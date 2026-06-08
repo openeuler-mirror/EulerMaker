@@ -2,9 +2,7 @@
 
 ## 概述
 
-本文档完整定义 EulerMaker 系统中所有 RESTful 资源的结构体，每个字段均标明 Go 类型、JSON tag 与业务含义。所有资源遵循 `apiVersion: ebs/v1alpha1`。
-
-`v1alpha1` 为早期设计版本，允许根据实现反馈进行不兼容调整；进入 `v1beta1` 或 `v1` 后应保持向后兼容，并通过新版本承载破坏性变更。
+本文档完整定义 EulerMaker 系统中所有 RESTful 资源的结构体，每个字段均标明 Go 类型、JSON tag 与业务含义。所有资源遵循 `apiVersion: ebs/v1`。
 
 ---
 
@@ -19,9 +17,9 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 
 | 字段 | Go 类型 | JSON | 说明 |
 |------|---------|------|------|
-| `apiVersion` | string | `apiVersion` | `ebs/v1alpha1` |
+| `apiVersion` | string | `apiVersion` | `ebs/v1` |
 | `kind` | string | `kind` | Project / Snapshot / Build / Job / … |
-| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/Job 在所属 Project 内唯一 |
+| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-` |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -41,11 +39,15 @@ Items           []Xxx `json:"items"`
 
 Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、Job 的唯一项目归属来源。子资源名称只需在所属 Project 内唯一。
 
-| 子资源 | 集合 API | 单对象 API | etcd |
-|--------|----------|------------|------|
-| Snapshot | `/apis/ebs/v1alpha1/projects/{project}/snapshots` | `/apis/ebs/v1alpha1/projects/{project}/snapshots/{name}` | `/registry/ebs/projects/{project}/snapshots/{name}` |
-| Build | `/apis/ebs/v1alpha1/projects/{project}/builds` | `/apis/ebs/v1alpha1/projects/{project}/builds/{name}` | `/registry/ebs/projects/{project}/builds/{name}` |
-| Job | `/apis/ebs/v1alpha1/projects/{project}/jobs` | `/apis/ebs/v1alpha1/projects/{project}/jobs/{name}` | `/registry/ebs/projects/{project}/jobs/{name}` |
+调度器和控制器使用全局系统 API list/watch 全部对象；用户侧和项目侧调用使用 Project API。
+
+当前 apiserver 基于 `GenericAPIServer` 实现，Project API 会在服务端重写到 scoped storage 路径，因此 Project 名必须满足 DNS1123 label 约束。需要展示带点号、空格或大小写的项目名时，使用 `Project.spec.displayName`。
+
+| 子资源 | Project API | 全局 API | etcd |
+|--------|-------------|----------|------|
+| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | `/registry/ebs/snapshots/{project}/{name}` |
+| Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | `/registry/ebs/builds/{project}/{name}` |
+| Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | `/registry/ebs/jobs/{project}/{name}` |
 
 ---
 
@@ -64,7 +66,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 
 ## 一、Project（项目）
 
-**API**: `/apis/ebs/v1alpha1/projects`  
+**API**: `/apis/ebs/v1/projects`  
 **etcd**: `/registry/ebs/projects/{name}`
 
 ### Project
@@ -82,6 +84,7 @@ type Project struct {
 
 ```go
 type ProjectSpec struct {
+    DisplayName      string                     `json:"displayName,omitempty"`
     Description      string                     `json:"description,omitempty"`
     SpecBranch       string                     `json:"specBranch,omitempty"`
     BuildEnvMacros   string                     `json:"buildEnvMacros,omitempty"`
@@ -92,6 +95,7 @@ type ProjectSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
+| `displayName` | string | 否 | 页面展示名称，默认使用创建时的 Project 名称 |
 | `description` | string | 否 | 项目描述 |
 | `specBranch` | string | 否 | 默认 spec 分支，默认 `"master"` |
 | `buildEnvMacros` | string | 否 | 构建环境宏，YAML 格式 |
@@ -132,8 +136,9 @@ type ProjectList struct {
 
 ## 二、Snapshot（快照）
 
-**API**: `/apis/ebs/v1alpha1/projects/{project}/snapshots`  
-**etcd**: `/registry/ebs/projects/{project}/snapshots/{name}`
+**API**: `/apis/ebs/v1/projects/{project}/snapshots`  
+**全局 API**: `/apis/ebs/v1/snapshots`  
+**etcd**: `/registry/ebs/snapshots/{project}/{name}`
 
 ### Snapshot
 
@@ -196,8 +201,9 @@ type SnapshotList struct {
 
 ## 三、Build（构建）
 
-**API**: `/apis/ebs/v1alpha1/projects/{project}/builds`  
-**etcd**: `/registry/ebs/projects/{project}/builds/{name}`
+**API**: `/apis/ebs/v1/projects/{project}/builds`  
+**全局 API**: `/apis/ebs/v1/builds`  
+**etcd**: `/registry/ebs/builds/{project}/{name}`
 
 ### Build
 
@@ -286,8 +292,9 @@ type BuildList struct {
 
 ## 四、Job（任务）
 
-**API**: `/apis/ebs/v1alpha1/projects/{project}/jobs`  
-**etcd**: `/registry/ebs/projects/{project}/jobs/{name}`
+**API**: `/apis/ebs/v1/projects/{project}/jobs`  
+**全局 API**: `/apis/ebs/v1/jobs`  
+**etcd**: `/registry/ebs/jobs/{project}/{name}`
 
 ### Job
 
@@ -366,7 +373,7 @@ type JobList struct {
 
 ## 五、Runner（执行机）
 
-**API**: `/apis/ebs/v1alpha1/runners`  
+**API**: `/apis/ebs/v1/runners`  
 **etcd**: `/registry/ebs/runners/{name}`
 
 ### Runner
@@ -382,7 +389,7 @@ type Runner struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `apiVersion` | string | - | `ebs/v1alpha1` |
+| `apiVersion` | string | - | `ebs/v1` |
 | `kind` | string | - | `Runner` |
 | `metadata` | ObjectMeta | 是 | 标准元数据 |
 | `spec` | RunnerSpec | 是 | 执行机规格 |
