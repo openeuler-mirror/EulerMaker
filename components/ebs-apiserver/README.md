@@ -2,7 +2,7 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，基于 `k8s.io/apiserver` 的 `GenericAPIServer` 实现，提供 REST API、`/status` 子资源、list/watch 能力和 etcd 持久化。
 
-服务使用 etcd 作为主存储，Elasticsearch 作为对象索引和增强数据存储。
+服务使用 etcd 和 Elasticsearch 作为组合主存储：etcd 负责对象持久化、resourceVersion 和 list/watch，Elasticsearch 负责对象索引、搜索字段和增强数据。
 
 ## 架构
 
@@ -12,9 +12,9 @@ client / ebs-gateway
         v
 ebs-apiserver
         |
-        +-- etcd              主数据存储
+        +-- etcd              主存储：对象与 watch
         |
-        +-- Elasticsearch     对象索引与增强数据
+        +-- Elasticsearch     主存储：索引与增强数据
 ```
 
 ## 资源列表
