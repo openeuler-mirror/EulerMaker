@@ -109,6 +109,7 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		DefaultQualifiedResource:  ebsv1.Resource("runners"),
 		SingularQualifiedResource: ebsv1.Resource("runner"),
 		UpdateStrategy:            statusStrategy,
+		DeleteStrategy:            strategy,
 		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("runners")),
 	}
 

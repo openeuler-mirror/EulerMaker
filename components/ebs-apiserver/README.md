@@ -175,13 +175,31 @@ curl -k -N "https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/jobs
 
 ### 更新 Job 状态
 
+`PUT` 更新必须带当前对象的 `metadata.resourceVersion`。只更新 `status` 时，建议使用 merge patch：
+
+```bash
+curl -k -X PATCH https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/jobs/job-001/status \
+  -H "Content-Type: application/merge-patch+json" \
+  -d '{
+    "status": {
+      "phase": "Running",
+      "runner": "runner-001"
+    }
+  }'
+```
+
+如果使用 `PUT`，需要先查询对象并把返回的 `metadata.resourceVersion` 填入请求体：
+
 ```bash
 curl -k -X PUT https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/jobs/job-001/status \
   -H "Content-Type: application/json" \
   -d '{
     "apiVersion": "ebs/v1",
     "kind": "Job",
-    "metadata": {"name": "job-001"},
+    "metadata": {
+      "name": "job-001",
+      "resourceVersion": "<resourceVersion from GET>"
+    },
     "status": {
       "phase": "Running",
       "runner": "runner-001"
