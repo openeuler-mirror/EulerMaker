@@ -45,6 +45,7 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		DefaultQualifiedResource:  ebsv1.Resource("snapshots"),
 		SingularQualifiedResource: ebsv1.Resource("snapshot"),
 		UpdateStrategy:            statusStrategy,
+		DeleteStrategy:            strategy,
 		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("snapshots")),
 		KeyRootFunc:               keyRootFunc,
 		KeyFunc:                   keyFunc,

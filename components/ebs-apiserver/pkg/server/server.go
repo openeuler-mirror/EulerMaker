@@ -265,6 +265,9 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	if err := projectStorage.Project.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
 		return nil, err
 	}
+	if err := completeStore(projectStorage.Status, storeOptions); err != nil {
+		return nil, err
+	}
 	v1Storage["projects"] = hybrid.NewEnricherStore(projectStorage.Project.(*genericregistry.Store), esClient, "project", func() runtime.Object { return &ebsv1.Project{} }, func() runtime.Object { return &ebsv1.ProjectList{} })
 	v1Storage["projects/status"] = projectStorage.Status
 
@@ -272,11 +275,17 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	if err := snapshotStorage.Snapshot.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
 		return nil, err
 	}
+	if err := completeStore(snapshotStorage.Status, storeOptions); err != nil {
+		return nil, err
+	}
 	v1Storage["snapshots"] = hybrid.NewEnricherStore(snapshotStorage.Snapshot.(*genericregistry.Store), esClient, "snapshot", func() runtime.Object { return &ebsv1.Snapshot{} }, func() runtime.Object { return &ebsv1.SnapshotList{} })
 	v1Storage["snapshots/status"] = snapshotStorage.Status
 
 	buildStorage := buildstore.NewStorage(Scheme)
 	if err := buildStorage.Build.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
+		return nil, err
+	}
+	if err := completeStore(buildStorage.Status, storeOptions); err != nil {
 		return nil, err
 	}
 	v1Storage["builds"] = hybrid.NewEnricherStore(buildStorage.Build.(*genericregistry.Store), esClient, "build", func() runtime.Object { return &ebsv1.Build{} }, func() runtime.Object { return &ebsv1.BuildList{} })
@@ -287,11 +296,17 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	if err := jobStorage.Job.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
 		return nil, err
 	}
+	if err := completeStore(jobStorage.Status, storeOptions); err != nil {
+		return nil, err
+	}
 	v1Storage["jobs"] = hybrid.NewEnricherStore(jobStorage.Job.(*genericregistry.Store), esClient, "job", func() runtime.Object { return &ebsv1.Job{} }, func() runtime.Object { return &ebsv1.JobList{} })
 	v1Storage["jobs/status"] = jobStorage.Status
 
 	runnerStorage := runnerstore.NewStorage(Scheme)
 	if err := runnerStorage.Runner.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
+		return nil, err
+	}
+	if err := completeStore(runnerStorage.Status, storeOptions); err != nil {
 		return nil, err
 	}
 	v1Storage["runners"] = hybrid.NewEnricherStore(runnerStorage.Runner.(*genericregistry.Store), esClient, "runner", func() runtime.Object { return &ebsv1.Runner{} }, func() runtime.Object { return &ebsv1.RunnerList{} })
@@ -300,4 +315,12 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	apiGroupInfo.VersionedResourcesStorageMap["v1"] = v1Storage
 
 	return &apiGroupInfo, nil
+}
+
+func completeStore(storage rest.Storage, storeOptions *generic.StoreOptions) error {
+	store, ok := storage.(*genericregistry.Store)
+	if !ok {
+		return nil
+	}
+	return store.CompleteWithOptions(storeOptions)
 }

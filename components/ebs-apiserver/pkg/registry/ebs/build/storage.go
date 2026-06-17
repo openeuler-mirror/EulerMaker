@@ -61,6 +61,7 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		DefaultQualifiedResource:  ebsv1.Resource("builds"),
 		SingularQualifiedResource: ebsv1.Resource("build"),
 		UpdateStrategy:            statusStrategy,
+		DeleteStrategy:            strategy,
 		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("builds")),
 
 		KeyRootFunc: keyRootFunc,
