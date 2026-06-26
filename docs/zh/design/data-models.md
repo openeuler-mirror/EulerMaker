@@ -395,6 +395,8 @@ type Runner struct {
 | `spec` | RunnerSpec | 是 | 执行机规格 |
 | `status` | RunnerStatus | - | 执行机状态 |
 
+当前 runner agent 注册 Runner 时会写入 `metadata.labels["ebs.io/runner-type"]` 和 `metadata.labels["ebs.io/arch"]`，分别对应 `spec.type` 和 `spec.arch`。
+
 ### RunnerSpec
 
 ```go
@@ -411,11 +413,11 @@ type RunnerSpec struct {
 |------|---------|------|------|
 | `type` | string | 是 | 执行机类型：`dc`/`vm`/`hw` |
 | `arch` | string | 是 | CPU 架构：`aarch64`/`x86_64` |
-| `hostname` | string | 否 | 宿主机名称 |
+| `hostname` | string | 否 | 执行机主机名。当前 runner agent 填写 runner 资源名 |
 | `unschedulable` | bool | 否 | 是否禁止调度新 Job |
 | `taints` | []RunnerTaint | 否 | 反亲和污点 |
 
-> 调度标签统一使用 `metadata.labels`，不在 `spec` 中重复定义。
+> 调度标签统一使用 `metadata.labels`，不在 `spec` 中重复定义。`spec.type` 和 `spec.arch` 创建后不可变。
 
 ### RunnerTaint
 
@@ -451,13 +453,15 @@ type RunnerStatus struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | string | 执行机状态：`Registering`/`Booting`/`Running`/`Idle`/`Offline` |
-| `conditions` | []Condition | 详细状态条件 |
-| `capacity` | map[string]string | 总资源容量，如 `cpu`/`memory`/`disk`/`jobs` |
-| `allocatable` | map[string]string | 可调度资源容量，如 `cpu`/`memory`/`disk`/`jobs` |
+| `conditions` | []Condition | 详细状态条件，当前 runner agent 暂不主动填充 |
+| `capacity` | map[string]string | Runner 上报的总资源容量。当前包含 `cpu`、`memory`、`ephemeral-storage`：`cpu` 为逻辑 CPU 数，`memory` 使用 `Mi`，`ephemeral-storage` 使用 `Gi` |
+| `allocatable` | map[string]string | Runner 上报的可调度资源容量。当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间，使用 `Gi` |
 | `runningJobs` | []string | 当前运行中的 Job 名称列表 |
 | `addresses` | []RunnerAddress | 执行机地址列表 |
 | `info` | RunnerInfo | 执行机系统与 agent 信息 |
 | `heartbeat` | Time | 最后心跳时间 |
+
+Runner 创建时 apiserver 默认置为 `Registering`；当前 runner agent 启动后置为 `Booting`，心跳时根据是否存在运行中的 Job 置为 `Idle` 或 `Running`，退出时置为 `Offline`。
 
 ### RunnerAddress
 
@@ -470,7 +474,7 @@ type RunnerAddress struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `type` | string | 地址类型：`Hostname`/`InternalIP`/`ExternalIP` |
+| `type` | string | 地址类型。当前 runner agent 上报 `Hostname`，并在发现非 loopback 地址时上报 `InternalIP` |
 | `address` | string | 地址值 |
 
 ### RunnerInfo
@@ -490,7 +494,7 @@ type RunnerInfo struct {
 | `os` | string | 操作系统 |
 | `kernelVersion` | string | 内核版本 |
 | `arch` | string | CPU 架构 |
-| `runtimeVersion` | string | 执行运行时版本 |
+| `runtimeVersion` | string | 执行运行时版本，当前 runner agent 暂不主动填充 |
 | `agentVersion` | string | Runner agent 版本 |
 
 ### RunnerList
@@ -594,6 +598,7 @@ type SpecCommit struct {
 | Snapshot | `Created` → `Building` → `Completed` / `Failed` |
 | Build | `Pending` → `Building` → `Completed` / `Failed` / `Aborted` |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted` |
+| Runner | `Registering` → `Booting` → `Idle` / `Running` → `Offline` |
 
 ## 附录 B：结构体引用关系图
 
