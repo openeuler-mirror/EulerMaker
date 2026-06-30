@@ -526,11 +526,6 @@ func (in *RunnerStatus) DeepCopyInto(out *RunnerStatus) {
 			(*out)[k] = v
 		}
 	}
-	if in.RunningJobs != nil {
-		in, out := &in.RunningJobs, &out.RunningJobs
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
 	if in.Addresses != nil {
 		in, out := &in.Addresses, &out.Addresses
 		*out = make([]RunnerAddress, len(*in))

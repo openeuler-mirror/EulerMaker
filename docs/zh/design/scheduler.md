@@ -10,7 +10,7 @@ Scheduler 是系统组件，直接访问 `ebs-apiserver` 的全局系统 API：
 scheduler -> ebs-apiserver -> etcd / Elasticsearch
 ```
 
-Scheduler 不直接访问 etcd 或 Elasticsearch，不直接执行 Job，也不负责维护 Runner 本地执行状态。Runner 是否正在执行 Job、当前可用资源和心跳信息由 runner 进程通过 `Runner.status` 上报。
+Scheduler 不直接访问 etcd 或 Elasticsearch，不直接执行 Job，也不负责维护 Runner 本地执行状态。Runner 是否忙、当前可用资源和心跳信息由 runner 进程通过 `Runner.status` 上报；具体 Job 与 Runner 的绑定关系以 Job 自身的 `status.runner` 为准。
 
 ## 二、设计目标
 
@@ -62,7 +62,6 @@ Runner 是集群级资源，候选信息来自：
 - `spec.taints`
 - `status.phase`
 - `status.allocatable`
-- `status.runningJobs`
 - `status.heartbeat`
 
 ### 3.3 绑定 Job
@@ -83,7 +82,7 @@ status:
   startTime: "2026-06-09T10:00:00Z"
 ```
 
-Scheduler 不更新 `Runner.status.runningJobs`。该字段由 runner 心跳上报，避免 scheduler 和 runner 同时维护同一状态。
+Scheduler 不更新 Runner status。绑定关系只写入 Job status；如后续需要统计每个 Runner 的运行负载，Scheduler 应基于 watch 到的 Job 按 `status.runner` 聚合。
 
 ## 四、输入数据模型
 
@@ -139,7 +138,6 @@ type RunnerStatus struct {
     Conditions  []metav1.Condition `json:"conditions,omitempty"`
     Capacity    map[string]string  `json:"capacity,omitempty"`
     Allocatable map[string]string  `json:"allocatable,omitempty"`
-    RunningJobs []string           `json:"runningJobs,omitempty"`
     Addresses   []RunnerAddress    `json:"addresses,omitempty"`
     Info        RunnerInfo         `json:"info,omitempty"`
     Heartbeat   metav1.Time        `json:"heartbeat,omitempty"`
@@ -152,7 +150,6 @@ type RunnerStatus struct {
 |------|------|
 | `phase` | 过滤 Offline、Booting 等不可执行状态 |
 | `allocatable` | 判断是否仍有可调度容量 |
-| `runningJobs` | 判断 Runner 当前负载 |
 | `heartbeat` | 过滤心跳超时的 Runner |
 
 ## 五、调度流程
@@ -183,12 +180,12 @@ watch Job
 
 | 规则 | 说明 |
 |------|------|
-| PhaseFilter | Runner `status.phase` 必须是 `Idle` 或 `Running` |
+| PhaseFilter | Runner `status.phase` 必须是 `Idle` |
 | HeartbeatFilter | Runner 心跳不能超时 |
 | UnschedulableFilter | Runner `spec.unschedulable` 不能为 true |
 | ArchFilter | Job `spec.arch` 为空或等于 Runner `spec.arch` |
 | TypeFilter | Job `spec.runner` 为空，或能匹配 Runner `spec.type` / `metadata.labels` |
-| CapacityFilter | Runner `status.allocatable["jobs"]` 大于 0，或未设置 `jobs` 且当前无运行中 Job |
+| CapacityFilter | 当前模型不设置 Job 数量资源维度；首版按单 Runner 单 Job 处理，由 PhaseFilter 过滤忙碌 Runner |
 | TaintFilter | 首版没有 Job tolerations 字段，因此存在 `NoSchedule` taint 的 Runner 默认不可调度 |
 
 `status.phase == "Booting"` 的 Runner 可以被 watch 缓存，但不进入候选集，等 Runner 上报 `Idle` 或 `Running` 后再参与调度。
@@ -199,15 +196,13 @@ watch Job
 
 | 打分项 | 说明 |
 |--------|------|
-| Idle 优先 | `runningJobs` 为空的 Runner 优先 |
-| jobs 余量 | `allocatable["jobs"]` 越大越优先 |
 | 标签匹配 | Job `spec.runner` 能精确匹配 Runner label 时加分 |
 | 稳定心跳 | 心跳越新越优先 |
 
 示例权重：
 
 ```text
-score = idleScore * 40 + jobsScore * 30 + labelScore * 20 + heartbeatScore * 10
+score = labelScore * 70 + heartbeatScore * 30
 ```
 
 首版不引入复杂插件系统。实现上可以先用固定 Filter/Score 函数，后续再拆成插件。

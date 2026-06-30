@@ -118,7 +118,6 @@ type RunnerStatus struct {
     Conditions  []metav1.Condition `json:"conditions,omitempty"`
     Capacity    map[string]string  `json:"capacity,omitempty"`
     Allocatable map[string]string  `json:"allocatable,omitempty"`
-    RunningJobs []string           `json:"runningJobs,omitempty"`
     Addresses   []RunnerAddress    `json:"addresses,omitempty"`
     Info        RunnerInfo         `json:"info,omitempty"`
     Heartbeat   metav1.Time        `json:"heartbeat,omitempty"`
@@ -129,11 +128,10 @@ type RunnerStatus struct {
 |------|------|
 | `phase` | `Registering` / `Booting` / `Running` / `Idle` / `Offline` |
 | `conditions` | 详细状态条件 |
-| `capacity` | 总资源容量，如 `cpu`、`memory`、`disk`、`jobs` |
-| `allocatable` | 当前可调度资源，如 `cpu`、`memory`、`disk`、`jobs` |
-| `runningJobs` | 当前运行中的 Job 名称列表 |
-| `addresses` | Hostname、InternalIP、ExternalIP 等地址 |
-| `info` | OS、内核、架构、运行时版本、agent 版本 |
+| `capacity` | Runner 上报的总资源容量，当前包含 `cpu`、`memory`、`ephemeral-storage` |
+| `allocatable` | Runner 上报的可调度资源容量，当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间 |
+| `addresses` | 当前 runner agent 上报 Hostname，并在发现非 loopback 地址时上报 InternalIP |
+| `info` | OS、内核、架构、agent 版本；当前 runner agent 暂不主动填充运行时版本 |
 | `heartbeat` | 最后一次成功心跳时间 |
 
 ## 五、生命周期
@@ -166,15 +164,12 @@ status:
   phase: Idle
   capacity:
     cpu: "32"
-    memory: 64Gi
-    disk: 500Gi
-    jobs: "1"
+    memory: 65536Mi
+    ephemeral-storage: 500Gi
   allocatable:
     cpu: "32"
-    memory: 60Gi
-    disk: 450Gi
-    jobs: "1"
-  runningJobs: []
+    memory: 65536Mi
+    ephemeral-storage: 450Gi
   addresses:
     - type: Hostname
       address: build-host-01
@@ -192,8 +187,8 @@ status:
 状态上报原则：
 
 - `capacity` 表示执行机总容量，通常变化较少。
-- `allocatable` 表示当前可调度容量，会随运行中 Job 变化。
-- `runningJobs` 记录正在执行的 Job 名称。
+- `allocatable` 表示可调度容量；当前实现不按运行中 Job 扣减 `cpu` 或 `memory`，`ephemeral-storage` 反映工作目录所在文件系统的当前可用空间。
+- Runner 是否忙由 `status.phase` 表达；具体 Job 与 Runner 的绑定关系以 Job 自身的 `status.runner` 为准。
 - `heartbeat` 由 Runner 每次心跳刷新。
 - 心跳超时后的 `Offline` 标记可以由 apiserver 外部控制器完成。
 
@@ -213,7 +208,7 @@ watch /apis/ebs/v1/jobs?watch=true
 ```text
 1. Runner watch 到绑定给自己的 Job
 2. 根据 metadata.namespace 确定所属 Project
-3. 更新 Runner.status.phase=Running、runningJobs=[jobName]
+3. 更新 Runner.status.phase=Running
 4. 更新 Job.status.stage=Running
 5. 准备执行环境
 6. 执行 Job.spec.commands 或默认构建逻辑
