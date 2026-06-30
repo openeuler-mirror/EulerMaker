@@ -443,7 +443,6 @@ type RunnerStatus struct {
     Conditions  []metav1.Condition `json:"conditions,omitempty"`
     Capacity    map[string]string  `json:"capacity,omitempty"`
     Allocatable map[string]string  `json:"allocatable,omitempty"`
-    RunningJobs []string           `json:"runningJobs,omitempty"`
     Addresses   []RunnerAddress    `json:"addresses,omitempty"`
     Info        RunnerInfo         `json:"info,omitempty"`
     Heartbeat   metav1.Time        `json:"heartbeat,omitempty"`
@@ -456,7 +455,6 @@ type RunnerStatus struct {
 | `conditions` | []Condition | 详细状态条件，当前 runner agent 暂不主动填充 |
 | `capacity` | map[string]string | Runner 上报的总资源容量。当前包含 `cpu`、`memory`、`ephemeral-storage`：`cpu` 为逻辑 CPU 数，`memory` 使用 `Mi`，`ephemeral-storage` 使用 `Gi` |
 | `allocatable` | map[string]string | Runner 上报的可调度资源容量。当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间，使用 `Gi` |
-| `runningJobs` | []string | 当前运行中的 Job 名称列表 |
 | `addresses` | []RunnerAddress | 执行机地址列表 |
 | `info` | RunnerInfo | 执行机系统与 agent 信息 |
 | `heartbeat` | Time | 最后心跳时间 |

@@ -198,7 +198,6 @@ type RunnerStatus struct {
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	Capacity    map[string]string  `json:"capacity,omitempty"`
 	Allocatable map[string]string  `json:"allocatable,omitempty"`
-	RunningJobs []string           `json:"runningJobs,omitempty"`
 	Addresses   []RunnerAddress    `json:"addresses,omitempty"`
 	Info        RunnerInfo         `json:"info,omitempty"`
 	Heartbeat   metav1.Time        `json:"heartbeat,omitempty"`

@@ -40,7 +40,6 @@ type RunnerStatus struct {
 	Conditions  []Condition       `json:"conditions,omitempty"`
 	Capacity    map[string]string `json:"capacity,omitempty"`
 	Allocatable map[string]string `json:"allocatable,omitempty"`
-	RunningJobs []string          `json:"runningJobs,omitempty"`
 	Addresses   []RunnerAddress   `json:"addresses,omitempty"`
 	Info        RunnerInfo        `json:"info,omitempty"`
 	Heartbeat   *time.Time        `json:"heartbeat,omitempty"`

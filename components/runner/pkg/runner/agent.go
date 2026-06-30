@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,9 +23,9 @@ type Agent struct {
 	client   *Client
 	executor Executor
 
-	mu          sync.Mutex
-	runningJobs map[string]struct{}
-	lastRV      string
+	mu         sync.Mutex
+	activeJobs map[string]struct{}
+	lastRV     string
 }
 
 func NewAgent(cfg Config) (*Agent, error) {
@@ -39,10 +38,10 @@ func NewAgent(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	return &Agent{
-		cfg:         cfg,
-		client:      client,
-		executor:    &ShellExecutor{WorkDir: workDir(cfg.RootDir), ResultRoot: resultRoot(cfg.RootDir)},
-		runningJobs: make(map[string]struct{}),
+		cfg:        cfg,
+		client:     client,
+		executor:   &ShellExecutor{WorkDir: workDir(cfg.RootDir), ResultRoot: resultRoot(cfg.RootDir)},
+		activeJobs: make(map[string]struct{}),
 	}, nil
 }
 
@@ -141,9 +140,8 @@ func (a *Agent) patchRunnerPhase(ctx context.Context, phase string) error {
 
 func (a *Agent) currentStatus() RunnerStatus {
 	now := time.Now().UTC()
-	running := a.runningJobNames()
 	phase := "Idle"
-	if len(running) > 0 {
+	if a.runningJobCount() > 0 {
 		phase = "Running"
 	}
 	capacity, allocatable := nodeResources(workDir(a.cfg.RootDir))
@@ -151,7 +149,6 @@ func (a *Agent) currentStatus() RunnerStatus {
 		Phase:       phase,
 		Capacity:    capacity,
 		Allocatable: allocatable,
-		RunningJobs: running,
 		Addresses:   runnerAddresses(a.cfg.Name),
 		Info: RunnerInfo{
 			OS:            runtime.GOOS,
@@ -259,28 +256,23 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 func (a *Agent) tryStartJob(key string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, ok := a.runningJobs[key]; ok {
+	if _, ok := a.activeJobs[key]; ok {
 		return false
 	}
-	a.runningJobs[key] = struct{}{}
+	a.activeJobs[key] = struct{}{}
 	return true
 }
 
 func (a *Agent) finishJob(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.runningJobs, key)
+	delete(a.activeJobs, key)
 }
 
-func (a *Agent) runningJobNames() []string {
+func (a *Agent) runningJobCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	names := make([]string, 0, len(a.runningJobs))
-	for key := range a.runningJobs {
-		names = append(names, key)
-	}
-	sort.Strings(names)
-	return names
+	return len(a.activeJobs)
 }
 
 func (a *Agent) lastResourceVersion() string {
