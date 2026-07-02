@@ -313,6 +313,7 @@ type Job struct {
 type JobSpec struct {
     Runner       string               `json:"runner,omitempty"`
     Arch         string               `json:"arch,omitempty"`
+    Priority     int64                `json:"priority,omitempty"`
     Runtime      int64                `json:"runtime,omitempty"`
     DockerImage  string               `json:"dockerImage,omitempty"`
     RepoUrl      string               `json:"repoUrl,omitempty"`
@@ -320,6 +321,10 @@ type JobSpec struct {
     ImageConfig  runtime.RawExtension `json:"imageConfig,omitempty"`
     Env          map[string]string    `json:"env,omitempty"`
     Commands     []string             `json:"commands,omitempty"`
+    BackoffLimit int64                `json:"backoffLimit,omitempty"`
+    Resources    ResourceRequirements `json:"resources,omitempty"`
+    NodeSelector map[string]string    `json:"nodeSelector,omitempty"`
+    Tolerations  []Toleration         `json:"tolerations,omitempty"`
 }
 ```
 
@@ -327,6 +332,7 @@ type JobSpec struct {
 |------|---------|------|------|
 | `runner` | string | 否 | 期望的执行机规格，如 `"dc-64g"` |
 | `arch` | string | 是 | `"aarch64"` / `"x86_64"` |
+| `priority` | int64 | 否 | 优先级，默认 0。调度器按优先级排序，值越大越优先调度 |
 | `runtime` | int64 | 否 | 最大运行秒数，默认 10800 |
 | `dockerImage` | string | 否 | Docker 环境镜像 |
 | `repoUrl` | string | 否 | 依赖仓库 URL |
@@ -334,6 +340,42 @@ type JobSpec struct {
 | `imageConfig` | runtime.RawExtension | 否 | 预留镜像配置 |
 | `env` | map[string]string | 否 | 环境变量 |
 | `commands` | []string | 否 | 执行命令列表 |
+| `backoffLimit` | int64 | 否 | 最大重试次数，默认 -1（不限制）。超过限制后 Job 标记为 Aborted |
+| `resources` | ResourceRequirements | 否 | 资源需求与限制（requests / limits） |
+| `nodeSelector` | map[string]string | 否 | 节点选择器，按 label 筛选 Runner |
+| `tolerations` | []Toleration | 否 | 容忍度，匹配 Runner 的 taints |
+
+### ResourceRequirements
+
+```go
+type ResourceRequirements struct {
+    Requests map[string]string `json:"requests,omitempty"`
+    Limits   map[string]string `json:"limits,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `requests` | map[string]string | 资源需求，如 `{"cpu": "4", "memory": "8Gi"}`。调度器用于匹配 Runner 的可分配容量 |
+| `limits` | map[string]string | 资源上限，如 `{"cpu": "8", "memory": "16Gi"}`。用于限制 Job 最大资源使用量 |
+
+### Toleration
+
+```go
+type Toleration struct {
+    Key      string `json:"key,omitempty"`
+    Operator string `json:"operator,omitempty"`
+    Value    string `json:"value,omitempty"`
+    Effect   string `json:"effect,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `key` | string | 匹配 Runner taint 的键 |
+| `operator` | string | 匹配操作符：`Equal`（相等）、`Exists`（存在）、`Gt`（大于）、`Lt`（小于） |
+| `value` | string | 匹配值，与 `key` 配合使用 |
+| `effect` | string | 容忍效果：`NoSchedule`（不调度）、`PreferNoSchedule`（尽量不调度）、`NoExecute`（不执行并驱逐） |
 
 ### JobStatus
 
@@ -346,6 +388,7 @@ type JobStatus struct {
     EndTime    metav1.Time `json:"endTime,omitempty"`
     ResultRoot string      `json:"resultRoot,omitempty"`
     Message    string      `json:"message,omitempty"`
+    RestartCount int64     `json:"restartCount,omitempty"`
 }
 ```
 
@@ -358,6 +401,7 @@ type JobStatus struct {
 | `endTime` | metav1.Time | 结束时间 |
 | `resultRoot` | string | 结果存储路径 |
 | `message` | string | 状态消息 |
+| `restartCount` | int64 | 重试次数，默认 0。调度器用于计算退避时间，与 `backoffLimit` 配合控制重试上限 |
 
 ### JobList
 
