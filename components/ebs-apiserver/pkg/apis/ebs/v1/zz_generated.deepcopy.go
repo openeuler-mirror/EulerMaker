@@ -381,17 +381,18 @@ func (in *BuildList) DeepCopyObject() runtime.Object {
 
 func (in *JobSpec) DeepCopyInto(out *JobSpec) {
 	*out = *in
-	in.ImageConfig.DeepCopyInto(&out.ImageConfig)
-	if in.Env != nil {
-		in, out := &in.Env, &out.Env
+	in.RuntimeSpec.DeepCopyInto(&out.RuntimeSpec)
+	in.Resources.DeepCopyInto(&out.Resources)
+	if in.NodeSelector != nil {
+		in, out := &in.NodeSelector, &out.NodeSelector
 		*out = make(map[string]string, len(*in))
 		for k, v := range *in {
 			(*out)[k] = v
 		}
 	}
-	if in.Commands != nil {
-		in, out := &in.Commands, &out.Commands
-		*out = make([]string, len(*in))
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]Toleration, len(*in))
 		copy(*out, *in)
 	}
 }
@@ -401,6 +402,46 @@ func (in *JobSpec) DeepCopy() *JobSpec {
 		return nil
 	}
 	out := new(JobSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ResourceRequirements) DeepCopyInto(out *ResourceRequirements) {
+	*out = *in
+	if in.Requests != nil {
+		in, out := &in.Requests, &out.Requests
+		*out = make(map[string]string, len(*in))
+		for k, v := range *in {
+			(*out)[k] = v
+		}
+	}
+	if in.Limits != nil {
+		in, out := &in.Limits, &out.Limits
+		*out = make(map[string]string, len(*in))
+		for k, v := range *in {
+			(*out)[k] = v
+		}
+	}
+}
+
+func (in *ResourceRequirements) DeepCopy() *ResourceRequirements {
+	if in == nil {
+		return nil
+	}
+	out := new(ResourceRequirements)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *Toleration) DeepCopyInto(out *Toleration) {
+	*out = *in
+}
+
+func (in *Toleration) DeepCopy() *Toleration {
+	if in == nil {
+		return nil
+	}
+	out := new(Toleration)
 	in.DeepCopyInto(out)
 	return out
 }

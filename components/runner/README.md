@@ -9,7 +9,7 @@
 - Watches `/apis/ebs/v1/jobs?watch=true`.
 - Executes only Jobs whose `status.runner` equals `RUNNER_NAME` and `status.phase` is `Running`.
 - Uses `metadata.namespace` from the Job as the Project name for status updates.
-- Runs `job.spec.commands` with `/bin/sh -c` in an isolated work directory.
+- Runs `job.spec.payload` with `/bin/sh -c` in an isolated work directory.
 - Patches final Job status to `Completed` or `Failed`.
 
 ## Configuration

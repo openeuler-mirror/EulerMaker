@@ -76,9 +76,6 @@ func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
-	if len(obj.Spec.Arch) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "arch"), "arch is required"))
-	}
 	return allErrs
 }
 

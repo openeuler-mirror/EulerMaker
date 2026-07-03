@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestShellExecutorRunsCommands(t *testing.T) {
+func TestShellExecutorRunsPayload(t *testing.T) {
 	dir := t.TempDir()
 	executor := &ShellExecutor{
 		WorkDir:    filepath.Join(dir, "work"),
@@ -15,10 +15,7 @@ func TestShellExecutorRunsCommands(t *testing.T) {
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec: JobSpec{
-			Env:      map[string]string{"MESSAGE": "ok"},
-			Commands: []string{"printf '%s' \"$MESSAGE\" > output.txt"},
-		},
+		Spec:     JobSpec{Payload: "MESSAGE=ok\nprintf '%s' \"$MESSAGE\" > output.txt"},
 	}
 
 	resultRoot, err := executor.Execute(context.Background(), job)
@@ -45,7 +42,7 @@ func TestShellExecutorReturnsCommandError(t *testing.T) {
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{Commands: []string{"echo boom >&2; exit 7"}},
+		Spec:     JobSpec{Payload: "echo boom >&2; exit 7"},
 	}
 
 	if _, err := executor.Execute(context.Background(), job); err == nil {

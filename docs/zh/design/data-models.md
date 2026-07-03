@@ -56,10 +56,11 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 ```
 主资源（5）: Project Snapshot Build Job Runner
 列表类型（5）: ProjectList SnapshotList BuildList JobList RunnerList
-辅助结构体（18）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
+辅助结构体（20）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus JobSpec JobStatus
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
-                  BuildTarget BuildTargetFlags PackageRepo SpecCommit PackageStatus
+                  ResourceRequirements Toleration BuildTarget BuildTargetFlags
+                  PackageRepo SpecCommit PackageStatus
 ```
 
 ---
@@ -116,7 +117,7 @@ type ProjectStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Active"` / `"Terminating"` |
+| `phase` | string | `"Active"` / `"Terminating"` |
 | `snapshotCount` | int32 | 快照总数 |
 | `buildCount` | int32 | 构建总数 |
 | `lastBuildTime` | metav1.Time | 最后构建时间 |
@@ -311,39 +312,25 @@ type Job struct {
 
 ```go
 type JobSpec struct {
-    Runner       string               `json:"runner,omitempty"`
-    Arch         string               `json:"arch,omitempty"`
-    Priority     int64                `json:"priority,omitempty"`
-    Runtime      int64                `json:"runtime,omitempty"`
-    DockerImage  string               `json:"dockerImage,omitempty"`
-    RepoUrl      string               `json:"repoUrl,omitempty"`
-    Package      string               `json:"package,omitempty"`
-    ImageConfig  runtime.RawExtension `json:"imageConfig,omitempty"`
-    Env          map[string]string    `json:"env,omitempty"`
-    Commands     []string             `json:"commands,omitempty"`
-    BackoffLimit int64                `json:"backoffLimit,omitempty"`
+    Runtime      string               `json:"runtime,omitempty"`
+    RuntimeSpec  runtime.RawExtension `json:"runtimeSpec,omitempty"`
+    TimeoutSeconds int64              `json:"timeoutSeconds,omitempty"`
     Resources    ResourceRequirements `json:"resources,omitempty"`
     NodeSelector map[string]string    `json:"nodeSelector,omitempty"`
     Tolerations  []Toleration         `json:"tolerations,omitempty"`
+    Payload      string               `json:"payload,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `runner` | string | 否 | 期望的执行机规格，如 `"dc-64g"` |
-| `arch` | string | 是 | `"aarch64"` / `"x86_64"` |
-| `priority` | int64 | 否 | 优先级，默认 0。调度器按优先级排序，值越大越优先调度 |
-| `runtime` | int64 | 否 | 最大运行秒数，默认 10800 |
-| `dockerImage` | string | 否 | Docker 环境镜像 |
-| `repoUrl` | string | 否 | 依赖仓库 URL |
-| `package` | string | 否 | 包名 |
-| `imageConfig` | runtime.RawExtension | 否 | 预留镜像配置 |
-| `env` | map[string]string | 否 | 环境变量 |
-| `commands` | []string | 否 | 执行命令列表 |
-| `backoffLimit` | int64 | 否 | 最大重试次数，默认 -1（不限制）。超过限制后 Job 标记为 Aborted |
-| `resources` | ResourceRequirements | 否 | 资源需求与限制（requests / limits） |
-| `nodeSelector` | map[string]string | 否 | 节点选择器，按 label 筛选 Runner |
-| `tolerations` | []Toleration | 否 | 容忍度，匹配 Runner 的 taints |
+| `runtime` | string | 否 | 执行运行时类型，如 `dc`/`vm`/`hw`，默认 `dc` |
+| `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置，由对应 runtime 解释 |
+| `timeoutSeconds` | int64 | 否 | 最大运行秒数，默认 10800 |
+| `resources` | ResourceRequirements | 否 | Job 资源请求与限制 |
+| `nodeSelector` | map[string]string | 否 | Runner label 精确匹配条件，如通过 `ebs.io/runner-arch` 选择架构 |
+| `tolerations` | []Toleration | 否 | 可容忍的 Runner 污点 |
+| `payload` | string | 否 | Job 执行载荷，包含运行实际需要的业务输入 |
 
 ### ResourceRequirements
 
@@ -395,7 +382,7 @@ type JobStatus struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | string | `"Pending"` / `"Running"` / `"Completed"` / `"Failed"` / `"Aborted"` |
-| `stage` | string | `"Pending"` / `"Running"` / `"PostRun"` |
+| `stage` | string | `"Pending"` / `"Running"` / `"PostRun"` / `"Failed"` |
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
@@ -439,7 +426,7 @@ type Runner struct {
 | `spec` | RunnerSpec | 是 | 执行机规格 |
 | `status` | RunnerStatus | - | 执行机状态 |
 
-当前 runner agent 注册 Runner 时会写入 `metadata.labels["ebs.io/runner-type"]` 和 `metadata.labels["ebs.io/arch"]`，分别对应 `spec.type` 和 `spec.arch`。
+当前 runner agent 注册 Runner 时会写入 `metadata.labels["ebs.io/runner-type"]` 和 `metadata.labels["ebs.io/runner-arch"]`，分别对应 `spec.type` 和 `spec.arch`。
 
 ### RunnerSpec
 
@@ -656,6 +643,9 @@ SnapshotSpec
 
 BuildSpec ──▶ BuildTarget
 BuildStatus ──▶ PackageStatus
+JobSpec
+├── ResourceRequirements
+└── Toleration
 
 RunnerSpec ──▶ RunnerTaint
 RunnerStatus

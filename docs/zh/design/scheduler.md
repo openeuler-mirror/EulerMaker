@@ -92,15 +92,13 @@ Scheduler 不更新 Runner status。绑定关系只写入 Job status；如后续
 
 ```go
 type JobSpec struct {
-    Runner       string               `json:"runner,omitempty"`
-    Arch         string               `json:"arch,omitempty"`
-    Runtime      int64                `json:"runtime,omitempty"`
-    DockerImage  string               `json:"dockerImage,omitempty"`
-    RepoUrl      string               `json:"repoUrl,omitempty"`
-    Package      string               `json:"package,omitempty"`
-    ImageConfig  runtime.RawExtension `json:"imageConfig,omitempty"`
-    Env          map[string]string    `json:"env,omitempty"`
-    Commands     []string             `json:"commands,omitempty"`
+    Runtime      string               `json:"runtime,omitempty"`
+    RuntimeSpec  runtime.RawExtension `json:"runtimeSpec,omitempty"`
+    TimeoutSeconds int64              `json:"timeoutSeconds,omitempty"`
+    Resources    ResourceRequirements `json:"resources,omitempty"`
+    NodeSelector map[string]string    `json:"nodeSelector,omitempty"`
+    Tolerations  []Toleration         `json:"tolerations,omitempty"`
+    Payload      string               `json:"payload,omitempty"`
 }
 ```
 
@@ -108,13 +106,16 @@ type JobSpec struct {
 
 | 字段 | 调度用途 |
 |------|----------|
-| `runner` | 期望的执行机规格。首版可按 Runner `spec.type` 或 `metadata.labels` 匹配 |
-| `arch` | 必须匹配 Runner `spec.arch` |
-| `runtime` | 暂不参与资源计算，可用于后续超时或长任务隔离策略 |
-| `dockerImage` | 暂不参与首版调度，可用于后续镜像缓存亲和 |
-| `package` | 暂不参与首版调度，可用于后续构建缓存亲和 |
+| `runtime` | 执行运行时类型，默认 `dc`；首版暂不参与资源计算，可用于后续运行时亲和或隔离策略 |
+| `runtimeSpec` | 运行时专属配置，首版暂不参与调度 |
+| `timeoutSeconds` | 最大运行秒数，首版暂不参与调度，可由 runner 执行侧用于超时控制 |
+| `resources.requests` | 判断 Runner `status.allocatable` 是否满足资源请求 |
+| `resources.limits` | 执行时资源上限，首版暂不参与调度 |
+| `nodeSelector` | 精确匹配 Runner `metadata.labels`，架构约束通过 `ebs.io/runner-arch` 表达 |
+| `tolerations` | 容忍 Runner `spec.taints` |
+| `payload` | Job 执行载荷，首版暂不参与调度 |
 
-当前数据模型没有 `cpuMinimum`、`memoryMinimum`、`nodeSelector`、`tolerations` 等字段，首版 Scheduler 不依赖这些字段。
+首版可以先支持 `nodeSelector`、`tolerations` 和常见资源名 `cpu`、`memory`、`ephemeral-storage`。资源数量沿用字符串表达，如 `"8"`、`"16Gi"`、`"100Gi"`。
 
 ### 4.2 RunnerSpec
 
@@ -183,10 +184,9 @@ watch Job
 | PhaseFilter | Runner `status.phase` 必须是 `Idle` |
 | HeartbeatFilter | Runner 心跳不能超时 |
 | UnschedulableFilter | Runner `spec.unschedulable` 不能为 true |
-| ArchFilter | Job `spec.arch` 为空或等于 Runner `spec.arch` |
-| TypeFilter | Job `spec.runner` 为空，或能匹配 Runner `spec.type` / `metadata.labels` |
-| CapacityFilter | 当前模型不设置 Job 数量资源维度；首版按单 Runner 单 Job 处理，由 PhaseFilter 过滤忙碌 Runner |
-| TaintFilter | 首版没有 Job tolerations 字段，因此存在 `NoSchedule` taint 的 Runner 默认不可调度 |
+| NodeSelectorFilter | Job `spec.nodeSelector` 中的每个键值都必须匹配 Runner `metadata.labels` |
+| CapacityFilter | Runner `status.allocatable` 必须满足 Job `spec.resources.requests`；未声明 requests 时不限制资源 |
+| TaintFilter | Runner `spec.taints` 中 `NoSchedule` taint 必须被 Job `spec.tolerations` 容忍 |
 
 `status.phase == "Booting"` 的 Runner 可以被 watch 缓存，但不进入候选集，等 Runner 上报 `Idle` 或 `Running` 后再参与调度。
 
@@ -196,13 +196,14 @@ watch Job
 
 | 打分项 | 说明 |
 |--------|------|
-| 标签匹配 | Job `spec.runner` 能精确匹配 Runner label 时加分 |
+| 标签匹配 | `nodeSelector` 匹配越具体可加分 |
+| 资源余量 | 满足 requests 后剩余资源越多可加分 |
 | 稳定心跳 | 心跳越新越优先 |
 
 示例权重：
 
 ```text
-score = labelScore * 70 + heartbeatScore * 30
+score = labelScore * 40 + resourceScore * 40 + heartbeatScore * 20
 ```
 
 首版不引入复杂插件系统。实现上可以先用固定 Filter/Score 函数，后续再拆成插件。
@@ -231,20 +232,27 @@ status:
 
 ## 六、Runner 匹配规则
 
-`Job.spec.runner` 是当前数据模型中表达期望执行机规格的字段。首版可采用保守匹配规则：
+Job 使用 `nodeSelector` 表达对 Runner 标签的硬约束。首版采用精确匹配规则：
 
-1. 如果为空，不限制 Runner 类型。
-2. 如果等于 `dc` / `vm` / `hw`，匹配 `Runner.spec.type`。
-3. 如果不等于上述类型，则按 Runner label 匹配：
+1. 如果 `nodeSelector` 为空，不限制 Runner 标签。
+2. 如果设置了 `nodeSelector`，其中每个键值都必须存在于 Runner `metadata.labels` 且值相等。
+3. Runner agent 注册时会上报常用标签，例如：
 
 ```yaml
 metadata:
   labels:
-    ebs.io/runner: dc-64g
     ebs.io/runner-type: dc
+    ebs.io/runner-arch: aarch64
 ```
 
-这种规则允许当前字段先承载简单执行机规格，后续再扩展更明确的调度字段。
+例如指定只调度到 dc 类型 aarch64 Runner：
+
+```yaml
+spec:
+  nodeSelector:
+    ebs.io/runner-type: dc
+    ebs.io/runner-arch: aarch64
+```
 
 ## 七、调度队列
 
@@ -325,8 +333,7 @@ components/ebs-scheduler/
 
 后续可以在不改变首版主流程的前提下扩展：
 
-- 更明确的 Job 资源请求字段，例如 CPU、内存、磁盘、GPU。
-- Job tolerations / nodeSelector。
+- 更完整的资源数量解析和 GPU 等扩展资源。
 - 镜像缓存、ccache 缓存亲和。
 - VM / HW 类型专用 PreBind 检查。
 - 多副本 scheduler leader election。
