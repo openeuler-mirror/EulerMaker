@@ -1,6 +1,9 @@
 package runner
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type TypeMeta struct {
 	APIVersion string `json:"apiVersion,omitempty"`
@@ -75,14 +78,25 @@ type JobResource struct {
 }
 
 type JobSpec struct {
-	Runner      string            `json:"runner,omitempty"`
-	Arch        string            `json:"arch,omitempty"`
-	Runtime     int64             `json:"runtime,omitempty"`
-	DockerImage string            `json:"dockerImage,omitempty"`
-	RepoURL     string            `json:"repoUrl,omitempty"`
-	Package     string            `json:"package,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Commands    []string          `json:"commands,omitempty"`
+	Runtime        string               `json:"runtime,omitempty"`
+	RuntimeSpec    json.RawMessage      `json:"runtimeSpec,omitempty"`
+	TimeoutSeconds int64                `json:"timeoutSeconds,omitempty"`
+	Resources      ResourceRequirements `json:"resources,omitempty"`
+	NodeSelector   map[string]string    `json:"nodeSelector,omitempty"`
+	Tolerations    []Toleration         `json:"tolerations,omitempty"`
+	Payload        string               `json:"payload,omitempty"`
+}
+
+type ResourceRequirements struct {
+	Requests map[string]string `json:"requests,omitempty"`
+	Limits   map[string]string `json:"limits,omitempty"`
+}
+
+type Toleration struct {
+	Key      string `json:"key,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Effect   string `json:"effect,omitempty"`
 }
 
 type JobStatus struct {

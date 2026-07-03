@@ -102,7 +102,7 @@ metadata:
   name: runner-dc-aarch64-01
   labels:
     ebs.io/runner-type: dc
-    ebs.io/arch: aarch64
+    ebs.io/runner-arch: aarch64
     ebs.io/zone: local
 spec:
   type: dc
@@ -211,7 +211,7 @@ watch /apis/ebs/v1/jobs?watch=true
 3. 更新 Runner.status.phase=Running
 4. 更新 Job.status.stage=Running
 5. 准备执行环境
-6. 执行 Job.spec.commands 或默认构建逻辑
+6. 按 Job.spec.timeoutSeconds 限制执行时间，并执行 Job.spec.payload
 7. 收集产物，得到 resultRoot
 8. 成功时更新 Job.status.phase=Completed、stage=PostRun、resultRoot
 9. 失败时更新 Job.status.phase=Failed、message
@@ -278,7 +278,7 @@ scheduler -> update Job.status.runner / phase
 - `Runner.spec.taints`：过滤不能容忍污点的 Job。
 - `Runner.metadata.labels`：匹配类型、架构、机房、能力标签。
 - `Runner.status.allocatable`：判断资源是否足够。
-- `Job.spec.runner`、`Job.spec.arch`：匹配期望执行规格和架构。
+- `Job.spec.nodeSelector`、`Job.spec.resources.requests`、`Job.spec.tolerations`：匹配调度约束、资源请求和架构，架构通过 `ebs.io/runner-arch` 标签选择。
 
 Runner 只执行已绑定给自己的 Job，不负责调度决策。
 

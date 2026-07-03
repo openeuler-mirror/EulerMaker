@@ -41,35 +41,20 @@ func (e *ShellExecutor) Execute(ctx context.Context, job JobResource) (string, e
 		return "", fmt.Errorf("create result root: %w", err)
 	}
 
-	commands := job.Spec.Commands
-	if len(commands) == 0 {
-		commands = defaultCommands(job)
+	payload := strings.TrimSpace(job.Spec.Payload)
+	if payload == "" {
+		payload = "echo no payload specified"
 	}
-	for _, command := range commands {
-		if strings.TrimSpace(command) == "" {
-			continue
-		}
-		if err := runCommand(ctx, workDir, job.Spec.Env, command); err != nil {
-			return resultRoot, err
-		}
+	if err := runCommand(ctx, workDir, payload); err != nil {
+		return resultRoot, err
 	}
 	return resultRoot, nil
 }
 
-func defaultCommands(job JobResource) []string {
-	if job.Spec.Package != "" {
-		return []string{"echo building package " + shellQuote(job.Spec.Package)}
-	}
-	return []string{"echo no commands specified"}
-}
-
-func runCommand(ctx context.Context, dir string, env map[string]string, command string) error {
+func runCommand(ctx context.Context, dir, command string) error {
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
-	for key, value := range env {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
 
 	var output bytes.Buffer
 	cmd.Stdout = &output
@@ -82,8 +67,4 @@ func runCommand(ctx context.Context, dir string, env map[string]string, command 
 		return fmt.Errorf("command %q failed: %s", command, msg)
 	}
 	return nil
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

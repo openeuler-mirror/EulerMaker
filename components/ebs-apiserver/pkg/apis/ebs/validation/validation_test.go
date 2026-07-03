@@ -170,39 +170,13 @@ func TestValidateBuildStatusUpdate(t *testing.T) {
 }
 
 func TestValidateJob(t *testing.T) {
-	tests := []struct {
-		name       string
-		job        *ebsv1.Job
-		wantErrs   int
-		wantFields map[string]field.ErrorType
-	}{
-		{
-			name: "valid",
-			job:  validJob(),
-		},
-		{
-			name:     "requires arch",
-			job:      &ebsv1.Job{},
-			wantErrs: 1,
-			wantFields: map[string]field.ErrorType{
-				"spec.arch": field.ErrorTypeRequired,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			errs := ValidateJob(tt.job)
-			assertErrorList(t, errs, tt.wantErrs, tt.wantFields)
-		})
-	}
+	errs := ValidateJob(validJob())
+	assertErrorList(t, errs, 0, nil)
 }
 
 func TestValidateJobUpdate(t *testing.T) {
 	errs := ValidateJobUpdate(&ebsv1.Job{}, validJob())
-	assertErrorList(t, errs, 1, map[string]field.ErrorType{
-		"spec.arch": field.ErrorTypeRequired,
-	})
+	assertErrorList(t, errs, 0, nil)
 }
 
 func TestValidateJobStatusUpdate(t *testing.T) {
@@ -391,11 +365,7 @@ func validBuild() *ebsv1.Build {
 }
 
 func validJob() *ebsv1.Job {
-	return &ebsv1.Job{
-		Spec: ebsv1.JobSpec{
-			Arch: "x86_64",
-		},
-	}
+	return &ebsv1.Job{}
 }
 
 func validRunner(runnerType, arch string) *ebsv1.Runner {

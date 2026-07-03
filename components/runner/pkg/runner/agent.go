@@ -100,7 +100,7 @@ func (a *Agent) runnerObject(resourceVersion string) RunnerResource {
 			ResourceVersion: resourceVersion,
 			Labels: map[string]string{
 				"ebs.io/runner-type": a.cfg.Type,
-				"ebs.io/arch":        a.cfg.Arch,
+				"ebs.io/runner-arch": a.cfg.Arch,
 			},
 		},
 		Spec: RunnerSpec{
@@ -234,7 +234,13 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 		log.Printf("update job running status failed: %v", err)
 	}
 
-	resultRoot, err := a.executor.Execute(parent, job)
+	execCtx := parent
+	var cancel context.CancelFunc
+	if job.Spec.TimeoutSeconds > 0 {
+		execCtx, cancel = context.WithTimeout(parent, time.Duration(job.Spec.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+	resultRoot, err := a.executor.Execute(execCtx, job)
 	end := time.Now().UTC()
 	status.EndTime = &end
 	status.ResultRoot = resultRoot

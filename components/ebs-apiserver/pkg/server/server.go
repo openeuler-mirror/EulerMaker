@@ -80,6 +80,8 @@ var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"ebs-apiserver/pkg/apis/ebs/v1.Job":                             objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":                         objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.JobStatus":                       objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements":            objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.Toleration":                      objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.JobList":                         objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.Runner":                          objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.RunnerSpec":                      objDef(),
