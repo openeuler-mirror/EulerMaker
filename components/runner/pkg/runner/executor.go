@@ -14,6 +14,26 @@ type Executor interface {
 	Execute(ctx context.Context, job JobResource) (string, error)
 }
 
+type RuntimeManager struct {
+	RunnerType string
+	Executors  map[string]Executor
+}
+
+func (m *RuntimeManager) Execute(ctx context.Context, job JobResource) (string, error) {
+	runtimeName := job.Spec.Runtime
+	if runtimeName == "" {
+		runtimeName = "dc"
+	}
+	if m.RunnerType != "" && runtimeName != m.RunnerType {
+		return "", fmt.Errorf("runner type %q cannot execute job runtime %q", m.RunnerType, runtimeName)
+	}
+	executor, ok := m.Executors[runtimeName]
+	if !ok || executor == nil {
+		return "", fmt.Errorf("runtime %q is not supported", runtimeName)
+	}
+	return executor.Execute(ctx, job)
+}
+
 type ShellExecutor struct {
 	WorkDir    string
 	ResultRoot string

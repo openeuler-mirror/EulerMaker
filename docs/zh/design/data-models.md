@@ -330,7 +330,7 @@ type JobSpec struct {
 | `resources` | ResourceRequirements | 否 | Job 资源请求与限制 |
 | `nodeSelector` | map[string]string | 否 | Runner label 精确匹配条件，如通过 `ebs.io/runner-arch` 选择架构 |
 | `tolerations` | []Toleration | 否 | 可容忍的 Runner 污点 |
-| `payload` | string | 否 | Job 执行载荷，包含运行实际需要的业务输入 |
+| `payload` | string | 否 | YAML 格式的 Job 参数内容，用于记录任务执行所需的业务输入 |
 
 ### ResourceRequirements
 

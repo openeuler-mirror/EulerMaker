@@ -113,7 +113,7 @@ type JobSpec struct {
 | `resources.limits` | 执行时资源上限，首版暂不参与调度 |
 | `nodeSelector` | 精确匹配 Runner `metadata.labels`，架构约束通过 `ebs.io/runner-arch` 表达 |
 | `tolerations` | 容忍 Runner `spec.taints` |
-| `payload` | Job 执行载荷，首版暂不参与调度 |
+| `payload` | YAML 格式的 Job 参数内容，首版暂不参与调度 |
 
 首版可以先支持 `nodeSelector`、`tolerations` 和常见资源名 `cpu`、`memory`、`ephemeral-storage`。资源数量沿用字符串表达，如 `"8"`、`"16Gi"`、`"100Gi"`。
 
