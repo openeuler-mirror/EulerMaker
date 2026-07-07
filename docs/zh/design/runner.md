@@ -21,9 +21,9 @@ runner -> ebs-gateway -> ebs-apiserver -> etcd / Elasticsearch
 | 职责 | 说明 |
 |------|------|
 | 注册 Runner | 创建或更新集群级 `Runner` 对象，声明执行机类型、架构、主机名、污点等信息 |
-| 上报状态 | 定期更新 `Runner.status`，包括 phase、资源容量、可调度资源、运行中 Job、地址、系统信息和心跳时间 |
+| 上报状态 | 定期更新 `Runner.status`，包括 phase、资源容量、可调度资源、地址、系统信息和心跳时间 |
 | 监听 Job | 通过全局 Job watch 获取资源变化，只处理 `status.runner` 等于自身名称的 Job |
-| 执行 Job | 根据 Job spec 下载源码、准备环境、执行命令、收集产物 |
+| 执行 Job | 根据 Job spec 准备执行环境、提供 payload 参数、运行任务、收集产物 |
 | 回写结果 | 通过 Project API 更新 Job status，推进 Job phase/stage/resultRoot/message |
 
 ## 三、API 交互
@@ -211,7 +211,7 @@ watch /apis/ebs/v1/jobs?watch=true
 3. 更新 Runner.status.phase=Running
 4. 更新 Job.status.stage=Running
 5. 准备执行环境
-6. 按 Job.spec.timeoutSeconds 限制执行时间，并执行 Job.spec.payload
+6. 按 Job.spec.timeoutSeconds 限制执行时间，将 Job.spec.payload 作为 YAML 参数提供给任务执行入口
 7. 收集产物，得到 resultRoot
 8. 成功时更新 Job.status.phase=Completed、stage=PostRun、resultRoot
 9. 失败时更新 Job.status.phase=Failed、message
@@ -234,9 +234,9 @@ type JobStatus struct {
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 
-## 八、执行器抽象
+## 八、执行器与容器生命周期
 
-Runner agent 可以支持多种执行器实现，但单个 Runner 资源通过 `spec.type` 声明自身类型：
+Runner agent 的执行逻辑应按 kubelet 管理 Pod sandbox/container 的思路拆分：agent 负责 API watch、状态推进、超时控制和幂等清理；具体运行时由 executor 承接。单个 Runner 资源通过 `spec.type` 声明自身能力，Job 通过 `spec.runtime` 和 `spec.runtimeSpec` 声明本次任务需要的运行时配置。
 
 | `spec.type` | 执行方式 | 说明 |
 |-------------|----------|------|
@@ -244,20 +244,89 @@ Runner agent 可以支持多种执行器实现，但单个 Runner 资源通过 `
 | `vm` | 虚拟机环境 | 需要更强隔离的构建 |
 | `hw` | 物理机环境 | 需要裸机能力的任务 |
 
-建议实现上将公共控制逻辑和执行器逻辑分离：
+`Job.spec.runtime` 默认值为 `dc`。Runner 应先判断自身 `spec.type` 是否能承接该 runtime，再把 `runtimeSpec` 交给对应 executor 解释。公共控制逻辑和执行器逻辑建议分离：
 
 ```text
 runner agent
   ├── client: gateway API 访问、watch、status 更新
   ├── heartbeat: Runner.status 上报
   ├── job worker: Job 生命周期推进
-  └── executor
-      ├── dc executor
-      ├── vm executor
-      └── hw executor
+  └── runtime manager
+      ├── dc executor: Docker 容器生命周期
+      ├── vm executor: 虚拟机生命周期
+      └── hw executor: 物理机/宿主机执行生命周期
 ```
 
 如果一个进程需要管理多类执行能力，应注册多个 Runner 对象，或明确拆分为多个 runner 实例，避免单个 `Runner.spec.type` 同时表达多种能力。
+
+### 8.1 DC 容器运行时
+
+`dc` executor 负责启动实际业务容器，而不是在 runner agent 进程内直接执行构建命令。runner agent 容器自身只是控制面进程，业务容器应作为独立容器创建、启动、等待、停止和清理。
+
+推荐的容器生命周期：
+
+```text
+1. 解析 Job.spec.runtimeSpec，得到镜像、网络、权限、工作目录、挂载等容器配置
+2. 为 Job 创建本地 workDir 和 resultDir
+3. 将 Job.spec.payload 写入 workDir/payload.yaml，作为任务执行所需的 YAML 参数文件
+4. 拉取或确认业务镜像可用
+5. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label
+6. 启动容器，由业务入口读取 /workspace/payload.yaml 并执行任务
+7. 流式采集或落盘容器日志
+8. 等待容器退出，按退出码决定 Job 成功或失败
+9. 超时时先 stop，超过 grace period 后 kill
+10. 收集 resultDir，清理容器和临时目录
+```
+
+`runtimeSpec` 对 `dc` runtime 可采用以下结构，字段由 dc executor 解释：
+
+```yaml
+runtime: dc
+runtimeSpec:
+  image: openeuler:22.03
+  imagePullPolicy: IfNotPresent
+  privileged: false
+  networkMode: bridge
+  workingDir: /workspace
+  env:
+    BUILD_ENV: production
+  mounts:
+    - name: work
+      mountPath: /workspace
+    - name: results
+      mountPath: /results
+```
+
+首版可固定内置挂载：
+
+| 宿主机目录 | 容器目录 | 说明 |
+|------------|----------|------|
+| `${rootDir}/work/{project}/{job}` | `/workspace` | payload YAML 参数文件和执行工作目录 |
+| `${rootDir}/results/{project}/{job}` | `/results` | 构建产物目录，对应 `Job.status.resultRoot` |
+
+容器 label 建议至少包含：
+
+| Label | 值 |
+|-------|----|
+| `ebs.io/project` | Job `metadata.namespace` |
+| `ebs.io/job` | Job `metadata.name` |
+| `ebs.io/runner` | Runner `metadata.name` |
+
+### 8.2 状态与幂等
+
+runner agent 应把容器生命周期映射到 Job status，而不是在 `Runner.status` 中维护运行中 Job 列表：
+
+| 容器阶段 | Job status 建议 |
+|----------|-----------------|
+| 容器创建前 | `phase=Running, stage=Running` |
+| 容器运行中 | 保持 `phase=Running, stage=Running` |
+| 容器退出码为 0，产物收集完成 | `phase=Completed, stage=PostRun, resultRoot=...` |
+| 容器退出码非 0 | `phase=Failed, stage=Failed, message=...` |
+| 执行超时 | `phase=Failed` 或后续扩展为 `Aborted`，`message` 记录 timeout |
+
+`PostRun` 表示业务执行已经结束并完成结果收集后的最终阶段；当前不表示一个独立异步执行阶段。如果后续需要上传产物、清理缓存等耗时后处理，可以把 `PostRun` 扩展为真实阶段，并在完成后再推进最终 phase。
+
+容器清理应按 Job identity 幂等执行：runner 重启后可以根据容器 label 找回未完成容器，决定继续等待、终止或标记失败；重复 stop/remove 不应导致 Job 状态回退。
 
 ## 九、调度协作
 

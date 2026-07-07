@@ -38,9 +38,18 @@ func NewAgent(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	return &Agent{
-		cfg:        cfg,
-		client:     client,
-		executor:   &ShellExecutor{WorkDir: workDir(cfg.RootDir), ResultRoot: resultRoot(cfg.RootDir)},
+		cfg:    cfg,
+		client: client,
+		executor: &RuntimeManager{
+			RunnerType: cfg.Type,
+			Executors: map[string]Executor{
+				"dc": &DCExecutor{
+					WorkDir:    workDir(cfg.RootDir),
+					ResultRoot: resultRoot(cfg.RootDir),
+					RunnerName: cfg.Name,
+				},
+			},
+		},
 		activeJobs: make(map[string]struct{}),
 	}, nil
 }
