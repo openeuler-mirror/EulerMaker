@@ -56,10 +56,10 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 ```
 主资源（5）: Project Snapshot Build Job Runner
 列表类型（5）: ProjectList SnapshotList BuildList JobList RunnerList
-辅助结构体（20）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
+辅助结构体（19）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus JobSpec JobStatus
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
-                  ResourceRequirements Toleration BuildTarget BuildTargetFlags
+                  ResourceRequirements Toleration BuildTarget
                   PackageRepo SpecCommit PackageStatus
 ```
 
@@ -88,7 +88,7 @@ type ProjectSpec struct {
     DisplayName      string                     `json:"displayName,omitempty"`
     Description      string                     `json:"description,omitempty"`
     SpecBranch       string                     `json:"specBranch,omitempty"`
-    BuildEnvMacros   string                     `json:"buildEnvMacros,omitempty"`
+    BuildPayload     string                     `json:"buildPayload,omitempty"`
     BuildTargets     []BuildTarget              `json:"buildTargets,omitempty"`
     PackageRepos     []PackageRepo              `json:"packageRepos,omitempty"`
 }
@@ -99,7 +99,7 @@ type ProjectSpec struct {
 | `displayName` | string | 否 | 页面展示名称，默认使用创建时的 Project 名称 |
 | `description` | string | 否 | 项目描述 |
 | `specBranch` | string | 否 | 默认 spec 分支，默认 `"master"` |
-| `buildEnvMacros` | string | 否 | 构建环境宏，YAML 格式 |
+| `buildPayload` | string | 否 | 构建环境宏，YAML 格式 |
 | `buildTargets` | []BuildTarget | 是 | 构建目标列表 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表 |
 
@@ -107,21 +107,17 @@ type ProjectSpec struct {
 
 ```go
 type ProjectStatus struct {
-    Phase         string             `json:"phase,omitempty"`
-    SnapshotCount int32              `json:"snapshotCount,omitempty"`
-    BuildCount    int32              `json:"buildCount,omitempty"`
-    LastBuildTime metav1.Time        `json:"lastBuildTime,omitempty"`
-    Conditions    []metav1.Condition `json:"conditions,omitempty"`
+    Phase             string                 `json:"phase,omitempty"`
+    LastSnapshotId    string                 `json:"lastSnapshotId,omitempty"`
+    LastBuildStatus   map[string]string      `json:"lastBuildStatus,omitempty"`
 }
 ```
 
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `phase` | string | `"Active"` / `"Terminating"` |
-| `snapshotCount` | int32 | 快照总数 |
-| `buildCount` | int32 | 构建总数 |
-| `lastBuildTime` | metav1.Time | 最后构建时间 |
-| `conditions` | []metav1.Condition | 状态条件列表 |
+| 字段 | Go 类型             | 说明                           |
+|------|-------------------|------------------------------|
+| `phase` | string            | `"Active"` / `"Terminating"` |
+| `lastSnapshotId` | string            | 最新快照 ID                      |
+| `lastBuildStatus` | map[string]string | key是构建os/arch,value是最新构建 ID  |
 
 ### ProjectList
 
@@ -156,36 +152,32 @@ type Snapshot struct {
 
 ```go
 type SnapshotSpec struct {
-    IsTrunk        bool                 `json:"isTrunk,omitempty"`
-    PrevSnapshot   string               `json:"prevSnapshot,omitempty"`
-    SpecCommits    map[string]SpecCommit `json:"specCommits,omitempty"`
-    BuildTargets   []BuildTarget        `json:"buildTargets,omitempty"`
-    GroundProjects map[string]string    `json:"groundProjects,omitempty"`
+    PrevSnapshot     string                 `json:"prevSnapshot,omitempty"`
+    SpecCommits      map[string]SpecCommit  `json:"specCommits,omitempty"`
+    BuildTargets     []BuildTarget          `json:"buildTargets,omitempty"`
+    PackageRepos     []PackageRepo          `json:"packageRepos,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `isTrunk` | bool | 否 | 是否主干快照，默认 false |
 | `prevSnapshot` | string | 否 | 同一 Project 下的前一快照名称（增量构建用） |
 | `specCommits` | map[string]SpecCommit | 是 | 各包 spec 提交信息 |
 | `buildTargets` | []BuildTarget | 是 | 构建目标 |
-| `groundProjects` | map[string]string | 否 | 基础项目快照映射，key=`项目_架构` |
+| `packageRepos` | []PackageRepo | 是 | 待构建的包列表 |
 
 ### SnapshotStatus
 
 ```go
 type SnapshotStatus struct {
     Phase     string      `json:"phase,omitempty"`
-    BuildId   string      `json:"buildId,omitempty"`
     StartTime metav1.Time `json:"startTime,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Created"` / `"Building"` / `"Completed"` / `"Failed"` |
-| `buildId` | string | 关联构建 ID |
+| `phase` | string | `Pending` / `Processing` / `Active` |
 | `startTime` | metav1.Time | 开始时间 |
 
 ### SnapshotList
@@ -544,35 +536,19 @@ type RunnerList struct {
 
 ```go
 type BuildTarget struct {
-    OsVariant      string           `json:"osVariant,omitempty"`
-    Architecture   string           `json:"architecture,omitempty"`
-    GroundProjects []string         `json:"groundProjects,omitempty"`
-    Flags          BuildTargetFlags `json:"flags,omitempty"`
+    Os             string      `json:"os,omitempty"`
+    Arch           string      `json:"arch,omitempty"`
+    BuildFlag      bool        `json:"buildFlag,omitempty"`
+    PublishFlag    bool        `json:"publishFlag,omitempty"`
 }
 ```
 
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `osVariant` | string | OS 变体，如 `"openEuler-22.03-LTS"` |
-| `architecture` | string | `"aarch64"` / `"x86_64"` |
-| `groundProjects` | []string | 依赖的基础项目列表 |
-| `flags` | BuildTargetFlags | 构建标志 |
-
----
-
-### BuildTargetFlags
-
-```go
-type BuildTargetFlags struct {
-    Build   bool `json:"build,omitempty"`
-    Publish bool `json:"publish,omitempty"`
-}
-```
-
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `build` | bool | 是否构建，默认 true |
-| `publish` | bool | 是否发布，默认 false |
+| 字段         | Go 类型 | 说明                         |
+|------------|---------|----------------------------|
+| `os` | string | 构建os |
+| `arch`     | string | `"aarch64"` / `"x86_64"`   |
+| `buildFlag`    | bool | 构建标志                       |
+| `publishFlag`    | bool | 发布标志                       |
 
 ---
 
@@ -580,21 +556,23 @@ type BuildTargetFlags struct {
 
 ```go
 type PackageRepo struct {
-    SpecName   string `json:"specName,omitempty"`
-    SpecUrl    string `json:"specUrl,omitempty"`
-    SpecBranch string `json:"specBranch,omitempty"`
-    GitTag     string `json:"gitTag,omitempty"`
-    CommitId   string `json:"commitId,omitempty"`
+    Name          string          `json:"name,omitempty"`
+    Url           string          `json:"url,omitempty"`
+    Branch        string          `json:"branch,omitempty"`
+    GitTag        string          `json:"gitTag,omitempty"`
+    CommitId      string          `json:"commitId,omitempty"`
+    BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
 }
 ```
 
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `specName` | string | spec 包名称 |
-| `specUrl` | string | spec 仓库 Git URL |
-| `specBranch` | string | spec 分支（与 gitTag 二选一） |
-| `gitTag` | string | Git 标签（与 specBranch 二选一） |
-| `commitId` | string | 指定提交 ID |
+| 字段             | Go 类型         | 说明                       |
+|----------------|---------------|--------------------------|
+| `name`         | string        | spec 包名称                 |
+| `url`          | string        | spec 仓库 Git URL          |
+| `branch`       | string        | spec 分支（与 gitTag 二选一）    |
+| `gitTag`       | string        | Git 标签（与 specBranch 二选一） |
+| `commitId`     | string        | 指定提交 ID                  |
+| `buildTargets` | []BuildTarget | 构建目标 |
 
 
 ### SpecCommit
@@ -602,29 +580,23 @@ type PackageRepo struct {
 ```go
 type SpecCommit struct {
     SpecUrl    string `json:"specUrl,omitempty"`
-    SpecBranch string `json:"specBranch,omitempty"`
     CommitId   string `json:"commitId,omitempty"`
-    CommitTime string `json:"commitTime,omitempty"`
-    GitRepo    string `json:"gitRepo,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `specUrl` | string | spec 仓库 URL |
-| `specBranch` | string | spec 分支 |
 | `commitId` | string | 提交 ID |
-| `commitTime` | string | 提交时间 |
-| `gitRepo` | string | Git 仓库名 |
 
 ---
 
 ## 附录 A：状态枚举汇总
 
-| 资源 | Phase 可选值 |
-|------|-------------|
-| Project | `Active` |
-| Snapshot | `Created` → `Building` → `Completed` / `Failed` |
+| 资源 | Phase 可选值                                                   |
+|------|-------------------------------------------------------------|
+| Project | `Active` / `Terminating`                                    |
+| Snapshot | `Pending` / `Processing` / `Active`                          |
 | Build | `Pending` → `Building` → `Completed` / `Failed` / `Aborted` |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted` |
 | Runner | `Registering` → `Booting` → `Idle` / `Running` → `Offline` |
@@ -633,7 +605,7 @@ type SpecCommit struct {
 
 ```
 ProjectSpec
-├── BuildTarget ──▶ BuildTargetFlags
+├── BuildTarget
 ├── PackageRepo
 
 SnapshotSpec
