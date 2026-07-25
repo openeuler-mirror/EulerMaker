@@ -43,24 +43,28 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 
 当前 apiserver 基于 `GenericAPIServer` 实现，Project API 会在服务端重写到 scoped storage 路径，因此 Project 名必须满足 DNS1123 label 约束。需要展示带点号、空格或大小写的项目名时，使用 `Project.spec.displayName`。
 
-| 子资源 | Project API | 全局 API | etcd |
-|--------|-------------|----------|------|
-| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | `/registry/ebs/snapshots/{project}/{name}` |
-| Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | `/registry/ebs/builds/{project}/{name}` |
-| Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | `/registry/ebs/jobs/{project}/{name}` |
+| 子资源      | Project API                                  | 全局 API                    | etcd                                        |
+|----------|----------------------------------------------|---------------------------|---------------------------------------------|
+| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots`  | `/apis/ebs/v1/snapshots`  | `/registry/ebs/snapshots/{project}/{name}`  |
+| Build    | `/apis/ebs/v1/projects/{project}/builds`     | `/apis/ebs/v1/builds`     | `/registry/ebs/builds/{project}/{name}`     |
+| Job      | `/apis/ebs/v1/projects/{project}/jobs`       | `/apis/ebs/v1/jobs`       | `/registry/ebs/jobs/{project}/{name}`       |
+| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | `/registry/ebs/buildinfos/{project}/{name}` |
+| RpmRepo  | `/apis/ebs/v1/projects/{project}/rpmrepos`   | `/apis/ebs/v1/rpmrepos`  | `/registry/ebs/rpmrepos/{project}/{name}`   |
 
 ---
 
-## 结构体总览（28 个）
+## 结构体总览（44 个）
 
 ```
-主资源（5）: Project Snapshot Build Job Runner
-列表类型（5）: ProjectList SnapshotList BuildList JobList RunnerList
-辅助结构体（19）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
-                  BuildSpec BuildStatus JobSpec JobStatus
+主资源（7）: Project Snapshot Build BuildInfo RpmRepo Job Runner
+列表类型（7）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList JobList RunnerList 
+辅助结构体（30）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
+                  BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
+                  BuildInfoSpec BuildInfoStatus SpecDepend SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
+                  RpmRepoSpec RpmRepoStatus RpmMeta
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
-                  PackageRepo SpecCommit PackageStatus
+                  PackageRepo SpecCommit VersionConst
 ```
 
 ---
@@ -108,7 +112,6 @@ type ProjectSpec struct {
 ```go
 type ProjectStatus struct {
     Phase             string                 `json:"phase,omitempty"`
-    LastSnapshotId    string                 `json:"lastSnapshotId,omitempty"`
     LastBuildStatus   map[string]string      `json:"lastBuildStatus,omitempty"`
 }
 ```
@@ -116,7 +119,6 @@ type ProjectStatus struct {
 | 字段 | Go 类型             | 说明                           |
 |------|-------------------|------------------------------|
 | `phase` | string            | `"Active"` / `"Terminating"` |
-| `lastSnapshotId` | string            | 最新快照 ID                      |
 | `lastBuildStatus` | map[string]string | key是构建os/arch,value是最新构建 ID  |
 
 ### ProjectList
@@ -171,14 +173,12 @@ type SnapshotSpec struct {
 ```go
 type SnapshotStatus struct {
     Phase     string      `json:"phase,omitempty"`
-    StartTime metav1.Time `json:"startTime,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | string | `Pending` / `Processing` / `Active` |
-| `startTime` | metav1.Time | 开始时间 |
 
 ### SnapshotList
 
@@ -213,63 +213,59 @@ type Build struct {
 
 ```go
 type BuildSpec struct {
-    SnapshotName string      `json:"snapshotName,omitempty"`
-    BuildType    string      `json:"buildType,omitempty"`
-    BuildTarget  BuildTarget `json:"buildTarget,omitempty"`
-    Packages     []string    `json:"packages,omitempty"`
+    SnapshotName       string                 `json:"snapshotName,omitempty"`
+    BuildType          string                 `json:"buildType,omitempty"`
+    BootstrapRepo      []BootstrapRepo        `json:"bootstrapRepo,omitempty"`
+    Packages           []string               `json:"packages,omitempty"`
+    BuildTarget        BuildTarget            `json:"buildTarget,omitempty"`
+    PrevBuildRepo      string                 `json:"prevBuildRepo,omitempty"`
 }
 ```
 
-| 字段 | Go 类型 | 必填 | 说明 |
-|------|---------|------|------|
+| 字段             | Go 类型 | 必填 | 说明 |
+|----------------|---------|------|------|
 | `snapshotName` | string | 是 | 使用同一 Project 下的快照 |
-| `buildType` | string | 是 | `"full"`/`"incremental"`/`"specified"`/`"single"` |
-| `buildTarget` | BuildTarget | 是 | 构建目标 |
-| `packages` | []string | 否 | 指定构建的包列表，空 = 全量 |
+| `buildType`    | string | 是 | `"full"`/`"incremental"`/`"specified"`/`"single"` |
+| `buildTarget`  | BuildTarget | 是 | 构建目标 |
+| `bootstrapRepo` | []BootstrapRepo | 否 | 引导 RPM 仓库 |
+| `packages`     | []string | 是 | 构建的软件包 |
+| `prevBuildRepo` | string | 否 | 上一次构建的最终 repo url |
+
+### BootstrapRepo
+
+```go
+type BootstrapRepo struct {
+    Name      string           `json:"name,omitempty"`
+    Repo      string           `json:"repo,omitempty"`
+}
+```
+
+| 字段     | Go 类型 | 说明                    |
+|--------|---------|-----------------------|
+| `name` | string | repo名称，如 `"everything"` |
+| `repo` | string | 软件源地址                 |
 
 ### BuildStatus
 
 ```go
 type BuildStatus struct {
-    Phase         string                   `json:"phase,omitempty"`
-    StartTime     metav1.Time              `json:"startTime,omitempty"`
-    EndTime       metav1.Time              `json:"endTime,omitempty"`
-    RepoId        string                   `json:"repoId,omitempty"`
-    PackageStatus map[string]PackageStatus `json:"packageStatus,omitempty"`
-    Conditions    []metav1.Condition       `json:"conditions,omitempty"`
+    Phase        string             `json:"phase,omitempty"`
+    Stage        string             `json:"stage,omitempty"`
+    StartTime    metav1.Time        `json:"startTime,omitempty"`
+    EndTime      metav1.Time        `json:"endTime,omitempty"`
+    Repo         string             `json:"repo,omitempty"`
+    Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Building"` / `"Completed"` / `"Failed"` / `"Aborted"` |
+| `phase` | string | `"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborting"` / `"Aborted"` |
+| `stage` | string | `"build"` / `"publish"`，标识构建阶段还是发布阶段 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
-| `repoId` | string | 生成的仓库 ID |
-| `packageStatus` | map[string]PackageStatus | 各包构建状态 |
+| `repo` | string | 生成的仓库 url |
 | `conditions` | []metav1.Condition | 状态条件 |
-
-### PackageStatus
-
-```go
-type PackageStatus struct {
-    Phase     string      `json:"phase,omitempty"`
-    JobId     string      `json:"jobId,omitempty"`
-    StartTime metav1.Time `json:"startTime,omitempty"`
-    EndTime   metav1.Time `json:"endTime,omitempty"`
-    Attempts  int32       `json:"attempts,omitempty"`
-    Message   string      `json:"message,omitempty"`
-}
-```
-
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `phase` | string | `"Pending"`/`"Building"`/`"Completed"`/`"Failed"`/`"Aborted"` |
-| `jobId` | string | 关联 Job ID |
-| `startTime` | metav1.Time | 开始时间 |
-| `endTime` | metav1.Time | 结束时间 |
-| `attempts` | int32 | 重试次数 |
-| `message` | string | 状态消息 |
 
 ### BuildList
 
@@ -283,7 +279,240 @@ type BuildList struct {
 
 ---
 
-## 四、Job（任务）
+## 四、BuildInfo（构建信息）
+
+### BuildInfo
+
+**API**: `/apis/ebs/v1/projects/{project}/buildinfos`
+**全局 API**: `/apis/ebs/v1/buildinfos`  
+**etcd**: `/registry/ebs/buildinfos/{project}/{name}`
+
+```go
+type BuildInfo struct {
+    metav1.TypeMeta    `json:",inline"`
+    metav1.ObjectMeta  `json:"metadata,omitempty"`
+    Spec   BuildInfoSpec   `json:"spec,omitempty"`
+    Status BuildInfoStatus `json:"status,omitempty"`
+}
+```
+
+### BuildInfoSpec
+
+```go
+type BuildInfoSpec struct {
+    SpecDepends  map[string]SpecDepend  `json:"specDepends,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `specDepends` | map[string]SpecDepend | key 为 `specName`，value 为该 spec 的依赖信息 |
+
+---
+
+### SpecDepend
+
+```go
+type SpecDepend struct {
+    RepoName      string                  `json:"repoName"`
+    SpecName      string                  `json:"specName"`
+    SpecFileName  string                  `json:"specFileName,omitempty"`
+    Version       string                  `json:"version"`
+    Release       string                  `json:"release,omitempty"`
+    Epoch         string                  `json:"epoch,omitempty"`
+    ExclusiveArch []string                `json:"exclusiveArch,omitempty"`
+    Provides      []string                `json:"provides,omitempty"`
+    Requires      map[string]VersionConst `json:"requires,omitempty"`
+    BuildRequires map[string]VersionConst `json:"buildRequires,omitempty"`
+    BuildRemoves  map[string]VersionConst `json:"buildRemoves,omitempty"`
+}
+```
+
+| 字段              | Go 类型                    | 说明                                                                |
+| --------------- | ---------------------------  | ----------------------------------------------------------------- |
+| `repoName`      | string                  | spec 所属仓库名 |
+| `specName`      | string                  | spec 名称 |
+| `specFileName`  | string                  | 解析的 spec 文件名（如 `gcc.spec`） |
+| `version`       | string                  | 完整版本号（`epoch:version-release` 拼接后的字符串） |
+| `release`       | string                  | 原始 release 段值 |
+| `epoch`         | string                  | 原始 epoch 段值  |
+| `exclusiveArch` | []string                | `ExclusiveArch` 减去 `ExcludeArch` 之后的最终架构列表 `EXCLUSIVE_ARCH` |
+| `provides`      | []string                | spec 声明的 Provides（宏已展开） |
+| `requires`      | map[string]VersionConst | 安装期依赖 Requires |
+| `buildRequires` | map[string]VersionConst | 构建期依赖  |
+| `buildRemoves`  | map[string]VersionConst | 以 `-` 开头的 BuildRequires 列表 |
+
+---
+
+### BuildInfoStatus
+
+```go
+type BuildInfoStatus struct {
+    Phase       string                `json:"phase,omitempty"`
+    Conditions  []metav1.Condition    `json:"conditions,omitempty"`
+    SpecStatus  map[string]SpecStatus `json:"specStatus,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` |
+| `conditions` | []metav1.Condition | 状态条件 |
+| `specStatus` | map[string]SpecStatus | 各 spec 运行时状态 |
+
+### SpecStatus
+
+```go
+type SpecStatus struct {
+    Build   SpecBuildStatus   `json:"build,omitempty"`
+    Install SpecInstallStatus `json:"install,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `build` | SpecBuildStatus | 构建状态 |
+| `install` | SpecInstallStatus | 安装状态 |
+
+---
+
+### SpecBuildStatus
+
+```go
+type SpecBuildStatus struct {
+    Status     string             `json:"status"`
+    Conditions []metav1.Condition `json:"conditions,omitempty"`
+    JobName    string             `json:"jobName,omitempty"`
+}
+```
+
+| 字段           | Go 类型 | 说明 |
+|--------------|------|------|
+| `status`     | string | `"Running"` /`"Succeeded"` / `"Failed"` / `"Aborted"`|
+| `conditions` | []metav1.Condition | 构建状态条件 |
+| `jobName`    | string | 最近一次关联的远端 jobName |
+
+---
+
+### SpecInstallStatus
+
+```go
+type SpecInstallStatus struct {
+    Status      string                 `json:"status"`
+    MissingDeps map[string]MissingDep  `json:"missingDeps,omitempty"`
+    Conditions  []metav1.Condition     `json:"conditions,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明                  |
+|------|---------|---------------------|
+| `status` | string | `Succeeded` / `Failed` |
+| `missingDeps` | map[string]MissingDep | install 失败时记录       |
+| `conditions` | []metav1.Condition | install 状态条件 |
+
+---
+
+### MissingDep
+
+```go
+type MissingDep struct {
+    NeededBy        string          `json:"neededBy,omitempty"`
+    VersionRequests VersionConst    `json:"versionRequests,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `neededBy` | string | 依赖此 rpm 的上游 spec |
+| `versionRequests` | VersionConst | 版本约束 |
+
+---
+
+### BuildInfoList
+
+```go
+type BuildInfoList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items []BuildInfo `json:"items"`
+}
+```
+
+---
+
+## 五、RpmRepo（RPM 仓库解析信息）
+
+### RpmRepo
+
+**API**: `/apis/ebs/v1/projects/{project}/rpmrepos`
+**全局 API**: `/apis/ebs/v1/rpmrepos`
+**etcd**: `/registry/ebs/rpmrepos/{project}/{name}`
+
+```go
+type RpmRepo struct {
+    metav1.TypeMeta    `json:",inline"`
+    metav1.ObjectMeta  `json:"metadata,omitempty"`
+    Spec   RpmRepoSpec   `json:"spec,omitempty"`
+    Status RpmRepoStatus `json:"status,omitempty"`
+}
+```
+
+### RpmRepoSpec
+
+```go
+type RpmRepoSpec struct {
+}
+```
+
+### RpmRepoStatus
+
+```go
+type RpmRepoStatus struct {
+    Phase        string                  `json:"phase,omitempty"`
+    RpmDepends   map[string]RpmMeta      `json:"rpmDepends,omitempty"`
+    Conditions   []metav1.Condition      `json:"conditions,omitempty"`
+}
+```
+
+| 字段             | Go 类型            | 说明                                           |
+|----------------|------------------|----------------------------------------------|
+| `phase`        | string           | `"Pending"` / `"Processing"` / `"Completed"` |
+| `rpmDepends`   | map[string]RpmMeta                 | 仓库里每个 rpm 的元信息,key 格式 `<rpm名>@<spec名>`       |
+| `conditions`   | []metav1.Condition | 状态条件（记录失败原因等）                                |
+
+### RpmMeta
+
+```go
+type RpmMeta struct {
+    Version  string                  `json:"version"`
+    SpecName string                  `json:"specName"`
+    Provides map[string]string       `json:"provides,omitempty"`
+    Requires map[string]VersionConst `json:"requires,omitempty"`
+}
+```
+
+| 字段         | Go 类型             | 说明                                |
+|------------|-------------------|-----------------------------------|
+| `version`  | string            | 版本号（`epoch:ver-rel` 格式）           |
+| `specName` | string            | 由哪个 spec 产出                       |
+| `provides` | map[string]string | rpm 元数据里的 Provides 声明            |
+| `requires` | map[string]VersionConst | rpm 元数据里的 Requires 声明（运行时依赖）     |
+
+---
+
+### RpmRepoList
+
+```go
+type RpmRepoList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items []RpmRepo `json:"items"`
+}
+```
+
+---
+
+## 六、Job（任务）
 
 **API**: `/apis/ebs/v1/projects/{project}/jobs`  
 **全局 API**: `/apis/ebs/v1/jobs`  
@@ -394,7 +623,7 @@ type JobList struct {
 
 ---
 
-## 五、Runner（执行机）
+## 七、Runner（执行机）
 
 **API**: `/apis/ebs/v1/runners`  
 **etcd**: `/registry/ebs/runners/{name}`
@@ -530,7 +759,7 @@ type RunnerList struct {
 
 ---
 
-## 六、公共子结构体
+## 八、公共子结构体
 
 ### BuildTarget
 
@@ -591,15 +820,39 @@ type SpecCommit struct {
 
 ---
 
+### VersionConst
+
+```go
+type VersionConst struct {
+    GT string `json:"gt,omitempty"`
+    GE string `json:"ge,omitempty"`
+    EQ string `json:"eq,omitempty"`
+    LE string `json:"le,omitempty"`
+    LT string `json:"lt,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `gt` | string | `>` |
+| `ge` | string | `>=` |
+| `eq` | string | `=` |
+| `le` | string | `<=` |
+| `lt` | string | `<` |
+
+---
+
 ## 附录 A：状态枚举汇总
 
-| 资源 | Phase 可选值                                                   |
-|------|-------------------------------------------------------------|
-| Project | `Active` / `Terminating`                                    |
-| Snapshot | `Pending` / `Processing` / `Active`                          |
-| Build | `Pending` → `Building` → `Completed` / `Failed` / `Aborted` |
-| Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted` |
-| Runner | `Registering` → `Booting` → `Idle` / `Running` → `Offline` |
+| 资源 | Phase 可选值                                                                             |
+|------|---------------------------------------------------------------------------------------|
+| Project | `Active` / `Terminating`                                                              |
+| Snapshot | `Pending` / `Processing` / `Active`                                                   |
+| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborting` / `Aborted` |
+| BuildInfo | `Pending` / `Processing` / `Completed`                                                |
+| RpmRepo | `Pending` / `Processing` / `Completed`                                                |
+| Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |
+| Runner | `Registering` → `Booting` → `Idle` / `Running` → `Offline`                            |
 
 ## 附录 B：结构体引用关系图
 
@@ -613,8 +866,20 @@ SnapshotSpec
 ├── BuildTarget
 └── map[string]string
 
-BuildSpec ──▶ BuildTarget
-BuildStatus ──▶ PackageStatus
+BuildSpec
+├── BuildTarget
+└── BootstrapRepo
+
+BuildInfoSpec ──▶ SpecDepend ──▶ VersionConst
+
+BuildInfoStatus
+└── SpecStatus
+    ├── SpecBuildStatus
+    └── SpecInstallStatus
+        └── MissingDep ──▶ VersionConst
+
+RpmRepoStatus ──▶ RpmMeta
+
 JobSpec
 ├── ResourceRequirements
 └── Toleration
