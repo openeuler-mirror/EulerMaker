@@ -101,6 +101,7 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	b := obj.(*ebsv1.Build)
+	ebsv1.SetDefaults_Build(b)
 	b.Status = ebsv1.BuildStatus{Phase: "Pending"}
 }
 

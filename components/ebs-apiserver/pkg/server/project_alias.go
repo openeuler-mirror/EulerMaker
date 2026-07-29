@@ -11,9 +11,11 @@ import (
 )
 
 var projectScopedResources = map[string]struct{}{
-	"snapshots": {},
-	"builds":    {},
-	"jobs":      {},
+	"snapshots":  {},
+	"builds":     {},
+	"buildinfos": {},
+	"rpmrepos":   {},
+	"jobs":       {},
 }
 
 func installProjectAliasRoutes(srv *genericapiserver.GenericAPIServer) {

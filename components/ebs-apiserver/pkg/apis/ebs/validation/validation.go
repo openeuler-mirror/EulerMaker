@@ -20,11 +20,11 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets"), "at least one build target is required"))
 	}
 	for i, bt := range obj.Spec.BuildTargets {
-		if len(bt.OsVariant) == 0 {
-			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("osVariant"), "osVariant is required"))
+		if len(bt.Os) == 0 {
+			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("os"), "os is required"))
 		}
-		if len(bt.Architecture) == 0 {
-			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("architecture"), "architecture is required"))
+		if len(bt.Arch) == 0 {
+			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("arch"), "arch is required"))
 		}
 	}
 	return allErrs
@@ -47,6 +47,9 @@ func ValidateSnapshot(obj *ebsv1.Snapshot) field.ErrorList {
 	if len(obj.Spec.BuildTargets) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets"), "at least one build target is required"))
 	}
+	if len(obj.Spec.PackageRepos) == 0 {
+		allErrs = append(allErrs, field.Required(field.NewPath("spec", "packageRepos"), "at least one package repo is required"))
+	}
 	return allErrs
 }
 
@@ -62,6 +65,15 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	if len(obj.Spec.BuildType) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildType"), "buildType is required"))
 	}
+	if len(obj.Spec.Packages) == 0 {
+		allErrs = append(allErrs, field.Required(field.NewPath("spec", "packages"), "at least one package is required"))
+	}
+	if len(obj.Spec.BuildTarget.Os) == 0 {
+		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTarget", "os"), "os is required"))
+	}
+	if len(obj.Spec.BuildTarget.Arch) == 0 {
+		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTarget", "arch"), "arch is required"))
+	}
 	return allErrs
 }
 
@@ -73,6 +85,18 @@ func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	var allErrs field.ErrorList
 	return allErrs
 }
+
+func ValidateBuildInfo(obj *ebsv1.BuildInfo) field.ErrorList { return nil }
+func ValidateBuildInfoUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
+	return ValidateBuildInfo(newObj)
+}
+func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList { return nil }
+
+func ValidateRpmRepo(obj *ebsv1.RpmRepo) field.ErrorList { return nil }
+func ValidateRpmRepoUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
+	return ValidateRpmRepo(newObj)
+}
+func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList { return nil }
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList

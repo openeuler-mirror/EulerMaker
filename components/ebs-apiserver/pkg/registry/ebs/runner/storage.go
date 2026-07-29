@@ -26,6 +26,7 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	r := obj.(*ebsv1.Runner)
+	ebsv1.SetDefaults_Runner(r)
 	r.Status = ebsv1.RunnerStatus{Phase: "Registering"}
 }
 

@@ -83,6 +83,7 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	j := obj.(*ebsv1.Job)
+	ebsv1.SetDefaults_Job(j)
 	j.Status = ebsv1.JobStatus{Phase: "Pending"}
 }
 

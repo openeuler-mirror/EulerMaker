@@ -21,8 +21,10 @@ import (
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
+	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
+	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	"ebs-apiserver/pkg/storage/es"
@@ -65,7 +67,6 @@ var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"ebs-apiserver/pkg/apis/ebs/v1.ProjectStatus":                   objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.ProjectList":                     objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.BuildTarget":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildTargetFlags":                objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.PackageRepo":                     objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.Snapshot":                        objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.SnapshotSpec":                    objDef(),
@@ -75,8 +76,23 @@ var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"ebs-apiserver/pkg/apis/ebs/v1.Build":                           objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.BuildSpec":                       objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.BuildStatus":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.PackageStatus":                   objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.BuildList":                       objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.BootstrapRepo":                   objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfo":                       objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoSpec":                   objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoStatus":                 objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoList":                   objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.SpecDepend":                      objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.SpecStatus":                      objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.SpecBuildStatus":                 objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.SpecInstallStatus":               objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.MissingDep":                      objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepo":                         objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepoSpec":                     objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepoStatus":                   objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.RpmMeta":                         objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepoList":                     objDef(),
+	"ebs-apiserver/pkg/apis/ebs/v1.VersionConst":                    objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.Job":                             objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":                         objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.JobStatus":                       objDef(),
@@ -293,6 +309,26 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	v1Storage["builds"] = hybrid.NewEnricherStore(buildStorage.Build.(*genericregistry.Store), esClient, "build", func() runtime.Object { return &ebsv1.Build{} }, func() runtime.Object { return &ebsv1.BuildList{} })
 	v1Storage["builds/status"] = buildStorage.Status
 	v1Storage["builds/abort"] = buildStorage.Abort
+
+	buildInfoStorage := buildinfostore.NewStorage()
+	if err := completeStore(buildInfoStorage.Resource, storeOptions); err != nil {
+		return nil, err
+	}
+	if err := completeStore(buildInfoStorage.Status, storeOptions); err != nil {
+		return nil, err
+	}
+	v1Storage["buildinfos"] = hybrid.NewEnricherStore(buildInfoStorage.Resource.(*genericregistry.Store), esClient, "buildinfo", func() runtime.Object { return &ebsv1.BuildInfo{} }, func() runtime.Object { return &ebsv1.BuildInfoList{} })
+	v1Storage["buildinfos/status"] = buildInfoStorage.Status
+
+	rpmRepoStorage := rpmrepostore.NewStorage()
+	if err := completeStore(rpmRepoStorage.Resource, storeOptions); err != nil {
+		return nil, err
+	}
+	if err := completeStore(rpmRepoStorage.Status, storeOptions); err != nil {
+		return nil, err
+	}
+	v1Storage["rpmrepos"] = hybrid.NewEnricherStore(rpmRepoStorage.Resource.(*genericregistry.Store), esClient, "rpmrepo", func() runtime.Object { return &ebsv1.RpmRepo{} }, func() runtime.Object { return &ebsv1.RpmRepoList{} })
+	v1Storage["rpmrepos/status"] = rpmRepoStorage.Status
 
 	jobStorage := jobstore.NewStorage(Scheme)
 	if err := jobStorage.Job.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {

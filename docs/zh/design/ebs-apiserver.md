@@ -4,7 +4,7 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源、watch/list 能力，以及 etcd 持久化能力。
 
-Snapshot、Build、Job 采用折中实现：用户侧使用 Project API 表达项目归属，调度器和控制器使用全局系统 API list/watch 全部对象。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径，核心 list/watch/status 能力仍复用 generic apiserver。
+Snapshot、Build、BuildInfo、RpmRepo、Job 采用折中实现：用户侧使用 Project API 表达项目归属，调度器和控制器使用全局系统 API list/watch 全部对象。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径，核心 list/watch/status 能力仍复用 generic apiserver。
 
 服务使用 etcd 和 Elasticsearch 作为组合主存储：etcd 负责对象持久化、resourceVersion 和 list/watch；Elasticsearch 负责对象索引、搜索字段和增强数据。创建/更新对象时会同步写入 ES，读取单对象时会尝试从 ES 取回增强数据并覆盖返回对象。
 
@@ -45,7 +45,9 @@ components/ebs-apiserver/
 │   │   └── validation/validation.go   # admission 校验
 │   ├── registry/
 │   │   ├── scoped_store.go            # 命名空间作用域 store 包装
-│   │   └── ebs/*/storage.go           # 各资源 REST storage
+│   │   └── ebs/
+│   │       ├── */storage.go            # 各资源 REST storage
+│   │       └── scopedresource/         # Project 子资源通用 storage
 │   ├── server/
 │   │   ├── project_alias.go           # Project API 路由适配
 │   │   └── server.go                  # apiserver 配置与资源安装
@@ -75,10 +77,12 @@ apiVersion: ebs/v1
 | Project | `/apis/ebs/v1/projects` | - | `/status` |
 | Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | `/status` |
 | Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | `/status`, `/abort` |
+| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | `/status` |
+| RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | `/status` |
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | `/status` |
 | Runner | `/apis/ebs/v1/runners` | - | `/status` |
 
-其中 `Snapshot`、`Build`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源；全局 API 只用于调度器、控制器等系统组件做跨 Project 的 list/watch；`Project` 和 `Runner` 为集群级资源。
+其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源；全局 API 只用于调度器、控制器等系统组件做跨 Project 的 list/watch；`Project` 和 `Runner` 为集群级资源。
 
 Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `Project.spec.displayName`。
 
@@ -98,11 +102,13 @@ apiserver 使用 `k8s.io/apiserver/pkg/registry/generic/registry.Store` 将资�
 /registry/ebs/projects/{name}
 /registry/ebs/snapshots/{project}/{name}
 /registry/ebs/builds/{project}/{name}
+/registry/ebs/buildinfos/{project}/{name}
+/registry/ebs/rpmrepos/{project}/{name}
 /registry/ebs/jobs/{project}/{name}
 /registry/ebs/runners/{name}
 ```
 
-`Snapshot`、`Build`、`Job` 按 `{project}/{name}` 存在资源全局前缀下。全局 list/watch 监听对应资源前缀，例如 `/registry/ebs/builds`；Project API 的单 Project list/watch 监听对应 Project 子前缀，例如 `/registry/ebs/builds/{project}`。
+Project 子资源按 `{project}/{name}` 存在各自的资源全局前缀下。全局 list/watch 监听对应资源前缀，例如 `/registry/ebs/builds`；Project API 的单 Project list/watch 监听对应 Project 子前缀，例如 `/registry/ebs/builds/{project}`。
 
 ### Elasticsearch 主存储
 
@@ -114,17 +120,21 @@ apiserver 使用 `k8s.io/apiserver/pkg/registry/generic/registry.Store` 将资�
 - `List/Watch`：直接走 etcd。
 - `Delete`：先删 etcd，再删除 ES 文档。
 
-namespaced 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，HTTP 请求中会对 `/` 做 URL escape。
+Project scoped 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，HTTP 请求中会对 `/` 做 URL escape。
 
-ES client 启动时会 ping ES 并确保以下索引存在：
+资源使用以下 Elasticsearch 索引：
 
 ```text
 ebs-projects
 ebs-snapshots
 ebs-builds
+ebs-buildinfos
+ebs-rpmrepos
 ebs-jobs
 ebs-runners
 ```
+
+ES client 启动时会 ping ES，并预创建 Project、Snapshot、Build、Job 和 Runner 的索引。BuildInfo、RpmRepo 首次写入时分别使用 `ebs-buildinfos`、`ebs-rpmrepos`；部署环境需要允许 Elasticsearch 自动创建索引，或预先创建这两个索引。
 
 ## 默认值与校验
 
@@ -133,12 +143,26 @@ ebs-runners
 - 普通资源更新会保留旧 `status`。
 - `/status` 更新会保留旧 `spec`。
 - `Project` 创建默认 `status.phase = Active`。
-- `Snapshot` 创建默认 `status.phase = Created`。
+- `Snapshot` 创建默认 `status.phase = Pending`。
 - `Build` 创建默认 `status.phase = Pending`。
+- `BuildInfo` 创建默认 `status.phase = Pending`。
+- `RpmRepo` 创建默认 `status.phase = Pending`。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Registering`。
 
-当前校验逻辑位于 `pkg/apis/ebs/validation/validation.go`，主要校验必填字段、Project 名称格式、Runner 类型枚举，以及 Runner 的 `type`/`arch` 更新不可变。
+默认值还包括：
+
+- `Project.spec.displayName` 默认为创建请求中的 Project 名称，`spec.specBranch` 默认为 `master`。
+- `Build.spec.buildType` 默认为 `full`。
+- `Job.spec.runtime` 默认为 `dc`，`spec.timeoutSeconds` 默认为 `10800`。
+- `Runner.spec.type` 默认为 `dc`。
+
+当前校验逻辑位于 `pkg/apis/ebs/validation/validation.go`，主要包括：
+
+- Project 名称必须满足 DNS1123 label，并至少包含一个带 `os`、`arch` 的构建目标。
+- Snapshot 必须包含 `specCommits`、`buildTargets` 和 `packageRepos`。
+- Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
+- Runner 类型必须为 `dc`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
 
 ## 启动参数
 
@@ -190,9 +214,47 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "displayName": "openEuler 22.03 LTS",
       "description": "openEuler 22.03 LTS",
       "specBranch": "master",
+      "buildPayload": "debug_package: false",
       "buildTargets": [{
-        "osVariant": "openEuler-22.03-LTS",
-        "architecture": "aarch64"
+        "os": "openEuler-22.03-LTS",
+        "arch": "aarch64",
+        "buildFlag": true,
+        "publishFlag": true
+      }],
+      "packageRepos": [{
+        "name": "gcc",
+        "url": "https://example.com/src-openeuler/gcc.git",
+        "branch": "master"
+      }]
+    }
+  }'
+```
+
+创建 Snapshot：
+
+```bash
+curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/snapshots \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apiVersion": "ebs/v1",
+    "kind": "Snapshot",
+    "metadata": {"name": "snapshot-001"},
+    "spec": {
+      "specCommits": {
+        "gcc": {
+          "specUrl": "https://example.com/src-openeuler/gcc.git",
+          "commitId": "0123456789abcdef"
+        }
+      },
+      "buildTargets": [{
+        "os": "openEuler-22.03-LTS",
+        "arch": "aarch64",
+        "buildFlag": true
+      }],
+      "packageRepos": [{
+        "name": "gcc",
+        "url": "https://example.com/src-openeuler/gcc.git",
+        "commitId": "0123456789abcdef"
       }]
     }
   }'
@@ -210,12 +272,22 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
     "spec": {
       "snapshotName": "snapshot-001",
       "buildType": "full",
+      "packages": ["gcc"],
       "buildTarget": {
-        "osVariant": "openEuler-22.03-LTS",
-        "architecture": "aarch64"
+        "os": "openEuler-22.03-LTS",
+        "arch": "aarch64",
+        "buildFlag": true,
+        "publishFlag": true
       }
     }
   }'
+```
+
+查询 Project 下的 BuildInfo 和 RpmRepo：
+
+```bash
+curl -k 'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/buildinfos'
+curl -k 'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/rpmrepos'
 ```
 
 更新 Job 状态：
@@ -262,6 +334,13 @@ Watch 全局 Build：
 
 ```bash
 curl -k -N 'https://localhost:8443/apis/ebs/v1/builds?watch=true'
+```
+
+Watch 全局 BuildInfo 和 RpmRepo：
+
+```bash
+curl -k -N 'https://localhost:8443/apis/ebs/v1/buildinfos?watch=true'
+curl -k -N 'https://localhost:8443/apis/ebs/v1/rpmrepos?watch=true'
 ```
 
 ## 待完善项
