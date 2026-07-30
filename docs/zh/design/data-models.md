@@ -39,17 +39,19 @@ Items           []Xxx `json:"items"`
 
 Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。子资源名称只需在所属 Project 内唯一。
 
-调度器和控制器使用全局系统 API list/watch 全部对象；用户侧和项目侧调用使用 Project API。
+调度器和控制器可使用全局系统 API 跨 Project list 对象；在 Project 级资源中，只有 Job 的全局 API 支持 watch。集群级资源 Runner 的 API 同样支持 list/watch。用户侧和项目侧调用使用 Project API。
 
 当前 apiserver 基于 `GenericAPIServer` 实现，Project API 会在服务端重写到 scoped storage 路径，因此 Project 名必须满足 DNS1123 label 约束。需要展示带点号、空格或大小写的项目名时，使用 `Project.spec.displayName`。
 
-| 子资源      | Project API                                  | 全局 API                    | etcd                                        |
-|----------|----------------------------------------------|---------------------------|---------------------------------------------|
-| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots`  | `/apis/ebs/v1/snapshots`  | `/registry/ebs/snapshots/{project}/{name}`  |
-| Build    | `/apis/ebs/v1/projects/{project}/builds`     | `/apis/ebs/v1/builds`     | `/registry/ebs/builds/{project}/{name}`     |
-| Job      | `/apis/ebs/v1/projects/{project}/jobs`       | `/apis/ebs/v1/jobs`       | `/registry/ebs/jobs/{project}/{name}`       |
-| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | `/registry/ebs/buildinfos/{project}/{name}` |
-| RpmRepo  | `/apis/ebs/v1/projects/{project}/rpmrepos`   | `/apis/ebs/v1/rpmrepos`  | `/registry/ebs/rpmrepos/{project}/{name}`   |
+| 子资源 | Project API | 全局 API | 主存储 | 对象定位 |
+|--------|-------------|----------|--------|----------|
+| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | Elasticsearch | `ebs-snapshots` / `{project}/{name}` |
+| Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | Elasticsearch | `ebs-builds` / `{project}/{name}` |
+| Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | etcd | `/registry/ebs/jobs/{project}/{name}` |
+| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | Elasticsearch | `ebs-buildinfos` / `{project}/{name}` |
+| RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | Elasticsearch | `ebs-rpmrepos` / `{project}/{name}` |
+
+表中 Elasticsearch 对象定位格式为“索引 / 文档 ID”。Project scoped 对象统一使用 `{project}/{name}` 作为文档 ID；Job 使用相同层级的 etcd key。只有 Job 和 Runner 存入 etcd 并提供 list/watch。
 
 ---
 
@@ -72,7 +74,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 ## 一、Project（项目）
 
 **API**: `/apis/ebs/v1/projects`  
-**etcd**: `/registry/ebs/projects/{name}`
+**Elasticsearch**: 索引 `ebs-projects`，文档 ID `{name}`
 
 ### Project
 
@@ -137,7 +139,7 @@ type ProjectList struct {
 
 **API**: `/apis/ebs/v1/projects/{project}/snapshots`  
 **全局 API**: `/apis/ebs/v1/snapshots`  
-**etcd**: `/registry/ebs/snapshots/{project}/{name}`
+**Elasticsearch**: 索引 `ebs-snapshots`，文档 ID `{project}/{name}`
 
 ### Snapshot
 
@@ -196,7 +198,7 @@ type SnapshotList struct {
 
 **API**: `/apis/ebs/v1/projects/{project}/builds`  
 **全局 API**: `/apis/ebs/v1/builds`  
-**etcd**: `/registry/ebs/builds/{project}/{name}`
+**Elasticsearch**: 索引 `ebs-builds`，文档 ID `{project}/{name}`
 
 ### Build
 
@@ -284,8 +286,8 @@ type BuildList struct {
 ### BuildInfo
 
 **API**: `/apis/ebs/v1/projects/{project}/buildinfos`
-**全局 API**: `/apis/ebs/v1/buildinfos`  
-**etcd**: `/registry/ebs/buildinfos/{project}/{name}`
+**全局 API**: `/apis/ebs/v1/buildinfos`
+**Elasticsearch**: 索引 `ebs-buildinfos`，文档 ID `{project}/{name}`
 
 ```go
 type BuildInfo struct {
@@ -446,7 +448,7 @@ type BuildInfoList struct {
 
 **API**: `/apis/ebs/v1/projects/{project}/rpmrepos`
 **全局 API**: `/apis/ebs/v1/rpmrepos`
-**etcd**: `/registry/ebs/rpmrepos/{project}/{name}`
+**Elasticsearch**: 索引 `ebs-rpmrepos`，文档 ID `{project}/{name}`
 
 ```go
 type RpmRepo struct {
