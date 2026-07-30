@@ -61,8 +61,8 @@ func TestValidateProject(t *testing.T) {
 			},
 			wantErrs: 2,
 			wantFields: map[string]field.ErrorType{
-				"spec.buildTargets[0].osVariant":    field.ErrorTypeRequired,
-				"spec.buildTargets[0].architecture": field.ErrorTypeRequired,
+				"spec.buildTargets[0].os":   field.ErrorTypeRequired,
+				"spec.buildTargets[0].arch": field.ErrorTypeRequired,
 			},
 		},
 	}
@@ -100,12 +100,13 @@ func TestValidateSnapshot(t *testing.T) {
 			snapshot: validSnapshot(),
 		},
 		{
-			name:     "requires spec commits and build targets",
+			name:     "requires spec commits, build targets and package repos",
 			snapshot: &ebsv1.Snapshot{},
-			wantErrs: 2,
+			wantErrs: 3,
 			wantFields: map[string]field.ErrorType{
 				"spec.specCommits":  field.ErrorTypeRequired,
 				"spec.buildTargets": field.ErrorTypeRequired,
+				"spec.packageRepos": field.ErrorTypeRequired,
 			},
 		},
 	}
@@ -120,9 +121,10 @@ func TestValidateSnapshot(t *testing.T) {
 
 func TestValidateSnapshotUpdate(t *testing.T) {
 	errs := ValidateSnapshotUpdate(&ebsv1.Snapshot{}, validSnapshot())
-	assertErrorList(t, errs, 2, map[string]field.ErrorType{
+	assertErrorList(t, errs, 3, map[string]field.ErrorType{
 		"spec.specCommits":  field.ErrorTypeRequired,
 		"spec.buildTargets": field.ErrorTypeRequired,
+		"spec.packageRepos": field.ErrorTypeRequired,
 	})
 }
 
@@ -138,12 +140,15 @@ func TestValidateBuild(t *testing.T) {
 			build: validBuild(),
 		},
 		{
-			name:     "requires snapshot name and build type",
+			name:     "requires mandatory build fields",
 			build:    &ebsv1.Build{},
-			wantErrs: 2,
+			wantErrs: 5,
 			wantFields: map[string]field.ErrorType{
-				"spec.snapshotName": field.ErrorTypeRequired,
-				"spec.buildType":    field.ErrorTypeRequired,
+				"spec.snapshotName":     field.ErrorTypeRequired,
+				"spec.buildType":        field.ErrorTypeRequired,
+				"spec.packages":         field.ErrorTypeRequired,
+				"spec.buildTarget.os":   field.ErrorTypeRequired,
+				"spec.buildTarget.arch": field.ErrorTypeRequired,
 			},
 		},
 	}
@@ -158,9 +163,12 @@ func TestValidateBuild(t *testing.T) {
 
 func TestValidateBuildUpdate(t *testing.T) {
 	errs := ValidateBuildUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 2, map[string]field.ErrorType{
-		"spec.snapshotName": field.ErrorTypeRequired,
-		"spec.buildType":    field.ErrorTypeRequired,
+	assertErrorList(t, errs, 5, map[string]field.ErrorType{
+		"spec.snapshotName":     field.ErrorTypeRequired,
+		"spec.buildType":        field.ErrorTypeRequired,
+		"spec.packages":         field.ErrorTypeRequired,
+		"spec.buildTarget.os":   field.ErrorTypeRequired,
+		"spec.buildTarget.arch": field.ErrorTypeRequired,
 	})
 }
 
@@ -351,6 +359,7 @@ func validSnapshot() *ebsv1.Snapshot {
 				"pkg-a": {CommitId: "abc123"},
 			},
 			BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
+			PackageRepos: []ebsv1.PackageRepo{{Name: "pkg-a"}},
 		},
 	}
 }
@@ -360,6 +369,8 @@ func validBuild() *ebsv1.Build {
 		Spec: ebsv1.BuildSpec{
 			SnapshotName: "snapshot-a",
 			BuildType:    "full",
+			Packages:     []string{"pkg-a"},
+			BuildTarget:  validBuildTarget(),
 		},
 	}
 }
@@ -380,7 +391,7 @@ func validRunner(runnerType, arch string) *ebsv1.Runner {
 
 func validBuildTarget() ebsv1.BuildTarget {
 	return ebsv1.BuildTarget{
-		OsVariant:    "openEuler-22.03-LTS",
-		Architecture: "x86_64",
+		Os:   "openEuler-22.03-LTS",
+		Arch: "x86_64",
 	}
 }

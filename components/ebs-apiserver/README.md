@@ -24,10 +24,12 @@ ebs-apiserver
 | Project | `/apis/ebs/v1/projects` | - | `/status` |
 | Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | `/status` |
 | Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | `/status`, `/abort` |
+| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | `/status` |
+| RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | `/status` |
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | `/status` |
 | Runner | `/apis/ebs/v1/runners` | - | `/status` |
 
-`Snapshot`、`Build`、`Job` 的 Project API 表达业务归属；全局 API 用于调度器和控制器跨 Project list/watch。Project API 会在 apiserver 内部重写到 scoped storage 路径，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。
+`Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 的 Project API 表达业务归属；全局 API 用于调度器和控制器跨 Project list/watch。Project API 会在 apiserver 内部重写到 scoped storage 路径，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。
 
 ## 项目结构
 
@@ -47,6 +49,9 @@ ebs-apiserver/
 │   │   ├── project/storage.go
 │   │   ├── snapshot/storage.go
 │   │   ├── build/storage.go
+│   │   ├── buildinfo/storage.go
+│   │   ├── rpmrepo/storage.go
+│   │   ├── scopedresource/storage.go
 │   │   ├── job/storage.go
 │   │   └── runner/storage.go
 │   ├── server/
@@ -118,9 +123,17 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "displayName": "openEuler 22.03 LTS",
       "description": "openEuler 22.03 LTS",
       "specBranch": "master",
+      "buildPayload": "debug_package: false",
       "buildTargets": [{
-        "osVariant": "openEuler-22.03-LTS",
-        "architecture": "aarch64"
+        "os": "openEuler-22.03-LTS",
+        "arch": "aarch64",
+        "buildFlag": true,
+        "publishFlag": true
+      }],
+      "packageRepos": [{
+        "name": "gcc",
+        "url": "https://example.com/src-openeuler/gcc.git",
+        "branch": "master"
       }]
     }
   }'
@@ -131,6 +144,38 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
 ```bash
 curl -k https://localhost:8443/apis/ebs/v1/projects
 curl -k https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts
+```
+
+### 创建 Snapshot
+
+`specCommits`、`buildTargets` 和 `packageRepos` 为必填字段：
+
+```bash
+curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/snapshots \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apiVersion": "ebs/v1",
+    "kind": "Snapshot",
+    "metadata": {"name": "snap-001"},
+    "spec": {
+      "specCommits": {
+        "gcc": {
+          "specUrl": "https://example.com/src-openeuler/gcc.git",
+          "commitId": "0123456789abcdef"
+        }
+      },
+      "buildTargets": [{
+        "os": "openEuler-22.03-LTS",
+        "arch": "aarch64",
+        "buildFlag": true
+      }],
+      "packageRepos": [{
+        "name": "gcc",
+        "url": "https://example.com/src-openeuler/gcc.git",
+        "commitId": "0123456789abcdef"
+      }]
+    }
+  }'
 ```
 
 ### 创建 Build
@@ -145,12 +190,31 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
     "spec": {
       "snapshotName": "snap-001",
       "buildType": "full",
+      "packages": ["gcc"],
       "buildTarget": {
-        "osVariant": "openEuler-22.03-LTS",
-        "architecture": "aarch64"
+        "os": "openEuler-22.03-LTS",
+        "arch": "aarch64",
+        "buildFlag": true,
+        "publishFlag": true
       }
     }
   }'
+```
+
+`buildType` 支持 `full`、`incremental`、`specified` 和 `single`；省略时默认为 `full`。Build 创建时还必须提供 `snapshotName`、`packages` 以及包含 `os`、`arch` 的 `buildTarget`。
+
+### 查询 BuildInfo 和 RpmRepo
+
+```bash
+curl -k https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/buildinfos
+curl -k https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/rpmrepos
+```
+
+系统控制器也可以通过全局 API 跨 Project list/watch：
+
+```bash
+curl -k -N "https://localhost:8443/apis/ebs/v1/buildinfos?watch=true"
+curl -k -N "https://localhost:8443/apis/ebs/v1/rpmrepos?watch=true"
 ```
 
 ### Watch 全局 Job
@@ -226,11 +290,13 @@ etcd 主数据路径：
 ├── projects/{name}
 ├── snapshots/{project}/{name}
 ├── builds/{project}/{name}
+├── buildinfos/{project}/{name}
+├── rpmrepos/{project}/{name}
 ├── jobs/{project}/{name}
 └── runners/{name}
 ```
 
-`Snapshot`、`Build`、`Job` 按 `{project}/{name}` 存在资源全局前缀下，全局 list/watch 直接监听对应资源前缀，例如 `/registry/ebs/builds`。
+Project 子资源按 `{project}/{name}` 存在各自的资源全局前缀下，全局 list/watch 直接监听对应资源前缀，例如 `/registry/ebs/builds`。
 
 Elasticsearch 索引：
 
@@ -238,9 +304,13 @@ Elasticsearch 索引：
 ebs-projects
 ebs-snapshots
 ebs-builds
+ebs-buildinfos
+ebs-rpmrepos
 ebs-jobs
 ebs-runners
 ```
+
+服务启动时会预创建 Project、Snapshot、Build、Job 和 Runner 的索引。`BuildInfo`、`RpmRepo` 在首次写入时使用上表中的索引名；部署环境需要允许 Elasticsearch 自动创建索引，或预先创建这两个索引。
 
 ## 相关文档
 

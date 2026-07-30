@@ -8,138 +8,182 @@ import (
 type Project struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   ProjectSpec   `json:"spec,omitempty"`
-	Status ProjectStatus `json:"status,omitempty"`
+	Spec              ProjectSpec   `json:"spec,omitempty"`
+	Status            ProjectStatus `json:"status,omitempty"`
 }
 
 type ProjectSpec struct {
-	DisplayName    string        `json:"displayName,omitempty"`
-	Description    string        `json:"description,omitempty"`
-	SpecBranch     string        `json:"specBranch,omitempty"`
-	BuildEnvMacros string        `json:"buildEnvMacros,omitempty"`
-	BuildTargets   []BuildTarget `json:"buildTargets,omitempty"`
-	PackageRepos   []PackageRepo `json:"packageRepos,omitempty"`
+	DisplayName  string        `json:"displayName,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	SpecBranch   string        `json:"specBranch,omitempty"`
+	BuildPayload string        `json:"buildPayload,omitempty"`
+	BuildTargets []BuildTarget `json:"buildTargets,omitempty"`
+	PackageRepos []PackageRepo `json:"packageRepos,omitempty"`
 }
 
 type ProjectStatus struct {
-	Phase         string             `json:"phase,omitempty"`
-	SnapshotCount int32              `json:"snapshotCount,omitempty"`
-	BuildCount    int32              `json:"buildCount,omitempty"`
-	LastBuildTime metav1.Time        `json:"lastBuildTime,omitempty"`
-	Conditions    []metav1.Condition `json:"conditions,omitempty"`
-}
-
-type BuildTarget struct {
-	OsVariant      string           `json:"osVariant,omitempty"`
-	Architecture   string           `json:"architecture,omitempty"`
-	GroundProjects []string         `json:"groundProjects,omitempty"`
-	Flags          BuildTargetFlags `json:"flags,omitempty"`
-}
-
-type BuildTargetFlags struct {
-	Build   bool `json:"build,omitempty"`
-	Publish bool `json:"publish,omitempty"`
-}
-
-type PackageRepo struct {
-	SpecName   string `json:"specName,omitempty"`
-	SpecUrl    string `json:"specUrl,omitempty"`
-	SpecBranch string `json:"specBranch,omitempty"`
-	GitTag     string `json:"gitTag,omitempty"`
-	CommitId   string `json:"commitId,omitempty"`
+	Phase           string            `json:"phase,omitempty"`
+	LastBuildStatus map[string]string `json:"lastBuildStatus,omitempty"`
 }
 
 type ProjectList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-
-	Items []Project `json:"items"`
+	Items           []Project `json:"items"`
 }
 
 type Snapshot struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   SnapshotSpec   `json:"spec,omitempty"`
-	Status SnapshotStatus `json:"status,omitempty"`
+	Spec              SnapshotSpec   `json:"spec,omitempty"`
+	Status            SnapshotStatus `json:"status,omitempty"`
 }
 
 type SnapshotSpec struct {
-	IsTrunk        bool                  `json:"isTrunk,omitempty"`
-	PrevSnapshot   string                `json:"prevSnapshot,omitempty"`
-	SpecCommits    map[string]SpecCommit `json:"specCommits,omitempty"`
-	BuildTargets   []BuildTarget         `json:"buildTargets,omitempty"`
-	GroundProjects map[string]string     `json:"groundProjects,omitempty"`
+	PrevSnapshot string                `json:"prevSnapshot,omitempty"`
+	SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
+	BuildTargets []BuildTarget         `json:"buildTargets,omitempty"`
+	PackageRepos []PackageRepo         `json:"packageRepos,omitempty"`
 }
 
 type SnapshotStatus struct {
-	Phase     string      `json:"phase,omitempty"`
-	BuildId   string      `json:"buildId,omitempty"`
-	StartTime metav1.Time `json:"startTime,omitempty"`
-}
-
-type SpecCommit struct {
-	SpecUrl    string `json:"specUrl,omitempty"`
-	SpecBranch string `json:"specBranch,omitempty"`
-	CommitId   string `json:"commitId,omitempty"`
-	CommitTime string `json:"commitTime,omitempty"`
-	GitRepo    string `json:"gitRepo,omitempty"`
+	Phase string `json:"phase,omitempty"`
 }
 
 type SnapshotList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-
-	Items []Snapshot `json:"items"`
+	Items           []Snapshot `json:"items"`
 }
 
 type Build struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   BuildSpec   `json:"spec,omitempty"`
-	Status BuildStatus `json:"status,omitempty"`
+	Spec              BuildSpec   `json:"spec,omitempty"`
+	Status            BuildStatus `json:"status,omitempty"`
 }
 
 type BuildSpec struct {
-	SnapshotName string      `json:"snapshotName,omitempty"`
-	BuildType    string      `json:"buildType,omitempty"`
-	BuildTarget  BuildTarget `json:"buildTarget,omitempty"`
-	Packages     []string    `json:"packages,omitempty"`
+	SnapshotName  string          `json:"snapshotName,omitempty"`
+	BuildType     string          `json:"buildType,omitempty"`
+	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
+	Packages      []string        `json:"packages,omitempty"`
+	BuildTarget   BuildTarget     `json:"buildTarget,omitempty"`
+	PrevBuildRepo string          `json:"prevBuildRepo,omitempty"`
+}
+
+type BootstrapRepo struct {
+	Name string `json:"name,omitempty"`
+	Repo string `json:"repo,omitempty"`
 }
 
 type BuildStatus struct {
-	Phase         string                   `json:"phase,omitempty"`
-	StartTime     metav1.Time              `json:"startTime,omitempty"`
-	EndTime       metav1.Time              `json:"endTime,omitempty"`
-	RepoId        string                   `json:"repoId,omitempty"`
-	PackageStatus map[string]PackageStatus `json:"packageStatus,omitempty"`
-	Conditions    []metav1.Condition       `json:"conditions,omitempty"`
-}
-
-type PackageStatus struct {
-	Phase     string      `json:"phase,omitempty"`
-	JobId     string      `json:"jobId,omitempty"`
-	StartTime metav1.Time `json:"startTime,omitempty"`
-	EndTime   metav1.Time `json:"endTime,omitempty"`
-	Attempts  int32       `json:"attempts,omitempty"`
-	Message   string      `json:"message,omitempty"`
+	Phase      string             `json:"phase,omitempty"`
+	Stage      string             `json:"stage,omitempty"`
+	StartTime  metav1.Time        `json:"startTime,omitempty"`
+	EndTime    metav1.Time        `json:"endTime,omitempty"`
+	Repo       string             `json:"repo,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 type BuildList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Build `json:"items"`
+}
 
-	Items []Build `json:"items"`
+type BuildInfo struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              BuildInfoSpec   `json:"spec,omitempty"`
+	Status            BuildInfoStatus `json:"status,omitempty"`
+}
+
+type BuildInfoSpec struct {
+	SpecDepends map[string]SpecDepend `json:"specDepends,omitempty"`
+}
+
+type SpecDepend struct {
+	RepoName      string                  `json:"repoName"`
+	SpecName      string                  `json:"specName"`
+	SpecFileName  string                  `json:"specFileName,omitempty"`
+	Version       string                  `json:"version"`
+	Release       string                  `json:"release,omitempty"`
+	Epoch         string                  `json:"epoch,omitempty"`
+	ExclusiveArch []string                `json:"exclusiveArch,omitempty"`
+	Provides      []string                `json:"provides,omitempty"`
+	Requires      map[string]VersionConst `json:"requires,omitempty"`
+	BuildRequires map[string]VersionConst `json:"buildRequires,omitempty"`
+	BuildRemoves  map[string]VersionConst `json:"buildRemoves,omitempty"`
+}
+
+type BuildInfoStatus struct {
+	Phase      string                `json:"phase,omitempty"`
+	Conditions []metav1.Condition    `json:"conditions,omitempty"`
+	SpecStatus map[string]SpecStatus `json:"specStatus,omitempty"`
+}
+
+type SpecStatus struct {
+	Build   SpecBuildStatus   `json:"build,omitempty"`
+	Install SpecInstallStatus `json:"install,omitempty"`
+}
+
+type SpecBuildStatus struct {
+	Status     string             `json:"status"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	JobName    string             `json:"jobName,omitempty"`
+}
+
+type SpecInstallStatus struct {
+	Status      string                `json:"status"`
+	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
+	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
+}
+
+type MissingDep struct {
+	NeededBy        string       `json:"neededBy,omitempty"`
+	VersionRequests VersionConst `json:"versionRequests,omitempty"`
+}
+
+type BuildInfoList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []BuildInfo `json:"items"`
+}
+
+type RpmRepo struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              RpmRepoSpec   `json:"spec,omitempty"`
+	Status            RpmRepoStatus `json:"status,omitempty"`
+}
+
+type RpmRepoSpec struct{}
+
+type RpmRepoStatus struct {
+	Phase      string             `json:"phase,omitempty"`
+	RpmDepends map[string]RpmMeta `json:"rpmDepends,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type RpmMeta struct {
+	Version  string                  `json:"version"`
+	SpecName string                  `json:"specName"`
+	Provides map[string]string       `json:"provides,omitempty"`
+	Requires map[string]VersionConst `json:"requires,omitempty"`
+}
+
+type RpmRepoList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []RpmRepo `json:"items"`
 }
 
 type Job struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   JobSpec   `json:"spec,omitempty"`
-	Status JobStatus `json:"status,omitempty"`
+	Spec              JobSpec   `json:"spec,omitempty"`
+	Status            JobStatus `json:"status,omitempty"`
 }
 
 type JobSpec struct {
@@ -165,28 +209,27 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase      string      `json:"phase,omitempty"`
-	Stage      string      `json:"stage,omitempty"`
-	Runner     string      `json:"runner,omitempty"`
-	StartTime  metav1.Time `json:"startTime,omitempty"`
-	EndTime    metav1.Time `json:"endTime,omitempty"`
-	ResultRoot string      `json:"resultRoot,omitempty"`
-	Message    string      `json:"message,omitempty"`
+	Phase        string      `json:"phase,omitempty"`
+	Stage        string      `json:"stage,omitempty"`
+	Runner       string      `json:"runner,omitempty"`
+	StartTime    metav1.Time `json:"startTime,omitempty"`
+	EndTime      metav1.Time `json:"endTime,omitempty"`
+	ResultRoot   string      `json:"resultRoot,omitempty"`
+	Message      string      `json:"message,omitempty"`
+	RestartCount int64       `json:"restartCount,omitempty"`
 }
 
 type JobList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-
-	Items []Job `json:"items"`
+	Items           []Job `json:"items"`
 }
 
 type Runner struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   RunnerSpec   `json:"spec,omitempty"`
-	Status RunnerStatus `json:"status,omitempty"`
+	Spec              RunnerSpec   `json:"spec,omitempty"`
+	Status            RunnerStatus `json:"status,omitempty"`
 }
 
 type RunnerSpec struct {
@@ -229,6 +272,34 @@ type RunnerInfo struct {
 type RunnerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Runner `json:"items"`
+}
 
-	Items []Runner `json:"items"`
+type BuildTarget struct {
+	Os          string `json:"os,omitempty"`
+	Arch        string `json:"arch,omitempty"`
+	BuildFlag   bool   `json:"buildFlag,omitempty"`
+	PublishFlag bool   `json:"publishFlag,omitempty"`
+}
+
+type PackageRepo struct {
+	Name         string        `json:"name,omitempty"`
+	Url          string        `json:"url,omitempty"`
+	Branch       string        `json:"branch,omitempty"`
+	GitTag       string        `json:"gitTag,omitempty"`
+	CommitId     string        `json:"commitId,omitempty"`
+	BuildTargets []BuildTarget `json:"buildTargets,omitempty"`
+}
+
+type SpecCommit struct {
+	SpecUrl  string `json:"specUrl,omitempty"`
+	CommitId string `json:"commitId,omitempty"`
+}
+
+type VersionConst struct {
+	GT string `json:"gt,omitempty"`
+	GE string `json:"ge,omitempty"`
+	EQ string `json:"eq,omitempty"`
+	LE string `json:"le,omitempty"`
+	LT string `json:"lt,omitempty"`
 }

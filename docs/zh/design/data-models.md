@@ -18,8 +18,8 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 | 字段 | Go 类型 | JSON | 说明 |
 |------|---------|------|------|
 | `apiVersion` | string | `apiVersion` | `ebs/v1` |
-| `kind` | string | `kind` | Project / Snapshot / Build / Job / … |
-| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-` |
+| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / Job / Runner |
+| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-` |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -37,7 +37,7 @@ metav1.ListMeta `json:"metadata,omitempty"`
 Items           []Xxx `json:"items"`
 ```
 
-Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、Job 的唯一项目归属来源。子资源名称只需在所属 Project 内唯一。
+Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。子资源名称只需在所属 Project 内唯一。
 
 调度器和控制器使用全局系统 API list/watch 全部对象；用户侧和项目侧调用使用 Project API。
 
@@ -166,7 +166,7 @@ type SnapshotSpec struct {
 | `prevSnapshot` | string | 否 | 同一 Project 下的前一快照名称（增量构建用） |
 | `specCommits` | map[string]SpecCommit | 是 | 各包 spec 提交信息 |
 | `buildTargets` | []BuildTarget | 是 | 构建目标 |
-| `packageRepos` | []PackageRepo | 是 | 待构建的包列表 |
+| `packageRepos` | []PackageRepo | 是 | 快照包含的软件包仓库列表 |
 
 ### SnapshotStatus
 
@@ -225,7 +225,7 @@ type BuildSpec struct {
 | 字段             | Go 类型 | 必填 | 说明 |
 |----------------|---------|------|------|
 | `snapshotName` | string | 是 | 使用同一 Project 下的快照 |
-| `buildType`    | string | 是 | `"full"`/`"incremental"`/`"specified"`/`"single"` |
+| `buildType`    | string | 否 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"`，默认 `"full"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
 | `bootstrapRepo` | []BootstrapRepo | 否 | 引导 RPM 仓库 |
 | `packages`     | []string | 是 | 构建的软件包 |
@@ -609,7 +609,7 @@ type JobStatus struct {
 | `endTime` | metav1.Time | 结束时间 |
 | `resultRoot` | string | 结果存储路径 |
 | `message` | string | 状态消息 |
-| `restartCount` | int64 | 重试次数，默认 0。调度器用于计算退避时间，与 `backoffLimit` 配合控制重试上限 |
+| `restartCount` | int64 | 重试次数，默认 0。调度器可使用该字段计算重试退避时间 |
 
 ### JobList
 
@@ -663,7 +663,7 @@ type RunnerSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `type` | string | 是 | 执行机类型：`dc`/`vm`/`hw` |
+| `type` | string | 否 | 执行机类型：`dc` / `vm` / `hw`，默认 `dc` |
 | `arch` | string | 是 | CPU 架构：`aarch64`/`x86_64` |
 | `hostname` | string | 否 | 执行机主机名。当前 runner agent 填写 runner 资源名 |
 | `unschedulable` | bool | 否 | 是否禁止调度新 Job |
@@ -798,9 +798,9 @@ type PackageRepo struct {
 |----------------|---------------|--------------------------|
 | `name`         | string        | spec 包名称                 |
 | `url`          | string        | spec 仓库 Git URL          |
-| `branch`       | string        | spec 分支（与 gitTag 二选一）    |
-| `gitTag`       | string        | Git 标签（与 specBranch 二选一） |
-| `commitId`     | string        | 指定提交 ID                  |
+| `branch`       | string        | spec 分支，与 `gitTag`、`commitId` 三选一 |
+| `gitTag`       | string        | Git 标签，与 `branch`、`commitId` 三选一 |
+| `commitId`     | string        | 指定提交 ID，与 `branch`、`gitTag` 三选一 |
 | `buildTargets` | []BuildTarget | 构建目标 |
 
 
@@ -859,12 +859,14 @@ type VersionConst struct {
 ```
 ProjectSpec
 ├── BuildTarget
-├── PackageRepo
+└── PackageRepo
+    └── BuildTarget
 
 SnapshotSpec
 ├── SpecCommit
 ├── BuildTarget
-└── map[string]string
+└── PackageRepo
+    └── BuildTarget
 
 BuildSpec
 ├── BuildTarget
@@ -878,7 +880,7 @@ BuildInfoStatus
     └── SpecInstallStatus
         └── MissingDep ──▶ VersionConst
 
-RpmRepoStatus ──▶ RpmMeta
+RpmRepoStatus ──▶ RpmMeta ──▶ VersionConst
 
 JobSpec
 ├── ResourceRequirements
