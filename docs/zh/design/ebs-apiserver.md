@@ -2,11 +2,16 @@
 
 ## 概述
 
-`ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源、watch/list 能力，以及 etcd 持久化能力。
+`ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
 
-Snapshot、Build、BuildInfo、RpmRepo、Job 采用折中实现：用户侧使用 Project API 表达项目归属，调度器和控制器使用全局系统 API list/watch 全部对象。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径，核心 list/watch/status 能力仍复用 generic apiserver。
+Snapshot、Build、BuildInfo、RpmRepo、Job 使用 Project API 表达项目归属。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径。Job 同时提供全局系统 API，供调度器跨 Project list/watch；其余 Project 级资源的全局 API 只提供跨 Project 查询，不提供 watch。
 
-服务使用 etcd 和 Elasticsearch 作为组合主存储：etcd 负责对象持久化、resourceVersion 和 list/watch；Elasticsearch 负责对象索引、搜索字段和增强数据。创建/更新对象时会同步写入 ES，读取单对象时会尝试从 ES 取回增强数据并覆盖返回对象。
+服务按资源类型选择唯一主存储，不对同一对象执行 etcd 和 Elasticsearch 双写：
+
+- Job、Runner 使用 etcd。Runner 表示执行节点；两类资源需要可靠的 resourceVersion 和 list/watch，用于调度、心跳和执行状态协作。
+- Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch。这些资源需要 CRUD、分页、label selector、有限的 field selector 和搜索能力，但不提供 watch。
+
+etcd 和 Elasticsearch 中不存在同一资源的权威副本与索引副本关系，避免双写顺序、补偿和数据一致性问题。
 
 ## 架构
 
@@ -20,13 +25,13 @@ components/ebs-apiserver
         │   ├── REST storage
         │   ├── status subresource
         │   ├── validation/defaulting
-        │   └── watch/list/get/create/update/delete
+        │   └── list/get/create/update/delete
         │
         ├── etcd
-        │   └── 主存储：对象与 watch
+        │   └── Job、Runner：对象、resourceVersion 与 watch
         │
         └── Elasticsearch
-            └── 主存储：索引与增强数据
+            └── 其余资源：对象、索引、过滤与搜索
 ```
 
 ## 项目结构
@@ -53,7 +58,7 @@ components/ebs-apiserver/
 │   │   └── server.go                  # apiserver 配置与资源安装
 │   └── storage/
 │       ├── es/                        # Elasticsearch client
-│       └── hybrid/                    # etcd + ES 组合 storage
+│       └── esstore/                   # Elasticsearch REST storage
 ├── Dockerfile                         # openEuler 镜像构建
 ├── hack/                              # 代码生成脚本
 ├── go.mod
@@ -72,23 +77,36 @@ apiVersion: ebs/v1
 
 已安装到 apiserver 的资源如下：
 
-| 资源 | Project API | 全局 API | 子资源 |
-|------|-------------|----------|--------|
-| Project | `/apis/ebs/v1/projects` | - | `/status` |
-| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | `/status` |
-| Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | `/status`, `/abort` |
-| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | `/status` |
-| RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | `/status` |
-| Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | `/status` |
-| Runner | `/apis/ebs/v1/runners` | - | `/status` |
+| 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
+|------|--------|-------------|----------|-------|--------|
+| Project | Elasticsearch | `/apis/ebs/v1/projects` | - | 否 | `/status` |
+| Snapshot | Elasticsearch | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | 否 | `/status` |
+| Build | Elasticsearch | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | 否 | `/status`, `/abort` |
+| BuildInfo | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | 否 | `/status` |
+| RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
+| Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
+| Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
 
-其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源；全局 API 只用于调度器、控制器等系统组件做跨 Project 的 list/watch；`Project` 和 `Runner` 为集群级资源。
+其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；其他资源的全局 API 用于跨 Project list 和查询。`Project` 和 `Runner` 为集群级资源。
 
 Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `Project.spec.displayName`。
 
 ## 存储设计
 
-### etcd 主存储
+### 存储路由
+
+REST storage 按资源静态路由，不在请求时动态选择存储，也不对同一对象双写：
+
+| Storage | 资源 | 能力 |
+|---------|------|------|
+| generic etcd store | Job、Runner | CRUD、List、Watch、原生 resourceVersion |
+| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo | CRUD、List、分页、label selector、有限的 field selector、搜索 |
+
+Job、Runner 的 `/status` 子资源必须使用对应的 etcd store；ES-only 资源的 `/status` 和 Build 的 `/abort` 必须使用对应的 ESStore。子资源不能回退到另一种存储。
+
+ESStore 不实现 `rest.Watcher`，API discovery 不为 ES-only 资源声明 `watch` verb。对这些资源请求 `watch=true` 应返回不支持该操作的错误，而不是轮询 ES 模拟 watch。
+
+### etcd 存储
 
 apiserver 使用 `k8s.io/apiserver/pkg/registry/generic/registry.Store` 将资源对象写入 etcd，默认前缀为：
 
@@ -96,33 +114,29 @@ apiserver 使用 `k8s.io/apiserver/pkg/registry/generic/registry.Store` 将资�
 /registry/ebs
 ```
 
-资源的 etcd key 使用如下路径：
+只有 Job 和 Runner 写入 etcd：
 
 ```text
-/registry/ebs/projects/{name}
-/registry/ebs/snapshots/{project}/{name}
-/registry/ebs/builds/{project}/{name}
-/registry/ebs/buildinfos/{project}/{name}
-/registry/ebs/rpmrepos/{project}/{name}
 /registry/ebs/jobs/{project}/{name}
 /registry/ebs/runners/{name}
 ```
 
-Project 子资源按 `{project}/{name}` 存在各自的资源全局前缀下。全局 list/watch 监听对应资源前缀，例如 `/registry/ebs/builds`；Project API 的单 Project list/watch 监听对应 Project 子前缀，例如 `/registry/ebs/builds/{project}`。
+Job 按 `{project}/{name}` 存在全局资源前缀下。全局 list/watch 监听 `/registry/ebs/jobs`，Project API 的 list/watch 监听 `/registry/ebs/jobs/{project}`。Runner 是集群级资源，list/watch 监听 `/registry/ebs/runners`。
 
-### Elasticsearch 主存储
+etcd store 继续使用 Kubernetes 原生 label selector、field selector、resourceVersion、冲突检测和 watch 语义。
 
-`pkg/storage/hybrid/EnricherStore` 包装 generic etcd store：
+### Elasticsearch 存储
 
-- `Create`：先写 ES，再写 etcd。ES 写入失败会导致创建失败。
-- `Update`：先写 etcd，再尝试写 ES。ES 写入失败不会阻断 etcd 更新。
-- `Get`：并发读取 etcd 和 ES。etcd 失败则请求失败；ES 成功时尝试用 ES 中的 `data` 覆盖返回对象。
-- `List/Watch`：直接走 etcd。
-- `Delete`：先删 etcd，再删除 ES 文档。
+ESStore 直接实现 GenericAPIServer 所需的 REST storage 接口：
+
+- `Get/Create/Update/Delete` 直接读写 Elasticsearch。
+- `List` 将 `ListOptions` 转换为 ES 查询，并还原为对应的 Kubernetes List 对象。
+- 根据资源策略实现 `/status` 和 `/abort`，继续保证普通更新保留旧 `status`、`/status` 更新保留旧 `spec`。
+- 不实现 Watch。
 
 Project scoped 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，HTTP 请求中会对 `/` 做 URL escape。
 
-资源使用以下 Elasticsearch 索引：
+ES-only 资源使用以下索引：
 
 ```text
 ebs-projects
@@ -130,11 +144,72 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
-ebs-jobs
-ebs-runners
 ```
 
-ES client 启动时会 ping ES，并预创建 Project、Snapshot、Build、Job 和 Runner 的索引。BuildInfo、RpmRepo 首次写入时分别使用 `ebs-buildinfos`、`ebs-rpmrepos`；部署环境需要允许 Elasticsearch 自动创建索引，或预先创建这两个索引。
+apiserver 启动时检查并创建全部 ES-only 资源索引。生产环境应使用显式 index template/mapping，不依赖动态 mapping 或首次写入自动建索引。
+
+#### ES 文档与 mapping
+
+ES 文档保存完整 API 对象，同时抽取需要过滤和排序的字段：
+
+```json
+{
+  "apiVersion": "ebs/v1",
+  "kind": "Build",
+  "documentID": "openeuler-22-03-lts/build-001",
+  "metadata": {
+    "name": "build-001",
+    "namespace": "openeuler-22-03-lts",
+    "labels": [
+      {"key": "arch", "value": "x86_64"}
+    ],
+    "creationTimestamp": "2026-01-01T00:00:00Z"
+  },
+  "data": {
+    "...": "完整 API 对象"
+  }
+}
+```
+
+mapping 约束：
+
+- `documentID`、`metadata.name`、`metadata.namespace`、`kind`、`apiVersion` 使用 `keyword`。
+- `metadata.creationTimestamp` 使用 `date`。
+- `metadata.labels` 使用包含 `key/value` 两个 `keyword` 字段的 `nested` 数组。这样既避免 label key 动态展开导致 mapping 膨胀，也能正确处理包含 `.`、`/` 的 Kubernetes label key。
+- `data` 使用 `object` 且 `enabled: false`，只负责保存和还原完整对象。
+- 需要查询的业务字段必须显式抽取并定义 mapping，禁止将整个 `spec/status` 动态索引。
+
+#### Label 和 field selector
+
+ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并转换为 ES bool query。基础 label selector 支持：
+
+| Selector | ES 查询 |
+|----------|---------|
+| `key=value`、`key==value` | 同一 nested 元素内匹配 `key` 和 `value` |
+| `key!=value` | 排除同一 nested 元素内的 `key/value` 匹配，并遵循 Kubernetes 对缺失 label 的语义 |
+| `key in (a,b)` | 同一 nested 元素内匹配 `key` 和 `terms(value)` |
+| `key notin (a,b)` | 排除对应 nested 匹配，并遵循 Kubernetes 对缺失 label 的语义 |
+| `key` | nested 查询匹配 `key` |
+| `!key` | `must_not` nested 查询匹配 `key` |
+
+首期 field selector 只支持：
+
+- `metadata.name`
+- `metadata.namespace`
+
+后续业务字段必须先定义稳定的 API 语义和 ES mapping，再加入允许列表。无法识别或不支持的 selector 必须返回 `BadRequest`，不能静默忽略。
+
+#### 分页、版本与一致性
+
+- `ListOptions.limit` 映射为 ES `size`。
+- `continue` token 封装排序字段和 `search_after`，禁止使用深分页 `from + size`。
+- 默认使用显式的 `documentID` keyword 字段作为稳定的次级排序字段；分页 token 必须带版本并进行完整性校验。
+- List 返回值设置 `metadata.continue`；可可靠取得时设置 `remainingItemCount`。
+- Create/Update 使用 `refresh=wait_for`，保证写请求成功后紧随其后的 List/Search 能看到结果。
+- ES-only 对象的 `metadata.resourceVersion` 由 ES `_seq_no` 和 `_primary_term` 编码生成。
+- Update、Patch、Delete 使用 `if_seq_no` 和 `if_primary_term` 做乐观并发控制，版本不匹配返回 `409 Conflict`。
+- `resourceVersion` 只用于单对象并发控制，不承诺 etcd watch revision 语义；ES-only 资源不接受基于 resourceVersion 的 watch。
+- ES 批量查询应使用 Point in Time 与 `search_after` 保持同一分页过程的一致视图；PIT 标识封装在 continue token 中并设置有限有效期。
 
 ## 默认值与校验
 
@@ -330,22 +405,48 @@ Watch Job：
 curl -k -N 'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/jobs?watch=true'
 ```
 
-Watch 全局 Build：
+Watch 全局 Job：
 
 ```bash
-curl -k -N 'https://localhost:8443/apis/ebs/v1/builds?watch=true'
+curl -k -N 'https://localhost:8443/apis/ebs/v1/jobs?watch=true'
 ```
 
-Watch 全局 BuildInfo 和 RpmRepo：
+Watch Runner：
 
 ```bash
-curl -k -N 'https://localhost:8443/apis/ebs/v1/buildinfos?watch=true'
-curl -k -N 'https://localhost:8443/apis/ebs/v1/rpmrepos?watch=true'
+curl -k -N 'https://localhost:8443/apis/ebs/v1/runners?watch=true'
+```
+
+按 label 查询 ES-only 资源：
+
+```bash
+curl -k --get \
+  --data-urlencode 'labelSelector=arch=x86_64,channel in (stable,testing)' \
+  'https://localhost:8443/apis/ebs/v1/builds'
+```
+
+分页查询 ES-only 资源：
+
+```bash
+curl -k --get \
+  --data-urlencode 'limit=100' \
+  'https://localhost:8443/apis/ebs/v1/builds'
+
+# 使用上一页响应 metadata.continue 的原值请求下一页
+curl -k --get \
+  --data-urlencode 'limit=100' \
+  --data-urlencode 'continue=<metadata.continue>' \
+  'https://localhost:8443/apis/ebs/v1/builds'
 ```
 
 ## 待完善项
 
-已知需要继续完善：
+本文描述目标存储架构。当前实现仍使用 `hybrid.EnricherStore` 对资源执行 etcd 与 ES 双写，迁移时需要完成：
 
+- 新增 ESStore，并实现 CRUD、List、selector、分页和乐观并发控制。
+- 将 Project、Snapshot、Build、BuildInfo、RpmRepo 及其子资源切换为 ESStore。
+- 将 Job、Runner 保持为纯 etcd store，并移除对应 ES 索引和双写逻辑。
+- 更新 API discovery，确保只有 Job、Runner 暴露 watch verb。
+- 为现有双写数据提供一次性迁移与校验工具；切换完成后删除 etcd 中 ES-only 资源数据。
 - OpenAPI schema 当前是空对象占位，需要生成真实 schema。
 - 认证、鉴权、Admission 当前在 RecommendedOptions 中被置空，实际生产部署应由 gateway 或 apiserver 自身补齐。
