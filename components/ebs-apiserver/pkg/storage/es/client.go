@@ -4,20 +4,41 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
-var indices = []string{
-	"ebs-projects",
-	"ebs-snapshots",
-	"ebs-builds",
-	"ebs-jobs",
-	"ebs-runners",
+var indices = map[string]string{
+	"project":   "ebs-projects",
+	"snapshot":  "ebs-snapshots",
+	"build":     "ebs-builds",
+	"buildinfo": "ebs-buildinfos",
+	"rpmrepo":   "ebs-rpmrepos",
 }
+
+const indexMapping = `{
+  "settings":{"number_of_shards":1,"number_of_replicas":0},
+  "mappings":{"dynamic":"strict","properties":{
+    "apiVersion":{"type":"keyword"},
+    "kind":{"type":"keyword"},
+    "documentID":{"type":"keyword"},
+    "metadata":{"properties":{
+      "name":{"type":"keyword"},
+      "namespace":{"type":"keyword"},
+      "creationTimestamp":{"type":"date"},
+      "labels":{"type":"nested","properties":{
+        "key":{"type":"keyword"},
+        "value":{"type":"keyword"}
+      }}
+    }},
+    "data":{"type":"object","enabled":false}
+  }}
+}`
 
 type Client struct {
 	addresses  []string
@@ -26,26 +47,77 @@ type Client struct {
 	password   string
 }
 
-func (c *Client) addr() string {
-	return c.addresses[0]
+type Label struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
+type Metadata struct {
+	Name              string  `json:"name"`
+	Namespace         string  `json:"namespace,omitempty"`
+	CreationTimestamp string  `json:"creationTimestamp,omitempty"`
+	Labels            []Label `json:"labels,omitempty"`
+}
+
+type Document struct {
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	DocumentID string          `json:"documentID"`
+	Metadata   Metadata        `json:"metadata"`
+	Data       json.RawMessage `json:"data"`
+}
+
+type Hit struct {
+	ID          string
+	Document    Document
+	SeqNo       int64
+	PrimaryTerm int64
+	Sort        []json.RawMessage
+}
+
+type SearchResult struct {
+	Hits  []Hit
+	Total int64
+	PITID string
+}
+
+type Version struct {
+	SeqNo       int64
+	PrimaryTerm int64
+}
+
+type HTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("elasticsearch returned status %d: %s", e.StatusCode, e.Body)
+}
+
+func IsStatus(err error, status int) bool {
+	var httpErr *HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == status
+}
+
+func (c *Client) addr() string { return strings.TrimRight(c.addresses[0], "/") }
+
 func (c *Client) ping() error {
-	resp, err := c.httpClient.Get(c.addr())
+	req, err := http.NewRequest(http.MethodGet, c.addr(), nil)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ES ping failed: status=%d body=%s", resp.StatusCode, string(body))
+	resp, err := c.do(req)
+	if err != nil {
+		return err
 	}
+	resp.Body.Close()
 	return nil
 }
 
 func (c *Client) ensureIndices() error {
 	for _, index := range indices {
-		req, err := http.NewRequest("HEAD", c.addr()+"/"+index, nil)
+		req, err := http.NewRequest(http.MethodHead, c.addr()+"/"+index, nil)
 		if err != nil {
 			return err
 		}
@@ -55,60 +127,32 @@ func (c *Client) ensureIndices() error {
 			return fmt.Errorf("check index %s: %w", index, err)
 		}
 		resp.Body.Close()
-
-		if resp.StatusCode == 404 {
-			mapping := `{
-				"settings": {
-					"number_of_shards": 1,
-					"number_of_replicas": 0
-				},
-				"mappings": {
-					"properties": {
-						"metadata": {
-							"properties": {
-								"name": {"type": "keyword"},
-								"namespace": {"type": "keyword"},
-								"resourceVersion": {"type": "keyword"},
-								"creationTimestamp": {"type": "date"}
-							}
-						},
-						"kind": {"type": "keyword"},
-						"apiVersion": {"type": "keyword"},
-						"data": {"type": "object", "enabled": false}
-					}
-				}
-			}`
-			putReq, _ := http.NewRequest("PUT", c.addr()+"/"+index, bytes.NewReader([]byte(mapping)))
-			putReq.Header.Set("Content-Type", "application/json")
-			c.setAuth(putReq)
-			putResp, err := c.httpClient.Do(putReq)
-			if err != nil {
-				return fmt.Errorf("create index %s: %w", index, err)
+		if resp.StatusCode != http.StatusNotFound {
+			if resp.StatusCode >= 400 {
+				return &HTTPError{StatusCode: resp.StatusCode, Body: "check index " + index}
 			}
-			putResp.Body.Close()
-			if putResp.StatusCode >= 400 {
-				return fmt.Errorf("create index %s failed: status=%d", index, putResp.StatusCode)
-			}
+			continue
 		}
+		putReq, err := http.NewRequest(http.MethodPut, c.addr()+"/"+index, strings.NewReader(indexMapping))
+		if err != nil {
+			return err
+		}
+		putReq.Header.Set("Content-Type", "application/json")
+		putResp, err := c.do(putReq)
+		if err != nil {
+			return fmt.Errorf("create index %s: %w", index, err)
+		}
+		putResp.Body.Close()
 	}
 	return nil
 }
 
 func resourceIndex(resource string) string {
-	switch resource {
-	case "project", "projects":
-		return "ebs-projects"
-	case "snapshot", "snapshots":
-		return "ebs-snapshots"
-	case "build", "builds":
-		return "ebs-builds"
-	case "job", "jobs":
-		return "ebs-jobs"
-	case "runner", "runners":
-		return "ebs-runners"
-	default:
-		return "ebs-" + strings.TrimSuffix(resource, "s") + "s"
+	resource = strings.TrimSuffix(strings.ToLower(resource), "s")
+	if index, ok := indices[resource]; ok {
+		return index
 	}
+	return "ebs-" + resource + "s"
 }
 
 func (c *Client) setAuth(req *http.Request) {
@@ -117,166 +161,238 @@ func (c *Client) setAuth(req *http.Request) {
 	}
 }
 
-func docPathID(name string) string {
-	return url.PathEscape(name)
+func docPathID(name string) string { return url.PathEscape(name) }
+
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	c.setAuth(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	return resp, nil
 }
 
-type ESDocument struct {
-	APIVersion string          `json:"apiVersion,omitempty"`
-	Kind       string          `json:"kind,omitempty"`
-	Metadata   ESMetadata      `json:"metadata,omitempty"`
-	Data       json.RawMessage `json:"data"`
+func (c *Client) Create(ctx context.Context, resource, id string, doc Document) (Version, error) {
+	return c.write(ctx, http.MethodPut, resource, id, doc, -1, -1, true)
 }
 
-type ESMetadata struct {
-	Name              string `json:"name,omitempty"`
-	Namespace         string `json:"namespace,omitempty"`
-	ResourceVersion   string `json:"resourceVersion,omitempty"`
-	CreationTimestamp string `json:"creationTimestamp,omitempty"`
+func (c *Client) Update(ctx context.Context, resource, id string, doc Document, seqNo, primaryTerm int64) (Version, error) {
+	return c.write(ctx, http.MethodPut, resource, id, doc, seqNo, primaryTerm, false)
 }
 
-type SearchResponse struct {
-	Hits struct {
-		Total struct {
-			Value int `json:"value"`
-		} `json:"total"`
-		Hits []struct {
-			ID     string     `json:"_id"`
-			Source ESDocument `json:"_source"`
-		} `json:"hits"`
-	} `json:"hits"`
-}
-
-func (c *Client) Index(ctx context.Context, resource, name string, data json.RawMessage) error {
-	index := resourceIndex(resource)
-	doc := ESDocument{
-		APIVersion: "ebs/v1",
-		Kind:       resource,
-		Metadata: ESMetadata{
-			Name: name,
+// Index keeps the legacy hybrid store buildable while resources are migrated
+// to ESStore. New code should use Create or Update with explicit concurrency.
+func (c *Client) Index(ctx context.Context, resource, id string, data json.RawMessage) error {
+	var object struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Metadata   struct {
+			Name              string            `json:"name"`
+			Namespace         string            `json:"namespace"`
+			CreationTimestamp string            `json:"creationTimestamp"`
+			Labels            map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	doc := Document{
+		APIVersion: object.APIVersion,
+		Kind:       object.Kind,
+		DocumentID: id,
+		Metadata: Metadata{
+			Name: object.Metadata.Name, Namespace: object.Metadata.Namespace,
+			CreationTimestamp: object.Metadata.CreationTimestamp,
 		},
 		Data: data,
 	}
+	for key, value := range object.Metadata.Labels {
+		doc.Metadata.Labels = append(doc.Metadata.Labels, Label{Key: key, Value: value})
+	}
+	hit, err := c.Get(ctx, resource, id)
+	if IsStatus(err, http.StatusNotFound) {
+		_, err = c.Create(ctx, resource, id, doc)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	_, err = c.Update(ctx, resource, id, doc, hit.SeqNo, hit.PrimaryTerm)
+	return err
+}
 
+func (c *Client) write(ctx context.Context, method, resource, id string, doc Document, seqNo, primaryTerm int64, create bool) (Version, error) {
 	body, err := json.Marshal(doc)
 	if err != nil {
-		return fmt.Errorf("marshal ES document: %w", err)
+		return Version{}, err
 	}
-
-	url := fmt.Sprintf("%s/%s/_doc/%s", c.addr(), index, docPathID(name))
-	req, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewReader(body))
+	u, err := url.Parse(fmt.Sprintf("%s/%s/_doc/%s", c.addr(), resourceIndex(resource), docPathID(id)))
 	if err != nil {
-		return fmt.Errorf("create ES request: %w", err)
+		return Version{}, err
+	}
+	q := u.Query()
+	q.Set("refresh", "wait_for")
+	if create {
+		q.Set("op_type", "create")
+	} else {
+		q.Set("if_seq_no", strconv.FormatInt(seqNo, 10))
+		q.Set("if_primary_term", strconv.FormatInt(primaryTerm, 10))
+	}
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return Version{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
-		return fmt.Errorf("ES index %s/%s: %w", index, name, err)
+		return Version{}, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ES index %s/%s failed: status=%d body=%s", index, name, resp.StatusCode, string(respBody))
-	}
-
-	return nil
-}
-
-func (c *Client) Get(ctx context.Context, resource, name string) (json.RawMessage, error) {
-	index := resourceIndex(resource)
-	url := fmt.Sprintf("%s/%s/_doc/%s", c.addr(), index, docPathID(name))
-
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create ES GET request: %w", err)
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("ES get %s/%s: %w", index, name, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return nil, nil
-	}
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ES get %s/%s failed: status=%d body=%s", index, name, resp.StatusCode, string(respBody))
-	}
-
 	var result struct {
-		Source ESDocument `json:"_source"`
+		SeqNo       int64 `json:"_seq_no"`
+		PrimaryTerm int64 `json:"_primary_term"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode ES response: %w", err)
+		return Version{}, err
 	}
-
-	return result.Source.Data, nil
+	return Version{SeqNo: result.SeqNo, PrimaryTerm: result.PrimaryTerm}, nil
 }
 
-func (c *Client) Delete(ctx context.Context, resource, name string) error {
-	index := resourceIndex(resource)
-	url := fmt.Sprintf("%s/%s/_doc/%s", c.addr(), index, docPathID(name))
-
-	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+func (c *Client) Get(ctx context.Context, resource, id string) (*Hit, error) {
+	u := fmt.Sprintf("%s/%s/_doc/%s", c.addr(), resourceIndex(resource), docPathID(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return fmt.Errorf("create ES DELETE request: %w", err)
+		return nil, err
 	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
-		return fmt.Errorf("ES delete %s/%s: %w", index, name, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == 404 {
-		return nil
+	var result struct {
+		ID          string   `json:"_id"`
+		SeqNo       int64    `json:"_seq_no"`
+		PrimaryTerm int64    `json:"_primary_term"`
+		Source      Document `json:"_source"`
 	}
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ES delete %s/%s failed: status=%d body=%s", index, name, resp.StatusCode, string(respBody))
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
 	}
+	return &Hit{ID: result.ID, Document: result.Source, SeqNo: result.SeqNo, PrimaryTerm: result.PrimaryTerm}, nil
+}
 
+func (c *Client) Delete(ctx context.Context, resource, id string, seqNo, primaryTerm int64) error {
+	u, err := url.Parse(fmt.Sprintf("%s/%s/_doc/%s", c.addr(), resourceIndex(resource), docPathID(id)))
+	if err != nil {
+		return err
+	}
+	q := u.Query()
+	q.Set("refresh", "wait_for")
+	q.Set("if_seq_no", strconv.FormatInt(seqNo, 10))
+	q.Set("if_primary_term", strconv.FormatInt(primaryTerm, 10))
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
 	return nil
 }
 
-func (c *Client) Search(ctx context.Context, resource string, query map[string]interface{}) (*SearchResponse, error) {
-	index := resourceIndex(resource)
-
-	body, err := json.Marshal(query)
+func (c *Client) OpenPIT(ctx context.Context, resource, keepAlive string) (string, error) {
+	u := fmt.Sprintf("%s/%s/_pit?keep_alive=%s", c.addr(), resourceIndex(resource), url.QueryEscape(keepAlive))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("marshal ES query: %w", err)
+		return "", err
 	}
-
-	url := fmt.Sprintf("%s/%s/_search", c.addr(), index)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	resp, err := c.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("create ES search request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("ES search %s: %w", index, err)
+		return "", err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ES search %s failed: status=%d body=%s", index, resp.StatusCode, string(respBody))
+	var result struct {
+		ID string `json:"id"`
 	}
-
-	var result SearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode ES search response: %w", err)
+		return "", err
 	}
+	return result.ID, nil
+}
 
-	return &result, nil
+func (c *Client) ClosePIT(ctx context.Context, id string) error {
+	body, _ := json.Marshal(map[string]string{"id": id})
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.addr()+"/_pit", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query map[string]interface{}, size int64, searchAfter []json.RawMessage) (*SearchResult, error) {
+	body := map[string]interface{}{
+		"pit":                 map[string]string{"id": pitID, "keep_alive": keepAlive},
+		"query":               query,
+		"size":                size,
+		"sort":                []interface{}{map[string]interface{}{"documentID": map[string]string{"order": "asc"}}},
+		"track_total_hits":    true,
+		"seq_no_primary_term": true,
+	}
+	if len(searchAfter) > 0 {
+		body["search_after"] = searchAfter
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.addr()+"/_search", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		PITID string `json:"pit_id"`
+		Hits  struct {
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+			Hits []struct {
+				ID          string            `json:"_id"`
+				SeqNo       int64             `json:"_seq_no"`
+				PrimaryTerm int64             `json:"_primary_term"`
+				Source      Document          `json:"_source"`
+				Sort        []json.RawMessage `json:"sort"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	out := &SearchResult{Total: result.Hits.Total.Value, PITID: result.PITID}
+	for _, h := range result.Hits.Hits {
+		out.Hits = append(out.Hits, Hit{
+			ID: h.ID, Document: h.Source, SeqNo: h.SeqNo, PrimaryTerm: h.PrimaryTerm, Sort: h.Sort,
+		})
+	}
+	return out, nil
 }

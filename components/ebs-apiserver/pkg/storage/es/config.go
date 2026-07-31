@@ -18,6 +18,11 @@ func DefaultConfig() *Config {
 	}
 }
 
+// NewClientForTesting builds a client without pinging or creating indices.
+func NewClientForTesting(address string, httpClient *http.Client) *Client {
+	return &Client{addresses: []string{address}, httpClient: httpClient}
+}
+
 func (c *Config) NewClient() (*Client, error) {
 	transport := &http.Transport{
 		MaxIdleConns:    10,
