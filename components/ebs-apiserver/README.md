@@ -1,8 +1,8 @@
 # ebs-apiserver
 
-`ebs-apiserver` 是 EulerMaker 的资源 API 服务，基于 `k8s.io/apiserver` 的 `GenericAPIServer` 实现，提供 REST API、`/status` 子资源、list/watch 能力和 etcd 持久化。
+`ebs-apiserver` 是 EulerMaker 的资源 API 服务，基于 `k8s.io/apiserver` 的 `GenericAPIServer` 实现，提供 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化。
 
-服务使用 etcd 和 Elasticsearch 作为组合主存储：etcd 负责对象持久化、resourceVersion 和 list/watch，Elasticsearch 负责对象索引、搜索字段和增强数据。
+Job、Runner 使用 etcd 并支持 list/watch；Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch，支持 CRUD、selector 和分页但不支持 watch。同一资源不会在两种存储之间双写。
 
 ## 架构
 
@@ -12,24 +12,24 @@ client / ebs-gateway
         v
 ebs-apiserver
         |
-        +-- etcd              主存储：对象与 watch
+        +-- etcd              Job、Runner：对象与 watch
         |
-        +-- Elasticsearch     主存储：索引与增强数据
+        +-- Elasticsearch     其余资源：对象、过滤与分页
 ```
 
 ## 资源列表
 
-| 资源 | Project API | 全局 API | 子资源 |
-|------|-------------|----------|--------|
-| Project | `/apis/ebs/v1/projects` | - | `/status` |
-| Snapshot | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | `/status` |
-| Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | `/status`, `/abort` |
-| BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | `/status` |
-| RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | `/status` |
-| Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | `/status` |
-| Runner | `/apis/ebs/v1/runners` | - | `/status` |
+| 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
+|------|--------|-------------|----------|-------|--------|
+| Project | Elasticsearch | `/apis/ebs/v1/projects` | - | 否 | `/status` |
+| Snapshot | Elasticsearch | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | 否 | `/status` |
+| Build | Elasticsearch | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | 否 | `/status`, `/abort` |
+| BuildInfo | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | 否 | `/status` |
+| RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
+| Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
+| Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
 
-`Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 的 Project API 表达业务归属；全局 API 用于调度器和控制器跨 Project list/watch。Project API 会在 apiserver 内部重写到 scoped storage 路径，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。
+`Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 的 Project API 表达业务归属；全局 API 用于跨 Project list，只有 Job 支持全局 watch。Project API 会在 apiserver 内部重写到 scoped storage 路径，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。
 
 ## 项目结构
 
@@ -59,7 +59,7 @@ ebs-apiserver/
 │   │   └── server.go
 │   └── storage/
 │       ├── es/
-│       └── hybrid/
+│       └── esstore/
 ├── Dockerfile
 ├── hack/
 ├── go.mod
@@ -210,11 +210,11 @@ curl -k https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/buildinf
 curl -k https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/rpmrepos
 ```
 
-系统控制器也可以通过全局 API 跨 Project list/watch：
+系统控制器也可以通过全局 API 跨 Project list：
 
 ```bash
-curl -k -N "https://localhost:8443/apis/ebs/v1/buildinfos?watch=true"
-curl -k -N "https://localhost:8443/apis/ebs/v1/rpmrepos?watch=true"
+curl -k "https://localhost:8443/apis/ebs/v1/buildinfos"
+curl -k "https://localhost:8443/apis/ebs/v1/rpmrepos"
 ```
 
 ### Watch 全局 Job
@@ -225,11 +225,17 @@ curl -k -N "https://localhost:8443/apis/ebs/v1/rpmrepos?watch=true"
 curl -k -N "https://localhost:8443/apis/ebs/v1/jobs?watch=true"
 ```
 
-### Watch 全局 Build
+### 分页和 selector 查询
 
 ```bash
-curl -k -N "https://localhost:8443/apis/ebs/v1/builds?watch=true"
+curl -k --get \
+  --data-urlencode 'labelSelector=arch=x86_64,channel in (stable,testing)' \
+  --data-urlencode 'fieldSelector=metadata.namespace=openeuler-22-03-lts' \
+  --data-urlencode 'limit=100' \
+  "https://localhost:8443/apis/ebs/v1/builds"
 ```
+
+使用响应 `metadata.continue` 的原值请求下一页。ES-only 资源的 field selector 仅支持 `metadata.name` 和 `metadata.namespace`。
 
 ### Watch Project 下的 Job
 
@@ -287,16 +293,11 @@ etcd 主数据路径：
 
 ```text
 /registry/ebs/
-├── projects/{name}
-├── snapshots/{project}/{name}
-├── builds/{project}/{name}
-├── buildinfos/{project}/{name}
-├── rpmrepos/{project}/{name}
 ├── jobs/{project}/{name}
 └── runners/{name}
 ```
 
-Project 子资源按 `{project}/{name}` 存在各自的资源全局前缀下，全局 list/watch 直接监听对应资源前缀，例如 `/registry/ebs/builds`。
+Job 的全局 list/watch 使用 `/registry/ebs/jobs`，Project API 使用对应的 `/registry/ebs/jobs/{project}` 前缀。
 
 Elasticsearch 索引：
 
@@ -306,11 +307,11 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
-ebs-jobs
-ebs-runners
 ```
 
-服务启动时会预创建 Project、Snapshot、Build、Job 和 Runner 的索引。`BuildInfo`、`RpmRepo` 在首次写入时使用上表中的索引名；部署环境需要允许 Elasticsearch 自动创建索引，或预先创建这两个索引。
+服务启动时会检查并创建上述五个索引和显式 mapping。Project scoped 对象使用 `{project}/{name}` 作为文档 ID。ES-only 对象的 `resourceVersion` 只用于单对象乐观并发控制，不具备 etcd revision 或 watch 语义。
+
+当前版本不包含旧双写数据的迁移工具。已有部署切换前必须单独迁移或清空旧数据。
 
 ## 相关文档
 

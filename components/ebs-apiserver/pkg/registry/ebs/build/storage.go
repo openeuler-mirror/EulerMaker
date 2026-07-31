@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validation/path"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -24,18 +26,50 @@ type Storage struct {
 	Abort  rest.Storage
 }
 
-type abort struct{}
+type abort struct {
+	getter  rest.Getter
+	updater rest.Updater
+}
 
 func (a *abort) NamespaceScoped() bool { return true }
 func (a *abort) New() runtime.Object   { return &ebsv1.Build{} }
-func (a *abort) Connect(ctx context.Context, id string, options runtime.Object, r rest.Responder) (http.Handler, error) {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "aborted"}`))
+func (a *abort) Connect(ctx context.Context, id string, options runtime.Object, responder rest.Responder) (http.Handler, error) {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		obj, err := a.getter.Get(req.Context(), id, &metav1.GetOptions{})
+		if err != nil {
+			responder.Error(err)
+			return
+		}
+		build := obj.(*ebsv1.Build)
+		switch build.Status.Phase {
+		case "Aborting":
+			responder.Object(http.StatusOK, build)
+			return
+		case "Pending", "Prepared", "Processing":
+		default:
+			responder.Error(apierrors.NewConflict(ebsv1.Resource("builds"), id, fmt.Errorf("build in phase %q cannot be aborted", build.Status.Phase)))
+			return
+		}
+		next := build.DeepCopy()
+		next.Status.Phase = "Aborting"
+		updated, _, err := a.updater.Update(
+			req.Context(), id, rest.DefaultUpdatedObjectInfo(next),
+			nil, nil, false, &metav1.UpdateOptions{},
+		)
+		if err != nil {
+			responder.Error(err)
+			return
+		}
+		responder.Object(http.StatusOK, updated)
 	}), nil
 }
 func (a *abort) NewConnectOptions() (runtime.Object, bool, string) { return nil, false, "" }
+func (a *abort) ConnectMethods() []string                          { return []string{http.MethodPost} }
 func (a *abort) Destroy()                                          {}
+
+func NewAbortStorage(getter rest.Getter, updater rest.Updater) rest.Storage {
+	return &abort{getter: getter, updater: updater}
+}
 
 func NewStorage(scheme *runtime.Scheme) *Storage {
 	strategy := &strategy{}
@@ -71,7 +105,6 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 	return &Storage{
 		Build:  store,
 		Status: statusStore,
-		Abort:  &abort{},
 	}
 }
 
