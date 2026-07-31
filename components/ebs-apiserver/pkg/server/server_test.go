@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -10,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
@@ -22,22 +24,11 @@ import (
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
+	esclient "ebs-apiserver/pkg/storage/es"
 )
 
 func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
-	storeOptions := &generic.StoreOptions{RESTOptions: generic.RESTOptions{
-		StorageConfig: &storagebackend.ConfigForResource{
-			Config: storagebackend.Config{
-				Codec: Codecs.LegacyCodec(ebsv1.SchemeGroupVersion),
-				EncodeVersioner: runtime.NewMultiGroupVersioner(
-					ebsv1.SchemeGroupVersion,
-					schema.GroupKind{Group: ebsapi.GroupName},
-				),
-			},
-		},
-		Decorator:      fakeStorageDecorator,
-		ResourcePrefix: "test",
-	}}
+	storeOptions := &generic.StoreOptions{RESTOptions: testRESTOptions()}
 
 	tests := []struct {
 		name  string
@@ -62,6 +53,47 @@ func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
 				t.Fatalf("expected storage to be initialized")
 			}
 		})
+	}
+}
+
+func testRESTOptions() generic.RESTOptions {
+	return generic.RESTOptions{
+		StorageConfig: &storagebackend.ConfigForResource{
+			Config: storagebackend.Config{
+				Codec: Codecs.LegacyCodec(ebsv1.SchemeGroupVersion),
+				EncodeVersioner: runtime.NewMultiGroupVersioner(
+					ebsv1.SchemeGroupVersion,
+					schema.GroupKind{Group: ebsapi.GroupName},
+				),
+			},
+		},
+		Decorator:      fakeStorageDecorator,
+		ResourcePrefix: "test",
+	}
+}
+
+func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
+	apiGroup, err := CreateAPIGroupInfo(
+		testRESTOptions(),
+		esclient.NewClientForTesting("http://unused", http.DefaultClient),
+	)
+	if err != nil {
+		t.Fatalf("create API group info: %v", err)
+	}
+	storageMap := apiGroup.VersionedResourcesStorageMap["v1"]
+
+	for _, resource := range []string{"projects", "snapshots", "builds", "buildinfos", "rpmrepos"} {
+		if _, ok := storageMap[resource].(rest.Watcher); ok {
+			t.Errorf("%s unexpectedly implements watch", resource)
+		}
+	}
+	for _, resource := range []string{"jobs", "runners"} {
+		if _, ok := storageMap[resource].(rest.Watcher); !ok {
+			t.Errorf("%s must implement watch", resource)
+		}
+	}
+	if _, ok := storageMap["builds/abort"].(rest.Connecter); !ok {
+		t.Error("builds/abort must implement rest.Connecter")
 	}
 }
 

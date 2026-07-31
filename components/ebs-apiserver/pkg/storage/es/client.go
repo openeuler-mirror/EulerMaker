@@ -185,47 +185,6 @@ func (c *Client) Update(ctx context.Context, resource, id string, doc Document, 
 	return c.write(ctx, http.MethodPut, resource, id, doc, seqNo, primaryTerm, false)
 }
 
-// Index keeps the legacy hybrid store buildable while resources are migrated
-// to ESStore. New code should use Create or Update with explicit concurrency.
-func (c *Client) Index(ctx context.Context, resource, id string, data json.RawMessage) error {
-	var object struct {
-		APIVersion string `json:"apiVersion"`
-		Kind       string `json:"kind"`
-		Metadata   struct {
-			Name              string            `json:"name"`
-			Namespace         string            `json:"namespace"`
-			CreationTimestamp string            `json:"creationTimestamp"`
-			Labels            map[string]string `json:"labels"`
-		} `json:"metadata"`
-	}
-	if err := json.Unmarshal(data, &object); err != nil {
-		return err
-	}
-	doc := Document{
-		APIVersion: object.APIVersion,
-		Kind:       object.Kind,
-		DocumentID: id,
-		Metadata: Metadata{
-			Name: object.Metadata.Name, Namespace: object.Metadata.Namespace,
-			CreationTimestamp: object.Metadata.CreationTimestamp,
-		},
-		Data: data,
-	}
-	for key, value := range object.Metadata.Labels {
-		doc.Metadata.Labels = append(doc.Metadata.Labels, Label{Key: key, Value: value})
-	}
-	hit, err := c.Get(ctx, resource, id)
-	if IsStatus(err, http.StatusNotFound) {
-		_, err = c.Create(ctx, resource, id, doc)
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	_, err = c.Update(ctx, resource, id, doc, hit.SeqNo, hit.PrimaryTerm)
-	return err
-}
-
 func (c *Client) write(ctx context.Context, method, resource, id string, doc Document, seqNo, primaryTerm int64, create bool) (Version, error) {
 	body, err := json.Marshal(doc)
 	if err != nil {
