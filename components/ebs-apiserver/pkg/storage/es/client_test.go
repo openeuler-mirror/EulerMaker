@@ -82,6 +82,33 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	}
 }
 
+func TestEnsureIAMIndices(t *testing.T) {
+	created := map[string]bool{}
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodHead {
+			return response(http.StatusNotFound, ``), nil
+		}
+		if req.Method == http.MethodPut {
+			created[strings.TrimPrefix(req.URL.Path, "/")] = true
+			return response(http.StatusOK, `{"acknowledged":true}`), nil
+		}
+		t.Fatalf("unexpected method %s", req.Method)
+		return nil, nil
+	})}
+	client := NewClientForTesting("http://elasticsearch", httpClient)
+	if err := client.EnsureIAMIndices(); err != nil {
+		t.Fatalf("ensure IAM indices: %v", err)
+	}
+	for _, index := range []string{"ebs-users", "ebs-user-credentials"} {
+		if !created[index] {
+			t.Errorf("index %s was not created", index)
+		}
+	}
+	if created["ebs-projects"] {
+		t.Fatalf("core index unexpectedly created: %#v", created)
+	}
+}
+
 func TestHTTPErrorStatus(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return response(http.StatusNotFound, "missing"), nil
