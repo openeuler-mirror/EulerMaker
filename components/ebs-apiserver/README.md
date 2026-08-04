@@ -4,6 +4,8 @@
 
 Job、Runner 使用 etcd 并支持 list/watch；Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch，支持 CRUD、selector 和分页但不支持 watch。同一资源不会在两种存储之间双写。
 
+使用 `--enable-iam` 可以启用内置用户管理模块。User 对象和密码凭据分别存储在 Elasticsearch 的 `ebs-users`、`ebs-user-credentials` 索引中；User 使用标准资源 API，密码凭据仅通过内部认证接口访问。
+
 ## 架构
 
 ```
@@ -28,6 +30,7 @@ ebs-apiserver
 | RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
 | Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
 | Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
+| User（可选） | Elasticsearch | - | `/apis/iam.ebs/v1/users` | 否 | - |
 
 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 的 Project API 表达业务归属；全局 API 用于跨 Project list，只有 Job 支持全局 watch。Project API 会在 apiserver 内部重写到 scoped storage 路径，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。
 
@@ -99,8 +102,11 @@ CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
 ./ebs-apiserver \
   --etcd-servers=http://localhost:2379 \
   --es-servers=http://localhost:9200 \
+  --enable-iam \
   --secure-port=8443
 ```
+
+`--enable-iam` 是 IAM 模块唯一新增的启动配置。模块使用固定的 Argon2id 参数、密码策略和锁定策略，并复用 `--es-servers` 连接。
 
 ### Docker 构建
 
@@ -109,6 +115,28 @@ docker build -t eulermaker/ebs-apiserver:dev .
 ```
 
 ## API 示例
+
+### 创建 User
+
+```bash
+curl -k -X POST https://localhost:8443/apis/iam.ebs/v1/users \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apiVersion":"iam.ebs/v1",
+    "kind":"User",
+    "metadata":{"name":"alice","labels":{"ebs.io/tenant":"tenant-a"}},
+    "spec":{"enabled":true,"displayName":"Alice","email":"alice@example.com"}
+  }'
+```
+
+内部密码设置和认证接口分别为：
+
+```text
+PUT  /internal/iam/v1/users/{name}/password
+POST /internal/iam/v1/authenticate
+```
+
+这些接口供 ebs-gateway 在受信任网络中调用，密码和密码哈希不会出现在 User API 响应中。
 
 ### 创建 Project
 

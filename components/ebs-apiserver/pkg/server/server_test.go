@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"github.com/spf13/pflag"
 	"net/http"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
@@ -53,6 +55,30 @@ func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
 				t.Fatalf("expected storage to be initialized")
 			}
 		})
+	}
+}
+
+func TestEnableIAMFlag(t *testing.T) {
+	opts := NewEulerMakerServerOptions()
+	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	opts.AddFlags(fs)
+	if err := fs.Parse([]string{"--enable-iam"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	if !opts.EnableIAM {
+		t.Fatal("--enable-iam did not enable IAM")
+	}
+}
+
+func TestIAMStorageUsesESWithoutWatch(t *testing.T) {
+	client := esclient.NewClientForTesting("http://unused", http.DefaultClient)
+	group := CreateIAMAPIGroupInfo(client, credential.NewStore(client))
+	users := group.VersionedResourcesStorageMap["v1"]["users"]
+	if users == nil {
+		t.Fatal("users storage was not installed")
+	}
+	if _, ok := users.(rest.Watcher); ok {
+		t.Fatal("users unexpectedly implements watch")
 	}
 }
 

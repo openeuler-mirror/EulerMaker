@@ -47,6 +47,7 @@ type Store struct {
 	updateStrategy  rest.RESTUpdateStrategy
 	deleteStrategy  rest.RESTDeleteStrategy
 	tableConvertor  rest.TableConvertor
+	deleteHook      func(context.Context, string) error
 }
 
 type StatusStore struct {
@@ -74,6 +75,9 @@ func New(client *es.Client, resourceName, kind string, template *genericregistry
 func NewStatus(parent *Store, template *genericregistry.Store) *StatusStore {
 	return &StatusStore{parent: parent, updateStrategy: template.UpdateStrategy}
 }
+
+// SetDeleteHook registers cleanup that must succeed before an object is removed.
+func (s *Store) SetDeleteHook(hook func(context.Context, string) error) { s.deleteHook = hook }
 
 func (s *Store) New() runtime.Object     { return s.newFunc() }
 func (s *Store) NewList() runtime.Object { return s.newListFunc() }
@@ -195,6 +199,11 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 		if dryrun.IsDryRun(options.DryRun) {
 			return newObj, false, nil
 		}
+		if s.deleteHook != nil {
+			if err := s.deleteHook(ctx, name); err != nil {
+				return nil, false, apierrors.NewInternalError(err)
+			}
+		}
 		if err := s.client.Delete(ctx, s.resourceName, hit.ID, hit.SeqNo, hit.PrimaryTerm); err != nil {
 			return nil, false, s.apiError(err, name)
 		}
@@ -265,6 +274,11 @@ func (s *Store) Delete(ctx context.Context, name string, admission rest.Validate
 		return obj, false, nil
 	}
 	if !dryrun.IsDryRun(options.DryRun) {
+		if s.deleteHook != nil {
+			if err := s.deleteHook(ctx, name); err != nil {
+				return nil, false, apierrors.NewInternalError(err)
+			}
+		}
 		if err := s.client.Delete(ctx, s.resourceName, hit.ID, hit.SeqNo, hit.PrimaryTerm); err != nil {
 			return nil, false, s.apiError(err, name)
 		}

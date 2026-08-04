@@ -20,6 +20,10 @@ import (
 
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	iamapi "ebs-apiserver/pkg/apis/iam"
+	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
+	iammodule "ebs-apiserver/pkg/iam"
+	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
@@ -27,6 +31,7 @@ import (
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
+	userstore "ebs-apiserver/pkg/registry/iam/user"
 	"ebs-apiserver/pkg/storage/es"
 	"ebs-apiserver/pkg/storage/esstore"
 )
@@ -106,6 +111,9 @@ var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"ebs-apiserver/pkg/apis/ebs/v1.RunnerAddress":                   objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.RunnerInfo":                      objDef(),
 	"ebs-apiserver/pkg/apis/ebs/v1.RunnerList":                      objDef(),
+	"ebs-apiserver/pkg/apis/iam/v1.User":                            objDef(),
+	"ebs-apiserver/pkg/apis/iam/v1.UserSpec":                        objDef(),
+	"ebs-apiserver/pkg/apis/iam/v1.UserList":                        objDef(),
 }
 
 const etcdPrefix = "/registry/ebs"
@@ -119,11 +127,14 @@ func init() {
 	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
 	ebsapi.AddToScheme(Scheme)
 	ebsv1.AddToScheme(Scheme)
+	iamapi.AddToScheme(Scheme)
+	iamv1.AddToScheme(Scheme)
 }
 
 type EulerMakerServerOptions struct {
 	RecommendedOptions *options.RecommendedOptions
 	EsServers          string
+	EnableIAM          bool
 	esConfig           *es.Config
 }
 
@@ -151,6 +162,7 @@ func NewEulerMakerServerOptions() *EulerMakerServerOptions {
 
 func (o *EulerMakerServerOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.EsServers, "es-servers", o.EsServers, "elasticsearch server address")
+	fs.BoolVar(&o.EnableIAM, "enable-iam", o.EnableIAM, "enable the built-in IAM API and password authenticator")
 	o.RecommendedOptions.AddFlags(fs)
 }
 
@@ -237,7 +249,7 @@ func Run(stopCh <-chan struct{}) error {
 		return err
 	}
 
-	srv, err := CreateServerChain(config, esClient)
+	srv, err := CreateServerChain(config, esClient, opts.EnableIAM)
 	if err != nil {
 		return err
 	}
@@ -246,7 +258,7 @@ func Run(stopCh <-chan struct{}) error {
 	return prepared.Run(stopCh)
 }
 
-func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.Client) (*genericapiserver.GenericAPIServer, error) {
+func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.Client, enableIAM bool) (*genericapiserver.GenericAPIServer, error) {
 	completedConfig := config.Complete()
 
 	apiGroupInfo, err := CreateAPIGroupInfo(completedConfig.RESTOptionsGetter, esClient)
@@ -262,9 +274,29 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	if err := srv.InstallAPIGroup(apiGroupInfo); err != nil {
 		return nil, err
 	}
+	if enableIAM {
+		if err := esClient.EnsureIAMIndices(); err != nil {
+			return nil, fmt.Errorf("ensure IAM indices: %w", err)
+		}
+		credentials := credential.NewStore(esClient)
+		iamGroupInfo := CreateIAMAPIGroupInfo(esClient, credentials)
+		if err := srv.InstallAPIGroup(iamGroupInfo); err != nil {
+			return nil, err
+		}
+		iammodule.InstallInternalRoutes(srv, credentials)
+	}
 	installProjectAliasRoutes(srv)
 
 	return srv, nil
+}
+
+func CreateIAMAPIGroupInfo(esClient *es.Client, credentials *credential.Store) *genericapiserver.APIGroupInfo {
+	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(iamapi.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	storage := userstore.NewStorage()
+	userES := esstore.New(esClient, "user", "User", storage.User.(*genericregistry.Store))
+	userES.SetDeleteHook(credentials.Delete)
+	apiGroupInfo.VersionedResourcesStorageMap["v1"] = map[string]rest.Storage{"users": userES}
+	return &apiGroupInfo
 }
 
 func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *es.Client) (*genericapiserver.APIGroupInfo, error) {

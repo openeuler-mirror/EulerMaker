@@ -54,6 +54,7 @@ services:
     command:
       - --etcd-servers=http://etcd:2379
       - --es-servers=http://elasticsearch:9200
+      - --enable-iam=true
     ports:
       - "8443:8443"
     networks:

@@ -14,12 +14,17 @@ import (
 )
 
 var indices = map[string]string{
-	"project":   "ebs-projects",
-	"snapshot":  "ebs-snapshots",
-	"build":     "ebs-builds",
-	"buildinfo": "ebs-buildinfos",
-	"rpmrepo":   "ebs-rpmrepos",
+	"project":    "ebs-projects",
+	"snapshot":   "ebs-snapshots",
+	"build":      "ebs-builds",
+	"buildinfo":  "ebs-buildinfos",
+	"rpmrepo":    "ebs-rpmrepos",
+	"user":       "ebs-users",
+	"credential": "ebs-user-credentials",
 }
+
+var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo"}
+var iamResources = []string{"user", "credential"}
 
 const indexMapping = `{
   "settings":{"number_of_shards":1,"number_of_replicas":0},
@@ -116,7 +121,17 @@ func (c *Client) ping() error {
 }
 
 func (c *Client) ensureIndices() error {
-	for _, index := range indices {
+	return c.ensureResourceIndices(coreResources)
+}
+
+// EnsureIAMIndices initializes indices owned by the optional IAM module.
+func (c *Client) EnsureIAMIndices() error {
+	return c.ensureResourceIndices(iamResources)
+}
+
+func (c *Client) ensureResourceIndices(resources []string) error {
+	for _, resource := range resources {
+		index := resourceIndex(resource)
 		req, err := http.NewRequest(http.MethodHead, c.addr()+"/"+index, nil)
 		if err != nil {
 			return err
