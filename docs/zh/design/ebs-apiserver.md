@@ -4,6 +4,8 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
 
+apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块。IAM 模块注册 User API，并提供仅供 gateway 调用的密码设置和认证接口。User 与密码凭据存入 Elasticsearch；租户仅以 User、Project labels 保存，apiserver 不解释租户语义，也不执行租户鉴权。
+
 Snapshot、Build、BuildInfo、RpmRepo、Job 使用 Project API 表达项目归属。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径。Job 同时提供全局系统 API，供调度器跨 Project list/watch；其余 Project 级资源的全局 API 只提供跨 Project 查询，不提供 watch。
 
 服务按资源类型选择唯一主存储，不对同一对象执行 etcd 和 Elasticsearch 双写：
@@ -26,6 +28,9 @@ components/ebs-apiserver
         │   ├── status subresource
         │   ├── validation/defaulting
         │   └── list/get/create/update/delete
+        ├── IAM module（--enable-iam）
+        │   ├── User REST storage
+        │   └── Credential authenticator
         │
         ├── etcd
         │   └── Job、Runner：对象、resourceVersion 与 watch
@@ -48,6 +53,11 @@ components/ebs-apiserver/
 │   │   │   ├── defaults.go            # 默认值
 │   │   │   └── zz_generated.deepcopy.go
 │   │   └── validation/validation.go   # admission 校验
+│   ├── iam/                           # 可选 IAM 模块
+│   │   ├── api/                       # iam.ebs/v1 User 类型与注册
+│   │   ├── registry/                  # User REST storage
+│   │   ├── credential/                # Argon2id 哈希与密码验证
+│   │   └── install.go                 # IAM 路由安装
 │   ├── registry/
 │   │   ├── scoped_store.go            # 命名空间作用域 store 包装
 │   │   └── ebs/
@@ -91,6 +101,61 @@ apiVersion: ebs/v1
 
 Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `Project.spec.displayName`。
 
+### IAM API
+
+启用 IAM 模块后注册集群级 User 资源：
+
+```text
+GET    /apis/iam.ebs/v1/users
+POST   /apis/iam.ebs/v1/users
+GET    /apis/iam.ebs/v1/users/{name}
+PUT    /apis/iam.ebs/v1/users/{name}
+PATCH  /apis/iam.ebs/v1/users/{name}
+DELETE /apis/iam.ebs/v1/users/{name}
+```
+
+User 对象保存账号资料和状态：
+
+```yaml
+apiVersion: iam.ebs/v1
+kind: User
+metadata:
+  name: alice
+  labels:
+    ebs.io/tenant: tenant-a
+spec:
+  enabled: true
+  displayName: Alice
+  email: alice@example.com
+```
+
+IAM 模块还注册仅供 gateway 使用的内部接口：
+
+```text
+PUT  /internal/iam/v1/users/{name}/password
+POST /internal/iam/v1/authenticate
+```
+
+设置密码请求：
+
+```json
+{"password":"user supplied password"}
+```
+
+认证请求和成功响应：
+
+```json
+{"username":"alice","password":"user supplied password"}
+```
+
+```json
+{"authenticated":true,"username":"alice"}
+```
+
+内部接口不加入 API discovery，只接受 gateway 的内部凭据。请求体、密码和密码哈希不得写入日志、审计事件或错误响应。
+
+密码使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；同一账号连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分用户不存在、密码错误或账号被锁定。
+
 ## 存储设计
 
 ### 存储路由
@@ -100,7 +165,8 @@ REST storage 按资源静态路由，不在请求时动态选择存储，也不�
 | Storage | 资源 | 能力 |
 |---------|------|------|
 | generic etcd store | Job、Runner | CRUD、List、Watch、原生 resourceVersion |
-| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo | CRUD、List、分页、label selector、有限的 field selector、搜索 |
+| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo、User | CRUD、List、分页、label selector、有限的 field selector、搜索 |
+| IAM credential store | PasswordCredential | 仅供 IAM 模块设置和验证密码，不注册为 REST 资源 |
 
 Job、Runner 的 `/status` 子资源必须使用对应的 etcd store；ES-only 资源的 `/status` 和 Build 的 `/abort` 必须使用对应的 ESStore。子资源不能回退到另一种存储。
 
@@ -144,7 +210,11 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
+ebs-users
+ebs-user-credentials
 ```
+
+`ebs-users` 保存完整 User 对象。`ebs-user-credentials` 使用 User 名作为文档 ID，保存 `passwordHash`、`passwordUpdatedAt`、`failedAttempts` 和 `lockedUntil`。User API 的 Get/List 响应不读取或返回 credential 文档。删除 User 时 IAM 模块同时删除对应 credential 文档。
 
 apiserver 启动时检查并创建全部 ES-only 资源索引。生产环境应使用显式 index template/mapping，不依赖动态 mapping 或首次写入自动建索引。
 
@@ -224,6 +294,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - `RpmRepo` 创建默认 `status.phase = Pending`。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Registering`。
+- `User.spec.enabled` 默认为 `true`。
 
 默认值还包括：
 
@@ -238,6 +309,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - Snapshot 必须包含 `specCommits`、`buildTargets` 和 `packageRepos`。
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `dc`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
+- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`ebs.io/tenant` 对 apiserver 是普通 label，其租户语义和修改权限由 gateway 校验。
 
 ## 启动参数
 
@@ -254,6 +326,9 @@ components/ebs-apiserver/cmd/server/main.go
 | `--etcd-servers` | `http://etcd:2379` | etcd 地址 |
 | `--secure-port` | `8443` | HTTPS 监听端口 |
 | `--es-servers` | `http://elasticsearch:9200` | Elasticsearch 地址 |
+| `--enable-iam` | `false` | 启用内置 User API 和密码认证模块 |
+
+IAM 模块只增加 `--enable-iam` 这一项启动配置。User 和 credential 索引名称、Argon2id 参数、失败计数及锁定策略使用模块固定值；Elasticsearch 连接复用 `--es-servers`。
 
 示例：
 
@@ -262,6 +337,7 @@ cd components/ebs-apiserver
 go run ./cmd/server \
   --etcd-servers=http://localhost:2379 \
   --es-servers=http://localhost:9200 \
+  --enable-iam \
   --secure-port=8443
 ```
 
@@ -449,4 +525,4 @@ curl -k --get \
 - 更新 API discovery，确保只有 Job、Runner 暴露 watch verb。
 - 为现有双写数据提供一次性迁移与校验工具；切换完成后删除 etcd 中 ES-only 资源数据。
 - OpenAPI schema 当前是空对象占位，需要生成真实 schema。
-- 认证、鉴权、Admission 当前在 RecommendedOptions 中被置空，实际生产部署应由 gateway 或 apiserver 自身补齐。
+- 外部业务请求的认证与租户鉴权由 gateway 执行；IAM 内部接口校验 gateway 的内部身份，apiserver 仅部署在受信任网络中。
