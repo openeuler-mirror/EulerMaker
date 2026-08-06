@@ -2,137 +2,191 @@ package gateway
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
+	"os"
 	"strings"
 	"time"
 )
 
+const (
+	jwtIssuer    = "ebs-gateway"
+	jwtAudience  = "ebs-api"
+	jwtTTL       = time.Hour
+	jwtMaxTTL    = 24 * time.Hour
+	jwtClockSkew = 30 * time.Second
+)
+
 type Identity struct {
 	Subject string
-	Tenant  string
+	Runner  string
 	Scopes  []string
+	JTI     string
 }
 
-func (i Identity) IsSystem() bool {
+func (i Identity) IsSystem() bool { return i.hasScope("ebs:system") }
+func (i Identity) IsUser() bool   { return i.hasScope("ebs:user") }
+func (i Identity) hasScope(want string) bool {
 	for _, scope := range i.Scopes {
-		if scope == "ebs:system" {
+		if scope == want {
 			return true
 		}
 	}
 	return false
 }
-
-func (i Identity) ScopeHeader() string {
-	return strings.Join(i.Scopes, ",")
-}
+func (i Identity) ScopeHeader() string { return strings.Join(i.Scopes, ",") }
 
 type jwtClaims struct {
-	Subject string   `json:"sub"`
-	Tenant  string   `json:"tenant"`
-	Scopes  []string `json:"scopes"`
-	Exp     int64    `json:"exp"`
+	Subject   string   `json:"sub"`
+	Runner    string   `json:"runner,omitempty"`
+	Scopes    []string `json:"scopes"`
+	Issuer    string   `json:"iss"`
+	Audience  string   `json:"aud"`
+	IssuedAt  int64    `json:"iat"`
+	NotBefore int64    `json:"nbf"`
+	Exp       int64    `json:"exp"`
+	JTI       string   `json:"jti"`
 }
 
-func authenticate(r *http.Request, secret string, now time.Time) (Identity, error) {
+type tokenManager struct {
+	key []byte
+}
+
+func newTokenManager(cfg Config) (*tokenManager, error) {
+	data, err := os.ReadFile(cfg.JWTSecretFile)
+	if err != nil {
+		return nil, fmt.Errorf("read jwt secret file: %w", err)
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil {
+		return nil, fmt.Errorf("decode jwt secret: %w", err)
+	}
+	if len(key) < 32 {
+		return nil, errors.New("jwt secret must contain at least 32 bytes")
+	}
+	return &tokenManager{key: key}, nil
+}
+
+func (m *tokenManager) issueUser(subject string, now time.Time) (string, int64, error) {
+	jtiBytes := make([]byte, 16)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		return "", 0, fmt.Errorf("generate jti: %w", err)
+	}
+	expires := now.Add(jwtTTL).Unix()
+	claims := jwtClaims{Subject: subject, Scopes: []string{"ebs:user"}, Issuer: jwtIssuer, Audience: jwtAudience, IssuedAt: now.Unix(), NotBefore: now.Unix(), Exp: expires, JTI: hex.EncodeToString(jtiBytes)}
+	token, err := m.sign(claims)
+	return token, expires, err
+}
+
+func (m *tokenManager) sign(claims jwtClaims) (string, error) {
+	header, err := json.Marshal(map[string]string{"alg": "HS256", "typ": "JWT"})
+	if err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return "", err
+	}
+	input := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, m.key)
+	_, _ = mac.Write([]byte(input))
+	return input + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+func authenticate(r *http.Request, manager *tokenManager, now time.Time) (Identity, error) {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
 		return Identity{}, errors.New("missing bearer token")
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
+	parts := strings.Fields(auth)
+	if len(parts) != 2 || parts[0] != "Bearer" {
 		return Identity{}, errors.New("invalid authorization header")
 	}
-	return parseJWT(strings.TrimSpace(strings.TrimPrefix(auth, prefix)), secret, now)
+	return manager.parse(parts[1], now)
 }
 
-func parseJWT(token, secret string, now time.Time) (Identity, error) {
+func (m *tokenManager) parse(token string, now time.Time) (Identity, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return Identity{}, errors.New("invalid jwt format")
 	}
-
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return Identity{}, fmt.Errorf("decode jwt header: %w", err)
+		return Identity{}, errors.New("invalid jwt header")
 	}
 	var header struct {
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
 	}
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return Identity{}, fmt.Errorf("parse jwt header: %w", err)
+	if err := json.Unmarshal(headerBytes, &header); err != nil || header.Alg != "HS256" || header.Typ != "JWT" {
+		return Identity{}, errors.New("invalid jwt header")
 	}
-	if header.Alg != "HS256" {
-		return Identity{}, fmt.Errorf("unsupported jwt alg %q", header.Alg)
-	}
-
-	signingInput := parts[0] + "." + parts[1]
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write([]byte(signingInput))
-	wantSig := mac.Sum(nil)
-	gotSig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	got, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
-		return Identity{}, fmt.Errorf("decode jwt signature: %w", err)
-	}
-	if !hmac.Equal(gotSig, wantSig) {
 		return Identity{}, errors.New("invalid jwt signature")
 	}
-
-	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return Identity{}, fmt.Errorf("decode jwt claims: %w", err)
+	mac := hmac.New(sha256.New, m.key)
+	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
+	if !hmac.Equal(got, mac.Sum(nil)) {
+		return Identity{}, errors.New("invalid jwt signature")
 	}
-	claims, err := decodeClaims(claimsBytes)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
+		return Identity{}, errors.New("invalid jwt claims")
+	}
+	var claims jwtClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return Identity{}, errors.New("invalid jwt claims")
+	}
+	if err := m.validateClaims(claims, now); err != nil {
 		return Identity{}, err
 	}
-	if claims.Exp == 0 || now.Unix() >= claims.Exp {
-		return Identity{}, errors.New("jwt expired")
-	}
-	if claims.Subject == "" {
-		return Identity{}, errors.New("jwt sub is required")
-	}
-	if claims.Tenant == "" {
-		return Identity{}, errors.New("jwt tenant is required")
-	}
-	return Identity{Subject: claims.Subject, Tenant: claims.Tenant, Scopes: claims.Scopes}, nil
+	return Identity{Subject: claims.Subject, Runner: claims.Runner, Scopes: claims.Scopes, JTI: claims.JTI}, nil
 }
 
-func decodeClaims(data []byte) (jwtClaims, error) {
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return jwtClaims{}, fmt.Errorf("parse jwt claims: %w", err)
+func (m *tokenManager) validateClaims(c jwtClaims, now time.Time) error {
+	if c.Subject == "" || c.JTI == "" || c.Issuer != jwtIssuer || c.Audience != jwtAudience {
+		return errors.New("invalid jwt claims")
 	}
-
-	claims := jwtClaims{}
-	if v, ok := raw["sub"].(string); ok {
-		claims.Subject = v
+	if c.IssuedAt == 0 || c.NotBefore == 0 || c.Exp == 0 || c.Exp <= c.IssuedAt || c.Exp <= c.NotBefore {
+		return errors.New("invalid jwt time claims")
 	}
-	if v, ok := raw["tenant"].(string); ok {
-		claims.Tenant = v
+	skew := int64(jwtClockSkew / time.Second)
+	current := now.Unix()
+	if c.IssuedAt > current+skew || c.NotBefore > current+skew || c.Exp <= current-skew || time.Duration(c.Exp-c.IssuedAt)*time.Second > jwtMaxTTL {
+		return errors.New("invalid jwt time claims")
 	}
-	switch exp := raw["exp"].(type) {
-	case float64:
-		claims.Exp = int64(exp)
-	case string:
-		parsed, err := strconv.ParseInt(exp, 10, 64)
-		if err != nil {
-			return jwtClaims{}, fmt.Errorf("parse exp: %w", err)
+	scopes := make(map[string]struct{}, len(c.Scopes))
+	for _, scope := range c.Scopes {
+		if scope == "" {
+			return errors.New("invalid jwt scopes")
 		}
-		claims.Exp = parsed
-	}
-	if scopes, ok := raw["scopes"].([]any); ok {
-		for _, item := range scopes {
-			if scope, ok := item.(string); ok {
-				claims.Scopes = append(claims.Scopes, scope)
-			}
+		if _, duplicate := scopes[scope]; duplicate {
+			return errors.New("invalid jwt scopes")
 		}
+		scopes[scope] = struct{}{}
 	}
-	return claims, nil
+	_, user := scopes["ebs:user"]
+	_, runner := scopes["ebs:runner"]
+	_, system := scopes["ebs:system"]
+	_, userAdmin := scopes["ebs:user-admin"]
+	if len(scopes) == 1 && user && c.Runner == "" {
+		return nil
+	}
+	if len(scopes) == 1 && runner && c.Runner != "" && c.Runner == c.Subject {
+		return nil
+	}
+	if len(scopes) == 1 && system && c.Runner == "" {
+		return nil
+	}
+	if len(scopes) == 2 && system && userAdmin && c.Runner == "" {
+		return nil
+	}
+	return errors.New("invalid jwt scopes")
 }

@@ -212,7 +212,7 @@ JWT header 必须包含：
 {"alg":"HS256","typ":"JWT"}
 ```
 
-Gateway 只接受 `HS256`，使用 `JWT_SECRET_FILE` 指定的单一 HMAC 密钥签发 token，并使用常量时间比较验证签名。非 `HS256` 算法、header 不合法或签名错误均返回 401。密钥文件内容是单个 base64 字符串，解码后不得少于 32 字节；密钥文件缺失、无法解码或密钥过短时 gateway 拒绝启动。
+Gateway 只接受 `HS256`，使用 `--jwt-secret-file` 指定的单一 HMAC 密钥签发 token，并使用常量时间比较验证签名。非 `HS256` 算法、header 不合法或签名错误均返回 401。密钥文件内容是单个 base64 字符串，解码后不得少于 32 字节；密钥文件缺失、无法解码或密钥过短时 gateway 拒绝启动。
 
 Gateway 必须验证 `sub`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` 和 `jti`。`sub` 必须是非空字符串，`scopes` 必须是非空字符串数组，`iss` 和 `aud` 必须分别精确等于固定值 `ebs-gateway` 和 `ebs-api`，不接受多 audience 数组。普通用户 token 有效期在代码中固定为 1 小时，允许的时钟偏差固定为 30 秒，接受的 token 最大有效期固定为 24 小时；`iat` 和 `nbf` 均不得晚于“当前时间 + 时钟偏差”，`exp` 必须晚于“当前时间 - 时钟偏差”、`iat` 和 `nbf`，且 `exp-iat` 不得超过最大有效期。缺失必需 claim、claim 类型错误或校验失败均返回 401。
 
@@ -313,8 +313,8 @@ gateway 按调用方和客户端地址限流：
 
 | 配置 | 默认值 | 说明 |
 |------|--------|------|
-| `RATE_LIMIT_PER_SEC` | `100` | 每秒补充令牌数 |
-| `RATE_LIMIT_BURST` | `200` | 突发桶容量 |
+| `--rate-limit-per-sec` | `100` | 每秒补充令牌数 |
+| `--rate-limit-burst` | `200` | 突发桶容量 |
 
 超过限流返回：
 
@@ -437,7 +437,7 @@ gateway 不能只检查请求体中显式出现的字段。所有 `PUT`、`PATCH
 6. gateway 对完整的 `oldObject` 和 `candidateObject` 执行身份字段、subresource、角色权限和受保护字段比较。任何一项不通过均返回 403，不向上游发送写请求。
 7. 比较通过后，gateway 不转发原始 PATCH，而是将 `candidateObject` 以 `PUT application/json` 转发到原对象或原 `/status` 路径。上游必须使用候选对象中的 `resourceVersion` 执行原子更新；对象在步骤 2 后发生变化时返回 409，gateway 不自动重放写请求。
 
-外部接口不接受 `application/strategic-merge-patch+json`、`application/apply-patch+yaml`、YAML、缺失 `Content-Type` 或其他 PATCH 类型，统一返回 415。gateway 必须限制更新请求体和 patch 后候选对象的大小；超过 `MAX_REQUEST_BODY_BYTES` 返回 413。
+外部接口不接受 `application/strategic-merge-patch+json`、`application/apply-patch+yaml`、YAML、缺失 `Content-Type` 或其他 PATCH 类型，统一返回 415。gateway 必须限制更新请求体和 patch 后候选对象的大小；超过 `--max-request-body-bytes` 返回 413。
 
 JSON Patch 处理要求：
 
@@ -521,7 +521,7 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 - 支持 watch 长连接，不缓冲完整响应。
 - 不为不支持 watch 的 Project、Snapshot、Build、BuildInfo、RpmRepo 模拟轮询；相关错误由 apiserver 原样返回。
 - 透传 apiserver 返回的状态码和响应体。
-- 设置上游地址为 `EBS_APISERVER`。
+- 使用 `--apiserver-addr` 设置上游地址。
 
 ## 五、路由设计
 
@@ -580,18 +580,18 @@ components/ebs-gateway/
 
 启动配置：
 
-| 参数 | 环境变量 | 默认值 | 必填 | 说明 |
-|------|----------|--------|------|------|
-| `--port` | `PORT` | `8080` | 否 | gateway 监听端口 |
-| `--apiserver-addr` | `EBS_APISERVER` | `https://ebs-apiserver:8443` | 是 | 上游 apiserver 地址 |
-| `--jwt-secret-file` | `JWT_SECRET_FILE` | 空 | 是 | 保存单个 base64 HMAC 密钥的文件路径，解码后至少 32 字节 |
-| `--user-cache-ttl` | `USER_CACHE_TTL` | `30s` | 否 | User 状态缓存时间，实际缓存不能超过 JWT 剩余有效期 |
-| `--max-request-body-bytes` | `MAX_REQUEST_BODY_BYTES` | `1048576` | 否 | 登录和代理写请求的最大请求体，以及 PATCH 后候选对象的最大字节数 |
-| `--insecure-skip-verify` | `INSECURE_SKIP_VERIFY` | `false` | 否 | 是否跳过 apiserver TLS 校验，仅测试环境使用 |
-| `--apiserver-ca` | `APISERVER_CA` | 空 | 否 | apiserver CA 文件路径 |
-| `--rate-limit-per-sec` | `RATE_LIMIT_PER_SEC` | `100` | 否 | 每秒令牌数 |
-| `--rate-limit-burst` | `RATE_LIMIT_BURST` | `200` | 否 | 令牌桶容量 |
-| `--log-level` | `LOG_LEVEL` | `info` | 否 | 日志级别 |
+| 参数 | 默认值 | 必填 | 说明 |
+|------|--------|------|------|
+| `--port` | `8080` | 否 | gateway 监听端口 |
+| `--apiserver-addr` | `https://ebs-apiserver:8443` | 是 | 上游 apiserver 地址 |
+| `--jwt-secret-file` | 空 | 是 | 保存单个 base64 HMAC 密钥的文件路径，解码后至少 32 字节 |
+| `--user-cache-ttl` | `30s` | 否 | User 状态缓存时间，实际缓存不能超过 JWT 剩余有效期 |
+| `--max-request-body-bytes` | `1048576` | 否 | 登录和代理写请求的最大请求体，以及 PATCH 后候选对象的最大字节数 |
+| `--insecure-skip-verify` | `false` | 否 | 是否跳过 apiserver TLS 校验，仅测试环境使用 |
+| `--apiserver-ca` | 空 | 否 | apiserver CA 文件路径 |
+| `--rate-limit-per-sec` | `100` | 否 | 每秒令牌数 |
+| `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
+| `--log-level` | `info` | 否 | 日志级别 |
 
 密钥文件由 Secret 以只读方式挂载，文件权限应限制为 `0600`，内容为单个 base64 字符串，例如：
 

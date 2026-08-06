@@ -68,12 +68,14 @@ services:
   ebs-gateway:
     build:
       context: ../components/ebs-gateway
-    environment:
-      - EBS_APISERVER=https://ebs-apiserver:8443
-      - JWT_SECRET=dev-secret
-      - INSECURE_SKIP_VERIFY=true
-      - RATE_LIMIT_PER_SEC=100
-      - RATE_LIMIT_BURST=200
+    command:
+      - --apiserver-addr=https://ebs-apiserver:8443
+      - --jwt-secret-file=/run/secrets/ebs_gateway_jwt_secret
+      - --insecure-skip-verify=true
+      - --rate-limit-per-sec=100
+      - --rate-limit-burst=200
+    secrets:
+      - ebs_gateway_jwt_secret
     ports:
       - "8080:8080"
     networks:
@@ -88,3 +90,7 @@ networks:
 volumes:
   etcd-data:
   es-data:
+
+secrets:
+  ebs_gateway_jwt_secret:
+    file: ./ebs-gateway-jwt-secret
