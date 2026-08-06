@@ -7,38 +7,36 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
 type Config struct {
-	Port               int
-	APIServerAddr      string
-	JWTSecret          string
-	InsecureSkipVerify bool
-	APIServerCA        string
-	RateLimitPerSec    float64
-	RateLimitBurst     int
-	LogLevel           string
+	Port                int
+	APIServerAddr       string
+	JWTSecretFile       string
+	MaxRequestBodyBytes int64
+	InsecureSkipVerify  bool
+	APIServerCA         string
+	RateLimitPerSec     float64
+	RateLimitBurst      int
+	LogLevel            string
 }
 
 func LoadConfig(args []string) (Config, error) {
 	cfg := Config{
-		Port:            envInt("PORT", 8080),
-		APIServerAddr:   envString("EBS_APISERVER", "https://ebs-apiserver:8443"),
-		JWTSecret:       envString("JWT_SECRET", ""),
-		APIServerCA:     envString("APISERVER_CA", ""),
-		RateLimitPerSec: envFloat("RATE_LIMIT_PER_SEC", 100),
-		RateLimitBurst:  envInt("RATE_LIMIT_BURST", 200),
-		LogLevel:        envString("LOG_LEVEL", "info"),
+		Port:                8080,
+		APIServerAddr:       "https://ebs-apiserver:8443",
+		MaxRequestBodyBytes: 1048576,
+		RateLimitPerSec:     100,
+		RateLimitBurst:      200,
+		LogLevel:            "info",
 	}
-	cfg.InsecureSkipVerify = envBool("INSECURE_SKIP_VERIFY", false)
 
 	fs := flag.NewFlagSet("ebs-gateway", flag.ContinueOnError)
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "gateway listen port")
 	fs.StringVar(&cfg.APIServerAddr, "apiserver-addr", cfg.APIServerAddr, "upstream ebs-apiserver address")
-	fs.StringVar(&cfg.JWTSecret, "jwt-secret", cfg.JWTSecret, "HMAC JWT signing secret")
+	fs.StringVar(&cfg.JWTSecretFile, "jwt-secret-file", cfg.JWTSecretFile, "base64-encoded HMAC JWT secret file")
+	fs.Int64Var(&cfg.MaxRequestBodyBytes, "max-request-body-bytes", cfg.MaxRequestBodyBytes, "maximum request body size")
 	fs.BoolVar(&cfg.InsecureSkipVerify, "insecure-skip-verify", cfg.InsecureSkipVerify, "skip upstream TLS verification")
 	fs.StringVar(&cfg.APIServerCA, "apiserver-ca", cfg.APIServerCA, "upstream apiserver CA file")
 	fs.Float64Var(&cfg.RateLimitPerSec, "rate-limit-per-sec", cfg.RateLimitPerSec, "rate limit token refill rate")
@@ -51,8 +49,11 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.APIServerAddr == "" {
 		return Config{}, fmt.Errorf("apiserver address is required")
 	}
-	if cfg.JWTSecret == "" {
-		return Config{}, fmt.Errorf("jwt secret is required")
+	if cfg.JWTSecretFile == "" {
+		return Config{}, fmt.Errorf("jwt secret file is required")
+	}
+	if cfg.MaxRequestBodyBytes <= 0 {
+		return Config{}, fmt.Errorf("max-request-body-bytes must be greater than 0")
 	}
 	if cfg.RateLimitPerSec <= 0 {
 		return Config{}, fmt.Errorf("rate-limit-per-sec must be greater than 0")
@@ -84,48 +85,4 @@ func (c Config) HTTPTransport() (*http.Transport, error) {
 	transport.ResponseHeaderTimeout = 0
 	transport.IdleConnTimeout = 90 * time.Second
 	return transport, nil
-}
-
-func envString(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
-func envInt(key string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envFloat(key string, fallback float64) float64 {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseFloat(value, 64)
-	if err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envBool(key string, fallback bool) bool {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }

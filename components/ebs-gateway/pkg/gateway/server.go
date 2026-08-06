@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,9 +18,9 @@ import (
 )
 
 const (
-	apiPrefix             = "/apis/ebs/v1"
-	ownerTenantLabel      = "ebs.io/owner-tenant"
-	memberTenantLabelBase = "ebs.io/member-tenant."
+	apiPrefix           = "/apis/ebs/v1"
+	ownerUserLabel      = "ebs.io/owner-user"
+	memberUserLabelBase = "ebs.io/member-user."
 )
 
 type Gateway struct {
@@ -28,6 +29,7 @@ type Gateway struct {
 	client    *http.Client
 	proxy     *httputil.ReverseProxy
 	limiter   *RateLimiter
+	tokens    *tokenManager
 	now       func() time.Time
 	transport http.RoundTripper
 }
@@ -56,6 +58,13 @@ func NewGateway(cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	tokens, err := newTokenManager(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.MaxRequestBodyBytes == 0 {
+		cfg.MaxRequestBodyBytes = 1048576
+	}
 
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	proxy.Transport = transport
@@ -70,6 +79,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		client:    &http.Client{Transport: transport},
 		proxy:     proxy,
 		limiter:   NewRateLimiter(cfg.RateLimitPerSec, cfg.RateLimitBurst),
+		tokens:    tokens,
 		now:       time.Now,
 		transport: transport,
 	}
@@ -83,14 +93,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		log.Printf(
-			"method=%s path=%s query=%q status=%d latency_ms=%d client_ip=%s tenant=%s user=%s user_agent=%q",
+			"method=%s path=%s query=%q status=%d latency_ms=%d client_ip=%s user=%s user_agent=%q",
 			r.Method,
 			r.URL.Path,
 			r.URL.RawQuery,
 			rec.status,
 			g.now().Sub(start).Milliseconds(),
 			clientIP(r),
-			ident.Tenant,
 			ident.Subject,
 			r.UserAgent(),
 		)
@@ -101,19 +110,29 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = rec.Write([]byte("ok\n"))
 		return
 	}
+	if r.URL.Path == "/auth/login" {
+		g.handleLogin(rec, r)
+		return
+	}
 	if !strings.HasPrefix(r.URL.Path, apiPrefix+"/") && r.URL.Path != apiPrefix {
 		http.NotFound(rec, r)
 		return
 	}
 
-	authIdent, err := authenticate(r, g.cfg.JWTSecret, g.now())
+	authIdent, err := authenticate(r, g.tokens, g.now())
 	if err != nil {
 		http.Error(rec, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	ident = authIdent
+	if ident.IsUser() {
+		if resolveErr := g.resolveUser(r.Context(), ident.Subject); resolveErr != nil {
+			http.Error(rec, resolveErr.message, resolveErr.status)
+			return
+		}
+	}
 
-	limitKey := ident.Tenant + "/" + ident.Subject + "/" + clientIP(r)
+	limitKey := ident.Subject + "/" + clientIP(r)
 	if !g.limiter.Allow(limitKey) {
 		http.Error(rec, "too many requests", http.StatusTooManyRequests)
 		return
@@ -133,6 +152,114 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.proxy.ServeHTTP(rec, r)
 }
 
+type gatewayHTTPError struct {
+	status  int
+	message string
+}
+
+func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/json" {
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, g.cfg.MaxRequestBodyBytes)
+	var input struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "invalid login request", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(input.Username) == "" || input.Password == "" {
+		http.Error(w, "invalid login request", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(w, "invalid login request", http.StatusBadRequest)
+		return
+	}
+	username := strings.TrimSpace(input.Username)
+	if !g.limiter.Allow("login/" + username + "/" + clientIP(r)) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	payload, _ := json.Marshal(map[string]string{"username": username, "password": input.Password})
+	authBody, status, _, err := g.upstreamRequest(r.Context(), http.MethodPost, "/internal/iam/v1/authenticate", bytes.NewReader(payload), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil || status >= 500 {
+		http.Error(w, "authentication service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if status < 200 || status >= 300 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var authResult struct {
+		Authenticated bool   `json:"authenticated"`
+		Username      string `json:"username"`
+	}
+	if json.Unmarshal(authBody, &authResult) != nil || !authResult.Authenticated || authResult.Username != username {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if resolveErr := g.resolveUser(r.Context(), username); resolveErr != nil {
+		if resolveErr.status >= 500 {
+			http.Error(w, "authentication service unavailable", http.StatusServiceUnavailable)
+		} else {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		}
+		return
+	}
+	issuedAt := g.now()
+	token, expiresAt, err := g.tokens.issueUser(username, issuedAt)
+	if err != nil {
+		http.Error(w, "unable to issue token", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"token": token, "tokenType": "Bearer", "expiresIn": expiresAt - issuedAt.Unix()})
+}
+
+func (g *Gateway) resolveUser(ctx context.Context, username string) *gatewayHTTPError {
+	path := "/apis/iam.ebs/v1/users/" + url.PathEscape(username)
+	body, status, _, err := g.upstreamRequest(ctx, http.MethodGet, path, nil, nil)
+	if err != nil || status >= 500 {
+		return &gatewayHTTPError{status: http.StatusServiceUnavailable, message: "user service unavailable"}
+	}
+	if status < 200 || status >= 300 {
+		return &gatewayHTTPError{status: http.StatusForbidden, message: "user is not allowed"}
+	}
+	var user struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Enabled bool `json:"enabled"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &user); err != nil {
+		return &gatewayHTTPError{status: http.StatusForbidden, message: "user is not allowed"}
+	}
+	if user.Metadata.Name != username || !user.Spec.Enabled {
+		return &gatewayHTTPError{status: http.StatusForbidden, message: "user is not allowed"}
+	}
+	return nil
+}
+
 type authzDecision struct {
 	handle http.HandlerFunc
 }
@@ -141,7 +268,7 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 	if ident.IsSystem() {
 		route := parseRoute(r.URL.Path)
 		if route.resource == "projects" && route.project == "" && r.Method == http.MethodPost {
-			if err := injectProjectOwnerLabel(r, ident.Tenant); err != nil {
+			if err := g.validateSystemProjectOwner(ctx, r); err != nil {
 				return authzDecision{}, err
 			}
 		}
@@ -171,8 +298,11 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 		if err != nil {
 			return authzDecision{}, err
 		}
-		if !projectAllowsTenant(project, ident.Tenant) {
+		if !projectAllowsUser(project, ident.Subject) {
 			return authzDecision{}, fmt.Errorf("project access denied")
+		}
+		if project.Labels[ownerUserLabel] != ident.Subject && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			return authzDecision{}, fmt.Errorf("only project owner can modify project")
 		}
 		if isProjectObjectWrite(r.Method, route) {
 			if err := g.protectProjectAccessLabels(r, ident, project); err != nil {
@@ -187,8 +317,11 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 		if err != nil {
 			return authzDecision{}, err
 		}
-		if !projectAllowsTenant(project, ident.Tenant) {
+		if !projectAllowsUser(project, ident.Subject) {
 			return authzDecision{}, fmt.Errorf("project access denied")
+		}
+		if project.Labels[ownerUserLabel] != ident.Subject && r.Method == http.MethodDelete {
+			return authzDecision{}, fmt.Errorf("project member cannot delete resources")
 		}
 		return authzDecision{}, nil
 	}
@@ -199,7 +332,7 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 func (g *Gateway) handleProjectCollection(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
 	switch r.Method {
 	case http.MethodPost:
-		if err := injectProjectOwnerLabel(r, ident.Tenant); err != nil {
+		if err := injectProjectOwnerLabel(r, ident.Subject); err != nil {
 			return authzDecision{}, err
 		}
 		return authzDecision{}, nil
@@ -237,7 +370,7 @@ func (g *Gateway) handleFilteredProjectList(ctx context.Context, w http.Response
 	filtered := make([]any, 0, len(items))
 	for _, item := range items {
 		project, ok := projectFromAny(item)
-		if ok && projectAllowsTenant(project, ident.Tenant) {
+		if ok && projectAllowsUser(project, ident.Subject) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -308,15 +441,16 @@ func (g *Gateway) upstreamRequest(ctx context.Context, method, requestURI string
 }
 
 func injectIdentityHeaders(r *http.Request, ident Identity) {
-	r.Header.Del("X-EBS-Tenant")
-	r.Header.Del("X-EBS-User")
-	r.Header.Del("X-EBS-Scopes")
-	r.Header.Set("X-EBS-Tenant", ident.Tenant)
+	for key := range r.Header {
+		if strings.HasPrefix(strings.ToLower(key), "x-ebs-") {
+			r.Header.Del(key)
+		}
+	}
 	r.Header.Set("X-EBS-User", ident.Subject)
 	r.Header.Set("X-EBS-Scopes", ident.ScopeHeader())
 }
 
-func injectProjectOwnerLabel(r *http.Request, tenant string) error {
+func injectProjectOwnerLabel(r *http.Request, username string) error {
 	if !methodHasBody(r.Method) {
 		return nil
 	}
@@ -325,7 +459,24 @@ func injectProjectOwnerLabel(r *http.Request, tenant string) error {
 		return err
 	}
 	labels := ensureLabels(obj)
-	labels[ownerTenantLabel] = tenant
+	labels[ownerUserLabel] = username
+	return writeJSONObject(r, obj)
+}
+
+func (g *Gateway) validateSystemProjectOwner(ctx context.Context, r *http.Request) error {
+	obj, err := readJSONObject(r)
+	if err != nil {
+		return err
+	}
+	labels := ensureLabels(obj)
+	owner, ok := labels[ownerUserLabel].(string)
+	owner = strings.TrimSpace(owner)
+	if !ok || owner == "" {
+		return fmt.Errorf("system project create requires owner user label")
+	}
+	if resolveErr := g.resolveUser(ctx, owner); resolveErr != nil {
+		return fmt.Errorf("project owner user is not allowed")
+	}
 	return writeJSONObject(r, obj)
 }
 
@@ -334,7 +485,7 @@ func (g *Gateway) protectProjectAccessLabels(r *http.Request, ident Identity, ol
 		return nil
 	}
 	if r.Method == http.MethodPatch {
-		return protectProjectPatchAccessLabels(r, ident, old)
+		return g.protectProjectPatchAccessLabels(r, ident, old)
 	}
 
 	obj, err := readJSONObject(r)
@@ -342,18 +493,25 @@ func (g *Gateway) protectProjectAccessLabels(r *http.Request, ident Identity, ol
 		return err
 	}
 	labels := ensureLabels(obj)
-	oldOwner := old.Labels[ownerTenantLabel]
-	newOwner := labels[ownerTenantLabel]
+	oldOwner := old.Labels[ownerUserLabel]
+	newOwner := labels[ownerUserLabel]
 	if newOwner != oldOwner {
-		return fmt.Errorf("owner tenant label is immutable")
+		return fmt.Errorf("owner user label is immutable")
 	}
-	if ident.Tenant != oldOwner && accessLabelsChanged(labels, old.Labels) {
+	if ident.Subject != oldOwner && accessLabelsChanged(labels, old.Labels) {
 		return fmt.Errorf("only project owner can modify project access labels")
+	}
+	for label, value := range labels {
+		if strings.HasPrefix(label, memberUserLabelBase) && fmt.Sprint(value) == "true" && old.Labels[label] != "true" {
+			if resolveErr := g.resolveUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
+				return fmt.Errorf("project member user is not allowed")
+			}
+		}
 	}
 	return writeJSONObject(r, obj)
 }
 
-func protectProjectPatchAccessLabels(r *http.Request, ident Identity, old projectInfo) error {
+func (g *Gateway) protectProjectPatchAccessLabels(r *http.Request, ident Identity, old projectInfo) error {
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
@@ -374,11 +532,16 @@ func protectProjectPatchAccessLabels(r *http.Request, ident Identity, old projec
 			if label == "" {
 				continue
 			}
-			if label == ownerTenantLabel {
-				return fmt.Errorf("owner tenant label is immutable")
+			if label == ownerUserLabel {
+				return fmt.Errorf("owner user label is immutable")
 			}
-			if strings.HasPrefix(label, memberTenantLabelBase) && ident.Tenant != old.Labels[ownerTenantLabel] {
+			if strings.HasPrefix(label, memberUserLabelBase) && ident.Subject != old.Labels[ownerUserLabel] {
 				return fmt.Errorf("only project owner can modify project member labels")
+			}
+			if strings.HasPrefix(label, memberUserLabelBase) && old.Labels[label] != "true" && fmt.Sprint(op["value"]) == "true" {
+				if resolveErr := g.resolveUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
+					return fmt.Errorf("project member user is not allowed")
+				}
 			}
 		}
 		return nil
@@ -390,13 +553,18 @@ func protectProjectPatchAccessLabels(r *http.Request, ident Identity, old projec
 	}
 	labels := labelsFromObject(patch)
 	for label, value := range labels {
-		if label == ownerTenantLabel {
-			if value != old.Labels[ownerTenantLabel] {
-				return fmt.Errorf("owner tenant label is immutable")
+		if label == ownerUserLabel {
+			if value != old.Labels[ownerUserLabel] {
+				return fmt.Errorf("owner user label is immutable")
 			}
 		}
-		if strings.HasPrefix(label, memberTenantLabelBase) && ident.Tenant != old.Labels[ownerTenantLabel] {
+		if strings.HasPrefix(label, memberUserLabelBase) && ident.Subject != old.Labels[ownerUserLabel] {
 			return fmt.Errorf("only project owner can modify project member labels")
+		}
+		if strings.HasPrefix(label, memberUserLabelBase) && old.Labels[label] != "true" && value == "true" {
+			if resolveErr := g.resolveUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
+				return fmt.Errorf("project member user is not allowed")
+			}
 		}
 	}
 	return nil
@@ -465,12 +633,12 @@ func labelsFromObject(obj map[string]any) map[string]string {
 func accessLabelsChanged(newLabels map[string]any, oldLabels map[string]string) bool {
 	keys := map[string]struct{}{}
 	for key := range oldLabels {
-		if key == ownerTenantLabel || strings.HasPrefix(key, memberTenantLabelBase) {
+		if key == ownerUserLabel || strings.HasPrefix(key, memberUserLabelBase) {
 			keys[key] = struct{}{}
 		}
 	}
 	for key := range newLabels {
-		if key == ownerTenantLabel || strings.HasPrefix(key, memberTenantLabelBase) {
+		if key == ownerUserLabel || strings.HasPrefix(key, memberUserLabelBase) {
 			keys[key] = struct{}{}
 		}
 	}
@@ -521,7 +689,7 @@ func parseRoute(path string) routeInfo {
 }
 
 func isProjectScopedResource(resource string) bool {
-	return resource == "snapshots" || resource == "builds" || resource == "jobs"
+	return resource == "snapshots" || resource == "builds" || resource == "buildinfos" || resource == "rpmrepos" || resource == "jobs"
 }
 
 func isProjectObjectWrite(method string, route routeInfo) bool {
@@ -561,11 +729,11 @@ func projectFromAny(value any) (projectInfo, bool) {
 	return project, true
 }
 
-func projectAllowsTenant(project projectInfo, tenant string) bool {
-	if project.Labels[ownerTenantLabel] == tenant {
+func projectAllowsUser(project projectInfo, username string) bool {
+	if project.Labels[ownerUserLabel] == username {
 		return true
 	}
-	return project.Labels[memberTenantLabelBase+tenant] == "true"
+	return project.Labels[memberUserLabelBase+username] == "true"
 }
 
 func labelNameFromJSONPatchPath(path string) string {
