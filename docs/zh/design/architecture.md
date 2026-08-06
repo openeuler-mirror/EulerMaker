@@ -46,6 +46,51 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
 - etcd 和 Elasticsearch 都是主存储。
 - etcd 负责对象持久化、resourceVersion 和 list/watch，Elasticsearch 负责对象索引、搜索和增强数据。
 
+### 2.1 内部访问与信任边界
+
+普通用户和外部系统不得直连 `ebs-apiserver`。`ebs-gateway`、scheduler 和 controller 是允许直连 `ebs-apiserver` 的受信任内部组件，各组件使用内部 CA 签发的独立 mTLS 客户端证书：
+
+```text
+用户 / 外部系统
+       |
+       | JWT
+       v
+ebs-gateway ─── mTLS ───┐
+                        |
+scheduler ───── mTLS ───┼──> ebs-apiserver
+                        |
+controllers ─── mTLS ───┘
+```
+
+`ebs-apiserver` 根据客户端证书的 URI SAN 识别内部调用方，并按组件职责对 API group、资源、verb 和 subresource 执行授权。Gateway、scheduler 和 controller 必须使用不同的证书身份，不得共享客户端证书；不同 controller 在需要进一步限制权限时使用独立身份。
+
+建议的内部证书身份：
+
+```text
+spiffe://eulermaker/internal/ebs-gateway
+spiffe://eulermaker/internal/ebs-scheduler
+spiffe://eulermaker/internal/ebs-controller
+```
+
+内部授权遵循最小权限和默认拒绝原则：
+
+- `ebs-gateway` 只访问代理用户请求、解析 User 和调用 IAM 内部接口所需的 API。
+- scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
+- controller 只访问其控制循环负责的资源和 status API；不同 controller 可以按职责继续拆分权限。
+- 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
+- `/internal/iam/*` 只允许 `ebs-gateway` 的 mTLS 身份调用，scheduler 和 controller 不得访问。
+
+Gateway 转发用户请求时，外部用户身份由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头，只注入 `X-EBS-User` 和 `X-EBS-Scopes`；这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
+
+两类请求的认证链路分别为：
+
+```text
+用户请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
+系统请求：scheduler/controller mTLS -> apiserver 内部资源与 verb 授权
+```
+
+部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。网络隔离是 mTLS 和内部授权之外的附加防线，不能替代调用方认证或资源权限校验。Runner 仍统一通过 `ebs-gateway` 访问 API，不属于允许直连 `ebs-apiserver` 的组件。
+
 ---
 
 ## 三、核心组件
@@ -58,7 +103,7 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
 | `Elasticsearch` | 主存储，保存对象索引、搜索字段和增强数据 |
 | `controllers` | 监听 Project/Snapshot/Build 等对象变化，推进资源状态 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
-| `runner` | 通过 ebs-gateway 注册 Runner、心跳上报、监听绑定到自己的 Job 并执行 |
+| `runner` | 通过 ebs-gateway 注册 Runner、上报心跳、监听全局 Job 事件，只处理 `status.runner` 等于自身名称的 Job |
 
 ---
 
@@ -246,7 +291,8 @@ Scheduler 使用全局 Job API，不需要逐个 Project 建立 watch。
 ```text
 runner -> ebs-gateway -> ebs-apiserver: register Runner
 runner -> ebs-gateway -> ebs-apiserver: update Runner.status heartbeat
-runner -> ebs-gateway -> ebs-apiserver: watch assigned Job
+runner -> ebs-gateway -> ebs-apiserver: list/watch all Jobs
+runner: process only Jobs whose status.runner matches itself
 runner -> execute Job
 runner -> ebs-gateway -> ebs-apiserver: update Job.status
 ```
@@ -286,6 +332,6 @@ docker compose -f hacks/docker-compose.yml up -d
 当前架构后续主要完善方向：
 
 - 生成真实 OpenAPI schema。
-- 完善认证、鉴权、审计与多租户策略。
+- 完善认证、鉴权、审计与 Project owner/member 用户权限策略。
 - 补齐 controller、scheduler、runner 的实现。
 - 接入正式的镜像构建和发布流程。

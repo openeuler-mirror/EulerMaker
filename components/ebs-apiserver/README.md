@@ -124,7 +124,7 @@ curl -k -X POST https://localhost:8443/apis/iam.ebs/v1/users \
   -d '{
     "apiVersion":"iam.ebs/v1",
     "kind":"User",
-    "metadata":{"name":"alice","labels":{"ebs.io/tenant":"tenant-a"}},
+    "metadata":{"name":"alice"},
     "spec":{"enabled":true,"displayName":"Alice","email":"alice@example.com"}
   }'
 ```

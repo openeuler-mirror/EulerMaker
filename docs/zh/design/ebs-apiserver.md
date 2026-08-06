@@ -121,8 +121,6 @@ apiVersion: iam.ebs/v1
 kind: User
 metadata:
   name: alice
-  labels:
-    ebs.io/tenant: tenant-a
 spec:
   enabled: true
   displayName: Alice
@@ -309,7 +307,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - Snapshot 必须包含 `specCommits`、`buildTargets` 和 `packageRepos`。
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `dc`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
-- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`ebs.io/tenant` 对 apiserver 是普通 label，其租户语义和修改权限由 gateway 校验。
+- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。User 的 `metadata.name` 是全局唯一的稳定用户标识，与普通用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 
 ## 启动参数
 
