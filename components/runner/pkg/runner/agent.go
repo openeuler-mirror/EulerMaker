@@ -85,7 +85,16 @@ func (a *Agent) register(ctx context.Context) error {
 	desired := a.runnerObject("")
 	existing, err := a.client.GetRunner(ctx, a.cfg.Name)
 	if err == nil {
-		desired.Metadata.ResourceVersion = existing.Metadata.ResourceVersion
+		desired = *existing
+		desired.TypeMeta = TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
+		if desired.Metadata.Labels == nil {
+			desired.Metadata.Labels = map[string]string{}
+		}
+		desired.Metadata.Labels["ebs.io/runner-type"] = a.cfg.Type
+		desired.Metadata.Labels["ebs.io/runner-arch"] = a.cfg.Arch
+		desired.Spec.Type = a.cfg.Type
+		desired.Spec.Arch = a.cfg.Arch
+		desired.Spec.Hostname = a.cfg.Name
 		if err := a.client.UpdateRunner(ctx, desired); err != nil {
 			return fmt.Errorf("update runner: %w", err)
 		}
@@ -179,12 +188,22 @@ func (a *Agent) watchLoop(ctx context.Context) {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
+		wait := backoff
 		if err != nil {
 			log.Printf("watch jobs failed: %v", err)
+			var statusErr StatusError
+			if errors.As(err, &statusErr) {
+				if statusErr.Code == 410 {
+					a.resetLastResourceVersion()
+				}
+				if statusErr.Code == 429 && statusErr.RetryAfter > wait {
+					wait = statusErr.RetryAfter
+				}
+			}
 		}
 
 		select {
-		case <-time.After(backoff):
+		case <-time.After(wait):
 		case <-ctx.Done():
 			return
 		}
@@ -195,7 +214,17 @@ func (a *Agent) watchLoop(ctx context.Context) {
 }
 
 func (a *Agent) watchOnce(ctx context.Context) error {
-	events, errs := a.client.WatchJobs(ctx, a.lastResourceVersion())
+	if a.lastResourceVersion() == "" {
+		list, err := a.client.ListAssignedJobs(ctx, a.cfg.Name)
+		if err != nil {
+			return err
+		}
+		for _, job := range list.Items {
+			a.handleEvent(ctx, WatchEvent{Type: "ADDED", Object: job})
+		}
+		a.setLastResourceVersion(list.Metadata.ResourceVersion)
+	}
+	events, errs := a.client.WatchAssignedJobs(ctx, a.cfg.Name, a.lastResourceVersion())
 	for {
 		select {
 		case event, ok := <-events:
@@ -206,7 +235,9 @@ func (a *Agent) watchOnce(ctx context.Context) error {
 				return nil
 			}
 			a.setLastResourceVersion(event.Object.Metadata.ResourceVersion)
-			a.handleEvent(ctx, event)
+			if event.Type != "BOOKMARK" {
+				a.handleEvent(ctx, event)
+			}
 		case err, ok := <-errs:
 			if ok && err != nil {
 				return err
@@ -303,6 +334,12 @@ func (a *Agent) setLastResourceVersion(rv string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lastRV = rv
+}
+
+func (a *Agent) resetLastResourceVersion() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastRV = ""
 }
 
 func jobKey(job JobResource) string {

@@ -13,10 +13,14 @@ import (
 	"net/http/httputil"
 	"net/mail"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
+
+	jsonpatch "github.com/evanphx/json-patch"
 )
 
 const (
@@ -33,6 +37,8 @@ type Gateway struct {
 	limiter             *RateLimiter
 	registerIPLimiter   *RateLimiter
 	registerUserLimiter *RateLimiter
+	watchMu             sync.Mutex
+	activeRunnerWatches map[string]int
 	tokens              *tokenManager
 	now                 func() time.Time
 	transport           http.RoundTripper
@@ -85,6 +91,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		limiter:             NewRateLimiter(cfg.RateLimitPerSec, cfg.RateLimitBurst),
 		registerIPLimiter:   NewRateLimiter(5.0/60.0, 5),
 		registerUserLimiter: NewRateLimiter(3.0/60.0, 3),
+		activeRunnerWatches: make(map[string]int),
 		tokens:              tokens,
 		now:                 time.Now,
 		transport:           transport,
@@ -381,6 +388,9 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 		injectIdentityHeaders(r, ident)
 		return authzDecision{}, nil
 	}
+	if ident.IsRunner() {
+		return g.authorizeRunner(ctx, r, ident)
+	}
 
 	route := parseRoute(r.URL.Path)
 	if route.resource == "" {
@@ -433,6 +443,446 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 	}
 
 	return authzDecision{}, fmt.Errorf("access denied")
+}
+
+func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
+	if ident.Runner == "" || ident.Subject != ident.Runner {
+		return authzDecision{}, fmt.Errorf("runner identity mismatch")
+	}
+	route := parseRoute(r.URL.Path)
+	if route.resource == "runners" {
+		if route.name == "" {
+			if r.Method != http.MethodPost {
+				return authzDecision{}, fmt.Errorf("runner collection access denied")
+			}
+			if err := g.validateRunnerCreate(r, ident.Runner); err != nil {
+				return authzDecision{}, err
+			}
+			return authzDecision{}, nil
+		}
+		if route.name != ident.Runner {
+			return authzDecision{}, fmt.Errorf("runner access denied")
+		}
+		if len(route.rest) == 1 && route.rest[0] == "jobs" {
+			return g.authorizeRunnerJobs(r, ident)
+		}
+		if len(route.rest) == 1 && route.rest[0] == "status" {
+			if r.Method != http.MethodPut && r.Method != http.MethodPatch {
+				return authzDecision{}, fmt.Errorf("runner status method denied")
+			}
+			if err := g.validateRunnerStatusBody(r); err != nil {
+				return authzDecision{}, err
+			}
+			return authzDecision{}, nil
+		}
+		if len(route.rest) != 0 {
+			return authzDecision{}, fmt.Errorf("runner subresource denied")
+		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead:
+			return authzDecision{}, nil
+		case http.MethodPut:
+			if err := g.validateRunnerUpdate(ctx, r, ident.Runner); err != nil {
+				return authzDecision{}, err
+			}
+			return authzDecision{}, nil
+		case http.MethodPatch:
+			if err := g.validateRunnerPatch(ctx, r, ident.Runner); err != nil {
+				return authzDecision{}, err
+			}
+			return authzDecision{}, nil
+		default:
+			return authzDecision{}, fmt.Errorf("runner object method denied")
+		}
+	}
+	if route.resource == "jobs" && route.project != "" && route.name != "" {
+		assigned, err := g.jobAssignedTo(ctx, r.URL.Path, ident.Runner)
+		if err != nil || !assigned {
+			return authzDecision{}, fmt.Errorf("job is not assigned to runner")
+		}
+		if len(route.rest) == 0 && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			return authzDecision{}, nil
+		}
+		if len(route.rest) == 1 && route.rest[0] == "status" && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+			if err := g.validateRunnerJobStatusBody(r, ident.Runner); err != nil {
+				return authzDecision{}, err
+			}
+			return authzDecision{}, nil
+		}
+	}
+	return authzDecision{}, fmt.Errorf("runner access denied")
+}
+
+func (g *Gateway) authorizeRunnerJobs(r *http.Request, ident Identity) (authzDecision, error) {
+	if r.Method != http.MethodGet {
+		return authzDecision{}, fmt.Errorf("runner jobs only supports GET")
+	}
+	allowed := map[string]bool{"watch": true, "resourceVersion": true, "timeoutSeconds": true, "allowWatchBookmarks": true}
+	for key := range r.URL.Query() {
+		if !allowed[key] {
+			return authzDecision{}, fmt.Errorf("unsupported runner jobs query parameter")
+		}
+	}
+	query := r.URL.Query()
+	watchValue := query.Get("watch")
+	if watchValue != "" && watchValue != "false" && watchValue != "true" {
+		return authzDecision{}, fmt.Errorf("invalid watch value")
+	}
+	if bookmark := query.Get("allowWatchBookmarks"); bookmark != "" && bookmark != "false" && bookmark != "true" {
+		return authzDecision{}, fmt.Errorf("invalid allowWatchBookmarks value")
+	}
+	if timeout := query.Get("timeoutSeconds"); timeout != "" {
+		seconds, err := strconv.Atoi(timeout)
+		if err != nil || seconds < 1 || seconds > 300 {
+			return authzDecision{}, fmt.Errorf("invalid watch timeoutSeconds")
+		}
+	}
+	if watchValue != "true" {
+		return authzDecision{}, nil
+	}
+	return authzDecision{handle: func(w http.ResponseWriter, req *http.Request) {
+		if !g.acquireRunnerWatch(ident.Runner) {
+			w.Header().Set("Retry-After", "5")
+			http.Error(w, "too many watch requests", http.StatusTooManyRequests)
+			return
+		}
+		defer g.releaseRunnerWatch(ident.Runner)
+		injectIdentityHeaders(req, ident)
+		g.proxy.ServeHTTP(w, req)
+	}}, nil
+}
+
+func (g *Gateway) acquireRunnerWatch(runner string) bool {
+	g.watchMu.Lock()
+	defer g.watchMu.Unlock()
+	if g.activeRunnerWatches[runner] >= 1 {
+		return false
+	}
+	g.activeRunnerWatches[runner]++
+	return true
+}
+
+func (g *Gateway) releaseRunnerWatch(runner string) {
+	g.watchMu.Lock()
+	defer g.watchMu.Unlock()
+	delete(g.activeRunnerWatches, runner)
+}
+
+func readAndRestoreBody(r *http.Request, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("request body too large")
+	}
+	r.Body = io.NopCloser(bytes.NewReader(data))
+	return data, nil
+}
+
+func decodeObject(data []byte) (map[string]any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var obj map[string]any
+	if err := decoder.Decode(&obj); err != nil {
+		return nil, fmt.Errorf("invalid JSON object")
+	}
+	if obj == nil {
+		return nil, fmt.Errorf("invalid JSON object")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid trailing content")
+	}
+	return obj, nil
+}
+
+func (g *Gateway) validateRunnerCreate(r *http.Request, runner string) error {
+	data, err := readAndRestoreBody(r, g.cfg.MaxRequestBodyBytes)
+	if err != nil {
+		return err
+	}
+	obj, err := decodeObject(data)
+	if err != nil {
+		return err
+	}
+	return validateRunnerObject(obj, nil, runner, false)
+}
+
+func (g *Gateway) validateRunnerUpdate(ctx context.Context, r *http.Request, runner string) error {
+	data, err := readAndRestoreBody(r, g.cfg.MaxRequestBodyBytes)
+	if err != nil {
+		return err
+	}
+	candidate, err := decodeObject(data)
+	if err != nil {
+		return err
+	}
+	body, status, _, err := g.upstreamRequest(ctx, http.MethodGet, apiPrefix+"/runners/"+url.PathEscape(runner), nil, nil)
+	if err != nil || status < 200 || status >= 300 {
+		return fmt.Errorf("unable to read runner")
+	}
+	old, err := decodeObject(body)
+	if err != nil {
+		return fmt.Errorf("invalid upstream runner")
+	}
+	return validateRunnerObject(candidate, old, runner, true)
+}
+
+func validateRunnerObject(candidate, old map[string]any, runner string, update bool) error {
+	for key := range candidate {
+		if key != "apiVersion" && key != "kind" && key != "metadata" && key != "spec" && key != "status" {
+			return fmt.Errorf("unsupported runner field")
+		}
+	}
+	if fmt.Sprint(candidate["apiVersion"]) != "ebs/v1" || fmt.Sprint(candidate["kind"]) != "Runner" {
+		return fmt.Errorf("invalid runner type metadata")
+	}
+	meta, ok := candidate["metadata"].(map[string]any)
+	if !ok || fmt.Sprint(meta["name"]) != runner || meta["generateName"] != nil {
+		return fmt.Errorf("runner identity mismatch")
+	}
+	spec, ok := candidate["spec"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("runner spec is required")
+	}
+	typeName, _ := spec["type"].(string)
+	arch, _ := spec["arch"].(string)
+	if (typeName != "dc" && typeName != "vm" && typeName != "hw") || (arch != "aarch64" && arch != "x86_64") {
+		return fmt.Errorf("invalid runner type or arch")
+	}
+	labels := stringMap(meta["labels"])
+	if labels["ebs.io/runner-type"] != typeName || labels["ebs.io/runner-arch"] != arch {
+		return fmt.Errorf("runner labels do not match spec")
+	}
+	if !update {
+		for key := range meta {
+			if key != "name" && key != "labels" {
+				return fmt.Errorf("unsupported runner metadata")
+			}
+		}
+		for key := range spec {
+			if key != "type" && key != "arch" && key != "hostname" {
+				return fmt.Errorf("unsupported runner spec")
+			}
+		}
+		if rawStatus, exists := candidate["status"]; exists {
+			status, ok := rawStatus.(map[string]any)
+			if !ok || len(status) != 0 {
+				return fmt.Errorf("runner status must be empty on create")
+			}
+		}
+	} else {
+		oldMeta, _ := old["metadata"].(map[string]any)
+		if fmt.Sprint(meta["resourceVersion"]) == "" || fmt.Sprint(meta["resourceVersion"]) != fmt.Sprint(oldMeta["resourceVersion"]) {
+			return fmt.Errorf("runner resourceVersion conflict")
+		}
+		if !protectedRunnerFieldsEqual(old, candidate) {
+			return fmt.Errorf("runner protected fields changed")
+		}
+	}
+	for key := range labels {
+		if key != "ebs.io/runner-type" && key != "ebs.io/runner-arch" && !strings.HasPrefix(key, "ebs.io/runner-capability.") {
+			if !update {
+				return fmt.Errorf("unsupported runner label")
+			}
+		}
+	}
+	return nil
+}
+
+func protectedRunnerFieldsEqual(old, candidate map[string]any) bool {
+	oldMeta, _ := old["metadata"].(map[string]any)
+	newMeta, _ := candidate["metadata"].(map[string]any)
+	oldSpec, _ := old["spec"].(map[string]any)
+	newSpec, _ := candidate["spec"].(map[string]any)
+	oldLabels := stringMap(oldMeta["labels"])
+	newLabels := stringMap(newMeta["labels"])
+	for key, value := range oldLabels {
+		if key != "ebs.io/runner-type" && key != "ebs.io/runner-arch" && !strings.HasPrefix(key, "ebs.io/runner-capability.") && newLabels[key] != value {
+			return false
+		}
+	}
+	for key := range newLabels {
+		if key != "ebs.io/runner-type" && key != "ebs.io/runner-arch" && !strings.HasPrefix(key, "ebs.io/runner-capability.") {
+			if oldLabels[key] != newLabels[key] {
+				return false
+			}
+		}
+	}
+	for _, key := range []string{"annotations", "finalizers", "ownerReferences", "uid", "creationTimestamp", "generation", "managedFields", "deletionTimestamp"} {
+		if !reflect.DeepEqual(oldMeta[key], newMeta[key]) {
+			return false
+		}
+	}
+	for _, key := range []string{"unschedulable", "taints"} {
+		if !reflect.DeepEqual(oldSpec[key], newSpec[key]) {
+			return false
+		}
+	}
+	return reflect.DeepEqual(old["status"], candidate["status"])
+}
+
+func stringMap(value any) map[string]string {
+	result := map[string]string{}
+	if values, ok := value.(map[string]any); ok {
+		for key, raw := range values {
+			if text, ok := raw.(string); ok {
+				result[key] = text
+			}
+		}
+	}
+	return result
+}
+
+func (g *Gateway) validateRunnerStatusBody(r *http.Request) error {
+	data, err := readAndRestoreBody(r, g.cfg.MaxRequestBodyBytes)
+	if err != nil {
+		return err
+	}
+	obj, err := decodeObject(data)
+	if err != nil {
+		return err
+	}
+	for key := range obj {
+		if key != "status" && key != "metadata" {
+			return fmt.Errorf("runner status contains protected fields")
+		}
+	}
+	if err := validateStatusMetadata(obj["metadata"]); err != nil {
+		return err
+	}
+	status, ok := obj["status"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("runner status is required")
+	}
+	allowed := map[string]bool{"phase": true, "conditions": true, "capacity": true, "allocatable": true, "addresses": true, "info": true, "heartbeat": true}
+	for key := range status {
+		if !allowed[key] {
+			return fmt.Errorf("unsupported runner status field")
+		}
+	}
+	return nil
+}
+
+func (g *Gateway) validateRunnerPatch(ctx context.Context, r *http.Request, runner string) error {
+	data, err := readAndRestoreBody(r, g.cfg.MaxRequestBodyBytes)
+	if err != nil {
+		return err
+	}
+	oldData, status, _, err := g.upstreamRequest(ctx, http.MethodGet, apiPrefix+"/runners/"+url.PathEscape(runner), nil, nil)
+	if err != nil || status < 200 || status >= 300 {
+		return fmt.Errorf("unable to read runner")
+	}
+	contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0])
+	var candidateData []byte
+	switch contentType {
+	case "application/merge-patch+json":
+		candidateData, err = jsonpatch.MergePatch(oldData, data)
+	case "application/json-patch+json":
+		var patch jsonpatch.Patch
+		patch, err = jsonpatch.DecodePatch(data)
+		if err == nil {
+			candidateData, err = patch.Apply(oldData)
+		}
+	default:
+		return fmt.Errorf("unsupported runner patch type")
+	}
+	if err != nil || int64(len(candidateData)) > g.cfg.MaxRequestBodyBytes {
+		return fmt.Errorf("invalid runner patch")
+	}
+	candidate, err := decodeObject(candidateData)
+	if err != nil {
+		return err
+	}
+	old, err := decodeObject(oldData)
+	if err != nil {
+		return fmt.Errorf("invalid upstream runner")
+	}
+	oldMeta, _ := old["metadata"].(map[string]any)
+	meta, _ := candidate["metadata"].(map[string]any)
+	if meta == nil {
+		return fmt.Errorf("runner metadata is required")
+	}
+	meta["resourceVersion"] = oldMeta["resourceVersion"]
+	if err := validateRunnerObject(candidate, old, runner, true); err != nil {
+		return err
+	}
+	candidateData, err = json.Marshal(candidate)
+	if err != nil {
+		return err
+	}
+	r.Method = http.MethodPut
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Del("Content-Length")
+	r.ContentLength = int64(len(candidateData))
+	r.Body = io.NopCloser(bytes.NewReader(candidateData))
+	return nil
+}
+
+func (g *Gateway) validateRunnerJobStatusBody(r *http.Request, runner string) error {
+	data, err := readAndRestoreBody(r, g.cfg.MaxRequestBodyBytes)
+	if err != nil {
+		return err
+	}
+	obj, err := decodeObject(data)
+	if err != nil {
+		return err
+	}
+	for key := range obj {
+		if key != "status" && key != "metadata" {
+			return fmt.Errorf("job status contains protected fields")
+		}
+	}
+	if err := validateStatusMetadata(obj["metadata"]); err != nil {
+		return err
+	}
+	status, ok := obj["status"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("job status is required")
+	}
+	allowed := map[string]bool{"phase": true, "stage": true, "startTime": true, "endTime": true, "resultRoot": true, "message": true, "runner": true}
+	for key := range status {
+		if !allowed[key] {
+			return fmt.Errorf("unsupported job status field")
+		}
+	}
+	if value, exists := status["runner"]; exists && fmt.Sprint(value) != runner {
+		return fmt.Errorf("runner binding cannot be changed")
+	}
+	if _, exists := status["restartCount"]; exists {
+		return fmt.Errorf("restartCount cannot be changed")
+	}
+	return nil
+}
+
+func validateStatusMetadata(value any) error {
+	if value == nil {
+		return nil
+	}
+	metadata, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid status metadata")
+	}
+	for key := range metadata {
+		if key != "resourceVersion" {
+			return fmt.Errorf("status metadata contains protected fields")
+		}
+	}
+	return nil
+}
+
+func (g *Gateway) jobAssignedTo(ctx context.Context, path, runner string) (bool, error) {
+	base := strings.TrimSuffix(path, "/status")
+	body, status, _, err := g.upstreamRequest(ctx, http.MethodGet, base, nil, nil)
+	if err != nil || status < 200 || status >= 300 {
+		return false, err
+	}
+	obj, err := decodeObject(body)
+	if err != nil {
+		return false, err
+	}
+	statusObject, _ := obj["status"].(map[string]any)
+	return fmt.Sprint(statusObject["runner"]) == runner, nil
 }
 
 func (g *Gateway) handleProjectCollection(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {

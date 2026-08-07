@@ -286,6 +286,7 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 		iammodule.InstallInternalRoutes(srv, credentials, users)
 	}
 	installProjectAliasRoutes(srv)
+	installRunnerJobAliasRoutes(srv)
 
 	return srv, nil
 }

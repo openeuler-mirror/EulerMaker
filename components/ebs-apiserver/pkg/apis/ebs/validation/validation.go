@@ -129,15 +129,7 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 }
 
 func ValidateRunnerUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
-	var allErrs field.ErrorList
-	if newObj.Spec.Type != oldObj.Spec.Type {
-		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "type"), "type is immutable"))
-	}
-	if newObj.Spec.Arch != oldObj.Spec.Arch {
-		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "arch"), "arch is immutable"))
-	}
-	allErrs = append(allErrs, ValidateRunner(newObj)...)
-	return allErrs
+	return ValidateRunner(newObj)
 }
 
 func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {

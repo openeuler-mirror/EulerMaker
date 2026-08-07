@@ -472,6 +472,105 @@ func TestProjectOwnerCanModifyMemberLabelsButNotOwnerLabel(t *testing.T) {
 	}
 }
 
+func TestRunnerCanCreateItself(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != apiPrefix+"/runners" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("X-EBS-User") != "runner-a" || r.Header.Get("X-EBS-Scopes") != "ebs:runner" {
+			t.Fatalf("missing runner identity headers: %#v", r.Header)
+		}
+		w.WriteHeader(http.StatusCreated)
+	}), 100, 200)
+	body := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"dc","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"dc","arch":"x86_64","hostname":"runner-a"},"status":{}}`
+	req := authenticatedRequest(t, http.MethodPost, apiPrefix+"/runners", strings.NewReader(body), runnerClaims("runner-a"))
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunnerScopedJobsRequiresMatchingIdentityAndRejectsSelector(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != apiPrefix+"/runners/runner-a/jobs" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"metadata":{"resourceVersion":"1"},"items":[]}`)
+	}), 100, 200)
+
+	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/runners/runner-a/jobs", nil, runnerClaims("runner-a"))
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected scoped list 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	for _, target := range []string{
+		apiPrefix + "/runners/runner-b/jobs",
+		apiPrefix + "/runners/runner-a/jobs?fieldSelector=status.runner%3Drunner-b",
+		apiPrefix + "/jobs?watch=true",
+	} {
+		req := authenticatedRequest(t, http.MethodGet, target, nil, runnerClaims("runner-a"))
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected %s to be denied, got %d", target, rec.Code)
+		}
+	}
+}
+
+func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
+	var puts atomic.Int32
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != apiPrefix+"/runners/runner-a" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Method == http.MethodGet {
+			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"dc","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"type":"dc","arch":"x86_64","hostname":"old","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Idle"}}`)
+			return
+		}
+		if r.Method != http.MethodPut || r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("expected converted PUT, got %s %s", r.Method, r.Header.Get("Content-Type"))
+		}
+		var obj map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&obj); err != nil {
+			t.Fatalf("decode candidate: %v", err)
+		}
+		meta := obj["metadata"].(map[string]any)
+		labels := meta["labels"].(map[string]any)
+		spec := obj["spec"].(map[string]any)
+		status := obj["status"].(map[string]any)
+		if meta["resourceVersion"] != "7" || labels["ebs.io/zone"] != "zone-a" || spec["unschedulable"] != true || status["phase"] != "Idle" {
+			t.Fatalf("protected fields were not preserved: %#v", obj)
+		}
+		puts.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}), 100, 200)
+	patch := `{"metadata":{"labels":{"ebs.io/runner-type":"dc","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"dc","arch":"x86_64","hostname":"new"}}`
+	req := authenticatedRequest(t, http.MethodPatch, apiPrefix+"/runners/runner-a", strings.NewReader(patch), runnerClaims("runner-a"))
+	req.Header.Set("Content-Type", "application/merge-patch+json")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || puts.Load() != 1 {
+		t.Fatalf("expected protected patch to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunnerWatchConcurrencyLimit(t *testing.T) {
+	gw := newTestGateway(t, http.NotFoundHandler(), 100, 200)
+	if !gw.acquireRunnerWatch("runner-a") {
+		t.Fatal("first runner watch was rejected")
+	}
+	if gw.acquireRunnerWatch("runner-a") {
+		t.Fatal("second runner watch was allowed")
+	}
+	gw.releaseRunnerWatch("runner-a")
+	if !gw.acquireRunnerWatch("runner-a") {
+		t.Fatal("runner watch slot was not released")
+	}
+}
+
 func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -584,5 +683,13 @@ func systemClaims() jwtClaims {
 		NotBefore: now.Unix(),
 		Exp:       now.Add(time.Hour).Unix(),
 		JTI:       "system-test-token",
+	}
+}
+
+func runnerClaims(name string) jwtClaims {
+	now := time.Now()
+	return jwtClaims{
+		Subject: name, Runner: name, Scopes: []string{"ebs:runner"},
+		Issuer: "ebs-gateway", Audience: "ebs-api", IssuedAt: now.Unix(), NotBefore: now.Unix(), Exp: now.Add(time.Hour).Unix(), JTI: "runner-test-token",
 	}
 }
