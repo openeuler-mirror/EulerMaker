@@ -4,16 +4,14 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
 
-apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块。IAM 模块注册 User API，并提供仅供 gateway 调用的用户注册、密码设置和认证接口。User 与密码凭据存入 Elasticsearch；Project 的 owner/member 关系仅以用户标识 labels 保存，apiserver 不解释这些 labels 的权限语义，也不执行 Project 用户鉴权。
+apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块。IAM 模块注册 User 和 MachineAccount API，并提供仅供 gateway 调用的用户注册、密码认证、机机凭据认证接口。User、MachineAccount 及各自凭据存入 Elasticsearch；Project 的 owner/member 关系仅以用户标识 labels 保存，apiserver 不解释这些 labels 的权限语义，也不执行 Project 用户鉴权。
 
 Snapshot、Build、BuildInfo、RpmRepo、Job 使用 Project API 表达项目归属。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径。Job 同时提供全局系统 API，供调度器跨 Project list/watch；其余 Project 级资源的全局 API 只提供跨 Project 查询，不提供 watch。
 
-服务按资源类型选择唯一主存储，不对同一对象执行 etcd 和 Elasticsearch 双写：
+资源存储分配如下：
 
 - Job、Runner 使用 etcd。Runner 表示执行节点；两类资源需要可靠的 resourceVersion 和 list/watch，用于调度、心跳和执行状态协作。
 - Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch。这些资源需要 CRUD、分页、label selector、有限的 field selector 和搜索能力，但不提供 watch。
-
-etcd 和 Elasticsearch 中不存在同一资源的权威副本与索引副本关系，避免双写顺序、补偿和数据一致性问题。
 
 ## 架构
 
@@ -29,8 +27,8 @@ components/ebs-apiserver
         │   ├── validation/defaulting
         │   └── list/get/create/update/delete
         ├── IAM module（--enable-iam）
-        │   ├── User REST storage
-        │   └── Credential authenticator
+        │   ├── User、MachineAccount REST storage
+        │   └── User password、machine client secret authenticator
         │
         ├── etcd
         │   └── Job、Runner：对象、resourceVersion 与 watch
@@ -54,9 +52,9 @@ components/ebs-apiserver/
 │   │   │   └── zz_generated.deepcopy.go
 │   │   └── validation/validation.go   # admission 校验
 │   ├── iam/                           # 可选 IAM 模块
-│   │   ├── api/                       # iam.ebs/v1 User 类型与注册
-│   │   ├── registry/                  # User REST storage
-│   │   ├── credential/                # Argon2id 哈希与密码验证
+│   │   ├── api/                       # iam.ebs/v1 User、MachineAccount 类型与注册
+│   │   ├── registry/                  # User、MachineAccount REST storage
+│   │   ├── credential/                # Argon2id 哈希与凭据验证
 │   │   └── install.go                 # IAM 路由安装
 │   ├── registry/
 │   │   ├── scoped_store.go            # 命名空间作用域 store 包装
@@ -112,7 +110,7 @@ Project API 内部会重写为 scoped storage 请求，因此 Project 名需要�
 
 ### IAM API
 
-启用 IAM 模块后注册集群级 User 资源：
+启用 IAM 模块后注册集群级 User 和 MachineAccount 资源：
 
 ```text
 GET    /apis/iam.ebs/v1/users
@@ -121,6 +119,12 @@ GET    /apis/iam.ebs/v1/users/{name}
 PUT    /apis/iam.ebs/v1/users/{name}
 PATCH  /apis/iam.ebs/v1/users/{name}
 DELETE /apis/iam.ebs/v1/users/{name}
+
+GET    /apis/iam.ebs/v1/machineaccounts
+GET    /apis/iam.ebs/v1/machineaccounts/{name}
+PUT    /apis/iam.ebs/v1/machineaccounts/{name}
+PATCH  /apis/iam.ebs/v1/machineaccounts/{name}
+DELETE /apis/iam.ebs/v1/machineaccounts/{name}
 ```
 
 User 对象保存账号资料和状态：
@@ -136,12 +140,28 @@ spec:
   email: alice@example.com
 ```
 
+MachineAccount 保存机机账号状态和 Runner token 有效期配置：
+
+```yaml
+apiVersion: iam.ebs/v1
+kind: MachineAccount
+metadata:
+  name: runner-site-a
+spec:
+  enabled: true
+  tokenTTLSeconds: 3600
+```
+
+`metadata.name` 是 client ID，满足 DNS1123 label 且全局唯一。`tokenTTLSeconds` 由管理员设置，范围为 300～86400 秒，省略时默认为 3600 秒；客户端不能在交换请求中指定或扩大有效期。`spec.enabled=false` 立即阻止新的 token 交换，但不撤销已经签发的短期 token。
+
 IAM 模块还注册仅供 gateway 使用的内部接口：
 
 ```text
 POST /internal/iam/v1/register
 PUT  /internal/iam/v1/users/{name}/password
 POST /internal/iam/v1/authenticate
+POST /internal/iam/v1/machineaccounts/register
+POST /internal/iam/v1/machineaccounts/{name}/authenticate
 ```
 
 注册请求和成功响应：
@@ -163,6 +183,36 @@ POST /internal/iam/v1/authenticate
 
 由于 User 和凭据位于不同的 Elasticsearch 文档，注册实现必须避免向外暴露可认证的部分状态：先以 create-only 写入 `enabled=false` 的注册中 User，再写入凭据，最后通过乐观并发将 User 启用并清除注册中标记。任一步骤失败时执行补偿删除；注册中的 User 永远不能认证。相同用户名的重试若遇到已超过 10 分钟的未完成注册记录，应在确认记录仍处于原注册版本后清理并重试；仍在处理中的注册和已完成 User 返回 409。该流程保证接口成功时 User 与凭据均可用，失败或实例异常退出时账号不可认证，并通过后续同名注册请求回收超时中间状态，但不承诺 Elasticsearch 跨文档物理事务。
 
+MachineAccount 和初始 client secret 通过单一内部接口创建。请求为：
+
+```json
+{
+  "name": "runner-site-a",
+  "clientSecret": "base64url-encoded-random-secret",
+  "tokenTTLSeconds": 3600
+}
+```
+
+接口以201返回`{"name":"runner-site-a"}`，不回显secret。`name`满足DNS1123 label；client secret由管理端使用密码学安全随机源生成，采用无`:`的base64url编码，原始熵不少于32字节且编码长度不超过256字符；`tokenTTLSeconds`范围为300～86400，省略时默认为3600。apiserver创建MachineAccount对象和Argon2id凭据哈希，任一步骤失败均不保留可认证账号；名称已存在返回409，非法请求返回400。系统不提供设置、修改或轮换MachineAccount credential的接口。删除MachineAccount时同步删除credential文档。
+
+机机认证请求为：
+
+```json
+{"clientSecret":"base64url-encoded-random-secret"}
+```
+
+认证成功返回账号当前的权威授权信息：
+
+```json
+{
+  "authenticated": true,
+  "name": "runner-site-a",
+  "tokenTTLSeconds": 3600
+}
+```
+
+认证接口不签发 JWT。对象不存在、`spec.enabled=false`、credential 不存在、secret 错误或账号锁定均返回相同的 401 响应；同一账号连续失败 5 次后锁定 15 分钟，成功后清零失败次数。Gateway 使用认证成功响应中的 `tokenTTLSeconds` 决定有效期，Runner 名称由交换请求提供并由 Gateway 独立校验。
+
 设置密码请求：
 
 ```json
@@ -179,21 +229,21 @@ POST /internal/iam/v1/authenticate
 {"authenticated":true,"username":"alice"}
 ```
 
-内部接口不加入 API discovery，只接受 URI SAN 被识别为 `ebs-gateway` 的 mTLS 客户端身份。请求体、密码和密码哈希不得写入日志、审计事件或错误响应。
+内部接口不加入 API discovery，只接受 URI SAN 被识别为 `ebs-gateway` 的 mTLS 客户端身份。请求体、密码、client secret及其哈希不得写入日志、审计事件或错误响应。
 
-密码使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；同一账号连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分用户不存在、密码错误或账号被锁定。
+用户密码和 MachineAccount client secret 均使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；两类凭据分别维护失败次数，同一主体连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分主体不存在、凭据错误、未设置凭据或账号被锁定。
 
 ## 存储设计
 
 ### 存储路由
 
-REST storage 按资源静态路由，不在请求时动态选择存储，也不对同一对象双写：
+REST storage 按资源静态路由：
 
 | Storage | 资源 | 能力 |
 |---------|------|------|
 | generic etcd store | Job、Runner | CRUD、List、Watch、原生 resourceVersion |
-| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo、User | CRUD、List、分页、label selector、有限的 field selector、搜索 |
-| IAM credential store | PasswordCredential | 仅供 IAM 模块设置和验证密码，不注册为 REST 资源 |
+| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo、User、MachineAccount | CRUD、List、分页、label selector、有限的 field selector、搜索 |
+| IAM credential store | PasswordCredential、MachineCredential | 仅供 IAM 模块设置和验证用户密码或机机 secret，不注册为 REST 资源 |
 
 Job、Runner 的 `/status` 子资源必须使用对应的 etcd store；ES-only 资源的 `/status` 和 Build 的 `/abort` 必须使用对应的 ESStore。子资源不能回退到另一种存储。
 
@@ -241,9 +291,11 @@ ebs-buildinfos
 ebs-rpmrepos
 ebs-users
 ebs-user-credentials
+ebs-machineaccounts
+ebs-machineaccount-credentials
 ```
 
-`ebs-users` 保存完整 User 对象。`ebs-user-credentials` 使用 User 名作为文档 ID，保存 `passwordHash`、`passwordUpdatedAt`、`failedAttempts` 和 `lockedUntil`。User API 的 Get/List 响应不读取或返回 credential 文档。删除 User 时 IAM 模块同时删除对应 credential 文档。
+`ebs-users` 保存完整 User 对象。`ebs-user-credentials` 使用 User 名作为文档 ID，保存 `passwordHash`、`passwordUpdatedAt`、`failedAttempts` 和 `lockedUntil`。`ebs-machineaccounts` 保存完整 MachineAccount 对象，`ebs-machineaccount-credentials` 使用 MachineAccount 名作为文档 ID，保存 `secretHash`、`secretCreatedAt`、`failedAttempts` 和 `lockedUntil`。资源 API 的 Get/List 响应不读取或返回 credential 文档。删除 User 或 MachineAccount 时，IAM 模块同步删除对应 credential 文档。
 
 apiserver 启动时检查并创建全部 ES-only 资源索引。生产环境应使用显式 index template/mapping，不依赖动态 mapping 或首次写入自动建索引。
 
@@ -339,6 +391,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `dc`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。User 的 `metadata.name` 是全局唯一的稳定用户标识，与普通用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
+- MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。MachineAccount 不得携带 client secret、密码、JWT scope 或 Project 权限字段。
 
 ## 启动参数
 
@@ -355,9 +408,9 @@ components/ebs-apiserver/cmd/server/main.go
 | `--etcd-servers` | `http://etcd:2379` | etcd 地址 |
 | `--secure-port` | `8443` | HTTPS 监听端口 |
 | `--es-servers` | `http://elasticsearch:9200` | Elasticsearch 地址 |
-| `--enable-iam` | `false` | 启用内置 User API 和密码认证模块 |
+| `--enable-iam` | `false` | 启用内置 User、MachineAccount API和凭据认证模块 |
 
-IAM 模块只增加 `--enable-iam` 这一项启动配置。User 和 credential 索引名称、Argon2id 参数、失败计数及锁定策略使用模块固定值；Elasticsearch 连接复用 `--es-servers`。
+IAM 模块只增加 `--enable-iam` 这一项启动配置。User、MachineAccount 和 credential 索引名称、Argon2id 参数、失败计数及锁定策略使用模块固定值；Elasticsearch 连接复用 `--es-servers`。
 
 示例：
 
@@ -546,12 +599,11 @@ curl -k --get \
 
 ## 待完善项
 
-本文描述目标存储架构。当前实现仍使用 `hybrid.EnricherStore` 对资源执行 etcd 与 ES 双写，迁移时需要完成：
+存储实现需要完成：
 
 - 新增 ESStore，并实现 CRUD、List、selector、分页和乐观并发控制。
 - 将 Project、Snapshot、Build、BuildInfo、RpmRepo 及其子资源切换为 ESStore。
-- 将 Job、Runner 保持为纯 etcd store，并移除对应 ES 索引和双写逻辑。
+- Job、Runner 使用 generic etcd store。
 - 更新 API discovery，确保只有 Job、Runner 暴露 watch verb。
-- 为现有双写数据提供一次性迁移与校验工具；切换完成后删除 etcd 中 ES-only 资源数据。
 - OpenAPI schema 当前是空对象占位，需要生成真实 schema。
 - 外部业务请求的认证与 Project 用户鉴权由 gateway 执行；IAM 内部接口校验 gateway 的内部身份，apiserver 仅部署在受信任网络中。

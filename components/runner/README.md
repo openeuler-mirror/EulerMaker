@@ -7,7 +7,7 @@
 - Registers or updates `/apis/ebs/v1/runners/{name}` on startup.
 - Patches `/apis/ebs/v1/runners/{name}/status` periodically.
 - Watches `/apis/ebs/v1/jobs?watch=true`.
-- Executes only Jobs whose `status.runner` equals `RUNNER_NAME` and `status.phase` is `Running`.
+- Executes only Jobs whose `status.runner` equals the configured `--name` and `status.phase` is `Running`.
 - Uses `metadata.namespace` from the Job as the Project name for status updates.
 - For `dc` Jobs, creates a Docker container from `job.spec.runtimeSpec`, writes `job.spec.payload` to `/workspace/payload.yaml`, waits for the container to exit, and records container logs under the Job result directory.
 - Patches final Job status to `Completed` or `Failed`.
@@ -22,18 +22,19 @@ Runner configuration is passed through command-line flags. Environment variables
 | `--token` | empty | Bearer token for gateway access |
 | `--name` | hostname | Runner resource name |
 | `--type` | `dc` | Runner type: `dc`, `vm`, or `hw` |
-| `--arch` | runtime arch | Runner architecture, auto-detected as `x86_64` on amd64 and `aarch64` on arm64 |
 | `--root-dir` | `/var/lib/ebs-runner` | Runner local data root. Work files use `root-dir/work`; results use `root-dir/results` |
 | `--heartbeat-interval` | `30s` | Runner heartbeat interval |
 | `--insecure-skip-verify` | `false` | Skip gateway TLS verification |
 | `--gateway-ca` | empty | Gateway CA file |
+
+The runner detects its architecture from `GOARCH`: `amd64` maps to `x86_64`, and `arm64` maps to `aarch64`. Other architectures are rejected at startup.
 
 ## Run
 
 ```bash
 go run ./cmd/runner \
   --gateway=http://localhost:8080 \
-  --token="${RUNNER_TOKEN}" \
+  --token="<runner-token>" \
   --name=runner-dc-x86-01 \
   --type=dc
 ```
@@ -48,23 +49,7 @@ CGO_ENABLED=0 go build -o ebs-runner ./cmd/runner
 docker build -t eulermaker/ebs-runner:dev .
 ```
 
-## Docker Compose
-
-```bash
-cd components/runner
-mkdir -p /var/lib/ebs-runner
-
-export EBS_TOKEN="<runner-system-token>"
-export EBS_GATEWAY="http://host.docker.internal:8080"
-export RUNNER_NAME="ebs-runner-local"
-export RUNNER_TYPE="dc"
-
-docker compose -f docker-compose.yaml up -d --build
-```
-
-The compose file uses these host-side variables only for template substitution and passes them to the container as command-line flags. It passes `--name=${RUNNER_NAME:-ebs-runner-local}` so the runner resource name is stable instead of using the Docker-generated hostname. On Linux, the compose file maps `host.docker.internal` to the host gateway. For a gateway running in the repository-level compose network, use the host-published gateway address, for example `http://host.docker.internal:8080`.
-
-For a self-signed HTTPS gateway, either use `INSECURE_SKIP_VERIFY=true` for testing or mount a CA file and set `GATEWAY_CA`:
+For a self-signed HTTPS gateway, mount its CA file and pass the path explicitly:
 
 ```yaml
 volumes:
