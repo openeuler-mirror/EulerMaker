@@ -20,9 +20,9 @@ runner -> ebs-gateway -> ebs-apiserver -> etcd / Elasticsearch
 
 | 职责 | 说明 |
 |------|------|
-| 注册 Runner | 创建或更新集群级 `Runner` 对象，声明执行机类型、架构、主机名、污点等信息 |
+| 注册 Runner | 创建或受限更新与 token 身份一致的集群级 `Runner` 对象，声明执行机类型、架构、主机名和能力标签 |
 | 上报状态 | 定期更新 `Runner.status`，包括 phase、资源容量、可调度资源、地址、系统信息和心跳时间 |
-| 监听 Job | 通过全局 Job watch 获取资源变化，只处理 `status.runner` 等于自身名称的 Job |
+| 监听 Job | 通过自身 Runner 范围的 Job list-watch 获取已分配任务，服务端只返回 `status.runner` 等于自身名称的 Job |
 | 执行 Job | 根据 Job spec 准备执行环境、提供 payload 参数、运行任务、收集产物 |
 | 回写结果 | 通过 Project API 更新 Job status，推进 Job phase/stage/resultRoot/message |
 
@@ -38,20 +38,37 @@ POST   /apis/ebs/v1/runners
 PUT    /apis/ebs/v1/runners/{name}
 PATCH  /apis/ebs/v1/runners/{name}
 PUT    /apis/ebs/v1/runners/{name}/status
-DELETE /apis/ebs/v1/runners/{name}
 ```
 
-Runner 是集群级资源，`metadata.name` 在集群内唯一。
+Runner 是集群级资源，`metadata.name` 在集群内唯一。Runner token 的 `sub`、`runner` claim 以及请求对象或路径中的 Runner 名称必须完全相同；Runner 不能 list/watch Runner 集合、访问其他 Runner 或删除任何 Runner。
+
+Runner 采用受限自注册模型：对象不存在时通过 collection `POST` 创建；对象已存在时先 GET 最新对象，再携带 `metadata.resourceVersion` 通过 PUT/PATCH 更新。创建冲突和并发更新冲突返回 409，Runner 重新读取后按需重试，gateway 不自动重放写请求。
+
+Runner 可以声明和更新的普通对象字段为：
+
+```text
+metadata.labels["ebs.io/runner-type"]
+metadata.labels["ebs.io/runner-arch"]
+metadata.labels["ebs.io/runner-capability.*"]
+spec.type
+spec.arch
+spec.hostname
+```
+
+`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 system 调用方维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
 
 ### 3.2 Job API
 
-Runner 使用全局 Job API 建立 watch：
+Runner 使用自身范围的 Job API执行 list-watch：
 
 ```text
-GET /apis/ebs/v1/jobs?watch=true
+GET /apis/ebs/v1/runners/{runner}/jobs
+GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 ```
 
-Job 是 Project 级资源。Runner 从 watch 事件对象的 `metadata.namespace` 获取所属 Project，并通过 Project API 回写 Job 状态：
+`{runner}` 必须与 Runner token 的 `sub` 和 `runner` claim 完全一致。该接口由 apiserver强制按 `status.runner={runner}` 过滤；客户端不能提供或覆盖 `fieldSelector`。list返回当前已分配 Job 和 `metadata.resourceVersion`，watch从该版本继续。
+
+Job 是 Project 级资源。Runner 从 list/watch 对象的 `metadata.namespace` 获取所属 Project，并通过 Project API回写 Job状态：
 
 ```text
 GET /apis/ebs/v1/projects/{project}/jobs/{name}
@@ -92,6 +109,8 @@ type RunnerSpec struct {
 | `hostname` | 执行机宿主机名 |
 | `unschedulable` | 是否禁止调度新 Job |
 | `taints` | 反亲和污点 |
+
+`type`、`arch` 和 `hostname` 由 Runner 自身声明；`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 system 调用方管理，Runner 自注册和更新时不得修改。
 
 调度标签统一写入 `metadata.labels`，不在 `spec` 中重复定义。例如：
 
@@ -194,14 +213,27 @@ status:
 
 ## 七、Job 执行流程
 
-Runner 通过全局 API watch 全部 Job，但只处理已绑定到自己的对象：
+Runner 通过自身范围 API list-watch 已绑定到自己的 Job：
 
 ```text
-watch /apis/ebs/v1/jobs?watch=true
-  -> event.object.status.runner == runnerName
+list /apis/ebs/v1/runners/{runner}/jobs
+  -> record list.metadata.resourceVersion
+  -> process existing non-terminal Jobs
+watch /apis/ebs/v1/runners/{runner}/jobs?watch=true&resourceVersion={rv}
+  -> server guarantees event.object.status.runner == runnerName
   -> event.object.status.phase == Running
   -> execute
 ```
+
+标准恢复流程如下：
+
+1. Runner 启动或 resourceVersion 失效后先 list 自身已分配 Job，处理其中非终态对象并记录列表版本。
+2. 使用该 resourceVersion 建立 watch，设置 `allowWatchBookmarks=true` 和有限的 `timeoutSeconds`，建议 300 秒。
+3. `ADDED`、`MODIFIED`、`DELETED` 事件推进本地状态；`BOOKMARK` 只更新 resourceVersion，不触发执行。
+4. watch 正常超时或网络中断时，从最后收到的 resourceVersion 重连；服务端返回 410 时重新执行完整 list-watch。
+5. 429 按 `Retry-After` 等待，网络错误使用带随机抖动的指数退避；401/403 视为 token 或身份配置问题，不能无限快速重试。
+
+gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负责可信过滤，不能依赖 Runner 客户端收到事件后自行隐藏其他 Runner 的 Job。
 
 典型流程：
 
@@ -356,7 +388,7 @@ Runner 只执行已绑定给自己的 Job，不负责调度决策。
 | 场景 | 处理方式 |
 |------|----------|
 | gateway 不可达 | watch 和心跳失败后指数退避重连 |
-| watch 中断 | 使用上次 resourceVersion 恢复；不可恢复时重新 list/watch |
+| watch 中断 | 从最后收到的 resourceVersion 恢复；410 时重新 list自身已分配 Job后建立 watch，429 遵循 `Retry-After` |
 | 心跳超时 | 控制器将 Runner 标记为 `Offline`，scheduler 不再选择该 Runner |
 | Runner 重启 | 重新注册 Runner，恢复心跳，根据现有 Job 状态决定是否清理或继续 |
 | Job 执行失败 | 更新 `Job.status.phase=Failed` 和 `message`，并清理本地环境 |
@@ -397,6 +429,10 @@ services:
 ## 十二、安全边界
 
 - Runner 认证统一经过 `ebs-gateway`。
-- Runner token 权限应限制为注册/读取自身 Runner、更新自身 Runner status、watch Job、读取和更新已绑定 Job status。
+- Runner token 权限限制为创建自身 Runner、读取自身 Runner、受限更新自身普通对象字段、更新自身 Runner status、list/watch 自身已分配 Job，以及读取和更新已绑定 Job status。
+- Runner 身份必须满足 JWT `sub`、`runner` claim、Runner `metadata.name` 和请求路径名称完全一致；不允许 list/watch Runner 集合或访问其他 Runner。
+- Runner 创建和普通对象更新只能修改 3.1 节白名单字段；`unschedulable`、taints、zone、信任级别、安全域及服务端 metadata 由 system 维护。
+- Runner 禁止对所有资源执行 DELETE。
+- `/runners/{runner}/jobs` 的过滤由 apiserver依据可信身份强制执行，客户端 `fieldSelector` 不可信。
 - Runner 不应拥有直接访问 etcd、Elasticsearch 的权限。
 - DC 类型 Runner 如需挂载 Docker socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。

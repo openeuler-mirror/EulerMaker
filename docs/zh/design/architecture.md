@@ -107,7 +107,7 @@ Gateway 转发用户请求时，外部用户身份由 JWT、User 状态和 Proje
 | `Elasticsearch` | 主存储，保存对象索引、搜索字段和增强数据 |
 | `controllers` | 监听 Project/Snapshot/Build 等对象变化，推进资源状态 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
-| `runner` | 通过 ebs-gateway 注册 Runner、上报心跳、监听全局 Job 事件，只处理 `status.runner` 等于自身名称的 Job |
+| `runner` | 通过 ebs-gateway 注册 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
 
 ---
 
@@ -201,7 +201,13 @@ PUT    /apis/ebs/v1/runners/{name}
 PATCH  /apis/ebs/v1/runners/{name}
 DELETE /apis/ebs/v1/runners/{name}
 PUT    /apis/ebs/v1/runners/{name}/status
+GET    /apis/ebs/v1/runners/{name}/jobs
+GET    /apis/ebs/v1/runners/{name}/jobs?watch=true
 ```
+
+上述是资源支持的完整 API 集合，不代表 Runner token 拥有全部 verb。Runner 使用受限自注册模型：只能创建、读取和受限更新名称与 JWT `sub`、`runner` claim 一致的自身对象，并更新自身 `/status`；`metadata.name` 本身不可修改。Runner 不能 list/watch Runner 集合、访问其他 Runner 或执行 DELETE。Runner 普通对象更新仅允许自身声明的 type、arch、hostname 和能力 labels，`unschedulable`、taints、zone 及其他管理字段由 system 调用方维护。详细字段规则见 [ebs-gateway.md](./ebs-gateway.md) 和 [runner.md](./runner.md)。
+
+`/runners/{name}/jobs` 提供自身已分配 Job 的 list-watch，gateway强制路径名称与 Runner token身份一致，apiserver再按 `Job.status.runner={name}` 进行可信过滤。Runner先 list并记录 resourceVersion，再从该版本建立带超时和 BOOKMARK 的 watch；resourceVersion失效时重新 list。
 
 ---
 
