@@ -248,25 +248,20 @@ func TestValidateRunnerUpdate(t *testing.T) {
 		wantFields map[string]field.ErrorType
 	}{
 		{
-			name:      "valid unchanged immutable fields",
+			name:      "valid unchanged fields",
 			newRunner: validRunner("dc", "x86_64"),
 			oldRunner: validRunner("dc", "x86_64"),
 		},
 		{
-			name:      "type and arch are immutable",
+			name:      "type and arch may change",
 			newRunner: validRunner("vm", "aarch64"),
 			oldRunner: validRunner("dc", "x86_64"),
-			wantErrs:  2,
-			wantFields: map[string]field.ErrorType{
-				"spec.type": field.ErrorTypeForbidden,
-				"spec.arch": field.ErrorTypeForbidden,
-			},
 		},
 		{
 			name:      "also validates new object",
 			newRunner: &ebsv1.Runner{},
 			oldRunner: validRunner("dc", "x86_64"),
-			wantErrs:  5,
+			wantErrs:  3,
 			wantFields: map[string]field.ErrorType{
 				"spec.type":     field.ErrorTypeRequired,
 				"spec.arch":     field.ErrorTypeRequired,

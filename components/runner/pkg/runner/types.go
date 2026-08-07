@@ -17,6 +17,10 @@ type ObjectMeta struct {
 	Labels          map[string]string `json:"labels,omitempty"`
 }
 
+type ListMeta struct {
+	ResourceVersion string `json:"resourceVersion,omitempty"`
+}
+
 type RunnerResource struct {
 	TypeMeta `json:",inline"`
 	Metadata ObjectMeta   `json:"metadata,omitempty"`
@@ -75,6 +79,12 @@ type JobResource struct {
 	Metadata ObjectMeta `json:"metadata,omitempty"`
 	Spec     JobSpec    `json:"spec,omitempty"`
 	Status   JobStatus  `json:"status,omitempty"`
+}
+
+type JobList struct {
+	TypeMeta `json:",inline"`
+	Metadata ListMeta      `json:"metadata,omitempty"`
+	Items    []JobResource `json:"items"`
 }
 
 type JobSpec struct {

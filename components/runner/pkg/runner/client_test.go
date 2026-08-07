@@ -44,9 +44,50 @@ func TestClientPatchRunnerStatus(t *testing.T) {
 	}
 }
 
-func TestClientWatchJobsDecodesLineDelimitedEvents(t *testing.T) {
+func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
-		if req.URL.RequestURI() != apiPrefix+"/jobs?resourceVersion=10&watch=true" {
+		if req.Method != http.MethodPatch || req.URL.Path != apiPrefix+"/runners/runner-a" {
+			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+		}
+		if req.Header.Get("Content-Type") != "application/merge-patch+json" {
+			t.Fatalf("content type = %s", req.Header.Get("Content-Type"))
+		}
+		var patch map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&patch); err != nil {
+			t.Fatalf("decode patch: %v", err)
+		}
+		if _, exists := patch["status"]; exists {
+			t.Fatalf("runner update included status: %#v", patch)
+		}
+		return response(http.StatusOK, `{}`), nil
+	})
+	err := client.UpdateRunner(context.Background(), RunnerResource{
+		Metadata: ObjectMeta{Name: "runner-a"},
+		Spec:     RunnerSpec{Type: "dc", Arch: "x86_64", Hostname: "runner-a", Unschedulable: true},
+		Status:   RunnerStatus{Phase: "Running"},
+	})
+	if err != nil {
+		t.Fatalf("update runner: %v", err)
+	}
+}
+
+func TestClientListAssignedJobs(t *testing.T) {
+	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		if req.URL.RequestURI() != apiPrefix+"/runners/runner-a/jobs" {
+			t.Fatalf("path = %s", req.URL.RequestURI())
+		}
+		return response(200, `{"metadata":{"resourceVersion":"10"},"items":[{"metadata":{"name":"job-a","namespace":"project-a"}}]}`), nil
+	})
+	list, err := client.ListAssignedJobs(context.Background(), "runner-a")
+	if err != nil || list.Metadata.ResourceVersion != "10" || len(list.Items) != 1 {
+		t.Fatalf("unexpected list: %#v err=%v", list, err)
+	}
+}
+
+func TestClientWatchAssignedJobsDecodesLineDelimitedEvents(t *testing.T) {
+	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		want := apiPrefix + "/runners/runner-a/jobs?allowWatchBookmarks=true&resourceVersion=10&timeoutSeconds=300&watch=true"
+		if req.URL.RequestURI() != want {
 			t.Fatalf("path = %s", req.URL.RequestURI())
 		}
 		body := `{"type":"ADDED","object":{"metadata":{"name":"job-a","namespace":"project-a","resourceVersion":"11"},"status":{"runner":"runner-a","phase":"Running"}}}` + "\n" +
@@ -54,7 +95,7 @@ func TestClientWatchJobsDecodesLineDelimitedEvents(t *testing.T) {
 		return response(200, body), nil
 	})
 
-	events, errs := client.WatchJobs(context.Background(), "10")
+	events, errs := client.WatchAssignedJobs(context.Background(), "runner-a", "10")
 	first := <-events
 	second := <-events
 	if first.Object.Metadata.Name != "job-a" || first.Object.Status.Runner != "runner-a" {
@@ -65,6 +106,21 @@ func TestClientWatchJobsDecodesLineDelimitedEvents(t *testing.T) {
 	}
 	if err := <-errs; err != nil {
 		t.Fatalf("watch error: %v", err)
+	}
+}
+
+func TestClientWatchAssignedJobsReturnsWatchError(t *testing.T) {
+	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		return response(200, `{"type":"ERROR","object":{"code":410,"reason":"Gone","message":"resource version expired"}}`+"\n"), nil
+	})
+	events, errs := client.WatchAssignedJobs(context.Background(), "runner-a", "10")
+	if _, ok := <-events; ok {
+		t.Fatal("unexpected watch event")
+	}
+	err := <-errs
+	statusErr, ok := err.(StatusError)
+	if !ok || statusErr.Code != 410 {
+		t.Fatalf("expected 410 StatusError, got %#v", err)
 	}
 }
 

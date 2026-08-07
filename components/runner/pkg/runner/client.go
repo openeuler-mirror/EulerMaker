@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const apiPrefix = "/apis/ebs/v1"
@@ -45,7 +47,19 @@ func (c *Client) CreateRunner(ctx context.Context, runner RunnerResource) error 
 
 func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error {
 	path := apiPrefix + "/runners/" + url.PathEscape(runner.Metadata.Name)
-	return c.doJSON(ctx, http.MethodPut, path, runner, nil)
+	body := map[string]any{
+		"metadata": map[string]any{
+			"name": runner.Metadata.Name,
+			"labels": map[string]string{
+				"ebs.io/runner-type": runner.Spec.Type,
+				"ebs.io/runner-arch": runner.Spec.Arch,
+			},
+		},
+		"spec": map[string]any{
+			"type": runner.Spec.Type, "arch": runner.Spec.Arch, "hostname": runner.Spec.Hostname,
+		},
+	}
+	return c.doMergePatch(ctx, path, body, nil)
 }
 
 func (c *Client) PatchRunnerStatus(ctx context.Context, name string, status RunnerStatus) error {
@@ -60,7 +74,16 @@ func (c *Client) PatchJobStatus(ctx context.Context, project, name string, statu
 	return c.doMergePatch(ctx, path, body, nil)
 }
 
-func (c *Client) WatchJobs(ctx context.Context, resourceVersion string) (<-chan WatchEvent, <-chan error) {
+func (c *Client) ListAssignedJobs(ctx context.Context, runner string) (*JobList, error) {
+	var list JobList
+	path := apiPrefix + "/runners/" + url.PathEscape(runner) + "/jobs"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &list); err != nil {
+		return nil, err
+	}
+	return &list, nil
+}
+
+func (c *Client) WatchAssignedJobs(ctx context.Context, runner, resourceVersion string) (<-chan WatchEvent, <-chan error) {
 	events := make(chan WatchEvent)
 	errs := make(chan error, 1)
 
@@ -68,11 +91,16 @@ func (c *Client) WatchJobs(ctx context.Context, resourceVersion string) (<-chan 
 		defer close(events)
 		defer close(errs)
 
-		values := url.Values{"watch": []string{"true"}}
+		values := url.Values{
+			"watch":               []string{"true"},
+			"allowWatchBookmarks": []string{"true"},
+			"timeoutSeconds":      []string{"300"},
+		}
 		if resourceVersion != "" {
 			values.Set("resourceVersion", resourceVersion)
 		}
-		req, err := c.newRequest(ctx, http.MethodGet, apiPrefix+"/jobs?"+values.Encode(), nil)
+		path := apiPrefix + "/runners/" + url.PathEscape(runner) + "/jobs?" + values.Encode()
+		req, err := c.newRequest(ctx, http.MethodGet, path, nil)
 		if err != nil {
 			errs <- err
 			return
@@ -95,9 +123,31 @@ func (c *Client) WatchJobs(ctx context.Context, resourceVersion string) (<-chan 
 			if len(line) == 0 {
 				continue
 			}
-			var event WatchEvent
-			if err := json.Unmarshal(line, &event); err != nil {
+			var envelope struct {
+				Type   string          `json:"type"`
+				Object json.RawMessage `json:"object"`
+			}
+			if err := json.Unmarshal(line, &envelope); err != nil {
 				errs <- fmt.Errorf("decode watch event: %w", err)
+				return
+			}
+			if envelope.Type == "ERROR" {
+				var status struct {
+					Code    int    `json:"code"`
+					Reason  string `json:"reason"`
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal(envelope.Object, &status); err != nil {
+					errs <- fmt.Errorf("decode watch error: %w", err)
+					return
+				}
+				errs <- StatusError{Code: status.Code, Status: status.Reason, Message: status.Message}
+				return
+			}
+			var event WatchEvent
+			event.Type = envelope.Type
+			if err := json.Unmarshal(envelope.Object, &event.Object); err != nil {
+				errs <- fmt.Errorf("decode watch object: %w", err)
 				return
 			}
 			select {
@@ -194,13 +244,18 @@ func responseError(resp *http.Response) error {
 	if msg == "" {
 		msg = resp.Status
 	}
-	return StatusError{Code: resp.StatusCode, Status: resp.Status, Message: msg}
+	statusErr := StatusError{Code: resp.StatusCode, Status: resp.Status, Message: msg}
+	if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+		statusErr.RetryAfter = time.Duration(seconds) * time.Second
+	}
+	return statusErr
 }
 
 type StatusError struct {
-	Code    int
-	Status  string
-	Message string
+	Code       int
+	Status     string
+	Message    string
+	RetryAfter time.Duration
 }
 
 func (e StatusError) Error() string {

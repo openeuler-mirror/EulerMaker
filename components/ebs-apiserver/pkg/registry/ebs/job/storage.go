@@ -6,12 +6,15 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/validation/path"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/storage"
 
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
 	"ebs-apiserver/pkg/apis/ebs/validation"
@@ -37,6 +40,7 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("jobs")),
 		KeyRootFunc:               keyRootFunc,
 		KeyFunc:                   keyFunc,
+		PredicateFunc:             matchJob,
 	}
 
 	statusStore := &genericregistry.Store{
@@ -55,6 +59,23 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		Job:    store,
 		Status: statusStore,
 	}
+}
+
+func matchJob(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
+	return storage.SelectionPredicate{Label: label, Field: field, GetAttrs: jobAttrs}
+}
+
+func jobAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
+	job, ok := obj.(*ebsv1.Job)
+	if !ok {
+		return nil, nil, fmt.Errorf("expected Job, got %T", obj)
+	}
+	return labels.Set(job.Labels), fields.Set{
+		"metadata.name":      job.Name,
+		"metadata.namespace": job.Namespace,
+		"status.runner":      job.Status.Runner,
+		"status.phase":       job.Status.Phase,
+	}, nil
 }
 
 func keyRootFunc(ctx context.Context) string {

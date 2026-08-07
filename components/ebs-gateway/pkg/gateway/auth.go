@@ -32,6 +32,7 @@ type Identity struct {
 
 func (i Identity) IsSystem() bool { return i.hasScope("ebs:system") }
 func (i Identity) IsUser() bool   { return i.hasScope("ebs:user") }
+func (i Identity) IsRunner() bool { return i.hasScope("ebs:runner") }
 func (i Identity) hasScope(want string) bool {
 	for _, scope := range i.Scopes {
 		if scope == want {
