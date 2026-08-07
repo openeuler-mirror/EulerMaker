@@ -99,6 +99,15 @@ apiVersion: ebs/v1
 
 其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；其他资源的全局 API 用于跨 Project list 和查询。`Project` 和 `Runner` 为集群级资源。
 
+apiserver还为 Runner提供服务端过滤的 Job list-watch：
+
+```text
+GET /apis/ebs/v1/runners/{runner}/jobs
+GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
+```
+
+该路由在服务端固定添加 `status.runner={runner}` 过滤条件，不接受客户端提供的 `fieldSelector`。它支持 `resourceVersion`、`timeoutSeconds` 和 `allowWatchBookmarks`，list响应提供后续 watch使用的 resourceVersion。请求来自 Runner token时，路径名称必须由受信任 gateway身份头绑定到对应 Runner，过滤不能由客户端自行完成。
+
 Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `Project.spec.displayName`。
 
 ### IAM API
@@ -187,6 +196,8 @@ REST storage 按资源静态路由，不在请求时动态选择存储，也不�
 | IAM credential store | PasswordCredential | 仅供 IAM 模块设置和验证密码，不注册为 REST 资源 |
 
 Job、Runner 的 `/status` 子资源必须使用对应的 etcd store；ES-only 资源的 `/status` 和 Build 的 `/abort` 必须使用对应的 ESStore。子资源不能回退到另一种存储。
+
+Job etcd store的 selection predicate至少暴露 `metadata.name`、`metadata.namespace`、`status.runner` 和 `status.phase`。Runner范围 Job路由使用该 predicate对 list和 watch执行相同过滤；Job从其他 Runner转入当前 Runner时产生 ADDED，从当前 Runner转出时产生 DELETED，仍匹配时的变化产生 MODIFIED。过滤在 apiserver/watch cache中完成，不能把全局事件流转发给 gateway或 Runner后再过滤。
 
 ESStore 不实现 `rest.Watcher`，API discovery 不为 ES-only 资源声明 `watch` verb。对这些资源请求 `watch=true` 应返回不支持该操作的错误，而不是轮询 ES 模拟 watch。
 

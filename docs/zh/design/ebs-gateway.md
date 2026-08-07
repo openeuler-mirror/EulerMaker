@@ -395,12 +395,22 @@ gateway 在转发前进行用户级 Project 鉴权。
 
 Runner token：
 
-- scopes 必须仅包含 `ebs:runner`，且 `sub`、`runner` claim 和路径中的 Runner 名称必须一致。
-- 可以读取和更新自己的 Runner 对象；写请求仅允许 `PUT`、`PATCH` 自身 `/status`，不得修改 Runner spec 或其他 Runner。
-- 可以对全局 Job API 执行 `GET`、`list` 和 `watch`，用于发现分配给自己的 Job；当前版本明确接受所有 Runner 都能通过 list/watch 读取全部 Job 的安全边界，gateway 不对响应做对象级过滤。Runner 客户端仍必须只处理 `status.runner` 等于自身名称的 Job。
+- scopes 必须仅包含 `ebs:runner`，且 `sub`、`runner` claim、请求对象的 `metadata.name` 和路径中的 Runner 名称必须一致。
+- 可以通过 `POST /apis/ebs/v1/runners` 创建自身 Runner；只能读取自身单个对象，不能 list/watch Runner 集合。
+- 可以通过 `PUT`、`PATCH` 受限更新自身普通对象字段，并通过自身 `/status` 更新状态；不得访问或修改其他 Runner。
+- 可以对 `/apis/ebs/v1/runners/{runner}/jobs` 执行 GET list/watch，用于发现分配给自己的 Job；路径 `{runner}` 必须等于 token 的 `runner` claim，apiserver强制只返回 `status.runner` 匹配的对象。
 - 对单个 Job 执行 `get` 时，只允许读取 `status.runner` 等于自身名称的 Job；也只能通过该 Job 的 `/status` 子资源更新执行状态。不得修改 Job spec、Runner 绑定关系或其他 Runner 的 Job。
 - 不得访问 Project、Snapshot、Build、BuildInfo、RpmRepo 和 User API。
 - 禁止对所有资源执行 `DELETE`。
+
+Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行以下检查：
+
+- JWT `sub`、`runner` claim 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
+- 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.type`、`spec.arch`、`spec.hostname`。
+- type、arch labels 必须分别与 spec 字段一致；`spec.type` 只允许 `dc`、`vm`、`hw`，当前 `spec.arch` 只允许 `aarch64`、`x86_64`。
+- `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable`、`spec.taints` 或其他管理字段。
+
+不满足条件返回 400 或 403且不转发；对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并按 4.8.1 节发起受限 PUT/PATCH。
 
 受信任 system token：
 
@@ -418,8 +428,9 @@ Project 级鉴权规则：
 | `GET /apis/ebs/v1/projects/{project}` | 有 owner/member 权限才允许 | 禁止 | 允许 |
 | `/apis/ebs/v1/projects/{project}/...` | 有 owner/member 权限才允许 | 仅允许读取已分配 Job、更新其 `/status` | 允许 |
 | `/apis/ebs/v1/{snapshots,builds,buildinfos,rpmrepos}` | 禁止 | 禁止 | 允许跨 Project list/查询，不支持 watch |
-| `/apis/ebs/v1/jobs`（含 `watch=true`） | 禁止 | 只允许 `GET`/list/watch；对象读取和状态写入须匹配 `status.runner` | 允许跨 Project list/watch |
-| `/apis/ebs/v1/runners...` | 禁止 | 只允许读取自身及更新自身 `/status` | 允许 |
+| `/apis/ebs/v1/jobs`（含 `watch=true`） | 禁止 | — | 允许跨 Project list/watch |
+| `/apis/ebs/v1/runners/{runner}/jobs` | 禁止 | 仅允许自身路径的 GET list/watch，服务端按 `status.runner` 强制过滤 | 允许 |
+| `/apis/ebs/v1/runners...` | 禁止 | 允许创建自身、读取自身、受限更新自身普通对象字段及更新自身 `/status`；除自身 Job 子路径外禁止集合 list/watch | 允许 |
 
 User API 鉴权规则：
 
@@ -436,13 +447,14 @@ User 管理使用附加的 `ebs:user-admin` scope。它不能独立授权，只�
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Job | 全部支持的 verb，watch 仅在 apiserver 支持时允许 | `get/list/create/update/patch`，禁止 `delete`；watch 仅在 apiserver 支持时允许 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
-| 全局 Job | 禁止 | 禁止 | `get/list/watch`，单对象 get 后仍须核对 `status.runner` | 全部支持的 verb | 同 System |
-| Runner | 禁止 | 禁止 | 自身 `get` 和自身 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
+| 全局 Job | 禁止 | 禁止 | — | 全部支持的 verb | 同 System |
+| Runner 范围 Job list/watch | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
+| Runner | 禁止 | 禁止 | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 禁止 | 禁止 | 全部支持的 User verb 和密码管理 |
 
-Owner 用户只有在修改 Project access labels 时受 4.8 节的额外字段约束。Member 用户禁止对任何资源执行 `DELETE`，也不能修改 Project 本身或 Project access labels。Runner 禁止所有 `create` 和 `delete`，其 Job `/status` 更新不得改变 `status.runner`。
+Owner 用户只有在修改 Project access labels 时受 4.8 节的额外字段约束。Member 用户禁止对任何资源执行 `DELETE`，也不能修改 Project 本身或 Project access labels。Runner 仅允许创建自身 Runner，禁止创建其他资源并禁止所有 `delete`；其 Job `/status` 更新不得改变 `status.runner`。
 
-Runner 对全部 Job 的可见性只代表读取权限，不产生执行或写入权限。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。由于任一受信任 Runner 都能看到 Job 的 spec、status 和 metadata，Job 对象不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。若未来需要隔离 Job 可见性，应由 apiserver 提供可信的服务端过滤，或由 gateway 对 list 和 watch 事件执行流式过滤，不能依赖 Runner 客户端自行隐藏。
+Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `runner` claim。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
 
 如果 gateway 无法确认 Project 归属，应返回 403，不能放行。
 
@@ -454,7 +466,10 @@ Runner 对全部 Job 的可见性只代表读取权限，不产生执行或写�
 - Project 详情请求：gateway 先读取 Project，确认 JWT `sub` 是 owner 或 member，再转发原请求。
 - Project 子资源请求：gateway 先根据路径中的 `{project}` 读取 Project 并校验 owner/member 权限，再转发原请求。
 - Project 写请求：gateway 在转发前注入或保护 Project owner/member labels。
-- Runner 请求：先校验 Runner 路径身份或读取 Job 并核对 `status.runner`，状态写入还必须拒绝对 Job 绑定字段的修改。
+- Runner 创建请求：校验 token 的 `sub`、`runner` claim 和对象 `metadata.name` 完全一致，并执行 Runner 创建字段白名单检查。
+- Runner 普通对象请求：校验路径名称等于 token 的 `runner` claim；PUT/PATCH 构造完整候选对象后，只允许修改自声明字段并保护 system 管理字段。
+- Runner 状态和 Job 请求：校验 Runner 路径身份或读取 Job 并核对 `status.runner`，状态写入还必须拒绝对 Job 绑定字段的修改。
+- Runner 范围 Job list/watch：只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver从可信路径生成。
 - System 请求：包含 `ebs:system` scope 时不做 Project 用户过滤，但 User API 仍要求额外的 `ebs:user-admin`。
 
 由于 Kubernetes label selector 不支持 OR，Project 列表请求由 gateway 发起两次查询并合并结果：一次查询 owner user，一次查询 member user。
@@ -512,6 +527,7 @@ metadata.managedFields
 | Member 更新 Project | 无 | 4.7 节禁止 member 修改 Project，请求返回 403 |
 | Owner/Member 更新 Project 子资源普通路径 | `metadata.labels`、`metadata.annotations`、`spec` | member 禁止 DELETE，但可按 4.7 节执行 update/patch |
 | Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.7 节允许该调用方更新时允许 |
+| Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch`、`spec.hostname` | 路径名称必须等于 token 的 `runner` claim；type/arch label 必须与 spec 一致；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
 | Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `runner` claim；`spec` 和全部 metadata 保持不变 |
 | Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.startTime`、`status.endTime`、`status.resultRoot`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner` 或 `status.restartCount` |
 | System 更新业务资源 | 普通路径为 `metadata`、`spec`，`/status` 路径为 `status` | 仍受身份字段、subresource 隔离和 `resourceVersion` 规则约束 |
@@ -589,6 +605,7 @@ gateway 暴露业务 API 和用户管理插件 API：
 | `GET /apis/ebs/v1/projects/{project}/jobs` | `GET /apis/ebs/v1/projects/{project}/jobs` |
 | `PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status` | `PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status` |
 | `GET /apis/ebs/v1/jobs?watch=true` | `GET /apis/ebs/v1/jobs?watch=true` |
+| `GET /apis/ebs/v1/runners/{runner}/jobs?watch=true` | 同路径，由 apiserver强制按 Runner过滤 |
 | `PUT /apis/ebs/v1/runners/{name}/status` | `PUT /apis/ebs/v1/runners/{name}/status` |
 
 ### 5.3 Watch 透传
@@ -596,11 +613,13 @@ gateway 暴露业务 API 和用户管理插件 API：
 受信任 system 调用方和 Runner 可能通过 gateway 对支持 watch 的资源建立连接：
 
 ```text
-GET /apis/ebs/v1/jobs?watch=true
+GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 GET /apis/ebs/v1/runners?watch=true
 ```
 
-当前只有 etcd 主存储的 Job、Runner 支持 watch；Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch 主存储，不支持 watch。Runner token 只允许全局 Job watch，不允许 Runner watch；system token 可以 watch Job 和 Runner。普通用户通过 Project 范围的 API 访问资源，Project 范围的 Job watch 在权限校验后透传。
+当前只有 etcd 主存储的 Job、Runner 支持 watch；Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch 主存储，不支持 watch。Runner token通过自身 Runner范围接口 watch Job；system token可以 watch Job和 Runner。普通用户通过 Project范围的 API访问资源，Project范围的 Job watch在权限校验后透传。
+
+每个 Runner token 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
 
 gateway 需要支持流式响应：
 
@@ -703,7 +722,7 @@ curl -X POST http://localhost:8080/apis/ebs/v1/projects \
 
 ### 7.5 Runner Watch Job
 
-Runner 使用受信任签发流程获得仅包含 `ebs:runner` 的 token，并通过全局 Job watch 发现分配给自己的 Job。以下签发代码仅用于说明 claims 和 header，生产环境的密钥来自受控的单一密钥文件：
+Runner 使用受信任签发流程获得仅包含 `ebs:runner` 的 token，并通过自身范围 Job list-watch发现分配给自己的 Job。以下签发代码仅用于说明 claims 和 header，生产环境的密钥来自受控的单一密钥文件：
 
 ```bash
 python3 - <<'PY'
@@ -731,7 +750,7 @@ PY
 ```
 
 ```bash
-curl -N http://localhost:8080/apis/ebs/v1/jobs?watch=true \
+curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&allowWatchBookmarks=true&timeoutSeconds=300' \
   -H "Authorization: Bearer ${RUNNER_TOKEN}"
 ```
 
@@ -753,7 +772,7 @@ curl -N http://localhost:8080/apis/ebs/v1/jobs?watch=true \
 | 客户端越权修改 Project members | 只有 owner user 或 system token 可以修改 member user labels，新增成员必须是已启用 User |
 | 用户访问未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403 |
 | 用户访问全局 API | 普通用户禁止；Runner 仅能发现 Job 并操作自身 Runner 和已分配 Job；system token 可访问业务资源全局 API |
-| Runner 读取其他 Runner 的 Job | 当前版本接受 Runner 对全部 Job 的 list/watch 可见性；Job 不保存明文敏感信息，执行和状态写入仍按 `status.runner` 隔离 |
+| Runner 范围 Job 过滤被绕过 | gateway绑定路径身份，apiserver按 `status.runner` 强制过滤，并拒绝客户端提供 `fieldSelector` |
 | token 泄漏 | 使用短有效期、固定 issuer/audience 和最小 scope；轮换单一密钥会使全部旧 token 失效，`jti` 进入审计记录以支持后续撤销扩展 |
 | 请求风暴 | 基于调用方限流 |
 | 上游 TLS 风险 | 生产环境启用 TLS 校验或配置 CA |
@@ -770,12 +789,13 @@ curl -N http://localhost:8080/apis/ebs/v1/jobs?watch=true \
 | PasswordLogin | 登录成功且只能获得 `ebs:user`、请求 scope 不产生提权、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
 | UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、缓存命中、User API 不可用，以及 runner/system/admin token 跳过 User 查询 |
 | Header | 删除伪造 `X-EBS-*` 并注入可信身份 |
-| ProjectAuthz | 普通用户只能访问自己拥有或作为 member 的 Project；Runner 可以 list/watch 全部 Job，但只能读取自身 Runner、更新自身 Runner status，并对 `status.runner` 匹配的单个 Job 执行 get 和 status 写入；system token 可访问业务全局 API |
+| ProjectAuthz | 普通用户只能访问自己拥有或作为 member 的 Project；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入；system token可访问业务全局 API |
 | UserAdmin | user、runner、仅 `ebs:system` 和仅 `ebs:user-admin` 均不能访问 User API，只有 `ebs:system` + `ebs:user-admin` 可以管理 User 和重置密码 |
 | ObjectCompare | PUT 缺失/过期 `resourceVersion`；Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；检查后并发更新返回 409且不自动重放 |
 | AccessLabels | 普通用户创建 Project 时强制写入 owner user label；system 创建时校验 owner User；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
+| RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护 system 管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、restartCount、spec 或 metadata |
 | RateLimit | 超过令牌桶容量后返回 429 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |
-| Watch | system 的 Job/Runner watch 和 Runner 的 Job watch 能够流式转发；Runner 的 Runner watch、普通用户全局 watch 返回 403；ES-only 资源不支持 watch |
+| Watch | system的 Job/Runner watch和 Runner自身范围 Job list-watch能够流式转发；校验强制过滤、fieldSelector注入、BOOKMARK、410重建、timeoutSeconds和每 Runner单连接限制；路径身份不匹配和普通用户全局 watch返回403；ES-only资源不支持 watch |
 | Audit | 请求结束后记录 method/path/status/latency/user |
