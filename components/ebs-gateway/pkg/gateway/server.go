@@ -11,10 +11,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/mail"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -24,14 +26,16 @@ const (
 )
 
 type Gateway struct {
-	cfg       Config
-	upstream  *url.URL
-	client    *http.Client
-	proxy     *httputil.ReverseProxy
-	limiter   *RateLimiter
-	tokens    *tokenManager
-	now       func() time.Time
-	transport http.RoundTripper
+	cfg                 Config
+	upstream            *url.URL
+	client              *http.Client
+	proxy               *httputil.ReverseProxy
+	limiter             *RateLimiter
+	registerIPLimiter   *RateLimiter
+	registerUserLimiter *RateLimiter
+	tokens              *tokenManager
+	now                 func() time.Time
+	transport           http.RoundTripper
 }
 
 func NewServer(cfg Config) (*http.Server, error) {
@@ -74,14 +78,16 @@ func NewGateway(cfg Config) (*Gateway, error) {
 	}
 
 	gw := &Gateway{
-		cfg:       cfg,
-		upstream:  upstream,
-		client:    &http.Client{Transport: transport},
-		proxy:     proxy,
-		limiter:   NewRateLimiter(cfg.RateLimitPerSec, cfg.RateLimitBurst),
-		tokens:    tokens,
-		now:       time.Now,
-		transport: transport,
+		cfg:                 cfg,
+		upstream:            upstream,
+		client:              &http.Client{Transport: transport},
+		proxy:               proxy,
+		limiter:             NewRateLimiter(cfg.RateLimitPerSec, cfg.RateLimitBurst),
+		registerIPLimiter:   NewRateLimiter(5.0/60.0, 5),
+		registerUserLimiter: NewRateLimiter(3.0/60.0, 3),
+		tokens:              tokens,
+		now:                 time.Now,
+		transport:           transport,
 	}
 	return gw, nil
 }
@@ -112,6 +118,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/auth/login" {
 		g.handleLogin(rec, r)
+		return
+	}
+	if r.URL.Path == "/auth/register" {
+		g.handleRegister(rec, r)
 		return
 	}
 	if !strings.HasPrefix(r.URL.Path, apiPrefix+"/") && r.URL.Path != apiPrefix {
@@ -155,6 +165,102 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type gatewayHTTPError struct {
 	status  int
 	message string
+}
+
+func (g *Gateway) handleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if contentType := strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]); contentType != "application/json" {
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, g.cfg.MaxRequestBodyBytes)
+	var input struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		DisplayName string `json:"displayName"`
+		Email       string `json:"email"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "invalid registration request", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF || !validRegistrationInput(input.Username, input.Password, input.Email) {
+		http.Error(w, "invalid registration request", http.StatusBadRequest)
+		return
+	}
+	ip := clientIP(r)
+	if !g.registerIPLimiter.Allow(ip) || !g.registerUserLimiter.Allow(input.Username+"/"+ip) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	payload, err := json.Marshal(input)
+	if err != nil {
+		http.Error(w, "invalid registration request", http.StatusBadRequest)
+		return
+	}
+	body, status, headers, err := g.upstreamRequest(r.Context(), http.MethodPost, "/internal/iam/v1/register", bytes.NewReader(payload), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil || status >= 500 {
+		http.Error(w, "registration service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if status == http.StatusConflict {
+		http.Error(w, "username already exists", http.StatusConflict)
+		return
+	}
+	if status < 200 || status >= 300 {
+		http.Error(w, "invalid registration request", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	for _, value := range headers.Values("Cache-Control") {
+		w.Header().Add("Cache-Control", value)
+	}
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write(body)
+}
+
+func validRegistrationInput(username, password, email string) bool {
+	if !isDNS1123Label(username) {
+		return false
+	}
+	if n := utf8.RuneCountInString(password); n < 12 || n > 128 {
+		return false
+	}
+	if email != "" {
+		address, err := mail.ParseAddress(email)
+		if err != nil || address.Address != email {
+			return false
+		}
+	}
+	return true
+}
+
+func isDNS1123Label(value string) bool {
+	if len(value) == 0 || len(value) > 63 || !isLowerAlphanumeric(value[0]) || !isLowerAlphanumeric(value[len(value)-1]) {
+		return false
+	}
+	for i := 1; i < len(value)-1; i++ {
+		if value[i] != '-' && !isLowerAlphanumeric(value[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isLowerAlphanumeric(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }
 
 func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {

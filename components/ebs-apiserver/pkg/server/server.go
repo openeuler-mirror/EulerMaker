@@ -279,24 +279,24 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 			return nil, fmt.Errorf("ensure IAM indices: %w", err)
 		}
 		credentials := credential.NewStore(esClient)
-		iamGroupInfo := CreateIAMAPIGroupInfo(esClient, credentials)
+		iamGroupInfo, users := CreateIAMAPIGroupInfo(esClient, credentials)
 		if err := srv.InstallAPIGroup(iamGroupInfo); err != nil {
 			return nil, err
 		}
-		iammodule.InstallInternalRoutes(srv, credentials)
+		iammodule.InstallInternalRoutes(srv, credentials, users)
 	}
 	installProjectAliasRoutes(srv)
 
 	return srv, nil
 }
 
-func CreateIAMAPIGroupInfo(esClient *es.Client, credentials *credential.Store) *genericapiserver.APIGroupInfo {
+func CreateIAMAPIGroupInfo(esClient *es.Client, credentials *credential.Store) (*genericapiserver.APIGroupInfo, *esstore.Store) {
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(iamapi.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	storage := userstore.NewStorage()
 	userES := esstore.New(esClient, "user", "User", storage.User.(*genericregistry.Store))
 	userES.SetDeleteHook(credentials.Delete)
 	apiGroupInfo.VersionedResourcesStorageMap["v1"] = map[string]rest.Storage{"users": userES}
-	return &apiGroupInfo
+	return &apiGroupInfo, userES
 }
 
 func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *es.Client) (*genericapiserver.APIGroupInfo, error) {

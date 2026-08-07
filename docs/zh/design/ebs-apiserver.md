@@ -4,7 +4,7 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
 
-apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块。IAM 模块注册 User API，并提供仅供 gateway 调用的密码设置和认证接口。User 与密码凭据存入 Elasticsearch；租户仅以 User、Project labels 保存，apiserver 不解释租户语义，也不执行租户鉴权。
+apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块。IAM 模块注册 User API，并提供仅供 gateway 调用的用户注册、密码设置和认证接口。User 与密码凭据存入 Elasticsearch；Project 的 owner/member 关系仅以用户标识 labels 保存，apiserver 不解释这些 labels 的权限语义，也不执行 Project 用户鉴权。
 
 Snapshot、Build、BuildInfo、RpmRepo、Job 使用 Project API 表达项目归属。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径。Job 同时提供全局系统 API，供调度器跨 Project list/watch；其余 Project 级资源的全局 API 只提供跨 Project 查询，不提供 watch。
 
@@ -130,9 +130,29 @@ spec:
 IAM 模块还注册仅供 gateway 使用的内部接口：
 
 ```text
+POST /internal/iam/v1/register
 PUT  /internal/iam/v1/users/{name}/password
 POST /internal/iam/v1/authenticate
 ```
+
+注册请求和成功响应：
+
+```json
+{
+  "username": "alice",
+  "password": "user supplied password",
+  "displayName": "Alice",
+  "email": "alice@example.com"
+}
+```
+
+```json
+{"username":"alice"}
+```
+
+注册接口以 201 返回成功结果，并提供“创建普通 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`，请求不能设置 metadata、labels、scope、enabled 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。
+
+由于 User 和凭据位于不同的 Elasticsearch 文档，注册实现必须避免向外暴露可认证的部分状态：先以 create-only 写入 `enabled=false` 的注册中 User，再写入凭据，最后通过乐观并发将 User 启用并清除注册中标记。任一步骤失败时执行补偿删除；注册中的 User 永远不能认证。相同用户名的重试若遇到已超过 10 分钟的未完成注册记录，应在确认记录仍处于原注册版本后清理并重试；仍在处理中的注册和已完成 User 返回 409。该流程保证接口成功时 User 与凭据均可用，失败或实例异常退出时账号不可认证，并通过后续同名注册请求回收超时中间状态，但不承诺 Elasticsearch 跨文档物理事务。
 
 设置密码请求：
 
@@ -150,7 +170,7 @@ POST /internal/iam/v1/authenticate
 {"authenticated":true,"username":"alice"}
 ```
 
-内部接口不加入 API discovery，只接受 gateway 的内部凭据。请求体、密码和密码哈希不得写入日志、审计事件或错误响应。
+内部接口不加入 API discovery，只接受 URI SAN 被识别为 `ebs-gateway` 的 mTLS 客户端身份。请求体、密码和密码哈希不得写入日志、审计事件或错误响应。
 
 密码使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；同一账号连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分用户不存在、密码错误或账号被锁定。
 
@@ -523,4 +543,4 @@ curl -k --get \
 - 更新 API discovery，确保只有 Job、Runner 暴露 watch verb。
 - 为现有双写数据提供一次性迁移与校验工具；切换完成后删除 etcd 中 ES-only 资源数据。
 - OpenAPI schema 当前是空对象占位，需要生成真实 schema。
-- 外部业务请求的认证与租户鉴权由 gateway 执行；IAM 内部接口校验 gateway 的内部身份，apiserver 仅部署在受信任网络中。
+- 外部业务请求的认证与 Project 用户鉴权由 gateway 执行；IAM 内部接口校验 gateway 的内部身份，apiserver 仅部署在受信任网络中。
