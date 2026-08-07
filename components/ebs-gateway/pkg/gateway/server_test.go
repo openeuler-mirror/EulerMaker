@@ -30,6 +30,94 @@ func TestHealthzDoesNotRequireAuth(t *testing.T) {
 	}
 }
 
+func TestRegisterCreatesUserWithoutIssuingToken(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/register" {
+			t.Fatalf("unexpected upstream request %s %s", r.Method, r.URL.Path)
+		}
+		var input map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Fatalf("decode registration: %v", err)
+		}
+		if input["username"] != "alice" || input["password"] != "correct password" || input["email"] != "alice@example.com" {
+			t.Fatalf("unexpected registration payload: %#v", input)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"username":"alice"}`)
+	}), 100, 200)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"username":"alice","password":"correct password","displayName":"Alice","email":"alice@example.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["username"] != "alice" || response["token"] != nil {
+		t.Fatalf("unexpected registration response: %#v", response)
+	}
+}
+
+func TestRegisterValidatesInputAndMapsConflict(t *testing.T) {
+	var upstreamHits atomic.Int32
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		http.Error(w, "exists", http.StatusConflict)
+	}), 100, 200)
+
+	invalid := []string{
+		`{"username":"Alice","password":"correct password"}`,
+		`{"username":"alice","password":"short"}`,
+		`{"username":"alice","password":"correct password","enabled":true}`,
+		`{"username":"alice","password":"correct password","email":"invalid"}`,
+	}
+	for _, body := range invalid {
+		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected invalid request 400, got %d for %s", rec.Code, body)
+		}
+	}
+	if upstreamHits.Load() != 0 {
+		t.Fatalf("invalid requests reached upstream %d times", upstreamHits.Load())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"username":"alice","password":"correct password"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected conflict 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegisterRateLimitUsesUsernameAndClientIP(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"username":"alice"}`)
+	}), 100, 200)
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{"username":"alice","password":"correct password"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "192.0.2.1:1234"
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if i < 3 && rec.Code != http.StatusCreated {
+			t.Fatalf("request %d: expected 201, got %d", i+1, rec.Code)
+		}
+		if i == 3 && (rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "60") {
+			t.Fatalf("expected fourth request 429 with Retry-After, got %d %#v", rec.Code, rec.Header())
+		}
+	}
+}
+
 func TestLoginAuthenticatesUserAndIssuesUsableUserToken(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -82,12 +82,16 @@ spiffe://eulermaker/internal/ebs-controller
 
 Gateway 转发用户请求时，外部用户身份由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头，只注入 `X-EBS-User` 和 `X-EBS-Scopes`；这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
 
-两类请求的认证链路分别为：
+用户注册、登录和两类业务请求的认证链路分别为：
 
 ```text
+用户注册：注册资料 -> gateway 校验与注册限流 -> gateway mTLS -> apiserver IAM 创建 User 与凭据
+用户登录：账号密码 -> gateway 登录限流 -> gateway mTLS -> apiserver IAM 认证 -> gateway 签发 JWT
 用户请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
 系统请求：scheduler/controller mTLS -> apiserver 内部资源与 verb 授权
 ```
+
+自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。注册和登录使用的 `/internal/iam/*` 接口只信任 gateway 的 mTLS 身份，不接受外部 JWT、scheduler 或 controller 调用。
 
 部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。网络隔离是 mTLS 和内部授权之外的附加防线，不能替代调用方认证或资源权限校验。Runner 仍统一通过 `ebs-gateway` 访问 API，不属于允许直连 `ebs-apiserver` 的组件。
 
@@ -260,10 +264,12 @@ namespaced 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，请求
 ### 8.1 用户请求
 
 ```text
+注册：用户 -> ebs-gateway -> ebs-apiserver IAM -> User + 密码凭据
+登录：用户 -> ebs-gateway -> ebs-apiserver IAM -> JWT
 用户 -> ebs-gateway -> ebs-apiserver -> etcd
 ```
 
-`ebs-gateway` 负责入口能力，`ebs-apiserver` 负责资源语义和数据访问。
+`ebs-gateway` 负责注册和登录入口、认证鉴权及请求代理，`ebs-apiserver` 负责 User/凭据一致性、资源语义和数据访问。注册成功不自动登录，用户需再通过登录接口获取 JWT。
 
 ### 8.2 Controller 流程
 

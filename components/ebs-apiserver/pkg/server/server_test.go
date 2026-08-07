@@ -72,7 +72,7 @@ func TestEnableIAMFlag(t *testing.T) {
 
 func TestIAMStorageUsesESWithoutWatch(t *testing.T) {
 	client := esclient.NewClientForTesting("http://unused", http.DefaultClient)
-	group := CreateIAMAPIGroupInfo(client, credential.NewStore(client))
+	group, _ := CreateIAMAPIGroupInfo(client, credential.NewStore(client))
 	users := group.VersionedResourcesStorageMap["v1"]["users"]
 	if users == nil {
 		t.Fatal("users storage was not installed")

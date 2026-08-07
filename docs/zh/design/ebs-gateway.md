@@ -24,7 +24,7 @@ etcd / Elasticsearch
 | 目标 | 说明 |
 |------|------|
 | 统一入口 | 用户、外部系统和 runner 统一通过 gateway 访问 `ebs/v1` API |
-| 统一认证 | gateway 调用 apiserver IAM 模块验证账号密码，确认 User 状态后由 gateway 签发 JWT；业务请求进入 apiserver 前由 gateway 完成 token 校验 |
+| 统一认证 | gateway 提供用户自助注册和登录入口，调用 apiserver IAM 模块管理账号凭据；登录成功后由 gateway 签发 JWT，业务请求进入 apiserver 前由 gateway 完成 token 校验 |
 | 用户校验 | 通过 apiserver 的 User API 检查用户是否存在并启用 |
 | 请求转发 | 将合法请求反向代理到 `ebs-apiserver` |
 | Watch 透传 | 为 apiserver 支持 watch 的 Job、Runner 透传长连接和流式响应 |
@@ -66,7 +66,7 @@ spec:
 - `metadata.name` 是稳定用户标识，与用户 JWT 的 `sub` 一致。
 - `spec.enabled` 控制用户是否可以访问业务 API。
 - apiserver IAM 模块验证密码，gateway 签发 JWT；User API 保存 gateway 鉴权需要的用户状态。
-- 同时包含 `ebs:system` 和 `ebs:user-admin` 的管理调用方负责 User 的创建、删除和启停。
+- 普通用户通过公开注册接口创建自己的 User 和初始密码；同时包含 `ebs:system` 和 `ebs:user-admin` 的管理调用方仍可创建、删除、启停和维护 User。
 - gateway 可以短期缓存 User 查询结果，但 User API 是用户状态的权威来源。
 
 ### 3.2 业务资源归属
@@ -241,7 +241,45 @@ JWT 只有两种签发路径：普通用户 token 由 gateway 登录接口在线
 | scope 未知、冲突或组合不合法 | 401 |
 | Runner token 缺少合法 `runner` claim | 401 |
 
-### 4.3 PasswordLogin
+### 4.3 RegistrationAndPasswordLogin
+
+gateway 提供无需 JWT 的用户自助注册入口：
+
+```text
+POST /auth/register
+```
+
+```json
+{
+  "username": "alice",
+  "password": "user supplied password",
+  "displayName": "Alice",
+  "email": "alice@example.com"
+}
+```
+
+注册请求仅接受 `application/json`，拒绝未知字段，且受 `--max-request-body-bytes` 限制。字段规则如下：
+
+- `username` 必填，必须原样满足 DNS1123 label 约束且不超过 63 个字符；gateway 不做 trim、大小写折叠或其他规范化，避免多个输入映射到同一账号。
+- `password` 必填，长度为 12 到 128 个字符，按客户端提交的原值处理，不做 trim 或 Unicode 规范化。
+- `displayName` 和 `email` 可选；非空 email 必须是合法地址。
+- 客户端不能提交 `metadata`、labels、scope、`enabled` 或其他 User 字段；新注册 User 的 `spec.enabled` 固定为 `true`。
+
+gateway 完成请求格式和基础校验后，使用自身 mTLS 身份调用 apiserver 的原子语义注册接口：
+
+```text
+POST /internal/iam/v1/register
+```
+
+apiserver 是用户名唯一性、User 和凭据一致性以及全部字段校验的权威方。gateway 不通过“先创建 User、再设置密码”两个独立请求实现自助注册，避免向客户端暴露只有 User 或只有凭据的部分成功状态。
+
+注册成功返回 201，且不自动签发 JWT：
+
+```json
+{"username":"alice"}
+```
+
+用户随后通过登录接口获取 token。注册接口的错误语义为：请求或字段非法返回 400，用户名已存在返回 409，超过注册限流返回 429，apiserver IAM 不可用返回 503；响应不得回显密码。注册按客户端 IP 和 `{username}/{clientIP}` 分别使用独立令牌桶，固定限制为每个 IP 每分钟 5 次、每个用户名和 IP 组合每分钟 3 次，超限响应包含 `Retry-After`。多 gateway 实例部署时，生产环境应使用共享限流后端，确保实例间合并计数。
 
 登录请求：
 
@@ -532,6 +570,7 @@ gateway 暴露业务 API 和用户管理插件 API：
 | 路由 | 鉴权 | 说明 |
 |------|------|------|
 | `GET /healthz` | 否 | 健康检查 |
+| `POST /auth/register` | 否 | 用户自助注册；创建普通 User 和初始密码，不签发 JWT |
 | `POST /auth/login` | 否 | 账号密码登录，成功后签发 JWT |
 | `PUT /auth/users/{name}/password` | 是 | 设置或修改密码，仅允许本人，或同时包含 `ebs:system` 和 `ebs:user-admin` 的管理调用方 |
 | `ANY /apis/ebs/v1/*` | 是 | `ebs/v1` API 代理，需要 Project 用户权限校验 |
@@ -609,36 +648,22 @@ MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
 curl http://localhost:8080/healthz
 ```
 
-### 7.2 创建测试 User
+### 7.2 注册 User
 
-User 由 apiserver 插件管理，只有同时包含 `ebs:system` 和 `ebs:user-admin` 的管理 token 可以创建：
+普通用户通过公开接口自助注册：
 
 ```bash
-curl -X POST http://localhost:8080/apis/iam.ebs/v1/users \
-  -H "Authorization: Bearer ${ADMIN_SYSTEM_TOKEN}" \
+curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
   -d '{
-    "apiVersion": "iam.ebs/v1",
-    "kind": "User",
-    "metadata": {
-      "name": "alice"
-    },
-    "spec": {
-      "enabled": true,
-      "displayName": "Alice",
-      "email": "alice@example.com"
-    }
+    "username": "alice",
+    "password": "example password",
+    "displayName": "Alice",
+    "email": "alice@example.com"
   }'
 ```
 
-为 User 设置初始密码：
-
-```bash
-curl -X PUT http://localhost:8080/auth/users/alice/password \
-  -H "Authorization: Bearer ${ADMIN_SYSTEM_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"newPassword":"example password"}'
-```
+成功响应为 `201 Created` 和 `{"username":"alice"}`。注册不会自动登录。
 
 ### 7.3 登录
 
@@ -715,6 +740,8 @@ curl -N http://localhost:8080/apis/ebs/v1/jobs?watch=true \
 | 风险 | 处理 |
 |------|------|
 | 未认证请求访问业务 API | 返回 401，不转发到 apiserver |
+| 注册接口被滥用或批量占用用户名 | 按客户端 IP 和用户名/IP 组合独立限流；限制请求体和字段；多实例生产部署使用共享计数 |
+| 注册过程中 User 与凭据部分成功 | gateway 只调用 apiserver 的单一注册接口；apiserver 保证不可认证的中间状态、失败补偿和可重试恢复 |
 | 登录接口泄漏密码 | 登录请求体不记录日志，gateway 与 apiserver 之间使用 TLS，错误响应不回显输入 |
 | 密码暴力尝试 | gateway 按账号和客户端地址限流，IAM 模块维护失败次数和临时锁定状态 |
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
@@ -739,6 +766,7 @@ curl -N http://localhost:8080/apis/ebs/v1/jobs?watch=true \
 | 模块 | 场景 |
 |------|------|
 | Auth | 缺失 token、非法签名、非 HS256、非法 header、issuer/audience 错误、时间 claim 越界、缺失 `jti`、非法 scope 组合以及合法的 user/runner/system/admin token；密钥文件缺失、非法或过短时启动失败 |
+| Registration | 注册成功但不签发 token、User 固定启用、未知/越权字段、用户名和 email 校验、密码长度、重复用户名、请求体过大、IP 与用户名/IP 限流、IAM 不可用和敏感字段不入日志 |
 | PasswordLogin | 登录成功且只能获得 `ebs:user`、请求 scope 不产生提权、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
 | UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、缓存命中、User API 不可用，以及 runner/system/admin token 跳过 User 查询 |
 | Header | 删除伪造 `X-EBS-*` 并注入可信身份 |

@@ -43,9 +43,16 @@ type Store struct{ client *es.Client }
 
 func NewStore(client *es.Client) *Store { return &Store{client: client} }
 
-func (s *Store) SetPassword(ctx context.Context, username, password string) error {
+func ValidatePassword(password string) error {
 	if n := utf8.RuneCountInString(password); n < 12 || n > 128 {
 		return ErrInvalidPassword
+	}
+	return nil
+}
+
+func (s *Store) SetPassword(ctx context.Context, username, password string) error {
+	if err := ValidatePassword(password); err != nil {
+		return err
 	}
 	if _, err := s.client.Get(ctx, "user", username); err != nil {
 		if es.IsStatus(err, 404) {
@@ -73,6 +80,24 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (bo
 			return false, nil
 		}
 		return false, err
+	}
+	userHit, err := s.client.Get(ctx, "user", username)
+	if err != nil {
+		if es.IsStatus(err, 404) {
+			return false, nil
+		}
+		return false, err
+	}
+	var user struct {
+		Spec struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(userHit.Document.Data, &user); err != nil {
+		return false, err
+	}
+	if user.Spec.Enabled == nil || !*user.Spec.Enabled {
+		return false, nil
 	}
 	now := time.Now().UTC()
 	if cred.LockedUntil != nil && now.Before(*cred.LockedUntil) {

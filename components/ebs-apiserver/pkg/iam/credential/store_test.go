@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"ebs-apiserver/pkg/storage/es"
 )
@@ -54,13 +55,42 @@ func TestPasswordLengthPolicy(t *testing.T) {
 	}
 }
 
+func TestAuthenticateRejectsDisabledUser(t *testing.T) {
+	hash, err := HashPassword("correct horse battery staple")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	credentialData, _ := json.Marshal(Credential{PasswordHash: hash, PasswordUpdatedAt: time.Now().UTC()})
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
+			doc := es.Document{APIVersion: "iam.ebs/internal", Kind: "PasswordCredential", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: credentialData}
+			body, _ := json.Marshal(map[string]interface{}{"_id": "alice", "_seq_no": 0, "_primary_term": 1, "_source": doc})
+			return httpResponse(http.StatusOK, string(body)), nil
+		case strings.Contains(req.URL.Path, "/ebs-users/"):
+			return httpResponse(http.StatusOK, `{"_id":"alice","_seq_no":0,"_primary_term":1,"_source":{"apiVersion":"iam.ebs/v1","kind":"User","documentID":"alice","metadata":{"name":"alice"},"data":{"metadata":{"name":"alice"},"spec":{"enabled":false}}}}`), nil
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
+			return nil, nil
+		}
+	})}
+	store := NewStore(es.NewClientForTesting("http://elasticsearch", httpClient))
+	ok, err := store.Authenticate(context.Background(), "alice", "correct horse battery staple")
+	if err != nil {
+		t.Fatalf("authenticate disabled user: %v", err)
+	}
+	if ok {
+		t.Fatal("disabled registration user authenticated")
+	}
+}
+
 func TestCredentialLifecycleAndLockout(t *testing.T) {
 	var credentialDoc *es.Document
 	seq := int64(0)
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch {
 		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/ebs-users/"):
-			return httpResponse(http.StatusOK, `{"_id":"alice","_seq_no":0,"_primary_term":1,"_source":{"apiVersion":"iam.ebs/v1","kind":"User","documentID":"alice","metadata":{"name":"alice"},"data":{"metadata":{"name":"alice"}}}}`), nil
+			return httpResponse(http.StatusOK, `{"_id":"alice","_seq_no":0,"_primary_term":1,"_source":{"apiVersion":"iam.ebs/v1","kind":"User","documentID":"alice","metadata":{"name":"alice"},"data":{"metadata":{"name":"alice"},"spec":{"enabled":true}}}}`), nil
 		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
 			if credentialDoc == nil {
 				return httpResponse(http.StatusNotFound, `{"error":"missing"}`), nil
