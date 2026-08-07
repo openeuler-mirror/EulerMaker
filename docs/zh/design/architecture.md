@@ -74,7 +74,7 @@ spiffe://eulermaker/internal/ebs-controller
 
 内部授权遵循最小权限和默认拒绝原则：
 
-- `ebs-gateway` 只访问代理用户请求、解析 User 和调用 IAM 内部接口所需的 API。
+- `ebs-gateway` 只访问代理请求、解析 User/MachineAccount 和调用 IAM 内部凭据接口所需的 API。
 - scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
 - controller 只访问其控制循环负责的资源和 status API；不同 controller 可以按职责继续拆分权限。
 - 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
@@ -82,16 +82,19 @@ spiffe://eulermaker/internal/ebs-controller
 
 Gateway 转发用户请求时，外部用户身份由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头，只注入 `X-EBS-User` 和 `X-EBS-Scopes`；这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
 
-用户注册、登录和两类业务请求的认证链路分别为：
+用户、Runner和内部组件的认证链路分别为：
 
 ```text
 用户注册：注册资料 -> gateway 校验与注册限流 -> gateway mTLS -> apiserver IAM 创建 User 与凭据
 用户登录：账号密码 -> gateway 登录限流 -> gateway mTLS -> apiserver IAM 认证 -> gateway 签发 JWT
 用户请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
+机机账号创建：管理员 -> gateway -> apiserver IAM 原子创建 MachineAccount 与凭据
+Runner换取token：MachineAccount client凭据和Runner名称 -> gateway交换限流 -> apiserver IAM认证 -> gateway签发短期Runner JWT
+Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gateway mTLS -> apiserver
 系统请求：scheduler/controller mTLS -> apiserver 内部资源与 verb 授权
 ```
 
-自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。注册和登录使用的 `/internal/iam/*` 接口只信任 gateway 的 mTLS 身份，不接受外部 JWT、scheduler 或 controller 调用。
+自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `ebs:runner` JWT。所有 `/internal/iam/*` 接口只信任 gateway 的 mTLS 身份，不接受外部 JWT、scheduler 或 controller 调用。
 
 部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。网络隔离是 mTLS 和内部授权之外的附加防线，不能替代调用方认证或资源权限校验。Runner 仍统一通过 `ebs-gateway` 访问 API，不属于允许直连 `ebs-apiserver` 的组件。
 
@@ -143,6 +146,8 @@ status:
 ```
 
 Project 名用于内部 scoped storage，需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `spec.displayName`。
+
+IAM 资源使用独立的 `iam.ebs/v1` API group，包括 User 和 MachineAccount。
 
 详细字段定义见 [data-models.md](./data-models.md)。
 
@@ -301,10 +306,10 @@ Scheduler 使用全局 Job API，不需要逐个 Project 建立 watch。
 ### 8.4 Runner 流程
 
 ```text
+runner -> ebs-gateway: exchange MachineAccount credential for short-lived Runner JWT
 runner -> ebs-gateway -> ebs-apiserver: register Runner
 runner -> ebs-gateway -> ebs-apiserver: update Runner.status heartbeat
-runner -> ebs-gateway -> ebs-apiserver: list/watch all Jobs
-runner: process only Jobs whose status.runner matches itself
+runner -> ebs-gateway -> ebs-apiserver: list/watch /runners/{runner}/jobs
 runner -> execute Job
 runner -> ebs-gateway -> ebs-apiserver: update Job.status
 ```

@@ -30,7 +30,34 @@ runner -> ebs-gateway -> ebs-apiserver -> etcd / Elasticsearch
 
 Runner 访问 `ebs-gateway`，API 路径保持 `ebs-apiserver` 的资源路径不变，由 gateway 转发。
 
-### 3.1 Runner API
+### 3.1 获取 Runner token
+
+Runner 不保存长期 Runner JWT，而是使用预置的 MachineAccount client ID 和 client secret 换取短期 token：
+
+```text
+POST /auth/runner-token
+Authorization: Basic base64(<client-id>:<client-secret>)
+Content-Type: application/json
+
+{"runner":"runner-001"}
+```
+
+MachineAccount 必须已启用，`runner-001` 必须满足 DNS1123 label。Gateway 成功后返回最长 24 小时的 `ebs:runner` JWT，token 的 `sub`、`runner` claim 和本地 Runner 名称完全相同。Runner 仅在内存中保存短期 token，不将 client secret、Basic header 或完整 token 写入日志和状态对象。
+
+Runner 在首次注册前获取 token，并在到期前重新交换。建议在剩余有效期小于 10 分钟或总有效期的 20%（取较小值）时刷新，并加入随机抖动避免大量实例同时请求。业务请求收到 401 时只触发一次立即刷新和重试；交换接口返回 401 表示长期凭据无效，400 表示 Runner 名称或请求格式错误，两者均进入低频退避并报告配置错误，不能无限快速重试。429 遵循 `Retry-After`，网络错误和 503 使用带抖动的指数退避。Runner 不使用 refresh token。
+
+Runner 从 `--machine-credential-file` 指定的 JSON 文件同时读取 client ID 和 client secret：
+
+```json
+{
+  "clientID": "runner-site-a",
+  "clientSecret": "base64url-encoded-random-secret"
+}
+```
+
+文件只允许上述两个必填字符串字段，拒绝未知字段、空值、重复 JSON key 和文件尾部附加内容。文件权限应限制为 `0600` 或等效的只读 Secret 挂载权限。Runner 不接受通过其他启动参数直接覆盖文件中的 client ID 或 client secret，避免凭据两部分配置不一致。
+
+### 3.2 Runner API
 
 ```text
 GET    /apis/ebs/v1/runners/{name}
@@ -57,7 +84,7 @@ spec.hostname
 
 `ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 system 调用方维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
 
-### 3.2 Job API
+### 3.3 Job API
 
 Runner 使用自身范围的 Job API执行 list-watch：
 
@@ -401,13 +428,18 @@ Runner 只执行已绑定给自己的 Job，不负责调度决策。
 
 Runner 作为独立组件容器化部署，至少需要以下配置：
 
-| 配置 | 说明 |
-|------|------|
-| `EBS_GATEWAY` | gateway 地址，例如 `https://ebs-gateway:8443` |
-| `EBS_TOKEN` | Runner 访问 gateway 的认证令牌 |
-| `RUNNER_NAME` | Runner 资源名称，默认可使用 hostname |
-| `RUNNER_TYPE` | Runner 类型：`dc` / `vm` / `hw` |
-| `RUNNER_ARCH` | Runner 架构：`aarch64` / `x86_64` |
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--gateway` | `https://ebs-gateway:8443` | gateway 地址 |
+| `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
+| `--name` | hostname | Runner 资源名称 |
+| `--type` | `dc` | Runner 类型：`dc` / `vm` / `hw` |
+| `--root-dir` | `/var/lib/ebs-runner` | Runner 工作目录和结果目录的根路径 |
+| `--heartbeat-interval` | `30s` | 心跳上报周期 |
+| `--gateway-ca` | 无 | gateway 服务端证书的 CA 文件 |
+| `--insecure-skip-verify` | `false` | 跳过 gateway TLS 校验，仅用于测试环境 |
+
+Runner 启动时根据运行环境获取架构：`GOARCH=amd64` 映射为 `x86_64`，`GOARCH=arm64` 映射为 `aarch64`。其他架构不受支持，Runner拒绝启动。检测结果写入`Runner.spec.arch`和`ebs.io/runner-arch` label，不提供启动参数覆盖。
 
 示例：
 
@@ -415,23 +447,29 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 services:
   ebs-runner-dc-1:
     image: ebs-runner:latest
-    environment:
-      EBS_GATEWAY: https://ebs-gateway:8443
-      EBS_TOKEN: ${RUNNER_TOKEN}
-      RUNNER_NAME: runner-dc-aarch64-01
-      RUNNER_TYPE: dc
-      RUNNER_ARCH: aarch64
+    command:
+      - --gateway=https://ebs-gateway:8443
+      - --machine-credential-file=/run/secrets/runner-machine-credential
+      - --name=runner-dc-aarch64-01
+      - --type=dc
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - runner-cache:/var/lib/ebs-runner
+    secrets:
+      - runner-machine-credential
+
+secrets:
+  runner-machine-credential:
+    file: ./runner-machine-credential.json
 ```
 
 ## 十二、安全边界
 
 - Runner 认证统一经过 `ebs-gateway`。
+- 长期 MachineAccount 凭据用于换取最长 24 小时的 Runner token；每个 Runner 或受控站点应使用独立账号以便独立审计和吊销，不应在镜像中内置全局共享 secret。
 - Runner token 权限限制为创建自身 Runner、读取自身 Runner、受限更新自身普通对象字段、更新自身 Runner status、list/watch 自身已分配 Job，以及读取和更新已绑定 Job status。
 - Runner 身份必须满足 JWT `sub`、`runner` claim、Runner `metadata.name` 和请求路径名称完全一致；不允许 list/watch Runner 集合或访问其他 Runner。
-- Runner 创建和普通对象更新只能修改 3.1 节白名单字段；`unschedulable`、taints、zone、信任级别、安全域及服务端 metadata 由 system 维护。
+- Runner 创建和普通对象更新只能修改 3.2 节白名单字段；`unschedulable`、taints、zone、信任级别、安全域及服务端 metadata 由 system 维护。
 - Runner 禁止对所有资源执行 DELETE。
 - `/runners/{runner}/jobs` 的过滤由 apiserver依据可信身份强制执行，客户端 `fieldSelector` 不可信。
 - Runner 不应拥有直接访问 etcd、Elasticsearch 的权限。
