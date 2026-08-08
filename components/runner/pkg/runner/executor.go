@@ -22,7 +22,7 @@ type RuntimeManager struct {
 func (m *RuntimeManager) Execute(ctx context.Context, job JobResource) (string, error) {
 	runtimeName := job.Spec.Runtime
 	if runtimeName == "" {
-		runtimeName = "dc"
+		runtimeName = "ct"
 	}
 	if m.RunnerType != "" && runtimeName != m.RunnerType {
 		return "", fmt.Errorf("runner type %q cannot execute job runtime %q", m.RunnerType, runtimeName)

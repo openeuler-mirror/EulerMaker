@@ -647,7 +647,7 @@ func validateRunnerObject(candidate, old map[string]any, runner string, update b
 	}
 	typeName, _ := spec["type"].(string)
 	arch, _ := spec["arch"].(string)
-	if (typeName != "dc" && typeName != "vm" && typeName != "hw") || (arch != "aarch64" && arch != "x86_64") {
+	if (typeName != "ct" && typeName != "vm" && typeName != "hw") || (arch != "aarch64" && arch != "x86_64") {
 		return fmt.Errorf("invalid runner type or arch")
 	}
 	labels := stringMap(meta["labels"])

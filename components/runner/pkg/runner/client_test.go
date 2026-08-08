@@ -63,7 +63,7 @@ func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 	})
 	err := client.UpdateRunner(context.Background(), RunnerResource{
 		Metadata: ObjectMeta{Name: "runner-a"},
-		Spec:     RunnerSpec{Type: "dc", Arch: "x86_64", Hostname: "runner-a", Unschedulable: true},
+		Spec:     RunnerSpec{Type: "ct", Arch: "x86_64", Hostname: "runner-a", Unschedulable: true},
 		Status:   RunnerStatus{Phase: "Running"},
 	})
 	if err != nil {

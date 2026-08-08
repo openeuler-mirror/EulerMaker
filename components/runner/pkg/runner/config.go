@@ -28,7 +28,7 @@ func LoadConfig(args []string) (Config, error) {
 	cfg := Config{
 		Gateway:           "https://ebs-gateway:8443",
 		Name:              hostname,
-		Type:              "dc",
+		Type:              "ct",
 		Arch:              runtimeArch(),
 		RootDir:           "/var/lib/ebs-runner",
 		HeartbeatInterval: 30 * time.Second,
@@ -38,7 +38,7 @@ func LoadConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.Gateway, "gateway", cfg.Gateway, "ebs-gateway address")
 	fs.StringVar(&cfg.Token, "token", cfg.Token, "gateway bearer token")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
-	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: dc, vm, or hw")
+	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
 	fs.StringVar(&cfg.Arch, "arch", cfg.Arch, "runner architecture")
 	fs.StringVar(&cfg.RootDir, "root-dir", cfg.RootDir, "runner root directory")
 	fs.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", cfg.HeartbeatInterval, "heartbeat interval")
@@ -57,8 +57,8 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.Name == "" {
 		return Config{}, fmt.Errorf("runner name is required")
 	}
-	if cfg.Type != "dc" && cfg.Type != "vm" && cfg.Type != "hw" {
-		return Config{}, fmt.Errorf("runner type must be one of dc, vm, hw")
+	if cfg.Type != "ct" && cfg.Type != "vm" && cfg.Type != "hw" {
+		return Config{}, fmt.Errorf("runner type must be one of ct, vm, hw")
 	}
 	if cfg.Arch == "" {
 		return Config{}, fmt.Errorf("runner arch is required")

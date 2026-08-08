@@ -119,8 +119,8 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 	}
 	if len(obj.Spec.Type) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "type"), "type is required"))
-	} else if obj.Spec.Type != "dc" && obj.Spec.Type != "vm" && obj.Spec.Type != "hw" {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "type"), obj.Spec.Type, []string{"dc", "vm", "hw"}))
+	} else if obj.Spec.Type != "ct" && obj.Spec.Type != "vm" && obj.Spec.Type != "hw" {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "type"), obj.Spec.Type, []string{"ct", "vm", "hw"}))
 	}
 	if len(obj.Spec.Arch) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "arch"), "arch is required"))
