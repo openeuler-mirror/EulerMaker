@@ -19,18 +19,21 @@ const apiPrefix = "/apis/ebs/v1"
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
-	token      string
+	tokens     TokenSource
 }
 
-func NewClient(gateway, token string, httpClient *http.Client) (*Client, error) {
-	baseURL, err := url.Parse(gateway)
+func NewClient(gateway string, tokens TokenSource, httpClient *http.Client) (*Client, error) {
+	baseURL, err := parseGatewayURL(gateway)
 	if err != nil {
-		return nil, fmt.Errorf("parse gateway url: %w", err)
+		return nil, err
 	}
-	if baseURL.Scheme == "" || baseURL.Host == "" {
-		return nil, fmt.Errorf("gateway must include scheme and host")
+	if tokens == nil {
+		return nil, fmt.Errorf("token source is required")
 	}
-	return &Client{baseURL: baseURL, httpClient: httpClient, token: token}, nil
+	if httpClient == nil {
+		return nil, fmt.Errorf("http client is required")
+	}
+	return &Client{baseURL: baseURL, httpClient: httpClient, tokens: tokens}, nil
 }
 
 func (c *Client) GetRunner(ctx context.Context, name string) (*RunnerResource, error) {
@@ -105,7 +108,7 @@ func (c *Client) WatchAssignedJobs(ctx context.Context, runner, resourceVersion 
 			errs <- err
 			return
 		}
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.execute(req)
 		if err != nil {
 			errs <- err
 			return
@@ -198,7 +201,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body any, out 
 }
 
 func (c *Client) do(req *http.Request, out any) error {
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.execute(req)
 	if err != nil {
 		return err
 	}
@@ -233,9 +236,39 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body io.Re
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get runner token: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	return req, nil
+}
+
+func (c *Client) execute(req *http.Request) (*http.Response, error) {
+	resp, err := c.httpClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+	_ = resp.Body.Close()
+	rejected := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+	token, err := c.tokens.RefreshAfterUnauthorized(req.Context(), rejected)
+	if err != nil {
+		return nil, fmt.Errorf("refresh runner token: %w", err)
+	}
+	retry := req.Clone(req.Context())
+	if req.Body != nil {
+		if req.GetBody == nil {
+			return nil, fmt.Errorf("request body cannot be replayed after authentication failure")
+		}
+		retry.Body, err = req.GetBody()
+		if err != nil {
+			return nil, fmt.Errorf("rebuild request body: %w", err)
+		}
+	}
+	retry.Header = req.Header.Clone()
+	retry.Header.Set("Authorization", "Bearer "+token)
+	return c.httpClient.Do(retry)
 }
 
 func responseError(resp *http.Response) error {

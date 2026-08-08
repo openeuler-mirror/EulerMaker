@@ -21,6 +21,7 @@ const agentVersion = "v0.1.0"
 type Agent struct {
 	cfg      Config
 	client   *Client
+	tokens   *TokenProvider
 	executor Executor
 
 	mu         sync.Mutex
@@ -33,13 +34,22 @@ func NewAgent(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := NewClient(cfg.Gateway, cfg.Token, httpClient)
+	credential, err := LoadMachineCredential(cfg.MachineCredentialFile)
+	if err != nil {
+		return nil, err
+	}
+	tokens, err := NewTokenProvider(cfg.Gateway, cfg.Name, credential, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	client, err := NewClient(cfg.Gateway, tokens, httpClient)
 	if err != nil {
 		return nil, err
 	}
 	return &Agent{
 		cfg:    cfg,
 		client: client,
+		tokens: tokens,
 		executor: &RuntimeManager{
 			RunnerType: cfg.Type,
 			Executors: map[string]Executor{
@@ -61,6 +71,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := os.MkdirAll(resultRoot(a.cfg.RootDir), 0o755); err != nil {
 		return fmt.Errorf("create result root: %w", err)
 	}
+	if err := a.waitForInitialToken(ctx); err != nil {
+		return err
+	}
 
 	if err := a.register(ctx); err != nil {
 		return err
@@ -79,6 +92,47 @@ func (a *Agent) Run(ctx context.Context) error {
 		log.Printf("update offline status failed: %v", err)
 	}
 	return nil
+}
+
+func (a *Agent) waitForInitialToken(ctx context.Context) error {
+	backoff := time.Second
+	for {
+		if _, err := a.tokens.Token(ctx); err == nil {
+			return nil
+		} else {
+			wait := backoff
+			var statusErr StatusError
+			if errors.As(err, &statusErr) {
+				switch statusErr.Code {
+				case 400, 401:
+					wait = 30 * time.Second
+				case 429:
+					if statusErr.RetryAfter > wait {
+						wait = statusErr.RetryAfter
+					}
+				}
+			}
+			log.Printf("obtain runner token failed; retrying in %s: %v", wait, err)
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return ctx.Err()
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+				if backoff > 30*time.Second {
+					backoff = 30 * time.Second
+				}
+			}
+		}
+	}
 }
 
 func (a *Agent) register(ctx context.Context) error {
