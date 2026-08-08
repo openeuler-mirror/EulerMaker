@@ -10,6 +10,7 @@ type User struct {
 
 type UserSpec struct {
 	Enabled     *bool  `json:"enabled,omitempty"`
+	Admin       bool   `json:"admin,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
 	Email       string `json:"email,omitempty"`
 }
