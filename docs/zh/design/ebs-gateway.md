@@ -58,6 +58,7 @@ metadata:
   name: alice
 spec:
   enabled: true
+  admin: false
   displayName: Alice
   email: alice@example.com
 ```
@@ -66,8 +67,10 @@ spec:
 
 - `metadata.name` 是稳定用户标识，与用户 JWT 的 `sub` 一致。
 - `spec.enabled` 控制用户是否可以访问业务 API。
+- `spec.admin=true` 表示管理员；自助注册的 User 固定为 `false`。
+- 管理员标记由受信任内部流程通过 apiserver User API 设置，gateway 不提供对外提升管理员的接口。
 - apiserver IAM 模块验证用户密码或 MachineAccount client secret，gateway 签发 JWT；IAM资源保存gateway鉴权需要的主体状态和token TTL。
-- 普通用户通过公开注册接口创建自己的 User 和初始密码；同时包含 `ebs:system` 和 `ebs:user-admin` 的管理调用方仍可创建、删除、启停和维护 User。
+- 普通用户通过公开注册接口创建自己的 User 和初始密码。
 - gateway 可以短期缓存 User 查询结果，但 User API 是用户状态的权威来源。
 
 ### 3.2 业务资源归属
@@ -150,7 +153,7 @@ gateway 记录结构化审计日志，建议包含：
 | `latency_ms` | 请求耗时 |
 | `client_ip` | 客户端地址 |
 | `user` | 认证后的调用方标识 |
-| `token_type` | `user`、`runner`、`system`、`user-admin` 或 `machine-admin` |
+| `token_type` | `user`、`runner`、`system` 或 `admin` |
 | `jti` | JWT 唯一标识，不记录完整 token |
 | `user_agent` | 客户端 User-Agent |
 
@@ -224,12 +227,9 @@ Gateway 必须验证 `sub`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` �
 | 普通用户 | 仅 `ebs:user` | 只由 `POST /auth/login` 签发 | 是 |
 | Runner | 仅 `ebs:runner` | 只由 `POST /auth/runner-token` 使用 MachineAccount 凭据签发 | 否 |
 | 受信任系统调用方 | 仅 `ebs:system` | 由部署管理员控制的受信任签发流程签发 | 否 |
-| User 管理员 | `ebs:system` 和 `ebs:user-admin` | 由部署管理员控制的受信任签发流程签发 | 否 |
-| MachineAccount 管理员 | `ebs:system` 和 `ebs:machine-admin` | 由部署管理员控制的受信任签发流程签发 | 否 |
+| 管理员 | 仅 `ebs:admin` | `spec.admin=true` 的 User 通过 `POST /auth/login` 签发 | 是 |
 
-`POST /auth/login` 永远只签发 `ebs:user`，请求不能指定或提升 scope。`POST /auth/runner-token` 永远只签发 `ebs:runner`，请求不能指定 scope、有效期或其他权限 claim。`ebs:system`、`ebs:user-admin` 和 `ebs:machine-admin` 不通过普通用户或 MachineAccount 凭据在线签发。两个 admin scope 均不能单独使用，必须同时包含 `ebs:system`；system token可以同时携带两个 admin scope。`ebs:user`、`ebs:runner` 和 `ebs:system` 互斥；重复、未知或不满足合法组合的 scopes 返回 401。
-
-JWT 在线签发只有两条路径：普通用户 token 由登录接口签发，Runner token 由 MachineAccount 交换接口签发。system、User 管理员和 MachineAccount 管理员 token 仍由部署管理员控制的受信任流程签发。gateway 使用单一 HMAC 密钥和固定 issuer `ebs-gateway`，不提供公网通用签发接口，也不接受调用方自选 scope、`sub`、有效期或 `runner` claim。所有签发路径必须生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；在线签发的 user token固定为1小时，Runner token由 MachineAccount 的 `tokenTTLSeconds` 决定且最长24小时。
+JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 的 `spec.admin` 签发仅包含 `ebs:user` 或 `ebs:admin` 的 token；`POST /auth/runner-token` 使用 MachineAccount 凭据签发仅包含 `ebs:runner` 的 token。`ebs:system` 由部署管理员控制的受信任流程签发，不通过 User 或 MachineAccount 凭据在线签发。调用方不能指定 scope、`sub`、有效期或 `runner` claim。`ebs:user`、`ebs:admin`、`ebs:runner` 和 `ebs:system` 互斥；重复、未知或多 scope 组合均返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user 和 admin token 固定为 1 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
 
 普通用户 JWT 不携带额外的资源归属信息，`sub` 就是唯一用户身份。`ebs:system` 仅保留给必须经过 gateway 的受信任自动化调用方，Runner 必须使用独立的 `ebs:runner` scope。
 
@@ -257,7 +257,7 @@ Content-Type: application/json
 {"runner":"runner-001"}
 ```
 
-Gateway 只接受 TLS 上的请求，限制请求体大小并拒绝未知字段。`runner` 必须原样满足 DNS1123 label；Gateway 调用 `/internal/iam/v1/machineaccounts/{client-id}/authenticate` 验证凭据并确认 MachineAccount 已启用。认证成功后签发 `sub` 和 `runner` 均等于请求名称、scopes 仅为 `ebs:runner` 的 JWT。MachineAccount 名称不写入 `sub`，只作为审计字段 `actor` 记录，不能据此访问业务资源。
+Gateway 限制请求体大小并拒绝未知字段。`runner` 必须原样满足 DNS1123 label；Gateway 调用 `/internal/iam/v1/machineaccounts/{client-id}/authenticate` 验证凭据。认证成功后签发 `sub` 和 `runner` 均等于请求名称、scopes 仅为 `ebs:runner` 的 JWT。MachineAccount 名称不写入 `sub`，只作为审计字段 `actor` 记录，不能据此访问业务资源。
 
 成功响应为：
 
@@ -269,9 +269,9 @@ Gateway 只接受 TLS 上的请求，限制请求体大小并拒绝未知字段�
 }
 ```
 
-响应必须包含 `Cache-Control: no-store`。账号不存在、禁用、凭据错误和账号锁定统一返回 401，不能泄漏账号状态；请求或 Runner 名称非法返回 400；超过独立的 client ID/IP 令牌桶限制返回 429 并包含 `Retry-After`；IAM 不可用返回 503。client secret、Basic header、完整 JWT 和凭据验证细节不得进入访问日志或审计日志。每次成功和失败交换都记录 client ID、目标 Runner、结果、客户端地址；成功记录签发 token 的 `jti`。
+响应必须包含 `Cache-Control: no-store`。账号不存在、凭据错误和账号锁定统一返回 401，不能泄漏账号状态；请求或 Runner 名称非法返回 400；超过独立的 client ID/IP 令牌桶限制返回 429 并包含 `Retry-After`；IAM 不可用返回 503。client secret、Basic header、完整 JWT 和凭据验证细节不得进入访问日志或审计日志。每次成功和失败交换都记录 client ID、目标 Runner、结果、客户端地址；成功记录签发 token 的 `jti`。
 
-Runner不使用 refresh token。短期 token到期前，Runner使用 MachineAccount 凭据重新调用交换接口。禁用或删除账号只阻止后续交换，已签发 token在最长24小时后自然失效；需要即时撤销属于后续 `jti` denylist或签名密钥轮换能力。
+Runner不使用 refresh token。短期 token到期前，Runner使用 MachineAccount 凭据重新调用交换接口。删除账号后不能再交换新 token；已签发 token在最长24小时后自然失效，需要即时撤销属于后续 `jti` denylist或签名密钥轮换能力。
 
 管理员通过 `POST /auth/machineaccounts` 原子创建 MachineAccount 和初始凭据：
 
@@ -283,7 +283,9 @@ Runner不使用 refresh token。短期 token到期前，Runner使用 MachineAcco
 }
 ```
 
-Gateway要求system + machine-admin权限，校验请求后调用`POST /internal/iam/v1/machineaccounts/register`。成功返回201和`{"name":"runner-site-a"}`，不回显secret；名称已存在返回409，非法请求返回400。管理端将名称作为`clientID`、原始secret作为`clientSecret`组成Runner使用的机机凭据文件并通过受保护渠道下发。系统不提供MachineAccount credential修改接口；凭据失效或泄漏时禁用或删除账号，并使用新secret创建账号。
+`name` 必填，必须原样满足 DNS1123 label 约束且不超过 63 个字符。`clientSecret` 必须是无填充的 Base64URL 字符串，解码后至少包含 32 字节，编码后长度不得超过 256 字节。`tokenTTLSeconds` 可选，默认为 3600，取值范围为 300 至 86400。Gateway 按原值校验和转发 `name` 与 `clientSecret`，不执行 trim、大小写转换或其他规范化。请求只接受上述三个字段，未知字段或任一字段非法时返回 400。
+
+Gateway要求 admin 权限，校验请求后调用`POST /internal/iam/v1/machineaccounts/register`。成功返回201和`{"name":"runner-site-a"}`，不回显secret；名称已存在返回409，非法请求返回400。管理端将名称作为`clientID`、原始secret作为`clientSecret`组成Runner使用的机机凭据文件并通过受保护渠道下发。
 
 ### 4.3 RegistrationAndPasswordLogin
 
@@ -307,15 +309,15 @@ POST /auth/register
 - `username` 必填，必须原样满足 DNS1123 label 约束且不超过 63 个字符；gateway 不做 trim、大小写折叠或其他规范化，避免多个输入映射到同一账号。
 - `password` 必填，长度为 12 到 128 个字符，按客户端提交的原值处理，不做 trim 或 Unicode 规范化。
 - `displayName` 和 `email` 可选；非空 email 必须是合法地址。
-- 客户端不能提交 `metadata`、labels、scope、`enabled` 或其他 User 字段；新注册 User 的 `spec.enabled` 固定为 `true`。
+- 客户端不能提交 `metadata`、labels、scope、`enabled`、`admin` 或其他 User 字段；新注册 User 的 `spec.enabled` 固定为 `true`、`spec.admin` 固定为 `false`。
 
-gateway 完成请求格式和基础校验后，使用自身 mTLS 身份调用 apiserver 的原子语义注册接口：
+gateway 完成请求格式和基础校验后，调用 apiserver 的原子语义注册接口：
 
 ```text
-POST /internal/iam/v1/register
+POST /internal/iam/v1/users/register
 ```
 
-apiserver 是用户名唯一性、User 和凭据一致性以及全部字段校验的权威方。gateway 不通过“先创建 User、再设置密码”两个独立请求实现自助注册，避免向客户端暴露只有 User 或只有凭据的部分成功状态。
+apiserver 是用户名唯一性和全部字段校验的权威方，并通过单个ES文档原子创建User与初始密码哈希。
 
 注册成功返回 201，且不自动签发 JWT：
 
@@ -355,15 +357,29 @@ POST /internal/iam/v1/authenticate
 
 响应必须包含 `Cache-Control: no-store`；`expiresIn` 为从签发时间开始计算的秒数。
 
-密码设置和修改通过 `PUT /auth/users/{name}/password` 完成：
+用户通过 `PUT /auth/users/{name}/password` 修改本人密码：
 
-- 同时包含 `ebs:system` 和 `ebs:user-admin` 的管理调用方为用户设置初始密码或重置密码时提交 `newPassword`。
-- 用户修改自己的密码时提交 `currentPassword` 和 `newPassword`；gateway 先调用认证接口验证当前密码，再调用内部密码设置接口。
+- 路径 `{name}` 必须与 JWT `sub` 完全一致。
+- 请求提交 `currentPassword` 和 `newPassword`；gateway 先调用认证接口验证当前密码，再调用内部密码设置接口。
 - gateway 将 `newPassword` 转换为 apiserver 内部接口要求的 `password` 字段并转发，不在本地保存密码。
+
+密码修改成功返回 204，不返回响应体。错误语义如下：
+
+| 场景 | HTTP 状态码 |
+|------|-------------|
+| 请求体非法、包含未知字段或 `newPassword` 不满足密码规则 | 400 |
+| 未携带 token或 token 非法 | 401 |
+| `currentPassword` 错误 | 401 |
+| 路径 `{name}` 与 JWT `sub` 不一致 | 403 |
+| User 不存在或 `spec.enabled=false` | 403 |
+| 超过限流 | 429 |
+| apiserver IAM 不可用 | 503 |
+
+密码修改不撤销已签发的 JWT，现有 token 继续有效至 `exp`。
 
 ### 4.4 UserResolve
 
-仅 `ebs:user` token 在完成 4.2 节全部 JWT 校验后执行 UserResolve。`ebs:runner`、`ebs:system` 以及带任意 admin scope 的 system token不映射为 User，也不执行 UserResolve。对于普通用户，gateway 使用受信任的内部凭据读取：
+`ebs:user` 和 `ebs:admin` token 在完成 4.2 节全部 JWT 校验后执行 UserResolve。`ebs:runner` 和 `ebs:system` 不映射为 User，也不执行 UserResolve。gateway 使用内部请求读取：
 
 ```text
 GET /apis/iam.ebs/v1/users/{jwt.sub}
@@ -377,7 +393,7 @@ GET /apis/iam.ebs/v1/users/{jwt.sub}
 | `spec.enabled=false` | 返回 403 |
 | User API 不可用且无有效缓存 | 返回 503 |
 
-gateway 必须确认返回对象的 `metadata.name` 与 JWT `sub` 完全一致，并可以按用户名缓存 `enabled`。缓存时间不超过 JWT 剩余有效期，JWT 和缓存使用较短有效期，使用户禁用能够及时生效。
+gateway 必须确认返回对象的 `metadata.name` 与 JWT `sub` 完全一致。`ebs:user` 要求 `spec.enabled=true`；`ebs:admin` 同时要求 `spec.enabled=true` 和 `spec.admin=true`。gateway 可以按用户名缓存上述状态，缓存时间不超过 JWT 剩余有效期。
 
 User API 的内部查询不能使用正在校验的普通用户 token，避免递归鉴权和权限提升。gateway 应使用仅具备 User 读取权限的内部凭据，且不得将该凭据转发给客户端。
 
@@ -427,26 +443,6 @@ X-EBS-Scopes: <jwt.scopes>
 
 gateway 在转发前进行用户级 Project 鉴权。
 
-普通用户 token：
-
-- 必须对应一个已启用且 `metadata.name` 等于 JWT `sub` 的 User。
-- 可以创建 Project，Project owner user 强制为 JWT `sub`。
-- 可以访问 owner user 为自己的 Project。
-- 可以访问 member users 包含自己的 Project。
-- 可以访问上述 Project 下的 Snapshot、Build、BuildInfo、RpmRepo、Job。
-- 不能访问 Snapshot、Build、BuildInfo、RpmRepo、Job 的全局 API。
-- 不能访问 Runner API。
-
-Runner token：
-
-- scopes 必须仅包含 `ebs:runner`，且 `sub`、`runner` claim、请求对象的 `metadata.name` 和路径中的 Runner 名称必须一致。
-- 可以通过 `POST /apis/ebs/v1/runners` 创建自身 Runner；只能读取自身单个对象，不能 list/watch Runner 集合。
-- 可以通过 `PUT`、`PATCH` 受限更新自身普通对象字段，并通过自身 `/status` 更新状态；不得访问或修改其他 Runner。
-- 可以对 `/apis/ebs/v1/runners/{runner}/jobs` 执行 GET list/watch，用于发现分配给自己的 Job；路径 `{runner}` 必须等于 token 的 `runner` claim，apiserver强制只返回 `status.runner` 匹配的对象。
-- 对单个 Job 执行 `get` 时，只允许读取 `status.runner` 等于自身名称的 Job；也只能通过该 Job 的 `/status` 子资源更新执行状态。不得修改 Job spec、Runner 绑定关系或其他 Runner 的 Job。
-- 不得访问 Project、Snapshot、Build、BuildInfo、RpmRepo、User 和 MachineAccount API。
-- 禁止对所有资源执行 `DELETE`。
-
 Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行以下检查：
 
 - JWT `sub`、`runner` claim 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
@@ -456,69 +452,28 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 
 不满足条件返回 400 或 403且不转发；对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并按 4.8.1 节发起受限 PUT/PATCH。
 
-受信任 system token：
-
-- 必须包含 `ebs:system` scope。
-- 可以访问各资源的全局 API；watch 仅适用于 Job、Runner。
-- 可以访问 Runner API。
-- 可以跨 Project 访问业务资源，但不能仅凭 system scope访问User或MachineAccount API；两类IAM资源管理还必须分别具有`ebs:user-admin`或`ebs:machine-admin`。
-
-Project 级鉴权规则：
-
-| 请求 | 普通用户 | Runner | System |
-|------|----------|--------|--------|
-| `POST /apis/ebs/v1/projects` | 允许，强制写入 `owner-user=<jwt.sub>` | 禁止 | 允许，但必须提供合法且已启用的 `owner-user` |
-| `GET /apis/ebs/v1/projects` | 只返回自己拥有或被授权的 Project | 禁止 | 允许全量 |
-| `GET /apis/ebs/v1/projects/{project}` | 有 owner/member 权限才允许 | 禁止 | 允许 |
-| `/apis/ebs/v1/projects/{project}/...` | 有 owner/member 权限才允许 | 仅允许读取已分配 Job、更新其 `/status` | 允许 |
-| `/apis/ebs/v1/{snapshots,builds,buildinfos,rpmrepos}` | 禁止 | 禁止 | 允许跨 Project list/查询，不支持 watch |
-| `/apis/ebs/v1/jobs`（含 `watch=true`） | 禁止 | — | 允许跨 Project list/watch |
-| `/apis/ebs/v1/runners/{runner}/jobs` | 禁止 | 仅允许自身路径的 GET list/watch，服务端按 `status.runner` 强制过滤 | 允许 |
-| `/apis/ebs/v1/runners...` | 禁止 | 允许创建自身、读取自身、受限更新自身普通对象字段及更新自身 `/status`；除自身 Job 子路径外禁止集合 list/watch | 允许 |
-
-IAM API 鉴权规则：
-
-| 请求 | 普通用户 | Runner | 仅 System | System + UserAdmin | System + MachineAdmin |
-|------|----------|--------|-------------|--------------------|-----------------------|
-| `/apis/iam.ebs/v1/users...` | 禁止 | 禁止 | 禁止 | 允许管理 | 禁止 |
-| `/apis/iam.ebs/v1/machineaccounts...` | 禁止 | 禁止 | 禁止 | 禁止 | 允许管理 |
-
-User 管理使用附加的 `ebs:user-admin` scope，MachineAccount 管理使用独立的 `ebs:machine-admin` scope。两者均不能独立授权，只有和 `ebs:system` 同时出现时才允许访问对应 API。MachineAccount 原子创建接口要求 system + machine-admin，凭据认证内部接口只允许 gateway 的 mTLS 身份调用。
-
 以下资源—verb 矩阵是授权实现的规范；未列出或标为“禁止”的组合默认拒绝。`get/list/watch` 统称读操作，`create/update/patch/delete` 统称写操作；资源实际不支持的 verb 即使矩阵允许也由 apiserver 拒绝。
 
-| 资源范围 | Owner 用户 | Member 用户 | Runner | System | System + UserAdmin | System + MachineAdmin |
-|----------|------------|-------------|--------|--------|--------------------|-----------------------|
-| Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 禁止 | 全部支持的 verb | 同 System | 同 System |
-| Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 禁止 | 全部支持的 verb | 同 System | 同 System |
-| Project 子资源：Job | 全部支持的 verb，watch 仅在 apiserver 支持时允许 | `get/list/create/update/patch`，禁止 `delete`；watch 仅在 apiserver 支持时允许 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System | 同 System |
-| 全局 Job | 禁止 | 禁止 | — | 全部支持的 verb | 同 System | 同 System |
-| Runner 范围 Job list/watch | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System | 同 System |
-| Runner | 禁止 | 禁止 | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System | 同 System |
-| User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 禁止 | 禁止 | 全部支持的 User verb 和密码管理 | 禁止 |
-| MachineAccount | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 通过专用接口`create`；资源API支持`get/list/update/patch/delete` |
+| 资源范围 | Owner 用户 | Member 用户 | Runner | System | Admin |
+|----------|------------|-------------|--------|--------|-----------------------|
+| Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 禁止 | 全部支持的 verb | 同 System |
+| Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 禁止 | 全部支持的 verb | 同 System |
+| Project 子资源：Job | 全部支持的 verb，watch 仅在 apiserver 支持时允许 | `get/list/create/update/patch`，禁止 `delete`；watch 仅在 apiserver 支持时允许 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
+| 全局 Job | 禁止 | 禁止 | — | 全部支持的 verb | 同 System |
+| Runner 范围 Job list/watch | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
+| Runner | 禁止 | 禁止 | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
+| User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 禁止 | 禁止 | 普通 User 支持 `get/list/update/patch/delete`，另可修改本人密码 |
+| MachineAccount | 禁止 | 禁止 | 禁止 | 禁止 | 通过专用接口`create`；资源API支持`get/list/delete` |
 
-Owner 用户只有在修改 Project access labels 时受 4.8 节的额外字段约束。Member 用户禁止对任何资源执行 `DELETE`，也不能修改 Project 本身或 Project access labels。Runner 仅允许创建自身 Runner，禁止创建其他资源并禁止所有 `delete`；其 Job `/status` 更新不得改变 `status.runner`。
+矩阵中的权限还受 4.8 节完整对象比较和字段约束。User 只能通过 `/auth/register` 创建；Admin 不能读取或操作 `spec.admin=true` 的 User，也不能设置或重置其他用户的密码。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
 
 Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `runner` claim。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
 
 如果 gateway 无法确认 Project 归属，应返回 403，不能放行。
 
-实现建议：
+普通用户列出 Project 时，gateway 分别使用 `ebs.io/owner-user=<jwt.sub>` 和 `ebs.io/member-user.<jwt.sub>=true` 查询并合并结果，因为 Kubernetes label selector 不支持 OR。Project 详情和子资源请求先读取 Project 并校验 owner/member 权限。
 
-- Project 列表请求：普通用户请求 `GET /apis/ebs/v1/projects` 时，gateway 查询并合并两类 Project：
-  - `ebs.io/owner-user=<jwt.sub>`
-  - `ebs.io/member-user.<jwt.sub>=true`
-- Project 详情请求：gateway 先读取 Project，确认 JWT `sub` 是 owner 或 member，再转发原请求。
-- Project 子资源请求：gateway 先根据路径中的 `{project}` 读取 Project 并校验 owner/member 权限，再转发原请求。
-- Project 写请求：gateway 在转发前注入或保护 Project owner/member labels。
-- Runner 创建请求：校验 token 的 `sub`、`runner` claim 和对象 `metadata.name` 完全一致，并执行 Runner 创建字段白名单检查。
-- Runner 普通对象请求：校验路径名称等于 token 的 `runner` claim；PUT/PATCH 构造完整候选对象后，只允许修改自声明字段并保护 system 管理字段。
-- Runner 状态和 Job 请求：校验 Runner 路径身份或读取 Job 并核对 `status.runner`，状态写入还必须拒绝对 Job 绑定字段的修改。
-- Runner 范围 Job list/watch：只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver从可信路径生成。
-- System 请求：包含 `ebs:system` scope 时不做 Project 用户过滤，但 User 和 MachineAccount API仍分别要求额外的 `ebs:user-admin`、`ebs:machine-admin`。
-
-由于 Kubernetes label selector 不支持 OR，Project 列表请求由 gateway 发起两次查询并合并结果：一次查询 owner user，一次查询 member user。
+Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
 
 ### 4.8 AccessLabels
 
@@ -561,6 +516,8 @@ metadata.deletionTimestamp
 metadata.deletionGracePeriodSeconds
 metadata.generation
 metadata.managedFields
+metadata.finalizers
+metadata.ownerReferences
 ```
 
 `metadata.resourceVersion` 只能保持为 `oldObject` 的值。路径中的资源类型、namespace、name 必须分别与候选对象的 `apiVersion/kind`、`metadata.namespace`、`metadata.name` 一致；缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段，候选对象的 `status` 必须与旧对象完全相同；`/status` 路径只允许修改授权的 `status` 字段，`metadata`（除保持原值的 `resourceVersion` 外）和 `spec` 必须与旧对象完全相同。
@@ -577,13 +534,11 @@ metadata.managedFields
 | Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `runner` claim；`spec` 和全部 metadata 保持不变 |
 | Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.startTime`、`status.endTime`、`status.resultRoot`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner` 或 `status.restartCount` |
 | System 更新业务资源 | 普通路径为 `metadata`、`spec`，`/status` 路径为 `status` | 仍受身份字段、subresource 隔离和 `resourceVersion` 规则约束 |
-| System + UserAdmin 更新 User | `metadata.labels`、`metadata.annotations`、`spec` | User labels 是普通扩展元数据，不参与 Project 权限判定 |
+| Admin 更新普通 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.admin` 均必须为 `false`；不能操作管理员 User |
 
 表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。
 
-#### 4.8.2 User 和 Project access labels
-
-只有同时包含 `ebs:system` 和 `ebs:user-admin` 的管理请求可以创建或修改 User。User labels 是普通扩展元数据，不作为身份或 Project 权限来源。
+#### 4.8.2 Project access labels
 
 普通用户创建 Project 时，gateway 对 `POST` JSON 请求注入或覆盖：
 
@@ -635,29 +590,15 @@ gateway 暴露业务 API 和用户管理插件 API：
 | `POST /auth/register` | 否 | 用户自助注册；创建普通 User 和初始密码，不签发 JWT |
 | `POST /auth/login` | 否 | 账号密码登录，成功后签发 JWT |
 | `POST /auth/runner-token` | MachineAccount Basic凭据 | 验证机机账号和Runner名称格式，签发短期 `ebs:runner` JWT |
-| `PUT /auth/users/{name}/password` | 是 | 设置或修改密码，仅允许本人，或同时包含 `ebs:system` 和 `ebs:user-admin` 的管理调用方 |
-| `POST /auth/machineaccounts` | 是 | 原子创建MachineAccount和初始凭据，仅允许同时包含`ebs:system`和`ebs:machine-admin`的管理调用方 |
+| `PUT /auth/users/{name}/password` | 是 | 用户验证当前密码后修改本人密码 |
+| `POST /auth/machineaccounts` | 是 | 原子创建MachineAccount和初始凭据，仅允许 `ebs:admin` |
 | `ANY /apis/ebs/v1/*` | 是 | `ebs/v1` API 代理，需要 Project 用户权限校验 |
-| `ANY /apis/iam.ebs/v1/users*` | 是 | User 管理 API，仅允许同时包含 `ebs:system` 和 `ebs:user-admin` 的管理 token |
-| `ANY /apis/iam.ebs/v1/machineaccounts*` | 是 | MachineAccount查询、更新和删除API；collection POST返回405，创建使用`POST /auth/machineaccounts` |
+| `ANY /apis/iam.ebs/v1/users*` | 是 | Admin 可查询、修改和删除普通 User；POST 返回 405 |
+| `ANY /apis/iam.ebs/v1/machineaccounts*` | 是 | MachineAccount查询和删除API；POST/PUT/PATCH返回405，创建使用`POST /auth/machineaccounts` |
 
 不提供 `/api/*` 简化别名。客户端统一使用 Kubernetes-like API 路径，避免出现两套路由标准。
 
-### 5.2 API 透传示例
-
-| 客户端请求 | 转发到 apiserver |
-|------------|------------------|
-| `GET /apis/ebs/v1/projects` | `GET /apis/ebs/v1/projects` |
-| `POST /apis/ebs/v1/projects` | `POST /apis/ebs/v1/projects` |
-| `GET /apis/ebs/v1/projects/{project}/buildinfos` | `GET /apis/ebs/v1/projects/{project}/buildinfos` |
-| `GET /apis/ebs/v1/projects/{project}/rpmrepos` | `GET /apis/ebs/v1/projects/{project}/rpmrepos` |
-| `GET /apis/ebs/v1/projects/{project}/jobs` | `GET /apis/ebs/v1/projects/{project}/jobs` |
-| `PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status` | `PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status` |
-| `GET /apis/ebs/v1/jobs?watch=true` | `GET /apis/ebs/v1/jobs?watch=true` |
-| `GET /apis/ebs/v1/runners/{runner}/jobs?watch=true` | 同路径，由 apiserver强制按 Runner过滤 |
-| `PUT /apis/ebs/v1/runners/{name}/status` | `PUT /apis/ebs/v1/runners/{name}/status` |
-
-### 5.3 Watch 透传
+### 5.2 Watch 透传
 
 受信任 system 调用方和 Runner 可能通过 gateway 对支持 watch 的资源建立连接：
 
@@ -678,12 +619,6 @@ gateway 需要支持流式响应：
 - 审计日志记录连接建立和最终关闭状态。
 
 ## 六、配置
-
-建议组件目录：
-
-```text
-components/ebs-gateway/
-```
 
 启动配置：
 
@@ -774,7 +709,7 @@ curl -X POST http://localhost:8080/apis/ebs/v1/projects \
 Runner 使用 MachineAccount 长期凭据换取仅包含 `ebs:runner` 的短期 token，再通过自身范围 Job list-watch发现分配给自己的 Job：
 
 ```bash
-TOKEN_RESPONSE=$(curl --fail-with-body 'https://localhost:8443/auth/runner-token' \
+TOKEN_RESPONSE=$(curl --fail-with-body 'http://localhost:8080/auth/runner-token' \
   --user "runner-site-a:${RUNNER_CLIENT_SECRET}" \
   -H 'Content-Type: application/json' \
   --data '{"runner":"runner-001"}')
@@ -792,21 +727,18 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 |------|------|
 | 未认证请求访问业务 API | 返回 401，不转发到 apiserver |
 | 注册接口被滥用或批量占用用户名 | 按客户端 IP 和用户名/IP 组合独立限流；限制请求体和字段；多实例生产部署使用共享计数 |
-| 注册过程中 User 与凭据部分成功 | gateway 只调用 apiserver 的单一注册接口；apiserver 保证不可认证的中间状态、失败补偿和可重试恢复 |
+| User凭据泄漏 | User REST响应不包含credential字段，密码和哈希不写入日志、审计事件或错误响应 |
 | 登录接口泄漏密码 | 登录请求体不记录日志，gateway 与 apiserver 之间使用 TLS，错误响应不回显输入 |
 | 密码暴力尝试 | gateway 按账号和客户端地址限流，IAM 模块维护失败次数和临时锁定状态 |
-| MachineAccount凭据泄漏 | 禁用或删除账号并使用新secret创建账号；每个Runner或受控站点使用独立账号和随机secret，secret只从受限文件读取且不写日志 |
+| MachineAccount凭据泄漏 | 删除账号并使用新secret创建账号；每个Runner或受控站点使用独立账号和随机secret，secret只从受限文件读取且不写日志 |
 | MachineAccount提升权限 | 交换接口只固定签发`ebs:runner`，调用方不能指定scope、TTL或除Runner名称外的claim |
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
 | User API 不可用 | 仅使用仍有效的短期缓存；无有效缓存时返回 503，不默认放行 |
-| 普通用户管理 User | `/apis/iam.ebs/v1/users*` 返回 403 |
-| 非MachineAdmin管理机机账号 | MachineAccount创建和资源管理接口返回403 |
-| User 内部查询凭据泄漏 | 使用最小只读权限、独立密钥和轮换机制，不写入审计日志或转发请求头 |
+| Admin 越权操作管理员 User | User list 过滤 `spec.admin=true` 对象；单对象读取和写入先校验旧对象；PUT/PATCH 保护 `spec.admin` |
 | 客户端伪造内部身份头 | 转发前删除所有客户端 `X-EBS-*`，只重建 `X-EBS-User` 和 `X-EBS-Scopes` |
 | 客户端伪造 Project owner | 普通用户创建 Project 时强制覆盖 `metadata.labels["ebs.io/owner-user"]`；system 创建时校验指定 owner User |
 | 客户端越权修改 Project members | 只有 owner user 或 system token 可以修改 member user labels，新增成员必须是已启用 User |
 | 用户访问未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403 |
-| 用户访问全局 API | 普通用户禁止；Runner 仅能发现 Job 并操作自身 Runner 和已分配 Job；system token 可访问业务资源全局 API |
 | Runner 范围 Job 过滤被绕过 | gateway绑定路径身份，apiserver按 `status.runner` 强制过滤，并拒绝客户端提供 `fieldSelector` |
 | token 泄漏 | 使用短有效期、固定 issuer/audience 和最小 scope；轮换单一密钥会使全部旧 token 失效，`jti` 进入审计记录以支持后续撤销扩展 |
 | 请求风暴 | 基于调用方限流 |
@@ -820,15 +752,15 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | 模块 | 场景 |
 |------|------|
 | Auth | 缺失 token、非法签名、非 HS256、非法 header、issuer/audience 错误、时间 claim 越界、缺失 `jti`、非法 scope 组合以及合法的 user/runner/system/admin token；密钥文件缺失、非法或过短时启动失败 |
-| Registration | 注册成功但不签发 token、User 固定启用、未知/越权字段、用户名和 email 校验、密码长度、重复用户名、请求体过大、IP 与用户名/IP 限流、IAM 不可用和敏感字段不入日志 |
-| MachineAccountRegistration | 对象和凭据原子创建、重复名称409、非法名称/secret/TTL、响应不回显secret、通用资源POST返回405、非MachineAdmin返回403以及失败不保留可认证账号 |
-| PasswordLogin | 登录成功且只能获得 `ebs:user`、请求 scope 不产生提权、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
-| RunnerTokenExchange | MachineAccount认证成功、禁用/不存在/错误secret统一401、非法Runner名称400、固定scope和TTL、独立限流、响应no-store以及凭据不入日志 |
-| UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、缓存命中、User API 不可用，以及 runner/system/admin token 跳过 User 查询 |
+| Registration | User和密码哈希单文档原子创建、注册成功但不签发token、User固定启用、未知/越权字段、用户名和email校验、密码长度、重复用户名、请求体过大、限流、IAM不可用、REST响应不包含credential以及敏感字段不入日志 |
+| MachineAccountRegistration | 对象和凭据原子创建、重复名称409、非法名称/secret/TTL、响应不回显secret、通用资源POST返回405、非Admin返回403以及失败不保留可认证账号 |
+| PasswordLogin | 普通 User 登录获得 `ebs:user`、`spec.admin=true` 获得 `ebs:admin`、请求 scope 不产生提权、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
+| RunnerTokenExchange | MachineAccount认证成功、不存在/错误secret统一401、非法Runner名称400、固定scope和TTL、独立限流、响应no-store以及凭据不入日志 |
+| UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、admin 标记被移除、缓存命中和 User API 不可用；runner/system token 跳过 User 查询 |
 | Header | 删除伪造 `X-EBS-*` 并注入可信身份 |
 | ProjectAuthz | 普通用户只能访问自己拥有或作为 member 的 Project；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入；system token可访问业务全局 API |
-| UserAdmin | user、runner、仅 `ebs:system` 和仅 `ebs:user-admin` 均不能访问 User API，只有 `ebs:system` + `ebs:user-admin` 可以管理 User 和重置密码 |
-| MachineAdmin | user、runner、仅`ebs:system`和仅`ebs:machine-admin`均不能管理MachineAccount，只有`ebs:system` + `ebs:machine-admin`可以创建和管理对象 |
+| Admin | user、runner 和 system 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询和删除对象 |
+| AdminUser | Admin 只能 get/list/update/patch/delete 普通 User，list 不返回管理员，禁止 create、修改 `spec.admin`、操作管理员 User 和重置他人密码 |
 | ObjectCompare | PUT 缺失/过期 `resourceVersion`；Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；检查后并发更新返回 409且不自动重放 |
 | AccessLabels | 普通用户创建 Project 时强制写入 owner user label；system 创建时校验 owner User；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护 system 管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |

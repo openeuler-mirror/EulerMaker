@@ -5,7 +5,12 @@
 ## Features
 
 - `GET /healthz` without authentication.
-- `POST /auth/login` authenticates against the apiserver IAM endpoint and issues an `ebs:user` token.
+- `POST /auth/register` atomically creates a User and initial password through the apiserver IAM service.
+- `POST /auth/login` authenticates against the apiserver IAM endpoint and issues an `ebs:user` or `ebs:admin` token from `User.spec.admin`.
+- `PUT /auth/users/{name}/password` verifies the current password before changing the authenticated user's password.
+- `POST /auth/machineaccounts` creates a MachineAccount and credential for `ebs:admin` callers.
+- `POST /auth/runner-token` exchanges MachineAccount Basic credentials for a short-lived `ebs:runner` token.
+- MachineAccount `get/list/delete` proxying for `ebs:admin`, plus protected `get/list/update/patch/delete` management of non-admin Users.
 - Bearer JWT authentication with `HS256`.
 - Per `{sub}/{clientIP}` in-memory token bucket rate limiting.
 - Trusted upstream headers:

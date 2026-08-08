@@ -33,6 +33,7 @@ type Identity struct {
 func (i Identity) IsSystem() bool { return i.hasScope("ebs:system") }
 func (i Identity) IsUser() bool   { return i.hasScope("ebs:user") }
 func (i Identity) IsRunner() bool { return i.hasScope("ebs:runner") }
+func (i Identity) IsAdmin() bool  { return i.hasScope("ebs:admin") }
 func (i Identity) hasScope(want string) bool {
 	for _, scope := range i.Scopes {
 		if scope == want {
@@ -75,12 +76,27 @@ func newTokenManager(cfg Config) (*tokenManager, error) {
 }
 
 func (m *tokenManager) issueUser(subject string, now time.Time) (string, int64, error) {
+	return m.issue(subject, "", []string{"ebs:user"}, now, jwtTTL)
+}
+
+func (m *tokenManager) issueAdmin(subject string, now time.Time) (string, int64, error) {
+	return m.issue(subject, "", []string{"ebs:admin"}, now, jwtTTL)
+}
+
+func (m *tokenManager) issueRunner(runner string, now time.Time, ttl time.Duration) (string, int64, error) {
+	if ttl < 5*time.Minute || ttl > jwtMaxTTL {
+		return "", 0, errors.New("invalid runner token ttl")
+	}
+	return m.issue(runner, runner, []string{"ebs:runner"}, now, ttl)
+}
+
+func (m *tokenManager) issue(subject, runner string, scopes []string, now time.Time, ttl time.Duration) (string, int64, error) {
 	jtiBytes := make([]byte, 16)
 	if _, err := rand.Read(jtiBytes); err != nil {
 		return "", 0, fmt.Errorf("generate jti: %w", err)
 	}
-	expires := now.Add(jwtTTL).Unix()
-	claims := jwtClaims{Subject: subject, Scopes: []string{"ebs:user"}, Issuer: jwtIssuer, Audience: jwtAudience, IssuedAt: now.Unix(), NotBefore: now.Unix(), Exp: expires, JTI: hex.EncodeToString(jtiBytes)}
+	expires := now.Add(ttl).Unix()
+	claims := jwtClaims{Subject: subject, Runner: runner, Scopes: scopes, Issuer: jwtIssuer, Audience: jwtAudience, IssuedAt: now.Unix(), NotBefore: now.Unix(), Exp: expires, JTI: hex.EncodeToString(jtiBytes)}
 	token, err := m.sign(claims)
 	return token, expires, err
 }
@@ -176,7 +192,7 @@ func (m *tokenManager) validateClaims(c jwtClaims, now time.Time) error {
 	_, user := scopes["ebs:user"]
 	_, runner := scopes["ebs:runner"]
 	_, system := scopes["ebs:system"]
-	_, userAdmin := scopes["ebs:user-admin"]
+	_, admin := scopes["ebs:admin"]
 	if len(scopes) == 1 && user && c.Runner == "" {
 		return nil
 	}
@@ -186,7 +202,7 @@ func (m *tokenManager) validateClaims(c jwtClaims, now time.Time) error {
 	if len(scopes) == 1 && system && c.Runner == "" {
 		return nil
 	}
-	if len(scopes) == 2 && system && userAdmin && c.Runner == "" {
+	if len(scopes) == 1 && admin && c.Runner == "" {
 		return nil
 	}
 	return errors.New("invalid jwt scopes")

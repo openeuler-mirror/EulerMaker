@@ -32,7 +32,7 @@ func TestHealthzDoesNotRequireAuth(t *testing.T) {
 
 func TestRegisterCreatesUserWithoutIssuingToken(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/register" {
+		if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/users/register" {
 			t.Fatalf("unexpected upstream request %s %s", r.Method, r.URL.Path)
 		}
 		var input map[string]string
@@ -609,6 +609,10 @@ func newTestGateway(t *testing.T, upstream http.Handler, rate float64, burst int
 	}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		rec := httptest.NewRecorder()
+		if r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
+			_, _ = io.WriteString(rec, `{"metadata":{"name":"admin"},"spec":{"enabled":true,"admin":true}}`)
+			return rec.Result(), nil
+		}
 		if r.Method == http.MethodGet && (r.URL.Path == "/apis/iam.ebs/v1/users/alice" || r.URL.Path == "/apis/iam.ebs/v1/users/bob") {
 			name := strings.TrimPrefix(r.URL.Path, "/apis/iam.ebs/v1/users/")
 			_, _ = io.WriteString(rec, `{"metadata":{"name":"`+name+`"},"spec":{"enabled":true}}`)
