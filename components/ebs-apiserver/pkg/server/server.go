@@ -1,10 +1,12 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,10 +33,31 @@ import (
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
+	machineaccountstore "ebs-apiserver/pkg/registry/iam/machineaccount"
 	userstore "ebs-apiserver/pkg/registry/iam/user"
 	"ebs-apiserver/pkg/storage/es"
 	"ebs-apiserver/pkg/storage/esstore"
 )
+
+type readDeleteStorage struct{ store *esstore.Store }
+
+func (s *readDeleteStorage) New() runtime.Object     { return s.store.New() }
+func (s *readDeleteStorage) NewList() runtime.Object { return s.store.NewList() }
+func (s *readDeleteStorage) Destroy()                { s.store.Destroy() }
+func (s *readDeleteStorage) NamespaceScoped() bool   { return false }
+func (s *readDeleteStorage) GetSingularName() string { return s.store.GetSingularName() }
+func (s *readDeleteStorage) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
+	return s.store.Get(ctx, name, opts)
+}
+func (s *readDeleteStorage) List(ctx context.Context, opts *internalversion.ListOptions) (runtime.Object, error) {
+	return s.store.List(ctx, opts)
+}
+func (s *readDeleteStorage) Delete(ctx context.Context, name string, validate rest.ValidateObjectFunc, opts *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	return s.store.Delete(ctx, name, validate, opts)
+}
+func (s *readDeleteStorage) ConvertToTable(ctx context.Context, obj runtime.Object, opts runtime.Object) (*metav1.Table, error) {
+	return s.store.ConvertToTable(ctx, obj, opts)
+}
 
 func objDef() openapicommon.OpenAPIDefinition {
 	return openapicommon.OpenAPIDefinition{
@@ -114,6 +137,9 @@ var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"ebs-apiserver/pkg/apis/iam/v1.User":                            objDef(),
 	"ebs-apiserver/pkg/apis/iam/v1.UserSpec":                        objDef(),
 	"ebs-apiserver/pkg/apis/iam/v1.UserList":                        objDef(),
+	"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":                  objDef(),
+	"ebs-apiserver/pkg/apis/iam/v1.MachineAccountSpec":              objDef(),
+	"ebs-apiserver/pkg/apis/iam/v1.MachineAccountList":              objDef(),
 }
 
 const etcdPrefix = "/registry/ebs"
@@ -279,11 +305,11 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 			return nil, fmt.Errorf("ensure IAM indices: %w", err)
 		}
 		credentials := credential.NewStore(esClient)
-		iamGroupInfo, users := CreateIAMAPIGroupInfo(esClient, credentials)
+		iamGroupInfo, users, machines := CreateIAMAPIGroupInfo(esClient)
 		if err := srv.InstallAPIGroup(iamGroupInfo); err != nil {
 			return nil, err
 		}
-		iammodule.InstallInternalRoutes(srv, credentials, users)
+		iammodule.InstallInternalRoutes(srv, credentials, users, machines)
 	}
 	installProjectAliasRoutes(srv)
 	installRunnerJobAliasRoutes(srv)
@@ -291,13 +317,14 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	return srv, nil
 }
 
-func CreateIAMAPIGroupInfo(esClient *es.Client, credentials *credential.Store) (*genericapiserver.APIGroupInfo, *esstore.Store) {
+func CreateIAMAPIGroupInfo(esClient *es.Client) (*genericapiserver.APIGroupInfo, *esstore.Store, *esstore.Store) {
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(iamapi.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	storage := userstore.NewStorage()
 	userES := esstore.New(esClient, "user", "User", storage.User.(*genericregistry.Store))
-	userES.SetDeleteHook(credentials.Delete)
-	apiGroupInfo.VersionedResourcesStorageMap["v1"] = map[string]rest.Storage{"users": userES}
-	return &apiGroupInfo, userES
+	machineStorage := machineaccountstore.NewStorage()
+	machineES := esstore.New(esClient, "machineaccount", "MachineAccount", machineStorage.MachineAccount.(*genericregistry.Store))
+	apiGroupInfo.VersionedResourcesStorageMap["v1"] = map[string]rest.Storage{"users": userES, "machineaccounts": &readDeleteStorage{store: machineES}}
+	return &apiGroupInfo, userES, machineES
 }
 
 func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *es.Client) (*genericapiserver.APIGroupInfo, error) {

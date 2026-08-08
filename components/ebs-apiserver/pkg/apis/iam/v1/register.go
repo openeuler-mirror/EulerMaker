@@ -15,7 +15,7 @@ var (
 )
 
 func addKnownTypes(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(SchemeGroupVersion, &User{}, &UserList{})
+	scheme.AddKnownTypes(SchemeGroupVersion, &User{}, &UserList{}, &MachineAccount{}, &MachineAccountList{})
 	return nil
 }
 

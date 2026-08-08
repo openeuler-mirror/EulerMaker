@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	resourceName = "credential"
+	resourceName = "user"
 	memoryKiB    = 19456
 	iterations   = 2
 	parallelism  = 1
@@ -54,7 +54,8 @@ func (s *Store) SetPassword(ctx context.Context, username, password string) erro
 	if err := ValidatePassword(password); err != nil {
 		return err
 	}
-	if _, err := s.client.Get(ctx, "user", username); err != nil {
+	hit, err := s.client.Get(ctx, resourceName, username)
+	if err != nil {
 		if es.IsStatus(err, 404) {
 			return ErrUserNotFound
 		}
@@ -65,7 +66,18 @@ func (s *Store) SetPassword(ctx context.Context, username, password string) erro
 		return err
 	}
 	cred := Credential{PasswordHash: hash, PasswordUpdatedAt: time.Now().UTC()}
-	return s.put(ctx, username, cred)
+	return s.update(ctx, username, hit, cred)
+}
+
+func NewPasswordCredential(password string) (json.RawMessage, error) {
+	if err := ValidatePassword(password); err != nil {
+		return nil, err
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(Credential{PasswordHash: hash, PasswordUpdatedAt: time.Now().UTC()})
 }
 
 func (s *Store) Authenticate(ctx context.Context, username, password string) (bool, error) {
@@ -81,19 +93,12 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (bo
 		}
 		return false, err
 	}
-	userHit, err := s.client.Get(ctx, "user", username)
-	if err != nil {
-		if es.IsStatus(err, 404) {
-			return false, nil
-		}
-		return false, err
-	}
 	var user struct {
 		Spec struct {
 			Enabled *bool `json:"enabled"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(userHit.Document.Data, &user); err != nil {
+	if err := json.Unmarshal(hit.Document.Data, &user); err != nil {
 		return false, err
 	}
 	if user.Spec.Enabled == nil || !*user.Spec.Enabled {
@@ -128,42 +133,16 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (bo
 	return false, nil
 }
 
-func (s *Store) Delete(ctx context.Context, username string) error {
-	hit, err := s.client.Get(ctx, resourceName, username)
-	if err != nil {
-		if es.IsStatus(err, 404) {
-			return nil
-		}
-		return err
-	}
-	return s.client.Delete(ctx, resourceName, username, hit.SeqNo, hit.PrimaryTerm)
-}
-
-func (s *Store) put(ctx context.Context, username string, cred Credential) error {
-	data, err := json.Marshal(cred)
-	if err != nil {
-		return err
-	}
-	doc := es.Document{APIVersion: "iam.ebs/internal", Kind: "PasswordCredential", DocumentID: username, Metadata: es.Metadata{Name: username}, Data: data}
-	hit, err := s.client.Get(ctx, resourceName, username)
-	if err != nil {
-		if es.IsStatus(err, 404) {
-			_, err = s.client.Create(ctx, resourceName, username, doc)
-			return err
-		}
-		return err
-	}
-	_, err = s.client.Update(ctx, resourceName, username, doc, hit.SeqNo, hit.PrimaryTerm)
-	return err
-}
-
 func (s *Store) get(ctx context.Context, username string) (*es.Hit, Credential, error) {
 	hit, err := s.client.Get(ctx, resourceName, username)
 	if err != nil {
 		return nil, Credential{}, err
 	}
 	var cred Credential
-	if err := json.Unmarshal(hit.Document.Data, &cred); err != nil {
+	if len(hit.Document.Credential) == 0 {
+		return nil, Credential{}, &es.HTTPError{StatusCode: 404, Body: "credential not found"}
+	}
+	if err := json.Unmarshal(hit.Document.Credential, &cred); err != nil {
 		return nil, Credential{}, err
 	}
 	return hit, cred, nil
@@ -175,7 +154,7 @@ func (s *Store) update(ctx context.Context, username string, hit *es.Hit, cred C
 		return err
 	}
 	doc := hit.Document
-	doc.Data = data
+	doc.Credential = data
 	_, err = s.client.Update(ctx, resourceName, username, doc, hit.SeqNo, hit.PrimaryTerm)
 	return err
 }

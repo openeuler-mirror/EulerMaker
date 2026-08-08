@@ -99,7 +99,7 @@ func TestEnsureIAMIndices(t *testing.T) {
 	if err := client.EnsureIAMIndices(); err != nil {
 		t.Fatalf("ensure IAM indices: %v", err)
 	}
-	for _, index := range []string{"ebs-users", "ebs-user-credentials"} {
+	for _, index := range []string{"ebs-users", "ebs-machineaccounts"} {
 		if !created[index] {
 			t.Errorf("index %s was not created", index)
 		}

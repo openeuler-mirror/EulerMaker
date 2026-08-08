@@ -20,7 +20,6 @@ import (
 
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
-	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
@@ -72,13 +71,23 @@ func TestEnableIAMFlag(t *testing.T) {
 
 func TestIAMStorageUsesESWithoutWatch(t *testing.T) {
 	client := esclient.NewClientForTesting("http://unused", http.DefaultClient)
-	group, _ := CreateIAMAPIGroupInfo(client, credential.NewStore(client))
+	group, _, _ := CreateIAMAPIGroupInfo(client)
 	users := group.VersionedResourcesStorageMap["v1"]["users"]
 	if users == nil {
 		t.Fatal("users storage was not installed")
 	}
 	if _, ok := users.(rest.Watcher); ok {
 		t.Fatal("users unexpectedly implements watch")
+	}
+	machines := group.VersionedResourcesStorageMap["v1"]["machineaccounts"]
+	if machines == nil {
+		t.Fatal("machineaccounts storage was not installed")
+	}
+	if _, ok := machines.(rest.Creater); ok {
+		t.Fatal("machineaccounts unexpectedly implements create")
+	}
+	if _, ok := machines.(rest.Updater); ok {
+		t.Fatal("machineaccounts unexpectedly implements update")
 	}
 }
 
