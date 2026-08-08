@@ -53,3 +53,46 @@ func (in *UserList) DeepCopyObject() runtime.Object {
 	}
 	return nil
 }
+
+func (in *MachineAccount) DeepCopyInto(out *MachineAccount) {
+	*out = *in
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+}
+func (in *MachineAccount) DeepCopy() *MachineAccount {
+	if in == nil {
+		return nil
+	}
+	out := new(MachineAccount)
+	in.DeepCopyInto(out)
+	return out
+}
+func (in *MachineAccount) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+func (in *MachineAccountList) DeepCopyInto(out *MachineAccountList) {
+	*out = *in
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		out.Items = make([]MachineAccount, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&out.Items[i])
+		}
+	}
+}
+func (in *MachineAccountList) DeepCopy() *MachineAccountList {
+	if in == nil {
+		return nil
+	}
+	out := new(MachineAccountList)
+	in.DeepCopyInto(out)
+	return out
+}
+func (in *MachineAccountList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}

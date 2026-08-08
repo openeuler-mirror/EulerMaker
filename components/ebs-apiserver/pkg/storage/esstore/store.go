@@ -98,6 +98,10 @@ func (s *Store) Get(ctx context.Context, name string, _ *metav1.GetOptions) (run
 }
 
 func (s *Store) Create(ctx context.Context, obj runtime.Object, admission rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	return s.CreateWithCredential(ctx, obj, nil, admission, options)
+}
+
+func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, credential json.RawMessage, admission rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	if options == nil {
 		options = &metav1.CreateOptions{}
 	}
@@ -131,8 +135,12 @@ func (s *Store) Create(ctx context.Context, obj runtime.Object, admission rest.V
 	if err != nil {
 		return nil, err
 	}
+	doc.Credential = credential
 	version, err := s.client.Create(ctx, s.resourceName, id, doc)
 	if err != nil {
+		if es.IsStatus(err, 409) {
+			return nil, apierrors.NewAlreadyExists(s.resource, accessor.GetName())
+		}
 		return nil, s.apiError(err, accessor.GetName())
 	}
 	accessor.SetResourceVersion(encodeVersion(version.SeqNo, version.PrimaryTerm))
@@ -216,6 +224,7 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 	if err != nil {
 		return nil, false, err
 	}
+	doc.Credential = hit.Document.Credential
 	version, err := s.client.Update(ctx, s.resourceName, id, doc, hit.SeqNo, hit.PrimaryTerm)
 	if err != nil {
 		return nil, false, s.apiError(err, name)
@@ -264,6 +273,7 @@ func (s *Store) Delete(ctx context.Context, name string, admission rest.Validate
 				if docErr != nil {
 					return nil, false, docErr
 				}
+				doc.Credential = hit.Document.Credential
 				version, updateErr := s.client.Update(ctx, s.resourceName, id, doc, hit.SeqNo, hit.PrimaryTerm)
 				if updateErr != nil {
 					return nil, false, s.apiError(updateErr, name)
@@ -441,8 +451,12 @@ func (s *Store) documentFor(ctx context.Context, obj runtime.Object) (es.Documen
 	if accessor.GetNamespace() != "" {
 		id = accessor.GetNamespace() + "/" + id
 	}
+	apiVersion := "ebs/v1"
+	if s.resource.Group != "" && s.resource.Group != "ebs" {
+		apiVersion = s.resource.Group + "/v1"
+	}
 	return es.Document{
-		APIVersion: "ebs/v1", Kind: s.kind, DocumentID: id,
+		APIVersion: apiVersion, Kind: s.kind, DocumentID: id,
 		Metadata: es.Metadata{
 			Name: accessor.GetName(), Namespace: accessor.GetNamespace(),
 			CreationTimestamp: accessor.GetCreationTimestamp().UTC().Format(time.RFC3339Nano), Labels: labels,

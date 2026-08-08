@@ -14,17 +14,17 @@ import (
 )
 
 var indices = map[string]string{
-	"project":    "ebs-projects",
-	"snapshot":   "ebs-snapshots",
-	"build":      "ebs-builds",
-	"buildinfo":  "ebs-buildinfos",
-	"rpmrepo":    "ebs-rpmrepos",
-	"user":       "ebs-users",
-	"credential": "ebs-user-credentials",
+	"project":        "ebs-projects",
+	"snapshot":       "ebs-snapshots",
+	"build":          "ebs-builds",
+	"buildinfo":      "ebs-buildinfos",
+	"rpmrepo":        "ebs-rpmrepos",
+	"user":           "ebs-users",
+	"machineaccount": "ebs-machineaccounts",
 }
 
 var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo"}
-var iamResources = []string{"user", "credential"}
+var iamResources = []string{"user", "machineaccount"}
 
 const indexMapping = `{
   "settings":{"number_of_shards":1,"number_of_replicas":0},
@@ -41,7 +41,8 @@ const indexMapping = `{
         "value":{"type":"keyword"}
       }}
     }},
-    "data":{"type":"object","enabled":false}
+    "data":{"type":"object","enabled":false},
+    "credential":{"type":"object","enabled":false}
   }}
 }`
 
@@ -70,6 +71,7 @@ type Document struct {
 	DocumentID string          `json:"documentID"`
 	Metadata   Metadata        `json:"metadata"`
 	Data       json.RawMessage `json:"data"`
+	Credential json.RawMessage `json:"credential,omitempty"`
 }
 
 type Hit struct {

@@ -2,6 +2,7 @@ package credential
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -62,14 +63,11 @@ func TestAuthenticateRejectsDisabledUser(t *testing.T) {
 	}
 	credentialData, _ := json.Marshal(Credential{PasswordHash: hash, PasswordUpdatedAt: time.Now().UTC()})
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch {
-		case strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
-			doc := es.Document{APIVersion: "iam.ebs/internal", Kind: "PasswordCredential", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: credentialData}
+		if strings.Contains(req.URL.Path, "/ebs-users/") {
+			doc := es.Document{APIVersion: "iam.ebs/v1", Kind: "User", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":false}}`), Credential: credentialData}
 			body, _ := json.Marshal(map[string]interface{}{"_id": "alice", "_seq_no": 0, "_primary_term": 1, "_source": doc})
 			return httpResponse(http.StatusOK, string(body)), nil
-		case strings.Contains(req.URL.Path, "/ebs-users/"):
-			return httpResponse(http.StatusOK, `{"_id":"alice","_seq_no":0,"_primary_term":1,"_source":{"apiVersion":"iam.ebs/v1","kind":"User","documentID":"alice","metadata":{"name":"alice"},"data":{"metadata":{"name":"alice"},"spec":{"enabled":false}}}}`), nil
-		default:
+		} else {
 			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.String())
 			return nil, nil
 		}
@@ -85,24 +83,20 @@ func TestAuthenticateRejectsDisabledUser(t *testing.T) {
 }
 
 func TestCredentialLifecycleAndLockout(t *testing.T) {
-	var credentialDoc *es.Document
+	credentialData, _ := NewPasswordCredential("initial password value")
+	userDoc := es.Document{APIVersion: "iam.ebs/v1", Kind: "User", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":true}}`), Credential: credentialData}
 	seq := int64(0)
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch {
 		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/ebs-users/"):
-			return httpResponse(http.StatusOK, `{"_id":"alice","_seq_no":0,"_primary_term":1,"_source":{"apiVersion":"iam.ebs/v1","kind":"User","documentID":"alice","metadata":{"name":"alice"},"data":{"metadata":{"name":"alice"},"spec":{"enabled":true}}}}`), nil
-		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
-			if credentialDoc == nil {
-				return httpResponse(http.StatusNotFound, `{"error":"missing"}`), nil
-			}
-			body, _ := json.Marshal(map[string]interface{}{"_id": "alice", "_seq_no": seq, "_primary_term": int64(1), "_source": credentialDoc})
+			body, _ := json.Marshal(map[string]interface{}{"_id": "alice", "_seq_no": seq, "_primary_term": int64(1), "_source": userDoc})
 			return httpResponse(http.StatusOK, string(body)), nil
-		case req.Method == http.MethodPut && strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
+		case req.Method == http.MethodPut && strings.Contains(req.URL.Path, "/ebs-users/"):
 			var doc es.Document
 			if err := json.NewDecoder(req.Body).Decode(&doc); err != nil {
 				t.Fatalf("decode credential document: %v", err)
 			}
-			credentialDoc = &doc
+			userDoc = doc
 			seq++
 			body, _ := json.Marshal(map[string]int64{"_seq_no": seq, "_primary_term": 1})
 			return httpResponse(http.StatusOK, string(body)), nil
@@ -132,5 +126,36 @@ func TestCredentialLifecycleAndLockout(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("locked account authenticated")
+	}
+}
+
+func TestAuthenticateMachine(t *testing.T) {
+	secret := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	credentialData, err := NewMachineCredential(secret)
+	if err != nil {
+		t.Fatalf("new machine credential: %v", err)
+	}
+	doc := es.Document{APIVersion: "iam.ebs/v1", Kind: "MachineAccount", DocumentID: "runner-site-a", Metadata: es.Metadata{Name: "runner-site-a"}, Data: json.RawMessage(`{"metadata":{"name":"runner-site-a"},"spec":{"tokenTTLSeconds":86400}}`), Credential: credentialData}
+	seq := int64(0)
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.Method {
+		case http.MethodGet:
+			body, _ := json.Marshal(map[string]interface{}{"_id": "runner-site-a", "_seq_no": seq, "_primary_term": int64(1), "_source": doc})
+			return httpResponse(http.StatusOK, string(body)), nil
+		case http.MethodPut:
+			if err := json.NewDecoder(req.Body).Decode(&doc); err != nil {
+				t.Fatalf("decode update: %v", err)
+			}
+			seq++
+			return httpResponse(http.StatusOK, `{"_seq_no":1,"_primary_term":1}`), nil
+		default:
+			t.Fatalf("unexpected request: %s", req.Method)
+			return nil, nil
+		}
+	})}
+	store := NewStore(es.NewClientForTesting("http://elasticsearch", httpClient))
+	ttl, ok, err := store.AuthenticateMachine(context.Background(), "runner-site-a", secret)
+	if err != nil || !ok || ttl != 86400 {
+		t.Fatalf("authenticate machine: ttl=%d ok=%v err=%v", ttl, ok, err)
 	}
 }

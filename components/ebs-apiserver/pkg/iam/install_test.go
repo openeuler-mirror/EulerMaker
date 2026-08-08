@@ -2,8 +2,8 @@ package iam
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,23 +12,35 @@ import (
 	"github.com/emicklei/go-restful/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
-	"ebs-apiserver/pkg/iam/credential"
-	"ebs-apiserver/pkg/storage/es"
 )
 
 type fakeUserStorage struct {
-	user    *iamv1.User
-	deleted bool
+	user       *iamv1.User
+	deleted    bool
+	credential json.RawMessage
+}
+
+type fakeMachineStorage struct {
+	account    *iamv1.MachineAccount
+	credential json.RawMessage
+}
+
+func (f *fakeMachineStorage) CreateWithCredential(_ context.Context, obj runtime.Object, data json.RawMessage, _ rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
+	f.account = obj.(*iamv1.MachineAccount).DeepCopy()
+	f.credential = append(json.RawMessage(nil), data...)
+	return f.account.DeepCopy(), nil
+}
+
+func (f *fakeUserStorage) CreateWithCredential(ctx context.Context, obj runtime.Object, data json.RawMessage, validate rest.ValidateObjectFunc, opts *metav1.CreateOptions) (runtime.Object, error) {
+	f.credential = append(json.RawMessage(nil), data...)
+	return f.Create(ctx, obj, validate, opts)
 }
 
 func (f *fakeUserStorage) Create(_ context.Context, obj runtime.Object, _ rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
 	f.user = obj.(*iamv1.User).DeepCopy()
-	f.user.UID = types.UID("registration-test")
-	f.user.ResourceVersion = "v1:0:1"
 	return f.user.DeepCopy(), nil
 }
 
@@ -51,26 +63,9 @@ func (f *fakeUserStorage) Delete(_ context.Context, _ string, _ rest.ValidateObj
 }
 
 func TestRegisterCreatesEnabledUserAndCredential(t *testing.T) {
-	var credentialDocument es.Document
-	httpClient := &http.Client{Transport: iamRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch {
-		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/ebs-users/"):
-			return iamHTTPResponse(http.StatusOK, `{"_id":"alice","_seq_no":0,"_primary_term":1,"_source":{"apiVersion":"iam.ebs/v1","kind":"User","documentID":"alice","metadata":{"name":"alice"},"data":{"metadata":{"name":"alice"},"spec":{"enabled":false}}}}`), nil
-		case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
-			return iamHTTPResponse(http.StatusNotFound, `{"error":"missing"}`), nil
-		case req.Method == http.MethodPut && strings.Contains(req.URL.Path, "/ebs-user-credentials/"):
-			if err := json.NewDecoder(req.Body).Decode(&credentialDocument); err != nil {
-				t.Fatalf("decode credential: %v", err)
-			}
-			return iamHTTPResponse(http.StatusCreated, `{"_seq_no":0,"_primary_term":1}`), nil
-		default:
-			t.Fatalf("unexpected ES request: %s %s", req.Method, req.URL.String())
-			return nil, nil
-		}
-	})}
 	users := &fakeUserStorage{}
-	h := &Handler{credentials: credential.NewStore(es.NewClientForTesting("http://elasticsearch", httpClient)), users: users}
-	req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/register", strings.NewReader(`{"username":"alice","password":"correct password","displayName":"Alice","email":"alice@example.com"}`))
+	h := &Handler{users: users}
+	req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/users/register", strings.NewReader(`{"username":"alice","password":"correct password","displayName":"Alice","email":"alice@example.com"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	rec := httptest.NewRecorder()
@@ -84,8 +79,8 @@ func TestRegisterCreatesEnabledUserAndCredential(t *testing.T) {
 	if users.user.Spec.Enabled == nil || !*users.user.Spec.Enabled || users.user.Annotations != nil {
 		t.Fatalf("user was not finalized: %#v", users.user)
 	}
-	if credentialDocument.DocumentID != "alice" || len(credentialDocument.Data) == 0 {
-		t.Fatalf("credential was not created: %#v", credentialDocument)
+	if len(users.credential) == 0 {
+		t.Fatal("credential was not created")
 	}
 }
 
@@ -104,10 +99,24 @@ func TestValidRegistration(t *testing.T) {
 	}
 }
 
-type iamRoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f iamRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
-
-func iamHTTPResponse(status int, body string) *http.Response {
-	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+func TestRegisterMachineAccount(t *testing.T) {
+	machines := &fakeMachineStorage{}
+	h := &Handler{machines: machines}
+	secret := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	body := `{"name":"runner-site-a","clientSecret":"` + secret + `","tokenTTLSeconds":86400}`
+	req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/machineaccounts/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	response := restful.NewResponse(rec)
+	response.SetRequestAccepts(restful.MIME_JSON)
+	h.registerMachine(restful.NewRequest(req), response)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if machines.account == nil || machines.account.Name != "runner-site-a" || machines.account.Spec.TokenTTLSeconds != 86400 {
+		t.Fatalf("unexpected account: %#v", machines.account)
+	}
+	if len(machines.credential) == 0 {
+		t.Fatal("credential was not stored")
+	}
 }

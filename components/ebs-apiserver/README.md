@@ -2,9 +2,9 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，基于 `k8s.io/apiserver` 的 `GenericAPIServer` 实现，提供 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化。
 
-Job、Runner 使用 etcd 并支持 list/watch；Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch，支持 CRUD、selector 和分页但不支持 watch。同一资源不会在两种存储之间双写。
+Job、Runner 使用 etcd并支持list/watch；Project、Snapshot、Build、BuildInfo、RpmRepo使用Elasticsearch，支持CRUD、selector和分页但不支持watch。
 
-使用 `--enable-iam` 可以启用内置用户管理模块。User 对象和密码凭据分别存储在 Elasticsearch 的 `ebs-users`、`ebs-user-credentials` 索引中；User 使用标准资源 API，密码凭据仅通过内部认证接口访问。
+使用 `--enable-iam` 启用内置 IAM 模块，提供 User 和 MachineAccount 管理及认证能力。
 
 ## 架构
 
@@ -31,6 +31,7 @@ ebs-apiserver
 | Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
 | Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
 | User（可选） | Elasticsearch | - | `/apis/iam.ebs/v1/users` | 否 | - |
+| MachineAccount（可选） | Elasticsearch | - | `/apis/iam.ebs/v1/machineaccounts` | 否 | - |
 
 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 的 Project API 表达业务归属；全局 API 用于跨 Project list，只有 Job 支持全局 watch。Project API 会在 apiserver 内部重写到 scoped storage 路径，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。
 

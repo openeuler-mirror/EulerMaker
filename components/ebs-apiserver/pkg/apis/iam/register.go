@@ -18,8 +18,8 @@ var (
 )
 
 func addKnownTypes(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(SchemeGroupVersion, &iamv1.User{}, &iamv1.UserList{})
-	scheme.AddKnownTypes(schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}, &iamv1.User{}, &iamv1.UserList{})
+	scheme.AddKnownTypes(SchemeGroupVersion, &iamv1.User{}, &iamv1.UserList{}, &iamv1.MachineAccount{}, &iamv1.MachineAccountList{})
+	scheme.AddKnownTypes(schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}, &iamv1.User{}, &iamv1.UserList{}, &iamv1.MachineAccount{}, &iamv1.MachineAccountList{})
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }
