@@ -48,3 +48,23 @@ func TestTokenManagerRejectsShortKey(t *testing.T) {
 		t.Fatal("expected short key to be rejected")
 	}
 }
+
+func TestTokenManagerAcceptsOnlyUnifiedAdminScope(t *testing.T) {
+	manager := &tokenManager{key: []byte("0123456789abcdef0123456789abcdef")}
+	now := time.Unix(1790000000, 0)
+	base := jwtClaims{
+		Subject: "admin", Issuer: jwtIssuer, Audience: jwtAudience,
+		IssuedAt: now.Unix(), NotBefore: now.Unix(), Exp: now.Add(time.Hour).Unix(), JTI: "admin-token",
+	}
+	base.Scopes = []string{"ebs:admin"}
+	if err := manager.validateClaims(base, now); err != nil {
+		t.Fatalf("expected unified admin scope to be valid: %v", err)
+	}
+	for _, scopes := range [][]string{{"ebs:system", "ebs:admin"}} {
+		claims := base
+		claims.Scopes = scopes
+		if err := manager.validateClaims(claims, now); err == nil {
+			t.Fatalf("expected scopes %#v to be rejected", scopes)
+		}
+	}
+}
