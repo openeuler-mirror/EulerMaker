@@ -4,14 +4,13 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
 
-apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块。IAM 模块注册 User 和 MachineAccount API，并提供仅供 gateway 调用的用户注册、密码认证、机机凭据认证接口。User、MachineAccount 及各自凭据存入 Elasticsearch；Project 的 owner/member 关系仅以用户标识 labels 保存，apiserver 不解释这些 labels 的权限语义，也不执行 Project 用户鉴权。
-
-Snapshot、Build、BuildInfo、RpmRepo、Job 使用 Project API 表达项目归属。Project API 由轻量路由适配层重写到 generic apiserver 的 scoped storage 路径。Job 同时提供全局系统 API，供调度器跨 Project list/watch；其余 Project 级资源的全局 API 只提供跨 Project 查询，不提供 watch。
+apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块，提供 User、MachineAccount 资源及相关认证接口。
 
 资源存储分配如下：
 
 - Job、Runner 使用 etcd。Runner 表示执行节点；两类资源需要可靠的 resourceVersion 和 list/watch，用于调度、心跳和执行状态协作。
-- Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch。这些资源需要 CRUD、分页、label selector、有限的 field selector 和搜索能力，但不提供 watch。
+- Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch，提供分页、selector 和搜索能力，不支持 watch。
+- User、MachineAccount 使用 Elasticsearch和专用IAM Storage，公开对象与认证字段保存在同一文档中，不支持watch。
 
 ## 架构
 
@@ -122,8 +121,6 @@ DELETE /apis/iam.ebs/v1/users/{name}
 
 GET    /apis/iam.ebs/v1/machineaccounts
 GET    /apis/iam.ebs/v1/machineaccounts/{name}
-PUT    /apis/iam.ebs/v1/machineaccounts/{name}
-PATCH  /apis/iam.ebs/v1/machineaccounts/{name}
 DELETE /apis/iam.ebs/v1/machineaccounts/{name}
 ```
 
@@ -136,11 +133,12 @@ metadata:
   name: alice
 spec:
   enabled: true
+  admin: false
   displayName: Alice
   email: alice@example.com
 ```
 
-MachineAccount 保存机机账号状态和 Runner token 有效期配置：
+MachineAccount 保存 Runner token 有效期配置：
 
 ```yaml
 apiVersion: iam.ebs/v1
@@ -148,16 +146,15 @@ kind: MachineAccount
 metadata:
   name: runner-site-a
 spec:
-  enabled: true
   tokenTTLSeconds: 3600
 ```
 
-`metadata.name` 是 client ID，满足 DNS1123 label 且全局唯一。`tokenTTLSeconds` 由管理员设置，范围为 300～86400 秒，省略时默认为 3600 秒；客户端不能在交换请求中指定或扩大有效期。`spec.enabled=false` 立即阻止新的 token 交换，但不撤销已经签发的短期 token。
+`metadata.name` 是 client ID，满足 DNS1123 label 且全局唯一。`tokenTTLSeconds` 在创建时设置，范围为 300～86400 秒，省略时默认为 3600 秒；客户端不能在交换请求中指定或扩大有效期。
 
 IAM 模块还注册仅供 gateway 使用的内部接口：
 
 ```text
-POST /internal/iam/v1/register
+POST /internal/iam/v1/users/register
 PUT  /internal/iam/v1/users/{name}/password
 POST /internal/iam/v1/authenticate
 POST /internal/iam/v1/machineaccounts/register
@@ -179,9 +176,9 @@ POST /internal/iam/v1/machineaccounts/{name}/authenticate
 {"username":"alice"}
 ```
 
-注册接口以 201 返回成功结果，并提供“创建普通 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`，请求不能设置 metadata、labels、scope、enabled 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。
+注册接口以 201 返回成功结果，并提供“创建普通 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`、`spec.admin` 固定为 `false`，请求不能设置 metadata、labels、scope、enabled、admin 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。
 
-由于 User 和凭据位于不同的 Elasticsearch 文档，注册实现必须避免向外暴露可认证的部分状态：先以 create-only 写入 `enabled=false` 的注册中 User，再写入凭据，最后通过乐观并发将 User 启用并清除注册中标记。任一步骤失败时执行补偿删除；注册中的 User 永远不能认证。相同用户名的重试若遇到已超过 10 分钟的未完成注册记录，应在确认记录仍处于原注册版本后清理并重试；仍在处理中的注册和已完成 User 返回 409。该流程保证接口成功时 User 与凭据均可用，失败或实例异常退出时账号不可认证，并通过后续同名注册请求回收超时中间状态，但不承诺 Elasticsearch 跨文档物理事务。
+apiserver 将 User 对象和 Argon2id 密码哈希通过一次 create-only 请求写入同一 ES 文档。创建成功后账号即可认证；名称已存在返回 409，不需要注册中状态或补偿流程。
 
 MachineAccount 和初始 client secret 通过单一内部接口创建。请求为：
 
@@ -193,7 +190,7 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 }
 ```
 
-接口以201返回`{"name":"runner-site-a"}`，不回显secret。`name`满足DNS1123 label；client secret由管理端使用密码学安全随机源生成，采用无`:`的base64url编码，原始熵不少于32字节且编码长度不超过256字符；`tokenTTLSeconds`范围为300～86400，省略时默认为3600。apiserver创建MachineAccount对象和Argon2id凭据哈希，任一步骤失败均不保留可认证账号；名称已存在返回409，非法请求返回400。系统不提供设置、修改或轮换MachineAccount credential的接口。删除MachineAccount时同步删除credential文档。
+接口以201返回`{"name":"runner-site-a"}`，不回显secret。`name`满足DNS1123 label；client secret由管理端使用密码学安全随机源生成，采用无`:`的base64url编码，原始熵不少于32字节且编码长度不超过256字符；`tokenTTLSeconds`范围为300～86400，省略时默认为3600。apiserver将MachineAccount对象和Argon2id凭据哈希通过一次create-only请求写入同一ES文档；名称已存在返回409，非法请求返回400。
 
 机机认证请求为：
 
@@ -211,7 +208,7 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 }
 ```
 
-认证接口不签发 JWT。对象不存在、`spec.enabled=false`、credential 不存在、secret 错误或账号锁定均返回相同的 401 响应；同一账号连续失败 5 次后锁定 15 分钟，成功后清零失败次数。Gateway 使用认证成功响应中的 `tokenTTLSeconds` 决定有效期，Runner 名称由交换请求提供并由 Gateway 独立校验。
+认证接口不签发 JWT。对象不存在、credential 不存在、secret 错误或账号锁定均返回相同的 401 响应；同一账号连续失败 5 次后锁定 15 分钟，成功后清零失败次数。Gateway 使用认证成功响应中的 `tokenTTLSeconds` 决定有效期，Runner 名称由交换请求提供并由 Gateway 独立校验。
 
 设置密码请求：
 
@@ -242,8 +239,9 @@ REST storage 按资源静态路由：
 | Storage | 资源 | 能力 |
 |---------|------|------|
 | generic etcd store | Job、Runner | CRUD、List、Watch、原生 resourceVersion |
-| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo、User、MachineAccount | CRUD、List、分页、label selector、有限的 field selector、搜索 |
-| IAM credential store | PasswordCredential、MachineCredential | 仅供 IAM 模块设置和验证用户密码或机机 secret，不注册为 REST 资源 |
+| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo | CRUD、List、分页、label selector、有限的 field selector、搜索 |
+| User store | User | 单文档CRUD、List、密码设置和认证 |
+| MachineAccount store | MachineAccount | 单文档内部原子创建、Get、List、Delete和凭据认证 |
 
 Job、Runner 的 `/status` 子资源必须使用对应的 etcd store；ES-only 资源的 `/status` 和 Build 的 `/abort` 必须使用对应的 ESStore。子资源不能回退到另一种存储。
 
@@ -290,12 +288,57 @@ ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
 ebs-users
-ebs-user-credentials
 ebs-machineaccounts
-ebs-machineaccount-credentials
 ```
 
-`ebs-users` 保存完整 User 对象。`ebs-user-credentials` 使用 User 名作为文档 ID，保存 `passwordHash`、`passwordUpdatedAt`、`failedAttempts` 和 `lockedUntil`。`ebs-machineaccounts` 保存完整 MachineAccount 对象，`ebs-machineaccount-credentials` 使用 MachineAccount 名作为文档 ID，保存 `secretHash`、`secretCreatedAt`、`failedAttempts` 和 `lockedUntil`。资源 API 的 Get/List 响应不读取或返回 credential 文档。删除 User 或 MachineAccount 时，IAM 模块同步删除对应 credential 文档。
+`ebs-users` 使用User名称作为文档ID，每个文档同时保存公开对象和内部credential字段：
+
+```json
+{
+  "apiVersion": "iam.ebs/v1",
+  "kind": "User",
+  "metadata": {
+    "name": "alice"
+  },
+  "spec": {
+    "enabled": true,
+    "admin": false,
+    "displayName": "Alice",
+    "email": "alice@example.com"
+  },
+  "credential": {
+    "passwordHash": "$argon2id$...",
+    "passwordUpdatedAt": "2026-08-08T00:00:00Z",
+    "failedAttempts": 0,
+    "lockedUntil": null
+  }
+}
+```
+
+User的REST Storage是专用实现。注册接口写入包含credential的完整文档；GET/List只返回公开对象；PUT/PATCH保留已有credential；密码设置和认证接口读取或更新credential字段；DELETE删除整个文档。认证失败计数、锁定时间和密码修改使用ES的`seq_no`、`primary_term`执行乐观并发更新。
+
+`ebs-machineaccounts` 使用MachineAccount名称作为文档ID，每个文档同时保存公开对象和内部credential字段：
+
+```json
+{
+  "apiVersion": "iam.ebs/v1",
+  "kind": "MachineAccount",
+  "metadata": {
+    "name": "runner-site-a"
+  },
+  "spec": {
+    "tokenTTLSeconds": 3600
+  },
+  "credential": {
+    "secretHash": "$argon2id$...",
+    "secretCreatedAt": "2026-08-08T00:00:00Z",
+    "failedAttempts": 0,
+    "lockedUntil": null
+  }
+}
+```
+
+MachineAccount的REST Storage是专用实现。内部创建接口写入完整文档，认证接口读取credential字段；GET/List只构造并返回`apiVersion`、`kind`、`metadata`和`spec`，不得序列化credential。认证失败计数和锁定时间使用ES的`seq_no`、`primary_term`执行乐观并发更新。DELETE删除单个文档，删除成功后账号不能继续认证。
 
 apiserver 启动时检查并创建全部 ES-only 资源索引。生产环境应使用显式 index template/mapping，不依赖动态 mapping 或首次写入自动建索引。
 
@@ -375,7 +418,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - `RpmRepo` 创建默认 `status.phase = Pending`。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Registering`。
-- `User.spec.enabled` 默认为 `true`。
+- `User.spec.enabled` 默认为 `true`，`User.spec.admin` 默认为 `false`。
 
 默认值还包括：
 
@@ -391,7 +434,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `dc`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。User 的 `metadata.name` 是全局唯一的稳定用户标识，与普通用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
-- MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。MachineAccount 不得携带 client secret、密码、JWT scope 或 Project 权限字段。
+- MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
 
 ## 启动参数
 
@@ -410,7 +453,7 @@ components/ebs-apiserver/cmd/server/main.go
 | `--es-servers` | `http://elasticsearch:9200` | Elasticsearch 地址 |
 | `--enable-iam` | `false` | 启用内置 User、MachineAccount API和凭据认证模块 |
 
-IAM 模块只增加 `--enable-iam` 这一项启动配置。User、MachineAccount 和 credential 索引名称、Argon2id 参数、失败计数及锁定策略使用模块固定值；Elasticsearch 连接复用 `--es-servers`。
+IAM 模块只增加 `--enable-iam` 这一项启动配置。User、MachineAccount索引名称、Argon2id参数、失败计数及锁定策略使用模块固定值；Elasticsearch连接复用`--es-servers`。
 
 示例：
 

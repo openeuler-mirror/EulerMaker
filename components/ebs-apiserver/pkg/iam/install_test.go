@@ -76,7 +76,7 @@ func TestRegisterCreatesEnabledUserAndCredential(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if users.user.Spec.Enabled == nil || !*users.user.Spec.Enabled || users.user.Annotations != nil {
+	if users.user.Spec.Enabled == nil || !*users.user.Spec.Enabled || users.user.Spec.Admin || users.user.Annotations != nil {
 		t.Fatalf("user was not finalized: %#v", users.user)
 	}
 	if len(users.credential) == 0 {
