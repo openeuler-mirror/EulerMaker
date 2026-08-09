@@ -78,7 +78,7 @@ PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status
 status:
   phase: Running
   stage: Pending
-  runner: runner-dc-aarch64-01
+  runner: runner-ct-aarch64-01
   startTime: "2026-06-09T10:00:00Z"
 ```
 
@@ -106,7 +106,7 @@ type JobSpec struct {
 
 | 字段 | 调度用途 |
 |------|----------|
-| `runtime` | 执行运行时类型，默认 `dc`；首版暂不参与资源计算，可用于后续运行时亲和或隔离策略 |
+| `runtime` | 执行运行时类型，默认 `ct`；首版暂不参与资源计算，可用于后续运行时亲和或隔离策略 |
 | `runtimeSpec` | 运行时专属配置，首版暂不参与调度 |
 | `timeoutSeconds` | 最大运行秒数，首版暂不参与调度，可由 runner 执行侧用于超时控制 |
 | `resources.requests` | 判断 Runner `status.allocatable` 是否满足资源请求 |
@@ -220,7 +220,7 @@ score = labelScore * 40 + resourceScore * 40 + heartbeatScore * 20
 status:
   phase: Running
   stage: Pending
-  runner: runner-dc-aarch64-01
+  runner: runner-ct-aarch64-01
   startTime: "2026-06-09T10:00:00Z"
 ```
 
@@ -241,16 +241,16 @@ Job 使用 `nodeSelector` 表达对 Runner 标签的硬约束。首版采用精�
 ```yaml
 metadata:
   labels:
-    ebs.io/runner-type: dc
+    ebs.io/runner-type: ct
     ebs.io/runner-arch: aarch64
 ```
 
-例如指定只调度到 dc 类型 aarch64 Runner：
+例如指定只调度到 ct 类型 aarch64 Runner：
 
 ```yaml
 spec:
   nodeSelector:
-    ebs.io/runner-type: dc
+    ebs.io/runner-type: ct
     ebs.io/runner-arch: aarch64
 ```
 

@@ -131,7 +131,7 @@ type RunnerSpec struct {
 
 | 字段 | 说明 |
 |------|------|
-| `type` | 执行机类型：`dc` / `vm` / `hw` |
+| `type` | 执行机类型：`ct` / `vm` / `hw` |
 | `arch` | CPU 架构：`aarch64` / `x86_64` |
 | `hostname` | 执行机宿主机名 |
 | `unschedulable` | 是否禁止调度新 Job |
@@ -145,13 +145,13 @@ type RunnerSpec struct {
 apiVersion: ebs/v1
 kind: Runner
 metadata:
-  name: runner-dc-aarch64-01
+  name: runner-ct-aarch64-01
   labels:
-    ebs.io/runner-type: dc
+    ebs.io/runner-type: ct
     ebs.io/runner-arch: aarch64
     ebs.io/zone: local
 spec:
-  type: dc
+  type: ct
   arch: aarch64
   hostname: build-host-01
 ```
@@ -299,11 +299,11 @@ Runner agent 的执行逻辑应按 kubelet 管理 Pod sandbox/container 的思�
 
 | `spec.type` | 执行方式 | 说明 |
 |-------------|----------|------|
-| `dc` | Docker / 容器环境 | 常规包构建 |
+| `ct` | 容器环境 | 常规包构建 |
 | `vm` | 虚拟机环境 | 需要更强隔离的构建 |
 | `hw` | 物理机环境 | 需要裸机能力的任务 |
 
-`Job.spec.runtime` 默认值为 `dc`。Runner 应先判断自身 `spec.type` 是否能承接该 runtime，再把 `runtimeSpec` 交给对应 executor 解释。公共控制逻辑和执行器逻辑建议分离：
+`Job.spec.runtime` 默认值为 `ct`。Runner 应先判断自身 `spec.type` 是否能承接该 runtime，再把 `runtimeSpec` 交给对应 executor 解释。公共控制逻辑和执行器逻辑建议分离：
 
 ```text
 runner agent
@@ -311,16 +311,16 @@ runner agent
   ├── heartbeat: Runner.status 上报
   ├── job worker: Job 生命周期推进
   └── runtime manager
-      ├── dc executor: Docker 容器生命周期
+      ├── ct executor: 容器生命周期
       ├── vm executor: 虚拟机生命周期
       └── hw executor: 物理机/宿主机执行生命周期
 ```
 
 如果一个进程需要管理多类执行能力，应注册多个 Runner 对象，或明确拆分为多个 runner 实例，避免单个 `Runner.spec.type` 同时表达多种能力。
 
-### 8.1 DC 容器运行时
+### 8.1 CT 容器运行时
 
-`dc` executor 负责启动实际业务容器，而不是在 runner agent 进程内直接执行构建命令。runner agent 容器自身只是控制面进程，业务容器应作为独立容器创建、启动、等待、停止和清理。
+`ct` executor 负责启动实际业务容器，而不是在 runner agent 进程内直接执行构建命令。runner agent 容器自身只是控制面进程，业务容器应作为独立容器创建、启动、等待、停止和清理。
 
 推荐的容器生命周期：
 
@@ -337,10 +337,10 @@ runner agent
 10. 收集 resultDir，清理容器和临时目录
 ```
 
-`runtimeSpec` 对 `dc` runtime 可采用以下结构，字段由 dc executor 解释：
+`runtimeSpec` 对 `ct` runtime 可采用以下结构，字段由 ct executor 解释：
 
 ```yaml
-runtime: dc
+runtime: ct
 runtimeSpec:
   image: openeuler:22.03
   imagePullPolicy: IfNotPresent
@@ -433,7 +433,7 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--gateway` | `https://ebs-gateway:8443` | gateway 地址 |
 | `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
 | `--name` | hostname | Runner 资源名称 |
-| `--type` | `dc` | Runner 类型：`dc` / `vm` / `hw` |
+| `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |
 | `--root-dir` | `/var/lib/ebs-runner` | Runner 工作目录和结果目录的根路径 |
 | `--heartbeat-interval` | `30s` | 心跳上报周期 |
 | `--gateway-ca` | 无 | gateway 服务端证书的 CA 文件 |
@@ -445,13 +445,13 @@ Runner 启动时根据运行环境获取架构：`GOARCH=amd64` 映射为 `x86_6
 
 ```yaml
 services:
-  ebs-runner-dc-1:
+  ebs-runner-ct-1:
     image: ebs-runner:latest
     command:
       - --gateway=https://ebs-gateway:8443
       - --machine-credential-file=/run/secrets/runner-machine-credential
-      - --name=runner-dc-aarch64-01
-      - --type=dc
+      - --name=runner-ct-aarch64-01
+      - --type=ct
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - runner-cache:/var/lib/ebs-runner
@@ -473,4 +473,4 @@ secrets:
 - Runner 禁止对所有资源执行 DELETE。
 - `/runners/{runner}/jobs` 的过滤由 apiserver依据可信身份强制执行，客户端 `fieldSelector` 不可信。
 - Runner 不应拥有直接访问 etcd、Elasticsearch 的权限。
-- DC 类型 Runner 如需挂载 Docker socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。
+- CT 类型 Runner 如需挂载控制 socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。

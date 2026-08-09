@@ -451,7 +451,7 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 
 - JWT `sub`、`runner` claim 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
 - 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.type`、`spec.arch`、`spec.hostname`。
-- type、arch labels 必须分别与 spec 字段一致；`spec.type` 只允许 `dc`、`vm`、`hw`，当前 `spec.arch` 只允许 `aarch64`、`x86_64`。
+- type、arch labels 必须分别与 spec 字段一致；`spec.type` 只允许 `ct`、`vm`、`hw`，当前 `spec.arch` 只允许 `aarch64`、`x86_64`。
 - `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable`、`spec.taints` 或其他管理字段。
 
 不满足条件返回 400 或 403且不转发；对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并按 4.8.1 节发起受限 PUT/PATCH。
