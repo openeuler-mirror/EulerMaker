@@ -238,31 +238,56 @@ func (a *Agent) watchLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		startedAt := time.Now()
 		err := a.watchOnce(ctx)
 		if errors.Is(err, context.Canceled) {
 			return
 		}
-		wait := backoff
+		watchDuration := time.Since(startedAt)
+		if watchDuration >= 30*time.Second {
+			backoff = time.Second
+		}
+		wait := time.Duration(0)
 		if err != nil {
+			wait = backoff
 			log.Printf("watch jobs failed: %v", err)
 			var statusErr StatusError
 			if errors.As(err, &statusErr) {
 				if statusErr.Code == 410 {
 					a.resetLastResourceVersion()
+					backoff = time.Second
+					continue
 				}
 				if statusErr.Code == 429 && statusErr.RetryAfter > wait {
 					wait = statusErr.RetryAfter
 				}
 			}
+		} else {
+			backoff = time.Second
+			if watchDuration < time.Second {
+				wait = backoff
+			}
 		}
 
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
 		}
-		if backoff < 30*time.Second {
+		if err != nil && watchDuration < 30*time.Second && backoff < 30*time.Second {
 			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
 		}
 	}
 }

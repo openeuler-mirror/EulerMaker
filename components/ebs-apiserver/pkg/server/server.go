@@ -207,6 +207,7 @@ func (o *EulerMakerServerOptions) Complete() error {
 
 func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig, error) {
 	config := genericapiserver.NewRecommendedConfig(Codecs)
+	config.LongRunningFunc = runnerJobLongRunningCheck(config.LongRunningFunc)
 	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
 		func(ref openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
 			return ebsOpenAPIDefinitions
