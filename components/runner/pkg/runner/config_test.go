@@ -23,17 +23,9 @@ func TestRuntimeArchMapsGoArch(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRequiresToken(t *testing.T) {
-	_, err := LoadConfig([]string{"--token=", "--name=runner-a", "--arch=x86_64"})
+func TestLoadConfigRequiresMachineCredentialFile(t *testing.T) {
+	_, err := LoadConfig([]string{"--machine-credential-file=", "--name=runner-a"})
 	if err == nil {
-		t.Fatalf("expected token error")
-	}
-}
-
-func TestLoadConfigDoesNotReadTokenFromEnvironment(t *testing.T) {
-	t.Setenv("EBS_TOKEN", "env-token")
-	_, err := LoadConfig([]string{"--name=runner-a", "--arch=x86_64"})
-	if err == nil {
-		t.Fatalf("expected token error")
+		t.Fatalf("expected machine credential file error")
 	}
 }

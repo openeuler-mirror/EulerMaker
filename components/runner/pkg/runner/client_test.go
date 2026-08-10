@@ -124,13 +124,57 @@ func TestClientWatchAssignedJobsReturnsWatchError(t *testing.T) {
 	}
 }
 
+func TestClientRefreshesAndRetriesUnauthorizedOnce(t *testing.T) {
+	tokens := &testTokenSource{token: "token-a", refreshed: "token-b"}
+	calls := 0
+	client, err := NewClient("https://gateway.example", tokens, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			if req.Header.Get("Authorization") != "Bearer token-a" {
+				t.Fatalf("first auth = %q", req.Header.Get("Authorization"))
+			}
+			return response(http.StatusUnauthorized, "unauthorized"), nil
+		}
+		if req.Header.Get("Authorization") != "Bearer token-b" {
+			t.Fatalf("retry auth = %q", req.Header.Get("Authorization"))
+		}
+		return response(http.StatusUnauthorized, "still unauthorized"), nil
+	})})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	err = client.PatchRunnerStatus(context.Background(), "runner-a", RunnerStatus{Phase: "Idle"})
+	if err == nil {
+		t.Fatal("expected unauthorized error")
+	}
+	if calls != 2 || tokens.refreshCalls != 1 {
+		t.Fatalf("calls=%d refreshes=%d", calls, tokens.refreshCalls)
+	}
+}
+
 func newTestClient(t *testing.T, fn roundTripFunc) *Client {
 	t.Helper()
-	client, err := NewClient("https://gateway.example", "token-a", &http.Client{Transport: fn})
+	client, err := NewClient("https://gateway.example", &testTokenSource{token: "token-a", refreshed: "token-b"}, &http.Client{Transport: fn})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
 	return client
+}
+
+type testTokenSource struct {
+	token        string
+	refreshed    string
+	refreshCalls int
+}
+
+func (s *testTokenSource) Token(context.Context) (string, error) { return s.token, nil }
+
+func (s *testTokenSource) RefreshAfterUnauthorized(_ context.Context, rejected string) (string, error) {
+	s.refreshCalls++
+	if rejected == s.token {
+		s.token = s.refreshed
+	}
+	return s.token, nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

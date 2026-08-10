@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -154,6 +155,7 @@ func TestRuntimeManagerRejectsMismatchedRuntime(t *testing.T) {
 }
 
 type fakeContainerRuntime struct {
+	mu        sync.Mutex
 	created   ContainerSpec
 	started   bool
 	stopped   bool
@@ -194,13 +196,18 @@ func (f *fakeContainerRuntime) Logs(ctx context.Context, _ string, output io.Wri
 }
 
 func (f *fakeContainerRuntime) Wait(context.Context, string) (int, error) {
-	if f.waitBlock != nil {
-		<-f.waitBlock
+	f.mu.Lock()
+	waitBlock := f.waitBlock
+	f.mu.Unlock()
+	if waitBlock != nil {
+		<-waitBlock
 	}
 	return f.exitCode, nil
 }
 
 func (f *fakeContainerRuntime) Stop(context.Context, string, time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.stopped = true
 	if f.waitBlock != nil {
 		close(f.waitBlock)
@@ -210,6 +217,8 @@ func (f *fakeContainerRuntime) Stop(context.Context, string, time.Duration) erro
 }
 
 func (f *fakeContainerRuntime) Kill(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.waitBlock != nil {
 		close(f.waitBlock)
 		f.waitBlock = nil

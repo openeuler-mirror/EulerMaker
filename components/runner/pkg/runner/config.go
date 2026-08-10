@@ -12,15 +12,15 @@ import (
 )
 
 type Config struct {
-	Gateway            string
-	Token              string
-	Name               string
-	Type               string
-	Arch               string
-	RootDir            string
-	HeartbeatInterval  time.Duration
-	InsecureSkipVerify bool
-	GatewayCA          string
+	Gateway               string
+	MachineCredentialFile string
+	Name                  string
+	Type                  string
+	Arch                  string
+	RootDir               string
+	HeartbeatInterval     time.Duration
+	InsecureSkipVerify    bool
+	GatewayCA             string
 }
 
 func LoadConfig(args []string) (Config, error) {
@@ -36,10 +36,9 @@ func LoadConfig(args []string) (Config, error) {
 
 	fs := flag.NewFlagSet("ebs-runner", flag.ContinueOnError)
 	fs.StringVar(&cfg.Gateway, "gateway", cfg.Gateway, "ebs-gateway address")
-	fs.StringVar(&cfg.Token, "token", cfg.Token, "gateway bearer token")
+	fs.StringVar(&cfg.MachineCredentialFile, "machine-credential-file", cfg.MachineCredentialFile, "MachineAccount credential JSON file")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
-	fs.StringVar(&cfg.Arch, "arch", cfg.Arch, "runner architecture")
 	fs.StringVar(&cfg.RootDir, "root-dir", cfg.RootDir, "runner root directory")
 	fs.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", cfg.HeartbeatInterval, "heartbeat interval")
 	fs.BoolVar(&cfg.InsecureSkipVerify, "insecure-skip-verify", cfg.InsecureSkipVerify, "skip gateway TLS verification")
@@ -51,8 +50,8 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.Gateway == "" {
 		return Config{}, fmt.Errorf("gateway is required")
 	}
-	if cfg.Token == "" {
-		return Config{}, fmt.Errorf("token is required")
+	if cfg.MachineCredentialFile == "" {
+		return Config{}, fmt.Errorf("machine credential file is required")
 	}
 	if cfg.Name == "" {
 		return Config{}, fmt.Errorf("runner name is required")
@@ -60,8 +59,8 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.Type != "ct" && cfg.Type != "vm" && cfg.Type != "hw" {
 		return Config{}, fmt.Errorf("runner type must be one of ct, vm, hw")
 	}
-	if cfg.Arch == "" {
-		return Config{}, fmt.Errorf("runner arch is required")
+	if cfg.Arch != "aarch64" && cfg.Arch != "x86_64" {
+		return Config{}, fmt.Errorf("unsupported runtime architecture %q", cfg.Arch)
 	}
 	if cfg.RootDir == "" {
 		return Config{}, fmt.Errorf("runner root dir is required")
