@@ -6,6 +6,7 @@ import (
 
 	"github.com/emicklei/go-restful/v3"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 )
 
@@ -14,6 +15,23 @@ var runnerJobQueryParameters = map[string]struct{}{
 	"resourceVersion":     {},
 	"timeoutSeconds":      {},
 	"allowWatchBookmarks": {},
+}
+
+func runnerJobLongRunningCheck(base apirequest.LongRunningRequestCheck) apirequest.LongRunningRequestCheck {
+	return func(req *http.Request, info *apirequest.RequestInfo) bool {
+		if base != nil && base(req, info) {
+			return true
+		}
+		if req.Method != http.MethodGet {
+			return false
+		}
+		parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+		if len(parts) != 6 || parts[0] != "apis" || parts[1] != "ebs" || parts[2] != "v1" || parts[3] != "runners" || parts[5] != "jobs" {
+			return false
+		}
+		watch := strings.ToLower(req.URL.Query().Get("watch"))
+		return watch != "" && watch != "false" && watch != "0"
+	}
 }
 
 func installRunnerJobAliasRoutes(srv *genericapiserver.GenericAPIServer) {

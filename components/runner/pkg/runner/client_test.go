@@ -44,6 +44,29 @@ func TestClientPatchRunnerStatus(t *testing.T) {
 	}
 }
 
+func TestClientCreateRunnerOmitsStatus(t *testing.T) {
+	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if _, exists := body["status"]; exists {
+			t.Fatalf("create body contains status: %s", body["status"])
+		}
+		return response(http.StatusCreated, `{}`), nil
+	})
+	err := client.CreateRunner(context.Background(), RunnerResource{
+		TypeMeta: TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"},
+		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{
+			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64",
+		}},
+		Spec: RunnerSpec{Type: "ct", Arch: "x86_64", Hostname: "runner-a"},
+	})
+	if err != nil {
+		t.Fatalf("create runner: %v", err)
+	}
+}
+
 func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodPatch || req.URL.Path != apiPrefix+"/runners/runner-a" {

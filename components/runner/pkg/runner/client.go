@@ -45,7 +45,18 @@ func (c *Client) GetRunner(ctx context.Context, name string) (*RunnerResource, e
 }
 
 func (c *Client) CreateRunner(ctx context.Context, runner RunnerResource) error {
-	return c.doJSON(ctx, http.MethodPost, apiPrefix+"/runners", runner, nil)
+	body := map[string]any{
+		"apiVersion": runner.APIVersion,
+		"kind":       runner.Kind,
+		"metadata": map[string]any{
+			"name":   runner.Metadata.Name,
+			"labels": runner.Metadata.Labels,
+		},
+		"spec": map[string]any{
+			"type": runner.Spec.Type, "arch": runner.Spec.Arch, "hostname": runner.Spec.Hostname,
+		},
+	}
+	return c.doJSON(ctx, http.MethodPost, apiPrefix+"/runners", body, nil)
 }
 
 func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error {
