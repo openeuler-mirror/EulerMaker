@@ -11,26 +11,26 @@ import (
 	"time"
 )
 
-func TestDCExecutorCreatesContainerWithPayloadFile(t *testing.T) {
+func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	dir := t.TempDir()
-	docker := &fakeDockerRuntime{exitCode: 0}
-	runtimeSpec := mustJSON(t, DCRuntimeSpec{
+	container := &fakeContainerRuntime{exitCode: 0}
+	runtimeSpec := mustJSON(t, ContainerRuntimeSpec{
 		Image:       "openeuler:22.03",
 		NetworkMode: "bridge",
 		WorkingDir:  "/workspace",
 		Env: map[string]string{
 			"BUILD_ENV": "production",
 		},
-		Mounts: []DCMount{
+		Mounts: []ContainerMount{
 			{Name: "work", MountPath: "/workspace"},
 			{Name: "results", MountPath: "/results"},
 		},
 	})
-	executor := &DCExecutor{
+	executor := &CTExecutor{
 		WorkDir:    filepath.Join(dir, "work"),
 		ResultRoot: filepath.Join(dir, "results"),
 		RunnerName: "runner-a",
-		Docker:     docker,
+		Runtime:    container,
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
@@ -54,20 +54,20 @@ func TestDCExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	if string(payload) != "build:\n  target: rpm\n" {
 		t.Fatalf("payload = %q", string(payload))
 	}
-	if docker.created.Image != "openeuler:22.03" {
-		t.Fatalf("image = %q", docker.created.Image)
+	if container.created.Image != "openeuler:22.03" {
+		t.Fatalf("image = %q", container.created.Image)
 	}
-	if docker.created.Labels["ebs.io/project"] != "project-a" || docker.created.Labels["ebs.io/job"] != "job-a" || docker.created.Labels["ebs.io/runner"] != "runner-a" {
-		t.Fatalf("labels = %#v", docker.created.Labels)
+	if container.created.Labels["ebs.io/project"] != "project-a" || container.created.Labels["ebs.io/job"] != "job-a" || container.created.Labels["ebs.io/runner"] != "runner-a" {
+		t.Fatalf("labels = %#v", container.created.Labels)
 	}
-	if docker.created.Mounts[filepath.Join(dir, "work", "project-a", "job-a")] != "/workspace" {
-		t.Fatalf("work mount = %#v", docker.created.Mounts)
+	if container.created.Mounts[filepath.Join(dir, "work", "project-a", "job-a")] != "/workspace" {
+		t.Fatalf("work mount = %#v", container.created.Mounts)
 	}
-	if docker.created.Mounts[filepath.Join(dir, "results", "project-a", "job-a")] != "/results" {
-		t.Fatalf("result mount = %#v", docker.created.Mounts)
+	if container.created.Mounts[filepath.Join(dir, "results", "project-a", "job-a")] != "/results" {
+		t.Fatalf("result mount = %#v", container.created.Mounts)
 	}
-	if !docker.started || !docker.removed {
-		t.Fatalf("expected container start and cleanup, started=%v removed=%v", docker.started, docker.removed)
+	if !container.started || !container.removed {
+		t.Fatalf("expected container start and cleanup, started=%v removed=%v", container.started, container.removed)
 	}
 	logData, err := os.ReadFile(filepath.Join(resultRoot, "container.log"))
 	if err != nil {
@@ -78,17 +78,17 @@ func TestDCExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	}
 }
 
-func TestDCExecutorReturnsContainerExitCode(t *testing.T) {
+func TestCTExecutorReturnsContainerExitCode(t *testing.T) {
 	dir := t.TempDir()
-	docker := &fakeDockerRuntime{exitCode: 7}
-	executor := &DCExecutor{
+	container := &fakeContainerRuntime{exitCode: 7}
+	executor := &CTExecutor{
 		WorkDir:    filepath.Join(dir, "work"),
 		ResultRoot: filepath.Join(dir, "results"),
-		Docker:     docker,
+		Runtime:    container,
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{RuntimeSpec: mustJSON(t, DCRuntimeSpec{Image: "openeuler:22.03"})},
+		Spec:     JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})},
 	}
 
 	_, err := executor.Execute(context.Background(), job)
@@ -97,18 +97,18 @@ func TestDCExecutorReturnsContainerExitCode(t *testing.T) {
 	}
 }
 
-func TestDCExecutorStopsContainerOnContextCancel(t *testing.T) {
+func TestCTExecutorStopsContainerOnContextCancel(t *testing.T) {
 	dir := t.TempDir()
-	docker := &fakeDockerRuntime{waitBlock: make(chan struct{})}
-	executor := &DCExecutor{
+	container := &fakeContainerRuntime{waitBlock: make(chan struct{})}
+	executor := &CTExecutor{
 		WorkDir:         filepath.Join(dir, "work"),
 		ResultRoot:      filepath.Join(dir, "results"),
-		Docker:          docker,
+		Runtime:         container,
 		StopGracePeriod: time.Millisecond,
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{RuntimeSpec: mustJSON(t, DCRuntimeSpec{Image: "openeuler:22.03"})},
+		Spec:     JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -117,16 +117,16 @@ func TestDCExecutorStopsContainerOnContextCancel(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}
-	if !docker.stopped {
+	if !container.stopped {
 		t.Fatalf("expected container stop")
 	}
 }
 
-func TestRuntimeManagerDispatchesDC(t *testing.T) {
+func TestRuntimeManagerDispatchesCT(t *testing.T) {
 	executor := &fakeExecutor{resultRoot: "/results/project/job"}
 	manager := &RuntimeManager{
-		RunnerType: "dc",
-		Executors:  map[string]Executor{"dc": executor},
+		RunnerType: "ct",
+		Executors:  map[string]Executor{"ct": executor},
 	}
 
 	resultRoot, err := manager.Execute(context.Background(), JobResource{})
@@ -143,8 +143,8 @@ func TestRuntimeManagerDispatchesDC(t *testing.T) {
 
 func TestRuntimeManagerRejectsMismatchedRuntime(t *testing.T) {
 	manager := &RuntimeManager{
-		RunnerType: "dc",
-		Executors:  map[string]Executor{"dc": &fakeExecutor{}},
+		RunnerType: "ct",
+		Executors:  map[string]Executor{"ct": &fakeExecutor{}},
 	}
 
 	_, err := manager.Execute(context.Background(), JobResource{Spec: JobSpec{Runtime: "vm"}})
@@ -153,7 +153,7 @@ func TestRuntimeManagerRejectsMismatchedRuntime(t *testing.T) {
 	}
 }
 
-type fakeDockerRuntime struct {
+type fakeContainerRuntime struct {
 	created   ContainerSpec
 	started   bool
 	stopped   bool
@@ -163,44 +163,44 @@ type fakeDockerRuntime struct {
 	waitBlock chan struct{}
 }
 
-func (f *fakeDockerRuntime) ImageExists(context.Context, string) (bool, error) {
+func (f *fakeContainerRuntime) ImageExists(context.Context, string) (bool, error) {
 	return !f.pulled, nil
 }
 
-func (f *fakeDockerRuntime) Pull(context.Context, string) error {
+func (f *fakeContainerRuntime) Pull(context.Context, string) error {
 	f.pulled = true
 	return nil
 }
 
-func (f *fakeDockerRuntime) Remove(context.Context, string) error {
+func (f *fakeContainerRuntime) Remove(context.Context, string) error {
 	f.removed = true
 	return nil
 }
 
-func (f *fakeDockerRuntime) Create(_ context.Context, spec ContainerSpec) (string, error) {
+func (f *fakeContainerRuntime) Create(_ context.Context, spec ContainerSpec) (string, error) {
 	f.created = spec
 	return "container-a", nil
 }
 
-func (f *fakeDockerRuntime) Start(context.Context, string) error {
+func (f *fakeContainerRuntime) Start(context.Context, string) error {
 	f.started = true
 	return nil
 }
 
-func (f *fakeDockerRuntime) Logs(ctx context.Context, _ string, output io.Writer) error {
+func (f *fakeContainerRuntime) Logs(ctx context.Context, _ string, output io.Writer) error {
 	_, _ = io.WriteString(output, "container log\n")
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func (f *fakeDockerRuntime) Wait(context.Context, string) (int, error) {
+func (f *fakeContainerRuntime) Wait(context.Context, string) (int, error) {
 	if f.waitBlock != nil {
 		<-f.waitBlock
 	}
 	return f.exitCode, nil
 }
 
-func (f *fakeDockerRuntime) Stop(context.Context, string, time.Duration) error {
+func (f *fakeContainerRuntime) Stop(context.Context, string, time.Duration) error {
 	f.stopped = true
 	if f.waitBlock != nil {
 		close(f.waitBlock)
@@ -209,7 +209,7 @@ func (f *fakeDockerRuntime) Stop(context.Context, string, time.Duration) error {
 	return nil
 }
 
-func (f *fakeDockerRuntime) Kill(context.Context, string) error {
+func (f *fakeContainerRuntime) Kill(context.Context, string) error {
 	if f.waitBlock != nil {
 		close(f.waitBlock)
 		f.waitBlock = nil

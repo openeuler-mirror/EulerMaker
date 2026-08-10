@@ -43,7 +43,7 @@ func NewAgent(cfg Config) (*Agent, error) {
 		executor: &RuntimeManager{
 			RunnerType: cfg.Type,
 			Executors: map[string]Executor{
-				"dc": &DCExecutor{
+				"ct": &CTExecutor{
 					WorkDir:    workDir(cfg.RootDir),
 					ResultRoot: resultRoot(cfg.RootDir),
 					RunnerName: cfg.Name,

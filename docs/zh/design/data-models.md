@@ -547,7 +547,7 @@ type JobSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `runtime` | string | 否 | 执行运行时类型，如 `dc`/`vm`/`hw`，默认 `dc` |
+| `runtime` | string | 否 | 执行运行时类型，如 `ct`/`vm`/`hw`，默认 `ct` |
 | `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置，由对应 runtime 解释 |
 | `timeoutSeconds` | int64 | 否 | 最大运行秒数，默认 10800 |
 | `resources` | ResourceRequirements | 否 | Job 资源请求与限制 |
@@ -665,7 +665,7 @@ type RunnerSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `type` | string | 否 | 执行机类型：`dc` / `vm` / `hw`，默认 `dc` |
+| `type` | string | 否 | 执行机类型：`ct` / `vm` / `hw`，默认 `ct` |
 | `arch` | string | 是 | CPU 架构：`aarch64`/`x86_64` |
 | `hostname` | string | 否 | 执行机主机名。当前 runner agent 填写 runner 资源名 |
 | `unschedulable` | bool | 否 | 是否禁止调度新 Job |

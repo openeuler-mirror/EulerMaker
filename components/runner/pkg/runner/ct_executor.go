@@ -15,31 +15,31 @@ import (
 )
 
 const (
-	defaultDCWorkingDir = "/workspace"
-	defaultDCResultDir  = "/results"
+	defaultCTWorkingDir = "/workspace"
+	defaultCTResultDir  = "/results"
 )
 
-type DCExecutor struct {
+type CTExecutor struct {
 	WorkDir         string
 	ResultRoot      string
 	RunnerName      string
-	Docker          DockerRuntime
+	Runtime         ContainerRuntime
 	StopGracePeriod time.Duration
 }
 
-type DCRuntimeSpec struct {
+type ContainerRuntimeSpec struct {
 	Image           string            `json:"image,omitempty"`
 	ImagePullPolicy string            `json:"imagePullPolicy,omitempty"`
 	Privileged      bool              `json:"privileged,omitempty"`
 	NetworkMode     string            `json:"networkMode,omitempty"`
 	WorkingDir      string            `json:"workingDir,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
-	Mounts          []DCMount         `json:"mounts,omitempty"`
+	Mounts          []ContainerMount  `json:"mounts,omitempty"`
 	Command         []string          `json:"command,omitempty"`
 	Args            []string          `json:"args,omitempty"`
 }
 
-type DCMount struct {
+type ContainerMount struct {
 	Name      string `json:"name,omitempty"`
 	MountPath string `json:"mountPath,omitempty"`
 }
@@ -57,7 +57,7 @@ type ContainerSpec struct {
 	Args        []string
 }
 
-type DockerRuntime interface {
+type ContainerRuntime interface {
 	ImageExists(ctx context.Context, image string) (bool, error)
 	Pull(ctx context.Context, image string) error
 	Remove(ctx context.Context, name string) error
@@ -69,7 +69,7 @@ type DockerRuntime interface {
 	Kill(ctx context.Context, id string) error
 }
 
-func (e *DCExecutor) Execute(ctx context.Context, job JobResource) (string, error) {
+func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, error) {
 	project := job.Metadata.Namespace
 	if project == "" {
 		project = "default"
@@ -79,12 +79,12 @@ func (e *DCExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return "", fmt.Errorf("job name is required")
 	}
 
-	spec, err := parseDCRuntimeSpec(job.Spec.RuntimeSpec)
+	spec, err := parseContainerRuntimeSpec(job.Spec.RuntimeSpec)
 	if err != nil {
 		return "", err
 	}
 	if spec.Image == "" {
-		return "", fmt.Errorf("dc runtimeSpec.image is required")
+		return "", fmt.Errorf("ct runtimeSpec.image is required")
 	}
 
 	workDir := filepath.Join(e.WorkDir, project, jobName)
@@ -105,30 +105,30 @@ func (e *DCExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return "", fmt.Errorf("write payload.yaml: %w", err)
 	}
 
-	docker := e.Docker
-	if docker == nil {
-		docker = DockerCLI{}
+	container := e.Runtime
+	if container == nil {
+		container = DockerCLI{}
 	}
 	gracePeriod := e.StopGracePeriod
 	if gracePeriod <= 0 {
 		gracePeriod = 10 * time.Second
 	}
 
-	if err := ensureImage(ctx, docker, spec.Image, spec.ImagePullPolicy); err != nil {
+	if err := ensureImage(ctx, container, spec.Image, spec.ImagePullPolicy); err != nil {
 		return resultRoot, err
 	}
 
 	containerName := containerName(project, jobName)
-	_ = docker.Remove(context.Background(), containerName)
+	_ = container.Remove(context.Background(), containerName)
 
 	containerSpec := ContainerSpec{
 		Name:        containerName,
 		Image:       spec.Image,
 		Privileged:  spec.Privileged,
 		NetworkMode: spec.NetworkMode,
-		WorkingDir:  valueOrDefault(spec.WorkingDir, defaultDCWorkingDir),
+		WorkingDir:  valueOrDefault(spec.WorkingDir, defaultCTWorkingDir),
 		Env:         spec.Env,
-		Mounts:      dcMounts(spec.Mounts, workDir, resultRoot),
+		Mounts:      containerMounts(spec.Mounts, workDir, resultRoot),
 		Labels: map[string]string{
 			"ebs.io/project": project,
 			"ebs.io/job":     jobName,
@@ -138,12 +138,12 @@ func (e *DCExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		Args:    spec.Args,
 	}
 
-	id, err := docker.Create(ctx, containerSpec)
+	id, err := container.Create(ctx, containerSpec)
 	if err != nil {
 		return resultRoot, fmt.Errorf("create container: %w", err)
 	}
 	defer func() {
-		_ = docker.Remove(context.Background(), id)
+		_ = container.Remove(context.Background(), id)
 	}()
 
 	logFile, err := os.Create(filepath.Join(resultRoot, "container.log"))
@@ -152,17 +152,17 @@ func (e *DCExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	}
 	defer logFile.Close()
 
-	if err := docker.Start(ctx, id); err != nil {
+	if err := container.Start(ctx, id); err != nil {
 		return resultRoot, fmt.Errorf("start container: %w", err)
 	}
 
 	logCtx, cancelLogs := context.WithCancel(context.Background())
 	logsDone := make(chan error, 1)
 	go func() {
-		logsDone <- docker.Logs(logCtx, id, logFile)
+		logsDone <- container.Logs(logCtx, id, logFile)
 	}()
 
-	exitCode, waitErr := waitContainer(ctx, docker, id, gracePeriod)
+	exitCode, waitErr := waitContainer(ctx, container, id, gracePeriod)
 	cancelLogs()
 	select {
 	case <-logsDone:
@@ -177,24 +177,24 @@ func (e *DCExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	return resultRoot, nil
 }
 
-func ensureImage(ctx context.Context, docker DockerRuntime, image, policy string) error {
+func ensureImage(ctx context.Context, runtime ContainerRuntime, image, policy string) error {
 	switch strings.ToLower(policy) {
 	case "always":
-		if err := docker.Pull(ctx, image); err != nil {
+		if err := runtime.Pull(ctx, image); err != nil {
 			return fmt.Errorf("pull image %q: %w", image, err)
 		}
 		return nil
 	case "never":
 		return nil
 	case "", "ifnotpresent":
-		exists, err := docker.ImageExists(ctx, image)
+		exists, err := runtime.ImageExists(ctx, image)
 		if err != nil {
 			return fmt.Errorf("inspect image %q: %w", image, err)
 		}
 		if exists {
 			return nil
 		}
-		if err := docker.Pull(ctx, image); err != nil {
+		if err := runtime.Pull(ctx, image); err != nil {
 			return fmt.Errorf("pull image %q: %w", image, err)
 		}
 		return nil
@@ -203,20 +203,20 @@ func ensureImage(ctx context.Context, docker DockerRuntime, image, policy string
 	}
 }
 
-func parseDCRuntimeSpec(raw json.RawMessage) (DCRuntimeSpec, error) {
-	var spec DCRuntimeSpec
+func parseContainerRuntimeSpec(raw json.RawMessage) (ContainerRuntimeSpec, error) {
+	var spec ContainerRuntimeSpec
 	if len(raw) == 0 {
 		return spec, nil
 	}
 	if err := json.Unmarshal(raw, &spec); err != nil {
-		return spec, fmt.Errorf("parse dc runtimeSpec: %w", err)
+		return spec, fmt.Errorf("parse ct runtimeSpec: %w", err)
 	}
 	return spec, nil
 }
 
-func dcMounts(specMounts []DCMount, workDir, resultRoot string) map[string]string {
-	workMount := defaultDCWorkingDir
-	resultMount := defaultDCResultDir
+func containerMounts(specMounts []ContainerMount, workDir, resultRoot string) map[string]string {
+	workMount := defaultCTWorkingDir
+	resultMount := defaultCTResultDir
 	for _, mount := range specMounts {
 		switch mount.Name {
 		case "work":
@@ -235,14 +235,14 @@ func dcMounts(specMounts []DCMount, workDir, resultRoot string) map[string]strin
 	}
 }
 
-func waitContainer(ctx context.Context, docker DockerRuntime, id string, gracePeriod time.Duration) (int, error) {
+func waitContainer(ctx context.Context, runtime ContainerRuntime, id string, gracePeriod time.Duration) (int, error) {
 	type waitResult struct {
 		exitCode int
 		err      error
 	}
 	waitDone := make(chan waitResult, 1)
 	go func() {
-		code, err := docker.Wait(context.Background(), id)
+		code, err := runtime.Wait(context.Background(), id)
 		waitDone <- waitResult{exitCode: code, err: err}
 	}()
 
@@ -252,12 +252,12 @@ func waitContainer(ctx context.Context, docker DockerRuntime, id string, gracePe
 	case <-ctx.Done():
 		stopCtx, cancel := context.WithTimeout(context.Background(), gracePeriod+5*time.Second)
 		defer cancel()
-		_ = docker.Stop(stopCtx, id, gracePeriod)
+		_ = runtime.Stop(stopCtx, id, gracePeriod)
 		select {
 		case <-waitDone:
 			return -1, ctx.Err()
 		case <-time.After(gracePeriod + 2*time.Second):
-			_ = docker.Kill(context.Background(), id)
+			_ = runtime.Kill(context.Background(), id)
 			<-waitDone
 			return -1, ctx.Err()
 		}

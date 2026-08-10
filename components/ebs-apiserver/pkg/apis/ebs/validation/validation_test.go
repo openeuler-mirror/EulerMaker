@@ -200,8 +200,8 @@ func TestValidateRunner(t *testing.T) {
 		wantFields map[string]field.ErrorType
 	}{
 		{
-			name:   "valid dc",
-			runner: validRunner("dc", "x86_64"),
+			name:   "valid ct",
+			runner: validRunner("ct", "x86_64"),
 		},
 		{
 			name:   "valid vm",
@@ -249,18 +249,18 @@ func TestValidateRunnerUpdate(t *testing.T) {
 	}{
 		{
 			name:      "valid unchanged fields",
-			newRunner: validRunner("dc", "x86_64"),
-			oldRunner: validRunner("dc", "x86_64"),
+			newRunner: validRunner("ct", "x86_64"),
+			oldRunner: validRunner("ct", "x86_64"),
 		},
 		{
 			name:      "type and arch may change",
 			newRunner: validRunner("vm", "aarch64"),
-			oldRunner: validRunner("dc", "x86_64"),
+			oldRunner: validRunner("ct", "x86_64"),
 		},
 		{
 			name:      "also validates new object",
 			newRunner: &ebsv1.Runner{},
-			oldRunner: validRunner("dc", "x86_64"),
+			oldRunner: validRunner("ct", "x86_64"),
 			wantErrs:  3,
 			wantFields: map[string]field.ErrorType{
 				"spec.type":     field.ErrorTypeRequired,
@@ -303,9 +303,9 @@ func TestValidateRunnerStatusUpdate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			newRunner := validRunner("dc", "x86_64")
+			newRunner := validRunner("ct", "x86_64")
 			newRunner.Status.Phase = tt.phase
-			errs := ValidateRunnerStatusUpdate(newRunner, validRunner("dc", "x86_64"))
+			errs := ValidateRunnerStatusUpdate(newRunner, validRunner("ct", "x86_64"))
 			assertErrorList(t, errs, tt.wantErrs, tt.wantFields)
 		})
 	}

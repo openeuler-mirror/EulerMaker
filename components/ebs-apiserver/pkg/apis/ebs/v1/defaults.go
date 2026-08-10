@@ -49,7 +49,7 @@ func SetDefaults_Build(obj *Build) {
 
 func SetDefaults_Job(obj *Job) {
 	if len(obj.Spec.Runtime) == 0 {
-		obj.Spec.Runtime = "dc"
+		obj.Spec.Runtime = "ct"
 	}
 	if obj.Spec.TimeoutSeconds == 0 {
 		obj.Spec.TimeoutSeconds = 10800
@@ -58,6 +58,6 @@ func SetDefaults_Job(obj *Job) {
 
 func SetDefaults_Runner(obj *Runner) {
 	if len(obj.Spec.Type) == 0 {
-		obj.Spec.Type = "dc"
+		obj.Spec.Type = "ct"
 	}
 }

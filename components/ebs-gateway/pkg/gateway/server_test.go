@@ -482,7 +482,7 @@ func TestRunnerCanCreateItself(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	}), 100, 200)
-	body := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"dc","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"dc","arch":"x86_64","hostname":"runner-a"},"status":{}}`
+	body := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"ct","arch":"x86_64","hostname":"runner-a"},"status":{}}`
 	req := authenticatedRequest(t, http.MethodPost, apiPrefix+"/runners", strings.NewReader(body), runnerClaims("runner-a"))
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
@@ -527,7 +527,7 @@ func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"dc","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"type":"dc","arch":"x86_64","hostname":"old","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Idle"}}`)
+			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"type":"ct","arch":"x86_64","hostname":"old","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Idle"}}`)
 			return
 		}
 		if r.Method != http.MethodPut || r.Header.Get("Content-Type") != "application/json" {
@@ -547,7 +547,7 @@ func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
 		puts.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}), 100, 200)
-	patch := `{"metadata":{"labels":{"ebs.io/runner-type":"dc","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"dc","arch":"x86_64","hostname":"new"}}`
+	patch := `{"metadata":{"labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"ct","arch":"x86_64","hostname":"new"}}`
 	req := authenticatedRequest(t, http.MethodPatch, apiPrefix+"/runners/runner-a", strings.NewReader(patch), runnerClaims("runner-a"))
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rec := httptest.NewRecorder()
