@@ -99,10 +99,10 @@ func TestClientListAssignedJobs(t *testing.T) {
 		if req.URL.RequestURI() != apiPrefix+"/runners/runner-a/jobs" {
 			t.Fatalf("path = %s", req.URL.RequestURI())
 		}
-		return response(200, `{"metadata":{"resourceVersion":"10"},"items":[{"metadata":{"name":"job-a","namespace":"project-a"}}]}`), nil
+		return response(200, `{"metadata":{"resourceVersion":"10"},"items":[{"metadata":{"name":"job-a","namespace":"project-a"},"spec":{"priority":100}}]}`), nil
 	})
 	list, err := client.ListAssignedJobs(context.Background(), "runner-a")
-	if err != nil || list.Metadata.ResourceVersion != "10" || len(list.Items) != 1 {
+	if err != nil || list.Metadata.ResourceVersion != "10" || len(list.Items) != 1 || list.Items[0].Spec.Priority != 100 {
 		t.Fatalf("unexpected list: %#v err=%v", list, err)
 	}
 }
