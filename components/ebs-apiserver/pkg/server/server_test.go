@@ -3,9 +3,10 @@ package server
 import (
 	"context"
 	"errors"
-	"github.com/spf13/pflag"
 	"net/http"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storage/storagebackend/factory"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
@@ -27,6 +29,32 @@ import (
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	esclient "ebs-apiserver/pkg/storage/es"
 )
+
+func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
+	definitions := getOpenAPIDefinitions(func(path string) spec.Ref {
+		return spec.MustCreateRef("#/components/schemas/" + path)
+	})
+
+	tests := map[string][]string{
+		"ebs-apiserver/pkg/apis/ebs/v1.ProjectSpec":    {"displayName", "buildTargets", "packageRepos"},
+		"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":        {"priority", "runtime", "runtimeSpec", "payload"},
+		"ebs-apiserver/pkg/apis/ebs/v1.RunnerStatus":   {"phase", "capacity", "heartbeat"},
+		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "admin", "email"},
+		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount": {"apiVersion", "kind", "metadata", "spec"},
+	}
+	for name, fields := range tests {
+		definition, ok := definitions[name]
+		if !ok {
+			t.Errorf("OpenAPI definition %q is missing", name)
+			continue
+		}
+		for _, field := range fields {
+			if _, ok := definition.Schema.Properties[field]; !ok {
+				t.Errorf("OpenAPI definition %q is missing property %q", name, field)
+			}
+		}
+	}
+}
 
 func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
 	storeOptions := &generic.StoreOptions{RESTOptions: testRESTOptions()}
