@@ -535,6 +535,7 @@ type Job struct {
 
 ```go
 type JobSpec struct {
+    Priority     int64                `json:"priority,omitempty"`
     Runtime      string               `json:"runtime,omitempty"`
     RuntimeSpec  runtime.RawExtension `json:"runtimeSpec,omitempty"`
     TimeoutSeconds int64              `json:"timeoutSeconds,omitempty"`
@@ -547,6 +548,7 @@ type JobSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
+| `priority` | int64 | 否 | Job 调度优先级，值越大越优先，默认：0 |
 | `runtime` | string | 否 | 执行运行时类型，如 `ct`/`vm`/`hw`，默认 `ct` |
 | `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置，由对应 runtime 解释 |
 | `timeoutSeconds` | int64 | 否 | 最大运行秒数，默认 10800 |
