@@ -88,6 +88,7 @@ type JobList struct {
 }
 
 type JobSpec struct {
+	Priority       int64                `json:"priority,omitempty"`
 	Runtime        string               `json:"runtime,omitempty"`
 	RuntimeSpec    json.RawMessage      `json:"runtimeSpec,omitempty"`
 	TimeoutSeconds int64                `json:"timeoutSeconds,omitempty"`
