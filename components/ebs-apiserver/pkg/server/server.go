@@ -24,6 +24,7 @@ import (
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
 	iamapi "ebs-apiserver/pkg/apis/iam"
 	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
+	generatedopenapi "ebs-apiserver/pkg/generated/openapi"
 	iammodule "ebs-apiserver/pkg/iam"
 	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
@@ -68,7 +69,7 @@ func objDef() openapicommon.OpenAPIDefinition {
 	}
 }
 
-var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
+var openAPISupportDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta":               objDef(),
 	"k8s.io/apimachinery/pkg/apis/meta/v1.TypeMeta":                 objDef(),
 	"k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta":                 objDef(),
@@ -90,56 +91,14 @@ var ebsOpenAPIDefinitions = map[string]openapicommon.OpenAPIDefinition{
 	"k8s.io/apimachinery/pkg/apis/meta/v1.ListOptions":              objDef(),
 	"k8s.io/apimachinery/pkg/apis/meta/v1.Patch":                    objDef(),
 	"k8s.io/apimachinery/pkg/apis/meta/v1.WatchEvent":               objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.Project":                         objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.ProjectSpec":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.ProjectStatus":                   objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.ProjectList":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildTarget":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.PackageRepo":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.Snapshot":                        objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SnapshotSpec":                    objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SnapshotStatus":                  objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SpecCommit":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SnapshotList":                    objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.Build":                           objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildSpec":                       objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildStatus":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildList":                       objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BootstrapRepo":                   objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfo":                       objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoSpec":                   objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoStatus":                 objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoList":                   objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SpecDepend":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SpecStatus":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SpecBuildStatus":                 objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.SpecInstallStatus":               objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.MissingDep":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepo":                         objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepoSpec":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepoStatus":                   objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RpmMeta":                         objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RpmRepoList":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.VersionConst":                    objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.Job":                             objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":                         objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.JobStatus":                       objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements":            objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.Toleration":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.JobList":                         objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.Runner":                          objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RunnerSpec":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RunnerTaint":                     objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RunnerStatus":                    objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RunnerAddress":                   objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RunnerInfo":                      objDef(),
-	"ebs-apiserver/pkg/apis/ebs/v1.RunnerList":                      objDef(),
-	"ebs-apiserver/pkg/apis/iam/v1.User":                            objDef(),
-	"ebs-apiserver/pkg/apis/iam/v1.UserSpec":                        objDef(),
-	"ebs-apiserver/pkg/apis/iam/v1.UserList":                        objDef(),
-	"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":                  objDef(),
-	"ebs-apiserver/pkg/apis/iam/v1.MachineAccountSpec":              objDef(),
-	"ebs-apiserver/pkg/apis/iam/v1.MachineAccountList":              objDef(),
+}
+
+func getOpenAPIDefinitions(ref openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
+	definitions := generatedopenapi.GetOpenAPIDefinitions(ref)
+	for name, definition := range openAPISupportDefinitions {
+		definitions[name] = definition
+	}
+	return definitions
 }
 
 const etcdPrefix = "/registry/ebs"
@@ -209,9 +168,7 @@ func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig,
 	config := genericapiserver.NewRecommendedConfig(Codecs)
 	config.LongRunningFunc = runnerJobLongRunningCheck(config.LongRunningFunc)
 	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
-		func(ref openapicommon.ReferenceCallback) map[string]openapicommon.OpenAPIDefinition {
-			return ebsOpenAPIDefinitions
-		},
+		getOpenAPIDefinitions,
 		openapinamer.NewDefinitionNamer(Scheme),
 	)
 	config.OpenAPIV3Config.GetDefinitionName = func(name string) (string, spec.Extensions) {
