@@ -84,125 +84,61 @@ status:
 
 Scheduler 不更新 Runner status。绑定关系只写入 Job status；如后续需要统计每个 Runner 的运行负载，Scheduler 应基于 watch 到的 Job 按 `status.runner` 聚合。
 
-## 四、输入数据模型
+## 四、调度输入
 
-### 4.1 JobSpec
+Job、Runner 及其公共子结构的完整字段、类型、默认值和枚举统一由 [data-models.md](./data-models.md) 定义。本节只说明 Scheduler 实际读取的字段及其调度语义，不重复定义对象结构。
 
-首版调度只使用当前 `JobSpec` 已定义字段：
-
-```go
-type JobSpec struct {
-    Priority     int64                `json:"priority,omitempty"`
-    Runtime      string               `json:"runtime,omitempty"`
-    RuntimeSpec  runtime.RawExtension `json:"runtimeSpec,omitempty"`
-    TimeoutSeconds int64              `json:"timeoutSeconds,omitempty"`
-    Resources    ResourceRequirements `json:"resources,omitempty"`
-    NodeSelector map[string]string    `json:"nodeSelector,omitempty"`
-    Tolerations  []Toleration         `json:"tolerations,omitempty"`
-    Payload      string               `json:"payload,omitempty"`
-}
-```
-
-调度含义：
+### 4.1 Job 字段
 
 | 字段 | 调度用途 |
 |------|----------|
-| `priority` | Job 调度优先级，值越大越优先，默认：0 |
-| `runtime` | 执行运行时类型，默认 `ct`；首版暂不参与资源计算，可用于后续运行时亲和或隔离策略 |
-| `runtimeSpec` | 运行时专属配置，首版暂不参与调度 |
-| `timeoutSeconds` | 最大运行秒数，首版暂不参与调度，可由 runner 执行侧用于超时控制 |
-| `resources.requests` | 判断 Runner `status.allocatable` 是否满足资源请求 |
-| `resources.limits` | 执行时资源上限，首版暂不参与调度 |
-| `nodeSelector` | 精确匹配 Runner `metadata.labels`，架构约束通过 `ebs.io/runner-arch` 表达 |
-| `tolerations` | 容忍 Runner `spec.taints` |
-| `payload` | YAML 格式的 Job 参数内容，首版暂不参与调度 |
+| `metadata.namespace` | 获取所属 Project，并组成 Job Key |
+| `metadata.name` | 与 Project 共同组成 Job Key |
+| `metadata.uid` | 区分同名 Job 删除后重建的不同实例 |
+| `metadata.resourceVersion` | Bind 时执行乐观并发控制 |
+| `spec.priority` | ActiveQueue 排序；值越大越优先，默认 0 |
+| `spec.runtime` | 执行运行时类型，默认 `ct`；首版暂不参与资源计算 |
+| `spec.resources.requests` | 判断 Runner 剩余资源是否满足请求 |
+| `spec.nodeSelector` | 精确匹配 Runner `metadata.labels` |
+| `spec.tolerations` | 判断 Job 是否容忍 Runner `spec.taints` |
+| `status.phase` | 判断 Job 是否需要调度以及是否正在占用资源 |
+| `status.runner` | 判断 Job 是否已经绑定，并聚合 Runner 已绑定资源 |
 
-首版可以先支持 `nodeSelector`、`tolerations` 和常见资源名 `cpu`、`memory`、`ephemeral-storage`。资源数量沿用字符串表达，如 `"8"`、`"16Gi"`、`"100Gi"`。
+`spec.runtimeSpec`、`spec.timeoutSeconds`、`spec.resources.limits` 和 `spec.payload` 首版不参与调度，由 Runner 执行侧解释或使用。
 
-#### ResourceRequirements
+首版资源匹配支持 `cpu`、`memory` 和 `ephemeral-storage`。资源数量使用数据模型定义的字符串形式，例如 `"8"`、`"16Gi"` 和 `"100Gi"`。
 
-```go
-type ResourceRequirements struct {
-    Requests map[string]string `json:"requests,omitempty"`
-    Limits   map[string]string `json:"limits,omitempty"`
-}
-```
+### 4.2 Runner 字段
 
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `requests` | map[string]string | 资源需求，如 `{"cpu": "4", "memory": "8Gi"}`。调度器用于匹配 Runner 的可分配容量 |
-| `limits` | map[string]string | 资源上限，如 `{"cpu": "8", "memory": "16Gi"}`。用于限制 Job 最大资源使用量 |
-
-#### Toleration
-
-```go
-type Toleration struct {
-    Key      string `json:"key,omitempty"`
-    Operator string `json:"operator,omitempty"`
-    Value    string `json:"value,omitempty"`
-    Effect   string `json:"effect,omitempty"`
-}
-```
-
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `key` | string | 匹配 Runner taint 的键 |
-| `operator` | string | 匹配操作符：`Equal`（相等）、`Exists`（存在）、`Gt`（大于）、`Lt`（小于） |
-| `value` | string | 匹配值，与 `key` 配合使用 |
-| `effect` | string | 容忍效果：`NoSchedule`（不调度）、`PreferNoSchedule`（尽量不调度）、`NoExecute`（不执行并驱逐） |
-
-### 4.2 RunnerSpec
-
-```go
-type RunnerSpec struct {
-    Type          string        `json:"type,omitempty"`
-    Arch          string        `json:"arch,omitempty"`
-    Hostname      string        `json:"hostname,omitempty"`
-    Unschedulable bool          `json:"unschedulable,omitempty"`
-    Taints        []RunnerTaint `json:"taints,omitempty"`
-}
-```
-
-#### RunnerTaint
-
-```go
-type RunnerTaint struct {
-    Key    string `json:"key"`
-    Value  string `json:"value,omitempty"`
-    Effect string `json:"effect"`
-}
-```
-
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `key` | string | 污点键 |
-| `value` | string | 污点值 |
-| `effect` | string | 效果：`NoSchedule`/`PreferNoSchedule`/`NoExecute` |
+| 字段 | 调度用途 |
+|------|----------|
+| `metadata.name` | Runner 唯一标识及 Job 绑定目标 |
+| `metadata.labels` | 匹配 Job `spec.nodeSelector` |
+| `spec.type` | 表示 Runner 执行类型 |
+| `spec.arch` | 表示 Runner CPU 架构；调度约束通过标准标签表达 |
+| `spec.unschedulable` | 为 true 时禁止调度新 Job |
+| `spec.taints` | 与 Job `spec.tolerations` 执行匹配 |
+| `status.phase` | 只有 `Idle` 或 `Running` Runner 能进入候选集 |
+| `status.allocatable` | 计算 Runner 可用于 Job 的资源基数 |
+| `status.heartbeat` | 判断 Runner 信息是否仍然有效 |
 
 调度标签统一使用 `Runner.metadata.labels`，不使用 `spec.labels`。
 
-### 4.3 RunnerStatus
+### 4.3 Job 唯一键
 
-```go
-type RunnerStatus struct {
-    Phase       string             `json:"phase,omitempty"`
-    Conditions  []metav1.Condition `json:"conditions,omitempty"`
-    Capacity    map[string]string  `json:"capacity,omitempty"`
-    Allocatable map[string]string  `json:"allocatable,omitempty"`
-    Addresses   []RunnerAddress    `json:"addresses,omitempty"`
-    Info        RunnerInfo         `json:"info,omitempty"`
-    Heartbeat   metav1.Time        `json:"heartbeat,omitempty"`
-}
+Job 名称只在所属 Project 内唯一。Scheduler 的 Indexer、调度队列、去重集合和退避记录统一使用以下格式作为 Job 唯一键：
+
+```text
+{project}/{jobName}
 ```
 
-首版调度使用：
+其中 `project` 取自 `job.metadata.namespace`，`jobName` 取自 `job.metadata.name`。例如：
 
-| 字段 | 用途 |
-|------|------|
-| `phase` | 过滤掉 `status.phase == "Offline"`、`status.phase == "Booting"` 等不可执行状态 |
-| `allocatable` | 判断是否仍有可调度容量 |
-| `unschedulable` | 过滤标记为不可调度 `spec.unschedulable == true`的 Runner |
-| `taints` | 过滤 Runner 污点 |
+```text
+openeuler-24-03/build-kernel
+```
+
+从队列取出 Job Key 后，Indexer 必须按完整 Job Key 查询对象。Runner 是集群级资源，其缓存键仍使用 `metadata.name`。
 
 ## 五、调度流程
 
@@ -228,8 +164,12 @@ graph TD
     A1 --> |plugins| P[PluginChain]
     
     
-    P --> |绑定 Runner 失败| Q3[WorkerQueue::UnschedulableQueue]
-    P --> |绑定 Runner 成功| S[请求ApiServer更新Job状态]
+    P --> |无候选 Runner| Q3[WorkerQueue::UnschedulableQueue]
+    P --> |选出 Runner| AC[AssumedCache::原子预占资源]
+    AC --> |预占成功| S[请求ApiServer更新Job状态]
+    AC --> |资源已不足| Q3
+    S --> |更新失败并回滚预占| Q2
+    S --> |更新成功，等待 watch 确认| D
     Q3 --> |退避到期 Job| Q1
 
     SC --> |启动Job/Runner缓存刷新定时器| T0
@@ -258,7 +198,7 @@ Scheduler 事件处理:
   -> on_delete: 删除 Job -> WorkerQueue.remove()
 
 Scheduler process_loop 调度主循环:
-  -> WorkerQueue.pop() 从 ActiveQueue 取出 job_name, 从 Indexer 根据 job_name 查询 Job 对象
+  -> WorkerQueue.pop() 从 ActiveQueue 取出 {project}/{jobName}, 从 Indexer 根据完整 Job Key 查询 Job 对象
   -> 创建 SchedulingContext (job, runner indexer, client)
   -> pre_schedule:
        INITIAL: 读取 Runner 快照 -> 提取 Job 资源需求 -> 生成候选列表
@@ -268,9 +208,11 @@ Scheduler process_loop 调度主循环:
        SCORE:  调用 ScorePlugin 对 Runner 打分
        BIND:   调用 BindPlugin 选择最优 Runner
   -> post_schedule 调度后处理:
-       BROADCAST: Job 绑定 Runner   -> 更新 status.phase="Running", status.stage="Pending" 同步到 apiserver; 
+       ASSUME: 在本地 assumed cache 中原子预占 Runner 资源
+       BROADCAST: Job 绑定 Runner   -> 更新 status.phase="Running", status.stage="Pending" 同步到 apiserver;
+                  watch 确认绑定     -> 从 assumed cache 删除对应预占；
+                  API 更新失败       -> 回滚预占并将 Job 加入 WorkerQueue.add_to_backoff()；
                   Job 未绑定 Runner -> WorkerQueue.add_to_unschedulable()；
-                  API 更新失败       -> WorkerQueue.add_to_backoff()
 
 定时器线程 (WorkerQueue.run_with_interval):
   -> 每 10s 将 UnschedulableQueue 头部 Job 移回 ActiveQueue
@@ -299,7 +241,7 @@ Job 进入调度队列：
 
 - List Job
   
-  添加 Job 到 Indexer 创建缓存和索引。
+  使用 `{project}/{jobName}` 作为键，将 Job 添加到 Indexer 创建缓存和索引。
 
 - List Runner
 
@@ -326,7 +268,7 @@ Job 进入调度队列：
 - List Job: 
 
   - 获取最新 Job 列表，逐个检索 Job 在 Indexer 中是否存在，不存在则添加；存在则更新缓存和索引
-  - 获取最新 Job 列表，计算出最新和缓存 Job 各自的唯一标识列表，删除缓存中存在而最新列表不存在的 Job 缓存和索引
+  - 获取最新 Job 列表，按 `{project}/{jobName}` 计算最新和缓存 Job 各自的唯一标识列表，删除缓存中存在而最新列表不存在的 Job 缓存和索引
 
 - List Runner:
 
@@ -335,7 +277,46 @@ Job 进入调度队列：
 
 #### 5.2.4 Runner 可分配
 
-检索 Indexer 中绑定了 Runner 且 Job `status.phase == "Running"` 的 Job 列表，然后将当前 Runner `status.allocatable` 减掉所有绑定了该 Runner 的 Job 的请求资源，剩下的即是当前 Runner 的可分配资源。
+检索 Indexer 中绑定了 Runner 且 Job `status.phase == "Running"` 的 Job 列表，并结合本地 assumed cache 中尚未被 watch 确认的预占，计算 Runner 当前可用于调度的资源：
+
+```text
+available = runner.status.allocatable
+          - sum(running Job requests)
+          - sum(unconfirmed assumed Job requests)
+```
+
+当 Job 的绑定已经通过 watch 进入 Indexer 时，必须先删除其 assumed 记录，再按 Running Job 计算，避免同一 Job 被重复扣减。
+
+#### 5.2.5 Assumed Cache
+
+apiserver 更新成功到 Job watch 事件进入本地 Indexer 之间存在时间窗口。如果 Scheduler 在这个窗口内继续调度，后续 Job 会读取到旧的 Runner 可用资源，可能造成资源超卖。Scheduler 使用进程内 assumed cache 记录已经选定 Runner、但尚未被 watch 确认的 Job 绑定。
+
+每条记录至少包含：
+
+```text
+AssumedJob
+├── jobKey           # {project}/{jobName}
+├── jobUID           # 防止同名 Job 删除重建后误匹配
+├── runnerName       # 预选 Runner
+├── requests         # 调度时使用的资源请求快照
+├── resourceVersion  # 发起 Bind 前观察到的 Job 版本
+└── assumedAt        # 预占时间
+```
+
+assumed cache 同时维护按 Job Key 和 Runner 名称查询的索引。对同一个 Runner 执行“读取可用资源、判断是否满足、写入预占”必须处于同一临界区，保证多个调度 worker 不能同时消费同一份资源。
+
+生命周期：
+
+1. Scheduler 选出 Runner 后，在发送 Bind 请求前调用 `assume(job, runner)` 原子预占资源。
+2. 如果预占时发现 Runner 的最新可用资源不足，则放弃该候选并重新选择，不发送 Bind 请求。
+3. Bind API 返回失败或 resourceVersion 冲突时，立即调用 `forget(jobKey)` 回滚预占，然后按失败类型重新入队。
+4. Job watch 观察到同一 UID 的 Job 已处于 `Running` 且 `status.runner` 与预占 Runner 相同时，视为绑定已确认，调用 `forget(jobKey)`；资源随后由 Indexer 中的 Running Job 继续扣减。
+5. Job 被删除，或其状态、UID、Runner 与预占不一致时，删除预占并重新评估是否需要入队。
+6. Scheduler 关闭时直接丢弃 assumed cache；重启后通过全量 List 中的 Running Job 重建实际资源占用，不恢复旧的临时预占。
+
+为防止 Bind 请求结果未知或 watch 长时间中断导致预占永久泄漏，记录设置可配置的确认超时，例如 30 秒。记录超时后不能直接释放：Scheduler 必须先从 apiserver GET 最新 Job，确认绑定未生效后才能删除；如果 GET 失败，保留预占并延后重试。
+
+assumed cache 只存在于 Scheduler 内存中，不修改 Runner 对象，也不是最终绑定事实来源。Job `status.runner` 仍是唯一持久化绑定关系。首版单调度进程可以使用本地 cache；多副本部署必须配合 leader election，否则不同副本之间无法共享预占信息。
 
 ### 5.3 Filter
 
@@ -351,35 +332,75 @@ Job 进入调度队列：
 
 `status.phase == "Booting"` 的 Runner 可以被 watch 缓存，但不进入候选集，等 Runner 上报 `Idle` 或 `Running` 后再参与调度。
 
-### 5.4 Score
+`NodeSelectorFilter` 采用精确匹配：`spec.nodeSelector` 为空时不限制 Runner；非空时，其中每个键值都必须存在于 Runner `metadata.labels` 且值相等。Runner agent 注册时会上报常用调度标签，例如：
 
-首版打分保持简单：
-
-| 打分项 | 说明 |
-|--------|------|
-| Idle 优先 | 绑定 Job 越少的 Runner 优先 |
-| CPU 余量 | Runner `status.allocatable["cpu"]` 越大越优先 |
-| 内存余量 | Runner `status.allocatable["memory"]` 越大越优先 |
-
-
-示例权重：
-
-```text
-score = idleScore * 40 + CPU * 30 + Memory * 30
+```yaml
+metadata:
+  labels:
+    ebs.io/runner-type: ct
+    ebs.io/runner-arch: aarch64
 ```
 
-首版打分规则：
+Job 可以通过相同标签约束目标 Runner：
 
-| 插件 | 说明 |
-|--------|------|
-| UtilizationScorer | 计算指标：CPU 和 Memory。计算公式: score = (cpu(allocatable * max_score * cpu_weight/capacity) + memory(allocatable * max_score * memory_weight/capacity)) / weight_sum | 
-| SpreadingScorer | 计算指标：Runner 已绑定的 Job 数量。计算公式: score = (runner_job_capacity - bound_runner_count) / runner_job_capacity * weight_sum | 
+```yaml
+spec:
+  nodeSelector:
+    ebs.io/runner-type: ct
+    ebs.io/runner-arch: aarch64
+```
 
-首版不引入复杂插件系统。实现上可以先用固定 Filter/Score 函数，后续再拆成插件。
+### 5.4 Score
+
+首版使用 `UtilizationScorer` 和 `SpreadingScorer` 两个固定打分函数。每项分数统一归一化到 `[0, 100]`，分数越高越优先。资源计算包含已绑定的 Running Job 和尚未被 watch 确认的 assumed Job。
+
+#### UtilizationScorer
+
+根据当前 Job 假定调度到 Runner 后的 CPU、内存剩余比例打分：
+
+```text
+cpuRemainingRatio = (availableCPU - requestedCPU) / allocatableCPU
+memoryRemainingRatio = (availableMemory - requestedMemory) / allocatableMemory
+
+metrics = 可参与计算的 CPU、Memory 指标集合
+utilizationScore = sum(remainingRatio(metric) for metric in metrics) / len(metrics) * 100
+```
+
+规则：
+
+- `available` 使用 5.2.4 定义的 Runner 当前可用资源。
+- 只计算 Runner 声明了 `allocatable` 且值大于 0 的指标，`metricCount` 是实际参与计算的指标数量。
+- Job 未声明某项 request 时，该项 request 按 0 计算。
+- Job 请求大于 available 的 Runner 已由 `CapacityFilter` 淘汰，不进入打分。
+- 如果 CPU 和内存都无法参与计算，`utilizationScore` 取 0。
+- 最终结果限制在 `[0, 100]`，避免解析和舍入误差产生越界值。
+
+该算法优先选择调度后资源余量更高的 Runner，使负载在 Runner 间分散。
+
+#### SpreadingScorer
+
+根据 Runner 当前承担的 Job 数量打分：
+
+```text
+jobCount = runningJobCount + assumedJobCount
+spreadingScore = 100 / (1 + jobCount)
+```
+
+Running Job 和 assumed Job 均计入 `jobCount`，避免连续调度期间所有新 Job 都选择同一个 Runner。
+
+#### 总分
+
+```text
+finalScore = utilizationScore * 0.6 + spreadingScore * 0.4
+```
+
+`finalScore` 统一限制在 `[0, 100]`。
+
+首版直接实现上述固定函数，不引入插件注册框架；后续插件化时保持相同的分值范围和加权接口。
 
 ### 5.5 Pick
 
-选择总分最高的 Runner。若分数相同，按 Runner 名称排序，保证结果稳定。
+选择总分最高的 Runner。若分数相同，按 Runner `metadata.name` 升序选择，保证结果稳定。
 
 ### 5.6 Bind
 
@@ -395,9 +416,11 @@ status:
 
 绑定更新必须处理资源版本冲突：
 
+- 发送更新前必须已经在 assumed cache 中完成资源预占。
 - 如果 Job 已经不是 Pending，放弃本次绑定。
 - 如果 Job 已经有 `status.runner`，放弃本次绑定。
-- 如果更新时出现 resourceVersion 冲突，重新读取 Job 后再判断是否需要重试。
+- 如果更新时出现 resourceVersion 冲突，先回滚 assumed 记录，再读取 Job 判断是否需要重试。
+- API 返回成功后不立即释放预占，等待 Job watch 事件确认绑定。
 
 ### 5.7 Job 饥饿问题
 
@@ -422,7 +445,7 @@ status:
   - 描述：当请求资源大的高 Priority Job 绑定 Runner 失败后，可以将当前最有可能执行 Job 的 Runner 锁定， 除锁定 Runner 的 Job 外，其他 Job 无法绑定该 Runner。
   - 实现：
   
-    - 在缓存 Runner `metadata.labels` 中添加一个 `ebs.io/runner-locked-by` 标签，当 Job 绑定 Runner 失败后，会尝试向 Runner 添加该标签，值为 Job 名称。
+    - 在缓存 Runner `metadata.labels` 中添加一个 `ebs.io/runner-locked-by` 标签，当 Job 绑定 Runner 失败后，会尝试向 Runner 添加该标签。由于 Kubernetes label value 不能包含 `/`，标签值使用 Job UID；Scheduler 内部仍以 `{project}/{jobName}` 标识 Job。
     - 锁定 Runner 后，其他 Job 无法绑定该 Runner，直到高 Priority Job 完成绑定或取消。
     - 实现一个 Runner 锁定过滤插件，在 Filter 阶段，若 Runner 已被锁定，且 Job 不是锁定 Runner 的 Job，则过滤该 Runner。
 
@@ -430,7 +453,7 @@ status:
   - 描述：当请求资源大的高 Priority Job 绑定 Runner 失败后，可以向当前最有可能执行 Job 的 Runner 预定资源，当其他 Job 向 Runner 请求资源时，会根据当前的负载策略决定是否接受。
   - 实现：
   
-    - 在缓存 Runner `metadata.labels` 中添加一个 `ebs.io/runner-reserved-by` 标签，当高 Priority Job 被绑定 Runner 失败后，会尝试向 Runner 添加该标签，值为 Job 名称。
+    - 在缓存 Runner `metadata.labels` 中添加一个 `ebs.io/runner-reserved-by` 标签，当高 Priority Job 被绑定 Runner 失败后，会尝试向 Runner 添加该标签。标签值使用 Job UID；Scheduler 内部仍以 `{project}/{jobName}` 标识 Job。
     - 预定 Runner 后，其他 Job 可以根据当前的负载策略尝试绑定 Runner，预定 Runner 直到高 Priority Job 完成绑定或取消后释放预定资源。
     - 实现一个 Runner 预定过滤插件，在 Filter 阶段，若 Runner 已被预定，且 Job 不是预定 Runner 的 Job，则尝试保留该 Runner。
 
@@ -440,33 +463,9 @@ status:
 
 注意：若设置了本地自定义标签，则需要实现一个 Job 事件处理器，用于处理 Job 事件发生时自定义标签的合并，并及时更新缓存。
 
-## 六、Runner 匹配规则
+## 六、调度队列
 
-Job 使用 `spec.nodeSelector` 表达对 Runner 标签的硬约束。首版采用精确匹配规则：
-
-1. 如果 `spec.nodeSelector` 为空，不限制 Runner 标签。
-2. 如果设置了 `spec.nodeSelector`，其中每个键值都必须存在于 Runner `metadata.labels` 且值相等。
-3. Runner agent 注册时会上报常用标签，例如：
-
-```yaml
-metadata:
-  labels:
-    ebs.io/runner-type: ct
-    ebs.io/runner-arch: aarch64
-```
-
-例如指定只调度到 ct 类型 aarch64 Runner：
-
-```yaml
-spec:
-  nodeSelector:
-    ebs.io/runner-type: ct
-    ebs.io/runner-arch: aarch64
-```
-
-## 七、调度队列
-
-### 7.1 队列架构
+### 6.1 队列架构
 
 调度队列由 `WorkerQueue` 统一管理，内部包含三个子队列：
 
@@ -486,21 +485,21 @@ graph TD
     U[UnschedulableQueue] --> |到期 Job| A
 ```
 
-### 7.2 PriorityQueue（优先级队列）
+### 6.2 PriorityQueue（优先级队列）
 
-继承 `GenericHeapQueue`，基于 `HeapQueue`（大顶堆）实现，Job 按 `spec.priority` 排序，优先级高的先出队。内部维护 `_obj_keys` 和 `_delete_keys` 列表，重复对象自动忽略，删除采用懒删除策略。
+继承 `GenericHeapQueue`，基于 `HeapQueue`（大顶堆）实现，Job 按 `spec.priority` 排序，优先级高的先出队。Job 的 `obj_key` 固定为 `{project}/{jobName}`。内部维护 `_obj_keys` 和 `_delete_keys` 列表，重复对象自动忽略，删除采用懒删除策略。
 
 | 方法 | 说明 |
 |------|------|
 | `push(obj)` | 入队，重复对象忽略，返回 `bool` |
-| `pop(block, timeout)` | 出队，返回 `(priority, obj_key, obj_value)` 元组，队列为空返回 `None` |
-| `peek()` | 查看队首元素但不移除，返回 `(priority, obj_key, obj_value)` 元组 |
+| `pop(block, timeout)` | 出队，返回 `(priority, obj_key, obj_value)` 元组，其中 `obj_key` 为 `{project}/{jobName}`；队列为空返回 `None` |
+| `peek()` | 查看队首元素但不移除，返回 `(priority, obj_key, obj_value)` 元组，其中 `obj_key` 为 `{project}/{jobName}` |
 | `delete(obj)` | 懒删除，`pop()`/`peek()` 时跳过已删除项 |
 | `exists(obj)` | 判断对象是否在队列中 |
 | `is_empty()` | 判断队列是否为空 |
 | `close()` | 关闭队列，关闭后 `push()` 返回 `False` |
 
-### 7.3 BackoffQueue（退避队列）
+### 6.3 BackoffQueue（退避队列）
 
 继承 `GenericHeapQueue`，使用小顶堆（`big_top_heap=False`），用于调度失败后的指数退避重试。入队时自动计算退避到期时间作为排序依据：
 
@@ -528,7 +527,7 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 | `push(obj)` | 入队前自动计算退避时间（`time.time() + backoff_time`）作为排序依据 |
 | `all_backoff_matured(timeout_limit)` | 弹出入队时间小于给定值的所有对象，用于定时器检查到期 Job |
 
-### 7.4 WorkerQueue（工作队列）
+### 6.4 WorkerQueue（工作队列）
 
 顶层队列管理器，组合三个子队列并通过定时器线程实现队列间自动流转。
 
@@ -538,18 +537,18 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 | `add_to_backoff(job)` | 将失败 Job 加入 BackoffQueue（自动计算退避时间），从其他队列中移除 |
 | `add_to_unschedulable(job)` | 将无可用 Runner 的 Job 加入 UnschedulableQueue，从其他队列中移除 |
 | `remove(obj)` | 从所有子队列中懒删除 Job |
-| `pop()` | 阻塞从 ActiveQueue 中取出优先级最高的 Job，返回 `(priority, obj_key, obj_value)` |
+| `pop()` | 阻塞从 ActiveQueue 中取出优先级最高的 Job，返回 `(priority, obj_key, obj_value)`，其中 `obj_key` 为 `{project}/{jobName}` |
 | `peek()` | 查看 ActiveQueue 队首 Job |
 | `close()` | 关闭所有队列并停止定时器线程 |
 
-### 7.5 定时器线程
+### 6.5 定时器线程
 
 `WorkerQueue` 内部维护一个定时器线程 `run_with_interval`，按 `interval`（默认 10s）间隔周期性执行：
 
 1. 检查 `UnschedulableQueue`：每次弹出一个头部 Job，`re_push` 回 `ActiveQueue`
 2. 检查 `BackoffQueue`：调用 `all_backoff_matured(timeout_limit)` 获取所有退避到期的 Job，逐一 `re_push` 回 `ActiveQueue`
 
-### 7.6 队列规则
+### 6.6 队列规则
 
 - 新增或更新为 Pending 的 Job 进入 `ActiveQueue`（`on_add` / `on_update`）。
 - 调度失败的重试 Job 进入 `BackoffQueue`（退避到期后自动移回 `ActiveQueue`）。
@@ -566,7 +565,7 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 | Job 请求资源超过 Runner 总容量资源 | 更新 Job `status.phase="Aborted"` |
 | API 更新失败 | 进入 BackoffQueue，退避后重试 |
 
-## 八、并发与幂等
+## 七、并发与幂等
 
 首版可以单副本部署，简化锁和 leader election。
 
@@ -575,8 +574,10 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 - 只绑定 `status.phase == "Pending"` 且 `status.runner` 为空的 Job。
 - 绑定成功后，重复处理同一 watch 事件不会再次修改已 Running 的 Job。
 - 绑定失败不修改 Runner `status.phase` 和  `status.runner`。
+- 同一 Runner 的可用资源计算与 assumed 预占必须原子执行，防止不同 Job 并发绑定导致资源超卖。
+- assumed cache 是单进程状态；启用多个调度进程前必须先实现 leader election 或等价的分布式协调机制。
 
-## 九、故障处理
+## 八、故障处理
 
 | 场景 | 处理 |
 |------|------|
@@ -584,10 +585,12 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 | Runner watch 中断 | 重新 list Runner，刷新本地缓存 |
 | Runner 心跳超时 | 本地过滤该 Runner；`status.phase == "Offline"` 标记由外部控制器处理 |
 | Bind 冲突 | 重新读取 Job，若仍 `status.phase == "Pending"` 则重试 |
+| Bind 失败 | 立即回滚对应 assumed 记录，Job 进入退避队列 |
+| Bind 成功但 watch 未确认 | assumed 记录到期后 GET 最新 Job，确认绑定未生效才释放预占 |
 | 无候选 Runner | Job 进入 unschedulable，等待 Runner 或资源状态变化 |
 | apiserver 不可达 | 指数退避重连 |
 
-## 十、首版实现结构
+## 九、首版实现结构
 
 目录结构：
 
@@ -612,7 +615,7 @@ components/scheduler/
     └── server/                    # API服务，健康检查 API 实现
 ```
 
-## 十一、后续扩展
+## 十、后续扩展
 
 后续可以在不改变首版主流程的前提下扩展：
 
