@@ -22,7 +22,7 @@ Scheduler 不直接访问 etcd 或 Elasticsearch，不直接执行 Job，也不�
 | Project 无关 | 通过全局 Job API 跨 Project 调度，不逐个 Project 建立 watch |
 | 轻量过滤 | 基于 Runner 类型、架构、状态、污点、标签和可调度资源过滤 |
 | 简单打分 | 基于空闲优先、可调度资源和标签匹配进行排序 |
-| 状态绑定 | 只更新 Job status，写入实际 Runner `status.runner` 名称并将 Job 置为 Running `status.phase="Running"` |
+| 状态绑定 | 只更新 Job status：将实际 Runner 名称写入 `status.runner`，并将 Job 置为 `status.phase="Running"` |
 | 可扩展 | 后续可逐步引入更多 Filter/Score 插件 |
 
 ## 三、API 交互
@@ -77,7 +77,6 @@ PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status
 ```yaml
 status:
   phase: Running
-  stage: Pending
   runner: runner-ct-aarch64-01
   startTime: "2026-06-09T10:00:00Z"
 ```
@@ -97,7 +96,7 @@ Job、Runner 及其公共子结构的完整字段、类型、默认值和枚举�
 | `metadata.uid` | 区分同名 Job 删除后重建的不同实例 |
 | `metadata.resourceVersion` | Bind 时执行乐观并发控制 |
 | `spec.priority` | ActiveQueue 排序；值越大越优先，默认 0 |
-| `spec.runtime` | 执行运行时类型，默认 `ct`；首版暂不参与资源计算 |
+| `spec.runtime` | 执行使用的运行时类型，默认 `ct`；首版暂不参与资源计算 |
 | `spec.resources.requests` | 判断 Runner 剩余资源是否满足请求 |
 | `spec.nodeSelector` | 精确匹配 Runner `metadata.labels` |
 | `spec.tolerations` | 判断 Job 是否容忍 Runner `spec.taints` |
@@ -146,16 +145,15 @@ openeuler-24-03/build-kernel
 
 ```mermaid
 graph TD
-    SC[Scheduler] --> |启动 Job/Runner 事件监听| A 
-    A[Reflector] -->|watch Job/Runner事件| B[DeltaFIFO]
+    SC[Scheduler] --> |启动 Job/Runner 事件监听| A
+    A[Reflector] -->|watch Job/Runner 事件| B[DeltaFIFO]
     B -->|缓存增量事件| C[Informer]
     C -->|消费事件| F
-    C -->|更新索引| D[Indexer]
+    C -->|新建/更新/删除索引| D[Indexer]
 
-    F[Informer::_event_dispatch] --> |Job 事件|G[Scheduler::on_add/on_update/on_delete]
-    G -->|Failed Job| Q2[WorkerQueue::BackoffQueue]
+    F[Informer::_event_dispatch] --> |Job 事件| G[Scheduler::on_add/on_update/on_delete]
     G -->|Pending Job| Q1[WorkerQueue::ActiveQueue]
-    Q2 -->|延迟到期 Job| Q1
+    Q2[WorkerQueue::BackoffQueue] -->|延迟到期 Job| Q1
 
     Q1 -->|消费 Job| L[Scheduler::process_loop]
     D --> |Job| L
@@ -164,16 +162,16 @@ graph TD
     A1 --> |plugins| P[PluginChain]
     
     
-    P --> |无候选 Runner| Q3[WorkerQueue::UnschedulableQueue]
+    P --> |无候选 Runner, Job 重新加入队尾| Q1
     P --> |选出 Runner| AC[AssumedCache::原子预占资源]
-    AC --> |预占成功| S[请求ApiServer更新Job状态]
-    AC --> |资源已不足| Q3
+    AC --> |预占成功| S[请求 APIServer 更新 Job 状态]
+    AC --> |预占失败, Job 重新加入队尾| Q1
     S --> |更新失败并回滚预占| Q2
     S --> |更新成功，等待 watch 确认| D
-    Q3 --> |退避到期 Job| Q1
+  
 
-    SC --> |启动Job/Runner缓存刷新定时器| T0
-    T0[Scheduler::refresh_loop] --> |每60s刷新 Job/Runner 缓存| RI[Informer::refresh]
+    SC --> |启动 Job/Runner 缓存刷新定时器| T0
+    T0[Scheduler::refresh_loop] --> |每 60s 刷新 Job/Runner 缓存| RI[Informer::refresh]
     RI --> RR[Reflector::list]
     RR --> |List Job| F1[Informer::_event_dispatch]
     RR --> |List Runner| F1
@@ -186,45 +184,80 @@ graph TD
 
 核心逻辑
 
-```text
-Informer (ListWatch / Reflector)
-  -> watch Job / Runner 事件
-  -> DeltaFIFO 缓存增量事件
-  -> SharedInformer 消费事件 -> Indexer 更新索引 -> 事件分发
+```mermaid
+sequenceDiagram
+  participant S as Scheduler
+  participant I as Informer
+  participant A as Action
+  participant ID as Indexer
+  participant WQ as WorkQueue
+  participant AP as APIServer
 
-Scheduler 事件处理:
-  -> on_add / on_update: Pending Job -> WorkerQueue.add_to_active()
-  -> on_add / on_update: Failed Job  -> WorkerQueue.add_to_backoff()
-  -> on_delete: 删除 Job -> WorkerQueue.remove()
+  alt 初始化
+    S ->>+S: 初始化 Plugin、Action
+    S ->> S: 初始化 EventHandler、Informer
+    S ->> S: 启动 work、refresh 工作线程
+    S ->>-I: 启动事件 watch
+  end
 
-Scheduler process_loop 调度主循环:
-  -> WorkerQueue.pop() 从 ActiveQueue 取出 {project}/{jobName}, 从 Indexer 根据完整 Job Key 查询 Job 对象
-  -> 创建 SchedulingContext (job, runner indexer, client)
-  -> pre_schedule:
-       INITIAL: 读取 Runner 快照 -> 提取 Job 资源需求 -> 生成候选列表
-       CALC_CAPACITY: 调用 ResourceCalcPlugin 计算 Runner 容量
-  -> schedule:
-       FILTER: 调用 FilterPlugin 过滤 Runner
-       SCORE:  调用 ScorePlugin 对 Runner 打分
-       BIND:   调用 BindPlugin 选择最优 Runner
-  -> post_schedule 调度后处理:
-       ASSUME: 在本地 assumed cache 中原子预占 Runner 资源
-       BROADCAST: Job 绑定 Runner   -> 更新 status.phase="Running", status.stage="Pending" 同步到 apiserver;
-                  watch 确认绑定     -> 从 assumed cache 删除对应预占；
-                  API 更新失败       -> 回滚预占并将 Job 加入 WorkerQueue.add_to_backoff()；
-                  Job 未绑定 Runner -> WorkerQueue.add_to_unschedulable()；
+  I ->> AP: 发起 list 请求
+  AP ->> +I: 返回 list 资源列表
+  I ->> -ID: 添加 list 资源到 Indexer
+  
+  alt watch 事件
+    I ->> AP: 发起 watch 请求
+    AP ->> +I: 持续不断地返回 watch 事件流
+    I ->> ID: 添加/删除/更新索引和资源缓存
+    I ->> -S: 分发 watch 事件
+    S ->> WQ: Pending 状态的 Job 入队
+  end
 
-定时器线程 (WorkerQueue.run_with_interval):
-  -> 每 10s 将 UnschedulableQueue 头部 Job 移回 ActiveQueue
-  -> 每 10s 将 BackoffQueue 中到期 Job 移回 ActiveQueue
+  alt worker(process_loop)
+    WQ ->> +S: 消费 Job
+    S ->> -S: 创建 Job 上下文
 
-定时器线程 (Scheduler._run_refresh):
-  -> 每 60s 执行 list 操作，将 Job 和 Runner 的缓存刷新
+    alt pre_scheduler
+      S ->> +A: 调用 init_action
+      A ->> +ID: 检索所有运行或空闲的 Runner
+      ID ->> -A: 返回检索结果
+      A ->> A: 提取 Job 请求资源, 生成 Runner 候选列表
+      A ->> -S: 返回 init_action 执行结果
+
+      S ->> +A: 调用 calc_capacity_action
+      A ->> A: Runner 资源扣减 Job 执行和预占资源
+      A ->> -S: 返回 calc_capacity_action 执行结果
+    end
+    
+    alt scheduler
+      S ->> +A: 调用 filter_action
+      A ->> A: 调用 filter plugin chain 进行 Runner 资源过滤
+      A ->> -S: 返回 filter_action 执行结果
+      
+      S ->> +A: 调用 score_action
+      A ->> A: 调用 score plugin chain 对 Runner 资源进行打分
+      A ->> -S: 返回 score_action 执行结果
+
+      S ->> +A: 调用 bind_action
+      A ->> A: 调用 bind plugin chain 对 Job 进行 Runner 绑定
+      A ->> -S: 返回 bind_action 执行结果
+    end
+
+    alt post_scheduler
+      S ->> +A: 调用 broadcast_action
+      A ->> WQ: Runner 预占资源失败, 重新加入队尾
+      
+      A ->> AP: Runner 预占资源成功, 更新 Job 状态
+      AP ->> +A: 返回更新结果
+      A ->> -WQ: 更新 Job 状态失败, 入退避队列
+
+      A ->> -S: 返回 broadcast_action 执行结果
+    end
+  
+  end
 
 ```
 
 ### 5.1 入队
-
 
 Job 进入调度队列：
 
@@ -369,7 +402,7 @@ utilizationScore = sum(remainingRatio(metric) for metric in metrics) / len(metri
 规则：
 
 - `available` 使用 5.2.4 定义的 Runner 当前可用资源。
-- 只计算 Runner 声明了 `allocatable` 且值大于 0 的指标，`metricCount` 是实际参与计算的指标数量。
+- 只计算 Runner 声明了 `allocatable` 且值大于 0 的指标，`metrics` 是实际参与计算的指标集合。
 - Job 未声明某项 request 时，该项 request 按 0 计算。
 - Job 请求大于 available 的 Runner 已由 `CapacityFilter` 淘汰，不进入打分。
 - 如果 CPU 和内存都无法参与计算，`utilizationScore` 取 0。
@@ -409,7 +442,6 @@ finalScore = utilizationScore * 0.6 + spreadingScore * 0.4
 ```yaml
 status:
   phase: Running
-  stage: Pending
   runner: runner-ct-aarch64-01
   startTime: "2026-06-09T10:00:00Z"
 ```
@@ -439,10 +471,10 @@ status:
 
 `缺点1`尚可接受，因为高 Priority Job 优先执行，符合预期。
 
-`缺点2`高优 Priority Job 被饿死，这是不可接受的。导致该问题的原因是：Job 均匀分布在 Runner 上执行，则 Job 执行时间长或数量过多都会导致 Runner 没有足够的资源执行较大请求资源的高 Priority Job。针对这个问题有如下几种方案：
+`缺点2`高优先级 Job 被饿死，这是不可接受的。导致该问题的原因是：Job 均匀分布在 Runner 上执行，当某个 Job 执行时间较长或数量较多时，Runner 就没有足够的资源来执行请求资源较大的高 Priority Job。针对这个问题有如下几种方案：
 
-- 方案1: 资源锁定
-  - 描述：当请求资源大的高 Priority Job 绑定 Runner 失败后，可以将当前最有可能执行 Job 的 Runner 锁定， 除锁定 Runner 的 Job 外，其他 Job 无法绑定该 Runner。
+- 方案1：资源锁定
+  - 描述：当请求资源大的高 Priority Job 绑定 Runner 失败后，可以将当前最有可能执行 Job 的 Runner 锁定，除锁定 Runner 的 Job 外，其他 Job 无法绑定该 Runner。
   - 实现：
   
     - 在缓存 Runner `metadata.labels` 中添加一个 `ebs.io/runner-locked-by` 标签，当 Job 绑定 Runner 失败后，会尝试向 Runner 添加该标签。由于 Kubernetes label value 不能包含 `/`，标签值使用 Job UID；Scheduler 内部仍以 `{project}/{jobName}` 标识 Job。
@@ -459,111 +491,424 @@ status:
 
 - 方案3: 动态唤醒
   - 描述：当请求资源大的高 Priority Job 绑定 Runner 失败后进入延迟队列，每当有 Runner 释放资源的事件发生时，都将优先唤醒高优先级 Job 进行调度。
-  - 实现： 实现 Job 事件处理器，每当有 Job `status.phase == "Running"` 状态变更为: `Completed`、`Aborted` 或 `Failed` 的事件发生时，将该 Job 从延迟队列中唤醒。
+  - 实现：实现 Job 事件处理器，每当有 Job 的 `status.phase` 从 `Running` 变更为 `Completed`、`Aborted` 或 `Failed` 时，将延迟队列中的高优先级 Job 唤醒。
 
 注意：若设置了本地自定义标签，则需要实现一个 Job 事件处理器，用于处理 Job 事件发生时自定义标签的合并，并及时更新缓存。
 
 ## 六、调度队列
 
-### 6.1 队列架构
+基于 `Heap` 实现双队列调度模型。
 
-调度队列由 `WorkerQueue` 统一管理，内部包含三个子队列：
+### 6.1 数据模型
 
-```text
-WorkerQueue
-├── ActiveQueue (PriorityQueue)        # 待调度 Pending Job，按 spec.priority 排序
-├── BackoffQueue (PriorityQueue)       # 运行失败退避 Job，按退避到期时间排序
-└── UnschedulableQueue (PriorityQueue) # Runner 的可用资源不满足 Job 资源需求，按入队顺序排序
+#### Item 数据模型
+
+```python
+class Item:
+    __slots__ = ('key', 'priority', '_counter')
+
+    def __init__(self, key: str, priority: int = 0) -> None:
+        self.key = key                    # 唯一标识，用于去重
+        self.priority = priority          # 调度优先级，值越大越优先
+        self._counter: int = 0            # 插入序号，用于同优先级 FIFO
 ```
-数据流转
-```mermaid
-graph TD
-    J[Job] --> |status.phase == "Pending"| A[ActiveQueue]
-    J --> |status.phase == "Failed"| B[BackoffQueue]
-    J --> |status.runner Bound Failed| U[UnschedulableQueue]
-    B[BackoffQueue] --> |到期 Job| A[ActiveQueue]
-    U[UnschedulableQueue] --> |到期 Job| A
+
+#### BackoffItem 数据模型
+
+```python
+class BackoffItem(Item):
+    __slots__ = ('_backoff_time', '_retry_count')
+
+    def __init__(self, key: str, priority: int = 0) -> None:
+        super().__init__(key, priority)
+        self._backoff_time: float = 0.0      # 退避到期时间（monotonic 时钟）
+        self._retry_count: int = 0           # 退避重试次数
 ```
+
+---
 
 ### 6.2 PriorityQueue（优先级队列）
 
-继承 `GenericHeapQueue`，基于 `HeapQueue`（大顶堆）实现，Job 按 `spec.priority` 排序，优先级高的先出队。Job 的 `obj_key` 固定为 `{project}/{jobName}`。内部维护 `_obj_keys` 和 `_delete_keys` 列表，重复对象自动忽略，删除采用懒删除策略。
+#### 职责
 
-| 方法 | 说明 |
-|------|------|
-| `push(obj)` | 入队，重复对象忽略，返回 `bool` |
-| `pop(block, timeout)` | 出队，返回 `(priority, obj_key, obj_value)` 元组，其中 `obj_key` 为 `{project}/{jobName}`；队列为空返回 `None` |
-| `peek()` | 查看队首元素但不移除，返回 `(priority, obj_key, obj_value)` 元组，其中 `obj_key` 为 `{project}/{jobName}` |
-| `delete(obj)` | 懒删除，`pop()`/`peek()` 时跳过已删除项 |
-| `exists(obj)` | 判断对象是否在队列中 |
-| `is_empty()` | 判断队列是否为空 |
-| `close()` | 关闭队列，关闭后 `push()` 返回 `False` |
+管理 Item 从入队到处理完成的完整生命周期：
+- **去重**：基于 Heap 的 key 映射，同一 key 的 Item 自动覆盖
+- **优先级排序**：高优先级先出队，同优先级 FIFO
+- **有主状态**：`get()` 返回的 Item 标记为 in_flight，`done()` 前不会被重复取出
+- **优雅停止**：`close()` 后所有阻塞 `get()` 返回 None
+- **线程安全**：`threading.Condition` 保护所有共享状态
 
-### 6.3 BackoffQueue（退避队列）
+#### 架构
 
-继承 `GenericHeapQueue`，使用小顶堆（`big_top_heap=False`），用于调度失败后的指数退避重试。入队时自动计算退避到期时间作为排序依据：
+```
+     add(item)
+        │
+        ├── activeQ 已存在? ──Yes──► 更新优先级，保留 _counter
+        ├── in_flight 中?   ──Yes──► 标记 dirty，done() 后重新入队
+        ├── activeQ 满?     ──Yes──► 返回 False
+        └── 全新 Item       ───────► 分配 _counter，入队，notify()
 
-```text
-order_no = time.time() + backoff_time
-backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
+     get()
+        │
+        ├── activeQ 为空? ──Yes──► cond.wait()
+        └── 有 Item       ───────► pop() → 标记 in_flight → 链式 notify → 返回
+
+     done(item)
+        │
+        ├── 不在 in_flight 中 ──► return
+        └── 在 in_flight 中 ────► 移除 → dirty 存在? → 重新入队 activeQ
 ```
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `backoff_factor` | 10 | 退避基础因子（秒） |
-| `max_backoff` | 3600 | 最大退避时间上限（秒） |
+#### 类定义
 
-退避时间计算示例（`backoff_factor=10`）：
+```python
+import threading
+from typing import Dict, List, Optional, Set
+from cache.heap import Heap
 
-| restartCount | 退避时间 | 公式 |
-|-------------|---------|------|
-| 1 | 10s | 10 * 2^0 |
-| 2 | 20s | 10 * 2^1 |
-| 3 | 40s | 10 * 2^2 |
-| 4 | 80s | 10 * 2^3 |
 
-| 方法 | 说明 |
-|------|------|
-| `push(obj)` | 入队前自动计算退避时间（`time.time() + backoff_time`）作为排序依据 |
-| `all_backoff_matured(timeout_limit)` | 弹出入队时间小于给定值的所有对象，用于定时器检查到期 Job |
+class PriorityQueue:
+    """线程安全的优先级队列，支持去重、有主状态、优雅停止。"""
 
-### 6.4 WorkerQueue（工作队列）
+    def __init__(self, max_size: int = 0) -> None:
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
 
-顶层队列管理器，组合三个子队列并通过定时器线程实现队列间自动流转。
+        # 大顶堆：高优先级在前；同优先级时，先入队的在前
+        self._activeQ = Heap(
+            key_func=lambda item: item.key,
+            less_func=self._priority_less,
+        )
 
-| 方法 | 说明 |
-|------|------|
-| `add_to_active(job)` | 将 Pending Job 加入 ActiveQueue，若 Job 已经在 BackoffQueue 或 UnschedulableQueue 则不加入 ActiveQueue|
-| `add_to_backoff(job)` | 将失败 Job 加入 BackoffQueue（自动计算退避时间），从其他队列中移除 |
-| `add_to_unschedulable(job)` | 将无可用 Runner 的 Job 加入 UnschedulableQueue，从其他队列中移除 |
-| `remove(obj)` | 从所有子队列中懒删除 Job |
-| `pop()` | 阻塞从 ActiveQueue 中取出优先级最高的 Job，返回 `(priority, obj_key, obj_value)`，其中 `obj_key` 为 `{project}/{jobName}` |
-| `peek()` | 查看 ActiveQueue 队首 Job |
-| `close()` | 关闭所有队列并停止定时器线程 |
+        self._in_flight: Dict[str, Item] = {}   # 正在处理中的 Item
+        self._dirty: Set[str] = set()           # 处理期间被重新 add 的 key
+        self._closed: bool = False
+        self._max_size: int = max_size
+        self._counter: int = 0
+```
 
-### 6.5 定时器线程
+#### 公共接口
 
-`WorkerQueue` 内部维护一个定时器线程 `run_with_interval`，按 `interval`（默认 10s）间隔周期性执行：
+```python
+    def add(self, item: Item) -> bool:
+        """添加或更新 Item。
+         - 已在 activeQ 中：更新优先级，保留 _counter
+         - 已在 in_flight 中：标记 dirty，done() 后重新入队
+         - 全新 Item：分配 _counter，入队
+         - 队列满：返回 False
+        """
+        with self._cond:
+            return self._add_locked(item)
 
-1. 检查 `UnschedulableQueue`：每次弹出一个头部 Job，`re_push` 回 `ActiveQueue`
-2. 检查 `BackoffQueue`：调用 `all_backoff_matured(timeout_limit)` 获取所有退避到期的 Job，逐一 `re_push` 回 `ActiveQueue`
+    def get(self) -> Optional[Item]:
+        """阻塞获取下一个待处理的 Item。
+        返回的 Item 具有"有主"状态：在 done() 被调用前不会被重复取出。
+        """
+        with self._cond:
+            return self._get_locked()
 
-### 6.6 队列规则
+    def done(self, item: Item) -> None:
+        """标记 Item 处理完成。处理期间有 add() 请求（dirty）时重新入队。"""
+        with self._cond:
+            self._done_locked(item)
 
-- 新增或更新为 Pending 的 Job 进入 `ActiveQueue`（`on_add` / `on_update`）。
-- 调度失败的重试 Job 进入 `BackoffQueue`（退避到期后自动移回 `ActiveQueue`）。
-- 当前 Runner 可分配资源不满足 Job 请求资源的 Job 进入 `UnschedulableQueue`，定时重试。
-- Job 被删除后，通过 `on_delete` 从所有队列 `remove()`。
-- 调度成功绑定后，Job 状态变为 `status.phase="Running"`, `status.stage="Pending"`，不再进入队列。
-- Runner 资源总容量无法满足 Job 请求资源的 Job 直接标记为 Aborted，不入队。
+    def delete(self, key: str) -> None:
+        """从 activeQ、in_flight、dirty 三个状态中彻底删除 Item。"""
+        with self._cond:
+            self._delete_locked(key)
+
+    def close(self) -> None:
+        """关闭队列，唤醒所有阻塞在 get() 的线程。"""
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
+
+    def size(self) -> int:
+        """返回当前待处理 Item 数量（不含 in_flight）。"""
+        with self._cond:
+            return self._activeQ.size()
+
+    def pending(self) -> List[Item]:
+        """返回所有待处理 Item 的列表快照（不含 in_flight）。"""
+        with self._cond:
+            return self._activeQ.list()
+```
+
+#### Template Methods（子类可重写以扩展行为）
+
+```python
+    def _add_locked(self, item: Item) -> bool:
+        """add() 核心逻辑，调用者必须持有 self._cond。"""
+        # 1. 已关闭 → 返回 False
+        # 2. 已在 activeQ 中 → 保留 _counter，push 更新，notify，返回 True
+        # 3. 已在 in_flight 中 → 标记 dirty，更新优先级副本，返回 True
+        # 4. 达到 max_size → 返回 False
+        # 5. 全新 Item → 分配 _counter，push，notify，返回 True
+
+    def _get_locked(self) -> Optional[Item]:
+        """get() 核心逻辑，调用者必须持有 self._cond。"""
+        # 1. 循环等待直到 activeQ 非空或已关闭
+        # 2. 调用 _pop_active_locked() 返回
+
+    def _done_locked(self, item: Item) -> None:
+        """done() 核心逻辑，调用者必须持有 self._cond。"""
+        # 1. 不在 in_flight 中 → 返回
+        # 2. 从 in_flight 移除
+        # 3. dirty 存在 → push 重新入队，notify
+
+    def _delete_locked(self, key: str) -> None:
+        """delete() 核心逻辑，调用者必须持有 self._cond。"""
+        # 1. 创建临时 Item(key)
+        # 2. activeQ.delete(dummy)，in_flight.pop(key)，dirty.discard(key)
+```
+
+#### 内部辅助方法
+
+```python
+    def _pop_active_locked(self) -> Item:
+        """从 activeQ 弹出堆顶并标记 in_flight。"""
+        # 1. activeQ.pop() 取出堆顶
+        # 2. 存入 in_flight[key] = item
+        # 3. activeQ 还有剩余 → notify 链式唤醒
+
+    @staticmethod
+    def _priority_less(a: Item, b: Item) -> bool:
+        """大顶堆 + 同优先级 FIFO。"""
+        # a.priority > b.priority 优先
+        # 相等时 a._counter < b._counter 优先
+
+    def _next_counter(self) -> int:
+        """分配下一个单调递增计数器。"""
+```
+
+---
+
+### 6.3 WorkQueue（工作队列）
+
+#### 职责
+
+继承 PriorityQueue 的所有能力，增加指数退避：
+- 处理失败时进入退避队列，按指数退避算法等待重试
+- `get()` 自动将到期 Item 从退避队列移回活跃队列
+- `add()` 检测到 Item 在退避队列中时，取消退避移回活跃队列
+
+#### 架构
+
+```
+                         ┌─────────────────────┐
+                    ┌───►│      activeQ        │◄──────────────┐
+                    │    │ 大顶堆（优先级排序）   │               │
+                    │    │ 同优先级 FIFO        │               │
+                    │    └─────────┬───────────┘               │
+                    │              │ get()                      │
+                    │              ▼                            │
+                    │    ┌─────────────────────┐               │
+                    │    │  处理成功 → done()   │               │
+                    │    └─────────┬───────────┘               │
+                    │              │ 处理失败                    │
+                    │              ▼                            │
+                    │    ┌─────────────────────┐  到期自动移回   │
+                    │    │     backoffQ        │──────────────►─┘
+                    │    │ 小顶堆（退避时间排序） │
+                    │    │ 退避时长封顶           │
+                    │    │ 单次迁移上限 32 个     │
+                    │    └─────────┬───────────┘
+                    │              │
+                    │              ▼
+                    │   add() 检测到在 backoffQ 中
+                    │   → 取消退避，移回 activeQ
+                    │
+                    └─── add() 新增或变更
+```
+
+#### 退避算法
+
+```python
+def _calc_backoff(self, retry_count: int) -> float:
+    return min(
+        self._backoff_initial * (self._backoff_factor ** (retry_count - 1)),
+        self._backoff_max,
+    )
+```
+
+| 重试次数 | 退避时长 | 说明 |
+|----------|----------|------|
+| 1 | 1.0s | 首次退避 = `backoff_initial` |
+| 2 | 2.0s | 指数增长 |
+| ... | ... | 直至封顶 |
+| 10+ | 300.0s | 封顶于 `backoff_max` |
+
+#### 退避迁移机制
+
+```
+get() 每次被调用时，先执行 _flush_backoff()：
+
+  backoffQ.peek() → 检查堆顶的 _backoff_time
+      ├── _backoff_time <= now ──► pop() → activeQ.push() → 继续
+      ├── _backoff_time > now  ──► 停止
+      └── 达到 MAX_FLUSH(32)   ──► 停止
+```
+
+#### 类定义
+
+```python
+import time
+from typing import Dict, List, Optional
+from cache.heap import Heap
+
+
+class WorkQueue(PriorityQueue):
+    """优先级队列 + 指数退避。通过重写 Template Method 扩展，不修改父类代码。"""
+
+    def __init__(
+        self,
+        max_size: int = 0,
+        backoff_initial: float = 1.0,
+        backoff_max: float = 300.0,
+        backoff_factor: float = 2.0,
+    ) -> None:
+        super().__init__(max_size)
+
+        # 小顶堆：退避到期时间最早的在前
+        self._backoffQ = Heap(
+            key_func=lambda item: item.key,
+            less_func=self._backoff_less,
+        )
+
+        self._backoff_initial = backoff_initial
+        self._backoff_max = backoff_max
+        self._backoff_factor = backoff_factor
+        self._backoff_max_size: int = max_size
+```
+
+#### 新增接口
+
+```python
+    def add_backoff(self, item: BackoffItem) -> bool:
+        """处理失败，进入退避队列。
+        自动从 in_flight 移除（done 语义），计算指数退避时长后入 backoffQ。
+        """
+        with self._cond:
+            return self._add_backoff_locked(item)
+
+    def stats(self) -> Dict[str, int]:
+        """返回各队列深度详情，用于监控。"""
+        with self._cond:
+            return {
+                "active": self._activeQ.size(),
+                "backoff": self._backoffQ.size(),
+                "in_flight": len(self._in_flight),
+            }
+```
+
+#### 重写公共接口
+
+```python
+    def add(self, item: BackoffItem) -> bool:
+        with self._cond:
+            return self._add_locked(item)
+
+    def get(self) -> Optional[BackoffItem]:
+        with self._cond:
+            return self._get_locked()
+
+    def done(self, item: BackoffItem) -> None:
+        with self._cond:
+            self._done_locked(item)
+
+    def delete(self, key: str) -> None:
+        with self._cond:
+            self._delete_locked(key)
+
+    def size(self) -> int:
+        """返回待处理 Item 总数（activeQ + backoffQ）。"""
+        with self._cond:
+            return self._activeQ.size() + self._backoffQ.size()
+
+    def pending(self) -> List[BackoffItem]:
+        with self._cond:
+            return self._activeQ.list() + self._backoffQ.list()
+```
+
+#### 重写 Template Methods
+
+```python
+    def _add_locked(self, item: BackoffItem) -> bool:
+        """add() 核心逻辑（扩展：取消退避）。"""
+        # 1. 已关闭 → 返回 False
+        # 2. 在 backoffQ 中 → 删除 backoffQ 记录，重置退避状态，
+        #    push 到 activeQ，notify，返回 True
+        # 3. 其他情况 → 委托 super()._add_locked(item)
+
+    def _get_locked(self) -> Optional[BackoffItem]:
+        """get() 核心逻辑（扩展：退避到期自动迁移）。"""
+        # 1. 循环：
+        #    a. 已关闭 → 返回 None
+        #    b. _flush_backoff() 将到期 Item 移回 activeQ
+        #    c. activeQ 非空 → _pop_active_locked() 返回
+        #    d. activeQ 为空 → 以 backoffQ 最早到期时间为超时等待
+        #       backoffQ 也为空 → 无限等待
+
+    def _done_locked(self, item: BackoffItem) -> None:
+        """done() 核心逻辑（扩展：退避中不重新入队）。"""
+        # 1. 不在 in_flight 中 → 返回
+        # 2. 从 in_flight 移除
+        # 3. dirty 存在且不在 backoffQ 中 → 重新入队 activeQ，notify
+
+    def _delete_locked(self, key: str) -> None:
+        """delete() 核心逻辑（扩展：同时清理 backoffQ）。"""
+        # 1. 创建临时 BackoffItem(key)
+        # 2. 分别从 activeQ 和 backoffQ 中 delete
+        # 3. 清理 in_flight 和 dirty
+```
+
+#### 新增内部方法
+
+```python
+    def _add_backoff_locked(self, item: BackoffItem) -> bool:
+        """add_backoff() 核心逻辑。"""
+        # 1. 已关闭 → 返回 False
+        # 2. 判断 item.key 是否在 in_flight 中
+        #    若存在 → 从 in_flight 移除，清理 dirty，继续
+        #    否则 → 不操作，返回 False
+        # 3. 从 activeQ 删除（如果存在）
+        # 4. retry_count + 1，计算退避时长，设置 backoff_time
+        # 5. 已在 backoffQ 中 → push 更新，notify，返回 True
+        # 6. backoffQ 满 → 返回 False
+        # 7. push 到 backoffQ，notify，返回 True
+
+    @staticmethod
+    def _backoff_less(a: BackoffItem, b: BackoffItem) -> bool:
+        """退避队列：按退避到期时间升序（小顶堆）。"""
+
+    def _calc_backoff(self, retry_count: int) -> float:
+        """指数退避：min(initial * factor^(retry_count-1), max_backoff)。"""
+
+    def _flush_backoff(self) -> None:
+        """将 backoffQ 中到期的 Item 移回 activeQ，最多 32 个。"""
+        # 1. 检查堆顶，_backoff_time <= now 时弹出
+        # 2. 重置 backoff_time = 0.0，push 到 activeQ
+        # 3. 重复直到达到上限或无不到期 Item
+```
+
+### 6.4 队列规则
+
+- 新增 `status.phase == "Pending"` 的 Job 通过 `add()` 进入 `activeQ`。
+- 更新 `status.phase == "Pending"` 的 Job 通过 `add()` 刷新 `priority`，若 Job 已在 `backoffQ` 中，则取消退避，移回 `activeQ`。
+- 调度失败的重试 Job 通过 `add_backoff()` 进入 `backoffQ`（退避到期后自动移回 `activeQ`）。
+- 退避时长按指数增长并封顶于 `backoff_max`，无"耗尽"特判：重试间隔随失败次数单调增大，最长不超过 `backoff_max`。
+- `max_size` 分别限制 `activeQ` 与 `backoffQ` 各自的长度（总量上界 `2 * max_size`），只约束全新条目：任一队列对全新条目已满时 `add`/`add_backoff` 返回 `False` 并丢弃（不阻塞），由定时 list 刷新（见 5.2.3）重新筛选 Pending Job 补偿；已在队列中的 Item 走 add-or-update/迁移，不丢弃。
+- Job 被删除后通过 `delete()` 从所有子队列移除。
+- 调度成功绑定后，Job 状态变为 `status.phase="Running"`，不再进入队列。
+- Job 请求资源超过 Runner 总容量时，直接标记为 `status.phase="Aborted"`，不入队。
 
 失败类型：
 
 | 类型 | 处理 |
 |------|------|
-| Job 请求资源超过 Runner 可分配资源 | 进入 UnschedulableQueue，定时重试 |
-| Job 请求资源超过 Runner 总容量资源 | 更新 Job `status.phase="Aborted"` |
-| API 更新失败 | 进入 BackoffQueue，退避后重试 |
+| Job 请求资源超过 Runner 可分配资源 | `add_backoff()` → 退避后重试 |
+| Job 请求资源超过 Runner 总容量 | 更新 Job `status.phase="Aborted"` |
+| API 更新失败 | `add_backoff()` → 退避后重试 |
 
 ## 七、并发与幂等
 
@@ -573,7 +918,7 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 
 - 只绑定 `status.phase == "Pending"` 且 `status.runner` 为空的 Job。
 - 绑定成功后，重复处理同一 watch 事件不会再次修改已 Running 的 Job。
-- 绑定失败不修改 Runner `status.phase` 和  `status.runner`。
+- 绑定失败不修改 Runner `status.phase` 和 `status.runner`。
 - 同一 Runner 的可用资源计算与 assumed 预占必须原子执行，防止不同 Job 并发绑定导致资源超卖。
 - assumed cache 是单进程状态；启用多个调度进程前必须先实现 leader election 或等价的分布式协调机制。
 
@@ -587,7 +932,7 @@ backoff_time = min(backoff_factor * 2^(restartCount - 1), max_backoff)
 | Bind 冲突 | 重新读取 Job，若仍 `status.phase == "Pending"` 则重试 |
 | Bind 失败 | 立即回滚对应 assumed 记录，Job 进入退避队列 |
 | Bind 成功但 watch 未确认 | assumed 记录到期后 GET 最新 Job，确认绑定未生效才释放预占 |
-| 无候选 Runner | Job 进入 unschedulable，等待 Runner 或资源状态变化 |
+| 无候选 Runner | Job 进入退避队列，指数退避后重试 |
 | apiserver 不可达 | 指数退避重连 |
 
 ## 九、首版实现结构
@@ -612,7 +957,7 @@ components/scheduler/
     ├── client/                    # API 客户端 EBSClient、Decoder 实现
     ├── plugin/                    # 插件系统，插件基类、注册中心、所有插件实现
     ├── log/                       # 日志模块
-    └── server/                    # API服务，健康检查 API 实现
+    └── server/                    # API 服务，健康检查 API 实现
 ```
 
 ## 十、后续扩展
