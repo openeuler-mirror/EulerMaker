@@ -654,3 +654,480 @@ Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文
 - 保证同一个相对路径只生成一条 manifest 记录。
 
 推荐使用 `packages/`、`logs/` 等一级目录组织产物；Repo Controller 将 `packages/` 下的 RPM 重新组织到最终 repo 的 `Packages/` 目录。
+
+## 九、日志处理
+
+### 9.1 最终日志文件
+
+容器运行期间的实时日志和 Job 结束后的最终日志使用同一份活动日志正文。Artifact Manager 持续追加实时日志；Runner 封账后，服务将该正文原子转换为 `relativePath=logs/container.log`、`category=log` 的普通 `Completed` Artifact，用于长期归档、查询和下载，不再要求 Runner 重复上传完整日志文件。
+
+### 9.2 实时日志
+
+实时日志使用独立于 Artifact 分片上传的追加协议。每个 Job 首版只允许一个 `stream=combined` 的日志流，按 Runner 捕获顺序合并 stdout 和 stderr。服务端以 `(project, jobUID, stream)` 唯一标识日志流，Job 名仅用于路由和展示。
+
+日志流状态：
+
+```text
+Open -> Finalizing -> Completed
+                   \-> Failed
+Open -> Expired
+```
+
+本地持久化布局：
+
+```text
+${dataDir}/.logs/{project}/{jobUID}/combined.log
+${dataDir}/.logs/{project}/{jobUID}/combined.index.jsonl
+${dataDir}/.metadata/logs/{project}/{jobUID}/combined.json
+```
+
+`combined.index.jsonl` 是 sequence、字节范围和 chunk 摘要的持久化索引；`combined.json` 只保存 `LogStream` 的小型汇总状态，不重复保存最近 chunk 列表。日志正文只追加到一个活动文件，不把每个 chunk 保存成长期独立对象。
+
+接收新 chunk 时，提交顺序固定为：
+
+1. 将解压后的正文追加到 `combined.log`，执行 `fdatasync`。
+2. 将一条带换行符的完整 JSON 记录追加到 `combined.index.jsonl`，执行 `fdatasync`。
+3. 原子更新 `combined.json` 中的 `nextSequence`、`committedBytes` 和 `updatedAt`，并 `fsync` 父目录。
+4. 只有以上步骤全部成功后才向 Runner 返回确认。
+
+`combined.index.jsonl` 是已提交 chunk 边界的事实来源，`combined.json` 是可重建的汇总和状态来源。步骤 1 或 2 后崩溃产生的未提交尾部必须在恢复阶段截断，不能直接对 Runner 返回成功。
+
+#### 9.2.1 追加日志块
+
+```http
+POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
+Authorization: Bearer <runner-token>
+Content-Type: application/octet-stream
+Content-Encoding: identity | gzip
+X-Job-UID: e32450b8-...
+X-Log-Stream: combined
+X-Log-Sequence: 100
+X-Content-SHA256: <解压后正文的sha256>
+```
+
+请求体是一个 sequence 对应的原始日志字节，可选使用 gzip 传输压缩。sequence 从 `0` 开始且每个请求递增 `1`；sequence 标识日志块而不是日志行。`X-Content-SHA256` 始终针对解压后的字节计算，服务端必须限制压缩前后大小和解压比例，防止压缩炸弹。
+
+成功返回：
+
+```json
+{
+  "stream": "combined",
+  "acceptedSequence": 100,
+  "nextSequence": 101,
+  "committedBytes": 18743291
+}
+```
+
+服务端按以下规则处理 sequence：
+
+| 请求情况 | 处理 |
+|----------|------|
+| `sequence == nextSequence` | 校验摘要后追加、持久化并返回 200 |
+| `sequence < nextSequence` 且已记录摘要相同 | 视为幂等重试，不重复追加，返回 200 |
+| `sequence < nextSequence` 但摘要不同 | 返回 409 `SequenceConflict` |
+| `sequence > nextSequence` | 返回 409 `SequenceGap`，响应携带期望的 `nextSequence` |
+| 日志流已经 Completed | 返回 409 `LogAlreadyFinalized` |
+| URL、请求或已有日志流中的 Job 标识不一致 | 返回 409 `JobIdentityConflict` |
+
+服务端不接受乱序缓存。Runner 收到 `SequenceGap` 后，从服务端返回的 `nextSequence` 开始重传，避免服务端持有无界乱序数据。为了判定旧 sequence 的幂等重试，服务端保留最近 `--log-dedupe-window` 个 chunk 的 sequence、大小和 SHA-256；早于窗口的重复请求返回 409，Runner 应先查询状态并从 `nextSequence` 继续。
+
+Runner 在本地维护待确认缓冲区，每达到 256 KiB 或 500 ms 发送一个 chunk，同一日志流同一时间最多发送一个未确认请求。只有服务端确认后才能丢弃对应本地字节；网络错误使用相同 sequence 和正文重试。服务端返回 429 或 503 时，Runner 按 `Retry-After` 和指数退避重试，并限制本地缓冲区大小；超过上限时应暂停读取或将日志溢写到本地文件，不能静默丢弃日志。
+
+#### 9.2.2 查询日志流状态
+
+```http
+GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status?jobUID={uid}&stream=combined
+Authorization: Bearer <runner-token>
+```
+
+```json
+{
+  "stream": "combined",
+  "state": "Open",
+  "nextSequence": 101,
+  "committedBytes": 18743291,
+  "updatedAt": "2026-08-12T10:30:00Z"
+}
+```
+
+Runner 启动、重连或遇到结果未知时查询该接口，并以 `nextSequence` 作为恢复点。Runner 必须在本地保留尚未被服务端确认的日志；如果服务端请求的 sequence 已不在 Runner 本地缓冲或落盘文件中，Runner 将 Job 标记为日志不完整，不能伪造缺失数据继续封账。
+
+#### 9.2.3 SSE 实时读取
+
+```http
+GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream?jobUID={uid}&stream=combined&afterSequence=100
+Accept: text/event-stream
+Last-Event-ID: 100
+```
+
+响应事件：
+
+```text
+id: 101
+event: log
+data: {"encoding":"base64","content":"Li4u"}
+
+event: complete
+data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
+```
+
+事件 ID 是 chunk sequence。恢复位置的优先级为 `Last-Event-ID` 请求头、`afterSequence` 查询参数、当前最新 sequence。浏览器原生 `EventSource` 首次连接不能自行设置 `Last-Event-ID`，因此首次从历史日志衔接实时流时必须使用 `afterSequence`；浏览器自动重连时会携带最后收到的 `Last-Event-ID`。服务端总是从恢复位置的下一 sequence 推送。两者同时存在时必须优先使用 `Last-Event-ID`，避免代理或客户端重连时退回旧位置。
+
+未提供恢复位置时只推送连接建立后的新日志。提供的 sequence 已超出内存重放窗口时返回 409 `ReplayWindowExceeded`，客户端改用活动日志读取接口补齐后重连。服务端应在 SSE 流开始处发送 `retry: 2000`，建议浏览器断线 2 秒后重连。
+
+SSE 只是展示通道，不参与持久化确认。慢客户端使用有界发送队列；队列溢出时断开连接，让客户端通过 `Last-Event-ID` 恢复，不能阻塞 Runner 写入。服务端定期发送注释心跳，建议间隔 15 秒。SSE 响应必须禁用代理缓冲和中间缓存，例如返回 `Cache-Control: no-cache, no-transform` 和 `X-Accel-Buffering: no`。
+
+活动日志读取接口：
+
+```http
+GET /artifacts/v1/projects/{project}/jobs/{job}/logs/content?jobUID={uid}&stream=combined
+Range: bytes=<start>-<end>
+```
+
+只读取已提交的 `committedBytes`，支持 `Range`、`ETag` 和 `If-None-Match`。处理请求时，服务端必须在同一个一致性快照中读取 `snapshotCommittedBytes` 和 `snapshotNextSequence`，响应正文不得超过该快照的字节边界，不能在正文读取结束后再获取最新 sequence。
+
+响应头至少包含：
+
+```http
+X-Log-State: Open | Completed | Failed
+X-Log-Next-Sequence: 101
+X-Committed-Bytes: 18743291
+X-Artifact-ID: art-log-01
+```
+
+`X-Artifact-ID` 只在日志已经封账时返回。日志流完成后，接口继续返回相同正文和这些响应头，避免 Web UI 因重定向产生不同处理流程；最终日志的独立下载仍使用 Artifact 内容接口。
+
+#### 9.2.4 Web UI 展示流程
+
+Web UI 使用 Range 获取已有日志，再用 SSE 接收新增日志：
+
+```text
+LoadingHistory -> ConnectingSSE -> Streaming -> Completed
+                         ^              |
+                         |              v
+                  CatchingUpByRange <- Disconnected
+```
+
+首次打开页面时：
+
+1. 请求 `/logs/content`，首屏可使用 `Range: bytes=0-`；日志很大时可以只请求末尾窗口，并提供加载更早内容的入口。
+2. 记录响应正文结束位置 `committedOffset=X-Committed-Bytes`，以及 `lastSequence=X-Log-Next-Sequence-1`。
+3. 如果 `X-Log-State=Completed`，直接展示正文和完整日志下载入口，不建立 SSE。
+4. 如果日志仍为 Open，使用 `afterSequence={lastSequence}` 创建 `EventSource`。由于响应正文和 sequence 来自同一个一致性快照，SSE 会从下一 chunk 开始，不会遗漏 Range 请求与 SSE 建连之间到达的日志。
+
+前端处理 `log` 事件时应：
+
+1. Base64 解码 `content` 得到原始字节。
+2. 使用 `TextDecoder("utf-8")` 的 `{stream:true}` 模式增量解码，正确处理跨 chunk 的 UTF-8 字符。
+3. 将字节长度累加到 `committedOffset`，把 `event.lastEventId` 保存为 `lastSequence`。
+4. 批量刷新终端组件，不能为每一行创建永久 DOM 节点。
+
+SSE 使用 Base64 是因为日志可能包含非 UTF-8 字节、不完整的多字节字符、换行和 SSE 控制格式。页面推荐使用 xterm.js 或虚拟列表，只保留有限可视行；完整内容通过 Range 分段加载或 Artifact 下载。用户离开底部时只暂停自动滚动，不暂停接收和位置记录。
+
+浏览器自动重连会携带 `Last-Event-ID`。如果发生普通网络错误，Web UI 保持当前 `committedOffset` 和 `lastSequence` 等待自动重连；如果持续失败或服务端报告 `ReplayWindowExceeded`，则关闭 `EventSource`，执行：
+
+```http
+GET .../logs/content
+Range: bytes={committedOffset}-
+```
+
+页面追加补齐内容，从新响应头更新 `committedOffset` 和 `lastSequence`，再以新的 `afterSequence` 创建 SSE。由于原生 `EventSource` 无法可靠读取非 200 响应体，前端不能依赖解析 409 的 JSON 正文，应在错误后主动走 Range 补齐流程。
+
+收到：
+
+```text
+event: complete
+data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
+```
+
+前端刷新 `TextDecoder` 剩余内容、关闭 `EventSource`、将状态更新为 Completed，并显示 `/artifacts/v1/artifacts/{artifactID}/content` 的完整日志下载入口。页面隐藏时可以降低渲染频率，但仍需持续消费事件并保存 byte offset 和 sequence。
+
+#### 9.2.5 日志封账
+
+Job 执行结束且全部日志 chunk 已确认后，Runner 调用：
+
+```http
+POST /artifacts/v1/projects/{project}/jobs/{job}/logs/complete
+Authorization: Bearer <runner-token>
+Idempotency-Key: <jobUID>-log-complete
+Content-Type: application/json
+```
+
+```json
+{
+  "jobUID": "e32450b8-...",
+  "stream": "combined",
+  "lastSequence": 100,
+  "size": 18743291,
+  "sha256": "..."
+}
+```
+
+服务端以日志流为粒度加锁，并执行：
+
+1. 重新校验 Runner Token 的签名、有效期和 `ebs:runner` scope。
+2. 检查 `nextSequence == lastSequence + 1`，且没有 sequence 缺口。
+3. 检查已提交字节数等于 `size`，重新流式计算完整正文 SHA-256。
+4. 将状态置为 `Finalizing`，把活动日志正文原子移动到 Artifact 的最终存储键；正文已经位于目标文件系统时不得复制整份文件。
+5. 创建或更新 `category=log`、`relativePath=logs/container.log` 的 Artifact 元数据，并将日志流与 Artifact 原子标记为 `Completed`。
+
+成功返回：
+
+```json
+{
+  "state": "Completed",
+  "artifactID": "art-log-01...",
+  "relativePath": "logs/container.log",
+  "size": 18743291,
+  "sha256": "..."
+}
+```
+
+重复完成请求必须返回同一个 Artifact；相同幂等键或已完成日志流携带不同的 `lastSequence`、大小或摘要时返回 409。最终日志 Artifact 可以加入 JobUploadManifest；日志是否为必需文件由 Job 类型决定。日志封账失败时保留活动正文和可恢复状态，不能要求 Runner 从头上传。
+
+#### 9.2.6 崩溃恢复和清理
+
+服务启动时加载日志元数据并校验正文长度：
+
+- 逐行解析 `combined.index.jsonl`；最后一行不是完整 JSON 或缺少结尾换行时，删除该残缺尾行并 `fdatasync`，文件中部存在无效 JSON 时标记为 `Failed/Corrupted`。
+- 验证索引从 sequence 0 开始连续，首条 `startOffset=0`，且每条 `startOffset` 等于上一条的 `startOffset+size`；不满足时标记为 `Failed/Corrupted`。
+- 以最后一条有效索引的 `startOffset+size` 作为恢复后的 `committedBytes`，以最后 sequence 加 1 作为 `nextSequence`；空索引对应两个值均为 0。
+- 正文长度大于索引得出的 `committedBytes` 时，截断未提交尾部并 `fdatasync`。
+- 正文长度小于索引得出的 `committedBytes` 时，将日志流标记为 `Failed/Corrupted`，禁止继续追加和封账。
+- `combined.json` 与索引汇总不一致且日志仍为 Open 时，以索引为准原子重建汇总字段；终态和失败信息仍以 `combined.json` 为准。
+- `Finalizing` 状态根据最终 Artifact 元数据和正文是否存在幂等完成或回退到可重试状态。
+- `Completed` 状态缺少 Artifact 元数据或正文时标记为 `Failed/Corrupted`，不得返回成功。
+
+Job 终止后长时间没有封账的 Open 日志流按 `--active-log-ttl` 过期并异步清理；仍处于可运行阶段的 Job 不得仅因长时间无日志而过期。最终日志 Artifact 进入普通 `category=log` 保留策略。
+
+## 十、上传 Token 校验
+
+### 10.1 Runner 上传
+
+Runner 使用现有短期 `ebs:runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 内部校验接口：
+
+```http
+POST /internal/auth/v1/check
+Authorization: Bearer <runner-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "requiredScopes": ["ebs:runner"]
+}
+```
+
+Gateway 只验证 Token 的签名、issuer、audience、有效期和 `ebs:runner` scope，不查询 ebs-apiserver 中的 Job 或 Runner。验证成功时返回经过认证的身份：
+
+```json
+{
+  "authenticated": true,
+  "identity": {
+    "type": "runner",
+    "name": "runner-ct-aarch64-01",
+    "scopes": ["ebs:runner"]
+  },
+  "expiresAt": "2026-08-11T12:00:00Z"
+}
+```
+
+Artifact Manager 使用响应中的 `identity.name` 作为 Runner 名称，不能信任上传请求正文、查询参数或外部请求头提供的身份。
+
+首版明确不执行以下检查：
+
+- 不读取 Job 或 Runner 对象。
+- 不校验 `job.status.runner` 是否等于 Token 中的 Runner。
+- 不校验 Job 当前 phase/stage 是否允许上传。
+- 不校验 Token 身份是否有权操作请求中的 project、jobName 或 jobUID。
+
+Artifact Manager 仍需校验同一个请求和已有本地记录之间的标识一致性，例如 URL Project、URL Job、metadata.jobUID、Artifact 和 Manifest 归属不能互相冲突。这属于本地数据完整性校验，不是 Job/Runner 授权检查。
+
+鉴权时机：
+
+| 操作 | 检查要求 |
+|------|----------|
+| 上传 Artifact | 读取文件正文前校验 Token；提交 Artifact 前确认 Token 仍在有效期内 |
+| 完成 Job 上传清单 | 校验 Token，并以 Job 为粒度加锁完成本地完整性校验和封账 |
+| 追加日志、查询日志流状态 | 校验 Token；允许使用短期认证缓存 |
+| 完成日志流 | 重新校验 Token，并以日志流为粒度加锁完成摘要校验和封账 |
+
+SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 Runner Token；部署方必须通过网络边界、并发连接数、读取速率和带宽限制控制访问。若后续将构建日志调整为非公开数据，这两个接口必须统一接入用户或服务身份鉴权，不能依赖不可伪造的 URL。
+
+认证结果可以按 Token 摘要缓存，缓存时间不得超过 `min(30s, tokenExpiresAt-now)`；完成 Artifact、Manifest 和日志流时不得使用过期缓存。认证失败结果不做长期缓存。
+
+`/internal/auth/v1/check` 只允许 Artifact Manager 等受信服务访问。服务间使用 mTLS 或独立服务凭据进行认证，并限制网络来源。Runner Token 只能通过 TLS 传递，Artifact Manager 和 Gateway 均不得记录 Token 原文或用于缓存的完整 Token。
+
+该内部接口需要在 ebs-gateway 中新增；它只提供 Token 认证和 scope 校验，不承担资源授权。上传和下载文件正文不会经过 Gateway。后续需要加强权限时，再扩展为基于 Job/Runner 状态的动态授权，首版不实现。
+
+## 十一、配额与安全
+
+至少配置以下限制：
+
+| 配额 | 说明 |
+|------|------|
+| 单文件大小 | 防止异常大文件耗尽存储 |
+| 单 Job 总大小 | 控制单次构建产物规模 |
+| 单 Project 总大小 | 实现租户存储配额 |
+| 单 Job 文件数 | 防止海量小文件攻击 |
+| Runner 并发文件上传数 | 控制连接、文件句柄和磁盘压力 |
+| 请求体大小和上传超时 | 防止超大或长期占用连接的请求耗尽资源 |
+| Multipart metadata 和 header | 防止解析器被超大元数据或 header 耗尽内存 |
+| 日志 chunk 大小和解压比例 | 防止超大请求和压缩炸弹 |
+| 单 Job 日志速率与总大小 | 防止日志洪泛耗尽磁盘和带宽 |
+| SSE 连接数与发送队列 | 防止慢客户端阻塞服务 |
+
+安全要求：
+
+- 文件名和相对路径必须规范化。
+- 所有写入必须绑定服务端生成的 storage key；本地路径不得由客户端输入直接构造。
+- Content-Type 只用于展示，不能作为可信文件类型。
+- 完成上传前验证 SHA-256。
+- 结构化服务日志和错误响应中不得输出 Token 或文件正文；日志内容和 Artifact 正文接口按其协议返回文件内容。
+- 可选接入恶意文件扫描；扫描完成前 Artifact 保持不可下载。
+- 服务端不得自动解压客户端上传的归档文件。
+
+## 十二、清理与保留
+
+后台清理任务负责：
+
+- 清理请求中断或服务崩溃遗留的 `.uploads/*.tmp` 临时文件。
+- 清理到期的 Failed IdempotencyRecord；Completed 记录随对应 Artifact 生命周期清理。
+- 删除超过保留期限的 Artifact。
+- 清理无元数据记录的孤儿文件或对象。
+- 处理 Project 或 Job 删除产生的异步清理任务。
+
+`Completed` Job 上传清单引用的 Artifact 不得被单独清理。清理任务必须以清单为边界，在确认清单达到保留期限且没有正在消费后，先删除其引用的 Artifact，再删除清单元数据。首版应保证 `artifact` 的保留时间覆盖 Repo Controller 的最大等待和重试时间；后续可在本地清单元数据中增加带 TTL 的 Consumer Hold，避免生成 repo 期间输入过期。Consumer Hold 属于 Artifact Manager 私有元数据，不需要新增 ebs-apiserver 对象。
+
+不能在 Job 删除请求中同步删除大量文件。删除任务必须幂等，并支持失败重试。
+
+建议默认保留策略：
+
+| Category | 默认保留时间 |
+|----------|--------------|
+| artifact | 由 Project 策略决定 |
+| log | 30 天 |
+
+## 十三、与 Job Status 的关系
+
+Job Status 只保存结果摘要和 Artifact Manager 定位信息，不保存完整 Artifact 列表：
+
+```yaml
+status:
+  phase: Completed
+  stage: PostRun
+  resultRoot: artifact://e32450b8-...
+  artifactState: Completed
+  artifactGeneration: 1
+  artifactDigest: sha256:...
+  artifactCount: 12
+```
+
+完整产物列表通过 Artifact API 查询。上述字段只是可 watch 的完成信号和定位摘要，Artifact Manager 的本地 Job 上传清单仍是完整文件集合的事实来源。Runner 必须先完成清单封账，再更新 Job Status；Repo Controller 收到 Job 事件后，根据 `jobUID`、`artifactGeneration` 和 `artifactDigest` 查询并校验固定清单，不能根据当前 Artifact 列表推断完整性。
+
+## 十四、错误处理
+
+| 场景 | 处理 |
+|------|------|
+| 相同幂等键和元数据摘要重复上传 | 已完成时返回原 Artifact；失败时允许整文件重传 |
+| 相同幂等键对应不同元数据 | 返回 409 `IdempotencyConflict` |
+| 同一幂等键仍在上传 | 返回 409 `UploadInProgress` |
+| 文件大小或 SHA-256 校验失败 | 返回 422，删除临时正文，Runner 整文件重传 |
+| 上传连接中断或超时 | 删除或异步清理临时正文，Runner 整文件重传 |
+| Multipart part 缺失、重复、乱序或类型错误 | 返回 400 `InvalidMultipartRequest` |
+| Multipart metadata、header 或请求超过限制 | 返回 413 `RequestTooLarge` |
+| URL、请求和本地记录的 Job 标识冲突 | 返回 409 `JobIdentityConflict` |
+| Project 配额不足 | 返回 413 |
+| 请求速率过高 | 返回 429 和 Retry-After |
+| 本地存储不可用 | 返回 503，Runner 使用相同幂等键重试 |
+| 本地存储空间不足 | 返回 507，Runner 使用相同幂等键重试 |
+| 上传请求结果未知 | Runner 使用相同幂等键重试；服务返回原 Artifact 或重新接收整文件 |
+| 清单包含未完成或不匹配的 Artifact | 返回 422，保留 Open 清单供 Runner 修正后重试 |
+| 已完成 generation 收到不同清单 | 返回 409，不修改已有清单 |
+| 清单完成请求结果未知 | Runner 查询固定 generation 的清单状态后决定是否重试 |
+| 日志 sequence 存在缺口 | 返回 409 和期望的 `nextSequence`，Runner 从该位置重传 |
+| 日志 sequence 重复且摘要一致 | 幂等返回原确认，不重复追加 |
+| 日志 sequence 重复但摘要不同 | 返回 409，不修改已提交日志 |
+| 日志封账大小或摘要不匹配 | 返回 422，保留活动日志供查询和重试 |
+| SSE 客户端落后于重放窗口 | 返回 409，客户端通过活动日志 Range 接口补齐 |
+| SSE 普通网络中断 | 浏览器携带 `Last-Event-ID` 自动重连，服务端从下一 sequence 继续 |
+| Web UI 无法确认 SSE 恢复点 | 关闭 SSE，从已记录的 byte offset 通过 Range 补齐后重新连接 |
+
+## 十五、配置
+
+| 配置 | 建议默认值 | 说明 |
+|------|------------|------|
+| `--listen` | `:8080` | HTTP 监听地址 |
+| `--gateway-url` | `https://ebs-gateway:8443` | Gateway 内部 Token 校验接口地址 |
+| `--gateway-ca` | 必填 | 校验 Gateway 服务证书的 CA |
+| `--auth-cache-ttl` | `30s` | Token 认证结果最大缓存时间 |
+| `--data-dir` | `/var/lib/ebs-artifacts` | 本地持久化目录 |
+| `--upload-timeout` | 按最大文件和最小允许速率配置 | 单次整文件上传的最大持续时间 |
+| `--temporary-upload-ttl` | `24h` | 中断后遗留临时正文的最长保留时间 |
+| `--failed-idempotency-retention` | `24h` | Failed 幂等记录的保留时间 |
+| `--max-metadata-size` | `64KiB` | multipart metadata part 的最大正文大小 |
+| `--max-part-headers` | `16` | 单个 multipart part 的最大 header 数量 |
+| `--max-header-line-size` | `8KiB` | 单个 multipart header 行的最大长度 |
+| `--max-part-header-bytes` | `32KiB` | 单个 multipart part 的 header 总大小 |
+| `--min-upload-rate` | 按部署配置 | 超过宽限期后整文件上传允许的最低持续速率 |
+| `--max-file-size` | 按部署配置 | 单文件上限 |
+| `--max-job-size` | 按部署配置 | 单 Job 总大小上限 |
+| `--log-chunk-size` | `256KiB` | 单个解压后日志 chunk 的建议及最大尺寸 |
+| `--log-flush-interval` | `500ms` | Runner 聚合日志的建议最长期限 |
+| `--log-dedupe-window` | `1024` | 持久化用于重复校验的最近 chunk 数量 |
+| `--log-replay-window` | `1024` | SSE 可在内存中重放的最近事件数量 |
+| `--log-sse-heartbeat` | `15s` | SSE 心跳间隔 |
+| `--active-log-ttl` | `24h` | Job 终止后未封账活动日志的保留时间 |
+| `--max-log-size` | 按部署配置 | 单 Job 实时日志总大小上限 |
+| `--max-log-rate` | 按部署配置 | 单 Runner 或单 Job 日志写入速率上限 |
+
+## 十六、可观测性
+
+指标至少包括：
+
+- 活跃整文件上传请求数。
+- 上传成功、失败、中断和整文件重试次数。
+- 上传字节数与速率。
+- 整文件上传耗时、重试次数和校验失败次数。
+- Job 上传清单完成、失败次数及封账耗时。
+- 活跃日志流和 SSE 连接数。
+- 日志 chunk 写入字节数、重复数、sequence 冲突数和写入延迟。
+- 日志封账成功、失败、摘要不匹配和恢复次数。
+- SSE 断连、重放窗口超限和慢消费者次数。
+- 活动日志 Range 请求次数、读取字节数和补齐次数。
+- 本地存储错误数及剩余空间。
+- 过期临时文件与孤儿文件清理数。
+- 各 Project 存储用量。
+
+结构化日志包含 `project`、`jobUID`、`artifactID` 和 `runnerName`，但不得记录 Token 或文件正文。
+
+健康检查：
+
+```text
+GET /healthz   # 进程存活
+GET /readyz    # 本地持久化目录可用，元数据索引已加载
+```
+
+## 十七、首版实现范围
+
+首版实现：
+
+1. 本地持久化文件系统。
+2. 本地元数据文件与启动时内存索引。
+3. Runner Token 签名、有效期和 `ebs:runner` scope 校验。
+4. 经 Artifact Manager 进行单请求整文件流式上传。
+5. 单请求流式上传、整文件重试和幂等完成。
+6. 文件大小与 SHA-256 校验。
+7. Artifact 查询和本地文件流式下载。
+8. 中断上传临时文件及孤儿文件清理。
+9. 容器日志实时分块追加、sequence 幂等和断点续传。
+10. Job 上传清单的本地持久化、完整性校验、幂等封账和查询。
+11. Job Status 中 Artifact 完成摘要与 Repo Controller 消费约定。
+12. 活动日志一致性 Range 读取、SSE 实时展示、Web UI 断线补齐及 `container.log` Artifact 幂等封账。
+13. 实时日志的崩溃恢复、限流、背压和过期清理。
+
+后续扩展：
+
+- Artifact 内容扫描。
+- Project 自定义保留策略。
+- Artifact 复制和发布流程。
