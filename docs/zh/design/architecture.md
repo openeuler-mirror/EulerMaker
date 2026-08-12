@@ -11,40 +11,48 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
 - 声明式对象模型：资源由 `metadata/spec/status` 组成，普通更新和 `/status` 更新分离。
 - Watch 驱动协作：controller、scheduler、runner 通过 watch 获取资源变化。
 - Project 业务作用域：Snapshot、Build、Job 归属于 Project，同时提供全局 list/watch API 给系统组件。
+- 构建结果数据面：`artifact-manager` 独立承载构建产物与实时日志正文，避免大文件流量经过资源 API 和 Gateway 数据转发链路。
 - 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch 和 `ebs-apiserver`等组件。
 
 ---
 
 ## 二、整体架构
 
-```
+```text
 用户 / 外部系统
       |
       v
-┌──────────────────────────────────────────────┐       ┌──────────────────┐
-│                 ebs-gateway                  │<──────│      runner      │
-│        认证、鉴权、审计、请求入口              │       │  Job 执行/心跳上报 │
-└──────────────────────┬───────────────────────┘       └──────────────────┘
-                       |
-                       v
-┌───────────────────────────────────────────────┐       ┌───────────────────┐
-│                ebs-apiserver                  │<──────│    controllers    │
-│  ebs/v1 REST API / status subresource / watch │       │     scheduler     │
-└───────────────┬──────────────────┬────────────┘       └───────────────────┘
-                |                  |                    REST / list / watch
-                |                  |
-                v
-┌──────────────────────────┐  ┌──────────────────────────┐
-│           etcd           │  │      Elasticsearch        │
-│   主存储：对象与 watch     │  │   主存储：索引与增强数据   │
-└──────────────────────────┘  └──────────────────────────┘
+┌──────────────────────────────────────────────┐       ┌────────────────────────┐
+│                 ebs-gateway                  │<──────│         runner         │
+│        认证、鉴权、审计、资源请求入口          │       │ Job 执行、心跳、产物上传 │
+└──────────────────────┬───────────────────────┘       └───────────┬────────────┘
+                       |                                           |
+                       v                                           | 整文件上传/
+┌───────────────────────────────────────────────┐                   | 实时日志追加
+│                ebs-apiserver                  │                   v
+│  ebs/v1 REST API / status subresource / watch │       ┌────────────────────────┐
+└───────────────┬──────────────────┬────────────┘       │    artifact-manager    │
+                |                  |                    │ 上传、Manifest、日志 SSE │
+                |                  |                    └───────────┬────────────┘
+                v                  v                                |
+┌──────────────────────────┐  ┌──────────────────────────┐          v
+│           etcd           │  │      Elasticsearch        │  ┌────────────────────┐
+│   主存储：对象与 watch     │  │   主存储：索引与增强数据   │  │   本地持久化存储    │
+└──────────────────────────┘  └──────────────────────────┘  └────────────────────┘
+
+controllers / scheduler ── REST / list / watch ──> ebs-apiserver
+controllers ──读取 Completed Manifest / Artifact──> artifact-manager
+Web UI ──Artifact 查询下载 / 日志 Range + SSE──> artifact-manager
+artifact-manager ──Runner Token 校验──> ebs-gateway
 ```
 
 核心原则：
 - 所有资源读写最终都经过 `ebs-apiserver`；
-- runner 统一访问 `ebs-gateway`，便于外部执行机和内部执行机使用同一套访问逻辑。
+- runner 的资源 API 统一访问 `ebs-gateway`，便于外部执行机和内部执行机使用同一套访问逻辑；构建正文直接访问 `artifact-manager`。
 - etcd 和 Elasticsearch 都是主存储。
 - etcd 负责对象持久化、resourceVersion 和 list/watch，Elasticsearch 负责对象索引、搜索和增强数据。
+- `artifact-manager` 是构建产物、Job 上传清单和实时日志的数据服务；正文与私有元数据保存在其持久化目录，不写入 etcd 或 Elasticsearch。
+- Runner 直接向 `artifact-manager` 传输文件和日志，`artifact-manager` 通过 `ebs-gateway` 的内部接口校验 Runner Token 的签名、有效期和 scope。首版不校验 Job 与 Runner 的绑定关系。
 
 ### 2.1 内部访问与信任边界
 
@@ -60,6 +68,9 @@ ebs-gateway ─── mTLS ───┐
 scheduler ───── mTLS ───┼──> ebs-apiserver
                         |
 controllers ─── mTLS ───┘
+
+artifact-manager ── 服务凭据或 mTLS ──> ebs-gateway /internal/auth/v1/check
+runner ── Runner JWT + 文件正文 ──> artifact-manager
 ```
 
 `ebs-apiserver` 根据客户端证书的 URI SAN 识别内部调用方，并按组件职责对 API group、资源、verb 和 subresource 执行授权。Gateway、scheduler 和 controller 必须使用不同的证书身份，不得共享客户端证书；不同 controller 在需要进一步限制权限时使用独立身份。
@@ -77,6 +88,7 @@ spiffe://eulermaker/internal/ebs-controller
 - `ebs-gateway` 只访问代理请求、解析 User/MachineAccount 和调用 IAM 内部凭据接口所需的 API。
 - scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
 - controller 只访问其控制循环负责的资源和 status API；不同 controller 可以按职责继续拆分权限。
+- `artifact-manager` 不直接访问 etcd、Elasticsearch 或 `ebs-apiserver`，只调用 `ebs-gateway` 的内部 Token 校验接口；首版只校验 Token，不查询 Job/Runner 对象或校验两者关系。
 - 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
 - `/internal/iam/*` 只允许 `ebs-gateway` 的 mTLS 身份调用，scheduler 和 controller 不得访问。
 
@@ -96,7 +108,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 
 自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `ebs:runner` JWT。所有 `/internal/iam/*` 接口只信任 gateway 的 mTLS 身份，不接受外部 JWT、scheduler 或 controller 调用。
 
-部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。网络隔离是 mTLS 和内部授权之外的附加防线，不能替代调用方认证或资源权限校验。Runner 仍统一通过 `ebs-gateway` 访问 API，不属于允许直连 `ebs-apiserver` 的组件。
+部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。`artifact-manager` 的 Token 校验调用只允许访问 `ebs-gateway` 的 `/internal/auth/v1/check`，外部 Runner 不得访问该内部接口。网络隔离是 mTLS 和内部授权之外的附加防线，不能替代调用方认证。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
 
 ---
 
@@ -111,6 +123,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 | `controllers` | 监听 Project/Snapshot/Build 等对象变化，推进资源状态 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 通过 ebs-gateway 注册 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
+| `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、查询下载及日志 SSE |
 
 ---
 
@@ -311,10 +324,31 @@ runner -> ebs-gateway -> ebs-apiserver: register Runner
 runner -> ebs-gateway -> ebs-apiserver: update Runner.status heartbeat
 runner -> ebs-gateway -> ebs-apiserver: list/watch /runners/{runner}/jobs
 runner -> execute Job
+runner -> artifact-manager: single-request streaming upload artifacts
+runner -> artifact-manager: append and finalize real-time container logs
+runner -> artifact-manager: complete immutable Job upload manifest
 runner -> ebs-gateway -> ebs-apiserver: update Job.status
 ```
 
-Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资源容量和运行状态写入 `status`。runner 不直接访问 `ebs-apiserver`，统一访问 `ebs-gateway`，外部执行机和内部执行机使用同一套客户端逻辑。
+Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资源容量和运行状态写入 `status`。runner 不直接访问 `ebs-apiserver`，资源操作统一访问 `ebs-gateway`，外部执行机和内部执行机使用同一套客户端逻辑。构建产物和日志正文直接上传到 `artifact-manager`，避免大文件经过 Gateway；Artifact Manager 将 Runner Token 发送给 Gateway 校验签名、有效期和 scope。
+
+### 8.5 Artifact 与 repo 流程
+
+```text
+runner -> artifact-manager: upload Completed Artifact
+runner -> artifact-manager: finalize logs/container.log Artifact
+runner -> artifact-manager: complete immutable JobUploadManifest
+runner -> ebs-gateway -> ebs-apiserver: update Job artifact summary/status
+repo controller -> watch Job status
+repo controller -> artifact-manager: query fixed manifest generation and verify digest
+repo controller -> artifact-manager: stream-download RPM Artifacts
+repo controller -> generate and publish RPM repository
+repo controller -> ebs-apiserver: update RpmRepo/Build/Job status
+```
+
+`artifact-manager` 的本地 Job 上传清单是一次 Job 完整文件集合的事实来源；Job status 只保存 `artifactState`、`artifactGeneration`、`artifactDigest` 和 `artifactCount` 等可 watch 摘要。Repo Controller 不能扫描 Artifact Manager 的内部目录，也不能根据当前 Artifact 列表推断上传是否结束。
+
+Web UI 通过 Artifact API 查询和下载 Completed Artifact。实时日志先使用 Range 读取已提交历史内容，再通过 SSE 接收新增 chunk；日志封账后转为普通 `category=log` Artifact。Artifact Manager 的详细协议、数据结构和本地恢复规则见 [artifact-manager.md](./artifact-manager.md)。
 
 ---
 
@@ -326,6 +360,8 @@ Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资�
 etcd
 Elasticsearch
 ebs-apiserver
+ebs-gateway
+artifact-manager
 ```
 
 启动命令：
@@ -341,6 +377,8 @@ docker compose -f hacks/docker-compose.yml up -d
 | etcd | `http://localhost:2379` |
 | Elasticsearch | `http://localhost:9200` |
 | ebs-apiserver | `https://localhost:8443` |
+| ebs-gateway | `https://localhost:9443` |
+| artifact-manager | `http://localhost:8080` |
 
 ---
 
