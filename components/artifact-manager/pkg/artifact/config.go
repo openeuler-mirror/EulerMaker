@@ -16,7 +16,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Listen: ":8080", DataDir: "/var/lib/ebs-artifacts", GatewayURL: "https://ebs-gateway:8443", MaxFileSize: 25 << 30, MaxJobSize: 100 << 30, MaxMetadataSize: 64 << 10, MaxLogSize: 4 << 30, LogChunkSize: 256 << 10, UploadTimeout: 2 * time.Hour, AuthCacheTTL: 30 * time.Second, SSEHeartbeat: 15 * time.Second, TemporaryUploadTTL: 24 * time.Hour, LogReplayWindow: 1024, LogDedupeWindow: 1024, MaxPartHeaders: 16, MaxHeaderLineSize: 8 << 10, MaxPartHeaderBytes: 32 << 10}
+	return Config{Listen: ":8081", DataDir: "/var/lib/ebs-artifacts", GatewayURL: "https://ebs-gateway:8443", MaxFileSize: 25 << 30, MaxJobSize: 100 << 30, MaxMetadataSize: 64 << 10, MaxLogSize: 4 << 30, LogChunkSize: 256 << 10, UploadTimeout: 2 * time.Hour, AuthCacheTTL: 30 * time.Second, SSEHeartbeat: 15 * time.Second, TemporaryUploadTTL: 24 * time.Hour, LogReplayWindow: 1024, LogDedupeWindow: 1024, MaxPartHeaders: 16, MaxHeaderLineSize: 8 << 10, MaxPartHeaderBytes: 32 << 10}
 }
 func LoadConfig(args []string) (Config, error) {
 	c := DefaultConfig()

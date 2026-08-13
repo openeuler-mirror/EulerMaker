@@ -1050,7 +1050,7 @@ status:
 
 | 配置 | 建议默认值 | 说明 |
 |------|------------|------|
-| `--listen` | `:8080` | HTTP 监听地址 |
+| `--listen` | `:8081` | HTTP 监听地址 |
 | `--gateway-url` | `https://ebs-gateway:8443` | Gateway 公开 Token 校验接口所在地址 |
 | `--gateway-ca` | 必填 | 校验 Gateway 服务证书的 CA |
 | `--auth-cache-ttl` | `30s` | Token 认证结果最大缓存时间 |
