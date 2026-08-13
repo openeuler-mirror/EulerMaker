@@ -100,6 +100,25 @@ services:
     depends_on:
       - ebs-gateway
 
+  ebs-runner:
+    build:
+      context: ../components/runner
+    command:
+      - --gateway=http://ebs-gateway:8080
+      - --machine-credential-file=/run/secrets/runner_machine_credential
+      - --name=runner-ct-01
+      - --type=ct
+      - --root-dir=/var/lib/ebs-runner
+    secrets:
+      - runner_machine_credential
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-data:/var/lib/ebs-runner
+    networks:
+      - ebs-net
+    depends_on:
+      - ebs-gateway
+
 networks:
   ebs-net:
     driver: bridge
@@ -108,7 +127,10 @@ volumes:
   etcd-data:
   es-data:
   artifact-data:
+  runner-data:
 
 secrets:
   ebs_gateway_jwt_secret:
     file: ./ebs-gateway-jwt-secret
+  runner_machine_credential:
+    file: ./runner-machine-credential.json
