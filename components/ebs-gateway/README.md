@@ -10,6 +10,7 @@
 - `PUT /auth/users/{name}/password` verifies the current password before changing the authenticated user's password.
 - `POST /auth/machineaccounts` creates a MachineAccount and credential for `ebs:admin` callers.
 - `POST /auth/runner-token` exchanges MachineAccount Basic credentials for a short-lived `ebs:runner` token.
+- `POST /auth/check` is a public bearer-token validation endpoint. It requires no request body or separate service credential and returns the validated identity and token scopes.
 - MachineAccount `get/list/delete` proxying for `ebs:admin`, plus protected `get/list/update/patch/delete` management of non-admin Users.
 - Bearer JWT authentication with `HS256`.
 - Per `{sub}/{clientIP}` in-memory token bucket rate limiting.

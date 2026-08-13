@@ -24,10 +24,11 @@ const (
 )
 
 type Identity struct {
-	Subject string
-	Runner  string
-	Scopes  []string
-	JTI     string
+	Subject   string
+	Runner    string
+	Scopes    []string
+	JTI       string
+	ExpiresAt time.Time
 }
 
 func (i Identity) IsSystem() bool { return i.hasScope("ebs:system") }
@@ -164,7 +165,7 @@ func (m *tokenManager) parse(token string, now time.Time) (Identity, error) {
 	if err := m.validateClaims(claims, now); err != nil {
 		return Identity{}, err
 	}
-	return Identity{Subject: claims.Subject, Runner: claims.Runner, Scopes: claims.Scopes, JTI: claims.JTI}, nil
+	return Identity{Subject: claims.Subject, Runner: claims.Runner, Scopes: claims.Scopes, JTI: claims.JTI, ExpiresAt: time.Unix(claims.Exp, 0).UTC()}, nil
 }
 
 func (m *tokenManager) validateClaims(c jwtClaims, now time.Time) error {

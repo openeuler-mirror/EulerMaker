@@ -904,21 +904,14 @@ Job 终止后长时间没有封账的 Open 日志流按 `--active-log-ttl` 过�
 
 ### 10.1 Runner 上传
 
-Runner 使用现有短期 `ebs:runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 内部校验接口：
+Runner 使用现有短期 `ebs:runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 公开 Token 校验接口：
 
 ```http
-POST /internal/auth/v1/check
+POST /auth/check
 Authorization: Bearer <runner-token>
-Content-Type: application/json
 ```
 
-```json
-{
-  "requiredScopes": ["ebs:runner"]
-}
-```
-
-Gateway 只验证 Token 的签名、issuer、audience、有效期和 `ebs:runner` scope，不查询 ebs-apiserver 中的 Job 或 Runner。验证成功时返回经过认证的身份：
+Gateway 只验证 Token 的签名、issuer、audience、有效期和 scopes 结构，不查询 ebs-apiserver 中的 Job 或 Runner。验证成功时返回经过认证的身份：
 
 ```json
 {
@@ -932,7 +925,7 @@ Gateway 只验证 Token 的签名、issuer、audience、有效期和 `ebs:runner
 }
 ```
 
-Artifact Manager 使用响应中的 `identity.name` 作为 Runner 名称，不能信任上传请求正文、查询参数或外部请求头提供的身份。
+Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.scopes` 包含 `ebs:runner`，随后使用 `identity.name` 作为 Runner 名称；不能信任上传请求正文、查询参数或外部请求头提供的身份。其他合法 Token 类型由 Gateway 正常解析，但 Artifact Manager 必须拒绝。
 
 首版明确不执行以下检查：
 
@@ -956,9 +949,9 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 
 认证结果可以按 Token 摘要缓存，缓存时间不得超过 `min(30s, tokenExpiresAt-now)`；完成 Artifact、Manifest 和日志流时不得使用过期缓存。认证失败结果不做长期缓存。
 
-`/internal/auth/v1/check` 只允许 Artifact Manager 等受信服务访问。服务间使用 mTLS 或独立服务凭据进行认证，并限制网络来源。Runner Token 只能通过 TLS 传递，Artifact Manager 和 Gateway 均不得记录 Token 原文或用于缓存的完整 Token。
+`/auth/check` 是公开接口，调用方无需提供独立的服务身份、mTLS 客户端证书或服务凭据，也不提交请求正文；请求中的 Bearer Token 是该接口唯一验证的凭据。接口必须通过 TLS 暴露并按 Token 身份和客户端地址限流。Artifact Manager、Gateway 以及其他调用方均不得记录 Token 原文或用于缓存的完整 Token。
 
-该内部接口需要在 ebs-gateway 中新增；它只提供 Token 认证和 scope 校验，不承担资源授权。上传和下载文件正文不会经过 Gateway。后续需要加强权限时，再扩展为基于 Job/Runner 状态的动态授权，首版不实现。
+该接口只提供 Token 认证并返回 Token 自带的 scopes，不接受调用方指定待校验 scope，也不承担资源授权；持有有效 Token 的客户端可以直接调用。各调用方必须自行检查所需 scope。上传和下载文件正文不会经过 Gateway。后续需要加强权限时，再扩展为基于 Job/Runner 状态的动态授权，首版不实现。
 
 ## 十一、配额与安全
 
@@ -1058,7 +1051,7 @@ status:
 | 配置 | 建议默认值 | 说明 |
 |------|------------|------|
 | `--listen` | `:8080` | HTTP 监听地址 |
-| `--gateway-url` | `https://ebs-gateway:8443` | Gateway 内部 Token 校验接口地址 |
+| `--gateway-url` | `https://ebs-gateway:8443` | Gateway 公开 Token 校验接口所在地址 |
 | `--gateway-ca` | 必填 | 校验 Gateway 服务证书的 CA |
 | `--auth-cache-ttl` | `30s` | Token 认证结果最大缓存时间 |
 | `--data-dir` | `/var/lib/ebs-artifacts` | 本地持久化目录 |

@@ -287,6 +287,17 @@ Runner不使用 refresh token。短期 token到期前，Runner使用 MachineAcco
 
 Gateway要求 admin 权限，校验请求后调用`POST /internal/iam/v1/machineaccounts/register`。成功返回201和`{"name":"runner-site-a"}`，不回显secret；名称已存在返回409，非法请求返回400。管理端将名称作为`clientID`、原始secret作为`clientSecret`组成Runner使用的机机凭据文件并通过受保护渠道下发。
 
+#### 4.2.2 公开 Token 校验
+
+Gateway 公开提供 `POST /auth/check`。调用方只携带待校验的 Bearer Token：
+
+```http
+POST /auth/check
+Authorization: Bearer <token>
+```
+
+该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查 scopes。Token 非法返回 401，携带非空请求正文返回 400，超过按 `{sub}/{clientIP}` 计算的限流返回 429。接口不查询 User、Runner 或 Job，不执行资源授权，也不向 apiserver 转发。
+
 ### 4.3 RegistrationAndPasswordLogin
 
 gateway 提供无需 JWT 的用户自助注册入口：
@@ -590,6 +601,7 @@ gateway 暴露业务 API 和用户管理插件 API：
 | `POST /auth/register` | 否 | 用户自助注册；创建普通 User 和初始密码，不签发 JWT |
 | `POST /auth/login` | 否 | 账号密码登录，成功后签发 JWT |
 | `POST /auth/runner-token` | MachineAccount Basic凭据 | 验证机机账号和Runner名称格式，签发短期 `ebs:runner` JWT |
+| `POST /auth/check` | Bearer Token | 公开校验 Token 并返回身份与 scopes；无请求正文，无需额外服务身份，不执行资源授权 |
 | `PUT /auth/users/{name}/password` | 是 | 用户验证当前密码后修改本人密码 |
 | `POST /auth/machineaccounts` | 是 | 原子创建MachineAccount和初始凭据，仅允许 `ebs:admin` |
 | `ANY /apis/ebs/v1/*` | 是 | `ebs/v1` API 代理，需要 Project 用户权限校验 |
@@ -741,6 +753,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | 用户访问未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403 |
 | Runner 范围 Job 过滤被绕过 | gateway绑定路径身份，apiserver按 `status.runner` 强制过滤，并拒绝客户端提供 `fieldSelector` |
 | token 泄漏 | 使用短有效期、固定 issuer/audience 和最小 scope；轮换单一密钥会使全部旧 token 失效，`jti` 进入审计记录以支持后续撤销扩展 |
+| 公开 Token 校验接口被用于探测或请求风暴 | 不回显 Token 和具体签名失败原因；限制请求体，并按 Token 身份和客户端地址限流 |
 | 请求风暴 | 基于调用方限流 |
 | 上游 TLS 风险 | 生产环境启用 TLS 校验或配置 CA |
 | watch 长连接占用 | 限制单调用方并发 watch 数，保留合理超时 |
@@ -756,6 +769,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | MachineAccountRegistration | 对象和凭据原子创建、重复名称409、非法名称/secret/TTL、响应不回显secret、通用资源POST返回405、非Admin返回403以及失败不保留可认证账号 |
 | PasswordLogin | 普通 User 登录获得 `ebs:user`、`spec.admin=true` 获得 `ebs:admin`、请求 scope 不产生提权、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
 | RunnerTokenExchange | MachineAccount认证成功、不存在/错误secret统一401、非法Runner名称400、固定scope和TTL、独立限流、响应no-store以及凭据不入日志 |
+| TokenCheck | 公开访问、合法身份与 scopes 响应、非法 Token 401、非空请求正文 400 和调用方限流 |
 | UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、admin 标记被移除、缓存命中和 User API 不可用；runner/system token 跳过 User 查询 |
 | Header | 删除伪造 `X-EBS-*` 并注入可信身份 |
 | ProjectAuthz | 普通用户只能访问自己拥有或作为 member 的 Project；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入；system token可访问业务全局 API |
