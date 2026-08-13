@@ -52,7 +52,7 @@ artifact-manager ──Runner Token 校验──> ebs-gateway
 - etcd 和 Elasticsearch 都是主存储。
 - etcd 负责对象持久化、resourceVersion 和 list/watch，Elasticsearch 负责对象索引、搜索和增强数据。
 - `artifact-manager` 是构建产物、Job 上传清单和实时日志的数据服务；正文与私有元数据保存在其持久化目录，不写入 etcd 或 Elasticsearch。
-- Runner 直接向 `artifact-manager` 传输文件和日志，`artifact-manager` 通过 `ebs-gateway` 的内部接口校验 Runner Token 的签名、有效期和 scope。首版不校验 Job 与 Runner 的绑定关系。
+- Runner 直接向 `artifact-manager` 传输文件和日志，`artifact-manager` 通过 `ebs-gateway` 的公开 Token 校验接口校验 Runner Token 的签名、有效期和 scope。首版不校验 Job 与 Runner 的绑定关系。
 
 ### 2.1 内部访问与信任边界
 
@@ -69,7 +69,7 @@ scheduler ───── mTLS ───┼──> ebs-apiserver
                         |
 controllers ─── mTLS ───┘
 
-artifact-manager ── 服务凭据或 mTLS ──> ebs-gateway /internal/auth/v1/check
+artifact-manager ── Runner JWT ──> ebs-gateway /auth/check（公开）
 runner ── Runner JWT + 文件正文 ──> artifact-manager
 ```
 
@@ -88,7 +88,7 @@ spiffe://eulermaker/internal/ebs-controller
 - `ebs-gateway` 只访问代理请求、解析 User/MachineAccount 和调用 IAM 内部凭据接口所需的 API。
 - scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
 - controller 只访问其控制循环负责的资源和 status API；不同 controller 可以按职责继续拆分权限。
-- `artifact-manager` 不直接访问 etcd、Elasticsearch 或 `ebs-apiserver`，只调用 `ebs-gateway` 的内部 Token 校验接口；首版只校验 Token，不查询 Job/Runner 对象或校验两者关系。
+- `artifact-manager` 不直接访问 etcd、Elasticsearch 或 `ebs-apiserver`，只调用 `ebs-gateway` 的公开 Token 校验接口；首版只校验 Token，不查询 Job/Runner 对象或校验两者关系。
 - 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
 - `/internal/iam/*` 只允许 `ebs-gateway` 的 mTLS 身份调用，scheduler 和 controller 不得访问。
 
@@ -108,7 +108,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 
 自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `ebs:runner` JWT。所有 `/internal/iam/*` 接口只信任 gateway 的 mTLS 身份，不接受外部 JWT、scheduler 或 controller 调用。
 
-部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。`artifact-manager` 的 Token 校验调用只允许访问 `ebs-gateway` 的 `/internal/auth/v1/check`，外部 Runner 不得访问该内部接口。网络隔离是 mTLS 和内部授权之外的附加防线，不能替代调用方认证。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
+部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。`ebs-gateway` 的 `/auth/check` 是公开接口：调用方无需服务身份且不提交请求正文，Gateway 校验请求携带的 Bearer Token 并返回身份与 scopes，同时执行限流。`artifact-manager` 根据响应确认 `ebs:runner` scope。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
 
 ---
 

@@ -136,6 +136,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.handleRunnerToken(rec, r)
 		return
 	}
+	if r.URL.Path == "/auth/check" {
+		g.handleTokenCheck(rec, r)
+		return
+	}
 	isPasswordRoute := strings.HasPrefix(r.URL.Path, "/auth/users/") && strings.HasSuffix(r.URL.Path, "/password")
 	isMachineCreate := r.URL.Path == "/auth/machineaccounts"
 	isIAMRoute := strings.HasPrefix(r.URL.Path, "/apis/iam.ebs/v1/")
@@ -195,6 +199,45 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	injectIdentityHeaders(r, ident)
 	g.proxy.ServeHTTP(rec, r)
+}
+
+func (g *Gateway) handleTokenCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1))
+	if err != nil || len(body) != 0 {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	ident, err := authenticate(r, g.tokens, g.now())
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if !g.limiter.Allow(ident.Subject + "/" + clientIP(r)) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	identityType := "service"
+	name := ident.Subject
+	if ident.IsRunner() {
+		identityType = "runner"
+		name = ident.Runner
+	} else if ident.IsUser() {
+		identityType = "user"
+	} else if ident.IsAdmin() {
+		identityType = "admin"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"authenticated": true,
+		"identity":      map[string]any{"type": identityType, "name": name, "scopes": ident.Scopes},
+		"expiresAt":     ident.ExpiresAt,
+	})
 }
 
 type gatewayHTTPError struct {

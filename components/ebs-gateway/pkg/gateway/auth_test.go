@@ -1,12 +1,93 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestPublicTokenCheckReturnsValidatedIdentity(t *testing.T) {
+	gw := newTestGateway(t, http.NotFoundHandler(), 100, 200)
+	now := time.Unix(1790000000, 0)
+	gw.now = func() time.Time { return now }
+	token, expires, err := gw.tokens.issueRunner("runner-1", now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("check: %d %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Authenticated bool `json:"authenticated"`
+		Identity      struct {
+			Type, Name string
+			Scopes     []string
+		} `json:"identity"`
+		ExpiresAt time.Time `json:"expiresAt"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.Authenticated || response.Identity.Type != "runner" || response.Identity.Name != "runner-1" || response.ExpiresAt.Unix() != expires {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+
+	userToken, _, _ := gw.tokens.issueUser("alice", now)
+	r = httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+	r.Header.Set("Authorization", "Bearer "+userToken)
+	w = httptest.NewRecorder()
+	gw.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("user token status: %d", w.Code)
+	}
+}
+
+func TestPublicTokenCheckRejectsRequestBody(t *testing.T) {
+	gw := newTestGateway(t, http.NotFoundHandler(), 100, 200)
+	now := time.Unix(1790000000, 0)
+	gw.now = func() time.Time { return now }
+	token, _, err := gw.tokens.issueRunner("runner-1", now, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/auth/check", bytes.NewBufferString(`{}`))
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("body status: %d", w.Code)
+	}
+}
+
+func TestTokenCheckDoesNotExposeLegacyInternalPath(t *testing.T) {
+	gw := newTestGateway(t, http.NotFoundHandler(), 100, 200)
+	r := httptest.NewRequest(http.MethodPost, "/internal/auth/v1/check", nil)
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("legacy internal path status: %d", w.Code)
+	}
+}
+
+func TestTokenCheckDoesNotExposeVersionedPath(t *testing.T) {
+	gw := newTestGateway(t, http.NotFoundHandler(), 100, 200)
+	r := httptest.NewRequest(http.MethodPost, "/auth/v1/check", nil)
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("versioned path status: %d", w.Code)
+	}
+}
 
 func TestTokenManagerLoadsSecretAndIssuesUserToken(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
