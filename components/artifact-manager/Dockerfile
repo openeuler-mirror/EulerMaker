@@ -32,6 +32,6 @@ RUN mkdir -p /var/lib/ebs-artifacts && \
 USER ebs
 
 VOLUME ["/var/lib/ebs-artifacts"]
-EXPOSE 8080
+EXPOSE 8081
 
 ENTRYPOINT ["/app/artifact-manager"]

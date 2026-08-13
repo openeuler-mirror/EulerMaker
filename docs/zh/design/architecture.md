@@ -377,8 +377,8 @@ docker compose -f hacks/docker-compose.yml up -d
 | etcd | `http://localhost:2379` |
 | Elasticsearch | `http://localhost:9200` |
 | ebs-apiserver | `https://localhost:8443` |
-| ebs-gateway | `https://localhost:9443` |
-| artifact-manager | `http://localhost:8080` |
+| ebs-gateway | `http://localhost:8080` |
+| artifact-manager | `http://localhost:8081` |
 
 ---
 
