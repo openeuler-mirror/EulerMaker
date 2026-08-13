@@ -50,7 +50,8 @@ services:
         hard: 65536
 
   ebs-apiserver:
-    image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:latest
+    build:
+      context: ../components/ebs-apiserver
     command:
       - --etcd-servers=http://etcd:2379
       - --es-servers=http://elasticsearch:9200
@@ -83,6 +84,22 @@ services:
     depends_on:
       - ebs-apiserver
 
+  artifact-manager:
+    build:
+      context: ../components/artifact-manager
+    command:
+      - --listen=:8080
+      - --data-dir=/var/lib/ebs-artifacts
+      - --gateway-url=http://ebs-gateway:8080
+    ports:
+      - "8081:8080"
+    volumes:
+      - artifact-data:/var/lib/ebs-artifacts
+    networks:
+      - ebs-net
+    depends_on:
+      - ebs-gateway
+
 networks:
   ebs-net:
     driver: bridge
@@ -90,6 +107,7 @@ networks:
 volumes:
   etcd-data:
   es-data:
+  artifact-data:
 
 secrets:
   ebs_gateway_jwt_secret:
