@@ -105,6 +105,7 @@ services:
       context: ../components/runner
     command:
       - --gateway=http://ebs-gateway:8080
+      - --artifact-manager=http://artifact-manager:8081
       - --machine-credential-file=/run/secrets/runner_machine_credential
       - --name=runner-ct-01
       - --type=ct
@@ -118,6 +119,7 @@ services:
       - ebs-net
     depends_on:
       - ebs-gateway
+      - artifact-manager
 
 networks:
   ebs-net:
