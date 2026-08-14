@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,8 @@ type CTExecutor struct {
 	ResultRoot      string
 	RunnerName      string
 	Runtime         ContainerRuntime
+	LogFactory      JobLogSinkFactory
+	LogDrainTimeout time.Duration
 	StopGracePeriod time.Duration
 }
 
@@ -70,6 +73,9 @@ type ContainerRuntime interface {
 }
 
 func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, error) {
+	if e.LogFactory != nil && (job.Metadata.Namespace == "" || job.Metadata.UID == "") {
+		return "", fmt.Errorf("job namespace and UID are required for log upload")
+	}
 	project := job.Metadata.Namespace
 	if project == "" {
 		project = "default"
@@ -87,8 +93,12 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return "", fmt.Errorf("ct runtimeSpec.image is required")
 	}
 
-	workDir := filepath.Join(e.WorkDir, project, jobName)
-	resultRoot := filepath.Join(e.ResultRoot, project, jobName)
+	executionID := job.Metadata.UID
+	if executionID == "" {
+		executionID = jobName
+	}
+	workDir := filepath.Join(e.WorkDir, project, executionID)
+	resultRoot := filepath.Join(e.ResultRoot, project, executionID)
 	if err := os.RemoveAll(workDir); err != nil {
 		return "", fmt.Errorf("clean work dir: %w", err)
 	}
@@ -146,11 +156,22 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		_ = container.Remove(context.Background(), id)
 	}()
 
-	logFile, err := os.Create(filepath.Join(resultRoot, "container.log"))
-	if err != nil {
-		return resultRoot, fmt.Errorf("create container log: %w", err)
+	var logOutput io.Writer
+	var logSink JobLogSink
+	if e.LogFactory != nil {
+		logSink, err = e.LogFactory.Open(job)
+		if err != nil {
+			return resultRoot, fmt.Errorf("open artifact log: %w", err)
+		}
+		logOutput = logSink
+	} else {
+		logFile, createErr := os.Create(filepath.Join(resultRoot, "container.log"))
+		if createErr != nil {
+			return resultRoot, fmt.Errorf("create container log: %w", createErr)
+		}
+		defer logFile.Close()
+		logOutput = logFile
 	}
-	defer logFile.Close()
 
 	if err := container.Start(ctx, id); err != nil {
 		return resultRoot, fmt.Errorf("start container: %w", err)
@@ -159,22 +180,37 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	logCtx, cancelLogs := context.WithCancel(context.Background())
 	logsDone := make(chan error, 1)
 	go func() {
-		logsDone <- container.Logs(logCtx, id, logFile)
+		logsDone <- container.Logs(logCtx, id, logOutput)
 	}()
 
 	exitCode, waitErr := waitContainer(ctx, container, id, gracePeriod)
-	cancelLogs()
+	drainTimeout := e.LogDrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = 30 * time.Second
+	}
+	var logErr error
 	select {
-	case <-logsDone:
-	case <-time.After(2 * time.Second):
+	case logErr = <-logsDone:
+	case <-time.After(drainTimeout):
+		cancelLogs()
+		logErr = fmt.Errorf("drain container logs: timeout after %s", drainTimeout)
+	}
+	cancelLogs()
+	if logSink != nil {
+		completeCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		_, completeErr := logSink.Complete(completeCtx)
+		cancel()
+		if completeErr != nil {
+			logErr = errors.Join(logErr, fmt.Errorf("complete artifact log: %w", completeErr))
+		}
 	}
 	if waitErr != nil {
-		return resultRoot, waitErr
+		return resultRoot, errors.Join(waitErr, logErr)
 	}
 	if exitCode != 0 {
-		return resultRoot, fmt.Errorf("container exited with code %d", exitCode)
+		return resultRoot, errors.Join(fmt.Errorf("container exited with code %d", exitCode), logErr)
 	}
-	return resultRoot, nil
+	return resultRoot, logErr
 }
 
 func ensureImage(ctx context.Context, runtime ContainerRuntime, image, policy string) error {

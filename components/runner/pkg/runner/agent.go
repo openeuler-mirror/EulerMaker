@@ -19,10 +19,11 @@ import (
 const agentVersion = "v0.1.0"
 
 type Agent struct {
-	cfg      Config
-	client   *Client
-	tokens   *TokenProvider
-	executor Executor
+	cfg        Config
+	client     *Client
+	tokens     *TokenProvider
+	executor   Executor
+	logFactory *ArtifactLogFactory
 
 	mu         sync.Mutex
 	activeJobs map[string]struct{}
@@ -46,6 +47,22 @@ func NewAgent(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	artifactHTTPClient, err := cfg.ArtifactManagerHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	artifactClient, err := NewArtifactClient(cfg.ArtifactManager, tokens, artifactHTTPClient)
+	if err != nil {
+		return nil, err
+	}
+	logFactory := &ArtifactLogFactory{
+		Remote:          artifactClient,
+		RootDir:         cfg.RootDir,
+		ChunkSize:       cfg.LogChunkSize,
+		FlushInterval:   cfg.LogFlushInterval,
+		SpoolLimit:      cfg.LogSpoolLimit,
+		RetryMaxBackoff: cfg.LogRetryMaxBackoff,
+	}
 	return &Agent{
 		cfg:    cfg,
 		client: client,
@@ -54,12 +71,15 @@ func NewAgent(cfg Config) (*Agent, error) {
 			RunnerType: cfg.Type,
 			Executors: map[string]Executor{
 				"ct": &CTExecutor{
-					WorkDir:    workDir(cfg.RootDir),
-					ResultRoot: resultRoot(cfg.RootDir),
-					RunnerName: cfg.Name,
+					WorkDir:         workDir(cfg.RootDir),
+					ResultRoot:      resultRoot(cfg.RootDir),
+					RunnerName:      cfg.Name,
+					LogFactory:      logFactory,
+					LogDrainTimeout: cfg.LogDrainTimeout,
 				},
 			},
 		},
+		logFactory: logFactory,
 		activeJobs: make(map[string]struct{}),
 	}, nil
 }
@@ -374,6 +394,10 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 	}
 	if updateErr := a.client.PatchJobStatus(context.Background(), job.Metadata.Namespace, job.Metadata.Name, status); updateErr != nil {
 		log.Printf("update job final status failed: %v", updateErr)
+	} else if a.logFactory != nil {
+		if cleanupErr := a.logFactory.Cleanup(job); cleanupErr != nil {
+			log.Printf("clean completed log spool failed: %v", cleanupErr)
+		}
 	}
 	a.sendHeartbeat(context.Background())
 }

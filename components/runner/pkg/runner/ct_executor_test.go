@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -98,6 +99,27 @@ func TestCTExecutorReturnsContainerExitCode(t *testing.T) {
 	}
 }
 
+func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
+	dir := t.TempDir()
+	container := &fakeContainerRuntime{exitCode: 7}
+	sink := &recordingLogSink{}
+	executor := &CTExecutor{
+		WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
+		Runtime: container, LogFactory: staticLogFactory{sink: sink}, LogDrainTimeout: time.Second,
+	}
+	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a", UID: "uid-a"}, Spec: JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})}}
+	resultRoot, err := executor.Execute(context.Background(), job)
+	if err == nil || !strings.Contains(err.Error(), "container exited with code 7") {
+		t.Fatalf("error = %v", err)
+	}
+	if resultRoot != filepath.Join(dir, "results", "project-a", "uid-a") {
+		t.Fatalf("result root = %s", resultRoot)
+	}
+	if string(sink.data) != "container log\n" || !sink.completed {
+		t.Fatalf("sink data=%q completed=%v", sink.data, sink.completed)
+	}
+}
+
 func TestCTExecutorStopsContainerOnContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	container := &fakeContainerRuntime{waitBlock: make(chan struct{})}
@@ -165,6 +187,25 @@ type fakeContainerRuntime struct {
 	waitBlock chan struct{}
 }
 
+type staticLogFactory struct{ sink JobLogSink }
+
+func (f staticLogFactory) Open(JobResource) (JobLogSink, error) { return f.sink, nil }
+
+type recordingLogSink struct {
+	data      []byte
+	completed bool
+}
+
+func (s *recordingLogSink) Write(p []byte) (int, error) {
+	s.data = append(s.data, p...)
+	return len(p), nil
+}
+func (s *recordingLogSink) Complete(context.Context) (CompletedLog, error) {
+	s.completed = true
+	return CompletedLog{State: "Completed"}, nil
+}
+func (s *recordingLogSink) Abort() {}
+
 func (f *fakeContainerRuntime) ImageExists(context.Context, string) (bool, error) {
 	return !f.pulled, nil
 }
@@ -191,8 +232,7 @@ func (f *fakeContainerRuntime) Start(context.Context, string) error {
 
 func (f *fakeContainerRuntime) Logs(ctx context.Context, _ string, output io.Writer) error {
 	_, _ = io.WriteString(output, "container log\n")
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeContainerRuntime) Wait(context.Context, string) (int, error) {
