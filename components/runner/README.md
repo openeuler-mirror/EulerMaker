@@ -21,6 +21,7 @@ Runner configuration is passed through command-line flags.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--gateway` | `https://ebs-gateway:8443` | Gateway base URL |
+| `--artifact-manager` | `http://artifact-manager:8081` | Artifact Manager base URL |
 | `--machine-credential-file` | empty | JSON file containing the MachineAccount client ID and client secret; required |
 | `--name` | hostname | Runner resource name |
 | `--type` | `ct` | Runner type: `ct`, `vm`, or `hw` |
@@ -28,6 +29,13 @@ Runner configuration is passed through command-line flags.
 | `--heartbeat-interval` | `30s` | Runner heartbeat interval |
 | `--insecure-skip-verify` | `false` | Skip gateway TLS verification |
 | `--gateway-ca` | empty | Gateway CA file |
+| `--artifact-manager-ca` | empty | Artifact Manager CA file |
+| `--artifact-manager-insecure-skip-verify` | `false` | Skip Artifact Manager TLS verification |
+| `--log-chunk-size` | `256KiB` | Maximum uncompressed log chunk size |
+| `--log-flush-interval` | `500ms` | Maximum delay before uploading a partial log chunk |
+| `--log-spool-limit` | `4GiB` | Per-Job local log spool limit |
+| `--log-drain-timeout` | `30s` | Time allowed to drain and finalize logs after execution |
+| `--log-retry-max-backoff` | `30s` | Maximum retry delay for log chunk uploads |
 
 The runner detects its architecture from `GOARCH`: `amd64` maps to `x86_64`, and `arm64` maps to `aarch64`. Other architectures are rejected at startup.
 
@@ -36,8 +44,8 @@ The runner detects its architecture from `GOARCH`: `amd64` maps to `x86_64`, and
 ```bash
 go run ./cmd/runner \
   --gateway=http://localhost:8080 \
+  --artifact-manager=http://localhost:8081 \
   --machine-credential-file=./runner-machine-credential.json \
-  --token="<runner-token>" \
   --name=runner-ct-x86-01 \
   --type=ct \
   --insecure-skip-verify
