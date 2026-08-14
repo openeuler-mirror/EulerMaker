@@ -4,16 +4,18 @@
 
 Runner 是 EulerMaker 的 Job 执行机，负责注册自身能力、上报心跳、监听已调度给自己的 Job、执行构建任务，并将执行状态回写到 `ebs/v1` API。
 
-Runner 不直接访问 etcd 或 Elasticsearch，也不直接依赖内部存储路径。所有资源读写都通过统一 API 完成：
+Runner 不直接访问 etcd 或 Elasticsearch，也不直接依赖这些组件的内部存储路径。资源对象读写通过统一 API 完成，构建产物和日志正文直接发送给 Artifact Manager：
 
 ```text
 runner -> ebs-gateway -> ebs-apiserver -> etcd / Elasticsearch
+runner -> artifact-manager -> local persistent storage
 ```
 
 其中：
 
 - `ebs-gateway` 负责认证、鉴权、审计和请求转发。
 - `ebs-apiserver` 负责资源语义、校验、默认值、`/status` 子资源、list/watch 和存储访问。
+- `artifact-manager` 负责产物上传、实时日志追加、日志封账和 Job 上传清单。
 - etcd 和 Elasticsearch 是组合主存储，Runner 不直接访问。
 
 ## 二、核心职责
@@ -24,7 +26,8 @@ runner -> ebs-gateway -> ebs-apiserver -> etcd / Elasticsearch
 | 上报状态 | 定期更新 `Runner.status`，包括 phase、资源容量、可调度资源、地址、系统信息和心跳时间 |
 | 监听 Job | 通过自身 Runner 范围的 Job list-watch 获取已分配任务，服务端只返回 `status.runner` 等于自身名称的 Job |
 | 执行 Job | 根据 Job spec 准备执行环境、提供 payload 参数、运行任务、收集产物 |
-| 回写结果 | 通过 Project API 更新 Job status，推进 Job phase/stage/resultRoot/message |
+| 上传日志和产物 | 容器运行期间向 Artifact Manager 实时追加日志，执行结束后封账日志、上传产物并完成 Job 上传清单 |
+| 回写结果 | 通过 Project API 更新 Job status，推进 Job phase/stage，并记录 Artifact 完成摘要 |
 
 ## 三、API 交互
 
@@ -117,6 +120,24 @@ PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status
 ```
 
 `{project}` 来自 Job 对象的 `metadata.namespace`。Job spec 中不重复保存 `projectName`。
+
+Runner 必须从 Job 的 `metadata.uid` 获取不可变的 `jobUID`。缺少 `metadata.namespace`、`metadata.name` 或 `metadata.uid` 的 Job 不能执行，也不能使用 Job 名称推导 UID。Job 被删除后以相同名称重建时，新 UID 对应独立的日志流、Artifact 和上传清单。
+
+### 3.4 Artifact Manager API
+
+Runner 使用 `--artifact-manager` 配置的独立地址直接访问 Artifact Manager，正文不经过 Gateway：
+
+```text
+POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
+GET  /artifacts/v1/projects/{project}/jobs/{job}/logs/status
+POST /artifacts/v1/projects/{project}/jobs/{job}/logs/complete
+POST /artifacts/v1/projects/{project}/jobs/{job}/artifacts
+POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
+```
+
+这些写入和状态查询请求复用 3.1 节的并发安全 token provider，将当前 `ebs:runner` Token 作为 Bearer Token 直接交给 Artifact Manager。Artifact Manager 再通过 Gateway 校验 Token；Runner 不额外申请 Artifact Token。Artifact Manager 返回 401 时执行与普通业务请求相同的一次强制刷新和单次重放，但请求体必须可重建：日志 chunk 保留在本地待确认缓冲中，普通 Artifact 保留本地文件，JSON 请求从结构重新编码。403 不刷新 Token。
+
+Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用于 Gateway，`--artifact-manager-ca` 只用于 Artifact Manager；测试环境可以分别显式跳过校验，不能因为其中一个地址使用 HTTP 或跳过 TLS 而放宽另一个客户端。
 
 ## 四、Runner 资源模型
 
@@ -284,26 +305,35 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 3. 更新 Runner.status.phase=Running
 4. 更新 Job.status.stage=Running
 5. 准备执行环境
-6. 按 Job.spec.timeoutSeconds 限制执行时间，将 Job.spec.payload 作为 YAML 参数提供给任务执行入口
-7. 收集产物，得到 resultRoot
-8. 成功时更新 Job.status.phase=Completed、stage=PostRun、resultRoot
-9. 失败时更新 Job.status.phase=Failed、message
-10. 清理环境，更新 Runner.status 为 Idle 或继续 Running
+6. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
+7. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 YAML 参数提供给任务入口
+8. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
+9. 将 Job 保持为 phase=Running 并推进到 stage=PostRun，封账日志；业务执行失败或超时也必须尝试封账已有日志
+10. 业务执行成功时收集并上传产物，完成 JobUploadManifest
+11. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Completed 和 Artifact 摘要
+12. 业务执行、必需日志封账、必需产物上传或清单封账失败时更新 phase=Failed，并保留明确的失败原因和已完成 Artifact 摘要
+13. 清理执行环境和已确认的本地上传状态，更新 Runner.status 为 Idle 或继续 Running
 ```
 
 Job status 使用当前数据模型：
 
 ```go
 type JobStatus struct {
-    Phase      string      `json:"phase,omitempty"`
-    Stage      string      `json:"stage,omitempty"`
-    Runner     string      `json:"runner,omitempty"`
-    StartTime  metav1.Time `json:"startTime,omitempty"`
-    EndTime    metav1.Time `json:"endTime,omitempty"`
-    ResultRoot string      `json:"resultRoot,omitempty"`
-    Message    string      `json:"message,omitempty"`
+    Phase              string      `json:"phase,omitempty"`
+    Stage              string      `json:"stage,omitempty"`
+    Runner             string      `json:"runner,omitempty"`
+    StartTime          metav1.Time `json:"startTime,omitempty"`
+    EndTime            metav1.Time `json:"endTime,omitempty"`
+    ResultRoot         string      `json:"resultRoot,omitempty"`
+    ArtifactState      string      `json:"artifactState,omitempty"`
+    ArtifactGeneration int64       `json:"artifactGeneration,omitempty"`
+    ArtifactDigest     string      `json:"artifactDigest,omitempty"`
+    ArtifactCount      int         `json:"artifactCount,omitempty"`
+    Message            string      `json:"message,omitempty"`
 }
 ```
+
+`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{jobUID}`，不能向其他组件公开 Runner 容器内的本地路径。`ArtifactState` 使用 `Uploading`、`Completed`、`Failed` 或 `NotRequired`：存在必需日志或产物时，在进入 `PostRun` 前设置为 `Uploading`；清单完成后设置为 `Completed`；没有需归档内容时设置为 `NotRequired`；必需上传或封账最终失败时设置为 `Failed`。`ArtifactGeneration` 首版固定从 1 开始，仅在清单存在时填写；`ArtifactDigest` 和 `ArtifactCount` 必须直接使用清单完成响应，不能由 Runner 自行重算或通过 Artifact 列表推断。
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 
@@ -374,8 +404,8 @@ runtimeSpec:
 
 | 宿主机目录 | 容器目录 | 说明 |
 |------------|----------|------|
-| `${rootDir}/work/{project}/{job}` | `/workspace` | payload YAML 参数文件和执行工作目录 |
-| `${rootDir}/results/{project}/{job}` | `/results` | 构建产物目录，对应 `Job.status.resultRoot` |
+| `${rootDir}/work/{project}/{jobUID}` | `/workspace` | payload YAML 参数文件和执行工作目录 |
+| `${rootDir}/results/{project}/{jobUID}` | `/results` | 构建产物暂存目录；最终结果通过 Artifact Manager 定位 |
 
 容器 label 建议至少包含：
 
@@ -393,57 +423,163 @@ runner agent 应把容器生命周期映射到 Job status，而不是在 `Runner
 |----------|-----------------|
 | 容器创建前 | `phase=Running, stage=Running` |
 | 容器运行中 | 保持 `phase=Running, stage=Running` |
-| 容器退出码为 0，产物收集完成 | `phase=Completed, stage=PostRun, resultRoot=...` |
-| 容器退出码非 0 | `phase=Failed, stage=Failed, message=...` |
-| 执行超时 | `phase=Failed` 或后续扩展为 `Aborted`，`message` 记录 timeout |
+| 容器退出、日志采集到 EOF | `phase=Running, stage=PostRun, artifactState=Uploading` |
+| 日志、必需产物和清单封账完成 | `phase=Completed, stage=PostRun, artifactState=Completed` |
+| 容器退出码非 0 | 先尝试封账已有日志，再置 `phase=Failed, stage=Failed` |
+| 执行超时 | 终止容器并尝试封账已有日志，再置 `phase=Failed` 或后续扩展为 `Aborted` |
 
-`PostRun` 表示业务执行已经结束并完成结果收集后的最终阶段；当前不表示一个独立异步执行阶段。如果后续需要上传产物、清理缓存等耗时后处理，可以把 `PostRun` 扩展为真实阶段，并在完成后再推进最终 phase。
+`PostRun` 是业务执行结束后的真实阶段，包括排空实时日志、日志封账、产物上传和 JobUploadManifest 封账。进入 `PostRun` 时 Job 仍为 `phase=Running`；所有必需后处理完成后才能推进最终 phase。
 
 容器清理应按 Job identity 幂等执行：runner 重启后可以根据容器 label 找回未完成容器，决定继续等待、终止或标记失败；重复 stop/remove 不应导致 Job 状态回退。
 
-## 九、调度协作
+### 8.3 实时日志上传
 
-Scheduler 使用全局 Job API 和 Runner API：
+首版每个 Job 只上传 `stream=combined`，按照 Runner 从容器运行时读取到的顺序合并 stdout 和 stderr。日志上传器位于 executor 和 Artifact Manager 客户端之间，不由容器运行时直接访问网络：
 
 ```text
-scheduler -> watch /apis/ebs/v1/jobs
-scheduler -> list/watch /apis/ebs/v1/runners
-scheduler -> 过滤 Pending Job
-scheduler -> 选择可用 Runner
-scheduler -> update Job.status.runner / phase
+container runtime logs
+        |
+        v
+durable local spool -> chunk assembler -> one in-flight request -> artifact-manager
+        |
+        +-> final size / SHA-256
 ```
 
-调度过滤建议基于：
+#### 8.3.1 本地状态
 
-- `Runner.status.phase`：只选择 `Idle` 或仍有可调度容量的 `Running` Runner。
-- `Runner.spec.unschedulable`：为 true 时不调度新 Job。
-- `Runner.spec.taints`：过滤不能容忍污点的 Job。
-- `Runner.metadata.labels`：匹配类型、架构、机房、能力标签。
-- `Runner.status.allocatable`：判断资源是否足够。
-- `Job.spec.nodeSelector`、`Job.spec.resources.requests`、`Job.spec.tolerations`：匹配调度约束、资源请求和架构，架构通过 `ebs.io/runner-arch` 标签选择。
+Runner 必须先把日志写入 `${rootDir}/logs/{project}/{jobUID}/combined.log`，再从该文件生成上传 chunk。该文件既是网络故障时的有界溢写区，也是 Runner 重启后的恢复来源。不得只把未确认日志保存在进程内存中。
 
-Runner 只执行已绑定给自己的 Job，不负责调度决策。
+每次确定一个 chunk 边界时，Runner 还必须向 `${rootDir}/logs/{project}/{jobUID}/chunks.jsonl` 追加一条完整 JSON Lines 记录并同步落盘：
 
-## 十、故障处理
+```go
+type LocalLogChunk struct {
+    Sequence    int64  `json:"sequence"`
+    StartOffset int64  `json:"startOffset"`
+    Size        int64  `json:"size"`
+    SHA256      string `json:"sha256"`
+}
+```
+
+索引从 sequence 0 连续，offset 也必须连续。正文和索引采用与服务端相同的提交原则：先同步正文，再追加并同步完整索引行，最后更新 checkpoint。启动时截断不完整索引尾行；正文长于最后一条索引结束位置的部分是尚未组块的已生产日志，可以继续聚合；正文短于索引边界表示本地损坏，不能继续上传。
+
+同目录原子保存 `upload.json`，至少包含：
+
+```go
+type LogUploadCheckpoint struct {
+    SchemaVersion   int       `json:"schemaVersion"`
+    Project         string    `json:"project"`
+    JobName         string    `json:"jobName"`
+    JobUID          string    `json:"jobUID"`
+    Stream          string    `json:"stream"`
+    NextSequence    int64     `json:"nextSequence"`
+    ConfirmedOffset int64     `json:"confirmedOffset"`
+    ProducedBytes   int64     `json:"producedBytes"`
+    State           string    `json:"state"` // Open, Draining, Completed, Failed
+    UpdatedAt       time.Time `json:"updatedAt"`
+}
+```
+
+`NextSequence` 是下一个待发送 sequence，`ConfirmedOffset` 是服务端已确认的连续字节边界，`ProducedBytes` 是本地日志文件已完成写入的字节数。checkpoint 使用临时文件、文件同步和原子 rename 更新；正文先落盘，再更新 `ProducedBytes`。只有服务端确认 chunk 后才能同时推进 `NextSequence` 和 `ConfirmedOffset`。最终日志的完整 SHA-256 可以在采集时增量计算，但重启后必须能够从本地正文重新计算，不能把不可恢复的哈希内存状态作为唯一来源。
+
+#### 8.3.2 聚合和发送
+
+- 解压后的目标 chunk 大小默认为 256 KiB；未达到大小时最多等待 500 ms，日志 EOF 时立即刷新剩余字节。空 chunk 不发送。
+- 一个日志流同一时间最多存在一个未确认请求。请求失败或结果未知时，使用相同 sequence、相同字节和相同 SHA-256 重试。
+- `X-Content-SHA256` 对原始日志字节计算；启用 gzip 时只改变传输编码，不改变 sequence、size、摘要或本地 checkpoint。
+- 上传器使用有界内存队列；未确认正文始终可从本地 spool 重新读取。单 Job 的 spool 总大小达到 `--log-spool-limit` 时暂停读取容器日志，让容器运行时或其日志文件承担背压，不能静默丢弃、跳过或伪造日志。服务端确认不会立即释放本地正文，因为封账和崩溃恢复仍需要完整文件；只有 8.3.5 节的终态清理才能回收。
+- 采集 goroutine、chunk 上传 goroutine和容器等待 goroutine由同一 Job context 管理。业务超时取消容器执行，但日志读取使用独立的排空期限；必须先等待运行时日志 EOF，再关闭 chunk 输入，不能在 `Wait` 返回时立即取消日志读取。
+
+追加请求严格使用 Artifact Manager 9.2.1 节定义的 header。200 响应只有在 `acceptedSequence` 等于请求 sequence、`nextSequence` 等于请求 sequence+1 且 `committedBytes` 等于本 chunk 结束 offset 时才算确认；响应字段不一致按结果未知处理并查询状态。
+
+#### 8.3.3 启动与断线恢复
+
+开始或恢复 Job 日志前，Runner 调用 `/logs/status?jobUID={uid}&stream=combined`：
+
+1. 服务端不存在日志流时，以 `nextSequence=0`、`committedBytes=0` 开始。
+2. 服务端 `state=Open` 时，以服务端值为事实来源；校验本地 spool 至少包含 `committedBytes`，将 checkpoint 回退或前进到该边界，并从对应 sequence 继续。
+3. 服务端 `state=Completed` 时，不再追加；记录其 `artifactID`。如果本地仍认为容器正在运行，这是不可继续写入的状态冲突，停止该 Job 并报告错误。
+4. 服务端 `state=Failed/Expired` 时停止上传，Job 的 Artifact 状态标记为 Failed。
+
+本地文件短于服务端 `committedBytes`、无法从本地索引确定 `nextSequence` 对应 offset，或未确认区间已经被删除时，日志不可恢复。Runner 必须保留已有数据、停止封账并将 Job 标记为失败，不能从新的 sequence 继续制造一份不连续日志。
+
+本地 `chunks.jsonl` 必须保留至日志封账完成。Runner 使用服务端 `nextSequence` 查找相同 sequence 的本地记录，并验证此前所有本地记录的结束 offset 恰好等于服务端 `committedBytes`；不匹配时不能通过猜测固定 chunk 大小恢复，因为按时间刷新的 chunk 长度并不固定。
+
+#### 8.3.4 错误处理
+
+| 响应或错误 | Runner 行为 |
+|------------|-------------|
+| 网络中断、超时、503 | 保留当前 chunk，指数退避后以相同 sequence 和正文重试；结果未知时先查 status |
+| 401 | 强制刷新一次 Token，以相同 chunk 重放一次；再次 401 进入低频配置错误重试 |
+| 403 | 不刷新 Token，标记身份/权限配置错误 |
+| 429 | 保留当前 chunk，遵循 `Retry-After` 并增加抖动 |
+| 409 `SequenceGap` | 读取响应 `details.nextSequence`，再查询 status；按服务端连续边界恢复 |
+| 409 `SequenceConflict` | 查询 status 和本地 chunk 索引；摘要无法证明一致时将日志标记为不可恢复 |
+| 409 `LogAlreadyFinalized` | 查询 status；Completed 视为可能的重复完成，其他状态按冲突失败 |
+| 409 `JobIdentityConflict` | 不重试，标记本地 Job 身份错误 |
+| 413/422 `LogChunkMismatch` | 校验本地 chunk 大小和摘要；实现错误或正文改变时停止上传，不能跳过该 sequence |
+| 507 | 保留本地日志并低频重试；达到本地 spool 上限后暂停日志读取 |
+
+#### 8.3.5 排空和封账
+
+容器无论成功、失败、超时或被取消，只要已经产生日志，Runner 都应在有限的 `--log-drain-timeout` 内执行：等待日志 EOF、刷新最后一个非空 chunk、确认所有 sequence、重新计算本地完整正文的 size 和 SHA-256，然后调用 `/logs/complete`。空日志使用 `lastSequence=-1`、`size=0` 和 SHA-256 空输入。
+
+完成请求使用稳定的 `Idempotency-Key={jobUID}-log-complete`。网络错误或结果未知时先查询 status；已 Completed 且返回的最终 size、SHA-256 与本地一致时视为成功。重复完成必须得到同一个 Artifact。封账摘要不匹配时保留 spool 和 checkpoint 供诊断，不重新从 sequence 0 上传，也不删除服务端活动日志。
+
+日志是否为 JobUploadManifest 的必需文件由 Job 类型的产物策略决定。业务执行失败时，日志封账成功不会把 Job 改为 Completed；Runner 保留业务失败原因，同时可在清单中记录已完成日志。业务执行成功但必需日志无法封账时，Job 必须 Failed，不能先发布 Completed 再后台补日志。
+
+### 8.4 上传回执与本地文件清理
+
+Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续保存本地副本。每个文件必须使用以下顺序处理：
+
+1. 流式计算本地文件大小和 SHA-256，构造稳定的 `Idempotency-Key` 并上传。
+2. 只在收到 200/201 且响应 Artifact 为 `state=Completed`、project、jobName、jobUID、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。
+3. 将完整 Artifact 响应作为上传回执原子写入 `${rootDir}/uploads/{project}/{jobUID}/artifacts/{relativePath}.json`；实际文件名使用安全编码或路径摘要，不能直接信任 relativePath 拼接。
+4. 同步回执文件及其父目录后，删除对应的本地产物正文。目录为空时可以逐级清理空目录。
+5. JobUploadManifest 从持久化回执生成，不再依赖已删除的本地正文。清单完成后删除本 Job 的普通产物上传回执。
+
+普通产物的幂等键固定为 `{jobUID}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求且在同一 generation 内应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
+
+上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执后清理。删除本地文件失败不影响服务端 Artifact 的完成状态，记录告警并由后台清理重试，不能重复创建 Artifact。
+
+该顺序允许在任意点崩溃后恢复：
+
+| 本地现场 | 恢复动作 |
+|----------|----------|
+| 正文存在、无回执 | 使用稳定幂等键重新上传或确认结果 |
+| 正文存在、Completed 回执存在 | 校验回执与本地文件元数据后删除正文，不重复上传 |
+| 正文缺失、Completed 回执存在 | 使用回执继续构造 Manifest |
+| 正文和回执都缺失、Manifest 未完成 | 标记本地结果不可恢复，Job 不能进入 Completed |
+| Manifest 已完成但本地回执残留 | 对照 Manifest 后删除回执和空目录 |
+
+实时日志是例外：`combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；如果日志需要加入 JobUploadManifest，则等待 Manifest Completed；随后成功写回最终 Job Status，再删除日志 spool、索引、checkpoint 和完成回执。若日志不进入 Manifest，也必须至少等日志 Artifact 完成且最终 Job Status 已成功写回后清理。
+
+`${rootDir}/work/{project}/{jobUID}` 中的 payload 和临时执行文件在容器退出且不再需要恢复执行后清理。`${rootDir}/results/{project}/{jobUID}` 中的普通产物按文件完成上传后逐个删除；不能在扫描完目录后一次性提前删除整个 resultRoot。所有 Job 本地目录都使用 UID 而不是可复用的 Job 名。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
+
+## 九、故障处理
 
 | 场景 | 处理方式 |
 |------|----------|
 | gateway 不可达或 watch 中断 | watch 按第七章的 list-watch 恢复流程处理；心跳使用带抖动的指数退避重试 |
+| artifact-manager 暂时不可达 | 继续写入本地日志 spool，在上限内重试；不得阻塞心跳和 Job watch |
 | 心跳超时 | 控制器将 Runner 标记为 `Offline`，scheduler 不再选择该 Runner |
-| Runner 重启 | 重新注册 Runner，恢复心跳，根据现有 Job 状态决定是否清理或继续 |
-| Job 执行失败 | 更新 `Job.status.phase=Failed` 和 `message`，并清理本地环境 |
-| Job 超时 | 终止执行进程，更新 Job 为 Failed 或 Aborted |
+| Runner 重启 | 重新注册 Runner，恢复心跳，根据 Job、容器 label、本地 spool/checkpoint 和服务端日志 status 恢复或明确失败 |
+| Job 执行失败 | 先排空并封账已有日志，再更新 `Job.status.phase=Failed` 和 `message` |
+| Job 超时 | 终止执行进程并尝试封账已有日志，再更新 Job 为 Failed 或 Aborted |
+| 本地日志不可恢复 | 保留诊断文件，将 `artifactState=Failed`，Job 不得进入 Completed |
+| 日志已封账但 Job 状态更新失败 | 保留日志完成回执和 spool，按 resourceVersion 重新读取并幂等更新 Job，不重复创建日志 Artifact |
+| 普通产物已上传但本地删除失败 | 保留 Completed 回执并异步重试删除，不重复上传或改变 Artifact 状态 |
 | 状态更新冲突 | 使用 apiserver 返回的 resourceVersion 重新读取并重试 |
 
 状态更新应保持幂等：重复上报同一阶段、重复清理、重复标记失败不应破坏对象状态。
 
-## 十一、部署配置
+## 十、部署配置
 
 Runner 作为独立组件容器化部署，至少需要以下配置：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--gateway` | `https://ebs-gateway:8443` | gateway 地址 |
+| `--artifact-manager` | `http://artifact-manager:8081` | Artifact Manager 地址，必填 |
 | `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
 | `--name` | hostname | Runner 资源名称 |
 | `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |
@@ -451,6 +587,13 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--heartbeat-interval` | `30s` | 心跳上报周期 |
 | `--gateway-ca` | 无 | gateway 服务端证书的 CA 文件 |
 | `--insecure-skip-verify` | `false` | 跳过 gateway TLS 校验，仅用于测试环境 |
+| `--artifact-manager-ca` | 无 | Artifact Manager 服务端证书的 CA 文件 |
+| `--artifact-manager-insecure-skip-verify` | `false` | 跳过 Artifact Manager TLS 校验，仅用于测试环境 |
+| `--log-chunk-size` | `256KiB` | 解压后单个日志 chunk 的目标和最大大小，不得超过服务端限制 |
+| `--log-flush-interval` | `500ms` | 未达到目标大小时的最长聚合时间 |
+| `--log-spool-limit` | 按部署配置 | 单 Job 完整本地日志 spool 的空间上限，至少应与服务端 `--max-log-size` 协调 |
+| `--log-drain-timeout` | `30s` | 容器结束后等待日志 EOF、上传排空和封账的期限 |
+| `--log-retry-max-backoff` | `30s` | 实时日志临时错误的最大退避间隔 |
 
 Runner 启动时根据运行环境获取架构：`GOARCH=amd64` 映射为 `x86_64`，`GOARCH=arm64` 映射为 `aarch64`。其他架构不受支持，Runner拒绝启动。检测结果写入`Runner.spec.arch`和`ebs.io/runner-arch` label，不提供启动参数覆盖。
 
@@ -462,6 +605,7 @@ services:
     image: ebs-runner:latest
     command:
       - --gateway=https://ebs-gateway:8443
+      - --artifact-manager=http://artifact-manager:8081
       - --machine-credential-file=/run/secrets/runner-machine-credential
       - --name=runner-ct-aarch64-01
       - --type=ct
@@ -476,7 +620,31 @@ secrets:
     file: ./runner-machine-credential.json
 ```
 
-## 十二、安全边界
+## 十一、安全边界
 
 - 长期 MachineAccount 凭据用于换取最长 24 小时的 Runner token；每个 Runner 或受控站点应使用独立账号以便独立审计和吊销，不应在镜像中内置全局共享 secret。
 - CT 类型 Runner 如需挂载 socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。
+- 日志 spool 和上传 checkpoint 可能包含敏感构建输出，只允许 Runner 运行用户访问；不得把日志正文、Bearer Token 或 MachineAccount secret 写入结构化运行日志。
+- 普通产物在 Completed 回执持久化后立即删除本地正文；回执不得包含 Token 或文件内容。日志 spool 只有在日志封账、所需 Manifest 和最终 Job Status 完成后才能删除。失败或不可恢复日志先保留用于诊断，并由独立 TTL 清理，不能在错误路径立即删除。
+- 生产环境中 Runner 到 Artifact Manager 必须使用 TLS；使用 HTTP 的 Compose 地址只适用于受控测试网络。
+
+## 十二、测试设计
+
+实时日志开发至少覆盖以下测试：
+
+| 模块 | 场景 |
+|------|------|
+| Job identity | 从 `metadata.uid` 取得 jobUID；缺少 namespace/name/UID 时拒绝执行；同名不同 UID 使用独立目录和日志流 |
+| Chunk | 256 KiB 聚合、500 ms 刷新、EOF 刷新、空日志不发送 chunk、SHA-256 针对原始字节、可选 gzip |
+| 顺序与确认 | 单请求在途、200 响应字段校验、相同 sequence/正文重试不重复推进、checkpoint 只在确认后更新 |
+| 本地持久化 | 正文先于索引、JSON Lines 残缺尾行恢复、正文未组块尾部继续聚合、正文短于索引时拒绝恢复 |
+| 断线恢复 | status 为 Open/Completed/Failed；服务端领先、客户端 checkpoint 落后、结果未知、Runner 进程在各提交点崩溃 |
+| 协议错误 | SequenceGap、SequenceConflict、LogAlreadyFinalized、JobIdentityConflict、LogChunkMismatch |
+| 认证和退避 | 401 单次刷新重放、403 不刷新、429 Retry-After、503/网络错误指数退避；日志故障不阻塞心跳和 watch |
+| 背压 | 慢服务端、内存队列满、本地 spool 达上限时不丢日志；Job 取消后仍能在 drain timeout 内排空 |
+| 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应 |
+| 本地清理 | Completed 回执落盘后删除普通产物；各崩溃点恢复；结果未知不删除；删除失败重试；Manifest 使用回执；日志延迟清理 |
+| Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Completed；上传失败时 ArtifactState 和 Message 正确 |
+| 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
+
+端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact，最终下载正文与本地 spool 字节完全一致。
