@@ -2323,10 +2323,12 @@ func schema_pkg_apis_iam_v1_UserSpec(ref common.ReferenceCallback) common.OpenAP
 							Format: "",
 						},
 					},
-					"admin": {
+					"scopes": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"boolean"},
-							Format: "",
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{Schema: &spec.Schema{SchemaProps: spec.SchemaProps{
+								Type: []string{"string"},
+							}}},
 						},
 					},
 					"displayName": {

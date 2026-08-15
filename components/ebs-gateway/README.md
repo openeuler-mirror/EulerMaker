@@ -6,7 +6,7 @@
 
 - `GET /healthz` without authentication.
 - `POST /auth/register` atomically creates a User and initial password through the apiserver IAM service.
-- `POST /auth/login` authenticates against the apiserver IAM endpoint and issues an `ebs:user` or `ebs:admin` token from `User.spec.admin`.
+- `POST /auth/login` authenticates against the apiserver IAM endpoint and issues the single `ebs:user`, `ebs:ops`, or `ebs:admin` scope stored in `User.spec.scopes`.
 - `PUT /auth/users/{name}/password` verifies the current password before changing the authenticated user's password.
 - `POST /auth/machineaccounts` creates a MachineAccount and credential for `ebs:admin` callers.
 - `POST /auth/runner-token` exchanges MachineAccount Basic credentials for a short-lived `ebs:runner` token.
@@ -18,6 +18,7 @@
   - `X-EBS-User`
   - `X-EBS-Scopes`
 - Owner/member user authorization for Project-owned resources.
+- Read-only Runner get/list access for `ebs:ops`; watch, subresources, and writes remain denied.
 - Project list filtering for ordinary user tokens.
 - Project `ebs.io/owner-user` label injection on ordinary-user create.
 - Project access label protection on update and patch.

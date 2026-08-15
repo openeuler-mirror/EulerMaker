@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"net/mail"
+	"sort"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -39,15 +40,18 @@ func (*strategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
 		enabled := true
 		user.Spec.Enabled = &enabled
 	}
+	defaultAndSortScopes(user)
 }
-func (*strategy) PrepareForUpdate(_ context.Context, obj, old runtime.Object) {}
+func (*strategy) PrepareForUpdate(_ context.Context, obj, old runtime.Object) {
+	defaultAndSortScopes(obj.(*iamv1.User))
+}
 func (*strategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList {
 	return validateUser(obj.(*iamv1.User))
 }
 func (*strategy) ValidateUpdate(_ context.Context, obj, old runtime.Object) field.ErrorList {
 	return validateUser(obj.(*iamv1.User))
 }
-func (*strategy) Canonicalize(runtime.Object) {}
+func (*strategy) Canonicalize(obj runtime.Object) { defaultAndSortScopes(obj.(*iamv1.User)) }
 func (*strategy) ObjectKinds(runtime.Object) ([]schema.GroupVersionKind, bool, error) {
 	return []schema.GroupVersionKind{{Group: iamv1.GroupName, Version: "v1", Kind: "User"}}, false, nil
 }
@@ -73,5 +77,30 @@ func validateUser(user *iamv1.User) field.ErrorList {
 			errs = append(errs, field.Invalid(field.NewPath("spec", "email"), user.Spec.Email, "must be a valid email address"))
 		}
 	}
+	scopePath := field.NewPath("spec", "scopes")
+	seen := make(map[string]struct{}, len(user.Spec.Scopes))
+	for i, scope := range user.Spec.Scopes {
+		if scope != "ebs:user" && scope != "ebs:ops" && scope != "ebs:admin" {
+			errs = append(errs, field.NotSupported(scopePath.Index(i), scope, []string{"ebs:user", "ebs:ops", "ebs:admin"}))
+		}
+		if _, exists := seen[scope]; exists {
+			errs = append(errs, field.Duplicate(scopePath.Index(i), scope))
+		}
+		seen[scope] = struct{}{}
+	}
+	if len(user.Spec.Scopes) == 0 {
+		errs = append(errs, field.Required(scopePath, "at least one scope is required"))
+	}
+	if len(seen) > 1 {
+		errs = append(errs, field.Invalid(scopePath, user.Spec.Scopes, "exactly one user scope is allowed"))
+	}
 	return errs
+}
+
+func defaultAndSortScopes(user *iamv1.User) {
+	if len(user.Spec.Scopes) == 0 {
+		user.Spec.Scopes = []string{"ebs:user"}
+		return
+	}
+	sort.Strings(user.Spec.Scopes)
 }

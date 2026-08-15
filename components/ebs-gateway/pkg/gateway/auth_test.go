@@ -149,3 +149,16 @@ func TestTokenManagerAcceptsOnlyUnifiedAdminScope(t *testing.T) {
 		}
 	}
 }
+
+func TestTokenManagerAcceptsStandaloneOpsScope(t *testing.T) {
+	manager := &tokenManager{key: []byte("0123456789abcdef0123456789abcdef")}
+	now := time.Unix(1790000000, 0)
+	claims := jwtClaims{Subject: "operator", Scopes: []string{"ebs:ops"}, Issuer: jwtIssuer, Audience: jwtAudience, IssuedAt: now.Unix(), NotBefore: now.Unix(), Exp: now.Add(time.Hour).Unix(), JTI: "ops-token"}
+	if err := manager.validateClaims(claims, now); err != nil {
+		t.Fatalf("ops scope rejected: %v", err)
+	}
+	claims.Scopes = []string{"ebs:user", "ebs:ops"}
+	if err := manager.validateClaims(claims, now); err == nil {
+		t.Fatal("combined user and ops scopes were accepted")
+	}
+}

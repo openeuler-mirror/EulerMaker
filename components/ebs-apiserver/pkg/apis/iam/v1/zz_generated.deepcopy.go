@@ -9,6 +9,9 @@ func (in *User) DeepCopyInto(out *User) {
 		out.Spec.Enabled = new(bool)
 		*out.Spec.Enabled = *in.Spec.Enabled
 	}
+	if in.Spec.Scopes != nil {
+		out.Spec.Scopes = append([]string(nil), in.Spec.Scopes...)
+	}
 }
 
 func (in *User) DeepCopy() *User {

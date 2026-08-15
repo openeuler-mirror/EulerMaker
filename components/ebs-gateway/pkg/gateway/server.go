@@ -167,6 +167,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if ident.IsOps() {
+		if resolveErr := g.resolveOps(r.Context(), ident.Subject); resolveErr != nil {
+			http.Error(rec, resolveErr.message, resolveErr.status)
+			return
+		}
+	}
 
 	limitKey := ident.Subject + "/" + clientIP(r)
 	if !g.limiter.Allow(limitKey) {
@@ -231,6 +237,8 @@ func (g *Gateway) handleTokenCheck(w http.ResponseWriter, r *http.Request) {
 		identityType = "user"
 	} else if ident.IsAdmin() {
 		identityType = "admin"
+	} else if ident.IsOps() {
+		identityType = "ops"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -445,7 +453,7 @@ func (g *Gateway) handlePasswordChange(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/auth/users/"), "/password")
-	if (!ident.IsUser() && !ident.IsAdmin()) || !isDNS1123Label(name) || name != ident.Subject {
+	if (!ident.IsUser() && !ident.IsAdmin() && !ident.IsOps()) || !isDNS1123Label(name) || name != ident.Subject {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -637,8 +645,8 @@ func (g *Gateway) handleOrdinaryUserList(w http.ResponseWriter, r *http.Request)
 
 func userObjectIsAdmin(obj map[string]any) bool {
 	spec, _ := obj["spec"].(map[string]any)
-	admin, _ := spec["admin"].(bool)
-	return admin
+	scopes, _ := spec["scopes"].([]any)
+	return len(scopes) == 1 && scopes[0] == "ebs:admin"
 }
 
 func (g *Gateway) prepareOrdinaryUserUpdate(r *http.Request, name string, oldData []byte, oldObject map[string]any) error {
@@ -730,7 +738,7 @@ func validateOrdinaryUserCandidate(name string, oldObject, candidate map[string]
 		return errors.New("user spec is required")
 	}
 	for key := range spec {
-		if key != "enabled" && key != "admin" && key != "displayName" && key != "email" {
+		if key != "enabled" && key != "scopes" && key != "displayName" && key != "email" {
 			return errors.New("unsupported user spec field")
 		}
 	}
@@ -872,10 +880,16 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	issuedAt := g.now()
 	var token string
 	var expiresAt int64
-	if user.Admin {
+	switch user.Scope {
+	case "ebs:admin":
 		token, expiresAt, err = g.tokens.issueAdmin(username, issuedAt)
-	} else {
+	case "ebs:ops":
+		token, expiresAt, err = g.tokens.issueOps(username, issuedAt)
+	case "ebs:user":
 		token, expiresAt, err = g.tokens.issueUser(username, issuedAt)
+	default:
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 	if err != nil {
 		http.Error(w, "unable to issue token", http.StatusInternalServerError)
@@ -892,7 +906,7 @@ func (g *Gateway) resolveUser(ctx context.Context, username string) *gatewayHTTP
 	if resolveErr != nil {
 		return resolveErr
 	}
-	if !user.Enabled {
+	if !user.Enabled || user.Scope != "ebs:user" {
 		return &gatewayHTTPError{status: http.StatusForbidden, message: "user is not allowed"}
 	}
 	return nil
@@ -903,8 +917,19 @@ func (g *Gateway) resolveAdmin(ctx context.Context, username string) *gatewayHTT
 	if resolveErr != nil {
 		return resolveErr
 	}
-	if !user.Enabled || !user.Admin {
+	if !user.Enabled || user.Scope != "ebs:admin" {
 		return &gatewayHTTPError{status: http.StatusForbidden, message: "admin is not allowed"}
+	}
+	return nil
+}
+
+func (g *Gateway) resolveOps(ctx context.Context, username string) *gatewayHTTPError {
+	user, resolveErr := g.getUser(ctx, username)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	if !user.Enabled || user.Scope != "ebs:ops" {
+		return &gatewayHTTPError{status: http.StatusForbidden, message: "ops user is not allowed"}
 	}
 	return nil
 }
@@ -912,7 +937,7 @@ func (g *Gateway) resolveAdmin(ctx context.Context, username string) *gatewayHTT
 type userInfo struct {
 	Name    string
 	Enabled bool
-	Admin   bool
+	Scope   string
 }
 
 func (g *Gateway) getUser(ctx context.Context, username string) (userInfo, *gatewayHTTPError) {
@@ -929,8 +954,8 @@ func (g *Gateway) getUser(ctx context.Context, username string) (userInfo, *gate
 			Name string `json:"name"`
 		} `json:"metadata"`
 		Spec struct {
-			Enabled bool `json:"enabled"`
-			Admin   bool `json:"admin"`
+			Enabled bool     `json:"enabled"`
+			Scopes  []string `json:"scopes"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(body, &user); err != nil {
@@ -939,7 +964,10 @@ func (g *Gateway) getUser(ctx context.Context, username string) (userInfo, *gate
 	if user.Metadata.Name != username {
 		return userInfo{}, &gatewayHTTPError{status: http.StatusForbidden, message: "user is not allowed"}
 	}
-	return userInfo{Name: user.Metadata.Name, Enabled: user.Spec.Enabled, Admin: user.Spec.Admin}, nil
+	if len(user.Spec.Scopes) != 1 {
+		return userInfo{}, &gatewayHTTPError{status: http.StatusForbidden, message: "user is not allowed"}
+	}
+	return userInfo{Name: user.Metadata.Name, Enabled: user.Spec.Enabled, Scope: user.Spec.Scopes[0]}, nil
 }
 
 type authzDecision struct {
@@ -959,6 +987,9 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 	}
 	if ident.IsRunner() {
 		return g.authorizeRunner(ctx, r, ident)
+	}
+	if ident.IsOps() {
+		return g.authorizeOps(r)
 	}
 
 	route := parseRoute(r.URL.Path)
@@ -1080,6 +1111,22 @@ func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Id
 		}
 	}
 	return authzDecision{}, fmt.Errorf("runner access denied")
+}
+
+func (g *Gateway) authorizeOps(r *http.Request) (authzDecision, error) {
+	route := parseRoute(r.URL.Path)
+	if route.resource != "runners" || len(route.rest) != 0 {
+		return authzDecision{}, fmt.Errorf("ops access is limited to runner reads")
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return authzDecision{}, fmt.Errorf("ops runner access is read-only")
+	}
+	for _, value := range r.URL.Query()["watch"] {
+		if value != "false" {
+			return authzDecision{}, fmt.Errorf("ops runner watch is not allowed")
+		}
+	}
+	return authzDecision{}, nil
 }
 
 func (g *Gateway) authorizeRunnerJobs(r *http.Request, ident Identity) (authzDecision, error) {
