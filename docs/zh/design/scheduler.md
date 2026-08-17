@@ -152,8 +152,8 @@ graph TD
     C -->|新建/更新/删除索引| D[Indexer]
 
     F[Informer::_event_dispatch] --> |Job 事件| G[Scheduler::on_add/on_update/on_delete]
-    G -->|Pending Job| Q1[WorkerQueue::ActiveQueue]
-    Q2[WorkerQueue::BackoffQueue] -->|延迟到期 Job| Q1
+    G -->|Pending Job| Q1[WorkQueue::ActiveQueue]
+    Q2[WorkQueue::BackoffQueue] -->|延迟到期 Job| Q1
 
     Q1 -->|消费 Job| L[Scheduler::process_loop]
     D --> |Job| L
@@ -505,12 +505,12 @@ status:
 
 ```python
 class Item:
-    __slots__ = ('key', 'priority', '_counter')
+    __slots__ = ('key', 'priority', '_sequence')
 
     def __init__(self, key: str, priority: int = 0) -> None:
         self.key = key                    # 唯一标识，用于去重
         self.priority = priority          # 调度优先级，值越大越优先
-        self._counter: int = 0            # 插入序号，用于同优先级 FIFO
+        self._sequence: int = 0           # 自增序列，用于同优先级 FIFO 排序
 ```
 
 #### BackoffItem 数据模型
@@ -543,10 +543,10 @@ class BackoffItem(Item):
 ```
      add(item)
         │
-        ├── activeQ 已存在? ──Yes──► 更新优先级，保留 _counter
+        ├── activeQ 已存在? ──Yes──► 更新优先级，保留 _sequence
         ├── in_flight 中?   ──Yes──► 标记 dirty，done() 后重新入队
         ├── activeQ 满?     ──Yes──► 返回 False
-        └── 全新 Item       ───────► 分配 _counter，入队，notify()
+        └── 全新 Item       ───────► 分配自增序列号，入队，notify()
 
      get()
         │
@@ -584,7 +584,7 @@ class PriorityQueue:
         self._dirty: Set[str] = set()           # 处理期间被重新 add 的 key
         self._closed: bool = False
         self._max_size: int = max_size
-        self._counter: int = 0
+        self._sequence: int = 0         # 自增序列，保证同优先级 FIFO，序列溢出值为 2^63-1 自增为 1 的情况下溢出可以不用考虑
 ```
 
 #### 公共接口
@@ -592,9 +592,9 @@ class PriorityQueue:
 ```python
     def add(self, item: Item) -> bool:
         """添加或更新 Item。
-         - 已在 activeQ 中：更新优先级，保留 _counter
+         - 已在 activeQ 中：更新优先级，保留 _sequence
          - 已在 in_flight 中：标记 dirty，done() 后重新入队
-         - 全新 Item：分配 _counter，入队
+         - 全新 Item：调用 _next_sequence() 分配自增序列号
          - 队列满：返回 False
         """
         with self._cond:
@@ -640,10 +640,11 @@ class PriorityQueue:
     def _add_locked(self, item: Item) -> bool:
         """add() 核心逻辑，调用者必须持有 self._cond。"""
         # 1. 已关闭 → 返回 False
-        # 2. 已在 activeQ 中 → 保留 _counter，push 更新，notify，返回 True
+        # 2. 已在 activeQ 中 → 保留 _sequence，push 更新，notify，返回 True
         # 3. 已在 in_flight 中 → 标记 dirty，更新优先级副本，返回 True
         # 4. 达到 max_size → 返回 False
-        # 5. 全新 Item → 分配 _counter，push，notify，返回 True
+        # 5. 全新 Item → 1. 调用 _next_sequence() 分配自增序列号
+        #                2. push，notify，返回 True
 
     def _get_locked(self) -> Optional[Item]:
         """get() 核心逻辑，调用者必须持有 self._cond。"""
@@ -675,10 +676,12 @@ class PriorityQueue:
     def _priority_less(a: Item, b: Item) -> bool:
         """大顶堆 + 同优先级 FIFO。"""
         # a.priority > b.priority 优先
-        # 相等时 a._counter < b._counter 优先
+        # 相等时 a._sequence < b._sequence 优先
 
-    def _next_counter(self) -> int:
-        """分配下一个单调递增计数器。"""
+    def _next_sequence(self) -> int:
+        """自增序列号，保证同优先级 FIFO。"""
+        # 1. self._sequence 自增 1
+        # 2. 返回 self._sequence
 ```
 
 ---
