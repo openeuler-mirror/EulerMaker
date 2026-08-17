@@ -39,7 +39,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-apiserver/pkg/apis/ebs/v1.ProjectSpec":    {"displayName", "buildTargets", "packageRepos"},
 		"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":        {"priority", "runtime", "runtimeSpec", "payload"},
 		"ebs-apiserver/pkg/apis/ebs/v1.RunnerStatus":   {"phase", "capacity", "heartbeat"},
-		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "admin", "email"},
+		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "scopes", "email"},
 		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount": {"apiVersion", "kind", "metadata", "spec"},
 	}
 	for name, fields := range tests {

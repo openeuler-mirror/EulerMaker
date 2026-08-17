@@ -114,7 +114,7 @@ func (h *Handler) register(req *restful.Request, resp *restful.Response) {
 	user := &iamv1.User{
 		TypeMeta:   metav1.TypeMeta{APIVersion: iamv1.SchemeGroupVersion.String(), Kind: "User"},
 		ObjectMeta: metav1.ObjectMeta{Name: body.Username},
-		Spec:       iamv1.UserSpec{Enabled: &enabled, DisplayName: body.DisplayName, Email: body.Email},
+		Spec:       iamv1.UserSpec{Enabled: &enabled, Scopes: []string{"ebs:user"}, DisplayName: body.DisplayName, Email: body.Email},
 	}
 	credentialData, err := credential.NewPasswordCredential(body.Password)
 	if err != nil {

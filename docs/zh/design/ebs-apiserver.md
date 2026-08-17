@@ -133,7 +133,8 @@ metadata:
   name: alice
 spec:
   enabled: true
-  admin: false
+  scopes:
+    - ebs:ops
   displayName: Alice
   email: alice@example.com
 ```
@@ -176,7 +177,7 @@ POST /internal/iam/v1/machineaccounts/{name}/authenticate
 {"username":"alice"}
 ```
 
-注册接口以 201 返回成功结果，并提供“创建普通 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`、`spec.admin` 固定为 `false`，请求不能设置 metadata、labels、scope、enabled、admin 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。
+注册接口以 201 返回成功结果，并提供“创建普通 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`、`spec.scopes` 固定为 `["ebs:user"]`，请求不能设置 metadata、labels、scopes、enabled 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。
 
 apiserver 将 User 对象和 Argon2id 密码哈希通过一次 create-only 请求写入同一 ES 文档。创建成功后账号即可认证；名称已存在返回 409，不需要注册中状态或补偿流程。
 
@@ -302,7 +303,7 @@ ebs-machineaccounts
   },
   "spec": {
     "enabled": true,
-    "admin": false,
+    "scopes": ["ebs:ops"],
     "displayName": "Alice",
     "email": "alice@example.com"
   },
@@ -418,7 +419,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - `RpmRepo` 创建默认 `status.phase = Pending`。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Registering`。
-- `User.spec.enabled` 默认为 `true`，`User.spec.admin` 默认为 `false`。
+- `User.spec.enabled` 默认为 `true`，`User.spec.scopes` 默认为 `["ebs:user"]`，并按字典序规范化。
 
 默认值还包括：
 
@@ -433,8 +434,10 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 - Snapshot 必须包含 `specCommits`、`buildTargets` 和 `packageRepos`。
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `ct`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
-- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。User 的 `metadata.name` 是全局唯一的稳定用户标识，与普通用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
+- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
+
+从旧模型升级时必须在启用新 Gateway 前迁移已有 User：`spec.admin=true` 转为 `spec.scopes=["ebs:admin"]`，其他 User 转为 `spec.scopes=["ebs:user"]`，迁移完成后删除旧 `spec.admin` 字段。存量对象读取不依赖创建默认值，不能把数据迁移交给 storage strategy 隐式完成。
 
 ## 启动参数
 

@@ -591,6 +591,40 @@ func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 	}
 }
 
+func TestOpsCanOnlyGetAndListRunners(t *testing.T) {
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
+			t.Fatalf("unexpected identity headers: %#v", r.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	})
+	gw := newTestGateway(t, upstream, 100, 200)
+	for _, path := range []string{apiPrefix + "/runners", apiPrefix + "/runners/runner-a"} {
+		req := authenticatedRequest(t, http.MethodGet, path, nil, opsClaims())
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	denied := []struct{ method, path string }{
+		{http.MethodGet, apiPrefix + "/runners?watch=true"},
+		{http.MethodGet, apiPrefix + "/runners?watch=1"},
+		{http.MethodGet, apiPrefix + "/runners/runner-a/status"},
+		{http.MethodPost, apiPrefix + "/runners"},
+		{http.MethodGet, apiPrefix + "/projects"},
+	}
+	for _, tc := range denied {
+		req := authenticatedRequest(t, tc.method, tc.path, nil, opsClaims())
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: got %d", tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
 func newTestGateway(t *testing.T, upstream http.Handler, rate float64, burst int) *Gateway {
 	t.Helper()
 	secretFile := filepath.Join(t.TempDir(), "jwt-secret")
@@ -610,12 +644,16 @@ func newTestGateway(t *testing.T, upstream http.Handler, rate float64, burst int
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		rec := httptest.NewRecorder()
 		if r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
-			_, _ = io.WriteString(rec, `{"metadata":{"name":"admin"},"spec":{"enabled":true,"admin":true}}`)
+			_, _ = io.WriteString(rec, `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`)
 			return rec.Result(), nil
 		}
 		if r.Method == http.MethodGet && (r.URL.Path == "/apis/iam.ebs/v1/users/alice" || r.URL.Path == "/apis/iam.ebs/v1/users/bob") {
 			name := strings.TrimPrefix(r.URL.Path, "/apis/iam.ebs/v1/users/")
-			_, _ = io.WriteString(rec, `{"metadata":{"name":"`+name+`"},"spec":{"enabled":true}}`)
+			_, _ = io.WriteString(rec, `{"metadata":{"name":"`+name+`"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`)
+			return rec.Result(), nil
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/operator" {
+			_, _ = io.WriteString(rec, `{"metadata":{"name":"operator"},"spec":{"enabled":true,"scopes":["ebs:ops"]}}`)
 			return rec.Result(), nil
 		}
 		upstream.ServeHTTP(rec, r)
@@ -674,6 +712,13 @@ func userClaims(sub string) jwtClaims {
 		Exp:       now.Add(time.Hour).Unix(),
 		JTI:       "user-test-token",
 	}
+}
+
+func opsClaims() jwtClaims {
+	claims := userClaims("operator")
+	claims.Scopes = []string{"ebs:ops"}
+	claims.JTI = "ops-test-token"
+	return claims
 }
 
 func systemClaims() jwtClaims {

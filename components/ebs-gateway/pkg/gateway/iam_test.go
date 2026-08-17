@@ -42,6 +42,34 @@ func TestAdminLoginIssuesStandaloneAdminToken(t *testing.T) {
 	}
 }
 
+func TestOpsLoginIssuesStandaloneOpsToken(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/iam/v1/authenticate" {
+			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"authenticated":true,"username":"operator"}`)
+	}), 100, 200)
+	now := time.Unix(1790000000, 0)
+	gw.now = func() time.Time { return now }
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"operator","password":"operator-password-123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := gw.tokens.parse(response.Token, now)
+	if err != nil || !identity.IsOps() || len(identity.Scopes) != 1 {
+		t.Fatalf("unexpected ops identity %#v, err=%v", identity, err)
+	}
+}
+
 func TestRunnerTokenExchangeIssuesScopedToken(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/machineaccounts/runner-site-a/authenticate" {
@@ -237,7 +265,7 @@ func TestAdminUserListFiltersAdministrators(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/users" {
 			t.Fatalf("unexpected upstream request %s %s", r.Method, r.URL.Path)
 		}
-		_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"UserList","items":[{"metadata":{"name":"charlie"},"spec":{"enabled":true}},{"metadata":{"name":"root-admin"},"spec":{"enabled":true,"admin":true}}]}`)
+		_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"UserList","items":[{"metadata":{"name":"charlie"},"spec":{"enabled":true,"scopes":["ebs:user"]}},{"metadata":{"name":"root-admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}]}`)
 	}), 100, 200)
 	req := authenticatedRequest(t, http.MethodGet, "/apis/iam.ebs/v1/users", nil, adminClaims())
 	rec := httptest.NewRecorder()
@@ -265,9 +293,9 @@ func TestAdminCannotReadOrPromoteAdministrator(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/root-admin":
-			_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"User","metadata":{"name":"root-admin","uid":"u1","resourceVersion":"v1:1:1"},"spec":{"enabled":true,"admin":true}}`)
+			_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"User","metadata":{"name":"root-admin","uid":"u1","resourceVersion":"v1:1:1"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`)
 		case r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/users/charlie":
-			_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"User","metadata":{"name":"charlie","uid":"u2","resourceVersion":"v1:1:1"},"spec":{"enabled":true}}`)
+			_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"User","metadata":{"name":"charlie","uid":"u2","resourceVersion":"v1:1:1"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`)
 		case r.Method == http.MethodPut:
 			putCalls++
 		default:
@@ -282,7 +310,7 @@ func TestAdminCannotReadOrPromoteAdministrator(t *testing.T) {
 		t.Fatalf("expected administrator GET 403, got %d", rec.Code)
 	}
 
-	req = authenticatedRequest(t, http.MethodPatch, "/apis/iam.ebs/v1/users/charlie", strings.NewReader(`{"spec":{"admin":true}}`), adminClaims())
+	req = authenticatedRequest(t, http.MethodPatch, "/apis/iam.ebs/v1/users/charlie", strings.NewReader(`{"spec":{"scopes":["ebs:admin"]}}`), adminClaims())
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rec = httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
@@ -298,7 +326,7 @@ func TestAdminCanPatchOrdinaryUser(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"User","metadata":{"name":"charlie","uid":"u2","resourceVersion":"v1:1:1"},"spec":{"enabled":true,"displayName":"Charlie"}}`)
+			_, _ = io.WriteString(w, `{"apiVersion":"iam.ebs/v1","kind":"User","metadata":{"name":"charlie","uid":"u2","resourceVersion":"v1:1:1"},"spec":{"enabled":true,"scopes":["ebs:user"],"displayName":"Charlie"}}`)
 		case http.MethodPut:
 			var user map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&user); err != nil {

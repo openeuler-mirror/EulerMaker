@@ -35,6 +35,7 @@ func (i Identity) IsSystem() bool { return i.hasScope("ebs:system") }
 func (i Identity) IsUser() bool   { return i.hasScope("ebs:user") }
 func (i Identity) IsRunner() bool { return i.hasScope("ebs:runner") }
 func (i Identity) IsAdmin() bool  { return i.hasScope("ebs:admin") }
+func (i Identity) IsOps() bool    { return i.hasScope("ebs:ops") }
 func (i Identity) hasScope(want string) bool {
 	for _, scope := range i.Scopes {
 		if scope == want {
@@ -82,6 +83,10 @@ func (m *tokenManager) issueUser(subject string, now time.Time) (string, int64, 
 
 func (m *tokenManager) issueAdmin(subject string, now time.Time) (string, int64, error) {
 	return m.issue(subject, "", []string{"ebs:admin"}, now, jwtTTL)
+}
+
+func (m *tokenManager) issueOps(subject string, now time.Time) (string, int64, error) {
+	return m.issue(subject, "", []string{"ebs:ops"}, now, jwtTTL)
 }
 
 func (m *tokenManager) issueRunner(runner string, now time.Time, ttl time.Duration) (string, int64, error) {
@@ -194,6 +199,7 @@ func (m *tokenManager) validateClaims(c jwtClaims, now time.Time) error {
 	_, runner := scopes["ebs:runner"]
 	_, system := scopes["ebs:system"]
 	_, admin := scopes["ebs:admin"]
+	_, ops := scopes["ebs:ops"]
 	if len(scopes) == 1 && user && c.Runner == "" {
 		return nil
 	}
@@ -204,6 +210,9 @@ func (m *tokenManager) validateClaims(c jwtClaims, now time.Time) error {
 		return nil
 	}
 	if len(scopes) == 1 && admin && c.Runner == "" {
+		return nil
+	}
+	if len(scopes) == 1 && ops && c.Runner == "" {
 		return nil
 	}
 	return errors.New("invalid jwt scopes")
