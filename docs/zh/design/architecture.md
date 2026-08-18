@@ -10,7 +10,7 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
 - 统一数据访问：业务组件不直接访问 etcd 和 Elasticsearch，统一通过 `ebs-apiserver` 读写资源。
 - 声明式对象模型：资源由 `metadata/spec/status` 组成，普通更新和 `/status` 更新分离。
 - Watch 驱动协作：controller、scheduler、runner 通过 watch 获取资源变化。
-- Project 业务作用域：Snapshot、Build、Job 归属于 Project，同时提供全局 list/watch API 给系统组件。
+- Project 业务作用域：Snapshot、Build、Job 归属于 Project，同时提供内部全局 list/watch API 给系统组件。
 - 构建结果数据面：`artifact-manager` 独立承载构建产物与实时日志正文，避免大文件流量经过资源 API 和 Gateway 数据转发链路。
 - 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch 和 `ebs-apiserver`等组件。
 
@@ -61,7 +61,7 @@ artifact-manager ──Runner Token 校验──> ebs-gateway
 ```text
 用户 / 外部系统
        |
-       | JWT
+       | 匿名只读 GET/HEAD 或 JWT
        v
 ebs-gateway ─── mTLS ───┐
                         |
@@ -92,7 +92,7 @@ spiffe://eulermaker/internal/ebs-controller
 - 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
 - `/internal/iam/*` 只允许 `ebs-gateway` 的 mTLS 身份调用，scheduler 和 controller 不得访问。
 
-Gateway 转发用户请求时，外部用户身份由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头，只注入 `X-EBS-User` 和 `X-EBS-Scopes`；这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
+Gateway 允许匿名调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；匿名请求不能 watch、写入或访问 Runner/IAM。认证用户身份由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；认证请求只注入可信的 `X-EBS-User` 和 `X-EBS-Scopes`，匿名读取使用 Gateway 内部身份访问 apiserver 并原样转发对象响应。这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
 
 用户、Runner和内部组件的认证链路分别为：
 
@@ -100,6 +100,7 @@ Gateway 转发用户请求时，外部用户身份由 JWT、User 状态和 Proje
 用户注册：注册资料 -> gateway 校验与注册限流 -> gateway mTLS -> apiserver IAM 创建 User 与凭据
 用户登录：账号密码 -> gateway 登录限流 -> gateway mTLS -> apiserver IAM 认证 -> gateway 签发 JWT
 用户请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
+匿名读取：无 Token GET/HEAD（公开对象、collection 或单对象 `/status`）-> gateway 公开资源白名单与限流 -> gateway mTLS -> apiserver -> 完整对象响应
 机机账号创建：管理员 -> gateway -> apiserver IAM 原子创建 MachineAccount 与凭据
 Runner换取token：MachineAccount client凭据和Runner名称 -> gateway交换限流 -> apiserver IAM认证 -> gateway签发短期Runner JWT
 Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gateway mTLS -> apiserver
@@ -116,7 +117,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 
 | 组件 | 职责 |
 |------|------|
-| `ebs-gateway` | 系统入口，负责认证、鉴权、审计和请求转发 |
+| `ebs-gateway` | 系统入口，负责匿名公开读取、认证、鉴权、审计和请求转发 |
 | `ebs-apiserver` | 统一资源 API，负责对象校验、默认值、存储访问、list/watch、`/status` 子资源 |
 | `etcd` | 主存储，保存资源对象、resourceVersion，并提供 list/watch |
 | `Elasticsearch` | 主存储，保存对象索引、搜索字段和增强数据 |
@@ -124,7 +125,6 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 通过 ebs-gateway 注册 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
 | `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、查询下载及日志 SSE |
-
 ---
 
 ## 四、资源模型
@@ -192,13 +192,15 @@ PUT    /apis/ebs/v1/projects/{name}/status
 
 `{project}` 是对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。
 
-### 5.3 全局系统 API
+### 5.3 内部全局系统 API
 
-调度器和控制器通过全局 API 跨 Project list/watch：
+调度器和控制器使用各自的 mTLS 身份直连 apiserver，通过内部全局 API 跨 Project list/watch。这些路径不经 Gateway，也不对外部客户端开放：
 
 ```text
 /apis/ebs/v1/snapshots
 /apis/ebs/v1/builds
+/apis/ebs/v1/buildinfos
+/apis/ebs/v1/rpmrepos
 /apis/ebs/v1/jobs
 ```
 
