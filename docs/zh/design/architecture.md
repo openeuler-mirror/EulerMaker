@@ -125,6 +125,10 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 通过 ebs-gateway 注册 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
 | `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、查询下载及日志 SSE |
+| `ebsctl` | 面向用户和运维的命令行客户端，首版通过 Gateway 操作资源 |
+
+`ebsctl` 的命令、context、资源操作和输出协议见 [ebsctl.md](./ebsctl.md)。
+
 ---
 
 ## 四、资源模型

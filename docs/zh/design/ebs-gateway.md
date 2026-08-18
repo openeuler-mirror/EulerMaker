@@ -59,7 +59,8 @@ metadata:
   name: alice
 spec:
   enabled: true
-  admin: false
+  scopes:
+    - ebs:user
   displayName: Alice
   email: alice@example.com
 ```
