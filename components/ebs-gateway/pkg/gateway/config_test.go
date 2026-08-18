@@ -16,4 +16,7 @@ func TestLoadConfigUsesDefaultsAndFlags(t *testing.T) {
 	if cfg.InsecureSkipVerify || cfg.RateLimitPerSec != 100 || cfg.RateLimitBurst != 200 {
 		t.Fatalf("unexpected defaults: %#v", cfg)
 	}
+	if cfg.PublicRateLimitPerSec != 20 || cfg.PublicRateLimitBurst != 40 || cfg.PublicMaxListLimit != 100 {
+		t.Fatalf("unexpected public read defaults: %#v", cfg)
+	}
 }

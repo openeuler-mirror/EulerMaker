@@ -11,25 +11,31 @@ import (
 )
 
 type Config struct {
-	Port                int
-	APIServerAddr       string
-	JWTSecretFile       string
-	MaxRequestBodyBytes int64
-	InsecureSkipVerify  bool
-	APIServerCA         string
-	RateLimitPerSec     float64
-	RateLimitBurst      int
-	LogLevel            string
+	Port                  int
+	APIServerAddr         string
+	JWTSecretFile         string
+	MaxRequestBodyBytes   int64
+	InsecureSkipVerify    bool
+	APIServerCA           string
+	RateLimitPerSec       float64
+	RateLimitBurst        int
+	PublicRateLimitPerSec float64
+	PublicRateLimitBurst  int
+	PublicMaxListLimit    int
+	LogLevel              string
 }
 
 func LoadConfig(args []string) (Config, error) {
 	cfg := Config{
-		Port:                8080,
-		APIServerAddr:       "https://ebs-apiserver:8443",
-		MaxRequestBodyBytes: 1048576,
-		RateLimitPerSec:     100,
-		RateLimitBurst:      200,
-		LogLevel:            "info",
+		Port:                  8080,
+		APIServerAddr:         "https://ebs-apiserver:8443",
+		MaxRequestBodyBytes:   1048576,
+		RateLimitPerSec:       100,
+		RateLimitBurst:        200,
+		PublicRateLimitPerSec: 20,
+		PublicRateLimitBurst:  40,
+		PublicMaxListLimit:    100,
+		LogLevel:              "info",
 	}
 
 	fs := flag.NewFlagSet("ebs-gateway", flag.ContinueOnError)
@@ -41,6 +47,9 @@ func LoadConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.APIServerCA, "apiserver-ca", cfg.APIServerCA, "upstream apiserver CA file")
 	fs.Float64Var(&cfg.RateLimitPerSec, "rate-limit-per-sec", cfg.RateLimitPerSec, "rate limit token refill rate")
 	fs.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", cfg.RateLimitBurst, "rate limit burst size")
+	fs.Float64Var(&cfg.PublicRateLimitPerSec, "public-rate-limit-per-sec", cfg.PublicRateLimitPerSec, "anonymous public read token refill rate")
+	fs.IntVar(&cfg.PublicRateLimitBurst, "public-rate-limit-burst", cfg.PublicRateLimitBurst, "anonymous public read burst size")
+	fs.IntVar(&cfg.PublicMaxListLimit, "public-max-list-limit", cfg.PublicMaxListLimit, "maximum anonymous collection page size")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "log level")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -60,6 +69,15 @@ func LoadConfig(args []string) (Config, error) {
 	}
 	if cfg.RateLimitBurst <= 0 {
 		return Config{}, fmt.Errorf("rate-limit-burst must be greater than 0")
+	}
+	if cfg.PublicRateLimitPerSec <= 0 {
+		return Config{}, fmt.Errorf("public-rate-limit-per-sec must be greater than 0")
+	}
+	if cfg.PublicRateLimitBurst <= 0 {
+		return Config{}, fmt.Errorf("public-rate-limit-burst must be greater than 0")
+	}
+	if cfg.PublicMaxListLimit <= 0 {
+		return Config{}, fmt.Errorf("public-max-list-limit must be greater than 0")
 	}
 	return cfg, nil
 }

@@ -1,10 +1,12 @@
 # ebs-gateway
 
-`ebs-gateway` is the external HTTP entrypoint for EulerMaker EBS APIs. It authenticates HMAC JWT bearer tokens, applies user-based Project authorization, injects trusted identity headers, rate-limits callers, audits requests, and reverse proxies valid `/apis/ebs/v1/*` traffic to `ebs-apiserver`.
+`ebs-gateway` is the external HTTP entrypoint for EulerMaker EBS APIs. It serves explicitly public read routes, authenticates HMAC JWT bearer tokens for protected routes, applies user-based Project authorization, injects trusted identity headers, rate-limits callers, audits requests, and reverse proxies valid traffic to `ebs-apiserver`.
 
 ## Features
 
 - `GET /healthz` without authentication.
+- Anonymous `GET/HEAD` for Project and Project-scoped Snapshot, Build, BuildInfo, RpmRepo, and Job collections, objects, and object `/status` routes. Responses contain the complete upstream objects; watch and writes still require authentication.
+- Snapshot, Build, BuildInfo, RpmRepo, and Job global collection APIs are internal apiserver routes and are not exposed by the Gateway.
 - `POST /auth/register` atomically creates a User and initial password through the apiserver IAM service.
 - `POST /auth/login` authenticates against the apiserver IAM endpoint and issues the single `ebs:user`, `ebs:ops`, or `ebs:admin` scope stored in `User.spec.scopes`.
 - `PUT /auth/users/{name}/password` verifies the current password before changing the authenticated user's password.
@@ -14,6 +16,7 @@
 - MachineAccount `get/list/delete` proxying for `ebs:admin`, plus protected `get/list/update/patch/delete` management of non-admin Users.
 - Bearer JWT authentication with `HS256`.
 - Per `{sub}/{clientIP}` in-memory token bucket rate limiting.
+- Independent per-IP anonymous-read rate limiting and a bounded public collection page size.
 - Trusted upstream headers:
   - `X-EBS-User`
   - `X-EBS-Scopes`
@@ -55,6 +58,9 @@ chmod 600 /tmp/ebs-jwt-secret
 | `--apiserver-ca` | empty | no | Upstream apiserver CA file |
 | `--rate-limit-per-sec` | `100` | no | Token refill rate per second |
 | `--rate-limit-burst` | `200` | no | Token bucket burst size |
+| `--public-rate-limit-per-sec` | `20` | no | Anonymous public-read token refill rate per second |
+| `--public-rate-limit-burst` | `40` | no | Anonymous public-read token bucket burst size |
+| `--public-max-list-limit` | `100` | no | Maximum page size for anonymous collection reads; also used as the default when `limit` is omitted |
 | `--log-level` | `info` | no | Reserved log level setting |
 
 ## JWT Claims
