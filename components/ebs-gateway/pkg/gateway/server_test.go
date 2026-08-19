@@ -318,10 +318,13 @@ func TestSystemProjectCreateRejectsMissingOwnerUser(t *testing.T) {
 	}
 }
 
-func TestProjectListFiltersByOwnerAndMemberUser(t *testing.T) {
+func TestAuthenticatedProjectListUsesPublicReadRules(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != apiPrefix+"/projects" {
 			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+		if r.Header.Get("X-EBS-User") != "" || r.Header.Get("X-EBS-Scopes") != "" {
+			t.Fatalf("public read forwarded identity headers: %#v", r.Header)
 		}
 		_, _ = io.WriteString(w, `{
 			"kind":"ProjectList",
@@ -346,8 +349,8 @@ func TestProjectListFiltersByOwnerAndMemberUser(t *testing.T) {
 		t.Fatalf("parse response: %v", err)
 	}
 	items := list["items"].([]any)
-	if len(items) != 2 {
-		t.Fatalf("expected 2 visible projects, got %d: %s", len(items), rec.Body.String())
+	if len(items) != 3 {
+		t.Fatalf("expected all 3 public projects, got %d: %s", len(items), rec.Body.String())
 	}
 }
 
@@ -369,22 +372,20 @@ func TestUserCannotAccessGlobalProjectScopedResource(t *testing.T) {
 	}
 }
 
-func TestProjectSubresourceRequiresProjectAccess(t *testing.T) {
+func TestAuthenticatedUserCanReadUnownedProjectSubresource(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case apiPrefix + "/projects/project-a":
-			_, _ = io.WriteString(w, `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"bob"}}}`)
-		default:
+		if r.URL.Path != apiPrefix+"/projects/project-a/jobs" {
 			t.Fatalf("unexpected upstream proxy request %s", r.URL.Path)
 		}
+		_, _ = io.WriteString(w, `{"items":[{"metadata":{"name":"job-a"}}]}`)
 	}), 100, 200)
 
 	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/projects/project-a/jobs", nil, userClaims("alice"))
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "job-a") {
+		t.Fatalf("expected public read 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -597,8 +598,12 @@ func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 
 func TestOpsCanOnlyGetAndListRunners(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
-			t.Fatalf("unexpected identity headers: %#v", r.Header)
+		if strings.HasPrefix(r.URL.Path, apiPrefix+"/runners") {
+			if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
+				t.Fatalf("unexpected identity headers: %#v", r.Header)
+			}
+		} else if r.Header.Get("X-EBS-User") != "" || r.Header.Get("X-EBS-Scopes") != "" {
+			t.Fatalf("public read forwarded identity headers: %#v", r.Header)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{}`)
@@ -612,12 +617,17 @@ func TestOpsCanOnlyGetAndListRunners(t *testing.T) {
 			t.Fatalf("GET %s: %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
+	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/projects", nil, opsClaims())
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ops public Project read: %d %s", rec.Code, rec.Body.String())
+	}
 	denied := []struct{ method, path string }{
 		{http.MethodGet, apiPrefix + "/runners?watch=true"},
 		{http.MethodGet, apiPrefix + "/runners?watch=1"},
 		{http.MethodGet, apiPrefix + "/runners/runner-a/status"},
 		{http.MethodPost, apiPrefix + "/runners"},
-		{http.MethodGet, apiPrefix + "/projects"},
 	}
 	for _, tc := range denied {
 		req := authenticatedRequest(t, tc.method, tc.path, nil, opsClaims())

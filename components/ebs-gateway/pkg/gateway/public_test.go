@@ -148,6 +148,27 @@ func TestInvalidTokenDoesNotDowngradeToAnonymous(t *testing.T) {
 	}
 }
 
+func TestDisabledUserCannotUseAuthenticatedPublicRead(t *testing.T) {
+	var publicHits atomic.Int32
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/iam.ebs/v1/users/disabled":
+			_, _ = io.WriteString(w, `{"metadata":{"name":"disabled"},"spec":{"enabled":false,"scopes":["ebs:user"]}}`)
+		case apiPrefix + "/projects":
+			publicHits.Add(1)
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+	}), 100, 200)
+	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/projects", nil, userClaims("disabled"))
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || publicHits.Load() != 0 {
+		t.Fatalf("expected disabled user 403 without public proxy, status=%d hits=%d", rec.Code, publicHits.Load())
+	}
+}
+
 func TestAnonymousReadUsesIndependentRateLimit(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{}`)

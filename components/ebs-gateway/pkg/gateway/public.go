@@ -96,6 +96,20 @@ func (g *Gateway) preparePublicRead(r *http.Request) error {
 	return nil
 }
 
+func (g *Gateway) servePublicRead(w http.ResponseWriter, r *http.Request) {
+	if err := g.preparePublicRead(r); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	removeIdentityHeaders(r)
+	r = markPublicRead(r)
+	if r.Method == http.MethodHead {
+		g.proxy.ServeHTTP(headResponseWriter{ResponseWriter: w}, r)
+		return
+	}
+	g.proxy.ServeHTTP(w, r)
+}
+
 func isPublicCollectionPath(path string) bool {
 	parts, ok := ebsAPIPathParts(path)
 	if !ok {
