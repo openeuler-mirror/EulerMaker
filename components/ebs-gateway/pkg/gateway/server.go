@@ -36,6 +36,7 @@ type Gateway struct {
 	client              *http.Client
 	proxy               *httputil.ReverseProxy
 	limiter             *RateLimiter
+	publicLimiter       *RateLimiter
 	registerIPLimiter   *RateLimiter
 	registerUserLimiter *RateLimiter
 	watchMu             sync.Mutex
@@ -73,15 +74,18 @@ func NewGateway(cfg Config) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.MaxRequestBodyBytes == 0 {
-		cfg.MaxRequestBodyBytes = 1048576
-	}
 
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	proxy.Transport = transport
 	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
+	}
+	proxy.ModifyResponse = func(response *http.Response) error {
+		if response.Request != nil && isMarkedPublicRead(response.Request) {
+			sanitizePublicResponseHeaders(response.Header)
+		}
+		return nil
 	}
 
 	gw := &Gateway{
@@ -90,6 +94,7 @@ func NewGateway(cfg Config) (*Gateway, error) {
 		client:              &http.Client{Transport: transport},
 		proxy:               proxy,
 		limiter:             NewRateLimiter(cfg.RateLimitPerSec, cfg.RateLimitBurst),
+		publicLimiter:       NewRateLimiter(cfg.PublicRateLimitPerSec, cfg.PublicRateLimitBurst),
 		registerIPLimiter:   NewRateLimiter(5.0/60.0, 5),
 		registerUserLimiter: NewRateLimiter(3.0/60.0, 3),
 		activeRunnerWatches: make(map[string]int),
@@ -146,6 +151,34 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isBusinessRoute := strings.HasPrefix(r.URL.Path, apiPrefix+"/") || r.URL.Path == apiPrefix
 	if !isPasswordRoute && !isMachineCreate && !isIAMRoute && !isBusinessRoute {
 		http.NotFound(rec, r)
+		return
+	}
+	if isBusinessRoute && isInternalGlobalAPIPath(r.URL.Path) {
+		http.NotFound(rec, r)
+		return
+	}
+	if isBusinessRoute && !hasAuthorizationHeader(r) {
+		if !isPublicReadRoute(r) {
+			http.Error(rec, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ident.Subject = "anonymous"
+		if !g.publicLimiter.Allow(clientIP(r)) {
+			rec.Header().Set("Retry-After", "1")
+			http.Error(rec, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		if err := g.preparePublicRead(r); err != nil {
+			http.Error(rec, err.Error(), http.StatusBadRequest)
+			return
+		}
+		removeIdentityHeaders(r)
+		r = markPublicRead(r)
+		if r.Method == http.MethodHead {
+			g.proxy.ServeHTTP(headResponseWriter{ResponseWriter: rec}, r)
+		} else {
+			g.proxy.ServeHTTP(rec, r)
+		}
 		return
 	}
 
@@ -1613,13 +1646,17 @@ func (g *Gateway) upstreamRequest(ctx context.Context, method, requestURI string
 }
 
 func injectIdentityHeaders(r *http.Request, ident Identity) {
+	removeIdentityHeaders(r)
+	r.Header.Set("X-EBS-User", ident.Subject)
+	r.Header.Set("X-EBS-Scopes", ident.ScopeHeader())
+}
+
+func removeIdentityHeaders(r *http.Request) {
 	for key := range r.Header {
 		if strings.HasPrefix(strings.ToLower(key), "x-ebs-") {
 			r.Header.Del(key)
 		}
 	}
-	r.Header.Set("X-EBS-User", ident.Subject)
-	r.Header.Set("X-EBS-Scopes", ident.ScopeHeader())
 }
 
 func injectProjectOwnerLabel(r *http.Request, username string) error {

@@ -217,7 +217,7 @@ func TestMissingTokenReturnsUnauthorizedAndDoesNotProxy(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}), 100, 200)
 
-	req := httptest.NewRequest(http.MethodGet, apiPrefix+"/projects", nil)
+	req := httptest.NewRequest(http.MethodGet, apiPrefix+"/runners", nil)
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 
@@ -243,7 +243,7 @@ func TestProxyInjectsTrustedIdentityHeaders(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}), 100, 200)
 
-	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/jobs?watch=true", nil, systemClaims())
+	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/runners?watch=true", nil, systemClaims())
 	req.Header.Set("X-EBS-Admin", "spoofed")
 	req.Header.Set("X-EBS-User", "mallory")
 	rec := httptest.NewRecorder()
@@ -361,8 +361,8 @@ func TestUserCannotAccessGlobalProjectScopedResource(t *testing.T) {
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if upstreamHits.Load() != 0 {
 		t.Fatalf("expected no upstream request, got %d", upstreamHits.Load())
@@ -514,7 +514,11 @@ func TestRunnerScopedJobsRequiresMatchingIdentityAndRejectsSelector(t *testing.T
 		req := authenticatedRequest(t, http.MethodGet, target, nil, runnerClaims("runner-a"))
 		rec := httptest.NewRecorder()
 		gw.ServeHTTP(rec, req)
-		if rec.Code != http.StatusForbidden {
+		want := http.StatusForbidden
+		if target == apiPrefix+"/jobs?watch=true" {
+			want = http.StatusNotFound
+		}
+		if rec.Code != want {
 			t.Fatalf("expected %s to be denied, got %d", target, rec.Code)
 		}
 	}
@@ -576,14 +580,14 @@ func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}), 1, 1)
 
-	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/jobs", nil, systemClaims())
+	req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/runners", nil, systemClaims())
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected first request 200, got %d", rec.Code)
 	}
 
-	req = authenticatedRequest(t, http.MethodGet, apiPrefix+"/jobs", nil, systemClaims())
+	req = authenticatedRequest(t, http.MethodGet, apiPrefix+"/runners", nil, systemClaims())
 	rec = httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
@@ -632,11 +636,15 @@ func newTestGateway(t *testing.T, upstream http.Handler, rate float64, burst int
 		t.Fatalf("write jwt secret: %v", err)
 	}
 	gw, err := NewGateway(Config{
-		Port:            8080,
-		APIServerAddr:   "http://ebs-apiserver",
-		JWTSecretFile:   secretFile,
-		RateLimitPerSec: rate,
-		RateLimitBurst:  burst,
+		Port:                  8080,
+		APIServerAddr:         "http://ebs-apiserver",
+		JWTSecretFile:         secretFile,
+		MaxRequestBodyBytes:   1048576,
+		RateLimitPerSec:       rate,
+		RateLimitBurst:        burst,
+		PublicRateLimitPerSec: 20,
+		PublicRateLimitBurst:  40,
+		PublicMaxListLimit:    100,
 	})
 	if err != nil {
 		t.Fatalf("create gateway: %v", err)
@@ -667,7 +675,11 @@ func newTestGateway(t *testing.T, upstream http.Handler, rate float64, burst int
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
+	response, err := f(r)
+	if response != nil && response.Request == nil {
+		response.Request = r
+	}
+	return response, err
 }
 
 func authenticatedRequest(t *testing.T, method, target string, body io.Reader, claims jwtClaims) *http.Request {
