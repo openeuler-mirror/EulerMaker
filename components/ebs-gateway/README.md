@@ -5,7 +5,7 @@
 ## Features
 
 - `GET /healthz` without authentication.
-- Anonymous `GET/HEAD` for Project and Project-scoped Snapshot, Build, BuildInfo, RpmRepo, and Job collections, objects, and object `/status` routes. Responses contain the complete upstream objects; watch and writes still require authentication.
+- Anonymous and authenticated `GET/HEAD` for Project and Project-scoped Snapshot, Build, BuildInfo, RpmRepo, and Job collections, objects, and object `/status` routes. Both use the same complete-object and pagination rules; authenticated requests still validate the token and user first. Watch and writes require authentication and their existing authorization.
 - Snapshot, Build, BuildInfo, RpmRepo, and Job global collection APIs are internal apiserver routes and are not exposed by the Gateway.
 - `POST /auth/register` atomically creates a User and initial password through the apiserver IAM service.
 - `POST /auth/login` authenticates against the apiserver IAM endpoint and issues the single `ebs:user`, `ebs:ops`, or `ebs:admin` scope stored in `User.spec.scopes`.

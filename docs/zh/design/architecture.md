@@ -92,15 +92,16 @@ spiffe://eulermaker/internal/ebs-controller
 - 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
 - `/internal/iam/*` 只允许 `ebs-gateway` 的 mTLS 身份调用，scheduler 和 controller 不得访问。
 
-Gateway 允许匿名调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；匿名请求不能 watch、写入或访问 Runner/IAM。认证用户身份由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；认证请求只注入可信的 `X-EBS-User` 和 `X-EBS-Scopes`，匿名读取使用 Gateway 内部身份访问 apiserver 并原样转发对象响应。这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
+Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；需要身份授权的认证请求只注入可信的 `X-EBS-User` 和 `X-EBS-Scopes`，公开读取使用 Gateway 内部身份访问 apiserver并原样转发对象响应。这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
 
 用户、Runner和内部组件的认证链路分别为：
 
 ```text
 用户注册：注册资料 -> gateway 校验与注册限流 -> gateway mTLS -> apiserver IAM 创建 User 与凭据
 用户登录：账号密码 -> gateway 登录限流 -> gateway mTLS -> apiserver IAM 认证 -> gateway 签发 JWT
-用户请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
+用户写入或非公开请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
 匿名读取：无 Token GET/HEAD（公开对象、collection 或单对象 `/status`）-> gateway 公开资源白名单与限流 -> gateway mTLS -> apiserver -> 完整对象响应
+认证公开读取：JWT -> UserResolve -> gateway 公开资源白名单与认证限流 -> gateway mTLS -> apiserver -> 完整对象响应
 机机账号创建：管理员 -> gateway -> apiserver IAM 原子创建 MachineAccount 与凭据
 Runner换取token：MachineAccount client凭据和Runner名称 -> gateway交换限流 -> apiserver IAM认证 -> gateway签发短期Runner JWT
 Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gateway mTLS -> apiserver

@@ -168,17 +168,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(rec, "too many requests", http.StatusTooManyRequests)
 			return
 		}
-		if err := g.preparePublicRead(r); err != nil {
-			http.Error(rec, err.Error(), http.StatusBadRequest)
-			return
-		}
-		removeIdentityHeaders(r)
-		r = markPublicRead(r)
-		if r.Method == http.MethodHead {
-			g.proxy.ServeHTTP(headResponseWriter{ResponseWriter: rec}, r)
-		} else {
-			g.proxy.ServeHTTP(rec, r)
-		}
+		g.servePublicRead(rec, r)
 		return
 	}
 
@@ -211,6 +201,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !g.limiter.Allow(limitKey) {
 		rec.Header().Set("Retry-After", "1")
 		http.Error(rec, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	if isBusinessRoute && isPublicReadRoute(r) {
+		g.servePublicRead(rec, r)
 		return
 	}
 	if isPasswordRoute {
@@ -1542,8 +1536,10 @@ func (g *Gateway) handleProjectCollection(ctx context.Context, r *http.Request, 
 		}
 		return authzDecision{}, nil
 	case http.MethodGet:
-		if r.URL.Query().Get("watch") == "true" {
-			return authzDecision{}, fmt.Errorf("project watch requires system scope")
+		for _, value := range r.URL.Query()["watch"] {
+			if value != "false" {
+				return authzDecision{}, fmt.Errorf("project watch requires system scope")
+			}
 		}
 		return authzDecision{handle: func(w http.ResponseWriter, req *http.Request) {
 			g.handleFilteredProjectList(ctx, w, req, ident)
