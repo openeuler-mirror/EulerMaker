@@ -243,7 +243,7 @@ JWT header 必须包含：
 
 Gateway 只接受 `HS256`，使用 `--jwt-secret-file` 指定的单一 HMAC 密钥签发 token，并使用常量时间比较验证签名。非 `HS256` 算法、header 不合法或签名错误均返回 401。密钥文件内容是单个 base64 字符串，解码后不得少于 32 字节；密钥文件缺失、无法解码或密钥过短时 gateway 拒绝启动。
 
-Gateway 必须验证 `sub`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` 和 `jti`。`sub` 必须是非空字符串，`scopes` 必须是非空字符串数组，`iss` 和 `aud` 必须分别精确等于固定值 `ebs-gateway` 和 `ebs-api`，不接受多 audience 数组。普通用户 token 有效期在代码中固定为 1 小时，允许的时钟偏差固定为 30 秒，接受的 token 最大有效期固定为 24 小时；`iat` 和 `nbf` 均不得晚于“当前时间 + 时钟偏差”，`exp` 必须晚于“当前时间 - 时钟偏差”、`iat` 和 `nbf`，且 `exp-iat` 不得超过最大有效期。缺失必需 claim、claim 类型错误或校验失败均返回 401。
+Gateway 必须验证 `sub`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` 和 `jti`。`sub` 必须是非空字符串，`scopes` 必须是非空字符串数组，`iss` 和 `aud` 必须分别精确等于固定值 `ebs-gateway` 和 `ebs-api`，不接受多 audience 数组。普通用户 token 有效期在代码中固定为 24 小时，允许的时钟偏差固定为 30 秒，接受的 token 最大有效期固定为 24 小时；`iat` 和 `nbf` 均不得晚于“当前时间 + 时钟偏差”，`exp` 必须晚于“当前时间 - 时钟偏差”、`iat` 和 `nbf`，且 `exp-iat` 不得超过最大有效期。缺失必需 claim、claim 类型错误或校验失败均返回 401。
 
 固定 scope 及合法组合：
 
@@ -255,7 +255,7 @@ Gateway 必须验证 `sub`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` �
 | 受信任系统调用方 | 仅 `ebs:system` | 由部署管理员控制的受信任签发流程签发 | 否 |
 | 管理员 | 仅 `ebs:admin` | `spec.scopes=["ebs:admin"]` 的 User 通过 `POST /auth/login` 签发 | 是 |
 
-JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 的 token；`POST /auth/runner-token` 使用 MachineAccount 凭据签发仅包含 `ebs:runner` 的 token。`ebs:system` 由部署管理员控制的受信任流程签发，不通过 User 或 MachineAccount 凭据在线签发。调用方不能指定 scope、`sub`、有效期或 `runner` claim。`ebs:user`、`ebs:ops`、`ebs:admin`、`ebs:runner` 和 `ebs:system` 互斥；重复、未知或多 scope 组合均返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 1 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
+JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 的 token；`POST /auth/runner-token` 使用 MachineAccount 凭据签发仅包含 `ebs:runner` 的 token。`ebs:system` 由部署管理员控制的受信任流程签发，不通过 User 或 MachineAccount 凭据在线签发。调用方不能指定 scope、`sub`、有效期或 `runner` claim。`ebs:user`、`ebs:ops`、`ebs:admin`、`ebs:runner` 和 `ebs:system` 互斥；重复、未知或多 scope 组合均返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
 
 普通用户 JWT 不携带额外的资源归属信息，`sub` 就是唯一用户身份。`ebs:system` 仅保留给必须经过 gateway 的受信任自动化调用方，Runner 必须使用独立的 `ebs:runner` scope。
 
@@ -388,7 +388,7 @@ POST /internal/iam/v1/authenticate
 {
   "token": "<jwt>",
   "tokenType": "Bearer",
-  "expiresIn": 3600
+  "expiresIn": 86400
 }
 ```
 

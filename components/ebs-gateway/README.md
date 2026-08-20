@@ -78,7 +78,7 @@ chmod 600 /tmp/ebs-jwt-secret
 }
 ```
 
-The user token lifetime is fixed at one hour. JWT clock skew is fixed at 30 seconds and the maximum accepted token lifetime is fixed at 24 hours. See `docs/zh/design/ebs-gateway.md` for the complete scope and authorization rules.
+The user token lifetime is fixed at 24 hours. JWT clock skew is fixed at 30 seconds and the maximum accepted token lifetime is fixed at 24 hours. See `docs/zh/design/ebs-gateway.md` for the complete scope and authorization rules.
 
 ## Docker
 

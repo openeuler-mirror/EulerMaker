@@ -107,7 +107,7 @@ func TestTokenManagerLoadsSecretAndIssuesUserToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue user token: %v", err)
 	}
-	if expiresAt != now.Add(time.Hour).Unix() {
+	if expiresAt != now.Add(24*time.Hour).Unix() {
 		t.Fatalf("unexpected expiry %d", expiresAt)
 	}
 	identity, err := manager.parse(token, now)
