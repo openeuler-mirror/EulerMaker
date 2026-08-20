@@ -93,6 +93,7 @@ ebsctl logout
 
 ```bash
 ebsctl get projects
+ebsctl get projects --mine
 ebsctl get jobs -p openeuler-mainline
 ebsctl get job build-kernel -p openeuler-mainline -o yaml
 ebsctl get jobs -l package=kernel --field-selector status.phase=Running
@@ -107,6 +108,7 @@ ebsctl get jobs --watch
 - `-l, --selector` 映射为 `labelSelector`；
 - `--field-selector` 映射为 `fieldSelector`；
 - `--limit` 和 `--continue` 原样使用服务端分页；
+- `--mine` 仅用于 `get projects`，通过 `/auth/check` 获取当前可信用户，并在客户端保留 owner 或 member labels 与该用户匹配的 Project；该参数只是显示过滤，不构成服务端权限边界；
 - `-w, --watch` 建立 watch；
 - `--watch-only` 不先输出初始列表，只显示后续事件。
 
@@ -119,7 +121,7 @@ ebsctl create -f project.yaml
 ebsctl create -f manifests/
 ebsctl replace -f job.yaml
 ebsctl patch job build-kernel -p openeuler-mainline \
-  --type merge -p '{"spec":{"priority":100}}'
+  --type merge --patch '{"spec":{"priority":100}}'
 ebsctl delete job build-kernel -p openeuler-mainline
 ```
 
@@ -128,7 +130,7 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - Project 级对象的 `metadata.namespace` 可以省略，由 `--project` 或 context 补齐；若文件值与命令行 Project 不同则拒绝；
 - `create` 只执行 POST，已存在返回冲突；
 - `replace` 先要求输入包含 `metadata.resourceVersion`，再执行 PUT，不自动覆盖并发修改；
-- `patch --type merge` 使用 `application/merge-patch+json`；首版只支持 merge patch；
+- `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
 `ebsctl` 不提供 `apply`。声明式对象的创建和更新分别使用 `create` 与 `replace`，局部字段更新使用 `patch`。
