@@ -18,7 +18,7 @@ import (
 const (
 	jwtIssuer    = "ebs-gateway"
 	jwtAudience  = "ebs-api"
-	jwtTTL       = time.Hour
+	jwtTTL       = 24 * time.Hour
 	jwtMaxTTL    = 24 * time.Hour
 	jwtClockSkew = 30 * time.Second
 )

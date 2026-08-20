@@ -154,7 +154,7 @@ func TestLoginAuthenticatesUserAndIssuesUsableUserToken(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode login response: %v", err)
 	}
-	if response.TokenType != "Bearer" || response.ExpiresIn != 3600 {
+	if response.TokenType != "Bearer" || response.ExpiresIn != 86400 {
 		t.Fatalf("unexpected login response: %#v", response)
 	}
 	identity, err := gw.tokens.parse(response.Token, fixedNow)
