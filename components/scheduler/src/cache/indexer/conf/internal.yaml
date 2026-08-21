@@ -1,0 +1,71 @@
+# handler: ListHandler、 DictHandler、 GeneralHandler
+# name: "索引名称"
+#     description: "索引器资源索引名称"
+#     handler: {
+#       name: GeneralHandler,
+#       args: {
+#         required: False,
+#         retrieval: ['metadata', 'name']
+#         defaultValue: "" or [] or {}
+#       }
+#     } 
+indexers:
+  - name: "kind"
+    description: "索引器资源类型"
+    handler: {
+      name: GeneralHandler,
+      args: {
+        required: True,
+        retrieval: ['kind']
+      }
+    } 
+  
+  - name: "metadata.name"
+    description: "索引器资源名称"
+    handler: {
+      name: GeneralHandler,
+      args: {
+        required: True,
+        retrieval: ['metadata', 'name']
+      }
+    } 
+        
+  - name: "metadata.labels"
+    description: "索引器资源标签"
+    handler: {
+      name: DictHandler,
+      args: {
+        required: False,
+        retrieval: ['metadata', 'labels']
+      }
+    } 
+  
+  - name: "metadata.namespace"
+    description: "索引器资源命名空间"
+    handler: {
+      name: GeneralHandler,
+      args: {
+        required: False,
+        retrieval: ['metadata', 'namespace']
+      }
+    } 
+  
+  - name: "status.phase"
+    description: "索引器资源状态阶段"
+    handler: {
+      name: GeneralHandler,
+      args: {
+        required: False,
+        retrieval: ['status', 'phase']
+      }
+    } 
+  
+  - name: "status.runner"
+    description: "根据绑定的Runner索引"
+    handler: {
+      name: GeneralHandler,
+      args: {
+        required: False,
+        retrieval: ['status', 'runner']
+      }
+    } 
