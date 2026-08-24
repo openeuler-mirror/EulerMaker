@@ -112,7 +112,10 @@ services:
       - --root-dir=/var/lib/ebs-runner
     secrets:
       - runner_machine_credential
+    group_add:
+      - "${DOCKER_GID:-989}"
     volumes:
+      - /usr/bin/docker:/usr/bin/docker:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - runner-data:/var/lib/ebs-runner
     networks:
