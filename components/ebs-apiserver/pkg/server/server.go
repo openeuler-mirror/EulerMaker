@@ -325,20 +325,14 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	v1Storage["rpmrepos/status"] = esstore.NewStatus(rpmRepoES, rpmRepoStorage.Status.(*genericregistry.Store))
 
 	jobStorage := jobstore.NewStorage(Scheme)
-	if err := jobStorage.Job.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
-		return nil, err
-	}
-	if err := completeStore(jobStorage.Status, storeOptions); err != nil {
+	if err := jobStorage.CompleteWithOptions(storeOptions); err != nil {
 		return nil, err
 	}
 	v1Storage["jobs"] = jobStorage.Job
 	v1Storage["jobs/status"] = jobStorage.Status
 
 	runnerStorage := runnerstore.NewStorage(Scheme)
-	if err := runnerStorage.Runner.(*genericregistry.Store).CompleteWithOptions(storeOptions); err != nil {
-		return nil, err
-	}
-	if err := completeStore(runnerStorage.Status, storeOptions); err != nil {
+	if err := runnerStorage.CompleteWithOptions(storeOptions); err != nil {
 		return nil, err
 	}
 	v1Storage["runners"] = runnerStorage.Runner

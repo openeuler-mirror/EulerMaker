@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
@@ -28,6 +29,36 @@ func TestRunnerJobIdentityAllowed(t *testing.T) {
 				t.Fatalf("allowed=%v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGlobalJobRequestContextRemovesAliasNameScope(t *testing.T) {
+	original := &apirequest.RequestInfo{
+		IsResourceRequest: true,
+		Path:              "/apis/ebs/v1/runners/runner-a/jobs",
+		Verb:              "watch",
+		APIPrefix:         "apis",
+		APIGroup:          "ebs",
+		APIVersion:        "v1",
+		Resource:          "runners",
+		Name:              "runner-a",
+		Subresource:       "jobs",
+	}
+	ctx := apirequest.WithRequestInfo(context.Background(), original)
+	ctx = globalJobRequestContext(ctx, "/apis/ebs/v1/jobs")
+
+	got, ok := apirequest.RequestInfoFrom(ctx)
+	if !ok || got == nil {
+		t.Fatal("rewritten request info is missing")
+	}
+	if got.Path != "/apis/ebs/v1/jobs" || got.Resource != "jobs" || got.Name != "" || got.Subresource != "" {
+		t.Fatalf("unexpected rewritten request info: %#v", got)
+	}
+	if got.Verb != "watch" || got.APIGroup != "ebs" || got.APIVersion != "v1" {
+		t.Fatalf("rewritten request info lost API identity: %#v", got)
+	}
+	if original.Resource != "runners" || original.Name != "runner-a" || original.Subresource != "jobs" {
+		t.Fatalf("original request info was mutated: %#v", original)
 	}
 }
 

@@ -3,15 +3,14 @@ package job
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	"k8s.io/apimachinery/pkg/api/validation/path"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
@@ -21,8 +20,13 @@ import (
 )
 
 type Storage struct {
-	Job    rest.StandardStorage
-	Status rest.StandardStorage
+	Job            *genericregistry.Store
+	Status         rest.Storage
+	statusStrategy rest.RESTUpdateStrategy
+}
+
+type StatusREST struct {
+	store *genericregistry.Store
 }
 
 func NewStorage(scheme *runtime.Scheme) *Storage {
@@ -38,27 +42,44 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		UpdateStrategy:            strategy,
 		DeleteStrategy:            strategy,
 		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("jobs")),
-		KeyRootFunc:               keyRootFunc,
-		KeyFunc:                   keyFunc,
 		PredicateFunc:             matchJob,
 	}
 
-	statusStore := &genericregistry.Store{
-		NewFunc:                   func() runtime.Object { return &ebsv1.Job{} },
-		NewListFunc:               func() runtime.Object { return &ebsv1.JobList{} },
-		DefaultQualifiedResource:  ebsv1.Resource("jobs"),
-		SingularQualifiedResource: ebsv1.Resource("job"),
-		UpdateStrategy:            statusStrategy,
-		DeleteStrategy:            strategy,
-		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("jobs")),
-		KeyRootFunc:               keyRootFunc,
-		KeyFunc:                   keyFunc,
-	}
-
 	return &Storage{
-		Job:    store,
-		Status: statusStore,
+		Job:            store,
+		statusStrategy: statusStrategy,
 	}
+}
+
+func (s *Storage) CompleteWithOptions(options *generic.StoreOptions) error {
+	if err := s.Job.CompleteWithOptions(jobStoreOptions(options)); err != nil {
+		return err
+	}
+	statusStore := *s.Job
+	statusStore.UpdateStrategy = s.statusStrategy
+	statusStore.CreateStrategy = nil
+	statusStore.DeleteStrategy = nil
+	statusStore.DestroyFunc = nil
+	s.Status = &StatusREST{store: &statusStore}
+	return nil
+}
+
+func jobStoreOptions(options *generic.StoreOptions) *generic.StoreOptions {
+	jobOptions := *options
+	jobOptions.AttrFunc = jobAttrs
+	return &jobOptions
+}
+
+func (r *StatusREST) New() runtime.Object { return r.store.New() }
+func (r *StatusREST) Destroy()            {}
+func (r *StatusREST) NamespaceScoped() bool {
+	return r.store.UpdateStrategy.NamespaceScoped()
+}
+func (r *StatusREST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	return r.store.Get(ctx, name, options)
+}
+func (r *StatusREST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	return r.store.Update(ctx, name, objInfo, createValidation, updateValidation, forceAllowCreate, options)
 }
 
 func matchJob(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
@@ -76,24 +97,6 @@ func jobAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
 		"status.runner":      job.Status.Runner,
 		"status.phase":       job.Status.Phase,
 	}, nil
-}
-
-func keyRootFunc(ctx context.Context) string {
-	project, ok := genericapirequest.NamespaceFrom(ctx)
-	if !ok || project == "" {
-		return "/registry/ebs/jobs"
-	}
-	return "/registry/ebs/jobs/" + project
-}
-
-func keyFunc(ctx context.Context, name string) (string, error) {
-	if len(name) == 0 {
-		return "", fmt.Errorf("name parameter required")
-	}
-	if msgs := path.IsValidPathSegmentName(name); len(msgs) != 0 {
-		return "", fmt.Errorf("name parameter invalid: %q: %s", name, strings.Join(msgs, ";"))
-	}
-	return keyRootFunc(ctx) + "/" + name, nil
 }
 
 type strategy struct{}
