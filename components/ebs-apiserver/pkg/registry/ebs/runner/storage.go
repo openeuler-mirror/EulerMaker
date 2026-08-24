@@ -3,9 +3,11 @@ package runner
 import (
 	"context"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 
@@ -14,8 +16,13 @@ import (
 )
 
 type Storage struct {
-	Runner rest.StandardStorage
-	Status rest.StandardStorage
+	Runner         *genericregistry.Store
+	Status         rest.Storage
+	statusStrategy rest.RESTUpdateStrategy
+}
+
+type StatusREST struct {
+	store *genericregistry.Store
 }
 
 type strategy struct{}
@@ -104,18 +111,33 @@ func NewStorage(scheme *runtime.Scheme) *Storage {
 		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("runners")),
 	}
 
-	statusStore := &genericregistry.Store{
-		NewFunc:                   func() runtime.Object { return &ebsv1.Runner{} },
-		NewListFunc:               func() runtime.Object { return &ebsv1.RunnerList{} },
-		DefaultQualifiedResource:  ebsv1.Resource("runners"),
-		SingularQualifiedResource: ebsv1.Resource("runner"),
-		UpdateStrategy:            statusStrategy,
-		DeleteStrategy:            strategy,
-		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("runners")),
-	}
-
 	return &Storage{
-		Runner: store,
-		Status: statusStore,
+		Runner:         store,
+		statusStrategy: statusStrategy,
 	}
+}
+
+func (s *Storage) CompleteWithOptions(options *generic.StoreOptions) error {
+	if err := s.Runner.CompleteWithOptions(options); err != nil {
+		return err
+	}
+	statusStore := *s.Runner
+	statusStore.UpdateStrategy = s.statusStrategy
+	statusStore.CreateStrategy = nil
+	statusStore.DeleteStrategy = nil
+	statusStore.DestroyFunc = nil
+	s.Status = &StatusREST{store: &statusStore}
+	return nil
+}
+
+func (r *StatusREST) New() runtime.Object { return r.store.New() }
+func (r *StatusREST) Destroy()            {}
+func (r *StatusREST) NamespaceScoped() bool {
+	return r.store.UpdateStrategy.NamespaceScoped()
+}
+func (r *StatusREST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	return r.store.Get(ctx, name, options)
+}
+func (r *StatusREST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	return r.store.Update(ctx, name, objInfo, createValidation, updateValidation, forceAllowCreate, options)
 }

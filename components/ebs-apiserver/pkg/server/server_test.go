@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
+	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -23,9 +24,7 @@ import (
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
-	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
-	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	esclient "ebs-apiserver/pkg/storage/es"
 )
@@ -66,8 +65,6 @@ func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
 		{name: "projects/status", store: projectstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
 		{name: "snapshots/status", store: snapshotstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
 		{name: "builds/status", store: buildstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
-		{name: "jobs/status", store: jobstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
-		{name: "runners/status", store: runnerstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
 	}
 
 	for _, tt := range tests {
@@ -155,8 +152,50 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 			t.Errorf("%s must implement watch", resource)
 		}
 	}
+	for _, resource := range []string{"jobs/status", "runners/status"} {
+		status := storageMap[resource]
+		if _, ok := status.(rest.Getter); !ok {
+			t.Errorf("%s must implement get", resource)
+		}
+		if _, ok := status.(rest.Updater); !ok {
+			t.Errorf("%s must implement update", resource)
+		}
+		if _, ok := status.(rest.Creater); ok {
+			t.Errorf("%s unexpectedly implements create", resource)
+		}
+		if _, ok := status.(rest.Lister); ok {
+			t.Errorf("%s unexpectedly implements list", resource)
+		}
+		if _, ok := status.(rest.Watcher); ok {
+			t.Errorf("%s unexpectedly implements watch", resource)
+		}
+		if _, ok := status.(rest.GracefulDeleter); ok {
+			t.Errorf("%s unexpectedly implements delete", resource)
+		}
+	}
 	if _, ok := storageMap["builds/abort"].(rest.Connecter); !ok {
 		t.Error("builds/abort must implement rest.Connecter")
+	}
+}
+
+func TestJobStorageUsesResourcePrefixForKeys(t *testing.T) {
+	apiGroup, err := CreateAPIGroupInfo(
+		testRESTOptions(),
+		esclient.NewClientForTesting("http://unused", http.DefaultClient),
+	)
+	if err != nil {
+		t.Fatalf("create API group info: %v", err)
+	}
+
+	store := apiGroup.VersionedResourcesStorageMap["v1"]["jobs"].(*genericregistry.Store)
+	ctx := genericapirequest.WithNamespace(genericapirequest.NewContext(), "example-project")
+	if got, want := store.KeyRootFunc(ctx), "/test/example-project"; got != want {
+		t.Fatalf("job key root = %q, want %q", got, want)
+	}
+	if got, err := store.KeyFunc(ctx, "example-job"); err != nil {
+		t.Fatalf("job key: %v", err)
+	} else if want := "/test/example-project/example-job"; got != want {
+		t.Fatalf("job key = %q, want %q", got, want)
 	}
 }
 
@@ -170,7 +209,7 @@ func fakeStorageDecorator(
 	trigger storage.IndexerFuncs,
 	indexers *cache.Indexers,
 ) (storage.Interface, factory.DestroyFunc, error) {
-	return fakeStorage{}, func() {}, nil
+	return &fakeStorage{}, func() {}, nil
 }
 
 type fakeStorage struct{}

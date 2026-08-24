@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -70,8 +71,22 @@ func installRunnerJobAliasRoutes(srv *genericapiserver.GenericAPIServer) {
 		rewritten.URL.RawPath = ""
 		rewritten.URL.RawQuery = query.Encode()
 		rewritten.RequestURI = ""
+		rewritten = rewritten.WithContext(globalJobRequestContext(rewritten.Context(), rewritten.URL.Path))
 		srv.Handler.ServeHTTP(resp.ResponseWriter, rewritten)
 	}))
+}
+
+func globalJobRequestContext(ctx context.Context, path string) context.Context {
+	info, ok := apirequest.RequestInfoFrom(ctx)
+	if !ok || info == nil {
+		return ctx
+	}
+	global := *info
+	global.Path = path
+	global.Resource = "jobs"
+	global.Name = ""
+	global.Subresource = ""
+	return apirequest.WithRequestInfo(ctx, &global)
 }
 
 func runnerJobIdentityAllowed(req *http.Request, runner string) bool {
