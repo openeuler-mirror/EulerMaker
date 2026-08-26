@@ -11,8 +11,9 @@
 - Lists and watches `/apis/ebs/v1/runners/{name}/jobs`.
 - Executes only Jobs whose `status.runner` equals the configured `--name` and `status.phase` is `Running`.
 - Uses `metadata.namespace` from the Job as the Project name for status updates.
-- For `ct` Jobs, creates a container from `job.spec.runtimeSpec`, writes `job.spec.payload` to `/workspace/payload.yaml`, waits for the container to exit, and records container logs under the Job result directory.
-- Patches final Job status to `Completed` or `Failed`.
+- For `ct` Jobs, creates a container from `job.spec.runtimeSpec`, writes `job.spec.payload` to `/workspace/payload.yaml`, mounts the local result directory at `/results`, and waits for the container to exit.
+- Streams and finalizes container logs through Artifact Manager, uploads ordinary files produced under `/results`, and completes generation 1 of the Job manifest.
+- Patches final Job status with the Artifact manifest summary and `artifact://<jobUID>`, then immediately removes successful local artifact state. Failed or unknown uploads are retained for 24 hours by default.
 
 ## Configuration
 
@@ -36,6 +37,13 @@ Runner configuration is passed through command-line flags.
 | `--log-spool-limit` | `4GiB` | Per-Job local log spool limit |
 | `--log-drain-timeout` | `30s` | Time allowed to drain and finalize logs after execution |
 | `--log-retry-max-backoff` | `30s` | Maximum retry delay for log chunk uploads |
+| `--artifact-max-file-size` | `25GiB` | Maximum ordinary artifact file size in bytes |
+| `--artifact-max-job-size` | `100GiB` | Maximum total ordinary artifact size per Job in bytes |
+| `--artifact-max-files` | `10000` | Maximum ordinary artifact files per Job |
+| `--artifact-upload-concurrency` | `4` | Concurrent ordinary artifact uploads per Job |
+| `--artifact-upload-timeout` | `2h` | Total timeout for ordinary uploads and manifest finalization |
+| `--artifact-retry-max-backoff` | `30s` | Maximum retry delay for ordinary artifact and manifest requests |
+| `--artifact-failed-retention` | `24h` | Local retention after an Artifact failure status is persisted |
 
 The runner detects its architecture from `GOARCH`: `amd64` maps to `x86_64`, and `arm64` maps to `aarch64`. Other architectures are rejected at startup.
 

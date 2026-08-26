@@ -18,12 +18,24 @@ import (
 
 const agentVersion = "v0.1.0"
 
+type RunnerAPI interface {
+	GetRunner(context.Context, string) (*RunnerResource, error)
+	CreateRunner(context.Context, RunnerResource) error
+	UpdateRunner(context.Context, RunnerResource) error
+	PatchRunnerStatus(context.Context, string, RunnerStatus) error
+	PatchJobStatus(context.Context, string, string, JobStatus) error
+	ListAssignedJobs(context.Context, string) (*JobList, error)
+	WatchAssignedJobs(context.Context, string, string) (<-chan WatchEvent, <-chan error)
+}
+
 type Agent struct {
 	cfg        Config
-	client     *Client
+	client     RunnerAPI
 	tokens     *TokenProvider
 	executor   Executor
 	logFactory *ArtifactLogFactory
+	artifacts  *ArtifactProcessor
+	cleanup    *ArtifactCleanupManager
 
 	mu         sync.Mutex
 	activeJobs map[string]struct{}
@@ -63,6 +75,13 @@ func NewAgent(cfg Config) (*Agent, error) {
 		SpoolLimit:      cfg.LogSpoolLimit,
 		RetryMaxBackoff: cfg.LogRetryMaxBackoff,
 	}
+	artifactProcessor := &ArtifactProcessor{
+		Remote: artifactClient, RootDir: cfg.RootDir,
+		MaxFileSize: cfg.ArtifactMaxFileSize, MaxJobSize: cfg.ArtifactMaxJobSize,
+		MaxFiles: cfg.ArtifactMaxFiles, Concurrency: cfg.ArtifactUploadConcurrency,
+		RetryMaxBackoff: cfg.ArtifactRetryMaxBackoff,
+	}
+	cleanupManager := &ArtifactCleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.ArtifactFailedRetention}
 	return &Agent{
 		cfg:    cfg,
 		client: client,
@@ -80,6 +99,8 @@ func NewAgent(cfg Config) (*Agent, error) {
 			},
 		},
 		logFactory: logFactory,
+		artifacts:  artifactProcessor,
+		cleanup:    cleanupManager,
 		activeJobs: make(map[string]struct{}),
 	}, nil
 }
@@ -104,6 +125,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	go a.heartbeatLoop(ctx)
 	go a.watchLoop(ctx)
+	go a.cleanup.Run(ctx)
 
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -359,6 +381,10 @@ func (a *Agent) handleEvent(ctx context.Context, event WatchEvent) {
 	if !a.tryStartJob(key) {
 		return
 	}
+	if job.Status.Stage == "PostRun" {
+		go a.resumePostRun(ctx, key, job)
+		return
+	}
 	go a.runJob(ctx, key, job)
 }
 
@@ -379,27 +405,79 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 		execCtx, cancel = context.WithTimeout(parent, time.Duration(job.Spec.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
-	resultRoot, err := a.executor.Execute(execCtx, job)
+	resultRoot, executionErr := a.executor.Execute(execCtx, job)
+	status.ResultRoot = resultRoot
+	status.Phase = "Running"
+	status.Stage = "PostRun"
+	status.ArtifactState = "Uploading"
+	if executionErr != nil {
+		status.Message = executionErr.Error()
+	} else {
+		status.Message = ""
+	}
+	if err := a.client.PatchJobStatus(context.Background(), job.Metadata.Namespace, job.Metadata.Name, status); err != nil {
+		log.Printf("update job post-run status failed: %v", err)
+	}
+	a.finalizeArtifacts(parent, job, status, resultRoot, executionErr)
+	a.sendHeartbeat(context.Background())
+}
+
+func (a *Agent) resumePostRun(parent context.Context, key string, job JobResource) {
+	defer a.finishJob(key)
+	resultDir := job.Status.ResultRoot
+	if resultDir == "" || strings.HasPrefix(resultDir, "artifact://") {
+		resultDir = filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.UID)
+	}
+	var executionErr error
+	if job.Status.Message != "" {
+		executionErr = errors.New(job.Status.Message)
+	}
+	a.finalizeArtifacts(parent, job, job.Status, resultDir, executionErr)
+	a.sendHeartbeat(context.Background())
+}
+
+func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, status JobStatus, resultDir string, executionErr error) {
+	artifactCtx, cancelArtifacts := context.WithTimeout(parent, a.cfg.ArtifactUploadTimeout)
+	manifest, artifactErr := a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
+	cancelArtifacts()
 	end := time.Now().UTC()
 	status.EndTime = &end
-	status.ResultRoot = resultRoot
-	if err != nil {
+	if artifactErr != nil {
 		status.Phase = "Failed"
 		status.Stage = "Failed"
-		status.Message = err.Error()
+		status.ArtifactState = "Failed"
+		if executionErr != nil {
+			status.Message = executionErr.Error() + "; artifact upload: " + artifactErr.Error()
+		} else {
+			status.Message = "artifact upload: " + artifactErr.Error()
+		}
 	} else {
-		status.Phase = "Completed"
-		status.Stage = "PostRun"
-		status.Message = ""
+		status.ResultRoot = "artifact://" + job.Metadata.UID
+		status.ArtifactState = "Completed"
+		status.ArtifactGeneration = manifest.Generation
+		status.ArtifactDigest = manifest.Digest
+		status.ArtifactCount = manifest.ArtifactCount
+		if executionErr != nil {
+			status.Phase = "Failed"
+			status.Stage = "Failed"
+			status.Message = executionErr.Error()
+		} else {
+			status.Phase = "Completed"
+			status.Stage = "PostRun"
+			status.Message = ""
+		}
 	}
 	if updateErr := a.client.PatchJobStatus(context.Background(), job.Metadata.Namespace, job.Metadata.Name, status); updateErr != nil {
 		log.Printf("update job final status failed: %v", updateErr)
-	} else if a.logFactory != nil {
-		if cleanupErr := a.logFactory.Cleanup(job); cleanupErr != nil {
-			log.Printf("clean completed log spool failed: %v", cleanupErr)
+	} else if artifactErr != nil {
+		if cleanupErr := a.cleanup.MarkFailure(job); cleanupErr != nil {
+			log.Printf("schedule failed artifact cleanup: %v", cleanupErr)
+		}
+	} else {
+		if cleanupErr := a.cleanup.MarkSuccess(job); cleanupErr != nil {
+			log.Printf("clean completed artifact state: %v", cleanupErr)
 		}
 	}
-	a.sendHeartbeat(context.Background())
 }
 
 func (a *Agent) tryStartJob(key string) bool {
