@@ -2,8 +2,13 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,6 +16,52 @@ import (
 type staticTokens struct {
 	token     string
 	refreshed string
+}
+
+func TestArtifactClientStreamsMultipartUpload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "package.rpm")
+	if err := os.WriteFile(path, []byte("rpm-data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := UploadArtifactInput{JobUID: "uid-1", Category: "artifact", FileName: "package.rpm", RelativePath: "packages/package.rpm", ContentType: "application/x-rpm", Size: 8, SHA256: "sum"}
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("Idempotency-Key") != "upload-key" || r.Header.Get("Authorization") != "Bearer token" {
+			t.Fatalf("unexpected headers: %#v", r.Header)
+		}
+		mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mediaType != "multipart/form-data" {
+			t.Fatalf("content type = %q err=%v", mediaType, err)
+		}
+		reader := multipart.NewReader(r.Body, params["boundary"])
+		metadataPart, err := reader.NextPart()
+		if err != nil || metadataPart.FormName() != "metadata" {
+			t.Fatalf("metadata part: %v %#v", err, metadataPart)
+		}
+		var got UploadArtifactInput
+		if err := json.NewDecoder(metadataPart).Decode(&got); err != nil || got != input {
+			t.Fatalf("metadata = %#v err=%v", got, err)
+		}
+		filePart, err := reader.NextPart()
+		if err != nil || filePart.FormName() != "file" {
+			t.Fatalf("file part: %v %#v", err, filePart)
+		}
+		body, _ := io.ReadAll(filePart)
+		if string(body) != "rpm-data" {
+			t.Fatalf("file body = %q", body)
+		}
+		return &http.Response{StatusCode: 201, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"artifact":{"id":"a1","project":"project","jobName":"job","jobUID":"uid-1","category":"artifact","relativePath":"packages/package.rpm","size":8,"sha256":"sum","state":"Completed"}}`))}, nil
+	})}
+	client, err := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := client.UploadArtifact(context.Background(), "project", "job", "upload-key", path, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.ID != "a1" || artifact.State != "Completed" {
+		t.Fatalf("artifact = %#v", artifact)
+	}
 }
 
 func (s *staticTokens) Token(context.Context) (string, error) { return s.token, nil }
