@@ -117,7 +117,10 @@ services:
     volumes:
       - /usr/bin/docker:/usr/bin/docker:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - runner-data:/var/lib/ebs-runner
+      # Docker mounts are resolved by the host daemon. Keep the runner data
+      # root at the same absolute path on both the host and runner container so
+      # Job containers can mount work/results and the runner can upload them.
+      - /var/lib/ebs-runner:/var/lib/ebs-runner
     networks:
       - ebs-net
     depends_on:
@@ -132,7 +135,6 @@ volumes:
   etcd-data:
   es-data:
   artifact-data:
-  runner-data:
 
 secrets:
   ebs_gateway_jwt_secret:
