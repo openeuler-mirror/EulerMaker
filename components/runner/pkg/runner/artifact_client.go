@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +54,55 @@ type CompletedLog struct {
 	RelativePath string `json:"relativePath"`
 	Size         int64  `json:"size"`
 	SHA256       string `json:"sha256"`
+}
+
+type ArtifactRecord struct {
+	ID           string     `json:"id"`
+	Project      string     `json:"project"`
+	JobName      string     `json:"jobName"`
+	JobUID       string     `json:"jobUID"`
+	Category     string     `json:"category"`
+	FileName     string     `json:"fileName"`
+	RelativePath string     `json:"relativePath"`
+	ContentType  string     `json:"contentType"`
+	Size         int64      `json:"size"`
+	SHA256       string     `json:"sha256"`
+	State        string     `json:"state"`
+	CompletedAt  *time.Time `json:"completedAt,omitempty"`
+}
+
+type UploadArtifactInput struct {
+	JobUID       string `json:"jobUID"`
+	Category     string `json:"category"`
+	FileName     string `json:"fileName"`
+	RelativePath string `json:"relativePath"`
+	ContentType  string `json:"contentType"`
+	Size         int64  `json:"size"`
+	SHA256       string `json:"sha256"`
+}
+
+type ManifestFile struct {
+	ArtifactID   string `json:"artifactID"`
+	RelativePath string `json:"relativePath"`
+	Category     string `json:"category"`
+	Size         int64  `json:"size"`
+	SHA256       string `json:"sha256"`
+	Required     bool   `json:"required"`
+}
+
+type CompleteManifestInput struct {
+	JobUID     string         `json:"jobUID"`
+	Generation int64          `json:"generation"`
+	Files      []ManifestFile `json:"files"`
+}
+
+type CompletedManifest struct {
+	JobUID        string         `json:"jobUID"`
+	Generation    int64          `json:"generation"`
+	State         string         `json:"state"`
+	ArtifactCount int            `json:"artifactCount"`
+	Digest        string         `json:"digest"`
+	Files         []ManifestFile `json:"files,omitempty"`
 }
 
 type ArtifactAPIError struct {
@@ -109,6 +161,116 @@ func (c *ArtifactClient) CompleteLog(ctx context.Context, project, job, key stri
 	headers.Set("Idempotency-Key", key)
 	var out CompletedLog
 	err = c.do(ctx, http.MethodPost, c.jobPath(project, job)+"/logs/complete", data, headers, &out)
+	return out, err
+}
+
+func (c *ArtifactClient) UploadArtifact(ctx context.Context, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, error) {
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return ArtifactRecord{}, fmt.Errorf("get runner token: %w", err)
+	}
+	result, unauthorized, err := c.uploadArtifactOnce(ctx, token, project, job, key, path, input)
+	if !unauthorized {
+		return result, err
+	}
+	token, err = c.tokens.RefreshAfterUnauthorized(ctx, token)
+	if err != nil {
+		return ArtifactRecord{}, fmt.Errorf("refresh runner token: %w", err)
+	}
+	result, _, err = c.uploadArtifactOnce(ctx, token, project, job, key, path, input)
+	return result, err
+}
+
+func (c *ArtifactClient) uploadArtifactOnce(ctx context.Context, token, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return ArtifactRecord{}, false, err
+	}
+	defer file.Close()
+
+	reader, writer := io.Pipe()
+	multipartWriter := multipart.NewWriter(writer)
+	writeDone := make(chan error, 1)
+	go func() {
+		metadataHeader := make(textproto.MIMEHeader)
+		metadataHeader.Set("Content-Disposition", `form-data; name="metadata"`)
+		metadataHeader.Set("Content-Type", "application/json")
+		part, writeErr := multipartWriter.CreatePart(metadataHeader)
+		if writeErr == nil {
+			writeErr = json.NewEncoder(part).Encode(input)
+		}
+		if writeErr == nil {
+			fileHeader := make(textproto.MIMEHeader)
+			fileHeader.Set("Content-Disposition", `form-data; name="file"; filename="artifact"`)
+			fileHeader.Set("Content-Type", "application/octet-stream")
+			part, writeErr = multipartWriter.CreatePart(fileHeader)
+		}
+		if writeErr == nil {
+			_, writeErr = io.Copy(part, file)
+		}
+		if writeErr == nil {
+			writeErr = multipartWriter.Close()
+		}
+		_ = writer.CloseWithError(writeErr)
+		writeDone <- writeErr
+	}()
+
+	u := *c.baseURL
+	u.Path = singleJoiningSlash(c.baseURL.Path, c.jobPath(project, job)+"/artifacts")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), reader)
+	if err != nil {
+		_ = reader.CloseWithError(err)
+		return ArtifactRecord{}, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Idempotency-Key", key)
+	req.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+	resp, requestErr := c.httpClient.Do(req)
+	_ = reader.Close()
+	writeErr := <-writeDone
+	if requestErr != nil {
+		return ArtifactRecord{}, false, requestErr
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ArtifactRecord{}, true, artifactResponseError(resp)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ArtifactRecord{}, false, artifactResponseError(resp)
+	}
+	if writeErr != nil {
+		return ArtifactRecord{}, false, writeErr
+	}
+	var out struct {
+		Artifact ArtifactRecord `json:"artifact"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return ArtifactRecord{}, false, fmt.Errorf("decode artifact-manager response: %w", err)
+	}
+	return out.Artifact, false, nil
+}
+
+func (c *ArtifactClient) CompleteManifest(ctx context.Context, project, job, key string, input CompleteManifestInput) (CompletedManifest, error) {
+	data, err := json.Marshal(input)
+	if err != nil {
+		return CompletedManifest{}, err
+	}
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Idempotency-Key", key)
+	var out CompletedManifest
+	err = c.do(ctx, http.MethodPost, c.jobPath(project, job)+"/manifest/complete", data, headers, &out)
+	return out, err
+}
+
+func (c *ArtifactClient) GetManifest(ctx context.Context, project, job, uid string, generation int64) (CompletedManifest, error) {
+	q := url.Values{"jobUID": {uid}, "generation": {strconv.FormatInt(generation, 10)}}
+	var out CompletedManifest
+	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/manifest?"+q.Encode(), nil, nil, &out)
+	if out.ArtifactCount == 0 && len(out.Files) > 0 {
+		out.ArtifactCount = len(out.Files)
+	}
 	return out, err
 }
 

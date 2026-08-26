@@ -29,23 +29,37 @@ type Config struct {
 	LogSpoolLimit                     int64
 	LogDrainTimeout                   time.Duration
 	LogRetryMaxBackoff                time.Duration
+	ArtifactMaxFileSize               int64
+	ArtifactMaxJobSize                int64
+	ArtifactMaxFiles                  int
+	ArtifactUploadConcurrency         int
+	ArtifactUploadTimeout             time.Duration
+	ArtifactRetryMaxBackoff           time.Duration
+	ArtifactFailedRetention           time.Duration
 }
 
 func LoadConfig(args []string) (Config, error) {
 	hostname, _ := os.Hostname()
 	cfg := Config{
-		Gateway:            "https://ebs-gateway:8443",
-		ArtifactManager:    "http://artifact-manager:8081",
-		Name:               hostname,
-		Type:               "ct",
-		Arch:               runtimeArch(),
-		RootDir:            "/var/lib/ebs-runner",
-		HeartbeatInterval:  30 * time.Second,
-		LogChunkSize:       256 << 10,
-		LogFlushInterval:   500 * time.Millisecond,
-		LogSpoolLimit:      4 << 30,
-		LogDrainTimeout:    30 * time.Second,
-		LogRetryMaxBackoff: 30 * time.Second,
+		Gateway:                   "https://ebs-gateway:8443",
+		ArtifactManager:           "http://artifact-manager:8081",
+		Name:                      hostname,
+		Type:                      "ct",
+		Arch:                      runtimeArch(),
+		RootDir:                   "/var/lib/ebs-runner",
+		HeartbeatInterval:         30 * time.Second,
+		LogChunkSize:              256 << 10,
+		LogFlushInterval:          500 * time.Millisecond,
+		LogSpoolLimit:             4 << 30,
+		LogDrainTimeout:           30 * time.Second,
+		LogRetryMaxBackoff:        30 * time.Second,
+		ArtifactMaxFileSize:       25 << 30,
+		ArtifactMaxJobSize:        100 << 30,
+		ArtifactMaxFiles:          10000,
+		ArtifactUploadConcurrency: 4,
+		ArtifactUploadTimeout:     2 * time.Hour,
+		ArtifactRetryMaxBackoff:   30 * time.Second,
+		ArtifactFailedRetention:   24 * time.Hour,
 	}
 
 	fs := flag.NewFlagSet("ebs-runner", flag.ContinueOnError)
@@ -65,6 +79,13 @@ func LoadConfig(args []string) (Config, error) {
 	fs.Int64Var(&cfg.LogSpoolLimit, "log-spool-limit", cfg.LogSpoolLimit, "per-job log spool size limit")
 	fs.DurationVar(&cfg.LogDrainTimeout, "log-drain-timeout", cfg.LogDrainTimeout, "log drain timeout")
 	fs.DurationVar(&cfg.LogRetryMaxBackoff, "log-retry-max-backoff", cfg.LogRetryMaxBackoff, "maximum log retry backoff")
+	fs.Int64Var(&cfg.ArtifactMaxFileSize, "artifact-max-file-size", cfg.ArtifactMaxFileSize, "maximum ordinary artifact file size in bytes")
+	fs.Int64Var(&cfg.ArtifactMaxJobSize, "artifact-max-job-size", cfg.ArtifactMaxJobSize, "maximum ordinary artifact total size per job in bytes")
+	fs.IntVar(&cfg.ArtifactMaxFiles, "artifact-max-files", cfg.ArtifactMaxFiles, "maximum ordinary artifact files per job")
+	fs.IntVar(&cfg.ArtifactUploadConcurrency, "artifact-upload-concurrency", cfg.ArtifactUploadConcurrency, "ordinary artifact upload concurrency per job")
+	fs.DurationVar(&cfg.ArtifactUploadTimeout, "artifact-upload-timeout", cfg.ArtifactUploadTimeout, "total ordinary artifact post-run timeout")
+	fs.DurationVar(&cfg.ArtifactRetryMaxBackoff, "artifact-retry-max-backoff", cfg.ArtifactRetryMaxBackoff, "maximum ordinary artifact retry backoff")
+	fs.DurationVar(&cfg.ArtifactFailedRetention, "artifact-failed-retention", cfg.ArtifactFailedRetention, "retention for failed artifact upload state")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -83,6 +104,18 @@ func LoadConfig(args []string) (Config, error) {
 	}
 	if cfg.Type != "ct" && cfg.Type != "vm" && cfg.Type != "hw" {
 		return Config{}, fmt.Errorf("runner type must be one of ct, vm, hw")
+	}
+	if cfg.ArtifactMaxFileSize <= 0 || cfg.ArtifactMaxJobSize <= 0 || cfg.ArtifactMaxFiles <= 0 || cfg.ArtifactUploadConcurrency <= 0 {
+		return Config{}, fmt.Errorf("artifact size, file count, and concurrency limits must be positive")
+	}
+	if cfg.ArtifactMaxFileSize > cfg.ArtifactMaxJobSize {
+		return Config{}, fmt.Errorf("artifact max file size cannot exceed max job size")
+	}
+	if cfg.ArtifactFailedRetention < 0 {
+		return Config{}, fmt.Errorf("artifact failed retention cannot be negative")
+	}
+	if cfg.ArtifactUploadTimeout <= 0 || cfg.ArtifactRetryMaxBackoff <= 0 {
+		return Config{}, fmt.Errorf("artifact upload timeout and retry backoff must be positive")
 	}
 	if cfg.Arch != "aarch64" && cfg.Arch != "x86_64" {
 		return Config{}, fmt.Errorf("unsupported runtime architecture %q", cfg.Arch)

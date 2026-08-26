@@ -525,35 +525,52 @@ type LogUploadCheckpoint struct {
 
 完成请求使用稳定的 `Idempotency-Key={jobUID}-log-complete`。网络错误或结果未知时先查询 status；已 Completed 且返回的最终 size、SHA-256 与本地一致时视为成功。重复完成必须得到同一个 Artifact。封账摘要不匹配时保留 spool 和 checkpoint 供诊断，不重新从 sequence 0 上传，也不删除服务端活动日志。
 
-日志是否为 JobUploadManifest 的必需文件由 Job 类型的产物策略决定。业务执行失败时，日志封账成功不会把 Job 改为 Completed；Runner 保留业务失败原因，同时可在清单中记录已完成日志。业务执行成功但必需日志无法封账时，Job 必须 Failed，不能先发布 Completed 再后台补日志。
+首版所有 `ct` Job 都把封账后的 `logs/container.log` 作为 JobUploadManifest 的必需文件。业务执行失败时，日志封账成功不会把 Job 改为 Completed；Runner 保留业务失败原因，并提交只包含日志的清单。业务执行成功但日志无法封账时，Job 必须 Failed，不能先发布 Completed 再后台补日志。
 
-### 8.4 上传回执与本地文件清理
+### 8.4 首版普通产物策略
+
+首版使用以下固定策略，不由构建镜像、文件内容或扩展名之外的隐式规则改变：
+
+- 只有容器退出码为 0 时才扫描和上传普通产物。业务失败、超时或取消时只封账日志，不发布 `${rootDir}/results/{project}/{jobUID}` 中的部分文件。
+- 扫描根目录固定为 `${rootDir}/results/{project}/{jobUID}`。递归遍历其中的目录并上传全部普通文件，包括点文件；目录本身不生成 Artifact。
+- `relativePath` 是文件相对扫描根目录的清理后 slash 路径。Runner 不增加、删除或重命名一级目录，也不根据扩展名自动移动文件；构建脚本需要自行把 RPM 写入希望发布的目录，例如 `/results/packages/`。
+- 所有普通文件使用 `category=artifact`、`required=true`。`fileName` 使用相对路径的最后一个路径段。
+- `.rpm` 文件使用 `contentType=application/x-rpm`；其他普通文件统一使用 `application/octet-stream`。首版不嗅探文件正文，也不依赖宿主机 MIME 数据库。
+- 遇到符号链接、socket、device、FIFO、无法读取的文件、非法 UTF-8 路径、路径规范化失败或路径逃逸时，整个普通产物阶段失败；不得静默忽略后继续封账清单。
+- 单文件上限默认 25 GiB，单 Job 普通产物总大小上限默认 100 GiB，文件数量上限默认 10000，并发上传数默认 4；任一限制必须不高于 Artifact Manager 对应部署限制，超过限制时在上传任何新文件前终止扫描并将 Job 标记为 Artifact 失败。
+- 扫描结果必须先完整排序并校验，再开始上传。排序键是规范化后的 `relativePath`，保证重试、回执和 Manifest 顺序确定。
+- 封账日志始终以 `relativePath=logs/container.log`、`category=log`、`required=true` 加入 generation 1 的 Manifest。普通产物不得使用 `logs/container.log`，发生路径冲突时 Job 失败。
+- 构建成功但结果目录没有普通文件时，仍提交只包含日志的 generation 1 Manifest；因此首版已执行的 `ct` Job 不使用 `artifactState=NotRequired`。该状态保留给未来明确无需日志和产物的执行类型。
+- generation 首版固定为 1。Manifest 完成请求结果未知时，Runner 查询相同 project、jobUID 和 generation；服务端已返回相同 Completed 清单时继续写回 Job，否则使用相同幂等键重试，不能递增 generation 规避冲突。
+- 任何必需普通产物上传或 Manifest 封账最终失败都会令 `artifactState=Failed` 且 Job `phase=Failed`；已经成功上传的 Artifact 和本地回执保留用于幂等恢复，不提交缺少文件的降级清单。
+
+### 8.5 上传回执与本地文件清理
 
 Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续保存本地副本。每个文件必须使用以下顺序处理：
 
 1. 流式计算本地文件大小和 SHA-256，构造稳定的 `Idempotency-Key` 并上传。
 2. 只在收到 200/201 且响应 Artifact 为 `state=Completed`、project、jobName、jobUID、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。
 3. 将完整 Artifact 响应作为上传回执原子写入 `${rootDir}/uploads/{project}/{jobUID}/artifacts/{relativePath}.json`；实际文件名使用安全编码或路径摘要，不能直接信任 relativePath 拼接。
-4. 同步回执文件及其父目录后，删除对应的本地产物正文。目录为空时可以逐级清理空目录。
-5. JobUploadManifest 从持久化回执生成，不再依赖已删除的本地正文。清单完成后删除本 Job 的普通产物上传回执。
+4. JobUploadManifest 从持久化回执生成。Manifest 完成且最终 Job Status 成功写回后即视为上传成功，原子写入 `notBefore=now` 的成功清理标记并立即执行清理；清理失败时保留标记供后台重试，不设置成功保留期。
+5. 后台清理器只处理具有有效清理标记且当前时间不早于 `notBefore` 的 Job，并在重新确认目录仍属于同一 project/jobUID 后删除本地内容。
 
 普通产物的幂等键固定为 `{jobUID}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求且在同一 generation 内应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
 
-上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执后清理。删除本地文件失败不影响服务端 Artifact 的完成状态，记录告警并由后台清理重试，不能重复创建 Artifact。
+上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed, artifactState=Failed`，再写入失败清理标记；失败现场从该状态写回时间起保留 `--artifact-failed-retention`，默认 24 小时。最终状态写回失败或结果仍可能恢复时不得启动保留期。到期删除意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
 
 该顺序允许在任意点崩溃后恢复：
 
 | 本地现场 | 恢复动作 |
 |----------|----------|
 | 正文存在、无回执 | 使用稳定幂等键重新上传或确认结果 |
-| 正文存在、Completed 回执存在 | 校验回执与本地文件元数据后删除正文，不重复上传 |
+| 正文存在、Completed 回执存在 | 校验回执与本地文件元数据，不重复上传；Manifest 和最终状态成功后立即清理 |
 | 正文缺失、Completed 回执存在 | 使用回执继续构造 Manifest |
 | 正文和回执都缺失、Manifest 未完成 | 标记本地结果不可恢复，Job 不能进入 Completed |
-| Manifest 已完成但本地回执残留 | 对照 Manifest 后删除回执和空目录 |
+| Manifest 已完成但本地回执残留 | 对照 Manifest 和最终 Job Status；成功终态立即清理，失败终态恢复失败清理标记 |
 
-实时日志是例外：`combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；如果日志需要加入 JobUploadManifest，则等待 Manifest Completed；随后成功写回最终 Job Status，再删除日志 spool、索引、checkpoint 和完成回执。若日志不进入 Manifest，也必须至少等日志 Artifact 完成且最终 Job Status 已成功写回后清理。
+实时日志的 `combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；随后等待 Manifest Completed 和最终 Job Status 成功写回，成功后与普通产物一起立即清理。日志封账或上传最终失败时使用失败保留期，不在错误路径立即删除。
 
-`${rootDir}/work/{project}/{jobUID}` 中的 payload 和临时执行文件在容器退出且不再需要恢复执行后清理。`${rootDir}/results/{project}/{jobUID}` 中的普通产物按文件完成上传后逐个删除；不能在扫描完目录后一次性提前删除整个 resultRoot。所有 Job 本地目录都使用 UID 而不是可复用的 Job 名。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
+`${rootDir}/work/{project}/{jobUID}` 中的 payload 和临时执行文件在容器退出且不再需要恢复执行后清理，不受 Artifact 保留期影响。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobUID}`、`${rootDir}/logs/{project}/{jobUID}` 和 `${rootDir}/uploads/{project}/{jobUID}`。其他终态默认使用 `--artifact-failed-retention=24h`，到期后删除上述目录及失败清理标记；不得在保留期内按单文件提前删除。所有 Job 本地目录都使用 UID 而不是可复用的 Job 名。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
 
 ## 九、故障处理
 
@@ -567,7 +584,9 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | Job 超时 | 终止执行进程并尝试封账已有日志，再更新 Job 为 Failed 或 Aborted |
 | 本地日志不可恢复 | 保留诊断文件，将 `artifactState=Failed`，Job 不得进入 Completed |
 | 日志已封账但 Job 状态更新失败 | 保留日志完成回执和 spool，按 resourceVersion 重新读取并幂等更新 Job，不重复创建日志 Artifact |
-| 普通产物已上传但本地删除失败 | 保留 Completed 回执并异步重试删除，不重复上传或改变 Artifact 状态 |
+| 上传成功但立即清理失败 | 记录告警并异步重试，不改变 Job/Artifact 成功状态 |
+| 失败清理标记尚未到期 | 保留 results、日志和上传回执，不提前回收 |
+| 清理标记已到期但本地删除失败 | 保留清理标记并异步重试删除，不重复上传或改变 Job/Artifact 状态 |
 | 状态更新冲突 | 使用 apiserver 返回的 resourceVersion 重新读取并重试 |
 
 状态更新应保持幂等：重复上报同一阶段、重复清理、重复标记失败不应破坏对象状态。
@@ -594,6 +613,13 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--log-spool-limit` | 按部署配置 | 单 Job 完整本地日志 spool 的空间上限，至少应与服务端 `--max-log-size` 协调 |
 | `--log-drain-timeout` | `30s` | 容器结束后等待日志 EOF、上传排空和封账的期限 |
 | `--log-retry-max-backoff` | `30s` | 实时日志临时错误的最大退避间隔 |
+| `--artifact-max-file-size` | `25GiB` | 单个普通产物大小上限，不能超过 Artifact Manager 配置 |
+| `--artifact-max-job-size` | `100GiB` | 单 Job 普通产物总大小上限，不能超过 Artifact Manager 配置 |
+| `--artifact-max-files` | `10000` | 单 Job 普通产物文件数量上限 |
+| `--artifact-upload-concurrency` | `4` | 单 Job 普通产物并发上传数 |
+| `--artifact-upload-timeout` | `2h` | 单 Job 普通产物上传、Manifest 查询及封账的总期限，超时后进入失败终态 |
+| `--artifact-retry-max-backoff` | `30s` | 普通产物和 Manifest 临时错误的最大退避间隔 |
+| `--artifact-failed-retention` | `24h` | 上传失败、超时、结果未知或封账失败并成功写回失败终态后，本地现场的保留时间 |
 
 Runner 启动时根据运行环境获取架构：`GOARCH=amd64` 映射为 `x86_64`，`GOARCH=arm64` 映射为 `aarch64`。其他架构不受支持，Runner拒绝启动。检测结果写入`Runner.spec.arch`和`ebs.io/runner-arch` label，不提供启动参数覆盖。
 
@@ -625,7 +651,7 @@ secrets:
 - 长期 MachineAccount 凭据用于换取最长 24 小时的 Runner token；每个 Runner 或受控站点应使用独立账号以便独立审计和吊销，不应在镜像中内置全局共享 secret。
 - CT 类型 Runner 如需挂载 socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。
 - 日志 spool 和上传 checkpoint 可能包含敏感构建输出，只允许 Runner 运行用户访问；不得把日志正文、Bearer Token 或 MachineAccount secret 写入结构化运行日志。
-- 普通产物在 Completed 回执持久化后立即删除本地正文；回执不得包含 Token 或文件内容。日志 spool 只有在日志封账、所需 Manifest 和最终 Job Status 完成后才能删除。失败或不可恢复日志先保留用于诊断，并由独立 TTL 清理，不能在错误路径立即删除。
+- 普通产物回执不得包含 Token 或文件内容。Manifest 和最终 Job Status 成功后立即删除 results、日志 spool 和上传回执；失败、超时、结果未知或封账失败现场按 24 小时失败保留期保存，不能在错误路径立即删除。
 - 生产环境中 Runner 到 Artifact Manager 必须使用 TLS；使用 HTTP 的 Compose 地址只适用于受控测试网络。
 
 ## 十二、测试设计
@@ -643,8 +669,11 @@ secrets:
 | 认证和退避 | 401 单次刷新重放、403 不刷新、429 Retry-After、503/网络错误指数退避；日志故障不阻塞心跳和 watch |
 | 背压 | 慢服务端、内存队列满、本地 spool 达上限时不丢日志；Job 取消后仍能在 drain timeout 内排空 |
 | 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应 |
-| 本地清理 | Completed 回执落盘后删除普通产物；各崩溃点恢复；结果未知不删除；删除失败重试；Manifest 使用回执；日志延迟清理 |
+| 普通产物扫描 | 空目录、嵌套目录、点文件、稳定排序、RPM MIME、普通 MIME、路径冲突、非法 UTF-8、不可读文件、符号链接和特殊文件拒绝、文件数及大小限制 |
+| 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
+| Manifest | 日志必需项、只含日志的清单、普通产物全部 required、generation 1、稳定排序、完成结果未知查询、内容冲突不递增 generation |
+| 本地清理 | 成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、Runner 重启恢复、失败保留期内不删除、24 小时到期统一删除、结果未知未终态不计时 |
 | Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Completed；上传失败时 ArtifactState 和 Message 正确 |
 | 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
 
-端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact，最终下载正文与本地 spool 字节完全一致。
+端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact 和普通 Artifact，generation 1 Manifest 包含全部必需项，下载正文与本地源文件一致，最终 Job Artifact 摘要直接使用 Manifest 完成响应。
