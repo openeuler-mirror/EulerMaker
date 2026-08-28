@@ -1,8 +1,8 @@
-from pydantic import Field
+from pydantic import BaseModel, Field
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Callable, Mapping, Optional, Set, Tuple, Type
 
-from common import DataContainer, key_func as _key_func
+from common import key_func as _key_func
 from log import debug
 
 
@@ -30,13 +30,13 @@ class IndexKeyMissingError(IndexKeyError):
     '''索引键不存在(更新/删除目标缺失)。'''
 
 
-class IndexHandlerOptions(DataContainer):
+class IndexHandlerOptions(BaseModel):
     name: str = Field(default=None, description="索引处理器名称")
     description: str = Field(default="", description="索引处理器描述")
     args: Mapping[str, Any] = Field(default_factory=dict, description="索引处理器关键字参数")
 
 
-class IndexerItemOptions(DataContainer):
+class IndexerItemOptions(BaseModel):
     '''索引器选项列表中的单条索引配置。'''
 
     name: str = Field(default=None, description="索引名称")
@@ -44,13 +44,13 @@ class IndexerItemOptions(DataContainer):
     handler: IndexHandlerOptions = Field(default=None, description="索引处理器")
 
 
-class StoreHandlerOptions(DataContainer):
+class StoreHandlerOptions(BaseModel):
     name: str = Field(default="default", description="数据存储名称")
     description: str = Field(default="", description="数据存储描述")
     args: Mapping[str, Any] = Field(default_factory=dict, description="数据存储关键字参数")
 
 
-class IndexerOptions(DataContainer):
+class IndexerOptions(BaseModel):
 
     # keyFunc 使用驼峰命名以兼容既有 YAML 配置(如 conf/internal.yaml),
     # 与 snake_case 字段并存是有意为之, 新增配置项请使用 snake_case。
@@ -531,7 +531,7 @@ class Indexer(ABC):
         ...
 
 
-class KeyValue(DataContainer):
+class KeyValue(BaseModel):
     key: Any = Field(default=None, description="索引键")
     value: Any = Field(default=None, description="索引值")
 
