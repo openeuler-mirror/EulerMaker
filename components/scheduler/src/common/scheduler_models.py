@@ -9,8 +9,8 @@
         
     - NumaNode: NUMA 节点信息（物理机场景）
         - node_id: 节点id
-        - memory: 内存总量(单位: MB)
-        - allocatable_memory: 剩余内存(单位: MB)
+        - memory: 内存总量(单位: Byte)
+        - allocatable_memory: 剩余内存(单位: Byte)
         - cores: CPU列表
 
     - CapacityInfo: 磁盘/内存容量信息
@@ -18,18 +18,18 @@
         - allocatable: 剩余容量
 
     - RunnerCapacity: 执行机资源容量
-        - cpu: CPU核心信息
-        - memory: 内存容量信息(单位: MB)
-        - disk: 磁盘容量信息(单位: GB)
-        - gpu: GPU核心信息
-        - vram: GPU显存容量信息(单位: MB)
+        - cpu: CPU核心信息(单位: 毫核, 1000 毫核 = 1 核)
+        - memory: 内存容量信息(单位: Byte)
+        - disk: 磁盘容量信息(单位: Byte)
+        - gpu: GPU核心信息(单位: 毫核, 1000 毫核 = 1 核)
+        - vram: GPU显存容量信息(单位: Byte)
         - gpu_model: GPU模型信息
         - numa_topology: NUMA拓扑信息
 
     - ResourceRequest: 资源请求
         - requests: 资源需求
         - limits: 资源限制
-        - nodeSelector: 节点选择器
+        - node_selector: 节点选择器
         - tolerations: 污点容忍度
 """
 from typing import Mapping, List, Optional, Tuple
@@ -60,23 +60,23 @@ from .constants import (
 class NumaNode:
     """NUMA 节点信息（物理机场景）"""
     node_id:    int = 0  # 节点id
-    memory:     int = 0  # 内存总量(单位：MB)
-    allocatable_memory:   int = 0  # 剩余内存
+    memory:     int = 0  # 内存总量(单位：Byte)
+    allocatable_memory:   int = 0  # 剩余内存(单位：Byte)
     cores: List[int] = field(default_factory=list)  # CPU列表
 
 
 @dataclass
 class CoreInfo:
     """CPU/GPU内核信息"""
-    cores:          float = 0.0  # 核心总数
-    allocatable:    float = 0.0  # 剩余核心数
+    cores:          int = 0  # 核心总数(单位：毫核，1000 毫核 = 1 核)
+    allocatable:    int = 0  # 剩余核心数(单位：毫核， 1000 毫核 = 1 核)
 
 
 @dataclass
 class CapacityInfo:
     """磁盘/内存容量信息"""
-    capacity:       int = 0  # 内存总容量
-    allocatable:    int = 0  # 剩余内存数
+    capacity:       int = 0  # 总容量(单位：Byte)
+    allocatable:    int = 0  # 剩余容量(单位：Byte)
 
 
 class CapacityField(Enum):
@@ -155,7 +155,8 @@ class RunnerCapacity:
             ("memory", "allocatable", "capacity"),
             ("disk",   "allocatable", "capacity"),
             ("gpu",    "allocatable", "cores"),
-            ("vram",   "allocatable", "capacity")
+            ("vram",   "allocatable", "capacity"),
+            ("ephemeral_storage", "allocatable", "capacity"),
         ]
 
     def subtract(self, req: "JobRequirement"):
@@ -205,7 +206,7 @@ class RunnerCapacity:
 
 @dataclass
 class JobRequirement:
-    """Job 当前资源容量"""
+    """Job 资源需求"""
     cpu:        int = field(default=DEFAULT_RES_CPU)
     memory:     int = field(default=DEFAULT_RES_MEMORY)
     disk:       int = field(default=DEFAULT_RES_NOT_LIMIT)
@@ -221,7 +222,7 @@ class JobRequirement:
     }
 
     @staticmethod
-    def from_resource_quantity(res_quantity: Optional[ResourceQuantity]) -> Optional['JobRequirement']:
+    def from_resource_quantity(res_quantity: Optional[ResourceQuantity]) -> 'JobRequirement':
         """从ResourceQuantity创建JobRequirement"""
         requirement = JobRequirement()
 
@@ -243,7 +244,7 @@ class ResourceRequest:
     Job对Runner的资源需求, jobSpec字段中解析, 包含字段：
     - requests      → 资源需求
     - limits        → 资源限制
-    - nodeSelector  → 节点选择器
+    - node_selector  → 节点选择器
     - tolerations   → 污点容忍度
     """
     # 资源需求

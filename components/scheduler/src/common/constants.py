@@ -1,6 +1,6 @@
 """常量定义
 
-Runner标签常量保护:
+Runner标签常量包含:
     - LABEL_RUNNER_TYPE: 运行器类型标签, 如："ebs.io/runner-type": "ct"
     - LABEL_RUNNER_ARCH: 架构标签， 如："ebs.io/arch": "x86_64"
     - LABEL_RUNNER_ZONE: 区域标签， 如："ebs.io/zone": "east"
@@ -41,12 +41,12 @@ INDEX_BOUNDED_RUNNER = "status.runner"
 INDEX_STATUS_PHASE = "status.phase"
 
 # ================================ Job 默认值 ==========================
-# CPU 默认资源
-DEFAULT_RES_CPU = 2
-DEFAULT_RES_CPU_STR = "2"
+# CPU 默认资源: 2 核(单位: 毫核, 1000 毫核 = 1 核)
+DEFAULT_RES_CPU = 2000
+DEFAULT_RES_CPU_STR = "2000m"
 
 # MEMORY 默认资源
-DEFAULT_RES_MEMORY = 8192
+DEFAULT_RES_MEMORY = 8589934592  # 默认：8GiB, 单位：Byte
 DEFAULT_RES_MEMORY_STR = "8Gi"
 
 # -1 表示无限制
@@ -85,6 +85,8 @@ __all__ = [
     "DEFAULT_RES_MEMORY_STR",
     "DEFAULT_RES_NOT_LIMIT",
     "DEFAULT_RES_NOT_LIMIT_STR",
+    "DEFAULT_PRIORITY",
+    "DEFAULT_TIMEOUT_SECONDS",
 
     "API_VERSION",
 ]
