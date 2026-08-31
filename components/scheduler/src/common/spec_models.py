@@ -30,7 +30,7 @@
 
     - JobStatus: 作业状态
         - phase: 执行阶段： Pending、Running、Completed、Failed、Aborted
-        - stage: Pending、Running、PostRun
+        - stage: Pending、Running、PostRun、Failed
         - runner: 执行机名称
         - startTime: 开始时间
         - endTime: 结束时间
@@ -45,7 +45,7 @@
     - JobList: 作业资源列表
         - items: 作业资源列表
 
-    - Taint: 污点
+    - RunnerTaint: 污点
         - key: 污点键
         - value: 污点值
         - effect: 污点效果, 如: NoSchedule, PreferNoSchedule, NoExecute
@@ -69,7 +69,7 @@
         - agentVersion: 执行机代理版本
 
     - RunnerStatus: 执行机状态
-        - phase: 执行阶段： Registering、Running、Idle、Offline
+        - phase: 执行阶段： Registering、Booting、Running、Idle、Offline
         - conditions: 执行状态列表
         - capacity:  资源总容量
         - allocatable: 可调度容量
@@ -108,13 +108,13 @@ class ResourceQuantity(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     cpu:      Optional[str] = Field(default=DEFAULT_RES_CPU_STR, description="CPU核心数, 默认2核")
-    memory:   Optional[str] = Field(default=DEFAULT_RES_MEMORY_STR, description="内存需求(MB), 默认8Gi")
-    disk:     Optional[str] = Field(default=DEFAULT_RES_NOT_LIMIT_STR, description="磁盘需求(Gi), 默认-1表示不关注磁盘需求")
+    memory:   Optional[str] = Field(default=DEFAULT_RES_MEMORY_STR, description="内存需求, 默认8Gi")
+    disk:     Optional[str] = Field(default=DEFAULT_RES_NOT_LIMIT_STR, description="磁盘需求, 默认-1表示不关注磁盘需求")
     gpu:      Optional[str] = Field(default=DEFAULT_RES_NOT_LIMIT_STR, description="GPU数量, 默认-1表示不关注gpu数量")
-    vram:     Optional[str] = Field(default=DEFAULT_RES_NOT_LIMIT_STR, description="GPU显存需求(MB), 默认-1表示不关注显存需求")
+    vram:     Optional[str] = Field(default=DEFAULT_RES_NOT_LIMIT_STR, description="GPU显存需求, 默认-1表示不关注显存需求")
     gpuModel: Optional[str] = Field(default="", description="GPU模型, 为空表示不关注gpu模型")
     ephemeralStorage: Optional[str] = Field(default=DEFAULT_RES_NOT_LIMIT_STR,
-                                            alias="ephemeral-storage", description="临时存储(GB), 默认-1表示不关注")
+                                            alias="ephemeral-storage", description="临时存储, 默认-1表示不关注")
 
 
 class Metadata(BaseModel):
@@ -140,13 +140,13 @@ class SpecHeader(BaseModel):
 
 class Toleration(BaseModel):
     # 污点键
-    key:        str = Field(default="")
+    key:        Optional[str] = Field(default=None)
     # Equal, Exists, Gt, Lt
-    operator:   str = Field(default="")
+    operator:   Optional[str] = Field(default=None)
     # 污点值
-    value:      str = Field(default="")
+    value:      Optional[str] = Field(default=None)
     # NoSchedule, PreferNoSchedule, NoExecute
-    effect:     str = Field(default="")
+    effect:     Optional[str] = Field(default=None)
 
 
 class ResourceRequirements(BaseModel):
@@ -211,10 +211,10 @@ class JobList(SpecHeader):
 
 
 class RunnerTaint(BaseModel):
-    key:    str = Field(default=None)  # 污点键
-    value:  str = Field(default=None)  # 污点值
+    key:    Optional[str] = Field(default=None)  # 污点键
+    value:  Optional[str] = Field(default=None)  # 污点值
     # NoSchedule, PreferNoSchedule, NoExecute
-    effect: str = Field(default=None)
+    effect: Optional[str] = Field(default=None)
 
 
 class RunnerSpec(BaseModel):
@@ -229,8 +229,8 @@ class RunnerSpec(BaseModel):
 
 class RunnerAddress(BaseModel):
     # 地址类型：Hostname、InternalIP、ExternalIP
-    type:       str = Field(default="")
-    address:    str = Field(default="")  # 地址
+    type:       Optional[str] = None
+    address:    Optional[str] = None  # 地址
 
 
 class RunnerInfo(BaseModel):
@@ -245,7 +245,7 @@ class RunnerStatus(BaseModel):
     """
     运行器状态
     """
-    # 执行机状态：Registering、Running、Idle、Offline
+    # 执行机状态：Registering、Booting、Running、Idle、Offline
     phase:          RunnerPhase = Field(...)
     conditions:     List[Any] = Field(default_factory=list)
     capacity:       Mapping[str, str] = Field(default_factory=dict)  # 资源总容量

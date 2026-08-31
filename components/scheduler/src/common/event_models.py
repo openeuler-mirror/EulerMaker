@@ -12,7 +12,6 @@
 
     - NotifyUpdate: 更新事件
         - old_obj: 旧对象
-        - is_refresh: 是否为刷新事件
 
     - NotifyDelete: 删除事件
 

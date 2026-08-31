@@ -1,15 +1,20 @@
 """枚举类型模块
 
-这是一个枚举类型模块, 用于表示事件类型, 任务状态, 资源类型, 操作类型, 操作状态, 操作错误原因
+这是一个枚举类型模块, 用于表示事件类型, 任务状态, 资源类型, 操作类型, 操作状态, 操作错误原因等
 
 包含以下枚举类型:
 
 - EventType: 事件类型
-- JobStatus: 任务状态
+- JobPhase: 任务状态
 - ResourceType: 资源类型
 - ActionType: 操作类型
 - ActionStatus: 操作状态
 - ActionErrorReason: 操作错误原因
+- KindType: 资源 Kind 类型
+- RunnerArch: 运行器架构
+- RunnerType: 运行器类型
+- SchedulerStepType: 调度操作步骤类型
+- RunnerPhase: 运行器阶段
 
 """
 from enum import Enum

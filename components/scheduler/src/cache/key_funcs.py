@@ -15,10 +15,4 @@ class MetaNamespaceKeyFunc(KeyFunc):
         if not obj or isinstance(obj, str):
             raise ValueError("Cannot extract key from empty object or string object")
 
-        name = key_func(obj, ['metadata', 'name'])
-        namespace = key_func(obj, ['metadata', 'namespace'])
-
-        if name:
-            return f'{namespace}/{name}' if namespace else name
-
-        raise ValueError("Spec object does not have metadata.name attribute")
+        return key_func(obj)
