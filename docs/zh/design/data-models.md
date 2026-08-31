@@ -174,13 +174,15 @@ type SnapshotSpec struct {
 
 ```go
 type SnapshotStatus struct {
-    Phase     string      `json:"phase,omitempty"`
+    Phase        string             `json:"phase,omitempty"`
+    Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | string | `Pending` / `Processing` / `Active` |
+| `conditions` | []metav1.Condition | 状态条件 |
 
 ### SnapshotList
 
