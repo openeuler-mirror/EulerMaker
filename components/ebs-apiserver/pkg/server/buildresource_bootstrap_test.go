@@ -47,8 +47,12 @@ func TestEnsureDefaultBuildResourceCreatesMissingObject(t *testing.T) {
 	if obj.Name != "default" || obj.Namespace != "default" || obj.Kind != "BuildResource" {
 		t.Fatalf("unexpected identity: %#v", obj.ObjectMeta)
 	}
-	if obj.Spec.Default.Requests["cpu"] != "2" || obj.Spec.Default.Requests["memory"] != "4Gi" {
+	if obj.Spec.Default.Requests["cpu"] != "4" || obj.Spec.Default.Requests["memory"] != "8Gi" {
 		t.Fatalf("unexpected default requests: %#v", obj.Spec.Default.Requests)
+	}
+	effective := ebsv1.ResolveBuildResources(obj.Spec, "any-package", "riscv64")
+	if effective.Limits["cpu"] != "4" || effective.Limits["memory"] != "8Gi" {
+		t.Fatalf("unexpected effective default limits: %#v", effective.Limits)
 	}
 }
 

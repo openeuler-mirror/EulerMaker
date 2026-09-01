@@ -119,9 +119,17 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 
 	specPath := field.NewPath("spec")
 	defaultConfigured := !resourceRequirementsEmpty(obj.Spec.Default)
-	if defaultConfigured {
-		allErrs = append(allErrs, validateBuildResources(obj.Spec.Default, specPath.Child("default"))...)
+	var defaultErrs field.ErrorList
+	if !defaultConfigured {
+		defaultErrs = append(defaultErrs, field.Required(specPath.Child("default"), "a complete table default is required"))
+	} else {
+		defaultErrs = validateBuildResources(obj.Spec.Default, specPath.Child("default"), true)
+		if len(defaultErrs) == 0 {
+			effectiveDefault := ebsv1.MergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
+			defaultErrs = append(defaultErrs, validateEffectiveResourceLimits(effectiveDefault, specPath.Child("default"))...)
+		}
 	}
+	allErrs = append(allErrs, defaultErrs...)
 	if len(obj.Spec.Packages) == 0 && !(obj.Namespace == "default" && obj.Name == "default" && defaultConfigured) {
 		allErrs = append(allErrs, field.Required(specPath.Child("packages"), "at least one package is required"))
 	}
@@ -134,15 +142,34 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 		if !packageDefault && len(config.Arches) == 0 {
 			allErrs = append(allErrs, field.Required(packagePath, "default or at least one architecture is required"))
 		}
+		packageBase := ebsv1.MergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
+		packageBaseValid := len(defaultErrs) == 0
 		if packageDefault {
-			allErrs = append(allErrs, validateBuildResources(config.Default, packagePath.Child("default"))...)
+			packageErrs := validateBuildResources(config.Default, packagePath.Child("default"), false)
+			allErrs = append(allErrs, packageErrs...)
+			packageBase = ebsv1.MergeResourceRequirements(packageBase, config.Default)
+			packageBaseValid = packageBaseValid && len(packageErrs) == 0
+			if packageBaseValid {
+				effectiveErrs := validateEffectiveResourceLimits(packageBase, packagePath.Child("default"))
+				allErrs = append(allErrs, effectiveErrs...)
+				packageBaseValid = len(effectiveErrs) == 0
+			}
 		}
 		for arch, resources := range config.Arches {
 			archPath := packagePath.Child("arches").Key(arch)
 			if !architecturePattern.MatchString(arch) {
 				allErrs = append(allErrs, field.Invalid(archPath, arch, "must match ^[a-z0-9][a-z0-9._-]{0,62}$"))
 			}
-			allErrs = append(allErrs, validateBuildResources(resources, archPath)...)
+			if resourceRequirementsEmpty(resources) {
+				allErrs = append(allErrs, field.Required(archPath, "at least one resource override is required"))
+				continue
+			}
+			archErrs := validateBuildResources(resources, archPath, false)
+			allErrs = append(allErrs, archErrs...)
+			if packageBaseValid && len(archErrs) == 0 {
+				effective := ebsv1.MergeResourceRequirements(packageBase, resources)
+				allErrs = append(allErrs, validateEffectiveResourceLimits(effective, archPath)...)
+			}
 		}
 	}
 	return allErrs
@@ -156,20 +183,29 @@ func resourceRequirementsEmpty(resources ebsv1.ResourceRequirements) bool {
 	return len(resources.Requests) == 0 && len(resources.Limits) == 0
 }
 
-func validateBuildResources(resources ebsv1.ResourceRequirements, path *field.Path) field.ErrorList {
+func validateBuildResources(resources ebsv1.ResourceRequirements, path *field.Path, complete bool) field.ErrorList {
 	var allErrs field.ErrorList
-	requests, requestErrs := validateResourceMap(resources.Requests, path.Child("requests"), true)
+	requests, requestErrs := validateResourceMap(resources.Requests, path.Child("requests"), complete)
 	allErrs = append(allErrs, requestErrs...)
-	if len(resources.Limits) == 0 {
-		return allErrs
-	}
-	limits, limitErrs := validateResourceMap(resources.Limits, path.Child("limits"), true)
+	limits, limitErrs := validateResourceMap(resources.Limits, path.Child("limits"), false)
 	allErrs = append(allErrs, limitErrs...)
 	for _, name := range []string{"cpu", "memory"} {
 		request, requestOK := requests[name]
 		limit, limitOK := limits[name]
 		if requestOK && limitOK && limit.Cmp(request) < 0 {
 			allErrs = append(allErrs, field.Invalid(path.Child("limits").Key(name), resources.Limits[name], "must be greater than or equal to request"))
+		}
+	}
+	return allErrs
+}
+
+func validateEffectiveResourceLimits(resources ebsv1.ResourceRequirements, path *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	for _, name := range []string{"cpu", "memory"} {
+		request, requestErr := resource.ParseQuantity(resources.Requests[name])
+		limit, limitErr := resource.ParseQuantity(resources.Limits[name])
+		if requestErr == nil && limitErr == nil && limit.Cmp(request) < 0 {
+			allErrs = append(allErrs, field.Invalid(path.Child("limits").Key(name), resources.Limits[name], "effective limit must be greater than or equal to effective request"))
 		}
 	}
 	return allErrs
