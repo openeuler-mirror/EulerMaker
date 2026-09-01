@@ -18,8 +18,8 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 | 字段 | Go 类型 | JSON | 说明 |
 |------|---------|------|------|
 | `apiVersion` | string | `apiVersion` | `ebs/v1` |
-| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / Job / Runner |
-| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-` |
+| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / BuildResource / Job / Runner |
+| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/BuildResource/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-` |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -37,9 +37,9 @@ metav1.ListMeta `json:"metadata,omitempty"`
 Items           []Xxx `json:"items"`
 ```
 
-Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。子资源名称只需在所属 Project 内唯一。
+Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、BuildResource、Job 的唯一项目归属来源。。
 
-调度器和控制器可使用全局系统 API 跨 Project list 对象；在 Project 级资源中，只有 Job 的全局 API 支持 watch。集群级资源 Runner 的 API 同样支持 list/watch。用户侧和项目侧调用使用 Project API。
+调度器和控制器可使用全局系统 API 跨 Project list 大部分对象。在 Project 级资源中，只有 Job 的全局 API 支持 watch。集群级资源 Runner 的 API 同样支持 list/watch。用户侧和项目侧调用使用 Project API。
 
 当前 apiserver 基于 `GenericAPIServer` 实现，Project API 会在服务端重写到 scoped storage 路径，因此 Project 名必须满足 DNS1123 label 约束。需要展示带点号、空格或大小写的项目名时，使用 `Project.spec.displayName`。
 
@@ -50,20 +50,22 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | etcd | `/registry/ebs/jobs/{project}/{name}` |
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | Elasticsearch | `ebs-buildinfos` / `{project}/{name}` |
 | RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | Elasticsearch | `ebs-rpmrepos` / `{project}/{name}` |
+| BuildResource | `/apis/ebs/v1/projects/{project}/buildresources` | 不提供 | Elasticsearch | `ebs-buildresources` / `{project}/{project}` |
 
 表中 Elasticsearch 对象定位格式为“索引 / 文档 ID”。Project scoped 对象统一使用 `{project}/{name}` 作为文档 ID；Job 使用相同层级的 etcd key。只有 Job 和 Runner 存入 etcd 并提供 list/watch。
 
 ---
 
-## 结构体总览（44 个）
+## 结构体总览（48 个）
 
 ```
-主资源（7）: Project Snapshot Build BuildInfo RpmRepo Job Runner
-列表类型（7）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList JobList RunnerList 
-辅助结构体（30）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
+主资源（8）: Project Snapshot Build BuildInfo RpmRepo BuildResource Job Runner
+列表类型（8）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList BuildResourceList JobList RunnerList
+辅助结构体（32）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecDepend SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
                   RpmRepoSpec RpmRepoStatus RpmMeta
+                  BuildResourceSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
                   PackageRepo SpecCommit VersionConst
@@ -516,7 +518,82 @@ type RpmRepoList struct {
 
 ---
 
-## 六、Job（任务）
+## 六、BuildResource（构建资源表）
+
+**API**: `/apis/ebs/v1/projects/{project}/buildresources`
+
+**Elasticsearch**: 索引 `ebs-buildresources`，文档 ID `{project}/{project}`
+
+每个 Project 最多存在一个 `BuildResource`，其 `metadata.namespace` 和 `metadata.name` 均等于 Project 名。系统默认对象固定为 `default/default`。Project 对象不存在时如何回退到默认对象，以及 apiserver 如何初始化默认对象，见 [BuildResource 设计文档](./build-resource.md)。
+
+`BuildResource` 不注册 `/apis/ebs/v1/buildresources` 全局 API。系统组件、运维工具和普通用户都必须通过明确的 Project 路径访问，避免跨 Project 枚举或误更新资源表。
+
+### BuildResource
+
+```go
+type BuildResource struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+    Spec              BuildResourceSpec `json:"spec,omitempty"`
+}
+```
+
+### BuildResourceSpec
+
+```go
+type BuildResourceSpec struct {
+    Default  ResourceRequirements             `json:"default,omitempty"`
+    Packages map[string]PackageResourceConfig `json:"packages"`
+}
+```
+
+| 字段 | Go 类型 | 必填 | 说明 |
+|------|---------|------|------|
+| `default` | ResourceRequirements | 否 | 目标软件包没有匹配配置时使用的表级默认资源需求 |
+| `packages` | map[string]PackageResourceConfig | 是 | Project 下全部软件包的资源配置，Map key 为 spec 包名且不得为空 |
+
+`BuildResourceSpec` 不包含 OS 字段。同一张表适用于所属 Project 的全部 Build Target OS。
+
+### PackageResourceConfig
+
+```go
+type PackageResourceConfig struct {
+    Default ResourceRequirements            `json:"default,omitempty"`
+    Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 必填 | 说明 |
+|------|---------|------|------|
+| `default` | ResourceRequirements | 否 | 该软件包未匹配架构专属配置时使用的默认资源需求 |
+| `arches` | map[string]ResourceRequirements | 否 | 按 CPU 架构记录的资源需求；key 使用规范架构名 |
+
+每个软件包必须至少声明 `default` 或一个 `arches` 条目。架构采用开放集合，不固定为 `x86_64` 和 `aarch64`；可增加 `riscv64` 等新架构。架构名必须满足 `^[a-z0-9][a-z0-9._-]{0,62}$`，并与 Build Target 和 Runner label 使用的名称完全一致。
+
+BuildResource 中的每个有效 `ResourceRequirements` 必须在 `requests` 中同时声明 `cpu` 和 `memory`，且只允许这两个资源键。如果声明 `limits`，也必须同时包含二者，并满足每项 limit 大于或等于 request。资源值必须是大于 0、可由 Kubernetes `resource.ParseQuantity` 解析的字符串。
+
+配置匹配顺序为：
+
+1. `packages[specName].arches[arch]`；
+2. `packages[specName].default`；
+3. `spec.default`；
+4. 无匹配配置。
+
+每一级 `ResourceRequirements` 都作为整体使用，不在不同层级之间逐字段合并。
+
+### BuildResourceList
+
+```go
+type BuildResourceList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items           []BuildResource `json:"items"`
+}
+```
+
+---
+
+## 七、Job（任务）
 
 **API**: `/apis/ebs/v1/projects/{project}/jobs`  
 **全局 API**: `/apis/ebs/v1/jobs`  
@@ -629,7 +706,7 @@ type JobList struct {
 
 ---
 
-## 七、Runner（执行机）
+## 八、Runner（执行机）
 
 **API**: `/apis/ebs/v1/runners`  
 **etcd**: `/registry/ebs/runners/{name}`
@@ -765,7 +842,7 @@ type RunnerList struct {
 
 ---
 
-## 八、公共子结构体
+## 九、公共子结构体
 
 ### BuildTarget
 
@@ -887,6 +964,12 @@ BuildInfoStatus
         └── MissingDep ──▶ VersionConst
 
 RpmRepoStatus ──▶ RpmMeta ──▶ VersionConst
+
+BuildResourceSpec
+├── ResourceRequirements (default)
+└── PackageResourceConfig
+    ├── ResourceRequirements (default)
+    └── ResourceRequirements (arches)
 
 JobSpec
 ├── ResourceRequirements
