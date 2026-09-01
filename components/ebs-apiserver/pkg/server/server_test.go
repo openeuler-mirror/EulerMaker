@@ -35,11 +35,13 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	})
 
 	tests := map[string][]string{
-		"ebs-apiserver/pkg/apis/ebs/v1.ProjectSpec":    {"displayName", "buildTargets", "packageRepos"},
-		"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":        {"priority", "runtime", "runtimeSpec", "payload"},
-		"ebs-apiserver/pkg/apis/ebs/v1.RunnerStatus":   {"phase", "capacity", "heartbeat"},
-		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "scopes", "email"},
-		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount": {"apiVersion", "kind", "metadata", "spec"},
+		"ebs-apiserver/pkg/apis/ebs/v1.ProjectSpec":           {"displayName", "buildTargets", "packageRepos"},
+		"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceSpec":     {"default", "packages"},
+		"ebs-apiserver/pkg/apis/ebs/v1.PackageResourceConfig": {"default", "arches"},
+		"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":               {"priority", "runtime", "runtimeSpec", "payload"},
+		"ebs-apiserver/pkg/apis/ebs/v1.RunnerStatus":          {"phase", "capacity", "heartbeat"},
+		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":              {"enabled", "scopes", "email"},
+		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":        {"apiVersion", "kind", "metadata", "spec"},
 	}
 	for name, fields := range tests {
 		definition, ok := definitions[name]
@@ -141,6 +143,9 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 		t.Fatalf("create API group info: %v", err)
 	}
 	storageMap := apiGroup.VersionedResourcesStorageMap["v1"]
+	if _, ok := storageMap["buildresources"]; ok {
+		t.Fatal("BuildResource must not register a global API storage")
+	}
 
 	for _, resource := range []string{"projects", "snapshots", "builds", "buildinfos", "rpmrepos"} {
 		if _, ok := storageMap[resource].(rest.Watcher); ok {

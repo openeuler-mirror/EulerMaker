@@ -1,10 +1,18 @@
 package validation
 
 import (
+	"regexp"
+
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+)
+
+var (
+	packageNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*$`)
+	architecturePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 )
 
 func ValidateProject(obj *ebsv1.Project) field.ErrorList {
@@ -97,6 +105,105 @@ func ValidateRpmRepoUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
 	return ValidateRpmRepo(newObj)
 }
 func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList { return nil }
+
+func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
+	var allErrs field.ErrorList
+	if obj.Name == "" {
+		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "name"), "name is required"))
+	}
+	if obj.Namespace == "" {
+		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "namespace"), "namespace is required"))
+	} else if obj.Name != "" && obj.Name != obj.Namespace {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("metadata", "name"), obj.Name, "must equal metadata.namespace"))
+	}
+
+	specPath := field.NewPath("spec")
+	defaultConfigured := !resourceRequirementsEmpty(obj.Spec.Default)
+	if defaultConfigured {
+		allErrs = append(allErrs, validateBuildResources(obj.Spec.Default, specPath.Child("default"))...)
+	}
+	if len(obj.Spec.Packages) == 0 && !(obj.Namespace == "default" && obj.Name == "default" && defaultConfigured) {
+		allErrs = append(allErrs, field.Required(specPath.Child("packages"), "at least one package is required"))
+	}
+	for packageName, config := range obj.Spec.Packages {
+		packagePath := specPath.Child("packages").Key(packageName)
+		if !packageNamePattern.MatchString(packageName) {
+			allErrs = append(allErrs, field.Invalid(packagePath, packageName, "must be a valid spec package name"))
+		}
+		packageDefault := !resourceRequirementsEmpty(config.Default)
+		if !packageDefault && len(config.Arches) == 0 {
+			allErrs = append(allErrs, field.Required(packagePath, "default or at least one architecture is required"))
+		}
+		if packageDefault {
+			allErrs = append(allErrs, validateBuildResources(config.Default, packagePath.Child("default"))...)
+		}
+		for arch, resources := range config.Arches {
+			archPath := packagePath.Child("arches").Key(arch)
+			if !architecturePattern.MatchString(arch) {
+				allErrs = append(allErrs, field.Invalid(archPath, arch, "must match ^[a-z0-9][a-z0-9._-]{0,62}$"))
+			}
+			allErrs = append(allErrs, validateBuildResources(resources, archPath)...)
+		}
+	}
+	return allErrs
+}
+
+func ValidateBuildResourceUpdate(newObj, oldObj *ebsv1.BuildResource) field.ErrorList {
+	return ValidateBuildResource(newObj)
+}
+
+func resourceRequirementsEmpty(resources ebsv1.ResourceRequirements) bool {
+	return len(resources.Requests) == 0 && len(resources.Limits) == 0
+}
+
+func validateBuildResources(resources ebsv1.ResourceRequirements, path *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	requests, requestErrs := validateResourceMap(resources.Requests, path.Child("requests"), true)
+	allErrs = append(allErrs, requestErrs...)
+	if len(resources.Limits) == 0 {
+		return allErrs
+	}
+	limits, limitErrs := validateResourceMap(resources.Limits, path.Child("limits"), true)
+	allErrs = append(allErrs, limitErrs...)
+	for _, name := range []string{"cpu", "memory"} {
+		request, requestOK := requests[name]
+		limit, limitOK := limits[name]
+		if requestOK && limitOK && limit.Cmp(request) < 0 {
+			allErrs = append(allErrs, field.Invalid(path.Child("limits").Key(name), resources.Limits[name], "must be greater than or equal to request"))
+		}
+	}
+	return allErrs
+}
+
+func validateResourceMap(values map[string]string, path *field.Path, required bool) (map[string]resource.Quantity, field.ErrorList) {
+	parsed := make(map[string]resource.Quantity, 2)
+	var allErrs field.ErrorList
+	for name := range values {
+		if name != "cpu" && name != "memory" {
+			allErrs = append(allErrs, field.NotSupported(path.Key(name), name, []string{"cpu", "memory"}))
+		}
+	}
+	for _, name := range []string{"cpu", "memory"} {
+		value, ok := values[name]
+		if !ok {
+			if required {
+				allErrs = append(allErrs, field.Required(path.Key(name), name+" is required"))
+			}
+			continue
+		}
+		quantity, err := resource.ParseQuantity(value)
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(path.Key(name), value, "must be a valid resource quantity"))
+			continue
+		}
+		if quantity.Sign() <= 0 {
+			allErrs = append(allErrs, field.Invalid(path.Key(name), value, "must be greater than zero"))
+			continue
+		}
+		parsed[name] = quantity
+	}
+	return parsed, allErrs
+}
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList

@@ -550,7 +550,7 @@ type BuildResourceSpec struct {
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
 | `default` | ResourceRequirements | 否 | 目标软件包没有匹配配置时使用的表级默认资源需求 |
-| `packages` | map[string]PackageResourceConfig | 是 | Project 下全部软件包的资源配置，Map key 为 spec 包名且不得为空 |
+| `packages` | map[string]PackageResourceConfig | 是 | Project 下全部软件包的资源配置，Map key 为 spec 包名。Project 自定义表不得为空；`default/default` 可为空，但必须声明有效的表级 `default` |
 
 `BuildResourceSpec` 不包含 OS 字段。同一张表适用于所属 Project 的全部 Build Target OS。
 

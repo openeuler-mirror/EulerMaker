@@ -108,7 +108,7 @@ spec:
   packages: {}
 ```
 
-上例只展示对象身份和字段形式；实际内置清单的 `packages` 必须包含完整软件包配置，并满足非空校验。
+首次部署时允许默认对象使用空 `packages`，此时表级 `spec.default` 对所有软件包生效。运维可在默认对象创建后通过 API 逐步补充软件包专属配置。
 
 ### 3.3 数据模型
 
@@ -304,7 +304,8 @@ apiserver 创建或更新对象时执行以下校验：
 - `metadata.namespace` 必须存在，并与 API 路径中的 Project 一致；
 - 所有命名空间中的对象都不得声明 `spec.os`；该字段不属于 API 模型；
 - Project 自定义对象的 `metadata.name` 必须等于 `metadata.namespace`，即 Project 名；
-- `spec.packages` 不得为空；
+- Project 自定义对象的 `spec.packages` 不得为空；
+- `default/default` 允许 `spec.packages` 为空，但必须声明有效的 `spec.default`；
 
 上述确定性名称约束保证同一 Project 下只能存在一张有效资源表，不需要额外执行跨对象唯一性查询。
 
@@ -332,7 +333,7 @@ apiserver 创建或更新对象时执行以下校验：
 
 ## 八、apiserver 启动初始化
 
-apiserver 部署包内置全局默认 `BuildResource` 清单。推荐将清单作为独立 YAML 文件随二进制发布，或通过 `go:embed` 编译进二进制；不得把数千个软件包配置硬编码成 Go 字面量。
+apiserver 通过 `go:embed` 内置全局默认 `BuildResource` JSON 清单。初始清单使用表级 `spec.default` 覆盖所有软件包，不把软件包明细硬编码成 Go 字面量；后续可通过普通 API 更新软件包专属配置。
 
 apiserver 在完成存储初始化、注册 REST storage 之后，对外进入 Ready 之前执行 `EnsureDefaultBuildResource`：
 

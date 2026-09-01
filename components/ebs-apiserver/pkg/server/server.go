@@ -29,6 +29,7 @@ import (
 	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
+	buildresourcestore "ebs-apiserver/pkg/registry/ebs/buildresource"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
@@ -256,6 +257,14 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	}
 
 	if err := srv.InstallAPIGroup(apiGroupInfo); err != nil {
+		return nil, err
+	}
+	buildResourceTemplate := buildresourcestore.NewStorage()
+	buildResourceES := esstore.New(esClient, "buildresource", "BuildResource", buildResourceTemplate.(*genericregistry.Store))
+	if err := ensureDefaultBuildResource(context.Background(), buildResourceES); err != nil {
+		return nil, err
+	}
+	if err := installBuildResourceRoutes(srv.Handler.GoRestfulContainer, buildResourceES); err != nil {
 		return nil, err
 	}
 	if enableIAM {

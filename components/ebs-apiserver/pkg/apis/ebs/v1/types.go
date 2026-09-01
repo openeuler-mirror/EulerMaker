@@ -179,6 +179,28 @@ type RpmRepoList struct {
 	Items           []RpmRepo `json:"items"`
 }
 
+type BuildResource struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              BuildResourceSpec `json:"spec,omitempty"`
+}
+
+type BuildResourceSpec struct {
+	Default  ResourceRequirements             `json:"default,omitempty"`
+	Packages map[string]PackageResourceConfig `json:"packages"`
+}
+
+type PackageResourceConfig struct {
+	Default ResourceRequirements            `json:"default,omitempty"`
+	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
+}
+
+type BuildResourceList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []BuildResource `json:"items"`
+}
+
 type Job struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

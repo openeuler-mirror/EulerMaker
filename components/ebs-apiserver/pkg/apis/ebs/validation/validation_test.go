@@ -177,6 +177,80 @@ func TestValidateBuildStatusUpdate(t *testing.T) {
 	assertErrorList(t, errs, 0, nil)
 }
 
+func TestValidateBuildResource(t *testing.T) {
+	tests := []struct {
+		name       string
+		object     *ebsv1.BuildResource
+		wantErrs   int
+		wantFields map[string]field.ErrorType
+	}{
+		{name: "valid project table with extensible architecture", object: validBuildResource("project-a", "riscv64")},
+		{
+			name: "valid bootstrap default with table default only",
+			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"}, Spec: ebsv1.BuildResourceSpec{
+				Default: validResourceRequirements(), Packages: map[string]ebsv1.PackageResourceConfig{},
+			}},
+		},
+		{
+			name:     "requires identity and packages",
+			object:   &ebsv1.BuildResource{},
+			wantErrs: 3,
+			wantFields: map[string]field.ErrorType{
+				"metadata.name": field.ErrorTypeRequired, "metadata.namespace": field.ErrorTypeRequired, "spec.packages": field.ErrorTypeRequired,
+			},
+		},
+		{
+			name:       "name must equal project",
+			object:     validBuildResource("project-a", "x86_64"),
+			wantErrs:   1,
+			wantFields: map[string]field.ErrorType{"metadata.name": field.ErrorTypeInvalid},
+		},
+		{
+			name:       "rejects invalid architecture",
+			object:     validBuildResource("project-a", "RISC V"),
+			wantErrs:   1,
+			wantFields: map[string]field.ErrorType{"spec.packages[gcc].arches[RISC V]": field.ErrorTypeInvalid},
+		},
+		{
+			name: "requires complete positive requests",
+			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "0"}}}},
+			}},
+			wantErrs: 2,
+			wantFields: map[string]field.ErrorType{
+				"spec.packages[gcc].default.requests[cpu]":    field.ErrorTypeInvalid,
+				"spec.packages[gcc].default.requests[memory]": field.ErrorTypeRequired,
+			},
+		},
+		{
+			name: "rejects unknown resources and lower limits",
+			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{
+					Requests: map[string]string{"cpu": "4", "memory": "8Gi", "gpu": "1"},
+					Limits:   map[string]string{"cpu": "2", "memory": "4Gi"},
+				}}},
+			}},
+			wantErrs: 3,
+			wantFields: map[string]field.ErrorType{
+				"spec.packages[gcc].default.requests[gpu]":  field.ErrorTypeNotSupported,
+				"spec.packages[gcc].default.limits[cpu]":    field.ErrorTypeInvalid,
+				"spec.packages[gcc].default.limits[memory]": field.ErrorTypeInvalid,
+			},
+		},
+	}
+	tests[3].object.Name = "other"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertErrorList(t, ValidateBuildResource(tt.object), tt.wantErrs, tt.wantFields)
+		})
+	}
+}
+
+func TestValidateBuildResourceUpdate(t *testing.T) {
+	object := validBuildResource("project-a", "aarch64")
+	assertErrorList(t, ValidateBuildResourceUpdate(object, object.DeepCopy()), 0, nil)
+}
+
 func TestValidateJob(t *testing.T) {
 	errs := ValidateJob(validJob())
 	assertErrorList(t, errs, 0, nil)
@@ -367,6 +441,22 @@ func validBuild() *ebsv1.Build {
 			Packages:     []string{"pkg-a"},
 			BuildTarget:  validBuildTarget(),
 		},
+	}
+}
+
+func validBuildResource(project, arch string) *ebsv1.BuildResource {
+	return &ebsv1.BuildResource{
+		ObjectMeta: metav1.ObjectMeta{Name: project, Namespace: project},
+		Spec: ebsv1.BuildResourceSpec{Packages: map[string]ebsv1.PackageResourceConfig{
+			"gcc": {Arches: map[string]ebsv1.ResourceRequirements{arch: validResourceRequirements()}},
+		}},
+	}
+}
+
+func validResourceRequirements() ebsv1.ResourceRequirements {
+	return ebsv1.ResourceRequirements{
+		Requests: map[string]string{"cpu": "4", "memory": "8Gi"},
+		Limits:   map[string]string{"cpu": "8", "memory": "16Gi"},
 	}
 }
 
