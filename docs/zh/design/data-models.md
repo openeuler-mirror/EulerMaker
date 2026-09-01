@@ -549,7 +549,7 @@ type BuildResourceSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `default` | ResourceRequirements | 否 | 目标软件包没有匹配配置时使用的表级默认资源需求 |
+| `default` | ResourceRequirements | 是 | 表级默认资源需求，requests 必须完整声明 CPU 和 memory；limits 可缺省并取同级 requests |
 | `packages` | map[string]PackageResourceConfig | 是 | Project 下全部软件包的资源配置，Map key 为 spec 包名。Project 自定义表不得为空；`default/default` 可为空，但必须声明有效的表级 `default` |
 
 `BuildResourceSpec` 不包含 OS 字段。同一张表适用于所属 Project 的全部 Build Target OS。
@@ -570,16 +570,16 @@ type PackageResourceConfig struct {
 
 每个软件包必须至少声明 `default` 或一个 `arches` 条目。架构采用开放集合，不固定为 `x86_64` 和 `aarch64`；可增加 `riscv64` 等新架构。架构名必须满足 `^[a-z0-9][a-z0-9._-]{0,62}$`，并与 Build Target 和 Runner label 使用的名称完全一致。
 
-BuildResource 中的每个有效 `ResourceRequirements` 必须在 `requests` 中同时声明 `cpu` 和 `memory`，且只允许这两个资源键。如果声明 `limits`，也必须同时包含二者，并满足每项 limit 大于或等于 request。资源值必须是大于 0、可由 Kubernetes `resource.ParseQuantity` 解析的字符串。
+BuildResource 只允许 `cpu` 和 `memory` 两种资源键。表级 `spec.default.requests` 必须完整声明二者；limits 可以缺省。软件包 default 和架构配置可以只覆盖其中一个或多个键。任一级声明某项 request 但省略对应 limit 时，limit 取同级 request；该级未声明 request 时，request 和 limit 按“架构配置 → 软件包 default → 表级 default”逐字段继承。合并结果必须满足每项 limit 大于或等于 request。所有资源值必须是大于 0、可由 Kubernetes `resource.ParseQuantity` 解析的字符串。
 
-配置匹配顺序为：
+配置按以下顺序逐字段覆盖：
 
-1. `packages[specName].arches[arch]`；
-2. `packages[specName].default`；
-3. `spec.default`；
-4. 无匹配配置。
+1. 使用 `spec.default` 初始化完整配置；
+2. 使用 `packages[specName].default` 覆盖已声明字段；
+3. 使用 `packages[specName].arches[arch]` 覆盖已声明字段；
+4. 未覆盖字段保留 `spec.default` 值。
 
-每一级 `ResourceRequirements` 都作为整体使用，不在不同层级之间逐字段合并。
+`requests` 和 `limits` 分别按 `cpu`、`memory` 键合并，不在 Project 对象和 `default/default` 对象之间跨对象补齐。
 
 ### BuildResourceList
 

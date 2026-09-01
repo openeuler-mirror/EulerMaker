@@ -100,15 +100,12 @@ metadata:
 spec:
   default:
     requests:
-      cpu: "2"
-      memory: 4Gi
-    limits:
       cpu: "4"
       memory: 8Gi
   packages: {}
 ```
 
-首次部署时允许默认对象使用空 `packages`，此时表级 `spec.default` 对所有软件包生效。运维可在默认对象创建后通过 API 逐步补充软件包专属配置。
+首次部署时允许默认对象使用空 `packages`，此时表级 `spec.default` 对所有软件包生效。省略的 limits 分别取同级 requests，因此有效 limits 同样为 4 CPU、8Gi 内存。运维可在默认对象创建后通过 API 逐步补充软件包专属配置。
 
 ### 3.3 数据模型
 
@@ -132,9 +129,6 @@ metadata:
 spec:
   default:
     requests:
-      cpu: "2"
-      memory: 4Gi
-    limits:
       cpu: "4"
       memory: 8Gi
 
@@ -142,11 +136,7 @@ spec:
     bash:
       default:
         requests:
-          cpu: "2"
-          memory: 2Gi
-        limits:
-          cpu: "4"
-          memory: 4Gi
+          memory: 12Gi
 
     gcc:
       default:
@@ -160,10 +150,6 @@ spec:
         aarch64:
           requests:
             cpu: "12"
-            memory: 24Gi
-          limits:
-            cpu: "24"
-            memory: 48Gi
 
     kernel:
       arches:
@@ -215,16 +201,16 @@ Build Controller 按以下顺序读取对象：
 
 ### 5.2 选择对象内资源配置
 
-选定一个 `BuildResource` 后，匹配顺序固定为：
+选定一个 `BuildResource` 后，按以下顺序逐字段覆盖：
 
-1. `spec.packages[specName].arches[arch]`；
-2. `spec.packages[specName].default`；
-3. `spec.default`；
-4. 无匹配配置。
+1. 使用 `spec.default` 初始化完整配置；
+2. 使用 `spec.packages[specName].default` 覆盖已声明字段；
+3. 使用 `spec.packages[specName].arches[arch]` 覆盖已声明字段；
+4. 未被覆盖的字段保留 `spec.default` 中的值。
 
-匹配到某一级配置后整体返回该级 `ResourceRequirements`，不得在不同层级之间逐字段合并。例如架构级配置只有 `requests` 时，不从软件包级或表级默认值补充 `limits`。这种规则能够避免最终结果由多个位置隐式组合，便于审计和排查。
+合并分别作用于 `requests` 和 `limits` 中的 `cpu`、`memory` 键。同一级声明了 request 但未声明对应 limit 时，limit 默认等于该级 request；该级连 request 也未声明时，request 和 limit 一起继承上一级。例如软件包只配置 `requests.memory: 12Gi` 时，其有效 memory limit 也是 12Gi，而 CPU request/limit 从表级默认值继承。
 
-无匹配配置时，Build Controller 拒绝创建对应 Job，并在 Build/BuildInfo condition 中记录 `PackageResourceNotFound`。兜底值必须显式写入当前选中对象的 `spec.default`，不在控制器代码中维护隐藏默认值，也不跨对象逐项合并。
+`spec.default.requests` 必须完整声明 CPU 和 memory；`spec.default.limits` 可以缺省并取对应 request。因此即使软件包完全没有专属配置，也总能生成完整的 `Job.spec.resources`。对象间仍不混合：Project 表存在时，不从 `default/default` 补字段。
 
 伪代码如下：
 
@@ -242,18 +228,14 @@ func ResolveForProject(ctx context.Context, project, specName, arch string) (Res
 }
 
 func Resolve(table BuildResource, specName, arch string) (ResourceRequirements, error) {
+    resources := DeepCopy(table.Spec.Default)
     if pkg, ok := table.Spec.Packages[specName]; ok {
-        if resources, ok := pkg.Arches[arch]; ok {
-            return resources, nil
-        }
-        if !empty(pkg.Default) {
-            return pkg.Default, nil
+        resources = MergeResourceFields(resources, pkg.Default)
+        if archResources, ok := pkg.Arches[arch]; ok {
+            resources = MergeResourceFields(resources, archResources)
         }
     }
-    if !empty(table.Spec.Default) {
-        return table.Spec.Default, nil
-    }
-    return ResourceRequirements{}, ErrPackageResourceNotFound
+    return resources, ValidateEffectiveResources(resources)
 }
 ```
 
@@ -304,6 +286,7 @@ apiserver 创建或更新对象时执行以下校验：
 - `metadata.namespace` 必须存在，并与 API 路径中的 Project 一致；
 - 所有命名空间中的对象都不得声明 `spec.os`；该字段不属于 API 模型；
 - Project 自定义对象的 `metadata.name` 必须等于 `metadata.namespace`，即 Project 名；
+- `spec.default.requests` 必须完整声明 CPU 和 memory；limits 可以缺省，缺省值取同级 requests；
 - Project 自定义对象的 `spec.packages` 不得为空；
 - `default/default` 允许 `spec.packages` 为空，但必须声明有效的 `spec.default`；
 
@@ -321,11 +304,11 @@ apiserver 创建或更新对象时执行以下校验：
 ### 7.3 资源数量校验
 
 - 当前只允许 `cpu` 和 `memory` 两种资源键；
-- 每个有效配置的 `requests` 必须同时包含 `cpu` 和 `memory`；
+- 软件包 default 和架构配置可以只声明 CPU 或 memory，缺失字段按架构、软件包、表级 default 的顺序继承；
+- 任一级声明 request 但省略对应 limit 时，limit 使用同级 request；
 - CPU 和内存必须能被 Kubernetes `resource.ParseQuantity` 解析；
 - CPU 和内存必须大于 0；
-- 如果声明 `limits`，必须同时包含 `cpu` 和 `memory`；
-- 对每种资源，`limits` 必须大于或等于 `requests`；
+- 合并后的每种资源必须满足 `limits` 大于或等于 `requests`；
 - 建议 CPU request 使用整数核，避免当前 Runner 以逻辑 CPU 整数上报时产生精度和超卖语义差异；
 - 内存建议使用二进制单位 `Mi` 或 `Gi`。
 
