@@ -26,6 +26,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&Build{}, &BuildList{},
 		&BuildInfo{}, &BuildInfoList{},
 		&RpmRepo{}, &RpmRepoList{},
+		&BuildResource{}, &BuildResourceList{},
 		&Job{}, &JobList{},
 		&Runner{}, &RunnerList{},
 	)

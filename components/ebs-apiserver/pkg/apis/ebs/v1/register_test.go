@@ -22,3 +22,19 @@ func TestJobFieldLabelConversion(t *testing.T) {
 		t.Fatal("expected unsupported field selector error")
 	}
 }
+
+func TestBuildResourceTypesAreRegistered(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	for _, kind := range []string{"BuildResource", "BuildResourceList"} {
+		obj, err := scheme.New(SchemeGroupVersion.WithKind(kind))
+		if err != nil {
+			t.Fatalf("new %s: %v", kind, err)
+		}
+		if obj == nil {
+			t.Fatalf("new %s returned nil", kind)
+		}
+	}
+}

@@ -19,11 +19,12 @@ var indices = map[string]string{
 	"build":          "ebs-builds",
 	"buildinfo":      "ebs-buildinfos",
 	"rpmrepo":        "ebs-rpmrepos",
+	"buildresource":  "ebs-buildresources",
 	"user":           "ebs-users",
 	"machineaccount": "ebs-machineaccounts",
 }
 
-var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo"}
+var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource"}
 var iamResources = []string{"user", "machineaccount"}
 
 const indexMapping = `{

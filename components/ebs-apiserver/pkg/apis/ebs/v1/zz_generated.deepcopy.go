@@ -58,6 +58,15 @@ func (in *RpmRepoList) DeepCopyInto(out *RpmRepoList)  { *out = *copyValue(in) }
 func (in *RpmRepoList) DeepCopy() *RpmRepoList         { return copyValue(in) }
 func (in *RpmRepoList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
 
+func (in *BuildResource) DeepCopyInto(out *BuildResource) { *out = *copyValue(in) }
+func (in *BuildResource) DeepCopy() *BuildResource        { return copyValue(in) }
+func (in *BuildResource) DeepCopyObject() runtime.Object  { return in.DeepCopy() }
+func (in *BuildResourceList) DeepCopyInto(out *BuildResourceList) {
+	*out = *copyValue(in)
+}
+func (in *BuildResourceList) DeepCopy() *BuildResourceList   { return copyValue(in) }
+func (in *BuildResourceList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+
 func (in *Job) DeepCopyInto(out *Job)              { *out = *copyValue(in) }
 func (in *Job) DeepCopy() *Job                     { return copyValue(in) }
 func (in *Job) DeepCopyObject() runtime.Object     { return in.DeepCopy() }
