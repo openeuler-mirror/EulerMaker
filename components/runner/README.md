@@ -1,53 +1,34 @@
 # ebs-runner
 
-`ebs-runner` is the EulerMaker job execution agent. It obtains a short-lived token through `ebs-gateway`, registers a cluster-level Runner resource, reports heartbeat through the `/status` subresource, watches Jobs assigned to itself, executes them, and writes Job status back through Project-scoped APIs.
+`ebs-runner` 是 EulerMaker 的任务执行代理。它通过 `ebs-gateway` 注册执行机、接收已分配的 Job，并将日志和产物上传到 Artifact Manager。
 
-## Behavior
+## 构建与测试
 
-- Registers or updates `/apis/ebs/v1/runners/{name}` on startup.
-- Patches `/apis/ebs/v1/runners/{name}/status` periodically.
-- Exchanges MachineAccount credentials for a short-lived `ebs:runner` token.
-- Shares the in-memory token across all requests, refreshes it before expiry, and performs at most one refresh-and-retry after a 401 response.
-- Lists and watches `/apis/ebs/v1/runners/{name}/jobs`.
-- Executes only Jobs whose `status.runner` equals the configured `--name` and `status.phase` is `Running`.
-- Uses `metadata.namespace` from the Job as the Project name for status updates.
-- For `ct` Jobs, creates a container from `job.spec.runtimeSpec`, writes `job.spec.payload` to `/workspace/payload.yaml`, mounts the local result directory at `/results`, and waits for the container to exit.
-- Streams and finalizes container logs through Artifact Manager, uploads ordinary files produced under `/results`, and completes generation 1 of the Job manifest.
-- Patches final Job status with the Artifact manifest summary and `artifact://<jobUID>`, then immediately removes successful local artifact state. Failed or unknown uploads are retained for 24 hours by default.
+在当前目录执行：
 
-## Configuration
+```bash
+go test ./...
+CGO_ENABLED=0 go build -o ebs-runner ./cmd/runner
+```
 
-Runner configuration is passed through command-line flags.
+构建容器镜像：
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--gateway` | `https://ebs-gateway:8443` | Gateway base URL |
-| `--artifact-manager` | `http://artifact-manager:8081` | Artifact Manager base URL |
-| `--machine-credential-file` | empty | JSON file containing the MachineAccount client ID and client secret; required |
-| `--name` | hostname | Runner resource name |
-| `--type` | `ct` | Runner type: `ct`, `vm`, or `hw` |
-| `--root-dir` | `/var/lib/ebs-runner` | Runner local data root. Work files use `root-dir/work`; results use `root-dir/results` |
-| `--heartbeat-interval` | `30s` | Runner heartbeat interval |
-| `--insecure-skip-verify` | `false` | Skip gateway TLS verification |
-| `--gateway-ca` | empty | Gateway CA file |
-| `--artifact-manager-ca` | empty | Artifact Manager CA file |
-| `--artifact-manager-insecure-skip-verify` | `false` | Skip Artifact Manager TLS verification |
-| `--log-chunk-size` | `256KiB` | Maximum uncompressed log chunk size |
-| `--log-flush-interval` | `500ms` | Maximum delay before uploading a partial log chunk |
-| `--log-spool-limit` | `4GiB` | Per-Job local log spool limit |
-| `--log-drain-timeout` | `30s` | Time allowed to drain and finalize logs after execution |
-| `--log-retry-max-backoff` | `30s` | Maximum retry delay for log chunk uploads |
-| `--artifact-max-file-size` | `25GiB` | Maximum ordinary artifact file size in bytes |
-| `--artifact-max-job-size` | `100GiB` | Maximum total ordinary artifact size per Job in bytes |
-| `--artifact-max-files` | `10000` | Maximum ordinary artifact files per Job |
-| `--artifact-upload-concurrency` | `4` | Concurrent ordinary artifact uploads per Job |
-| `--artifact-upload-timeout` | `2h` | Total timeout for ordinary uploads and manifest finalization |
-| `--artifact-retry-max-backoff` | `30s` | Maximum retry delay for ordinary artifact and manifest requests |
-| `--artifact-failed-retention` | `24h` | Local retention after an Artifact failure status is persisted |
+```bash
+docker build -t eulermaker/ebs-runner:dev .
+```
 
-The runner detects its architecture from `GOARCH`: `amd64` maps to `x86_64`, and `arm64` maps to `aarch64`. Other architectures are rejected at startup.
+## 本地运行
 
-## Run
+Runner 启动前需要可访问的 Gateway、Artifact Manager，以及包含 MachineAccount 凭据的 JSON 文件：
+
+```json
+{
+  "clientID": "runner-site-a",
+  "clientSecret": "base64url-encoded-random-secret"
+}
+```
+
+启动 Runner：
 
 ```bash
 go run ./cmd/runner \
@@ -59,32 +40,18 @@ go run ./cmd/runner \
   --insecure-skip-verify
 ```
 
-The credential file contains both parts of the MachineAccount credential:
+`--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
-```json
-{
-  "clientID": "runner-site-a",
-  "clientSecret": "base64url-encoded-random-secret"
-}
-```
+Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭据和签发的 Token 不应写入日志或 Runner 状态。
 
-The credential file is read once at startup. Replacing it requires restarting the runner; credentials and issued tokens are never written to logs or Runner status.
-
-Use `--insecure-skip-verify` only for local testing. In other environments, pass the gateway CA with `--gateway-ca`.
-
-## Build
+完整参数请执行：
 
 ```bash
-go test ./...
-CGO_ENABLED=0 go build -o ebs-runner ./cmd/runner
-docker build -t eulermaker/ebs-runner:dev .
+go run ./cmd/runner --help
 ```
 
-For a self-signed HTTPS gateway, mount its CA file and pass the path explicitly:
+也可以在仓库根目录构建并启动完整开发环境：
 
-```yaml
-volumes:
-  - /etc/ebs/certs/gateway-ca.crt:/etc/ebs/certs/gateway-ca.crt:ro
-command:
-  - --gateway-ca=/etc/ebs/certs/gateway-ca.crt
+```bash
+docker compose -f hacks/docker-compose.yml up -d --build
 ```

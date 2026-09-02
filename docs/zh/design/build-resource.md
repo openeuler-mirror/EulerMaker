@@ -389,15 +389,15 @@ func EnsureDefaultBuildResource(ctx context.Context, client BuildResourceInterfa
 
 ## 十一、权限建议
 
-建议沿用 Project scoped 资源授权规则：
+BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Project 校验 owner/member 关系。授权规则如下：
 
-- Project owner：读、创建、更新、删除；
-- Project member：只读；
+- Project owner：只读自己拥有的 Project 下的对象；
+- Project member：只读自己作为 member 的 Project 下的对象；
 - Build Controller MachineAccount：只读；
 - 运维角色：跨 Project 读写；
 - Scheduler 和 Runner：无需读取该对象。
 
-`default` 命名空间是例外：普通 Project owner/member 不得写入或删除其中的 `BuildResource`，只有运维角色和 apiserver 启动初始化身份具有写权限。Build Controller 具有读取权限，以便执行回退。
+普通 Project owner/member 禁止创建、更新、Patch 或删除任何 `BuildResource`，也不能通过 `default` Project 路径读取全局默认对象。只有运维角色和 apiserver 启动初始化身份具有写权限。Build Controller 具有读取权限，以便执行回退。
 
 ## 十二、实现范围
 

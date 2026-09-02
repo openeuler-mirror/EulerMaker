@@ -526,6 +526,8 @@ type RpmRepoList struct {
 
 `BuildResource` 不注册 `/apis/ebs/v1/buildresources` 全局 API。系统组件、运维工具和普通用户都必须通过明确的 Project 路径访问，避免跨 Project 枚举或误更新资源表。
 
+`BuildResource` 不属于公开读取资源。Project owner 和 member 只能读取与自己具有 owner/member 关系的 Project 下的对象，禁止全部写操作；跨 Project 读写仅允许运维或受信任系统身份。
+
 ### BuildResource
 
 ```go

@@ -495,6 +495,7 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 |----------|------------|-------------|-----|--------|--------|-------|
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 禁止 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 禁止 | 禁止 | 全部支持的 verb | 同 System |
+| Project 子资源：BuildResource | 仅自己拥有的 Project 下 `get/list`，禁止全部写操作 | 仅自己作为 member 的 Project 下 `get/list`，禁止全部写操作 | 跨 Project `get/list/create/update/patch/delete` | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Job | 全部支持的 verb，watch 仅在 apiserver 支持时允许 | `get/list/create/update/patch`，禁止 `delete`；watch 仅在 apiserver 支持时允许 | 禁止 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
 | Runner | 禁止 | 禁止 | 仅 `get/list`，禁止 watch、子资源和全部写操作 | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
@@ -507,7 +508,7 @@ Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称
 
 如果 gateway 无法确认 Project 归属，应返回 403，不能放行。
 
-公开 `GET/HEAD` 不查询 Project owner/member。普通用户修改 Project 或 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
+公开 `GET/HEAD` 不查询 Project owner/member。BuildResource 不属于公开读取资源；普通用户读取时，gateway 必须先读取路径指定的 Project 并校验 owner/member 关系，不能读取无归属关系 Project（包括 `default`）下的 BuildResource。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
 
 Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
 
