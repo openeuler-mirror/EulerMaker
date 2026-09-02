@@ -40,3 +40,17 @@ func TestWatchTablePrintsHeaderOnce(t *testing.T) {
 		t.Fatalf("header repeated: %s", output.String())
 	}
 }
+
+func TestBuildResourceTable(t *testing.T) {
+	definition, _ := resource.Resolve("buildresource")
+	data := []byte(`{"metadata":{"name":"project-a"},"spec":{"default":{"requests":{"cpu":"4","memory":"8Gi"}},"packages":{"gcc":{},"llvm":{}}}}`)
+	var output bytes.Buffer
+	if err := New(&output, Options{Format: "table"}).Print(definition, data); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"CPU", "MEMORY", "PACKAGES", "project-a", "4", "8Gi", "2"} {
+		if !strings.Contains(output.String(), value) {
+			t.Fatalf("table missing %q: %s", value, output.String())
+		}
+	}
+}

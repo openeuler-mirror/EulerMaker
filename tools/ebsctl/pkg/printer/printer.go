@@ -137,6 +137,16 @@ func tableColumns(definition resource.Definition, wide bool) []column {
 		columns = []column{name, phase("PHASE"), {name: "STAGE", value: func(object map[string]any) string { return nestedString(object, "status", "stage") }}, {name: "RUNNER", value: func(object map[string]any) string { return nestedString(object, "status", "runner") }}, age}
 	case "BuildInfo", "RpmRepo":
 		columns = []column{name, phase("STATUS"), age}
+	case "BuildResource":
+		columns = []column{
+			name,
+			{name: "CPU", value: func(object map[string]any) string { return nestedString(object, "spec", "default", "requests", "cpu") }},
+			{name: "MEMORY", value: func(object map[string]any) string {
+				return nestedString(object, "spec", "default", "requests", "memory")
+			}},
+			{name: "PACKAGES", value: func(object map[string]any) string { return nestedMapLength(object, "spec", "packages") }},
+			age,
+		}
 	default:
 		columns = []column{name, age}
 	}
@@ -144,6 +154,19 @@ func tableColumns(definition resource.Definition, wide bool) []column {
 		columns = append(columns, column{name: "PROJECT", value: func(object map[string]any) string { return nestedString(object, "metadata", "namespace") }})
 	}
 	return columns
+}
+
+func nestedMapLength(object map[string]any, path ...string) string {
+	var current any = object
+	for _, segment := range path {
+		mapped, ok := current.(map[string]any)
+		if !ok {
+			return "0"
+		}
+		current = mapped[segment]
+	}
+	mapped, _ := current.(map[string]any)
+	return fmt.Sprint(len(mapped))
 }
 
 func objects(value any) []map[string]any {
