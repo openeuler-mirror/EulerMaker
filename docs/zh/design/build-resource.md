@@ -289,6 +289,7 @@ apiserver 创建或更新对象时执行以下校验：
 - `spec.default.requests` 必须完整声明 CPU 和 memory；limits 可以缺省，缺省值取同级 requests；
 - Project 自定义对象的 `spec.packages` 不得为空；
 - `default/default` 允许 `spec.packages` 为空，但必须声明有效的 `spec.default`；
+- 软件包键允许使用 `kernel:kernel-rt` 形式表示 multibuild 子包；冒号分隔的每一段都必须是有效的 spec 包名；
 
 上述确定性名称约束保证同一 Project 下只能存在一张有效资源表，不需要额外执行跨对象唯一性查询。
 

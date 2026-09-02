@@ -50,9 +50,20 @@ func TestEnsureDefaultBuildResourceCreatesMissingObject(t *testing.T) {
 	if obj.Spec.Default.Requests["cpu"] != "4" || obj.Spec.Default.Requests["memory"] != "8Gi" {
 		t.Fatalf("unexpected default requests: %#v", obj.Spec.Default.Requests)
 	}
+	if len(obj.Spec.Packages) != 665 {
+		t.Fatalf("package overrides = %d, want 665", len(obj.Spec.Packages))
+	}
 	effective := ebsv1.ResolveBuildResources(obj.Spec, "any-package", "riscv64")
 	if effective.Limits["cpu"] != "4" || effective.Limits["memory"] != "8Gi" {
 		t.Fatalf("unexpected effective default limits: %#v", effective.Limits)
+	}
+	atune := ebsv1.ResolveBuildResources(obj.Spec, "A-Tune", "x86_64")
+	if atune.Requests["cpu"] != "8" || atune.Requests["memory"] != "8Gi" {
+		t.Fatalf("unexpected A-Tune requests: %#v", atune.Requests)
+	}
+	computeLibrary := ebsv1.ResolveBuildResources(obj.Spec, "ComputeLibrary", "aarch64")
+	if computeLibrary.Requests["cpu"] != "4" || computeLibrary.Requests["memory"] != "64Gi" {
+		t.Fatalf("unexpected ComputeLibrary requests: %#v", computeLibrary.Requests)
 	}
 }
 

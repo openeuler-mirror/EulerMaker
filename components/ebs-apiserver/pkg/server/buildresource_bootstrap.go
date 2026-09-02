@@ -16,7 +16,7 @@ import (
 
 const defaultBuildResourceName = "default"
 
-//go:embed default-build-resource.json
+//go:embed default-build-resource.yaml
 var defaultBuildResourceTemplate []byte
 
 type defaultBuildResourceStorage interface {

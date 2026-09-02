@@ -1,0 +1,2789 @@
+apiVersion: ebs/v1
+kind: BuildResource
+metadata:
+  name: default
+  namespace: default
+spec:
+  default:
+    requests:
+      cpu: "4"
+      memory: 8Gi
+  packages:
+    "A-Tune":
+      default:
+        requests:
+          cpu: "8"
+    "BehaviorTree.CPP":
+      default:
+        requests:
+          memory: 13Gi
+    "ComputeLibrary":
+      default:
+        requests:
+          memory: 64Gi
+    "Fast-DDS":
+      default:
+        requests:
+          memory: 22Gi
+    "ImageMagick":
+      default:
+        requests:
+          cpu: "16"
+    "Imath":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "Kmesh":
+      default:
+        requests:
+          memory: 12Gi
+    "ModemManager":
+      default:
+        requests:
+          cpu: "16"
+    "NetworkManager":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "OpenEXR":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "OpenIPMI":
+      default:
+        requests:
+          cpu: "8"
+    "PEGTL":
+      default:
+        requests:
+          cpu: "8"
+    "PyQt4":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "R-language":
+      default:
+        requests:
+          memory: 22Gi
+    "WasmEngine":
+      default:
+        requests:
+          memory: 22Gi
+    "abrt":
+      default:
+        requests:
+          cpu: "8"
+    "accumulo":
+      default:
+        requests:
+          memory: 12Gi
+    "adwaita-qt":
+      default:
+        requests:
+          memory: 12Gi
+    "afterburn":
+      default:
+        requests:
+          memory: 22Gi
+    "amanda":
+      default:
+        requests:
+          cpu: "8"
+    "ansible":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "aom":
+      default:
+        requests:
+          memory: 11Gi
+    "apache-commons-logging":
+      default:
+        requests:
+          memory: 11Gi
+    "apache-poi":
+      default:
+        requests:
+          memory: 22Gi
+    "apr":
+      default:
+        requests:
+          cpu: "8"
+    "ark":
+      default:
+        requests:
+          memory: 15Gi
+    "asio":
+      default:
+        requests:
+          memory: 17Gi
+    "assimp":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "asymptote":
+      default:
+        requests:
+          memory: 19Gi
+    "augeas":
+      default:
+        requests:
+          cpu: "16"
+    "autoconf":
+      default:
+        requests:
+          cpu: "32"
+    "autofdo":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "autogen":
+      default:
+        requests:
+          cpu: "8"
+    "automake":
+      default:
+        requests:
+          cpu: "32"
+    "avro":
+      default:
+        requests:
+          memory: 22Gi
+    "aws-sdk-java":
+      default:
+        requests:
+          memory: 32Gi
+    "bacula":
+      default:
+        requests:
+          memory: 33Gi
+    "bash":
+      default:
+        requests:
+          cpu: "8"
+    "bazel":
+      default:
+        requests:
+          memory: 32Gi
+    "bcc":
+      default:
+        requests:
+          memory: 22Gi
+    "bind":
+      default:
+        requests:
+          cpu: "16"
+    "binutils":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "boost":
+      default:
+        requests:
+          cpu: "16"
+          memory: 42Gi
+    "botan2":
+      default:
+        requests:
+          memory: 22Gi
+    "bpftrace":
+      default:
+        requests:
+          memory: 16Gi
+    "bullet":
+      default:
+        requests:
+          memory: 22Gi
+    "c-ares":
+      default:
+        requests:
+          cpu: "8"
+          memory: 11Gi
+    "cartographer":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "ceph":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "cereal":
+      default:
+        requests:
+          memory: 29Gi
+    "certmonger":
+      default:
+        requests:
+          cpu: "32"
+    "chatglm.cpp":
+      default:
+        requests:
+          memory: 11Gi
+    "cinnamon-mozjs78":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "cjs":
+      default:
+        requests:
+          memory: 20Gi
+    "clamav":
+      default:
+        requests:
+          cpu: "8"
+    "clang":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "clang-15":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "claws-mail":
+      default:
+        requests:
+          memory: 22Gi
+    "cmake":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "coreutils":
+      default:
+        requests:
+          cpu: "16"
+    "cppcheck":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "crash":
+      default:
+        requests:
+          memory: 32Gi
+    "cri-o":
+      default:
+        requests:
+          memory: 22Gi
+    "cryfs":
+      default:
+        requests:
+          memory: 22Gi
+    "cryptopp":
+      default:
+        requests:
+          memory: 22Gi
+    "cryptsetup":
+      default:
+        requests:
+          cpu: "8"
+    "cups":
+      default:
+        requests:
+          cpu: "16"
+    "curl":
+      default:
+        requests:
+          cpu: "16"
+    "datovka":
+      default:
+        requests:
+          memory: 22Gi
+    "dde-api":
+      default:
+        requests:
+          memory: 22Gi
+    "dde-app-services":
+      default:
+        requests:
+          memory: 13Gi
+    "dde-calendar":
+      default:
+        requests:
+          memory: 22Gi
+    "dde-introduction":
+      default:
+        requests:
+          memory: 20Gi
+    "dde-launcher":
+      default:
+        requests:
+          memory: 22Gi
+    "dde-qt-dbus-factory":
+      default:
+        requests:
+          memory: 22Gi
+    "dde-session-shell":
+      default:
+        requests:
+          memory: 32Gi
+    "deepin-clone":
+      default:
+        requests:
+          memory: 12Gi
+    "deepin-compressor":
+      default:
+        requests:
+          memory: 16Gi
+    "deepin-devicemanager":
+      default:
+        requests:
+          memory: 15Gi
+    "deepin-draw":
+      default:
+        requests:
+          memory: 25Gi
+    "deepin-editor":
+      default:
+        requests:
+          memory: 15Gi
+    "deepin-image-editor":
+      default:
+        requests:
+          memory: 16Gi
+    "deepin-image-viewer":
+      default:
+        requests:
+          memory: 19Gi
+    "deepin-log-viewer":
+      default:
+        requests:
+          memory: 32Gi
+    "deepin-manual":
+      default:
+        requests:
+          memory: 16Gi
+    "deepin-movie":
+      default:
+        requests:
+          memory: 25Gi
+    "deepin-music":
+      default:
+        requests:
+          memory: 17Gi
+    "deepin-reader":
+      default:
+        requests:
+          memory: 22Gi
+    "deepin-terminal":
+      default:
+        requests:
+          memory: 17Gi
+    "deepin-wallpapers":
+      default:
+        requests:
+          memory: 22Gi
+    "demos":
+      default:
+        requests:
+          memory: 25Gi
+    "disruptor":
+      default:
+        requests:
+          memory: 22Gi
+    "dovecot":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "doxygen":
+      default:
+        requests:
+          memory: 32Gi
+    "dpdk":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "dtkcore":
+      default:
+        requests:
+          memory: 16Gi
+    "dtkgui":
+      default:
+        requests:
+          memory: 13Gi
+    "dtkwidget":
+      default:
+        requests:
+          memory: 32Gi
+    "dtkwidget2":
+      default:
+        requests:
+          memory: 22Gi
+    "dyninst":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "e2fsprogs":
+      default:
+        requests:
+          cpu: "32"
+    "eclipse":
+      default:
+        requests:
+          memory: 32Gi
+    "eclipse-emf":
+      default:
+        requests:
+          memory: 11Gi
+    "eclipselink":
+      default:
+        requests:
+          memory: 11Gi
+    "efl":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "eigenpy":
+      default:
+        requests:
+          memory: 37Gi
+    "elixir":
+      default:
+        requests:
+          cpu: "32"
+    "emacs":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "emacs-auctex":
+      default:
+        requests:
+          cpu: "8"
+    "environment-modules":
+      default:
+        requests:
+          cpu: "32"
+    "epiphany":
+      default:
+        requests:
+          cpu: "16"
+    "erlang":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "evolution-data-server":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "examples":
+      default:
+        requests:
+          memory: 17Gi
+    "exempi":
+      default:
+        requests:
+          cpu: "8"
+    "extra-cmake-modules":
+      default:
+        requests:
+          cpu: "16"
+    "fcl":
+      default:
+        requests:
+          memory: 32Gi
+    "featherpad":
+      default:
+        requests:
+          memory: 17Gi
+    "festival":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "ffmpeg":
+      default:
+        requests:
+          memory: 22Gi
+    "fftw":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "findbugs":
+      default:
+        requests:
+          cpu: "8"
+    "firebird":
+      default:
+        requests:
+          memory: 32Gi
+    "firefox":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "fish":
+      default:
+        requests:
+          memory: 17Gi
+    "flatbuffers":
+      default:
+        requests:
+          memory: 22Gi
+    "flink":
+      default:
+        requests:
+          memory: 32Gi
+    "flume":
+      default:
+        requests:
+          memory: 11Gi
+    "fmt":
+      default:
+        requests:
+          memory: 12Gi
+    "fontforge":
+      default:
+        requests:
+          cpu: "8"
+    "foomatic-db":
+      default:
+        requests:
+          cpu: "16"
+    "foros":
+      default:
+        requests:
+          memory: 12Gi
+    "freeimage":
+      default:
+        requests:
+          memory: 11Gi
+    "galera":
+      default:
+        requests:
+          memory: 22Gi
+    "gammaray":
+      default:
+        requests:
+          memory: 32Gi
+    "gawk":
+      default:
+        requests:
+          cpu: "8"
+    "gcc":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "gcc-7":
+      default:
+        requests:
+          memory: 32Gi
+    "gcc-cross":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "gdb":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "gearmand":
+      default:
+        requests:
+          memory: 17Gi
+    "gegl04":
+      default:
+        requests:
+          memory: 11Gi
+    "geometry2":
+      default:
+        requests:
+          memory: 15Gi
+    "geometry_tutorials":
+      default:
+        requests:
+          memory: 11Gi
+    "geos":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "gettext":
+      default:
+        requests:
+          cpu: "16"
+    "gimp":
+      default:
+        requests:
+          memory: 32Gi
+    "git":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "gjs":
+      default:
+        requests:
+          memory: 12Gi
+    "glib2":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "glibc":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "glibmm24":
+      default:
+        requests:
+          memory: 22Gi
+    "glusterfs":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "gnome-builder":
+      default:
+        requests:
+          memory: 32Gi
+    "gnome-calendar":
+      default:
+        requests:
+          memory: 11Gi
+    "gnome-software":
+      default:
+        requests:
+          memory: 11Gi
+    "gnome-system-monitor":
+      default:
+        requests:
+          memory: 15Gi
+    "gnome-user-docs":
+      default:
+        requests:
+          memory: 12Gi
+    "gnu-free-fonts":
+      default:
+        requests:
+          cpu: "8"
+    "gnulib":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "gnuplot":
+      default:
+        requests:
+          cpu: "16"
+          memory: 12Gi
+    "gnutls":
+      default:
+        requests:
+          cpu: "16"
+    "google-noto-cjk-fonts":
+      default:
+        requests:
+          memory: 22Gi
+    "google-noto-emoji-fonts":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "google-noto-fonts":
+      default:
+        requests:
+          memory: 13Gi
+    "gparted":
+      default:
+        requests:
+          memory: 23Gi
+    "gperftools":
+      default:
+        requests:
+          cpu: "8"
+    "gpgme":
+      default:
+        requests:
+          cpu: "8"
+          memory: 16Gi
+    "gradle":
+      default:
+        requests:
+          memory: 17Gi
+    "grafana":
+      default:
+        requests:
+          memory: 11Gi
+    "grantlee-qt5":
+      default:
+        requests:
+          memory: 15Gi
+    "graphviz":
+      default:
+        requests:
+          cpu: "16"
+    "greatsql":
+      default:
+        requests:
+          cpu: "8"
+          memory: 128Gi
+    "grid_map":
+      default:
+        requests:
+          memory: 22Gi
+    "gromacs":
+      default:
+        requests:
+          memory: 64Gi
+    "groovy":
+      default:
+        requests:
+          memory: 22Gi
+    "grpc":
+      default:
+        requests:
+          cpu: "8"
+          memory: 64Gi
+    "grub2":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "gsl":
+      default:
+        requests:
+          cpu: "16"
+    "gsoap":
+      default:
+        requests:
+          memory: 22Gi
+    "gstreamer1-plugins-bad-free":
+      default:
+        requests:
+          cpu: "16"
+    "gtest":
+      default:
+        requests:
+          memory: 12Gi
+    "gtk2":
+      default:
+        requests:
+          memory: 22Gi
+    "gtk3":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "gtk4":
+      default:
+        requests:
+          memory: 32Gi
+    "gtkmm24":
+      default:
+        requests:
+          memory: 22Gi
+    "gtkmm30":
+      default:
+        requests:
+          memory: 32Gi
+    "guile":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "hadoop":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "hadoop-3.1":
+      default:
+        requests:
+          memory: 22Gi
+    "harfbuzz":
+      default:
+        requests:
+          cpu: "16"
+          memory: 12Gi
+    "hbase":
+      default:
+        requests:
+          memory: 22Gi
+    "hdf5":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "hibernate":
+      default:
+        requests:
+          memory: 12Gi
+    "hibernate4":
+      default:
+        requests:
+          memory: 11Gi
+    "highlight":
+      default:
+        requests:
+          memory: 22Gi
+    "hive":
+      default:
+        requests:
+          memory: 22Gi
+    "hivex":
+      default:
+        requests:
+          cpu: "16"
+    "hplip":
+      default:
+        requests:
+          cpu: "8"
+    "hpp-fcl":
+      default:
+        requests:
+          memory: 52Gi
+    "hwinfo":
+      default:
+        requests:
+          cpu: "16"
+    "hwloc":
+      default:
+        requests:
+          cpu: "16"
+    "hyperscan":
+      default:
+        requests:
+          memory: 32Gi
+    "iSulad":
+      default:
+        requests:
+          memory: 32Gi
+    "ibus":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "icedtea-web":
+      default:
+        requests:
+          cpu: "8"
+    "icu":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "icu4j":
+      default:
+        requests:
+          memory: 22Gi
+    "ignition_math6_vendor":
+      default:
+        requests:
+          memory: 12Gi
+    "image_pipeline":
+      default:
+        requests:
+          memory: 16Gi
+    "imu_tools":
+      default:
+        requests:
+          memory: 11Gi
+    "indicator-china-weather":
+      default:
+        requests:
+          memory: 15Gi
+    "infinispan":
+      default:
+        requests:
+          memory: 12Gi
+    "ipxe":
+      default:
+        requests:
+          memory: 22Gi
+    "jackson-databind":
+      default:
+        requests:
+          memory: 13Gi
+    "jboss-dmr":
+      default:
+        requests:
+          memory: 13Gi
+    "jetty":
+      default:
+        requests:
+          memory: 11Gi
+    "k3s":
+      default:
+        requests:
+          memory: 22Gi
+    "kafka":
+      default:
+        requests:
+          memory: 22Gi
+    "kata-containers":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "kde-cli-tools":
+      default:
+        requests:
+          memory: 12Gi
+    "kde-connect":
+      default:
+        requests:
+          memory: 22Gi
+    "kernel":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "kernel:kernel-rt":
+      default:
+        requests:
+          cpu: "32"
+          memory: 16Gi
+    "kf5-akonadi-calendar":
+      default:
+        requests:
+          memory: 16Gi
+    "kf5-akonadi-contacts":
+      default:
+        requests:
+          memory: 22Gi
+    "kf5-akonadi-mime":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-akonadi-search":
+      default:
+        requests:
+          memory: 20Gi
+    "kf5-akonadi-server":
+      default:
+        requests:
+          memory: 32Gi
+    "kf5-attica":
+      default:
+        requests:
+          memory: 15Gi
+    "kf5-baloo":
+      default:
+        requests:
+          memory: 17Gi
+    "kf5-bluez-qt":
+      default:
+        requests:
+          memory: 20Gi
+    "kf5-calendarsupport":
+      default:
+        requests:
+          memory: 13Gi
+    "kf5-kcalendarcore":
+      default:
+        requests:
+          memory: 16Gi
+    "kf5-kconfig":
+      default:
+        requests:
+          memory: 19Gi
+    "kf5-kcontacts":
+      default:
+        requests:
+          memory: 16Gi
+    "kf5-kcoreaddons":
+      default:
+        requests:
+          memory: 16Gi
+    "kf5-kdeclarative":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kdelibs4support":
+      default:
+        requests:
+          memory: 22Gi
+    "kf5-kfilemetadata":
+      default:
+        requests:
+          memory: 12Gi
+    "kf5-khtml":
+      default:
+        requests:
+          memory: 32Gi
+    "kf5-kimageformats":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kimap":
+      default:
+        requests:
+          memory: 15Gi
+    "kf5-kio":
+      default:
+        requests:
+          memory: 32Gi
+    "kf5-kirigami2":
+      default:
+        requests:
+          memory: 12Gi
+    "kf5-kjsembed":
+      default:
+        requests:
+          memory: 15Gi
+    "kf5-kldap":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kmailtransport":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kmime":
+      default:
+        requests:
+          memory: 12Gi
+    "kf5-knewstuff":
+      default:
+        requests:
+          memory: 12Gi
+    "kf5-knotifications":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kpimtextedit":
+      default:
+        requests:
+          memory: 17Gi
+    "kf5-kquickcharts":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kservice":
+      default:
+        requests:
+          memory: 12Gi
+    "kf5-ktexteditor":
+      default:
+        requests:
+          memory: 32Gi
+    "kf5-kunitconversion":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kwallet":
+      default:
+        requests:
+          memory: 17Gi
+    "kf5-kwayland":
+      default:
+        requests:
+          memory: 17Gi
+    "kf5-kwidgetsaddons":
+      default:
+        requests:
+          memory: 20Gi
+    "kf5-kwindowsystem":
+      default:
+        requests:
+          memory: 11Gi
+    "kf5-kxmlgui":
+      default:
+        requests:
+          memory: 15Gi
+    "kf5-libkleo":
+      default:
+        requests:
+          memory: 17Gi
+    "kf5-libksieve":
+      default:
+        requests:
+          memory: 22Gi
+    "kf5-mailcommon":
+      default:
+        requests:
+          memory: 32Gi
+    "kf5-mailimporter":
+      default:
+        requests:
+          memory: 12Gi
+    "kf5-messagelib":
+      default:
+        requests:
+          memory: 32Gi
+    "kf5-modemmanager-qt":
+      default:
+        requests:
+          memory: 28Gi
+    "kf5-networkmanager-qt":
+      default:
+        requests:
+          memory: 22Gi
+    "kf5-pimcommon":
+      default:
+        requests:
+          memory: 16Gi
+    "kf5-plasma":
+      default:
+        requests:
+          memory: 13Gi
+    "kf5-purpose":
+      default:
+        requests:
+          memory: 13Gi
+    "kf5-solid":
+      default:
+        requests:
+          memory: 13Gi
+    "kf5-syndication":
+      default:
+        requests:
+          memory: 16Gi
+    "kiran-authentication-service":
+      default:
+        requests:
+          memory: 12Gi
+    "kiran-calculator":
+      default:
+        requests:
+          memory: 12Gi
+    "kiran-cc-daemon":
+      default:
+        requests:
+          memory: 22Gi
+    "kiran-control-panel":
+      default:
+        requests:
+          memory: 32Gi
+    "kiran-flameshot":
+      default:
+        requests:
+          memory: 17Gi
+    "kiran-menu":
+      default:
+        requests:
+          memory: 24Gi
+    "kiran-widgets-qt5":
+      default:
+        requests:
+          memory: 15Gi
+    "konsole5":
+      default:
+        requests:
+          memory: 22Gi
+    "ktextaddons":
+      default:
+        requests:
+          memory: 19Gi
+    "kuasar":
+      default:
+        requests:
+          memory: 32Gi
+    "kubernetes":
+      default:
+        requests:
+          memory: 32Gi
+    "kuserfeedback":
+      default:
+        requests:
+          memory: 13Gi
+    "kwayland-server":
+      default:
+        requests:
+          memory: 17Gi
+    "kwin":
+      default:
+        requests:
+          memory: 64Gi
+    "kylin-burner":
+      default:
+        requests:
+          memory: 13Gi
+    "kylin-calculator":
+      default:
+        requests:
+          memory: 16Gi
+    "kylin-ipmsg":
+      default:
+        requests:
+          memory: 21Gi
+    "kylin-music":
+      default:
+        requests:
+          memory: 19Gi
+    "kylin-nm":
+      default:
+        requests:
+          memory: 21Gi
+    "kylin-photo-viewer":
+      default:
+        requests:
+          memory: 23Gi
+    "kylin-recorder":
+      default:
+        requests:
+          memory: 17Gi
+    "kylin-scanner":
+      default:
+        requests:
+          memory: 20Gi
+    "kylin-screenshot":
+      default:
+        requests:
+          memory: 17Gi
+    "kylin-video":
+      default:
+        requests:
+          memory: 16Gi
+    "kylin-weather":
+      default:
+        requests:
+          memory: 17Gi
+    "kyua":
+      default:
+        requests:
+          memory: 22Gi
+    "lapack":
+      default:
+        requests:
+          memory: 22Gi
+    "laser_filters":
+      default:
+        requests:
+          memory: 11Gi
+    "latex2html":
+      default:
+        requests:
+          cpu: "8"
+    "ldns":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "leveldb":
+      default:
+        requests:
+          cpu: "8"
+    "libabigail":
+      default:
+        requests:
+          cpu: "8"
+          memory: 16Gi
+    "libarchive":
+      default:
+        requests:
+          cpu: "16"
+    "libbluray":
+      default:
+        requests:
+          cpu: "8"
+    "libclc":
+      default:
+        requests:
+          memory: 22Gi
+    "libconfig":
+      default:
+        requests:
+          cpu: "8"
+    "libdb":
+      default:
+        requests:
+          memory: 22Gi
+    "libdnf":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "libevent":
+      default:
+        requests:
+          cpu: "8"
+    "libffado":
+      default:
+        requests:
+          memory: 13Gi
+    "libffi":
+      default:
+        requests:
+          cpu: "8"
+    "libg2o-release":
+      default:
+        requests:
+          memory: 33Gi
+    "libgee":
+      default:
+        requests:
+          cpu: "8"
+    "libguestfs":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "libkcapi":
+      default:
+        requests:
+          cpu: "32"
+    "libkgapi":
+      default:
+        requests:
+          memory: 19Gi
+    "libkscreen-qt5":
+      default:
+        requests:
+          memory: 12Gi
+    "libkysdk-applications":
+      default:
+        requests:
+          memory: 15Gi
+    "libldb":
+      default:
+        requests:
+          cpu: "16"
+    "libmediainfo":
+      default:
+        requests:
+          memory: 22Gi
+    "libmemcached":
+      default:
+        requests:
+          cpu: "16"
+    "libpointmatcher":
+      default:
+        requests:
+          memory: 24Gi
+    "libqalculate":
+      default:
+        requests:
+          memory: 12Gi
+    "libqb":
+      default:
+        requests:
+          cpu: "8"
+    "libqmi":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "librealsense":
+      default:
+        requests:
+          memory: 37Gi
+    "librsvg2":
+      default:
+        requests:
+          memory: 22Gi
+    "libsass":
+      default:
+        requests:
+          memory: 16Gi
+    "libseccomp":
+      default:
+        requests:
+          cpu: "16"
+    "libtheora":
+      default:
+        requests:
+          cpu: "8"
+    "libtommath":
+      default:
+        requests:
+          cpu: "8"
+    "libtool":
+      default:
+        requests:
+          cpu: "32"
+    "libunistring":
+      default:
+        requests:
+          cpu: "16"
+    "libuser":
+      default:
+        requests:
+          cpu: "16"
+    "libvdpau":
+      default:
+        requests:
+          cpu: "8"
+    "libvirt":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "libvma":
+      default:
+        requests:
+          memory: 12Gi
+    "libvpx":
+      default:
+        requests:
+          memory: 16Gi
+    "libxsmm":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "linux-firmware":
+      default:
+        requests:
+          memory: 11Gi
+    "linux-sgx":
+      default:
+        requests:
+          memory: 32Gi
+    "lld-15":
+      default:
+        requests:
+          memory: 28Gi
+    "lldb":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "llvm":
+      default:
+        requests:
+          memory: 128Gi
+    "llvm-15":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "llvm-bolt":
+      default:
+        requests:
+          cpu: "48"
+          memory: 128Gi
+    "llvm-bolt-15":
+      default:
+        requests:
+          memory: 128Gi
+    "llvm-mlir":
+      default:
+        requests:
+          memory: 41Gi
+    "lucenepp":
+      default:
+        requests:
+          memory: 22Gi
+    "lustre":
+      default:
+        requests:
+          memory: 22Gi
+    "lxc":
+      default:
+        requests:
+          memory: 32Gi
+    "lyx":
+      default:
+        requests:
+          memory: 32Gi
+    "man-db":
+      default:
+        requests:
+          cpu: "8"
+    "mariadb":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "mate-system-monitor":
+      default:
+        requests:
+          memory: 11Gi
+    "mavros":
+      default:
+        requests:
+          memory: 22Gi
+    "memkind":
+      default:
+        requests:
+          cpu: "16"
+          memory: 13Gi
+    "mesa":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "message_filters":
+      default:
+        requests:
+          memory: 13Gi
+    "metrics":
+      default:
+        requests:
+          cpu: "16"
+    "mlir-15":
+      default:
+        requests:
+          memory: 64Gi
+    "mockito":
+      default:
+        requests:
+          memory: 13Gi
+    "mod_wsgi":
+      default:
+        requests:
+          memory: 22Gi
+    "moveit2":
+      default:
+        requests:
+          memory: 33Gi
+    "moveit_msgs":
+      default:
+        requests:
+          memory: 22Gi
+    "moveit_visual_tools":
+      default:
+        requests:
+          memory: 11Gi
+    "mozjs102":
+      default:
+        requests:
+          memory: 53Gi
+    "mozjs78":
+      default:
+        requests:
+          cpu: "8"
+          memory: 64Gi
+    "mpich":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "muffin":
+      default:
+        requests:
+          memory: 11Gi
+    "mustache-java":
+      default:
+        requests:
+          memory: 64Gi
+    "mutter":
+      default:
+        requests:
+          memory: 32Gi
+    "mvapich2":
+      default:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+    "mysql":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "mysql5":
+      default:
+        requests:
+          memory: 32Gi
+    "nao_lola":
+      default:
+        requests:
+          memory: 11Gi
+    "navigation2":
+      default:
+        requests:
+          memory: 43Gi
+    "nbdkit":
+      default:
+        requests:
+          cpu: "16"
+    "ncbi-blast":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "ncurses":
+      default:
+        requests:
+          memory: 32Gi
+    "neo4j":
+      default:
+        requests:
+          memory: 32Gi
+    "nestos-installer":
+      default:
+        requests:
+          memory: 32Gi
+    "net-snmp":
+      default:
+        requests:
+          cpu: "16"
+    "netpbm":
+      default:
+        requests:
+          cpu: "16"
+    "nghttp2":
+      default:
+        requests:
+          memory: 12Gi
+    "nodejs":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "nodejs-flot":
+      default:
+        requests:
+          memory: 11Gi
+    "nodelet_core":
+      default:
+        requests:
+          cpu: "16"
+    "nss":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "numactl":
+      default:
+        requests:
+          cpu: "8"
+    "numpy":
+      default:
+        requests:
+          memory: 22Gi
+    "oath-toolkit":
+      default:
+        requests:
+          cpu: "8"
+    "ocaml":
+      default:
+        requests:
+          cpu: "16"
+    "octomap_rviz_plugins":
+      default:
+        requests:
+          memory: 11Gi
+    "okular":
+      default:
+        requests:
+          memory: 32Gi
+    "ompl":
+      default:
+        requests:
+          memory: 32Gi
+    "oneDNN":
+      default:
+        requests:
+          cpu: "16"
+          memory: 35Gi
+    "oozie":
+      default:
+        requests:
+          memory: 13Gi
+    "open-vm-tools":
+      default:
+        requests:
+          cpu: "16"
+    "openblas":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "opencv":
+      default:
+        requests:
+          memory: 32Gi
+    "opengauss-server":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "openhpi":
+      default:
+        requests:
+          cpu: "32"
+    "openjdk-1.8.0":
+      default:
+        requests:
+          memory: 64Gi
+    "openjdk-11":
+      default:
+        requests:
+          memory: 64Gi
+    "openjdk-17":
+      default:
+        requests:
+          memory: 64Gi
+    "openjdk-latest":
+      default:
+        requests:
+          memory: 64Gi
+    "openldap":
+      default:
+        requests:
+          cpu: "32"
+    "openmp-15":
+      default:
+        requests:
+          memory: 11Gi
+    "openmpi":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "openssl":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "openttd":
+      default:
+        requests:
+          memory: 32Gi
+    "openvpn":
+      default:
+        requests:
+          cpu: "8"
+    "openvswitch":
+      default:
+        requests:
+          memory: 22Gi
+    "opus":
+      default:
+        requests:
+          cpu: "8"
+    "orocos_kdl":
+      default:
+        requests:
+          memory: 16Gi
+    "ostree":
+      default:
+        requests:
+          cpu: "32"
+    "ovirt-engine":
+      default:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+    "pacemaker":
+      default:
+        requests:
+          cpu: "32"
+    "passenger":
+      default:
+        requests:
+          memory: 22Gi
+    "pavucontrol":
+      default:
+        requests:
+          memory: 11Gi
+    "pcp":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "pcs":
+      default:
+        requests:
+          cpu: "8"
+          memory: 11Gi
+    "peony":
+      default:
+        requests:
+          memory: 32Gi
+    "peony-extensions":
+      default:
+        requests:
+          memory: 19Gi
+    "percona-xtrabackup":
+      default:
+        requests:
+          memory: 32Gi
+    "perl":
+      default:
+        requests:
+          cpu: "16"
+    "perl-IO-Socket-SSL":
+      default:
+        requests:
+          cpu: "8"
+    "perl-Regexp-Common":
+      default:
+        requests:
+          cpu: "8"
+    "perl-Tk":
+      default:
+        requests:
+          cpu: "8"
+    "perl-libwww-perl":
+      default:
+        requests:
+          cpu: "8"
+    "php":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "pick_ik":
+      default:
+        requests:
+          memory: 11Gi
+    "pipewire":
+      default:
+        requests:
+          cpu: "8"
+    "plasma-breeze":
+      default:
+        requests:
+          memory: 16Gi
+    "plasma-workspace":
+      default:
+        requests:
+          memory: 32Gi
+    "poco":
+      default:
+        requests:
+          memory: 22Gi
+    "podman":
+      default:
+        requests:
+          memory: 22Gi
+    "polly-15":
+      default:
+        requests:
+          memory: 29Gi
+    "poppler":
+      default:
+        requests:
+          memory: 22Gi
+    "postgresql":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "proj":
+      default:
+        requests:
+          memory: 32Gi
+    "protobuf":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "protobuf2":
+      default:
+        requests:
+          memory: 12Gi
+    "pstoedit":
+      default:
+        requests:
+          cpu: "8"
+    "pybind11":
+      default:
+        requests:
+          memory: 27Gi
+    "pycharm-community":
+      default:
+        requests:
+          memory: 11Gi
+    "python-behave":
+      default:
+        requests:
+          cpu: "8"
+    "python-maturin":
+      default:
+        requests:
+          memory: 22Gi
+    "python-pandas":
+      default:
+        requests:
+          memory: 22Gi
+    "python-qt5":
+      default:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+    "python-scikit-learn":
+      default:
+        requests:
+          memory: 22Gi
+    "python-tensorboard":
+      default:
+        requests:
+          memory: 36Gi
+    "python-xgboost":
+      default:
+        requests:
+          memory: 13Gi
+    "python3":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "pytorch":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "qca":
+      default:
+        requests:
+          memory: 19Gi
+    "qemu":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "qpid-proton":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "qscintilla":
+      default:
+        requests:
+          memory: 22Gi
+    "qt":
+      default:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+    "qt-mobility":
+      default:
+        requests:
+          memory: 32Gi
+    "qt5-qt3d":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "qt5-qtbase":
+      default:
+        requests:
+          memory: 64Gi
+    "qt5-qtcanvas3d":
+      default:
+        requests:
+          memory: 24Gi
+    "qt5-qtcharts":
+      default:
+        requests:
+          memory: 22Gi
+    "qt5-qtconnectivity":
+      default:
+        requests:
+          memory: 22Gi
+    "qt5-qtdatavis3d":
+      default:
+        requests:
+          memory: 22Gi
+    "qt5-qtdeclarative":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "qt5-qtenginio":
+      default:
+        requests:
+          memory: 11Gi
+    "qt5-qtlocation":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "qt5-qtmultimedia":
+      default:
+        requests:
+          memory: 32Gi
+    "qt5-qtquickcontrols":
+      default:
+        requests:
+          memory: 19Gi
+    "qt5-qtquickcontrols2":
+      default:
+        requests:
+          memory: 32Gi
+    "qt5-qtremoteobjects":
+      default:
+        requests:
+          memory: 12Gi
+    "qt5-qtscript":
+      default:
+        requests:
+          memory: 22Gi
+    "qt5-qtscxml":
+      default:
+        requests:
+          memory: 12Gi
+    "qt5-qtsensors":
+      default:
+        requests:
+          memory: 16Gi
+    "qt5-qtserialport":
+      default:
+        requests:
+          memory: 12Gi
+    "qt5-qtsvg":
+      default:
+        requests:
+          memory: 16Gi
+    "qt5-qttools":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "qt5-qtvirtualkeyboard":
+      default:
+        requests:
+          memory: 15Gi
+    "qt5-qtwayland":
+      default:
+        requests:
+          memory: 32Gi
+    "qt5-qtwebengine":
+      default:
+        requests:
+          cpu: "64"
+          memory: 128Gi
+    "qt5-qtwebkit":
+      default:
+        requests:
+          cpu: "32"
+          memory: 64Gi
+    "qt5-qtxmlpatterns":
+      default:
+        requests:
+          memory: 22Gi
+    "qt5-ukui-platformtheme":
+      default:
+        requests:
+          memory: 15Gi
+    "qt5integration":
+      default:
+        requests:
+          memory: 13Gi
+    "qt6-qt3d":
+      default:
+        requests:
+          memory: 32Gi
+    "qt6-qt5compat":
+      default:
+        requests:
+          memory: 17Gi
+    "qt6-qtbase":
+      default:
+        requests:
+          memory: 64Gi
+    "qt6-qtcharts":
+      default:
+        requests:
+          memory: 32Gi
+    "qt6-qtdatavis3d":
+      default:
+        requests:
+          memory: 22Gi
+    "qt6-qtdeclarative":
+      default:
+        requests:
+          memory: 64Gi
+    "qt6-qtdoc":
+      default:
+        requests:
+          memory: 13Gi
+    "qt6-qtlocation":
+      default:
+        requests:
+          memory: 22Gi
+    "qt6-qtlottie":
+      default:
+        requests:
+          memory: 12Gi
+    "qt6-qtmultimedia":
+      default:
+        requests:
+          memory: 22Gi
+    "qt6-qtpositioning":
+      default:
+        requests:
+          memory: 12Gi
+    "qt6-qtserialbus":
+      default:
+        requests:
+          memory: 16Gi
+    "qt6-qtshadertools":
+      default:
+        requests:
+          memory: 16Gi
+    "qt6-qtsvg":
+      default:
+        requests:
+          memory: 11Gi
+    "qt6-qtwayland":
+      default:
+        requests:
+          memory: 32Gi
+    "qtav":
+      default:
+        requests:
+          memory: 22Gi
+    "rabbitmq-server":
+      default:
+        requests:
+          cpu: "8"
+    "randomizedtesting":
+      default:
+        requests:
+          memory: 12Gi
+    "range-v3":
+      default:
+        requests:
+          memory: 22Gi
+    "raspberrypi-kernel":
+      default:
+        requests:
+          memory: 64Gi
+    "rcl":
+      default:
+        requests:
+          memory: 13Gi
+    "rclcpp":
+      default:
+        requests:
+          memory: 40Gi
+    "rclpy":
+      default:
+        requests:
+          memory: 17Gi
+    "rcutils":
+      default:
+        requests:
+          memory: 11Gi
+    "realsense-ros":
+      default:
+        requests:
+          memory: 15Gi
+    "rmf_simulation":
+      default:
+        requests:
+          memory: 12Gi
+    "rmf_task":
+      default:
+        requests:
+          memory: 12Gi
+    "rmf_traffic":
+      default:
+        requests:
+          memory: 32Gi
+    "rmw_fastrtps":
+      default:
+        requests:
+          memory: 17Gi
+    "robot_calibration":
+      default:
+        requests:
+          memory: 22Gi
+    "robot_controllers":
+      default:
+        requests:
+          memory: 13Gi
+    "robot_state_publisher":
+      default:
+        requests:
+          memory: 12Gi
+    "rocksdb":
+      default:
+        requests:
+          memory: 64Gi
+    "ros2_base":
+      default:
+        requests:
+          memory: 30Gi
+    "ros2_control":
+      default:
+        requests:
+          memory: 12Gi
+    "ros_comm":
+      default:
+        requests:
+          memory: 32Gi
+    "ros_tutorials":
+      default:
+        requests:
+          memory: 11Gi
+    "rosbag2":
+      default:
+        requests:
+          memory: 28Gi
+    "rpm":
+      default:
+        requests:
+          cpu: "32"
+    "rpm-ostree":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "rsyslog":
+      default:
+        requests:
+          cpu: "8"
+    "ruby":
+      default:
+        requests:
+          memory: 22Gi
+    "rust":
+      default:
+        requests:
+          cpu: "32"
+          memory: 24Gi
+    "rviz":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "rviz_2d_overlay_plugins":
+      default:
+        requests:
+          memory: 12Gi
+    "rviz_visual_tools":
+      default:
+        requests:
+          memory: 11Gi
+    "samba":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "sane-backends":
+      default:
+        requests:
+          cpu: "8"
+    "sbt":
+      default:
+        requests:
+          memory: 22Gi
+    "scala":
+      default:
+        requests:
+          memory: 32Gi
+    "scap-security-guide":
+      default:
+        requests:
+          cpu: "8"
+          memory: 42Gi
+    "scap-workbench":
+      default:
+        requests:
+          memory: 13Gi
+    "schemas":
+      default:
+        requests:
+          memory: 22Gi
+    "scipy":
+      default:
+        requests:
+          memory: 32Gi
+    "selinux-policy":
+      default:
+        requests:
+          cpu: "16"
+    "sigil":
+      default:
+        requests:
+          memory: 22Gi
+    "signon":
+      default:
+        requests:
+          memory: 17Gi
+    "simde":
+      default:
+        requests:
+          cpu: "32"
+    "slam_toolbox":
+      default:
+        requests:
+          memory: 22Gi
+    "snapd-glib":
+      default:
+        requests:
+          memory: 13Gi
+    "soccer_visualization":
+      default:
+        requests:
+          memory: 11Gi
+    "softhsm":
+      default:
+        requests:
+          cpu: "8"
+    "source-highlight":
+      default:
+        requests:
+          memory: 11Gi
+    "spark":
+      default:
+        requests:
+          memory: 32Gi
+    "spirv-llvm-translator":
+      default:
+        requests:
+          memory: 28Gi
+    "spirv-tools":
+      default:
+        requests:
+          memory: 32Gi
+    "sqlite":
+      default:
+        requests:
+          cpu: "8"
+    "squid":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "sssd":
+      default:
+        requests:
+          cpu: "16"
+    "stratovirt":
+      default:
+        requests:
+          memory: 22Gi
+    "strongswan":
+      default:
+        requests:
+          cpu: "16"
+    "subversion":
+      default:
+        requests:
+          cpu: "32"
+          memory: 22Gi
+    "swig":
+      default:
+        requests:
+          cpu: "16"
+    "swri_console":
+      default:
+        requests:
+          memory: 16Gi
+    "syslinux":
+      default:
+        requests:
+          cpu: "8"
+    "sysmaster":
+      default:
+        requests:
+          memory: 22Gi
+    "sysstat":
+      default:
+        requests:
+          cpu: "8"
+    "system_modes":
+      default:
+        requests:
+          memory: 15Gi
+    "systemd":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "systemtap":
+      default:
+        requests:
+          cpu: "16"
+          memory: 17Gi
+    "tar":
+      default:
+        requests:
+          cpu: "16"
+    "tbb":
+      default:
+        requests:
+          memory: 16Gi
+    "tcl":
+      default:
+        requests:
+          cpu: "8"
+    "tesseract":
+      default:
+        requests:
+          memory: 22Gi
+    "texlive-base":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "texworks":
+      default:
+        requests:
+          memory: 16Gi
+    "thin-provisioning-tools":
+      default:
+        requests:
+          memory: 12Gi
+    "three-eight-nine-ds-base":
+      default:
+        requests:
+          memory: 22Gi
+    "thrift":
+      default:
+        requests:
+          cpu: "16"
+          memory: 22Gi
+    "tog-pegasus":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "tracker3-miners":
+      default:
+        requests:
+          cpu: "8"
+    "trafficserver":
+      default:
+        requests:
+          memory: 32Gi
+    "turtlebot3":
+      default:
+        requests:
+          memory: 11Gi
+    "ublox":
+      default:
+        requests:
+          memory: 20Gi
+    "uboot-tools":
+      default:
+        requests:
+          memory: 32Gi
+    "udisks2":
+      default:
+        requests:
+          cpu: "16"
+    "uimaj":
+      default:
+        requests:
+          memory: 22Gi
+    "ukui-biometric-manager":
+      default:
+        requests:
+          memory: 17Gi
+    "ukui-bluetooth":
+      default:
+        requests:
+          memory: 16Gi
+    "ukui-clock":
+      default:
+        requests:
+          memory: 19Gi
+    "ukui-control-center":
+      default:
+        requests:
+          memory: 32Gi
+    "ukui-greeter":
+      default:
+        requests:
+          memory: 16Gi
+    "ukui-interface":
+      default:
+        requests:
+          memory: 15Gi
+    "ukui-kwin":
+      default:
+        requests:
+          memory: 32Gi
+    "ukui-media":
+      default:
+        requests:
+          memory: 11Gi
+    "ukui-menu":
+      default:
+        requests:
+          memory: 26Gi
+    "ukui-notebook":
+      default:
+        requests:
+          memory: 16Gi
+    "ukui-power-manager":
+      default:
+        requests:
+          memory: 11Gi
+    "ukui-screensaver":
+      default:
+        requests:
+          memory: 16Gi
+    "ukui-search":
+      default:
+        requests:
+          memory: 17Gi
+    "ukui-session-manager":
+      default:
+        requests:
+          memory: 11Gi
+    "ukui-settings-daemon":
+      default:
+        requests:
+          memory: 22Gi
+    "ukui-sidebar":
+      default:
+        requests:
+          memory: 17Gi
+    "ukui-window-switch":
+      default:
+        requests:
+          memory: 12Gi
+    "unixODBC":
+      default:
+        requests:
+          cpu: "16"
+    "usbguard":
+      default:
+        requests:
+          cpu: "16"
+          memory: 15Gi
+    "vala":
+      default:
+        requests:
+          cpu: "32"
+    "varnish":
+      default:
+        requests:
+          cpu: "16"
+    "vdsm-jsonrpc-java":
+      default:
+        requests:
+          memory: 24Gi
+    "vim":
+      default:
+        requests:
+          cpu: "8"
+          memory: 22Gi
+    "vision_msgs":
+      default:
+        requests:
+          memory: 19Gi
+    "vte291":
+      default:
+        requests:
+          memory: 13Gi
+    "webkit2gtk3":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "wireshark":
+      default:
+        requests:
+          cpu: "8"
+          memory: 32Gi
+    "wxGTK3":
+      default:
+        requests:
+          cpu: "16"
+          memory: 32Gi
+    "xapian-core":
+      default:
+        requests:
+          memory: 11Gi
+    "xdelta":
+      default:
+        requests:
+          cpu: "8"
+    "xorg-x11-fonts":
+      default:
+        requests:
+          cpu: "8"
+    "xorg-x11-server":
+      default:
+        requests:
+          cpu: "16"
+    "xsd":
+      default:
+        requests:
+          memory: 20Gi
+    "youker-assistant":
+      default:
+        requests:
+          memory: 16Gi
+    "zegrapher":
+      default:
+        requests:
+          memory: 29Gi
+    "zincati":
+      default:
+        requests:
+          memory: 22Gi
+    "zstd":
+      default:
+        requests:
+          cpu: "8"
+    "flang-15":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "pcl":
+      default:
+        requests:
+          memory: 48Gi
+    "octave":
+      default:
+        requests:
+          memory: 32Gi
+    "ceres-solver":
+      default:
+        requests:
+          memory: 36Gi
+    "dde-control-center":
+      default:
+        requests:
+          memory: 32Gi
+    "lld":
+      default:
+        requests:
+          memory: 24Gi
+    "dde-file-manager":
+      default:
+        requests:
+          memory: 20Gi
+    "arangodb":
+      default:
+        requests:
+          memory: 48Gi
+    "sophus":
+      default:
+        requests:
+          memory: 32Gi
+    "tensorflow":
+      default:
+        requests:
+          memory: 64Gi
+    "dde-network-core":
+      default:
+        requests:
+          memory: 20Gi
+    "mindspore":
+      default:
+        requests:
+          memory: 32Gi
+    "pin-for-openEuler":
+      default:
+        requests:
+          memory: 128Gi
+    "gcc-for-openEuler":
+      default:
+        requests:
+          memory: 128Gi
+    "qtwebkit":
+      default:
+        requests:
+          cpu: "32"
+          memory: 32Gi
+    "ubs-engine":
+      default:
+        requests:
+          memory: 32Gi
+    "ubs-comm":
+      default:
+        requests:
+          memory: 32Gi
+    "llvm-toolset-21":
+      default:
+        requests:
+          memory: 128Gi
+    "llvm-toolset-20":
+      default:
+        requests:
+          memory: 128Gi
+    "oceanbase-ce":
+      default:
+        requests:
+          memory: 128Gi
+    "openjdk-21":
+      default:
+        requests:
+          memory: 64Gi
+    "qt6-qtwebengine":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "ogre":
+      default:
+        requests:
+          memory: 48Gi
+    "llvm-toolset-17":
+      default:
+        requests:
+          memory: 64Gi
+    "llvm-toolset-18":
+      default:
+        requests:
+          memory: 64Gi
+    "llvm-toolset-19":
+      default:
+        requests:
+          memory: 128Gi
+    "webkitgtk":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "webkitgtk6.0":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "webkit2gtk4.1":
+      default:
+        requests:
+          cpu: "32"
+          memory: 128Gi
+    "triton-cpu":
+      default:
+        requests:
+          memory: 48Gi
+    "thunderbird":
+      default:
+        requests:
+          memory: 100Gi
+    "libreoffice":
+      default:
+        requests:
+          memory: 128Gi
+    "openvino":
+      default:
+        requests:
+          memory: 128Gi
+    "intel-graphics-compiler":
+      default:
+        requests:
+          memory: 128Gi
+    "mold":
+      default:
+        requests:
+          memory: 50Gi
+    "kea":
+      default:
+        requests:
+          memory: 50Gi
+    "qt-creator":
+      default:
+        requests:
+          memory: 100Gi
+    "jpegxl":
+      default:
+        requests:
+          memory: 48Gi
+    "KASandbox":
+      default:
+        requests:
+          memory: 48Gi
+    "classic-flang":
+      default:
+        requests:
+          memory: 64Gi
