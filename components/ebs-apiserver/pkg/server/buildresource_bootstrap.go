@@ -1,16 +1,15 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"sigs.k8s.io/yaml"
 
 	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
 )
@@ -36,9 +35,7 @@ func ensureDefaultBuildResource(ctx context.Context, storage defaultBuildResourc
 	}
 
 	obj := new(ebsv1.BuildResource)
-	decoder := json.NewDecoder(bytes.NewReader(defaultBuildResourceTemplate))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(obj); err != nil {
+	if err := yaml.UnmarshalStrict(defaultBuildResourceTemplate, obj); err != nil {
 		return fmt.Errorf("decode embedded default BuildResource: %w", err)
 	}
 	_, err = storage.Create(ctx, obj, nil, &metav1.CreateOptions{})

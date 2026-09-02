@@ -186,6 +186,13 @@ func TestValidateBuildResource(t *testing.T) {
 	}{
 		{name: "valid project table with extensible architecture", object: validBuildResource("project-a", "riscv64")},
 		{
+			name: "allows multibuild package names",
+			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+				Default:  validResourceRequirements(),
+				Packages: map[string]ebsv1.PackageResourceConfig{"kernel:kernel-rt": {Default: validResourceRequirements()}},
+			}},
+		},
+		{
 			name: "allows table limits to default to requests",
 			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
 				Default:  ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "4", "memory": "8Gi"}},
@@ -257,7 +264,7 @@ func TestValidateBuildResource(t *testing.T) {
 			},
 		},
 	}
-	tests[5].object.Name = "other"
+	tests[6].object.Name = "other"
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertErrorList(t, ValidateBuildResource(tt.object), tt.wantErrs, tt.wantFields)
