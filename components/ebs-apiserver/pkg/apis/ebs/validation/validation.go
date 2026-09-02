@@ -49,14 +49,8 @@ func ValidateProjectStatusUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList 
 
 func ValidateSnapshot(obj *ebsv1.Snapshot) field.ErrorList {
 	var allErrs field.ErrorList
-	if len(obj.Spec.SpecCommits) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "specCommits"), "specCommits is required"))
-	}
 	if len(obj.Spec.BuildTargets) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets"), "at least one build target is required"))
-	}
-	if len(obj.Spec.PackageRepos) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "packageRepos"), "at least one package repo is required"))
 	}
 	return allErrs
 }

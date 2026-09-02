@@ -177,7 +177,7 @@ curl -k https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts
 
 ### 创建 Snapshot
 
-`specCommits`、`buildTargets` 和 `packageRepos` 为必填字段：
+`buildTargets` 为必填字段；无法获取 commit 时，`specCommits` 可以省略或为空对象：
 
 ```bash
 curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/snapshots \
@@ -197,11 +197,6 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
         "os": "openEuler-22.03-LTS",
         "arch": "aarch64",
         "buildFlag": true
-      }],
-      "packageRepos": [{
-        "name": "gcc",
-        "url": "https://example.com/src-openeuler/gcc.git",
-        "commitId": "0123456789abcdef"
       }]
     }
   }'
