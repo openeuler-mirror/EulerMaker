@@ -125,7 +125,7 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 	} else {
 		defaultErrs = validateBuildResources(obj.Spec.Default, specPath.Child("default"), true)
 		if len(defaultErrs) == 0 {
-			effectiveDefault := ebsv1.MergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
+			effectiveDefault := mergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
 			defaultErrs = append(defaultErrs, validateEffectiveResourceLimits(effectiveDefault, specPath.Child("default"))...)
 		}
 	}
@@ -142,12 +142,12 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 		if !packageDefault && len(config.Arches) == 0 {
 			allErrs = append(allErrs, field.Required(packagePath, "default or at least one architecture is required"))
 		}
-		packageBase := ebsv1.MergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
+		packageBase := mergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
 		packageBaseValid := len(defaultErrs) == 0
 		if packageDefault {
 			packageErrs := validateBuildResources(config.Default, packagePath.Child("default"), false)
 			allErrs = append(allErrs, packageErrs...)
-			packageBase = ebsv1.MergeResourceRequirements(packageBase, config.Default)
+			packageBase = mergeResourceRequirements(packageBase, config.Default)
 			packageBaseValid = packageBaseValid && len(packageErrs) == 0
 			if packageBaseValid {
 				effectiveErrs := validateEffectiveResourceLimits(packageBase, packagePath.Child("default"))
@@ -167,7 +167,7 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 			archErrs := validateBuildResources(resources, archPath, false)
 			allErrs = append(allErrs, archErrs...)
 			if packageBaseValid && len(archErrs) == 0 {
-				effective := ebsv1.MergeResourceRequirements(packageBase, resources)
+				effective := mergeResourceRequirements(packageBase, resources)
 				allErrs = append(allErrs, validateEffectiveResourceLimits(effective, archPath)...)
 			}
 		}
@@ -181,6 +181,29 @@ func ValidateBuildResourceUpdate(newObj, oldObj *ebsv1.BuildResource) field.Erro
 
 func resourceRequirementsEmpty(resources ebsv1.ResourceRequirements) bool {
 	return len(resources.Requests) == 0 && len(resources.Limits) == 0
+}
+
+func mergeResourceRequirements(base, override ebsv1.ResourceRequirements) ebsv1.ResourceRequirements {
+	merged := ebsv1.ResourceRequirements{Requests: map[string]string{}, Limits: map[string]string{}}
+	for name, value := range base.Requests {
+		merged.Requests[name] = value
+		if _, hasLimit := base.Limits[name]; !hasLimit {
+			merged.Limits[name] = value
+		}
+	}
+	for name, value := range base.Limits {
+		merged.Limits[name] = value
+	}
+	for name, value := range override.Requests {
+		merged.Requests[name] = value
+		if _, hasLimit := override.Limits[name]; !hasLimit {
+			merged.Limits[name] = value
+		}
+	}
+	for name, value := range override.Limits {
+		merged.Limits[name] = value
+	}
+	return merged
 }
 
 func validateBuildResources(resources ebsv1.ResourceRequirements, path *field.Path, complete bool) field.ErrorList {
