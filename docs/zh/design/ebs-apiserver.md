@@ -431,7 +431,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 当前校验逻辑位于 `pkg/apis/ebs/validation/validation.go`，主要包括：
 
 - Project 名称必须满足 DNS1123 label，并至少包含一个带 `os`、`arch` 的构建目标。
-- Snapshot 必须包含 `specCommits`、`buildTargets` 和 `packageRepos`。
+- Snapshot 必须包含 `buildTargets`；无法获取 commit 时，`specCommits` 允许为空。
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `ct`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
@@ -529,11 +529,6 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
         "os": "openEuler-22.03-LTS",
         "arch": "aarch64",
         "buildFlag": true
-      }],
-      "packageRepos": [{
-        "name": "gcc",
-        "url": "https://example.com/src-openeuler/gcc.git",
-        "commitId": "0123456789abcdef"
       }]
     }
   }'

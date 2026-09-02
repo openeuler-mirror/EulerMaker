@@ -100,13 +100,17 @@ func TestValidateSnapshot(t *testing.T) {
 			snapshot: validSnapshot(),
 		},
 		{
-			name:     "requires spec commits, build targets and package repos",
+			name: "valid with empty spec commits",
+			snapshot: &ebsv1.Snapshot{Spec: ebsv1.SnapshotSpec{
+				BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
+			}},
+		},
+		{
+			name:     "requires build targets",
 			snapshot: &ebsv1.Snapshot{},
-			wantErrs: 3,
+			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
-				"spec.specCommits":  field.ErrorTypeRequired,
 				"spec.buildTargets": field.ErrorTypeRequired,
-				"spec.packageRepos": field.ErrorTypeRequired,
 			},
 		},
 	}
@@ -121,10 +125,8 @@ func TestValidateSnapshot(t *testing.T) {
 
 func TestValidateSnapshotUpdate(t *testing.T) {
 	errs := ValidateSnapshotUpdate(&ebsv1.Snapshot{}, validSnapshot())
-	assertErrorList(t, errs, 3, map[string]field.ErrorType{
-		"spec.specCommits":  field.ErrorTypeRequired,
+	assertErrorList(t, errs, 1, map[string]field.ErrorType{
 		"spec.buildTargets": field.ErrorTypeRequired,
-		"spec.packageRepos": field.ErrorTypeRequired,
 	})
 }
 
@@ -454,7 +456,6 @@ func validSnapshot() *ebsv1.Snapshot {
 				"pkg-a": {CommitId: "abc123"},
 			},
 			BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
-			PackageRepos: []ebsv1.PackageRepo{{Name: "pkg-a"}},
 		},
 	}
 }
