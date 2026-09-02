@@ -435,6 +435,57 @@ func TestProjectMemberCannotDeleteSubresource(t *testing.T) {
 	}
 }
 
+func TestProjectUsersHaveReadOnlyBuildResourceAccess(t *testing.T) {
+	var buildResourceWrites atomic.Int32
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case apiPrefix + "/projects/project-a":
+			_, _ = io.WriteString(w, `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true"}}}`)
+		case apiPrefix + "/projects/project-a/buildresources", apiPrefix + "/projects/project-a/buildresources/project-a":
+			if r.Method != http.MethodGet {
+				buildResourceWrites.Add(1)
+			}
+			_, _ = io.WriteString(w, `{"kind":"BuildResource","metadata":{"name":"project-a"}}`)
+		default:
+			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+	}), 100, 200)
+
+	for _, username := range []string{"alice", "bob"} {
+		for _, path := range []string{
+			apiPrefix + "/projects/project-a/buildresources",
+			apiPrefix + "/projects/project-a/buildresources/project-a",
+		} {
+			req := authenticatedRequest(t, http.MethodGet, path, nil, userClaims(username))
+			rec := httptest.NewRecorder()
+			gw.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s GET %s: expected 200, got %d: %s", username, path, rec.Code, rec.Body.String())
+			}
+		}
+
+		writes := []struct {
+			method string
+			path   string
+		}{
+			{http.MethodPost, apiPrefix + "/projects/project-a/buildresources"},
+			{http.MethodPut, apiPrefix + "/projects/project-a/buildresources/project-a"},
+			{http.MethodDelete, apiPrefix + "/projects/project-a/buildresources/project-a"},
+		}
+		for _, write := range writes {
+			req := authenticatedRequest(t, write.method, write.path, strings.NewReader(`{}`), userClaims(username))
+			rec := httptest.NewRecorder()
+			gw.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s %s: expected 403, got %d: %s", username, write.method, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if buildResourceWrites.Load() != 0 {
+		t.Fatalf("project user writes reached upstream %d times", buildResourceWrites.Load())
+	}
+}
+
 func TestProjectOwnerCanModifyMemberLabelsButNotOwnerLabel(t *testing.T) {
 	var proxied atomic.Int32
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -635,6 +686,46 @@ func TestOpsCanOnlyGetAndListRunners(t *testing.T) {
 		gw.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("%s %s: got %d", tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
+func TestOpsCanOperateBuildResources(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
+			t.Fatalf("unexpected identity headers: %#v", r.Header)
+		}
+		w.WriteHeader(http.StatusOK)
+	}), 100, 200)
+
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, apiPrefix + "/projects/project-a/buildresources"},
+		{http.MethodPost, apiPrefix + "/projects/project-a/buildresources"},
+		{http.MethodGet, apiPrefix + "/projects/project-a/buildresources/project-a"},
+		{http.MethodPut, apiPrefix + "/projects/project-a/buildresources/project-a"},
+		{http.MethodDelete, apiPrefix + "/projects/project-a/buildresources/project-a"},
+	}
+	for _, tc := range tests {
+		req := authenticatedRequest(t, tc.method, tc.path, strings.NewReader(`{}`), opsClaims())
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: expected 200, got %d: %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPatch, apiPrefix + "/projects/project-a/buildresources/project-a"},
+		{http.MethodPost, apiPrefix + "/projects/project-a/buildresources/project-a"},
+	} {
+		req := authenticatedRequest(t, tc.method, tc.path, strings.NewReader(`{}`), opsClaims())
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: expected 403, got %d: %s", tc.method, tc.path, rec.Code, rec.Body.String())
 		}
 	}
 }

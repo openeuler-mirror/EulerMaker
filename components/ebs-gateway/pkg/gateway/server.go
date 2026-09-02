@@ -1063,6 +1063,9 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 		if !projectAllowsUser(project, ident.Subject) {
 			return authzDecision{}, fmt.Errorf("project access denied")
 		}
+		if route.resource == "buildresources" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			return authzDecision{}, fmt.Errorf("build resource access is read-only for project users")
+		}
 		if project.Labels[ownerUserLabel] != ident.Subject && r.Method == http.MethodDelete {
 			return authzDecision{}, fmt.Errorf("project member cannot delete resources")
 		}
@@ -1142,8 +1145,20 @@ func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Id
 
 func (g *Gateway) authorizeOps(r *http.Request) (authzDecision, error) {
 	route := parseRoute(r.URL.Path)
+	if route.resource == "buildresources" && route.project != "" && len(route.rest) == 0 {
+		if route.name == "" {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodPost {
+				return authzDecision{}, nil
+			}
+			return authzDecision{}, fmt.Errorf("unsupported build resource collection method")
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodPut || r.Method == http.MethodDelete {
+			return authzDecision{}, nil
+		}
+		return authzDecision{}, fmt.Errorf("unsupported build resource method")
+	}
 	if route.resource != "runners" || len(route.rest) != 0 {
-		return authzDecision{}, fmt.Errorf("ops access is limited to runner reads")
+		return authzDecision{}, fmt.Errorf("ops access is limited to runner reads and build resource operations")
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return authzDecision{}, fmt.Errorf("ops runner access is read-only")
@@ -1894,7 +1909,8 @@ func parseRoute(path string) routeInfo {
 }
 
 func isProjectScopedResource(resource string) bool {
-	return resource == "snapshots" || resource == "builds" || resource == "buildinfos" || resource == "rpmrepos" || resource == "jobs"
+	_, ok := projectScopedResources[resource]
+	return ok
 }
 
 func isProjectObjectWrite(method string, route routeInfo) bool {

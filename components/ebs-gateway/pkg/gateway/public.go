@@ -19,6 +19,15 @@ var publicProjectResources = map[string]struct{}{
 	"jobs":       {},
 }
 
+var projectScopedResources = map[string]struct{}{
+	"snapshots":      {},
+	"builds":         {},
+	"buildinfos":     {},
+	"rpmrepos":       {},
+	"jobs":           {},
+	"buildresources": {},
+}
+
 func hasAuthorizationHeader(r *http.Request) bool {
 	for key := range r.Header {
 		if strings.EqualFold(key, "Authorization") {
@@ -33,7 +42,7 @@ func isInternalGlobalAPIPath(path string) bool {
 	if !ok || len(parts) == 0 {
 		return false
 	}
-	_, internal := publicProjectResources[parts[0]]
+	_, internal := projectScopedResources[parts[0]]
 	return internal
 }
 
