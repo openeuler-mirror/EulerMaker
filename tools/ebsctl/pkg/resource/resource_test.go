@@ -22,6 +22,28 @@ func TestResolveAliasesAndPaths(t *testing.T) {
 	}
 }
 
+func TestBuildResourceAliasesAndPaths(t *testing.T) {
+	for _, alias := range []string{"buildresource", "buildresources", "BuildResource", "br"} {
+		definition, err := Resolve(alias)
+		if err != nil || definition.Kind != "BuildResource" {
+			t.Fatalf("resolve %q: %#v %v", alias, definition, err)
+		}
+	}
+	definition, _ := Resolve("br")
+	if path, err := definition.CollectionPath("project-a"); err != nil || path != "/apis/ebs/v1/projects/project-a/buildresources" {
+		t.Fatalf("unexpected collection path %q: %v", path, err)
+	}
+	if path, err := definition.ObjectPath("project-a", "project-a"); err != nil || path != "/apis/ebs/v1/projects/project-a/buildresources/project-a" {
+		t.Fatalf("unexpected object path %q: %v", path, err)
+	}
+	if _, err := definition.ObjectPath("project-a", "other"); err == nil {
+		t.Fatal("expected BuildResource name mismatch error")
+	}
+	if definition.SupportsPatch() || definition.SupportsWatch() {
+		t.Fatal("BuildResource must not support patch or watch")
+	}
+}
+
 func TestReadManifestsInjectsProjectAndValidates(t *testing.T) {
 	input := `apiVersion: ebs/v1
 kind: Job
@@ -56,5 +78,12 @@ func TestReadManifestsRejectsUnknownFieldAndNamespaceConflict(t *testing.T) {
 	conflict := "apiVersion: ebs/v1\nkind: Job\nmetadata:\n  name: job-a\n  namespace: other\n"
 	if _, err := ReadManifests("-", "project-a", false, strings.NewReader(conflict)); err == nil {
 		t.Fatal("expected namespace conflict")
+	}
+}
+
+func TestReadManifestsRejectsBuildResourceNameDifferentFromProject(t *testing.T) {
+	input := "apiVersion: ebs/v1\nkind: BuildResource\nmetadata:\n  name: other\n"
+	if _, err := ReadManifests("-", "project-a", true, strings.NewReader(input)); err == nil {
+		t.Fatal("expected BuildResource name mismatch error")
 	}
 }

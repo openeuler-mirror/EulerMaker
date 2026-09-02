@@ -134,6 +134,18 @@ func TestGetProjectsMineRejectsUnsupportedUsage(t *testing.T) {
 	}
 }
 
+func TestBuildResourceRejectsUnsupportedCommands(t *testing.T) {
+	streams := Streams{In: strings.NewReader(""), Out: io.Discard, ErrOut: io.Discard}
+	for _, args := range [][]string{
+		{"get", "buildresources", "--watch"},
+		{"patch", "buildresource", "project-a", "--patch", `{}`},
+	} {
+		if code := Execute(context.Background(), streams, args); code != 2 {
+			t.Fatalf("args=%v exit code=%d", args, code)
+		}
+	}
+}
+
 func TestUsageAndAuthenticationExitCodes(t *testing.T) {
 	streams := Streams{In: strings.NewReader(""), Out: io.Discard, ErrOut: io.Discard}
 	if code := Execute(context.Background(), streams, []string{"get", "runner"}); code != 2 {

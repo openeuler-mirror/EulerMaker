@@ -53,6 +53,9 @@ func (a *App) getCommand() *cobra.Command {
 			if err != nil {
 				return UsageError("%v", err)
 			}
+			if watch && !definition.SupportsWatch() {
+				return UsageError("resource %s does not support watch", definition.Kind)
+			}
 			if mine && (definition.Kind != "Project" || len(args) != 1 || watch) {
 				return UsageError("--mine is only supported by non-watch 'get projects'")
 			}
@@ -244,6 +247,13 @@ func (a *App) patchCommand() *cobra.Command {
 			return validateOutput(output.format)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			definition, err := resource.Resolve(args[0])
+			if err != nil {
+				return UsageError("%v", err)
+			}
+			if !definition.SupportsPatch() {
+				return UsageError("resource %s does not support patch", definition.Kind)
+			}
 			definition, api, path, err := a.namedResource(args[0], args[1], true)
 			if err != nil {
 				return err
