@@ -21,7 +21,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
-	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	ebsv1 "ebs-api/ebs/v1"
 	iamapi "ebs-apiserver/pkg/apis/iam"
 	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
 	generatedopenapi "ebs-apiserver/pkg/generated/openapi"

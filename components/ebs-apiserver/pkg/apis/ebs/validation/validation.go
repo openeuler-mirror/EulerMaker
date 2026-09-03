@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 var (

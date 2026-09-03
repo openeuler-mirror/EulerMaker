@@ -11,7 +11,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/yaml"
 
-	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 const defaultBuildResourceName = "default"

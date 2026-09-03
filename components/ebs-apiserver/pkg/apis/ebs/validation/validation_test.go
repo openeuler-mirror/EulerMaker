@@ -6,7 +6,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestValidateProject(t *testing.T) {

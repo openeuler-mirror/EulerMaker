@@ -5,7 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/registry/rest"
 
-	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/apis/ebs/validation"
 	"ebs-apiserver/pkg/registry/ebs/scopedresource"
 )

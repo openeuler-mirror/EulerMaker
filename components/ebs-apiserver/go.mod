@@ -3,6 +3,7 @@ module ebs-apiserver
 go 1.21
 
 require (
+	ebs-api v0.0.0
 	github.com/spf13/pflag v1.0.5
 	k8s.io/api v0.28.4
 	k8s.io/apimachinery v0.28.4
@@ -13,6 +14,8 @@ require (
 	k8s.io/kube-openapi v0.0.0-20230717233707-2695361300d9
 	golang.org/x/crypto v0.15.0
 )
+
+replace ebs-api => ../../api
 
 require (
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
