@@ -158,9 +158,8 @@ type Snapshot struct {
 
 ```go
 type SnapshotSpec struct {
-    PrevSnapshot     string                 `json:"prevSnapshot,omitempty"`
-    SpecCommits      map[string]SpecCommit  `json:"specCommits,omitempty"`
-    BuildTargets     []BuildTarget          `json:"buildTargets,omitempty"`
+    PrevSnapshot string                `json:"prevSnapshot,omitempty"`
+    SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
 }
 ```
 
@@ -168,7 +167,6 @@ type SnapshotSpec struct {
 |------|---------|------|------|
 | `prevSnapshot` | string | 否 | 同一 Project 下的前一快照名称（增量构建用） |
 | `specCommits` | map[string]SpecCommit | 否 | 各包 spec 提交信息；无法获取 commit 时允许为空 |
-| `buildTargets` | []BuildTarget | 是 | 构建目标 |
 
 ### SnapshotStatus
 

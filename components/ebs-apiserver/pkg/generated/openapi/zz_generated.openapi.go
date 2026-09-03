@@ -1727,24 +1727,11 @@ func schema_pkg_apis_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Op
 							},
 						},
 					},
-					"buildTargets": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.BuildTarget"),
-									},
-								},
-							},
-						},
-					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-apiserver/pkg/apis/ebs/v1.BuildTarget", "ebs-apiserver/pkg/apis/ebs/v1.SpecCommit"},
+			"ebs-apiserver/pkg/apis/ebs/v1.SpecCommit"},
 	}
 }
 

@@ -42,7 +42,6 @@ type Snapshot struct {
 type SnapshotSpec struct {
 	PrevSnapshot string                `json:"prevSnapshot,omitempty"`
 	SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
-	BuildTargets []BuildTarget         `json:"buildTargets,omitempty"`
 }
 
 type SnapshotStatus struct {
