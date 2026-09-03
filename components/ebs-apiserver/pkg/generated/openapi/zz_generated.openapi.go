@@ -16,14 +16,14 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 	return map[string]common.OpenAPIDefinition{
 		"ebs-apiserver/pkg/apis/ebs/v1.BootstrapRepo":         schema_pkg_apis_ebs_v1_BootstrapRepo(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.Build":                 schema_pkg_apis_ebs_v1_Build(ref),
-		"ebs-apiserver/pkg/apis/ebs/v1.BuildResource":         schema_pkg_apis_ebs_v1_BuildResource(ref),
-		"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceList":     schema_pkg_apis_ebs_v1_BuildResourceList(ref),
-		"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceSpec":     schema_pkg_apis_ebs_v1_BuildResourceSpec(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildInfo":             schema_pkg_apis_ebs_v1_BuildInfo(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoList":         schema_pkg_apis_ebs_v1_BuildInfoList(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoSpec":         schema_pkg_apis_ebs_v1_BuildInfoSpec(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildInfoStatus":       schema_pkg_apis_ebs_v1_BuildInfoStatus(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildList":             schema_pkg_apis_ebs_v1_BuildList(ref),
+		"ebs-apiserver/pkg/apis/ebs/v1.BuildResource":         schema_pkg_apis_ebs_v1_BuildResource(ref),
+		"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceList":     schema_pkg_apis_ebs_v1_BuildResourceList(ref),
+		"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceSpec":     schema_pkg_apis_ebs_v1_BuildResourceSpec(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildSpec":             schema_pkg_apis_ebs_v1_BuildSpec(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildStatus":           schema_pkg_apis_ebs_v1_BuildStatus(ref),
 		"ebs-apiserver/pkg/apis/ebs/v1.BuildTarget":           schema_pkg_apis_ebs_v1_BuildTarget(ref),
@@ -355,6 +355,129 @@ func schema_pkg_apis_ebs_v1_BuildList(ref common.ReferenceCallback) common.OpenA
 		},
 		Dependencies: []string{
 			"ebs-apiserver/pkg/apis/ebs/v1.Build", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_ebs_v1_BuildResource(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.BuildResourceSpec"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_ebs_v1_BuildResourceList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.BuildResource"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"ebs-apiserver/pkg/apis/ebs/v1.BuildResource", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_ebs_v1_BuildResourceSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"default": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements"),
+						},
+					},
+					"packages": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.PackageResourceConfig"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"packages"},
+			},
+		},
+		Dependencies: []string{
+			"ebs-apiserver/pkg/apis/ebs/v1.PackageResourceConfig", "ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements"},
 	}
 }
 
@@ -830,6 +953,40 @@ func schema_pkg_apis_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Ope
 		},
 		Dependencies: []string{
 			"ebs-apiserver/pkg/apis/ebs/v1.BuildTarget"},
+	}
+}
+
+func schema_pkg_apis_ebs_v1_PackageResourceConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"default": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements"),
+						},
+					},
+					"arches": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-apiserver/pkg/apis/ebs/v1.ResourceRequirements"},
 	}
 }
 
@@ -2304,9 +2461,15 @@ func schema_pkg_apis_iam_v1_UserSpec(ref common.ReferenceCallback) common.OpenAP
 					"scopes": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{Schema: &spec.Schema{SchemaProps: spec.SchemaProps{
-								Type: []string{"string"},
-							}}},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
 						},
 					},
 					"displayName": {
