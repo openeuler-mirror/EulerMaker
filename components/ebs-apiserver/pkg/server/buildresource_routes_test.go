@@ -36,15 +36,15 @@ func TestDecodeBuildResourceRejectsUnknownFields(t *testing.T) {
 }
 
 func TestNormalizeBuildResourceIdentity(t *testing.T) {
-	body := io.NopCloser(strings.NewReader(`{"spec":{"packages":{}}}`))
+	body := io.NopCloser(strings.NewReader(`{"metadata":{"name":"custom-table"},"spec":{"packages":{}}}`))
 	obj, err := decodeBuildResource(body)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if err := normalizeBuildResourceIdentity(obj, "project-a", "project-a"); err != nil {
+	if err := normalizeBuildResourceIdentity(obj, "project-a", "custom-table"); err != nil {
 		t.Fatalf("normalize: %v", err)
 	}
-	if obj.Name != "project-a" || obj.Namespace != "project-a" || obj.Kind != "BuildResource" || obj.APIVersion != "ebs/v1" {
+	if obj.Name != "custom-table" || obj.Namespace != "project-a" || obj.Kind != "BuildResource" || obj.APIVersion != "ebs/v1" {
 		t.Fatalf("unexpected object identity: %#v %#v", obj.TypeMeta, obj.ObjectMeta)
 	}
 }

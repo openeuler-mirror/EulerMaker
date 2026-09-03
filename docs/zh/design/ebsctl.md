@@ -71,7 +71,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | Job | `job/jobs` | `job` | Project |
 | BuildInfo | `buildinfo/buildinfos` | `bi` | Project |
 | RpmRepo | `rpmrepo/rpmrepos` | `repo` | Project |
-| BuildResource | `buildresource/buildresources` | `br` | Project（每个 Project 单例） |
+| BuildResource | `buildresource/buildresources` | `br` | Project |
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
 
@@ -115,7 +115,7 @@ ebsctl get jobs --watch
 
 watch 输出 table 时增加 `EVENT` 列；JSON/YAML 模式逐事件输出完整 WatchEvent。连接正常超时后使用最后的 `resourceVersion` 重连；收到资源版本过期响应时重新 list。用户主动中断返回 0，无法恢复的认证或协议错误返回非 0。
 
-`BuildResource` 只提供 Project 级 list/get，不支持 watch。每个 Project 最多存在一个对象，单对象命令中的名称必须与当前 Project 相同，例如：
+`BuildResource` 只提供 Project 级 list/get，不支持 watch。例如：
 
 ```bash
 ebsctl get buildresources -p openeuler-mainline
@@ -143,7 +143,7 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
-`BuildResource` 支持 create、replace 和 delete，但不支持 patch；客户端会在请求发送前拒绝 `patch buildresource`。其清单中的 `metadata.name` 必须与当前 Project 相同；`metadata.namespace` 可以省略并由客户端补齐，显式填写时也必须与当前 Project 相同。普通用户对该资源只有读权限，create、replace 和 delete 仅允许 Ops、Admin 或 System 身份执行。例如：
+`BuildResource` 支持 create、replace 和 delete，但不支持 patch；客户端会在请求发送前拒绝 `patch buildresource`。普通用户对该资源只有读权限，create、replace 和 delete 仅允许 Ops、Admin 或 System 身份执行。例如：
 
 ```bash
 ebsctl create -f buildresource.yaml -p openeuler-mainline
@@ -296,7 +296,7 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 |------|----------|
 | 配置 | context 优先级、0600 权限、原子写入、环境变量覆盖、损坏配置 |
 | 认证 | 登录成功/失败、Token 不进入诊断输出、401、logout、password-stdin |
-| 资源映射 | 所有单复数/短名、Project 路由、未知 GVK、namespace 冲突、BuildResource 名称与 Project 一致性 |
+| 资源映射 | 所有单复数/短名、Project 路由、未知 GVK、namespace 冲突 |
 | CRUD | JSON/YAML、多文档、stdin、resourceVersion 冲突、merge patch、批量错误汇总 |
 | 输出 | table 列、JSON/YAML 合法性、name、stdout/stderr 分离 |
 | Watch | BOOKMARK、断线恢复、410 重新 list、取消、慢消费者、不支持 watch 的资源在本地拒绝 |

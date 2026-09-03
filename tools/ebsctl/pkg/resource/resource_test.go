@@ -36,8 +36,8 @@ func TestBuildResourceAliasesAndPaths(t *testing.T) {
 	if path, err := definition.ObjectPath("project-a", "project-a"); err != nil || path != "/apis/ebs/v1/projects/project-a/buildresources/project-a" {
 		t.Fatalf("unexpected object path %q: %v", path, err)
 	}
-	if _, err := definition.ObjectPath("project-a", "other"); err == nil {
-		t.Fatal("expected BuildResource name mismatch error")
+	if path, err := definition.ObjectPath("project-a", "other"); err != nil || path != "/apis/ebs/v1/projects/project-a/buildresources/other" {
+		t.Fatalf("unexpected custom-name path %q: %v", path, err)
 	}
 	if definition.SupportsPatch() || definition.SupportsWatch() {
 		t.Fatal("BuildResource must not support patch or watch")
@@ -81,9 +81,9 @@ func TestReadManifestsRejectsUnknownFieldAndNamespaceConflict(t *testing.T) {
 	}
 }
 
-func TestReadManifestsRejectsBuildResourceNameDifferentFromProject(t *testing.T) {
+func TestReadManifestsAllowsBuildResourceNameDifferentFromProject(t *testing.T) {
 	input := "apiVersion: ebs/v1\nkind: BuildResource\nmetadata:\n  name: other\n"
-	if _, err := ReadManifests("-", "project-a", true, strings.NewReader(input)); err == nil {
-		t.Fatal("expected BuildResource name mismatch error")
+	if _, err := ReadManifests("-", "project-a", false, strings.NewReader(input)); err != nil {
+		t.Fatalf("read BuildResource manifest: %v", err)
 	}
 }

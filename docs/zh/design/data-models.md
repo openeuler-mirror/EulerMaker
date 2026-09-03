@@ -50,7 +50,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | etcd | `/registry/ebs/jobs/{project}/{name}` |
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | Elasticsearch | `ebs-buildinfos` / `{project}/{name}` |
 | RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | Elasticsearch | `ebs-rpmrepos` / `{project}/{name}` |
-| BuildResource | `/apis/ebs/v1/projects/{project}/buildresources` | 不提供 | Elasticsearch | `ebs-buildresources` / `{project}/{project}` |
+| BuildResource | `/apis/ebs/v1/projects/{project}/buildresources` | 不提供 | Elasticsearch | `ebs-buildresources` / `{project}/{name}` |
 
 表中 Elasticsearch 对象定位格式为“索引 / 文档 ID”。Project scoped 对象统一使用 `{project}/{name}` 作为文档 ID；Job 使用相同层级的 etcd key。只有 Job 和 Runner 存入 etcd 并提供 list/watch。
 
@@ -518,9 +518,9 @@ type RpmRepoList struct {
 
 **API**: `/apis/ebs/v1/projects/{project}/buildresources`
 
-**Elasticsearch**: 索引 `ebs-buildresources`，文档 ID `{project}/{project}`
+**Elasticsearch**: 索引 `ebs-buildresources`，文档 ID `{project}/{name}`
 
-每个 Project 最多存在一个 `BuildResource`，其 `metadata.namespace` 和 `metadata.name` 均等于 Project 名。系统默认对象固定为 `default/default`。Project 对象不存在时如何回退到默认对象，以及 apiserver 如何初始化默认对象，见 [BuildResource 设计文档](./build-resource.md)。
+Project 对象不存在时如何回退到默认对象，以及 apiserver 如何初始化默认对象，见 [BuildResource 设计文档](./build-resource.md)。
 
 `BuildResource` 不注册 `/apis/ebs/v1/buildresources` 全局 API。系统组件、运维工具和普通用户都必须通过明确的 Project 路径访问，避免跨 Project 枚举或误更新资源表。
 

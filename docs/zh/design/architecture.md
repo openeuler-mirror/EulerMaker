@@ -2,17 +2,17 @@
 
 ## 一、设计目标
 
-EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver` 作为统一资源 API 和数据访问入口，以 etcd 和 Elasticsearch 作为组合主存储，通过 list/watch 驱动控制器、调度器和执行机协作。
+EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver` 作为统一资源 API 和数据访问入口，以 etcd 和 Elasticsearch 作为组合主存储，通过资源 API 的 list/watch 或周期性 list 驱动控制器、调度器和执行机协作。
 
 当前架构目标：
 
-- 统一资源 API：Project、Snapshot、Build、Job、Runner 统一通过 `ebs/v1` API 暴露。
+- 统一资源 API：Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResource、Job、Runner 统一通过 `ebs/v1` API 暴露。
 - 统一数据访问：业务组件不直接访问 etcd 和 Elasticsearch，统一通过 `ebs-apiserver` 读写资源。
-- 声明式对象模型：资源由 `metadata/spec/status` 组成，普通更新和 `/status` 更新分离。
-- Watch 驱动协作：controller、scheduler、runner 通过 watch 获取资源变化。
-- Project 业务作用域：Snapshot、Build、Job 归属于 Project，同时提供内部全局 list/watch API 给系统组件。
+- 声明式对象模型：资源由 `metadata/spec/status` 组成；提供 status 的资源将普通更新和 `/status` 更新分离。
+- 事件与查询驱动协作：etcd 中的 Job、Runner 支持 watch；Elasticsearch 中的资源使用 list/get，不模拟 watch。
+- Project 业务作用域：Snapshot、Build、BuildInfo、RpmRepo、BuildResource、Job 归属于 Project；除 BuildResource 外均提供内部全局 list，只有 Job 的全局 API 支持 watch。
 - 构建结果数据面：`artifact-manager` 独立承载构建产物与实时日志正文，避免大文件流量经过资源 API 和 Gateway 数据转发链路。
-- 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch 和 `ebs-apiserver`等组件。
+- 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch、`ebs-apiserver` 等组件。
 
 ---
 
@@ -30,17 +30,17 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
                        v                                           | 整文件上传/
 ┌───────────────────────────────────────────────┐                   | 实时日志追加
 │                ebs-apiserver                  │                   v
-│  ebs/v1 REST API / status subresource / watch │       ┌────────────────────────┐
+│ ebs/v1 REST API / status / scoped list-watch  │       ┌────────────────────────┐
 └───────────────┬──────────────────┬────────────┘       │    artifact-manager    │
                 |                  |                    │ 上传、Manifest、日志 SSE │
                 |                  |                    └───────────┬────────────┘
                 v                  v                                |
 ┌──────────────────────────┐  ┌──────────────────────────┐          v
 │           etcd           │  │      Elasticsearch        │  ┌────────────────────┐
-│   主存储：对象与 watch     │  │   主存储：索引与增强数据   │  │   本地持久化存储    │
+│ Job/Runner：对象与 watch  │  │ 其他资源、IAM 与查询索引  │  │   本地持久化存储    │
 └──────────────────────────┘  └──────────────────────────┘  └────────────────────┘
 
-controllers / scheduler ── REST / list / watch ──> ebs-apiserver
+controllers / scheduler ── REST / list（Job 可 watch）──> ebs-apiserver
 controllers ──读取 Completed Manifest / Artifact──> artifact-manager
 Web UI ──Artifact 查询下载 / 日志 Range + SSE──> artifact-manager
 artifact-manager ──Runner Token 校验──> ebs-gateway
@@ -50,7 +50,7 @@ artifact-manager ──Runner Token 校验──> ebs-gateway
 - 所有资源读写最终都经过 `ebs-apiserver`；
 - runner 的资源 API 统一访问 `ebs-gateway`，便于外部执行机和内部执行机使用同一套访问逻辑；构建正文直接访问 `artifact-manager`。
 - etcd 和 Elasticsearch 都是主存储。
-- etcd 负责对象持久化、resourceVersion 和 list/watch，Elasticsearch 负责对象索引、搜索和增强数据。
+- etcd 保存 Job 和 Runner，提供原生 resourceVersion 与 list/watch；Elasticsearch 保存其余 `ebs/v1` 资源和 IAM 对象，提供 CRUD、分页与查询，但不支持 watch。
 - `artifact-manager` 是构建产物、Job 上传清单和实时日志的数据服务；正文与私有元数据保存在其持久化目录，不写入 etcd 或 Elasticsearch。
 - Runner 直接向 `artifact-manager` 传输文件和日志，`artifact-manager` 通过 `ebs-gateway` 的公开 Token 校验接口校验 Runner Token 的签名、有效期和 scope。首版不校验 Job 与 Runner 的绑定关系。
 
@@ -119,10 +119,10 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 | 组件 | 职责 |
 |------|------|
 | `ebs-gateway` | 系统入口，负责匿名公开读取、认证、鉴权、审计和请求转发 |
-| `ebs-apiserver` | 统一资源 API，负责对象校验、默认值、存储访问、list/watch、`/status` 子资源 |
-| `etcd` | 主存储，保存资源对象、resourceVersion，并提供 list/watch |
-| `Elasticsearch` | 主存储，保存对象索引、搜索字段和增强数据 |
-| `controllers` | 监听 Project/Snapshot/Build 等对象变化，推进资源状态 |
+| `ebs-apiserver` | 统一资源 API，负责对象校验、默认值、存储访问、list，以及 Job/Runner watch 和各资源子资源 |
+| `etcd` | Job、Runner 的主存储，提供原生 resourceVersion 和 list/watch |
+| `Elasticsearch` | Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResource 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
+| `controllers` | 通过 API 查询或监听职责内对象，推进 Snapshot、Build、RpmRepo 等资源状态 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 通过 ebs-gateway 注册 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
 | `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、查询下载及日志 SSE |
@@ -144,9 +144,12 @@ apiVersion: ebs/v1
 
 | 资源 | 作用域 | 说明 |
 |------|--------|------|
-| Project | 集群级 | 项目，是 Snapshot、Build、Job 的业务归属 |
+| Project | 集群级 | 项目，是所有 Project 级资源的业务归属 |
 | Snapshot | Project 级 | 项目快照 |
 | Build | Project 级 | 构建任务 |
+| BuildInfo | Project 级 | 软件包构建依赖与结果信息 |
+| RpmRepo | Project 级 | RPM 仓库解析和发布信息 |
+| BuildResource | Project 级 | 构建资源策略 |
 | Job | Project 级 | 可调度执行任务 |
 | Runner | 集群级 | 执行机 |
 
@@ -187,19 +190,22 @@ PUT    /apis/ebs/v1/projects/{name}/status
 
 ### 5.2 Project 子资源 API
 
-用户侧通过 Project API 管理 Snapshot、Build、Job：
+用户侧通过 Project API 访问 Project 级资源：
 
 ```text
 /apis/ebs/v1/projects/{project}/snapshots
 /apis/ebs/v1/projects/{project}/builds
+/apis/ebs/v1/projects/{project}/buildinfos
+/apis/ebs/v1/projects/{project}/rpmrepos
+/apis/ebs/v1/projects/{project}/buildresources
 /apis/ebs/v1/projects/{project}/jobs
 ```
 
-`{project}` 是对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。
+`{project}` 是对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。BuildResource 不属于匿名公开读取资源，普通 Project owner/member 仅可读取，写操作仅允许 Ops 以上身份。BuildResource 只提供 list/create/get/update/delete，不提供 patch、watch、`/status` 或全局 API。
 
 ### 5.3 内部全局系统 API
 
-调度器和控制器使用各自的 mTLS 身份直连 apiserver，通过内部全局 API 跨 Project list/watch。这些路径不经 Gateway，也不对外部客户端开放：
+调度器和控制器使用各自的 mTLS 身份直连 apiserver，通过内部全局 API 跨 Project list。这些路径不经 Gateway，也不对外部客户端开放：
 
 ```text
 /apis/ebs/v1/snapshots
@@ -209,12 +215,13 @@ PUT    /apis/ebs/v1/projects/{name}/status
 /apis/ebs/v1/jobs
 ```
 
-典型 watch：
+只有 Job 和 Runner 使用 etcd 并支持 watch。典型的全局 Job watch：
 
 ```bash
-curl -k -N 'https://localhost:8443/apis/ebs/v1/builds?watch=true'
 curl -k -N 'https://localhost:8443/apis/ebs/v1/jobs?watch=true'
 ```
+
+BuildResource 不注册 `/apis/ebs/v1/buildresources`；系统组件也必须指定 Project 路径访问。
 
 ### 5.4 Runner API
 
@@ -238,9 +245,9 @@ GET    /apis/ebs/v1/runners/{name}/jobs?watch=true
 
 ## 六、ebs-apiserver
 
-`ebs-apiserver` 基于 `k8s.io/apiserver` 的 `GenericAPIServer` 实现，复用 Kubernetes apiserver 的资源注册、REST storage、watch、resourceVersion、`/status` 子资源和对象元数据机制。
+`ebs-apiserver` 基于 `k8s.io/apiserver` 的 `GenericAPIServer` 实现，复用 Kubernetes apiserver 的资源注册、REST storage、对象元数据机制，以及 etcd 资源的 watch、resourceVersion 和 `/status` 能力；Elasticsearch 资源由 ESStore 提供 CRUD、list 和对应子资源。
 
-Project 子资源 API 由 `project_alias.go` 提供轻量适配：
+常规 Project 子资源 API 由 `project_alias.go` 提供轻量适配：
 
 ```text
 /apis/ebs/v1/projects/{project}/builds
@@ -252,7 +259,7 @@ Project 子资源 API 由 `project_alias.go` 提供轻量适配：
 /apis/ebs/v1/namespaces/{project}/builds
 ```
 
-该内部路径只作为实现细节，外部文档和业务调用统一使用 Project API 和全局系统 API。
+该内部路径只作为实现细节，外部文档和业务调用统一使用 Project API 和全局系统 API。BuildResource 使用独立的 Project scoped 路由实现，并刻意不注册全局 API。apiserver 在进入 Ready 前幂等确保 `default/default` BuildResource 存在；已有对象不会被启动配置覆盖。
 
 详细实现见 [ebs-apiserver.md](./ebs-apiserver.md)。
 
@@ -260,21 +267,14 @@ Project 子资源 API 由 `project_alias.go` 提供轻量适配：
 
 ## 七、存储设计
 
-etcd 主数据路径：
+etcd 只保存需要原生 watch 的 Job 和 Runner：
 
 ```text
-/registry/ebs/projects/{name}
-/registry/ebs/snapshots/{project}/{name}
-/registry/ebs/builds/{project}/{name}
 /registry/ebs/jobs/{project}/{name}
 /registry/ebs/runners/{name}
 ```
 
-这种布局同时满足：
-
-- Project 内对象名称唯一：`{project}/{name}`。
-- 全局 list/watch：监听 `/registry/ebs/builds`、`/registry/ebs/jobs` 等资源前缀。
-- Project 内 list/watch：监听 `/registry/ebs/builds/{project}` 等 Project 子前缀。
+Job 的 `{project}/{name}` 布局同时支持全局和 Project 范围 list/watch；Runner 是集群级资源。
 
 Elasticsearch 索引：
 
@@ -282,11 +282,14 @@ Elasticsearch 索引：
 ebs-projects
 ebs-snapshots
 ebs-builds
-ebs-jobs
-ebs-runners
+ebs-buildinfos
+ebs-rpmrepos
+ebs-buildresources
+ebs-users
+ebs-machineaccounts
 ```
 
-namespaced 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，请求时对 `/` 做 URL escape。
+Project scoped 的 ES 对象统一使用 `{project}/{name}` 作为文档 ID。User、MachineAccount 使用各自名称定位。
 
 ---
 
@@ -297,7 +300,7 @@ namespaced 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，请求
 ```text
 注册：用户 -> ebs-gateway -> ebs-apiserver IAM -> User + 密码凭据
 登录：用户 -> ebs-gateway -> ebs-apiserver IAM -> JWT
-用户 -> ebs-gateway -> ebs-apiserver -> etcd
+用户 -> ebs-gateway -> ebs-apiserver -> etcd / Elasticsearch
 ```
 
 `ebs-gateway` 负责注册和登录入口、认证鉴权及请求代理，`ebs-apiserver` 负责 User/凭据一致性、资源语义和数据访问。注册成功不自动登录，用户需再通过登录接口获取 JWT。
@@ -305,12 +308,14 @@ namespaced 对象写入 ES 时使用 `{project}/{name}` 作为文档 ID，请求
 ### 8.2 Controller 流程
 
 ```text
-controller -> watch Project/Snapshot/Build
-controller -> create/update Snapshot、Build、Job
+controller -> list/get Project、Snapshot、Build、BuildInfo、RpmRepo
+controller -> watch Job（需要事件流时）
+build controller -> get Project BuildResource；不存在时 get default/default
+controller -> create/update Snapshot、Build、BuildInfo、RpmRepo、Job
 controller -> update status
 ```
 
-controller 只通过 API 操作资源，不直接访问 etcd。
+controller 只通过 API 操作资源，不直接访问 etcd 或 Elasticsearch。ES-only 资源不支持 watch，控制器需使用分页 list、显式触发或周期性协调。
 
 ### 8.3 Scheduler 流程
 
@@ -369,6 +374,7 @@ Elasticsearch
 ebs-apiserver
 ebs-gateway
 artifact-manager
+ebs-runner
 ```
 
 启动命令：
@@ -393,7 +399,7 @@ docker compose -f hacks/docker-compose.yml up -d
 
 当前架构后续主要完善方向：
 
-- 生成真实 OpenAPI schema。
-- 完善认证、鉴权、审计与 Project owner/member 用户权限策略。
-- 补齐 controller、scheduler、runner 的实现。
+- 持续校验 OpenAPI schema 与实际资源模型的一致性。
+- 细化各 controller、scheduler 的内部 mTLS 最小权限策略。
+- 补齐 controller，并完善 scheduler、runner 的生产级故障恢复与可观测性。
 - 接入正式的镜像构建和发布流程。

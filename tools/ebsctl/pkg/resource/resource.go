@@ -15,15 +15,14 @@ import (
 const APIPrefix = "/apis/ebs/v1"
 
 type Definition struct {
-	Kind             string
-	Singular         string
-	Plural           string
-	Short            string
-	Namespaced       bool
-	ProjectSingleton bool
-	NoPatch          bool
-	NoWatch          bool
-	Object           func() runtime.Object
+	Kind       string
+	Singular   string
+	Plural     string
+	Short      string
+	Namespaced bool
+	NoPatch    bool
+	NoWatch    bool
+	Object     func() runtime.Object
 }
 
 var definitions = []Definition{
@@ -33,7 +32,7 @@ var definitions = []Definition{
 	{Kind: "Job", Singular: "job", Plural: "jobs", Short: "job", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Job{} }},
 	{Kind: "BuildInfo", Singular: "buildinfo", Plural: "buildinfos", Short: "bi", Namespaced: true, Object: func() runtime.Object { return &ebsv1.BuildInfo{} }},
 	{Kind: "RpmRepo", Singular: "rpmrepo", Plural: "rpmrepos", Short: "repo", Namespaced: true, Object: func() runtime.Object { return &ebsv1.RpmRepo{} }},
-	{Kind: "BuildResource", Singular: "buildresource", Plural: "buildresources", Short: "br", Namespaced: true, ProjectSingleton: true, NoPatch: true, NoWatch: true, Object: func() runtime.Object { return &ebsv1.BuildResource{} }},
+	{Kind: "BuildResource", Singular: "buildresource", Plural: "buildresources", Short: "br", Namespaced: true, NoPatch: true, NoWatch: true, Object: func() runtime.Object { return &ebsv1.BuildResource{} }},
 }
 
 var byName map[string]Definition
@@ -87,9 +86,6 @@ func (d Definition) ObjectPath(project, name string) (string, error) {
 	collection, err := d.CollectionPath(project)
 	if err != nil {
 		return "", err
-	}
-	if d.ProjectSingleton && name != project {
-		return "", fmt.Errorf("resource %s name must equal Project %q", d.Kind, project)
 	}
 	return collection + "/" + url.PathEscape(name), nil
 }

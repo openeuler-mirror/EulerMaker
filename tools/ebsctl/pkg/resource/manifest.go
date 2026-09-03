@@ -132,9 +132,6 @@ func decodeManifests(reader io.Reader, source, project string, validate bool) ([
 			if objectProject == "" {
 				return nil, fmt.Errorf("%s document %d: %s requires a Project", source, document, definition.Kind)
 			}
-			if definition.ProjectSingleton && name != objectProject {
-				return nil, fmt.Errorf("%s document %d: %s name must equal Project %q", source, document, definition.Kind, objectProject)
-			}
 		} else if objectProject != "" {
 			return nil, fmt.Errorf("%s document %d: Project cannot set metadata.namespace", source, document)
 		}
