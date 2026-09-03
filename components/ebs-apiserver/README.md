@@ -11,15 +11,15 @@ go test ./...
 CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
 ```
 
-构建容器镜像：
+在仓库根目录构建容器镜像：
 
 ```bash
-docker build -t eulermaker/ebs-apiserver:dev .
+docker build -f components/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:dev .
 ```
 
 ## OpenAPI 代码生成
 
-修改 `pkg/apis/ebs/v1` 或 `pkg/apis/iam/v1` 下的 API 类型后，需要重新生成 OpenAPI 定义：
+修改 `../../api/ebs/v1` 或 `pkg/apis/iam/v1` 下的 API 类型后，需要重新生成 OpenAPI 定义：
 
 ```bash
 ./hacks/update-openapi.sh

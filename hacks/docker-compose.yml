@@ -51,7 +51,8 @@ services:
 
   ebs-apiserver:
     build:
-      context: ../components/ebs-apiserver
+      context: ..
+      dockerfile: components/ebs-apiserver/Dockerfile
     command:
       - --etcd-servers=http://etcd:2379
       - --es-servers=http://elasticsearch:9200

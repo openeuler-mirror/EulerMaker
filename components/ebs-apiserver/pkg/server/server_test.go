@@ -22,7 +22,7 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
-	ebsv1 "ebs-apiserver/pkg/apis/ebs/v1"
+	ebsv1 "ebs-api/ebs/v1"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
@@ -35,11 +35,11 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	})
 
 	tests := map[string][]string{
-		"ebs-apiserver/pkg/apis/ebs/v1.ProjectSpec":           {"displayName", "buildTargets", "packageRepos"},
-		"ebs-apiserver/pkg/apis/ebs/v1.BuildResourceSpec":     {"default", "packages"},
-		"ebs-apiserver/pkg/apis/ebs/v1.PackageResourceConfig": {"default", "arches"},
-		"ebs-apiserver/pkg/apis/ebs/v1.JobSpec":               {"priority", "runtime", "runtimeSpec", "payload"},
-		"ebs-apiserver/pkg/apis/ebs/v1.RunnerStatus":          {"phase", "capacity", "heartbeat"},
+		"ebs-api/ebs/v1.ProjectSpec":           {"displayName", "buildTargets", "packageRepos"},
+		"ebs-api/ebs/v1.BuildResourceSpec":     {"default", "packages"},
+		"ebs-api/ebs/v1.PackageResourceConfig": {"default", "arches"},
+		"ebs-api/ebs/v1.JobSpec":               {"priority", "runtime", "runtimeSpec", "payload"},
+		"ebs-api/ebs/v1.RunnerStatus":          {"phase", "capacity", "heartbeat"},
 		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":              {"enabled", "scopes", "email"},
 		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":        {"apiVersion", "kind", "metadata", "spec"},
 	}
@@ -56,7 +56,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		}
 	}
 
-	snapshotSpec, ok := definitions["ebs-apiserver/pkg/apis/ebs/v1.SnapshotSpec"]
+	snapshotSpec, ok := definitions["ebs-api/ebs/v1.SnapshotSpec"]
 	if !ok {
 		t.Fatal("SnapshotSpec OpenAPI definition is missing")
 	}

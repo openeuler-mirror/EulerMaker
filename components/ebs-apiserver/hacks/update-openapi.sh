@@ -17,4 +17,4 @@ go run "k8s.io/kube-openapi/cmd/openapi-gen@${openapi_gen_version}" \
   --output-file-base zz_generated.openapi \
   --go-header-file /dev/null \
   --report-filename /dev/null \
-  --input-dirs ebs-apiserver/pkg/apis/ebs/v1,ebs-apiserver/pkg/apis/iam/v1
+  --input-dirs ebs-api/ebs/v1,ebs-apiserver/pkg/apis/iam/v1
