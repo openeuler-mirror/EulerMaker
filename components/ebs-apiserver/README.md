@@ -17,6 +17,24 @@ CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
 docker build -t eulermaker/ebs-apiserver:dev .
 ```
 
+## OpenAPI 代码生成
+
+修改 `pkg/apis/ebs/v1` 或 `pkg/apis/iam/v1` 下的 API 类型后，需要重新生成 OpenAPI 定义：
+
+```bash
+./hacks/update-openapi.sh
+```
+
+脚本使用固定版本的 `openapi-gen`，并将两个 API 包的定义统一写入`pkg/generated/openapi/zz_generated.openapi.go`。生成文件不应手工修改；API 类型、字段或校验标记发生变化时，应运行脚本并一并提交生成结果。
+
+首次执行可能需要下载生成工具。提交前应再次执行脚本，并检查生成文件的格式和差异：
+
+```bash
+./hacks/update-openapi.sh
+git diff --check
+git diff -- pkg/generated/openapi/zz_generated.openapi.go
+```
+
 ## 本地运行
 
 先启动 etcd 和 Elasticsearch，然后执行：
