@@ -214,12 +214,11 @@ func TestValidateBuildResource(t *testing.T) {
 				"spec.default": field.ErrorTypeRequired, "spec.packages": field.ErrorTypeRequired,
 			},
 		},
-		{
-			name:       "name must equal project",
-			object:     validBuildResource("project-a", "x86_64"),
-			wantErrs:   1,
-			wantFields: map[string]field.ErrorType{"metadata.name": field.ErrorTypeInvalid},
-		},
+		{name: "allows a name different from project", object: func() *ebsv1.BuildResource {
+			object := validBuildResource("project-a", "x86_64")
+			object.Name = "custom-table"
+			return object
+		}()},
 		{
 			name:       "rejects invalid architecture",
 			object:     validBuildResource("project-a", "RISC V"),

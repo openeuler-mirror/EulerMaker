@@ -42,6 +42,8 @@
 
 `BuildResource` 是 Project scoped 资源。Project 通过 API 路径和对象的 `metadata.namespace` 表达，不在 `spec` 中重复记录。
 
+约定使用 Project 名作为 `BuildResource` 的名称，但该约定不作为对象校验依据。
+
 资源命名约定：
 
 ```text
@@ -285,13 +287,10 @@ apiserver 创建或更新对象时执行以下校验：
 - `metadata.name` 必须符合 DNS1123 label；
 - `metadata.namespace` 必须存在，并与 API 路径中的 Project 一致；
 - 所有命名空间中的对象都不得声明 `spec.os`；该字段不属于 API 模型；
-- Project 自定义对象的 `metadata.name` 必须等于 `metadata.namespace`，即 Project 名；
 - `spec.default.requests` 必须完整声明 CPU 和 memory；limits 可以缺省，缺省值取同级 requests；
 - Project 自定义对象的 `spec.packages` 不得为空；
 - `default/default` 允许 `spec.packages` 为空，但必须声明有效的 `spec.default`；
 - 软件包键允许使用 `kernel:kernel-rt` 形式表示 multibuild 子包；冒号分隔的每一段都必须是有效的 spec 包名；
-
-上述确定性名称约束保证同一 Project 下只能存在一张有效资源表，不需要额外执行跨对象唯一性查询。
 
 ### 7.2 软件包与架构校验
 

@@ -102,7 +102,7 @@ func (h *buildResourceHandler) create(req *restful.Request, resp *restful.Respon
 		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
-	if err := normalizeBuildResourceIdentity(obj, project, project); err != nil {
+	if err := normalizeBuildResourceIdentity(obj, project, obj.Name); err != nil {
 		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
@@ -159,10 +159,6 @@ func buildResourceRequest(req *restful.Request, resp *restful.Response, item boo
 	name := project
 	if item {
 		name = req.PathParameter("name")
-		if name != project {
-			writeBuildResourceError(resp, apierrors.NewNotFound(ebsv1.Resource("buildresources"), name))
-			return nil, "", false
-		}
 	}
 	return genericapirequest.WithNamespace(req.Request.Context(), project), name, true
 }

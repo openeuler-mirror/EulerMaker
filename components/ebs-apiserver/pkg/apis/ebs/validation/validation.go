@@ -103,8 +103,6 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 	}
 	if obj.Namespace == "" {
 		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "namespace"), "namespace is required"))
-	} else if obj.Name != "" && obj.Name != obj.Namespace {
-		allErrs = append(allErrs, field.Invalid(field.NewPath("metadata", "name"), obj.Name, "must equal metadata.namespace"))
 	}
 
 	specPath := field.NewPath("spec")
