@@ -55,6 +55,14 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 			}
 		}
 	}
+
+	snapshotSpec, ok := definitions["ebs-apiserver/pkg/apis/ebs/v1.SnapshotSpec"]
+	if !ok {
+		t.Fatal("SnapshotSpec OpenAPI definition is missing")
+	}
+	if _, ok := snapshotSpec.Schema.Properties["buildTargets"]; ok {
+		t.Error("SnapshotSpec OpenAPI definition must not expose buildTargets")
+	}
 }
 
 func TestCompleteStoreInitializesStatusStorage(t *testing.T) {

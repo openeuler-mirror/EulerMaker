@@ -100,18 +100,8 @@ func TestValidateSnapshot(t *testing.T) {
 			snapshot: validSnapshot(),
 		},
 		{
-			name: "valid with empty spec commits",
-			snapshot: &ebsv1.Snapshot{Spec: ebsv1.SnapshotSpec{
-				BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
-			}},
-		},
-		{
-			name:     "requires build targets",
+			name:     "valid with empty spec commits",
 			snapshot: &ebsv1.Snapshot{},
-			wantErrs: 1,
-			wantFields: map[string]field.ErrorType{
-				"spec.buildTargets": field.ErrorTypeRequired,
-			},
 		},
 	}
 
@@ -125,9 +115,7 @@ func TestValidateSnapshot(t *testing.T) {
 
 func TestValidateSnapshotUpdate(t *testing.T) {
 	errs := ValidateSnapshotUpdate(&ebsv1.Snapshot{}, validSnapshot())
-	assertErrorList(t, errs, 1, map[string]field.ErrorType{
-		"spec.buildTargets": field.ErrorTypeRequired,
-	})
+	assertErrorList(t, errs, 0, nil)
 }
 
 func TestValidateBuild(t *testing.T) {
@@ -455,7 +443,6 @@ func validSnapshot() *ebsv1.Snapshot {
 			SpecCommits: map[string]ebsv1.SpecCommit{
 				"pkg-a": {CommitId: "abc123"},
 			},
-			BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
 		},
 	}
 }
