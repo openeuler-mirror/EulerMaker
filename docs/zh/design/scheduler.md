@@ -956,8 +956,6 @@ worker 在终结前统一调用结果校验函数。未知 `QueueAction` 或空 
 |------|--------|------|
 | `--apiserver` | 必填 | ebs-apiserver 地址 |
 | `--apiserver-ca` | 条件必填 | 用于验证 ebs-apiserver 服务端证书的 CA 文件；启用 `--insecure-skip-verify` 时可省略 |
-| `--client-cert-file` | 必填 | Scheduler 的 mTLS 客户端证书文件 |
-| `--client-key-file` | 必填 | Scheduler 的 mTLS 客户端私钥文件 |
 | `--insecure-skip-verify` | `false` | 跳过 ebs-apiserver 服务端证书校验，仅允许在开发环境显式启用 |
 | `--workers` | `4` | 调度 worker 数量 |
 | `--resync-period` | `60s` | informer resync 周期 |
@@ -973,13 +971,13 @@ worker 在终结前统一调用结果校验函数。未知 `QueueAction` 或空 
 | `--request-timeout` | `30s` | 非 watch 请求超时 |
 | `--health-address` | `:8080` | 健康检查和指标监听地址 |
 
-Scheduler 使用独立的 mTLS 身份直连 ebs-apiserver，不使用 system token 或外部 JWT。客户端证书的 URI SAN 应为 `spiffe://eulermaker/internal/ebs-scheduler`，apiserver 根据该身份授予全局读取和 watch Job、Runner，以及更新任意 Project 下 Job status 的最小权限。
+Scheduler 当前通过 HTTPS 直连 ebs-apiserver，不使用客户端证书。客户端身份认证与对应的最小权限控制，待 ebs-apiserver 提供客户端证书校验能力后再实现。
 
-启动时必须读取并校验客户端证书和私钥；任一文件缺失、无法解析、证书与私钥不匹配或证书已经失效时，Scheduler 必须启动失败。默认必须通过 `--apiserver-ca` 验证 ebs-apiserver 的服务端证书；未提供 CA 且未显式启用 `--insecure-skip-verify` 时启动失败。
+默认必须通过 `--apiserver-ca` 验证 ebs-apiserver 的服务端证书；未提供 CA 且未显式启用 `--insecure-skip-verify` 时启动失败。
 
-`--insecure-skip-verify` 只跳过服务端证书链和主机名校验，不关闭 Scheduler 向 apiserver 提供客户端证书的 mTLS 认证。启用时必须输出醒目的安全警告；生产部署必须保持为 `false`。
+启用 `--insecure-skip-verify` 时必须输出醒目的安全警告；生产部署必须保持为 `false`。
 
-首版在启动时加载证书，不监听证书文件变化。证书轮换通过更新挂载文件并滚动重启 Scheduler 完成；客户端私钥文件权限应限制为 `0600` 或等效的只读 Secret 挂载权限。证书、私钥内容及 TLS 握手中的敏感信息不得写入日志。
+首版不监听 CA 文件变化。CA 轮换通过更新挂载文件并滚动重启 Scheduler 完成；证书内容及 TLS 握手中的敏感信息不得写入日志。
 
 ## 十二、可观测性
 

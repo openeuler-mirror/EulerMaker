@@ -85,6 +85,20 @@ services:
     depends_on:
       - ebs-apiserver
 
+  scheduler:
+    build:
+      context: ..
+      dockerfile: components/scheduler/Dockerfile
+    command:
+      - --apiserver=https://ebs-apiserver:8443
+      - --insecure-skip-verify=true
+    ports:
+      - "8082:8080"
+    networks:
+      - ebs-net
+    depends_on:
+      - ebs-apiserver
+
   artifact-manager:
     build:
       context: ../components/artifact-manager
