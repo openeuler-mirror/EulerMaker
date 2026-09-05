@@ -1,5 +1,7 @@
 FROM golang:1.21 AS builder
 
+ENV GOPROXY=https://goproxy.cn,direct
+
 WORKDIR /build/components/scheduler
 COPY api/go.mod api/go.sum /build/api/
 COPY components/scheduler/go.mod components/scheduler/go.sum ./
