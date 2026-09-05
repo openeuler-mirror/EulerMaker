@@ -326,7 +326,10 @@ func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query m
 		"pit":                 map[string]string{"id": pitID, "keep_alive": keepAlive},
 		"query":               query,
 		"size":                size,
-		"sort":                []interface{}{map[string]interface{}{"documentID": map[string]string{"order": "asc"}}},
+		"sort": []interface{}{
+			map[string]interface{}{"metadata.creationTimestamp": map[string]string{"order": "desc", "missing": "_last"}},
+			map[string]interface{}{"documentID": map[string]string{"order": "desc"}},
+		},
 		"track_total_hits":    true,
 		"seq_no_primary_term": true,
 	}

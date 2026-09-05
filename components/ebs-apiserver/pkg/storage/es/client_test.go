@@ -119,3 +119,37 @@ func TestHTTPErrorStatus(t *testing.T) {
 		t.Fatalf("expected 404 HTTPError, got %v", err)
 	}
 }
+
+func TestSearchPITSortsByCreationTimeAndDocumentID(t *testing.T) {
+	searchAfter := []json.RawMessage{json.RawMessage(`"2026-09-05T08:00:00Z"`), json.RawMessage(`"project-a/build-a"`)}
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost || req.URL.Path != "/_search" {
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		}
+		var body struct {
+			Sort        []map[string]map[string]string `json:"sort"`
+			SearchAfter []json.RawMessage              `json:"search_after"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(body.Sort) != 2 || body.Sort[0]["metadata.creationTimestamp"]["order"] != "desc" || body.Sort[0]["metadata.creationTimestamp"]["missing"] != "_last" {
+			t.Fatalf("unexpected primary sort: %#v", body.Sort)
+		}
+		if body.Sort[1]["documentID"]["order"] != "desc" {
+			t.Fatalf("unexpected tie-break sort: %#v", body.Sort)
+		}
+		if len(body.SearchAfter) != 2 || string(body.SearchAfter[0]) != string(searchAfter[0]) || string(body.SearchAfter[1]) != string(searchAfter[1]) {
+			t.Fatalf("unexpected search_after: %s", body.SearchAfter)
+		}
+		return response(http.StatusOK, `{"pit_id":"pit-next","hits":{"total":{"value":0},"hits":[]}}`), nil
+	})}
+	client := NewClientForTesting("http://elasticsearch", httpClient)
+	result, err := client.SearchPIT(context.Background(), "pit", "1m", map[string]interface{}{"match_all": map[string]interface{}{}}, 10, searchAfter)
+	if err != nil {
+		t.Fatalf("search PIT: %v", err)
+	}
+	if result.PITID != "pit-next" {
+		t.Fatalf("PIT ID = %q, want pit-next", result.PITID)
+	}
+}

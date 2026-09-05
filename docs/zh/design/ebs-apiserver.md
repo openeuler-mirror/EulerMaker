@@ -398,7 +398,8 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 
 - `ListOptions.limit` 映射为 ES `size`。
 - `continue` token 封装排序字段和 `search_after`，禁止使用深分页 `from + size`。
-- 默认使用显式的 `documentID` keyword 字段作为稳定的次级排序字段；分页 token 必须带版本并进行完整性校验。
+- 所有 ES-backed 资源默认按 `metadata.creationTimestamp desc` 排序，缺少创建时间的历史对象排在最后；时间相同时按 `documentID desc` 稳定决胜。
+- continue token 保存创建时间和 documentID 两个 `search_after` 值；排序策略版本必须进入 token fingerprint，分页 token还必须带格式版本并进行完整性校验。
 - List 返回值设置 `metadata.continue`；可可靠取得时设置 `remainingItemCount`。
 - Create/Update 使用 `refresh=wait_for`，保证写请求成功后紧随其后的 List/Search 能看到结果。
 - ES-only 对象的 `metadata.resourceVersion` 由 ES `_seq_no` 和 `_primary_term` 编码生成。

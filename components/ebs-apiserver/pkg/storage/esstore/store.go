@@ -562,7 +562,7 @@ func queryFingerprint(resource, namespace string, options *internalversion.ListO
 	if options.FieldSelector != nil {
 		fieldSelector = options.FieldSelector.String()
 	}
-	raw := resource + "\x00" + namespace + "\x00" + labelSelector + "\x00" + fieldSelector
+	raw := "creation-time-desc-v1\x00" + resource + "\x00" + namespace + "\x00" + labelSelector + "\x00" + fieldSelector
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
 }
