@@ -51,6 +51,7 @@ func TestCreateUsesCreateOnlyAndRefresh(t *testing.T) {
 
 func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	created := map[string]bool{}
+	mappings := map[string]string{}
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.Method {
 		case http.MethodGet:
@@ -58,7 +59,10 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 		case http.MethodHead:
 			return response(http.StatusNotFound, ``), nil
 		case http.MethodPut:
-			created[strings.TrimPrefix(req.URL.Path, "/")] = true
+			index := strings.TrimPrefix(req.URL.Path, "/")
+			created[index] = true
+			body, _ := io.ReadAll(req.Body)
+			mappings[index] = string(body)
 			return response(http.StatusOK, `{"acknowledged":true}`), nil
 		default:
 			t.Fatalf("unexpected method %s", req.Method)
@@ -72,24 +76,84 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	if err := client.ensureIndices(); err != nil {
 		t.Fatalf("ensure indices: %v", err)
 	}
-	for _, index := range []string{"ebs-projects", "ebs-snapshots", "ebs-builds", "ebs-buildinfos", "ebs-rpmrepos", "ebs-buildresources"} {
+	for _, index := range []string{"ebs-projects-v1", "ebs-snapshots-v1", "ebs-builds-v1", "ebs-buildinfos-v1", "ebs-rpmrepos-v1", "ebs-buildresources-v1"} {
 		if !created[index] {
 			t.Errorf("index %s was not created", index)
 		}
 	}
-	if created["ebs-jobs"] || created["ebs-runners"] {
+	if created["ebs-jobs-v1"] || created["ebs-runners-v1"] {
 		t.Fatalf("etcd resources must not have ES indices: %#v", created)
+	}
+	if !strings.Contains(mappings["ebs-builds-v1"], `"phase"`) || !strings.Contains(mappings["ebs-builds-v1"], `"stage"`) {
+		t.Fatalf("build index does not use the default mapping: %s", mappings["ebs-builds-v1"])
+	}
+	if !strings.Contains(mappings["ebs-builds-v1"], `"dynamic":false`) {
+		t.Fatalf("build data does not disable dynamic mapping: %s", mappings["ebs-builds-v1"])
+	}
+	if strings.Contains(mappings["ebs-builds-v1"], `"buildTarget"`) {
+		t.Fatalf("build index unexpectedly maps buildTarget: %s", mappings["ebs-builds-v1"])
+	}
+	if !strings.Contains(mappings["ebs-projects-v1"], `"phase"`) || !strings.Contains(mappings["ebs-projects-v1"], `"stage"`) {
+		t.Fatalf("default mapping does not map status fields: %s", mappings["ebs-projects-v1"])
+	}
+	if strings.Contains(mappings["ebs-projects-v1"], `"credential"`) {
+		t.Fatalf("default mapping unexpectedly contains credential: %s", mappings["ebs-projects-v1"])
+	}
+	if strings.Contains(mappings["ebs-builds-v1"], `"credential"`) {
+		t.Fatalf("build index unexpectedly contains credential: %s", mappings["ebs-builds-v1"])
+	}
+	if mappingForResource("build") != mappingForResource("project") {
+		t.Fatal("build and project indices do not use the same default mapping")
+	}
+	for index, mapping := range mappings {
+		var decoded struct {
+			Aliases map[string]struct {
+				IsWriteIndex bool `json:"is_write_index"`
+			} `json:"aliases"`
+		}
+		if err := json.Unmarshal([]byte(mapping), &decoded); err != nil {
+			t.Errorf("index %s has invalid mapping JSON: %v", index, err)
+			continue
+		}
+		alias := strings.TrimSuffix(index, "-v1")
+		if !decoded.Aliases[alias].IsWriteIndex {
+			t.Errorf("index %s does not define %s as its write alias", index, alias)
+		}
+	}
+}
+
+func TestEnsureIndicesDoesNotCreateWhenAliasExists(t *testing.T) {
+	putRequests := 0
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodHead && strings.HasPrefix(req.URL.Path, "/_alias/") {
+			return response(http.StatusOK, `{}`), nil
+		}
+		if req.Method == http.MethodPut {
+			putRequests++
+		}
+		return response(http.StatusInternalServerError, `{}`), nil
+	})}
+	client := NewClientForTesting("http://elasticsearch", httpClient)
+	if err := client.ensureIndices(); err != nil {
+		t.Fatalf("ensure indices: %v", err)
+	}
+	if putRequests != 0 {
+		t.Fatalf("created %d indices despite existing aliases", putRequests)
 	}
 }
 
 func TestEnsureIAMIndices(t *testing.T) {
 	created := map[string]bool{}
+	mappings := map[string]string{}
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodHead {
 			return response(http.StatusNotFound, ``), nil
 		}
 		if req.Method == http.MethodPut {
-			created[strings.TrimPrefix(req.URL.Path, "/")] = true
+			index := strings.TrimPrefix(req.URL.Path, "/")
+			created[index] = true
+			body, _ := io.ReadAll(req.Body)
+			mappings[index] = string(body)
 			return response(http.StatusOK, `{"acknowledged":true}`), nil
 		}
 		t.Fatalf("unexpected method %s", req.Method)
@@ -99,13 +163,21 @@ func TestEnsureIAMIndices(t *testing.T) {
 	if err := client.EnsureIAMIndices(); err != nil {
 		t.Fatalf("ensure IAM indices: %v", err)
 	}
-	for _, index := range []string{"ebs-users", "ebs-machineaccounts"} {
+	for _, index := range []string{"ebs-users-v1", "ebs-machineaccounts-v1"} {
 		if !created[index] {
 			t.Errorf("index %s was not created", index)
 		}
 	}
-	if created["ebs-projects"] {
+	if created["ebs-projects-v1"] {
 		t.Fatalf("core index unexpectedly created: %#v", created)
+	}
+	for index, mapping := range mappings {
+		if !strings.Contains(mapping, `"credential"`) {
+			t.Errorf("IAM index %s does not contain credential mapping: %s", index, mapping)
+		}
+		if strings.Contains(mapping, `"phase"`) || strings.Contains(mapping, `"stage"`) {
+			t.Errorf("IAM index %s unexpectedly maps status fields: %s", index, mapping)
+		}
 	}
 }
 
