@@ -89,7 +89,7 @@ name:      default
 /apis/ebs/v1/projects/default/buildresources/default
 ```
 
-`default` 命名空间中的 `default` 使用与 Project 自定义对象完全相同的名称规则、字段和存储结构。它由 apiserver 保证存在，并作为其他 Project 的回退来源。
+`default` 作用域中的 `default` 使用与 Project 自定义对象完全相同的名称规则、字段和存储结构。它由 apiserver 保证存在，并作为其他 Project 的回退来源。`default` 是系统保留作用域，不要求也不允许创建同名 Project。
 
 默认对象采用以下结构：
 
@@ -320,7 +320,7 @@ apiserver 通过 `go:embed` 内置全局默认 `BuildResource` JSON 清单。初
 
 apiserver 在完成存储初始化、注册 REST storage 之后，对外进入 Ready 之前执行 `EnsureDefaultBuildResource`：
 
-1. 确认系统保留的 `default` Project/命名空间存在；如果 Project 是对象访问的必要前提，则先以同样的幂等方式创建它；
+1. 使用系统保留的 `default` 作用域；不创建 `default` Project；
 2. GET `default/default`；
 3. 对象存在时直接完成，不修改、不合并，也不覆盖用户或运维已经更新的内容；
 4. 仅在返回 `404 NotFound` 时读取内置清单，执行完整解码和字段校验后创建对象；
@@ -396,7 +396,7 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 - 运维角色：跨 Project 读写；
 - Scheduler 和 Runner：无需读取该对象。
 
-普通 Project owner/member 禁止创建、更新、Patch 或删除任何 `BuildResource`，也不能通过 `default` Project 路径读取全局默认对象。只有运维角色和 apiserver 启动初始化身份具有写权限。Build Controller 具有读取权限，以便执行回退。
+普通 Project owner/member 禁止创建、更新、Patch 或删除任何 `BuildResource`，也不能通过 `default` 保留作用域路径读取全局默认对象。只有运维角色和 apiserver 启动初始化身份具有写权限。Build Controller 具有读取权限，以便执行回退。
 
 ## 十二、实现范围
 
@@ -408,7 +408,7 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 4. 增加对象及资源 quantity 校验；
 5. 在 Gateway 中加入该 Project scoped 资源的鉴权映射；
 6. 在 ebsctl 中增加 get/list/create/update/delete 支持；
-7. 提供内置默认表清单，并在 apiserver Ready 前幂等创建 `default` 命名空间及默认对象；
+7. 提供内置默认表清单，并在 apiserver Ready 前于保留的 `default` 作用域幂等创建默认对象；
 8. 在 Build Controller 中实现 Project 优先、`default` 回退的对象查询、缓存与配置匹配；
 9. 创建 Job 时写入 `Job.spec.resources` 和包含实际来源命名空间的审计注解；
 10. 增加 API、初始化、多副本并发创建、回退边界、匹配优先级、并发更新和大对象边界测试；

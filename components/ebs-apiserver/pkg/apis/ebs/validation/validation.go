@@ -17,12 +17,15 @@ var (
 
 func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	var allErrs field.ErrorList
+	namePath := field.NewPath("metadata", "name")
 	if len(obj.Name) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "name"), "name is required"))
+		allErrs = append(allErrs, field.Required(namePath, "name is required"))
 	} else if errs := validation.IsDNS1123Label(obj.Name); len(errs) > 0 {
 		for _, e := range errs {
-			allErrs = append(allErrs, field.Invalid(field.NewPath("metadata", "name"), obj.Name, e))
+			allErrs = append(allErrs, field.Invalid(namePath, obj.Name, e))
 		}
+	} else if obj.Name == "default" {
+		allErrs = append(allErrs, field.Forbidden(namePath, "default is reserved for global resources"))
 	}
 	if len(obj.Spec.BuildTargets) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets"), "at least one build target is required"))

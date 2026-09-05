@@ -166,7 +166,7 @@ status:
   phase: Active
 ```
 
-Project 名用于内部 scoped storage，需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `spec.displayName`。
+Project 名用于内部 scoped storage，需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。`default` 是系统保留作用域，不允许创建同名 Project。页面展示名称使用 `spec.displayName`。
 
 IAM 资源使用独立的 `iam.ebs/v1` API group，包括 User 和 MachineAccount。
 

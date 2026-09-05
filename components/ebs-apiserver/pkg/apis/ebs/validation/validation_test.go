@@ -42,6 +42,17 @@ func TestValidateProject(t *testing.T) {
 			},
 		},
 		{
+			name: "rejects reserved default name",
+			project: &ebsv1.Project{
+				ObjectMeta: metav1.ObjectMeta{Name: "default"},
+				Spec:       validProjectSpec(),
+			},
+			wantErrs: 1,
+			wantFields: map[string]field.ErrorType{
+				"metadata.name": field.ErrorTypeForbidden,
+			},
+		},
+		{
 			name: "requires build targets",
 			project: &ebsv1.Project{
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},

@@ -105,7 +105,7 @@ GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 
 该路由在服务端固定添加 `status.runner={runner}` 过滤条件，不接受客户端提供的 `fieldSelector`。它支持 `resourceVersion`、`timeoutSeconds` 和 `allowWatchBookmarks`，list响应提供后续 watch使用的 resourceVersion。请求来自 Runner token时，路径名称必须由受信任 gateway身份头绑定到对应 Runner，过滤不能由客户端自行完成。
 
-Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。页面展示名称使用 `Project.spec.displayName`。
+Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。`default` 保留给全局默认资源，apiserver 拒绝创建同名 Project。页面展示名称使用 `Project.spec.displayName`。
 
 ### IAM API
 
@@ -454,7 +454,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 
 当前校验逻辑位于 `pkg/apis/ebs/validation/validation.go`，主要包括：
 
-- Project 名称必须满足 DNS1123 label，并至少包含一个带 `os`、`arch` 的构建目标。
+- Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
 - Snapshot 无法获取 commit 时，`specCommits` 允许为空。
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 类型必须为 `ct`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
@@ -667,7 +667,7 @@ curl -k --get \
   'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
 ```
 
-所有 ES-backed 资源默认按创建时间倒序，因此通过 label 完整指定 os、arch 后配合 `limit=1` 可以取得该 target 最新创建的 Build。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
+所有 ES-backed 资源默认按创建时间倒序，因此通过 label 完整指定 os、arch 后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 
 ## 待完善项
 
