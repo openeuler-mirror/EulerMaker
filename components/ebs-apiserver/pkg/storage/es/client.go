@@ -27,7 +27,7 @@ var indices = map[string]string{
 var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource"}
 var iamResources = []string{"user", "machineaccount"}
 
-const indexMapping = `{
+const defaultIndexMapping = `{
   "settings":{"number_of_shards":1,"number_of_replicas":0},
   "mappings":{"dynamic":"strict","properties":{
     "apiVersion":{"type":"keyword"},
@@ -42,7 +42,31 @@ const indexMapping = `{
         "value":{"type":"keyword"}
       }}
     }},
-    "data":{"type":"object","enabled":false},
+    "data":{"type":"object","dynamic":false,"properties":{
+      "status":{"type":"object","dynamic":false,"properties":{
+        "phase":{"type":"keyword"},
+        "stage":{"type":"keyword"}
+      }}
+    }}
+  }}
+}`
+
+const iamIndexMapping = `{
+  "settings":{"number_of_shards":1,"number_of_replicas":0},
+  "mappings":{"dynamic":"strict","properties":{
+    "apiVersion":{"type":"keyword"},
+    "kind":{"type":"keyword"},
+    "documentID":{"type":"keyword"},
+    "metadata":{"properties":{
+      "name":{"type":"keyword"},
+      "namespace":{"type":"keyword"},
+      "creationTimestamp":{"type":"date"},
+      "labels":{"type":"nested","properties":{
+        "key":{"type":"keyword"},
+        "value":{"type":"keyword"}
+      }}
+    }},
+    "data":{"type":"object","dynamic":false},
     "credential":{"type":"object","enabled":false}
   }}
 }`
@@ -134,24 +158,29 @@ func (c *Client) EnsureIAMIndices() error {
 
 func (c *Client) ensureResourceIndices(resources []string) error {
 	for _, resource := range resources {
-		index := resourceIndex(resource)
-		req, err := http.NewRequest(http.MethodHead, c.addr()+"/"+index, nil)
+		alias := resourceIndex(resource)
+		req, err := http.NewRequest(http.MethodHead, c.addr()+"/_alias/"+alias, nil)
 		if err != nil {
 			return err
 		}
 		c.setAuth(req)
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return fmt.Errorf("check index %s: %w", index, err)
+			return fmt.Errorf("check index alias %s: %w", alias, err)
 		}
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			if resp.StatusCode >= 400 {
-				return &HTTPError{StatusCode: resp.StatusCode, Body: "check index " + index}
+				return &HTTPError{StatusCode: resp.StatusCode, Body: "check index alias " + alias}
 			}
 			continue
 		}
-		putReq, err := http.NewRequest(http.MethodPut, c.addr()+"/"+index, strings.NewReader(indexMapping))
+		index := resourcePhysicalIndex(resource)
+		definition, err := indexDefinitionForResource(resource)
+		if err != nil {
+			return err
+		}
+		putReq, err := http.NewRequest(http.MethodPut, c.addr()+"/"+index, bytes.NewReader(definition))
 		if err != nil {
 			return err
 		}
@@ -165,12 +194,36 @@ func (c *Client) ensureResourceIndices(resources []string) error {
 	return nil
 }
 
+func indexDefinitionForResource(resource string) ([]byte, error) {
+	var definition map[string]interface{}
+	if err := json.Unmarshal([]byte(mappingForResource(resource)), &definition); err != nil {
+		return nil, fmt.Errorf("decode mapping for %s: %w", resource, err)
+	}
+	definition["aliases"] = map[string]interface{}{
+		resourceIndex(resource): map[string]bool{"is_write_index": true},
+	}
+	return json.Marshal(definition)
+}
+
+func mappingForResource(resource string) string {
+	switch resource {
+	case "user", "machineaccount":
+		return iamIndexMapping
+	default:
+		return defaultIndexMapping
+	}
+}
+
 func resourceIndex(resource string) string {
 	resource = strings.TrimSuffix(strings.ToLower(resource), "s")
 	if index, ok := indices[resource]; ok {
 		return index
 	}
 	return "ebs-" + resource + "s"
+}
+
+func resourcePhysicalIndex(resource string) string {
+	return resourceIndex(resource) + "-v1"
 }
 
 func (c *Client) setAuth(req *http.Request) {

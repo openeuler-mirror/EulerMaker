@@ -341,11 +341,12 @@ User的REST Storage是专用实现。注册接口写入包含credential的完整
 
 MachineAccount的REST Storage是专用实现。内部创建接口写入完整文档，认证接口读取credential字段；GET/List只构造并返回`apiVersion`、`kind`、`metadata`和`spec`，不得序列化credential。认证失败计数和锁定时间使用ES的`seq_no`、`primary_term`执行乐观并发更新。DELETE删除单个文档，删除成功后账号不能继续认证。
 
-apiserver 启动时检查并创建全部 ES-only 资源索引。生产环境应使用显式 index template/mapping，不依赖动态 mapping 或首次写入自动建索引。
+apiserver 启动时检查并创建全部 ES-only 资源索引。Build 和其他业务资源使用基础 mapping，User 和 MachineAccount 使用独立的 IAM mapping。IAM mapping 单独定义不建立索引的 `credential` 字段，避免认证数据字段出现在业务资源 mapping 中。
+物理索引使用 `-v1` 版本后缀，例如 `ebs-builds-v1`，并在创建时绑定无版本的稳定 alias `ebs-builds`。alias 设置 `is_write_index: true`，所有读写和 PIT 操作只使用 alias。生产环境不依赖动态 mapping 或首次写入自动建索引。
 
 #### ES 文档与 mapping
 
-ES 文档保存完整 API 对象，同时抽取需要过滤和排序的字段：
+ES 文档在 `data` 中保存完整 API 对象，并对需要过滤的字段建立显式 mapping：
 
 ```json
 {
@@ -361,7 +362,19 @@ ES 文档保存完整 API 对象，同时抽取需要过滤和排序的字段：
     "creationTimestamp": "2026-01-01T00:00:00Z"
   },
   "data": {
-    "...": "完整 API 对象"
+    "apiVersion": "ebs/v1",
+    "kind": "Build",
+    "metadata": {"...": "完整对象元数据"},
+    "spec": {
+      "buildTarget": {
+        "os": "openEuler-22.03-LTS",
+        "arch": "x86_64"
+      }
+    },
+    "status": {
+      "phase": "Processing",
+      "stage": "build"
+    }
   }
 }
 ```
@@ -371,8 +384,10 @@ mapping 约束：
 - `documentID`、`metadata.name`、`metadata.namespace`、`kind`、`apiVersion` 使用 `keyword`。
 - `metadata.creationTimestamp` 使用 `date`。
 - `metadata.labels` 使用包含 `key/value` 两个 `keyword` 字段的 `nested` 数组。这样既避免 label key 动态展开导致 mapping 膨胀，也能正确处理包含 `.`、`/` 的 Kubernetes label key。
-- `data` 使用 `object` 且 `enabled: false`，只负责保存和还原完整对象。
-- 需要查询的业务字段必须显式抽取并定义 mapping，禁止将整个 `spec/status` 动态索引。
+- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中，当前只有 `data.status.phase` 和 `data.status.stage` 使用 `keyword` 建立索引。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
+- 需要查询的业务字段必须显式定义 mapping，禁止将整个 `spec/status` 动态索引。
+
+Build 查询字段直接来自待持久化的完整 API 对象，不生成额外的查询投影。Create、Update、Patch、`/status` 和 `/abort` 更新 `data` 后，对应的索引字段随同一次 ES 写入更新。`status.stage` 为空时不写 `data.status.stage`。
 
 #### Label 和 field selector
 
@@ -387,25 +402,33 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 | `key` | nested 查询匹配 `key` |
 | `!key` | `must_not` nested 查询匹配 `key` |
 
-首期 field selector 只支持：
+所有 ESStore 资源支持 `metadata.name` 和 `metadata.namespace`。Build 额外支持以下 field selector：
 
-- `metadata.name`
-- `metadata.namespace`
+| API 字段 | ES 字段 | 操作符 |
+|----------|---------|--------|
+| `status.phase` | `data.status.phase` | `=`、`==`、`!=` |
+| `status.stage` | `data.status.stage` | `=`、`==`、`!=` |
 
-后续业务字段必须先定义稳定的 API 语义和 ES mapping，再加入允许列表。无法识别或不支持的 selector 必须返回 `BadRequest`，不能静默忽略。
+field selector 白名单必须按资源区分，Build 的业务字段不能自动对 Project、Snapshot、BuildInfo、RpmRepo 或 BuildResource 生效。多个 requirement 以及 label selector、Project 路径隐含的 namespace 条件均按 AND 组合；客户端提供与路径不同的 namespace 时返回空列表，不能查询到其他 Project。无法识别或不支持的字段、操作符和语法必须返回 `BadRequest`，不能静默忽略。
+
+`status.stage` 具有特殊的存在性语义：只有字段存在且非空的 Build 才参与 stage requirement 匹配。`status.stage=publish` 只匹配明确处于 publish 阶段的对象；`status.stage!=publish` 也只匹配 stage 存在、非空且不等于 publish 的对象。缺少 stage、值为 `null` 或空字符串的 Build 对两种查询都不匹配。ES 查询必须为两种操作符都附加 `exists(data.status.stage)`；不等值查询不能只生成 `must_not term`。
 
 #### 分页、版本与一致性
 
 - `ListOptions.limit` 映射为 ES `size`。
 - `continue` token 封装排序字段和 `search_after`，禁止使用深分页 `from + size`。
 - 所有 ES-backed 资源默认按 `metadata.creationTimestamp desc` 排序，缺少创建时间的历史对象排在最后；时间相同时按 `documentID desc` 稳定决胜。
-- continue token 保存创建时间和 documentID 两个 `search_after` 值；排序策略版本必须进入 token fingerprint，分页 token还必须带格式版本并进行完整性校验。
+- continue token 保存创建时间和 documentID 两个 `search_after` 值；排序策略版本必须进入 token fingerprint，分页 token 还必须带格式版本并进行完整性校验。
 - List 返回值设置 `metadata.continue`；可可靠取得时设置 `remainingItemCount`。
 - Create/Update 使用 `refresh=wait_for`，保证写请求成功后紧随其后的 List/Search 能看到结果。
 - ES-only 对象的 `metadata.resourceVersion` 由 ES `_seq_no` 和 `_primary_term` 编码生成。
 - Update、Patch、Delete 使用 `if_seq_no` 和 `if_primary_term` 做乐观并发控制，版本不匹配返回 `409 Conflict`。
 - `resourceVersion` 只用于单对象并发控制，不承诺 etcd watch revision 语义；ES-only 资源不接受基于 resourceVersion 的 watch。
 - ES 批量查询应使用 Point in Time 与 `search_after` 保持同一分页过程的一致视图；PIT 标识封装在 continue token 中并设置有限有效期。
+
+#### Mapping 升级
+
+apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动迁移已有索引。兼容性新增字段可以更新当前物理索引的 mapping；不兼容变更应创建下一版本物理索引，将数据 reindex 后，通过单次 `_aliases` 请求移除旧索引并绑定新索引。切换时必须将新索引设置为 `is_write_index: true`，旧索引保留至确认无需回滚后再删除。
 
 ## 默认值与校验
 
@@ -633,6 +656,18 @@ curl -k --get \
   --data-urlencode 'continue=<metadata.continue>' \
   'https://localhost:8443/apis/ebs/v1/builds'
 ```
+
+按构建目标 label、phase 和 stage 查询 Build：
+
+```bash
+curl -k --get \
+  --data-urlencode 'labelSelector=os=openEuler-22.03-LTS,arch=x86_64' \
+  --data-urlencode 'fieldSelector=status.phase=Processing,status.stage=build' \
+  --data-urlencode 'limit=100' \
+  'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
+```
+
+所有 ES-backed 资源默认按创建时间倒序，因此通过 label 完整指定 os、arch 后配合 `limit=1` 可以取得该 target 最新创建的 Build。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 
 ## 待完善项
 
