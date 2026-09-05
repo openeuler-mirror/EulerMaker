@@ -1,525 +1,551 @@
-# Controller Manager 设计文档
+# Controller Manager 框架设计
 
-## 1. 概述
+## 1. 目标与范围
 
-### 1.1 设计目标
+Controller Manager 使用 Go 实现，参考 Kubernetes controller 的组织方式，负责创建共享依赖、初始化 Controller、启动事件源与 Worker，并统一处理健康检查和优雅退出。
 
-Controller Manager 负责管理多个 Controller 的生命周期，提供统一的启动与停止入口。通过一个管理器编排所有 Controller 的运行，避免为每个 Controller 单独管理进程或线程，降低运维复杂度。
+本文只定义 Controller Manager 和 Controller 公共框架，不定义 Build、Snapshot 等业务对象的状态机。具体 Controller 负责决定关注哪些资源、哪些变化需要入队、如何调谐以及拥有哪些状态字段。
 
-核心功能仅包含两项：
+框架遵循以下原则：
 
-- **启动所有 Controller**：一次性将所有已注册的 Controller 在各自独立的线程中启动
-- **停止所有 Controller**：通过广播停止信号，让所有正在运行的 Controller 退出
+- Controller Manager 只管理生命周期，不直接调用业务调谐逻辑；
+- 事件只负责触发调谐，资源 key 是队列中唯一的数据；
+- Worker 每次处理 key 时读取最新对象，不依赖事件携带的旧对象；
+- 所有业务副作用集中在 `Sync` 中，事件处理函数不得写状态、创建或删除资源；
+- `Sync` 必须幂等，并允许因事件重复、进程重启和超时确认而重复执行；
+- 优先使用 Kubernetes 的 `client-go` 工作队列、缓存与并发约定，不重复实现 dirty/processing、退避和关闭语义。
 
-**范围边界**：本文覆盖 Controller Manager 的编排层与 Controller 基类通用骨架（Handler / Controller / 工作队列 / 注册表 / 停止机制）。具体 Controller 的业务状态机、具体 Handler 实现，以及对 apiserver 的认证/授权、TLS 与超时/重试参数，均不在本文范围（由各 Controller 设计文档及 API 客户端单独设计）。
+### 1.1 API 能力边界
 
-### 1.2 关键设计
+当前 ebs-apiserver 只有以下资源支持 List/Watch：
 
-其关键设计包括：
+- `Job`
+- `Runner`
 
-- 业务 Controller 通过 `register_controller("name")` 装饰器自注册其初始化函数（`InitFunc`），`new_controller_initializers()` 收集全局注册表，将控制器名称映射到初始化函数
-- `ControllerManager._start_controllers()` 遍历该注册表，依次调用每个初始化函数启动对应的控制器
-- 每个控制器在独立的线程中运行，互不阻塞
-- 通过停止事件（`threading.Event`）传递停止信号，`event.set()` 一次性通知所有控制器退出
+除 `Job` 和 `Runner` 以外的所有资源均不支持 Watch，包括但不限于 `Project`、`Snapshot`、`Build`、`BuildInfo`、`RpmRepo` 和 `BuildResource`。框架不得为这些资源创建 Reflector、SharedInformer 或发起带 `watch=true` 的请求。
 
-### 1.3 设计原则
+因此框架同时支持两种事件源：
 
-| 编号 | 原则 | 说明 |
-|----|------|------|
-| P1 | **编排优于实现** | Controller Manager 的价值在于"管"，而非"做"。调谐流水线、对象过滤、状态推进全部下沉到 Controller 基类与各 Controller 的实现（Handler / reconcile）中。管理器本身保持极薄，任何试图把业务逻辑塞进管理器的冲动都应被拒绝 |
-| P2 | **可观测优于可猜测** | 每个 Controller 必须有名称，每次启动、退出、异常都必须留下日志痕迹。当生产环境出问题时，运维人员应能从日志快速判断"哪个 Controller 挂了、挂在哪一步、是否已经退出" |
-
-**编码与工程标准**：
-
-- **语言**：Python 3.9+，类型注解（PEP 484）必填。
-- **风格**：遵循 PEP 8，行宽 120；使用 `black` 格式化、`isort` 排序导入、`flake8` 静态检查、`mypy` 类型检查。
-- **异步模型**：Controller 框架基于多线程（Lister 线程 + Worker 线程池），禁止在 reconcile 中混用 asyncio；I/O 阻塞调用通过线程池并发，单次 reconcile 控制在秒级。
-- **API 客户端**：统一使用项目内 API 客户端，封装重试、分页、标签选择器；禁止裸 `requests`。
-- **配置**：通过配置模块 + 环境变量注入（Worker 数量、Lister 间隔、队列容量、退避参数、发布服务地址、文件系统根路径、日志目录），禁止硬编码。
-- **测试**：单元测试覆盖率 ≥ 80%；reconcile 各分支、状态机所有迁移、幂等性、失败跳过路径必须有测试用例。
-- **异常处理**：`reconcile` 抛出异常时，基类记录 ERROR 日志（含堆栈）并跳过该对象，不重试、不退避；该对象在下一轮 Lister 周期重新拉取并再次入队（若仍被 Handler 链保留）。是否写入 condition 由各 Controller 业务实现自行决定，基类不代写。
-
-### 1.4 强约束
-
-强约束是不可逾越的红线，定义了"什么绝对不能做"，用以防止后续迭代中因短期便利而侵蚀架构。
-
-| 编号 | 强约束 | 违反后果 |
+| 事件源 | 适用资源 | 数据获取方式 |
 | --- | --- | --- |
-| G-01 | Controller Manager 不得直接调用任何 Controller 的 `reconcile` 方法 | 架构腐化，管理器退化为业务编排器 |
-| G-02 | 不得在 `ControllerManager` 类中导入任何具体 Controller 子类或具体业务模块 | 注册表与实现解耦被破坏。具体 Controller 仅由 `new_controller_initializers()` 内的模块导入副作用触发自注册 |
-| G-03 | 停止流程不得依赖 Controller 数量，`ControllerManager` 不得逐个 join 各 Controller 线程 | 广播语义被破坏，停止成为不可靠操作。Controller 线程为 daemon，由进程退出回收；基类内部对自己的 Lister/Worker 线程做 shutdown + join 属基类收尾，不在本约束内 |
-| G-04 | `stop_event` 不得被任何 Controller 重置 (`clear()`) | 停止信号被误清，系统无法退出 |
-| G-05 | 不得引入进程级 `ControllerManager` 单例（如全局 `manager = ControllerManager()`） | 破坏可测试性，隐藏依赖。`ControllerManager` 通过构造参数注入 `initializers` 保持可测试 |
-| G-06 | Controller 线程不得以非 daemon 方式运行 | 主进程退出时挂死，影响容器编排回收 |
-| G-07 | `InitFunc` 不得在调用线程内执行长时间阻塞的调谐循环 | 阻塞管理器的启动编排，启动顺序不可控 |
-| G-08 | 不得绕过 workqueue 直接把对象交给 Worker | 去重与背压机制失效 |
-| G-09 | `reconcile` 对同一对象的重复调用不得产生重复业务副作用 | 失败跳过 + 下一轮重放会重复执行副作用，破坏幂等性 |
+| `WatchSource` | 仅 `Job`、`Runner` | List/Watch、本地 cache 和 lister |
+| `PollingSource` | 其他所有资源 | 周期 List、快照比较和按需 GET |
 
-### 1.5 功能边界
+Controller 的一致性不能依赖事件只发生一次。Watch 断线重连、周期 relist、Polling 重复扫描都可以造成同一 key 被多次入队。
 
-本节明确 Controller Manager **不提供**的功能，划定能力边界。
-
-| 编号 | 边界 | 说明                                                                                                                                                                                                                |
-| --- | --- |-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| F-01 | **不感知 Controller 是否存活** | Controller Manager 不提供心跳上报、健康检查、存活探测（liveness）等任何存活感知机制，无法主动判断某个 Controller 线程是否仍在运行。Controller 线程为 daemon，管理器不 join、不检查线程状态（见 G-03 / G-06）；判断"哪个 Controller 挂了、是否已退出"只能依赖日志观测                                    |
-| F-02 | **无优雅停机，进程退出即全量回收** | Controller Manager 不提供优雅停机：停止仅通过 `stop_event.set()` 广播停止信号，不阻塞等待线程退出、不保证清理完成（见 G-03 / G-06）。各 Controller 的 `InitFunc` 以 daemon 线程启动（G-06），因此直接关闭启动容器（如 kill 进程、删除 Pod）时，主进程退出即回收全部 daemon 线程——所有 Controller 随之终止。 |
-
----
-
-## 2. 整体架构
-
-### 2.1 核心组件
-
-Controller Manager 由以下核心抽象构成：
-
-- **`InitFunc`**：Controller 的初始化函数类型，接收 `stop_event`，负责创建并启动一个 Controller 的线程，返回 `(enabled, error)`
-- **`Handler` 抽象基类**：对象过滤器基类，各 Controller 继承它实现自己的过滤/删除/观测逻辑
-- **`Controller` 抽象基类**：封装 `list → filter → workqueue → reconcile` 流水线，子类实现 `list_objects` / `get_handlers` / `reconcile`
-- **`ControllerManager` 类**：持有初始化函数注册表与共享 `stop_event`，提供 `run` / `stop`
-- **`register_controller` 装饰器**：业务 Controller 自注册 `InitFunc` 到全局注册表
-- **`new_controller_initializers()` 工厂**：导入各 Controller 模块触发注册副作用，并收集注册表
-
-### 2.2 整体框架图
-
-```mermaid
-flowchart TD
-    subgraph ControllerManager
-        REG["register_controller 装饰器<br/>业务 Controller 自注册 InitFunc"]
-        REGISTRY["全局注册表<br/>名称 → 初始化函数"]
-        NCI["new_controller_initializers()<br/>收集注册表"]
-        START["_start_controllers()<br/>遍历注册表启动各 controller"]
-        STOPEVT["stop_event<br/>停止信号"]
-    end
-
-    REG -->|注册副作用| REGISTRY
-    REGISTRY -->|收集| NCI
-    NCI -->|提供注册表| START
-
-    START -->|Thread| CA["build-controller<br/>（独立线程）"]
-    START -->|Thread| CB["snapshot-controller<br/>（独立线程）"]
-    START -->|Thread| CN["rpm-repo-controller<br/>（独立线程）"]
-
-    STOPEVT -.->|set 广播停止信号| CA
-    STOPEVT -.->|set 广播停止信号| CB
-    STOPEVT -.->|set 广播停止信号| CN
-
-    style STOPEVT fill:#fef3c7,stroke:#f59e0b
-    style REG fill:#dbeafe,stroke:#3b82f6
-    style REGISTRY fill:#dbeafe,stroke:#3b82f6
-    style NCI fill:#dbeafe,stroke:#3b82f6
-    style START fill:#dbeafe,stroke:#3b82f6
-```
-
-图中实线表示启动阶段的注册与线程派发关系，虚线表示停止时 `stop_event` 的广播通知路径。业务 Controller 在导入期通过 `register_controller` 装饰器将 `InitFunc` 登记进全局注册表；`ControllerManager` 构造时经 `new_controller_initializers()` 收集该注册表，随后 `_start_controllers()` 将每个 Controller 投放到独立线程。停止时 `stop_event.set()` 的广播特性使所有线程同时收到退出信号。
-
-### 2.3 Controller 内部流水线
-
-每个 Controller 内部运行两类线程：一个 **Lister 线程** 负责周期性拉取数据并经过 Handler 链过滤，N 个 **Worker 线程** 负责从 workqueue 取出对象执行调谐。Lister 和 Worker 之间通过 `WorkerQueue` 解耦。
+## 2. 总体架构
 
 ```mermaid
 flowchart LR
-    subgraph Lister线程
-        LIST["list_objects()<br/>周期拉取全量数据"]
-        H1["Handler 1<br/>过滤（如终态剔除）"]
-        H2["Handler 2<br/>过滤/删除（如父中止级联）"]
-        Hn["Handler N<br/>观测写/过滤"]
-        LIST --> H1 --> H2 --> Hn
+    API[ebs-apiserver]
+
+    subgraph Manager[Controller Manager]
+        CLIENT[共享 API Client]
+        WF[Job/Runner WatchSource]
+        PF[非 Watch 资源 PollingSource]
+        REG[Controller Initializers]
+        HEALTH[healthz / readyz]
     end
 
-    subgraph WorkQueue
-        WQ["WorkerQueue<br/>待调谐对象 key 队列"]
+    subgraph Controller[业务 Controller]
+        EH[事件映射器]
+        Q[RateLimiting WorkQueue]
+        W[Workers]
+        SYNC[Sync context/key]
     end
 
-    subgraph Worker线程池
-        W1["Worker 1<br/>reconcile()"]
-        W2["Worker 2<br/>reconcile()"]
-        WN["Worker N<br/>reconcile()"]
-    end
-
-    Hn -->|入队 key| WQ
-    WQ -->|出队 key| W1
-    WQ -->|出队 key| W2
-    WQ -->|出队 key| WN
-
-    style WQ fill:#fef3c7,stroke:#f59e0b
-    style LIST fill:#dbeafe,stroke:#3b82f6
-    style H1 fill:#dcfce7,stroke:#22c55e
-    style H2 fill:#dcfce7,stroke:#22c55e
-    style Hn fill:#dcfce7,stroke:#22c55e
+    API --> CLIENT
+    CLIENT --> WF
+    CLIENT --> PF
+    WF --> EH
+    PF --> EH
+    EH --> Q
+    Q --> W
+    W --> SYNC
+    SYNC --> CLIENT
+    REG --> Controller
+    WF --> HEALTH
+    PF --> HEALTH
 ```
 
-Lister 线程周期性执行 `list_objects()` 获取全量对象，依次经过 Handler 链：每个 Handler 接收一个对象列表，返回过滤后的列表，被剔除的对象不再进入后续 Handler 与 workqueue。过滤后剩余的对象按 `key_func(obj)` 提取稳定资源键入队 workqueue，由 Worker 线程池中的 N 个线程并发取出执行 `reconcile()` 调谐。
+Manager 创建共享客户端及事件源工厂，通过显式 initializer 构造 Controller。每个 Controller 拥有独立的限速队列和 Worker。事件源把资源变化交给 Controller 注册的映射器，映射器只计算并加入调谐 key。
 
-### 2.4 状态推进职责划分
+## 3. 包结构与公共接口
 
-**核心原则**：Handler 只负责"过滤 / 删除 / 观测写"，`reconcile` 是业务状态机（phase / stage 推进）的唯一推进点。终态对象不再入队、不再推进。
+建议使用以下包结构：
 
-| 职责 | 负责角色 | 说明 |
+```text
+components/controller-manager/
+  cmd/controller-manager/
+  pkg/app/
+  pkg/controller/
+    controller.go
+    registry.go
+  pkg/source/
+    watch.go
+    polling.go
+  pkg/queue/
+  pkg/health/
+  pkg/controllers/
+    build/
+    buildinfo/
+    snapshot/
+    rpmrepo/
+```
+
+公共 API 类型继续来自独立的 `api` module。框架包不得依赖任何具体 Controller 包；`pkg/app` 负责显式组装具体 Controller。
+
+### 3.1 Controller
+
+```go
+type Controller interface {
+    Name() string
+    Run(ctx context.Context, workers int) error
+}
+```
+
+- `Name` 返回稳定且唯一的名称，用于配置、日志和指标标签；
+- `Run` 启动 Worker 并阻塞到 `ctx` 取消或发生不可恢复错误；
+- 同一个 Controller 实例的 `Run` 只允许调用一次。
+
+Controller 的标准实现持有：
+
+```go
+type SyncFunc func(ctx context.Context, key string) error
+
+type BaseController struct {
+    name  string
+    queue workqueue.TypedRateLimitingInterface[string]
+    sync  SyncFunc
+}
+```
+
+`BaseController` 只实现 Worker、队列终结和停止逻辑，不解释业务对象。
+
+### 3.2 Initializer
+
+```go
+type Dependencies struct {
+    Client         Client
+    WatchFactory   WatchSourceFactory
+    PollingFactory PollingSourceFactory
+    Recorder       EventRecorder
+}
+
+type InitContext struct {
+    Dependencies Dependencies
+    Config       ControllerConfig
+}
+
+type InitFunc func(ctx context.Context, init InitContext) (Controller, bool, error)
+```
+
+返回值语义：
+
+- `(controller, true, nil)`：Controller 已成功构造；
+- `(nil, false, nil)`：Controller 被配置显式禁用；
+- 其他组合均视为初始化失败。
+
+Initializer 只能构造和注册事件处理器，不得启动 goroutine。Controller 名称到 `InitFunc` 的映射由 `NewControllerInitializers` 显式创建，不使用导入副作用或全局可变注册表。
+
+### 3.3 Manager
+
+```go
+type Manager struct {
+    controllers []Controller
+    sources     []Source
+    health      HealthServer
+}
+
+func (m *Manager) Run(ctx context.Context) error
+```
+
+Manager 不知道业务 Controller 的类型，也不调用其 `Sync`。首次同步由 Manager 对所有已创建 Source 统一等待，不在 Controller 上重复暴露同步状态。
+
+## 4. 事件源
+
+### 4.1 通用约束
+
+```go
+type Source interface {
+    Name() string
+    AddEventHandler(handler ResourceEventHandler) error
+    Run(ctx context.Context) error
+    HasSynced() bool
+    Ready() bool
+}
+
+type ResourceEventHandler interface {
+    OnAdd(obj runtime.Object)
+    OnUpdate(oldObj, newObj runtime.Object)
+    OnDelete(obj runtime.Object)
+}
+
+var ErrSourceStarted = errors.New("source already started")
+var ErrWatchUnsupported = errors.New("resource does not support watch")
+```
+
+接口语义：
+
+- `Name` 返回稳定且唯一的事件源名称，用于日志、指标和错误定位；
+- `AddEventHandler` 注册订阅者，同一个 Source 可以注册多个 Handler；
+- `Run` 启动 List/Watch 或 Polling 主循环并阻塞，直到 `ctx` 取消或发生不可恢复错误；
+- `HasSynced` 只表示首次完整同步已经成功，不表示事件源此后永远健康；
+- `Ready` 返回事件源当前是否可用于调谐，供 Manager 聚合 readiness；
+- `ctx` 正常取消时 `Run` 返回 `nil`；不可恢复的初始化、协议或数据错误由 `Run` 返回；
+- List、Watch 断线和临时网络错误由 Source 内部按退避策略持续恢复，不应直接终止 `Run`；底层运行循环在 context 未取消时意外结束才作为不可恢复错误返回。
+
+所有 Handler 必须在 Source 的 `Run` 被调用之前完成注册。Source 一旦开始运行，其订阅集合即被冻结；之后调用 `AddEventHandler` 必须返回 `ErrSourceStarted`，不得动态修改订阅列表。`Run` 只能调用一次，重复调用返回 `ErrSourceStarted`。`AddEventHandler` 与 `Run` 对 started 状态的检查和修改必须由同一把锁保护，确保注册与启动不存在竞态。Initializer 是唯一允许注册业务 Handler 的阶段。
+
+事件处理器只允许执行以下操作：
+
+1. 校验并提取资源 key；
+2. 比较与入队判断直接相关的轻量字段；
+3. 将一个或多个 key 加入目标 Controller 队列。
+
+事件处理器不得调用写 API、访问外部服务或执行耗时计算。关联资源事件需要通过索引或一次 List 找到受影响的主资源 key；具体映射规则属于业务 Controller。
+
+Source 在调用 Handler 时必须隔离订阅者异常：一个 Handler 的 panic 不得阻止同一事件通知其他 Handler。Source 记录 handler、source、resource 和 panic 堆栈后继续分发；事件将在后续 Watch relist 或 Polling resync 中重新触发。
+
+Handler 方法不返回 error，这是有意遵循 informer event handler 的通知语义。对象类型错误、key 提取失败或事件映射失败由 Handler 记录日志和指标后丢弃本次通知，不得阻塞或终止 Source；后续 relist/resync 负责再次触发。
+
+### 4.2 Source Factory 与共享规则
+
+Source 使用 Kubernetes 的 `schema.GroupVersionResource` 标识，不以 Go 类型名或 URL 字符串作为共享键：
+
+```go
+type WatchSourceFactory interface {
+    ForResource(gvr schema.GroupVersionResource) (Source, error)
+    Sources() []Source
+}
+
+type PollingSourceFactory interface {
+    ForResource(gvr schema.GroupVersionResource, period time.Duration) (Source, error)
+    Sources() []Source
+}
+```
+
+Factory 契约：
+
+- 相同 GVR 的多次 `ForResource` 返回同一个 Source；
+- 不同 group、version 或 resource 永远不共享 Source；
+- `WatchSourceFactory` 只接受 `ebs/v1` 的 `jobs` 和 `runners`，其他 GVR 返回 `ErrWatchUnsupported`；
+- `PollingSourceFactory` 负责通过共享 API Client 为 GVR 构造分页 List 调用；
+- 同一 PollingSource 被请求不同周期时，在启动前采用最短周期；Source 启动后不得再次调用 `ForResource` 改变周期；
+- `Sources` 返回去重后的稳定快照，只允许 Manager 在全部 initializer 完成后调用；首次调用同时冻结 Factory，之后任何 `ForResource` 调用均返回 `ErrSourceStarted`；
+- Factory 的创建、复用和周期合并必须并发安全，但首版仍要求 initializer 串行执行，以获得确定的注册顺序。
+
+Manager 合并两个 Factory 的 `Sources`，只启动已被启用 Controller 请求的 Source，并等待这些 Source 全部 `HasSynced`。因此不需要维护 Controller 到 Source 的依赖图，也不会为未启用的 Controller 启动事件源。
+
+### 4.3 Job 和 Runner WatchSource
+
+`Job`、`Runner` 使用 `client-go` 的 Reflector/SharedIndexInformer 语义：
+
+- 首次 List 成功并完成本地 cache 替换后，`HasSynced` 才可返回 true；
+- Watch 断开后从最近的 `resourceVersion` 恢复；版本过期时重新 List；
+- Add、Update、Delete 都可以触发入队；
+- Delete 必须兼容 `cache.DeletedFinalStateUnknown`；
+- Update 收到相同 `resourceVersion` 时可以跳过；是否进一步比较 generation、spec 或 status 由业务 Controller 决定；
+- resync 事件允许重复入队，不影响正确性。
+
+共享 WatchSource 可以被多个 Controller 订阅，但每个 Controller 使用自己的事件映射器和队列。业务代码不得修改 informer cache 返回的对象；需要保留或修改时必须 `DeepCopy`。
+
+WatchSource 在 `Run` 内启动底层 SharedIndexInformer 并等待 context 取消。List/Watch 临时失败交由 Reflector 的退避和 relist 机制恢复，普通 Watch 断线不导致 `Run` 返回错误。与 Kubernetes informer 一致，首次同步后 `Ready` 保持 true；底层 Reflector 没有把安静但健康的 Watch 与断连重试区分为可靠的 stale 信号，因此不对 WatchSource 应用时间阈值。仅当 informer 主 goroutine 在 context 未取消时意外结束，`Run` 才返回带 Source 名称的不可恢复错误。
+
+### 4.4 非 Watch 资源 PollingSource
+
+不支持 Watch 的资源使用统一 `PollingSource`。每种资源可以共享一个 PollingSource，多个 Controller 注册独立事件映射器。
+
+PollingSource 通过以下通用分页接口读取资源：
+
+```go
+type ListPage struct {
+    Items           []runtime.Object
+    Continue        string
+    ResourceVersion string
+}
+
+type ListFunc func(
+    ctx context.Context,
+    gvr schema.GroupVersionResource,
+    continueToken string,
+    limit int64,
+) (ListPage, error)
+```
+
+`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。每一页使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
+
+PollingSource 每轮执行：
+
+1. 调用 List 获取全量对象并处理分页；
+2. 用 `UID` 标识对象身份，用 `resourceVersion` 判断同一对象是否变化；
+3. 与上一次成功快照比较，产生 Add、Update 和 Delete 通知；
+4. 原子替换本地只读快照；
+5. 记录成功时间并等待下一轮。
+
+约束如下：
+
+- 首次完整 List 成功后 `HasSynced` 才返回 true；空列表也是一次成功同步；
+- 任一分页失败则整轮失败，不替换快照，也不产生 Delete 通知；
+- 同名对象 UID 改变必须表现为旧对象 Delete 和新对象 Add；
+- 快照内对象必须 DeepCopy，禁止订阅方修改；
+- 每次成功扫描可以选择对全部对象产生周期 resync 通知，默认开启，以修复遗漏事件和外部副作用；
+- List 失败按独立的指数退避重试，成功后恢复正常轮询周期；
+- `ctx` 取消必须中止等待和后续扫描；已经发出的 HTTP 请求必须携带该 context；
+- PollingSource 不能把轮询结果称为 Watch 事件，也不能提供强实时性保证。
+
+PollingSource 对临时 List 失败持续退避重试；超过 stale threshold 时将 readiness 置为 false，成功完成一轮扫描后恢复。临时失败不终止 `Run`，且不得用失败或不完整的 List 结果覆盖旧快照。只有固定配置错误、响应无法按契约解析，或者轮询主循环在 context 未取消时意外结束，`Run` 才返回不可恢复错误。
+
+默认轮询周期为 30 秒，允许按资源和 Controller 配置。相同资源的共享 PollingSource 使用所有订阅者要求的最短周期，避免重复全量 List。同一 Source 不允许并发执行两轮扫描；上一次扫描完成后才计算下一次等待时间。
+
+对于非 Watch 资源，Worker 收到 key 后应通过 API `Get` 读取最新对象；PollingSource 快照只用于变化检测、索引和事件映射，不作为业务写入的并发前提。若 API 不提供对应 Get，业务 Controller 才可读取快照，并必须在设计中明确其最终一致性限制。
+
+## 5. WorkQueue 与 Worker
+
+每个 Controller 使用独立的 client-go 限速队列。当前仓库固定使用 `client-go v0.28.4`，该版本尚未提供泛型 Typed WorkQueue，因此首版使用：
+
+```go
+workqueue.RateLimitingInterface
+```
+
+`BaseController.Enqueue` 只接收 string，Worker 从队列取出元素后必须断言为 string，其他类型记录框架错误并 `Forget`。未来升级到提供泛型队列的 client-go 版本时，直接替换为 `workqueue.TypedRateLimitingInterface[string]`，队列语义不变。
+
+队列中只存放稳定 key：
+
+- project 范围资源使用 `{namespace}/{name}`；
+- cluster 范围资源使用 `{name}`；
+- key 生成失败时记录错误并丢弃事件。
+
+`client-go` workqueue 的 dirty/processing 语义保证：同一 key 不会被同一队列的多个 Worker 同时处理；处理期间再次 Add 会在当前处理结束后重新入队一次。
+
+### 5.1 标准 Worker 循环
+
+```go
+func (c *BaseController) processNext(ctx context.Context) bool {
+    key, shutdown := c.queue.Get()
+    if shutdown {
+        return false
+    }
+    defer c.queue.Done(key)
+
+    err := c.sync(ctx, key)
+    switch {
+    case err == nil:
+        c.queue.Forget(key)
+    case ctx.Err() != nil:
+        c.queue.Forget(key)
+        return false
+    case IsPermanent(err):
+        c.queue.Forget(key)
+    case c.queue.NumRequeues(key) < c.maxRetries:
+        c.queue.AddRateLimited(key)
+    default:
+        c.queue.Forget(key)
+    }
+    return true
+}
+```
+
+终结规则：
+
+- 成功：`Forget`；
+- 对象已删除且无需清理：视为成功；
+- API Conflict、暂时性网络错误、依赖未就绪：`AddRateLimited`；
+- 输入永久无效：记录 condition/event 后返回永久错误并 `Forget`；
+- 超过最大重试次数：`Forget`，记录 error、指标和事件，等待后续 Watch 或 Polling resync 再次激活；
+- 无论任何结果都必须且只能调用一次 `Done`。
+
+默认使用指数退避与总体限速组合，基础退避 5 ms、最大退避 1000 秒，Controller 可覆盖；默认最大连续重试次数为 15。成功、永久错误或超过重试上限时通过 `Forget` 清除旧退避。普通 Add 不主动清除一个仍在失败重试中的 key 的退避次数。
+
+### 5.2 错误分类
+
+框架提供可被 `errors.Is`/`errors.As` 穿透包装识别的永久错误：
+
+```go
+type PermanentError interface {
+    error
+    Permanent() bool
+}
+
+func NewPermanentError(err error) error
+func IsPermanent(err error) bool
+```
+
+永久错误只终结本次调谐并清除本次队列退避，不会永久屏蔽 key。后续新的 Watch 事件或 Polling resync 仍可以重新入队。
+
+框架不负责为永久错误写 condition。业务 `Sync` 必须先完成必要且幂等的状态或 Event 写入，再返回永久错误；如果这次写入本身失败，应返回可重试错误。context cancellation 不计入重试，Controller 正在停止时直接结束当前 Worker。
+
+### 5.3 最新状态与并发写
+
+- Watch 资源由 Worker 通过 lister 获取最新 cache 对象；
+- 非 Watch 资源由 Worker 通过 API Get 获取最新对象；
+- 更新 status 时必须携带 `resourceVersion`；
+- Conflict 应重新读取对象并重算结果，不能盲目重放旧 patch；
+- 创建确定性名称的子对象遇到 AlreadyExists 时，应读取并确认其 owner/UID 等幂等标识；
+- API 写入请求已发送但响应超时时，业务 Controller 必须先通过 Get/List 确认结果，不能直接重复产生外部副作用。
+
+## 6. 生命周期
+
+### 6.1 启动顺序
+
+Manager 必须按以下顺序启动：
+
+1. 解析配置并创建 REST config、客户端、事件记录器和健康服务；
+2. 执行所有 initializer，构造启用的 Controller，并在此阶段向 Source 注册全部 Handler；
+3. 启动 `/healthz` 和 `/readyz`；
+4. 结束注册阶段；后续调用 Source 的 `Run` 时，由 Source 原子地标记 started 并冻结订阅集合；
+5. 从两个 Factory 获取并合并全部已创建 Source，使用同一个 `errgroup.WithContext` 调用其 `Run`；
+6. 使用 cache-sync timeout 等待全部已创建 Source 的 `HasSynced` 返回 true；
+7. 使用同一 errgroup 启动各 Controller Worker；
+8. 所有 Controller 启动且依赖已同步后，将 readiness 设置为 true；
+9. 阻塞等待根 context 取消，或任一 Source/Controller 返回不可恢复错误。
+
+缓存同步具有可配置超时，默认 2 分钟。超时、初始化失败、Source 返回不可恢复错误或 Controller 意外退出均取消 errgroup context，Manager 等待其他组件退出后返回原始错误并终止进程，交由容器编排层重启；不得静默保留一个永久缺失的事件源或 Controller。根 context 正常取消且所有组件正常退出时，Manager 返回 `nil`。
+
+启动顺序不表达业务依赖。Controller 必须通过资源状态实现依赖协调，不得依赖另一个 Controller 恰好先启动。
+
+### 6.2 停止顺序
+
+`main` 使用 `signal.NotifyContext` 将 SIGINT/SIGTERM 转换为根 context 取消。停止顺序为：
+
+1. readiness 立即变为 false；
+2. Manager 取消运行 context，Source 的 `Run` 停止 Watch、Polling 和新的 API 请求；
+3. 每个 Controller 调用 `queue.ShutDownWithDrain()`，不再接受新 key；
+4. Worker 完成当前 `Sync` 后退出；
+5. Manager 单独创建 `shutdownCtx`，其超时时间为 `--shutdown-timeout`，并等待 errgroup 返回；
+6. errgroup 在期限内完成则返回其原始结果；`shutdownCtx` 先到期则返回 shutdown timeout 错误，由容器终止宽限期兜底。
+
+shutdown timeout 只由 Manager 创建，Source 和 Controller 不得各自建立进程级退出期限。框架不使用游离 goroutine，也不允许丢下不受 context 管理的后台任务。业务外部调用必须设置超时并接受运行 context；收到取消后应尽快返回。
+
+### 6.3 Controller panic
+
+Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 panic 的本次 key 按可重试失败处理，但连续 panic 仍受最大重试次数限制。Controller 的顶层 `Run` 意外返回视为不可恢复错误，Manager 终止进程。
+
+## 7. 配置
+
+框架至少提供：
+
+| 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| 剔除自身已终态的对象 | Handler（`TerminalStateFilter`，各 Controller 自实现） | 终态集合由各 Controller 自行定义（如 build 的 `{Success, Failed, Aborted}`、snapshot 的 `{Active}`），终态对象不入队 |
-| 父对象中止时级联删除子对象 | Handler（`ParentAbortedFilter`，各 Controller 自实现） | 父中止则删除子对象；父不存在（孤儿）时保留子对象，不误删 |
-| 观测型 condition 写（如 `BuildNotFound`） | Handler | 「跳过不入队」语义下写入该 condition 的唯一时机（观测元数据，非业务状态推进） |
-| phase / stage 推进 | `reconcile`（各 Controller 自实现状态机） | 业务状态迁移的唯一推进点，Handler 不得推进业务 phase |
+| `--apiserver` | 必填 | ebs-apiserver 地址 |
+| `--apiserver-ca` | 空 | 服务端 CA |
+| `--insecure-skip-verify` | false | 仅开发环境允许关闭 TLS 校验 |
+| `--controllers` | `*` | 启用或禁用的 Controller 集合 |
+| `--workers` | 2 | Controller 默认 Worker 数量 |
+| `--poll-period` | 30s | 非 Watch 资源默认轮询周期 |
+| `--poll-page-size` | 500 | 非 Watch 资源单页对象数 |
+| `--cache-sync-timeout` | 2m | 首次同步超时 |
+| `--shutdown-timeout` | 30s | 优雅退出上限 |
+| `--source-stale-threshold` | 2m | Source 持续未成功同步后 readiness 失败的最小阈值 |
+| `--health-bind-address` | `:8080` | 健康与指标监听地址 |
 
-**判定规则**：
+每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；配置非法时启动失败。当前不配置客户端证书，认证能力随 ebs-apiserver 的客户端契约另行扩展。
 
-- Handler 在 Lister 线程内串行执行，顺序由各 Controller 的 `get_handlers()` 返回列表决定，不可在流水线之外变更。
-- Handler 剔除对象后可执行副作用（删除对象、写 condition），被 Handler 删除的对象不再入队 `reconcile`。
-- 具体状态机、迁移表与终态集合见各 Controller 设计文档（`build_controller.md`、`snapshot_controller.md` 等），不在本文范围。
+## 8. 健康检查与可观测性
 
----
+### 8.1 健康检查
 
-## 3. 核心抽象与职责
+- `/healthz`：进程主循环和 HTTP 服务存活即成功；
+- `/readyz`：初始化成功、全部启用 Controller 的依赖完成首次同步，且没有 Controller 意外退出时成功；
+- 首次 Polling List 失败或 Watch 初始 List 失败时，进程可以继续重试，但 readiness 保持 false，直至同步超时；
+- 运行期间短暂 List/Watch 错误不立即令进程 unhealthy，应通过指标和日志反映；持续超过配置阈值时 readiness 变为 false。
 
-### 3.1 InitFunc 类型
+PollingSource 的有效 stale threshold 为 `max(--source-stale-threshold, 3 × pollPeriod)`。PollingSource 必须原子维护 `lastSuccessfulSync`，健康检查只读取该状态，不执行 API 请求；恢复一次成功扫描后 readiness 自动恢复。WatchSource 首次同步后沿用 SharedInformer 的 synced 状态，不使用基于时间的 stale 判定。
 
-`InitFunc` 是 Controller 的工厂函数签名。每个 Controller 提供一个符合此签名的函数，负责实例化 Controller 并在其内部启动线程运行控制循环。
+### 8.2 日志字段
 
-- 接收 `stop_event`，用于通知 Controller 退出。
-- 返回 `(enabled, error)`：`enabled` 表示该 Controller 是否成功启用，`error` 表示初始化过程中遇到的异常（`None` 表示无错误）。
-- `InitFunc` 不得抛出未捕获异常；调用方会兜底捕获并转为该元组。
+结构化日志至少包含：
 
-### 3.2 Handler 过滤器基类
+- `controller`
+- `key`
+- `source`
+- `resource`
+- `result`
+- `retries`
+- `duration`
+- `error`
 
-`Handler` 是对 list 出的对象进行过滤并执行副作用（删除对象、写 condition）的处理单元基类，各 Controller 继承它实现自己的 Handler。
+不得记录 payload、认证信息或可能包含密钥的完整对象。
 
-- 每个 Handler 接收一个对象列表，返回过滤后的对象列表；被过滤掉的对象不再进入后续 Handler 与 workqueue。
-- 可在此方法中执行副作用（如删除对象、写 condition）。
+### 8.3 指标
 
-> 各 Controller 自行实现具体 Handler（如 `TerminalStateFilter`、`ParentAbortedFilter`、`ProjectStatusFilter`），均继承 `Handler` 基类。本文不内置具体 Handler。
+除 client-go workqueue 指标外，至少提供：
 
-### 3.3 Controller 抽象基类
+- Controller 启动状态和 Worker 数；
+- reconcile 总数、错误数、重试数和耗时；
+- Watch 重连和 relist 次数；
+- Polling 成功/失败次数、耗时和最后成功时间；
+- cache sync 状态；
+- 永久错误和超过最大重试次数的对象数。
 
-`Controller` 抽象基类封装了 Lister + Worker 的流水线骨架。子类只需实现 `list_objects`、`get_handlers`、`reconcile` 三个抽象方法，`run` 方法由基类提供默认实现。
+## 9. 多副本与一致性
 
-- `list_objects`：周期性拉取待处理的全量对象，由 Lister 线程调用。
-- `get_handlers`：返回过滤链，按列表顺序依次执行。
-- `reconcile`：对 workqueue 中取出的单个对象执行调谐，由 Worker 线程调用。
-- `key_func(obj)` 为资源键提取函数，默认取 `metadata.name`，有 namespace 时拼为 `namespace/name`，缺失时返回 `None`。
-- 日志器携带 controller 名称（见第7节）。
+首版 Controller Manager 按单活设计。部署多个副本时必须启用 leader election，只有 leader 启动 Controller Worker；非 leader 可以保持健康，但 readiness 必须明确表示 standby 状态。
 
-`run` 的默认行为：首次运行时构建 Handler 链（只构建一次，避免半构造对象上调用）；随后启动 1 个 Lister 线程与 N 个 Worker 线程，均为 daemon；随后阻塞在 `stop_event.wait()` 上等待停止信号。收到信号后，立即关闭 workqueue（丢弃积压，对应 B-7），并 join 自己启动的线程（超时后由 daemon 回收）。
+Leader election 不能替代幂等性：领导者切换可能发生在 API 或外部操作已经成功但本进程尚未观察到响应时，新的领导者仍会重新调谐同一对象。
 
-Lister 线程主循环：每个周期执行 `list_objects()` 拉取全量对象 → 依次经过 Handler 链过滤 → 用 `key_func` 提取资源键，原子重建工作集（供 Worker 按 key 只读取值）→ 将 key 入队 workqueue。周期结束在 `stop_event.wait(timeout=period)` 上休眠，兼顾下一周期与停止响应。
+如果首版暂不实现 leader election，部署清单必须固定 `replicas: 1`，并在启动参数或文档中明确不支持多副本并发工作。
 
-Worker 线程主循环：从 workqueue 取 key → 用 key 从工作集取对象（对象可能已被下一周期过滤掉）→ 调用 `reconcile(obj)`。`reconcile` 抛异常时记录 ERROR 日志并跳过（不重试、不退避，该对象在下一轮 Lister 周期重新入队）；无论成败最终都 `done(key)`，释放处理中标记。
+## 10. 测试要求
 
-**workqueue 语义**（`WorkerQueue`）：
+### 10.1 框架单元测试
 
-- 队列元素为稳定可哈希的资源键（`key_func` 结果），不存可变资源对象。
-- 去重采用 client-go 风格 `dirty + processing` 两集合配合 `ready` 队列：同一 key 在等待队列中只保留一份；处理中再次 `add` 会进入 `dirty`，处理完成后重新入队一次，不丢失处理期间的更新。
-- 有界：`max_size` 限制等待队列长度，队列满时 `add` 阻塞等待空间（软背压），不丢弃。
-- `shutdown(drain=False)` 立即丢弃待处理与处理中状态（对应 B-7）；`drain=True` 等待 ready 与 processing 排空。
+- initializer 成功、禁用、失败和重复名称；
+- Source 名称、首次 Run、重复 Run，以及 Run 前/后的 Handler 注册；
+- Source 临时错误内部恢复、不可恢复错误返回和 Manager 错误传播；
+- Source Factory 按 GVR 复用、拒绝非 Job/Runner Watch、Polling 周期合并和启动后冻结；
+- 多个 Handler 的事件分发，以及单个 Handler panic 不影响其他订阅者；
+- cache sync 成功、失败、超时和 context 取消；
+- stale threshold 导致 readiness 失败及成功同步后的恢复；
+- key 去重、处理期间更新、退避、Forget 和最大重试；
+- 永久错误包装识别、Forget 以及后续新事件重新激活；
+- panic 恢复和 Controller 意外退出；
+- tombstone Delete；
+- Polling 首次空列表同步；
+- Polling Add/Update/Delete、UID 替换、完整分页、分页失败不覆盖快照和单轮串行；
+- 停止时不再入队并等待 Worker 退出；
+- shutdown timeout 由 Manager 统一执行；
+- readiness 随初始化和同步状态变化。
 
-### 3.4 ControllerManager 类
+### 10.2 Controller 契约测试
 
-`ControllerManager` 是整个系统的核心，持有 Controller 注册表和停止事件，管理多个 Controller 的生命周期。
+每个业务 Controller 至少验证：
 
-- 对外提供`run` / `stop`（运行/停止）；`run`内部通过`_start_controllers`启动注册的Controller。
-- 构造时可注入自定义 `initializers`（默认用 `new_controller_initializers()`），以保持可测试。
-- 校验 `initializers` 为 dict、key 为非空字符串、value 可调用，非法即抛错。
+- 注册的事件源符合 API 能力边界；
+- 对 `Job`、`Runner` 使用 WatchSource；
+- 对其他资源使用 PollingSource，代码不会请求 Watch；
+- 事件映射只入队，不产生写副作用；
+- 相同 key 重复调谐保持幂等；
+- Conflict、NotFound、超时结果未知和外部依赖暂时失败；
+- 进程重启后的状态恢复。
 
-### 3.5 注册表与 register_controller 装饰器
+所有模块必须通过：
 
-业务 Controller 通过 `register_controller("name")` 装饰其 `InitFunc`，即可自动注册到全局注册表，无需手动登记。注册顺序即导入顺序，亦为启动顺序。
-
-- 全局注册表维护 `name -> InitFunc` 映射，dict 保序。
-- `register_controller` 在注册期校验名称：非法（非空字符串）或重复时抛错，避免注册表在导入期被静默污染（对应 B-4）。
-- `get_registered_initializers()` 返回当前已注册的全部初始化函数（拷贝）。
-
-### 3.6 配置
-
-运行参数与启动抖动区间集中配置，避免各模块硬编码。
-
-- 启动抖动区间（秒，闭区间）：0.5 ~ 1.5。
-- Controller 默认运行参数：Worker 数量 2、Lister 周期 30 秒、队列容量 1024、worker 取对象轮询超时 1 秒、停止等待线程退出超时 5 秒。
-
-各 Controller 的独立运行参数（`worker_num` / `list_period` / `queue_capacity` 及业务参数）与独立日志目录，以 controller 实例名为 key 集中配置，未配置者回退到默认值。
-
----
-
-## 4. 启动流程
-
-### 4.1 注册 Controller — register_controller 与 new_controller_initializers
-
-业务 Controller 用 `register_controller("name")` 装饰其 `InitFunc`，在模块导入期自动登记到全局注册表。`new_controller_initializers()` 负责导入各 Controller 模块以触发注册副作用，并收集注册表。
-
-- 导入顺序即注册顺序，亦为启动顺序。新增 Controller 需追加一次导入以触发注册副作用。
-- 当前注册 4 个 Controller：`build-controller`、`build-info-controller`、`snapshot-controller`、`rpm-repo-controller`。
-- `new_controller_initializers()` 收集注册表后记录 `controller_registered` 日志（含 `total_count`）。
-
-### 4.2 主入口 — run
-
-`run` 是 `ControllerManager` 的启动入口，编排注册与启动流程，随后阻塞等待停止信号。
-
-- 调用 `_start_controllers()` 后记录 `controller manager started: ok/total` 日志；无注册时记录 `no controllers registered`。
-- 阻塞等待 `stop_event`，收到信号后退出。不 join 各 controller 线程 —— InitFunc 内部启动的是 daemon 线程，由进程退出回收（见 G-03 / G-06）。
-
-### 4.3 启动流程图
-
-```mermaid
-sequenceDiagram
-    participant Main as main()
-    participant CM as ControllerManager
-    participant NCI as new_controller_initializers
-    participant CA as Controller A
-    participant CB as Controller B
-
-    Main->>CM: ControllerManager()
-    CM->>NCI: new_controller_initializers()
-    NCI-->>CM: 名称 → 初始化函数（自注册表收集）
-
-    Main->>CM: run()
-    CM->>CM: _start_controllers()
-
-    loop 遍历注册表每个 controller
-        CM->>CA: init_fn(stop_event)
-        CA->>CA: 创建 Controller 并启动线程（运行 run 循环）
-        CA-->>CM: (enabled=True, None)
-
-        CM->>CB: init_fn(stop_event)
-        CB->>CB: 创建 Controller 并启动线程（运行 run 循环）
-        CB-->>CM: (enabled=True, None)
-    end
-
-    CM->>CM: stop_event.wait() 阻塞等待
+```bash
+go test ./...
+go test -race ./...
+go vet ./...
 ```
 
-启动流程的执行顺序为：`main` 创建 `ControllerManager` 实例（构造时经 `new_controller_initializers` 收集自注册表），随后调用 `run`。`run` 内部调用 `_start_controllers`，遍历每个 `InitFunc` 并调用它，每个 `InitFunc` 在内部创建 Controller 并启动一个 daemon 线程运行控制循环。所有 Controller 启动后，`run` 在 `stop_event.wait()` 处阻塞，等待停止信号。
-
----
-
-## 5. 停止流程
-
-### 5.1 停止机制
-
-停止通过 `stop_event.set()` 实现。Python 的 `threading.Event` 内部维护一个布尔标志，调用 `set()` 后标志变为 `True`，所有调用 `wait()` 阻塞的线程会立即被唤醒，所有调用 `is_set()` 检查的线程会读到 `True`。这一广播特性天然适合一对多的停止通知场景：无需逐个通知每个 Controller，一次 `set()` 即可让所有线程感知。
-
-- `stop()` 广播停止信号，让所有正在运行的 Controller 退出。
-- 幂等：多次调用等价于一次。
-- 不阻塞等待线程退出。
-
-### 5.2 信号处理
-
-`main` 函数注册 `SIGINT` 和 `SIGTERM` 信号处理器，收到信号后调用 `cm.stop()` 设置 `stop_event`。
-
-### 5.3 Controller 内部的停止逻辑
-
-Controller 基类的 `run` 方法启动了 Lister 线程和 N 个 Worker 线程后，在 `stop_event.wait()` 处阻塞。当 `stop_event` 被设置后，Lister 线程的 `while not stop_event.is_set()` 循环退出（或在 `wait(timeout=period)` 处立即返回并 break），Worker 线程在 `workqueue.get(timeout=1)` 超时（返回 `(None, False)`）后继续轮询，检查到 `stop_event.is_set()` 也退出；`run` 方法随后 `workqueue.shutdown()` 并 `join` 所有线程返回（超时后依赖 daemon 回收）。
-
-```mermaid
-sequenceDiagram
-    participant Run as run()
-    participant L as Lister 线程
-    participant WQ as WorkQueue
-    participant W1 as Worker 1
-    participant W2 as Worker 2
-
-    Run->>L: 启动 Lister 线程
-    Run->>W1: 启动 Worker 线程
-    Run->>W2: 启动 Worker 线程
-
-    loop 每个 list_period 周期
-        L->>L: list_objects() 拉取全量对象
-        L->>L: Handler 链过滤/删除/观测
-        L->>WQ: add(key) 入队剩余对象
-    end
-
-    par Worker 1 消费
-        W1->>WQ: get() 取出 key
-        W1->>W1: reconcile(obj) 调谐
-        W1->>WQ: done(key)
-    and Worker 2 消费
-        W2->>WQ: get() 取出 key
-        W2->>W2: reconcile(obj) 调谐
-        W2->>WQ: done(key)
-    end
-
-    Note over Run: stop_event.set() 触发
-    L-->>Run: 循环退出，线程结束
-    W1-->>Run: 循环退出，线程结束
-    W2-->>Run: 循环退出，线程结束
-    Run->>WQ: shutdown()
-    Run->>Run: join 所有线程，返回
-```
-
-Lister 线程周期性地执行 list-filter-enqueue 循环，Worker 线程持续从 workqueue 取对象执行 reconcile。两类线程通过 `WorkerQueue` 解耦：Lister 产出对象的速率与 Worker 消费的速率不必一致，workqueue 起到缓冲作用。当 `stop_event` 被设置时，Lister 与 Worker 的循环条件不满足即退出，`run` 方法随后 `shutdown()` 并 `join` 所有线程（`join(timeout=5)` 超时后由 daemon 回收）。
-
-### 5.4 停止流程图
-
-```mermaid
-sequenceDiagram
-    participant OS as OS Signal
-    participant Main as main()
-    participant CM as ControllerManager
-    participant CA as Controller A
-    participant CB as Controller B
-
-    OS->>Main: SIGINT / SIGTERM
-    Main->>CM: stop()
-    CM->>CM: stop_event.set()
-
-    par Controller A 收到停止信号
-        CA->>CA: is_set() 检测到 stop_event 已设置
-        CA->>CA: run() 内 shutdown + join 后线程退出
-    and Controller B 收到停止信号
-        CB->>CB: is_set() 检测到 stop_event 已设置
-        CB->>CB: run() 内 shutdown + join 后线程退出
-    end
-
-    Main->>Main: run() 从 stop_event.wait() 返回
-    Main-->>Main: 进程退出（daemon 线程被回收）
-```
-
-停止流程的关键在于 `stop_event.set()` 的广播特性。所有 Controller 的线程通过 `wait()` 阻塞或 `is_set()` 轮询检测到事件被设置，各自执行清理逻辑后退出。`run` 方法中阻塞的 `stop_event.wait()` 也会返回，使主流程得以继续向下执行并最终退出进程。图中使用 `par` 块表示各 Controller 的退出是并行发生的；各 Controller 线程均为 daemon，即便清理未完成，主进程退出时也会被回收。
-
----
-
-## 6. 边界情况与裁定
-
-本节列出设计阶段识别的边界情况及其裁定，作为实现的契约依据。
-
-### 6.1 启动与停止边界
-
-**B-1: 注册表为空**
-
-`new_controller_initializers()` 返回空 dict 时，`_start_controllers()` 不启动任何 Controller，`run()` 记录 `no controllers registered` 后进入 `stop_event.wait()` 阻塞。进程正常运行，等待停止信号。这是合法状态，非异常。
-
-**B-2: InitFunc 抛出异常而非返回元组**
-
-`_start_controllers()` 用 try/except 包裹调用，捕获后转为 `(False, exc)` 并记录 `ERROR` 日志，继续后续 Controller。这保证一个不规范的 InitFunc 不会拖垮整个启动。
-
-**B-3: stop_event 在启动完成前被设置**
-
-启动过程中收到 SIGTERM 时，`_start_controllers()` 在每次调用 InitFunc 前检查 `stop_event.is_set()`，若已设置则跳过剩余 Controller。已启动的 Controller 线程感知事件后退出。`run()` 不阻塞，直接返回。这避免在停止过程中继续启动新 Controller。
-
-**B-4: Controller 名非法或重复注册**
-
-`register_controller` 在注册期校验名称：非空字符串，否则抛 `ValueError`；同名重复注册抛 `ValueError`。注册表在导入期即失败，避免被静默污染。
-
-### 6.2 运行时边界
-
-**B-5: Lister 拉取周期内 stop_event 被设置**
-
-Lister 处于 `stop_event.wait(timeout=period)` 阻塞中收到停止信号时，`wait` 立即返回（返回 True），Lister 退出循环，不再拉取。这是 `threading.Event.wait` 的标准语义，天然支持。若停止信号在 `list_objects` 或 Handler 链执行期间到达，Lister 会完成当前周期（含入队）后退出，不中途打断，也不影响停止的最终达成。
-
-**B-6: Worker 正在调谐一个耗时对象时收到停止信号**
-
-`reconcile` 调用耗时 60 秒，停止信号在调谐进行到 10 秒时到达：Worker 不中断当前 `reconcile`（无法安全中断），完成当前对象后，在下次取队列前检查 `stop_event`，退出。`run` 中 `join(timeout=5)` 只等待 5 秒，超时后未退出的 Worker 线程交由主进程 daemon 回收，不阻塞退出。若 `reconcile` 内部有可中断点，子类应自行检查 stop_event 提前退出。容器编排层 `terminationGracePeriodSeconds` 兜底强制 kill。
-
-**B-7: workqueue 在停止时仍有积压**
-
-停止时 workqueue 含未处理对象，积压对象被丢弃，不强制排空（`shutdown(drain=False)`）。理由：停止语义是"尽快退出"，排空积压可能耗时不可控；对象在进程重启后的下一轮 Lister 拉取时会重新入队（前提是对象状态未达终态）。此结论依赖 G-09：`reconcile` 必须可安全重放，否则丢弃积压后的重放会重复产生副作用。
-
-### 6.3 关键歧义裁定
-
-| 歧义 | 裁定 |
-| --- | --- |
-| 某个 InitFunc 失败后是否重试？ | 不重试。失败即记录并跳过。重试职责属于各 Controller 内部的连接管理，不属于管理器。管理器重启整个进程是唯一的"全局重试"途径，由容器编排层负责 |
-| `stop()` 是否阻塞等待所有线程退出？ | 不阻塞。`stop()` 仅设置 `stop_event` 后返回；Controller 线程为 daemon，由进程退出回收 |
-| Worker 数量 N 如何确定？ | 由 Controller 子类构造时指定（从配置读取，回退默认值），必须为正整数，非法值抛 `ValueError` |
-| Lister 拉取周期如何确定？ | 由 Controller 子类构造时指定（从配置读取，回退默认 30 秒），通过 `stop_event.wait(timeout=period)` 实现兼顾轮询与停止响应 |
-| 注册表的顺序由什么决定？ | 由各 Controller 模块的导入顺序决定，导入顺序即 `register_controller` 注册顺序，亦即启动顺序（Python 3.7+ dict 保序） |
-| `reconcile` 失败后如何处理？ | 不重试、不退避。基类记录 ERROR 日志（含堆栈）并跳过，该对象在下一轮 Lister 周期重新拉取入队（若仍被 Handler 链保留）。是否写 condition 由各 Controller 业务实现决定 |
-| 启动抖动区间如何确定？ | 相邻 Controller 之间插入 0.5~1.5 秒（闭区间）随机抖动 |
-| `ControllerManager` 如何保持可测试？ | 构造参数 `initializers` 可注入自定义注册表（默认用 `new_controller_initializers()`），测试无需真实业务 Controller |
-
----
-
-## 7. 可观测性设计
-
-### 7.1 关键事件表
-
-每个 Controller 必须有名称，每次启动、退出、异常都必须留下日志痕迹。日志器按 controller 名称创建，其日志器名称即为 controller 名称（模块级日志取调用方模块名）。下表定义系统应埋点的关键事件。
-
-| 事件 | 等级 | 关键字段 | 触发点 |
-| --- | --- | --- | --- |
-| controller_registered | INFO | total_count | `new_controller_initializers()` 收集注册表完成 |
-| controller thread dispatched | INFO | controller（日志器名） | InitFunc 返回 `(True, None)` |
-| controller start failed | ERROR | controller, error | InitFunc 返回 `(False, err)` |
-| controller init raised | ERROR | controller, exc（堆栈） | InitFunc 抛异常（B-2 兜底） |
-| lister cycle | INFO | controller, total, enqueued | Lister 完成一轮 |
-| lister cycle error | ERROR | controller, exc（堆栈） | list/handler 循环内异常 |
-| reconcile done | INFO | controller, obj_key, duration_ms | Worker 完成一次调谐 |
-| reconcile error | ERROR | controller, obj_key, exc（堆栈） | reconcile 抛异常 |
-| object not found in working set | WARN | controller, obj_key | 队列 key 在工作集中缺失 |
-| workqueue drop item | DEBUG | item | 队列关闭后仍 `add`（丢弃） |
-| controller lister stopped | INFO | controller | Lister 线程退出（finally） |
-| manager stopping | INFO | — | `stop()` 被调用 |
-
-### 7.2 日志规范
-
-- 每个 Controller 用独立日志器，日志器名称即 controller 名，日志输出的模块段即为该名称。
-- 启动、退出、异常三个关键事件必须打 `INFO` 或更高等级。
-- 高频指标（如 workqueue 丢弃）打 `DEBUG`，生产默认关闭（受调试开关控制）。
-- 异常日志必须包含堆栈信息：记录时携带异常实例以输出完整堆栈。
-
----
-
-## 8. 典型场景
-
-### 8.1 场景 S-1: 正常启动
-
-**前置条件**：平台进程启动，导入 4 个 Controller 模块：`build-controller`、`build-info-controller`、`snapshot-controller`、`rpm-repo-controller`
-
-**主流程**：
-1. `main` 构造 `ControllerManager`（构造时内部调用 `new_controller_initializers()`，收集自注册表）
-2. `main` 注册 SIGINT/SIGTERM 处理器，指向 `ControllerManager.stop`
-3. `main` 调用 `ControllerManager.run()`
-4. `run()` 内部调用 `_start_controllers()`
-5. 依次调用 `build-controller` 的 InitFunc，线程启动；间隔抖动；调用 `build-info-controller` 的 InitFunc，线程启动；……依序完成 4 个 Controller
-6. `run()` 在 `stop_event.wait()` 阻塞
-
-**后置条件**：4 个 Controller 并发调谐，日志可见 4 条 `controller thread dispatched` 记录
-
-### 8.2 场景 S-2: 单个 Controller 启动失败
-
-**前置条件**：`snapshot-controller` 的 InitFunc 因依赖服务不可用返回 `(False, RuntimeError("client unavailable"))`
-
-**主流程**：
-1. `_start_controllers()` 依次调用各 InitFunc
-2. `snapshot-controller` 的 InitFunc 返回 `(False, err)`
-3. 记录 `ERROR` 日志（`controller start failed`），继续后续
-4. 其余 Controller 正常启动
-5. `run()` 阻塞等待停止
-
-**后置条件**：3 个 Controller 正常运行，`snapshot-controller` 未运行，日志可见失败记录，进程不退出
-
-### 8.3 场景 S-3: Controller 线程运行时崩溃
-
-**前置条件**：`build-controller` 的 Lister 线程因 API 返回非预期数据抛出异常
-
-**主流程**：
-1. Lister 线程的循环用 try/except 捕获异常
-2. 记录 `ERROR` 日志含堆栈
-3. 该轮 list 失败但 Lister 线程不退出，下一周期继续尝试
-4. 其他 Controller 与管理器不受影响
-
-**后置条件**：仅 `build-controller` 该轮调谐受影响，平台整体继续运行，日志可定位崩溃点
-
----
-
-## 9. 关键设计决策
-
-### 9.1 为什么使用装饰器自注册而非手工维护 Dict
-
-采用 `register_controller("name")` 装饰器 + 全局注册表，而非手工维护名称到初始化函数的映射，原因有二：
-
-- **可标识性与唯一性**：每个 Controller 通过名称标识，`register_controller` 在注册期校验名称非法/重复并抛错，避免注册表在导入期被静默污染（对应 B-4）。
-- **可扩展性与低耦合**：新增 Controller 只需在其模块顶部加一行装饰器，并追加一次导入以触发注册副作用，无需改动注册表构造逻辑。`ControllerManager` 不直接导入具体 Controller 子类（G-02），注册与实现解耦。
-
-### 9.2 为什么每个 Controller 在独立线程运行
-
-将每个 Controller 放在独立的线程中运行，实现了故障隔离和并发执行。一个 Controller 的异常或阻塞不会影响其他 Controller 的正常运行。Python 的 `threading` 模块足以管理数十个 Controller，且 `daemon=True` 保证了即使某个线程未正常退出，主进程退出时也不会被挂住。
-
-需要注意的是，Python 受 GIL 限制，多线程适合 I/O 密集型控制循环（如轮询 API、等待事件）。如果 Controller 涉及大量 CPU 计算，可考虑使用 `multiprocessing` 或 `concurrent.futures.ProcessPoolExecutor` 替代。
-
-### 9.3 为什么使用 threading.Event 而非 contextvars 或其他机制
-
-本设计使用 `threading.Event` 作为停止信号的载体，原因在于：
-
-- **广播语义直观**：`Event.set()` 的语义是"通知所有等待者"，恰好对应"停止所有 Controller"的需求。所有调用 `wait()` 阻塞的线程会立即被唤醒，所有调用 `is_set()` 的线程会读到 `True`
-- **API 简洁**：`Event` 只有 `set()`、`clear()`、`is_set()`、`wait()` 四个方法，语义清晰，无额外认知负担
-- **可组合性强**：`wait(timeout=N)` 兼顾了轮询间隔和停止信号响应——若事件被设置则立即返回，否则最多等待 N 秒，非常适合控制循环的 `while not stop_event.is_set()` 模式
-
-如果项目整体已采用 `asyncio` 异步框架，也可以将 `threading.Event` 替换为 `asyncio.Event`，将线程替换为协程，核心逻辑不变。
+## 11. 实现裁定
+
+以下决策作为首版实现的固定契约：
+
+1. Manager 与 Controller 使用 `context.Context` 管理生命周期；
+2. Controller 显式注册，不使用导入副作用；
+3. 每个 Controller 使用独立的 client-go rate-limiting workqueue，并在当前 v0.28.4 版本通过 BaseController 强制 string key 边界；
+4. 队列只保存 key，所有业务写入集中在 `Sync`；
+5. 仅 `Job`、`Runner` 使用 List/Watch 和本地 lister；
+6. 其他资源使用周期 List 的 PollingSource，Worker 默认通过 GET 获取最新对象；
+7. 首次事件源同步完成前不得启动 Worker，readiness 保持 false；
+8. 可重试失败进入指数退避，成功和永久失败执行 Forget；
+9. 初始化失败、同步超时或 Controller 意外退出使进程失败；
+10. 首版若不实现 leader election，只允许部署一个工作副本；
+11. 所有事件 Handler 必须在 Source `Run` 前注册，运行后注册和重复运行均返回 `ErrSourceStarted`；
+12. Source 通过阻塞的 `Run(ctx) error` 报告不可恢复错误，Manager 使用共享 errgroup 将该错误传播到进程出口；
+13. Source Factory 按完整 GVR 共享事件源；Watch Factory 必须拒绝 Job、Runner 之外的资源；
+14. Manager 启动 Worker 前统一等待全部已创建 Source 完成首次同步，不维护 Controller 到 Source 的依赖图；
+15. 普通 List/Watch/Polling 错误持续退避恢复，通过 stale 状态影响 readiness，不直接终止进程；
+16. PollingSource 使用通用分页 `ListFunc`，任何一页失败都不得替换旧快照；
+17. 永久错误只终结本次调谐，后续资源事件仍可重新激活 key；
+18. 运行 context 和 shutdown timeout 均由 Manager 统一管理。
