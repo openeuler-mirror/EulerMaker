@@ -19,7 +19,7 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 |------|---------|------|------|
 | `apiVersion` | string | `apiVersion` | `ebs/v1` |
 | `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / BuildResource / Job / Runner |
-| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/BuildResource/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-` |
+| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/BuildResource/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -115,15 +115,15 @@ type ProjectSpec struct {
 
 ```go
 type ProjectStatus struct {
-    Phase             string                 `json:"phase,omitempty"`
-    LastBuildStatus   map[string]string      `json:"lastBuildStatus,omitempty"`
+    Phase string `json:"phase,omitempty"`
 }
 ```
 
-| 字段 | Go 类型             | 说明                           |
-|------|-------------------|------------------------------|
-| `phase` | string            | `"Active"` / `"Terminating"` |
-| `lastBuildStatus` | map[string]string | key是构建os/arch,value是最新构建 ID  |
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `phase` | string | `"Active"` / `"Terminating"` |
+
+Project 不保存最新构建状态。调用方按 Project 路径查询 Build，通过目标 OS、架构 label 过滤，并使用默认的创建时间倒序和 `limit=1` 获取目标下最新 Build；构建状态以该 Build 的 `status` 为准。
 
 ### ProjectList
 

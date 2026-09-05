@@ -1160,21 +1160,6 @@ func schema_ebs_api_ebs_v1_ProjectStatus(ref common.ReferenceCallback) common.Op
 							Format: "",
 						},
 					},
-					"lastBuildStatus": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
 				},
 			},
 		},

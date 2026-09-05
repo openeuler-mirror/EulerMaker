@@ -22,8 +22,7 @@ type ProjectSpec struct {
 }
 
 type ProjectStatus struct {
-	Phase           string            `json:"phase,omitempty"`
-	LastBuildStatus map[string]string `json:"lastBuildStatus,omitempty"`
+	Phase string `json:"phase,omitempty"`
 }
 
 type ProjectList struct {

@@ -508,7 +508,7 @@ Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称
 
 如果 gateway 无法确认 Project 归属，应返回 403，不能放行。
 
-公开 `GET/HEAD` 不查询 Project owner/member。BuildResource 不属于公开读取资源；普通用户读取时，gateway 必须先读取路径指定的 Project 并校验 owner/member 关系，不能读取无归属关系 Project（包括 `default`）下的 BuildResource。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
+公开 `GET/HEAD` 不查询 Project owner/member。BuildResource 不属于公开读取资源；普通用户读取时，gateway 必须先读取路径指定的 Project 并校验 owner/member 关系，不能读取无归属关系 Project 下的 BuildResource。`default` 是没有同名 Project 的系统保留作用域，因此普通用户不能借助 Project owner/member 权限读取其中的全局默认对象。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
 
 Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
 
