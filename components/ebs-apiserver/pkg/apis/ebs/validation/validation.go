@@ -266,7 +266,24 @@ func ValidateJobUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 
 func ValidateJobStatusUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	validPhases := []string{"Pending", "Running", "Completed", "Failed", "Aborted"}
+	if !containsString(validPhases, newObj.Status.Phase) {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, validPhases))
+	}
+	validStages := []string{"Pending", "Running", "PostRun"}
+	if !containsString(validStages, newObj.Status.Stage) {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "stage"), newObj.Status.Stage, validStages))
+	}
 	return allErrs
+}
+
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {

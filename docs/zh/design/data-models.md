@@ -684,7 +684,7 @@ type JobStatus struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | string | `"Pending"` / `"Running"` / `"Completed"` / `"Failed"` / `"Aborted"` |
-| `stage` | string | `"Pending"` / `"Running"` / `"PostRun"` / `"Failed"` |
+| `stage` | string | `"Pending"` / `"Running"` / `"PostRun"`。失败时保留最后到达的执行阶段，不使用 `Failed` stage |
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |

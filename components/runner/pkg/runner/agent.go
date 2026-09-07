@@ -444,7 +444,6 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 	status.EndTime = &end
 	if artifactErr != nil {
 		status.Phase = "Failed"
-		status.Stage = "Failed"
 		status.ArtifactState = "Failed"
 		if executionErr != nil {
 			status.Message = executionErr.Error() + "; artifact upload: " + artifactErr.Error()
@@ -459,7 +458,6 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 		status.ArtifactCount = manifest.ArtifactCount
 		if executionErr != nil {
 			status.Phase = "Failed"
-			status.Stage = "Failed"
 			status.Message = executionErr.Error()
 		} else {
 			status.Phase = "Completed"
