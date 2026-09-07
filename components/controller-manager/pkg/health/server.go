@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/metrics"
 )
 
 type Server struct {
@@ -68,6 +69,7 @@ func (s *Server) Run(ctx context.Context) error {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
+	mux.Handle("/metrics", metrics.Handler())
 	server := &http.Server{Addr: s.address, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
