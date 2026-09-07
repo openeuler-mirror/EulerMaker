@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"controller-manager/pkg/client"
+	jobcontroller "controller-manager/pkg/controllers/job"
 	"controller-manager/pkg/health"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/options"
@@ -20,7 +21,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if o.InsecureSkipVerify {
+	if o.API.InsecureSkipVerify {
 		log.Print("WARNING: TLS server certificate verification is disabled")
 	}
 	config, err := o.RESTConfig()
@@ -29,16 +30,19 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	apiClient, err := client.New(config, o.RequestTimeout)
+	apiClient, err := client.New(config, o.API.RequestTimeout)
 	if err != nil {
 		log.Fatal(err)
 	}
 	watchFactory := source.NewWatchSourceFactory(func(gvr schema.GroupVersionResource) (source.WatchResource, error) {
 		return apiClient.ResolveWatch(ctx, gvr)
-	}, o.ResyncPeriod, o.SourceStaleThreshold)
-	pollingFactory := source.NewPollingSourceFactory(apiClient.ListPage, int64(o.PollPageSize), o.SourceStaleThreshold)
-	healthServer := health.New(o.HealthAddress)
-	m, err := manager.New(map[string]manager.InitFunc{}, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Workers, Controllers: o.Controllers, CacheSyncTimeout: o.CacheSyncTimeout, ShutdownTimeout: o.ShutdownTimeout}, healthServer)
+	}, o.Source.ResyncPeriod, o.Source.SourceStaleThreshold)
+	pollingFactory := source.NewPollingSourceFactory(apiClient.ListPage, int64(o.Source.PollPageSize), o.Source.SourceStaleThreshold)
+	healthServer := health.New(o.Health.Address)
+	initializers := map[string]manager.InitFunc{
+		jobcontroller.Name: jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
+	}
+	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout}, healthServer)
 	if err != nil {
 		log.Fatal(err)
 	}
