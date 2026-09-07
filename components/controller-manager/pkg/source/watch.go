@@ -28,9 +28,42 @@ func (s *WatchSource) Name() string { return s.name }
 func (s *WatchSource) AddEventHandler(handler ResourceEventHandler) error {
 	return s.subscriptions.add(handler)
 }
-func (s *WatchSource) HasSynced() bool                     { return s.synced.Load() && s.informer.HasSynced() }
-func (s *WatchSource) Ready() bool                         { return s.HasSynced() }
-func (s *WatchSource) Informer() cache.SharedIndexInformer { return s.informer }
+func (s *WatchSource) HasSynced() bool { return s.synced.Load() && s.informer.HasSynced() }
+func (s *WatchSource) Ready() bool     { return s.HasSynced() }
+
+func (s *WatchSource) GetByKey(key string) (runtime.Object, bool, error) {
+	if !s.HasSynced() {
+		return nil, false, ErrCacheNotSynced
+	}
+	obj, exists, err := s.informer.GetIndexer().GetByKey(key)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	value, ok := obj.(runtime.Object)
+	if !ok {
+		return nil, false, fmt.Errorf("cached object %q in %s has type %T", key, s.name, obj)
+	}
+	return value.DeepCopyObject(), true, nil
+}
+
+func (s *WatchSource) ByIndex(indexName, indexedValue string) ([]runtime.Object, error) {
+	if !s.HasSynced() {
+		return nil, ErrCacheNotSynced
+	}
+	items, err := s.informer.GetIndexer().ByIndex(indexName, indexedValue)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrIndexNotFound, indexName, err)
+	}
+	out := make([]runtime.Object, 0, len(items))
+	for _, item := range items {
+		value, ok := item.(runtime.Object)
+		if !ok {
+			return nil, fmt.Errorf("cached index %q in %s has type %T", indexName, s.name, item)
+		}
+		out = append(out, value.DeepCopyObject())
+	}
+	return out, nil
+}
 
 func (s *WatchSource) Run(ctx context.Context) error {
 	handlers, err := s.subscriptions.start()

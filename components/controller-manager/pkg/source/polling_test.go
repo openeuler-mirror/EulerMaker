@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/tools/cache"
 )
 
 type recordingHandler struct {
@@ -115,4 +118,63 @@ func TestPollingFactoryFreezesAfterSources(t *testing.T) {
 	if _, err := f.ForResource(gvr, time.Second); !errors.Is(err, ErrSourceStarted) {
 		t.Fatalf("expected frozen factory, got %v", err)
 	}
+}
+
+func TestWatchSourceCacheReturnsDeepCopies(t *testing.T) {
+	fakeWatch := watch.NewRaceFreeFake()
+	lw := &cache.ListWatch{
+		ListFunc:  func(metav1.ListOptions) (runtime.Object, error) { return &ebsv1.JobList{}, nil },
+		WatchFunc: func(metav1.ListOptions) (watch.Interface, error) { return fakeWatch, nil },
+	}
+	s, err := NewWatchSource("jobs", lw, &ebsv1.Job{}, 0, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.GetByKey("project/job"); !errors.Is(err, ErrCacheNotSynced) {
+		t.Fatalf("GetByKey before sync returned %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	waitFor(t, time.Second, s.HasSynced, "watch source did not sync")
+
+	fakeWatch.Add(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "1"}})
+	waitFor(t, time.Second, func() bool {
+		_, exists, err := s.GetByKey("project/job")
+		return err == nil && exists
+	}, "watch event did not reach cache")
+
+	obj, exists, err := s.GetByKey("project/job")
+	if err != nil || !exists {
+		t.Fatalf("GetByKey failed: exists=%t err=%v", exists, err)
+	}
+	obj.(*ebsv1.Job).Name = "changed"
+	again, _, err := s.GetByKey("project/job")
+	if err != nil || again.(*ebsv1.Job).Name != "job" {
+		t.Fatal("GetByKey exposed the cached object by reference")
+	}
+	indexed, err := s.ByIndex(cache.NamespaceIndex, "project")
+	if err != nil || len(indexed) != 1 {
+		t.Fatalf("ByIndex returned %d objects: %v", len(indexed), err)
+	}
+	if _, err := s.ByIndex("missing", "value"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("missing index returned %v", err)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitFor(t *testing.T, timeout time.Duration, condition func() bool, message string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal(message)
 }

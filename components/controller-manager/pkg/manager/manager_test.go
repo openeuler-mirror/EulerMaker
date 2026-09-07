@@ -3,12 +3,15 @@ package manager
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	clientpkg "controller-manager/pkg/client"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -22,6 +25,8 @@ func (f *fakeSource) Name() string                                      { return
 func (f *fakeSource) AddEventHandler(source.ResourceEventHandler) error { return nil }
 func (f *fakeSource) HasSynced() bool                                   { return f.synced }
 func (f *fakeSource) Ready() bool                                       { return f.ready }
+func (f *fakeSource) GetByKey(string) (runtime.Object, bool, error)     { return nil, false, nil }
+func (f *fakeSource) ByIndex(string, string) ([]runtime.Object, error)  { return nil, nil }
 func (f *fakeSource) Run(ctx context.Context) error {
 	if f.runErr != nil {
 		return f.runErr
@@ -32,7 +37,7 @@ func (f *fakeSource) Run(ctx context.Context) error {
 
 type fakeWatchFactory struct{ items []source.Source }
 
-func (f *fakeWatchFactory) ForResource(schema.GroupVersionResource) (source.Source, error) {
+func (f *fakeWatchFactory) ForResource(schema.GroupVersionResource) (source.CachedSource, error) {
 	return nil, errors.New("unused")
 }
 func (f *fakeWatchFactory) Sources() []source.Source { return f.items }
@@ -44,23 +49,35 @@ func (f *fakePollingFactory) ForResource(schema.GroupVersionResource, time.Durat
 }
 func (f *fakePollingFactory) Sources() []source.Source { return f.items }
 
-type fakeHealth struct{ ready atomic.Bool }
+type fakeHealth struct {
+	ready atomic.Bool
+	mu    sync.Mutex
+	names []string
+}
 
 func (f *fakeHealth) SetReady(value bool)           { f.ready.Store(value) }
 func (f *fakeHealth) Run(ctx context.Context) error { <-ctx.Done(); return nil }
+func (f *fakeHealth) AddHealthChecker(name string, _ controller.HealthChecker) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.names = append(f.names, name)
+	return nil
+}
 
 func TestManagerStartsAfterSourcesSyncAndStops(t *testing.T) {
 	s := &fakeSource{name: "source", synced: true, ready: true}
 	h := &fakeHealth{}
 	started := make(chan struct{})
 	initializers := map[string]InitFunc{"test": func(context.Context, InitContext) (controller.Controller, bool, error) {
-		c, err := controller.New("test", func(context.Context, string) error { return nil }, 1)
+		c, err := controller.New("test", func(context.Context, string) (controller.ReconcileResult, error) {
+			return controller.ReconcileResult{}, nil
+		}, 1)
 		if err != nil {
 			return nil, false, err
 		}
 		return &observedController{Controller: c, started: started}, true, nil
 	}}
-	m, err := New(initializers, Dependencies{WatchFactory: &fakeWatchFactory{items: []source.Source{s}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second}, h)
+	m, err := New(initializers, Dependencies{Client: &clientpkg.Client{}, WatchFactory: &fakeWatchFactory{items: []source.Source{s}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second}, h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +92,11 @@ func TestManagerStartsAfterSourcesSyncAndStops(t *testing.T) {
 	if !h.ready.Load() {
 		t.Fatal("manager not ready")
 	}
+	h.mu.Lock()
+	if len(h.names) != 1 || h.names[0] != "test" {
+		t.Fatalf("unexpected health checkers: %v", h.names)
+	}
+	h.mu.Unlock()
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -93,7 +115,7 @@ func (c *observedController) Run(ctx context.Context, workers int) error {
 
 func TestManagerPropagatesSourceError(t *testing.T) {
 	want := errors.New("fatal source")
-	m, err := New(map[string]InitFunc{}, Dependencies{WatchFactory: &fakeWatchFactory{items: []source.Source{&fakeSource{name: "broken", runErr: want}}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second}, &fakeHealth{})
+	m, err := New(map[string]InitFunc{}, Dependencies{Client: &clientpkg.Client{}, WatchFactory: &fakeWatchFactory{items: []source.Source{&fakeSource{name: "broken", runErr: want}}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second}, &fakeHealth{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	clientpkg "controller-manager/pkg/client"
 	"k8s.io/client-go/util/workqueue"
 )
 
@@ -15,7 +16,28 @@ type Controller interface {
 	Name() string
 	Run(context.Context, int) error
 }
-type SyncFunc func(context.Context, string) error
+type HealthChecker interface {
+	Check(context.Context) error
+}
+
+type HealthCheckFunc func(context.Context) error
+
+func (f HealthCheckFunc) Check(ctx context.Context) error { return f(ctx) }
+
+type HealthCheckable interface {
+	HealthChecker() HealthChecker
+}
+
+type ReconcileResult struct {
+	Requeue      bool
+	RequeueAfter time.Duration
+}
+
+func (r ReconcileResult) Valid() bool {
+	return r.RequeueAfter >= 0 && !(r.Requeue && r.RequeueAfter > 0)
+}
+
+type SyncFunc func(context.Context, string) (ReconcileResult, error)
 
 type BaseController struct {
 	name       string
@@ -77,25 +99,41 @@ func (c *BaseController) processNext(ctx context.Context) bool {
 		log.Printf("controller=%s result=invalid-key type=%T", c.name, item)
 		return true
 	}
-	err := c.callSync(ctx, key)
+	result, err := c.callSync(ctx, key)
+	if err != nil && result != (ReconcileResult{}) {
+		log.Printf("controller=%s key=%s result=invalid-result-with-error", c.name, key)
+	}
 	switch {
-	case err == nil:
-		c.queue.Forget(item)
 	case ctx.Err() != nil:
 		c.queue.Forget(item)
 		return false
 	case IsPermanent(err):
 		c.queue.Forget(item)
 		log.Printf("controller=%s key=%s result=permanent-error error=%v", c.name, key, err)
-	case c.queue.NumRequeues(item) < c.maxRetries:
+	case err != nil && clientpkg.RetryAfter(err) > 0:
+		delay := clientpkg.RetryAfter(err)
+		c.queue.Forget(item)
+		c.queue.AddAfter(item, delay)
+	case err != nil && c.queue.NumRequeues(item) < c.maxRetries:
 		c.queue.AddRateLimited(item)
-	default:
+	case err != nil:
 		c.queue.Forget(item)
 		log.Printf("controller=%s key=%s result=max-retries error=%v", c.name, key, err)
+	case !result.Valid():
+		c.queue.Forget(item)
+		log.Printf("controller=%s key=%s result=invalid-result requeue=%t requeue-after=%s", c.name, key, result.Requeue, result.RequeueAfter)
+	case result.RequeueAfter > 0:
+		c.queue.Forget(item)
+		c.queue.AddAfter(item, result.RequeueAfter)
+	case result.Requeue:
+		c.queue.Forget(item)
+		c.queue.Add(item)
+	default:
+		c.queue.Forget(item)
 	}
 	return true
 }
-func (c *BaseController) callSync(ctx context.Context, key string) (err error) {
+func (c *BaseController) callSync(ctx context.Context, key string) (result ReconcileResult, err error) {
 	started := time.Now()
 	defer func() {
 		if value := recover(); value != nil {
