@@ -304,7 +304,7 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 2. 根据 metadata.namespace 确定所属 Project
 3. 更新 Runner.status.phase=Running
 4. 更新 Job.status.stage=Running
-5. 准备执行环境
+5. 准备执行环境并开始业务执行；环境准备和业务运行统一属于 `Running` stage
 6. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
 7. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 YAML 参数提供给任务入口
 8. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
@@ -425,8 +425,8 @@ runner agent 应把容器生命周期映射到 Job status，而不是在 `Runner
 | 容器运行中 | 保持 `phase=Running, stage=Running` |
 | 容器退出、日志采集到 EOF | `phase=Running, stage=PostRun, artifactState=Uploading` |
 | 日志、必需产物和清单封账完成 | `phase=Completed, stage=PostRun, artifactState=Completed` |
-| 容器退出码非 0 | 先尝试封账已有日志，再置 `phase=Failed, stage=Failed` |
-| 执行超时 | 终止容器并尝试封账已有日志，再置 `phase=Failed` 或后续扩展为 `Aborted` |
+| 容器退出码非 0 | 先尝试封账已有日志，再置 `phase=Failed` 并保留最后到达的 stage；已进入后处理时为 `PostRun` |
+| 执行超时 | 终止容器并尝试封账已有日志，再置 `phase=Failed`，stage 保留为 `Running` 或 `PostRun` |
 
 `PostRun` 是业务执行结束后的真实阶段，包括排空实时日志、日志封账、产物上传和 JobUploadManifest 封账。进入 `PostRun` 时 Job 仍为 `phase=Running`；所有必需后处理完成后才能推进最终 phase。
 

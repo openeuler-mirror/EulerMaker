@@ -288,8 +288,39 @@ func TestValidateJobUpdate(t *testing.T) {
 }
 
 func TestValidateJobStatusUpdate(t *testing.T) {
-	errs := ValidateJobStatusUpdate(&ebsv1.Job{}, validJob())
-	assertErrorList(t, errs, 0, nil)
+	tests := []struct {
+		name       string
+		status     ebsv1.JobStatus
+		wantErrs   int
+		wantFields map[string]field.ErrorType
+	}{
+		{name: "pending", status: ebsv1.JobStatus{Phase: "Pending", Stage: "Pending"}},
+		{name: "running", status: ebsv1.JobStatus{Phase: "Running", Stage: "Running"}},
+		{name: "post run", status: ebsv1.JobStatus{Phase: "Running", Stage: "PostRun"}},
+		{
+			name:     "rejects unsupported phase",
+			status:   ebsv1.JobStatus{Phase: "Unknown", Stage: "Pending"},
+			wantErrs: 1,
+			wantFields: map[string]field.ErrorType{
+				"status.phase": field.ErrorTypeNotSupported,
+			},
+		},
+		{
+			name:     "rejects failed stage",
+			status:   ebsv1.JobStatus{Phase: "Failed", Stage: "Failed"},
+			wantErrs: 1,
+			wantFields: map[string]field.ErrorType{
+				"status.stage": field.ErrorTypeNotSupported,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := &ebsv1.Job{Status: tt.status}
+			errs := ValidateJobStatusUpdate(job, validJob())
+			assertErrorList(t, errs, tt.wantErrs, tt.wantFields)
+		})
+	}
 }
 
 func TestValidateRunner(t *testing.T) {
@@ -485,7 +516,7 @@ func validResourceRequirements() ebsv1.ResourceRequirements {
 }
 
 func validJob() *ebsv1.Job {
-	return &ebsv1.Job{}
+	return &ebsv1.Job{Status: ebsv1.JobStatus{Phase: "Pending", Stage: "Pending"}}
 }
 
 func validRunner(runnerType, arch string) *ebsv1.Runner {
