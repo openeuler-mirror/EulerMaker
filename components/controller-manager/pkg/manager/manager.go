@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	clientpkg "controller-manager/pkg/client"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
 	"golang.org/x/sync/errgroup"
@@ -15,9 +16,10 @@ import (
 type HealthServer interface {
 	Run(context.Context) error
 	SetReady(bool)
+	AddHealthChecker(string, controller.HealthChecker) error
 }
 type Dependencies struct {
-	Client         any
+	Client         clientpkg.Interface
 	WatchFactory   source.WatchSourceFactory
 	PollingFactory source.PollingSourceFactory
 }
@@ -41,8 +43,8 @@ type Manager struct {
 }
 
 func New(initializers map[string]InitFunc, dependencies Dependencies, config Config, health HealthServer) (*Manager, error) {
-	if initializers == nil || dependencies.WatchFactory == nil || dependencies.PollingFactory == nil || health == nil {
-		return nil, fmt.Errorf("initializers, source factories and health server are required")
+	if initializers == nil || dependencies.Client == nil || dependencies.WatchFactory == nil || dependencies.PollingFactory == nil || health == nil {
+		return nil, fmt.Errorf("initializers, client, source factories and health server are required")
 	}
 	if config.Workers <= 0 || config.Controllers == "" || config.CacheSyncTimeout <= 0 || config.ShutdownTimeout <= 0 {
 		return nil, fmt.Errorf("workers and timeouts must be positive")
@@ -59,6 +61,17 @@ func (m *Manager) Run(parent context.Context) error {
 	controllers, err := m.initialize(parent)
 	if err != nil {
 		return err
+	}
+	for _, item := range controllers {
+		checker := controller.HealthChecker(controller.HealthCheckFunc(func(context.Context) error { return nil }))
+		if healthCheckable, ok := item.(controller.HealthCheckable); ok {
+			if custom := healthCheckable.HealthChecker(); custom != nil {
+				checker = custom
+			}
+		}
+		if err := m.health.AddHealthChecker(item.Name(), checker); err != nil {
+			return fmt.Errorf("register health checker for controller %s: %w", item.Name(), err)
+		}
 	}
 	sources := append(m.dependencies.WatchFactory.Sources(), m.dependencies.PollingFactory.Sources()...)
 	runCtx, cancel := context.WithCancel(parent)

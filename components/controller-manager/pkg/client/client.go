@@ -2,24 +2,85 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
 
+type DeletePreconditions struct {
+	UID             types.UID
+	ResourceVersion string
+}
+
+type WriteOutcome string
+
+const (
+	WriteNotSent  WriteOutcome = "NotSent"
+	WriteRejected WriteOutcome = "Rejected"
+	WriteUnknown  WriteOutcome = "Unknown"
+)
+
+type WriteError struct {
+	Operation  string
+	Resource   schema.GroupResource
+	Outcome    WriteOutcome
+	StatusCode int
+	RetryAfter time.Duration
+	Err        error
+}
+
+func (e *WriteError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%s %s failed (%s): %v", e.Operation, e.Resource.String(), e.Outcome, e.Err)
+}
+func (e *WriteError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func RetryAfter(err error) time.Duration {
+	var writeErr *WriteError
+	if !errors.As(err, &writeErr) || writeErr.Outcome != WriteRejected || writeErr.RetryAfter <= 0 {
+		return 0
+	}
+	if writeErr.StatusCode != 429 && writeErr.StatusCode != 503 {
+		return 0
+	}
+	return writeErr.RetryAfter
+}
+
 type Client struct {
 	rest    *rest.RESTClient
 	timeout time.Duration
 }
+
+type Interface interface {
+	ListPage(context.Context, schema.GroupVersionResource, string, int64) (source.ListPage, error)
+	ResolveWatch(context.Context, schema.GroupVersionResource) (source.WatchResource, error)
+	Get(context.Context, schema.GroupVersionResource, string, string) (runtime.Object, error)
+	UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
+	Delete(context.Context, schema.GroupVersionResource, string, string, DeletePreconditions) error
+}
+
+var _ Interface = (*Client)(nil)
 
 func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 	if config == nil || timeout <= 0 {
@@ -72,6 +133,144 @@ func (c *Client) ResolveWatch(ctx context.Context, gvr schema.GroupVersionResour
 	return source.WatchResource{ListerWatcher: lw, ObjectType: objectType}, nil
 }
 
+func (c *Client) Get(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (runtime.Object, error) {
+	if err := validateTarget(gvr, namespace, name); err != nil {
+		return nil, err
+	}
+	out, err := newObject(gvr)
+	if err != nil {
+		return nil, err
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	err = c.rest.Get().AbsPath(resourcePath(gvr, namespace, name, "")).Do(requestCtx).Into(out)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResponseObject(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) UpdateStatus(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
+	if obj == nil {
+		return nil, notSent("update-status", gvr, fmt.Errorf("object is required"))
+	}
+	accessor, err := apiMeta.Accessor(obj)
+	if err != nil {
+		return nil, notSent("update-status", gvr, err)
+	}
+	if err := validateTarget(gvr, namespace, accessor.GetName()); err != nil {
+		return nil, notSent("update-status", gvr, err)
+	}
+	if accessor.GetNamespace() != namespace || accessor.GetUID() == "" || accessor.GetResourceVersion() == "" {
+		return nil, notSent("update-status", gvr, fmt.Errorf("object metadata does not match target or lacks UID/resourceVersion"))
+	}
+	out, err := newObject(gvr)
+	if err != nil {
+		return nil, notSent("update-status", gvr, err)
+	}
+	if reflect.TypeOf(obj) != reflect.TypeOf(out) {
+		return nil, notSent("update-status", gvr, fmt.Errorf("object type %T does not match resource %s", obj, gvr.Resource))
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	err = c.rest.Put().AbsPath(resourcePath(gvr, namespace, accessor.GetName(), "status")).Body(obj).Do(requestCtx).Into(out)
+	if err != nil {
+		return nil, classifyWrite("update-status", gvr, err)
+	}
+	if err := validateResponseObject(out); err != nil {
+		return nil, unknown("update-status", gvr, err)
+	}
+	responseAccessor, err := apiMeta.Accessor(out)
+	if err != nil || responseAccessor.GetUID() != accessor.GetUID() || responseAccessor.GetName() != accessor.GetName() || responseAccessor.GetNamespace() != accessor.GetNamespace() {
+		return nil, unknown("update-status", gvr, fmt.Errorf("response object identity does not match request"))
+	}
+	return out, nil
+}
+
+func (c *Client) Delete(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, preconditions DeletePreconditions) error {
+	if err := validateTarget(gvr, namespace, name); err != nil {
+		return notSent("delete", gvr, err)
+	}
+	if preconditions.UID == "" || preconditions.ResourceVersion == "" {
+		return notSent("delete", gvr, fmt.Errorf("UID and resourceVersion preconditions are required"))
+	}
+	opts := &metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &preconditions.UID, ResourceVersion: &preconditions.ResourceVersion}}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if err := c.rest.Delete().AbsPath(resourcePath(gvr, namespace, name, "")).Body(opts).Do(requestCtx).Error(); err != nil {
+		return classifyWrite("delete", gvr, err)
+	}
+	return nil
+}
+
+func validateTarget(gvr schema.GroupVersionResource, namespace, name string) error {
+	if _, err := newObject(gvr); err != nil {
+		return err
+	}
+	if name == "" {
+		return fmt.Errorf("resource name is required")
+	}
+	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners"
+	if clusterScoped && namespace != "" {
+		return fmt.Errorf("cluster-scoped resource %s requires an empty namespace", gvr.Resource)
+	}
+	if !clusterScoped && namespace == "" {
+		return fmt.Errorf("namespace-scoped resource %s requires a namespace", gvr.Resource)
+	}
+	return nil
+}
+
+func resourcePath(gvr schema.GroupVersionResource, namespace, name, subresource string) string {
+	base := "/apis/" + gvr.Group + "/" + gvr.Version + "/"
+	if namespace != "" {
+		base += "projects/" + namespace + "/"
+	}
+	base += gvr.Resource
+	if name != "" {
+		base += "/" + name
+	}
+	if subresource != "" {
+		base += "/" + subresource
+	}
+	return base
+}
+
+func validateResponseObject(obj runtime.Object) error {
+	if obj == nil {
+		return fmt.Errorf("response object is nil")
+	}
+	accessor, err := apiMeta.Accessor(obj)
+	if err != nil {
+		return err
+	}
+	if accessor.GetUID() == "" || accessor.GetResourceVersion() == "" {
+		return fmt.Errorf("response object lacks UID/resourceVersion")
+	}
+	return nil
+}
+
+func notSent(operation string, gvr schema.GroupVersionResource, err error) *WriteError {
+	return &WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: WriteNotSent, Err: err}
+}
+func unknown(operation string, gvr schema.GroupVersionResource, err error) *WriteError {
+	return &WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: WriteUnknown, Err: err}
+}
+func classifyWrite(operation string, gvr schema.GroupVersionResource, err error) *WriteError {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		code := int(status.Status().Code)
+		result := &WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: WriteRejected, StatusCode: code, Err: err}
+		if seconds, ok := apierrors.SuggestsClientDelay(err); ok && seconds > 0 {
+			result.RetryAfter = time.Duration(seconds) * time.Second
+		}
+		return result
+	}
+	return unknown(operation, gvr, err)
+}
+
 type listerWatcher struct {
 	ctx    context.Context
 	client *Client
@@ -116,6 +315,32 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.JobList{}, nil
 	case "runners":
 		return &ebsv1.RunnerList{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported resource %s", gvr)
+	}
+}
+
+func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
+	if gvr.Group != "ebs" || gvr.Version != "v1" {
+		return nil, fmt.Errorf("unsupported resource %s", gvr)
+	}
+	switch gvr.Resource {
+	case "projects":
+		return &ebsv1.Project{}, nil
+	case "snapshots":
+		return &ebsv1.Snapshot{}, nil
+	case "builds":
+		return &ebsv1.Build{}, nil
+	case "buildinfos":
+		return &ebsv1.BuildInfo{}, nil
+	case "rpmrepos":
+		return &ebsv1.RpmRepo{}, nil
+	case "buildresources":
+		return &ebsv1.BuildResource{}, nil
+	case "jobs":
+		return &ebsv1.Job{}, nil
+	case "runners":
+		return &ebsv1.Runner{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported resource %s", gvr)
 	}

@@ -22,7 +22,7 @@ type WatchResource struct {
 type WatchResolver func(schema.GroupVersionResource) (WatchResource, error)
 
 type WatchSourceFactory interface {
-	ForResource(schema.GroupVersionResource) (Source, error)
+	ForResource(schema.GroupVersionResource) (CachedSource, error)
 	Sources() []Source
 }
 type PollingSourceFactory interface {
@@ -41,7 +41,7 @@ type watchFactory struct {
 func NewWatchSourceFactory(resolver WatchResolver, resync, stale time.Duration) WatchSourceFactory {
 	return &watchFactory{resolver: resolver, resync: resync, stale: stale, sources: make(map[schema.GroupVersionResource]*WatchSource)}
 }
-func (f *watchFactory) ForResource(gvr schema.GroupVersionResource) (Source, error) {
+func (f *watchFactory) ForResource(gvr schema.GroupVersionResource) (CachedSource, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.frozen {

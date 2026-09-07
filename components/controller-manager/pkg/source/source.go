@@ -14,6 +14,8 @@ import (
 var (
 	ErrSourceStarted    = errors.New("source already started")
 	ErrWatchUnsupported = errors.New("resource does not support watch")
+	ErrCacheNotSynced   = errors.New("source cache is not synced")
+	ErrIndexNotFound    = errors.New("source index does not exist")
 )
 
 type ResourceEventHandler interface {
@@ -50,6 +52,12 @@ type Source interface {
 	Run(context.Context) error
 	HasSynced() bool
 	Ready() bool
+}
+
+type CachedSource interface {
+	Source
+	GetByKey(string) (runtime.Object, bool, error)
+	ByIndex(string, string) ([]runtime.Object, error)
 }
 
 type subscriptions struct {
