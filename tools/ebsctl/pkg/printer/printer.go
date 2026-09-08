@@ -132,7 +132,7 @@ func tableColumns(definition resource.Definition, wide bool) []column {
 	case "Snapshot":
 		columns = []column{name, phase("PHASE"), age}
 	case "Build":
-		columns = []column{name, phase("PHASE"), {name: "SNAPSHOT", value: func(object map[string]any) string { return nestedString(object, "spec", "snapshotName") }}, age}
+		columns = []column{name, phase("PHASE"), age}
 	case "Job":
 		columns = []column{name, phase("PHASE"), {name: "STAGE", value: func(object map[string]any) string { return nestedString(object, "status", "stage") }}, {name: "RUNNER", value: func(object map[string]any) string { return nestedString(object, "status", "runner") }}, age}
 	case "BuildInfo", "RpmRepo":

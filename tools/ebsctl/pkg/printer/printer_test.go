@@ -54,3 +54,20 @@ func TestBuildResourceTable(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTableDoesNotIncludeSnapshot(t *testing.T) {
+	definition, _ := resource.Resolve("build")
+	data := []byte(`{"metadata":{"name":"build-a","creationTimestamp":"2026-08-19T00:00:00Z"},"status":{"phase":"Pending"}}`)
+	var output bytes.Buffer
+	if err := New(&output, Options{Format: "table"}).Print(definition, data); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "SNAPSHOT") {
+		t.Fatalf("Build table still contains SNAPSHOT column: %s", output.String())
+	}
+	for _, value := range []string{"NAME", "PHASE", "AGE", "build-a", "Pending"} {
+		if !strings.Contains(output.String(), value) {
+			t.Fatalf("table missing %q: %s", value, output.String())
+		}
+	}
+}

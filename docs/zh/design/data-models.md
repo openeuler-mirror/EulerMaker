@@ -215,7 +215,6 @@ type Build struct {
 
 ```go
 type BuildSpec struct {
-    SnapshotName       string                 `json:"snapshotName,omitempty"`
     BuildType          string                 `json:"buildType,omitempty"`
     BootstrapRepo      []BootstrapRepo        `json:"bootstrapRepo,omitempty"`
     Packages           []string               `json:"packages,omitempty"`
@@ -226,7 +225,6 @@ type BuildSpec struct {
 
 | 字段             | Go 类型 | 必填 | 说明 |
 |----------------|---------|------|------|
-| `snapshotName` | string | 是 | 使用同一 Project 下的快照 |
 | `buildType`    | string | 否 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"`，默认 `"full"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
 | `bootstrapRepo` | []BootstrapRepo | 否 | 引导 RPM 仓库 |
