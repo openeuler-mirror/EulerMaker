@@ -1287,31 +1287,12 @@ func (g *Gateway) validateRunnerUpdate(ctx context.Context, r *http.Request, run
 }
 
 func validateRunnerObject(candidate, old map[string]any, runner string, update bool) error {
-	for key := range candidate {
-		if key != "apiVersion" && key != "kind" && key != "metadata" && key != "spec" && key != "status" {
-			return fmt.Errorf("unsupported runner field")
-		}
-	}
-	if fmt.Sprint(candidate["apiVersion"]) != "ebs/v1" || fmt.Sprint(candidate["kind"]) != "Runner" {
-		return fmt.Errorf("invalid runner type metadata")
-	}
 	meta, ok := candidate["metadata"].(map[string]any)
 	if !ok || fmt.Sprint(meta["name"]) != runner || meta["generateName"] != nil {
 		return fmt.Errorf("runner identity mismatch")
 	}
-	spec, ok := candidate["spec"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("runner spec is required")
-	}
-	typeName, _ := spec["type"].(string)
-	arch, _ := spec["arch"].(string)
-	if (typeName != "ct" && typeName != "vm" && typeName != "hw") || (arch != "aarch64" && arch != "x86_64") {
-		return fmt.Errorf("invalid runner type or arch")
-	}
+	spec, _ := candidate["spec"].(map[string]any)
 	labels := stringMap(meta["labels"])
-	if labels["ebs.io/runner-type"] != typeName || labels["ebs.io/runner-arch"] != arch {
-		return fmt.Errorf("runner labels do not match spec")
-	}
 	if !update {
 		for key := range meta {
 			if key != "name" && key != "labels" {
@@ -1319,7 +1300,7 @@ func validateRunnerObject(candidate, old map[string]any, runner string, update b
 			}
 		}
 		for key := range spec {
-			if key != "type" && key != "arch" && key != "hostname" {
+			if key != "instanceId" && key != "type" && key != "arch" {
 				return fmt.Errorf("unsupported runner spec")
 			}
 		}
@@ -1330,10 +1311,6 @@ func validateRunnerObject(candidate, old map[string]any, runner string, update b
 			}
 		}
 	} else {
-		oldMeta, _ := old["metadata"].(map[string]any)
-		if fmt.Sprint(meta["resourceVersion"]) == "" || fmt.Sprint(meta["resourceVersion"]) != fmt.Sprint(oldMeta["resourceVersion"]) {
-			return fmt.Errorf("runner resourceVersion conflict")
-		}
 		if !protectedRunnerFieldsEqual(old, candidate) {
 			return fmt.Errorf("runner protected fields changed")
 		}
@@ -1456,12 +1433,10 @@ func (g *Gateway) validateRunnerPatch(ctx context.Context, r *http.Request, runn
 	if err != nil {
 		return fmt.Errorf("invalid upstream runner")
 	}
-	oldMeta, _ := old["metadata"].(map[string]any)
 	meta, _ := candidate["metadata"].(map[string]any)
 	if meta == nil {
 		return fmt.Errorf("runner metadata is required")
 	}
-	meta["resourceVersion"] = oldMeta["resourceVersion"]
 	if err := validateRunnerObject(candidate, old, runner, true); err != nil {
 		return err
 	}

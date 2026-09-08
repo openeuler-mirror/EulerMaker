@@ -190,7 +190,6 @@ func (a *Agent) register(ctx context.Context) error {
 		desired.Metadata.Labels["ebs.io/runner-arch"] = a.cfg.Arch
 		desired.Spec.Type = a.cfg.Type
 		desired.Spec.Arch = a.cfg.Arch
-		desired.Spec.Hostname = a.cfg.Name
 		if err := a.client.UpdateRunner(ctx, desired); err != nil {
 			return fmt.Errorf("update runner: %w", err)
 		}
@@ -218,9 +217,8 @@ func (a *Agent) runnerObject(resourceVersion string) RunnerResource {
 			},
 		},
 		Spec: RunnerSpec{
-			Type:     a.cfg.Type,
-			Arch:     a.cfg.Arch,
-			Hostname: a.cfg.Name,
+			Type: a.cfg.Type,
+			Arch: a.cfg.Arch,
 		},
 	}
 }

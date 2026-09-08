@@ -20,8 +20,8 @@ import (
 	openapicommon "k8s.io/kube-openapi/pkg/common"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-api/ebs/v1"
+	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	iamapi "ebs-apiserver/pkg/apis/iam"
 	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
 	generatedopenapi "ebs-apiserver/pkg/generated/openapi"
@@ -106,7 +106,7 @@ const etcdPrefix = "/registry/ebs"
 
 var (
 	Scheme = runtime.NewScheme()
-	Codecs = serializer.NewCodecFactory(Scheme)
+	Codecs = serializer.NewCodecFactory(Scheme, serializer.EnableStrict)
 )
 
 func init() {

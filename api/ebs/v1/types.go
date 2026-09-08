@@ -253,9 +253,9 @@ type Runner struct {
 }
 
 type RunnerSpec struct {
+	InstanceID    string        `json:"instanceId,omitempty"`
 	Type          string        `json:"type,omitempty"`
 	Arch          string        `json:"arch,omitempty"`
-	Hostname      string        `json:"hostname,omitempty"`
 	Unschedulable bool          `json:"unschedulable,omitempty"`
 	Taints        []RunnerTaint `json:"taints,omitempty"`
 }

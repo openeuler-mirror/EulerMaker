@@ -1583,6 +1583,12 @@ func schema_ebs_api_ebs_v1_RunnerSpec(ref common.ReferenceCallback) common.OpenA
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"instanceId": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"type": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -1590,12 +1596,6 @@ func schema_ebs_api_ebs_v1_RunnerSpec(ref common.ReferenceCallback) common.OpenA
 						},
 					},
 					"arch": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"hostname": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",

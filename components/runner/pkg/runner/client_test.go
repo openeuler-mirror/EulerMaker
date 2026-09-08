@@ -60,7 +60,7 @@ func TestClientCreateRunnerOmitsStatus(t *testing.T) {
 		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{
 			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64",
 		}},
-		Spec: RunnerSpec{Type: "ct", Arch: "x86_64", Hostname: "runner-a"},
+		Spec: RunnerSpec{Type: "ct", Arch: "x86_64"},
 	})
 	if err != nil {
 		t.Fatalf("create runner: %v", err)
@@ -86,7 +86,7 @@ func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 	})
 	err := client.UpdateRunner(context.Background(), RunnerResource{
 		Metadata: ObjectMeta{Name: "runner-a"},
-		Spec:     RunnerSpec{Type: "ct", Arch: "x86_64", Hostname: "runner-a", Unschedulable: true},
+		Spec:     RunnerSpec{Type: "ct", Arch: "x86_64", Unschedulable: true},
 		Status:   RunnerStatus{Phase: "Running"},
 	})
 	if err != nil {

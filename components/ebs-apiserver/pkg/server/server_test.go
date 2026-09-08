@@ -21,8 +21,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
-	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	ebsv1 "ebs-api/ebs/v1"
+	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
@@ -35,13 +35,13 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	})
 
 	tests := map[string][]string{
-		"ebs-api/ebs/v1.ProjectSpec":           {"displayName", "buildTargets", "packageRepos"},
-		"ebs-api/ebs/v1.BuildResourceSpec":     {"default", "packages"},
-		"ebs-api/ebs/v1.PackageResourceConfig": {"default", "arches"},
-		"ebs-api/ebs/v1.JobSpec":               {"priority", "runtime", "runtimeSpec", "payload"},
-		"ebs-api/ebs/v1.RunnerStatus":          {"phase", "capacity", "heartbeat"},
-		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":              {"enabled", "scopes", "email"},
-		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":        {"apiVersion", "kind", "metadata", "spec"},
+		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos"},
+		"ebs-api/ebs/v1.BuildResourceSpec":             {"default", "packages"},
+		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
+		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
+		"ebs-api/ebs/v1.RunnerStatus":                  {"phase", "capacity", "heartbeat"},
+		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "scopes", "email"},
+		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount": {"apiVersion", "kind", "metadata", "spec"},
 	}
 	for name, fields := range tests {
 		definition, ok := definitions[name]
@@ -62,6 +62,19 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	}
 	if _, ok := snapshotSpec.Schema.Properties["buildTargets"]; ok {
 		t.Error("SnapshotSpec OpenAPI definition must not expose buildTargets")
+	}
+}
+
+func TestCodecsUseStrictDecoding(t *testing.T) {
+	tests := []string{
+		`{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a"},"spec":{"unknown":true}}`,
+		`{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a"},"spec":{"arch":1}}`,
+		`{"apiVersion":"other/v1","kind":"Runner","metadata":{"name":"runner-a"}}`,
+	}
+	for _, data := range tests {
+		if _, _, err := Codecs.UniversalDeserializer().Decode([]byte(data), nil, nil); err == nil {
+			t.Errorf("expected strict decoding to reject %s", data)
+		}
 	}
 }
 

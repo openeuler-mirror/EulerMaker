@@ -13,6 +13,7 @@ import (
 var (
 	packageNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9][A-Za-z0-9+._-]*)*$`)
 	architecturePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+	uuidV4Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 func ValidateProject(obj *ebsv1.Project) field.ErrorList {
@@ -299,11 +300,28 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 	if len(obj.Spec.Arch) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "arch"), "arch is required"))
 	}
+	instanceIDPath := field.NewPath("spec", "instanceId")
+	if obj.Spec.InstanceID == "" {
+		allErrs = append(allErrs, field.Required(instanceIDPath, "instanceId is required"))
+	} else if !uuidV4Pattern.MatchString(obj.Spec.InstanceID) {
+		allErrs = append(allErrs, field.Invalid(instanceIDPath, obj.Spec.InstanceID, "must be a canonical lowercase UUID v4"))
+	}
+	labelsPath := field.NewPath("metadata", "labels")
+	if obj.Labels["ebs.io/runner-type"] != obj.Spec.Type {
+		allErrs = append(allErrs, field.Invalid(labelsPath.Key("ebs.io/runner-type"), obj.Labels["ebs.io/runner-type"], "must match spec.type"))
+	}
+	if obj.Labels["ebs.io/runner-arch"] != obj.Spec.Arch {
+		allErrs = append(allErrs, field.Invalid(labelsPath.Key("ebs.io/runner-arch"), obj.Labels["ebs.io/runner-arch"], "must match spec.arch"))
+	}
 	return allErrs
 }
 
 func ValidateRunnerUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
-	return ValidateRunner(newObj)
+	allErrs := ValidateRunner(newObj)
+	if newObj.Spec.InstanceID != oldObj.Spec.InstanceID {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "instanceId"), newObj.Spec.InstanceID, "field is immutable"))
+	}
+	return allErrs
 }
 
 func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
