@@ -734,9 +734,9 @@ type Runner struct {
 
 ```go
 type RunnerSpec struct {
+    InstanceID   string        `json:"instanceId,omitempty"`
     Type          string        `json:"type,omitempty"`
     Arch          string        `json:"arch,omitempty"`
-    Hostname      string        `json:"hostname,omitempty"`
     Unschedulable bool          `json:"unschedulable,omitempty"`
     Taints        []RunnerTaint `json:"taints,omitempty"`
 }
@@ -744,13 +744,13 @@ type RunnerSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
+| `instanceId` | string | 是 | Runner 安装实例持久化 UUID；规范小写 UUID v4，同名对象恢复时必须匹配 |
 | `type` | string | 否 | 执行机类型：`ct` / `vm` / `hw`，默认 `ct` |
-| `arch` | string | 是 | CPU 架构：`aarch64`/`x86_64` |
-| `hostname` | string | 否 | 执行机主机名。当前 runner agent 填写 runner 资源名 |
+| `arch` | string | 是 | CPU 架构标识，不限制枚举值 |
 | `unschedulable` | bool | 否 | 是否禁止调度新 Job |
 | `taints` | []RunnerTaint | 否 | 反亲和污点 |
 
-> 调度标签统一使用 `metadata.labels`，不在 `spec` 中重复定义。`spec.type` 和 `spec.arch` 创建后不可变。
+> 调度标签统一使用 `metadata.labels`，不在 `spec` 中重复定义。`spec.instanceId`、`spec.type` 和 `spec.arch` 创建后不可变；`instanceId` 不能修改或清空。
 
 ### RunnerTaint
 

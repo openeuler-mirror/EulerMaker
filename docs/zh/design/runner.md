@@ -22,7 +22,7 @@ runner -> artifact-manager -> local persistent storage
 
 | 职责 | 说明 |
 |------|------|
-| 注册 Runner | 创建或受限更新与 token 身份一致的集群级 `Runner` 对象，声明执行机类型、架构、主机名和能力标签 |
+| 注册 Runner | 创建或受限更新与 token 身份一致的集群级 `Runner` 对象，声明安装实例 ID、执行机类型、架构和能力标签 |
 | 上报状态 | 定期更新 `Runner.status`，包括 phase、资源容量、可调度资源、地址、系统信息和心跳时间 |
 | 监听 Job | 通过自身 Runner 范围的 Job list-watch 获取已分配任务，服务端只返回 `status.runner` 等于自身名称的 Job |
 | 执行 Job | 根据 Job spec 准备执行环境、提供 payload 参数、运行任务、收集产物 |
@@ -86,9 +86,13 @@ PUT    /apis/ebs/v1/runners/{name}/status
 
 Runner 是集群级资源，`metadata.name` 在集群内唯一。Runner token 的 `sub`、`runner` claim 以及请求对象或路径中的 Runner 名称必须完全相同；Runner 不能 list/watch Runner 集合或访问其他 Runner，并且禁止对所有资源执行 DELETE。
 
-Runner 采用受限自注册模型：对象不存在时通过 collection `POST` 创建；对象已存在时先 GET 最新对象，再携带 `metadata.resourceVersion` 通过 PUT/PATCH 更新。创建冲突和并发更新冲突返回 409，Runner 重新读取后按需重试，gateway 不自动重放写请求。
+Runner 采用受限自注册模型。Runner 在首次启动时生成 UUID v4 作为安装实例 ID，以小写规范形式持久化到 `--root-dir/runner-instance-id`；文件必须使用原子创建并限制为 Runner 运行用户读写。进程重启和镜像升级必须复用该值，不能按进程重新生成，也不能在多个 Runner 实例之间复制同一数据目录。`instanceId` 只是实例标识，不是认证凭据，不能替代 MachineAccount token，也不得用于授权判断。
 
-Runner 可以声明和更新的普通对象字段为：
+对象不存在时通过 collection `POST` 创建；对象已存在时先 GET 最新对象并比较 `spec.instanceId`：相同才视为同一安装实例并允许受限更新，不同则本地终止注册并报告同名冲突，不能覆盖已有对象。创建冲突和并发更新冲突返回 409，Runner 必须重新读取：若最新对象的 `instanceId` 与本地相同，视为前一次创建已成功或同实例并发注册并继续；不同则终止。gateway 不自动重放写请求。
+
+`spec.instanceId` 创建后不可修改或清空。若本地 ID 文件丢失，Runner 必须停止并要求恢复原文件或由管理员删除旧 Runner 后重新注册，不能自动接管。
+
+Runner 创建时可以声明 `spec.instanceId`。创建后可以更新的普通对象字段为：
 
 ```text
 metadata.labels["ebs.io/runner-type"]
@@ -96,10 +100,9 @@ metadata.labels["ebs.io/runner-arch"]
 metadata.labels["ebs.io/runner-capability.*"]
 spec.type
 spec.arch
-spec.hostname
 ```
 
-`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 system 调用方维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
+`spec.instanceId` 必须是规范的小写 UUID，创建时必填，创建后不可修改或清空。`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 system 调用方维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
 
 ### 3.3 Job API
 
@@ -156,9 +159,9 @@ type Runner struct {
 
 ```go
 type RunnerSpec struct {
+    InstanceID   string        `json:"instanceId,omitempty"`
     Type          string        `json:"type,omitempty"`
     Arch          string        `json:"arch,omitempty"`
-    Hostname      string        `json:"hostname,omitempty"`
     Unschedulable bool          `json:"unschedulable,omitempty"`
     Taints        []RunnerTaint `json:"taints,omitempty"`
 }
@@ -166,13 +169,13 @@ type RunnerSpec struct {
 
 | 字段 | 说明 |
 |------|------|
+| `instanceId` | Runner 安装实例持久化 UUID，用于识别同名对象是否属于同一安装实例 |
 | `type` | 执行机类型：`ct` / `vm` / `hw` |
-| `arch` | CPU 架构：`aarch64` / `x86_64` |
-| `hostname` | 执行机宿主机名 |
+| `arch` | CPU 架构标识，必填但不限制枚举值 |
 | `unschedulable` | 是否禁止调度新 Job |
 | `taints` | 反亲和污点 |
 
-`type`、`arch` 和 `hostname` 由 Runner 自身声明；`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 system 调用方管理，Runner 自注册和更新时不得修改。
+`instanceId`、`type` 和 `arch` 由 Runner 自身声明；`instanceId` 创建后不可变，`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 system 调用方管理，Runner 自注册和更新时不得修改。
 
 调度标签统一写入 `metadata.labels`，不在 `spec` 中重复定义。例如：
 
@@ -186,9 +189,9 @@ metadata:
     ebs.io/runner-arch: aarch64
     ebs.io/zone: local
 spec:
+  instanceId: 5d65d05e-37b6-4e7b-bfcb-264930f4436b
   type: ct
   arch: aarch64
-  hostname: build-host-01
 ```
 
 ### 4.2 RunnerStatus
@@ -580,6 +583,8 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | artifact-manager 暂时不可达 | 继续写入本地日志 spool，在上限内重试；不得阻塞心跳和 Job watch |
 | 心跳超时 | 控制器将 Runner 标记为 `Offline`，scheduler 不再选择该 Runner |
 | Runner 重启 | 重新注册 Runner，恢复心跳，根据 Job、容器 label、本地 spool/checkpoint 和服务端日志 status 恢复或明确失败 |
+| 同名 Runner 注册 | `instanceId` 相同才允许恢复；不同则终止注册并报告冲突 |
+| 本地 instance ID 丢失 | 不接管已有同名 Runner；恢复 ID 文件或由管理员删除旧对象后重新注册 |
 | Job 执行失败 | 先排空并封账已有日志，再更新 `Job.status.phase=Failed` 和 `message` |
 | Job 超时 | 终止执行进程并尝试封账已有日志，再更新 Job 为 Failed 或 Aborted |
 | 本地日志不可恢复 | 保留诊断文件，将 `artifactState=Failed`，Job 不得进入 Completed |
@@ -649,6 +654,7 @@ secrets:
 ## 十一、安全边界
 
 - 长期 MachineAccount 凭据用于换取最长 24 小时的 Runner token；每个 Runner 或受控站点应使用独立账号以便独立审计和吊销，不应在镜像中内置全局共享 secret。
+- `runner-instance-id` 必须与 `--root-dir` 一起持久化且只允许 Runner 运行用户读写；UUID 可出现在对象和诊断日志中，但它不是秘密或认证因子，任何授权判断仍以 token 为准。
 - CT 类型 Runner 如需挂载 socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。
 - 日志 spool 和上传 checkpoint 可能包含敏感构建输出，只允许 Runner 运行用户访问；不得把日志正文、Bearer Token 或 MachineAccount secret 写入结构化运行日志。
 - 普通产物回执不得包含 Token 或文件内容。Manifest 和最终 Job Status 成功后立即删除 results、日志 spool 和上传回执；失败、超时、结果未知或封账失败现场按 24 小时失败保留期保存，不能在错误路径立即删除。
@@ -660,6 +666,7 @@ secrets:
 
 | 模块 | 场景 |
 |------|------|
+| Runner identity | 首次启动原子生成规范 UUID v4；重启复用；同名同 ID 恢复；同名不同 ID 终止；POST 409 后 GET 并按 ID 分类；更新不能修改或清空 ID；ID 文件丢失时不接管已有对象 |
 | Job identity | 从 `metadata.uid` 取得 jobUID；缺少 namespace/name/UID 时拒绝执行；同名不同 UID 使用独立目录和日志流 |
 | Chunk | 256 KiB 聚合、500 ms 刷新、EOF 刷新、空日志不发送 chunk、SHA-256 针对原始字节、可选 gzip |
 | 顺序与确认 | 单请求在途、200 响应字段校验、相同 sequence/正文重试不重复推进、checkpoint 只在确认后更新 |
