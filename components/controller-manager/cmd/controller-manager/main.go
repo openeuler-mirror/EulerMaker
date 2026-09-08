@@ -9,6 +9,7 @@ import (
 
 	"controller-manager/pkg/client"
 	jobcontroller "controller-manager/pkg/controllers/job"
+	runnercontroller "controller-manager/pkg/controllers/runner"
 	"controller-manager/pkg/health"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/options"
@@ -40,7 +41,8 @@ func main() {
 	pollingFactory := source.NewPollingSourceFactory(apiClient.ListPage, int64(o.Source.PollPageSize), o.Source.SourceStaleThreshold)
 	healthServer := health.New(o.Health.Address)
 	initializers := map[string]manager.InitFunc{
-		jobcontroller.Name: jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
+		jobcontroller.Name:    jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
+		runnercontroller.Name: runnercontroller.Initializer(runnercontroller.Config{HeartbeatTimeout: o.Runner.HeartbeatTimeout, StartupGracePeriod: o.Runner.StartupGracePeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
 	}
 	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout, SlowRetryInitial: o.Manager.SlowRetryInitialDelay, SlowRetryMax: o.Manager.SlowRetryMaxDelay, SlowRetryJitter: o.Manager.SlowRetryJitter}, healthServer)
 	if err != nil {
