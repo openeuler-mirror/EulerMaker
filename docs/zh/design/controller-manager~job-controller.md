@@ -426,7 +426,7 @@ status 更新结果未知后执行 Job GET：
 | 永久 HTTP、输入或客户端错误 | 零值 Result 和 PermanentError，记录分类指标，不改变 Controller 健康状态 |
 | 无法解析对象或违反内部不变量 | 零值 Result 和错误，记录并限速重试；持续失败必须可观测 |
 
-超过 `--controller-max-retries` 后仍不能静默丢弃。框架应记录错误日志和 dropped 指标，并在周期性 resync 时允许对象再次进入队列。
+超过 `--controller-max-retries` 后仍不能静默丢弃。BaseController 将 key 转入统一的慢速指数退避并持续重新入队；周期性 resync 或 Watch 事件可以提前唤醒该 key，但不替代慢速重入，也不在调谐成功前清除其失败历史。
 
 客户端地址、TLS 和认证等静态配置必须在 initializer 阶段完成校验；配置非法时 Controller Manager 启动失败，不得延迟到单个 Job 的 Reconcile 中处理，也不通过 HealthChecker 表达。
 
