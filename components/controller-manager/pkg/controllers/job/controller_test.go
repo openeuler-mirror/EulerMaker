@@ -104,6 +104,22 @@ func newTestController(t *testing.T, now time.Time, job *ebsv1.Job, cachedRunner
 	return c, clk, jobs, runners
 }
 
+func TestRunnerAvailableOnlyWhenOnline(t *testing.T) {
+	for _, phase := range []string{"Online", "Offline", "Unknown", ""} {
+		t.Run(phase, func(t *testing.T) {
+			job := runningJob()
+			c, _, _, _ := newTestController(t, time.Unix(1000, 0), job, runner(phase), &fakeClient{}, false)
+			available, err := c.runnerAvailableFromCache("runner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if available != (phase == "Online") {
+				t.Fatalf("phase %q available=%t", phase, available)
+			}
+		})
+	}
+}
+
 func TestRunnerLostGraceAndFailure(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("test", 8*60*60))
 	job := runningJob()
@@ -148,7 +164,7 @@ func TestAuthoritativeRunnerRecoveryPreventsFailure(t *testing.T) {
 	job := runningJob()
 	client := &fakeClient{}
 	client.getJobFn = func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil }
-	client.getRunnerFn = func(context.Context, string) (*ebsv1.Runner, error) { return runner("Idle"), nil }
+	client.getRunnerFn = func(context.Context, string) (*ebsv1.Runner, error) { return runner("Online"), nil }
 	client.updateFn = func(context.Context, *ebsv1.Job) (*ebsv1.Job, error) {
 		t.Fatal("unexpected status update")
 		return nil, nil
@@ -331,17 +347,17 @@ func TestEventHandlersMaintainIndexAndIgnoreHeartbeat(t *testing.T) {
 	job := runningJob()
 	client := &fakeClient{
 		getJobFn:    func(context.Context, string, string) (*ebsv1.Job, error) { return job, nil },
-		getRunnerFn: func(context.Context, string) (*ebsv1.Runner, error) { return runner("Idle"), nil },
+		getRunnerFn: func(context.Context, string) (*ebsv1.Runner, error) { return runner("Online"), nil },
 		updateFn:    func(context.Context, *ebsv1.Job) (*ebsv1.Job, error) { return nil, nil },
 		deleteFn:    func(context.Context, string, string, clientpkg.DeletePreconditions) error { return nil },
 	}
-	c, _, _, _ := newTestController(t, time.Unix(1000, 0), job, runner("Idle"), client, true)
+	c, _, _, _ := newTestController(t, time.Unix(1000, 0), job, runner("Online"), client, true)
 	c.onJobAdd(job)
 	item, _ := c.Queue().Get()
 	c.Queue().Done(item)
 	c.Queue().Forget(item)
 
-	oldRunner := runner("Idle")
+	oldRunner := runner("Online")
 	newRunner := oldRunner.DeepCopy()
 	newRunner.ResourceVersion = "8"
 	newRunner.Status.Heartbeat = metav1.NewTime(time.Unix(2000, 0))
@@ -377,10 +393,10 @@ func TestSyncReadsClockOnce(t *testing.T) {
 	now := time.Unix(1000, 0)
 	job := runningJob()
 	sourceJobs := &fakeCachedSource{objects: map[string]runtime.Object{"project/job": job}}
-	sourceRunners := &fakeCachedSource{objects: map[string]runtime.Object{"runner": runner("Idle")}}
+	sourceRunners := &fakeCachedSource{objects: map[string]runtime.Object{"runner": runner("Online")}}
 	client := &fakeClient{
 		getJobFn:    func(context.Context, string, string) (*ebsv1.Job, error) { return job, nil },
-		getRunnerFn: func(context.Context, string) (*ebsv1.Runner, error) { return runner("Idle"), nil },
+		getRunnerFn: func(context.Context, string) (*ebsv1.Runner, error) { return runner("Online"), nil },
 		updateFn:    func(context.Context, *ebsv1.Job) (*ebsv1.Job, error) { return nil, nil },
 		deleteFn:    func(context.Context, string, string, clientpkg.DeletePreconditions) error { return nil },
 	}

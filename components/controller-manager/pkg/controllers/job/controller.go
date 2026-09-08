@@ -155,7 +155,7 @@ func (c *Controller) onRunnerUpdate(oldObj, newObj runtime.Object) {
 	if !oldOK || !newOK || oldRunner == nil || newRunner == nil {
 		return
 	}
-	if oldRunner.UID != newRunner.UID || (oldRunner.Status.Phase == "Offline") != (newRunner.Status.Phase == "Offline") {
+	if oldRunner.UID != newRunner.UID || (oldRunner.Status.Phase == "Online") != (newRunner.Status.Phase == "Online") {
 		c.enqueueRunnerJobs(newRunner.Name)
 	}
 }

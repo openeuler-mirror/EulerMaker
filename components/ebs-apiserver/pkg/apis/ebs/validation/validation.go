@@ -326,9 +326,11 @@ func ValidateRunnerUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 
 func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
-	validPhases := []string{"Registering", "Booting", "Running", "Idle", "Offline"}
+	validPhases := []string{"Online", "Offline"}
 	phase := newObj.Status.Phase
-	if phase != "" {
+	if phase == "" {
+		allErrs = append(allErrs, field.Required(field.NewPath("status", "phase"), "must be Online or Offline"))
+	} else {
 		valid := false
 		for _, p := range validPhases {
 			if phase == p {

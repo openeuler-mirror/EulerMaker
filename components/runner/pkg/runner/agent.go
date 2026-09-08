@@ -125,13 +125,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.register(ctx); err != nil {
 		return err
 	}
-	if err := a.patchRunnerPhase(ctx, "Booting"); err != nil {
-		log.Printf("update booting status failed: %v", err)
-	}
 
-	go a.heartbeatLoop(ctx)
 	go a.watchLoop(ctx)
 	go a.cleanup.Run(ctx)
+	if err := a.patchRunnerPhase(ctx, "Online"); err != nil {
+		log.Printf("update online status failed: %v", err)
+	}
+	go a.heartbeatLoop(ctx)
 
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -274,13 +274,9 @@ func (a *Agent) patchRunnerPhase(ctx context.Context, phase string) error {
 
 func (a *Agent) currentStatus() RunnerStatus {
 	now := time.Now().UTC()
-	phase := "Idle"
-	if a.runningJobCount() > 0 {
-		phase = "Running"
-	}
 	capacity, allocatable := nodeResources(workDir(a.cfg.RootDir))
 	return RunnerStatus{
-		Phase:       phase,
+		Phase:       "Online",
 		Capacity:    capacity,
 		Allocatable: allocatable,
 		Addresses:   runnerAddresses(a.cfg.Name),
@@ -512,12 +508,6 @@ func (a *Agent) finishJob(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	delete(a.activeJobs, key)
-}
-
-func (a *Agent) runningJobCount() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return len(a.activeJobs)
 }
 
 func (a *Agent) lastResourceVersion() string {

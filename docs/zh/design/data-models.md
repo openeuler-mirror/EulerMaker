@@ -784,7 +784,7 @@ type RunnerStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | 执行机状态：`Registering`/`Booting`/`Running`/`Idle`/`Offline` |
+| `phase` | string | 执行机状态：`Online`/`Offline` |
 | `conditions` | []Condition | 详细状态条件，当前 runner agent 暂不主动填充 |
 | `capacity` | map[string]string | Runner 上报的总资源容量。当前包含 `cpu`、`memory`、`ephemeral-storage`：`cpu` 为逻辑 CPU 数，`memory` 使用 `Mi`，`ephemeral-storage` 使用 `Gi` |
 | `allocatable` | map[string]string | Runner 上报的可调度资源容量。当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间，使用 `Gi` |
@@ -792,7 +792,7 @@ type RunnerStatus struct {
 | `info` | RunnerInfo | 执行机系统与 agent 信息 |
 | `heartbeat` | Time | 最后心跳时间 |
 
-Runner 创建时 apiserver 默认置为 `Registering`；当前 runner agent 启动后置为 `Booting`，心跳时根据是否存在运行中的 Job 置为 `Idle` 或 `Running`，退出时置为 `Offline`。
+Runner 创建时 apiserver 默认置为 `Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次心跳置为 `Online`；主动下线或心跳超时后置为 `Offline`。Runner 的忙闲状态由绑定 Job 计算，不通过 Runner phase 表达。
 
 ### RunnerAddress
 
@@ -933,7 +933,7 @@ type VersionConst struct {
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
 | RpmRepo | `Pending` / `Processing` / `Completed`                                                |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |
-| Runner | `Registering` → `Booting` → `Idle` / `Running` → `Offline`                            |
+| Runner | `Offline` ↔ `Online`                                                               |
 
 ## 附录 B：结构体引用关系图
 

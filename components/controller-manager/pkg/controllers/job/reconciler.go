@@ -70,7 +70,7 @@ func (c *Controller) runnerAvailableFromCache(name string) (bool, error) {
 	if !ok || runner == nil {
 		return false, fmt.Errorf("unexpected Runner cache object %T for %s", obj, name)
 	}
-	return runner.Status.Phase != "Offline", nil
+	return runner.Status.Phase == "Online", nil
 }
 
 func (c *Controller) failLostRunnerJob(ctx context.Context, key string, cached *ebsv1.Job, now time.Time) (controller.ReconcileResult, error) {
@@ -104,7 +104,7 @@ func (c *Controller) failLostRunnerJob(ctx context.Context, key string, cached *
 			return controller.ReconcileResult{}, validationErr
 		}
 	}
-	if err == nil && authoritative.Status.Phase != "Offline" {
+	if err == nil && authoritative.Status.Phase == "Online" {
 		c.clearObservation(key)
 		log.Printf("controller=%s key=%s uid=%s runner=%s reason=RunnerRecovered", Name, key, latest.UID, latest.Status.Runner)
 		return controller.ReconcileResult{}, nil

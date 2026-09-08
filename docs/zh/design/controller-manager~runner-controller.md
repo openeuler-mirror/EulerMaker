@@ -19,9 +19,9 @@ Runner Controller 是 `controller-manager` 中负责 Runner 健康状态收敛�
 - 不生成或校验 `spec.instanceId` 的格式；该字段由 Runner 注册流程和 apiserver 校验，Controller 只在响应身份比较时保持其不变；
 - 不根据 Runner 数量扩缩执行机；
 - 不修改 `spec.unschedulable`、taints、labels 或其他 spec/metadata 字段；
-- 不把 `Offline` Runner 自动恢复为 `Booting`、`Idle` 或 `Running`，恢复由 Runner agent 的下一次成功状态上报完成；
+- 不把 `Offline` Runner 自动恢复为 `Online`，恢复由已经完成本地初始化的 Runner agent 在下一次成功状态上报时完成；
 - 不读取、更新或删除 Job。已绑定 Job 的失败收敛由 Job Controller 处理；
-- 不根据 Runner 上是否存在 Job推导 `Idle` 或 `Running`；
+- 不根据 Runner 上是否存在 Job 推导 Runner phase；
 - 不实现节点驱逐、Pod eviction、污点管理、zone health 或 Kubernetes Node Controller 的其他集群能力；
 - 不清理长期离线的 Runner。若以后需要历史 Runner 回收，应作为独立、显式启用的保留策略设计。
 
@@ -210,7 +210,7 @@ request.Status.Phase = "Offline"
 
 Controller 不把心跳改为当前时间，也不清空旧容量信息。`Offline` 表示旧信息不再可用于调度，不表示历史上报数据需要删除。
 
-Runner agent 允许通过带有更新心跳的状态写入将 `Offline` 恢复为 `Booting`、`Idle` 或 `Running`。Runner Controller 对 `Offline` 对象直接结束，不阻止或覆盖后续恢复。
+Runner agent 允许通过带有更新心跳的状态写入将 `Offline` 恢复为 `Online`。Runner Controller 对 `Offline` 对象直接结束，不阻止或覆盖后续恢复。
 
 ## 5. 健康判定
 
@@ -219,7 +219,7 @@ Runner agent 允许通过带有更新心跳的状态写入将 `Offline` 恢复�
 只有以下 phase 参与心跳超时判定：
 
 ```text
-Registering | Booting | Idle | Running
+Online
 ```
 
 `Offline` Runner 直接结束。phase 为空或不是上述合法值时，视为非法对象：记录结构化日志和指标，返回永久错误，不计算截止时间，也不尝试修复其状态。虽然 apiserver 会拒绝新写入的非法 phase，Controller 仍必须安全处理历史数据和异常响应。
@@ -234,7 +234,7 @@ Registering | Booting | Idle | Running
 
 `heartbeat` 晚于本次 `now` 时，视为尚未超时，并按 `heartbeat + HeartbeatTimeout` 安排检查。Controller 不在首版推断时钟漂移，也不修改未来时间戳；应记录时钟偏移指标和限速日志，供运维排查 Runner 与控制面时钟同步。
 
-`Registering` 和 `Booting` Runner 可能尚无首次心跳，使用创建时间和启动宽限期。`Idle` 或 `Running` 但心跳为零的数据也采用同一规则；若已经超过启动宽限期，则允许标记为 `Offline`，不能永久保持可调度。
+正常的 `Online` 写入必须同时携带非零心跳。为安全处理异常或不完整对象，`Online` 但心跳为零时使用创建时间和启动宽限期；超过启动宽限期后允许标记为 `Offline`，不能永久保持可调度。
 
 ### 5.2 截止时间安全计算
 
@@ -281,7 +281,7 @@ func calculateHealthDeadline(
 1. 对象不存在：成功结束；
 2. `deletionTimestamp` 非空：成功结束；
 3. `phase == Offline`：成功结束；
-4. phase 为空或不属于 `Registering`、`Booting`、`Idle`、`Running`：返回永久错误；
+4. phase 为空或不是 `Online`：返回永久错误；
 5. 调用 `calculateHealthDeadline`；
 6. `Expired=false`：返回函数给出的安全 `RequeueAfter`；
 7. 已到期：进入权威确认阶段。

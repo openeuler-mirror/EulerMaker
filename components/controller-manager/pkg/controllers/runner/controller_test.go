@@ -96,7 +96,7 @@ func newTestController(t *testing.T, now time.Time, cached *ebsv1.Runner, client
 
 func TestCalculateHealthDeadlineBoundaries(t *testing.T) {
 	now := time.Unix(1000, 0)
-	runner := testRunner("Idle", now)
+	runner := testRunner("Online", now)
 	config := Config{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute}
 	result, err := calculateHealthDeadline(runner, now, config)
 	if err != nil || result.Expired || result.RequeueAfter != 2*time.Minute || result.Basis != "heartbeat" {
@@ -115,7 +115,7 @@ func TestCalculateHealthDeadlineBoundaries(t *testing.T) {
 
 func TestCalculateHealthDeadlineUsesCreationAndRejectsMissingTime(t *testing.T) {
 	now := time.Unix(1000, 0)
-	runner := testRunner("Booting", time.Time{})
+	runner := testRunner("Online", time.Time{})
 	runner.CreationTimestamp = metav1.NewTime(now)
 	result, err := calculateHealthDeadline(runner, now, Config{HeartbeatTimeout: time.Minute, StartupGracePeriod: 5 * time.Minute})
 	if err != nil || result.Basis != "creationTimestamp" || result.RequeueAfter != 5*time.Minute {
@@ -134,7 +134,7 @@ func TestCalculateHealthDeadlineUsesCreationAndRejectsMissingTime(t *testing.T) 
 
 func TestCalculateHealthDeadlineRejectsOverflow(t *testing.T) {
 	base := time.Date(9999, 12, 31, 23, 59, 0, 0, time.UTC)
-	runner := testRunner("Idle", base)
+	runner := testRunner("Online", base)
 	_, err := calculateHealthDeadline(runner, base, Config{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: time.Minute})
 	var target objectTimestampError
 	if !errors.As(err, &target) {
@@ -144,7 +144,7 @@ func TestCalculateHealthDeadlineRejectsOverflow(t *testing.T) {
 
 func TestSyncSchedulesBeforeDeadlineWithoutAPI(t *testing.T) {
 	now := time.Unix(1000, 0)
-	runner := testRunner("Idle", now)
+	runner := testRunner("Online", now)
 	client := &fakeClient{
 		getFn: func(context.Context, string) (*ebsv1.Runner, error) { t.Fatal("unexpected GET"); return nil, nil },
 		updateFn: func(context.Context, *ebsv1.Runner) (*ebsv1.Runner, error) {
@@ -161,7 +161,7 @@ func TestSyncSchedulesBeforeDeadlineWithoutAPI(t *testing.T) {
 
 func TestSyncAuthoritativeHeartbeatPreventsOffline(t *testing.T) {
 	now := time.Unix(1000, 0)
-	cached := testRunner("Running", now.Add(-3*time.Minute))
+	cached := testRunner("Online", now.Add(-3*time.Minute))
 	latest := cached.DeepCopy()
 	latest.ResourceVersion = "8"
 	latest.Status.Heartbeat = metav1.NewTime(now)
@@ -181,7 +181,7 @@ func TestSyncAuthoritativeHeartbeatPreventsOffline(t *testing.T) {
 
 func TestSyncMarksExpiredRunnerOfflineAndPreservesFields(t *testing.T) {
 	now := time.Unix(1000, 0)
-	runner := testRunner("Running", now.Add(-3*time.Minute))
+	runner := testRunner("Online", now.Add(-3*time.Minute))
 	var request *ebsv1.Runner
 	client := &fakeClient{}
 	client.getFn = func(context.Context, string) (*ebsv1.Runner, error) { return runner.DeepCopy(), nil }
@@ -203,7 +203,7 @@ func TestSyncMarksExpiredRunnerOfflineAndPreservesFields(t *testing.T) {
 
 func TestSyncConflictImmediatelyRequeues(t *testing.T) {
 	now := time.Unix(1000, 0)
-	runner := testRunner("Running", now.Add(-3*time.Minute))
+	runner := testRunner("Online", now.Add(-3*time.Minute))
 	client := &fakeClient{}
 	client.getFn = func(context.Context, string) (*ebsv1.Runner, error) { return runner.DeepCopy(), nil }
 	client.updateFn = func(context.Context, *ebsv1.Runner) (*ebsv1.Runner, error) {
@@ -218,7 +218,7 @@ func TestSyncConflictImmediatelyRequeues(t *testing.T) {
 
 func TestSyncUnknownWriteConfirmsOffline(t *testing.T) {
 	now := time.Unix(1000, 0)
-	runner := testRunner("Running", now.Add(-3*time.Minute))
+	runner := testRunner("Online", now.Add(-3*time.Minute))
 	gets := 0
 	client := &fakeClient{}
 	client.getFn = func(context.Context, string) (*ebsv1.Runner, error) {
@@ -250,7 +250,7 @@ func TestInvalidPhaseIsPermanent(t *testing.T) {
 }
 
 func TestShouldEnqueueRunnerUpdate(t *testing.T) {
-	old := testRunner("Idle", time.Unix(1000, 0))
+	old := testRunner("Online", time.Unix(1000, 0))
 	unchanged := old.DeepCopy()
 	unchanged.ResourceVersion = "8"
 	if shouldEnqueueRunnerUpdate(old, unchanged) {

@@ -23,7 +23,7 @@ func TestClientPatchRunnerStatus(t *testing.T) {
 		return response(200, `{}`), nil
 	})
 
-	err := client.PatchRunnerStatus(context.Background(), "runner-a", RunnerStatus{Phase: "Idle"})
+	err := client.PatchRunnerStatus(context.Background(), "runner-a", RunnerStatus{Phase: "Online"})
 	if err != nil {
 		t.Fatalf("patch runner status: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestClientPatchRunnerStatus(t *testing.T) {
 	if gotContentType != "application/merge-patch+json" {
 		t.Fatalf("content type = %s", gotContentType)
 	}
-	if gotBody["status"].Phase != "Idle" {
+	if gotBody["status"].Phase != "Online" {
 		t.Fatalf("unexpected body: %#v", gotBody)
 	}
 }
@@ -94,7 +94,7 @@ func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 	err := client.UpdateRunner(context.Background(), RunnerResource{
 		Metadata: ObjectMeta{Name: "runner-a"},
 		Spec:     RunnerSpec{Type: "ct", Arch: "x86_64", Unschedulable: true},
-		Status:   RunnerStatus{Phase: "Running"},
+		Status:   RunnerStatus{Phase: "Online"},
 	})
 	if err != nil {
 		t.Fatalf("update runner: %v", err)
@@ -173,7 +173,7 @@ func TestClientRefreshesAndRetriesUnauthorizedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
-	err = client.PatchRunnerStatus(context.Background(), "runner-a", RunnerStatus{Phase: "Idle"})
+	err = client.PatchRunnerStatus(context.Background(), "runner-a", RunnerStatus{Phase: "Online"})
 	if err == nil {
 		t.Fatal("expected unauthorized error")
 	}
