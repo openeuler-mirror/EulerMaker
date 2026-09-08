@@ -442,7 +442,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - `BuildInfo` 创建默认 `status.phase = Pending`。
 - `RpmRepo` 创建默认 `status.phase = Pending`。
 - `Job` 创建默认 `status.phase = Pending`。
-- `Runner` 创建默认 `status.phase = Registering`。
+- `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 - 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。
 - `User.spec.enabled` 默认为 `true`，`User.spec.scopes` 默认为 `["ebs:user"]`，并按字典序规范化。
 

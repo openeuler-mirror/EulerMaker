@@ -210,7 +210,7 @@ type RunnerStatus struct {
 
 | 字段 | 说明 |
 |------|------|
-| `phase` | `Registering` / `Booting` / `Running` / `Idle` / `Offline` |
+| `phase` | `Online` / `Offline` |
 | `conditions` | 详细状态条件 |
 | `capacity` | Runner 上报的总资源容量，当前包含 `cpu`、`memory`、`ephemeral-storage` |
 | `allocatable` | Runner 上报的可调度资源容量，当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间 |
@@ -220,24 +220,20 @@ type RunnerStatus struct {
 
 ## 五、生命周期
 
-Runner phase 使用数据模型中定义的状态：
+Runner phase 只表达是否可以参与调度：
 
 ```text
-Registering -> Booting -> Idle -> Running -> Idle
-                                  |
-                                  v
-                               Offline
+Offline <-> Online
 ```
 
 | Phase | 含义 |
 |-------|------|
-| `Registering` | Runner 已启动，正在创建或更新 Runner 对象 |
-| `Booting` | Runner 对象已就绪，正在初始化执行环境和 watch 循环 |
-| `Idle` | Runner 可调度，当前无运行中 Job |
-| `Running` | Runner 正在执行一个或多个 Job |
+| `Online` | Runner 已完成本地初始化、心跳正常，可以接收新 Job |
 | `Offline` | Runner 主动下线或心跳超时，不应继续接收新 Job |
 
-`Executing` 不作为 `Runner.status.phase`。如果实现中需要更细的执行阶段，应放在 Runner 进程内部状态或 Job 的 `status.stage` 中。
+Runner 的启动、初始化和忙闲状态不写入 `status.phase`。具体执行阶段由 Job 的 `status.phase` 和 `status.stage` 表达，Runner 当前负载由绑定到该 Runner 的 Job 计算。
+
+新建 Runner 由 apiserver 默认置为 `Offline`。Runner agent 必须先完成配置加载、工作目录和执行器初始化，并启动 Job list/watch 所需组件；确认具备接收任务能力后，才通过带有当前心跳的状态写入切换为 `Online`。初始化失败时不得上报 `Online`。
 
 ## 六、心跳与状态上报
 
@@ -245,7 +241,7 @@ Runner 定期通过 `/status` 子资源上报状态，建议默认心跳间隔�
 
 ```yaml
 status:
-  phase: Idle
+  phase: Online
   capacity:
     cpu: "32"
     memory: 65536Mi
@@ -272,7 +268,7 @@ status:
 
 - `capacity` 表示执行机总容量，通常变化较少。
 - `allocatable` 表示可调度容量；当前实现不按运行中 Job 扣减 `cpu` 或 `memory`，`ephemeral-storage` 反映工作目录所在文件系统的当前可用空间。
-- Runner 是否忙由 `status.phase` 表达；具体 Job 与 Runner 的绑定关系以 Job 自身的 `status.runner` 为准。
+- Runner 的忙闲不由 `status.phase` 表达；具体 Job 与 Runner 的绑定关系以 Job 自身的 `status.runner` 为准。
 - `heartbeat` 由 Runner 每次心跳刷新。
 - 心跳超时后的 `Offline` 标记可以由 apiserver 外部控制器完成。
 
@@ -305,17 +301,16 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 ```text
 1. Runner watch 到绑定给自己的 Job
 2. 根据 metadata.namespace 确定所属 Project
-3. 更新 Runner.status.phase=Running
-4. 更新 Job.status.stage=Running
-5. 准备执行环境并开始业务执行；环境准备和业务运行统一属于 `Running` stage
-6. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
-7. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 YAML 参数提供给任务入口
-8. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
-9. 将 Job 保持为 phase=Running 并推进到 stage=PostRun，封账日志；业务执行失败或超时也必须尝试封账已有日志
-10. 业务执行成功时收集并上传产物，完成 JobUploadManifest
-11. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Completed 和 Artifact 摘要
-12. 业务执行、必需日志封账、必需产物上传或清单封账失败时更新 phase=Failed，并保留明确的失败原因和已完成 Artifact 摘要
-13. 清理执行环境和已确认的本地上传状态，更新 Runner.status 为 Idle 或继续 Running
+3. 更新 Job.status.stage=Running
+4. 准备执行环境并开始业务执行；环境准备和业务运行统一属于 `Running` stage
+5. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
+6. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 YAML 参数提供给任务入口
+7. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
+8. 将 Job 保持为 phase=Running 并推进到 stage=PostRun，封账日志；业务执行失败或超时也必须尝试封账已有日志
+9. 业务执行成功时收集并上传产物，完成 JobUploadManifest
+10. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Completed 和 Artifact 摘要
+11. 业务执行、必需日志封账、必需产物上传或清单封账失败时更新 phase=Failed，并保留明确的失败原因和已完成 Artifact 摘要
+12. 清理执行环境和已确认的本地上传状态；Runner 保持 `Online`
 ```
 
 Job status 使用当前数据模型：

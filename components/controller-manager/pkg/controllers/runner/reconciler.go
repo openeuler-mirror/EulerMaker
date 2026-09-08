@@ -129,12 +129,7 @@ func (c *Controller) evaluateRunner(runner *ebsv1.Runner, now time.Time, futureO
 }
 
 func processablePhase(phase string) bool {
-	switch phase {
-	case "Registering", "Booting", "Idle", "Running":
-		return true
-	default:
-		return false
-	}
+	return phase == "Online"
 }
 
 func (c *Controller) confirmAndMarkOffline(ctx context.Context, cached *ebsv1.Runner, now time.Time, futureObserved *bool) (controller.ReconcileResult, error) {

@@ -33,7 +33,7 @@ func Phase() framework.FilterPlugin {
 		if r.Invalid != nil {
 			return fail("PhaseFilter", r.Invalid)
 		}
-		if r.Runner.Status.Phase != "Idle" && r.Runner.Status.Phase != "Running" {
+		if r.Runner.Status.Phase != "Online" {
 			return reject("PhaseFilter", "runner phase is not schedulable")
 		}
 		return ok("PhaseFilter")

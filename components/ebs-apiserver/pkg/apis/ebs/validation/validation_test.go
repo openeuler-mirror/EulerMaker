@@ -478,12 +478,23 @@ func TestValidateRunnerStatusUpdate(t *testing.T) {
 		wantErrs   int
 		wantFields map[string]field.ErrorType
 	}{
-		{name: "allows empty phase"},
-		{name: "allows registering", phase: "Registering"},
-		{name: "allows booting", phase: "Booting"},
-		{name: "allows running", phase: "Running"},
-		{name: "allows idle", phase: "Idle"},
+		{name: "allows online", phase: "Online"},
 		{name: "allows offline", phase: "Offline"},
+		{
+			name:     "rejects empty phase",
+			wantErrs: 1,
+			wantFields: map[string]field.ErrorType{
+				"status.phase": field.ErrorTypeRequired,
+			},
+		},
+		{
+			name:     "rejects legacy phase",
+			phase:    "Running",
+			wantErrs: 1,
+			wantFields: map[string]field.ErrorType{
+				"status.phase": field.ErrorTypeNotSupported,
+			},
+		},
 		{
 			name:     "rejects unsupported phase",
 			phase:    "Unknown",

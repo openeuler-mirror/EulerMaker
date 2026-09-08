@@ -613,7 +613,7 @@ func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"instanceId":"5d65d05e-37b6-4e7b-bfcb-264930f4436b","type":"ct","arch":"x86_64","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Idle"}}`)
+			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"instanceId":"5d65d05e-37b6-4e7b-bfcb-264930f4436b","type":"ct","arch":"x86_64","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Online"}}`)
 			return
 		}
 		if r.Method != http.MethodPut || r.Header.Get("Content-Type") != "application/json" {
@@ -627,7 +627,7 @@ func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
 		labels := meta["labels"].(map[string]any)
 		spec := obj["spec"].(map[string]any)
 		status := obj["status"].(map[string]any)
-		if meta["resourceVersion"] != "7" || labels["ebs.io/zone"] != "zone-a" || spec["instanceId"] != "5d65d05e-37b6-4e7b-bfcb-264930f4436b" || spec["unschedulable"] != true || status["phase"] != "Idle" {
+		if meta["resourceVersion"] != "7" || labels["ebs.io/zone"] != "zone-a" || spec["instanceId"] != "5d65d05e-37b6-4e7b-bfcb-264930f4436b" || spec["unschedulable"] != true || status["phase"] != "Online" {
 			t.Fatalf("protected fields were not preserved: %#v", obj)
 		}
 		puts.Add(1)

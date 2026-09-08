@@ -163,12 +163,12 @@ metadata.deletionTimestamp == nil
 
 | Runner 情况 | Job Controller 行为 |
 |-------------|---------------------|
-| 对象存在且 phase 不是 `Offline` | Job 保持不变，清除本地宽限期记录 |
+| 对象存在且 phase 为 `Online` | Job 保持不变，清除本地宽限期记录 |
 | 对象存在且 phase 为 `Offline` | 进入或继续离线宽限期 |
 | Runner 对象不存在 | 进入或继续离线宽限期 |
-| Runner 删除后以相同名称重建且 phase 不是 `Offline` | 视为同一个逻辑 Runner 已恢复，Job 保持不变 |
+| Runner 删除后以相同名称重建且 phase 为 `Online` | 视为同一个逻辑 Runner 已恢复，Job 保持不变 |
 
-首版明确接受 Runner UID 无法参与绑定判断的限制。`Job.status.runner` 只保存 Runner 名称，Scheduler、Runner 和 Job Controller 都把该名称视为稳定的逻辑 Runner 身份；Job Controller 不记录或比较 Runner UID。Runner 删除后，只要相同名称的 Runner 在宽限期内重新出现且不为 `Offline`，就视为原逻辑 Runner 恢复，即使新对象 UID 已变化。
+首版明确接受 Runner UID 无法参与绑定判断的限制。`Job.status.runner` 只保存 Runner 名称，Scheduler、Runner 和 Job Controller 都把该名称视为稳定的逻辑 Runner 身份；Job Controller 不记录或比较 Runner UID。Runner 删除后，只要相同名称的 Runner 在宽限期内重新出现且为 `Online`，就视为原逻辑 Runner 恢复，即使新对象 UID 已变化。
 
 因此首版无法区分“同一 Runner 重新注册”和“另一执行实例复用了相同名称”，也不能保证后一种情况下旧 Job 不被新实例接管。这与 Kubernetes 普通 Pod 只通过 `spec.nodeName` 绑定 Node 的名称模型一致，是有意接受的一致性边界，而不是 Controller 的临时缓存缺陷。
 
@@ -233,7 +233,7 @@ remaining    = deadline - now
 7. 宽限期到期后，通过 apiserver GET 读取最新 Job，不能直接以 cache 对象写 status。
 8. 再次检查 name、namespace、UID、deletionTimestamp、phase 和 runner。对象已经终态、删除重建、不再 Running 或 runner 变化时停止处理。
 9. 再通过最新 Runner cache 检查一次；若 Runner 已恢复则停止处理。缓存仍显示 Runner 不存在或为 `Offline` 时，必须调用 `GetRunner` 从 apiserver 读取权威对象，不能仅凭缓存把 Job 置为 `Failed`：
-   - 返回同名 Runner 且 phase 不是 `Offline`：视为已经恢复，清除宽限期记录并成功结束；
+   - 返回同名 Runner 且 phase 为 `Online`：视为已经恢复，清除宽限期记录并成功结束；
    - 返回同名 Runner 且 phase 为 `Offline`：确认 Runner 不可用，继续状态更新；
    - 返回 404：确认 Runner 不存在，继续状态更新；
    - 返回 401/403：返回 PermanentError，记录鉴权失败；
