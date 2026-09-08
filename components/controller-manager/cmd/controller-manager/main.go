@@ -42,7 +42,7 @@ func main() {
 	initializers := map[string]manager.InitFunc{
 		jobcontroller.Name: jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
 	}
-	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout}, healthServer)
+	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout, SlowRetryInitial: o.Manager.SlowRetryInitialDelay, SlowRetryMax: o.Manager.SlowRetryMaxDelay, SlowRetryJitter: o.Manager.SlowRetryJitter}, healthServer)
 	if err != nil {
 		log.Fatal(err)
 	}

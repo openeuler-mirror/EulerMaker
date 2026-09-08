@@ -13,6 +13,9 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if o.Manager.Workers != 2 || o.Source.PollPageSize != 500 || o.Manager.ControllerMaxRetries != 15 {
 		t.Fatalf("unexpected defaults: %+v", o)
 	}
+	if o.Manager.SlowRetryInitialDelay != 30*time.Second || o.Manager.SlowRetryMaxDelay != 15*time.Minute || o.Manager.SlowRetryJitter != 0.2 {
+		t.Fatalf("unexpected slow retry defaults: %+v", o.Manager)
+	}
 	if o.Job.RunnerLostGracePeriod != 5*time.Minute || !o.Job.HistoryGCEnabled || o.Job.HistoryRetention != 720*time.Hour {
 		t.Fatalf("unexpected Job controller defaults: %+v", o)
 	}
@@ -44,6 +47,12 @@ func TestParseRejectsInvalidJobControllerDurations(t *testing.T) {
 	}
 	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--controller-max-retries=-1"}); err == nil {
 		t.Fatal("negative controller max retries was accepted")
+	}
+	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--controller-slow-retry-initial-delay=2m", "--controller-slow-retry-max-delay=1m"}); err == nil {
+		t.Fatal("slow retry maximum below initial delay was accepted")
+	}
+	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--controller-slow-retry-jitter=1"}); err == nil {
+		t.Fatal("slow retry jitter outside [0, 1) was accepted")
 	}
 	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--job-history-retention=0"}); err == nil {
 		t.Fatal("zero enabled history retention was accepted")

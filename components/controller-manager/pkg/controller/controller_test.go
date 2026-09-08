@@ -140,3 +140,56 @@ func TestPermanentErrorIsNotRetried(t *testing.T) {
 		t.Fatalf("permanent error retried %d times", calls.Load())
 	}
 }
+
+func TestControllerEntersSlowRetryAndClearsItAfterSuccess(t *testing.T) {
+	var calls atomic.Int32
+	done := make(chan struct{})
+	c, err := New("slow-retry", func(context.Context, string) (ReconcileResult, error) {
+		if calls.Add(1) < 3 {
+			return ReconcileResult{}, errors.New("temporary failure")
+		}
+		close(done)
+		return ReconcileResult{}, nil
+	}, 0, WithSlowRetry(time.Millisecond, 4*time.Millisecond, 0.2), WithJitter(func(delay time.Duration, _ float64) time.Duration { return delay }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = c.Run(ctx, 1) }()
+	c.Enqueue("key")
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("controller did not continue slow retries")
+	}
+	if c.isSlowRetry("key") {
+		t.Fatal("successful reconciliation did not clear slow retry state")
+	}
+}
+
+func TestControllerSlowRetryDelayIsExponentialAndCapped(t *testing.T) {
+	c, err := New("slow-delay", func(context.Context, string) (ReconcileResult, error) {
+		return ReconcileResult{}, errors.New("temporary failure")
+	}, 0, WithSlowRetry(time.Second, 4*time.Second, 0.2), WithJitter(func(delay time.Duration, _ float64) time.Duration { return delay }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for retries, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
+		if got := c.slowRetryDelay(retries); got != want {
+			t.Fatalf("slowRetryDelay(%d)=%s, want %s", retries, got, want)
+		}
+	}
+}
+
+func TestWithSlowRetryRejectsInvalidDelays(t *testing.T) {
+	if _, err := New("invalid", func(context.Context, string) (ReconcileResult, error) { return ReconcileResult{}, nil }, 0, WithSlowRetry(0, time.Second, 0.2)); err == nil {
+		t.Fatal("zero initial delay was accepted")
+	}
+	if _, err := New("invalid", func(context.Context, string) (ReconcileResult, error) { return ReconcileResult{}, nil }, 0, WithSlowRetry(time.Second, time.Millisecond, 0.2)); err == nil {
+		t.Fatal("maximum below initial delay was accepted")
+	}
+	if _, err := New("invalid", func(context.Context, string) (ReconcileResult, error) { return ReconcileResult{}, nil }, 0, WithSlowRetry(time.Second, time.Minute, 1)); err == nil {
+		t.Fatal("jitter outside [0, 1) was accepted")
+	}
+}

@@ -23,7 +23,12 @@ type Dependencies struct {
 	WatchFactory   source.WatchSourceFactory
 	PollingFactory source.PollingSourceFactory
 }
-type ControllerConfig struct{ Workers int }
+type ControllerConfig struct {
+	Workers          int
+	SlowRetryInitial time.Duration
+	SlowRetryMax     time.Duration
+	SlowRetryJitter  float64
+}
 type InitContext struct {
 	Dependencies Dependencies
 	Config       ControllerConfig
@@ -33,6 +38,8 @@ type Config struct {
 	Workers                           int
 	Controllers                       string
 	CacheSyncTimeout, ShutdownTimeout time.Duration
+	SlowRetryInitial, SlowRetryMax    time.Duration
+	SlowRetryJitter                   float64
 }
 
 type Manager struct {
@@ -46,8 +53,8 @@ func New(initializers map[string]InitFunc, dependencies Dependencies, config Con
 	if initializers == nil || dependencies.Client == nil || dependencies.WatchFactory == nil || dependencies.PollingFactory == nil || health == nil {
 		return nil, fmt.Errorf("initializers, client, source factories and health server are required")
 	}
-	if config.Workers <= 0 || config.Controllers == "" || config.CacheSyncTimeout <= 0 || config.ShutdownTimeout <= 0 {
-		return nil, fmt.Errorf("workers and timeouts must be positive")
+	if config.Workers <= 0 || config.Controllers == "" || config.CacheSyncTimeout <= 0 || config.ShutdownTimeout <= 0 || config.SlowRetryInitial <= 0 || config.SlowRetryMax < config.SlowRetryInitial || config.SlowRetryJitter < 0 || config.SlowRetryJitter >= 1 {
+		return nil, fmt.Errorf("workers and timeouts must be positive and slow retry maximum must not be less than its initial delay")
 	}
 	for name, initializer := range initializers {
 		if name == "" || initializer == nil {
@@ -140,7 +147,7 @@ func (m *Manager) initialize(ctx context.Context) ([]controller.Controller, erro
 	items := make([]controller.Controller, 0, len(names))
 	seen := make(map[string]struct{})
 	for _, name := range names {
-		item, active, err := enabled[name](ctx, InitContext{Dependencies: m.dependencies, Config: ControllerConfig{Workers: m.config.Workers}})
+		item, active, err := enabled[name](ctx, InitContext{Dependencies: m.dependencies, Config: ControllerConfig{Workers: m.config.Workers, SlowRetryInitial: m.config.SlowRetryInitial, SlowRetryMax: m.config.SlowRetryMax, SlowRetryJitter: m.config.SlowRetryJitter}})
 		if err != nil {
 			return nil, fmt.Errorf("initialize controller %s: %w", name, err)
 		}
