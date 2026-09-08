@@ -19,6 +19,9 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if o.Job.RunnerLostGracePeriod != 5*time.Minute || !o.Job.HistoryGCEnabled || o.Job.HistoryRetention != 720*time.Hour {
 		t.Fatalf("unexpected Job controller defaults: %+v", o)
 	}
+	if o.Runner.HeartbeatTimeout != 2*time.Minute || o.Runner.StartupGracePeriod != 5*time.Minute {
+		t.Fatalf("unexpected Runner controller defaults: %+v", o.Runner)
+	}
 }
 
 func TestParseFlatFlagsIntoNestedOptions(t *testing.T) {
@@ -29,6 +32,8 @@ func TestParseFlatFlagsIntoNestedOptions(t *testing.T) {
 		"--poll-page-size=100",
 		"--job-runner-lost-grace-period=1m",
 		"--job-history-gc-enabled=false",
+		"--runner-heartbeat-timeout=3m",
+		"--runner-startup-grace-period=6m",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +43,9 @@ func TestParseFlatFlagsIntoNestedOptions(t *testing.T) {
 	}
 	if o.Job.RunnerLostGracePeriod != time.Minute || o.Job.HistoryGCEnabled {
 		t.Fatalf("flat Job flags were not stored in nested options: %+v", o.Job)
+	}
+	if o.Runner.HeartbeatTimeout != 3*time.Minute || o.Runner.StartupGracePeriod != 6*time.Minute {
+		t.Fatalf("flat Runner flags were not stored in nested options: %+v", o.Runner)
 	}
 }
 
@@ -59,6 +67,9 @@ func TestParseRejectsInvalidJobControllerDurations(t *testing.T) {
 	}
 	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--job-history-gc-enabled=false", "--job-history-retention=0"}); err != nil {
 		t.Fatalf("disabled GC rejected unused retention: %v", err)
+	}
+	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--runner-heartbeat-timeout=0"}); err == nil {
+		t.Fatal("zero Runner heartbeat timeout was accepted")
 	}
 }
 func TestParseRequiresTLSConfiguration(t *testing.T) {

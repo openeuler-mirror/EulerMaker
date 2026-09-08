@@ -15,6 +15,7 @@ type Options struct {
 	Source  SourceOptions
 	Health  HealthOptions
 	Job     JobControllerOptions
+	Runner  RunnerControllerOptions
 }
 
 type APIOptions struct {
@@ -50,6 +51,11 @@ type JobControllerOptions struct {
 	HistoryGCEnabled      bool
 }
 
+type RunnerControllerOptions struct {
+	HeartbeatTimeout   time.Duration
+	StartupGracePeriod time.Duration
+}
+
 func Parse(args []string) (Options, error) {
 	o := Options{
 		API:     APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
@@ -57,6 +63,7 @@ func Parse(args []string) (Options, error) {
 		Source:  SourceOptions{PollPeriod: 30 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
 		Health:  HealthOptions{Address: ":8080"},
 		Job:     JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
+		Runner:  RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
 	f.StringVar(&o.API.Server, "apiserver", "", "ebs-apiserver address")
@@ -81,6 +88,8 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Job.RunnerLostGracePeriod, "job-runner-lost-grace-period", o.Job.RunnerLostGracePeriod, "grace period before failing a Job whose Runner is unavailable")
 	f.BoolVar(&o.Job.HistoryGCEnabled, "job-history-gc-enabled", o.Job.HistoryGCEnabled, "delete terminal Jobs after their history retention period")
 	f.DurationVar(&o.Job.HistoryRetention, "job-history-retention", o.Job.HistoryRetention, "retention period for terminal Jobs")
+	f.DurationVar(&o.Runner.HeartbeatTimeout, "runner-heartbeat-timeout", o.Runner.HeartbeatTimeout, "timeout since the last persisted Runner heartbeat")
+	f.DurationVar(&o.Runner.StartupGracePeriod, "runner-startup-grace-period", o.Runner.StartupGracePeriod, "grace period for a new Runner to publish its first heartbeat")
 	if err := f.Parse(args); err != nil {
 		return o, err
 	}
@@ -90,7 +99,7 @@ func Parse(args []string) (Options, error) {
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")
 	}
-	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) {
+	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 {
 		return o, fmt.Errorf("workers, limits, periods, timeouts and addresses must be valid")
 	}
 	return o, nil
