@@ -61,7 +61,6 @@ type Build struct {
 }
 
 type BuildSpec struct {
-	SnapshotName  string          `json:"snapshotName,omitempty"`
 	BuildType     string          `json:"buildType,omitempty"`
 	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
 	Packages      []string        `json:"packages,omitempty"`

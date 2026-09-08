@@ -61,9 +61,6 @@ func ValidateSnapshotUpdate(newObj, oldObj *ebsv1.Snapshot) field.ErrorList {
 
 func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	var allErrs field.ErrorList
-	if len(obj.Spec.SnapshotName) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "snapshotName"), "snapshotName is required"))
-	}
 	if len(obj.Spec.BuildType) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildType"), "buildType is required"))
 	}

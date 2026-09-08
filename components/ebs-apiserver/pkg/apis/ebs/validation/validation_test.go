@@ -143,9 +143,8 @@ func TestValidateBuild(t *testing.T) {
 		{
 			name:     "requires mandatory build fields",
 			build:    &ebsv1.Build{},
-			wantErrs: 5,
+			wantErrs: 4,
 			wantFields: map[string]field.ErrorType{
-				"spec.snapshotName":     field.ErrorTypeRequired,
 				"spec.buildType":        field.ErrorTypeRequired,
 				"spec.packages":         field.ErrorTypeRequired,
 				"spec.buildTarget.os":   field.ErrorTypeRequired,
@@ -164,8 +163,7 @@ func TestValidateBuild(t *testing.T) {
 
 func TestValidateBuildUpdate(t *testing.T) {
 	errs := ValidateBuildUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 5, map[string]field.ErrorType{
-		"spec.snapshotName":     field.ErrorTypeRequired,
+	assertErrorList(t, errs, 4, map[string]field.ErrorType{
 		"spec.buildType":        field.ErrorTypeRequired,
 		"spec.packages":         field.ErrorTypeRequired,
 		"spec.buildTarget.os":   field.ErrorTypeRequired,
@@ -564,10 +562,9 @@ func validSnapshot() *ebsv1.Snapshot {
 func validBuild() *ebsv1.Build {
 	return &ebsv1.Build{
 		Spec: ebsv1.BuildSpec{
-			SnapshotName: "snapshot-a",
-			BuildType:    "full",
-			Packages:     []string{"pkg-a"},
-			BuildTarget:  validBuildTarget(),
+			BuildType:   "full",
+			Packages:    []string{"pkg-a"},
+			BuildTarget: validBuildTarget(),
 		},
 	}
 }
