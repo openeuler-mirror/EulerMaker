@@ -36,6 +36,7 @@ type Agent struct {
 	logFactory *ArtifactLogFactory
 	artifacts  *ArtifactProcessor
 	cleanup    *ArtifactCleanupManager
+	instanceID string
 
 	mu         sync.Mutex
 	activeJobs map[string]struct{}
@@ -112,6 +113,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := os.MkdirAll(resultRoot(a.cfg.RootDir), 0o755); err != nil {
 		return fmt.Errorf("create result root: %w", err)
 	}
+	instanceID, err := loadOrCreateRunnerInstanceID(a.cfg.RootDir)
+	if err != nil {
+		return fmt.Errorf("initialize runner instance ID: %w", err)
+	}
+	a.instanceID = instanceID
 	if err := a.waitForInitialToken(ctx); err != nil {
 		return err
 	}
@@ -181,26 +187,41 @@ func (a *Agent) register(ctx context.Context) error {
 	desired := a.runnerObject("")
 	existing, err := a.client.GetRunner(ctx, a.cfg.Name)
 	if err == nil {
-		desired = *existing
-		desired.TypeMeta = TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
-		if desired.Metadata.Labels == nil {
-			desired.Metadata.Labels = map[string]string{}
-		}
-		desired.Metadata.Labels["ebs.io/runner-type"] = a.cfg.Type
-		desired.Metadata.Labels["ebs.io/runner-arch"] = a.cfg.Arch
-		desired.Spec.Type = a.cfg.Type
-		desired.Spec.Arch = a.cfg.Arch
-		if err := a.client.UpdateRunner(ctx, desired); err != nil {
-			return fmt.Errorf("update runner: %w", err)
-		}
-		return nil
+		return a.updateExistingRunner(ctx, existing)
 	}
 	var statusErr StatusError
 	if !errors.As(err, &statusErr) || statusErr.Code != 404 {
 		return fmt.Errorf("get runner: %w", err)
 	}
-	if err := a.client.CreateRunner(ctx, desired); err != nil {
+	if err := a.client.CreateRunner(ctx, desired); err == nil {
+		return nil
+	} else if !errors.As(err, &statusErr) || statusErr.Code != 409 {
 		return fmt.Errorf("create runner: %w", err)
+	}
+
+	existing, err = a.client.GetRunner(ctx, a.cfg.Name)
+	if err != nil {
+		return fmt.Errorf("get runner after create conflict: %w", err)
+	}
+	return a.updateExistingRunner(ctx, existing)
+}
+
+func (a *Agent) updateExistingRunner(ctx context.Context, existing *RunnerResource) error {
+	if existing.Spec.InstanceID != a.instanceID {
+		return fmt.Errorf("runner %q is registered by a different instance", a.cfg.Name)
+	}
+	desired := *existing
+	desired.TypeMeta = TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
+	if desired.Metadata.Labels == nil {
+		desired.Metadata.Labels = map[string]string{}
+	}
+	desired.Metadata.Labels["ebs.io/runner-type"] = a.cfg.Type
+	desired.Metadata.Labels["ebs.io/runner-arch"] = a.cfg.Arch
+	desired.Spec.InstanceID = a.instanceID
+	desired.Spec.Type = a.cfg.Type
+	desired.Spec.Arch = a.cfg.Arch
+	if err := a.client.UpdateRunner(ctx, desired); err != nil {
+		return fmt.Errorf("update runner: %w", err)
 	}
 	return nil
 }
@@ -217,8 +238,9 @@ func (a *Agent) runnerObject(resourceVersion string) RunnerResource {
 			},
 		},
 		Spec: RunnerSpec{
-			Type: a.cfg.Type,
-			Arch: a.cfg.Arch,
+			InstanceID: a.instanceID,
+			Type:       a.cfg.Type,
+			Arch:       a.cfg.Arch,
 		},
 	}
 }

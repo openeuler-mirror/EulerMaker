@@ -483,11 +483,10 @@ gateway 在转发前进行用户级 Project 鉴权。
 Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行以下检查：
 
 - JWT `sub`、`runner` claim 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
-- 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.type`、`spec.arch`、`spec.hostname`。
-- type、arch labels 必须分别与 spec 字段一致；`spec.type` 只允许 `ct`、`vm`、`hw`，当前 `spec.arch` 只允许 `aarch64`、`x86_64`。
+- 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceId`、`spec.type`、`spec.arch`。
 - `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable`、`spec.taints` 或其他管理字段。
 
-不满足条件返回 400 或 403且不转发；对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并按 4.9.1 节发起受限 PUT/PATCH。
+`spec.instanceId` 必填和 UUID v4 格式、type 取值、`arch` 必填以及 type/arch labels 与 spec 一致性均由 apiserver 统一校验。apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并比较 `instanceId`，相同才按 4.9.1 节发起受限 PUT/PATCH，不同则停止注册。
 
 以下资源—verb 矩阵是已认证身份对非公开读取和写操作的授权规范；4.1 节公开 `GET/HEAD` 在身份校验通过后优先适用，不受 owner/member 行限制。未列出或标为“禁止”的组合默认拒绝。`get/list/watch` 统称读操作，`create/update/patch/delete` 统称写操作；资源实际不支持的 verb 即使矩阵允许也由 apiserver 拒绝。
 
@@ -522,9 +521,9 @@ gateway 不能只检查请求体中显式出现的字段。所有 `PUT`、`PATCH
 
 1. 根据规范化后的路由确定资源、对象名称和 subresource；路径中不存在对象名称的 collection 路由不接受 `PUT`、`PATCH`。gateway 先执行不依赖对象内容的 scope、verb、Project 和路径权限检查，调用方对该类请求必然无权时直接返回 403，不使用内部凭据探测对象。
 2. gateway 使用内部读取凭据从相同资源路径读取当前对象，记为 `oldObject`。上游返回 404 时向客户端返回 404，读取失败时不执行写入。需要依据对象内容授权的 Runner Job 请求在读取后继续核对 `status.runner`。
-3. `PUT` 只接受 `application/json`，请求体必须是单个完整 JSON 对象，以请求体作为 `candidateObject`。请求必须携带 `metadata.resourceVersion`，并且与 `oldObject.metadata.resourceVersion` 完全一致，否则返回 409。
+3. `PUT` 只接受 `application/json`，请求体必须是单个完整 JSON 对象，以请求体作为 `candidateObject`。Runner 请求中的 `metadata.resourceVersion` 原样交给 apiserver 校验，gateway 不自行判断冲突。
 4. `PATCH` 只接受 `application/merge-patch+json` 和 `application/json-patch+json`。gateway 将 patch 应用到 `oldObject` 的规范 JSON 表示，得到 `candidateObject`。JSON 语法错误、patch 操作失败或结果不是对象时返回 400。
-5. PATCH 中如果显式提供或修改 `metadata.resourceVersion`，其结果必须等于旧对象版本；如果没有提供，gateway 将旧对象的 `metadata.resourceVersion` 写入候选对象。这样 PATCH 同样受乐观并发控制。
+5. PATCH 基于 `oldObject` 生成候选对象，因此未修改的 `metadata.resourceVersion` 自然保留；如果 patch 显式修改或删除该字段，gateway 不覆盖结果，由 apiserver 执行乐观并发校验。
 6. gateway 对完整的 `oldObject` 和 `candidateObject` 执行身份字段、subresource、角色权限和受保护字段比较。任何一项不通过均返回 403，不向上游发送写请求。
 7. 比较通过后，gateway 不转发原始 PATCH，而是将 `candidateObject` 以 `PUT application/json` 转发到原对象或原 `/status` 路径。上游必须使用候选对象中的 `resourceVersion` 执行原子更新；对象在步骤 2 后发生变化时返回 409，gateway 不自动重放写请求。
 
@@ -557,7 +556,7 @@ metadata.finalizers
 metadata.ownerReferences
 ```
 
-`metadata.resourceVersion` 只能保持为 `oldObject` 的值。路径中的资源类型、namespace、name 必须分别与候选对象的 `apiVersion/kind`、`metadata.namespace`、`metadata.name` 一致；缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段，候选对象的 `status` 必须与旧对象完全相同；`/status` 路径只允许修改授权的 `status` 字段，`metadata`（除保持原值的 `resourceVersion` 外）和 `spec` 必须与旧对象完全相同。
+除 Runner 外，`metadata.resourceVersion` 只能保持为 `oldObject` 的值；Runner 的版本值由 gateway 原样转发并由 apiserver 校验。路径中的 namespace、name 必须与候选对象的 `metadata.namespace`、`metadata.name` 一致；Runner 的 `apiVersion`、`kind`、对象结构和字段类型由 apiserver 严格解码，gateway 只核对其身份名称。缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段，候选对象的 `status` 必须与旧对象完全相同；`/status` 路径只允许修改授权的 `status` 字段，`metadata`（除 `resourceVersion` 外）和 `spec` 必须与旧对象完全相同。
 
 字段比较后的角色规则：
 
@@ -567,13 +566,13 @@ metadata.ownerReferences
 | Member 更新 Project | 无 | 4.8 节禁止 member 修改 Project，请求返回 403 |
 | Owner/Member 更新 Project 子资源普通路径 | `metadata.labels`、`metadata.annotations`、`spec` | member 禁止 DELETE，但可按 4.8 节执行 update/patch |
 | Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.8 节允许该调用方更新时允许 |
-| Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch`、`spec.hostname` | 路径名称必须等于 token 的 `runner` claim；type/arch label 必须与 spec 一致；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
+| Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `runner` claim；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
 | Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `runner` claim；`spec` 和全部 metadata 保持不变 |
 | Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.startTime`、`status.endTime`、`status.resultRoot`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner` 或 `status.restartCount` |
 | System 更新业务资源 | 普通路径为 `metadata`、`spec`，`/status` 路径为 `status` | 仍受身份字段、subresource 隔离和 `resourceVersion` 规则约束 |
 | Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
 
-表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。
+表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。Runner 的 `instanceId` 不可变、type/arch labels 一致性和 `resourceVersion` 冲突也只由 apiserver 判定，gateway 不重复实现。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。
 
 #### 4.9.2 Project access labels
 
@@ -806,7 +805,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | Admin | user、runner 和 system 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询和删除对象 |
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |
 | Ops | 只允许 Runner collection list 和单对象 get；拒绝 watch、Runner 子资源、全部写操作和其他资源 |
-| ObjectCompare | PUT 缺失/过期 `resourceVersion`；Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；检查后并发更新返回 409且不自动重放 |
+| ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户创建 Project 时强制写入 owner user label；system 创建时校验 owner User；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护 system 管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、restartCount、spec 或 metadata |

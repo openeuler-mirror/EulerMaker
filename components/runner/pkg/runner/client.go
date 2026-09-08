@@ -53,7 +53,9 @@ func (c *Client) CreateRunner(ctx context.Context, runner RunnerResource) error 
 			"labels": runner.Metadata.Labels,
 		},
 		"spec": map[string]any{
-			"type": runner.Spec.Type, "arch": runner.Spec.Arch,
+			"instanceId": runner.Spec.InstanceID,
+			"type":       runner.Spec.Type,
+			"arch":       runner.Spec.Arch,
 		},
 	}
 	return c.doJSON(ctx, http.MethodPost, apiPrefix+"/runners", body, nil)
@@ -70,7 +72,9 @@ func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error 
 			},
 		},
 		"spec": map[string]any{
-			"type": runner.Spec.Type, "arch": runner.Spec.Arch,
+			"instanceId": runner.Spec.InstanceID,
+			"type":       runner.Spec.Type,
+			"arch":       runner.Spec.Arch,
 		},
 	}
 	return c.doMergePatch(ctx, path, body, nil)

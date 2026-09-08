@@ -53,6 +53,13 @@ func TestClientCreateRunnerOmitsStatus(t *testing.T) {
 		if _, exists := body["status"]; exists {
 			t.Fatalf("create body contains status: %s", body["status"])
 		}
+		var spec RunnerSpec
+		if err := json.Unmarshal(body["spec"], &spec); err != nil {
+			t.Fatalf("decode spec: %v", err)
+		}
+		if spec.InstanceID != testRunnerInstanceID {
+			t.Fatalf("instanceId = %q", spec.InstanceID)
+		}
 		return response(http.StatusCreated, `{}`), nil
 	})
 	err := client.CreateRunner(context.Background(), RunnerResource{
@@ -60,7 +67,7 @@ func TestClientCreateRunnerOmitsStatus(t *testing.T) {
 		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{
 			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64",
 		}},
-		Spec: RunnerSpec{Type: "ct", Arch: "x86_64"},
+		Spec: RunnerSpec{InstanceID: testRunnerInstanceID, Type: "ct", Arch: "x86_64"},
 	})
 	if err != nil {
 		t.Fatalf("create runner: %v", err)

@@ -443,6 +443,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - `RpmRepo` 创建默认 `status.phase = Pending`。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Registering`。
+- 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。
 - `User.spec.enabled` 默认为 `true`，`User.spec.scopes` 默认为 `["ebs:user"]`，并按字典序规范化。
 
 默认值还包括：
@@ -454,10 +455,12 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 
 当前校验逻辑位于 `pkg/apis/ebs/validation/validation.go`，主要包括：
 
+- API 请求使用严格解码：`apiVersion`、`kind`、对象结构或字段类型不合法时直接拒绝，未知字段不会被静默丢弃。
+
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
 - Snapshot 无法获取 commit 时，`specCommits` 允许为空。
 - Build 必须包含 `snapshotName`、`buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
-- Runner 类型必须为 `ct`、`vm` 或 `hw`，`type` 和 `arch` 更新时不可变。
+- Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
 

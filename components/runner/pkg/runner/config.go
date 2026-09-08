@@ -117,9 +117,6 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.ArtifactUploadTimeout <= 0 || cfg.ArtifactRetryMaxBackoff <= 0 {
 		return Config{}, fmt.Errorf("artifact upload timeout and retry backoff must be positive")
 	}
-	if cfg.Arch != "aarch64" && cfg.Arch != "x86_64" {
-		return Config{}, fmt.Errorf("unsupported runtime architecture %q", cfg.Arch)
-	}
 	if cfg.RootDir == "" {
 		return Config{}, fmt.Errorf("runner root dir is required")
 	}
