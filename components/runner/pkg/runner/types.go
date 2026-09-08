@@ -32,7 +32,6 @@ type RunnerResource struct {
 type RunnerSpec struct {
 	Type          string        `json:"type,omitempty"`
 	Arch          string        `json:"arch,omitempty"`
-	Hostname      string        `json:"hostname,omitempty"`
 	Unschedulable bool          `json:"unschedulable,omitempty"`
 	Taints        []RunnerTaint `json:"taints,omitempty"`
 }

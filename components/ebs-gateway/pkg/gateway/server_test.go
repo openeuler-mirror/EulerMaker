@@ -534,12 +534,42 @@ func TestRunnerCanCreateItself(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 	}), 100, 200)
-	body := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"ct","arch":"x86_64","hostname":"runner-a"},"status":{}}`
+	body := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"instanceId":"not-validated-by-gateway","type":"ct","arch":"x86_64"},"status":{}}`
 	req := authenticatedRequest(t, http.MethodPost, apiPrefix+"/runners", strings.NewReader(body), runnerClaims("runner-a"))
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunnerCreateDefersValidationAndForwardsConflict(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}), 100, 200)
+
+	body := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"ct","arch":"x86_64"},"status":{}}`
+	req := authenticatedRequest(t, http.MethodPost, apiPrefix+"/runners", strings.NewReader(body), runnerClaims("runner-a"))
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected missing instanceId validation to be deferred, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body = `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"instanceId":"5d65d05e-37b6-4e7b-bfcb-264930f4436b","type":"ct","arch":"x86_64","hostname":"runner-a"},"status":{}}`
+	req = authenticatedRequest(t, http.MethodPost, apiPrefix+"/runners", strings.NewReader(body), runnerClaims("runner-a"))
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected removed hostname field to be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body = `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"instanceId":"5d65d05e-37b6-4e7b-bfcb-264930f4436b","type":"ct","arch":"x86_64"},"status":{}}`
+	req = authenticatedRequest(t, http.MethodPost, apiPrefix+"/runners", strings.NewReader(body), runnerClaims("runner-a"))
+	rec = httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected upstream conflict to be forwarded, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -583,7 +613,7 @@ func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"type":"ct","arch":"x86_64","hostname":"old","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Idle"}}`)
+			_, _ = io.WriteString(w, `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-a","resourceVersion":"7","labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64","ebs.io/zone":"zone-a"}},"spec":{"instanceId":"5d65d05e-37b6-4e7b-bfcb-264930f4436b","type":"ct","arch":"x86_64","unschedulable":true,"taints":[{"key":"dedicated","effect":"NoSchedule"}]},"status":{"phase":"Idle"}}`)
 			return
 		}
 		if r.Method != http.MethodPut || r.Header.Get("Content-Type") != "application/json" {
@@ -597,19 +627,33 @@ func TestRunnerPatchPreservesProtectedFieldsAndBecomesPut(t *testing.T) {
 		labels := meta["labels"].(map[string]any)
 		spec := obj["spec"].(map[string]any)
 		status := obj["status"].(map[string]any)
-		if meta["resourceVersion"] != "7" || labels["ebs.io/zone"] != "zone-a" || spec["unschedulable"] != true || status["phase"] != "Idle" {
+		if meta["resourceVersion"] != "7" || labels["ebs.io/zone"] != "zone-a" || spec["instanceId"] != "5d65d05e-37b6-4e7b-bfcb-264930f4436b" || spec["unschedulable"] != true || status["phase"] != "Idle" {
 			t.Fatalf("protected fields were not preserved: %#v", obj)
 		}
 		puts.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}), 100, 200)
-	patch := `{"metadata":{"labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"ct","arch":"x86_64","hostname":"new"}}`
+	patch := `{"metadata":{"labels":{"ebs.io/runner-type":"ct","ebs.io/runner-arch":"x86_64"}},"spec":{"type":"ct","arch":"x86_64"}}`
 	req := authenticatedRequest(t, http.MethodPatch, apiPrefix+"/runners/runner-a", strings.NewReader(patch), runnerClaims("runner-a"))
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || puts.Load() != 1 {
 		t.Fatalf("expected protected patch to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunnerInstanceIDValidationIsDeferredToAPIServer(t *testing.T) {
+	old := map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{}},
+		"spec":     map[string]any{"instanceId": "5d65d05e-37b6-4e7b-bfcb-264930f4436b"},
+	}
+	candidate := map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{}},
+		"spec":     map[string]any{"instanceId": "dc12a241-34c4-45b0-92cf-58ab1234b9c2"},
+	}
+	if !protectedRunnerFieldsEqual(old, candidate) {
+		t.Fatal("gateway must not duplicate instanceId immutability validation")
 	}
 }
 
