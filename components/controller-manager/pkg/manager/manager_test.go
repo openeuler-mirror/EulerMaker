@@ -68,7 +68,9 @@ func TestManagerStartsAfterSourcesSyncAndStops(t *testing.T) {
 	s := &fakeSource{name: "source", synced: true, ready: true}
 	h := &fakeHealth{}
 	started := make(chan struct{})
-	initializers := map[string]InitFunc{"test": func(context.Context, InitContext) (controller.Controller, bool, error) {
+	var observedConfig ControllerConfig
+	initializers := map[string]InitFunc{"test": func(_ context.Context, init InitContext) (controller.Controller, bool, error) {
+		observedConfig = init.Config
 		c, err := controller.New("test", func(context.Context, string) (controller.ReconcileResult, error) {
 			return controller.ReconcileResult{}, nil
 		}, 1)
@@ -77,7 +79,7 @@ func TestManagerStartsAfterSourcesSyncAndStops(t *testing.T) {
 		}
 		return &observedController{Controller: c, started: started}, true, nil
 	}}
-	m, err := New(initializers, Dependencies{Client: &clientpkg.Client{}, WatchFactory: &fakeWatchFactory{items: []source.Source{s}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second}, h)
+	m, err := New(initializers, Dependencies{Client: &clientpkg.Client{}, WatchFactory: &fakeWatchFactory{items: []source.Source{s}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second, SlowRetryInitial: time.Second, SlowRetryMax: time.Minute, SlowRetryJitter: 0.2}, h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +90,9 @@ func TestManagerStartsAfterSourcesSyncAndStops(t *testing.T) {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("controller did not start")
+	}
+	if observedConfig.SlowRetryInitial != time.Second || observedConfig.SlowRetryMax != time.Minute || observedConfig.SlowRetryJitter != 0.2 {
+		t.Fatalf("unexpected controller retry config: %+v", observedConfig)
 	}
 	if !h.ready.Load() {
 		t.Fatal("manager not ready")
@@ -115,7 +120,7 @@ func (c *observedController) Run(ctx context.Context, workers int) error {
 
 func TestManagerPropagatesSourceError(t *testing.T) {
 	want := errors.New("fatal source")
-	m, err := New(map[string]InitFunc{}, Dependencies{Client: &clientpkg.Client{}, WatchFactory: &fakeWatchFactory{items: []source.Source{&fakeSource{name: "broken", runErr: want}}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second}, &fakeHealth{})
+	m, err := New(map[string]InitFunc{}, Dependencies{Client: &clientpkg.Client{}, WatchFactory: &fakeWatchFactory{items: []source.Source{&fakeSource{name: "broken", runErr: want}}}, PollingFactory: &fakePollingFactory{}}, Config{Workers: 1, Controllers: "*", CacheSyncTimeout: time.Second, ShutdownTimeout: time.Second, SlowRetryInitial: time.Second, SlowRetryMax: time.Minute, SlowRetryJitter: 0.2}, &fakeHealth{})
 	if err != nil {
 		t.Fatal(err)
 	}

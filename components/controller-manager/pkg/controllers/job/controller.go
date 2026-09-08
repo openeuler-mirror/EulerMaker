@@ -52,6 +52,10 @@ type Controller struct {
 }
 
 func New(jobs, runners source.CachedSource, client Client, clk clock.Clock, config Config) (*Controller, error) {
+	return newController(jobs, runners, client, clk, config)
+}
+
+func newController(jobs, runners source.CachedSource, client Client, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
 	if jobs == nil || runners == nil || client == nil || clk == nil {
 		return nil, fmt.Errorf("Job and Runner sources, client and clock are required")
 	}
@@ -59,7 +63,7 @@ func New(jobs, runners source.CachedSource, client Client, clk clock.Clock, conf
 		return nil, err
 	}
 	c := &Controller{jobs: jobs, runners: runners, client: client, clock: clk, config: config, index: newRunnerIndex(), observations: make(map[string]LostRunnerObservation)}
-	base, err := controller.New(Name, c.sync, config.MaxRetries)
+	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +87,8 @@ func Initializer(config Config) manager.InitFunc {
 		if err != nil {
 			return nil, false, err
 		}
-		value, err := New(jobs, runners, newAPIClient(init.Dependencies.Client), clock.RealClock{}, config)
+		value, err := newController(jobs, runners, newAPIClient(init.Dependencies.Client), clock.RealClock{}, config,
+			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
 		return value, err == nil, err
 	}
 }

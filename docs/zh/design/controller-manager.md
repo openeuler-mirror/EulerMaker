@@ -131,13 +131,17 @@ type ReconcileResult struct {
 type SyncFunc func(ctx context.Context, key string) (ReconcileResult, error)
 
 type BaseController struct {
-    name  string
-    queue workqueue.TypedRateLimitingInterface[string]
-    sync  SyncFunc
+    name         string
+    queue        workqueue.TypedRateLimitingInterface[string]
+    sync         SyncFunc
+    maxRetries   int
+    slowBackoff  workqueue.RateLimiter
+    slowKeys     map[string]struct{}
+    slowKeysLock sync.Mutex
 }
 ```
 
-`BaseController` 只实现 Worker、队列终结和停止逻辑，不解释业务对象。业务 `Sync` 只返回结构化结果和错误，不得直接调用 `Done`、`Forget`、`AddRateLimited` 或 `AddAfter`。
+`BaseController` 只实现 Worker、队列终结、两阶段错误退避和停止逻辑，不解释业务对象。业务 `Sync` 只返回结构化结果和错误，不得直接调用 `Done`、`Forget`、`AddRateLimited` 或 `AddAfter`。`slowKeys` 和 `slowBackoff` 仅由 BaseController 管理；锁内不得调用队列、RateLimiter 或业务 `Sync`。
 
 `ReconcileResult` 语义如下：
 
@@ -534,24 +538,34 @@ func (c *BaseController) processNext(ctx context.Context) bool {
         c.queue.Forget(key)
         return false
     case IsPermanent(err):
+        c.clearSlowRetry(key)
         c.queue.Forget(key)
     case err != nil && retryAfter > 0:
         c.queue.Forget(key)
         c.queue.AddAfter(key, retryAfter)
+    case err != nil && c.isSlowRetry(key):
+        c.queue.Forget(key)
+        c.addSlowRetry(key)
     case err != nil && c.queue.NumRequeues(key) < c.maxRetries:
         c.queue.AddRateLimited(key)
     case err != nil:
         c.queue.Forget(key)
+        c.enterSlowRetry(key)
+        c.addSlowRetry(key)
     case !result.Valid():
+        c.clearSlowRetry(key)
         c.queue.Forget(key)
         // 记录 Controller 编程错误和 invalid-result 指标。
     case result.RequeueAfter > 0:
+        c.clearSlowRetry(key)
         c.queue.Forget(key)
         c.queue.AddAfter(key, result.RequeueAfter)
     case result.Requeue:
+        c.clearSlowRetry(key)
         c.queue.Forget(key)
         c.queue.Add(key)
     default:
+        c.clearSlowRetry(key)
         c.queue.Forget(key)
     }
     return true
@@ -575,12 +589,22 @@ func (r ReconcileResult) Valid() bool {
 - API Conflict 如果业务需要立即读取最新版本，返回 `ReconcileResult{Requeue: true}, nil`；如果冲突持续发生可能形成竞争，则允许返回错误进入 `AddRateLimited`；
 - 暂时性网络错误、依赖未就绪：返回错误并 `AddRateLimited`；
 - 输入永久无效：记录 condition/event 后返回永久错误并 `Forget`；
-- 超过最大重试次数：`Forget`，记录 error、指标和事件，等待后续 Watch 或 Polling resync 再次激活；
+- 达到快速重试上限：清除快速 RateLimiter 计数，进入慢速指数退避并通过 `AddAfter` 持续重新入队，不能静默丢弃 key；
 - 无论任何结果都必须且只能调用一次 `Done`。
 
 `Forget` 必须发生在 `Add` 或 `AddAfter` 之前，以清除上一轮失败累计的 rate-limit 次数。处理期间由事件 Handler 执行的普通 `Add` 仍由 workqueue 的 dirty/processing 语义保留；延迟条目到期后可能形成一次额外的幂等调谐，这是允许的，业务正确性不能依赖取消旧的 `AddAfter`。
 
-默认使用指数退避与总体限速组合，基础退避 5 ms、最大退避 1000 秒，Controller 可覆盖；默认最大连续重试次数为 15。成功、永久错误或超过重试上限时通过 `Forget` 清除旧退避。普通 Add 不主动清除一个仍在失败重试中的 key 的退避次数。
+快速阶段默认使用 client-go 的指数退避与总体限速组合，基础退避 5 ms，默认最多连续重试 15 次。达到上限后，该 key 进入框架维护的慢速阶段，延迟从 30 秒开始按 2 倍增长，最大 15 分钟，并应用 `[0.8, 1.2]` 的随机抖动。慢速阶段的每次临时失败直接计算下一次慢速延迟，不重新执行一轮快速重试，避免长期故障持续制造请求尖峰。
+
+慢速状态遵循以下固定语义：
+
+- 调谐成功、合法的 `Requeue`/`RequeueAfter`、永久错误、非法 Result 或确认对象已不存在时，清除该 key 的快速和慢速退避状态；
+- `RetryAfter` 优先于本地退避；它只决定本次延迟，不增加慢速失败次数，也不清除已经存在的慢速状态；
+- Event Handler 的普通 `Enqueue` 可以立即唤醒处于慢速等待中的 key，但不直接清除慢速失败历史；本次调谐成功后才清除，继续临时失败则沿用慢速阶段；
+- context 取消时不再入队；Controller 退出后慢速状态随实例释放；
+- 慢速状态必须在终结路径及时删除，不能因已删除对象或成功调谐造成无界增长。
+
+抖动函数和时钟必须可注入，以便单元测试精确验证延迟。慢速 RateLimiter 自身的计数与 `slowKeys` 的阶段标记必须并发安全；多个 worker 可以操作不同 key，同一 key 仍由 workqueue 的 dirty/processing 语义串行化。慢速退避是最终收敛保障，不替代 Watch/Polling resync。
 
 ### 5.2 错误分类
 
@@ -647,7 +671,7 @@ shutdown timeout 只由 Manager 创建，Source 和 Controller 不得各自建�
 
 ### 6.3 Controller panic
 
-Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 panic 的本次 key 按可重试失败处理，但连续 panic 仍受最大重试次数限制。Controller 的顶层 `Run` 意外返回视为不可恢复错误，Manager 终止进程。
+Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 panic 的本次 key 按可重试失败处理；连续 panic 先经历快速重试，随后进入慢速指数退避，不能形成紧密循环。Controller 的顶层 `Run` 意外返回视为不可恢复错误，Manager 终止进程。
 
 ## 7. 配置
 
@@ -660,6 +684,10 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--insecure-skip-verify` | false | 仅开发环境允许关闭 TLS 校验 |
 | `--controllers` | `*` | 启用或禁用的 Controller 集合 |
 | `--workers` | 2 | Controller 默认 Worker 数量 |
+| `--controller-max-retries` | 15 | 单个 key 进入慢速阶段前的快速连续重试次数 |
+| `--controller-slow-retry-initial-delay` | 30s | 快速重试耗尽后的首次慢速重入延迟 |
+| `--controller-slow-retry-max-delay` | 15m | 慢速指数退避上限 |
+| `--controller-slow-retry-jitter` | 0.2 | 慢速延迟的正负抖动比例，取值范围 `[0, 1)` |
 | `--poll-period` | 30s | 非 Watch 资源默认轮询周期 |
 | `--poll-page-size` | 500 | 非 Watch 资源单页对象数 |
 | `--cache-sync-timeout` | 2m | 首次同步超时 |
@@ -667,7 +695,7 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--source-stale-threshold` | 2m | Source 持续未成功同步后 readiness 失败的最小阈值 |
 | `--health-bind-address` | `:8080` | 健康与指标监听地址 |
 
-每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；配置非法时启动失败。当前不配置客户端证书，认证能力随 ebs-apiserver 的客户端契约另行扩展。
+每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；快速重试次数不得为负数，慢速初始延迟不得大于最大延迟，抖动必须位于 `[0, 1)`；配置非法时启动失败。当前不配置客户端证书，认证能力随 ebs-apiserver 的客户端契约另行扩展。
 
 ## 8. 健康检查与可观测性
 
@@ -708,7 +736,7 @@ PollingSource 的有效 stale threshold 为 `max(--source-stale-threshold, 3 × 
 - Watch 重连和 relist 次数；
 - Polling 成功/失败次数、耗时和最后成功时间；
 - cache sync 状态；
-- 永久错误和超过最大重试次数的对象数。
+- 永久错误数、进入慢速退避的 key 数、慢速重入次数和当前慢速 key 数。
 
 ## 9. 多副本与一致性
 
@@ -732,11 +760,13 @@ Leader election 不能替代幂等性：领导者切换可能发生在 API 或�
 - 多个 Handler 的事件分发，以及单个 Handler panic 不影响其他订阅者；
 - cache sync 成功、失败、超时和 context 取消；
 - stale threshold 导致 readiness 失败及成功同步后的恢复；
-- key 去重、处理期间更新、退避、Forget 和最大重试；
+- key 去重、处理期间更新、快速退避、进入慢速退避及慢速延迟封顶；
 - ReconcileResult 零值、立即重入、延迟重入，以及非法组合；
 - 返回结果并同时返回错误时忽略结果，临时错误仍按限速重试；
 - `Requeue` 和 `RequeueAfter` 在入队前清除旧的 rate-limit 次数；
 - WriteError 携带合法 RetryAfter 时执行 `Forget + AddAfter`，永久错误不得被延迟重试覆盖；
+- RetryAfter 保留已有慢速阶段但不增加慢速失败次数；普通 Enqueue 立即唤醒慢速 key 且不清除其失败历史；
+- 成功、永久错误、对象删除和合法业务重入清理慢速状态，停止后不产生新的延迟入队；
 - 永久错误包装识别、Forget 以及后续新事件重新激活；
 - panic 恢复和 Controller 意外退出；
 - tombstone Delete；
@@ -780,7 +810,7 @@ go vet ./...
 6. 仅 `Job`、`Runner` 使用 List/Watch，并通过 `CachedSource` 读取本地缓存；
 7. 其他资源使用周期 List 的 PollingSource，Worker 默认通过 GET 获取最新对象；
 8. 首次事件源同步完成前不得启动 Worker，readiness 保持 false；
-9. 可重试失败进入指数退避，成功和永久失败执行 Forget；
+9. 可重试失败先进入有上限的快速退避，耗尽后由 BaseController 统一进入带抖动和上限的慢速指数退避；成功和永久失败清除两阶段状态；
 10. 初始化失败、同步超时或 Controller 意外退出使进程失败；
 11. 首版若不实现 leader election，只允许部署一个工作副本；
 12. 所有事件 Handler 必须在 Source `Run` 前注册，运行后注册和重复运行均返回 `ErrSourceStarted`；
