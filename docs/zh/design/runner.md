@@ -179,6 +179,8 @@ type RunnerSpec struct {
 
 调度标签统一写入 `metadata.labels`，不在 `spec` 中重复定义。例如：
 
+系统保留的 Runner 标签及其写入权限见 [EulerMaker 标签约定](./labels.md)。
+
 ```yaml
 apiVersion: ebs/v1
 kind: Runner

@@ -81,3 +81,72 @@ func TestAbortTransitionsBuild(t *testing.T) {
 		})
 	}
 }
+
+func TestPrepareForCreateAddsMissingBuildTargetLabels(t *testing.T) {
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+
+	(&strategy{}).PrepareForCreate(context.Background(), build)
+
+	if build.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || build.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" {
+		t.Fatalf("labels = %#v", build.Labels)
+	}
+}
+
+func TestPrepareForUpdateAddsMissingBuildTargetLabels(t *testing.T) {
+	oldBuild := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: "Processing"}}
+	newBuild := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+
+	(&strategy{}).PrepareForUpdate(context.Background(), newBuild, oldBuild)
+
+	if newBuild.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" {
+		t.Fatalf("labels = %#v", newBuild.Labels)
+	}
+	if newBuild.Status.Phase != "Processing" {
+		t.Fatalf("phase = %q", newBuild.Status.Phase)
+	}
+}
+
+func TestPrepareForCreatePreservesConflictingBuildTargetLabels(t *testing.T) {
+	build := &ebsv1.Build{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+			ebsv1.BuildTargetOSLabel:   "another-os",
+			ebsv1.BuildTargetArchLabel: "aarch64",
+		}},
+		Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}},
+	}
+
+	(&strategy{}).PrepareForCreate(context.Background(), build)
+
+	if build.Labels[ebsv1.BuildTargetOSLabel] != "another-os" || build.Labels[ebsv1.BuildTargetArchLabel] != "aarch64" {
+		t.Fatalf("labels = %#v", build.Labels)
+	}
+}
+
+func TestStatusPrepareForUpdatePreservesObjectMetadata(t *testing.T) {
+	oldBuild := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
+		Name:            "build-a",
+		Namespace:       "project-a",
+		ResourceVersion: "7",
+		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "openEuler", ebsv1.BuildTargetArchLabel: "x86_64"},
+		Annotations:     map[string]string{"existing": "value"},
+	}, Spec: ebsv1.BuildSpec{BuildType: "full"}}
+	newBuild := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
+		Name:            "build-a",
+		Namespace:       "project-a",
+		ResourceVersion: "7",
+		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "tampered"},
+		Annotations:     map[string]string{"tampered": "value"},
+	}, Spec: ebsv1.BuildSpec{BuildType: "incremental"}, Status: ebsv1.BuildStatus{Phase: "Processing"}}
+
+	(&statusStrategy{}).PrepareForUpdate(context.Background(), newBuild, oldBuild)
+
+	if newBuild.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" {
+		t.Fatalf("labels = %#v", newBuild.Labels)
+	}
+	if len(newBuild.Annotations) != 1 || newBuild.Annotations["existing"] != "value" {
+		t.Fatalf("annotations = %#v", newBuild.Annotations)
+	}
+	if newBuild.Spec.BuildType != "full" || newBuild.Status.Phase != "Processing" {
+		t.Fatalf("spec=%#v status=%#v", newBuild.Spec, newBuild.Status)
+	}
+}

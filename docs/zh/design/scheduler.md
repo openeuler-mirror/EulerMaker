@@ -625,7 +625,7 @@ assumed 向 Running 占用的转移按 4.1 节 Job event handler 的原子更新
 | 5 | TaintFilter | Runner 的硬性 taint 必须被 Job tolerations 容忍 |
 | 6 | CapacityFilter | CPU、Memory available 必须满足 requests |
 
-`spec.runtime` 使用 apiserver 默认值，未填写时为 `ct`。RuntimeFilter 匹配结构化字段，不依赖 `ebs.io/runner-type` 标签。
+系统保留的 Runner 调度标签统一定义在 [EulerMaker 标签约定](./labels.md)。`spec.runtime` 使用 apiserver 默认值，未填写时为 `ct`。RuntimeFilter 匹配结构化字段，不依赖 `ebs.io/runner-type` 标签。
 
 TaintFilter 规则：
 
