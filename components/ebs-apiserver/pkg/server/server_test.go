@@ -35,7 +35,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	})
 
 	tests := map[string][]string{
-		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos"},
+		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
 		"ebs-api/ebs/v1.BuildResourceSpec":             {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
 		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
@@ -62,6 +62,17 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	}
 	if _, ok := snapshotSpec.Schema.Properties["buildTargets"]; ok {
 		t.Error("SnapshotSpec OpenAPI definition must not expose buildTargets")
+	}
+	if _, ok := snapshotSpec.Schema.Properties["prevSnapshot"]; ok {
+		t.Error("SnapshotSpec OpenAPI definition must not expose prevSnapshot")
+	}
+
+	buildSpec, ok := definitions["ebs-api/ebs/v1.BuildSpec"]
+	if !ok {
+		t.Fatal("BuildSpec OpenAPI definition is missing")
+	}
+	if _, ok := buildSpec.Schema.Properties["prevBuildRepo"]; ok {
+		t.Error("BuildSpec OpenAPI definition must not expose prevBuildRepo")
 	}
 }
 
