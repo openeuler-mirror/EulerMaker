@@ -391,6 +391,8 @@ Build 查询字段直接来自待持久化的完整 API 对象，不生成额外
 
 #### Label 和 field selector
 
+EulerMaker 系统保留标签及其适用对象见 [EulerMaker 标签约定](./labels.md)。
+
 ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并转换为 ES bool query。基础 label selector 支持：
 
 | Selector | ES 查询 |
@@ -458,6 +460,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - API 请求使用严格解码：`apiVersion`、`kind`、对象结构或字段类型不合法时直接拒绝，未知字段不会被静默丢弃。
 
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
+- Build 创建或更新时根据 `spec.buildTarget` 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。`/status` 更新保留原对象 metadata，不能修改目标标签。
 - Snapshot 无法获取 commit 时，`specCommits` 允许为空。
 - Build 必须包含 `buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
@@ -667,13 +670,13 @@ curl -k --get \
 
 ```bash
 curl -k --get \
-  --data-urlencode 'labelSelector=os=openEuler-22.03-LTS,arch=x86_64' \
+  --data-urlencode 'labelSelector=ebs.io/target-os=openEuler-22.03-LTS,ebs.io/target-arch=x86_64' \
   --data-urlencode 'fieldSelector=status.phase=Processing,status.stage=build' \
   --data-urlencode 'limit=100' \
   'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
 ```
 
-所有 ES-backed 资源默认按创建时间倒序，因此通过 label 完整指定 os、arch 后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
+所有 ES-backed 资源默认按创建时间倒序，因此通过 `ebs.io/target-os`、`ebs.io/target-arch` 完整指定构建目标后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 
 ## 待完善项
 

@@ -24,7 +24,7 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
 | `creationTimestamp` | Time | `creationTimestamp` | 创建时间 |
-| `labels` | map[string]string | `labels` | 查询/筛选标签 |
+| `labels` | map[string]string | `labels` | 查询/筛选标签；系统保留标签见 [EulerMaker 标签约定](./labels.md) |
 | `annotations` | map[string]string | `annotations` | 非标识元数据 |
 | `deletionTimestamp` | Time | `deletionTimestamp` | 删除标记时间 |
 | `finalizers` | []string | `finalizers` | 删除前清理操作 |
@@ -125,7 +125,7 @@ type ProjectStatus struct {
 |------|---------|------|
 | `phase` | string | `"Active"` / `"Terminating"` |
 
-Project 不保存最新构建状态。调用方按 Project 路径查询 Build，通过目标 OS、架构 label 过滤，并使用默认的创建时间倒序和 `limit=1` 获取目标下最新 Build；构建状态以该 Build 的 `status` 为准。
+Project 不保存最新构建状态。调用方按 Project 路径查询 Build，通过 `ebs.io/target-os`、`ebs.io/target-arch` label 过滤，并使用默认的创建时间倒序和 `limit=1` 获取目标下最新 Build；构建状态以该 Build 的 `status` 为准。
 
 ### ProjectList
 

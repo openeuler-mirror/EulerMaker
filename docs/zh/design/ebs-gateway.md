@@ -102,6 +102,8 @@ Project 级资源通过 Project API 创建：
 
 Project 创建和更新时，gateway 使用 labels 表达 Project 的 owner user 和 member users：
 
+标签名称、值域和写入权限的集中定义见 [EulerMaker 标签约定](./labels.md)。
+
 ```yaml
 metadata:
   labels:

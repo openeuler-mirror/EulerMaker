@@ -135,12 +135,14 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	b := obj.(*ebsv1.Build)
 	ebsv1.SetDefaults_Build(b)
+	ensureBuildTargetLabels(b)
 	b.Status = ebsv1.BuildStatus{Phase: "Pending"}
 }
 
 func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newB := obj.(*ebsv1.Build)
 	oldB := old.(*ebsv1.Build)
+	ensureBuildTargetLabels(newB)
 	newB.Status = oldB.Status
 }
 
@@ -174,7 +176,20 @@ func (s *statusStrategy) AllowUnconditionalUpdate() bool { return false }
 func (s *statusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newB := obj.(*ebsv1.Build)
 	oldB := old.(*ebsv1.Build)
+	metav1.ResetObjectMetaForStatus(&newB.ObjectMeta, &oldB.ObjectMeta)
 	newB.Spec = oldB.Spec
+}
+
+func ensureBuildTargetLabels(build *ebsv1.Build) {
+	if build.Labels == nil {
+		build.Labels = make(map[string]string, 2)
+	}
+	if _, ok := build.Labels[ebsv1.BuildTargetOSLabel]; !ok && len(build.Spec.BuildTarget.Os) > 0 {
+		build.Labels[ebsv1.BuildTargetOSLabel] = build.Spec.BuildTarget.Os
+	}
+	if _, ok := build.Labels[ebsv1.BuildTargetArchLabel]; !ok && len(build.Spec.BuildTarget.Arch) > 0 {
+		build.Labels[ebsv1.BuildTargetArchLabel] = build.Spec.BuildTarget.Arch
+	}
 }
 
 func (s *statusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {

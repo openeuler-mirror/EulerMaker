@@ -143,12 +143,28 @@ func TestValidateBuild(t *testing.T) {
 		{
 			name:     "requires mandatory build fields",
 			build:    &ebsv1.Build{},
-			wantErrs: 4,
+			wantErrs: 6,
 			wantFields: map[string]field.ErrorType{
-				"spec.buildType":        field.ErrorTypeRequired,
-				"spec.packages":         field.ErrorTypeRequired,
-				"spec.buildTarget.os":   field.ErrorTypeRequired,
-				"spec.buildTarget.arch": field.ErrorTypeRequired,
+				"spec.buildType":                      field.ErrorTypeRequired,
+				"spec.packages":                       field.ErrorTypeRequired,
+				"spec.buildTarget.os":                 field.ErrorTypeRequired,
+				"spec.buildTarget.arch":               field.ErrorTypeRequired,
+				"metadata.labels[ebs.io/target-os]":   field.ErrorTypeRequired,
+				"metadata.labels[ebs.io/target-arch]": field.ErrorTypeRequired,
+			},
+		},
+		{
+			name: "rejects labels inconsistent with build target",
+			build: func() *ebsv1.Build {
+				build := validBuild()
+				build.Labels[ebsv1.BuildTargetOSLabel] = "another-os"
+				build.Labels[ebsv1.BuildTargetArchLabel] = "aarch64"
+				return build
+			}(),
+			wantErrs: 2,
+			wantFields: map[string]field.ErrorType{
+				"metadata.labels[ebs.io/target-os]":   field.ErrorTypeInvalid,
+				"metadata.labels[ebs.io/target-arch]": field.ErrorTypeInvalid,
 			},
 		},
 	}
@@ -163,11 +179,13 @@ func TestValidateBuild(t *testing.T) {
 
 func TestValidateBuildUpdate(t *testing.T) {
 	errs := ValidateBuildUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 4, map[string]field.ErrorType{
-		"spec.buildType":        field.ErrorTypeRequired,
-		"spec.packages":         field.ErrorTypeRequired,
-		"spec.buildTarget.os":   field.ErrorTypeRequired,
-		"spec.buildTarget.arch": field.ErrorTypeRequired,
+	assertErrorList(t, errs, 6, map[string]field.ErrorType{
+		"spec.buildType":                      field.ErrorTypeRequired,
+		"spec.packages":                       field.ErrorTypeRequired,
+		"spec.buildTarget.os":                 field.ErrorTypeRequired,
+		"spec.buildTarget.arch":               field.ErrorTypeRequired,
+		"metadata.labels[ebs.io/target-os]":   field.ErrorTypeRequired,
+		"metadata.labels[ebs.io/target-arch]": field.ErrorTypeRequired,
 	})
 }
 
@@ -561,6 +579,10 @@ func validSnapshot() *ebsv1.Snapshot {
 
 func validBuild() *ebsv1.Build {
 	return &ebsv1.Build{
+		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+			ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
+			ebsv1.BuildTargetArchLabel: "x86_64",
+		}},
 		Spec: ebsv1.BuildSpec{
 			BuildType:   "full",
 			Packages:    []string{"pkg-a"},

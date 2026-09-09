@@ -343,7 +343,7 @@ runner -> artifact-manager: complete immutable Job upload manifest
 runner -> ebs-gateway -> ebs-apiserver: update Job.status
 ```
 
-Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资源容量和运行状态写入 `status`。runner 不直接访问 `ebs-apiserver`，资源操作统一访问 `ebs-gateway`，外部执行机和内部执行机使用同一套客户端逻辑。构建产物和日志正文直接上传到 `artifact-manager`，避免大文件经过 Gateway；Artifact Manager 将 Runner Token 发送给 Gateway 校验签名、有效期和 scope。
+Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资源容量和运行状态写入 `status`。系统保留标签及其写入权限统一见 [EulerMaker 标签约定](./labels.md)。runner 不直接访问 `ebs-apiserver`，资源操作统一访问 `ebs-gateway`，外部执行机和内部执行机使用同一套客户端逻辑。构建产物和日志正文直接上传到 `artifact-manager`，避免大文件经过 Gateway；Artifact Manager 将 Runner Token 发送给 Gateway 校验签名、有效期和 scope。
 
 ### 8.5 Artifact 与 repo 流程
 
