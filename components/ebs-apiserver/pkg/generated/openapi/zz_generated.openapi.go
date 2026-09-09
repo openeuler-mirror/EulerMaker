@@ -526,12 +526,6 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 							Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
 						},
 					},
-					"prevBuildRepo": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 				},
 			},
 		},
@@ -1134,11 +1128,24 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 							},
 						},
 					},
+					"bootstrapRepo": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.BootstrapRepo"),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.PackageRepo"},
+			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 
@@ -1843,12 +1850,6 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"prevSnapshot": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 					"specCommits": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"object"},

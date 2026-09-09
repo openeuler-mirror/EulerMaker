@@ -13,12 +13,13 @@ type Project struct {
 }
 
 type ProjectSpec struct {
-	DisplayName  string        `json:"displayName,omitempty"`
-	Description  string        `json:"description,omitempty"`
-	SpecBranch   string        `json:"specBranch,omitempty"`
-	BuildPayload string        `json:"buildPayload,omitempty"`
-	BuildTargets []BuildTarget `json:"buildTargets,omitempty"`
-	PackageRepos []PackageRepo `json:"packageRepos,omitempty"`
+	DisplayName   string          `json:"displayName,omitempty"`
+	Description   string          `json:"description,omitempty"`
+	SpecBranch    string          `json:"specBranch,omitempty"`
+	BuildPayload  string          `json:"buildPayload,omitempty"`
+	BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
+	PackageRepos  []PackageRepo   `json:"packageRepos,omitempty"`
+	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
 }
 
 type ProjectStatus struct {
@@ -39,8 +40,7 @@ type Snapshot struct {
 }
 
 type SnapshotSpec struct {
-	PrevSnapshot string                `json:"prevSnapshot,omitempty"`
-	SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
+	SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
 }
 
 type SnapshotStatus struct {
@@ -65,7 +65,6 @@ type BuildSpec struct {
 	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
 	Packages      []string        `json:"packages,omitempty"`
 	BuildTarget   BuildTarget     `json:"buildTarget,omitempty"`
-	PrevBuildRepo string          `json:"prevBuildRepo,omitempty"`
 }
 
 type BootstrapRepo struct {

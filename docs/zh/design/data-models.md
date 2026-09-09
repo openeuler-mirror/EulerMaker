@@ -99,6 +99,7 @@ type ProjectSpec struct {
     BuildPayload     string                     `json:"buildPayload,omitempty"`
     BuildTargets     []BuildTarget              `json:"buildTargets,omitempty"`
     PackageRepos     []PackageRepo              `json:"packageRepos,omitempty"`
+    BootstrapRepo    []BootstrapRepo            `json:"bootstrapRepo,omitempty"`
 }
 ```
 
@@ -110,6 +111,7 @@ type ProjectSpec struct {
 | `buildPayload` | string | 否 | 构建环境宏，YAML 格式 |
 | `buildTargets` | []BuildTarget | 是 | 构建目标列表 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表 |
+| `bootstrapRepo` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
 
 ### ProjectStatus
 
@@ -158,14 +160,12 @@ type Snapshot struct {
 
 ```go
 type SnapshotSpec struct {
-    PrevSnapshot string                `json:"prevSnapshot,omitempty"`
     SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `prevSnapshot` | string | 否 | 同一 Project 下的前一快照名称（增量构建用） |
 | `specCommits` | map[string]SpecCommit | 否 | 各包 spec 提交信息；无法获取 commit 时允许为空 |
 
 ### SnapshotStatus
@@ -219,7 +219,6 @@ type BuildSpec struct {
     BootstrapRepo      []BootstrapRepo        `json:"bootstrapRepo,omitempty"`
     Packages           []string               `json:"packages,omitempty"`
     BuildTarget        BuildTarget            `json:"buildTarget,omitempty"`
-    PrevBuildRepo      string                 `json:"prevBuildRepo,omitempty"`
 }
 ```
 
@@ -229,7 +228,6 @@ type BuildSpec struct {
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
 | `bootstrapRepo` | []BootstrapRepo | 否 | 引导 RPM 仓库 |
 | `packages`     | []string | 是 | 构建的软件包 |
-| `prevBuildRepo` | string | 否 | 上一次构建的最终 repo url |
 
 ### BootstrapRepo
 
@@ -938,14 +936,12 @@ type VersionConst struct {
 ```
 ProjectSpec
 ├── BuildTarget
-└── PackageRepo
-    └── BuildTarget
+├── PackageRepo
+│   └── BuildTarget
+└── BootstrapRepo
 
 SnapshotSpec
-├── SpecCommit
-├── BuildTarget
-└── PackageRepo
-    └── BuildTarget
+└── SpecCommit
 
 BuildSpec
 ├── BuildTarget

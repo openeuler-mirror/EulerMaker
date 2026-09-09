@@ -531,6 +531,10 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
         "branch": "master"
+      }],
+      "bootstrapRepo": [{
+        "name": "base",
+        "repo": "https://repo.example.com/openEuler/24.03-LTS/OS/aarch64/"
       }]
     }
   }'
