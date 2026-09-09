@@ -84,6 +84,11 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	} else if value != obj.Spec.BuildTarget.Arch {
 		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTargetArchLabel), value, "must match spec.buildTarget.arch"))
 	}
+	if value, ok := obj.Labels[ebsv1.BuildTypeLabel]; !ok || len(value) == 0 {
+		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTypeLabel), "build type label is required"))
+	} else if value != obj.Spec.BuildType {
+		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTypeLabel), value, "must match spec.buildType"))
+	}
 	return allErrs
 }
 
