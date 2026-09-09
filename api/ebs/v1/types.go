@@ -44,7 +44,8 @@ type SnapshotSpec struct {
 }
 
 type SnapshotStatus struct {
-	Phase string `json:"phase,omitempty"`
+	Phase      string             `json:"phase,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 type SnapshotList struct {
