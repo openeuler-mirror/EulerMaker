@@ -404,16 +404,16 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 | `key` | nested 查询匹配 `key` |
 | `!key` | `must_not` nested 查询匹配 `key` |
 
-所有 ESStore 资源支持 `metadata.name` 和 `metadata.namespace`。Build 额外支持以下 field selector：
+所有 ESStore 核心资源（Project、Snapshot、Build、BuildInfo、RpmRepo 和 BuildResource）支持以下 field selector：
 
 | API 字段 | ES 字段 | 操作符 |
 |----------|---------|--------|
 | `status.phase` | `data.status.phase` | `=`、`==`、`!=` |
 | `status.stage` | `data.status.stage` | `=`、`==`、`!=` |
 
-field selector 白名单必须按资源区分，Build 的业务字段不能自动对 Project、Snapshot、BuildInfo、RpmRepo 或 BuildResource 生效。多个 requirement 以及 label selector、Project 路径隐含的 namespace 条件均按 AND 组合；客户端提供与路径不同的 namespace 时返回空列表，不能查询到其他 Project。无法识别或不支持的字段、操作符和语法必须返回 `BadRequest`，不能静默忽略。
+IAM 资源不支持 `status.phase` 和 `status.stage`。多个 requirement 以及 label selector、Project 路径隐含的 namespace 条件均按 AND 组合；客户端提供与路径不同的 namespace 时返回空列表，不能查询到其他 Project。无法识别或不支持的字段、操作符和语法必须返回 `BadRequest`，不能静默忽略。
 
-`status.stage` 具有特殊的存在性语义：只有字段存在且非空的 Build 才参与 stage requirement 匹配。`status.stage=publish` 只匹配明确处于 publish 阶段的对象；`status.stage!=publish` 也只匹配 stage 存在、非空且不等于 publish 的对象。缺少 stage、值为 `null` 或空字符串的 Build 对两种查询都不匹配。ES 查询必须为两种操作符都附加 `exists(data.status.stage)`；不等值查询不能只生成 `must_not term`。
+`status.stage` 具有特殊的存在性语义：只有字段存在且非空的对象才参与 stage requirement 匹配。`status.stage=publish` 只匹配明确处于 publish 阶段的对象；`status.stage!=publish` 也只匹配 stage 存在、非空且不等于 publish 的对象。缺少 stage、值为 `null` 或空字符串的对象对两种查询都不匹配。ES 查询必须为两种操作符都附加 `exists(data.status.stage)`；不等值查询不能只生成 `must_not term`。
 
 #### 分页、版本与一致性
 

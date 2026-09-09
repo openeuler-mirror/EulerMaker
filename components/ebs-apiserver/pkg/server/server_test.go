@@ -35,6 +35,8 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	})
 
 	tests := map[string][]string{
+		"ebs-api/ebs/v1.BaseBuildRef":                  {"name", "repo"},
+		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "repo", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
 		"ebs-api/ebs/v1.BuildResourceSpec":             {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},

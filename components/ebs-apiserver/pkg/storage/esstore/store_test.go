@@ -135,7 +135,7 @@ func TestSelectorQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	query, err := selectorQuery("project-a", &internalversion.ListOptions{
+	query, err := selectorQuery("project", "project-a", &internalversion.ListOptions{
 		LabelSelector: labelSelector,
 		FieldSelector: fieldSelector,
 	})
@@ -152,10 +152,77 @@ func TestSelectorQuery(t *testing.T) {
 }
 
 func TestUnsupportedFieldSelector(t *testing.T) {
-	fieldSelector, _ := fields.ParseSelector("status.phase=Active")
-	_, err := selectorQuery("", &internalversion.ListOptions{FieldSelector: fieldSelector})
+	fieldSelector, _ := fields.ParseSelector("spec.displayName=Project")
+	_, err := selectorQuery("project", "", &internalversion.ListOptions{FieldSelector: fieldSelector})
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("expected unsupported field error, got %v", err)
+	}
+}
+
+func TestStatusFieldSelectors(t *testing.T) {
+	tests := []struct {
+		name     string
+		resource string
+		selector string
+		want     []string
+		wantNot  []string
+		wantErr  bool
+	}{
+		{
+			name:     "phase equals",
+			resource: "build",
+			selector: "status.phase=Processing",
+			want:     []string{`"data.status.phase"`, `"Processing"`},
+		},
+		{
+			name:     "phase not equals",
+			resource: "snapshot",
+			selector: "status.phase!=Active",
+			want:     []string{`"must_not"`, `"data.status.phase"`, `"Active"`},
+		},
+		{
+			name:     "stage requires existence",
+			resource: "buildinfo",
+			selector: "status.stage!=publish",
+			want:     []string{`"exists"`, `"data.status.stage"`, `"must_not"`, `"publish"`},
+		},
+		{
+			name:     "iam resource",
+			resource: "user",
+			selector: "status.phase=Active",
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fieldSelector, err := fields.ParseSelector(tt.selector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			query, err := selectorQuery(tt.resource, "", &internalversion.ListOptions{FieldSelector: fieldSelector})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got query %#v", query)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("selector query: %v", err)
+			}
+			data, _ := json.Marshal(query)
+			text := string(data)
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("query does not contain %s: %s", want, text)
+				}
+			}
+			for _, unwanted := range tt.wantNot {
+				if strings.Contains(text, unwanted) {
+					t.Errorf("query unexpectedly contains %s: %s", unwanted, text)
+				}
+			}
+		})
 	}
 }
 

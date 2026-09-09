@@ -252,7 +252,13 @@ type BuildStatus struct {
     StartTime    metav1.Time        `json:"startTime,omitempty"`
     EndTime      metav1.Time        `json:"endTime,omitempty"`
     Repo         string             `json:"repo,omitempty"`
+    BaseBuildRef *BaseBuildRef      `json:"baseBuildRef,omitempty"`
     Conditions   []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type BaseBuildRef struct {
+    Name string `json:"name,omitempty"`
+    Repo string `json:"repo,omitempty"`
 }
 ```
 
@@ -263,6 +269,7 @@ type BuildStatus struct {
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `repo` | string | 生成的仓库 url |
+| `baseBuildRef` | BaseBuildRef | 增量构建使用的基础 Build 名称及其仓库地址；没有基础 Build 时省略 |
 | `conditions` | []metav1.Condition | 状态条件 |
 
 ### BuildList

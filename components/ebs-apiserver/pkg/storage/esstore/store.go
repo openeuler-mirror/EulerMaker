@@ -319,7 +319,7 @@ func (s *Store) List(ctx context.Context, options *internalversion.ListOptions) 
 		options = &internalversion.ListOptions{}
 	}
 	namespace := s.requestNamespace(ctx)
-	query, err := selectorQuery(namespace, options)
+	query, err := selectorQuery(s.resourceName, namespace, options)
 	if err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
@@ -567,7 +567,7 @@ func queryFingerprint(resource, namespace string, options *internalversion.ListO
 	return hex.EncodeToString(sum[:])
 }
 
-func selectorQuery(namespace string, options *internalversion.ListOptions) (map[string]interface{}, error) {
+func selectorQuery(resource, namespace string, options *internalversion.ListOptions) (map[string]interface{}, error) {
 	must := make([]interface{}, 0)
 	mustNot := make([]interface{}, 0)
 	if namespace != "" {
@@ -576,14 +576,18 @@ func selectorQuery(namespace string, options *internalversion.ListOptions) (map[
 	if options.FieldSelector != nil {
 		for _, req := range options.FieldSelector.Requirements() {
 			field := req.Field
-			if field != "metadata.name" && field != "metadata.namespace" {
+			queryField, requireExists, supported := fieldSelectorMapping(resource, field)
+			if !supported {
 				return nil, fmt.Errorf("field selector %q is not supported", field)
+			}
+			if requireExists {
+				must = append(must, map[string]interface{}{"exists": map[string]interface{}{"field": queryField}})
 			}
 			switch req.Operator {
 			case selection.Equals, selection.DoubleEquals:
-				must = append(must, term(field, req.Value))
+				must = append(must, term(queryField, req.Value))
 			case selection.NotEquals:
-				mustNot = append(mustNot, term(field, req.Value))
+				mustNot = append(mustNot, term(queryField, req.Value))
 			default:
 				return nil, fmt.Errorf("operator %q is not supported for field %q", req.Operator, field)
 			}
@@ -625,6 +629,31 @@ func selectorQuery(namespace string, options *internalversion.ListOptions) (map[
 		boolQuery["must_not"] = mustNot
 	}
 	return map[string]interface{}{"bool": boolQuery}, nil
+}
+
+func fieldSelectorMapping(resource, field string) (queryField string, requireExists, supported bool) {
+	switch field {
+	case "metadata.name", "metadata.namespace":
+		return field, false, true
+	case "status.phase":
+		if supportsStatusFieldSelectors(resource) {
+			return "data.status.phase", false, true
+		}
+	case "status.stage":
+		if supportsStatusFieldSelectors(resource) {
+			return "data.status.stage", true, true
+		}
+	}
+	return "", false, false
+}
+
+func supportsStatusFieldSelectors(resource string) bool {
+	switch resource {
+	case "project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource":
+		return true
+	default:
+		return false
+	}
 }
 
 func term(field, value string) map[string]interface{} {

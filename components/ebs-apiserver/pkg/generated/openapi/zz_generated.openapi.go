@@ -14,6 +14,7 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
+		"ebs-api/ebs/v1.BaseBuildRef":                      schema_ebs_api_ebs_v1_BaseBuildRef(ref),
 		"ebs-api/ebs/v1.BootstrapRepo":                     schema_ebs_api_ebs_v1_BootstrapRepo(ref),
 		"ebs-api/ebs/v1.Build":                             schema_ebs_api_ebs_v1_Build(ref),
 		"ebs-api/ebs/v1.BuildInfo":                         schema_ebs_api_ebs_v1_BuildInfo(ref),
@@ -68,6 +69,30 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-apiserver/pkg/apis/iam/v1.User":               schema_pkg_apis_iam_v1_User(ref),
 		"ebs-apiserver/pkg/apis/iam/v1.UserList":           schema_pkg_apis_iam_v1_UserList(ref),
 		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":           schema_pkg_apis_iam_v1_UserSpec(ref),
+	}
+}
+
+func schema_ebs_api_ebs_v1_BaseBuildRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"repo": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -570,6 +595,11 @@ func schema_ebs_api_ebs_v1_BuildStatus(ref common.ReferenceCallback) common.Open
 							Format: "",
 						},
 					},
+					"baseBuildRef": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/ebs/v1.BaseBuildRef"),
+						},
+					},
 					"conditions": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
@@ -587,7 +617,7 @@ func schema_ebs_api_ebs_v1_BuildStatus(ref common.ReferenceCallback) common.Open
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"ebs-api/ebs/v1.BaseBuildRef", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }
 
