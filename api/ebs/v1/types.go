@@ -74,12 +74,18 @@ type BootstrapRepo struct {
 }
 
 type BuildStatus struct {
-	Phase      string             `json:"phase,omitempty"`
-	Stage      string             `json:"stage,omitempty"`
-	StartTime  metav1.Time        `json:"startTime,omitempty"`
-	EndTime    metav1.Time        `json:"endTime,omitempty"`
-	Repo       string             `json:"repo,omitempty"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Phase        string             `json:"phase,omitempty"`
+	Stage        string             `json:"stage,omitempty"`
+	StartTime    metav1.Time        `json:"startTime,omitempty"`
+	EndTime      metav1.Time        `json:"endTime,omitempty"`
+	Repo         string             `json:"repo,omitempty"`
+	BaseBuildRef *BaseBuildRef      `json:"baseBuildRef,omitempty"`
+	Conditions   []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type BaseBuildRef struct {
+	Name string `json:"name,omitempty"`
+	Repo string `json:"repo,omitempty"`
 }
 
 type BuildList struct {
