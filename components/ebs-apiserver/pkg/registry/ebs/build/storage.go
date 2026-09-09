@@ -182,13 +182,16 @@ func (s *statusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.
 
 func ensureBuildTargetLabels(build *ebsv1.Build) {
 	if build.Labels == nil {
-		build.Labels = make(map[string]string, 2)
+		build.Labels = make(map[string]string, 3)
 	}
 	if _, ok := build.Labels[ebsv1.BuildTargetOSLabel]; !ok && len(build.Spec.BuildTarget.Os) > 0 {
 		build.Labels[ebsv1.BuildTargetOSLabel] = build.Spec.BuildTarget.Os
 	}
 	if _, ok := build.Labels[ebsv1.BuildTargetArchLabel]; !ok && len(build.Spec.BuildTarget.Arch) > 0 {
 		build.Labels[ebsv1.BuildTargetArchLabel] = build.Spec.BuildTarget.Arch
+	}
+	if _, ok := build.Labels[ebsv1.BuildTypeLabel]; !ok && len(build.Spec.BuildType) > 0 {
+		build.Labels[ebsv1.BuildTypeLabel] = build.Spec.BuildType
 	}
 }
 
