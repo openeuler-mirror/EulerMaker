@@ -180,7 +180,7 @@ type SnapshotStatus struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | string | `Pending` / `Processing` / `Active` |
-| `conditions` | []metav1.Condition | 状态条件 |
+| `conditions` | []metav1.Condition | 状态条件，用于记录 Snapshot 处理过程中的异常原因和详细信息 |
 
 ### SnapshotList
 

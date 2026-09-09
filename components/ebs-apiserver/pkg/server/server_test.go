@@ -39,6 +39,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.BuildResourceSpec":             {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
 		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
+		"ebs-api/ebs/v1.SnapshotStatus":                {"phase", "conditions"},
 		"ebs-api/ebs/v1.RunnerStatus":                  {"phase", "capacity", "heartbeat"},
 		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "scopes", "email"},
 		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount": {"apiVersion", "kind", "metadata", "spec"},
