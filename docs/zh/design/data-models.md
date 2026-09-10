@@ -264,7 +264,7 @@ type BaseBuildRef struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborting"` / `"Aborted"` |
+| `phase` | string | `"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborted"` |
 | `stage` | string | `"build"` / `"publish"`，标识构建阶段还是发布阶段 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
@@ -932,7 +932,7 @@ type VersionConst struct {
 |------|---------------------------------------------------------------------------------------|
 | Project | `Active` / `Terminating`                                                              |
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
-| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborting` / `Aborted` |
+| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
 | RpmRepo | `Pending` / `Processing` / `Completed`                                                |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |

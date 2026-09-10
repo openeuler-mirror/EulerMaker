@@ -42,7 +42,7 @@ func (a *abort) Connect(ctx context.Context, id string, options runtime.Object, 
 		}
 		build := obj.(*ebsv1.Build)
 		switch build.Status.Phase {
-		case "Aborting":
+		case "Aborted":
 			responder.Object(http.StatusOK, build)
 			return
 		case "Pending", "Prepared", "Processing":
@@ -51,7 +51,7 @@ func (a *abort) Connect(ctx context.Context, id string, options runtime.Object, 
 			return
 		}
 		next := build.DeepCopy()
-		next.Status.Phase = "Aborting"
+		next.Status.Phase = "Aborted"
 		updated, _, err := a.updater.Update(
 			req.Context(), id, rest.DefaultUpdatedObjectInfo(next),
 			nil, nil, false, &metav1.UpdateOptions{},

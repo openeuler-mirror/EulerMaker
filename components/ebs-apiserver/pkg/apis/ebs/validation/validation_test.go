@@ -194,8 +194,15 @@ func TestValidateBuildUpdate(t *testing.T) {
 }
 
 func TestValidateBuildStatusUpdate(t *testing.T) {
-	errs := ValidateBuildStatusUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 0, nil)
+	for _, phase := range []string{"Pending", "Prepared", "Processing", "Success", "Failed", "Aborted"} {
+		t.Run(phase, func(t *testing.T) {
+			errs := ValidateBuildStatusUpdate(&ebsv1.Build{Status: ebsv1.BuildStatus{Phase: phase}}, validBuild())
+			assertErrorList(t, errs, 0, nil)
+		})
+	}
+
+	errs := ValidateBuildStatusUpdate(&ebsv1.Build{Status: ebsv1.BuildStatus{Phase: "Aborting"}}, validBuild())
+	assertErrorList(t, errs, 1, map[string]field.ErrorType{"status.phase": field.ErrorTypeNotSupported})
 }
 
 func TestValidateBuildResource(t *testing.T) {
