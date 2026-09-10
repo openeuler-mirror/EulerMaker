@@ -23,7 +23,7 @@ type ProjectSpec struct {
 }
 
 type ProjectStatus struct {
-	Phase string `json:"phase,omitempty"`
+	Phase ProjectPhase `json:"phase,omitempty"`
 }
 
 type ProjectList struct {
@@ -40,12 +40,12 @@ type Snapshot struct {
 }
 
 type SnapshotSpec struct {
-	SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
+	SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
 	PackageRepos []PackageRepo         `json:"packageRepos,omitempty"`
 }
 
 type SnapshotStatus struct {
-	Phase      string             `json:"phase,omitempty"`
+	Phase      SnapshotPhase      `json:"phase,omitempty"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -75,7 +75,7 @@ type BootstrapRepo struct {
 }
 
 type BuildStatus struct {
-	Phase        string             `json:"phase,omitempty"`
+	Phase        BuildPhase         `json:"phase,omitempty"`
 	Stage        string             `json:"stage,omitempty"`
 	StartTime    metav1.Time        `json:"startTime,omitempty"`
 	EndTime      metav1.Time        `json:"endTime,omitempty"`
@@ -121,7 +121,7 @@ type SpecDepend struct {
 }
 
 type BuildInfoStatus struct {
-	Phase      string                `json:"phase,omitempty"`
+	Phase      BuildInfoPhase        `json:"phase,omitempty"`
 	Conditions []metav1.Condition    `json:"conditions,omitempty"`
 	SpecStatus map[string]SpecStatus `json:"specStatus,omitempty"`
 }
@@ -235,8 +235,8 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase        string      `json:"phase,omitempty"`
-	Stage        string      `json:"stage,omitempty"`
+	Phase        JobPhase    `json:"phase,omitempty"`
+	Stage        JobStage    `json:"stage,omitempty"`
 	Runner       string      `json:"runner,omitempty"`
 	StartTime    metav1.Time `json:"startTime,omitempty"`
 	EndTime      metav1.Time `json:"endTime,omitempty"`
@@ -273,7 +273,7 @@ type RunnerTaint struct {
 }
 
 type RunnerStatus struct {
-	Phase       string             `json:"phase,omitempty"`
+	Phase       RunnerPhase        `json:"phase,omitempty"`
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	Capacity    map[string]string  `json:"capacity,omitempty"`
 	Allocatable map[string]string  `json:"allocatable,omitempty"`

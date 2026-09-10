@@ -33,7 +33,7 @@ func Phase() framework.FilterPlugin {
 		if r.Invalid != nil {
 			return fail("PhaseFilter", r.Invalid)
 		}
-		if r.Runner.Status.Phase != "Online" {
+		if r.Runner.Status.Phase != ebsv1.RunnerOnline {
 			return reject("PhaseFilter", "runner phase is not schedulable")
 		}
 		return ok("PhaseFilter")

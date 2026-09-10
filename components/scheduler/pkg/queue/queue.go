@@ -87,7 +87,7 @@ func New(initial, maximum time.Duration) *Queue {
 }
 
 func fromJob(job *ebsv1.Job) *QueuedJob {
-	return &QueuedJob{Key: job.Namespace + "/" + job.Name, UID: job.UID, Priority: job.Spec.Priority, Schedulable: job.Status.Phase == "Pending" && job.Status.Runner == "", index: -1}
+	return &QueuedJob{Key: job.Namespace + "/" + job.Name, UID: job.UID, Priority: job.Spec.Priority, Schedulable: job.Status.Phase == ebsv1.JobPending && job.Status.Runner == "", index: -1}
 }
 func clone(q *QueuedJob) *QueuedJob {
 	if q == nil {

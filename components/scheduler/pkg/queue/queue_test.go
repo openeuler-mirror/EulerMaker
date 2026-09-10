@@ -11,7 +11,7 @@ import (
 )
 
 func job(name string, priority int64) *ebsv1.Job {
-	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: types.UID("uid-" + name)}, Spec: ebsv1.JobSpec{Priority: priority}, Status: ebsv1.JobStatus{Phase: "Pending"}}
+	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: types.UID("uid-" + name)}, Spec: ebsv1.JobSpec{Priority: priority}, Status: ebsv1.JobStatus{Phase: ebsv1.JobPending}}
 }
 func TestPriorityFIFOAndDirtyWinsBackoff(t *testing.T) {
 	q := New(time.Hour, time.Hour)

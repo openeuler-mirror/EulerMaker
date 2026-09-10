@@ -81,11 +81,11 @@ func (c *fakeClient) DeleteJob(ctx context.Context, namespace, name string, prec
 func runningJob() *ebsv1.Job {
 	return &ebsv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "project", Name: "job", UID: "job-uid", ResourceVersion: "10"},
-		Status:     ebsv1.JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner", StartTime: metav1.NewTime(time.Unix(100, 0)), ResultRoot: "result", Message: "old", RestartCount: 3},
+		Status:     ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun, Runner: "runner", StartTime: metav1.NewTime(time.Unix(100, 0)), ResultRoot: "result", Message: "old", RestartCount: 3},
 	}
 }
 
-func runner(phase string) *ebsv1.Runner {
+func runner(phase ebsv1.RunnerPhase) *ebsv1.Runner {
 	return &ebsv1.Runner{ObjectMeta: metav1.ObjectMeta{Name: "runner", UID: "runner-uid", ResourceVersion: "7"}, Status: ebsv1.RunnerStatus{Phase: phase}}
 }
 
@@ -105,15 +105,15 @@ func newTestController(t *testing.T, now time.Time, job *ebsv1.Job, cachedRunner
 }
 
 func TestRunnerAvailableOnlyWhenOnline(t *testing.T) {
-	for _, phase := range []string{"Online", "Offline", "Unknown", ""} {
-		t.Run(phase, func(t *testing.T) {
+	for _, phase := range []ebsv1.RunnerPhase{ebsv1.RunnerOnline, ebsv1.RunnerOffline, "Unknown", ""} {
+		t.Run(string(phase), func(t *testing.T) {
 			job := runningJob()
 			c, _, _, _ := newTestController(t, time.Unix(1000, 0), job, runner(phase), &fakeClient{}, false)
 			available, err := c.runnerAvailableFromCache("runner")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if available != (phase == "Online") {
+			if available != (phase == ebsv1.RunnerOnline) {
 				t.Fatalf("phase %q available=%t", phase, available)
 			}
 		})
@@ -151,7 +151,7 @@ func TestRunnerLostGraceAndFailure(t *testing.T) {
 	if client.getRunnerCalls != 1 || client.updateCalls != 1 || request == nil {
 		t.Fatalf("calls: runner=%d update=%d", client.getRunnerCalls, client.updateCalls)
 	}
-	if request.Status.Phase != "Failed" || request.Status.Stage != "PostRun" || request.Status.Runner != "runner" || request.Status.ResultRoot != "result" || request.Status.RestartCount != 3 {
+	if request.Status.Phase != ebsv1.JobFailed || request.Status.Stage != ebsv1.JobStagePostRun || request.Status.Runner != "runner" || request.Status.ResultRoot != "result" || request.Status.RestartCount != 3 {
 		t.Fatalf("owned fields were not preserved: %+v", request.Status)
 	}
 	wantEnd := now.Add(5 * time.Minute)
@@ -191,7 +191,7 @@ func TestStatusWriteUnknownIsConfirmed(t *testing.T) {
 		getCalls++
 		value := job.DeepCopy()
 		if getCalls == 2 {
-			value.Status.Phase = "Failed"
+			value.Status.Phase = ebsv1.JobFailed
 		}
 		return value, nil
 	}
@@ -227,7 +227,7 @@ func TestCanceledContextDoesNotConfirmUnknownWrite(t *testing.T) {
 func TestHistoryGCUsesLatestPreconditions(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	job := runningJob()
-	job.Status.Phase = "Completed"
+	job.Status.Phase = ebsv1.JobCompleted
 	job.Status.EndTime = metav1.NewTime(now.Add(-30 * 24 * time.Hour))
 	latest := job.DeepCopy()
 	latest.ResourceVersion = "22"
@@ -253,7 +253,7 @@ func TestHistoryGCUsesLatestPreconditions(t *testing.T) {
 func TestHistoryGCWaitsAndCanBeDisabled(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	job := runningJob()
-	job.Status.Phase = "Failed"
+	job.Status.Phase = ebsv1.JobFailed
 	job.Status.EndTime = metav1.NewTime(now.Add(-time.Hour))
 	client := &fakeClient{
 		getJobFn:    func(context.Context, string, string) (*ebsv1.Job, error) { t.Fatal("unexpected GET"); return nil, nil },
@@ -365,7 +365,7 @@ func TestEventHandlersMaintainIndexAndIgnoreHeartbeat(t *testing.T) {
 	if c.Queue().Len() != 0 {
 		t.Fatal("ordinary heartbeat enqueued bound Jobs")
 	}
-	newRunner.Status.Phase = "Offline"
+	newRunner.Status.Phase = ebsv1.RunnerOffline
 	c.onRunnerUpdate(oldRunner, newRunner)
 	if c.Queue().Len() != 1 {
 		t.Fatal("Offline transition did not enqueue bound Job")

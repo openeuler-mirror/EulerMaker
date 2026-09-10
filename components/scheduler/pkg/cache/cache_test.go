@@ -12,7 +12,7 @@ import (
 )
 
 func testJob(name string, uid types.UID) *ebsv1.Job {
-	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: uid, ResourceVersion: "1"}, Spec: ebsv1.JobSpec{Resources: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "1Gi"}}}, Status: ebsv1.JobStatus{Phase: "Pending"}}
+	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: uid, ResourceVersion: "1"}, Spec: ebsv1.JobSpec{Resources: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "1Gi"}}}, Status: ebsv1.JobStatus{Phase: ebsv1.JobPending}}
 }
 func testRunner() *ebsv1.Runner {
 	return &ebsv1.Runner{ObjectMeta: metav1.ObjectMeta{Name: "r", UID: "runner"}, Spec: ebsv1.RunnerSpec{Type: "ct"}, Status: ebsv1.RunnerStatus{Phase: "Online", Allocatable: map[string]string{"cpu": "1", "memory": "1Gi"}}}
@@ -55,7 +55,7 @@ func TestResyncDoesNotDoubleCountRunningJob(t *testing.T) {
 	r.Status.Allocatable["cpu"] = "2"
 	c.UpsertRunner(r)
 	j := testJob("a", "a")
-	j.Status.Phase = "Running"
+	j.Status.Phase = ebsv1.JobRunning
 	j.Status.Runner = "r"
 	c.UpsertJob(j)
 	c.UpsertJob(j.DeepCopy())

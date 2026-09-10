@@ -98,9 +98,8 @@ func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 
 func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	var allErrs field.ErrorList
-	validPhases := []string{"Pending", "Prepared", "Processing", "Success", "Failed", "Aborted"}
-	if !containsString(validPhases, newObj.Status.Phase) {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, validPhases))
+	if !newObj.Status.Phase.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, ebsv1.BuildPhaseValues()))
 	}
 	return allErrs
 }
@@ -284,13 +283,11 @@ func ValidateJobUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 
 func ValidateJobStatusUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
-	validPhases := []string{"Pending", "Running", "Completed", "Failed", "Aborted"}
-	if !containsString(validPhases, newObj.Status.Phase) {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, validPhases))
+	if !newObj.Status.Phase.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, ebsv1.JobPhaseValues()))
 	}
-	validStages := []string{"Pending", "Running", "PostRun"}
-	if !containsString(validStages, newObj.Status.Stage) {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "stage"), newObj.Status.Stage, validStages))
+	if !newObj.Status.Stage.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "stage"), newObj.Status.Stage, ebsv1.JobStageValues()))
 	}
 	return allErrs
 }
@@ -343,21 +340,11 @@ func ValidateRunnerUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 
 func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
-	validPhases := []string{"Online", "Offline"}
 	phase := newObj.Status.Phase
 	if phase == "" {
 		allErrs = append(allErrs, field.Required(field.NewPath("status", "phase"), "must be Online or Offline"))
-	} else {
-		valid := false
-		for _, p := range validPhases {
-			if phase == p {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), phase, validPhases))
-		}
+	} else if !phase.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), phase, ebsv1.RunnerPhaseValues()))
 	}
 	return allErrs
 }

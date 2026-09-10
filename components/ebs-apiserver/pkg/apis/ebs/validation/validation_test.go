@@ -194,14 +194,17 @@ func TestValidateBuildUpdate(t *testing.T) {
 }
 
 func TestValidateBuildStatusUpdate(t *testing.T) {
-	for _, phase := range []string{"Pending", "Prepared", "Processing", "Success", "Failed", "Aborted"} {
-		t.Run(phase, func(t *testing.T) {
+	for _, phase := range []ebsv1.BuildPhase{
+		ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing,
+		ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
 			errs := ValidateBuildStatusUpdate(&ebsv1.Build{Status: ebsv1.BuildStatus{Phase: phase}}, validBuild())
 			assertErrorList(t, errs, 0, nil)
 		})
 	}
 
-	errs := ValidateBuildStatusUpdate(&ebsv1.Build{Status: ebsv1.BuildStatus{Phase: "Aborting"}}, validBuild())
+	errs := ValidateBuildStatusUpdate(&ebsv1.Build{Status: ebsv1.BuildStatus{Phase: ebsv1.BuildPhase("Aborting")}}, validBuild())
 	assertErrorList(t, errs, 1, map[string]field.ErrorType{"status.phase": field.ErrorTypeNotSupported})
 }
 
@@ -321,12 +324,12 @@ func TestValidateJobStatusUpdate(t *testing.T) {
 		wantErrs   int
 		wantFields map[string]field.ErrorType
 	}{
-		{name: "pending", status: ebsv1.JobStatus{Phase: "Pending", Stage: "Pending"}},
-		{name: "running", status: ebsv1.JobStatus{Phase: "Running", Stage: "Running"}},
-		{name: "post run", status: ebsv1.JobStatus{Phase: "Running", Stage: "PostRun"}},
+		{name: "pending", status: ebsv1.JobStatus{Phase: ebsv1.JobPending, Stage: ebsv1.JobStagePending}},
+		{name: "running", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStageRunning}},
+		{name: "post run", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun}},
 		{
 			name:     "rejects unsupported phase",
-			status:   ebsv1.JobStatus{Phase: "Unknown", Stage: "Pending"},
+			status:   ebsv1.JobStatus{Phase: ebsv1.JobPhase("Unknown"), Stage: ebsv1.JobStagePending},
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
 				"status.phase": field.ErrorTypeNotSupported,
@@ -334,7 +337,7 @@ func TestValidateJobStatusUpdate(t *testing.T) {
 		},
 		{
 			name:     "rejects failed stage",
-			status:   ebsv1.JobStatus{Phase: "Failed", Stage: "Failed"},
+			status:   ebsv1.JobStatus{Phase: ebsv1.JobFailed, Stage: ebsv1.JobStage("Failed")},
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
 				"status.stage": field.ErrorTypeNotSupported,
@@ -501,12 +504,12 @@ func TestValidateRunnerUpdate(t *testing.T) {
 func TestValidateRunnerStatusUpdate(t *testing.T) {
 	tests := []struct {
 		name       string
-		phase      string
+		phase      ebsv1.RunnerPhase
 		wantErrs   int
 		wantFields map[string]field.ErrorType
 	}{
-		{name: "allows online", phase: "Online"},
-		{name: "allows offline", phase: "Offline"},
+		{name: "allows online", phase: ebsv1.RunnerOnline},
+		{name: "allows offline", phase: ebsv1.RunnerOffline},
 		{
 			name:     "rejects empty phase",
 			wantErrs: 1,
@@ -516,7 +519,7 @@ func TestValidateRunnerStatusUpdate(t *testing.T) {
 		},
 		{
 			name:     "rejects legacy phase",
-			phase:    "Running",
+			phase:    ebsv1.RunnerPhase("Running"),
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
 				"status.phase": field.ErrorTypeNotSupported,
@@ -524,7 +527,7 @@ func TestValidateRunnerStatusUpdate(t *testing.T) {
 		},
 		{
 			name:     "rejects unsupported phase",
-			phase:    "Unknown",
+			phase:    ebsv1.RunnerPhase("Unknown"),
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
 				"status.phase": field.ErrorTypeNotSupported,
@@ -620,7 +623,7 @@ func validResourceRequirements() ebsv1.ResourceRequirements {
 }
 
 func validJob() *ebsv1.Job {
-	return &ebsv1.Job{Status: ebsv1.JobStatus{Phase: "Pending", Stage: "Pending"}}
+	return &ebsv1.Job{Status: ebsv1.JobStatus{Phase: ebsv1.JobPending, Stage: ebsv1.JobStagePending}}
 }
 
 func validRunner(runnerType, arch string) *ebsv1.Runner {

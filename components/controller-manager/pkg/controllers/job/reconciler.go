@@ -36,7 +36,7 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	if !ok || job == nil {
 		return controller.ReconcileResult{}, fmt.Errorf("unexpected Job cache object %T for %s", obj, key)
 	}
-	if terminal(job.Status.Phase) {
+	if job.Status.Phase.IsTerminal() {
 		c.clearObservation(key)
 		return c.reconcileHistory(ctx, key, job, now)
 	}
@@ -70,7 +70,7 @@ func (c *Controller) runnerAvailableFromCache(name string) (bool, error) {
 	if !ok || runner == nil {
 		return false, fmt.Errorf("unexpected Runner cache object %T for %s", obj, name)
 	}
-	return runner.Status.Phase == "Online", nil
+	return runner.Status.Phase == ebsv1.RunnerOnline, nil
 }
 
 func (c *Controller) failLostRunnerJob(ctx context.Context, key string, cached *ebsv1.Job, now time.Time) (controller.ReconcileResult, error) {
@@ -104,14 +104,14 @@ func (c *Controller) failLostRunnerJob(ctx context.Context, key string, cached *
 			return controller.ReconcileResult{}, validationErr
 		}
 	}
-	if err == nil && authoritative.Status.Phase == "Online" {
+	if err == nil && authoritative.Status.Phase == ebsv1.RunnerOnline {
 		c.clearObservation(key)
 		log.Printf("controller=%s key=%s uid=%s runner=%s reason=RunnerRecovered", Name, key, latest.UID, latest.Status.Runner)
 		return controller.ReconcileResult{}, nil
 	}
 
 	request := latest.DeepCopy()
-	request.Status.Phase = "Failed"
+	request.Status.Phase = ebsv1.JobFailed
 	request.Status.EndTime = metav1.NewTime(now.UTC())
 	request.Status.Message = fmt.Sprintf("runner %s is unavailable after %s grace period", latest.Status.Runner, c.config.RunnerLostGracePeriod)
 	updated, err := c.client.UpdateJobStatus(ctx, request)
@@ -174,7 +174,7 @@ func (c *Controller) confirmUnknownStatus(ctx context.Context, key string, reque
 	if err := validateJobResponse(latest, request.Namespace, request.Name); err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	if latest.UID != request.UID || latest.Status.Phase == "Failed" || !processable(latest) || latest.Status.Runner != request.Status.Runner {
+	if latest.UID != request.UID || latest.Status.Phase == ebsv1.JobFailed || !processable(latest) || latest.Status.Runner != request.Status.Runner {
 		c.clearObservation(key)
 		return controller.ReconcileResult{}, nil
 	}
@@ -219,7 +219,7 @@ func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *e
 }
 
 func eligibleForDeletion(job *ebsv1.Job, now time.Time, retention time.Duration) bool {
-	return job != nil && job.DeletionTimestamp == nil && terminal(job.Status.Phase) && !job.Status.EndTime.IsZero() && !job.Status.EndTime.Time.Add(retention).After(now)
+	return job != nil && job.DeletionTimestamp == nil && job.Status.Phase.IsTerminal() && !job.Status.EndTime.IsZero() && !job.Status.EndTime.Time.Add(retention).After(now)
 }
 
 func (c *Controller) handleDeleteError(ctx context.Context, request *ebsv1.Job, err error, now time.Time) (controller.ReconcileResult, error) {
@@ -308,7 +308,7 @@ func validateRunnerResponse(runner *ebsv1.Runner, name string) error {
 
 func validateFailedStatusResponse(updated, request *ebsv1.Job) error {
 	if updated == nil || updated.Namespace != request.Namespace || updated.Name != request.Name || updated.UID != request.UID || updated.ResourceVersion == "" ||
-		updated.Status.Phase != "Failed" || updated.Status.Runner != request.Status.Runner || updated.Status.Stage != request.Status.Stage {
+		updated.Status.Phase != ebsv1.JobFailed || updated.Status.Runner != request.Status.Runner || updated.Status.Stage != request.Status.Stage {
 		return writeUnknown("update-status", fmt.Errorf("unexpected Job status response"))
 	}
 	return nil

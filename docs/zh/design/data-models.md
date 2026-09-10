@@ -117,13 +117,13 @@ type ProjectSpec struct {
 
 ```go
 type ProjectStatus struct {
-    Phase string `json:"phase,omitempty"`
+    Phase ProjectPhase `json:"phase,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Active"` / `"Terminating"` |
+| `phase` | `ProjectPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Active"` / `"Terminating"` |
 
 Project 不保存最新构建状态。调用方按 Project 路径查询 Build，通过 `ebs.io/target-os`、`ebs.io/target-arch` label 过滤，并使用默认的创建时间倒序和 `limit=1` 获取目标下最新 Build；构建状态以该 Build 的 `status` 为准。
 
@@ -174,14 +174,14 @@ type SnapshotSpec struct {
 
 ```go
 type SnapshotStatus struct {
-    Phase        string             `json:"phase,omitempty"`
+    Phase        SnapshotPhase      `json:"phase,omitempty"`
     Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `Pending` / `Processing` / `Active` |
+| `phase` | `SnapshotPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Pending` / `Processing` / `Active` |
 | `conditions` | []metav1.Condition | 状态条件，用于记录 Snapshot 处理过程中的异常原因和详细信息 |
 
 ### SnapshotList
@@ -249,7 +249,7 @@ type BootstrapRepo struct {
 
 ```go
 type BuildStatus struct {
-    Phase        string             `json:"phase,omitempty"`
+    Phase        BuildPhase         `json:"phase,omitempty"`
     Stage        string             `json:"stage,omitempty"`
     StartTime    metav1.Time        `json:"startTime,omitempty"`
     EndTime      metav1.Time        `json:"endTime,omitempty"`
@@ -266,7 +266,7 @@ type BaseBuildRef struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborted"` |
+| `phase` | `BuildPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborted"` / `"Skipped"`；后四项为终态 |
 | `stage` | string | `"build"` / `"publish"`，标识构建阶段还是发布阶段 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
@@ -355,7 +355,7 @@ type SpecDepend struct {
 
 ```go
 type BuildInfoStatus struct {
-    Phase       string                `json:"phase,omitempty"`
+    Phase       BuildInfoPhase        `json:"phase,omitempty"`
     Conditions  []metav1.Condition    `json:"conditions,omitempty"`
     SpecStatus  map[string]SpecStatus `json:"specStatus,omitempty"`
 }
@@ -363,7 +363,7 @@ type BuildInfoStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` |
+| `phase` | `BuildInfoPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Processing"` / `"Completed"` |
 | `conditions` | []metav1.Condition | 状态条件 |
 | `specStatus` | map[string]SpecStatus | 各 spec 运行时状态 |
 
@@ -675,8 +675,8 @@ type Toleration struct {
 
 ```go
 type JobStatus struct {
-    Phase      string      `json:"phase,omitempty"`
-    Stage      string      `json:"stage,omitempty"`
+    Phase      JobPhase    `json:"phase,omitempty"`
+    Stage      JobStage    `json:"stage,omitempty"`
     Runner     string      `json:"runner,omitempty"`
     StartTime  metav1.Time `json:"startTime,omitempty"`
     EndTime    metav1.Time `json:"endTime,omitempty"`
@@ -688,8 +688,8 @@ type JobStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Running"` / `"Completed"` / `"Failed"` / `"Aborted"` |
-| `stage` | string | `"Pending"` / `"Running"` / `"PostRun"`。失败时保留最后到达的执行阶段，不使用 `Failed` stage |
+| `phase` | `JobPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"Completed"` / `"Failed"` / `"Aborted"`；后三项为终态 |
+| `stage` | `JobStage` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"PostRun"`。失败时保留最后到达的执行阶段，不使用 `Failed` stage |
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
@@ -777,7 +777,7 @@ type RunnerTaint struct {
 
 ```go
 type RunnerStatus struct {
-    Phase       string             `json:"phase,omitempty"`
+    Phase       RunnerPhase        `json:"phase,omitempty"`
     Conditions  []metav1.Condition `json:"conditions,omitempty"`
     Capacity    map[string]string  `json:"capacity,omitempty"`
     Allocatable map[string]string  `json:"allocatable,omitempty"`
@@ -789,7 +789,7 @@ type RunnerStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | 执行机状态：`Online`/`Offline` |
+| `phase` | `RunnerPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Online` / `Offline` |
 | `conditions` | []Condition | 详细状态条件，当前 runner agent 暂不主动填充 |
 | `capacity` | map[string]string | Runner 上报的总资源容量。当前包含 `cpu`、`memory`、`ephemeral-storage`：`cpu` 为逻辑 CPU 数，`memory` 使用 `Mi`，`ephemeral-storage` 使用 `Gi` |
 | `allocatable` | map[string]string | Runner 上报的可调度资源容量。当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间，使用 `Gi` |
@@ -934,7 +934,7 @@ type VersionConst struct {
 |------|---------------------------------------------------------------------------------------|
 | Project | `Active` / `Terminating`                                                              |
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
-| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` |
+| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
 | RpmRepo | `Pending` / `Processing` / `Completed`                                                |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |

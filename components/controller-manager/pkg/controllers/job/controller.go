@@ -155,7 +155,7 @@ func (c *Controller) onRunnerUpdate(oldObj, newObj runtime.Object) {
 	if !oldOK || !newOK || oldRunner == nil || newRunner == nil {
 		return
 	}
-	if oldRunner.UID != newRunner.UID || (oldRunner.Status.Phase == "Online") != (newRunner.Status.Phase == "Online") {
+	if oldRunner.UID != newRunner.UID || (oldRunner.Status.Phase == ebsv1.RunnerOnline) != (newRunner.Status.Phase == ebsv1.RunnerOnline) {
 		c.enqueueRunnerJobs(newRunner.Name)
 	}
 }
@@ -168,7 +168,7 @@ func (c *Controller) onRunnerDelete(obj runtime.Object) {
 }
 
 func (c *Controller) updateIndex(key string, job *ebsv1.Job) {
-	if !terminal(job.Status.Phase) && job.Status.Runner != "" {
+	if !job.Status.Phase.IsTerminal() && job.Status.Runner != "" {
 		c.index.set(key, job.Status.Runner)
 		return
 	}
@@ -200,10 +200,6 @@ func (c *Controller) clearObservation(key string) {
 	c.observationMu.Unlock()
 }
 
-func terminal(phase string) bool {
-	return phase == "Completed" || phase == "Failed" || phase == "Aborted"
-}
-
 func deletionTimeChanged(oldJob, newJob *ebsv1.Job) bool {
 	if (oldJob.DeletionTimestamp == nil) != (newJob.DeletionTimestamp == nil) {
 		return true
@@ -212,5 +208,5 @@ func deletionTimeChanged(oldJob, newJob *ebsv1.Job) bool {
 }
 
 func processable(job *ebsv1.Job) bool {
-	return job != nil && job.DeletionTimestamp == nil && job.Status.Phase == "Running" && job.Status.Runner != ""
+	return job != nil && job.DeletionTimestamp == nil && job.Status.Phase == ebsv1.JobRunning && job.Status.Runner != ""
 }
