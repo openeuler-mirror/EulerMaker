@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validation/path"
@@ -29,6 +30,7 @@ type Storage struct {
 type abort struct {
 	getter  rest.Getter
 	updater rest.Updater
+	now     func() time.Time
 }
 
 func (a *abort) NamespaceScoped() bool { return true }
@@ -52,6 +54,7 @@ func (a *abort) Connect(ctx context.Context, id string, options runtime.Object, 
 		}
 		next := build.DeepCopy()
 		next.Status.Phase = "Aborted"
+		next.Status.EndTime = metav1.NewTime(a.now().UTC())
 		updated, _, err := a.updater.Update(
 			req.Context(), id, rest.DefaultUpdatedObjectInfo(next),
 			nil, nil, false, &metav1.UpdateOptions{},
@@ -68,7 +71,7 @@ func (a *abort) ConnectMethods() []string                          { return []st
 func (a *abort) Destroy()                                          {}
 
 func NewAbortStorage(getter rest.Getter, updater rest.Updater) rest.Storage {
-	return &abort{getter: getter, updater: updater}
+	return &abort{getter: getter, updater: updater, now: time.Now}
 }
 
 func NewStorage(scheme *runtime.Scheme) *Storage {
