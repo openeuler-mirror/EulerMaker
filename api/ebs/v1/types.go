@@ -41,6 +41,7 @@ type Snapshot struct {
 
 type SnapshotSpec struct {
 	SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
+	PackageRepos []PackageRepo         `json:"packageRepos,omitempty"`
 }
 
 type SnapshotStatus struct {

@@ -558,7 +558,12 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
           "specUrl": "https://example.com/src-openeuler/gcc.git",
           "commitId": "0123456789abcdef"
         }
-      }
+      },
+      "packageRepos": [{
+        "name": "gcc",
+        "url": "https://example.com/src-openeuler/gcc.git",
+        "branch": "master"
+      }]
     }
   }'
 ```

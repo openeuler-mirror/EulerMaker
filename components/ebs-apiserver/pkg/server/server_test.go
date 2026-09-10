@@ -69,6 +69,9 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	if _, ok := snapshotSpec.Schema.Properties["prevSnapshot"]; ok {
 		t.Error("SnapshotSpec OpenAPI definition must not expose prevSnapshot")
 	}
+	if _, ok := snapshotSpec.Schema.Properties["packageRepos"]; !ok {
+		t.Error("SnapshotSpec OpenAPI definition must expose packageRepos")
+	}
 
 	buildSpec, ok := definitions["ebs-api/ebs/v1.BuildSpec"]
 	if !ok {

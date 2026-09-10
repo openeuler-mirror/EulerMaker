@@ -160,13 +160,15 @@ type Snapshot struct {
 
 ```go
 type SnapshotSpec struct {
-    SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
+    SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
+    PackageRepos []PackageRepo        `json:"packageRepos,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
 | `specCommits` | map[string]SpecCommit | 否 | 各包 spec 提交信息；无法获取 commit 时允许为空 |
+| `packageRepos` | []PackageRepo | 否 | 创建 Snapshot 时使用的包仓库列表 |
 
 ### SnapshotStatus
 
