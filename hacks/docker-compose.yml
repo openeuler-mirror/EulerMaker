@@ -129,6 +129,27 @@ services:
     depends_on:
       - ebs-gateway
 
+  git-server:
+    build:
+      context: ../components/git-server
+    command:
+      - --listen-address=:8080
+      - --data-dir=/var/lib/ebs-git
+      - --git-daemon-address=:9418
+      - --clone-base-url=git://git-server:9418
+    ports:
+      - "8084:8080"
+      - "9418:9418"
+    volumes:
+      - git-data:/var/lib/ebs-git
+    networks:
+      - ebs-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   ebs-runner:
     build:
       context: ../components/runner
@@ -164,6 +185,7 @@ volumes:
   etcd-data:
   es-data:
   artifact-data:
+  git-data:
 
 secrets:
   ebs_gateway_jwt_secret:
