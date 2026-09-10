@@ -98,6 +98,10 @@ func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 
 func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	var allErrs field.ErrorList
+	validPhases := []string{"Pending", "Prepared", "Processing", "Success", "Failed", "Aborted"}
+	if !containsString(validPhases, newObj.Status.Phase) {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, validPhases))
+	}
 	return allErrs
 }
 

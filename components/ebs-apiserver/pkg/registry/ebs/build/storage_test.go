@@ -49,8 +49,11 @@ func TestAbortTransitionsBuild(t *testing.T) {
 		wantUpdates  int
 		wantConflict bool
 	}{
-		{name: "active build", phase: "Processing", wantPhase: "Aborting", wantUpdates: 1},
-		{name: "already aborting", phase: "Aborting", wantPhase: "Aborting"},
+		{name: "pending build", phase: "Pending", wantPhase: "Aborted", wantUpdates: 1},
+		{name: "prepared build", phase: "Prepared", wantPhase: "Aborted", wantUpdates: 1},
+		{name: "processing build", phase: "Processing", wantPhase: "Aborted", wantUpdates: 1},
+		{name: "already aborted", phase: "Aborted", wantPhase: "Aborted"},
+		{name: "obsolete aborting phase", phase: "Aborting", wantPhase: "Aborting", wantConflict: true},
 		{name: "terminal build", phase: "Success", wantPhase: "Success", wantConflict: true},
 	}
 
