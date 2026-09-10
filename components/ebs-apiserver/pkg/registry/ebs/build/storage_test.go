@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,17 +43,21 @@ func (f *fakeResponder) Object(_ int, obj runtime.Object) { f.obj = obj }
 func (f *fakeResponder) Error(err error)                  { f.err = err }
 
 func TestAbortTransitionsBuild(t *testing.T) {
+	now := time.Date(2026, time.September, 10, 8, 30, 0, 0, time.FixedZone("CST", 8*60*60))
+	existingEndTime := metav1.NewTime(now.Add(-time.Hour))
 	tests := []struct {
 		name         string
 		phase        string
+		endTime      metav1.Time
 		wantPhase    string
+		wantEndTime  metav1.Time
 		wantUpdates  int
 		wantConflict bool
 	}{
-		{name: "pending build", phase: "Pending", wantPhase: "Aborted", wantUpdates: 1},
-		{name: "prepared build", phase: "Prepared", wantPhase: "Aborted", wantUpdates: 1},
-		{name: "processing build", phase: "Processing", wantPhase: "Aborted", wantUpdates: 1},
-		{name: "already aborted", phase: "Aborted", wantPhase: "Aborted"},
+		{name: "pending build", phase: "Pending", wantPhase: "Aborted", wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
+		{name: "prepared build", phase: "Prepared", wantPhase: "Aborted", wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
+		{name: "processing build", phase: "Processing", wantPhase: "Aborted", wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
+		{name: "already aborted", phase: "Aborted", endTime: existingEndTime, wantPhase: "Aborted", wantEndTime: existingEndTime},
 		{name: "obsolete aborting phase", phase: "Aborting", wantPhase: "Aborting", wantConflict: true},
 		{name: "terminal build", phase: "Success", wantPhase: "Success", wantConflict: true},
 	}
@@ -61,9 +66,10 @@ func TestAbortTransitionsBuild(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &fakeBuildStorage{build: &ebsv1.Build{
 				ObjectMeta: metav1.ObjectMeta{Name: "build-a"},
-				Status:     ebsv1.BuildStatus{Phase: tt.phase},
+				Status:     ebsv1.BuildStatus{Phase: tt.phase, EndTime: tt.endTime},
 			}}
-			connector := NewAbortStorage(backend, backend).(rest.Connecter)
+			connector := NewAbortStorage(backend, backend).(*abort)
+			connector.now = func() time.Time { return now }
 			responder := &fakeResponder{}
 			handler, err := connector.Connect(context.Background(), "build-a", nil, responder)
 			if err != nil {
@@ -80,6 +86,9 @@ func TestAbortTransitionsBuild(t *testing.T) {
 			}
 			if backend.build.Status.Phase != tt.wantPhase || backend.updates != tt.wantUpdates {
 				t.Fatalf("phase=%s updates=%d, want phase=%s updates=%d", backend.build.Status.Phase, backend.updates, tt.wantPhase, tt.wantUpdates)
+			}
+			if !backend.build.Status.EndTime.Equal(&tt.wantEndTime) {
+				t.Fatalf("endTime=%v, want %v", backend.build.Status.EndTime, tt.wantEndTime)
 			}
 		})
 	}
