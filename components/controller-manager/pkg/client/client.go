@@ -74,8 +74,10 @@ type Client struct {
 
 type Interface interface {
 	ListPage(context.Context, schema.GroupVersionResource, metav1.ListOptions) (source.ListPage, error)
+	ListProjectPage(context.Context, schema.GroupVersionResource, string, metav1.ListOptions) (source.ListPage, error)
 	ResolveWatch(context.Context, schema.GroupVersionResource) (source.WatchResource, error)
 	Get(context.Context, schema.GroupVersionResource, string, string) (runtime.Object, error)
+	Create(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
 	Update(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
 	UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
 	Delete(context.Context, schema.GroupVersionResource, string, string, DeletePreconditions) error
@@ -109,16 +111,64 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 }
 
 func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, opts metav1.ListOptions) (source.ListPage, error) {
+	return c.listPage(ctx, gvr, "", opts)
+}
+
+func (c *Client) ListProjectPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
+	if err := validateProjectScopedResource(gvr, project); err != nil {
+		return source.ListPage{}, err
+	}
+	return c.listPage(ctx, gvr, project, opts)
+}
+
+func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
 	list, err := newList(gvr)
 	if err != nil {
 		return source.ListPage{}, err
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if err := c.rest.Get().AbsPath("/apis/"+gvr.Group+"/"+gvr.Version+"/"+gvr.Resource).VersionedParams(&opts, metav1.ParameterCodec).Do(requestCtx).Into(list); err != nil {
+	if err := c.rest.Get().AbsPath(resourcePath(gvr, project, "", "")).VersionedParams(&opts, metav1.ParameterCodec).Do(requestCtx).Into(list); err != nil {
 		return source.ListPage{}, err
 	}
 	return listPage(list)
+}
+
+func (c *Client) Create(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
+	if obj == nil {
+		return nil, notSent("create", gvr, fmt.Errorf("object is required"))
+	}
+	accessor, err := apiMeta.Accessor(obj)
+	if err != nil {
+		return nil, notSent("create", gvr, err)
+	}
+	if err := validateTarget(gvr, namespace, accessor.GetName()); err != nil {
+		return nil, notSent("create", gvr, err)
+	}
+	if accessor.GetNamespace() != namespace || accessor.GetUID() != "" || accessor.GetResourceVersion() != "" {
+		return nil, notSent("create", gvr, fmt.Errorf("object metadata does not match target or contains server-assigned UID/resourceVersion"))
+	}
+	out, err := newObject(gvr)
+	if err != nil {
+		return nil, notSent("create", gvr, err)
+	}
+	if reflect.TypeOf(obj) != reflect.TypeOf(out) {
+		return nil, notSent("create", gvr, fmt.Errorf("object type %T does not match resource %s", obj, gvr.Resource))
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	err = c.rest.Post().AbsPath(resourcePath(gvr, namespace, "", "")).Body(obj).Do(requestCtx).Into(out)
+	if err != nil {
+		return nil, classifyWrite("create", gvr, err)
+	}
+	if err := validateResponseObject(out); err != nil {
+		return nil, unknown("create", gvr, err)
+	}
+	responseAccessor, err := apiMeta.Accessor(out)
+	if err != nil || responseAccessor.GetName() != accessor.GetName() || responseAccessor.GetNamespace() != accessor.GetNamespace() {
+		return nil, unknown("create", gvr, fmt.Errorf("response object identity does not match request"))
+	}
+	return out, nil
 }
 
 func (c *Client) ResolveWatch(ctx context.Context, gvr schema.GroupVersionResource) (source.WatchResource, error) {
@@ -227,6 +277,19 @@ func validateTarget(gvr schema.GroupVersionResource, namespace, name string) err
 	}
 	if !clusterScoped && namespace == "" {
 		return fmt.Errorf("namespace-scoped resource %s requires a namespace", gvr.Resource)
+	}
+	return nil
+}
+
+func validateProjectScopedResource(gvr schema.GroupVersionResource, project string) error {
+	if _, err := newList(gvr); err != nil {
+		return err
+	}
+	if project == "" {
+		return fmt.Errorf("project is required")
+	}
+	if gvr.Resource == "projects" || gvr.Resource == "runners" {
+		return fmt.Errorf("resource %s is not project-scoped", gvr.Resource)
 	}
 	return nil
 }

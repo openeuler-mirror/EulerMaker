@@ -212,6 +212,13 @@ type Client interface {
         options metav1.ListOptions,
     ) (source.ListPage, error)
 
+    ListProjectPage(
+        ctx context.Context,
+        gvr schema.GroupVersionResource,
+        project string,
+        options metav1.ListOptions,
+    ) (source.ListPage, error)
+
     ResolveWatch(
         ctx context.Context,
         gvr schema.GroupVersionResource,
@@ -221,6 +228,13 @@ type Client interface {
         ctx context.Context,
         gvr schema.GroupVersionResource,
         namespace, name string,
+    ) (runtime.Object, error)
+
+    Create(
+        ctx context.Context,
+        gvr schema.GroupVersionResource,
+        namespace string,
+        obj runtime.Object,
     ) (runtime.Object, error)
 
     Update(
@@ -246,11 +260,13 @@ type Client interface {
 }
 ```
 
-namespace-scoped 资源要求 `namespace` 非空；cluster-scoped 资源要求为空。`name`、GVR、对象类型和删除前置条件必须在发起请求前校验。首版 Controller 发起的删除必须同时提供非空 UID 和 resourceVersion，不提供无条件删除接口。
+`ListPage` 读取资源的集群范围集合路径；`ListProjectPage` 仅接受 namespace-scoped 资源和非空 Project，并读取 `/projects/{project}/{resource}`。两者都完整传递分页和 selector 相关的 `ListOptions`。
+
+namespace-scoped 写资源要求 `namespace` 非空；cluster-scoped 写资源要求为空。`name`、GVR、对象类型和删除前置条件必须在发起请求前校验。Create 请求对象的 namespace 必须与目标一致，并且不得预填 UID 或 resourceVersion；Update 请求必须携带服务端返回的 UID 和 resourceVersion。首版 Controller 发起的删除必须同时提供非空 UID 和 resourceVersion，不提供无条件删除接口。
 
 所有非 Watch 请求使用共享 `--request-timeout` 派生子 context；调用方 context 更早取消时必须立即返回。Watch 不使用该短超时，由 `ListOptions.timeoutSeconds` 和生命周期 context 控制。
 
-`Get` 成功必须返回 apiserver 响应对象；404 等读取错误使用 Kubernetes `apierrors` 保留状态码和 Reason，不包装成 WriteError。`Update` 和 `UpdateStatus` 成功必须返回 apiserver 持久化后的对象，不能用请求对象构造成功结果；两者都要求请求对象携带 UID 和 resourceVersion，并校验响应对象身份不变。`Update` 写入资源主路径，`UpdateStatus` 写入 `/status` 子资源。`Delete` 收到完整 2xx 响应即可视为成功；资源包含 finalizer 时只表示删除已经被接受，调用方仍通过后续 Get/Watch 观察最终消失。
+`Get` 成功必须返回 apiserver 响应对象；404 等读取错误使用 Kubernetes `apierrors` 保留状态码和 Reason，不包装成 WriteError。`Create`、`Update` 和 `UpdateStatus` 成功必须返回 apiserver 持久化后的对象，不能用请求对象构造成功结果，并校验响应对象身份符合请求。`Create` 向资源集合路径发送 POST，`Update` 向资源主路径发送 PUT，`UpdateStatus` 向 `/status` 子资源发送 PUT。`Delete` 收到完整 2xx 响应即可视为成功；资源包含 finalizer 时只表示删除已经被接受，调用方仍通过后续 Get/Watch 观察最终消失。
 
 写操作错误统一实现以下接口：
 
