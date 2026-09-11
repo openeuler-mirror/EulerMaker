@@ -61,7 +61,7 @@ func (c *fakeClient) UpdateRunnerStatus(ctx context.Context, runner *ebsv1.Runne
 	return c.updateFn(ctx, runner)
 }
 
-func testRunner(phase string, heartbeat time.Time) *ebsv1.Runner {
+func testRunner(phase ebsv1.RunnerPhase, heartbeat time.Time) *ebsv1.Runner {
 	value := &ebsv1.Runner{
 		ObjectMeta: metav1.ObjectMeta{Name: "runner", UID: types.UID("runner-uid"), ResourceVersion: "7", CreationTimestamp: metav1.NewTime(time.Unix(100, 0))},
 		Spec:       ebsv1.RunnerSpec{InstanceID: "instance", Type: "host", Arch: "x86_64", Taints: []ebsv1.RunnerTaint{{Key: "dedicated", Effect: "NoSchedule"}}},
@@ -196,7 +196,7 @@ func TestSyncMarksExpiredRunnerOfflineAndPreservesFields(t *testing.T) {
 	if err != nil || result != (controller.ReconcileResult{}) || request == nil {
 		t.Fatalf("result=%+v err=%v request=%v", result, err, request)
 	}
-	if request.Status.Phase != "Offline" || request.Status.Heartbeat != runner.Status.Heartbeat || request.Spec.InstanceID != runner.Spec.InstanceID || request.Status.Capacity["cpu"] != "8" {
+	if request.Status.Phase != ebsv1.RunnerOffline || request.Status.Heartbeat != runner.Status.Heartbeat || request.Spec.InstanceID != runner.Spec.InstanceID || request.Status.Capacity["cpu"] != "8" {
 		t.Fatalf("request did not preserve Runner fields: %+v", request)
 	}
 }
@@ -225,7 +225,7 @@ func TestSyncUnknownWriteConfirmsOffline(t *testing.T) {
 		gets++
 		value := runner.DeepCopy()
 		if gets == 2 {
-			value.Status.Phase = "Offline"
+			value.Status.Phase = ebsv1.RunnerOffline
 		}
 		return value, nil
 	}

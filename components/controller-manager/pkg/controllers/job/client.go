@@ -54,7 +54,7 @@ func (c *apiClient) UpdateJobStatus(ctx context.Context, request *ebsv1.Job) (*e
 	}
 	updated, ok := obj.(*ebsv1.Job)
 	if !ok || updated == nil || updated.Namespace != request.Namespace || updated.Name != request.Name || updated.UID != request.UID || updated.ResourceVersion == "" ||
-		updated.Status.Phase != "Failed" || updated.Status.Runner != request.Status.Runner || updated.Status.Stage != request.Status.Stage {
+		updated.Status.Phase != ebsv1.JobFailed || updated.Status.Runner != request.Status.Runner || updated.Status.Stage != request.Status.Stage {
 		return nil, writeUnknown("update-status", fmt.Errorf("unexpected Job status response: %T", obj))
 	}
 	return updated, nil

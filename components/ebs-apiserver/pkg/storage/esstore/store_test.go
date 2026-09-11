@@ -89,7 +89,7 @@ func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	created := createdObj.(*ebsv1.Project)
-	if created.Status.Phase != "Active" || created.Generation != 1 || created.ResourceVersion != "v1:0:1" {
+	if created.Status.Phase != ebsv1.ProjectActive || created.Generation != 1 || created.ResourceVersion != "v1:0:1" {
 		t.Fatalf("unexpected created object: %#v", created)
 	}
 
@@ -103,7 +103,7 @@ func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	updated := updatedObj.(*ebsv1.Project)
-	if updated.Generation != 2 || updated.Status.Phase != "Active" || updated.ResourceVersion != "v1:1:1" {
+	if updated.Generation != 2 || updated.Status.Phase != ebsv1.ProjectActive || updated.ResourceVersion != "v1:1:1" {
 		t.Fatalf("unexpected updated object: %#v", updated)
 	}
 
@@ -111,7 +111,7 @@ func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: updated.Name, ResourceVersion: updated.ResourceVersion,
 		},
-		Status: ebsv1.ProjectStatus{Phase: "Terminating"},
+		Status: ebsv1.ProjectStatus{Phase: ebsv1.ProjectTerminating},
 	}
 	statusObj, _, err := statusStore.Update(
 		ctx, updated.Name, rest.DefaultUpdatedObjectInfo(statusInput),
@@ -121,7 +121,7 @@ func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 		t.Fatalf("status update: %v", err)
 	}
 	status := statusObj.(*ebsv1.Project)
-	if status.Spec.Description != "updated" || status.Status.Phase != "Terminating" || status.Generation != 2 {
+	if status.Spec.Description != "updated" || status.Status.Phase != ebsv1.ProjectTerminating || status.Generation != 2 {
 		t.Fatalf("status update crossed spec/status boundary: %#v", status)
 	}
 }

@@ -58,7 +58,7 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	p := obj.(*ebsv1.Project)
 	ebsv1.SetDefaults_Project(p)
-	p.Status = ebsv1.ProjectStatus{Phase: "Active"}
+	p.Status = ebsv1.ProjectStatus{Phase: ebsv1.ProjectActive}
 }
 
 func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {

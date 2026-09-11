@@ -200,7 +200,7 @@ spec:
 
 ```go
 type RunnerStatus struct {
-    Phase       string             `json:"phase,omitempty"`
+    Phase       RunnerPhase        `json:"phase,omitempty"`
     Conditions  []metav1.Condition `json:"conditions,omitempty"`
     Capacity    map[string]string  `json:"capacity,omitempty"`
     Allocatable map[string]string  `json:"allocatable,omitempty"`
@@ -212,7 +212,7 @@ type RunnerStatus struct {
 
 | 字段 | 说明 |
 |------|------|
-| `phase` | `Online` / `Offline` |
+| `phase` | 公共 `ebs/v1` API 定义的 `RunnerPhase`，稳定取值为 `Online` / `Offline` |
 | `conditions` | 详细状态条件 |
 | `capacity` | Runner 上报的总资源容量，当前包含 `cpu`、`memory`、`ephemeral-storage` |
 | `allocatable` | Runner 上报的可调度资源容量，当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间 |

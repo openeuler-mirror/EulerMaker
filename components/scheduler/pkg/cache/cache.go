@@ -84,10 +84,10 @@ func New(assumeTimeout ...time.Duration) *SchedulerCache {
 func JobKey(job *ebsv1.Job) string { return job.Namespace + "/" + job.Name }
 
 func schedulable(job *ebsv1.Job) bool {
-	return job != nil && job.Status.Phase == "Pending" && job.Status.Runner == ""
+	return job != nil && job.Status.Phase == ebsv1.JobPending && job.Status.Runner == ""
 }
 func running(job *ebsv1.Job) bool {
-	return job != nil && job.Status.Phase == "Running" && job.Status.Runner != ""
+	return job != nil && job.Status.Phase == ebsv1.JobRunning && job.Status.Runner != ""
 }
 
 func (c *SchedulerCache) UpsertJob(job *ebsv1.Job) {

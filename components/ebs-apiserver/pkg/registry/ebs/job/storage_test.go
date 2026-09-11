@@ -31,7 +31,7 @@ func TestJobStoreOptionsUseJobAttrsWithoutMutatingSharedOptions(t *testing.T) {
 
 	jobOptions := jobStoreOptions(shared)
 
-	job := &ebsv1.Job{Status: ebsv1.JobStatus{Runner: "runner-a", Phase: "Running"}}
+	job := &ebsv1.Job{Status: ebsv1.JobStatus{Runner: "runner-a", Phase: ebsv1.JobRunning}}
 	_, jobFields, err := jobOptions.AttrFunc(job)
 	if err != nil {
 		t.Fatalf("get job attrs: %v", err)

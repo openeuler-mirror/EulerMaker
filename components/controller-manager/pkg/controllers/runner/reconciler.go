@@ -104,7 +104,7 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 }
 
 func (c *Controller) evaluateRunner(runner *ebsv1.Runner, now time.Time, futureObserved *bool) (DeadlineResult, bool, error) {
-	if runner.DeletionTimestamp != nil || runner.Status.Phase == "Offline" {
+	if runner.DeletionTimestamp != nil || runner.Status.Phase == ebsv1.RunnerOffline {
 		return DeadlineResult{}, true, nil
 	}
 	if !processablePhase(runner.Status.Phase) {
@@ -128,8 +128,8 @@ func (c *Controller) evaluateRunner(runner *ebsv1.Runner, now time.Time, futureO
 	return result, false, nil
 }
 
-func processablePhase(phase string) bool {
-	return phase == "Online"
+func processablePhase(phase ebsv1.RunnerPhase) bool {
+	return phase == ebsv1.RunnerOnline
 }
 
 func (c *Controller) confirmAndMarkOffline(ctx context.Context, cached *ebsv1.Runner, now time.Time, futureObserved *bool) (controller.ReconcileResult, error) {
@@ -155,7 +155,7 @@ func (c *Controller) confirmAndMarkOffline(ctx context.Context, cached *ebsv1.Ru
 	}
 	heartbeatTimeouts.Inc()
 	request := latest.DeepCopy()
-	request.Status.Phase = "Offline"
+	request.Status.Phase = ebsv1.RunnerOffline
 	updated, err := c.client.UpdateRunnerStatus(ctx, request)
 	if err == nil {
 		err = validateOfflineStatusResponse(updated, request)
@@ -216,7 +216,7 @@ func (c *Controller) confirmUnknownStatus(ctx context.Context, request *ebsv1.Ru
 	if latest.UID != request.UID {
 		return controller.ReconcileResult{Requeue: true}, nil
 	}
-	if latest.Status.Phase == "Offline" {
+	if latest.Status.Phase == ebsv1.RunnerOffline {
 		offlineUpdates.Inc()
 		return controller.ReconcileResult{}, nil
 	}
@@ -261,7 +261,7 @@ func validateOfflineStatusResponse(response, request *ebsv1.Runner) error {
 	if response == nil || request == nil || response.Name != request.Name || response.Namespace != request.Namespace || response.UID != request.UID || response.ResourceVersion == "" {
 		return runnerWriteUnknown(fmt.Errorf("Runner status response identity is invalid"))
 	}
-	if !apiequality.Semantic.DeepEqual(response.Spec, request.Spec) || response.Status.Phase != "Offline" ||
+	if !apiequality.Semantic.DeepEqual(response.Spec, request.Spec) || response.Status.Phase != ebsv1.RunnerOffline ||
 		!apiequality.Semantic.DeepEqual(response.Status.Conditions, request.Status.Conditions) ||
 		!apiequality.Semantic.DeepEqual(response.Status.Capacity, request.Status.Capacity) ||
 		!apiequality.Semantic.DeepEqual(response.Status.Allocatable, request.Status.Allocatable) ||

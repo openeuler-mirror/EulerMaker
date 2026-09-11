@@ -8,11 +8,11 @@ import (
 )
 
 func TestPrepareForCreateDefaultsOffline(t *testing.T) {
-	runner := &ebsv1.Runner{Status: ebsv1.RunnerStatus{Phase: "Online"}}
+	runner := &ebsv1.Runner{Status: ebsv1.RunnerStatus{Phase: ebsv1.RunnerOnline}}
 
 	(&strategy{}).PrepareForCreate(context.Background(), runner)
 
-	if runner.Status.Phase != "Offline" {
+	if runner.Status.Phase != ebsv1.RunnerOffline {
 		t.Fatalf("status.phase = %q, want Offline", runner.Status.Phase)
 	}
 }

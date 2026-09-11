@@ -83,7 +83,7 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	snap := obj.(*ebsv1.Snapshot)
-	snap.Status = ebsv1.SnapshotStatus{Phase: "Pending"}
+	snap.Status = ebsv1.SnapshotStatus{Phase: ebsv1.SnapshotPending}
 }
 
 func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {

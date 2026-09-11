@@ -95,7 +95,7 @@ func jobAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
 		"metadata.name":      job.Name,
 		"metadata.namespace": job.Namespace,
 		"status.runner":      job.Status.Runner,
-		"status.phase":       job.Status.Phase,
+		"status.phase":       string(job.Status.Phase),
 	}, nil
 }
 
@@ -108,7 +108,7 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	j := obj.(*ebsv1.Job)
 	ebsv1.SetDefaults_Job(j)
-	j.Status = ebsv1.JobStatus{Phase: "Pending", Stage: "Pending"}
+	j.Status = ebsv1.JobStatus{Phase: ebsv1.JobPending, Stage: ebsv1.JobStagePending}
 }
 
 func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {

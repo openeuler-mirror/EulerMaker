@@ -52,7 +52,7 @@ func (f *fakeJobs) UpdateStatus(context.Context, string, string, *ebsv1.Job, met
 	return f.response.DeepCopy(), nil
 }
 func pending() *ebsv1.Job {
-	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "j", UID: "u", ResourceVersion: "1"}, Status: ebsv1.JobStatus{Phase: "Pending"}}
+	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: "j", UID: "u", ResourceVersion: "1"}, Status: ebsv1.JobStatus{Phase: ebsv1.JobPending}}
 }
 func request() Request {
 	return Request{JobKey: "p/j", JobUID: "u", RunnerName: "r", RunnerUID: "ru", RunnerRevision: 1, JobResourceVersion: "1"}

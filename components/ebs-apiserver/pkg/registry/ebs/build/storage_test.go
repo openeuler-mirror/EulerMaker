@@ -47,19 +47,20 @@ func TestAbortTransitionsBuild(t *testing.T) {
 	existingEndTime := metav1.NewTime(now.Add(-time.Hour))
 	tests := []struct {
 		name         string
-		phase        string
+		phase        ebsv1.BuildPhase
 		endTime      metav1.Time
-		wantPhase    string
+		wantPhase    ebsv1.BuildPhase
 		wantEndTime  metav1.Time
 		wantUpdates  int
 		wantConflict bool
 	}{
-		{name: "pending build", phase: "Pending", wantPhase: "Aborted", wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
-		{name: "prepared build", phase: "Prepared", wantPhase: "Aborted", wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
-		{name: "processing build", phase: "Processing", wantPhase: "Aborted", wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
-		{name: "already aborted", phase: "Aborted", endTime: existingEndTime, wantPhase: "Aborted", wantEndTime: existingEndTime},
-		{name: "obsolete aborting phase", phase: "Aborting", wantPhase: "Aborting", wantConflict: true},
-		{name: "terminal build", phase: "Success", wantPhase: "Success", wantConflict: true},
+		{name: "pending build", phase: ebsv1.BuildPending, wantPhase: ebsv1.BuildAborted, wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
+		{name: "prepared build", phase: ebsv1.BuildPrepared, wantPhase: ebsv1.BuildAborted, wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
+		{name: "processing build", phase: ebsv1.BuildProcessing, wantPhase: ebsv1.BuildAborted, wantEndTime: metav1.NewTime(now.UTC()), wantUpdates: 1},
+		{name: "already aborted", phase: ebsv1.BuildAborted, endTime: existingEndTime, wantPhase: ebsv1.BuildAborted, wantEndTime: existingEndTime},
+		{name: "obsolete aborting phase", phase: ebsv1.BuildPhase("Aborting"), wantPhase: ebsv1.BuildPhase("Aborting"), wantConflict: true},
+		{name: "terminal build", phase: ebsv1.BuildSuccess, wantPhase: ebsv1.BuildSuccess, wantConflict: true},
+		{name: "skipped build", phase: ebsv1.BuildSkipped, wantPhase: ebsv1.BuildSkipped, wantConflict: true},
 	}
 
 	for _, tt := range tests {
@@ -105,7 +106,7 @@ func TestPrepareForCreateAddsMissingBuildTargetLabels(t *testing.T) {
 }
 
 func TestPrepareForUpdateAddsMissingBuildTargetLabels(t *testing.T) {
-	oldBuild := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: "Processing"}}
+	oldBuild := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
 	newBuild := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "incremental", BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
 
 	(&strategy{}).PrepareForUpdate(context.Background(), newBuild, oldBuild)
@@ -113,7 +114,7 @@ func TestPrepareForUpdateAddsMissingBuildTargetLabels(t *testing.T) {
 	if newBuild.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || newBuild.Labels[ebsv1.BuildTypeLabel] != "incremental" {
 		t.Fatalf("labels = %#v", newBuild.Labels)
 	}
-	if newBuild.Status.Phase != "Processing" {
+	if newBuild.Status.Phase != ebsv1.BuildProcessing {
 		t.Fatalf("phase = %q", newBuild.Status.Phase)
 	}
 }
@@ -149,7 +150,7 @@ func TestStatusPrepareForUpdatePreservesObjectMetadata(t *testing.T) {
 		ResourceVersion: "7",
 		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "tampered"},
 		Annotations:     map[string]string{"tampered": "value"},
-	}, Spec: ebsv1.BuildSpec{BuildType: "incremental"}, Status: ebsv1.BuildStatus{Phase: "Processing"}}
+	}, Spec: ebsv1.BuildSpec{BuildType: "incremental"}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
 
 	(&statusStrategy{}).PrepareForUpdate(context.Background(), newBuild, oldBuild)
 
@@ -159,7 +160,7 @@ func TestStatusPrepareForUpdatePreservesObjectMetadata(t *testing.T) {
 	if len(newBuild.Annotations) != 1 || newBuild.Annotations["existing"] != "value" {
 		t.Fatalf("annotations = %#v", newBuild.Annotations)
 	}
-	if newBuild.Spec.BuildType != "full" || newBuild.Status.Phase != "Processing" {
+	if newBuild.Spec.BuildType != "full" || newBuild.Status.Phase != ebsv1.BuildProcessing {
 		t.Fatalf("spec=%#v status=%#v", newBuild.Spec, newBuild.Status)
 	}
 }

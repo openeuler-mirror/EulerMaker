@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -74,11 +75,11 @@ func (s *Statement) Commit(ctx context.Context) error {
 	if err != nil {
 		return s.discard(err)
 	}
-	if current == nil || current.UID != s.request.JobUID || current.Status.Phase != "Pending" || current.Status.Runner != "" || current.ResourceVersion != s.request.JobResourceVersion {
+	if current == nil || current.UID != s.request.JobUID || current.Status.Phase != ebsv1.JobPending || current.Status.Runner != "" || current.ResourceVersion != s.request.JobResourceVersion {
 		return s.discard(ErrJobNoLongerSchedulable)
 	}
 	updated := current.DeepCopy()
-	updated.Status.Phase = "Running"
+	updated.Status.Phase = ebsv1.JobRunning
 	updated.Status.Runner = s.request.RunnerName
 	response, err := s.jobs.UpdateStatus(ctx, parts[0], parts[1], updated, metav1.UpdateOptions{})
 	if err != nil {
@@ -95,7 +96,7 @@ func (s *Statement) Commit(ctx context.Context) error {
 				s.commitErr = getErr
 				return getErr
 			}
-			if latest != nil && latest.UID == s.request.JobUID && latest.Status.Phase == "Pending" && latest.Status.Runner == "" {
+			if latest != nil && latest.UID == s.request.JobUID && latest.Status.Phase == ebsv1.JobPending && latest.Status.Runner == "" {
 				s.commitErr = ErrConflictRetryable
 			} else {
 				s.commitErr = ErrJobNoLongerSchedulable
@@ -104,7 +105,7 @@ func (s *Statement) Commit(ctx context.Context) error {
 		}
 		return s.commitErr
 	}
-	if response == nil || response.UID != s.request.JobUID || response.Status.Phase != "Running" || response.Status.Runner != s.request.RunnerName || response.ResourceVersion == "" {
+	if response == nil || response.UID != s.request.JobUID || response.Status.Phase != ebsv1.JobRunning || response.Status.Runner != s.request.RunnerName || response.ResourceVersion == "" {
 		s.state = StateUnknown
 		s.commitErr = fmt.Errorf("%w: unexpected-success-response", ErrBindOutcomeUnknown)
 		return s.commitErr

@@ -62,7 +62,7 @@ func New(ctx context.Context, o options.Options, c client.Interface) (*Scheduler
 	rlw := &listerWatcher{ctx: ctx, list: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
 		return c.Runners().List(ctx, o)
 	}, watch: c.Runners().Watch}
-	s.jobInformer = kcache.NewSharedIndexInformer(jlw, &ebsv1.Job{}, o.ResyncPeriod, kcache.Indexers{kcache.NamespaceIndex: kcache.MetaNamespaceIndexFunc, "status.runner": func(obj any) ([]string, error) { return []string{obj.(*ebsv1.Job).Status.Runner}, nil }, "status.phase": func(obj any) ([]string, error) { return []string{obj.(*ebsv1.Job).Status.Phase}, nil }})
+	s.jobInformer = kcache.NewSharedIndexInformer(jlw, &ebsv1.Job{}, o.ResyncPeriod, kcache.Indexers{kcache.NamespaceIndex: kcache.MetaNamespaceIndexFunc, "status.runner": func(obj any) ([]string, error) { return []string{obj.(*ebsv1.Job).Status.Runner}, nil }, "status.phase": func(obj any) ([]string, error) { return []string{string(obj.(*ebsv1.Job).Status.Phase)}, nil }})
 	s.runnerInformer = kcache.NewSharedIndexInformer(rlw, &ebsv1.Runner{}, o.ResyncPeriod, kcache.Indexers{})
 	var err error
 	s.jobRegistration, err = s.jobInformer.AddEventHandler(kcache.ResourceEventHandlerFuncs{AddFunc: s.onJobAdd, UpdateFunc: s.onJobUpdate, DeleteFunc: s.onJobDelete})
@@ -96,7 +96,7 @@ func (s *Scheduler) onJobUpdate(oldObj, newObj any) {
 	s.cache.UpsertJob(job)
 	if schedulingJobChanged(old, job) {
 		s.queue.Add(job)
-		if old.Status.Phase == "Running" || job.Status.Phase == "Running" {
+		if old.Status.Phase == ebsv1.JobRunning || job.Status.Phase == ebsv1.JobRunning {
 			s.queue.ActivateAll()
 		}
 	}
@@ -116,7 +116,7 @@ func (s *Scheduler) onJobDelete(obj any) {
 	key := schedcache.JobKey(job)
 	s.cache.DeleteJob(key, job.UID)
 	s.queue.Delete(key, job.UID)
-	if job.Status.Phase == "Running" {
+	if job.Status.Phase == ebsv1.JobRunning {
 		s.queue.ActivateAll()
 	}
 }
@@ -243,7 +243,7 @@ func (s *Scheduler) confirmOne(ctx context.Context, a *schedcache.AssumedJob) {
 		s.metrics.recordConfirm("error", false)
 		return
 	}
-	if job != nil && job.UID == a.JobUID && job.Status.Phase == "Running" && job.Status.Runner == a.RunnerName {
+	if job != nil && job.UID == a.JobUID && job.Status.Phase == ebsv1.JobRunning && job.Status.Runner == a.RunnerName {
 		s.metrics.recordConfirm("running", false)
 		return
 	}
@@ -252,7 +252,7 @@ func (s *Scheduler) confirmOne(ctx context.Context, a *schedcache.AssumedJob) {
 		return
 	}
 	s.metrics.recordConfirm("released", true)
-	if job != nil && job.UID == a.JobUID && job.Status.Phase == "Pending" && job.Status.Runner == "" {
+	if job != nil && job.UID == a.JobUID && job.Status.Phase == ebsv1.JobPending && job.Status.Runner == "" {
 		s.queue.Add(job)
 	}
 }

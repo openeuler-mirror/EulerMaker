@@ -44,16 +44,16 @@ func (a *abort) Connect(ctx context.Context, id string, options runtime.Object, 
 		}
 		build := obj.(*ebsv1.Build)
 		switch build.Status.Phase {
-		case "Aborted":
+		case ebsv1.BuildAborted:
 			responder.Object(http.StatusOK, build)
 			return
-		case "Pending", "Prepared", "Processing":
+		case ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing:
 		default:
 			responder.Error(apierrors.NewConflict(ebsv1.Resource("builds"), id, fmt.Errorf("build in phase %q cannot be aborted", build.Status.Phase)))
 			return
 		}
 		next := build.DeepCopy()
-		next.Status.Phase = "Aborted"
+		next.Status.Phase = ebsv1.BuildAborted
 		next.Status.EndTime = metav1.NewTime(a.now().UTC())
 		updated, _, err := a.updater.Update(
 			req.Context(), id, rest.DefaultUpdatedObjectInfo(next),
@@ -139,7 +139,7 @@ func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	b := obj.(*ebsv1.Build)
 	ebsv1.SetDefaults_Build(b)
 	ensureBuildTargetLabels(b)
-	b.Status = ebsv1.BuildStatus{Phase: "Pending"}
+	b.Status = ebsv1.BuildStatus{Phase: ebsv1.BuildPending}
 }
 
 func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
