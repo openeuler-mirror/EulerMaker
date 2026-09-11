@@ -4,7 +4,7 @@
 
 软件包构建所需的 CPU 和内存差异较大。若所有构建 Job 使用同一套资源参数，资源较小的包会浪费 Runner 容量，资源较大的包则可能因资源不足而失败。
 
-本设计新增项目级对象 `BuildResource`，使用一个对象集中记录 Project 下全部 spec 软件包的构建资源需求。Build Controller 在创建 Job 时查询该对象，将匹配到的资源配置写入 `Job.spec.resources`，后续 Scheduler 和 Runner 继续使用已有的 Job 资源模型。
+本设计新增项目级对象 `BuildResource`，使用一个对象集中记录 Project 下全部 spec 软件包的构建资源需求。BuildInfo Controller 在创建 Job 时查询该对象，将匹配到的资源配置写入 `Job.spec.resources`，后续 Scheduler 和 Runner 继续使用已有的 Job 资源模型。
 
 本设计的目标是：
 
@@ -32,7 +32,7 @@
 2. 每个 Project 只维护一张有效资源表，其名称固定为 Project 名。
 3. 资源表与 OS 无关，同一份配置适用于该 Project 的全部 Build Target OS。
 4. CPU 和内存使用现有 Job 资源数量字符串格式，例如 CPU 使用 `"8"`，内存使用 `"16Gi"`。
-5. Build Controller 负责读取资源表并生成 Job；Scheduler 只读取 `Job.spec.resources.requests`。
+5. BuildInfo Controller 负责读取资源表并创建 Job；Scheduler 只读取 `Job.spec.resources.requests`。
 6. `default` 是系统保留命名空间，其中保存所有 Project、所有 OS 共享的默认表。
 7. apiserver 启动时保证默认表存在，但不覆盖已经存在的默认表。
 
@@ -63,7 +63,7 @@ PUT    /apis/ebs/v1/projects/{project}/buildresources/{project}
 DELETE /apis/ebs/v1/projects/{project}/buildresources/{project}
 ```
 
-不提供 `/apis/ebs/v1/buildresources` 全局 API。apiserver 不注册该路由，Gateway、Build Controller 和 ebsctl 也不得依赖全局端点。运维角色需要操作多个 Project 时，应逐个使用 Project scoped API。
+不提供 `/apis/ebs/v1/buildresources` 全局 API。apiserver 不注册该路由，Gateway、BuildInfo Controller 和 ebsctl 也不得依赖全局端点。运维角色需要操作多个 Project 时，应逐个使用 Project scoped API。
 
 Project 自定义表的名称必须等于 Project 名。例如：
 
@@ -180,7 +180,7 @@ spec:
 
 ## 五、匹配规则
 
-Build Controller 根据以下输入查询资源需求：
+BuildInfo Controller 根据以下输入查询资源需求：
 
 ```text
 project + specName + arch
@@ -190,7 +190,7 @@ project + specName + arch
 
 ### 5.1 选择 BuildResource 对象
 
-Build Controller 按以下顺序读取对象：
+BuildInfo Controller 按以下顺序读取对象：
 
 1. GET `{project}/buildresources/{project}`；
 2. Project 对象返回 `404 NotFound` 时，GET `default/buildresources/default`；
@@ -241,7 +241,7 @@ func Resolve(table BuildResource, specName, arch string) (ResourceRequirements, 
 }
 ```
 
-## 六、Build 与 Job 集成
+## 六、BuildInfo 与 Job 集成
 
 资源表仅作为创建 Job 时的配置来源，不作为 Scheduler 的直接输入：
 
@@ -251,7 +251,7 @@ Project/{project} ──不存在──> default/default
        └────────────────┬─────────────────┘
                         │ 按 specName、arch 解析
                         ▼
-Build Controller
+BuildInfo Controller
         │ 深拷贝解析结果
         ▼
 Job.spec.resources
@@ -381,7 +381,7 @@ func EnsureDefaultBuildResource(ctx context.Context, client BuildResourceInterfa
 - 主存储使用 Elasticsearch，与 Project、BuildInfo 等配置和索引类对象保持一致；
 - apiserver 对对象设置明确的最大序列化大小，避免单次请求耗尽内存；
 - 第一版建议限制软件包数量和对象大小，例如最多 50,000 个软件包、JSON 不超过 16 MiB，最终限制应根据真实数据测量确定；
-- Build Controller 按 `metadata.resourceVersion` 或 `generation` 缓存解析后的 Map，避免为每个包重复反序列化整张表；
+- BuildInfo Controller 按 `metadata.resourceVersion` 或 `generation` 缓存解析后的 Map，避免为每个包重复反序列化整张表；
 - 更新频率应保持较低，资源数据批量计算完成后一次性提交。
 
 若真实数据超过 apiserver、网关或 Elasticsearch 的安全请求限制，应重新评估“单对象总表”的约束。此时可保持对外的逻辑总表语义，但在存储层引入分片；首版不实现分片。
@@ -392,11 +392,11 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 
 - Project owner：只读自己拥有的 Project 下的对象；
 - Project member：只读自己作为 member 的 Project 下的对象；
-- Build Controller MachineAccount：只读；
+- BuildInfo Controller MachineAccount：只读；
 - 运维角色：跨 Project 读写；
 - Scheduler 和 Runner：无需读取该对象。
 
-普通 Project owner/member 禁止创建、更新、Patch 或删除任何 `BuildResource`，也不能通过 `default` 保留作用域路径读取全局默认对象。只有运维角色和 apiserver 启动初始化身份具有写权限。Build Controller 具有读取权限，以便执行回退。
+普通 Project owner/member 禁止创建、更新、Patch 或删除任何 `BuildResource`，也不能通过 `default` 保留作用域路径读取全局默认对象。只有运维角色和 apiserver 启动初始化身份具有写权限。BuildInfo Controller 具有读取权限，以便执行回退。
 
 ## 十二、实现范围
 
@@ -409,7 +409,7 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 5. 在 Gateway 中加入该 Project scoped 资源的鉴权映射；
 6. 在 ebsctl 中增加 get/list/create/update/delete 支持；
 7. 提供内置默认表清单，并在 apiserver Ready 前于保留的 `default` 作用域幂等创建默认对象；
-8. 在 Build Controller 中实现 Project 优先、`default` 回退的对象查询、缓存与配置匹配；
+8. 在 BuildInfo Controller 中实现 Project 优先、`default` 回退的对象查询、缓存与配置匹配；
 9. 创建 Job 时写入 `Job.spec.resources` 和包含实际来源命名空间的审计注解；
 10. 增加 API、初始化、多副本并发创建、回退边界、匹配优先级、并发更新和大对象边界测试；
 11. 更新统一数据模型文档。
