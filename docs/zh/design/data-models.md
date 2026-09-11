@@ -231,6 +231,8 @@ type BuildSpec struct {
 | `bootstrapRepo` | []BootstrapRepo | 否 | 引导 RPM 仓库 |
 | `packages`     | []string | 是 | 构建的软件包 |
 
+Build 创建后整个 `spec` 不可修改；普通 Update 只能修改服务端允许的 metadata，运行状态通过 `/status` 子资源更新。
+
 ### BootstrapRepo
 
 ```go

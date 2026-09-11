@@ -460,7 +460,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - API 请求使用严格解码：`apiVersion`、`kind`、对象结构或字段类型不合法时直接拒绝，未知字段不会被静默丢弃。
 
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
-- Build 创建或更新时根据默认化后的 spec 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。`/status` 更新保留原对象 metadata，不能修改这些标签。
+- Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。Build 创建后整个 `spec` 不可修改；普通 Update 只能修改允许的 metadata，`/status` 更新保留原对象 metadata，不能修改这些标签。
 - Snapshot 的 `status.specCommits` 由 Snapshot Controller 根据 `spec.packageRepos` 解析和写入，无法获取 commit 时允许为空；创建请求不能直接设置该字段。
 - Build 必须包含 `buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。

@@ -3,6 +3,7 @@ package validation
 import (
 	"regexp"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -93,7 +94,11 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 }
 
 func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
-	return ValidateBuild(newObj)
+	allErrs := ValidateBuild(newObj)
+	if !apiequality.Semantic.DeepEqual(newObj.Spec, oldObj.Spec) {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec"), newObj.Spec, "field is immutable"))
+	}
+	return allErrs
 }
 
 func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {

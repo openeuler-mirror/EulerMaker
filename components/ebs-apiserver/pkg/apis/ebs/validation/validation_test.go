@@ -182,7 +182,8 @@ func TestValidateBuild(t *testing.T) {
 
 func TestValidateBuildUpdate(t *testing.T) {
 	errs := ValidateBuildUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 7, map[string]field.ErrorType{
+	assertErrorList(t, errs, 8, map[string]field.ErrorType{
+		"spec":                                field.ErrorTypeInvalid,
 		"spec.buildType":                      field.ErrorTypeRequired,
 		"spec.packages":                       field.ErrorTypeRequired,
 		"spec.buildTarget.os":                 field.ErrorTypeRequired,
@@ -191,6 +192,17 @@ func TestValidateBuildUpdate(t *testing.T) {
 		"metadata.labels[ebs.io/target-arch]": field.ErrorTypeRequired,
 		"metadata.labels[ebs.io/build-type]":  field.ErrorTypeRequired,
 	})
+
+	oldBuild := validBuild()
+	newBuild := oldBuild.DeepCopy()
+	newBuild.Spec.Packages = append(newBuild.Spec.Packages, "pkg-b")
+	errs = ValidateBuildUpdate(newBuild, oldBuild)
+	assertErrorList(t, errs, 1, map[string]field.ErrorType{
+		"spec": field.ErrorTypeInvalid,
+	})
+
+	errs = ValidateBuildUpdate(oldBuild.DeepCopy(), oldBuild)
+	assertErrorList(t, errs, 0, nil)
 }
 
 func TestValidateBuildStatusUpdate(t *testing.T) {
