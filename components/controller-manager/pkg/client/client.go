@@ -73,7 +73,7 @@ type Client struct {
 }
 
 type Interface interface {
-	ListPage(context.Context, schema.GroupVersionResource, string, int64) (source.ListPage, error)
+	ListPage(context.Context, schema.GroupVersionResource, metav1.ListOptions) (source.ListPage, error)
 	ResolveWatch(context.Context, schema.GroupVersionResource) (source.WatchResource, error)
 	Get(context.Context, schema.GroupVersionResource, string, string) (runtime.Object, error)
 	UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
@@ -107,12 +107,11 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 	return &Client{rest: rc, timeout: timeout}, nil
 }
 
-func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, token string, limit int64) (source.ListPage, error) {
+func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, opts metav1.ListOptions) (source.ListPage, error) {
 	list, err := newList(gvr)
 	if err != nil {
 		return source.ListPage{}, err
 	}
-	opts := metav1.ListOptions{Continue: token, Limit: limit}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	if err := c.rest.Get().AbsPath("/apis/"+gvr.Group+"/"+gvr.Version+"/"+gvr.Resource).VersionedParams(&opts, metav1.ParameterCodec).Do(requestCtx).Into(list); err != nil {

@@ -42,10 +42,10 @@ func object(name, uid, rv string) runtime.Object {
 func TestPollingSourceScanAndFailedPageKeepsSnapshot(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
 	pages := map[string]ListPage{"": {Items: []runtime.Object{object("a", "1", "1")}, Continue: "next"}, "next": {Items: []runtime.Object{object("b", "2", "1")}}}
-	list := func(_ context.Context, _ schema.GroupVersionResource, token string, _ int64) (ListPage, error) {
-		return pages[token], nil
+	list := func(_ context.Context, _ schema.GroupVersionResource, options metav1.ListOptions) (ListPage, error) {
+		return pages[options.Continue], nil
 	}
-	s, err := NewPollingSource(gvr, time.Second, 10, time.Second, list)
+	s, err := NewPollingSource(gvr, time.Second, 10, time.Second, metav1.ListOptions{}, list)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,11 +64,11 @@ func TestPollingSourceScanAndFailedPageKeepsSnapshot(t *testing.T) {
 		t.Fatalf("unexpected initial state: items=%d synced=%v ready=%v", len(s.snapshot), s.HasSynced(), s.Ready())
 	}
 	pages[""] = ListPage{Items: []runtime.Object{object("a", "1", "2")}, Continue: "broken"}
-	s.list = func(_ context.Context, _ schema.GroupVersionResource, token string, _ int64) (ListPage, error) {
-		if token == "broken" {
+	s.list = func(_ context.Context, _ schema.GroupVersionResource, options metav1.ListOptions) (ListPage, error) {
+		if options.Continue == "broken" {
 			return ListPage{}, errors.New("page failed")
 		}
-		return pages[token], nil
+		return pages[options.Continue], nil
 	}
 	if err := s.scan(context.Background(), handlers); err == nil {
 		t.Fatal("expected page failure")
@@ -79,7 +79,7 @@ func TestPollingSourceScanAndFailedPageKeepsSnapshot(t *testing.T) {
 }
 
 func TestPollingSourceRegistrationFreezesAtRun(t *testing.T) {
-	s, err := NewPollingSource(schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}, time.Hour, 10, time.Hour, func(context.Context, schema.GroupVersionResource, string, int64) (ListPage, error) {
+	s, err := NewPollingSource(schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}, time.Hour, 10, time.Hour, metav1.ListOptions{}, func(context.Context, schema.GroupVersionResource, metav1.ListOptions) (ListPage, error) {
 		return ListPage{}, nil
 	})
 	if err != nil {
@@ -107,16 +107,75 @@ func TestWatchFactoryRejectsUnsupportedResource(t *testing.T) {
 }
 
 func TestPollingFactoryFreezesAfterSources(t *testing.T) {
-	f := NewPollingSourceFactory(func(context.Context, schema.GroupVersionResource, string, int64) (ListPage, error) {
+	f := NewPollingSourceFactory(func(context.Context, schema.GroupVersionResource, metav1.ListOptions) (ListPage, error) {
 		return ListPage{}, nil
 	}, 10, time.Minute)
 	gvr := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
-	if _, err := f.ForResource(gvr, time.Minute); err != nil {
+	if _, err := f.ForResource(gvr, time.Minute, metav1.ListOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = f.Sources()
-	if _, err := f.ForResource(gvr, time.Second); !errors.Is(err, ErrSourceStarted) {
+	if _, err := f.ForResource(gvr, time.Second, metav1.ListOptions{}); !errors.Is(err, ErrSourceStarted) {
 		t.Fatalf("expected frozen factory, got %v", err)
+	}
+}
+
+func TestPollingSourcePassesSelectorsToEveryPage(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
+	want := metav1.ListOptions{LabelSelector: "build.ebs.io/os=openEuler", FieldSelector: "status.phase=Pending"}
+	var calls []metav1.ListOptions
+	list := func(_ context.Context, _ schema.GroupVersionResource, options metav1.ListOptions) (ListPage, error) {
+		calls = append(calls, options)
+		if options.Continue == "" {
+			return ListPage{Continue: "next"}, nil
+		}
+		return ListPage{}, nil
+	}
+	s, err := NewPollingSource(gvr, time.Second, 25, time.Minute, want, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.scan(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("got %d List calls, want 2", len(calls))
+	}
+	for i, options := range calls {
+		if options.LabelSelector != want.LabelSelector || options.FieldSelector != want.FieldSelector || options.Limit != 25 {
+			t.Fatalf("call %d options = %#v", i, options)
+		}
+	}
+	if calls[0].Continue != "" || calls[1].Continue != "next" {
+		t.Fatalf("unexpected continue tokens: %#v", calls)
+	}
+}
+
+func TestPollingFactorySharesOnlyIdenticallyFilteredSources(t *testing.T) {
+	f := NewPollingSourceFactory(func(context.Context, schema.GroupVersionResource, metav1.ListOptions) (ListPage, error) {
+		return ListPage{}, nil
+	}, 10, time.Minute)
+	gvr := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
+	first, err := f.ForResource(gvr, time.Minute, metav1.ListOptions{LabelSelector: "team=a", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := f.ForResource(gvr, time.Second, metav1.ListOptions{LabelSelector: "team=a", Continue: "ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != same {
+		t.Fatal("identical selectors did not share a source")
+	}
+	different, err := f.ForResource(gvr, time.Minute, metav1.ListOptions{LabelSelector: "team=b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == different {
+		t.Fatal("different selectors shared a source")
+	}
+	if got := len(f.Sources()); got != 2 {
+		t.Fatalf("got %d sources, want 2", got)
 	}
 }
 
