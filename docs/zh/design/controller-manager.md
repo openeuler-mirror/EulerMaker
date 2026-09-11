@@ -354,17 +354,22 @@ type WatchSourceFactory interface {
 }
 
 type PollingSourceFactory interface {
-    ForResource(gvr schema.GroupVersionResource, period time.Duration) (Source, error)
+    ForResource(
+        gvr schema.GroupVersionResource,
+        period time.Duration,
+        options metav1.ListOptions,
+    ) (Source, error)
     Sources() []Source
 }
 ```
 
 Factory 契约：
 
-- 相同 GVR 的多次 `ForResource` 返回同一个 Source；
+- 相同 GVR、`labelSelector` 和 `fieldSelector` 的多次 `ForResource` 返回同一个 Source；过滤条件不同则创建独立 Source；
 - 不同 group、version 或 resource 永远不共享 Source；
 - `WatchSourceFactory` 只接受 `ebs/v1` 的 `jobs` 和 `runners`，其他 GVR 返回 `ErrWatchUnsupported`；
 - `PollingSourceFactory` 负责通过共享 API Client 为 GVR 构造分页 List 调用；
+- `PollingSourceFactory` 只读取 `ListOptions` 中的 `LabelSelector` 和 `FieldSelector`；分页 token 和页大小由 Source 管理，调用方设置的其他 List 选项不参与 Source 配置；
 - 同一 PollingSource 被请求不同周期时，在启动前采用最短周期；Source 启动后不得再次调用 `ForResource` 改变周期；
 - `Sources` 返回去重后的稳定快照，只允许 Manager 在全部 initializer 完成后调用；首次调用同时冻结 Factory，之后任何 `ForResource` 调用均返回 `ErrSourceStarted`；
 - Factory 的创建、复用和周期合并必须并发安全，但首版仍要求 initializer 串行执行，以获得确定的注册顺序。
@@ -471,12 +476,11 @@ type ListPage struct {
 type ListFunc func(
     ctx context.Context,
     gvr schema.GroupVersionResource,
-    continueToken string,
-    limit int64,
+    options metav1.ListOptions,
 ) (ListPage, error)
 ```
 
-`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。每一页使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
+`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。Source 在每一页请求中保留注册时指定的 `labelSelector` 和 `fieldSelector`，使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
 
 PollingSource 每轮执行：
 
@@ -499,7 +503,7 @@ PollingSource 每轮执行：
 
 PollingSource 对临时 List 失败持续退避重试；超过 stale threshold 时将 readiness 置为 false，成功完成一轮扫描后恢复。临时失败不终止 `Run`，且不得用失败或不完整的 List 结果覆盖旧快照。只有固定配置错误、响应无法按契约解析，或者轮询主循环在 context 未取消时意外结束，`Run` 才返回不可恢复错误。
 
-默认轮询周期为 30 秒，允许按资源和 Controller 配置。相同资源的共享 PollingSource 使用所有订阅者要求的最短周期，避免重复全量 List。同一 Source 不允许并发执行两轮扫描；上一次扫描完成后才计算下一次等待时间。
+默认轮询周期为 30 秒，允许按资源和 Controller 配置。相同资源和过滤条件的共享 PollingSource 使用所有订阅者要求的最短周期，避免重复 List。同一 Source 不允许并发执行两轮扫描；上一次扫描完成后才计算下一次等待时间。对象进入过滤范围产生 Add，匹配期间发生变化产生 Update，离开过滤范围产生 Delete。
 
 对于非 Watch 资源，Worker 收到 key 后应通过 API `Get` 读取最新对象；PollingSource 快照只用于变化检测、索引和事件映射，不作为业务写入的并发前提。若 API 不提供对应 Get，业务 Controller 才可读取快照，并必须在设计中明确其最终一致性限制。
 

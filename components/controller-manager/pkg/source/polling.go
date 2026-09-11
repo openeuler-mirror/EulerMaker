@@ -7,7 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/api/meta"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -16,7 +17,7 @@ type ListPage struct {
 	Items                     []runtime.Object
 	Continue, ResourceVersion string
 }
-type ListFunc func(context.Context, schema.GroupVersionResource, string, int64) (ListPage, error)
+type ListFunc func(context.Context, schema.GroupVersionResource, metav1.ListOptions) (ListPage, error)
 
 type pollingEntry struct {
 	uid, resourceVersion string
@@ -34,6 +35,7 @@ type PollingSource struct {
 	configMu      sync.Mutex
 	period, stale time.Duration
 	pageSize      int64
+	listOptions   metav1.ListOptions
 	list          ListFunc
 	snapshotMu    sync.RWMutex
 	snapshot      map[string]pollingEntry
@@ -41,14 +43,14 @@ type PollingSource struct {
 	lastSuccess   atomic.Int64
 }
 
-func NewPollingSource(gvr schema.GroupVersionResource, period time.Duration, pageSize int64, stale time.Duration, list ListFunc) (*PollingSource, error) {
+func NewPollingSource(gvr schema.GroupVersionResource, period time.Duration, pageSize int64, stale time.Duration, listOptions metav1.ListOptions, list ListFunc) (*PollingSource, error) {
 	if gvr.Empty() || period <= 0 || pageSize <= 0 || stale <= 0 || list == nil {
 		return nil, fmt.Errorf("valid GVR, period, page size, stale threshold and list function are required")
 	}
 	if minimum := 3 * period; stale < minimum {
 		stale = minimum
 	}
-	return &PollingSource{gvr: gvr, name: gvr.String(), period: period, stale: stale, pageSize: pageSize, list: list, snapshot: make(map[string]pollingEntry)}, nil
+	return &PollingSource{gvr: gvr, name: pollingSourceName(gvr, listOptions), period: period, stale: stale, pageSize: pageSize, listOptions: listOptions, list: list, snapshot: make(map[string]pollingEntry)}, nil
 }
 func (s *PollingSource) Name() string { return s.name }
 func (s *PollingSource) AddEventHandler(handler ResourceEventHandler) error {
@@ -120,7 +122,10 @@ func (s *PollingSource) scan(ctx context.Context, handlers []ResourceEventHandle
 	next := make(map[string]pollingEntry)
 	continueToken := ""
 	for {
-		page, err := s.list(ctx, s.gvr, continueToken, s.pageSize)
+		options := s.listOptions
+		options.Continue = continueToken
+		options.Limit = s.pageSize
+		page, err := s.list(ctx, s.gvr, options)
 		if err != nil {
 			return err
 		}
@@ -128,7 +133,7 @@ func (s *PollingSource) scan(ctx context.Context, handlers []ResourceEventHandle
 			if obj == nil {
 				return &pollingDataError{fmt.Errorf("nil object in %s list", s.name)}
 			}
-			accessor, err := metav1.Accessor(obj)
+			accessor, err := apiMeta.Accessor(obj)
 			if err != nil {
 				return &pollingDataError{err}
 			}

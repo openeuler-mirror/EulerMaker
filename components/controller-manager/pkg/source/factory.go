@@ -2,9 +2,11 @@ package source
 
 import (
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
@@ -26,7 +28,7 @@ type WatchSourceFactory interface {
 	Sources() []Source
 }
 type PollingSourceFactory interface {
-	ForResource(schema.GroupVersionResource, time.Duration) (Source, error)
+	ForResource(schema.GroupVersionResource, time.Duration, metav1.ListOptions) (Source, error)
 	Sources() []Source
 }
 
@@ -80,29 +82,36 @@ type pollingFactory struct {
 	list     ListFunc
 	pageSize int64
 	stale    time.Duration
-	sources  map[schema.GroupVersionResource]*PollingSource
+	sources  map[pollingSourceKey]*PollingSource
+}
+
+type pollingSourceKey struct {
+	gvr                          schema.GroupVersionResource
+	labelSelector, fieldSelector string
 }
 
 func NewPollingSourceFactory(list ListFunc, pageSize int64, stale time.Duration) PollingSourceFactory {
-	return &pollingFactory{list: list, pageSize: pageSize, stale: stale, sources: make(map[schema.GroupVersionResource]*PollingSource)}
+	return &pollingFactory{list: list, pageSize: pageSize, stale: stale, sources: make(map[pollingSourceKey]*PollingSource)}
 }
-func (f *pollingFactory) ForResource(gvr schema.GroupVersionResource, period time.Duration) (Source, error) {
+func (f *pollingFactory) ForResource(gvr schema.GroupVersionResource, period time.Duration, options metav1.ListOptions) (Source, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.frozen {
 		return nil, ErrSourceStarted
 	}
-	if existing := f.sources[gvr]; existing != nil {
+	options = pollingListOptions(options)
+	key := pollingSourceKey{gvr: gvr, labelSelector: options.LabelSelector, fieldSelector: options.FieldSelector}
+	if existing := f.sources[key]; existing != nil {
 		if err := existing.shortenPeriod(period); err != nil {
 			return nil, err
 		}
 		return existing, nil
 	}
-	s, err := NewPollingSource(gvr, period, f.pageSize, f.stale, f.list)
+	s, err := NewPollingSource(gvr, period, f.pageSize, f.stale, options, f.list)
 	if err != nil {
 		return nil, err
 	}
-	f.sources[gvr] = s
+	f.sources[key] = s
 	return s, nil
 }
 func (f *pollingFactory) Sources() []Source {
@@ -121,14 +130,14 @@ func orderedWatchSources(items map[schema.GroupVersionResource]*WatchSource) []S
 	}
 	return out
 }
-func orderedPollingSources(items map[schema.GroupVersionResource]*PollingSource) []Source {
-	keys := make([]schema.GroupVersionResource, 0, len(items))
+func orderedPollingSources(items map[pollingSourceKey]*PollingSource) []Source {
+	keys := make([]pollingSourceKey, 0, len(items))
 	for key := range items {
 		keys = append(keys, key)
 	}
 	for i := 0; i < len(keys); i++ {
 		for j := i + 1; j < len(keys); j++ {
-			if keys[j].String() < keys[i].String() {
+			if pollingSourceName(keys[j].gvr, metav1.ListOptions{LabelSelector: keys[j].labelSelector, FieldSelector: keys[j].fieldSelector}) < pollingSourceName(keys[i].gvr, metav1.ListOptions{LabelSelector: keys[i].labelSelector, FieldSelector: keys[i].fieldSelector}) {
 				keys[i], keys[j] = keys[j], keys[i]
 			}
 		}
@@ -138,4 +147,22 @@ func orderedPollingSources(items map[schema.GroupVersionResource]*PollingSource)
 		out = append(out, items[key])
 	}
 	return out
+}
+
+func pollingListOptions(options metav1.ListOptions) metav1.ListOptions {
+	return metav1.ListOptions{LabelSelector: options.LabelSelector, FieldSelector: options.FieldSelector}
+}
+
+func pollingSourceName(gvr schema.GroupVersionResource, options metav1.ListOptions) string {
+	query := url.Values{}
+	if options.LabelSelector != "" {
+		query.Set("labelSelector", options.LabelSelector)
+	}
+	if options.FieldSelector != "" {
+		query.Set("fieldSelector", options.FieldSelector)
+	}
+	if encoded := query.Encode(); encoded != "" {
+		return gvr.String() + "?" + encoded
+	}
+	return gvr.String()
 }

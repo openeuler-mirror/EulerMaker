@@ -11,6 +11,7 @@ import (
 	clientpkg "controller-manager/pkg/client"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -44,7 +45,7 @@ func (f *fakeWatchFactory) Sources() []source.Source { return f.items }
 
 type fakePollingFactory struct{ items []source.Source }
 
-func (f *fakePollingFactory) ForResource(schema.GroupVersionResource, time.Duration) (source.Source, error) {
+func (f *fakePollingFactory) ForResource(schema.GroupVersionResource, time.Duration, metav1.ListOptions) (source.Source, error) {
 	return nil, errors.New("unused")
 }
 func (f *fakePollingFactory) Sources() []source.Source { return f.items }
