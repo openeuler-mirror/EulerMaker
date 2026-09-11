@@ -197,7 +197,7 @@ Manager 只负责注册和调用显式 HealthChecker，不根据 Reconcile 返�
 
 ### 3.4 API Client 与写入结果
 
-Controller Manager 共享的 API Client 提供 Source 所需的 List/Watch 能力，以及业务 Controller 所需的 Get、status 更新和带前置条件删除能力：
+Controller Manager 共享的 API Client 提供 Source 所需的 List/Watch 能力，以及业务 Controller 所需的 Get、普通更新、status 更新和带前置条件删除能力：
 
 ```go
 type DeletePreconditions struct {
@@ -209,8 +209,7 @@ type Client interface {
     ListPage(
         ctx context.Context,
         gvr schema.GroupVersionResource,
-        continueToken string,
-        limit int64,
+        options metav1.ListOptions,
     ) (source.ListPage, error)
 
     ResolveWatch(
@@ -222,6 +221,13 @@ type Client interface {
         ctx context.Context,
         gvr schema.GroupVersionResource,
         namespace, name string,
+    ) (runtime.Object, error)
+
+    Update(
+        ctx context.Context,
+        gvr schema.GroupVersionResource,
+        namespace string,
+        obj runtime.Object,
     ) (runtime.Object, error)
 
     UpdateStatus(
@@ -244,7 +250,7 @@ namespace-scoped 资源要求 `namespace` 非空；cluster-scoped 资源要求�
 
 所有非 Watch 请求使用共享 `--request-timeout` 派生子 context；调用方 context 更早取消时必须立即返回。Watch 不使用该短超时，由 `ListOptions.timeoutSeconds` 和生命周期 context 控制。
 
-`Get` 成功必须返回 apiserver 响应对象；404 等读取错误使用 Kubernetes `apierrors` 保留状态码和 Reason，不包装成 WriteError。`UpdateStatus` 成功必须返回 apiserver 持久化后的对象，不能用请求对象构造成功结果。`Delete` 收到完整 2xx 响应即可视为成功；资源包含 finalizer 时只表示删除已经被接受，调用方仍通过后续 Get/Watch 观察最终消失。
+`Get` 成功必须返回 apiserver 响应对象；404 等读取错误使用 Kubernetes `apierrors` 保留状态码和 Reason，不包装成 WriteError。`Update` 和 `UpdateStatus` 成功必须返回 apiserver 持久化后的对象，不能用请求对象构造成功结果；两者都要求请求对象携带 UID 和 resourceVersion，并校验响应对象身份不变。`Update` 写入资源主路径，`UpdateStatus` 写入 `/status` 子资源。`Delete` 收到完整 2xx 响应即可视为成功；资源包含 finalizer 时只表示删除已经被接受，调用方仍通过后续 Get/Watch 观察最终消失。
 
 写操作错误统一实现以下接口：
 
@@ -791,7 +797,7 @@ Leader election 不能替代幂等性：领导者切换可能发生在 API 或�
 - 相同 key 重复调谐保持幂等；
 - Conflict、NotFound、超时结果未知和外部依赖暂时失败；
 - Client 的 NotSent、Rejected、Unknown 分类，以及 StatusCode、RetryAfter 和 Unwrap；
-- UpdateStatus 异常 2xx 响应和 Delete 结果未知时不会被当作成功或直接重放；
+- Update、UpdateStatus 异常 2xx 响应和 Delete 结果未知时不会被当作成功或直接重放；
 - 进程重启后的状态恢复。
 
 所有模块必须通过：

@@ -76,6 +76,7 @@ type Interface interface {
 	ListPage(context.Context, schema.GroupVersionResource, metav1.ListOptions) (source.ListPage, error)
 	ResolveWatch(context.Context, schema.GroupVersionResource) (source.WatchResource, error)
 	Get(context.Context, schema.GroupVersionResource, string, string) (runtime.Object, error)
+	Update(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
 	UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
 	Delete(context.Context, schema.GroupVersionResource, string, string, DeletePreconditions) error
 }
@@ -153,38 +154,46 @@ func (c *Client) Get(ctx context.Context, gvr schema.GroupVersionResource, names
 }
 
 func (c *Client) UpdateStatus(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
+	return c.update(ctx, "update-status", gvr, namespace, "status", obj)
+}
+
+func (c *Client) Update(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
+	return c.update(ctx, "update", gvr, namespace, "", obj)
+}
+
+func (c *Client) update(ctx context.Context, operation string, gvr schema.GroupVersionResource, namespace, subresource string, obj runtime.Object) (runtime.Object, error) {
 	if obj == nil {
-		return nil, notSent("update-status", gvr, fmt.Errorf("object is required"))
+		return nil, notSent(operation, gvr, fmt.Errorf("object is required"))
 	}
 	accessor, err := apiMeta.Accessor(obj)
 	if err != nil {
-		return nil, notSent("update-status", gvr, err)
+		return nil, notSent(operation, gvr, err)
 	}
 	if err := validateTarget(gvr, namespace, accessor.GetName()); err != nil {
-		return nil, notSent("update-status", gvr, err)
+		return nil, notSent(operation, gvr, err)
 	}
 	if accessor.GetNamespace() != namespace || accessor.GetUID() == "" || accessor.GetResourceVersion() == "" {
-		return nil, notSent("update-status", gvr, fmt.Errorf("object metadata does not match target or lacks UID/resourceVersion"))
+		return nil, notSent(operation, gvr, fmt.Errorf("object metadata does not match target or lacks UID/resourceVersion"))
 	}
 	out, err := newObject(gvr)
 	if err != nil {
-		return nil, notSent("update-status", gvr, err)
+		return nil, notSent(operation, gvr, err)
 	}
 	if reflect.TypeOf(obj) != reflect.TypeOf(out) {
-		return nil, notSent("update-status", gvr, fmt.Errorf("object type %T does not match resource %s", obj, gvr.Resource))
+		return nil, notSent(operation, gvr, fmt.Errorf("object type %T does not match resource %s", obj, gvr.Resource))
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	err = c.rest.Put().AbsPath(resourcePath(gvr, namespace, accessor.GetName(), "status")).Body(obj).Do(requestCtx).Into(out)
+	err = c.rest.Put().AbsPath(resourcePath(gvr, namespace, accessor.GetName(), subresource)).Body(obj).Do(requestCtx).Into(out)
 	if err != nil {
-		return nil, classifyWrite("update-status", gvr, err)
+		return nil, classifyWrite(operation, gvr, err)
 	}
 	if err := validateResponseObject(out); err != nil {
-		return nil, unknown("update-status", gvr, err)
+		return nil, unknown(operation, gvr, err)
 	}
 	responseAccessor, err := apiMeta.Accessor(out)
 	if err != nil || responseAccessor.GetUID() != accessor.GetUID() || responseAccessor.GetName() != accessor.GetName() || responseAccessor.GetNamespace() != accessor.GetNamespace() {
-		return nil, unknown("update-status", gvr, fmt.Errorf("response object identity does not match request"))
+		return nil, unknown(operation, gvr, fmt.Errorf("response object identity does not match request"))
 	}
 	return out, nil
 }
