@@ -40,13 +40,13 @@ type Snapshot struct {
 }
 
 type SnapshotSpec struct {
-	SpecCommits  map[string]SpecCommit `json:"specCommits,omitempty"`
-	PackageRepos []PackageRepo         `json:"packageRepos,omitempty"`
+	PackageRepos []PackageRepo `json:"packageRepos,omitempty"`
 }
 
 type SnapshotStatus struct {
-	Phase      SnapshotPhase      `json:"phase,omitempty"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Phase       SnapshotPhase        `json:"phase,omitempty"`
+	SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
+	Conditions  []metav1.Condition   `json:"conditions,omitempty"`
 }
 
 type SnapshotList struct {

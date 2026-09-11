@@ -160,28 +160,28 @@ type Snapshot struct {
 
 ```go
 type SnapshotSpec struct {
-    SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
     PackageRepos []PackageRepo        `json:"packageRepos,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `specCommits` | map[string]SpecCommit | 否 | 各包 spec 提交信息；无法获取 commit 时允许为空 |
 | `packageRepos` | []PackageRepo | 否 | 创建 Snapshot 时使用的包仓库列表 |
 
 ### SnapshotStatus
 
 ```go
 type SnapshotStatus struct {
-    Phase        SnapshotPhase      `json:"phase,omitempty"`
-    Conditions   []metav1.Condition `json:"conditions,omitempty"`
+    Phase       SnapshotPhase        `json:"phase,omitempty"`
+    SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
+    Conditions  []metav1.Condition   `json:"conditions,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | `SnapshotPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Pending` / `Processing` / `Active` |
+| `specCommits` | map[string]SpecCommit | Snapshot Controller 根据 `spec.packageRepos` 解析得到的各包 spec 提交信息；无法获取 commit 时允许为空 |
 | `conditions` | []metav1.Condition | 状态条件，用于记录 Snapshot 处理过程中的异常原因和详细信息 |
 
 ### SnapshotList

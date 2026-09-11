@@ -1880,20 +1880,6 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"specCommits": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.SpecCommit"),
-									},
-								},
-							},
-						},
-					},
 					"packageRepos": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
@@ -1911,7 +1897,7 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.PackageRepo", "ebs-api/ebs/v1.SpecCommit"},
+			"ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 
@@ -1925,6 +1911,20 @@ func schema_ebs_api_ebs_v1_SnapshotStatus(ref common.ReferenceCallback) common.O
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
+						},
+					},
+					"specCommits": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.SpecCommit"),
+									},
+								},
+							},
 						},
 					},
 					"conditions": {
@@ -1944,7 +1944,7 @@ func schema_ebs_api_ebs_v1_SnapshotStatus(ref common.ReferenceCallback) common.O
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.SpecCommit", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 
