@@ -355,24 +355,45 @@ type SpecDepend struct {
 
 ```go
 type BuildInfoStatus struct {
-    Phase       BuildInfoPhase        `json:"phase,omitempty"`
-    Conditions  []metav1.Condition    `json:"conditions,omitempty"`
-    SpecStatus  map[string]SpecStatus `json:"specStatus,omitempty"`
+    Phase       BuildInfoPhase           `json:"phase,omitempty"`
+    Conditions  []metav1.Condition       `json:"conditions,omitempty"`
+    SpecStatus  map[string]SpecStatus    `json:"specStatus,omitempty"`
+    Dcg         map[string]DcgNodeState  `json:"dcg,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | `BuildInfoPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Processing"` / `"Completed"` |
+| `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Aborted"` |
 | `conditions` | []metav1.Condition | 状态条件 |
 | `specStatus` | map[string]SpecStatus | 各 spec 运行时状态 |
+| `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 `BuildInfo.spec.specDepends` 的 `buildRequires`，不依赖本字段 |
+
+### DcgNodeState
+
+```go
+type DcgNodeState struct {
+    Version      string                  `json:"version,omitempty"`
+    OutDep       []string                `json:"outDep,omitempty"`
+    InDep        map[string]VersionConst `json:"inDep,omitempty"`
+    InstallInDep map[string]VersionConst `json:"installInDep,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `version` | string | spec 完整版本号（溯源展示，不参与调度判定） |
+| `outDep` | []string | 依赖本 spec 的下游 spec 列表（build/install 边合并；命名与直觉相反，勿混淆） |
+| `inDep` | map[string]VersionConst | 本 spec 依赖的上游 spec → 版本约束（build 边） |
+| `installInDep` | map[string]VersionConst | 本 spec 安装期依赖命中的上游 spec → 版本约束（install 边，建图规则见 build_info_controller.md 15.1）；入度 = len(inDep) + len(installInDep) |
 
 ### SpecStatus
 
 ```go
 type SpecStatus struct {
-    Build   SpecBuildStatus   `json:"build,omitempty"`
-    Install SpecInstallStatus `json:"install,omitempty"`
+    Build         SpecBuildStatus   `json:"build,omitempty"`
+    Install       SpecInstallStatus `json:"install,omitempty"`
+    DispatchCount int64             `json:"dispatchCount,omitempty"`    
 }
 ```
 
@@ -380,6 +401,7 @@ type SpecStatus struct {
 |------|---------|------|
 | `build` | SpecBuildStatus | 构建状态 |
 | `install` | SpecInstallStatus | 安装状态 |
+| `dispatchCount` | int64（默认 0） | 下发计数门禁（G-03）：创建 Job 成功后 `+= 1`；回填时以 `max(dispatchCount, 同 spec 现存 Job 数)` 对齐兜底；达到**有效 required**（普通 1 / 环内 2；任一直接上游 Failed 时降为 1，重建取消）后不再下发，详见 build_info_controller.md 6.5.2/14.2.3 |
 
 ---
 
