@@ -101,20 +101,10 @@ func TestUpdateUsesMainResourcePath(t *testing.T) {
 		if r.Method != http.MethodPut || r.URL.Path != "/apis/ebs/v1/projects/project/jobs/job" {
 			return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(bytes.NewReader(body)),
-			Request:    r,
-		}, nil
+		return jsonResponse(r, body), nil
 	})
 
-	client, err := New(&rest.Config{
-		Host: "http://controller-manager.test",
-		WrapTransport: func(http.RoundTripper) http.RoundTripper {
-			return transport
-		},
-	}, time.Second)
+	client, err := New(testRESTConfig(transport), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,5 +126,92 @@ func TestUpdateRejectsInvalidObjectBeforeSending(t *testing.T) {
 	var writeErr *WriteError
 	if !errors.As(err, &writeErr) || writeErr.Outcome != WriteNotSent || writeErr.Operation != "update" {
 		t.Fatalf("unexpected error: %#v", err)
+	}
+}
+
+func TestCreateUsesResourceCollectionPath(t *testing.T) {
+	request := &ebsv1.Job{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Job"},
+		ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project"},
+	}
+	response := request.DeepCopy()
+	response.UID = types.UID("uid")
+	response.ResourceVersion = "1"
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/ebs/v1/projects/project/jobs" {
+			return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		return jsonResponse(r, body), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := client.Create(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}, "project", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.(*ebsv1.Job).UID != types.UID("uid") {
+		t.Fatalf("UID = %q, want uid", created.(*ebsv1.Job).UID)
+	}
+}
+
+func TestListProjectPageUsesScopedPathAndOptions(t *testing.T) {
+	response := &ebsv1.JobList{
+		TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "JobList"},
+		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/projects/project/jobs" {
+			return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		query := r.URL.Query()
+		if query.Get("labelSelector") != "team=a" || query.Get("fieldSelector") != "status.phase=Pending" || query.Get("continue") != "next" || query.Get("limit") != "25" {
+			return nil, fmt.Errorf("unexpected query: %s", r.URL.RawQuery)
+		}
+		return jsonResponse(r, body), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ListProjectPage(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}, "project", metav1.ListOptions{
+		LabelSelector: "team=a", FieldSelector: "status.phase=Pending", Continue: "next", Limit: 25,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListProjectPageRejectsClusterScopedResource(t *testing.T) {
+	_, err := (&Client{}).ListProjectPage(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}, "project", metav1.ListOptions{})
+	if err == nil {
+		t.Fatal("project-scoped Runner List was accepted")
+	}
+}
+
+func testRESTConfig(transport http.RoundTripper) *rest.Config {
+	return &rest.Config{
+		Host: "http://controller-manager.test",
+		WrapTransport: func(http.RoundTripper) http.RoundTripper {
+			return transport
+		},
+	}
+}
+
+func jsonResponse(request *http.Request, body []byte) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+		Request:    request,
 	}
 }
