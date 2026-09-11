@@ -30,12 +30,60 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&Job{}, &JobList{},
 		&Runner{}, &RunnerList{},
 	)
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Project"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace", "status.phase":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for Project: %s", label)
+		}
+	})
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Snapshot"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace", "status.phase":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for Snapshot: %s", label)
+		}
+	})
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Build"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace", "status.phase", "status.stage":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for Build: %s", label)
+		}
+	})
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("BuildInfo"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace", "status.phase":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for BuildInfo: %s", label)
+		}
+	})
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("RpmRepo"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace", "status.phase":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for RpmRepo: %s", label)
+		}
+	})
 	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Job"), func(label, value string) (string, string, error) {
 		switch label {
 		case "metadata.name", "metadata.namespace", "status.runner", "status.phase":
 			return label, value, nil
 		default:
 			return "", "", fmt.Errorf("field label not supported for Job: %s", label)
+		}
+	})
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Runner"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace", "status.phase":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for Runner: %s", label)
 		}
 	})
 	return nil

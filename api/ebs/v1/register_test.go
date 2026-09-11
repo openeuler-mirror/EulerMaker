@@ -23,6 +23,108 @@ func TestJobFieldLabelConversion(t *testing.T) {
 	}
 }
 
+func TestBuildFieldLabelConversion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	gvk := SchemeGroupVersion.WithKind("Build")
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase", "status.stage"} {
+		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+		if err != nil || label != field || value != "value" {
+			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+		}
+	}
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "spec.buildTarget.os", "openEuler"); err == nil {
+		t.Fatal("expected unsupported field selector error")
+	}
+}
+
+func TestBuildInfoFieldLabelConversion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	gvk := SchemeGroupVersion.WithKind("BuildInfo")
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
+		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+		if err != nil || label != field || value != "value" {
+			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+		}
+	}
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "build"); err == nil {
+		t.Fatal("expected unsupported field selector error")
+	}
+}
+
+func TestRpmRepoFieldLabelConversion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	gvk := SchemeGroupVersion.WithKind("RpmRepo")
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
+		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+		if err != nil || label != field || value != "value" {
+			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+		}
+	}
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "publish"); err == nil {
+		t.Fatal("expected unsupported field selector error")
+	}
+}
+
+func TestSnapshotFieldLabelConversion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	gvk := SchemeGroupVersion.WithKind("Snapshot")
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
+		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+		if err != nil || label != field || value != "value" {
+			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+		}
+	}
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "build"); err == nil {
+		t.Fatal("expected unsupported field selector error")
+	}
+}
+
+func TestRunnerFieldLabelConversion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	gvk := SchemeGroupVersion.WithKind("Runner")
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
+		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+		if err != nil || label != field || value != "value" {
+			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+		}
+	}
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "running"); err == nil {
+		t.Fatal("expected unsupported field selector error")
+	}
+}
+
+func TestProjectFieldLabelConversion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	gvk := SchemeGroupVersion.WithKind("Project")
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
+		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+		if err != nil || label != field || value != "value" {
+			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+		}
+	}
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "running"); err == nil {
+		t.Fatal("expected unsupported field selector error")
+	}
+}
+
 func TestBuildResourceTypesAreRegistered(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := AddToScheme(scheme); err != nil {
