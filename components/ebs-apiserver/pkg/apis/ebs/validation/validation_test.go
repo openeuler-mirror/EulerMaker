@@ -583,7 +583,7 @@ func validProjectSpec() ebsv1.ProjectSpec {
 
 func validSnapshot() *ebsv1.Snapshot {
 	return &ebsv1.Snapshot{
-		Spec: ebsv1.SnapshotSpec{
+		Status: ebsv1.SnapshotStatus{
 			SpecCommits: map[string]ebsv1.SpecCommit{
 				"pkg-a": {CommitId: "abc123"},
 			},
