@@ -2,7 +2,7 @@
 
 ## 一、定位
 
-Artifact Manager 是 EulerMaker 的构建结果数据服务，负责接收 Runner 上传的构建产物和日志，并提供查询、下载、保留与清理能力。
+Artifact Manager 是 EulerMaker 的构建结果数据服务，负责接收 Runner 上传的构建产物和日志，并提供查询、下载、保留与清理能力，同时提供由 Controller Manager 中 RpmRepo Controller 驱动的 RPM 仓库物化能力。
 
 ```text
 Runner -> artifact-manager -> Local Persistent Storage
@@ -41,7 +41,7 @@ Artifact、Job 上传清单和幂等记录均以元数据文件形式存放在�
 
 文件正文写入 Artifact Manager 管理的本地持久化目录。使用节点本地目录时只能部署单实例。
 
-首版由 Runner 单请求上传完整文件，Artifact Manager 流式写入本地文件系统。首版不支持普通 Artifact 的分片传输和断点续传；请求中断后 Runner 使用相同幂等键重新上传整个文件。实时日志仍使用第九章定义的 chunk/sequence 追加协议，该协议用于实时展示和日志流恢复，不属于普通 Artifact 分片上传。
+首版由 Runner 单请求上传完整文件，Artifact Manager 流式写入本地文件系统。首版不支持普通 Artifact 的分片传输和断点续传；请求中断后 Runner 使用相同幂等键重新上传整个文件。实时日志仍使用第十章定义的 chunk/sequence 追加协议，该协议用于实时展示和日志流恢复，不属于普通 Artifact 分片上传。
 
 ## 四、文件归属与存储键
 
@@ -636,15 +636,454 @@ Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文
 - 限制单文件大小、文件数量和总大小。
 - 保证同一个相对路径只生成一条 manifest 记录。
 
-推荐使用 `packages/`、`logs/` 等一级目录组织产物；Repo Controller 将 `packages/` 下的 RPM 重新组织到最终 repo 的 `Packages/` 目录。
+推荐使用 `packages/`、`logs/` 等一级目录组织产物；RpmRepo Controller 提交固定版本清单，Artifact Manager 将 `packages/` 下的 RPM 重新组织到不可变仓库的 `Packages/` 目录。
 
-## 九、日志处理
+## 九、RPM 仓库物化
 
-### 9.1 最终日志文件
+### 9.1 定位
+
+Artifact Manager 在已经接管 Job 构建产物的基础上，提供 RPM 仓库物化能力。Controller Manager 中的 RpmRepo Controller 负责持续感知构建结果、选择基础仓和输入 Job，并更新 `RpmRepo`、`Build`、`Job` 等 API 对象；Artifact Manager 只负责校验固定版本的 Job 上传清单、组织 RPM、生成 repodata、原子发布仓库正文和保存本地物化状态。
+
+```text
+RpmRepo Controller
+    │ 选择 base repository 和 Completed manifests
+    ▼
+Artifact Manager
+    │ 校验清单与 RPM，继承基础仓，替换本批次 spec
+    │ 执行 createrepo_c，在本地原子发布不可变仓库
+    ▼
+Repository content URL
+    │
+    └── RpmRepo Controller 更新 RpmRepo/Build/Job status
+```
+
+该能力替代老 repo-manager 的 Job JSON 目录扫描、ES 直接写入和 etcd 队列通知。Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etcd，也不自行决定“最新仓库”。
+
+### 9.2 设计目标
+
+1. 从一个显式基础仓和一组已封账的 Job 上传清单生成完整 RPM 仓库。
+2. 同一请求可安全重试，不重复生成仓库或重复替换内容。
+3. 新仓库发布前不可见；成功后内容不可变。
+4. 同一 spec 的新产物完整替换基础仓中的旧产物。
+5. 复用本地 Artifact 正文，避免控制器下载再上传大文件。
+6. 进程崩溃后能够区分 Ready、可继续清理的临时状态和失败状态。
+7. 仓库生成不直接修改业务 API 对象，避免数据面与控制面形成双写事务。
+
+首版不提供仓库签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。
+
+### 9.3 职责边界
+
+#### 9.3.1 RpmRepo Controller
+
+RpmRepo Controller 负责：
+
+- 监听或轮询构建结果，确认所有输入 Job 已完成上传清单；
+- 为每个 Build 维护唯一的逻辑 `RpmRepo`，名称与 Build name 相同；
+- 以当前已发布物理版本为基础仓，并为每批输入 Job 推进一个新的不可变版本；
+- 提交物化前先将固定的输入、基础仓和 `repositoryUID` 持久化到 `RpmRepo.status.transition`；
+- 提交物化请求并查询结果；
+- 将完成的物理版本原子提升为 `RpmRepo.status` 当前版本；
+- 只有 API 状态更新成功后，才允许后续 Job 使用该仓库；
+- 处理并发 Build 的基础仓选择和控制面冲突。
+
+#### 9.3.2 Artifact Manager
+
+Artifact Manager 负责：
+
+- 验证请求身份、字段和幂等摘要；
+- 按 Job UID 读取唯一的 Completed Job 上传清单，并在内部校验清单完整性；
+- 按固定输入执行物化；输入或基础仓已因保留策略删除时返回稳定失败；
+- 校验 RPM 文件、解析 spec 归属并检测冲突；
+- 继承基础仓、删除被替换 spec 的旧 RPM、加入新 RPM；
+- 运行 `createrepo_c` 并验证生成结果；
+- 原子发布不可变仓库，保存本地状态并提供内容下载；
+- 服务重启时恢复状态和清理未完成临时目录。
+
+Artifact Manager 不负责更新 `RpmRepo`、`Build` 或 `Job`，也不维护可变的 `last`、`current` 软链接。调用方必须使用返回的不可变仓库 URL。
+
+#### 9.3.3 主动持续生成流程
+
+RpmRepo Controller 是 Controller Manager 内的常驻控制器，不等待其他组件逐次调用“生成仓库”。它必须在 `Run` 前注册 Job 事件处理器，启动时先完成全局 Job List，再从取得的 `resourceVersion` 建立 Watch；Watch 断开时按 Controller Manager 的 Source 语义重新 List/Watch。只有 Job 支持 Watch，`Build`、`BuildInfo`、`Snapshot` 和 `RpmRepo` 仍通过按需 GET/List 读取。
+
+进入仓库队列的 Job 必须同时满足：
+
+- `status.phase=Completed`；
+- `status.artifactState=Completed`；
+- Job 携带由 BuildInfo Controller 写入的构建归属和目标 labels，能够确定 Build、spec、目标 OS 和目标架构；
+- 该 Job 未写入仓库发布结果，也不是 `RpmRepo.status.transition` 中正在处理的输入。
+
+RpmRepo Controller 以 `{project}/{buildName}` 作为串行队列 key，Reconcile 的对象是 Build，而不是触发事件的单个 Job。`buildName` 由唯一 UUID 生成且不复用，因此无需再引入 Build UID、目标 OS 或目标架构作为队列维度。目标 OS 和架构由 Build 确定，仅作为仓库元数据及一致性校验字段。同一 key 任一时刻只允许一个物化周期，保证后一个仓库显式以上一个 Ready 仓库为基础；不同 key 可以并行。Job 事件只计算并 Add Build key，同一 key 的重复事件由队列合并。
+
+BuildInfo Controller 创建 Job 时必须写入以下不可变元数据：
+
+| 位置 | Key | 值 |
+|------|-----|----|
+| label | `ebs.io/build-name` | 所属 Build name，值为唯一 UUID |
+| label | `ebs.io/spec-name` | 本 Job 构建的 spec 名 |
+| label | `ebs.io/target-os` | 目标操作系统 |
+| label | `ebs.io/target-arch` | 目标架构 |
+
+RpmRepo Controller 不从 Job 名称、Payload 或 RPM 文件名推导这些控制面归属。缺少任一字段的 Job 不进入物化队列，并记录结构化告警和指标。Project 直接使用 Job `metadata.namespace`。
+
+每个 Build 只有一个同名 RpmRepo，每批完成 Job 将该逻辑仓库推进一个新的不可变物理版本。每次最多选择 `--rpmrepo-max-jobs-per-batch` 个 Job，同时受 Manifest 数量和输入总字节数上限约束；不使用时间窗口等待更多 Job，到达任一上限或当前候选集已取完即形成批次。候选 Job 按 `creationTimestamp`、`metadata.name`、`metadata.uid` 升序稳定排序。同一批次每个 `specName` 最多一个 Job；遇到重复 spec 时只选择排序最前的 Job，其余 Job 留到下一批次，不能以 Watch 事件到达顺序决定覆盖关系。
+
+一次 Build Reconcile 流程如下：
+
+1. GET Build 和同名 RpmRepo；RpmRepo 不存在时创建空 spec 对象，创建冲突后直接重新 GET。
+2. RpmRepo 已存在 `status.transition` 时不得选择新输入或重新计算批次，直接按 transition 查询或重新提交 Artifact Manager，并继续该批次的结果确认。
+3. 没有 transition 时，按 Build label 过滤 List Job，重新校验每个候选 Job 的 UID、终态、Artifact 状态和构建归属，剔除已发布、已稳定失败或不再满足条件的对象，然后按稳定顺序和批次上限选择输入。没有候选 Job 时成功结束。
+4. 使用当前 `status.repositoryUID` 作为基础仓。首次推进根据 `Build.status.baseBuildRef.name` 读取对应的已发布 RpmRepo 版本；未指定时基础仓为空。
+5. 按候选顺序查询每个 Job 的唯一 Completed Manifest，达到 Job 数量或输入总字节数上限时停止加入批次。根据 Project、Build name、基础仓 UID 以及排序后的全部 Job UID 计算确定性 `repositoryUID`，再将完整 `RepositoryTransition` 以 `resourceVersion` CAS 写入 RpmRepo status。
+6. transition 写入成功后才能调用 Artifact Manager，单次请求提交批次内全部 Manifest。返回 `202` 后不占用 worker 等待，使用带指数退避的延迟队列再次入队同一个 Build key。
+7. 查询到 `Ready` 后，用一次 CAS 将 transition 中的版本提升为当前版本、写入 URL、摘要、RPM 元数据和本批次 Job UID，并清空 transition；然后逐个将同一物理版本 UID 写入本批次 Job status 作为已消费标记。
+8. Job status 写回必须逐项幂等。部分 Job 写回失败时，后续 Reconcile 根据 RpmRepo 当前版本记录的 Job UID 补写，不重新物化，也不把这些 Job 选入新批次；全部补写完成后若仍有候选 Job，立即重新入队同一个 Build key。
+9. 可重试基础设施错误保留原 transition 和同一 `repositoryUID` 重试。某个输入存在不可重试的请求、RPM 或 Manifest 错误时，整批不发布；将确定失败的 Job 标记为 `repositoryState=Failed` 并写入稳定错误，清除 transition 后将其余 Job 重新入队组成新批次。原已发布版本始终可读。
+
+RpmRepo Controller 重启后通过 List 已完成 Job 和同名 RpmRepo 重建 Build key，不依赖内存中的“已消费集合”。存在 transition 时必须先按其固定的输入 Job UID 集合、base repository UID 和 repository UID 恢复旧批次，不得重新选择输入或基础仓。当前 `RpmRepoSpec` 可保持为空，需扩展的是公共 `RpmRepoStatus`、`JobStatus` 及对应的 apiserver status 校验。
+
+当前公共 `JobStatus` 同样尚未包含 `artifactState`、`artifactCount`、`repositoryState` 和 `repositoryUID`。实现 RpmRepo Controller 前必须将这些字段加入公共 API，更新 OpenAPI、apiserver status 校验和客户端。`repositoryState=Published` 且 `repositoryUID` 非空表示 Job 已被逻辑仓库消费；`repositoryState=Failed` 表示稳定输入错误，不得自动重放。
+
+首版 Controller Manager 只运行一个活动的 RpmRepo Controller。需要多副本时必须先在 Controller Manager 框架加入 Leader Election；不能依赖进程内队列锁协调多个实例。即使发生故障切换，RpmRepo status 的 `resourceVersion` CAS、持久化 transition 和 Artifact Manager 的 repositoryUID 幂等约束仍是最终防线。
+
+### 9.4 标识与存储布局
+
+一个 RpmRepo 是可持续推进的逻辑仓库，其 `metadata.uid` 不能直接作为物理版本标识。每次推进根据 Project、Build name、`baseRepositoryUID` 和按字典序排列的全部输入 Job UID 计算 SHA-256，将其十六进制结果作为稳定 `repositoryUID`。Build name 本身由唯一 UUID 生成且不复用。相同批次重试自然复用同一幂等键；基础仓或批次成员变化一定生成不同的不可变版本。摘要编码必须使用带长度前缀的字段序列，避免字符串拼接歧义。
+
+```text
+${dataDir}/
+├── repositories/
+│   └── {project}/
+│       └── {arch}/
+│           ├── Packages -> releases/{publicationUID}/Packages
+│           ├── repodata -> releases/{publicationUID}/repodata
+│           ├── RPM-GPG-KEY-openEuler
+│           ├── releases/
+│           │   └── {publicationUID}/
+│           │       ├── Packages/
+│           │       ├── repodata/
+│           │       └── publication.json
+│           └── history/
+│               └── {buildName}/
+│                   └── steps/
+│                       └── {repositoryUID}/
+│                           ├── Packages/
+│                           ├── repodata/
+│                           └── repository.json
+├── .repository-work/
+│   └── {repositoryUID}-{random}/
+└── .metadata/
+    └── repositories/
+        └── {repositoryUID}.json
+```
+
+`project`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 和目标 OS 只属于元数据，不直接参与本地路径拼接。所有目录操作必须从预先打开的 `dataDir` FD 开始，拒绝非服务自身创建的符号链接，并确保目标始终位于配置的数据目录内。
+
+`history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
+
+`releases/{publicationUID}` 预留给正式发布产生的不可变版本；架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，只能由后续正式发布流程以原子切换方式维护。当前 RpmRepo 物化流程不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。仓库签名和正式发布仍属于后续能力。
+
+Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
+
+### 9.5 数据模型
+
+控制面中 RpmRepo 与 Build 一对一，`metadata.name` 与 Build name 相同。Build name、目标 OS 和架构均可从同名 Build 获取，因此 spec 保持为空：
+
+```go
+type RpmRepoSpec struct {
+}
+
+type RepositoryInput struct {
+    JobName            string `json:"jobName"`
+    JobUID             string `json:"jobUID"`
+    SpecName           string `json:"specName"`
+}
+
+type RepositoryTransition struct {
+    Inputs             []RepositoryInput `json:"inputs"`
+    BaseRepositoryUID  string `json:"baseRepositoryUID,omitempty"`
+    RepositoryUID      string `json:"repositoryUID"`
+}
+
+type RpmRepoStatus struct {
+    Phase             RpmRepoPhase        `json:"phase,omitempty"`
+    RepositoryUID     string              `json:"repositoryUID,omitempty"`
+    ContentURL        string              `json:"contentURL,omitempty"`
+    RepositoryDigest  string              `json:"repositoryDigest,omitempty"`
+    PackageCount      int                 `json:"packageCount,omitempty"`
+    RpmDepends        map[string]RpmMeta  `json:"rpmDepends,omitempty"`
+    SourceJobUIDs     []string            `json:"sourceJobUIDs,omitempty"`
+    Transition        *RepositoryTransition `json:"transition,omitempty"`
+    UpdatedAt         *metav1.Time        `json:"updatedAt,omitempty"`
+    Conditions        []metav1.Condition  `json:"conditions,omitempty"`
+}
+```
+
+`RpmRepoPhase` 的稳定取值为 `Pending`、`Processing`、`Ready`、`Failed`。RpmRepo 会随 Job 完成持续推进，因此 `Ready` 和 `Failed` 都不是对象终态；`Ready` 表示当前已有可读版本，`Processing` 表示 transition 正在物化。推进失败时不清除已发布版本字段：存在旧版本时可继续以 `Ready` 对外服务并通过 condition 暴露本次失败，只有首次物化失败且没有可读版本时才使用 `Failed`。`RpmRepo` 创建时由 apiserver 设置 `status.phase=Pending`；只有 RpmRepo Controller 可以更新 status。
+
+```go
+type RepositoryState string
+
+const (
+    RepositoryCreating RepositoryState = "Creating"
+    RepositoryReady         RepositoryState = "Ready"
+    RepositoryFailed        RepositoryState = "Failed"
+    RepositoryDeleting      RepositoryState = "Deleting"
+)
+
+type ManifestReference struct {
+    JobName    string `json:"jobName"`
+    JobUID     string `json:"jobUID"`
+}
+
+type CreateRepositoryRequest struct {
+    RepositoryUID    string              `json:"repositoryUID"`
+    RepositoryName   string              `json:"repositoryName"`
+    Project          string              `json:"project"`
+    BuildName        string              `json:"buildName"`
+    TargetOS         string              `json:"targetOS"`
+    TargetArch       string              `json:"targetArch"`
+    BaseRepositoryUID string             `json:"baseRepositoryUID,omitempty"`
+    Manifests        []ManifestReference `json:"manifests"`
+}
+
+type RepositoryRecord struct {
+    SchemaVersion     int                 `json:"schemaVersion"`
+    RepositoryUID     string              `json:"repositoryUID"`
+    RepositoryName    string              `json:"repositoryName"`
+    Project           string              `json:"project"`
+    BuildName         string              `json:"buildName"`
+    TargetOS          string              `json:"targetOS"`
+    TargetArch        string              `json:"targetArch"`
+    BaseRepositoryUID string              `json:"baseRepositoryUID,omitempty"`
+    Manifests         []ManifestReference `json:"manifests"`
+    RequestDigest     string              `json:"requestDigest"`
+    State             RepositoryState     `json:"state"`
+    Attempt           int                 `json:"attempt"`
+    PackageCount      int                 `json:"packageCount,omitempty"`
+    RepositoryDigest  string              `json:"repositoryDigest,omitempty"`
+    ContentURL        string              `json:"contentURL,omitempty"`
+    RPMs              map[string]RPMMeta  `json:"rpms,omitempty"`
+    Failure           *FailureInfo        `json:"failure,omitempty"`
+    CreatedAt         Timestamp           `json:"createdAt"`
+    UpdatedAt         Timestamp           `json:"updatedAt"`
+    CompletedAt       *Timestamp          `json:"completedAt,omitempty"`
+}
+
+type RepositoryResponse struct {
+    RepositoryUID     string              `json:"repositoryUID"`
+    State             RepositoryState     `json:"state"`
+    Attempt           int                 `json:"attempt"`
+    PollAfterSeconds  int                 `json:"pollAfterSeconds,omitempty"`
+    ContentURL        string              `json:"contentURL,omitempty"`
+    RepositoryDigest string              `json:"repositoryDigest,omitempty"`
+    PackageCount      int                 `json:"packageCount,omitempty"`
+    RPMs              map[string]RPMMeta  `json:"rpms,omitempty"`
+    Failure           *FailureInfo        `json:"failure,omitempty"`
+    CreatedAt         Timestamp           `json:"createdAt"`
+    UpdatedAt         Timestamp           `json:"updatedAt"`
+    CompletedAt       *Timestamp          `json:"completedAt,omitempty"`
+}
+```
+
+请求摘要由规范化后的全部请求字段计算。`Manifests` 先按 `JobUID` 排序；重复引用、空输入、重复 `JobUID` 或不合法 UID 均返回 `422`。Artifact Manager 还必须重新计算并校验 `repositoryUID` 与规范化请求一致。相同 `repositoryUID` 和相同请求摘要是幂等重试；相同 UID 对应不同摘要返回 `409 RepositoryIdentityConflict`。
+
+`RPMMeta` 至少记录文件名、SHA-256、大小、RPM name、epoch/version/release、arch、source RPM、specName、provides 和 requires。键使用仓库内唯一文件名，不沿用老实现中容易碰撞的 `<rpmName>@<specName>` 作为唯一标识。
+
+### 9.6 内部 API
+
+当前实现只暴露 Artifact 上传/查询/下载、Manifest、实时日志和健康检查接口，不能支撑 RpmRepo Controller 请求仓库生成，也不能把 Artifact Manager 的私有 `${dataDir}` 暴露给其他组件。实现本章流程必须新增以下内部物化接口和仓库内容接口。RpmRepo Controller 不得通过现有 Artifact 下载接口逐个下载 RPM 后在 Controller Manager 本地生成仓库，否则会重复存储、传输和实现清理恢复逻辑。
+
+所有内部管理接口使用 `application/json`。成功响应统一返回 `RepositoryResponse`；失败响应使用第五章的 `APIError`，其中 `code` 是稳定的机器可读错误码，`message` 只供诊断，`retryable` 决定调用方能否自动重试。响应均包含 `X-Request-ID`。需要延迟重试的响应同时返回整数秒 `Retry-After`；调用方优先使用该 header，否则采用自身指数退避。
+
+`attempt` 从 1 开始，只在服务端接受一次新的执行尝试时增加。查询、相同请求的并发提交以及 Ready 结果重放均不增加。`pollAfterSeconds` 只在 `Creating` 时返回，首版固定为 5；它是轮询下限，不是完成期限。
+
+#### 9.6.1 提交物化
+
+```http
+POST /internal/v1/repositories
+Content-Type: application/json
+```
+
+请求体中的确定性 `repositoryUID` 同时作为物化操作的幂等键，不再要求额外的 `Idempotency-Key` 请求头。
+
+处理规则：
+
+| 条件 | HTTP 状态 | 响应与行为 |
+|------|-----------|------------|
+| 首次接受 | `202 Accepted` | 原子持久化 `Creating, attempt=1` 后入队，返回 `RepositoryResponse` 和 `Location: /internal/v1/repositories/{repositoryUID}` |
+| 相同请求正在执行或排队 | `202 Accepted` | 返回原 `Creating`，不重复入队、不增加 attempt |
+| 相同请求已经 Ready | `200 OK` | 返回原 Ready 结果 |
+| 相同请求处于可重试 Failed | `202 Accepted` | 原子增加 attempt、清空旧 Failure、写为 Creating 后重新入队 |
+| 相同请求处于不可重试 Failed | `200 OK` | 返回原 Failed 结果，不重新执行 |
+| 相同 UID、不同请求摘要 | `409 Conflict` | `RepositoryIdentityConflict` |
+| 请求字段非法、UID 计算不一致或 Manifest 引用重复 | `422 Unprocessable Entity` | 返回对应稳定错误，不创建记录 |
+| 接受前已确认 Manifest、Artifact 或基础仓过期 | `410 Gone` | `MaterializationInputExpired`，不创建或推进 attempt |
+| 内存待执行队列已满 | `429 Too Many Requests` | `RepositoryQueueFull`、`retryable=true` 和 `Retry-After: 5`；不得先创建 Creating 记录 |
+| 服务正在关闭、元数据存储暂不可用 | `503 Service Unavailable` | 稳定错误、`retryable=true` 和 `Retry-After` |
+
+只有成功持久化 Creating 记录后才能返回接受成功并入队。入队操作与记录写入不可能形成单一本地文件事务，因此服务必须在启动恢复和周期扫描时重新入队所有没有活动 worker 的 Creating 记录。响应不等待 `createrepo_c` 完成。
+
+#### 9.6.2 查询状态
+
+```http
+GET /internal/v1/repositories/{repositoryUID}
+```
+
+存在记录时统一返回 `200 OK` 和 `RepositoryResponse`：
+
+- `Creating` 包含 attempt 和 `pollAfterSeconds`；
+- `Ready` 必须包含不可变的 `contentURL`、`repositoryDigest`、`packageCount`、RPM 元数据和 `completedAt`；
+- `Failed` 必须包含 attempt 和 Failure，且 `Failure.retryable` 明确能否用完全相同的 POST 请求重试；
+- `Deleting` 只返回身份、状态和时间字段，不再返回可用内容地址。
+
+记录不存在或 tombstone 已完成清理时返回 `404 Not Found / RepositoryNotFound`。GET 从不改变状态或 attempt。
+
+#### 9.6.3 删除仓库
+
+```http
+DELETE /internal/v1/repositories/{repositoryUID}
+```
+
+删除是异步、幂等操作，不检查仓库是否正被物化任务读取：
+
+| 条件 | HTTP 状态 | 响应与行为 |
+|------|-----------|------------|
+| Creating、Ready 或 Failed | `202 Accepted` | 原子写为 Deleting，取消同 UID 的排队任务；运行任务不要求立即中断，最终发布前必须因状态不再是 Creating 而放弃发布 |
+| 已经 Deleting | `202 Accepted` | 返回原 Deleting，不重复创建清理任务 |
+| 记录不存在或删除已完成 | `204 No Content` | 视为删除成功 |
+
+DELETE 不使用请求体。进入 Deleting 后，相同 UID 的 POST 返回 `409 Conflict / RepositoryDeleting`，不能通过重提物化请求撤销删除。Artifact Manager 不因 Project、Build 或 RpmRepo API 对象删除而自行推断清理；保留期限到达或显式删除请求均可直接推进删除。
+
+#### 9.6.4 仓库内容
+
+```http
+GET /repositories/v1/{repositoryUID}/{path...}
+```
+
+只为 `Ready` 仓库提供只读内容。Creating 返回 `409 RepositoryNotReady`，Failed 和 Deleting 返回 `410 RepositoryUnavailable`，未知 UID 返回 404。路径必须经过规范化并限制在仓库目录中，支持 `GET`、`HEAD`、单区间 `Range`、`ETag` 和条件请求；不支持多区间 Range，目录列表关闭。`ETag` 使用目标文件 SHA-256 的强校验值。部署方可通过网络边界决定是否公开该接口。
+
+当前内部管理 API 暂不执行 Token 校验，只能暴露在受信任的组件网络中，并通过网络策略限制为 Controller Manager 访问。后续接入统一的组件身份认证时再增加认证，不改变接口业务语义。
+
+### 9.6.5 错误分类与停机
+
+以下错误不可使用相同 UID 自动重试：请求或身份冲突、Manifest 内容非法、RPM 无法解析、包冲突、架构不兼容、输入已经过期以及本地文件系统布局不满足硬链接要求。命令超时、`createrepo_c` 临时失败、瞬时 I/O 错误和磁盘空间不足标记为 `retryable=true`；调用方仍必须遵守退避，不能无限快速重试。服务端错误信息不得包含本地绝对路径、Token 或命令环境。
+
+优雅停机按以下顺序执行：停止接受新的 POST 和 DELETE，`/readyz` 立即失败；GET 状态和已打开的内容下载可继续；停止从队列取新任务；在 `--shutdown-timeout` 内等待运行任务完成。期限结束后取消命令，将对应记录持久化为 `Failed`，错误码为 `MaterializationInterrupted` 且 `retryable=true`。尚未启动的 Creating 记录保持不变，由下次启动重新入队。
+
+进程崩溃可能留下 Creating 记录。启动恢复若发现完整且校验通过的最终目录则补写 Ready；否则隔离残留工作目录，将记录改为 `Failed / MaterializationInterrupted / retryable=true`。恢复完成前不接受创建或删除请求，`/readyz` 保持失败。
+
+### 9.7 物化算法
+
+单次物化按以下顺序执行：
+
+1. 在 `repositoryUID` 粒度取得互斥锁，校验或创建并持久化 `Creating` 的 `RepositoryRecord`。
+2. 校验基础仓存在且为 `Ready`，并且 Project、目标 OS 和架构与请求一致。
+3. 按 Job UID 逐个读取唯一的 Job 上传清单，要求状态为 `Completed`，并在 Artifact Manager 内部重新计算清单摘要以验证本地元数据完整性。
+4. 只选择 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；流式计算 SHA-256 并与清单再次比对。
+5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 使用 Source RPM 推导，source RPM 使用自身名称推导；无法确定归属时整次请求失败。
+6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。
+7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
+8. 基础仓存在时，将其 `Packages` 中的 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用。基础仓和工作目录必须位于同一文件系统；首版硬链接失败不静默退化为完整复制。
+9. 从工作目录删除所有属于本次输入 spec 集合的旧 RPM，再将输入 Artifact 正文硬链接进去。Artifact 正文和仓库工作目录也必须位于同一文件系统。
+10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、最大输出、固定 locale、受限环境和资源限制。
+11. 重新解析生成的 primary metadata，确认 RPM 数量、文件摘要和解析结果与工作目录一致。
+12. 计算确定性的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256。
+13. 写入并 fsync `repository.json`，再将工作目录以不覆盖语义原子重命名为最终目录。
+14. 原子写入 `Ready` 元数据，并向等待该 UID 的请求广播完成。
+
+任何一步失败都不得暴露工作目录为可下载仓库，也不得修改基础仓或输入 Artifact。
+
+### 9.8 并发和一致性
+
+- 同一 `repositoryUID` 同时最多一个写操作；状态查询和 Ready 内容读取可并发。
+- 不同仓库可以并发物化，即使它们引用同一个 Ready 基础仓；基础仓不可变，因此读取无需串行化。
+- 清理不与物化建立引用或锁协调。清理先把目标原子移动到内部 trash，再异步删除；物化过程中已经打开的文件或已经建立的硬链接可继续使用，尚未打开的输入或基础仓在删除后读取失败，本次物化转为 Failed。
+- `baseRepositoryUID` 必须指向已经 Ready 的仓库，禁止引用 Creating、Failed 或自身；由此仓库依赖图保持无环。
+- 多个请求可以从同一基础仓产生不同分支。首版单活动 RpmRepo Controller 和同 key 串行队列决定某个 Build 的唯一后续版本；RpmRepo status 的 `resourceVersion` CAS、持久化 transition 和 repositoryUID 幂等约束用于阻止故障恢复期间的陈旧写入，不能替代 Leader Election。
+- Artifact Manager 不提供隐式“取最新仓库”接口，避免列表时间排序参与正确性判断。
+
+### 9.9 失败、重试和恢复
+
+| 场景 | 处理 |
+|------|------|
+| 清单不存在或未 Completed | `422 ManifestNotReady`，不启动物化 |
+| 基础仓不存在或不是 Ready | `422 BaseRepositoryNotReady` |
+| 同 UID 不同请求 | `409 RepositoryIdentityConflict` |
+| RPM 非法或 spec 无法识别 | 标记 `Failed`，错误不可使用同一 UID 重试 |
+| 硬链接返回跨文件系统 | 标记 `Failed / RepositoryFilesystemMismatch / retryable=false` |
+| `createrepo_c` 超时或临时失败 | 标记 `Failed / RepositoryCommandFailed / retryable=true`，保存截断后的 stderr，不发布目录 |
+| 磁盘空间不足 | 标记 `Failed / InsufficientStorage / retryable=true`，不发布目录 |
+| 输入 Manifest、Artifact 或基础仓在物化期间到期删除 | 标记 `Failed / MaterializationInputExpired / retryable=false`，不发布目录 |
+| 优雅停机超时或崩溃中断 | 标记 `Failed / MaterializationInterrupted / retryable=true`，相同请求可增加 attempt 重试 |
+| 提交响应丢失 | 调用方使用相同 UID 查询；禁止生成新 UID 盲目重试 |
+| 状态查询暂时失败 | RpmRepo Controller 指数退避，不重复提交不同请求 |
+| API 状态更新失败 | 仓库保持 Ready，RpmRepo Controller 继续重试 API 更新 |
+
+服务启动时先扫描 `.metadata/repositories` 和最终仓库目录：
+
+- 元数据为 Ready 且最终目录和 `repository.json` 摘要一致时恢复为 Ready；
+- Ready 元数据缺少最终目录或校验失败时标记 Failed，并阻止内容下载；
+- 最终目录存在但元数据仍为 Creating 时，校验 `repository.json` 和请求摘要；一致则补写 Ready，否则隔离并标记 Failed；
+- `.repository-work` 中超过恢复宽限期的目录在确认不对应活动 Worker 后安全清理；
+- 孤立最终目录不自动对外提供，记录指标并等待管理员处理。
+
+恢复扫描完成前 `/readyz` 返回失败。
+
+### 9.10 清理与保留
+
+仓库和 Artifact 生命周期分离：仓库中的 RPM 使用硬链接后拥有独立目录项，删除原 Artifact 不会破坏 Ready 仓库。清理器不判断对象是否正在被物化使用，到期后直接把目标移动到内部 trash。若删除与物化并发，已经打开的文件或已经建立的硬链接仍可继续使用；其他读取可能失败，物化任务必须终止且不得发布半成品。
+
+删除顺序：
+
+1. 将记录持久化为 `Deleting`，拒绝新的内容请求和基础仓引用；
+2. 把最终目录原子移动到内部 trash 目录；
+3. 持久化删除 tombstone；
+4. 后台逐级删除内容；
+5. 删除完成后移除元数据和 tombstone。
+
+崩溃恢复时继续处理 tombstone。不得直接对由请求字段拼接出的路径执行递归删除。
+
+### 9.11 配置和可观测性
+
+新增配置：
+
+| 参数 | 建议默认值 | 说明 |
+|------|------------|------|
+| `--createrepo-command` | `/usr/bin/createrepo_c` | 固定可执行文件路径 |
+| `--rpm-query-command` | `/usr/bin/rpm` | 读取 RPM 头信息的固定可执行文件路径 |
+| `--createrepo-workers` | `min(8, CPU)` | 单次生成 worker 数 |
+| `--repository-workers` | `2` | 并发物化仓库数 |
+| `--repository-queue-capacity` | `100` | 内存待执行队列上限；达到上限后新请求返回 429 |
+| `--rpmrepo-max-jobs-per-batch` | `20` | RpmRepo Controller 单次仓库推进最多包含的 Job 数 |
+| `--rpmrepo-max-input-bytes` | `20GiB` | 单批 Manifest 引用文件的总大小上限 |
+| `--repository-timeout` | `30m` | 单次物化最大时间 |
+| `--repository-work-ttl` | `24h` | 无活动任务工作目录的清理期限 |
+| `--repository-command-output-limit` | `64KiB` | stdout/stderr 各自保存上限 |
+| `--shutdown-timeout` | `30s` | 停机时等待正在运行的物化任务完成的最长时间 |
+
+至少暴露：物化请求数、Ready/Failed 数、排队和执行耗时、继承 RPM 数、替换 spec 数、最终 RPM 数、硬链接失败数、`createrepo_c` 失败和超时数、恢复结果、工作目录清理数、仓库内容读取字节数。结构化日志包含 `repositoryUID`、Project、Build name 和输入 Job UID，但不记录 Token。
+
+### 9.12 首版验收场景
+
+1. 无基础仓时从多个 Completed Manifest 生成可被 DNF 使用的首个物理版本。
+2. 基于 Ready 仓库替换一个 spec，未涉及的 RPM 保持不变，旧 spec RPM 全部消失。
+3. 同一 Build 的多个 Job 同时满足条件时，在上限内组成一个批次，只更新一次同名 RpmRepo；后续批次始终基于前一个已发布物理版本。
+4. 相同 UID、相同请求并发提交只产生一个最终仓库。
+5. 相同 UID、不同请求返回 409，原仓库不变。
+6. 输入清单损坏、RPM 损坏、文件名冲突和跨文件系统硬链接均不会发布半成品。
+7. `createrepo_c` 执行期间进程退出，重启后可恢复或清理，不暴露工作目录。
+8. Ready 后 RpmRepo Controller 更新 API 失败并重试时，不重新生成仓库。
+9. 基础仓或输入 Artifact 到期时可以直接删除；并行物化若尚未打开所需文件则以 `MaterializationInputExpired` 失败，且不得发布半成品仓库。
+10. 内容 API 不允许路径逃逸、符号链接跟随或目录列表。
+11. RpmRepo Controller 在 transition 写入后任意时点重启，均使用原输入 Job 集合、基础仓和 repositoryUID 恢复，不产生分叉版本。
+
+## 十、日志处理
+
+### 10.1 最终日志文件
 
 容器运行期间的实时日志和 Job 结束后的最终日志使用同一份活动日志正文。Artifact Manager 持续追加实时日志；Runner 封账后，服务将该正文原子转换为 `relativePath=logs/container.log`、`category=log` 的普通 `Completed` Artifact，用于长期归档、查询和下载，不再要求 Runner 重复上传完整日志文件。
 
-### 9.2 实时日志
+### 10.2 实时日志
 
 实时日志使用独立于 Artifact 分片上传的追加协议。每个 Job 首版只允许一个 `stream=combined` 的日志流，按 Runner 捕获顺序合并 stdout 和 stderr。服务端以 `(project, jobUID, stream)` 唯一标识日志流，Job 名仅用于路由和展示。
 
@@ -675,7 +1114,7 @@ ${dataDir}/.metadata/logs/{project}/{jobUID}/combined.json
 
 `combined.index.jsonl` 是已提交 chunk 边界的事实来源，`combined.json` 是可重建的汇总和状态来源。步骤 1 或 2 后崩溃产生的未提交尾部必须在恢复阶段截断，不能直接对 Runner 返回成功。
 
-#### 9.2.1 追加日志块
+#### 10.2.1 追加日志块
 
 ```http
 POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
@@ -716,7 +1155,7 @@ X-Content-SHA256: <解压后正文的sha256>
 
 Runner 在本地维护待确认缓冲区，每达到 256 KiB 或 500 ms 发送一个 chunk，同一日志流同一时间最多发送一个未确认请求。只有服务端确认后才能丢弃对应本地字节；网络错误使用相同 sequence 和正文重试。服务端返回 429 或 503 时，Runner 按 `Retry-After` 和指数退避重试，并限制本地缓冲区大小；超过上限时应暂停读取或将日志溢写到本地文件，不能静默丢弃日志。
 
-#### 9.2.2 查询日志流状态
+#### 10.2.2 查询日志流状态
 
 ```http
 GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status?jobUID={uid}&stream=combined
@@ -735,7 +1174,7 @@ Authorization: Bearer <runner-token>
 
 Runner 启动、重连或遇到结果未知时查询该接口，并以 `nextSequence` 作为恢复点。Runner 必须在本地保留尚未被服务端确认的日志；如果服务端请求的 sequence 已不在 Runner 本地缓冲或落盘文件中，Runner 将 Job 标记为日志不完整，不能伪造缺失数据继续封账。
 
-#### 9.2.3 SSE 实时读取
+#### 10.2.3 SSE 实时读取
 
 ```http
 GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream?jobUID={uid}&stream=combined&afterSequence=100
@@ -780,7 +1219,7 @@ X-Artifact-ID: art-log-01
 
 `X-Artifact-ID` 只在日志已经封账时返回。日志流完成后，接口继续返回相同正文和这些响应头，避免 Web UI 因重定向产生不同处理流程；最终日志的独立下载仍使用 Artifact 内容接口。
 
-#### 9.2.4 Web UI 展示流程
+#### 10.2.4 Web UI 展示流程
 
 Web UI 使用 Range 获取已有日志，再用 SSE 接收新增日志：
 
@@ -825,7 +1264,7 @@ data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
 
 前端刷新 `TextDecoder` 剩余内容、关闭 `EventSource`、将状态更新为 Completed，并显示 `/artifacts/v1/artifacts/{artifactID}/content` 的完整日志下载入口。页面隐藏时可以降低渲染频率，但仍需持续消费事件并保存 byte offset 和 sequence。
 
-#### 9.2.5 日志封账
+#### 10.2.5 日志封账
 
 Job 执行结束且全部日志 chunk 已确认后，Runner 调用：
 
@@ -868,7 +1307,7 @@ Content-Type: application/json
 
 重复完成请求必须返回同一个 Artifact；相同幂等键或已完成日志流携带不同的 `lastSequence`、大小或摘要时返回 409。最终日志 Artifact 可以加入 JobUploadManifest；日志是否为必需文件由 Job 类型决定。日志封账失败时保留活动正文和可恢复状态，不能要求 Runner 从头上传。
 
-#### 9.2.6 崩溃恢复和清理
+#### 10.2.6 崩溃恢复和清理
 
 服务启动时加载日志元数据并校验正文长度：
 
@@ -883,9 +1322,9 @@ Content-Type: application/json
 
 Job 终止后长时间没有封账的 Open 日志流按 `--active-log-ttl` 过期并异步清理；仍处于可运行阶段的 Job 不得仅因长时间无日志而过期。最终日志 Artifact 进入普通 `category=log` 保留策略。
 
-## 十、上传 Token 校验
+## 十一、上传 Token 校验
 
-### 10.1 Runner 上传
+### 11.1 Runner 上传
 
 Runner 使用现有短期 `ebs:runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 公开 Token 校验接口：
 
@@ -936,7 +1375,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 
 该接口只提供 Token 认证并返回 Token 自带的 scopes，不接受调用方指定待校验 scope，也不承担资源授权；持有有效 Token 的客户端可以直接调用。各调用方必须自行检查所需 scope。上传和下载文件正文不会经过 Gateway。后续需要加强权限时，再扩展为基于 Job/Runner 状态的动态授权，首版不实现。
 
-## 十一、配额与安全
+## 十二、配额与安全
 
 至少配置以下限制：
 
@@ -963,7 +1402,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 - 可选接入恶意文件扫描；扫描完成前 Artifact 保持不可下载。
 - 服务端不得自动解压客户端上传的归档文件。
 
-## 十二、清理与保留
+## 十三、清理与保留
 
 后台清理任务负责：
 
@@ -984,7 +1423,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 | artifact | 由 Project 策略决定 |
 | log | 30 天 |
 
-## 十三、与 Job Status 的关系
+## 十四、与 Job Status 的关系
 
 Job Status 只保存结果摘要和 Artifact Manager 定位信息，不保存完整 Artifact 列表：
 
@@ -999,7 +1438,7 @@ status:
 
 完整产物列表通过 Artifact API 查询。上述字段只是可 watch 的完成信号和定位摘要，Artifact Manager 的本地 Job 上传清单仍是完整文件集合的事实来源。Runner 必须先完成清单封账，再更新 Job Status；RpmRepo Controller 收到 Job 事件后，根据 `jobUID` 查询唯一的 Completed 清单，不能根据当前 Artifact 列表推断完整性。Manifest digest 只用于 Artifact Manager 内部幂等和完整性校验。
 
-## 十四、错误处理
+## 十五、错误处理
 
 | 场景 | 处理 |
 |------|------|
@@ -1028,7 +1467,7 @@ status:
 | SSE 普通网络中断 | 浏览器携带 `Last-Event-ID` 自动重连，服务端从下一 sequence 继续 |
 | Web UI 无法确认 SSE 恢复点 | 关闭 SSE，从已记录的 byte offset 通过 Range 补齐后重新连接 |
 
-## 十五、配置
+## 十六、配置
 
 | 配置 | 建议默认值 | 说明 |
 |------|------------|------|
@@ -1056,7 +1495,7 @@ status:
 | `--max-log-size` | 按部署配置 | 单 Job 实时日志总大小上限 |
 | `--max-log-rate` | 按部署配置 | 单 Runner 或单 Job 日志写入速率上限 |
 
-## 十六、可观测性
+## 十七、可观测性
 
 指标至少包括：
 
@@ -1083,7 +1522,7 @@ GET /healthz   # 进程存活
 GET /readyz    # 本地持久化目录可用，元数据索引已加载
 ```
 
-## 十七、首版实现范围
+## 十八、首版实现范围
 
 首版实现：
 
@@ -1100,9 +1539,10 @@ GET /readyz    # 本地持久化目录可用，元数据索引已加载
 11. Job Status 中 Artifact 完成摘要与 RpmRepo Controller 消费约定。
 12. 活动日志一致性 Range 读取、SSE 实时展示、Web UI 断线补齐及 `container.log` Artifact 幂等封账。
 13. 实时日志的崩溃恢复、限流、背压和过期清理。
+14. 由 RpmRepo Controller 驱动、基于 Completed Manifest 和显式基础仓的 RPM 仓库物化。
 
 后续扩展：
 
 - Artifact 内容扫描。
 - Project 自定义保留策略。
-- Artifact 复制和发布流程。
+- 仓库签名、跨实例复制和外部镜像发布流程。
