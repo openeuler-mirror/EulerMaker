@@ -21,9 +21,10 @@ import (
 )
 
 type Server struct {
-	cfg   Config
-	store *Store
-	auth  Authorizer
+	cfg          Config
+	store        *Store
+	auth         Authorizer
+	repositories *repositoryManager
 }
 
 func NewServer(c Config, a Authorizer) (*http.Server, error) {
@@ -34,8 +35,13 @@ func NewServer(c Config, a Authorizer) (*http.Server, error) {
 	if e = st.CleanupTemporary(c.TemporaryUploadTTL); e != nil {
 		return nil, e
 	}
-	s := &Server{cfg: c, store: st, auth: a}
-	return &http.Server{Addr: c.Listen, Handler: s, ReadHeaderTimeout: 10 * time.Second}, nil
+	s, e := newArtifactServer(c, a, st, newFilesystemMaterializer(c, st))
+	if e != nil {
+		return nil, e
+	}
+	server := &http.Server{Addr: c.Listen, Handler: s, ReadHeaderTimeout: 10 * time.Second}
+	server.RegisterOnShutdown(s.repositories.stop)
+	return server, nil
 }
 func NewHandler(c Config, a Authorizer) (http.Handler, error) {
 	st, e := NewStore(c.DataDir)
@@ -45,7 +51,15 @@ func NewHandler(c Config, a Authorizer) (http.Handler, error) {
 	if e = st.CleanupTemporary(c.TemporaryUploadTTL); e != nil {
 		return nil, e
 	}
-	return &Server{cfg: c, store: st, auth: a}, nil
+	return newArtifactServer(c, a, st, newFilesystemMaterializer(c, st))
+}
+
+func newArtifactServer(c Config, a Authorizer, store *Store, materializer repositoryMaterializer) (*Server, error) {
+	repositories, err := newRepositoryManager(c, materializer)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{cfg: c, store: store, auth: a, repositories: repositories}, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -54,12 +68,136 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/internal/v1/repositories/") || r.URL.Path == "/internal/v1/repositories" {
+		s.routeRepositoryManagement(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/repositories/v1/") {
+		s.repositoryContent(w, r)
+		return
+	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) >= 2 && parts[0] == "artifacts" && parts[1] == "v1" {
 		s.route(w, r, parts[2:])
 		return
 	}
 	writeErr(w, r, 404, "NotFound", "not found", false, nil)
+}
+
+func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/internal/v1/repositories" {
+		if r.Method != http.MethodPost {
+			method(w, http.MethodPost)
+			return
+		}
+		var request CreateRepositoryRequest
+		if err := decodeJSON(r.Body, s.cfg.MaxMetadataSize, &request); err != nil {
+			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
+			return
+		}
+		record, status, err := s.repositories.submit(request)
+		if err != nil {
+			s.writeRepositoryError(w, r, err)
+			return
+		}
+		w.Header().Set("Location", "/internal/v1/repositories/"+record.RepositoryUID)
+		writeJSON(w, status, repositoryResponse(record))
+		return
+	}
+	uid := strings.TrimPrefix(r.URL.Path, "/internal/v1/repositories/")
+	if !validIdentifier(uid) || strings.Contains(uid, "/") {
+		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		record, ok := s.repositories.get(uid)
+		if !ok {
+			writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, repositoryResponse(record))
+	case http.MethodDelete:
+		record, status, err := s.repositories.delete(uid)
+		if err != nil {
+			s.writeRepositoryError(w, r, err)
+			return
+		}
+		if status == http.StatusNoContent {
+			w.WriteHeader(status)
+			return
+		}
+		writeJSON(w, status, repositoryResponse(record))
+	default:
+		method(w, "GET, DELETE")
+	}
+}
+
+func (s *Server) writeRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
+	var typed *repositoryError
+	if !errors.As(err, &typed) {
+		typed = &repositoryError{code: "RepositoryInternalError", status: http.StatusInternalServerError, retryable: true}
+	}
+	if typed.status == 0 {
+		typed.status = http.StatusInternalServerError
+	}
+	if typed.status == http.StatusTooManyRequests || typed.status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "5")
+	}
+	writeErr(w, r, typed.status, typed.code, typed.code, typed.retryable, nil)
+}
+
+func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		method(w, "GET, HEAD")
+		return
+	}
+	if strings.Contains(r.Header.Get("Range"), ",") {
+		writeErr(w, r, http.StatusRequestedRangeNotSatisfiable, "MultipleRangesNotSupported", "multiple ranges are not supported", false, nil)
+		return
+	}
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/v1/"), "/", 2)
+	if len(parts) != 2 || !validIdentifier(parts[0]) {
+		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
+		return
+	}
+	record, ok := s.repositories.get(parts[0])
+	if !ok {
+		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
+		return
+	}
+	if record.State == RepositoryCreating {
+		writeErr(w, r, http.StatusConflict, "RepositoryNotReady", "repository is not ready", true, nil)
+		return
+	}
+	if record.State != RepositoryReady {
+		writeErr(w, r, http.StatusGone, "RepositoryUnavailable", "repository is unavailable", false, nil)
+		return
+	}
+	relative, err := safeRelative(parts[1])
+	if err != nil {
+		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
+		return
+	}
+	path := filepath.Join(repositoryVersionPath(s.cfg.DataDir, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID), filepath.FromSlash(relative))
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
+		return
+	}
+	defer file.Close()
+	sum, err := fileSHA256(path)
+	if err != nil {
+		writeErr(w, r, http.StatusServiceUnavailable, "RepositoryStorageUnavailable", "repository storage unavailable", true, nil)
+		return
+	}
+	w.Header().Set("ETag", `"`+sum+`"`)
+	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
 }
 func (s *Server) route(w http.ResponseWriter, r *http.Request, p []string) {
 	if len(p) == 3 && p[0] == "artifacts" && p[1] != "" && p[2] == "content" && r.Method == http.MethodGet {
