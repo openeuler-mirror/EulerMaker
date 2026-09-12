@@ -286,7 +286,7 @@ func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
 	if code == "JobQuotaExceeded" {
 		status = 413
 	}
-	if code == "IdempotencyConflict" || code == "ArtifactPathConflict" || code == "UploadInProgress" || code == "SequenceGap" || code == "SequenceConflict" || code == "LogAlreadyFinalized" || code == "JobIdentityConflict" || strings.Contains(strings.ToLower(code), "conflict") {
+	if code == "IdempotencyConflict" || code == "ArtifactPathConflict" || code == "UploadInProgress" || code == "SequenceGap" || code == "SequenceConflict" || code == "LogAlreadyFinalized" || code == "JobIdentityConflict" || code == "ManifestAlreadyCompleted" || strings.Contains(strings.ToLower(code), "conflict") {
 		status = 409
 	}
 	writeErr(w, r, status, code, code, status >= 500, nil)
@@ -297,29 +297,20 @@ func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j s
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
-	if k := r.Header.Get("Idempotency-Key"); k == "" || len(k) > 128 {
-		writeErr(w, r, 400, "InvalidIdempotencyKey", "invalid idempotency key", false, nil)
-		return
-	}
 	var in CompleteManifestRequest
 	if decodeJSON(r.Body, 1<<20, &in) != nil {
 		writeErr(w, r, 400, "InvalidRequest", "invalid request", false, nil)
 		return
 	}
-	m, e := s.store.CompleteManifest(p, j, id.Name, r.Header.Get("Idempotency-Key"), in)
+	m, e := s.store.CompleteManifest(p, j, id.Name, in)
 	if e != nil {
 		s.mapErr(w, r, e)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"jobUID": m.JobUID, "generation": m.Generation, "state": m.State, "artifactCount": len(m.Files), "digest": m.Digest})
+	writeJSON(w, 200, map[string]any{"jobUID": m.JobUID, "state": m.State, "artifactCount": len(m.Files), "digest": m.Digest})
 }
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string) {
-	g, e := strconv.ParseInt(r.URL.Query().Get("generation"), 10, 64)
-	if e != nil {
-		writeErr(w, r, 400, "InvalidRequest", "invalid generation", false, nil)
-		return
-	}
-	m, ok := s.store.GetManifest(p, j, r.URL.Query().Get("jobUID"), g)
+	m, ok := s.store.GetManifest(p, j, r.URL.Query().Get("jobUID"))
 	if !ok {
 		writeErr(w, r, 404, "NotFound", "manifest not found", false, nil)
 		return

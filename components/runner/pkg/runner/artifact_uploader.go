@@ -17,13 +17,11 @@ import (
 	"unicode/utf8"
 )
 
-const artifactGeneration int64 = 1
-
 type ArtifactRemote interface {
 	LogStatus(context.Context, string, string, string) (LogStatus, error)
 	UploadArtifact(context.Context, string, string, string, string, UploadArtifactInput) (ArtifactRecord, error)
-	CompleteManifest(context.Context, string, string, string, CompleteManifestInput) (CompletedManifest, error)
-	GetManifest(context.Context, string, string, string, int64) (CompletedManifest, error)
+	CompleteManifest(context.Context, string, string, CompleteManifestInput) (CompletedManifest, error)
+	GetManifest(context.Context, string, string, string) (CompletedManifest, error)
 }
 
 type ArtifactProcessor struct {
@@ -88,13 +86,12 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].RelativePath < files[j].RelativePath })
-	input := CompleteManifestInput{JobUID: job.Metadata.UID, Generation: artifactGeneration, Files: files}
-	key := job.Metadata.UID + "-manifest-1"
-	manifest, err := p.completeManifestWithRetry(ctx, job, key, input)
+	input := CompleteManifestInput{JobUID: job.Metadata.UID, Files: files}
+	manifest, err := p.completeManifestWithRetry(ctx, job, input)
 	if err != nil {
 		return CompletedManifest{}, err
 	}
-	if manifest.State != "Completed" || manifest.Generation != artifactGeneration || manifest.ArtifactCount != len(files) || manifest.Digest == "" {
+	if manifest.JobUID != job.Metadata.UID || manifest.State != "Completed" || manifest.ArtifactCount != len(files) {
 		return CompletedManifest{}, fmt.Errorf("artifact manifest completion response does not match request")
 	}
 	return manifest, nil
@@ -290,15 +287,15 @@ func (p *ArtifactProcessor) uploadWithRetry(ctx context.Context, job JobResource
 	}
 }
 
-func (p *ArtifactProcessor) completeManifestWithRetry(ctx context.Context, job JobResource, key string, input CompleteManifestInput) (CompletedManifest, error) {
+func (p *ArtifactProcessor) completeManifestWithRetry(ctx context.Context, job JobResource, input CompleteManifestInput) (CompletedManifest, error) {
 	delay := time.Second
 	for {
-		manifest, err := p.Remote.CompleteManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, key, input)
+		manifest, err := p.Remote.CompleteManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, input)
 		if err == nil {
 			return manifest, nil
 		}
-		known, getErr := p.Remote.GetManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, job.Metadata.UID, artifactGeneration)
-		if getErr == nil && known.State == "Completed" && known.ArtifactCount == len(input.Files) && known.Digest != "" {
+		known, getErr := p.Remote.GetManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, job.Metadata.UID)
+		if getErr == nil && known.JobUID == input.JobUID && known.State == "Completed" && known.ArtifactCount == len(input.Files) {
 			return known, nil
 		}
 		if !retryableArtifactError(err) {

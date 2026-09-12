@@ -469,8 +469,6 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 	} else {
 		status.ResultRoot = "artifact://" + job.Metadata.UID
 		status.ArtifactState = "Completed"
-		status.ArtifactGeneration = manifest.Generation
-		status.ArtifactDigest = manifest.Digest
 		status.ArtifactCount = manifest.ArtifactCount
 		if executionErr != nil {
 			status.Phase = "Failed"

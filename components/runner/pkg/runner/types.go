@@ -112,17 +112,15 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase              string     `json:"phase,omitempty"`
-	Stage              string     `json:"stage,omitempty"`
-	Runner             string     `json:"runner,omitempty"`
-	StartTime          *time.Time `json:"startTime,omitempty"`
-	EndTime            *time.Time `json:"endTime,omitempty"`
-	ResultRoot         string     `json:"resultRoot,omitempty"`
-	ArtifactState      string     `json:"artifactState,omitempty"`
-	ArtifactGeneration int64      `json:"artifactGeneration,omitempty"`
-	ArtifactDigest     string     `json:"artifactDigest,omitempty"`
-	ArtifactCount      int        `json:"artifactCount,omitempty"`
-	Message            string     `json:"message,omitempty"`
+	Phase         string     `json:"phase,omitempty"`
+	Stage         string     `json:"stage,omitempty"`
+	Runner        string     `json:"runner,omitempty"`
+	StartTime     *time.Time `json:"startTime,omitempty"`
+	EndTime       *time.Time `json:"endTime,omitempty"`
+	ResultRoot    string     `json:"resultRoot,omitempty"`
+	ArtifactState string     `json:"artifactState,omitempty"`
+	ArtifactCount int        `json:"artifactCount,omitempty"`
+	Message       string     `json:"message,omitempty"`
 }
 
 type WatchEvent struct {

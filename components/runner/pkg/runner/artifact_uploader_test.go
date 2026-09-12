@@ -33,17 +33,17 @@ func (f *fakeArtifactRemote) UploadArtifact(_ context.Context, project, job, _ s
 	}, nil
 }
 
-func (f *fakeArtifactRemote) CompleteManifest(_ context.Context, _, _ string, _ string, input CompleteManifestInput) (CompletedManifest, error) {
+func (f *fakeArtifactRemote) CompleteManifest(_ context.Context, _, _ string, input CompleteManifestInput) (CompletedManifest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.manifest = input
 	if f.manifestErr != nil {
 		return CompletedManifest{}, f.manifestErr
 	}
-	return CompletedManifest{JobUID: input.JobUID, Generation: input.Generation, State: "Completed", ArtifactCount: len(input.Files), Digest: "sha256:manifest"}, nil
+	return CompletedManifest{JobUID: input.JobUID, State: "Completed", ArtifactCount: len(input.Files)}, nil
 }
 
-func (f *fakeArtifactRemote) GetManifest(context.Context, string, string, string, int64) (CompletedManifest, error) {
+func (f *fakeArtifactRemote) GetManifest(context.Context, string, string, string) (CompletedManifest, error) {
 	return CompletedManifest{}, os.ErrNotExist
 }
 
@@ -67,7 +67,7 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalize artifacts: %v", err)
 	}
-	if manifest.ArtifactCount != 3 || manifest.Digest != "sha256:manifest" {
+	if manifest.JobUID != "uid-a" || manifest.ArtifactCount != 3 {
 		t.Fatalf("unexpected manifest: %#v", manifest)
 	}
 	remote.mu.Lock()
