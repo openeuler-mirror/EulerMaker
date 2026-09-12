@@ -2,8 +2,14 @@ package main
 
 import (
 	artifact "artifact-manager/pkg/artifact"
+	"context"
+	"errors"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 func main() {
@@ -20,5 +26,24 @@ func main() {
 		log.Fatal(e)
 	}
 	log.Printf("artifact-manager listening on %s", c.Listen)
-	log.Fatal(s.ListenAndServe())
+	serverError := make(chan error, 1)
+	go func() { serverError <- s.ListenAndServe() }()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-serverError:
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case <-signals:
+		ctx, cancel := context.WithTimeout(context.Background(), c.ShutdownTimeout)
+		defer cancel()
+		if err := s.Shutdown(ctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("artifact-manager shutdown failed: %v", err)
+		}
+		select {
+		case <-serverError:
+		case <-time.After(time.Second):
+		}
+	}
 }

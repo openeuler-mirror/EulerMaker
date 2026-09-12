@@ -17,7 +17,7 @@ RUN go build -ldflags="-s -w" -o artifact-manager ./cmd/server/
 FROM openeuler/openeuler:24.03-lts
 
 RUN dnf update -y && \
-    dnf install -y ca-certificates shadow-utils && \
+    dnf install -y ca-certificates createrepo_c rpm shadow-utils && \
     dnf clean all
 
 RUN groupadd ebs && useradd -g ebs -s /sbin/nologin ebs
