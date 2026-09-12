@@ -66,7 +66,7 @@ projects/{project}/jobs/{jobUID}/{safeRelativePath}
 
 本地后端以 `--data-dir` 为根目录，将存储键映射为正文路径。上传中的文件写入 `${dataDir}/.uploads/{artifactID}.tmp`，校验完成后在同一文件系统内原子重命名到最终路径。服务不得跟随符号链接，并必须验证规范化后的路径始终位于数据根目录内。
 
-Artifact 元数据写入 `${dataDir}/.metadata/artifacts/{artifactID}.json`，Job 上传清单写入 `${dataDir}/.metadata/jobs/{project}/{jobUID}/manifest-{generation}.json`。元数据先写入临时文件，完成文件和父目录的 `fsync` 后原子重命名。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
+Artifact 元数据写入 `${dataDir}/.metadata/artifacts/{artifactID}.json`，Job 上传清单写入 `${dataDir}/.metadata/jobs/{project}/{jobUID}/manifest.json`。元数据先写入临时文件，完成文件和父目录的 `fsync` 后原子重命名。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
 
 RPM 路径使用 `packages/{fileName}`，例如 `packages/kernel-6.6.rpm`。日志使用 `logs/` 作为一级目录。
 
@@ -165,26 +165,16 @@ type ManifestFile struct {
     Required    bool             `json:"required"`
 }
 
-type ConsumerHold struct {
-    ID        string    `json:"id"`
-    Owner     string    `json:"owner"`
-    CreatedAt Timestamp `json:"createdAt"`
-    ExpiresAt Timestamp `json:"expiresAt"`
-}
-
 type JobUploadManifest struct {
     SchemaVersion  int            `json:"schemaVersion"`
     Project        string         `json:"project"`
     JobName        string         `json:"jobName"`
     JobUID         string         `json:"jobUID"`
     RunnerName     string         `json:"runnerName"`
-    Generation     int64          `json:"generation"`
-    IdempotencyKey string         `json:"idempotencyKey"`
     Files          []ManifestFile `json:"files"`
     Digest         string         `json:"digest,omitempty"`
     State          ManifestState  `json:"state"`
     Failure        *FailureInfo   `json:"failure,omitempty"`
-    Holds          []ConsumerHold `json:"holds,omitempty"`
     CreatedAt      Timestamp      `json:"createdAt"`
     UpdatedAt      Timestamp      `json:"updatedAt"`
     CompletedAt    *Timestamp     `json:"completedAt,omitempty"`
@@ -199,17 +189,16 @@ Open -> Completing -> Completed
                   \-> Failed
 ```
 
-`files` 中的路径必须唯一。清单完成后不可增加、删除或替换文件；确需补传时必须创建新的 `generation`，消费者必须读取明确的 generation，不能隐式跟随最新版本。
+`files` 中的路径必须唯一。每个 `(project, jobUID)` 最多只能有一个 Manifest 成功进入 `Completed`；清单完成后不可增加、删除或替换文件。校验失败不会持久化一个可供选择的清单版本，Runner 修正或补传后仍使用同一个 Manifest 完成接口原样重试。
 
 `digest` 对按 `relativePath` 排序后的规范字段计算 SHA-256，不直接对未规范化的 JSON 文本计算，保证相同清单始终产生相同摘要。
 
-`Generation` 从 1 开始。`Files` 至少包含一个条目，并按 `relativePath` 排序持久化；`artifactID` 和 `relativePath` 在清单内都必须唯一。首版的 `manifest/complete` 同时提交并封账清单，`Open` 和 `Completing` 是服务端持久化过程中的可恢复状态，不提供单独编辑 Open 清单的公共接口。
+`Files` 至少包含一个条目，并按 `relativePath` 排序持久化；`artifactID` 和 `relativePath` 在清单内都必须唯一。首版的 `manifest/complete` 同时提交并封账清单，`Open` 和 `Completing` 是服务端持久化过程中的可恢复状态，不提供单独编辑 Open 清单的公共接口。
 
 摘要输入逐项使用 UTF-8 编码，数字使用不带前导零的十进制，布尔值使用 `true/false`：
 
 ```text
 artifact-manifest-v1\n
-generation\n
 relativePath\0artifactID\0category\0size\0sha256\0required\n
 ...
 ```
@@ -350,7 +339,6 @@ API 错误响应的 `Content-Type` 为 `application/json`，客户端只能依�
 | `size`、offset | `int64` 非负数，并受部署配额限制 |
 | 单文件 SHA-256 | 64 位小写十六进制；Manifest digest 使用 `sha256:` 前缀 |
 | `idempotencyKey` | 1–128 个可打印 ASCII 字符，不得包含空白；同一作用域内唯一 |
-| `generation` | 从 1 开始的正 `int64` |
 
 持久化记录的不可变字段不得通过更新接口修改。状态更新必须验证合法状态转换；失败记录不得包含 Token、文件正文、绝对本地路径或敏感签名材料。
 
@@ -373,14 +361,12 @@ type UploadArtifactResponse struct {
 }
 
 type CompleteManifestRequest struct {
-    JobUID     string         `json:"jobUID"`
-    Generation int64          `json:"generation"`
-    Files      []ManifestFile `json:"files"`
+    JobUID string         `json:"jobUID"`
+    Files  []ManifestFile `json:"files"`
 }
 
 type CompleteManifestResponse struct {
     JobUID        string        `json:"jobUID"`
-    Generation    int64         `json:"generation"`
     State         ManifestState `json:"state"`
     ArtifactCount int           `json:"artifactCount"`
     Digest        string        `json:"digest"`
@@ -536,14 +522,12 @@ Runner 完成全部单文件上传后提交最终清单：
 ```http
 POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
 Authorization: Bearer <runner-token>
-Idempotency-Key: <jobUID>-manifest-<generation>
 Content-Type: application/json
 ```
 
 ```json
 {
   "jobUID": "e32450b8-...",
-  "generation": 1,
   "files": [
     {
       "artifactID": "art-01...",
@@ -557,35 +541,34 @@ Content-Type: application/json
 }
 ```
 
-服务以 `(project, jobUID, generation)` 为粒度加锁，并验证：
+服务以 `(project, jobUID)` 为粒度加锁，并验证：
 
 1. Runner Token 仍然有效，URL、请求清单与 Artifact 中的 project、jobName、jobUID 归属一致。
 2. 清单内路径唯一，且每个 Artifact 都属于该 Job。
 3. 所有必需 Artifact 均为 `Completed`。
 4. Artifact 的路径、大小和 SHA-256 与清单一致。
-5. 同一 generation 尚未由不同内容完成。
+5. 该 Job 尚未由不同内容完成 Manifest。
 
-验证成功后计算确定性的清单摘要，原子写入 `Completed` 清单。相同幂等键或相同内容的重复请求返回原结果；已经完成的 generation 收到不同内容时返回 `409 Conflict`。
+验证成功后计算确定性的清单摘要，原子写入 `Completed` 清单。相同 Job UID 和相同规范化文件集合的重复请求返回原结果；已经完成的 Job 收到不同清单内容时返回 `409 Conflict`。Manifest 完成接口不使用独立幂等键，Job UID 即为幂等作用域。
 
 ```json
 {
   "jobUID": "e32450b8-...",
-  "generation": 1,
   "state": "Completed",
   "artifactCount": 1,
   "digest": "sha256:..."
 }
 ```
 
-清单完成后禁止为该 generation 创建或完成新的 Artifact 上传。该接口是一次 Job 产物集合的封账边界，不能通过扫描当前已有 Artifact 推断上传是否结束。
+清单完成后禁止为该 Job 创建或完成新的 Artifact 上传。该接口是一次 Job 产物集合的唯一封账边界，不能通过扫描当前已有 Artifact 推断上传是否结束。
 
 ### 6.3 查询 Job 上传清单
 
 ```http
-GET /artifacts/v1/projects/{project}/jobs/{job}/manifest?jobUID={uid}&generation={generation}
+GET /artifacts/v1/projects/{project}/jobs/{job}/manifest?jobUID={uid}
 ```
 
-接口返回固定 generation 的清单状态、摘要和文件列表。Repo Controller 等消费者只有在清单状态为 `Completed` 时才能使用其中的 Artifact，并应记录和校验返回的 `digest`。消费者不得直接读取 Artifact Manager 的本地元数据文件。
+接口返回该 Job 唯一清单的状态和文件列表。RpmRepo Controller 等消费者只有在清单状态为 `Completed` 时才能使用其中的 Artifact。Manifest digest 是 Artifact Manager 的内部完整性和幂等字段，不要求消费者记录或回传。消费者不得直接读取 Artifact Manager 的本地元数据文件。
 
 ## 七、查询与下载 API
 
@@ -641,7 +624,7 @@ Runner 执行完成后扫描 Job 结果目录并生成 manifest：
 4. 上传请求失败时使用相同幂等键整文件重传。
 5. 确认每个必需文件均已返回 `Completed`。
 6. 调用 Job 上传清单完成接口，由 Artifact Manager 校验并封账全部必需文件。
-7. 清单完成后更新 Job 的 `artifactState`、`artifactGeneration`、`artifactDigest` 和 `artifactCount`，再将 Job 更新为 `phase=Completed`；必需产物上传或清单封账失败时更新为 `Failed`。
+7. 清单完成后更新 Job 的 `artifactState` 和 `artifactCount`，再将 Job 更新为 `phase=Completed`；必需产物上传或清单封账失败时更新为 `Failed`。Manifest digest 只由 Artifact Manager 保存，不写入 Job Status。
 
 Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文件数量限流。上传成功前保留本地文件。
 
@@ -990,7 +973,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 - 清理无元数据记录的孤儿文件或对象。
 - 处理 Project 或 Job 删除产生的异步清理任务。
 
-`Completed` Job 上传清单引用的 Artifact 不得被单独清理。清理任务必须以清单为边界，在确认清单达到保留期限且没有正在消费后，先删除其引用的 Artifact，再删除清单元数据。首版应保证 `artifact` 的保留时间覆盖 Repo Controller 的最大等待和重试时间；后续可在本地清单元数据中增加带 TTL 的 Consumer Hold，避免生成 repo 期间输入过期。Consumer Hold 属于 Artifact Manager 私有元数据，不需要新增 ebs-apiserver 对象。
+`Completed` Job 上传清单引用的 Artifact 不得被单独清理。清理任务以清单为边界，到达保留期限后直接将该清单及其 Artifact 原子移入内部 trash，再异步删除，不检查是否存在物化任务。仓库到达自身保留期限后同样直接删除，不检查是否正被用作基础仓。由此产生的并发读取失败属于允许的竞态，物化任务记录稳定错误；输入已经过期时不能保证同一请求可重试成功。
 
 不能在 Job 删除请求中同步删除大量文件。删除任务必须幂等，并支持失败重试。
 
@@ -1011,12 +994,10 @@ status:
   stage: PostRun
   resultRoot: artifact://e32450b8-...
   artifactState: Completed
-  artifactGeneration: 1
-  artifactDigest: sha256:...
   artifactCount: 12
 ```
 
-完整产物列表通过 Artifact API 查询。上述字段只是可 watch 的完成信号和定位摘要，Artifact Manager 的本地 Job 上传清单仍是完整文件集合的事实来源。Runner 必须先完成清单封账，再更新 Job Status；Repo Controller 收到 Job 事件后，根据 `jobUID`、`artifactGeneration` 和 `artifactDigest` 查询并校验固定清单，不能根据当前 Artifact 列表推断完整性。
+完整产物列表通过 Artifact API 查询。上述字段只是可 watch 的完成信号和定位摘要，Artifact Manager 的本地 Job 上传清单仍是完整文件集合的事实来源。Runner 必须先完成清单封账，再更新 Job Status；RpmRepo Controller 收到 Job 事件后，根据 `jobUID` 查询唯一的 Completed 清单，不能根据当前 Artifact 列表推断完整性。Manifest digest 只用于 Artifact Manager 内部幂等和完整性校验。
 
 ## 十四、错误处理
 
@@ -1035,9 +1016,10 @@ status:
 | 本地存储不可用 | 返回 503，Runner 使用相同幂等键重试 |
 | 本地存储空间不足 | 返回 507，Runner 使用相同幂等键重试 |
 | 上传请求结果未知 | Runner 使用相同幂等键重试；服务返回原 Artifact 或重新接收整文件 |
+| Job 的 Manifest 已 Completed 后创建或完成新 Artifact | 返回 409 `ManifestAlreadyCompleted`；仅已完成 Artifact 的同摘要幂等重放可返回原结果 |
 | 清单包含未完成或不匹配的 Artifact | 返回 422，保留 Open 清单供 Runner 修正后重试 |
-| 已完成 generation 收到不同清单 | 返回 409，不修改已有清单 |
-| 清单完成请求结果未知 | Runner 查询固定 generation 的清单状态后决定是否重试 |
+| 已完成 Job 收到不同清单 | 返回 409，不修改已有清单 |
+| 清单完成请求结果未知 | Runner 查询该 Job 唯一清单的状态后决定是否重试 |
 | 日志 sequence 存在缺口 | 返回 409 和期望的 `nextSequence`，Runner 从该位置重传 |
 | 日志 sequence 重复且摘要一致 | 幂等返回原确认，不重复追加 |
 | 日志 sequence 重复但摘要不同 | 返回 409，不修改已提交日志 |
@@ -1114,8 +1096,8 @@ GET /readyz    # 本地持久化目录可用，元数据索引已加载
 7. Artifact 查询和本地文件流式下载。
 8. 中断上传临时文件及孤儿文件清理。
 9. 容器日志实时分块追加、sequence 幂等和断点续传。
-10. Job 上传清单的本地持久化、完整性校验、幂等封账和查询。
-11. Job Status 中 Artifact 完成摘要与 Repo Controller 消费约定。
+10. Job 上传清单的本地持久化、完整性校验、单次成功封账、幂等完成和查询。
+11. Job Status 中 Artifact 完成摘要与 RpmRepo Controller 消费约定。
 12. 活动日志一致性 Range 读取、SSE 实时展示、Web UI 断线补齐及 `container.log` Artifact 幂等封账。
 13. 实时日志的崩溃恢复、限流、背压和过期清理。
 

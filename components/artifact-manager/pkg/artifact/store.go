@@ -91,7 +91,11 @@ func (s *Store) load() error {
 			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobUID == "" {
 				return fmt.Errorf("load manifest metadata %s: invalid JSON", path)
 			}
-			s.manifests[manifestKey(v.Project, v.JobName, v.JobUID, v.Generation)] = &v
+			key := manifestKey(v.Project, v.JobName, v.JobUID)
+			if _, exists := s.manifests[key]; exists {
+				return fmt.Errorf("load manifest metadata %s: duplicate completed manifest for job", path)
+			}
+			s.manifests[key] = &v
 		case "logs":
 			var v LogStream
 			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobUID == "" {
@@ -243,9 +247,7 @@ func (s *Store) artifactPath(a *Artifact) string {
 func (s *Store) artifactMeta(id string) string {
 	return filepath.Join(s.root, ".metadata/artifacts", id+".json")
 }
-func manifestKey(p, j, u string, g int64) string {
-	return fmt.Sprintf("%s\x00%s\x00%s\x00%d", p, j, u, g)
-}
+func manifestKey(p, j, u string) string    { return p + "\x00" + j + "\x00" + u }
 func logKey(p, j, u, stream string) string { return p + "\x00" + j + "\x00" + u + "\x00" + stream }
 func hashText(v string) string             { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
 func (s *Store) idemPath(scope, key string) string {
@@ -266,7 +268,17 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 	scope := "artifact-upload/" + project + "/" + m.JobUID
 	ik := scope + "\x00" + key
 	digest := metadataDigest(m)
-	if old := s.idempotency[ik]; old != nil {
+	old := s.idempotency[ik]
+	if s.manifests[manifestKey(project, job, m.JobUID)] != nil {
+		if old != nil && old.RequestDigest == digest {
+			a := s.artifacts[old.ArtifactID]
+			if old.State == IdempotencyCompleted && a != nil && a.State == Completed && verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil {
+				return a, old, true, nil
+			}
+		}
+		return nil, nil, false, errors.New("ManifestAlreadyCompleted")
+	}
+	if old != nil {
 		if old.RequestDigest != digest {
 			return nil, nil, false, fmt.Errorf("IdempotencyConflict")
 		}
@@ -327,6 +339,9 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 func (s *Store) CompleteUpload(a *Artifact, ir *IdempotencyRecord, tmp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.manifests[manifestKey(a.Project, a.JobName, a.JobUID)] != nil {
+		return errors.New("ManifestAlreadyCompleted")
+	}
 	final := s.artifactPath(a)
 	if err := os.MkdirAll(filepath.Dir(final), 0750); err != nil {
 		return err
@@ -402,18 +417,18 @@ func (s *Store) ListArtifacts(project, job, uid string, cat Category) ([]Artifac
 	return out, nil
 }
 
-func manifestDigest(g int64, files []ManifestFile) string {
+func manifestDigest(files []ManifestFile) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "artifact-manifest-v1\n%d\n", g)
+	b.WriteString("artifact-manifest-v1\n")
 	for _, f := range files {
 		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%d\x00%s\x00%t\n", f.RelativePath, f.ArtifactID, f.Category, f.Size, f.SHA256, f.Required)
 	}
 	return "sha256:" + hashText(b.String())
 }
-func (s *Store) CompleteManifest(project, job, runner, key string, r CompleteManifestRequest) (*JobUploadManifest, error) {
+func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifestRequest) (*JobUploadManifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if r.Generation < 1 || len(r.Files) == 0 {
+	if len(r.Files) == 0 {
 		return nil, errors.New("invalid manifest")
 	}
 	sort.Slice(r.Files, func(i, j int) bool { return r.Files[i].RelativePath < r.Files[j].RelativePath })
@@ -430,8 +445,8 @@ func (s *Store) CompleteManifest(project, job, runner, key string, r CompleteMan
 			return nil, errors.New("artifact mismatch")
 		}
 	}
-	k := manifestKey(project, job, r.JobUID, r.Generation)
-	digest := manifestDigest(r.Generation, r.Files)
+	k := manifestKey(project, job, r.JobUID)
+	digest := manifestDigest(r.Files)
 	if old := s.manifests[k]; old != nil {
 		if old.Digest == digest && old.State == ManifestCompleted {
 			return old, nil
@@ -439,18 +454,18 @@ func (s *Store) CompleteManifest(project, job, runner, key string, r CompleteMan
 		return nil, errors.New("manifest conflict")
 	}
 	now := time.Now().UTC()
-	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, JobUID: r.JobUID, RunnerName: runner, Generation: r.Generation, IdempotencyKey: key, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
-	path := filepath.Join(s.root, ".metadata/jobs", project, r.JobUID, fmt.Sprintf("manifest-%d.json", r.Generation))
+	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, JobUID: r.JobUID, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
+	path := filepath.Join(s.root, ".metadata/jobs", project, r.JobUID, "manifest.json")
 	if err := atomicJSON(path, m); err != nil {
 		return nil, err
 	}
 	s.manifests[k] = m
 	return m, nil
 }
-func (s *Store) GetManifest(p, j, u string, g int64) (*JobUploadManifest, bool) {
+func (s *Store) GetManifest(p, j, u string) (*JobUploadManifest, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	m, ok := s.manifests[manifestKey(p, j, u, g)]
+	m, ok := s.manifests[manifestKey(p, j, u)]
 	if !ok {
 		return nil, false
 	}

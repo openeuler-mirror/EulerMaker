@@ -91,17 +91,14 @@ type ManifestFile struct {
 }
 
 type CompleteManifestInput struct {
-	JobUID     string         `json:"jobUID"`
-	Generation int64          `json:"generation"`
-	Files      []ManifestFile `json:"files"`
+	JobUID string         `json:"jobUID"`
+	Files  []ManifestFile `json:"files"`
 }
 
 type CompletedManifest struct {
 	JobUID        string         `json:"jobUID"`
-	Generation    int64          `json:"generation"`
 	State         string         `json:"state"`
 	ArtifactCount int            `json:"artifactCount"`
-	Digest        string         `json:"digest"`
 	Files         []ManifestFile `json:"files,omitempty"`
 }
 
@@ -251,21 +248,20 @@ func (c *ArtifactClient) uploadArtifactOnce(ctx context.Context, token, project,
 	return out.Artifact, false, nil
 }
 
-func (c *ArtifactClient) CompleteManifest(ctx context.Context, project, job, key string, input CompleteManifestInput) (CompletedManifest, error) {
+func (c *ArtifactClient) CompleteManifest(ctx context.Context, project, job string, input CompleteManifestInput) (CompletedManifest, error) {
 	data, err := json.Marshal(input)
 	if err != nil {
 		return CompletedManifest{}, err
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	headers.Set("Idempotency-Key", key)
 	var out CompletedManifest
 	err = c.do(ctx, http.MethodPost, c.jobPath(project, job)+"/manifest/complete", data, headers, &out)
 	return out, err
 }
 
-func (c *ArtifactClient) GetManifest(ctx context.Context, project, job, uid string, generation int64) (CompletedManifest, error) {
-	q := url.Values{"jobUID": {uid}, "generation": {strconv.FormatInt(generation, 10)}}
+func (c *ArtifactClient) GetManifest(ctx context.Context, project, job, uid string) (CompletedManifest, error) {
+	q := url.Values{"jobUID": {uid}}
 	var out CompletedManifest
 	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/manifest?"+q.Encode(), nil, nil, &out)
 	if out.ArtifactCount == 0 && len(out.Files) > 0 {

@@ -326,14 +326,12 @@ type JobStatus struct {
     EndTime            metav1.Time `json:"endTime,omitempty"`
     ResultRoot         string      `json:"resultRoot,omitempty"`
     ArtifactState      string      `json:"artifactState,omitempty"`
-    ArtifactGeneration int64       `json:"artifactGeneration,omitempty"`
-    ArtifactDigest     string      `json:"artifactDigest,omitempty"`
     ArtifactCount      int         `json:"artifactCount,omitempty"`
     Message            string      `json:"message,omitempty"`
 }
 ```
 
-`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{jobUID}`，不能向其他组件公开 Runner 容器内的本地路径。`ArtifactState` 使用 `Uploading`、`Completed`、`Failed` 或 `NotRequired`：存在必需日志或产物时，在进入 `PostRun` 前设置为 `Uploading`；清单完成后设置为 `Completed`；没有需归档内容时设置为 `NotRequired`；必需上传或封账最终失败时设置为 `Failed`。`ArtifactGeneration` 首版固定从 1 开始，仅在清单存在时填写；`ArtifactDigest` 和 `ArtifactCount` 必须直接使用清单完成响应，不能由 Runner 自行重算或通过 Artifact 列表推断。
+`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{jobUID}`，不能向其他组件公开 Runner 容器内的本地路径。`ArtifactState` 使用 `Uploading`、`Completed`、`Failed` 或 `NotRequired`：存在必需日志或产物时，在进入 `PostRun` 前设置为 `Uploading`；清单完成后设置为 `Completed`；没有需归档内容时设置为 `NotRequired`；必需上传或封账最终失败时设置为 `Failed`。`ArtifactCount` 必须直接使用清单完成响应，不能由 Runner 自行重算或通过 Artifact 列表推断。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 
@@ -489,7 +487,7 @@ type LogUploadCheckpoint struct {
 - 上传器使用有界内存队列；未确认正文始终可从本地 spool 重新读取。单 Job 的 spool 总大小达到 `--log-spool-limit` 时暂停读取容器日志，让容器运行时或其日志文件承担背压，不能静默丢弃、跳过或伪造日志。服务端确认不会立即释放本地正文，因为封账和崩溃恢复仍需要完整文件；只有 8.3.5 节的终态清理才能回收。
 - 采集 goroutine、chunk 上传 goroutine和容器等待 goroutine由同一 Job context 管理。业务超时取消容器执行，但日志读取使用独立的排空期限；必须先等待运行时日志 EOF，再关闭 chunk 输入，不能在 `Wait` 返回时立即取消日志读取。
 
-追加请求严格使用 Artifact Manager 9.2.1 节定义的 header。200 响应只有在 `acceptedSequence` 等于请求 sequence、`nextSequence` 等于请求 sequence+1 且 `committedBytes` 等于本 chunk 结束 offset 时才算确认；响应字段不一致按结果未知处理并查询状态。
+追加请求严格使用 Artifact Manager 10.2.1 节定义的 header。200 响应只有在 `acceptedSequence` 等于请求 sequence、`nextSequence` 等于请求 sequence+1 且 `committedBytes` 等于本 chunk 结束 offset 时才算确认；响应字段不一致按结果未知处理并查询状态。
 
 #### 8.3.3 启动与断线恢复
 
@@ -539,9 +537,9 @@ type LogUploadCheckpoint struct {
 - 遇到符号链接、socket、device、FIFO、无法读取的文件、非法 UTF-8 路径、路径规范化失败或路径逃逸时，整个普通产物阶段失败；不得静默忽略后继续封账清单。
 - 单文件上限默认 25 GiB，单 Job 普通产物总大小上限默认 100 GiB，文件数量上限默认 10000，并发上传数默认 4；任一限制必须不高于 Artifact Manager 对应部署限制，超过限制时在上传任何新文件前终止扫描并将 Job 标记为 Artifact 失败。
 - 扫描结果必须先完整排序并校验，再开始上传。排序键是规范化后的 `relativePath`，保证重试、回执和 Manifest 顺序确定。
-- 封账日志始终以 `relativePath=logs/container.log`、`category=log`、`required=true` 加入 generation 1 的 Manifest。普通产物不得使用 `logs/container.log`，发生路径冲突时 Job 失败。
-- 构建成功但结果目录没有普通文件时，仍提交只包含日志的 generation 1 Manifest；因此首版已执行的 `ct` Job 不使用 `artifactState=NotRequired`。该状态保留给未来明确无需日志和产物的执行类型。
-- generation 首版固定为 1。Manifest 完成请求结果未知时，Runner 查询相同 project、jobUID 和 generation；服务端已返回相同 Completed 清单时继续写回 Job，否则使用相同幂等键重试，不能递增 generation 规避冲突。
+- 封账日志始终以 `relativePath=logs/container.log`、`category=log`、`required=true` 加入该 Job 的唯一 Manifest。普通产物不得使用 `logs/container.log`，发生路径冲突时 Job 失败。
+- 构建成功但结果目录没有普通文件时，仍提交只包含日志的 Manifest；因此首版已执行的 `ct` Job 不使用 `artifactState=NotRequired`。该状态保留给未来明确无需日志和产物的执行类型。
+- Manifest 完成请求结果未知时，Runner 查询相同 project 和 jobUID 的唯一清单；服务端已返回相同 Completed 清单时继续写回 Job，否则原样重试完成请求。Manifest 完成接口直接以 Job UID 保证幂等，不使用独立幂等键。
 - 任何必需普通产物上传或 Manifest 封账最终失败都会令 `artifactState=Failed` 且 Job `phase=Failed`；已经成功上传的 Artifact 和本地回执保留用于幂等恢复，不提交缺少文件的降级清单。
 
 ### 8.5 上传回执与本地文件清理
@@ -554,7 +552,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 4. JobUploadManifest 从持久化回执生成。Manifest 完成且最终 Job Status 成功写回后即视为上传成功，原子写入 `notBefore=now` 的成功清理标记并立即执行清理；清理失败时保留标记供后台重试，不设置成功保留期。
 5. 后台清理器只处理具有有效清理标记且当前时间不早于 `notBefore` 的 Job，并在重新确认目录仍属于同一 project/jobUID 后删除本地内容。
 
-普通产物的幂等键固定为 `{jobUID}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求且在同一 generation 内应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
+普通产物的幂等键固定为 `{jobUID}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
 
 上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed, artifactState=Failed`，再写入失败清理标记；失败现场从该状态写回时间起保留 `--artifact-failed-retention`，默认 24 小时。最终状态写回失败或结果仍可能恢复时不得启动保留期。到期删除意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
 
@@ -675,9 +673,9 @@ secrets:
 | 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应 |
 | 普通产物扫描 | 空目录、嵌套目录、点文件、稳定排序、RPM MIME、普通 MIME、路径冲突、非法 UTF-8、不可读文件、符号链接和特殊文件拒绝、文件数及大小限制 |
 | 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
-| Manifest | 日志必需项、只含日志的清单、普通产物全部 required、generation 1、稳定排序、完成结果未知查询、内容冲突不递增 generation |
+| Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、完成结果未知查询和内容冲突处理 |
 | 本地清理 | 成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、Runner 重启恢复、失败保留期内不删除、24 小时到期统一删除、结果未知未终态不计时 |
 | Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Completed；上传失败时 ArtifactState 和 Message 正确 |
 | 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
 
-端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact 和普通 Artifact，generation 1 Manifest 包含全部必需项，下载正文与本地源文件一致，最终 Job Artifact 摘要直接使用 Manifest 完成响应。
+端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact 和普通 Artifact，Job 的唯一 Manifest 包含全部必需项，下载正文与本地源文件一致，最终 Job 的 Artifact 状态和数量直接使用 Manifest 完成响应。

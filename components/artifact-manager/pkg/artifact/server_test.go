@@ -119,15 +119,37 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		Artifact Artifact `json:"artifact"`
 	}](t, w).Artifact
 
-	manifest := CompleteManifestRequest{JobUID: "uid-1", Generation: 1, Files: []ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
+	manifest := CompleteManifestRequest{JobUID: "uid-1", Files: []ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
 	b, _ := json.Marshal(manifest)
 	r := httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/manifest/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
-	r.Header.Set("Idempotency-Key", "manifest-1")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("manifest: %d %s", w.Code, w.Body.String())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/manifest?jobUID=uid-1", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get manifest: %d %s", w.Code, w.Body.String())
+	}
+
+	manifest.Files[0].Required = false
+	b, _ = json.Marshal(manifest)
+	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/manifest/complete", bytes.NewReader(b))
+	r.Header.Set("Authorization", "Bearer runner-token")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("replace completed manifest: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, uploadRequest(t, data, "upload-after-manifest"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("upload after completed manifest: %d %s", w.Code, w.Body.String())
 	}
 
 	chunks := [][]byte{[]byte("hello\n"), []byte("world\n")}

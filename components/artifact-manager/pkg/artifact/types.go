@@ -65,21 +65,19 @@ type ManifestFile struct {
 	Required     bool     `json:"required"`
 }
 type JobUploadManifest struct {
-	SchemaVersion  int            `json:"schemaVersion"`
-	Project        string         `json:"project"`
-	JobName        string         `json:"jobName"`
-	JobUID         string         `json:"jobUID"`
-	RunnerName     string         `json:"runnerName"`
-	Generation     int64          `json:"generation"`
-	IdempotencyKey string         `json:"idempotencyKey"`
-	Files          []ManifestFile `json:"files"`
-	Digest         string         `json:"digest,omitempty"`
-	State          ManifestState  `json:"state"`
-	Failure        *FailureInfo   `json:"failure,omitempty"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	UpdatedAt      time.Time      `json:"updatedAt"`
-	CompletedAt    *time.Time     `json:"completedAt,omitempty"`
-	ExpiresAt      *time.Time     `json:"expiresAt,omitempty"`
+	SchemaVersion int            `json:"schemaVersion"`
+	Project       string         `json:"project"`
+	JobName       string         `json:"jobName"`
+	JobUID        string         `json:"jobUID"`
+	RunnerName    string         `json:"runnerName"`
+	Files         []ManifestFile `json:"files"`
+	Digest        string         `json:"digest,omitempty"`
+	State         ManifestState  `json:"state"`
+	Failure       *FailureInfo   `json:"failure,omitempty"`
+	CreatedAt     time.Time      `json:"createdAt"`
+	UpdatedAt     time.Time      `json:"updatedAt"`
+	CompletedAt   *time.Time     `json:"completedAt,omitempty"`
+	ExpiresAt     *time.Time     `json:"expiresAt,omitempty"`
 }
 type IdempotencyState string
 
@@ -149,9 +147,8 @@ type UploadMetadata struct {
 	SHA256       string   `json:"sha256"`
 }
 type CompleteManifestRequest struct {
-	JobUID     string         `json:"jobUID"`
-	Generation int64          `json:"generation"`
-	Files      []ManifestFile `json:"files"`
+	JobUID string         `json:"jobUID"`
+	Files  []ManifestFile `json:"files"`
 }
 type CompleteLogRequest struct {
 	JobUID       string `json:"jobUID"`
