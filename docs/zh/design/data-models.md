@@ -918,10 +918,21 @@ type BuildTarget struct {
 type PackageRepo struct {
     Name          string          `json:"name,omitempty"`
     Url           string          `json:"url,omitempty"`
-    Branch        string          `json:"branch,omitempty"`
-    GitTag        string          `json:"gitTag,omitempty"`
-    CommitId      string          `json:"commitId,omitempty"`
+    Ref           GitRef          `json:"ref,omitempty"`
     BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
+}
+
+type GitRefType string
+
+const (
+    GitRefBranch GitRefType = "Branch"
+    GitRefTag    GitRefType = "Tag"
+    GitRefCommit GitRefType = "Commit"
+)
+
+type GitRef struct {
+    Type  GitRefType `json:"type,omitempty"`
+    Value string     `json:"value,omitempty"`
 }
 ```
 
@@ -929,10 +940,10 @@ type PackageRepo struct {
 |----------------|---------------|--------------------------|
 | `name`         | string        | spec 包名称                 |
 | `url`          | string        | spec 仓库 Git URL          |
-| `branch`       | string        | spec 分支，与 `gitTag`、`commitId` 三选一 |
-| `gitTag`       | string        | Git 标签，与 `branch`、`commitId` 三选一 |
-| `commitId`     | string        | 指定提交 ID，与 `branch`、`gitTag` 三选一 |
+| `ref`          | GitRef        | Git 引用；`type` 为 `Branch`、`Tag` 或 `Commit`，`value` 为对应分支名、标签名或完整 commit ID |
 | `buildTargets` | []BuildTarget | 构建目标 |
+
+`ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。`type` 和 `value` 必须同时存在，不允许使用裸字符串推断引用类型。
 
 
 ### SpecCommit

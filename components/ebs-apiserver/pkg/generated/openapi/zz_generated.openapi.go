@@ -28,6 +28,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.BuildSpec":                         schema_ebs_api_ebs_v1_BuildSpec(ref),
 		"ebs-api/ebs/v1.BuildStatus":                       schema_ebs_api_ebs_v1_BuildStatus(ref),
 		"ebs-api/ebs/v1.BuildTarget":                       schema_ebs_api_ebs_v1_BuildTarget(ref),
+		"ebs-api/ebs/v1.GitRef":                            schema_ebs_api_ebs_v1_GitRef(ref),
 		"ebs-api/ebs/v1.Job":                               schema_ebs_api_ebs_v1_Job(ref),
 		"ebs-api/ebs/v1.JobList":                           schema_ebs_api_ebs_v1_JobList(ref),
 		"ebs-api/ebs/v1.JobSpec":                           schema_ebs_api_ebs_v1_JobSpec(ref),
@@ -657,6 +658,30 @@ func schema_ebs_api_ebs_v1_BuildTarget(ref common.ReferenceCallback) common.Open
 	}
 }
 
+func schema_ebs_api_ebs_v1_GitRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"value": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func schema_ebs_api_ebs_v1_Job(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -935,22 +960,10 @@ func schema_ebs_api_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Open
 							Format: "",
 						},
 					},
-					"branch": {
+					"ref": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"gitTag": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"commitId": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-api/ebs/v1.GitRef"),
 						},
 					},
 					"buildTargets": {
@@ -970,7 +983,7 @@ func schema_ebs_api_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Open
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BuildTarget"},
+			"ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.GitRef"},
 	}
 }
 

@@ -44,9 +44,9 @@ type SnapshotSpec struct {
 }
 
 type SnapshotStatus struct {
-	Phase       SnapshotPhase        `json:"phase,omitempty"`
+	Phase       SnapshotPhase         `json:"phase,omitempty"`
 	SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
-	Conditions  []metav1.Condition   `json:"conditions,omitempty"`
+	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
 }
 
 type SnapshotList struct {
@@ -311,10 +311,21 @@ type BuildTarget struct {
 type PackageRepo struct {
 	Name         string        `json:"name,omitempty"`
 	Url          string        `json:"url,omitempty"`
-	Branch       string        `json:"branch,omitempty"`
-	GitTag       string        `json:"gitTag,omitempty"`
-	CommitId     string        `json:"commitId,omitempty"`
+	Ref          GitRef        `json:"ref,omitempty"`
 	BuildTargets []BuildTarget `json:"buildTargets,omitempty"`
+}
+
+type GitRefType string
+
+const (
+	GitRefBranch GitRefType = "Branch"
+	GitRefTag    GitRefType = "Tag"
+	GitRefCommit GitRefType = "Commit"
+)
+
+type GitRef struct {
+	Type  GitRefType `json:"type,omitempty"`
+	Value string     `json:"value,omitempty"`
 }
 
 type SpecCommit struct {

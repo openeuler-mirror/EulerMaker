@@ -533,7 +533,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "packageRepos": [{
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
-        "branch": "master"
+        "ref": {"type": "Branch", "value": "master"}
       }],
       "bootstrapRepo": [{
         "name": "base",
@@ -556,7 +556,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
       "packageRepos": [{
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
-        "branch": "master"
+        "ref": {"type": "Branch", "value": "master"}
       }]
     }
   }'
