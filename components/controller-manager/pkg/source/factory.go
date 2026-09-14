@@ -13,8 +13,10 @@ import (
 )
 
 var (
-	JobsGVR    = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
-	RunnersGVR = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}
+	SnapshotsGVR = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "snapshots"}
+	BuildsGVR    = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
+	JobsGVR      = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
+	RunnersGVR   = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}
 )
 
 type WatchResource struct {
