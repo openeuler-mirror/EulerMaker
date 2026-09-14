@@ -15,6 +15,10 @@
 | Build | `ebs.io/target-os` | Build Target 的操作系统名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/target-arch` | Build Target 的架构名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/build-type` | Build `spec.buildType` | Build 创建方 | 按构建类型查询 Build |
+| Job | `ebs.io/build-name` | 所属 Build 的 `metadata.name` | BuildInfo Controller | 按 Build 查询仓库输入 Job |
+| Job | `ebs.io/spec-name` | Job 构建的 spec 名 | BuildInfo Controller | 仓库物化时按 spec 替换旧 RPM |
+| Job | `ebs.io/target-os` | 所属 Build 的目标操作系统 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
+| Job | `ebs.io/target-arch` | 所属 Build 的目标架构 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
 | Runner | `ebs.io/runner-type` | 与 `spec.type` 相同 | Runner | 表达 Runner 类型 |
 | Runner | `ebs.io/runner-arch` | 与 `spec.arch` 相同 | Runner | 表达 Runner 架构，供 `nodeSelector` 精确匹配 |
 | Runner | `ebs.io/runner-capability.<name>` | 由具体能力定义 | Runner | 表达 Runner 自声明能力，供 `nodeSelector` 精确匹配 |
@@ -110,17 +114,16 @@ Runner 创建构建容器时至少写入：
 
 这些是容器运行时标签，不是 EBS API 对象的 `metadata.labels`。Runner 使用它们在重启后定位容器，并执行幂等恢复、停止和清理。它们不能作为 API 权限或调度依据。
 
-## 7. 标签与注解的边界
+## 7. Job 构建归属标签
 
-以下字段是 Job annotations，不是 labels：
+BuildInfo Controller 创建 Job 时必须写入以下 labels：
 
-| Annotation | 用途 |
-|------------|------|
-| `ebs.io/build-resource-namespace` | 记录实际命中的 BuildResource Project/命名空间 |
-| `ebs.io/build-resource` | 记录 BuildResource 名称 |
-| `ebs.io/build-resource-generation` | 记录解析时的 BuildResource generation |
+| Label | 用途 |
+|-------|------|
+| `ebs.io/build-name` | 记录所属 Build name（由唯一 UUID 生成），供 RpmRepo Controller 建立仓库输入关系和队列隔离 |
+| `ebs.io/spec-name` | 记录 Job 构建的 spec 名，供仓库按 spec 完整替换旧 RPM |
 
-这些注解只用于审计。实际调度和运行时资源限制以 `Job.spec.resources` 为准。
+BuildResource 只在创建 Job 时解析为 `Job.spec.resources`，Job 不额外记录其配置来源。Build 和 spec 归属标签由 BuildInfo Controller 创建 Job 时写入，创建后不可修改；RpmRepo Controller 使用 `ebs.io/build-name` 的 label selector 查询候选 Job，并从 `ebs.io/spec-name` 读取 spec 归属，不得从对象名称推导这些关系。
 
 ## 8. 查询与扩展规则
 
