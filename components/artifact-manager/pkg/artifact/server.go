@@ -25,6 +25,7 @@ type Server struct {
 	store        *Store
 	auth         Authorizer
 	repositories *repositoryManager
+	releases     *releaseManager
 }
 
 func NewServer(c Config, a Authorizer) (*http.Server, error) {
@@ -40,7 +41,7 @@ func NewServer(c Config, a Authorizer) (*http.Server, error) {
 		return nil, e
 	}
 	server := &http.Server{Addr: c.Listen, Handler: s, ReadHeaderTimeout: 10 * time.Second}
-	server.RegisterOnShutdown(s.repositories.stop)
+	server.RegisterOnShutdown(func() { s.repositories.stop(); s.releases.stop() })
 	return server, nil
 }
 func NewHandler(c Config, a Authorizer) (http.Handler, error) {
@@ -59,7 +60,12 @@ func newArtifactServer(c Config, a Authorizer, store *Store, materializer reposi
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: c, store: store, auth: a, repositories: repositories}, nil
+	releases, err := newReleaseManager(c, repositories, newFilesystemReleaseMaterializer(c))
+	if err != nil {
+		repositories.stop()
+		return nil, err
+	}
+	return &Server{cfg: c, store: store, auth: a, repositories: repositories, releases: releases}, nil
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
