@@ -44,7 +44,7 @@ func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(server.repositories.stop)
+	t.Cleanup(func() { server.repositories.stop(); server.releases.stop() })
 	request := CreateRepositoryRequest{RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job-1", JobUID: "job-uid-1"}}}
 	request.RepositoryUID = repositoryUID(request.Project, request.BuildName, request.BaseRepositoryUID, request.Manifests)
 	return server, request
