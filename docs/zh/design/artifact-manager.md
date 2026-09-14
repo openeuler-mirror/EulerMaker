@@ -2,7 +2,7 @@
 
 ## 一、定位
 
-Artifact Manager 是 EulerMaker 的构建结果数据服务，负责接收 Runner 上传的构建产物和日志，并提供查询、下载、保留与清理能力，同时提供由 Controller Manager 中 RpmRepo Controller 驱动的 RPM 仓库物化能力。
+Artifact Manager 是 EulerMaker 的构建结果数据服务，负责接收 Runner 上传的构建产物和日志，并提供查询、下载、保留与清理能力，同时提供 RPM 过程仓物化和正式仓库发布能力。过程仓物化和正式发布均由 Controller Manager 中的 RpmRepo Controller 驱动。
 
 ```text
 Runner -> artifact-manager -> Local Persistent Storage
@@ -699,7 +699,7 @@ Artifact Manager 负责：
 - 原子发布不可变仓库，保存本地状态并提供内容下载；
 - 服务重启时恢复状态和清理未完成临时目录。
 
-Artifact Manager 不负责更新 `RpmRepo`、`Build` 或 `Job`，也不维护可变的 `last`、`current` 软链接。调用方必须使用返回的不可变仓库 URL。
+Artifact Manager 不负责更新 `RpmRepo`、`Build` 或 `Job`。过程仓物化不维护可变的 `last`、`current` 软链接，调用方必须使用返回的不可变仓库 URL；9.13 节正式发布的 `current` 只属于稳定发布入口，不参与过程仓版本选择。
 
 #### 9.3.3 主动持续生成流程
 
@@ -754,14 +754,15 @@ ${dataDir}/
 ├── repositories/
 │   └── {project}/
 │       └── {arch}/
-│           ├── Packages -> releases/{publicationUID}/Packages
-│           ├── repodata -> releases/{publicationUID}/repodata
-│           ├── RPM-GPG-KEY-openEuler
+│           ├── current -> releases/{buildName}
+│           ├── Packages -> current/Packages
+│           ├── repodata -> current/repodata
+│           ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
 │           ├── releases/
-│           │   └── {publicationUID}/
+│           │   └── {buildName}/
 │           │       ├── Packages/
 │           │       ├── repodata/
-│           │       └── publication.json
+│           │       └── release.json
 │           └── history/
 │               └── {buildName}/
 │                   └── steps/
@@ -771,16 +772,22 @@ ${dataDir}/
 │                           └── repository.json
 ├── .repository-work/
 │   └── {repositoryUID}-{random}/
+├── .release-work/
+│   └── {buildName}-{random}/
+├── .repository-trash/
+├── .release-trash/
 └── .metadata/
-    └── repositories/
-        └── {repositoryUID}.json
+    ├── repositories/
+    │   └── {repositoryUID}.json
+    └── releases/
+        └── {buildName}.json
 ```
 
 `project`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 和目标 OS 只属于元数据，不直接参与本地路径拼接。所有目录操作必须从预先打开的 `dataDir` FD 开始，拒绝非服务自身创建的符号链接，并确保目标始终位于配置的数据目录内。
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
-`releases/{publicationUID}` 预留给正式发布产生的不可变版本；架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，只能由后续正式发布流程以原子切换方式维护。当前 RpmRepo 物化流程不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。仓库签名和正式发布仍属于后续能力。
+`releases/{buildName}` 保存正式发布产生的不可变版本；架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。首版正式发布只安装已经由可信发布流程提供的公钥，不在 Artifact Manager 内签名 RPM 或 repodata。
 
 Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
 
@@ -1076,6 +1083,231 @@ GET /repositories/v1/{repositoryUID}/{path...}
 9. 基础仓或输入 Artifact 到期时可以直接删除；并行物化若尚未打开所需文件则以 `MaterializationInputExpired` 失败，且不得发布半成品仓库。
 10. 内容 API 不允许路径逃逸、符号链接跟随或目录列表。
 11. RpmRepo Controller 在 transition 写入后任意时点重启，均使用原输入 Job 集合、基础仓和 repositoryUID 恢复，不产生分叉版本。
+
+### 9.13 正式发布
+
+#### 9.13.1 职责边界
+
+正式发布由 RpmRepo Controller 驱动。RpmRepo Controller 除负责过程仓持续物化外，还负责：
+
+- 判断 Build 是否满足发布条件，并取得同名 RpmRepo 当前 Ready 版本；
+- 根据 Project 配置和当前 BuildInfo 计算需要从过程仓删除的 spec 集合；
+- 使用 Build name 作为发布版本标识并生成固定的发布请求；
+- 在提交前把发布输入和执行状态持久化到 RpmRepo status，重启后按该状态恢复；
+- 调用 Artifact Manager、轮询结果，并在确认 Ready 后更新控制面发布状态；
+- 对控制面冲突、未知提交结果和重启恢复进行幂等处理。
+
+Artifact Manager 负责：
+
+- 校验发布请求和源 `repositoryUID`；
+- 从 Ready 过程仓构造经过筛选的不可变 release；
+- 生成并验证 repodata，写入 `release.json`；
+- 在同一 Project 和架构范围内原子切换稳定入口；
+- 保存本地发布记录，提供状态查询、稳定内容读取和历史版本清理；
+- 重启时恢复未完成切换，保证稳定入口指向一个完整的 Ready release。
+
+Artifact Manager 不根据 Build type 推导删除集合。全量和增量 Build 均提交最终 RpmRepo 的 `repositoryUID`；调用方根据 Project、BuildInfo 和发布策略计算固定的 `excludeSpecs`，用于删除 Project 已移除的软件包和只构建、不发布的软件包。除该集合外，源过程仓中的其他 RPM 均进入正式仓库。
+
+RpmRepo Controller 的过程仓推进仍以 `{project}/{buildName}` 为队列 key；正式发布另以 `{project}/{arch}` 为串行 key，保证同一稳定入口不会由不同 Build 并发推进。两类动作由同一个控制器实现，但使用独立的状态迁移和队列键，过程仓 Ready 不等同于正式发布 Ready。
+
+#### 9.13.2 标识与数据模型
+
+同一个 Project 和架构只有一个稳定发布入口，但可以保存多个不可变发布版本。Build name 由唯一 UUID 生成且不复用，一个 Build 最多对应一个正式发布版本，因此直接使用 `buildName` 作为发布记录和 release 目录的唯一标识，不再生成独立的发布 ID。
+
+发布身份和请求内容分离：`buildName` 标识不可变版本，`requestDigest` 根据以下规范化字段计算 SHA-256：
+
+```text
+buildName
+project
+targetOS
+targetArch
+sourceRepositoryUID
+按字典序排列的 excludeSpecs
+```
+
+各字符串使用长度前缀编码，不能直接拼接。同一 `buildName` 和相同 `requestDigest` 是幂等重试；同一 `buildName` 对应不同摘要必须返回 `409 ReleaseIdentityConflict`。发布成功后不得使用相同 Build name 更换源仓或排除集合重新发布，修正内容必须创建新 Build。`targetOS` 参与摘要和一致性校验，但不参与本地路径；Project 与架构共同确定稳定发布目标。
+
+```go
+type ReleaseState string
+
+const (
+    ReleaseCreating ReleaseState = "Creating"
+    ReleasePrepared ReleaseState = "Prepared"
+    ReleaseReady    ReleaseState = "Ready"
+    ReleaseFailed   ReleaseState = "Failed"
+    ReleaseDeleting ReleaseState = "Deleting"
+)
+
+type CreateReleaseRequest struct {
+    BuildName               string   `json:"buildName"`
+    Project                 string   `json:"project"`
+    TargetOS                string   `json:"targetOS"`
+    TargetArch              string   `json:"targetArch"`
+    SourceRepositoryUID     string   `json:"sourceRepositoryUID"`
+    ExcludeSpecs            []string `json:"excludeSpecs,omitempty"`
+}
+
+type ReleaseRecord struct {
+    SchemaVersion            int              `json:"schemaVersion"`
+    BuildName                string           `json:"buildName"`
+    Project                  string           `json:"project"`
+    TargetOS                 string           `json:"targetOS"`
+    TargetArch               string           `json:"targetArch"`
+    SourceRepositoryUID      string           `json:"sourceRepositoryUID"`
+    ExcludeSpecs             []string         `json:"excludeSpecs,omitempty"`
+    RequestDigest            string           `json:"requestDigest"`
+    State                    ReleaseState     `json:"state"`
+    Attempt                  int              `json:"attempt"`
+    PackageCount             int              `json:"packageCount,omitempty"`
+    ReleaseDigest            string           `json:"releaseDigest,omitempty"`
+    ContentURL               string           `json:"contentURL,omitempty"`
+    Failure                  *FailureInfo     `json:"failure,omitempty"`
+    CreatedAt                Timestamp        `json:"createdAt"`
+    UpdatedAt                Timestamp        `json:"updatedAt"`
+    CompletedAt              *Timestamp       `json:"completedAt,omitempty"`
+}
+```
+
+`excludeSpecs` 可以为空，非空时必须去重并按字典序规范化。Artifact Manager 必须校验源 RepositoryRecord 的 Project、目标 OS、架构和 `buildName` 均与请求一致，禁止使用其他 Build 的过程仓作为本次发布内容。Artifact Manager 从源仓 RPM 头中的 `specName` 判断是否删除，禁止由文件名推导；命中 `excludeSpecs` 的 RPM 全部排除，其余 RPM 全部保留。排除集合中的 spec 在源仓不存在视为幂等删除，不作为错误。调用方必须在提交前完整推导删除集合，Artifact Manager 不再查询 Project 或 BuildInfo 补充策略。
+
+发布请求不携带公钥路径、公钥正文或公钥摘要。Artifact Manager 配置了只读公钥路径时，将该文件复制为 release 中的 `RPM-GPG-KEY-openEuler`，并把实际 SHA-256 记录到 `release.json` 供审计；未配置时不生成该文件。公钥完全属于服务端发布配置，不参与请求身份和幂等判断。
+
+状态迁移固定为：
+
+```text
+Creating -> Prepared -> Ready
+    |           |
+    +----------> Failed
+Creating/Prepared/Ready/Failed -> Deleting
+```
+
+`Prepared` 表示不可变正文已经完整落盘但尚未切换稳定入口；它不能通过稳定或不可变内容 API 对外读取。`Ready` 表示该版本至少成功激活过，即使后续被新版本替代也保持 Ready。Failed 不会破坏此前的 current。
+
+#### 9.13.3 内部 API
+
+提交发布：
+
+```http
+POST /internal/v1/releases
+Content-Type: application/json
+```
+
+响应语义与仓库物化一致：首次接受、Creating、Prepared 和可重试失败重放返回 `202`，已经 Ready 的相同请求返回 `200`，相同 Build name 对应不同摘要返回 `409 ReleaseIdentityConflict`，非法集合或源仓不满足条件返回 `422`，队列满返回 `429`。接受成功时返回：
+
+```http
+Location: /internal/v1/releases/{buildName}
+```
+
+查询和删除：
+
+```http
+GET    /internal/v1/releases/{buildName}
+DELETE /internal/v1/releases/{buildName}
+```
+
+GET 始终返回已持久化状态，不触发执行。DELETE 只能删除非当前发布版本；请求删除当前稳定入口所引用的版本时返回 `409 ReleaseInUse`。删除采用 `Deleting -> trash -> 删除正文 -> 删除元数据`，崩溃后继续处理。
+
+受控激活或回滚使用：
+
+```http
+POST /internal/v1/releases/{buildName}/activate
+```
+
+目标 release 必须为 Prepared 或 Ready，且 Project 和架构由其持久化记录确定。Prepared 用于首次激活，Ready 用于幂等确认或回滚。Artifact Manager 在 `{project}/{arch}` 目标锁内切换当前指针；目标已经是当前版本时返回 `200`，成功切换返回 `200` 和 ReleaseRecord。接口不接收请求体，发布顺序由 RpmRepo Controller 的同目标串行队列保证。
+
+稳定仓库内容地址为：
+
+```http
+GET /repositories/{project}/{arch}/{path...}
+```
+
+典型 DNF base URL：
+
+```text
+https://artifact.example/repositories/{project}/{arch}/
+```
+
+该地址是 Project 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，内容读取、Range、ETag、路径规范化和目录列表规则与 9.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
+
+路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
+
+```http
+GET /repositories/releases/v1/{buildName}/{path...}
+```
+
+稳定 URL 不返回重定向，避免客户端缓存历史 Build name；服务端在单次请求开始时取得 `current` 的目标快照，该请求的全部文件读取只能落到同一个 release。根目录的 `Packages`、`repodata` 和公钥链接固定指向 `current` 下的对应名称，因此切换时只需要替换一条 `current` 链接。
+
+#### 9.13.4 发布算法与原子切换
+
+一次发布按以下顺序执行：
+
+1. 规范化请求，校验 `buildName` 及 `requestDigest`，持久化 `Creating` 记录后入队。
+2. 查询本地源仓记录，要求为 Ready，且 Project、Build name、目标 OS 和架构与请求一致。
+3. 在 `.release-work/{buildName}-{random}` 创建工作目录。
+4. 读取源仓 `repository.json` 和 RPM 元数据，删除 `specName` 位于 `excludeSpecs` 的 RPM，保留其余 RPM。
+5. 将选中的 RPM 从过程仓 `Packages` 硬链接到工作目录；源仓保持不可变。跨文件系统失败返回稳定错误，不退化为无界复制。
+6. 不复用源仓 repodata，执行一次完整 `createrepo_c`。正式发布集合通常经过删除，完整生成可以避免旧 metadata 残留；可在性能数据证明必要后再引入安全的 `--update` 优化。
+7. 重新解析 repodata，核对文件集合、摘要、架构和 RPM 数量。
+8. 复制服务端配置的公钥并记录其实际摘要；首版不执行 RPM、repomd 或 updateinfo 签名。
+9. 计算 `releaseDigest`，写入包含请求摘要、源仓 UID、排除 spec 集合、RPM 摘要和完成时间的 `release.json`，fsync 文件和目录。
+10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
+11. 获取 `{project}/{arch}` 发布锁，重新确认该版本完整且摘要正确。
+12. 读取 `current`；已经指向本次 `buildName` 时按幂等成功处理，否则继续切换。
+13. 创建指向 `releases/{buildName}` 的临时符号链接，fsync 后以 rename 原子替换 `current`，再 fsync 架构目录。`Packages`、`repodata` 和可选公钥是初始化目标目录时一次创建、之后不改变的兼容链接，统一经过 `current` 解析。
+14. 将 ReleaseRecord 标记为 Ready 并返回稳定 `contentURL`。如果控制面状态更新失败，RpmRepo Controller 使用相同 Build name 继续确认，不重新生成 release。
+
+第 13 步是唯一生效点。在它之前失败，旧版本继续服务；在它之后进程崩溃，启动恢复根据 `current` 和 release 元数据补写 Ready。不能用依次删除再创建 `Packages`、`repodata` 两个链接作为切换机制，否则客户端可能观察到混合版本。
+
+#### 9.13.5 并发、失败和回滚
+
+- 同一 `{project}/{arch}` 同时最多执行一个激活操作；不同目标可以并行创建和激活。
+- 相同 `buildName` 的提交由 Build name 锁和请求摘要实现幂等；不同 Build 可以并行准备正文，但进入激活临界区后按取得锁的顺序切换。
+- RpmRepo Controller 在激活前必须再次确认控制面意图仍指向该 Build name，并保证同一目标串行；Artifact Manager 的目标锁只保护本地文件系统切换的一致性，不判断发布先后关系。
+- `createrepo_c`、磁盘或读取配置公钥失败时不得切换指针；错误按是否可重试写入 Failed。
+- 提交响应超时属于结果未知，调用方必须先 GET 相同 Build name，不能改用其他 Build name 盲目重试。
+- 回滚不修改旧 release，而是通过受控激活接口把当前指针切回仍然完整的历史 Build name。回滚也必须经过目标锁、审计记录和摘要校验。
+- 当前版本不能由自动保留清理删除。切换成功后，旧版本才开始计算保留期。
+
+#### 9.13.6 恢复与保留
+
+启动时在对外 Ready 前执行：
+
+1. 加载 `.metadata/releases` 中的记录；
+2. 校验每个 `current` 指向的 release、`release.json` 和整体摘要；
+3. `current` 已指向 Creating 或 Prepared 记录且正文有效时补写 Ready；
+4. Prepared 记录未激活时不由 Artifact Manager 自动切换 current，等待 RpmRepo Controller 查询状态、重新确认控制面意图后调用激活接口；
+5. 指针无效时不选择目录中“最新”的版本，保留服务未就绪并要求管理员修复或显式回滚；
+6. 清理超过 `--release-work-ttl` 且不属于活动 worker 的工作目录；
+7. 继续处理 release trash 和 tombstone。
+
+历史 release 默认保留当前版本加最近一个旧版本，并同时满足最短保留时间；版本选择依据是持久化的激活历史，而不是目录修改时间。配置建议为：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--release-workers` | `1` | 并发准备发布版本数量 |
+| `--release-queue-capacity` | `20` | 待发布队列上限 |
+| `--release-timeout` | `30m` | 单次发布正文生成上限 |
+| `--release-work-ttl` | `24h` | 孤立工作目录保留时间 |
+| `--release-history-count` | `2` | 每个目标至少保留的 Ready 版本数，包含当前版本 |
+| `--release-history-ttl` | `168h` | 非当前版本的最短保留时间 |
+| `--release-public-key` | 空 | 只读公钥文件路径；为空时不发布公钥 |
+
+清理候选必须同时满足：不是当前指针、超出保留数量且超过最短保留时间。清理只处理 `releases`，不得连带删除源过程仓；过程仓和 Artifact 仍按各自策略独立清理。
+
+#### 9.13.7 可观测性与验收
+
+结构化日志至少包含 Build name、Project、架构、源 repositoryUID、请求摘要、状态迁移和被排除的 spec 数量。指标至少覆盖请求、队列和执行耗时、输入与发布 RPM 数量、排除 spec 数量、命令失败、指针切换、恢复、回滚和历史清理。
+
+正式发布验收至少包括：
+
+1. 从 Ready 过程仓生成可被 DNF 使用的稳定仓库，禁止发布的 spec 和已删除 spec 均不存在。
+2. 发布生成期间稳定 URL 始终读取旧版本；切换后新请求完整读取新版本。
+3. 在正文 rename、指针 rename 和状态持久化前后分别注入崩溃，重启后均不出现混合版本。
+4. 相同请求并发提交只生成一个 release；同一 Build name 对应不同请求时返回冲突。
+5. 新发布失败时旧稳定仓库及其 repodata 保持可用。
+6. 当前版本不会被删除，历史版本满足数量和时间条件后才进入 trash。
+7. 配置公钥时 release 包含该公钥且 `release.json` 记录实际摘要；未配置公钥时仓库仍可正常使用。
+8. 显式回滚后稳定 URL 指向目标历史版本，原新版本仍保持不可变并可审计。
 
 ## 十、日志处理
 
