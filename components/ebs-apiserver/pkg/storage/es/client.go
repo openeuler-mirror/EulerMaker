@@ -45,7 +45,29 @@ const defaultIndexMapping = `{
     "data":{"type":"object","dynamic":false,"properties":{
       "status":{"type":"object","dynamic":false,"properties":{
         "phase":{"type":"keyword"},
-        "stage":{"type":"keyword"},
+        "stage":{"type":"keyword"}
+      }}
+    }}
+  }}
+}`
+
+const rpmRepoIndexMapping = `{
+  "settings":{"number_of_shards":1,"number_of_replicas":0},
+  "mappings":{"dynamic":"strict","properties":{
+    "apiVersion":{"type":"keyword"},
+    "kind":{"type":"keyword"},
+    "documentID":{"type":"keyword"},
+    "metadata":{"properties":{
+      "name":{"type":"keyword"},
+      "namespace":{"type":"keyword"},
+      "creationTimestamp":{"type":"date"},
+      "labels":{"type":"nested","properties":{
+        "key":{"type":"keyword"},
+        "value":{"type":"keyword"}
+      }}
+    }},
+    "data":{"type":"object","dynamic":false,"properties":{
+      "status":{"type":"object","dynamic":false,"properties":{
         "repository":{"type":"object","dynamic":false,"properties":{
           "phase":{"type":"keyword"}
         }},
@@ -213,6 +235,8 @@ func indexDefinitionForResource(resource string) ([]byte, error) {
 
 func mappingForResource(resource string) string {
 	switch resource {
+	case "rpmrepo":
+		return rpmRepoIndexMapping
 	case "user", "machineaccount":
 		return iamIndexMapping
 	default:
