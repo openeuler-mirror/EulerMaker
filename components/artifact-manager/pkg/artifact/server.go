@@ -74,12 +74,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok\n"))
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/internal/v1/releases/") || r.URL.Path == "/internal/v1/releases" {
+		s.routeReleaseManagement(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/repositories/releases/v1/") {
+		s.releaseVersionContent(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/internal/v1/repositories/") || r.URL.Path == "/internal/v1/repositories" {
 		s.routeRepositoryManagement(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/repositories/v1/") {
 		s.repositoryContent(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/repositories/") {
+		s.releaseCurrentContent(w, r)
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
