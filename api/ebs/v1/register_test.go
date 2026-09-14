@@ -63,13 +63,13 @@ func TestRpmRepoFieldLabelConversion(t *testing.T) {
 		t.Fatalf("add scheme: %v", err)
 	}
 	gvk := SchemeGroupVersion.WithKind("RpmRepo")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
+	for _, field := range []string{"metadata.name", "metadata.namespace", "status.repository.phase", "status.release.phase"} {
 		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
 		if err != nil || label != field || value != "value" {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
 	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "publish"); err == nil {
+	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.phase", "Ready"); err == nil {
 		t.Fatal("expected unsupported field selector error")
 	}
 }

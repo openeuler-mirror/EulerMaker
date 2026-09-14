@@ -680,7 +680,7 @@ RpmRepo Controller 负责：
 - 监听或轮询构建结果，确认所有输入 Job 已完成上传清单；
 - 为每个 Build 维护唯一的逻辑 `RpmRepo`，名称与 Build name 相同；
 - 以当前已发布物理版本为基础仓，并为每批输入 Job 推进一个新的不可变版本；
-- 提交物化前先将固定的输入、基础仓和 `repositoryUID` 持久化到 `RpmRepo.status.transition`；
+- 提交物化前先将固定的输入、基础仓和 `repositoryUID` 持久化到 `RpmRepo.status.repository.transition`；
 - 提交物化请求并查询结果；
 - 将完成的物理版本原子提升为 `RpmRepo.status` 当前版本；
 - 只有 API 状态更新成功后，才允许后续 Job 使用该仓库；
@@ -710,7 +710,7 @@ RpmRepo Controller 是 Controller Manager 内的常驻控制器，不等待其�
 - `status.phase=Completed`；
 - `status.artifactState=Completed`；
 - Job 携带由 BuildInfo Controller 写入的构建归属和目标 labels，能够确定 Build、spec、目标 OS 和目标架构；
-- 该 Job 未写入仓库发布结果，也不是 `RpmRepo.status.transition` 中正在处理的输入。
+- 该 Job 未写入仓库发布结果，也不是 `RpmRepo.status.repository.transition` 中正在处理的输入。
 
 RpmRepo Controller 以 `{project}/{buildName}` 作为串行队列 key，Reconcile 的对象是 Build，而不是触发事件的单个 Job。`buildName` 由唯一 UUID 生成且不复用，因此无需再引入 Build UID、目标 OS 或目标架构作为队列维度。目标 OS 和架构由 Build 确定，仅作为仓库元数据及一致性校验字段。同一 key 任一时刻只允许一个物化周期，保证后一个仓库显式以上一个 Ready 仓库为基础；不同 key 可以并行。Job 事件只计算并 Add Build key，同一 key 的重复事件由队列合并。
 
@@ -725,21 +725,21 @@ BuildInfo Controller 创建 Job 时必须写入以下不可变元数据：
 
 RpmRepo Controller 不从 Job 名称、Payload 或 RPM 文件名推导这些控制面归属。缺少任一字段的 Job 不进入物化队列，并记录结构化告警和指标。Project 直接使用 Job `metadata.namespace`。
 
-每个 Build 只有一个同名 RpmRepo，每批完成 Job 将该逻辑仓库推进一个新的不可变物理版本。每次最多选择 `--rpmrepo-max-jobs-per-batch` 个 Job，同时受 Manifest 数量和输入总字节数上限约束；不使用时间窗口等待更多 Job，到达任一上限或当前候选集已取完即形成批次。候选 Job 按 `creationTimestamp`、`metadata.name`、`metadata.uid` 升序稳定排序。同一批次每个 `specName` 最多一个 Job；遇到重复 spec 时只选择排序最前的 Job，其余 Job 留到下一批次，不能以 Watch 事件到达顺序决定覆盖关系。
+Build Controller 创建与 Build 同名的 RpmRepo；RpmRepo Controller 只读取该对象并推进 status，不负责补建。每批完成 Job 将该逻辑仓库推进一个新的不可变物理版本。每次最多选择 `--rpmrepo-max-jobs-per-batch` 个 Job，同时受 Manifest 数量和输入总字节数上限约束；不使用时间窗口等待更多 Job，到达任一上限或当前候选集已取完即形成批次。候选 Job 按 `creationTimestamp`、`metadata.name`、`metadata.uid` 升序稳定排序。同一批次每个 `specName` 最多一个 Job；遇到重复 spec 时只选择排序最前的 Job，其余 Job 留到下一批次，不能以 Watch 事件到达顺序决定覆盖关系。
 
 一次 Build Reconcile 流程如下：
 
-1. GET Build 和同名 RpmRepo；RpmRepo 不存在时创建空 spec 对象，创建冲突后直接重新 GET。
-2. RpmRepo 已存在 `status.transition` 时不得选择新输入或重新计算批次，直接按 transition 查询或重新提交 Artifact Manager，并继续该批次的结果确认。
+1. GET Build 和同名 RpmRepo；RpmRepo 不存在表示 Build Controller 的前置创建尚未完成或对象被异常删除，本周期返回临时错误并退避重试，不创建替代对象。
+2. RpmRepo 已存在 `status.repository.transition` 时不得选择新输入或重新计算批次，直接按 transition 查询或重新提交 Artifact Manager，并继续该批次的结果确认。
 3. 没有 transition 时，按 Build label 过滤 List Job，重新校验每个候选 Job 的 UID、终态、Artifact 状态和构建归属，剔除已发布、已稳定失败或不再满足条件的对象，然后按稳定顺序和批次上限选择输入。没有候选 Job 时成功结束。
-4. 使用当前 `status.repositoryUID` 作为基础仓。首次推进根据 `Build.status.baseBuildRef.name` 读取对应的已发布 RpmRepo 版本；未指定时基础仓为空。
+4. 使用当前 `status.repository.repositoryUID` 作为基础仓。首次推进根据 `Build.status.baseBuildRef.name` 读取对应的已发布 RpmRepo 版本；未指定时基础仓为空。
 5. 按候选顺序查询每个 Job 的唯一 Completed Manifest，达到 Job 数量或输入总字节数上限时停止加入批次。根据 Project、Build name、基础仓 UID 以及排序后的全部 Job UID 计算确定性 `repositoryUID`，再将完整 `RepositoryTransition` 以 `resourceVersion` CAS 写入 RpmRepo status。
 6. transition 写入成功后才能调用 Artifact Manager，单次请求提交批次内全部 Manifest。返回 `202` 后不占用 worker 等待，使用带指数退避的延迟队列再次入队同一个 Build key。
 7. 查询到 `Ready` 后，用一次 CAS 将 transition 中的版本提升为当前版本、写入 URL、摘要、RPM 元数据和本批次 Job UID，并清空 transition；然后逐个将同一物理版本 UID 写入本批次 Job status 作为已消费标记。
 8. Job status 写回必须逐项幂等。部分 Job 写回失败时，后续 Reconcile 根据 RpmRepo 当前版本记录的 Job UID 补写，不重新物化，也不把这些 Job 选入新批次；全部补写完成后若仍有候选 Job，立即重新入队同一个 Build key。
 9. 可重试基础设施错误保留原 transition 和同一 `repositoryUID` 重试。某个输入存在不可重试的请求、RPM 或 Manifest 错误时，整批不发布；将确定失败的 Job 标记为 `repositoryState=Failed` 并写入稳定错误，清除 transition 后将其余 Job 重新入队组成新批次。原已发布版本始终可读。
 
-RpmRepo Controller 重启后通过 List 已完成 Job 和同名 RpmRepo 重建 Build key，不依赖内存中的“已消费集合”。存在 transition 时必须先按其固定的输入 Job UID 集合、base repository UID 和 repository UID 恢复旧批次，不得重新选择输入或基础仓。当前 `RpmRepoSpec` 可保持为空，需扩展的是公共 `RpmRepoStatus`、`JobStatus` 及对应的 apiserver status 校验。
+RpmRepo Controller 重启后通过 List 已完成 Job 和同名 RpmRepo 重建 Build key，不依赖内存中的“已消费集合”。存在 transition 时必须先按其固定的输入 Job UID 集合、base repository UID 和 repository UID 恢复旧批次，不得重新选择输入或基础仓。当前由 Build Controller 创建的 `RpmRepoSpec` 可保持为空；RpmRepo Controller 需扩展和更新的是公共 `RpmRepoStatus`、`JobStatus` 及对应的 apiserver status 校验。
 
 当前公共 `JobStatus` 同样尚未包含 `artifactState`、`artifactCount`、`repositoryState` 和 `repositoryUID`。实现 RpmRepo Controller 前必须将这些字段加入公共 API，更新 OpenAPI、apiserver status 校验和客户端。`repositoryState=Published` 且 `repositoryUID` 非空表示 Job 已被逻辑仓库消费；`repositoryState=Failed` 表示稳定输入错误，不得自动重放。
 
@@ -785,7 +785,7 @@ ${dataDir}/
 
 `project`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 和目标 OS 只属于元数据，不直接参与本地路径拼接。所有目录操作必须从预先打开的 `dataDir` FD 开始，拒绝非服务自身创建的符号链接，并确保目标始终位于配置的数据目录内。
 
-`history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
+`history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
 `releases/{buildName}` 保存正式发布产生的不可变版本；架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。首版正式发布只安装已经由可信发布流程提供的公钥，不在 Artifact Manager 内签名 RPM 或 repodata。
 
@@ -811,7 +811,22 @@ type RepositoryTransition struct {
     RepositoryUID      string `json:"repositoryUID"`
 }
 
-type RpmRepoStatus struct {
+type ReleaseTransition struct {
+    SourceRepositoryUID string   `json:"sourceRepositoryUID"`
+    ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
+}
+
+type RpmRepoReleaseStatus struct {
+    Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
+    SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
+    ContentURL          string              `json:"contentURL,omitempty"`
+    ReleaseDigest       string              `json:"releaseDigest,omitempty"`
+    PackageCount        int                 `json:"packageCount,omitempty"`
+    Transition          *ReleaseTransition  `json:"transition,omitempty"`
+    UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
+}
+
+type RpmRepoRepositoryStatus struct {
     Phase             RpmRepoPhase        `json:"phase,omitempty"`
     RepositoryUID     string              `json:"repositoryUID,omitempty"`
     ContentURL        string              `json:"contentURL,omitempty"`
@@ -821,11 +836,18 @@ type RpmRepoStatus struct {
     SourceJobUIDs     []string            `json:"sourceJobUIDs,omitempty"`
     Transition        *RepositoryTransition `json:"transition,omitempty"`
     UpdatedAt         *metav1.Time        `json:"updatedAt,omitempty"`
+}
+
+type RpmRepoStatus struct {
+    Repository        *RpmRepoRepositoryStatus `json:"repository,omitempty"`
+    Release           *RpmRepoReleaseStatus    `json:"release,omitempty"`
     Conditions        []metav1.Condition  `json:"conditions,omitempty"`
 }
 ```
 
-`RpmRepoPhase` 的稳定取值为 `Pending`、`Processing`、`Ready`、`Failed`。RpmRepo 会随 Job 完成持续推进，因此 `Ready` 和 `Failed` 都不是对象终态；`Ready` 表示当前已有可读版本，`Processing` 表示 transition 正在物化。推进失败时不清除已发布版本字段：存在旧版本时可继续以 `Ready` 对外服务并通过 condition 暴露本次失败，只有首次物化失败且没有可读版本时才使用 `Failed`。`RpmRepo` 创建时由 apiserver 设置 `status.phase=Pending`；只有 RpmRepo Controller 可以更新 status。
+`RpmRepoPhase` 的稳定取值为 `Pending`、`Processing`、`Ready`、`Failed`。RpmRepo 会随 Job 完成持续推进，因此 `Ready` 和 `Failed` 都不是对象终态；`Ready` 表示当前已有可读版本，`Processing` 表示 transition 正在物化。推进失败时不清除已发布版本字段：存在旧版本时可继续以 `Ready` 对外服务并通过 condition 暴露本次失败，只有首次物化失败且没有可读版本时才使用 `Failed`。`RpmRepo` 创建时由 apiserver 设置 `status.repository.phase=Pending`；只有 RpmRepo Controller 可以更新 status。
+
+正式发布使用独立的 `status.release` 状态机，不能复用过程仓 `phase`。`RpmRepoReleasePhase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。提交 release API 前，Controller 必须先把源过程仓 UID 和规范化后的 `excludeSpecs` 写入 `release.transition`；恢复时必须重放该固定输入。激活成功后将源 UID 提升到 `release.sourceRepositoryUID`，写入稳定入口、摘要和包数量，并清除 transition。正式发布失败通过带独立 type 的顶层 condition 记录，不覆盖仍然可读的过程仓状态。
 
 ```go
 type RepositoryState string

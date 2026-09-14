@@ -15,7 +15,9 @@ func NewStorage() *scopedresource.Storage {
 		New:     func() runtime.Object { return &ebsv1.RpmRepo{} },
 		NewList: func() runtime.Object { return &ebsv1.RpmRepoList{} },
 		PrepareCreate: func(obj runtime.Object) {
-			obj.(*ebsv1.RpmRepo).Status = ebsv1.RpmRepoStatus{Phase: "Pending"}
+			obj.(*ebsv1.RpmRepo).Status = ebsv1.RpmRepoStatus{
+				Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoPending},
+			}
 		},
 		CopyStatus: func(obj, old runtime.Object) {
 			obj.(*ebsv1.RpmRepo).Status = old.(*ebsv1.RpmRepo).Status

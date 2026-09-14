@@ -225,3 +225,70 @@ func (p BuildPhase) IsTerminal() bool {
 		return false
 	}
 }
+
+// RpmRepoPhase describes the lifecycle of the current process repository version.
+type RpmRepoPhase string
+
+const (
+	RpmRepoPending    RpmRepoPhase = "Pending"
+	RpmRepoProcessing RpmRepoPhase = "Processing"
+	RpmRepoReady      RpmRepoPhase = "Ready"
+	RpmRepoFailed     RpmRepoPhase = "Failed"
+)
+
+var rpmRepoPhaseValues = []string{
+	string(RpmRepoPending),
+	string(RpmRepoProcessing),
+	string(RpmRepoReady),
+	string(RpmRepoFailed),
+}
+
+// RpmRepoPhaseValues returns all valid RpmRepo phase values.
+func RpmRepoPhaseValues() []string {
+	return append([]string(nil), rpmRepoPhaseValues...)
+}
+
+// IsValid reports whether p is a supported RpmRepo phase.
+func (p RpmRepoPhase) IsValid() bool {
+	switch p {
+	case RpmRepoPending, RpmRepoProcessing, RpmRepoReady, RpmRepoFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// RpmRepoReleasePhase describes formal release preparation and activation.
+type RpmRepoReleasePhase string
+
+const (
+	RpmRepoReleasePending  RpmRepoReleasePhase = "Pending"
+	RpmRepoReleaseCreating RpmRepoReleasePhase = "Creating"
+	RpmRepoReleasePrepared RpmRepoReleasePhase = "Prepared"
+	RpmRepoReleaseReady    RpmRepoReleasePhase = "Ready"
+	RpmRepoReleaseFailed   RpmRepoReleasePhase = "Failed"
+)
+
+var rpmRepoReleasePhaseValues = []string{
+	string(RpmRepoReleasePending),
+	string(RpmRepoReleaseCreating),
+	string(RpmRepoReleasePrepared),
+	string(RpmRepoReleaseReady),
+	string(RpmRepoReleaseFailed),
+}
+
+// RpmRepoReleasePhaseValues returns all valid formal release phase values.
+func RpmRepoReleasePhaseValues() []string {
+	return append([]string(nil), rpmRepoReleasePhaseValues...)
+}
+
+// IsValid reports whether p is a supported formal release phase.
+func (p RpmRepoReleasePhase) IsValid() bool {
+	switch p {
+	case RpmRepoReleasePending, RpmRepoReleaseCreating, RpmRepoReleasePrepared,
+		RpmRepoReleaseReady, RpmRepoReleaseFailed:
+		return true
+	default:
+		return false
+	}
+}

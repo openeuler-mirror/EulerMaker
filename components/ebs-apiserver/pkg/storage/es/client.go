@@ -45,7 +45,13 @@ const defaultIndexMapping = `{
     "data":{"type":"object","dynamic":false,"properties":{
       "status":{"type":"object","dynamic":false,"properties":{
         "phase":{"type":"keyword"},
-        "stage":{"type":"keyword"}
+        "stage":{"type":"keyword"},
+        "repository":{"type":"object","dynamic":false,"properties":{
+          "phase":{"type":"keyword"}
+        }},
+        "release":{"type":"object","dynamic":false,"properties":{
+          "phase":{"type":"keyword"}
+        }}
       }}
     }}
   }}
@@ -376,9 +382,9 @@ func (c *Client) ClosePIT(ctx context.Context, id string) error {
 
 func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query map[string]interface{}, size int64, searchAfter []json.RawMessage) (*SearchResult, error) {
 	body := map[string]interface{}{
-		"pit":                 map[string]string{"id": pitID, "keep_alive": keepAlive},
-		"query":               query,
-		"size":                size,
+		"pit":   map[string]string{"id": pitID, "keep_alive": keepAlive},
+		"query": query,
+		"size":  size,
 		"sort": []interface{}{
 			map[string]interface{}{"metadata.creationTimestamp": map[string]string{"order": "desc", "missing": "_last"}},
 			map[string]interface{}{"documentID": map[string]string{"order": "desc"}},
