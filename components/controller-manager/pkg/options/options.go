@@ -10,12 +10,14 @@ import (
 )
 
 type Options struct {
-	API     APIOptions
-	Manager ManagerOptions
-	Source  SourceOptions
-	Health  HealthOptions
-	Job     JobControllerOptions
-	Runner  RunnerControllerOptions
+	API       APIOptions
+	Manager   ManagerOptions
+	Source    SourceOptions
+	Health    HealthOptions
+	Job       JobControllerOptions
+	Runner    RunnerControllerOptions
+	Snapshot  SnapshotControllerOptions
+	GitServer GitServerOptions
 }
 
 type APIOptions struct {
@@ -56,14 +58,30 @@ type RunnerControllerOptions struct {
 	StartupGracePeriod time.Duration
 }
 
+type SnapshotControllerOptions struct {
+	ResolveWorkers    int
+	ResolveBudget     time.Duration
+	SyncRequeueDelay  time.Duration
+	FailureRetryLimit int
+}
+
+type GitServerOptions struct {
+	Address  string
+	Timeout  time.Duration
+	Retries  int
+	CacheTTL time.Duration
+}
+
 func Parse(args []string) (Options, error) {
 	o := Options{
-		API:     APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
-		Manager: ManagerOptions{Controllers: "*", Workers: 2, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
-		Source:  SourceOptions{PollPeriod: 30 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
-		Health:  HealthOptions{Address: ":8080"},
-		Job:     JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
-		Runner:  RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
+		API:       APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
+		Manager:   ManagerOptions{Controllers: "*", Workers: 2, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
+		Source:    SourceOptions{PollPeriod: 30 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
+		Health:    HealthOptions{Address: ":8080"},
+		Job:       JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
+		Runner:    RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
+		Snapshot:  SnapshotControllerOptions{ResolveWorkers: 8, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 3},
+		GitServer: GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
 	f.StringVar(&o.API.Server, "apiserver", "", "ebs-apiserver address")
@@ -90,6 +108,14 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Job.HistoryRetention, "job-history-retention", o.Job.HistoryRetention, "retention period for terminal Jobs")
 	f.DurationVar(&o.Runner.HeartbeatTimeout, "runner-heartbeat-timeout", o.Runner.HeartbeatTimeout, "timeout since the last persisted Runner heartbeat")
 	f.DurationVar(&o.Runner.StartupGracePeriod, "runner-startup-grace-period", o.Runner.StartupGracePeriod, "grace period for a new Runner to publish its first heartbeat")
+	f.IntVar(&o.Snapshot.ResolveWorkers, "snapshot-resolve-workers", o.Snapshot.ResolveWorkers, "concurrent repository resolution workers per Snapshot")
+	f.DurationVar(&o.Snapshot.ResolveBudget, "snapshot-resolve-budget", o.Snapshot.ResolveBudget, "total repository resolution budget per Snapshot reconcile")
+	f.DurationVar(&o.Snapshot.SyncRequeueDelay, "snapshot-sync-requeue-delay", o.Snapshot.SyncRequeueDelay, "delay before checking repositories that are still synchronizing")
+	f.IntVar(&o.Snapshot.FailureRetryLimit, "snapshot-failure-retry-limit", o.Snapshot.FailureRetryLimit, "confirmed temporary failures before a repository is skipped")
+	f.StringVar(&o.GitServer.Address, "git-server-addr", o.GitServer.Address, "git-server address")
+	f.DurationVar(&o.GitServer.Timeout, "git-server-timeout", o.GitServer.Timeout, "git-server request timeout")
+	f.IntVar(&o.GitServer.Retries, "git-server-retry", o.GitServer.Retries, "git-server request retry count")
+	f.DurationVar(&o.GitServer.CacheTTL, "git-server-cache-ttl", o.GitServer.CacheTTL, "git-server synchronization status cache TTL")
 	if err := f.Parse(args); err != nil {
 		return o, err
 	}
@@ -99,7 +125,7 @@ func Parse(args []string) (Options, error) {
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")
 	}
-	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 {
+	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
 		return o, fmt.Errorf("workers, limits, periods, timeouts and addresses must be valid")
 	}
 	return o, nil

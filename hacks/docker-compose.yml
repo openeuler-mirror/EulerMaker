@@ -106,12 +106,14 @@ services:
     command:
       - --apiserver=https://ebs-apiserver:8443
       - --insecure-skip-verify=true
+      - --git-server-addr=http://git-server:8080
     ports:
       - "8083:8080"
     networks:
       - ebs-net
     depends_on:
       - ebs-apiserver
+      - git-server
 
   artifact-manager:
     build:
