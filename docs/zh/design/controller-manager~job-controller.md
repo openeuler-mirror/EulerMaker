@@ -77,7 +77,7 @@ type Client interface {
     DeleteJob(
         ctx context.Context,
         namespace, name string,
-        preconditions client.DeletePreconditions,
+        preconditions apiserver.DeletePreconditions,
     ) error
 }
 ```
@@ -87,7 +87,7 @@ type Client interface {
 `DeleteJob` 必须同时接收 UID 和 resourceVersion，不能暴露无条件删除。Get 返回 Kubernetes 标准读取错误；两个写方法返回的错误必须能通过下列方式读取 Outcome，并保留 `apierrors.IsConflict`、`IsNotFound`、`IsUnauthorized`、`IsForbidden` 和 `IsTooManyRequests` 判断能力：
 
 ```go
-var writeErr *client.WriteError
+var writeErr *apiserver.WriteError
 if errors.As(err, &writeErr) {
     outcome := writeErr.Outcome
 }
@@ -408,7 +408,7 @@ status 更新结果未知后执行 Job GET：
 
 #### 7.4.5 Client 契约违例
 
-写方法返回非 nil error 时必须是可由 `errors.As` 取得的 `*client.WriteError`。若不是，Controller 将其保守地当作 WriteUnknown，记录 `unexpected-write-error`，并进入 7.4.4 的确认读取流程；不能直接重试写操作。写方法返回 `(nil, nil)` 或异常成功对象时，由 typed client 包装成 WriteUnknown。
+写方法返回非 nil error 时必须是可由 `errors.As` 取得的 `*apiserver.WriteError`。若不是，Controller 将其保守地当作 WriteUnknown，记录 `unexpected-write-error`，并进入 7.4.4 的确认读取流程；不能直接重试写操作。写方法返回 `(nil, nil)` 或异常成功对象时，由 typed client 包装成 WriteUnknown。
 
 ## 八、错误与重试
 

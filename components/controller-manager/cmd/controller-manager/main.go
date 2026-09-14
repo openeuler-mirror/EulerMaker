@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"controller-manager/pkg/client"
+	"controller-manager/pkg/clients/apiserver"
 	jobcontroller "controller-manager/pkg/controllers/job"
 	runnercontroller "controller-manager/pkg/controllers/runner"
 	"controller-manager/pkg/health"
@@ -31,7 +31,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	apiClient, err := client.New(config, o.API.RequestTimeout)
+	apiClient, err := apiserver.New(config, o.API.RequestTimeout)
 	if err != nil {
 		log.Fatal(err)
 	}

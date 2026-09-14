@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	clientpkg "controller-manager/pkg/client"
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )

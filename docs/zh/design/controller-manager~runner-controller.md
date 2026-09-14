@@ -88,7 +88,7 @@ GET /apis/ebs/v1/runners/{name}
 PUT /apis/ebs/v1/runners/{name}/status
 ```
 
-`UpdateRunnerStatus` 使用完整的最新 Runner 对象和当前 `metadata.resourceVersion`。适配器必须保留 `client.WriteError` 的 `WriteRejected`、`WriteNotSent`、`WriteUnknown` 分类以及 HTTP 状态判断能力。
+`UpdateRunnerStatus` 使用完整的最新 Runner 对象和当前 `metadata.resourceVersion`。适配器必须保留 `apiserver.WriteError` 的 `WriteRejected`、`WriteNotSent`、`WriteUnknown` 分类以及 HTTP 状态判断能力。
 
 ## 3. 配置
 

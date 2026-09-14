@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	clientpkg "controller-manager/pkg/client"
+	clientpkg "controller-manager/pkg/clients/apiserver"
 )
 
 func TestControllerRetriesThenForgets(t *testing.T) {
