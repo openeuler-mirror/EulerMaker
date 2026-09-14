@@ -61,6 +61,44 @@ func TestManagerSyncAndDelete(t *testing.T) {
 	}
 }
 
+func TestManagerSyncCoalescesPendingRequest(t *testing.T) {
+	store, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	manager, err := NewManager(context.Background(), store, &fakeGit{}, ManagerConfig{
+		Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond,
+		CloneBaseURL: "git://git-server:9418", CleanupPeriod: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := "https://example.com/team/repo.git"
+	if _, err := manager.Sync(origin); err != nil {
+		t.Fatal(err)
+	}
+	state := manager.states["example.com/team/repo.git"]
+	revision := state.Revision
+	state.RetryCount = 1
+	state.Error = &RepositoryError{Code: "FetchFailed", Retryable: true}
+	state.ResetBackoff = false
+
+	response, err := manager.Sync(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision != revision || state.RetryCount != 1 || state.Error == nil || state.ResetBackoff {
+		t.Fatalf("pending sync was reset: state=%+v", state)
+	}
+	if response.RetryCount != 1 || response.Error == nil {
+		t.Fatalf("response=%+v", response)
+	}
+	if manager.queue.Len() != 1 {
+		t.Fatalf("queue length=%d, want 1", manager.queue.Len())
+	}
+}
+
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

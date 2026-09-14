@@ -157,9 +157,15 @@ func (m *Manager) Sync(originURL string) (Response, error) {
 		s = &state{Key: parsed.Key}
 		m.states[parsed.Key] = s
 	}
+	if s.DesiredAction == ActionSync && s.OperationPending {
+		response := m.responseLocked(s)
+		m.mu.Unlock()
+		return response, nil
+	}
 	s.Revision++
 	s.DesiredAction = ActionSync
 	s.OriginURL = originURL
+	s.OperationPending = true
 	s.Error, s.RetryCount, s.ResetBackoff = nil, 0, true
 	response := m.responseLocked(s)
 	m.mu.Unlock()
@@ -184,6 +190,7 @@ func (m *Manager) Delete(originURL string) (Response, bool, error) {
 	}
 	s.Revision++
 	s.DesiredAction = ActionDelete
+	s.OperationPending = true
 	s.Error, s.RetryCount, s.ResetBackoff = nil, 0, true
 	response := m.responseLocked(s)
 	m.mu.Unlock()
@@ -319,6 +326,7 @@ func (m *Manager) processNext(ctx context.Context) bool {
 	}
 	if operationErr == nil {
 		current.Error, current.RetryCount = nil, 0
+		current.OperationPending = false
 		m.mu.Unlock()
 		m.queue.Forget(item)
 		return true
@@ -332,6 +340,7 @@ func (m *Manager) processNext(ctx context.Context) bool {
 		m.queue.AddRateLimited(item)
 		return true
 	}
+	current.OperationPending = false
 	m.mu.Unlock()
 	m.queue.Forget(item)
 	return true

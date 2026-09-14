@@ -204,7 +204,7 @@ Content-Type: application/json
 
 sync 只表示服务已经记录同步意图，不保证本次同步已经完成。仓库曾成功同步且尚未删除时返回 `clone_url` 和 `sync_time`；首次同步尚未成功时只返回 `key`。调用方不区分重复 sync 请求，也不等待某一次请求完成：存在 `sync_time` 和 `clone_url` 时可以尝试 clone，否则稍后重新查询 status。
 
-URL 非法返回 `400 Bad Request`，队列已经关闭返回 `503 Service Unavailable`。相同 key 的重复请求更新为最新同步意图，由队列合并处理，不并行同步同一个仓库。
+URL 非法返回 `400 Bad Request`，队列已经关闭返回 `503 Service Unavailable`。相同 key 已经排队、执行或等待自动重试的相同 sync 请求直接合并，返回当前状态且不创建新同步周期；同步周期终结后再次请求 sync 才创建新周期。sync 与 delete 相互切换时仍更新为最新意图。队列保证同一个仓库不会被并行同步。
 
 ### 4.2 查询仓库
 
@@ -360,11 +360,12 @@ type RepositoryState struct {
     RetryCount    int
     Error         *RepositoryError
     resetBackoff  bool
+    operationPending bool
     operationLock sync.RWMutex
 }
 ```
 
-`SyncTime != nil` 表示最终路径存在一份至少成功同步过一次、尚未完成删除的裸仓库；此时 API 可以返回 CloneURL。同步成功时更新 SyncTime；后续同步失败不清除它；删除成功时必须清除 SyncTime。`Error` 至少包含稳定的 `code`、脱敏后的 `message` 和 `retryable`，表示最近一次后台操作错误；收到新的显式意图时清除旧的 Error 和 RetryCount。
+`SyncTime != nil` 表示最终路径存在一份至少成功同步过一次、尚未完成删除的裸仓库；此时 API 可以返回 CloneURL。同步成功时更新 SyncTime；后续同步失败不清除它；删除成功时必须清除 SyncTime。`Error` 至少包含稳定的 `code`、脱敏后的 `message` 和 `retryable`，表示最近一次后台操作错误。`operationPending` 表示当前 revision 尚在队列、执行中或等待自动重试；同一状态下的重复 sync 请求据此合并。创建新的非合并显式意图时清除旧的 Error 和 RetryCount。
 
 状态 map 的值必须是 `*RepositoryState`。对象一经创建，在进程生命周期内不得替换或从 map 删除；这样同仓库的 operationLock 始终是同一个锁。读取任务参数时只复制 DesiredAction、OriginURL 和内部 revision，禁止复制包含互斥锁的 RepositoryState。
 
@@ -378,14 +379,17 @@ type RepositoryState struct {
 
 RepositoryState map 由一个全局互斥锁保护，锁内只修改内存字段，不执行文件系统、Git、队列阻塞操作或网络请求。每个仓库的 `operationLock` 保护本地裸仓库；全局锁与 operationLock 不得同时持有。
 
-sync 和 delete 都是幂等的最新意图：
+sync 和 delete 使用最新意图模型；相同 sync 在一个未终结周期内具有合并语义：
 
 1. handler 规范化 URL并取得全局锁；
 2. 创建或读取 RepositoryState；
-3. 内部 `revision++` 并更新 DesiredAction；sync 请求同时记录本次 OriginURL，delete 请求保留该字段。OriginURL 只是未来需要 clone 时的输入，不代表覆盖已有仓库的 origin；
-4. 清除上一意图的错误和 RetryCount，设置 `resetBackoff=true` 后释放锁；
-5. 调用 `queue.Add(key)`；如果 key 正在处理，workqueue 将其标记为 dirty；如果 key 正在延迟队列中，本次 Add 使其立即可用；
-6. 返回当前状态，不暴露内部 revision。
+3. 若请求为 sync，且 `DesiredAction=Sync && operationPending=true`，直接返回当前状态：不增加 revision、不清除 Error/RetryCount、不重置退避，也不再次 Add；排队、执行中和等待自动重试均属于未终结周期；
+4. 否则创建新显式意图：内部 `revision++`，更新 DesiredAction 并设置 `operationPending=true`；sync 请求同时记录本次 OriginURL，delete 请求保留该字段。OriginURL 只是未来需要 clone 时的输入，不代表覆盖已有仓库的 origin；
+5. 清除上一意图的错误和 RetryCount，设置 `resetBackoff=true` 后释放锁；
+6. 调用 `queue.Add(key)`；如果 key 正在处理，workqueue 将其标记为 dirty；如果 key 正在延迟队列中，本次 Add 使其立即可用；
+7. 返回当前状态，不暴露内部 revision。
+
+Worker 在当前 revision 成功、不可重试失败或重试耗尽时设置 `operationPending=false`。安排 `AddRateLimited` 后仍保持 true；发现 revision 已变化时不修改该字段，因为它已经表示更新意图的未终结周期。终结后的新 sync 请求会增加 revision 并重新入队。
 
 同一个 key 的多个请求以最后分配的内部 revision 为最终意图。例如 sync 正在执行时收到 delete，当前 sync 可以完成，但随后必须执行 delete；delete 正在执行时收到 sync，delete 完成后必须再次 clone。中间意图可以被更新的 revision 合并，服务只保证最终状态符合最新意图。
 
@@ -415,7 +419,7 @@ Worker 处理规则：
 delay(n) = min(retryBaseDelay * 2^(n-1), retryMaxDelay)
 ```
 
-其中 `n` 从 1 开始，表示即将安排的第 `n` 次自动重试。默认 `retryBaseDelay=1s`、`retryMaxDelay=1m`。`max-retries=5` 表示首次执行失败后最多再执行 5 次，因此单个 revision 最多执行 6 次；设置为 0 表示不自动重试。`RetryCount` 表示当前 revision 已经安排或开始执行的自动重试序号，首次执行时为 0，第一次调用 `AddRateLimited` 后为 1，最大不超过 `max-retries`。操作成功、新的显式意图到达时将 RetryCount 和 Error 清零；不可重试失败和重试耗尽时保留最终 RetryCount 和 Error 供 status 查询。
+其中 `n` 从 1 开始，表示即将安排的第 `n` 次自动重试。默认 `retryBaseDelay=1s`、`retryMaxDelay=1m`。`max-retries=5` 表示首次执行失败后最多再执行 5 次，因此单个 revision 最多执行 6 次；设置为 0 表示不自动重试。`RetryCount` 表示当前 revision 已经安排或开始执行的自动重试序号，首次执行时为 0，第一次调用 `AddRateLimited` 后为 1，最大不超过 `max-retries`。操作成功、新的非合并显式意图到达时将 RetryCount 和 Error 清零；合并的 sync 请求保持当前值；不可重试失败和重试耗尽时保留最终 RetryCount 和 Error 供 status 查询。
 
 可重试错误发生且当前 `RetryCount < max-retries` 时，Worker 先令 RetryCount 加一、保存 Error，再调用 `AddRateLimited`；到期取出后 RetryCount 不再增加，只有该次执行再次失败并确实安排下一次重试时才增加。网络超时、临时 DNS/连接错误和远端 5xx 属于可重试错误；URL/认证错误、仓库格式错误和本地权限错误默认不可重试。不可重试错误或重试耗尽时记录 Error 并调用 `Forget`。新的显式 sync/delete 请求增加 revision，可以重新激活已停止重试的 key，并在 Worker 处理该 revision 前清除旧 rate limiter 计数。
 
@@ -693,7 +697,7 @@ readiness 检查数据目录可读写且 Worker 已启动；单个远端仓库�
 - clone 失败、超时和进程重启后的临时目录清理；
 - 删除隔离目录清理失败不恢复 SyncTime，并能由后台清理器重试；
 - 后台清理器跳过 active 和未知条目，不跟随符号链接；
-- 相同仓库并发请求合并；
+- 相同仓库处于排队、执行或自动重试期间的重复 sync 请求合并，不增加 revision、不重置错误和退避；同步周期终结后的新 sync 创建新 revision；
 - 同步和删除串行；
 - sync 执行中收到 delete、delete 执行中收到 sync 时，最终状态符合最新内部 revision；
 - 旧 revision 的成功和失败均不能覆盖新 revision，也不能触发旧请求的退避；
