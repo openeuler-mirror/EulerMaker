@@ -105,6 +105,16 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	if mappingForResource("build") != mappingForResource("project") {
 		t.Fatal("build and project indices do not use the same default mapping")
 	}
+	if mappingForResource("rpmrepo") == mappingForResource("project") {
+		t.Fatal("rpmrepo index unexpectedly uses the default mapping")
+	}
+	if !strings.Contains(mappings["ebs-rpmrepos-v1"], `"repository"`) ||
+		!strings.Contains(mappings["ebs-rpmrepos-v1"], `"release"`) {
+		t.Fatalf("rpmrepo index does not map repository and release status: %s", mappings["ebs-rpmrepos-v1"])
+	}
+	if strings.Contains(mappings["ebs-rpmrepos-v1"], `"stage"`) {
+		t.Fatalf("rpmrepo index unexpectedly maps top-level status fields: %s", mappings["ebs-rpmrepos-v1"])
+	}
 	for index, mapping := range mappings {
 		var decoded struct {
 			Aliases map[string]struct {
