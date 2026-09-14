@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	clientpkg "controller-manager/pkg/client"
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"

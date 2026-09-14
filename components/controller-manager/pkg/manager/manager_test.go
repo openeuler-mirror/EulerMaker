@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	clientpkg "controller-manager/pkg/client"
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
