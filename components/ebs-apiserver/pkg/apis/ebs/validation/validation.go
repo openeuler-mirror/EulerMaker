@@ -2,6 +2,7 @@ package validation
 
 import (
 	"regexp"
+	"strings"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,6 +16,9 @@ var (
 	packageNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9][A-Za-z0-9+._-]*)*$`)
 	architecturePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	uuidV4Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	gitRefNamePattern   = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
+	gitCommitPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	gitRefDotSegment    = regexp.MustCompile(`(^|/)\.\.?($|/)`)
 )
 
 func ValidateProject(obj *ebsv1.Project) field.ErrorList {
@@ -40,6 +44,7 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("arch"), "arch is required"))
 		}
 	}
+	allErrs = append(allErrs, validatePackageRepos(obj.Spec.PackageRepos, field.NewPath("spec", "packageRepos"))...)
 	return allErrs
 }
 
@@ -53,7 +58,35 @@ func ValidateProjectStatusUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList 
 }
 
 func ValidateSnapshot(obj *ebsv1.Snapshot) field.ErrorList {
-	return nil
+	return validatePackageRepos(obj.Spec.PackageRepos, field.NewPath("spec", "packageRepos"))
+}
+
+func validatePackageRepos(repos []ebsv1.PackageRepo, path *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	validTypes := []string{string(ebsv1.GitRefBranch), string(ebsv1.GitRefTag), string(ebsv1.GitRefCommit)}
+	for i, repo := range repos {
+		refPath := path.Index(i).Child("ref")
+		if repo.Ref.Type == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("type"), "ref type is required"))
+		} else if repo.Ref.Type != ebsv1.GitRefBranch && repo.Ref.Type != ebsv1.GitRefTag && repo.Ref.Type != ebsv1.GitRefCommit {
+			allErrs = append(allErrs, field.NotSupported(refPath.Child("type"), repo.Ref.Type, validTypes))
+		}
+		if repo.Ref.Value == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("value"), "ref value is required"))
+			continue
+		}
+		switch repo.Ref.Type {
+		case ebsv1.GitRefBranch, ebsv1.GitRefTag:
+			if !gitRefNamePattern.MatchString(repo.Ref.Value) || repo.Ref.Value[0] == '-' || gitRefDotSegment.MatchString(repo.Ref.Value) || strings.Contains(repo.Ref.Value, "..") {
+				allErrs = append(allErrs, field.Invalid(refPath.Child("value"), repo.Ref.Value, "must be a safe branch or tag name"))
+			}
+		case ebsv1.GitRefCommit:
+			if !gitCommitPattern.MatchString(repo.Ref.Value) {
+				allErrs = append(allErrs, field.Invalid(refPath.Child("value"), repo.Ref.Value, "must be a full 40-character lowercase commit ID"))
+			}
+		}
+	}
+	return allErrs
 }
 
 func ValidateSnapshotUpdate(newObj, oldObj *ebsv1.Snapshot) field.ErrorList {
