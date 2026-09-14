@@ -14,8 +14,12 @@ type Config struct {
 	MaxFileSize, MaxJobSize, MaxMetadataSize, MaxLogSize, LogChunkSize int64
 	UploadTimeout, AuthCacheTTL, SSEHeartbeat, TemporaryUploadTTL      time.Duration
 	RepositoryTimeout, RepositoryWorkTTL, ShutdownTimeout              time.Duration
+	ReleaseTimeout, ReleaseWorkTTL                                     time.Duration
 	LogReplayWindow, LogDedupeWindow, MaxPartHeaders                   int
 	CreateRepoWorkers, RepositoryWorkers, RepositoryQueueCapacity      int
+	ReleaseWorkers, ReleaseQueueCapacity, ReleaseHistoryCount          int
+	ReleasePublicKey                                                   string
+	ReleaseHistoryTTL                                                  time.Duration
 	MaxHeaderLineSize, MaxPartHeaderBytes                              int64
 }
 
@@ -24,7 +28,7 @@ func DefaultConfig() Config {
 	if createRepoWorkers > 8 {
 		createRepoWorkers = 8
 	}
-	return Config{Listen: ":8081", DataDir: "/var/lib/ebs-artifacts", GatewayURL: "https://ebs-gateway:8443", MaxFileSize: 25 << 30, MaxJobSize: 100 << 30, MaxMetadataSize: 64 << 10, MaxLogSize: 4 << 30, LogChunkSize: 256 << 10, UploadTimeout: 2 * time.Hour, AuthCacheTTL: 30 * time.Second, SSEHeartbeat: 15 * time.Second, TemporaryUploadTTL: 24 * time.Hour, LogReplayWindow: 1024, LogDedupeWindow: 1024, MaxPartHeaders: 16, MaxHeaderLineSize: 8 << 10, MaxPartHeaderBytes: 32 << 10, CreateRepoCommand: "/usr/bin/createrepo_c", RPMQueryCommand: "/usr/bin/rpm", CreateRepoWorkers: createRepoWorkers, RepositoryTimeout: 30 * time.Minute, RepositoryWorkTTL: 24 * time.Hour, ShutdownTimeout: 30 * time.Second, RepositoryWorkers: 2, RepositoryQueueCapacity: 100}
+	return Config{Listen: ":8081", DataDir: "/var/lib/ebs-artifacts", GatewayURL: "https://ebs-gateway:8443", MaxFileSize: 25 << 30, MaxJobSize: 100 << 30, MaxMetadataSize: 64 << 10, MaxLogSize: 4 << 30, LogChunkSize: 256 << 10, UploadTimeout: 2 * time.Hour, AuthCacheTTL: 30 * time.Second, SSEHeartbeat: 15 * time.Second, TemporaryUploadTTL: 24 * time.Hour, LogReplayWindow: 1024, LogDedupeWindow: 1024, MaxPartHeaders: 16, MaxHeaderLineSize: 8 << 10, MaxPartHeaderBytes: 32 << 10, CreateRepoCommand: "/usr/bin/createrepo_c", RPMQueryCommand: "/usr/bin/rpm", CreateRepoWorkers: createRepoWorkers, RepositoryTimeout: 30 * time.Minute, RepositoryWorkTTL: 24 * time.Hour, ReleaseTimeout: 30 * time.Minute, ReleaseWorkTTL: 24 * time.Hour, ReleaseHistoryTTL: 7 * 24 * time.Hour, ShutdownTimeout: 30 * time.Second, RepositoryWorkers: 2, RepositoryQueueCapacity: 100, ReleaseWorkers: 1, ReleaseQueueCapacity: 20, ReleaseHistoryCount: 2}
 }
 func LoadConfig(args []string) (Config, error) {
 	c := DefaultConfig()
@@ -50,6 +54,13 @@ func LoadConfig(args []string) (Config, error) {
 	fs.DurationVar(&c.ShutdownTimeout, "shutdown-timeout", c.ShutdownTimeout, "graceful shutdown timeout")
 	fs.IntVar(&c.RepositoryWorkers, "repository-workers", c.RepositoryWorkers, "repository materialization workers")
 	fs.IntVar(&c.RepositoryQueueCapacity, "repository-queue-capacity", c.RepositoryQueueCapacity, "repository materialization queue capacity")
+	fs.DurationVar(&c.ReleaseTimeout, "release-timeout", c.ReleaseTimeout, "release creation timeout")
+	fs.DurationVar(&c.ReleaseWorkTTL, "release-work-ttl", c.ReleaseWorkTTL, "orphan release work directory retention")
+	fs.IntVar(&c.ReleaseWorkers, "release-workers", c.ReleaseWorkers, "release creation workers")
+	fs.IntVar(&c.ReleaseQueueCapacity, "release-queue-capacity", c.ReleaseQueueCapacity, "release queue capacity")
+	fs.StringVar(&c.ReleasePublicKey, "release-public-key", c.ReleasePublicKey, "read-only public key copied into releases")
+	fs.IntVar(&c.ReleaseHistoryCount, "release-history-count", c.ReleaseHistoryCount, "minimum ready releases retained per target")
+	fs.DurationVar(&c.ReleaseHistoryTTL, "release-history-ttl", c.ReleaseHistoryTTL, "minimum non-current release retention")
 	fs.IntVar(&c.MaxPartHeaders, "max-part-headers", c.MaxPartHeaders, "maximum headers per multipart part")
 	fs.Int64Var(&c.MaxHeaderLineSize, "max-header-line-size", c.MaxHeaderLineSize, "maximum multipart header line size")
 	fs.Int64Var(&c.MaxPartHeaderBytes, "max-part-header-bytes", c.MaxPartHeaderBytes, "maximum multipart part header bytes")
@@ -59,7 +70,7 @@ func LoadConfig(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
-	if c.Listen == "" || c.DataDir == "" || c.GatewayURL == "" || c.MaxFileSize <= 0 || c.MaxJobSize <= 0 || c.MaxMetadataSize <= 0 || c.LogChunkSize <= 0 || c.MaxPartHeaders <= 0 || c.MaxHeaderLineSize <= 0 || c.MaxPartHeaderBytes <= 0 || c.LogDedupeWindow <= 0 || c.LogReplayWindow <= 0 || c.CreateRepoCommand == "" || c.RPMQueryCommand == "" || c.CreateRepoWorkers <= 0 || c.RepositoryTimeout <= 0 || c.RepositoryWorkTTL <= 0 || c.ShutdownTimeout <= 0 || c.RepositoryWorkers <= 0 || c.RepositoryQueueCapacity <= 0 {
+	if c.Listen == "" || c.DataDir == "" || c.GatewayURL == "" || c.MaxFileSize <= 0 || c.MaxJobSize <= 0 || c.MaxMetadataSize <= 0 || c.LogChunkSize <= 0 || c.MaxPartHeaders <= 0 || c.MaxHeaderLineSize <= 0 || c.MaxPartHeaderBytes <= 0 || c.LogDedupeWindow <= 0 || c.LogReplayWindow <= 0 || c.CreateRepoCommand == "" || c.RPMQueryCommand == "" || c.CreateRepoWorkers <= 0 || c.RepositoryTimeout <= 0 || c.RepositoryWorkTTL <= 0 || c.ReleaseTimeout <= 0 || c.ReleaseWorkTTL <= 0 || c.ReleaseHistoryTTL <= 0 || c.ShutdownTimeout <= 0 || c.RepositoryWorkers <= 0 || c.RepositoryQueueCapacity <= 0 || c.ReleaseWorkers <= 0 || c.ReleaseQueueCapacity <= 0 || c.ReleaseHistoryCount <= 0 {
 		return c, fmt.Errorf("invalid configuration")
 	}
 	return c, nil
