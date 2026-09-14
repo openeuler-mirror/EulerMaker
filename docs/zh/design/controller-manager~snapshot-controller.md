@@ -20,7 +20,7 @@ Snapshot Controller 是 `controller-manager` 中负责将 `Snapshot` 资源沿 `
 - 不负责 git-server 的部署、运维和镜像清理策略；
 - 不处理 Project 删除的级联清理；
 - 不维护 Build、BuildInfo、RpmRepo 等上层资源状态；
-- 不负责 `PackageRepo.ref` 的结构校验；该校验由 apiserver 负责；
+- 不承担 `PackageRepo.ref` 的权威准入校验，该校验由 apiserver 负责；git-server 客户端仍在安全边界执行防御性复核，Snapshot Controller 只消费分类后的错误；
 - 不实现 leader election（首版单副本部署）。
 
 ## 二、依赖与组件边界
@@ -106,6 +106,41 @@ type GitServerClient interface {
 }
 ```
 
+`GitServerClient` 的失败必须返回可由 `errors.As` 识别的分类错误，Controller 不解析错误文本或底层 HTTP 状态：
+
+```go
+type GitServerErrorKind string
+
+const (
+    GitServerErrorValidation GitServerErrorKind = "Validation"
+    GitServerErrorNotFound   GitServerErrorKind = "NotFound"
+    GitServerErrorTemporary  GitServerErrorKind = "Temporary"
+    GitServerErrorPermanent  GitServerErrorKind = "Permanent"
+)
+
+type GitServerError struct {
+    Operation string
+    Kind      GitServerErrorKind
+    Err       error
+}
+```
+
+各方法的 error 契约如下：
+
+| error | 含义与 Controller 行为 |
+|-------|-------------------------|
+| `nil` | 调用成功；`CheckSynced` 的正常未就绪也返回 `Synced=false, nil` |
+| `GitServerError{Kind: Validation}` | Controller 提供的 URL 或 ref 不符合约束，确定性包级 `ValidationFailed`，当轮进入 Skipped |
+| `GitServerError{Kind: NotFound}` | `ResolveCommit` 确认 Branch/Tag 不存在，确定性包级 `ResolveFailed`，当轮进入 Skipped |
+| `GitServerError{Kind: Temporary}` | 408、429、5xx、临时网络错误、异常/不完整响应等；`PublishSyncTask`/`CheckSynced` 映射为 `SyncFailed`，`ResolveCommit` 映射为 `ResolveFailed`，均设置 `retryable=true` 并计入跨轮失败预算 |
+| `GitServerError{Kind: Permanent}` | 401、403 或无法通过重试修复的协议错误；Controller 返回 `PermanentError`，不得把基础设施配置错误固化成包级 Skipped |
+| `context.Canceled` | 原样返回；Manager context 取消时停止本周期，不生成业务错误 |
+| `context.DeadlineExceeded` | 若由 `budgetCtx` 或单请求超时触发，归入 `SyncTimeout` 或对应的临时解析失败；Manager context 已取消时仍原样结束 |
+
+客户端内部固定重试耗尽后只返回一次最终分类错误，并保留 `errors.Is(err, context.Canceled)`、`errors.Is(err, context.DeadlineExceeded)`，以及通过 `var gitErr *GitServerError; errors.As(err, &gitErr)` 读取分类的能力。Controller 对未知且无法分类的 error 按 `Temporary` 处理并记录 `unexpected-git-server-error` 指标，避免误把暂时故障永久固化到 Snapshot。
+
+HTTP 及协议结果必须在客户端内按以下规则归一化：400/422 且明确表示输入 URL/ref 非法时为 `Validation`；`CheckSynced` 的仓库 404 为正常未就绪；`ResolveCommit` 明确确认 ref 不存在时为 `NotFound`；401/403、接口不存在导致的 404/405 和其他不可恢复协议错误为 `Permanent`；408、429、5xx、网络错误及无法解析或字段不完整的成功响应为 `Temporary`。不得将服务端异常响应归为输入 `Validation`，避免把基础设施故障永久写入包状态。
+
 接口边界约定：
 
 - Snapshot Controller 只调用上述三个方法，不直接构造 `/status`、`/command` 请求，不解析 `RepositoryResponse` 或 `CommandResponse`。
@@ -114,7 +149,7 @@ type GitServerClient interface {
 - `CheckSynced` 仅在 `sync_time >= baseline` 且响应包含非空 `clone_url` 时返回 `SyncCheckResult{Synced:true, CloneURL:...}, nil`；同步时间达标但缺少 `clone_url` 属于 git-server 响应异常，返回临时错误。
 - `ResolveCommit` 在内部将 Branch 转为 `refs/heads/<value>`，将 Tag 转为 `refs/tags/<value>^{commit}`，调用只读 `/command` 并校验输出。Controller 不自行拼接命令数组或完整 ref。
 - 相同仓库已经排队或正在执行同步时，git-server 合并重复发布；Controller 不依赖某次请求的操作 ID。
-- `PackageRepo.url`、`ref.value` 和组装后的 Git ref 均是不可信输入，客户端必须执行防御性校验；违反约束返回确定性的 `ErrGitValidation`。
+- `PackageRepo.url`、`ref.value` 和组装后的 Git ref 均是不可信输入，客户端必须执行防御性校验；违反约束返回 `GitServerError{Kind: Validation}`。该复核不替代 apiserver 的权威准入校验。
 - 三个方法都必须遵守传入 context；context 取消或超时后及时返回。
 - L1 TTL 缓存属于客户端实现。同步状态缓存以规范化仓库 URL 为 key，同时缓存原始 `sync_time` 和 `clone_url`，每次调用仍使用本次 baseline 比较；不得仅缓存某次 `CheckSynced` 的布尔结果。`ResolveCommit` 不跨调用缓存 Branch/Tag 的解析结果，避免仓库完成新一轮同步后仍返回旧分支或标签结果。
 - 客户端实现可以提供 `PublishSyncTask`、`GetSyncStatus`、`ExecuteCommand` 等底层私有方法，但这些方法不属于 Controller 接口。
@@ -135,10 +170,10 @@ func (c *Controller) advancePhase(
 - 写入结果为 `WriteUnknown` 时，按 7.4.4 GET 确认。若写入意图已实现，返回确认 GET 得到的最新 Snapshot；若未实现，结束本周期并重新入队。不得继续使用调用 `advancePhase` 前的对象。
 - Snapshot 已是 `Processing` 时不调用 `advancePhase`，直接使用本周期 API GET 得到的对象。
 
-所有方法返回的错误必须能通过下列方式读取 Outcome，并保留 `apierrors.IsConflict`、`IsNotFound`、`IsUnauthorized`、`IsForbidden` 和 `IsTooManyRequests` 判断能力：
+`UpdateSnapshotStatus` 的写入失败必须能通过下列方式读取 Outcome，并保留 `apierrors.IsConflict`、`IsNotFound`、`IsUnauthorized`、`IsForbidden` 和 `IsTooManyRequests` 判断能力。`GetSnapshot`、`GetBuild` 不返回 `WriteError`，但必须保留对应的 `apierrors.Is*` 判断能力；git-server 方法遵循前述 `GitServerError` 契约：
 
 ```go
-var writeErr *client.WriteError
+var writeErr *apiserver.WriteError
 if errors.As(err, &writeErr) {
     outcome := writeErr.Outcome
 }
@@ -180,7 +215,7 @@ UID 不编码在字符串键中。`Sync` 通过 API Get 获取最新对象，并
 ### 4.2 Snapshot 事件（PollingSource）
 
 - `Add`：`phase ∈ {Pending, Processing}` 时入队；`Active` Snapshot 不入队。
-- `Update`：`old.resourceVersion == new.resourceVersion` 时视为重复事件并忽略；`resourceVersion` 变化且新对象的 `phase ∈ {Pending, Processing}` 时入队。新对象已经进入 `Active` 时不入队。PollingSource resync 事件仍需入队，作为恢复兜底。
+- `Update`：不比较新旧 `resourceVersion`；只要新对象的 `phase ∈ {Pending, Processing}` 就入队，新对象已经进入 `Active` 时不入队。PollingSource 每轮扫描都会产生 Update，同一 resourceVersion 的 Update 也必须入队，作为丢事件、慢速重试和外部依赖恢复后的 resync 兜底；工作队列负责合并同一 key。
 - `Delete`：无需处理（Snapshot Controller 不删除 Snapshot）。
 
 事件处理器只做类型检查和入队，不调用外部 API，不执行状态机。
@@ -220,10 +255,10 @@ type failureTracker struct {
 - Snapshot GET 404 时调用 `ClearObjectKey(objectKey)`，清除该键记录的 UID、该 UID 的全部计数；
 - GET 得到 `Active` Snapshot 时清除该 UID 的全部计数和 objectKey 映射；
 - GET 得到已有成功状态或不可重试 error 时，该状态已经由 apiserver 确认，可立即清除对应包的遗留计数；
-- 本轮新产生 Resolved、Waiting 或终态 Skipped（包括确定性失败和 `RetryExhausted`）时，将清理动作作为候选变更；只有 status 写入成功或 WriteUnknown 确认写入意图已实现后才提交；如果 status 无变化，调和成功返回前直接提交；
+- 本轮新产生 Resolved、Waiting 或终态 Skipped（包括确定性失败和 `RetryExhausted`）时，将清理动作作为候选变更；只有 status 写入成功或 WriteUnknown 确认写入意图已实现后才提交；如果 status 无变化，则在返回预先计算的 `postWriteResult/postWriteErr` 前直接提交；
 - 未达到上限的非确定性 Failed 仅在 status 写入成功或 WriteUnknown 确认后增加计数；达到上限并成功持久化 `RetryExhausted` 后清除该包计数。Conflict、写入失败或确认未实现时丢弃候选增量和清理动作；
 - Snapshot 成功推进 Active 后清除该 UID 的全部计数和 objectKey 映射；
-- 计数 ≥ `failureRetryLimit` 时写入不可重试的 `PackageRepoStatus.error`（code=`RetryExhausted`）并跳过；
+- 对本轮非确定性失败计算 `nextCount = currentCount + 1`。当 `nextCount >= failureRetryLimit` 时，本轮直接写入不可重试的 `PackageRepoStatus.error`（code=`RetryExhausted`）并跳过；否则写入可重试 error。默认 `failureRetryLimit=3` 表示第 1、2 次已确认失败仍可重试，第 3 次已确认失败转为 `RetryExhausted`；
 - 锁内不得执行 API 请求或队列阻塞操作。
 
 ## 五、状态判定
@@ -248,16 +283,16 @@ metadata.deletionTimestamp == nil
 | DR-3 | 本地镜像同步完成判定 | **baseline 时间戳比较** | POST `/api/v1/repo/status` 返回的 `RepoStatus.SyncTime`（`*time.Time`，RFC3339 解析）字段与 Snapshot 创建时间比较，仅当 `RepoStatus.SyncTime != nil && *RepoStatus.SyncTime >= baseline` 才认为镜像已同步到本次所需状态 |
 | DR-4 | 失败原因记录位置 | **包级错误写入 `Snapshot.status.packageRepoStatuses[repo.name].error`** | `packageRepoStatuses` 已按包名索引，不需要把不受控包名编码成 condition type；`status.conditions` 只记录 Snapshot 整体级异常 |
 | DR-5 | 部分失败处理 | **允许部分成功** | 成功的 repo 写入 packageRepoStatuses；失败的 repo 按 DR-6 分类处理（确定性当轮跳过，非确定性未超限下轮仅重试失败项） |
-| DR-6 | 失败分类与重试预算 | **确定性失败当轮跳过；非确定性失败跨轮重试，预算 `failureRetryLimit`（默认 3，可配），超限跳过** | 确定性失败当轮写入 `retryable=false` 的包级 error；非确定性失败写入 `retryable=true` 的包级 error 并跨轮重试，超限后改写为 `RetryExhausted`、`retryable=false`。无 packageRepos 属于整体错误，仍使用 condition。全部目标包“成功或跳过”即推进 Active |
+| DR-6 | 失败分类与重试预算 | **确定性失败当轮跳过；非确定性失败跨轮重试，预算 `failureRetryLimit`（默认 3，可配），达到上限时跳过** | 确定性失败当轮写入 `retryable=false` 的包级 error；非确定性失败令 `nextCount=currentCount+1`，`nextCount < failureRetryLimit` 时写入 `retryable=true` 并跨轮重试，`nextCount >= failureRetryLimit` 时写入 `RetryExhausted`、`retryable=false`。无 packageRepos 属于整体错误，仍使用 condition。全部目标包“成功或跳过”即推进 Active |
 | DR-7 | Snapshot 命名 | `<build-name>` | 与所属 Build 同名，通过 `metadata.name` 直接定位 Snapshot 与反查父 Build，无需 label 关联；由 build_controller 创建时确定 |
 | DR-8 | `ref.type=Commit` 时跳过解析 | **结构校验后直接采用** | commit 输入由统一的 `ref` 显式表达，不发布同步任务，也不执行 `git-rev-parse` |
 | DR-9 | commit 冲突（同 repo 不同包） | **跳过 + 包级错误** | 同一 URL 与同一规范化 `ref` 已有 commitId 且与本次解析结果不同时，不覆盖写入，为冲突包写入 code=`CommitConflict`、`retryable=false` 的 error |
-| DR-10 | git-server 客户端 | **Controller 只依赖 `PublishSyncTask` / `CheckSynced` / `ResolveCommit`** | 共享包 `pkg/gitserver` 封装 HTTP 协议、输出解析、固定次数重试和同步状态的 L1 TTL 缓存；底层 status/command 方法不暴露给 Controller。Branch/Tag 的 ResolveCommit 结果不跨调用缓存 |
+| DR-10 | git-server 客户端 | **Controller 只依赖 `PublishSyncTask` / `CheckSynced` / `ResolveCommit`** | 共享客户端包 `pkg/clients/gitserver` 封装 HTTP 协议、输出解析、固定次数重试和同步状态的 L1 TTL 缓存；底层 status/command 方法不暴露给 Controller。Branch/Tag 的 ResolveCommit 结果不跨调用缓存 |
 | DR-11 | `CheckSynced` 语义 | **返回同步判定及 clone URL** | HTTP 404、`SyncTime == nil` 或 `SyncTime < baseline` 均返回 `SyncCheckResult{Synced:false}, nil`；只有 `SyncTime >= baseline` 且 clone URL 非空时返回 `SyncCheckResult{Synced:true, CloneURL:...}, nil`。缓存原始 `sync_time` 和 `clone_url`，不能缓存脱离 baseline 的布尔结论 |
 | DR-12 | build_tag 来源 | **build_env_macros 注入** | Build 的 `build_env_macros` 包含 build_tag 宏，由 build_controller 在创建 Build 时从 Project 继承 |
 | DR-13 | 并发解析 | **固定 worker pool（默认 8）+ 总预算检查** | 主 goroutine 将待解析包写入任务通道，固定数量 worker 消费并写结果通道；不为每个包创建 goroutine，也不使用信号量。总预算 `resolveBudget`（默认 120s）通过 `context.WithTimeout` 控制。预算耗尽时，已经取得 `Synced=false, err=nil`、仅等待下次检查的任务进入 Waiting；尚未开始或请求尚未返回的任务进入 `SyncTimeout` Failed |
 | DR-14 | 单包轮内检查与错误重试上限 | **每轮最多调用 `CheckSynced` 8 次；请求错误最多连续出现 5 次**（检查间隔为 1s/2s/4s/8s，之后按 8s 封顶，可被 ctx 中断） | 8 次调用均为正常未就绪结果时进入 Waiting，不计失败；5xx/网络错误连续达到上限后进入 Failed，计入跨轮失败预算（DR-6） |
-| DR-15 | 指定包构建 | **仅解析找到的目标包，缺失目标按逻辑 Skipped 计入完成判定** | single/specified 构建以 `Build.spec.packages` 为目标名称集合；在 `Snapshot.spec.packageRepos` 中找到的目标正常解析，未找到的目标写整体 `TargetPackagesNotFound` condition，但不创建虚假的 `PackageRepoStatus`；非目标仓库不参与本次解析和完成判定 |
+| DR-15 | 指定包构建 | **只有 `single` 解析指定目标包；其他构建类型解析全部仓库** | `Build.spec.buildType == "single"` 时以 `Build.spec.packages` 为目标名称集合；在 `Snapshot.spec.packageRepos` 中找到的目标正常解析，未找到的目标写整体 `TargetPackagesNotFound` condition，但不创建虚假的 `PackageRepoStatus`；非目标仓库不参与本次解析和完成判定。任何其他非空 buildType 均解析全部 PackageRepo，不读取 `Build.spec.packages` |
 | DR-16 | 父 Build 生命周期 | **父 Build 必然存在** | build_controller 只会在 Build 已持久化后创建同名 Snapshot，且 Snapshot 存续期间不会删除父 Build。Controller 读取 Build 仅用于确定构建类型和目标包范围；Build 404 视为暂时不可调和并重试，不采用 fail-open，也不记录父对象缺失 condition |
 
 ### 5.3 幂等性
@@ -363,21 +398,24 @@ build_controller 在 Prepared 阶段创建 Snapshot
 4. 获取 PackageRepo 列表：从 `Snapshot.spec.packageRepos` 。
    - `Snapshot.spec.packageRepos` 为空 → 记 type=`InvalidPackageRepos`、reason=`NoPackageRepos` 的 condition，无包可解析 → 直接推进 Active。
 5. 确定目标包集合：
-   - `Build.spec.buildType = single/specified` 时，以 `Build.spec.packages` 中去重后的名称作为目标集合，并与 `Snapshot.spec.packageRepos[].name` 求交集。已找到目标进入待解析集合；未找到目标进入 missing set，在完成判定中按逻辑 Skipped 处理，但不得为其创建 `packageRepoStatuses` 条目。
+   - 仅当 `Build.spec.buildType == "single"` 时，以 `Build.spec.packages` 中去重后的名称作为目标集合，并与 `Snapshot.spec.packageRepos[].name` 求交集。已找到目标进入待解析集合；未找到目标进入 missing set，在完成判定中按逻辑 Skipped 处理，但不得为其创建 `packageRepoStatuses` 条目。
    - missing set 非空时写 type=`TargetPackagesNotFound`、reason=`TargetPackagesNotFound` 的整体 condition，message 使用排序后的缺失包名生成稳定且经过消毒的摘要；missing set 为空时删除已有的同 type condition。
-   - single/specified 的非目标 PackageRepo 不解析，也不参与完成判定。其他构建类型以全部 PackageRepo 为目标集合，missing set 为空。
-   - 若 single/specified 的全部目标都缺失，则不启动 worker；写入 condition 后直接推进 Active。
+   - `single` 的非目标 PackageRepo 不解析，也不参与完成判定。其他所有非空 buildType 均以全部 PackageRepo 为目标集合、忽略 `Build.spec.packages`，missing set 为空。
+   - 若 `single` 的全部目标都缺失，则不启动 worker；写入 condition 后直接推进 Active。
 6. 按 6.2 的子状态机解析尚未完成的目标包；已有成功结果或不可重试 error 的包不再解析。并发派发、预算取消和结果合并严格采用 6.2.1 的规则。
-7. 汇总结果并应用 4.4 的跨轮失败计数：Waiting 不计失败；Failed 未超限时保留可重试 error，达到上限时转为不可重试的 `RetryExhausted` 并计入 Skipped。
+7. 汇总结果并应用 4.4 的跨轮失败计数，同时计算最终写入确认后的 `postWriteResult/postWriteErr`。两者必须满足 BaseController 契约：有 error 时 Result 必须为零值。
    - 全部已找到目标包 Resolved 或 Skipped，且所有缺失目标已经按 missing set 记为逻辑 Skipped → 推进 Active。包级错误保留在对应 PackageRepoStatus 中，缺失目标仅保留整体 condition，二者共同作为 Active 快照的质量记录。不得因为部分目标缺失而提前跳过仍需解析的已找到目标。
-   - 存在 waiting set → 保持 Processing；完成必要的 status 写入后返回 `ReconcileResult{RequeueAfter: syncRequeueDelay}`。同时存在 failed set 时仍采用该延迟，避免立即重试正在同步的仓库；包级失败预算已经记录，不会丢失。
-   - 仅存在可重试 failed set、没有 waiting set → 保持 Processing 并返回临时错误，由 BaseController `AddRateLimited`。
+   - 存在 waiting set → 保持 Processing；设置 `postWriteResult=ReconcileResult{RequeueAfter: syncRequeueDelay}`、`postWriteErr=nil`。同时存在 failed set 时仍采用该延迟，避免立即重试正在同步的仓库；包级失败预算在写入确认后提交，不会丢失。
+   - 仅存在可重试 failed set、没有 waiting set → 保持 Processing；设置零值 `postWriteResult` 和临时 `postWriteErr`，由 BaseController `AddRateLimited`。
+   - 全部目标完成 → 设置零值 `postWriteResult` 和 `postWriteErr=nil`。
 8. 回写（updateSnapshot，调用 PUT：PUT /status 写 packageRepoStatuses + phase + conditions）。
    - 脏检查：reconcile 入口 DeepCopy 快照，回写前 `reflect.DeepEqual` 对比 status，无变化跳过 PUT。
+   - status 无变化时直接提交候选 failureTracker 变更，并返回第 7 步计算的 `postWriteResult/postWriteErr`。
+   - 完整 2xx 或 `WriteUnknown` 经 GET 确认写入意图已实现时，提交候选 failureTracker 变更，并返回第 7 步计算的 `postWriteResult/postWriteErr`。写入确认本身不改变预先计算的队列动作。
    - 409/412 冲突 → 不在当前周期内合并或重放写入，返回 `ReconcileResult{Requeue: true}`；由下一周期重新 GET 最新对象并重新计算。
    - 404 → 静默返回（已被外部删除）。
    - 5xx → 保持 phase=Processing，返回 error 退避重试。
-9. 返回 nil（等下一轮 poll，仅 phase ∈ {Pending, Processing} 会再次入队）。
+9. `advancePhase` 属于中间写入：成功或确认成功后继续本轮第 3 步，不能套用最终 `postWriteResult`。只有第 8 步最终写入确认后才返回第 7 步计算的结果。
 
 ### 6.4 错误记录
 
@@ -386,7 +424,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | type | reason | 触发时机 |
 |------|--------|----------|
 | `InvalidPackageRepos` | `NoPackageRepos` | `spec.packageRepos` 为空 |
-| `TargetPackagesNotFound` | `TargetPackagesNotFound` | single/specified Build 指定的一个或多个包无法在 `spec.packageRepos` 中找到；缺失目标不创建 `PackageRepoStatus`，仅通过该整体 condition 记录 |
+| `TargetPackagesNotFound` | `TargetPackagesNotFound` | `buildType=single` 的 Build 指定的一个或多个包无法在 `spec.packageRepos` 中找到；缺失目标不创建 `PackageRepoStatus`，仅通过该整体 condition 记录 |
 
 同一 type 同一时刻只保留当前 reason，对应问题消失时删除 condition。包名重复可以通过该名称写入包级 `ValidationFailed` error，不写整体 condition。
 
@@ -395,6 +433,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `SyncFailed` | `true` | 发布同步任务或查询同步状态发生临时错误，且跨轮预算尚未耗尽 |
 | `SyncTimeout` | `true` | git-server 请求超时，或总预算耗尽时任务尚未开始/请求尚未返回，且跨轮预算尚未耗尽；正常的 `Synced=false` 不产生该错误 |
 | `ResolveFailed` | `false` | Branch/Tag 指向的 ref 不存在或命令返回确定性失败 |
+| `ResolveFailed` | `true` | `ResolveCommit` 遭遇临时网络、服务端或响应错误，且跨轮预算尚未耗尽 |
 | `ValidationFailed` | `false` | 不可信输入校验失败、包名重复等确定性输入错误 |
 | `CommitConflict` | `false` | 同一 URL 与规范化 ref 得到不同 commitId |
 | `RetryExhausted` | `false` | 非确定性失败达到跨轮预算 |
@@ -435,7 +474,7 @@ git-server 为外部服务，可能不可用或响应延迟。Controller 必须�
 - git-server 超时归入 failed set，跨轮重试；
 - Snapshot 状态收敛不依赖 git-server 返回某次请求的操作 ID；重复同步请求由 git-server 合并，Controller 自身仍须保证状态写入幂等；
 - Controller 不直接解释 status HTTP 响应，只使用客户端的 `CheckSynced(originURL, baseline)` 结果；
-- `CheckSynced` 的 baseline 判定及 Waiting 迁移遵循 6.2；HTTP 与传输错误遵循 7.4。
+- `CheckSynced` 的 baseline 判定及 Waiting 迁移遵循 6.2；git-server 的 HTTP、协议与传输错误统一由客户端转换为第二章定义的 `GitServerError`，Controller 只按该分类契约处理。
 
 ### 7.4 完整错误矩阵
 
@@ -458,7 +497,7 @@ git-server 为外部服务，可能不可用或响应延迟。Controller 必须�
 
 | HTTP 结果 | 处理 |
 |-----------|------|
-| 完整 2xx 且成功响应校验通过 | 清理跨轮失败计数（成功包），记录成功日志和指标，成功结束 |
+| 完整 2xx 且成功响应校验通过 | 本次写入已确认；`advancePhase` 返回服务端对象并继续本轮，最终 `updateSnapshot` 提交候选 failureTracker 变更并返回预先计算的 `postWriteResult/postWriteErr` |
 | 2xx 但响应为空、解码失败或成功对象校验失败 | WriteUnknown，进入 7.4.4 |
 | 400、405、410、422、其他未单列 4xx | PermanentError，记录请求或 API 契约错误 |
 | 401、403 | PermanentError，记录鉴权失败 |
@@ -487,12 +526,12 @@ git-server 为外部服务，可能不可用或响应延迟。Controller 必须�
 
 若 Manager context 已取消，Controller 不在停止阶段启动确认请求，直接返回 context 错误；未确认的写入由进程重启后的初始 List 和正常调谐收敛。
 
-status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot Controller 拥有的全部目标字段均已达到本次写入意图时，才确认写入成功；否则不得重放旧请求，应以最新对象重新调和。UID 不同或对象不存在时结束旧周期。
+status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot Controller 拥有的全部目标字段均已达到本次写入意图时，才确认写入成功；否则不得重放旧请求，应以最新对象重新调和。确认成功只表示本次写入已持久化，不直接决定 reconcile 是否结束：`advancePhase` 返回确认 GET 的对象并继续处理，最终 `updateSnapshot` 则提交候选 failureTracker 变更并恢复写入前计算的 `postWriteResult/postWriteErr`。UID 不同或对象不存在时结束旧周期。
 
 | 确认结果 | 处理 |
 |----------|------|
 | 404 | Snapshot 已消失，成功结束 |
-| 同一 UID，`phase`、`packageRepoStatuses` 和 `conditions` 均与写入意图语义等价 | 本次写入意图已经收敛，成功结束 |
+| 同一 UID，`phase`、`packageRepoStatuses` 和 `conditions` 均与写入意图语义等价 | 本次写入意图已经收敛；按调用点继续：中间 phase 写入继续本轮，最终写入返回预先计算的后续动作 |
 | UID 不同 | 原 Snapshot 已消失且同名对象已重建，成功结束，不更新新对象 |
 | 同一 UID，但任一 Controller 所有字段未达到写入意图 | 不重放旧请求，返回 `Requeue=true`，按最新对象重新调谐 |
 | GET 失败 | 严格按 7.4.1 的 GET 矩阵处理 |
@@ -502,13 +541,14 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | 结果 | 队列行为 |
 |------|----------|
 | 对象不存在、无需处理、已经终态 | `ReconcileResult{}, nil`，BaseController Forget |
-| 状态推进成功或 GET 确认已达到预期 | `ReconcileResult{}, nil` |
+| `advancePhase` 成功或 GET 确认已达到预期 | 使用服务端返回或确认 GET 得到的 Snapshot 继续本轮，不在此处返回 |
+| 最终 `updateSnapshot` 成功或 GET 确认已达到预期 | 提交候选 failureTracker 变更，返回汇总阶段预先计算的 `postWriteResult/postWriteErr` |
 | 存在 Waiting 包（包括同时存在可重试失败包） | `ReconcileResult{RequeueAfter: syncRequeueDelay}, nil` |
 | 仅存在未超限可重试失败包 | 零值 Result 和临时错误，由 BaseController `AddRateLimited` |
 | resourceVersion Conflict | `ReconcileResult{Requeue: true}, nil`，清除旧退避后立即重读 |
 | 429/503 且 WriteError 带合法 RetryAfter | 零值 Result 和原始错误，由 BaseController Forget 后 AddAfter |
 | 读取或写入临时错误 | 零值 Result 和临时错误，由 BaseController AddRateLimited |
-| WriteUnknown | 先按 7.4.4 确认；确认后成功结束、立即重入或按确认 GET 错误处理 |
+| WriteUnknown | 先按 7.4.4 确认；确认成功后按写入调用点继续或返回预先计算的后续动作，确认未实现则立即重入，确认 GET 失败按读取错误处理 |
 | 永久 HTTP、输入或客户端错误 | 零值 Result 和 PermanentError，记录分类指标，不改变 Controller 健康状态 |
 | 无法解析对象或违反内部不变量 | 零值 Result 和错误，记录并限速重试；持续失败必须可观测 |
 
@@ -527,7 +567,7 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | `--snapshot-resolve-workers` | 8 | 单 Snapshot 内包解析并发数 |
 | `--snapshot-resolve-budget` | 120s | 单轮解析总预算（budgetCtx） |
 | `--snapshot-sync-requeue-delay` | 30s | `CheckSynced` 返回 `Synced=false, err=nil` 的轮内检查耗尽后再次检查的固定延迟 |
-| `--snapshot-failure-retry-limit` | 3 | 非确定性失败跨轮重试预算，超限写入不可重试的 `RetryExhausted` error 并跳过 |
+| `--snapshot-failure-retry-limit` | 3 | 非确定性失败跨轮重试预算，必须大于 0；`nextCount >= limit` 时写入不可重试的 `RetryExhausted` error 并跳过 |
 | `--git-server-addr` | `http://localhost:8080` | git-server 地址 |
 | `--git-server-timeout` | 30s | 单次请求超时 |
 | `--git-server-retry` | 3 | 客户端固定尝试次数 |
@@ -605,11 +645,13 @@ snapshot_controller_conflict_requeues_total
 - PackageRepo 已有 commitId 或不可重试 error 时不重复解析，已有可重试 error 时继续解析；
 - `ref.type=Commit` 时跳过 git-server 解析并直接采用 `ref.value`；
 - 包级确定性失败写入不可重试 error 并跳过；无 packageRepos 写整体 condition；
-- single/specified 部分目标缺失时，缺失目标写整体 condition 且不创建包级状态，已找到目标仍完成解析后才推进 Active；全部目标缺失时不启动 worker 并直接推进 Active；
+- `buildType=single` 部分目标缺失时，缺失目标写整体 condition 且不创建包级状态，已找到目标仍完成解析后才推进 Active；全部目标缺失时不启动 worker 并直接推进 Active；其他 buildType 即使填写 `spec.packages` 也解析全部仓库；
 - 非确定性失败（5xx/网络/超时）跨轮重试，超限后跳过；
 - `CheckSynced` 返回 `Synced=false, err=nil`，轮内检查耗尽后返回 `RequeueAfter=syncRequeueDelay`，不写包级 error、不增加失败预算；
 - 全部目标包成功或跳过后推进 Active；
 - WriteError 三分类处理（WriteRejected/WriteUnknown/WriteNotSent）；
+- `advancePhase` 正常 2xx 或 WriteUnknown 确认成功后继续本轮解析，不提前返回；
+- 最终 `updateSnapshot` 正常 2xx 或 WriteUnknown 确认成功后，均提交候选 failureTracker 变更并恢复相同的 `postWriteResult/postWriteErr`；
 - PermanentError 清除退避；
 - Conflict 重新入队（`Requeue=true`）；
 - 404 静默返回；
@@ -647,7 +689,7 @@ snapshot_controller_conflict_requeues_total
    - 确认 `SnapshotStatus.Conditions` 字段已扩展（已完成）
    - 执行 `api/hacks/update-codegen.sh` 生成 DeepCopy 方法
 
-2. **git-server 客户端**（`pkg/gitserver/`）：
+2. **git-server 客户端**（`pkg/clients/gitserver/`）：
    - `validate.go`：不可信输入白名单校验
    - `client.go`：实现 Controller 接口 `PublishSyncTask`、`CheckSynced`、`ResolveCommit`；内部封装 GetSyncStatus、ExecuteCommand（重试 3 次，30s 超时）
    - `revparse.go`：rev-parse 输出解析（提取 40 字符十六进制 SHA）
