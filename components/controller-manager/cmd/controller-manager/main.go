@@ -8,8 +8,10 @@ import (
 	"syscall"
 
 	"controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/clients/gitserver"
 	jobcontroller "controller-manager/pkg/controllers/job"
 	runnercontroller "controller-manager/pkg/controllers/runner"
+	snapshotcontroller "controller-manager/pkg/controllers/snapshot"
 	"controller-manager/pkg/health"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/options"
@@ -40,9 +42,14 @@ func main() {
 	}, o.Source.ResyncPeriod, o.Source.SourceStaleThreshold)
 	pollingFactory := source.NewPollingSourceFactory(apiClient.ListPage, int64(o.Source.PollPageSize), o.Source.SourceStaleThreshold)
 	healthServer := health.New(o.Health.Address)
+	gitClient, err := gitserver.New(gitserver.Config{Address: o.GitServer.Address, Timeout: o.GitServer.Timeout, Retries: o.GitServer.Retries, CacheTTL: o.GitServer.CacheTTL})
+	if err != nil {
+		log.Fatal(err)
+	}
 	initializers := map[string]manager.InitFunc{
-		jobcontroller.Name:    jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
-		runnercontroller.Name: runnercontroller.Initializer(runnercontroller.Config{HeartbeatTimeout: o.Runner.HeartbeatTimeout, StartupGracePeriod: o.Runner.StartupGracePeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
+		jobcontroller.Name:      jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
+		runnercontroller.Name:   runnercontroller.Initializer(runnercontroller.Config{HeartbeatTimeout: o.Runner.HeartbeatTimeout, StartupGracePeriod: o.Runner.StartupGracePeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
+		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, gitClient),
 	}
 	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout, SlowRetryInitial: o.Manager.SlowRetryInitialDelay, SlowRetryMax: o.Manager.SlowRetryMaxDelay, SlowRetryJitter: o.Manager.SlowRetryJitter}, healthServer)
 	if err != nil {

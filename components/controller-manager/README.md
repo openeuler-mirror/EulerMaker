@@ -1,8 +1,8 @@
 # Controller Manager
 
-Go Controller Manager 提供 Kubernetes 风格的 Controller 公共运行框架，包括共享事件源、限速工作队列、错误重试、健康检查和优雅退出。业务 Controller 通过 initializer 注册，框架本身不包含 Build、Snapshot 等对象的业务状态机。
+Go Controller Manager 提供 Kubernetes 风格的 Controller 公共运行框架，包括共享事件源、限速工作队列、错误重试、健康检查和优雅退出。业务 Controller 通过 initializer 注册。
 
-当前只有 `Job` 和 `Runner` 使用 List/Watch；其他 EBS 资源必须使用 PollingSource。入口已注册 Job Controller 和 Runner Controller：Runner Controller 根据持久化心跳把失联 Runner 收敛为 `Offline`，Job Controller 随后处理绑定到不可用 Runner 的悬挂 Job，并按保留期清理终态 Job。
+当前只有 `Job` 和 `Runner` 使用 List/Watch；`Snapshot` 使用带 phase 过滤的 PollingSource。入口已注册 Job、Runner 和 Snapshot Controller。Snapshot Controller 固化代码仓库 commit，并通过 git-server 驱动仓库同步和 ref 解析。
 
 ## 构建与测试
 
@@ -27,6 +27,7 @@ docker build -f components/controller-manager/Dockerfile -t eulermaker/controlle
 ./controller-manager \
   --apiserver=https://localhost:8443 \
   --insecure-skip-verify=true \
+  --git-server-addr=http://localhost:8084 \
   --runner-heartbeat-timeout=2m \
   --runner-startup-grace-period=5m \
   --job-runner-lost-grace-period=5m \
@@ -36,4 +37,4 @@ docker build -f components/controller-manager/Dockerfile -t eulermaker/controlle
 
 生产环境应通过 `--apiserver-ca` 校验 ebs-apiserver 服务端证书。进程默认在 `:8080` 提供 `/healthz`、`/readyz` 和 `/metrics`。
 
-默认 `--controllers=*` 会启用 Job Controller 和 Runner Controller；可以使用 `--controllers=-job` 或 `--controllers=-runner` 分别关闭。Runner Controller 负责根据心跳把 Runner 标记为 `Offline`，Job Controller 只读取该状态并执行后续 Job 收敛。
+默认 `--controllers=*` 会启用 Job、Runner 和 Snapshot Controller；可以使用 `--controllers=-job`、`--controllers=-runner` 或 `--controllers=-snapshot` 单独关闭。Snapshot 解析并发数、单轮总预算、同步重入延迟及仓库失败上限分别由 `--snapshot-resolve-workers`、`--snapshot-resolve-budget`、`--snapshot-sync-requeue-delay` 和 `--snapshot-failure-retry-limit` 配置。
