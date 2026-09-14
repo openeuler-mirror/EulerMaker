@@ -44,7 +44,13 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("arch"), "arch is required"))
 		}
 	}
-	allErrs = append(allErrs, validatePackageRepos(obj.Spec.PackageRepos, field.NewPath("spec", "packageRepos"))...)
+	packageReposPath := field.NewPath("spec", "packageRepos")
+	for i, repo := range obj.Spec.PackageRepos {
+		if repo.Name == "" {
+			allErrs = append(allErrs, field.Required(packageReposPath.Index(i).Child("name"), "name is required"))
+		}
+	}
+	allErrs = append(allErrs, validatePackageRepos(obj.Spec.PackageRepos, packageReposPath)...)
 	return allErrs
 }
 

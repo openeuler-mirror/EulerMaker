@@ -82,12 +82,28 @@ func TestValidateProject(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 				Spec: ebsv1.ProjectSpec{
 					BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
-					PackageRepos: []ebsv1.PackageRepo{{Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch}}},
+					PackageRepos: []ebsv1.PackageRepo{{Name: "pkg-a", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch}}},
 				},
 			},
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
 				"spec.packageRepos[0].ref.value": field.ErrorTypeRequired,
+			},
+		},
+		{
+			name: "requires package repo name",
+			project: &ebsv1.Project{
+				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
+				Spec: ebsv1.ProjectSpec{
+					BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
+					PackageRepos: []ebsv1.PackageRepo{{
+						Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"},
+					}},
+				},
+			},
+			wantErrs: 1,
+			wantFields: map[string]field.ErrorType{
+				"spec.packageRepos[0].name": field.ErrorTypeRequired,
 			},
 		},
 	}
@@ -105,6 +121,17 @@ func TestValidateProjectUpdate(t *testing.T) {
 	assertErrorList(t, errs, 2, map[string]field.ErrorType{
 		"metadata.name":     field.ErrorTypeRequired,
 		"spec.buildTargets": field.ErrorTypeRequired,
+	})
+}
+
+func TestValidateProjectUpdateRequiresPackageRepoName(t *testing.T) {
+	newProject := validProject()
+	newProject.Spec.PackageRepos = []ebsv1.PackageRepo{{
+		Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"},
+	}}
+	err := ValidateProjectUpdate(newProject, validProject())
+	assertErrorList(t, err, 1, map[string]field.ErrorType{
+		"spec.packageRepos[0].name": field.ErrorTypeRequired,
 	})
 }
 
@@ -649,8 +676,11 @@ func validProjectSpec() ebsv1.ProjectSpec {
 func validSnapshot() *ebsv1.Snapshot {
 	return &ebsv1.Snapshot{
 		Status: ebsv1.SnapshotStatus{
-			SpecCommits: map[string]ebsv1.SpecCommit{
-				"pkg-a": {CommitId: "abc123"},
+			PackageRepoStatuses: map[string]ebsv1.PackageRepoStatus{
+				"pkg-a": {
+					CloneURL: "git://git-server:9418/gitee.com/src-openeuler/pkg-a.git",
+					CommitID: "abc123",
+				},
 			},
 		},
 	}

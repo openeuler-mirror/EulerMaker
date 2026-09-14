@@ -461,7 +461,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
 - Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。Build 创建后整个 `spec` 不可修改；普通 Update 只能修改允许的 metadata，`/status` 更新保留原对象 metadata，不能修改这些标签。
-- Snapshot 的 `status.specCommits` 由 Snapshot Controller 根据 `spec.packageRepos` 解析和写入，无法获取 commit 时允许为空；创建请求不能直接设置该字段。
+- Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneUrl` 记录 git-server 确认同步后返回的只读地址；包解析成功时记录 commitId，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 只记录整体级异常，不使用包名作为 condition type。
 - Build 必须包含 `buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
