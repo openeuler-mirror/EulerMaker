@@ -35,6 +35,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.JobStatus":                         schema_ebs_api_ebs_v1_JobStatus(ref),
 		"ebs-api/ebs/v1.MissingDep":                        schema_ebs_api_ebs_v1_MissingDep(ref),
 		"ebs-api/ebs/v1.PackageRepo":                       schema_ebs_api_ebs_v1_PackageRepo(ref),
+		"ebs-api/ebs/v1.PackageRepoStatus":                 schema_ebs_api_ebs_v1_PackageRepoStatus(ref),
 		"ebs-api/ebs/v1.PackageResourceConfig":             schema_ebs_api_ebs_v1_PackageResourceConfig(ref),
 		"ebs-api/ebs/v1.Project":                           schema_ebs_api_ebs_v1_Project(ref),
 		"ebs-api/ebs/v1.ProjectList":                       schema_ebs_api_ebs_v1_ProjectList(ref),
@@ -58,7 +59,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.SnapshotSpec":                      schema_ebs_api_ebs_v1_SnapshotSpec(ref),
 		"ebs-api/ebs/v1.SnapshotStatus":                    schema_ebs_api_ebs_v1_SnapshotStatus(ref),
 		"ebs-api/ebs/v1.SpecBuildStatus":                   schema_ebs_api_ebs_v1_SpecBuildStatus(ref),
-		"ebs-api/ebs/v1.SpecCommit":                        schema_ebs_api_ebs_v1_SpecCommit(ref),
+		"ebs-api/ebs/v1.SpecCommitError":                   schema_ebs_api_ebs_v1_SpecCommitError(ref),
 		"ebs-api/ebs/v1.SpecDepend":                        schema_ebs_api_ebs_v1_SpecDepend(ref),
 		"ebs-api/ebs/v1.SpecInstallStatus":                 schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
 		"ebs-api/ebs/v1.SpecStatus":                        schema_ebs_api_ebs_v1_SpecStatus(ref),
@@ -984,6 +985,37 @@ func schema_ebs_api_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Open
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.GitRef"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_PackageRepoStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"cloneUrl": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"commitId": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"error": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/ebs/v1.SpecCommitError"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.SpecCommitError"},
 	}
 }
 
@@ -1926,7 +1958,7 @@ func schema_ebs_api_ebs_v1_SnapshotStatus(ref common.ReferenceCallback) common.O
 							Format: "",
 						},
 					},
-					"specCommits": {
+					"packageRepoStatuses": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
@@ -1934,7 +1966,7 @@ func schema_ebs_api_ebs_v1_SnapshotStatus(ref common.ReferenceCallback) common.O
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.SpecCommit"),
+										Ref:     ref("ebs-api/ebs/v1.PackageRepoStatus"),
 									},
 								},
 							},
@@ -1957,7 +1989,7 @@ func schema_ebs_api_ebs_v1_SnapshotStatus(ref common.ReferenceCallback) common.O
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.SpecCommit", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.PackageRepoStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 
@@ -2002,21 +2034,27 @@ func schema_ebs_api_ebs_v1_SpecBuildStatus(ref common.ReferenceCallback) common.
 	}
 }
 
-func schema_ebs_api_ebs_v1_SpecCommit(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_ebs_v1_SpecCommitError(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"specUrl": {
+					"code": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
 						},
 					},
-					"commitId": {
+					"message": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"retryable": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
 							Format: "",
 						},
 					},

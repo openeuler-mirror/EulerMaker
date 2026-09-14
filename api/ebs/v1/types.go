@@ -44,9 +44,9 @@ type SnapshotSpec struct {
 }
 
 type SnapshotStatus struct {
-	Phase       SnapshotPhase         `json:"phase,omitempty"`
-	SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
-	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
+	Phase               SnapshotPhase                `json:"phase,omitempty"`
+	PackageRepoStatuses map[string]PackageRepoStatus `json:"packageRepoStatuses,omitempty"`
+	Conditions          []metav1.Condition           `json:"conditions,omitempty"`
 }
 
 type SnapshotList struct {
@@ -310,7 +310,7 @@ type BuildTarget struct {
 
 type PackageRepo struct {
 	Name         string        `json:"name,omitempty"`
-	Url          string        `json:"url,omitempty"`
+	URL          string        `json:"url,omitempty"`
 	Ref          GitRef        `json:"ref,omitempty"`
 	BuildTargets []BuildTarget `json:"buildTargets,omitempty"`
 }
@@ -328,9 +328,16 @@ type GitRef struct {
 	Value string     `json:"value,omitempty"`
 }
 
-type SpecCommit struct {
-	SpecUrl  string `json:"specUrl,omitempty"`
-	CommitId string `json:"commitId,omitempty"`
+type PackageRepoStatus struct {
+	CloneURL string           `json:"cloneUrl,omitempty"`
+	CommitID string           `json:"commitId,omitempty"`
+	Error    *SpecCommitError `json:"error,omitempty"`
+}
+
+type SpecCommitError struct {
+	Code      SpecCommitErrorCode `json:"code,omitempty"`
+	Message   string              `json:"message,omitempty"`
+	Retryable bool                `json:"retryable,omitempty"`
 }
 
 type VersionConst struct {

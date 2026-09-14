@@ -68,7 +68,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
                   BuildResourceSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
-                  PackageRepo SpecCommit VersionConst
+                  PackageRepo PackageRepoStatus VersionConst
 ```
 
 ---
@@ -172,17 +172,17 @@ type SnapshotSpec struct {
 
 ```go
 type SnapshotStatus struct {
-    Phase       SnapshotPhase        `json:"phase,omitempty"`
-    SpecCommits map[string]SpecCommit `json:"specCommits,omitempty"`
-    Conditions  []metav1.Condition   `json:"conditions,omitempty"`
+    Phase               SnapshotPhase                `json:"phase,omitempty"`
+    PackageRepoStatuses map[string]PackageRepoStatus `json:"packageRepoStatuses,omitempty"`
+    Conditions          []metav1.Condition           `json:"conditions,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | `SnapshotPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Pending` / `Processing` / `Active` |
-| `specCommits` | map[string]SpecCommit | Snapshot Controller 根据 `spec.packageRepos` 解析得到的各包 spec 提交信息；无法获取 commit 时允许为空 |
-| `conditions` | []metav1.Condition | 状态条件，用于记录 Snapshot 处理过程中的异常原因和详细信息 |
+| `packageRepoStatuses` | map[string]PackageRepoStatus | Snapshot Controller 根据 `spec.packageRepos` 写入的各包解析状态；成功记录 commit，失败记录包级 error |
+| `conditions` | []metav1.Condition | 仅记录无法归属于具体包的 Snapshot 整体异常，不使用包名作为 condition type |
 
 ### SnapshotList
 
@@ -917,7 +917,7 @@ type BuildTarget struct {
 ```go
 type PackageRepo struct {
     Name          string          `json:"name,omitempty"`
-    Url           string          `json:"url,omitempty"`
+    URL           string          `json:"url,omitempty"`
     Ref           GitRef          `json:"ref,omitempty"`
     BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
 }
@@ -946,19 +946,29 @@ type GitRef struct {
 `ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。`type` 和 `value` 必须同时存在，不允许使用裸字符串推断引用类型。
 
 
-### SpecCommit
+### PackageRepoStatus
 
 ```go
-type SpecCommit struct {
-    SpecUrl    string `json:"specUrl,omitempty"`
-    CommitId   string `json:"commitId,omitempty"`
+type PackageRepoStatus struct {
+    CloneURL string           `json:"cloneUrl,omitempty"`
+    CommitID string           `json:"commitId,omitempty"`
+    Error    *SpecCommitError `json:"error,omitempty"`
+}
+
+type SpecCommitError struct {
+    Code      SpecCommitErrorCode `json:"code,omitempty"`
+    Message   string              `json:"message,omitempty"`
+    Retryable bool                `json:"retryable,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `specUrl` | string | spec 仓库 URL |
-| `commitId` | string | 提交 ID |
+| `cloneUrl` | string | git-server 返回的只读 clone URL；仅完成本轮同步确认后填写 |
+| `commitId` | string | 成功解析出的完整提交 ID；设置后 error 必须为空 |
+| `error` | *SpecCommitError | 包级解析错误；设置后 commitId 必须为空。`retryable=true` 表示后续继续解析 |
+
+`SpecCommitErrorCode` 的稳定取值为 `ValidationFailed`、`SyncFailed`、`SyncTimeout`、`ResolveFailed`、`CommitConflict` 和 `RetryExhausted`。map 中不存在对应包表示尚未处理；存在 commitId 表示成功；存在不可重试 error 表示已跳过。
 
 ---
 
@@ -1006,7 +1016,7 @@ ProjectSpec
 └── BootstrapRepo
 
 SnapshotSpec
-└── SpecCommit
+└── PackageRepoStatus
 
 BuildSpec
 ├── BuildTarget

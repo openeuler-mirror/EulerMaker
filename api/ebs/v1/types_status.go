@@ -138,6 +138,18 @@ func (p RunnerPhase) IsValid() bool {
 // SnapshotPhase describes the lifecycle state of a Snapshot.
 type SnapshotPhase string
 
+// SpecCommitErrorCode classifies a package repository resolution failure.
+type SpecCommitErrorCode string
+
+const (
+	SpecCommitValidationFailed SpecCommitErrorCode = "ValidationFailed"
+	SpecCommitSyncFailed       SpecCommitErrorCode = "SyncFailed"
+	SpecCommitSyncTimeout      SpecCommitErrorCode = "SyncTimeout"
+	SpecCommitResolveFailed    SpecCommitErrorCode = "ResolveFailed"
+	SpecCommitCommitConflict   SpecCommitErrorCode = "CommitConflict"
+	SpecCommitRetryExhausted   SpecCommitErrorCode = "RetryExhausted"
+)
+
 const (
 	SnapshotPending    SnapshotPhase = "Pending"
 	SnapshotProcessing SnapshotPhase = "Processing"
