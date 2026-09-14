@@ -56,16 +56,17 @@ type Response struct {
 }
 
 type state struct {
-	Key           string
-	OriginURL     string
-	DesiredAction Action
-	Revision      uint64
-	Available     bool
-	SyncTime      *time.Time
-	RetryCount    int
-	Error         *RepositoryError
-	ResetBackoff  bool
-	operationLock sync.RWMutex
+	Key              string
+	OriginURL        string
+	DesiredAction    Action
+	Revision         uint64
+	Available        bool
+	SyncTime         *time.Time
+	RetryCount       int
+	Error            *RepositoryError
+	ResetBackoff     bool
+	OperationPending bool
+	operationLock    sync.RWMutex
 }
 
 type snapshot struct {
