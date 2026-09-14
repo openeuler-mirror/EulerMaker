@@ -41,10 +41,15 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.ProjectList":                       schema_ebs_api_ebs_v1_ProjectList(ref),
 		"ebs-api/ebs/v1.ProjectSpec":                       schema_ebs_api_ebs_v1_ProjectSpec(ref),
 		"ebs-api/ebs/v1.ProjectStatus":                     schema_ebs_api_ebs_v1_ProjectStatus(ref),
+		"ebs-api/ebs/v1.ReleaseTransition":                 schema_ebs_api_ebs_v1_ReleaseTransition(ref),
+		"ebs-api/ebs/v1.RepositoryInput":                   schema_ebs_api_ebs_v1_RepositoryInput(ref),
+		"ebs-api/ebs/v1.RepositoryTransition":              schema_ebs_api_ebs_v1_RepositoryTransition(ref),
 		"ebs-api/ebs/v1.ResourceRequirements":              schema_ebs_api_ebs_v1_ResourceRequirements(ref),
 		"ebs-api/ebs/v1.RpmMeta":                           schema_ebs_api_ebs_v1_RpmMeta(ref),
 		"ebs-api/ebs/v1.RpmRepo":                           schema_ebs_api_ebs_v1_RpmRepo(ref),
 		"ebs-api/ebs/v1.RpmRepoList":                       schema_ebs_api_ebs_v1_RpmRepoList(ref),
+		"ebs-api/ebs/v1.RpmRepoReleaseStatus":              schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref),
+		"ebs-api/ebs/v1.RpmRepoRepositoryStatus":           schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref),
 		"ebs-api/ebs/v1.RpmRepoSpec":                       schema_ebs_api_ebs_v1_RpmRepoSpec(ref),
 		"ebs-api/ebs/v1.RpmRepoStatus":                     schema_ebs_api_ebs_v1_RpmRepoStatus(ref),
 		"ebs-api/ebs/v1.Runner":                            schema_ebs_api_ebs_v1_Runner(ref),
@@ -1242,6 +1247,115 @@ func schema_ebs_api_ebs_v1_ProjectStatus(ref common.ReferenceCallback) common.Op
 	}
 }
 
+func schema_ebs_api_ebs_v1_ReleaseTransition(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"sourceRepositoryUID": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"excludeSpecs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"sourceRepositoryUID"},
+			},
+		},
+	}
+}
+
+func schema_ebs_api_ebs_v1_RepositoryInput(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"jobName": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"jobUID": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"specName": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"jobName", "jobUID", "specName"},
+			},
+		},
+	}
+}
+
+func schema_ebs_api_ebs_v1_RepositoryTransition(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"inputs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.RepositoryInput"),
+									},
+								},
+							},
+						},
+					},
+					"baseRepositoryUID": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"repositoryUID": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"inputs", "repositoryUID"},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.RepositoryInput"},
+	}
+}
+
 func schema_ebs_api_ebs_v1_ResourceRequirements(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1436,6 +1550,142 @@ func schema_ebs_api_ebs_v1_RpmRepoList(ref common.ReferenceCallback) common.Open
 	}
 }
 
+func schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"sourceRepositoryUID": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"contentURL": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"releaseDigest": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"packageCount": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"integer"},
+							Format: "int32",
+						},
+					},
+					"transition": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/ebs/v1.ReleaseTransition"),
+						},
+					},
+					"updatedAt": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.ReleaseTransition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"repositoryUID": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"contentURL": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"repositoryDigest": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"packageCount": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"integer"},
+							Format: "int32",
+						},
+					},
+					"rpmDepends": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.RpmMeta"),
+									},
+								},
+							},
+						},
+					},
+					"sourceJobUIDs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"transition": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/ebs/v1.RepositoryTransition"),
+						},
+					},
+					"updatedAt": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.RepositoryTransition", "ebs-api/ebs/v1.RpmMeta", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+	}
+}
+
 func schema_ebs_api_ebs_v1_RpmRepoSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1452,24 +1702,14 @@ func schema_ebs_api_ebs_v1_RpmRepoStatus(ref common.ReferenceCallback) common.Op
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"phase": {
+					"repository": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
+							Ref: ref("ebs-api/ebs/v1.RpmRepoRepositoryStatus"),
 						},
 					},
-					"rpmDepends": {
+					"release": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.RpmMeta"),
-									},
-								},
-							},
+							Ref: ref("ebs-api/ebs/v1.RpmRepoReleaseStatus"),
 						},
 					},
 					"conditions": {
@@ -1489,7 +1729,7 @@ func schema_ebs_api_ebs_v1_RpmRepoStatus(ref common.ReferenceCallback) common.Op
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.RpmMeta", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.RpmRepoReleaseStatus", "ebs-api/ebs/v1.RpmRepoRepositoryStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 

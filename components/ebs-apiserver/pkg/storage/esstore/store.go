@@ -639,6 +639,14 @@ func fieldSelectorMapping(resource, field string) (queryField string, requireExi
 		if supportsStatusFieldSelectors(resource) {
 			return "data.status.phase", false, true
 		}
+	case "status.repository.phase":
+		if resource == "rpmrepo" {
+			return "data.status.repository.phase", false, true
+		}
+	case "status.release.phase":
+		if resource == "rpmrepo" {
+			return "data.status.release.phase", false, true
+		}
 	case "status.stage":
 		if supportsStatusFieldSelectors(resource) {
 			return "data.status.stage", true, true
@@ -649,7 +657,7 @@ func fieldSelectorMapping(resource, field string) (queryField string, requireExi
 
 func supportsStatusFieldSelectors(resource string) bool {
 	switch resource {
-	case "project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource":
+	case "project", "snapshot", "build", "buildinfo", "buildresource":
 		return true
 	default:
 		return false

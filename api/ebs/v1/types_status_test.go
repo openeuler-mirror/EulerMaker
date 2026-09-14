@@ -137,3 +137,38 @@ func TestBuildPhase(t *testing.T) {
 		t.Error("BuildPhaseValues exposes mutable internal state")
 	}
 }
+
+func TestRpmRepoPhase(t *testing.T) {
+	for _, phase := range []RpmRepoPhase{RpmRepoPending, RpmRepoProcessing, RpmRepoReady, RpmRepoFailed} {
+		if !phase.IsValid() {
+			t.Errorf("phase %q is not valid", phase)
+		}
+	}
+	if RpmRepoPhase("Unknown").IsValid() {
+		t.Error("unknown phase is valid")
+	}
+	values := RpmRepoPhaseValues()
+	values[0] = "changed"
+	if RpmRepoPhaseValues()[0] != string(RpmRepoPending) {
+		t.Error("RpmRepoPhaseValues exposes mutable internal state")
+	}
+}
+
+func TestRpmRepoReleasePhase(t *testing.T) {
+	for _, phase := range []RpmRepoReleasePhase{
+		RpmRepoReleasePending, RpmRepoReleaseCreating, RpmRepoReleasePrepared,
+		RpmRepoReleaseReady, RpmRepoReleaseFailed,
+	} {
+		if !phase.IsValid() {
+			t.Errorf("phase %q is not valid", phase)
+		}
+	}
+	if RpmRepoReleasePhase("Unknown").IsValid() {
+		t.Error("unknown release phase is valid")
+	}
+	values := RpmRepoReleasePhaseValues()
+	values[0] = "changed"
+	if RpmRepoReleasePhaseValues()[0] != string(RpmRepoReleasePending) {
+		t.Error("RpmRepoReleasePhaseValues exposes mutable internal state")
+	}
+}

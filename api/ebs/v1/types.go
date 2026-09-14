@@ -163,10 +163,49 @@ type RpmRepo struct {
 
 type RpmRepoSpec struct{}
 
+type RepositoryInput struct {
+	JobName  string `json:"jobName"`
+	JobUID   string `json:"jobUID"`
+	SpecName string `json:"specName"`
+}
+
+type RepositoryTransition struct {
+	Inputs            []RepositoryInput `json:"inputs"`
+	BaseRepositoryUID string            `json:"baseRepositoryUID,omitempty"`
+	RepositoryUID     string            `json:"repositoryUID"`
+}
+
+type ReleaseTransition struct {
+	SourceRepositoryUID string   `json:"sourceRepositoryUID"`
+	ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
+}
+
+type RpmRepoReleaseStatus struct {
+	Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
+	SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
+	ContentURL          string              `json:"contentURL,omitempty"`
+	ReleaseDigest       string              `json:"releaseDigest,omitempty"`
+	PackageCount        int                 `json:"packageCount,omitempty"`
+	Transition          *ReleaseTransition  `json:"transition,omitempty"`
+	UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
+}
+
+type RpmRepoRepositoryStatus struct {
+	Phase            RpmRepoPhase          `json:"phase,omitempty"`
+	RepositoryUID    string                `json:"repositoryUID,omitempty"`
+	ContentURL       string                `json:"contentURL,omitempty"`
+	RepositoryDigest string                `json:"repositoryDigest,omitempty"`
+	PackageCount     int                   `json:"packageCount,omitempty"`
+	RpmDepends       map[string]RpmMeta    `json:"rpmDepends,omitempty"`
+	SourceJobUIDs    []string              `json:"sourceJobUIDs,omitempty"`
+	Transition       *RepositoryTransition `json:"transition,omitempty"`
+	UpdatedAt        *metav1.Time          `json:"updatedAt,omitempty"`
+}
+
 type RpmRepoStatus struct {
-	Phase      string             `json:"phase,omitempty"`
-	RpmDepends map[string]RpmMeta `json:"rpmDepends,omitempty"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Repository *RpmRepoRepositoryStatus `json:"repository,omitempty"`
+	Release    *RpmRepoReleaseStatus    `json:"release,omitempty"`
+	Conditions []metav1.Condition       `json:"conditions,omitempty"`
 }
 
 type RpmMeta struct {

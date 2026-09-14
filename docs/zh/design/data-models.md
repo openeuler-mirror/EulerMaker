@@ -449,7 +449,7 @@ type BuildInfoList struct {
 
 ---
 
-## 五、RpmRepo（RPM 仓库解析信息）
+## 五、RpmRepo（过程仓与正式发布状态）
 
 ### RpmRepo
 
@@ -487,14 +487,31 @@ type RepositoryTransition struct {
     BaseRepositoryUID  string `json:"baseRepositoryUID,omitempty"`
     RepositoryUID      string `json:"repositoryUID"`
 }
+
+type ReleaseTransition struct {
+    SourceRepositoryUID string   `json:"sourceRepositoryUID"`
+    ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
+}
 ```
 
 `RepositoryTransition` 是提交物化前先写入的恢复检查点。存在 transition 时不得选择新输入或重新计算基础仓。
+`ReleaseTransition` 在提交正式发布前固化源过程仓和排除集合；存在该字段时必须恢复原请求，不得根据最新 Project 或 BuildInfo 重新计算。
+
+| 类型与字段 | 说明 |
+|------------|------|
+| `RepositoryInput.jobName` | 输入 Job 名称，用于 API 定位和诊断 |
+| `RepositoryInput.jobUID` | 输入 Job 的稳定身份，用于 Manifest 查询和幂等计算 |
+| `RepositoryInput.specName` | Job 产出的 spec，用于批次去重和错误归属 |
+| `RepositoryTransition.inputs` | 已冻结并按稳定顺序保存的本批输入 |
+| `RepositoryTransition.baseRepositoryUID` | 本次物化继承的不可变基础仓；首次构建可为空 |
+| `RepositoryTransition.repositoryUID` | 根据固定输入计算出的目标物理版本 UID |
+| `ReleaseTransition.sourceRepositoryUID` | 正式发布使用的 Ready 过程仓 UID |
+| `ReleaseTransition.excludeSpecs` | 已规范化、去重并按字典序保存的排除集合 |
 
 ### RpmRepoStatus
 
 ```go
-type RpmRepoStatus struct {
+type RpmRepoRepositoryStatus struct {
     Phase             RpmRepoPhase          `json:"phase,omitempty"`
     RepositoryUID     string                `json:"repositoryUID,omitempty"`
     ContentURL        string                `json:"contentURL,omitempty"`
@@ -504,12 +521,33 @@ type RpmRepoStatus struct {
     SourceJobUIDs     []string              `json:"sourceJobUIDs,omitempty"`
     Transition        *RepositoryTransition `json:"transition,omitempty"`
     UpdatedAt         *metav1.Time          `json:"updatedAt,omitempty"`
+}
+
+type RpmRepoReleaseStatus struct {
+    Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
+    SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
+    ContentURL          string              `json:"contentURL,omitempty"`
+    ReleaseDigest       string              `json:"releaseDigest,omitempty"`
+    PackageCount        int                 `json:"packageCount,omitempty"`
+    Transition          *ReleaseTransition  `json:"transition,omitempty"`
+    UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
+}
+
+type RpmRepoStatus struct {
+    Repository       *RpmRepoRepositoryStatus `json:"repository,omitempty"`
+    Release          *RpmRepoReleaseStatus    `json:"release,omitempty"`
     Conditions        []metav1.Condition    `json:"conditions,omitempty"`
 }
 ```
 
 | 字段             | Go 类型            | 说明                                           |
 |----------------|------------------|----------------------------------------------|
+| `repository` | *RpmRepoRepositoryStatus | 构建过程仓的当前版本和推进状态 |
+| `release` | *RpmRepoReleaseStatus | 正式发布的独立状态；不与过程仓 phase 混用 |
+| `conditions` | []metav1.Condition | 状态条件（记录失败原因等） |
+
+| `repository` 字段 | Go 类型 | 说明 |
+|--------------------|---------|------|
 | `phase` | RpmRepoPhase | `"Pending"` / `"Processing"` / `"Ready"` / `"Failed"`；逻辑仓库可持续推进，均不是对象终态 |
 | `repositoryUID` | string | 当前已发布不可变物理版本的 UID |
 | `contentURL` | string | 当前物理版本的不可变仓库地址 |
@@ -519,7 +557,18 @@ type RpmRepoStatus struct {
 | `sourceJobUIDs` | []string | 当前物理版本对应的输入 Job UID 集合，按字典序保存 |
 | `transition` | *RepositoryTransition | 正在物化或等待确认的下一版本 |
 | `updatedAt` | *metav1.Time | 当前物理版本的发布时间 |
-| `conditions` | []metav1.Condition | 状态条件（记录失败原因等） |
+
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`、`releaseDigest`、`packageCount`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。
+
+| `release` 字段 | Go 类型 | 说明 |
+|----------------|---------|------|
+| `phase` | RpmRepoReleasePhase | 正式发布状态 |
+| `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
+| `contentURL` | string | Project/架构稳定仓库入口 |
+| `releaseDigest` | string | 正式版本内容摘要 |
+| `packageCount` | int | 正式版本包含的 RPM 数量 |
+| `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
+| `updatedAt` | *metav1.Time | 正式发布状态最近更新时间 |
 
 ### RpmMeta
 
@@ -1002,7 +1051,7 @@ type VersionConst struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
-| RpmRepo | `Pending` / `Processing` / `Ready` / `Failed`                                          |
+| RpmRepo | 过程仓：`Pending` / `Processing` / `Ready` / `Failed`；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 
@@ -1030,7 +1079,11 @@ BuildInfoStatus
     └── SpecInstallStatus
         └── MissingDep ──▶ VersionConst
 
-RpmRepoStatus ──▶ RpmMeta ──▶ VersionConst
+RpmRepoStatus
+├── RpmRepoRepositoryStatus
+│   ├── RpmMeta ──▶ VersionConst
+│   └── RepositoryTransition ──▶ RepositoryInput
+└── RpmRepoReleaseStatus ──▶ ReleaseTransition
 
 BuildResourceSpec
 ├── ResourceRequirements (default)

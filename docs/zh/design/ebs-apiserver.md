@@ -384,7 +384,7 @@ mapping 约束：
 - `documentID`、`metadata.name`、`metadata.namespace`、`kind`、`apiVersion` 使用 `keyword`。
 - `metadata.creationTimestamp` 使用 `date`。
 - `metadata.labels` 使用包含 `key/value` 两个 `keyword` 字段的 `nested` 数组。这样既避免 label key 动态展开导致 mapping 膨胀，也能正确处理包含 `.`、`/` 的 Kubernetes label key。
-- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中，当前只有 `data.status.phase` 和 `data.status.stage` 使用 `keyword` 建立索引。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
+- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中。通用的 `data.status.phase`、`data.status.stage` 以及 RpmRepo 的 `data.status.repository.phase`、`data.status.release.phase` 使用 `keyword` 建立索引。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
 - 需要查询的业务字段必须显式定义 mapping，禁止将整个 `spec/status` 动态索引。
 
 Build 查询字段直接来自待持久化的完整 API 对象，不生成额外的查询投影。Create、Update、Patch、`/status` 和 `/abort` 更新 `data` 后，对应的索引字段随同一次 ES 写入更新。`status.stage` 为空时不写 `data.status.stage`。
@@ -404,11 +404,13 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 | `key` | nested 查询匹配 `key` |
 | `!key` | `must_not` nested 查询匹配 `key` |
 
-所有 ESStore 核心资源（Project、Snapshot、Build、BuildInfo、RpmRepo 和 BuildResource）支持以下 field selector：
+Project、Snapshot、Build、BuildInfo 和 BuildResource 使用通用状态字段；RpmRepo 的过程仓与正式发布各自使用独立状态字段：
 
 | API 字段 | ES 字段 | 操作符 |
 |----------|---------|--------|
 | `status.phase` | `data.status.phase` | `=`、`==`、`!=` |
+| `status.repository.phase`（仅 RpmRepo） | `data.status.repository.phase` | `=`、`==`、`!=` |
+| `status.release.phase`（仅 RpmRepo） | `data.status.release.phase` | `=`、`==`、`!=` |
 | `status.stage` | `data.status.stage` | `=`、`==`、`!=` |
 
 IAM 资源不支持 `status.phase` 和 `status.stage`。多个 requirement 以及 label selector、Project 路径隐含的 namespace 条件均按 AND 组合；客户端提供与路径不同的 namespace 时返回空列表，不能查询到其他 Project。无法识别或不支持的字段、操作符和语法必须返回 `BadRequest`，不能静默忽略。
@@ -442,7 +444,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - `Snapshot` 创建默认 `status.phase = Pending`。
 - `Build` 创建默认 `status.phase = Pending`。
 - `BuildInfo` 创建默认 `status.phase = Pending`。
-- `RpmRepo` 创建默认 `status.phase = Pending`。
+- `RpmRepo` 创建默认 `status.repository.phase = Pending`，`status.release` 在产生正式发布意图前保持为空。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 - 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。

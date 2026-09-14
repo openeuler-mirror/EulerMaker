@@ -64,7 +64,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	})
 	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("RpmRepo"), func(label, value string) (string, string, error) {
 		switch label {
-		case "metadata.name", "metadata.namespace", "status.phase":
+		case "metadata.name", "metadata.namespace", "status.repository.phase", "status.release.phase":
 			return label, value, nil
 		default:
 			return "", "", fmt.Errorf("field label not supported for RpmRepo: %s", label)
