@@ -473,21 +473,53 @@ type RpmRepoSpec struct {
 }
 ```
 
+RpmRepo 与 Build 一对一，`metadata.name` 与 Build name 相同。RpmRepo 是可持续推进的逻辑仓库，每批完成 Job 在 Artifact Manager 中产生一个新的不可变物理版本。
+
+```go
+type RepositoryInput struct {
+    JobName            string `json:"jobName"`
+    JobUID             string `json:"jobUID"`
+    SpecName           string `json:"specName"`
+}
+
+type RepositoryTransition struct {
+    Inputs             []RepositoryInput `json:"inputs"`
+    BaseRepositoryUID  string `json:"baseRepositoryUID,omitempty"`
+    RepositoryUID      string `json:"repositoryUID"`
+}
+```
+
+`RepositoryTransition` 是提交物化前先写入的恢复检查点。存在 transition 时不得选择新输入或重新计算基础仓。
+
 ### RpmRepoStatus
 
 ```go
 type RpmRepoStatus struct {
-    Phase        string                  `json:"phase,omitempty"`
-    RpmDepends   map[string]RpmMeta      `json:"rpmDepends,omitempty"`
-    Conditions   []metav1.Condition      `json:"conditions,omitempty"`
+    Phase             RpmRepoPhase          `json:"phase,omitempty"`
+    RepositoryUID     string                `json:"repositoryUID,omitempty"`
+    ContentURL        string                `json:"contentURL,omitempty"`
+    RepositoryDigest string                `json:"repositoryDigest,omitempty"`
+    PackageCount      int                   `json:"packageCount,omitempty"`
+    RpmDepends        map[string]RpmMeta    `json:"rpmDepends,omitempty"`
+    SourceJobUIDs     []string              `json:"sourceJobUIDs,omitempty"`
+    Transition        *RepositoryTransition `json:"transition,omitempty"`
+    UpdatedAt         *metav1.Time          `json:"updatedAt,omitempty"`
+    Conditions        []metav1.Condition    `json:"conditions,omitempty"`
 }
 ```
 
 | 字段             | Go 类型            | 说明                                           |
 |----------------|------------------|----------------------------------------------|
-| `phase`        | string           | `"Pending"` / `"Processing"` / `"Completed"` |
-| `rpmDepends`   | map[string]RpmMeta                 | 仓库里每个 rpm 的元信息,key 格式 `<rpm名>@<spec名>`       |
-| `conditions`   | []metav1.Condition | 状态条件（记录失败原因等）                                |
+| `phase` | RpmRepoPhase | `"Pending"` / `"Processing"` / `"Ready"` / `"Failed"`；逻辑仓库可持续推进，均不是对象终态 |
+| `repositoryUID` | string | 当前已发布不可变物理版本的 UID |
+| `contentURL` | string | 当前物理版本的不可变仓库地址 |
+| `repositoryDigest` | string | 仓库内容的确定性 SHA-256 摘要 |
+| `packageCount` | int | 仓库 RPM 文件数量 |
+| `rpmDepends` | map[string]RpmMeta | 仓库中每个 RPM 的元信息 |
+| `sourceJobUIDs` | []string | 当前物理版本对应的输入 Job UID 集合，按字典序保存 |
+| `transition` | *RepositoryTransition | 正在物化或等待确认的下一版本 |
+| `updatedAt` | *metav1.Time | 当前物理版本的发布时间 |
+| `conditions` | []metav1.Condition | 状态条件（记录失败原因等） |
 
 ### RpmMeta
 
@@ -676,6 +708,13 @@ type Toleration struct {
 ### JobStatus
 
 ```go
+type JobRepositoryState string
+
+const (
+    JobRepositoryPublished JobRepositoryState = "Published"
+    JobRepositoryFailed    JobRepositoryState = "Failed"
+)
+
 type JobStatus struct {
     Phase      JobPhase    `json:"phase,omitempty"`
     Stage      JobStage    `json:"stage,omitempty"`
@@ -685,6 +724,8 @@ type JobStatus struct {
     ResultRoot string      `json:"resultRoot,omitempty"`
     Message    string      `json:"message,omitempty"`
     RestartCount int64     `json:"restartCount,omitempty"`
+    RepositoryState JobRepositoryState `json:"repositoryState,omitempty"`
+    RepositoryUID   string             `json:"repositoryUID,omitempty"`
 }
 ```
 
@@ -698,6 +739,8 @@ type JobStatus struct {
 | `resultRoot` | string | 结果存储路径 |
 | `message` | string | 状态消息 |
 | `restartCount` | int64 | 重试次数，默认 0。调度器可使用该字段计算重试退避时间 |
+| `repositoryState` | JobRepositoryState | RpmRepo Controller 的处理结果：`Published` / `Failed`；空值表示尚未处理 |
+| `repositoryUID` | string | `repositoryState=Published` 时记录包含该 Job 所在批次的不可变物理仓库 UID；同批 Job 共享该值 |
 
 ### JobList
 
@@ -938,7 +981,7 @@ type VersionConst struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
-| RpmRepo | `Pending` / `Processing` / `Completed`                                                |
+| RpmRepo | `Pending` / `Processing` / `Ready` / `Failed`                                          |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 

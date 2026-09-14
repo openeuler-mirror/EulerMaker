@@ -260,24 +260,6 @@ Job.spec.resources
         └── limits   → Runner 限制构建容器
 ```
 
-创建 Job 时建议记录资源配置来源：
-
-```yaml
-metadata:
-  annotations:
-    ebs.io/build-resource-namespace: default
-    ebs.io/build-resource: default
-    ebs.io/build-resource-generation: "7"
-```
-
-其中：
-
-- `ebs.io/build-resource-namespace` 记录实际命中的 Project/命名空间；
-- `ebs.io/build-resource` 记录 BuildResource 名称；
-- `ebs.io/build-resource-generation` 记录解析时的对象 generation。
-
-注解只用于审计，实际调度始终以 `Job.spec.resources` 为准。总表更新不会改变已经创建的 Job；需要应用新配置时，应重新创建 Job。
-
 ## 七、校验规则
 
 apiserver 创建或更新对象时执行以下校验：

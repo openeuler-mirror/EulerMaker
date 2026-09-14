@@ -123,10 +123,10 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 | `ebs-apiserver` | 统一资源 API，负责对象校验、默认值、存储访问、list，以及 Job/Runner watch 和各资源子资源 |
 | `etcd` | Job、Runner 的主存储，提供原生 resourceVersion 和 list/watch |
 | `Elasticsearch` | Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResource 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
-| `controllers` | 通过 API 查询或监听职责内对象，推进 Snapshot、Build、RpmRepo 等资源状态 |
+| `controller-manager` | 运行 Snapshot、BuildInfo、Job、Runner、RpmRepo 等控制器 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 持久化安装实例 UUID，通过 ebs-gateway 注册或恢复同一 `instanceId` 的 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
-| `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、查询下载及日志 SSE |
+| `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、RPM 仓库物化、查询下载及日志 SSE |
 | `ebsctl` | 面向用户和运维的命令行客户端，首版通过 Gateway 操作资源 |
 
 `ebsctl` 的命令、context、资源操作和输出协议见 [ebsctl.md](./ebsctl.md)。
@@ -352,14 +352,15 @@ runner -> artifact-manager: upload Completed Artifact
 runner -> artifact-manager: finalize logs/container.log Artifact
 runner -> artifact-manager: complete immutable JobUploadManifest
 runner -> ebs-gateway -> ebs-apiserver: update Job artifact summary/status
-repo controller -> watch Job status
-repo controller -> artifact-manager: query fixed manifest generation and verify digest
-repo controller -> artifact-manager: stream-download RPM Artifacts
-repo controller -> generate and publish RPM repository
+repo controller -> list/watch Job status and continuously enqueue completed jobs
+repo controller -> artifact-manager: query the Job's unique immutable manifest
+repo controller -> artifact-manager: asynchronously request repository materialization
+artifact-manager -> materialize and expose immutable RPM repository
+repo controller -> artifact-manager: poll materialization result
 repo controller -> ebs-apiserver: update RpmRepo/Build/Job status
 ```
 
-`artifact-manager` 的本地 Job 上传清单是一次 Job 完整文件集合的事实来源；Job status 只保存 `artifactState`、`artifactGeneration`、`artifactDigest` 和 `artifactCount` 等可 watch 摘要。Repo Controller 不能扫描 Artifact Manager 的内部目录，也不能根据当前 Artifact 列表推断上传是否结束。
+`artifact-manager` 的本地 Job 上传清单是一次 Job 完整文件集合的事实来源；Job status 只保存 Artifact 和仓库发布的可 watch 摘要。Controller Manager 中的 RpmRepo Controller 持续 List/Watch Job，将符合条件的完成事件转换为 Project 和 Build name 队列 key。每次 Reconcile 为同一个 Build 稳定选择一批 Job，并在 Artifact Manager 中生成一个新的不可变物理版本后原子更新同名 RpmRepo 指向；同一 Build 的批次串行，不同 Build 可以并行。Build name 由唯一 UUID 生成，目标 OS 和架构由 Build 确定而不参与队列分组。RpmRepo Controller 不能扫描 Artifact Manager 的内部目录，也不能根据当前 Artifact 列表推断上传是否结束。Artifact Manager 不直接更新业务 API 对象，也不自行选择“最新仓库”。
 
 Web UI 通过 Artifact API 查询和下载 Completed Artifact。实时日志先使用 Range 读取已提交历史内容，再通过 SSE 接收新增 chunk；日志封账后转为普通 `category=log` Artifact。Artifact Manager 的详细协议、数据结构和本地恢复规则见 [artifact-manager.md](./artifact-manager.md)。
 
