@@ -85,6 +85,18 @@ services:
     depends_on:
       - ebs-apiserver
 
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${EULERMAKER_FRONTEND_PORT:-3000}:8080"
+    networks:
+      - ebs-net
+    depends_on:
+      - ebs-gateway
+      - artifact-manager
+
   scheduler:
     build:
       context: ..
