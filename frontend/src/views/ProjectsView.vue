@@ -62,7 +62,10 @@
         <label class="field"><span>{{ t("projects.displayName") }}</span><input v-model.trim="form.displayName" autocomplete="off" :placeholder="t('projects.displayNamePlaceholder')" /></label>
       </div>
       <label class="field"><span>{{ t("projects.descriptionField") }}</span><textarea v-model.trim="form.description" rows="3" :placeholder="t('projects.descriptionPlaceholder')"></textarea></label>
-      <label class="field"><span>{{ t("projects.specBranch") }}</span><input v-model.trim="form.specBranch" required autocomplete="off" /></label>
+      <div class="form-grid">
+        <label class="field"><span>{{ t("project.refType") }}</span><select v-model="form.defaultRef.type"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option></select></label>
+        <label class="field"><span>{{ t("projects.defaultRef") }}</span><input v-model.trim="form.defaultRef.value" required autocomplete="off" /></label>
+      </div>
       <label v-if="requiresOwner" class="field required-field"><span>{{ t("projects.ownerUser") }}</span><input v-model.trim="form.ownerUser" required autocomplete="off" :placeholder="t('projects.ownerUserPlaceholder')" /></label>
       <fieldset class="target-fieldset">
         <legend>{{ t("projects.firstTarget") }}</legend>
@@ -134,7 +137,7 @@ const form = reactive({
   name: "",
   displayName: "",
   description: "",
-  specBranch: "master",
+  defaultRef: { type: "Branch" as "Branch" | "Tag", value: "master" },
   os: "openEuler-24.03-LTS",
   arch: "x86_64",
   buildFlag: true,

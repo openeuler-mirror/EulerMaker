@@ -23,8 +23,7 @@
     </nav>
 
     <section v-if="activeTab === 'overview'" id="project-panel-overview" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-overview">
-      <section class="metrics compact" :aria-label="t('project.overview')">
-        <article class="metric-card"><div class="metric-icon blue"><Camera /></div><div><span>{{ t("project.snapshots") }}</span><strong>{{ resourceValue(snapshots) }}</strong><small>{{ t("project.snapshotsHint") }}</small></div></article>
+      <section class="metrics compact resource-metrics" :aria-label="t('project.overview')">
         <article class="metric-card"><div class="metric-icon violet"><Operation /></div><div><span>{{ t("project.builds") }}</span><strong>{{ resourceValue(builds) }}</strong><small>{{ t("project.buildsHint") }}</small></div></article>
         <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong>{{ resourceValue(jobs) }}</strong><small>{{ t("project.jobsHint") }}</small></div></article>
       </section>
@@ -35,7 +34,7 @@
           <dl class="detail-list">
             <div><dt>{{ t("project.projectName") }}</dt><dd>{{ project.metadata?.name }}</dd></div>
             <div><dt>{{ t("project.displayName") }}</dt><dd>{{ project.spec?.displayName || t("common.emptyValue") }}</dd></div>
-            <div><dt>{{ t("project.specBranch") }}</dt><dd>{{ project.spec?.specBranch || t("common.emptyValue") }}</dd></div>
+            <div><dt>{{ t("project.defaultRef") }}</dt><dd>{{ gitRefLabel(project.spec?.defaultRef) }}</dd></div>
             <div><dt>{{ t("project.createdAt") }}</dt><dd>{{ formatDate(project.metadata?.creationTimestamp) }}</dd></div>
           </dl>
         </article>
@@ -53,6 +52,28 @@
           </div>
         </article>
       </section>
+
+      <article class="content-panel project-packages-panel">
+        <div class="section-heading"><div><h2>{{ t("project.packageRepositories") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openPackageEditor"><Plus />{{ t("project.addPackage") }}</button></div></div>
+        <div class="package-list-toolbar"><label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label></div>
+        <div v-if="packageSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageSaved") }}</div>
+        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>URL</th><th>Git ref</th><th>{{ t("project.buildTargets") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td><td>{{ gitRefLabel(repo.ref) }}</td><td>{{ targetListLabel(repo.buildTargets) }}</td></tr></tbody></table></div>
+        <p v-else class="config-empty">{{ t(project.spec?.packageRepos?.length ? "project.noMatchingPackages" : "project.noPackageRepositories") }}</p>
+        <div v-if="filteredPackageRepos.length" class="table-footer">
+          <div class="page-summary">
+            <span>{{ t("common.count", { count: filteredPackageRepos.length }) }}</span>
+            <label><select v-model.number="packagePageSize" :aria-label="t('common.perPage')" @change="packageCurrentPage = 1"><option v-for="size in packagePageSizes" :key="size" :value="size">{{ t("common.itemsPerPage", { count: size }) }}</option></select></label>
+            <nav class="pagination-row" :aria-label="t('common.pagination')">
+              <button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="packageCurrentPage === 1" @click="packageCurrentPage -= 1"><ArrowLeft /></button>
+              <template v-for="item in packagePaginationItems" :key="item.key">
+                <span v-if="item.page === null" class="page-ellipsis">…</span>
+                <button v-else class="page-button" :class="{ active: item.page === packageCurrentPage }" type="button" :aria-current="item.page === packageCurrentPage ? 'page' : undefined" @click="packageCurrentPage = item.page">{{ item.page }}</button>
+              </template>
+              <button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="packageCurrentPage === packageTotalPages" @click="packageCurrentPage += 1"><ArrowRight /></button>
+            </nav>
+          </div>
+        </div>
+      </article>
     </section>
 
     <section v-else-if="activeTab === 'builds'" id="project-panel-builds" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-builds">
@@ -95,12 +116,23 @@
       <div class="config-split config-wide-panel">
         <div class="config-left-column">
           <article class="content-panel">
-            <div class="section-heading"><div><h2>{{ t("project.basicConfig") }}</h2></div></div>
+            <div class="section-heading"><div><h2>{{ t("project.basicConfig") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openBasicEditor"><Edit />{{ t("common.edit") }}</button></div></div>
+            <div v-if="basicSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.basicConfigSaved") }}</div>
             <dl class="detail-list config-detail-list">
               <div><dt>{{ t("project.displayName") }}</dt><dd>{{ project.spec?.displayName || t("common.emptyValue") }}</dd></div>
               <div><dt>{{ t("project.descriptionField") }}</dt><dd>{{ project.spec?.description || t("common.emptyValue") }}</dd></div>
-              <div><dt>{{ t("project.specBranch") }}</dt><dd><code>{{ project.spec?.specBranch || t("common.emptyValue") }}</code></dd></div>
+              <div><dt>{{ t("project.defaultRef") }}</dt><dd><code>{{ gitRefLabel(project.spec?.defaultRef) }}</code></dd></div>
             </dl>
+          </article>
+
+          <article class="content-panel">
+            <div class="section-heading"><div><h2>{{ t("project.userManagement") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openMemberEditor"><Edit />{{ t("common.edit") }}</button></div></div>
+            <div v-if="memberSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.membersSaved") }}</div>
+            <div class="project-user-list">
+              <div class="project-user-row"><strong>{{ ownerUsername || t("common.emptyValue") }}</strong><span class="user-role owner-role">{{ t("project.ownerRole") }}</span></div>
+              <div v-for="member in memberUsernames" :key="member" class="project-user-row"><strong>{{ member }}</strong><span class="user-role">{{ t("project.memberRole") }}</span></div>
+            </div>
+            <p v-if="!memberUsernames.length" class="config-empty user-empty">{{ t("project.noMembers") }}</p>
           </article>
 
           <article class="content-panel">
@@ -131,12 +163,35 @@
         </article>
       </div>
 
-      <article class="content-panel config-wide-panel">
-        <div class="section-heading"><div><h2>{{ t("project.packageRepositories") }}</h2></div><span>{{ project.spec?.packageRepos?.length || 0 }}</span></div>
-        <div v-if="project.spec?.packageRepos?.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>URL</th><th>Git ref</th><th>{{ t("project.buildTargets") }}</th></tr></thead><tbody><tr v-for="(repo, index) in project.spec.packageRepos" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td><td>{{ gitRefLabel(repo.ref) }}</td><td>{{ targetListLabel(repo.buildTargets) }}</td></tr></tbody></table></div>
-        <p v-else class="config-empty">{{ t("project.noPackageRepositories") }}</p>
-      </article>
     </section>
+
+    <ModalDialog v-if="basicEditorOpen" title-id="edit-basic-title" :title="t('project.editBasicConfig')" :close-label="t('common.close')" @close="closeBasicEditor">
+      <form class="project-form" @submit.prevent="saveBasicConfig">
+        <p class="form-hint">{{ t("project.editBasicConfigHint") }}</p>
+        <label class="field"><span>{{ t("project.displayName") }}</span><input v-model.trim="basicDraft.displayName" :disabled="savingBasic" autocomplete="off" /></label>
+        <label class="field"><span>{{ t("project.descriptionField") }}</span><textarea v-model.trim="basicDraft.description" :disabled="savingBasic" rows="3"></textarea></label>
+        <div class="form-grid package-ref-fields">
+          <label class="field required-field"><span>{{ t("project.refType") }}</span><select v-model="basicDraft.defaultRef.type" :disabled="savingBasic"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option></select></label>
+          <label class="field required-field"><span>{{ t("project.defaultRef") }}</span><input v-model.trim="basicDraft.defaultRef.value" required :disabled="savingBasic" autocomplete="off" /></label>
+        </div>
+        <div v-if="basicErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(basicErrorKey) }}</div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingBasic" @click="closeBasicEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingBasic">{{ savingBasic ? t("common.saving") : t("common.save") }}</button></div>
+      </form>
+    </ModalDialog>
+
+    <ModalDialog v-if="packageEditorOpen" title-id="add-package-title" :title="t('project.addPackage')" :close-label="t('common.close')" @close="closePackageEditor">
+      <form class="project-form" @submit.prevent="savePackage">
+        <p class="form-hint">{{ t("project.addPackageHint") }}</p>
+        <label class="field required-field"><span>{{ t("project.repositoryName") }}</span><input v-model.trim="packageDraft.name" required :disabled="savingPackage" autocomplete="off" placeholder="gcc" /></label>
+        <label class="field required-field"><span>{{ t("project.repositoryAddress") }}</span><input v-model.trim="packageDraft.url" required :disabled="savingPackage" autocomplete="off" placeholder="https://atomgit.com/src-openeuler/gcc.git" /></label>
+        <div class="form-grid package-ref-fields">
+          <label class="field"><span>{{ t("project.refType") }}</span><select v-model="packageDraft.ref.type" :disabled="savingPackage"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option><option value="Commit">Commit</option></select></label>
+          <label class="field required-field"><span>{{ t("project.refValue") }}</span><input v-model.trim="packageDraft.ref.value" required :disabled="savingPackage" autocomplete="off" /></label>
+        </div>
+        <div v-if="packageErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(packageErrorKey) }}</div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingPackage" @click="closePackageEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingPackage">{{ savingPackage ? t("common.saving") : t("common.save") }}</button></div>
+      </form>
+    </ModalDialog>
 
     <ModalDialog v-if="targetEditorOpen" title-id="edit-targets-title" :title="t('project.editBuildTargets')" :close-label="t('common.close')" @close="closeTargetEditor">
       <form class="project-form" @submit.prevent="saveTargets">
@@ -168,8 +223,8 @@
             <legend>{{ t("project.bootstrapNumber", { number: index + 1 }) }}</legend>
             <button class="remove-target-button" type="button" :aria-label="t('project.removeBootstrap', { number: index + 1 })" :disabled="savingBootstrap" @click="removeBootstrapRepository(index)"><Delete /></button>
             <div class="form-grid bootstrap-fields">
-              <label class="field required-field repository-name-field"><span>{{ t("project.repositoryName") }}</span><input v-model.trim="repo.name" required autocomplete="off" :placeholder="t('project.repositoryNamePlaceholder')" /></label>
-              <label class="field required-field"><span>{{ t("project.repositoryAddress") }}</span><input v-model.trim="repo.repo" required autocomplete="off" :placeholder="t('project.repositoryAddressPlaceholder')" /></label>
+              <label class="field required-field repository-name-field"><span>{{ t("project.sourceName") }}</span><input v-model.trim="repo.name" required autocomplete="off" :placeholder="t('project.repositoryNamePlaceholder')" /></label>
+              <label class="field required-field"><span>{{ t("project.sourceAddress") }}</span><input v-model.trim="repo.repo" required autocomplete="off" :placeholder="t('project.repositoryAddressPlaceholder')" /></label>
             </div>
           </fieldset>
         </div>
@@ -179,12 +234,32 @@
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingBootstrap" @click="closeBootstrapEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingBootstrap">{{ savingBootstrap ? t("common.saving") : t("common.save") }}</button></div>
       </form>
     </ModalDialog>
+
+    <ModalDialog v-if="memberEditorOpen" title-id="edit-members-title" :title="t('project.editMembers')" :close-label="t('common.close')" @close="closeMemberEditor">
+      <form class="project-form" @submit.prevent="saveMembers">
+        <p class="form-hint">{{ t("project.editMembersHint") }}</p>
+        <div class="member-owner-row"><span>{{ t("project.ownerRole") }}</span><strong>{{ ownerUsername }}</strong></div>
+        <div v-if="editingMembers.length" class="editable-member-list">
+          <div v-for="(member, index) in editingMembers" :key="member" class="editable-member-row">
+            <strong>{{ member }}</strong>
+            <button class="remove-member-button" type="button" :disabled="savingMembers" :aria-label="t('project.removeMember', { username: member })" @click="removeMember(index)"><Delete />{{ t("common.remove") }}</button>
+          </div>
+        </div>
+        <p v-else class="config-empty editor-empty">{{ t("project.noMembers") }}</p>
+        <div class="member-add-row">
+          <label class="field"><span>{{ t("project.memberUsername") }}</span><input v-model.trim="memberDraft" autocomplete="off" :placeholder="t('project.memberUsernamePlaceholder')" @keydown.enter.prevent="addMember" /></label>
+          <button class="secondary-button" type="button" :disabled="savingMembers" @click="addMember"><Plus />{{ t("project.addMember") }}</button>
+        </div>
+        <div v-if="memberErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(memberErrorKey) }}</div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingMembers" @click="closeMemberEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingMembers">{{ savingMembers ? t("common.saving") : t("common.save") }}</button></div>
+      </form>
+    </ModalDialog>
   </template>
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, Camera, Check, CircleCheckFilled, Delete, DocumentCopy, Download, Edit, Operation, Plus, Tickets, WarningFilled } from "@element-plus/icons-vue";
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { ArrowLeft, ArrowRight, Check, CircleCheckFilled, Delete, DocumentCopy, Download, Edit, Operation, Plus, Search, Tickets, WarningFilled } from "@element-plus/icons-vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { stringify } from "yaml";
@@ -194,7 +269,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
-import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project, Snapshot } from "@/types";
+import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "config";
 
@@ -204,7 +279,6 @@ const session = useSessionStore();
 const { t } = useI18n();
 const name = computed(() => String(route.params.name || ""));
 const project = ref<Project | null>(null);
-const snapshots = ref<Snapshot[]>([]);
 const builds = ref<Build[]>([]);
 const selectedBuildName = ref("");
 const jobs = ref<Job[]>([]);
@@ -232,6 +306,38 @@ const payloadDraft = ref("");
 const savingPayload = ref(false);
 const payloadErrorKey = ref("");
 const payloadSaveSuccess = ref(false);
+const basicEditorOpen = ref(false);
+const savingBasic = ref(false);
+const basicErrorKey = ref("");
+const basicSaveSuccess = ref(false);
+const basicDraft = ref({ displayName: "", description: "", defaultRef: { type: "Branch" as "Branch" | "Tag", value: "" } });
+const memberEditorOpen = ref(false);
+const editingMembers = ref<string[]>([]);
+const memberDraft = ref("");
+const savingMembers = ref(false);
+const memberErrorKey = ref("");
+const memberSaveSuccess = ref(false);
+const packageSearch = ref("");
+const packageEditorOpen = ref(false);
+const savingPackage = ref(false);
+const packageErrorKey = ref("");
+const packageSaveSuccess = ref(false);
+const packagePageSizes = [20, 50, 100] as const;
+const packagePageSize = ref<number>(20);
+const packageCurrentPage = ref(1);
+const packageDraft = ref({ name: "", url: "", ref: { type: "Branch" as NonNullable<GitRef["type"]>, value: "" } });
+const filteredPackageRepos = computed(() => {
+  const repos = project.value?.spec?.packageRepos || [];
+  const query = packageSearch.value.trim().toLowerCase();
+  return query ? repos.filter((repo) => [repo.name, repo.url, repo.ref?.type, repo.ref?.value]
+    .some((value) => value?.toLowerCase().includes(query))) : repos;
+});
+const packageTotalPages = computed(() => Math.max(1, Math.ceil(filteredPackageRepos.value.length / packagePageSize.value)));
+const paginatedPackageRepos = computed(() => {
+  const start = (packageCurrentPage.value - 1) * packagePageSize.value;
+  return filteredPackageRepos.value.slice(start, start + packagePageSize.value);
+});
+const packagePaginationItems = computed(() => buildPaginationItems(packageTotalPages.value, packageCurrentPage.value));
 const activeTab = ref<ProjectTab>(normalizeTab(route.query.tab));
 const projectError = computed(() => (projectErrorKey.value ? t(projectErrorKey.value) : ""));
 const resourcesError = computed(() =>
@@ -248,6 +354,14 @@ const canEditProject = computed(() => {
   if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
 });
+const ownerUsername = computed(() => project.value?.metadata?.labels?.["ebs.io/owner-user"] || "");
+const memberUsernames = computed(() =>
+  Object.entries(project.value?.metadata?.labels || {})
+    .filter(([key, value]) => key.startsWith("ebs.io/member-user.") && value === "true")
+    .map(([key]) => key.slice("ebs.io/member-user.".length))
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right)),
+);
 const selectedBuild = computed(() => builds.value.find((build) => build.metadata?.name === selectedBuildName.value) || null);
 
 onMounted(async () => {
@@ -256,6 +370,14 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => window.clearTimeout(copyResetTimer));
+
+watch(packageSearch, () => {
+  packageCurrentPage.value = 1;
+});
+
+watch(packageTotalPages, (total) => {
+  if (packageCurrentPage.value > total) packageCurrentPage.value = total;
+});
 
 async function loadProject(): Promise<void> {
   loadingProject.value = true;
@@ -273,20 +395,18 @@ async function loadResources(): Promise<void> {
   resourcesLoading.value = true;
   const base = `/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`;
   const results = await Promise.allSettled([
-    list<Snapshot>(`${base}/snapshots?limit=20`),
     list<Build>(`${base}/builds?limit=100`),
     list<Job>(`${base}/jobs?limit=20`),
   ]);
-  if (results[0].status === "fulfilled") snapshots.value = results[0].value.items;
-  if (results[1].status === "fulfilled") {
-    builds.value = results[1].value.items;
+  if (results[0].status === "fulfilled") {
+    builds.value = results[0].value.items;
     if (!builds.value.some((build) => build.metadata?.name === selectedBuildName.value)) {
       selectedBuildName.value = builds.value[0]?.metadata?.name || "";
     }
   }
-  if (results[2].status === "fulfilled") jobs.value = results[2].value.items;
+  if (results[1].status === "fulfilled") jobs.value = results[1].value.items;
   const failures = results.filter((item) => item.status === "rejected");
-  buildLoadFailed.value = results[1].status === "rejected";
+  buildLoadFailed.value = results[0].status === "rejected";
   resourceFailureCount.value = failures.length;
   resourcesLoading.value = false;
 }
@@ -311,6 +431,57 @@ function openTargetEditor(): void {
   }));
   if (!editingTargets.value.length) addTarget();
   targetEditorOpen.value = true;
+}
+
+function openPackageEditor(): void {
+  if (!project.value || !canEditProject.value) return;
+  packageDraft.value = { name: "", url: "", ref: { type: project.value.spec?.defaultRef?.type || "Branch", value: project.value.spec?.defaultRef?.value || "master" } };
+  packageErrorKey.value = "";
+  packageSaveSuccess.value = false;
+  packageEditorOpen.value = true;
+}
+
+function closePackageEditor(): void {
+  if (savingPackage.value) return;
+  packageEditorOpen.value = false;
+  packageErrorKey.value = "";
+}
+
+async function savePackage(): Promise<void> {
+  if (!project.value || !canEditProject.value || savingPackage.value) return;
+  const draft = packageDraft.value;
+  const repo = { name: draft.name.trim(), url: draft.url.trim(), ref: { type: draft.ref.type, value: draft.ref.value.trim() } };
+  if (!repo.name || !repo.url || !repo.ref.value) {
+    packageErrorKey.value = "project.packageRequired";
+    return;
+  }
+  if (project.value.spec?.packageRepos?.some((item) => item.name === repo.name)) {
+    packageErrorKey.value = "project.packageAlreadyAdded";
+    return;
+  }
+  if (repo.ref.type === "Commit" && !/^[a-fA-F0-9]{40}$/.test(repo.ref.value)) {
+    packageErrorKey.value = "project.invalidCommit";
+    return;
+  }
+  if (repo.ref.type === "Commit") repo.ref.value = repo.ref.value.toLowerCase();
+  savingPackage.value = true;
+  packageErrorKey.value = "";
+  try {
+    const updated = JSON.parse(JSON.stringify(project.value)) as Project;
+    updated.spec = { ...updated.spec, packageRepos: [...(updated.spec?.packageRepos || []), repo] };
+    project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
+      method: "PUT",
+      body: JSON.stringify(updated),
+    });
+    packageEditorOpen.value = false;
+    packageSaveSuccess.value = true;
+    packageSearch.value = "";
+    packageCurrentPage.value = 1;
+  } catch (reason) {
+    packageErrorKey.value = errorTranslationKey(reason, "errors.updateProject");
+  } finally {
+    savingPackage.value = false;
+  }
 }
 
 function closeTargetEditor(): void {
@@ -442,8 +613,158 @@ async function savePayload(): Promise<void> {
   }
 }
 
+function openBasicEditor(): void {
+  if (!project.value || !canEditProject.value) return;
+  basicDraft.value = {
+    displayName: project.value.spec?.displayName || "",
+    description: project.value.spec?.description || "",
+    defaultRef: {
+      type: project.value.spec?.defaultRef?.type || "Branch",
+      value: project.value.spec?.defaultRef?.value || "master",
+    },
+  };
+  basicErrorKey.value = "";
+  basicSaveSuccess.value = false;
+  basicEditorOpen.value = true;
+}
+
+function closeBasicEditor(): void {
+  if (savingBasic.value) return;
+  basicEditorOpen.value = false;
+  basicErrorKey.value = "";
+}
+
+async function saveBasicConfig(): Promise<void> {
+  if (!project.value || !canEditProject.value || savingBasic.value) return;
+  const refValue = basicDraft.value.defaultRef.value.trim();
+  if (!refValue) {
+    basicErrorKey.value = "project.defaultRefRequired";
+    return;
+  }
+  if (!isSafeGitRef(refValue)) {
+    basicErrorKey.value = "project.invalidDefaultRef";
+    return;
+  }
+  savingBasic.value = true;
+  basicErrorKey.value = "";
+  try {
+    const updated = JSON.parse(JSON.stringify(project.value)) as Project;
+    updated.spec = {
+      ...updated.spec,
+      displayName: basicDraft.value.displayName.trim(),
+      description: basicDraft.value.description.trim(),
+      defaultRef: { type: basicDraft.value.defaultRef.type, value: refValue },
+    };
+    project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
+      method: "PUT",
+      body: JSON.stringify(updated),
+    });
+    basicEditorOpen.value = false;
+    basicSaveSuccess.value = true;
+  } catch (reason) {
+    basicErrorKey.value = errorTranslationKey(reason, "errors.updateProject");
+  } finally {
+    savingBasic.value = false;
+  }
+}
+
+function openMemberEditor(): void {
+  if (!project.value || !canEditProject.value) return;
+  editingMembers.value = [...memberUsernames.value];
+  memberDraft.value = "";
+  memberErrorKey.value = "";
+  memberSaveSuccess.value = false;
+  memberEditorOpen.value = true;
+}
+
+function closeMemberEditor(): void {
+  if (savingMembers.value) return;
+  memberEditorOpen.value = false;
+  memberErrorKey.value = "";
+}
+
+function addMember(): void {
+  const username = memberDraft.value.trim();
+  memberErrorKey.value = "";
+  if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(username)) {
+    memberErrorKey.value = "project.invalidMemberUsername";
+    return;
+  }
+  if (username === ownerUsername.value) {
+    memberErrorKey.value = "project.ownerCannotBeMember";
+    return;
+  }
+  if (editingMembers.value.includes(username)) {
+    memberErrorKey.value = "project.memberAlreadyAdded";
+    return;
+  }
+  editingMembers.value.push(username);
+  editingMembers.value.sort((left, right) => left.localeCompare(right));
+  memberDraft.value = "";
+}
+
+function removeMember(index: number): void {
+  editingMembers.value.splice(index, 1);
+  memberErrorKey.value = "";
+}
+
+async function saveMembers(): Promise<void> {
+  if (!project.value) return;
+  if (memberDraft.value.trim()) {
+    addMember();
+    if (memberErrorKey.value) return;
+  }
+  savingMembers.value = true;
+  memberErrorKey.value = "";
+  try {
+    const updated = JSON.parse(JSON.stringify(project.value)) as Project;
+    const labels = { ...(updated.metadata?.labels || {}) };
+    for (const key of Object.keys(labels)) {
+      if (key.startsWith("ebs.io/member-user.")) delete labels[key];
+    }
+    for (const username of editingMembers.value) labels[`ebs.io/member-user.${username}`] = "true";
+    updated.metadata = { ...updated.metadata, labels };
+    project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
+      method: "PUT",
+      body: JSON.stringify(updated),
+    });
+    memberEditorOpen.value = false;
+    memberSaveSuccess.value = true;
+  } catch (reason) {
+    memberErrorKey.value = errorTranslationKey(reason, "errors.updateProject");
+  } finally {
+    savingMembers.value = false;
+  }
+}
+
 function normalizeTab(value: unknown): ProjectTab {
   return value === "builds" || value === "config" ? value : "overview";
+}
+
+function buildPaginationItems(total: number, current: number): Array<{ key: string; page: number | null }> {
+  const pages = new Set<number>();
+  if (total <= 7) {
+    for (let page = 1; page <= total; page += 1) pages.add(page);
+  } else if (current <= 4) {
+    for (let page = 1; page <= 5; page += 1) pages.add(page);
+    pages.add(total);
+  } else if (current >= total - 3) {
+    pages.add(1);
+    for (let page = total - 4; page <= total; page += 1) pages.add(page);
+  } else {
+    pages.add(1);
+    pages.add(current - 1);
+    pages.add(current);
+    pages.add(current + 1);
+    pages.add(total);
+  }
+  const sorted = [...pages].sort((left, right) => left - right);
+  const result: Array<{ key: string; page: number | null }> = [];
+  sorted.forEach((page, index) => {
+    if (index > 0 && page - sorted[index - 1] > 1) result.push({ key: `package-ellipsis-${page}`, page: null });
+    result.push({ key: `package-page-${page}`, page });
+  });
+  return result;
 }
 
 function exportYaml(): void {
@@ -515,6 +836,10 @@ function targetListLabel(targets?: BuildTarget[]): string {
 
 function gitRefLabel(ref?: GitRef): string {
   return [ref?.type, ref?.value].filter(Boolean).join(" / ") || t("common.emptyValue");
+}
+
+function isSafeGitRef(value: string): boolean {
+  return /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/.test(value) && !/(^|\/)\.{1,2}($|\/)/.test(value) && !value.includes("..");
 }
 
 function booleanLabel(value?: boolean): string {

@@ -48,7 +48,7 @@ export interface Project {
   spec?: {
     displayName?: string;
     description?: string;
-    specBranch?: string;
+    defaultRef?: { type?: "Branch" | "Tag"; value?: string };
     buildPayload?: string;
     buildTargets?: BuildTarget[];
     packageRepos?: PackageRepo[];
