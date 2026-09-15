@@ -32,7 +32,7 @@ func TestCheckSyncedUsesCacheAndBaseline(t *testing.T) {
 	if err != nil || !result.Synced || result.CloneURL == "" {
 		t.Fatalf("unexpected first result %#v, err=%v", result, err)
 	}
-	result, err = client.CheckSynced(context.Background(), "https://example.com/repo.git", syncTime.Add(time.Second))
+	result, err = client.CheckSynced(context.Background(), "git@EXAMPLE.com:repo", syncTime.Add(time.Second))
 	if err != nil || result.Synced || requests != 1 {
 		t.Fatalf("cache/baseline mismatch: result=%#v requests=%d err=%v", result, requests, err)
 	}

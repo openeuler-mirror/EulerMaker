@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"reflect"
 	"sort"
 	"strings"
@@ -56,9 +57,11 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 				return controller.ReconcileResult{}, nil
 			}
 			if apierrors.IsConflict(err) {
+				conflictRequeues.Inc()
 				return controller.ReconcileResult{Requeue: true}, nil
 			}
 			if apierrors.IsUnauthorized(err) || apierrors.IsForbidden(err) {
+				authFailures.Inc()
 				return controller.ReconcileResult{}, controller.NewPermanentError(err)
 			}
 			return c.handleWriteError(ctx, err, nil, nil)
@@ -108,6 +111,7 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	_, err = c.client.UpdateSnapshotStatus(ctx, intent)
 	if err != nil {
 		return c.handleWriteError(ctx, err, intent, func() (controller.ReconcileResult, error) {
+			c.recordStatus(original, snapshot)
 			c.applyTrackerChanges(snapshot.UID, changes)
 			if snapshot.Status.Phase == ebsv1.SnapshotActive {
 				c.failures.clearUID(snapshot.UID)
@@ -115,6 +119,7 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 			return postResult, postErr
 		})
 	}
+	c.recordStatus(original, snapshot)
 	c.applyTrackerChanges(snapshot.UID, changes)
 	if snapshot.Status.Phase == ebsv1.SnapshotActive {
 		c.failures.clearUID(snapshot.UID)
@@ -127,34 +132,38 @@ func (c *Controller) advancePhase(ctx context.Context, snapshot *ebsv1.Snapshot)
 	request.Status.Phase = ebsv1.SnapshotProcessing
 	updated, err := c.client.UpdateSnapshotStatus(ctx, request)
 	if err == nil {
+		c.recordStatus(snapshot, updated)
 		return updated, nil
 	}
 	var writeErr *clientpkg.WriteError
 	if !errors.As(err, &writeErr) || writeErr.Outcome != clientpkg.WriteUnknown {
 		return nil, err
 	}
+	unknownWrites.Inc()
 	latest, getErr := c.client.GetSnapshot(ctx, request.Namespace, request.Name)
 	if getErr != nil {
-		return nil, getErr
+		return nil, classifyReadError(getErr)
 	}
 	if latest.UID != request.UID {
 		return nil, apierrors.NewNotFound(sourceResource(), request.Name)
 	}
 	if statusEquivalent(latest.Status, request.Status) {
+		c.recordStatus(snapshot, latest)
 		return latest, nil
 	}
 	return nil, apierrors.NewConflict(sourceResource(), request.Name, err)
 }
 
 func (c *Controller) handleWriteError(ctx context.Context, err error, intent *ebsv1.Snapshot, confirmed func() (controller.ReconcileResult, error)) (controller.ReconcileResult, error) {
+	if ctx.Err() != nil {
+		return controller.ReconcileResult{}, ctx.Err()
+	}
 	var writeErr *clientpkg.WriteError
 	if !errors.As(err, &writeErr) {
 		return controller.ReconcileResult{}, err
 	}
 	if writeErr.Outcome == clientpkg.WriteUnknown && intent != nil {
-		if ctx.Err() != nil {
-			return controller.ReconcileResult{}, ctx.Err()
-		}
+		unknownWrites.Inc()
 		latest, getErr := c.client.GetSnapshot(ctx, intent.Namespace, intent.Name)
 		if apierrors.IsNotFound(getErr) {
 			return controller.ReconcileResult{}, nil
@@ -175,12 +184,23 @@ func (c *Controller) handleWriteError(ctx context.Context, err error, intent *eb
 		case 404:
 			return controller.ReconcileResult{}, nil
 		case 409, 412:
+			conflictRequeues.Inc()
 			return controller.ReconcileResult{Requeue: true}, nil
-		case 400, 401, 403, 405, 410, 422:
+		case 408, 429:
+			return controller.ReconcileResult{}, err
+		}
+		if writeErr.StatusCode < 500 || writeErr.StatusCode >= 600 {
+			if writeErr.StatusCode == 401 || writeErr.StatusCode == 403 {
+				authFailures.Inc()
+			}
 			return controller.ReconcileResult{}, controller.NewPermanentError(err)
 		}
 	}
-	if writeErr.Outcome == clientpkg.WriteNotSent && writeErr.StatusCode == 0 {
+	if writeErr.Outcome == clientpkg.WriteNotSent {
+		var networkError net.Error
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkError) {
+			return controller.ReconcileResult{}, err
+		}
 		return controller.ReconcileResult{}, controller.NewPermanentError(err)
 	}
 	return controller.ReconcileResult{}, err
@@ -188,6 +208,7 @@ func (c *Controller) handleWriteError(ctx context.Context, err error, intent *eb
 
 func classifyReadError(err error) error {
 	if apierrors.IsUnauthorized(err) || apierrors.IsForbidden(err) {
+		authFailures.Inc()
 		return controller.NewPermanentError(err)
 	}
 	return err

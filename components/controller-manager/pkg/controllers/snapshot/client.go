@@ -45,7 +45,7 @@ func (c *apiClient) GetBuild(ctx context.Context, namespace, name string) (*ebsv
 
 func (c *apiClient) UpdateSnapshotStatus(ctx context.Context, request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
 	if request == nil {
-		return nil, snapshotWriteUnknown(fmt.Errorf("nil Snapshot request"))
+		return nil, &clientpkg.WriteError{Operation: "update-status", Resource: source.SnapshotsGVR.GroupResource(), Outcome: clientpkg.WriteNotSent, Err: fmt.Errorf("nil Snapshot request")}
 	}
 	obj, err := c.client.UpdateStatus(ctx, source.SnapshotsGVR, request.Namespace, request)
 	if err != nil {
