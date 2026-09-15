@@ -15,7 +15,7 @@ services:
     ports:
       - "2379:2379"
     volumes:
-      - etcd-data:/etcd-data
+      - /srv/etcd:/etcd-data
     networks:
       - ebs-net
     healthcheck:
@@ -33,7 +33,7 @@ services:
     ports:
       - "9200:9200"
     volumes:
-      - es-data:/usr/share/elasticsearch/data
+      - /srv/es:/usr/share/elasticsearch/data
     networks:
       - ebs-net
     healthcheck:
@@ -90,7 +90,7 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
     ports:
-      - "${EULERMAKER_FRONTEND_PORT:-3000}:8080"
+      - "${EULERMAKER_FRONTEND_PORT:-80}:8080"
     networks:
       - ebs-net
     depends_on:
@@ -137,7 +137,7 @@ services:
     ports:
       - "8081:8081"
     volumes:
-      - artifact-data:/var/lib/ebs-artifacts
+      - /srv/artifact:/var/lib/ebs-artifacts
     networks:
       - ebs-net
     depends_on:
@@ -155,7 +155,7 @@ services:
       - "8084:8080"
       - "9418:9418"
     volumes:
-      - git-data:/var/lib/ebs-git
+      - /srv/git:/var/lib/ebs-git
     networks:
       - ebs-net
     healthcheck:
@@ -194,12 +194,6 @@ services:
 networks:
   ebs-net:
     driver: bridge
-
-volumes:
-  etcd-data:
-  es-data:
-  artifact-data:
-  git-data:
 
 secrets:
   ebs_gateway_jwt_secret:
