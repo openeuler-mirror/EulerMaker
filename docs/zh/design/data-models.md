@@ -168,7 +168,7 @@ type SnapshotSpec struct {
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
 | `defaultRef` | GitRef | 否 | Build Controller 创建时复制 `Project.spec.defaultRef`，与 packageRepos 来自同一次 Project GET；仅支持 Branch/Tag，不在 Snapshot 侧自动默认成 master |
-| `packageRepos` | []PackageRepo | 否 | 创建 Snapshot 时从同一 Project 复制的包仓库列表，仓库 ref 允许整体为空，不自动补齐 |
+| `packageRepos` | []PackageRepo | 否 | 创建 Snapshot 时从同一 Project 复制：single 仅保留 Build.spec.packages 指定的仓库，其他类型复制全部；仓库 ref 允许整体为空，不自动补齐 |
 
 已存在的 Snapshot 不因 Project 变化而更新 defaultRef 或 packageRepos。Snapshot Controller 优先使用包 ref，整体为空时回退到 Snapshot.spec.defaultRef，不回查 Project、不回写 spec。两者均为空时记录包级 ValidationFailed 并跳过。
 
@@ -996,7 +996,7 @@ type GitRef struct {
 | `ref`          | GitRef        | Git 引用；`type` 为 `Branch`、`Tag` 或 `Commit`，`value` 为对应分支名、标签名或完整 commit ID |
 | `buildTargets` | []BuildTarget | 构建目标 |
 
-`ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。Project 和 Snapshot 创建、普通更新时均允许省略仓库的 `ref`，或传入 `null` / `{}`（type、value 均为空）；apiserver 保留空 ref，不自动补齐。工程级 `defaultRef` 仅支持 Branch/Tag，整体为空时默认成 `{type: Branch, value: master}`；仅填写 type 或 value 均校验失败。仓库显式填写的 ref 保持不变，修改工程默认引用不会改写已有 ref；仓库仍可显式使用 Commit。Build Controller 原样复制 Project 的 defaultRef 和 packageRepos；Snapshot Controller 实际使用时优先采用包 ref，整体为空时回退到 Snapshot 自身 defaultRef。显式 ref 必须完整且合法。
+`ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。Project 和 Snapshot 创建、普通更新时均允许省略仓库的 `ref`，或传入 `null` / `{}`（type、value 均为空）；apiserver 保留空 ref，不自动补齐。工程级 `defaultRef` 仅支持 Branch/Tag，整体为空时默认成 `{type: Branch, value: master}`；仅填写 type 或 value 均校验失败。仓库显式填写的 ref 保持不变，修改工程默认引用不会改写已有 ref；仓库仍可显式使用 Commit。Build Controller 复制 Project 的 defaultRef；single 仅复制 Build.spec.packages 指定的 packageRepos，其他类型复制全部，所选仓库字段保持原值；Snapshot Controller 实际使用时优先采用包 ref，整体为空时回退到 Snapshot 自身 defaultRef。显式 ref 必须完整且合法。
 
 旧清单及存量 Project 的 `spec.specBranch` 必须迁移为 `spec.defaultRef`：原字符串转换为 `{type: Branch, value: <原值>}`，原 GitRef 对象则保留 type/value 并重命名字段。不会自动读取旧字段作为默认引用。
 
