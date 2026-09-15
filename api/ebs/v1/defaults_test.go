@@ -15,10 +15,7 @@ func TestSetDefaultsProjectPackageRefs(t *testing.T) {
 				}
 				project := &Project{Spec: ProjectSpec{DefaultRef: branch, PackageRepos: []PackageRepo{repo}}}
 				SetDefaults_Project(project)
-				want := branch
-				if want == (GitRef{}) {
-					want = GitRef{Type: GitRefBranch, Value: "master"}
-				}
+				want := GitRef{}
 				if got := project.Spec.PackageRepos[0].Ref; got != want {
 					t.Fatalf("ref=%+v, want %+v", got, want)
 				}

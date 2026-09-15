@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,14 +56,67 @@ func (c *fakeClient) UpdateSnapshotStatus(_ context.Context, request *ebsv1.Snap
 	return c.snapshot.DeepCopy(), nil
 }
 
-type fakeGitClient struct{ publishErr error }
+type fakeGitClient struct {
+	mu          sync.Mutex
+	publishErr  error
+	resolvedRef ebsv1.GitRef
+}
 
 func (f *fakeGitClient) PublishSyncTask(context.Context, string) error { return f.publishErr }
 func (f *fakeGitClient) CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error) {
 	return gitserver.SyncCheckResult{Synced: true, CloneURL: "git://mirror/repo"}, nil
 }
-func (f *fakeGitClient) ResolveCommit(context.Context, string, ebsv1.GitRef) (string, error) {
+func (f *fakeGitClient) ResolveCommit(_ context.Context, _ string, ref ebsv1.GitRef) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolvedRef = ref
 	return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
+}
+
+func TestResolveSnapshotDefaultRef(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ref, fallback ebsv1.GitRef
+		skipped       bool
+	}{
+		{name: "branch fallback", fallback: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "release"}},
+		{name: "tag fallback", fallback: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+		{name: "explicit wins", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}, fallback: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+		{name: "both empty", skipped: true},
+		{name: "partial does not inherit", ref: ebsv1.GitRef{Type: ebsv1.GitRefTag}, fallback: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}, skipped: true},
+		{name: "explicit commit", ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, fallback: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: tc.ref}})
+			snapshot.Spec.DefaultRef = tc.fallback
+			git := &fakeGitClient{}
+			c := newTestController(t, &fakeClient{snapshot: snapshot, build: build}, git, Config{})
+			results, err := c.resolveAll(context.Background(), snapshot, snapshot.Spec.PackageRepos)
+			if err != nil || len(results) != 1 {
+				t.Fatalf("results=%v err=%v", results, err)
+			}
+			result := results[0]
+			if tc.skipped {
+				if result.state != stateSkipped || result.status.Error.Code != ebsv1.SpecCommitValidationFailed {
+					t.Fatalf("result=%+v", result)
+				}
+			} else {
+				want := tc.ref
+				if want == (ebsv1.GitRef{}) {
+					want = tc.fallback
+				}
+				if result.state != stateResolved {
+					t.Fatalf("result=%+v", result)
+				}
+				if want.Type != ebsv1.GitRefCommit && git.resolvedRef != want {
+					t.Fatalf("ref=%+v want=%+v", git.resolvedRef, want)
+				}
+			}
+			if snapshot.Spec.PackageRepos[0].Ref != tc.ref {
+				t.Fatal("spec ref mutated")
+			}
+		})
+	}
 }
 
 func newTestController(t *testing.T, api *fakeClient, git GitServerClient, config Config) *Controller {

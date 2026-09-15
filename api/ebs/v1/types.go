@@ -40,6 +40,7 @@ type Snapshot struct {
 }
 
 type SnapshotSpec struct {
+	DefaultRef   GitRef        `json:"defaultRef,omitempty"`
 	PackageRepos []PackageRepo `json:"packageRepos,omitempty"`
 }
 

@@ -452,7 +452,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 
 默认值还包括：
 
-- `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是 GitRef 对象，仅支持 Branch/Tag，整体为空时默认 `{type: Branch, value: master}`。仓库的空 `ref` 在 Project 创建/普通更新时复制该默认引用，显式 ref 不改写。旧字符串形式不再接受。
+- `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是 GitRef 对象，仅支持 Branch/Tag，整体为空时默认 `{type: Branch, value: master}`。Project 和 Snapshot 均允许仓库 ref 整体为空，创建/普通更新不补齐；显式 ref 必须完整且合法。解析时优先使用包 ref，整体为空则回退到 Snapshot.spec.defaultRef，不回查 Project。旧字符串形式不再接受。
 - `Build.spec.buildType` 默认为 `full`。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
 - `Runner.spec.type` 默认为 `ct`。
@@ -555,6 +555,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
     "kind": "Snapshot",
     "metadata": {"name": "snapshot-001"},
     "spec": {
+      "defaultRef": {"type": "Branch", "value": "master"},
       "packageRepos": [{
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
