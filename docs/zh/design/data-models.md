@@ -373,10 +373,11 @@ type BuildInfoStatus struct {
 
 ```go
 type DcgNodeState struct {
-    Version      string                  `json:"version,omitempty"`
-    OutDep       []string                `json:"outDep,omitempty"`
-    InDep        map[string]VersionConst `json:"inDep,omitempty"`
-    InstallInDep map[string]VersionConst `json:"installInDep,omitempty"`
+    Version        string                  `json:"version,omitempty"`
+    OutDep         []string                `json:"outDep,omitempty"`
+    InDep          map[string]VersionConst `json:"inDep,omitempty"`
+    InstallInDep   map[string]VersionConst `json:"installInDep,omitempty"`
+    BootstrapBreak bool                    `json:"bootstrapBreak,omitempty"`
 }
 ```
 
@@ -385,7 +386,8 @@ type DcgNodeState struct {
 | `version` | string | spec 完整版本号（溯源展示，不参与调度判定） |
 | `outDep` | []string | 依赖本 spec 的下游 spec 列表（build/install 边合并；命名与直觉相反，勿混淆） |
 | `inDep` | map[string]VersionConst | 本 spec 依赖的上游 spec → 版本约束（build 边） |
-| `installInDep` | map[string]VersionConst | 本 spec 安装期依赖命中的上游 spec → 版本约束（install 边，建图规则见 build_info_controller.md 15.1）；入度 = len(inDep) + len(installInDep) |
+| `installInDep` | map[string]VersionConst | 本 spec 安装期依赖命中的上游 spec → 版本约束（install 边；运行期 install 补边可增量追加） |
+| `bootstrapBreak` | bool | 破环点标记：初始建图剥离选点或运行期新环追加选点写入；持久化为准、加载直读不重选（重选会漂移已下发的初始破环点） |
 
 ### SpecStatus
 
