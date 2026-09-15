@@ -2165,6 +2165,12 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"defaultRef": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-api/ebs/v1.GitRef"),
+						},
+					},
 					"packageRepos": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
@@ -2182,7 +2188,7 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.PackageRepo"},
+			"ebs-api/ebs/v1.GitRef", "ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 

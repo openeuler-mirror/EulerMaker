@@ -7,11 +7,6 @@ func SetDefaults_Project(obj *Project) {
 	if obj.Spec.DefaultRef == (GitRef{}) {
 		obj.Spec.DefaultRef = GitRef{Type: GitRefBranch, Value: "master"}
 	}
-	for i := range obj.Spec.PackageRepos {
-		if obj.Spec.PackageRepos[i].Ref == (GitRef{}) {
-			obj.Spec.PackageRepos[i].Ref = obj.Spec.DefaultRef
-		}
-	}
 }
 
 func SetDefaults_Build(obj *Build) {

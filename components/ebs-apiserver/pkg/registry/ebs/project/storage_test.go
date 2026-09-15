@@ -8,7 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestPackageRefDefaultingBeforeValidation(t *testing.T) {
+func TestPackageRefPreservedBeforeValidation(t *testing.T) {
 	for _, operation := range []string{"create", "update"} {
 		for _, tc := range []struct {
 			name    string
@@ -46,8 +46,8 @@ func TestPackageRefDefaultingBeforeValidation(t *testing.T) {
 				if (len(errs) > 0) != tc.invalid {
 					t.Fatalf("validation=%v, want invalid=%v", errs, tc.invalid)
 				}
-				if !tc.invalid && obj.Spec.PackageRepos[0].Ref != obj.Spec.DefaultRef {
-					t.Fatal("ref was not defaulted")
+				if obj.Spec.PackageRepos[0].Ref != tc.ref {
+					t.Fatal("package ref was changed")
 				}
 				if old.Spec.PackageRepos[0].Ref != tc.ref {
 					t.Fatal("old object was mutated")

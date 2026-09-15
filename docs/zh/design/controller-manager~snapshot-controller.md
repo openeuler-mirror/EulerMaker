@@ -16,7 +16,7 @@ Snapshot Controller 是 `controller-manager` 中负责将 `Snapshot` 资源沿 `
 首版不负责：
 
 - 不创建或删除 Snapshot 资源（由 build_controller 负责）；
-- 不修改 `Snapshot.spec.packageRepos`（从 Project 继承）；
+- 不修改 `Snapshot.spec.defaultRef` 或 `Snapshot.spec.packageRepos`（从 Project 继承）；
 - 不负责 git-server 的部署、运维和镜像清理策略；
 - 不处理 Project 删除的级联清理；
 - 不维护 Build、BuildInfo、RpmRepo 等上层资源状态；
@@ -48,7 +48,7 @@ git-server HTTP API -------> Commit 解析
 ```
 
 **字段所有权**：
-- `Snapshot.spec.packageRepos`：由 build_controller 创建 Snapshot 时固化；Snapshot Controller 只读该字段，不查询 Project 或使用 Project 兜底
+- `Snapshot.spec.defaultRef` / `Snapshot.spec.packageRepos`：由 build_controller 创建 Snapshot 时从同一次 Project GET 复制并固化；Snapshot Controller 优先使用包 ref，整体为空时回退到 Snapshot.spec.defaultRef，不查询 Project、不回写 spec。部分填写的 ref 不触发回退，由 apiserver 拒绝；两者均为空时，当轮记录包级 ValidationFailed 并跳过。下文 ref 均指回退后的有效引用，包括并发结果冲突比较
 - `Snapshot.status.packageRepoStatuses`：由 snapshot_controller **写入**（每个包的 commit 解析结果或错误）
 - `Snapshot.status.phase`：由 snapshot_controller **写入**
 - `Snapshot.status.conditions`：由 snapshot_controller **写入**

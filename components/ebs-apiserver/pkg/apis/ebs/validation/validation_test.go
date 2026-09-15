@@ -134,7 +134,8 @@ func TestValidateProjectDefaultRef(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := validProject()
 			obj.Spec.DefaultRef = tc.ref
-			for _, errs := range []field.ErrorList{ValidateProject(obj), ValidateProjectUpdate(obj, validProject())} {
+			snapshot := &ebsv1.Snapshot{Spec: ebsv1.SnapshotSpec{DefaultRef: tc.ref}}
+			for _, errs := range []field.ErrorList{ValidateProject(obj), ValidateProjectUpdate(obj, validProject()), ValidateSnapshot(snapshot), ValidateSnapshotUpdate(snapshot, &ebsv1.Snapshot{})} {
 				if (len(errs) > 0) != tc.invalid {
 					t.Fatalf("errors=%v, want invalid=%v", errs, tc.invalid)
 				}
@@ -145,6 +146,20 @@ func TestValidateProjectDefaultRef(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSnapshotAllowsEmptyPackageRef(t *testing.T) {
+	obj := &ebsv1.Snapshot{Spec: ebsv1.SnapshotSpec{
+		DefaultRef:   ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"},
+		PackageRepos: []ebsv1.PackageRepo{{Name: "gcc"}},
+	}}
+	errs := ValidateSnapshot(obj)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors=%v", errs)
+	}
+	if obj.Spec.PackageRepos[0].Ref != (ebsv1.GitRef{}) {
+		t.Fatal("validation mutated package ref")
 	}
 }
 
@@ -196,13 +211,8 @@ func TestValidateSnapshot(t *testing.T) {
 			}}},
 		},
 		{
-			name:     "requires ref type and value",
+			name:     "allows empty ref",
 			snapshot: &ebsv1.Snapshot{Spec: ebsv1.SnapshotSpec{PackageRepos: []ebsv1.PackageRepo{{}}}},
-			wantErrs: 2,
-			wantFields: map[string]field.ErrorType{
-				"spec.packageRepos[0].ref.type":  field.ErrorTypeRequired,
-				"spec.packageRepos[0].ref.value": field.ErrorTypeRequired,
-			},
 		},
 		{
 			name: "rejects unsupported ref type",

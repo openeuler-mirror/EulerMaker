@@ -47,6 +47,7 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 	}
 	tasks := make([]resolveTask, 0, len(targets))
 	for index, repo := range targets {
+		repo = effectiveRepo(repo, snapshot.Spec.DefaultRef)
 		if nameCount[repo.Name] > 1 {
 			results = append(results, skippedResult(index, repo, ebsv1.SpecCommitValidationFailed, "duplicate package repository name"))
 			continue
@@ -124,6 +125,9 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 
 func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline time.Time) resolveResult {
 	repo := task.repo
+	if repo.Ref.Type == "" || repo.Ref.Value == "" {
+		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository ref and snapshot defaultRef do not provide a complete ref")
+	}
 	if repo.Ref.Type == ebsv1.GitRefCommit {
 		if !fullCommitPattern.MatchString(repo.Ref.Value) {
 			return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "commit must be a full lowercase SHA")
@@ -205,7 +209,7 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 	accepted := make(map[string]string)
 	for _, repo := range snapshot.Spec.PackageRepos {
 		if status := snapshot.Status.PackageRepoStatuses[repo.Name]; status.CommitID != "" {
-			accepted[repoIdentity(repo)] = status.CommitID
+			accepted[repoIdentity(effectiveRepo(repo, snapshot.Spec.DefaultRef))] = status.CommitID
 		}
 	}
 	changes := make([]trackerChange, 0, len(results))
@@ -262,6 +266,14 @@ func sortResults(results []resolveResult) {
 
 func repoIdentity(repo ebsv1.PackageRepo) string {
 	return repo.URL + "\x00" + string(repo.Ref.Type) + "\x00" + repo.Ref.Value
+}
+
+// effectiveRepo resolves the frozen Snapshot default without changing spec inputs.
+func effectiveRepo(repo ebsv1.PackageRepo, defaultRef ebsv1.GitRef) ebsv1.PackageRepo {
+	if repo.Ref == (ebsv1.GitRef{}) {
+		repo.Ref = defaultRef
+	}
+	return repo
 }
 
 func controllerPermanent(err error) error {

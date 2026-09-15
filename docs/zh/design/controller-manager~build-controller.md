@@ -183,7 +183,7 @@ package build
 
 type Client interface {
     // Project 级资源读取
-    // GetProject 读取 Project；用于构造 Snapshot.spec.packageRepos。
+    // GetProject 读取 Project；用于构造 Snapshot.spec.defaultRef 与 packageRepos。
     GetProject(ctx context.Context, project string) (*v1.Project, error)
     GetBuild(ctx context.Context, project, name string) (*v1.Build, error)
     // GetLastPublishedBuild 返回最后一个发布成功的 Build。
@@ -351,7 +351,7 @@ status:
 
 ### 4.2 Snapshot
 
-Build Controller 创建 Snapshot 时写入 `Snapshot.spec.packageRepos`（逐项复制 `Project.spec.packageRepos`，Project 名取 `Build.metadata.namespace`）；不写 `Snapshot.status.packageRepoStatuses`，该字段由 Snapshot Controller 按 `spec.packageRepos` 逐项解析后写入。Build Controller 只等待 `Snapshot.status.phase=Active`；已存在的 Snapshot 不读 Project、不覆盖 spec。
+Build Controller 创建 Snapshot 时，从同一次 `GetProject` 的返回对象复制 `Project.spec.defaultRef` 与 `Project.spec.packageRepos`，分别写入 `Snapshot.spec.defaultRef` 和 `Snapshot.spec.packageRepos`（Project 名取 `Build.metadata.namespace`），不能分别读取两次 Project 混合不同版本的输入。复制 packageRepos 时使用 DeepCopy，原样保留仓库 ref（包括空 ref），由 Snapshot Controller 解析时回退到 Snapshot.spec.defaultRef；不写 `Snapshot.status.packageRepoStatuses`，该字段由 Snapshot Controller 按仓库 ref 逐项解析后写入。Build Controller 只等待 `Snapshot.status.phase=Active`；已存在的 Snapshot 不读 Project、不覆盖 spec，也不补写 defaultRef。
 
 ```yaml
 apiVersion: ebs/v1
@@ -360,6 +360,9 @@ metadata:
   name: ${build.metadata.name}
   namespace: ${build.metadata.namespace}
 spec:
+  defaultRef:    # 复制同一 Project 的 spec.defaultRef
+    type: Branch
+    value: master
   packageRepos:   # 逐项复制 Project.spec.packageRepos
     - name: gcc
       url: https://example.com/src-openeuler/gcc.git
@@ -375,6 +378,7 @@ status:
 | 字段                                     | 来源/写入方              | 说明                                            |
 | -------------------------------------- | ------------------- | --------------------------------------------- |
 | `Snapshot.metadata.name` / `namespace` | Build Controller    | 与 `Build.metadata.name` 同名，namespace 来自 Build |
+| `Snapshot.spec.defaultRef`             | Build Controller    | 创建时复制 `Project.spec.defaultRef`；与 packageRepos 来自同一次 Project GET；已有 Snapshot 不覆盖 |
 | `Snapshot.spec.packageRepos`           | Build Controller    | 创建时逐项复制 `Project.spec.packageRepos`；已存在对象不覆盖；`Project.spec.packageRepos` 为空时写入空列表 |
 | `Snapshot.status.packageRepoStatuses`  | Snapshot Controller | 按 `Snapshot.spec.packageRepos` 逐项解析写入 |
 | `Snapshot.status.phase`                | Snapshot Controller | Pending → Processing → Active                              |
@@ -510,7 +514,7 @@ status:
 
 ensure 不推进子资源状态、不等待子资源就绪、不覆盖已存在 spec、不删除其他 Build 的对象。
 
-Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetProject(Build.metadata.namespace)`，并以返回对象的 `spec.packageRepos` 构造 Snapshot spec 后创建；已有 Snapshot 时不读 Project、不覆盖 spec。`GetProject` 返回 NotFound 时按永久错误处理，不创建子资源、不写 `Build.status`。
+Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetProject(Build.metadata.namespace)`，并以同一返回对象的 `spec.defaultRef` 和 `spec.packageRepos` 构造 Snapshot spec 后创建；已有 Snapshot 时不读 Project、不覆盖 spec。`GetProject` 返回 NotFound 时按永久错误处理，不创建子资源、不写 `Build.status`。
 
 ## 七、Reconcile 流程
 
@@ -555,7 +559,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 - ensure Snapshot：GET Snapshot；
   - 已存在且未处于删除中：沿用，不读 Project、不覆盖 spec；
   - 已存在但处于删除中：按未就绪等待；
-  - NotFound：`GetProject(project)` → 以 `spec.packageRepos` 构造 Snapshot spec 后创建；
+  - NotFound：`GetProject(project)` → 以同一返回对象的 `spec.defaultRef` 和 `spec.packageRepos` 构造 Snapshot spec 后创建；
     - `GetProject` NotFound：返回零值 + `controller.NewPermanentError`，不写 status、不创建子资源；
     - `GetProject` 其他错误：按 7.1「全局网络错误语义」分类（临时→可重试错误，确定性 4xx→永久错误）。
 - ensure RpmRepo。
@@ -812,7 +816,7 @@ buildinfos:     get, create
 - ensure 幂等：GET 命中直接沿用、创建返回 409 沿用现有对象、创建结果未知先 GET 确认；
 - ensure 命中删除中子资源：子资源 GET 返回带 `deletionTimestamp` 的对象时，断言不调用 `Create`、不写 `Build.status`，且返回零值 + `nil`；对象消失后下一轮重新创建；
 - `baseBuildRef` 写入即返回：`Build.status.baseBuildRef` 为 nil 时断言本轮只发生一次 `/status` 写入（写 `baseBuildRef`）、不调用 `CreateSnapshot` / `CreateRpmRepo`，且返回零值 + `nil`；下一轮以已写入的 `baseBuildRef` 继续 ensure 子资源；
-- Snapshot 创建写入 packageRepos：`GetProject` 返回 N 个 `PackageRepo` 时，断言 `CreateSnapshot` 收到的对象 `spec.packageRepos` 与之一致；已有 Snapshot 存在时断言不调用 `GetProject`、不调用 `CreateSnapshot`；
+- Snapshot 创建复制输入：覆盖 Project.defaultRef 为 Branch/Tag，断言只调用一次 `GetProject`，`CreateSnapshot` 收到的 `spec.defaultRef` 和 N 个 `packageRepos` 均与该返回对象一致，修改构造出的 Snapshot 不影响 Project；已有 Snapshot（含缺少 defaultRef 的对象）存在时，不调用 `GetProject`、不调用 `CreateSnapshot`、不覆盖 spec；
 - Project 读取失败：`GetProject` 返回 NotFound 时断言不调用 `CreateSnapshot`、不写 `Build.status`，且返回零值 + `controller.NewPermanentError`；返回临时错误时断言零值 + 原始错误；
 - 删除中守卫：`deletionTimestamp` 非空时断言不调用 `UpdateBuildStatus`、不调用 `Create`，且返回零值 + `nil`；
 - PollingSource：非终态 fieldSelector 生效、Add/Update/Delete 事件映射正确、List 失败时退避重试且不替换旧快照；

@@ -45,20 +45,7 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 		}
 	}
 	packageReposPath := field.NewPath("spec", "packageRepos")
-	// An entirely omitted default ref is filled by Project defaulting.
-	if ref := obj.Spec.DefaultRef; ref != (ebsv1.GitRef{}) {
-		refPath := field.NewPath("spec", "defaultRef")
-		if ref.Type == "" {
-			allErrs = append(allErrs, field.Required(refPath.Child("type"), "ref type is required"))
-		} else if ref.Type != ebsv1.GitRefBranch && ref.Type != ebsv1.GitRefTag {
-			allErrs = append(allErrs, field.NotSupported(refPath.Child("type"), ref.Type, []string{string(ebsv1.GitRefBranch), string(ebsv1.GitRefTag)}))
-		}
-		if ref.Value == "" {
-			allErrs = append(allErrs, field.Required(refPath.Child("value"), "ref value is required"))
-		} else if !gitRefNamePattern.MatchString(ref.Value) || ref.Value[0] == '-' || gitRefDotSegment.MatchString(ref.Value) || strings.Contains(ref.Value, "..") {
-			allErrs = append(allErrs, field.Invalid(refPath.Child("value"), ref.Value, "must be a safe branch or tag name"))
-		}
-	}
+	allErrs = append(allErrs, validateDefaultRef(obj.Spec.DefaultRef, field.NewPath("spec", "defaultRef"))...)
 	for i, repo := range obj.Spec.PackageRepos {
 		if repo.Name == "" {
 			allErrs = append(allErrs, field.Required(packageReposPath.Index(i).Child("name"), "name is required"))
@@ -78,13 +65,35 @@ func ValidateProjectStatusUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList 
 }
 
 func ValidateSnapshot(obj *ebsv1.Snapshot) field.ErrorList {
-	return validatePackageRepos(obj.Spec.PackageRepos, field.NewPath("spec", "packageRepos"))
+	allErrs := validateDefaultRef(obj.Spec.DefaultRef, field.NewPath("spec", "defaultRef"))
+	return append(allErrs, validatePackageRepos(obj.Spec.PackageRepos, field.NewPath("spec", "packageRepos"))...)
+}
+
+func validateDefaultRef(ref ebsv1.GitRef, refPath *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	if ref == (ebsv1.GitRef{}) {
+		return allErrs
+	}
+	if ref.Type == "" {
+		allErrs = append(allErrs, field.Required(refPath.Child("type"), "ref type is required"))
+	} else if ref.Type != ebsv1.GitRefBranch && ref.Type != ebsv1.GitRefTag {
+		allErrs = append(allErrs, field.NotSupported(refPath.Child("type"), ref.Type, []string{string(ebsv1.GitRefBranch), string(ebsv1.GitRefTag)}))
+	}
+	if ref.Value == "" {
+		allErrs = append(allErrs, field.Required(refPath.Child("value"), "ref value is required"))
+	} else if !gitRefNamePattern.MatchString(ref.Value) || ref.Value[0] == '-' || gitRefDotSegment.MatchString(ref.Value) || strings.Contains(ref.Value, "..") {
+		allErrs = append(allErrs, field.Invalid(refPath.Child("value"), ref.Value, "must be a safe branch or tag name"))
+	}
+	return allErrs
 }
 
 func validatePackageRepos(repos []ebsv1.PackageRepo, path *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 	validTypes := []string{string(ebsv1.GitRefBranch), string(ebsv1.GitRefTag), string(ebsv1.GitRefCommit)}
 	for i, repo := range repos {
+		if repo.Ref == (ebsv1.GitRef{}) {
+			continue
+		}
 		refPath := path.Index(i).Child("ref")
 		if repo.Ref.Type == "" {
 			allErrs = append(allErrs, field.Required(refPath.Child("type"), "ref type is required"))
