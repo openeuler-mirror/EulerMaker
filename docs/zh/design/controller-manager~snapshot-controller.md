@@ -589,19 +589,32 @@ builds:           get
 
 不记录 payload、凭据或完整 packageRepos 列表。
 
-### 10.2 建议指标
+### 10.2 指标
+
+沿用公共 metrics 包的无标签 Counter，以固定指标名区分结果，避免包名或 URL 产生高基数序列。框架提供通用 reconcile 指标，Snapshot 与 git-server 客户端补充：
 
 ```text
-controller_reconcile_total{controller="snapshot",result}
-controller_reconcile_duration_seconds{controller="snapshot"}
-snapshot_controller_phase_transitions_total{from,to}
-snapshot_controller_resolve_total{result}
-snapshot_controller_resolve_duration_seconds
-snapshot_controller_git_server_requests_total{method,result}
-snapshot_controller_git_server_cache_hits_total
-snapshot_controller_conditions_total{type,reason}
+snapshot_controller_phase_transitions_total
+snapshot_controller_conditions_total
 snapshot_controller_conflict_requeues_total
+snapshot_controller_unknown_writes_total
+snapshot_controller_resolve_batches_total
+snapshot_controller_resolve_duration_nanoseconds_total
+snapshot_controller_resolved_total
+snapshot_controller_waiting_total
+snapshot_controller_failed_total
+snapshot_controller_skipped_total
+snapshot_controller_retry_exhausted_total
+snapshot_controller_unexpected_git_server_errors_total
+snapshot_controller_auth_failures_total
+git_server_client_sync_requests_total
+git_server_client_status_requests_total
+git_server_client_resolve_requests_total
+git_server_client_request_failures_total
+git_server_client_cache_hits_total
 ```
+
+Resolved、Waiting、Failed 统计本轮解析结果；阶段、condition、Skipped 和 RetryExhausted 仅在写入成功或 Unknown 确认后统计变更。耗时累计值除以批次数得到平均解析耗时。客户端请求数按业务方法调用统计（包含缓存命中），失败数在内部重试耗尽后统计，不按 HTTP 尝试次数重复累计。状态变更日志仅记录已确认且与原状态不同的结果，同一批包按名称排序输出；重复 resync 不重复输出相同包结果。
 
 ### 10.3 日志 reason
 

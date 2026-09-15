@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"sync"
@@ -30,16 +31,24 @@ type resolveTask struct {
 }
 
 type resolveResult struct {
-	index  int
-	repo   ebsv1.PackageRepo
-	state  resolveState
-	status ebsv1.PackageRepoStatus
-	fatal  error
+	index           int
+	repo            ebsv1.PackageRepo
+	state           resolveState
+	status          ebsv1.PackageRepoStatus
+	fatal           error
+	unexpectedError bool
 }
 
 var fullCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot, targets []ebsv1.PackageRepo) ([]resolveResult, error) {
+	started := c.clock.Now()
+	defer func() {
+		resolveBatches.Inc()
+		if elapsed := c.clock.Now().Sub(started); elapsed > 0 {
+			resolveDuration.Add(uint64(elapsed))
+		}
+	}()
 	results := make([]resolveResult, 0, len(targets))
 	nameCount := make(map[string]int)
 	for _, repo := range targets {
@@ -53,6 +62,7 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 			continue
 		}
 		if status, ok := snapshot.Status.PackageRepoStatuses[repo.Name]; ok && (status.CommitID != "" || (status.Error != nil && !status.Error.Retryable)) {
+			c.failures.set(snapshot.UID, repo.Name, 0)
 			continue
 		}
 		tasks = append(tasks, resolveTask{index: index, repo: repo})
@@ -116,14 +126,30 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 	}
 	sortResults(results)
 	for _, result := range results {
+		if result.unexpectedError {
+			unexpectedGitErrors.Inc()
+		}
 		if result.state == stateFatal {
 			return nil, result.fatal
+		}
+		switch result.state {
+		case stateResolved:
+			resolvedPackages.Inc()
+		case stateWaiting:
+			waitingPackages.Inc()
+		case stateFailed:
+			failedPackages.Inc()
 		}
 	}
 	return results, nil
 }
 
-func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline time.Time) resolveResult {
+func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline time.Time) (out resolveResult) {
+	unexpected := false
+	defer func() { out.unexpectedError = out.unexpectedError || unexpected }()
+	if err := ctx.Err(); err != nil {
+		return c.gitFailure(task, "sync", err)
+	}
 	repo := task.repo
 	if repo.Ref.Type == "" || repo.Ref.Value == "" {
 		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository ref and snapshot defaultRef do not provide a complete ref")
@@ -139,10 +165,16 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 	}
 	delays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second}
 	temporaryFailures := 0
+	var lastCheckErr error
 	for attempt := 0; attempt < 8; attempt++ {
 		check, err := c.gitClient.CheckSynced(ctx, repo.URL, baseline)
+		lastCheckErr = err
 		if err != nil {
-			kind, _ := gitErrorKind(err)
+			if errors.Is(err, context.Canceled) || isTimeout(err) {
+				return c.gitFailure(task, "sync", err)
+			}
+			kind, classified := gitErrorKind(err)
+			unexpected = unexpected || !classified
 			if kind == gitserver.ErrorValidation {
 				return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "git-server rejected repository input")
 			}
@@ -175,14 +207,18 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 			}
 		}
 	}
+	if lastCheckErr != nil {
+		return c.gitFailure(task, "sync", lastCheckErr)
+	}
 	return resolveResult{index: task.index, repo: repo, state: stateWaiting}
 }
 
-func (c *Controller) gitFailure(task resolveTask, operation string, err error) resolveResult {
+func (c *Controller) gitFailure(task resolveTask, operation string, err error) (out resolveResult) {
 	if errors.Is(err, context.Canceled) && err != context.DeadlineExceeded {
 		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: err}
 	}
-	kind, _ := gitErrorKind(err)
+	kind, classified := gitErrorKind(err)
+	defer func() { out.unexpectedError = !classified && !isTimeout(err) }()
 	switch kind {
 	case gitserver.ErrorValidation:
 		return skippedResult(task.index, task.repo, ebsv1.SpecCommitValidationFailed, "git-server rejected repository input")
@@ -191,7 +227,7 @@ func (c *Controller) gitFailure(task resolveTask, operation string, err error) r
 	case gitserver.ErrorPermanent:
 		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: controllerPermanent(err)}
 	default:
-		if errors.Is(err, context.DeadlineExceeded) {
+		if isTimeout(err) {
 			return failedResult(task.index, task.repo, ebsv1.SpecCommitSyncTimeout, operation+" request timed out")
 		}
 		code := ebsv1.SpecCommitSyncFailed
@@ -200,6 +236,11 @@ func (c *Controller) gitFailure(task resolveTask, operation string, err error) r
 		}
 		return failedResult(task.index, task.repo, code, operation+" request failed")
 	}
+}
+
+func isTimeout(err error) bool {
+	var networkError net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &networkError) && networkError.Timeout())
 }
 
 func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveResult) ([]trackerChange, bool, bool) {
@@ -220,7 +261,9 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 		case stateResolved:
 			identity := repoIdentity(result.repo)
 			if commit, ok := accepted[identity]; ok && commit != result.status.CommitID {
+				cloneURL := result.status.CloneURL
 				result = skippedResult(result.index, result.repo, ebsv1.SpecCommitCommitConflict, "repository ref resolved to conflicting commits")
+				result.status.CloneURL = cloneURL
 			} else {
 				accepted[identity] = result.status.CommitID
 				snapshot.Status.PackageRepoStatuses[name] = result.status
@@ -265,7 +308,11 @@ func sortResults(results []resolveResult) {
 }
 
 func repoIdentity(repo ebsv1.PackageRepo) string {
-	return repo.URL + "\x00" + string(repo.Ref.Type) + "\x00" + repo.Ref.Value
+	key, err := gitserver.RepositoryKey(repo.URL)
+	if err != nil {
+		key = "invalid:" + repo.URL
+	}
+	return key + "\x00" + string(repo.Ref.Type) + "\x00" + repo.Ref.Value
 }
 
 // effectiveRepo resolves the frozen Snapshot default without changing spec inputs.

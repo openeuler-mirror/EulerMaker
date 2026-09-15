@@ -113,7 +113,8 @@ func New(config Config) (*Client, error) {
 	return &Client{address: strings.TrimRight(config.Address, "/"), http: &http.Client{Timeout: config.Timeout}, retries: config.Retries, ttl: config.CacheTTL, cache: make(map[string]statusCache)}, nil
 }
 
-func (c *Client) PublishSyncTask(ctx context.Context, originURL string) error {
+func (c *Client) PublishSyncTask(ctx context.Context, originURL string) (resultErr error) {
+	defer recordRequest(syncRequests, &resultErr)
 	if err := validateOrigin(originURL); err != nil {
 		return gitError("sync", ErrorValidation, err)
 	}
@@ -121,11 +122,19 @@ func (c *Client) PublishSyncTask(ctx context.Context, originURL string) error {
 	return err
 }
 
-func (c *Client) CheckSynced(ctx context.Context, originURL string, baseline time.Time) (SyncCheckResult, error) {
+func (c *Client) CheckSynced(ctx context.Context, originURL string, baseline time.Time) (result SyncCheckResult, resultErr error) {
+	defer recordRequest(statusRequests, &resultErr)
 	if err := validateOrigin(originURL); err != nil {
 		return SyncCheckResult{}, gitError("status", ErrorValidation, err)
 	}
-	response, cached := c.cachedStatus(originURL)
+	key, err := RepositoryKey(originURL)
+	if err != nil {
+		return SyncCheckResult{}, gitError("status", ErrorValidation, err)
+	}
+	response, cached := c.cachedStatus(key)
+	if cached {
+		cacheHits.Inc()
+	}
 	if !cached {
 		body, err := c.do(ctx, "status", "/api/v1/repo/status", repositoryRequest{OriginURL: originURL}, http.StatusOK)
 		if err != nil {
@@ -138,7 +147,7 @@ func (c *Client) CheckSynced(ctx context.Context, originURL string, baseline tim
 		if err := json.Unmarshal(body, &response); err != nil {
 			return SyncCheckResult{}, gitError("status", ErrorTemporary, fmt.Errorf("decode response: %w", err))
 		}
-		c.storeStatus(originURL, response)
+		c.storeStatus(key, response)
 	}
 	if response.Error != nil {
 		kind := ErrorValidation
@@ -156,7 +165,8 @@ func (c *Client) CheckSynced(ctx context.Context, originURL string, baseline tim
 	return SyncCheckResult{Synced: true, CloneURL: response.CloneURL}, nil
 }
 
-func (c *Client) ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (string, error) {
+func (c *Client) ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (result string, resultErr error) {
+	defer recordRequest(resolveRequests, &resultErr)
 	if err := validateOrigin(originURL); err != nil {
 		return "", gitError("resolve", ErrorValidation, err)
 	}

@@ -36,6 +36,8 @@ func NewCounter(name, help string) *Counter {
 
 func (c *Counter) Inc() { c.value.Add(1) }
 
+func (c *Counter) Add(value uint64) { c.value.Add(value) }
+
 func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
