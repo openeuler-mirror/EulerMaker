@@ -318,6 +318,7 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 	buildStorage := buildstore.NewStorage(Scheme)
 	buildES := esstore.New(esClient, "build", "Build", buildStorage.Build.(*genericregistry.Store))
+	buildES.SetCreateHook(buildstore.ValidateProjectPackages(projectES))
 	buildStatusES := esstore.NewStatus(buildES, buildStorage.Status.(*genericregistry.Store))
 	v1Storage["builds"] = buildES
 	v1Storage["builds/status"] = buildStatusES

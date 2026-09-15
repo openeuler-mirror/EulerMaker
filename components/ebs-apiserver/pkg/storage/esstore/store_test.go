@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -26,6 +27,34 @@ import (
 )
 
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
+
+func TestCreateHookBeforePersistence(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(map[bool]string{false: "create", true: "dry-run"}[dryRun], func(t *testing.T) {
+			templates := projectstore.NewStorage(runtime.NewScheme())
+			// A rejected hook must return before accessing the nil ES client.
+			store := New(nil, "project", "Project", templates.Project.(*genericregistry.Store))
+			wantErr := errors.New("project dependency unavailable")
+			calls := 0
+			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error {
+				calls++
+				if obj.(*ebsv1.Project).Status.Phase != ebsv1.ProjectActive {
+					t.Fatal("hook ran before defaulting")
+				}
+				return wantErr
+			})
+			opts := &metav1.CreateOptions{}
+			if dryRun {
+				opts.DryRun = []string{metav1.DryRunAll}
+			}
+			obj := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{BuildTargets: []ebsv1.BuildTarget{{Os: "openEuler", Arch: "x86_64"}}}}
+			_, err := store.Create(genericapirequest.WithNamespace(context.Background(), ""), obj, nil, opts)
+			if err != wantErr || calls != 1 {
+				t.Fatalf("error=%v calls=%d", err, calls)
+			}
+		})
+	}
+}
 
 func (f fakeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
