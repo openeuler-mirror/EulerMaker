@@ -95,7 +95,7 @@ type Project struct {
 type ProjectSpec struct {
     DisplayName      string                     `json:"displayName,omitempty"`
     Description      string                     `json:"description,omitempty"`
-    SpecBranch       string                     `json:"specBranch,omitempty"`
+    DefaultRef       GitRef                     `json:"defaultRef,omitempty"`
     BuildPayload     string                     `json:"buildPayload,omitempty"`
     BuildTargets     []BuildTarget              `json:"buildTargets,omitempty"`
     PackageRepos     []PackageRepo              `json:"packageRepos,omitempty"`
@@ -107,7 +107,7 @@ type ProjectSpec struct {
 |------|---------|------|------|
 | `displayName` | string | 否 | 页面展示名称，默认使用创建时的 Project 名称 |
 | `description` | string | 否 | 项目描述 |
-| `specBranch` | string | 否 | 默认 spec 分支，默认 `"master"` |
+| `defaultRef` | GitRef | 否 | 默认 spec 引用，仅允许 `Branch` / `Tag`；整体为空时默认 `{type: Branch, value: master}`，不接受旧字符串形式 |
 | `buildPayload` | string | 否 | 构建环境宏，YAML 格式 |
 | `buildTargets` | []BuildTarget | 是 | 构建目标列表 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表 |
@@ -992,7 +992,9 @@ type GitRef struct {
 | `ref`          | GitRef        | Git 引用；`type` 为 `Branch`、`Tag` 或 `Commit`，`value` 为对应分支名、标签名或完整 commit ID |
 | `buildTargets` | []BuildTarget | 构建目标 |
 
-`ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。`type` 和 `value` 必须同时存在，不允许使用裸字符串推断引用类型。
+`ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。Project 创建和普通更新时，允许省略仓库的 `ref`，或传入 `null` / `{}`（type、value 均为空）；apiserver 在校验前复制 `Project.spec.defaultRef` 的 type 和 value 并持久化。工程级 `defaultRef` 仅支持 Branch/Tag，整体为空时默认成 `{type: Branch, value: master}`；仅填写 type 或 value 均校验失败。仓库显式填写的 ref 保持不变，修改工程默认引用不会改写已有 ref；仓库仍可显式使用 Commit。Snapshot 不提供该默认逻辑，仍要求每个 ref 的 type 和 value 完整；从 Project 复制时使用已经补齐并固化的值。
+
+旧清单及存量 Project 的 `spec.specBranch` 必须迁移为 `spec.defaultRef`：原字符串转换为 `{type: Branch, value: <原值>}`，原 GitRef 对象则保留 type/value 并重命名字段。不会自动读取旧字段作为默认引用。
 
 
 ### PackageRepoStatus

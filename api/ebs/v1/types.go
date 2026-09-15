@@ -15,7 +15,7 @@ type Project struct {
 type ProjectSpec struct {
 	DisplayName   string          `json:"displayName,omitempty"`
 	Description   string          `json:"description,omitempty"`
-	SpecBranch    string          `json:"specBranch,omitempty"`
+	DefaultRef    GitRef          `json:"defaultRef,omitempty"`
 	BuildPayload  string          `json:"buildPayload,omitempty"`
 	BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
 	PackageRepos  []PackageRepo   `json:"packageRepos,omitempty"`

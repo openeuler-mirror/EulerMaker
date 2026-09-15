@@ -64,6 +64,7 @@ func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
 	newP := obj.(*ebsv1.Project)
 	oldP := old.(*ebsv1.Project)
+	ebsv1.SetDefaults_Project(newP)
 	newP.Status = oldP.Status
 }
 

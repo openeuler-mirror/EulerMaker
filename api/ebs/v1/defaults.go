@@ -4,8 +4,13 @@ func SetDefaults_Project(obj *Project) {
 	if len(obj.Spec.DisplayName) == 0 {
 		obj.Spec.DisplayName = obj.Name
 	}
-	if len(obj.Spec.SpecBranch) == 0 {
-		obj.Spec.SpecBranch = "master"
+	if obj.Spec.DefaultRef == (GitRef{}) {
+		obj.Spec.DefaultRef = GitRef{Type: GitRefBranch, Value: "master"}
+	}
+	for i := range obj.Spec.PackageRepos {
+		if obj.Spec.PackageRepos[i].Ref == (GitRef{}) {
+			obj.Spec.PackageRepos[i].Ref = obj.Spec.DefaultRef
+		}
 	}
 }
 

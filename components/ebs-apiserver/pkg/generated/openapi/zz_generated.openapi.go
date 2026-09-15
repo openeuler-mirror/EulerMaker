@@ -1170,10 +1170,10 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 							Format: "",
 						},
 					},
-					"specBranch": {
+					"defaultRef": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-api/ebs/v1.GitRef"),
 						},
 					},
 					"buildPayload": {
@@ -1225,7 +1225,7 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.PackageRepo"},
+			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.GitRef", "ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 

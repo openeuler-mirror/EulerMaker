@@ -116,6 +116,38 @@ func TestValidateProject(t *testing.T) {
 	}
 }
 
+func TestValidateProjectDefaultRef(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		ref     ebsv1.GitRef
+		invalid bool
+	}{
+		{name: "omitted"},
+		{name: "branch", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "release/main"}},
+		{name: "tag", ref: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1.0"}},
+		{name: "commit", ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "0123456789012345678901234567890123456789"}, invalid: true},
+		{name: "missing type", ref: ebsv1.GitRef{Value: "main"}, invalid: true},
+		{name: "missing value", ref: ebsv1.GitRef{Type: ebsv1.GitRefTag}, invalid: true},
+		{name: "unsafe ref", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "--bad"}, invalid: true},
+		{name: "unknown type", ref: ebsv1.GitRef{Type: "Other", Value: "main"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := validProject()
+			obj.Spec.DefaultRef = tc.ref
+			for _, errs := range []field.ErrorList{ValidateProject(obj), ValidateProjectUpdate(obj, validProject())} {
+				if (len(errs) > 0) != tc.invalid {
+					t.Fatalf("errors=%v, want invalid=%v", errs, tc.invalid)
+				}
+				for _, err := range errs {
+					if err.Field != "spec.defaultRef.type" && err.Field != "spec.defaultRef.value" {
+						t.Fatalf("unexpected error: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestValidateProjectUpdate(t *testing.T) {
 	errs := ValidateProjectUpdate(&ebsv1.Project{}, validProject())
 	assertErrorList(t, errs, 2, map[string]field.ErrorType{
