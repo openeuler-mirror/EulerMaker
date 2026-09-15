@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <title>EulerMaker</title>
+  <g fill="#0077ff">
+    <path d="M12 24 2.3 18v-2.7h1.9V17l7.8 4.8 7.9-4.9v-3.6L12 8.4 8.3 10.7v1H6.5V9.6L12 6.1l9.8 6v5.9z"/>
+    <path d="M12 18.6 2.2 12.6l.1-5.8L12 .8l9.7 6v2.5h-1.9V7.9L12 3 4.1 7.9v3.7l7.9 4.9 3.6-2.3v-1.1h1.9v2.2z"/>
+  </g>
+</svg>
