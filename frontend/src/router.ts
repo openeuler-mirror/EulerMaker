@@ -1,11 +1,12 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-const StartView = { template: "<section><h1>EulerMaker</h1></section>" };
-
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", name: "home", component: StartView },
+    { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
+    { path: "/projects", name: "projects", component: () => import("@/views/ProjectsView.vue") },
+    { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
+  scrollBehavior: () => ({ top: 0 }),
 });
