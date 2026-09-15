@@ -16,7 +16,7 @@ export interface BasicProjectForm {
   name: string;
   displayName: string;
   description: string;
-  specBranch: string;
+  defaultRef: { type: "Branch" | "Tag"; value: string };
   os: string;
   arch: string;
   buildFlag: boolean;
@@ -49,7 +49,7 @@ export function projectFromForm(form: BasicProjectForm): Project {
     spec: {
       displayName: form.displayName.trim() || name,
       description: form.description.trim(),
-      specBranch: form.specBranch.trim() || "master",
+      defaultRef: { type: form.defaultRef.type, value: form.defaultRef.value.trim() },
       buildTargets: [target],
     },
   };
