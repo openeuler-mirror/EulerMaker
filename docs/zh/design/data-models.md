@@ -523,7 +523,6 @@ type RpmRepoRepositoryStatus struct {
     ContentURL        string                `json:"contentURL,omitempty"`
     RepositoryDigest string                `json:"repositoryDigest,omitempty"`
     PackageCount      int                   `json:"packageCount,omitempty"`
-    RpmDepends        map[string]RpmMeta    `json:"rpmDepends,omitempty"`
     SourceJobUIDs     []string              `json:"sourceJobUIDs,omitempty"`
     Transition        *RepositoryTransition `json:"transition,omitempty"`
     UpdatedAt         *metav1.Time          `json:"updatedAt,omitempty"`
@@ -559,7 +558,6 @@ type RpmRepoStatus struct {
 | `contentURL` | string | 当前物理版本的不可变仓库地址 |
 | `repositoryDigest` | string | 仓库内容的确定性 SHA-256 摘要 |
 | `packageCount` | int | 仓库 RPM 文件数量 |
-| `rpmDepends` | map[string]RpmMeta | 仓库中每个 RPM 的元信息 |
 | `sourceJobUIDs` | []string | 当前物理版本对应的输入 Job UID 集合，按字典序保存 |
 | `transition` | *RepositoryTransition | 正在物化或等待确认的下一版本 |
 | `updatedAt` | *metav1.Time | 当前物理版本的发布时间 |

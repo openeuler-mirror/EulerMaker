@@ -1640,20 +1640,6 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 							Format: "int32",
 						},
 					},
-					"rpmDepends": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.RpmMeta"),
-									},
-								},
-							},
-						},
-					},
 					"sourceJobUIDs": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
@@ -1682,7 +1668,7 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.RepositoryTransition", "ebs-api/ebs/v1.RpmMeta", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"ebs-api/ebs/v1.RepositoryTransition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }
 
