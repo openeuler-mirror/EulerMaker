@@ -13,6 +13,7 @@ import (
 )
 
 var (
+	uuidPattern         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	packageNamePattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9][A-Za-z0-9+._-]*)*$`)
 	architecturePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 	uuidV4Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -124,6 +125,12 @@ func ValidateSnapshotUpdate(newObj, oldObj *ebsv1.Snapshot) field.ErrorList {
 
 func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	var allErrs field.ErrorList
+	namePath := field.NewPath("metadata", "name")
+	if obj.Name == "" {
+		allErrs = append(allErrs, field.Required(namePath, "Build name is required"))
+	} else if !uuidPattern.MatchString(obj.Name) {
+		allErrs = append(allErrs, field.Invalid(namePath, obj.Name, "must be a canonical lowercase UUID"))
+	}
 	if len(obj.Spec.BuildType) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildType"), "buildType is required"))
 	}
