@@ -342,6 +342,22 @@ func TestValidateBuildStatusUpdate(t *testing.T) {
 	assertErrorList(t, errs, 1, map[string]field.ErrorType{"status.phase": field.ErrorTypeNotSupported})
 }
 
+func TestTerminalBuildPhaseImmutable(t *testing.T) {
+	for _, oldPhase := range []ebsv1.BuildPhase{ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped} {
+		for _, phase := range ebsv1.BuildPhaseValues() {
+			old := validBuild()
+			old.Status.Phase = oldPhase
+			next := old.DeepCopy()
+			next.Status.Phase = ebsv1.BuildPhase(phase)
+			next.Status.Repo = "updated"
+			errs := ValidateBuildStatusUpdate(next, old)
+			if (len(errs) == 0) != (next.Status.Phase == oldPhase) {
+				t.Fatalf("%s -> %s: %v", oldPhase, phase, errs)
+			}
+		}
+	}
+}
+
 func TestValidateBuildResource(t *testing.T) {
 	tests := []struct {
 		name       string

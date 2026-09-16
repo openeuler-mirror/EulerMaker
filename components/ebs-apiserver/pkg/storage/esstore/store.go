@@ -35,20 +35,22 @@ const (
 )
 
 type Store struct {
-	client          *es.Client
-	resource        schema.GroupResource
-	singular        schema.GroupResource
-	resourceName    string
-	kind            string
-	namespaceScoped bool
-	newFunc         func() runtime.Object
-	newListFunc     func() runtime.Object
-	createStrategy  rest.RESTCreateStrategy
-	updateStrategy  rest.RESTUpdateStrategy
-	deleteStrategy  rest.RESTDeleteStrategy
-	tableConvertor  rest.TableConvertor
-	deleteHook      func(context.Context, string) error
-	createHook      rest.ValidateObjectFunc
+	client            *es.Client
+	resource          schema.GroupResource
+	singular          schema.GroupResource
+	resourceName      string
+	kind              string
+	namespaceScoped   bool
+	newFunc           func() runtime.Object
+	newListFunc       func() runtime.Object
+	createStrategy    rest.RESTCreateStrategy
+	updateStrategy    rest.RESTUpdateStrategy
+	deleteStrategy    rest.RESTDeleteStrategy
+	tableConvertor    rest.TableConvertor
+	deleteHook        func(context.Context, string) error
+	createHook        rest.ValidateObjectFunc
+	createTransaction func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error)
+	afterWrite        func(context.Context, runtime.Object, bool)
 }
 
 type StatusStore struct {
@@ -82,6 +84,22 @@ func (s *Store) SetDeleteHook(hook func(context.Context, string) error) { s.dele
 
 // SetCreateHook registers resource-specific validation after defaulting and before persistence.
 func (s *Store) SetCreateHook(hook rest.ValidateObjectFunc) { s.createHook = hook }
+
+// SetCreateTransaction wraps persistence after all validation and admission.
+// The callback must not invoke persist more than once.
+func (s *Store) SetCreateTransaction(hook func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error)) {
+	s.createTransaction = hook
+}
+
+// SetAfterWrite observes successful non-dry-run updates and physical deletions.
+// Cleanup failures must not change an already committed operation's result.
+func (s *Store) SetAfterWrite(hook func(context.Context, runtime.Object, bool)) { s.afterWrite = hook }
+
+func (s *Store) notifyWrite(ctx context.Context, obj runtime.Object, deleted bool) {
+	if s.afterWrite != nil {
+		s.afterWrite(ctx, obj.DeepCopyObject(), deleted)
+	}
+}
 
 func (s *Store) New() runtime.Object     { return s.newFunc() }
 func (s *Store) NewList() runtime.Object { return s.newListFunc() }
@@ -136,24 +154,30 @@ func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, cr
 			return nil, err
 		}
 	}
-	if dryrun.IsDryRun(options.DryRun) {
-		accessor.SetResourceVersion("v1:0:0")
-		return obj, nil
-	}
 	doc, id, err := s.documentFor(ctx, obj)
 	if err != nil {
 		return nil, err
 	}
 	doc.Credential = credential
-	version, err := s.client.Create(ctx, s.resourceName, id, doc)
-	if err != nil {
-		if es.IsStatus(err, 409) {
-			return nil, apierrors.NewAlreadyExists(s.resource, accessor.GetName())
+	persist := func() (runtime.Object, error) {
+		if dryrun.IsDryRun(options.DryRun) {
+			accessor.SetResourceVersion("v1:0:0")
+			return obj, nil
 		}
-		return nil, s.apiError(err, accessor.GetName())
+		version, err := s.client.Create(ctx, s.resourceName, id, doc)
+		if err != nil {
+			if es.IsStatus(err, 409) {
+				return nil, apierrors.NewAlreadyExists(s.resource, accessor.GetName())
+			}
+			return nil, s.apiError(err, accessor.GetName())
+		}
+		accessor.SetResourceVersion(encodeVersion(version.SeqNo, version.PrimaryTerm))
+		return obj, nil
 	}
-	accessor.SetResourceVersion(encodeVersion(version.SeqNo, version.PrimaryTerm))
-	return obj, nil
+	if s.createTransaction != nil {
+		return s.createTransaction(ctx, obj.DeepCopyObject(), dryrun.IsDryRun(options.DryRun), persist)
+	}
+	return persist()
 }
 
 func (s *Store) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
@@ -224,6 +248,7 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 		if err := s.client.Delete(ctx, s.resourceName, hit.ID, hit.SeqNo, hit.PrimaryTerm); err != nil {
 			return nil, false, s.apiError(err, name)
 		}
+		s.notifyWrite(ctx, newObj, true)
 		return newObj, false, nil
 	}
 	if dryrun.IsDryRun(options.DryRun) {
@@ -239,6 +264,7 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 		return nil, false, s.apiError(err, name)
 	}
 	newMeta.SetResourceVersion(encodeVersion(version.SeqNo, version.PrimaryTerm))
+	s.notifyWrite(ctx, newObj, false)
 	return newObj, false, nil
 }
 
@@ -301,6 +327,7 @@ func (s *Store) Delete(ctx context.Context, name string, admission rest.Validate
 		if err := s.client.Delete(ctx, s.resourceName, hit.ID, hit.SeqNo, hit.PrimaryTerm); err != nil {
 			return nil, false, s.apiError(err, name)
 		}
+		s.notifyWrite(ctx, obj, true)
 	}
 	return obj, true, nil
 }

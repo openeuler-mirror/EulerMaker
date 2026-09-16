@@ -165,6 +165,9 @@ func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 
 func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	var allErrs field.ErrorList
+	if oldObj.Status.Phase.IsTerminal() && newObj.Status.Phase != oldObj.Status.Phase {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "phase"), "terminal Build phase is immutable"))
+	}
 	if !newObj.Status.Phase.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, ebsv1.BuildPhaseValues()))
 	}

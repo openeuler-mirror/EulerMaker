@@ -259,6 +259,15 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	if err := srv.InstallAPIGroup(apiGroupInfo); err != nil {
 		return nil, err
 	}
+	buildCoordination := apiGroupInfo.VersionedResourcesStorageMap["v1"]["builds"].(*buildstore.CreateStorage)
+	if err := srv.AddPostStartHook("build-target-claim-recovery", func(hook genericapiserver.PostStartHookContext) error {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() { <-hook.StopCh; cancel() }()
+		go buildCoordination.RunRecovery(ctx)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	buildResourceTemplate := buildresourcestore.NewStorage()
 	buildResourceES := esstore.New(esClient, "buildresource", "BuildResource", buildResourceTemplate.(*genericregistry.Store))
 	if err := ensureDefaultBuildResource(context.Background(), buildResourceES); err != nil {
@@ -320,7 +329,7 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	buildES := esstore.New(esClient, "build", "Build", buildStorage.Build.(*genericregistry.Store))
 	buildES.SetCreateHook(buildstore.ValidateProjectPackages(projectES))
 	buildStatusES := esstore.NewStatus(buildES, buildStorage.Status.(*genericregistry.Store))
-	v1Storage["builds"] = buildES
+	v1Storage["builds"] = buildstore.NewCreateStorage(buildES, esClient)
 	v1Storage["builds/status"] = buildStatusES
 	v1Storage["builds/abort"] = buildstore.NewAbortStorage(buildES, buildStatusES)
 

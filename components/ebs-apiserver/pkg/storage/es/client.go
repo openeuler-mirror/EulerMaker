@@ -22,9 +22,10 @@ var indices = map[string]string{
 	"buildresource":  "ebs-buildresources",
 	"user":           "ebs-users",
 	"machineaccount": "ebs-machineaccounts",
+	"buildclaim":     "ebs-build-target-claims",
 }
 
-var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource"}
+var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource", "buildclaim"}
 var iamResources = []string{"user", "machineaccount"}
 
 const defaultIndexMapping = `{
@@ -201,6 +202,11 @@ func (c *Client) ensureResourceIndices(resources []string) error {
 			if resp.StatusCode >= 400 {
 				return &HTTPError{StatusCode: resp.StatusCode, Body: "check index alias " + alias}
 			}
+			if resource == "buildclaim" {
+				if err := c.validateCoordinationAlias(alias); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		index := resourcePhysicalIndex(resource)
@@ -215,6 +221,14 @@ func (c *Client) ensureResourceIndices(resources []string) error {
 		putReq.Header.Set("Content-Type", "application/json")
 		putResp, err := c.do(putReq)
 		if err != nil {
+			var status *HTTPError
+			if errors.As(err, &status) && status.StatusCode == 400 && strings.Contains(status.Body, "resource_already_exists_exception") {
+				// Another apiserver may have initialized this physical index.
+				// Confirm the alias exists before accepting the startup race.
+				if aliasErr := c.validateCoordinationAlias(alias); aliasErr == nil {
+					continue
+				}
+			}
 			return fmt.Errorf("create index %s: %w", index, err)
 		}
 		putResp.Body.Close()
@@ -235,6 +249,8 @@ func indexDefinitionForResource(resource string) ([]byte, error) {
 
 func mappingForResource(resource string) string {
 	switch resource {
+	case "buildclaim":
+		return buildCoordinationMapping
 	case "rpmrepo":
 		return rpmRepoIndexMapping
 	case "user", "machineaccount":
@@ -320,6 +336,9 @@ func (c *Client) write(ctx context.Context, method, resource, id string, doc Doc
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return Version{}, err
+	}
+	if result.PrimaryTerm <= 0 || result.SeqNo < 0 {
+		return Version{}, fmt.Errorf("elasticsearch write response missing valid concurrency version")
 	}
 	return Version{SeqNo: result.SeqNo, PrimaryTerm: result.PrimaryTerm}, nil
 }
