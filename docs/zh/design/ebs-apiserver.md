@@ -466,11 +466,92 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneUrl` 记录 git-server 确认同步后返回的只读地址；包解析成功时记录 commitId，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 只记录整体级异常，不使用包名作为 condition type。
 - Build 必须包含 `buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。
 - 创建 `buildType=single` 或 `specified` 的 Build 时（含 dry-run），额外读取一次所属 Project，校验 `spec.packages` 中每个包名均存在于 `Project.spec.packageRepos[].name`；允许多个包及重复包名。不存在的包返回 `422 Invalid`，错误字段定位到 `spec.packages[i]`；Project 不存在或读取失败时原样返回对应 API 错误，不创建 Build。full/incremental 不执行该检查，普通更新和 `/status` 更新也不重新校验包存在性；创建后 Project 变化仍需由控制器处理。
+- 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + OS + Arch 执行下节的 ES 目标占用协议；省略 buildType 按 full 处理。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
 
 从旧模型升级时必须在启用新 Gateway 前迁移已有 User：`spec.admin=true` 转为 `spec.scopes=["ebs:admin"]`，其他 User 转为 `spec.scopes=["ebs:user"]`，迁移完成后删除旧 `spec.admin` 字段。存量对象读取不依赖创建默认值，不能把数据迁移交给 storage strategy 隐式完成。
+
+## 非 single Build 的 ES 目标占用
+
+apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进程内锁或 etcd。Build Controller 只写 Build 状态，不读写占用索引。占用编排和恢复位于 `pkg/registry/ebs/build/claims_*.go`，底层复用 `pkg/storage/es` 的 create-only、实时 GET、CAS 与 PIT 扫描能力。
+
+### 范围与存储
+
+- 目标键为 Project 名、`spec.buildTarget.os`、`spec.buildTarget.arch` 三元组；不同目标可并行，同一目标最多有一个通过本协议创建的非终态 full/incremental/specified Build。single 创建和完成均不影响占用。
+- 内部 alias 为 `ebs-build-target-claims`，初始物理索引为 `ebs-build-target-claims-v1`，只允许一个写索引，不暴露为公共 EBS 资源。所有实例必须访问同一索引及一致的 routing；禁止在在线创建期间无协调地切换占用索引，否则同 ID 可能在两个物理索引同时存在。
+- 文档 ID 为三元组 UTF-8 JSON 数组紧凑编码后的 SHA-256 小写十六进制串；不使用有歧义的字符串拼接。读取后核对原始三元组，不一致时拒绝并告警。
+- Mapping 使用 `dynamic: strict`；身份与 state 为 keyword，时间为 date。不保存 Project 凭据或完整 Build spec。
+
+内部记录字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `project` / `os` / `arch` | 目标原始三元组 |
+| `claimID` | 本次抢占的随机 UUID，用于区分同一目标的不同占用 |
+| `buildName` | UUID 形式且不复用的 Build 名称，作为占用归属标识 |
+| `state` | `Reserved`、`Creating`、`Bound`、`Releasing` |
+| `createdAt` / `updatedAt` | UTC 观测时间，只用于诊断与扫描，不能作为抢占期限 |
+| `releaseReason` | Releasing 时记录 `CreateNotSent`、`CreateRejected`、`Terminal` 或 `Deleted` |
+
+不设 TTL，不因心跳、请求超时或占用年龄直接释放。占用文档更新和删除全部携带当前 `_seq_no`、`_primary_term`；每次先核对 claimID 与 Build 身份。版本冲突后重新 GET，不把旧决定套到新版本上。
+
+### 创建协议
+
+1. 执行认证授权、默认值、字段和 Project 包名校验及 admission；确定 Build name。相同 Build 名称已存在时维持标准 `409 AlreadyExists`，不得当作本次请求成功或转换为更新。后续持久化不得重新生成 UID 或改变目标。
+2. 按确定 ID 使用 `_create` 抢占 Reserved 文档。存在其他占用时返回 `409 Conflict`，附带占用 Build 名称；读取失败返回临时错误，禁止绕过。
+3. 抢占成功后执行历史门禁：按 Project + OS + Arch 查询创建时间降序最新一条非 single Build（`ebs.io/build-type!=single`，`limit=1`，不按 phase 过滤）。不存在或已为 Success/Failed/Aborted/Skipped 时继续；否则拒绝创建并释放本次 Reserved 占用。空/未知 phase 视为非终态，查询失败也不创建。仅查最新一条，不承诺排除更早的历史非终态对象。
+4. CAS 将 Reserved 改为 Creating。只有成功完成这次状态迁移的请求能够发送一次 Build create-only 写入；其他实例和恢复任务不得替它重新发送创建。ES 客户端也不得自动重试这笔写请求。
+5. Build 创建确认成功后，CAS 将占用改为 Bound，再返回正常创建结果。若记录 Bound 失败但 Build 已确认成功，仍返回已创建 Build，记录错误并交由恢复任务补齐；Creating 仍阻塞其他创建。
+
+Reserved 与 Creating 是写入分界：请求尚在 Reserved 时不可能发送 Build 创建。恢复任务可以 CAS 将 Reserved 改为 Releasing 后删除；原请求随后 CAS Creating 必然失败，必须结束且不发送 Build 写入。扫描提前取消一个仍存活的 Reserved 请求属于可重试竞争，不影响互斥。
+
+dry-run 只检查现有占用和历史门禁，不创建占用、不写 Build，也不预留后续执行资格；返回成功不保证真实提交仍可通过。由无 dry-run 的真实 POST 执行原子抢占。
+
+### 写入结果与返回
+
+| 操作与结果 | 处理 |
+| --- | --- |
+| 占用 `_create` 结果未知 | 按固定 ID 实时 GET；claimID 一致才继续，其他 claimID 返回 Conflict。不存在或读取失败时返回临时错误，不创建 Build；可能迟到的 Reserved 记录由扫描安全清理 |
+| Reserved → Creating CAS 结果未知 | 本请求不得发送 Build 创建，即使 GET 看到 Creating 也不再接续发送；保留占用等待人工确认，避免与恢复流程形成第二个发送者 |
+| Build 写入确定未发送 | CAS 到 Releasing/CreateNotSent 后删除；保留原始请求错误 |
+| Build 写入明确被拒绝且未持久化 | CAS 到 Releasing/CreateRejected 后删除；保留原始请求错误。仅客户端能证明未提交时使用此分类，ES 超时/5xx 不默认视为未写入 |
+| Build 写入结果未知 | 实时 GET 固定 Build ID；同名称、同 Project、同目标则确认持久化并补 Bound；不存在或读取失败则保持 Creating、返回临时错误，不重放 POST、不释放 |
+| Bound CAS 或占用删除结果未知 | GET 占用确认；已达目标或删除后不存在则完成，属于其他 claimID 时结束旧清理，仍为自己的记录则按最新版本继续对应恢复流程 |
+
+进程可能在标记 Creating 后、真正发送前崩溃，这与“请求已发送但尚未可见”无法通过一次 GET 区分。因此 Creating + Build NotFound 不自动解除：持续确认并告警。人工释放前必须隔离原发送实例并排除 ES 仍在处理的迟到创建；仅关闭进程或等待固定时间不构成该证明。无法证明时保持阻塞。此方案优先保证互斥，不承诺所有崩溃窗口自动恢复可用。
+
+### 终态与删除释放
+
+占用释放由 apiserver 完成，覆盖 `/status`、`/abort`、DELETE 与 DeleteCollection 的逐项删除路径：
+
+- Build 成功持久化终态后，实时 GET 核实同名称、同 Project、同目标且 phase 为 Success/Failed/Aborted/Skipped，将自己的占用 CAS 为 Releasing/Terminal 后删除。若占用还在 Creating 但同名称、同 Project、同目标 Build 已存在，可先确认 Bound。不得在 Build 写入成功前释放。
+- Build DELETE 先完成权限、UID/resourceVersion 前置条件和删除校验。实际删除成功后，使用被删对象的名称、Project 和目标核实占用归属，CAS 为 Releasing/Deleted 后删除。仅设置 deletionTimestamp、finalizer 尚未完成时不得释放。
+- 对 Bound 记录实时 GET Build 返回 NotFound，也可 CAS 到 Releasing/Deleted 后删除：Bound 已证明该次唯一创建写入曾完成，且协议禁止重发该创建。Creating + NotFound 不适用此规则。名称、Project 或目标不匹配属于身份异常，保留占用并告警，不更新或删除替代对象。
+- Build 状态/删除已成功，但释放失败时，不把成功的业务操作改报失败；输出结构化错误，由扫描补偿。占用漏释放只会暂时阻止新构建，不会放行两个构建。
+- Releasing 记录由任意实例按版本条件删除；旧清理遇到新 claimID 时立即停止。
+
+为使终态释放安全，必须同步增加 Build 终态不可回退校验：旧 phase 已终态时，`/status` 只允许保留原 phase，不得改回非终态或另一终态；可继续完善其他允许的 status 字段。仅有 resourceVersion 校验不足以防止读取最新对象后的主动回退。Build 名称为 UUID 形式且不复用是本协议前提，删除后不得重建同名 Build。调用方保证名称不复用，apiserver 不保存历史名称使用记录，也不校验已删除对象的历史名称。
+
+
+此互斥限定 Build 对象生命周期：Aborted 或删除不代表对应 Job/Runner 已停止执行；停止旧任务、避免旧任务继续发布由各业务控制器负责，不由占用释放协议保证。
+
+### 多实例恢复与上线
+
+- apiserver 启动 ES 索引就绪后运行恢复扫描，默认每 30s 一轮、分页 100 条，使用服务生命周期 context 和现有 ES 请求超时；停止时取消扫描，不派生脱离生命周期的后台任务。
+- 各实例均可扫描，无需 leader。搜索结果只作为候选，处理前按 ID 实时 GET 取得最新状态与版本；CAS 冲突结束本条，下一轮重试。搜索 refresh 延迟只延后清理，不用于授权创建。
+- Reserved：CAS 到 Releasing/CreateNotSent 并删除。Creating：GET 同名称、同 Project、同目标 Build，存在则补 Bound 后继续判断，NotFound 则保留并告警。Bound：非终态保留、终态释放、NotFound 按删除规则释放。Releasing：条件删除。任意读取错误不释放；每条失败不阻断本页其他记录。
+- 新请求看到占用统一返回 Conflict，不在请求内无限等待恢复。日志包含目标、claimID、Build name、state、操作和结果，避免记录 spec；指标记录抢占冲突、恢复错误、Creating 未确认数量与持续时间，目标和 Build 名称不作为指标 label。
+- 上线需暂停创建，停用所有旧版实例，按目标检查并处理已有非终态 Build，为需继续运行的非 single 构建建立 Bound 占用，然后启用新版本。历史门禁本身不能处理多个存量非终态对象；禁止新旧协议混跑，也禁止绕过 apiserver 直接写 Build。
+- 备份恢复必须同时考虑 Build 和占用；恢复后在重新开放创建前执行一致性检查，不能只清空占用索引来解除阻塞。
+
+### 实现边界与验证
+
+- `pkg/storage/es` 提供内部索引 mapping、alias 校验及 create-only、实时 GET、CAS 更新/删除、分页扫描；`claims_store.go` 封装占用记录与原始 ES 版本，与公共 EBS 资源隔离。
+- Build 创建编排统一封装在 build storage，拆开本地校验与最终持久化，避免校验/admission 被重复执行；本地目标锁可移除，或仅作为减少竞争的优化，不参与正确性证明。
+- 终态与删除释放使用持久化成功后的回调，不能复用“删除前必须成功”的清理 hook；扫描器由 server 生命周期管理。Build Controller 不新增 ES 权限或释放调用。
+- 测试至少覆盖：两个 apiserver 同目标同时创建仅一方成功、不同目标并行、single 绕过、默认 full、dry-run 无写入、历史门禁拒绝、各步骤崩溃与 Unknown、迟到写入不误释放、Reserved 清理与 Creating CAS 竞争、终态不可回退、删除前置条件失败不释放、释放 CAS 防误删、多实例重复扫描和重启恢复。
 
 ## 启动参数
 
