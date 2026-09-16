@@ -39,7 +39,6 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 	for _, spec := range record.ExcludeSpecs {
 		excluded[spec] = true
 	}
-	count := 0
 	for _, meta := range source.RPMs {
 		if excluded[meta.SpecName] {
 			continue
@@ -52,7 +51,6 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		if err := os.Link(from, to); err != nil {
 			return result, classifyReleaseLinkError(err)
 		}
-		count++
 	}
 	command := exec.CommandContext(ctx, m.createRepoCommand, "--workers", strconv.Itoa(m.createRepoWorkers), work)
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C"}
@@ -96,7 +94,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
-	return releaseResult{Digest: digest, Count: count}, nil
+	return releaseResult{Digest: digest}, nil
 }
 
 type repoMetadata struct {

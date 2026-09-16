@@ -56,7 +56,7 @@ func (m *releaseManager) recover(workTTL time.Duration) error {
 			continue
 		}
 		if record.State == ReleaseCreating {
-			record.State, record.ReleaseDigest, record.PackageCount, record.UpdatedAt = ReleasePrepared, digest, countReleasePackages(m.releasePath(record)), now
+			record.State, record.ReleaseDigest, record.UpdatedAt = ReleasePrepared, digest, now
 			if err := m.persist(record); err != nil {
 				return err
 			}
@@ -90,9 +90,4 @@ func readReleaseIndex(path string) (releaseIndex, error) {
 	}
 	err = json.Unmarshal(data, &index)
 	return index, err
-}
-
-func countReleasePackages(path string) int {
-	entries, _ := os.ReadDir(filepath.Join(path, "Packages"))
-	return len(entries)
 }

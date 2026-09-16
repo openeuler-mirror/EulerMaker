@@ -36,7 +36,7 @@ func (m *testReleaseMaterializer) Create(ctx context.Context, record ReleaseReco
 	if err := os.WriteFile(filepath.Join(root, "repodata", "repomd.xml"), []byte("release-metadata"), 0640); err != nil {
 		return releaseResult{}, err
 	}
-	return releaseResult{Digest: "release-digest", Count: 1}, nil
+	return releaseResult{Digest: "release-digest"}, nil
 }
 
 func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testReleaseMaterializer) {
@@ -166,7 +166,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Count != 1 || result.Digest == "" {
+	if result.Digest == "" {
 		t.Fatalf("result = %#v", result)
 	}
 	releasePath := filepath.Join(root, "repositories", "project", "x86_64", "releases", "build")

@@ -87,7 +87,7 @@ func (m *repositoryManager) recover(workTTL time.Duration) error {
 			continue
 		}
 		record.State, record.RepositoryDigest, record.RPMs = RepositoryReady, digest, index.RPMs
-		record.PackageCount, record.ContentURL, record.UpdatedAt, record.CompletedAt = len(index.RPMs), "/repositories/v1/"+uid+"/", now, &now
+		record.ContentURL, record.UpdatedAt, record.CompletedAt = "/repositories/v1/"+uid+"/", now, &now
 		if err := m.persist(record); err != nil {
 			return err
 		}
@@ -283,7 +283,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 		record.State = RepositoryFailed
 		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, Time: now}
 	} else {
-		record.State, record.RepositoryDigest, record.PackageCount, record.RPMs = RepositoryReady, result.Digest, result.Count, result.RPMs
+		record.State, record.RepositoryDigest, record.RPMs = RepositoryReady, result.Digest, result.RPMs
 		record.ContentURL = "/repositories/v1/" + uid + "/"
 		record.CompletedAt = &now
 	}
@@ -386,7 +386,7 @@ func cloneRepository(in *RepositoryRecord) *RepositoryRecord {
 }
 
 func repositoryResponse(record *RepositoryRecord) RepositoryResponse {
-	response := RepositoryResponse{RepositoryUID: record.RepositoryUID, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, RepositoryDigest: record.RepositoryDigest, PackageCount: record.PackageCount, RPMs: record.RPMs, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
+	response := RepositoryResponse{RepositoryUID: record.RepositoryUID, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, RPMs: record.RPMs, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
 	if record.State == RepositoryCreating {
 		response.PollAfterSeconds = 5
 	}

@@ -45,7 +45,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.RepositoryInput":                   schema_ebs_api_ebs_v1_RepositoryInput(ref),
 		"ebs-api/ebs/v1.RepositoryTransition":              schema_ebs_api_ebs_v1_RepositoryTransition(ref),
 		"ebs-api/ebs/v1.ResourceRequirements":              schema_ebs_api_ebs_v1_ResourceRequirements(ref),
-		"ebs-api/ebs/v1.RpmMeta":                           schema_ebs_api_ebs_v1_RpmMeta(ref),
 		"ebs-api/ebs/v1.RpmRepo":                           schema_ebs_api_ebs_v1_RpmRepo(ref),
 		"ebs-api/ebs/v1.RpmRepoList":                       schema_ebs_api_ebs_v1_RpmRepoList(ref),
 		"ebs-api/ebs/v1.RpmRepoReleaseStatus":              schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref),
@@ -1398,64 +1397,6 @@ func schema_ebs_api_ebs_v1_ResourceRequirements(ref common.ReferenceCallback) co
 	}
 }
 
-func schema_ebs_api_ebs_v1_RpmMeta(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"version": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-					"specName": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-					"provides": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"requires": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConst"),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"version", "specName"},
-			},
-		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.VersionConst"},
-	}
-}
-
 func schema_ebs_api_ebs_v1_RpmRepo(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1574,18 +1515,6 @@ func schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref common.ReferenceCallback) co
 							Format: "",
 						},
 					},
-					"releaseDigest": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"packageCount": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int32",
-						},
-					},
 					"transition": {
 						SchemaProps: spec.SchemaProps{
 							Ref: ref("ebs-api/ebs/v1.ReleaseTransition"),
@@ -1626,18 +1555,6 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
-						},
-					},
-					"repositoryDigest": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"packageCount": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int32",
 						},
 					},
 					"sourceJobUIDs": {

@@ -27,7 +27,7 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record Rep
 		return repositoryResult{}, ctx.Err()
 	case <-m.release:
 	}
-	return repositoryResult{Digest: "digest", Count: 1, RPMs: map[string]RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}, nil
+	return repositoryResult{Digest: "digest", RPMs: map[string]RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}, nil
 }
 
 func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) (*Server, CreateRepositoryRequest) {
