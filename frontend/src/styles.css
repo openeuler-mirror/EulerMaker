@@ -42,6 +42,8 @@ body.modal-open { overflow: hidden; }
 .login-button, .text-button { border: 0; background: transparent; color: var(--blue); font-size: 14px; font-weight: 650; }
 .login-button { padding: 8px 17px; border: 1px solid #bcd9fb; border-radius: 7px; }
 .login-button:hover { background: #edf6ff; }
+.register-link { color: var(--blue); font-size: 14px; font-weight: 650; }
+.register-link:hover, .register-link:focus-visible { text-decoration: underline; }
 .language-button { width: 34px; height: 32px; border: 1px solid var(--line); border-radius: 6px; color: #536176; background: #fff; font-size: 13px; font-weight: 700; }
 .language-button:hover { color: var(--blue); border-color: #a9cef8; }
 .menu-toggle { display: none; border: 0; background: transparent; color: var(--ink); }
@@ -353,11 +355,16 @@ body.modal-open { overflow: hidden; }
 .auth-card label > span { display: block; margin-bottom: 8px; color: #445167; font-size: 14px; font-weight: 650; }
 .auth-card input { width: 100%; height: 44px; padding: 0 13px; border: 1px solid #d8e0eb; border-radius: 7px; outline: 0; color: var(--ink); background: #fbfcfe; font-size: 14px; }
 .auth-card input:focus { background: #fff; border-color: #68aaf4; box-shadow: 0 0 0 3px rgb(20 120 242 / 10%); }
+.field-hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .form-error { margin-top: 16px; padding: 10px 12px; display: flex; gap: 8px; align-items: center; color: #aa3e4a; background: #fff1f2; border-radius: 6px; font-size: 13px; }
 .form-error svg { width: 17px; }
 .submit-button { width: 100%; height: 44px; margin-top: 22px; border: 0; border-radius: 7px; color: #fff; background: var(--blue); font-size: 15px; font-weight: 700; }
 .submit-button:hover { background: var(--blue-deep); }
 .submit-button:disabled { opacity: .65; cursor: wait; }
+.auth-action-link { display: grid; place-items: center; }
+.auth-action-link:hover { color: #fff; }
+.auth-switch-link { margin-top: 12px; display: block; color: var(--blue); text-align: right; font-size: 13px; }
+.auth-switch-link:hover, .guest-link:hover { text-decoration: underline; }
 .guest-link { margin-top: 17px; display: block; color: var(--blue); text-align: center; font-size: 13px; }
 
 @media (max-width: 900px) {
@@ -391,6 +398,7 @@ body.modal-open { overflow: hidden; }
   .main-nav { top: 58px; padding-left: 16px; padding-right: 16px; }
   .identity { display: none; }
   .login-button { padding: 7px 12px; }
+  .register-link { display: none; }
   .page-container { margin-top: 14px; margin-bottom: 24px; padding: 20px 14px 30px; border-radius: 9px; }
   .welcome-panel { min-height: 0; padding: 30px 24px; grid-template-columns: 1fr; }
   .welcome-panel h1 { font-size: 34px; }

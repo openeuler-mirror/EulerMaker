@@ -63,6 +63,13 @@ export async function login(username: string, password: string): Promise<Session
   }
 }
 
+export async function registerUser(input: { username: string; password: string; displayName: string; email: string }): Promise<void> {
+  await request<{ username: string }>("/auth/register", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export async function checkSession(): Promise<Session> {
   const response = await request<{
     identity: SessionIdentity;

@@ -23,7 +23,10 @@
           <span class="identity"><User />{{ session.username }}</span>
           <button type="button" class="text-button" @click="logout">{{ t("app.logout") }}</button>
         </template>
-        <RouterLink v-else class="login-button" to="/login">{{ t("app.login") }}</RouterLink>
+        <template v-else>
+          <RouterLink class="register-link" to="/register">{{ t("app.register") }}</RouterLink>
+          <RouterLink class="login-button" to="/login">{{ t("app.login") }}</RouterLink>
+        </template>
       </div>
     </header>
 
