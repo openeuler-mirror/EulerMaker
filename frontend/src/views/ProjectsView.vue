@@ -1,6 +1,6 @@
 <template>
   <section class="page-heading">
-    <div><h1>{{ t("projects.title") }}</h1><p>{{ t("projects.description") }}</p></div>
+    <div><h1>{{ t("projects.title") }}</h1></div>
     <div class="page-actions">
       <button class="secondary-button" type="button" :disabled="createForbidden" :title="createForbidden ? t('projects.noPermission') : ''" @click="openDialog('import')"><Upload />{{ t("projects.importYaml") }}</button>
       <button class="primary-button" type="button" :disabled="createForbidden" :title="createForbidden ? t('projects.noPermission') : ''" @click="openDialog('create')"><Plus />{{ t("projects.create") }}</button>
