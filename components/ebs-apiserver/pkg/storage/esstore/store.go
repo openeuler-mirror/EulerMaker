@@ -48,6 +48,7 @@ type Store struct {
 	deleteStrategy  rest.RESTDeleteStrategy
 	tableConvertor  rest.TableConvertor
 	deleteHook      func(context.Context, string) error
+	createHook      rest.ValidateObjectFunc
 }
 
 type StatusStore struct {
@@ -78,6 +79,9 @@ func NewStatus(parent *Store, template *genericregistry.Store) *StatusStore {
 
 // SetDeleteHook registers cleanup that must succeed before an object is removed.
 func (s *Store) SetDeleteHook(hook func(context.Context, string) error) { s.deleteHook = hook }
+
+// SetCreateHook registers resource-specific validation after defaulting and before persistence.
+func (s *Store) SetCreateHook(hook rest.ValidateObjectFunc) { s.createHook = hook }
 
 func (s *Store) New() runtime.Object     { return s.newFunc() }
 func (s *Store) NewList() runtime.Object { return s.newListFunc() }
@@ -121,6 +125,11 @@ func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, cr
 	}
 	if err := rest.BeforeCreate(s.createStrategy, ctx, obj); err != nil {
 		return nil, err
+	}
+	if s.createHook != nil {
+		if err := s.createHook(ctx, obj.DeepCopyObject()); err != nil {
+			return nil, err
+		}
 	}
 	if admission != nil {
 		if err := admission(ctx, obj.DeepCopyObject()); err != nil {
