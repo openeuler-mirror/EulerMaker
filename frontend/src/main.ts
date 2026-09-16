@@ -11,6 +11,7 @@ import { useSessionStore } from "@/stores/session";
 const app = createApp(App);
 const pinia = createPinia();
 
-app.use(pinia).use(router).use(i18n);
+app.use(pinia).use(i18n);
 await useSessionStore(pinia).restore();
+app.use(router);
 app.mount("#app");

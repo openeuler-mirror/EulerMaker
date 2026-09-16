@@ -91,3 +91,28 @@ export interface Session {
   identity: SessionIdentity;
   expiresAt?: number;
 }
+
+export interface ManagedUser {
+  apiVersion?: "iam.ebs/v1";
+  kind?: "User";
+  metadata?: ObjectMeta & { uid?: string };
+  spec?: { enabled?: boolean; scopes?: string[]; displayName?: string; email?: string };
+}
+
+export interface MachineAccount {
+  metadata?: ObjectMeta;
+  spec?: { tokenTTLSeconds?: number };
+}
+
+export interface Runner {
+  metadata?: ObjectMeta;
+  spec?: { instanceId?: string; type?: string; arch?: string; unschedulable?: boolean };
+  status?: { phase?: string; heartbeat?: string; capacity?: Record<string, string>; allocatable?: Record<string, string>; info?: { os?: string; kernelVersion?: string; runtimeVersion?: string; agentVersion?: string } };
+}
+
+export interface BuildResource {
+  apiVersion?: "ebs/v1";
+  kind?: "BuildResource";
+  metadata?: ObjectMeta;
+  spec?: { default?: { requests?: Record<string, string>; limits?: Record<string, string> }; packages?: Record<string, unknown> };
+}
