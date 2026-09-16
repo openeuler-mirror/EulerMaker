@@ -12,6 +12,7 @@
       <div class="auth-card-heading"><img src="@/assets/eulermaker-logo.svg" alt="" /><div><h2>{{ t("auth.loginTitle") }}</h2><p>{{ t("auth.loginHint") }}</p></div></div>
       <label><span>{{ t("auth.username") }}</span><input v-model.trim="username" autocomplete="username" required maxlength="63" :placeholder="t('auth.usernamePlaceholder')" /></label>
       <label><span>{{ t("auth.password") }}</span><input v-model="password" type="password" autocomplete="current-password" required maxlength="128" :placeholder="t('auth.passwordPlaceholder')" /></label>
+      <RouterLink class="auth-switch-link" :to="registerDestination">{{ t("auth.noAccount") }} {{ t("app.register") }}</RouterLink>
       <div v-if="error" class="form-error" role="alert"><WarningFilled />{{ error }}</div>
       <button class="submit-button" type="submit" :disabled="submitting">{{ submitting ? t("auth.submitting") : t("app.login") }}</button>
       <RouterLink class="guest-link" to="/projects">{{ t("auth.browseAsGuest") }}</RouterLink>
@@ -28,15 +29,16 @@ import { useI18n } from "vue-i18n";
 import { errorTranslationKey } from "@/api";
 import { useSessionStore } from "@/stores/session";
 
-const username = ref("");
+const route = useRoute();
+const username = ref(typeof route.query.username === "string" ? route.query.username : "");
 const password = ref("");
 const errorKey = ref("");
 const submitting = ref(false);
 const session = useSessionStore();
 const { t } = useI18n();
 const error = computed(() => (errorKey.value ? t(errorKey.value) : ""));
-const route = useRoute();
 const router = useRouter();
+const registerDestination = computed(() => ({ name: "register", query: typeof route.query.redirect === "string" ? { redirect: route.query.redirect } : {} }));
 
 async function submit(): Promise<void> {
   submitting.value = true;
