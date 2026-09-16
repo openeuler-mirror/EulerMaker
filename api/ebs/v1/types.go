@@ -64,10 +64,9 @@ type Build struct {
 }
 
 type BuildSpec struct {
-	BuildType     string          `json:"buildType,omitempty"`
-	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
-	Packages      []string        `json:"packages,omitempty"`
-	BuildTarget   BuildTarget     `json:"buildTarget,omitempty"`
+	BuildType   string      `json:"buildType,omitempty"`
+	Packages    []string    `json:"packages,omitempty"`
+	BuildTarget BuildTarget `json:"buildTarget,omitempty"`
 }
 
 type BootstrapRepo struct {
@@ -104,7 +103,8 @@ type BuildInfo struct {
 }
 
 type BuildInfoSpec struct {
-	SpecDepends map[string]SpecDepend `json:"specDepends,omitempty"`
+	BootstrapRepo []BootstrapRepo       `json:"bootstrapRepo,omitempty"`
+	SpecDepends   map[string]SpecDepend `json:"specDepends,omitempty"`
 }
 
 type SpecDepend struct {

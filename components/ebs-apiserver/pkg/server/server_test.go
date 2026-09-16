@@ -33,8 +33,12 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	definitions := getOpenAPIDefinitions(func(path string) spec.Ref {
 		return spec.MustCreateRef("#/components/schemas/" + path)
 	})
+	if _, exists := definitions["ebs-api/ebs/v1.BuildSpec"].Schema.Properties["bootstrapRepo"]; exists {
+		t.Fatal("BuildSpec still exposes bootstrapRepo")
+	}
 
 	tests := map[string][]string{
+		"ebs-api/ebs/v1.BuildInfoSpec":                 {"bootstrapRepo", "specDepends"},
 		"ebs-api/ebs/v1.BaseBuildRef":                  {"name", "repo"},
 		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "repo", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},

@@ -64,7 +64,7 @@ export interface Snapshot {
 
 export interface Build {
   metadata?: ObjectMeta;
-  spec?: { buildType?: string; bootstrapRepo?: BootstrapRepo[]; packages?: string[]; buildTarget?: BuildTarget };
+  spec?: { buildType?: string; packages?: string[]; buildTarget?: BuildTarget };
   status?: {
     phase?: string;
     stage?: string;
