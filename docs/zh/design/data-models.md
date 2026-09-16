@@ -202,6 +202,8 @@ type SnapshotList struct {
 
 ## 三、Build（构建）
 
+`metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4），由 apiserver 在创建和普通更新时校验；调用方保证名称不复用。
+
 **API**: `/apis/ebs/v1/projects/{project}/builds`  
 **全局 API**: `/apis/ebs/v1/builds`  
 **Elasticsearch**: 索引 `ebs-builds`，文档 ID `{project}/{name}`

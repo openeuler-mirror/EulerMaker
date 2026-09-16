@@ -265,8 +265,9 @@ func TestValidateBuild(t *testing.T) {
 		{
 			name:     "requires mandatory build fields",
 			build:    &ebsv1.Build{},
-			wantErrs: 7,
+			wantErrs: 8,
 			wantFields: map[string]field.ErrorType{
+				"metadata.name":                       field.ErrorTypeRequired,
 				"spec.buildType":                      field.ErrorTypeRequired,
 				"spec.packages":                       field.ErrorTypeRequired,
 				"spec.buildTarget.os":                 field.ErrorTypeRequired,
@@ -302,9 +303,46 @@ func TestValidateBuild(t *testing.T) {
 	}
 }
 
+func TestValidateBuildName(t *testing.T) {
+	for _, name := range []string{
+		"123e4567-e89b-42d3-a456-426614174000",
+		"123e4567-e89b-12d3-a456-426614174000",
+		"01900000-0000-7000-8000-000000000000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := validBuild()
+			b.Name = name
+			assertErrorList(t, ValidateBuild(b), 0, nil)
+			assertErrorList(t, ValidateBuildUpdate(b.DeepCopy(), b), 0, nil)
+		})
+	}
+	for _, name := range []string{
+		"", "build-001", "123E4567-E89B-42D3-A456-426614174000",
+		"123e4567e89b42d3a456426614174000",
+		"{123e4567-e89b-42d3-a456-426614174000}",
+		"urn:uuid:123e4567-e89b-42d3-a456-426614174000",
+		"123e4567-e89b-42d3-a456-42661417400g",
+		"123e4567-e89b-42d3-a456-426614174000-extra",
+		"123e4567-e89b-42d3-a456-426614174000\n",
+	} {
+		t.Run("invalid/"+name, func(t *testing.T) {
+			b := validBuild()
+			b.Name = name
+			errorType := field.ErrorTypeInvalid
+			if name == "" {
+				errorType = field.ErrorTypeRequired
+			}
+			want := map[string]field.ErrorType{"metadata.name": errorType}
+			assertErrorList(t, ValidateBuild(b), 1, want)
+			assertErrorList(t, ValidateBuildUpdate(b, validBuild()), 1, want)
+		})
+	}
+}
+
 func TestValidateBuildUpdate(t *testing.T) {
 	errs := ValidateBuildUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 8, map[string]field.ErrorType{
+	assertErrorList(t, errs, 9, map[string]field.ErrorType{
+		"metadata.name":                       field.ErrorTypeRequired,
 		"spec":                                field.ErrorTypeInvalid,
 		"spec.buildType":                      field.ErrorTypeRequired,
 		"spec.packages":                       field.ErrorTypeRequired,
@@ -746,7 +784,7 @@ func validSnapshot() *ebsv1.Snapshot {
 
 func validBuild() *ebsv1.Build {
 	return &ebsv1.Build{
-		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000", Labels: map[string]string{
 			ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
 			ebsv1.BuildTargetArchLabel: "x86_64",
 			ebsv1.BuildTypeLabel:       "full",
