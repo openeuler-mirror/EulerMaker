@@ -1,10 +1,18 @@
 <template>
   <div class="detail-toolbar">
     <RouterLink class="back-link" to="/projects"><ArrowLeft /> {{ t("project.back") }}</RouterLink>
-    <button v-if="project" class="secondary-button" type="button" @click="exportYaml"><Download />{{ t("project.exportYaml") }}</button>
+    <div class="detail-actions">
+      <template v-if="project && canStartBuild">
+        <button class="primary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('full')">{{ t("project.fullBuild") }}</button>
+        <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('incremental')">{{ t("project.incrementalBuild") }}</button>
+      </template>
+      <button v-if="project" class="secondary-button" type="button" @click="exportYaml"><Download />{{ t("project.exportYaml") }}</button>
+    </div>
   </div>
   <div v-if="exportErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(exportErrorKey) }}</div>
   <div v-if="copyErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(copyErrorKey) }}</div>
+  <div v-if="buildActionErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(buildActionErrorKey) }}</div>
+  <div v-if="createdBuildNames.length" class="success-banner" role="status"><CircleCheckFilled />{{ createdBuildNames.length === 1 ? t("project.buildCreated", { name: createdBuildNames[0] }) : t("project.buildsCreated", { count: createdBuildNames.length }) }}</div>
 
   <div v-if="loadingProject" class="skeleton-list page-skeleton" :aria-label="t('project.loading')"><span v-for="item in 5" :key="item"></span></div>
   <div v-else-if="projectError" class="inline-error page-error">
@@ -30,7 +38,7 @@
 
       <section class="detail-grid">
         <article class="content-panel">
-          <div class="section-heading"><div><span class="eyebrow">{{ t("project.infoEyebrow") }}</span><h2>{{ t("project.info") }}</h2></div></div>
+          <div class="section-heading"><div><h2>{{ t("project.info") }}</h2></div></div>
           <dl class="detail-list">
             <div><dt>{{ t("project.projectName") }}</dt><dd>{{ project.metadata?.name }}</dd></div>
             <div><dt>{{ t("project.displayName") }}</dt><dd>{{ project.spec?.displayName || t("common.emptyValue") }}</dd></div>
@@ -40,7 +48,7 @@
         </article>
 
         <article class="content-panel">
-          <div class="section-heading"><div><span class="eyebrow">{{ t("project.activityEyebrow") }}</span><h2>{{ t("project.recentBuilds") }}</h2></div><button v-if="builds.length" class="text-button" type="button" @click="selectTab('builds')">{{ t("project.viewAllBuilds") }}</button></div>
+          <div class="section-heading"><div><h2>{{ t("project.recentBuilds") }}</h2></div><button v-if="builds.length" class="text-button" type="button" @click="selectTab('builds')">{{ t("project.viewAllBuilds") }}</button></div>
           <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('project.loadingResources')"><span v-for="item in 4" :key="item"></span></div>
           <div v-else-if="resourcesError" class="inline-error compact-error"><WarningFilled /><span>{{ resourcesError }}</span></div>
           <EmptyState v-else-if="!builds.length" :title="t('project.emptyBuilds')" :description="t('project.emptyBuildsHint')" />
@@ -164,6 +172,26 @@
 
     </section>
 
+    <ModalDialog v-if="buildDialogOpen" title-id="create-build-title" :title="t(buildType === 'full' ? 'project.createFullBuild' : 'project.createIncrementalBuild')" :close-label="t('common.close')" @close="closeBuildDialog">
+      <form class="project-form" @submit.prevent="createBuild">
+        <p class="form-hint">{{ t("project.createBuildHint") }}</p>
+        <fieldset class="target-fieldset">
+          <legend>{{ t("project.buildTarget") }}</legend>
+          <div class="build-target-options">
+            <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
+              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }}</span></label>
+              <div class="build-target-statuses">
+                <span>{{ t("project.buildEnabled") }} <span :class="['target-boolean-icon', { enabled: target.buildFlag }]" :aria-label="booleanLabel(target.buildFlag)" :title="booleanLabel(target.buildFlag)"><Check v-if="target.buildFlag" /><Close v-else /></span></span>
+                <span>{{ t("project.publishEnabled") }} <span :class="['target-boolean-icon', { enabled: target.publishFlag }]" :aria-label="booleanLabel(target.publishFlag)" :title="booleanLabel(target.publishFlag)"><Check v-if="target.publishFlag" /><Close v-else /></span></span>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+        <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
+      </form>
+    </ModalDialog>
+
     <ModalDialog v-if="basicEditorOpen" title-id="edit-basic-title" :title="t('project.editBasicConfig')" :close-label="t('common.close')" @close="closeBasicEditor">
       <form class="project-form" @submit.prevent="saveBasicConfig">
         <p class="form-hint">{{ t("project.editBasicConfigHint") }}</p>
@@ -257,7 +285,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, ArrowRight, Check, CircleCheckFilled, Delete, DocumentCopy, Download, Edit, Operation, Plus, Search, Tickets, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowRight, Check, CircleCheckFilled, Close, Delete, DocumentCopy, Download, Edit, Operation, Plus, Search, Tickets, WarningFilled } from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -271,6 +299,7 @@ import { useSessionStore } from "@/stores/session";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "config";
+type BuildTargetDraft = BuildTarget & { selected: boolean };
 
 const route = useRoute();
 const router = useRouter();
@@ -290,6 +319,13 @@ const exportErrorKey = ref("");
 const copyErrorKey = ref("");
 const copiedId = ref(false);
 let copyResetTimer: number | undefined;
+const buildDialogOpen = ref(false);
+const buildType = ref<"full" | "incremental">("full");
+const buildTargetDrafts = ref<BuildTargetDraft[]>([]);
+const creatingBuild = ref(false);
+const buildDialogErrorKey = ref("");
+const buildActionErrorKey = ref("");
+const createdBuildNames = ref<string[]>([]);
 const targetEditorOpen = ref(false);
 const editingTargets = ref<BuildTarget[]>([]);
 const savingTargets = ref(false);
@@ -353,6 +389,16 @@ const canEditProject = computed(() => {
   if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
 });
+const canStartBuild = computed(() => {
+  const identity = session.session?.identity;
+  if (!identity || identity.type === "ops") return false;
+  if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
+  const labels = project.value?.metadata?.labels || {};
+  return labels["ebs.io/owner-user"] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === "true";
+});
+const buildConfigurationMissing = computed(() =>
+  !project.value?.spec?.buildTargets?.length || !project.value?.spec?.packageRepos?.some((repo) => repo.name),
+);
 const ownerUsername = computed(() => project.value?.metadata?.labels?.["ebs.io/owner-user"] || "");
 const memberUsernames = computed(() =>
   Object.entries(project.value?.metadata?.labels || {})
@@ -416,6 +462,77 @@ function selectTab(tab: ProjectTab): void {
   if (tab === "overview") delete query.tab;
   else query.tab = tab;
   void router.replace({ query });
+}
+
+function openBuildDialog(type: "full" | "incremental"): void {
+  if (!project.value || !canStartBuild.value || buildConfigurationMissing.value) return;
+  buildType.value = type;
+  buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
+    os: target.os,
+    arch: target.arch,
+    buildFlag: Boolean(target.buildFlag),
+    publishFlag: Boolean(target.publishFlag),
+    selected: true,
+  }));
+  buildDialogErrorKey.value = "";
+  buildActionErrorKey.value = "";
+  createdBuildNames.value = [];
+  buildDialogOpen.value = true;
+}
+
+function closeBuildDialog(): void {
+  if (creatingBuild.value) return;
+  buildDialogOpen.value = false;
+  buildDialogErrorKey.value = "";
+}
+
+async function createBuild(): Promise<void> {
+  if (!project.value || !canStartBuild.value || creatingBuild.value) return;
+  const targets = buildTargetDrafts.value
+    .filter((target) => target.selected && target.os && target.arch)
+    .map(({ selected: _, ...target }) => target);
+  const packages = (project.value.spec?.packageRepos || []).map((repo) => repo.name?.trim()).filter((value): value is string => Boolean(value));
+  if (!targets.length) {
+    buildDialogErrorKey.value = "project.selectBuildTarget";
+    return;
+  }
+  if (!packages.length) {
+    buildDialogErrorKey.value = "project.buildConfigurationRequired";
+    return;
+  }
+  creatingBuild.value = true;
+  buildDialogErrorKey.value = "";
+  const buildNames = targets.map(() => createBuildName());
+  const results = await Promise.allSettled(targets.map((target, index) =>
+    request<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds`, {
+      method: "POST",
+      body: JSON.stringify({ apiVersion: "ebs/v1", kind: "Build", metadata: { name: buildNames[index] }, spec: { buildType: buildType.value, packages, buildTarget: { ...target } } }),
+    }),
+  ));
+  const successfulNames = results.flatMap((result, index) => result.status === "fulfilled" ? [result.value.metadata?.name || buildNames[index]] : []);
+  try {
+    if (!successfulNames.length) {
+      const failure = results.find((result) => result.status === "rejected");
+      buildDialogErrorKey.value = errorTranslationKey(failure && failure.status === "rejected" ? failure.reason : undefined, "errors.createBuild");
+      return;
+    }
+    buildDialogOpen.value = false;
+    createdBuildNames.value = successfulNames;
+    selectedBuildName.value = successfulNames[0];
+    if (successfulNames.length < targets.length) buildActionErrorKey.value = "project.partialBuildFailure";
+    await loadResources();
+    selectTab("builds");
+  } finally {
+    creatingBuild.value = false;
+  }
+}
+
+function createBuildName(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function openTargetEditor(): void {
