@@ -17,6 +17,14 @@ CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
 docker build -f components/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:dev .
 ```
 
+## Build 创建互斥
+
+full、incremental、specified 构建按 Project + OS + Arch 通过 ES 原子占用互斥，冲突返回 409；single 不占用目标。apiserver 在终态写入或实际删除成功后释放占用，并每 30 秒扫描补偿，不需要 controller 直接访问 ES。
+
+内部索引 alias 为 `ebs-build-target-claims`，仅保存目标占用。调用方保证 Build 名称不复用，apiserver 不保存历史名称记录。未知创建且无法确认结果时保留占用，不按超时自动释放；可通过 `ebs_build_claim_unconfirmed`、`ebs_build_claim_oldest_unconfirmed_seconds` 和结构化日志观察。
+
+升级时先暂停所有 Build 创建、停止旧版实例，检查存量非终态构建、建立对应目标占用，再开放创建。禁止新旧协议混跑、直接写入 Build、在线无协调切换内部索引或清空占用解除阻塞。创建结果未知时，人工清理前必须排除仍可能提交的迟到写入。
+
 ## OpenAPI 代码生成
 
 修改 `../../api/ebs/v1` 或 `pkg/apis/iam/v1` 下的 API 类型后，需要重新生成 OpenAPI 定义：
