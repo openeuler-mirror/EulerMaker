@@ -187,7 +187,7 @@ func (m *releaseManager) finish(completed *ReleaseRecord, result releaseResult, 
 		m.mu.Unlock()
 		return
 	}
-	record.State, record.ReleaseDigest, record.PackageCount = ReleasePrepared, result.Digest, result.Count
+	record.State, record.ReleaseDigest = ReleasePrepared, result.Digest
 	_ = m.persist(record)
 	m.mu.Unlock()
 	_, _, _ = m.activate(completed.BuildName)
@@ -371,7 +371,7 @@ func cloneRelease(in *ReleaseRecord) *ReleaseRecord {
 }
 
 func releaseResponse(record *ReleaseRecord) ReleaseResponse {
-	response := ReleaseResponse{BuildName: record.BuildName, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, ReleaseDigest: record.ReleaseDigest, PackageCount: record.PackageCount, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
+	response := ReleaseResponse{BuildName: record.BuildName, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
 	if record.State == ReleaseCreating || record.State == ReleasePrepared {
 		response.PollAfterSeconds = 5
 	}

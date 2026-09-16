@@ -43,7 +43,6 @@ type RepositoryRecord struct {
 	RequestDigest     string                       `json:"requestDigest"`
 	State             RepositoryState              `json:"state"`
 	Attempt           int                          `json:"attempt"`
-	PackageCount      int                          `json:"packageCount,omitempty"`
 	RepositoryDigest  string                       `json:"repositoryDigest,omitempty"`
 	ContentURL        string                       `json:"contentURL,omitempty"`
 	RPMs              map[string]RepositoryRPMMeta `json:"rpms,omitempty"`
@@ -75,8 +74,6 @@ type RepositoryResponse struct {
 	Attempt          int                          `json:"attempt"`
 	PollAfterSeconds int                          `json:"pollAfterSeconds,omitempty"`
 	ContentURL       string                       `json:"contentURL,omitempty"`
-	RepositoryDigest string                       `json:"repositoryDigest,omitempty"`
-	PackageCount     int                          `json:"packageCount,omitempty"`
 	RPMs             map[string]RepositoryRPMMeta `json:"rpms,omitempty"`
 	Failure          *FailureInfo                 `json:"failure,omitempty"`
 	CreatedAt        time.Time                    `json:"createdAt"`
@@ -86,7 +83,6 @@ type RepositoryResponse struct {
 
 type repositoryResult struct {
 	Digest string
-	Count  int
 	RPMs   map[string]RepositoryRPMMeta
 }
 

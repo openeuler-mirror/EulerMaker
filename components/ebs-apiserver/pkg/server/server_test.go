@@ -43,6 +43,20 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	if _, exists := repositoryStatus.Schema.Properties["rpmDepends"]; exists {
 		t.Fatal("RpmRepoRepositoryStatus must not expose rpmDepends")
 	}
+	for _, name := range []string{"RpmRepoRepositoryStatus", "RpmRepoReleaseStatus"} {
+		definition, ok := definitions["ebs-api/ebs/v1."+name]
+		if !ok {
+			t.Fatalf("%s OpenAPI definition is missing", name)
+		}
+		if _, exists := definition.Schema.Properties["packageCount"]; exists {
+			t.Fatalf("%s must not expose packageCount", name)
+		}
+		for _, field := range []string{"repositoryDigest", "releaseDigest"} {
+			if _, exists := definition.Schema.Properties[field]; exists {
+				t.Fatalf("%s must not expose %s", name, field)
+			}
+		}
+	}
 
 	tests := map[string][]string{
 		"ebs-api/ebs/v1.BuildInfoSpec":                 {"bootstrapRepo", "specDepends"},

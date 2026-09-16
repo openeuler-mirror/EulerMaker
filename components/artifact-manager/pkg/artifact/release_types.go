@@ -35,7 +35,6 @@ type ReleaseRecord struct {
 	RequestDigest       string       `json:"requestDigest"`
 	State               ReleaseState `json:"state"`
 	Attempt             int          `json:"attempt"`
-	PackageCount        int          `json:"packageCount,omitempty"`
 	ReleaseDigest       string       `json:"releaseDigest,omitempty"`
 	ContentURL          string       `json:"contentURL,omitempty"`
 	Failure             *FailureInfo `json:"failure,omitempty"`
@@ -50,8 +49,6 @@ type ReleaseResponse struct {
 	Attempt          int          `json:"attempt"`
 	PollAfterSeconds int          `json:"pollAfterSeconds,omitempty"`
 	ContentURL       string       `json:"contentURL,omitempty"`
-	ReleaseDigest    string       `json:"releaseDigest,omitempty"`
-	PackageCount     int          `json:"packageCount,omitempty"`
 	Failure          *FailureInfo `json:"failure,omitempty"`
 	CreatedAt        time.Time    `json:"createdAt"`
 	UpdatedAt        time.Time    `json:"updatedAt"`
@@ -70,7 +67,6 @@ type releaseIndex struct {
 
 type releaseResult struct {
 	Digest string
-	Count  int
 }
 
 type releaseMaterializer interface {

@@ -64,7 +64,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 辅助结构体（32）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecDepend SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
-                  RpmRepoSpec RpmRepoStatus RpmMeta
+                  RpmRepoSpec RpmRepoStatus
                   BuildResourceSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
@@ -521,8 +521,6 @@ type RpmRepoRepositoryStatus struct {
     Phase             RpmRepoPhase          `json:"phase,omitempty"`
     RepositoryUID     string                `json:"repositoryUID,omitempty"`
     ContentURL        string                `json:"contentURL,omitempty"`
-    RepositoryDigest string                `json:"repositoryDigest,omitempty"`
-    PackageCount      int                   `json:"packageCount,omitempty"`
     SourceJobUIDs     []string              `json:"sourceJobUIDs,omitempty"`
     Transition        *RepositoryTransition `json:"transition,omitempty"`
     UpdatedAt         *metav1.Time          `json:"updatedAt,omitempty"`
@@ -532,8 +530,6 @@ type RpmRepoReleaseStatus struct {
     Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
     SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
     ContentURL          string              `json:"contentURL,omitempty"`
-    ReleaseDigest       string              `json:"releaseDigest,omitempty"`
-    PackageCount        int                 `json:"packageCount,omitempty"`
     Transition          *ReleaseTransition  `json:"transition,omitempty"`
     UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
 }
@@ -556,43 +552,19 @@ type RpmRepoStatus struct {
 | `phase` | RpmRepoPhase | `"Pending"` / `"Processing"` / `"Ready"` / `"Failed"`；逻辑仓库可持续推进，均不是对象终态 |
 | `repositoryUID` | string | 当前已发布不可变物理版本的 UID |
 | `contentURL` | string | 当前物理版本的不可变仓库地址 |
-| `repositoryDigest` | string | 仓库内容的确定性 SHA-256 摘要 |
-| `packageCount` | int | 仓库 RPM 文件数量 |
 | `sourceJobUIDs` | []string | 当前物理版本对应的输入 Job UID 集合，按字典序保存 |
 | `transition` | *RepositoryTransition | 正在物化或等待确认的下一版本 |
 | `updatedAt` | *metav1.Time | 当前物理版本的发布时间 |
 
-`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`、`releaseDigest`、`packageCount`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。
 
 | `release` 字段 | Go 类型 | 说明 |
 |----------------|---------|------|
 | `phase` | RpmRepoReleasePhase | 正式发布状态 |
 | `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
 | `contentURL` | string | Project/架构稳定仓库入口 |
-| `releaseDigest` | string | 正式版本内容摘要 |
-| `packageCount` | int | 正式版本包含的 RPM 数量 |
 | `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
 | `updatedAt` | *metav1.Time | 正式发布状态最近更新时间 |
-
-### RpmMeta
-
-```go
-type RpmMeta struct {
-    Version  string                  `json:"version"`
-    SpecName string                  `json:"specName"`
-    Provides map[string]string       `json:"provides,omitempty"`
-    Requires map[string]VersionConst `json:"requires,omitempty"`
-}
-```
-
-| 字段         | Go 类型             | 说明                                |
-|------------|-------------------|-----------------------------------|
-| `version`  | string            | 版本号（`epoch:ver-rel` 格式）           |
-| `specName` | string            | 由哪个 spec 产出                       |
-| `provides` | map[string]string | rpm 元数据里的 Provides 声明            |
-| `requires` | map[string]VersionConst | rpm 元数据里的 Requires 声明（运行时依赖）     |
-
----
 
 ### RpmRepoList
 
@@ -1088,7 +1060,6 @@ BuildInfoStatus
 
 RpmRepoStatus
 ├── RpmRepoRepositoryStatus
-│   ├── RpmMeta ──▶ VersionConst
 │   └── RepositoryTransition ──▶ RepositoryInput
 └── RpmRepoReleaseStatus ──▶ ReleaseTransition
 

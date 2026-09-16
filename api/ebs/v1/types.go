@@ -185,34 +185,23 @@ type RpmRepoReleaseStatus struct {
 	Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
 	SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
 	ContentURL          string              `json:"contentURL,omitempty"`
-	ReleaseDigest       string              `json:"releaseDigest,omitempty"`
-	PackageCount        int                 `json:"packageCount,omitempty"`
 	Transition          *ReleaseTransition  `json:"transition,omitempty"`
 	UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
 }
 
 type RpmRepoRepositoryStatus struct {
-	Phase            RpmRepoPhase          `json:"phase,omitempty"`
-	RepositoryUID    string                `json:"repositoryUID,omitempty"`
-	ContentURL       string                `json:"contentURL,omitempty"`
-	RepositoryDigest string                `json:"repositoryDigest,omitempty"`
-	PackageCount     int                   `json:"packageCount,omitempty"`
-	SourceJobUIDs    []string              `json:"sourceJobUIDs,omitempty"`
-	Transition       *RepositoryTransition `json:"transition,omitempty"`
-	UpdatedAt        *metav1.Time          `json:"updatedAt,omitempty"`
+	Phase         RpmRepoPhase          `json:"phase,omitempty"`
+	RepositoryUID string                `json:"repositoryUID,omitempty"`
+	ContentURL    string                `json:"contentURL,omitempty"`
+	SourceJobUIDs []string              `json:"sourceJobUIDs,omitempty"`
+	Transition    *RepositoryTransition `json:"transition,omitempty"`
+	UpdatedAt     *metav1.Time          `json:"updatedAt,omitempty"`
 }
 
 type RpmRepoStatus struct {
 	Repository *RpmRepoRepositoryStatus `json:"repository,omitempty"`
 	Release    *RpmRepoReleaseStatus    `json:"release,omitempty"`
 	Conditions []metav1.Condition       `json:"conditions,omitempty"`
-}
-
-type RpmMeta struct {
-	Version  string                  `json:"version"`
-	SpecName string                  `json:"specName"`
-	Provides map[string]string       `json:"provides,omitempty"`
-	Requires map[string]VersionConst `json:"requires,omitempty"`
 }
 
 type RpmRepoList struct {

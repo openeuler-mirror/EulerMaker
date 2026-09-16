@@ -802,8 +802,6 @@ type RpmRepoReleaseStatus struct {
     Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
     SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
     ContentURL          string              `json:"contentURL,omitempty"`
-    ReleaseDigest       string              `json:"releaseDigest,omitempty"`
-    PackageCount        int                 `json:"packageCount,omitempty"`
     Transition          *ReleaseTransition  `json:"transition,omitempty"`
     UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
 }
@@ -812,8 +810,6 @@ type RpmRepoRepositoryStatus struct {
     Phase             RpmRepoPhase        `json:"phase,omitempty"`
     RepositoryUID     string              `json:"repositoryUID,omitempty"`
     ContentURL        string              `json:"contentURL,omitempty"`
-    RepositoryDigest  string              `json:"repositoryDigest,omitempty"`
-    PackageCount      int                 `json:"packageCount,omitempty"`
     SourceJobUIDs     []string            `json:"sourceJobUIDs,omitempty"`
     Transition        *RepositoryTransition `json:"transition,omitempty"`
     UpdatedAt         *metav1.Time        `json:"updatedAt,omitempty"`
@@ -869,7 +865,6 @@ type RepositoryRecord struct {
     RequestDigest     string              `json:"requestDigest"`
     State             RepositoryState     `json:"state"`
     Attempt           int                 `json:"attempt"`
-    PackageCount      int                 `json:"packageCount,omitempty"`
     RepositoryDigest  string              `json:"repositoryDigest,omitempty"`
     ContentURL        string              `json:"contentURL,omitempty"`
     RPMs              map[string]RPMMeta  `json:"rpms,omitempty"`
@@ -885,8 +880,6 @@ type RepositoryResponse struct {
     Attempt           int                 `json:"attempt"`
     PollAfterSeconds  int                 `json:"pollAfterSeconds,omitempty"`
     ContentURL        string              `json:"contentURL,omitempty"`
-    RepositoryDigest string              `json:"repositoryDigest,omitempty"`
-    PackageCount      int                 `json:"packageCount,omitempty"`
     RPMs              map[string]RPMMeta  `json:"rpms,omitempty"`
     Failure           *FailureInfo        `json:"failure,omitempty"`
     CreatedAt         Timestamp           `json:"createdAt"`
@@ -942,7 +935,8 @@ GET /internal/v1/repositories/{repositoryUID}
 存在记录时统一返回 `200 OK` 和 `RepositoryResponse`：
 
 - `Creating` 包含 attempt 和 `pollAfterSeconds`；
-- `Ready` 必须包含不可变的 `contentURL`、`repositoryDigest`、`packageCount`、RPM 元数据和 `completedAt`；
+- `Ready` 必须包含不可变的 `contentURL`、RPM 元数据和 `completedAt`；
+- Controller 按预期的 `repositoryUID` 与 `Ready` 确认过程仓；正式发布按预期的 `buildName` 与 `Ready` 确认。内容摘要仅保留在 Artifact Manager 内部记录和索引文件中，用于完整性校验与重启恢复，不写入 RpmRepo 状态，也不在仓库或发布响应中返回。
 - `Failed` 必须包含 attempt 和 Failure，且 `Failure.retryable` 明确能否用完全相同的 POST 请求重试；
 - `Deleting` 只返回身份、状态和时间字段，不再返回可用内容地址。
 
@@ -1151,8 +1145,6 @@ type ReleaseRecord struct {
     RequestDigest            string           `json:"requestDigest"`
     State                    ReleaseState     `json:"state"`
     Attempt                  int              `json:"attempt"`
-    PackageCount             int              `json:"packageCount,omitempty"`
-    ReleaseDigest            string           `json:"releaseDigest,omitempty"`
     ContentURL               string           `json:"contentURL,omitempty"`
     Failure                  *FailureInfo     `json:"failure,omitempty"`
     CreatedAt                Timestamp        `json:"createdAt"`
