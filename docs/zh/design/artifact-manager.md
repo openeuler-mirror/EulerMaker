@@ -814,7 +814,6 @@ type RpmRepoRepositoryStatus struct {
     ContentURL        string              `json:"contentURL,omitempty"`
     RepositoryDigest  string              `json:"repositoryDigest,omitempty"`
     PackageCount      int                 `json:"packageCount,omitempty"`
-    RpmDepends        map[string]RpmMeta  `json:"rpmDepends,omitempty"`
     SourceJobUIDs     []string            `json:"sourceJobUIDs,omitempty"`
     Transition        *RepositoryTransition `json:"transition,omitempty"`
     UpdatedAt         *metav1.Time        `json:"updatedAt,omitempty"`
