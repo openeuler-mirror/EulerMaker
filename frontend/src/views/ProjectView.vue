@@ -105,7 +105,6 @@
               <div><dt>{{ t("project.baseBuild") }}</dt><dd>{{ baseBuildLabel(selectedBuild) }}</dd></div>
             </dl>
             <section class="build-detail-section"><h3>{{ t("project.packages") }}</h3><div v-if="selectedBuild.spec?.packages?.length" class="value-chip-list"><code v-for="item in selectedBuild.spec.packages" :key="item">{{ item }}</code></div><p v-else>{{ t("project.noPackages") }}</p></section>
-            <section class="build-detail-section"><h3>{{ t("project.bootstrapRepositories") }}</h3><div v-if="selectedBuild.spec?.bootstrapRepo?.length" class="build-bootstrap-list"><div v-for="(repo, index) in selectedBuild.spec.bootstrapRepo" :key="`${repo.name}-${index}`"><strong>{{ repo.name || t("common.emptyValue") }}</strong><code>{{ repo.repo || t("common.emptyValue") }}</code></div></div><p v-else>{{ t("project.noBootstrapRepositories") }}</p></section>
           </template>
           <EmptyState v-else :title="t('project.selectBuild')" :description="t('project.selectBuildHint')" />
         </article>

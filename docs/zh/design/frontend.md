@@ -230,12 +230,9 @@ spec:
   buildTarget:
     os: openEuler-24.03-LTS
     arch: x86_64
-  bootstrapRepo:
-    - name: bootstrap
-      repo: https://example.invalid/repo
 ```
 
-前端不得提交已经移除的 `snapshotName` 或 `prevBuildRepo`。基础构建关系从服务端 `status.baseBuildRef` 展示。
+前端不得提交已经移除的 `snapshotName`、`prevBuildRepo` 或 `bootstrapRepo`。引导仓在 Project 中配置，由 Build Controller 创建 BuildInfo 时复制到其 spec；基础构建关系从服务端 `status.baseBuildRef` 展示。
 
 ### 5.7 Runner 页面
 

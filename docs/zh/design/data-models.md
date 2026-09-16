@@ -222,7 +222,6 @@ type Build struct {
 ```go
 type BuildSpec struct {
     BuildType          string                 `json:"buildType,omitempty"`
-    BootstrapRepo      []BootstrapRepo        `json:"bootstrapRepo,omitempty"`
     Packages           []string               `json:"packages,omitempty"`
     BuildTarget        BuildTarget            `json:"buildTarget,omitempty"`
 }
@@ -232,7 +231,6 @@ type BuildSpec struct {
 |----------------|---------|------|------|
 | `buildType`    | string | 否 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"`，默认 `"full"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
-| `bootstrapRepo` | []BootstrapRepo | 否 | 引导 RPM 仓库 |
 | `packages`     | []string | 是 | 构建的软件包 |
 
 Build 创建后整个 `spec` 不可修改；普通 Update 只能修改服务端允许的 metadata，运行状态通过 `/status` 子资源更新。
@@ -313,6 +311,7 @@ type BuildInfo struct {
 
 ```go
 type BuildInfoSpec struct {
+    BootstrapRepo []BootstrapRepo      `json:"bootstrapRepo,omitempty"`
     SpecDepends  map[string]SpecDepend  `json:"specDepends,omitempty"`
 }
 ```
@@ -320,6 +319,7 @@ type BuildInfoSpec struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `specDepends` | map[string]SpecDepend | key 为 `specName`，value 为该 spec 的依赖信息 |
+| `bootstrapRepo` | []BootstrapRepo | Build Controller 创建时从所属 Project.spec.bootstrapRepo 深拷贝，已有 BuildInfo 不覆盖；供构建任务使用的引导 RPM 仓库 |
 
 ---
 
@@ -1074,10 +1074,11 @@ SnapshotSpec
 └── PackageRepoStatus
 
 BuildSpec
-├── BuildTarget
-└── BootstrapRepo
+└── BuildTarget
 
-BuildInfoSpec ──▶ SpecDepend ──▶ VersionConst
+BuildInfoSpec
+├── BootstrapRepo
+└── SpecDepend ──▶ VersionConst
 
 BuildInfoStatus
 └── SpecStatus
