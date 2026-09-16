@@ -9,8 +9,14 @@ export const router = createRouter({
     { path: "/projects/:name", name: "project", component: () => import("@/views/ProjectView.vue") },
     { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
     { path: "/register", name: "register", component: () => import("@/views/RegisterView.vue") },
-    { path: "/admin/users", name: "admin-users", component: () => import("@/views/AdminUsersView.vue"), meta: { roles: ["admin"] } },
-    { path: "/admin/machineaccounts", name: "admin-machineaccounts", component: () => import("@/views/MachineAccountsView.vue"), meta: { roles: ["admin"] } },
+    {
+      path: "/admin", component: () => import("@/views/AdminView.vue"), meta: { roles: ["admin"] },
+      children: [
+        { path: "", redirect: { name: "admin-users" } },
+        { path: "users", name: "admin-users", component: () => import("@/views/AdminUsersView.vue") },
+        { path: "machineaccounts", name: "admin-machineaccounts", component: () => import("@/views/MachineAccountsView.vue") },
+      ],
+    },
     { path: "/operations", alias: "/runners", name: "operations", component: () => import("@/views/OperationsView.vue"), meta: { roles: ["ops", "admin"] } },
     { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue"), meta: { authenticated: true } },
     { path: "/:pathMatch(.*)*", redirect: "/" },

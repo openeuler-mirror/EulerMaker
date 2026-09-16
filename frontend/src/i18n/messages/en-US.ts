@@ -9,7 +9,7 @@ export default {
     home: "Home",
     projects: "Projects",
     operations: "Operations",
-    userManagement: "Users",
+    userManagement: "Account management",
     settings: "Account settings",
     accountMenu: "Account menu for {name}",
     login: "Sign in",
@@ -289,7 +289,7 @@ export default {
     browseAsGuest: "Browse projects without signing in",
   },
   admin: {
-    usersTitle: "User management",
+    usersTitle: "User accounts",
     usersHint: "Registered users can be assigned the operations role here. Administrator accounts are excluded.",
     machineAccounts: "Machine accounts",
     machineHint: "Manage service accounts and their token lifetimes.",

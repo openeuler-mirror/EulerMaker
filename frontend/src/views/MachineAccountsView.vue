@@ -1,5 +1,5 @@
 <template>
-  <section class="page-heading"><div><h1>{{ t("admin.machineAccounts") }}</h1><p>{{ t("admin.machineHint") }}</p></div><div class="page-actions"><RouterLink class="secondary-button" to="/admin/users">{{ t("admin.usersTitle") }}</RouterLink><button class="primary-button" type="button" @click="createOpen = true">{{ t("admin.createMachine") }}</button><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="loading" @click="reload"><Refresh /></button></div></section>
+  <section class="page-heading"><div><p>{{ t("admin.machineHint") }}</p></div><div class="page-actions"><button class="primary-button" type="button" @click="createOpen = true">{{ t("admin.createMachine") }}</button><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="loading" @click="reload"><Refresh /></button></div></section>
   <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
   <section class="content-panel">
     <div v-if="loading" class="skeleton-list" :aria-label="t('admin.loadingMachines')"><span v-for="item in 5" :key="item"></span></div>
@@ -21,7 +21,6 @@
 <script setup lang="ts">
 import { ArrowLeft, ArrowRight, CircleCheckFilled, Refresh, WarningFilled } from "@element-plus/icons-vue";
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { RouterLink } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { ApiError, errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";

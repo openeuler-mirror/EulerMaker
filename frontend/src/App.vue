@@ -14,7 +14,7 @@
         <RouterLink to="/">{{ t("app.home") }}</RouterLink>
         <RouterLink to="/projects">{{ t("app.projects") }}</RouterLink>
         <RouterLink v-if="session.role === 'ops' || session.role === 'admin'" to="/operations">{{ t("app.operations") }}</RouterLink>
-        <RouterLink v-if="session.role === 'admin'" to="/admin/users">{{ t("app.userManagement") }}</RouterLink>
+        <RouterLink v-if="session.role === 'admin'" to="/admin">{{ t("app.userManagement") }}</RouterLink>
       </nav>
 
       <div class="account">
