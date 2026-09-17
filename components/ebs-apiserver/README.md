@@ -19,7 +19,7 @@ docker build -f components/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:
 
 ## 构建环境配置
 
-启动时通过 `pkg/server/default-build-conf.yaml` 创建集群级 `BuildConf/default`，不覆盖已有对象；ES alias 为 `ebs-buildconfs`。初始 `spec.targets: {}` 不影响启动，但会拒绝所有新 Build，需先配置 OS / Arch 对应的镜像：
+启动时通过 `pkg/server/default-build-conf.yaml` 创建集群级 `BuildConf/default`，不覆盖已有对象；ES alias 为 `ebs-buildconfs`。
 
 ```yaml
 apiVersion: ebs/v1

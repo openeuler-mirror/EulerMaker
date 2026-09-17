@@ -93,7 +93,7 @@ PATCH    /apis/ebs/v1/buildconfs/default
 
 复用现有通用 mapping，配置保存在 data 中，不新增 OS、Arch、image 的索引字段；客户端直接 GET 全局对象，无需对内部配置做 ES 查询。资源不开放 status.phase/status.stage 过滤。
 
-初始化文件为 `components/ebs-apiserver/pkg/server/default-build-conf.yaml`，随二进制嵌入。初始内容使用 `spec.targets: {}`，不内置未经确认的镜像地址。
+初始化文件为 `components/ebs-apiserver/pkg/server/default-build-conf.yaml`，随二进制嵌入。
 
 启动时在 Ready 前：
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/apis/ebs/validation"
 	"ebs-apiserver/pkg/storage/es"
 	"github.com/emicklei/go-restful/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -171,10 +172,28 @@ func TestBootstrapBuildConf(t *testing.T) {
 		if err := ensureDefaultBuildConf(context.Background(), f); err != nil {
 			t.Fatal(err)
 		}
-		if f.object.Name != "default" || f.object.Spec.Targets == nil || len(f.object.Spec.Targets) != 0 {
+		if f.object.Name != "default" || len(f.object.Spec.Targets) != 12 {
 			t.Fatalf("invalid template %+v", f.object)
 		}
-		f.object.Spec.Targets["os"] = ebsv1.BuildConfTarget{Arches: map[string]ebsv1.BuildConfArch{"arch": {Image: "keep:v1"}}}
+		if errs := validation.ValidateBuildConf(f.object); len(errs) != 0 {
+			t.Fatalf("invalid default configuration: %v", errs)
+		}
+		images := 0
+		for _, target := range f.object.Spec.Targets {
+			images += len(target.Arches)
+			for _, arch := range target.Arches {
+				if !strings.HasPrefix(arch.Image, "swr.cn-north-4.myhuaweicloud.com/eulermaker/") {
+					t.Fatalf("missing image registry prefix: %s", arch.Image)
+				}
+			}
+		}
+		if images != 53 {
+			t.Fatalf("image mappings=%d, want 53", images)
+		}
+		if image := f.object.Spec.Targets["openEuler-24.03-LTS-SP4"].Arches["aarch64"].Image; image != "swr.cn-north-4.myhuaweicloud.com/eulermaker/openeuler:24.03-lts-sp4-arm64" {
+			t.Fatalf("unexpected image: %s", image)
+		}
+		f.object.Spec.Targets = map[string]ebsv1.BuildConfTarget{"os": {Arches: map[string]ebsv1.BuildConfArch{"arch": {Image: "keep:v1"}}}}
 		if err := ensureDefaultBuildConf(context.Background(), f); err != nil || f.creates != 1 || len(f.object.Spec.Targets) != 1 {
 			t.Fatalf("overwrote existing config err=%v", err)
 		}
