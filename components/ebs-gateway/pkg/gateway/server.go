@@ -939,6 +939,17 @@ func (g *Gateway) resolveUser(ctx context.Context, username string) *gatewayHTTP
 	return nil
 }
 
+func (g *Gateway) resolveProjectUser(ctx context.Context, username string) *gatewayHTTPError {
+	user, resolveErr := g.getUser(ctx, username)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	if !user.Enabled || (user.Scope != "ebs:user" && user.Scope != "ebs:ops") {
+		return &gatewayHTTPError{status: http.StatusForbidden, message: "project user is not allowed"}
+	}
+	return nil
+}
+
 func (g *Gateway) resolveAdmin(ctx context.Context, username string) *gatewayHTTPError {
 	user, resolveErr := g.getUser(ctx, username)
 	if resolveErr != nil {
@@ -1016,7 +1027,12 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 		return g.authorizeRunner(ctx, r, ident)
 	}
 	if ident.IsOps() {
-		return g.authorizeOps(r)
+		route := parseRoute(r.URL.Path)
+		// Ops keeps its cross-project BuildResource and read-only Runner access.
+		// Other business resources use the same owner/member rules as ebs:user.
+		if route.resource == "buildresources" || route.resource == "runners" {
+			return g.authorizeOps(r)
+		}
 	}
 
 	route := parseRoute(r.URL.Path)
@@ -1669,7 +1685,7 @@ func (g *Gateway) validateSystemProjectOwner(ctx context.Context, r *http.Reques
 	if !ok || owner == "" {
 		return fmt.Errorf("system project create requires owner user label")
 	}
-	if resolveErr := g.resolveUser(ctx, owner); resolveErr != nil {
+	if resolveErr := g.resolveProjectUser(ctx, owner); resolveErr != nil {
 		return fmt.Errorf("project owner user is not allowed")
 	}
 	return writeJSONObject(r, obj)
@@ -1698,7 +1714,7 @@ func (g *Gateway) protectProjectAccessLabels(r *http.Request, ident Identity, ol
 	}
 	for label, value := range labels {
 		if strings.HasPrefix(label, memberUserLabelBase) && fmt.Sprint(value) == "true" && old.Labels[label] != "true" {
-			if resolveErr := g.resolveUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
+			if resolveErr := g.resolveProjectUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
 				return fmt.Errorf("project member user is not allowed")
 			}
 		}
@@ -1734,7 +1750,7 @@ func (g *Gateway) protectProjectPatchAccessLabels(r *http.Request, ident Identit
 				return fmt.Errorf("only project owner can modify project member labels")
 			}
 			if strings.HasPrefix(label, memberUserLabelBase) && old.Labels[label] != "true" && fmt.Sprint(op["value"]) == "true" {
-				if resolveErr := g.resolveUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
+				if resolveErr := g.resolveProjectUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
 					return fmt.Errorf("project member user is not allowed")
 				}
 			}
@@ -1757,7 +1773,7 @@ func (g *Gateway) protectProjectPatchAccessLabels(r *http.Request, ident Identit
 			return fmt.Errorf("only project owner can modify project member labels")
 		}
 		if strings.HasPrefix(label, memberUserLabelBase) && old.Labels[label] != "true" && value == "true" {
-			if resolveErr := g.resolveUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
+			if resolveErr := g.resolveProjectUser(r.Context(), strings.TrimPrefix(label, memberUserLabelBase)); resolveErr != nil {
 				return fmt.Errorf("project member user is not allowed")
 			}
 		}
