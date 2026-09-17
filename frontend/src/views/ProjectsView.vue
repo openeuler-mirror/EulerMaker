@@ -45,7 +45,7 @@
     <div v-if="!loading && !error" class="table-footer">
       <div class="page-summary">
         <span>{{ t("common.count", { count: filtered.length }) }}</span>
-        <label><select v-model.number="pageSize" :aria-label="t('common.perPage')" @change="changePageSize"><option v-for="size in pageSizes" :key="size" :value="size">{{ t("common.itemsPerPage", { count: size }) }}</option></select></label>
+        <AppSelect :model-value="String(pageSize)" :options="pageSizes.map(size => ({ value: String(size), label: t('common.itemsPerPage', { count: size }) }))" :label="t('common.perPage')" compact @change="changePageSize" />
         <nav class="pagination-row" :aria-label="t('common.pagination')">
           <button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="currentPage === 1 || loading" @click="goToPage(currentPage - 1)"><ArrowLeft /></button>
           <template v-for="item in paginationItems" :key="item.key">
@@ -65,9 +65,9 @@
         <label class="field"><span>{{ t("projects.displayName") }}</span><input v-model.trim="form.displayName" autocomplete="off" :placeholder="t('projects.displayNamePlaceholder')" /></label>
       </div>
       <label class="field"><span>{{ t("projects.descriptionField") }}</span><textarea v-model.trim="form.description" rows="3" :placeholder="t('projects.descriptionPlaceholder')"></textarea></label>
-      <label v-if="canManageType" class="field"><span>{{ t("projects.type") }}</span><select v-model="form.projectType"><option value="personal">{{ t("projects.personal") }}</option><option value="community">{{ t("projects.community") }}</option></select></label>
+      <div v-if="canManageType" class="field"><span>{{ t("projects.type") }}</span><AppSelect :model-value="form.projectType" :options="[{ value: 'personal', label: t('projects.personal') }, { value: 'community', label: t('projects.community') }]" :label="t('projects.type')" @update:model-value="form.projectType = $event as ProjectType" /></div>
       <div class="form-grid">
-        <label class="field"><span>{{ t("project.refType") }}</span><select v-model="form.defaultRef.type"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option></select></label>
+        <div class="field"><span>{{ t("project.refType") }}</span><AppSelect :model-value="form.defaultRef.type" :options="[{ value: 'Branch', label: t('project.refBranch') }, { value: 'Tag', label: t('project.refTag') }]" :label="t('project.refType')" @update:model-value="form.defaultRef.type = $event as 'Branch' | 'Tag'" /></div>
         <label class="field"><span>{{ t("projects.defaultRef") }}</span><input v-model.trim="form.defaultRef.value" required autocomplete="off" /></label>
       </div>
       <label v-if="requiresOwner" class="field required-field"><span>{{ t("projects.ownerUser") }}</span><input v-model.trim="form.ownerUser" required autocomplete="off" :placeholder="t('projects.ownerUserPlaceholder')" /></label>
@@ -104,6 +104,7 @@ import { useI18n } from "vue-i18n";
 
 import { createProject, errorTranslationKey, list } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
+import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildConf } from "@/composables/useBuildConf";
@@ -212,7 +213,8 @@ function reload(): void {
   void loadPage("", 1);
 }
 
-function changePageSize(): void {
+function changePageSize(value: string): void {
+  pageSize.value = Number(value);
   resetPagination();
   void loadPage("", 1);
 }

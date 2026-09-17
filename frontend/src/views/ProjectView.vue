@@ -70,7 +70,7 @@
         <div v-if="filteredPackageRepos.length" class="table-footer">
           <div class="page-summary">
             <span>{{ t("common.count", { count: filteredPackageRepos.length }) }}</span>
-            <label><select v-model.number="packagePageSize" :aria-label="t('common.perPage')" @change="packageCurrentPage = 1"><option v-for="size in packagePageSizes" :key="size" :value="size">{{ t("common.itemsPerPage", { count: size }) }}</option></select></label>
+            <AppSelect :model-value="String(packagePageSize)" :options="packagePageSizes.map(size => ({ value: String(size), label: t('common.itemsPerPage', { count: size }) }))" :label="t('common.perPage')" compact @change="packagePageSize = Number($event); packageCurrentPage = 1" />
             <nav class="pagination-row" :aria-label="t('common.pagination')">
               <button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="packageCurrentPage === 1" @click="packageCurrentPage -= 1"><ArrowLeft /></button>
               <template v-for="item in packagePaginationItems" :key="item.key">
@@ -199,7 +199,7 @@
         <label class="field"><span>{{ t("project.displayName") }}</span><input v-model.trim="basicDraft.displayName" :disabled="savingBasic" autocomplete="off" /></label>
         <label class="field"><span>{{ t("project.descriptionField") }}</span><textarea v-model.trim="basicDraft.description" :disabled="savingBasic" rows="3"></textarea></label>
         <div class="form-grid package-ref-fields">
-          <label class="field required-field"><span>{{ t("project.refType") }}</span><select v-model="basicDraft.defaultRef.type" :disabled="savingBasic"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option></select></label>
+          <div class="field required-field"><span>{{ t("project.refType") }}</span><AppSelect :model-value="basicDraft.defaultRef.type" :options="[{ value: 'Branch', label: t('project.refBranch') }, { value: 'Tag', label: t('project.refTag') }]" :label="t('project.refType')" :disabled="savingBasic" @update:model-value="basicDraft.defaultRef.type = $event as 'Branch' | 'Tag'" /></div>
           <label class="field required-field"><span>{{ t("project.defaultRef") }}</span><input v-model.trim="basicDraft.defaultRef.value" required :disabled="savingBasic" autocomplete="off" /></label>
         </div>
         <div v-if="basicErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(basicErrorKey) }}</div>
@@ -213,7 +213,7 @@
         <label class="field required-field"><span>{{ t("project.repositoryName") }}</span><input v-model.trim="packageDraft.name" required :disabled="savingPackage" autocomplete="off" placeholder="gcc" /></label>
         <label class="field required-field"><span>{{ t("project.repositoryAddress") }}</span><input v-model.trim="packageDraft.url" required :disabled="savingPackage" autocomplete="off" placeholder="https://atomgit.com/src-openeuler/gcc.git" /></label>
         <div class="form-grid package-ref-fields">
-          <label class="field"><span>{{ t("project.refType") }}</span><select v-model="packageDraft.ref.type" :disabled="savingPackage"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option><option value="Commit">Commit</option></select></label>
+          <div class="field"><span>{{ t("project.refType") }}</span><AppSelect :model-value="packageDraft.ref.type" :options="[{ value: 'Branch', label: t('project.refBranch') }, { value: 'Tag', label: t('project.refTag') }, { value: 'Commit', label: 'Commit' }]" :label="t('project.refType')" :disabled="savingPackage" @update:model-value="packageDraft.ref.type = $event as NonNullable<GitRef['type']>" /></div>
           <label class="field required-field"><span>{{ t("project.refValue") }}</span><input v-model.trim="packageDraft.ref.value" required :disabled="savingPackage" autocomplete="off" /></label>
         </div>
         <div v-if="packageErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(packageErrorKey) }}</div>
@@ -289,6 +289,7 @@ import { stringify } from "yaml";
 
 import { errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
+import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildConf } from "@/composables/useBuildConf";

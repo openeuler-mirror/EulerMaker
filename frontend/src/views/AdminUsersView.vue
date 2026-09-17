@@ -13,7 +13,7 @@
   <ModalDialog v-if="editing" title-id="edit-user-title" :title="t('admin.editUser', { name: editing.metadata?.name })" :close-label="t('common.close')" @close="closeDialog">
     <form class="project-form" @submit.prevent="saveUser">
       <div class="form-grid"><label class="field"><span>{{ t("admin.displayName") }}</span><input v-model.trim="draft.displayName" /></label><label class="field"><span>{{ t("admin.email") }}</span><input v-model.trim="draft.email" type="email" /></label></div>
-      <div class="form-grid"><label class="field"><span>{{ t("admin.role") }}</span><select v-model="draft.scope"><option value="ebs:user">{{ t("admin.regularUser") }}</option><option value="ebs:ops">{{ t("admin.opsUser") }}</option></select></label><label class="field"><span>{{ t("admin.enabled") }}</span><select v-model="draft.enabled"><option :value="true">{{ t("admin.active") }}</option><option :value="false">{{ t("admin.disabled") }}</option></select></label></div>
+      <div class="form-grid"><div class="field"><span>{{ t("admin.role") }}</span><AppSelect v-model="draft.scope" :options="[{ value: 'ebs:user', label: t('admin.regularUser') }, { value: 'ebs:ops', label: t('admin.opsUser') }]" :label="t('admin.role')" /></div><div class="field"><span>{{ t("admin.enabled") }}</span><AppSelect :model-value="String(draft.enabled)" :options="[{ value: 'true', label: t('admin.active') }, { value: 'false', label: t('admin.disabled') }]" :label="t('admin.enabled')" @update:model-value="draft.enabled = $event === 'true'" /></div></div>
       <div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div>
       <div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div>
     </form>
@@ -30,6 +30,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
+import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import type { ManagedUser } from "@/types";
 
