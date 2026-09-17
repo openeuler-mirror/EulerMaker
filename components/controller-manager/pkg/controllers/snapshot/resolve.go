@@ -20,6 +20,7 @@ type resolveState string
 const (
 	stateResolved resolveState = "Resolved"
 	stateWaiting  resolveState = "Waiting"
+	stateDeferred resolveState = "Deferred"
 	stateFailed   resolveState = "Failed"
 	stateSkipped  resolveState = "Skipped"
 	stateFatal    resolveState = "Fatal"
@@ -40,6 +41,7 @@ type resolveResult struct {
 }
 
 var fullCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var errResolveBudget = errors.New("snapshot resolve budget exhausted")
 
 func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot, targets []ebsv1.PackageRepo) ([]resolveResult, error) {
 	started := c.clock.Now()
@@ -55,7 +57,12 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		nameCount[repo.Name]++
 	}
 	tasks := make([]resolveTask, 0, len(targets))
-	for index, repo := range targets {
+	indices := make(map[string]int, len(snapshot.Spec.PackageRepos))
+	for index, repo := range snapshot.Spec.PackageRepos {
+		indices[repo.Name] = index
+	}
+	for _, repo := range targets {
+		index := indices[repo.Name]
 		repo = effectiveRepo(repo, snapshot.Spec.DefaultRef)
 		if nameCount[repo.Name] > 1 {
 			results = append(results, skippedResult(index, repo, ebsv1.SpecCommitValidationFailed, "duplicate package repository name"))
@@ -71,8 +78,13 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		sortResults(results)
 		return results, nil
 	}
-	budgetCtx, cancel := context.WithTimeout(parent, c.config.ResolveBudget)
+	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].index < tasks[j].index })
+	budgetCtx, cancel := context.WithTimeoutCause(parent, c.config.ResolveBudget, errResolveBudget)
 	defer cancel()
+	// Rotate dispatch order, while preserving stable indices for merging.
+	cursor := c.failures.cursor(snapshot.UID)
+	pivot := sort.Search(len(tasks), func(i int) bool { return tasks[i].index >= cursor })
+	tasks = append(append(make([]resolveTask, 0, len(tasks)), tasks[pivot:]...), tasks[:pivot]...)
 	jobs := make(chan resolveTask, len(tasks))
 	resultCh := make(chan resolveResult, len(tasks))
 	for _, task := range tasks {
@@ -84,23 +96,27 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		workers = len(tasks)
 	}
 	var wg sync.WaitGroup
+	var dispatchMu sync.Mutex
+	nextCursor := cursor
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for {
+				// Serialize receipt and cursor accounting, never external requests.
+				dispatchMu.Lock()
 				if budgetCtx.Err() != nil {
+					dispatchMu.Unlock()
 					return
 				}
-				select {
-				case <-budgetCtx.Done():
+				task, ok := <-jobs
+				if !ok {
+					dispatchMu.Unlock()
 					return
-				case task, ok := <-jobs:
-					if !ok {
-						return
-					}
-					resultCh <- c.resolveOne(budgetCtx, task, snapshot.CreationTimestamp.Time)
 				}
+				nextCursor = (task.index + 1) % len(snapshot.Spec.PackageRepos)
+				dispatchMu.Unlock()
+				resultCh <- c.resolveOne(budgetCtx, task, snapshot.CreationTimestamp.Time)
 			}
 		}()
 	}
@@ -116,12 +132,13 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		received[result.index] = struct{}{}
 	}
 	<-done
+	c.failures.setCursor(snapshot.UID, nextCursor)
 	if parent.Err() != nil {
 		return nil, parent.Err()
 	}
 	for _, task := range tasks {
 		if _, ok := received[task.index]; !ok {
-			results = append(results, failedResult(task.index, task.repo, ebsv1.SpecCommitSyncTimeout, "snapshot resolve budget exhausted"))
+			results = append(results, resolveResult{index: task.index, repo: task.repo, state: stateDeferred})
 		}
 	}
 	sortResults(results)
@@ -137,6 +154,8 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 			resolvedPackages.Inc()
 		case stateWaiting:
 			waitingPackages.Inc()
+		case stateDeferred:
+			deferredPackages.Inc()
 		case stateFailed:
 			failedPackages.Inc()
 		}
@@ -144,11 +163,9 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 	return results, nil
 }
 
-func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline time.Time) (out resolveResult) {
-	unexpected := false
-	defer func() { out.unexpectedError = out.unexpectedError || unexpected }()
+func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline time.Time) resolveResult {
 	if err := ctx.Err(); err != nil {
-		return c.gitFailure(task, "sync", err)
+		return c.requestFailure(ctx, task, "sync", err)
 	}
 	repo := task.repo
 	if repo.Ref.Type == "" || repo.Ref.Value == "" {
@@ -160,57 +177,38 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 		}
 		return resolveResult{index: task.index, repo: repo, state: stateResolved, status: ebsv1.PackageRepoStatus{CommitID: repo.Ref.Value}}
 	}
-	if err := c.gitClient.PublishSyncTask(ctx, repo.URL); err != nil {
-		return c.gitFailure(task, "sync", err)
+	check, err := c.gitClient.CheckSynced(ctx, repo.URL, baseline)
+	if err != nil {
+		return c.requestFailure(ctx, task, "sync", err)
 	}
-	delays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second}
-	temporaryFailures := 0
-	var lastCheckErr error
-	for attempt := 0; attempt < 8; attempt++ {
-		check, err := c.gitClient.CheckSynced(ctx, repo.URL, baseline)
-		lastCheckErr = err
-		if err != nil {
-			if errors.Is(err, context.Canceled) || isTimeout(err) {
-				return c.gitFailure(task, "sync", err)
-			}
-			kind, classified := gitErrorKind(err)
-			unexpected = unexpected || !classified
-			if kind == gitserver.ErrorValidation {
-				return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "git-server rejected repository input")
-			}
-			if kind == gitserver.ErrorPermanent {
-				return resolveResult{index: task.index, repo: repo, state: stateFatal, fatal: controllerPermanent(err)}
-			}
-			temporaryFailures++
-			if temporaryFailures >= 5 {
-				return failedResult(task.index, repo, ebsv1.SpecCommitSyncFailed, "git-server synchronization check failed")
-			}
-		} else if check.Synced {
-			commit, resolveErr := c.gitClient.ResolveCommit(ctx, repo.URL, repo.Ref)
-			if resolveErr != nil {
-				result := c.gitFailure(task, "resolve", resolveErr)
-				result.status.CloneURL = check.CloneURL
-				return result
-			}
-			return resolveResult{index: task.index, repo: repo, state: stateResolved, status: ebsv1.PackageRepoStatus{CloneURL: check.CloneURL, CommitID: commit}}
-		} else {
-			temporaryFailures = 0
+	if err := ctx.Err(); err != nil {
+		return c.requestFailure(ctx, task, "sync", err)
+	}
+	if !check.Synced {
+		if err := c.gitClient.PublishSyncTask(ctx, repo.URL); err != nil {
+			return c.requestFailure(ctx, task, "sync", err)
 		}
-		if attempt < len(delays) {
-			select {
-			case <-ctx.Done():
-				if err == nil {
-					return resolveResult{index: task.index, repo: repo, state: stateWaiting}
-				}
-				return failedResult(task.index, repo, ebsv1.SpecCommitSyncTimeout, "git-server synchronization check timed out")
-			case <-c.clock.After(delays[attempt]):
-			}
+		return resolveResult{index: task.index, repo: repo, state: stateWaiting}
+	}
+	commit, err := c.gitClient.ResolveCommit(ctx, repo.URL, repo.Ref)
+	if err != nil {
+		result := c.requestFailure(ctx, task, "resolve", err)
+		result.status.CloneURL = check.CloneURL
+		return result
+	}
+	return resolveResult{index: task.index, repo: repo, state: stateResolved, status: ebsv1.PackageRepoStatus{CloneURL: check.CloneURL, CommitID: commit}}
+}
+
+// Only an interrupted request is deferred; a completed HTTP failure retains its
+// classification even if the batch deadline expires at the same time.
+func (c *Controller) requestFailure(ctx context.Context, task resolveTask, operation string, err error) resolveResult {
+	if ctx.Err() != nil && (errors.Is(err, ctx.Err()) || isTimeout(err)) {
+		if errors.Is(context.Cause(ctx), errResolveBudget) {
+			return resolveResult{index: task.index, repo: task.repo, state: stateDeferred}
 		}
+		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: ctx.Err()}
 	}
-	if lastCheckErr != nil {
-		return c.gitFailure(task, "sync", lastCheckErr)
-	}
-	return resolveResult{index: task.index, repo: repo, state: stateWaiting}
+	return c.gitFailure(task, operation, err)
 }
 
 func (c *Controller) gitFailure(task resolveTask, operation string, err error) (out resolveResult) {
@@ -274,6 +272,8 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 		case stateSkipped:
 			snapshot.Status.PackageRepoStatuses[name] = result.status
 			changes = append(changes, trackerChange{repo: name})
+		case stateDeferred:
+			waiting = true
 		case stateWaiting:
 			waiting = true
 			if old, ok := snapshot.Status.PackageRepoStatuses[name]; ok && old.Error != nil && old.Error.Retryable {

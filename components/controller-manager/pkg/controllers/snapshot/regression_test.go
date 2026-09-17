@@ -12,17 +12,7 @@ import (
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
-	"k8s.io/utils/clock"
 )
-
-// Only After advances immediately; no real sleeps or scheduling-dependent timers.
-type immediateClock struct{ clock.Clock }
-
-func (immediateClock) After(time.Duration) <-chan time.Time {
-	ch := make(chan time.Time, 1)
-	ch <- time.Unix(0, 0)
-	return ch
-}
 
 type checkingGit struct {
 	fakeGitClient
@@ -42,9 +32,8 @@ func TestSyncCheckOutcomes(t *testing.T) {
 		code       ebsv1.SpecCommitErrorCode
 		calls      int
 	}{
-		{"waiting", 9, nil, stateWaiting, "", 8},
-		{"late failures", 5, errors.New("unavailable"), stateFailed, ebsv1.SpecCommitSyncFailed, 8},
-		{"five errors", 1, errors.New("unavailable"), stateFailed, ebsv1.SpecCommitSyncFailed, 5},
+		{"waiting", 9, nil, stateWaiting, "", 1},
+		{"temporary error", 1, errors.New("unavailable"), stateFailed, ebsv1.SpecCommitSyncFailed, 1},
 		{"request timeout", 1, context.DeadlineExceeded, stateFailed, ebsv1.SpecCommitSyncTimeout, 1},
 		{"transport timeout", 1, &net.DNSError{Err: "timeout", IsTimeout: true}, stateFailed, ebsv1.SpecCommitSyncTimeout, 1},
 	} {
@@ -58,7 +47,6 @@ func TestSyncCheckOutcomes(t *testing.T) {
 				return gitserver.SyncCheckResult{}, nil
 			}}
 			c := newTestController(t, &fakeClient{}, g, Config{})
-			c.clock = immediateClock{Clock: c.clock}
 			task := resolveTask{repo: ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}}}
 			got := c.resolveOne(context.Background(), task, time.Time{})
 			if got.state != tc.want || calls != tc.calls {

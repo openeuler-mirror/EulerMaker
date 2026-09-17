@@ -199,7 +199,9 @@ func TestTemporaryFailureAtLimitIsSkipped(t *testing.T) {
 	api := &fakeClient{snapshot: snapshot, build: build}
 	gitErr := &gitserver.Error{Operation: "sync", Kind: gitserver.ErrorTemporary, Err: errors.New("unavailable")}
 	config := Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2}
-	c := newTestController(t, api, &fakeGitClient{publishErr: gitErr}, config)
+	c := newTestController(t, api, &checkingGit{check: func(context.Context) (gitserver.SyncCheckResult, error) {
+		return gitserver.SyncCheckResult{}, gitErr
+	}}, config)
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 		t.Fatal(err)
 	}

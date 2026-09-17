@@ -18,6 +18,7 @@ var (
 	resolveBatches      = metrics.NewCounter("snapshot_controller_resolve_batches_total", "Package resolution batches.")
 	resolvedPackages    = metrics.NewCounter("snapshot_controller_resolved_total", "Resolved package results before status persistence.")
 	waitingPackages     = metrics.NewCounter("snapshot_controller_waiting_total", "Normally waiting package results.")
+	deferredPackages    = metrics.NewCounter("snapshot_controller_deferred_total", "Packages deferred by the batch budget without consuming retries.")
 	failedPackages      = metrics.NewCounter("snapshot_controller_failed_total", "Retryable package results before status persistence.")
 	skippedPackages     = metrics.NewCounter("snapshot_controller_skipped_total", "Confirmed non-retryable package errors.")
 	exhaustedPackages   = metrics.NewCounter("snapshot_controller_retry_exhausted_total", "Confirmed exhausted package retry budgets.")
@@ -40,21 +41,28 @@ func (c *Controller) recordStatus(before, after *ebsv1.Snapshot) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	resolved := make([]string, 0, len(names))
 	for _, name := range names {
 		status := after.Status.PackageRepoStatuses[name]
 		if reflect.DeepEqual(before.Status.PackageRepoStatuses[name], status) {
 			continue
 		}
-		reason := "PackageResolved"
-		if status.Error != nil {
-			reason = string(status.Error.Code)
-			if !status.Error.Retryable {
-				skippedPackages.Inc()
+		if status.Error == nil {
+			if status.CommitID != "" {
+				resolved = append(resolved, name)
 			}
-			if status.Error.Code == ebsv1.SpecCommitRetryExhausted {
-				exhaustedPackages.Inc()
-			}
+			continue
+		}
+		reason := string(status.Error.Code)
+		if !status.Error.Retryable {
+			skippedPackages.Inc()
+		}
+		if status.Error.Code == ebsv1.SpecCommitRetryExhausted {
+			exhaustedPackages.Inc()
 		}
 		log.Printf("controller=snapshot key=%q snapshot_uid=%q package_name=%q phase=%q resourceVersion=%q reason=%q", after.Namespace+"/"+after.Name, after.UID, name, after.Status.Phase, before.ResourceVersion, reason)
+	}
+	if len(resolved) > 0 {
+		log.Printf("controller=snapshot key=%q snapshot_uid=%q package_count=%d package_names=%q phase=%q resourceVersion=%q reason=PackagesResolved", after.Namespace+"/"+after.Name, after.UID, len(resolved), resolved, after.Status.Phase, before.ResourceVersion)
 	}
 }

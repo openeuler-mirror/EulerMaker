@@ -10,8 +10,14 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Manager.Workers != 2 || o.Source.PollPageSize != 500 || o.Manager.ControllerMaxRetries != 15 {
+	if o.Manager.Workers != 6 || o.Source.PollPageSize != 500 || o.Manager.ControllerMaxRetries != 15 {
 		t.Fatalf("unexpected defaults: %+v", o)
+	}
+	if o.Snapshot.ResolveWorkers != 10 {
+		t.Fatalf("unexpected Snapshot resolve workers: %d", o.Snapshot.ResolveWorkers)
+	}
+	if o.Snapshot.FailureRetryLimit != 5 {
+		t.Fatalf("unexpected Snapshot failure retry limit: %d", o.Snapshot.FailureRetryLimit)
 	}
 	if o.Manager.SlowRetryInitialDelay != 30*time.Second || o.Manager.SlowRetryMaxDelay != 15*time.Minute || o.Manager.SlowRetryJitter != 0.2 {
 		t.Fatalf("unexpected slow retry defaults: %+v", o.Manager)
