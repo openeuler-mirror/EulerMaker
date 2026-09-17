@@ -5,6 +5,37 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +k8s:deepcopy-gen=true
+type BuildConf struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              BuildConfSpec `json:"spec"`
+}
+
+// +k8s:deepcopy-gen=true
+type BuildConfSpec struct {
+	Targets map[string]BuildConfTarget `json:"targets"`
+}
+
+// +k8s:deepcopy-gen=true
+type BuildConfTarget struct {
+	Arches map[string]BuildConfArch `json:"arches"`
+}
+
+// +k8s:deepcopy-gen=true
+type BuildConfArch struct {
+	Image string `json:"image"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +k8s:deepcopy-gen=true
+type BuildConfList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []BuildConf `json:"items"`
+}
+
 type Project struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

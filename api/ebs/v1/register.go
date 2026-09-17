@@ -21,6 +21,7 @@ var (
 
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
+		&BuildConf{}, &BuildConfList{},
 		&Project{}, &ProjectList{},
 		&Snapshot{}, &SnapshotList{},
 		&Build{}, &BuildList{},
