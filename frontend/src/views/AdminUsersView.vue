@@ -1,5 +1,5 @@
 <template>
-  <section class="page-heading"><div><h1>{{ t("admin.usersTitle") }}</h1><p>{{ t("admin.usersHint") }}</p></div><div class="page-actions"><RouterLink class="secondary-button" to="/admin/machineaccounts">{{ t("admin.machineAccounts") }}</RouterLink><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="loading" @click="reload"><Refresh /></button></div></section>
+  <section class="page-heading"><div><p>{{ t("admin.usersHint") }}</p></div><div class="page-actions"><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="loading" @click="reload"><Refresh /></button></div></section>
   <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
   <section class="content-panel">
     <div class="list-toolbar"><label class="search-box"><Search /><input v-model.trim="search" type="search" :placeholder="t('admin.searchUsers')" /></label></div>
@@ -27,7 +27,6 @@
 <script setup lang="ts">
 import { ArrowLeft, ArrowRight, CircleCheckFilled, Refresh, Search, WarningFilled } from "@element-plus/icons-vue";
 import { computed, onMounted, reactive, ref } from "vue";
-import { RouterLink } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";

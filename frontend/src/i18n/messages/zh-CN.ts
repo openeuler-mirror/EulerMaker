@@ -5,7 +5,7 @@ export default {
     home: "首页",
     projects: "工程",
     operations: "运维管理",
-    userManagement: "用户管理",
+    userManagement: "账号管理",
     settings: "账号设置",
     accountMenu: "{name} 的账号菜单",
     login: "登录",
@@ -285,7 +285,7 @@ export default {
     browseAsGuest: "暂不登录，浏览工程",
   },
   admin: {
-    usersTitle: "用户管理",
+    usersTitle: "用户账号",
     usersHint: "用户自行注册后可在此调整为运维用户；管理员账号不在此列表中。",
     machineAccounts: "机器账号",
     machineHint: "管理服务使用的机器账号及其令牌有效期。",
