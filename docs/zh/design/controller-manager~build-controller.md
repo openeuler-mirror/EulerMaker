@@ -162,7 +162,6 @@ metadata:
     ebs.io/build-type: full
 spec:
   buildType: full
-  packages: [gcc]
   buildTarget:
     os: openEuler-22.03-LTS
     arch: aarch64
@@ -181,7 +180,7 @@ status:
 | `Build.metadata.name` / `Build.metadata.namespace`                                                     | 用户提交 / API 路径    | uuid，不复用同名                                     |
 | `Build.metadata.labels`                                                                                | 用户或调用方           | 创建 Build 时写入                               |
 | `Build.spec.buildType`                                                                                 | 用户提交             | Controller 只读；允许值 `full` / `incremental` / `specified` / `single`，控制器只对 `single` 特判，其余取值（含未枚举值）一律按非 single 处理 |
-| `Build.spec.packages` / `Build.spec.buildTarget` | 用户提交 | Controller 只读 |
+| `Build.spec.packages` / `Build.spec.buildTarget` | 用户提交 | Controller 只读；full/incremental 的 packages 在创建时清空，single/specified 指定目标包 |
 | `Build.status.phase` / `Build.status.stage` | Build Controller | Pending → Prepared → Processing 由本控制器状态机推进；publish 终态由本控制器依据 `RpmRepo.status.release.phase` 判定，`stage` 由本控制器写 `publish` |
 | `Build.status.repo` | Build Controller | 复制自 `RpmRepo.status.release.contentURL`（正式发布稳定入口），仅在 `RpmRepo.status.release.phase=Ready` 时写入 |
 | `Build.status.startTime` / `Build.status.endTime` / `Build.status.baseBuildRef` | Build Controller | 进入 Processing 时写 `startTime`，进入终态时写 `endTime`；`baseBuildRef` 在 Pending 阶段写入，`nil` 表示未解析，`{}` 表示无上一个发布成功的 Build |

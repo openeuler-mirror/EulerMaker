@@ -493,12 +493,12 @@ async function createBuild(): Promise<void> {
   const targets = buildTargetDrafts.value
     .filter((target) => target.selected && target.os && target.arch)
     .map(({ selected: _, ...target }) => target);
-  const packages = (project.value.spec?.packageRepos || []).map((repo) => repo.name?.trim()).filter((value): value is string => Boolean(value));
+  const hasPackages = (project.value.spec?.packageRepos || []).some((repo) => Boolean(repo.name?.trim()));
   if (!targets.length) {
     buildDialogErrorKey.value = "project.selectBuildTarget";
     return;
   }
-  if (!packages.length) {
+  if (!hasPackages) {
     buildDialogErrorKey.value = "project.buildConfigurationRequired";
     return;
   }
@@ -508,7 +508,7 @@ async function createBuild(): Promise<void> {
   const results = await Promise.allSettled(targets.map((target, index) =>
     request<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds`, {
       method: "POST",
-      body: JSON.stringify({ apiVersion: "ebs/v1", kind: "Build", metadata: { name: buildNames[index] }, spec: { buildType: buildType.value, packages, buildTarget: { ...target } } }),
+      body: JSON.stringify({ apiVersion: "ebs/v1", kind: "Build", metadata: { name: buildNames[index] }, spec: { buildType: buildType.value, buildTarget: { ...target } } }),
     }),
   ));
   const successfulNames = results.flatMap((result, index) => result.status === "fulfilled" ? [result.value.metadata?.name || buildNames[index]] : []);

@@ -233,7 +233,7 @@ type BuildSpec struct {
 |----------------|---------|------|------|
 | `buildType`    | string | 否 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"`，默认 `"full"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
-| `packages`     | []string | 是 | 构建的软件包 |
+| `packages`     | []string | 条件必填 | single、specified 的目标包列表；full、incremental 保持为空，apiserver 创建时统一清空 |
 
 Build 创建后整个 `spec` 不可修改；普通 Update 只能修改服务端允许的 metadata，运行状态通过 `/status` 子资源更新。
 

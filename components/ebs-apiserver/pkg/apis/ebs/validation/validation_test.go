@@ -265,6 +265,25 @@ func TestValidateSnapshotUpdate(t *testing.T) {
 	assertErrorList(t, errs, 0, nil)
 }
 
+func TestValidateBuildEmptyPackagesByType(t *testing.T) {
+	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
+		t.Run(buildType, func(t *testing.T) {
+			b := validBuild()
+			b.Spec.BuildType = buildType
+			b.Labels[ebsv1.BuildTypeLabel] = buildType
+			b.Spec.Packages = nil
+			errs := ValidateBuild(b)
+			if buildType == "full" || buildType == "incremental" {
+				if len(errs) != 0 {
+					t.Fatalf("empty packages rejected: %v", errs)
+				}
+			} else if len(errs) != 1 || errs[0].Field != "spec.packages" {
+				t.Fatalf("expected packages error: %v", errs)
+			}
+		})
+	}
+}
+
 func TestValidateBuild(t *testing.T) {
 	tests := []struct {
 		name       string
