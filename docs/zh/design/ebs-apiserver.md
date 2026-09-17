@@ -444,7 +444,7 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 - `Snapshot` 创建默认 `status.phase = Pending`。
 - `Build` 创建默认 `status.phase = Pending`。
 - `BuildInfo` 创建默认 `status.phase = Pending`。
-- `RpmRepo` 创建默认 `status.repository.phase = Pending`，`status.release` 在产生正式发布意图前保持为空。
+- `RpmRepo` 创建默认 `status.repository.phase = Pending`，`status.release` 在产生正式发布意图前保持为空。创建请求中若同时提供 `status.repository.repositoryUID` 与 `status.repository.contentURL`，服务端保留这两个字段作为过程仓基线（Build Controller 用其继承上一轮过程仓版本），`repository` 的其余字段与 `status.release`、`status.conditions` 一律归零；只提供其中一个字段的请求返回 422。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 - 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。
