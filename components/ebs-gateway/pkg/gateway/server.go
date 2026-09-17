@@ -28,6 +28,7 @@ const (
 	apiPrefix           = "/apis/ebs/v1"
 	ownerUserLabel      = "ebs.io/owner-user"
 	memberUserLabelBase = "ebs.io/member-user."
+	projectTypeLabel    = "project.ebs.io/type"
 )
 
 type Gateway struct {
@@ -1537,6 +1538,18 @@ func (g *Gateway) jobAssignedTo(ctx context.Context, path, runner string) (bool,
 func (g *Gateway) handleProjectCollection(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
 	switch r.Method {
 	case http.MethodPost:
+		if !ident.IsOps() {
+			obj, err := readJSONObject(r)
+			if err != nil {
+				return authzDecision{}, err
+			}
+			if value, exists := ensureLabels(obj)[projectTypeLabel]; exists && value != "personal" {
+				return authzDecision{}, fmt.Errorf("only ops or higher can create community projects")
+			}
+			if err := writeJSONObject(r, obj); err != nil {
+				return authzDecision{}, err
+			}
+		}
 		if err := injectProjectOwnerLabel(r, ident.Subject); err != nil {
 			return authzDecision{}, err
 		}
@@ -1696,6 +1709,12 @@ func (g *Gateway) protectProjectAccessLabels(r *http.Request, ident Identity, ol
 		return nil
 	}
 	if r.Method == http.MethodPatch {
+		if !ident.IsOps() {
+			if err := g.prepareProjectTypePatch(r, old); err != nil {
+				return err
+			}
+			return g.protectProjectAccessLabels(r, ident, old)
+		}
 		return g.protectProjectPatchAccessLabels(r, ident, old)
 	}
 
@@ -1704,6 +1723,16 @@ func (g *Gateway) protectProjectAccessLabels(r *http.Request, ident Identity, ol
 		return err
 	}
 	labels := ensureLabels(obj)
+	if !ident.IsOps() && !sameProjectType(labels, old.Labels) {
+		return fmt.Errorf("only ops or higher can modify project type")
+	}
+	if !ident.IsOps() {
+		oldMeta, _ := old.Object["metadata"].(map[string]any)
+		meta, _ := obj["metadata"].(map[string]any)
+		if version, _ := oldMeta["resourceVersion"].(string); version != "" && meta["resourceVersion"] != version {
+			return fmt.Errorf("project resourceVersion changed; read the project again")
+		}
+	}
 	oldOwner := old.Labels[ownerUserLabel]
 	newOwner := labels[ownerUserLabel]
 	if newOwner != oldOwner {
@@ -1918,6 +1947,7 @@ func methodHasBody(method string) bool {
 type projectInfo struct {
 	Name   string
 	Labels map[string]string
+	Object map[string]any
 }
 
 func projectFromAny(value any) (projectInfo, bool) {
@@ -1929,7 +1959,7 @@ func projectFromAny(value any) (projectInfo, bool) {
 	if !ok {
 		return projectInfo{}, false
 	}
-	project := projectInfo{Labels: map[string]string{}}
+	project := projectInfo{Labels: map[string]string{}, Object: obj}
 	if name, ok := meta["name"].(string); ok {
 		project.Name = name
 	}

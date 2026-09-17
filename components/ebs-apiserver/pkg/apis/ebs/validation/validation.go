@@ -24,6 +24,9 @@ var (
 
 func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	var allErrs field.ErrorList
+	if value, exists := obj.Labels[ebsv1.ProjectTypeLabel]; exists && value != ebsv1.ProjectTypeCommunity && value != ebsv1.ProjectTypePersonal {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("metadata", "labels").Key(ebsv1.ProjectTypeLabel), value, []string{ebsv1.ProjectTypeCommunity, ebsv1.ProjectTypePersonal}))
+	}
 	namePath := field.NewPath("metadata", "name")
 	if len(obj.Name) == 0 {
 		allErrs = append(allErrs, field.Required(namePath, "name is required"))

@@ -1,6 +1,12 @@
 package v1
 
 func SetDefaults_Project(obj *Project) {
+	if obj.Labels == nil {
+		obj.Labels = map[string]string{}
+	}
+	if _, exists := obj.Labels[ProjectTypeLabel]; !exists {
+		obj.Labels[ProjectTypeLabel] = ProjectTypePersonal
+	}
 	if len(obj.Spec.DisplayName) == 0 {
 		obj.Spec.DisplayName = obj.Name
 	}

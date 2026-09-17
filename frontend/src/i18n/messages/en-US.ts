@@ -70,6 +70,9 @@ export default {
     targets: "{count} build targets",
   },
   projects: {
+    type: "Project type",
+    community: "Community projects",
+    personal: "Personal projects",
     eyebrow: "Projects",
     title: "Projects",
     search: "Search this page",

@@ -182,6 +182,20 @@ func TestValidateProjectUpdateRequiresPackageRepoName(t *testing.T) {
 	})
 }
 
+func TestValidateProjectType(t *testing.T) {
+	for _, value := range []string{"personal", "community", "", "invalid"} {
+		p := validProject()
+		p.Labels = map[string]string{ebsv1.ProjectTypeLabel: value}
+		valid := value == "personal" || value == "community"
+		if errs := ValidateProject(p); (len(errs) == 0) != valid {
+			t.Fatalf("create %q: %v", value, errs)
+		}
+		if errs := ValidateProjectUpdate(p, validProject()); (len(errs) == 0) != valid {
+			t.Fatalf("update %q: %v", value, errs)
+		}
+	}
+}
+
 func TestValidateProjectStatusUpdate(t *testing.T) {
 	errs := ValidateProjectStatusUpdate(&ebsv1.Project{}, validProject())
 	assertErrorList(t, errs, 0, nil)

@@ -59,3 +59,14 @@ func TestPackageRefPreservedBeforeValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusPreservesProjectType(t *testing.T) {
+	old := &ebsv1.Project{}
+	old.Labels = map[string]string{ebsv1.ProjectTypeLabel: ebsv1.ProjectTypeCommunity}
+	candidate := old.DeepCopy()
+	candidate.Labels[ebsv1.ProjectTypeLabel] = ebsv1.ProjectTypePersonal
+	(&statusStrategy{}).PrepareForUpdate(context.Background(), candidate, old)
+	if candidate.Labels[ebsv1.ProjectTypeLabel] != ebsv1.ProjectTypeCommunity {
+		t.Fatal("status update changed project type")
+	}
+}

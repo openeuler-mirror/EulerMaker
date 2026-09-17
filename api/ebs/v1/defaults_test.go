@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+func TestProjectTypeDefault(t *testing.T) {
+	for _, value := range []string{"missing", "personal", "community", "", "invalid"} {
+		p := &Project{}
+		want := value
+		if value == "missing" {
+			want = ProjectTypePersonal
+		} else {
+			p.Labels = map[string]string{ProjectTypeLabel: value}
+		}
+		SetDefaults_Project(p)
+		if p.Labels[ProjectTypeLabel] != want {
+			t.Fatalf("%q defaulted to %q", value, p.Labels[ProjectTypeLabel])
+		}
+	}
+}
+
 func TestSetDefaultsProjectPackageRefs(t *testing.T) {
 	for _, branch := range []GitRef{{}, {Type: GitRefBranch, Value: "openEuler-24.03-LTS-SP4"}, {Type: GitRefTag, Value: "v1"}} {
 		for _, input := range []string{`{"name":"gcc"}`, `{"name":"gcc","ref":null}`, `{"name":"gcc","ref":{}}`} {

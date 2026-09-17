@@ -10,6 +10,7 @@
 
 | 对象 | 标签 | 值 | 写入方 | 用途 |
 |------|------|----|--------|------|
+| Project | `project.ebs.io/type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
 | Project | `ebs.io/owner-user` | User `metadata.name` | Gateway 或 system | 标识 Project owner，参与 Gateway 写权限判定 |
 | Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner 或 system | 授予指定用户 Project 成员权限 |
 | Build | `ebs.io/target-os` | Build Target 的操作系统名称 | Build 创建方 | 按构建目标查询 Build |
@@ -26,7 +27,7 @@
 
 `ebs.io/` 前缀由 EulerMaker 保留。使用该前缀但未在本文档登记的标签，不具有稳定的公共语义。
 
-## 3. Project 访问标签
+## 3. Project 标签
 
 ### 3.1 所有者
 
@@ -51,6 +52,25 @@ metadata:
 成员标签的用户名位于标签 key 中，值只能是字符串 `"true"`。Project owner 和 system 可以增删成员；新增成员必须对应已存在且启用的 User。成员不能修改 owner 或成员标签。
 
 Project 子资源不重复保存访问标签，而是通过所属 Project 继承权限。apiserver 只存储这些标签，不解释其授权语义；授权由 Gateway 完成。
+
+### 3.3 工程分类
+
+`project.ebs.io/type` 是系统保留的分类标签，只允许 `community`（社区工程）和 `personal`（个人工程），不增加对应 spec 字段。
+
+- apiserver 创建及普通更新时补齐缺失标签为 `personal`；显式空值或其他值返回 `422 Invalid`。读取旧对象不写回，缺失标签按个人工程解释。
+- 普通用户只能创建个人工程；不能修改或删除已有类型标签。旧对象可补写 `personal`。Ops、Admin、System 可以指定、修改类型，但仍遵循原有 Project 写权限；Ops 不因此获得跨工程编辑权限。
+- Gateway 负责上述权限；普通用户的 JSON/Merge PATCH 按最新对象计算完整候选对象，检查类型和访问标签后转为携带原 resourceVersion 的 PUT，避免通过替换 metadata/labels、move/copy 或并发修改绕过保护。
+- Project `/status` 更新保留服务端原 labels，不能借状态更新修改分类。
+- 分类不影响公开读取或 owner/member 权限；“个人工程”表示类型，不等于“我的工程”。
+
+前端工程列表提供“社区工程 / 个人工程”Tab，默认社区工程。切换时重置分页，查询使用现有 `labelSelector`：
+
+| Tab | 选择器 |
+|-----|--------|
+| 社区工程 | `project.ebs.io/type=community` |
+| 个人工程 | `project.ebs.io/type!=community` |
+
+不等于筛选包含无标签对象，保证旧工程在个人 Tab 中可见；过滤在服务端分页前完成。Tab 切换后忽略前一次未完成请求的结果。普通用户表单固定创建个人工程；Ops 及以上可以选择类型，YAML 导入保留显式标签并由后端校验。
 
 ## 4. Build 查询标签
 
