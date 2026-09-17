@@ -61,6 +61,7 @@ func NewCommand(streams Streams) (*cobra.Command, *App) {
 	flags.StringVar(&app.configPath, "config", app.configPath, "configuration file")
 	flags.StringVar(&app.context, "context", "", "context override")
 	flags.StringVarP(&app.project, "project", "p", "", "Project override")
+	flags.StringVarP(&app.project, "namespace", "n", "", "alias for --project")
 	flags.StringVar(&app.gateway, "gateway", "", "Gateway URL override")
 	flags.DurationVar(&app.timeout, "request-timeout", app.timeout, "ordinary request timeout")
 	flags.BoolVar(&app.insecure, "insecure-skip-tls-verify", false, "skip Gateway TLS verification")

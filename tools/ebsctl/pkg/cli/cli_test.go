@@ -13,6 +13,28 @@ import (
 	"testing"
 )
 
+func TestProjectFlagAliases(t *testing.T) {
+	for _, flags := range [][]string{
+		{"-p", "project-a"},
+		{"--project=project-a"},
+		{"-n", "project-a"},
+		{"--namespace=project-a"},
+		{"-p", "other", "-n", "project-a"},
+		{"-n", "other", "-p", "project-a"},
+	} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			command, app := NewCommand(Streams{In: strings.NewReader(""), Out: io.Discard, ErrOut: io.Discard})
+			command.SetArgs(append([]string{"version"}, flags...))
+			if err := command.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if app.project != "project-a" {
+				t.Fatalf("project = %q, want project-a", app.project)
+			}
+		})
+	}
+}
+
 func TestLoginThenCreateAndGet(t *testing.T) {
 	var created map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +76,7 @@ func TestLoginThenCreateAndGet(t *testing.T) {
 		t.Fatal(err)
 	}
 	createOut, createErr := &bytes.Buffer{}, &bytes.Buffer{}
-	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: createOut, ErrOut: createErr}, []string{"--config", configPath, "-p", "project-a", "create", "-f", manifest, "-o", "name"})
+	code = Execute(context.Background(), Streams{In: strings.NewReader(""), Out: createOut, ErrOut: createErr}, []string{"--config", configPath, "-n", "project-a", "create", "-f", manifest, "-o", "name"})
 	if code != 0 || strings.TrimSpace(createOut.String()) != "job/job-a" {
 		t.Fatalf("create code=%d stdout=%q stderr=%q", code, createOut.String(), createErr.String())
 	}
