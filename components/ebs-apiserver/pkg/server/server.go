@@ -28,6 +28,7 @@ import (
 	iammodule "ebs-apiserver/pkg/iam"
 	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
+	buildconfstore "ebs-apiserver/pkg/registry/ebs/buildconf"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	buildresourcestore "ebs-apiserver/pkg/registry/ebs/buildresource"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
@@ -269,6 +270,13 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 		return nil, err
 	}
 	buildResourceTemplate := buildresourcestore.NewStorage()
+	buildConfES := newBuildConfStore(esClient)
+	if err := ensureDefaultBuildConf(context.Background(), buildConfES); err != nil {
+		return nil, err
+	}
+	if err := installBuildConfRoutes(srv.Handler.GoRestfulContainer, buildConfES); err != nil {
+		return nil, err
+	}
 	buildResourceES := esstore.New(esClient, "buildresource", "BuildResource", buildResourceTemplate.(*genericregistry.Store))
 	if err := ensureDefaultBuildResource(context.Background(), buildResourceES); err != nil {
 		return nil, err
@@ -327,7 +335,7 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 	buildStorage := buildstore.NewStorage(Scheme)
 	buildES := esstore.New(esClient, "build", "Build", buildStorage.Build.(*genericregistry.Store))
-	buildES.SetCreateHook(buildstore.ValidateProjectPackages(projectES))
+	buildES.SetCreateHook(buildstore.ValidateBuildTargetConfig(newBuildConfStore(esClient), buildstore.ValidateProjectPackages(projectES)))
 	buildStatusES := esstore.NewStatus(buildES, buildStorage.Status.(*genericregistry.Store))
 	v1Storage["builds"] = buildstore.NewCreateStorage(buildES, esClient)
 	v1Storage["builds/status"] = buildStatusES
@@ -360,6 +368,10 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	apiGroupInfo.VersionedResourcesStorageMap["v1"] = v1Storage
 
 	return &apiGroupInfo, nil
+}
+
+func newBuildConfStore(client *es.Client) *esstore.Store {
+	return esstore.New(client, "buildconf", "BuildConf", buildconfstore.NewStorage(Scheme).BuildConf.(*genericregistry.Store))
 }
 
 func completeStore(storage rest.Storage, storeOptions *generic.StoreOptions) error {
