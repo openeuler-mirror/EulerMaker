@@ -37,8 +37,16 @@ body.modal-open { overflow: hidden; }
 .main-nav a:hover, .main-nav a.router-link-exact-active { color: var(--blue); }
 .main-nav a.router-link-exact-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--blue); }
 .account { display: flex; align-items: center; gap: 14px; }
-.identity { display: inline-flex; align-items: center; gap: 7px; color: #48576d; font-size: 14px; }
-.identity svg { width: 17px; }
+.account-menu { position: relative; }
+.account-trigger { max-width: 240px; padding: 7px 4px; display: flex; align-items: center; gap: 7px; border: 0; border-radius: 6px; color: #48576d; background: transparent; font-size: 14px; }
+.account-trigger:hover, .account-trigger[aria-expanded="true"] { color: var(--blue); }
+.account-trigger:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 2px; }
+.account-trigger svg { width: 17px; height: 17px; flex: none; }
+.account-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-trigger .account-chevron { width: 12px; height: 12px; }
+.account-menu-list { position: absolute; top: calc(100% + 9px); right: 0; z-index: 30; min-width: 160px; padding: 6px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }
+.account-menu-list a, .account-menu-list button { width: 100%; min-height: 38px; padding: 8px 12px; display: flex; align-items: center; border: 0; border-radius: 5px; color: #455269; background: transparent; text-align: left; font-size: 14px; }
+.account-menu-list a:hover, .account-menu-list button:hover, .account-menu-list a:focus-visible, .account-menu-list button:focus-visible { color: var(--blue); background: #edf6ff; outline: 0; }
 .login-button, .text-button { border: 0; background: transparent; color: var(--blue); font-size: 14px; font-weight: 650; }
 .login-button { padding: 8px 17px; border: 1px solid #bcd9fb; border-radius: 7px; }
 .login-button:hover { background: #edf6ff; }
@@ -191,6 +199,20 @@ body.modal-open { overflow: hidden; }
 .success-banner { margin: 0 0 16px; padding: 12px 15px; display: flex; align-items: center; gap: 9px; color: #217b55; background: #eefaf4; border: 1px solid #ccebdc; border-radius: 8px; font-size: 14px; }
 .success-banner svg { width: 18px; }
 .action-error { min-height: auto; margin: 0 0 16px; justify-content: flex-start; }
+.admin-table td { vertical-align: middle; }
+.admin-row-actions { white-space: nowrap; }
+.admin-row-actions button + button { margin-left: 12px; }
+.admin-cell-subtitle { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+.danger-link { color: #bf3f4a; }
+.danger-button { background: #bd3f4b; }
+.danger-button:hover { background: #a92f3c; }
+.machine-secret-warning { margin: 0 0 20px; color: #95520e; line-height: 1.6; }
+.machine-secret-field { margin-top: 18px; }
+.machine-secret-field textarea { font-family: "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
+.operations-section + .operations-section { margin-top: 20px; }
+.operations-project-form { margin-bottom: 20px; display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.operations-project-form .field { width: min(320px, 100%); }
+.settings-panel { width: min(560px, 100%); }
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; padding: 32px 18px; display: grid; place-items: center; overflow-y: auto; background: rgb(15 28 48 / 52%); backdrop-filter: blur(2px); }
 .modal-card { width: min(660px, 100%); max-height: calc(100vh - 64px); overflow-y: auto; padding: 28px; background: #fff; border: 1px solid #d9e2ee; border-radius: 12px; box-shadow: 0 24px 70px rgb(15 34 61 / 28%); }
@@ -407,7 +429,7 @@ body.modal-open { overflow: hidden; }
   .brand { font-size: 18px; }
   .brand img { width: 26px; height: 26px; }
   .main-nav { top: 58px; padding-left: 16px; padding-right: 16px; }
-  .identity { display: none; }
+  .account-trigger { max-width: 100px; }
   .login-button { padding: 7px 12px; }
   .register-link { display: none; }
   .page-container { margin-top: 14px; margin-bottom: 24px; padding: 20px 14px 30px; border-radius: 9px; }
@@ -455,9 +477,14 @@ body.modal-open { overflow: hidden; }
   .auth-layout { padding: 16px 0 28px; }
   .auth-intro { display: none; }
   .auth-card { padding: 26px 21px; }
+  .operations-project-form .field, .operations-project-form .secondary-button, .operations-project-form .primary-button { width: 100%; }
   .footer { padding: 18px 16px; flex-direction: column; gap: 13px; }
   .footer-copy { align-items: flex-start; flex-direction: column; gap: 4px; }
   .footer-links { width: 100%; flex-wrap: wrap; gap: 10px 20px; }
+}
+
+@media (max-width: 400px) {
+  .brand span { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
