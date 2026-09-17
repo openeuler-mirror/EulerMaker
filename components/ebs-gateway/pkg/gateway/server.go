@@ -1014,6 +1014,17 @@ type authzDecision struct {
 }
 
 func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
+	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "buildconfs" {
+		return authzDecision{}, fmt.Errorf("BuildConf is cluster-scoped")
+	}
+	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) > 0 && parts[0] == "buildconfs" {
+		valid := len(parts) == 1 && r.Method == http.MethodPost || len(parts) == 2 && parts[1] == "default" && (r.Method == http.MethodPut || r.Method == http.MethodPatch)
+		if !valid || !(ident.IsOps() || ident.IsAdmin() || ident.IsSystem()) {
+			return authzDecision{}, fmt.Errorf("BuildConf write requires ops or higher and a supported operation")
+		}
+		injectIdentityHeaders(r, ident)
+		return authzDecision{}, nil
+	}
 	if ident.IsSystem() || ident.IsAdmin() {
 		route := parseRoute(r.URL.Path)
 		if route.resource == "projects" && route.project == "" && r.Method == http.MethodPost {

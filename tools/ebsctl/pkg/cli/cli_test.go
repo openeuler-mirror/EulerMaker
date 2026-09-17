@@ -161,6 +161,9 @@ func TestBuildResourceRejectsUnsupportedCommands(t *testing.T) {
 	for _, args := range [][]string{
 		{"get", "buildresources", "--watch"},
 		{"patch", "buildresource", "project-a", "--patch", `{}`},
+		{"get", "buildconfs", "--watch"},
+		{"delete", "bc", "default", "--yes"},
+		{"delete", "bc", "--all", "--yes"},
 	} {
 		if code := Execute(context.Background(), streams, args); code != 2 {
 			t.Fatalf("args=%v exit code=%d", args, code)
