@@ -204,6 +204,7 @@ body.modal-open { overflow: hidden; }
 .admin-row-actions button + button { margin-left: 12px; }
 .admin-cell-subtitle { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .danger-link { color: #bf3f4a; }
+.danger-link:disabled { color: #9aa6b6; cursor: not-allowed; }
 .danger-button { background: #bd3f4b; }
 .danger-button:hover { background: #a92f3c; }
 .machine-secret-warning { margin: 0 0 20px; color: #95520e; line-height: 1.6; }
@@ -212,6 +213,9 @@ body.modal-open { overflow: hidden; }
 .operations-section + .operations-section { margin-top: 20px; }
 .operations-project-form { margin-bottom: 20px; display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
 .operations-project-form .field { width: min(320px, 100%); }
+.operations-project-form .operations-project-field { width: min(390px, 100%); display: flex; align-items: center; gap: 12px; }
+.operations-project-form .operations-project-field > span { margin: 0; flex: none; white-space: nowrap; font-size: 14px; }
+.operations-project-form .operations-project-field input { min-width: 0; width: auto; flex: 1; }
 .settings-panel { width: min(560px, 100%); }
 
 .modal-backdrop { position: fixed; z-index: 100; inset: 0; padding: 32px 18px; display: grid; place-items: center; overflow-y: auto; background: rgb(15 28 48 / 52%); backdrop-filter: blur(2px); }

@@ -1014,6 +1014,10 @@ type authzDecision struct {
 }
 
 func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
+	protectedRoute := parseRoute(r.URL.Path)
+	if r.Method == http.MethodDelete && protectedRoute.resource == "buildresources" && protectedRoute.project == "default" && protectedRoute.name == "default" && len(protectedRoute.rest) == 0 {
+		return authzDecision{}, fmt.Errorf("global default BuildResource cannot be deleted")
+	}
 	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "buildconfs" {
 		return authzDecision{}, fmt.Errorf("BuildConf is cluster-scoped")
 	}

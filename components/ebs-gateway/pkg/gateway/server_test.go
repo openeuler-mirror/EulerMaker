@@ -846,6 +846,48 @@ func TestOpsCanOperateBuildResources(t *testing.T) {
 	}
 }
 
+func TestDefaultBuildResourceCannotBeDeleted(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}), 100, 200)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		claims jwtClaims
+		want   int
+	}{
+		{"ops", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default", opsClaims(), http.StatusForbidden},
+		{"admin", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default", adminClaims(), http.StatusForbidden},
+		{"system", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default", systemClaims(), http.StatusForbidden},
+		{"trailing slash", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default/", opsClaims(), http.StatusForbidden},
+		{"other rule in default namespace", http.MethodDelete, apiPrefix + "/projects/default/buildresources/other", opsClaims(), http.StatusOK},
+		{"default rule in another project", http.MethodDelete, apiPrefix + "/projects/project-a/buildresources/default", opsClaims(), http.StatusOK},
+		{"update global default rule", http.MethodPut, apiPrefix + "/projects/default/buildresources/default", opsClaims(), http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := upstreamCalls.Load()
+			req := authenticatedRequest(t, tc.method, tc.path, strings.NewReader(`{}`), tc.claims)
+			rec := httptest.NewRecorder()
+			gw.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("expected %d, got %d: %s", tc.want, rec.Code, rec.Body.String())
+			}
+			wantCalls := before
+			if tc.want == http.StatusOK {
+				wantCalls++
+			}
+			if got := upstreamCalls.Load(); got != wantCalls {
+				t.Fatalf("expected %d upstream calls, got %d", wantCalls, got)
+			}
+		})
+	}
+}
+
 func newTestGateway(t *testing.T, upstream http.Handler, rate float64, burst int) *Gateway {
 	t.Helper()
 	secretFile := filepath.Join(t.TempDir(), "jwt-secret")

@@ -509,6 +509,8 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 
 Ops token 仍只携带 `ebs:ops`，不与 `ebs:user` 组合；Gateway 在授权时将 Ops 视为具备普通用户的 Project owner/member 能力，并额外授予跨 Project 的 BuildResource 能力和 Runner 只读能力。Ops 不因此获得其他用户工程的 Project/Build/Job 写权限，也不获得 Admin、System 或 Runner 权限。
 
+`default` 命名空间中的 `default` BuildResource 是系统默认资源规则；Gateway 对所有身份拒绝其 `delete` 请求，其他 BuildResource 仍按上表授权。
+
 矩阵中的权限还受 4.9 节完整对象比较和字段约束。User 只能通过 `/auth/register` 创建；Admin 不能读取或操作 `spec.scopes=["ebs:admin"]` 的 User，也不能设置或重置其他用户的密码。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
 
 Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `runner` claim。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。

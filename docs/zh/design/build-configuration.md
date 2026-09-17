@@ -509,7 +509,7 @@ func EnsureDefaultBuildResource(ctx context.Context, client BuildResourceInterfa
 
 初始化必须走与普通 API 创建相同的 defaulting 和 validation 逻辑，不能直接向 Elasticsearch 写文档。默认对象与 Project 自定义表使用相同的字段校验。
 
-该机制是“启动时确保存在”，不是持续 reconcile：运行中的默认对象被删除后，不会立即自动恢复，直到 apiserver 重启。为降低误删风险，Gateway 应只允许运维角色修改或删除 `default` 命名空间中的 `BuildResource`。如果业务要求删除后立即恢复，应后续增加独立 Controller，不应在请求处理路径内临时创建。
+该机制是“启动时确保存在”，不是持续 reconcile：运行中的默认对象被删除后，不会立即自动恢复，直到 apiserver 重启。因此 Gateway 禁止任何身份删除 `default/default`，但仍允许授权身份更新它；`default` 命名空间中的其他 `BuildResource` 按常规权限管理。不应在请求处理路径内临时创建默认对象。
 
 默认表内容升级遵循 create-only 语义。新版 apiserver 携带的新模板不会覆盖集群中已经存在的对象；默认表的数据升级由运维通过正常 API 更新，以避免部署过程静默改变后续 Job 的资源需求。
 
