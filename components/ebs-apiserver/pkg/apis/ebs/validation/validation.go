@@ -137,7 +137,7 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	if len(obj.Spec.BuildType) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildType"), "buildType is required"))
 	}
-	if len(obj.Spec.Packages) == 0 {
+	if len(obj.Spec.Packages) == 0 && obj.Spec.BuildType != "full" && obj.Spec.BuildType != "incremental" {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "packages"), "at least one package is required"))
 	}
 	if len(obj.Spec.BuildTarget.Os) == 0 {

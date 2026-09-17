@@ -20,6 +20,22 @@ type fakeBuildStorage struct {
 	updates int
 }
 
+func TestPrepareForCreatePackagesByBuildType(t *testing.T) {
+	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
+		t.Run(buildType, func(t *testing.T) {
+			b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: buildType, Packages: []string{"gcc"}}}
+			(&strategy{}).PrepareForCreate(context.Background(), b)
+			if buildType == "full" || buildType == "incremental" {
+				if b.Spec.Packages != nil {
+					t.Fatalf("packages not cleared: %v", b.Spec.Packages)
+				}
+			} else if len(b.Spec.Packages) != 1 || b.Spec.Packages[0] != "gcc" {
+				t.Fatalf("explicit packages changed: %v", b.Spec.Packages)
+			}
+		})
+	}
+}
+
 func (f *fakeBuildStorage) New() runtime.Object { return &ebsv1.Build{} }
 func (f *fakeBuildStorage) Get(context.Context, string, *metav1.GetOptions) (runtime.Object, error) {
 	return f.build.DeepCopy(), nil
