@@ -584,7 +584,7 @@ type RpmRepoList struct {
 
 **Elasticsearch**: 索引 `ebs-buildresources`，文档 ID `{project}/{name}`
 
-Project 对象不存在时如何回退到默认对象，以及 apiserver 如何初始化默认对象，见 [BuildResource 设计文档](./build-resource.md)。
+Project 对象不存在时如何回退到默认对象，以及 apiserver 如何初始化默认对象，见 [BuildResource 设计文档](./build-configuration.md#3-buildresource资源规则)。
 
 `BuildResource` 不注册 `/apis/ebs/v1/buildresources` 全局 API。系统组件、运维工具和普通用户都必须通过明确的 Project 路径访问，避免跨 Project 枚举或误更新资源表。
 
@@ -654,6 +654,44 @@ type BuildResourceList struct {
 ```
 
 ---
+
+## BuildConf（构建配置，待实现）
+
+BuildConf 是集群级配置，首版使用名称 `default`，不设置 namespace 或 status。完整生命周期、权限和消费规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。以下为计划新增的公共 API 类型，尚未表示代码已实现。
+
+```go
+type BuildConf struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+    Spec BuildConfSpec `json:"spec"`
+}
+
+type BuildConfSpec struct {
+    Targets map[string]BuildConfTarget `json:"targets"`
+}
+
+type BuildConfTarget struct {
+    Arches map[string]BuildConfArch `json:"arches"`
+}
+
+type BuildConfArch struct {
+    Image string `json:"image"`
+}
+
+type BuildConfList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items []BuildConf `json:"items"`
+}
+```
+
+| 字段 | 含义 |
+|------|------|
+| `spec.targets` | key 为 BuildTarget.os；允许空映射 |
+| `spec.targets[os].arches` | key 为 BuildTarget.arch；每个 OS 至少一个架构 |
+| `spec.targets[os].arches[arch].image` | 对应目标的容器构建镜像引用，创建 Job 时写入 runtimeSpec.image |
+
+不在该对象中保存镜像凭据或 BuildResource 的资源规则。
 
 ## 七、Job（任务）
 

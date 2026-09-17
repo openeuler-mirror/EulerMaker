@@ -1,6 +1,177 @@
-# BuildResource 设计文档
+# 构建配置设计
 
-## 一、背景与目标
+## 1. 总体职责
+
+本文统一维护 BuildConf 和 BuildResource 设计。两者由 BuildInfo Controller 在创建 Job 时消费，Scheduler 和 Runner 使用 Job 中固化的结果。
+
+| 对象 | 配置内容 | 作用域 | Job 中的结果 |
+|------|----------|--------|-------------|
+| BuildConf | 支持的 OS、Arch 和构建镜像 | 集群级 `default` | `spec.runtimeSpec.image` |
+| BuildResource | spec 软件包及架构的 CPU、内存规则 | Project 级，缺失时回退全局默认表 | `spec.resources` |
+
+BuildConf 为待实现方案；BuildResource 的 API 与默认表已实现，Job 消费规则由 BuildInfo Controller 实现。字段类型统一维护在 [数据模型](data-models.md)。
+
+- [BuildConf：构建环境](#2-buildconf构建环境)
+- [BuildResource：资源规则](#3-buildresource资源规则)
+- [创建 Job 时的组合](#4-创建-job-时的组合)
+
+## 2. BuildConf：构建环境
+
+### 2.1 目标与范围
+
+状态：待实现。BuildConf 是集群级构建配置，替代 CBS `common-conf` 中的 OS、架构和镜像映射，为前端和任务创建方提供同一份数据。
+
+- 前端从配置生成目标 OS、Arch 下拉选项。
+- BuildInfo Controller 根据 Build 的 OS、Arch 选择镜像，并写入 Job。
+- Ops、Admin、System 可以通过 Gateway 修改配置，无需重启服务。
+
+BuildConf 管理构建环境；BuildResource 仍独立管理 CPU、内存需求。首版不包含 Project 级覆盖、镜像凭据、自动探测镜像可用性或新的 watch 源。
+
+### 2.2 对象
+
+资源使用 `ebs/v1`，Kind 为 `BuildConf`，复数为 `buildconfs`。首版只接受名称 `default`，不允许 namespace 或 generateName，不依赖同名 Project。
+
+```yaml
+apiVersion: ebs/v1
+kind: BuildConf
+metadata:
+  name: default
+spec:
+  targets:
+    openEuler-24.03-LTS-SP4:
+      arches:
+        x86_64:
+          image: registry.example.com/build/openeuler:24.03-lts-sp4-amd64
+        aarch64:
+          image: registry.example.com/build/openeuler:24.03-lts-sp4-arm64
+    openEuler-mainline:
+      arches:
+        x86_64:
+          image: registry.example.com/build/openeuler:mainline-amd64
+```
+
+镜像地址为示例，不作为内置可用镜像。
+
+字段定义见 [数据模型](data-models.md#buildconf构建配置待实现)。不设置 status，不额外维护 supportedOS、supportedArch、镜像摘要或配置版本字段；版本复用 metadata.resourceVersion / generation。
+
+#### 2.2.1 校验与解释
+
+| 字段 | 规则 |
+|------|------|
+| `spec.targets` | OS 到目标配置的映射；允许空表，表示暂不接受新的构建目标 |
+| OS key | 非空、无首尾空白，满足 Build 目标 OS 对应 label value 的语法，与 `BuildTarget.os` 精确匹配 |
+| `arches` | 每个 OS 至少包含一个架构；选项仅来自所选 OS，不对全部 OS 的架构取并集 |
+| Arch key | 使用现有 Build 目标架构校验，不写死 x86_64/aarch64，与 `BuildTarget.arch` 精确匹配 |
+| `image` | 必填，合法的容器镜像引用，允许 tag 或 digest；禁止 URL scheme、内嵌凭据和空白；使用镜像引用解析库校验，不联网检查存在性 |
+
+不自动转换 OS 大小写、冒号、连字符，也不从 OS 名称拼接镜像。运维显式维护映射。缺失条目没有默认镜像回退。
+
+### 2.3 API 与权限
+
+```text
+GET/HEAD /apis/ebs/v1/buildconfs
+POST     /apis/ebs/v1/buildconfs
+GET/HEAD /apis/ebs/v1/buildconfs/default
+PUT      /apis/ebs/v1/buildconfs/default
+PATCH    /apis/ebs/v1/buildconfs/default
+```
+
+提供标准对象与 BuildConfList 响应。只支持 JSON Merge Patch 和 JSON Patch，不支持 Strategic Merge Patch。无 DELETE、watch、/status 或 Project scoped 路由；移除 OS、Arch 通过修改 spec 完成，不删除全局对象。
+
+- GET/HEAD 公开只读；带凭据请求遵循 Gateway 现有认证规则。配置中禁止保存密码、token 等秘密。
+- POST/PUT/PATCH 仅允许 Ops、Admin、System，与 Project owner/member 无关；普通用户与 Runner 身份不得写入。
+- apiserver 负责对象结构、字段值和版本校验，Gateway 负责身份权限，不复制字段校验逻辑。
+- POST 已存在返回 `409 AlreadyExists`；更新必须携带匹配的 resourceVersion，PATCH 后的对象也必须满足版本检查。并发修改返回 `409 Conflict`。
+- 非法配置返回 `422 Invalid`，对象缺失返回 `404`，未授权写入返回 `403`。无修改权限时禁止通过其他路径或子资源绕过。
+- spec 实际改变时 generation 递增，元数据更新不递增 generation；不允许用户覆盖服务端 UID、时间及版本信息。
+
+运维客户端更新冲突时重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧配置。
+
+### 2.4 存储与初始化
+
+使用 Elasticsearch，逻辑 alias 为 `ebs-buildconfs`，首个物理索引为 `ebs-buildconfs-v1`，文档 ID 为 `default`，沿用现有 alias 初始化机制。
+
+复用现有通用 mapping，配置保存在 data 中，不新增 OS、Arch、image 的索引字段；客户端直接 GET 全局对象，无需对内部配置做 ES 查询。资源不开放 status.phase/status.stage 过滤。
+
+初始化文件为 `components/ebs-apiserver/pkg/server/default-build-conf.yaml`，随二进制嵌入。初始内容使用 `spec.targets: {}`，不内置未经确认的镜像地址。
+
+启动时在 Ready 前：
+
+1. 确保索引与 alias 存在，读取默认对象。
+2. 对象存在则沿用，不把随版本发布的 YAML 覆盖到线上。
+3. 对象不存在时校验初始化 YAML，并通过 create-only 写入创建。
+4. 多实例创建冲突后读取获胜对象并继续；不覆盖。其他存储错误导致初始化失败，不能在未知结果下覆盖配置。
+
+启动配置不是持续同步源。发布新版本不修改运维数据；导入生产映射由 Ops 使用 API 或前端完成。初始化空表不阻止 apiserver Ready，但新建 Build 会因目标未配置而被拒绝。
+
+### 2.5 构建流程
+
+#### 2.5.1 Project 与 Build
+
+Project.spec.buildTargets 仍记录工程自己的构建目标。Project 创建/更新只做现有字段校验，不强制所有目标当前都在 BuildConf 中，避免全局配置变更后工程无法进行其他编辑。
+
+创建任意类型 Build 时，apiserver 在申请非 single 目标占用、写入 Build 之前读取 BuildConf，校验 `spec.buildTarget.os/arch` 是否有对应映射：
+
+- 目标不存在：`422 Invalid`，错误定位到 `spec.buildTarget`，不创建 Build、不申请占用。
+- 配置对象不存在或读取失败：`503 ServiceUnavailable`，不得当成用户输入错误或使用硬编码回退。
+- 成功：继续已有 Project 目标、packages、并发占用等校验流程。
+
+该检查不是锁定配置：Build 创建成功后配置仍可能变化，因此 Job 创建方必须再次检查。
+
+#### 2.5.2 BuildInfo Controller 创建 Job
+
+每次需要创建新 Job 的 reconcile，读取一次最新 BuildConf；该轮批量创建使用同一个内存快照，按所属 Build 的 OS、Arch 查询镜像。
+
+镜像写入 `Job.spec.runtimeSpec.image`。该字段由配置解析结果确定，Job 模板不得覆盖它；runtimeSpec 其他字段及 BuildResource 解析按原规则执行。首版面向现有容器 rpmbuild Job，不把容器镜像解释为 VM 镜像。
+
+读取失败或映射缺失时，不创建本轮的新 Job，输出结构化错误，按 controller 框架的错误分类及慢速重入策略等待配置恢复；不把配置问题直接写成构建失败。无需注册 BuildConf watch。已有 Job 的观察、结果回收不依赖本轮配置可用性。
+
+Job 创建沿用确定性名称及幂等流程：已存在的同一任务 Job 直接沿用，不能因配置改变更新其镜像；Create 返回结果未知时先确认原请求的写入意图，不能读取新配置后用不同镜像盲目重试同一次创建。
+
+#### 2.5.3 生效边界
+
+首版采用**创建 Job 时取配置**，不在 Build 或 BuildInfo 中额外保存镜像快照：
+
+- 已创建的 Pending/Running Job 均继续使用自身固化的镜像。
+- 修改或移除配置会影响之后创建的 Job，包括正在进行的 Build 中尚未创建的 Job。
+- 同一 Build 可以包含使用不同镜像的 Job；不承诺 Build 级环境快照一致性。
+- Runner 只执行 Job.spec.runtimeSpec，不读取 BuildConf。
+- tag 可被镜像仓库重新指向，Job 固化 tag 不等于固化镜像内容；需要内容可复现时由运维填写 digest 引用。
+
+这也是删除某个 OS/Arch 的语义：禁止后续接收该目标 Build，并暂停该目标尚未创建 Job 的派发，不删除或中止已有任务。恢复映射后重新调和即可继续。
+
+### 2.6 前端与 ebsctl
+
+“运维管理”新增“构建配置”入口，Ops 及以上支持按 OS/Arch 增删行、填写镜像，并支持完整 spec 的 YAML/JSON 编辑。两种模式共用同一份草稿，切换不得丢字段；保存携带原 resourceVersion。删除目标前提示对进行中 Build 的影响。
+
+工程创建及工程目标编辑页面：
+
+- 从 BuildConf 获取 OS 选项，选中 OS 后展示其 arches；选项按名称排序，不维护第二份前端列表。
+- 新行默认 OS 未选择；切换 OS 后，原 Arch 不受支持则清空，要求重新选择。
+- 空配置显示“暂无可用构建目标”；配置请求失败显示错误并支持重试，不回退到硬编码选项。
+- 旧工程不受支持的目标仍显示原值并标注“不再支持”；不静默删除或替换。未修改的旧目标不阻止保存其他工程配置。
+- 发起 Build 时，对不支持的目标禁用提交并给出提示；最终仍以 apiserver 校验为准。
+
+ebsctl 注册集群级 BuildConf 的 get/list/create/replace/patch；`-p/-n` 不改变其路径。delete/watch 返回不支持。不导入镜像仓库凭据。
+
+### 2.7 实现与验收
+
+| 模块 | 修改范围 |
+|------|----------|
+| 公共 api | BuildConf 类型、List、scheme/deepcopy 注册 |
+| apiserver | storage、校验、初始化、ES alias、OpenAPI、Build create 校验 |
+| gateway | 公开读取白名单、Ops 及以上写权限、集群级路由识别 |
+| controller-manager | 类型化读取接口，BuildInfo Controller 创建 Job 时解析镜像 |
+| frontend | 运维配置编辑、OS/Arch 选项、不可用目标提示 |
+| ebsctl | 集群级资源与允许操作注册 |
+
+实现时使用现有可重复执行的代码生成脚本，不手工维护独立 OpenAPI 文件。
+
+验收至少覆盖：合法/非法镜像和目标、空配置、两架构不同镜像、无权限写入、更新冲突、多实例初始化不覆盖、未配置目标创建 Build 不留下占用、配置读取失败、批量 Job 使用同一配置快照、Job 创建未知结果确认、配置更新不修改已有 Job、删除目标后新任务停发及恢复、前端旧目标保留和请求失败提示。
+
+## 3. BuildResource：资源规则
+
+### 3.1 背景与目标
 
 软件包构建所需的 CPU 和内存差异较大。若所有构建 Job 使用同一套资源参数，资源较小的包会浪费 Runner 容量，资源较大的包则可能因资源不足而失败。
 
@@ -24,21 +195,21 @@
 - GPU、临时存储、网络带宽等扩展资源；
 - 单个软件包资源项的独立 REST API。
 
-## 二、设计假设
+### 3.2 设计假设
 
 当前设计基于以下假设：
 
 1. 软件包标识使用 spec 包名，例如 `gcc`、`kernel`，不使用最终生成的二进制 RPM 子包名。
-2. 每个 Project 只维护一张有效资源表，其名称固定为 Project 名。
+2. 每个 Project 只维护一张有效资源表，约定以 Project 名查找有效资源表。
 3. 资源表与 OS 无关，同一份配置适用于该 Project 的全部 Build Target OS。
 4. CPU 和内存使用现有 Job 资源数量字符串格式，例如 CPU 使用 `"8"`，内存使用 `"16Gi"`。
 5. BuildInfo Controller 负责读取资源表并创建 Job；Scheduler 只读取 `Job.spec.resources.requests`。
 6. `default` 是系统保留命名空间，其中保存所有 Project、所有 OS 共享的默认表。
 7. apiserver 启动时保证默认表存在，但不覆盖已经存在的默认表。
 
-## 三、API 对象
+### 3.3 API 对象
 
-### 3.1 资源范围
+#### 3.3.1 资源范围
 
 `BuildResource` 是 Project scoped 资源。Project 通过 API 路径和对象的 `metadata.namespace` 表达，不在 `spec` 中重复记录。
 
@@ -65,16 +236,16 @@ DELETE /apis/ebs/v1/projects/{project}/buildresources/{project}
 
 不提供 `/apis/ebs/v1/buildresources` 全局 API。apiserver 不注册该路由，Gateway、BuildInfo Controller 和 ebsctl 也不得依赖全局端点。运维角色需要操作多个 Project 时，应逐个使用 Project scoped API。
 
-Project 自定义表的名称必须等于 Project 名。例如：
+Project 自定义表按同名约定维护。例如：
 
 ```text
 namespace: openeuler-24-03-lts-sp4
 name:      openeuler-24-03-lts-sp4
 ```
 
-系统默认表同样遵循该规则，使用 `default/default`。确定性名称保证每个 Project 最多有一个有效资源表，调用方也不需要先执行 list 查找对象。
+系统默认表使用 `default/default`。调用方按约定名称读取，不需要先执行 list 查找；该约定不作为名称与命名空间必须相等的校验依据。
 
-### 3.2 系统默认对象
+#### 3.3.2 系统默认对象
 
 系统默认表使用以下固定身份：
 
@@ -109,7 +280,7 @@ spec:
 
 首次部署时允许默认对象使用空 `packages`，此时表级 `spec.default` 对所有软件包生效。省略的 limits 分别取同级 requests，因此有效 limits 同样为 4 CPU、8Gi 内存。运维可在默认对象创建后通过 API 逐步补充软件包专属配置。
 
-### 3.3 数据模型
+#### 3.3.3 数据模型
 
 `BuildResource`、`BuildResourceList`、`BuildResourceSpec`、`PackageResourceConfig` 和复用的 `ResourceRequirements` 的 Go 类型、JSON tag、必填性及字段说明统一维护在 [data-models.md](./data-models.md)。本文不重复定义字段，只说明对象的初始化、回退、匹配和消费语义。
 
@@ -120,7 +291,7 @@ spec:
 - 避免数组中出现重复软件包或重复架构；
 - YAML 中更适合维护大规模软件包清单。
 
-## 四、对象示例
+### 3.4 对象示例
 
 ```yaml
 apiVersion: ebs/v1
@@ -178,7 +349,7 @@ spec:
             memory: 64Gi
 ```
 
-## 五、匹配规则
+### 3.5 匹配规则
 
 BuildInfo Controller 根据以下输入查询资源需求：
 
@@ -188,7 +359,7 @@ project + specName + arch
 
 解析分为“选择对象”和“选择对象内配置”两个阶段。
 
-### 5.1 选择 BuildResource 对象
+#### 3.5.1 选择 BuildResource 对象
 
 BuildInfo Controller 按以下顺序读取对象：
 
@@ -201,7 +372,7 @@ BuildInfo Controller 按以下顺序读取对象：
 
 `project == "default"` 时只读取一次 `default/default`，不重复执行回退。
 
-### 5.2 选择对象内资源配置
+#### 3.5.2 选择对象内资源配置
 
 选定一个 `BuildResource` 后，按以下顺序逐字段覆盖：
 
@@ -241,7 +412,7 @@ func Resolve(table BuildResource, specName, arch string) (ResourceRequirements, 
 }
 ```
 
-## 六、BuildInfo 与 Job 集成
+### 3.6 BuildInfo 与 Job 集成
 
 资源表仅作为创建 Job 时的配置来源，不作为 Scheduler 的直接输入：
 
@@ -260,11 +431,11 @@ Job.spec.resources
         └── limits   → Runner 限制构建容器
 ```
 
-## 七、校验规则
+### 3.7 校验规则
 
 apiserver 创建或更新对象时执行以下校验：
 
-### 7.1 对象级校验
+#### 3.7.1 对象级校验
 
 - `metadata.name` 必须符合 DNS1123 label；
 - `metadata.namespace` 必须存在，并与 API 路径中的 Project 一致；
@@ -274,7 +445,7 @@ apiserver 创建或更新对象时执行以下校验：
 - `default/default` 允许 `spec.packages` 为空，但必须声明有效的 `spec.default`；
 - 软件包键允许使用 `kernel:kernel-rt` 形式表示 multibuild 子包；冒号分隔的每一段都必须是有效的 spec 包名；
 
-### 7.2 软件包与架构校验
+#### 3.7.2 软件包与架构校验
 
 - 软件包 Map key 必须为非空合法 spec 名称；
 - 软件包必须至少声明 `default` 或一个 `arches` 条目；
@@ -283,7 +454,7 @@ apiserver 创建或更新对象时执行以下校验：
 - Build Target、Runner label 和资源表必须使用完全一致的架构名称，apiserver 不自动转换 `risc-v`、`riscv64` 等别名；
 - Map 结构天然禁止同一个软件包出现重复架构。
 
-### 7.3 资源数量校验
+#### 3.7.3 资源数量校验
 
 - 当前只允许 `cpu` 和 `memory` 两种资源键；
 - 软件包 default 和架构配置可以只声明 CPU 或 memory，缺失字段按架构、软件包、表级 default 的顺序继承；
@@ -296,9 +467,9 @@ apiserver 创建或更新对象时执行以下校验：
 
 未知资源键应直接拒绝，而不是忽略，以防 `memroy` 等拼写错误导致 Job 缺少有效资源约束。
 
-## 八、apiserver 启动初始化
+### 3.8 apiserver 启动初始化
 
-apiserver 通过 `go:embed` 内置全局默认 `BuildResource` JSON 清单。初始清单使用表级 `spec.default` 覆盖所有软件包，不把软件包明细硬编码成 Go 字面量；后续可通过普通 API 更新软件包专属配置。
+apiserver 通过 `go:embed` 内置全局默认 `BuildResource` YAML 清单（`components/ebs-apiserver/pkg/server/default-build-resource.yaml`）。初始清单使用表级 `spec.default` 覆盖所有软件包，不把软件包明细硬编码成 Go 字面量；后续可通过普通 API 更新软件包专属配置。
 
 apiserver 在完成存储初始化、注册 REST storage 之后，对外进入 Ready 之前执行 `EnsureDefaultBuildResource`：
 
@@ -336,13 +507,13 @@ func EnsureDefaultBuildResource(ctx context.Context, client BuildResourceInterfa
 }
 ```
 
-初始化必须走与普通 API 创建相同的 defaulting 和 validation 逻辑，不能直接向 Elasticsearch 写文档。默认对象同样满足名称等于命名空间的校验，不需要额外的命名例外。
+初始化必须走与普通 API 创建相同的 defaulting 和 validation 逻辑，不能直接向 Elasticsearch 写文档。默认对象与 Project 自定义表使用相同的字段校验。
 
 该机制是“启动时确保存在”，不是持续 reconcile：运行中的默认对象被删除后，不会立即自动恢复，直到 apiserver 重启。为降低误删风险，Gateway 应只允许运维角色修改或删除 `default` 命名空间中的 `BuildResource`。如果业务要求删除后立即恢复，应后续增加独立 Controller，不应在请求处理路径内临时创建。
 
 默认表内容升级遵循 create-only 语义。新版 apiserver 携带的新模板不会覆盖集群中已经存在的对象；默认表的数据升级由运维通过正常 API 更新，以避免部署过程静默改变后续 Job 的资源需求。
 
-## 九、更新与并发
+### 3.9 更新与并发
 
 该对象是整张总表，更新任意软件包都会改变同一个对象。因此客户端更新时必须携带最新的 `metadata.resourceVersion`，发生冲突时重新获取、合并并重试，不允许无条件覆盖。
 
@@ -356,7 +527,7 @@ func EnsureDefaultBuildResource(ctx context.Context, client BuildResourceInterfa
 
 批量生成工具应按软件包 key 做稳定排序后输出 YAML，以降低代码评审时的无关 diff。JSON/对象语义不依赖 Map 顺序。
 
-## 十、存储与容量约束
+### 3.10 存储与容量约束
 
 总表对象可能包含数千或数万个软件包，设计和实现时必须评估序列化后的对象大小。建议：
 
@@ -368,7 +539,7 @@ func EnsureDefaultBuildResource(ctx context.Context, client BuildResourceInterfa
 
 若真实数据超过 apiserver、网关或 Elasticsearch 的安全请求限制，应重新评估“单对象总表”的约束。此时可保持对外的逻辑总表语义，但在存储层引入分片；首版不实现分片。
 
-## 十一、权限建议
+### 3.11 权限建议
 
 BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Project 校验 owner/member 关系。授权规则如下：
 
@@ -380,7 +551,7 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 
 普通 Project owner/member 禁止创建、更新、Patch 或删除任何 `BuildResource`，也不能通过 `default` 保留作用域路径读取全局默认对象。只有运维角色和 apiserver 启动初始化身份具有写权限。BuildInfo Controller 具有读取权限，以便执行回退。
 
-## 十二、实现范围
+### 3.12 实现范围
 
 落地该设计需要完成：
 
@@ -392,6 +563,17 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 6. 在 ebsctl 中增加 get/list/create/update/delete 支持；
 7. 提供内置默认表清单，并在 apiserver Ready 前于保留的 `default` 作用域幂等创建默认对象；
 8. 在 BuildInfo Controller 中实现 Project 优先、`default` 回退的对象查询、缓存与配置匹配；
-9. 创建 Job 时写入 `Job.spec.resources` 和包含实际来源命名空间的审计注解；
+9. 创建 Job 时写入 `Job.spec.resources`；
 10. 增加 API、初始化、多副本并发创建、回退边界、匹配优先级、并发更新和大对象边界测试；
 11. 更新统一数据模型文档。
+
+## 4. 创建 Job 时的组合
+
+BuildInfo Controller 创建新 Job 时：
+
+1. 依据 Build 的 OS、Arch 从 BuildConf 当前快照解析镜像，见 2.5。
+2. 选择 Project BuildResource，只有对象不存在才回退 `default/default`；在选定表内按默认值、spec 软件包、架构逐字段解析，见 3.5。
+3. 两部分解析都成功后，将镜像和资源需求写入同一个 Job 创建请求；任一配置不可用时不派发该新 Job。
+4. 已存在 Job 沿用，不因配置更新重写；创建结果未知时先确认原写入意图。
+
+两张表独立更新，不提供跨对象原子快照，也不承诺同一 Build 的全部 Job 使用相同配置版本。共同的生效边界是新 Job 创建，具体权限、初始化和错误规则以各资源章节为准。
