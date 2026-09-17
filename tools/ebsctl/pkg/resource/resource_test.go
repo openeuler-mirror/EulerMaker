@@ -22,6 +22,22 @@ func TestResolveAliasesAndPaths(t *testing.T) {
 	}
 }
 
+func TestBuildConfScopeAndOperations(t *testing.T) {
+	for _, alias := range []string{"buildconf", "buildconfs", "BuildConf", "bc"} {
+		definition, err := Resolve(alias)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path, err := definition.ObjectPath("ignored-project", "default")
+		if err != nil || path != "/apis/ebs/v1/buildconfs/default" {
+			t.Fatalf("path=%s err=%v", path, err)
+		}
+		if definition.SupportsWatch() || !definition.NoDelete || !definition.SupportsPatch() {
+			t.Fatalf("unexpected operations: %+v", definition)
+		}
+	}
+}
+
 func TestBuildResourceAliasesAndPaths(t *testing.T) {
 	for _, alias := range []string{"buildresource", "buildresources", "BuildResource", "br"} {
 		definition, err := Resolve(alias)

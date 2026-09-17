@@ -22,10 +22,12 @@ type Definition struct {
 	Namespaced bool
 	NoPatch    bool
 	NoWatch    bool
+	NoDelete   bool
 	Object     func() runtime.Object
 }
 
 var definitions = []Definition{
+	{Kind: "BuildConf", Singular: "buildconf", Plural: "buildconfs", Short: "bc", NoWatch: true, NoDelete: true, Object: func() runtime.Object { return &ebsv1.BuildConf{} }},
 	{Kind: "Project", Singular: "project", Plural: "projects", Short: "proj", Object: func() runtime.Object { return &ebsv1.Project{} }},
 	{Kind: "Snapshot", Singular: "snapshot", Plural: "snapshots", Short: "snap", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Snapshot{} }},
 	{Kind: "Build", Singular: "build", Plural: "builds", Short: "build", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Build{} }},

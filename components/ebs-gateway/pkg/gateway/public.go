@@ -54,6 +54,9 @@ func isPublicReadRoute(r *http.Request) bool {
 		return false
 	}
 	parts, ok := ebsAPIPathParts(r.URL.Path)
+	if ok && len(parts) > 0 && parts[0] == "buildconfs" {
+		return len(parts) == 1 || len(parts) == 2 && parts[1] == "default"
+	}
 	if !ok || len(parts) == 0 || parts[0] != "projects" {
 		return false
 	}
@@ -124,7 +127,7 @@ func isPublicCollectionPath(path string) bool {
 	if !ok {
 		return false
 	}
-	if len(parts) == 1 && parts[0] == "projects" {
+	if len(parts) == 1 && (parts[0] == "projects" || parts[0] == "buildconfs") {
 		return true
 	}
 	if len(parts) != 3 || parts[0] != "projects" || !validPathSegment(parts[1]) {

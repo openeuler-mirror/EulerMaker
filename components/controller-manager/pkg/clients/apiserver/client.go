@@ -271,7 +271,7 @@ func validateTarget(gvr schema.GroupVersionResource, namespace, name string) err
 	if name == "" {
 		return fmt.Errorf("resource name is required")
 	}
-	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners"
+	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "buildconfs"
 	if clusterScoped && namespace != "" {
 		return fmt.Errorf("cluster-scoped resource %s requires an empty namespace", gvr.Resource)
 	}
@@ -288,7 +288,7 @@ func validateProjectScopedResource(gvr schema.GroupVersionResource, project stri
 	if project == "" {
 		return fmt.Errorf("project is required")
 	}
-	if gvr.Resource == "projects" || gvr.Resource == "runners" {
+	if gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "buildconfs" {
 		return fmt.Errorf("resource %s is not project-scoped", gvr.Resource)
 	}
 	return nil
@@ -370,6 +370,8 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return nil, fmt.Errorf("unsupported resource %s", gvr)
 	}
 	switch gvr.Resource {
+	case "buildconfs":
+		return &ebsv1.BuildConfList{}, nil
 	case "projects":
 		return &ebsv1.ProjectList{}, nil
 	case "snapshots":
@@ -396,6 +398,8 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return nil, fmt.Errorf("unsupported resource %s", gvr)
 	}
 	switch gvr.Resource {
+	case "buildconfs":
+		return &ebsv1.BuildConf{}, nil
 	case "projects":
 		return &ebsv1.Project{}, nil
 	case "snapshots":
@@ -420,6 +424,11 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 func listPage(list runtime.Object) (source.ListPage, error) {
 	page := source.ListPage{}
 	switch value := list.(type) {
+	case *ebsv1.BuildConfList:
+		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
+		for i := range value.Items {
+			page.Items = append(page.Items, value.Items[i].DeepCopy())
+		}
 	case *ebsv1.ProjectList:
 		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
 		for i := range value.Items {

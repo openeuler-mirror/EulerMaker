@@ -285,6 +285,9 @@ func (a *App) deleteCommand() *cobra.Command {
 			if err != nil {
 				return UsageError("%v", err)
 			}
+			if definition.NoDelete {
+				return UsageError("%s does not support delete", definition.Kind)
+			}
 			_, resolved, err := a.loadResolved(true)
 			if err != nil {
 				return err
