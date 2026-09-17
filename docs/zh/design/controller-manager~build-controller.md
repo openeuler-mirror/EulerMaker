@@ -241,9 +241,22 @@ spec: {}
 status:
   repository:
     phase: Pending          # Pending / Processing / Ready / Failed，均非对象终态
+    repositoryUID: DB3A8CE2-00CD-4C89-9C20-ADA417C83155
+    contentURL: https://artifact-manager/repositories/v1/DB3A8CE2-00CD-4C89-9C20-ADA417C83155
+    # 上一个发布成功 Build 同名 RpmRepo 的 status.repository.repositoryUID / contentURL；无历史发布时都省略
   release: null             # 尚未进入发布阶段
   conditions: []
 ```
+
+**基线初始化**
+
+- 生效范围：所有 `buildType != single` 的 Build；`single` 只创建 Snapshot 与 BuildInfo，不创建、不读取本轮同名 RpmRepo。
+- 只在 ensure 按确定性名称 GET 未命中、准备创建时读取一次历史对象，因此在创建那一刻固化一次：`Build.status.baseBuildRef.Name` 为空（`baseBuildRef={}`，即没有上一个发布成功的 Build）时不读取、不写入；已存在的 RpmRepo（含 `metadata.deletionTimestamp` 非空的对象）一律沿用，不重读、不覆盖，后续轮次也不再改写该字段。
+- 取值来源是历史 Build 同名 RpmRepo 的 `status.repository.repositoryUID` 与 `status.repository.contentURL`，即过程仓的不可变版本标识与地址（形如 `https://artifact-manager/repositories/v1/{repositoryUID}`）；它们不是 `Build.status.repo`（正式发布稳定入口），也不是 `status.release.*`。不要求历史对象 `phase=Ready`，两个字段都非空即可继承：种入后本轮过程仓的当前版本初期即继承版本，尚未产生本轮自己的版本。
+- 只有在「确定没有可继承基线」时降级：历史对象 NotFound，或历史对象存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空。此时降级为不带宽带的创建（两个字段都不写入，避免版本 UID 与地址不匹配），输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryUnavailable base_build=<name> error=<error>`，本轮继续正常推进，不写 Build 终态、不 requeue。
+- 历史对象读取失败（网络错误、超时、408/429/5xx）不降级：本轮不创建 RpmRepo、不写 `Build.status`，把 `classifyReadError` 的分类结果返回给框架——临时错误走退避重试（依赖 30s 轮询复查，下一次读取成功后正常创建与推进），并输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryReadFailed base_build=<name> retryable=<bool> error=<error>`；`401/403/400/422` 与响应身份契约错误按 `controller.NewPermanentError` 返回（同一日志 `retryable=false`）；Manager context 取消返回 `ctx.Err()`，同样不创建、不写 status。
+- `repositoryUID` 与 `contentURL` 是除 `Build.status` 之外本控制器唯一带入的子资源 status 字段，且只出现在创建请求中；创建后对 RpmRepo status 的维护仍归 RpmRepo Controller。
+- 待对齐欠账：本文档不修改 `docs/zh/design/artifact-manager.md`，其 9.3.3「首次推进根据 `Build.status.baseBuildRef` 读取对应的已发布 RpmRepo 版本」仍在描述 RpmRepo Controller 自行推导基线；消费侧契约需后续单独对齐为以种入的 `status.repository.repositoryUID` / `contentURL` 为准，避免出现两个基线来源。UID 已显式种入，消费方不需要再从 `contentURL` 末段解析 UID。另需与该文档 9.3.4「`baseRepositoryUID` 必须指向已经 Ready 的仓库」对齐：本控制器只要求两个字段非空、不检查历史过程仓 phase，历史仓处于 Creating 或 Failed 时基线是否可用必须在消费侧契约中明确，否则出现"种入成功但推进被拒"的缺口。
 
 发布后仅消费以下状态字段，完整结构见 data-models.md：
 
@@ -260,10 +273,12 @@ status:
 | ------------------------------------- | ------------------ | ---------------------------------------------- |
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 `Build.metadata.name` 同名，namespace 来自 Build |
 | `RpmRepo.spec`                        | Build Controller   | 空 `{}`                                         |
+| `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时种入） | 创建时复制历史过程仓的不可变版本 UID 作为本轮过程仓的当前版本；已有对象不覆盖；随后由 RpmRepo Controller 在推进自己的版本时覆盖 |
+| `RpmRepo.status.repository.contentURL` | Build Controller（创建时种入） | 与 `repositoryUID` 同源同时种入，复制历史过程仓的不可变地址；已有对象不覆盖；随后由 RpmRepo Controller 在推进自己的版本时覆盖 |
 | `RpmRepo.status.release.phase`        | RpmRepo Controller | 发布收口门禁与结论来源：`Ready` → `Success/publish`、`Failed` → `Failed/publish`；其余取值（含 `release` 缺失）表示等待 |
 | `RpmRepo.status.release.contentURL`   | RpmRepo Controller | 正式发布稳定入口地址；仅在 `release.phase=Ready` 时复制到 `Build.status.repo` |
 
-上表仅列 Build Controller 消费的字段；其余字段（`status.repository.*`、`status.release` 的其它字段、`status.conditions`）由 RpmRepo Controller 维护，Build 不读取。
+上表仅列 Build Controller 消费与创建时种入的字段；除 `status.repository.repositoryUID` 与 `status.repository.contentURL` 之外的其他 status 字段（`repository` 的其它字段、`status.release`、`status.conditions`）由 RpmRepo Controller 维护，Build 不读取。
 
 ### 4.4 BuildInfo
 
@@ -312,8 +327,8 @@ status:
 | `Prepared` / 空 | ensure BuildInfo | `Processing` / `build` |
 | `Processing` / `build` | BuildInfo GET 返回 NotFound | `Failed` / `build` |
 | `Processing` / `build` | 等待 `BuildInfo.status.phase=Completed`；完成后按以下分支处理 | — |
-|  | `Build.spec.buildType=single` 且构建失败（汇总规则见 7.4） | `Failed` / `build` |
-|  | `buildType=single` 且单包构建成功，或非 single 且 `Build.spec.buildTarget.publishFlag=false`（由本控制器判定跳过发布） | `Skipped` / `publish` |
+|  | `Build.spec.buildType=single` 且结果汇总失败（build 或 install 非 Succeeded，汇总规则见 7.4） | `Failed` / `build` |
+|  | `buildType=single` 且结果汇总成功，或非 single 且 `Build.spec.buildTarget.publishFlag=false`（由本控制器判定跳过发布） | `Skipped` / `publish` |
 |  | 其余情况（非 single 且 `Build.spec.buildTarget.publishFlag=true`） | `Processing` / `publish` |
 | `Processing` / `publish` | RpmRepo GET 返回 NotFound | `Failed` / `publish` |
 | `Processing` / `publish` | 等待 RpmRepo 发布收口：`RpmRepo.status.release` 缺失或 `release.phase` 不是 `Ready` / `Failed`；未收口时等待 | — |
@@ -339,6 +354,7 @@ status:
 2. **创建对象**
    - 按约定 spec 执行 POST。
    - POST 返回 `WriteError.Outcome=Rejected` 且为 409（AlreadyExists）：优先按创建冲突处理，GET 后沿用现有对象，不修改 spec；不直接返回通用 Conflict 的 `RequeueAfter: 1s`。GET 成功后仍检查 deletionTimestamp：未删除则沿用并继续本阶段，删除中则按第 1 步等待；GET NotFound 表示并发删除，返回 `RequeueAfter: 1s`，下轮重新 ensure，本轮不再次 POST；其他 GET 错误按读取错误分类返回。
+   - POST 返回 404 表示目标路由或父对象暂不可用（apiserver 版本落后、Project 尚未创建等），按临时错误退避重试：既不按 AlreadyExists 沿用，也不按永久错误收口；每次创建拒绝输出 `controller` / `key` / `kind` / `name` / `operation` / `status` / `retryable` 日志。
 3. **结果未知处理**
    - 仅当 `WriteError.Outcome=Unknown` 时：
      - 先 GET 确认实际结果；
@@ -351,7 +367,7 @@ ensure 不推进子资源状态、不等待子资源就绪、不覆盖已存在 
 
 | 阶段 | 操作 | NotFound 处理 |
 | --- | --- | --- |
-| Pending（baseBuildRef 已固化） | ensure Snapshot → 等待 Active → ensure RpmRepo（仅非 single）→ 进入 Prepared | 在本阶段按顺序创建 |
+| Pending（baseBuildRef 已固化） | ensure Snapshot → 等待 Active → ensure RpmRepo（仅非 single，创建前按 4.3 固化过程仓基线）→ 进入 Prepared | 在本阶段按顺序创建 |
 | Prepared | ensure BuildInfo，存在且未删除后进入 Processing/build；不重新查询 Snapshot/RpmRepo | 从 Project 复制 bootstrapRepo 并创建 BuildInfo |
 | Processing/build | GET BuildInfo，等待 Completed；不查询 Snapshot/RpmRepo | 记录异常，不创建任何子资源，写入 Failed/build |
 | Processing/publish（仅非 single） | GET RpmRepo，判断 release.phase；不查询 Snapshot/BuildInfo | 记录异常，不创建任何子资源，写入 Failed/publish |
@@ -400,7 +416,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
       - `Build.status.baseBuildRef.name`（上一个发布成功 Build 的 `Build.metadata.name`）
       - `Build.status.baseBuildRef.repo`（上一个发布成功 Build 的 `Build.status.repo`）
   - 写入后立即返回零值 + `nil`，`ensure Snapshot` / `ensure RpmRepo` 与后续等待从下一轮继续；`{}` 与实际值同样视为已处理。
-- 按第六章 Pending 行先 ensure Snapshot 并等待 Active，再 ensure RpmRepo（仅非 single）。
+- 按第六章 Pending 行先 ensure Snapshot 并等待 Active，再 ensure RpmRepo（仅非 single，按 4.3 固化过程仓基线）。
 - 满足后写 `Build.status.phase=Prepared`。
 
 ### 7.3 Prepared
@@ -414,15 +430,15 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 ### 7.4 Processing/build
 
 - 按第六章 Processing/build 行读取 BuildInfo，缺失时按第六章写 Failed/build 并结束；存在时等待 BuildInfo Completed。
-- 统一汇总规则（single 与非 single 共用）：`specStatus` 非空且全部 `value.build.status == Succeeded` 才判定成功；空 map 或任一状态非 Succeeded（含缺失、未完成、Failed、Aborted）均判定失败。结果不依赖 map 遍历顺序，目标 spec 的完整性由 4.4 的 Completed 契约保证。
+- 统一汇总规则（single 与非 single 共用）：`specStatus` 非空且每个目标 spec 的 `value.build.status == Succeeded` 且 `value.install.status == Succeeded` 才判定成功；空 map、任一 spec 的 `build` 或 `install` 不是 `Succeeded`（含缺失/未评估、未完成、Failed、Aborted）均判定失败。结果不依赖 map 遍历顺序，目标 spec 的完整性由 4.4 的 Completed 契约保证。
 - 若 `Build.spec.buildType=single`：
-  - 构建失败：
+  - 结果汇总失败（build 或 install 非 Succeeded）：
     - 写：
       - `Build.status.phase=Failed`
       - `Build.status.stage=build`
       - `Build.status.endTime`
       - `BuildSucceed=False/BuildFailed`
-  - 构建成功（跳过发布）：
+  - 结果汇总成功（跳过发布）：
     - 写：
       - `Build.status.phase=Skipped`
       - `Build.status.stage=publish`
@@ -430,7 +446,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
       - `BuildSucceed=True/BuildSucceeded`
 - 否则：
   - 按上述汇总结果写 `BuildSucceed`：成功为 `True/BuildSucceeded`，失败为 `False/BuildFailed`。
-  - `BuildSucceed` 仅记录所有包是否完全构建成功，不作为发布门禁。
+  - `BuildSucceed` 记录所有目标 spec 的构建与安装依赖是否全部成功，不作为发布门禁。
   - 若 `Build.spec.buildTarget.publishFlag=false`（跳过发布），写：
     - `Build.status.phase=Skipped`
     - `Build.status.stage=publish`
@@ -475,7 +491,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 | 写入 `baseBuildRef` 后本轮返回、等待 `Snapshot.status.phase=Active`、`BuildInfo.status.phase=Completed`、RpmRepo 发布收口（`RpmRepo.status.release.phase` 为 `Ready` / `Failed`） | 零值 + `nil`（依赖 PollingSource 周期 resync 复查） |
 | 子资源 POST 返回 409 AlreadyExists（优先匹配） | 按第六章 GET 后沿用；返回后续阶段结果，不直接套用通用 Conflict 重入；GET NotFound 时延迟 1s 重新 ensure |
 | `/status` 或其他写入返回 409 Conflict（不含上述 AlreadyExists） | `ReconcileResult{RequeueAfter: 1s}` + `nil`（下轮重新 GET 并按第七章重算目标 status，不使用立即重入，避免持续冲突形成热循环） |
-| API 临时错误（408、429、5xx、网络错误或超时；写入 Unknown 先执行确认流程） | 零值 + 原始错误（BaseController 走 `AddRateLimited`；超过 `--controller-max-retries` 后转慢速指数退避并持续重入） |
+| API 临时错误（404、408、429、5xx、网络错误或超时；写入 Unknown 先执行确认流程） | 零值 + 原始错误（BaseController 走 `AddRateLimited`；超过 `--controller-max-retries` 后转慢速指数退避并持续重入） |
 | 429 / 503 且响应带 `Retry-After` | 零值 + 携带 RetryAfter 的 `client.WriteError`（框架按该延时重入） |
 | API/配置永久错误、非法 `(phase, stage)`、输入或客户端错误 | 不写业务终态或失败条件；记录错误并返回零值 + `controller.NewPermanentError(err)`（框架 Forget 仅清除本次队列退避；后续仍会被 PollingSource 周期 resync 重新入队） |
 | 构建或发布确定性失败，或 Processing 直接依赖确认缺失，且终态与条件已通过一次 `/status` 写入 | 零值 + `controller.NewPermanentError(err)`（终态即该 key 的终点） |
@@ -498,7 +514,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 
 | type             | 含义           | `status="True"` 的写入时机                                     | `status="False"` 的写入时机                                    |
 | ---------------- | -------------- | ----------------------------------------------------------- | ------------------------------------------------------------ |
-| `BuildSucceed` | 构建是否成功 | BuildInfo Completed 后，按 7.4 汇总成功（reason/message 为 BuildSucceeded） | BuildInfo Completed 后，按 7.4 汇总失败（reason/message 为 BuildFailed）；Processing/build 的 BuildInfo NotFound 时为 ChildResourceMissing |
+| `BuildSucceed` | 构建与安装依赖是否全部成功 | BuildInfo Completed 后，按 7.4 汇总成功（reason/message 为 BuildSucceeded） | BuildInfo Completed 后，按 7.4 汇总失败（reason/message 为 BuildFailed）；Processing/build 的 BuildInfo NotFound 时为 ChildResourceMissing |
 | `PublishSucceed` | 发布是否成功   | `RpmRepo.status.release.phase=Ready`（本控制器写 `reason/message=PublishSucceeded`） | `RpmRepo.status.release.phase=Failed`（本控制器写 `reason/message=PublishFailed`）；Processing/publish 的 RpmRepo NotFound 时为 ChildResourceMissing；对象存在且 `release.phase` 未到终态时不写 |
 
 各阶段写入规则：
@@ -668,18 +684,19 @@ buildinfos:     get, create
 - 写入结果未知确认：模拟 `Pending → Prepared` 响应丢失后 GET 返回 Prepared，断言按原意图确认成功并结束本轮，不生成 Processing 目标、不 ensure 后续子资源；覆盖正常推进、baseBuildRef（含 nil/空对象区别）、时间序列化精度和失败终态的返回结果；
 - 写入前并发校验：入口 GET 后、写入前 GET 时分别模拟 NotFound、UID 改变、外部 Aborted 和删除中对象，断言不调用 UpdateBuildStatus 且返回零值 + `nil`；同 UID 非终态对象仅 resourceVersion 改变时，断言不提交旧目标、返回 `RequeueAfter: 1s`，下一轮重新计算。UID/resourceVersion 均未变化时允许写入并保留无关字段；写入前 GET 后再发生并发更新时，由 PUT Conflict 结束本轮并延迟重入；
 - 确认比较与异常：目标字段缺失或不一致时返回 `RequeueAfter: 1s`，下一轮重新 GET 调和；resourceVersion、无关 status 字段或条件顺序变化不影响确认；GET 返回 NotFound、不同 UID、外部 Aborted、删除中对象时不写入；GET 失败或 context 取消时不重放 PUT、不创建后台确认任务；
-- 队列结果映射（见 7.6）：逐分支断言返回值形态——Build 不存在、已终态、状态无变化与全部等待类分支（等待 Snapshot Active / BuildInfo Completed / RpmRepo 发布收口）返回零值 + `nil`；409 Conflict 返回 `ReconcileResult{RequeueAfter: 1s}` + `nil`；临时错误返回零值 + 原始错误；永久错误返回零值 + `controller.NewPermanentError`；并断言任何 `err != nil` 的分支都不带非零 `ReconcileResult`；
-- ensure 幂等：GET 命中直接沿用、创建返回 409 沿用现有对象、创建结果未知先 GET 确认；
+- 队列结果映射（见 7.6）：逐分支断言返回值形态——Build 不存在、已终态、状态无变化与全部等待类分支（等待 Snapshot Active / BuildInfo Completed / RpmRepo 发布收口）返回零值 + `nil`；409 Conflict 返回 `ReconcileResult{RequeueAfter: 1s}` + `nil`；临时错误（含子资源 POST 返回 404）返回零值 + 原始错误；永久错误返回零值 + `controller.NewPermanentError`；并断言任何 `err != nil` 的分支都不带非零 `ReconcileResult`；
+- ensure 幂等：GET 命中直接沿用、创建返回 409 沿用现有对象、创建结果未知先 GET 确认；创建返回 404 断言按临时错误退避（零值 + 原始 `WriteError`）、不写 `Build.status`、不触发确认读取，且输出含 `kind`、`status=404`、`retryable=true` 的 `reason=CreateRejected` 日志；创建返回 400/401/403/422 断言返回 `PermanentError` 且日志 `retryable=false`；
 - 阶段读取范围：Prepared 与 Processing/build 的 BuildInfo 存在时，断言不 GET Snapshot/RpmRepo；Processing/publish 的 RpmRepo 存在时，断言不 GET Snapshot/BuildInfo，直接使用发布结果。前序对象单独被删除不触发全链路巡检或重建；
 - Snapshot 就绪门禁：Pending 中 Snapshot 未 Active 时不 GET/Create RpmRepo；Active 后才 ensure RpmRepo。Prepared 只 ensure BuildInfo，不再检查前序对象；RpmRepo 处于 Pending 不阻止正常阶段推进；
+- RpmRepo 基线种入：非 single 且 `baseBuildRef.Name` 非空时断言只读取一次同名历史 RpmRepo、`CreateRpmRepo` 的 `spec` 为 `{}` 且 `status.repository.repositoryUID` 与 `status.repository.contentURL` 都等于历史值、`release` 与 `conditions` 为空；`single` 与 `baseBuildRef={}` 断言零次历史读取、不种入基线；历史对象 NotFound 或存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空时断言仍创建 RpmRepo、两个字段都为空并输出 `reason=BaseRepositoryUnavailable` 日志，且不写 Build 终态、不延迟重入；历史对象读取失败（网络错误、超时、408/429/5xx）断言返回可重试错误、`CreateRpmRepo` 与 `UpdateBuildStatus` 均为 0、Build 保持 Pending 并输出 `reason=BaseRepositoryReadFailed retryable=true`；`401/403/400/422` 与响应身份契约错误断言返回 `PermanentError`、同样不创建且日志 `retryable=false`；已有 RpmRepo（含 `metadata.deletionTimestamp` 非空）断言不读取历史、不覆盖这两个字段；创建后重入与进程重启断言不重复查询、不改写这两个字段；
 - AlreadyExists 优先级：POST 返回 AlreadyExists 后 GET 命中正常对象，断言沿用并继续阶段，不覆盖 spec、不再次 POST、不直接返回通用 Conflict 重入；GET 命中删除中对象则等待，GET NotFound 则延迟 1s，其他读取错误按分类返回；
-- 永久错误与业务失败隔离：覆盖 API 400/401/403/422、非法输入和客户端错误，断言不调用 UpdateBuildStatus、不写失败条件，只记录并返回 PermanentError；对照覆盖 single 构建失败、release.phase=Failed 和 Processing 直接依赖 NotFound，仅确认对应失败原因后才写 Failed，且状态写入失败不得被业务 PermanentError 覆盖；静态配置非法在 initializer 阶段启动失败；
+- 永久错误与业务失败隔离：覆盖 API 400/401/403/422、非法输入和客户端错误，断言不调用 UpdateBuildStatus、不写失败条件，只记录并返回 PermanentError；对照覆盖 single 结果汇总失败（build 或 install 非 Succeeded）、release.phase=Failed 和 Processing 直接依赖 NotFound，仅确认对应失败原因后才写 Failed，且状态写入失败不得被业务 PermanentError 覆盖；静态配置非法在 initializer 阶段启动失败；
 - 删除中子资源：本轮读到 deletionTimestamp 时不调用 Create、不写 Build.status，返回零值 + nil；对象消失后，仅 Pending/Prepared 的创建职责允许 ensure 创建，Processing 记录缺失异常并写 Failed；
 - 子对象缺失：Processing/build 的 BuildInfo 或 Processing/publish 的 RpmRepo 返回 NotFound 时，断言输出 ChildResourceMissing 日志，不调用任何 Create/GetProject、不恢复前序依赖；同一次 `/status` 写入 Failed、保留当前 stage、填写 endTime，并写对应条件 False/ChildResourceMissing，保留其他条件。写入成功后返回业务 PermanentError；覆盖 Conflict、Unknown 确认及外部 Aborted 保护，写入失败不得被业务 PermanentError 覆盖。重启后仍按此规则处理，已 Failed 后不再调和；读取超时、权限错误不触发该失败分支；
 - single 依赖边界：只 ensure Snapshot / BuildInfo；本轮没有 RpmRepo 不影响正常推进，single + Processing/publish 返回永久错误且不创建 RpmRepo。与 BuildInfo Controller 联调时覆盖 bootstrap-only、bootstrap 加历史不可变过程仓、历史仓不可读时不下发 Job，以及 Job 完成后无需仓库物化即可完成 BuildInfo；
 - `baseBuildRef` 写入即返回：`Build.status.baseBuildRef` 为 nil 时断言本轮只发生一次 `/status` 写入（写 `baseBuildRef`）、不调用 `CreateSnapshot` / `CreateRpmRepo`，且返回零值 + `nil`；下一轮以已写入的 `baseBuildRef` 继续 ensure 子资源；
 - Snapshot 创建复制输入：覆盖 Project.defaultRef 为 Branch/Tag，断言只调用一次 `GetProject`，非 single 的 `CreateSnapshot` 收到的 `spec.defaultRef` 和 N 个 `packageRepos` 均与该返回对象一致；single 只包含 Build.spec.packages 命中的仓库，defaultRef 不变，修改构造出的 Snapshot 不影响 Project；已有 Snapshot（含缺少 defaultRef 的对象）存在时，不调用 `GetProject`、不调用 `CreateSnapshot`、不覆盖 spec；
-- single 多包输入：覆盖多个包名及重复包名，断言 Snapshot 仅包含去重后命中的仓库并保持 Project 列表顺序；BuildInfo Completed 后汇总所有目标仓库的 spec，全部成功才进入 Skipped/publish，任一失败则进入 Failed/build；
+- single 多包输入：覆盖多个包名及重复包名，断言 Snapshot 仅包含去重后命中的仓库并保持 Project 列表顺序；BuildInfo Completed 后汇总所有目标仓库的 spec，每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，任一 build 或 install 非 Succeeded 则进入 Failed/build；
 - Project 读取失败：`GetProject` 返回 NotFound 时断言不调用 `CreateSnapshot`、不写 `Build.status`，且返回零值 + `controller.NewPermanentError`；返回临时错误时断言零值 + 原始错误；
 - BuildInfo 创建输入：覆盖所有构建类型、空引导仓及 Prepared 创建阶段重入，断言创建前读取 Project 并深拷贝 bootstrapRepo；修改创建对象不影响 Project。已有 BuildInfo 不因 Project 配置变化覆盖输入、不为其读取 Project；AlreadyExists 沿用服务端对象。读取 Project 失败不调用 CreateBuildInfo、不写 Build.status；创建使用当前 Project 配置；
 - 删除中守卫：`deletionTimestamp` 非空时断言不调用 `UpdateBuildStatus`、不调用 `Create`，且返回零值 + `nil`；
@@ -691,8 +708,8 @@ buildinfos:     get, create
 - 发布收口映射（成功）：`RpmRepo.status.release.phase=Ready` 时，断言同一次 `/status` 写入 `Build.status.phase=Success`、`stage=publish`、`repo=RpmRepo.status.release.contentURL`、`endTime` 非空与 `PublishSucceed=True/PublishSucceeded`；
 - 发布收口映射（失败）：`release.phase=Failed` 时，断言同一次 `/status` 写入 `phase=Failed`、`stage=publish`、`endTime` 非空与 `PublishSucceed=False/PublishFailed`，不写 `repo`，且不覆盖已写入的 `BuildSucceed`；
 - 等待语义：`RpmRepo.status.release` 缺失或 `release.phase` 为 `Pending` / `Creating` / `Prepared` 时断言不写 `Build.status`、返回零值 + `nil`；收口完成后下一轮收敛到同一终态；
-- 跳过发布：`buildType=single` 构建成功、非 single 的 `buildTarget.publishFlag=false` 两种输入都断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo，single 全程不访问本轮同名 RpmRepo；
-- `Build.spec.buildType=single` 分支：验证所有阶段不 GET/Create 本轮同名 RpmRepo，缺失时也不重建；覆盖目标仓库含多个 spec、全部成功、部分失败、空 map、缺失 build.status；只有非空且全部 Succeeded 才进入 Skipped/publish，其余进入 Failed/build。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
+- 跳过发布：`buildType=single` 结果汇总成功、非 single 的 `buildTarget.publishFlag=false` 两种输入都断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo，single 全程不访问本轮同名 RpmRepo；
+- `Build.spec.buildType=single` 分支：验证所有阶段不 GET/Create 本轮同名 RpmRepo，缺失时也不重建；覆盖目标仓库含多个 spec、build 与 install 全部成功、部分失败、空 map、缺失 build.status、缺失 install.status；只有非空且每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，其余进入 Failed/build。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
 - API 交互：`/status` 保留 spec、AlreadyExists 与 Conflict 的处理、`GetLastPublishedBuild` 通过项目级 List 路径限定 Project；
 - 崩溃恢复：分别模拟崩在 ensure 之间、崩在 `/status` 之前、崩在 `/status` 结果未知之后、崩在读 RpmRepo 发布收口结果前后、崩在终态写入前，断言重启后收敛到同一终态，且不产生重复子资源；
 - 启动打点：断言进程内首次 reconcile 成功时只输出一次 `reconciled-after-start` 日志；
