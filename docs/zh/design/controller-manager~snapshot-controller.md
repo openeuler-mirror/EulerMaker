@@ -29,7 +29,7 @@ Snapshot Controller 运行在现有 `controller-manager` 框架内，建议实�
 components/controller-manager/pkg/controllers/snapshot/
   controller.go       # 初始化、事件注册和 Sync
   reconcile.go        # reconcile 入口、父 Build 读取和目标范围判定
-  resolve.go          # 两阶段并发解析（固定 worker pool + budgetCtx）
+  resolve.go          # 单次状态检查、异步同步提交及解析（固定 worker pool + 轮转派发 + budgetCtx）
   conditions.go       # condition upsert/清理/消毒
   update.go           # advancePhase + updateSnapshot
   metrics.go
@@ -135,7 +135,7 @@ type GitServerError struct {
 | `GitServerError{Kind: Temporary}` | 408、429、5xx、临时网络错误、异常/不完整响应等；`PublishSyncTask`/`CheckSynced` 映射为 `SyncFailed`，`ResolveCommit` 映射为 `ResolveFailed`，均设置 `retryable=true` 并计入跨轮失败预算 |
 | `GitServerError{Kind: Permanent}` | 401、403 或无法通过重试修复的协议错误；Controller 返回 `PermanentError`，不得把基础设施配置错误固化成包级 Skipped |
 | `context.Canceled` | 原样返回；Manager context 取消时停止本周期，不生成业务错误 |
-| `context.DeadlineExceeded` | 若由 `budgetCtx` 或单请求超时触发，归入 `SyncTimeout` 或对应的临时解析失败；Manager context 已取消时仍原样结束 |
+| `context.DeadlineExceeded` | 单请求自身超时归入 `SyncTimeout` 并计失败；单轮 `budgetCtx` 到期导致的中断归入 Deferred，不计失败；Manager context 已取消时仍原样结束。客户端保留错误链，Controller 根据 context 取消原因区分，不能只检查错误字符串 |
 
 客户端内部固定重试耗尽后只返回一次最终分类错误，并保留 `errors.Is(err, context.Canceled)`、`errors.Is(err, context.DeadlineExceeded)`，以及通过 `var gitErr *GitServerError; errors.As(err, &gitErr)` 读取分类的能力。Controller 对未知且无法分类的 error 按 `Temporary` 处理并记录 `unexpected-git-server-error` 指标，避免误把暂时故障永久固化到 Snapshot。
 
@@ -258,7 +258,8 @@ type failureTracker struct {
 - 本轮新产生 Resolved、Waiting 或终态 Skipped（包括确定性失败和 `RetryExhausted`）时，将清理动作作为候选变更；只有 status 写入成功或 WriteUnknown 确认写入意图已实现后才提交；如果 status 无变化，则在返回预先计算的 `postWriteResult/postWriteErr` 前直接提交；
 - 未达到上限的非确定性 Failed 仅在 status 写入成功或 WriteUnknown 确认后增加计数；达到上限并成功持久化 `RetryExhausted` 后清除该包计数。Conflict、写入失败或确认未实现时丢弃候选增量和清理动作；
 - Snapshot 成功推进 Active 后清除该 UID 的全部计数和 objectKey 映射；
-- 对本轮非确定性失败计算 `nextCount = currentCount + 1`。当 `nextCount >= failureRetryLimit` 时，本轮直接写入不可重试的 `PackageRepoStatus.error`（code=`RetryExhausted`）并跳过；否则写入可重试 error。默认 `failureRetryLimit=3` 表示第 1、2 次已确认失败仍可重试，第 3 次已确认失败转为 `RetryExhausted`；
+- 对本轮非确定性失败计算 `nextCount = currentCount + 1`。当 `nextCount >= failureRetryLimit` 时，本轮直接写入不可重试的 `PackageRepoStatus.error`（code=`RetryExhausted`）并跳过；否则写入可重试 error。默认 `failureRetryLimit=5` 表示第 1～4 次已确认失败仍可重试，第 5 次已确认失败转为 `RetryExhausted`；
+- 只有实际调用返回的可重试错误才产生 Failed，同一包每轮至多增加一次计数（包括客户端内部重试）。Deferred 表示本轮未完成检查，不增加也不清零计数，并保留已有包级状态；不能把尚未派发、同步进行中或单轮预算耗尽计作包级失败。
 - 锁内不得执行 API 请求或队列阻塞操作。
 
 ## 五、状态判定
@@ -279,7 +280,7 @@ metadata.deletionTimestamp == nil
 | 决策编号 | 决策 | 选择 | 理由 |
 |----------|------|------|------|
 | DR-1 | `Processing` 状态不回退 | **不回退，保持 Processing，继续填充** | reconcile 取到 phase=Processing（异常重入）时不回退 Pending：回退会丢失"已在填充中"语义，保持 Processing 更符合"进行中"语义，避免抖动 |
-| DR-2 | git-server 同步与 commit 获取 | **Branch/Tag 两阶段解析，Commit 校验后直接采用** | 不同 ref 类型采用不同处理路径；客户端协议见第二章，解析状态迁移见 6.2 |
+| DR-2 | git-server 同步与 commit 获取 | **Branch/Tag 查状态后按需异步同步或解析，Commit 校验后直接采用** | 不同 ref 类型采用不同处理路径；客户端协议见第二章，解析状态迁移见 6.2 |
 | DR-3 | 本地镜像同步完成判定 | **baseline 时间戳比较** | 不依赖某次同步请求的操作 ID；判定契约见第二章 CheckSynced |
 | DR-4 | 失败原因记录位置 | **包级 error 与整体 condition 分离** | 避免将不受控包名编码为 condition type；字段约束见 6.4 |
 | DR-5 | 部分失败处理 | **允许部分成功** | 已完成包不重复解析，完成判定见 6.3 |
@@ -289,7 +290,7 @@ metadata.deletionTimestamp == nil
 | DR-10 | git-server 客户端 | **Controller 仅依赖三个业务方法** | HTTP、重试和缓存封装在 pkg/clients/gitserver；接口与缓存约束见第二章 |
 | DR-11 | CheckSynced 返回值 | **返回同步判定及 clone URL** | Controller 不解释底层 HTTP；完整返回值与错误契约见第二章 |
 | DR-13 | 并发解析 | **固定 worker pool + 总预算** | 限制并发及单轮耗时；派发、取消和合并规则见 6.2.1，配置默认值见 9.1 |
-| DR-14 | 单包轮内检查与错误重试上限 | **每轮最多调用 `CheckSynced` 8 次；请求错误最多连续出现 5 次**（检查间隔为 1s/2s/4s/8s，之后按 8s 封顶，可被 ctx 中断） | 8 次调用均为正常未就绪结果时进入 Waiting，不计失败；5xx/网络错误连续达到上限后进入 Failed，计入跨轮失败预算（DR-6） |
+| DR-14 | 单包检查与异步同步 | **每包每轮调用一次 `CheckSynced`；未就绪则发布一次 Sync 并立即返回 Waiting** | 不在 worker 内 sleep 或轮询同步结果；客户端内部 HTTP 重试不增加 Controller 方法调用次数，跨轮由工作队列重新检查 |
 | DR-15 | 指定包构建 | **single 解析指定目标；其他类型解析全部仓库** | 目标筛选、缺失包处理及完成判定统一见 6.3 |
 | DR-16 | 父 Build 生命周期 | **父 Build 必然存在** | Build 持久化后才创建 Snapshot，且 Snapshot 存续期间不删除父 Build；读取异常处理见 6.3 和 7.4.1 |
 
@@ -326,40 +327,28 @@ build_controller 在 Prepared 阶段创建 Snapshot
                      [ Active ]
 ```
 
-`Processing` 在存在 Waiting 包或未超限的可重试失败包时保持自循环；`budgetCtx` 耗尽时，正常等待同步的包进入 Waiting，尚未开始或请求未返回的包计入失败预算。`Active` 是终态，HandlerFuncs 不再将其加入队列。
+`Processing` 在存在 Waiting、Deferred 或未超限的可重试失败包时保持自循环；单轮预算耗尽不消耗包级失败预算。`Active` 是终态，HandlerFuncs 不再将其加入队列。
 
 | 状态 | 含义 | 进入条件 | 外出条件 |
 |------|------|----------|----------|
 | `Pending` | 初始态，repo 输入待处理 | build_controller 创建 Snapshot 时置入 | reconcile 取出后经 advancePhase 单 PUT /status → `Processing` |
-| `Processing` | 填充进行中（异常重入保持，不回退） | `Pending → Processing` | 全部目标包 Resolved 或 Skipped（确定性失败/重试超限）→ `Active`；存在 Waiting 或未超限可重试失败时保持（自循环） |
+| `Processing` | 填充进行中（异常重入保持，不回退） | `Pending → Processing` | 全部目标包 Resolved 或 Skipped（确定性失败/重试超限）→ `Active`；存在 Waiting、Deferred 或未超限可重试失败时保持（自循环） |
 | `Active` | 终态，目标包均已处理 | 单轮 reconcile 汇总全部包成功或跳过 | 无（终态；不再入队） |
 
 ### 6.2 单包 commit 解析子状态机（reconcile 内瞬时状态，不持久化）
 
-单轮 reconcile 中，`ref.type=Branch/Tag` 的 PackageRepo 使用以下三阶段解析流程。`ref.type=Commit` 校验 `ref.value` 后直接进入 `Resolved`，不进入该子状态机。瞬时状态仅存在于当轮内存，跨轮不保留——下轮从头部重放。
+`ref.type=Branch/Tag` 每轮从 `CheckSynced` 开始。已满足 baseline 时直接解析 ref，不再提交 Sync；未就绪时调用 `PublishSyncTask`，成功后立即返回 Waiting 并释放 worker，由下一轮重新检查。git-server 异步完成同步，Controller 不创建脱离 reconcile 的后台轮询 goroutine，也不在 worker 内等待仓库同步完成。
 
-```
-┌────────────┐  PublishSyncTask 成功  ┌─────────┐  CheckSynced 达标     ┌───────────┐  rev-parse 成功  ┌──────────┐
-│ PendingSync │ ───────────────────→ │ Syncing │ ───────────────────→ │ Resolving │ ──────────────→ │ Resolved │
-└────────────┘                       └─────────┘  (SyncTime!=nil&&>=baseline) └───────────┘                 └──────────┘
-      │失败（非确定）                       │未就绪/404：轮内检查 ≤8 次后 Waiting │校验失败 / 分支不存在 / commit 冲突（确定性）
-      ▼                                     ▼（异常上限 5 次，DR-14）        ▼
-┌──────────────────────────────────┐   ┌───────────────────────────────────────────────────────────────┐
-│ Failed（可重试，计跨轮预算）        │   │ Skipped（终态分流，不再重试）                                     │
-│ 下轮重试；连续失败 ≥ failureRetryLimit│   │ · 确定性失败当轮进入（ValidationFailed/ResolveFailed/CommitConflict）│
-│ → 写包级 error（RetryExhausted）→ Skipped│   │ · 非确定性失败重试超限进入（RetryExhausted）                  │
-└──────────────────────────────────┘   └───────────────────────────────────────────────────────────────┘
-```
-
-**注意**：git-server 客户端把 status 接口的 404、缺少 `sync_time` 和同步时间早于 baseline 统一转换为 `SyncCheckResult{Synced:false}, nil`。Controller 收到未就绪结果后继续轮内检查；检查次数耗尽时进入 `Waiting`，不得归入 `Failed`。它不读取原始 `RepoStatus`。
+`ref.type=Commit` 校验 `ref.value` 后直接进入 Resolved，不访问 git-server。瞬时状态不持久化；进程重启后从 Snapshot 已持久化结果和 git-server 同步状态恢复，不需要持久化同步请求 ID。
 
 | 瞬时状态 | 含义 | 迁移条件 |
 |----------|------|----------|
-| `PendingSync` | 待发布同步任务 | `PublishSyncTask` 成功 → `Syncing`；失败（非确定）→ `Failed` |
-| `Syncing` | git-server 本地镜像同步中 | `CheckSynced` 返回 `Synced=true` 时保存 `CloneURL` 并进入 `Resolving`；返回 `Synced=false` 时继续轮内检查，检查次数耗尽 → `Waiting`；返回 error → 按错误分类处理并进入 `Failed` |
+| `Checking` | 查询已有同步结果 | `CheckSynced` 达标 → `Resolving`；未就绪 → `PendingSync`；错误按第二章分类，不在检查失败后继续提交 Sync |
+| `PendingSync` | 注册异步同步任务 | `PublishSyncTask` 成功 → `Waiting`；错误按第二章分类；已排队或执行中的相同请求由 git-server 合并 |
 | `Resolving` | 本地镜像 ref 解析中 | `rev-parse` 成功且无冲突 → `Resolved`；校验失败/ref 不存在/commit 冲突（确定性）→ `Skipped`；解析 I/O 失败（非确定）→ `Failed` |
 | `Resolved` | commit 已解析 | 组装包含 `commitId` 且 `error=nil` 的只读解析结果，进入主 goroutine 的当轮汇总 |
 | `Waiting` | git-server 正常同步中 | 不写包级 error、不增加 failure tracker；本轮结束后按 `syncRequeueDelay` 延迟重新入队 |
+| `Deferred` | 未派发或被单轮预算中断 | 保留已有状态及失败次数，不生成 error；按 Waiting 的队列动作延迟重入，但不执行 Waiting 的清理动作 |
 | `Failed` | 本轮失败（可重试） | 组装失败结果；由主 goroutine 根据跨轮失败计数决定继续重试或转为 `Skipped` |
 | `Skipped` | 已跳过（不再重试） | `packageRepoStatuses[repo.name].error` 已持久化确定性失败或 `RetryExhausted`，且 `retryable=false`；后续轮次直接归入 skipped set |
 
@@ -368,16 +357,18 @@ build_controller 在 Prepared 阶段创建 Snapshot
 并发阶段采用“worker 只计算、主 goroutine 唯一合并”的模型。通过 `context.WithTimeout` 创建 `budgetCtx`，总预算为 `resolveBudget`，默认值见 9.1：
 
 - 进入并发阶段前，主 goroutine 对目标 `PackageRepo` 做一次预检查并为每项分配其在 `Snapshot.spec.packageRepos` 中的稳定索引。同一名称重复时，所有同名项均不启动解析，并在 `packageRepoStatuses[repo.name]` 写入一条不可重试的 `ValidationFailed` error 表示名称冲突；控制器不得任意选择其中一项。
-- 主 goroutine 创建容量等于待解析项数量的 `jobs` 和 `results` 通道，将通过预检查且尚未完成的任务按稳定索引写入 `jobs` 后关闭该通道。worker 数为 `min(resolveWorkers, len(jobs))`；没有任务时不启动 worker。
+- 主 goroutine 创建容量等于待解析项数量的 `jobs` 和 `results` 通道，按下述轮转顺序写入任务后关闭 `jobs`。worker 数为 `min(resolveWorkers, 待解析项数量)`；没有任务时不启动 worker。
+- 按 Snapshot UID 保存进程内派发游标，初始为索引 0；每轮从游标开始按稳定索引环形排列尚未完成项。所有 worker 退出后，由主 goroutine 将游标推进到本轮最后领取项的下一原始索引；未领取任何任务则保持不变。游标按领取顺序而非结果完成顺序计算，即使本轮因预算中断或 status 写入冲突也推进，避免队首慢请求长期阻塞队尾。它只影响调度顺序，不代表业务完成；重启丢失游标允许重新扫描，成功/跳过项仍由持久化 status 排除。游标与 failureTracker 使用同样的 UID 隔离、并发锁和对象删除/终态清理规则。
 - 每个 worker 是一个固定 goroutine，循环从 `jobs` 领取任务。领取前以及领取后、发起外部请求前都检查 `budgetCtx.Err()`；context 已取消时立即退出，不再领取或处理后续任务。禁止为单个 PackageRepo 再创建子 goroutine。
 - 每个 worker 只读取不可变的 `PackageRepo`、baseline 和 reconcile 上下文，调用 git-server 后返回一条不可变的 `packageResolveResult`。worker 不得修改 Snapshot、`status.packageRepoStatuses`、conditions、failure tracker、指标计数器或工作队列。
-- 结果至少携带稳定索引、包名、解析状态（Resolved/Waiting/Failed/Skipped）、成功时的 `PackageRepoStatus`，以及失败时的分类、reason 和已消毒 message。`results` 容量等于待解析项数量，worker 发送结果不得因主 goroutine 尚未读取而阻塞。
+- 结果至少携带稳定索引、包名、解析状态（Resolved/Waiting/Deferred/Failed/Skipped）、成功时的 `PackageRepoStatus`，以及失败时的分类、reason 和已消毒 message。`results` 容量等于待解析项数量，worker 发送结果不得因主 goroutine 尚未读取而阻塞。
 - 已经启动的 git-server 请求必须遵守 `budgetCtx` 并及时退出。一个专用收尾 goroutine 只负责 `WaitGroup.Wait()` 后关闭 `results`；主 goroutine range 读取结果直至通道关闭。所有 worker 退出前 reconcile 不得返回，不允许遗留 goroutine 在本周期结束后继续执行。
-- worker 从 `CheckSynced` 取得 `Synced=false, err=nil` 后必须记住该任务已经进入正常等待；若 budgetCtx 在下一次检查前取消，worker 返回 Waiting 结果。主 goroutine 对 budgetCtx 取消后仍未被领取或未返回结果的其余任务，根据稳定索引与已收到结果的差集生成 `SyncTimeout` Failed。每个目标项必须恰好进入一次最终汇总。Manager context 取消仍直接结束，不生成业务结果。
+- 每包每轮最多调用一次 `CheckSynced`，随后根据结果调用一次 `PublishSyncTask` 或 `ResolveCommit`，不进行轮内重复检查。调用间预算到期，或请求因 `budgetCtx` 到期而中断，返回 Deferred；单请求自身超时且非总预算中断才返回 Failed。请求返回时即判定并记录分类，不因之后总预算到期改写已取得的 Resolved、Waiting、Skipped 或真实 Failed 结果。主 goroutine 根据稳定索引与已收到结果的差集为未领取/未返回结果项补充 Deferred，每个目标项恰好汇总一次。Manager context 取消直接结束，不生成业务结果。
 - 主 goroutine 收齐结果后，按稳定索引升序合并，而不是按 goroutine 完成顺序合并。因此相同输入在不同调度时序下必须生成相同的 `packageRepoStatuses`、conditions 和日志结果。
 - 合并以 API GET 得到对象的 DeepCopy 为基础。原始仓库地址始终从不可变的 `Snapshot.spec.packageRepos` 读取，不在 status 中重复保存。已有成功结果或不可重试 error 保持不变；Resolved 结果写入 `commitId` 并清空旧 error；Branch/Tag 在 `CheckSynced` 成功后同时写入其返回的 `cloneUrl`，Commit 类型的 `cloneUrl` 为空；Waiting 结果不创建 `packageRepoStatuses` 条目，并清除该包已有的可重试 error；Skipped 结果写入不可重试 error；Failed 结果写入可重试 error，若此前已经取得 clone URL 则保留该值，达到跨轮预算时改写为不可重试的 `RetryExhausted`。任何 worker 结果都不能覆盖其他组件拥有的字段。
 - 同一规范化 URL 和 ref 已有持久化 commitId 时，以该值为基准；本轮解析结果不同则按 `CommitConflict` 跳过，不覆盖已有结果。同一规范化 URL 和 ref 在本轮产生多个结果且没有已有基准时，按稳定索引处理：第一个已接受的 commit 作为本轮基准；后续结果相同则正常接受，不同则按 `CommitConflict` 跳过，禁止后完成的 worker 覆盖先接受的结果。
 - 主 goroutine 按 4.4 计算 failure tracker 的候选增量及清理项，用于生成目标 status；计数的提交和丢弃同样遵循 4.4。
+- Deferred 不修改该包的 `packageRepoStatuses` 或失败计数，也不能作为 Resolved/Skipped 参与完成判定；它与 Waiting 一起触发延迟重入。
 - 汇总完成后最多执行一次本轮最终 `/status` 写入；并发阶段不得执行状态写入。若在写入前发现 reconcile context 已取消，则丢弃尚未持久化的合并结果，由后续 List 重新触发。
 
 ### 6.3 Sync 流程
@@ -402,7 +393,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 6. 按 6.2 的子状态机解析尚未完成的目标包；已有成功结果或不可重试 error 的包不再解析。并发派发、预算取消和结果合并严格采用 6.2.1 的规则。
 7. 汇总结果并应用 4.4 的跨轮失败计数，同时计算最终写入确认后的 `postWriteResult/postWriteErr`。两者必须满足 BaseController 契约：有 error 时 Result 必须为零值。
    - 全部已找到目标包 Resolved 或 Skipped，且所有缺失目标已经按 missing set 记为逻辑 Skipped → 推进 Active。包级错误保留在对应 PackageRepoStatus 中，缺失目标仅保留整体 condition，二者共同作为 Active 快照的质量记录。不得因为部分目标缺失而提前跳过仍需解析的已找到目标。
-   - 尚有 Waiting 或可重试 Failed 时保持 Processing；按第八章计算返回值（Waiting 优先）。全部目标完成时返回零值 Result 和 nil。
+   - 尚有 Waiting、Deferred 或可重试 Failed 时保持 Processing；按第八章计算返回值（Waiting/Deferred 优先）。全部目标完成时返回零值 Result 和 nil。
 8. 回写（updateSnapshot，调用 PUT：PUT /status 写 packageRepoStatuses + phase + conditions）。
    - 脏检查：reconcile 入口 DeepCopy 快照，回写前 `reflect.DeepEqual` 对比 status，无变化跳过 PUT。
    - status 无变化时直接提交候选 failureTracker 变更，并返回第 7 步计算的 `postWriteResult/postWriteErr`。
@@ -422,7 +413,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | error.code | retryable | 触发时机 |
 |------------|-----------|----------|
 | `SyncFailed` | `true` | 发布同步任务或查询同步状态发生临时错误，且跨轮预算尚未耗尽 |
-| `SyncTimeout` | `true` | git-server 请求超时，或总预算耗尽时任务尚未开始/请求尚未返回，且跨轮预算尚未耗尽；正常的 `Synced=false` 不产生该错误 |
+| `SyncTimeout` | `true` | 实际 git-server 请求自身超时，且跨轮失败预算尚未耗尽；单轮预算中断为 Deferred，正常同步等待为 Waiting，二者均不产生该错误 |
 | `ResolveFailed` | `false` | Branch/Tag 指向的 ref 不存在或命令返回确定性失败 |
 | `ResolveFailed` | `true` | `ResolveCommit` 遭遇临时网络、服务端或响应错误，且跨轮预算尚未耗尽 |
 | `ValidationFailed` | `false` | 不可信输入校验失败、包名重复等确定性输入错误 |
@@ -456,7 +447,7 @@ Snapshot Controller 写入前通过 API GET 获取最新对象，携带其 resou
 ### 7.3 与 git-server 的竞态
 
 git-server 为外部服务，可能不可用或响应延迟。Controller 必须：
-- git-server 超时归入 failed set，跨轮重试；
+- 单请求自身超时与单轮预算中断按 6.2.1 区分，前者计失败、后者延后处理；
 - Snapshot 状态收敛不依赖 git-server 返回某次请求的操作 ID；重复同步请求由 git-server 合并，Controller 自身仍须保证状态写入幂等；
 - Controller 不直接解释 status HTTP 响应，只使用客户端的 `CheckSynced(originURL, baseline)` 结果；
 - `CheckSynced` 的 baseline 判定及 Waiting 迁移遵循 6.2；git-server 的 HTTP、协议与传输错误统一由客户端转换为第二章定义的 `GitServerError`，Controller 只按该分类契约处理。
@@ -528,7 +519,7 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | 对象不存在、无需处理、已经终态 | `ReconcileResult{}, nil`，BaseController Forget |
 | `advancePhase` 成功或 GET 确认已达到预期 | 使用服务端返回或确认 GET 得到的 Snapshot 继续本轮，不在此处返回 |
 | 最终 `updateSnapshot` 成功或 GET 确认已达到预期 | 提交候选 failureTracker 变更，返回汇总阶段预先计算的 `postWriteResult/postWriteErr` |
-| 存在 Waiting 包（包括同时存在可重试失败包） | `ReconcileResult{RequeueAfter: syncRequeueDelay}, nil` |
+| 存在 Waiting 或 Deferred 包（包括同时存在可重试失败包） | `ReconcileResult{RequeueAfter: syncRequeueDelay}, nil` |
 | 仅存在未超限可重试失败包 | 零值 Result 和临时错误，由 BaseController `AddRateLimited` |
 | resourceVersion Conflict | `ReconcileResult{Requeue: true}, nil`，清除旧退避后立即重读 |
 | 429/503 且 WriteError 带合法 RetryAfter | 零值 Result 和原始错误，由 BaseController Forget 后 AddAfter |
@@ -547,12 +538,12 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--workers` | 2 | worker goroutine 数 |
+| `--workers` | 6 | Snapshot reconcile worker 数（不是单个 Snapshot 内的仓库解析并发数） |
 | `--poll-period` | 30s | PollingSource list 周期 |
-| `--snapshot-resolve-workers` | 8 | 单 Snapshot 内包解析并发数 |
+| `--snapshot-resolve-workers` | 10 | 单 Snapshot 内包解析并发数 |
 | `--snapshot-resolve-budget` | 120s | 单轮解析总预算（budgetCtx） |
-| `--snapshot-sync-requeue-delay` | 30s | `CheckSynced` 返回 `Synced=false, err=nil` 的轮内检查耗尽后再次检查的固定延迟 |
-| `--snapshot-failure-retry-limit` | 3 | 非确定性失败跨轮重试预算，必须大于 0；`nextCount >= limit` 时写入不可重试的 `RetryExhausted` error 并跳过 |
+| `--snapshot-sync-requeue-delay` | 30s | 存在 Waiting 或 Deferred 包时延迟重入的时间；轮内不等待同步 |
+| `--snapshot-failure-retry-limit` | 5 | 非确定性失败跨轮重试预算，必须大于 0；`nextCount >= limit` 时写入不可重试的 `RetryExhausted` error 并跳过 |
 | `--git-server-addr` | `http://localhost:8080` | git-server 地址 |
 | `--git-server-timeout` | 30s | 单次请求超时 |
 | `--git-server-retry` | 3 | 客户端固定尝试次数 |
@@ -584,7 +575,8 @@ builds:           get
 - `retries`: 重试次数
 - `duration`: reconcile 耗时
 - `error`: 错误信息（如有）
-- `package_name`: 包名称（解析相关日志）
+- `package_name`: 异常包名称（异常逐包记录）
+- `package_names`、`package_count`: 本轮新确认解析成功的包名列表（按名称排序）及数量，合并为一条 `PackagesResolved` 日志；没有新增成功包时不输出
 - `git_server_method`: git-server API 方法
 
 不记录 payload、凭据或完整 packageRepos 列表。
@@ -602,6 +594,7 @@ snapshot_controller_resolve_batches_total
 snapshot_controller_resolve_duration_nanoseconds_total
 snapshot_controller_resolved_total
 snapshot_controller_waiting_total
+snapshot_controller_deferred_total
 snapshot_controller_failed_total
 snapshot_controller_skipped_total
 snapshot_controller_retry_exhausted_total
@@ -614,7 +607,7 @@ git_server_client_request_failures_total
 git_server_client_cache_hits_total
 ```
 
-Resolved、Waiting、Failed 统计本轮解析结果；阶段、condition、Skipped 和 RetryExhausted 仅在写入成功或 Unknown 确认后统计变更。耗时累计值除以批次数得到平均解析耗时。客户端请求数按业务方法调用统计（包含缓存命中），失败数在内部重试耗尽后统计，不按 HTTP 尝试次数重复累计。状态变更日志仅记录已确认且与原状态不同的结果，同一批包按名称排序输出；重复 resync 不重复输出相同包结果。
+Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred 不计入 failed 或 retry_exhausted 指标。阶段、condition、Skipped 和 RetryExhausted 仅在写入成功或 Unknown 确认后统计变更。耗时累计值除以批次数得到平均解析耗时。客户端请求数按业务方法调用统计（包含缓存命中），失败数在内部重试耗尽后统计，不按 HTTP 尝试次数重复累计。状态变更日志仅记录已确认且与原状态不同的结果，同一批包按名称排序输出；重复 resync 不重复输出相同包结果。
 
 ### 10.3 日志 reason
 
@@ -622,7 +615,7 @@ Resolved、Waiting、Failed 统计本轮解析结果；阶段、condition、Skip
 |------|-------------|
 | 推进 Pending → Processing | `PhaseAdvanced` |
 | 推进 Processing → Active | `PhaseCompleted` |
-| 包解析成功 | `PackageResolved` |
+| 本轮包解析成功汇总 | `PackagesResolved` |
 | 包解析失败（确定性） | `PackageSkipped` |
 | 包解析失败（非确定性） | `PackageFailed` |
 | 重试超限 | `RetryExhausted` |
@@ -644,8 +637,9 @@ Resolved、Waiting、Failed 统计本轮解析结果；阶段、condition、Skip
 - `ref.type=Commit` 时跳过 git-server 解析并直接采用 `ref.value`；
 - 包级确定性失败写入不可重试 error 并跳过；无 packageRepos 写整体 condition；
 - `buildType=single` 部分目标缺失时，缺失目标写整体 condition 且不创建包级状态，已找到目标仍完成解析后才推进 Active；全部目标缺失时不启动 worker 并直接推进 Active；其他 buildType 即使填写 `spec.packages` 也解析全部仓库；
-- 非确定性失败（5xx/网络/超时）跨轮重试，超限后跳过；
-- `CheckSynced` 返回 `Synced=false, err=nil`，轮内检查耗尽后返回 `RequeueAfter=syncRequeueDelay`，不写包级 error、不增加失败预算；
+- 实际请求的非确定性失败（5xx/网络/单请求超时）跨轮重试，同一包每轮只计一次，超限后跳过；
+- 已同步时只调用一次 CheckSynced 和一次 ResolveCommit，不调用 PublishSyncTask；未就绪时只调用一次 CheckSynced 和一次 PublishSyncTask，成功后立即返回 Waiting，不 sleep 或轮询，按 `RequeueAfter=syncRequeueDelay` 重入；
+- CheckSynced 返回错误时不继续提交 Sync，按错误分类返回；Sync 请求响应丢失时允许后续轮次通过查询确认同步完成或幂等重发；
 - 全部目标包成功或跳过后推进 Active；
 - WriteError 三分类处理（WriteRejected/WriteUnknown/WriteNotSent）；
 - `advancePhase` 正常 2xx 或 WriteUnknown 确认成功后继续本轮解析，不提前返回；
@@ -656,14 +650,16 @@ Resolved、Waiting、Failed 统计本轮解析结果；阶段、condition、Skip
 - FakeClock 推进时间；
 - `go test -race` 无竞态；
 - 固定 worker 数不超过 `min(resolveWorkers, 待解析包数)`，且不会为每个包创建 goroutine；
-- budgetCtx 取消后 worker 停止领取任务并全部退出；已经取得 `Synced=false, err=nil` 的任务返回 Waiting，其余未完成任务各生成一次 `SyncTimeout`；
+- budgetCtx 取消后 worker 停止领取任务并全部退出；未派发及因预算中断的任务各生成一次 Deferred，已有完成结果保持不变；
 - Branch/Tag 成功同步后记录 git-server CloneURL，Commit 的 CloneURL 为空；原始仓库地址仅从 `spec.packageRepos` 读取；
 - 跨轮失败计数 map 并发安全；
 - condition 消毒（去除换行、截断至 200 runes）；
 - Snapshot 整体 condition type 只产生 `InvalidPackageRepos` 或 `TargetPackagesNotFound`，包名不会进入 condition type；
 - rev-parse 输出为空、格式非法、分支或标签不存在的确定性失败处理；
 - L1 缓存命中减少 git-server 请求；
-- budgetCtx 超时时，正常等待同步的任务进入 Waiting，尚未开始或请求尚未返回的任务进入 `SyncTimeout` Failed；
+- 连续多轮预算耗尽不使 Deferred 包产生 RetryExhausted，也不清除其已有可重试 error/计数；仅有 Deferred 包时仍保持 Processing 并延迟重入；
+- 5,000 个仓库场景，轮转游标保证队尾也能被派发；队首慢请求、乱序完成及 status Conflict 不阻止游标前进，稳定索引合并规则不变；
+- 派发游标在 UID 变化、404/Active 时清理，重启后可以重新扫描；延迟任务和 Sync 请求标记不持久化，重启后通过状态检查继续收敛；
 - failureTracker 在 UID 变化、Snapshot 404/Active、包成功、Waiting、确定性失败及重试超限场景下按 4.4 的规则清理，且写入冲突不会错误提交计数变更；
 
 ### 11.2 集成测试
@@ -696,7 +692,7 @@ Resolved、Waiting、Failed 统计本轮解析结果；阶段、condition、Skip
 3. **Snapshot Controller**（`pkg/controllers/snapshot/`）：
    - `conditions.go`：condition upsert/清理/消毒
    - `update.go`：advancePhase + updateSnapshot
-   - `resolve.go`：两阶段并发解析（固定 worker pool + jobs/results 通道 + budgetCtx）
+   - `resolve.go`：单次状态检查、按需异步同步及 ref 解析（固定 worker pool + 轮转派发 + jobs/results 通道 + budgetCtx）
    - `reconcile.go`：reconcile 入口、父 Build 读取、目标范围判定和错误返回约定
    - `controller.go`：Initializer、事件注册、Client 接口定义
 

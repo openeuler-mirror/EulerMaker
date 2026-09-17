@@ -15,10 +15,29 @@ type failureTracker struct {
 	mu             sync.Mutex
 	counts         map[failureKey]int
 	uidByObjectKey map[string]types.UID
+	cursors        map[types.UID]int
 }
 
 func newFailureTracker() *failureTracker {
-	return &failureTracker{counts: make(map[failureKey]int), uidByObjectKey: make(map[string]types.UID)}
+	return &failureTracker{counts: make(map[failureKey]int), uidByObjectKey: make(map[string]types.UID), cursors: make(map[types.UID]int)}
+}
+
+func (t *failureTracker) cursor(uid types.UID) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cursors[uid]
+}
+
+func (t *failureTracker) setCursor(uid types.UID, cursor int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// An event handler may have removed this UID while requests were running.
+	for _, current := range t.uidByObjectKey {
+		if current == uid {
+			t.cursors[uid] = cursor
+			return
+		}
+	}
 }
 
 func (t *failureTracker) observe(objectKey string, uid types.UID) {
@@ -68,6 +87,7 @@ func (t *failureTracker) clearUID(uid types.UID) {
 }
 
 func (t *failureTracker) clearUIDLocked(uid types.UID) {
+	delete(t.cursors, uid)
 	for key := range t.counts {
 		if key.uid == uid {
 			delete(t.counts, key)

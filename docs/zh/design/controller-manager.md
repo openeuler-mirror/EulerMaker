@@ -709,7 +709,7 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--apiserver-ca` | 空 | 服务端 CA |
 | `--insecure-skip-verify` | false | 仅开发环境允许关闭 TLS 校验 |
 | `--controllers` | `*` | 启用或禁用的 Controller 集合 |
-| `--workers` | 2 | Controller 默认 Worker 数量 |
+| `--workers` | 6 | 每个 Controller 默认 reconcile Worker 数量 |
 | `--controller-max-retries` | 15 | 单个 key 进入慢速阶段前的快速连续重试次数 |
 | `--controller-slow-retry-initial-delay` | 30s | 快速重试耗尽后的首次慢速重入延迟 |
 | `--controller-slow-retry-max-delay` | 15m | 慢速指数退避上限 |

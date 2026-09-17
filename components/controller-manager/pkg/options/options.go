@@ -75,12 +75,12 @@ type GitServerOptions struct {
 func Parse(args []string) (Options, error) {
 	o := Options{
 		API:       APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
-		Manager:   ManagerOptions{Controllers: "*", Workers: 2, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
+		Manager:   ManagerOptions{Controllers: "*", Workers: 6, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
 		Source:    SourceOptions{PollPeriod: 30 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
 		Health:    HealthOptions{Address: ":8080"},
 		Job:       JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
 		Runner:    RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
-		Snapshot:  SnapshotControllerOptions{ResolveWorkers: 8, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 3},
+		Snapshot:  SnapshotControllerOptions{ResolveWorkers: 10, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 5},
 		GitServer: GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
