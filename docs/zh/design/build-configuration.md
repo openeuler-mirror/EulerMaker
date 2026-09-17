@@ -9,7 +9,7 @@
 | BuildConf | 支持的 OS、Arch 和构建镜像 | 集群级 `default` | `spec.runtimeSpec.image` |
 | BuildResource | spec 软件包及架构的 CPU、内存规则 | Project 级，缺失时回退全局默认表 | `spec.resources` |
 
-BuildConf 为待实现方案；BuildResource 的 API 与默认表已实现，Job 消费规则由 BuildInfo Controller 实现。字段类型统一维护在 [数据模型](data-models.md)。
+BuildConf 与 BuildResource 的 API、默认表已实现。当前 controller-manager 已提供 BuildConf 读取与镜像解析接口；BuildInfo Controller 尚未实现，创建 Job 时的消费规则由该控制器接入。字段类型统一维护在 [数据模型](data-models.md)。
 
 - [BuildConf：构建环境](#2-buildconf构建环境)
 - [BuildResource：资源规则](#3-buildresource资源规则)
@@ -19,7 +19,7 @@ BuildConf 为待实现方案；BuildResource 的 API 与默认表已实现，Job
 
 ### 2.1 目标与范围
 
-状态：待实现。BuildConf 是集群级构建配置，替代 CBS `common-conf` 中的 OS、架构和镜像映射，为前端和任务创建方提供同一份数据。
+BuildConf 是集群级构建配置，替代 CBS `common-conf` 中的 OS、架构和镜像映射，为前端和任务创建方提供同一份数据。
 
 - 前端从配置生成目标 OS、Arch 下拉选项。
 - BuildInfo Controller 根据 Build 的 OS、Arch 选择镜像，并写入 Job。

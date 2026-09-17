@@ -655,9 +655,9 @@ type BuildResourceList struct {
 
 ---
 
-## BuildConf（构建配置，待实现）
+## BuildConf（构建配置）
 
-BuildConf 是集群级配置，首版使用名称 `default`，不设置 namespace 或 status。完整生命周期、权限和消费规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。以下为计划新增的公共 API 类型，尚未表示代码已实现。
+BuildConf 是集群级配置，使用名称 `default`，不设置 namespace 或 status。完整生命周期、权限和消费规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。公共 API 类型如下。
 
 ```go
 type BuildConf struct {

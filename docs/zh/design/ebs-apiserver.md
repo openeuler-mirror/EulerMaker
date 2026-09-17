@@ -84,7 +84,7 @@ apiVersion: ebs/v1
 
 已安装到 apiserver 的资源如下：
 
-计划新增集群级 `BuildConf`，使用 Elasticsearch 存储，在 Ready 前幂等初始化 `default` 对象，并在创建 Build 前校验目标映射。该能力待实现，接口、初始化和错误规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。
+集群级 `BuildConf` 使用 Elasticsearch 存储，在 Ready 前幂等初始化 `default` 对象，并在创建 Build 前校验目标映射。接口、初始化和错误规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|
