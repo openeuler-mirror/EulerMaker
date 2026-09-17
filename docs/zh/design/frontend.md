@@ -16,7 +16,7 @@ EulerMaker 已具备 Project、Snapshot、Build、BuildInfo、RpmRepo、BuildRes
 
 - 匿名用户可以浏览 Project 及其公开构建资源。
 - 注册用户可以创建 Project，管理自己拥有或参与的 Project，并发起构建。
-- Ops 可以管理 BuildResource，并查看 Runner 运行状态。
+- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 BuildResource 和查看 Runner 运行状态。
 - Admin 可以管理普通 User 和 MachineAccount，并具备系统级资源能力。
 - 前端能力模型与 System 身份保持兼容，但 System 是受信任自动化身份，不提供账号密码登录入口。
 - 用户可以查看 Build、Job、RPM 仓库和产物状态，并实时查看 Job 日志。
@@ -70,11 +70,11 @@ Project、资源名称、页签、搜索条件、筛选条件和当前页应进�
 |------|-------|----------|
 | 匿名用户 | 无 | 浏览公开 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job |
 | 普通用户 | `ebs:user` | 创建 Project；操作自己拥有或参与的 Project |
-| 运维用户 | `ebs:ops` | 管理 BuildResource；只读查看 Runner |
+| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 BuildResource；只读查看 Runner |
 | 管理员 | `ebs:admin` | 管理非管理员 User 和 MachineAccount；具备系统级业务资源能力 |
 | 系统身份 | `ebs:system` | 受信任自动化调用方；前端不提供登录入口 |
 
-这些 scope 是互斥身份，不应组合推导新角色。正常交互式登录只会获得 `ebs:user`、`ebs:ops` 或 `ebs:admin`。System 和 Runner 都是机机身份，不能通过 Web 控制台登录；能力矩阵保留 System 列是为了使界面判断与 Gateway 契约完整对应。
+这些 scope 是互斥身份，不在令牌中组合。`ebs:ops` 通过 Gateway 授权策略继承普通用户的 owner/member 工程权限，同时保留额外的运维能力。正常交互式登录只会获得 `ebs:user`、`ebs:ops` 或 `ebs:admin`。System 和 Runner 都是机机身份，不能通过 Web 控制台登录；能力矩阵保留 System 列是为了使界面判断与 Gateway 契约完整对应。
 
 ### 4.2 Project 关系
 
@@ -92,11 +92,11 @@ ebs.io/member-user.<username>: "true"
 | 能力 | 匿名 | User Owner | User Member | Ops | System | Admin |
 |------|------|------------|-------------|-----|--------|-------|
 | 浏览公开业务资源 | 是 | 是 | 是 | 是 | 是 | 是 |
-| 创建 Project | 否 | 是 | 是 | 否 | 是 | 是 |
-| 修改/删除 Project | 否 | 修改、删除 | 否 | 否 | 是 | 是 |
-| 管理 Project 成员 | 否 | 是 | 否 | 否 | 是 | 是 |
-| 创建/修改 Project 子资源 | 否 | 是 | 是 | 否 | 是 | 是 |
-| 删除 Project 子资源 | 否 | 是 | 否 | 否 | 是 | 是 |
+| 创建 Project | 否 | 是 | 是 | 是 | 是 | 是 |
+| 修改/删除 Project | 否 | 修改、删除 | 否 | 按 owner/member 关系同普通用户 | 是 | 是 |
+| 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
+| 创建/修改 Project 子资源 | 否 | 是 | 是 | 按 owner/member 关系同普通用户 | 是 | 是 |
+| 删除 Project 子资源 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
 | 读取 BuildResource | 否 | 所属 Project | 所属 Project | 全部 | 全部 | 全部 |
 | 修改 BuildResource | 否 | 否 | 否 | 是 | 是 | 是 |
 | 查看 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
@@ -173,10 +173,10 @@ System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队�
 
 工程列表提供两种创建入口：
 
-- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户创建的工程由 Gateway 注入 owner，Admin/System 创建时需指定已启用的普通用户作为 owner。
+- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户和 Ops 创建的工程由 Gateway 注入 owner，Admin/System 创建时需指定已启用的普通用户或 Ops 用户作为 owner。
 - “导入 YAML”读取或粘贴单个 `ebs/v1 Project` 清单。客户端解析 YAML，校验 `apiVersion`、`kind`、工程名和至少一个包含 `os`、`arch` 的 Build target；提交前移除 `status` 和服务器维护的 metadata 字段。该入口只用于创建 Project，不构成通用资源 YAML 编辑器。
 
-两个入口共用 `POST /apis/ebs/v1/projects`。匿名用户点击后进入登录页并返回工程列表；Ops 不具备创建权限。409 冲突、校验错误和权限错误都在弹窗中保留输入并以当前界面语言展示。
+两个入口共用 `POST /apis/ebs/v1/projects`。匿名用户点击后进入登录页并返回工程列表。409 冲突、校验错误和权限错误都在弹窗中保留输入并以当前界面语言展示。
 
 ### 5.5 工程详情
 
@@ -631,7 +631,7 @@ GET /readyz
 2. 注册、登录、刷新和过期退出。
 3. User 创建 Project、添加成员、创建 Snapshot 和 Build。
 4. Member 可以修改子资源但不能删除。
-5. Ops 管理 BuildResource 并只读查看 Runner。
+5. Ops 相对于普通用户可以额外管理 BuildResource，并只读查看 Runner。
 6. Admin 管理普通 User 和 MachineAccount。
 7. Build 中止、409 冲突和 429 限流。
 8. Job 日志历史加载、SSE 增量、断线补齐和完成下载。

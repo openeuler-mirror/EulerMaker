@@ -385,13 +385,13 @@ const tabs = computed<Array<{ id: ProjectTab; label: string }>>(() => [
 ]);
 const canEditProject = computed(() => {
   const identity = session.session?.identity;
-  if (!identity || identity.type === "ops") return false;
+  if (!identity) return false;
   if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
 });
 const canStartBuild = computed(() => {
   const identity = session.session?.identity;
-  if (!identity || identity.type === "ops") return false;
+  if (!identity) return false;
   if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
   const labels = project.value?.metadata?.labels || {};
   return labels["ebs.io/owner-user"] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === "true";

@@ -284,19 +284,20 @@ func TestSystemProjectCreateRequiresEnabledOwnerUser(t *testing.T) {
 			t.Fatalf("decode upstream body: %v", err)
 		}
 		labels := labelsFromObject(obj)
-		if labels[ownerUserLabel] != "alice" {
-			t.Fatalf("expected system-provided owner user alice, got labels %#v", labels)
+		if labels[ownerUserLabel] != "alice" && labels[ownerUserLabel] != "operator" {
+			t.Fatalf("expected system-provided user or ops owner, got labels %#v", labels)
 		}
 		w.WriteHeader(http.StatusCreated)
 	}), 100, 200)
 
-	body := `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"alice"}}}`
-	req := authenticatedRequest(t, http.MethodPost, apiPrefix+"/projects", strings.NewReader(body), systemClaims())
-	rec := httptest.NewRecorder()
-	gw.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	for _, owner := range []string{"alice", "operator"} {
+		body := `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"` + owner + `"}}}`
+		req := authenticatedRequest(t, http.MethodPost, apiPrefix+"/projects", strings.NewReader(body), systemClaims())
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("owner %s: expected 201, got %d: %s", owner, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -502,21 +503,22 @@ func TestProjectOwnerCanModifyMemberLabelsButNotOwnerLabel(t *testing.T) {
 		}
 	}), 100, 200)
 
-	body := `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true"}}}`
+	for _, member := range []string{"bob", "operator"} {
+		body := `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.` + member + `":"true"}}}`
+		req := authenticatedRequest(t, http.MethodPut, apiPrefix+"/projects/project-a", strings.NewReader(body), userClaims("alice"))
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("member %s: expected 200, got %d: %s", member, rec.Code, rec.Body.String())
+		}
+	}
+	if proxied.Load() != 2 {
+		t.Fatalf("expected project update proxied twice, got %d", proxied.Load())
+	}
+
+	body := `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"bob"}}}`
 	req := authenticatedRequest(t, http.MethodPut, apiPrefix+"/projects/project-a", strings.NewReader(body), userClaims("alice"))
 	rec := httptest.NewRecorder()
-	gw.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if proxied.Load() != 1 {
-		t.Fatalf("expected project update proxied once, got %d", proxied.Load())
-	}
-
-	body = `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"bob"}}}`
-	req = authenticatedRequest(t, http.MethodPut, apiPrefix+"/projects/project-a", strings.NewReader(body), userClaims("alice"))
-	rec = httptest.NewRecorder()
 	gw.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
@@ -691,7 +693,7 @@ func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 	}
 }
 
-func TestOpsCanOnlyGetAndListRunners(t *testing.T) {
+func TestOpsRunnerAccessRemainsReadOnly(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, apiPrefix+"/runners") {
 			if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
@@ -730,6 +732,76 @@ func TestOpsCanOnlyGetAndListRunners(t *testing.T) {
 		gw.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("%s %s: got %d", tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
+func TestOpsInheritsProjectUserPermissions(t *testing.T) {
+	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, apiPrefix+"/projects/") {
+			name := strings.TrimPrefix(r.URL.Path, apiPrefix+"/projects/")
+			labels := map[string]string{"ebs.io/owner-user": "alice"}
+			switch name {
+			case "owned":
+				labels["ebs.io/owner-user"] = "operator"
+			case "member":
+				labels["ebs.io/member-user.operator"] = "true"
+			case "other":
+			default:
+				t.Fatalf("unexpected project read %s", name)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"metadata": map[string]any{"name": name, "labels": labels}})
+			return
+		}
+		if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
+			t.Fatalf("unexpected proxied identity for %s %s: %#v", r.Method, r.URL.Path, r.Header)
+		}
+		if r.Method == http.MethodPost && r.URL.Path == apiPrefix+"/projects" {
+			var project struct {
+				Metadata struct {
+					Labels map[string]string `json:"labels"`
+				} `json:"metadata"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&project); err != nil || project.Metadata.Labels[ownerUserLabel] != "operator" {
+				t.Fatalf("ops project owner was not injected: %#v, %v", project, err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		if r.Method == http.MethodPost && (r.URL.Path == apiPrefix+"/projects/owned/builds" || r.URL.Path == apiPrefix+"/projects/member/builds") {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == apiPrefix+"/projects/owned" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Fatalf("denied operation reached upstream: %s %s", r.Method, r.URL.Path)
+	}), 100, 200)
+
+	tests := []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodPost, apiPrefix + "/projects", `{"metadata":{"name":"new"}}`, http.StatusCreated},
+		{http.MethodPost, apiPrefix + "/projects/owned/builds", `{}`, http.StatusCreated},
+		{http.MethodPost, apiPrefix + "/projects/member/builds", `{}`, http.StatusCreated},
+		{http.MethodPut, apiPrefix + "/projects/owned", `{"metadata":{"name":"owned","labels":{"ebs.io/owner-user":"operator"}}}`, http.StatusOK},
+		{http.MethodPost, apiPrefix + "/projects/other/builds", `{}`, http.StatusForbidden},
+		{http.MethodDelete, apiPrefix + "/projects/member/builds/build-a", "", http.StatusForbidden},
+		{http.MethodPut, apiPrefix + "/projects/member", `{"metadata":{"name":"member","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.operator":"true"}}}`, http.StatusForbidden},
+		{http.MethodGet, apiPrefix + "/projects?watch=true", "", http.StatusForbidden},
+	}
+	for _, tc := range tests {
+		var body io.Reader
+		if tc.body != "" {
+			body = strings.NewReader(tc.body)
+		}
+		req := authenticatedRequest(t, tc.method, tc.path, body, opsClaims())
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("%s %s: expected %d, got %d: %s", tc.method, tc.path, tc.want, rec.Code, rec.Body.String())
 		}
 	}
 }

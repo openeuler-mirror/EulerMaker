@@ -146,7 +146,7 @@ const form = reactive({
 });
 const canCreate = computed(() => {
   const identity = session.session?.identity;
-  return identity?.type === "user" || identity?.type === "admin" || Boolean(identity?.scopes.includes("ebs:system"));
+  return identity?.type === "user" || identity?.type === "ops" || identity?.type === "admin" || Boolean(identity?.scopes.includes("ebs:system"));
 });
 const createForbidden = computed(() => session.authenticated && !canCreate.value);
 const requiresOwner = computed(() => session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
