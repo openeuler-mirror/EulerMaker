@@ -20,12 +20,13 @@ var indices = map[string]string{
 	"buildinfo":      "ebs-buildinfos",
 	"rpmrepo":        "ebs-rpmrepos",
 	"buildresource":  "ebs-buildresources",
+	"buildconf":      "ebs-buildconfs",
 	"user":           "ebs-users",
 	"machineaccount": "ebs-machineaccounts",
 	"buildclaim":     "ebs-build-target-claims",
 }
 
-var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource", "buildclaim"}
+var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "buildresource", "buildconf", "buildclaim"}
 var iamResources = []string{"user", "machineaccount"}
 
 const defaultIndexMapping = `{

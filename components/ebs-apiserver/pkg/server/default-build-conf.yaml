@@ -1,0 +1,6 @@
+apiVersion: ebs/v1
+kind: BuildConf
+metadata:
+  name: default
+spec:
+  targets: {}
