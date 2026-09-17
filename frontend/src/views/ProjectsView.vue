@@ -12,6 +12,9 @@
   <div v-if="actionErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(actionErrorKey) }}</div>
 
   <section class="content-panel">
+    <nav class="project-tabs" :aria-label="t('projects.type')">
+      <button v-for="type in projectTypes" :key="type" type="button" :class="{ active: projectType === type }" :aria-current="projectType === type ? 'page' : undefined" @click="changeProjectType(type)">{{ t(`projects.${type}`) }}</button>
+    </nav>
     <div class="list-toolbar">
       <label class="search-box">
         <Search />
@@ -62,6 +65,7 @@
         <label class="field"><span>{{ t("projects.displayName") }}</span><input v-model.trim="form.displayName" autocomplete="off" :placeholder="t('projects.displayNamePlaceholder')" /></label>
       </div>
       <label class="field"><span>{{ t("projects.descriptionField") }}</span><textarea v-model.trim="form.description" rows="3" :placeholder="t('projects.descriptionPlaceholder')"></textarea></label>
+      <label v-if="canManageType" class="field"><span>{{ t("projects.type") }}</span><select v-model="form.projectType"><option value="personal">{{ t("projects.personal") }}</option><option value="community">{{ t("projects.community") }}</option></select></label>
       <div class="form-grid">
         <label class="field"><span>{{ t("project.refType") }}</span><select v-model="form.defaultRef.type"><option value="Branch">{{ t("project.refBranch") }}</option><option value="Tag">{{ t("project.refTag") }}</option></select></label>
         <label class="field"><span>{{ t("projects.defaultRef") }}</span><input v-model.trim="form.defaultRef.value" required autocomplete="off" /></label>
@@ -109,8 +113,12 @@ import ModalDialog from "@/components/ModalDialog.vue";
 import { useSessionStore } from "@/stores/session";
 import type { Project } from "@/types";
 import { ProjectManifestError, projectFromForm, projectFromYaml } from "@/utils/projectManifest";
+import { projectTypeSelector, PROJECT_TYPE_LABEL, type ProjectType } from "@/utils/projectType";
 
 const projects = ref<Project[]>([]);
+const projectTypes: ProjectType[] = ["community", "personal"];
+const projectType = ref<ProjectType>("community");
+let loadSequence = 0;
 const { t } = useI18n();
 const router = useRouter();
 const session = useSessionStore();
@@ -143,12 +151,14 @@ const form = reactive({
   buildFlag: true,
   publishFlag: false,
   ownerUser: "",
+  projectType: "personal" as ProjectType,
 });
 const canCreate = computed(() => {
   const identity = session.session?.identity;
   return identity?.type === "user" || identity?.type === "ops" || identity?.type === "admin" || Boolean(identity?.scopes.includes("ebs:system"));
 });
 const createForbidden = computed(() => session.authenticated && !canCreate.value);
+const canManageType = computed(() => session.role === "ops" || session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
 const requiresOwner = computed(() => session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
 const totalPages = computed(() => {
   const estimated = remainingCount.value === undefined ? 0 : currentPage.value + Math.ceil(remainingCount.value / pageSize.value);
@@ -166,12 +176,14 @@ const filtered = computed(() => {
 onMounted(() => loadPage("", 1));
 
 async function loadPage(token: string, page = currentPage.value): Promise<boolean> {
+  const sequence = ++loadSequence;
   loading.value = true;
   errorKey.value = "";
-  const query = new URLSearchParams({ limit: String(pageSize.value) });
+  const query = new URLSearchParams({ limit: String(pageSize.value), labelSelector: projectTypeSelector(projectType.value) });
   if (token) query.set("continue", token);
   try {
     const result = await list<Project>(`/apis/ebs/v1/projects?${query}`);
+    if (sequence !== loadSequence) return false;
     projects.value = result.items;
     nextToken.value = result.next;
     remainingCount.value = result.remaining;
@@ -181,11 +193,19 @@ async function loadPage(token: string, page = currentPage.value): Promise<boolea
     else pageTokens.value = pageTokens.value.slice(0, page);
     return true;
   } catch (reason) {
+    if (sequence !== loadSequence) return false;
     errorKey.value = errorTranslationKey(reason, "errors.loadProjects");
     return false;
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
+}
+
+function changeProjectType(type: ProjectType): void {
+  if (projectType.value === type) return;
+  projectType.value = type;
+  projects.value = [];
+  reload();
 }
 
 function reload(): void {
@@ -221,7 +241,9 @@ function closeDialog(): void {
 
 async function submitForm(): Promise<void> {
   try {
-    await submitProject(projectFromForm(form), "projects.createSuccess");
+    const project = projectFromForm(form);
+    project.metadata!.labels = { ...project.metadata?.labels, [PROJECT_TYPE_LABEL]: canManageType.value ? form.projectType : "personal" };
+    await submitProject(project, "projects.createSuccess");
   } catch (reason) {
     setSubmitError(reason);
   }

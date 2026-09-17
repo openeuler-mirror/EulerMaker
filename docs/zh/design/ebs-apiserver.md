@@ -436,6 +436,8 @@ apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动
 
 ## 默认值与校验
 
+Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `personal`，显式值仅允许 `community` / `personal`；状态更新保留原 labels。存量缺失标签的读取及筛选语义见 [标签约定](labels.md#33-工程分类)。
+
 各资源 storage strategy 负责在创建和更新时保护 `spec/status` 边界：
 
 - 普通资源更新会保留旧 `status`。

@@ -66,6 +66,9 @@ export default {
     targets: "{count} 个构建目标",
   },
   projects: {
+    type: "工程类型",
+    community: "社区工程",
+    personal: "个人工程",
     eyebrow: "工程",
     title: "工程列表",
     search: "搜索当前页工程",

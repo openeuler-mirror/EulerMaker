@@ -99,6 +99,7 @@ func (s *statusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.
 	newP := obj.(*ebsv1.Project)
 	oldP := old.(*ebsv1.Project)
 	newP.Spec = oldP.Spec
+	newP.Labels = oldP.Labels
 }
 
 func (s *statusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
