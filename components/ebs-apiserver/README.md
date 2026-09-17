@@ -17,6 +17,28 @@ CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
 docker build -f components/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:dev .
 ```
 
+## 构建环境配置
+
+启动时通过 `pkg/server/default-build-conf.yaml` 创建集群级 `BuildConf/default`，不覆盖已有对象；ES alias 为 `ebs-buildconfs`。初始 `spec.targets: {}` 不影响启动，但会拒绝所有新 Build，需先配置 OS / Arch 对应的镜像：
+
+```yaml
+apiVersion: ebs/v1
+kind: BuildConf
+metadata:
+  name: default
+  resourceVersion: "<GET 返回的版本>"
+spec:
+  targets:
+    openEuler-24.03-LTS-SP4:
+      arches:
+        x86_64:
+          image: registry.example/build:24.03-x86_64
+        aarch64:
+          image: registry.example/build:24.03-aarch64
+```
+
+通过 `GET /apis/ebs/v1/buildconfs/default` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。经 Gateway 读取公开，写入仅允许 Ops/Admin/System；不支持删除、watch、status 子资源。创建 Build 时目标未配置返回 422，配置读取失败返回 503，均不申请构建目标占用。
+
 ## Build 创建互斥
 
 full、incremental、specified 构建按 Project + OS + Arch 通过 ES 原子占用互斥，冲突返回 409；single 不占用目标。apiserver 在终态写入或实际删除成功后释放占用，并每 30 秒扫描补偿，不需要 controller 直接访问 ES。

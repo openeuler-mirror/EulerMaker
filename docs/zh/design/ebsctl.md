@@ -67,6 +67,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | 资源 | 单数/复数 | 短名 | 作用域 |
 |------|-----------|------|--------|
 | Project | `project/projects` | `proj` | 集群级 |
+| BuildConf | `buildconf/buildconfs` | `bc` | 集群级 |
 | Snapshot | `snapshot/snapshots` | `snap` | Project |
 | Build | `build/builds` | `build` | Project |
 | Job | `job/jobs` | `job` | Project |
@@ -75,6 +76,8 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | BuildResource | `buildresource/buildresources` | `br` | Project |
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
+
+BuildConf 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 delete/watch。读取公开，写入要求 Ops/Admin/System，更新保留最新 `metadata.resourceVersion`。对象固定为 `default`，通过修改 spec 移除构建目标，不删除对象。
 
 ### 3.2 登录与 Context
 

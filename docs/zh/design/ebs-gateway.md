@@ -2,7 +2,7 @@
 
 ## 一、定位
 
-计划新增集群级 BuildConf 的公开读取及 Ops/Admin/System 写权限，不依赖 Project owner/member 关系；支持的 API 和权限边界见 [BuildConf 设计](build-configuration.md#23-api-与权限)。该能力待实现。
+集群级 BuildConf 支持公开读取，写入要求 Ops/Admin/System 权限，不依赖 Project owner/member 关系；支持的 API 和权限边界见 [BuildConf 设计](build-configuration.md#23-api-与权限)。
 
 Project 分类标签 `project.ebs.io/type` 的创建、修改权限及 PATCH 保护规则见 [标签约定](labels.md#33-工程分类)；分类不改变既有访问权限。
 
