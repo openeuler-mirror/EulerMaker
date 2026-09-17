@@ -22,6 +22,8 @@ ebsctl get br openeuler-mainline -p openeuler-mainline -o yaml
 
 BuildResource does not support `patch` or `watch`. Regular Project owners and members can only read it in their authorized Projects; `create`, `replace`, and `delete` require Ops, Admin, or System privileges.
 
+Use `-p/--project` or its alias `-n/--namespace` to override the current Project. Both accept the same Project name; if repeated or combined, the last value wins.
+
 For CI, set `EBS_GATEWAY` and `EBS_TOKEN` instead of persisting a context. The default configuration file is `$HOME/.config/ebs/config.yaml` and must use mode `0600` in a mode `0700` directory.
 
 The first version intentionally excludes Runner, Artifact, log, `apply`, plugin, exec, and port-forward commands. See `docs/zh/design/ebsctl.md` for the complete command and compatibility contract.

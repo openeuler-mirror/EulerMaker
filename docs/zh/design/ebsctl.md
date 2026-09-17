@@ -56,6 +56,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | `--config` | 配置文件，默认 `$HOME/.config/ebs/config.yaml` |
 | `--context` | 覆盖当前 context |
 | `-p, --project` | 覆盖默认 Project |
+| `-n, --namespace` | 与 `-p, --project` 等价；同时指定时以最后出现的值为准 |
 | `--gateway` | 临时覆盖 Gateway 地址，不写配置 |
 | `--request-timeout` | 普通 HTTP 请求超时，默认 `30s`；watch 不使用该总超时 |
 | `--insecure-skip-tls-verify` | 仅测试环境跳过 TLS 校验 |
