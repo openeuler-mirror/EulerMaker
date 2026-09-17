@@ -36,10 +36,16 @@
     <form class="project-form" @submit.prevent="add">
       <p class="form-hint">{{ t('buildConf.addHint') }}</p>
       <div class="form-grid">
-        <label class="field required-field"><span>{{ t('buildConf.os') }}</span><input v-model.trim="newOS" required list="buildconf-os-options" autocomplete="off" /></label>
+        <div class="field required-field buildconf-os-field"><span id="buildconf-os-label">{{ t('buildConf.os') }}</span>
+          <div ref="osSuggestRoot" class="buildconf-os-combobox" @focusout="onOSFocusOut">
+            <input v-model.trim="newOS" required autocomplete="off" role="combobox" aria-autocomplete="list" aria-labelledby="buildconf-os-label" aria-controls="buildconf-os-options" :aria-expanded="osSuggestionsOpen && matchingOS.length > 0" :aria-activedescendant="osSuggestionsOpen && activeOSIndex >= 0 ? `buildconf-os-option-${activeOSIndex}` : undefined" @focus="osSuggestionsOpen = true" @input="onOSInput" @keydown="onOSKeydown" />
+            <div v-if="osSuggestionsOpen && matchingOS.length" id="buildconf-os-options" ref="osSuggestList" class="buildconf-os-options" role="listbox" :aria-label="t('buildConf.os')">
+              <button v-for="(os, index) in matchingOS" :id="`buildconf-os-option-${index}`" :key="os" type="button" role="option" tabindex="-1" :aria-selected="activeOSIndex === index" :class="{ active: activeOSIndex === index }" @mousedown.prevent @mouseenter="activeOSIndex = index" @click="selectOS(os)">{{ os }}</button>
+            </div>
+          </div>
+        </div>
         <label class="field required-field"><span>{{ t('buildConf.arch') }}</span><input v-model.trim="newArch" required autocomplete="off" /></label>
       </div>
-      <datalist id="buildconf-os-options"><option v-for="group in targetGroups" :key="group.os" :value="group.os"></option></datalist>
       <label class="field required-field"><span>{{ t('buildConf.image') }}</span><input v-model.trim="newImage" required autocomplete="off" /></label>
       <div v-if="addError" class="form-error" role="alert">{{ t(addError) }}</div>
       <div class="modal-actions"><button class="secondary-button" type="button" @click="closeAddDialog">{{ t('common.cancel') }}</button><button class="primary-button" type="submit">{{ t('buildConf.add') }}</button></div>
@@ -48,7 +54,7 @@
 </template>
 <script setup lang="ts">
 import { Refresh } from '@element-plus/icons-vue';
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { parse, stringify } from 'yaml';
 import { ApiError, errorTranslationKey, request } from '@/api';
@@ -63,6 +69,10 @@ const mode = ref<typeof modes[number]>('list');
 const source = ref('');
 const newOS = ref(''); const newArch = ref(''); const newImage = ref('');
 const addDialogOpen = ref(false); const addError = ref('');
+const osSuggestRoot = ref<HTMLElement | null>(null);
+const osSuggestList = ref<HTMLElement | null>(null);
+const osSuggestionsOpen = ref(false);
+const activeOSIndex = ref(-1);
 const error = ref(''); const success = ref(false); const saving = ref(false);
 const editing = ref(false);
 const expanded = ref(false);
@@ -72,8 +82,11 @@ const targetGroups = computed(() => Object.entries(draft.value.targets).map(([os
 })));
 const targetEntries = computed(() => targetGroups.value.flatMap(group => group.entries));
 const visibleGroups = computed(() => expanded.value ? targetGroups.value : targetGroups.value.slice(0, 1));
+const matchingOS = computed(() => targetGroups.value.map(group => group.os).filter(os => os.toLocaleLowerCase().includes(newOS.value.toLocaleLowerCase())));
 const path = '/apis/ebs/v1/buildconfs/default';
 onMounted(load);
+onMounted(() => document.addEventListener('pointerdown', onOSPointerDown));
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onOSPointerDown));
 async function load() {
   if (saving.value) return;
   saving.value = true; error.value = ''; success.value = false;
@@ -100,9 +113,30 @@ function cancelEdit() {
 }
 function openAddDialog() {
   if (!editing.value) return;
-  newOS.value = ''; newArch.value = ''; newImage.value = ''; addError.value = ''; addDialogOpen.value = true;
+  newOS.value = ''; newArch.value = ''; newImage.value = ''; addError.value = ''; osSuggestionsOpen.value = false; activeOSIndex.value = -1; addDialogOpen.value = true;
 }
-function closeAddDialog() { addDialogOpen.value = false; }
+function closeAddDialog() { osSuggestionsOpen.value = false; addDialogOpen.value = false; }
+function onOSInput() { activeOSIndex.value = -1; osSuggestionsOpen.value = true; }
+function selectOS(os: string) { newOS.value = os; activeOSIndex.value = -1; osSuggestionsOpen.value = false; }
+function onOSFocusOut(event: FocusEvent) {
+  if (!osSuggestRoot.value?.contains(event.relatedTarget as Node | null)) osSuggestionsOpen.value = false;
+}
+function onOSPointerDown(event: PointerEvent) {
+  if (!osSuggestRoot.value?.contains(event.target as Node)) osSuggestionsOpen.value = false;
+}
+function onOSKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && osSuggestionsOpen.value) {
+    event.preventDefault(); event.stopPropagation(); osSuggestionsOpen.value = false; return;
+  }
+  if (event.key === 'Enter' && osSuggestionsOpen.value && activeOSIndex.value >= 0) {
+    event.preventDefault(); selectOS(matchingOS.value[activeOSIndex.value]); return;
+  }
+  if ((event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || !matchingOS.value.length) return;
+  event.preventDefault(); osSuggestionsOpen.value = true;
+  const step = event.key === 'ArrowDown' ? 1 : -1;
+  activeOSIndex.value = activeOSIndex.value < 0 ? (step > 0 ? 0 : matchingOS.value.length - 1) : (activeOSIndex.value + step + matchingOS.value.length) % matchingOS.value.length;
+  void nextTick(() => osSuggestList.value?.children[activeOSIndex.value]?.scrollIntoView({ block: 'nearest' }));
+}
 function add() {
   if (!editing.value || !addDialogOpen.value) return;
   if (!newOS.value || !newArch.value || !newImage.value || ['__proto__','constructor','prototype'].includes(newOS.value) || ['__proto__','constructor','prototype'].includes(newArch.value)) { addError.value = 'buildConf.invalid'; return; }
@@ -156,6 +190,11 @@ async function save() {
 .buildconf-image-value { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
 .buildconf-actions { margin: 16px 0; display: flex; justify-content: flex-start; flex-wrap: wrap; gap: 10px; }
 .buildconf-expand-button { margin-top: 12px; }
+.buildconf-os-combobox { position: relative; }
+.buildconf-os-combobox input { width: 100%; }
+.buildconf-os-options { position: absolute; top: calc(100% + 5px); right: 0; left: 0; z-index: 5; max-height: 220px; padding: 5px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 28px rgb(25 54 96 / 14%); }
+.buildconf-os-options button { width: 100%; min-height: 36px; padding: 7px 10px; display: block; border: 0; border-radius: 5px; color: #455269; background: transparent; text-align: left; font-size: 14px; overflow-wrap: anywhere; }
+.buildconf-os-options button:hover, .buildconf-os-options button.active { color: var(--blue); background: #edf6ff; }
 .yaml-editor[readonly] { background: #f7f9fc; }
 @media (max-width: 640px) {
   .buildconf-arch-row { grid-template-columns: minmax(64px, 100px) minmax(0, 1fr) auto; gap: 8px; }
