@@ -24,6 +24,13 @@ export interface BuildTarget {
   publishFlag?: boolean;
 }
 
+export interface BuildConf {
+  apiVersion?: string;
+  kind?: string;
+  metadata?: ObjectMeta;
+  spec: { targets: Record<string, { arches: Record<string, { image: string }> }> };
+}
+
 export interface GitRef {
   type?: "Branch" | "Tag" | "Commit";
   value?: string;

@@ -73,17 +73,12 @@
       <label v-if="requiresOwner" class="field required-field"><span>{{ t("projects.ownerUser") }}</span><input v-model.trim="form.ownerUser" required autocomplete="off" :placeholder="t('projects.ownerUserPlaceholder')" /></label>
       <fieldset class="target-fieldset">
         <legend>{{ t("projects.firstTarget") }}</legend>
-        <div class="form-grid">
-          <label class="field required-field"><span>{{ t("projects.targetOS") }}</span><input v-model.trim="form.os" required list="os-options" autocomplete="off" /></label>
-          <label class="field required-field"><span>{{ t("projects.targetArch") }}</span><input v-model.trim="form.arch" required list="arch-options" autocomplete="off" /></label>
-        </div>
+        <BuildTargetFields v-model:os="form.os" v-model:arch="form.arch" />
         <div class="checkbox-row">
           <label><input v-model="form.buildFlag" type="checkbox" />{{ t("projects.buildFlag") }}</label>
           <label><input v-model="form.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label>
         </div>
       </fieldset>
-      <datalist id="os-options"><option value="openEuler-24.03-LTS"></option><option value="openEuler-22.03-LTS-SP4"></option></datalist>
-      <datalist id="arch-options"><option value="x86_64"></option><option value="aarch64"></option><option value="riscv64"></option></datalist>
       <div v-if="submitErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(submitErrorKey) }}</div>
       <div class="modal-actions"><button class="secondary-button" type="button" :disabled="submitting" @click="closeDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="submitting">{{ submitting ? t("projects.submitting") : t("projects.submitCreate") }}</button></div>
     </form>
@@ -110,11 +105,15 @@ import { useI18n } from "vue-i18n";
 import { createProject, errorTranslationKey, list } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
+import BuildTargetFields from "@/components/BuildTargetFields.vue";
+import { useBuildConf } from "@/composables/useBuildConf";
+
 import { useSessionStore } from "@/stores/session";
 import type { Project } from "@/types";
 import { ProjectManifestError, projectFromForm, projectFromYaml } from "@/utils/projectManifest";
 import { projectTypeSelector, PROJECT_TYPE_LABEL, type ProjectType } from "@/utils/projectType";
 
+const { supports: supportsBuildTarget } = useBuildConf();
 const projects = ref<Project[]>([]);
 const projectTypes: ProjectType[] = ["community", "personal"];
 const projectType = ref<ProjectType>("community");
@@ -146,8 +145,8 @@ const form = reactive({
   displayName: "",
   description: "",
   defaultRef: { type: "Branch" as "Branch" | "Tag", value: "master" },
-  os: "openEuler-24.03-LTS",
-  arch: "x86_64",
+  os: "",
+  arch: "",
   buildFlag: true,
   publishFlag: false,
   ownerUser: "",
@@ -240,6 +239,7 @@ function closeDialog(): void {
 }
 
 async function submitForm(): Promise<void> {
+  if (!supportsBuildTarget(form)) { submitErrorKey.value = "buildConf.unsupported"; return; }
   try {
     const project = projectFromForm(form);
     project.metadata!.labels = { ...project.metadata?.labels, [PROJECT_TYPE_LABEL]: canManageType.value ? form.projectType : "personal" };
