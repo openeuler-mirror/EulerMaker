@@ -34,8 +34,8 @@ body.modal-open { overflow: hidden; }
 .brand img { width: 30px; height: 30px; }
 .main-nav { height: 100%; display: flex; align-items: stretch; gap: 34px; }
 .main-nav a { position: relative; display: flex; align-items: center; color: #536176; font-size: 15px; font-weight: 550; }
-.main-nav a:hover, .main-nav a.router-link-exact-active { color: var(--blue); }
-.main-nav a.router-link-exact-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--blue); }
+.main-nav a:hover, .main-nav a.router-link-active { color: var(--blue); }
+.main-nav a.router-link-active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--blue); }
 .account { display: flex; align-items: center; gap: 14px; }
 .account-menu { position: relative; }
 .account-trigger { max-width: 240px; padding: 7px 4px; display: flex; align-items: center; gap: 7px; border: 0; border-radius: 6px; color: #48576d; background: transparent; font-size: 14px; }
@@ -275,11 +275,13 @@ body.modal-open { overflow: hidden; }
 .project-id button.copied { color: #21895c; }
 .project-hero p { margin: 15px 0 0; color: var(--muted); font-size: 15px; line-height: 1.7; }
 .project-tabs { margin-top: 24px; display: flex; gap: 30px; border-bottom: 1px solid var(--line); }
+.content-panel > .project-tabs { margin-top: 0; }
 .project-tabs button { position: relative; padding: 13px 2px 14px; color: #59677b; background: transparent; border: 0; font-size: 15px; font-weight: 650; white-space: nowrap; }
 .project-tabs button:hover { color: var(--blue); }
 .project-tabs button.active { color: var(--blue); }
 .project-tabs button.active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--blue); }
 .project-tabs button:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 2px; border-radius: 3px; }
+.project-tabs + .list-toolbar { margin-top: 20px; }
 .project-tab-panel { margin-top: 20px; }
 .project-tab-panel > .metrics { margin-top: 0; }
 .project-packages-panel { margin-top: 20px; }
@@ -407,7 +409,7 @@ body.modal-open { overflow: hidden; }
   .main-nav { position: absolute; left: 0; right: 0; top: 64px; height: auto; padding: 8px 24px 18px; display: none; flex-direction: column; align-items: stretch; gap: 0; background: #fff; border-bottom: 1px solid var(--line); box-shadow: var(--shadow); }
   .main-nav.open { display: flex; }
   .main-nav a { min-height: 44px; }
-  .main-nav a.router-link-exact-active::after { left: -10px; right: auto; top: 12px; bottom: 12px; width: 3px; height: auto; border-radius: 3px; }
+  .main-nav a.router-link-active::after { left: -10px; right: auto; top: 12px; bottom: 12px; width: 3px; height: auto; border-radius: 3px; }
   .welcome-panel { grid-template-columns: 1fr 180px; padding: 40px; }
   .build-mark { width: 170px; height: 170px; }
   .build-mark small { bottom: 34px; }

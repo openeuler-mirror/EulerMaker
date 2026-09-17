@@ -175,11 +175,12 @@
     <ModalDialog v-if="buildDialogOpen" title-id="create-build-title" :title="t(buildType === 'full' ? 'project.createFullBuild' : 'project.createIncrementalBuild')" :close-label="t('common.close')" @close="closeBuildDialog">
       <form class="project-form" @submit.prevent="createBuild">
         <p class="form-hint">{{ t("project.createBuildHint") }}</p>
+        <p v-if="unsupportedBuildSelection" class="form-error">{{ t('buildConf.unsupported') }} <button type="button" @click="reloadBuildConf">{{ t('common.reload') }}</button></p>
         <fieldset class="target-fieldset">
           <legend>{{ t("project.buildTarget") }}</legend>
           <div class="build-target-options">
             <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
-              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }}</span></label>
+              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildConf.unsupported') }}</small></span></label>
               <div class="build-target-statuses">
                 <span>{{ t("project.buildEnabled") }} <span :class="['target-boolean-icon', { enabled: target.buildFlag }]" :aria-label="booleanLabel(target.buildFlag)" :title="booleanLabel(target.buildFlag)"><Check v-if="target.buildFlag" /><Close v-else /></span></span>
                 <span>{{ t("project.publishEnabled") }} <span :class="['target-boolean-icon', { enabled: target.publishFlag }]" :aria-label="booleanLabel(target.publishFlag)" :title="booleanLabel(target.publishFlag)"><Check v-if="target.publishFlag" /><Close v-else /></span></span>
@@ -188,7 +189,7 @@
           </div>
         </fieldset>
         <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
-        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
       </form>
     </ModalDialog>
 
@@ -227,15 +228,10 @@
           <fieldset v-for="(target, index) in editingTargets" :key="index" class="target-fieldset editable-target">
             <legend>{{ t("project.targetNumber", { number: index + 1 }) }}</legend>
             <button class="remove-target-button" type="button" :aria-label="t('project.removeTarget', { number: index + 1 })" :disabled="editingTargets.length === 1 || savingTargets" @click="removeTarget(index)"><Delete /></button>
-            <div class="form-grid">
-              <label class="field required-field"><span>{{ t("projects.targetOS") }}</span><input v-model.trim="target.os" required list="edit-os-options" autocomplete="off" /></label>
-              <label class="field required-field"><span>{{ t("projects.targetArch") }}</span><input v-model.trim="target.arch" required list="edit-arch-options" autocomplete="off" /></label>
-            </div>
+            <BuildTargetFields v-model:os="target.os" v-model:arch="target.arch" allow-legacy />
             <div class="checkbox-row"><label><input v-model="target.buildFlag" type="checkbox" />{{ t("projects.buildFlag") }}</label><label><input v-model="target.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label></div>
           </fieldset>
         </div>
-        <datalist id="edit-os-options"><option value="openEuler-24.03-LTS"></option><option value="openEuler-22.03-LTS-SP4"></option></datalist>
-        <datalist id="edit-arch-options"><option value="x86_64"></option><option value="aarch64"></option><option value="riscv64"></option></datalist>
         <button class="secondary-button add-target-button" type="button" :disabled="savingTargets" @click="addTarget"><Plus />{{ t("project.addTarget") }}</button>
         <div v-if="targetErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(targetErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingTargets" @click="closeTargetEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingTargets">{{ savingTargets ? t("common.saving") : t("common.save") }}</button></div>
@@ -294,6 +290,8 @@ import { stringify } from "yaml";
 import { errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
+import BuildTargetFields from "@/components/BuildTargetFields.vue";
+import { useBuildConf } from "@/composables/useBuildConf";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project } from "@/types";
@@ -323,6 +321,8 @@ const buildDialogOpen = ref(false);
 const buildType = ref<"full" | "incremental">("full");
 const buildTargetDrafts = ref<BuildTargetDraft[]>([]);
 const creatingBuild = ref(false);
+const { supports: supportsBuildTarget, error: buildConfError, loading: buildConfLoading, reload: reloadBuildConf } = useBuildConf();
+const unsupportedBuildSelection = computed(() => buildConfLoading.value || Boolean(buildConfError.value) || buildTargetDrafts.value.some(target => target.selected && !supportsBuildTarget(target)));
 const buildDialogErrorKey = ref("");
 const buildActionErrorKey = ref("");
 const createdBuildNames = ref<string[]>([]);
@@ -466,6 +466,7 @@ function selectTab(tab: ProjectTab): void {
 
 function openBuildDialog(type: "full" | "incremental"): void {
   if (!project.value || !canStartBuild.value || buildConfigurationMissing.value) return;
+  void reloadBuildConf();
   buildType.value = type;
   buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os,
@@ -487,6 +488,7 @@ function closeBuildDialog(): void {
 }
 
 async function createBuild(): Promise<void> {
+  if (unsupportedBuildSelection.value) return;
   if (!project.value || !canStartBuild.value || creatingBuild.value) return;
   const targets = buildTargetDrafts.value
     .filter((target) => target.selected && target.os && target.arch)
@@ -607,7 +609,7 @@ function closeTargetEditor(): void {
 }
 
 function addTarget(): void {
-  editingTargets.value.push({ os: "openEuler-24.03-LTS", arch: "x86_64", buildFlag: true, publishFlag: false });
+  editingTargets.value.push({ os: "", arch: "", buildFlag: true, publishFlag: false });
 }
 
 function removeTarget(index: number): void {
