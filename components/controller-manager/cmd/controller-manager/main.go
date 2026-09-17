@@ -9,6 +9,7 @@ import (
 
 	"controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
+	buildcontroller "controller-manager/pkg/controllers/build"
 	jobcontroller "controller-manager/pkg/controllers/job"
 	runnercontroller "controller-manager/pkg/controllers/runner"
 	snapshotcontroller "controller-manager/pkg/controllers/snapshot"
@@ -47,6 +48,7 @@ func main() {
 		log.Fatal(err)
 	}
 	initializers := map[string]manager.InitFunc{
+		buildcontroller.Name:    buildcontroller.Initializer(buildcontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
 		jobcontroller.Name:      jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
 		runnercontroller.Name:   runnercontroller.Initializer(runnercontroller.Config{HeartbeatTimeout: o.Runner.HeartbeatTimeout, StartupGracePeriod: o.Runner.StartupGracePeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
 		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, gitClient),
