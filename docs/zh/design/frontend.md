@@ -2,6 +2,8 @@
 
 ## 一、文档状态
 
+构建配置的后续扩展见 [BuildConf 设计](build-configuration.md#26-前端与-ebsctl)：运维编辑 OS/Arch/镜像映射，工程目标选项改为读取全局配置，保留旧工程已失效的目标值。该能力待实现。
+
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 
 本文状态为 **Proposed**。实现应以当前 `ebs/v1`、`iam.ebs/v1`、Gateway 和 Artifact Manager 契约为准；资源字段的权威定义仍位于 [`api/ebs/v1`](../../../api/ebs/v1) 和 [`components/ebs-apiserver/pkg/apis/iam/v1`](../../../components/ebs-apiserver/pkg/apis/iam/v1)。

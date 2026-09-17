@@ -2,6 +2,8 @@
 
 ## 一、定位
 
+计划新增集群级 BuildConf 的公开读取及 Ops/Admin/System 写权限，不依赖 Project owner/member 关系；支持的 API 和权限边界见 [BuildConf 设计](build-configuration.md#23-api-与权限)。该能力待实现。
+
 Project 分类标签 `project.ebs.io/type` 的创建、修改权限及 PATCH 保护规则见 [标签约定](labels.md#33-工程分类)；分类不改变既有访问权限。
 
 `ebs-gateway` 是 EulerMaker 对外请求入口，位于客户端和 `ebs-apiserver` 之间，负责公开只读访问、令牌认证、用户状态检查、Project 权限校验、审计、限流和请求转发。
