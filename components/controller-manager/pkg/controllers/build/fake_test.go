@@ -316,11 +316,16 @@ func (f *fakeAPI) CreateRpmRepo(_ context.Context, project string, request *ebsv
 		return nil, apierrors.NewAlreadyExists(rpmReposResource, request.Name)
 	}
 	created := request.DeepCopy()
-	// The apiserver keeps the seeded base version and forces the initial phase, dropping every other status
-	// field. That contract is implemented by the RpmRepo create strategy and guarded by the store level test
-	// TestCreateRpmRepoKeepsSeededRepositoryBaseline in components/ebs-apiserver/pkg/storage/esstore.
+	// The apiserver keeps the requested initial phase and the seeded base version, dropping every other status
+	// field; a missing or unsupported phase falls back to Processing. That contract is implemented by the
+	// RpmRepo create strategy and guarded by the store level test TestCreateRpmRepoKeepsSeededRepositoryBaseline
+	// in components/ebs-apiserver/pkg/storage/esstore.
 	seeded := created.Status.Repository
-	created.Status = ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoPending}}
+	phase := ebsv1.RpmRepoProcessing
+	if seeded != nil && (seeded.Phase == ebsv1.RpmRepoReady || seeded.Phase == ebsv1.RpmRepoProcessing) {
+		phase = seeded.Phase
+	}
+	created.Status = ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: phase}}
 	if seeded != nil {
 		created.Status.Repository.RepositoryUID = seeded.RepositoryUID
 		created.Status.Repository.ContentURL = seeded.ContentURL

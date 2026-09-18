@@ -15,15 +15,21 @@ func NewStorage() *scopedresource.Storage {
 		New:     func() runtime.Object { return &ebsv1.RpmRepo{} },
 		NewList: func() runtime.Object { return &ebsv1.RpmRepoList{} },
 		PrepareCreate: func(obj runtime.Object) {
-			// The Build controller seeds the inherited process repository version when it creates the
-			// RpmRepo of a round. Only that pair survives creation: release, conditions and every other
-			// repository field stay server-owned and the repository phase always starts at Pending.
+			// The Build controller seeds the inherited process repository version and the initial
+			// process repository phase when it creates the RpmRepo of a round: Ready together with a
+			// complete baseline, Processing otherwise. Only that phase and the baseline pair survive
+			// creation; release, conditions and every other repository field stay server-owned.
+			// A missing phase defaults to Processing; anything else is passed through so the create
+			// validation below can reject it.
 			repo := obj.(*ebsv1.RpmRepo)
 			seeded := repo.Status.Repository
 			repo.Status = ebsv1.RpmRepoStatus{
-				Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoPending},
+				Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoProcessing},
 			}
 			if seeded != nil {
+				if seeded.Phase != "" {
+					repo.Status.Repository.Phase = seeded.Phase
+				}
 				repo.Status.Repository.RepositoryUID = seeded.RepositoryUID
 				repo.Status.Repository.ContentURL = seeded.ContentURL
 			}
@@ -43,6 +49,23 @@ func NewStorage() *scopedresource.Storage {
 				(repository.RepositoryUID == "") != (repository.ContentURL == "") {
 				allErrs = append(allErrs, field.Invalid(field.NewPath("status", "repository"), repository,
 					"repositoryUID and contentURL must be provided together"))
+			}
+			// The create request may only pick the initial process repository phase: Ready when it
+			// inherits a complete baseline, Processing otherwise. Later phases belong to the RpmRepo
+			// controller, so other values (including a Ready without a baseline) are rejected here and
+			// not in ValidateRpmRepo, which also guards ordinary updates.
+			if repository := repo.Status.Repository; repository != nil {
+				switch repository.Phase {
+				case ebsv1.RpmRepoProcessing:
+				case ebsv1.RpmRepoReady:
+					if repository.RepositoryUID == "" || repository.ContentURL == "" {
+						allErrs = append(allErrs, field.Invalid(field.NewPath("status", "repository", "phase"), repository.Phase,
+							"phase Ready requires a complete repository baseline"))
+					}
+				default:
+					allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "repository", "phase"), repository.Phase,
+						[]string{string(ebsv1.RpmRepoProcessing), string(ebsv1.RpmRepoReady)}))
+				}
 			}
 			return allErrs
 		},

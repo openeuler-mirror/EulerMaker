@@ -230,14 +230,12 @@ func (p BuildPhase) IsTerminal() bool {
 type RpmRepoPhase string
 
 const (
-	RpmRepoPending    RpmRepoPhase = "Pending"
 	RpmRepoProcessing RpmRepoPhase = "Processing"
 	RpmRepoReady      RpmRepoPhase = "Ready"
 	RpmRepoFailed     RpmRepoPhase = "Failed"
 )
 
 var rpmRepoPhaseValues = []string{
-	string(RpmRepoPending),
 	string(RpmRepoProcessing),
 	string(RpmRepoReady),
 	string(RpmRepoFailed),
@@ -251,7 +249,7 @@ func RpmRepoPhaseValues() []string {
 // IsValid reports whether p is a supported RpmRepo phase.
 func (p RpmRepoPhase) IsValid() bool {
 	switch p {
-	case RpmRepoPending, RpmRepoProcessing, RpmRepoReady, RpmRepoFailed:
+	case RpmRepoProcessing, RpmRepoReady, RpmRepoFailed:
 		return true
 	default:
 		return false

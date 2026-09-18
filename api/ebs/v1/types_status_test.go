@@ -139,7 +139,7 @@ func TestBuildPhase(t *testing.T) {
 }
 
 func TestRpmRepoPhase(t *testing.T) {
-	for _, phase := range []RpmRepoPhase{RpmRepoPending, RpmRepoProcessing, RpmRepoReady, RpmRepoFailed} {
+	for _, phase := range []RpmRepoPhase{RpmRepoProcessing, RpmRepoReady, RpmRepoFailed} {
 		if !phase.IsValid() {
 			t.Errorf("phase %q is not valid", phase)
 		}
@@ -149,7 +149,7 @@ func TestRpmRepoPhase(t *testing.T) {
 	}
 	values := RpmRepoPhaseValues()
 	values[0] = "changed"
-	if RpmRepoPhaseValues()[0] != string(RpmRepoPending) {
+	if RpmRepoPhaseValues()[0] != string(RpmRepoProcessing) {
 		t.Error("RpmRepoPhaseValues exposes mutable internal state")
 	}
 }

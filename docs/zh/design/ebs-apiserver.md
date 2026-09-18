@@ -448,7 +448,7 @@ Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `perso
 - `Snapshot` 创建默认 `status.phase = Pending`。
 - `Build` 创建默认 `status.phase = Pending`。
 - `BuildInfo` 创建默认 `status.phase = Pending`。
-- `RpmRepo` 创建默认 `status.repository.phase = Pending`，`status.release` 在产生正式发布意图前保持为空。创建请求中若同时提供 `status.repository.repositoryUID` 与 `status.repository.contentURL`，服务端保留这两个字段作为过程仓基线（Build Controller 用其继承上一轮过程仓版本），`repository` 的其余字段与 `status.release`、`status.conditions` 一律归零；只提供其中一个字段的请求返回 422。
+- `RpmRepo` 创建保留请求携带的 `status.repository.phase`（只允许 `Processing` / `Ready`，缺失时默认 `Processing`），`status.release` 在产生正式发布意图前保持为空。创建请求中若同时提供 `status.repository.repositoryUID` 与 `status.repository.contentURL`，服务端保留这两个字段作为过程仓基线（Build Controller 用其继承上一轮过程仓版本，并在继承到完整基线时把相位置为 `Ready`），`repository` 的其余字段与 `status.release`、`status.conditions` 一律归零；只提供其中一个字段、`phase=Ready` 而未提供完整基线、或 `phase` 取 `Processing` / `Ready` 以外的值的请求返回 422。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 - 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。

@@ -66,7 +66,7 @@ func TestPendingSeedsRpmRepoBaseFromHistory(t *testing.T) {
 			if created.Status.Repository == nil {
 				t.Fatal("repository status is missing")
 			}
-			if created.Status.Repository.Phase != ebsv1.RpmRepoPending {
+			if created.Status.Repository.Phase != ebsv1.RpmRepoReady {
 				t.Fatalf("phase = %q", created.Status.Repository.Phase)
 			}
 			if created.Status.Repository.RepositoryUID != seededRepositoryUID || created.Status.Repository.ContentURL != repositoryContentURL(seededRepositoryUID) {
@@ -100,7 +100,7 @@ func TestPendingSkipsRpmRepoBaseWithoutHistory(t *testing.T) {
 	if created.Status.Repository.RepositoryUID != "" || created.Status.Repository.ContentURL != "" {
 		t.Fatalf("seeded base = %+v", created.Status.Repository)
 	}
-	if created.Status.Repository.Phase != ebsv1.RpmRepoPending {
+	if created.Status.Repository.Phase != ebsv1.RpmRepoProcessing {
 		t.Fatalf("phase = %q", created.Status.Repository.Phase)
 	}
 }
@@ -162,6 +162,9 @@ func TestPendingDegradesWhenHistoricalRpmRepoUnavailable(t *testing.T) {
 			}
 			if created.Status.Repository.RepositoryUID != "" || created.Status.Repository.ContentURL != "" {
 				t.Fatalf("seeded base = %+v", created.Status.Repository)
+			}
+			if created.Status.Repository.Phase != ebsv1.RpmRepoProcessing {
+				t.Fatalf("phase = %q", created.Status.Repository.Phase)
 			}
 			if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared || !stored.Status.EndTime.IsZero() {
 				t.Fatalf("status = %+v", stored.Status)
