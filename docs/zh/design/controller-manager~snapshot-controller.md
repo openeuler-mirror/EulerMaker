@@ -576,7 +576,7 @@ builds:           get
 - `duration`: reconcile 耗时
 - `error`: 错误信息（如有）
 - `package_name`: 异常包名称（异常逐包记录）
-- `package_names`、`package_count`: 本轮新确认解析成功的包名列表（按名称排序）及数量，合并为一条 `PackagesResolved` 日志；没有新增成功包时不输出
+- `package_names`、`package_count`、`omitted_count`: 本轮新确认解析成功的包按名称排序，仅显示前 3 个包名；保留成功总数及省略数量（未省略时为 0），合并为一条 `PackagesResolved` 日志；没有新增成功包时不输出
 - `git_server_method`: git-server API 方法
 
 不记录 payload、凭据或完整 packageRepos 列表。

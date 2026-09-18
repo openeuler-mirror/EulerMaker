@@ -2,12 +2,41 @@ package snapshot
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"strings"
 	"testing"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
+
+func TestRecordStatusTruncatesPackageNames(t *testing.T) {
+	for _, count := range []int{1, 3, 4, 5000} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			before, _ := baseObjects(nil)
+			after := before.DeepCopy()
+			after.Status.PackageRepoStatuses = make(map[string]ebsv1.PackageRepoStatus)
+			for i := count - 1; i >= 0; i-- {
+				after.Status.PackageRepoStatuses[fmt.Sprintf("pkg-%04d", i)] = ebsv1.PackageRepoStatus{CommitID: "commit"}
+			}
+			var output bytes.Buffer
+			oldWriter := log.Writer()
+			log.SetOutput(&output)
+			t.Cleanup(func() { log.SetOutput(oldWriter) })
+			c := newTestController(t, &fakeClient{}, &fakeGitClient{}, Config{})
+			c.recordStatus(before, after)
+			shown := min(count, 3)
+			names := make([]string, shown)
+			for i := range names {
+				names[i] = fmt.Sprintf("pkg-%04d", i)
+			}
+			want := fmt.Sprintf("package_count=%d package_names=%q omitted_count=%d", count, names, count-shown)
+			if !strings.Contains(output.String(), want) || strings.Count(output.String(), "\n") != 1 || strings.Contains(output.String(), "pkg-0003") {
+				t.Fatalf("unexpected summary: %s", output.String())
+			}
+		})
+	}
+}
 
 func TestRecordStatusGroupsSuccessAndSeparatesErrors(t *testing.T) {
 	before, _ := baseObjects(nil)
