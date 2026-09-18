@@ -735,23 +735,24 @@ RpmRepo Controller 重启后通过 List 已完成 Job 和同名 RpmRepo 重建 B
 ${dataDir}/
 ├── repositories/
 │   └── {project}/
-│       └── {arch}/
-│           ├── current -> releases/{buildName}
-│           ├── Packages -> current/Packages
-│           ├── repodata -> current/repodata
-│           ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
-│           ├── releases/
-│           │   └── {buildName}/
-│           │       ├── Packages/
-│           │       ├── repodata/
-│           │       └── release.json
-│           └── history/
-│               └── {buildName}/
-│                   └── steps/
-│                       └── {repositoryUID}/
-│                           ├── Packages/
-│                           ├── repodata/
-│                           └── repository.json
+│       └── {os}/
+│           └── {arch}/
+│               ├── current -> releases/{buildName}
+│               ├── Packages -> current/Packages
+│               ├── repodata -> current/repodata
+│               ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
+│               ├── releases/
+│               │   └── {buildName}/
+│               │       ├── Packages/
+│               │       ├── repodata/
+│               │       └── release.json
+│               └── history/
+│                   └── {buildName}/
+│                       └── steps/
+│                           └── {repositoryUID}/
+│                               ├── Packages/
+│                               ├── repodata/
+│                               └── repository.json
 ├── .repository-work/
 │   └── {repositoryUID}-{random}/
 ├── .release-work/
@@ -765,13 +766,13 @@ ${dataDir}/
         └── {buildName}.json
 ```
 
-`project`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 和目标 OS 只属于元数据，不直接参与本地路径拼接。所有目录操作必须从预先打开的 `dataDir` FD 开始，拒绝非服务自身创建的符号链接，并确保目标始终位于配置的数据目录内。
+`project`、`os`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 只属于元数据，不直接参与本地路径拼接。所有目录操作必须从预先打开的 `dataDir` FD 开始，拒绝非服务自身创建的符号链接，并确保目标始终位于配置的数据目录内。
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
-`releases/{buildName}` 保存正式发布产生的不可变版本；架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。首版正式发布只安装已经由可信发布流程提供的公钥，不在 Artifact Manager 内签名 RPM 或 repodata。
+`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。首版正式发布只安装已经由可信发布流程提供的公钥，不在 Artifact Manager 内签名 RPM 或 repodata。
 
-Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
+Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、OS、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
 
 ### 9.5 数据模型
 
@@ -1094,11 +1095,11 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 Artifact Manager 按 9.13.2 的请求契约校验源仓与排除集合，执行 9.13.4 的正文生成和原子切换，并负责状态查询、内容读取以及 9.13.6 的恢复与保留。Artifact Manager 不根据 Build type 推导删除集合：全量和增量 Build 均提交最终过程仓的 repositoryUID，由调用方根据 Project、BuildInfo 和发布策略完整计算 excludeSpecs。
 
-RpmRepo Controller 的过程仓推进仍以 `{project}/{buildName}` 为队列 key；正式发布另以 `{project}/{arch}` 为串行 key，保证同一稳定入口不会由不同 Build 并发推进。两类动作由同一个控制器实现，但使用独立的状态迁移和队列键，过程仓 Ready 不等同于正式发布 Ready。
+RpmRepo Controller 的过程仓推进仍以 `{project}/{buildName}` 为队列 key；正式发布另以 `{project}/{os}/{arch}` 为串行 key，保证同一稳定入口不会由不同 Build 并发推进。两类动作由同一个控制器实现，但使用独立的状态迁移和队列键，过程仓 Ready 不等同于正式发布 Ready。
 
 #### 9.13.2 标识与数据模型
 
-同一个 Project 和架构只有一个稳定发布入口，但可以保存多个不可变发布版本。Build name 由唯一 UUID 生成且不复用，一个 Build 最多对应一个正式发布版本，因此直接使用 `buildName` 作为发布记录和 release 目录的唯一标识，不再生成独立的发布 ID。
+同一个 Project、OS 和架构只有一个稳定发布入口，但可以保存多个不可变发布版本。Build name 由唯一 UUID 生成且不复用，一个 Build 最多对应一个正式发布版本，因此直接使用 `buildName` 作为发布记录和 release 目录的唯一标识，不再生成独立的发布 ID。
 
 发布身份和请求内容分离：`buildName` 标识不可变版本，`requestDigest` 根据以下规范化字段计算 SHA-256：
 
@@ -1111,7 +1112,7 @@ sourceRepositoryUID
 按字典序排列的 excludeSpecs
 ```
 
-各字符串使用长度前缀编码，不能直接拼接。同一 `buildName` 和相同 `requestDigest` 是幂等重试；同一 `buildName` 对应不同摘要必须返回 `409 ReleaseIdentityConflict`。发布成功后不得使用相同 Build name 更换源仓或排除集合重新发布，修正内容必须创建新 Build。`targetOS` 参与摘要和一致性校验，但不参与本地路径；Project 与架构共同确定稳定发布目标。
+各字符串使用长度前缀编码，不能直接拼接。同一 `buildName` 和相同 `requestDigest` 是幂等重试；同一 `buildName` 对应不同摘要必须返回 `409 ReleaseIdentityConflict`。发布成功后不得使用相同 Build name 更换源仓或排除集合重新发布，修正内容必须创建新 Build。Project、目标 OS 与架构共同确定稳定发布目标和正式版本的本地路径。
 
 ```go
 type ReleaseState string
@@ -1197,23 +1198,23 @@ GET 始终返回已持久化状态，不触发执行。DELETE 只能删除非当
 POST /internal/v1/releases/{buildName}/activate
 ```
 
-目标 release 必须为 Prepared 或 Ready，且 Project 和架构由其持久化记录确定。Prepared 用于首次激活，Ready 用于幂等确认或回滚。Artifact Manager 在 `{project}/{arch}` 目标锁内切换当前指针；目标已经是当前版本时返回 `200`，成功切换返回 `200` 和 ReleaseRecord。接口不接收请求体，发布顺序由 RpmRepo Controller 的同目标串行队列保证。
+目标 release 必须为 Prepared 或 Ready，且 Project、OS 和架构由其持久化记录确定。Prepared 用于首次激活，Ready 用于幂等确认或回滚。Artifact Manager 在 `{project}/{os}/{arch}` 目标锁内切换当前指针；目标已经是当前版本时返回 `200`，成功切换返回 `200` 和 ReleaseRecord。接口不接收请求体，发布顺序由 RpmRepo Controller 的同目标串行队列保证。
 
 稳定仓库内容地址为：
 
 ```http
-GET /repositories/{project}/{arch}/{path...}
+GET /repositories/{project}/{os}/{arch}/{path...}
 ```
 
 典型 DNF base URL：
 
 ```text
-https://artifact.example/repositories/{project}/{arch}/
+https://artifact.example/repositories/{project}/{os}/{arch}/
 ```
 
-该地址是 Project 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，内容读取、Range、ETag、路径规范化和目录列表规则与 9.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
+该地址是 Project、OS 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 OS/架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，内容读取、Range、ETag、路径规范化和目录列表规则与 9.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
 
-路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
+路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{os}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
 
 ```http
 GET /repositories/releases/v1/{buildName}/{path...}
@@ -1235,16 +1236,16 @@ GET /repositories/releases/v1/{buildName}/{path...}
 8. 复制服务端配置的公钥并记录其实际摘要；首版不执行 RPM、repomd 或 updateinfo 签名。
 9. 计算 `releaseDigest`，写入包含请求摘要、源仓 UID、排除 spec 集合、RPM 摘要和完成时间的 `release.json`，fsync 文件和目录。
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
-11. 获取 `{project}/{arch}` 发布锁，重新确认该版本完整且摘要正确。
+11. 获取 `{project}/{os}/{arch}` 发布锁，重新确认该版本完整且摘要正确。
 12. 读取 `current`；已经指向本次 `buildName` 时按幂等成功处理，否则继续切换。
-13. 创建指向 `releases/{buildName}` 的临时符号链接，fsync 后以 rename 原子替换 `current`，再 fsync 架构目录。`Packages`、`repodata` 和可选公钥是初始化目标目录时一次创建、之后不改变的兼容链接，统一经过 `current` 解析。
+13. 创建指向 `releases/{buildName}` 的临时符号链接，fsync 后以 rename 原子替换 `current`，再 fsync OS/架构目录。`Packages`、`repodata` 和可选公钥是初始化目标目录时一次创建、之后不改变的兼容链接，统一经过 `current` 解析。
 14. 将 ReleaseRecord 标记为 Ready 并返回稳定 `contentURL`。如果控制面状态更新失败，RpmRepo Controller 使用相同 Build name 继续确认，不重新生成 release。
 
 第 13 步是唯一生效点。在它之前失败，旧版本继续服务；在它之后进程崩溃，启动恢复根据 `current` 和 release 元数据补写 Ready。不能用依次删除再创建 `Packages`、`repodata` 两个链接作为切换机制，否则客户端可能观察到混合版本。
 
 #### 9.13.5 并发、失败和回滚
 
-- 同一 `{project}/{arch}` 同时最多执行一个激活操作；不同目标可以并行创建和激活。
+- 同一 `{project}/{os}/{arch}` 同时最多执行一个激活操作；不同目标可以并行创建和激活。
 - 相同 `buildName` 的提交由 Build name 锁和请求摘要实现幂等；不同 Build 可以并行准备正文，但进入激活临界区后按取得锁的顺序切换。
 - RpmRepo Controller 在激活前必须再次确认控制面意图仍指向该 Build name，并保证同一目标串行；Artifact Manager 的目标锁只保护本地文件系统切换的一致性，不判断发布先后关系。
 - `createrepo_c`、磁盘或读取配置公钥失败时不得切换指针；错误按是否可重试写入 Failed。

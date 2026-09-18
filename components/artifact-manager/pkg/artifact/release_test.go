@@ -26,7 +26,7 @@ func (m *testReleaseMaterializer) Create(ctx context.Context, record ReleaseReco
 		return releaseResult{}, ctx.Err()
 	case <-m.release:
 	}
-	root := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases", record.BuildName)
+	root := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "releases", record.BuildName)
 	if err := os.MkdirAll(filepath.Join(root, "Packages"), 0750); err != nil {
 		return releaseResult{}, err
 	}
@@ -97,7 +97,7 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if state.ContentURL != "/repositories/project-1/x86_64/" {
+	if state.ContentURL != "/repositories/project-1/openEuler/x86_64/" {
 		t.Fatalf("content URL = %q", state.ContentURL)
 	}
 	for _, path := range []string{state.ContentURL + "repodata/repomd.xml", "/repositories/releases/v1/build-1/repodata/repomd.xml"} {
@@ -116,6 +116,84 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 	}
 }
 
+func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
+	server, first, materializer := newReleaseTestServer(t)
+	close(materializer.release)
+	second := first
+	second.BuildName = "build-2"
+	second.TargetOS = "openEuler-mainline"
+	second.SourceRepositoryUID = "source-repository-2"
+	now := time.Now().UTC()
+	server.repositories.mu.Lock()
+	server.repositories.records[second.SourceRepositoryUID] = &RepositoryRecord{
+		RepositoryUID: second.SourceRepositoryUID, RepositoryName: second.BuildName,
+		Project: second.Project, BuildName: second.BuildName, TargetOS: second.TargetOS,
+		TargetArch: second.TargetArch, State: RepositoryReady, CreatedAt: now, UpdatedAt: now,
+	}
+	server.repositories.mu.Unlock()
+
+	for _, request := range []CreateReleaseRequest{first, second} {
+		response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("submit %s = %d: %s", request.BuildName, response.Code, response.Body.String())
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/releases/"+request.BuildName, nil)
+			var state ReleaseResponse
+			if err := json.Unmarshal(response.Body.Bytes(), &state); err == nil && state.State == ReleaseReady {
+				want := "/repositories/" + request.Project + "/" + request.TargetOS + "/" + request.TargetArch + "/"
+				if state.ContentURL != want {
+					t.Fatalf("content URL = %q, want %q", state.ContentURL, want)
+				}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("release %s did not become ready: %s", request.BuildName, response.Body.String())
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	for _, request := range []CreateReleaseRequest{first, second} {
+		path := "/repositories/" + request.Project + "/" + request.TargetOS + "/" + request.TargetArch + "/repodata/repomd.xml"
+		response := repositoryRequest(t, server, http.MethodGet, path, nil)
+		if response.Code != http.StatusOK || response.Body.String() != "release-metadata" {
+			t.Fatalf("content %s = %d %q", path, response.Code, response.Body.String())
+		}
+		if response := repositoryRequest(t, server, http.MethodDelete, "/internal/v1/releases/"+request.BuildName, nil); response.Code != http.StatusConflict {
+			t.Fatalf("delete current %s = %d", request.BuildName, response.Code)
+		}
+	}
+	wrongOS := "/repositories/" + first.Project + "/another-os/" + first.TargetArch + "/repodata/repomd.xml"
+	if response := repositoryRequest(t, server, http.MethodGet, wrongOS, nil); response.Code != http.StatusNotFound {
+		t.Fatalf("wrong OS = %d", response.Code)
+	}
+}
+
+func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
+	server, request, materializer := newReleaseTestServer(t)
+	request.Project, request.TargetOS = "releases", "v1"
+	server.repositories.mu.Lock()
+	server.repositories.records[request.SourceRepositoryUID].Project = request.Project
+	server.repositories.records[request.SourceRepositoryUID].TargetOS = request.TargetOS
+	server.repositories.mu.Unlock()
+	close(materializer.release)
+	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
+		t.Fatalf("submit = %d", response.Code)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		response := repositoryRequest(t, server, http.MethodGet, "/repositories/releases/v1/x86_64/repodata/repomd.xml", nil)
+		if response.Code == http.StatusOK && response.Body.String() == "release-metadata" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stable content = %d %q", response.Code, response.Body.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestReleaseRequestNormalization(t *testing.T) {
 	request := CreateReleaseRequest{BuildName: "build", Project: "project", TargetOS: "os", TargetArch: "arch", SourceRepositoryUID: "repository", ExcludeSpecs: []string{"z", "a", "a"}}
 	normalized, first, err := normalizeReleaseRequest(request)
@@ -128,6 +206,10 @@ func TestReleaseRequestNormalization(t *testing.T) {
 	_, second, err := normalizeReleaseRequest(CreateReleaseRequest{BuildName: "build", Project: "project", TargetOS: "os", TargetArch: "arch", SourceRepositoryUID: "repository", ExcludeSpecs: []string{"a", "z"}})
 	if err != nil || first != second {
 		t.Fatalf("digest mismatch: %q %q, %v", first, second, err)
+	}
+	request.TargetOS = "../other"
+	if _, _, err := normalizeReleaseRequest(request); err == nil {
+		t.Fatal("unsafe target OS accepted")
 	}
 }
 
@@ -148,11 +230,11 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		t.Fatal(err)
 	}
 	materializer := newFilesystemReleaseMaterializer(c)
-	source := RepositoryRecord{RepositoryUID: "source", Project: "project", BuildName: "build", TargetArch: "x86_64", RPMs: map[string]RepositoryRPMMeta{
+	source := RepositoryRecord{RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64", RPMs: map[string]RepositoryRPMMeta{
 		"keep+1.rpm": {FileName: "keep+1.rpm", SpecName: "keep"},
 		"skip.rpm":   {FileName: "skip.rpm", SpecName: "skip"},
 	}}
-	sourcePackages := filepath.Join(repositoryVersionPath(root, source.Project, source.TargetArch, source.BuildName, source.RepositoryUID), "Packages")
+	sourcePackages := filepath.Join(root, "repositories", source.Project, source.TargetOS, source.TargetArch, "history", source.BuildName, "steps", source.RepositoryUID, "Packages")
 	if err := os.MkdirAll(sourcePackages, 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +243,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	record := ReleaseRecord{BuildName: "build", Project: "project", TargetArch: "x86_64", SourceRepositoryUID: "source", RequestDigest: "request", ExcludeSpecs: []string{"skip"}}
+	record := ReleaseRecord{BuildName: "build", Project: "project", TargetOS: "openEuler", TargetArch: "x86_64", SourceRepositoryUID: "source", RequestDigest: "request", ExcludeSpecs: []string{"skip"}}
 	result, err := materializer.Create(context.Background(), record, source)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +251,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	if result.Digest == "" {
 		t.Fatalf("result = %#v", result)
 	}
-	releasePath := filepath.Join(root, "repositories", "project", "x86_64", "releases", "build")
+	releasePath := filepath.Join(root, "repositories", "project", "openEuler", "x86_64", "releases", "build")
 	if _, err := os.Stat(filepath.Join(releasePath, "Packages", "keep+1.rpm")); err != nil {
 		t.Fatal(err)
 	}

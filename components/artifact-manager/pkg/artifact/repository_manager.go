@@ -126,7 +126,7 @@ func (m *repositoryManager) load() error {
 }
 
 func normalizeRepositoryRequest(in CreateRepositoryRequest) (CreateRepositoryRequest, string, error) {
-	if !validIdentifier(in.RepositoryUID) || !validIdentifier(in.RepositoryName) || !validIdentifier(in.Project) || !validIdentifier(in.BuildName) || in.RepositoryName != in.BuildName || in.TargetOS == "" || !validIdentifier(in.TargetArch) || len(in.Manifests) == 0 || (in.BaseRepositoryUID != "" && (!validIdentifier(in.BaseRepositoryUID) || in.BaseRepositoryUID == in.RepositoryUID)) {
+	if !validIdentifier(in.RepositoryUID) || !validIdentifier(in.RepositoryName) || !validIdentifier(in.Project) || !validIdentifier(in.BuildName) || in.RepositoryName != in.BuildName || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || len(in.Manifests) == 0 || (in.BaseRepositoryUID != "" && (!validIdentifier(in.BaseRepositoryUID) || in.BaseRepositoryUID == in.RepositoryUID)) {
 		return in, "", &repositoryError{code: "InvalidRepositoryRequest", status: 422}
 	}
 	sort.Slice(in.Manifests, func(i, j int) bool { return in.Manifests[i].JobUID < in.Manifests[j].JobUID })
@@ -343,7 +343,7 @@ func (m *repositoryManager) remove(uid string) {
 		return
 	}
 	source := m.repositoryPath(record)
-	trashDir := filepath.Join(m.root, ".repository-trash", record.Project, record.TargetArch)
+	trashDir := filepath.Join(m.root, ".repository-trash", record.Project, record.TargetOS, record.TargetArch)
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -365,11 +365,11 @@ func (m *repositoryManager) persist(record *RepositoryRecord) error {
 }
 
 func (m *repositoryManager) repositoryPath(record *RepositoryRecord) string {
-	return repositoryVersionPath(m.root, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)
+	return repositoryVersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
 }
 
-func repositoryVersionPath(root, project, arch, buildName, uid string) string {
-	return filepath.Join(root, "repositories", project, arch, "history", buildName, "steps", uid)
+func repositoryVersionPath(root, project, osName, arch, buildName, uid string) string {
+	return filepath.Join(root, "repositories", project, osName, arch, "history", buildName, "steps", uid)
 }
 func (m *repositoryManager) metaPath(uid string) string {
 	return filepath.Join(m.root, ".metadata/repositories", uid+".json")
