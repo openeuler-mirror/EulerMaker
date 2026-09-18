@@ -213,7 +213,7 @@ func TestStatusFieldSelectors(t *testing.T) {
 			name:     "rpm repository phase",
 			resource: "rpmrepo",
 			selector: "status.repository.phase=Ready",
-			want:     []string{`"data.status.repository.phase"`, `"Ready"`},
+			wantErr:  true,
 		},
 		{
 			name:     "rpm release phase",

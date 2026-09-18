@@ -386,7 +386,7 @@ mapping 约束：
 - `documentID`、`metadata.name`、`metadata.namespace`、`kind`、`apiVersion` 使用 `keyword`。
 - `metadata.creationTimestamp` 使用 `date`。
 - `metadata.labels` 使用包含 `key/value` 两个 `keyword` 字段的 `nested` 数组。这样既避免 label key 动态展开导致 mapping 膨胀，也能正确处理包含 `.`、`/` 的 Kubernetes label key。
-- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中。通用 mapping 将 `data.status.phase`、`data.status.stage` 建立为 `keyword`；RpmRepo 使用独立 mapping，仅将 `data.status.repository.phase`、`data.status.release.phase` 建立为 `keyword`。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
+- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中。通用 mapping 将 `data.status.phase`、`data.status.stage` 建立为 `keyword`；RpmRepo 使用独立 mapping，仅将 `data.status.release.phase` 建立为 `keyword`。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
 - 需要查询的业务字段必须显式定义 mapping，禁止将整个 `spec/status` 动态索引。
 
 Build 查询字段直接来自待持久化的完整 API 对象，不生成额外的查询投影。Create、Update、Patch、`/status` 和 `/abort` 更新 `data` 后，对应的索引字段随同一次 ES 写入更新。`status.stage` 为空时不写 `data.status.stage`。
@@ -411,7 +411,6 @@ Project、Snapshot、Build、BuildInfo 和 BuildResource 使用通用状态字�
 | API 字段 | ES 字段 | 操作符 |
 |----------|---------|--------|
 | `status.phase` | `data.status.phase` | `=`、`==`、`!=` |
-| `status.repository.phase`（仅 RpmRepo） | `data.status.repository.phase` | `=`、`==`、`!=` |
 | `status.release.phase`（仅 RpmRepo） | `data.status.release.phase` | `=`、`==`、`!=` |
 | `status.stage` | `data.status.stage` | `=`、`==`、`!=` |
 
@@ -448,7 +447,7 @@ Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `perso
 - `Snapshot` 创建默认 `status.phase = Pending`。
 - `Build` 创建默认 `status.phase = Pending`。
 - `BuildInfo` 创建默认 `status.phase = Pending`。
-- `RpmRepo` 创建保留请求携带的 `status.repository.phase`（只允许 `Processing` / `Ready`，缺失时默认 `Processing`），`status.release` 在产生正式发布意图前保持为空。创建请求中若同时提供 `status.repository.repositoryUID` 与 `status.repository.contentURL`，服务端保留这两个字段作为过程仓基线（Build Controller 用其继承上一轮过程仓版本，并在继承到完整基线时把相位置为 `Ready`），`repository` 的其余字段与 `status.release`、`status.conditions` 一律归零；只提供其中一个字段、`phase=Ready` 而未提供完整基线、或 `phase` 取 `Processing` / `Ready` 以外的值的请求返回 422。
+- `RpmRepo` 创建时仅保留 `status.repository.repositoryUID` 与 `status.repository.contentURL` 作为过程仓基线，两者必须成对提供，否则返回 422；未提供 `status.repository` 时保持 `nil`。`repository` 的其余字段与 `status.release`、`status.conditions` 一律归零。过程仓没有 phase 字段，创建后的 status 由 RpmRepo Controller 维护。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 - 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。

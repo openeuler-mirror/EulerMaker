@@ -40,6 +40,9 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	if !ok {
 		t.Fatal("RpmRepoRepositoryStatus OpenAPI definition is missing")
 	}
+	if _, exists := repositoryStatus.Schema.Properties["phase"]; exists {
+		t.Fatal("RpmRepoRepositoryStatus must not expose phase")
+	}
 	if _, exists := repositoryStatus.Schema.Properties["rpmDepends"]; exists {
 		t.Fatal("RpmRepoRepositoryStatus must not expose rpmDepends")
 	}

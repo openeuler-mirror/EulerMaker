@@ -1705,12 +1705,6 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"phase": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 					"repositoryUID": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},

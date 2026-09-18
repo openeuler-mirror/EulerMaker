@@ -675,10 +675,6 @@ func fieldSelectorMapping(resource, field string) (queryField string, requireExi
 		if supportsStatusFieldSelectors(resource) {
 			return "data.status.phase", false, true
 		}
-	case "status.repository.phase":
-		if resource == "rpmrepo" {
-			return "data.status.repository.phase", false, true
-		}
 	case "status.release.phase":
 		if resource == "rpmrepo" {
 			return "data.status.release.phase", false, true
