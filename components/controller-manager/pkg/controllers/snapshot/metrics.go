@@ -63,6 +63,11 @@ func (c *Controller) recordStatus(before, after *ebsv1.Snapshot) {
 		log.Printf("controller=snapshot key=%q snapshot_uid=%q package_name=%q phase=%q resourceVersion=%q reason=%q", after.Namespace+"/"+after.Name, after.UID, name, after.Status.Phase, before.ResourceVersion, reason)
 	}
 	if len(resolved) > 0 {
-		log.Printf("controller=snapshot key=%q snapshot_uid=%q package_count=%d package_names=%q phase=%q resourceVersion=%q reason=PackagesResolved", after.Namespace+"/"+after.Name, after.UID, len(resolved), resolved, after.Status.Phase, before.ResourceVersion)
+		const maxPackageNames = 3
+		shown := len(resolved)
+		if shown > maxPackageNames {
+			shown = maxPackageNames
+		}
+		log.Printf("controller=snapshot key=%q snapshot_uid=%q package_count=%d package_names=%q omitted_count=%d phase=%q resourceVersion=%q reason=PackagesResolved", after.Namespace+"/"+after.Name, after.UID, len(resolved), resolved[:shown], len(resolved)-shown, after.Status.Phase, before.ResourceVersion)
 	}
 }
