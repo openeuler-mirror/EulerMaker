@@ -103,7 +103,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
 		return
 	}
-	path := filepath.Join(repositoryVersionPath(s.cfg.DataDir, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID), filepath.FromSlash(relative))
+	path := filepath.Join(repositoryVersionPath(s.cfg.DataDir, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID), filepath.FromSlash(relative))
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)

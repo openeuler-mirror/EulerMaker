@@ -46,7 +46,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		if meta.FileName == "" || filepath.Base(meta.FileName) != meta.FileName || filepath.Ext(meta.FileName) != ".rpm" {
 			return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
 		}
-		from := filepath.Join(repositoryVersionPath(m.root, source.Project, source.TargetArch, source.BuildName, source.RepositoryUID), "Packages", meta.FileName)
+		from := filepath.Join(repositoryVersionPath(m.root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID), "Packages", meta.FileName)
 		to := filepath.Join(packages, meta.FileName)
 		if err := os.Link(from, to); err != nil {
 			return result, classifyReleaseLinkError(err)
@@ -79,7 +79,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 	if err := atomicJSON(filepath.Join(work, "release.json"), index); err != nil {
 		return result, retryableReleaseError(err)
 	}
-	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases")
+	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "releases")
 	if err := os.MkdirAll(parent, 0750); err != nil {
 		return result, retryableReleaseError(err)
 	}

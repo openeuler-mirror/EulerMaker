@@ -63,7 +63,7 @@ func newReleaseManager(c Config, repositories *repositoryManager, materializer r
 }
 
 func normalizeReleaseRequest(in CreateReleaseRequest) (CreateReleaseRequest, string, error) {
-	if !validIdentifier(in.BuildName) || !validIdentifier(in.Project) || in.TargetOS == "" || !validIdentifier(in.TargetArch) || !validIdentifier(in.SourceRepositoryUID) {
+	if !validIdentifier(in.BuildName) || !validIdentifier(in.Project) || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || !validIdentifier(in.SourceRepositoryUID) {
 		return in, "", &releaseError{code: "InvalidReleaseRequest", status: http.StatusUnprocessableEntity}
 	}
 	sort.Strings(in.ExcludeSpecs)
@@ -203,7 +203,7 @@ func (m *releaseManager) activate(name string) (*ReleaseRecord, int, error) {
 	if record.State != ReleasePrepared && record.State != ReleaseReady {
 		return nil, 0, &releaseError{code: "ReleaseNotReady", status: http.StatusConflict}
 	}
-	targetDir := filepath.Join(m.root, "repositories", record.Project, record.TargetArch)
+	targetDir := m.releaseTargetDir(record)
 	if err := ensureStableLinks(targetDir, m.publicKey != ""); err != nil {
 		return nil, 0, releaseStorageError()
 	}
@@ -226,7 +226,7 @@ func (m *releaseManager) activate(name string) (*ReleaseRecord, int, error) {
 		}
 	}
 	now := time.Now().UTC()
-	record.State, record.ContentURL, record.UpdatedAt = ReleaseReady, "/repositories/"+record.Project+"/"+record.TargetArch+"/", now
+	record.State, record.ContentURL, record.UpdatedAt = ReleaseReady, releaseContentURL(record), now
 	if record.CompletedAt == nil {
 		record.CompletedAt = &now
 	}
@@ -275,7 +275,7 @@ func (m *releaseManager) delete(name string) (*ReleaseRecord, int, error) {
 	if record == nil {
 		return nil, http.StatusNoContent, nil
 	}
-	current := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "current")
+	current := filepath.Join(m.releaseTargetDir(record), "current")
 	if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", name)) {
 		return nil, 0, &releaseError{code: "ReleaseInUse", status: http.StatusConflict}
 	}
@@ -297,7 +297,7 @@ func (m *releaseManager) remove(name string) {
 		return
 	}
 	source := m.releasePath(record)
-	trashDir := filepath.Join(m.root, ".release-trash", record.Project, record.TargetArch)
+	trashDir := filepath.Join(m.root, ".release-trash", record.Project, record.TargetOS, record.TargetArch)
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -357,7 +357,15 @@ func (m *releaseManager) metaPath(name string) string {
 	return filepath.Join(m.root, ".metadata/releases", name+".json")
 }
 func (m *releaseManager) releasePath(record *ReleaseRecord) string {
-	return filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases", record.BuildName)
+	return filepath.Join(m.releaseTargetDir(record), "releases", record.BuildName)
+}
+
+func (m *releaseManager) releaseTargetDir(record *ReleaseRecord) string {
+	return filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch)
+}
+
+func releaseContentURL(record *ReleaseRecord) string {
+	return "/repositories/" + record.Project + "/" + record.TargetOS + "/" + record.TargetArch + "/"
 }
 
 func cloneRelease(in *ReleaseRecord) *ReleaseRecord {

@@ -34,9 +34,10 @@ go run ./cmd/server \
 
 过程仓接口包括创建物理版本 `POST /internal/v1/repositories`、查询状态或删除 `GET/DELETE /internal/v1/repositories/{repositoryUID}`。Ready 过程仓通过只读地址 `GET /repositories/v1/{repositoryUID}/{path}` 提供内容。
 
-正式发布接口包括创建 `POST /internal/v1/releases`、查询或删除 `GET/DELETE /internal/v1/releases/{buildName}`，以及激活或回滚 `POST /internal/v1/releases/{buildName}/activate`。稳定 DNF 地址为 `/repositories/{project}/{arch}/`，不可变历史版本地址为 `/repositories/releases/v1/{buildName}/`。
+正式发布接口包括创建 `POST /internal/v1/releases`、查询或删除 `GET/DELETE /internal/v1/releases/{buildName}`，以及激活或回滚 `POST /internal/v1/releases/{buildName}/activate`。稳定 DNF 地址为 `/repositories/{project}/{os}/{arch}/`，不可变历史版本地址为 `/repositories/releases/v1/{buildName}/`。
 
-构建过程仓保存在 `${dataDir}/repositories/{project}/{arch}/history/{buildName}/steps/{repositoryUID}`，正式版本保存在 `${dataDir}/repositories/{project}/{arch}/releases/{buildName}`。Artifact Manager 通过原子替换架构目录中的 `current` 链接切换稳定入口。`--release-public-key` 可以指定复制到每个正式版本的只读公钥；历史版本由 `--release-history-count` 和 `--release-history-ttl` 控制。
+构建过程仓保存在 `${dataDir}/repositories/{project}/{os}/{arch}/history/{buildName}/steps/{repositoryUID}`，正式版本保存在 `${dataDir}/repositories/{project}/{os}/{arch}/releases/{buildName}`。Artifact Manager 通过原子替换 OS/架构目录中的 `current` 链接切换稳定入口。`--release-public-key` 可以指定复制到每个正式版本的只读公钥；历史版本由 `--release-history-count` 和 `--release-history-ttl` 控制。
+
 
 服务启动后可以检查健康状态：
 

@@ -61,9 +61,9 @@ func (m *releaseManager) recover(workTTL time.Duration) error {
 				return err
 			}
 		}
-		current := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "current")
+		current := filepath.Join(m.releaseTargetDir(record), "current")
 		if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", name)) {
-			record.State, record.ContentURL, record.UpdatedAt, record.CompletedAt = ReleaseReady, "/repositories/"+record.Project+"/"+record.TargetArch+"/", now, &now
+			record.State, record.ContentURL, record.UpdatedAt, record.CompletedAt = ReleaseReady, releaseContentURL(record), now, &now
 			if err := m.persist(record); err != nil {
 				return err
 			}

@@ -559,7 +559,7 @@ type RpmRepoStatus struct {
 |----------------|---------|------|
 | `phase` | RpmRepoReleasePhase | 正式发布状态 |
 | `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
-| `contentURL` | string | Project/架构稳定仓库入口 |
+| `contentURL` | string | Project/OS/架构稳定仓库入口 |
 | `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
 | `updatedAt` | *metav1.Time | 正式发布状态最近更新时间 |
 

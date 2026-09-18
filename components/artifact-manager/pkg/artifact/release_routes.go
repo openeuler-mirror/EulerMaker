@@ -117,12 +117,12 @@ func (s *Server) releaseVersionContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 3)
-	if len(parts) != 3 || !validIdentifier(parts[0]) || !validIdentifier(parts[1]) {
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 4)
+	if len(parts) != 4 || !validIdentifier(parts[0]) || !validIdentifier(parts[1]) || !validIdentifier(parts[2]) {
 		s.releaseNotFound(w, r)
 		return
 	}
-	current := filepath.Join(s.cfg.DataDir, "repositories", parts[0], parts[1], "current")
+	current := filepath.Join(s.cfg.DataDir, "repositories", parts[0], parts[1], parts[2], "current")
 	target, err := os.Readlink(current)
 	if err != nil {
 		s.releaseNotFound(w, r)
@@ -134,11 +134,11 @@ func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	record, ok := s.releases.get(targetParts[1])
-	if !ok || record.State != ReleaseReady || record.Project != parts[0] || record.TargetArch != parts[1] {
+	if !ok || record.State != ReleaseReady || record.Project != parts[0] || record.TargetOS != parts[1] || record.TargetArch != parts[2] {
 		s.releaseNotFound(w, r)
 		return
 	}
-	s.serveReleaseFile(w, r, record, parts[2])
+	s.serveReleaseFile(w, r, record, parts[3])
 }
 
 func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *ReleaseRecord, value string) {
@@ -155,7 +155,8 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 		s.releaseNotFound(w, r)
 		return
 	}
-	path := filepath.Join(s.cfg.DataDir, "repositories", record.Project, record.TargetArch, "releases", record.BuildName, filepath.FromSlash(relative))
+	path := s.releases.releasePath(record)
+	path = filepath.Join(path, filepath.FromSlash(relative))
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		s.releaseNotFound(w, r)

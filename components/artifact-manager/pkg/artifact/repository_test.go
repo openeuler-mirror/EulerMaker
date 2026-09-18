@@ -115,7 +115,7 @@ func TestRepositoryContent(t *testing.T) {
 	materializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
 	close(materializer.release)
 	server, request := newRepositoryTestServer(t, materializer)
-	directory := filepath.Join(repositoryVersionPath(server.cfg.DataDir, request.Project, request.TargetArch, request.BuildName, request.RepositoryUID), "repodata")
+	directory := filepath.Join(server.cfg.DataDir, "repositories", request.Project, request.TargetOS, request.TargetArch, "history", request.BuildName, "steps", request.RepositoryUID, "repodata")
 	if err := os.MkdirAll(directory, 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -123,12 +123,20 @@ func TestRepositoryContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	record := &RepositoryRecord{RepositoryUID: request.RepositoryUID, Project: request.Project, BuildName: request.BuildName, TargetArch: request.TargetArch, State: RepositoryReady, ContentURL: "/repositories/v1/" + request.RepositoryUID + "/", CreatedAt: now, UpdatedAt: now}
+	record := &RepositoryRecord{RepositoryUID: request.RepositoryUID, Project: request.Project, BuildName: request.BuildName, TargetOS: request.TargetOS, TargetArch: request.TargetArch, State: RepositoryReady, ContentURL: "/repositories/v1/" + request.RepositoryUID + "/", CreatedAt: now, UpdatedAt: now}
 	server.repositories.mu.Lock()
 	server.repositories.records[request.RepositoryUID] = record
 	server.repositories.mu.Unlock()
 	response := repositoryRequest(t, server, http.MethodGet, record.ContentURL+"repodata/repomd.xml", nil)
 	if response.Code != http.StatusOK || response.Body.String() != "metadata" || response.Header().Get("ETag") == "" {
 		t.Fatalf("content response = %d %q, etag=%q", response.Code, response.Body.String(), response.Header().Get("ETag"))
+	}
+}
+
+func TestRepositoryRejectsUnsafeTargetOS(t *testing.T) {
+	request := CreateRepositoryRequest{RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "../other", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job", JobUID: "uid"}}}
+	request.RepositoryUID = repositoryUID(request.Project, request.BuildName, "", request.Manifests)
+	if _, _, err := normalizeRepositoryRequest(request); err == nil {
+		t.Fatal("unsafe target OS accepted")
 	}
 }

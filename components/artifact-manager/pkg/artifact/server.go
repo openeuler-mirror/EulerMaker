@@ -69,10 +69,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/repositories/releases/v1/") {
-		s.releaseVersionContent(w, r)
-		return
+		name := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/releases/v1/"), "/", 2)[0]
+		if _, ok := s.releases.get(name); ok {
+			s.releaseVersionContent(w, r)
+			return
+		}
 	}
-	if strings.HasPrefix(r.URL.Path, "/repositories/v1/") {
+	if strings.HasPrefix(r.URL.Path, "/repositories/v1/") && validHash(strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/v1/"), "/", 2)[0]) {
 		s.repositoryContent(w, r)
 		return
 	}
