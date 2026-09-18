@@ -113,9 +113,6 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 			if _, ok := testCondition(stored.Status.Conditions, ConditionPublishSucceed); ok {
 				t.Fatal("single builds must not record a publish result")
 			}
-			if stored.Status.Repo != "" {
-				t.Fatalf("repo = %q", stored.Status.Repo)
-			}
 			if api.CallCount("GetRpmRepo") != 0 || api.CallCount("CreateRpmRepo") != 0 {
 				t.Fatal("single builds must never touch the RpmRepo of this round")
 			}
@@ -156,9 +153,6 @@ func TestSingleBuildFailureKeepsBuildStage(t *testing.T) {
 	}
 	if _, ok := testCondition(stored.Status.Conditions, ConditionPublishSucceed); ok {
 		t.Fatal("a single build must not record a publish result")
-	}
-	if stored.Status.Repo != "" {
-		t.Fatalf("repo = %q", stored.Status.Repo)
 	}
 	if api.CallCount("GetRpmRepo") != 0 || api.CallCount("CreateRpmRepo") != 0 {
 		t.Fatal("a single build must never touch the RpmRepo of this round")
@@ -315,9 +309,6 @@ func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 	if stored.Status.Phase != ebsv1.BuildSuccess || stored.Status.Stage != stagePublish {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
-	if stored.Status.Repo != "https://release.example.com/project-a/aarch64" {
-		t.Fatalf("repo = %q", stored.Status.Repo)
-	}
 	if !stored.Status.EndTime.Time.Equal(clk.Now().UTC()) {
 		t.Fatalf("endTime = %+v", stored.Status.EndTime)
 	}
@@ -353,9 +344,6 @@ func TestProcessingPublishFailedKeepsRepositoryEmpty(t *testing.T) {
 	stored := api.build("project-a", "build-a")
 	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stagePublish {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
-	}
-	if stored.Status.Repo != "" {
-		t.Fatalf("repo = %q", stored.Status.Repo)
 	}
 	condition := findCondition(t, stored.Status.Conditions, ConditionPublishSucceed)
 	if condition.Status != metav1.ConditionFalse || condition.Reason != ReasonPublishFailed {

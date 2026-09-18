@@ -47,9 +47,6 @@ type writeIntent struct {
 	setEndTime bool
 	endTime    metav1.Time
 
-	setRepo bool
-	repo    string
-
 	setConditions    bool
 	conditions       []metav1.Condition
 	conditionIntents []conditionIntent
@@ -66,9 +63,6 @@ func applyIntent(build *ebsv1.Build, intent writeIntent) {
 	}
 	if intent.setEndTime {
 		build.Status.EndTime = intent.endTime
-	}
-	if intent.setRepo {
-		build.Status.Repo = intent.repo
 	}
 	if intent.setConditions {
 		build.Status.Conditions = intent.conditions
@@ -88,9 +82,6 @@ func intentSatisfied(build *ebsv1.Build, intent writeIntent) bool {
 		return false
 	}
 	if intent.setEndTime && !build.Status.EndTime.Time.Equal(intent.endTime.Time) {
-		return false
-	}
-	if intent.setRepo && build.Status.Repo != intent.repo {
 		return false
 	}
 	for _, want := range intent.conditionIntents {
@@ -260,7 +251,7 @@ func classifyReadError(err error) error {
 // statusEquivalent compares the status fields this controller owns. Conditions are matched by type, so their
 // slice order does not create spurious writes.
 func statusEquivalent(a, b ebsv1.BuildStatus) bool {
-	if a.Phase != b.Phase || a.Stage != b.Stage || a.Repo != b.Repo {
+	if a.Phase != b.Phase || a.Stage != b.Stage {
 		return false
 	}
 	if !reflect.DeepEqual(a.BaseBuildRef, b.BaseBuildRef) {

@@ -259,7 +259,6 @@ type BuildStatus struct {
     Stage        string             `json:"stage,omitempty"`
     StartTime    metav1.Time        `json:"startTime,omitempty"`
     EndTime      metav1.Time        `json:"endTime,omitempty"`
-    Repo         string             `json:"repo,omitempty"`
     BaseBuildRef *BaseBuildRef      `json:"baseBuildRef,omitempty"`
     Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -275,7 +274,6 @@ type BaseBuildRef struct {
 | `stage` | string | `"build"` / `"publish"`，标识构建阶段还是发布阶段 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
-| `repo` | string | 生成的仓库 url |
 | `baseBuildRef` | BaseBuildRef | 基础 Build 名称；未设置表示尚未查询，`{}` 表示已查询但没有基础 Build；过程仓 UID 和地址从同名 RpmRepo 获取 |
 | `conditions` | []metav1.Condition | 状态条件 |
 

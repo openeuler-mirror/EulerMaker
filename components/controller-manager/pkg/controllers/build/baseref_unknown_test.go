@@ -14,7 +14,6 @@ import (
 // newHistoryBuild is the last successfully published Build the baseBuildRef cases resolve against.
 func newHistoryBuild(project, name string) *ebsv1.Build {
 	history := withPhaseStage(newBuild(project, name, "full", []string{"gcc"}), ebsv1.BuildSuccess, stagePublish)
-	history.Status.Repo = "https://artifact-manager/releases/v1/" + name
 	return history
 }
 
@@ -287,7 +286,6 @@ func TestIntentSatisfiedComparesOnlyTargetFields(t *testing.T) {
 			build: func() *ebsv1.Build {
 				build := withRef(pendingBuild(), emptyRef)
 				build.Status.StartTime = testTime(9)
-				build.Status.Repo = "https://release.example.com/other"
 				return build
 			}(),
 			want: true,
