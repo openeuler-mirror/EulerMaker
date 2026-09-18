@@ -226,36 +226,6 @@ func (p BuildPhase) IsTerminal() bool {
 	}
 }
 
-// RpmRepoPhase describes the lifecycle of the current process repository version.
-type RpmRepoPhase string
-
-const (
-	RpmRepoProcessing RpmRepoPhase = "Processing"
-	RpmRepoReady      RpmRepoPhase = "Ready"
-	RpmRepoFailed     RpmRepoPhase = "Failed"
-)
-
-var rpmRepoPhaseValues = []string{
-	string(RpmRepoProcessing),
-	string(RpmRepoReady),
-	string(RpmRepoFailed),
-}
-
-// RpmRepoPhaseValues returns all valid RpmRepo phase values.
-func RpmRepoPhaseValues() []string {
-	return append([]string(nil), rpmRepoPhaseValues...)
-}
-
-// IsValid reports whether p is a supported RpmRepo phase.
-func (p RpmRepoPhase) IsValid() bool {
-	switch p {
-	case RpmRepoProcessing, RpmRepoReady, RpmRepoFailed:
-		return true
-	default:
-		return false
-	}
-}
-
 // RpmRepoReleasePhase describes formal release preparation and activation.
 type RpmRepoReleasePhase string
 

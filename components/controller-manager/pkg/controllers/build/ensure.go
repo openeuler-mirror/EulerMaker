@@ -235,18 +235,14 @@ func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 		TypeMeta:   metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "RpmRepo"},
 		ObjectMeta: metav1.ObjectMeta{Name: build.Name, Namespace: build.Namespace},
 	}
-	// The initial phase is part of the create contract: an inherited, complete baseline makes the process
-	// repository readable from the start (Ready), while a round without a baseline starts as Processing.
-	// The apiserver keeps this phase together with the baseline pair and drops every other status field.
+	// Seed the last available immutable repository version, when present.
 	if base.repositoryUID != "" && base.contentURL != "" {
 		repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{
-			Phase:         ebsv1.RpmRepoReady,
 			RepositoryUID: base.repositoryUID,
 			ContentURL:    base.contentURL,
 		}
 		return repo
 	}
-	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoProcessing}
 	return repo
 }
 

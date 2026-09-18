@@ -220,7 +220,6 @@ type RpmRepoReleaseStatus struct {
 }
 
 type RpmRepoRepositoryStatus struct {
-	Phase         RpmRepoPhase          `json:"phase,omitempty"`
 	RepositoryUID string                `json:"repositoryUID,omitempty"`
 	ContentURL    string                `json:"contentURL,omitempty"`
 	SourceJobUIDs []string              `json:"sourceJobUIDs,omitempty"`

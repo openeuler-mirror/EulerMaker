@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 )
@@ -316,19 +317,19 @@ func (f *fakeAPI) CreateRpmRepo(_ context.Context, project string, request *ebsv
 		return nil, apierrors.NewAlreadyExists(rpmReposResource, request.Name)
 	}
 	created := request.DeepCopy()
-	// The apiserver keeps the requested initial phase and the seeded base version, dropping every other status
-	// field; a missing or unsupported phase falls back to Processing. That contract is implemented by the
-	// RpmRepo create strategy and guarded by the store level test TestCreateRpmRepoKeepsSeededRepositoryBaseline
-	// in components/ebs-apiserver/pkg/storage/esstore.
+	// Match the apiserver: preserve and validate the baseline pair.
 	seeded := created.Status.Repository
-	phase := ebsv1.RpmRepoProcessing
-	if seeded != nil && (seeded.Phase == ebsv1.RpmRepoReady || seeded.Phase == ebsv1.RpmRepoProcessing) {
-		phase = seeded.Phase
-	}
-	created.Status = ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: phase}}
+	created.Status = ebsv1.RpmRepoStatus{}
 	if seeded != nil {
-		created.Status.Repository.RepositoryUID = seeded.RepositoryUID
-		created.Status.Repository.ContentURL = seeded.ContentURL
+		created.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{
+			RepositoryUID: seeded.RepositoryUID,
+			ContentURL:    seeded.ContentURL,
+		}
+	}
+	repository := created.Status.Repository
+	if repository != nil && (repository.RepositoryUID == "") != (repository.ContentURL == "") {
+		return nil, apierrors.NewInvalid(ebsv1.SchemeGroupVersion.WithKind("RpmRepo").GroupKind(), request.Name,
+			field.ErrorList{field.Invalid(field.NewPath("status", "repository"), repository, "invalid initial repository status")})
 	}
 	created.UID = types.UID("rpmrepo-uid-" + id)
 	created.ResourceVersion = f.nextRevision()

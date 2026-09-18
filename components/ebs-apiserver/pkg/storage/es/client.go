@@ -70,9 +70,6 @@ const rpmRepoIndexMapping = `{
     }},
     "data":{"type":"object","dynamic":false,"properties":{
       "status":{"type":"object","dynamic":false,"properties":{
-        "repository":{"type":"object","dynamic":false,"properties":{
-          "phase":{"type":"keyword"}
-        }},
         "release":{"type":"object","dynamic":false,"properties":{
           "phase":{"type":"keyword"}
         }}

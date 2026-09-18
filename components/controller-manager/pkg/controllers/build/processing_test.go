@@ -273,12 +273,12 @@ func TestProcessingPublishWaitsForReleaseOutcome(t *testing.T) {
 	}
 }
 
-func TestProcessingPublishWaitsWhileRepositoryFailed(t *testing.T) {
+func TestProcessingPublishWaitsWithoutRelease(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
 	api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Status:     ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoFailed}},
+		Status:     ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{}},
 	}
 	c := newTestController(t, api, newTestClock())
 	result, err := c.sync(context.Background(), "project-a/build-a")
@@ -286,7 +286,7 @@ func TestProcessingPublishWaitsWhileRepositoryFailed(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if api.CallCount("UpdateBuildStatus") != 0 {
-		t.Fatal("the process repository failure is not a release outcome")
+		t.Fatal("missing release status must not complete the build")
 	}
 }
 
@@ -301,7 +301,7 @@ func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 	api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
 		Status: ebsv1.RpmRepoStatus{
-			Repository: &ebsv1.RpmRepoRepositoryStatus{Phase: ebsv1.RpmRepoReady, ContentURL: "https://internal.example.com/repo"},
+			Repository: &ebsv1.RpmRepoRepositoryStatus{ContentURL: "https://internal.example.com/repo"},
 			Release:    &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady, ContentURL: "https://release.example.com/project-a/aarch64"},
 		},
 	}
