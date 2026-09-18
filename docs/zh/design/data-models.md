@@ -548,12 +548,14 @@ type RpmRepoStatus struct {
 
 | `repository` 字段 | Go 类型 | 说明 |
 |--------------------|---------|------|
-| `phase` | RpmRepoPhase | `"Pending"` / `"Processing"` / `"Ready"` / `"Failed"`；逻辑仓库可持续推进，均不是对象终态 |
+| `phase` | RpmRepoPhase | `"Processing"` / `"Ready"` / `"Failed"`；逻辑仓库可持续推进，均不是对象终态 |
 | `repositoryUID` | string | 当前已发布不可变物理版本的 UID |
 | `contentURL` | string | 当前物理版本的不可变仓库地址 |
 | `sourceJobUIDs` | []string | 当前物理版本对应的输入 Job UID 集合，按字典序保存 |
 | `transition` | *RepositoryTransition | 正在物化或等待确认的下一版本 |
 | `updatedAt` | *metav1.Time | 当前物理版本的发布时间 |
+
+`repository.phase` 的初值由 Build Controller 在创建 RpmRepo 时给出：继承到完整基线（`repositoryUID` 与 `contentURL` 同时非空）时为 `Ready`，否则为 `Processing`。因此 `Ready` 可以只表示"继承了上一轮的可用版本"，此时 `sourceJobUIDs` 仍为空。
 
 `release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。
 
@@ -1066,7 +1068,7 @@ type VersionConst struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
-| RpmRepo | 过程仓：`Pending` / `Processing` / `Ready` / `Failed`；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
+| RpmRepo | 过程仓：`Processing` / `Ready` / `Failed`；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
 | Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 

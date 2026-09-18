@@ -822,7 +822,7 @@ type RpmRepoStatus struct {
 }
 ```
 
-`RpmRepoPhase` 的稳定取值为 `Pending`、`Processing`、`Ready`、`Failed`。RpmRepo 会随 Job 完成持续推进，因此 `Ready` 和 `Failed` 都不是对象终态；`Ready` 表示当前已有可读版本，`Processing` 表示 transition 正在物化。推进失败时不清除已发布版本字段：存在旧版本时可继续以 `Ready` 对外服务并通过 condition 暴露本次失败，只有首次物化失败且没有可读版本时才使用 `Failed`。`RpmRepo` 创建时由 apiserver 设置 `status.repository.phase=Pending`；只有 RpmRepo Controller 可以更新 status。
+`RpmRepoPhase` 的稳定取值为 `Processing`、`Ready`、`Failed`。RpmRepo 会随 Job 完成持续推进，因此 `Ready` 和 `Failed` 都不是对象终态；`Ready` 表示当前已有可读版本，`Processing` 表示 transition 正在物化。推进失败时不清除已发布版本字段：存在旧版本时可继续以 `Ready` 对外服务并通过 condition 暴露本次失败，只有首次物化失败且没有可读版本时才使用 `Failed`。`RpmRepo` 创建时由 Build Controller 在请求中给出初始相位：继承到完整过程仓基线（`repositoryUID` 与 `contentURL` 同时非空）时为 `Ready`，否则为 `Processing`，apiserver 保留该值并校验；只有 RpmRepo Controller 可以在创建后更新 status。
 
 正式发布使用独立的 `status.release` 状态机，不能复用过程仓 `phase`。`RpmRepoReleasePhase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。提交 release API 前，Controller 必须先把源过程仓 UID 和规范化后的 `excludeSpecs` 写入 `release.transition`；恢复时必须重放该固定输入。激活成功后将源 UID 提升到 `release.sourceRepositoryUID`，写入稳定入口、摘要和包数量，并清除 transition。正式发布失败通过带独立 type 的顶层 condition 记录，不覆盖仍然可读的过程仓状态。
 
