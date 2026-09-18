@@ -768,12 +768,6 @@ type Toleration struct {
 ### JobStatus
 
 ```go
-type JobRepositoryState string
-
-const (
-    JobRepositoryPublished JobRepositoryState = "Published"
-    JobRepositoryFailed    JobRepositoryState = "Failed"
-)
 
 type JobStatus struct {
     Phase      JobPhase    `json:"phase,omitempty"`
@@ -784,8 +778,6 @@ type JobStatus struct {
     ResultRoot string      `json:"resultRoot,omitempty"`
     Message    string      `json:"message,omitempty"`
     RestartCount int64     `json:"restartCount,omitempty"`
-    RepositoryState JobRepositoryState `json:"repositoryState,omitempty"`
-    RepositoryUID   string             `json:"repositoryUID,omitempty"`
 }
 ```
 
@@ -799,8 +791,6 @@ type JobStatus struct {
 | `resultRoot` | string | 结果存储路径 |
 | `message` | string | 状态消息 |
 | `restartCount` | int64 | 重试次数，默认 0。调度器可使用该字段计算重试退避时间 |
-| `repositoryState` | JobRepositoryState | RpmRepo Controller 的处理结果：`Published` / `Failed`；空值表示尚未处理 |
-| `repositoryUID` | string | `repositoryState=Published` 时记录包含该 Job 所在批次的不可变物理仓库 UID；同批 Job 共享该值 |
 
 ### JobList
 
