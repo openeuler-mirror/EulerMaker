@@ -109,7 +109,6 @@
               <div><dt>{{ t("project.stage") }}</dt><dd>{{ selectedBuild.status?.stage || t("common.emptyValue") }}</dd></div>
               <div><dt>{{ t("project.startedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.startTime) }}</dd></div>
               <div><dt>{{ t("project.finishedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.endTime) }}</dd></div>
-              <div><dt>{{ t("project.resultRepository") }}</dt><dd><code>{{ selectedBuild.status?.repo || t("common.emptyValue") }}</code></dd></div>
               <div><dt>{{ t("project.baseBuild") }}</dt><dd>{{ baseBuildLabel(selectedBuild) }}</dd></div>
             </dl>
             <section class="build-detail-section"><h3>{{ t("project.packages") }}</h3><div v-if="selectedBuild.spec?.packages?.length" class="value-chip-list"><code v-for="item in selectedBuild.spec.packages" :key="item">{{ item }}</code></div><p v-else>{{ t("project.noPackages") }}</p></section>
@@ -287,7 +286,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { stringify } from "yaml";
 
-import { errorTranslationKey, list, request } from "@/api";
+import { ApiError, errorTranslationKey, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
@@ -513,16 +512,20 @@ async function createBuild(): Promise<void> {
     }),
   ));
   const successfulNames = results.flatMap((result, index) => result.status === "fulfilled" ? [result.value.metadata?.name || buildNames[index]] : []);
+  const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
   try {
     if (!successfulNames.length) {
-      const failure = results.find((result) => result.status === "rejected");
-      buildDialogErrorKey.value = errorTranslationKey(failure && failure.status === "rejected" ? failure.reason : undefined, "errors.createBuild");
+      const reason = failures.find((failure) => !(failure instanceof ApiError && failure.status === 409)) ?? failures[0];
+      buildDialogErrorKey.value = reason instanceof ApiError && reason.status === 409 ? "project.activeBuildConflict" : errorTranslationKey(reason, "errors.createBuild");
       return;
     }
     buildDialogOpen.value = false;
     createdBuildNames.value = successfulNames;
     selectedBuildName.value = successfulNames[0];
-    if (successfulNames.length < targets.length) buildActionErrorKey.value = "project.partialBuildFailure";
+    if (successfulNames.length < targets.length) {
+      const conflictsOnly = failures.every((failure) => failure instanceof ApiError && failure.status === 409);
+      buildActionErrorKey.value = conflictsOnly ? "project.partialActiveBuildConflict" : "project.partialBuildFailure";
+    }
     await loadResources();
     selectTab("builds");
   } finally {

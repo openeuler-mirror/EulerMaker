@@ -404,7 +404,6 @@ func TestStatusWriteKeepsFieldsOutsideTheIntent(t *testing.T) {
 	api := newFakeAPI()
 	build := withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
 	build.Status.StartTime = testTime(9)
-	build.Status.Repo = "https://existing.example.com"
 	build.Status.Conditions = []metav1.Condition{{
 		Type: "Unrelated", Status: metav1.ConditionTrue, Reason: "Kept", Message: "Kept", LastTransitionTime: testTime(9),
 	}}
@@ -421,7 +420,7 @@ func TestStatusWriteKeepsFieldsOutsideTheIntent(t *testing.T) {
 	if stored.Status.Phase != ebsv1.BuildPrepared {
 		t.Fatalf("phase = %q", stored.Status.Phase)
 	}
-	if !stored.Status.StartTime.Time.Equal(testTime(9).Time) || stored.Status.Repo != "https://existing.example.com" {
+	if !stored.Status.StartTime.Time.Equal(testTime(9).Time) {
 		t.Fatalf("unrelated status fields changed: %+v", stored.Status)
 	}
 	if _, ok := testCondition(stored.Status.Conditions, "Unrelated"); !ok {

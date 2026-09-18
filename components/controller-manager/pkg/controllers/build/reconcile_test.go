@@ -151,7 +151,6 @@ func TestPendingRecordsBaseBuildRefFromHistory(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "full", []string{"gcc"})
 	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, stagePublish)
-	previous.Status.Repo = "https://release.example.com/project-a/aarch64"
 	api.hooks.lastPublished = func(project, targetOS, targetArch string) (*ebsv1.Build, error) {
 		if project != "project-a" || targetOS != "openEuler-22.03-LTS" || targetArch != "aarch64" {
 			t.Errorf("unexpected history query %q %q %q", project, targetOS, targetArch)

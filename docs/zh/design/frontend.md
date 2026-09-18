@@ -184,7 +184,7 @@ System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队�
 
 工程页面使用三个一级 Tab 组织信息：“工程详情”展示资源摘要、基础信息和最近构建；“构建历史”展示 Build 类型、目标、状态与起止时间；“工程配置”展示 Project spec、Build targets、Package repositories 和 Bootstrap repositories。页签状态写入 `tab` 查询参数，可刷新和分享。
 
-构建历史采用主从布局：左侧可滚动列表展示构建名称、状态、类型、目标与开始时间，默认选中第一条；右侧展示所选 Build 的阶段、起止时间、结果仓库、基础构建、软件包和 Bootstrap repositories。窄屏设备按列表、详情的顺序改为上下布局。
+构建历史采用主从布局：左侧可滚动列表展示构建名称、状态、类型、目标与开始时间，默认选中第一条；右侧展示所选 Build 的阶段、起止时间、基础构建、软件包和 Bootstrap repositories。窄屏设备按列表、详情的顺序改为上下布局。
 
 工程配置中的 Build targets 使用列表展示 `os`、`arch`、`buildFlag` 和 `publishFlag`。工程 owner、Admin 和 System 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
 

@@ -110,7 +110,6 @@ type BuildStatus struct {
 	Stage        string             `json:"stage,omitempty"`
 	StartTime    metav1.Time        `json:"startTime,omitempty"`
 	EndTime      metav1.Time        `json:"endTime,omitempty"`
-	Repo         string             `json:"repo,omitempty"`
 	BaseBuildRef *BaseBuildRef      `json:"baseBuildRef,omitempty"`
 	Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }

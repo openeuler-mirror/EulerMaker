@@ -761,12 +761,6 @@ func schema_ebs_api_ebs_v1_BuildStatus(ref common.ReferenceCallback) common.Open
 							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
-					"repo": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 					"baseBuildRef": {
 						SchemaProps: spec.SchemaProps{
 							Ref: ref("ebs-api/ebs/v1.BaseBuildRef"),

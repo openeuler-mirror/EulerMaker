@@ -77,7 +77,6 @@ export interface Build {
     stage?: string;
     startTime?: string;
     endTime?: string;
-    repo?: string;
     baseBuildRef?: { name?: string };
   };
 }

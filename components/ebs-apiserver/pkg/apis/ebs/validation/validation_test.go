@@ -420,7 +420,7 @@ func TestTerminalBuildPhaseImmutable(t *testing.T) {
 			old.Status.Phase = oldPhase
 			next := old.DeepCopy()
 			next.Status.Phase = ebsv1.BuildPhase(phase)
-			next.Status.Repo = "updated"
+			next.Status.Stage = "updated"
 			errs := ValidateBuildStatusUpdate(next, old)
 			if (len(errs) == 0) != (next.Status.Phase == oldPhase) {
 				t.Fatalf("%s -> %s: %v", oldPhase, phase, errs)

@@ -189,10 +189,7 @@ func (r *reconciler) processingPublish() (controller.ReconcileResult, error) {
 			fmt.Errorf("release of Build %s/%s failed", target.Namespace, target.Name)))
 	}
 	target.Status.Phase = ebsv1.BuildSuccess
-	target.Status.Repo = release.ContentURL
 	write.phase = target.Status.Phase
-	write.setRepo = true
-	write.repo = release.ContentURL
 	return r.apply(target, write, controller.ReconcileResult{}, nil)
 }
 
