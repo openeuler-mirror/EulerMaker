@@ -78,7 +78,7 @@ export interface Build {
     startTime?: string;
     endTime?: string;
     repo?: string;
-    baseBuildRef?: BootstrapRepo;
+    baseBuildRef?: { name?: string };
   };
 }
 

@@ -266,7 +266,6 @@ type BuildStatus struct {
 
 type BaseBuildRef struct {
     Name string `json:"name,omitempty"`
-    Repo string `json:"repo,omitempty"`
 }
 ```
 
@@ -277,7 +276,7 @@ type BaseBuildRef struct {
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `repo` | string | 生成的仓库 url |
-| `baseBuildRef` | BaseBuildRef | 增量构建使用的基础 Build 名称及其仓库地址；没有基础 Build 时省略 |
+| `baseBuildRef` | BaseBuildRef | 基础 Build 名称；未设置表示尚未查询，`{}` 表示已查询但没有基础 Build；过程仓 UID 和地址从同名 RpmRepo 获取 |
 | `conditions` | []metav1.Condition | 状态条件 |
 
 ### BuildList

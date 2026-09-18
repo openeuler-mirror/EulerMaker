@@ -95,12 +95,6 @@ func schema_ebs_api_ebs_v1_BaseBuildRef(ref common.ReferenceCallback) common.Ope
 							Format: "",
 						},
 					},
-					"repo": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 				},
 			},
 		},

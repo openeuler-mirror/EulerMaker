@@ -55,7 +55,6 @@ func (r *reconciler) recordBaseBuildRef() (controller.ReconcileResult, error) {
 	}
 	if previous != nil {
 		reference.Name = previous.Name
-		reference.Repo = previous.Status.Repo
 	}
 	target := r.current.DeepCopy()
 	target.Status.BaseBuildRef = reference

@@ -164,7 +164,7 @@ func TestPendingRecordsBaseBuildRefFromHistory(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.BaseBuildRef == nil || stored.Status.BaseBuildRef.Name != "build-prev" || stored.Status.BaseBuildRef.Repo != previous.Status.Repo {
+	if stored.Status.BaseBuildRef == nil || stored.Status.BaseBuildRef.Name != "build-prev" {
 		t.Fatalf("baseBuildRef = %+v", stored.Status.BaseBuildRef)
 	}
 	if stored.Status.Phase != ebsv1.BuildPending || api.CallCount("UpdateBuildStatus") != 1 {
@@ -186,7 +186,7 @@ func TestPendingRecordsEmptyBaseBuildRefWhenNoHistoryExists(t *testing.T) {
 	if stored.Status.BaseBuildRef == nil {
 		t.Fatal("an empty resolution must be recorded as an empty object, not nil")
 	}
-	if stored.Status.BaseBuildRef.Name != "" || stored.Status.BaseBuildRef.Repo != "" {
+	if stored.Status.BaseBuildRef.Name != "" {
 		t.Fatalf("baseBuildRef = %+v", stored.Status.BaseBuildRef)
 	}
 }

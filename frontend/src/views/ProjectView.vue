@@ -945,7 +945,7 @@ function buildTargetLabel(build: Build): string {
 
 function baseBuildLabel(build: Build): string {
   const base = build.status?.baseBuildRef;
-  return [base?.name, base?.repo].filter(Boolean).join(" · ") || t("common.emptyValue");
+  return base?.name || t("common.emptyValue");
 }
 
 function targetListLabel(targets?: BuildTarget[]): string {

@@ -117,7 +117,6 @@ type BuildStatus struct {
 
 type BaseBuildRef struct {
 	Name string `json:"name,omitempty"`
-	Repo string `json:"repo,omitempty"`
 }
 
 type BuildList struct {
