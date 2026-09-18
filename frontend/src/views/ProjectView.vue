@@ -13,6 +13,7 @@
   <div v-if="copyErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(copyErrorKey) }}</div>
   <div v-if="buildActionErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(buildActionErrorKey) }}</div>
   <div v-if="createdBuildNames.length" class="success-banner" role="status"><CircleCheckFilled />{{ createdBuildNames.length === 1 ? t("project.buildCreated", { name: createdBuildNames[0] }) : t("project.buildsCreated", { count: createdBuildNames.length }) }}</div>
+  <div v-if="abortedBuildName" class="success-banner" role="status"><CircleCheckFilled />{{ t("project.buildAborted", { name: abortedBuildName }) }}</div>
 
   <div v-if="loadingProject" class="skeleton-list page-skeleton" :aria-label="t('project.loading')"><span v-for="item in 5" :key="item"></span></div>
   <div v-else-if="projectError" class="inline-error page-error">
@@ -92,11 +93,14 @@
         <article class="content-panel build-history-list-panel">
           <div class="section-heading"><div><h2>{{ t("project.buildHistory") }}</h2></div><span>{{ t("common.count", { count: builds.length }) }}</span></div>
           <div class="build-history-list">
-            <button v-for="build in builds" :key="build.metadata?.name" type="button" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name }]" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
-              <span class="build-history-item-heading"><strong>{{ build.metadata?.name }}</strong><StatusBadge :value="build.status?.phase" /></span>
-              <small>{{ build.spec?.buildType || t("project.unspecifiedType") }} · {{ buildTargetLabel(build) }}</small>
-              <time>{{ formatDate(build.status?.startTime) }}</time>
-            </button>
+            <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
+              <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
+                <span class="build-history-item-heading"><strong>{{ build.metadata?.name }}</strong><StatusBadge :value="build.status?.phase" /></span>
+                <small>{{ build.spec?.buildType || t("project.unspecifiedType") }} · {{ buildTargetLabel(build) }}</small>
+                <time>{{ formatDate(build.status?.startTime) }}</time>
+              </button>
+              <button v-if="canAbortBuild(build)" class="build-history-abort" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
+            </div>
           </div>
         </article>
 
@@ -189,6 +193,16 @@
         </fieldset>
         <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
+      </form>
+    </ModalDialog>
+
+    <ModalDialog v-if="abortTarget" title-id="abort-build-title" :title="t('project.abortBuild')" :close-label="t('common.close')" @close="closeAbortDialog">
+      <form class="project-form" @submit.prevent="confirmAbort">
+        <p class="form-hint">{{ t("project.abortBuildConfirm", { name: abortTarget.metadata?.name }) }}</p>
+        <div class="abort-build-phase"><span>{{ t("project.currentBuildPhase") }}</span><StatusBadge :value="abortTarget.status?.phase" /></div>
+        <p class="form-hint">{{ t("project.abortBuildWarning") }}</p>
+        <div v-if="abortErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(abortErrorKey) }}</div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="abortingBuild" @click="closeAbortDialog">{{ t("common.cancel") }}</button><button class="primary-button danger-button" type="submit" :disabled="abortingBuild">{{ abortingBuild ? t("project.abortingBuild") : t("project.abortBuild") }}</button></div>
       </form>
     </ModalDialog>
 
@@ -326,6 +340,10 @@ const unsupportedBuildSelection = computed(() => buildConfLoading.value || Boole
 const buildDialogErrorKey = ref("");
 const buildActionErrorKey = ref("");
 const createdBuildNames = ref<string[]>([]);
+const abortTarget = ref<Build | null>(null);
+const abortingBuild = ref(false);
+const abortErrorKey = ref("");
+const abortedBuildName = ref("");
 const targetEditorOpen = ref(false);
 const editingTargets = ref<BuildTarget[]>([]);
 const savingTargets = ref(false);
@@ -409,6 +427,47 @@ const memberUsernames = computed(() =>
 );
 const selectedBuild = computed(() => builds.value.find((build) => build.metadata?.name === selectedBuildName.value) || null);
 
+function canAbortBuild(build: Build): boolean {
+  return canStartBuild.value && Boolean(build.metadata?.name) && ["Pending", "Prepared", "Processing"].includes(build.status?.phase || "");
+}
+
+function openAbortDialog(build: Build): void {
+  if (!canAbortBuild(build)) return;
+  abortTarget.value = build;
+  abortErrorKey.value = "";
+  buildActionErrorKey.value = "";
+  createdBuildNames.value = [];
+  abortedBuildName.value = "";
+}
+
+function closeAbortDialog(): void {
+  if (!abortingBuild.value) abortTarget.value = null;
+}
+
+async function confirmAbort(): Promise<void> {
+  const build = abortTarget.value;
+  const buildName = build?.metadata?.name;
+  if (!build || !buildName || !canAbortBuild(build) || abortingBuild.value) return;
+  abortingBuild.value = true;
+  abortErrorKey.value = "";
+  try {
+    await request<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds/${encodeURIComponent(buildName)}/abort`, { method: "POST" });
+    abortTarget.value = null;
+    abortedBuildName.value = buildName;
+    await loadResources();
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
+      abortTarget.value = null;
+      buildActionErrorKey.value = "project.abortBuildStale";
+      await loadResources();
+    } else {
+      abortErrorKey.value = errorTranslationKey(error, "project.abortBuildFailed");
+    }
+  } finally {
+    abortingBuild.value = false;
+  }
+}
+
 onMounted(async () => {
   await loadProject();
   if (project.value) await loadResources();
@@ -478,6 +537,7 @@ function openBuildDialog(type: "full" | "incremental"): void {
   buildDialogErrorKey.value = "";
   buildActionErrorKey.value = "";
   createdBuildNames.value = [];
+  abortedBuildName.value = "";
   buildDialogOpen.value = true;
 }
 
