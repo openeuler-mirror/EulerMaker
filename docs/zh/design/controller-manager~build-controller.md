@@ -413,7 +413,6 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
     - 若结果为空，写 `Build.status.baseBuildRef={}`；
     - 否则写：
       - `Build.status.baseBuildRef.name`（上一个发布成功 Build 的 `Build.metadata.name`）
-      - `Build.status.baseBuildRef.repo`（上一个发布成功 Build 的 `Build.status.repo`）
   - 写入后立即返回零值 + `nil`，`ensure Snapshot` / `ensure RpmRepo` 与后续等待从下一轮继续；`{}` 与实际值同样视为已处理。
 - 按第六章 Pending 行先 ensure Snapshot 并等待 Active，再 ensure RpmRepo（仅非 single，按 4.3 固化过程仓基线）。
 - 满足后写 `Build.status.phase=Prepared`。

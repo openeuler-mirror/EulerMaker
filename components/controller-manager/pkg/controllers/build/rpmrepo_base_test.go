@@ -23,7 +23,7 @@ import (
 const seededRepositoryUID = "DB3A8CE2-00CD-4C89-9C20-ADA417C83155"
 
 func withBaseBuildRefName(build *ebsv1.Build, name string) *ebsv1.Build {
-	build.Status.BaseBuildRef = &ebsv1.BaseBuildRef{Name: name, Repo: "https://release.example.com/" + name}
+	build.Status.BaseBuildRef = &ebsv1.BaseBuildRef{Name: name}
 	return build
 }
 

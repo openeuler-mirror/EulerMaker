@@ -76,7 +76,7 @@ func TestBaseBuildRefWriteUnknownConfirmation(t *testing.T) {
 		}
 		stored := api.build("project-a", "build-a")
 		if stored.Status.BaseBuildRef == nil ||
-			stored.Status.BaseBuildRef.Name != history.Name || stored.Status.BaseBuildRef.Repo != history.Status.Repo {
+			stored.Status.BaseBuildRef.Name != history.Name {
 			t.Fatalf("baseBuildRef = %+v", stored.Status.BaseBuildRef)
 		}
 		if stored.Status.Phase != ebsv1.BuildPending {
@@ -103,7 +103,7 @@ func TestBaseBuildRefWriteUnknownConfirmation(t *testing.T) {
 		if stored.Status.BaseBuildRef == nil {
 			t.Fatal("an empty resolution must be persisted as an empty object, not nil")
 		}
-		if stored.Status.BaseBuildRef.Name != "" || stored.Status.BaseBuildRef.Repo != "" {
+		if stored.Status.BaseBuildRef.Name != "" {
 			t.Fatalf("baseBuildRef = %+v", stored.Status.BaseBuildRef)
 		}
 		assertBaseBuildRefRound(t, api, before, 1)
@@ -204,9 +204,9 @@ func TestBaseBuildRefWriteUnknownConfirmation(t *testing.T) {
 
 func TestIntentSatisfiedComparesOnlyTargetFields(t *testing.T) {
 	emptyRef := &ebsv1.BaseBuildRef{}
-	historyRef := &ebsv1.BaseBuildRef{Name: "build-history", Repo: "https://artifact-manager/releases/v1/build-history"}
-	sameHistoryRef := &ebsv1.BaseBuildRef{Name: "build-history", Repo: "https://artifact-manager/releases/v1/build-history"}
-	otherHistoryRef := &ebsv1.BaseBuildRef{Name: "build-other", Repo: "https://artifact-manager/releases/v1/build-other"}
+	historyRef := &ebsv1.BaseBuildRef{Name: "build-history"}
+	sameHistoryRef := &ebsv1.BaseBuildRef{Name: "build-history"}
+	otherHistoryRef := &ebsv1.BaseBuildRef{Name: "build-other"}
 
 	pendingBuild := func() *ebsv1.Build {
 		return withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, "")
