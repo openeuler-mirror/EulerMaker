@@ -11,17 +11,29 @@
     <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else-if="loadedProject"><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.metadata?.name"><td><strong>{{ resource.metadata?.name }}</strong></td><td>{{ resource.spec?.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.spec?.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.spec?.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :disabled="isProtectedDefaultResource(resource)" :title="isProtectedDefaultResource(resource) ? t('operations.defaultResourceProtected') : undefined" @click="openDelete(resource)">{{ t("common.remove") }}</button></td></tr></tbody></table></div></template>
   </section>
 
-  <section class="content-panel operations-section"><div class="section-heading"><h2>{{ t("operations.runners") }}</h2></div><div v-if="runnersLoading" class="skeleton-list" :aria-label="t('operations.loadingRunners')"><span v-for="item in 4" :key="item"></span></div><div v-else-if="runnersError" class="inline-error" role="alert"><WarningFilled />{{ t(runnersError) }}<button type="button" @click="loadRunners">{{ t("common.reload") }}</button></div><EmptyState v-else-if="!runners.length" :title="t('operations.noRunners')" :description="t('operations.noRunnersHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th><th>{{ t("operations.arch") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th></tr></thead><tbody><tr v-for="runner in runners" :key="runner.metadata?.name"><td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td><td>{{ runner.status?.phase || t("common.unknown") }}</td><td>{{ runner.spec?.type || t("common.emptyValue") }}</td><td>{{ runner.spec?.arch || t("common.emptyValue") }}</td><td>{{ t(runner.spec?.unschedulable ? 'common.no' : 'common.yes') }}</td><td>{{ formatDate(runner.status?.heartbeat) }}</td></tr></tbody></table></div></section>
+  <section class="content-panel operations-section"><div class="section-heading"><h2>{{ t("operations.runners") }}</h2></div><div v-if="runnersLoading" class="skeleton-list" :aria-label="t('operations.loadingRunners')"><span v-for="item in 4" :key="item"></span></div><div v-else-if="runnersError" class="inline-error" role="alert"><WarningFilled />{{ t(runnersError) }}<button type="button" @click="loadRunners">{{ t("common.reload") }}</button></div><EmptyState v-else-if="!runners.length" :title="t('operations.noRunners')" :description="t('operations.noRunnersHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th><th>{{ t("operations.arch") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th><th v-if="canManageRunners">{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="runner in runners" :key="runner.metadata?.name"><td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td><td><StatusBadge :value="runner.status?.phase" /></td><td>{{ runner.spec?.type || t("common.emptyValue") }}</td><td>{{ runner.spec?.arch || t("common.emptyValue") }}</td><td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td><td>{{ formatDate(runner.status?.heartbeat) }}</td><td v-if="canManageRunners" class="admin-row-actions"><button class="text-button danger-link" type="button" :disabled="evictionSaving || !runner.metadata?.name" @click="openEviction(runner)">{{ t(runner.status?.phase === "Evicted" ? "operations.cancelEviction" : "operations.evict") }}</button></td></tr></tbody></table></div></section>
 
+  <ModalDialog v-if="evicting" title-id="evict-runner-title" :title="t(cancelEviction ? 'operations.cancelEvictionTitle' : 'operations.evictRunner', { name: evicting.metadata?.name })" :close-label="t('common.close')" @close="closeEviction">
+    <form class="project-form" @submit.prevent="evictRunner">
+      <p class="form-hint">{{ t(cancelEviction ? "operations.cancelEvictionHint" : "operations.evictHint") }}</p>
+      <div v-if="evictionError" class="form-error" role="alert"><WarningFilled />{{ t(evictionError) }}</div>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" :disabled="evictionSaving" @click="closeEviction">{{ t("common.cancel") }}</button>
+        <button class="primary-button danger-button" type="submit" :disabled="evictionSaving">{{ t(evictionSaving ? "common.saving" : cancelEviction ? "operations.cancelEviction" : "operations.evict") }}</button>
+      </div>
+    </form>
+  </ModalDialog>
   <ModalDialog v-if="editorOpen" title-id="resource-editor-title" :title="t(editing ? 'operations.editResource' : 'operations.createResource')" :close-label="t('common.close')" @close="closeEditor"><form class="project-form" @submit.prevent="saveResource"><label class="field required-field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="resourceName" required maxlength="63" :disabled="Boolean(editing)" /></label><BuildResourceSpecEditor ref="specEditor" :source="specSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form></ModalDialog>
   <ModalDialog v-if="deleting" title-id="delete-resource-title" :title="t('operations.deleteResource', { name: deleting.metadata?.name })" :close-label="t('common.close')" @close="closeDelete"><form class="project-form" @submit.prevent="deleteResource"><p class="form-hint">{{ t("admin.typeNameHint", { name: deleting.metadata?.name }) }}</p><label class="field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="confirmName" required autocomplete="off" /></label><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeDelete">{{ t("common.cancel") }}</button><button class="primary-button danger-button" type="submit" :disabled="saving || confirmName !== deleting.metadata?.name">{{ t("common.remove") }}</button></div></form></ModalDialog>
 </template>
 
 <script setup lang="ts">
 import { CircleCheckFilled, Refresh, WarningFilled } from "@element-plus/icons-vue";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
+import { useSessionStore } from "@/stores/session";
+import StatusBadge from "@/components/StatusBadge.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildResourceSpecEditor from "@/components/BuildResourceSpecEditor.vue";
@@ -29,6 +41,12 @@ import BuildConfEditor from "@/components/BuildConfEditor.vue";
 import type { BuildResource, Runner } from "@/types";
 
 const { t } = useI18n();
+const session = useSessionStore();
+const canManageRunners = computed(() => session.role === "admin" || session.role === "ops");
+const evicting = ref<Runner | null>(null);
+const evictionSaving = ref(false);
+const cancelEviction = ref(false);
+const evictionError = ref("");
 const runners = ref<Runner[]>([]);
 const runnersLoading = ref(true);
 const runnersError = ref("");
@@ -56,6 +74,41 @@ async function loadRunners(): Promise<void> {
     runners.value = await loadAll<Runner>("/apis/ebs/v1/runners");
   } catch (error) { runnersError.value = errorTranslationKey(error, "operations.loadRunnersFailed"); }
   finally { runnersLoading.value = false; }
+}
+function openEviction(runner: Runner): void {
+  if (!canManageRunners.value || evictionSaving.value) return;
+  evicting.value = runner;
+  cancelEviction.value = runner.status?.phase === "Evicted";
+  evictionError.value = "";
+  success.value = "";
+}
+function closeEviction(): void { if (!evictionSaving.value) evicting.value = null; }
+async function evictRunner(): Promise<void> {
+  const selected = evicting.value;
+  const name = selected?.metadata?.name;
+  if (!canManageRunners.value || !name || evictionSaving.value) return;
+  evictionSaving.value = true;
+  evictionError.value = "";
+  try {
+    const path = `/apis/ebs/v1/runners/${encodeURIComponent(name)}`;
+    const current = await request<Runner>(path);
+    if (!selected.metadata?.uid || current.metadata?.uid !== selected.metadata.uid || !current.metadata?.resourceVersion) {
+      evictionError.value = "errors.conflict";
+      return;
+    }
+    const shouldUpdate = cancelEviction.value ? current.status?.phase === "Evicted" : current.status?.phase !== "Evicted";
+    if (shouldUpdate) {
+      await request<Runner>(path + "/status", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/merge-patch+json" },
+        body: JSON.stringify({ metadata: { resourceVersion: current.metadata.resourceVersion }, status: { phase: cancelEviction.value ? "Offline" : "Evicted" } }),
+      });
+    }
+    success.value = t(cancelEviction.value ? "operations.evictionCancelled" : "operations.runnerEvicted", { name });
+    evicting.value = null;
+    await loadRunners();
+  } catch (error) { evictionError.value = errorTranslationKey(error, cancelEviction.value ? "operations.cancelEvictionFailed" : "operations.evictFailed"); }
+  finally { evictionSaving.value = false; }
 }
 async function loadResources(): Promise<void> {
   const project = projectName.value;

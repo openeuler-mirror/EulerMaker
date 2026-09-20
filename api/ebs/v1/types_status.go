@@ -118,11 +118,13 @@ type RunnerPhase string
 const (
 	RunnerOnline  RunnerPhase = "Online"
 	RunnerOffline RunnerPhase = "Offline"
+	RunnerEvicted RunnerPhase = "Evicted"
 )
 
 var runnerPhaseValues = []string{
 	string(RunnerOnline),
 	string(RunnerOffline),
+	string(RunnerEvicted),
 }
 
 // RunnerPhaseValues returns all valid Runner phase values.
@@ -132,7 +134,7 @@ func RunnerPhaseValues() []string {
 
 // IsValid reports whether p is a supported Runner phase.
 func (p RunnerPhase) IsValid() bool {
-	return p == RunnerOnline || p == RunnerOffline
+	return p == RunnerOnline || p == RunnerOffline || p == RunnerEvicted
 }
 
 // SnapshotPhase describes the lifecycle state of a Snapshot.

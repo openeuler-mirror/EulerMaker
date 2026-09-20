@@ -618,7 +618,7 @@ assumed 向 Running 占用的转移按 4.1 节 Job event handler 的原子更新
 
 | 顺序 | 插件 | 规则 |
 |------|------|------|
-| 1 | PhaseFilter | Runner phase 必须为 `Online` |
+| 1 | PhaseFilter | Runner phase 必须为 `Online`，`Evicted` 不可调度 |
 | 2 | UnschedulableFilter | `spec.unschedulable` 必须为 false |
 | 3 | RuntimeFilter | Job `spec.runtime` 必须等于 Runner `spec.type` |
 | 4 | NodeSelectorFilter | Job selector 的每个键值必须精确匹配 Runner labels |

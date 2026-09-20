@@ -886,7 +886,7 @@ type RunnerStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | `RunnerPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Online` / `Offline` |
+| `phase` | `RunnerPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Online` / `Offline` / `Evicted` |
 | `conditions` | []Condition | 详细状态条件，当前 runner agent 暂不主动填充 |
 | `capacity` | map[string]string | Runner 上报的总资源容量。当前包含 `cpu`、`memory`、`ephemeral-storage`：`cpu` 为逻辑 CPU 数，`memory` 使用 `Mi`，`ephemeral-storage` 使用 `Gi` |
 | `allocatable` | map[string]string | Runner 上报的可调度资源容量。当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间，使用 `Gi` |
@@ -895,6 +895,12 @@ type RunnerStatus struct {
 | `heartbeat` | Time | 最后心跳时间 |
 
 Runner 创建时 apiserver 默认置为 `Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次心跳置为 `Online`；主动下线或心跳超时后置为 `Offline`。Runner 的忙闲状态由绑定 Job 计算，不通过 Runner phase 表达。
+
+### Runner 驱逐状态
+
+`status.phase=Evicted` 表示暂停向该 Runner 分配新 Job。Scheduler 的 PhaseFilter 仅接受 Online；已绑定 Job 继续执行，不因驱逐自动中止或迁移。Runner Controller 不把 Evicted 改为 Offline。
+Runner agent 上报心跳或主动下线前读取最新 Runner，保留 Evicted，并携带该对象的 resourceVersion 写入；发生冲突时不重放旧状态，下一次上报重新读取。解除驱逐需显式更新 phase 为 Online 或 Offline，后者由后续心跳恢复在线。此状态不代替 spec.unschedulable，恢复后仍需通过其他调度过滤。
+
 
 ### RunnerAddress
 

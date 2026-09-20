@@ -212,6 +212,9 @@ Controller 不把心跳改为当前时间，也不清空旧容量信息。`Offli
 
 Runner agent 允许通过带有更新心跳的状态写入将 `Offline` 恢复为 `Online`。Runner Controller 对 `Offline` 对象直接结束，不阻止或覆盖后续恢复。
 
+Runner 的 `Evicted` 为合法驱逐状态：不入队处理心跳超时，也不恢复为 Online；直接读取遇到该状态时结束当前周期，保留驱逐状态。
+
+
 ## 5. 健康判定
 
 ### 5.1 有效时间基准

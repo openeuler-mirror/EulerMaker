@@ -1029,7 +1029,7 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 		injectIdentityHeaders(r, ident)
 		return authzDecision{}, nil
 	}
-	if ident.IsSystem() || ident.IsAdmin() {
+	if ident.IsSystem() || ident.IsAdmin() || (ident.IsOps() && protectedRoute.resource == "runners") {
 		route := parseRoute(r.URL.Path)
 		if route.resource == "projects" && route.project == "" && r.Method == http.MethodPost {
 			if err := g.validateSystemProjectOwner(ctx, r); err != nil {
@@ -1044,9 +1044,9 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 	}
 	if ident.IsOps() {
 		route := parseRoute(r.URL.Path)
-		// Ops keeps its cross-project BuildResource and read-only Runner access.
+		// Ops keeps its cross-project BuildResource access; Runner management is handled above.
 		// Other business resources use the same owner/member rules as ebs:user.
-		if route.resource == "buildresources" || route.resource == "runners" {
+		if route.resource == "buildresources" {
 			return g.authorizeOps(r)
 		}
 	}
@@ -1189,18 +1189,7 @@ func (g *Gateway) authorizeOps(r *http.Request) (authzDecision, error) {
 		}
 		return authzDecision{}, fmt.Errorf("unsupported build resource method")
 	}
-	if route.resource != "runners" || len(route.rest) != 0 {
-		return authzDecision{}, fmt.Errorf("ops access is limited to runner reads and build resource operations")
-	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		return authzDecision{}, fmt.Errorf("ops runner access is read-only")
-	}
-	for _, value := range r.URL.Query()["watch"] {
-		if value != "false" {
-			return authzDecision{}, fmt.Errorf("ops runner watch is not allowed")
-		}
-	}
-	return authzDecision{}, nil
+	return authzDecision{}, fmt.Errorf("unsupported ops resource operation")
 }
 
 func (g *Gateway) authorizeRunnerJobs(r *http.Request, ident Identity) (authzDecision, error) {

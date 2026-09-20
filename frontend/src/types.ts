@@ -1,4 +1,5 @@
 export interface ObjectMeta {
+  uid?: string;
   name?: string;
   namespace?: string;
   labels?: Record<string, string>;
