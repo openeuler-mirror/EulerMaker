@@ -2,10 +2,6 @@
   <div class="detail-toolbar">
     <RouterLink class="back-link" to="/projects"><ArrowLeft /> {{ t("project.back") }}</RouterLink>
     <div class="detail-actions">
-      <template v-if="project && canStartBuild">
-        <button class="primary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('full')">{{ t("project.fullBuild") }}</button>
-        <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('incremental')">{{ t("project.incrementalBuild") }}</button>
-      </template>
       <button v-if="project" class="secondary-button" type="button" @click="exportYaml"><Download />{{ t("project.exportYaml") }}</button>
     </div>
   </div>
@@ -24,6 +20,12 @@
       <div class="project-hero-copy">
         <div class="title-with-status"><h1>{{ project.spec?.displayName || project.metadata?.name }}</h1><span class="project-id"><code>{{ project.metadata?.name }}</code><button type="button" :class="{ copied: copiedId }" :aria-label="copiedId ? t('project.copied') : t('project.copyProjectId')" :title="copiedId ? t('project.copied') : t('project.copyProjectId')" @click="copyProjectId"><Check v-if="copiedId" /><DocumentCopy v-else /></button></span></div>
         <p>{{ project.spec?.description || t("project.noDescription") }}</p>
+        <div v-if="canStartBuild" class="project-build-actions">
+          <button class="primary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('full')">{{ t("project.fullBuild") }}</button>
+          <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('incremental')">{{ t("project.incrementalBuild") }}</button>
+          <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('specified')">{{ t("project.specifiedBuild") }}</button>
+          <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('single')">{{ t("project.singleBuild") }}</button>
+        </div>
       </div>
     </section>
 
@@ -66,7 +68,8 @@
         <div class="section-heading"><div><h2>{{ t("project.packageRepositories") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openPackageEditor"><Plus />{{ t("project.addPackage") }}</button></div></div>
         <div class="package-list-toolbar"><label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label></div>
         <div v-if="packageSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageSaved") }}</div>
-        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>URL</th><th>Git ref</th><th>{{ t("project.buildTargets") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td><td>{{ gitRefLabel(repo.ref) }}</td><td>{{ targetListLabel(repo.buildTargets) }}</td></tr></tbody></table></div>
+        <div v-if="deletedPackageName" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageDeleted", { name: deletedPackageName }) }}</div>
+        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>URL</th><th>Git ref</th><th>{{ t("project.buildTargets") }}</th><th v-if="canEditProject" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td><td>{{ gitRefLabel(repo.ref) }}</td><td>{{ targetListLabel(repo.buildTargets) }}</td><td v-if="canEditProject" class="package-actions-column"><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
         <p v-else class="config-empty">{{ t(project.spec?.packageRepos?.length ? "project.noMatchingPackages" : "project.noPackageRepositories") }}</p>
         <div v-if="filteredPackageRepos.length" class="table-footer">
           <div class="page-summary">
@@ -136,16 +139,6 @@
           </article>
 
           <article class="content-panel">
-            <div class="section-heading"><div><h2>{{ t("project.userManagement") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openMemberEditor"><Edit />{{ t("common.edit") }}</button></div></div>
-            <div v-if="memberSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.membersSaved") }}</div>
-            <div class="project-user-list">
-              <div class="project-user-row"><strong>{{ ownerUsername || t("common.emptyValue") }}</strong><span class="user-role owner-role">{{ t("project.ownerRole") }}</span></div>
-              <div v-for="member in memberUsernames" :key="member" class="project-user-row"><strong>{{ member }}</strong><span class="user-role">{{ t("project.memberRole") }}</span></div>
-            </div>
-            <p v-if="!memberUsernames.length" class="config-empty user-empty">{{ t("project.noMembers") }}</p>
-          </article>
-
-          <article class="content-panel">
             <div class="section-heading"><div><h2>{{ t("project.buildTargets") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openTargetEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="targetSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.targetsSaved") }}</div>
             <div v-if="project.spec?.buildTargets?.length" class="project-table-wrap">
@@ -159,6 +152,16 @@
             <div v-if="bootstrapSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.bootstrapSaved") }}</div>
             <div v-if="project.spec?.bootstrapRepo?.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>{{ t("project.repositoryAddress") }}</th></tr></thead><tbody><tr v-for="(repo, index) in project.spec.bootstrapRepo" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.repo || t("common.emptyValue") }}</code></td></tr></tbody></table></div>
             <p v-else class="config-empty">{{ t("project.noBootstrapRepositories") }}</p>
+          </article>
+
+          <article class="content-panel">
+            <div class="section-heading"><div><h2>{{ t("project.userManagement") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openMemberEditor"><Edit />{{ t("common.edit") }}</button></div></div>
+            <div v-if="memberSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.membersSaved") }}</div>
+            <div class="project-user-list">
+              <div class="project-user-row"><strong>{{ ownerUsername || t("common.emptyValue") }}</strong><span class="user-role owner-role">{{ t("project.ownerRole") }}</span></div>
+              <div v-for="member in memberUsernames" :key="member" class="project-user-row"><strong>{{ member }}</strong><span class="user-role">{{ t("project.memberRole") }}</span></div>
+            </div>
+            <p v-if="!memberUsernames.length" class="config-empty user-empty">{{ t("project.noMembers") }}</p>
           </article>
         </div>
 
@@ -175,9 +178,19 @@
 
     </section>
 
-    <ModalDialog v-if="buildDialogOpen" title-id="create-build-title" :title="t(buildType === 'full' ? 'project.createFullBuild' : 'project.createIncrementalBuild')" :close-label="t('common.close')" @close="closeBuildDialog">
+    <ModalDialog v-if="buildDialogOpen" title-id="create-build-title" :title="t(buildDialogTitle)" :close-label="t('common.close')" @close="closeBuildDialog">
       <form class="project-form" @submit.prevent="createBuild">
         <p class="form-hint">{{ t("project.createBuildHint") }}</p>
+        <fieldset v-if="requiresBuildPackages" class="target-fieldset build-package-fieldset">
+          <legend>{{ t("project.selectBuildPackages") }}</legend>
+          <p class="form-hint build-package-hint">{{ t("project.selectBuildPackagesHint") }}</p>
+          <label class="search-box build-package-search"><Search /><input v-model="buildPackageSearch" type="search" :placeholder="t('project.searchBuildPackages')" :aria-label="t('project.searchBuildPackages')" /></label>
+          <div class="build-package-options">
+            <label v-for="packageName in visibleBuildPackages" :key="packageName" class="build-package-option"><input v-model="selectedBuildPackages" type="checkbox" :value="packageName" :disabled="creatingBuild" /><span>{{ packageName }}</span></label>
+            <p v-if="!visibleBuildPackages.length" class="form-hint">{{ t("project.noMatchingBuildPackages") }}</p>
+          </div>
+          <p class="build-package-count">{{ t("project.selectedBuildPackages", { count: selectedBuildPackages.length }) }}</p>
+        </fieldset>
         <p v-if="unsupportedBuildSelection" class="form-error">{{ t('buildConf.unsupported') }} <button type="button" @click="reloadBuildConf">{{ t('common.reload') }}</button></p>
         <fieldset class="target-fieldset">
           <legend>{{ t("project.buildTarget") }}</legend>
@@ -192,7 +205,7 @@
           </div>
         </fieldset>
         <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
-        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection || (requiresBuildPackages && !selectedBuildPackages.length)">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
       </form>
     </ModalDialog>
 
@@ -232,6 +245,12 @@
         <div v-if="packageErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(packageErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingPackage" @click="closePackageEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingPackage">{{ savingPackage ? t("common.saving") : t("common.save") }}</button></div>
       </form>
+    </ModalDialog>
+
+    <ModalDialog v-if="packageDeleteName" title-id="delete-package-title" :title="t('project.deletePackage', { name: packageDeleteName })" :close-label="t('common.close')" @close="closePackageDelete">
+      <p class="form-hint">{{ t("project.deletePackageConfirm", { name: packageDeleteName }) }}</p>
+      <div v-if="packageDeleteErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(packageDeleteErrorKey) }}</div>
+      <div class="modal-actions"><button class="secondary-button" type="button" :disabled="deletingPackage" @click="closePackageDelete">{{ t("common.cancel") }}</button><button class="primary-button danger-button" type="button" :disabled="deletingPackage" @click="confirmDeletePackage">{{ deletingPackage ? t("common.saving") : t("project.deletePackageAction") }}</button></div>
     </ModalDialog>
 
     <ModalDialog v-if="targetEditorOpen" title-id="edit-targets-title" :title="t('project.editBuildTargets')" :close-label="t('common.close')" @close="closeTargetEditor">
@@ -311,6 +330,7 @@ import { useSessionStore } from "@/stores/session";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "config";
+type BuildType = "full" | "incremental" | "single" | "specified";
 type BuildTargetDraft = BuildTarget & { selected: boolean };
 
 const route = useRoute();
@@ -332,7 +352,13 @@ const copyErrorKey = ref("");
 const copiedId = ref(false);
 let copyResetTimer: number | undefined;
 const buildDialogOpen = ref(false);
-const buildType = ref<"full" | "incremental">("full");
+const buildType = ref<BuildType>("full");
+const selectedBuildPackages = ref<string[]>([]);
+const buildPackageSearch = ref("");
+const requiresBuildPackages = computed(() => buildType.value === "single" || buildType.value === "specified");
+const buildDialogTitle = computed(() => ({ full: "project.createFullBuild", incremental: "project.createIncrementalBuild", single: "project.createSingleBuild", specified: "project.createSpecifiedBuild" })[buildType.value]);
+const availableBuildPackages = computed(() => [...new Set((project.value?.spec?.packageRepos || []).map((repo) => repo.name).filter((value): value is string => Boolean(value?.trim())))].sort((left, right) => left.localeCompare(right)));
+const visibleBuildPackages = computed(() => availableBuildPackages.value.filter((item) => item.toLowerCase().includes(buildPackageSearch.value.trim().toLowerCase())));
 const buildTargetDrafts = ref<BuildTargetDraft[]>([]);
 const creatingBuild = ref(false);
 const { supports: supportsBuildTarget, error: buildConfError, loading: buildConfLoading, reload: reloadBuildConf } = useBuildConf();
@@ -375,6 +401,10 @@ const packageEditorOpen = ref(false);
 const savingPackage = ref(false);
 const packageErrorKey = ref("");
 const packageSaveSuccess = ref(false);
+const packageDeleteName = ref("");
+const packageDeleteErrorKey = ref("");
+const deletingPackage = ref(false);
+const deletedPackageName = ref("");
 const packagePageSizes = [20, 50, 100] as const;
 const packagePageSize = ref<number>(20);
 const packageCurrentPage = ref(1);
@@ -523,10 +553,12 @@ function selectTab(tab: ProjectTab): void {
   void router.replace({ query });
 }
 
-function openBuildDialog(type: "full" | "incremental"): void {
+function openBuildDialog(type: BuildType): void {
   if (!project.value || !canStartBuild.value || buildConfigurationMissing.value) return;
   void reloadBuildConf();
   buildType.value = type;
+  selectedBuildPackages.value = [];
+  buildPackageSearch.value = "";
   buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os,
     arch: target.arch,
@@ -562,13 +594,19 @@ async function createBuild(): Promise<void> {
     buildDialogErrorKey.value = "project.buildConfigurationRequired";
     return;
   }
+  if (requiresBuildPackages.value && !selectedBuildPackages.value.length) {
+    buildDialogErrorKey.value = "project.selectBuildPackagesError";
+    return;
+  }
   creatingBuild.value = true;
   buildDialogErrorKey.value = "";
+  const selectedType = buildType.value;
+  const packages = requiresBuildPackages.value ? [...selectedBuildPackages.value] : undefined;
   const buildNames = targets.map(() => createBuildName());
   const results = await Promise.allSettled(targets.map((target, index) =>
     request<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds`, {
       method: "POST",
-      body: JSON.stringify({ apiVersion: "ebs/v1", kind: "Build", metadata: { name: buildNames[index] }, spec: { buildType: buildType.value, buildTarget: { ...target } } }),
+      body: JSON.stringify({ apiVersion: "ebs/v1", kind: "Build", metadata: { name: buildNames[index] }, spec: { buildType: selectedType, buildTarget: { ...target }, ...(packages ? { packages } : {}) } }),
     }),
   ));
   const successfulNames = results.flatMap((result, index) => result.status === "fulfilled" ? [result.value.metadata?.name || buildNames[index]] : []);
@@ -620,6 +658,7 @@ function openPackageEditor(): void {
   packageDraft.value = { name: "", url: "", ref: { type: project.value.spec?.defaultRef?.type || "Branch", value: project.value.spec?.defaultRef?.value || "master" } };
   packageErrorKey.value = "";
   packageSaveSuccess.value = false;
+  deletedPackageName.value = "";
   packageEditorOpen.value = true;
 }
 
@@ -663,6 +702,46 @@ async function savePackage(): Promise<void> {
     packageErrorKey.value = errorTranslationKey(reason, "errors.updateProject");
   } finally {
     savingPackage.value = false;
+  }
+}
+
+function openPackageDelete(packageName: string): void {
+  if (!project.value || !canEditProject.value || !packageName) return;
+  packageDeleteName.value = packageName;
+  packageDeleteErrorKey.value = "";
+  packageSaveSuccess.value = false;
+  deletedPackageName.value = "";
+}
+
+function closePackageDelete(): void {
+  if (deletingPackage.value) return;
+  packageDeleteName.value = "";
+  packageDeleteErrorKey.value = "";
+}
+
+async function confirmDeletePackage(): Promise<void> {
+  if (!project.value || !canEditProject.value || deletingPackage.value || !packageDeleteName.value) return;
+  const packageName = packageDeleteName.value;
+  if (!project.value.spec?.packageRepos?.some((repo) => repo.name === packageName)) {
+    packageDeleteErrorKey.value = "project.packageDeleteMissing";
+    return;
+  }
+  deletingPackage.value = true;
+  packageDeleteErrorKey.value = "";
+  try {
+    const updated = JSON.parse(JSON.stringify(project.value)) as Project;
+    updated.spec = { ...updated.spec, packageRepos: (updated.spec?.packageRepos || []).filter((repo) => repo.name !== packageName) };
+    project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
+      method: "PUT",
+      body: JSON.stringify(updated),
+    });
+    packageDeleteName.value = "";
+    deletedPackageName.value = packageName;
+    packageCurrentPage.value = Math.min(packageCurrentPage.value, packageTotalPages.value);
+  } catch (reason) {
+    packageDeleteErrorKey.value = errorTranslationKey(reason, "project.packageDeleteFailed");
+  } finally {
+    deletingPackage.value = false;
   }
 }
 
