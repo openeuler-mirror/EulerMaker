@@ -37,15 +37,18 @@ func TestBuildInfoPhase(t *testing.T) {
 }
 
 func TestJobPhase(t *testing.T) {
-	for _, phase := range []JobPhase{JobPending, JobRunning, JobCompleted, JobFailed, JobAborted} {
+	for _, phase := range []JobPhase{JobPending, JobRunning, JobSucceeded, JobFailed, JobAborted} {
 		if !phase.IsValid() {
 			t.Errorf("phase %q is not valid", phase)
 		}
 	}
+	if JobPhase("Completed").IsValid() || JobPhase("Completed").IsTerminal() {
+		t.Error("legacy Completed must not be a valid or terminal Job phase")
+	}
 	if JobPhase("Unknown").IsValid() {
 		t.Error("unknown phase is valid")
 	}
-	for _, phase := range []JobPhase{JobCompleted, JobFailed, JobAborted} {
+	for _, phase := range []JobPhase{JobSucceeded, JobFailed, JobAborted} {
 		if !phase.IsTerminal() {
 			t.Errorf("phase %q is not terminal", phase)
 		}

@@ -75,7 +75,7 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 		t.Fatalf("post-run status = %#v", statuses[1])
 	}
 	final := statuses[2]
-	if final.Phase != "Completed" || final.ArtifactState != "Completed" || final.ResultRoot != "artifact://uid" || final.ArtifactCount != 2 {
+	if final.Phase != "Succeeded" || final.ArtifactState != "Completed" || final.ResultRoot != "artifact://uid" || final.ArtifactCount != 2 {
 		t.Fatalf("final status = %#v", final)
 	}
 	if _, err := os.Stat(resultDir); !os.IsNotExist(err) {
@@ -113,7 +113,7 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	}
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	if len(api.jobStatuses) != 1 || api.jobStatuses[0].Phase != "Completed" || api.jobStatuses[0].ArtifactState != "Completed" {
+	if len(api.jobStatuses) != 1 || api.jobStatuses[0].Phase != "Succeeded" || api.jobStatuses[0].ArtifactState != "Completed" {
 		t.Fatalf("recovered statuses = %#v", api.jobStatuses)
 	}
 }

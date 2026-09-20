@@ -9,7 +9,7 @@ Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史�
 - 监听 Job 和 Runner 变化；
 - 识别绑定到已删除或明确 `Offline` Runner 的非终态 Job；
 - 经过离线宽限期并再次确认后，将悬挂 Job 标记为 `Failed`；
-- 删除 `Completed`、`Failed`、`Aborted` 状态下超过 30 天保留期的历史 Job；
+- 删除 `Succeeded`、`Failed`、`Aborted` 状态下超过 30 天保留期的历史 Job；
 - 保证状态更新幂等，并在并发更新时以 apiserver 中的最新对象为准；
 - 暴露必要的结构化日志和指标。
 
@@ -108,10 +108,10 @@ Job Controller 不修改 `runner`、`startTime`、`resultRoot` 和 `restartCount
 终态为：
 
 ```text
-Completed | Failed | Aborted
+Succeeded | Failed | Aborted
 ```
 
-Job Controller 自身把 `Completed`、`Failed`、`Aborted` 视为终态：观察到这些 phase 后不再更新其 status，只根据 `endTime` 安排历史对象清理。首版不要求 apiserver 强制校验终态不可回退，该约束暂由 Scheduler、Runner 和各 Controller 共同遵守。
+Job Controller 自身把 `Succeeded`、`Failed`、`Aborted` 视为终态：观察到这些 phase 后不再更新其 status，只根据 `endTime` 安排历史对象清理。首版不要求 apiserver 强制校验终态不可回退，该约束暂由 Scheduler、Runner 和各 Controller 共同遵守。
 
 ## 四、事件与本地索引
 
@@ -257,7 +257,7 @@ status:
 
 历史清理是同一个 Job Controller 的第二条调和分支，共用 Job Watch Source、队列、worker 和单键串行保证，不注册单独的顶层 Controller。Job 进入终态后，`Sync` 按以下流程处理：
 
-1. 仅接受 `Completed`、`Failed`、`Aborted`；其他 phase 不参与 GC。
+1. 仅接受 `Succeeded`、`Failed`、`Aborted`；其他 phase 不参与 GC。
 2. `metadata.deletionTimestamp` 非空时不重复删除。
 3. 必须存在非零 `status.endTime`。`endTime` 缺失的终态 Job 记录告警和指标，但不得使用 `creationTimestamp` 或 `resourceVersion` 时间代替，以免误删异常对象。
 4. 计算固定时长截止时间：
@@ -310,12 +310,12 @@ Job、Runner 和上层 Controller 都可能更新对象。Job Controller 必须�
 宽限期到期时 Runner 可能同时完成 Job。resourceVersion 冲突只保证基于同一个旧版本的并发更新至多一个成功：
 
 - Runner 先写终态：Job Controller 冲突后读取终态并停止；
-- Job Controller 先写 Failed：遵守本设计的 Runner 在冲突后读取最新 Job，发现终态后停止写入，不得把 Failed 改回 Running 或 Completed；
+- Job Controller 先写 Failed：遵守本设计的 Runner 在冲突后读取最新 Job，发现终态后停止写入，不得把 Failed 改回 Running 或 Succeeded；
 - Runner 恢复但其状态事件尚未到达本地缓存：宽限期到期后的强制 Runner GET 读取权威状态并阻止错误的 Failed 更新。
 
 首版明确接受强制 Runner GET 与 Job status 更新之间仍存在不可消除的竞态窗口：Controller 可能在 GET 确认 Runner 不存在或为 `Offline` 后、提交 Job status 前遇到 Runner 恢复，并最终成功把 Job 写为 `Failed`。该 GET 只用于排除 Watch 缓存陈旧造成的误判，不构成 Runner 状态与 Job status 更新之间的事务前置条件，也不承诺写入瞬间 Runner 仍不可用。
 
-一旦 Job 成功进入 `Failed`，后续 Runner 恢复不得把它回退为 Running 或 Completed。实现不在 status 更新后再次 GET Runner 并补偿 Job，也不自动重新调度，因为无法证明旧执行是否已经停止。若在 Job status 写入返回 Conflict 后观察到 Runner 已恢复，只按最新 Job 和 Runner 状态重新调谐，不覆盖并发结果。
+一旦 Job 成功进入 `Failed`，后续 Runner 恢复不得把它回退为 Running 或 Succeeded。实现不在 status 更新后再次 GET Runner 并补偿 Job，也不自动重新调度，因为无法证明旧执行是否已经停止。若在 Job status 写入返回 Conflict 后观察到 Runner 已恢复，只按最新 Job 和 Runner 状态重新调谐，不覆盖并发结果。
 
 若未来必须消除此窗口，需要由 apiserver 提供能够原子校验 Runner 身份、phase 或版本的专用 Job 状态迁移接口；仅增加客户端 GET 次数无法形成事务保证。
 

@@ -54,7 +54,7 @@ type JobPhase string
 const (
 	JobPending   JobPhase = "Pending"
 	JobRunning   JobPhase = "Running"
-	JobCompleted JobPhase = "Completed"
+	JobSucceeded JobPhase = "Succeeded"
 	JobFailed    JobPhase = "Failed"
 	JobAborted   JobPhase = "Aborted"
 )
@@ -62,7 +62,7 @@ const (
 var jobPhaseValues = []string{
 	string(JobPending),
 	string(JobRunning),
-	string(JobCompleted),
+	string(JobSucceeded),
 	string(JobFailed),
 	string(JobAborted),
 }
@@ -75,7 +75,7 @@ func JobPhaseValues() []string {
 // IsValid reports whether p is a supported Job phase.
 func (p JobPhase) IsValid() bool {
 	switch p {
-	case JobPending, JobRunning, JobCompleted, JobFailed, JobAborted:
+	case JobPending, JobRunning, JobSucceeded, JobFailed, JobAborted:
 		return true
 	default:
 		return false
@@ -84,7 +84,7 @@ func (p JobPhase) IsValid() bool {
 
 // IsTerminal reports whether no more Job execution is expected for p.
 func (p JobPhase) IsTerminal() bool {
-	return p == JobCompleted || p == JobFailed || p == JobAborted
+	return p == JobSucceeded || p == JobFailed || p == JobAborted
 }
 
 // JobStage describes the current execution stage of a Job.

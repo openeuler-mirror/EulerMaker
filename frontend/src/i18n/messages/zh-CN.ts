@@ -447,6 +447,7 @@ export default {
     aborted: "已中止",
     skipped: "已跳过",
     running: "运行中",
+    succeeded: "成功",
     completed: "已完成",
     online: "在线",
     offline: "离线",
