@@ -474,7 +474,7 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 			status.Phase = "Failed"
 			status.Message = executionErr.Error()
 		} else {
-			status.Phase = "Completed"
+			status.Phase = "Succeeded"
 			status.Stage = "PostRun"
 			status.Message = ""
 		}

@@ -162,7 +162,7 @@ ebsctl delete br openeuler-mainline -p openeuler-mainline
 ```bash
 ebsctl describe job build-kernel -p openeuler-mainline
 ebsctl wait job build-kernel -p openeuler-mainline \
-  --for=jsonpath='{.status.phase}'=Completed --timeout=30m
+  --for=jsonpath='{.status.phase}'=Succeeded --timeout=30m
 ebsctl version
 ```
 

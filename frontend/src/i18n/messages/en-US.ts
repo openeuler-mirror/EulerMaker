@@ -451,6 +451,7 @@ export default {
     aborted: "Aborted",
     skipped: "Skipped",
     running: "Running",
+    succeeded: "Succeeded",
     completed: "Completed",
     online: "Online",
     offline: "Offline",

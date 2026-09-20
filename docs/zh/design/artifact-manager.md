@@ -624,7 +624,7 @@ Runner 执行完成后扫描 Job 结果目录并生成 manifest：
 4. 上传请求失败时使用相同幂等键整文件重传。
 5. 确认每个必需文件均已返回 `Completed`。
 6. 调用 Job 上传清单完成接口，由 Artifact Manager 校验并封账全部必需文件。
-7. 清单完成后更新 Job 的 `artifactState` 和 `artifactCount`，再将 Job 更新为 `phase=Completed`；必需产物上传或清单封账失败时更新为 `Failed`。Manifest digest 只由 Artifact Manager 保存，不写入 Job Status。
+7. 清单完成后更新 Job 的 `artifactState` 和 `artifactCount`，再将 Job 更新为 `phase=Succeeded`；必需产物上传或清单封账失败时更新为 `Failed`。Manifest digest 只由 Artifact Manager 保存，不写入 Job Status。
 
 Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文件数量限流。上传成功前保留本地文件。
 
@@ -689,7 +689,7 @@ RpmRepo Controller 是 Controller Manager 内的常驻控制器，不等待其�
 
 进入仓库队列的 Job 必须同时满足：
 
-- `status.phase=Completed`；
+- `status.phase=Succeeded`；
 - `status.artifactState=Completed`；
 - Job 携带由 BuildInfo Controller 写入的构建归属和目标 labels，能够确定 Build、spec、目标 OS 和目标架构；
 - 该 Job 未写入仓库发布结果，也不是 `RpmRepo.status.repository.transition` 中正在处理的输入。
@@ -1646,7 +1646,7 @@ Job Status 只保存结果摘要和 Artifact Manager 定位信息，不保存完
 
 ```yaml
 status:
-  phase: Completed
+  phase: Succeeded
   stage: PostRun
   resultRoot: artifact://e32450b8-...
   artifactState: Completed

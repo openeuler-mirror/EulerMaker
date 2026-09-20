@@ -310,7 +310,7 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 7. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
 8. 将 Job 保持为 phase=Running 并推进到 stage=PostRun，封账日志；业务执行失败或超时也必须尝试封账已有日志
 9. 业务执行成功时收集并上传产物，完成 JobUploadManifest
-10. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Completed 和 Artifact 摘要
+10. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Succeeded 和 Artifact 摘要
 11. 业务执行、必需日志封账、必需产物上传或清单封账失败时更新 phase=Failed，并保留明确的失败原因和已完成 Artifact 摘要
 12. 清理执行环境和已确认的本地上传状态；Runner 保持 `Online`
 ```
@@ -422,7 +422,7 @@ runner agent 应把容器生命周期映射到 Job status，而不是在 `Runner
 | 容器创建前 | `phase=Running, stage=Running` |
 | 容器运行中 | 保持 `phase=Running, stage=Running` |
 | 容器退出、日志采集到 EOF | `phase=Running, stage=PostRun, artifactState=Uploading` |
-| 日志、必需产物和清单封账完成 | `phase=Completed, stage=PostRun, artifactState=Completed` |
+| 日志、必需产物和清单封账完成 | `phase=Succeeded, stage=PostRun, artifactState=Completed` |
 | 容器退出码非 0 | 先尝试封账已有日志，再置 `phase=Failed` 并保留最后到达的 stage；已进入后处理时为 `PostRun` |
 | 执行超时 | 终止容器并尝试封账已有日志，再置 `phase=Failed`，stage 保留为 `Running` 或 `PostRun` |
 
@@ -523,7 +523,7 @@ type LogUploadCheckpoint struct {
 
 完成请求使用稳定的 `Idempotency-Key={jobUID}-log-complete`。网络错误或结果未知时先查询 status；已 Completed 且返回的最终 size、SHA-256 与本地一致时视为成功。重复完成必须得到同一个 Artifact。封账摘要不匹配时保留 spool 和 checkpoint 供诊断，不重新从 sequence 0 上传，也不删除服务端活动日志。
 
-首版所有 `ct` Job 都把封账后的 `logs/container.log` 作为 JobUploadManifest 的必需文件。业务执行失败时，日志封账成功不会把 Job 改为 Completed；Runner 保留业务失败原因，并提交只包含日志的清单。业务执行成功但日志无法封账时，Job 必须 Failed，不能先发布 Completed 再后台补日志。
+首版所有 `ct` Job 都把封账后的 `logs/container.log` 作为 JobUploadManifest 的必需文件。业务执行失败时，日志封账成功不会把 Job 改为 Succeeded；Runner 保留业务失败原因，并提交只包含日志的清单。业务执行成功但日志无法封账时，Job 必须 Failed，不能先发布 Succeeded 再后台补日志。
 
 ### 8.4 首版普通产物策略
 
@@ -563,7 +563,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | 正文存在、无回执 | 使用稳定幂等键重新上传或确认结果 |
 | 正文存在、Completed 回执存在 | 校验回执与本地文件元数据，不重复上传；Manifest 和最终状态成功后立即清理 |
 | 正文缺失、Completed 回执存在 | 使用回执继续构造 Manifest |
-| 正文和回执都缺失、Manifest 未完成 | 标记本地结果不可恢复，Job 不能进入 Completed |
+| 正文和回执都缺失、Manifest 未完成 | 标记本地结果不可恢复，Job 不能进入 Succeeded |
 | Manifest 已完成但本地回执残留 | 对照 Manifest 和最终 Job Status；成功终态立即清理，失败终态恢复失败清理标记 |
 
 实时日志的 `combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；随后等待 Manifest Completed 和最终 Job Status 成功写回，成功后与普通产物一起立即清理。日志封账或上传最终失败时使用失败保留期，不在错误路径立即删除。
@@ -582,7 +582,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | 本地 instance ID 丢失 | 不接管已有同名 Runner；恢复 ID 文件或由管理员删除旧对象后重新注册 |
 | Job 执行失败 | 先排空并封账已有日志，再更新 `Job.status.phase=Failed` 和 `message` |
 | Job 超时 | 终止执行进程并尝试封账已有日志，再更新 Job 为 Failed 或 Aborted |
-| 本地日志不可恢复 | 保留诊断文件，将 `artifactState=Failed`，Job 不得进入 Completed |
+| 本地日志不可恢复 | 保留诊断文件，将 `artifactState=Failed`，Job 不得进入 Succeeded |
 | 日志已封账但 Job 状态更新失败 | 保留日志完成回执和 spool，按 resourceVersion 重新读取并幂等更新 Job，不重复创建日志 Artifact |
 | 上传成功但立即清理失败 | 记录告警并异步重试，不改变 Job/Artifact 成功状态 |
 | 失败清理标记尚未到期 | 保留 results、日志和上传回执，不提前回收 |
@@ -675,7 +675,7 @@ secrets:
 | 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
 | Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、完成结果未知查询和内容冲突处理 |
 | 本地清理 | 成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、Runner 重启恢复、失败保留期内不删除、24 小时到期统一删除、结果未知未终态不计时 |
-| Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Completed；上传失败时 ArtifactState 和 Message 正确 |
+| Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Succeeded；上传失败时 ArtifactState 和 Message 正确 |
 | 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
 
 端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact 和普通 Artifact，Job 的唯一 Manifest 包含全部必需项，下载正文与本地源文件一致，最终 Job 的 Artifact 状态和数量直接使用 Manifest 完成响应。

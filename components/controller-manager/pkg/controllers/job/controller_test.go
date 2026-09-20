@@ -227,7 +227,7 @@ func TestCanceledContextDoesNotConfirmUnknownWrite(t *testing.T) {
 func TestHistoryGCUsesLatestPreconditions(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	job := runningJob()
-	job.Status.Phase = ebsv1.JobCompleted
+	job.Status.Phase = ebsv1.JobSucceeded
 	job.Status.EndTime = metav1.NewTime(now.Add(-30 * 24 * time.Hour))
 	latest := job.DeepCopy()
 	latest.ResourceVersion = "22"

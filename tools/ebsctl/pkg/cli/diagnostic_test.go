@@ -3,11 +3,11 @@ package cli
 import "testing"
 
 func TestParseWaitCondition(t *testing.T) {
-	condition, err := parseWaitCondition("jsonpath='{.status.phase}'=Completed")
+	condition, err := parseWaitCondition("jsonpath='{.status.phase}'=Succeeded")
 	if err != nil {
 		t.Fatal(err)
 	}
-	object := map[string]any{"status": map[string]any{"phase": "Completed"}}
+	object := map[string]any{"status": map[string]any{"phase": "Succeeded"}}
 	if !condition.matches(object) {
 		t.Fatal("JSONPath condition did not match")
 	}

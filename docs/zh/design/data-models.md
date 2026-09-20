@@ -783,7 +783,7 @@ type JobStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | `JobPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"Completed"` / `"Failed"` / `"Aborted"`；后三项为终态 |
+| `phase` | `JobPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"Succeeded"` / `"Failed"` / `"Aborted"`；后三项为终态 |
 | `stage` | `JobStage` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"PostRun"`。失败时保留最后到达的执行阶段，不使用 `Failed` stage |
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
@@ -1055,7 +1055,7 @@ type VersionConst struct {
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
 | RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
-| Job | `Pending` → `Running` → `Completed` / `Failed` / `Aborted`                            |
+| Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 
 ## 附录 B：结构体引用关系图
