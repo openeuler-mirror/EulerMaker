@@ -190,7 +190,7 @@ System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队�
 
 Bootstrap repositories 同样向工程 owner、Admin 和 System 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。
 
-工程配置采用左右分区：左侧纵向展示基础配置、Build targets 与 Bootstrap repositories，右侧使用等高独立面板完整展示 `buildPayload`；Package repositories 位于底部整行。窄屏设备按基础配置、Build targets、Bootstrap repositories、Build payload、Package repositories 的顺序折叠为单列。
+工程配置采用左右分区：左侧依次展示基础配置、Build targets、Bootstrap repositories 和用户管理，右侧使用等高独立面板完整展示 `buildPayload`；Package repositories 位于工程详情 Tab。窄屏设备按左侧四个容器、Build payload 的顺序折叠为单列。
 
 具有工程编辑权限的用户可在 Build payload 面板内切换编辑状态。编辑时只读代码块替换为保留换行的多行文本框，并提供取消和保存操作；保存复用 Project PUT 与冲突处理，失败时保留草稿。
 
@@ -212,11 +212,7 @@ Project 普通配置使用结构化表单。复杂且可能丢失未知字段的
 
 ### 5.6 Build 创建流程
 
-Build 创建采用三步表单：
-
-1. 选择 Build 类型和软件包。
-2. 选择 Project 已配置的 Build target，并设置允许用户覆盖的 Bootstrap repository。
-3. 展示即将提交的资源摘要并确认。
+工程详情提供全量构建、增量构建、单包构建和指定增量四个入口。单包构建与指定增量弹窗从 `Project.spec.packageRepos` 展示可搜索的软件包多选列表，至少选择一个软件包，并将所选名称写入 `spec.packages`；全量和普通增量不提交该字段。四种类型均在弹窗中选择工程已配置的 Build target，默认全选；每个目标创建一条 Build 记录。
 
 请求体严格使用当前 `BuildSpec`：
 
@@ -226,7 +222,7 @@ kind: Build
 metadata:
   name: build-20260915-001
 spec:
-  buildType: incremental
+  buildType: specified
   packages:
     - kernel
   buildTarget:

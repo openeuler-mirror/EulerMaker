@@ -188,8 +188,8 @@ body.modal-open { overflow: hidden; }
 .admin-cell-subtitle { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
 .danger-link { color: #bf3f4a; }
 .danger-link:disabled { color: #9aa6b6; cursor: not-allowed; }
-.danger-button { background: #bd3f4b; }
-.danger-button:hover { background: #a92f3c; }
+.danger-button { background: #bd3f4b; border-color: #bd3f4b; }
+.danger-button:hover { background: #a92f3c; border-color: #a92f3c; }
 .machine-secret-warning { margin: 0 0 20px; color: #95520e; line-height: 1.6; }
 .machine-secret-field { margin-top: 18px; }
 .machine-secret-field textarea { font-family: "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
@@ -220,6 +220,13 @@ body.modal-open { overflow: hidden; }
 .field input:focus, .field textarea:focus { background-color: #fff; border-color: #68aaf4; box-shadow: 0 0 0 3px rgb(20 120 242 / 10%); }
 .target-fieldset { margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
 .target-fieldset legend { padding: 0 7px; color: #536176; font-size: 13px; font-weight: 700; }
+.build-package-hint { margin: 0 0 12px; }
+.build-package-search { width: 100%; margin: 0 0 12px; }
+.build-package-options { max-height: 220px; padding: 4px; display: grid; gap: 4px; overflow-y: auto; }
+.build-package-option { min-height: 34px; padding: 6px 8px; display: flex; align-items: center; gap: 9px; color: #455269; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.build-package-option:hover { background: #f0f6fd; }
+.build-package-option input { width: 16px; height: 16px; flex: none; accent-color: var(--blue); }
+.build-package-count { margin: 10px 4px 0; color: var(--muted); font-size: 12px; }
 .build-target-options { display: grid; gap: 8px; }
 .build-target-option { min-height: 46px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #455269; background: #f8fafc; border-radius: 6px; }
 .build-target-option:hover { background: #f0f6fd; }
@@ -259,6 +266,7 @@ body.modal-open { overflow: hidden; }
 .project-id button svg { width: 15px; }
 .project-id button.copied { color: #21895c; }
 .project-hero p { margin: 15px 0 0; color: var(--muted); font-size: 15px; line-height: 1.7; }
+.project-build-actions { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
 .project-tabs { margin-top: 24px; display: flex; gap: 30px; border-bottom: 1px solid var(--line); }
 .content-panel > .project-tabs { margin-top: 0; }
 .project-tabs button { position: relative; padding: 13px 2px 14px; color: #59677b; background: transparent; border: 0; font-size: 15px; font-weight: 650; white-space: nowrap; }
@@ -365,6 +373,7 @@ body.modal-open { overflow: hidden; }
 .editor-empty { padding: 16px; background: #f8fafc; border: 1px dashed #d8e0eb; border-radius: 7px; }
 .config-table td:first-child { min-width: 170px; }
 .config-table code { overflow-wrap: anywhere; }
+.config-table .package-actions-column { width: 86px; min-width: 86px; white-space: nowrap; }
 .compact-error { min-height: 64px; }
 .page-error { margin-top: 28px; }
 
