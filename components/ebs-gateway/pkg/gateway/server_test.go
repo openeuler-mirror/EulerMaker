@@ -693,7 +693,7 @@ func TestRateLimitReturnsTooManyRequests(t *testing.T) {
 	}
 }
 
-func TestOpsRunnerAccessRemainsReadOnly(t *testing.T) {
+func TestOpsRunnerManagementAccess(t *testing.T) {
 	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, apiPrefix+"/runners") {
 			if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
@@ -720,17 +720,21 @@ func TestOpsRunnerAccessRemainsReadOnly(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ops public Project read: %d %s", rec.Code, rec.Body.String())
 	}
-	denied := []struct{ method, path string }{
+	allowed := []struct{ method, path string }{
+		{http.MethodPatch, apiPrefix + "/runners/runner-a/status"},
+		{http.MethodPut, apiPrefix + "/runners/runner-a"},
+		{http.MethodPatch, apiPrefix + "/runners/runner-a"},
+		{http.MethodDelete, apiPrefix + "/runners/runner-a"},
 		{http.MethodGet, apiPrefix + "/runners?watch=true"},
 		{http.MethodGet, apiPrefix + "/runners?watch=1"},
 		{http.MethodGet, apiPrefix + "/runners/runner-a/status"},
 		{http.MethodPost, apiPrefix + "/runners"},
 	}
-	for _, tc := range denied {
+	for _, tc := range allowed {
 		req := authenticatedRequest(t, tc.method, tc.path, nil, opsClaims())
 		rec := httptest.NewRecorder()
 		gw.ServeHTTP(rec, req)
-		if rec.Code != http.StatusForbidden {
+		if rec.Code != http.StatusOK {
 			t.Fatalf("%s %s: got %d", tc.method, tc.path, rec.Code)
 		}
 	}

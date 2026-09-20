@@ -502,16 +502,31 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 | Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 按 owner/member 关系同普通用户 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：BuildResource | 仅自己拥有的 Project 下 `get/list`，禁止全部写操作 | 仅自己作为 member 的 Project 下 `get/list`，禁止全部写操作 | 跨 Project `get/list/create/update/delete`，不允许 `patch` | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Job | 全部支持的 verb，watch 仅在 apiserver 支持时允许 | `get/list/create/update/patch`，禁止 `delete`；watch 仅在 apiserver 支持时允许 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
-| Runner 范围 Job list/watch | 禁止 | 禁止 | 禁止 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
-| Runner | 禁止 | 禁止 | 仅 `get/list`，禁止 watch、子资源和全部写操作 | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
+| Runner 范围 Job list/watch | 禁止 | 禁止 | 允许 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
+| Runner | 禁止 | 禁止 | 全部支持的 verb，包括 `/status` | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 仅修改本人密码，禁止 User API | 禁止 | 禁止 | 非 Admin User 支持 `get/list/update/patch/delete`，另可修改本人密码 |
 | MachineAccount | 禁止 | 禁止 | 禁止 | 禁止 | 禁止 | 通过专用接口`create`；资源API支持`get/list/delete` |
 
-Ops token 仍只携带 `ebs:ops`，不与 `ebs:user` 组合；Gateway 在授权时将 Ops 视为具备普通用户的 Project owner/member 能力，并额外授予跨 Project 的 BuildResource 能力和 Runner 只读能力。Ops 不因此获得其他用户工程的 Project/Build/Job 写权限，也不获得 Admin、System 或 Runner 权限。
+Ops token 仍只携带 `ebs:ops`，不与 `ebs:user` 组合；Gateway 在授权时将 Ops 视为具备普通用户的 Project owner/member 能力，并额外授予跨 Project 的 BuildResource 能力和 Runner 管理能力。Ops 不因此获得其他用户工程的 Project/Build/Job 写权限，也不获得其他 Admin、System 权限或 Runner 身份。
 
 `default` 命名空间中的 `default` BuildResource 是系统默认资源规则；Gateway 对所有身份拒绝其 `delete` 请求，其他 BuildResource 仍按上表授权。
 
 矩阵中的权限还受 4.9 节完整对象比较和字段约束。User 只能通过 `/auth/register` 创建；Admin 不能读取或操作 `spec.scopes=["ebs:admin"]` 的 User，也不能设置或重置其他用户的密码。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
+
+Ops 和 Admin 可通过现有 `PATCH /apis/ebs/v1/runners/{name}/status` 将 Runner 标记为 `Evicted`，无需独立驱逐接口。普通用户不允许该操作（403），匿名请求返回 401；System 保持已有管理权限。Gateway 原样转发 apiserver 的响应，包括 404 和 resourceVersion 冲突的 409。
+
+先 GET Runner 获取最新 `metadata.resourceVersion`，再发送以下请求；冲突后重新读取对象，不重放旧版本请求：
+
+```bash
+curl -X PATCH "${GATEWAY_URL}/apis/ebs/v1/runners/${RUNNER_NAME}/status" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -H 'Content-Type: application/merge-patch+json' \
+  --data '{"metadata":{"resourceVersion":"<最新版本>"},"status":{"phase":"Evicted"}}'
+```
+
+前端对 Ops 和 Admin 在已驱逐 Runner 行显示“取消驱逐”。确认后重新 GET 校验同一 UID，并携带最新 resourceVersion PATCH phase 为 `Offline`，等待新心跳恢复 Online；不修改 spec.unschedulable。若读取时已解除驱逐则无需再次写入，409 不自动重放。
+
+Scheduler 不再向 Evicted Runner 分配新 Job，已有 Job 继续执行。Runner agent 保留驱逐状态；Ops 和 Admin 可通过同一路径显式更新为 `Offline`（等待新心跳恢复在线）或 `Online` 解除驱逐。
 
 Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称强制过滤 `status.runner`；gateway 校验该路径名称等于 token 的 `runner` claim。客户端传入的 `fieldSelector` 一律拒绝，不能依赖 Runner 客户端自行隐藏对象。单对象 Job `get` 和 `/status` 写入仍必须读取对象并校验 `status.runner` 等于 token 的 `runner` claim，不匹配时返回 403。Job 对象仍不得保存密码、访问令牌、私钥或其他明文敏感信息；执行所需凭据必须通过独立的受控凭据交付机制提供。
 
@@ -814,7 +829,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |
 | Admin | user、runner 和 system 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询和删除对象 |
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |
-| Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许跨 Project 的 BuildResource 操作及 Runner list/get，拒绝 Runner watch、子资源和写操作 |
+| Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许跨 Project 的 BuildResource 操作及 Runner 管理（包含 watch、普通对象写入、`/status` 和 Runner 范围 Job list/watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户和 Ops 创建 Project 时强制写入 owner user label；system 创建时校验 owner 为已启用的普通用户或 Ops；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护 system 管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |

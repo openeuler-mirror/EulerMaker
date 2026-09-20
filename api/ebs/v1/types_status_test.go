@@ -80,7 +80,7 @@ func TestJobStage(t *testing.T) {
 }
 
 func TestRunnerPhase(t *testing.T) {
-	for _, phase := range []RunnerPhase{RunnerOnline, RunnerOffline} {
+	for _, phase := range []RunnerPhase{RunnerOnline, RunnerOffline, RunnerEvicted} {
 		if !phase.IsValid() {
 			t.Errorf("phase %q is not valid", phase)
 		}

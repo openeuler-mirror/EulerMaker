@@ -81,7 +81,21 @@ func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error 
 }
 
 func (c *Client) PatchRunnerStatus(ctx context.Context, name string, status RunnerStatus) error {
-	body := map[string]any{"status": status}
+	current, err := c.GetRunner(ctx, name)
+	if err != nil {
+		return err
+	}
+	if current.Metadata.ResourceVersion == "" {
+		return fmt.Errorf("Runner %s has no resourceVersion", name)
+	}
+	// Heartbeats and shutdown reports must not undo administrative eviction.
+	if current.Status.Phase == "Evicted" {
+		status.Phase = "Evicted"
+	}
+	body := map[string]any{
+		"metadata": map[string]string{"resourceVersion": current.Metadata.ResourceVersion},
+		"status":   status,
+	}
 	path := apiPrefix + "/runners/" + url.PathEscape(name) + "/status"
 	return c.doMergePatch(ctx, path, body, nil)
 }

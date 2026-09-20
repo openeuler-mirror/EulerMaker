@@ -731,6 +731,7 @@ func TestValidateRunnerStatusUpdate(t *testing.T) {
 	}{
 		{name: "allows online", phase: ebsv1.RunnerOnline},
 		{name: "allows offline", phase: ebsv1.RunnerOffline},
+		{name: "allows evicted", phase: ebsv1.RunnerEvicted},
 		{
 			name:     "rejects empty phase",
 			wantErrs: 1,

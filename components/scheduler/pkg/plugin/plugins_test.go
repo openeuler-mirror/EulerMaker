@@ -27,7 +27,7 @@ func TestFiltersAndLeastAllocated(t *testing.T) {
 
 func TestPhaseFilterOnlyAcceptsOnline(t *testing.T) {
 	filter := Phase()
-	for _, phase := range []ebsv1.RunnerPhase{ebsv1.RunnerOnline, ebsv1.RunnerOffline, "Idle", "Running", ""} {
+	for _, phase := range []ebsv1.RunnerPhase{ebsv1.RunnerOnline, ebsv1.RunnerOffline, ebsv1.RunnerEvicted, "Idle", "Running", ""} {
 		t.Run(string(phase), func(t *testing.T) {
 			runner := &framework.RunnerSnapshot{Runner: &ebsv1.Runner{Status: ebsv1.RunnerStatus{Phase: phase}}}
 			status := filter.Filter(context.Background(), &framework.Session{}, runner)

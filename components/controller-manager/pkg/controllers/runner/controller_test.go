@@ -281,3 +281,13 @@ func TestValidateOfflineStatusResponseRejectsChangedFields(t *testing.T) {
 		t.Fatalf("changed response error=%v, want WriteUnknown", err)
 	}
 }
+
+func TestEvictedRunnerIsNotMarkedOffline(t *testing.T) {
+	now := time.Unix(1000, 0)
+	c := &Controller{}
+	future := false
+	_, done, err := c.evaluateRunner(testRunner("Evicted", now.Add(-time.Hour)), now, &future)
+	if err != nil || !done {
+		t.Fatalf("done=%v err=%v", done, err)
+	}
+}

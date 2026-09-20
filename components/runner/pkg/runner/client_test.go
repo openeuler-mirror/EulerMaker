@@ -11,8 +11,14 @@ import (
 
 func TestClientPatchRunnerStatus(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotContentType string
-	var gotBody map[string]RunnerStatus
+	var gotBody struct {
+		Status   RunnerStatus `json:"status"`
+		Metadata ObjectMeta   `json:"metadata"`
+	}
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodGet {
+			return response(200, `{"metadata":{"resourceVersion":"7"},"status":{"phase":"Online"}}`), nil
+		}
 		gotMethod = req.Method
 		gotPath = req.URL.RequestURI()
 		gotAuth = req.Header.Get("Authorization")
@@ -39,7 +45,7 @@ func TestClientPatchRunnerStatus(t *testing.T) {
 	if gotContentType != "application/merge-patch+json" {
 		t.Fatalf("content type = %s", gotContentType)
 	}
-	if gotBody["status"].Phase != "Online" {
+	if gotBody.Status.Phase != "Online" || gotBody.Metadata.ResourceVersion != "7" {
 		t.Fatalf("unexpected body: %#v", gotBody)
 	}
 }
@@ -219,5 +225,31 @@ func response(status int, body string) *http.Response {
 		Status:     http.StatusText(status),
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestClientStatusPreservesEviction(t *testing.T) {
+	for _, reported := range []string{"Online", "Offline"} {
+		t.Run(reported, func(t *testing.T) {
+			client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodGet {
+					return response(200, `{"metadata":{"resourceVersion":"9"},"status":{"phase":"Evicted"}}`), nil
+				}
+				var body struct {
+					Metadata ObjectMeta   `json:"metadata"`
+					Status   RunnerStatus `json:"status"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Status.Phase != "Evicted" || body.Metadata.ResourceVersion != "9" {
+					t.Fatalf("eviction overwritten: %+v", body)
+				}
+				return response(409, `{"message":"conflict"}`), nil
+			})
+			if err := client.PatchRunnerStatus(context.Background(), "r", RunnerStatus{Phase: reported}); err == nil {
+				t.Fatal("concurrent status conflict must propagate instead of retrying a stale status")
+			}
+		})
 	}
 }

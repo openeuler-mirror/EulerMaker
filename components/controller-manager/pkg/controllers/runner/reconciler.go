@@ -104,7 +104,7 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 }
 
 func (c *Controller) evaluateRunner(runner *ebsv1.Runner, now time.Time, futureObserved *bool) (DeadlineResult, bool, error) {
-	if runner.DeletionTimestamp != nil || runner.Status.Phase == ebsv1.RunnerOffline {
+	if runner.DeletionTimestamp != nil || runner.Status.Phase == ebsv1.RunnerOffline || runner.Status.Phase == ebsv1.RunnerEvicted {
 		return DeadlineResult{}, true, nil
 	}
 	if !processablePhase(runner.Status.Phase) {

@@ -212,7 +212,7 @@ type RunnerStatus struct {
 
 | 字段 | 说明 |
 |------|------|
-| `phase` | 公共 `ebs/v1` API 定义的 `RunnerPhase`，稳定取值为 `Online` / `Offline` |
+| `phase` | 公共 `ebs/v1` API 定义的 `RunnerPhase`，稳定取值为 `Online` / `Offline` / `Evicted` |
 | `conditions` | 详细状态条件 |
 | `capacity` | Runner 上报的总资源容量，当前包含 `cpu`、`memory`、`ephemeral-storage` |
 | `allocatable` | Runner 上报的可调度资源容量，当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间 |
@@ -236,6 +236,12 @@ Offline <-> Online
 Runner 的启动、初始化和忙闲状态不写入 `status.phase`。具体执行阶段由 Job 的 `status.phase` 和 `status.stage` 表达，Runner 当前负载由绑定到该 Runner 的 Job 计算。
 
 新建 Runner 由 apiserver 默认置为 `Offline`。Runner agent 必须先完成配置加载、工作目录和执行器初始化，并启动 Job list/watch 所需组件；确认具备接收任务能力后，才通过带有当前心跳的状态写入切换为 `Online`。初始化失败时不得上报 `Online`。
+
+### Runner 驱逐状态
+
+`status.phase=Evicted` 表示暂停向该 Runner 分配新 Job。Scheduler 的 PhaseFilter 仅接受 Online；已绑定 Job 继续执行，不因驱逐自动中止或迁移。Runner Controller 不把 Evicted 改为 Offline。
+Runner agent 上报心跳或主动下线前读取最新 Runner，保留 Evicted，并携带该对象的 resourceVersion 写入；发生冲突时不重放旧状态，下一次上报重新读取。解除驱逐需显式更新 phase 为 Online 或 Offline，后者由后续心跳恢复在线。此状态不代替 spec.unschedulable，恢复后仍需通过其他调度过滤。
+
 
 ## 六、心跳与状态上报
 

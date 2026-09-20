@@ -20,7 +20,7 @@ const label = computed(() => {
 const tone = computed(() => {
   const value = (props.value || "").toLowerCase();
   if (["active", "success", "succeeded", "completed", "online", "ready"].includes(value)) return "success";
-  if (["failed", "aborted", "offline"].includes(value)) return "danger";
+  if (["failed", "aborted", "offline", "evicted"].includes(value)) return "danger";
   if (["processing", "running", "prepared"].includes(value)) return "primary";
   return "muted";
 });

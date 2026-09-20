@@ -422,7 +422,7 @@ func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
 	phase := newObj.Status.Phase
 	if phase == "" {
-		allErrs = append(allErrs, field.Required(field.NewPath("status", "phase"), "must be Online or Offline"))
+		allErrs = append(allErrs, field.Required(field.NewPath("status", "phase"), "must be Online, Offline or Evicted"))
 	} else if !phase.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), phase, ebsv1.RunnerPhaseValues()))
 	}
