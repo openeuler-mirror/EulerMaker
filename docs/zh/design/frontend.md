@@ -186,6 +186,8 @@ System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队�
 
 构建历史采用主从布局：左侧可滚动列表展示构建名称、状态、类型、目标与开始时间，默认选中第一条；右侧展示所选 Build 的阶段、起止时间、基础构建、软件包和 Bootstrap repositories。用户有权限且 Build 处于 `Pending`、`Prepared` 或 `Processing` 时，该条列表记录提供中止按钮；二次确认显示当前状态，操作后重新读取构建历史。窄屏设备按列表、详情的顺序改为上下布局。
 
+软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
+
 工程配置中的 Build targets 使用列表展示 `os`、`arch`、`buildFlag` 和 `publishFlag`。工程 owner、Admin 和 System 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
 
 Bootstrap repositories 同样向工程 owner、Admin 和 System 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。

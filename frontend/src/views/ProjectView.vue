@@ -64,12 +64,13 @@
         </article>
       </section>
 
+      <div :class="['project-packages-layout', { 'has-selection': selectedPackageName }]">
       <article class="content-panel project-packages-panel">
         <div class="section-heading"><div><h2>{{ t("project.packageRepositories") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openPackageEditor"><Plus />{{ t("project.addPackage") }}</button></div></div>
         <div class="package-list-toolbar"><label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label></div>
         <div v-if="packageSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageSaved") }}</div>
         <div v-if="deletedPackageName" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageDeleted", { name: deletedPackageName }) }}</div>
-        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>URL</th><th>Git ref</th><th>{{ t("project.buildTargets") }}</th><th v-if="canEditProject" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td><td>{{ gitRefLabel(repo.ref) }}</td><td>{{ targetListLabel(repo.buildTargets) }}</td><td v-if="canEditProject" class="package-actions-column"><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
+        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table package-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th v-if="!selectedPackageName">URL</th><th v-if="!selectedPackageName">Git ref</th><th v-if="!selectedPackageName">{{ t("project.buildTargets") }}</th><th v-if="canEditProject && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }"><td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td><td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td><td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td><td v-if="!selectedPackageName">{{ targetListLabel(repo.buildTargets) }}</td><td v-if="canEditProject && !selectedPackageName" class="package-actions-column"><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
         <p v-else class="config-empty">{{ t(project.spec?.packageRepos?.length ? "project.noMatchingPackages" : "project.noPackageRepositories") }}</p>
         <div v-if="filteredPackageRepos.length" class="table-footer">
           <div class="page-summary">
@@ -86,6 +87,27 @@
           </div>
         </div>
       </article>
+      <article v-if="selectedPackageName" class="content-panel package-detail-panel">
+        <div class="section-heading"><div><h2>{{ selectedPackageName }}</h2></div><button class="package-detail-close" type="button" :aria-label="t('project.closePackageDetails')" @click="closePackageDetails"><Close /></button></div>
+        <section class="package-detail-section">
+          <h3>{{ t("project.rpmDownloadAddress") }}</h3>
+          <p class="package-detail-placeholder">{{ t("project.rpmDownloadPending") }}</p>
+        </section>
+        <section class="package-detail-section">
+          <div class="section-heading"><div><h3>{{ t("project.packageJobHistory") }}</h3></div><span v-if="!packageHistoryLoading && !packageHistoryErrorKey">{{ t("common.count", { count: packageHistoryJobs.length }) }}</span></div>
+          <div v-if="packageHistoryLoading" class="skeleton-list" :aria-label="t('project.loadingPackageJobs')"><span v-for="item in 3" :key="item"></span></div>
+          <div v-else-if="packageHistoryErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(packageHistoryErrorKey) }}</span><button type="button" @click="loadPackageHistory">{{ t("common.reload") }}</button></div>
+          <p v-else-if="!packageHistoryJobs.length" class="config-empty">{{ t("project.noPackageJobs") }}</p>
+          <div v-else class="package-job-list">
+            <div v-for="job in packageHistoryJobs" :key="job.metadata?.name" class="package-job-item">
+              <div class="package-job-heading"><strong>{{ job.metadata?.name }}</strong><StatusBadge :value="job.status?.phase" /></div>
+              <span>{{ job.metadata?.labels?.["ebs.io/target-os"] || t("common.emptyValue") }} · {{ job.metadata?.labels?.["ebs.io/target-arch"] || t("common.emptyValue") }}</span>
+              <time>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</time>
+            </div>
+          </div>
+        </section>
+      </article>
+      </div>
     </section>
 
     <section v-else-if="activeTab === 'builds'" id="project-panel-builds" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-builds">
@@ -327,6 +349,7 @@ import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildConf } from "@/composables/useBuildConf";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
+import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "config";
@@ -397,6 +420,11 @@ const savingMembers = ref(false);
 const memberErrorKey = ref("");
 const memberSaveSuccess = ref(false);
 const packageSearch = ref("");
+const selectedPackageName = ref("");
+const packageHistoryJobs = ref<Job[]>([]);
+const packageHistoryLoading = ref(false);
+const packageHistoryErrorKey = ref("");
+let packageHistoryRequestId = 0;
 const packageEditorOpen = ref(false);
 const savingPackage = ref(false);
 const packageErrorKey = ref("");
@@ -713,6 +741,52 @@ function openPackageDelete(packageName: string): void {
   deletedPackageName.value = "";
 }
 
+function selectPackage(packageName: string): void {
+  if (!packageName) return;
+  selectedPackageName.value = packageName;
+  void loadPackageHistory();
+}
+
+function closePackageDetails(): void {
+  packageHistoryRequestId += 1;
+  selectedPackageName.value = "";
+  packageHistoryJobs.value = [];
+  packageHistoryErrorKey.value = "";
+  packageHistoryLoading.value = false;
+}
+
+async function listPackageJobs(packageLabelValue: string): Promise<Job[]> {
+  const items: Job[] = [];
+  let next = "";
+  do {
+    const query = new URLSearchParams({ limit: "100", labelSelector: `${PACKAGE_NAME_LABEL}=${packageLabelValue}` });
+    if (next) query.set("continue", next);
+    const page = await list<Job>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/jobs?${query}`);
+    items.push(...page.items);
+    next = page.next;
+  } while (next);
+  return items;
+}
+
+async function loadPackageHistory(): Promise<void> {
+  const packageName = selectedPackageName.value;
+  if (!packageName) return;
+  const requestId = ++packageHistoryRequestId;
+  packageHistoryLoading.value = true;
+  packageHistoryErrorKey.value = "";
+  packageHistoryJobs.value = [];
+  try {
+    const labelValue = await packageNameLabelValue(packageName);
+    const jobs = await listPackageJobs(labelValue);
+    if (requestId !== packageHistoryRequestId) return;
+    packageHistoryJobs.value = jobs.sort((left, right) => (Date.parse(right.status?.startTime || right.metadata?.creationTimestamp || "") || 0) - (Date.parse(left.status?.startTime || left.metadata?.creationTimestamp || "") || 0));
+  } catch (reason) {
+    if (requestId === packageHistoryRequestId) packageHistoryErrorKey.value = errorTranslationKey(reason, "project.loadPackageJobsFailed");
+  } finally {
+    if (requestId === packageHistoryRequestId) packageHistoryLoading.value = false;
+  }
+}
+
 function closePackageDelete(): void {
   if (deletingPackage.value) return;
   packageDeleteName.value = "";
@@ -735,6 +809,7 @@ async function confirmDeletePackage(): Promise<void> {
       method: "PUT",
       body: JSON.stringify(updated),
     });
+    if (selectedPackageName.value === packageName) closePackageDetails();
     packageDeleteName.value = "";
     deletedPackageName.value = packageName;
     packageCurrentPage.value = Math.min(packageCurrentPage.value, packageTotalPages.value);

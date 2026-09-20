@@ -707,6 +707,8 @@ type Job struct {
 }
 ```
 
+BuildInfo Controller 创建的 Job 在 `metadata.labels` 中记录所属 Build、spec 与软件包仓库：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/package-name`。包名 label 的值遵循[标签约定](labels.md#7-job-构建归属标签)中的截断及编码规则，从创建时的 `BuildInfo.spec.specDepends[specName].repoName` 取得。
+
 ### JobSpec
 
 ```go

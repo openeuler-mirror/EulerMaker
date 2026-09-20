@@ -18,6 +18,7 @@
 | Build | `ebs.io/build-type` | Build `spec.buildType` | Build 创建方 | 按构建类型查询 Build |
 | Job | `ebs.io/build-name` | 所属 Build 的 `metadata.name` | BuildInfo Controller | 按 Build 查询仓库输入 Job |
 | Job | `ebs.io/spec-name` | Job 构建的 spec 名 | BuildInfo Controller | 仓库物化时按 spec 替换旧 RPM |
+| Job | `ebs.io/package-name` | 所属 `PackageRepo.name` 的可查询 label 值，编码规则见第 7 节 | BuildInfo Controller | 按软件包仓库筛选 Job 构建历史 |
 | Job | `ebs.io/target-os` | 所属 Build 的目标操作系统 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
 | Job | `ebs.io/target-arch` | 所属 Build 的目标架构 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
 | Runner | `ebs.io/runner-type` | 与 `spec.type` 相同 | Runner | 表达 Runner 类型 |
@@ -142,8 +143,13 @@ BuildInfo Controller 创建 Job 时必须写入以下 labels：
 |-------|------|
 | `ebs.io/build-name` | 记录所属 Build name（由唯一 UUID 生成），供 RpmRepo Controller 建立仓库输入关系和队列隔离 |
 | `ebs.io/spec-name` | 记录 Job 构建的 spec 名，供仓库按 spec 完整替换旧 RPM |
+| `ebs.io/package-name` | 记录 Job 所属 `Project.spec.packageRepos[].name`，供工程详情按软件包查询 Job 历史；同一仓库有多个 spec 时，它们的 Job 使用相同包名标签 |
 
-BuildResource 只在创建 Job 时解析为 `Job.spec.resources`，Job 不额外记录其配置来源。Build 和 spec 归属标签由 BuildInfo Controller 创建 Job 时写入，创建后不可修改；RpmRepo Controller 使用 `ebs.io/build-name` 的 label selector 查询候选 Job，并从 `ebs.io/spec-name` 读取 spec 归属，不得从对象名称推导这些关系。
+`ebs.io/package-name` 的来源是创建该 Job 时 `BuildInfo.spec.specDepends[specName].repoName`，而不是实时读取可能已修改的 Project，也不得从 spec 名或 Job 名推断。映射不存在时不创建 Job，应等待 BuildInfo 补齐或报告确定性错误。不写同名 annotation。
+
+`PackageRepo.name` 目前仅要求非空，可能不符合 Kubernetes label 值的长度或字符规则。计算 `ebs.io/package-name` 的值时：如果原名只含 Kubernetes label 值允许的字符，且首尾为字母或数字，先截取前 63 个字符，再去掉截断位置末尾的 `-`、`_`、`.`；若结果不匹配保留的摘要形态 `^sha256-[a-z2-7]{52}$`，直接用作 label 值。含非法字符的原名，或截断后恰好匹配保留形态的原名，使用 `sha256-` 加原名 UTF-8 字节的 SHA-256 摘要经 RFC 4648 标准 Base32 无填充编码后转小写的 52 个字符。消费者按相同规则计算 label selector 的值；Job 不保存截断前的原名，界面可从当前 Project 的仓库列表展示名称。不同原名若截断后相同，将共享一个 label 值，因此按标签查询的历史会合并；需要区分这类包名时必须调整命名规则。
+
+BuildResource 只在创建 Job 时解析为 `Job.spec.resources`，Job 不额外记录其配置来源。Build、spec 和包归属标签由 BuildInfo Controller 创建 Job 时写入，创建后不可修改；RpmRepo Controller 使用 `ebs.io/build-name` 的 label selector 查询候选 Job，并从 `ebs.io/spec-name` 读取 spec 归属，不得从对象名称推导这些关系。新建的构建 Job 必须同时具有上述三个归属标签；apiserver 校验包名标签值的语法，普通更新和 `/status` 更新不得改变这些字段。存量 Job 不回填，没有包名标签的 Job 不出现在前端包级历史中。
 
 ## 8. 查询与扩展规则
 
