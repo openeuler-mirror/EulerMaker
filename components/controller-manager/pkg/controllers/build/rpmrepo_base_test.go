@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,6 +39,19 @@ func historicalRpmRepo(project, name, repositoryUID, contentURL string) *ebsv1.R
 
 func repositoryContentURL(repositoryUID string) string {
 	return "https://artifact-manager/repositories/v1/" + repositoryUID
+}
+
+// assertRpmRepoTargetLabels pins the target labels stamped at creation: they come from the Build target and
+// must be the only labels carried into the RpmRepo.
+func assertRpmRepoTargetLabels(t *testing.T, build *ebsv1.Build, repo *ebsv1.RpmRepo) {
+	t.Helper()
+	want := map[string]string{
+		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
+		ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+	}
+	if !reflect.DeepEqual(repo.Labels, want) {
+		t.Fatalf("labels = %+v, want %+v", repo.Labels, want)
+	}
 }
 
 func TestPendingSeedsRpmRepoBaseFromHistory(t *testing.T) {
@@ -72,6 +86,7 @@ func TestPendingSeedsRpmRepoBaseFromHistory(t *testing.T) {
 			if created.Status.Release != nil || len(created.Status.Conditions) != 0 {
 				t.Fatalf("only the seeded base must survive creation: %+v", created.Status)
 			}
+			assertRpmRepoTargetLabels(t, api.build("project-a", "build-a"), created)
 			if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared {
 				t.Fatalf("phase = %q", stored.Status.Phase)
 			}
@@ -96,6 +111,24 @@ func TestPendingSkipsRpmRepoBaseWithoutHistory(t *testing.T) {
 	}
 	if created.Status.Repository != nil {
 		t.Fatalf("unexpected repository: %+v", created.Status.Repository)
+	}
+	assertRpmRepoTargetLabels(t, api.build("project-a", "build-a"), created)
+}
+
+func TestPendingDoesNotBackfillLabelsOnExistingRpmRepo(t *testing.T) {
+	api := newFakeAPI()
+	api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", "incremental", []string{"gcc"}))
+	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+	api.storeRpmRepo(&ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"}})
+	c := newTestController(t, api, newTestClock())
+	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if api.CallCount("CreateRpmRepo") != 0 {
+		t.Fatal("an existing RpmRepo must be reused, not created again")
+	}
+	if repo := api.rpmRepo("project-a", "build-a"); len(repo.Labels) != 0 {
+		t.Fatalf("labels must not be backfilled on existing objects: %+v", repo.Labels)
 	}
 }
 
@@ -157,6 +190,7 @@ func TestPendingDegradesWhenHistoricalRpmRepoUnavailable(t *testing.T) {
 			if created.Status.Repository != nil {
 				t.Fatalf("unexpected repository: %+v", created.Status.Repository)
 			}
+			assertRpmRepoTargetLabels(t, api.build("project-a", "build-a"), created)
 			if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared || !stored.Status.EndTime.IsZero() {
 				t.Fatalf("status = %+v", stored.Status)
 			}
@@ -248,6 +282,7 @@ func TestPendingDoesNotReReadBaseAfterRestart(t *testing.T) {
 	if stored.Status.Repository.RepositoryUID != seededRepositoryUID || stored.Status.Repository.ContentURL != repositoryContentURL(seededRepositoryUID) {
 		t.Fatalf("existing RpmRepo was overwritten: %+v", stored.Status.Repository)
 	}
+	assertRpmRepoTargetLabels(t, api.build("project-a", "build-a"), stored)
 	if updated := api.build("project-a", "build-a"); updated.Status.Phase != ebsv1.BuildPrepared {
 		t.Fatalf("phase = %q", updated.Status.Phase)
 	}

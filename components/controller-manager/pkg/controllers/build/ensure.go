@@ -232,8 +232,17 @@ func newSnapshot(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.Snapshot {
 
 func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 	repo := &ebsv1.RpmRepo{
-		TypeMeta:   metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "RpmRepo"},
-		ObjectMeta: metav1.ObjectMeta{Name: build.Name, Namespace: build.Namespace},
+		TypeMeta: metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "RpmRepo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      build.Name,
+			Namespace: build.Namespace,
+			// Carry the build target so RpmRepo objects stay queryable and groupable by (os, arch)
+			// without reading the same-name Build.
+			Labels: map[string]string{
+				ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
+				ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+			},
+		},
 	}
 	// Seed the last available immutable repository version, when present.
 	if base.repositoryUID != "" && base.contentURL != "" {

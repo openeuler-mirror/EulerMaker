@@ -3,12 +3,20 @@ package rpmrepo
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 )
+
+func targetLabels() map[string]string {
+	return map[string]string{
+		ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
+		ebsv1.BuildTargetArchLabel: "aarch64",
+	}
+}
 
 func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
@@ -24,15 +32,18 @@ func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 		{"url-only", "", "https://artifact/repositories/v1/version-1", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			obj := &ebsv1.RpmRepo{Status: ebsv1.RpmRepoStatus{
-				Repository: &ebsv1.RpmRepoRepositoryStatus{
-					RepositoryUID: tc.uid, ContentURL: tc.url,
-					SourceJobUIDs: []string{"job-1"}, Transition: &ebsv1.RepositoryTransition{},
-					UpdatedAt: &metav1.Time{},
+			obj := &ebsv1.RpmRepo{
+				ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: targetLabels()},
+				Status: ebsv1.RpmRepoStatus{
+					Repository: &ebsv1.RpmRepoRepositoryStatus{
+						RepositoryUID: tc.uid, ContentURL: tc.url,
+						SourceJobUIDs: []string{"job-1"}, Transition: &ebsv1.RepositoryTransition{},
+						UpdatedAt: &metav1.Time{},
+					},
+					Release:    &ebsv1.RpmRepoReleaseStatus{},
+					Conditions: []metav1.Condition{{Type: "Ignored"}},
 				},
-				Release:    &ebsv1.RpmRepoReleaseStatus{},
-				Conditions: []metav1.Condition{{Type: "Ignored"}},
-			}}
+			}
 			strategy.PrepareForCreate(context.Background(), obj)
 			invalid := tc.invalid
 			want := ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{
@@ -47,7 +58,7 @@ func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 		})
 	}
 	t.Run("missing-repository", func(t *testing.T) {
-		obj := &ebsv1.RpmRepo{}
+		obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: targetLabels()}}
 		strategy.PrepareForCreate(context.Background(), obj)
 		if obj.Status.Repository != nil {
 			t.Fatalf("status = %+v", obj.Status)
@@ -56,4 +67,46 @@ func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 			t.Fatalf("validation errors = %v", errs)
 		}
 	})
+}
+
+func TestCreateRequiresTargetLabels(t *testing.T) {
+	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		field  string
+	}{
+		{"missing-both", nil, "metadata.labels[ebs.io/target-os]"},
+		{"os-only", map[string]string{ebsv1.BuildTargetOSLabel: "openEuler-22.03-LTS"}, "metadata.labels[ebs.io/target-arch]"},
+		{"arch-only", map[string]string{ebsv1.BuildTargetArchLabel: "aarch64"}, "metadata.labels[ebs.io/target-os]"},
+		{"empty-values", map[string]string{ebsv1.BuildTargetOSLabel: "", ebsv1.BuildTargetArchLabel: ""}, "metadata.labels[ebs.io/target-os]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: tc.labels}}
+			errs := strategy.Validate(context.Background(), obj)
+			if len(errs) == 0 {
+				t.Fatalf("expected validation errors for labels %+v", tc.labels)
+			}
+			if !strings.Contains(errs[0].Field, tc.field) {
+				t.Fatalf("first error field = %q, want %q", errs[0].Field, tc.field)
+			}
+		})
+	}
+	t.Run("both-present", func(t *testing.T) {
+		obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: targetLabels()}}
+		if errs := strategy.Validate(context.Background(), obj); len(errs) != 0 {
+			t.Fatalf("validation errors = %v", errs)
+		}
+	})
+}
+
+// The label requirement only guards creation: objects created before the labels existed must stay
+// updatable and keep accepting status writes.
+func TestUpdateAllowsMissingTargetLabels(t *testing.T) {
+	store := NewStorage().Resource.(*genericregistry.Store)
+	obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a"}}
+	old := obj.DeepCopy()
+	if errs := store.UpdateStrategy.ValidateUpdate(context.Background(), obj, old); len(errs) != 0 {
+		t.Fatalf("update validation errors = %v", errs)
+	}
 }

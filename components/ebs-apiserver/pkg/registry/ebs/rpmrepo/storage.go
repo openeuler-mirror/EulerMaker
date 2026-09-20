@@ -36,6 +36,15 @@ func NewStorage() *scopedresource.Storage {
 		Validate: func(obj runtime.Object) field.ErrorList {
 			repo := obj.(*ebsv1.RpmRepo)
 			allErrs := validation.ValidateRpmRepo(repo)
+			// The Build controller stamps the target labels at creation so RpmRepo objects can be
+			// filtered by build target without reading the same-name Build.
+			labelsPath := field.NewPath("metadata", "labels")
+			if repo.Labels[ebsv1.BuildTargetOSLabel] == "" {
+				allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetOSLabel), "target OS label is required"))
+			}
+			if repo.Labels[ebsv1.BuildTargetArchLabel] == "" {
+				allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetArchLabel), "target architecture label is required"))
+			}
 			// A seeded baseline is only usable as a pair; reject half of it instead of persisting a
 			// version UID that cannot be resolved to a content URL.
 			if repository := repo.Status.Repository; repository != nil &&
