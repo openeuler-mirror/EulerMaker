@@ -448,6 +448,7 @@ Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `perso
 - `Build` 创建默认 `status.phase = Pending`。
 - `BuildInfo` 创建默认 `status.phase = Pending`。
 - `RpmRepo` 创建时仅保留 `status.repository.repositoryUID` 与 `status.repository.contentURL` 作为过程仓基线，两者必须成对提供，否则返回 422；未提供 `status.repository` 时保持 `nil`。`repository` 的其余字段与 `status.release`、`status.conditions` 一律归零。过程仓没有 phase 字段，创建后的 status 由 RpmRepo Controller 维护。
+- `RpmRepo` 创建时还要求 `metadata.labels[ebs.io/target-os]` 与 `metadata.labels[ebs.io/target-arch]` 存在且非空（由 Build Controller 写入，取值等于同名 Build 的 `spec.buildTarget.os` / `arch`），缺失或为空返回 422；该校验只在创建路径生效，不影响普通更新与 `/status` 更新。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 - 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。

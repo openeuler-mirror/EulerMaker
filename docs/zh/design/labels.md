@@ -16,6 +16,8 @@
 | Build | `ebs.io/target-os` | Build Target 的操作系统名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/target-arch` | Build Target 的架构名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/build-type` | Build `spec.buildType` | Build 创建方 | 按构建类型查询 Build |
+| RpmRepo | `ebs.io/target-os` | 同名 Build 的 `spec.buildTarget.os` | Build Controller | 按构建目标查询/归组 RpmRepo |
+| RpmRepo | `ebs.io/target-arch` | 同名 Build 的 `spec.buildTarget.arch` | Build Controller | 按构建目标查询/归组 RpmRepo |
 | Job | `ebs.io/build-name` | 所属 Build 的 `metadata.name` | BuildInfo Controller | 按 Build 查询仓库输入 Job |
 | Job | `ebs.io/spec-name` | Job 构建的 spec 名 | BuildInfo Controller | 仓库物化时按 spec 替换旧 RPM |
 | Job | `ebs.io/target-os` | 所属 Build 的目标操作系统 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
