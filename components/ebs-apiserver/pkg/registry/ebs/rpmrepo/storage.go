@@ -17,10 +17,14 @@ func NewStorage() *scopedresource.Storage {
 		NewList: func() runtime.Object { return &ebsv1.RpmRepoList{} },
 		PrepareCreate: func(obj runtime.Object) {
 			// The Build controller seeds the inherited process repository version when it creates the
-			// RpmRepo of a round. Only the baseline pair survives creation.
+			// RpmRepo of a round. Preserve the baseline pair and explicit skip marker only.
 			repo := obj.(*ebsv1.RpmRepo)
 			seeded := repo.Status.Repository
+			release := repo.Status.Release
 			repo.Status = ebsv1.RpmRepoStatus{}
+			if release != nil && release.Phase == ebsv1.RpmRepoReleaseSkipped {
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
+			}
 			if seeded != nil {
 				repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{
 					RepositoryUID: seeded.RepositoryUID,

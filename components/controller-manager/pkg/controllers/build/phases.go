@@ -34,10 +34,8 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 	if snapshot.Status.Phase != ebsv1.SnapshotActive {
 		return controller.ReconcileResult{}, nil
 	}
-	if r.current.Spec.BuildType != buildTypeSingle {
-		if _, outcome := r.ensureRpmRepo(); !outcome.ready {
-			return outcome.result(), outcome.err
-		}
+	if _, outcome := r.ensureRpmRepo(); !outcome.ready {
+		return outcome.result(), outcome.err
 	}
 	target := r.current.DeepCopy()
 	target.Status.Phase = ebsv1.BuildPrepared

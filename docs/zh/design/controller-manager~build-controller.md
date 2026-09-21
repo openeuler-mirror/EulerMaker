@@ -227,7 +227,7 @@ status:
 
 RpmRepo 的版本推进与发布收口语义以 RpmRepo Controller 为准，RpmRepo 没有对象终态；Build Controller 只消费下表字段，并仅在创建时按下表写初始 status 与目标标签。`RpmRepoStatus` 的结构（`repository` / `release` / `conditions`）与 `docs/zh/design/data-models.md` 一致。
 
-骨架形态（仅非 single，Build Controller 在 Pending 阶段等待 Snapshot Active 后 ensure）：
+骨架形态（所有构建类型均在 Pending 阶段等待 Snapshot Active 后 ensure）：
 
 ```yaml
 apiVersion: ebs/v1
@@ -244,20 +244,20 @@ status:
     repositoryUID: DB3A8CE2-00CD-4C89-9C20-ADA417C83155
     contentURL: https://artifact-manager/repositories/v1/DB3A8CE2-00CD-4C89-9C20-ADA417C83155
     # 上一个发布成功 Build 同名 RpmRepo 的 status.repository.repositoryUID / contentURL；无历史发布时都省略
-  release: null             # 尚未进入发布阶段
+  release: null             # 非 single 尚未进入发布阶段；single 改为 {phase: Skipped}
   conditions: []
 ```
 
 **基线初始化**
 
-- 生效范围：所有 `buildType != single` 的 Build；`single` 只创建 Snapshot 与 BuildInfo，不创建、不读取本轮同名 RpmRepo。
+- 生效范围：所有构建类型。single 同样创建 Snapshot、RpmRepo、BuildInfo；创建 RpmRepo 时额外设置 `status.release.phase=Skipped`，非 single 的初始 release 为 nil。
 - 只在 ensure 按确定性名称 GET 未命中、准备创建时读取一次历史对象，因此在创建那一刻固化一次：`Build.status.baseBuildRef.Name` 为空（`baseBuildRef={}`，即没有上一个发布成功的 Build）时不读取、不写入；已存在的 RpmRepo（含 `metadata.deletionTimestamp` 非空的对象）一律沿用，不重读、不覆盖，后续轮次也不再改写该字段。
 - 取值来源是历史 Build 同名 RpmRepo 的 `status.repository.repositoryUID` 与 `status.repository.contentURL`，即过程仓的不可变版本标识与地址（形如 `https://artifact-manager/repositories/v1/{repositoryUID}`）；它们不是 `status.release.*`（正式发布信息）。两个字段都非空即可继承：种入后本轮过程仓的当前版本初期即继承版本，尚未产生本轮自己的版本。
-- 只有在「确定没有可继承基线」时降级：历史对象 NotFound，或历史对象存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空。此时降级为不带宽带的创建（两个字段都不写入，避免版本 UID 与地址不匹配），输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryUnavailable base_build=<name> error=<error>`，本轮继续正常推进，不写 Build 终态、不 requeue。
+- 只有在「确定没有可继承基线」时降级：历史对象 NotFound，或历史对象存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空。此时降级为不带基线的创建（两个字段都不写入，避免版本 UID 与地址不匹配），输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryUnavailable base_build=<name> error=<error>`，本轮继续正常推进，不写 Build 终态、不 requeue。
 - 历史对象读取失败（网络错误、超时、408/429/5xx）不降级：本轮不创建 RpmRepo、不写 `Build.status`，把 `classifyReadError` 的分类结果返回给框架——临时错误走退避重试（依赖 30s 轮询复查，下一次读取成功后正常创建与推进），并输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryReadFailed base_build=<name> retryable=<bool> error=<error>`；`401/403/400/422` 与响应身份契约错误按 `controller.NewPermanentError` 返回（同一日志 `retryable=false`）；Manager context 取消返回 `ctx.Err()`，同样不创建、不写 status。
-- `repositoryUID` 与 `contentURL` 是除 `Build.status` 之外本控制器唯一带入的子资源 status 字段，且只出现在创建请求中；创建后对 RpmRepo status 的维护仍归 RpmRepo Controller。
+- 创建请求携带成对的 `repositoryUID` / `contentURL`；single 额外携带 `release.phase=Skipped`。不初始化 transition、sourceJobUIDs 或 conditions；无可继承基线时 repository 保持 nil，但 single 仍写 Skipped。已有对象不补写或覆盖初始状态。
 - 创建时同时写入目标标签 `ebs.io/target-os` / `ebs.io/target-arch`（值取 `Build.spec.buildTarget.os` / `arch`），使 RpmRepo 可按构建目标查询与归组；标签只在创建请求中携带一次，已存在的同名 RpmRepo 不补写、不修改其 metadata。
-- 待对齐欠账：本文档不修改 `docs/zh/design/artifact-manager.md`，其 9.3.3「首次推进根据 `Build.status.baseBuildRef` 读取对应的已发布 RpmRepo 版本」仍在描述 RpmRepo Controller 自行推导基线；消费侧契约需后续单独对齐为以种入的 `status.repository.repositoryUID` / `contentURL` 为准，避免出现两个基线来源。UID 已显式种入，消费方不需要再从 `contentURL` 末段解析 UID。Artifact Manager 的 Ready 表示不可变物理版本已生成，不是 RpmRepo 对象的 phase。
+
 
 发布后仅消费以下状态字段，完整结构见 data-models.md：
 
@@ -275,11 +275,11 @@ status:
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 `Build.metadata.name` 同名，namespace 来自 Build |
 | `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-os` / `ebs.io/target-arch`，值取 `Build.spec.buildTarget.os` / `arch` ；仅创建时写入一次，已有对象不补写、不改写 |
 | `RpmRepo.spec`                        | Build Controller   | 空 `{}`                                         |
-| `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时种入） | 创建时复制历史过程仓的不可变版本 UID 作为本轮过程仓的当前版本；已有对象不覆盖；随后由 RpmRepo Controller 在推进自己的版本时覆盖 |
-| `RpmRepo.status.repository.contentURL` | Build Controller（创建时种入） | 与 `repositoryUID` 同源同时种入，复制历史过程仓的不可变地址；已有对象不覆盖；随后由 RpmRepo Controller 在推进自己的版本时覆盖 |
-| `RpmRepo.status.release.phase`        | RpmRepo Controller | 发布收口门禁与结论来源：`Ready` → `Success/publish`、`Failed` → `Failed/publish`；其余取值（含 `release` 缺失）表示等待 |
+| `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时种入） | 创建时复制历史过程仓的不可变版本 UID 作为本轮过程仓的当前版本；已有对象不覆盖；非 single 随后由 RpmRepo Controller 推进版本，single 保持该初始基线 |
+| `RpmRepo.status.repository.contentURL` | Build Controller（创建时种入） | 与 `repositoryUID` 同源同时种入，复制历史过程仓的不可变地址；已有对象不覆盖；非 single 随后由 RpmRepo Controller 推进版本，single 保持该初始基线 |
+| `RpmRepo.status.release.phase` | Build Controller（single 创建时）/ RpmRepo Controller（非 single） | single 初始为 `Skipped`，仅保存构建输入仓地址，不参与物化与发布；非 single 按 `Ready` / `Failed` 消费发布结果 |
 
-上表仅列 Build Controller 消费与创建时种入的字段；除 `status.repository.repositoryUID` 与 `status.repository.contentURL` 之外的其他 status 字段（`repository` 的其它字段、`status.release`、`status.conditions`）由 RpmRepo Controller 维护，Build 不读取。
+single 的 `Skipped` 不表示构建已经完成，也不表示没有可用过程仓；Build 仍等待 BuildInfo Completed 后汇总结果。其继承地址保存在 `status.repository.contentURL`，不写 `status.release.contentURL`。RpmRepo Controller 应将 Skipped 视为终态并排除，不推进其过程仓或发布；非 single 仍按现有状态机推进。
 
 ### 4.4 BuildInfo
 
@@ -287,9 +287,9 @@ Build Controller 创建 BuildInfo 时，读取所属 Project 并深拷贝 `Proje
 
 single 的 BuildInfo 只包含目标仓库解析出的 spec，不包含其他仓库或依赖仓库的 spec；`Build.spec.packages` 可以指定多个目标仓库，每个仓库也可以包含多个 spec，不能假设 specStatus 只有一个条目。BuildInfo Controller 保证进入 Completed 时所有目标仓库的 spec 结果齐全，不得只记录已成功的部分 spec 就宣布完成。Build Controller 在 Completed 后按 7.4 的统一规则汇总结果。
 
-**single 的执行契约**：Build Controller 仅创建 Snapshot 和 BuildInfo，不创建、读取或恢复本轮同名 RpmRepo。BuildInfo Controller 在 Snapshot Active 后解析目标包，使用 `BuildInfo.spec.bootstrapRepo` 和 `Build.status.baseBuildRef.name` 指向的历史 Build 的过程仓下发 Job，然后直接汇总 Job 的构建结果。single 的 `BuildInfo.status.phase=Completed` 不以生成本轮过程仓、Job 被 RpmRepo Controller 消费或正式发布完成为前提；产物仍通过 Runner / Artifact Manager 上传与保存。
+**single 的执行契约**：Build Controller 在 Snapshot Active 后创建本轮同名 RpmRepo（`status.release.phase=Skipped`），再创建 BuildInfo。BuildInfo Controller 使用 `BuildInfo.spec.bootstrapRepo` 和本轮同名 RpmRepo 的 `status.repository.contentURL` 下发 Job，然后直接汇总结果，不再自行读取历史 RpmRepo。single 的 BuildInfo Completed 不以新过程仓生成、Job 被 RpmRepo Controller 消费或正式发布完成为前提；产物仍通过 Runner / Artifact Manager 上传与保存。
 
-历史 Build 按 3.1 的查询规则选择。BuildInfo Controller 读取该历史 Build 同名 RpmRepo 中已经可用的过程仓版本及不可变 contentURL，不使用会随正式发布切换的正式仓库稳定入口。下发 Job 时固化该次使用的仓库 URL，后续历史仓版本推进不修改已创建的 Job；不生成新的过程仓。baseBuildRef 为 `{}` 时仅使用 bootstrapRepo；baseBuildRef 非空但历史仓缺失或不可读时，不重建历史对象、不静默改用其他版本，按依赖读取错误处理，不下发 Job。
+历史基线由 Build Controller 按 4.3 在创建 RpmRepo 时一次固化。BuildInfo Controller 下发 Job 时固化该对象中的不可变 URL，不使用正式仓稳定入口；repository 为空时仅使用 bootstrapRepo。同名 RpmRepo 缺失或读取失败时，不等同于无基线，不下发 Job，按依赖读取错误处理。
 
 状态推进见第五章；非法阶段组合由 7.1 的入口守卫处理。
 
@@ -326,7 +326,7 @@ status:
 | 当前 phase / stage | 动作与分支 | 下一 phase / stage |
 | --- | --- | --- |
 | `Pending` / 空 | 若 `Build.status.baseBuildRef` 为 nil：定位上一个发布成功的 Build 并写 `baseBuildRef`（结果为空写 `{}`），本轮即返回 | 仍 `Pending` / 空（下一轮继续） |
-| `Pending` / 空 | ensure Snapshot，等待 `Snapshot.status.phase=Active`；就绪后非 single 才 ensure RpmRepo | Snapshot Active 且所需 RpmRepo ensure 成功后：`Prepared` / 空 |
+| `Pending` / 空 | ensure Snapshot，等待 `Snapshot.status.phase=Active`；就绪后所有类型均 ensure RpmRepo | Snapshot Active 且所需 RpmRepo ensure 成功后：`Prepared` / 空 |
 | `Prepared` / 空 | ensure BuildInfo | `Processing` / `build` |
 | `Processing` / `build` | BuildInfo GET 返回 NotFound | `Failed` / `build` |
 | `Processing` / `build` | 等待 `BuildInfo.status.phase=Completed`；完成后按以下分支处理 | — |
@@ -370,7 +370,7 @@ ensure 不推进子资源状态、不等待子资源就绪、不覆盖已存在 
 
 | 阶段 | 操作 | NotFound 处理 |
 | --- | --- | --- |
-| Pending（baseBuildRef 已固化） | ensure Snapshot → 等待 Active → ensure RpmRepo（仅非 single，创建前按 4.3 固化过程仓基线）→ 进入 Prepared | 在本阶段按顺序创建 |
+| Pending（baseBuildRef 已固化） | ensure Snapshot → 等待 Active → ensure RpmRepo（所有类型，按 4.3 固化基线；single 写 Skipped）→ 进入 Prepared | 在本阶段按顺序创建 |
 | Prepared | ensure BuildInfo，存在且未删除后进入 Processing/build；不重新查询 Snapshot/RpmRepo | 从 Project 复制 bootstrapRepo、buildPayload 并创建 BuildInfo |
 | Processing/build | GET BuildInfo，等待 Completed；不查询 Snapshot/RpmRepo | 记录异常，不创建任何子资源，写入 Failed/build |
 | Processing/publish（仅非 single） | GET RpmRepo，判断 release.phase；不查询 Snapshot/BuildInfo | 记录异常，不创建任何子资源，写入 Failed/publish |
@@ -418,7 +418,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
     - 否则写：
       - `Build.status.baseBuildRef.name`（上一个发布成功 Build 的 `Build.metadata.name`）
   - 写入后立即返回零值 + `nil`，`ensure Snapshot` / `ensure RpmRepo` 与后续等待从下一轮继续；`{}` 与实际值同样视为已处理。
-- 按第六章 Pending 行先 ensure Snapshot 并等待 Active，再 ensure RpmRepo（仅非 single，按 4.3 固化过程仓基线）。
+- 按第六章 Pending 行先 ensure Snapshot 并等待 Active，再 ensure RpmRepo（所有类型，按 4.3 固化基线；single 写 Skipped）。
 - 满足后写 `Build.status.phase=Prepared`。
 
 ### 7.3 Prepared
@@ -670,6 +670,8 @@ buildinfos:     get, create
 - Build 校验：apiserver 创建 `single` 或 `specified` Build 时，要求 `Build.spec.packages` 非空且每个包名均存在于所属 `Project.spec.packageRepos`，允许多个包。创建钩子在基础校验后读取一次 Project；不存在的包返回 422 字段错误，Project 读取错误原样返回。该校验不应用于 full/incremental，也不在普通更新或 status 更新时重新检查；创建后 Project 变化仍由后续调和处理。single 的仓库选择仍按 4.2 的去重名称集执行，specified 仍复制全部仓库。
 - RpmRepo Controller：负责 repo 解析、发布与 `RpmRepo.status` 推进。Build 依赖其提供 `RpmRepo.status.release.phase` 与 `RpmRepo.status.release.contentURL`；`RpmRepoStatus` 的 `repository` / `release` / `conditions` 结构已在公共 API 落地（见 `api/ebs/v1/types.go` 与 `docs/zh/design/data-models.md`）。在该 Controller 就绪前 Build 会停在 `Processing/publish` 等待。
 
+- 配套消费契约：RpmRepo Controller 的轮询与发布候选过滤、入口终态判断均需排除 `Skipped`（与 Ready、Failed 一并处理）；single 不生成新版本、不正式发布。公共数据模型和 RpmRepo Controller 文档需同步此契约；本次仅修改 Build Controller 设计，不代表代码已实现。
+
 ## 十四、测试计划
 
 ### 14.1 单元测试
@@ -688,13 +690,13 @@ buildinfos:     get, create
 - ensure 幂等：GET 命中直接沿用、创建返回 409 沿用现有对象、创建结果未知先 GET 确认；创建返回 404 断言按临时错误退避（零值 + 原始 `WriteError`）、不写 `Build.status`、不触发确认读取，且输出含 `kind`、`status=404`、`retryable=true` 的 `reason=CreateRejected` 日志；创建返回 400/401/403/422 断言返回 `PermanentError` 且日志 `retryable=false`；
 - 阶段读取范围：Prepared 与 Processing/build 的 BuildInfo 存在时，断言不 GET Snapshot/RpmRepo；Processing/publish 的 RpmRepo 存在时，断言不 GET Snapshot/BuildInfo，直接使用发布结果。前序对象单独被删除不触发全链路巡检或重建；
 - Snapshot 就绪门禁：Pending 中 Snapshot 未 Active 时不 GET/Create RpmRepo；Active 后才 ensure RpmRepo。Prepared 只 ensure BuildInfo，不再检查前序对象；RpmRepo 没有可用过程仓版本不阻止正常阶段推进；
-- RpmRepo 基线种入：非 single 且 `baseBuildRef.Name` 非空时断言只读取一次同名历史 RpmRepo、`CreateRpmRepo` 的 `spec` 为 `{}` 且 `status.repository.repositoryUID` 与 `status.repository.contentURL` 都等于历史值、`release` 与 `conditions` 为空；`single` 与 `baseBuildRef={}` 断言零次历史读取、不种入基线；历史对象 NotFound 或存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空时断言仍创建 RpmRepo、两个字段都为空，并输出 `reason=BaseRepositoryUnavailable` 日志，且不写 Build 终态、不延迟重入；历史对象读取失败（网络错误、超时、408/429/5xx）断言返回可重试错误、`CreateRpmRepo` 与 `UpdateBuildStatus` 均为 0、Build 保持 Pending 并输出 `reason=BaseRepositoryReadFailed retryable=true`；`401/403/400/422` 与响应身份契约错误断言返回 `PermanentError`、同样不创建且日志 `retryable=false`；已有 RpmRepo（含 `metadata.deletionTimestamp` 非空）断言不读取历史、不覆盖基线字段；创建后重入与进程重启断言不重复查询、不改写这些字段；
-- RpmRepo 目标标签：断言 `CreateRpmRepo` 请求的 `metadata.labels` **恰好**为 `{ebs.io/target-os: <Build.spec.buildTarget.os>, ebs.io/target-arch: <Build.spec.buildTarget.arch>}`（无多余标签），有/无继承基线两条创建路径都一致；`single` 不创建 RpmRepo 因而无标签断言；已有 RpmRepo 命中时断言沿用对象且**不补写、不改写**其 labels；
+- RpmRepo 基线种入：所有构建类型在 `baseBuildRef.Name` 非空时断言只读取一次同名历史 RpmRepo、`CreateRpmRepo` 的 `spec` 为 `{}` 且 `status.repository.repositoryUID` 与 `status.repository.contentURL` 都等于历史值、非 single 的 release 为空、single 的 release.phase 为 Skipped，conditions 为空；所有类型的 `baseBuildRef={}` 断言零次历史读取、repository 为 nil；single 仍创建 release.phase=Skipped；历史对象 NotFound 或存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空时断言仍创建 RpmRepo、两个字段都为空，并输出 `reason=BaseRepositoryUnavailable` 日志，且不写 Build 终态、不延迟重入；历史对象读取失败（网络错误、超时、408/429/5xx）断言返回可重试错误、`CreateRpmRepo` 与 `UpdateBuildStatus` 均为 0、Build 保持 Pending 并输出 `reason=BaseRepositoryReadFailed retryable=true`；`401/403/400/422` 与响应身份契约错误断言返回 `PermanentError`、同样不创建且日志 `retryable=false`；已有 RpmRepo（含 `metadata.deletionTimestamp` 非空）断言不读取历史、不覆盖基线字段；创建后重入与进程重启断言不重复查询、不改写这些字段；
+- RpmRepo 目标标签：断言 `CreateRpmRepo` 请求的 `metadata.labels` **恰好**为 `{ebs.io/target-os: <Build.spec.buildTarget.os>, ebs.io/target-arch: <Build.spec.buildTarget.arch>}`（无多余标签），有/无继承基线两条创建路径都一致；single 与非 single 均覆盖相同标签断言；已有 RpmRepo 命中时断言沿用对象且**不补写、不改写**其 labels；
 - AlreadyExists 优先级：POST 返回 AlreadyExists 后 GET 命中正常对象，断言沿用并继续阶段，不覆盖 spec、不再次 POST、不直接返回通用 Conflict 重入；GET 命中删除中对象则等待，GET NotFound 则延迟 1s，其他读取错误按分类返回；
 - 永久错误与业务失败隔离：覆盖 API 400/401/403/422、非法输入和客户端错误，断言不调用 UpdateBuildStatus、不写失败条件，只记录并返回 PermanentError；对照覆盖 single 结果汇总失败（build 或 install 非 Succeeded）、release.phase=Failed 和 Processing 直接依赖 NotFound，仅确认对应失败原因后才写 Failed，且状态写入失败不得被业务 PermanentError 覆盖；静态配置非法在 initializer 阶段启动失败；
 - 删除中子资源：本轮读到 deletionTimestamp 时不调用 Create、不写 Build.status，返回零值 + nil；对象消失后，仅 Pending/Prepared 的创建职责允许 ensure 创建，Processing 记录缺失异常并写 Failed；
 - 子对象缺失：Processing/build 的 BuildInfo 或 Processing/publish 的 RpmRepo 返回 NotFound 时，断言输出 ChildResourceMissing 日志，不调用任何 Create/GetProject、不恢复前序依赖；同一次 `/status` 写入 Failed、保留当前 stage、填写 endTime，并写对应条件 False/ChildResourceMissing，保留其他条件。写入成功后返回业务 PermanentError；覆盖 Conflict、Unknown 确认及外部 Aborted 保护，写入失败不得被业务 PermanentError 覆盖。重启后仍按此规则处理，已 Failed 后不再调和；读取超时、权限错误不触发该失败分支；
-- single 依赖边界：只 ensure Snapshot / BuildInfo；本轮没有 RpmRepo 不影响正常推进，single + Processing/publish 返回永久错误且不创建 RpmRepo。与 BuildInfo Controller 联调时覆盖 bootstrap-only、bootstrap 加历史不可变过程仓、历史仓不可读时不下发 Job，以及 Job 完成后无需仓库物化即可完成 BuildInfo；
+- single 依赖边界：Pending 按 Snapshot Active → ensure RpmRepo（Skipped）→ Prepared 推进；Prepared 才 ensure BuildInfo。覆盖继承基线、无基线和历史读取失败；验证 BuildInfo 使用本轮 RpmRepo 的 URL、不再读取历史对象，当前 RpmRepo 缺失或读取失败不下发 Job，Skipped 不触发物化或发布；single + Processing/publish 仍返回永久错误。
 - `baseBuildRef` 写入即返回：`Build.status.baseBuildRef` 为 nil 时断言本轮只发生一次 `/status` 写入（写 `baseBuildRef`）、不调用 `CreateSnapshot` / `CreateRpmRepo`，且返回零值 + `nil`；下一轮以已写入的 `baseBuildRef` 继续 ensure 子资源；
 - Snapshot 创建复制输入：覆盖 Project.defaultRef 为 Branch/Tag，断言只调用一次 `GetProject`，非 single 的 `CreateSnapshot` 收到的 `spec.defaultRef` 和 N 个 `packageRepos` 均与该返回对象一致；single 只包含 Build.spec.packages 命中的仓库，defaultRef 不变，修改构造出的 Snapshot 不影响 Project；已有 Snapshot（含缺少 defaultRef 的对象）存在时，不调用 `GetProject`、不调用 `CreateSnapshot`、不覆盖 spec；
 - single 多包输入：覆盖多个包名及重复包名，断言 Snapshot 仅包含去重后命中的仓库并保持 Project 列表顺序；BuildInfo Completed 后汇总所有目标仓库的 spec，每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，任一 build 或 install 非 Succeeded 则进入 Failed/build；
@@ -709,8 +711,8 @@ buildinfos:     get, create
 - 发布收口映射（成功）：`RpmRepo.status.release.phase=Ready` 时，断言同一次 `/status` 写入 `Build.status.phase=Success`、`stage=publish`、`repo=RpmRepo.status.release.contentURL`、`endTime` 非空与 `PublishSucceed=True/PublishSucceeded`；
 - 发布收口映射（失败）：`release.phase=Failed` 时，断言同一次 `/status` 写入 `phase=Failed`、`stage=publish`、`endTime` 非空与 `PublishSucceed=False/PublishFailed`，不写 `repo`，且不覆盖已写入的 `BuildSucceed`；
 - 等待语义：`RpmRepo.status.release` 缺失或 `release.phase` 为 `Pending` / `Creating` / `Prepared` 时断言不写 `Build.status`、返回零值 + `nil`；收口完成后下一轮收敛到同一终态；
-- 跳过发布：`buildType=single` 结果汇总成功、非 single 的 `buildTarget.publishFlag=false` 两种输入都断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo，single 全程不访问本轮同名 RpmRepo；
-- `Build.spec.buildType=single` 分支：验证所有阶段不 GET/Create 本轮同名 RpmRepo，缺失时也不重建；覆盖目标仓库含多个 spec、build 与 install 全部成功、部分失败、空 map、缺失 build.status、缺失 install.status；只有非空且每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，其余进入 Failed/build。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
+- 跳过发布：`buildType=single` 结果汇总成功、非 single 的 `buildTarget.publishFlag=false` 两种输入都断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo，single 仅在 Pending ensure 本轮同名 RpmRepo，后续不消费其发布结果；
+- `Build.spec.buildType=single` 分支：验证 Pending 创建本轮同名 RpmRepo 且 release.phase=Skipped，后续阶段不巡检或重建该对象；覆盖目标仓库含多个 spec、build 与 install 全部成功、部分失败、空 map、缺失 build.status、缺失 install.status；只有非空且每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，其余进入 Failed/build。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
 - API 交互：`/status` 保留 spec、AlreadyExists 与 Conflict 的处理、`GetLastPublishedBuild` 通过项目级 List 路径限定 Project；
 - 崩溃恢复：分别模拟崩在 ensure 之间、崩在 `/status` 之前、崩在 `/status` 结果未知之后、崩在读 RpmRepo 发布收口结果前后、崩在终态写入前，断言重启后收敛到同一终态，且不产生重复子资源；
 - 启动打点：断言进程内首次 reconcile 成功时只输出一次 `reconciled-after-start` 日志；
@@ -727,7 +729,7 @@ buildinfos:     get, create
 ## 十六、假设与限制
 
 - `Build.metadata.name` 为 uuid，不存在同名重建。
-- apiserver 创建 RpmRepo 时只保留成对提供的 `status.repository.repositoryUID` 与 `status.repository.contentURL`，只提供其中一个字段时返回 422；未提供 `repository` 时保持为空。
+- 配套 API 契约：增加 `RpmRepoReleaseSkipped` 枚举；创建 RpmRepo 时保留成对的 repositoryUID / contentURL，以及显式传入的 `release.phase=Skipped`。Skipped 不要求 release.contentURL，不允许 release.transition；未提供 repository 时保持 nil。当前创建策略与状态校验需同步实现，不能清除 single 的 Skipped。
 - `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 由创建方或 apiserver 补齐，且必须与 spec 一致；`GetLastPublishedBuild` 依赖 `ebs.io/target-os` / `ebs.io/target-arch` 两个 label 与 `status.phase` / `status.stage` 字段，`PollingSource` 只依赖 `status.phase` 字段，不依赖任何 label。
 - 本轮不设未就绪超时。
 - 启动入队、单副本和重启恢复的取舍见第十二章；部署身份与授权的范围见第十一章。

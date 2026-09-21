@@ -555,7 +555,9 @@ type RpmRepoStatus struct {
 
 `repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。批次失败收口保留 transition、写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False，不清除已有可用版本。`repository` 不再定义 phase。
 
-`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。中止使用 `Failed`，由 RpmRepo Controller 在确认对象存在、未删除且非终态，并读到同名 `Build.status.phase=Aborted` 时写入，属**发布终局**：清除 `release.transition`、写 `PublishSucceed=False/reason=BuildAborted`，`release.contentURL` 保持为空，此后不再提交、激活或重放；发布终态为 `Ready`、`Failed`，轮询与发布候选过滤必须一并排除。
+所有构建类型均创建同名 RpmRepo。single 由 Build Controller 在创建时设置 `status.release.phase=Skipped`，只保存继承的 `status.repository.repositoryUID/contentURL`，供本轮 BuildInfo 使用；无基线时 repository 为 nil。Skipped 不要求 release.contentURL，不允许 release.transition；RpmRepo Controller 将其视为终态，不物化、不发布、不因 Build 中止改写为 Failed。Skipped 不是 Artifact Manager 的物理仓库或发布记录状态，也不表示 Build 已完成。
+
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Skipped`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。中止使用 `Failed`，由 RpmRepo Controller 在确认对象存在、未删除且非终态，并读到同名 `Build.status.phase=Aborted` 时写入，属**发布终局**：清除 `release.transition`、写 `PublishSucceed=False/reason=BuildAborted`，`release.contentURL` 保持为空，此后不再提交、激活或重放；发布终态为 `Ready`、`Failed`、`Skipped`，轮询与发布候选过滤必须一并排除。
 
 RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobUIDs 非空要求版本指针非空；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`/status` 保留原 spec 与受保护 metadata。
 
@@ -572,7 +574,7 @@ RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；r
 
 | `release` 字段 | Go 类型 | 说明 |
 |----------------|---------|------|
-| `phase` | RpmRepoReleasePhase | 正式发布状态（终态：`Ready` / `Failed`） |
+| `phase` | RpmRepoReleasePhase | 正式发布状态（终态：`Ready` / `Failed` / `Skipped`） |
 | `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
 | `contentURL` | string | Project/OS/架构稳定仓库入口 |
 | `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
@@ -1075,7 +1077,7 @@ type VersionConst struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
-| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
+| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Skipped` |
 | Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 
