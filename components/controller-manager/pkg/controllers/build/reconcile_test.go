@@ -623,9 +623,9 @@ func TestNewSnapshotCopiesProjectInputWithoutSharingState(t *testing.T) {
 		t.Fatalf("defaultRef = %+v", snapshot.Spec.DefaultRef)
 	}
 	snapshot.Spec.PackageRepos[0].Name = "mutated"
-	snapshot.Spec.PackageRepos[0].BuildTargets[0].Arch = "mutated"
+	snapshot.Spec.PackageRepos[0].Ref.Value = "mutated"
 	snapshot.Spec.DefaultRef.Value = "mutated"
-	if project.Spec.PackageRepos[0].Name != "gcc" || project.Spec.PackageRepos[0].BuildTargets[0].Arch != "aarch64" || project.Spec.DefaultRef.Value != "master" {
+	if project.Spec.PackageRepos[0].Name != "gcc" || project.Spec.PackageRepos[0].Ref.Value != "master" || project.Spec.DefaultRef.Value != "master" {
 		t.Fatal("Snapshot construction must not share state with the Project")
 	}
 }

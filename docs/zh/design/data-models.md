@@ -979,7 +979,6 @@ type PackageRepo struct {
     Name          string          `json:"name,omitempty"`
     URL           string          `json:"url,omitempty"`
     Ref           GitRef          `json:"ref,omitempty"`
-    BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
 }
 
 type GitRefType string
@@ -1001,7 +1000,6 @@ type GitRef struct {
 | `name`         | string        | spec 包名称                 |
 | `url`          | string        | spec 仓库 Git URL          |
 | `ref`          | GitRef        | Git 引用；`type` 为 `Branch`、`Tag` 或 `Commit`，`value` 为对应分支名、标签名或完整 commit ID |
-| `buildTargets` | []BuildTarget | 构建目标 |
 
 `ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。Project 和 Snapshot 创建、普通更新时均允许省略仓库的 `ref`，或传入 `null` / `{}`（type、value 均为空）；apiserver 保留空 ref，不自动补齐。工程级 `defaultRef` 仅支持 Branch/Tag，整体为空时默认成 `{type: Branch, value: master}`；仅填写 type 或 value 均校验失败。仓库显式填写的 ref 保持不变，修改工程默认引用不会改写已有 ref；仓库仍可显式使用 Commit。Build Controller 复制 Project 的 defaultRef；single 仅复制 Build.spec.packages 指定的 packageRepos，其他类型复制全部，所选仓库字段保持原值；Snapshot Controller 实际使用时优先采用包 ref，整体为空时回退到 Snapshot 自身 defaultRef。显式 ref 必须完整且合法。
 

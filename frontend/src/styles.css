@@ -394,7 +394,8 @@ body.modal-open { overflow: hidden; }
 .editor-empty { padding: 16px; background: #f8fafc; border: 1px dashed #d8e0eb; border-radius: 7px; }
 .config-table td:first-child { min-width: 170px; }
 .config-table code { overflow-wrap: anywhere; }
-.config-table .package-actions-column { width: 86px; min-width: 86px; white-space: nowrap; }
+.config-table .package-actions-column { width: 136px; min-width: 136px; white-space: nowrap; }
+.package-actions-column .text-button + .text-button { margin-left: 12px; }
 .compact-error { min-height: 64px; }
 .page-error { margin-top: 28px; }
 
