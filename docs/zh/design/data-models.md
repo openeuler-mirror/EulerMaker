@@ -555,11 +555,11 @@ type RpmRepoStatus struct {
 
 `repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。失败通过顶层 `conditions` 记录，不清除已有可用版本。`repository` 不再定义 phase。
 
-`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Aborted`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。`Aborted` 由 RpmRepo Controller 在读到同名 `Build.status.phase=Aborted` 时直接写入，属**发布终局**：清除 `release.transition`、写 `PublishSucceed=False/reason=RepositoryPublishAborted`，`release.contentURL` 保持为空，此后不再提交、激活或重放；它与 `Ready`、`Failed` 同属发布终态，轮询与发布候选过滤必须一并排除。
 
 | `release` 字段 | Go 类型 | 说明 |
 |----------------|---------|------|
-| `phase` | RpmRepoReleasePhase | 正式发布状态 |
+| `phase` | RpmRepoReleasePhase | 正式发布状态（终态：`Ready` / `Failed` / `Aborted`） |
 | `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
 | `contentURL` | string | Project/OS/架构稳定仓库入口 |
 | `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
@@ -1062,7 +1062,7 @@ type VersionConst struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
-| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
+| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Aborted` |
 | Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 
