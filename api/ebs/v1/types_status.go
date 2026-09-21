@@ -228,6 +228,22 @@ func (p BuildPhase) IsTerminal() bool {
 	}
 }
 
+// RpmRepo condition types distinguish repository batches from formal releases.
+const (
+	RpmRepoConditionRepositoryReady = "RepositoryReady"
+	RpmRepoConditionPublishSucceed  = "PublishSucceed"
+)
+
+// RpmRepo condition reasons describe the outcome of repository or release work.
+const (
+	RpmRepoReasonRepositoryCreated        = "RepositoryCreated"
+	RpmRepoReasonRepositoryCreationFailed = "RepositoryCreationFailed"
+	RpmRepoReasonReleaseActivated         = "ReleaseActivated"
+	RpmRepoReasonReleaseFailed            = "ReleaseFailed"
+	RpmRepoReasonNoPublishableArtifacts   = "NoPublishableArtifacts"
+	RpmRepoReasonBuildAborted             = "BuildAborted"
+)
+
 // RpmRepoReleasePhase describes formal release preparation and activation.
 type RpmRepoReleasePhase string
 

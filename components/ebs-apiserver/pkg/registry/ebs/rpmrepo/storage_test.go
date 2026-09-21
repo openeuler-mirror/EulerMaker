@@ -18,6 +18,31 @@ func targetLabels() map[string]string {
 	}
 }
 
+func TestStatusPreservesMetadataAndValidatesRelease(t *testing.T) {
+	strategy := NewStorage().Status.(*genericregistry.Store).UpdateStrategy
+	old := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{
+		Name: "build-a", Namespace: "project-a", ResourceVersion: "7",
+		Labels: targetLabels(), Annotations: map[string]string{"original": "value"},
+	}}
+	obj := old.DeepCopy()
+	obj.ResourceVersion = "8"
+	obj.Labels = map[string]string{"tampered": "value"}
+	obj.Annotations = nil
+	obj.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
+	obj.Status.Conditions = []metav1.Condition{{Type: ebsv1.RpmRepoConditionPublishSucceed, Status: metav1.ConditionFalse, Reason: ebsv1.RpmRepoReasonBuildAborted}}
+	strategy.PrepareForUpdate(context.Background(), obj, old)
+	if !reflect.DeepEqual(obj.Labels, old.Labels) || !reflect.DeepEqual(obj.Annotations, old.Annotations) || obj.ResourceVersion != "8" {
+		t.Fatalf("metadata not protected or request resourceVersion lost: %+v", obj.ObjectMeta)
+	}
+	if errs := strategy.ValidateUpdate(context.Background(), obj, old); len(errs) != 0 {
+		t.Fatalf("Failed with abort reason rejected: %v", errs)
+	}
+	obj.Status.Release.Transition = &ebsv1.ReleaseTransition{SourceRepositoryUID: "base"}
+	if errs := strategy.ValidateUpdate(context.Background(), obj, old); len(errs) == 0 {
+		t.Fatal("terminal release checkpoint accepted")
+	}
+}
+
 func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
 	for _, tc := range []struct {
