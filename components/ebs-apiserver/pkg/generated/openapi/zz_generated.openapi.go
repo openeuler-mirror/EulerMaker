@@ -438,6 +438,12 @@ func schema_ebs_api_ebs_v1_BuildInfoSpec(ref common.ReferenceCallback) common.Op
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"buildPayload": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"bootstrapRepo": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},

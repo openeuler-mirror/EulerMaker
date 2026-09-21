@@ -655,6 +655,20 @@ func TestNewBuildInfoCopiesBootstrapRepos(t *testing.T) {
 	}
 }
 
+func TestNewBuildInfoFreezesBuildPayload(t *testing.T) {
+	for _, payload := range []string{"", "macros:\n  dist: .oe2403\n"} {
+		t.Run(payload, func(t *testing.T) {
+			project := newProject("project-a", newPackageRepo("gcc"))
+			project.Spec.BuildPayload = payload
+			info := newBuildInfo(newBuild("project-a", "build-a", "full", nil), project)
+			project.Spec.BuildPayload = "changed"
+			if info.Spec.BuildPayload != payload {
+				t.Fatalf("buildPayload = %q, want %q", info.Spec.BuildPayload, payload)
+			}
+		})
+	}
+}
+
 func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
@@ -693,7 +707,7 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Spec:       ebsv1.BuildInfoSpec{BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "existing", Repo: "https://example.com/existing"}}},
+		Spec:       ebsv1.BuildInfoSpec{BuildPayload: "frozen payload", BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "existing", Repo: "https://example.com/existing"}}},
 	})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
@@ -702,7 +716,7 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	if api.CallCount("GetProject") != 0 || api.CallCount("CreateBuildInfo") != 0 {
 		t.Fatal("an existing BuildInfo must not be recreated or re-read from the Project")
 	}
-	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepo[0].Name != "existing" {
+	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepo[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" {
 		t.Fatalf("BuildInfo spec was overwritten: %+v", info.Spec)
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing {

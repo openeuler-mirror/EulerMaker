@@ -310,6 +310,7 @@ type BuildInfo struct {
 
 ```go
 type BuildInfoSpec struct {
+    BuildPayload string                `json:"buildPayload,omitempty"`
     BootstrapRepo []BootstrapRepo      `json:"bootstrapRepo,omitempty"`
     SpecDepends  map[string]SpecDepend  `json:"specDepends,omitempty"`
 }
@@ -318,6 +319,7 @@ type BuildInfoSpec struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `specDepends` | map[string]SpecDepend | key 为 `specName`，value 为该 spec 的依赖信息 |
+| `buildPayload` | string | Build Controller 创建时从所属 Project.spec.buildPayload 原样复制的构建环境宏（YAML）；未配置时为空，已有 BuildInfo 不覆盖，不跟随 Project 后续变更 |
 | `bootstrapRepo` | []BootstrapRepo | Build Controller 创建时从所属 Project.spec.bootstrapRepo 深拷贝，已有 BuildInfo 不覆盖；供构建任务使用的引导 RPM 仓库 |
 
 ---

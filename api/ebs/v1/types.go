@@ -132,6 +132,7 @@ type BuildInfo struct {
 }
 
 type BuildInfoSpec struct {
+	BuildPayload  string                `json:"buildPayload,omitempty"`
 	BootstrapRepo []BootstrapRepo       `json:"bootstrapRepo,omitempty"`
 	SpecDepends   map[string]SpecDepend `json:"specDepends,omitempty"`
 }

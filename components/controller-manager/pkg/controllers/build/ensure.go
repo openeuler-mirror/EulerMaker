@@ -259,7 +259,7 @@ func newBuildInfo(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.BuildInfo {
 	return &ebsv1.BuildInfo{
 		TypeMeta:   metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "BuildInfo"},
 		ObjectMeta: metav1.ObjectMeta{Name: build.Name, Namespace: build.Namespace},
-		Spec:       ebsv1.BuildInfoSpec{BootstrapRepo: copyBootstrapRepos(project.Spec.BootstrapRepo)},
+		Spec:       ebsv1.BuildInfoSpec{BuildPayload: project.Spec.BuildPayload, BootstrapRepo: copyBootstrapRepos(project.Spec.BootstrapRepo)},
 	}
 }
 
