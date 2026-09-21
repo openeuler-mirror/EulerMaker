@@ -93,6 +93,14 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		}
 	}
 
+	packageRepo, ok := definitions["ebs-api/ebs/v1.PackageRepo"]
+	if !ok {
+		t.Fatal("PackageRepo OpenAPI definition is missing")
+	}
+	if _, ok := packageRepo.Schema.Properties["buildTargets"]; ok {
+		t.Error("PackageRepo OpenAPI definition must not expose buildTargets")
+	}
+
 	snapshotSpec, ok := definitions["ebs-api/ebs/v1.SnapshotSpec"]
 	if !ok {
 		t.Fatal("SnapshotSpec OpenAPI definition is missing")

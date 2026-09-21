@@ -366,10 +366,9 @@ type BuildTarget struct {
 }
 
 type PackageRepo struct {
-	Name         string        `json:"name,omitempty"`
-	URL          string        `json:"url,omitempty"`
-	Ref          GitRef        `json:"ref,omitempty"`
-	BuildTargets []BuildTarget `json:"buildTargets,omitempty"`
+	Name string `json:"name,omitempty"`
+	URL  string `json:"url,omitempty"`
+	Ref  GitRef `json:"ref,omitempty"`
 }
 
 type GitRefType string

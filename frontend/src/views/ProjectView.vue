@@ -70,7 +70,7 @@
         <div class="package-list-toolbar"><label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label></div>
         <div v-if="packageSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageSaved") }}</div>
         <div v-if="deletedPackageName" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageDeleted", { name: deletedPackageName }) }}</div>
-        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table package-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th v-if="!selectedPackageName">URL</th><th v-if="!selectedPackageName">Git ref</th><th v-if="!selectedPackageName">{{ t("project.buildTargets") }}</th><th v-if="canEditProject && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }"><td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td><td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td><td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td><td v-if="!selectedPackageName">{{ targetListLabel(repo.buildTargets) }}</td><td v-if="canEditProject && !selectedPackageName" class="package-actions-column"><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
+        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table package-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th v-if="!selectedPackageName">URL</th><th v-if="!selectedPackageName">Git ref</th><th v-if="canEditProject && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }"><td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td><td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td><td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td><td v-if="canEditProject && !selectedPackageName" class="package-actions-column"><button class="text-button" type="button" :disabled="!repo.name" :aria-label="t('project.editPackage', { name: repo.name })" @click="openPackageEdit(repo)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
         <p v-else class="config-empty">{{ t(project.spec?.packageRepos?.length ? "project.noMatchingPackages" : "project.noPackageRepositories") }}</p>
         <div v-if="filteredPackageRepos.length" class="table-footer">
           <div class="page-summary">
@@ -255,14 +255,14 @@
       </form>
     </ModalDialog>
 
-    <ModalDialog v-if="packageEditorOpen" title-id="add-package-title" :title="t('project.addPackage')" :close-label="t('common.close')" @close="closePackageEditor">
+    <ModalDialog v-if="packageEditorOpen" title-id="add-package-title" :title="t(editingPackageName ? 'project.editPackage' : 'project.addPackage', { name: editingPackageName })" :close-label="t('common.close')" @close="closePackageEditor">
       <form class="project-form" @submit.prevent="savePackage">
-        <p class="form-hint">{{ t("project.addPackageHint") }}</p>
-        <label class="field required-field"><span>{{ t("project.repositoryName") }}</span><input v-model.trim="packageDraft.name" required :disabled="savingPackage" autocomplete="off" placeholder="gcc" /></label>
+        <p class="form-hint">{{ t(editingPackageName ? "project.editPackageHint" : "project.addPackageHint") }}</p>
+        <label class="field required-field"><span>{{ t("project.repositoryName") }}</span><input v-model.trim="packageDraft.name" required :disabled="savingPackage || Boolean(editingPackageName)" autocomplete="off" placeholder="gcc" /></label>
         <label class="field required-field"><span>{{ t("project.repositoryAddress") }}</span><input v-model.trim="packageDraft.url" required :disabled="savingPackage" autocomplete="off" placeholder="https://atomgit.com/src-openeuler/gcc.git" /></label>
         <div class="form-grid package-ref-fields">
           <div class="field"><span>{{ t("project.refType") }}</span><AppSelect :model-value="packageDraft.ref.type" :options="[{ value: 'Branch', label: t('project.refBranch') }, { value: 'Tag', label: t('project.refTag') }, { value: 'Commit', label: 'Commit' }]" :label="t('project.refType')" :disabled="savingPackage" @update:model-value="packageDraft.ref.type = $event as NonNullable<GitRef['type']>" /></div>
-          <label class="field required-field"><span>{{ t("project.refValue") }}</span><input v-model.trim="packageDraft.ref.value" required :disabled="savingPackage" autocomplete="off" /></label>
+          <label class="field"><span>{{ t("project.refValue") }}</span><input v-model.trim="packageDraft.ref.value" :disabled="savingPackage" autocomplete="off" /></label>
         </div>
         <div v-if="packageErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(packageErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingPackage" @click="closePackageEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingPackage">{{ savingPackage ? t("common.saving") : t("common.save") }}</button></div>
@@ -350,7 +350,7 @@ import { useBuildConf } from "@/composables/useBuildConf";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
-import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, Project } from "@/types";
+import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "config";
 type BuildType = "full" | "incremental" | "single" | "specified";
@@ -426,6 +426,8 @@ const packageHistoryLoading = ref(false);
 const packageHistoryErrorKey = ref("");
 let packageHistoryRequestId = 0;
 const packageEditorOpen = ref(false);
+const editingPackageName = ref("");
+const packageEditorProject = ref<Project | null>(null);
 const savingPackage = ref(false);
 const packageErrorKey = ref("");
 const packageSaveSuccess = ref(false);
@@ -683,7 +685,20 @@ function openTargetEditor(): void {
 
 function openPackageEditor(): void {
   if (!project.value || !canEditProject.value) return;
+  editingPackageName.value = "";
+  packageEditorProject.value = JSON.parse(JSON.stringify(project.value)) as Project;
   packageDraft.value = { name: "", url: "", ref: { type: project.value.spec?.defaultRef?.type || "Branch", value: project.value.spec?.defaultRef?.value || "master" } };
+  packageErrorKey.value = "";
+  packageSaveSuccess.value = false;
+  deletedPackageName.value = "";
+  packageEditorOpen.value = true;
+}
+
+function openPackageEdit(repo: PackageRepo): void {
+  if (!project.value || !canEditProject.value || !repo.name || savingPackage.value) return;
+  packageEditorProject.value = JSON.parse(JSON.stringify(project.value)) as Project;
+  editingPackageName.value = repo.name;
+  packageDraft.value = { name: repo.name, url: repo.url || "", ref: { type: repo.ref?.type || "Branch", value: repo.ref?.value || "" } };
   packageErrorKey.value = "";
   packageSaveSuccess.value = false;
   deletedPackageName.value = "";
@@ -699,25 +714,33 @@ function closePackageEditor(): void {
 async function savePackage(): Promise<void> {
   if (!project.value || !canEditProject.value || savingPackage.value) return;
   const draft = packageDraft.value;
-  const repo = { name: draft.name.trim(), url: draft.url.trim(), ref: { type: draft.ref.type, value: draft.ref.value.trim() } };
-  if (!repo.name || !repo.url || !repo.ref.value) {
+  const repo: PackageRepo = { name: editingPackageName.value || draft.name.trim(), url: draft.url.trim(), ref: draft.ref.value.trim() ? { type: draft.ref.type, value: draft.ref.value.trim() } : undefined };
+  if (!repo.name || !repo.url) {
     packageErrorKey.value = "project.packageRequired";
     return;
   }
-  if (project.value.spec?.packageRepos?.some((item) => item.name === repo.name)) {
+  if (!editingPackageName.value && packageEditorProject.value?.spec?.packageRepos?.some((item) => item.name === repo.name)) {
     packageErrorKey.value = "project.packageAlreadyAdded";
     return;
   }
-  if (repo.ref.type === "Commit" && !/^[a-fA-F0-9]{40}$/.test(repo.ref.value)) {
+  if (repo.ref?.type === "Commit" && !/^[a-fA-F0-9]{40}$/.test(repo.ref.value || "")) {
     packageErrorKey.value = "project.invalidCommit";
     return;
   }
-  if (repo.ref.type === "Commit") repo.ref.value = repo.ref.value.toLowerCase();
+  if (repo.ref?.type === "Commit") repo.ref.value = repo.ref.value?.toLowerCase();
   savingPackage.value = true;
   packageErrorKey.value = "";
   try {
-    const updated = JSON.parse(JSON.stringify(project.value)) as Project;
-    updated.spec = { ...updated.spec, packageRepos: [...(updated.spec?.packageRepos || []), repo] };
+    if (!packageEditorProject.value) throw new Error("missing project input");
+    const updated = JSON.parse(JSON.stringify(packageEditorProject.value)) as Project;
+    const repos = updated.spec?.packageRepos || [];
+    if (editingPackageName.value && !repos.some((item) => item.name === editingPackageName.value)) {
+      packageErrorKey.value = "errors.conflict";
+      return;
+    }
+    updated.spec = { ...updated.spec, packageRepos: editingPackageName.value
+      ? repos.map((item) => item.name === editingPackageName.value ? { ...item, url: repo.url, ref: repo.ref } : item)
+      : [...repos, repo] };
     project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
       method: "PUT",
       body: JSON.stringify(updated),

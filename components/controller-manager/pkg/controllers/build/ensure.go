@@ -269,7 +269,7 @@ func selectPackageRepos(build *ebsv1.Build, project *ebsv1.Project) []ebsv1.Pack
 	if build.Spec.BuildType != buildTypeSingle {
 		result := make([]ebsv1.PackageRepo, 0, len(project.Spec.PackageRepos))
 		for _, repo := range project.Spec.PackageRepos {
-			result = append(result, copyPackageRepo(repo))
+			result = append(result, repo)
 		}
 		return result
 	}
@@ -280,16 +280,8 @@ func selectPackageRepos(build *ebsv1.Build, project *ebsv1.Project) []ebsv1.Pack
 	result := make([]ebsv1.PackageRepo, 0, len(wanted))
 	for _, repo := range project.Spec.PackageRepos {
 		if _, ok := wanted[repo.Name]; ok {
-			result = append(result, copyPackageRepo(repo))
+			result = append(result, repo)
 		}
-	}
-	return result
-}
-
-func copyPackageRepo(repo ebsv1.PackageRepo) ebsv1.PackageRepo {
-	result := repo
-	if repo.BuildTargets != nil {
-		result.BuildTargets = append([]ebsv1.BuildTarget(nil), repo.BuildTargets...)
 	}
 	return result
 }

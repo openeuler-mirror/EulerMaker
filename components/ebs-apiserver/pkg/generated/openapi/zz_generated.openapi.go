@@ -1137,24 +1137,11 @@ func schema_ebs_api_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Open
 							Ref:     ref("ebs-api/ebs/v1.GitRef"),
 						},
 					},
-					"buildTargets": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
-									},
-								},
-							},
-						},
-					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.GitRef"},
+			"ebs-api/ebs/v1.GitRef"},
 	}
 }
 

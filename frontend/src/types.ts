@@ -41,7 +41,6 @@ export interface PackageRepo {
   name?: string;
   url?: string;
   ref?: GitRef;
-  buildTargets?: BuildTarget[];
 }
 
 export interface BootstrapRepo {

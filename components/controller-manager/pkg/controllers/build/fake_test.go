@@ -406,10 +406,9 @@ func newProject(name string, repos ...ebsv1.PackageRepo) *ebsv1.Project {
 
 func newPackageRepo(name string) ebsv1.PackageRepo {
 	return ebsv1.PackageRepo{
-		Name:         name,
-		URL:          "https://example.com/src-openeuler/" + name + ".git",
-		Ref:          ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "master"},
-		BuildTargets: []ebsv1.BuildTarget{{Os: "openEuler-22.03-LTS", Arch: "aarch64"}},
+		Name: name,
+		URL:  "https://example.com/src-openeuler/" + name + ".git",
+		Ref:  ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "master"},
 	}
 }
 
