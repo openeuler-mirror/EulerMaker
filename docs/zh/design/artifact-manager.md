@@ -409,7 +409,7 @@ type SSECompleteData struct {
 }
 ```
 
-HTTP 路径中的 `{project}`、`{job}` 是归属来源，上传元数据不得重复提供或覆盖。`RunnerName`、ID、状态、存储键和时间均由服务端填写。空文件使用长度为 0 的正文上传；空日志封账时 `lastSequence=-1`、`size=0`、`sha256` 为 SHA-256 空输入。JobUploadManifest 首版不允许空 `files`；没有需要归档文件的 Job 不创建 manifest，并在 Job Status 中记录 `artifactCount=0` 和明确的 `artifactState=NotRequired`。
+HTTP 路径中的 `{project}`、`{job}` 是归属来源，上传元数据不得重复提供或覆盖。`RunnerName`、ID、状态、存储键和时间均由服务端填写。空文件使用长度为 0 的正文上传；空日志封账时 `lastSequence=-1`、`size=0`、`sha256` 为 SHA-256 空输入。JobUploadManifest 首版不允许空 `files`；没有需要归档文件的 Job 不创建 manifest，Job Status 不增加 artifactCount 或 artifactState 字段。
 
 ## 六、上传 API
 
@@ -624,7 +624,7 @@ Runner 执行完成后扫描 Job 结果目录并生成 manifest：
 4. 上传请求失败时使用相同幂等键整文件重传。
 5. 确认每个必需文件均已返回 `Completed`。
 6. 调用 Job 上传清单完成接口，由 Artifact Manager 校验并封账全部必需文件。
-7. 清单完成后更新 Job 的 `artifactState` 和 `artifactCount`，再将 Job 更新为 `phase=Succeeded`；必需产物上传或清单封账失败时更新为 `Failed`。Manifest digest 只由 Artifact Manager 保存，不写入 Job Status。
+7. 必需清单完成后再将 Job 更新为 `phase=Succeeded`；必需产物上传或清单封账失败时更新为 `Failed`。Manifest digest 只由 Artifact Manager 保存，不写入 Job Status。
 
 Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文件数量限流。上传成功前保留本地文件。
 
@@ -642,7 +642,7 @@ Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文
 
 ### 9.1 定位
 
-Artifact Manager 在已经接管 Job 构建产物的基础上，提供 RPM 仓库物化能力。Controller Manager 中的 RpmRepo Controller 负责持续感知构建结果、选择基础仓和输入 Job，并更新 `RpmRepo`、`Build`、`Job` 等 API 对象；Artifact Manager 只负责校验固定版本的 Job 上传清单、组织 RPM、生成 repodata、原子发布仓库正文和保存本地物化状态。
+Artifact Manager 在已经接管 Job 构建产物的基础上，提供 RPM 仓库物化能力。Controller Manager 中的 RpmRepo Controller 负责持续感知构建结果、选择基础仓和输入 Job，并只更新 `RpmRepo.status`；Artifact Manager 只负责校验固定版本的 Job 上传清单、组织 RPM、生成 repodata、原子发布仓库正文和保存本地物化状态。
 
 ```text
 RpmRepo Controller
@@ -654,7 +654,7 @@ Artifact Manager
     ▼
 Repository content URL
     │
-    └── RpmRepo Controller 更新 RpmRepo/Build/Job status
+    └── RpmRepo Controller 更新 RpmRepo.status
 ```
 
 该能力替代老 repo-manager 的 Job JSON 目录扫描、ES 直接写入和 etcd 队列通知。控制面与数据面的职责边界见 9.3。
@@ -685,47 +685,17 @@ Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etc
 
 #### 9.3.3 主动持续生成流程
 
-RpmRepo Controller 是 Controller Manager 内的常驻控制器，不等待其他组件逐次调用“生成仓库”。它必须在 `Run` 前注册 Job 事件处理器，启动时先完成全局 Job List，再从取得的 `resourceVersion` 建立 Watch；Watch 断开时按 Controller Manager 的 Source 语义重新 List/Watch。只有 Job 支持 Watch，`Build`、`BuildInfo`、`Snapshot` 和 `RpmRepo` 仍通过按需 GET/List 读取。
+控制面流程以 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 为准。Controller 只轮询非发布终态 RpmRepo，不注册 Job Watch；过程仓键为 `build/{project}/{buildName}`，发布键为 `release/{project}/{os}/{arch}`。
 
-进入仓库队列的 Job 必须同时满足：
+Build Controller 为非 single Build 创建同名 RpmRepo，并可预置继承基线的 repositoryUID / contentURL。RpmRepo Controller 不补建对象，只写其 status；Build 状态由 Build Controller 推进，Job 状态由执行侧维护。
 
-- `status.phase=Succeeded`；
-- `status.artifactState=Completed`；
-- Job 携带由 BuildInfo Controller 写入的构建归属和目标 labels，能够确定 Build、spec、目标 OS 和目标架构；
-- 该 Job 未写入仓库发布结果，也不是 `RpmRepo.status.repository.transition` 中正在处理的输入。
+1. 按 Build label 完整分页读取 Job。候选需为 Succeeded、携带正确的归属和目标 labels、未被 sourceJobUIDs 消费，且 Artifact Manager 的唯一 manifest 为 Completed；不依赖 Job 上的 artifactState、artifactCount 或 repositoryState。
+2. 按稳定顺序和批次上限选输入，同一批每个 spec 最多一个 Job；基础仓取当前 repository.repositoryUID。先 CAS 写入固定 inputs、baseRepositoryUID、repositoryUID 的 transition，再提交物化请求。
+3. Ready 后一次 CAS 提升 repositoryUID / contentURL、累计去重排序的 sourceJobUIDs、更新时间与条件，并清空 transition；不向 RpmRepo 写摘要或 RPM 元数据，不向 Job 回写消费标记。
+4. 可重试失败沿用原检查点，按 Artifact Manager attempt 与 updatedAt 控制预算和退避。不可重试失败或预算耗尽时保留失败 transition 和原可读版本，同次写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False；不拆批重组，不修改 Job。
+5. BuildInfo 未 Completed 时允许持续生成过程仓；Completed 表示所有 Job 已收敛。首次发布前仍须复核无剩余候选、无未就绪 manifest、无过程仓 transition，且本对象已产出版本（sourceJobUIDs 非空）；发布策略与在途恢复按 Controller 设计执行。
 
-RpmRepo Controller 以 `{project}/{buildName}` 作为串行队列 key，Reconcile 的对象是 Build，而不是触发事件的单个 Job。`buildName` 由唯一 UUID 生成且不复用，因此无需再引入 Build UID、目标 OS 或目标架构作为队列维度。目标 OS 和架构由 Build 确定，仅作为仓库元数据及一致性校验字段。同一 key 任一时刻只允许一个物化周期，保证后一个仓库显式以上一个 Ready 仓库为基础；不同 key 可以并行。Job 事件只计算并 Add Build key，同一 key 的重复事件由队列合并。
-
-BuildInfo Controller 创建 Job 时必须写入以下不可变元数据：
-
-| 位置 | Key | 值 |
-|------|-----|----|
-| label | `ebs.io/build-name` | 所属 Build name，值为唯一 UUID |
-| label | `ebs.io/spec-name` | 本 Job 构建的 spec 名 |
-| label | `ebs.io/target-os` | 目标操作系统 |
-| label | `ebs.io/target-arch` | 目标架构 |
-
-RpmRepo Controller 不从 Job 名称、Payload 或 RPM 文件名推导这些控制面归属。缺少任一字段的 Job 不进入物化队列，并记录结构化告警和指标。Project 直接使用 Job `metadata.namespace`。
-
-Build Controller 仅为非 single Build 创建同名 RpmRepo；single 只消费 bootstrap 和历史过程仓，构建产物仍可上传保存，但不进入本轮仓库物化或正式发布流程。RpmRepo Controller 只读取该对象并推进 status，不负责补建。每批完成 Job 将该逻辑仓库推进一个新的不可变物理版本。每次最多选择 `--rpmrepo-max-jobs-per-batch` 个 Job，同时受 Manifest 数量和输入总字节数上限约束；不使用时间窗口等待更多 Job，到达任一上限或当前候选集已取完即形成批次。候选 Job 按 `creationTimestamp`、`metadata.name`、`metadata.uid` 升序稳定排序。同一批次每个 `specName` 最多一个 Job；遇到重复 spec 时只选择排序最前的 Job，其余 Job 留到下一批次，不能以 Watch 事件到达顺序决定覆盖关系。
-
-一次 Build Reconcile 流程如下：
-
-1. GET Build；若 `spec.buildType=single`，成功结束，不读取或创建本轮同名 RpmRepo、不物化或发布本轮产物。其他类型再 GET 同名 RpmRepo；RpmRepo 不存在表示 Build Controller 的前置创建尚未完成或对象被异常删除，本周期返回临时错误并退避重试，不创建替代对象。
-2. RpmRepo 已存在 `status.repository.transition` 时不得选择新输入或重新计算批次，直接按 transition 查询或重新提交 Artifact Manager，并继续该批次的结果确认。
-3. 没有 transition 时，按 Build label 过滤 List Job，重新校验每个候选 Job 的 UID、终态、Artifact 状态和构建归属，剔除已发布、已稳定失败或不再满足条件的对象，然后按稳定顺序和批次上限选择输入。没有候选 Job 时成功结束。
-4. 使用当前 `status.repository.repositoryUID` 作为基础仓。首次推进根据 `Build.status.baseBuildRef.name` 读取对应的已发布 RpmRepo 版本；未指定时基础仓为空。
-5. 按候选顺序查询每个 Job 的唯一 Completed Manifest，达到 Job 数量或输入总字节数上限时停止加入批次。根据 Project、Build name、基础仓 UID 以及排序后的全部 Job UID 计算确定性 `repositoryUID`，再将完整 `RepositoryTransition` 以 `resourceVersion` CAS 写入 RpmRepo status。
-6. transition 写入成功后才能调用 Artifact Manager，单次请求提交批次内全部 Manifest。返回 `202` 后不占用 worker 等待，使用带指数退避的延迟队列再次入队同一个 Build key。
-7. 查询到 `Ready` 后，用一次 CAS 将 transition 中的版本提升为当前版本、写入 URL、摘要、RPM 元数据和本批次 Job UID，并清空 transition；然后逐个将同一物理版本 UID 写入本批次 Job status 作为已消费标记。
-8. Job status 写回必须逐项幂等。部分 Job 写回失败时，后续 Reconcile 根据 RpmRepo 当前版本记录的 Job UID 补写，不重新物化，也不把这些 Job 选入新批次；全部补写完成后若仍有候选 Job，立即重新入队同一个 Build key。
-9. 可重试基础设施错误保留原 transition 和同一 `repositoryUID` 重试。某个输入存在不可重试的请求、RPM 或 Manifest 错误时，整批不发布；将确定失败的 Job 标记为 `repositoryState=Failed` 并写入稳定错误，清除 transition 后将其余 Job 重新入队组成新批次。原已发布版本始终可读。
-
-RpmRepo Controller 重启后通过 List 已完成 Job 和同名 RpmRepo 重建 Build key，不依赖内存中的“已消费集合”。存在 transition 时必须先按其固定的输入 Job UID 集合、base repository UID 和 repository UID 恢复旧批次，不得重新选择输入或基础仓。当前由 Build Controller 创建的 `RpmRepoSpec` 可保持为空；RpmRepo Controller 需扩展和更新的是公共 `RpmRepoStatus`、`JobStatus` 及对应的 apiserver status 校验。
-
-当前公共 `JobStatus` 同样尚未包含 `artifactState`、`artifactCount`、`repositoryState` 和 `repositoryUID`。实现 RpmRepo Controller 前必须将这些字段加入公共 API，更新 OpenAPI、apiserver status 校验和客户端。`repositoryState=Published` 且 `repositoryUID` 非空表示 Job 已被逻辑仓库消费；`repositoryState=Failed` 表示稳定输入错误，不得自动重放。
-
-首版 Controller Manager 只运行一个活动的 RpmRepo Controller。需要多副本时必须先在 Controller Manager 框架加入 Leader Election；不能依赖进程内队列锁协调多个实例。即使发生故障切换，RpmRepo status 的 `resourceVersion` CAS、持久化 transition 和 Artifact Manager 的 repositoryUID 幂等约束仍是最终防线。
+Job labels 由 BuildInfo Controller 写入：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/target-os`、`ebs.io/target-arch`；Project 取 metadata.namespace。single 没有本轮 RpmRepo，不进入该物化流程。重启由 RpmRepo 轮询恢复键，再按持久化检查点查询或重放。首版只允许单活动 Controller 实例。
 
 ### 9.4 标识与存储布局
 
@@ -822,9 +792,9 @@ type RpmRepoStatus struct {
 }
 ```
 
-`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。失败通过顶层 `conditions` 记录，不清除已有可用版本。`repository` 不再定义 phase。 Build Controller 创建 RpmRepo 时仅种入基线 UID 与 URL；创建后由 RpmRepo Controller 维护 status。
+`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。批次失败收口时保留 transition 作为已放弃批次，写 RepositoryReady=False 与发布失败终局，不清除已有可用版本。`repository` 不再定义 phase。 Build Controller 创建 RpmRepo 时仅种入基线 UID 与 URL；创建后由 RpmRepo Controller 维护 status。
 
-正式发布使用独立的 `status.release` 状态机，不能复用过程仓 `phase`。`RpmRepoReleasePhase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。提交 release API 前，Controller 必须先把源过程仓 UID 和规范化后的 `excludeSpecs` 写入 `release.transition`；恢复时必须重放该固定输入。激活成功后将源 UID 提升到 `release.sourceRepositoryUID`，写入稳定入口、摘要和包数量，并清除 transition。正式发布失败通过带独立 type 的顶层 condition 记录，不覆盖仍然可读的过程仓状态。
+正式发布使用独立的 `status.release` 状态机，过程仓不定义 phase。`RpmRepoReleasePhase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。提交 release API 前，Controller 必须先把源过程仓 UID 和规范化后的 `excludeSpecs` 写入 `release.transition`；恢复时必须重放该固定输入。激活成功后将源 UID 提升到 `release.sourceRepositoryUID`，写入稳定入口与更新时间，并清除 transition。正式发布失败通过 PublishSucceed 条件记录；同名 Build 中止时，对未删除且非终态的 RpmRepo 写 release.phase=Failed、清空 release.transition，并写 PublishSucceed=False/reason=BuildAborted。Ready、Failed 均为终态，不再提交、激活或重放；过程仓可读版本保持不变。
 
 ```go
 type RepositoryState string
@@ -1642,18 +1612,9 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 
 ## 十四、与 Job Status 的关系
 
-Job Status 只保存结果摘要和 Artifact Manager 定位信息，不保存完整 Artifact 列表：
+Job Status 保留执行结果与 resultRoot，不增加 artifactState、artifactCount、repositoryState 或 repositoryUID。Runner 在必需产物与 manifest 封账后写 Succeeded；完整产物集合及封账状态由 Artifact Manager 的 JobUploadManifest 提供。
 
-```yaml
-status:
-  phase: Succeeded
-  stage: PostRun
-  resultRoot: artifact://e32450b8-...
-  artifactState: Completed
-  artifactCount: 12
-```
-
-完整产物列表通过 Artifact API 查询。上述字段只是可 watch 的完成信号和定位摘要，本地 JobUploadManifest 才是完整文件集合的事实来源。Runner 的封账与状态更新顺序见第八章，RpmRepo Controller 的消费流程见 9.3.3；Manifest digest 仅供 Artifact Manager 内部使用。
+RpmRepo Controller 根据 Job phase、labels 与 manifest 判定输入，并在 RpmRepo.status.repository.sourceJobUIDs 中记录已消费 Job，不回写 Job status。Manifest digest 仅供 Artifact Manager 内部校验，不进入公共 Job 或 RpmRepo 状态。
 
 ## 十五、错误处理
 
@@ -1752,7 +1713,7 @@ GET /readyz    # 本地持久化目录可用，元数据索引已加载
 7. 中断上传临时文件及孤儿文件清理。
 8. 容器日志实时分块追加、sequence 幂等和断点续传。
 9. Job 上传清单的本地持久化、完整性校验、单次成功封账、幂等完成和查询。
-10. Job Status 中 Artifact 完成摘要与 RpmRepo Controller 消费约定。
+10. Runner 的 manifest 封账顺序与 RpmRepo Controller 基于清单、sourceJobUIDs 的消费约定。
 11. 活动日志一致性 Range 读取、SSE 实时展示、Web UI 断线补齐及 `container.log` Artifact 幂等封账。
 12. 实时日志的崩溃恢复、限流、背压和过期清理。
 13. 由 RpmRepo Controller 驱动、基于 Completed Manifest 和显式基础仓的 RPM 仓库物化。

@@ -6,6 +6,7 @@ import (
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -194,7 +195,68 @@ func ValidateRpmRepo(obj *ebsv1.RpmRepo) field.ErrorList { return nil }
 func ValidateRpmRepoUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
 	return ValidateRpmRepo(newObj)
 }
-func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList { return nil }
+func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
+	var allErrs field.ErrorList
+	if repository := newObj.Status.Repository; repository != nil {
+		path := field.NewPath("status", "repository")
+		if (repository.RepositoryUID == "") != (repository.ContentURL == "") {
+			allErrs = append(allErrs, field.Invalid(path, repository, "repositoryUID and contentURL must be provided together"))
+		}
+		if len(repository.SourceJobUIDs) > 0 && (repository.RepositoryUID == "" || repository.ContentURL == "") {
+			allErrs = append(allErrs, field.Invalid(path.Child("sourceJobUIDs"), repository.SourceJobUIDs, "requires repositoryUID and contentURL"))
+		}
+		if transition := repository.Transition; transition != nil {
+			if transition.RepositoryUID == "" {
+				allErrs = append(allErrs, field.Required(path.Child("transition", "repositoryUID"), "repository UID is required"))
+			}
+			if len(transition.Inputs) == 0 {
+				allErrs = append(allErrs, field.Required(path.Child("transition", "inputs"), "at least one input is required"))
+			}
+		}
+	}
+	if release := newObj.Status.Release; release != nil {
+		path := field.NewPath("status", "release")
+		if !release.Phase.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(path.Child("phase"), release.Phase, ebsv1.RpmRepoReleasePhaseValues()))
+		}
+		if release.Transition != nil && release.Phase != ebsv1.RpmRepoReleasePending &&
+			release.Phase != ebsv1.RpmRepoReleaseCreating && release.Phase != ebsv1.RpmRepoReleasePrepared {
+			allErrs = append(allErrs, field.Forbidden(path.Child("transition"), "only allowed for Pending, Creating or Prepared releases"))
+		}
+		if release.Phase == ebsv1.RpmRepoReleaseReady && release.ContentURL == "" {
+			allErrs = append(allErrs, field.Required(path.Child("contentURL"), "content URL is required for Ready releases"))
+		}
+	}
+	for i, condition := range newObj.Status.Conditions {
+		path := field.NewPath("status", "conditions").Index(i)
+		if condition.Type != ebsv1.RpmRepoConditionRepositoryReady && condition.Type != ebsv1.RpmRepoConditionPublishSucceed {
+			allErrs = append(allErrs, field.NotSupported(path.Child("type"), condition.Type, []string{ebsv1.RpmRepoConditionRepositoryReady, ebsv1.RpmRepoConditionPublishSucceed}))
+		}
+		if condition.Status != metav1.ConditionTrue && condition.Status != metav1.ConditionFalse {
+			allErrs = append(allErrs, field.NotSupported(path.Child("status"), condition.Status, []string{string(metav1.ConditionTrue), string(metav1.ConditionFalse)}))
+		}
+		var reasons []string
+		switch {
+		case condition.Type == ebsv1.RpmRepoConditionRepositoryReady && condition.Status == metav1.ConditionTrue:
+			reasons = []string{ebsv1.RpmRepoReasonRepositoryCreated}
+		case condition.Type == ebsv1.RpmRepoConditionRepositoryReady && condition.Status == metav1.ConditionFalse:
+			reasons = []string{ebsv1.RpmRepoReasonRepositoryCreationFailed}
+		case condition.Type == ebsv1.RpmRepoConditionPublishSucceed && condition.Status == metav1.ConditionTrue:
+			reasons = []string{ebsv1.RpmRepoReasonReleaseActivated}
+		case condition.Type == ebsv1.RpmRepoConditionPublishSucceed && condition.Status == metav1.ConditionFalse:
+			reasons = []string{ebsv1.RpmRepoReasonReleaseFailed, ebsv1.RpmRepoReasonRepositoryCreationFailed, ebsv1.RpmRepoReasonNoPublishableArtifacts, ebsv1.RpmRepoReasonBuildAborted}
+		}
+		validReason := false
+		for _, reason := range reasons {
+			validReason = validReason || condition.Reason == reason
+		}
+		if len(reasons) > 0 && !validReason {
+			allErrs = append(allErrs, field.NotSupported(path.Child("reason"), condition.Reason,
+				reasons))
+		}
+	}
+	return allErrs
+}
 
 func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 	var allErrs field.ErrorList

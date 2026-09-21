@@ -1,6 +1,7 @@
 package rpmrepo
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -31,7 +32,9 @@ func NewStorage() *scopedresource.Storage {
 			obj.(*ebsv1.RpmRepo).Status = old.(*ebsv1.RpmRepo).Status
 		},
 		CopySpec: func(obj, old runtime.Object) {
-			obj.(*ebsv1.RpmRepo).Spec = old.(*ebsv1.RpmRepo).Spec
+			newRepo, oldRepo := obj.(*ebsv1.RpmRepo), old.(*ebsv1.RpmRepo)
+			newRepo.Spec = oldRepo.Spec
+			metav1.ResetObjectMetaForStatus(&newRepo.ObjectMeta, &oldRepo.ObjectMeta)
 		},
 		Validate: func(obj runtime.Object) field.ErrorList {
 			repo := obj.(*ebsv1.RpmRepo)

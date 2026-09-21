@@ -499,7 +499,7 @@ type ReleaseTransition struct {
 }
 ```
 
-`RepositoryTransition` 是提交物化前先写入的恢复检查点。存在 transition 时不得选择新输入或重新计算基础仓。
+`RepositoryTransition` 是提交物化前先写入的恢复检查点，也可保留已放弃的失败批次。存在 transition 时不得选择新输入或重新计算基础仓；失败收口保留原 inputs、baseRepositoryUID 与 repositoryUID。
 `ReleaseTransition` 在提交正式发布前固化源过程仓和排除集合；存在该字段时必须恢复原请求，不得根据最新 Project 或 BuildInfo 重新计算。
 
 | 类型与字段 | 说明 |
@@ -542,24 +542,37 @@ type RpmRepoStatus struct {
 | 字段             | Go 类型            | 说明                                           |
 |----------------|------------------|----------------------------------------------|
 | `repository` | *RpmRepoRepositoryStatus | 构建过程仓的当前版本和推进状态 |
-| `release` | *RpmRepoReleaseStatus | 正式发布的独立状态；不与过程仓 phase 混用 |
+| `release` | *RpmRepoReleaseStatus | 正式发布的独立状态；过程仓不定义 phase |
 | `conditions` | []metav1.Condition | 状态条件（记录失败原因等） |
 
 | `repository` 字段 | Go 类型 | 说明 |
 |--------------------|---------|------|
 | `repositoryUID` | string | 当前已发布不可变物理版本的 UID |
 | `contentURL` | string | 当前物理版本的不可变仓库地址 |
-| `sourceJobUIDs` | []string | 当前物理版本对应的输入 Job UID 集合，按字典序保存 |
-| `transition` | *RepositoryTransition | 正在物化或等待确认的下一版本 |
-| `updatedAt` | *metav1.Time | 当前物理版本的发布时间 |
+| `sourceJobUIDs` | []string | 本对象已成功消费的累计 Job UID 集合，去重并按字典序保存；继承基线不计入，非空表示本对象已产出版本 |
+| `transition` | *RepositoryTransition | 在途版本的固定输入，或失败收口时原样保留的已放弃批次 |
+| `updatedAt` | *metav1.Time | 过程仓 status 最近一次有效写入时间（提交批次、失败收口或提升版本） |
 
-`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。失败通过顶层 `conditions` 记录，不清除已有可用版本。`repository` 不再定义 phase。
+`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。批次失败收口保留 transition、写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False，不清除已有可用版本。`repository` 不再定义 phase。
 
-`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Aborted`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。`Aborted` 由 RpmRepo Controller 在读到同名 `Build.status.phase=Aborted` 时直接写入，属**发布终局**：清除 `release.transition`、写 `PublishSucceed=False/reason=RepositoryPublishAborted`，`release.contentURL` 保持为空，此后不再提交、激活或重放；它与 `Ready`、`Failed` 同属发布终态，轮询与发布候选过滤必须一并排除。
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。中止使用 `Failed`，由 RpmRepo Controller 在确认对象存在、未删除且非终态，并读到同名 `Build.status.phase=Aborted` 时写入，属**发布终局**：清除 `release.transition`、写 `PublishSucceed=False/reason=BuildAborted`，`release.contentURL` 保持为空，此后不再提交、激活或重放；发布终态为 `Ready`、`Failed`，轮询与发布候选过滤必须一并排除。
+
+RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobUIDs 非空要求版本指针非空；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`/status` 保留原 spec 与受保护 metadata。
+
+| Type | Status | Reason | 场景 |
+| --- | --- | --- | --- |
+| `RepositoryReady` | `True` | `RepositoryCreated` | 最近一次过程仓批次成功提升 |
+| `RepositoryReady` | `False` | `RepositoryCreationFailed` | 过程仓不可重试失败或重试耗尽 |
+| `PublishSucceed` | `True` | `ReleaseActivated` | 正式发布已成功激活 |
+| `PublishSucceed` | `False` | `ReleaseFailed` | 正式发布准备或激活失败 |
+| `PublishSucceed` | `False` | `RepositoryCreationFailed` | 过程仓失败导致无法发布，含首个候选输入超限 |
+| `PublishSucceed` | `False` | `NoPublishableArtifacts` | 已完成构建没有可发布产物 |
+| `PublishSucceed` | `False` | `BuildAborted` | 同名 Build 被中止 |
+
 
 | `release` 字段 | Go 类型 | 说明 |
 |----------------|---------|------|
-| `phase` | RpmRepoReleasePhase | 正式发布状态（终态：`Ready` / `Failed` / `Aborted`） |
+| `phase` | RpmRepoReleasePhase | 正式发布状态（终态：`Ready` / `Failed`） |
 | `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
 | `contentURL` | string | Project/OS/架构稳定仓库入口 |
 | `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
@@ -1062,7 +1075,7 @@ type VersionConst struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed`                                                |
-| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Aborted` |
+| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` |
 | Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 
