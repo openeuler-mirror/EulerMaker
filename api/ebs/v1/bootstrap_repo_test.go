@@ -10,7 +10,7 @@ func TestBuildInfoBootstrapRepo(t *testing.T) {
 	if _, ok := reflect.TypeOf(BuildSpec{}).FieldByName("BootstrapRepo"); ok {
 		t.Fatal("BuildSpec must not contain BootstrapRepo")
 	}
-	info := &BuildInfo{Spec: BuildInfoSpec{BootstrapRepo: []BootstrapRepo{{Name: "base", Repo: "https://example.com/repo"}}}}
+	info := &BuildInfo{Spec: BuildInfoSpec{BuildPayload: "macros:\n  dist: .oe2403\n", BootstrapRepo: []BootstrapRepo{{Name: "base", Repo: "https://example.com/repo"}}}}
 	data, err := json.Marshal(info)
 	if err != nil {
 		t.Fatal(err)
