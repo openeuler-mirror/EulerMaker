@@ -253,6 +253,7 @@ const (
 	RpmRepoReleasePrepared RpmRepoReleasePhase = "Prepared"
 	RpmRepoReleaseReady    RpmRepoReleasePhase = "Ready"
 	RpmRepoReleaseFailed   RpmRepoReleasePhase = "Failed"
+	RpmRepoReleaseSkipped  RpmRepoReleasePhase = "Skipped"
 )
 
 var rpmRepoReleasePhaseValues = []string{
@@ -261,6 +262,7 @@ var rpmRepoReleasePhaseValues = []string{
 	string(RpmRepoReleasePrepared),
 	string(RpmRepoReleaseReady),
 	string(RpmRepoReleaseFailed),
+	string(RpmRepoReleaseSkipped),
 }
 
 // RpmRepoReleasePhaseValues returns all valid formal release phase values.
@@ -272,7 +274,7 @@ func RpmRepoReleasePhaseValues() []string {
 func (p RpmRepoReleasePhase) IsValid() bool {
 	switch p {
 	case RpmRepoReleasePending, RpmRepoReleaseCreating, RpmRepoReleasePrepared,
-		RpmRepoReleaseReady, RpmRepoReleaseFailed:
+		RpmRepoReleaseReady, RpmRepoReleaseFailed, RpmRepoReleaseSkipped:
 		return true
 	default:
 		return false

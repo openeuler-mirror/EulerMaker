@@ -37,6 +37,9 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 		{"missing-transition-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.Transition.RepositoryUID = "" }, "status.repository.transition.repositoryUID"},
 		{"missing-inputs", func(o *ebsv1.RpmRepo) { o.Status.Repository.Transition.Inputs = nil }, "status.repository.transition.inputs"},
 		{"empty-phase", func(o *ebsv1.RpmRepo) { o.Status.Release = &ebsv1.RpmRepoReleaseStatus{} }, "status.release.phase"},
+		{"skipped-without-content-url", func(o *ebsv1.RpmRepo) {
+			o.Status = ebsv1.RpmRepoStatus{Release: &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}}
+		}, ""},
 		{"invalid-phase", func(o *ebsv1.RpmRepo) { o.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: "Unknown"} }, "status.release.phase"},
 		{"ready-without-url", func(o *ebsv1.RpmRepo) {
 			o.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady}
@@ -91,7 +94,7 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 			if checkpoint {
 				obj.Status.Release.Transition = &ebsv1.ReleaseTransition{SourceRepositoryUID: "base"}
 			}
-			terminal := phase == "Ready" || phase == "Failed"
+			terminal := phase == "Ready" || phase == "Failed" || phase == "Skipped"
 			errs := ValidateRpmRepoStatusUpdate(obj, valid())
 			if (len(errs) != 0) != (terminal && checkpoint) {
 				t.Fatalf("phase=%s checkpoint=%v: %v", phase, checkpoint, errs)

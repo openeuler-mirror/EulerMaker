@@ -482,8 +482,9 @@ func TestPendingAdvancesToPrepared(t *testing.T) {
 		buildType   string
 		wantRpmRepo bool
 	}{
-		{name: "single skips RpmRepo", buildType: "single"},
+		{name: "single creates skipped RpmRepo", buildType: "single", wantRpmRepo: true},
 		{name: "full creates RpmRepo", buildType: "full", wantRpmRepo: true},
+		{name: "incremental creates RpmRepo", buildType: "incremental", wantRpmRepo: true},
 		{name: "specified creates RpmRepo", buildType: "specified", wantRpmRepo: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -568,7 +569,7 @@ func TestPendingAdvancesWhenSnapshotReportsMissingTargets(t *testing.T) {
 		buildType       string
 		wantRpmRepoCall int
 	}{
-		{name: "single skips RpmRepo", buildType: "single"},
+		{name: "single creates skipped RpmRepo", buildType: "single", wantRpmRepoCall: 1},
 		{name: "full creates RpmRepo", buildType: "full", wantRpmRepoCall: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

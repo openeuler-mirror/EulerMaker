@@ -250,7 +250,9 @@ func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 			RepositoryUID: base.repositoryUID,
 			ContentURL:    base.contentURL,
 		}
-		return repo
+	}
+	if build.Spec.BuildType == buildTypeSingle {
+		repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
 	}
 	return repo
 }
