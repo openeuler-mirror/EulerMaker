@@ -125,9 +125,9 @@ label 语义：
 
 `<username>` 必须是已存在的 User `metadata.name`。User 名称满足 DNS1123 label 约束，因此可以同时用作 `owner-user` 的 label value 和 `member-user.<username>` 的 label key name 片段。
 
-普通用户和 Ops 创建 Project 时，gateway 必须写入或覆盖 `ebs.io/owner-user=<jwt.sub>`，客户端传入的 owner user 不可信。system token 创建 Project 时必须显式提供 `ebs.io/owner-user`，gateway 校验该 User 存在、`spec.enabled=true` 且 scope 为 `ebs:user` 或 `ebs:ops`，否则返回 403。
+普通用户和 Ops 创建 Project 时，gateway 必须写入或覆盖 `ebs.io/owner-user=<jwt.sub>`，客户端传入的 owner user 不可信。Admin 或 System 创建 Project 时必须显式提供 `ebs.io/owner-user`，gateway 校验该 User 存在、`spec.enabled=true` 且 scope 为 `ebs:user` 或 `ebs:ops`，否则返回 403。
 
-更新 Project 时，gateway 必须保护 `ebs.io/owner-user` 不被普通用户或 Ops 伪造或篡改。成员用户 label 用于表达共享权限，只有 owner user 和 system token 可以增删；新增的 member user 必须对应已存在且启用、scope 为 `ebs:user` 或 `ebs:ops` 的 User。
+更新 Project 时，gateway 必须保护 `ebs.io/owner-user` 不被普通用户或 Ops 伪造或篡改。成员用户 label 用于表达共享权限，owner user、Admin 和 System 可以增删；新增的 member user 必须对应已存在且启用、scope 为 `ebs:user` 或 `ebs:ops` 的 User。
 
 匿名调用方可以读取第 4.1 节定义的公开资源，认证用户通过 Project API 访问 Project 级资源。Runner 使用独立的 runner token。普通用户 token 只有在对应 User 存在且已启用时才有效；gateway 直接使用 JWT `sub` 作为用户身份，并限制用户只能写入自己拥有或被授权为 member 的 Project 和 Project 子资源。
 
@@ -501,8 +501,8 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 按 owner/member 关系同普通用户 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：BuildResource | 仅自己拥有的 Project 下 `get/list`，禁止全部写操作 | 仅自己作为 member 的 Project 下 `get/list`，禁止全部写操作 | 跨 Project `get/list/create/update/delete`，不允许 `patch` | 禁止 | 全部支持的 verb | 同 System |
-| Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
-| Job `/abort` | 本工程 POST | 本工程 POST | 跨工程 POST | 禁止 | 禁止（非用户身份） | 跨工程 POST |
+| Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 主资源同 System，禁止 `/status` 写入 |
+| Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 禁止（非用户身份） | 仅 owner/member 工程 POST |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 允许 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
 | Runner | 禁止 | 禁止 | 全部支持的 verb，包括 `/status` | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 仅修改本人密码，禁止 User API | 禁止 | 禁止 | 非 Admin User 支持 `get/list/update/patch/delete`，另可修改本人密码 |
@@ -543,21 +543,20 @@ Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，�
 
 | 调用身份 | 权限 |
 |---|---|
-| admin、ops 用户 | 可跨工程中止 |
-| 普通用户 | 仅 Project 的 owner 或 member 可中止 |
+| 普通用户、ops、admin | 仅 Project 的 owner 或 member 可中止，无跨工程特权 |
 | 其他用户 | 403 |
 | Runner token、MachineAccount 凭据、匿名请求 | 不允许；未认证 401，已认证非用户身份 403 |
 
 - 对 `/abort` 路由先执行本节专用鉴权，再进入其它角色的通用授权分支，避免 admin/system 通用放行或普通成员写权限规则扩大调用主体。仅允许 POST，其它方法返回 405。
-- 普通用户授权读取路径所指的服务端 Project，以可信 owner/member 标签判定；归属查询失败不放行。不得使用请求体、客户端标签或 Job payload 判断归属。admin/ops 不要求是工程成员。
-- 用户只能通过 `/abort` 中止 Job；普通用户及 ops 不获得 Job `/status` 写权限。保留 Runner 和内部组件既有受控状态写通道，不能通过主资源 PUT/PATCH 改 status。网关权限矩阵和路由测试应覆盖这些替代路径。
+- 所有用户角色均读取路径所指的服务端 Project，以可信 owner/member 标签判定；归属查询失败不放行。不得使用请求体、客户端标签或 Job payload 判断归属，admin/ops 也必须具有 owner/member 关系。
+- 用户只能通过 `/abort` 中止 Job；普通用户、ops 和 admin 均不获得 Job `/status` 写权限。保留 Runner 和内部组件既有受控状态写通道，不能通过主资源 PUT/PATCH 改 status。网关权限矩阵和路由测试应覆盖这些替代路径。
 - 转发原始 apiserver 成功对象和 Status 错误，不把中止转成删除，不自动修改请求 UID。审计记录操作者、工程、Job、请求 UID、响应码与最终返回 phase；原因属于不可信文本，结构化记录并限制长度，不记录 token/payload。
-- 测试覆盖 owner/member、非成员、跨工程 ops/admin、Runner/机器身份、匿名、错误方法、Project 查询失败及 404/409/422 透传。
+- 测试覆盖各用户角色的 owner/member 放行与非成员拒绝、Runner/机器身份、匿名、错误方法、Project 查询失败及 404/409/422 透传。
 
 ### 4.8.2 前端 Job 中止入口
 
-- 工程详情增加按工程查询的 Job 列表（分页，支持 Pending/Running 筛选），owner/member 和 admin/ops 可见中止操作；按钮权限仅用于交互，gateway 负责最终授权。
-- 运维页面供 admin/ops 按工程查询并中止 Job，复用同一个列表/确认弹窗，不新增全局 Job 明细接口。
+- 工程详情增加按工程查询的 Job 列表（分页，支持 Pending/Running 筛选），仅 owner/member 可见中止操作，admin/ops 也遵循此规则；按钮权限仅用于交互，gateway 负责最终授权。
+- 运维页面供 admin/ops 按工程只读查询 Job；中止操作通过有 owner/member 权限的工程详情页发起，不新增全局 Job 明细接口。
 - 确认弹窗显示工程、Job、当前状态，允许填写中止原因；提交带选中对象 UID，防重复点击。终态不显示中止按钮。
 - 200 后以服务端返回 phase 刷新：Aborted 显示“已中止任务；执行端将在收到通知后停止运行”；Succeeded/Failed 显示“任务已结束，未改变原结果”。不得将 HTTP 200 一律显示为中止成功。
 - 超时/断线时先 GET 确认，无法确认则提示结果未知并提供刷新；UID 变化不自动中止新对象。403 提示无权限，404 提示已删除，409 刷新对象，422 显示请求校验错误。不自动无限重试。
@@ -634,7 +633,7 @@ metadata.ownerReferences
 metadata.labels["ebs.io/owner-user"] = jwt.sub
 ```
 
-system token 创建 Project 时不覆盖客户端提供的 `owner-user`，但必须读取该 User 并确认存在且已启用。
+Admin 或 System 创建 Project 时不覆盖客户端提供的 `owner-user`，但必须读取该 User 并确认存在且已启用。
 
 gateway 对 Project 的 `PUT`、`PATCH` 请求需要保护以下 labels：
 
@@ -648,7 +647,7 @@ metadata.labels["ebs.io/member-user.<username>"]
 - 普通 member user 不能修改 Project access labels。
 - owner user 可以增删 `ebs.io/member-user.<username>` labels；新增成员前必须确认对应 User 存在且已启用。
 - owner user 不能把 `ebs.io/owner-user` 改成其他用户。
-- system token 可以修改 owner/member labels。
+- Admin 与 System 权限相同，均可修改 owner/member labels。
 
 Project access labels 的保护逻辑只应用于 Project 对象。Snapshot、Build、BuildInfo、RpmRepo、Job 通过所属 Project 继承权限。
 
@@ -829,8 +828,8 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | User API 不可用 | 仅使用仍有效的短期缓存；无有效缓存时返回 503，不默认放行 |
 | Admin 越权操作管理员 User | User list 过滤 `spec.scopes=["ebs:admin"]` 对象；单对象读取和写入先校验旧对象；PUT/PATCH 保护管理员角色 |
 | 客户端伪造内部身份头 | 转发前删除所有客户端 `X-EBS-*`，只重建 `X-EBS-User` 和 `X-EBS-Scopes` |
-| 客户端伪造 Project owner | 普通用户创建 Project 时强制覆盖 `metadata.labels["ebs.io/owner-user"]`；system 创建时校验指定 owner User |
-| 客户端越权修改 Project members | 只有 owner user 或 system token 可以修改 member user labels，新增成员必须是已启用 User |
+| 客户端伪造 Project owner | 普通用户创建 Project 时强制覆盖 `metadata.labels["ebs.io/owner-user"]`；Admin/System 创建时校验指定 owner User |
+| 客户端越权修改 Project members | owner user、Admin 或 System 可以修改 member user labels，新增成员必须是已启用 User |
 | 用户写入未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403；公开 `GET/HEAD` 不受该写权限限制 |
 | Runner 范围 Job 过滤被绕过 | gateway绑定路径身份，apiserver按 `status.runner` 强制过滤，并拒绝客户端提供 `fieldSelector` |
 | token 泄漏 | 使用短有效期、固定 issuer/audience 和最小 scope；轮换单一密钥会使全部旧 token 失效，`jti` 进入审计记录以支持后续撤销扩展 |
@@ -859,7 +858,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |
 | Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许跨 Project 的 BuildResource 操作及 Runner 管理（包含 watch、普通对象写入、`/status` 和 Runner 范围 Job list/watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
-| AccessLabels | 普通用户和 Ops 创建 Project 时强制写入 owner user label；system 创建时校验 owner 为已启用的普通用户或 Ops；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
+| AccessLabels | 普通用户和 Ops 创建 Project 时强制写入 owner user label；Admin/System 创建时校验 owner 为已启用的普通用户或 Ops；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护 system 管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、restartCount、spec 或 metadata |
 | RateLimit | 超过令牌桶容量后返回 429 |

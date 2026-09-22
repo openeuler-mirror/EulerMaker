@@ -307,4 +307,4 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 | 安全 | TLS CA、insecure 警告、URL 校验、敏感字段脱敏、响应体上限 |
 | 兼容性 | 新增未知响应字段、旧配置迁移、客户端与服务端 API 版本不匹配 |
 
-端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户只读自身 Project 的 BuildResource、Ops 管理 BuildResource，以及无权限访问其他用户 Project 被拒绝。
+端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户只读自身 Project 的 BuildResource、Ops 管理 BuildResource，以及未经授权的写入或受保护资源访问被拒绝。

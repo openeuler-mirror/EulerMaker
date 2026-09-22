@@ -2,7 +2,7 @@
   <section class="page-heading"><div><h1>{{ t("operations.title") }}</h1><p>{{ t("operations.hint") }}</p></div><div class="page-actions"><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="runnersLoading" @click="loadRunners"><Refresh /></button></div></section>
   <BuildConfEditor />
   <section class="content-panel operations-section"><form class="operations-project-form" @submit.prevent="jobProject = jobProjectInput"><label class="field"><span>{{ t('operations.projectName') }}</span><input v-model.trim="jobProjectInput" required /></label><button class="secondary-button">{{ t('jobControl.load') }}</button></form></section>
-  <ProjectJobs v-if="jobProject" :key="jobProject" :project="jobProject" :can-abort="canManageRunners" />
+  <ProjectJobs v-if="jobProject" :key="jobProject" :project="jobProject" :can-abort="false" />
   <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
 
   <section class="content-panel operations-section">

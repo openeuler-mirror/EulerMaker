@@ -11,8 +11,8 @@
 | 对象 | 标签 | 值 | 写入方 | 用途 |
 |------|------|----|--------|------|
 | Project | `project.ebs.io/type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
-| Project | `ebs.io/owner-user` | User `metadata.name` | Gateway 或 system | 标识 Project owner，参与 Gateway 写权限判定 |
-| Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner 或 system | 授予指定用户 Project 成员权限 |
+| Project | `ebs.io/owner-user` | User `metadata.name` | Gateway、Admin 或 System | 标识 Project owner，参与 Gateway 写权限判定 |
+| Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner、Admin 或 System | 授予指定用户 Project 成员权限 |
 | Build | `ebs.io/target-os` | Build Target 的操作系统名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/target-arch` | Build Target 的架构名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/build-type` | Build `spec.buildType` | Build 创建方 | 按构建类型查询 Build |
@@ -40,9 +40,9 @@ metadata:
     ebs.io/owner-user: alice
 ```
 
-普通用户创建 Project 时，Gateway 强制将 `ebs.io/owner-user` 设置为 JWT `sub`。客户端提交的值不可信。system 创建 Project 时必须显式指定一个已存在且启用的 User。
+普通用户创建 Project 时，Gateway 强制将 `ebs.io/owner-user` 设置为 JWT `sub`。客户端提交的值不可信。Admin 或 System 创建 Project 时必须显式指定一个已存在且启用的 User。
 
-普通 Project owner 不能转移所有权；只有 system 可以修改该标签。删除或设置为空同样视为修改。
+Admin 与 System 均可修改 owner 标签；普通 Project owner 不能转移所有权。删除或设置为空同样视为修改，仍须满足 Gateway 对 owner 的校验规则。
 
 ### 3.2 成员
 
@@ -52,7 +52,7 @@ metadata:
     ebs.io/member-user.bob: "true"
 ```
 
-成员标签的用户名位于标签 key 中，值只能是字符串 `"true"`。Project owner 和 system 可以增删成员；新增成员必须对应已存在且启用的 User。成员不能修改 owner 或成员标签。
+成员标签的用户名位于标签 key 中，值只能是字符串 `"true"`。Project owner、Admin 和 System 可以增删成员；新增成员必须对应已存在且启用的 User。普通成员不能修改 owner 或成员标签。
 
 Project 子资源不重复保存访问标签，而是通过所属 Project 继承权限。apiserver 只存储这些标签，不解释其授权语义；授权由 Gateway 完成。
 
