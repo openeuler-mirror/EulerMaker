@@ -357,6 +357,7 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	}
 	v1Storage["jobs"] = jobStorage.Job
 	v1Storage["jobs/status"] = jobStorage.Status
+	v1Storage["jobs/abort"] = jobstore.NewAbortStorage(jobStorage.Job, jobStorage.Status.(rest.Updater))
 
 	runnerStorage := runnerstore.NewStorage(Scheme)
 	if err := runnerStorage.CompleteWithOptions(storeOptions); err != nil {
