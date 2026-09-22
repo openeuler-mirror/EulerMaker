@@ -647,9 +647,6 @@ func TestNewBuildInfoCopiesBootstrapRepos(t *testing.T) {
 	if !reflect.DeepEqual(info.Spec.BootstrapRepo, project.Spec.BootstrapRepo) {
 		t.Fatalf("bootstrapRepo = %+v", info.Spec.BootstrapRepo)
 	}
-	if len(info.Spec.SpecDepends) != 0 {
-		t.Fatalf("specDepends = %+v", info.Spec.SpecDepends)
-	}
 	info.Spec.BootstrapRepo[0].Repo = "mutated"
 	if project.Spec.BootstrapRepo[0].Repo != "https://example.com/repo/everything" {
 		t.Fatal("BuildInfo construction must not share state with the Project")
