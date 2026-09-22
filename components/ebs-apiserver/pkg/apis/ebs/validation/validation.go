@@ -41,6 +41,7 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	if len(obj.Spec.BuildTargets) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets"), "at least one build target is required"))
 	}
+	seenTargets := make(map[[2]string]struct{}, len(obj.Spec.BuildTargets))
 	for i, bt := range obj.Spec.BuildTargets {
 		if len(bt.Os) == 0 {
 			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("os"), "os is required"))
@@ -48,13 +49,26 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 		if len(bt.Arch) == 0 {
 			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("arch"), "arch is required"))
 		}
+		if bt.Os != "" && bt.Arch != "" {
+			key := [2]string{bt.Os, bt.Arch}
+			if _, exists := seenTargets[key]; exists {
+				allErrs = append(allErrs, field.Duplicate(field.NewPath("spec", "buildTargets").Index(i), key))
+			}
+			seenTargets[key] = struct{}{}
+		}
 	}
 	packageReposPath := field.NewPath("spec", "packageRepos")
 	allErrs = append(allErrs, validateDefaultRef(obj.Spec.DefaultRef, field.NewPath("spec", "defaultRef"))...)
+	seenRepoNames := make(map[string]struct{}, len(obj.Spec.PackageRepos))
 	for i, repo := range obj.Spec.PackageRepos {
 		if repo.Name == "" {
 			allErrs = append(allErrs, field.Required(packageReposPath.Index(i).Child("name"), "name is required"))
+			continue
 		}
+		if _, exists := seenRepoNames[repo.Name]; exists {
+			allErrs = append(allErrs, field.Duplicate(packageReposPath.Index(i).Child("name"), repo.Name))
+		}
+		seenRepoNames[repo.Name] = struct{}{}
 	}
 	allErrs = append(allErrs, validatePackageRepos(obj.Spec.PackageRepos, packageReposPath)...)
 	return allErrs
