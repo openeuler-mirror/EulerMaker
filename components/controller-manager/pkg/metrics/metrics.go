@@ -38,6 +38,10 @@ func (c *Counter) Inc() { c.value.Add(1) }
 
 func (c *Counter) Add(value uint64) { c.value.Add(value) }
 
+// Value returns the current counter value. It exists for tests and diagnostics; production code should only
+// increment counters.
+func (c *Counter) Value() uint64 { return c.value.Load() }
+
 func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

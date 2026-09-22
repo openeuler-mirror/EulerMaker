@@ -28,6 +28,62 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if o.Runner.HeartbeatTimeout != 2*time.Minute || o.Runner.StartupGracePeriod != 5*time.Minute {
 		t.Fatalf("unexpected Runner controller defaults: %+v", o.Runner)
 	}
+	if o.RpmRepo.MaxJobsPerBatch != 20 || o.RpmRepo.MaxInputBytes != 21474836480 || o.RpmRepo.MaterializeRetryLimit != 3 || o.RpmRepo.ArtifactManagerTimeout != 30*time.Second {
+		t.Fatalf("unexpected RpmRepo controller defaults: %+v", o.RpmRepo)
+	}
+}
+
+func TestParseRpmRepoFlags(t *testing.T) {
+	o, err := Parse([]string{
+		"--apiserver=https://api:8443",
+		"--insecure-skip-verify=true",
+		"--rpmrepo-max-jobs-per-batch=5",
+		"--rpmrepo-max-input-bytes=1024",
+		"--rpmrepo-materialize-retry-limit=4",
+		"--artifact-manager-addr=http://artifact-manager:8080",
+		"--artifact-manager-timeout=10s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.RpmRepo.MaxJobsPerBatch != 5 || o.RpmRepo.MaxInputBytes != 1024 || o.RpmRepo.MaterializeRetryLimit != 4 {
+		t.Fatalf("flat RpmRepo limits were not stored: %+v", o.RpmRepo)
+	}
+	if o.RpmRepo.ArtifactManagerAddr != "http://artifact-manager:8080" || o.RpmRepo.ArtifactManagerTimeout != 10*time.Second {
+		t.Fatalf("flat artifact manager flags were not stored: %+v", o.RpmRepo)
+	}
+}
+
+func TestParseRejectsInvalidRpmRepoOptions(t *testing.T) {
+	for _, args := range [][]string{
+		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--rpmrepo-materialize-retry-limit=0"},
+		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--rpmrepo-max-jobs-per-batch=0"},
+		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--rpmrepo-max-input-bytes=0"},
+		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--artifact-manager-timeout=0"},
+	} {
+		if _, err := Parse(args); err == nil {
+			t.Fatalf("invalid RpmRepo options were accepted: %v", args)
+		}
+	}
+}
+
+func TestParseValidatesArtifactManagerAddress(t *testing.T) {
+	for _, address := range []string{"artifact-manager:8080", "ftp://artifact-manager", "http://", "://bad"} {
+		if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--artifact-manager-addr=" + address}); err == nil {
+			t.Fatalf("invalid artifact manager address %q was accepted", address)
+		}
+	}
+	o, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--artifact-manager-addr=https://artifact-manager:8443"})
+	if err != nil {
+		t.Fatalf("valid artifact manager address rejected: %v", err)
+	}
+	if o.RpmRepo.ArtifactManagerAddr != "https://artifact-manager:8443" {
+		t.Fatalf("unexpected artifact manager address %q", o.RpmRepo.ArtifactManagerAddr)
+	}
+	// An unset address keeps the controller inactive instead of failing startup.
+	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true"}); err != nil {
+		t.Fatalf("unset artifact manager address must stay valid: %v", err)
+	}
 }
 
 func TestParseFlatFlagsIntoNestedOptions(t *testing.T) {
