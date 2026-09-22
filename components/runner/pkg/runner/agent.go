@@ -23,7 +23,8 @@ type RunnerAPI interface {
 	CreateRunner(context.Context, RunnerResource) error
 	UpdateRunner(context.Context, RunnerResource) error
 	PatchRunnerStatus(context.Context, string, RunnerStatus) error
-	PatchJobStatus(context.Context, string, string, JobStatus) error
+	GetJob(context.Context, string, string) (*JobResource, error)
+	UpdateJobStatus(context.Context, JobResource, JobStatus) (*JobResource, error)
 	ListAssignedJobs(context.Context, string) (*JobList, error)
 	WatchAssignedJobs(context.Context, string, string) (<-chan WatchEvent, <-chan error)
 }
@@ -39,7 +40,7 @@ type Agent struct {
 	instanceID string
 
 	mu         sync.Mutex
-	activeJobs map[string]struct{}
+	executions map[string]*jobExecution
 	lastRV     string
 }
 
@@ -102,7 +103,6 @@ func NewAgent(cfg Config) (*Agent, error) {
 		logFactory: logFactory,
 		artifacts:  artifactProcessor,
 		cleanup:    cleanupManager,
-		activeJobs: make(map[string]struct{}),
 	}, nil
 }
 
@@ -124,6 +124,9 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	if err := a.register(ctx); err != nil {
 		return err
+	}
+	if err := a.recoverContainers(ctx); err != nil {
+		return fmt.Errorf("recover managed Job containers: %w", err)
 	}
 
 	go a.watchLoop(ctx)
@@ -351,6 +354,9 @@ func (a *Agent) watchLoop(ctx context.Context) {
 }
 
 func (a *Agent) watchOnce(ctx context.Context) error {
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer a.resetLastResourceVersion()
 	if a.lastResourceVersion() == "" {
 		list, err := a.client.ListAssignedJobs(ctx, a.cfg.Name)
 		if err != nil {
@@ -359,13 +365,17 @@ func (a *Agent) watchOnce(ctx context.Context) error {
 		for _, job := range list.Items {
 			a.handleEvent(ctx, WatchEvent{Type: "ADDED", Object: job})
 		}
+		a.reconcileExecutions(ctx)
 		a.setLastResourceVersion(list.Metadata.ResourceVersion)
 	}
-	events, errs := a.client.WatchAssignedJobs(ctx, a.cfg.Name, a.lastResourceVersion())
+	events, errs := a.client.WatchAssignedJobs(watchCtx, a.cfg.Name, a.lastResourceVersion())
 	for {
 		select {
 		case event, ok := <-events:
 			if !ok {
+				if errs == nil {
+					return nil
+				}
 				if err := <-errs; err != nil {
 					return err
 				}
@@ -379,6 +389,9 @@ func (a *Agent) watchOnce(ctx context.Context) error {
 			if ok && err != nil {
 				return err
 			}
+			if !ok {
+				errs = nil
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -386,22 +399,33 @@ func (a *Agent) watchOnce(ctx context.Context) error {
 }
 
 func (a *Agent) handleEvent(ctx context.Context, event WatchEvent) {
-	if event.Type == "DELETED" {
+	job := event.Object
+	if event.Type == "DELETED" || terminalJob(job.Status.Phase) {
+		a.cancelExecution(job.Metadata.UID)
 		return
 	}
-	job := event.Object
 	if job.Status.Runner != a.cfg.Name || job.Status.Phase != "Running" {
 		return
 	}
-	key := jobKey(job)
-	if !a.tryStartJob(key) {
+	execCtx, key, ok := a.registerExecution(ctx, job)
+	if !ok {
 		return
 	}
-	if job.Status.Stage == "PostRun" {
-		go a.resumePostRun(ctx, key, job)
-		return
-	}
-	go a.runJob(ctx, key, job)
+	go func() {
+		current, err := a.client.GetJob(execCtx, job.Metadata.Namespace, job.Metadata.Name)
+		if err != nil || current.Metadata.UID != job.Metadata.UID || current.Status.Phase != "Running" || current.Status.Runner != a.cfg.Name || execCtx.Err() != nil {
+			if err != nil {
+				log.Printf("verify assigned job %s: %v", key, err)
+			}
+			a.finishJob(key)
+			return
+		}
+		if current.Status.Stage == "PostRun" {
+			a.resumePostRun(execCtx, key, *current)
+		} else {
+			a.runJob(execCtx, key, *current)
+		}
+	}()
 }
 
 func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
@@ -411,8 +435,9 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 	status := job.Status
 	status.Stage = "Running"
 	status.StartTime = &now
-	if err := a.client.PatchJobStatus(parent, job.Metadata.Namespace, job.Metadata.Name, status); err != nil {
+	if err := a.writeJobStatus(parent, &job, status); err != nil {
 		log.Printf("update job running status failed: %v", err)
+		return
 	}
 
 	execCtx := parent
@@ -422,17 +447,20 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 		defer cancel()
 	}
 	resultRoot, executionErr := a.executor.Execute(execCtx, job)
+	if parent.Err() != nil {
+		return
+	}
 	status.ResultRoot = resultRoot
 	status.Phase = "Running"
 	status.Stage = "PostRun"
-	status.ArtifactState = "Uploading"
 	if executionErr != nil {
 		status.Message = executionErr.Error()
 	} else {
 		status.Message = ""
 	}
-	if err := a.client.PatchJobStatus(context.Background(), job.Metadata.Namespace, job.Metadata.Name, status); err != nil {
+	if err := a.writeJobStatus(parent, &job, status); err != nil {
 		log.Printf("update job post-run status failed: %v", err)
+		return
 	}
 	a.finalizeArtifacts(parent, job, status, resultRoot, executionErr)
 	a.sendHeartbeat(context.Background())
@@ -454,13 +482,15 @@ func (a *Agent) resumePostRun(parent context.Context, key string, job JobResourc
 
 func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, status JobStatus, resultDir string, executionErr error) {
 	artifactCtx, cancelArtifacts := context.WithTimeout(parent, a.cfg.ArtifactUploadTimeout)
-	manifest, artifactErr := a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
+	_, artifactErr := a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
 	cancelArtifacts()
+	if parent.Err() != nil {
+		return
+	}
 	end := time.Now().UTC()
 	status.EndTime = &end
 	if artifactErr != nil {
 		status.Phase = "Failed"
-		status.ArtifactState = "Failed"
 		if executionErr != nil {
 			status.Message = executionErr.Error() + "; artifact upload: " + artifactErr.Error()
 		} else {
@@ -468,8 +498,6 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 		}
 	} else {
 		status.ResultRoot = "artifact://" + job.Metadata.UID
-		status.ArtifactState = "Completed"
-		status.ArtifactCount = manifest.ArtifactCount
 		if executionErr != nil {
 			status.Phase = "Failed"
 			status.Message = executionErr.Error()
@@ -479,7 +507,7 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 			status.Message = ""
 		}
 	}
-	if updateErr := a.client.PatchJobStatus(context.Background(), job.Metadata.Namespace, job.Metadata.Name, status); updateErr != nil {
+	if updateErr := a.writeJobStatus(parent, &job, status); updateErr != nil {
 		log.Printf("update job final status failed: %v", updateErr)
 	} else if artifactErr != nil {
 		if cleanupErr := a.cleanup.MarkFailure(job); cleanupErr != nil {
@@ -492,20 +520,14 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 	}
 }
 
-func (a *Agent) tryStartJob(key string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, ok := a.activeJobs[key]; ok {
-		return false
-	}
-	a.activeJobs[key] = struct{}{}
-	return true
-}
-
 func (a *Agent) finishJob(key string) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	delete(a.activeJobs, key)
+	execution := a.executions[key]
+	delete(a.executions, key)
+	a.mu.Unlock()
+	if execution != nil {
+		execution.cancel()
+	}
 }
 
 func (a *Agent) lastResourceVersion() string {

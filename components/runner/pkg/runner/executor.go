@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 type Executor interface {
@@ -73,6 +75,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, job JobResource) (string, e
 
 func runCommand(ctx context.Context, dir, command string) error {
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
 

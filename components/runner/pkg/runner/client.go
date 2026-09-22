@@ -100,10 +100,28 @@ func (c *Client) PatchRunnerStatus(ctx context.Context, name string, status Runn
 	return c.doMergePatch(ctx, path, body, nil)
 }
 
-func (c *Client) PatchJobStatus(ctx context.Context, project, name string, status JobStatus) error {
-	body := map[string]any{"status": status}
-	path := apiPrefix + "/projects/" + url.PathEscape(project) + "/jobs/" + url.PathEscape(name) + "/status"
-	return c.doMergePatch(ctx, path, body, nil)
+func (c *Client) GetJob(ctx context.Context, project, name string) (*JobResource, error) {
+	var job JobResource
+	err := c.doJSON(ctx, http.MethodGet, apiPrefix+"/projects/"+url.PathEscape(project)+"/jobs/"+url.PathEscape(name), nil, &job)
+	return &job, err
+}
+
+func (c *Client) UpdateJobStatus(ctx context.Context, job JobResource, status JobStatus) (*JobResource, error) {
+	if job.Metadata.UID == "" || job.Metadata.ResourceVersion == "" {
+		return nil, fmt.Errorf("Job UID and resourceVersion are required")
+	}
+	body := map[string]any{
+		"metadata": map[string]string{"resourceVersion": job.Metadata.ResourceVersion},
+		"status": map[string]any{
+			"phase": status.Phase, "stage": status.Stage, "runner": status.Runner,
+			"startTime": status.StartTime, "endTime": status.EndTime,
+			"resultRoot": status.ResultRoot, "message": status.Message,
+		},
+	}
+	path := apiPrefix + "/projects/" + url.PathEscape(job.Metadata.Namespace) + "/jobs/" + url.PathEscape(job.Metadata.Name) + "/status"
+	var updated JobResource
+	err := c.doMergePatch(ctx, path, body, &updated)
+	return &updated, err
 }
 
 func (c *Client) ListAssignedJobs(ctx context.Context, runner string) (*JobList, error) {

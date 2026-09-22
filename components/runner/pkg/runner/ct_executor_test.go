@@ -120,7 +120,7 @@ func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
 	}
 }
 
-func TestCTExecutorStopsContainerOnContextCancel(t *testing.T) {
+func TestCTExecutorDoesNotCreateContainerAfterContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	container := &fakeContainerRuntime{waitBlock: make(chan struct{})}
 	executor := &CTExecutor{
@@ -140,8 +140,18 @@ func TestCTExecutorStopsContainerOnContextCancel(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}
-	if !container.stopped {
-		t.Fatalf("expected container stop")
+	if container.started || container.created.Image != "" {
+		t.Fatalf("cancelled execution created a container")
+	}
+}
+
+func TestWaitContainerStopsOnCancellation(t *testing.T) {
+	container := &fakeContainerRuntime{waitBlock: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := waitContainer(ctx, container, "id", time.Millisecond)
+	if !errors.Is(err, context.Canceled) || !container.stopped {
+		t.Fatalf("stop=%v err=%v", container.stopped, err)
 	}
 }
 

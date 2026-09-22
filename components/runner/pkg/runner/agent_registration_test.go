@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
@@ -42,8 +43,12 @@ func (f *registrationAPI) UpdateRunner(_ context.Context, runner RunnerResource)
 }
 
 func (*registrationAPI) PatchRunnerStatus(context.Context, string, RunnerStatus) error { return nil }
-func (*registrationAPI) PatchJobStatus(context.Context, string, string, JobStatus) error {
-	return nil
+func (*registrationAPI) GetJob(context.Context, string, string) (*JobResource, error) {
+	return nil, os.ErrNotExist
+}
+func (*registrationAPI) UpdateJobStatus(_ context.Context, job JobResource, status JobStatus) (*JobResource, error) {
+	job.Status = status
+	return &job, nil
 }
 func (*registrationAPI) ListAssignedJobs(context.Context, string) (*JobList, error) { return nil, nil }
 func (*registrationAPI) WatchAssignedJobs(context.Context, string, string) (<-chan WatchEvent, <-chan error) {

@@ -22,11 +22,15 @@ func (f *fakeRunnerAPI) UpdateRunner(context.Context, RunnerResource) error { re
 func (f *fakeRunnerAPI) PatchRunnerStatus(context.Context, string, RunnerStatus) error {
 	return nil
 }
-func (f *fakeRunnerAPI) PatchJobStatus(_ context.Context, _, _ string, status JobStatus) error {
+func (f *fakeRunnerAPI) GetJob(context.Context, string, string) (*JobResource, error) {
+	return nil, os.ErrNotExist
+}
+func (f *fakeRunnerAPI) UpdateJobStatus(_ context.Context, job JobResource, status JobStatus) (*JobResource, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.jobStatuses = append(f.jobStatuses, status)
-	return nil
+	job.Status = status
+	return &job, nil
 }
 func (f *fakeRunnerAPI) ListAssignedJobs(context.Context, string) (*JobList, error) {
 	return &JobList{}, nil
@@ -56,12 +60,11 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	remote := &fakeArtifactRemote{}
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
-		cfg:        Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second},
-		client:     api,
-		executor:   &fakeExecutor{resultRoot: resultDir},
-		artifacts:  &ArtifactProcessor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
-		cleanup:    &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
-		activeJobs: map[string]struct{}{},
+		cfg:       Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second},
+		client:    api,
+		executor:  &fakeExecutor{resultRoot: resultDir},
+		artifacts: &ArtifactProcessor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
+		cleanup:   &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
 	}
 
 	agent.runJob(context.Background(), jobKey(job), job)
@@ -71,11 +74,11 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	if len(statuses) != 3 {
 		t.Fatalf("job status updates = %d, want 3", len(statuses))
 	}
-	if statuses[1].Phase != "Running" || statuses[1].Stage != "PostRun" || statuses[1].ArtifactState != "Uploading" {
+	if statuses[1].Phase != "Running" || statuses[1].Stage != "PostRun" {
 		t.Fatalf("post-run status = %#v", statuses[1])
 	}
 	final := statuses[2]
-	if final.Phase != "Succeeded" || final.ArtifactState != "Completed" || final.ResultRoot != "artifact://uid" || final.ArtifactCount != 2 {
+	if final.Phase != "Succeeded" || final.ResultRoot != "artifact://uid" {
 		t.Fatalf("final status = %#v", final)
 	}
 	if _, err := os.Stat(resultDir); !os.IsNotExist(err) {
@@ -97,14 +100,14 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"},
-		Status:   JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a", ArtifactState: "Uploading", ResultRoot: resultDir},
+		Status:   JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a", ResultRoot: resultDir},
 	}
 	executor := &fakeExecutor{resultRoot: resultDir}
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
 		cfg: Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second}, client: api, executor: executor,
 		artifacts: &ArtifactProcessor{Remote: &fakeArtifactRemote{}, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
-		cleanup:   &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour}, activeJobs: map[string]struct{}{},
+		cleanup:   &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
 	}
 
 	agent.resumePostRun(context.Background(), jobKey(job), job)
@@ -113,7 +116,7 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	}
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	if len(api.jobStatuses) != 1 || api.jobStatuses[0].Phase != "Succeeded" || api.jobStatuses[0].ArtifactState != "Completed" {
+	if len(api.jobStatuses) != 1 || api.jobStatuses[0].Phase != "Succeeded" {
 		t.Fatalf("recovered statuses = %#v", api.jobStatuses)
 	}
 }
