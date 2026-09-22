@@ -386,7 +386,7 @@ func cloneRepository(in *RepositoryRecord) *RepositoryRecord {
 }
 
 func repositoryResponse(record *RepositoryRecord) RepositoryResponse {
-	response := RepositoryResponse{RepositoryUID: record.RepositoryUID, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, RPMs: record.RPMs, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
+	response := RepositoryResponse{RepositoryUID: record.RepositoryUID, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
 	if record.State == RepositoryCreating {
 		response.PollAfterSeconds = 5
 	}
