@@ -9,6 +9,77 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestProjectBuildTargetUniqueness(t *testing.T) {
+	tests := []struct {
+		name    string
+		targets []ebsv1.BuildTarget
+		wantErr bool
+	}{
+		{"duplicate", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-a", Arch: "x86_64"}}, true},
+		{"different options still duplicate", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-a", Arch: "x86_64", PublishFlag: true}}, true},
+		{"different arch", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-a", Arch: "aarch64"}}, false},
+		{"different os", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-b", Arch: "x86_64"}}, false},
+		{"distinct pairs", []ebsv1.BuildTarget{{Os: "a-b", Arch: "c"}, {Os: "a", Arch: "b-c"}}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			project := validProject()
+			project.Spec.BuildTargets = tt.targets
+			for operation, errs := range map[string]field.ErrorList{
+				"create": ValidateProject(project),
+				"update": ValidateProjectUpdate(project, validProject()),
+			} {
+				if !tt.wantErr {
+					if len(errs) != 0 {
+						t.Fatalf("%s: unexpected errors: %v", operation, errs)
+					}
+					continue
+				}
+				if len(errs) != 1 || errs[0].Type != field.ErrorTypeDuplicate || errs[0].Field != "spec.buildTargets[1]" {
+					t.Fatalf("%s: expected duplicate target error, got %v", operation, errs)
+				}
+			}
+		})
+	}
+}
+
+func TestProjectPackageRepoNameUniqueness(t *testing.T) {
+	tests := []struct {
+		name       string
+		repos      []ebsv1.PackageRepo
+		wantFields map[string]field.ErrorType
+	}{
+		{name: "empty list"},
+		{name: "different names with same URL", repos: []ebsv1.PackageRepo{{Name: "a", URL: "https://example.com/repo.git"}, {Name: "b", URL: "https://example.com/repo.git"}}},
+		{name: "duplicate with empty refs", repos: []ebsv1.PackageRepo{{Name: "a"}, {Name: "a"}}, wantFields: map[string]field.ErrorType{"spec.packageRepos[1].name": field.ErrorTypeDuplicate}},
+		{name: "duplicate with different URL and ref", repos: []ebsv1.PackageRepo{
+			{Name: "a", URL: "https://example.com/a.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}},
+			{Name: "a", URL: "https://example.com/b.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+		}, wantFields: map[string]field.ErrorType{"spec.packageRepos[1].name": field.ErrorTypeDuplicate}},
+		{name: "nonadjacent duplicates", repos: []ebsv1.PackageRepo{{Name: "a"}, {Name: "b"}, {Name: "a"}, {Name: "a"}}, wantFields: map[string]field.ErrorType{"spec.packageRepos[2].name": field.ErrorTypeDuplicate, "spec.packageRepos[3].name": field.ErrorTypeDuplicate}},
+		{name: "empty names remain required", repos: []ebsv1.PackageRepo{{}, {}}, wantFields: map[string]field.ErrorType{"spec.packageRepos[0].name": field.ErrorTypeRequired, "spec.packageRepos[1].name": field.ErrorTypeRequired}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			project := validProject()
+			project.Spec.PackageRepos = tt.repos
+			for operation, errs := range map[string]field.ErrorList{
+				"create": ValidateProject(project),
+				"update": ValidateProjectUpdate(project, validProject()),
+			} {
+				if len(errs) != len(tt.wantFields) {
+					t.Fatalf("%s: unexpected errors: %v", operation, errs)
+				}
+				for _, err := range errs {
+					if want, ok := tt.wantFields[err.Field]; !ok || err.Type != want {
+						t.Errorf("%s: unexpected error: %v", operation, err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestValidateProject(t *testing.T) {
 	tests := []struct {
 		name       string

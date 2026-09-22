@@ -109,8 +109,8 @@ type ProjectSpec struct {
 | `description` | string | 否 | 项目描述 |
 | `defaultRef` | GitRef | 否 | 默认 spec 引用，仅允许 `Branch` / `Tag`；整体为空时默认 `{type: Branch, value: master}`，不接受旧字符串形式 |
 | `buildPayload` | string | 否 | 构建环境宏，YAML 格式 |
-| `buildTargets` | []BuildTarget | 是 | 构建目标列表 |
-| `packageRepos` | []PackageRepo | 否 | 包仓库列表 |
+| `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；创建和更新时 `os + arch` 组合必须唯一，其余配置不同也不能重复 |
+| `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
 | `bootstrapRepo` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
 
 ### ProjectStatus
