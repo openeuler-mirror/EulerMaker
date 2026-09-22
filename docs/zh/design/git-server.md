@@ -170,8 +170,7 @@ type ErrorResponse struct {
 | HTTP 状态码 | code | 适用场景 |
 |------------|------|----------|
 | `400 Bad Request` | `InvalidRequest` | JSON、Content-Type、字段、URL 或命令请求格式非法 |
-| `401 Unauthorized` | `Unauthorized` | 未提供或无法验证客户端身份 |
-| `403 Forbidden` | `Forbidden` | 身份有效但无权调用对应接口 |
+| `403 Forbidden` | `Forbidden` | 请求的 Git 命令不在允许列表中，不涉及调用方身份鉴权 |
 | `404 Not Found` | `RepositoryNotFound` | 仓库从未出现、已删除或尚无可用本地副本 |
 | `409 Conflict` | `RepositoryConflict` | 最终路径被异常文件占用或当前文件系统状态与请求冲突 |
 | `413 Content Too Large` | `RequestTooLarge` | HTTP 请求正文超过限制 |
@@ -179,7 +178,7 @@ type ErrorResponse struct {
 | `503 Service Unavailable` | `NotReady` | 服务尚未 ready |
 | `503 Service Unavailable` | `QueueClosed` | 关闭期间无法记录新的异步意图 |
 
-同一请求只能写入一次响应。handler 在服务未 ready 时不读取或修改 RepositoryState，直接返回 `NotReady`。认证和授权在 JSON 解码及 URL 处理之前完成，避免未授权调用利用接口探测仓库状态。
+同一请求只能写入一次响应。handler 在服务未 ready 时不读取或修改 RepositoryState，直接返回 `NotReady`。
 
 ### 4.1 请求同步
 
@@ -242,7 +241,7 @@ Content-Type: application/json
 }
 ```
 
-合法请求加入队列后返回 `202 Accepted`，响应只包含 `key`。同步和删除使用相同仓库队列串行执行。删除不存在的仓库直接返回 `204 No Content`。只有运维身份可以调用删除接口。
+合法请求加入队列后返回 `202 Accepted`，响应只包含 `key`。同步和删除使用相同仓库队列串行执行。删除不存在的仓库直接返回 `204 No Content`。
 
 sync 和 status 使用统一的状态响应字段；尚无成功同步结果时省略 `clone_url` 和 `sync_time`：
 
@@ -326,16 +325,16 @@ stdout 和 stderr 按原始字节捕获，但 JSON 字符串必须是合法 UTF-
 - 限制参数数量、参数长度和输出大小；
 - 拒绝包含 NUL 的参数；
 - 仓库不存在返回 `404 Not Found`；
-- 命令不允许返回 `403 Forbidden`；
+- 命令不在允许列表中时返回 `403 Forbidden`；
 - 执行失败返回 `422 Unprocessable Entity`；
 - 输出超过限制返回 `413 Content Too Large`；
 - 超时返回 `504 Gateway Timeout`。
 
-`/command` 在 Git 子进程成功启动后使用 `CommandResponse` 表达 `200`、`422`、`413` 和 `504`，这是统一错误结构的唯一例外；对应语义分别为成功、`CommandFailed`、`OutputLimitExceeded` 和 `CommandTimeout`。请求校验失败、仓库不可用、认证授权失败或子进程无法启动时仍返回通用 `ErrorResponse`。因此 `413` 对请求正文使用 `ErrorResponse{code=RequestTooLarge}`，对已经运行的命令输出超限使用 `CommandResponse`，两者可由响应结构区分。
+`/command` 在 Git 子进程成功启动后使用 `CommandResponse` 表达 `200`、`422`、`413` 和 `504`，这是统一错误结构的唯一例外；对应语义分别为成功、`CommandFailed`、`OutputLimitExceeded` 和 `CommandTimeout`。请求校验失败、仓库不可用、命令不在允许列表中或子进程无法启动时仍返回通用 `ErrorResponse`。因此 `413` 对请求正文使用 `ErrorResponse{code=RequestTooLarge}`，对已经运行的命令输出超限使用 `CommandResponse`，两者可由响应结构区分。
 
 后续可以将其拆成 resolve、tree 和 blob 接口，但不作为首版前置条件。
 
-`/command` 仅供 EulerMaker 内部受信任组件调用，不接入 ebs-gateway，也不向普通用户或集群外网络开放。首版接受白名单 Git 命令的部分参数可能访问仓库附加信息或尝试写入本地文件的风险，不实现逐命令参数语法解析；仍必须保留命令名白名单、不经过 shell、固定工作目录、非 root 运行、超时、参数数量及长度限制和输出限制，并通过客户端认证及 NetworkPolicy 限制调用来源。容器除 `${dataDir}` 和必要临时目录外不得拥有可写路径。若以后向非受信任调用方开放，必须先增加逐命令参数校验，或将接口替换为 resolve、tree、blob 等结构化只读 API。
+`/command` 仅供 EulerMaker 内部受信任组件调用，不接入 ebs-gateway，也不向普通用户或集群外网络开放。首版接受白名单 Git 命令的部分参数可能访问仓库附加信息或尝试写入本地文件的风险，不实现逐命令参数语法解析；仍必须保留命令名白名单、不经过 shell、固定工作目录、非 root 运行、超时、参数数量及长度限制和输出限制，并通过 NetworkPolicy 限制调用来源。容器除 `${dataDir}` 和必要临时目录外不得拥有可写路径。若以后向非受信任调用方开放，必须先增加逐命令参数校验，或将接口替换为 resolve、tree、blob 等结构化只读 API。
 
 ## 5. 同步逻辑
 
@@ -498,7 +497,7 @@ Worker 每次只终结一次队列项：成功、不可重试失败、重试耗�
 
 SSH 使用私钥和 `known_hosts`，不得关闭 host key 校验。HTTPS 使用系统 CA 或挂载的 CA bundle。URL 中禁止携带密码或 token。
 
-HTTP API 只在 EulerMaker 内部网络开放。生产环境使用 TLS 和客户端认证；开发环境可以显式关闭 TLS 校验。Git Server 不接入 ebs-gateway 的普通用户 API。
+Git Server 是内部服务，HTTP API 不执行调用方身份认证或角色授权，包括 sync、status、delete 和 `/command`。服务只在 EulerMaker 受信任内部网络开放，通过网络隔离和 NetworkPolicy 限制访问，不接入 ebs-gateway 的普通用户 API，也不得暴露到公网。下文凭据配置仅用于 Git Server 访问远端 Git 仓库，不用于认证 API 调用方。
 
 服务不配置远端 host 白名单，格式合法且能够连接的远端地址均可使用。因此管理 API 必须只对受信任的内部组件开放，不能允许普通用户直接提交任意仓库同步请求。
 

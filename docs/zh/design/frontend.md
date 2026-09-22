@@ -18,7 +18,7 @@ EulerMaker 已具备 Project、Snapshot、Build、BuildInfo、RpmRepo、BuildRes
 
 - 匿名用户可以浏览 Project 及其公开构建资源。
 - 注册用户可以创建 Project，管理自己拥有或参与的 Project，并发起构建。
-- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 BuildResource 和查看 Runner 运行状态。
+- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 BuildResource、查看 Runner 运行状态并执行驱逐或取消驱逐。
 - Admin 可以管理普通 User 和 MachineAccount，并具备系统级资源能力。
 - 前端能力模型与 System 身份保持兼容，但 System 是受信任自动化身份，不提供账号密码登录入口。
 - 用户可以查看 Build、Job、RPM 仓库和产物状态，并实时查看 Job 日志。
@@ -28,7 +28,7 @@ EulerMaker 已具备 Project、Snapshot、Build、BuildInfo、RpmRepo、BuildRes
 首版不包括：
 
 - 在浏览器中编辑任意资源 YAML 或 JSON。
-- 修改 Job、Runner 或控制器维护的 `status`。
+- 提供任意 Job、Runner 或控制器维护的 `status` 编辑器；Runner 驱逐和取消驱逐使用下文定义的受控状态操作。
 - 编排流水线、审批流和通知中心。
 - 多集群切换。
 - 在前端保存 Git、仓库或 Runner 凭据。
@@ -72,7 +72,7 @@ Project、资源名称、页签、搜索条件、筛选条件和当前页应进�
 |------|-------|----------|
 | 匿名用户 | 无 | 浏览公开 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job |
 | 普通用户 | `ebs:user` | 创建 Project；操作自己拥有或参与的 Project |
-| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 BuildResource；只读查看 Runner |
+| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 BuildResource 和 Runner，支持驱逐与取消驱逐 |
 | 管理员 | `ebs:admin` | 管理非管理员 User 和 MachineAccount；具备系统级业务资源能力 |
 | 系统身份 | `ebs:system` | 受信任自动化调用方；前端不提供登录入口 |
 
@@ -102,7 +102,7 @@ ebs.io/member-user.<username>: "true"
 | 读取 BuildResource | 否 | 所属 Project | 所属 Project | 全部 | 全部 | 全部 |
 | 修改 BuildResource | 否 | 否 | 否 | 是 | 是 | 是 |
 | 查看 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
-| 管理 Runner | 否 | 否 | 否 | 否 | 是 | 是 |
+| 管理 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
 | 管理 User/MachineAccount | 否 | 否 | 否 | 否 | 否 | 是 |
 
 按钮是否显示由前端能力函数统一判断，例如 `canEditProject(identity, project)`；页面不得散落 scope 字符串比较。服务端返回 403 时，以服务端结果为准并刷新当前资源。
@@ -243,7 +243,12 @@ Runner 页面展示：
 - 地址、操作系统、内核、运行时和 Agent 版本。
 - labels、taints 和 conditions。
 
-Ops 只有只读能力。System/Admin 的调度开关或 taint 修改必须按照 Gateway 允许字段生成 Patch，不提供直接 status 编辑入口。
+Ops 和 Admin 均可进入运维页面查看 Runner，并执行驱逐和取消驱逐；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、删除、调度开关或 taint 编辑入口。System 保留 API 管理权限，但没有 Web 登录入口。
+
+- 非 `Evicted` Runner 显示“驱逐”，`Evicted` Runner 显示“取消驱逐”，操作均需二次确认。
+- 提交前 GET 最新 Runner，确认 UID 与选中对象一致，并携带最新 resourceVersion PATCH `/runners/{name}/status`；驱逐写 `Evicted`，取消驱逐写 `Offline`，等待新心跳恢复 `Online`，不修改 `spec.unschedulable`。
+- 最新对象已驱逐或已解除驱逐时，对应操作不重复写入；UID 不一致时提示冲突。404、403、409 等错误显示在确认弹窗中，不自动重放写请求。
+- 不提供任意 status 编辑入口；按钮权限只用于交互，最终授权由 Gateway 执行。
 
 ### 5.8 用户与 MachineAccount 管理
 
@@ -433,7 +438,7 @@ ES-backed 资源使用 `metadata.continue`，不使用页码换算 offset。分�
 |------|----------|
 | Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResource | 用户主动刷新；运行中详情可每 10 秒轮询 |
 | Job | Project 页面每 5 秒轮询；后续可接入 Project Job watch |
-| Runner | Ops 每 10 秒轮询；System/Admin 后续可使用 watch |
+| Runner | Ops/Admin 页面进入时加载，手动刷新及驱逐/取消驱逐成功后重新加载；当前不自动轮询或 watch |
 | Job 日志 | Range 获取历史内容，SSE 接收增量 |
 
 页面隐藏时降低普通资源轮询频率。相同资源的上一请求未完成时不发起下一轮。路由离开时通过 `AbortController` 取消请求。
@@ -631,7 +636,7 @@ GET /readyz
 2. 注册、登录、刷新和过期退出。
 3. User 创建 Project、添加成员、创建 Snapshot 和 Build。
 4. Member 可以修改子资源但不能删除。
-5. Ops 相对于普通用户可以额外管理 BuildResource，并只读查看 Runner。
+5. Ops/Admin 可查看 Runner、驱逐和取消驱逐；覆盖普通用户路由拒绝、确认弹窗、UID 变化、resourceVersion 冲突和操作后刷新。Ops 相对于普通用户还可以额外管理 BuildResource。
 6. Admin 管理普通 User 和 MachineAccount。
 7. Build 中止、409 冲突和 429 限流。
 8. Job 日志历史加载、SSE 增量、断线补齐和完成下载。

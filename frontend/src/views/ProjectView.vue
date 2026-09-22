@@ -480,7 +480,8 @@ const canStartBuild = computed(() => {
 const canAbortJobs = computed(() => {
   const identity = session.session?.identity;
   if (!identity || identity.type === 'service') return false;
-  return identity.type === 'ops' || identity.type === 'admin' || canStartBuild.value;
+  const labels = project.value?.metadata?.labels || {};
+  return labels['ebs.io/owner-user'] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === 'true';
 });
 const buildConfigurationMissing = computed(() =>
   !project.value?.spec?.buildTargets?.length || !project.value?.spec?.packageRepos?.some((repo) => repo.name),

@@ -545,7 +545,7 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 
 - Project owner：只读自己拥有的 Project 下的对象；
 - Project member：只读自己作为 member 的 Project 下的对象；
-- BuildInfo Controller MachineAccount：只读；
+- BuildInfo Controller 内部服务身份：只读；
 - 运维角色：跨 Project 读写；
 - Scheduler 和 Runner：无需读取该对象。
 
