@@ -3,6 +3,12 @@ import zhCN from "@/i18n/messages/zh-CN";
 type MessageShape<T> = { [K in keyof T]: T[K] extends string ? string : MessageShape<T[K]> };
 
 export default {
+  jobControl: {
+    title: 'Build jobs', name: 'Job name', phase: 'Phase', all: 'All', next: 'Next page', load: 'Load jobs',
+    abort: 'Abort job', reason: 'Reason (optional)', hint: 'Only this job is aborted, not the entire build. Execution stops after the runner receives the notification.',
+    aborted: 'Job aborted. Execution stops when the runner receives the notification.', finished: 'The job already finished; its result was not changed.',
+    unknown: 'Abort is not confirmed and the job is still nonterminal. Refresh to confirm or submit again.',
+  },
   app: {
     title: "EulerMaker",
     description: "EulerMaker package build system console",

@@ -39,6 +39,7 @@
         <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong>{{ resourceValue(jobs) }}</strong><small>{{ t("project.jobsHint") }}</small></div></article>
       </section>
 
+      <ProjectJobs :project="project.metadata?.name || ''" :can-abort="canAbortJobs" />
       <section class="detail-grid">
         <article class="content-panel">
           <div class="section-heading"><div><h2>{{ t("project.info") }}</h2></div></div>
@@ -349,6 +350,7 @@ import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildConf } from "@/composables/useBuildConf";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
+import ProjectJobs from "@/components/ProjectJobs.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
 
@@ -474,6 +476,11 @@ const canStartBuild = computed(() => {
   if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
   const labels = project.value?.metadata?.labels || {};
   return labels["ebs.io/owner-user"] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === "true";
+});
+const canAbortJobs = computed(() => {
+  const identity = session.session?.identity;
+  if (!identity || identity.type === 'service') return false;
+  return identity.type === 'ops' || identity.type === 'admin' || canStartBuild.value;
 });
 const buildConfigurationMissing = computed(() =>
   !project.value?.spec?.buildTargets?.length || !project.value?.spec?.packageRepos?.some((repo) => repo.name),

@@ -1,6 +1,8 @@
 <template>
   <section class="page-heading"><div><h1>{{ t("operations.title") }}</h1><p>{{ t("operations.hint") }}</p></div><div class="page-actions"><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="runnersLoading" @click="loadRunners"><Refresh /></button></div></section>
   <BuildConfEditor />
+  <section class="content-panel operations-section"><form class="operations-project-form" @submit.prevent="jobProject = jobProjectInput"><label class="field"><span>{{ t('operations.projectName') }}</span><input v-model.trim="jobProjectInput" required /></label><button class="secondary-button">{{ t('jobControl.load') }}</button></form></section>
+  <ProjectJobs v-if="jobProject" :key="jobProject" :project="jobProject" :can-abort="canManageRunners" />
   <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
 
   <section class="content-panel operations-section">
@@ -38,10 +40,13 @@ import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildResourceSpecEditor from "@/components/BuildResourceSpecEditor.vue";
 import BuildConfEditor from "@/components/BuildConfEditor.vue";
+import ProjectJobs from "@/components/ProjectJobs.vue";
 import type { BuildResource, Runner } from "@/types";
 
 const { t } = useI18n();
 const session = useSessionStore();
+const jobProjectInput = ref('');
+const jobProject = ref('');
 const canManageRunners = computed(() => session.role === "admin" || session.role === "ops");
 const evicting = ref<Runner | null>(null);
 const evictionSaving = ref(false);
