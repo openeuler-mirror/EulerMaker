@@ -367,6 +367,8 @@ status:
 
 **批次构成**
 
+Job 主动中止以 apiserver 持久化的终态为准：Aborted 即使已有 Completed Manifest，也不入候选、不加入 `sourceJobUIDs`，继续扫描其它成功 Job；单个 Job 中止不等同于父 Build 中止，不触发 `BuildAborted` 发布失败。Succeeded 先写入时 `/abort` 不改变其结果，仍按正常规则归档。终态 status 不可变，因此正常 `/abort` 不会使已冻结的成功输入变为 Aborted，也不新增批次回滚路径。最终发布仍遵循 BuildInfo Completed 和发布策略。
+
 - 候选按 `creationTimestamp`、`metadata.name`、`metadata.uid` 升序稳定排序；
 - 同一批次内每个 `specName` 至多选择一个 Job，其余留到下一批；
 - 每个候选的物化输入字节数按 Artifact Manager 的物化输入口径计算，与其保持一致；
@@ -740,6 +742,8 @@ buildinfos:      get
 ## 十四、测试计划
 
 ### 14.1 单元测试
+
+- Job 中止与成功并发：仅已持久化为 Succeeded 的 Job 可入选；Aborted + Completed Manifest 不查询产物、不入选、不加入 `sourceJobUIDs`，不阻止扫描其它成功 Job，也不写 `BuildAborted`。
 
 - Skipped：轮询与发布列表选择器均包含 `status.release.phase!=Skipped`；残留队列键直接调谐时只读取 RpmRepo 即结束，不读取 Build/BuildInfo/Job、不调用 Artifact Manager、不写 status、不入队发布键。发布列表的旧快照在最新 GET 返回 Skipped 时跳过，不进行激活。覆盖有基线、无基线、Build 已 Aborted、重启与重复入队，断言版本指针不变、条件与指标不变。
 

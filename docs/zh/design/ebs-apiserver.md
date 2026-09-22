@@ -561,6 +561,36 @@ dry-run 只检查现有占用和历史门禁，不创建占用、不写 Build，
 - 终态与删除释放使用持久化成功后的回调，不能复用“删除前必须成功”的清理 hook；扫描器由 server 生命周期管理。Build Controller 不新增 ES 权限或释放调用。
 - 测试至少覆盖：两个 apiserver 同目标同时创建仅一方成功、不同目标并行、single 绕过、默认 full、dry-run 无写入、历史门禁拒绝、各步骤崩溃与 Unknown、迟到写入不误释放、Reserved 清理与 Creating CAS 竞争、终态不可回退、删除前置条件失败不释放、释放 CAS 防误删、多实例重复扫描和重启恢复。
 
+## Job 主动中止
+
+### 接口与状态转换
+
+```http
+POST /apis/ebs/v1/projects/{project}/jobs/{name}/abort
+Content-Type: application/json
+
+{"uid":"<Job metadata.uid>","reason":"人工停止本次任务"}
+```
+
+- 请求体只接受 `uid`（必填、非空）和 `reason`（可选，最多 1024 个 Unicode 字符）；不接受目标 phase、runner 或操作者字段。格式错误返回 400，字段校验错误返回 Kubernetes Status 422。操作者从 gateway 注入的可信身份取得，不能信任请求体。
+- 返回 200 和当前完整 Job。Pending/Running 原子改为 Aborted，`endTime` 使用服务端当前时间，`message` 使用 reason（空时为 `job aborted by user`）；保留 spec、metadata、runner、startTime、stage 及产物字段。不增加 Aborting phase。
+- 已为 Aborted/Succeeded/Failed 时幂等返回当前对象，不改终态、message 或 endTime。未知/空 phase 返回 409，不推导状态。对象不存在返回 404；UID 不同返回 409，防止同名重建后误中止新对象。
+- 使用 Job 所在 etcd 存储的原子更新/CAS，不使用无前提的 GET 后覆盖。每次冲突重读后重新核验 UID、phase，再决定返回终态或写 Aborted；有界重试仍冲突时返回 409。成功完成与中止并发时，先持久化的终态获胜；绑定先成功则中止保留绑定的 runner，反之绑定不得覆盖 Aborted。
+- 请求超时属于结果未知：调用方 GET 同名 Job 并核验 UID，终态则展示实际结果；仍非终态可使用相同 UID 重试此幂等接口，不以超时宣告中止失败或成功。
+
+### 终态保护与写入方契约
+
+- 本能力实施时补齐服务端 Job 终态保护：旧 phase 为 Succeeded/Failed/Aborted 时，禁止任何 status 变化，语义等价的重复写入允许；拒绝返回 422。该限制覆盖 `/status` 的 PUT/PATCH，不允许通过普通 PUT/PATCH 绕过（普通更新保留旧 status）。不扩展为完整的非终态迁移矩阵。
+- Scheduler、Runner、Job Controller 写 status 必须携带读取对象的 resourceVersion；缺少前提不得执行无条件更新。Conflict 后 GET 最新对象并重新判断，不只换 resourceVersion 重放旧 status；若最新对象已终态，停止状态推进。
+- `/abort` 是 apiserver 自有的原子状态操作，不要求前端先取最新 resourceVersion；UID 前提不可省略。普通 Job 写接口不能替代 `/abort` 绕过 gateway 的授权。
+- Aborted 与 endTime 表示逻辑中止，不是进程已停止的证明。Runner 通过既有 Watch 异步停止执行，见 [Runner 主动中止](runner.md#86-job-主动中止)。Runner 离线时可能继续执行；本接口不承诺物理停止时限，不负责级联中止父 Build、BuildInfo 或其它 Job。
+
+### 验证要求
+
+- Pending/Running 中止、重复中止、已有三种终态不变、404、UID 不匹配、非法请求和原因长度边界。
+- 中止与绑定、Runner 完成、Job Controller 写 Failed 并发；终态第一写入获胜，PUT/PATCH 均不能覆盖终态。
+- 中止响应丢失后的 GET 确认和同 UID 重试；返回对象保留 runner，使已分配 Job 的 Watch 能感知 Aborted。
+
 ## 启动参数
 
 入口为：

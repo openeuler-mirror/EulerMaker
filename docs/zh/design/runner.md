@@ -331,13 +331,11 @@ type JobStatus struct {
     StartTime          metav1.Time `json:"startTime,omitempty"`
     EndTime            metav1.Time `json:"endTime,omitempty"`
     ResultRoot         string      `json:"resultRoot,omitempty"`
-    ArtifactState      string      `json:"artifactState,omitempty"`
-    ArtifactCount      int         `json:"artifactCount,omitempty"`
     Message            string      `json:"message,omitempty"`
 }
 ```
 
-`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{jobUID}`，不能向其他组件公开 Runner 容器内的本地路径。`ArtifactState` 使用 `Uploading`、`Completed`、`Failed` 或 `NotRequired`：存在必需日志或产物时，在进入 `PostRun` 前设置为 `Uploading`；清单完成后设置为 `Completed`；没有需归档内容时设置为 `NotRequired`；必需上传或封账最终失败时设置为 `Failed`。`ArtifactCount` 必须直接使用清单完成响应，不能由 Runner 自行重算或通过 Artifact 列表推断。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
+`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{jobUID}`，不能向其他组件公开 Runner 容器内的本地路径。Job 通过 `phase/stage` 表达执行进度，产物状态和文件数量由 Artifact Manager 的 Manifest 提供，不在 Job Status 中重复记录。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 
@@ -427,8 +425,8 @@ runner agent 应把容器生命周期映射到 Job status，而不是在 `Runner
 |----------|-----------------|
 | 容器创建前 | `phase=Running, stage=Running` |
 | 容器运行中 | 保持 `phase=Running, stage=Running` |
-| 容器退出、日志采集到 EOF | `phase=Running, stage=PostRun, artifactState=Uploading` |
-| 日志、必需产物和清单封账完成 | `phase=Succeeded, stage=PostRun, artifactState=Completed` |
+| 容器退出、日志采集到 EOF | `phase=Running, stage=PostRun` |
+| 日志、必需产物和清单封账完成 | `phase=Succeeded, stage=PostRun` |
 | 容器退出码非 0 | 先尝试封账已有日志，再置 `phase=Failed` 并保留最后到达的 stage；已进入后处理时为 `PostRun` |
 | 执行超时 | 终止容器并尝试封账已有日志，再置 `phase=Failed`，stage 保留为 `Running` 或 `PostRun` |
 
@@ -544,9 +542,9 @@ type LogUploadCheckpoint struct {
 - 单文件上限默认 25 GiB，单 Job 普通产物总大小上限默认 100 GiB，文件数量上限默认 10000，并发上传数默认 4；任一限制必须不高于 Artifact Manager 对应部署限制，超过限制时在上传任何新文件前终止扫描并将 Job 标记为 Artifact 失败。
 - 扫描结果必须先完整排序并校验，再开始上传。排序键是规范化后的 `relativePath`，保证重试、回执和 Manifest 顺序确定。
 - 封账日志始终以 `relativePath=logs/container.log`、`category=log`、`required=true` 加入该 Job 的唯一 Manifest。普通产物不得使用 `logs/container.log`，发生路径冲突时 Job 失败。
-- 构建成功但结果目录没有普通文件时，仍提交只包含日志的 Manifest；因此首版已执行的 `ct` Job 不使用 `artifactState=NotRequired`。该状态保留给未来明确无需日志和产物的执行类型。
+- 构建成功但结果目录没有普通文件时，仍提交只包含日志的 Manifest。
 - Manifest 完成请求结果未知时，Runner 查询相同 project 和 jobUID 的唯一清单；服务端已返回相同 Completed 清单时继续写回 Job，否则原样重试完成请求。Manifest 完成接口直接以 Job UID 保证幂等，不使用独立幂等键。
-- 任何必需普通产物上传或 Manifest 封账最终失败都会令 `artifactState=Failed` 且 Job `phase=Failed`；已经成功上传的 Artifact 和本地回执保留用于幂等恢复，不提交缺少文件的降级清单。
+- 任何必需普通产物上传或 Manifest 封账最终失败都会令 Job `phase=Failed`，并在 `message` 中记录原因；已经成功上传的 Artifact 和本地回执保留用于幂等恢复，不提交缺少文件的降级清单。
 
 ### 8.5 上传回执与本地文件清理
 
@@ -560,7 +558,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 普通产物的幂等键固定为 `{jobUID}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
 
-上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed, artifactState=Failed`，再写入失败清理标记；失败现场从该状态写回时间起保留 `--artifact-failed-retention`，默认 24 小时。最终状态写回失败或结果仍可能恢复时不得启动保留期。到期删除意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
+上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed` 并记录失败原因，再写入失败清理标记；失败现场从该状态写回时间起保留 `--artifact-failed-retention`，默认 24 小时。最终状态写回失败或结果仍可能恢复时不得启动保留期。到期删除意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
 
 该顺序允许在任意点崩溃后恢复：
 
@@ -576,6 +574,36 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 `${rootDir}/work/{project}/{jobUID}` 中的 payload 和临时执行文件在容器退出且不再需要恢复执行后清理，不受 Artifact 保留期影响。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobUID}`、`${rootDir}/logs/{project}/{jobUID}` 和 `${rootDir}/uploads/{project}/{jobUID}`。其他终态默认使用 `--artifact-failed-retention=24h`，到期后删除上述目录及失败清理标记；不得在保留期内按单文件提前删除。所有 Job 本地目录都使用 UID 而不是可复用的 Job 名。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
 
+### 8.6 Job 主动中止
+
+中止 API 和终态第一写入获胜规则以 [apiserver Job 主动中止](ebs-apiserver.md#job-主动中止) 为准。Runner 不调用 `/abort`，只消费服务端已经持久化的终态并执行停止/清理。
+
+#### 感知与任务注册
+
+- 继续使用 `/apis/ebs/v1/runners/{runner}/jobs` 的 List/Watch，服务端仅按 `status.runner` 过滤，不能增加只看 Running 的过滤条件。收到 Aborted 时必须处理，不能沿用“非 Running 一律忽略”的逻辑。
+- 活动任务按 Job UID 记录 namespace/name、执行取消函数、产物上传取消函数、结束信号及已观察到的终态。注册、记录终态和移除条目由同一互斥锁保护；取消函数幂等，取消和等待退出在锁外执行，不在锁内调用 API 或容器运行时。
+- 启动路径先注册可取消的活动条目，再 GET 当前 Job，核验 UID、runner 和 phase；仅同 UID、绑定本 Runner 且 Running 时继续。观察到终态即记录并取消。旧 Running 事件不得覆盖该活动条目已记录的终态或再次启动同一 UID。
+- 启动前状态回写也使用 GET 返回的 resourceVersion；失败先确认最新状态，不得在未知结果下直接执行。执行器在创建/启动外部进程前检查 context，启动期间到达的取消同样进入 Stop/Kill 清理。
+- GET 与真实进程启动之间不可能形成跨系统事务；接受中止后短暂启动再停止的窗口，不承诺“API 中止成功后绝不执行任何指令”。
+
+#### 停止与状态回写
+
+- Aborted 事件取消执行和普通产物上传（包含 PostRun），CT 执行器依次 Stop、等待既有宽限期、必要时 Kill；shell 执行器需终止整个任务进程组，不能只终止启动 shell 而遗留子进程。
+- 运行时停止/清理使用独立、有上限的 context；Stop/Kill/Wait 都必须有退出边界，不能因后台 Wait 永不返回而永久阻塞。停止失败记录结构化告警，并保留可重试的本地任务/容器记录；实际进程未退出前不释放本地执行占用。
+- 日志按 8.3 的独立 `--log-drain-timeout` 尽力排空封账；不启动新的普通产物扫描/上传。已经提交的远端上传无法保证撤销，已完成 Manifest 不删除；RpmRepo Controller 按 Job phase 排除 Aborted 输入，不能只凭 Manifest Completed 纳入新批次。对已经冻结/发布的批次不承诺回滚。
+- Runner 的 PostRun 与最终状态写入统一携带 resourceVersion；Conflict 或 Unknown 后 GET 确认，发现任一终态即停止全部业务 status 写入，不能将 Aborted 覆盖为 Failed/Succeeded，也不改 endTime/message/产物字段。终态之后的日志清理只更新本地状态或 Artifact Manager，不更新 Job status。
+- 超时引发的执行失败仍按原执行失败流程写 Failed；用户中止以服务端 Aborted 为准，取消异常本身不决定 Job 必须为 Failed。最终写入与 `/abort` 并发时接受服务端先持久化的终态。
+
+#### 断线与重启恢复
+
+- Watch 重连先完整 List 并记录 resourceVersion，再 Watch；List 中终态 Job 也用于取消本地活动任务，而不只是筛选可启动任务。完整列表未出现的本地活动项逐一 GET：404 或 UID 不同则停止旧执行，读取失败保留并重试，不把一次 List 缺项当成确定删除。
+- Runner 重启先扫描带 Runner、Project、Job name 和 Job UID 标签的受管容器，将这些标签作为持久化执行身份，与服务端核对；不得仅依赖内存执行表。已 Aborted/其它终态或已删除的旧任务停止并清理，不恢复执行或普通产物上传；不能误杀非本 Runner 管理的容器。当前 CT 执行器不重接旧进程：确认移除受管旧容器后才启动 List/Watch，由最新 Running/PostRun 状态决定重新执行或继续上传；清理无法确认时启动失败，不接收新任务。
+- Runner 失联期间无法立即感知中止。Scheduler 可能在 Job 逻辑终态后释放账面占用，但 Runner 必须在实际退出前保留本地占用，并继续执行本地容量准入，避免旧进程尚未退出就超额运行新 Job。
+
+#### 测试
+
+覆盖 Pending 未执行即中止、Running/启动中/PostRun 中止、取消早于启动确认、重复事件、旧 Running 事件、Watch 重连、Runner 重启遗留容器、进程组清理、Stop/Kill 超时、日志排空超时、上传已完成，以及中止与最终状态写入并发。
+
 ## 九、故障处理
 
 | 场景 | 处理方式 |
@@ -588,7 +616,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | 本地 instance ID 丢失 | 不接管已有同名 Runner；恢复 ID 文件或由管理员删除旧对象后重新注册 |
 | Job 执行失败 | 先排空并封账已有日志，再更新 `Job.status.phase=Failed` 和 `message` |
 | Job 超时 | 终止执行进程并尝试封账已有日志，再更新 Job 为 Failed 或 Aborted |
-| 本地日志不可恢复 | 保留诊断文件，将 `artifactState=Failed`，Job 不得进入 Succeeded |
+| 本地日志不可恢复 | 保留诊断文件，Job 写入 Failed 并记录原因，不得进入 Succeeded |
 | 日志已封账但 Job 状态更新失败 | 保留日志完成回执和 spool，按 resourceVersion 重新读取并幂等更新 Job，不重复创建日志 Artifact |
 | 上传成功但立即清理失败 | 记录告警并异步重试，不改变 Job/Artifact 成功状态 |
 | 失败清理标记尚未到期 | 保留 results、日志和上传回执，不提前回收 |
@@ -681,7 +709,7 @@ secrets:
 | 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
 | Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、完成结果未知查询和内容冲突处理 |
 | 本地清理 | 成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、Runner 重启恢复、失败保留期内不删除、24 小时到期统一删除、结果未知未终态不计时 |
-| Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Succeeded；上传失败时 ArtifactState 和 Message 正确 |
+| Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Succeeded；上传失败时 phase 为 Failed 且 message 记录原因 |
 | 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
 
 端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact 和普通 Artifact，Job 的唯一 Manifest 包含全部必需项，下载正文与本地源文件一致，最终 Job 的 Artifact 状态和数量直接使用 Manifest 完成响应。
