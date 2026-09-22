@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,8 +129,10 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return resultRoot, err
 	}
 
-	containerName := containerName(project, jobName)
-	_ = container.Remove(context.Background(), containerName)
+	containerName := containerName(project, executionID)
+	if err := ctx.Err(); err != nil {
+		return resultRoot, err
+	}
 
 	containerSpec := ContainerSpec{
 		Name:        containerName,
@@ -140,6 +143,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		Env:         spec.Env,
 		Mounts:      containerMounts(spec.Mounts, workDir, resultRoot),
 		Labels: map[string]string{
+			"ebs.io/job-uid": job.Metadata.UID,
 			"ebs.io/project": project,
 			"ebs.io/job":     jobName,
 			"ebs.io/runner":  e.RunnerName,
@@ -153,7 +157,11 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return resultRoot, fmt.Errorf("create container: %w", err)
 	}
 	defer func() {
-		_ = container.Remove(context.Background(), id)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := container.Remove(cleanupCtx, id); err != nil {
+			log.Printf("remove Job container %s: %v", id, err)
+		}
 	}()
 
 	var logOutput io.Writer
@@ -173,7 +181,14 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		logOutput = logFile
 	}
 
+	if err := ctx.Err(); err != nil {
+		return resultRoot, err
+	}
 	if err := container.Start(ctx, id); err != nil {
+		// Start may have reached the daemon despite a lost response.
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, _ = waitContainer(cancelled, container, id, gracePeriod)
 		return resultRoot, fmt.Errorf("start container: %w", err)
 	}
 
@@ -277,26 +292,44 @@ func waitContainer(ctx context.Context, runtime ContainerRuntime, id string, gra
 		err      error
 	}
 	waitDone := make(chan waitResult, 1)
+	waitCtx, cancelWait := context.WithCancel(context.Background())
+	defer cancelWait()
 	go func() {
-		code, err := runtime.Wait(context.Background(), id)
+		code, err := runtime.Wait(waitCtx, id)
 		waitDone <- waitResult{exitCode: code, err: err}
 	}()
 
 	select {
 	case result := <-waitDone:
-		return result.exitCode, result.err
-	case <-ctx.Done():
-		stopCtx, cancel := context.WithTimeout(context.Background(), gracePeriod+5*time.Second)
-		defer cancel()
-		_ = runtime.Stop(stopCtx, id, gracePeriod)
-		select {
-		case <-waitDone:
-			return -1, ctx.Err()
-		case <-time.After(gracePeriod + 2*time.Second):
-			_ = runtime.Kill(context.Background(), id)
-			<-waitDone
-			return -1, ctx.Err()
+		if result.err == nil {
+			return result.exitCode, nil
 		}
+		// A failed wait does not establish process exit. Stop before releasing
+		// local accounting, just as for cancellation.
+		return -1, errors.Join(result.err, stopContainer(runtime, id, gracePeriod))
+	case <-ctx.Done():
+		return -1, errors.Join(ctx.Err(), stopContainer(runtime, id, gracePeriod))
+	}
+}
+
+// Keep the execution registered until the daemon confirms a stop. Each call
+// is bounded; persistent daemon failure retries without releasing capacity.
+func stopContainer(runtime ContainerRuntime, id string, gracePeriod time.Duration) error {
+	for {
+		stopCtx, cancel := context.WithTimeout(context.Background(), gracePeriod+5*time.Second)
+		err := runtime.Stop(stopCtx, id, gracePeriod)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		killCtx, cancelKill := context.WithTimeout(context.Background(), 10*time.Second)
+		killErr := runtime.Kill(killCtx, id)
+		cancelKill()
+		if killErr == nil {
+			return nil
+		}
+		log.Printf("Job container %s stop not confirmed; retaining execution: stop=%v kill=%v", id, err, killErr)
+		time.Sleep(5 * time.Second)
 	}
 }
 
