@@ -439,6 +439,12 @@ func ValidateJobUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 
 func ValidateJobStatusUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	switch oldObj.Status.Phase {
+	case ebsv1.JobSucceeded, ebsv1.JobFailed, ebsv1.JobAborted:
+		if !apiequality.Semantic.DeepEqual(newObj.Status, oldObj.Status) {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("status"), "terminal Job status is immutable"))
+		}
+	}
 	if !newObj.Status.Phase.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, ebsv1.JobPhaseValues()))
 	}

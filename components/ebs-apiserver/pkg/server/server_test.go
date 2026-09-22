@@ -274,6 +274,9 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 	if _, ok := storageMap["builds/abort"].(rest.Connecter); !ok {
 		t.Error("builds/abort must implement rest.Connecter")
 	}
+	if _, ok := storageMap["jobs/abort"].(rest.Connecter); !ok {
+		t.Error("jobs/abort must implement rest.Connecter")
+	}
 }
 
 func TestJobStorageUsesResourcePrefixForKeys(t *testing.T) {

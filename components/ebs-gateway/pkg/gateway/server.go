@@ -1015,6 +1015,31 @@ type authzDecision struct {
 
 func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
 	protectedRoute := parseRoute(r.URL.Path)
+	if protectedRoute.resource == "jobs" && len(protectedRoute.rest) == 1 && protectedRoute.rest[0] == "abort" {
+		if ident.IsRunner() || ident.IsSystem() || !(ident.IsUser() || ident.IsOps() || ident.IsAdmin()) || protectedRoute.project == "" || protectedRoute.name == "" {
+			return authzDecision{}, fmt.Errorf("Job abort requires a user identity and project-scoped Job")
+		}
+		if !ident.IsAdmin() && !ident.IsOps() {
+			project, err := g.getProject(ctx, protectedRoute.project)
+			if err != nil {
+				return authzDecision{}, err
+			}
+			if !projectAllowsUser(project, ident.Subject) {
+				return authzDecision{}, fmt.Errorf("project access denied")
+			}
+		}
+		if r.Method != http.MethodPost {
+			return authzDecision{handle: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Allow", http.MethodPost)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}}, nil
+		}
+		injectIdentityHeaders(r, ident)
+		return authzDecision{handle: g.jobAbortHandler(ident)}, nil
+	}
+	if protectedRoute.resource == "jobs" && len(protectedRoute.rest) > 0 && protectedRoute.rest[0] == "status" && r.Method != http.MethodGet && r.Method != http.MethodHead && !ident.IsAdmin() && !ident.IsSystem() && !ident.IsRunner() {
+		return authzDecision{}, fmt.Errorf("Job status write requires system or assigned Runner identity")
+	}
 	if r.Method == http.MethodDelete && protectedRoute.resource == "buildresources" && protectedRoute.project == "default" && protectedRoute.name == "default" && len(protectedRoute.rest) == 0 {
 		return authzDecision{}, fmt.Errorf("global default BuildResource cannot be deleted")
 	}

@@ -148,6 +148,7 @@ func (s *statusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.
 	newJ := obj.(*ebsv1.Job)
 	oldJ := old.(*ebsv1.Job)
 	newJ.Spec = oldJ.Spec
+	metav1.ResetObjectMetaForStatus(&newJ.ObjectMeta, &oldJ.ObjectMeta)
 }
 
 func (s *statusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
