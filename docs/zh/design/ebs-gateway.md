@@ -501,7 +501,8 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 按 owner/member 关系同普通用户 | 禁止 | 全部支持的 verb | 同 System |
 | Project 子资源：BuildResource | 仅自己拥有的 Project 下 `get/list`，禁止全部写操作 | 仅自己作为 member 的 Project 下 `get/list`，禁止全部写操作 | 跨 Project `get/list/create/update/delete`，不允许 `patch` | 禁止 | 全部支持的 verb | 同 System |
-| Project 子资源：Job | 全部支持的 verb，watch 仅在 apiserver 支持时允许 | `get/list/create/update/patch`，禁止 `delete`；watch 仅在 apiserver 支持时允许 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
+| Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 全部支持的 verb | 同 System |
+| Job `/abort` | 本工程 POST | 本工程 POST | 跨工程 POST | 禁止 | 禁止（非用户身份） | 跨工程 POST |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 允许 | 自身路径 `get/list/watch`，由 apiserver按 `status.runner` 强制过滤 | 允许 | 同 System |
 | Runner | 禁止 | 禁止 | 全部支持的 verb，包括 `/status` | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb | 同 System |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 仅修改本人密码，禁止 User API | 禁止 | 禁止 | 非 Admin User 支持 `get/list/update/patch/delete`，另可修改本人密码 |
@@ -535,6 +536,32 @@ Runner 范围 Job list/watch 必须由 apiserver根据路径中的 Runner 名称
 公开 `GET/HEAD` 不查询 Project owner/member。BuildResource 不属于公开读取资源；普通用户读取时，gateway 必须先读取路径指定的 Project 并校验 owner/member 关系，不能读取无归属关系 Project 下的 BuildResource。`default` 是没有同名 Project 的系统保留作用域，因此普通用户不能借助 Project owner/member 权限读取其中的全局默认对象。普通用户修改 Project 或其他 Project 子资源时，gateway 先读取 Project 并校验 owner/member 权限；需要区分 owner 与 member 的写操作继续按矩阵限制。
 
 Runner 范围 Job list/watch 只允许 GET，拒绝客户端 `fieldSelector`，仅透传 `resourceVersion`、`timeoutSeconds`、`allowWatchBookmarks` 等受支持参数；过滤条件由 apiserver 从可信路径生成。
+
+### 4.8.1 Job 主动中止授权
+
+`POST /apis/ebs/v1/projects/{project}/jobs/{name}/abort` 代理到 apiserver 同路径，接口及状态语义见 [Job 主动中止](ebs-apiserver.md#job-主动中止)。不开放全局 Job 列表，不以通用 `/status` 写入实现中止。
+
+| 调用身份 | 权限 |
+|---|---|
+| admin、ops 用户 | 可跨工程中止 |
+| 普通用户 | 仅 Project 的 owner 或 member 可中止 |
+| 其他用户 | 403 |
+| Runner token、MachineAccount 凭据、匿名请求 | 不允许；未认证 401，已认证非用户身份 403 |
+
+- 对 `/abort` 路由先执行本节专用鉴权，再进入其它角色的通用授权分支，避免 admin/system 通用放行或普通成员写权限规则扩大调用主体。仅允许 POST，其它方法返回 405。
+- 普通用户授权读取路径所指的服务端 Project，以可信 owner/member 标签判定；归属查询失败不放行。不得使用请求体、客户端标签或 Job payload 判断归属。admin/ops 不要求是工程成员。
+- 用户只能通过 `/abort` 中止 Job；普通用户及 ops 不获得 Job `/status` 写权限。保留 Runner 和内部组件既有受控状态写通道，不能通过主资源 PUT/PATCH 改 status。网关权限矩阵和路由测试应覆盖这些替代路径。
+- 转发原始 apiserver 成功对象和 Status 错误，不把中止转成删除，不自动修改请求 UID。审计记录操作者、工程、Job、请求 UID、响应码与最终返回 phase；原因属于不可信文本，结构化记录并限制长度，不记录 token/payload。
+- 测试覆盖 owner/member、非成员、跨工程 ops/admin、Runner/机器身份、匿名、错误方法、Project 查询失败及 404/409/422 透传。
+
+### 4.8.2 前端 Job 中止入口
+
+- 工程详情增加按工程查询的 Job 列表（分页，支持 Pending/Running 筛选），owner/member 和 admin/ops 可见中止操作；按钮权限仅用于交互，gateway 负责最终授权。
+- 运维页面供 admin/ops 按工程查询并中止 Job，复用同一个列表/确认弹窗，不新增全局 Job 明细接口。
+- 确认弹窗显示工程、Job、当前状态，允许填写中止原因；提交带选中对象 UID，防重复点击。终态不显示中止按钮。
+- 200 后以服务端返回 phase 刷新：Aborted 显示“已中止任务；执行端将在收到通知后停止运行”；Succeeded/Failed 显示“任务已结束，未改变原结果”。不得将 HTTP 200 一律显示为中止成功。
+- 超时/断线时先 GET 确认，无法确认则提示结果未知并提供刷新；UID 变化不自动中止新对象。403 提示无权限，404 提示已删除，409 刷新对象，422 显示请求校验错误。不自动无限重试。
+- 中英文文案、键盘可访问的确认弹窗及权限/并发完成/结果未知场景纳入测试。
 
 ### 4.9 AccessLabels
 
@@ -656,6 +683,7 @@ gateway 暴露业务 API 和用户管理插件 API：
 | `POST /auth/machineaccounts` | 是 | 原子创建MachineAccount和初始凭据，仅允许 `ebs:admin` |
 | `GET/HEAD /apis/ebs/v1/*` | 部分否 | 4.1 节白名单资源允许匿名 get/list 及单对象 `/status` 读取并返回完整对象；Runner、watch 和非白名单资源需要认证 |
 | `POST/PUT/PATCH/DELETE /apis/ebs/v1/*` | 是 | `ebs/v1` 写请求按身份和 Project 权限校验 |
+| `POST /apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 是 | 专用用户授权优先于通用写路由，见 4.8.1 |
 | `ANY /apis/iam.ebs/v1/users*` | 是 | Admin 可查询、修改和删除普通 User；POST 返回 405 |
 | `ANY /apis/iam.ebs/v1/machineaccounts*` | 是 | MachineAccount查询和删除API；POST/PUT/PATCH返回405，创建使用`POST /auth/machineaccounts` |
 

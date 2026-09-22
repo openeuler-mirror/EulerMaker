@@ -319,7 +319,7 @@ Job、Runner 和上层 Controller 都可能更新对象。Job Controller 必须�
 
 若未来必须消除此窗口，需要由 apiserver 提供能够原子校验 Runner 身份、phase 或版本的专用 Job 状态迁移接口；仅增加客户端 GET 次数无法形成事务保证。
 
-首版明确不实现 apiserver Job 状态迁移校验，因此无法在服务端阻止错误或旧版本客户端后续把终态改回非终态。Job Controller 的正确性依赖 Scheduler、Runner 和其他 status 写入方遵守字段所有权、Conflict 后重新读取以及终态不回退约定；这是一项已接受的一致性限制，不阻塞 Job Controller 开发。后续若补充服务端状态机，应保持当前合法流程兼容，并把终态不可回退从客户端约定提升为 API 不变量。
+Job 主动中止能力实施时增加 apiserver 终态 status 保护，统一见 [Job 主动中止](ebs-apiserver.md#job-主动中止)，不扩展为完整非终态迁移矩阵。Job Controller 在 RunnerLost 写 Failed 前及 Conflict/Unknown 确认时重新核验 Job；发现 Aborted 或其它终态后结束本轮，不覆盖中止原因和 endTime。Job 中止由专用 API 执行，本控制器不新增中止写入或级联中止父 Build 的能力；终态 Job 继续按既有历史保留策略处理。
 
 ### 7.4 完整错误矩阵
 
