@@ -1,4 +1,10 @@
 export default {
+  jobControl: {
+    title: '构建任务', name: '任务名称', phase: '状态', all: '全部', next: '下一页', load: '加载任务',
+    abort: '中止任务', reason: '中止原因（可选）', hint: '中止仅影响此任务，不会中止整个构建。执行端收到通知后停止运行。',
+    aborted: '已中止任务；执行端将在收到通知后停止运行。', finished: '任务已结束，未改变原结果。',
+    unknown: '尚未确认中止结果，任务仍未结束。请刷新后确认，或再次提交中止请求。',
+  },
   app: {
     title: "EulerMaker",
     description: "EulerMaker 软件包构建系统控制台",
