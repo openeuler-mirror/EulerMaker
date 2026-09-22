@@ -287,7 +287,7 @@
           </fieldset>
         </div>
         <button class="secondary-button add-target-button" type="button" :disabled="savingTargets" @click="addTarget"><Plus />{{ t("project.addTarget") }}</button>
-        <div v-if="targetErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(targetErrorKey) }}</div>
+        <div v-if="targetErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(targetErrorKey, targetErrorParams) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingTargets" @click="closeTargetEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingTargets">{{ savingTargets ? t("common.saving") : t("common.save") }}</button></div>
       </form>
     </ModalDialog>
@@ -397,6 +397,7 @@ const targetEditorOpen = ref(false);
 const editingTargets = ref<BuildTarget[]>([]);
 const savingTargets = ref(false);
 const targetErrorKey = ref("");
+const targetErrorParams = ref<Record<string, string>>({});
 const targetSaveSuccess = ref(false);
 const bootstrapEditorOpen = ref(false);
 const editingBootstrapRepositories = ref<BootstrapRepo[]>([]);
@@ -859,6 +860,7 @@ function removeTarget(index: number): void {
 
 async function saveTargets(): Promise<void> {
   if (!project.value) return;
+  targetErrorParams.value = {};
   const targets = editingTargets.value.map((target) => ({
     os: target.os?.trim(),
     arch: target.arch?.trim(),
@@ -868,6 +870,16 @@ async function saveTargets(): Promise<void> {
   if (!targets.length || targets.some((target) => !target.os || !target.arch)) {
     targetErrorKey.value = "projects.targetRequired";
     return;
+  }
+  const seenTargets = new Set<string>();
+  for (const target of targets) {
+    const key = JSON.stringify([target.os, target.arch]);
+    if (seenTargets.has(key)) {
+      targetErrorKey.value = "projects.targetDuplicate";
+      targetErrorParams.value = { os: target.os!, arch: target.arch! };
+      return;
+    }
+    seenTargets.add(key);
   }
   savingTargets.value = true;
   targetErrorKey.value = "";

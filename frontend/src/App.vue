@@ -46,6 +46,7 @@
     <footer class="footer">
       <div class="footer-copy"><strong>EulerMaker</strong><span>{{ t("app.footer") }}</span></div>
       <nav class="footer-links" :aria-label="t('app.footerLinks')">
+        <a href="https://atomgit.com/openeuler/EulerMaker" target="_blank" rel="noopener noreferrer">{{ t("app.sourceRepository") }}</a>
         <a :href="openEulerLink('privacy')" target="_blank" rel="noopener noreferrer">{{ t("app.privacy") }}</a>
         <a :href="openEulerLink('legal')" target="_blank" rel="noopener noreferrer">{{ t("app.legal") }}</a>
         <a :href="openEulerLink('cookies')" target="_blank" rel="noopener noreferrer">{{ t("app.cookies") }}</a>
