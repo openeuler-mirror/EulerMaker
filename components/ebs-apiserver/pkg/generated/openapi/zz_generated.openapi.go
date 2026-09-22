@@ -69,7 +69,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.SnapshotStatus":                    schema_ebs_api_ebs_v1_SnapshotStatus(ref),
 		"ebs-api/ebs/v1.SpecBuildStatus":                   schema_ebs_api_ebs_v1_SpecBuildStatus(ref),
 		"ebs-api/ebs/v1.SpecCommitError":                   schema_ebs_api_ebs_v1_SpecCommitError(ref),
-		"ebs-api/ebs/v1.SpecDepend":                        schema_ebs_api_ebs_v1_SpecDepend(ref),
 		"ebs-api/ebs/v1.SpecInstallStatus":                 schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
 		"ebs-api/ebs/v1.SpecStatus":                        schema_ebs_api_ebs_v1_SpecStatus(ref),
 		"ebs-api/ebs/v1.Toleration":                        schema_ebs_api_ebs_v1_Toleration(ref),
@@ -457,25 +456,11 @@ func schema_ebs_api_ebs_v1_BuildInfoSpec(ref common.ReferenceCallback) common.Op
 							},
 						},
 					},
-					"specDepends": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.SpecDepend"),
-									},
-								},
-							},
-						},
-					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.SpecDepend"},
+			"ebs-api/ebs/v1.BootstrapRepo"},
 	}
 }
 
@@ -2357,130 +2342,6 @@ func schema_ebs_api_ebs_v1_SpecCommitError(ref common.ReferenceCallback) common.
 				},
 			},
 		},
-	}
-}
-
-func schema_ebs_api_ebs_v1_SpecDepend(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"repoName": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-					"specName": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-					"specFileName": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"version": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-					"release": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"epoch": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"exclusiveArch": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"provides": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"requires": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConst"),
-									},
-								},
-							},
-						},
-					},
-					"buildRequires": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConst"),
-									},
-								},
-							},
-						},
-					},
-					"buildRemoves": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConst"),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"repoName", "specName", "version"},
-			},
-		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.VersionConst"},
 	}
 }
 

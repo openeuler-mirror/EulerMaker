@@ -147,7 +147,7 @@ BuildInfo Controller 创建 Job 时必须写入以下 labels：
 | `ebs.io/spec-name` | 记录 Job 构建的 spec 名，供仓库按 spec 完整替换旧 RPM |
 | `ebs.io/package-name` | 记录 Job 所属 `Project.spec.packageRepos[].name`，供工程详情按软件包查询 Job 历史；同一仓库有多个 spec 时，它们的 Job 使用相同包名标签 |
 
-`ebs.io/package-name` 的来源是创建该 Job 时 `BuildInfo.spec.specDepends[specName].repoName`，而不是实时读取可能已修改的 Project，也不得从 spec 名或 Job 名推断。映射不存在时不创建 Job，应等待 BuildInfo 补齐或报告确定性错误。不写同名 annotation。
+`ebs.io/package-name` 的来源是创建该 Job 时 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName`，而不是实时读取可能已修改的 Project，也不得从 spec 名或 Job 名推断。映射不存在时不创建 Job，应等待解析结果补齐或报告确定性错误。不写同名 annotation。
 
 `PackageRepo.name` 目前仅要求非空，可能不符合 Kubernetes label 值的长度或字符规则。计算 `ebs.io/package-name` 的值时：如果原名只含 Kubernetes label 值允许的字符，且首尾为字母或数字，先截取前 63 个字符，再去掉截断位置末尾的 `-`、`_`、`.`；若结果不匹配保留的摘要形态 `^sha256-[a-z2-7]{52}$`，直接用作 label 值。含非法字符的原名，或截断后恰好匹配保留形态的原名，使用 `sha256-` 加原名 UTF-8 字节的 SHA-256 摘要经 RFC 4648 标准 Base32 无填充编码后转小写的 52 个字符。消费者按相同规则计算 label selector 的值；Job 不保存截断前的原名，界面可从当前 Project 的仓库列表展示名称。不同原名若截断后相同，将共享一个 label 值，因此按标签查询的历史会合并；需要区分这类包名时必须调整命名规则。
 

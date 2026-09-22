@@ -132,23 +132,8 @@ type BuildInfo struct {
 }
 
 type BuildInfoSpec struct {
-	BuildPayload  string                `json:"buildPayload,omitempty"`
-	BootstrapRepo []BootstrapRepo       `json:"bootstrapRepo,omitempty"`
-	SpecDepends   map[string]SpecDepend `json:"specDepends,omitempty"`
-}
-
-type SpecDepend struct {
-	RepoName      string                  `json:"repoName"`
-	SpecName      string                  `json:"specName"`
-	SpecFileName  string                  `json:"specFileName,omitempty"`
-	Version       string                  `json:"version"`
-	Release       string                  `json:"release,omitempty"`
-	Epoch         string                  `json:"epoch,omitempty"`
-	ExclusiveArch []string                `json:"exclusiveArch,omitempty"`
-	Provides      []string                `json:"provides,omitempty"`
-	Requires      map[string]VersionConst `json:"requires,omitempty"`
-	BuildRequires map[string]VersionConst `json:"buildRequires,omitempty"`
-	BuildRemoves  map[string]VersionConst `json:"buildRemoves,omitempty"`
+	BuildPayload  string          `json:"buildPayload,omitempty"`
+	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
 }
 
 type BuildInfoStatus struct {

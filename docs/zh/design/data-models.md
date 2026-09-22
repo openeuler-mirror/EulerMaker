@@ -63,7 +63,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 列表类型（8）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList BuildResourceList JobList RunnerList
 辅助结构体（32）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
-                  BuildInfoSpec BuildInfoStatus SpecDepend SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
+                  BuildInfoSpec BuildInfoStatus SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
                   RpmRepoSpec RpmRepoStatus
                   BuildResourceSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
@@ -312,49 +312,13 @@ type BuildInfo struct {
 type BuildInfoSpec struct {
     BuildPayload string                `json:"buildPayload,omitempty"`
     BootstrapRepo []BootstrapRepo      `json:"bootstrapRepo,omitempty"`
-    SpecDepends  map[string]SpecDepend  `json:"specDepends,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `specDepends` | map[string]SpecDepend | key 为 `specName`，value 为该 spec 的依赖信息 |
 | `buildPayload` | string | Build Controller 创建时从所属 Project.spec.buildPayload 原样复制的构建环境宏（YAML）；未配置时为空，已有 BuildInfo 不覆盖，不跟随 Project 后续变更 |
 | `bootstrapRepo` | []BootstrapRepo | Build Controller 创建时从所属 Project.spec.bootstrapRepo 深拷贝，已有 BuildInfo 不覆盖；供构建任务使用的引导 RPM 仓库 |
-
----
-
-### SpecDepend
-
-```go
-type SpecDepend struct {
-    RepoName      string                  `json:"repoName"`
-    SpecName      string                  `json:"specName"`
-    SpecFileName  string                  `json:"specFileName,omitempty"`
-    Version       string                  `json:"version"`
-    Release       string                  `json:"release,omitempty"`
-    Epoch         string                  `json:"epoch,omitempty"`
-    ExclusiveArch []string                `json:"exclusiveArch,omitempty"`
-    Provides      []string                `json:"provides,omitempty"`
-    Requires      map[string]VersionConst `json:"requires,omitempty"`
-    BuildRequires map[string]VersionConst `json:"buildRequires,omitempty"`
-    BuildRemoves  map[string]VersionConst `json:"buildRemoves,omitempty"`
-}
-```
-
-| 字段              | Go 类型                    | 说明                                                                |
-| --------------- | ---------------------------  | ----------------------------------------------------------------- |
-| `repoName`      | string                  | spec 所属仓库名 |
-| `specName`      | string                  | spec 名称 |
-| `specFileName`  | string                  | 解析的 spec 文件名（如 `gcc.spec`） |
-| `version`       | string                  | 完整版本号（`epoch:version-release` 拼接后的字符串） |
-| `release`       | string                  | 原始 release 段值 |
-| `epoch`         | string                  | 原始 epoch 段值  |
-| `exclusiveArch` | []string                | `ExclusiveArch` 减去 `ExcludeArch` 之后的最终架构列表 `EXCLUSIVE_ARCH` |
-| `provides`      | []string                | spec 声明的 Provides（宏已展开） |
-| `requires`      | map[string]VersionConst | 安装期依赖 Requires |
-| `buildRequires` | map[string]VersionConst | 构建期依赖  |
-| `buildRemoves`  | map[string]VersionConst | 以 `-` 开头的 BuildRequires 列表 |
 
 ---
 
@@ -374,7 +338,7 @@ type BuildInfoStatus struct {
 | `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Aborted"` |
 | `conditions` | []metav1.Condition | 状态条件 |
 | `specStatus` | map[string]SpecStatus | 各 spec 运行时状态 |
-| `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 `BuildInfo.spec.specDepends` 的 `buildRequires`，不依赖本字段 |
+| `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 BuildInfo Controller 本轮解析结果 `specDepends` 的 `buildRequires`，不依赖本字段 |
 
 ### DcgNodeState
 
@@ -748,7 +712,7 @@ type Job struct {
 }
 ```
 
-BuildInfo Controller 创建的 Job 在 `metadata.labels` 中记录所属 Build、spec 与软件包仓库：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/package-name`。包名 label 的值遵循[标签约定](labels.md#7-job-构建归属标签)中的截断及编码规则，从创建时的 `BuildInfo.spec.specDepends[specName].repoName` 取得。
+BuildInfo Controller 创建的 Job 在 `metadata.labels` 中记录所属 Build、spec 与软件包仓库：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/package-name`。包名 label 的值遵循[标签约定](labels.md#7-job-构建归属标签)中的截断及编码规则，从创建时的 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 取得。
 
 ### JobSpec
 
@@ -1121,8 +1085,7 @@ BuildSpec
 └── BuildTarget
 
 BuildInfoSpec
-├── BootstrapRepo
-└── SpecDepend ──▶ VersionConst
+└── BootstrapRepo
 
 BuildInfoStatus
 └── SpecStatus

@@ -41,7 +41,7 @@ components/controller-manager/
         rpmcache.go                # RpmMetaSources 内存分层缓存：XML 下载/解析、分层索引（providesInfo/rpmByName）、contentURL 变化刷新、失效清扫复用 dcgDict（15.10）
         rpmver.go                  # VersionSatisfies
       specparse/
-        specparse.go               # *.spec 解析为 ebsv1.SpecDepend（规则见 16.3）
+        specparse.go               # *.spec 解析为 SpecDepend（规则见 16.3）
       controller.go                # Initializer：注册 PollingSource handler + 构造 BaseController；注入 apiserver / gitserver 客户端与 clock.Clock
       reconcile.go                 # reconcile 入口、parentAbortGuard、错误返回约定
       init.go                      # initBuildInfo（步骤 0~5；含 single 直通分支，见 7.2.3）
@@ -550,7 +550,7 @@ list Build 定位基准轮次——`GET /apis/ebs/v1/projects/{project}/builds?l
 **不做就绪判定、不发布同步任务**：镜像由 Snapshot Controller 在 Snapshot 解析期完成同步任务发布与新鲜度等待（BuildInfo 创建于 Snapshot Active 之后，直接复用，见 4.2），本控制器直接以 `cloneUrl` / `commitId` 发起请求（镜像定位由服务端按仓库 key 完成，客户端不持有 storePath）；仓库请求不可达按错误性质二分（与 E-23 对齐）——网络/超时/5xx 类瞬态失败 → 该仓库本轮不进组装结果、本轮组装不完整保持 Pending，下轮重入重新组装（不写 condition；条目不被移除）；git 内容缺失（`commitId` 非法、spec 文件路径不存在）或 spec 解析失败类确定性失败 → 按 E-23 按仓库角色分流（非指定包仓库与 `single` 各指定包仓库：单 spec 粒度跳过，记 condition `SpecDependsFillFailed`，`commitId` 非法时仓库级跳过；`specified` 指定包仓库：init 确定性失败收口——condition + 置 `Completed` 终态；`single` 全部指定包被跳过后构建集为空 → 同 init 确定性失败收口，见 7.2.3）。
 
 1. **枚举 spec 文件**：`ExecCommand(cloneUrl, "git ls-tree --name-only <commitId>")`，按行过滤 `*.spec` 后缀路径（**仅枚举仓库根目录直接条目，不递归子目录**——子目录 spec 不枚举不解析；根目录内文件名唯一，specFileCache 第二层 basename key 无碰撞，15.11.2；根目录可含多个 spec 文件，全部解析、逐一生成条目）。
-2. **读取 spec 内容**：逐路径以 `commitId` + 路径 basename（含 `.spec`，即 `specFileName`）查全局 `Cache.specFileCache`（15.11，两层 key）：命中 → 直接取缓存的文件原始内容（不发起 git-server 请求）；miss → `ExecCommand(cloneUrl, "git show <commitId>:<path>")` 下载，下载成功即写入 specFileCache（LRU；写入与解析成败解耦——内容按 commit 定位且确定，解析失败的 spec 其内容对同 commit 的后续访问仍有效），内容按 16.3 规则解析为 `ebsv1.SpecDepend`。
+2. **读取 spec 内容**：逐路径以 `commitId` + 路径 basename（含 `.spec`，即 `specFileName`）查全局 `Cache.specFileCache`（15.11，两层 key）：命中 → 直接取缓存的文件原始内容（不发起 git-server 请求）；miss → `ExecCommand(cloneUrl, "git show <commitId>:<path>")` 下载，下载成功即写入 specFileCache（LRU；写入与解析成败解耦——内容按 commit 定位且确定，解析失败的 spec 其内容对同 commit 的后续访问仍有效），内容按 16.3 规则解析为 `SpecDepend`。
 
 单个 spec 下载/解析失败按仓库角色分流处理（E-23）：非指定包仓库与 `single` 各指定包仓库均按单 spec 粒度跳过（不影响同仓库其余 spec 与其他仓库），`specified` 指定包仓库则 init 确定性失败；仓库级跳过仅发生在 `commitId` 非法时（该仓库全部 spec 跳过，见 7.2.2——`single` 命中指定包仓库时同样按包降级跳过）——`cloneUrl` 为 Snapshot Controller 同步确认后填写的只读镜像地址，本控制器无输入校验概念；spec 文件原始内容缓存于全局 specFileCache（15.11），相同 `commitId+specFileName` 命中不重复下载；解析产物（specDepends）缓存于 per-BuildInfo specDependsCache（15.11），缓存命中轮直接复用全量视图（下载解析在缓存锁外执行，成功结果写回，失败/跳过条目不写入）。
 
@@ -1097,7 +1097,7 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 `BuildInfoSpec.BuildPayload: string`：Build Controller 创建 BuildInfo 时从 `Project.spec.buildPayload` 深拷贝写入，已有 BuildInfo 不覆盖（与 BootstrapRepo 同一固化语义，data-models.md「BuildInfoSpec」）；本 controller **只读**，BuildInfo 生命周期内不随 Project 后续变更。三个消费点共用同一次 YAML 解析结果：① 解析 `prefer` 作 dcg 版本感知建边上下文（不进 specDepends 组装视图，16.1）；② 解析 `macros` 作步骤 0 spec 解析的构建环境宏（宏定义行列表，16.3）；③ Job payload 构造基底 map（per-spec 注入后重新序列化，15.3.1）。Job `spec.resources` 不取自本字段（由 BuildResource 解析，见 15.3.1）。
 
-`SpecDepend` 字段（类型保留：`*.spec` 解析产物与 per-BuildInfo 缓存条目类型，16.3/15.11；下表"消费点"同时标注了组装时的来源；条目取自缓存命中的 specDepends 内存视图）：
+`SpecDepend` 字段（控制器内部类型，不属于公共 API：`*.spec` 解析产物与 per-BuildInfo 缓存条目类型，16.3/15.11；下表"消费点"同时标注了组装时的来源；条目取自缓存命中的 specDepends 内存视图）：
 
 | 字段 | Go 类型 | 本 controller 消费点 |
 |------|------|----------------------|
@@ -1560,7 +1560,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 ### 16.3 *.spec 解析规则
 
-> Go 落地点：`specparse.go`（解析产物为 `ebsv1.SpecDepend`）。
+> Go 落地点：`specparse.go`（解析产物为 `SpecDepend`）。
 
 > **解析产物去向（15.11）**：spec 文件原始内容先写入全局 `Cache.specFileCache`（两层 key `commitId`→`specFileName`，LRU，写入与解析成败解耦），解析结果（`map[string]SpecDepend`）按 specName 合并为 BuildInfo 级全量视图后写入 per-BuildInfo 缓存 `Cache.specDependsCache`（key = `<namespace>/<buildinfo.name>`，7.2.2），不再落库至 `BuildInfo.spec`。
 
@@ -1617,7 +1617,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | `exclusiveArchList` / `excludeArchList` | `exclusiveArch` | 见「exclusiveArch 归一」 |
 
 - 各字符串取值（`name` / `version` / `release` / `epoch` / `provide.name` / 版本约束）统一做宏展开（由 `expandMacros(value, spec)` 完成，规则见上「宏展开」：`rpmspec -P` 已展开主体，此处处理残留宏引用）；
-- 每个 spec 文件产出一条 `ebsv1.SpecDepend`，附加 `specFileName`（`git show` 输出路径的 basename，含 `.spec`）与 `repoName`（包仓库名）；
+- 每个 spec 文件产出一条 `SpecDepend`，附加 `specFileName`（`git show` 输出路径的 basename，含 `.spec`）与 `repoName`（包仓库名）；
 - 同仓库/跨仓库多 spec 按 `specName` 归并（同名后者覆盖，即 `depends[specName] = depend`）；
 - 主路径与回退解析共用同一套模型规则，仅"是否经 rpmspec 宏展开"不同。
 
@@ -1664,7 +1664,6 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | BuildInfoPhase | 增加 Aborted 枚举 | 6.1 |
 | BuildInfoStatus | 增加 Dcg map[string]DcgNodeState 及节点类型 | 15.9 |
 | BuildInfoStatus | 增加 PendingJobCreates map[string]PendingJobCreate；条目字段为 JobName string、DispatchGeneration int64（JSON 为 jobName、dispatchGeneration） | 6.5.1 |
-| BuildInfoSpec | 移除 SpecDepends；保留 SpecDepend 作为解析结果类型 | 15.2.2 / 15.11 |
 
 资源查询与标签前提见 15.1、7.2.2 和 labels.md。
 
