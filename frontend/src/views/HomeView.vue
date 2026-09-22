@@ -1,7 +1,6 @@
 <template>
   <section class="welcome-panel">
     <div>
-      <span class="eyebrow">{{ t("home.eyebrow") }}</span>
       <h1>{{ t("home.title") }}</h1>
       <p>{{ t("home.description") }}</p>
       <RouterLink class="primary-action" to="/projects">{{ t("home.viewProjects") }} <ArrowRight /></RouterLink>
@@ -13,7 +12,7 @@
     </div>
   </section>
 
-  <section class="metrics" :aria-label="t('home.overview')">
+  <section class="metrics home-metrics" :aria-label="t('home.overview')">
     <article class="metric-card">
       <div class="metric-icon blue"><Folder /></div>
       <div><span>{{ t("home.projectCount") }}</span><strong>{{ loading ? t("common.emptyValue") : projects.length }}</strong><small>{{ t("home.loaded") }}</small></div>
@@ -21,10 +20,6 @@
     <article class="metric-card">
       <div class="metric-icon green"><CircleCheck /></div>
       <div><span>{{ t("home.activeProjects") }}</span><strong>{{ loading ? t("common.emptyValue") : activeCount }}</strong><small>{{ t("home.activeHint") }}</small></div>
-    </article>
-    <article class="metric-card">
-      <div class="metric-icon violet"><Cpu /></div>
-      <div><span>{{ t("home.buildTargets") }}</span><strong>{{ loading ? t("common.emptyValue") : targetCount }}</strong><small>{{ t("home.targetHint") }}</small></div>
     </article>
   </section>
 
@@ -62,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowRight, CircleCheck, Cpu, Folder, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowRight, CircleCheck, Folder, WarningFilled } from "@element-plus/icons-vue";
 import { computed, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -78,7 +73,6 @@ const loading = ref(true);
 const errorKey = ref("");
 const error = computed(() => (errorKey.value ? t(errorKey.value) : ""));
 const activeCount = computed(() => projects.value.filter((item) => item.status?.phase === "Active").length);
-const targetCount = computed(() => projects.value.reduce((total, item) => total + (item.spec?.buildTargets?.length || 0), 0));
 
 onMounted(load);
 
