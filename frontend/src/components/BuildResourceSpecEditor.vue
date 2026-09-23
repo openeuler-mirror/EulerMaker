@@ -12,17 +12,17 @@
       <p class="form-hint">{{ t('operations.specHint') }}</p>
     </template>
     <template v-else>
-      <section class="resource-rule-card">
+      <section class="resource-rule-card resource-default-card">
         <h3>{{ t('operations.tableDefaults') }}</h3>
         <ResourceRequirementsFields v-model="draft.defaults" />
       </section>
       <p class="form-hint">{{ t('operations.listEditorHint') }}</p>
       <div class="resource-rule-toolbar">
-        <label class="field"><span>{{ t('operations.searchPackages') }}</span><input v-model="search" type="search" /></label>
+        <label class="field resource-package-search"><span>{{ t('operations.searchPackages') }}</span><input v-model="search" type="search" /></label>
         <button class="secondary-button" type="button" @click="addPackage">{{ t('operations.addPackageRule') }}</button>
       </div>
       <div class="resource-rule-list">
-        <section v-for="pkg in visiblePackages" :key="rowKey(pkg)" class="resource-rule-card">
+        <section v-for="pkg in visiblePackages" :key="rowKey(pkg)" class="resource-rule-card resource-package-card">
           <div class="resource-rule-toolbar">
             <label class="field required-field"><span>{{ t('operations.packageName') }}</span><input v-model="pkg.name" required /></label>
             <button class="text-button danger-link" type="button" @click="draft.packages.splice(draft.packages.indexOf(pkg), 1)">{{ t('common.remove') }}</button>
@@ -99,14 +99,18 @@ defineExpose({ getSpec });
 .resource-spec-editor { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
 .resource-editor-modes { margin-top: 0; }
 .resource-rule-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 12px; }
+.resource-default-card { background: #edf5ff; border-color: #c5daf5; }
+.resource-package-card { background: #f7f8fa; }
 .resource-rule-card h3, .resource-rule-card h4 { margin: 0; font-size: 14px; }
 .resource-rule-toolbar { display: flex; gap: 12px; align-items: end; }
 .resource-rule-toolbar .field { flex: 1; min-width: 0; }
+.resource-rule-toolbar .resource-package-search { flex: 0 1 320px; max-width: 100%; }
 .resource-rule-list { display: grid; gap: 14px; max-height: 48vh; overflow: auto; }
 .resource-arch-rule { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 12px; }
 :deep(.resource-quantity-grid) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 540px) {
   :deep(.resource-quantity-grid) { grid-template-columns: 1fr; }
   .resource-rule-toolbar { flex-wrap: wrap; }
+  .resource-rule-toolbar .resource-package-search { flex: 1 1 100%; }
 }
 </style>

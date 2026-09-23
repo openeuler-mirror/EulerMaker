@@ -195,6 +195,17 @@ body.modal-open { overflow: hidden; }
 .machine-secret-field { margin-top: 18px; }
 .machine-secret-field textarea { font-family: "SFMono-Regular", Consolas, monospace; overflow-wrap: anywhere; }
 .operations-section + .operations-section { margin-top: 20px; }
+.operations-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); align-items: start; gap: 20px; }
+.operations-menu { max-height: calc(100vh - 104px); padding: 8px; position: sticky; top: 84px; z-index: 5; display: grid; gap: 4px; overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px rgb(25 54 96 / 12%); }
+.operations-menu button { min-height: 42px; padding: 0 13px; position: relative; color: #536176; background: transparent; border: 0; border-radius: 7px; text-align: left; font-size: 14px; font-weight: 650; }
+.operations-menu button:hover { color: var(--blue); background: #f4f8fd; }
+.operations-menu button.active { color: var(--blue); background: #edf6ff; }
+.operations-menu button.active::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 3px; background: var(--blue); border-radius: 0 3px 3px 0; }
+.operations-menu button:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 1px; }
+.operations-content { min-width: 0; }
+.operations-resource-editor { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--line); }
+.operations-resource-editor .section-heading { margin-bottom: 18px; }
+.operations-resource-editor .section-heading h3 { margin: 0; color: var(--ink); font-size: 18px; }
 .operations-project-form { margin-bottom: 20px; display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
 .operations-project-form .field { width: min(320px, 100%); }
 .operations-project-form .operations-project-field { width: min(390px, 100%); display: flex; align-items: center; gap: 12px; }
@@ -507,6 +518,10 @@ body.modal-open { overflow: hidden; }
   .auth-layout { padding: 16px 0 28px; }
   .auth-intro { display: none; }
   .auth-card { padding: 26px 21px; }
+  .operations-layout { grid-template-columns: 1fr; }
+  .operations-menu { max-height: none; position: static; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-x: auto; overflow-y: visible; }
+  .operations-menu button { padding: 0 8px; text-align: center; white-space: nowrap; }
+  .operations-menu button.active::before { top: auto; right: 10px; bottom: 0; left: 10px; width: auto; height: 3px; border-radius: 3px 3px 0 0; }
   .operations-project-form .field, .operations-project-form .secondary-button, .operations-project-form .primary-button { width: 100%; }
   .footer { padding: 18px 16px; flex-direction: column; gap: 13px; }
   .footer-copy { align-items: flex-start; flex-direction: column; gap: 4px; }
