@@ -32,6 +32,13 @@ export interface BuildConf {
   spec: { targets: Record<string, { arches: Record<string, { image: string }> }> };
 }
 
+export interface Script {
+  apiVersion?: string;
+  kind?: string;
+  metadata?: ObjectMeta;
+  spec: { content: string };
+}
+
 export interface GitRef {
   type?: "Branch" | "Tag" | "Commit";
   value?: string;
