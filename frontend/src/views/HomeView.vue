@@ -17,15 +17,11 @@
       <div class="metric-icon blue"><Folder /></div>
       <div><span>{{ t("home.projectCount") }}</span><strong>{{ loading ? t("common.emptyValue") : projects.length }}</strong><small>{{ t("home.loaded") }}</small></div>
     </article>
-    <article class="metric-card">
-      <div class="metric-icon green"><CircleCheck /></div>
-      <div><span>{{ t("home.activeProjects") }}</span><strong>{{ loading ? t("common.emptyValue") : activeCount }}</strong><small>{{ t("home.activeHint") }}</small></div>
-    </article>
   </section>
 
   <section class="content-panel">
     <div class="section-heading">
-      <div><span class="eyebrow">{{ t("home.recentEyebrow") }}</span><h2>{{ t("home.recentProjects") }}</h2></div>
+      <div><h2>{{ t("home.recentProjects") }}</h2></div>
       <RouterLink to="/projects">{{ t("home.allProjects") }} <ArrowRight /></RouterLink>
     </div>
 
@@ -33,10 +29,11 @@
     <div v-else-if="error" class="inline-error">
       <WarningFilled /><span>{{ error }}</span><button type="button" @click="load">{{ t("common.reload") }}</button>
     </div>
-    <EmptyState v-else-if="!projects.length" :title="t('home.emptyTitle')" :description="t('home.emptyDescription')" />
+    <EmptyState v-else-if="!session.authenticated" :title="t('home.signInTitle')" :description="t('home.signInDescription')" />
+    <EmptyState v-else-if="!recentProjects.length" :title="t('home.emptyTitle')" :description="t('home.emptyDescription')" />
     <div v-else class="project-grid">
       <RouterLink
-        v-for="project in projects.slice(0, 6)"
+        v-for="project in recentProjects"
         :key="project.metadata?.name"
         class="project-card"
         :to="`/projects/${encodeURIComponent(project.metadata?.name || '')}`"
@@ -57,34 +54,61 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowRight, CircleCheck, Folder, WarningFilled } from "@element-plus/icons-vue";
-import { computed, onMounted, ref } from "vue";
+import { ArrowRight, Folder, WarningFilled } from "@element-plus/icons-vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import { errorTranslationKey, list } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
+import { useSessionStore } from "@/stores/session";
 import type { Project } from "@/types";
 
 const projects = ref<Project[]>([]);
+const recentProjects = ref<Project[]>([]);
+const session = useSessionStore();
 const { t } = useI18n();
 const loading = ref(true);
 const errorKey = ref("");
 const error = computed(() => (errorKey.value ? t(errorKey.value) : ""));
-const activeCount = computed(() => projects.value.filter((item) => item.status?.phase === "Active").length);
 
-onMounted(load);
+let loadVersion = 0;
+watch(() => session.username, load, { immediate: true });
 
 async function load(): Promise<void> {
+  const version = ++loadVersion;
+  const username = session.username;
   loading.value = true;
   errorKey.value = "";
+  recentProjects.value = [];
   try {
-    projects.value = (await list<Project>("/apis/ebs/v1/projects?limit=24")).items;
+    const selectors = username ? [
+      `ebs.io/owner-user=${username}`,
+      `ebs.io/member-user.${username}=true`,
+    ] : [];
+    const [overview, ...related] = await Promise.all([
+      list<Project>("/apis/ebs/v1/projects?limit=24"),
+      ...selectors.map(labelSelector => list<Project>(`/apis/ebs/v1/projects?${new URLSearchParams({ limit: "6", labelSelector })}`)),
+    ]);
+    if (version !== loadVersion) return;
+    projects.value = overview.items;
+    const unique = new Map<string, Project>();
+    for (const project of related.flatMap(page => page.items)) {
+      const labels = project.metadata?.labels || {};
+      if (project.metadata?.name && (labels["ebs.io/owner-user"] === username || labels[`ebs.io/member-user.${username}`] === "true")) {
+        unique.set(project.metadata.name, project);
+      }
+    }
+    const createdAt = (project: Project): number => Date.parse(project.metadata?.creationTimestamp || "") || 0;
+    recentProjects.value = [...unique.values()].sort((a, b) =>
+      createdAt(b) - createdAt(a) || (a.metadata?.name || "").localeCompare(b.metadata?.name || ""),
+    ).slice(0, 6);
   } catch (reason) {
+    if (version !== loadVersion) return;
     errorKey.value = errorTranslationKey(reason, "errors.loadProjects");
   } finally {
-    loading.value = false;
+    if (version === loadVersion) loading.value = false;
   }
 }
 

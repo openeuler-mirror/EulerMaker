@@ -95,8 +95,11 @@ apiVersion: ebs/v1
 | RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
 | Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
 | Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
+| BuildResource | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildresources` | - | 否 | - |
+| BuildConf | Elasticsearch | - | `/apis/ebs/v1/buildconfs` | 否 | - |
+| Script | Elasticsearch | - | `/apis/ebs/v1/scripts` | 否 | - |
 
-其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；其他资源的全局 API 用于跨 Project list 和查询。`Project` 和 `Runner` 为集群级资源。
+其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job`、`BuildResource` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。BuildResource 仅提供 Project API。`Project`、`Runner`、`BuildConf` 和 `Script` 为集群级资源。
 
 apiserver还为 Runner提供服务端过滤的 Job list-watch：
 
@@ -290,9 +293,14 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
+ebs-buildresources
+ebs-buildconfs
+ebs-scripts
 ebs-users
 ebs-machineaccounts
 ```
+
+此外，内部索引 `ebs-build-target-claims` 用于构建目标互斥，不作为 API 资源暴露。
 
 `ebs-users` 使用User名称作为文档ID，每个文档同时保存公开对象和内部credential字段：
 
@@ -343,7 +351,7 @@ User的REST Storage是专用实现。注册接口写入包含credential的完整
 
 MachineAccount的REST Storage是专用实现。内部创建接口写入完整文档，认证接口读取credential字段；GET/List只构造并返回`apiVersion`、`kind`、`metadata`和`spec`，不得序列化credential。认证失败计数和锁定时间使用ES的`seq_no`、`primary_term`执行乐观并发更新。DELETE删除单个文档，删除成功后账号不能继续认证。
 
-apiserver 启动时检查并创建全部 ES-only 资源索引。Build 和其他业务资源使用基础 mapping，User 和 MachineAccount 使用独立的 IAM mapping。IAM mapping 单独定义不建立索引的 `credential` 字段，避免认证数据字段出现在业务资源 mapping 中。
+apiserver 启动时检查并创建全部 ES-only 资源索引。RpmRepo 使用独立 mapping，Build 等其余业务资源使用基础 mapping；内部构建目标互斥索引使用专用协调 mapping。User 和 MachineAccount 使用独立的 IAM mapping，单独定义不建立索引的 `credential` 字段，避免认证数据字段出现在业务资源 mapping 中。
 物理索引使用 `-v1` 版本后缀，例如 `ebs-builds-v1`，并在创建时绑定无版本的稳定 alias `ebs-builds`。alias 设置 `is_write_index: true`，所有读写和 PIT 操作只使用 alias。生产环境不依赖动态 mapping 或首次写入自动建索引。
 
 #### ES 文档与 mapping
