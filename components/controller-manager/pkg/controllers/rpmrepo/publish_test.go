@@ -202,18 +202,18 @@ func TestReconcileReleaseSkipsCandidateWhenPolicySaysNo(t *testing.T) {
 	if result.Requeue || result.RequeueAfter != 0 {
 		t.Fatalf("a skipped candidate must not requeue, got %+v", result)
 	}
-	if len(client.StatusWrites) != 0 {
-		t.Fatalf("a policy skip without a residual release must not write status, got %d writes", len(client.StatusWrites))
+	if len(client.StatusWrites) != 1 {
+		t.Fatalf("a policy skip must persist one terminal status, got %d writes", len(client.StatusWrites))
 	}
 	if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
 		t.Fatalf("a skipped candidate must not reach Artifact Manager")
 	}
-	if repo := client.RpmRepos[key(testProject, testBuild)]; repo.Status.Release != nil {
-		t.Fatalf("a skipped candidate must not persist a release state: %+v", repo.Status.Release)
+	if repo := client.RpmRepos[key(testProject, testBuild)]; repo.Status.Release == nil || repo.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {
+		t.Fatalf("a skipped candidate must persist Skipped: %+v", repo.Status.Release)
 	}
 }
 
-func TestReconcileReleaseClearsResidualReleaseBeforeSkipping(t *testing.T) {
+func TestReconcileReleaseReplacesResidualReleaseWithSkipped(t *testing.T) {
 	client := NewFakeClient()
 	repo := releasableRpmRepo(testBuild)
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePending}
@@ -232,9 +232,9 @@ func TestReconcileReleaseClearsResidualReleaseBeforeSkipping(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(client.StatusWrites) != 1 {
-		t.Fatalf("a residual release must be cleared exactly once, got %d writes", len(client.StatusWrites))
+		t.Fatalf("a residual release must be replaced exactly once, got %d writes", len(client.StatusWrites))
 	}
-	if client.StatusWrites[0].Status.Release != nil {
-		t.Fatalf("the residual release must be cleared")
+	if release := client.StatusWrites[0].Status.Release; release == nil || release.Phase != ebsv1.RpmRepoReleaseSkipped || release.Transition != nil {
+		t.Fatalf("the residual release must become Skipped: %+v", release)
 	}
 }

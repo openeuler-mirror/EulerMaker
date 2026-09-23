@@ -179,9 +179,9 @@ func releaseKey(project, os, arch string) string {
 	return releaseKeyPrefix + "/" + project + "/" + os + "/" + arch
 }
 
-// releaseTerminal reports whether the formal release already reached a terminal phase. Skipped is written by
-// the Build Controller for single builds and is terminal for this controller too: it must never be advanced,
-// rewritten on abort, or counted.
+// releaseTerminal reports whether the formal release already reached a terminal phase. Skipped is written
+// when a single build is created or after a nonpublishing build's repository inputs settle; it must never be
+// advanced, rewritten on abort, or counted.
 func releaseTerminal(repo *ebsv1.RpmRepo) bool {
 	if repo == nil || repo.Status.Release == nil {
 		return false

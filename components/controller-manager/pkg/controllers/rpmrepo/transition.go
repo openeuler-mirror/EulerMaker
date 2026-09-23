@@ -297,6 +297,10 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 		log.Printf("controller=%s key=%q uid=%q reason=BuildInfoNotReady", Name, r.key, repo.UID)
 		return controller.ReconcileResult{}, nil
 	}
+	if !build.Spec.BuildTarget.PublishFlag {
+		_, err := r.writeReleaseSkipped(repo)
+		return controller.ReconcileResult{}, err
+	}
 	if repo.Status.Repository == nil || len(repo.Status.Repository.SourceJobUIDs) == 0 {
 		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonNoPublishableArtifacts, countReleaseFailure)
 	}
