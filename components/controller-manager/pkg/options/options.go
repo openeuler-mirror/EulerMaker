@@ -85,7 +85,7 @@ func Parse(args []string) (Options, error) {
 	o := Options{
 		API:       APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
 		Manager:   ManagerOptions{Controllers: "*", Workers: 6, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
-		Source:    SourceOptions{PollPeriod: 30 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
+		Source:    SourceOptions{PollPeriod: 15 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
 		Health:    HealthOptions{Address: ":8080"},
 		Job:       JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
 		Runner:    RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},

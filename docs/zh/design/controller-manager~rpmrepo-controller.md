@@ -13,7 +13,7 @@ RpmRepo Controller 是 controller-manager 中负责把构建产物物化为 RPM 
 
 - 不写 `Build.status`、`BuildInfo.status`、`Job.status`、`Project.status`；Build 侧由 Build Controller 自行复制发布结果；
 - 不创建或删除 Job，不修改 `Build.spec`，不修改 `RpmRepo.spec`（首版 `RpmRepo.spec` 为空 `{}`）；
-- 不直连 Artifact Manager 的 `${dataDir}`；所有物化与发布动作只经 `ArtifactManagerClient` 的 HTTP 接口；本控制器不解析、不持久化 RPM 元数据（单个 RPM 的元信息由 Artifact Manager 维护）；
+- 所有物化与发布动作只经 `ArtifactManagerClient` 的 HTTP 接口；
 - 不负责仓库签名、跨实例复制、镜像同步与 delta RPM。
 
 ## 二、依赖与组件边界
@@ -84,7 +84,7 @@ RpmRepo PollingSource ─key──▶   reconcile（经包内 Client）      ─
 
 ### 2.3 Source 装配语义
 
-RpmRepo PollingSource 是唯一的外部变化触发源，周期沿用 `--poll-period`（默认 30s）。Job 完成由下一轮轮询发现；实际处理时间还受队列等待、请求耗时及错误重试影响。
+RpmRepo PollingSource 是唯一的外部变化触发源，周期沿用 `--poll-period`（默认 15s）。Job 完成由下一轮轮询发现；实际处理时间还受队列等待、请求耗时及错误重试影响。
 
 - `rpmrepos`：注册 `PollingSourceFactory.ForResource(RpmReposGVR, period, metav1.ListOptions{FieldSelector: "status.release.phase!=Ready,status.release.phase!=Failed,status.release.phase!=Skipped"})` 的 handler（`RpmReposGVR` 已由框架 `source` 包内置）。Add/Update 事件按 `build/{namespace}/{name}` 入队；Delete 事件仅记录日志；
   - 过滤语义：本源**只带** `fieldSelector`（驱动过程仓键、由单个对象重算），不带 `labelSelector`；只排除「发布终态（`release.phase ∈ {Ready, Failed, Skipped}`）」的 RpmRepo。过程仓不再有相位，apiserver 对 RpmRepo 的**字段**选择器只有 `metadata.name` / `metadata.namespace` / `status.release.phase`（labelSelector 另行支持，发布候选查询见 §7.3），因此不能按过程仓状态过滤。字段缺失（`release` 为 null）视为「不等于任何具体相位」，不会被排除。RpmRepo 的 `ebs.io/target-os` / `ebs.io/target-arch` 标签由 Build Controller 在创建时写入、apiserver 创建校验强制存在；
