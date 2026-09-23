@@ -17,6 +17,16 @@ CGO_ENABLED=0 go build -o ebs-gateway ./cmd/server
 docker build -t eulermaker/ebs-gateway:dev .
 ```
 
+## 全局脚本权限
+
+`/apis/ebs/v1/scripts` 为需要认证的全局资源，不按 Project 成员关系过滤：
+
+- Ops/Admin/System：创建、读取、列表及 PUT/PATCH 修改。
+- 普通登录用户：读取和列表，禁止写入。
+- Runner：仅 GET/HEAD `/apis/ebs/v1/scripts/{name}`，禁止列表和写入。
+
+不开放匿名访问、DELETE、Watch、status 子资源和 Project-scoped 路径。脚本字段及更新冲突由 apiserver 校验，Gateway 不解析或执行脚本内容。
+
 ## 本地运行
 
 Gateway 需要一个 Base64 编码的 HMAC 密钥。以下命令生成仅供本地开发使用的临时密钥：
