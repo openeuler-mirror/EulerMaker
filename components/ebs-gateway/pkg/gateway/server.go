@@ -226,12 +226,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(rec, err.Error(), http.StatusForbidden)
 		return
 	}
+	injectIdentityHeaders(r, ident)
 	if decision.handle != nil {
 		decision.handle(rec, r)
 		return
 	}
 
-	injectIdentityHeaders(r, ident)
 	g.proxy.ServeHTTP(rec, r)
 }
 
@@ -1009,138 +1009,10 @@ func (g *Gateway) getUser(ctx context.Context, username string) (userInfo, *gate
 	return userInfo{Name: user.Metadata.Name, Enabled: user.Spec.Enabled, Scope: user.Spec.Scopes[0]}, nil
 }
 
-type authzDecision struct {
-	handle http.HandlerFunc
-}
-
-func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
-	protectedRoute := parseRoute(r.URL.Path)
-	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "scripts" {
-		return authzDecision{}, fmt.Errorf("Script is cluster-scoped")
-	}
-	if r.URL.Path == apiPrefix+"/scripts" || strings.HasPrefix(r.URL.Path, apiPrefix+"/scripts/") {
-		return authorizeScript(r, ident)
-	}
-	if protectedRoute.resource == "jobs" && len(protectedRoute.rest) == 1 && protectedRoute.rest[0] == "abort" {
-		if ident.IsRunner() || ident.IsSystem() || !(ident.IsUser() || ident.IsOps() || ident.IsAdmin()) || protectedRoute.project == "" || protectedRoute.name == "" {
-			return authzDecision{}, fmt.Errorf("Job abort requires a user identity and project-scoped Job")
-		}
-		project, err := g.getProject(ctx, protectedRoute.project)
-		if err != nil {
-			return authzDecision{}, err
-		}
-		if !projectAllowsUser(project, ident.Subject) {
-			return authzDecision{}, fmt.Errorf("project access denied")
-		}
-		if r.Method != http.MethodPost {
-			return authzDecision{handle: func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Allow", http.MethodPost)
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			}}, nil
-		}
-		injectIdentityHeaders(r, ident)
-		return authzDecision{handle: g.jobAbortHandler(ident)}, nil
-	}
-	if protectedRoute.resource == "jobs" && len(protectedRoute.rest) > 0 && protectedRoute.rest[0] == "status" && r.Method != http.MethodGet && r.Method != http.MethodHead && !ident.IsSystem() && !ident.IsRunner() {
-		return authzDecision{}, fmt.Errorf("Job status write requires system or assigned Runner identity")
-	}
-	if r.Method == http.MethodDelete && protectedRoute.resource == "buildresources" && protectedRoute.project == "default" && protectedRoute.name == "default" && len(protectedRoute.rest) == 0 {
-		return authzDecision{}, fmt.Errorf("global default BuildResource cannot be deleted")
-	}
-	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "buildconfs" {
-		return authzDecision{}, fmt.Errorf("BuildConf is cluster-scoped")
-	}
-	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) > 0 && parts[0] == "buildconfs" {
-		valid := len(parts) == 1 && r.Method == http.MethodPost || len(parts) == 2 && parts[1] == "default" && (r.Method == http.MethodPut || r.Method == http.MethodPatch)
-		if !valid || !(ident.IsOps() || ident.IsAdmin() || ident.IsSystem()) {
-			return authzDecision{}, fmt.Errorf("BuildConf write requires ops or higher and a supported operation")
-		}
-		injectIdentityHeaders(r, ident)
-		return authzDecision{}, nil
-	}
-	if ident.IsSystem() || ident.IsAdmin() || (ident.IsOps() && protectedRoute.resource == "runners") {
-		route := parseRoute(r.URL.Path)
-		if route.resource == "projects" && route.project == "" && r.Method == http.MethodPost {
-			if err := g.validateSystemProjectOwner(ctx, r); err != nil {
-				return authzDecision{}, err
-			}
-		}
-		injectIdentityHeaders(r, ident)
-		return authzDecision{}, nil
-	}
-	if ident.IsRunner() {
-		return g.authorizeRunner(ctx, r, ident)
-	}
-	if ident.IsOps() {
-		route := parseRoute(r.URL.Path)
-		// Ops keeps its cross-project BuildResource access; Runner management is handled above.
-		// Other business resources use the same owner/member rules as ebs:user.
-		if route.resource == "buildresources" {
-			return g.authorizeOps(r)
-		}
-	}
-
-	route := parseRoute(r.URL.Path)
-	if route.resource == "" {
-		return authzDecision{}, fmt.Errorf("unsupported ebs api path")
-	}
-
-	if route.resource == "runners" {
-		return authzDecision{}, fmt.Errorf("runner api requires system scope")
-	}
-
-	if route.project == "" && isProjectScopedResource(route.resource) {
-		return authzDecision{}, fmt.Errorf("global %s api requires system scope", route.resource)
-	}
-
-	if route.resource == "projects" && route.project == "" {
-		return g.handleProjectCollection(ctx, r, ident)
-	}
-
-	if route.resource == "projects" && route.project != "" {
-		project, err := g.getProject(ctx, route.project)
-		if err != nil {
-			return authzDecision{}, err
-		}
-		if !projectAllowsUser(project, ident.Subject) {
-			return authzDecision{}, fmt.Errorf("project access denied")
-		}
-		if project.Labels[ownerUserLabel] != ident.Subject && r.Method != http.MethodGet && r.Method != http.MethodHead {
-			return authzDecision{}, fmt.Errorf("only project owner can modify project")
-		}
-		if isProjectObjectWrite(r.Method, route) {
-			if err := g.protectProjectAccessLabels(r, ident, project); err != nil {
-				return authzDecision{}, err
-			}
-		}
-		return authzDecision{}, nil
-	}
-
-	if route.project != "" {
-		project, err := g.getProject(ctx, route.project)
-		if err != nil {
-			return authzDecision{}, err
-		}
-		if !projectAllowsUser(project, ident.Subject) {
-			return authzDecision{}, fmt.Errorf("project access denied")
-		}
-		if route.resource == "buildresources" && r.Method != http.MethodGet && r.Method != http.MethodHead {
-			return authzDecision{}, fmt.Errorf("build resource access is read-only for project users")
-		}
-		if project.Labels[ownerUserLabel] != ident.Subject && r.Method == http.MethodDelete {
-			return authzDecision{}, fmt.Errorf("project member cannot delete resources")
-		}
-		return authzDecision{}, nil
-	}
-
-	return authzDecision{}, fmt.Errorf("access denied")
-}
-
-func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
+func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Identity, route routeInfo) (authzDecision, error) {
 	if ident.Runner == "" || ident.Subject != ident.Runner {
 		return authzDecision{}, fmt.Errorf("runner identity mismatch")
 	}
-	route := parseRoute(r.URL.Path)
 	if route.resource == "runners" {
 		if route.name == "" {
 			if r.Method != http.MethodPost {
@@ -1204,8 +1076,7 @@ func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Id
 	return authzDecision{}, fmt.Errorf("runner access denied")
 }
 
-func (g *Gateway) authorizeOps(r *http.Request) (authzDecision, error) {
-	route := parseRoute(r.URL.Path)
+func (g *Gateway) authorizeOps(r *http.Request, route routeInfo) (authzDecision, error) {
 	if route.resource == "buildresources" && route.project != "" && len(route.rest) == 0 {
 		if route.name == "" {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodPost {
@@ -1255,7 +1126,6 @@ func (g *Gateway) authorizeRunnerJobs(r *http.Request, ident Identity) (authzDec
 			return
 		}
 		defer g.releaseRunnerWatch(ident.Runner)
-		injectIdentityHeaders(req, ident)
 		g.proxy.ServeHTTP(w, req)
 	}}, nil
 }

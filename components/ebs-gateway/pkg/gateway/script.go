@@ -12,7 +12,7 @@ func authorizeScript(r *http.Request, ident Identity) (authzDecision, error) {
 	if !ok || len(parts) < 1 || len(parts) > 2 || parts[0] != "scripts" || (len(parts) == 2 && !validPathSegment(parts[1])) || hasWatchRequest(r) {
 		return authzDecision{}, fmt.Errorf("unsupported Script API operation")
 	}
-	privileged := ident.IsOps() || ident.IsAdmin() || ident.IsSystem()
+	privileged := ident.IsPrivileged()
 	allowed := false
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
@@ -28,6 +28,5 @@ func authorizeScript(r *http.Request, ident Identity) (authzDecision, error) {
 	if !allowed {
 		return authzDecision{}, fmt.Errorf("Script access denied: writes require ops or higher; only supported reads are allowed")
 	}
-	injectIdentityHeaders(r, ident)
 	return authzDecision{}, nil
 }
