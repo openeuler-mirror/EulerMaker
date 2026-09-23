@@ -2,12 +2,15 @@ package build
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"testing"
 
 	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	request "k8s.io/apiserver/pkg/endpoints/request"
@@ -82,5 +85,63 @@ func TestLimitedBuild(t *testing.T) {
 		if got := limitedBuild(&ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: typ}}); got != (typ != "single") {
 			t.Fatalf("unexpected gate for %s", typ)
 		}
+	}
+}
+
+type fullBuildLister struct {
+	rest.Lister
+	t      *testing.T
+	exists bool
+	err    error
+}
+
+func (l *fullBuildLister) List(ctx context.Context, opts *internalversion.ListOptions) (runtime.Object, error) {
+	l.t.Helper()
+	if ns, _ := request.NamespaceFrom(ctx); ns != "project-a" {
+		l.t.Fatalf("namespace = %q", ns)
+	}
+	if opts.Limit != 1 || !opts.FieldSelector.Matches(fields.Set{"status.phase": string(ebsv1.BuildSuccess)}) || opts.FieldSelector.Matches(fields.Set{"status.phase": string(ebsv1.BuildFailed)}) {
+		l.t.Fatal("must query one successful full Build")
+	}
+	for _, tc := range []struct {
+		os, arch, typ string
+		match         bool
+	}{
+		{"os", "arch", "full", true}, {"os", "arch", "incremental", false},
+		{"os", "other", "full", false}, {"other", "arch", "full", false},
+	} {
+		if got := opts.LabelSelector.Matches(labels.Set{ebsv1.BuildTargetOSLabel: tc.os, ebsv1.BuildTargetArchLabel: tc.arch, ebsv1.BuildTypeLabel: tc.typ}); got != tc.match {
+			l.t.Fatalf("selector mismatch for %+v", tc)
+		}
+	}
+	if l.err != nil {
+		return nil, l.err
+	}
+	list := &ebsv1.BuildList{}
+	if l.exists {
+		list.Items = []ebsv1.Build{{Status: ebsv1.BuildStatus{Phase: ebsv1.BuildSuccess}}}
+	}
+	return list, nil
+}
+
+func TestValidateFullBuildBaseline(t *testing.T) {
+	ctx := request.WithNamespace(context.Background(), "project-a")
+	for _, typ := range []string{"incremental", "specified"} {
+		build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: typ, BuildTarget: ebsv1.BuildTarget{Os: "os", Arch: "arch"}}}
+		if err := validateFullBuildBaseline(ctx, &fullBuildLister{t: t, exists: true}, build); err != nil {
+			t.Fatal(err)
+		}
+		err := validateFullBuildBaseline(ctx, &fullBuildLister{t: t}, build)
+		status, ok := err.(*apierrors.StatusError)
+		if !ok || status.ErrStatus.Code != http.StatusPreconditionFailed || status.ErrStatus.Reason != "FullBuildRequired" || status.ErrStatus.Message != "No complete full build exists yet for this project and target" {
+			t.Fatalf("unexpected missing-baseline response: %v", err)
+		}
+		want := errors.New("list unavailable")
+		if err := validateFullBuildBaseline(ctx, &fullBuildLister{t: t, err: want}, build); err != want {
+			t.Fatalf("list error not preserved: %v", err)
+		}
+	}
+	if err := validateFullBuildBaseline(ctx, &fullBuildLister{t: t}, &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "full"}}); err != nil {
+		t.Fatal(err)
 	}
 }

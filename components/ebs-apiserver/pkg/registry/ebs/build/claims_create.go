@@ -75,6 +75,10 @@ func (m *claimManager) create(ctx context.Context, obj runtime.Object, dryRun bo
 			m.cleanup(ctx, c, "CreateNotSent")
 			return nil, err
 		}
+		if err := validateFullBuildBaseline(ctx, m.list, b); err != nil {
+			m.cleanup(ctx, c, "CreateNotSent")
+			return nil, err
+		}
 	}
 	if dryRun {
 		return persist()

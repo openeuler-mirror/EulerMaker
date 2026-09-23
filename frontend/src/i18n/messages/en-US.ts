@@ -204,6 +204,8 @@ export default {
     abortBuildFailed: "Could not abort the build",
     partialBuildFailure: "Some builds could not be created. Review the created records in build history.",
     activeBuildConflict: "A build for the same OS and architecture is already in progress in this project. Try again after it finishes.",
+    fullBuildRequired: "No complete full build exists yet for this target.",
+    partialFullBuildRequired: "Some targets do not have a complete full build yet; the other builds were created.",
     partialActiveBuildConflict: "Some targets already have a build in progress for the same OS and architecture; the other builds were created.",
     selectBuildTarget: "Select at least one build target",
     buildConfigurationRequired: "Configure at least one build target and package first",

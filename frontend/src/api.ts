@@ -28,7 +28,12 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
   const response = await fetch(path, { ...init, headers });
-  if (!response.ok) throw new ApiError(response.status, errorKeyForStatus(response.status));
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const reason = body && typeof body === "object" && "reason" in body ? body.reason : undefined;
+    const key = reason === "FullBuildRequired" ? "project.fullBuildRequired" : errorKeyForStatus(response.status);
+    throw new ApiError(response.status, key);
+  }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
