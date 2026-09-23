@@ -1028,8 +1028,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 | `--createrepo-workers` | `min(8, CPU)` | 单次生成 worker 数 |
 | `--repository-workers` | `2` | 并发物化仓库数 |
 | `--repository-queue-capacity` | `100` | 内存待执行队列上限；达到上限后新请求返回 429 |
-| `--rpmrepo-max-jobs-per-batch` | `20` | RpmRepo Controller 单次仓库推进最多包含的 Job 数 |
-| `--rpmrepo-max-input-bytes` | `20GiB` | 单批 Manifest 引用文件的总大小上限 |
+| `--rpmrepo-max-jobs-per-batch` | `100` | RpmRepo Controller 单次仓库推进最多包含的 Job 数 |
 | `--repository-timeout` | `30m` | 单次物化最大时间 |
 | `--repository-work-ttl` | `24h` | 无活动任务工作目录的清理期限 |
 | `--repository-command-output-limit` | `64KiB` | stdout/stderr 各自保存上限 |

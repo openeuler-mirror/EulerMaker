@@ -56,7 +56,6 @@ func main() {
 			ArtifactManagerAddr:    o.RpmRepo.ArtifactManagerAddr,
 			ArtifactManagerTimeout: o.RpmRepo.ArtifactManagerTimeout,
 			MaxJobsPerBatch:        o.RpmRepo.MaxJobsPerBatch,
-			MaxInputBytes:          o.RpmRepo.MaxInputBytes,
 			MaterializeRetryLimit:  o.RpmRepo.MaterializeRetryLimit,
 			PollPeriod:             o.Source.PollPeriod,
 			MaxRetries:             o.Manager.ControllerMaxRetries,

@@ -50,7 +50,6 @@ type Config struct {
 	ArtifactManagerAddr    string
 	ArtifactManagerTimeout time.Duration
 	MaxJobsPerBatch        int
-	MaxInputBytes          int64
 	MaterializeRetryLimit  int
 	PollPeriod             time.Duration
 	MaxRetries             int
@@ -68,8 +67,8 @@ func (c Config) validate() error {
 	if c.ArtifactManagerTimeout <= 0 {
 		return fmt.Errorf("artifact manager timeout must be positive")
 	}
-	if c.MaxJobsPerBatch <= 0 || c.MaxInputBytes <= 0 || c.MaterializeRetryLimit <= 0 {
-		return fmt.Errorf("batch size, input byte limit and materialize retry limit must be positive")
+	if c.MaxJobsPerBatch <= 0 || c.MaterializeRetryLimit <= 0 {
+		return fmt.Errorf("batch size and materialize retry limit must be positive")
 	}
 	if c.PollPeriod <= 0 || c.MaxRetries < 0 {
 		return fmt.Errorf("poll period must be positive and the retry count must not be negative")

@@ -28,7 +28,7 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if o.Runner.HeartbeatTimeout != 2*time.Minute || o.Runner.StartupGracePeriod != 5*time.Minute {
 		t.Fatalf("unexpected Runner controller defaults: %+v", o.Runner)
 	}
-	if o.RpmRepo.MaxJobsPerBatch != 20 || o.RpmRepo.MaxInputBytes != 21474836480 || o.RpmRepo.MaterializeRetryLimit != 3 || o.RpmRepo.ArtifactManagerTimeout != 30*time.Second {
+	if o.RpmRepo.MaxJobsPerBatch != 100 || o.RpmRepo.MaterializeRetryLimit != 3 || o.RpmRepo.ArtifactManagerTimeout != 30*time.Second {
 		t.Fatalf("unexpected RpmRepo controller defaults: %+v", o.RpmRepo)
 	}
 }
@@ -38,7 +38,6 @@ func TestParseRpmRepoFlags(t *testing.T) {
 		"--apiserver=https://api:8443",
 		"--insecure-skip-verify=true",
 		"--rpmrepo-max-jobs-per-batch=5",
-		"--rpmrepo-max-input-bytes=1024",
 		"--rpmrepo-materialize-retry-limit=4",
 		"--artifact-manager-addr=http://artifact-manager:8080",
 		"--artifact-manager-timeout=10s",
@@ -46,7 +45,7 @@ func TestParseRpmRepoFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.RpmRepo.MaxJobsPerBatch != 5 || o.RpmRepo.MaxInputBytes != 1024 || o.RpmRepo.MaterializeRetryLimit != 4 {
+	if o.RpmRepo.MaxJobsPerBatch != 5 || o.RpmRepo.MaterializeRetryLimit != 4 {
 		t.Fatalf("flat RpmRepo limits were not stored: %+v", o.RpmRepo)
 	}
 	if o.RpmRepo.ArtifactManagerAddr != "http://artifact-manager:8080" || o.RpmRepo.ArtifactManagerTimeout != 10*time.Second {
@@ -58,7 +57,6 @@ func TestParseRejectsInvalidRpmRepoOptions(t *testing.T) {
 	for _, args := range [][]string{
 		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--rpmrepo-materialize-retry-limit=0"},
 		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--rpmrepo-max-jobs-per-batch=0"},
-		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--rpmrepo-max-input-bytes=0"},
 		{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--artifact-manager-timeout=0"},
 	} {
 		if _, err := Parse(args); err == nil {

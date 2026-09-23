@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strings"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -17,7 +16,6 @@ type candidate struct {
 	name      string
 	specName  string
 	createdAt int64
-	bytes     int64
 }
 
 // sortCandidates orders inputs by creation time, name and UID so a retry selects the same batch.
@@ -33,62 +31,24 @@ func sortCandidates(values []candidate) {
 	})
 }
 
-// batchSelection is the deterministic result of applying the batch limits to the ordered candidates.
-type batchSelection struct {
-	inputs    []candidate
-	oversized *candidate
-}
-
-// selectBatch keeps at most one Job per spec, then appends candidates until the Job count or byte limit would
-// be exceeded. The first candidate is always included unless it alone exceeds the byte limit, which is the
-// terminal "input too large" case.
-func selectBatch(candidates []candidate, maxJobs int, maxBytes int64) batchSelection {
+// selectBatch keeps at most one Job per spec, in stable order, up to the Job count limit.
+func selectBatch(candidates []candidate, maxJobs int) []candidate {
 	ordered := append([]candidate(nil), candidates...)
 	sortCandidates(ordered)
 	seenSpecs := make(map[string]struct{}, len(ordered))
-	selection := batchSelection{}
-	var total int64
+	selection := make([]candidate, 0, min(len(ordered), maxJobs))
 	for i := range ordered {
 		item := ordered[i]
 		if _, exists := seenSpecs[item.specName]; exists {
 			continue
 		}
-		if len(selection.inputs) == 0 {
-			if maxBytes > 0 && item.bytes > maxBytes {
-				oversized := item
-				return batchSelection{oversized: &oversized}
-			}
-			seenSpecs[item.specName] = struct{}{}
-			selection.inputs = append(selection.inputs, item)
-			total += item.bytes
-			continue
-		}
-		if len(selection.inputs) >= maxJobs {
-			break
-		}
-		if maxBytes > 0 && total+item.bytes > maxBytes {
+		if len(selection) >= maxJobs {
 			break
 		}
 		seenSpecs[item.specName] = struct{}{}
-		selection.inputs = append(selection.inputs, item)
-		total += item.bytes
+		selection = append(selection, item)
 	}
 	return selection
-}
-
-// materializationInputBytes sums the RPM payload of a completed manifest. Logs and other non-RPM files are not
-// part of the materialization input, matching what Artifact Manager copies into the repository.
-func materializationInputBytes(manifest JobUploadManifest) int64 {
-	var total int64
-	for _, file := range manifest.Files {
-		if !strings.HasSuffix(strings.ToLower(file.RelativePath), ".rpm") {
-			continue
-		}
-		if file.Size > 0 {
-			total += file.Size
-		}
-	}
-	return total
 }
 
 // repositoryUID reproduces the Artifact Manager identity: SHA-256 over length prefixed project, build name and

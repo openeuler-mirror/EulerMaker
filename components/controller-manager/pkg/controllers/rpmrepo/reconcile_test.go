@@ -45,7 +45,6 @@ func testConfig() Config {
 		ArtifactManagerAddr:    "http://artifact-manager",
 		ArtifactManagerTimeout: 5 * time.Second,
 		MaxJobsPerBatch:        20,
-		MaxInputBytes:          1 << 30,
 		MaterializeRetryLimit:  3,
 		PollPeriod:             30 * time.Second,
 		MaxRetries:             3,
@@ -352,50 +351,6 @@ func TestReconcileBuildReplaysRetryableFailureWithinBudget(t *testing.T) {
 	request := artifacts.SubmitRepositoryRequests[0]
 	if request.RepositoryUID != "next-1" || len(request.Manifests) != 1 || request.Manifests[0].JobUID != "uid-job-a" {
 		t.Fatalf("the replay must reuse the frozen checkpoint: %+v", request)
-	}
-}
-
-func TestReconcileBuildFailsWhenFirstCandidateExceedsInputLimit(t *testing.T) {
-	client := NewFakeClient()
-	repo := newRpmRepo(testBuild)
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
-
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
-		return completedManifest(150), nil
-	}
-	config := testConfig()
-	config.MaxInputBytes = 100
-	c := newTestController(t, client, artifacts, config)
-
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result != (controller.ReconcileResult{}) {
-		t.Fatalf("unexpected result %+v", result)
-	}
-	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Repository.Transition != nil {
-		t.Fatalf("an oversized candidate must not form a batch")
-	}
-	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed {
-		t.Fatalf("release terminal missing: %+v", updated.Status.Release)
-	}
-	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed) {
-		t.Fatalf("PublishSucceed=False/RepositoryCreationFailed missing: %+v", updated.Status.Conditions)
-	}
-	if updated.Status.Repository.UpdatedAt != nil {
-		t.Fatalf("the oversized terminal is release side only, but repository.updatedAt was written")
-	}
-	if conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed) {
-		t.Fatalf("the oversized terminal must not claim a repository batch failure: %+v", updated.Status.Conditions)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("no materialization request may be sent, got %d", len(artifacts.SubmitRepositoryRequests))
 	}
 }
 

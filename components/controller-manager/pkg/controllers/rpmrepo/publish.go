@@ -477,7 +477,6 @@ type failureCounter int
 
 const (
 	countReleaseFailure failureCounter = iota
-	countRepositoryFailure
 	countNoFailure
 )
 
@@ -498,8 +497,6 @@ func (r *reconciler) writeReleaseFailure(repo *ebsv1.RpmRepo, reason string, cou
 		return controller.ReconcileResult{}, err
 	}
 	switch counter {
-	case countRepositoryFailure:
-		repositoryFailed.Inc()
 	case countReleaseFailure:
 		releaseFailed.Inc()
 	}

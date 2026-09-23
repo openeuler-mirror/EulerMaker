@@ -50,8 +50,7 @@ components/controller-manager/pkg/controllers/rpmrepo/
 - 控制器自有配置项（启动阶段校验，非法即启动失败）：
   | 配置 | 默认值 | 校验规则 |
   | --- | --- | --- |
-  | `--rpmrepo-max-jobs-per-batch` | `20` | 必须 `> 0` |
-  | `--rpmrepo-max-input-bytes` | `20GiB`（`21474836480` 字节） | 必须 > 0；按 Artifact Manager 的物化输入口径累计，属批次追加上限；首个候选自身超限时直接发布失败（见第六章「批次构成」） |
+  | `--rpmrepo-max-jobs-per-batch` | `100` | 必须 `> 0` |
   | `--rpmrepo-materialize-retry-limit` | `3` | 必须 `> 0`；物化可重试失败的重试次数上限，首次提交不计入，判定见第八章 |
   | `--artifact-manager-addr` | 必填，无默认 | 非空且可解析为带 host 的 `http` / `https` URL |
   | `--artifact-manager-timeout` | `30s` | 必须 `> 0` |
@@ -371,12 +370,9 @@ Job 主动中止以 apiserver 持久化的终态为准：Aborted 即使已有 Co
 
 - 候选按 `creationTimestamp`、`metadata.name`、`metadata.uid` 升序稳定排序；
 - 同一批次内每个 `specName` 至多选择一个 Job，其余留到下一批；
-- 每个候选的物化输入字节数按 Artifact Manager 的物化输入口径计算，与其保持一致；
-- 形成批次：批次为空时取排序最前的候选——若其自身输入超过 `--rpmrepo-max-input-bytes`，**不形成批次**，输出一次 `reason=InputTooLarge`（附 `bytes` 与 `limit`）并按发布失败终局收口（只写发布侧条件，见 §7.2 第 2 步）；否则无条件加入该候选；
-- 继续追加：下一个候选会使累计输入超过 `--rpmrepo-max-input-bytes` 时，该候选留待下一批并结束本批；达到 `--rpmrepo-max-jobs-per-batch` 或候选集取完同样结束本批；
-- 被留待下一批的候选在成为首个候选时按同一规则判定，因此任何自身超限的候选最终都会触发该失败终局，不会造成静默丢包；
-- 该判定位于批次提交路径，不受 `BuildInfo.status.phase=Completed` 门禁约束；
-- 不使用时间窗口等待更多 Job；存在可入选 Job 即组批（首个候选自身超限的情形除外）。
+- 按顺序选取至多 `--rpmrepo-max-jobs-per-batch` 个 Job；同一批次内重复 spec 的 Job 留待下一批；
+- Job 列表仍需完整分页读取并稳定排序；按顺序查询 Manifest，选满本批后立即停止查询后续 Manifest。批次未满时扫至列表末尾，以便判断是否仍有 `Open` / `Completing` 输入并安全触发发布；同 spec 的重复 Job 不计入本批容量；
+- 不使用时间窗口等待更多 Job；存在可入选 Job 即组批，不受 `BuildInfo.status.phase=Completed` 门禁约束。
 
 **基础仓与幂等键**
 
@@ -467,7 +463,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
    - 在途批次（`RepositoryReady` 不是 `False/reason=RepositoryCreationFailed`）→ 跳至第 3 步；
    - 已放弃批次（`transition != nil` 且 `RepositoryReady=False/reason=RepositoryCreationFailed`）→ 视为发布终局被外部清空：一次 CAS 重写发布终局 `release.phase=Failed` + `release.transition=nil` + `release.updatedAt` + `PublishSucceed=False`（reason `RepositoryCreationFailed`），不写 `repository.*`、不调用 Artifact Manager、**不重复计** `rpmrepo_controller_repository_failed_total`，记录 `reason=RepositoryCreationFailed` 告警日志，返回零值 + `nil`；
    - 无在途批次 → 第 2 步。
-2. **提交候选批次**（候选规则见第六章）：有候选 Job → 若排序最前的候选自身输入超过 `--rpmrepo-max-input-bytes`，**不形成批次**、不写 `repository.transition`，输出一次 `reason=InputTooLarge` 并按发布失败终局收口（一次 CAS 写 `release.phase=Failed` + `release.transition=nil` + `release.updatedAt` + `PublishSucceed=False`（reason `RepositoryCreationFailed`）；不写 `repository.*`、不调用 Artifact Manager；计一次 `rpmrepo_controller_repository_failed_total`；返回零值 + `nil`）；否则按第六章选出 `inputs` / `baseRepositoryUID` / `repositoryUID`，以最新 `resourceVersion` 一次 CAS 写 `repository.transition` 与 `repository.updatedAt`（409 时结束本周期并延迟 1s 重新入队，下轮重算；本轮不调用 SubmitRepository），随后调 `SubmitRepository` 并把响应交给第 3 步；无候选 Job → 第 5 步。控制器不写任何重试计数（计数以响应 `attempt` 为准）。
+2. **提交候选批次**（候选规则见第六章）：有候选 Job → 按第六章选出 `inputs` / `baseRepositoryUID` / `repositoryUID`，以最新 `resourceVersion` 一次 CAS 写 `repository.transition` 与 `repository.updatedAt`（409 时结束本周期并延迟 1s 重新入队，下轮重算；本轮不调用 SubmitRepository），随后调 `SubmitRepository` 并把响应交给第 3 步；无候选 Job → 第 5 步。控制器不写任何重试计数（计数以响应 `attempt` 为准）。
 3. **结果分流**（`SubmitRepository` 的响应，或 `GetRepository(repository.transition.repositoryUID)` 的响应；冻结 `repository.transition`，沿用 `inputs` / `baseRepositoryUID` / `repositoryUID`，不得重新选批、更换基础仓或重算）：
 
 | 响应 | 处理 |
@@ -596,7 +592,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | 过程仓提升后仍有候选 Job；发布 Ready 后继续检查后续候选 | `ReconcileResult{Requeue: true}` + `nil` |
 | 策略不发布 | 必要的状态清理成功后继续扫描；全部候选处理完返回零值 + `nil` |
 | 检查点存在但 Artifact Manager 查询返回 404 | 按检查点重放对应提交，返回值由提交结果决定，不按 404 写业务失败 |
-| 过程仓失败、发布失败、无可用版本、输入超限、恢复被清空的失败终局或 Build 中止 | 终态写入成功后返回零值 + `nil`，不返回原始业务错误、不主动请求重入 |
+| 过程仓失败、发布失败、无可用版本、恢复被清空的失败终局或 Build 中止 | 终态写入成功后返回零值 + `nil`，不返回原始业务错误、不主动请求重入 |
 | status 写入 Conflict | `ReconcileResult{RequeueAfter: 1s}` + `nil`，下一周期重新计算 |
 | status 写入 Unknown | 按本章 WriteUnknown 确认规则处理，不重放旧决策 |
 | 其它 status 写入错误 | 按本章“状态写错误分类”返回；不得被原始业务错误覆盖或误报为成功 |
@@ -625,7 +621,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 
 - `repositoryUID` 就是幂等键，不额外使用 `Idempotency-Key`；
 - 发布依赖 Artifact Manager 保证：同一 buildName 与相同请求摘要幂等，不同摘要返回 409；Prepared 不会自行激活，只由控制器调用激活接口。
-- 可重试执行失败的退避间隔为 `d = min(initial × 2^(attempt-1), max)`，施加配置的 jitter；返回 `ReconcileResult{RequeueAfter}`，不叠加框架退避。可重试执行失败受重试预算限制，不可重试错误和输入超限按各自规则直接收口；`Creating` 不设超时，长期停留需人工处理。
+- 可重试执行失败的退避间隔为 `d = min(initial × 2^(attempt-1), max)`，施加配置的 jitter；返回 `ReconcileResult{RequeueAfter}`，不叠加框架退避。可重试执行失败受重试预算限制，不可重试错误直接收口；`Creating` 不设超时，长期停留需人工处理。
 - 重试预算以 Artifact Manager 响应的 `attempt` 为**权威计数**（`attempt` 是"服务端已接受的执行尝试次数"，首次提交为 `1`，相同请求处于可重试 `Failed` 被重放时 `+1`，查询与 Ready 重放不递增）；控制器不写任何计数，判定式为 `attempt >= --rpmrepo-materialize-retry-limit + 1` 即预算耗尽；
 - 预算边界：`429` / `503` / 网络超时（服务端未接受新尝试）不递增 `attempt`，因此不消耗预算；`404 RepositoryNotFound`（记录不存在）走"用同一请求重放 `SubmitRepository`"的恢复路径，重放会新建记录并把 `attempt` 重置为 `1`，即计数器从零开始；
 - 退避锚点：退避窗口以 `RepositoryResponse.updatedAt`（服务端记录最近一次状态变更时间）为锚点；窗口未过时，任何重复入队（`rpmrepos` 轮询 resync、框架重入）都只返回剩余等待时间（`RequeueAfter`）+ `nil`，**不重放** `SubmitRepository`、不写 status、不消耗预算。未落到记录的错误若响应带 `Retry-After` 则按其等待；无 `Retry-After`（例如连接中断、响应无法解析）时以上一次成功 `GetRepository` 响应的 `updatedAt` 为锚点，仍无可用锚点则按初始退避（`--controller-slow-retry-initial-delay`，默认 30s）等待。该比较跨进程，允许由 jitter 覆盖的时钟偏差；偏差只会让重放略微提前或推迟，不影响预算与终局判定；
@@ -645,7 +641,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | type | 含义 | True 时机 | False 时机 |
 | --- | --- | --- | --- |
 | `RepositoryReady` | **最近一次批次的结果**：`True` = 最近一次批次成功提升；`False/reason=RepositoryCreationFailed` = 最近一次批次失败收口；未设置 = 尚无批次结果（含仅继承基线、从未物化的对象） | 每次成功提升当前版本 | 过程仓失败收口（重试耗尽或不可重试失败） |
-| `PublishSucceed` | 正式发布是否成功 | 发布 `Ready` 后写入 | 发布不可重试失败（`409` / `422` / `Failed{retryable=false}`）、过程仓失败收口（重试耗尽 / 不可重试失败）时的终局登记（由 §7.2 失败收口同次写入），"无可用版本"的发布失败终局（§7.2 第 5 步），首个候选自身超限的发布失败终局（§7.2 第 2 步），已放弃批次被外部清空后的重新收口（§7.2 第 1 步），或同名 Build 被中止（reason `BuildAborted`，§7.2 入口与 §7.3 中止收口） |
+| `PublishSucceed` | 正式发布是否成功 | 发布 `Ready` 后写入 | 发布不可重试失败（`409` / `422` / `Failed{retryable=false}`）、过程仓失败收口（重试耗尽 / 不可重试失败）时的终局登记（由 §7.2 失败收口同次写入），"无可用版本"的发布失败终局（§7.2 第 5 步），已放弃批次被外部清空后的重新收口（§7.2 第 1 步），或同名 Build 被中止（reason `BuildAborted`，§7.2 入口与 §7.3 中止收口） |
 
 condition merge helper：
 
@@ -683,13 +679,12 @@ func MergeCondition(conditions []metav1.Condition, condType string, status metav
 | `InputLabelMismatch` | 输入 Job 的 `ebs.io/spec-name` 缺失或为空，或 `ebs.io/target-os` / `ebs.io/target-arch` 缺失或取值与 `Build.spec.buildTarget` 不一致（`ebs.io/build-name` 已由服务端选择器过滤，不产生该告警） |
 | `InputManifestMissing` / `InputManifestNotReady` / `InputManifestFailed` | 输入 manifest 为 `404` / `Open` / `Completing` / `Failed` |
 | `InputObjectMissing` | 候选校验期间 `Job` 对象 NotFound |
-| `InputTooLarge` | 排序最前的候选自身的物化输入超过 `--rpmrepo-max-input-bytes`，本批不形成并转入发布失败终局 |
 | `MultipleReleaseInFlight` | 同一 `{project}/{os}/{arch}` 的候选集内出现多个在途发布 |
 | `ReleasePolicySkipped` | 发布策略判定该候选不发布 |
 | `BuildAborted` | 过程仓流程或发布流程读到同名 `Build.status.phase=Aborted`，把 `release.phase` 收口为 `Failed`，条件 reason 为 `BuildAborted` |
 | `RpmRepoLabelMismatch` | 选中对象的 `ebs.io/target-os` / `ebs.io/target-arch` 标签与同名 Build 的 `spec.buildTarget` 不一致，跳过该对象 |
 
-失败收口日志复用条件 reason：`RepositoryCreationFailed`（过程仓失败或首个候选超限）、`ReleaseFailed`（正式发布失败）、`NoPublishableArtifacts`（无可发布产物）、`BuildAborted`（Build 中止），重试日志附 `attempt` 与本次退避时长。
+失败收口日志复用条件 reason：`RepositoryCreationFailed`（过程仓失败）、`ReleaseFailed`（正式发布失败）、`NoPublishableArtifacts`（无可发布产物）、`BuildAborted`（Build 中止），重试日志附 `attempt` 与本次退避时长。
 
 指标通过 `pkg/metrics.NewCounter` 注册，只保留有独立递增点、用于速率与告警的口径；`pkg/metrics.NewCounter` 不带标签，对象级维度（key / `repositoryUID` / Build 名）只出现在日志中：
 
@@ -704,11 +699,11 @@ rpmrepo_controller_status_update_conflicts_total
 rpmrepo_controller_status_update_unknown_total
 ```
 
-过程仓：`rpmrepo_controller_repository_ready_total` 在成功收口写入（`RepositoryReady=True/reason=RepositoryCreated`）时计一次；`rpmrepo_controller_repository_failed_total` 在每次**过程仓失败收口**（重试耗尽、不可重试失败，或 `GetRepository` 返回 `Deleting`）时计一次（不随轮次累加），并包含首个候选自身超限而直接写入的发布失败终局（该终局只写发布侧，见 §7.2 第 2 步）；**不含**已放弃批次被外部清空后的重新收口；`rpmrepo_controller_materialize_retries_total` 在每次因可重试失败而重放 `SubmitRepository` 时计一次——其中 `200 Failed{retryable=true}` 的重放与 Artifact Manager 响应里 `attempt` 的递增同步，`429` / `503` / 网络 / 超时 / 未解析这类未落到记录的重放不递增 `attempt`、仍计一次。
+过程仓：`rpmrepo_controller_repository_ready_total` 在成功收口写入（`RepositoryReady=True/reason=RepositoryCreated`）时计一次；`rpmrepo_controller_repository_failed_total` 在每次**过程仓失败收口**（重试耗尽、不可重试失败，或 `GetRepository` 返回 `Deleting`）时计一次（不随轮次累加），**不含**已放弃批次被外部清空后的重新收口；`rpmrepo_controller_materialize_retries_total` 在每次因可重试失败而重放 `SubmitRepository` 时计一次——其中 `200 Failed{retryable=true}` 的重放与 Artifact Manager 响应里 `attempt` 的递增同步，`429` / `503` / 网络 / 超时 / 未解析这类未落到记录的重放不递增 `attempt`、仍计一次。
 
-输入与归属：`rpmrepo_controller_build_missing_total` 统计过程仓键在 RpmRepo 已存在、但同名 Build NotFound 导致本键收敛（结束本轮、不写 status）的轮次；发布流程因选中对象的同名 Build 缺失（`reason=ReleaseGroupBuildMissing`）或标签与 Build 目标不一致（`reason=RpmRepoLabelMismatch`）而跳过对象只记告警日志、**不计入本计数**（由同一条告警定位，不重复计数），`Build` 读取的其它失败按可重试 / 永久错误分类、不计入本计数。输入侧被跳过的 Job（manifest 为 `Failed` / 404 / `Open` / `Completing`、候选校验期间 `Job` 对象 NotFound，或 `ebs.io/spec-name` 缺失/为空、`ebs.io/target-os` / `ebs.io/target-arch` 缺失或取值不一致——`ebs.io/build-name` 已由服务端选择器过滤，不属该告警集）一律不写 status、不加计数，只按上表输出 `reason` 告警日志；其中 `Open` / `Completing` 属未就绪输入、阻塞发布触发；首个候选自身超限不属该跳过路径，按 §7.2 第 2 步直接收口为发布失败。
+输入与归属：`rpmrepo_controller_build_missing_total` 统计过程仓键在 RpmRepo 已存在、但同名 Build NotFound 导致本键收敛（结束本轮、不写 status）的轮次；发布流程因选中对象的同名 Build 缺失（`reason=ReleaseGroupBuildMissing`）或标签与 Build 目标不一致（`reason=RpmRepoLabelMismatch`）而跳过对象只记告警日志、**不计入本计数**（由同一条告警定位，不重复计数），`Build` 读取的其它失败按可重试 / 永久错误分类、不计入本计数。输入侧被跳过的 Job（manifest 为 `Failed` / 404 / `Open` / `Completing`、候选校验期间 `Job` 对象 NotFound，或 `ebs.io/spec-name` 缺失/为空、`ebs.io/target-os` / `ebs.io/target-arch` 缺失或取值不一致——`ebs.io/build-name` 已由服务端选择器过滤，不属该告警集）一律不写 status、不加计数，只按上表输出 `reason` 告警日志；其中 `Open` / `Completing` 属未就绪输入、阻塞发布触发。
 
-发布：`rpmrepo_controller_release_ready_total` 在发布成功收口写入（`release.phase=Ready`）时计一次；`rpmrepo_controller_release_failed_total` 统计发布失败终局——发布流程自身的失败收口（含 `GetRelease` 返回 `Deleting`），以及"无可用版本"（`repository.sourceJobUIDs` 为空，本对象从未产出任何版本，含仅预置了继承基线的对象）时由 §7.2 第 5 步直接写入的发布失败终局，**不含**过程仓失败收口同次写入的发布失败终局登记（那一次计入 `rpmrepo_controller_repository_failed_total`），**也不含**首个候选自身超限的发布失败终局（同样计入 `rpmrepo_controller_repository_failed_total`），**更不含**同名 Build 被中止的 Failed 中止终局（它是用户中止而非发布失败，只由相位与 `reason=BuildAborted` 日志体现）。
+发布：`rpmrepo_controller_release_ready_total` 在发布成功收口写入（`release.phase=Ready`）时计一次；`rpmrepo_controller_release_failed_total` 统计发布失败终局——发布流程自身的失败收口（含 `GetRelease` 返回 `Deleting`），以及"无可用版本"（`repository.sourceJobUIDs` 为空，本对象从未产出任何版本，含仅预置了继承基线的对象）时由 §7.2 第 5 步直接写入的发布失败终局，**不含**过程仓失败收口同次写入的发布失败终局登记（那一次计入 `rpmrepo_controller_repository_failed_total`），**也不含**同名 Build 被中止的 Failed 中止终局（它是用户中止而非发布失败，只由相位与 `reason=BuildAborted` 日志体现）。
 
 状态写入：`rpmrepo_controller_status_update_conflicts_total` 统计 `/status` 写入因乐观并发被拒（409，结束本周期并延迟重新入队）的轮次；`rpmrepo_controller_status_update_unknown_total` 统计写入结果未知（超时 / 连接中断 / 响应无法解析，按第七章 GET 确认写入意图）的轮次；两者沿用 job / runner / build 控制器体例。
 
@@ -760,13 +755,11 @@ buildinfos:      get
 **过程仓：批次选择与提交**
 
 - 候选扫描查询：断言 `ListJobs` 的 labelSelector 恰为 `ebs.io/build-name=<RpmRepo 名>` 且 FieldSelector 为空，且选择器取自 RpmRepo/Build 名而非 RpmRepo labels 或其它字段。
-- 批次选择：`ebs.io/spec-name` 缺失或为空、`ebs.io/target-os` / `ebs.io/target-arch` 缺失或取值与 `Build.spec.buildTarget` 不一致、UID 已在 `repository.sourceJobUIDs`、Manifest 非 `Completed`、Manifest 404、Manifest `Failed` 的过滤；稳定排序；同 `specName` 去重；两个上限参数；Manifest `Failed` 场景断言不写任何 status 字段、输出 `reason=InputManifestFailed` 告警且不计数；上述 label 校验失败断言不入候选、不入队、输出 `reason=InputLabelMismatch` 告警且不阻塞发布触发（`ebs.io/build-name` 已由服务端选择器保证，不在本用例断言）；Fake 预置 phase 为 `Pending` / `Running` / `Failed` 的 Job 时断言它们被列出但不进入候选、不调用 `GetJobManifest`（规则 1 先行拦截）。
+- 批次选择：`ebs.io/spec-name` 缺失或为空、`ebs.io/target-os` / `ebs.io/target-arch` 缺失或取值与 `Build.spec.buildTarget` 不一致、UID 已在 `repository.sourceJobUIDs`、Manifest 非 `Completed`、Manifest 404、Manifest `Failed` 的过滤；稳定排序；同 `specName` 去重；按 Job 数量限制批次；Manifest `Failed` 场景断言不写任何 status 字段、输出 `reason=InputManifestFailed` 告警且不计数；上述 label 校验失败断言不入候选、不入队、输出 `reason=InputLabelMismatch` 告警且不阻塞发布触发（`ebs.io/build-name` 已由服务端选择器保证，不在本用例断言）；Fake 预置 phase 为 `Pending` / `Running` / `Failed` 的 Job 时断言它们被列出但不进入候选、不调用 `GetJobManifest`（规则 1 先行拦截）。
 - manifest 404 与未就绪输入：404 断言既不算候选、也不阻塞发布触发（不写 status、输出 `reason=InputManifestMissing` 告警、不计数），且该 Job 相位不是 `Succeeded` 时返回可重试错误；`Open` / `Completing` 断言不算候选、阻塞发布触发（不计入「无候选」）、输出 `reason=InputManifestNotReady` 告警且不计数。
 - 提交批次：`repository.transition` 为空且存在可入选 Job 时，断言一次 CAS 写 `repository.transition`（`inputs` / `baseRepositoryUID` / `repositoryUID`）与 `repository.updatedAt` 之后才调用 `SubmitRepository`；无候选 Job 时断言不写 status；两者都不产生只写中间状态的额外写入。
-- 首个候选超限：单候选自身输入为上限 1.5 倍时，断言不写 `repository.transition`、不调用 Artifact Manager、一次 CAS 写 `release.phase=Failed` + `release.transition=nil` + `release.updatedAt` + `PublishSucceed=False`（reason `RepositoryCreationFailed`）、计一次 `rpmrepo_controller_repository_failed_total`（且 `release_failed_total` 不增）、输出一次 `reason=InputTooLarge`、返回零值 + `nil`，且对象此后被轮询与发布候选排除。
-- 字节上限累加：上限 X、候选 A=0.6X 且 B=0.6X 时断言首批为 `[A]`、B 留待下一批；A=0.6X、B=0.3X、C=0.3X 时断言首批为 `[A,B]`、C 留待下一批；B 留待后在下一批成为首个候选且自身超限时断言走同一发布失败终局（不截断、不跳过）。
-- 计数口径：manifest 同时包含 RPM 与日志时，断言日志不参与累计（口径与 Artifact Manager 的物化输入一致）。
-- 零输入与未列 422：物化输入为 0 的候选断言正常参与批次（只占 Job 数上限）；Artifact Manager 返回 `422 ManifestContainsNoPackages` / `ManifestInvalid` 时断言按不可重试失败收口（`RepositoryReady=False` + `release.phase=Failed` + `PublishSucceed=False`，`repository.transition` 原样保留）。
+- 批次数量：候选超过 `--rpmrepo-max-jobs-per-batch` 时，断言仅选择稳定排序后的前 N 个不同 `specName`，余下候选留待下一批。
+- 空 RPM 清单与未列 422：不在选批时检查 RPM 文件数；Artifact Manager 返回 `422 ManifestContainsNoPackages` / `ManifestInvalid` 时断言按不可重试失败收口（`RepositoryReady=False` + `release.phase=Failed` + `PublishSucceed=False`，`repository.transition` 原样保留）。
 
 **过程仓：在途结果、重试预算与收口**
 
@@ -809,7 +802,7 @@ buildinfos:      get
 **条件、时间与观测**
 
 - 条件与时间：`RepositoryReady` / `PublishSucceed` 的 reason 固定短语；`repository.updatedAt` 与 `release.updatedAt` 仅在对应字段有效写入时更新，且重试期间不更新 `repository.updatedAt`（`observedGeneration`、FakeClock / UTC 与 `MergeCondition` 的断言见「时间、退避与条件纯函数」条）。
-- 指标：断言 §11 列出的指标均已注册；过程仓失败收口（含首个候选自身超限的发布失败终局）、每次重放、发布失败终局（发布不可重试失败与"无可用版本"终局）分别使 `rpmrepo_controller_repository_failed_total` / `rpmrepo_controller_materialize_retries_total` / `rpmrepo_controller_release_failed_total` 各递增一次。
+- 指标：断言 §11 列出的指标均已注册；过程仓失败收口、每次重放、发布失败终局（发布不可重试失败与"无可用版本"终局）分别使 `rpmrepo_controller_repository_failed_total` / `rpmrepo_controller_materialize_retries_total` / `rpmrepo_controller_release_failed_total` 各递增一次。
 
 - status 写错误 Outcome：覆盖 NotSent 的本地校验错误与临时网络错误，分别断言 PermanentError 与框架重试；覆盖 Rejected 的 404（结束）、408/429/5xx（重试）、400/401/403/422（PermanentError），均不执行 Unknown 确认 GET、不额外写业务终态。检查点或相位写入未确认时，断言不继续 SubmitRepository、SubmitRelease 或 ActivateRelease；Manager context 取消时不发起后续请求。
 
