@@ -244,13 +244,13 @@ status:
     repositoryUID: DB3A8CE2-00CD-4C89-9C20-ADA417C83155
     contentURL: https://artifact-manager/repositories/v1/DB3A8CE2-00CD-4C89-9C20-ADA417C83155
     # 上一个发布成功 Build 同名 RpmRepo 的 status.repository.repositoryUID / contentURL；无历史发布时都省略
-  release: null             # 非 single 尚未进入发布阶段；single 改为 {phase: Skipped}
+  release: null             # 非 single 创建时尚未进入发布阶段；single 改为 {phase: Skipped}
   conditions: []
 ```
 
 **基线初始化**
 
-- 生效范围：所有构建类型。single 同样创建 Snapshot、RpmRepo、BuildInfo；创建 RpmRepo 时额外设置 `status.release.phase=Skipped`，非 single 的初始 release 为 nil。
+- 生效范围：所有构建类型。single 同样创建 Snapshot、RpmRepo、BuildInfo；创建 RpmRepo 时设置 `status.release.phase=Skipped`。非 single 的初始 release 为 nil；若 `publishFlag=false`，RpmRepo Controller 在完成过程仓处理后写入 `Skipped`。
 - 只在 ensure 按确定性名称 GET 未命中、准备创建时读取一次历史对象，因此在创建那一刻固化一次：`Build.status.baseBuildRef.Name` 为空（`baseBuildRef={}`，即没有上一个发布成功的 Build）时不读取、不写入；已存在的 RpmRepo（含 `metadata.deletionTimestamp` 非空的对象）一律沿用，不重读、不覆盖，后续轮次也不再改写该字段。
 - 取值来源是历史 Build 同名 RpmRepo 的 `status.repository.repositoryUID` 与 `status.repository.contentURL`，即过程仓的不可变版本标识与地址（形如 `https://artifact-manager/repositories/v1/{repositoryUID}`）；它们不是 `status.release.*`（正式发布信息）。两个字段都非空即可继承：种入后本轮过程仓的当前版本初期即继承版本，尚未产生本轮自己的版本。
 - 只有在「确定没有可继承基线」时降级：历史对象 NotFound，或历史对象存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空。此时降级为不带基线的创建（两个字段都不写入，避免版本 UID 与地址不匹配），输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryUnavailable base_build=<name> error=<error>`，本轮继续正常推进，不写 Build 终态、不 requeue。
@@ -277,7 +277,7 @@ status:
 | `RpmRepo.spec`                        | Build Controller   | 空 `{}`                                         |
 | `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时种入） | 创建时复制历史过程仓的不可变版本 UID 作为本轮过程仓的当前版本；已有对象不覆盖；非 single 随后由 RpmRepo Controller 推进版本，single 保持该初始基线 |
 | `RpmRepo.status.repository.contentURL` | Build Controller（创建时种入） | 与 `repositoryUID` 同源同时种入，复制历史过程仓的不可变地址；已有对象不覆盖；非 single 随后由 RpmRepo Controller 推进版本，single 保持该初始基线 |
-| `RpmRepo.status.release.phase` | Build Controller（single 创建时）/ RpmRepo Controller（非 single） | single 初始为 `Skipped`，仅保存构建输入仓地址，不参与物化与发布；非 single 按 `Ready` / `Failed` 消费发布结果 |
+| `RpmRepo.status.release.phase` | Build Controller（single 创建时）/ RpmRepo Controller（非 single） | single 初始为 `Skipped`，仅保存构建输入仓地址，不参与物化与发布；非 single 的 `publishFlag=false` 在过程仓处理结束后为 `Skipped`，其余按 `Ready` / `Failed` 消费发布结果 |
 
 single 的 `Skipped` 不表示构建已经完成，也不表示没有可用过程仓；Build 仍等待 BuildInfo Completed 后汇总结果。其继承地址保存在 `status.repository.contentURL`，不写 `status.release.contentURL`。RpmRepo Controller 应将 Skipped 视为终态并排除，不推进其过程仓或发布；非 single 仍按现有状态机推进。
 

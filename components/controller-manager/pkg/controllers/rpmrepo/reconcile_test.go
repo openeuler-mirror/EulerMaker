@@ -213,6 +213,65 @@ func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
 	}
 }
 
+func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T) {
+	client := NewFakeClient()
+	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
+	build := newBuild(testBuild)
+	build.Spec.BuildTarget.PublishFlag = false
+	client.Builds[key(testProject, testBuild)] = build
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
+
+	artifacts := NewFakeArtifactManager()
+	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+		return completedManifest(100), nil
+	}
+	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
+	}
+	c := newTestController(t, client, artifacts, testConfig())
+	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	updated := client.RpmRepos[key(testProject, testBuild)]
+	if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "/repositories/v1/next/" {
+		t.Fatalf("process repository was not materialized: %+v", updated.Status.Repository)
+	}
+	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || updated.Status.Release.UpdatedAt == nil || updated.Status.Release.ContentURL != "" {
+		t.Fatalf("release was not skipped: %+v", updated.Status.Release)
+	}
+	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 0 {
+		t.Fatal("a nonpublishing build must not submit or enqueue a release")
+	}
+	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	if len(artifacts.SubmitRepositoryRequests) != 1 {
+		t.Fatal("a skipped release must not rematerialize the repository")
+	}
+}
+
+func TestReconcileBuildWithoutPublishingAndWithoutArtifactsSkipsRelease(t *testing.T) {
+	client := NewFakeClient()
+	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
+	build := newBuild(testBuild)
+	build.Spec.BuildTarget.PublishFlag = false
+	client.Builds[key(testProject, testBuild)] = build
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+	artifacts := NewFakeArtifactManager()
+	c := newTestController(t, client, artifacts, testConfig())
+	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	updated := client.RpmRepos[key(testProject, testBuild)]
+	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {
+		t.Fatalf("release phase = %+v, want Skipped", updated.Status.Release)
+	}
+	if len(updated.Status.Conditions) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatal("skipping without artifacts must not register a publication failure")
+	}
+}
+
 func TestReconcileBuildCollectsFailureAfterRetryBudget(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)

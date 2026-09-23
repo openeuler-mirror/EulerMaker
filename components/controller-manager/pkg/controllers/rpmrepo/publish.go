@@ -186,16 +186,9 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 	}
 	if !decision.Publish {
 		log.Printf("controller=%s key=%q uid=%q reason=ReleasePolicySkipped", Name, r.key, repo.UID)
-		if repo.Status.Release != nil {
-			target := repo.DeepCopy()
-			target.Status.Release = nil
-			confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool { return value.Status.Release == nil }, "ReleaseCleared")
-			if err != nil {
-				return true, controller.ReconcileResult{}, err
-			}
-			if confirmed == nil {
-				return true, controller.ReconcileResult{}, nil
-			}
+		confirmed, err := r.writeReleaseSkipped(repo)
+		if err != nil || confirmed == nil {
+			return true, controller.ReconcileResult{}, err
 		}
 		return false, controller.ReconcileResult{}, nil
 	}
@@ -227,6 +220,16 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 	}
 	result, err := r.handleReleaseResponse(confirmed, transition, response)
 	return true, result, err
+}
+
+// writeReleaseSkipped records a durable, terminal decision after repository inputs have settled.
+func (r *reconciler) writeReleaseSkipped(repo *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
+	target := repo.DeepCopy()
+	target.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped, UpdatedAt: r.nowPtr()}
+	return r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
+		release := value.Status.Release
+		return release != nil && release.Phase == ebsv1.RpmRepoReleaseSkipped && release.Transition == nil && release.ContentURL == ""
+	}, "ReleaseSkipped")
 }
 
 // reloadReleaseTarget re-reads the selected object and reports whether the candidate must be skipped.
