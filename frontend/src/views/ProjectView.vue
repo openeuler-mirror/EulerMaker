@@ -661,7 +661,8 @@ async function createBuild(): Promise<void> {
     selectedBuildName.value = successfulNames[0];
     if (successfulNames.length < targets.length) {
       const conflictsOnly = failures.every((failure) => failure instanceof ApiError && failure.status === 409);
-      buildActionErrorKey.value = conflictsOnly ? "project.partialActiveBuildConflict" : "project.partialBuildFailure";
+      const missingBaselineOnly = failures.every((failure) => failure instanceof ApiError && failure.translationKey === "project.fullBuildRequired");
+      buildActionErrorKey.value = conflictsOnly ? "project.partialActiveBuildConflict" : missingBaselineOnly ? "project.partialFullBuildRequired" : "project.partialBuildFailure";
     }
     await loadResources();
     selectTab("builds");

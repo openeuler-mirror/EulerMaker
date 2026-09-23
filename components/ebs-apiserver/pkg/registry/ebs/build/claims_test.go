@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -139,7 +140,7 @@ func (s coordinationBuilds) List(ctx context.Context, opts *internalversion.List
 	defer s.f.mu.Unlock()
 	list := &ebsv1.BuildList{}
 	for _, b := range s.f.builds {
-		if b.Namespace == ns && opts.LabelSelector.Matches(labels.Set(b.Labels)) {
+		if b.Namespace == ns && opts.LabelSelector.Matches(labels.Set(b.Labels)) && (opts.FieldSelector == nil || opts.FieldSelector.Matches(fields.Set{"status.phase": string(b.Status.Phase)})) {
 			list.Items = append(list.Items, *b.DeepCopy())
 		}
 	}
@@ -205,6 +206,15 @@ func TestClaimConcurrentServers(t *testing.T) {
 func TestClaimTargetsAndSingle(t *testing.T) {
 	f := newCoordinationFake()
 	m := testManager(f)
+	archBaseline := testBuild("arch-baseline", "full")
+	archBaseline.Spec.BuildTarget.Arch = "other"
+	archBaseline.Labels[ebsv1.BuildTargetArchLabel] = "other"
+	archBaseline.Status.Phase = ebsv1.BuildSuccess
+	f.builds[archBaseline.Namespace+"/"+archBaseline.Name] = archBaseline
+	projectBaseline := testBuild("project-baseline", "full")
+	projectBaseline.Namespace = "other-project"
+	projectBaseline.Status.Phase = ebsv1.BuildSuccess
+	f.builds[projectBaseline.Namespace+"/"+projectBaseline.Name] = projectBaseline
 	for i, b := range []*ebsv1.Build{testBuild("a", "full"), testBuild("b", "single"), testBuild("c", "incremental"), testBuild("d", "specified")} {
 		if i == 2 {
 			b.Spec.BuildTarget.Arch = "other"
@@ -216,6 +226,24 @@ func TestClaimTargetsAndSingle(t *testing.T) {
 		if _, err := m.create(context.Background(), b, false, f.persist(b)); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMissingFullBuildReleasesClaim(t *testing.T) {
+	for _, typ := range []string{"incremental", "specified"} {
+		t.Run(typ, func(t *testing.T) {
+			f := newCoordinationFake()
+			m := testManager(f)
+			b := testBuild("new", typ)
+			_, err := m.create(context.Background(), b, false, f.persist(b))
+			status, ok := err.(*apierrors.StatusError)
+			if !ok || status.ErrStatus.Reason != "FullBuildRequired" {
+				t.Fatalf("expected missing full Build, got %v", err)
+			}
+			if len(f.docs) != 0 || len(f.builds) != 0 {
+				t.Fatal("rejected create left an occupied target or Build")
+			}
+		})
 	}
 }
 

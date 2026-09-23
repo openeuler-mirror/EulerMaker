@@ -200,6 +200,8 @@ export default {
     abortBuildFailed: "构建中止失败",
     partialBuildFailure: "部分构建创建失败，请在构建历史中查看已创建的记录",
     activeBuildConflict: "同一工程中相同 OS 和架构的构建任务正在处理，请等待其完成后重试",
+    fullBuildRequired: "还没有一次完整的全量构建",
+    partialFullBuildRequired: "部分目标还没有一次完整的全量构建；其他构建已创建",
     partialActiveBuildConflict: "部分目标存在相同 OS 和架构的构建任务正在处理；其他构建已创建",
     selectBuildTarget: "请至少选择一个构建目标",
     buildConfigurationRequired: "请先配置至少一个构建目标和软件包",

@@ -483,6 +483,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - Build 必须包含 `buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。创建和普通更新时，`metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4）；缺失或格式非法返回 `422 Invalid`，错误字段为 `metadata.name`。UUID 格式校验不替代调用方对名称不复用的保证。
 - 创建 full/incremental Build 时（含 dry-run），`spec.packages` 统一清空，不要求非空；前端请求不携带该字段，不迁移已有 Build。创建 `buildType=single` 或 `specified` 的 Build 时（含 dry-run），要求 packages 非空，额外读取一次所属 Project，校验每个包名均存在于 `Project.spec.packageRepos[].name`；允许多个包及重复包名。不存在的包返回 `422 Invalid`，错误字段定位到 `spec.packages[i]`；Project 不存在或读取失败时原样返回对应 API 错误，不创建 Build。full/incremental 不执行该检查，普通更新和 `/status` 更新也不重新校验包存在性；创建后 Project 变化仍需由控制器处理。
 - 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + OS + Arch 执行下节的 ES 目标占用协议；省略 buildType 按 full 处理。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
+- 创建 `incremental` 或 `specified` Build 时，同一 Project + OS + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
@@ -518,8 +519,9 @@ apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进
 1. 执行认证授权、默认值、字段和 Project 包名校验及 admission；确定 Build name。相同 Build 名称已存在时维持标准 `409 AlreadyExists`，不得当作本次请求成功或转换为更新。后续持久化不得重新生成 UID 或改变目标。
 2. 按确定 ID 使用 `_create` 抢占 Reserved 文档。存在其他占用时返回 `409 Conflict`，附带占用 Build 名称；读取失败返回临时错误，禁止绕过。
 3. 抢占成功后执行历史门禁：按 Project + OS + Arch 查询创建时间降序最新一条非 single Build（`ebs.io/build-type!=single`，`limit=1`，不按 phase 过滤）。不存在或已为 Success/Failed/Aborted/Skipped 时继续；否则拒绝创建并释放本次 Reserved 占用。空/未知 phase 视为非终态，查询失败也不创建。仅查最新一条，不承诺排除更早的历史非终态对象。
-4. CAS 将 Reserved 改为 Creating。只有成功完成这次状态迁移的请求能够发送一次 Build create-only 写入；其他实例和恢复任务不得替它重新发送创建。ES 客户端也不得自动重试这笔写请求。
-5. Build 创建确认成功后，CAS 将占用改为 Bound，再返回正常创建结果。若记录 Bound 失败但 Build 已确认成功，仍返回已创建 Build，记录错误并交由恢复任务补齐；Creating 仍阻塞其他创建。
+4. 对 incremental/specified 另查同目标下至少一条 `ebs.io/build-type=full` 且 `status.phase=Success` 的 Build（`limit=1`）。查询为空返回 `412 FullBuildRequired` 并释放 Reserved；查询失败返回原错误，不得当作没有历史记录。full 不需要此门禁。
+5. CAS 将 Reserved 改为 Creating。只有成功完成这次状态迁移的请求能够发送一次 Build create-only 写入；其他实例和恢复任务不得替它重新发送创建。ES 客户端也不得自动重试这笔写请求。
+6. Build 创建确认成功后，CAS 将占用改为 Bound，再返回正常创建结果。若记录 Bound 失败但 Build 已确认成功，仍返回已创建 Build，记录错误并交由恢复任务补齐；Creating 仍阻塞其他创建。
 
 Reserved 与 Creating 是写入分界：请求尚在 Reserved 时不可能发送 Build 创建。恢复任务可以 CAS 将 Reserved 改为 Releasing 后删除；原请求随后 CAS Creating 必然失败，必须结束且不发送 Build 写入。扫描提前取消一个仍存活的 Reserved 请求属于可重试竞争，不影响互斥。
 

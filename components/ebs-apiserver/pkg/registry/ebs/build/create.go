@@ -3,12 +3,15 @@ package build
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/storage/es"
 	"ebs-apiserver/pkg/storage/esstore"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -65,4 +68,36 @@ func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.B
 	previous := &list.Items[0]
 	return apierrors.NewConflict(ebsv1.Resource("builds"), build.Name,
 		fmt.Errorf("latest non-single build %q for target %s/%s is not terminal (phase %q)", previous.Name, build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch, previous.Status.Phase))
+}
+
+func validateFullBuildBaseline(ctx context.Context, builds rest.Lister, build *ebsv1.Build) error {
+	if build.Spec.BuildType != "incremental" && build.Spec.BuildType != "specified" {
+		return nil
+	}
+	obj, err := builds.List(ctx, &internalversion.ListOptions{
+		LabelSelector: labels.SelectorFromSet(labels.Set{
+			ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
+			ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+			ebsv1.BuildTypeLabel:       "full",
+		}),
+		FieldSelector: fields.OneTermEqualSelector("status.phase", string(ebsv1.BuildSuccess)),
+		Limit:         1,
+	})
+	if err != nil {
+		return err
+	}
+	list, ok := obj.(*ebsv1.BuildList)
+	if !ok {
+		return apierrors.NewInternalError(fmt.Errorf("expected BuildList, got %T", obj))
+	}
+	if len(list.Items) != 0 {
+		return nil
+	}
+	return &apierrors.StatusError{ErrStatus: metav1.Status{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"},
+		Status:   metav1.StatusFailure,
+		Reason:   metav1.StatusReason("FullBuildRequired"),
+		Message:  "No complete full build exists yet for this project and target",
+		Code:     http.StatusPreconditionFailed,
+	}}
 }
