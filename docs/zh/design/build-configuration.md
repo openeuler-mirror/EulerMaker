@@ -682,12 +682,12 @@ apiserver 通过可选参数 `--default-script-file=/path/to/script.yaml` 加载
 后续实现涉及：
 
 1. 公共 API、deepcopy、OpenAPI、ES 索引、REST storage、内容校验和更新冲突检查；同步数据模型。
-2. Gateway 权限和 ebsctl 资源映射；运维可先通过 YAML 管理，不要求首版提供前端脚本编辑器。
+2. Gateway 权限和 ebsctl 资源映射；前端运维页面提供脚本列表、名称搜索、创建和正文编辑，不提供删除，编辑使用原 resourceVersion 防止并发覆盖。
 3. Build Controller 复制名称选择，BuildInfo Controller 解析并固定 Job 引用；配置读取错误沿用控制器写错误/重试分类，不误判为已执行构建失败。
 4. Runner 客户端拉取、内容验证、安全落盘、CT 显式 ENTRYPOINT 和取消处理；同步 Runner 设计。
 5. 测试集群级路由和 namespace 拒绝、默认名称选择及指定名称缺失、脚本原地更新及冲突、Job 引用不可变、更新前后拉取与本地副本的生效边界、权限、UID 不匹配、超时中止和旧 Job 执行兼容。
 
-当前已实现 Script 公共类型、apiserver 接口、ES 存储、校验、可选文件初始化和 Gateway 权限。scriptRef 字段、Controller 选择及 Runner 拉取执行仍为设计约定，未接入。
+当前已实现 Script 公共类型、apiserver 接口、ES 存储、校验、可选文件初始化、Gateway 权限及前端运维脚本管理。scriptRef 字段、Controller 选择及 Runner 拉取执行仍为设计约定，未接入。
 
 ## 5. 创建 Job 时的组合
 

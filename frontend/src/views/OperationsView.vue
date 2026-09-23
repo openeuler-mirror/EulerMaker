@@ -6,6 +6,7 @@
     </nav>
     <main class="operations-content">
       <section v-if="activeSection === 'build'" id="operations-panel-build" role="tabpanel" aria-labelledby="operations-tab-build"><BuildConfEditor /></section>
+      <section v-else-if="activeSection === 'scripts'" id="operations-panel-scripts" role="tabpanel" aria-labelledby="operations-tab-scripts"><ScriptManager /></section>
 
       <section v-else-if="activeSection === 'resources'" id="operations-panel-resources" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-resources">
         <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
@@ -51,9 +52,10 @@ import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildResourceSpecEditor from "@/components/BuildResourceSpecEditor.vue";
 import BuildConfEditor from "@/components/BuildConfEditor.vue";
+import ScriptManager from "@/components/ScriptManager.vue";
 import type { BuildResource, Runner } from "@/types";
 
-type OperationsSection = "build" | "resources" | "runners";
+type OperationsSection = "build" | "resources" | "scripts" | "runners";
 
 const { t } = useI18n();
 const session = useSessionStore();
@@ -61,6 +63,7 @@ const activeSection = ref<OperationsSection>("build");
 const operationSections = computed<Array<{ id: OperationsSection; label: string }>>(() => [
   { id: "build", label: t("operations.buildConfiguration") },
   { id: "resources", label: t("operations.resourceConfiguration") },
+  { id: "scripts", label: t("scripts.title") },
   { id: "runners", label: t("operations.runnerManagement") },
 ]);
 const canManageRunners = computed(() => session.role === "admin" || session.role === "ops");

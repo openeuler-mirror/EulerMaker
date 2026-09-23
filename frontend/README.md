@@ -4,6 +4,8 @@ EulerMaker 的基础 Web 控制台，使用 Vue 3、TypeScript、Vite、Vue Rout
 
 当前包含：首页工程概览、工程列表、工程详情、账号登录，以及中文和 English 国际化。资源与认证请求统一通过 `ebs-gateway`。
 
+运维页面提供“脚本管理”，Ops/Admin 可查看和搜索全局脚本、创建脚本、编辑正文；不提供删除。编辑保存携带原 resourceVersion，冲突时保留草稿并提示人工合并。脚本通过 `/apis/ebs/v1/scripts` 管理，不在浏览器中执行；Controller/Runner 的脚本消费链路尚未接入。
+
 ## 本地开发
 
 ```bash
