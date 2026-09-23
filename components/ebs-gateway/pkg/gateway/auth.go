@@ -36,6 +36,13 @@ func (i Identity) IsUser() bool   { return i.hasScope("ebs:user") }
 func (i Identity) IsRunner() bool { return i.hasScope("ebs:runner") }
 func (i Identity) IsAdmin() bool  { return i.hasScope("ebs:admin") }
 func (i Identity) IsOps() bool    { return i.hasScope("ebs:ops") }
+
+// IsPrivileged reports operations-level access, including internal System identities.
+// It does not replace project membership checks or Admin-only permissions.
+func (i Identity) IsPrivileged() bool {
+	return i.IsOps() || i.IsAdmin() || i.IsSystem()
+}
+
 func (i Identity) hasScope(want string) bool {
 	for _, scope := range i.Scopes {
 		if scope == want {

@@ -50,6 +50,9 @@ func TestJobAbortAuthorization(t *testing.T) {
 					return
 				}
 				calls++
+				if tc.claims == nil || r.Header.Get("X-EBS-User") != tc.claims.Subject || r.Header.Get("X-EBS-Scopes") != strings.Join(tc.claims.Scopes, ",") || r.Header.Get("X-EBS-Admin") != "" {
+					t.Fatal("abort handler did not receive sanitized identity headers")
+				}
 				body, _ := io.ReadAll(r.Body)
 				if string(body) != `{"uid":"u"}` {
 					t.Fatalf("body changed %s", body)
@@ -62,6 +65,8 @@ func TestJobAbortAuthorization(t *testing.T) {
 				r = authenticatedRequest(t, tc.method, path, strings.NewReader(`{"uid":"u"}`), *tc.claims)
 			}
 			w := httptest.NewRecorder()
+			r.Header.Set("X-EBS-User", "spoofed")
+			r.Header.Set("X-EBS-Admin", "true")
 			gw.ServeHTTP(w, r)
 			if w.Code != tc.want {
 				t.Fatalf("got %d %s want %d", w.Code, w.Body, tc.want)
