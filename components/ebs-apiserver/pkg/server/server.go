@@ -35,6 +35,7 @@ import (
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
+	scriptstore "ebs-apiserver/pkg/registry/ebs/script"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	machineaccountstore "ebs-apiserver/pkg/registry/iam/machineaccount"
 	userstore "ebs-apiserver/pkg/registry/iam/user"
@@ -122,6 +123,7 @@ type EulerMakerServerOptions struct {
 	RecommendedOptions *options.RecommendedOptions
 	EsServers          string
 	EnableIAM          bool
+	DefaultScriptFile  string
 	esConfig           *es.Config
 }
 
@@ -150,6 +152,7 @@ func NewEulerMakerServerOptions() *EulerMakerServerOptions {
 func (o *EulerMakerServerOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.EsServers, "es-servers", o.EsServers, "elasticsearch server address")
 	fs.BoolVar(&o.EnableIAM, "enable-iam", o.EnableIAM, "enable the built-in IAM API and password authenticator")
+	fs.StringVar(&o.DefaultScriptFile, "default-script-file", "", "optional Script YAML to create at startup if absent; existing objects are preserved")
 	o.RecommendedOptions.AddFlags(fs)
 }
 
@@ -240,6 +243,11 @@ func Run(stopCh <-chan struct{}) error {
 		return err
 	}
 
+	if opts.DefaultScriptFile != "" {
+		if err := ensureDefaultScript(context.Background(), newScriptStore(esClient), opts.DefaultScriptFile); err != nil {
+			return fmt.Errorf("initialize default script: %w", err)
+		}
+	}
 	prepared := srv.PrepareRun()
 	return prepared.Run(stopCh)
 }
@@ -275,6 +283,9 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 		return nil, err
 	}
 	if err := installBuildConfRoutes(srv.Handler.GoRestfulContainer, buildConfES); err != nil {
+		return nil, err
+	}
+	if err := installScriptRoutes(srv.Handler.GoRestfulContainer, newScriptStore(esClient)); err != nil {
 		return nil, err
 	}
 	buildResourceES := esstore.New(esClient, "buildresource", "BuildResource", buildResourceTemplate.(*genericregistry.Store))
@@ -373,6 +384,10 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 func newBuildConfStore(client *es.Client) *esstore.Store {
 	return esstore.New(client, "buildconf", "BuildConf", buildconfstore.NewStorage(Scheme).BuildConf.(*genericregistry.Store))
+}
+
+func newScriptStore(client *es.Client) *esstore.Store {
+	return esstore.New(client, "script", "Script", scriptstore.NewStorage(Scheme).Script.(*genericregistry.Store))
 }
 
 func completeStore(storage rest.Storage, storeOptions *generic.StoreOptions) error {

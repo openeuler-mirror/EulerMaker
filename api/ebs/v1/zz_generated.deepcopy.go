@@ -23,6 +23,58 @@ func copyValue[T any](in *T) *T {
 	return out
 }
 
+func (in *Script) DeepCopyInto(out *Script) {
+	*out = *in
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+}
+func (in *Script) DeepCopy() *Script {
+	if in == nil {
+		return nil
+	}
+	out := new(Script)
+	in.DeepCopyInto(out)
+	return out
+}
+func (in *Script) DeepCopyObject() runtime.Object {
+	if out := in.DeepCopy(); out != nil {
+		return out
+	}
+	return nil
+}
+func (in *ScriptSpec) DeepCopyInto(out *ScriptSpec) { *out = *in }
+func (in *ScriptSpec) DeepCopy() *ScriptSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ScriptSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+func (in *ScriptList) DeepCopyInto(out *ScriptList) {
+	*out = *in
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		out.Items = make([]Script, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&out.Items[i])
+		}
+	}
+}
+func (in *ScriptList) DeepCopy() *ScriptList {
+	if in == nil {
+		return nil
+	}
+	out := new(ScriptList)
+	in.DeepCopyInto(out)
+	return out
+}
+func (in *ScriptList) DeepCopyObject() runtime.Object {
+	if out := in.DeepCopy(); out != nil {
+		return out
+	}
+	return nil
+}
+
 func (in *Project) DeepCopyInto(out *Project)          { *out = *copyValue(in) }
 func (in *Project) DeepCopy() *Project                 { return copyValue(in) }
 func (in *Project) DeepCopyObject() runtime.Object     { return in.DeepCopy() }
