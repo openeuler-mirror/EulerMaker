@@ -16,6 +16,10 @@
       <button v-for="type in projectTypes" :key="type" type="button" :class="{ active: projectType === type }" :aria-current="projectType === type ? 'page' : undefined" @click="changeProjectType(type)">{{ t(`projects.${type}`) }}</button>
     </nav>
     <div class="list-toolbar">
+      <label class="related-projects-filter" :title="!session.authenticated ? t('projects.relatedSignIn') : undefined">
+        {{ t("projects.relatedOnly") }}
+        <input v-model="relatedOnly" type="checkbox" :disabled="!session.authenticated" />
+      </label>
       <label class="search-box">
         <Search />
         <input v-model.trim="keyword" type="search" :placeholder="t('projects.search')" />
@@ -52,7 +56,7 @@
             <span v-if="item.page === null" class="page-ellipsis">…</span>
             <button v-else class="page-button" :class="{ active: item.page === currentPage }" type="button" :aria-current="item.page === currentPage ? 'page' : undefined" :disabled="loading" @click="goToPage(item.page)">{{ item.page }}</button>
           </template>
-          <button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="!nextToken || loading" @click="goToPage(currentPage + 1)"><ArrowRight /></button>
+          <button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="(relatedOnly ? currentPage >= totalPages : !nextToken) || loading" @click="goToPage(currentPage + 1)"><ArrowRight /></button>
         </nav>
       </div>
     </div>
@@ -98,7 +102,7 @@
 
 <script setup lang="ts">
 import { ArrowLeft, ArrowRight, CircleCheckFilled, Plus, Refresh, Search, Upload, WarningFilled } from "@element-plus/icons-vue";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
@@ -113,11 +117,14 @@ import { useSessionStore } from "@/stores/session";
 import type { Project } from "@/types";
 import { ProjectManifestError, projectFromForm, projectFromYaml } from "@/utils/projectManifest";
 import { projectTypeSelector, PROJECT_TYPE_LABEL, type ProjectType } from "@/utils/projectType";
+import { listRelatedProjects } from "@/utils/relatedProjects";
 
 const { supports: supportsBuildTarget } = useBuildConf();
 const projects = ref<Project[]>([]);
 const projectTypes: ProjectType[] = ["community", "personal"];
 const projectType = ref<ProjectType>("community");
+const relatedOnly = ref(false);
+const relatedProjects = ref<Project[] | null>(null);
 let loadSequence = 0;
 const { t } = useI18n();
 const router = useRouter();
@@ -161,17 +168,29 @@ const createForbidden = computed(() => session.authenticated && !canCreate.value
 const canManageType = computed(() => session.role === "ops" || session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
 const requiresOwner = computed(() => session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
 const totalPages = computed(() => {
+  if (relatedOnly.value) return Math.max(1, Math.ceil(matchedProjects.value.length / pageSize.value));
   const estimated = remainingCount.value === undefined ? 0 : currentPage.value + Math.ceil(remainingCount.value / pageSize.value);
   return Math.max(1, estimated, pageTokens.value.length, currentPage.value + (nextToken.value ? 1 : 0));
 });
 const paginationItems = computed(() => buildPaginationItems(totalPages.value, currentPage.value));
-const filtered = computed(() => {
+const matchedProjects = computed(() => {
   const value = keyword.value.toLowerCase();
-  if (!value) return projects.value;
-  return projects.value.filter((item) =>
+  const items = relatedOnly.value ? relatedProjects.value || [] : projects.value;
+  if (!value) return items;
+  return items.filter((item) =>
     [item.metadata?.name, item.spec?.displayName, item.spec?.description].some((text) => text?.toLowerCase().includes(value)),
   );
 });
+const filtered = computed(() => relatedOnly.value
+  ? matchedProjects.value.slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value)
+  : matchedProjects.value);
+
+watch(relatedOnly, reload);
+watch(() => session.username, () => {
+  if (!session.authenticated && relatedOnly.value) relatedOnly.value = false;
+  else reload();
+});
+watch(keyword, () => { if (relatedOnly.value) resetPagination(); });
 
 onMounted(() => loadPage("", 1));
 
@@ -182,6 +201,13 @@ async function loadPage(token: string, page = currentPage.value): Promise<boolea
   const query = new URLSearchParams({ limit: String(pageSize.value), labelSelector: projectTypeSelector(projectType.value) });
   if (token) query.set("continue", token);
   try {
+    if (relatedOnly.value) {
+      const items = relatedProjects.value ?? await listRelatedProjects(session.username, projectTypeSelector(projectType.value), () => sequence === loadSequence);
+      if (sequence !== loadSequence) return false;
+      relatedProjects.value = items;
+      currentPage.value = Math.min(page, totalPages.value);
+      return true;
+    }
     const result = await list<Project>(`/apis/ebs/v1/projects?${query}`);
     if (sequence !== loadSequence) return false;
     projects.value = result.items;
@@ -209,6 +235,7 @@ function changeProjectType(type: ProjectType): void {
 }
 
 function reload(): void {
+  relatedProjects.value = null;
   resetPagination();
   void loadPage("", 1);
 }
@@ -268,6 +295,7 @@ async function submitProject(project: Project, messageKey: string): Promise<void
     dialog.value = "";
     createdName.value = name;
     successKey.value = messageKey;
+    relatedProjects.value = null;
     resetPagination();
     await loadPage("", 1);
     if (name) await router.push({ name: "project", params: { name } });
@@ -295,6 +323,10 @@ async function readYamlFile(event: Event): Promise<void> {
 
 async function goToPage(page: number): Promise<void> {
   if (page < 1 || page > totalPages.value || page === currentPage.value || loading.value) return;
+  if (relatedOnly.value) {
+    currentPage.value = page;
+    return;
+  }
   const knownToken = pageTokens.value[page - 1];
   if (knownToken !== undefined) {
     await loadPage(knownToken, page);
@@ -354,3 +386,8 @@ function formatDate(value?: string): string {
   return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 </script>
+
+<style scoped>
+.related-projects-filter { display: inline-flex; align-items: center; gap: 7px; margin-right: auto; white-space: nowrap; cursor: pointer; }
+.related-projects-filter input { width: 16px; height: 16px; accent-color: var(--blue); }
+</style>

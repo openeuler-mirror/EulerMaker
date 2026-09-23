@@ -2,7 +2,7 @@
 
 ## 一、文档状态
 
-构建配置的后续扩展见 [BuildConf 设计](build-configuration.md#26-前端与-ebsctl)：运维编辑 OS/Arch/镜像映射，工程目标选项改为读取全局配置，保留旧工程已失效的目标值。该能力待实现。
+构建配置已支持运维编辑 OS/Arch/镜像映射，工程目标选项读取全局配置，并保留旧工程已失效的目标值；规则见 [BuildConf 设计](build-configuration.md#26-前端与-ebsctl)。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](build-configuration.md#46-初始化与落地范围)。
 
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 
@@ -18,7 +18,7 @@ EulerMaker 已具备 Project、Snapshot、Build、BuildInfo、RpmRepo、BuildRes
 
 - 匿名用户可以浏览 Project 及其公开构建资源。
 - 注册用户可以创建 Project，管理自己拥有或参与的 Project，并发起构建。
-- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 BuildResource、查看 Runner 运行状态并执行驱逐或取消驱逐。
+- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 BuildConf、BuildResource 和 Script，查看 Runner 运行状态并执行驱逐或取消驱逐。
 - Admin 可以管理普通 User 和 MachineAccount，并具备系统级资源能力。
 - 前端能力模型与 System 身份保持兼容，但 System 是受信任自动化身份，不提供账号密码登录入口。
 - 用户可以查看 Build、Job、RPM 仓库和产物状态，并实时查看 Job 日志。
@@ -72,7 +72,7 @@ Project、资源名称、页签、搜索条件、筛选条件和当前页应进�
 |------|-------|----------|
 | 匿名用户 | 无 | 浏览公开 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job |
 | 普通用户 | `ebs:user` | 创建 Project；操作自己拥有或参与的 Project |
-| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 BuildResource 和 Runner，支持驱逐与取消驱逐 |
+| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 BuildConf、BuildResource、Script 和 Runner，支持驱逐与取消驱逐 |
 | 管理员 | `ebs:admin` | 管理非管理员 User 和 MachineAccount；具备系统级业务资源能力 |
 | 系统身份 | `ebs:system` | 受信任自动化调用方；前端不提供登录入口 |
 
@@ -222,7 +222,7 @@ Project 普通配置使用结构化表单。复杂且可能丢失未知字段的
 apiVersion: ebs/v1
 kind: Build
 metadata:
-  name: build-20260915-001
+  name: 0aa1fe2e-7d5d-46d1-9d2d-c31a331c1732
 spec:
   buildType: specified
   packages:
@@ -262,6 +262,14 @@ Admin 用户管理页支持：
 User 只能通过 `/auth/register` 创建。前端不提供“管理员创建 User 并代设初始密码”的流程，因为 Gateway 的 User API 不接受 POST，Admin 也不能重置其他用户的密码。
 
 MachineAccount 页面支持通过专用接口创建账号、列出和删除账号。创建时由浏览器 Web Crypto API 生成至少 32 字节随机值并编码为无填充 Base64URL client secret，再与账号配置一并提交。Gateway 成功响应不会回显 secret，因此页面只使用提交前的内存副本展示一次；离开结果页面后不再保留，不写入日志、Pinia、localStorage 或 sessionStorage。用户关闭一次性凭据页面前，界面必须明确提示其通过受保护渠道完成下发。
+
+### 5.9 脚本管理
+
+运维页面提供全局 Script 列表、名称搜索、刷新、创建和正文编辑，Ops 和 Admin 可操作，不提供删除入口。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
+
+编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。API 权限与内容校验分别由 Gateway 和 apiserver 执行。
+
+当前页面管理 Script 对象；Job 引用与 Runner 拉取执行尚未接入，不能将脚本保存成功视为构建执行已切换。
 
 ---
 

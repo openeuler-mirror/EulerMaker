@@ -52,7 +52,7 @@ spec:
 
 镜像地址为示例，不作为内置可用镜像。
 
-字段定义见 [数据模型](data-models.md#buildconf构建配置待实现)。不设置 status，不额外维护 supportedOS、supportedArch、镜像摘要或配置版本字段；版本复用 metadata.resourceVersion / generation。
+字段定义见 [数据模型](data-models.md#buildconf构建配置)。不设置 status，不额外维护 supportedOS、supportedArch、镜像摘要或配置版本字段；版本复用 metadata.resourceVersion / generation。
 
 #### 2.2.1 校验与解释
 
@@ -553,19 +553,9 @@ BuildResource 不属于公开读取资源，Gateway 必须按路径中的 Projec
 
 ### 3.12 实现范围
 
-落地该设计需要完成：
+当前已实现公共 API、scheme/deepcopy/OpenAPI、Elasticsearch 存储、Project scoped 接口、对象与资源 quantity 校验、Gateway 鉴权、ebsctl 操作及前端编辑。apiserver 在 Ready 前于保留的 `default` 作用域幂等初始化默认对象。
 
-1. 在 `ebs/v1` 增加对象、List 和辅助结构体；
-2. 更新 scheme 注册、deepcopy 和 OpenAPI；
-3. 增加 Elasticsearch 索引和仅 Project scoped 的 REST storage，确保未注册 `/apis/ebs/v1/buildresources`；
-4. 增加对象及资源 quantity 校验；
-5. 在 Gateway 中加入该 Project scoped 资源的鉴权映射；
-6. 在 ebsctl 中增加 get/list/create/update/delete 支持；
-7. 提供内置默认表清单，并在 apiserver Ready 前于保留的 `default` 作用域幂等创建默认对象；
-8. 在 BuildInfo Controller 中实现 Project 优先、`default` 回退的对象查询、缓存与配置匹配；
-9. 创建 Job 时写入 `Job.spec.resources`；
-10. 增加 API、初始化、多副本并发创建、回退边界、匹配优先级、并发更新和大对象边界测试；
-11. 更新统一数据模型文档。
+待接入 BuildInfo Controller：按 Project 优先、`default` 回退查询配置，实现缓存与规则匹配，并在创建 Job 时写入 `Job.spec.resources`；补齐回退边界、匹配优先级及并发配置更新的消费侧测试。
 
 ## 4. Script：构建脚本
 
@@ -679,15 +669,14 @@ Gateway 负责身份与操作权限校验，Script 访问不按 Project 成员�
 
 apiserver 通过可选参数 `--default-script-file=/path/to/script.yaml` 加载一个全局 Script 清单；未指定时不自动创建脚本，不内置示例脚本。清单名称应与 Controller 的 `--default-script-name` 对应。初始化在服务就绪前完成，仅在对象不存在时创建，已存在时不覆盖运维修改；升级脚本通过 PUT/PATCH 更新原对象完成。真实入口需与构建镜像的工具及 payload 契约匹配，不能直接把 4.2 的示例当作可用默认脚本。
 
-后续实现涉及：
+当前已实现 Script 公共类型、deepcopy/OpenAPI、apiserver 接口、ES 存储、内容校验、更新冲突检查、可选文件初始化、Gateway 权限及前端运维脚本管理。
 
-1. 公共 API、deepcopy、OpenAPI、ES 索引、REST storage、内容校验和更新冲突检查；同步数据模型。
-2. Gateway 权限和 ebsctl 资源映射；前端运维页面提供脚本列表、名称搜索、创建和正文编辑，不提供删除，编辑使用原 resourceVersion 防止并发覆盖。
-3. Build Controller 复制名称选择，BuildInfo Controller 解析并固定 Job 引用；配置读取错误沿用控制器写错误/重试分类，不误判为已执行构建失败。
-4. Runner 客户端拉取、内容验证、安全落盘、CT 显式 ENTRYPOINT 和取消处理；同步 Runner 设计。
-5. 测试集群级路由和 namespace 拒绝、默认名称选择及指定名称缺失、脚本原地更新及冲突、Job 引用不可变、更新前后拉取与本地副本的生效边界、权限、UID 不匹配、超时中止和旧 Job 执行兼容。
+后续接入范围：
 
-当前已实现 Script 公共类型、apiserver 接口、ES 存储、校验、可选文件初始化、Gateway 权限及前端运维脚本管理。scriptRef 字段、Controller 选择及 Runner 拉取执行仍为设计约定，未接入。
+1. ebsctl 增加 Script 资源映射。
+2. 增加 scriptRef 字段，由 Build Controller 复制名称选择，BuildInfo Controller 解析并固定 Job 引用；配置读取错误沿用控制器写错误/重试分类，不误判为已执行构建失败。
+3. Runner 客户端拉取、内容验证、安全落盘、CT 显式 ENTRYPOINT 和取消处理；同步 Runner 设计。
+4. 补齐默认名称选择及指定名称缺失、Job 引用不可变、更新前后拉取与本地副本的生效边界、UID 不匹配、超时中止和旧 Job 执行兼容测试。
 
 ## 5. 创建 Job 时的组合
 
