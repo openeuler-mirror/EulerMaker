@@ -39,6 +39,28 @@ spec:
 
 通过 `GET /apis/ebs/v1/buildconfs/default` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。经 Gateway 读取公开，写入仅允许 Ops/Admin/System；不支持删除、watch、status 子资源。创建 Build 时目标未配置返回 422，配置读取失败返回 503，均不申请构建目标占用。
 
+## 全局脚本资源
+
+`Script` 是集群级资源，ES alias 为 `ebs-scripts`，不设置 namespace，spec 仅包含可修改的 `content`。
+
+```yaml
+apiVersion: ebs/v1
+kind: Script
+metadata:
+  name: rpmbuild
+spec:
+  content: |
+    #!/bin/bash
+    set -euo pipefail
+    exec /usr/local/bin/build-rpm --config /workspace/payload.yaml
+```
+
+示例入口需与构建镜像匹配，不是内置默认脚本。通过 `POST /apis/ebs/v1/scripts` 创建，`GET /apis/ebs/v1/scripts` 列表，`GET/PUT/PATCH /apis/ebs/v1/scripts/{name}` 读取和更新。PUT 必须携带 GET 返回的 resourceVersion；PATCH 支持 JSON Merge Patch 和 JSON Patch，并使用 ES 乐观锁避免并发覆盖。列表支持分页和 label/metadata.name 过滤。
+
+正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 保留 2 MiB 请求体上限。经 Gateway 访问时还受其请求体限制。不支持删除、watch、status、dryRun 或 Project-scoped 路径。
+
+可选启动参数 `--default-script-file=/path/to/script.yaml` 在就绪前加载一个 Script YAML，仅创建不存在的对象；已有对象不被覆盖，初始化失败则启动失败。未配置时不自动创建脚本。Gateway 已限制仅 Ops/Admin/System 可创建和修改 Script，普通登录用户只读、Runner 仅可读取具名对象；Controller 和 Runner 消费链路尚未接入。apiserver 仍属于内部服务，不应直接对外暴露。
+
 ## Build 创建互斥
 
 full、incremental、specified 构建按 Project + OS + Arch 通过 ES 原子占用互斥，冲突返回 409；single 不占用目标。apiserver 在终态写入或实际删除成功后释放占用，并每 30 秒扫描补偿，不需要 controller 直接访问 ES。

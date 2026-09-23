@@ -695,6 +695,30 @@ type BuildConfList struct {
 
 不在该对象中保存镜像凭据或 BuildResource 的资源规则。
 
+## Script（全局脚本）
+
+Script 为集群级资源，通过 `/apis/ebs/v1/scripts` 管理，不包含 namespace 或 status。脚本正文可以原地更新，使用 resourceVersion 控制写入冲突。
+
+```go
+type Script struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+    Spec ScriptSpec `json:"spec"`
+}
+
+type ScriptSpec struct {
+    Content string `json:"content"`
+}
+
+type ScriptList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items []Script `json:"items"`
+}
+```
+
+`content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限，仍受请求体限制；首行通过 shebang 指定容器内解释器。名称为集群内唯一的 DNS subdomain，不支持 generateName。完整约定见 [Script 设计](build-configuration.md#4-script构建脚本)。目前实现资源 API，scriptRef 消费链路待接入。
+
 ## 七、Job（任务）
 
 **API**: `/apis/ebs/v1/projects/{project}/jobs`  

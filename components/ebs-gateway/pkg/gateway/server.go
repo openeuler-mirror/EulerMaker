@@ -1015,6 +1015,12 @@ type authzDecision struct {
 
 func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, ident Identity) (authzDecision, error) {
 	protectedRoute := parseRoute(r.URL.Path)
+	if parts, ok := ebsAPIPathParts(r.URL.Path); ok && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "scripts" {
+		return authzDecision{}, fmt.Errorf("Script is cluster-scoped")
+	}
+	if r.URL.Path == apiPrefix+"/scripts" || strings.HasPrefix(r.URL.Path, apiPrefix+"/scripts/") {
+		return authorizeScript(r, ident)
+	}
 	if protectedRoute.resource == "jobs" && len(protectedRoute.rest) == 1 && protectedRoute.rest[0] == "abort" {
 		if ident.IsRunner() || ident.IsSystem() || !(ident.IsUser() || ident.IsOps() || ident.IsAdmin()) || protectedRoute.project == "" || protectedRoute.name == "" {
 			return authzDecision{}, fmt.Errorf("Job abort requires a user identity and project-scoped Job")
