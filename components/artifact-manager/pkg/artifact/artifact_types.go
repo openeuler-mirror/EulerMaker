@@ -23,6 +23,7 @@ type FailureInfo struct {
 	Code      string    `json:"code"`
 	Message   string    `json:"message"`
 	Retryable bool      `json:"retryable"`
+	JobUID    string    `json:"jobUID,omitempty"`
 	Time      time.Time `json:"time"`
 }
 type Artifact struct {

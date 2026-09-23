@@ -281,7 +281,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 			typed = &repositoryError{code: "RepositoryMaterializationFailed", retryable: true}
 		}
 		record.State = RepositoryFailed
-		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, Time: now}
+		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobUID: typed.jobUID, Time: now}
 	} else {
 		record.State, record.RepositoryDigest, record.RPMs = RepositoryReady, result.Digest, result.RPMs
 		record.ContentURL = "/repositories/v1/" + uid + "/"

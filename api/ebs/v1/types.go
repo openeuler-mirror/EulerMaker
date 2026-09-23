@@ -226,11 +226,12 @@ type RpmRepoReleaseStatus struct {
 }
 
 type RpmRepoRepositoryStatus struct {
-	RepositoryUID string                `json:"repositoryUID,omitempty"`
-	ContentURL    string                `json:"contentURL,omitempty"`
-	SourceJobUIDs []string              `json:"sourceJobUIDs,omitempty"`
-	Transition    *RepositoryTransition `json:"transition,omitempty"`
-	UpdatedAt     *metav1.Time          `json:"updatedAt,omitempty"`
+	RepositoryUID  string                `json:"repositoryUID,omitempty"`
+	ContentURL     string                `json:"contentURL,omitempty"`
+	SourceJobUIDs  []string              `json:"sourceJobUIDs,omitempty"`
+	SkippedJobUIDs []string              `json:"skippedJobUIDs,omitempty"`
+	Transition     *RepositoryTransition `json:"transition,omitempty"`
+	UpdatedAt      *metav1.Time          `json:"updatedAt,omitempty"`
 }
 
 type RpmRepoStatus struct {

@@ -54,7 +54,7 @@ func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 	}
 }
 
-func TestReleaseRecheckWaitsForNotReadyInputs(t *testing.T) {
+func TestReleaseRecheckReturnsToRepositoryWithoutManifestProbe(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-b", "kernel", "uid-job-b", time.Unix(2, 0))}
 	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
@@ -68,8 +68,8 @@ func TestReleaseRecheckWaitsForNotReadyInputs(t *testing.T) {
 	if result != (controller.ReconcileResult{}) {
 		t.Fatalf("a candidate with not-ready inputs must wait, got %+v", result)
 	}
-	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 0 {
-		t.Fatalf("a candidate with not-ready inputs must neither submit nor re-enqueue")
+	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 1 || len(artifacts.ManifestRequests) != 0 {
+		t.Fatalf("an unconsumed Job must re-enqueue the repository without checking its manifest")
 	}
 }
 

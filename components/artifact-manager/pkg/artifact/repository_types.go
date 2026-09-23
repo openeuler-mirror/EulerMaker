@@ -101,6 +101,7 @@ type repositoryError struct {
 	code      string
 	retryable bool
 	status    int
+	jobUID    string
 }
 
 func (e *repositoryError) Error() string { return e.code }

@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -152,7 +151,7 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 	}
 }
 
-func TestReconcileBuildRejectsPermanentManifestReadError(t *testing.T) {
+func TestReconcileBuildDoesNotReadManifestBeforeSubmission(t *testing.T) {
 	client := NewFakeClient()
 	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
@@ -163,17 +162,20 @@ func TestReconcileBuildRejectsPermanentManifestReadError(t *testing.T) {
 	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
 		return JobUploadManifest{}, &artifactError{operation: "get-manifest", kind: artifactPermanent, code: "InvalidRequest"}
 	}
+	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, UpdatedAt: time.Now()}, nil
+	}
 	c := newTestController(t, client, artifacts, testConfig())
 
 	_, err := c.sync(context.Background(), buildKey(testProject, testBuild))
-	if err == nil || !controller.IsPermanent(err) {
-		t.Fatalf("a permanent manifest read failure must not be swallowed, got %v", err)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
 	}
-	if len(client.StatusWrites) != 0 {
-		t.Fatalf("the failure must not write status, got %d writes", len(client.StatusWrites))
+	if len(artifacts.ManifestRequests) != 0 {
+		t.Fatalf("manifest must not be read: %v", artifacts.ManifestRequests)
 	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("the failure must not submit a batch")
+	if len(artifacts.SubmitRepositoryRequests) != 1 {
+		t.Fatalf("succeeded Job must be submitted: %v", artifacts.SubmitRepositoryRequests)
 	}
 }
 
@@ -361,27 +363,5 @@ func TestReconcileReleaseRejectsResponseWithoutUpdatedAt(t *testing.T) {
 	}
 	if len(client.StatusWrites) != 0 {
 		t.Fatalf("an incomplete response must not write status, got %d writes", len(client.StatusWrites))
-	}
-}
-
-func TestReconcileBuildRejectsUnknownManifestState(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
-
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
-		return JobUploadManifest{State: ManifestState("Unknown")}, nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	_, err := c.sync(context.Background(), buildKey(testProject, testBuild))
-	if err == nil || !controller.IsPermanent(err) {
-		t.Fatalf("an unknown manifest state must be a permanent contract error, got %v", err)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("an unknown manifest state must not submit a batch")
 	}
 }

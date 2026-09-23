@@ -2,6 +2,7 @@ package rpmrepo
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -120,6 +121,87 @@ func completedManifest(size int64) JobUploadManifest {
 	return JobUploadManifest{
 		State: ManifestCompleted,
 		Files: []ManifestFile{{RelativePath: "packages/gcc.rpm", Size: size}},
+	}
+}
+
+func TestSkippableInputFailure(t *testing.T) {
+	for _, code := range []string{
+		"ManifestNotReady", "ManifestInvalid", "ManifestContainsNoPackages", "MaterializationInputExpired",
+		"PackageMetadataInvalid", "PackageArchitectureMismatch", "PackageConflict",
+	} {
+		if !skippableInputFailure(code) {
+			t.Fatalf("input error %q must be skippable", code)
+		}
+	}
+	for _, code := range []string{"", "BaseRepositoryNotReady", "RepositoryFilesystemMismatch", "RepositoryCommandFailed"} {
+		if skippableInputFailure(code) {
+			t.Fatalf("batch error %q must not be skipped", code)
+		}
+	}
+}
+
+func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
+	client := NewFakeClient()
+	repo := inFlightRepo()
+	repo.Status.Repository.Transition.Inputs = append(repo.Status.Repository.Transition.Inputs,
+		ebsv1.RepositoryInput{JobName: "job-b", JobUID: "uid-job-b", SpecName: "glibc"})
+	client.RpmRepos[key(testProject, testBuild)] = repo
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
+	client.Jobs[testProject] = []ebsv1.Job{
+		newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0)),
+		newSucceededJob("job-b", "glibc", "uid-job-b", time.Unix(2, 0)),
+	}
+	artifacts := NewFakeArtifactManager()
+	artifacts.GetRepositoryFunc = func(_ context.Context, uid string) (RepositoryResponse, error) {
+		return RepositoryResponse{RepositoryUID: uid, State: RepositoryFailed, Attempt: 1, UpdatedAt: time.Now(),
+			Failure: &FailureInfo{Code: "ManifestInvalid", JobUID: "uid-job-a"}}, nil
+	}
+	c := newTestController(t, client, artifacts, testConfig())
+	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	if err != nil || !result.Requeue {
+		t.Fatalf("skip result = %+v, %v", result, err)
+	}
+	updated := client.RpmRepos[key(testProject, testBuild)]
+	if updated.Status.Repository.Transition != nil || !reflect.DeepEqual(updated.Status.Repository.SkippedJobUIDs, []string{"uid-job-a"}) {
+		t.Fatalf("failed input was not durably skipped: %+v", updated.Status.Repository)
+	}
+	if updated.Status.Release != nil || len(updated.Status.Repository.SourceJobUIDs) != 0 {
+		t.Fatalf("skipping must not create a release or mark input as materialized: %+v", updated.Status)
+	}
+	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, UpdatedAt: time.Now()}, nil
+	}
+	c = newTestController(t, client, artifacts, testConfig())
+	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+		t.Fatalf("rebatch after restart: %v", err)
+	}
+	if len(artifacts.SubmitRepositoryRequests) != 1 || !reflect.DeepEqual(artifacts.SubmitRepositoryRequests[0].Manifests,
+		[]ManifestReference{{JobName: "job-b", JobUID: "uid-job-b"}}) {
+		t.Fatalf("rebatch must contain only the healthy Job: %+v", artifacts.SubmitRepositoryRequests)
+	}
+	if len(artifacts.ManifestRequests) != 0 {
+		t.Fatalf("rebatch must not pre-read manifests: %+v", artifacts.ManifestRequests)
+	}
+}
+
+func TestReconcileDoesNotSkipUnidentifiedManifestFailure(t *testing.T) {
+	client := NewFakeClient()
+	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
+	artifacts := NewFakeArtifactManager()
+	artifacts.GetRepositoryFunc = func(_ context.Context, uid string) (RepositoryResponse, error) {
+		return RepositoryResponse{RepositoryUID: uid, State: RepositoryFailed, Attempt: 1, UpdatedAt: time.Now(),
+			Failure: &FailureInfo{Code: "ManifestInvalid", JobUID: "foreign-uid"}}, nil
+	}
+	c := newTestController(t, client, artifacts, testConfig())
+	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	updated := client.RpmRepos[key(testProject, testBuild)]
+	if len(updated.Status.Repository.SkippedJobUIDs) != 0 || updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed {
+		t.Fatalf("unidentified failure must use the existing terminal path: %+v", updated.Status)
 	}
 }
 

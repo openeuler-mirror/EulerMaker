@@ -10,7 +10,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// candidate is one Job that already produced a sealed, completed manifest.
+// candidate is one succeeded Job eligible for materialization; its manifest is checked by Artifact Manager.
 type candidate struct {
 	uid       string
 	name      string
@@ -121,6 +121,24 @@ func unionSortedUIDs(existing []string, batch []ebsv1.RepositoryInput) []string 
 		}
 		seen[item.JobUID] = struct{}{}
 		result = append(result, item.JobUID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func unionSortedStrings(existing []string, value string) []string {
+	set := make(map[string]struct{}, len(existing)+1)
+	for _, uid := range existing {
+		if uid != "" {
+			set[uid] = struct{}{}
+		}
+	}
+	if value != "" {
+		set[value] = struct{}{}
+	}
+	result := make([]string, 0, len(set))
+	for uid := range set {
+		result = append(result, uid)
 	}
 	sort.Strings(result)
 	return result

@@ -3,7 +3,6 @@
 package rpmrepo
 
 import (
-	"fmt"
 	"log"
 	"reflect"
 	"sort"
@@ -35,9 +34,6 @@ func (r *reconciler) advanceRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, 
 		return controller.ReconcileResult{}, err
 	}
 	if len(scan.candidates) == 0 {
-		if scan.notReady {
-			return controller.ReconcileResult{}, nil
-		}
 		return r.maybeTriggerRelease(repo, build, info)
 	}
 	inputs := repositoryInputs(selectBatch(scan.candidates, r.controller.config.MaxJobsPerBatch))
@@ -117,6 +113,9 @@ func (r *reconciler) handleRepositoryResponse(repo *ebsv1.RpmRepo, transition *e
 	case RepositoryFailed:
 		if response.Failure != nil && response.Failure.Retryable {
 			return r.retryRepository(repo, transition, build, info, response)
+		}
+		if response.Failure != nil && skippableInputFailure(response.Failure.Code) && transitionHasJob(transition, response.Failure.JobUID) {
+			return r.skipFailedJob(repo, transition, response.Failure)
 		}
 		return r.collectRepositoryFailure(repo, transition)
 	default:
@@ -257,6 +256,44 @@ func (r *reconciler) collectRepositoryFailure(repo *ebsv1.RpmRepo, transition *e
 	return controller.ReconcileResult{}, nil
 }
 
+func skippableInputFailure(code string) bool {
+	switch code {
+	case "ManifestNotReady", "ManifestInvalid", "ManifestContainsNoPackages", "MaterializationInputExpired", "PackageMetadataInvalid", "PackageArchitectureMismatch", "PackageConflict":
+		return true
+	}
+	return false
+}
+
+func transitionHasJob(transition *ebsv1.RepositoryTransition, uid string) bool {
+	if uid == "" {
+		return false
+	}
+	for _, input := range transition.Inputs {
+		if input.JobUID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// skipFailedJob persists the offending UID before discarding this failed batch. A new cycle selects the
+// remaining Jobs and derives a new repository UID; the previous ready version remains untouched.
+func (r *reconciler) skipFailedJob(repo *ebsv1.RpmRepo, transition *ebsv1.RepositoryTransition, failure *FailureInfo) (controller.ReconcileResult, error) {
+	target := repo.DeepCopy()
+	repository := target.Status.Repository
+	repository.SkippedJobUIDs = unionSortedStrings(repository.SkippedJobUIDs, failure.JobUID)
+	repository.Transition = nil
+	repository.UpdatedAt = r.nowPtr()
+	confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
+		return reflect.DeepEqual(value.Status, target.Status)
+	}, "RepositoryInputSkipped")
+	if err != nil || confirmed == nil {
+		return controller.ReconcileResult{}, err
+	}
+	log.Printf("controller=%s key=%q uid=%q repository_uid=%q job_uid=%q code=%s result=InputSkipped", Name, r.key, confirmed.UID, transition.RepositoryUID, failure.JobUID, failure.Code)
+	return controller.ReconcileResult{Requeue: true}, nil
+}
+
 // finishRepository decides what follows a promoted batch: another batch, a wait, or the release trigger.
 func (r *reconciler) finishRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, info *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
 	if build == nil {
@@ -275,9 +312,6 @@ func (r *reconciler) finishRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, i
 	}
 	if len(scan.candidates) > 0 {
 		return controller.ReconcileResult{Requeue: true}, nil
-	}
-	if scan.notReady {
-		return controller.ReconcileResult{}, nil
 	}
 	return r.maybeTriggerRelease(fresh, build, info)
 }
@@ -303,10 +337,9 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 // candidateScan is the result of reading every input of one repository round.
 type candidateScan struct {
 	candidates []candidate
-	notReady   bool
 }
 
-// scanCandidates lists the Jobs of this repository and keeps the ones that carry a sealed, completed manifest.
+// scanCandidates lists Succeeded Jobs without reading manifests; Artifact Manager validates batch inputs.
 func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (candidateScan, error) {
 	jobs, err := r.controller.client.ListJobs(r.ctx, r.project, metav1.ListOptions{
 		LabelSelector: labels.Set{ebsv1.JobBuildNameLabel: repo.Name}.String(),
@@ -317,6 +350,9 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 	consumed := make(map[string]struct{})
 	if repo.Status.Repository != nil {
 		for _, uid := range repo.Status.Repository.SourceJobUIDs {
+			consumed[uid] = struct{}{}
+		}
+		for _, uid := range repo.Status.Repository.SkippedJobUIDs {
 			consumed[uid] = struct{}{}
 		}
 		if repo.Status.Repository.Transition != nil {
@@ -342,47 +378,18 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 			log.Printf("controller=%s key=%q uid=%q job_uid=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.UID)
 			continue
 		}
-		manifest, err := r.controller.artifacts.GetJobManifest(r.ctx, r.project, job.Name, string(job.UID))
-		if err != nil {
-			if isArtifactNotFound(err) {
-				log.Printf("controller=%s key=%q uid=%q job_uid=%q reason=InputManifestMissing", Name, r.key, repo.UID, job.UID)
-				continue
-			}
-			if isArtifactRetryable(err) {
-				return candidateScan{}, classifyArtifactReadError(err)
-			}
-			// A permanent read failure is not "this input has no artifacts": skipping it could silently drop a
-			// Job from the repository, so it follows the dependency read contract instead.
-			log.Printf("controller=%s key=%q uid=%q job_uid=%q code=%s result=PermanentManifestRead reason=InputManifestFailed", Name, r.key, repo.UID, job.UID, artifactErrorCode(err))
-			return candidateScan{}, controller.NewPermanentError(err)
+		scan.candidates = append(scan.candidates, candidate{
+			uid:       string(job.UID),
+			name:      job.Name,
+			specName:  specName,
+			createdAt: job.CreationTimestamp.UnixNano(),
+		})
+		if _, exists := selectedSpecs[specName]; exists {
+			continue
 		}
-		switch manifest.State {
-		case ManifestCompleted:
-			scan.candidates = append(scan.candidates, candidate{
-				uid:       string(job.UID),
-				name:      job.Name,
-				specName:  specName,
-				createdAt: job.CreationTimestamp.UnixNano(),
-			})
-			if _, exists := selectedSpecs[specName]; exists {
-				continue
-			}
-			selectedSpecs[specName] = struct{}{}
-			if len(selectedSpecs) >= r.controller.config.MaxJobsPerBatch {
-				// A batch is ready; later manifests are irrelevant until this batch is promoted.
-				return scan, nil
-			}
-		case ManifestOpen, ManifestCompleting:
-			scan.notReady = true
-			log.Printf("controller=%s key=%q uid=%q job_uid=%q state=%s reason=InputManifestNotReady", Name, r.key, repo.UID, job.UID, manifest.State)
-		case ManifestFailed:
-			// Sealed but unusable: the input is skipped, it neither blocks the batch nor fails the object.
-			log.Printf("controller=%s key=%q uid=%q job_uid=%q state=%s reason=InputManifestFailed", Name, r.key, repo.UID, job.UID, manifest.State)
-		default:
-			// Only Completed/Open/Completing/Failed exist: anything else is a contract violation, and treating
-			// it as a failed input would silently drop the Job from the repository.
-			log.Printf("controller=%s key=%q uid=%q job_uid=%q state=%s code=UnsupportedManifestState result=ResponseContractError", Name, r.key, repo.UID, job.UID, manifest.State)
-			return candidateScan{}, controller.NewPermanentError(fmt.Errorf("manifest for job %s/%s reported an unsupported state %q", r.project, job.Name, manifest.State))
+		selectedSpecs[specName] = struct{}{}
+		if len(selectedSpecs) >= r.controller.config.MaxJobsPerBatch {
+			return scan, nil
 		}
 	}
 	return scan, nil

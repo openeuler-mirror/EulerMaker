@@ -305,6 +305,7 @@ type FailureInfo struct {
     Code      string    `json:"code"`
     Message   string    `json:"message"`
     Retryable bool      `json:"retryable"`
+    JobUID    string    `json:"jobUID,omitempty"`
     Time      Timestamp `json:"time"`
 }
 
@@ -568,7 +569,7 @@ Content-Type: application/json
 GET /artifacts/v1/projects/{project}/jobs/{job}/manifest?jobUID={uid}
 ```
 
-接口返回该 Job 唯一清单的状态和文件列表。RpmRepo Controller 等消费者只有在清单状态为 `Completed` 时才能使用其中的 Artifact。Manifest digest 是 Artifact Manager 的内部完整性和幂等字段，不要求消费者记录或回传。消费者不得直接读取 Artifact Manager 的本地元数据文件。
+接口返回该 Job 唯一清单的状态和文件列表。仓库物化只使用状态为 `Completed` 的清单；RpmRepo Controller 不预查该接口。Manifest digest 是 Artifact Manager 的内部完整性和幂等字段，不要求消费者记录或回传。消费者不得直接读取 Artifact Manager 的本地元数据文件。
 
 ## 七、查询与下载 API
 
@@ -689,11 +690,11 @@ Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etc
 
 Build Controller 为非 single Build 创建同名 RpmRepo，并可预置继承基线的 repositoryUID / contentURL。RpmRepo Controller 不补建对象，只写其 status；Build 状态由 Build Controller 推进，Job 状态由执行侧维护。
 
-1. 按 Build label 完整分页读取 Job。候选需为 Succeeded、携带正确的归属和目标 labels、未被 sourceJobUIDs 消费，且 Artifact Manager 的唯一 manifest 为 Completed；不依赖 Job 上的 artifactState、artifactCount 或 repositoryState。
+1. 按 Build label 完整分页读取 Job。候选需为 Succeeded、携带正确的归属和目标 labels，且未被 sourceJobUIDs 消费或列入 skippedJobUIDs；控制器不预查 manifest。Artifact Manager 在物化时逐个校验输入，并在可定位的 Manifest 输入失败记录中返回出错的 jobUID，供控制器持久跳过后重新组批；不依赖 Job 上的 artifactState、artifactCount 或 repositoryState。
 2. 按稳定顺序和批次上限选输入，同一批每个 spec 最多一个 Job；基础仓取当前 repository.repositoryUID。先 CAS 写入固定 inputs、baseRepositoryUID、repositoryUID 的 transition，再提交物化请求。
 3. Ready 后一次 CAS 提升 repositoryUID / contentURL、累计去重排序的 sourceJobUIDs、更新时间与条件，并清空 transition；不向 RpmRepo 写摘要或 RPM 元数据，不向 Job 回写消费标记。
-4. 可重试失败沿用原检查点，按 Artifact Manager attempt 与 updatedAt 控制预算和退避。不可重试失败或预算耗尽时保留失败 transition 和原可读版本，同次写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False；不拆批重组，不修改 Job。
-5. BuildInfo 未 Completed 时允许持续生成过程仓；Completed 表示所有 Job 已收敛。首次发布前仍须复核无剩余候选、无未就绪 manifest、无过程仓 transition，且本对象已产出版本（sourceJobUIDs 非空）；发布策略与在途恢复按 Controller 设计执行。
+4. 可重试失败沿用原检查点，按 Artifact Manager attempt 与 updatedAt 控制预算和退避。不可重试的单 Job 输入错误携带本批 `jobUID` 时，控制器持久记录到 `skippedJobUIDs`、清除失败检查点并用剩余 Job 重新组批；无法定位的错误或重试预算耗尽才按批次失败收口。旧可读版本始终保留，不修改 Job。
+5. BuildInfo 未 Completed 时允许持续生成过程仓；Completed 表示所有 Job 已收敛。首次发布前仍须复核无剩余候选、无过程仓 transition，且本对象已产出版本（sourceJobUIDs 非空）；发布策略与在途恢复按 Controller 设计执行。
 
 Job labels 由 BuildInfo Controller 写入：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/target-os`、`ebs.io/target-arch`；Project 取 metadata.namespace。single 没有本轮 RpmRepo，不进入该物化流程。重启由 RpmRepo 轮询恢复键，再按持久化检查点查询或重放。首版只允许单活动 Controller 实例。
 
@@ -941,7 +942,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 ### 9.6.5 错误分类与停机
 
-以下错误不可使用相同 UID 自动重试：请求或身份冲突、Manifest 内容非法、RPM 无法解析、包冲突、架构不兼容、输入已经过期以及本地文件系统布局不满足硬链接要求。命令超时、`createrepo_c` 临时失败、瞬时 I/O 错误和磁盘空间不足标记为 `retryable=true`；调用方仍必须遵守退避，不能无限快速重试。服务端错误信息不得包含本地绝对路径、Token 或命令环境。
+以下错误不可使用相同 UID 自动重试：请求或身份冲突、Manifest 内容非法、RPM 无法解析、包冲突、架构不兼容、输入已经过期以及本地文件系统布局不满足硬链接要求。单个 Job 的清单、RPM 或产物错误在失败记录的 `failure.jobUID` 中标明对应输入；无法归属到单个 Job 时留空。命令超时、`createrepo_c` 临时失败、瞬时 I/O 错误和磁盘空间不足标记为 `retryable=true`；调用方仍必须遵守退避，不能无限快速重试。服务端错误信息不得包含本地绝对路径、Token 或命令环境。
 
 优雅停机按以下顺序执行：停止接受新的 POST 和 DELETE，`/readyz` 立即失败；GET 状态和已打开的内容下载可继续；停止从队列取新任务；在 `--shutdown-timeout` 内等待运行任务完成。期限结束后取消命令，将对应记录持久化为 `Failed`，错误码为 `MaterializationInterrupted` 且 `retryable=true`。尚未启动的 Creating 记录保持不变，由下次启动重新入队。
 
@@ -954,8 +955,8 @@ GET /repositories/v1/{repositoryUID}/{path...}
 1. 在 `repositoryUID` 粒度取得互斥锁，校验或创建并持久化 `Creating` 的 `RepositoryRecord`。
 2. 校验基础仓存在且为 `Ready`，并且 Project、目标 OS 和架构与请求一致。
 3. 按 Job UID 逐个读取唯一的 Job 上传清单，要求状态为 `Completed`，并在 Artifact Manager 内部重新计算清单摘要以验证本地元数据完整性。
-4. 只选择 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；流式计算 SHA-256 并与清单再次比对。
-5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 使用 Source RPM 推导，source RPM 使用自身名称推导；无法确定归属时整次请求失败。
+4. 每个输入 Job 至少包含一个 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；流式计算 SHA-256 并与清单再次比对。缺少 RPM、清单损坏或输入产物过期时在失败记录中标明该 Job UID。
+5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 使用 Source RPM 推导，source RPM 使用自身名称推导；无法确定归属时记录出错的 Job UID 并使本次请求失败。
 6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。
 7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
 8. 基础仓存在时，将其 `Packages` 中的 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用。基础仓和工作目录必须位于同一文件系统；首版硬链接失败不静默退化为完整复制。
@@ -980,10 +981,10 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 | 场景 | 处理 |
 |------|------|
-| 清单不存在或未 Completed | `422 ManifestNotReady`，不启动物化 |
+| 清单不存在或未 Completed | 标记 `Failed / ManifestNotReady / retryable=false`，记录对应 `jobUID`，不发布目录 |
 | 基础仓不存在或不是 Ready | `422 BaseRepositoryNotReady` |
 | 同 UID 不同请求 | `409 RepositoryIdentityConflict` |
-| RPM 非法或 spec 无法识别 | 标记 `Failed`，错误不可使用同一 UID 重试 |
+| RPM 非法或 spec 无法识别 | 标记 `Failed / PackageMetadataInvalid / retryable=false`，记录对应 `jobUID` |
 | 硬链接返回跨文件系统 | 标记 `Failed / RepositoryFilesystemMismatch / retryable=false` |
 | `createrepo_c` 超时或临时失败 | 标记 `Failed / RepositoryCommandFailed / retryable=true`，保存截断后的 stderr，不发布目录 |
 | 磁盘空间不足 | 标记 `Failed / InsufficientStorage / retryable=true`，不发布目录 |
@@ -1614,7 +1615,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 
 Job Status 保留执行结果与 resultRoot，不增加 artifactState、artifactCount、repositoryState 或 repositoryUID。Runner 在必需产物与 manifest 封账后写 Succeeded；完整产物集合及封账状态由 Artifact Manager 的 JobUploadManifest 提供。
 
-RpmRepo Controller 根据 Job phase、labels 与 manifest 判定输入，并在 RpmRepo.status.repository.sourceJobUIDs 中记录已消费 Job，不回写 Job status。Manifest digest 仅供 Artifact Manager 内部校验，不进入公共 Job 或 RpmRepo 状态。
+RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Artifact Manager 在物化时校验输入。控制器在 RpmRepo.status.repository.sourceJobUIDs 中记录已消费 Job，在 skippedJobUIDs 中记录可定位的异常 Job，不回写 Job status。Manifest digest 仅供 Artifact Manager 内部校验，不进入公共 Job 或 RpmRepo 状态。
 
 ## 十五、错误处理
 

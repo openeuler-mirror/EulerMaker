@@ -219,6 +219,19 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 		if len(repository.SourceJobUIDs) > 0 && (repository.RepositoryUID == "" || repository.ContentURL == "") {
 			allErrs = append(allErrs, field.Invalid(path.Child("sourceJobUIDs"), repository.SourceJobUIDs, "requires repositoryUID and contentURL"))
 		}
+		seen := make(map[string]bool, len(repository.SourceJobUIDs)+len(repository.SkippedJobUIDs))
+		for _, uid := range repository.SourceJobUIDs {
+			seen[uid] = true
+		}
+		for i, uid := range repository.SkippedJobUIDs {
+			itemPath := path.Child("skippedJobUIDs").Index(i)
+			if uid == "" {
+				allErrs = append(allErrs, field.Required(itemPath, "Job UID is required"))
+			} else if seen[uid] {
+				allErrs = append(allErrs, field.Duplicate(itemPath, uid))
+			}
+			seen[uid] = true
+		}
 		if transition := repository.Transition; transition != nil {
 			if transition.RepositoryUID == "" {
 				allErrs = append(allErrs, field.Required(path.Child("transition", "repositoryUID"), "repository UID is required"))
