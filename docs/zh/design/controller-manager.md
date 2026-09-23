@@ -525,7 +525,7 @@ PollingSource 每轮执行：
 
 PollingSource 对临时 List 失败持续退避重试；超过 stale threshold 时将 readiness 置为 false，成功完成一轮扫描后恢复。临时失败不终止 `Run`，且不得用失败或不完整的 List 结果覆盖旧快照。只有固定配置错误、响应无法按契约解析，或者轮询主循环在 context 未取消时意外结束，`Run` 才返回不可恢复错误。
 
-默认轮询周期为 30 秒，允许按资源和 Controller 配置。相同资源和过滤条件的共享 PollingSource 使用所有订阅者要求的最短周期，避免重复 List。同一 Source 不允许并发执行两轮扫描；上一次扫描完成后才计算下一次等待时间。对象进入过滤范围产生 Add，匹配期间发生变化产生 Update，离开过滤范围产生 Delete。
+默认轮询周期为 15 秒，允许按资源和 Controller 配置。相同资源和过滤条件的共享 PollingSource 使用所有订阅者要求的最短周期，避免重复 List。同一 Source 不允许并发执行两轮扫描；上一次扫描完成后才计算下一次等待时间。对象进入过滤范围产生 Add，匹配期间发生变化产生 Update，离开过滤范围产生 Delete。
 
 对于非 Watch 资源，Worker 收到 key 后应通过 API `Get` 读取最新对象；PollingSource 快照只用于变化检测、索引和事件映射，不作为业务写入的并发前提。若 API 不提供对应 Get，业务 Controller 才可读取快照，并必须在设计中明确其最终一致性限制。
 
@@ -714,7 +714,7 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--controller-slow-retry-initial-delay` | 30s | 快速重试耗尽后的首次慢速重入延迟 |
 | `--controller-slow-retry-max-delay` | 15m | 慢速指数退避上限 |
 | `--controller-slow-retry-jitter` | 0.2 | 慢速延迟的正负抖动比例，取值范围 `[0, 1)` |
-| `--poll-period` | 30s | 非 Watch 资源默认轮询周期 |
+| `--poll-period` | 15s | 非 Watch 资源默认轮询周期 |
 | `--poll-page-size` | 500 | 非 Watch 资源单页对象数 |
 | `--cache-sync-timeout` | 2m | 首次同步超时 |
 | `--shutdown-timeout` | 30s | 优雅退出上限 |

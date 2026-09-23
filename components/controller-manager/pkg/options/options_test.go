@@ -10,7 +10,7 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Manager.Workers != 6 || o.Source.PollPageSize != 500 || o.Manager.ControllerMaxRetries != 15 {
+	if o.Manager.Workers != 6 || o.Source.PollPeriod != 15*time.Second || o.Source.PollPageSize != 500 || o.Manager.ControllerMaxRetries != 15 {
 		t.Fatalf("unexpected defaults: %+v", o)
 	}
 	if o.Snapshot.ResolveWorkers != 10 {

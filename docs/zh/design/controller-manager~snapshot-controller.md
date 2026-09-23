@@ -236,7 +236,7 @@ if err != nil {
 
 ### 4.3 周期性重同步
 
-PollingSource 默认每 30s 轮询一次，作为丢事件和进程重启后的恢复兜底。延迟重入计划无需持久化；同步等待的判定与重新入队规则统一见 6.2 和第八章。
+PollingSource 默认每 15s 轮询一次，作为丢事件和进程重启后的恢复兜底。延迟重入计划无需持久化；同步等待的判定与重新入队规则统一见 6.2 和第八章。
 
 ### 4.4 跨轮失败计数
 
@@ -539,7 +539,7 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--workers` | 6 | Snapshot reconcile worker 数（不是单个 Snapshot 内的仓库解析并发数） |
-| `--poll-period` | 30s | PollingSource list 周期 |
+| `--poll-period` | 15s | PollingSource list 周期 |
 | `--snapshot-resolve-workers` | 10 | 单 Snapshot 内包解析并发数 |
 | `--snapshot-resolve-budget` | 120s | 单轮解析总预算（budgetCtx） |
 | `--snapshot-sync-requeue-delay` | 30s | 存在 Waiting 或 Deferred 包时延迟重入的时间；轮内不等待同步 |

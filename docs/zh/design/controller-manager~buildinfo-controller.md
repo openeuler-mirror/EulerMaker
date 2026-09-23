@@ -21,7 +21,7 @@ BuildInfo Controller 运行在现有 `controller-manager` 框架内。
 ### 2.1 装配与配置
 
 - 队列 key 为 `{BuildInfo.metadata.namespace}/{BuildInfo.metadata.name}`，`BuildInfo.metadata.namespace` 即 Project 名，`BuildInfo.metadata.name` 与父 Build 同名。
-- Controller 配置项：轮询周期沿用框架全局 `--poll-period`（默认 30s），worker 数沿用框架全局 `--workers`（默认 2）；本控制器专有配置见 12.1。
+- Controller 配置项：轮询周期沿用框架全局 `--poll-period`（默认 15s），worker 数沿用框架全局 `--workers`（默认 2）；本控制器专有配置见 12.1。
 - 配置校验时机：所有静态配置（apiserver 地址与 CA、git-server 地址/超时/重试、请求超时）必须在 initializer 阶段完成校验；配置非法时 controller-manager 直接启动失败，不得延迟到单个 BuildInfo 的 reconcile 中处理，也不通过 HealthChecker 表达。镜像映射不再是本地静态配置：创建 Job 时运行期经 apiserver 读取集群级 BuildConf（见 15.3.1/E-26）。
 
 ### 2.2 组件依赖与框架接口
@@ -224,7 +224,7 @@ BuildInfo 与父 Build 同名、namespace 即 Project。UID 不编码在字符�
 
 ### 5.3 周期性重同步
 
-PollingSource 默认每 30s（`--poll-period`）轮询一次，作为丢事件、慢速重试与进程重启后的恢复兜底；等待类分支（发布确认未兑现、补边待数据源等）统一返回零值 + nil，依赖周期 OnUpdate 重驱动（5.2/5.3）。
+PollingSource 默认每 15s（`--poll-period`）轮询一次，作为丢事件、慢速重试与进程重启后的恢复兜底；等待类分支（发布确认未兑现、补边待数据源等）统一返回零值 + nil，依赖周期 OnUpdate 重驱动（5.2/5.3）。
 
 ### 5.4 缓存生命周期与失败计数
 
@@ -771,7 +771,7 @@ spec 的 install 校验结果由 **runner 仅在 install 校验失败时** 以 J
 
 `ReconcileResult` 语义（`RequeueAfter < 0`，或 `Requeue=true` 且 `RequeueAfter>0` 为非法组合，`Valid()` 返回 false）：
 
-- 返回零值 `ReconcileResult{}` + `nil` → `Forget`：本轮收敛或等待外部就绪，由下一轮 poll（默认 30s，`--poll-period`，NFR-03）重新驱动（PollingSource 每轮对存活 key 无条件分发 OnUpdate，5.2/5.3）。**全文流程图、边界表与本节表格中的"返回 nil 等下一轮"均指此语义。**
+- 返回零值 `ReconcileResult{}` + `nil` → `Forget`：本轮收敛或等待外部就绪，由下一轮 poll（默认 15s，`--poll-period`，NFR-03）重新驱动（PollingSource 每轮对存活 key 无条件分发 OnUpdate，5.2/5.3）。**全文流程图、边界表与本节表格中的"返回 nil 等下一轮"均指此语义。**
 - 返回 `ReconcileResult{Requeue: true}` + `nil` → 先 `Forget` 再 `Add`：作为一次不带旧退避的立即重入队。
 - 返回 `ReconcileResult{RequeueAfter: d}` + `nil`（`d>0`）→ 先 `Forget` 再 `AddAfter(d)`：延迟调谐，不计为失败重试、不累计退避。409 Conflict 延迟重入（`RequeueAfter: 1s`）即走本行（见 10.2）。
 - 返回 `error` → `AddRateLimited`：快速阶段使用 client-go `DefaultControllerRateLimiter`（基础退避 5ms 指数增长，默认最多连续重试 `maxRetries`=15 次，`--controller-max-retries`）；**达上限后不丢弃 key**，而是 `Forget` + 进入框架慢速阶段以 `AddAfter` 持续重入队（默认 30s 起 2 倍增长至 15m 封顶、`[0.8, 1.2]` 抖动，`--controller-slow-retry-*`），慢速阶段每次临时失败直接计算下一次慢速延迟，不再回退快速重试。
@@ -979,7 +979,7 @@ condition 对应的 reason 及含义以 9.1 为准；停止派发日志只表示
 | 配置项 | 默认值 | 来源 | 说明 |
 |--------|--------|------|------|
 | `--workers` | 2 | flag（全局） | worker goroutine 数（各 controller 共用全局值；如需独立可增 `--build-info-workers`） |
-| `--poll-period` | 30s | flag（全局） | PollingSource list 周期 |
+| `--poll-period` | 15s | flag（全局） | PollingSource list 周期 |
 | `--build-info-dcg-prune-grace` | 3×pollPeriod | flag | dcg 缓存 tombstone 宽限期（5.4） |
 | `--rpmrepo-ready-retry-limit` | 3 | flag | RpmRepo 就绪性连续失败计数升级阈值（E-29）：连续失败达阈值触发 condition `RpmRepoUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮就绪自动清零 |
 | `--snapshot-ready-retry-limit` | 3 | flag | 当前 Snapshot 查询连续失败计数升级阈值（E-30）：连续失败达阈值触发 condition `SnapshotUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮 GET 成功自动清零 |
@@ -1684,7 +1684,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 |--------|------|--------|
 | NFR-01 | 吞吐量 | 单 worker 每秒可处理 ≥ 10 个 BuildInfo reconcile |
 | NFR-02 | 并发度（worker goroutine 池） | 默认 N=2，可配置（全局 `--workers`，或本控制器 flag 覆盖） |
-| NFR-03 | list 周期 | 默认 30s（全局 `--poll-period`），可配置 |
+| NFR-03 | list 周期 | 默认 15s（全局 `--poll-period`），可配置 |
 | NFR-04 | `Cache.dcgDict` 内存占用 | 单 BuildInfo < 2MB（2000 spec 场景，与 NFR-06 基准一致） |
 | NFR-05 | 可用性 | 控制器进程崩溃重启后，2 个 list 周期内恢复处理 |
 | NFR-06 | DAG 规模 | 支持单 BuildInfo 内 ≥ 2000 个 spec 的依赖图 |
