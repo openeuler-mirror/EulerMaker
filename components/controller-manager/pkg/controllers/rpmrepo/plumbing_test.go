@@ -89,7 +89,6 @@ func TestConfigValidationBranches(t *testing.T) {
 		{name: "unparsable", mutate: func(c *Config) { c.ArtifactManagerAddr = "://bad" }},
 		{name: "timeout", mutate: func(c *Config) { c.ArtifactManagerTimeout = 0 }},
 		{name: "jobs", mutate: func(c *Config) { c.MaxJobsPerBatch = 0 }},
-		{name: "bytes", mutate: func(c *Config) { c.MaxInputBytes = 0 }},
 		{name: "retry-limit", mutate: func(c *Config) { c.MaterializeRetryLimit = 0 }},
 		{name: "poll-period", mutate: func(c *Config) { c.PollPeriod = 0 }},
 		{name: "backoff-initial", mutate: func(c *Config) { c.Backoff.Initial = 0 }},

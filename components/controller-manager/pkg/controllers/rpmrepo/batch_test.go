@@ -7,56 +7,20 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func TestMaterializationInputBytesCountsOnlyRPMFiles(t *testing.T) {
-	manifest := JobUploadManifest{
-		State: ManifestCompleted,
-		Files: []ManifestFile{
-			{RelativePath: "packages/gcc-1.rpm", Size: 100},
-			{RelativePath: "packages/gcc-debuginfo-1.RPM", Size: 50},
-			{RelativePath: "logs/build.log", Size: 900},
-			{RelativePath: "metadata/summary.json", Size: 10},
-		},
-	}
-	if got := materializationInputBytes(manifest); got != 150 {
-		t.Fatalf("materializationInputBytes = %d, want 150", got)
-	}
-}
-
-func TestSelectBatchKeepsOneJobPerSpecAndHonoursLimits(t *testing.T) {
+func TestSelectBatchKeepsOneJobPerSpecAndHonoursJobLimit(t *testing.T) {
 	candidates := []candidate{
-		{name: "job-a", uid: "1", specName: "gcc", createdAt: 1, bytes: 10},
-		{name: "job-b", uid: "2", specName: "gcc", createdAt: 2, bytes: 10},
-		{name: "job-c", uid: "3", specName: "kernel", createdAt: 3, bytes: 10},
-		{name: "job-d", uid: "4", specName: "glibc", createdAt: 4, bytes: 10},
+		{name: "job-d", uid: "4", specName: "glibc", createdAt: 4},
+		{name: "job-b", uid: "2", specName: "gcc", createdAt: 2},
+		{name: "job-c", uid: "3", specName: "kernel", createdAt: 3},
+		{name: "job-a", uid: "1", specName: "gcc", createdAt: 1},
 	}
-	selection := selectBatch(candidates, 3, 25)
-	if selection.oversized != nil {
-		t.Fatalf("unexpected oversized candidate %+v", selection.oversized)
+	selection := selectBatch(candidates, 2)
+	if len(selection) != 2 || selection[0].name != "job-a" || selection[1].name != "job-c" {
+		t.Fatalf("unexpected two-job batch %+v", selection)
 	}
-	if len(selection.inputs) != 2 {
-		t.Fatalf("expected 2 inputs within the byte limit, got %d", len(selection.inputs))
-	}
-	if selection.inputs[0].name != "job-a" || selection.inputs[1].name != "job-c" {
-		t.Fatalf("unexpected batch %+v", selection.inputs)
-	}
-
-	selection = selectBatch(candidates, 20, 100)
-	if len(selection.inputs) != 3 {
-		t.Fatalf("同一批次每个 spec 至多一个 Job，expected 3 inputs, got %d", len(selection.inputs))
-	}
-}
-
-func TestSelectBatchReportsFirstCandidateOverLimit(t *testing.T) {
-	candidates := []candidate{
-		{name: "job-big", uid: "1", specName: "gcc", createdAt: 1, bytes: 150},
-		{name: "job-small", uid: "2", specName: "kernel", createdAt: 2, bytes: 10},
-	}
-	selection := selectBatch(candidates, 20, 100)
-	if selection.oversized == nil || selection.oversized.name != "job-big" {
-		t.Fatalf("expected the first candidate to be reported oversized, got %+v", selection.oversized)
-	}
-	if len(selection.inputs) != 0 {
-		t.Fatalf("an oversized first candidate must not form a batch, got %+v", selection.inputs)
+	selection = selectBatch(candidates, 20)
+	if len(selection) != 3 || selection[2].name != "job-d" {
+		t.Fatalf("each spec should appear only once per batch: %+v", selection)
 	}
 }
 

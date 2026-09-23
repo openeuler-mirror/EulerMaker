@@ -3,6 +3,7 @@ package rpmrepo
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -91,6 +92,91 @@ func TestScanSkipsConsumedJobs(t *testing.T) {
 	}
 	if len(client.StatusWrites) != 0 {
 		t.Fatalf("a consumed Job must not produce a write")
+	}
+}
+
+func TestScanStopsReadingManifestsWhenBatchIsFull(t *testing.T) {
+	tests := []struct {
+		name         string
+		specs        []string
+		unreadyJobs  map[string]bool
+		maxJobs      int
+		reverseJobs  bool
+		wantRequests []string
+		wantSelected []string
+		wantNotReady bool
+	}{
+		{
+			name:  "job count limit",
+			specs: []string{"gcc", "glibc", "bash"}, maxJobs: 2,
+			reverseJobs:  true,
+			wantRequests: []string{"job-a", "job-b"}, wantSelected: []string{"job-a", "job-b"},
+		},
+		{
+			name:  "duplicate spec does not fill batch",
+			specs: []string{"gcc", "gcc", "glibc", "bash"}, maxJobs: 2,
+			wantRequests: []string{"job-a", "job-b", "job-c"}, wantSelected: []string{"job-a", "job-c"},
+		},
+		{
+			name:  "unready prefix still allows a full batch",
+			specs: []string{"gcc", "glibc", "bash", "curl"}, maxJobs: 2,
+			unreadyJobs:  map[string]bool{"job-a": true},
+			wantRequests: []string{"job-a", "job-b", "job-c"}, wantSelected: []string{"job-b", "job-c"}, wantNotReady: true,
+		},
+		{
+			name:  "incomplete batch scans through unready suffix",
+			specs: []string{"gcc", "glibc", "bash"}, maxJobs: 2,
+			unreadyJobs:  map[string]bool{"job-b": true, "job-c": true},
+			wantRequests: []string{"job-a", "job-b", "job-c"}, wantSelected: []string{"job-a"}, wantNotReady: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewFakeClient()
+			for i, spec := range tt.specs {
+				name := "job-" + string(rune('a'+i))
+				client.Jobs[testProject] = append(client.Jobs[testProject], newSucceededJob(name, spec, "uid-"+name, time.Unix(int64(i+1), 0)))
+			}
+			if tt.reverseJobs {
+				jobs := client.Jobs[testProject]
+				for i, j := 0, len(jobs)-1; i < j; i, j = i+1, j-1 {
+					jobs[i], jobs[j] = jobs[j], jobs[i]
+				}
+			}
+			artifacts := NewFakeArtifactManager()
+			artifacts.GetJobManifestFunc = func(_ context.Context, _, name, _ string) (JobUploadManifest, error) {
+				if tt.unreadyJobs[name] {
+					return JobUploadManifest{State: ManifestOpen}, nil
+				}
+				return completedManifest(100), nil
+			}
+			config := testConfig()
+			config.MaxJobsPerBatch = tt.maxJobs
+			c := newTestController(t, client, artifacts, config)
+			r := &reconciler{controller: c, ctx: context.Background(), project: testProject}
+			scan, err := r.scanCandidates(newRpmRepo(testBuild), newBuild(testBuild))
+			if err != nil {
+				t.Fatalf("scanCandidates: %v", err)
+			}
+			var gotRequests []string
+			for _, request := range artifacts.ManifestRequests {
+				gotRequests = append(gotRequests, request[1])
+			}
+			if !reflect.DeepEqual(gotRequests, tt.wantRequests) {
+				t.Fatalf("manifest requests = %v, want %v", gotRequests, tt.wantRequests)
+			}
+			selection := selectBatch(scan.candidates, config.MaxJobsPerBatch)
+			var gotSelected []string
+			for _, item := range selection {
+				gotSelected = append(gotSelected, item.name)
+			}
+			if !reflect.DeepEqual(gotSelected, tt.wantSelected) {
+				t.Fatalf("selected jobs = %v, want %v", gotSelected, tt.wantSelected)
+			}
+			if scan.notReady != tt.wantNotReady {
+				t.Fatalf("notReady = %t, want %t", scan.notReady, tt.wantNotReady)
+			}
+		})
 	}
 }
 

@@ -555,7 +555,7 @@ RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；r
 | `RepositoryReady` | `False` | `RepositoryCreationFailed` | 过程仓不可重试失败或重试耗尽 |
 | `PublishSucceed` | `True` | `ReleaseActivated` | 正式发布已成功激活 |
 | `PublishSucceed` | `False` | `ReleaseFailed` | 正式发布准备或激活失败 |
-| `PublishSucceed` | `False` | `RepositoryCreationFailed` | 过程仓失败导致无法发布，含首个候选输入超限 |
+| `PublishSucceed` | `False` | `RepositoryCreationFailed` | 过程仓失败导致无法发布 |
 | `PublishSucceed` | `False` | `NoPublishableArtifacts` | 已完成构建没有可发布产物 |
 | `PublishSucceed` | `False` | `BuildAborted` | 同名 Build 被中止 |
 

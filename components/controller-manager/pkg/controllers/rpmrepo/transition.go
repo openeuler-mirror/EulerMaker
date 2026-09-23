@@ -40,15 +40,7 @@ func (r *reconciler) advanceRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, 
 		}
 		return r.maybeTriggerRelease(repo, build, info)
 	}
-	selection := selectBatch(scan.candidates, r.controller.config.MaxJobsPerBatch, r.controller.config.MaxInputBytes)
-	if selection.oversized != nil {
-		log.Printf("controller=%s key=%q uid=%q reason=InputTooLarge bytes=%d limit=%d job_uid=%q",
-			Name, r.key, repo.UID, selection.oversized.bytes, r.controller.config.MaxInputBytes, selection.oversized.uid)
-		// Release side terminal only: no batch was formed, so repository.* keeps its previous values and the
-		// repository failure counter is the one that moves.
-		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonRepositoryCreationFailed, countRepositoryFailure)
-	}
-	inputs := repositoryInputs(selection.inputs)
+	inputs := repositoryInputs(selectBatch(scan.candidates, r.controller.config.MaxJobsPerBatch))
 	base := repository.RepositoryUID
 	uid, err := repositoryUID(r.project, repo.Name, base, inputs)
 	if err != nil {
@@ -336,6 +328,7 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 	scan := candidateScan{}
 	ordered := append([]ebsv1.Job(nil), jobs...)
 	sortJobs(ordered)
+	selectedSpecs := make(map[string]struct{})
 	for i := range ordered {
 		job := &ordered[i]
 		if job.Status.Phase != ebsv1.JobSucceeded {
@@ -370,8 +363,15 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 				name:      job.Name,
 				specName:  specName,
 				createdAt: job.CreationTimestamp.UnixNano(),
-				bytes:     materializationInputBytes(manifest),
 			})
+			if _, exists := selectedSpecs[specName]; exists {
+				continue
+			}
+			selectedSpecs[specName] = struct{}{}
+			if len(selectedSpecs) >= r.controller.config.MaxJobsPerBatch {
+				// A batch is ready; later manifests are irrelevant until this batch is promoted.
+				return scan, nil
+			}
 		case ManifestOpen, ManifestCompleting:
 			scan.notReady = true
 			log.Printf("controller=%s key=%q uid=%q job_uid=%q state=%s reason=InputManifestNotReady", Name, r.key, repo.UID, job.UID, manifest.State)
