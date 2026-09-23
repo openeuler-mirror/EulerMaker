@@ -78,7 +78,6 @@ type RepositoryResponse struct {
 	CreatedAt        time.Time       `json:"createdAt"`
 	UpdatedAt        time.Time       `json:"updatedAt"`
 	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
-	RPMs             map[string]any  `json:"rpms,omitempty"`
 }
 
 type ManifestFile struct {
@@ -207,8 +206,8 @@ type httpArtifactClient struct {
 	client *http.Client
 }
 
-// maxResponseBytes bounds one control API response. Repository responses carry the RPM metadata of a whole
-// version, so the limit must stay well above a single manifest.
+// maxResponseBytes bounds one API response, including Job manifests. Repository status responses do not
+// include the repository's RPM metadata.
 const maxResponseBytes = 8 << 20
 
 // newArtifactManagerClient validates the configured address and builds the HTTP client used for every control

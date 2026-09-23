@@ -177,7 +177,7 @@ type ArtifactManagerClient interface {
 | --- | --- |
 | `RepositoryState` | 过程仓状态：`Creating` / `Ready` / `Failed` / `Deleting` |
 | `CreateRepositoryRequest` / `ManifestReference` | 物化请求：`repositoryUID`、`repositoryName`、`project`、`buildName`、`targetOS`、`targetArch`、可选的 `baseRepositoryUID`，以及按 `jobUID` 排序的 `manifests`（`jobName` + `jobUID`） |
-| `RepositoryResponse` | 物化响应：`repositoryUID`、`state`、`attempt`（重试预算的权威计数）、可选的 `pollAfterSeconds`、`contentURL`、`failure` 与 `createdAt` / `updatedAt`（退避窗口锚点，见 §8）/ `completedAt`；响应体可能携带 `rpms`（Artifact Manager 侧字段，控制器不解析、不持久化）。内容摘要只保留在 Artifact Manager 内部，不在响应中返回 |
+| `RepositoryResponse` | 物化响应：`repositoryUID`、`state`、`attempt`（重试预算的权威计数）、可选的 `pollAfterSeconds`、`contentURL`、`failure` 与 `createdAt` / `updatedAt`（退避窗口锚点，见 §8）/ `completedAt`；RPM 元数据和内容摘要只保留在 Artifact Manager 内部，不在响应中返回 |
 | `JobUploadManifest` / `ManifestFile` | Job 上传清单及其文件项：`state` ∈ `Open` / `Completing` / `Completed` / `Failed`、`digest`、`files[]`（相对路径、大小、SHA-256、是否必需等） |
 | `FailureInfo` | 失败详情：稳定错误码 `code`、诊断信息 `message`、是否可重试 `retryable` 与发生时间 |
 | `ReleaseState` | 发布状态：`Creating` / `Prepared` / `Ready` / `Failed` / `Deleting` |
