@@ -1,19 +1,31 @@
 <template>
-  <section class="page-heading"><div><h1>{{ t("operations.title") }}</h1><p>{{ t("operations.hint") }}</p></div><div class="page-actions"><button class="icon-button" type="button" :aria-label="t('common.refresh')" :disabled="runnersLoading" @click="loadRunners"><Refresh /></button></div></section>
-  <BuildConfEditor />
-  <section class="content-panel operations-section"><form class="operations-project-form" @submit.prevent="jobProject = jobProjectInput"><label class="field"><span>{{ t('operations.projectName') }}</span><input v-model.trim="jobProjectInput" required /></label><button class="secondary-button">{{ t('jobControl.load') }}</button></form></section>
-  <ProjectJobs v-if="jobProject" :key="jobProject" :project="jobProject" :can-abort="false" />
-  <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
+  <section class="page-heading"><div><h1>{{ t("operations.title") }}</h1><p>{{ t("operations.hint") }}</p></div></section>
+  <div class="operations-layout">
+    <nav class="operations-menu" role="tablist" :aria-label="t('operations.menuLabel')">
+      <button v-for="item in operationSections" :id="`operations-tab-${item.id}`" :key="item.id" type="button" role="tab" :aria-selected="activeSection === item.id" :aria-controls="`operations-panel-${item.id}`" :class="{ active: activeSection === item.id }" @click="selectSection(item.id)">{{ item.label }}</button>
+    </nav>
+    <main class="operations-content">
+      <section v-if="activeSection === 'build'" id="operations-panel-build" role="tabpanel" aria-labelledby="operations-tab-build"><BuildConfEditor /></section>
 
-  <section class="content-panel operations-section">
+      <section v-else-if="activeSection === 'resources'" id="operations-panel-resources" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-resources">
+        <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
     <div class="section-heading"><h2>{{ t("operations.resources") }}</h2></div>
     <p class="form-hint">{{ t("operations.resourcesHint") }}</p>
     <form class="operations-project-form" @submit.prevent="loadResources"><label class="field required-field operations-project-field"><span>{{ t("operations.projectName") }}</span><input v-model.trim="projectName" required maxlength="63" autocomplete="off" :placeholder="t('operations.projectPlaceholder')" /></label><button class="secondary-button" type="submit" :disabled="resourcesLoading">{{ t("operations.loadResources") }}</button><button v-if="loadedProject" class="primary-button" type="button" @click="openCreate">{{ t("operations.createResource") }}</button></form>
     <div v-if="resourcesError" class="inline-error" role="alert"><WarningFilled />{{ t(resourcesError) }}</div>
     <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else-if="loadedProject"><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.metadata?.name"><td><strong>{{ resource.metadata?.name }}</strong></td><td>{{ resource.spec?.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.spec?.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.spec?.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :disabled="isProtectedDefaultResource(resource)" :title="isProtectedDefaultResource(resource) ? t('operations.defaultResourceProtected') : undefined" @click="openDelete(resource)">{{ t("common.remove") }}</button></td></tr></tbody></table></div></template>
-  </section>
+        <section v-if="editorOpen" class="operations-resource-editor" aria-labelledby="resource-editor-title">
+          <div class="section-heading"><h3 id="resource-editor-title">{{ t(editing ? 'operations.editResource' : 'operations.createResource') }}</h3></div>
+          <form class="project-form" @submit.prevent="saveResource"><label class="field required-field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="resourceName" required maxlength="63" :disabled="Boolean(editing)" /></label><BuildResourceSpecEditor ref="specEditor" :source="specSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form>
+        </section>
+      </section>
 
-  <section class="content-panel operations-section"><div class="section-heading"><h2>{{ t("operations.runners") }}</h2></div><div v-if="runnersLoading" class="skeleton-list" :aria-label="t('operations.loadingRunners')"><span v-for="item in 4" :key="item"></span></div><div v-else-if="runnersError" class="inline-error" role="alert"><WarningFilled />{{ t(runnersError) }}<button type="button" @click="loadRunners">{{ t("common.reload") }}</button></div><EmptyState v-else-if="!runners.length" :title="t('operations.noRunners')" :description="t('operations.noRunnersHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th><th>{{ t("operations.arch") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th><th v-if="canManageRunners">{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="runner in runners" :key="runner.metadata?.name"><td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td><td><StatusBadge :value="runner.status?.phase" /></td><td>{{ runner.spec?.type || t("common.emptyValue") }}</td><td>{{ runner.spec?.arch || t("common.emptyValue") }}</td><td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td><td>{{ formatDate(runner.status?.heartbeat) }}</td><td v-if="canManageRunners" class="admin-row-actions"><button class="text-button danger-link" type="button" :disabled="evictionSaving || !runner.metadata?.name" @click="openEviction(runner)">{{ t(runner.status?.phase === "Evicted" ? "operations.cancelEviction" : "operations.evict") }}</button></td></tr></tbody></table></div></section>
+      <section v-else id="operations-panel-runners" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-runners"><div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div><div class="section-heading"><h2>{{ t("operations.runners") }}</h2><button class="icon-button runner-refresh-button" type="button" :aria-label="t('common.refresh')" :title="t('common.refresh')" :disabled="runnersLoading" @click="loadRunners"><Refresh /></button></div><form class="operations-project-form" @submit.prevent="runnerQuery = runnerSearch.trim()">
+        <label class="field operations-project-field"><span>{{ t('operations.searchRunners') }}</span><input v-model="runnerSearch" type="search" :placeholder="t('operations.runnerSearchPlaceholder')" /></label>
+        <button class="secondary-button" type="submit" :disabled="runnersLoading">{{ t('operations.search') }}</button>
+      </form><div v-if="runnersLoading" class="skeleton-list" :aria-label="t('operations.loadingRunners')"><span v-for="item in 4" :key="item"></span></div><div v-else-if="runnersError" class="inline-error" role="alert"><WarningFilled />{{ t(runnersError) }}<button type="button" @click="loadRunners">{{ t("common.reload") }}</button></div><EmptyState v-else-if="!runners.length" :title="t('operations.noRunners')" :description="t('operations.noRunnersHint')" /><EmptyState v-else-if="!filteredRunners.length" :title="t('operations.noMatchingRunners')" :description="t('operations.noMatchingRunnersHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th><th>{{ t("operations.arch") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th><th v-if="canManageRunners">{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name"><td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td><td><StatusBadge :value="runner.status?.phase" /></td><td>{{ runner.spec?.type || t("common.emptyValue") }}</td><td>{{ runner.spec?.arch || t("common.emptyValue") }}</td><td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td><td>{{ formatDate(runner.status?.heartbeat) }}</td><td v-if="canManageRunners" class="admin-row-actions"><button class="text-button danger-link" type="button" :disabled="evictionSaving || !runner.metadata?.name" @click="openEviction(runner)">{{ t(runner.status?.phase === "Evicted" ? "operations.cancelEviction" : "operations.evict") }}</button></td></tr></tbody></table></div></section>
+    </main>
+  </div>
 
   <ModalDialog v-if="evicting" title-id="evict-runner-title" :title="t(cancelEviction ? 'operations.cancelEvictionTitle' : 'operations.evictRunner', { name: evicting.metadata?.name })" :close-label="t('common.close')" @close="closeEviction">
     <form class="project-form" @submit.prevent="evictRunner">
@@ -25,13 +37,12 @@
       </div>
     </form>
   </ModalDialog>
-  <ModalDialog v-if="editorOpen" title-id="resource-editor-title" :title="t(editing ? 'operations.editResource' : 'operations.createResource')" :close-label="t('common.close')" @close="closeEditor"><form class="project-form" @submit.prevent="saveResource"><label class="field required-field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="resourceName" required maxlength="63" :disabled="Boolean(editing)" /></label><BuildResourceSpecEditor ref="specEditor" :source="specSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form></ModalDialog>
   <ModalDialog v-if="deleting" title-id="delete-resource-title" :title="t('operations.deleteResource', { name: deleting.metadata?.name })" :close-label="t('common.close')" @close="closeDelete"><form class="project-form" @submit.prevent="deleteResource"><p class="form-hint">{{ t("admin.typeNameHint", { name: deleting.metadata?.name }) }}</p><label class="field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="confirmName" required autocomplete="off" /></label><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeDelete">{{ t("common.cancel") }}</button><button class="primary-button danger-button" type="submit" :disabled="saving || confirmName !== deleting.metadata?.name">{{ t("common.remove") }}</button></div></form></ModalDialog>
 </template>
 
 <script setup lang="ts">
 import { CircleCheckFilled, Refresh, WarningFilled } from "@element-plus/icons-vue";
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
 import { useSessionStore } from "@/stores/session";
@@ -40,20 +51,31 @@ import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildResourceSpecEditor from "@/components/BuildResourceSpecEditor.vue";
 import BuildConfEditor from "@/components/BuildConfEditor.vue";
-import ProjectJobs from "@/components/ProjectJobs.vue";
 import type { BuildResource, Runner } from "@/types";
+
+type OperationsSection = "build" | "resources" | "runners";
 
 const { t } = useI18n();
 const session = useSessionStore();
-const jobProjectInput = ref('');
-const jobProject = ref('');
+const activeSection = ref<OperationsSection>("build");
+const operationSections = computed<Array<{ id: OperationsSection; label: string }>>(() => [
+  { id: "build", label: t("operations.buildConfiguration") },
+  { id: "resources", label: t("operations.resourceConfiguration") },
+  { id: "runners", label: t("operations.runnerManagement") },
+]);
 const canManageRunners = computed(() => session.role === "admin" || session.role === "ops");
 const evicting = ref<Runner | null>(null);
 const evictionSaving = ref(false);
 const cancelEviction = ref(false);
 const evictionError = ref("");
 const runners = ref<Runner[]>([]);
-const runnersLoading = ref(true);
+const runnerSearch = ref("");
+const runnerQuery = ref("");
+const filteredRunners = computed(() => {
+  const query = runnerQuery.value.toLowerCase();
+  return runners.value.filter(runner => (runner.metadata?.name || "").toLowerCase().includes(query));
+});
+const runnersLoading = ref(false);
 const runnersError = ref("");
 const projectName = ref("default");
 const loadedProject = ref("");
@@ -71,7 +93,12 @@ const confirmName = ref("");
 const dialogError = ref("");
 const saving = ref(false);
 
-onMounted(() => { void loadRunners(); void loadResources(); });
+function selectSection(section: OperationsSection): void {
+  activeSection.value = section;
+  success.value = "";
+  if (section === "resources" && !loadedProject.value && !resourcesLoading.value) void loadResources();
+  if (section === "runners" && !runners.value.length && !runnersLoading.value) void loadRunners();
+}
 async function loadRunners(): Promise<void> {
   runnersLoading.value = true;
   runnersError.value = "";
@@ -209,3 +236,8 @@ async function loadAll<T>(path: string): Promise<T[]> {
   return items;
 }
 </script>
+
+<style scoped>
+.runner-refresh-button { width: 28px; height: 28px; padding: 0; flex: none; border-radius: 6px; }
+.runner-refresh-button :deep(svg) { width: 16px; height: 16px; display: block; }
+</style>

@@ -17,7 +17,7 @@
         </div>
         <template v-if="mode === 'list'">
           <p v-if="!targetGroups.length" class="form-hint">{{ t('buildConf.empty') }}</p>
-          <div v-for="group in visibleGroups" :key="group.os" class="content-panel buildconf-os-card">
+          <div v-for="group in targetGroups" :key="group.os" class="content-panel buildconf-os-card">
             <div class="section-heading buildconf-os-heading"><h3>{{ group.os }}</h3><button v-if="editing" type="button" class="text-button danger-link" @click="removeOS(group.os)">{{ t('common.remove') }}</button></div>
             <div v-for="entry in group.entries" :key="entry.arch" class="buildconf-arch-row" :class="{ 'is-readonly': !editing }">
               <strong>{{ entry.arch }}</strong>
@@ -26,7 +26,6 @@
               <button v-if="editing" type="button" class="text-button danger-link" @click="removeArch(group.os, entry.arch)">{{ t('common.remove') }}</button>
             </div>
           </div>
-          <button v-if="targetGroups.length > 1" class="text-button buildconf-expand-button" type="button" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? t('buildConf.showLess') : t('buildConf.showAll', { count: targetGroups.length }) }}</button>
         </template>
         <label v-else class="field"><span>spec</span><textarea v-model="source" class="yaml-editor" rows="16" spellcheck="false" :readonly="!editing"></textarea></label>
       </fieldset>
@@ -75,13 +74,11 @@ const osSuggestionsOpen = ref(false);
 const activeOSIndex = ref(-1);
 const error = ref(''); const success = ref(false); const saving = ref(false);
 const editing = ref(false);
-const expanded = ref(false);
 const targetGroups = computed(() => Object.entries(draft.value.targets).map(([os, target]) => ({
   os,
   entries: Object.entries(target.arches).map(([arch, config]) => ({ arch, config })),
 })));
 const targetEntries = computed(() => targetGroups.value.flatMap(group => group.entries));
-const visibleGroups = computed(() => expanded.value ? targetGroups.value : targetGroups.value.slice(0, 1));
 const matchingOS = computed(() => targetGroups.value.map(group => group.os).filter(os => os.toLocaleLowerCase().includes(newOS.value.toLocaleLowerCase())));
 const path = '/apis/ebs/v1/buildconfs/default';
 onMounted(load);
@@ -90,7 +87,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onOSPointerDow
 async function load() {
   if (saving.value) return;
   saving.value = true; error.value = ''; success.value = false;
-  try { current.value = await request<BuildConf>(path); draft.value = JSON.parse(JSON.stringify(current.value.spec)); mode.value = 'list'; expanded.value = false; editing.value = false; addDialogOpen.value = false; }
+  try { current.value = await request<BuildConf>(path); draft.value = JSON.parse(JSON.stringify(current.value.spec)); mode.value = 'list'; editing.value = false; addDialogOpen.value = false; }
   catch (reason) { current.value = null; error.value = errorTranslationKey(reason, 'buildConf.loadFailed'); }
   finally { saving.value = false; }
 }
@@ -109,7 +106,7 @@ function cancelEdit() {
   draft.value = JSON.parse(JSON.stringify(current.value.spec));
   if (mode.value === 'json') source.value = JSON.stringify(current.value.spec, null, 2);
   if (mode.value === 'yaml') source.value = stringify(current.value.spec);
-  editing.value = false; expanded.value = false; addDialogOpen.value = false; error.value = '';
+  editing.value = false; addDialogOpen.value = false; error.value = '';
 }
 function openAddDialog() {
   if (!editing.value) return;
@@ -144,7 +141,7 @@ function add() {
   if (Object.hasOwn(targets, newOS.value) && Object.hasOwn(targets[newOS.value].arches, newArch.value)) { addError.value = 'buildConf.duplicate'; return; }
   if (!Object.hasOwn(targets, newOS.value)) targets[newOS.value] = { arches: {} };
   targets[newOS.value].arches[newArch.value] = { image: newImage.value };
-  error.value = ''; success.value = false; expanded.value = true; addDialogOpen.value = false;
+  error.value = ''; success.value = false; addDialogOpen.value = false;
 }
 function removeOS(os: string) { if (window.confirm(t('buildConf.removeWarning'))) delete draft.value.targets[os]; }
 function removeArch(os: string, arch: string) {
@@ -154,7 +151,7 @@ function removeArch(os: string, arch: string) {
 }
 async function save() {
   if (!current.value || saving.value || !editing.value) return;
-  if (mode.value === 'list' && targetEntries.value.some(entry => !entry.config.image.trim())) { expanded.value = true; error.value = 'buildConf.invalid'; return; }
+  if (mode.value === 'list' && targetEntries.value.some(entry => !entry.config.image.trim())) { error.value = 'buildConf.invalid'; return; }
   let spec: BuildConf['spec'];
   try { spec = readDraft(); } catch { error.value = 'buildConf.invalid'; return; }
   const removed = Object.entries(current.value.spec.targets).some(([os, target]) => Object.keys(target.arches).some(arch => !supportsTarget({ spec }, { os, arch })));
@@ -165,7 +162,7 @@ async function save() {
     draft.value = JSON.parse(JSON.stringify(current.value.spec));
     if (mode.value === 'json') source.value = JSON.stringify(current.value.spec, null, 2);
     if (mode.value === 'yaml') source.value = stringify(current.value.spec);
-    expanded.value = false; editing.value = false; success.value = true;
+    editing.value = false; success.value = true;
   }
   catch (reason) { error.value = reason instanceof ApiError && reason.status === 409 ? 'buildConf.conflict' : errorTranslationKey(reason, 'errors.requestFailed'); }
   finally { saving.value = false; }
@@ -189,7 +186,6 @@ async function save() {
 .buildconf-image-field { min-width: 0; }
 .buildconf-image-value { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
 .buildconf-actions { margin: 16px 0; display: flex; justify-content: flex-start; flex-wrap: wrap; gap: 10px; }
-.buildconf-expand-button { margin-top: 12px; }
 .buildconf-os-combobox { position: relative; }
 .buildconf-os-combobox input { width: 100%; }
 .buildconf-os-options { position: absolute; top: calc(100% + 5px); right: 0; left: 0; z-index: 5; max-height: 220px; padding: 5px; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 28px rgb(25 54 96 / 14%); }
