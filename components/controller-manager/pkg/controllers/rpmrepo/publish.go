@@ -154,9 +154,6 @@ func (r *reconciler) recheckReleaseInputs(repo *ebsv1.RpmRepo, build *ebsv1.Buil
 		r.controller.Enqueue(buildKey(r.project, repo.Name))
 		return nil, true, nil
 	}
-	if scan.notReady {
-		return nil, true, nil
-	}
 	if repo.Status.Repository == nil || repo.Status.Repository.RepositoryUID == "" {
 		return nil, true, nil
 	}

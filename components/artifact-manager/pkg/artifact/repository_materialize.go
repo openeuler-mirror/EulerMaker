@@ -65,10 +65,14 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	for _, input := range inputs {
 		meta, err := m.inspectRPM(ctx, input.Path, input.Metadata)
 		if err != nil {
+			var typed *repositoryError
+			if errors.As(err, &typed) && typed.code == "PackageMetadataInvalid" {
+				typed.jobUID = input.JobUID
+			}
 			return result, err
 		}
 		if meta.Arch != "noarch" && meta.Arch != "src" && meta.Arch != record.TargetArch {
-			return result, &repositoryError{code: "PackageArchitectureMismatch", status: 422}
+			return result, &repositoryError{code: "PackageArchitectureMismatch", status: 422, jobUID: input.JobUID}
 		}
 		inputMetadata = append(inputMetadata, meta)
 		inputSpecs[meta.SpecName] = true
@@ -107,10 +111,10 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	for i, input := range inputs {
 		meta := inputMetadata[i]
 		if old, ok := metadata[meta.FileName]; ok && old.SHA256 != meta.SHA256 {
-			return result, &repositoryError{code: "PackageConflict", status: 422}
+			return result, &repositoryError{code: "PackageConflict", status: 422, jobUID: input.JobUID}
 		}
 		if old, ok := nevra[rpmIdentity(meta)]; ok && !strings.HasSuffix(old, "\x00"+meta.SHA256) {
-			return result, &repositoryError{code: "PackageConflict", status: 422}
+			return result, &repositoryError{code: "PackageConflict", status: 422, jobUID: input.JobUID}
 		}
 		destination := filepath.Join(packages, meta.FileName)
 		if _, err := os.Stat(destination); os.IsNotExist(err) {

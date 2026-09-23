@@ -95,39 +95,24 @@ func TestScanSkipsConsumedJobs(t *testing.T) {
 	}
 }
 
-func TestScanStopsReadingManifestsWhenBatchIsFull(t *testing.T) {
+func TestScanStopsSelectingWhenBatchIsFull(t *testing.T) {
 	tests := []struct {
 		name         string
 		specs        []string
-		unreadyJobs  map[string]bool
 		maxJobs      int
 		reverseJobs  bool
-		wantRequests []string
 		wantSelected []string
-		wantNotReady bool
 	}{
 		{
 			name:  "job count limit",
 			specs: []string{"gcc", "glibc", "bash"}, maxJobs: 2,
 			reverseJobs:  true,
-			wantRequests: []string{"job-a", "job-b"}, wantSelected: []string{"job-a", "job-b"},
+			wantSelected: []string{"job-a", "job-b"},
 		},
 		{
 			name:  "duplicate spec does not fill batch",
 			specs: []string{"gcc", "gcc", "glibc", "bash"}, maxJobs: 2,
-			wantRequests: []string{"job-a", "job-b", "job-c"}, wantSelected: []string{"job-a", "job-c"},
-		},
-		{
-			name:  "unready prefix still allows a full batch",
-			specs: []string{"gcc", "glibc", "bash", "curl"}, maxJobs: 2,
-			unreadyJobs:  map[string]bool{"job-a": true},
-			wantRequests: []string{"job-a", "job-b", "job-c"}, wantSelected: []string{"job-b", "job-c"}, wantNotReady: true,
-		},
-		{
-			name:  "incomplete batch scans through unready suffix",
-			specs: []string{"gcc", "glibc", "bash"}, maxJobs: 2,
-			unreadyJobs:  map[string]bool{"job-b": true, "job-c": true},
-			wantRequests: []string{"job-a", "job-b", "job-c"}, wantSelected: []string{"job-a"}, wantNotReady: true,
+			wantSelected: []string{"job-a", "job-c"},
 		},
 	}
 	for _, tt := range tests {
@@ -144,12 +129,6 @@ func TestScanStopsReadingManifestsWhenBatchIsFull(t *testing.T) {
 				}
 			}
 			artifacts := NewFakeArtifactManager()
-			artifacts.GetJobManifestFunc = func(_ context.Context, _, name, _ string) (JobUploadManifest, error) {
-				if tt.unreadyJobs[name] {
-					return JobUploadManifest{State: ManifestOpen}, nil
-				}
-				return completedManifest(100), nil
-			}
 			config := testConfig()
 			config.MaxJobsPerBatch = tt.maxJobs
 			c := newTestController(t, client, artifacts, config)
@@ -158,12 +137,8 @@ func TestScanStopsReadingManifestsWhenBatchIsFull(t *testing.T) {
 			if err != nil {
 				t.Fatalf("scanCandidates: %v", err)
 			}
-			var gotRequests []string
-			for _, request := range artifacts.ManifestRequests {
-				gotRequests = append(gotRequests, request[1])
-			}
-			if !reflect.DeepEqual(gotRequests, tt.wantRequests) {
-				t.Fatalf("manifest requests = %v, want %v", gotRequests, tt.wantRequests)
+			if len(artifacts.ManifestRequests) != 0 {
+				t.Fatalf("selection must not query manifests: %v", artifacts.ManifestRequests)
 			}
 			selection := selectBatch(scan.candidates, config.MaxJobsPerBatch)
 			var gotSelected []string
@@ -173,20 +148,15 @@ func TestScanStopsReadingManifestsWhenBatchIsFull(t *testing.T) {
 			if !reflect.DeepEqual(gotSelected, tt.wantSelected) {
 				t.Fatalf("selected jobs = %v, want %v", gotSelected, tt.wantSelected)
 			}
-			if scan.notReady != tt.wantNotReady {
-				t.Fatalf("notReady = %t, want %t", scan.notReady, tt.wantNotReady)
-			}
 		})
 	}
 }
 
-func TestScanManifestStatesDriveTheFlow(t *testing.T) {
+func TestScanDoesNotReadManifestBeforeSubmission(t *testing.T) {
 	cases := []struct {
 		name        string
 		manifest    JobUploadManifest
 		manifestErr error
-		wantSubmit  bool
-		wantWrite   bool
 	}{
 		{
 			name:        "missing",
@@ -205,10 +175,8 @@ func TestScanManifestStatesDriveTheFlow(t *testing.T) {
 			manifest: JobUploadManifest{State: ManifestFailed},
 		},
 		{
-			name:       "completed",
-			manifest:   completedManifest(100),
-			wantSubmit: true,
-			wantWrite:  true,
+			name:     "completed",
+			manifest: completedManifest(100),
 		},
 	}
 	for _, tc := range cases {
@@ -227,11 +195,11 @@ func TestScanManifestStatesDriveTheFlow(t *testing.T) {
 			if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
 				t.Fatalf("sync: %v", err)
 			}
-			if got := len(artifacts.SubmitRepositoryRequests) > 0; got != tc.wantSubmit {
-				t.Fatalf("SubmitRepository called = %t, want %t", got, tc.wantSubmit)
+			if len(artifacts.ManifestRequests) != 0 {
+				t.Fatalf("manifest must not be read before submission: %v", artifacts.ManifestRequests)
 			}
-			if got := len(client.StatusWrites) > 0; got != tc.wantWrite {
-				t.Fatalf("status written = %t, want %t", got, tc.wantWrite)
+			if len(artifacts.SubmitRepositoryRequests) != 1 || len(client.StatusWrites) == 0 {
+				t.Fatalf("succeeded Job must be submitted regardless of manifest: submits=%d writes=%d", len(artifacts.SubmitRepositoryRequests), len(client.StatusWrites))
 			}
 		})
 	}

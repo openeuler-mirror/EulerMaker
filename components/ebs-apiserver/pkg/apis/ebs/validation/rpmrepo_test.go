@@ -29,6 +29,13 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 		{"baseline", func(o *ebsv1.RpmRepo) { o.Status.Repository.Transition = nil }, ""},
 		{"in-flight", func(o *ebsv1.RpmRepo) {}, ""},
 		{"consumed", func(o *ebsv1.RpmRepo) { o.Status.Repository.SourceJobUIDs = []string{"uid"} }, ""},
+		{"skipped", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobUIDs = []string{"bad-uid"} }, ""},
+		{"empty-skipped-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobUIDs = []string{""} }, "status.repository.skippedJobUIDs[0]"},
+		{"duplicate-skipped-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobUIDs = []string{"bad-uid", "bad-uid"} }, "status.repository.skippedJobUIDs[1]"},
+		{"skipped-source-overlap", func(o *ebsv1.RpmRepo) {
+			o.Status.Repository.SourceJobUIDs = []string{"uid"}
+			o.Status.Repository.SkippedJobUIDs = []string{"uid"}
+		}, "status.repository.skippedJobUIDs[0]"},
 		{"uid-only", func(o *ebsv1.RpmRepo) { o.Status.Repository.ContentURL = "" }, "status.repository"},
 		{"url-only", func(o *ebsv1.RpmRepo) { o.Status.Repository.RepositoryUID = "" }, "status.repository"},
 		{"consumed-without-version", func(o *ebsv1.RpmRepo) {

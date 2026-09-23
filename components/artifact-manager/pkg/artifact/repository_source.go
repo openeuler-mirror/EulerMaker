@@ -5,6 +5,7 @@ import "strings"
 type repositoryArtifact struct {
 	Metadata Artifact
 	Path     string
+	JobUID   string
 }
 
 func (s *Store) repositoryArtifacts(project string, refs []ManifestReference) ([]repositoryArtifact, error) {
@@ -14,12 +15,13 @@ func (s *Store) repositoryArtifacts(project string, refs []ManifestReference) ([
 		manifest := s.manifests[manifestKey(project, ref.JobName, ref.JobUID)]
 		if manifest == nil || manifest.State != ManifestCompleted {
 			s.mu.RUnlock()
-			return nil, &repositoryError{code: "ManifestNotReady", status: 422}
+			return nil, &repositoryError{code: "ManifestNotReady", status: 422, jobUID: ref.JobUID}
 		}
 		if manifest.Digest != manifestDigest(append([]ManifestFile(nil), manifest.Files...)) {
 			s.mu.RUnlock()
-			return nil, &repositoryError{code: "ManifestInvalid", status: 422}
+			return nil, &repositoryError{code: "ManifestInvalid", status: 422, jobUID: ref.JobUID}
 		}
+		packages := 0
 		for _, file := range manifest.Files {
 			if file.Category != CategoryArtifact || !strings.HasPrefix(file.RelativePath, "packages/") || !strings.HasSuffix(strings.ToLower(file.RelativePath), ".rpm") {
 				continue
@@ -27,10 +29,15 @@ func (s *Store) repositoryArtifacts(project string, refs []ManifestReference) ([
 			artifact := s.artifacts[file.ArtifactID]
 			if artifact == nil || artifact.State != Completed || artifact.Project != project || artifact.JobUID != ref.JobUID || artifact.Size != file.Size || artifact.SHA256 != file.SHA256 {
 				s.mu.RUnlock()
-				return nil, &repositoryError{code: "MaterializationInputExpired", status: 410}
+				return nil, &repositoryError{code: "MaterializationInputExpired", status: 410, jobUID: ref.JobUID}
 			}
 			copy := *artifact
-			result = append(result, repositoryArtifact{Metadata: copy, Path: s.artifactPath(&copy)})
+			result = append(result, repositoryArtifact{Metadata: copy, Path: s.artifactPath(&copy), JobUID: ref.JobUID})
+			packages++
+		}
+		if packages == 0 {
+			s.mu.RUnlock()
+			return nil, &repositoryError{code: "ManifestContainsNoPackages", status: 422, jobUID: ref.JobUID}
 		}
 	}
 	s.mu.RUnlock()
@@ -39,7 +46,7 @@ func (s *Store) repositoryArtifacts(project string, refs []ManifestReference) ([
 	}
 	for _, artifact := range result {
 		if err := verifyFile(artifact.Path, artifact.Metadata.Size, artifact.Metadata.SHA256); err != nil {
-			return nil, &repositoryError{code: "MaterializationInputExpired", status: 410}
+			return nil, &repositoryError{code: "MaterializationInputExpired", status: 410, jobUID: artifact.JobUID}
 		}
 	}
 	return result, nil

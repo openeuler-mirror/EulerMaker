@@ -1706,6 +1706,20 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 							},
 						},
 					},
+					"skippedJobUIDs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"transition": {
 						SchemaProps: spec.SchemaProps{
 							Ref: ref("ebs-api/ebs/v1.RepositoryTransition"),
