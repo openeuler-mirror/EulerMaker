@@ -10,6 +10,7 @@ import (
 	"controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
 	buildcontroller "controller-manager/pkg/controllers/build"
+	buildinfocontroller "controller-manager/pkg/controllers/buildinfo"
 	jobcontroller "controller-manager/pkg/controllers/job"
 	rpmrepocontroller "controller-manager/pkg/controllers/rpmrepo"
 	runnercontroller "controller-manager/pkg/controllers/runner"
@@ -66,6 +67,10 @@ func main() {
 			},
 		}),
 		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, gitClient),
+		buildinfocontroller.Name: buildinfocontroller.Initializer(buildinfocontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries,
+			DcgPruneGrace: o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
+			SnapshotReadyRetryLimit: o.BuildInfo.SnapshotReadyRetryLimit, SpecFileCacheSize: o.BuildInfo.SpecFileCacheSize,
+			SpecParseEngine: o.BuildInfo.SpecParseEngine}, gitClient),
 	}
 	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout, SlowRetryInitial: o.Manager.SlowRetryInitialDelay, SlowRetryMax: o.Manager.SlowRetryMaxDelay, SlowRetryJitter: o.Manager.SlowRetryJitter}, healthServer)
 	if err != nil {

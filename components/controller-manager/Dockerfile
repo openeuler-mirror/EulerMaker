@@ -10,7 +10,7 @@ COPY components/controller-manager .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /controller-manager ./cmd/controller-manager
 
 FROM openeuler/openeuler:24.03-lts
-RUN dnf install -y ca-certificates shadow-utils && dnf clean all && groupadd controller-manager && useradd -g controller-manager -s /sbin/nologin controller-manager
+RUN dnf install -y ca-certificates shadow-utils rpm-build && dnf clean all && groupadd controller-manager && useradd -g controller-manager -s /sbin/nologin controller-manager
 COPY --from=builder /controller-manager /usr/local/bin/ebs-controller-manager
 USER controller-manager
 EXPOSE 8080
