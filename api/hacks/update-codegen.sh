@@ -15,9 +15,9 @@ cd "${module_dir}"
 go run "k8s.io/code-generator/cmd/deepcopy-gen@${code_generator_version}" \
   --output-base "${output_base}" \
   --output-package ebs-api/ebs/v1 \
-  --output-file-base zz_generated.buildconf.deepcopy \
+  --output-file-base zz_generated.config.deepcopy \
   --go-header-file /dev/null \
   --input-dirs ebs-api/ebs/v1
 
 # The public module directory is api, not its import name ebs-api.
-cp "${output_base}/ebs-api/ebs/v1/zz_generated.buildconf.deepcopy.go" "${module_dir}/ebs/v1/zz_generated.buildconf.deepcopy.go"
+cp "${output_base}/ebs-api/ebs/v1/zz_generated.config.deepcopy.go" "${module_dir}/ebs/v1/zz_generated.config.deepcopy.go"
