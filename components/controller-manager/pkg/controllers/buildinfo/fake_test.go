@@ -13,7 +13,6 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,8 +24,7 @@ import (
 // 409 AlreadyExists on duplicate CreateJob, resourceVersion increments,
 // /status writes preserving the old spec, WriteError three-outcome injection
 // (Unknown may optionally persist the write, so confirmation reads return the
-// actual persisted state), label-filtered ListJobs, and ListBuilds filtering
-// with creationTimestamp-descending limit truncation.
+// actual persisted state), and label-filtered ListJobs.
 type fakeClient struct {
 	mu              sync.Mutex
 	buildinfos      map[string]*ebsv1.BuildInfo
@@ -371,53 +369,6 @@ func (f *fakeClient) GetBuild(_ context.Context, project, name string) (*ebsv1.B
 		return nil, ErrNotFound
 	}
 	return value.DeepCopy(), nil
-}
-
-func (f *fakeClient) ListBuilds(_ context.Context, project, labelSelector, fieldSelector string, limit int) ([]ebsv1.Build, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.consumeInjectedReadLocked("builds"); err != nil {
-		return nil, err
-	}
-	labelReq, err := labels.Parse(labelSelector)
-	if err != nil {
-		return nil, err
-	}
-	fieldReq, err := fields.ParseSelector(fieldSelector)
-	if err != nil {
-		return nil, err
-	}
-	var out []ebsv1.Build
-	for _, build := range f.builds {
-		if build.Namespace != project {
-			continue
-		}
-		if !labelReq.Matches(labels.Set(build.Labels)) {
-			continue
-		}
-		if !fieldReq.Matches(fields.Set{
-			"metadata.name":      build.Name,
-			"metadata.namespace": build.Namespace,
-			"status.phase":       string(build.Status.Phase),
-			"status.stage":       string(build.Status.Stage),
-		}) {
-			continue
-		}
-		out = append(out, *build.DeepCopy())
-	}
-	// The apiserver lists builds newest creationTimestamp first (ES store);
-	// ties break on name descending like the server's document ID tiebreak.
-	sort.Slice(out, func(i, j int) bool {
-		left, right := out[i], out[j]
-		if left.CreationTimestamp.Equal(&right.CreationTimestamp) {
-			return left.Name > right.Name
-		}
-		return left.CreationTimestamp.After(right.CreationTimestamp.Time)
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
 }
 
 func (f *fakeClient) GetRpmRepo(_ context.Context, project, name string) (*ebsv1.RpmRepo, error) {

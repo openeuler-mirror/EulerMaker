@@ -384,6 +384,31 @@ func TestAdvanceCompletionPartialFailure(t *testing.T) {
 	}
 	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
 	requireCondition(t, persisted.Status.SpecStatus["b"].Build.Conditions, ConditionBuildFailed, ReasonJobFailed)
+	if got := persisted.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
+		t.Fatalf("failedPackages = %v, want [repo1]", got)
+	}
+}
+
+func TestAdvanceCompletionRecordsInstallFailureRepository(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
+	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+		"a": {
+			Build:         ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded},
+			Install:       ebsv1.SpecInstallStatus{Status: SpecBuildFailed},
+			DispatchCount: 1,
+		},
+	}
+	seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
+
+	reconcileOnce(t, c)
+
+	persisted := getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
+	if got := persisted.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
+		t.Fatalf("failedPackages = %v, want [repo1]", got)
+	}
 }
 
 func TestAdvanceCompletionBlockedByPendingCreates(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -357,6 +358,9 @@ func (c *Controller) afterConfirmedWrite(round *reconcileRound, confirmed *ebsv1
 // matches per spec entry.
 func statusMatchesIntent(persisted, intent *ebsv1.BuildInfoStatus) bool {
 	if persisted.Phase != intent.Phase {
+		return false
+	}
+	if !slices.Equal(persisted.FailedPackages, intent.FailedPackages) {
 		return false
 	}
 	if !conditionsMatch(persisted.Conditions, intent.Conditions) {

@@ -61,10 +61,6 @@ type Client interface {
 
 	// GetBuild is read-only (G-01: Builds are never mutated here).
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
-	// ListBuilds locates the baseline round: newest-first single page
-	// (labelSelector target-os/target-arch/build-type!=single + terminal
-	// fieldSelector, limit 1; see 7.2.2).
-	ListBuilds(ctx context.Context, project, labelSelector, fieldSelector string, limit int) ([]ebsv1.Build, error)
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
@@ -198,29 +194,6 @@ func (c *apiClient) GetBuild(ctx context.Context, project, name string) (*ebsv1.
 		return nil, contractErrorf("unexpected Build response for %s/%s: %T", project, name, obj)
 	}
 	return value, nil
-}
-
-func (c *apiClient) ListBuilds(ctx context.Context, project, labelSelector, fieldSelector string, limit int) ([]ebsv1.Build, error) {
-	if project == "" {
-		return nil, contractErrorf("project is required")
-	}
-	opts := metav1.ListOptions{LabelSelector: labelSelector, FieldSelector: fieldSelector}
-	if limit > 0 {
-		opts.Limit = int64(limit)
-	}
-	page, err := c.readListProjectPage(ctx, source.BuildsGVR, project, opts)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ebsv1.Build, 0, len(page.Items))
-	for _, item := range page.Items {
-		build, ok := item.(*ebsv1.Build)
-		if !ok || build == nil || build.UID == "" || build.ResourceVersion == "" {
-			return nil, contractErrorf("unexpected Build list response for %s: %T", project, item)
-		}
-		out = append(out, *build)
-	}
-	return out, nil
 }
 
 func (c *apiClient) GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error) {

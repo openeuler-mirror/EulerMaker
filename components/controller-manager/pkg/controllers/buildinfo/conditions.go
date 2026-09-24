@@ -33,9 +33,8 @@ const (
 
 // BuildInfo-level condition types (design 9.1).
 const (
-	// ConditionSpecDependsFillFailed carries step-0 deterministic failures;
-	// the reason distinguishes degraded (SpecParseFailed) from terminal
-	// (SpecifiedSpecCommitMissing / SpecifiedBuildSetEmpty) outcomes.
+	// ConditionSpecDependsFillFailed carries spec parsing degradation and
+	// single-build empty-set closeouts.
 	ConditionSpecDependsFillFailed = "SpecDependsFillFailed"
 	// ConditionSpecCommitMissing records package-repo entries skipped for a
 	// non-retryable resolution failure (E-24 degraded path).
@@ -57,21 +56,20 @@ const (
 
 // BuildInfo-level condition reasons (design 9.1/E-23/E-24/E-28/E-29/E-30).
 const (
-	ReasonSpecParseFailed            = "SpecParseFailed"
-	ReasonSpecifiedSpecCommitMissing = "SpecifiedSpecCommitMissing"
-	ReasonSpecifiedBuildSetEmpty     = "SpecifiedBuildSetEmpty"
-	ReasonSpecCommitMissing          = "SpecCommitMissing"
-	ReasonDcgBuildFailed             = "DcgBuildFailed"
-	ReasonPartialFailure             = "PartialFailure"
-	ReasonAllSpecsSucceeded          = "AllSpecsSucceeded"
-	ReasonRpmRepoReleaseFailed       = "RpmRepoReleaseFailed"
-	ReasonRpmRepoNotFound            = "RpmRepoNotFound"
-	ReasonRpmRepoQueryFailed         = "RpmRepoQueryFailed"
-	ReasonRpmRepoXMLDownloadFailed   = "RpmRepoXmlDownloadFailed"
-	ReasonRpmRepoXMLParseFailed      = "RpmRepoXmlParseFailed"
-	ReasonBootstrapRepoXMLUnavail    = "BootstrapRepoXmlUnavailable"
-	ReasonSnapshotNotFound           = "SnapshotNotFound"
-	ReasonSnapshotQueryFailed        = "SnapshotQueryFailed"
+	ReasonSpecParseFailed          = "SpecParseFailed"
+	ReasonSpecifiedBuildSetEmpty   = "SpecifiedBuildSetEmpty"
+	ReasonSpecCommitMissing        = "SpecCommitMissing"
+	ReasonDcgBuildFailed           = "DcgBuildFailed"
+	ReasonPartialFailure           = "PartialFailure"
+	ReasonAllSpecsSucceeded        = "AllSpecsSucceeded"
+	ReasonRpmRepoReleaseFailed     = "RpmRepoReleaseFailed"
+	ReasonRpmRepoNotFound          = "RpmRepoNotFound"
+	ReasonRpmRepoQueryFailed       = "RpmRepoQueryFailed"
+	ReasonRpmRepoXMLDownloadFailed = "RpmRepoXmlDownloadFailed"
+	ReasonRpmRepoXMLParseFailed    = "RpmRepoXmlParseFailed"
+	ReasonBootstrapRepoXMLUnavail  = "BootstrapRepoXmlUnavailable"
+	ReasonSnapshotNotFound         = "SnapshotNotFound"
+	ReasonSnapshotQueryFailed      = "SnapshotQueryFailed"
 )
 
 // Spec-level condition types and reasons (design 9.1).
