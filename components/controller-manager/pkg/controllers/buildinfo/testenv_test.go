@@ -209,19 +209,18 @@ func testRpmRepoObj(contentURL string) *ebsv1.RpmRepo {
 	}
 }
 
-func testBuildConfObj() *ebsv1.BuildConf {
-	return &ebsv1.BuildConf{
-		ObjectMeta: metav1.ObjectMeta{Name: "buildconf"},
-		Spec: ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{
-			testOS: {Arches: map[string]ebsv1.BuildConfArch{testArch: {Image: testImage}}},
-		}},
+func testBuildTargetContent() *ebsv1.BuildTargetContent {
+	return &ebsv1.BuildTargetContent{
+		Targets: map[string]ebsv1.BuildTargetConfigEntry{
+			testOS: {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: testImage}}},
+		},
 	}
 }
 
-func testBuildResourceConfigObj() *ebsv1.BuildResourceConfig {
-	return &ebsv1.BuildResourceConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "default"},
-		Spec: ebsv1.BuildResourceConfigSpec{
+func testBuildResourceRules() *buildResourceRules {
+	return &buildResourceRules{
+		ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildResourceConfigName},
+		Spec: ebsv1.BuildResourceContent{
 			Default:  ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
 			Packages: map[string]ebsv1.PackageResourceConfig{},
 		},
@@ -233,8 +232,8 @@ func testBuildResourceConfigObj() *ebsv1.BuildResourceConfig {
 func seedHealthyBasics(client *fakeClient, buildType string, packages ...string) *ebsv1.BuildInfo {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj(buildType, packages...))
-	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
-	client.SetBuildConf(testBuildConfObj())
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildTargetContent(testBuildTargetContent())
 	return client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 }
 

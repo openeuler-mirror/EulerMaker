@@ -27,8 +27,8 @@ func seedProcessingRound(client *fakeClient, c *Controller, bi *ebsv1.BuildInfo,
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
-	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
-	client.SetBuildConf(testBuildConfObj())
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildTargetContent(testBuildTargetContent())
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
@@ -548,8 +548,8 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
-	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
-	client.SetBuildConf(testBuildConfObj())
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-e29"
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}

@@ -15,9 +15,9 @@ import (
 
 var configArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
-// GetBuildConf returns a snapshot for one Job creation batch. Callers must not
+// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not
 // refetch it per Job, or use it to mutate an already created Job.
-func (c *Client) GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error) {
+func (c *Client) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error) {
 	obj, err := c.Get(ctx, ebsv1.SchemeGroupVersion.WithResource("configs"), "", ebsv1.BuildTargetConfigName)
 	if err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func (c *Client) GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error) {
 	if !ok || config == nil || config.Name != ebsv1.BuildTargetConfigName {
 		return nil, fmt.Errorf("expected build-target Config, got %T", obj)
 	}
-	var content ebsv1.BuildConfSpec
+	var content ebsv1.BuildTargetContent
 	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
 		return nil, fmt.Errorf("decode build-target Config: %w", err)
 	}
@@ -44,20 +44,16 @@ func (c *Client) GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error) {
 			}
 		}
 	}
-	// Keep the existing controller-internal snapshot shape while the persisted
-	// resource is Config/build-target. The real Config identity was checked above.
-	metadata := config.ObjectMeta
-	metadata.Name = "default"
-	return &ebsv1.BuildConf{ObjectMeta: metadata, Spec: content}, nil
+	return &content, nil
 }
 
-func BuildImage(conf *ebsv1.BuildConf, target ebsv1.BuildTarget) (string, error) {
+func BuildImage(conf *ebsv1.BuildTargetContent, target ebsv1.BuildTarget) (string, error) {
 	if conf == nil {
-		return "", fmt.Errorf("BuildConf is unavailable")
+		return "", fmt.Errorf("build-target Config is unavailable")
 	}
-	image := conf.Spec.Targets[target.Os].Arches[target.Arch].Image
+	image := conf.Targets[target.Os].Arches[target.Arch].Image
 	if image == "" {
-		return "", fmt.Errorf("BuildConf has no image for %s/%s", target.Os, target.Arch)
+		return "", fmt.Errorf("build-target Config has no image for %s/%s", target.Os, target.Arch)
 	}
 	return image, nil
 }

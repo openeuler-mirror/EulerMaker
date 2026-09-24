@@ -258,7 +258,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if ss = round.current.Status.SpecStatus[name]; ss.Build.Status == SpecBuildFailed {
 			continue
 		}
-		// E-26: the BuildConf snapshot resolves lazily, shared round-wide.
+		// E-26: the build-target Config snapshot resolves lazily, shared round-wide.
 		image, err := c.ensureImage(ctx, round, dispatch)
 		if err != nil {
 			return controller.ReconcileResult{}, err
@@ -497,7 +497,7 @@ func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (
 // --- 6.5 停止派发收敛路径 ---
 
 // convergeToCompleted runs the 6.5 convergence: no new Job creation, no
-// Snapshot/RpmRepo/BuildConf reads. The full Job List is backfilled (a
+// Snapshot/RpmRepo/build-target Config reads. The full Job List is backfilled (a
 // failed page retried, never partially used), registered pending creates are
 // GET-confirmed one by one (stopped 404 keeps the entry with a rate-limited
 // JobCreateUnresolved warning, 6.5.1 #5), and Completed is written only when

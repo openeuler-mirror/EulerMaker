@@ -94,7 +94,7 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 	}
 
 	// Persisted stop-dispatch marker (E-28/E-29/E-30): the round joins the
-	// 6.5 convergence path directly — no Snapshot/RpmRepo/BuildConf reads,
+	// 6.5 convergence path directly — no Snapshot/RpmRepo/build-target Config reads,
 	// no parsing, no graph work (6.5 step 2).
 	if marker := stopCondition(round.current.Status.Conditions); marker != nil {
 		return c.convergeToCompleted(ctx, round)

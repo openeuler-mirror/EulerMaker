@@ -1,6 +1,6 @@
 // jobs_test.go covers the 19.1 Job-construction group (design 15.3.1): the
 // deterministic name, the package-name label encoding, the resource merge,
-// the payload contract, the BuildConf per-round image snapshot (E-26), and
+// the payload contract, the build-target Config per-round image snapshot (E-26), and
 // the dispatchSpec create outcomes (AlreadyExists identity verification with
 // the GET-404 retry, the Unknown late-landing confirmation).
 package buildinfo
@@ -74,8 +74,8 @@ func TestPackageNameLabelValue(t *testing.T) {
 // --- resource merge (data-models~config.md 3.2) ---
 
 func TestResolveResourcesMerge(t *testing.T) {
-	resource := &ebsv1.BuildResourceConfig{
-		Spec: ebsv1.BuildResourceConfigSpec{
+	resource := &buildResourceRules{
+		Spec: ebsv1.BuildResourceContent{
 			Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
 			Packages: map[string]ebsv1.PackageResourceConfig{
 				"a": {
@@ -132,10 +132,10 @@ func TestNormalizeRepoPriority(t *testing.T) {
 		{nil, 2, "10 10"},
 		{"", 1, "10"},
 		{"  ", 1, "10"},
-		{"5", 3, "5 10 10"},   // padded
-		{"1 2 3", 2, "1 2"},   // truncated
-		{"7 8", 2, "7 8"},     // aligned
-		{42, 2, "10 10"},      // non-string base
+		{"5", 3, "5 10 10"}, // padded
+		{"1 2 3", 2, "1 2"}, // truncated
+		{"7 8", 2, "7 8"},   // aligned
+		{42, 2, "10 10"},    // non-string base
 	}
 	for _, tc := range tests {
 		if got := c.normalizeRepoPriority(round, tc.base, tc.count); got != tc.want {
@@ -157,7 +157,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
-	resource := testBuildResourceConfigObj()
+	resource := testBuildResourceRules()
 	resource.Generation = 3
 
 	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, "job-x", 2)
@@ -180,8 +180,8 @@ func TestJobForSpecConstruction(t *testing.T) {
 	wantAnnotations := map[string]string{
 		annBuildInfoUID:           "bi-job-construct",
 		annDispatchGeneration:     "2",
-		annBuildResourceConfig:          "default",
-		annBuildResourceConfigGen:       "3",
+		annBuildResourceConfig:    ebsv1.BuildResourceConfigName,
+		annBuildResourceConfigGen: "3",
 	}
 	for k, want := range wantAnnotations {
 		if job.Annotations[k] != want {
@@ -230,7 +230,7 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	snapshot := testSnapshotObj()
 	depend := dependEntry("a")
 
-	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceConfigObj(), "job-y", 1)
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceRules(), "job-y", 1)
 
 	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commitId") {
 		t.Fatalf("payload = %q, want no spec_url/commitId without a repo entry", job.Spec.Payload)
@@ -240,11 +240,11 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	}
 }
 
-// --- BuildConf per-round image snapshot (E-26) ---
+// --- build-target Config per-round image snapshot (E-26) ---
 
 func TestEnsureImageRoundSnapshot(t *testing.T) {
 	c, client, _, _ := newTestController(t)
-	client.SetBuildConf(testBuildConfObj())
+	client.SetBuildTargetContent(testBuildTargetContent())
 	round := &reconcileRound{key: testNS + "/" + testBuild, build: testBuildObj("full")}
 	dispatch := &roundDispatch{arch: testArch}
 
@@ -252,12 +252,12 @@ func TestEnsureImageRoundSnapshot(t *testing.T) {
 	if err != nil || image != testImage {
 		t.Fatalf("ensureImage = %q, %v, want %q", image, err, testImage)
 	}
-	// A BuildConf change inside the round is invisible: the image snapshot is
+	// A build-target Config change inside the round is invisible: the image snapshot is
 	// resolved once and shared round-wide (E-26).
-	client.SetBuildConf(&ebsv1.BuildConf{
-		Spec: ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{
-			testOS: {Arches: map[string]ebsv1.BuildConfArch{testArch: {Image: "img:v2"}}},
-		}},
+	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
+		Targets: map[string]ebsv1.BuildTargetConfigEntry{
+			testOS: {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: "img:v2"}}},
+		},
 	})
 	again, err := c.ensureImage(context.Background(), round, dispatch)
 	if err != nil || again != testImage {
@@ -268,9 +268,9 @@ func TestEnsureImageRoundSnapshot(t *testing.T) {
 	if image, err = c.ensureImage(context.Background(), round, fresh); err != nil || image != "img:v2" {
 		t.Fatalf("ensureImage fresh round = %q, %v, want img:v2", image, err)
 	}
-	client.FailBuildConf()
+	client.FailBuildTargetContent()
 	if _, err = c.ensureImage(context.Background(), round, &roundDispatch{arch: testArch}); err == nil {
-		t.Fatal("ensureImage error = nil, want the BuildConf read failure (E-26 pause)")
+		t.Fatal("ensureImage error = nil, want the build-target Config read failure (E-26 pause)")
 	}
 }
 
@@ -286,7 +286,7 @@ func dispatchRound(t *testing.T, c *Controller, client *fakeClient, uid, spec st
 	bi.UID = types.UID(uid)
 	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{spec: {}}
 	seeded := client.SeedBuildInfo(bi)
-	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
+	client.SeedBuildResourceRules(testBuildResourceRules())
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	return round, seeded
 }

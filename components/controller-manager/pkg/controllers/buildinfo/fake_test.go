@@ -25,16 +25,16 @@ import (
 // (Unknown may optionally persist the write, so confirmation reads return the
 // actual persisted state), and label-filtered ListJobs.
 type fakeClient struct {
-	mu              sync.Mutex
-	buildinfos      map[string]*ebsv1.BuildInfo
-	jobs            map[string]*ebsv1.Job
-	builds          map[string]*ebsv1.Build
-	projects        map[string]*ebsv1.Project
-	snapshots       map[string]*ebsv1.Snapshot
-	rpmrepos        map[string]*ebsv1.RpmRepo
-	buildresourceconfigs  map[string]*ebsv1.BuildResourceConfig
-	buildconf       *ebsv1.BuildConf
-	buildconfFailed bool
+	mu                 sync.Mutex
+	buildinfos         map[string]*ebsv1.BuildInfo
+	jobs               map[string]*ebsv1.Job
+	builds             map[string]*ebsv1.Build
+	projects           map[string]*ebsv1.Project
+	snapshots          map[string]*ebsv1.Snapshot
+	rpmrepos           map[string]*ebsv1.RpmRepo
+	buildResourceRules map[string]*buildResourceRules
+	buildTargetContent *ebsv1.BuildTargetContent
+	buildTargetFailed  bool
 
 	// injected per-operation write failures, consumed once each.
 	injectedWrites map[string]*injectedWrite
@@ -63,16 +63,16 @@ var _ Client = (*fakeClient)(nil)
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{
-		buildinfos:     make(map[string]*ebsv1.BuildInfo),
-		jobs:           make(map[string]*ebsv1.Job),
-		builds:         make(map[string]*ebsv1.Build),
-		projects:       make(map[string]*ebsv1.Project),
-		snapshots:      make(map[string]*ebsv1.Snapshot),
-		rpmrepos:       make(map[string]*ebsv1.RpmRepo),
-		buildresourceconfigs: make(map[string]*ebsv1.BuildResourceConfig),
-		injectedWrites: make(map[string]*injectedWrite),
-		injectedReads:  make(map[string]*injectedRead),
-		rv:             100,
+		buildinfos:         make(map[string]*ebsv1.BuildInfo),
+		jobs:               make(map[string]*ebsv1.Job),
+		builds:             make(map[string]*ebsv1.Build),
+		projects:           make(map[string]*ebsv1.Project),
+		snapshots:          make(map[string]*ebsv1.Snapshot),
+		rpmrepos:           make(map[string]*ebsv1.RpmRepo),
+		buildResourceRules: make(map[string]*buildResourceRules),
+		injectedWrites:     make(map[string]*injectedWrite),
+		injectedReads:      make(map[string]*injectedRead),
+		rv:                 100,
 	}
 }
 
@@ -94,18 +94,18 @@ func (f *fakeClient) InjectRead(kind string, times int, err error) {
 	f.injectedReads[kind] = &injectedRead{times: times, err: err}
 }
 
-// SetBuildConf injects the BuildConf singleton (nil restores not-found).
-func (f *fakeClient) SetBuildConf(conf *ebsv1.BuildConf) {
+// SetBuildTargetContent injects the build-target Config singleton (nil restores not-found).
+func (f *fakeClient) SetBuildTargetContent(conf *ebsv1.BuildTargetContent) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.buildconf = conf
+	f.buildTargetContent = conf
 }
 
-// FailBuildConf makes GetBuildConf return a query failure (E-26).
-func (f *fakeClient) FailBuildConf() {
+// FailBuildTargetContent makes GetBuildTargetContent return a query failure (E-26).
+func (f *fakeClient) FailBuildTargetContent() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.buildconfFailed = true
+	f.buildTargetFailed = true
 }
 
 // Seed helpers pre-populate storage with server-assigned metadata and return
@@ -200,7 +200,7 @@ func (f *fakeClient) SeedRpmRepo(value *ebsv1.RpmRepo) *ebsv1.RpmRepo {
 	return stored.DeepCopy()
 }
 
-func (f *fakeClient) SeedBuildResourceConfig(value *ebsv1.BuildResourceConfig) *ebsv1.BuildResourceConfig {
+func (f *fakeClient) SeedBuildResourceRules(value *buildResourceRules) *buildResourceRules {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	stored := value.DeepCopy()
@@ -210,7 +210,7 @@ func (f *fakeClient) SeedBuildResourceConfig(value *ebsv1.BuildResourceConfig) *
 	if stored.ResourceVersion == "" {
 		stored.ResourceVersion = f.nextRVLocked()
 	}
-	f.buildresourceconfigs[stored.Name] = stored
+	f.buildResourceRules[stored.Name] = stored
 	return stored.DeepCopy()
 }
 
@@ -409,29 +409,29 @@ func (f *fakeClient) GetProject(_ context.Context, project string) (*ebsv1.Proje
 	return value.DeepCopy(), nil
 }
 
-func (f *fakeClient) GetBuildResourceConfig(_ context.Context) (*ebsv1.BuildResourceConfig, error) {
+func (f *fakeClient) GetBuildResourceRules(_ context.Context) (*buildResourceRules, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.consumeInjectedReadLocked("buildresourceconfigs"); err != nil {
+	if err := f.consumeInjectedReadLocked("buildResourceRules"); err != nil {
 		return nil, err
 	}
-	value, ok := f.buildresourceconfigs["default"]
+	value, ok := f.buildResourceRules[ebsv1.BuildResourceConfigName]
 	if !ok {
 		return nil, ErrNotFound
 	}
 	return value.DeepCopy(), nil
 }
 
-func (f *fakeClient) GetBuildConf(_ context.Context) (*ebsv1.BuildConf, error) {
+func (f *fakeClient) GetBuildTargetContent(_ context.Context) (*ebsv1.BuildTargetContent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.buildconfFailed {
-		return nil, fmt.Errorf("injected buildconf query failure")
+	if f.buildTargetFailed {
+		return nil, fmt.Errorf("injected build-target Config query failure")
 	}
-	if f.buildconf == nil {
+	if f.buildTargetContent == nil {
 		return nil, ErrNotFound
 	}
-	return f.buildconf.DeepCopy(), nil
+	return f.buildTargetContent.DeepCopy(), nil
 }
 
 func notSentFake(operation, resource string, err error) error {
