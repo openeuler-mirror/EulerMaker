@@ -1,5 +1,5 @@
 // jobs.go implements the Job lifecycle of the BuildInfo controller (design
-// 15.3 / 6.5.1): deterministic naming and identity annotations, the G-08
+// 15.3 / 6.5.1): deterministic naming and dispatch generation, the G-08
 // label set, Config content resolution, the payload construction
 // contract, the register-then-create dispatch pipeline with AlreadyExists /
 // Unknown confirmation, and the List backfill (7.4.2 count floor, 7.4.4
@@ -34,10 +34,8 @@ const (
 	jobTimeoutSeconds  = 10800
 	runnerArchSelector = "ebs.io/runner-arch"
 
-	annBuildInfoUID           = "ebs.io/buildinfo-uid"
-	annDispatchGeneration     = "ebs.io/dispatch-generation"
-	annBuildResourceConfig    = "ebs.io/build-resource-config"
-	annBuildResourceConfigGen = "ebs.io/build-resource-config-generation"
+	annBuildInfoUID       = "ebs.io/buildinfo-uid"
+	annDispatchGeneration = "ebs.io/dispatch-generation"
 )
 
 // jobNameFor derives the deterministic Job name (design 15.3.1): the hash is
@@ -390,10 +388,8 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 				ebsv1.BuildTargetArchLabel: target.Arch,
 			},
 			Annotations: map[string]string{
-				annBuildInfoUID:           string(buildInfo.UID),
-				annDispatchGeneration:     strconv.FormatInt(generation, 10),
-				annBuildResourceConfig:    resource.Name,
-				annBuildResourceConfigGen: strconv.FormatInt(resource.Generation, 10),
+				annBuildInfoUID:       string(buildInfo.UID),
+				annDispatchGeneration: strconv.FormatInt(generation, 10),
 			},
 		},
 		Spec: ebsv1.JobSpec{
@@ -408,12 +404,27 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 }
 
 // jobPayload assembles the payload YAML (design 15.3.1 payload 构造契约):
-// the BuildInfo.spec.buildPayload base map with the per-spec four keys and
-// the build-level Repo/repo_priority keys injected (overriding base keys).
+// the BuildInfo.spec.buildPayload base map with per-spec fields and the
+// build-level repo/repo_priority keys injected (overriding base keys).
 func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string) string {
 	base := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
+	delete(base, "unparsable_spec")
+	delete(base, "Repo")
 	base["spec_name"] = specName
 	base["spec_file_name"] = depend.SpecFileName
+	// The project-level list names package repositories, not spec files.
+	// Only a matching Job receives the flag; otherwise omit the base list.
+	disableCheckPath := false
+	for _, repoName := range stringList(base["disable_check_path"]) {
+		if repoName == depend.RepoName {
+			disableCheckPath = true
+			break
+		}
+	}
+	delete(base, "disable_check_path")
+	if disableCheckPath {
+		base["disable_check_path"] = true
+	}
 	if entry, ok := snapshot.Status.PackageRepoStatuses[depend.RepoName]; !ok || entry.CommitID == "" {
 		// Cannot happen for assembled specs (15.3.1): never blocks dispatch.
 		c.logf(round.key, "SpecRepoEntryMissing", "packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commitId not injected", depend.RepoName)
@@ -430,7 +441,7 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 		// Nothing to inject: keep the base key as-is (15.3.1).
 		return c.marshalPayload(round, base)
 	}
-	base["Repo"] = repoValue
+	base["repo"] = repoValue
 	repoCount := len(strings.Fields(repoValue))
 	base["repo_priority"] = c.normalizeRepoPriority(round, base["repo_priority"], repoCount)
 	return c.marshalPayload(round, base)
@@ -447,7 +458,7 @@ func joinRepoPayload(contentURL string, bootstrapRepos []string) string {
 	return strings.Join(parts, " ")
 }
 
-// normalizeRepoPriority renders the priority list aligned with the Repo
+// normalizeRepoPriority renders the priority list aligned with the repo
 // entry count (design 15.3.1): a non-empty base string is the base (padded
 // with "10" or truncated with one warning), otherwise all "10".
 func (c *Controller) normalizeRepoPriority(round *reconcileRound, baseValue any, repoCount int) string {
@@ -575,7 +586,7 @@ func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, sc
 // whether scoped specs without an entry get one (init yes — covers Jobs
 // created while the status write failed; Processing no, the init step-5
 // invariant already covers every build-set spec). Only Jobs carrying this
-// incarnation's ebs.io/buildinfo-uid annotation fold: a recreated same-name
+// incarnation's UID annotation and deterministic name fold: a recreated same-name
 // BuildInfo never inherits a previous incarnation's phases or counts
 // (15.3.1 identity; the returned groups are uid-filtered for the same
 // reason — the 7.4.6 gate inputs must not either).
@@ -593,7 +604,7 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 			}
 			ss = ebsv1.SpecStatus{}
 		}
-		own := filterJobsByUID(group, uid)
+		own := filterJobsByIdentity(group, uid)
 		if len(own) < len(group) {
 			c.logf(round.key, "ForeignIncarnationJob", "spec %s: %d of %d listed jobs belong to a previous same-name buildinfo; excluded from folding", spec, len(group)-len(own), len(group))
 		}
@@ -638,12 +649,14 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 	return bySpec
 }
 
-// filterJobsByUID keeps only the Jobs carrying the given
-// ebs.io/buildinfo-uid annotation (15.3.1 incarnation identity).
-func filterJobsByUID(jobs []ebsv1.Job, uid string) []ebsv1.Job {
+// filterJobsByIdentity checks the UID annotation and deterministic name
+// against the current BuildInfo UID, spec label and dispatch generation.
+func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	out := make([]ebsv1.Job, 0, len(jobs))
 	for i := range jobs {
-		if jobs[i].Annotations[annBuildInfoUID] == uid {
+		job := &jobs[i]
+		generation, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64)
+		if err == nil && generation > 0 && job.Annotations[annBuildInfoUID] == uid && job.Name == jobNameFor(uid, job.Labels[ebsv1.JobSpecNameLabel], generation) {
 			out = append(out, jobs[i])
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	yaml "gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/types"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
@@ -32,6 +33,19 @@ func TestJobNameForDeterministic(t *testing.T) {
 	}
 	if jobNameFor("uid-1", "a", 3) == first || jobNameFor("uid-2", "a", 2) == first || jobNameFor("uid-1", "b", 2) == first {
 		t.Fatal("jobNameFor must vary with generation, uid and spec")
+	}
+}
+
+func TestFilterJobsByIdentityRequiresBuildInfoUID(t *testing.T) {
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.UID = "current-buildinfo"
+	job := testJobObj(bi, "a", 1, ebsv1.JobRunning)
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
+		t.Fatalf("matching Job count = %d, want 1", len(got))
+	}
+	job.Annotations[annBuildInfoUID] = "previous-buildinfo"
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 0 {
+		t.Fatalf("foreign Job count = %d, want 0", len(got))
 	}
 }
 
@@ -107,7 +121,7 @@ func TestResolveResourcesMerge(t *testing.T) {
 	}
 }
 
-// --- Repo payload helpers ---
+// --- repo payload helpers ---
 
 func TestJoinRepoPayload(t *testing.T) {
 	if got := joinRepoPayload("", nil); got != "" {
@@ -151,14 +165,13 @@ func TestJobForSpecConstruction(t *testing.T) {
 	key := testNS + "/" + testBuild
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-job-construct"
-	bi.Spec.BuildPayload = "custom: keep\nRepo: http://base-override\nrepo_priority: \"7\"\n"
+	bi.Spec.BuildPayload = "custom: keep\nRepo: http://legacy-override\nrepo: http://base-override\nrepo_priority: \"7\"\n"
 	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
 	seeded := client.SeedBuildInfo(bi)
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
 	resource := testBuildResourceRules()
-	resource.Generation = 3
 
 	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, "job-x", 2)
 
@@ -178,10 +191,11 @@ func TestJobForSpecConstruction(t *testing.T) {
 		}
 	}
 	wantAnnotations := map[string]string{
-		annBuildInfoUID:           "bi-job-construct",
-		annDispatchGeneration:     "2",
-		annBuildResourceConfig:    ebsv1.BuildResourceConfigName,
-		annBuildResourceConfigGen: "3",
+		annBuildInfoUID:       "bi-job-construct",
+		annDispatchGeneration: "2",
+	}
+	if len(job.Annotations) != len(wantAnnotations) {
+		t.Fatalf("annotations = %v, want only %v", job.Annotations, wantAnnotations)
 	}
 	for k, want := range wantAnnotations {
 		if job.Annotations[k] != want {
@@ -208,15 +222,46 @@ func TestJobForSpecConstruction(t *testing.T) {
 		"commitId: c1",
 		"custom: keep",
 		// The injected build-level keys override the base ones (15.3.1).
-		"Repo: " + testRepoURL + " http://bootstrap.local/base",
+		"repo: " + testRepoURL + " http://bootstrap.local/base",
 		"repo_priority: 7 10",
 	} {
 		if !strings.Contains(payload, fragment) {
 			t.Errorf("payload missing %q:\n%s", fragment, payload)
 		}
 	}
-	if strings.Contains(payload, "base-override") {
-		t.Errorf("payload kept the base Repo key:\n%s", payload)
+	if strings.Contains(payload, "base-override") || strings.Contains(payload, "legacy-override") || strings.Contains(payload, "Repo:") {
+		t.Errorf("payload kept a base repo key:\n%s", payload)
+	}
+}
+
+func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     string
+		wantPresent bool
+	}{
+		{name: "matching repository", payload: "disable_check_path:\n- repo1\n", wantPresent: true},
+		{name: "spec name is not repository name", payload: "disable_check_path:\n- a\n"},
+		{name: "other repository", payload: "disable_check_path:\n- repo2\n"},
+		{name: "unset"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, client, _, _ := newTestController(t)
+			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+			bi.Spec.BuildPayload = tt.payload
+			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
+			depend := dependEntry("a")
+			job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, "", testBuildResourceRules(), "job-a", 1)
+			var payload map[string]any
+			if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
+				t.Fatal(err)
+			}
+			value, present := payload["disable_check_path"]
+			if present != tt.wantPresent || present && value != true {
+				t.Fatalf("disable_check_path = %v (present=%t), want present=%t and true when present", value, present, tt.wantPresent)
+			}
+		})
 	}
 }
 
