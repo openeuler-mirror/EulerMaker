@@ -30,12 +30,14 @@ const (
 	BuildInfoPending    BuildInfoPhase = "Pending"
 	BuildInfoProcessing BuildInfoPhase = "Processing"
 	BuildInfoCompleted  BuildInfoPhase = "Completed"
+	BuildInfoAborted    BuildInfoPhase = "Aborted"
 )
 
 var buildInfoPhaseValues = []string{
 	string(BuildInfoPending),
 	string(BuildInfoProcessing),
 	string(BuildInfoCompleted),
+	string(BuildInfoAborted),
 }
 
 // BuildInfoPhaseValues returns all valid BuildInfo phase values.
@@ -45,7 +47,17 @@ func BuildInfoPhaseValues() []string {
 
 // IsValid reports whether p is a supported BuildInfo phase.
 func (p BuildInfoPhase) IsValid() bool {
-	return p == BuildInfoPending || p == BuildInfoProcessing || p == BuildInfoCompleted
+	switch p {
+	case BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoAborted:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTerminal reports whether no more BuildInfo work is expected for p.
+func (p BuildInfoPhase) IsTerminal() bool {
+	return p == BuildInfoCompleted || p == BuildInfoAborted
 }
 
 // JobPhase describes the lifecycle state of a Job.

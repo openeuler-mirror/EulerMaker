@@ -157,15 +157,25 @@ type BuildInfoSpec struct {
 	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
 }
 
+// BuildInfoStatus is the desired/current state of a BuildInfo.
+// Dcg and PendingJobCreates are persisted working state owned by the
+// buildinfo controller: Dcg is the dependency graph snapshot (G-02) and
+// PendingJobCreates tracks pending Job creations that are registered but
+// not yet confirmed (6.5.1).
 type BuildInfoStatus struct {
-	Phase      BuildInfoPhase        `json:"phase,omitempty"`
-	Conditions []metav1.Condition    `json:"conditions,omitempty"`
-	SpecStatus map[string]SpecStatus `json:"specStatus,omitempty"`
+	Phase             BuildInfoPhase             `json:"phase,omitempty"`
+	Conditions        []metav1.Condition         `json:"conditions,omitempty"`
+	SpecStatus        map[string]SpecStatus      `json:"specStatus,omitempty"`
+	Dcg               map[string]DcgNodeState    `json:"dcg,omitempty"`
+	PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
 }
 
+// SpecStatus tracks per-spec build/install state plus the dispatch count
+// gate (G-03): required is 1 for plain specs and 2 for cycle members.
 type SpecStatus struct {
-	Build   SpecBuildStatus   `json:"build,omitempty"`
-	Install SpecInstallStatus `json:"install,omitempty"`
+	Build         SpecBuildStatus   `json:"build,omitempty"`
+	Install       SpecInstallStatus `json:"install,omitempty"`
+	DispatchCount int64             `json:"dispatchCount,omitempty"`
 }
 
 type SpecBuildStatus struct {
@@ -183,6 +193,26 @@ type SpecInstallStatus struct {
 type MissingDep struct {
 	NeededBy        string       `json:"neededBy,omitempty"`
 	VersionRequests VersionConst `json:"versionRequests,omitempty"`
+}
+
+// PendingJobCreate records a Job creation identity that has been registered
+// in status but whose creation result is not yet confirmed. Keyed by spec
+// name; a non-empty map blocks writing Completed (6.5.1).
+type PendingJobCreate struct {
+	JobName            string `json:"jobName,omitempty"`
+	DispatchGeneration int64  `json:"dispatchGeneration,omitempty"`
+}
+
+// DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep
+// lists downstream specs that depend on this spec; InDep/InstallInDep map
+// upstream specs to the matched version constraints. BootstrapBreak marks
+// a cycle-break node; it is persisted and never re-selected on load (G-09).
+type DcgNodeState struct {
+	Version       string                  `json:"version,omitempty"`
+	OutDep        []string                `json:"outDep,omitempty"`
+	InDep         map[string]VersionConst `json:"inDep,omitempty"`
+	InstallInDep  map[string]VersionConst `json:"installInDep,omitempty"`
+	BootstrapBreak bool                   `json:"bootstrapBreak,omitempty"`
 }
 
 type BuildInfoList struct {

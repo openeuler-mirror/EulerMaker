@@ -1,3 +1,7 @@
+// Package gitserver provides the shared git-server client: the Snapshot
+// controller's sync-publish / readiness-check / commit-resolution surface
+// (client.go), the repository identity helpers (identity.go) and the
+// BuildInfo controller's read-only command surface (exec.go).
 package gitserver
 
 import (
