@@ -11,8 +11,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/storage/esstore"
 	"github.com/emicklei/go-restful/v3"
 	jsonpatch "github.com/evanphx/json-patch"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,6 +18,9 @@ import (
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/yaml"
+
+	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/storage/esstore"
 )
 
 const maxConfigRequestSize = 16 << 20

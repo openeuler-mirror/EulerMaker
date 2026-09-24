@@ -10,14 +10,15 @@ import (
 	"strings"
 	"testing"
 
-	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/storage/es"
 	"github.com/emicklei/go-restful/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/yaml"
+
+	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/storage/es"
 )
 
 func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
