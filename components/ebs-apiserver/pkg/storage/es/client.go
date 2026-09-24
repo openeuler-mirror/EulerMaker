@@ -14,18 +14,16 @@ import (
 )
 
 var indices = map[string]string{
-	"project":             "ebs-projects",
-	"snapshot":            "ebs-snapshots",
-	"build":               "ebs-builds",
-	"buildinfo":           "ebs-buildinfos",
-	"rpmrepo":             "ebs-rpmrepos",
-	"buildresourceconfig": "ebs-buildresourceconfigs",
-	"buildconf":           "ebs-buildconfs",
-	"config":              "ebs-configs",
-	"script":              "ebs-scripts",
-	"user":                "ebs-users",
-	"machineaccount":      "ebs-machineaccounts",
-	"buildclaim":          "ebs-build-target-claims",
+	"project":        "ebs-projects",
+	"snapshot":       "ebs-snapshots",
+	"build":          "ebs-builds",
+	"buildinfo":      "ebs-buildinfos",
+	"rpmrepo":        "ebs-rpmrepos",
+	"config":         "ebs-configs",
+	"script":         "ebs-scripts",
+	"user":           "ebs-users",
+	"machineaccount": "ebs-machineaccounts",
+	"buildclaim":     "ebs-build-target-claims",
 }
 
 var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "config", "script", "buildclaim"}

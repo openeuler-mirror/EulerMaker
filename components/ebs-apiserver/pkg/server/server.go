@@ -28,7 +28,6 @@ import (
 	iammodule "ebs-apiserver/pkg/iam"
 	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
-	buildconfstore "ebs-apiserver/pkg/registry/ebs/buildconf"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	configstore "ebs-apiserver/pkg/registry/ebs/config"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
@@ -372,10 +371,6 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	apiGroupInfo.VersionedResourcesStorageMap["v1"] = v1Storage
 
 	return &apiGroupInfo, nil
-}
-
-func newBuildConfStore(client *es.Client) *esstore.Store {
-	return esstore.New(client, "buildconf", "BuildConf", buildconfstore.NewStorage(Scheme).BuildConf.(*genericregistry.Store))
 }
 
 func newConfigStore(client *es.Client) *esstore.Store {
