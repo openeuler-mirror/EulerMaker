@@ -42,16 +42,6 @@ func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident 
 	if validPath && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "scripts" {
 		return authzDecision{}, true, fmt.Errorf("Script is cluster-scoped")
 	}
-	if strings.HasPrefix(r.URL.Path, apiPrefix+"/projects/") && strings.Contains(r.URL.Path, "/buildresourceconfigs") {
-		return authzDecision{}, true, fmt.Errorf("BuildResourceConfig is cluster-scoped")
-	}
-	if r.URL.Path == apiPrefix+"/buildresourceconfigs" || strings.HasPrefix(r.URL.Path, apiPrefix+"/buildresourceconfigs/") {
-		if !validPath {
-			return authzDecision{}, true, fmt.Errorf("invalid BuildResourceConfig path")
-		}
-		decision, err := authorizeBuildResourceConfig(r, ident, parts)
-		return decision, true, err
-	}
 	if r.URL.Path == apiPrefix+"/scripts" || strings.HasPrefix(r.URL.Path, apiPrefix+"/scripts/") {
 		decision, err := authorizeScript(r, ident)
 		return decision, true, err
@@ -65,13 +55,6 @@ func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident 
 			return authzDecision{}, true, fmt.Errorf("Job status write requires system or assigned Runner identity")
 		}
 	}
-	if validPath && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "buildconfs" {
-		return authzDecision{}, true, fmt.Errorf("BuildConf is cluster-scoped")
-	}
-	if validPath && len(parts) > 0 && parts[0] == "buildconfs" {
-		decision, err := authorizeBuildConf(r, ident, parts)
-		return decision, true, err
-	}
 	if route.resource == "runners" {
 		if ident.IsPrivileged() {
 			return authzDecision{}, true, nil
@@ -83,40 +66,6 @@ func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident 
 		return authzDecision{}, true, fmt.Errorf("runner api requires operations privileges or runner identity")
 	}
 	return authzDecision{}, false, nil
-}
-
-func authorizeBuildConf(r *http.Request, ident Identity, parts []string) (authzDecision, error) {
-	// Public reads are handled before authorizeAndPrepare.
-	valid := len(parts) == 1 && r.Method == http.MethodPost || len(parts) == 2 && parts[1] == "default" && (r.Method == http.MethodPut || r.Method == http.MethodPatch)
-	if !valid || !ident.IsPrivileged() {
-		return authzDecision{}, fmt.Errorf("BuildConf write requires ops or higher and a supported operation")
-	}
-	return authzDecision{}, nil
-}
-
-func authorizeBuildResourceConfig(r *http.Request, ident Identity, parts []string) (authzDecision, error) {
-	if len(parts) < 1 || len(parts) > 2 || strings.HasSuffix(r.URL.Path, "/") || (len(parts) == 2 && !validPathSegment(parts[1])) || hasWatchRequest(r) {
-		return authzDecision{}, fmt.Errorf("unsupported BuildResourceConfig API operation")
-	}
-	switch r.Method {
-	case http.MethodGet, http.MethodHead:
-		if ident.IsPrivileged() || ident.IsUser() {
-			return authzDecision{}, nil
-		}
-	case http.MethodPost:
-		if len(parts) == 1 && ident.IsPrivileged() {
-			return authzDecision{}, nil
-		}
-	case http.MethodPut:
-		if len(parts) == 2 && ident.IsPrivileged() {
-			return authzDecision{}, nil
-		}
-	case http.MethodDelete:
-		if len(parts) == 2 && parts[1] != "default" && ident.IsPrivileged() {
-			return authzDecision{}, nil
-		}
-	}
-	return authzDecision{}, fmt.Errorf("BuildResourceConfig access denied")
 }
 
 func (g *Gateway) authorizeJobAbort(ctx context.Context, r *http.Request, ident Identity, route routeInfo) (authzDecision, error) {
