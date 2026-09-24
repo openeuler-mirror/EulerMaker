@@ -25,11 +25,11 @@ import (
 
 const maxConfigRequestSize = 16 << 20
 
-//go:embed default-build-conf.yaml
-var defaultBuildConfTemplate []byte
+//go:embed default-build-target.yaml
+var defaultBuildTargetTemplate []byte
 
-//go:embed default-build-resource-config.yaml
-var defaultBuildResourceConfigTemplate []byte
+//go:embed default-build-resource.yaml
+var defaultBuildResourceTemplate []byte
 
 func installConfigRoutes(srv handlerServer, store *esstore.Store) error {
 	ws := ebsV1WebService(srv)
@@ -170,12 +170,12 @@ func decodeConfig(data []byte) (*ebsv1.Config, error) {
 }
 
 func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
-	var target ebsv1.BuildConf
-	if err := yaml.UnmarshalStrict(defaultBuildConfTemplate, &target); err != nil {
+	var target ebsv1.BuildTargetContent
+	if err := yaml.UnmarshalStrict(defaultBuildTargetTemplate, &target); err != nil {
 		return err
 	}
-	var resources ebsv1.BuildResourceConfig
-	if err := yaml.UnmarshalStrict(defaultBuildResourceConfigTemplate, &resources); err != nil {
+	var resources ebsv1.BuildResourceContent
+	if err := yaml.UnmarshalStrict(defaultBuildResourceTemplate, &resources); err != nil {
 		return err
 	}
 	for _, item := range []struct {
@@ -183,8 +183,8 @@ func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 		visibility ebsv1.ConfigVisibility
 		value      interface{}
 	}{
-		{ebsv1.BuildTargetConfigName, ebsv1.ConfigVisibilityPublic, target.Spec},
-		{ebsv1.BuildResourceConfigName, ebsv1.ConfigVisibilityOpsOnly, resources.Spec},
+		{ebsv1.BuildTargetConfigName, ebsv1.ConfigVisibilityPublic, target},
+		{ebsv1.BuildResourceConfigName, ebsv1.ConfigVisibilityOpsOnly, resources},
 	} {
 		content, err := yaml.Marshal(item.value)
 		if err != nil {
