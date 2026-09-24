@@ -85,8 +85,8 @@ type SyncCheckResult struct {
     CloneURL string
 }
 
-// GitServerClient 是 Snapshot Controller 唯一依赖的 git-server 客户端接口。
-// HTTP 请求/响应结构和缓存均封装在实现内部，不暴露给 Controller。
+// GitServerClient 定义在 pkg/clients/gitserver/client.go，供多个 Controller 复用。
+// HTTP 请求/响应结构和缓存均封装在实现内部。
 type GitServerClient interface {
     // PublishSyncTask 调用 POST /api/v1/repo/sync，注册仓库同步任务
     PublishSyncTask(ctx context.Context, originURL string) error
@@ -103,8 +103,13 @@ type GitServerClient interface {
     // ref.Type 只能是 GitRefBranch 或 GitRefTag；GitRefCommit 由 Controller 直接采用，
     // 不得调用该方法。
     ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (string, error)
+
+    // ExecCommand 供 BuildInfo Controller 读取已就绪镜像中的 spec。
+    ExecCommand(ctx context.Context, originURL, command string) (string, error)
 }
 ```
+
+Snapshot Controller 仅调用前三个方法；`ExecCommand` 由 BuildInfo Controller 使用。
 
 `GitServerClient` 的失败必须返回可由 `errors.As` 识别的分类错误，Controller 不解析错误文本或底层 HTTP 状态：
 

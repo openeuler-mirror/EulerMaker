@@ -137,7 +137,6 @@ func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 
 func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
 	b := obj.(*ebsv1.Build)
-	ebsv1.SetDefaults_Build(b)
 	if b.Spec.BuildType == "full" || b.Spec.BuildType == "incremental" {
 		b.Spec.Packages = nil
 	}

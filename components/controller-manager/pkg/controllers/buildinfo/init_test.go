@@ -84,6 +84,28 @@ func TestInitFullHappyPath(t *testing.T) {
 	}
 }
 
+func TestInitGitCommandsUseOriginURL(t *testing.T) {
+	const originURL = "https://gitee.com/src-openeuler/repo1.git"
+	const cloneURL = "git://git-server:9418/gitee.com/src-openeuler/repo1.git"
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "full")
+	client.SeedSnapshot(testSnapshotObj(repoEntry{
+		name: "repo1", originURL: originURL, cloneURL: cloneURL, commitID: "c1", declare: true,
+	}))
+	client.SeedRpmRepo(testRpmRepoObj(""))
+	git.repo(originURL, "c1", map[string]string{"a.spec": specText("a")})
+
+	reconcileOnce(t, c)
+
+	bi := getBuildInfo(t, client)
+	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
+	requireSpecNames(t, bi, "a")
+	jobs := listJobs(t, client)
+	if len(jobs) != 1 || !strings.Contains(jobs[0].Spec.Payload, cloneURL) {
+		t.Fatalf("jobs = %+v, want one Job with clone URL in payload", jobs)
+	}
+}
+
 func TestInitEmptySnapshotCompletesEmpty(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	seedHealthyBasics(client, "full")

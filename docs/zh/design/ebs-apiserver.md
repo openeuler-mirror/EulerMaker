@@ -466,7 +466,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 默认值还包括：
 
 - `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是 GitRef 对象，仅支持 Branch/Tag，整体为空时默认 `{type: Branch, value: master}`。Project 和 Snapshot 均允许仓库 ref 整体为空，创建/普通更新不补齐；显式 ref 必须完整且合法。解析时优先使用包 ref，整体为空则回退到 Snapshot.spec.defaultRef，不回查 Project。旧字符串形式不再接受。
-- `Build.spec.buildType` 默认为 `full`。
+- `Build.spec.buildType` 必填，不设置默认值；缺失时返回 422。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
 - `Runner.spec.type` 默认为 `ct`。
 
@@ -567,7 +567,7 @@ dry-run 只检查现有占用和历史门禁，不创建占用、不写 Build，
 - `pkg/storage/es` 提供内部索引 mapping、alias 校验及 create-only、实时 GET、CAS 更新/删除、分页扫描；`claims_store.go` 封装占用记录与原始 ES 版本，与公共 EBS 资源隔离。
 - Build 创建编排统一封装在 build storage，拆开本地校验与最终持久化，避免校验/admission 被重复执行；本地目标锁可移除，或仅作为减少竞争的优化，不参与正确性证明。
 - 终态与删除释放使用持久化成功后的回调，不能复用“删除前必须成功”的清理 hook；扫描器由 server 生命周期管理。Build Controller 不新增 ES 权限或释放调用。
-- 测试至少覆盖：两个 apiserver 同目标同时创建仅一方成功、不同目标并行、single 绕过、默认 full、dry-run 无写入、历史门禁拒绝、各步骤崩溃与 Unknown、迟到写入不误释放、Reserved 清理与 Creating CAS 竞争、终态不可回退、删除前置条件失败不释放、释放 CAS 防误删、多实例重复扫描和重启恢复。
+- 测试至少覆盖：两个 apiserver 同目标同时创建仅一方成功、不同目标并行、single 绕过、缺失 buildType 拒绝、dry-run 无写入、历史门禁拒绝、各步骤崩溃与 Unknown、迟到写入不误释放、Reserved 清理与 Creating CAS 竞争、终态不可回退、删除前置条件失败不释放、释放 CAS 防误删、多实例重复扫描和重启恢复。
 
 ## Job 主动中止
 

@@ -231,7 +231,7 @@ type BuildSpec struct {
 
 | 字段             | Go 类型 | 必填 | 说明 |
 |----------------|---------|------|------|
-| `buildType`    | string | 否 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"`，默认 `"full"` |
+| `buildType`    | string | 是 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
 | `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
 

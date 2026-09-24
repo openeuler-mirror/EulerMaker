@@ -40,6 +40,9 @@ func (g *asyncGit) ResolveCommit(context.Context, string, ebsv1.GitRef) (string,
 	g.resolves++
 	return strings.Repeat("a", 40), nil
 }
+func (g *asyncGit) ExecCommand(context.Context, string, string) (string, error) {
+	panic("Snapshot Controller must not call ExecCommand")
+}
 
 func branchRepos(n int) []ebsv1.PackageRepo {
 	repos := make([]ebsv1.PackageRepo, n)
