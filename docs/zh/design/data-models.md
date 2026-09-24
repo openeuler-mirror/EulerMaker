@@ -233,9 +233,9 @@ type BuildSpec struct {
 |----------------|---------|------|------|
 | `buildType`    | string | 否 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"`，默认 `"full"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
-| `packages`     | []string | 条件必填 | single、specified 的目标包列表；full、incremental 保持为空，apiserver 创建时统一清空 |
+| `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
 
-Build 创建后整个 `spec` 不可修改；普通 Update 只能修改服务端允许的 metadata，运行状态通过 `/status` 子资源更新。
+Build 创建后，除 `incremental` 类型在 Pending 阶段由 Build Controller 幂等更新 `spec.packages` 外，其余 `spec` 字段不可修改。`packages` 允许为空数组表示没有构建种子；仅当 Build 进入 Prepared 后，才表示本轮种子已确认。普通用户不能修改 Controller 计算结果。运行状态通过 `/status` 子资源更新。
 
 ### BootstrapRepo
 
@@ -329,6 +329,7 @@ type BuildInfoStatus struct {
     Phase       BuildInfoPhase           `json:"phase,omitempty"`
     Conditions  []metav1.Condition       `json:"conditions,omitempty"`
     SpecStatus  map[string]SpecStatus    `json:"specStatus,omitempty"`
+    FailedPackages []string           `json:"failedPackages,omitempty"`
     Dcg         map[string]DcgNodeState  `json:"dcg,omitempty"`
 }
 ```
@@ -338,6 +339,7 @@ type BuildInfoStatus struct {
 | `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Aborted"` |
 | `conditions` | []metav1.Condition | 状态条件 |
 | `specStatus` | map[string]SpecStatus | 各 spec 运行时状态 |
+| `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；Completed 时再合并最终构建/安装失败的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；已恢复成功的中途构建/安装失败不保留 |
 | `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 BuildInfo Controller 本轮解析结果 `specDepends` 的 `buildRequires`，不依赖本字段 |
 
 ### DcgNodeState

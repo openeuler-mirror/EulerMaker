@@ -31,6 +31,9 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 
 // handled=false means the resource rule is not conclusive, not that access is granted.
 func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident Identity, route routeInfo) (authzDecision, bool, error) {
+	if route.resource == "builds" && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+		return authzDecision{}, true, fmt.Errorf("Build updates are not available through Gateway")
+	}
 	parts, validPath := ebsAPIPathParts(r.URL.Path)
 	if validPath && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "scripts" {
 		return authzDecision{}, true, fmt.Errorf("Script is cluster-scoped")

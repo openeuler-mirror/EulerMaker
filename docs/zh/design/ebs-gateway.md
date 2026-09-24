@@ -6,6 +6,8 @@
 
 集群级 Script 使用 `/apis/ebs/v1/scripts`：仅 Ops/Admin/System 可创建及 PUT/PATCH 修改；普通登录用户可读取和列表，Runner 身份仅可 GET/HEAD 具名脚本。匿名访问、DELETE、Watch、status 子资源和 Project-scoped 路径均不开放，即使 Admin/System 也不绕过此限制。Gateway 不校验脚本正文，将字段校验及 resourceVersion 冲突交给 apiserver；详见 [Script 设计](build-configuration.md#4-script构建脚本)。
 
+Gateway 不开放 Build 对象及其 `/status` 的 PUT/PATCH，任何身份均不得通过 Gateway 更新 Build；Build Controller 直连 apiserver 固化增量构建的 `spec.packages`。用户创建 Build 和使用已有中止接口的权限保持不变。
+
 Project 分类标签 `project.ebs.io/type` 的创建、修改权限及 PATCH 保护规则见 [标签约定](labels.md#33-工程分类)；分类不改变既有访问权限。
 
 `ebs-gateway` 是 EulerMaker 对外请求入口，位于客户端和 `ebs-apiserver` 之间，负责公开只读访问、令牌认证、用户状态检查、Project 权限校验、审计、限流和请求转发。
