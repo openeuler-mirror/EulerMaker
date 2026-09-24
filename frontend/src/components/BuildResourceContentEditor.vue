@@ -7,10 +7,10 @@
     </div>
     <div v-if="error" class="form-error" role="alert">{{ t(error) }}</div>
     <template v-if="mode !== 'list'">
-      <label class="field required-field"><span>{{ t('operations.resourceSpec') }}</span>
+      <label class="field required-field"><span>{{ t('operations.resourceContent') }}</span>
         <textarea v-model="source" class="yaml-editor" spellcheck="false" required></textarea>
       </label>
-      <p class="form-hint">{{ t('operations.specHint') }}</p>
+      <p class="form-hint">{{ t('operations.contentHint') }}</p>
     </template>
     <template v-else>
       <section class="resource-rule-card resource-default-card">
@@ -50,7 +50,7 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { parse, stringify } from "yaml";
 import ResourceRequirementsFields from "./ResourceRequirementsFields.vue";
-import { parseResourceDraft, resourceSpec, type ResourceDraft } from "./buildResourceConfigDraft";
+import { parseResourceContentDraft, serializeResourceContent, type ResourceDraft } from "./buildResourceContentDraft";
 const props = defineProps<{ source: string; disabled?: boolean }>();
 const { t } = useI18n();
 const source = ref(props.source);
@@ -59,7 +59,7 @@ const mode = ref<EditorMode>("list");
 const error = ref("");
 const search = ref("");
 const draft = ref<ResourceDraft>({ extra: {}, defaults: {}, packages: [] });
-try { draft.value = parseResourceDraft(source.value); }
+try { draft.value = parseResourceContentDraft(source.value); }
 catch { mode.value = "json"; }
 const visibleLimit = ref(50);
 const filteredPackages = computed(() => draft.value.packages.filter(pkg => pkg.name.toLowerCase().includes(search.value.toLowerCase())));
@@ -79,25 +79,25 @@ function switchMode(next: EditorMode): void {
   if (next === mode.value) return;
   error.value = "";
   try {
-    const value = getSpec();
-    if (next === "list") { draft.value = parseResourceDraft(JSON.stringify(value)); search.value = ""; }
+    const value = getContent();
+    if (next === "list") { draft.value = parseResourceContentDraft(JSON.stringify(value)); search.value = ""; }
     else source.value = next === "yaml" ? stringify(value) : JSON.stringify(value, null, 2);
     mode.value = next;
-  } catch (err) { error.value = err instanceof Error ? err.message : "operations.invalidSpec"; }
+  } catch (err) { error.value = err instanceof Error ? err.message : "operations.invalidContent"; }
 }
-function getSpec(): Record<string, unknown> {
+function getContent(): Record<string, unknown> {
   error.value = "";
   try {
-    if (mode.value === "list") return resourceSpec(draft.value);
+    if (mode.value === "list") return serializeResourceContent(draft.value);
     const value: unknown = mode.value === "yaml" ? parse(source.value, { uniqueKeys: true }) : JSON.parse(source.value);
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     return value as Record<string, unknown>;
   } catch (err) {
-    error.value = err instanceof Error && err.message.startsWith("operations.") ? err.message : "operations.invalidSpec";
+    error.value = err instanceof Error && err.message.startsWith("operations.") ? err.message : "operations.invalidContent";
     throw new Error(error.value);
   }
 }
-defineExpose({ getSpec });
+defineExpose({ getContent });
 </script>
 <style scoped>
 .resource-spec-editor { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }

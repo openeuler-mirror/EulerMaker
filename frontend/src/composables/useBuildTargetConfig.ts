@@ -1,16 +1,16 @@
 import { computed, onMounted, ref } from "vue";
 import { errorTranslationKey, request } from "@/api";
-import type { BuildConf, BuildTarget } from "@/types";
+import type { BuildTargetContent, BuildTarget } from "@/types";
 import type { Config } from "@/types";
 import { parse } from "yaml";
-import { buildConfSpec, configuredOS, configuredArches, supportsTarget } from "@/components/buildConfDraft";
+import { parseBuildTargetContent, configuredOS, configuredArches, supportsTarget } from "@/components/buildTargetConfigDraft";
 
-const configuration = ref<BuildConf | null>(null);
+const configuration = ref<BuildTargetContent | null>(null);
 const loading = ref(false);
 const error = ref("");
 let pending: Promise<void> | null = null;
 
-export function useBuildConf() {
+export function useBuildTargetConfig() {
   async function reload(): Promise<void> {
     if (pending) return pending;
     loading.value = true;
@@ -19,9 +19,9 @@ export function useBuildConf() {
       try {
         const config = await request<Config>("/apis/ebs/v1/configs/build-target");
         if (config.metadata?.name !== "build-target") throw new Error("invalid build-target Config");
-        configuration.value = { spec: buildConfSpec(parse(config.spec.content, { uniqueKeys: true })) };
+        configuration.value = parseBuildTargetContent(parse(config.spec.content, { uniqueKeys: true }));
       }
-      catch (reason) { configuration.value = null; error.value = errorTranslationKey(reason, "buildConf.loadFailed"); }
+      catch (reason) { configuration.value = null; error.value = errorTranslationKey(reason, "buildTargetConfig.loadFailed"); }
       finally { loading.value = false; pending = null; }
     })();
     return pending;
