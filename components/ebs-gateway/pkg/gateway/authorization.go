@@ -28,6 +28,13 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 
 // handled=false means the resource rule is not conclusive, not that access is granted.
 func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident Identity, route routeInfo) (authzDecision, bool, error) {
+	if strings.HasPrefix(r.URL.Path, apiPrefix+"/projects/") && strings.Contains(r.URL.Path, "/configs") {
+		return authzDecision{}, true, fmt.Errorf("Config is cluster-scoped")
+	}
+	if r.URL.Path == apiPrefix+"/configs" || strings.HasPrefix(r.URL.Path, apiPrefix+"/configs/") {
+		decision, err := authorizeConfig(r, ident)
+		return decision, true, err
+	}
 	if route.resource == "builds" && (r.Method == http.MethodPut || r.Method == http.MethodPatch) {
 		return authzDecision{}, true, fmt.Errorf("Build updates are not available through Gateway")
 	}

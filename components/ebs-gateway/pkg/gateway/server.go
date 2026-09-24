@@ -169,6 +169,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(rec, "too many requests", http.StatusTooManyRequests)
 			return
 		}
+		if name, ok := configReadName(r); ok {
+			g.serveConfigRead(rec, r, ident, name)
+			return
+		}
 		g.servePublicRead(rec, r)
 		return
 	}
@@ -205,6 +209,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isBusinessRoute && isPublicReadRoute(r) {
+		if name, ok := configReadName(r); ok {
+			g.serveConfigRead(rec, r, ident, name)
+			return
+		}
 		g.servePublicRead(rec, r)
 		return
 	}
