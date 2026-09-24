@@ -113,7 +113,7 @@ npm run dev
 - [数据模型](docs/zh/design/data-models.md)
 - [API Server](docs/zh/design/ebs-apiserver.md) 与 [Gateway](docs/zh/design/ebs-gateway.md)
 - [Controller Manager](docs/zh/design/controller-manager.md) 与 [Scheduler](docs/zh/design/scheduler.md)
-- [构建配置](docs/zh/design/build-configuration.md) 与 [标签约定](docs/zh/design/labels.md)
+- [构建配置](docs/zh/design/data-models~config.md)、[构建脚本](docs/zh/design/data-models~script.md)与[标签约定](docs/zh/design/labels.md)
 - [Git Server](docs/zh/design/git-server.md) 与 [Artifact Manager](docs/zh/design/artifact-manager.md)
 
 ## 参与贡献

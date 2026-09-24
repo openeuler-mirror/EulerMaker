@@ -71,7 +71,7 @@ func TestPackageNameLabelValue(t *testing.T) {
 	}
 }
 
-// --- resource merge (build-configuration.md 3.5) ---
+// --- resource merge (data-models~config.md 3.2) ---
 
 func TestResolveResourcesMerge(t *testing.T) {
 	resource := &ebsv1.BuildResourceConfig{

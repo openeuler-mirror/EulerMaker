@@ -483,7 +483,7 @@ func (c *Controller) marshalPayload(round *reconcileRound, base map[string]any) 
 }
 
 // resolveResources merges the BuildResourceConfig levels (design 15.3.1 /
-// build-configuration.md 3.5): spec.default -> packages[spec].default ->
+// data-models~config.md 3.2): spec.default -> packages[spec].default ->
 // packages[spec].arches[arch], per-field override; each level's unset limits
 // take the same level's requests.
 func resolveResources(resource *ebsv1.BuildResourceConfig, specName, arch string) ebsv1.ResourceRequirements {
@@ -498,7 +498,7 @@ func resolveResources(resource *ebsv1.BuildResourceConfig, specName, arch string
 }
 
 // normalizeResourceLevel fills a level's missing limits from its own
-// requests (build-configuration.md 3.5.2).
+// requests (data-models~config.md 3.2).
 func normalizeResourceLevel(level ebsv1.ResourceRequirements) ebsv1.ResourceRequirements {
 	out := deepCopyResources(level)
 	for _, key := range []string{"cpu", "memory"} {
