@@ -3,8 +3,9 @@ package validation
 import (
 	"testing"
 
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestValidateConfig(t *testing.T) {

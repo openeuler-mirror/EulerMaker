@@ -3,8 +3,6 @@ package build
 import (
 	"context"
 
-	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/apis/ebs/validation"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -12,6 +10,9 @@ import (
 	request "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/yaml"
+
+	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/apis/ebs/validation"
 )
 
 func ValidateBuildTargetConfig(configs rest.Getter, next rest.ValidateObjectFunc) rest.ValidateObjectFunc {

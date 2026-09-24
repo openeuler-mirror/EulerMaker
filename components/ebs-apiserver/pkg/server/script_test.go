@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/emicklei/go-restful/v3"
+
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/storage/es"
-	"github.com/emicklei/go-restful/v3"
 )
 
 // Exercise routing, validation, resourceVersion and generation through the real

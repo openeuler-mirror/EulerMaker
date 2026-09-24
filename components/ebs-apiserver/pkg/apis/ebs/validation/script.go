@@ -4,9 +4,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	ebsv1 "ebs-api/ebs/v1"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func ValidateScript(obj *ebsv1.Script) field.ErrorList {
