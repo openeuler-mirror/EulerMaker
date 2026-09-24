@@ -27,14 +27,13 @@ type Definition struct {
 }
 
 var definitions = []Definition{
-	{Kind: "BuildConf", Singular: "buildconf", Plural: "buildconfs", Short: "bc", NoWatch: true, NoDelete: true, Object: func() runtime.Object { return &ebsv1.BuildConf{} }},
+	{Kind: "Config", Singular: "config", Plural: "configs", Short: "cfg", NoWatch: true, NoDelete: true, Object: func() runtime.Object { return &ebsv1.Config{} }},
 	{Kind: "Project", Singular: "project", Plural: "projects", Short: "proj", Object: func() runtime.Object { return &ebsv1.Project{} }},
 	{Kind: "Snapshot", Singular: "snapshot", Plural: "snapshots", Short: "snap", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Snapshot{} }},
 	{Kind: "Build", Singular: "build", Plural: "builds", Short: "build", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Build{} }},
 	{Kind: "Job", Singular: "job", Plural: "jobs", Short: "job", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Job{} }},
 	{Kind: "BuildInfo", Singular: "buildinfo", Plural: "buildinfos", Short: "bi", Namespaced: true, Object: func() runtime.Object { return &ebsv1.BuildInfo{} }},
 	{Kind: "RpmRepo", Singular: "rpmrepo", Plural: "rpmrepos", Short: "repo", Namespaced: true, Object: func() runtime.Object { return &ebsv1.RpmRepo{} }},
-	{Kind: "BuildResourceConfig", Singular: "buildresourceconfig", Plural: "buildresourceconfigs", Short: "brc", Namespaced: false, NoPatch: true, NoWatch: true, Object: func() runtime.Object { return &ebsv1.BuildResourceConfig{} }},
 }
 
 var byName map[string]Definition

@@ -32,6 +32,13 @@ export interface BuildConf {
   spec: { targets: Record<string, { arches: Record<string, { image: string }> }> };
 }
 
+export interface Config {
+  apiVersion?: "ebs/v1";
+  kind?: "Config";
+  metadata?: ObjectMeta;
+  spec: { visibility: "Public" | "OpsOnly"; content: string };
+}
+
 export interface Script {
   apiVersion?: string;
   kind?: string;
@@ -128,4 +135,5 @@ export interface BuildResourceConfig {
   kind?: "BuildResourceConfig";
   metadata?: ObjectMeta;
   spec?: { default?: { requests?: Record<string, string>; limits?: Record<string, string> }; packages?: Record<string, unknown> };
+  rawConfig?: Config;
 }

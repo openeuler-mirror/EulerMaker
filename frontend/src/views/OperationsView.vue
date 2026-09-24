@@ -12,11 +12,11 @@
         <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
     <div class="section-heading"><h2>{{ t("operations.resources") }}</h2></div>
     <p class="form-hint">{{ t("operations.resourcesHint") }}</p>
-    <div class="operations-project-form"><button class="secondary-button" type="button" :disabled="resourcesLoading" @click="loadResources">{{ t("common.refresh") }}</button><button class="primary-button" type="button" @click="openCreate">{{ t("operations.createResource") }}</button></div>
+    <div class="operations-project-form"><button class="secondary-button" type="button" :disabled="resourcesLoading" @click="loadResources">{{ t("common.refresh") }}</button></div>
     <div v-if="resourcesError" class="inline-error" role="alert"><WarningFilled />{{ t(resourcesError) }}</div>
-    <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.metadata?.name"><td><strong>{{ resource.metadata?.name }}</strong></td><td>{{ resource.spec?.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.spec?.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.spec?.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :disabled="isProtectedDefaultResource(resource)" :title="isProtectedDefaultResource(resource) ? t('operations.defaultResourceProtected') : undefined" @click="openDelete(resource)">{{ t("common.remove") }}</button></td></tr></tbody></table></div></template>
+    <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.metadata?.name"><td><strong>{{ resource.metadata?.name }}</strong></td><td>{{ resource.spec?.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.spec?.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.spec?.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button></td></tr></tbody></table></div></template>
         <section v-if="editorOpen" class="operations-resource-editor" aria-labelledby="resource-editor-title">
-          <div class="section-heading"><h3 id="resource-editor-title">{{ t(editing ? 'operations.editResource' : 'operations.createResource') }}</h3></div>
+          <div class="section-heading"><h3 id="resource-editor-title">{{ t('operations.editResource') }}</h3></div>
           <form class="project-form" @submit.prevent="saveResource"><label class="field required-field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="resourceName" required maxlength="63" :disabled="Boolean(editing)" /></label><BuildResourceConfigSpecEditor ref="specEditor" :source="specSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form>
         </section>
       </section>
@@ -38,12 +38,12 @@
       </div>
     </form>
   </ModalDialog>
-  <ModalDialog v-if="deleting" title-id="delete-resource-title" :title="t('operations.deleteResource', { name: deleting.metadata?.name })" :close-label="t('common.close')" @close="closeDelete"><form class="project-form" @submit.prevent="deleteResource"><p class="form-hint">{{ t("admin.typeNameHint", { name: deleting.metadata?.name }) }}</p><label class="field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="confirmName" required autocomplete="off" /></label><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeDelete">{{ t("common.cancel") }}</button><button class="primary-button danger-button" type="submit" :disabled="saving || confirmName !== deleting.metadata?.name">{{ t("common.remove") }}</button></div></form></ModalDialog>
 </template>
 
 <script setup lang="ts">
 import { CircleCheckFilled, Refresh, WarningFilled } from "@element-plus/icons-vue";
 import { computed, ref } from "vue";
+import { parse, stringify } from "yaml";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
 import { useSessionStore } from "@/stores/session";
@@ -53,7 +53,7 @@ import ModalDialog from "@/components/ModalDialog.vue";
 import BuildResourceConfigSpecEditor from "@/components/BuildResourceConfigSpecEditor.vue";
 import BuildConfEditor from "@/components/BuildConfEditor.vue";
 import ScriptManager from "@/components/ScriptManager.vue";
-import type { BuildResourceConfig, Runner } from "@/types";
+import type { BuildResourceConfig, Config, Runner } from "@/types";
 
 type OperationsSection = "build" | "resources" | "scripts" | "runners";
 
@@ -89,8 +89,6 @@ const editing = ref<BuildResourceConfig | null>(null);
 const resourceName = ref("");
 const specSource = ref("");
 const specEditor = ref<InstanceType<typeof BuildResourceConfigSpecEditor> | null>(null);
-const deleting = ref<BuildResourceConfig | null>(null);
-const confirmName = ref("");
 const dialogError = ref("");
 const saving = ref(false);
 
@@ -147,32 +145,24 @@ async function loadResources(): Promise<void> {
   resourcesLoading.value = true;
   resourcesError.value = "";
   try {
-    resources.value = await loadAll<BuildResourceConfig>("/apis/ebs/v1/buildresourceconfigs");
+    const config = await request<Config>(resourcePath("build-resource"));
+    resources.value = [{ metadata: config.metadata, spec: parse(config.spec.content, { uniqueKeys: true }) as BuildResourceConfig["spec"], rawConfig: config }];
   } catch (error) { resourcesError.value = errorTranslationKey(error, "operations.loadResourcesFailed"); }
   finally { resourcesLoading.value = false; }
-}
-function openCreate(): void {
-  editing.value = null;
-  resourceName.value = "";
-  specSource.value = JSON.stringify({ default: { requests: { cpu: "1", memory: "2Gi" } }, packages: { example: { default: { requests: { cpu: "1", memory: "2Gi" } } } } }, null, 2);
-  dialogError.value = "";
-  editorOpen.value = true;
 }
 async function openEdit(resource: BuildResourceConfig): Promise<void> {
   if (!resource.metadata?.name) return;
   dialogError.value = "";
   try {
-    editing.value = await request<BuildResourceConfig>(resourcePath(resource.metadata.name));
+    const config = await request<Config>(resourcePath(resource.metadata.name));
+    editing.value = { metadata: config.metadata, spec: parse(config.spec.content, { uniqueKeys: true }) as BuildResourceConfig["spec"], rawConfig: config };
     resourceName.value = resource.metadata.name;
     specSource.value = JSON.stringify(editing.value.spec || {}, null, 2);
     editorOpen.value = true;
   } catch (error) { resourcesError.value = errorTranslationKey(error, "operations.loadResourcesFailed"); }
 }
 function closeEditor(): void { if (!saving.value) { editorOpen.value = false; editing.value = null; } }
-function isProtectedDefaultResource(resource: BuildResourceConfig): boolean { return resource.metadata?.name === "default"; }
-function openDelete(resource: BuildResourceConfig): void { if (isProtectedDefaultResource(resource)) return; deleting.value = resource; confirmName.value = ""; dialogError.value = ""; }
-function closeDelete(): void { if (!saving.value) deleting.value = null; }
-function resourcePath(name: string): string { return `/apis/ebs/v1/buildresourceconfigs/${encodeURIComponent(name)}`; }
+function resourcePath(name: string): string { return `/apis/ebs/v1/configs/${encodeURIComponent(name)}`; }
 async function refreshResources(): Promise<void> { await loadResources(); }
 async function saveResource(): Promise<void> {
   if (saving.value) return;
@@ -182,32 +172,18 @@ async function saveResource(): Promise<void> {
     if (!specEditor.value) return;
     spec = specEditor.value.getSpec() as BuildResourceConfig["spec"];
   } catch { return; }
+  const current = editing.value;
+  if (!current?.rawConfig) return;
   saving.value = true;
   dialogError.value = "";
-  const current = editing.value;
-  const body: BuildResourceConfig = current
-    ? { ...current, spec }
-    : { apiVersion: "ebs/v1", kind: "BuildResourceConfig", metadata: { name: resourceName.value }, spec };
+  const body: Config = { ...current.rawConfig, spec: { ...current.rawConfig.spec, content: stringify(spec) } };
   try {
-    await request<BuildResourceConfig>(current ? resourcePath(resourceName.value) : "/apis/ebs/v1/buildresourceconfigs", { method: current ? "PUT" : "POST", body: JSON.stringify(body) });
-    success.value = t(current ? "operations.resourceSaved" : "operations.resourceCreated", { name: resourceName.value });
+    await request<Config>(resourcePath(resourceName.value), { method: "PUT", body: JSON.stringify(body) });
+    success.value = t("operations.resourceSaved", { name: resourceName.value });
     editorOpen.value = false;
     editing.value = null;
     await refreshResources();
   } catch (error) { dialogError.value = errorTranslationKey(error, "operations.saveResourceFailed"); }
-  finally { saving.value = false; }
-}
-async function deleteResource(): Promise<void> {
-  const name = deleting.value?.metadata?.name;
-  if (!name || name === "default" || confirmName.value !== name || saving.value) return;
-  saving.value = true;
-  dialogError.value = "";
-  try {
-    await request<unknown>(resourcePath(name), { method: "DELETE" });
-    success.value = t("operations.resourceDeleted", { name });
-    deleting.value = null;
-    await refreshResources();
-  } catch (error) { dialogError.value = errorTranslationKey(error, "operations.deleteResourceFailed"); }
   finally { saving.value = false; }
 }
 function formatDate(value?: string): string {

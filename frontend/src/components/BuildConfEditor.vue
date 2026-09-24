@@ -58,10 +58,10 @@ import { useI18n } from 'vue-i18n';
 import { parse, stringify } from 'yaml';
 import { ApiError, errorTranslationKey, request } from '@/api';
 import ModalDialog from '@/components/ModalDialog.vue';
-import type { BuildConf } from '@/types';
+import type { BuildConf, Config } from '@/types';
 import { buildConfSpec, supportsTarget } from '@/components/buildConfDraft';
 const { t } = useI18n();
-const current = ref<BuildConf | null>(null);
+const current = ref<Config | null>(null);
 const draft = ref<BuildConf['spec']>({targets:{}});
 const modes = ['list', 'yaml', 'json'] as const;
 const mode = ref<typeof modes[number]>('list');
@@ -80,14 +80,18 @@ const targetGroups = computed(() => Object.entries(draft.value.targets).map(([os
 })));
 const targetEntries = computed(() => targetGroups.value.flatMap(group => group.entries));
 const matchingOS = computed(() => targetGroups.value.map(group => group.os).filter(os => os.toLocaleLowerCase().includes(newOS.value.toLocaleLowerCase())));
-const path = '/apis/ebs/v1/buildconfs/default';
+const path = '/apis/ebs/v1/configs/build-target';
 onMounted(load);
 onMounted(() => document.addEventListener('pointerdown', onOSPointerDown));
 onBeforeUnmount(() => document.removeEventListener('pointerdown', onOSPointerDown));
 async function load() {
   if (saving.value) return;
   saving.value = true; error.value = ''; success.value = false;
-  try { current.value = await request<BuildConf>(path); draft.value = JSON.parse(JSON.stringify(current.value.spec)); mode.value = 'list'; editing.value = false; addDialogOpen.value = false; }
+  try {
+    current.value = await request<Config>(path);
+    draft.value = buildConfSpec(parse(current.value.spec.content, { uniqueKeys: true }));
+    mode.value = 'list'; editing.value = false; addDialogOpen.value = false;
+  }
   catch (reason) { current.value = null; error.value = errorTranslationKey(reason, 'buildConf.loadFailed'); }
   finally { saving.value = false; }
 }
@@ -103,9 +107,9 @@ function switchMode(next: typeof modes[number]) {
 function startEdit() { editing.value = true; error.value = ''; success.value = false; }
 function cancelEdit() {
   if (!current.value) return;
-  draft.value = JSON.parse(JSON.stringify(current.value.spec));
-  if (mode.value === 'json') source.value = JSON.stringify(current.value.spec, null, 2);
-  if (mode.value === 'yaml') source.value = stringify(current.value.spec);
+  draft.value = buildConfSpec(parse(current.value.spec.content, { uniqueKeys: true }));
+  if (mode.value === 'json') source.value = JSON.stringify(draft.value, null, 2);
+  if (mode.value === 'yaml') source.value = stringify(draft.value);
   editing.value = false; addDialogOpen.value = false; error.value = '';
 }
 function openAddDialog() {
@@ -154,14 +158,15 @@ async function save() {
   if (mode.value === 'list' && targetEntries.value.some(entry => !entry.config.image.trim())) { error.value = 'buildConf.invalid'; return; }
   let spec: BuildConf['spec'];
   try { spec = readDraft(); } catch { error.value = 'buildConf.invalid'; return; }
-  const removed = Object.entries(current.value.spec.targets).some(([os, target]) => Object.keys(target.arches).some(arch => !supportsTarget({ spec }, { os, arch })));
+  const previous = buildConfSpec(parse(current.value.spec.content, { uniqueKeys: true }));
+  const removed = Object.entries(previous.targets).some(([os, target]) => Object.keys(target.arches).some(arch => !supportsTarget({ spec }, { os, arch })));
   if (removed && !window.confirm(t('buildConf.removeWarning'))) return;
   saving.value = true; error.value = ''; success.value = false;
   try {
-    current.value = await request<BuildConf>(path, {method:'PUT', body: JSON.stringify({...current.value, spec})});
-    draft.value = JSON.parse(JSON.stringify(current.value.spec));
-    if (mode.value === 'json') source.value = JSON.stringify(current.value.spec, null, 2);
-    if (mode.value === 'yaml') source.value = stringify(current.value.spec);
+    current.value = await request<Config>(path, {method:'PUT', body: JSON.stringify({...current.value, spec: {...current.value.spec, content: stringify(spec)}})});
+    draft.value = buildConfSpec(parse(current.value.spec.content, { uniqueKeys: true }));
+    if (mode.value === 'json') source.value = JSON.stringify(draft.value, null, 2);
+    if (mode.value === 'yaml') source.value = stringify(draft.value);
     editing.value = false; success.value = true;
   }
   catch (reason) { error.value = reason instanceof ApiError && reason.status === 409 ? 'buildConf.conflict' : errorTranslationKey(reason, 'errors.requestFailed'); }

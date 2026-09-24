@@ -2,10 +2,11 @@
   <fieldset class="resource-spec-editor" :disabled="disabled">
     <div class="project-tabs resource-editor-modes" :aria-label="t('operations.editMode')">
       <button type="button" :class="{ active: mode === 'list' }" :aria-pressed="mode === 'list'" @click="switchMode('list')">{{ t('operations.listEditor') }}</button>
+      <button type="button" :class="{ active: mode === 'yaml' }" :aria-pressed="mode === 'yaml'" @click="switchMode('yaml')">YAML</button>
       <button type="button" :class="{ active: mode === 'json' }" :aria-pressed="mode === 'json'" @click="switchMode('json')">{{ t('operations.jsonEditor') }}</button>
     </div>
     <div v-if="error" class="form-error" role="alert">{{ t(error) }}</div>
-    <template v-if="mode === 'json'">
+    <template v-if="mode !== 'list'">
       <label class="field required-field"><span>{{ t('operations.resourceSpec') }}</span>
         <textarea v-model="source" class="yaml-editor" spellcheck="false" required></textarea>
       </label>
@@ -47,12 +48,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { parse, stringify } from "yaml";
 import ResourceRequirementsFields from "./ResourceRequirementsFields.vue";
 import { parseResourceDraft, resourceSpec, type ResourceDraft } from "./buildResourceConfigDraft";
 const props = defineProps<{ source: string; disabled?: boolean }>();
 const { t } = useI18n();
 const source = ref(props.source);
-const mode = ref<"list" | "json">("list");
+type EditorMode = "list" | "yaml" | "json";
+const mode = ref<EditorMode>("list");
 const error = ref("");
 const search = ref("");
 const draft = ref<ResourceDraft>({ extra: {}, defaults: {}, packages: [] });
@@ -72,12 +75,13 @@ function addPackage(): void {
   search.value = "";
   draft.value.packages.unshift({ name: "", extra: {}, defaults: {}, arches: [] });
 }
-function switchMode(next: "list" | "json"): void {
+function switchMode(next: EditorMode): void {
   if (next === mode.value) return;
   error.value = "";
   try {
-    if (next === "list") { draft.value = parseResourceDraft(source.value); search.value = ""; }
-    else source.value = JSON.stringify(resourceSpec(draft.value), null, 2);
+    const value = getSpec();
+    if (next === "list") { draft.value = parseResourceDraft(JSON.stringify(value)); search.value = ""; }
+    else source.value = next === "yaml" ? stringify(value) : JSON.stringify(value, null, 2);
     mode.value = next;
   } catch (err) { error.value = err instanceof Error ? err.message : "operations.invalidSpec"; }
 }
@@ -85,7 +89,7 @@ function getSpec(): Record<string, unknown> {
   error.value = "";
   try {
     if (mode.value === "list") return resourceSpec(draft.value);
-    const value: unknown = JSON.parse(source.value);
+    const value: unknown = mode.value === "yaml" ? parse(source.value, { uniqueKeys: true }) : JSON.parse(source.value);
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     return value as Record<string, unknown>;
   } catch (err) {
