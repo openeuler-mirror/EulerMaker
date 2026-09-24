@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"controller-manager/pkg/clients/gitserver"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -407,11 +405,10 @@ func TestInitE19ArchUnsupported(t *testing.T) {
 func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
-	// BuildConf without the os/arch mapping: E-26 pauses the round (plain
+	// build-target Config without the os/arch mapping: E-26 pauses the round (plain
 	// error backoff, no Failed marking, no condition).
-	client.SetBuildConf(&ebsv1.BuildConf{
-		ObjectMeta: metav1.ObjectMeta{Name: "buildconf"},
-		Spec:       ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{}},
+	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
+		Targets: map[string]ebsv1.BuildTargetConfigEntry{},
 	})
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
@@ -419,7 +416,7 @@ func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 
 	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); err == nil {
-		t.Fatal("reconcile() error = nil, want BuildConf mapping failure")
+		t.Fatal("reconcile() error = nil, want build-target Config mapping failure")
 	}
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoPending)
@@ -438,7 +435,7 @@ func TestInitE27BuildResourceConfigMissing(t *testing.T) {
 	// cluster-wide default resource table is absent).
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
-	client.SetBuildConf(testBuildConfObj())
+	client.SetBuildTargetContent(testBuildTargetContent())
 	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
@@ -537,8 +534,8 @@ func TestSingleRepoInjection(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
-	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
-	client.SetBuildConf(testBuildConfObj())
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
 	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
 	client.SeedBuildInfo(bi)
@@ -648,7 +645,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		c, client, git, _ := newTestController(t)
 		client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 		client.SeedBuild(testBuildObj("single", "repo1"))
-		client.SetBuildConf(testBuildConfObj())
+		client.SetBuildTargetContent(testBuildTargetContent())
 		client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 		client.SeedSnapshot(testSnapshotObj(
 			repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
@@ -669,16 +666,15 @@ func TestSingleDeterministicFailures(t *testing.T) {
 func TestSingleE26Pauses(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "single", "repo1")
-	client.SetBuildConf(&ebsv1.BuildConf{
-		ObjectMeta: metav1.ObjectMeta{Name: "buildconf"},
-		Spec:       ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{}},
+	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
+		Targets: map[string]ebsv1.BuildTargetConfigEntry{},
 	})
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 
 	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); err == nil {
-		t.Fatal("reconcile() error = nil, want BuildConf mapping failure (E-26 pause)")
+		t.Fatal("reconcile() error = nil, want build-target Config mapping failure (E-26 pause)")
 	}
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoPending)

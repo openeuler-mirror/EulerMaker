@@ -38,10 +38,27 @@ var ErrNotFound = errors.New("object not found")
 const apiServerReadRetries = 3
 
 // SharedClient is the shared client surface this typed client needs: the
-// generic CRUD interface plus the BuildConf singleton helper (buildconf.go).
+// generic CRUD interface plus the build-target Config reader.
 type SharedClient interface {
 	apiserver.Interface
-	GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error)
+	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
+}
+
+// buildResourceRules keeps the Config identity needed by Job annotations
+// together with its parsed resource rules; it is not an API resource.
+type buildResourceRules struct {
+	metav1.ObjectMeta
+	Spec ebsv1.BuildResourceContent
+}
+
+func (r *buildResourceRules) DeepCopy() *buildResourceRules {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.ObjectMeta = *r.ObjectMeta.DeepCopy()
+	out.Spec = *r.Spec.DeepCopy()
+	return &out
 }
 
 var _ SharedClient = (*apiserver.Client)(nil)
@@ -71,11 +88,11 @@ type Client interface {
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
-	// GetBuildResourceConfig reads the cluster-wide default resource table.
-	GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildResourceConfig, error)
-	// GetBuildConf returns a snapshot for one Job creation batch. Callers
+	// GetBuildResourceRules reads the cluster-wide default resource table.
+	GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error)
+	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers
 	// must not refetch it per Job, or use it to mutate a created Job (E-26).
-	GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error)
+	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 
 // newAPIClient wraps the shared controller-manager API client.
@@ -247,7 +264,7 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 	return value, nil
 }
 
-func (c *apiClient) GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildResourceConfig, error) {
+func (c *apiClient) GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error) {
 	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.BuildResourceConfigName)
 	if err != nil {
 		return nil, err
@@ -256,7 +273,7 @@ func (c *apiClient) GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildRes
 	if !ok || config == nil || config.Name != ebsv1.BuildResourceConfigName || config.Namespace != "" || config.UID == "" || config.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected build-resource Config response: %T", obj)
 	}
-	var content ebsv1.BuildResourceConfigSpec
+	var content ebsv1.BuildResourceContent
 	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
 		return nil, fmt.Errorf("decode build-resource Config: %w", err)
 	}
@@ -266,7 +283,7 @@ func (c *apiClient) GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildRes
 	if err := validateConfigResourceLevel(content.Default); err != nil {
 		return nil, fmt.Errorf("invalid build-resource default: %w", err)
 	}
-	parsed := &ebsv1.BuildResourceConfig{ObjectMeta: config.ObjectMeta, Spec: content}
+	parsed := &buildResourceRules{ObjectMeta: config.ObjectMeta, Spec: content}
 	if err := validateEffectiveResources(resolveResources(parsed, "", "")); err != nil {
 		return nil, err
 	}
@@ -324,11 +341,11 @@ func validateConfigResourceLevel(level ebsv1.ResourceRequirements) error {
 	return nil
 }
 
-func (c *apiClient) GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error) {
-	var conf *ebsv1.BuildConf
+func (c *apiClient) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error) {
+	var conf *ebsv1.BuildTargetContent
 	var err error
 	for attempt := 0; ; attempt++ {
-		conf, err = c.client.GetBuildConf(ctx)
+		conf, err = c.client.GetBuildTargetContent(ctx)
 		if err == nil {
 			break
 		}
@@ -339,8 +356,8 @@ func (c *apiClient) GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error) 
 			return nil, err
 		}
 	}
-	if conf == nil || conf.Name != "default" || conf.UID == "" || conf.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected BuildConf response: %T", conf)
+	if conf == nil || conf.Targets == nil {
+		return nil, contractErrorf("unexpected build-target content: %T", conf)
 	}
 	return conf, nil
 }

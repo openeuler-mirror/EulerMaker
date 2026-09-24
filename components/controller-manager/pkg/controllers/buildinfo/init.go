@@ -97,7 +97,7 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	}
 
 	// Steps 3+4: dispatch zero-indegree specs and bootstrap break points. The
-	// BuildConf snapshot resolves lazily on the first actual Job creation and
+	// build-target Config snapshot resolves lazily on the first actual Job creation and
 	// is shared by every creation of this round (E-26).
 	dispatch := &roundDispatch{arch: arch, contentURL: heldContentURL(round)}
 	for _, name := range dcg.SortedNodes() {
@@ -138,14 +138,14 @@ type roundDispatch struct {
 	imageReady bool
 }
 
-// ensureImage resolves the BuildConf image snapshot lazily (E-26: a read
+// ensureImage resolves the build-target Config image snapshot lazily (E-26: a read
 // failure or a missing mapping pauses the round — plain error backoff, no
 // condition, no Failed marking).
 func (c *Controller) ensureImage(ctx context.Context, round *reconcileRound, dispatch *roundDispatch) (string, error) {
 	if dispatch.imageReady {
 		return dispatch.image, nil
 	}
-	conf, err := c.client.GetBuildConf(ctx)
+	conf, err := c.client.GetBuildTargetContent(ctx)
 	if err != nil {
 		return "", err
 	}
