@@ -436,17 +436,15 @@ func TestProjectMemberCannotDeleteSubresource(t *testing.T) {
 	}
 }
 
-func TestProjectUsersHaveReadOnlyBuildResourceAccess(t *testing.T) {
-	var buildResourceWrites atomic.Int32
+func TestUsersHaveReadOnlyClusterBuildResourceConfigAccess(t *testing.T) {
+	var buildResourceConfigWrites atomic.Int32
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case apiPrefix + "/projects/project-a":
-			_, _ = io.WriteString(w, `{"metadata":{"name":"project-a","labels":{"ebs.io/owner-user":"alice","ebs.io/member-user.bob":"true"}}}`)
-		case apiPrefix + "/projects/project-a/buildresources", apiPrefix + "/projects/project-a/buildresources/project-a":
+		case apiPrefix + "/buildresourceconfigs", apiPrefix + "/buildresourceconfigs/default":
 			if r.Method != http.MethodGet {
-				buildResourceWrites.Add(1)
+				buildResourceConfigWrites.Add(1)
 			}
-			_, _ = io.WriteString(w, `{"kind":"BuildResource","metadata":{"name":"project-a"}}`)
+			_, _ = io.WriteString(w, `{"kind":"BuildResourceConfig","metadata":{"name":"default"}}`)
 		default:
 			t.Fatalf("unexpected upstream path %s", r.URL.Path)
 		}
@@ -454,8 +452,8 @@ func TestProjectUsersHaveReadOnlyBuildResourceAccess(t *testing.T) {
 
 	for _, username := range []string{"alice", "bob"} {
 		for _, path := range []string{
-			apiPrefix + "/projects/project-a/buildresources",
-			apiPrefix + "/projects/project-a/buildresources/project-a",
+			apiPrefix + "/buildresourceconfigs",
+			apiPrefix + "/buildresourceconfigs/default",
 		} {
 			req := authenticatedRequest(t, http.MethodGet, path, nil, userClaims(username))
 			rec := httptest.NewRecorder()
@@ -469,9 +467,9 @@ func TestProjectUsersHaveReadOnlyBuildResourceAccess(t *testing.T) {
 			method string
 			path   string
 		}{
-			{http.MethodPost, apiPrefix + "/projects/project-a/buildresources"},
-			{http.MethodPut, apiPrefix + "/projects/project-a/buildresources/project-a"},
-			{http.MethodDelete, apiPrefix + "/projects/project-a/buildresources/project-a"},
+			{http.MethodPost, apiPrefix + "/buildresourceconfigs"},
+			{http.MethodPut, apiPrefix + "/buildresourceconfigs/default"},
+			{http.MethodDelete, apiPrefix + "/buildresourceconfigs/default"},
 		}
 		for _, write := range writes {
 			req := authenticatedRequest(t, write.method, write.path, strings.NewReader(`{}`), userClaims(username))
@@ -482,8 +480,8 @@ func TestProjectUsersHaveReadOnlyBuildResourceAccess(t *testing.T) {
 			}
 		}
 	}
-	if buildResourceWrites.Load() != 0 {
-		t.Fatalf("project user writes reached upstream %d times", buildResourceWrites.Load())
+	if buildResourceConfigWrites.Load() != 0 {
+		t.Fatalf("project user writes reached upstream %d times", buildResourceConfigWrites.Load())
 	}
 }
 
@@ -810,7 +808,7 @@ func TestOpsInheritsProjectUserPermissions(t *testing.T) {
 	}
 }
 
-func TestOpsCanOperateBuildResources(t *testing.T) {
+func TestOpsCanOperateBuildResourceConfigs(t *testing.T) {
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-EBS-User") != "operator" || r.Header.Get("X-EBS-Scopes") != "ebs:ops" {
 			t.Fatalf("unexpected identity headers: %#v", r.Header)
@@ -822,11 +820,11 @@ func TestOpsCanOperateBuildResources(t *testing.T) {
 		method string
 		path   string
 	}{
-		{http.MethodGet, apiPrefix + "/projects/project-a/buildresources"},
-		{http.MethodPost, apiPrefix + "/projects/project-a/buildresources"},
-		{http.MethodGet, apiPrefix + "/projects/project-a/buildresources/project-a"},
-		{http.MethodPut, apiPrefix + "/projects/project-a/buildresources/project-a"},
-		{http.MethodDelete, apiPrefix + "/projects/project-a/buildresources/project-a"},
+		{http.MethodGet, apiPrefix + "/buildresourceconfigs"},
+		{http.MethodPost, apiPrefix + "/buildresourceconfigs"},
+		{http.MethodGet, apiPrefix + "/buildresourceconfigs/default"},
+		{http.MethodPut, apiPrefix + "/buildresourceconfigs/default"},
+		{http.MethodDelete, apiPrefix + "/buildresourceconfigs/other"},
 	}
 	for _, tc := range tests {
 		req := authenticatedRequest(t, tc.method, tc.path, strings.NewReader(`{}`), opsClaims())
@@ -838,8 +836,9 @@ func TestOpsCanOperateBuildResources(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ method, path string }{
-		{http.MethodPatch, apiPrefix + "/projects/project-a/buildresources/project-a"},
-		{http.MethodPost, apiPrefix + "/projects/project-a/buildresources/project-a"},
+		{http.MethodPatch, apiPrefix + "/buildresourceconfigs/default"},
+		{http.MethodPost, apiPrefix + "/buildresourceconfigs/default"},
+		{http.MethodGet, apiPrefix + "/projects/project-a/buildresourceconfigs/default"},
 	} {
 		req := authenticatedRequest(t, tc.method, tc.path, strings.NewReader(`{}`), opsClaims())
 		rec := httptest.NewRecorder()
@@ -850,7 +849,7 @@ func TestOpsCanOperateBuildResources(t *testing.T) {
 	}
 }
 
-func TestDefaultBuildResourceCannotBeDeleted(t *testing.T) {
+func TestDefaultBuildResourceConfigCannotBeDeleted(t *testing.T) {
 	var upstreamCalls atomic.Int32
 	gw := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalls.Add(1)
@@ -864,13 +863,12 @@ func TestDefaultBuildResourceCannotBeDeleted(t *testing.T) {
 		claims jwtClaims
 		want   int
 	}{
-		{"ops", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default", opsClaims(), http.StatusForbidden},
-		{"admin", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default", adminClaims(), http.StatusForbidden},
-		{"system", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default", systemClaims(), http.StatusForbidden},
-		{"trailing slash", http.MethodDelete, apiPrefix + "/projects/default/buildresources/default/", opsClaims(), http.StatusForbidden},
-		{"other rule in default namespace", http.MethodDelete, apiPrefix + "/projects/default/buildresources/other", opsClaims(), http.StatusOK},
-		{"default rule in another project", http.MethodDelete, apiPrefix + "/projects/project-a/buildresources/default", opsClaims(), http.StatusOK},
-		{"update global default rule", http.MethodPut, apiPrefix + "/projects/default/buildresources/default", opsClaims(), http.StatusOK},
+		{"ops", http.MethodDelete, apiPrefix + "/buildresourceconfigs/default", opsClaims(), http.StatusForbidden},
+		{"admin", http.MethodDelete, apiPrefix + "/buildresourceconfigs/default", adminClaims(), http.StatusForbidden},
+		{"system", http.MethodDelete, apiPrefix + "/buildresourceconfigs/default", systemClaims(), http.StatusForbidden},
+		{"trailing slash", http.MethodDelete, apiPrefix + "/buildresourceconfigs/default/", opsClaims(), http.StatusForbidden},
+		{"other rule", http.MethodDelete, apiPrefix + "/buildresourceconfigs/other", opsClaims(), http.StatusOK},
+		{"update global default rule", http.MethodPut, apiPrefix + "/buildresourceconfigs/default", opsClaims(), http.StatusOK},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

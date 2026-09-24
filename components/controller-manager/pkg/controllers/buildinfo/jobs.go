@@ -1,6 +1,6 @@
 // jobs.go implements the Job lifecycle of the BuildInfo controller (design
 // 15.3 / 6.5.1): deterministic naming and identity annotations, the G-08
-// label set, BuildResource/BuildConf resolution, the payload construction
+// label set, BuildResourceConfig/BuildConf resolution, the payload construction
 // contract, the register-then-create dispatch pipeline with AlreadyExists /
 // Unknown confirmation, and the List backfill (7.4.2 count floor, 7.4.4
 // latest pick, 7.4.5 phase mapping, 7.4.7 install backfill).
@@ -22,9 +22,9 @@ import (
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
+	yaml "gopkg.in/yaml.v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	yaml "gopkg.in/yaml.v2"
 )
 
 // Job field constants (design 15.3.1).
@@ -35,9 +35,8 @@ const (
 
 	annBuildInfoUID           = "ebs.io/buildinfo-uid"
 	annDispatchGeneration     = "ebs.io/dispatch-generation"
-	annBuildResourceNamespace = "ebs.io/build-resource-namespace"
-	annBuildResource          = "ebs.io/build-resource"
-	annBuildResourceGen       = "ebs.io/build-resource-generation"
+	annBuildResourceConfig    = "ebs.io/build-resource-config"
+	annBuildResourceConfigGen = "ebs.io/build-resource-config-generation"
 )
 
 // jobNameFor derives the deterministic Job name (design 15.3.1): the hash is
@@ -139,7 +138,7 @@ func missingBuildRequires(depend *specparse.SpecDepend, sources *rpmver.RpmMetaS
 
 // dispatchSpec runs the full single-spec dispatch pipeline: pending-entry
 // reuse with GET verification (6.5.1 #4) or registration (先登记再请求),
-// BuildResource resolution (E-27), Job construction and CreateJob outcome
+// BuildResourceConfig resolution (E-27), Job construction and CreateJob outcome
 // handling (success / AlreadyExists / Unknown / NotSent / Rejected), and the
 // confirmed dispatch write-back. The E-19 arch check and the 7.4.1
 // dependency verdict run at the caller; image resolution happens once per
@@ -173,13 +172,12 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		}
 	}
 
-	// BuildResource resolution (15.3.1): project table with default/default
-	// fallback inside the typed client; both 404 is the E-27 verdict.
-	resource, err := c.client.GetBuildResource(ctx, namespace, namespace)
+	// The cluster-wide default table is the sole source of Job resources.
+	resource, err := c.client.GetBuildResourceConfig(ctx)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			message := fmt.Sprintf("BuildResource not found: project %s/%s and fallback default/default", namespace, namespace)
-			return c.markSpecFailed(ctx, round, specName, ConditionDefaultBuildResourceNotFound, ReasonDefaultBuildResourceNotFound, message, !entryExisted)
+			message := "default BuildResourceConfig not found"
+			return c.markSpecFailed(ctx, round, specName, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound, message, !entryExisted)
 		}
 		return controller.ReconcileResult{}, err
 	}
@@ -374,7 +372,7 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 // --- Job construction (design 15.3.1) ---
 
 // jobForSpec builds the Job object with every controller-filled field.
-func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *ebsv1.BuildResource, name string, generation int64) *ebsv1.Job {
+func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *ebsv1.BuildResourceConfig, name string, generation int64) *ebsv1.Job {
 	buildInfo := round.current
 	target := round.build.Spec.BuildTarget
 	runtimeSpec, _ := json.Marshal(map[string]string{"image": image})
@@ -384,18 +382,17 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 			Name:      name,
 			Namespace: buildInfo.Namespace,
 			Labels: map[string]string{
-				ebsv1.JobBuildNameLabel:   buildInfo.Name,
-				ebsv1.JobSpecNameLabel:    specName,
-				ebsv1.JobPackageNameLabel: packageNameLabelValue(depend.RepoName),
-				ebsv1.BuildTargetOSLabel:  target.Os,
+				ebsv1.JobBuildNameLabel:    buildInfo.Name,
+				ebsv1.JobSpecNameLabel:     specName,
+				ebsv1.JobPackageNameLabel:  packageNameLabelValue(depend.RepoName),
+				ebsv1.BuildTargetOSLabel:   target.Os,
 				ebsv1.BuildTargetArchLabel: target.Arch,
 			},
 			Annotations: map[string]string{
 				annBuildInfoUID:           string(buildInfo.UID),
 				annDispatchGeneration:     strconv.FormatInt(generation, 10),
-				annBuildResourceNamespace: resource.Namespace,
-				annBuildResource:          resource.Name,
-				annBuildResourceGen:       strconv.FormatInt(resource.Generation, 10),
+				annBuildResourceConfig:    resource.Name,
+				annBuildResourceConfigGen: strconv.FormatInt(resource.Generation, 10),
 			},
 		},
 		Spec: ebsv1.JobSpec{
@@ -484,11 +481,11 @@ func (c *Controller) marshalPayload(round *reconcileRound, base map[string]any) 
 	return string(payload)
 }
 
-// resolveResources merges the BuildResource levels (design 15.3.1 /
+// resolveResources merges the BuildResourceConfig levels (design 15.3.1 /
 // build-configuration.md 3.5): spec.default -> packages[spec].default ->
 // packages[spec].arches[arch], per-field override; each level's unset limits
 // take the same level's requests.
-func resolveResources(resource *ebsv1.BuildResource, specName, arch string) ebsv1.ResourceRequirements {
+func resolveResources(resource *ebsv1.BuildResourceConfig, specName, arch string) ebsv1.ResourceRequirements {
 	merged := normalizeResourceLevel(resource.Spec.Default)
 	if pkg, ok := resource.Spec.Packages[specName]; ok {
 		merged = overlayResources(merged, pkg.Default)

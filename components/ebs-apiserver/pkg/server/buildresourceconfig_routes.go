@@ -21,9 +21,9 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-const maxBuildResourceRequestSize = 16 << 20
+const maxBuildResourceConfigRequestSize = 16 << 20
 
-type buildResourceStorage interface {
+type buildResourceConfigStorage interface {
 	rest.Getter
 	rest.Lister
 	rest.Creater
@@ -31,13 +31,13 @@ type buildResourceStorage interface {
 	rest.GracefulDeleter
 }
 
-func installBuildResourceRoutes(srv handlerServer, storage buildResourceStorage) error {
+func installBuildResourceConfigRoutes(srv handlerServer, storage buildResourceConfigStorage) error {
 	ws := ebsV1WebService(srv)
 	if ws == nil {
 		return fmt.Errorf("ebs/v1 web service is not installed")
 	}
-	handler := &buildResourceHandler{storage: storage}
-	base := "/projects/{project}/buildresources"
+	handler := &buildResourceConfigHandler{storage: storage}
+	base := "/buildresourceconfigs"
 	ws.Route(ws.GET(base).To(handler.list))
 	ws.Route(ws.POST(base).To(handler.create))
 	ws.Route(ws.GET(base + "/{name}").To(handler.get))
@@ -59,131 +59,109 @@ func ebsV1WebService(server handlerServer) *restful.WebService {
 	return nil
 }
 
-type buildResourceHandler struct{ storage buildResourceStorage }
+type buildResourceConfigHandler struct{ storage buildResourceConfigStorage }
 
-func (h *buildResourceHandler) list(req *restful.Request, resp *restful.Response) {
-	ctx, _, ok := buildResourceRequest(req, resp, false)
-	if !ok {
-		return
-	}
-	options, err := buildResourceListOptions(req)
+func (h *buildResourceConfigHandler) list(req *restful.Request, resp *restful.Response) {
+	ctx, _ := buildResourceConfigRequest(req, false)
+	options, err := resourceListOptions(req)
 	if err != nil {
-		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
+		writeBuildResourceConfigError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
 	obj, err := h.storage.List(ctx, options)
 	if err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 		return
 	}
 	_ = resp.WriteEntity(obj)
 }
 
-func (h *buildResourceHandler) get(req *restful.Request, resp *restful.Response) {
-	ctx, name, ok := buildResourceRequest(req, resp, true)
-	if !ok {
-		return
-	}
+func (h *buildResourceConfigHandler) get(req *restful.Request, resp *restful.Response) {
+	ctx, name := buildResourceConfigRequest(req, true)
 	obj, err := h.storage.Get(ctx, name, &metav1.GetOptions{})
 	if err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 		return
 	}
 	_ = resp.WriteEntity(obj)
 }
 
-func (h *buildResourceHandler) create(req *restful.Request, resp *restful.Response) {
-	ctx, project, ok := buildResourceRequest(req, resp, false)
-	if !ok {
-		return
-	}
-	obj, err := decodeBuildResource(req.Request.Body)
+func (h *buildResourceConfigHandler) create(req *restful.Request, resp *restful.Response) {
+	ctx, _ := buildResourceConfigRequest(req, false)
+	obj, err := decodeBuildResourceConfig(req.Request.Body)
 	if err != nil {
-		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
+		writeBuildResourceConfigError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
-	if err := normalizeBuildResourceIdentity(obj, project, obj.Name); err != nil {
-		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
+	if err := normalizeBuildResourceConfigIdentity(obj, obj.Name); err != nil {
+		writeBuildResourceConfigError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
 	created, err := h.storage.Create(ctx, obj, nil, &metav1.CreateOptions{})
 	if err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 		return
 	}
 	resp.WriteHeaderAndEntity(http.StatusCreated, created)
 }
 
-func (h *buildResourceHandler) update(req *restful.Request, resp *restful.Response) {
-	ctx, name, ok := buildResourceRequest(req, resp, true)
-	if !ok {
-		return
-	}
-	obj, err := decodeBuildResource(req.Request.Body)
+func (h *buildResourceConfigHandler) update(req *restful.Request, resp *restful.Response) {
+	ctx, name := buildResourceConfigRequest(req, true)
+	obj, err := decodeBuildResourceConfig(req.Request.Body)
 	if err != nil {
-		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
+		writeBuildResourceConfigError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
-	project, _ := genericapirequest.NamespaceFrom(ctx)
-	if err := normalizeBuildResourceIdentity(obj, project, name); err != nil {
-		writeBuildResourceError(resp, apierrors.NewBadRequest(err.Error()))
+	if err := normalizeBuildResourceConfigIdentity(obj, name); err != nil {
+		writeBuildResourceConfigError(resp, apierrors.NewBadRequest(err.Error()))
 		return
 	}
 	updated, _, err := h.storage.Update(ctx, name, rest.DefaultUpdatedObjectInfo(obj), nil, nil, false, &metav1.UpdateOptions{})
 	if err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 		return
 	}
 	_ = resp.WriteEntity(updated)
 }
 
-func (h *buildResourceHandler) delete(req *restful.Request, resp *restful.Response) {
-	ctx, name, ok := buildResourceRequest(req, resp, true)
-	if !ok {
-		return
-	}
+func (h *buildResourceConfigHandler) delete(req *restful.Request, resp *restful.Response) {
+	ctx, name := buildResourceConfigRequest(req, true)
 	deleted, _, err := h.storage.Delete(ctx, name, nil, &metav1.DeleteOptions{})
 	if err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 		return
 	}
 	_ = resp.WriteEntity(deleted)
 }
 
-func buildResourceRequest(req *restful.Request, resp *restful.Response, item bool) (context.Context, string, bool) {
-	project := req.PathParameter("project")
-	if project == "" {
-		writeBuildResourceError(resp, apierrors.NewBadRequest("project is required"))
-		return nil, "", false
-	}
-	name := project
+func buildResourceConfigRequest(req *restful.Request, item bool) (context.Context, string) {
+	name := ""
 	if item {
 		name = req.PathParameter("name")
 	}
-	return genericapirequest.WithNamespace(req.Request.Context(), project), name, true
+	return genericapirequest.WithNamespace(req.Request.Context(), ""), name
 }
 
-func normalizeBuildResourceIdentity(obj *ebsv1.BuildResource, project, name string) error {
+func normalizeBuildResourceConfigIdentity(obj *ebsv1.BuildResourceConfig, name string) error {
 	if obj.Name != "" && obj.Name != name {
 		return fmt.Errorf("metadata.name must equal %q", name)
 	}
-	if obj.Namespace != "" && obj.Namespace != project {
-		return fmt.Errorf("metadata.namespace must equal %q", project)
+	if obj.Namespace != "" || obj.GenerateName != "" {
+		return fmt.Errorf("BuildResourceConfig does not support namespace or generateName")
 	}
 	obj.Name = name
-	obj.Namespace = project
 	obj.APIVersion = ebsv1.SchemeGroupVersion.String()
-	obj.Kind = "BuildResource"
+	obj.Kind = "BuildResourceConfig"
 	return nil
 }
 
-func decodeBuildResource(body io.ReadCloser) (*ebsv1.BuildResource, error) {
+func decodeBuildResourceConfig(body io.ReadCloser) (*ebsv1.BuildResourceConfig, error) {
 	defer body.Close()
-	decoder := json.NewDecoder(io.LimitReader(body, maxBuildResourceRequestSize+1))
+	decoder := json.NewDecoder(io.LimitReader(body, maxBuildResourceConfigRequestSize+1))
 	decoder.DisallowUnknownFields()
-	var obj ebsv1.BuildResource
+	var obj ebsv1.BuildResourceConfig
 	if err := decoder.Decode(&obj); err != nil {
-		return nil, fmt.Errorf("decode BuildResource: %w", err)
+		return nil, fmt.Errorf("decode BuildResourceConfig: %w", err)
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
 		return nil, err
@@ -201,7 +179,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return fmt.Errorf("request body must contain exactly one object")
 }
 
-func buildResourceListOptions(req *restful.Request) (*internalversion.ListOptions, error) {
+func resourceListOptions(req *restful.Request) (*internalversion.ListOptions, error) {
 	options := &internalversion.ListOptions{}
 	var err error
 	if value := req.QueryParameter("labelSelector"); value != "" {
@@ -226,7 +204,7 @@ func buildResourceListOptions(req *restful.Request) (*internalversion.ListOption
 	return options, nil
 }
 
-func writeBuildResourceError(resp *restful.Response, err error) {
+func writeBuildResourceConfigError(resp *restful.Response, err error) {
 	status := apierrors.NewInternalError(err).ErrStatus
 	if apiStatus, ok := err.(apierrors.APIStatus); ok {
 		status = apiStatus.Status()

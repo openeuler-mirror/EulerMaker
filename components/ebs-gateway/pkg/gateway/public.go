@@ -25,7 +25,6 @@ var projectScopedResources = map[string]struct{}{
 	"buildinfos":     {},
 	"rpmrepos":       {},
 	"jobs":           {},
-	"buildresources": {},
 }
 
 func hasAuthorizationHeader(r *http.Request) bool {

@@ -79,7 +79,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.BaseBuildRef":                  {"name"},
 		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
-		"ebs-api/ebs/v1.BuildResourceSpec":             {"default", "packages"},
+		"ebs-api/ebs/v1.BuildResourceConfigSpec":             {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
 		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
 		"ebs-api/ebs/v1.SnapshotStatus":                {"phase", "conditions"},
@@ -252,8 +252,8 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 		t.Fatalf("create API group info: %v", err)
 	}
 	storageMap := apiGroup.VersionedResourcesStorageMap["v1"]
-	if _, ok := storageMap["buildresources"]; ok {
-		t.Fatal("BuildResource must not register a global API storage")
+	if _, ok := storageMap["buildresourceconfigs"]; ok {
+		t.Fatal("BuildResourceConfig must not register a global API storage")
 	}
 
 	for _, resource := range []string{"projects", "snapshots", "builds", "buildinfos", "rpmrepos"} {

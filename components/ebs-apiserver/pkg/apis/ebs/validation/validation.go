@@ -289,13 +289,13 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 	return allErrs
 }
 
-func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
+func ValidateBuildResourceConfig(obj *ebsv1.BuildResourceConfig) field.ErrorList {
 	var allErrs field.ErrorList
 	if obj.Name == "" {
 		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "name"), "name is required"))
 	}
-	if obj.Namespace == "" {
-		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "namespace"), "namespace is required"))
+	if obj.Namespace != "" {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "namespace"), "BuildResourceConfig is cluster-scoped"))
 	}
 
 	specPath := field.NewPath("spec")
@@ -304,14 +304,14 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 	if !defaultConfigured {
 		defaultErrs = append(defaultErrs, field.Required(specPath.Child("default"), "a complete table default is required"))
 	} else {
-		defaultErrs = validateBuildResources(obj.Spec.Default, specPath.Child("default"), true)
+		defaultErrs = validateBuildResourceConfigs(obj.Spec.Default, specPath.Child("default"), true)
 		if len(defaultErrs) == 0 {
 			effectiveDefault := mergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
 			defaultErrs = append(defaultErrs, validateEffectiveResourceLimits(effectiveDefault, specPath.Child("default"))...)
 		}
 	}
 	allErrs = append(allErrs, defaultErrs...)
-	if len(obj.Spec.Packages) == 0 && !(obj.Namespace == "default" && obj.Name == "default" && defaultConfigured) {
+	if len(obj.Spec.Packages) == 0 && !(obj.Name == "default" && defaultConfigured) {
 		allErrs = append(allErrs, field.Required(specPath.Child("packages"), "at least one package is required"))
 	}
 	for packageName, config := range obj.Spec.Packages {
@@ -326,7 +326,7 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 		packageBase := mergeResourceRequirements(ebsv1.ResourceRequirements{}, obj.Spec.Default)
 		packageBaseValid := len(defaultErrs) == 0
 		if packageDefault {
-			packageErrs := validateBuildResources(config.Default, packagePath.Child("default"), false)
+			packageErrs := validateBuildResourceConfigs(config.Default, packagePath.Child("default"), false)
 			allErrs = append(allErrs, packageErrs...)
 			packageBase = mergeResourceRequirements(packageBase, config.Default)
 			packageBaseValid = packageBaseValid && len(packageErrs) == 0
@@ -345,7 +345,7 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 				allErrs = append(allErrs, field.Required(archPath, "at least one resource override is required"))
 				continue
 			}
-			archErrs := validateBuildResources(resources, archPath, false)
+			archErrs := validateBuildResourceConfigs(resources, archPath, false)
 			allErrs = append(allErrs, archErrs...)
 			if packageBaseValid && len(archErrs) == 0 {
 				effective := mergeResourceRequirements(packageBase, resources)
@@ -356,8 +356,8 @@ func ValidateBuildResource(obj *ebsv1.BuildResource) field.ErrorList {
 	return allErrs
 }
 
-func ValidateBuildResourceUpdate(newObj, oldObj *ebsv1.BuildResource) field.ErrorList {
-	return ValidateBuildResource(newObj)
+func ValidateBuildResourceConfigUpdate(newObj, oldObj *ebsv1.BuildResourceConfig) field.ErrorList {
+	return ValidateBuildResourceConfig(newObj)
 }
 
 func resourceRequirementsEmpty(resources ebsv1.ResourceRequirements) bool {
@@ -387,7 +387,7 @@ func mergeResourceRequirements(base, override ebsv1.ResourceRequirements) ebsv1.
 	return merged
 }
 
-func validateBuildResources(resources ebsv1.ResourceRequirements, path *field.Path, complete bool) field.ErrorList {
+func validateBuildResourceConfigs(resources ebsv1.ResourceRequirements, path *field.Path, complete bool) field.ErrorList {
 	var allErrs field.ErrorList
 	requests, requestErrs := validateResourceMap(resources.Requests, path.Child("requests"), complete)
 	allErrs = append(allErrs, requestErrs...)

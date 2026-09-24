@@ -17,7 +17,7 @@ var (
 	SnapshotsGVR       = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "snapshots"}
 	BuildsGVR          = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
 	BuildInfosGVR      = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "buildinfos"}
-	BuildResourcesGVR  = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "buildresources"}
+	BuildResourceConfigsGVR  = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "buildresourceconfigs"}
 	RpmReposGVR        = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "rpmrepos"}
 	JobsGVR            = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
 	RunnersGVR         = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}

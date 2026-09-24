@@ -24,7 +24,7 @@ import (
 //go:embed default-build-conf.yaml
 var defaultBuildConfTemplate []byte
 
-func ensureDefaultBuildConf(ctx context.Context, storage defaultBuildResourceStorage) error {
+func ensureDefaultBuildConf(ctx context.Context, storage defaultBuildResourceConfigStorage) error {
 	ctx = apirequest.WithNamespace(ctx, "")
 	if _, err := storage.Get(ctx, "default", &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		return err
@@ -63,7 +63,7 @@ type buildConfHandler struct{ store *esstore.Store }
 
 func (h *buildConfHandler) handle(req *restful.Request, resp *restful.Response) {
 	if err := h.serve(req, resp); err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 	}
 }
 
@@ -84,7 +84,7 @@ func (h *buildConfHandler) serve(req *restful.Request, resp *restful.Response) e
 	var patchVersion string
 	if method == http.MethodGet || method == http.MethodHead {
 		if name == "" {
-			opts, err := buildResourceListOptions(req)
+			opts, err := resourceListOptions(req)
 			if err != nil {
 				return apierrors.NewBadRequest(err.Error())
 			}
@@ -112,11 +112,11 @@ func (h *buildConfHandler) serve(req *restful.Request, resp *restful.Response) e
 	if req.QueryParameter("dryRun") != "" {
 		return apierrors.NewBadRequest("dryRun is not supported by BuildConf")
 	}
-	data, err := io.ReadAll(io.LimitReader(req.Request.Body, maxBuildResourceRequestSize+1))
+	data, err := io.ReadAll(io.LimitReader(req.Request.Body, maxBuildResourceConfigRequestSize+1))
 	if err != nil {
 		return apierrors.NewBadRequest(err.Error())
 	}
-	if len(data) > maxBuildResourceRequestSize {
+	if len(data) > maxBuildResourceConfigRequestSize {
 		return apierrors.NewRequestEntityTooLargeError("BuildConf exceeds request limit")
 	}
 	if method == http.MethodPatch {
@@ -170,7 +170,7 @@ func (h *buildConfHandler) serve(req *restful.Request, resp *restful.Response) e
 }
 
 func decodeBuildConf(data []byte) (*ebsv1.BuildConf, error) {
-	if len(data) > maxBuildResourceRequestSize {
+	if len(data) > maxBuildResourceConfigRequestSize {
 		return nil, fmt.Errorf("BuildConf exceeds request limit")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
