@@ -26,11 +26,11 @@ func ValidateBuildTargetConfig(configs rest.Getter, next rest.ValidateObjectFunc
 		if !ok || conf == nil {
 			return apierrors.NewServiceUnavailable("invalid build-target Config response")
 		}
-		var content ebsv1.BuildConfSpec
+		var content ebsv1.BuildTargetContent
 		if err := yaml.UnmarshalStrict([]byte(conf.Spec.Content), &content); err != nil {
 			return apierrors.NewServiceUnavailable("invalid build-target Config content")
 		}
-		if len(validation.ValidateBuildConf(&ebsv1.BuildConf{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: content})) != 0 {
+		if len(validation.ValidateBuildTargetContent(&content)) != 0 {
 			return apierrors.NewServiceUnavailable("invalid build-target Config content")
 		}
 		if content.Targets[build.Spec.BuildTarget.Os].Arches[build.Spec.BuildTarget.Arch].Image == "" {

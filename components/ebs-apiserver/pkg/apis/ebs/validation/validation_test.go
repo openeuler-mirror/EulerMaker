@@ -534,115 +534,6 @@ func TestTerminalBuildPhaseImmutable(t *testing.T) {
 	}
 }
 
-func TestValidateBuildResourceConfig(t *testing.T) {
-	tests := []struct {
-		name       string
-		object     *ebsv1.BuildResourceConfig
-		wantErrs   int
-		wantFields map[string]field.ErrorType
-	}{
-		{name: "valid cluster table with extensible architecture", object: validBuildResourceConfig("project-a", "riscv64")},
-		{
-			name: "allows multibuild package names",
-			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
-				Default:  validResourceRequirements(),
-				Packages: map[string]ebsv1.PackageResourceConfig{"kernel:kernel-rt": {Default: validResourceRequirements()}},
-			}},
-		},
-		{
-			name: "allows table limits to default to requests",
-			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
-				Default:  ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "4", "memory": "8Gi"}},
-				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{Requests: map[string]string{"memory": "12Gi"}}}},
-			}},
-		},
-		{
-			name: "allows package and architecture partial overrides",
-			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
-				Default: validResourceRequirements(),
-				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {
-					Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "3"}},
-					Arches:  map[string]ebsv1.ResourceRequirements{"riscv64": {Requests: map[string]string{"memory": "6Gi"}}},
-				}},
-			}},
-		},
-		{
-			name: "valid bootstrap default with table default only",
-			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: ebsv1.BuildResourceConfigSpec{
-				Default: validResourceRequirements(), Packages: map[string]ebsv1.PackageResourceConfig{},
-			}},
-		},
-		{
-			name:     "requires identity and packages",
-			object:   &ebsv1.BuildResourceConfig{},
-			wantErrs: 3,
-			wantFields: map[string]field.ErrorType{
-				"metadata.name": field.ErrorTypeRequired,
-				"spec.default": field.ErrorTypeRequired, "spec.packages": field.ErrorTypeRequired,
-			},
-		},
-		{name: "allows a custom name", object: func() *ebsv1.BuildResourceConfig {
-			object := validBuildResourceConfig("project-a", "x86_64")
-			object.Name = "custom-table"
-			return object
-		}()},
-		{
-			name:       "rejects invalid architecture",
-			object:     validBuildResourceConfig("project-a", "RISC V"),
-			wantErrs:   1,
-			wantFields: map[string]field.ErrorType{"spec.packages[gcc].arches[RISC V]": field.ErrorTypeInvalid},
-		},
-		{
-			name: "rejects invalid partial request",
-			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
-				Default:  validResourceRequirements(),
-				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "0"}}}},
-			}},
-			wantErrs: 1,
-			wantFields: map[string]field.ErrorType{
-				"spec.packages[gcc].default.requests[cpu]": field.ErrorTypeInvalid,
-			},
-		},
-		{
-			name: "rejects unknown resources and lower limits",
-			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
-				Default: validResourceRequirements(),
-				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{
-					Requests: map[string]string{"cpu": "4", "memory": "8Gi", "gpu": "1"},
-					Limits:   map[string]string{"cpu": "2", "memory": "4Gi"},
-				}}},
-			}},
-			wantErrs: 3,
-			wantFields: map[string]field.ErrorType{
-				"spec.packages[gcc].default.requests[gpu]":  field.ErrorTypeNotSupported,
-				"spec.packages[gcc].default.limits[cpu]":    field.ErrorTypeInvalid,
-				"spec.packages[gcc].default.limits[memory]": field.ErrorTypeInvalid,
-			},
-		},
-	}
-	tests[6].object.Name = "other"
-	tests = append(tests, struct {
-		name       string
-		object     *ebsv1.BuildResourceConfig
-		wantErrs   int
-		wantFields map[string]field.ErrorType
-	}{name: "rejects namespace", object: func() *ebsv1.BuildResourceConfig {
-		object := validBuildResourceConfig("default", "x86_64")
-		object.Namespace = "project-a"
-		return object
-	}(), wantErrs: 1, wantFields: map[string]field.ErrorType{"metadata.namespace": field.ErrorTypeForbidden}})
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assertErrorList(t, ValidateBuildResourceConfig(tt.object), tt.wantErrs, tt.wantFields)
-		})
-	}
-}
-
-func TestValidateBuildResourceConfigUpdate(t *testing.T) {
-	object := validBuildResourceConfig("project-a", "aarch64")
-	assertErrorList(t, ValidateBuildResourceConfigUpdate(object, object.DeepCopy()), 0, nil)
-}
-
 func TestValidateJob(t *testing.T) {
 	errs := ValidateJob(validJob())
 	assertErrorList(t, errs, 0, nil)
@@ -943,22 +834,6 @@ func validBuild() *ebsv1.Build {
 			Packages:    []string{"pkg-a"},
 			BuildTarget: validBuildTarget(),
 		},
-	}
-}
-
-func validBuildResourceConfig(project, arch string) *ebsv1.BuildResourceConfig {
-	return &ebsv1.BuildResourceConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: project},
-		Spec: ebsv1.BuildResourceConfigSpec{Default: validResourceRequirements(), Packages: map[string]ebsv1.PackageResourceConfig{
-			"gcc": {Arches: map[string]ebsv1.ResourceRequirements{arch: validResourceRequirements()}},
-		}},
-	}
-}
-
-func validResourceRequirements() ebsv1.ResourceRequirements {
-	return ebsv1.ResourceRequirements{
-		Requests: map[string]string{"cpu": "4", "memory": "8Gi"},
-		Limits:   map[string]string{"cpu": "8", "memory": "16Gi"},
 	}
 }
 

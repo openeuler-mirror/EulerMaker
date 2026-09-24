@@ -11,22 +11,13 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func ValidateBuildConf(obj *ebsv1.BuildConf) field.ErrorList {
+func ValidateBuildTargetContent(obj *ebsv1.BuildTargetContent) field.ErrorList {
 	var errs field.ErrorList
-	if obj.Name != "default" {
-		errs = append(errs, field.Invalid(field.NewPath("metadata", "name"), obj.Name, "must be default"))
+	if obj.Targets == nil {
+		errs = append(errs, field.Required(field.NewPath("targets"), "an object is required; use {} for no targets"))
 	}
-	if obj.Namespace != "" {
-		errs = append(errs, field.Forbidden(field.NewPath("metadata", "namespace"), "cluster-scoped resource"))
-	}
-	if obj.GenerateName != "" {
-		errs = append(errs, field.Forbidden(field.NewPath("metadata", "generateName"), "not supported"))
-	}
-	if obj.Spec.Targets == nil {
-		errs = append(errs, field.Required(field.NewPath("spec", "targets"), "an object is required; use {} for no targets"))
-	}
-	for os, target := range obj.Spec.Targets {
-		path := field.NewPath("spec", "targets").Key(os)
+	for os, target := range obj.Targets {
+		path := field.NewPath("targets").Key(os)
 		if os == "" || len(validation.IsValidLabelValue(os)) > 0 {
 			errs = append(errs, field.Invalid(path, os, "must be a nonempty label value"))
 		}
