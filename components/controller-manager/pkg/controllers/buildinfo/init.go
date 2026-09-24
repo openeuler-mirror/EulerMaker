@@ -40,8 +40,8 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		return result, err
 	}
 	asm := c.assembleSpecDepends(ctx, round, snapshot)
-	if asm.terminal != nil {
-		return c.closeoutInit(ctx, round, asm.terminal, asm.degraded)
+	if result, err = c.persistAssemblyFailures(ctx, round, asm); err != nil || result != (controller.ReconcileResult{}) {
+		return result, err
 	}
 	if asm.incomplete {
 		// Transient assembly gap: stay Pending and re-assemble next round.
@@ -63,14 +63,10 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	}
 
 	// Build-set determination (7.2.2 阶段二).
-	outcome, err := c.determineBuildSet(ctx, round, asm, sources.RepoLayer)
+	buildSet, err := c.determineBuildSet(round, asm, sources.RepoLayer)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	if outcome.terminal != nil {
-		return c.closeoutInit(ctx, round, outcome.terminal, asm.degraded)
-	}
-	buildSet := outcome.set
 	if len(buildSet) == 0 {
 		// Step 5: empty build set (full/incremental no-change) -> Completed.
 		return c.completeInitEmpty(ctx, round, asm.degraded)
@@ -359,6 +355,18 @@ func (c *Controller) writeStatusIfChanged(ctx context.Context, round *reconcileR
 	return c.writeStatus(ctx, round, next)
 }
 
+// persistAssemblyFailures records deterministic repository failures before
+// dispatch, including rounds that must wait for transient repository inputs.
+func (c *Controller) persistAssemblyFailures(ctx context.Context, round *reconcileRound, asm *specAssembly) (controller.ReconcileResult, error) {
+	next := round.current.DeepCopy()
+	var existing []string
+	if asm.incomplete {
+		existing = next.Status.FailedPackages
+	}
+	next.Status.FailedPackages = sortedFailedPackages(existing, asm.failedRepos)
+	return c.writeStatusIfChanged(ctx, round, next)
+}
+
 // applyDegradedConditions upserts this round's step-0 degradation conditions
 // and removes the two degradation types absent this round (each Pending
 // assembly fully re-evaluates them; terminal closeouts re-add their own).
@@ -515,8 +523,8 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		return result, err
 	}
 	asm := c.assembleSpecDepends(ctx, round, snapshot)
-	if asm.terminal != nil {
-		return c.closeoutInit(ctx, round, asm.terminal, asm.degraded)
+	if result, err = c.persistAssemblyFailures(ctx, round, asm); err != nil || result != (controller.ReconcileResult{}) {
+		return result, err
 	}
 	if asm.incomplete {
 		return controller.ReconcileResult{}, nil

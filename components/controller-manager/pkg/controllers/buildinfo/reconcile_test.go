@@ -439,6 +439,11 @@ func TestStatusMatchesIntent(t *testing.T) {
 	if statusMatchesIntent(base, pendA) {
 		t.Fatal("pendingJobCreates presence mismatch must not match")
 	}
+	failed := copyStatus(base)
+	failed.FailedPackages = []string{"repo1"}
+	if statusMatchesIntent(base, failed) {
+		t.Fatal("failedPackages mismatch must not match")
+	}
 }
 
 // --- 9.1/9.2 conditions ---

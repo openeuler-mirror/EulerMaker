@@ -1,7 +1,7 @@
 // init_test.go covers the 19.1 build-set (7.2.2/E-23/E-24) and single (7.2.3)
-// test groups: per-type build-set determination, base-round positioning and
-// failed-package merge, fixed-point downstream expansion, designated-repo
-// terminal closeouts vs per-package/spec degradations, the init deterministic
+// test groups: per-type build-set determination, parent Build package seeds,
+// fixed-point downstream expansion, shared incremental/specified degradation,
+// single-only empty-set closeouts, the init deterministic
 // checks (E-16/E-19/E-26/E-27) and the single直通 path (assembly, direct
 // dispatch, Repo injection, empty-set closeout).
 package buildinfo
@@ -151,29 +151,10 @@ func TestInitSpecifiedExpansionFixedPoint(t *testing.T) {
 	}
 }
 
-func TestInitIncrementalSeedsAndFailedMerge(t *testing.T) {
+func TestInitIncrementalUsesParentSeeds(t *testing.T) {
 	c, client, git, _ := newTestController(t)
-	seedHealthyBasics(client, "incremental")
-	// Base round: terminal full build with repo1@old/repo2@same; spec b failed
-	// (merge), spec w failed but its repo is gone (logged skip).
-	baseBuild := testBuildObj("full")
-	baseBuild.Name = "build0"
-	baseBuild.Status.Phase = ebsv1.BuildSuccess
-	client.SeedBuild(baseBuild)
-	baseInfo := testBuildInfoObj(ebsv1.BuildInfoCompleted)
-	baseInfo.Name = "build0"
-	baseInfo.Status.SpecStatus = map[string]ebsv1.SpecStatus{
-		"b": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildFailed}},
-		"w": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildFailed}},
-	}
-	client.SeedBuildInfo(baseInfo)
-	baseSnapshot := testSnapshotObj(
-		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1-old", declare: true},
-		repoEntry{name: "repo2", cloneURL: gitURL2, commitID: "c2", declare: true})
-	baseSnapshot.Name = "build0"
-	client.SeedSnapshot(baseSnapshot)
-	// Current round: repo1 commit changed (a), repo2 unchanged (b via merge),
-	// repo3 added (c).
+	seedHealthyBasics(client, "incremental", "repo1", "repo2", "repo3")
+	// The parent Build has already selected the seed repositories.
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1-new", declare: true},
 		repoEntry{name: "repo2", cloneURL: gitURL2, commitID: "c2", declare: true},
@@ -205,11 +186,11 @@ func TestInitIncrementalNoBaseCompletesEmpty(t *testing.T) {
 	requirePhase(t, bi, ebsv1.BuildInfoCompleted)
 	requireSpecNames(t, bi)
 	if len(bi.Status.Conditions) != 0 {
-		t.Fatalf("conditions = %v, want none (E-22 no base round)", bi.Status.Conditions)
+		t.Fatalf("conditions = %v, want none for empty incremental seed set", bi.Status.Conditions)
 	}
 }
 
-func TestInitSpecifiedEmptySetCloseout(t *testing.T) {
+func TestInitSpecifiedEmptySetCompletes(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "specified", "repo1")
 	client.SeedSnapshot(testSnapshotObj(
@@ -222,34 +203,42 @@ func TestInitSpecifiedEmptySetCloseout(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoCompleted)
-	requireCondition(t, bi.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecifiedBuildSetEmpty)
+	if len(bi.Status.Conditions) != 0 {
+		t.Fatalf("conditions = %v, want none for empty build set", bi.Status.Conditions)
+	}
 	requireSpecNames(t, bi)
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
 	}
 }
 
-func TestInitSpecifiedRepoMissingTerminal(t *testing.T) {
-	c, client, git, _ := newTestController(t)
-	// One designated repo missing from packageRepos terminates init even when
-	// the other designated repo assembles fine (E-24 先行收口).
-	seedHealthyBasics(client, "specified", "repo1", "ghost")
-	client.SeedSnapshot(testSnapshotObj(
-		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	client.SeedRpmRepo(testRpmRepoObj(""))
-	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
+func TestInitIncrementalAndSpecifiedRepoMissingDegrades(t *testing.T) {
+	for _, buildType := range []string{"incremental", "specified"} {
+		t.Run(buildType, func(t *testing.T) {
+			c, client, git, _ := newTestController(t)
+			// A missing seed is recorded but does not block the remaining build set.
+			seedHealthyBasics(client, buildType, "repo1", "ghost")
+			client.SeedSnapshot(testSnapshotObj(
+				repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+			client.SeedRpmRepo(testRpmRepoObj(""))
+			git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 
-	reconcileOnce(t, c)
+			reconcileOnce(t, c)
 
-	bi := getBuildInfo(t, client)
-	requirePhase(t, bi, ebsv1.BuildInfoCompleted)
-	cond := requireCondition(t, bi.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecifiedSpecCommitMissing)
-	if !strings.Contains(cond.Message, "ghost") {
-		t.Fatalf("condition message = %q, want the missing repo named", cond.Message)
-	}
-	requireSpecNames(t, bi)
-	if got := len(listJobs(t, client)); got != 0 {
-		t.Fatalf("jobs = %d, want 0", got)
+			bi := getBuildInfo(t, client)
+			requirePhase(t, bi, ebsv1.BuildInfoProcessing)
+			cond := requireCondition(t, bi.Status.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing)
+			if !strings.Contains(cond.Message, "ghost") {
+				t.Fatalf("condition message = %q, want the missing repo named", cond.Message)
+			}
+			requireSpecNames(t, bi, "a")
+			if got := bi.Status.FailedPackages; len(got) != 1 || got[0] != "ghost" {
+				t.Fatalf("failedPackages = %v, want [ghost]", got)
+			}
+			if got := len(listJobs(t, client)); got != 1 {
+				t.Fatalf("jobs = %d, want 1", got)
+			}
+		})
 	}
 }
 
@@ -319,12 +308,15 @@ func TestInitE23ParseFailureSkipsSpec(t *testing.T) {
 		t.Fatalf("condition message = %q, want repo1/bad.spec", cond.Message)
 	}
 	requireSpecNames(t, bi, "a")
+	if got := bi.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
+		t.Fatalf("failedPackages = %v, want [repo1]", got)
+	}
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
 		t.Fatalf("jobs = %v, want {a}", got)
 	}
 }
 
-func TestInitE23SpecifiedParseTerminal(t *testing.T) {
+func TestInitE23SpecifiedParseDegrades(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "specified", "repo1")
 	client.SeedSnapshot(testSnapshotObj(
@@ -336,11 +328,14 @@ func TestInitE23SpecifiedParseTerminal(t *testing.T) {
 	reconcileOnce(t, c)
 
 	bi := getBuildInfo(t, client)
-	requirePhase(t, bi, ebsv1.BuildInfoCompleted)
+	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	requireCondition(t, bi.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed)
-	requireSpecNames(t, bi)
-	if got := jobSpecNames(t, client); len(got) != 0 {
-		t.Fatalf("jobs = %v, want none", got)
+	requireSpecNames(t, bi, "a")
+	if got := bi.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
+		t.Fatalf("failedPackages = %v, want [repo1]", got)
+	}
+	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
+		t.Fatalf("jobs = %v, want {a}", got)
 	}
 }
 

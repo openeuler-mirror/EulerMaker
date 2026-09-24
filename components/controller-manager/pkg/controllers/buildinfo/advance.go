@@ -10,6 +10,7 @@ package buildinfo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -54,12 +55,6 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		return result, err
 	}
 	asm := c.assembleSpecDepends(ctx, round, snapshot)
-	if asm.terminal != nil {
-		// Defensive: a Processing re-assembly never produces a terminal
-		// verdict (init would have closed out first). Wait for the next round.
-		c.logf(round.key, "AssemblyTerminalInProcessing", "unexpected terminal verdict %s during processing assembly; round skipped", asm.terminal.reason)
-		return controller.ReconcileResult{}, nil
-	}
 	if asm.incomplete {
 		// Transient assembly gap: wait for the next round (7.3 step 2.2).
 		return controller.ReconcileResult{}, nil
@@ -101,7 +96,7 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 	}
 
 	// Step 5: completion check (6.4, effective required).
-	return c.checkCompletion(ctx, round, dcg)
+	return c.checkCompletion(ctx, round, dcg, asm)
 }
 
 // advanceDcg loads the persisted graph for the advance flow: the in-memory
@@ -400,7 +395,7 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 // pendingJobCreates map (6.5.1: every Completed path requires it). A
 // completed BuildInfo flips to Completed with PartialFailure (any Failed
 // spec) or AllSpecsSucceeded (9.1).
-func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound, dcg *DcgDict) (controller.ReconcileResult, error) {
+func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound, dcg *DcgDict, asm *specAssembly) (controller.ReconcileResult, error) {
 	var required map[string]int64
 	if dcg != nil {
 		required = dcg.DispatchRequirements()
@@ -421,7 +416,45 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 	if blocked := c.pendingCreatesBlock(round, "completion"); blocked {
 		return controller.ReconcileResult{}, nil
 	}
+	needsRepoMap := len(failed) > 0
+	for _, ss := range round.current.Status.SpecStatus {
+		needsRepoMap = needsRepoMap || ss.Install.Status == SpecBuildFailed
+	}
+	if asm == nil && needsRepoMap {
+		// The single path deliberately skips Snapshot reads while Jobs are in
+		// flight; recover the spec-to-repository map only for final failures.
+		if cached, ok := c.specDependsCache.Get(round.key); ok {
+			asm = &specAssembly{depends: cached}
+		} else {
+			snapshot, stop, result, err := c.currentSnapshot(ctx, round)
+			if stop {
+				return result, err
+			}
+			asm = c.assembleSpecDepends(ctx, round, snapshot)
+			if asm.incomplete {
+				return controller.ReconcileResult{}, nil
+			}
+		}
+	}
 	next := round.current.DeepCopy()
+	failedRepos := map[string]struct{}{}
+	if asm != nil {
+		for repo := range asm.failedRepos {
+			failedRepos[repo] = struct{}{}
+		}
+		for _, spec := range sortedSpecNames(round.current.Status.SpecStatus) {
+			ss := round.current.Status.SpecStatus[spec]
+			if ss.Build.Status != SpecBuildFailed && ss.Install.Status != SpecBuildFailed {
+				continue
+			}
+			depend, ok := asm.depends[spec]
+			if !ok || depend.RepoName == "" {
+				return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("cannot resolve repository for failed spec %q", spec))
+			}
+			failedRepos[depend.RepoName] = struct{}{}
+		}
+	}
+	next.Status.FailedPackages = sortedFailedPackages(next.Status.FailedPackages, failedRepos)
 	if len(failed) > 0 {
 		upsertCondition(&next.Status.Conditions, ConditionPartialFailure, ReasonPartialFailure, "failed specs: "+strings.Join(failed, ","))
 	} else {
@@ -458,7 +491,7 @@ func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (
 	if result, err := c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	return c.checkCompletion(ctx, round, nil)
+	return c.checkCompletion(ctx, round, nil, nil)
 }
 
 // --- 6.5 停止派发收敛路径 ---
