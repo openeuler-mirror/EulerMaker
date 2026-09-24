@@ -1,0 +1,514 @@
+package buildinfo
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+
+	ebsv1 "ebs-api/ebs/v1"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+// fakeClient is the in-package fake for the typed apiserver Client (design
+// 4.3). It keeps objects in memory maps and reproduces the server behaviors
+// the controller relies on: NotFound, 409 Conflict on stale resourceVersion,
+// 409 AlreadyExists on duplicate CreateJob, resourceVersion increments,
+// /status writes preserving the old spec, WriteError three-outcome injection
+// (Unknown may optionally persist the write, so confirmation reads return the
+// actual persisted state), label-filtered ListJobs, and ListBuilds filtering
+// with creationTimestamp-descending limit truncation.
+type fakeClient struct {
+	mu              sync.Mutex
+	buildinfos      map[string]*ebsv1.BuildInfo
+	jobs            map[string]*ebsv1.Job
+	builds          map[string]*ebsv1.Build
+	projects        map[string]*ebsv1.Project
+	snapshots       map[string]*ebsv1.Snapshot
+	rpmrepos        map[string]*ebsv1.RpmRepo
+	buildresources  map[string]*ebsv1.BuildResource
+	buildconf       *ebsv1.BuildConf
+	buildconfFailed bool
+
+	// injected per-operation write failures, consumed once each.
+	injectedWrites map[string]*injectedWrite
+	// injected per-resource-kind read failures with a countdown.
+	injectedReads map[string]*injectedRead
+
+	rv  int
+	uid int
+}
+
+type injectedWrite struct {
+	outcome    clientpkg.WriteOutcome
+	statusCode int
+	// persist applies the write to storage before returning the injected
+	// error (used to simulate an Unknown outcome whose intent landed).
+	persist bool
+	err     error
+}
+
+type injectedRead struct {
+	times int
+	err   error
+}
+
+var _ Client = (*fakeClient)(nil)
+
+func newFakeClient() *fakeClient {
+	return &fakeClient{
+		buildinfos:     make(map[string]*ebsv1.BuildInfo),
+		jobs:           make(map[string]*ebsv1.Job),
+		builds:         make(map[string]*ebsv1.Build),
+		projects:       make(map[string]*ebsv1.Project),
+		snapshots:      make(map[string]*ebsv1.Snapshot),
+		rpmrepos:       make(map[string]*ebsv1.RpmRepo),
+		buildresources: make(map[string]*ebsv1.BuildResource),
+		injectedWrites: make(map[string]*injectedWrite),
+		injectedReads:  make(map[string]*injectedRead),
+		rv:             100,
+	}
+}
+
+// InjectWrite makes the next write with the given operation ("update-status"
+// or "create") return a WriteError with the injected outcome instead of
+// performing the write. For Unknown, persist controls whether the write lands
+// in storage anyway, so a follow-up confirmation read observes the intent.
+func (f *fakeClient) InjectWrite(operation string, outcome clientpkg.WriteOutcome, statusCode int, persist bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.injectedWrites[operation] = &injectedWrite{outcome: outcome, statusCode: statusCode, persist: persist}
+}
+
+// InjectRead makes the next times reads of the given resource kind ("buildinfos",
+// "jobs", "rpmrepos", ...) return err instead of hitting storage.
+func (f *fakeClient) InjectRead(kind string, times int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.injectedReads[kind] = &injectedRead{times: times, err: err}
+}
+
+// SetBuildConf injects the BuildConf singleton (nil restores not-found).
+func (f *fakeClient) SetBuildConf(conf *ebsv1.BuildConf) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buildconf = conf
+}
+
+// FailBuildConf makes GetBuildConf return a query failure (E-26).
+func (f *fakeClient) FailBuildConf() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buildconfFailed = true
+}
+
+// Seed helpers pre-populate storage with server-assigned metadata and return
+// the stored copy.
+
+func (f *fakeClient) SeedBuildInfo(value *ebsv1.BuildInfo) *ebsv1.BuildInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if value.UID == "" {
+		value.UID = types.UID(f.nextUIDLocked())
+	}
+	if value.ResourceVersion == "" {
+		value.ResourceVersion = f.nextRVLocked()
+	}
+	f.buildinfos[value.Namespace+"/"+value.Name] = value.DeepCopy()
+	return value.DeepCopy()
+}
+
+func (f *fakeClient) SeedJob(value *ebsv1.Job) *ebsv1.Job {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := value.DeepCopy()
+	if stored.UID == "" {
+		stored.UID = types.UID(f.nextUIDLocked())
+	}
+	if stored.ResourceVersion == "" {
+		stored.ResourceVersion = f.nextRVLocked()
+	}
+	if stored.CreationTimestamp.IsZero() {
+		stored.CreationTimestamp = metav1.NewTime(time.Now())
+	}
+	f.jobs[stored.Namespace+"/"+stored.Name] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) SeedBuild(value *ebsv1.Build) *ebsv1.Build {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := value.DeepCopy()
+	if stored.UID == "" {
+		stored.UID = types.UID(f.nextUIDLocked())
+	}
+	if stored.ResourceVersion == "" {
+		stored.ResourceVersion = f.nextRVLocked()
+	}
+	if stored.CreationTimestamp.IsZero() {
+		stored.CreationTimestamp = metav1.NewTime(time.Now())
+	}
+	f.builds[stored.Namespace+"/"+stored.Name] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) SeedProject(value *ebsv1.Project) *ebsv1.Project {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := value.DeepCopy()
+	if stored.UID == "" {
+		stored.UID = types.UID(f.nextUIDLocked())
+	}
+	if stored.ResourceVersion == "" {
+		stored.ResourceVersion = f.nextRVLocked()
+	}
+	f.projects[stored.Name] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) SeedSnapshot(value *ebsv1.Snapshot) *ebsv1.Snapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := value.DeepCopy()
+	if stored.UID == "" {
+		stored.UID = types.UID(f.nextUIDLocked())
+	}
+	if stored.ResourceVersion == "" {
+		stored.ResourceVersion = f.nextRVLocked()
+	}
+	f.snapshots[stored.Namespace+"/"+stored.Name] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) SeedRpmRepo(value *ebsv1.RpmRepo) *ebsv1.RpmRepo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := value.DeepCopy()
+	if stored.UID == "" {
+		stored.UID = types.UID(f.nextUIDLocked())
+	}
+	if stored.ResourceVersion == "" {
+		stored.ResourceVersion = f.nextRVLocked()
+	}
+	f.rpmrepos[stored.Namespace+"/"+stored.Name] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) SeedBuildResource(value *ebsv1.BuildResource) *ebsv1.BuildResource {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := value.DeepCopy()
+	if stored.UID == "" {
+		stored.UID = types.UID(f.nextUIDLocked())
+	}
+	if stored.ResourceVersion == "" {
+		stored.ResourceVersion = f.nextRVLocked()
+	}
+	f.buildresources[stored.Namespace+"/"+stored.Name] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) nextRVLocked() string { f.rv++; return strconv.Itoa(f.rv) }
+
+func (f *fakeClient) nextUIDLocked() string { f.uid++; return fmt.Sprintf("fake-uid-%d", f.uid) }
+
+// consumeInjectedReadLocked returns the injected read error for the kind, or nil.
+func (f *fakeClient) consumeInjectedReadLocked(kind string) error {
+	injected := f.injectedReads[kind]
+	if injected == nil || injected.times <= 0 {
+		return nil
+	}
+	injected.times--
+	if injected.times == 0 {
+		delete(f.injectedReads, kind)
+	}
+	return injected.err
+}
+
+// consumeInjectedWriteLocked returns the injected write for the operation, or nil.
+func (f *fakeClient) consumeInjectedWriteLocked(operation string) *injectedWrite {
+	injected := f.injectedWrites[operation]
+	if injected != nil {
+		delete(f.injectedWrites, operation)
+	}
+	return injected
+}
+
+func (f *fakeClient) GetBuildInfo(_ context.Context, namespace, name string) (*ebsv1.BuildInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("buildinfos"); err != nil {
+		return nil, err
+	}
+	value, ok := f.buildinfos[namespace+"/"+name]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) UpdateBuildInfoStatus(_ context.Context, obj *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error) {
+	if obj == nil {
+		return nil, notSentFake("update-status", "buildinfos", fmt.Errorf("BuildInfo request is required"))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.buildinfos[obj.Namespace+"/"+obj.Name]
+	if !ok {
+		return nil, rejectedFake("update-status", "buildinfos", 404, fmt.Errorf("not found"))
+	}
+	if injected := f.consumeInjectedWriteLocked("update-status"); injected != nil {
+		if injected.persist {
+			f.applyStatusLocked(stored, obj)
+		}
+		return nil, injectedFake("update-status", "buildinfos", injected)
+	}
+	if stored.ResourceVersion != obj.ResourceVersion {
+		return nil, rejectedFake("update-status", "buildinfos", 409, fmt.Errorf("resourceVersion conflict"))
+	}
+	f.applyStatusLocked(stored, obj)
+	return stored.DeepCopy(), nil
+}
+
+// applyStatusLocked replaces only the status of the stored BuildInfo (the
+// /status subresource keeps the old spec) and bumps resourceVersion.
+func (f *fakeClient) applyStatusLocked(stored *ebsv1.BuildInfo, intent *ebsv1.BuildInfo) {
+	stored.Status = intent.DeepCopy().Status
+	stored.ResourceVersion = f.nextRVLocked()
+}
+
+func (f *fakeClient) CreateJob(_ context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error) {
+	if obj == nil {
+		return nil, notSentFake("create", "jobs", fmt.Errorf("Job request is required"))
+	}
+	if obj.Namespace != project || obj.UID != "" || obj.ResourceVersion != "" {
+		return nil, notSentFake("create", "jobs", fmt.Errorf("Job metadata does not match the create target"))
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := project + "/" + obj.Name
+	if injected := f.consumeInjectedWriteLocked("create"); injected != nil {
+		if injected.persist {
+			f.createJobLocked(key, obj)
+		}
+		return nil, injectedFake("create", "jobs", injected)
+	}
+	if _, exists := f.jobs[key]; exists {
+		return nil, rejectedFake("create", "jobs", 409, fmt.Errorf("already exists"))
+	}
+	return f.createJobLocked(key, obj), nil
+}
+
+func (f *fakeClient) createJobLocked(key string, obj *ebsv1.Job) *ebsv1.Job {
+	stored := obj.DeepCopy()
+	stored.UID = types.UID(f.nextUIDLocked())
+	stored.ResourceVersion = f.nextRVLocked()
+	if stored.CreationTimestamp.IsZero() {
+		stored.CreationTimestamp = metav1.NewTime(time.Now())
+	}
+	f.jobs[key] = stored
+	return stored.DeepCopy()
+}
+
+func (f *fakeClient) GetJob(_ context.Context, project, name string) (*ebsv1.Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("jobs"); err != nil {
+		return nil, err
+	}
+	value, ok := f.jobs[project+"/"+name]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) ListJobs(_ context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("jobs"); err != nil {
+		return nil, err
+	}
+	if selector == nil {
+		selector = labels.Everything()
+	}
+	var out []ebsv1.Job
+	for _, job := range f.jobs {
+		if job.Namespace != project {
+			continue
+		}
+		if selector.Matches(labels.Set(job.Labels)) {
+			out = append(out, *job.DeepCopy())
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		left, right := out[i], out[j]
+		if left.CreationTimestamp.Equal(&right.CreationTimestamp) {
+			return left.Name < right.Name
+		}
+		return left.CreationTimestamp.Before(&right.CreationTimestamp)
+	})
+	return out, nil
+}
+
+func (f *fakeClient) GetBuild(_ context.Context, project, name string) (*ebsv1.Build, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("builds"); err != nil {
+		return nil, err
+	}
+	value, ok := f.builds[project+"/"+name]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) ListBuilds(_ context.Context, project, labelSelector, fieldSelector string, limit int) ([]ebsv1.Build, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("builds"); err != nil {
+		return nil, err
+	}
+	labelReq, err := labels.Parse(labelSelector)
+	if err != nil {
+		return nil, err
+	}
+	fieldReq, err := fields.ParseSelector(fieldSelector)
+	if err != nil {
+		return nil, err
+	}
+	var out []ebsv1.Build
+	for _, build := range f.builds {
+		if build.Namespace != project {
+			continue
+		}
+		if !labelReq.Matches(labels.Set(build.Labels)) {
+			continue
+		}
+		if !fieldReq.Matches(fields.Set{
+			"metadata.name":      build.Name,
+			"metadata.namespace": build.Namespace,
+			"status.phase":       string(build.Status.Phase),
+			"status.stage":       string(build.Status.Stage),
+		}) {
+			continue
+		}
+		out = append(out, *build.DeepCopy())
+	}
+	// The apiserver lists builds newest creationTimestamp first (ES store);
+	// ties break on name descending like the server's document ID tiebreak.
+	sort.Slice(out, func(i, j int) bool {
+		left, right := out[i], out[j]
+		if left.CreationTimestamp.Equal(&right.CreationTimestamp) {
+			return left.Name > right.Name
+		}
+		return left.CreationTimestamp.After(right.CreationTimestamp.Time)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (f *fakeClient) GetRpmRepo(_ context.Context, project, name string) (*ebsv1.RpmRepo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("rpmrepos"); err != nil {
+		return nil, err
+	}
+	value, ok := f.rpmrepos[project+"/"+name]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) GetSnapshot(_ context.Context, project, name string) (*ebsv1.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("snapshots"); err != nil {
+		return nil, err
+	}
+	value, ok := f.snapshots[project+"/"+name]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) GetProject(_ context.Context, project string) (*ebsv1.Project, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("projects"); err != nil {
+		return nil, err
+	}
+	value, ok := f.projects[project]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) GetBuildResource(_ context.Context, namespace, name string) (*ebsv1.BuildResource, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.consumeInjectedReadLocked("buildresources"); err != nil {
+		return nil, err
+	}
+	value, ok := f.buildresources[namespace+"/"+name]
+	if !ok && namespace != "default" {
+		// Project table miss falls back to default/default (15.1).
+		value, ok = f.buildresources["default/default"]
+	}
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) GetBuildConf(_ context.Context) (*ebsv1.BuildConf, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.buildconfFailed {
+		return nil, fmt.Errorf("injected buildconf query failure")
+	}
+	if f.buildconf == nil {
+		return nil, ErrNotFound
+	}
+	return f.buildconf.DeepCopy(), nil
+}
+
+func notSentFake(operation, resource string, err error) error {
+	return &clientpkg.WriteError{Operation: operation, Resource: groupResource(resource), Outcome: clientpkg.WriteNotSent, Err: err}
+}
+
+func rejectedFake(operation, resource string, statusCode int, err error) error {
+	return &clientpkg.WriteError{Operation: operation, Resource: groupResource(resource), Outcome: clientpkg.WriteRejected, StatusCode: statusCode, Err: err}
+}
+
+func injectedFake(operation, resource string, injected *injectedWrite) error {
+	if injected.err != nil {
+		return injected.err
+	}
+	return &clientpkg.WriteError{
+		Operation:  operation,
+		Resource:   groupResource(resource),
+		Outcome:    injected.outcome,
+		StatusCode: injected.statusCode,
+		Err:        fmt.Errorf("injected %s failure", injected.outcome),
+	}
+}
+
+func groupResource(resource string) schema.GroupResource {
+	return schema.GroupResource{Group: "ebs", Resource: resource}
+}
