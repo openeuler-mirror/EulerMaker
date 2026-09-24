@@ -151,7 +151,7 @@ BuildInfo Controller 创建 Job 时必须写入以下 labels：
 
 `PackageRepo.name` 目前仅要求非空，可能不符合 Kubernetes label 值的长度或字符规则。计算 `ebs.io/package-name` 的值时：如果原名只含 Kubernetes label 值允许的字符，且首尾为字母或数字，先截取前 63 个字符，再去掉截断位置末尾的 `-`、`_`、`.`；若结果不匹配保留的摘要形态 `^sha256-[a-z2-7]{52}$`，直接用作 label 值。含非法字符的原名，或截断后恰好匹配保留形态的原名，使用 `sha256-` 加原名 UTF-8 字节的 SHA-256 摘要经 RFC 4648 标准 Base32 无填充编码后转小写的 52 个字符。消费者按相同规则计算 label selector 的值；Job 不保存截断前的原名，界面可从当前 Project 的仓库列表展示名称。不同原名若截断后相同，将共享一个 label 值，因此按标签查询的历史会合并；需要区分这类包名时必须调整命名规则。
 
-BuildResource 只在创建 Job 时解析为 `Job.spec.resources`，Job 不额外记录其配置来源。Build、spec 和包归属标签由 BuildInfo Controller 创建 Job 时写入，创建后不可修改；RpmRepo Controller 使用 `ebs.io/build-name` 的 label selector 查询候选 Job，并从 `ebs.io/spec-name` 读取 spec 归属，不得从对象名称推导这些关系。新建的构建 Job 必须同时具有上述三个归属标签；apiserver 校验包名标签值的语法，普通更新和 `/status` 更新不得改变这些字段。存量 Job 不回填，没有包名标签的 Job 不出现在前端包级历史中。
+BuildInfo Controller 创建 Job 时从集群级 `BuildResourceConfig/default` 解析 `Job.spec.resources`，并在 annotation 中记录配置名称和 generation 供审计；调度始终以 Job 中固化的资源需求为准。Build、spec 和包归属标签由 BuildInfo Controller 创建 Job 时写入，创建后不可修改；RpmRepo Controller 使用 `ebs.io/build-name` 的 label selector 查询候选 Job，并从 `ebs.io/spec-name` 读取 spec 归属，不得从对象名称推导这些关系。新建的构建 Job 必须同时具有上述三个归属标签；apiserver 校验包名标签值的语法，普通更新和 `/status` 更新不得改变这些字段。存量 Job 不回填，没有包名标签的 Job 不出现在前端包级历史中。
 
 ## 8. 查询与扩展规则
 

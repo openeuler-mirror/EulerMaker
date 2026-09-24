@@ -18,8 +18,8 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 | 字段 | Go 类型 | JSON | 说明 |
 |------|---------|------|------|
 | `apiVersion` | string | `apiVersion` | `ebs/v1` |
-| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / BuildResource / Job / Runner |
-| `name` | string | `name` | 资源名称。Project/Runner 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/BuildResource/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
+| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / BuildResourceConfig / Job / Runner |
+| `name` | string | `name` | 资源名称。Project/Runner/BuildResourceConfig 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -37,7 +37,7 @@ metav1.ListMeta `json:"metadata,omitempty"`
 Items           []Xxx `json:"items"`
 ```
 
-Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、BuildResource、Job 的唯一项目归属来源。。
+Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。BuildResourceConfig 为集群级资源。
 
 调度器和控制器可使用全局系统 API 跨 Project list 大部分对象。在 Project 级资源中，只有 Job 的全局 API 支持 watch。集群级资源 Runner 的 API 同样支持 list/watch。用户侧和项目侧调用使用 Project API。
 
@@ -50,7 +50,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | etcd | `/registry/ebs/jobs/{project}/{name}` |
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | Elasticsearch | `ebs-buildinfos` / `{project}/{name}` |
 | RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | Elasticsearch | `ebs-rpmrepos` / `{project}/{name}` |
-| BuildResource | `/apis/ebs/v1/projects/{project}/buildresources` | 不提供 | Elasticsearch | `ebs-buildresources` / `{project}/{name}` |
+| BuildResourceConfig | 不提供 | `/apis/ebs/v1/buildresourceconfigs` | Elasticsearch | `ebs-buildresourceconfigs` / `{name}` |
 
 表中 Elasticsearch 对象定位格式为“索引 / 文档 ID”。Project scoped 对象统一使用 `{project}/{name}` 作为文档 ID；Job 使用相同层级的 etcd key。只有 Job 和 Runner 存入 etcd 并提供 list/watch。
 
@@ -59,13 +59,13 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 ## 结构体总览（48 个）
 
 ```
-主资源（8）: Project Snapshot Build BuildInfo RpmRepo BuildResource Job Runner
-列表类型（8）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList BuildResourceList JobList RunnerList
+主资源（8）: Project Snapshot Build BuildInfo RpmRepo BuildResourceConfig Job Runner
+列表类型（8）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList BuildResourceConfigList JobList RunnerList
 辅助结构体（32）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
                   RpmRepoSpec RpmRepoStatus
-                  BuildResourceSpec PackageResourceConfig
+                  BuildResourceConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
                   PackageRepo PackageRepoStatus VersionConst
@@ -584,32 +584,32 @@ type RpmRepoList struct {
 
 ---
 
-## 六、BuildResource（构建资源表）
+## 六、BuildResourceConfig（构建资源表）
 
-**API**: `/apis/ebs/v1/projects/{project}/buildresources`
+**API**: `/apis/ebs/v1/buildresourceconfigs`
 
-**Elasticsearch**: 索引 `ebs-buildresources`，文档 ID `{project}/{name}`
+**Elasticsearch**: 索引 `ebs-buildresourceconfigs`，文档 ID `{name}`
 
-Project 对象不存在时如何回退到默认对象，以及 apiserver 如何初始化默认对象，见 [BuildResource 设计文档](./build-configuration.md#3-buildresource资源规则)。
+BuildInfo Controller 固定读取名为 `default` 的集群级对象；apiserver 的初始化规则见 [BuildResourceConfig 设计文档](./build-configuration.md#3-buildresourceconfig资源规则)。
 
-`BuildResource` 不注册 `/apis/ebs/v1/buildresources` 全局 API。系统组件、运维工具和普通用户都必须通过明确的 Project 路径访问，避免跨 Project 枚举或误更新资源表。
+`BuildResourceConfig` 不注册 Project-scoped API，不设置 `metadata.namespace`。当前构建流程不读取其它名称的对象。
 
-`BuildResource` 不属于公开读取资源。Project owner 和 member 只能读取与自己具有 owner/member 关系的 Project 下的对象，禁止全部写操作；跨 Project 读写仅允许运维或受信任系统身份。
+`BuildResourceConfig` 不属于匿名公开读取资源。普通登录用户可读；创建和更新仅允许运维或受信任系统身份，`default` 不允许通过 Gateway 删除。
 
-### BuildResource
+### BuildResourceConfig
 
 ```go
-type BuildResource struct {
+type BuildResourceConfig struct {
     metav1.TypeMeta   `json:",inline"`
     metav1.ObjectMeta `json:"metadata,omitempty"`
-    Spec              BuildResourceSpec `json:"spec,omitempty"`
+    Spec              BuildResourceConfigSpec `json:"spec,omitempty"`
 }
 ```
 
-### BuildResourceSpec
+### BuildResourceConfigSpec
 
 ```go
-type BuildResourceSpec struct {
+type BuildResourceConfigSpec struct {
     Default  ResourceRequirements             `json:"default,omitempty"`
     Packages map[string]PackageResourceConfig `json:"packages"`
 }
@@ -618,9 +618,9 @@ type BuildResourceSpec struct {
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
 | `default` | ResourceRequirements | 是 | 表级默认资源需求，requests 必须完整声明 CPU 和 memory；limits 可缺省并取同级 requests |
-| `packages` | map[string]PackageResourceConfig | 是 | Project 下全部软件包的资源配置，Map key 为 spec 包名。Project 自定义表不得为空；`default/default` 可为空，但必须声明有效的表级 `default` |
+| `packages` | map[string]PackageResourceConfig | 是 | 全部软件包的资源配置，Map key 为 spec 包名；`default` 对象可为空，但必须声明有效的表级 `default` |
 
-`BuildResourceSpec` 不包含 OS 字段。同一张表适用于所属 Project 的全部 Build Target OS。
+`BuildResourceConfigSpec` 不包含 OS 字段。同一张表适用于全部 Project 的 Build Target OS。
 
 ### PackageResourceConfig
 
@@ -638,7 +638,7 @@ type PackageResourceConfig struct {
 
 每个软件包必须至少声明 `default` 或一个 `arches` 条目。架构采用开放集合，不固定为 `x86_64` 和 `aarch64`；可增加 `riscv64` 等新架构。架构名必须满足 `^[a-z0-9][a-z0-9._-]{0,62}$`，并与 Build Target 和 Runner label 使用的名称完全一致。
 
-BuildResource 只允许 `cpu` 和 `memory` 两种资源键。表级 `spec.default.requests` 必须完整声明二者；limits 可以缺省。软件包 default 和架构配置可以只覆盖其中一个或多个键。任一级声明某项 request 但省略对应 limit 时，limit 取同级 request；该级未声明 request 时，request 和 limit 按“架构配置 → 软件包 default → 表级 default”逐字段继承。合并结果必须满足每项 limit 大于或等于 request。所有资源值必须是大于 0、可由 Kubernetes `resource.ParseQuantity` 解析的字符串。
+BuildResourceConfig 只允许 `cpu` 和 `memory` 两种资源键。表级 `spec.default.requests` 必须完整声明二者；limits 可以缺省。软件包 default 和架构配置可以只覆盖其中一个或多个键。任一级声明某项 request 但省略对应 limit 时，limit 取同级 request；该级未声明 request 时，request 和 limit 按“架构配置 → 软件包 default → 表级 default”逐字段继承。合并结果必须满足每项 limit 大于或等于 request。所有资源值必须是大于 0、可由 Kubernetes `resource.ParseQuantity` 解析的字符串。
 
 配置按以下顺序逐字段覆盖：
 
@@ -647,15 +647,15 @@ BuildResource 只允许 `cpu` 和 `memory` 两种资源键。表级 `spec.defaul
 3. 使用 `packages[specName].arches[arch]` 覆盖已声明字段；
 4. 未覆盖字段保留 `spec.default` 值。
 
-`requests` 和 `limits` 分别按 `cpu`、`memory` 键合并，不在 Project 对象和 `default/default` 对象之间跨对象补齐。
+`requests` 和 `limits` 分别按 `cpu`、`memory` 键合并，只在 `default` 对象内部解析。
 
-### BuildResourceList
+### BuildResourceConfigList
 
 ```go
-type BuildResourceList struct {
+type BuildResourceConfigList struct {
     metav1.TypeMeta `json:",inline"`
     metav1.ListMeta `json:"metadata,omitempty"`
-    Items           []BuildResource `json:"items"`
+    Items           []BuildResourceConfig `json:"items"`
 }
 ```
 
@@ -697,7 +697,7 @@ type BuildConfList struct {
 | `spec.targets[os].arches` | key 为 BuildTarget.arch；每个 OS 至少一个架构 |
 | `spec.targets[os].arches[arch].image` | 对应目标的容器构建镜像引用，创建 Job 时写入 runtimeSpec.image |
 
-不在该对象中保存镜像凭据或 BuildResource 的资源规则。
+不在该对象中保存镜像凭据或 BuildResourceConfig 的资源规则。
 
 ## Script（全局脚本）
 
@@ -1126,7 +1126,7 @@ RpmRepoStatus
 │   └── RepositoryTransition ──▶ RepositoryInput
 └── RpmRepoReleaseStatus ──▶ ReleaseTransition
 
-BuildResourceSpec
+BuildResourceConfigSpec
 ├── ResourceRequirements (default)
 └── PackageResourceConfig
     ├── ResourceRequirements (default)

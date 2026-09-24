@@ -73,7 +73,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | Job | `job/jobs` | `job` | Project |
 | BuildInfo | `buildinfo/buildinfos` | `bi` | Project |
 | RpmRepo | `rpmrepo/rpmrepos` | `repo` | Project |
-| BuildResource | `buildresource/buildresources` | `br` | Project |
+| BuildResourceConfig | `buildresourceconfig/buildresourceconfigs` | `brc` | 集群级 |
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
 
@@ -119,14 +119,14 @@ ebsctl get jobs --watch
 
 watch 输出 table 时增加 `EVENT` 列；JSON/YAML 模式逐事件输出完整 WatchEvent。连接正常超时后使用最后的 `resourceVersion` 重连；收到资源版本过期响应时重新 list。用户主动中断返回 0，无法恢复的认证或协议错误返回非 0。
 
-`BuildResource` 只提供 Project 级 list/get，不支持 watch。例如：
+`BuildResourceConfig` 只提供集群级 list/get，不支持 watch。例如：
 
 ```bash
-ebsctl get buildresources -p openeuler-mainline
-ebsctl get br openeuler-mainline -p openeuler-mainline -o yaml
+ebsctl get buildresourceconfigs
+ebsctl get brc default -o yaml
 ```
 
-普通 Project owner/member 只能读取自己具有 owner/member 关系的 Project 下的 `BuildResource`，不能读取其他 Project 或 `default` Project 的对象。
+所有已认证用户均可读取集群级 `BuildResourceConfig`，匿名用户不可读取。
 
 ### 3.4 创建和更新
 
@@ -147,12 +147,12 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
-`BuildResource` 支持 create、replace 和 delete，但不支持 patch；客户端会在请求发送前拒绝 `patch buildresource`。普通用户对该资源只有读权限，create、replace 和 delete 仅允许 Ops、Admin 或 System 身份执行。例如：
+`BuildResourceConfig` 支持 create、replace 和 delete，但不支持 patch；客户端会在请求发送前拒绝 `patch buildresourceconfig`。普通用户对该资源只有读权限，create、replace 和 delete 仅允许 Ops、Admin 或 System 身份执行。例如：
 
 ```bash
-ebsctl create -f buildresource.yaml -p openeuler-mainline
-ebsctl replace -f buildresource.yaml -p openeuler-mainline
-ebsctl delete br openeuler-mainline -p openeuler-mainline
+ebsctl create -f buildresourceconfig.yaml
+ebsctl replace -f buildresourceconfig.yaml
+ebsctl delete brc custom-config
 ```
 
 `ebsctl` 不提供 `apply`。声明式对象的创建和更新分别使用 `create` 与 `replace`，局部字段更新使用 `patch`。
@@ -223,7 +223,7 @@ credentials:
 | Job | NAME、PHASE、STAGE、RUNNER、AGE |
 | BuildInfo | NAME、STATUS、AGE |
 | RpmRepo | NAME、STATUS、AGE |
-| BuildResource | NAME、CPU、MEMORY、PACKAGES、AGE |
+| BuildResourceConfig | NAME、CPU、MEMORY、PACKAGES、AGE |
 
 ### 5.2 退出码
 
@@ -307,4 +307,4 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 | 安全 | TLS CA、insecure 警告、URL 校验、敏感字段脱敏、响应体上限 |
 | 兼容性 | 新增未知响应字段、旧配置迁移、客户端与服务端 API 版本不匹配 |
 
-端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户只读自身 Project 的 BuildResource、Ops 管理 BuildResource，以及未经授权的写入或受保护资源访问被拒绝。
+端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户只读集群级 BuildResourceConfig、Ops 管理 BuildResourceConfig，以及未经授权的写入或受保护资源访问被拒绝。

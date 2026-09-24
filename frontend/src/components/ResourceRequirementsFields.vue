@@ -11,7 +11,7 @@
 </template>
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import type { JSONMap } from "./buildResourceDraft";
+import type { JSONMap } from "./buildResourceConfigDraft";
 const props = defineProps<{ modelValue: JSONMap }>();
 const emit = defineEmits<{ 'update:modelValue': [value: JSONMap] }>();
 const { t } = useI18n();

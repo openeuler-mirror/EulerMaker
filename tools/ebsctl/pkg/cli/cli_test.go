@@ -156,11 +156,11 @@ func TestGetProjectsMineRejectsUnsupportedUsage(t *testing.T) {
 	}
 }
 
-func TestBuildResourceRejectsUnsupportedCommands(t *testing.T) {
+func TestBuildResourceConfigRejectsUnsupportedCommands(t *testing.T) {
 	streams := Streams{In: strings.NewReader(""), Out: io.Discard, ErrOut: io.Discard}
 	for _, args := range [][]string{
-		{"get", "buildresources", "--watch"},
-		{"patch", "buildresource", "project-a", "--patch", `{}`},
+		{"get", "buildresourceconfigs", "--watch"},
+		{"patch", "buildresourceconfig", "project-a", "--patch", `{}`},
 		{"get", "buildconfs", "--watch"},
 		{"delete", "bc", "default", "--yes"},
 		{"delete", "bc", "--all", "--yes"},

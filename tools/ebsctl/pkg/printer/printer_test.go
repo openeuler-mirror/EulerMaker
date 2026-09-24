@@ -41,8 +41,8 @@ func TestWatchTablePrintsHeaderOnce(t *testing.T) {
 	}
 }
 
-func TestBuildResourceTable(t *testing.T) {
-	definition, _ := resource.Resolve("buildresource")
+func TestBuildResourceConfigTable(t *testing.T) {
+	definition, _ := resource.Resolve("buildresourceconfig")
 	data := []byte(`{"metadata":{"name":"project-a"},"spec":{"default":{"requests":{"cpu":"4","memory":"8Gi"}},"packages":{"gcc":{},"llvm":{}}}}`)
 	var output bytes.Buffer
 	if err := New(&output, Options{Format: "table"}).Print(definition, data); err != nil {

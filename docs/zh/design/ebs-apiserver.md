@@ -95,11 +95,11 @@ apiVersion: ebs/v1
 | RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
 | Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
 | Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
-| BuildResource | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildresources` | - | 否 | - |
+| BuildResourceConfig | Elasticsearch | - | `/apis/ebs/v1/buildresourceconfigs` | 否 | - |
 | BuildConf | Elasticsearch | - | `/apis/ebs/v1/buildconfs` | 否 | - |
 | Script | Elasticsearch | - | `/apis/ebs/v1/scripts` | 否 | - |
 
-其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job`、`BuildResource` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。BuildResource 仅提供 Project API。`Project`、`Runner`、`BuildConf` 和 `Script` 为集群级资源。
+其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`BuildConf`、`BuildResourceConfig` 和 `Script` 为集群级资源。
 
 apiserver还为 Runner提供服务端过滤的 Job list-watch：
 
@@ -293,7 +293,7 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
-ebs-buildresources
+ebs-buildresourceconfigs
 ebs-buildconfs
 ebs-scripts
 ebs-users
@@ -414,7 +414,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 | `key` | nested 查询匹配 `key` |
 | `!key` | `must_not` nested 查询匹配 `key` |
 
-Project、Snapshot、Build、BuildInfo 和 BuildResource 使用通用状态字段；RpmRepo 的过程仓与正式发布各自使用独立状态字段：
+Project、Snapshot、Build 和 BuildInfo 使用通用状态字段；BuildResourceConfig 无 status，RpmRepo 的过程仓与正式发布各自使用独立状态字段：
 
 | API 字段 | ES 字段 | 操作符 |
 |----------|---------|--------|

@@ -1,6 +1,6 @@
 # ebsctl
 
-`ebsctl` is the EulerMaker command-line client. It talks only to `ebs-gateway` and supports Project, Snapshot, Build, Job, BuildInfo, RpmRepo, BuildConf, and BuildResource. BuildResource is read-only for regular Project users; create, replace, and delete require Ops or higher privileges.
+`ebsctl` is the EulerMaker command-line client. It talks only to `ebs-gateway` and supports Project, Snapshot, Build, Job, BuildInfo, RpmRepo, BuildConf, and BuildResourceConfig. BuildResourceConfig is read-only for regular Project users; create, replace, and delete require Ops or higher privileges.
 
 ## Build and test
 
@@ -17,10 +17,10 @@ ebsctl config set-project openeuler-mainline
 ebsctl get projects --mine
 ebsctl get jobs
 ebsctl get job build-kernel -o yaml
-ebsctl get br openeuler-mainline -p openeuler-mainline -o yaml
+ebsctl get brc default -o yaml
 ```
 
-BuildResource does not support `patch` or `watch`. Regular Project owners and members can only read it in their authorized Projects; `create`, `replace`, and `delete` require Ops, Admin, or System privileges.
+BuildResourceConfig is cluster-scoped and does not support `patch` or `watch`. Any authenticated user can read it; `create`, `replace`, and `delete` require Ops, Admin, or System privileges. The `default` object cannot be deleted through Gateway.
 
 BuildConf (`bc`) is cluster-scoped: `-p/-n` never changes its URL. Reads are public; `create`, `replace`, and `patch` require Ops, Admin, or System privileges. Delete and watch are unsupported. Update the existing default object using its current resourceVersion:
 

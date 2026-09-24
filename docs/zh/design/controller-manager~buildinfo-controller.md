@@ -57,7 +57,7 @@ components/controller-manager/
 
 > **客户端分层**：通用 apiserver 与 git-server 客户端位于 `pkg/clients/apiserver`、`pkg/clients/gitserver`，供多个控制器复用。`controllers/buildinfo/client.go` 定义本控制器所需的最小 `Client` 接口及 typed 适配层；git-server 侧仅依赖 `ExecCommand` 接口。
 >
-> 本控制器仅消费 `ExecCommand`（7.2.2 spec 下载，直接以 `packageRepoStatuses` 的 `cloneUrl` / `commitId` 请求；**不做就绪判定、不发布同步任务**——镜像同步任务发布与新鲜度等待由 Snapshot Controller 在 Snapshot 解析期完成，本控制器直接复用其同步完成的本地镜像，接口见 4.2）。新增资源 GVR 常量（`BuildInfosGVR` / `ProjectsGVR` / `RpmReposGVR` / `BuildResourcesGVR`）加入 `pkg/source`（复用已有 `SnapshotsGVR` / `BuildsGVR` / `JobsGVR`）。
+> 本控制器仅消费 `ExecCommand`（7.2.2 spec 下载，直接以 `packageRepoStatuses` 的 `cloneUrl` / `commitId` 请求；**不做就绪判定、不发布同步任务**——镜像同步任务发布与新鲜度等待由 Snapshot Controller 在 Snapshot 解析期完成，本控制器直接复用其同步完成的本地镜像，接口见 4.2）。新增资源 GVR 常量（`BuildInfosGVR` / `ProjectsGVR` / `RpmReposGVR` / `BuildResourceConfigsGVR`）加入 `pkg/source`（复用已有 `SnapshotsGVR` / `BuildsGVR` / `JobsGVR`）。
 
 依赖与注入：
 
@@ -134,7 +134,7 @@ type Client interface {
     GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
     GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
     GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
-    GetBuildResource(ctx context.Context, namespace, name string) (*ebsv1.BuildResource, error)
+    GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildResourceConfig, error)
     // BuildConf（集群级 name=default 单例）：Job 创建时的镜像解析来源。
     // 快照语义：一个 Job 创建批次取一次，不得按 Job 重复取、不得用于修改已创建 Job
     GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error)
@@ -148,7 +148,7 @@ type Client interface {
 - Build：`GET /apis/ebs/v1/projects/{project}/builds/{name}`；只读取本轮父 Build，不 List 历史 Build；
 - RpmRepo / Snapshot：`GET /apis/ebs/v1/projects/{project}/{resource}/{name}`（均与 Build 同名）；
 - Project：`GET /apis/ebs/v1/projects/{project}`；
-- BuildResource：`GET /apis/ebs/v1/projects/{project}/buildresources/{project}`（404 且 project≠default 时回退 `GET /apis/ebs/v1/projects/default/buildresources/default`）；
+- BuildResourceConfig：`GET /apis/ebs/v1/buildresourceconfigs/default`（集群级单例，无 Project 回退）；
 - BuildConf：`GET /apis/ebs/v1/buildconfs/default`（集群级资源，无 project 路径段；只读）。`GetBuildConf` 实现委托共享客户端 `pkg/clients/apiserver`（`buildconf.go` 已提供 `GetBuildConf` 与纯函数 `BuildImage(conf, target)`，快照语义注释同上），镜像查表复用 `BuildImage`，不重复实现。
 
 HTTP 实现复用共享 client 的 `Get` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus` 等能力；写请求使用对象 `metadata.resourceVersion` 触发乐观锁。
@@ -584,7 +584,7 @@ repeat:                                                                   # 迭�
 - **跳过步骤 4（破环）**：无图无环；
 - **步骤 3 为构建集全部 spec 直接创建 Job**（无入度概念、无上游语义，各指定包仓库全部 spec 并行直发、无构建排序、无下发顺序）：
   - **跳过的门禁**（不校验任何门禁依赖）：构建依赖统一存在性裁决（7.4.1 条件 2，含 RpmRepo 查询——守卫豁免，7.1）、发布确认门禁（7.4.6 第 2 条）、重建一致性门禁（7.4.6 第 1 条）、上游终态检查；
-  - **保留的确定性校验**（非门禁依赖）：E-19 架构白名单（exclusiveArch 不含目标架构 → spec 标 `Failed` 不下发）、E-27 BuildResource（Job 构造必需，标 `Failed`）；**E-26 BuildConf 镜像解析为暂停语义**（读取失败/映射缺失 → 本轮不创建 Job 等待配置恢复，不标 Failed）；
+  - **保留的确定性校验**（非门禁依赖）：E-19 架构白名单（exclusiveArch 不含目标架构 → spec 标 `Failed` 不下发）、E-27 BuildResourceConfig（Job 构造必需，标 `Failed`）；**E-26 BuildConf 镜像解析为暂停语义**（读取失败/映射缺失 → 本轮不创建 Job 等待配置恢复，不标 Failed）；
   - Job 字段填充照常按 15.3；payload `Repo` 注入按本节第 3 条；
   - `ss.DispatchCount += 1`、`ss.Build.Status = Running` 照常。
 
@@ -836,7 +836,7 @@ Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入
 | `RebuildFailed` | `RebuildJobFailed` | 末代重建 Job 失败，且存在前代 Succeeded 产物 → build.status 以最后一个 Job 为准标 `Failed`（仅 condition 区别于首次失败的 `BuildFailed`；下游按 E-17 自判，v1 产物经构建依赖统一存在性裁决可用则照常下发，见 7.4.2/7.4.5；message 记录失败 jobName） |
 | `BuildFailed` | `RpmDependsMissing` | 构建期依赖缺失/版本不满足（message 记录缺失依赖名：排序去重后逗号拼接，超 1024 字符截断并尾部标注 `...(+N deps total)`，防 apiserver message 上限）。两条触发路径：① 正常下发路径——发布确认门禁（7.4.6）通过后构建依赖统一存在性裁决（7.4.1 条件 2，含 Failed 上游影响的表达）仍缺失；② 破环点 bootstrap 路径（7.4.6 第 3 条，无视入度）——不创建 Job 不重试。install 依赖不触发本 reason（缺失不阻断下发，见 7.4.7） |
 | `ArchUnsupported` | `ArchUnsupported` | 目标架构（`Build.spec.buildTarget.arch`）不在该 spec 的 `exclusiveArch` 白名单内（message 记录目标架构，见 E-19）；`build.status` 同步标 `Failed`，其下游按 E-17 自判规则处理（不传播标记） |
-| `DefaultBuildResourceNotFound` | `DefaultBuildResourceNotFound` | BuildResource 对象不存在（project 表与 `default/default` 回退均 404，message 记录 project 名与回退路径，见 E-27）；`build.status` 同步标 `Failed`，其下游按 E-17 自判规则处理（不传播标记） |
+| `DefaultBuildResourceConfigNotFound` | `DefaultBuildResourceConfigNotFound` | 集群级 `default` BuildResourceConfig 不存在（GET 返回 404，见 E-27）；`build.status` 同步标 `Failed`，其下游按 E-17 自判规则处理（不传播标记） |
 | `BuildAborted` | `BuildAborted` | 对应 `Job.status.phase=Aborted`（message 记录中止 jobName，并注明"防御性视同 Failed：父 Build 非 Aborted"——回填到达时 parentAbortGuard 已确认父 Build 正常，Job 单独 Aborted 为异常事件，`build.status` 防御性置 `Failed` 终态，本 condition 作异常溯源，见 7.4.5/6.4 防御分支） |
 
 **不写 condition 的瞬时/非阻断事件（仅结构化日志）**：
@@ -1027,7 +1027,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | E-23 | spec 下载/解析确定性失败 | `full`、`incremental`、`specified` 和 `single` 均按 spec 粒度跳过；仓库级读取失败跳过该仓库，记录 `SpecDependsFillFailed` 和 `failedPackages`。`incremental`/`specified` 空集正常完成；`single` 空集按 7.2.3 失败收口。瞬态失败保持 Pending。 | 7.2.2 / 7.2.3 / 9.1 |
 | E-24 | Snapshot 的包仓库条目不可用 | 条目缺失但仓库仍在 `spec.packageRepos`，或 `retryable=true` 时保持 Pending；确定性失败或种子仓库已不在 `spec.packageRepos` 时，`incremental`/`specified` 同样降级并记录 `SpecCommitMissing`、`failedPackages`。`single` 空集按 7.2.3 收口。 | 7.2.2 / 9.1 |
 | E-26 | **BuildConf 不可用或映射缺失**（`GetBuildConf` 读取失败（404/超时/5xx/反序列化失败），或 `spec.targets[os].arches[arch].image` 缺失，契约见 [build-configuration.md](build-configuration.md) 2.5.2） | 本轮不创建新 Job，输出结构化错误并返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 `Failed`、不下游传播——不把配置问题直接写成构建失败）；挂载点：每轮需要创建新 Job 的 reconcile 读取一次 BuildConf 快照（init 步骤 3/4 / advance 步骤 4 / `single` 直通），同轮批量创建共享同一快照；已存在 Job 沿用固化镜像、不因配置更新重写，已有 Job 的回填/观察不受影响（生效边界见 [build-configuration.md](build-configuration.md) 2.5.3，无需注册 BuildConf watch） | 9.1 / 15.3.1 / [build-configuration.md](build-configuration.md) 2.5.2 |
-| E-27 | **BuildResource 对象不存在**（GET `{project}/buildresources/{project}` 返回 404 且回退 GET `default/buildresources/default` 仍 404（project≠default；project=default 时仅查一次不重复回退），契约见 [build-configuration.md](build-configuration.md) 3.5.1） | spec 标 `Failed`（`DefaultBuildResourceNotFound`，message 记录 project 名与回退路径），不提交 Job，其下游按 E-17 自判；查询返回其他错误（超时/无权限/5xx/反序列化失败）不落入本条——原样返回 error 退避重试（瞬态，不写 condition）；Project 表存在但缺目标包/架构配置不落入本条（`spec.default.requests` 经 apiserver 校验保证完整，缺省字段逐级继承）；挂载点与 E-19 同点 | 9.1 / 15.3.1（BuildResource 解析契约） |
+| E-27 | **集群级 `default` BuildResourceConfig 不存在**（GET `/apis/ebs/v1/buildresourceconfigs/default` 返回 404，契约见 [build-configuration.md](build-configuration.md) 3.5.1） | spec 标 `Failed`（`DefaultBuildResourceConfigNotFound`），不提交 Job，其下游按 E-17 自判；查询返回其他错误（超时/无权限/5xx/反序列化失败）原样返回 error 退避重试，不写 condition。包/架构配置缺省时按表级默认值继承；挂载点与 E-19 同点 | 9.1 / 15.3.1（BuildResourceConfig 解析契约） |
 | E-28 | 非 single 的 release.phase=Failed | 写 ReleaseFailed=True（reason=RpmRepoReleaseFailed，message 记录 RpmRepo 名），按 6.5 停止派发并等待已有 Job 收敛 | 6.5 / 2.5 |
 | E-29 | 非 single 的 RpmRepo 就绪性连续失败达阈值（默认 3 轮，每轮至多计一次） | 持久化 RpmRepoUnavailable=True（reason=RpmRepoNotFound / RpmRepoQueryFailed / RpmRepoXmlDownloadFailed / RpmRepoXmlParseFailed / BootstrapRepoXmlUnavailable，message 记录对象名、最后错误及连续失败次数），停止派发并按 6.5 等待已有 Job 全部终态后 Completed。未触发停止时检查整体成功清零；停止标记写成功后清除计数，重启按标记恢复、不重新计数。Completed 后父 Build 按 2.5 对应 condition 收口 | 5.4 / 6.5 / 7.1 / 9.1 |
 | E-30 | 当前 Snapshot GET 404/5xx/超时连续失败达阈值（默认 3 轮，每轮至多计一次） | 持久化 SnapshotUnavailable=True（reason=SnapshotNotFound / SnapshotQueryFailed，message 记录对象名、最后错误及连续失败次数），停止派发并按 6.5 等待已有 Job 全部终态后写 Completed。未触发停止时检查整体成功清零；停止标记写成功后清除计数，重启按标记恢复、不重新计数。Completed 后父 Build 按 2.5 对应 condition 收口 | 5.4 / 6.5 / 7.1 / 9.1 |
@@ -1050,7 +1050,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 与 Build 同名按 name 直接 get（一对一约定，见 15.4；每轮由 7.1 前置守卫单点 GET 一次、本轮复用，不重复查询）：发布失败守卫判定（`status.release.phase`，7.1/E-28）、建图前置存在性判定、构建依赖裁决、步骤 0 扩散反查、payload `contentURL` 注入；`single` 直通路径另经本接口按名 get 获取 Repo 注入用 contentURL（守卫豁免，7.2.3 第 3 条）；字段消费明细见 15.4 |
 | `Snapshot` | `GetSnapshot` | `/apis/ebs/v1/projects/{project}/snapshots/{name}` | **只读** | 仅读取本轮同名 Snapshot，用于 spec 仓库枚举和 `cloneUrl`/`commitId` 定位；其 GET 失败计入连续失败计数，达阈值按 E-30 收口；字段消费明细见 15.7 |
 | `Project` | `GetProject` | `/apis/ebs/v1/projects/{project}` | **只读** | 每轮 reconcile 由 parentAbortGuard 查询一次、全轮复用（不重复 GET，见 7.1），仅供 parentAbortGuard 判定 `Terminating`（E-20/E-21）——buildPayload 已固化于 BuildInfo.spec（15.2.2），本控制器不再消费 Project 数据字段；字段消费明细见 15.6 |
-| `BuildResource` | `GetBuildResource` | `/apis/ebs/v1/projects/{project}/buildresources/{project}`（404 且 project≠default 时回退 `/apis/ebs/v1/projects/default/buildresources/default`） | **只读** | 创建 Job 时解析 `Job.spec.resources`（Project 表优先、`default/default` 回退，逐层覆盖契约见 [build-configuration.md](build-configuration.md) 3.5 / 15.3.1 / E-27） |
+| `BuildResourceConfig` | `GetBuildResourceConfig` | `/apis/ebs/v1/buildresourceconfigs/default`（集群级单例） | **只读** | 创建 Job 时解析 `Job.spec.resources`（逐层覆盖契约见 [build-configuration.md](build-configuration.md) 3.5 / 15.3.1 / E-27） |
 | `BuildConf` | `GetBuildConf` | `GET /apis/ebs/v1/buildconfs/default`（集群级单例，无 project 段） | **只读** | 每轮创建新 Job 的 reconcile 读取一次快照（同轮批量共享），经 `BuildImage` 按 os/arch 解析写入 `Job.spec.runtimeSpec.image`（契约见 [build-configuration.md](build-configuration.md) 2.5.2 / 15.3.1 / E-26） |
 
 ### 15.2 BuildInfo（读写，主资源）
@@ -1070,7 +1070,7 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 `BuildInfoSpec.BootstrapRepo: []BootstrapRepo`：Build Controller 创建 BuildInfo 时从 `Project.spec.bootstrapRepo` 深拷贝写入，已有 BuildInfo 不覆盖（data-models.md「BuildInfoSpec」）；本 controller **只读**、不参与组装（非步骤 0 组装对象）——Job payload `Repo` 注入来源之一（按声明顺序，见 15.3.1）；上游 repo 源更新不触发本工程 spec 重新构建。
 
-`BuildInfoSpec.BuildPayload: string`：Build Controller 创建 BuildInfo 时从 `Project.spec.buildPayload` 深拷贝写入，已有 BuildInfo 不覆盖（与 BootstrapRepo 同一固化语义，data-models.md「BuildInfoSpec」）；本 controller **只读**，BuildInfo 生命周期内不随 Project 后续变更。三个消费点共用同一次 YAML 解析结果：① 解析 `prefer` 作 dcg 版本感知建边上下文（不进 specDepends 组装视图，16.1）；② 解析 `macros` 作步骤 0 spec 解析的构建环境宏（宏定义行列表，16.3）；③ Job payload 构造基底 map（per-spec 注入后重新序列化，15.3.1）。Job `spec.resources` 不取自本字段（由 BuildResource 解析，见 15.3.1）。
+`BuildInfoSpec.BuildPayload: string`：Build Controller 创建 BuildInfo 时从 `Project.spec.buildPayload` 深拷贝写入，已有 BuildInfo 不覆盖（与 BootstrapRepo 同一固化语义，data-models.md「BuildInfoSpec」）；本 controller **只读**，BuildInfo 生命周期内不随 Project 后续变更。三个消费点共用同一次 YAML 解析结果：① 解析 `prefer` 作 dcg 版本感知建边上下文（不进 specDepends 组装视图，16.1）；② 解析 `macros` 作步骤 0 spec 解析的构建环境宏（宏定义行列表，16.3）；③ Job payload 构造基底 map（per-spec 注入后重新序列化，15.3.1）。Job `spec.resources` 不取自本字段（由 BuildResourceConfig 解析，见 15.3.1）。
 
 `SpecDepend` 字段（控制器内部类型，不属于公共 API：`*.spec` 解析产物与 per-BuildInfo 缓存条目类型，16.3/15.11；下表"消费点"同时标注了组装时的来源；条目取自缓存命中的 specDepends 内存视图）：
 
@@ -1153,19 +1153,18 @@ metadata:
     ebs.io/package-name: ${本轮组装的 specDepends[${specName}].repoName}   # controller：spec 所属包仓库名（= Snapshot.spec.packageRepos[].name；值按 labels.md 第 7 节编码后写入，非原样 repoName）
     ebs.io/target-os: ${build.spec.buildTarget.os} # controller：同 Build.spec.buildTarget.os
     ebs.io/target-arch: ${build.spec.buildTarget.arch} # controller：同 Build.spec.buildTarget.arch
-  annotations:                                      # controller：创建身份与 BuildResource 来源审计
+  annotations:                                      # controller：创建身份与 BuildResourceConfig 来源审计
     ebs.io/buildinfo-uid: ${buildInfo.metadata.uid}
     ebs.io/dispatch-generation: "${dispatchGeneration}"
-    ebs.io/build-resource-namespace: ${实际命中的 BuildResource namespace}
-    ebs.io/build-resource: ${BuildResource 名}
-    ebs.io/build-resource-generation: "${命中对象的 metadata.generation}"
+    ebs.io/build-resource-config: default
+    ebs.io/build-resource-config-generation: "${BuildResourceConfig metadata.generation}"
 spec:
   priority: 0                                       # 类型零值默认，不显式设置
   runtime: ct                                       # controller 常量；apiserver 同值兜底
   runtimeSpec:
     image: ${BuildConf.spec.targets[build.spec.buildTarget.os].arches[build.spec.buildTarget.arch].image}   # controller：本轮 BuildConf 快照解析（集群级 name=default，GetBuildConf；os/arch 查 targets 映射；读取失败/映射缺失 → 本轮不创建新 Job，E-26）
   timeoutSeconds: 10800                             # controller 常量（3 小时）；apiserver 同值兜底
-  resources:                                        # controller：查 BuildResource 解析（project 表 404 → default/default 回退；逐层覆盖见 15.3.1 契约表）
+  resources:                                        # controller：查集群级 BuildResourceConfig/default 解析（逐层覆盖见 15.3.1 契约表）
     requests:
       cpu: "8"
       memory: 16Gi
@@ -1199,12 +1198,12 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.labels["ebs.io/package-name"]` | `specDepends[specName].repoName`（= `Snapshot.spec.packageRepos[].name`，spec 所属包仓库名）经 labels.md 第 7 节编码（合法原名截取前 63 字符并去尾 `-`/`_`/`.`；含非法字符或截断后冲突的名用 `sha256-` + SHA-256 Base32 摘要 52 字符；不写同名 annotation） | G-08 必写；必填归属标签（新建 Job 缺失不可创建，值语法由 apiserver 校验，labels.md 第 7 节）；供工程详情按软件包查询 Job 构建历史（同一仓库多 spec 共享同值）；本控制器查询不消费（list 仅按 build-name/spec-name，8.1） |
 | `metadata.labels["ebs.io/target-os"]` | `Build.spec.buildTarget.os` | G-08 必写；RpmRepo 物化队列过滤条件（labels.md 第 7 节 / artifact-manager.md 9.3.3，缺失的 Job 不进物化队列） |
 | `metadata.labels["ebs.io/target-arch"]` | `Build.spec.buildTarget.arch` | G-08 必写；同上 |
-| `metadata.annotations`（`ebs.io/build-resource-namespace` / `ebs.io/build-resource` / `ebs.io/build-resource-generation`） | 实际命中的 BuildResource 命名空间 / 名称 / 解析时 `metadata.generation` | 审计注解：记录资源配置来源；仅审计用途，调度始终以 `spec.resources` 为准 |                                                                                                 |
+| `metadata.annotations`（`ebs.io/build-resource-config` / `ebs.io/build-resource-config-generation`） | `default` / 解析时 BuildResourceConfig 的 `metadata.generation` | 审计注解：记录资源配置来源；仅审计用途，调度始终以 `spec.resources` 为准 |
 | `spec.priority` | `0` | 类型零值即默认，不显式设置                                                                                                                 |
 | `spec.runtime` | `"ct"` | 常量；apiserver `SetDefaults_Job` 同值兜底（见下"apiserver 默认与覆写"）                                                                      |
 | `spec.runtimeSpec` | `{"image": BuildConf 快照解析结果}` | RawExtension；ct 运行时的镜像来源：集群级 BuildConf（name=default，`GET /apis/ebs/v1/buildconfs/default`）——每轮创建新 Job 的 reconcile 经 `GetBuildConf` 读取一次快照、同轮批量创建共享，按 `Build.spec.buildTarget.os/arch` 解析 `spec.targets[os].arches[arch].image`（复用共享 `BuildImage`）；读取失败或映射缺失 → 本轮不创建新 Job，返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 Failed，E-26）；已存在 Job 沿用固化镜像、不因配置更新重写（生效边界见 [build-configuration.md](build-configuration.md) 2.5.3） |
 | `spec.timeoutSeconds` | `10800` | 常量（3 小时）；apiserver `SetDefaults_Job` 同值兜底                                                                                     |
-| `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 取值来源：**BuildResource 对象**（[build-configuration.md](build-configuration.md) 3.5）——创建 Job 时 GET `{project}/buildresources/{project}`，404 且 project≠default → 回退 GET `default/buildresources/default`，仍 404 → spec 标 `Failed`（condition `DefaultBuildResourceNotFound`，E-27）不创建 Job；其他错误（超时/无权限/5xx/反序列化失败）原样返回 error 退避重试。命中对象内按 `spec.default` → `spec.packages[specName].default` → `spec.packages[specName].arches[arch]` 逐字段覆盖（`spec.default.requests` 经 apiserver 校验保证完整，总能解析出完整配置；任一级声明 request 未声明 limit 时 limit 取同级 request）。**不再读 `BuildInfo.spec.buildPayload` 顶层 `cpu`/`memory` 键**（该键仅作为 payload 基底原样保留） |
+| `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET 集群级 `/apis/ebs/v1/buildresourceconfigs/default`；404 → spec 标 `Failed`（condition `DefaultBuildResourceConfigNotFound`，E-27）不创建 Job；其他错误（超时/无权限/5xx/反序列化失败）原样返回 error 退避重试。对象内按 `spec.default` → `spec.packages[specName].default` → `spec.packages[specName].arches[arch]` 逐字段覆盖（[build-configuration.md](build-configuration.md) 3.5）。**不再读 `BuildInfo.spec.buildPayload` 顶层 `cpu`/`memory` 键**（该键仅作为 payload 基底原样保留） |
 | `spec.nodeSelector` | `{"ebs.io/runner-arch": Build.spec.buildTarget.arch}` | scheduler 按 runner label 精确匹配架构                                                                                               |
 | `spec.tolerations` | 不设置（空） | 类型零值                                                                                                                          |
 | `spec.payload` | 构造 YAML 字符串（见下"payload 构造契约"） | **不再原样透传** `BuildInfo.spec.buildPayload`                                                                                        |
@@ -1212,7 +1211,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 **payload 构造契约**：
 
-1. **基底**：`BuildInfo.spec.buildPayload`（Build Controller 创建时从 `Project.spec.buildPayload` 深拷贝固化、已有 BuildInfo 不覆盖，本控制器只读、不随 Project 后续变更，见 15.2.2）经 YAML 解码 → map；解析失败或非 map → `{}` + warning（与 16.1 同一解析语义与告警义务）。项目级键（`macros` / `installPackages` / `cpu` / `memory` 等）原样保留（顶层 `cpu` / `memory` 键不再驱动 `spec.resources`——资源改由 BuildResource 解析（见 15.3.1），键本身仍随基底原样透传，不剔除）；`Repo` / `repo_priority` 按下述注入规则处理。
+1. **基底**：`BuildInfo.spec.buildPayload`（Build Controller 创建时从 `Project.spec.buildPayload` 深拷贝固化、已有 BuildInfo 不覆盖，本控制器只读、不随 Project 后续变更，见 15.2.2）经 YAML 解码 → map；解析失败或非 map → `{}` + warning（与 16.1 同一解析语义与告警义务）。项目级键（`macros` / `installPackages` / `cpu` / `memory` 等）原样保留（顶层 `cpu` / `memory` 键不再驱动 `spec.resources`——资源改由 BuildResourceConfig 解析（见 15.3.1），键本身仍随基底原样透传，不剔除）；`Repo` / `repo_priority` 按下述注入规则处理。
 2. **注入（覆盖基底同名键）**：
    - per-spec 四键（`specDepends` 统一为本轮组装的内存视图，15.11，不读主资源字段）：
      - `spec_name` = 本轮组装的 specDepends **map key**（条目内 `specName` 字段以 key 为准，不直读）；
@@ -1681,7 +1680,7 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 | single | 7.2.3 的组装、直通派发、Repo 注入、完成与失败分支 |
 | 依赖图 | 7.2.1 自环、多环、交叉环、确定性选点；7.4.2 计数及失败放宽；7.4.6 三类门禁 |
 | Job 回填 | 7.4.4 多代排序、7.4.5 phase 映射、7.4.7 install 三分支和动态补边 |
-| Job 构造 | 15.3.1 确定性名称、AlreadyExists 身份核验及 GET 404 后可重试且同名同代次、超时迟到写入与重启恢复；payload、标签编码、BuildConf 批次快照、BuildResource；E-19/E-26/E-27 |
+| Job 构造 | 15.3.1 确定性名称、AlreadyExists 身份核验及 GET 404 后可重试且同名同代次、超时迟到写入与重启恢复；payload、标签编码、BuildConf 批次快照、BuildResourceConfig；E-19/E-26/E-27 |
 | 停止派发 | 6.5/6.5.1 全部分支（登记后发送前崩溃、Unknown 后重启、持续 404、确认清除失败）；E-28/E-29/E-30 分别覆盖 Pending/Processing、未决创建、多页 Job、旧代与构建集外 Job、重启、依赖恢复、中止优先级 |
 | 缓存 | 5.4 生命周期与计数边界；15.9 持久化顺序；15.10 刷新与分层；15.11 命中、LRU 淘汰、补源失败 |
 | 解析 | 16.1～16.3 版本选择、约束比较、宏、架构归一、buildRemoves 与解析回退 |
