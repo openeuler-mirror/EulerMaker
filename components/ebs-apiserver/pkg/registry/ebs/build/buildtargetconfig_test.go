@@ -21,7 +21,7 @@ func TestUnconfiguredBuildDoesNotAcquireClaim(t *testing.T) {
 		t.Run(buildType, func(t *testing.T) {
 			store := esstore.New(nil, "build", "Build", NewStorage(runtime.NewScheme()).Build.(*genericregistry.Store))
 			calls := 0
-			hook := ValidateBuildTargetConfig(confGetter{obj: configForTest(ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{}}), t: t}, nil)
+			hook := ValidateBuildTargetConfig(confGetter{obj: configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), t: t}, nil)
 			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error { calls++; return hook(ctx, obj) })
 			store.SetCreateTransaction(func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error) {
 				t.Fatal("invalid target acquired claim")
@@ -50,8 +50,8 @@ func (g confGetter) Get(ctx context.Context, name string, _ *metav1.GetOptions) 
 	return g.obj, g.err
 }
 
-func TestBuildConfCreateHook(t *testing.T) {
-	conf := configForTest(ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{"os": {Arches: map[string]ebsv1.BuildConfArch{"arch": {Image: "build:v1"}}}}})
+func TestBuildTargetConfigCreateHook(t *testing.T) {
+	conf := configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{"os": {Arches: map[string]ebsv1.BuildTargetArch{"arch": {Image: "build:v1"}}}}})
 	for _, tc := range []struct {
 		name string
 		obj  runtime.Object
@@ -61,7 +61,7 @@ func TestBuildConfCreateHook(t *testing.T) {
 	}{
 		{"allowed", conf, nil, "arch", 0},
 		{"unsupported", conf, nil, "other", 422},
-		{"empty", configForTest(ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{}}), nil, "arch", 422},
+		{"empty", configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), nil, "arch", 422},
 		{"unavailable", nil, errors.New("unavailable"), "arch", 503},
 		{"missing", nil, apierrors.NewNotFound(ebsv1.Resource("configs"), ebsv1.BuildTargetConfigName), "arch", 503},
 	} {
@@ -83,7 +83,7 @@ func TestBuildConfCreateHook(t *testing.T) {
 	}
 }
 
-func configForTest(spec ebsv1.BuildConfSpec) *ebsv1.Config {
+func configForTest(spec ebsv1.BuildTargetContent) *ebsv1.Config {
 	content, _ := json.Marshal(spec)
 	return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: string(content)}}
 }
