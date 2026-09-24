@@ -1,7 +1,9 @@
 import { computed, onMounted, ref } from "vue";
 import { errorTranslationKey, request } from "@/api";
 import type { BuildConf, BuildTarget } from "@/types";
-import { configuredOS, configuredArches, supportsTarget } from "@/components/buildConfDraft";
+import type { Config } from "@/types";
+import { parse } from "yaml";
+import { buildConfSpec, configuredOS, configuredArches, supportsTarget } from "@/components/buildConfDraft";
 
 const configuration = ref<BuildConf | null>(null);
 const loading = ref(false);
@@ -14,7 +16,11 @@ export function useBuildConf() {
     loading.value = true;
     error.value = "";
     pending = (async () => {
-      try { configuration.value = await request<BuildConf>("/apis/ebs/v1/buildconfs/default"); }
+      try {
+        const config = await request<Config>("/apis/ebs/v1/configs/build-target");
+        if (config.metadata?.name !== "build-target") throw new Error("invalid build-target Config");
+        configuration.value = { spec: buildConfSpec(parse(config.spec.content, { uniqueKeys: true })) };
+      }
       catch (reason) { configuration.value = null; error.value = errorTranslationKey(reason, "buildConf.loadFailed"); }
       finally { loading.value = false; pending = null; }
     })();

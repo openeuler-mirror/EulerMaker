@@ -2,7 +2,7 @@
 
 ## 1. 总体职责
 
-本文统一维护集群级 `Config` 和 `Script` 的设计。`Config` 以 `spec.content` 保存 YAML 文本，由使用方按对象名称解析；它不取代 `Script`。BuildInfo Controller 在创建 Job 时选择配置，Scheduler 和 Runner 使用 Job 中固化的结果。以下为目标设计，现有 `BuildConf`、`BuildResourceConfig` 代码尚待迁移。
+本文统一维护集群级 `Config` 和 `Script` 的设计。`Config` 以 `spec.content` 保存 YAML 文本，由使用方按对象名称解析；它不取代 `Script`。BuildInfo Controller 在创建 Job 时选择配置，Scheduler 和 Runner 使用 Job 中固化的结果。
 
 | 对象 | 配置内容 | 作用域 | Job 中的结果 |
 |------|----------|--------|-------------|
