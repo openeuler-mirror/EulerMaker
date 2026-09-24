@@ -67,17 +67,16 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | 资源 | 单数/复数 | 短名 | 作用域 |
 |------|-----------|------|--------|
 | Project | `project/projects` | `proj` | 集群级 |
-| BuildConf | `buildconf/buildconfs` | `bc` | 集群级 |
+| Config | `config/configs` | `cfg` | 集群级 |
 | Snapshot | `snapshot/snapshots` | `snap` | Project |
 | Build | `build/builds` | `build` | Project |
 | Job | `job/jobs` | `job` | Project |
 | BuildInfo | `buildinfo/buildinfos` | `bi` | Project |
 | RpmRepo | `rpmrepo/rpmrepos` | `repo` | Project |
-| BuildResourceConfig | `buildresourceconfig/buildresourceconfigs` | `brc` | 集群级 |
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
 
-BuildConf 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 delete/watch。读取公开，写入要求 Ops/Admin/System，更新保留最新 `metadata.resourceVersion`。对象固定为 `default`，通过修改 spec 移除构建目标，不删除对象。
+Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。匿名、普通用户和 Runner 只能具名读取 `Public` 对象；`OpsOnly` 读取、list 和写入要求 Ops/Admin/System，更新保留最新 `metadata.resourceVersion`。内置对象 `build-target`、`build-resource` 不允许删除。
 
 ### 3.2 登录与 Context
 
@@ -119,14 +118,14 @@ ebsctl get jobs --watch
 
 watch 输出 table 时增加 `EVENT` 列；JSON/YAML 模式逐事件输出完整 WatchEvent。连接正常超时后使用最后的 `resourceVersion` 重连；收到资源版本过期响应时重新 list。用户主动中断返回 0，无法恢复的认证或协议错误返回非 0。
 
-`BuildResourceConfig` 只提供集群级 list/get，不支持 watch。例如：
+`Config` 只提供集群级 list/get，不支持 watch。list 仅允许 Ops/Admin/System。例如：
 
 ```bash
-ebsctl get buildresourceconfigs
-ebsctl get brc default -o yaml
+ebsctl get configs
+ebsctl get cfg build-resource -o yaml
 ```
 
-所有已认证用户均可读取集群级 `BuildResourceConfig`，匿名用户不可读取。
+非运维身份仅可具名读取 `Public` 对象，不可 list 或读取 `OpsOnly` 对象。
 
 ### 3.4 创建和更新
 
@@ -147,12 +146,13 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
-`BuildResourceConfig` 支持 create、replace 和 delete，但不支持 patch；客户端会在请求发送前拒绝 `patch buildresourceconfig`。普通用户对该资源只有读权限，create、replace 和 delete 仅允许 Ops、Admin 或 System 身份执行。例如：
+`Config` 支持 create、replace、patch，以及删除非内置对象。普通用户仅能具名读取 `Public` 对象，写入仅允许 Ops、Admin 或 System 身份执行。例如：
 
 ```bash
-ebsctl create -f buildresourceconfig.yaml
-ebsctl replace -f buildresourceconfig.yaml
-ebsctl delete brc custom-config
+ebsctl create -f config.yaml
+ebsctl replace -f config.yaml
+ebsctl patch cfg custom-config --type merge --patch '{"spec":{"visibility":"OpsOnly"}}'
+ebsctl delete cfg custom-config
 ```
 
 `ebsctl` 不提供 `apply`。声明式对象的创建和更新分别使用 `create` 与 `replace`，局部字段更新使用 `patch`。
@@ -223,7 +223,7 @@ credentials:
 | Job | NAME、PHASE、STAGE、RUNNER、AGE |
 | BuildInfo | NAME、STATUS、AGE |
 | RpmRepo | NAME、STATUS、AGE |
-| BuildResourceConfig | NAME、CPU、MEMORY、PACKAGES、AGE |
+| Config | NAME、VISIBILITY、AGE |
 
 ### 5.2 退出码
 
@@ -307,4 +307,4 @@ YAML 转 JSON 时保留整数精度。任何输出都不得包含 IAM credential
 | 安全 | TLS CA、insecure 警告、URL 校验、敏感字段脱敏、响应体上限 |
 | 兼容性 | 新增未知响应字段、旧配置迁移、客户端与服务端 API 版本不匹配 |
 
-端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户只读集群级 BuildResourceConfig、Ops 管理 BuildResourceConfig，以及未经授权的写入或受保护资源访问被拒绝。
+端到端测试使用真实 Gateway 和 apiserver，至少覆盖：登录后创建 Project、创建并 watch Job、普通用户具名读取 Public 对象但不能读取 OpsOnly 或 list、Ops 管理 Config、匿名具名读取 Public 对象、非运维身份 list 被拒绝，以及未经授权的写入或受保护资源访问被拒绝。

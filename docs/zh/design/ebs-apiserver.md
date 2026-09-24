@@ -84,7 +84,7 @@ apiVersion: ebs/v1
 
 已安装到 apiserver 的资源如下：
 
-集群级 `BuildConf` 使用 Elasticsearch 存储，在 Ready 前幂等初始化 `default` 对象，并在创建 Build 前校验目标映射。接口、初始化和错误规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。
+目标设计中，集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target` 和 `build-resource`。创建 Build 前解析 `build-target` 的 `spec.content` 校验目标映射；通用 Config 写入不解析业务内容。接口、初始化和错误规则见 [构建配置设计](build-configuration.md#11-config-公共资源与可见性)。现有两个专用配置资源的代码需迁移后才与本表一致。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|
@@ -95,11 +95,10 @@ apiVersion: ebs/v1
 | RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
 | Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
 | Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
-| BuildResourceConfig | Elasticsearch | - | `/apis/ebs/v1/buildresourceconfigs` | 否 | - |
-| BuildConf | Elasticsearch | - | `/apis/ebs/v1/buildconfs` | 否 | - |
+| Config | Elasticsearch | - | `/apis/ebs/v1/configs` | 否 | - |
 | Script | Elasticsearch | - | `/apis/ebs/v1/scripts` | 否 | - |
 
-其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`BuildConf`、`BuildResourceConfig` 和 `Script` 为集群级资源。
+其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`Config` 和 `Script` 为集群级资源。
 
 apiserver还为 Runner提供服务端过滤的 Job list-watch：
 
@@ -293,8 +292,7 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
-ebs-buildresourceconfigs
-ebs-buildconfs
+ebs-configs
 ebs-scripts
 ebs-users
 ebs-machineaccounts
@@ -414,7 +412,7 @@ ESStore 从 `internalversion.ListOptions` 读取已经解析的 selector，并�
 | `key` | nested 查询匹配 `key` |
 | `!key` | `must_not` nested 查询匹配 `key` |
 
-Project、Snapshot、Build 和 BuildInfo 使用通用状态字段；BuildResourceConfig 无 status，RpmRepo 的过程仓与正式发布各自使用独立状态字段：
+Project、Snapshot、Build 和 BuildInfo 使用通用状态字段；Config 无 status，RpmRepo 的过程仓与正式发布各自使用独立状态字段：
 
 | API 字段 | ES 字段 | 操作符 |
 |----------|---------|--------|
