@@ -127,18 +127,23 @@ func TestProjectFieldLabelConversion(t *testing.T) {
 	}
 }
 
-func TestBuildResourceConfigTypesAreRegistered(t *testing.T) {
+func TestConfigTypesAreRegistered(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	for _, kind := range []string{"BuildResourceConfig", "BuildResourceConfigList"} {
+	for _, kind := range []string{"Config", "ConfigList"} {
 		obj, err := scheme.New(SchemeGroupVersion.WithKind(kind))
 		if err != nil {
 			t.Fatalf("new %s: %v", kind, err)
 		}
 		if obj == nil {
 			t.Fatalf("new %s returned nil", kind)
+		}
+	}
+	for _, kind := range []string{"BuildConf", "BuildConfList", "BuildResourceConfig", "BuildResourceConfigList"} {
+		if _, err := scheme.New(SchemeGroupVersion.WithKind(kind)); err == nil {
+			t.Fatalf("retired resource %s is still registered", kind)
 		}
 	}
 }

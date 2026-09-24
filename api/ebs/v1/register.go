@@ -22,14 +22,12 @@ var (
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&Config{}, &ConfigList{},
-		&BuildConf{}, &BuildConfList{},
 		&Script{}, &ScriptList{},
 		&Project{}, &ProjectList{},
 		&Snapshot{}, &SnapshotList{},
 		&Build{}, &BuildList{},
 		&BuildInfo{}, &BuildInfoList{},
 		&RpmRepo{}, &RpmRepoList{},
-		&BuildResourceConfig{}, &BuildResourceConfigList{},
 		&Job{}, &JobList{},
 		&Runner{}, &RunnerList{},
 	)

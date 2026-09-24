@@ -586,7 +586,7 @@ type RpmRepoList struct {
 
 ## 六、Config（集群级配置）
 
-**API**：`/apis/ebs/v1/configs`；**Elasticsearch**：alias `ebs-configs`，文档 ID `{name}`。不提供 Project-scoped API、Watch 或 `/status`。资源生命周期、可见性及消费规则见 [构建配置设计](./build-configuration.md#11-config-公共资源与可见性)。
+**API**：`/apis/ebs/v1/configs`；**Elasticsearch**：alias `ebs-configs`，文档 ID `{name}`。不提供 Project-scoped API、Watch 或 `/status`。资源生命周期、可见性及消费规则见 [构建配置设计](./data-models~config.md#11-config-公共资源与可见性)。
 
 ```go
 type Config struct {
@@ -638,7 +638,7 @@ type BuildTargetContentArch struct {
 }
 ```
 
-`targets` 可为空；每个 OS 下至少有一个架构，每个架构必须有合法镜像引用。完整校验见 [构建目标内容](./build-configuration.md#22-对象)。
+`targets` 可为空；每个 OS 下至少有一个架构，每个架构必须有合法镜像引用。完整校验见 [构建目标内容](./data-models~config.md#22-对象)。
 
 `build-resource` 的 `content` 解码为以下内部结构（不是公开 API 类型）：
 
@@ -653,7 +653,7 @@ type PackageResourceConfig struct {
 }
 ```
 
-`default.requests` 必须同时包含 CPU 和 memory；`packages` 可为空。仅允许 CPU、memory 资源键；包名和架构名按 [构建资源内容](./build-configuration.md#3-构建资源内容) 的规则校验。按表级默认值、包级默认值、架构专属值逐字段合并，同一级 request 未给 limit 时取该级 request；最终 limits 均不得低于 requests。内容解析器需拒绝未知字段和重复 YAML key，不能静默丢失规则。
+`default.requests` 必须同时包含 CPU 和 memory；`packages` 可为空。仅允许 CPU、memory 资源键；包名和架构名按 [构建资源内容](./data-models~config.md#3-构建资源内容) 的规则校验。按表级默认值、包级默认值、架构专属值逐字段合并，同一级 request 未给 limit 时取该级 request；最终 limits 均不得低于 requests。内容解析器需拒绝未知字段和重复 YAML key，不能静默丢失规则。
 
 BuildInfo Controller 读取 `Config/build-target` 与 `Config/build-resource`，分别固化镜像及资源到 Job；Job 创建后配置变化不回写。Script 是独立资源，不复用 Config 内容。
 
@@ -679,7 +679,7 @@ type ScriptList struct {
 }
 ```
 
-`content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限，仍受请求体限制；首行通过 shebang 指定容器内解释器。名称为集群内唯一的 DNS subdomain，不支持 generateName。完整约定见 [Script 设计](build-configuration.md#4-script构建脚本)。目前实现资源 API，scriptRef 消费链路待接入。
+`content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限，仍受请求体限制；首行通过 shebang 指定容器内解释器。名称为集群内唯一的 DNS subdomain，不支持 generateName。完整约定见 [Script 设计](data-models~script.md)。目前实现资源 API，scriptRef 消费链路待接入。
 
 ## 七、Job（任务）
 

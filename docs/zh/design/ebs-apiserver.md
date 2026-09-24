@@ -84,7 +84,7 @@ apiVersion: ebs/v1
 
 已安装到 apiserver 的资源如下：
 
-目标设计中，集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target` 和 `build-resource`。创建 Build 前解析 `build-target` 的 `spec.content` 校验目标映射；通用 Config 写入不解析业务内容。接口、初始化和错误规则见 [构建配置设计](build-configuration.md#11-config-公共资源与可见性)。现有两个专用配置资源的代码需迁移后才与本表一致。
+集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target` 和 `build-resource`。创建 Build 前解析 `build-target` 的 `spec.content` 校验目标映射；通用 Config 写入不解析业务内容。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|

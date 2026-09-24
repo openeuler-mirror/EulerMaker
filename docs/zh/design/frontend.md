@@ -2,7 +2,7 @@
 
 ## 一、文档状态
 
-目标设计中构建配置支持运维编辑 OS/Arch/镜像映射，工程目标选项解析 `spec.content`，并保留旧工程已失效的目标值；规则见 [构建配置设计](build-configuration.md#26-前端与-ebsctl)。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](build-configuration.md#4-script构建脚本)。
+目标设计中构建配置支持运维编辑 OS/Arch/镜像映射，工程目标选项解析 `spec.content`，并保留旧工程已失效的目标值；规则见 [构建配置设计](data-models~config.md#26-前端与-ebsctl)。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](data-models~script.md)。
 
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 

@@ -115,7 +115,7 @@ The detailed design documents are currently in Chinese:
 - [Data models](docs/zh/design/data-models.md)
 - [API Server](docs/zh/design/ebs-apiserver.md) and [Gateway](docs/zh/design/ebs-gateway.md)
 - [Controller Manager](docs/zh/design/controller-manager.md) and [Scheduler](docs/zh/design/scheduler.md)
-- [Build configuration](docs/zh/design/build-configuration.md) and [Label conventions](docs/zh/design/labels.md)
+- [Build configuration](docs/zh/design/data-models~config.md), [build scripts](docs/zh/design/data-models~script.md), and [label conventions](docs/zh/design/labels.md)
 - [Git Server](docs/zh/design/git-server.md) and [Artifact Manager](docs/zh/design/artifact-manager.md)
 
 ## Contributing
