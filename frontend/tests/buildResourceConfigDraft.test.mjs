@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 
-const source = readFileSync(new URL("../src/components/buildResourceDraft.ts", import.meta.url), "utf8");
+const source = readFileSync(new URL("../src/components/buildResourceConfigDraft.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } });
 const { parseResourceDraft, resourceSpec } = await import("data:text/javascript;base64," + Buffer.from(outputText).toString("base64"));
 

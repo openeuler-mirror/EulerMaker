@@ -12,12 +12,12 @@
         <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
     <div class="section-heading"><h2>{{ t("operations.resources") }}</h2></div>
     <p class="form-hint">{{ t("operations.resourcesHint") }}</p>
-    <form class="operations-project-form" @submit.prevent="loadResources"><label class="field required-field operations-project-field"><span>{{ t("operations.projectName") }}</span><input v-model.trim="projectName" required maxlength="63" autocomplete="off" :placeholder="t('operations.projectPlaceholder')" /></label><button class="secondary-button" type="submit" :disabled="resourcesLoading">{{ t("operations.loadResources") }}</button><button v-if="loadedProject" class="primary-button" type="button" @click="openCreate">{{ t("operations.createResource") }}</button></form>
+    <div class="operations-project-form"><button class="secondary-button" type="button" :disabled="resourcesLoading" @click="loadResources">{{ t("common.refresh") }}</button><button class="primary-button" type="button" @click="openCreate">{{ t("operations.createResource") }}</button></div>
     <div v-if="resourcesError" class="inline-error" role="alert"><WarningFilled />{{ t(resourcesError) }}</div>
-    <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else-if="loadedProject"><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.metadata?.name"><td><strong>{{ resource.metadata?.name }}</strong></td><td>{{ resource.spec?.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.spec?.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.spec?.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :disabled="isProtectedDefaultResource(resource)" :title="isProtectedDefaultResource(resource) ? t('operations.defaultResourceProtected') : undefined" @click="openDelete(resource)">{{ t("common.remove") }}</button></td></tr></tbody></table></div></template>
+    <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.metadata?.name"><td><strong>{{ resource.metadata?.name }}</strong></td><td>{{ resource.spec?.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.spec?.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.spec?.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :disabled="isProtectedDefaultResource(resource)" :title="isProtectedDefaultResource(resource) ? t('operations.defaultResourceProtected') : undefined" @click="openDelete(resource)">{{ t("common.remove") }}</button></td></tr></tbody></table></div></template>
         <section v-if="editorOpen" class="operations-resource-editor" aria-labelledby="resource-editor-title">
           <div class="section-heading"><h3 id="resource-editor-title">{{ t(editing ? 'operations.editResource' : 'operations.createResource') }}</h3></div>
-          <form class="project-form" @submit.prevent="saveResource"><label class="field required-field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="resourceName" required maxlength="63" :disabled="Boolean(editing)" /></label><BuildResourceSpecEditor ref="specEditor" :source="specSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form>
+          <form class="project-form" @submit.prevent="saveResource"><label class="field required-field"><span>{{ t("operations.resourceName") }}</span><input v-model.trim="resourceName" required maxlength="63" :disabled="Boolean(editing)" /></label><BuildResourceConfigSpecEditor ref="specEditor" :source="specSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form>
         </section>
       </section>
 
@@ -50,10 +50,10 @@ import { useSessionStore } from "@/stores/session";
 import StatusBadge from "@/components/StatusBadge.vue";
 import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
-import BuildResourceSpecEditor from "@/components/BuildResourceSpecEditor.vue";
+import BuildResourceConfigSpecEditor from "@/components/BuildResourceConfigSpecEditor.vue";
 import BuildConfEditor from "@/components/BuildConfEditor.vue";
 import ScriptManager from "@/components/ScriptManager.vue";
-import type { BuildResource, Runner } from "@/types";
+import type { BuildResourceConfig, Runner } from "@/types";
 
 type OperationsSection = "build" | "resources" | "scripts" | "runners";
 
@@ -80,18 +80,16 @@ const filteredRunners = computed(() => {
 });
 const runnersLoading = ref(false);
 const runnersError = ref("");
-const projectName = ref("default");
-const loadedProject = ref("");
-const resources = ref<BuildResource[]>([]);
+const resources = ref<BuildResourceConfig[]>([]);
 const resourcesLoading = ref(false);
 const resourcesError = ref("");
 const success = ref("");
 const editorOpen = ref(false);
-const editing = ref<BuildResource | null>(null);
+const editing = ref<BuildResourceConfig | null>(null);
 const resourceName = ref("");
 const specSource = ref("");
-const specEditor = ref<InstanceType<typeof BuildResourceSpecEditor> | null>(null);
-const deleting = ref<BuildResource | null>(null);
+const specEditor = ref<InstanceType<typeof BuildResourceConfigSpecEditor> | null>(null);
+const deleting = ref<BuildResourceConfig | null>(null);
 const confirmName = ref("");
 const dialogError = ref("");
 const saving = ref(false);
@@ -99,7 +97,7 @@ const saving = ref(false);
 function selectSection(section: OperationsSection): void {
   activeSection.value = section;
   success.value = "";
-  if (section === "resources" && !loadedProject.value && !resourcesLoading.value) void loadResources();
+  if (section === "resources" && !resources.value.length && !resourcesLoading.value) void loadResources();
   if (section === "runners" && !runners.value.length && !runnersLoading.value) void loadRunners();
 }
 async function loadRunners(): Promise<void> {
@@ -146,56 +144,52 @@ async function evictRunner(): Promise<void> {
   finally { evictionSaving.value = false; }
 }
 async function loadResources(): Promise<void> {
-  const project = projectName.value;
-  if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(project)) { resourcesError.value = "operations.invalidProject"; return; }
   resourcesLoading.value = true;
   resourcesError.value = "";
-  loadedProject.value = "";
   try {
-    resources.value = await loadAll<BuildResource>(`/apis/ebs/v1/projects/${encodeURIComponent(project)}/buildresources`);
-    loadedProject.value = project;
+    resources.value = await loadAll<BuildResourceConfig>("/apis/ebs/v1/buildresourceconfigs");
   } catch (error) { resourcesError.value = errorTranslationKey(error, "operations.loadResourcesFailed"); }
   finally { resourcesLoading.value = false; }
 }
 function openCreate(): void {
   editing.value = null;
-  resourceName.value = loadedProject.value;
+  resourceName.value = "";
   specSource.value = JSON.stringify({ default: { requests: { cpu: "1", memory: "2Gi" } }, packages: { example: { default: { requests: { cpu: "1", memory: "2Gi" } } } } }, null, 2);
   dialogError.value = "";
   editorOpen.value = true;
 }
-async function openEdit(resource: BuildResource): Promise<void> {
+async function openEdit(resource: BuildResourceConfig): Promise<void> {
   if (!resource.metadata?.name) return;
   dialogError.value = "";
   try {
-    editing.value = await request<BuildResource>(resourcePath(resource.metadata.name));
+    editing.value = await request<BuildResourceConfig>(resourcePath(resource.metadata.name));
     resourceName.value = resource.metadata.name;
     specSource.value = JSON.stringify(editing.value.spec || {}, null, 2);
     editorOpen.value = true;
   } catch (error) { resourcesError.value = errorTranslationKey(error, "operations.loadResourcesFailed"); }
 }
 function closeEditor(): void { if (!saving.value) { editorOpen.value = false; editing.value = null; } }
-function isProtectedDefaultResource(resource: BuildResource): boolean { return loadedProject.value === "default" && resource.metadata?.name === "default"; }
-function openDelete(resource: BuildResource): void { if (isProtectedDefaultResource(resource)) return; deleting.value = resource; confirmName.value = ""; dialogError.value = ""; }
+function isProtectedDefaultResource(resource: BuildResourceConfig): boolean { return resource.metadata?.name === "default"; }
+function openDelete(resource: BuildResourceConfig): void { if (isProtectedDefaultResource(resource)) return; deleting.value = resource; confirmName.value = ""; dialogError.value = ""; }
 function closeDelete(): void { if (!saving.value) deleting.value = null; }
-function resourcePath(name: string): string { return `/apis/ebs/v1/projects/${encodeURIComponent(loadedProject.value)}/buildresources/${encodeURIComponent(name)}`; }
-async function refreshResources(): Promise<void> { projectName.value = loadedProject.value; await loadResources(); }
+function resourcePath(name: string): string { return `/apis/ebs/v1/buildresourceconfigs/${encodeURIComponent(name)}`; }
+async function refreshResources(): Promise<void> { await loadResources(); }
 async function saveResource(): Promise<void> {
   if (saving.value) return;
   if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(resourceName.value)) { dialogError.value = "operations.invalidResource"; return; }
-  let spec: BuildResource["spec"];
+  let spec: BuildResourceConfig["spec"];
   try {
     if (!specEditor.value) return;
-    spec = specEditor.value.getSpec() as BuildResource["spec"];
+    spec = specEditor.value.getSpec() as BuildResourceConfig["spec"];
   } catch { return; }
   saving.value = true;
   dialogError.value = "";
   const current = editing.value;
-  const body: BuildResource = current
+  const body: BuildResourceConfig = current
     ? { ...current, spec }
-    : { apiVersion: "ebs/v1", kind: "BuildResource", metadata: { name: resourceName.value, namespace: loadedProject.value }, spec };
+    : { apiVersion: "ebs/v1", kind: "BuildResourceConfig", metadata: { name: resourceName.value }, spec };
   try {
-    await request<BuildResource>(current ? resourcePath(resourceName.value) : `/apis/ebs/v1/projects/${encodeURIComponent(loadedProject.value)}/buildresources`, { method: current ? "PUT" : "POST", body: JSON.stringify(body) });
+    await request<BuildResourceConfig>(current ? resourcePath(resourceName.value) : "/apis/ebs/v1/buildresourceconfigs", { method: current ? "PUT" : "POST", body: JSON.stringify(body) });
     success.value = t(current ? "operations.resourceSaved" : "operations.resourceCreated", { name: resourceName.value });
     editorOpen.value = false;
     editing.value = null;
@@ -205,7 +199,7 @@ async function saveResource(): Promise<void> {
 }
 async function deleteResource(): Promise<void> {
   const name = deleting.value?.metadata?.name;
-  if (!name || (loadedProject.value === "default" && name === "default") || confirmName.value !== name || saving.value) return;
+  if (!name || name === "default" || confirmName.value !== name || saving.value) return;
   saving.value = true;
   dialogError.value = "";
   try {

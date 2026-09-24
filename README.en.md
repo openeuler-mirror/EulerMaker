@@ -14,7 +14,7 @@ The project uses a multi-module Go backend and a Vue 3 / TypeScript frontend. Ku
 - Scheduling and execution: Scheduler assigns Jobs to Runners, which execute tasks and report status, logs, and artifacts.
 - Artifact and repository services: upload manifests, artifacts, live logs, immutable process repository creation, and formal release APIs.
 - Access control: Gateway handles authentication, project authorization, and machine-account access; users interact through the Web console or ebsctl.
-- Build configuration: BuildConf defines target systems, architectures, and images; BuildResource defines build resource rules.
+- Build configuration: BuildConf defines target systems, architectures, and images; BuildResourceConfig defines build resource rules.
 
 Controller Manager currently registers Build, Snapshot, Job, and Runner Controllers. Business orchestration for BuildInfo Controller and RpmRepo Controller is not yet connected. Starting all services does not mean the complete end-to-end build pipeline is ready. Design documents include planned capabilities; component code and tests determine current support.
 

@@ -123,9 +123,9 @@ export interface Runner {
   status?: { phase?: string; heartbeat?: string; capacity?: Record<string, string>; allocatable?: Record<string, string>; info?: { os?: string; kernelVersion?: string; runtimeVersion?: string; agentVersion?: string } };
 }
 
-export interface BuildResource {
+export interface BuildResourceConfig {
   apiVersion?: "ebs/v1";
-  kind?: "BuildResource";
+  kind?: "BuildResourceConfig";
   metadata?: ObjectMeta;
   spec?: { default?: { requests?: Record<string, string>; limits?: Record<string, string> }; packages?: Record<string, unknown> };
 }

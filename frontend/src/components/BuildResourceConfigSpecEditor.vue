@@ -48,7 +48,7 @@
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import ResourceRequirementsFields from "./ResourceRequirementsFields.vue";
-import { parseResourceDraft, resourceSpec, type ResourceDraft } from "./buildResourceDraft";
+import { parseResourceDraft, resourceSpec, type ResourceDraft } from "./buildResourceConfigDraft";
 const props = defineProps<{ source: string; disabled?: boolean }>();
 const { t } = useI18n();
 const source = ref(props.source);

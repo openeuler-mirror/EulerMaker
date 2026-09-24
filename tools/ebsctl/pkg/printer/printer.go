@@ -137,7 +137,7 @@ func tableColumns(definition resource.Definition, wide bool) []column {
 		columns = []column{name, phase("PHASE"), {name: "STAGE", value: func(object map[string]any) string { return nestedString(object, "status", "stage") }}, {name: "RUNNER", value: func(object map[string]any) string { return nestedString(object, "status", "runner") }}, age}
 	case "BuildInfo", "RpmRepo":
 		columns = []column{name, phase("STATUS"), age}
-	case "BuildResource":
+	case "BuildResourceConfig":
 		columns = []column{
 			name,
 			{name: "CPU", value: func(object map[string]any) string { return nestedString(object, "spec", "default", "requests", "cpu") }},
