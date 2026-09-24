@@ -10,10 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // --- deterministic naming & label encoding ---

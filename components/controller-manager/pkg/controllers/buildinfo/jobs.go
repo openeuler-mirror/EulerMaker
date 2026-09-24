@@ -17,14 +17,15 @@ import (
 	"strconv"
 	"strings"
 
+	yaml "gopkg.in/yaml.v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
-	yaml "gopkg.in/yaml.v2"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // Job field constants (design 15.3.1).
