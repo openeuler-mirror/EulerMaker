@@ -78,7 +78,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.BaseBuildRef":                  {"name"},
 		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
-		"ebs-api/ebs/v1.BuildResourceConfigSpec":             {"default", "packages"},
+		"ebs-api/ebs/v1.BuildResourceContent":             {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
 		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
 		"ebs-api/ebs/v1.SnapshotStatus":                {"phase", "conditions"},

@@ -104,7 +104,7 @@ spec:
 
 复用现有通用 mapping，`content` 原样保存在 data 中，不新增 OS、Arch、image 的索引字段；客户端按名称 GET 对象，无需对内部配置做 ES 查询。资源不开放 status.phase/status.stage 过滤。
 
-初始化模板作为 `Config/build-target` 随 apiserver 二进制嵌入，内容可沿用现有默认目标映射；实施时替换现有 `default-build-conf.yaml`。
+初始化模板 `default-build-target.yaml` 作为 `Config/build-target` 的内容随 apiserver 二进制嵌入。
 
 启动时在 Ready 前：
 
@@ -241,7 +241,7 @@ Job annotation `ebs.io/build-resource-config` 记录 `build-resource`，`ebs.io/
 
 ### 3.4 初始化、更新与容量
 
-apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存在，初始化内容至少为 4 CPU、8Gi 的表级默认值和空 `packages`。已存在对象不覆盖；多实例创建冲突后读取获胜对象。启动模板不是持续同步源。初始化必须通过 Config API 的默认化与通用校验，不能直接写 Elasticsearch；运维更新业务内容后不会被新版本部署覆盖。
+apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存在，初始化模板 `default-build-resource.yaml` 包含 4 CPU、8Gi 的表级默认值及软件包覆盖规则。已存在对象不覆盖；多实例创建冲突后读取获胜对象。启动模板不是持续同步源。初始化必须通过 Config API 的默认化与通用校验，不能直接写 Elasticsearch；运维更新业务内容后不会被新版本部署覆盖。
 
 更新整张表必须携带 `metadata.resourceVersion`；发生 409 时重新读取并按包名合并用户的修改，不得只替换版本重放旧对象。批量生成内容按包名稳定排序。规模达到数千至数万包时，应对最终序列化大小、请求上限及解析耗时做压测；BuildInfo Controller 可按 UID/resourceVersion 缓存已验证的解析结果，但每轮先读取当前对象，缓存失效或解析失败时必须停止新 Job 派发。首版不支持按软件包的独立 REST API 或存储分片。
 

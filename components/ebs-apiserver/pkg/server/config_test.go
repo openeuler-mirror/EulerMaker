@@ -131,11 +131,11 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
 		t.Fatal("incorrect default visibility")
 	}
-	var targets ebsv1.BuildConfSpec
+	var targets ebsv1.BuildTargetContent
 	if err := yaml.UnmarshalStrict([]byte(target.Spec.Content), &targets); err != nil || len(targets.Targets) == 0 {
 		t.Fatalf("target content: %v", err)
 	}
-	var resources ebsv1.BuildResourceConfigSpec
+	var resources ebsv1.BuildResourceContent
 	if err := yaml.UnmarshalStrict([]byte(resource.Spec.Content), &resources); err != nil {
 		t.Fatal(err)
 	}
