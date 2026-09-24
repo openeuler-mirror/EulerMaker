@@ -6,11 +6,11 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
 
 当前架构目标：
 
-- 统一资源 API：Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResourceConfig、Job、Runner 统一通过 `ebs/v1` API 暴露。
+- 统一资源 API：Project、Snapshot、Build、BuildInfo、RpmRepo、Config、Script、Job、Runner 统一通过 `ebs/v1` API 暴露。
 - 统一数据访问：业务组件不直接访问 etcd 和 Elasticsearch，统一通过 `ebs-apiserver` 读写资源。
 - 声明式对象模型：资源由 `metadata/spec/status` 组成；提供 status 的资源将普通更新和 `/status` 更新分离。
 - 事件与查询驱动协作：etcd 中的 Job、Runner 支持 watch；Elasticsearch 中的资源使用 list/get，不模拟 watch。
-- Project 业务作用域：Snapshot、Build、BuildInfo、RpmRepo、Job 归属于 Project；BuildResourceConfig 为集群级资源。只有 Job 的全局 API 支持 watch。
+- Project 业务作用域：Snapshot、Build、BuildInfo、RpmRepo、Job 归属于 Project；Config 和 Script 为集群级资源。只有 Job 的全局 API 支持 watch。
 - 构建结果数据面：`artifact-manager` 独立承载构建产物与实时日志正文，避免大文件流量经过资源 API 和 Gateway 数据转发链路。
 - 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch、`ebs-apiserver` 等组件。
 
@@ -122,7 +122,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gatewa
 | `ebs-gateway` | 系统入口，负责匿名公开读取、认证、鉴权、审计和请求转发 |
 | `ebs-apiserver` | 统一资源 API，负责对象校验、默认值、存储访问、list，以及 Job/Runner watch 和各资源子资源 |
 | `etcd` | Job、Runner 的主存储，提供原生 resourceVersion 和 list/watch |
-| `Elasticsearch` | Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResourceConfig 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
+| `Elasticsearch` | Project、Snapshot、Build、BuildInfo、RpmRepo、Config、Script 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
 | `controller-manager` | 运行 Snapshot、BuildInfo、Job、Runner、RpmRepo 等控制器 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 持久化安装实例 UUID，通过 ebs-gateway 注册或恢复同一 `instanceId` 的 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
@@ -150,7 +150,8 @@ apiVersion: ebs/v1
 | Build | Project 级 | 构建任务 |
 | BuildInfo | Project 级 | 软件包构建依赖与结果信息 |
 | RpmRepo | Project 级 | RPM 仓库解析和发布信息 |
-| BuildResourceConfig | 集群级 | 构建资源策略，构建读取 `default` |
+| Config | 集群级 | 构建目标与资源策略等配置，以 `spec.content` 存储内容 |
+| Script | 集群级 | 构建脚本 |
 | Job | Project 级 | 可调度执行任务 |
 | Runner | 集群级 | 执行机 |
 
@@ -201,7 +202,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 /apis/ebs/v1/projects/{project}/jobs
 ```
 
-`{project}` 是上述对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。BuildResourceConfig 使用集群级 `/apis/ebs/v1/buildresourceconfigs`，普通登录用户可读，写操作仅允许 Ops 以上身份；不提供 patch、watch 或 `/status`。
+`{project}` 是上述对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。Config 使用集群级 `/apis/ebs/v1/configs`；`Public` 允许所有身份及匿名具名读取，`OpsOnly` 仅允许 Ops/Admin/System 读取，list 和写操作也仅允许这些运维身份；不提供 watch 或 `/status`。
 
 ### 5.3 内部全局系统 API
 
@@ -221,7 +222,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 curl -k -N 'https://localhost:8443/apis/ebs/v1/jobs?watch=true'
 ```
 
-BuildInfo Controller 通过集群级 API 读取 `/apis/ebs/v1/buildresourceconfigs/default`。
+BuildInfo Controller 通过集群级 API 读取 `/apis/ebs/v1/configs/build-target` 和 `/apis/ebs/v1/configs/build-resource`，按对象名称解析 `spec.content`。
 
 ### 5.4 Runner API
 
@@ -259,7 +260,7 @@ GET    /apis/ebs/v1/runners/{name}/jobs?watch=true
 /apis/ebs/v1/namespaces/{project}/builds
 ```
 
-该内部路径只作为实现细节，外部文档和业务调用统一使用 Project API 和全局系统 API。BuildResourceConfig 使用独立的集群级路由。apiserver 在进入 Ready 前幂等确保 `default` BuildResourceConfig 存在；已有对象不会被启动配置覆盖。
+该内部路径只作为实现细节，外部文档和业务调用统一使用 Project API 和全局系统 API。Config 使用集群级路由。apiserver 在进入 Ready 前以 create-only 方式确保 `build-target` 和 `build-resource` 存在；已有对象不会被启动配置覆盖。
 
 详细实现见 [ebs-apiserver.md](./ebs-apiserver.md)。
 
@@ -284,7 +285,7 @@ ebs-snapshots
 ebs-builds
 ebs-buildinfos
 ebs-rpmrepos
-ebs-buildresourceconfigs
+ebs-configs
 ebs-users
 ebs-machineaccounts
 ```
@@ -310,7 +311,7 @@ Project scoped 的 ES 对象统一使用 `{project}/{name}` 作为文档 ID。Us
 ```text
 controller -> list/get Project、Snapshot、Build、BuildInfo、RpmRepo
 controller -> watch Job（需要事件流时）
-buildinfo controller -> get 集群级 BuildResourceConfig/default
+buildinfo controller -> get 集群级 Config/build-target、Config/build-resource
 controller -> create/update Snapshot、Build、BuildInfo、RpmRepo、Job
 controller -> update status
 ```

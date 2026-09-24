@@ -2,7 +2,7 @@
 
 ## 一、文档状态
 
-构建配置已支持运维编辑 OS/Arch/镜像映射，工程目标选项读取全局配置，并保留旧工程已失效的目标值；规则见 [BuildConf 设计](build-configuration.md#26-前端与-ebsctl)。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](build-configuration.md#46-初始化与落地范围)。
+目标设计中构建配置支持运维编辑 OS/Arch/镜像映射，工程目标选项解析 `spec.content`，并保留旧工程已失效的目标值；规则见 [构建配置设计](build-configuration.md#26-前端与-ebsctl)。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](build-configuration.md#4-script构建脚本)。
 
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 
@@ -12,13 +12,13 @@
 
 ## 二、背景与目标
 
-EulerMaker 已具备 Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResourceConfig、Job 和 Runner 等 Kubernetes 风格资源，以及用户认证、Project 授权、产物下载和实时日志能力。当前需要一个面向社区用户、项目维护者和系统运维人员的 Web 控制台，把资源 API 组织成可理解、可操作的构建工作流。
+目标资源模型包括 Project、Snapshot、Build、BuildInfo、RpmRepo、Config、Job 和 Runner 等 Kubernetes 风格资源，以及用户认证、Project 授权、产物下载和实时日志能力。当前需要一个面向社区用户、项目维护者和系统运维人员的 Web 控制台，把资源 API 组织成可理解、可操作的构建工作流。
 
 首版目标：
 
 - 匿名用户可以浏览 Project 及其公开构建资源。
 - 注册用户可以创建 Project，管理自己拥有或参与的 Project，并发起构建。
-- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 BuildConf、BuildResourceConfig 和 Script，查看 Runner 运行状态并执行驱逐或取消驱逐。
+- Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 Config 和 Script，查看 Runner 运行状态并执行驱逐或取消驱逐。
 - Admin 可以管理普通 User 和 MachineAccount，并具备系统级资源能力。
 - 前端能力模型与 System 身份保持兼容，但 System 是受信任自动化身份，不提供账号密码登录入口。
 - 用户可以查看 Build、Job、RPM 仓库和产物状态，并实时查看 Job 日志。
@@ -72,7 +72,7 @@ Project、资源名称、页签、搜索条件、筛选条件和当前页应进�
 |------|-------|----------|
 | 匿名用户 | 无 | 浏览公开 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job |
 | 普通用户 | `ebs:user` | 创建 Project；操作自己拥有或参与的 Project |
-| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 BuildConf、BuildResourceConfig、Script 和 Runner，支持驱逐与取消驱逐 |
+| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 Config、Script 和 Runner，支持驱逐与取消驱逐 |
 | 管理员 | `ebs:admin` | 管理非管理员 User 和 MachineAccount；具备系统级业务资源能力 |
 | 系统身份 | `ebs:system` | 受信任自动化调用方；前端不提供登录入口 |
 
@@ -99,8 +99,8 @@ ebs.io/member-user.<username>: "true"
 | 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
 | 创建/修改 Project 子资源 | 否 | 是 | 是 | 按 owner/member 关系同普通用户 | 是 | 是 |
 | 删除 Project 子资源 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
-| 读取 BuildResourceConfig | 否 | 全部 | 全部 | 全部 | 全部 | 全部 |
-| 修改 BuildResourceConfig | 否 | 否 | 否 | 是 | 是 | 是 |
+| 读取 Config | 仅具名 Public | 仅具名 Public | 仅具名 Public | 全部（含 list） | 全部（含 list） | 全部（含 list） |
+| 修改 Config | 否 | 否 | 否 | 是 | 是 | 是 |
 | 查看 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
 | 管理 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
 | 管理 User/MachineAccount | 否 | 否 | 否 | 否 | 否 | 是 |
@@ -135,7 +135,7 @@ ebs.io/member-user.<username>: "true"
 /settings
 ```
 
-Project 详情的资源路由在桌面端表现为页签，在窄屏表现为二级菜单。BuildResourceConfig 在运维页 `/operations` 的资源配置页签管理。单个 Build 和 Job 使用独立 URL；抽屉只能作为列表中的快捷预览，不能成为唯一详情入口。
+Project 详情的资源路由在桌面端表现为页签，在窄屏表现为二级菜单。`Config/build-resource` 在运维页 `/operations` 的资源配置页签管理。单个 Build 和 Job 使用独立 URL；抽屉只能作为列表中的快捷预览，不能成为唯一详情入口。
 
 ### 5.2 全局导航
 
@@ -264,9 +264,9 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 ### 5.9 脚本管理
 
-运维页面提供集群级 BuildResourceConfig 的资源配置页签，读取和编辑 `default` 对象及软件包、架构规则；也提供全局 Script 列表、名称搜索、刷新、创建和正文编辑。Ops 和 Admin 可编辑配置，Script 不提供删除入口。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
+运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建和正文编辑。Ops 和 Admin 可编辑配置，Script 不提供删除入口。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
 
-编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。API 权限与内容校验分别由 Gateway 和 apiserver 执行。
+编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。前端对两份内置 Config 的 YAML 内容做业务预检，但保存成功不代表服务端已验证业务内容，消费方仍须重新校验。Gateway 负责权限，apiserver 只校验 Config 通用字段。
 
 当前页面管理 Script 对象；Job 引用与 Runner 拉取执行尚未接入，不能将脚本保存成功视为构建执行已切换。
 
@@ -443,7 +443,7 @@ ES-backed 资源使用 `metadata.continue`，不使用页码换算 offset。分�
 
 | 数据 | 首版策略 |
 |------|----------|
-| Project、Snapshot、Build、BuildInfo、RpmRepo、BuildResourceConfig | 用户主动刷新；运行中详情可每 10 秒轮询 |
+| Project、Snapshot、Build、BuildInfo、RpmRepo、Config | 用户主动刷新；运行中详情可每 10 秒轮询 |
 | Job | Project 页面每 5 秒轮询；后续可接入 Project Job watch |
 | Runner | Ops/Admin 页面进入时加载，手动刷新及驱逐/取消驱逐成功后重新加载；当前不自动轮询或 watch |
 | Job 日志 | Range 获取历史内容，SSE 接收增量 |
@@ -643,7 +643,7 @@ GET /readyz
 2. 注册、登录、刷新和过期退出。
 3. User 创建 Project、添加成员、创建 Snapshot 和 Build。
 4. Member 可以修改子资源但不能删除。
-5. Ops/Admin 可查看 Runner、驱逐和取消驱逐；覆盖普通用户路由拒绝、确认弹窗、UID 变化、resourceVersion 冲突和操作后刷新。Ops 相对于普通用户还可以额外管理 BuildResourceConfig。
+5. Ops/Admin 可查看 Runner、驱逐和取消驱逐；覆盖普通用户路由拒绝、确认弹窗、UID 变化、resourceVersion 冲突和操作后刷新。Ops 相对于普通用户还可以额外管理 Config。
 6. Admin 管理普通 User 和 MachineAccount。
 7. Build 中止、409 冲突和 429 限流。
 8. Job 日志历史加载、SSE 增量、断线补齐和完成下载。
@@ -707,7 +707,7 @@ OpenAPI 生成差异检查
 
 ### 阶段四：运维与管理
 
-- BuildResourceConfig 管理。
+- Config 管理。
 - User 和 MachineAccount 管理。
 - 性能、可访问性和端到端测试加固。
 

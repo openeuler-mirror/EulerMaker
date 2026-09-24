@@ -22,7 +22,7 @@ Controller Manager 使用 Go 实现，参考 Kubernetes controller 的组织方�
 - `Job`
 - `Runner`
 
-除 `Job` 和 `Runner` 以外的所有资源均不支持 Watch，包括但不限于 `Project`、`Snapshot`、`Build`、`BuildInfo`、`RpmRepo` 和 `BuildResourceConfig`。框架不得为这些资源创建 Reflector、SharedInformer 或发起带 `watch=true` 的请求。
+除 `Job` 和 `Runner` 以外的所有资源均不支持 Watch，包括但不限于 `Project`、`Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Config` 和 `Script`。框架不得为这些资源创建 Reflector、SharedInformer 或发起带 `watch=true` 的请求。
 
 因此框架同时支持两种事件源：
 

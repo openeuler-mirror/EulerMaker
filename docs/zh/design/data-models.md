@@ -18,8 +18,8 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 | 字段 | Go 类型 | JSON | 说明 |
 |------|---------|------|------|
 | `apiVersion` | string | `apiVersion` | `ebs/v1` |
-| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / BuildResourceConfig / Job / Runner |
-| `name` | string | `name` | 资源名称。Project/Runner/BuildResourceConfig 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
+| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / Config / Script / Job / Runner |
+| `name` | string | `name` | 资源名称。Project/Runner/Config/Script 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -37,7 +37,7 @@ metav1.ListMeta `json:"metadata,omitempty"`
 Items           []Xxx `json:"items"`
 ```
 
-Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。BuildResourceConfig 为集群级资源。
+Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。Config 和 Script 为集群级资源。
 
 调度器和控制器可使用全局系统 API 跨 Project list 大部分对象。在 Project 级资源中，只有 Job 的全局 API 支持 watch。集群级资源 Runner 的 API 同样支持 list/watch。用户侧和项目侧调用使用 Project API。
 
@@ -50,22 +50,22 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | etcd | `/registry/ebs/jobs/{project}/{name}` |
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | Elasticsearch | `ebs-buildinfos` / `{project}/{name}` |
 | RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | Elasticsearch | `ebs-rpmrepos` / `{project}/{name}` |
-| BuildResourceConfig | 不提供 | `/apis/ebs/v1/buildresourceconfigs` | Elasticsearch | `ebs-buildresourceconfigs` / `{name}` |
+| Config | 不提供 | `/apis/ebs/v1/configs` | Elasticsearch | `ebs-configs` / `{name}` |
 
 表中 Elasticsearch 对象定位格式为“索引 / 文档 ID”。Project scoped 对象统一使用 `{project}/{name}` 作为文档 ID；Job 使用相同层级的 etcd key。只有 Job 和 Runner 存入 etcd 并提供 list/watch。
 
 ---
 
-## 结构体总览（48 个）
+## 结构体总览
 
 ```
-主资源（8）: Project Snapshot Build BuildInfo RpmRepo BuildResourceConfig Job Runner
-列表类型（8）: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList BuildResourceConfigList JobList RunnerList
-辅助结构体（32）: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
+主资源: Project Snapshot Build BuildInfo RpmRepo Config Script Job Runner
+列表类型: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList ConfigList ScriptList JobList RunnerList
+辅助结构体: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
                   RpmRepoSpec RpmRepoStatus
-                  BuildResourceConfigSpec PackageResourceConfig
+                  ConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
                   PackageRepo PackageRepoStatus VersionConst
@@ -584,120 +584,78 @@ type RpmRepoList struct {
 
 ---
 
-## 六、BuildResourceConfig（构建资源表）
+## 六、Config（集群级配置）
 
-**API**: `/apis/ebs/v1/buildresourceconfigs`
-
-**Elasticsearch**: 索引 `ebs-buildresourceconfigs`，文档 ID `{name}`
-
-BuildInfo Controller 固定读取名为 `default` 的集群级对象；apiserver 的初始化规则见 [BuildResourceConfig 设计文档](./build-configuration.md#3-buildresourceconfig资源规则)。
-
-`BuildResourceConfig` 不注册 Project-scoped API，不设置 `metadata.namespace`。当前构建流程不读取其它名称的对象。
-
-`BuildResourceConfig` 不属于匿名公开读取资源。普通登录用户可读；创建和更新仅允许运维或受信任系统身份，`default` 不允许通过 Gateway 删除。
-
-### BuildResourceConfig
+**API**：`/apis/ebs/v1/configs`；**Elasticsearch**：alias `ebs-configs`，文档 ID `{name}`。不提供 Project-scoped API、Watch 或 `/status`。资源生命周期、可见性及消费规则见 [构建配置设计](./build-configuration.md#11-config-公共资源与可见性)。
 
 ```go
-type BuildResourceConfig struct {
+type Config struct {
     metav1.TypeMeta   `json:",inline"`
     metav1.ObjectMeta `json:"metadata,omitempty"`
-    Spec              BuildResourceConfigSpec `json:"spec,omitempty"`
+    Spec              ConfigSpec `json:"spec"`
+}
+
+type ConfigSpec struct {
+    Visibility ConfigVisibility `json:"visibility"`
+    Content    string           `json:"content"`
+}
+
+type ConfigVisibility string
+
+const (
+    ConfigVisibilityPublic  ConfigVisibility = "Public"
+    ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
+)
+
+type ConfigList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items           []Config `json:"items"`
 }
 ```
 
-### BuildResourceConfigSpec
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `metadata.name` | 是 | 集群唯一；内置对象为 `build-target` 和 `build-resource` |
+| `spec.visibility` | 是 | `Public` 允许所有身份及匿名具名读取；`OpsOnly` 仅 Ops/Admin/System 读取 |
+| `spec.content` | 是 | 非空 UTF-8 YAML 文本；apiserver 不解析业务结构，按对象名称由消费方解释 |
+
+`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin/System list；匿名、普通用户和 Runner 只能具名读取 `Public` 对象，`OpsOnly` 仅 Ops/Admin/System 可读。Ops/Admin/System 可创建更新，两个内置对象不可经 Gateway 删除。apiserver 只校验公共字段和资源版本，不验证 YAML 内的 OS、镜像、CPU、内存等业务规则。
+
+### 内置内容格式
+
+`build-target` 的 `content` 解码为以下内部结构（不是公开 API 类型）：
 
 ```go
-type BuildResourceConfigSpec struct {
-    Default  ResourceRequirements             `json:"default,omitempty"`
-    Packages map[string]PackageResourceConfig `json:"packages"`
+type BuildTargetContent struct {
+    Targets map[string]BuildTargetContentTarget `yaml:"targets"`
+}
+type BuildTargetContentTarget struct {
+    Arches map[string]BuildTargetContentArch `yaml:"arches"`
+}
+type BuildTargetContentArch struct {
+    Image string `yaml:"image"`
 }
 ```
 
-| 字段 | Go 类型 | 必填 | 说明 |
-|------|---------|------|------|
-| `default` | ResourceRequirements | 是 | 表级默认资源需求，requests 必须完整声明 CPU 和 memory；limits 可缺省并取同级 requests |
-| `packages` | map[string]PackageResourceConfig | 是 | 全部软件包的资源配置，Map key 为 spec 包名；`default` 对象可为空，但必须声明有效的表级 `default` |
+`targets` 可为空；每个 OS 下至少有一个架构，每个架构必须有合法镜像引用。完整校验见 [构建目标内容](./build-configuration.md#22-对象)。
 
-`BuildResourceConfigSpec` 不包含 OS 字段。同一张表适用于全部 Project 的 Build Target OS。
-
-### PackageResourceConfig
+`build-resource` 的 `content` 解码为以下内部结构（不是公开 API 类型）：
 
 ```go
+type BuildResourceContent struct {
+    Default  ResourceRequirements             `yaml:"default"`
+    Packages map[string]PackageResourceConfig `yaml:"packages"`
+}
 type PackageResourceConfig struct {
-    Default ResourceRequirements            `json:"default,omitempty"`
-    Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
+    Default ResourceRequirements            `yaml:"default"`
+    Arches  map[string]ResourceRequirements `yaml:"arches"`
 }
 ```
 
-| 字段 | Go 类型 | 必填 | 说明 |
-|------|---------|------|------|
-| `default` | ResourceRequirements | 否 | 该软件包未匹配架构专属配置时使用的默认资源需求 |
-| `arches` | map[string]ResourceRequirements | 否 | 按 CPU 架构记录的资源需求；key 使用规范架构名 |
+`default.requests` 必须同时包含 CPU 和 memory；`packages` 可为空。仅允许 CPU、memory 资源键；包名和架构名按 [构建资源内容](./build-configuration.md#3-构建资源内容) 的规则校验。按表级默认值、包级默认值、架构专属值逐字段合并，同一级 request 未给 limit 时取该级 request；最终 limits 均不得低于 requests。内容解析器需拒绝未知字段和重复 YAML key，不能静默丢失规则。
 
-每个软件包必须至少声明 `default` 或一个 `arches` 条目。架构采用开放集合，不固定为 `x86_64` 和 `aarch64`；可增加 `riscv64` 等新架构。架构名必须满足 `^[a-z0-9][a-z0-9._-]{0,62}$`，并与 Build Target 和 Runner label 使用的名称完全一致。
-
-BuildResourceConfig 只允许 `cpu` 和 `memory` 两种资源键。表级 `spec.default.requests` 必须完整声明二者；limits 可以缺省。软件包 default 和架构配置可以只覆盖其中一个或多个键。任一级声明某项 request 但省略对应 limit 时，limit 取同级 request；该级未声明 request 时，request 和 limit 按“架构配置 → 软件包 default → 表级 default”逐字段继承。合并结果必须满足每项 limit 大于或等于 request。所有资源值必须是大于 0、可由 Kubernetes `resource.ParseQuantity` 解析的字符串。
-
-配置按以下顺序逐字段覆盖：
-
-1. 使用 `spec.default` 初始化完整配置；
-2. 使用 `packages[specName].default` 覆盖已声明字段；
-3. 使用 `packages[specName].arches[arch]` 覆盖已声明字段；
-4. 未覆盖字段保留 `spec.default` 值。
-
-`requests` 和 `limits` 分别按 `cpu`、`memory` 键合并，只在 `default` 对象内部解析。
-
-### BuildResourceConfigList
-
-```go
-type BuildResourceConfigList struct {
-    metav1.TypeMeta `json:",inline"`
-    metav1.ListMeta `json:"metadata,omitempty"`
-    Items           []BuildResourceConfig `json:"items"`
-}
-```
-
----
-
-## BuildConf（构建配置）
-
-BuildConf 是集群级配置，使用名称 `default`，不设置 namespace 或 status。完整生命周期、权限和消费规则见 [BuildConf 设计](build-configuration.md#2-buildconf构建环境)。公共 API 类型如下。
-
-```go
-type BuildConf struct {
-    metav1.TypeMeta   `json:",inline"`
-    metav1.ObjectMeta `json:"metadata,omitempty"`
-    Spec BuildConfSpec `json:"spec"`
-}
-
-type BuildConfSpec struct {
-    Targets map[string]BuildConfTarget `json:"targets"`
-}
-
-type BuildConfTarget struct {
-    Arches map[string]BuildConfArch `json:"arches"`
-}
-
-type BuildConfArch struct {
-    Image string `json:"image"`
-}
-
-type BuildConfList struct {
-    metav1.TypeMeta `json:",inline"`
-    metav1.ListMeta `json:"metadata,omitempty"`
-    Items []BuildConf `json:"items"`
-}
-```
-
-| 字段 | 含义 |
-|------|------|
-| `spec.targets` | key 为 BuildTarget.os；允许空映射 |
-| `spec.targets[os].arches` | key 为 BuildTarget.arch；每个 OS 至少一个架构 |
-| `spec.targets[os].arches[arch].image` | 对应目标的容器构建镜像引用，创建 Job 时写入 runtimeSpec.image |
-
-不在该对象中保存镜像凭据或 BuildResourceConfig 的资源规则。
+BuildInfo Controller 读取 `Config/build-target` 与 `Config/build-resource`，分别固化镜像及资源到 Job；Job 创建后配置变化不回写。Script 是独立资源，不复用 Config 内容。
 
 ## Script（全局脚本）
 
@@ -1126,7 +1084,7 @@ RpmRepoStatus
 │   └── RepositoryTransition ──▶ RepositoryInput
 └── RpmRepoReleaseStatus ──▶ ReleaseTransition
 
-BuildResourceConfigSpec
+BuildResourceContent
 ├── ResourceRequirements (default)
 └── PackageResourceConfig
     ├── ResourceRequirements (default)
