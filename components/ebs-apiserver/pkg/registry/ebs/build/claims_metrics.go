@@ -1,9 +1,10 @@
 package build
 
 import (
+	"sync"
+
 	"k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
-	"sync"
 )
 
 var (

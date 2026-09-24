@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	request "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 type latestBuildLister struct {

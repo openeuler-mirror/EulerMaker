@@ -4,10 +4,11 @@ import (
 	_ "crypto/sha256"
 	"strings"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"github.com/distribution/reference"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func ValidateBuildConf(obj *ebsv1.BuildConf) field.ErrorList {

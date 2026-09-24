@@ -1,10 +1,12 @@
 package validation
 
 import (
-	ebsv1 "ebs-api/ebs/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestBuildConfValidation(t *testing.T) {

@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/storage/es"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +18,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	request "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+
+	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/storage/es"
 )
 
 var errUnknown = errors.New("response lost")

@@ -6,9 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func targetLabels() map[string]string {
