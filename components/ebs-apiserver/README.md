@@ -19,25 +19,27 @@ docker build -f components/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:
 
 ## 构建环境配置
 
-启动时通过 `pkg/server/default-build-conf.yaml` 创建集群级 `BuildConf/default`，不覆盖已有对象；ES alias 为 `ebs-buildconfs`。
+启动时以 create-only 方式初始化集群级 `Config/build-target`（公开读取）和 `Config/build-resource`（仅 Ops/Admin/System 读取），不覆盖已有对象；ES alias 为 `ebs-configs`。两者的业务 YAML 保存在 `spec.content` 中。
 
 ```yaml
 apiVersion: ebs/v1
-kind: BuildConf
+kind: Config
 metadata:
-  name: default
+  name: build-target
   resourceVersion: "<GET 返回的版本>"
 spec:
-  targets:
-    openEuler-24.03-LTS-SP4:
-      arches:
-        x86_64:
-          image: registry.example/build:24.03-x86_64
-        aarch64:
-          image: registry.example/build:24.03-aarch64
+  visibility: Public
+  content: |
+    targets:
+      openEuler-24.03-LTS-SP4:
+        arches:
+          x86_64:
+            image: registry.example/build:24.03-x86_64
+          aarch64:
+            image: registry.example/build:24.03-aarch64
 ```
 
-通过 `GET /apis/ebs/v1/buildconfs/default` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。经 Gateway 读取公开，写入仅允许 Ops/Admin/System；不支持删除、watch、status 子资源。创建 Build 时目标未配置返回 422，配置读取失败返回 503，均不申请构建目标占用。
+通过 `GET /apis/ebs/v1/configs/build-target` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。只有 `visibility: Public` 的对象可经 Gateway 匿名具名读取；列表和写入仅允许 Ops/Admin/System。不支持删除、watch、status 子资源。创建 Build 时目标未配置返回 422，配置读取或内容解析失败返回 503，均不申请构建目标占用。
 
 ## 全局脚本资源
 

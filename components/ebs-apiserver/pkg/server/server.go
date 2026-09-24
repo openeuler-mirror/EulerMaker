@@ -30,7 +30,7 @@ import (
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	buildconfstore "ebs-apiserver/pkg/registry/ebs/buildconf"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
-	buildresourceconfigstore "ebs-apiserver/pkg/registry/ebs/buildresourceconfig"
+	configstore "ebs-apiserver/pkg/registry/ebs/config"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
@@ -277,22 +277,14 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	}); err != nil {
 		return nil, err
 	}
-	buildResourceConfigTemplate := buildresourceconfigstore.NewStorage()
-	buildConfES := newBuildConfStore(esClient)
-	if err := ensureDefaultBuildConf(context.Background(), buildConfES); err != nil {
+	configES := newConfigStore(esClient)
+	if err := ensureDefaultConfigs(context.Background(), configES); err != nil {
 		return nil, err
 	}
-	if err := installBuildConfRoutes(srv.Handler.GoRestfulContainer, buildConfES); err != nil {
+	if err := installConfigRoutes(srv.Handler.GoRestfulContainer, configES); err != nil {
 		return nil, err
 	}
 	if err := installScriptRoutes(srv.Handler.GoRestfulContainer, newScriptStore(esClient)); err != nil {
-		return nil, err
-	}
-	buildResourceConfigES := esstore.New(esClient, "buildresourceconfig", "BuildResourceConfig", buildResourceConfigTemplate.(*genericregistry.Store))
-	if err := ensureDefaultBuildResourceConfig(context.Background(), buildResourceConfigES); err != nil {
-		return nil, err
-	}
-	if err := installBuildResourceConfigRoutes(srv.Handler.GoRestfulContainer, buildResourceConfigES); err != nil {
 		return nil, err
 	}
 	if enableIAM {
@@ -346,7 +338,7 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 	buildStorage := buildstore.NewStorage(Scheme)
 	buildES := esstore.New(esClient, "build", "Build", buildStorage.Build.(*genericregistry.Store))
-	buildES.SetCreateHook(buildstore.ValidateBuildTargetConfig(newBuildConfStore(esClient), buildstore.ValidateProjectPackages(projectES)))
+	buildES.SetCreateHook(buildstore.ValidateBuildTargetConfig(newConfigStore(esClient), buildstore.ValidateProjectPackages(projectES)))
 	buildStatusES := esstore.NewStatus(buildES, buildStorage.Status.(*genericregistry.Store))
 	v1Storage["builds"] = buildstore.NewCreateStorage(buildES, esClient)
 	v1Storage["builds/status"] = buildStatusES
@@ -384,6 +376,10 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 func newBuildConfStore(client *es.Client) *esstore.Store {
 	return esstore.New(client, "buildconf", "BuildConf", buildconfstore.NewStorage(Scheme).BuildConf.(*genericregistry.Store))
+}
+
+func newConfigStore(client *es.Client) *esstore.Store {
+	return esstore.New(client, "config", "Config", configstore.NewStorage().(*genericregistry.Store))
 }
 
 func newScriptStore(client *es.Client) *esstore.Store {
