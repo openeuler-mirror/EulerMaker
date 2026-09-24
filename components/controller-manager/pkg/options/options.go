@@ -19,6 +19,7 @@ type Options struct {
 	Runner    RunnerControllerOptions
 	RpmRepo   RpmRepoControllerOptions
 	Snapshot  SnapshotControllerOptions
+	BuildInfo BuildInfoControllerOptions
 	GitServer GitServerOptions
 }
 
@@ -74,6 +75,17 @@ type SnapshotControllerOptions struct {
 	FailureRetryLimit int
 }
 
+// BuildInfoControllerOptions carries the BuildInfo controller settings
+// (design controller-manager~buildinfo-controller.md 12.1). A zero
+// DcgPruneGrace resolves to 3×poll-period after parsing.
+type BuildInfoControllerOptions struct {
+	DcgPruneGrace           time.Duration
+	RpmRepoReadyRetryLimit  int
+	SnapshotReadyRetryLimit int
+	SpecFileCacheSize       int
+	SpecParseEngine         string
+}
+
 type GitServerOptions struct {
 	Address  string
 	Timeout  time.Duration
@@ -91,6 +103,7 @@ func Parse(args []string) (Options, error) {
 		Runner:    RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
 		RpmRepo:   RpmRepoControllerOptions{MaxJobsPerBatch: 100, MaterializeRetryLimit: 3, ArtifactManagerTimeout: 30 * time.Second},
 		Snapshot:  SnapshotControllerOptions{ResolveWorkers: 10, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 5},
+		BuildInfo: BuildInfoControllerOptions{RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 10000, SpecParseEngine: "text"},
 		GitServer: GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
@@ -126,12 +139,20 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Snapshot.ResolveBudget, "snapshot-resolve-budget", o.Snapshot.ResolveBudget, "total repository resolution budget per Snapshot reconcile")
 	f.DurationVar(&o.Snapshot.SyncRequeueDelay, "snapshot-sync-requeue-delay", o.Snapshot.SyncRequeueDelay, "delay before checking repositories that are still synchronizing")
 	f.IntVar(&o.Snapshot.FailureRetryLimit, "snapshot-failure-retry-limit", o.Snapshot.FailureRetryLimit, "confirmed temporary failures before a repository is skipped")
+	f.DurationVar(&o.BuildInfo.DcgPruneGrace, "build-info-dcg-prune-grace", o.BuildInfo.DcgPruneGrace, "BuildInfo dcg cache tombstone grace period (default 3x poll-period)")
+	f.IntVar(&o.BuildInfo.RpmRepoReadyRetryLimit, "rpmrepo-ready-retry-limit", o.BuildInfo.RpmRepoReadyRetryLimit, "consecutive RpmRepo readiness failures before RpmRepoUnavailable stop-dispatch")
+	f.IntVar(&o.BuildInfo.SnapshotReadyRetryLimit, "snapshot-ready-retry-limit", o.BuildInfo.SnapshotReadyRetryLimit, "consecutive current-Snapshot query failures before SnapshotUnavailable stop-dispatch")
+	f.IntVar(&o.BuildInfo.SpecFileCacheSize, "specfile-cache-size", o.BuildInfo.SpecFileCacheSize, "global spec file content LRU cache capacity")
+	f.StringVar(&o.BuildInfo.SpecParseEngine, "spec-parse-engine", o.BuildInfo.SpecParseEngine, "spec parse engine: text (in-package grammar, safe for untrusted sources) or rpmspec (expand via local rpmspec subprocess; trusted sources only)")
 	f.StringVar(&o.GitServer.Address, "git-server-addr", o.GitServer.Address, "git-server address")
 	f.DurationVar(&o.GitServer.Timeout, "git-server-timeout", o.GitServer.Timeout, "git-server request timeout")
 	f.IntVar(&o.GitServer.Retries, "git-server-retry", o.GitServer.Retries, "git-server request retry count")
 	f.DurationVar(&o.GitServer.CacheTTL, "git-server-cache-ttl", o.GitServer.CacheTTL, "git-server synchronization status cache TTL")
 	if err := f.Parse(args); err != nil {
 		return o, err
+	}
+	if o.BuildInfo.DcgPruneGrace == 0 {
+		o.BuildInfo.DcgPruneGrace = 3 * o.Source.PollPeriod
 	}
 	if o.API.Server == "" {
 		return o, fmt.Errorf("apiserver is required")
@@ -145,7 +166,7 @@ func Parse(args []string) (Options, error) {
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")
 	}
-	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.RpmRepo.ArtifactManagerTimeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
+	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.RpmRepo.ArtifactManagerTimeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.BuildInfo.DcgPruneGrace <= 0 || o.BuildInfo.RpmRepoReadyRetryLimit <= 0 || o.BuildInfo.SnapshotReadyRetryLimit <= 0 || o.BuildInfo.SpecFileCacheSize <= 0 || (o.BuildInfo.SpecParseEngine != "text" && o.BuildInfo.SpecParseEngine != "rpmspec") || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
 		return o, fmt.Errorf("workers, limits, periods, timeouts and addresses must be valid")
 	}
 	return o, nil
