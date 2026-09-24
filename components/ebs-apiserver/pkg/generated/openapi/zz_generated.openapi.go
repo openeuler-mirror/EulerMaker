@@ -509,6 +509,20 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 							},
 						},
 					},
+					"failedPackages": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"dcg": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"object"},

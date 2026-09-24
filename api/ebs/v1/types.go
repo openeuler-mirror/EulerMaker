@@ -163,10 +163,11 @@ type BuildInfoSpec struct {
 // PendingJobCreates tracks pending Job creations that are registered but
 // not yet confirmed (6.5.1).
 type BuildInfoStatus struct {
-	Phase             BuildInfoPhase             `json:"phase,omitempty"`
-	Conditions        []metav1.Condition         `json:"conditions,omitempty"`
-	SpecStatus        map[string]SpecStatus      `json:"specStatus,omitempty"`
-	Dcg               map[string]DcgNodeState    `json:"dcg,omitempty"`
+	Phase             BuildInfoPhase              `json:"phase,omitempty"`
+	Conditions        []metav1.Condition          `json:"conditions,omitempty"`
+	SpecStatus        map[string]SpecStatus       `json:"specStatus,omitempty"`
+	FailedPackages    []string                    `json:"failedPackages,omitempty"`
+	Dcg               map[string]DcgNodeState     `json:"dcg,omitempty"`
 	PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
 }
 
@@ -208,11 +209,11 @@ type PendingJobCreate struct {
 // upstream specs to the matched version constraints. BootstrapBreak marks
 // a cycle-break node; it is persisted and never re-selected on load (G-09).
 type DcgNodeState struct {
-	Version       string                  `json:"version,omitempty"`
-	OutDep        []string                `json:"outDep,omitempty"`
-	InDep         map[string]VersionConst `json:"inDep,omitempty"`
-	InstallInDep  map[string]VersionConst `json:"installInDep,omitempty"`
-	BootstrapBreak bool                   `json:"bootstrapBreak,omitempty"`
+	Version        string                  `json:"version,omitempty"`
+	OutDep         []string                `json:"outDep,omitempty"`
+	InDep          map[string]VersionConst `json:"inDep,omitempty"`
+	InstallInDep   map[string]VersionConst `json:"installInDep,omitempty"`
+	BootstrapBreak bool                    `json:"bootstrapBreak,omitempty"`
 }
 
 type BuildInfoList struct {

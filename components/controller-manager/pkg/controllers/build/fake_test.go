@@ -42,6 +42,7 @@ func (s *fakeSource) Ready() bool               { return true }
 type fakeHooks struct {
 	getProject      func(project string) (*ebsv1.Project, error)
 	getBuild        func(project, name string) (*ebsv1.Build, error)
+	updateBuild     func(request *ebsv1.Build) (*ebsv1.Build, error)
 	updateStatus    func(request *ebsv1.Build) (*ebsv1.Build, error)
 	getSnapshot     func(project, name string) (*ebsv1.Snapshot, error)
 	createSnapshot  func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error)
@@ -216,6 +217,23 @@ func (f *fakeAPI) commitStatus(request *ebsv1.Build) (*ebsv1.Build, error) {
 	return next.DeepCopy(), nil
 }
 
+func (f *fakeAPI) commitBuild(request *ebsv1.Build) (*ebsv1.Build, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored := f.builds[key(request.Namespace, request.Name)]
+	if stored == nil {
+		return nil, apierrors.NewNotFound(buildsResource, request.Name)
+	}
+	if stored.ResourceVersion != request.ResourceVersion {
+		return nil, apierrors.NewConflict(buildsResource, request.Name, fmt.Errorf("stale resourceVersion"))
+	}
+	next := stored.DeepCopy()
+	next.Spec = request.DeepCopy().Spec
+	next.ResourceVersion = f.nextRevision()
+	f.builds[key(next.Namespace, next.Name)] = next
+	return next.DeepCopy(), nil
+}
+
 func (f *fakeAPI) GetProject(_ context.Context, project string) (*ebsv1.Project, error) {
 	f.record("GetProject " + project)
 	if f.hooks.getProject != nil {
@@ -365,6 +383,14 @@ func (f *fakeAPI) UpdateBuildStatus(_ context.Context, request *ebsv1.Build) (*e
 		return f.hooks.updateStatus(request)
 	}
 	return f.commitStatus(request)
+}
+
+func (f *fakeAPI) UpdateBuild(_ context.Context, request *ebsv1.Build) (*ebsv1.Build, error) {
+	f.record("UpdateBuild " + key(request.Namespace, request.Name))
+	if f.hooks.updateBuild != nil {
+		return f.hooks.updateBuild(request)
+	}
+	return f.commitBuild(request)
 }
 
 // fakePollingFactory records the polling source request of an initializer.

@@ -31,6 +31,7 @@ type Client interface {
 	CreateRpmRepo(ctx context.Context, project string, obj *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
 	CreateBuildInfo(ctx context.Context, project string, obj *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
 
+	UpdateBuild(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error)
 	UpdateBuildStatus(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error)
 }
 
@@ -196,6 +197,21 @@ func (c *apiClient) UpdateBuildStatus(ctx context.Context, obj *ebsv1.Build) (*e
 	value, ok := updated.(*ebsv1.Build)
 	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace || value.ResourceVersion == "" {
 		return nil, unknownWrite("update-status", source.BuildsGVR, fmt.Errorf("unexpected Build status response: %T", updated))
+	}
+	return value, nil
+}
+
+func (c *apiClient) UpdateBuild(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error) {
+	if obj == nil {
+		return nil, notSentWrite("update", source.BuildsGVR, fmt.Errorf("Build request is required"))
+	}
+	updated, err := c.client.Update(ctx, source.BuildsGVR, obj.Namespace, obj)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := updated.(*ebsv1.Build)
+	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace || value.ResourceVersion == "" {
+		return nil, unknownWrite("update", source.BuildsGVR, fmt.Errorf("unexpected Build update response: %T", updated))
 	}
 	return value, nil
 }

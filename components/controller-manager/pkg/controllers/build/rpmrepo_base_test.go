@@ -28,6 +28,17 @@ func withBaseBuildRefName(build *ebsv1.Build, name string) *ebsv1.Build {
 	return build
 }
 
+func seedIncrementalHistory(api *fakeAPI) {
+	api.storeSnapshot(snapshotWithCommits("build-a", map[string]string{"gcc": "commit"}))
+	api.storeSnapshot(snapshotWithCommits("build-prev", map[string]string{"gcc": "commit"}))
+	api.storeBuildInfo(&ebsv1.BuildInfo{
+		ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"},
+		Status: ebsv1.BuildInfoStatus{
+			Phase: ebsv1.BuildInfoCompleted, FailedPackages: []string{"gcc"},
+		},
+	})
+}
+
 func historicalRpmRepo(project, name, repositoryUID, contentURL string) *ebsv1.RpmRepo {
 	return &ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
@@ -60,6 +71,9 @@ func TestPendingSeedsRpmRepoBaseFromHistory(t *testing.T) {
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", buildType, []string{"gcc"}), "build-prev")
 			api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+			if buildType == "incremental" {
+				seedIncrementalHistory(api)
+			}
 			api.storeRpmRepo(historicalRpmRepo("project-a", "build-prev", seededRepositoryUID, repositoryContentURL(seededRepositoryUID)))
 			c := newTestController(t, api, newTestClock())
 
@@ -189,6 +203,7 @@ func TestPendingDegradesWhenHistoricalRpmRepoUnavailable(t *testing.T) {
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", "incremental", []string{"gcc"}), "build-prev")
 			api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+			seedIncrementalHistory(api)
 			tc.setup(api)
 			c := newTestController(t, api, newTestClock())
 
@@ -227,6 +242,7 @@ func TestPendingStopsWhenContextIsCanceledDuringBaseLookup(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", "incremental", []string{"gcc"}), "build-prev")
 	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+	seedIncrementalHistory(api)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -269,6 +285,7 @@ func TestPendingDoesNotReReadBaseAfterRestart(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", "incremental", []string{"gcc"}), "build-prev")
 	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+	seedIncrementalHistory(api)
 	api.storeRpmRepo(historicalRpmRepo("project-a", "build-prev", seededRepositoryUID, repositoryContentURL(seededRepositoryUID)))
 	api.hooks.updateStatus = func(*ebsv1.Build) (*ebsv1.Build, error) {
 		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: errors.New("conflict")}
@@ -344,6 +361,7 @@ func TestPendingRetriesWhenHistoricalRpmRepoReadFails(t *testing.T) {
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", "incremental", []string{"gcc"}), "build-prev")
 			api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+			seedIncrementalHistory(api)
 			api.hooks.getRpmRepo = func(project, name string) (*ebsv1.RpmRepo, error) {
 				if name == "build-prev" {
 					return nil, tc.readErr

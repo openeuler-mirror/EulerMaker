@@ -3,6 +3,7 @@ package build
 import (
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 
 	"controller-manager/pkg/controller"
@@ -33,6 +34,19 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 	}
 	if snapshot.Status.Phase != ebsv1.SnapshotActive {
 		return controller.ReconcileResult{}, nil
+	}
+	if r.current.Spec.BuildType == "incremental" {
+		packages, err := r.incrementalPackageSeeds(snapshot)
+		if err != nil {
+			return controller.ReconcileResult{}, err
+		}
+		if !slices.Equal(r.current.Spec.Packages, packages) {
+			updated, result, err := r.writeIncrementalPackages(packages)
+			if updated == nil {
+				return result, err
+			}
+			r.current = updated
+		}
 	}
 	if _, outcome := r.ensureRpmRepo(); !outcome.ready {
 		return outcome.result(), outcome.err

@@ -70,7 +70,7 @@ func (s *stubSharedClient) Create(context.Context, schema.GroupVersionResource, 
 }
 
 func (s *stubSharedClient) Update(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error) {
-	return nil, nil
+	return s.updateResult, s.updateErr
 }
 
 func (s *stubSharedClient) UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error) {
@@ -238,5 +238,20 @@ func TestUpdateBuildStatusUnknownResponse(t *testing.T) {
 	var writeErr *clientpkg.WriteError
 	if !errors.As(err, &writeErr) || writeErr.Outcome != clientpkg.WriteUnknown {
 		t.Fatalf("write error = %v", err)
+	}
+}
+
+func TestUpdateBuildChecksResponseIdentity(t *testing.T) {
+	request := newBuild("project-a", "build-a", "incremental", []string{"gcc"})
+	shared := &stubSharedClient{updateResult: request.DeepCopy()}
+	updated, err := newAPIClient(shared).UpdateBuild(context.Background(), request)
+	if err != nil || updated.Name != request.Name {
+		t.Fatalf("updated=%+v err=%v", updated, err)
+	}
+	shared.updateResult = &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: request.Namespace, UID: "other", ResourceVersion: "2"}}
+	_, err = newAPIClient(shared).UpdateBuild(context.Background(), request)
+	var writeErr *clientpkg.WriteError
+	if !errors.As(err, &writeErr) || writeErr.Outcome != clientpkg.WriteUnknown {
+		t.Fatalf("unexpected update response error = %v", err)
 	}
 }
