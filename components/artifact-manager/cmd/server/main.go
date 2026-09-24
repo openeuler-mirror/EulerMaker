@@ -1,7 +1,6 @@
 package main
 
 import (
-	artifact "artifact-manager/pkg/artifact"
 	"context"
 	"errors"
 	"log"
@@ -10,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	artifact "artifact-manager/pkg/artifact"
 )
 
 func main() {

@@ -8,9 +8,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"ebsctl/pkg/client"
 	configpkg "ebsctl/pkg/config"
-	"github.com/spf13/cobra"
 )
 
 const Version = "0.1.0"

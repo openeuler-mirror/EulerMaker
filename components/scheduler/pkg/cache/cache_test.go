@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	ebsv1 "ebs-api/ebs/v1"
 	"scheduler/pkg/framework"
 )
 
