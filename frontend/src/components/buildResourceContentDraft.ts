@@ -4,7 +4,7 @@ export interface PackageRow { name: string; extra: JSONMap; defaults: JSONMap; a
 export interface ResourceDraft { extra: JSONMap; defaults: JSONMap; packages: PackageRow[] }
 
 function object(value: unknown): JSONMap {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("operations.invalidSpec");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("operations.invalidContent");
   return value as JSONMap;
 }
 function optionalObject(value: unknown): JSONMap { return value === undefined ? {} : object(value); }
@@ -17,10 +17,10 @@ function requirements(value: unknown): JSONMap {
   }
   return result;
 }
-export function parseResourceDraft(source: string): ResourceDraft {
-  let spec: JSONMap;
-  try { spec = object(JSON.parse(source)); } catch { throw new Error("operations.invalidSpec"); }
-  const { default: defaults, packages, ...extra } = spec;
+export function parseResourceContentDraft(source: string): ResourceDraft {
+  let content: JSONMap;
+  try { content = object(JSON.parse(source)); } catch { throw new Error("operations.invalidContent"); }
+  const { default: defaults, packages, ...extra } = content;
   return {
     extra, defaults: requirements(defaults),
     packages: Object.entries(optionalObject(packages)).map(([name, value]) => {
@@ -30,7 +30,7 @@ export function parseResourceDraft(source: string): ResourceDraft {
     }),
   };
 }
-export function resourceSpec(draft: ResourceDraft): JSONMap {
+export function serializeResourceContent(draft: ResourceDraft): JSONMap {
   const names = new Set<string>();
   const packages = draft.packages.map(pkg => {
     const name = pkg.name.trim();

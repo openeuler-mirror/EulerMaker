@@ -214,12 +214,12 @@
           </div>
           <p class="build-package-count">{{ t("project.selectedBuildPackages", { count: selectedBuildPackages.length }) }}</p>
         </fieldset>
-        <p v-if="unsupportedBuildSelection" class="form-error">{{ t('buildConf.unsupported') }} <button type="button" @click="reloadBuildConf">{{ t('common.reload') }}</button></p>
+        <p v-if="unsupportedBuildSelection" class="form-error">{{ t('buildTargetConfig.unsupported') }} <button type="button" @click="reloadBuildTargetConfig">{{ t('common.reload') }}</button></p>
         <fieldset class="target-fieldset">
           <legend>{{ t("project.buildTarget") }}</legend>
           <div class="build-target-options">
             <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
-              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildConf.unsupported') }}</small></span></label>
+              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildTargetConfig.unsupported') }}</small></span></label>
               <div class="build-target-statuses">
                 <span>{{ t("project.buildEnabled") }} <span :class="['target-boolean-icon', { enabled: target.buildFlag }]" :aria-label="booleanLabel(target.buildFlag)" :title="booleanLabel(target.buildFlag)"><Check v-if="target.buildFlag" /><Close v-else /></span></span>
                 <span>{{ t("project.publishEnabled") }} <span :class="['target-boolean-icon', { enabled: target.publishFlag }]" :aria-label="booleanLabel(target.publishFlag)" :title="booleanLabel(target.publishFlag)"><Check v-if="target.publishFlag" /><Close v-else /></span></span>
@@ -347,7 +347,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
-import { useBuildConf } from "@/composables/useBuildConf";
+import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
 import ProjectJobs from "@/components/ProjectJobs.vue";
@@ -386,8 +386,8 @@ const availableBuildPackages = computed(() => [...new Set((project.value?.spec?.
 const visibleBuildPackages = computed(() => availableBuildPackages.value.filter((item) => item.toLowerCase().includes(buildPackageSearch.value.trim().toLowerCase())));
 const buildTargetDrafts = ref<BuildTargetDraft[]>([]);
 const creatingBuild = ref(false);
-const { supports: supportsBuildTarget, error: buildConfError, loading: buildConfLoading, reload: reloadBuildConf } = useBuildConf();
-const unsupportedBuildSelection = computed(() => buildConfLoading.value || Boolean(buildConfError.value) || buildTargetDrafts.value.some(target => target.selected && !supportsBuildTarget(target)));
+const { supports: supportsBuildTarget, error: buildTargetConfigError, loading: buildTargetConfigLoading, reload: reloadBuildTargetConfig } = useBuildTargetConfig();
+const unsupportedBuildSelection = computed(() => buildTargetConfigLoading.value || Boolean(buildTargetConfigError.value) || buildTargetDrafts.value.some(target => target.selected && !supportsBuildTarget(target)));
 const buildDialogErrorKey = ref("");
 const buildActionErrorKey = ref("");
 const createdBuildNames = ref<string[]>([]);
@@ -594,7 +594,7 @@ function selectTab(tab: ProjectTab): void {
 
 function openBuildDialog(type: BuildType): void {
   if (!project.value || !canStartBuild.value || buildConfigurationMissing.value) return;
-  void reloadBuildConf();
+  void reloadBuildTargetConfig();
   buildType.value = type;
   selectedBuildPackages.value = [];
   buildPackageSearch.value = "";

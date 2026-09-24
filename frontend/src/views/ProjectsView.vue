@@ -111,7 +111,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
-import { useBuildConf } from "@/composables/useBuildConf";
+import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 
 import { useSessionStore } from "@/stores/session";
 import type { Project } from "@/types";
@@ -119,7 +119,7 @@ import { ProjectManifestError, projectFromForm, projectFromYaml } from "@/utils/
 import { projectTypeSelector, PROJECT_TYPE_LABEL, type ProjectType } from "@/utils/projectType";
 import { listRelatedProjects } from "@/utils/relatedProjects";
 
-const { supports: supportsBuildTarget } = useBuildConf();
+const { supports: supportsBuildTarget } = useBuildTargetConfig();
 const projects = ref<Project[]>([]);
 const projectTypes: ProjectType[] = ["community", "personal"];
 const projectType = ref<ProjectType>("community");
@@ -268,7 +268,7 @@ function closeDialog(): void {
 }
 
 async function submitForm(): Promise<void> {
-  if (!supportsBuildTarget(form)) { submitErrorKey.value = "buildConf.unsupported"; return; }
+  if (!supportsBuildTarget(form)) { submitErrorKey.value = "buildTargetConfig.unsupported"; return; }
   try {
     const project = projectFromForm(form);
     project.metadata!.labels = { ...project.metadata?.labels, [PROJECT_TYPE_LABEL]: canManageType.value ? form.projectType : "personal" };

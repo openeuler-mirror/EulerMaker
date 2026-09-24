@@ -25,11 +25,8 @@ export interface BuildTarget {
   publishFlag?: boolean;
 }
 
-export interface BuildConf {
-  apiVersion?: string;
-  kind?: string;
-  metadata?: ObjectMeta;
-  spec: { targets: Record<string, { arches: Record<string, { image: string }> }> };
+export interface BuildTargetContent {
+  targets: Record<string, { arches: Record<string, { image: string }> }>;
 }
 
 export interface Config {
@@ -130,10 +127,7 @@ export interface Runner {
   status?: { phase?: string; heartbeat?: string; capacity?: Record<string, string>; allocatable?: Record<string, string>; info?: { os?: string; kernelVersion?: string; runtimeVersion?: string; agentVersion?: string } };
 }
 
-export interface BuildResourceConfig {
-  apiVersion?: "ebs/v1";
-  kind?: "BuildResourceConfig";
-  metadata?: ObjectMeta;
-  spec?: { default?: { requests?: Record<string, string>; limits?: Record<string, string> }; packages?: Record<string, unknown> };
-  rawConfig?: Config;
+export interface BuildResourceContent {
+  default?: { requests?: Record<string, string>; limits?: Record<string, string> };
+  packages?: Record<string, unknown>;
 }
