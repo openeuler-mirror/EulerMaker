@@ -3,8 +3,9 @@ package framework
 import (
 	"fmt"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 type Resource struct {

@@ -7,10 +7,11 @@ import (
 	"sort"
 	"strings"
 
-	"ebsctl/pkg/client"
-	configpkg "ebsctl/pkg/config"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+
+	"ebsctl/pkg/client"
+	configpkg "ebsctl/pkg/config"
 )
 
 func (a *App) loginCommand() *cobra.Command {

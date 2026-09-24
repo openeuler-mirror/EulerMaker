@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"ebsctl/pkg/client"
 	"ebsctl/pkg/printer"
 	"ebsctl/pkg/resource"
-	"github.com/spf13/cobra"
 )
 
 func (a *App) describeCommand() *cobra.Command {

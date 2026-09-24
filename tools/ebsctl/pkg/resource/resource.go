@@ -7,9 +7,10 @@ import (
 	"reflect"
 	"strings"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 const APIPrefix = "/apis/ebs/v1"

@@ -8,10 +8,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"ebsctl/pkg/client"
 	"ebsctl/pkg/printer"
 	"ebsctl/pkg/resource"
-	"github.com/spf13/cobra"
 )
 
 type outputFlags struct {

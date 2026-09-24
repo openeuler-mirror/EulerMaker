@@ -4,8 +4,9 @@ import (
 	"context"
 	"time"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 type RunnerSnapshot struct {

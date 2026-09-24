@@ -9,12 +9,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 type JobInterface interface {

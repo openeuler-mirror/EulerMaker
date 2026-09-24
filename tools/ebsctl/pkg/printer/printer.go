@@ -9,8 +9,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"ebsctl/pkg/resource"
 	"gopkg.in/yaml.v3"
+
+	"ebsctl/pkg/resource"
 )
 
 type Options struct {

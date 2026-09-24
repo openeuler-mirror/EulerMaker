@@ -6,8 +6,9 @@ import (
 	"math/big"
 	"sort"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	ebsv1 "ebs-api/ebs/v1"
 	"scheduler/pkg/framework"
 )
 
