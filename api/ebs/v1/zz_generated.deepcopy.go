@@ -35,12 +35,6 @@ func (in *Script) DeepCopy() *Script {
 	in.DeepCopyInto(out)
 	return out
 }
-func (in *Script) DeepCopyObject() runtime.Object {
-	if out := in.DeepCopy(); out != nil {
-		return out
-	}
-	return nil
-}
 func (in *ScriptSpec) DeepCopyInto(out *ScriptSpec) { *out = *in }
 func (in *ScriptSpec) DeepCopy() *ScriptSpec {
 	if in == nil {
@@ -67,12 +61,6 @@ func (in *ScriptList) DeepCopy() *ScriptList {
 	out := new(ScriptList)
 	in.DeepCopyInto(out)
 	return out
-}
-func (in *ScriptList) DeepCopyObject() runtime.Object {
-	if out := in.DeepCopy(); out != nil {
-		return out
-	}
-	return nil
 }
 
 func (in *Project) DeepCopyInto(out *Project)          { *out = *copyValue(in) }
@@ -112,12 +100,12 @@ func (in *RpmRepoList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
 
 func (in *BuildResourceConfig) DeepCopyInto(out *BuildResourceConfig) { *out = *copyValue(in) }
 func (in *BuildResourceConfig) DeepCopy() *BuildResourceConfig        { return copyValue(in) }
-func (in *BuildResourceConfig) DeepCopyObject() runtime.Object  { return in.DeepCopy() }
+func (in *BuildResourceConfig) DeepCopyObject() runtime.Object        { return in.DeepCopy() }
 func (in *BuildResourceConfigList) DeepCopyInto(out *BuildResourceConfigList) {
 	*out = *copyValue(in)
 }
-func (in *BuildResourceConfigList) DeepCopy() *BuildResourceConfigList   { return copyValue(in) }
-func (in *BuildResourceConfigList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
+func (in *BuildResourceConfigList) DeepCopy() *BuildResourceConfigList { return copyValue(in) }
+func (in *BuildResourceConfigList) DeepCopyObject() runtime.Object     { return in.DeepCopy() }
 
 func (in *Job) DeepCopyInto(out *Job)              { *out = *copyValue(in) }
 func (in *Job) DeepCopy() *Job                     { return copyValue(in) }

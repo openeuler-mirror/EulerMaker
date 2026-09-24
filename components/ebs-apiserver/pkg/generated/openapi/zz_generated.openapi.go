@@ -33,6 +33,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.BuildSpec":                         schema_ebs_api_ebs_v1_BuildSpec(ref),
 		"ebs-api/ebs/v1.BuildStatus":                       schema_ebs_api_ebs_v1_BuildStatus(ref),
 		"ebs-api/ebs/v1.BuildTarget":                       schema_ebs_api_ebs_v1_BuildTarget(ref),
+		"ebs-api/ebs/v1.Config":                            schema_ebs_api_ebs_v1_Config(ref),
+		"ebs-api/ebs/v1.ConfigList":                        schema_ebs_api_ebs_v1_ConfigList(ref),
+		"ebs-api/ebs/v1.ConfigSpec":                        schema_ebs_api_ebs_v1_ConfigSpec(ref),
 		"ebs-api/ebs/v1.DcgNodeState":                      schema_ebs_api_ebs_v1_DcgNodeState(ref),
 		"ebs-api/ebs/v1.GitRef":                            schema_ebs_api_ebs_v1_GitRef(ref),
 		"ebs-api/ebs/v1.Job":                               schema_ebs_api_ebs_v1_Job(ref),
@@ -857,6 +860,123 @@ func schema_ebs_api_ebs_v1_BuildTarget(ref common.ReferenceCallback) common.Open
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func schema_ebs_api_ebs_v1_Config(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Config is a cluster-scoped, versioned text configuration. Consumers interpret Content according to the object's name; the API does not parse it.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-api/ebs/v1.ConfigSpec"),
+						},
+					},
+				},
+				Required: []string{"spec"},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.ConfigSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_ConfigList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.Config"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.Config", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_ConfigSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"visibility": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"content": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"visibility", "content"},
 			},
 		},
 	}

@@ -7,6 +7,38 @@ import (
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:deepcopy-gen=true
+// Config is a cluster-scoped, versioned text configuration. Consumers interpret
+// Content according to the object's name; the API does not parse it.
+type Config struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ConfigSpec `json:"spec"`
+}
+
+type ConfigVisibility string
+
+const (
+	ConfigVisibilityPublic  ConfigVisibility = "Public"
+	ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
+	BuildTargetConfigName                    = "build-target"
+	BuildResourceConfigName                  = "build-resource"
+)
+
+type ConfigSpec struct {
+	Visibility ConfigVisibility `json:"visibility"`
+	Content    string           `json:"content"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +k8s:deepcopy-gen=true
+type ConfigList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Config `json:"items"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +k8s:deepcopy-gen=true
 type BuildConf struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

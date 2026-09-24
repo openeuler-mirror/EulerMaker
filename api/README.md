@@ -10,4 +10,4 @@
 
 随后在 `components/ebs-apiserver` 下运行 `./hacks/update-openapi.sh`，同步更新服务端 OpenAPI 定义。
 
-当前旧类型沿用已有 DeepCopy 实现；BuildConf 及嵌套类型通过显式 `+k8s:deepcopy-gen=true` 标记生成至 `ebs/v1/zz_generated.buildconf.deepcopy.go`，避免覆盖旧类型的方法。脚本使用专用临时目录，重复执行不会在仓库根目录生成额外的 import-path 目录。
+多数旧类型沿用已有 DeepCopy 实现；显式标记的类型（包括 Config）由生成器写入 `ebs/v1/zz_generated.buildconf.deepcopy.go`。脚本使用专用临时目录，重复执行不会在仓库根目录生成额外的 import-path 目录。

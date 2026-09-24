@@ -4,6 +4,7 @@ import (
 	"context"
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/storage/esstore"
+	"encoding/json"
 	"errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +19,7 @@ func TestUnconfiguredBuildDoesNotAcquireClaim(t *testing.T) {
 		t.Run(buildType, func(t *testing.T) {
 			store := esstore.New(nil, "build", "Build", NewStorage(runtime.NewScheme()).Build.(*genericregistry.Store))
 			calls := 0
-			hook := ValidateBuildTargetConfig(confGetter{obj: &ebsv1.BuildConf{}, t: t}, nil)
+			hook := ValidateBuildTargetConfig(confGetter{obj: configForTest(ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{}}), t: t}, nil)
 			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error { calls++; return hook(ctx, obj) })
 			store.SetCreateTransaction(func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error) {
 				t.Fatal("invalid target acquired claim")
@@ -39,16 +40,16 @@ type confGetter struct {
 	t   *testing.T
 }
 
-func (g confGetter) New() runtime.Object { return &ebsv1.BuildConf{} }
+func (g confGetter) New() runtime.Object { return &ebsv1.Config{} }
 func (g confGetter) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
-	if request.NamespaceValue(ctx) != "" || name != "default" {
-		g.t.Fatal("BuildConf must be read cluster-wide")
+	if request.NamespaceValue(ctx) != "" || name != ebsv1.BuildTargetConfigName {
+		g.t.Fatal("Config must be read cluster-wide")
 	}
 	return g.obj, g.err
 }
 
 func TestBuildConfCreateHook(t *testing.T) {
-	conf := &ebsv1.BuildConf{Spec: ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{"os": {Arches: map[string]ebsv1.BuildConfArch{"arch": {Image: "build:v1"}}}}}}
+	conf := configForTest(ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{"os": {Arches: map[string]ebsv1.BuildConfArch{"arch": {Image: "build:v1"}}}}})
 	for _, tc := range []struct {
 		name string
 		obj  runtime.Object
@@ -58,9 +59,9 @@ func TestBuildConfCreateHook(t *testing.T) {
 	}{
 		{"allowed", conf, nil, "arch", 0},
 		{"unsupported", conf, nil, "other", 422},
-		{"empty", &ebsv1.BuildConf{}, nil, "arch", 422},
+		{"empty", configForTest(ebsv1.BuildConfSpec{Targets: map[string]ebsv1.BuildConfTarget{}}), nil, "arch", 422},
 		{"unavailable", nil, errors.New("unavailable"), "arch", 503},
-		{"missing", nil, apierrors.NewNotFound(ebsv1.Resource("buildconfs"), "default"), "arch", 503},
+		{"missing", nil, apierrors.NewNotFound(ebsv1.Resource("configs"), ebsv1.BuildTargetConfigName), "arch", 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -78,4 +79,9 @@ func TestBuildConfCreateHook(t *testing.T) {
 			}
 		})
 	}
+}
+
+func configForTest(spec ebsv1.BuildConfSpec) *ebsv1.Config {
+	content, _ := json.Marshal(spec)
+	return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: string(content)}}
 }
