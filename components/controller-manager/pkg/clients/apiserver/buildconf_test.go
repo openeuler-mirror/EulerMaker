@@ -16,10 +16,11 @@ func TestBuildConfBatchSnapshot(t *testing.T) {
 	calls := 0
 	client, err := New(testRESTConfig(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
-		if r.URL.Path != "/apis/ebs/v1/buildconfs/default" {
+		if r.URL.Path != "/apis/ebs/v1/configs/build-target" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		data, _ := json.Marshal(configuration)
+		content, _ := json.Marshal(configuration.Spec)
+		data, _ := json.Marshal(&ebsv1.Config{TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Config"}, ObjectMeta: metav1.ObjectMeta{Name: "build-target", UID: "uid", ResourceVersion: "v1:1:1"}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: string(content)}})
 		return jsonResponse(r, data), nil
 	})), time.Second)
 	if err != nil {

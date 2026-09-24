@@ -9,17 +9,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/yaml"
 )
+
+var configResourceArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+var configPackagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9][A-Za-z0-9+._-]*)*$`)
 
 // ErrNotFound is the sentinel returned by read methods when the requested
 // object does not exist, so callers distinguish "missing" from "query failed".
@@ -241,15 +248,80 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 }
 
 func (c *apiClient) GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildResourceConfig, error) {
-	obj, err := c.readGet(ctx, source.BuildResourceConfigsGVR, "", "default")
+	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.BuildResourceConfigName)
 	if err != nil {
 		return nil, err
 	}
-	value, ok := obj.(*ebsv1.BuildResourceConfig)
-	if !ok || value == nil || value.Name != "default" || value.Namespace != "" || value.UID == "" || value.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected default BuildResourceConfig response: %T", obj)
+	config, ok := obj.(*ebsv1.Config)
+	if !ok || config == nil || config.Name != ebsv1.BuildResourceConfigName || config.Namespace != "" || config.UID == "" || config.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected build-resource Config response: %T", obj)
 	}
-	return value, nil
+	var content ebsv1.BuildResourceConfigSpec
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
+		return nil, fmt.Errorf("decode build-resource Config: %w", err)
+	}
+	if content.Default.Requests["cpu"] == "" || content.Default.Requests["memory"] == "" {
+		return nil, fmt.Errorf("build-resource Config requires default CPU and memory requests")
+	}
+	if err := validateConfigResourceLevel(content.Default); err != nil {
+		return nil, fmt.Errorf("invalid build-resource default: %w", err)
+	}
+	parsed := &ebsv1.BuildResourceConfig{ObjectMeta: config.ObjectMeta, Spec: content}
+	if err := validateEffectiveResources(resolveResources(parsed, "", "")); err != nil {
+		return nil, err
+	}
+	for name, pkg := range content.Packages {
+		if !configPackagePattern.MatchString(name) || strings.TrimSpace(name) != name {
+			return nil, fmt.Errorf("invalid build-resource package name %q", name)
+		}
+		if len(pkg.Default.Requests) == 0 && len(pkg.Default.Limits) == 0 && len(pkg.Arches) == 0 {
+			return nil, fmt.Errorf("package %q has no resource rules", name)
+		}
+		if err := validateConfigResourceLevel(pkg.Default); err != nil {
+			return nil, fmt.Errorf("invalid package %q default: %w", name, err)
+		}
+		if err := validateEffectiveResources(resolveResources(parsed, name, "")); err != nil {
+			return nil, fmt.Errorf("invalid package %q resources: %w", name, err)
+		}
+		for arch, level := range pkg.Arches {
+			if !configResourceArchPattern.MatchString(arch) {
+				return nil, fmt.Errorf("invalid build-resource architecture %q", arch)
+			}
+			if err := validateConfigResourceLevel(level); err != nil {
+				return nil, fmt.Errorf("invalid package %q architecture %q: %w", name, arch, err)
+			}
+			if err := validateEffectiveResources(resolveResources(parsed, name, arch)); err != nil {
+				return nil, fmt.Errorf("invalid package %q architecture %q resources: %w", name, arch, err)
+			}
+		}
+	}
+	return parsed, nil
+}
+
+func validateEffectiveResources(level ebsv1.ResourceRequirements) error {
+	for _, key := range []string{"cpu", "memory"} {
+		request, reqErr := resource.ParseQuantity(level.Requests[key])
+		limit, limitErr := resource.ParseQuantity(level.Limits[key])
+		if reqErr != nil || limitErr != nil || request.Sign() <= 0 || limit.Cmp(request) < 0 {
+			return fmt.Errorf("invalid effective %s requests/limits", key)
+		}
+	}
+	return nil
+}
+
+func validateConfigResourceLevel(level ebsv1.ResourceRequirements) error {
+	for _, values := range []map[string]string{level.Requests, level.Limits} {
+		for key, value := range values {
+			if key != "cpu" && key != "memory" {
+				return fmt.Errorf("unsupported resource %q", key)
+			}
+			quantity, err := resource.ParseQuantity(value)
+			if err != nil || quantity.Sign() <= 0 {
+				return fmt.Errorf("invalid %s quantity %q", key, value)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *apiClient) GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error) {

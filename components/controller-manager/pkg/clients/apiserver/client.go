@@ -271,7 +271,7 @@ func validateTarget(gvr schema.GroupVersionResource, namespace, name string) err
 	if name == "" {
 		return fmt.Errorf("resource name is required")
 	}
-	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "buildconfs"
+	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "configs"
 	if clusterScoped && namespace != "" {
 		return fmt.Errorf("cluster-scoped resource %s requires an empty namespace", gvr.Resource)
 	}
@@ -288,7 +288,7 @@ func validateProjectScopedResource(gvr schema.GroupVersionResource, project stri
 	if project == "" {
 		return fmt.Errorf("project is required")
 	}
-	if gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "buildconfs" {
+	if gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "configs" {
 		return fmt.Errorf("resource %s is not project-scoped", gvr.Resource)
 	}
 	return nil
@@ -370,8 +370,8 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return nil, fmt.Errorf("unsupported resource %s", gvr)
 	}
 	switch gvr.Resource {
-	case "buildconfs":
-		return &ebsv1.BuildConfList{}, nil
+	case "configs":
+		return &ebsv1.ConfigList{}, nil
 	case "projects":
 		return &ebsv1.ProjectList{}, nil
 	case "snapshots":
@@ -382,8 +382,6 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildInfoList{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepoList{}, nil
-	case "buildresourceconfigs":
-		return &ebsv1.BuildResourceConfigList{}, nil
 	case "jobs":
 		return &ebsv1.JobList{}, nil
 	case "runners":
@@ -398,8 +396,8 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return nil, fmt.Errorf("unsupported resource %s", gvr)
 	}
 	switch gvr.Resource {
-	case "buildconfs":
-		return &ebsv1.BuildConf{}, nil
+	case "configs":
+		return &ebsv1.Config{}, nil
 	case "projects":
 		return &ebsv1.Project{}, nil
 	case "snapshots":
@@ -410,8 +408,6 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildInfo{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepo{}, nil
-	case "buildresourceconfigs":
-		return &ebsv1.BuildResourceConfig{}, nil
 	case "jobs":
 		return &ebsv1.Job{}, nil
 	case "runners":
@@ -424,7 +420,7 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 func listPage(list runtime.Object) (source.ListPage, error) {
 	page := source.ListPage{}
 	switch value := list.(type) {
-	case *ebsv1.BuildConfList:
+	case *ebsv1.ConfigList:
 		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
 		for i := range value.Items {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())
@@ -450,11 +446,6 @@ func listPage(list runtime.Object) (source.ListPage, error) {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())
 		}
 	case *ebsv1.RpmRepoList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.BuildResourceConfigList:
 		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
 		for i := range value.Items {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())
