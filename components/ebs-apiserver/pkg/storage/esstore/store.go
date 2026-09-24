@@ -689,7 +689,7 @@ func fieldSelectorMapping(resource, field string) (queryField string, requireExi
 
 func supportsStatusFieldSelectors(resource string) bool {
 	switch resource {
-	case "project", "snapshot", "build", "buildinfo", "buildresourceconfig":
+	case "project", "snapshot", "build", "buildinfo":
 		return true
 	default:
 		return false

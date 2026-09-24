@@ -15,7 +15,7 @@ import (
 	"ebs-apiserver/pkg/apis/ebs/validation"
 )
 
-func ensureDefaultScript(ctx context.Context, storage defaultBuildResourceConfigStorage, filename string) error {
+func ensureDefaultScript(ctx context.Context, storage bootstrapStorage, filename string) error {
 	f, err := os.Open(filename)
 	if err != nil {
 		return err

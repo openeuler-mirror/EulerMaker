@@ -45,7 +45,7 @@ type scriptHandler struct{ store *esstore.Store }
 
 func (h *scriptHandler) handle(req *restful.Request, resp *restful.Response) {
 	if err := h.serve(req, resp); err != nil {
-		writeBuildResourceConfigError(resp, err)
+		writeResourceError(resp, err)
 	}
 }
 

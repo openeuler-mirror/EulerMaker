@@ -21,6 +21,10 @@ import (
 	"ebs-apiserver/pkg/storage/es"
 )
 
+type confTransport func(*http.Request) (*http.Response, error)
+
+func (f confTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 	var document json.RawMessage
 	var seq int64

@@ -25,6 +25,12 @@ import (
 
 const maxConfigRequestSize = 16 << 20
 
+//go:embed default-build-conf.yaml
+var defaultBuildConfTemplate []byte
+
+//go:embed default-build-resource-config.yaml
+var defaultBuildResourceConfigTemplate []byte
+
 func installConfigRoutes(srv handlerServer, store *esstore.Store) error {
 	ws := ebsV1WebService(srv)
 	if ws == nil {
@@ -48,7 +54,7 @@ type configHandler struct{ store *esstore.Store }
 
 func (h *configHandler) handle(req *restful.Request, resp *restful.Response) {
 	if err := h.serve(req, resp); err != nil {
-		writeBuildResourceConfigError(resp, err)
+		writeResourceError(resp, err)
 	}
 }
 
@@ -163,7 +169,7 @@ func decodeConfig(data []byte) (*ebsv1.Config, error) {
 	return obj, nil
 }
 
-func ensureDefaultConfigs(ctx context.Context, storage defaultBuildResourceConfigStorage) error {
+func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 	var target ebsv1.BuildConf
 	if err := yaml.UnmarshalStrict(defaultBuildConfTemplate, &target); err != nil {
 		return err
@@ -195,7 +201,7 @@ func ensureDefaultConfigs(ctx context.Context, storage defaultBuildResourceConfi
 	return nil
 }
 
-func ensureDefaultConfig(ctx context.Context, storage defaultBuildResourceConfigStorage, obj *ebsv1.Config) error {
+func ensureDefaultConfig(ctx context.Context, storage bootstrapStorage, obj *ebsv1.Config) error {
 	ctx = apirequest.WithNamespace(ctx, "")
 	if _, err := storage.Get(ctx, obj.Name, &metav1.GetOptions{}); err == nil {
 		return nil
