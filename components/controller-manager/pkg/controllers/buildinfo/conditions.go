@@ -11,9 +11,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	ebsv1 "ebs-api/ebs/v1"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // Spec build/install status values persisted in SpecStatus (design 6.2/6.3).

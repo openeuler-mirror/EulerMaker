@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // lastPublishedBuildFieldSelector narrows the search to Builds that finished the publish stage successfully.

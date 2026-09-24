@@ -7,8 +7,6 @@ import (
 	"reflect"
 	"time"
 
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,6 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 type DeletePreconditions struct {

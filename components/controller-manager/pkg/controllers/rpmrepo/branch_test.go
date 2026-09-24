@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {

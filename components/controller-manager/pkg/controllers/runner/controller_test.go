@@ -8,16 +8,17 @@ import (
 	"testing"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/controller"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/controller"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 type fakeCachedSource struct {

@@ -6,11 +6,11 @@ import (
 	"slices"
 	"sort"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
-
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 func (r *reconciler) incrementalPackageSeeds(snapshot *ebsv1.Snapshot) ([]string, error) {

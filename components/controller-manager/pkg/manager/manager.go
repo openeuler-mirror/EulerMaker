@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
-	"golang.org/x/sync/errgroup"
 )
 
 type HealthServer interface {

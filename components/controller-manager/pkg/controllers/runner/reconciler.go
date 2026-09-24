@@ -10,11 +10,12 @@ import (
 	"strings"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
-	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const maxHealthRequeueAfter = 24 * time.Hour

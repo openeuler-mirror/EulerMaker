@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clocktesting "k8s.io/utils/clock/testing"
+
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // stubPolicy returns a scripted decision so the release flow can be driven without the default policy.

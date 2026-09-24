@@ -10,13 +10,13 @@ import (
 	"sort"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
-
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // conflictRequeueDelay is used when the current round must be recomputed from a fresh object.

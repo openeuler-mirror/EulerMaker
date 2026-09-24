@@ -14,13 +14,12 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/metrics"
-
 	ebsv1 "ebs-api/ebs/v1"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // --- 5.2 event handlers ---

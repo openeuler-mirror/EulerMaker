@@ -9,9 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
-
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,6 +16,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
+
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 var (

@@ -3,15 +3,15 @@ package rpmrepo
 import (
 	"fmt"
 	"log"
-	"sort"
-
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
 	"reflect"
+	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // reconcileRelease drives the releases of one {project}/{os}/{arch} group. In-flight releases win over

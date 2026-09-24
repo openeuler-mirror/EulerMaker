@@ -12,10 +12,6 @@ import (
 	"regexp"
 	"strings"
 
-	"controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
-
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +19,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
+
+	"controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 var configResourceArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)

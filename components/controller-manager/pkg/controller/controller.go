@@ -9,9 +9,10 @@ import (
 	"sync"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
 	"k8s.io/client-go/util/workqueue"
 	clockutils "k8s.io/utils/clock"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
 )
 
 type Controller interface {

@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"strconv"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // FakeClient is an in-memory Client for unit tests. It records the request options and status writes so a test
