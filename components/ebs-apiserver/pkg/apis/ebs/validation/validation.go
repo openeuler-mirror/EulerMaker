@@ -183,7 +183,11 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	allErrs := ValidateBuild(newObj)
 	if !apiequality.Semantic.DeepEqual(newObj.Spec, oldObj.Spec) {
-		allErrs = append(allErrs, field.Invalid(field.NewPath("spec"), newObj.Spec, "field is immutable"))
+		previous, next := oldObj.Spec, newObj.Spec
+		previous.Packages, next.Packages = nil, nil
+		if oldObj.Spec.BuildType != "incremental" || oldObj.Status.Phase != ebsv1.BuildPending || !apiequality.Semantic.DeepEqual(previous, next) {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("spec"), newObj.Spec, "field is immutable except incremental packages while Pending"))
+		}
 	}
 	return allErrs
 }

@@ -75,6 +75,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	}
 	tests := map[string][]string{
 		"ebs-api/ebs/v1.BuildInfoSpec":                 {"bootstrapRepo", "buildPayload"},
+		"ebs-api/ebs/v1.BuildInfoStatus":               {"failedPackages"},
 		"ebs-api/ebs/v1.BaseBuildRef":                  {"name"},
 		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
@@ -147,6 +148,21 @@ func TestCodecsUseStrictDecoding(t *testing.T) {
 		if _, _, err := Codecs.UniversalDeserializer().Decode([]byte(data), nil, nil); err == nil {
 			t.Errorf("expected strict decoding to reject %s", data)
 		}
+	}
+}
+
+func TestBuildInfoFailedPackagesDecoding(t *testing.T) {
+	data := []byte(`{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a","namespace":"project-a"},"status":{"failedPackages":["gcc","glibc"]}}`)
+	obj, _, err := Codecs.UniversalDeserializer().Decode(data, nil, nil)
+	if err != nil {
+		t.Fatalf("decode BuildInfo with failedPackages: %v", err)
+	}
+	buildInfo, ok := obj.(*ebsv1.BuildInfo)
+	if !ok {
+		t.Fatalf("decoded object has type %T, want *BuildInfo", obj)
+	}
+	if len(buildInfo.Status.FailedPackages) != 2 || buildInfo.Status.FailedPackages[0] != "gcc" || buildInfo.Status.FailedPackages[1] != "glibc" {
+		t.Fatalf("failedPackages = %v, want [gcc glibc]", buildInfo.Status.FailedPackages)
 	}
 }
 

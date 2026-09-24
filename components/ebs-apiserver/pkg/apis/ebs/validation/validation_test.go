@@ -484,6 +484,40 @@ func TestValidateBuildStatusUpdate(t *testing.T) {
 	assertErrorList(t, errs, 1, map[string]field.ErrorType{"status.phase": field.ErrorTypeNotSupported})
 }
 
+func TestIncrementalPackagesMayChangeOnlyWhilePending(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		phase   ebsv1.BuildPhase
+		wantErr bool
+	}{
+		{name: "pending", phase: ebsv1.BuildPending},
+		{name: "prepared", phase: ebsv1.BuildPrepared, wantErr: true},
+		{name: "processing", phase: ebsv1.BuildProcessing, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := validBuild()
+			old.Spec.BuildType = "incremental"
+			old.Labels[ebsv1.BuildTypeLabel] = "incremental"
+			old.Status.Phase = tc.phase
+			next := old.DeepCopy()
+			next.Spec.Packages = []string{"changed"}
+			errs := ValidateBuildUpdate(next, old)
+			if tc.wantErr {
+				assertErrorList(t, errs, 1, map[string]field.ErrorType{"spec": field.ErrorTypeInvalid})
+			} else {
+				assertErrorList(t, errs, 0, nil)
+			}
+		})
+	}
+	old := validBuild()
+	old.Spec.BuildType = "incremental"
+	old.Labels[ebsv1.BuildTypeLabel] = "incremental"
+	next := old.DeepCopy()
+	next.Spec.BuildTarget.Arch = "aarch64"
+	next.Labels[ebsv1.BuildTargetArchLabel] = "aarch64"
+	assertErrorList(t, ValidateBuildUpdate(next, old), 1, map[string]field.ErrorType{"spec": field.ErrorTypeInvalid})
+}
+
 func TestTerminalBuildPhaseImmutable(t *testing.T) {
 	for _, oldPhase := range []ebsv1.BuildPhase{ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped} {
 		for _, phase := range ebsv1.BuildPhaseValues() {
