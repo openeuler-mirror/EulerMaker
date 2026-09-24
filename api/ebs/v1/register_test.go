@@ -127,12 +127,12 @@ func TestProjectFieldLabelConversion(t *testing.T) {
 	}
 }
 
-func TestBuildResourceTypesAreRegistered(t *testing.T) {
+func TestBuildResourceConfigTypesAreRegistered(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	for _, kind := range []string{"BuildResource", "BuildResourceList"} {
+	for _, kind := range []string{"BuildResourceConfig", "BuildResourceConfigList"} {
 		obj, err := scheme.New(SchemeGroupVersion.WithKind(kind))
 		if err != nil {
 			t.Fatalf("new %s: %v", kind, err)

@@ -33,7 +33,7 @@ type fakeClient struct {
 	projects        map[string]*ebsv1.Project
 	snapshots       map[string]*ebsv1.Snapshot
 	rpmrepos        map[string]*ebsv1.RpmRepo
-	buildresources  map[string]*ebsv1.BuildResource
+	buildresourceconfigs  map[string]*ebsv1.BuildResourceConfig
 	buildconf       *ebsv1.BuildConf
 	buildconfFailed bool
 
@@ -70,7 +70,7 @@ func newFakeClient() *fakeClient {
 		projects:       make(map[string]*ebsv1.Project),
 		snapshots:      make(map[string]*ebsv1.Snapshot),
 		rpmrepos:       make(map[string]*ebsv1.RpmRepo),
-		buildresources: make(map[string]*ebsv1.BuildResource),
+		buildresourceconfigs: make(map[string]*ebsv1.BuildResourceConfig),
 		injectedWrites: make(map[string]*injectedWrite),
 		injectedReads:  make(map[string]*injectedRead),
 		rv:             100,
@@ -201,7 +201,7 @@ func (f *fakeClient) SeedRpmRepo(value *ebsv1.RpmRepo) *ebsv1.RpmRepo {
 	return stored.DeepCopy()
 }
 
-func (f *fakeClient) SeedBuildResource(value *ebsv1.BuildResource) *ebsv1.BuildResource {
+func (f *fakeClient) SeedBuildResourceConfig(value *ebsv1.BuildResourceConfig) *ebsv1.BuildResourceConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	stored := value.DeepCopy()
@@ -211,7 +211,7 @@ func (f *fakeClient) SeedBuildResource(value *ebsv1.BuildResource) *ebsv1.BuildR
 	if stored.ResourceVersion == "" {
 		stored.ResourceVersion = f.nextRVLocked()
 	}
-	f.buildresources[stored.Namespace+"/"+stored.Name] = stored
+	f.buildresourceconfigs[stored.Name] = stored
 	return stored.DeepCopy()
 }
 
@@ -410,17 +410,13 @@ func (f *fakeClient) GetProject(_ context.Context, project string) (*ebsv1.Proje
 	return value.DeepCopy(), nil
 }
 
-func (f *fakeClient) GetBuildResource(_ context.Context, namespace, name string) (*ebsv1.BuildResource, error) {
+func (f *fakeClient) GetBuildResourceConfig(_ context.Context) (*ebsv1.BuildResourceConfig, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.consumeInjectedReadLocked("buildresources"); err != nil {
+	if err := f.consumeInjectedReadLocked("buildresourceconfigs"); err != nil {
 		return nil, err
 	}
-	value, ok := f.buildresources[namespace+"/"+name]
-	if !ok && namespace != "default" {
-		// Project table miss falls back to default/default (15.1).
-		value, ok = f.buildresources["default/default"]
-	}
+	value, ok := f.buildresourceconfigs["default"]
 	if !ok {
 		return nil, ErrNotFound
 	}

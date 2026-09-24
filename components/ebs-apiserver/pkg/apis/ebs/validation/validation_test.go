@@ -534,31 +534,31 @@ func TestTerminalBuildPhaseImmutable(t *testing.T) {
 	}
 }
 
-func TestValidateBuildResource(t *testing.T) {
+func TestValidateBuildResourceConfig(t *testing.T) {
 	tests := []struct {
 		name       string
-		object     *ebsv1.BuildResource
+		object     *ebsv1.BuildResourceConfig
 		wantErrs   int
 		wantFields map[string]field.ErrorType
 	}{
-		{name: "valid project table with extensible architecture", object: validBuildResource("project-a", "riscv64")},
+		{name: "valid cluster table with extensible architecture", object: validBuildResourceConfig("project-a", "riscv64")},
 		{
 			name: "allows multibuild package names",
-			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
 				Default:  validResourceRequirements(),
 				Packages: map[string]ebsv1.PackageResourceConfig{"kernel:kernel-rt": {Default: validResourceRequirements()}},
 			}},
 		},
 		{
 			name: "allows table limits to default to requests",
-			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
 				Default:  ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "4", "memory": "8Gi"}},
 				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{Requests: map[string]string{"memory": "12Gi"}}}},
 			}},
 		},
 		{
 			name: "allows package and architecture partial overrides",
-			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
 				Default: validResourceRequirements(),
 				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {
 					Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "3"}},
@@ -568,33 +568,33 @@ func TestValidateBuildResource(t *testing.T) {
 		},
 		{
 			name: "valid bootstrap default with table default only",
-			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: "default"}, Spec: ebsv1.BuildResourceSpec{
+			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "default"}, Spec: ebsv1.BuildResourceConfigSpec{
 				Default: validResourceRequirements(), Packages: map[string]ebsv1.PackageResourceConfig{},
 			}},
 		},
 		{
 			name:     "requires identity and packages",
-			object:   &ebsv1.BuildResource{},
-			wantErrs: 4,
+			object:   &ebsv1.BuildResourceConfig{},
+			wantErrs: 3,
 			wantFields: map[string]field.ErrorType{
-				"metadata.name": field.ErrorTypeRequired, "metadata.namespace": field.ErrorTypeRequired,
+				"metadata.name": field.ErrorTypeRequired,
 				"spec.default": field.ErrorTypeRequired, "spec.packages": field.ErrorTypeRequired,
 			},
 		},
-		{name: "allows a name different from project", object: func() *ebsv1.BuildResource {
-			object := validBuildResource("project-a", "x86_64")
+		{name: "allows a custom name", object: func() *ebsv1.BuildResourceConfig {
+			object := validBuildResourceConfig("project-a", "x86_64")
 			object.Name = "custom-table"
 			return object
 		}()},
 		{
 			name:       "rejects invalid architecture",
-			object:     validBuildResource("project-a", "RISC V"),
+			object:     validBuildResourceConfig("project-a", "RISC V"),
 			wantErrs:   1,
 			wantFields: map[string]field.ErrorType{"spec.packages[gcc].arches[RISC V]": field.ErrorTypeInvalid},
 		},
 		{
 			name: "rejects invalid partial request",
-			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
 				Default:  validResourceRequirements(),
 				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "0"}}}},
 			}},
@@ -605,7 +605,7 @@ func TestValidateBuildResource(t *testing.T) {
 		},
 		{
 			name: "rejects unknown resources and lower limits",
-			object: &ebsv1.BuildResource{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Namespace: "project-a"}, Spec: ebsv1.BuildResourceSpec{
+			object: &ebsv1.BuildResourceConfig{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.BuildResourceConfigSpec{
 				Default: validResourceRequirements(),
 				Packages: map[string]ebsv1.PackageResourceConfig{"gcc": {Default: ebsv1.ResourceRequirements{
 					Requests: map[string]string{"cpu": "4", "memory": "8Gi", "gpu": "1"},
@@ -621,16 +621,26 @@ func TestValidateBuildResource(t *testing.T) {
 		},
 	}
 	tests[6].object.Name = "other"
+	tests = append(tests, struct {
+		name       string
+		object     *ebsv1.BuildResourceConfig
+		wantErrs   int
+		wantFields map[string]field.ErrorType
+	}{name: "rejects namespace", object: func() *ebsv1.BuildResourceConfig {
+		object := validBuildResourceConfig("default", "x86_64")
+		object.Namespace = "project-a"
+		return object
+	}(), wantErrs: 1, wantFields: map[string]field.ErrorType{"metadata.namespace": field.ErrorTypeForbidden}})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertErrorList(t, ValidateBuildResource(tt.object), tt.wantErrs, tt.wantFields)
+			assertErrorList(t, ValidateBuildResourceConfig(tt.object), tt.wantErrs, tt.wantFields)
 		})
 	}
 }
 
-func TestValidateBuildResourceUpdate(t *testing.T) {
-	object := validBuildResource("project-a", "aarch64")
-	assertErrorList(t, ValidateBuildResourceUpdate(object, object.DeepCopy()), 0, nil)
+func TestValidateBuildResourceConfigUpdate(t *testing.T) {
+	object := validBuildResourceConfig("project-a", "aarch64")
+	assertErrorList(t, ValidateBuildResourceConfigUpdate(object, object.DeepCopy()), 0, nil)
 }
 
 func TestValidateJob(t *testing.T) {
@@ -936,10 +946,10 @@ func validBuild() *ebsv1.Build {
 	}
 }
 
-func validBuildResource(project, arch string) *ebsv1.BuildResource {
-	return &ebsv1.BuildResource{
-		ObjectMeta: metav1.ObjectMeta{Name: project, Namespace: project},
-		Spec: ebsv1.BuildResourceSpec{Default: validResourceRequirements(), Packages: map[string]ebsv1.PackageResourceConfig{
+func validBuildResourceConfig(project, arch string) *ebsv1.BuildResourceConfig {
+	return &ebsv1.BuildResourceConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: project},
+		Spec: ebsv1.BuildResourceConfigSpec{Default: validResourceRequirements(), Packages: map[string]ebsv1.PackageResourceConfig{
 			"gcc": {Arches: map[string]ebsv1.ResourceRequirements{arch: validResourceRequirements()}},
 		}},
 	}

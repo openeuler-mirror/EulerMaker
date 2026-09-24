@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-func ensureDefaultScript(ctx context.Context, storage defaultBuildResourceStorage, filename string) error {
+func ensureDefaultScript(ctx context.Context, storage defaultBuildResourceConfigStorage, filename string) error {
 	f, err := os.Open(filename)
 	if err != nil {
 		return err

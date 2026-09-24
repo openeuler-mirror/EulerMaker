@@ -30,7 +30,7 @@ import (
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	buildconfstore "ebs-apiserver/pkg/registry/ebs/buildconf"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
-	buildresourcestore "ebs-apiserver/pkg/registry/ebs/buildresource"
+	buildresourceconfigstore "ebs-apiserver/pkg/registry/ebs/buildresourceconfig"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
@@ -277,7 +277,7 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	}); err != nil {
 		return nil, err
 	}
-	buildResourceTemplate := buildresourcestore.NewStorage()
+	buildResourceConfigTemplate := buildresourceconfigstore.NewStorage()
 	buildConfES := newBuildConfStore(esClient)
 	if err := ensureDefaultBuildConf(context.Background(), buildConfES); err != nil {
 		return nil, err
@@ -288,11 +288,11 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	if err := installScriptRoutes(srv.Handler.GoRestfulContainer, newScriptStore(esClient)); err != nil {
 		return nil, err
 	}
-	buildResourceES := esstore.New(esClient, "buildresource", "BuildResource", buildResourceTemplate.(*genericregistry.Store))
-	if err := ensureDefaultBuildResource(context.Background(), buildResourceES); err != nil {
+	buildResourceConfigES := esstore.New(esClient, "buildresourceconfig", "BuildResourceConfig", buildResourceConfigTemplate.(*genericregistry.Store))
+	if err := ensureDefaultBuildResourceConfig(context.Background(), buildResourceConfigES); err != nil {
 		return nil, err
 	}
-	if err := installBuildResourceRoutes(srv.Handler.GoRestfulContainer, buildResourceES); err != nil {
+	if err := installBuildResourceConfigRoutes(srv.Handler.GoRestfulContainer, buildResourceConfigES); err != nil {
 		return nil, err
 	}
 	if enableIAM {

@@ -1,8 +1,7 @@
 apiVersion: ebs/v1
-kind: BuildResource
+kind: BuildResourceConfig
 metadata:
   name: default
-  namespace: default
 spec:
   default:
     requests:

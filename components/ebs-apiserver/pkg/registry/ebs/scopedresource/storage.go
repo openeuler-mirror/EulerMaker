@@ -20,6 +20,7 @@ type Config struct {
 	Resource       string
 	Singular       string
 	Kind           string
+	ClusterScoped  bool
 	New            func() runtime.Object
 	NewList        func() runtime.Object
 	PrepareCreate  func(runtime.Object)
@@ -83,7 +84,7 @@ func keyFunc(resource string) func(context.Context, string) (string, error) {
 
 type strategy struct{ config Config }
 
-func (s *strategy) NamespaceScoped() bool          { return true }
+func (s *strategy) NamespaceScoped() bool          { return !s.config.ClusterScoped }
 func (s *strategy) AllowCreateOnUpdate() bool      { return false }
 func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 func (s *strategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
@@ -113,7 +114,7 @@ func (s *strategy) WarningsOnUpdate(context.Context, runtime.Object, runtime.Obj
 
 type statusStrategy struct{ config Config }
 
-func (s *statusStrategy) NamespaceScoped() bool          { return true }
+func (s *statusStrategy) NamespaceScoped() bool          { return !s.config.ClusterScoped }
 func (s *statusStrategy) AllowCreateOnUpdate() bool      { return false }
 func (s *statusStrategy) AllowUnconditionalUpdate() bool { return false }
 func (s *statusStrategy) PrepareForUpdate(_ context.Context, obj, old runtime.Object) {

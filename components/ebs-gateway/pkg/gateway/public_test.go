@@ -112,7 +112,8 @@ func TestAnonymousReadDeniesNonPublicRequests(t *testing.T) {
 	}{
 		{http.MethodGet, apiPrefix + "/jobs", http.StatusNotFound},
 		{http.MethodGet, apiPrefix + "/builds", http.StatusNotFound},
-		{http.MethodGet, apiPrefix + "/projects/project-a/buildresources", http.StatusUnauthorized},
+		{http.MethodGet, apiPrefix + "/buildresourceconfigs", http.StatusUnauthorized},
+		{http.MethodGet, apiPrefix + "/projects/project-a/buildresourceconfigs", http.StatusUnauthorized},
 		{http.MethodGet, apiPrefix + "/runners", http.StatusUnauthorized},
 		{http.MethodGet, apiPrefix + "/projects?watch=true", http.StatusUnauthorized},
 		{http.MethodGet, apiPrefix + "/projects?watch=1", http.StatusUnauthorized},
@@ -195,7 +196,7 @@ func TestAnonymousReadUsesIndependentRateLimit(t *testing.T) {
 
 func TestInternalGlobalAPIsAreNotGatewayRoutes(t *testing.T) {
 	gw := newTestGateway(t, http.NotFoundHandler(), 100, 200)
-	for _, resource := range []string{"snapshots", "builds", "buildinfos", "rpmrepos", "jobs", "buildresources"} {
+	for _, resource := range []string{"snapshots", "builds", "buildinfos", "rpmrepos", "jobs", "buildresourceconfigs"} {
 		req := authenticatedRequest(t, http.MethodGet, apiPrefix+"/"+resource, nil, systemClaims())
 		rec := httptest.NewRecorder()
 		gw.ServeHTTP(rec, req)

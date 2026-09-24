@@ -44,7 +44,7 @@ type scriptHandler struct{ store *esstore.Store }
 
 func (h *scriptHandler) handle(req *restful.Request, resp *restful.Response) {
 	if err := h.serve(req, resp); err != nil {
-		writeBuildResourceError(resp, err)
+		writeBuildResourceConfigError(resp, err)
 	}
 }
 
@@ -62,7 +62,7 @@ func (h *scriptHandler) serve(req *restful.Request, resp *restful.Response) erro
 	var patchVersion string
 	if method == http.MethodGet || method == http.MethodHead {
 		if name == "" {
-			opts, err := buildResourceListOptions(req)
+			opts, err := resourceListOptions(req)
 			if err != nil {
 				return apierrors.NewBadRequest(err.Error())
 			}

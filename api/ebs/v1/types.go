@@ -277,13 +277,13 @@ type RpmRepoList struct {
 	Items           []RpmRepo `json:"items"`
 }
 
-type BuildResource struct {
+type BuildResourceConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              BuildResourceSpec `json:"spec,omitempty"`
+	Spec              BuildResourceConfigSpec `json:"spec,omitempty"`
 }
 
-type BuildResourceSpec struct {
+type BuildResourceConfigSpec struct {
 	Default  ResourceRequirements             `json:"default,omitempty"`
 	Packages map[string]PackageResourceConfig `json:"packages"`
 }
@@ -293,10 +293,10 @@ type PackageResourceConfig struct {
 	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
 }
 
-type BuildResourceList struct {
+type BuildResourceConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []BuildResource `json:"items"`
+	Items           []BuildResourceConfig `json:"items"`
 }
 
 type Job struct {

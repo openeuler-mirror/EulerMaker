@@ -382,8 +382,8 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildInfoList{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepoList{}, nil
-	case "buildresources":
-		return &ebsv1.BuildResourceList{}, nil
+	case "buildresourceconfigs":
+		return &ebsv1.BuildResourceConfigList{}, nil
 	case "jobs":
 		return &ebsv1.JobList{}, nil
 	case "runners":
@@ -410,8 +410,8 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildInfo{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepo{}, nil
-	case "buildresources":
-		return &ebsv1.BuildResource{}, nil
+	case "buildresourceconfigs":
+		return &ebsv1.BuildResourceConfig{}, nil
 	case "jobs":
 		return &ebsv1.Job{}, nil
 	case "runners":
@@ -454,7 +454,7 @@ func listPage(list runtime.Object) (source.ListPage, error) {
 		for i := range value.Items {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())
 		}
-	case *ebsv1.BuildResourceList:
+	case *ebsv1.BuildResourceConfigList:
 		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
 		for i := range value.Items {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())

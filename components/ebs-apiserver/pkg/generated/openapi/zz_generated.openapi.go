@@ -27,9 +27,9 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.BuildInfoSpec":                     schema_ebs_api_ebs_v1_BuildInfoSpec(ref),
 		"ebs-api/ebs/v1.BuildInfoStatus":                   schema_ebs_api_ebs_v1_BuildInfoStatus(ref),
 		"ebs-api/ebs/v1.BuildList":                         schema_ebs_api_ebs_v1_BuildList(ref),
-		"ebs-api/ebs/v1.BuildResource":                     schema_ebs_api_ebs_v1_BuildResource(ref),
-		"ebs-api/ebs/v1.BuildResourceList":                 schema_ebs_api_ebs_v1_BuildResourceList(ref),
-		"ebs-api/ebs/v1.BuildResourceSpec":                 schema_ebs_api_ebs_v1_BuildResourceSpec(ref),
+		"ebs-api/ebs/v1.BuildResourceConfig":               schema_ebs_api_ebs_v1_BuildResourceConfig(ref),
+		"ebs-api/ebs/v1.BuildResourceConfigList":           schema_ebs_api_ebs_v1_BuildResourceConfigList(ref),
+		"ebs-api/ebs/v1.BuildResourceConfigSpec":           schema_ebs_api_ebs_v1_BuildResourceConfigSpec(ref),
 		"ebs-api/ebs/v1.BuildSpec":                         schema_ebs_api_ebs_v1_BuildSpec(ref),
 		"ebs-api/ebs/v1.BuildStatus":                       schema_ebs_api_ebs_v1_BuildStatus(ref),
 		"ebs-api/ebs/v1.BuildTarget":                       schema_ebs_api_ebs_v1_BuildTarget(ref),
@@ -607,7 +607,7 @@ func schema_ebs_api_ebs_v1_BuildList(ref common.ReferenceCallback) common.OpenAP
 	}
 }
 
-func schema_ebs_api_ebs_v1_BuildResource(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_ebs_v1_BuildResourceConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -636,18 +636,18 @@ func schema_ebs_api_ebs_v1_BuildResource(ref common.ReferenceCallback) common.Op
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.BuildResourceSpec"),
+							Ref:     ref("ebs-api/ebs/v1.BuildResourceConfigSpec"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BuildResourceSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"ebs-api/ebs/v1.BuildResourceConfigSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
 	}
 }
 
-func schema_ebs_api_ebs_v1_BuildResourceList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_ebs_v1_BuildResourceConfigList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -680,7 +680,7 @@ func schema_ebs_api_ebs_v1_BuildResourceList(ref common.ReferenceCallback) commo
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.BuildResource"),
+										Ref:     ref("ebs-api/ebs/v1.BuildResourceConfig"),
 									},
 								},
 							},
@@ -691,11 +691,11 @@ func schema_ebs_api_ebs_v1_BuildResourceList(ref common.ReferenceCallback) commo
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BuildResource", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"ebs-api/ebs/v1.BuildResourceConfig", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
 	}
 }
 
-func schema_ebs_api_ebs_v1_BuildResourceSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_ebs_v1_BuildResourceConfigSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{

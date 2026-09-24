@@ -23,9 +23,6 @@ func (g *Gateway) authorizeAndPrepare(ctx context.Context, r *http.Request, iden
 	if ident.IsRunner() {
 		return g.authorizeRunner(ctx, r, ident, route)
 	}
-	if ident.IsOps() && route.resource == "buildresources" {
-		return g.authorizeOps(r, route)
-	}
 	return g.authorizeProjectRequest(ctx, r, ident, route)
 }
 
@@ -37,6 +34,16 @@ func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident 
 	parts, validPath := ebsAPIPathParts(r.URL.Path)
 	if validPath && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "scripts" {
 		return authzDecision{}, true, fmt.Errorf("Script is cluster-scoped")
+	}
+	if strings.HasPrefix(r.URL.Path, apiPrefix+"/projects/") && strings.Contains(r.URL.Path, "/buildresourceconfigs") {
+		return authzDecision{}, true, fmt.Errorf("BuildResourceConfig is cluster-scoped")
+	}
+	if r.URL.Path == apiPrefix+"/buildresourceconfigs" || strings.HasPrefix(r.URL.Path, apiPrefix+"/buildresourceconfigs/") {
+		if !validPath {
+			return authzDecision{}, true, fmt.Errorf("invalid BuildResourceConfig path")
+		}
+		decision, err := authorizeBuildResourceConfig(r, ident, parts)
+		return decision, true, err
 	}
 	if r.URL.Path == apiPrefix+"/scripts" || strings.HasPrefix(r.URL.Path, apiPrefix+"/scripts/") {
 		decision, err := authorizeScript(r, ident)
@@ -50,9 +57,6 @@ func (g *Gateway) authorizeResource(ctx context.Context, r *http.Request, ident 
 		if len(route.rest) > 0 && route.rest[0] == "status" && r.Method != http.MethodGet && r.Method != http.MethodHead && !ident.IsSystem() && !ident.IsRunner() {
 			return authzDecision{}, true, fmt.Errorf("Job status write requires system or assigned Runner identity")
 		}
-	}
-	if r.Method == http.MethodDelete && route.resource == "buildresources" && route.project == "default" && route.name == "default" && len(route.rest) == 0 {
-		return authzDecision{}, true, fmt.Errorf("global default BuildResource cannot be deleted")
 	}
 	if validPath && len(parts) >= 3 && parts[0] == "projects" && parts[2] == "buildconfs" {
 		return authzDecision{}, true, fmt.Errorf("BuildConf is cluster-scoped")
@@ -81,6 +85,31 @@ func authorizeBuildConf(r *http.Request, ident Identity, parts []string) (authzD
 		return authzDecision{}, fmt.Errorf("BuildConf write requires ops or higher and a supported operation")
 	}
 	return authzDecision{}, nil
+}
+
+func authorizeBuildResourceConfig(r *http.Request, ident Identity, parts []string) (authzDecision, error) {
+	if len(parts) < 1 || len(parts) > 2 || strings.HasSuffix(r.URL.Path, "/") || (len(parts) == 2 && !validPathSegment(parts[1])) || hasWatchRequest(r) {
+		return authzDecision{}, fmt.Errorf("unsupported BuildResourceConfig API operation")
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		if ident.IsPrivileged() || ident.IsUser() {
+			return authzDecision{}, nil
+		}
+	case http.MethodPost:
+		if len(parts) == 1 && ident.IsPrivileged() {
+			return authzDecision{}, nil
+		}
+	case http.MethodPut:
+		if len(parts) == 2 && ident.IsPrivileged() {
+			return authzDecision{}, nil
+		}
+	case http.MethodDelete:
+		if len(parts) == 2 && parts[1] != "default" && ident.IsPrivileged() {
+			return authzDecision{}, nil
+		}
+	}
+	return authzDecision{}, fmt.Errorf("BuildResourceConfig access denied")
 }
 
 func (g *Gateway) authorizeJobAbort(ctx context.Context, r *http.Request, ident Identity, route routeInfo) (authzDecision, error) {
@@ -151,9 +180,6 @@ func (g *Gateway) authorizeProjectRequest(ctx context.Context, r *http.Request, 
 		}
 		if !projectAllowsUser(project, ident.Subject) {
 			return authzDecision{}, fmt.Errorf("project access denied")
-		}
-		if route.resource == "buildresources" && r.Method != http.MethodGet && r.Method != http.MethodHead {
-			return authzDecision{}, fmt.Errorf("build resource access is read-only for project users")
 		}
 		if project.Labels[ownerUserLabel] != ident.Subject && r.Method == http.MethodDelete {
 			return authzDecision{}, fmt.Errorf("project member cannot delete resources")

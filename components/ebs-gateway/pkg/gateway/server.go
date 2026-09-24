@@ -1076,22 +1076,6 @@ func (g *Gateway) authorizeRunner(ctx context.Context, r *http.Request, ident Id
 	return authzDecision{}, fmt.Errorf("runner access denied")
 }
 
-func (g *Gateway) authorizeOps(r *http.Request, route routeInfo) (authzDecision, error) {
-	if route.resource == "buildresources" && route.project != "" && len(route.rest) == 0 {
-		if route.name == "" {
-			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodPost {
-				return authzDecision{}, nil
-			}
-			return authzDecision{}, fmt.Errorf("unsupported build resource collection method")
-		}
-		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodPut || r.Method == http.MethodDelete {
-			return authzDecision{}, nil
-		}
-		return authzDecision{}, fmt.Errorf("unsupported build resource method")
-	}
-	return authzDecision{}, fmt.Errorf("unsupported ops resource operation")
-}
-
 func (g *Gateway) authorizeRunnerJobs(r *http.Request, ident Identity) (authzDecision, error) {
 	if r.Method != http.MethodGet {
 		return authzDecision{}, fmt.Errorf("runner jobs only supports GET")

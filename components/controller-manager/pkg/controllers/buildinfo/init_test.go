@@ -431,10 +431,10 @@ func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 	}
 }
 
-func TestInitE27BuildResourceMissing(t *testing.T) {
+func TestInitE27BuildResourceConfigMissing(t *testing.T) {
 	c, client, git, _ := newTestController(t)
-	// Seed everything except any BuildResource (project table and the
-	// default/default fallback both miss).
+	// Seed everything except any BuildResourceConfig (project table and the
+	// cluster-wide default resource table is absent).
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	client.SetBuildConf(testBuildConfObj())
@@ -452,7 +452,7 @@ func TestInitE27BuildResourceMissing(t *testing.T) {
 	if ss.Build.Status != SpecBuildFailed {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
 	}
-	requireCondition(t, ss.Build.Conditions, ConditionDefaultBuildResourceNotFound, ReasonDefaultBuildResourceNotFound)
+	requireCondition(t, ss.Build.Conditions, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound)
 	if len(bi.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want empty (this-round registration removed)", bi.Status.PendingJobCreates)
 	}
@@ -536,7 +536,7 @@ func TestSingleRepoInjection(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
-	client.SeedBuildResource(testBuildResourceObj())
+	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
 	client.SetBuildConf(testBuildConfObj())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
 	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
@@ -643,7 +643,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("E-27 BuildResource missing marks Failed", func(t *testing.T) {
+	t.Run("E-27 BuildResourceConfig missing marks Failed", func(t *testing.T) {
 		c, client, git, _ := newTestController(t)
 		client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 		client.SeedBuild(testBuildObj("single", "repo1"))
@@ -661,7 +661,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		if ss.Build.Status != SpecBuildFailed {
 			t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
 		}
-		requireCondition(t, ss.Build.Conditions, ConditionDefaultBuildResourceNotFound, ReasonDefaultBuildResourceNotFound)
+		requireCondition(t, ss.Build.Conditions, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound)
 	})
 }
 

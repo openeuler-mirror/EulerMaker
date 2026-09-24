@@ -64,9 +64,8 @@ type Client interface {
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
-	// GetBuildResource resolves Job resources; a miss in a non-default
-	// project falls back to default/default (15.1/E-27).
-	GetBuildResource(ctx context.Context, namespace, name string) (*ebsv1.BuildResource, error)
+	// GetBuildResourceConfig reads the cluster-wide default resource table.
+	GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildResourceConfig, error)
 	// GetBuildConf returns a snapshot for one Job creation batch. Callers
 	// must not refetch it per Job, or use it to mutate a created Job (E-26).
 	GetBuildConf(ctx context.Context) (*ebsv1.BuildConf, error)
@@ -241,29 +240,14 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 	return value, nil
 }
 
-func (c *apiClient) GetBuildResource(ctx context.Context, namespace, name string) (*ebsv1.BuildResource, error) {
-	if namespace == "" || name == "" {
-		return nil, contractErrorf("namespace and name are required")
-	}
-	obj, err := c.readGet(ctx, source.BuildResourcesGVR, namespace, name)
-	if errors.Is(err, ErrNotFound) && namespace != "default" {
-		// Project table miss falls back to the cluster default table (15.1).
-		obj, err = c.readGet(ctx, source.BuildResourcesGVR, "default", "default")
-		if err != nil {
-			return nil, err
-		}
-		value, ok := obj.(*ebsv1.BuildResource)
-		if !ok || value == nil || value.Name != "default" || value.Namespace != "default" || value.UID == "" || value.ResourceVersion == "" {
-			return nil, contractErrorf("unexpected default BuildResource response: %T", obj)
-		}
-		return value, nil
-	}
+func (c *apiClient) GetBuildResourceConfig(ctx context.Context) (*ebsv1.BuildResourceConfig, error) {
+	obj, err := c.readGet(ctx, source.BuildResourceConfigsGVR, "", "default")
 	if err != nil {
 		return nil, err
 	}
-	value, ok := obj.(*ebsv1.BuildResource)
-	if !ok || value == nil || value.Name != name || value.Namespace != namespace || value.UID == "" || value.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected BuildResource response for %s/%s: %T", namespace, name, obj)
+	value, ok := obj.(*ebsv1.BuildResourceConfig)
+	if !ok || value == nil || value.Name != "default" || value.Namespace != "" || value.UID == "" || value.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected default BuildResourceConfig response: %T", obj)
 	}
 	return value, nil
 }

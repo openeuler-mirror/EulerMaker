@@ -73,8 +73,8 @@ func TestPackageNameLabelValue(t *testing.T) {
 // --- resource merge (build-configuration.md 3.5) ---
 
 func TestResolveResourcesMerge(t *testing.T) {
-	resource := &ebsv1.BuildResource{
-		Spec: ebsv1.BuildResourceSpec{
+	resource := &ebsv1.BuildResourceConfig{
+		Spec: ebsv1.BuildResourceConfigSpec{
 			Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
 			Packages: map[string]ebsv1.PackageResourceConfig{
 				"a": {
@@ -99,7 +99,7 @@ func TestResolveResourcesMerge(t *testing.T) {
 	if merged.Requests["cpu"] != "2" || merged.Requests["memory"] != "2Gi" {
 		t.Fatalf("arch-miss requests = %v, want cpu=2 memory=2Gi", merged.Requests)
 	}
-	// A spec without a package entry gets the project default.
+	// A spec without a package entry gets the table default.
 	merged = resolveResources(resource, "b", testArch)
 	if merged.Requests["cpu"] != "1" || merged.Limits["memory"] != "2Gi" {
 		t.Fatalf("default requests/limits = %+v, want cpu=1 memory=2Gi", merged)
@@ -156,7 +156,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
-	resource := testBuildResourceObj()
+	resource := testBuildResourceConfigObj()
 	resource.Generation = 3
 
 	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, "job-x", 2)
@@ -179,9 +179,8 @@ func TestJobForSpecConstruction(t *testing.T) {
 	wantAnnotations := map[string]string{
 		annBuildInfoUID:           "bi-job-construct",
 		annDispatchGeneration:     "2",
-		annBuildResourceNamespace: testNS,
-		annBuildResource:          testNS,
-		annBuildResourceGen:       "3",
+		annBuildResourceConfig:          "default",
+		annBuildResourceConfigGen:       "3",
 	}
 	for k, want := range wantAnnotations {
 		if job.Annotations[k] != want {
@@ -230,7 +229,7 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	snapshot := testSnapshotObj()
 	depend := dependEntry("a")
 
-	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceObj(), "job-y", 1)
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceConfigObj(), "job-y", 1)
 
 	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commitId") {
 		t.Fatalf("payload = %q, want no spec_url/commitId without a repo entry", job.Spec.Payload)
@@ -278,7 +277,7 @@ func TestEnsureImageRoundSnapshot(t *testing.T) {
 
 // dispatchRound builds a minimal Processing round for direct dispatchSpec
 // calls: the seeded BuildInfo (specStatus entry for the spec), the parent
-// Build and the project BuildResource table.
+// Build and the project BuildResourceConfig table.
 func dispatchRound(t *testing.T, c *Controller, client *fakeClient, uid, spec string) (*reconcileRound, *ebsv1.BuildInfo) {
 	t.Helper()
 	key := testNS + "/" + testBuild
@@ -286,7 +285,7 @@ func dispatchRound(t *testing.T, c *Controller, client *fakeClient, uid, spec st
 	bi.UID = types.UID(uid)
 	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{spec: {}}
 	seeded := client.SeedBuildInfo(bi)
-	client.SeedBuildResource(testBuildResourceObj())
+	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	return round, seeded
 }

@@ -219,10 +219,10 @@ func testBuildConfObj() *ebsv1.BuildConf {
 	}
 }
 
-func testBuildResourceObj() *ebsv1.BuildResource {
-	return &ebsv1.BuildResource{
-		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: testNS},
-		Spec: ebsv1.BuildResourceSpec{
+func testBuildResourceConfigObj() *ebsv1.BuildResourceConfig {
+	return &ebsv1.BuildResourceConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: ebsv1.BuildResourceConfigSpec{
 			Default:  ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
 			Packages: map[string]ebsv1.PackageResourceConfig{},
 		},
@@ -234,7 +234,7 @@ func testBuildResourceObj() *ebsv1.BuildResource {
 func seedHealthyBasics(client *fakeClient, buildType string, packages ...string) *ebsv1.BuildInfo {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj(buildType, packages...))
-	client.SeedBuildResource(testBuildResourceObj())
+	client.SeedBuildResourceConfig(testBuildResourceConfigObj())
 	client.SetBuildConf(testBuildConfObj())
 	return client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 }
