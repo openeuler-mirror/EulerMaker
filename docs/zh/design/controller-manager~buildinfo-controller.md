@@ -391,6 +391,7 @@ E-28/E-29/E-30 统一采用：**停止派发 → 等待已有 Job 收敛 → Com
 4. **正常调谐恢复**：优先处理已登记条目，GET 核验；404 且仍允许派发时，仅用条目中的同名、同代次重新调和创建，不计算下一代。停止派发后只 GET 确认，禁止补发；即使 List 未命中，也须逐条 GET。GET 失败按读取错误分类处理；身份不匹配返回 PermanentError 并保留条目。
 5. **停止后的 404**：保留条目，输出限频结构化告警 `reason=JobCreateUnresolved`，返回零值 + nil 等待下一轮轮询，不增加派发次数，不将 404、重试次数或等待时长视为失败证明。重启从 status 恢复，不能因内存意图丢失认定无未决创建。
 6. **明确限制**：仅凭 GET 无法证明此前请求永远不会落库。若请求实际未落库，或登记成功后尚未发请求就崩溃，停止路径可能一直等待；本版本选择不误报 Completed，需人工核实并处置（例如通过现有中止流程结束父 Build）。不设置自动清除超时，不新增后台重发或自动补建能力。
+7. **预派发失败收口的条目核验**：spec 预派发失败标 `Failed`（E-19/E-27/`RpmDependsMissing`）且存在复用未决条目时，随判决同轮 GET 核验一次——终态 spec 无第 4 条自愈路径，孤儿条目无人消解、永久阻塞 Completed：命中且身份匹配 → 保留条目，下轮按第 2 条消解；404 → 与判决同次写删除；身份不匹配 → PermanentError 并保留（同第 4 条）。E-27 首次尝试仍按第 3 条直接删除；停止路径第 5/6 条保守语义不变。
 
 ## 七、Reconcile 流程
 
@@ -984,6 +985,7 @@ condition 对应的 reason 及含义以 9.1 为准；停止派发日志只表示
 | `--rpmrepo-ready-retry-limit` | 3 | flag | RpmRepo 就绪性连续失败计数升级阈值（E-29）：连续失败达阈值触发 condition `RpmRepoUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮就绪自动清零 |
 | `--snapshot-ready-retry-limit` | 3 | flag | 当前 Snapshot 查询连续失败计数升级阈值（E-30）：连续失败达阈值触发 condition `SnapshotUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮 GET 成功自动清零 |
 | `--specfile-cache-size` | 10000 | flag | 全局 spec 文件内容 LRU 缓存容量上限（15.11）：两层 key（`commitId`→`specFileName`），超限按 LRU 淘汰 |
+| `--spec-parse-engine` | `text` | flag | spec 解析引擎（16.3）：`text`＝包内文本语法+宏展开，不执行任何子进程，对不可信包仓库内容安全（默认）；`rpmspec`＝经本地 `rpmspec -P` 子进程展开——rpm 宏解析期求值 `%(...)`/`%{lua:...}` 于宿主执行，仅限可信包源，开启时启动打 `reason=SpecParseEngineRpmspec` 警告日志；stdout 为空/可执行缺失回退 text 解析 |
 | `--git-server-addr` | `http://localhost:8080` | flag / env `GIT_SERVER_ADDR` | git-server 服务地址（本控制器 `pkg/controllers/buildinfo/gitserver`） |
 | `--git-server-timeout` | 30s | flag / env `GIT_SERVER_TIMEOUT` | 单次 git-server HTTP 请求超时 |
 | `--git-server-retry` | 3 | flag / env `GIT_SERVER_RETRY` | git-server 请求尝试次数上限 |
@@ -1564,21 +1566,23 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 > **解析产物去向（15.11）**：spec 文件原始内容先写入全局 `Cache.specFileCache`（两层 key `commitId`→`specFileName`，LRU，写入与解析成败解耦），解析结果（`map[string]SpecDepend`）按 specName 合并为 BuildInfo 级全量视图后写入 per-BuildInfo 缓存 `Cache.specDependsCache`（key = `<namespace>/<buildinfo.name>`，7.2.2），不再落库至 `BuildInfo.spec`。
 
-**解析主路径与回退**：
+**解析引擎（`--spec-parse-engine`，`text` / `rpmspec`，见 12.1）**：
 
-1. 主路径：`rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件>`；**判定依据为 stdout 是否非空**（不看 exitCode）——stdout 非空即按下方「输入文本行格式语法」+「解析产物模型」建模；步骤 0 消费的 buildPayload 取自 BuildInfo.spec.buildPayload（与 dcg 建边上下文（16.1）/ Job payload（15.3.1）共用同一次 YAML 解析结果，见 15.2.2）。rpmspec 为**本地子进程调用**（`exec.Command` 直接启动、不经 shell，spec 文件先落临时文件供其读取）——**部署前提**：controller-manager 运行环境（容器镜像）必须预装 `rpm-build`（提供 `rpmspec` 可执行文件，见二十一章）；
-2. 主路径 stdout 为空 → 回退原始解析，**未经 rpmspec 宏展开**；行格式语法与产物模型同上，条件块不求值——见「输入文本行格式语法」）。**rpmspec 启动失败（含可执行文件缺失）视同主路径失败**，同样落入本回退路径（系统宏不展开、解析精度降级），不单独报错阻断——部署缺失由此表现为"全部 spec 走回退路径"的静默降级，镜像构建时须显式保证 rpm-build 存在；
-3. 两条路径均抛错（文件读取失败，或回退路径下 `Name`/`Version` 等字段缺失导致宏展开/取值失败）→ 单个 spec 记入 parseFailed（对应 E-23 失败分流——非指定包仓库与 `single` 各指定包仓库单 spec 粒度跳过、`specified` 指定包仓库 init 确定性失败），不阻断同仓库其余 spec 的解析。
+1. **text 引擎（默认，对不可信源安全）**：直接以「输入文本行格式语法」+「解析产物模型」解析 spec 原文，宏展开由包内展开器承担（规则见「宏展开」），**不启动任何子进程、不消费 `--load` 宏文件**。spec 原文来自用户包仓库（16.2 git-server 拉取），属不可信输入：rpm 宏语言在解析期即求值 `%(...)`（经 /bin/sh 执行）与 `%{lua:...}`（openEuler rpm 默认启用 Lua），任何执行 spec 内容的解析方式都会在本宿主执行仓库内容，故默认引擎必须为纯文本解析；
+2. **rpmspec 引擎（显式开启，仅限可信包源）**：先经 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件>` 展开后建模；**判定依据为 stdout 是否非空**（不看 exitCode）；步骤 0 消费的 buildPayload 取自 BuildInfo.spec.buildPayload（与 dcg 建边上下文（16.1）/ Job payload（15.3.1）共用同一次 YAML 解析结果，见 15.2.2）。rpmspec 为**本地子进程调用**（`exec.Command` 直接启动、不经 shell，spec 文件先落临时文件供其读取）——**安全边界**："不经 shell"仅指 exec 层不包装 shell，rpm 宏展开（含 `-P` 解析期）本身求值 `%(...)` shell 转义与 `%{lua:...}` 块：spec 与 `--load` 宏文件内容将以 controller 进程身份在本宿主执行，启用前提是全部包仓库内容受控可信，开启时控制器启动打印 `reason=SpecParseEngineRpmspec` 警告日志；**部署前提**（仅本引擎需要）：controller-manager 运行环境（容器镜像）必须预装 `rpm-build`（提供 `rpmspec` 可执行文件，见二十一章）；
+   - rpmspec 引擎 stdout 为空 → 回退 text 引擎原始解析，**未经 rpmspec 宏展开**（系统宏不展开、解析精度降级）；**rpmspec 启动失败（含可执行文件缺失）视同本引擎失败**，同样落入 text 解析，不单独报错阻断——部署缺失由此表现为"全部 spec 走 text 解析"的静默降级，镜像构建时须显式保证 rpm-build 存在；
+3. 两个引擎均抛错（文件读取失败，或解析中 `Name`/`Version` 等字段缺失导致宏展开/取值失败）→ 单个 spec 记入 parseFailed（对应 E-23 失败分流——非指定包仓库与 `single` 各指定包仓库单 spec 粒度跳过、`specified` 指定包仓库 init 确定性失败），不阻断同仓库其余 spec 的解析。
 
 **`--load` 宏定义文件行语法**：
 
 - 文件为 **UTF-8 纯文本、非 JSON**；行内容来源为 `BuildInfo.spec.buildPayload`（YAML）解析后的 `macros` 键（**宏定义行列表**），**逐项原样写入并追加 `\n`**——不补 `%define`/`%global` 前缀、不做转义/排序/去重/校验，行内容语义完全交由 rpmspec 解释；
 - 列表项为空串 → 写出空行（rpmspec 忽略）；`macros` 缺失或非 list → **文件仍须创建但为空**（老实现固定创建该临时文件并把路径交给 `--load`），等价无宏展开；
-- 该文件的生命周期为单次解析调用（老实现以临时目录包裹整次 `rpmspec` 调用，调用结束即删除）。
+- 该文件的生命周期为单次解析调用（老实现以临时目录包裹整次 `rpmspec` 调用，调用结束即删除）；
+- **该文件仅 rpmspec 引擎消费**——text 引擎不读取 buildPayload 宏定义行（包内展开器仅使用 spec 内 `%define`/`%global` 与 spec 同名属性，见「宏展开」）。
 
-**输入文本行格式语法**（主路径 stdout 与回退原始文本共用；pyrpm 0.11 等价）：
+**输入文本行格式语法**（rpmspec 引擎 stdout 与 text 引擎原始文本共用；pyrpm 0.11 等价）：
 
-- **行切分与续行**：按行独立解析（主路径 `splitlines()`，回退路径逐行读文件）；**不支持续行**——行尾 `\` 不做拼接，作为普通字符保留在值内；空行与 `#` 注释行不命中任何 tag，直接忽略（仅「多行累积」期间例外）。
+- **行切分与续行**：按行独立解析（rpmspec 引擎对 stdout `splitlines()`，text 引擎逐行读原文）；**不支持续行**——行尾 `\` 不做拼接，作为普通字符保留在值内；空行与 `#` 注释行不命中任何 tag，直接忽略（仅「多行累积」期间例外）。
 - **tag 命中**：每行按固定顺序尝试固定模式表，**首个命中的 tag 生效**（`%package`/`%define`/`%global`/`%description`/`%changelog` 优先，最后是"任意 `%<小写字母或下划线>` 开头宏行"兜底）；模式锚定行首，**tag 名大小写不敏感**（`Name:`/`name:`/`NAME:` 等价），tag 名与 `:` 之间允许任意空白；**值大小写敏感、原样保留**；既不命中 tag 模式、又不命中兜底宏行的行（如 `%Package devel`、纯文本行）整行丢弃（「多行累积」期间除外，见下）。
 - **值提取**：单值 tag（`Name`/`Version`/`Epoch`/`Release`/`URL` 等）只取 `:` 后首个非空白连续串，行内其余内容丢弃；约束/列表类 tag（`BuildRequires`/`Requires`/`Provides`/`ExclusiveArch`/`ExcludeArch`）取 `:` 后整行（含内部空白；尾部空白由后续 tokenizer / 字段切分消化）。
 - **分节边界**：`%package <name>` 与 `%package -n <name>`（**区分大小写**）切换"当前子包"上下文——`-n` 形式取该行**最后一个空白分隔字段**为子包名，其余形式为 `<主包名>-<name>`；`%prep`/`%build`/`%install`/`%files`/`%check`/`%setup`/`%ifarch`/`%if`/`%endif` 等宏行**不构成结构、整行忽略**，故 tag 采集**不受 section 与条件块边界限制**；`%changelog` 复位"当前子包"上下文。
@@ -1592,20 +1596,20 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
   | `Requires`/`BuildRequires`/`Provides` | 逐行**追加**（保序，多行均生效）；行内按「requirement 解析」归并，同名同操作符的版本**后者覆盖** |
   | `Source\d*`/`Patch\d*` | 列表追加 + 按 tag 名（含序号）建字典，同序号后者覆盖（本控制器不消费） |
   | `%define`/`%global` | 写入 spec 宏表，**同名后者覆盖**；宏名不属于既有 tag 名时同时写为 spec 属性 |
-- **多行累积**：`%description`/`%changelog` 行**不产出同名值**，而是开启多行模式——其后未命中任何 tag 的行被拼接到 `description`/`changelog` 字段（主路径 `splitlines()` 已去换行、直接串接；回退路径保留原行含换行符），直到下一个命中 tag 的行结束该模式。本控制器不消费这两个字段，但**必须正确终止多行模式**，否则其后的 tag 行会被误并入正文而丢字段。
+- **多行累积**：`%description`/`%changelog` 行**不产出同名值**，而是开启多行模式——其后未命中任何 tag 的行被拼接到 `description`/`changelog` 字段（rpmspec 引擎按 stdout 已去换行、直接串接；text 引擎保留原行含换行符），直到下一个命中 tag 的行结束该模式。本控制器不消费这两个字段，但**必须正确终止多行模式**，否则其后的 tag 行会被误并入正文而丢字段。
 
-**宏展开（回退路径下的宏展开语义）**：
+**宏展开（包内展开器语义；text 引擎为主要展开手段，rpmspec 引擎处理残留宏引用）**：
 
 - 可识别形式仅 `%{...}` 且花括号内**不含空白**（`%{name}` ✓；`%{ name }` 不识别、原样保留）；不支持 `$(...)`/`%(...)` 与无花括号 `%name`；
 - 取值来源与优先级：spec 宏表（`%define`/`%global` 定义）→ spec 同名属性（`Name`/`Version`/`Release`/`Epoch` 等）；
-- **未定义或取值为空 → 原样保留字面量**（不删空）；因此系统宏（`%{_bindir}`、`%{_isa}` 等）在回退路径下以字面量残留，仅主路径由 rpmspec 展开；
+- **未定义或取值为空 → 原样保留字面量**（不删空）；因此系统宏（`%{_bindir}`、`%{_isa}` 等）在 text 引擎下以字面量残留，仅 rpmspec 引擎由 rpmspec 展开；
 - 条件宏：`%{?x}`/`%{?x:default}` 在 x 已定义时取 x 的值（有 default 也取 x 的值）、未定义时取 default（无 default → 空串）；`%{!x}`/`%{!x:default}` 取反；`%{!x}` 无 default 且 x 未定义时老实现返回非字符串 → 该 spec 解析失败（parseFailed）；
 - 递归展开：替换结果若仍含 `%{...}` 继续展开，直至一轮替换无变化为止；
 - 应用点两处：约束/列表类整行值（在 tokenize **之前**）、各字段取值（`version`/`release`/`epoch`/`provides.name`/`specName`/`exclusiveArch` 逐项/版本约束值）。
 
 **解析产物模型（pyrpm 等价）**：
 
-`rpmspec -P` 展开后的文本按 pyrpm `Spec` 模型建模（行格式、分节边界与重复归并见上「输入文本行格式语法」），本控制器仅消费下列 tag（**只取 spec 级取值**，子包 section 内的同类 tag 不并入）：
+spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为原始文本）按 pyrpm `Spec` 模型建模（行格式、分节边界与重复归并见上「输入文本行格式语法」），本控制器仅消费下列 tag（**只取 spec 级取值**，子包 section 内的同类 tag 不并入）：
 
 | tag / 属性 | 产出字段 | 说明 |
 |---|---|---|
@@ -1616,10 +1620,10 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | `provides` | `provides` | 仅 name，见「provides」 |
 | `exclusiveArchList` / `excludeArchList` | `exclusiveArch` | 见「exclusiveArch 归一」 |
 
-- 各字符串取值（`name` / `version` / `release` / `epoch` / `provide.name` / 版本约束）统一做宏展开（由 `expandMacros(value, spec)` 完成，规则见上「宏展开」：`rpmspec -P` 已展开主体，此处处理残留宏引用）；
-- 每个 spec 文件产出一条 `SpecDepend`，附加 `specFileName`（`git show` 输出路径的 basename，含 `.spec`）与 `repoName`（包仓库名）；
+- 各字符串取值（`name` / `version` / `release` / `epoch` / `provide.name` / 版本约束）统一做宏展开（由 `expandMacros(value, spec)` 完成，规则见上「宏展开」：rpmspec 引擎下 `-P` 已展开主体、此处处理残留宏引用；text 引擎下此处为主要展开手段）；
+- 每个 spec 文件产出一条 `specparse.SpecDepend`（类型定义随生产者置于 specparse 包，不属于 API schema），附加 `specFileName`（`git show` 输出路径的 basename，含 `.spec`）与 `repoName`（包仓库名）；
 - 同仓库/跨仓库多 spec 按 `specName` 归并（同名后者覆盖，即 `depends[specName] = depend`）；
-- 主路径与回退解析共用同一套模型规则，仅"是否经 rpmspec 宏展开"不同。
+- 两引擎共用同一套模型规则，仅"是否经 rpmspec 宏展开"不同。
 
 **requirement 解析**（requires 与 buildRequires 共用；两阶段，由 `tokenizeRequirements` 与 `parseRequirement` 完成；输入仅为 spec 级集合）：
 
