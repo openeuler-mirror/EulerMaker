@@ -6,14 +6,15 @@ import (
 	"strconv"
 	"testing"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/controller"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/controller"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // pagingSharedClient returns one scripted page per call and records the options it received.

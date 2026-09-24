@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // releasableRpmRepo builds an object that already promoted one batch, so only the release flow is left.

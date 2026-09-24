@@ -8,14 +8,13 @@ import (
 	"sync"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-
-	ebsv1 "ebs-api/ebs/v1"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // fakeClient is the in-package fake for the typed apiserver Client (design

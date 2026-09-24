@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func inFlightReleaseRepo(name string) *ebsv1.RpmRepo {

@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/controller"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+
+	"controller-manager/pkg/controller"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 const (

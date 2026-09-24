@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 // inFlightRepo builds an object whose repository batch is already checkpointed.

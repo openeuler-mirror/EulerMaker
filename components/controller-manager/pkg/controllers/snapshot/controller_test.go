@@ -9,14 +9,15 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/clock"
 )
 
 type fakeSource struct{ handler source.ResourceEventHandler }

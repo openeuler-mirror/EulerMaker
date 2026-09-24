@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
 	buildcontroller "controller-manager/pkg/controllers/build"
@@ -19,7 +21,6 @@ import (
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/options"
 	"controller-manager/pkg/source"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func main() {

@@ -7,14 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"controller-manager/pkg/controller"
-	"controller-manager/pkg/manager"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/clock"
+
+	"controller-manager/pkg/controller"
+	"controller-manager/pkg/manager"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 const Name = "job"

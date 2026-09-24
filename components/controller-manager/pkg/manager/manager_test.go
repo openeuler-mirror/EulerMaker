@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/controller"
-	"controller-manager/pkg/source"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/controller"
+	"controller-manager/pkg/source"
 )
 
 type fakeSource struct {

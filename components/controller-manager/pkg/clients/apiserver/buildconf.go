@@ -6,10 +6,11 @@ import (
 	"regexp"
 	"strings"
 
-	ebsv1 "ebs-api/ebs/v1"
 	"github.com/distribution/reference"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 var configArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)

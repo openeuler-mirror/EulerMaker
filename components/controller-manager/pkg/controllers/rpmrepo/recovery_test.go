@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestReconcileBuildReRegistersAbandonedBatchTerminal(t *testing.T) {

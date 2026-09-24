@@ -13,12 +13,13 @@ import (
 	"sort"
 	"strings"
 
+	yaml "gopkg.in/yaml.v2"
+
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
-	yaml "gopkg.in/yaml.v2"
 )
 
 // degradedCondition is one business-degradation condition collected during

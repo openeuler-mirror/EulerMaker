@@ -12,14 +12,15 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/clients/gitserver"
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/clients/gitserver"
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 var errPackagesRetryable = errors.New("Snapshot contains retryable package failures")

@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/manager"
-	"controller-manager/pkg/source"
-	ebsv1 "ebs-api/ebs/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
+
+	"controller-manager/pkg/manager"
+	"controller-manager/pkg/source"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestNewValidatesDependenciesAndConfig(t *testing.T) {

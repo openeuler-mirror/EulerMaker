@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestReleaseRecheckSkipsCandidateWithoutBuildInfo(t *testing.T) {

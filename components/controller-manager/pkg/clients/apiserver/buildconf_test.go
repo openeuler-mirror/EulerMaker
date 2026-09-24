@@ -2,12 +2,14 @@ package apiserver
 
 import (
 	"context"
-	ebsv1 "ebs-api/ebs/v1"
 	"encoding/json"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"net/http"
 	"testing"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestBuildConfBatchSnapshot(t *testing.T) {

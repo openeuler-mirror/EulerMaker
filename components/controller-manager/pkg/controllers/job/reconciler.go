@@ -9,12 +9,13 @@ import (
 	"net/http"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/controller"
-	ebsv1 "ebs-api/ebs/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/controller"
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func (c *Controller) sync(ctx context.Context, key string) (controller.ReconcileResult, error) {
