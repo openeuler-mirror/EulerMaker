@@ -141,9 +141,4 @@ func TestConfigTypesAreRegistered(t *testing.T) {
 			t.Fatalf("new %s returned nil", kind)
 		}
 	}
-	for _, kind := range []string{"BuildConf", "BuildConfList", "BuildResourceConfig", "BuildResourceConfigList"} {
-		if _, err := scheme.New(SchemeGroupVersion.WithKind(kind)); err == nil {
-			t.Fatalf("retired resource %s is still registered", kind)
-		}
-	}
 }

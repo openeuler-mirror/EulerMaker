@@ -19,12 +19,6 @@ import (
 
 const Name = "snapshot"
 
-type GitServerClient interface {
-	PublishSyncTask(context.Context, string) error
-	CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error)
-	ResolveCommit(context.Context, string, ebsv1.GitRef) (string, error)
-}
-
 type Config struct {
 	PollPeriod       time.Duration
 	ResolveWorkers   int
@@ -45,17 +39,17 @@ type Controller struct {
 	*controller.BaseController
 	snapshots source.Source
 	client    Client
-	gitClient GitServerClient
+	gitClient gitserver.GitServerClient
 	clock     clock.Clock
 	config    Config
 	failures  *failureTracker
 }
 
-func New(snapshots source.Source, client Client, gitClient GitServerClient, clk clock.Clock, config Config) (*Controller, error) {
+func New(snapshots source.Source, client Client, gitClient gitserver.GitServerClient, clk clock.Clock, config Config) (*Controller, error) {
 	return newController(snapshots, client, gitClient, clk, config)
 }
 
-func newController(snapshots source.Source, client Client, gitClient GitServerClient, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
+func newController(snapshots source.Source, client Client, gitClient gitserver.GitServerClient, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
 	if snapshots == nil || client == nil || gitClient == nil || clk == nil {
 		return nil, fmt.Errorf("Snapshot source, API client, git-server client and clock are required")
 	}
@@ -74,7 +68,7 @@ func newController(snapshots source.Source, client Client, gitClient GitServerCl
 	return c, nil
 }
 
-func Initializer(config Config, gitClient GitServerClient) manager.InitFunc {
+func Initializer(config Config, gitClient gitserver.GitServerClient) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		snapshots, err := init.Dependencies.PollingFactory.ForResource(source.SnapshotsGVR, config.PollPeriod, metav1.ListOptions{FieldSelector: "status.phase!=Active"})
 		if err != nil {

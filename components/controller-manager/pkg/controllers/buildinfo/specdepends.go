@@ -123,19 +123,24 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 	}
 
 	repos := c.enumerateRepos(round, snapshot)
+	originURLs := make(map[string]string, len(snapshot.Spec.PackageRepos))
+	for _, repo := range snapshot.Spec.PackageRepos {
+		originURLs[repo.Name] = repo.URL
+	}
 	arch := round.build.Spec.BuildTarget.Arch
 	macros := payloadMacros(round.current.Spec.BuildPayload)
 	merged := map[string]specparse.SpecDepend{}
 	var parseFailures, commitMissing []string
 
 	for _, repo := range repos {
+		originURL, declared := originURLs[repo]
 		entry, ok := snapshot.Status.PackageRepoStatuses[repo]
 		if !ok {
 			// Explicit seeds may lack a status entry:
 			// not in spec.packageRepos is deterministic (E-24 routing); in
 			// packageRepos without an entry is the defensive transient
 			// (条目就绪不变式, 7.2.2).
-			if !packageRepoDeclared(snapshot, repo) {
+			if !declared {
 				asm.markFailedRepo(repo)
 				commitMissing = append(commitMissing, repo+" (not in packageRepos)")
 				continue
@@ -159,7 +164,12 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 			asm.incomplete = true
 			continue
 		}
-		specs, repoOK := c.fetchRepoSpecs(ctx, round, repo, entry, arch, macros, asm, &parseFailures)
+		if originURL == "" {
+			asm.markFailedRepo(repo)
+			commitMissing = append(commitMissing, repo+" (origin URL missing from packageRepos)")
+			continue
+		}
+		specs, repoOK := c.fetchRepoSpecs(ctx, round, repo, originURL, entry, arch, macros, asm, &parseFailures)
 		if !repoOK {
 			asm.incomplete = true
 			continue
@@ -227,24 +237,13 @@ func (c *Controller) enumerateRepos(round *reconcileRound, snapshot *ebsv1.Snaps
 	return repos
 }
 
-// packageRepoDeclared reports whether repo is declared in
-// snapshot.spec.packageRepos (design 15.7: existence verdict input).
-func packageRepoDeclared(snapshot *ebsv1.Snapshot, repo string) bool {
-	for _, declared := range snapshot.Spec.PackageRepos {
-		if declared.Name == repo {
-			return true
-		}
-	}
-	return false
-}
-
 // fetchRepoSpecs downloads and parses every root-level *.spec of one
 // repository (design 7.2.2 spec 下载解析). A transient failure anywhere in the
 // repo drops the whole repo from this round (ok=false); deterministic
 // failures skip per spec (or the whole repo on an invalid commitId) and are
 // recorded as degraded conditions. Parses run outside any lock.
-func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, repo string, entry ebsv1.PackageRepoStatus, arch string, macros []string, asm *specAssembly, parseFailures *[]string) (map[string]specparse.SpecDepend, bool) {
-	listing, err := c.gitServer.ExecCommand(ctx, entry.CloneURL, "git-ls-tree --name-only "+entry.CommitID)
+func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, repo, originURL string, entry ebsv1.PackageRepoStatus, arch string, macros []string, asm *specAssembly, parseFailures *[]string) (map[string]specparse.SpecDepend, bool) {
+	listing, err := c.gitServer.ExecCommand(ctx, originURL, "git-ls-tree --name-only "+entry.CommitID)
 	if err != nil {
 		return nil, c.handleGitFailure(round, repo, "", asm, parseFailures, err)
 	}
@@ -265,7 +264,7 @@ func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, 
 		if hit {
 			specFileCacheHits.Inc()
 		} else {
-			content, err = c.gitServer.ExecCommand(ctx, entry.CloneURL, "git-show "+entry.CommitID+":"+file)
+			content, err = c.gitServer.ExecCommand(ctx, originURL, "git-show "+entry.CommitID+":"+file)
 			if err != nil {
 				if !c.handleGitFailure(round, repo, file, asm, parseFailures, err) {
 					return nil, false

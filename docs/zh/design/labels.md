@@ -87,7 +87,7 @@ metadata:
     ebs.io/build-type: full
 ```
 
-`ebs.io/target-os`、`ebs.io/target-arch` 和 `ebs.io/build-type` 必须分别与 Build `spec.buildTarget.os`、`spec.buildTarget.arch` 和 `spec.buildType` 完全一致，不进行大小写折叠或别名转换。创建或更新 Build 时，apiserver 根据默认化后的 spec 补齐缺失标签；客户端显式提供的标签与 spec 不一致时返回 `422 Invalid`，不能静默覆盖。
+`ebs.io/target-os`、`ebs.io/target-arch` 和 `ebs.io/build-type` 必须分别与 Build `spec.buildTarget.os`、`spec.buildTarget.arch` 和 `spec.buildType` 完全一致，不进行大小写折叠或别名转换。创建或更新 Build 时，apiserver 根据 spec 补齐缺失标签；客户端显式提供的标签与 spec 不一致时返回 `422 Invalid`，不能静默覆盖。
 
 调用方可以组合标签选择器、状态字段选择器和默认创建时间倒序查询某个目标的最新 Build，例如：
 

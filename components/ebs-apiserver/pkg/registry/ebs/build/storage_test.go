@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -33,6 +34,30 @@ func TestPrepareForCreatePackagesByBuildType(t *testing.T) {
 				t.Fatalf("explicit packages changed: %v", b.Spec.Packages)
 			}
 		})
+	}
+}
+
+func TestPrepareForCreateRequiresBuildType(t *testing.T) {
+	b := &ebsv1.Build{
+		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000"},
+		Spec: ebsv1.BuildSpec{
+			Packages:    []string{"gcc"},
+			BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"},
+		},
+	}
+	strategy := &strategy{}
+	strategy.PrepareForCreate(context.Background(), b)
+	if b.Spec.BuildType != "" {
+		t.Fatalf("buildType was defaulted to %q", b.Spec.BuildType)
+	}
+	var buildTypeRequired bool
+	for _, err := range strategy.Validate(context.Background(), b) {
+		if err.Field == "spec.buildType" && err.Type == field.ErrorTypeRequired {
+			buildTypeRequired = true
+		}
+	}
+	if !buildTypeRequired {
+		t.Fatal("missing buildType was not rejected")
 	}
 }
 
@@ -112,7 +137,7 @@ func TestAbortTransitionsBuild(t *testing.T) {
 }
 
 func TestPrepareForCreateAddsMissingBuildTargetLabels(t *testing.T) {
-	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "full", BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
 
 	(&strategy{}).PrepareForCreate(context.Background(), build)
 

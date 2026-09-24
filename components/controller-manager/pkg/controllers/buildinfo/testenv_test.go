@@ -64,45 +64,59 @@ func newFakeGitServer() *fakeGitServer {
 	return &fakeGitServer{stubs: map[string]gitStub{}}
 }
 
-func gitStubKey(cloneURL, command string) string { return cloneURL + "\x00" + command }
+func gitStubKey(originURL, command string) string { return originURL + "\x00" + command }
 
 // on scripts a successful ExecCommand response.
-func (g *fakeGitServer) on(cloneURL, command, out string) {
+func (g *fakeGitServer) on(originURL, command, out string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.stubs[gitStubKey(cloneURL, command)] = gitStub{out: out}
+	g.stubs[gitStubKey(originURL, command)] = gitStub{out: out}
 }
 
 // fail scripts a failing ExecCommand response of the given E-23 kind.
-func (g *fakeGitServer) fail(cloneURL, command string, kind gitserver.ErrorKind, err error) {
+func (g *fakeGitServer) fail(originURL, command string, kind gitserver.ErrorKind, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.stubs[gitStubKey(cloneURL, command)] = gitStub{err: &gitserver.Error{Operation: "exec", Kind: kind, Err: err}}
+	g.stubs[gitStubKey(originURL, command)] = gitStub{err: &gitserver.Error{Operation: "exec", Kind: kind, Err: err}}
 }
 
-func (g *fakeGitServer) ExecCommand(_ context.Context, cloneURL, command string) (string, error) {
+func (g *fakeGitServer) ExecCommand(_ context.Context, originURL, command string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, command)
-	stub, ok := g.stubs[gitStubKey(cloneURL, command)]
+	stub, ok := g.stubs[gitStubKey(originURL, command)]
 	if !ok {
 		return "", &gitserver.Error{Operation: "exec", Kind: gitserver.ErrorPermanent,
-			Err: fmt.Errorf("unexpected git command %q on %s", command, cloneURL)}
+			Err: fmt.Errorf("unexpected git command %q on %s", command, originURL)}
 	}
 	return stub.out, stub.err
 }
 
+func (g *fakeGitServer) PublishSyncTask(context.Context, string) error {
+	panic("BuildInfo Controller must not publish git sync tasks")
+}
+
+func (g *fakeGitServer) CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error) {
+	panic("BuildInfo Controller must not check git sync status")
+}
+
+func (g *fakeGitServer) ResolveCommit(context.Context, string, ebsv1.GitRef) (string, error) {
+	panic("BuildInfo Controller must not resolve git commits")
+}
+
+var _ gitserver.GitServerClient = (*fakeGitServer)(nil)
+
 // repo scripts one repository mirror: the ls-tree listing plus one git-show
 // per file.
-func (g *fakeGitServer) repo(cloneURL, commitID string, files map[string]string) {
+func (g *fakeGitServer) repo(originURL, commitID string, files map[string]string) {
 	names := make([]string, 0, len(files))
 	for file := range files {
 		names = append(names, file)
 	}
 	sort.Strings(names)
-	g.on(cloneURL, "git-ls-tree --name-only "+commitID, strings.Join(names, "\n"))
+	g.on(originURL, "git-ls-tree --name-only "+commitID, strings.Join(names, "\n"))
 	for file, content := range files {
-		g.on(cloneURL, "git-show "+commitID+":"+file, content)
+		g.on(originURL, "git-show "+commitID+":"+file, content)
 	}
 }
 
@@ -178,10 +192,11 @@ func testBuildInfoObj(phase ebsv1.BuildInfoPhase) *ebsv1.BuildInfo {
 
 // repoEntry describes one snapshot package repository for testSnapshotObj.
 type repoEntry struct {
-	name     string
-	cloneURL string
-	commitID string
-	declare  bool // present in snapshot.spec.packageRepos
+	name      string
+	originURL string
+	cloneURL  string
+	commitID  string
+	declare   bool // present in snapshot.spec.packageRepos
 }
 
 func testSnapshotObj(repos ...repoEntry) *ebsv1.Snapshot {
@@ -191,7 +206,11 @@ func testSnapshotObj(repos ...repoEntry) *ebsv1.Snapshot {
 	}
 	for _, r := range repos {
 		if r.declare {
-			s.Spec.PackageRepos = append(s.Spec.PackageRepos, ebsv1.PackageRepo{Name: r.name, URL: r.cloneURL})
+			originURL := r.originURL
+			if originURL == "" {
+				originURL = r.cloneURL
+			}
+			s.Spec.PackageRepos = append(s.Spec.PackageRepos, ebsv1.PackageRepo{Name: r.name, URL: originURL})
 		}
 		if r.commitID != "" {
 			s.Status.PackageRepoStatuses[r.name] = ebsv1.PackageRepoStatus{CloneURL: r.cloneURL, CommitID: r.commitID}

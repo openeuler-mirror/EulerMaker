@@ -73,6 +73,9 @@ func (f *fakeGitClient) ResolveCommit(_ context.Context, _ string, ref ebsv1.Git
 	f.resolvedRef = ref
 	return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
 }
+func (f *fakeGitClient) ExecCommand(context.Context, string, string) (string, error) {
+	panic("Snapshot Controller must not execute git commands")
+}
 
 func TestResolveSnapshotDefaultRef(t *testing.T) {
 	for _, tc := range []struct {
@@ -120,7 +123,7 @@ func TestResolveSnapshotDefaultRef(t *testing.T) {
 	}
 }
 
-func newTestController(t *testing.T, api *fakeClient, git GitServerClient, config Config) *Controller {
+func newTestController(t *testing.T, api *fakeClient, git gitserver.GitServerClient, config Config) *Controller {
 	t.Helper()
 	if config == (Config{}) {
 		config = Config{PollPeriod: time.Second, ResolveWorkers: 2, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 3, MaxRetries: 2}
@@ -228,4 +231,4 @@ func TestPollingUpdateWithSameResourceVersionEnqueues(t *testing.T) {
 
 var _ source.Source = (*fakeSource)(nil)
 var _ Client = (*fakeClient)(nil)
-var _ GitServerClient = (*fakeGitClient)(nil)
+var _ gitserver.GitServerClient = (*fakeGitClient)(nil)
