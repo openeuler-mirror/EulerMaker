@@ -193,10 +193,39 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 		return asm
 	}
 	// Step 4: unified write-back of the completed full view (15.11.3).
+	c.ignoreBuildRequires(round, merged)
 	c.specDependsCache.Set(round.key, merged)
 	specDependsFills.Inc()
 	asm.depends = merged
 	return asm
+}
+
+// ignoreBuildRequires applies the BuildInfo's frozen spec-name list to the
+// assembled view, not to the raw spec-file cache. Parsing still happens for
+// every spec; only the controller's build-dependency decisions change.
+func (c *Controller) ignoreBuildRequires(round *reconcileRound, depends map[string]specparse.SpecDepend) {
+	value, exists := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)["unparsable_spec"]
+	if !exists {
+		return
+	}
+	items, ok := value.([]any)
+	if !ok {
+		c.logf(round.key, "UnparsableSpecInvalid", "buildPayload.unparsable_spec must be a list of spec names")
+		return
+	}
+	for _, item := range items {
+		name, ok := item.(string)
+		if !ok {
+			c.logf(round.key, "UnparsableSpecInvalid", "buildPayload.unparsable_spec contains a non-string item")
+			continue
+		}
+		depend, found := depends[name]
+		if !found {
+			continue
+		}
+		depend.BuildRequires = map[string]ebsv1.VersionConst{}
+		depends[name] = depend
+	}
 }
 
 // enumerateRepos assembles the current Snapshot. Incremental and specified

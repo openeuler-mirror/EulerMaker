@@ -44,8 +44,8 @@ type SharedClient interface {
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 
-// buildResourceRules keeps the Config identity needed by Job annotations
-// together with its parsed resource rules; it is not an API resource.
+// buildResourceRules keeps the Config metadata together with its parsed
+// resource rules; it is not an API resource.
 type buildResourceRules struct {
 	metav1.ObjectMeta
 	Spec ebsv1.BuildResourceContent

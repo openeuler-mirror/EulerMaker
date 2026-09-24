@@ -237,7 +237,7 @@ spec:
 
 BuildInfo Controller 在需要创建 Job 的 reconcile 中，GET `/apis/ebs/v1/configs/build-resource`，解析一次当前对象内容，本轮新 Job 共用同一解析结果。返回 404 时沿用现有 E-27 契约，将当前 spec 标为 `Failed`（`DefaultBuildResourceConfigNotFound`），不创建 Job；读取失败、内容非法或无法得到有效资源时，不以空规则/旧缓存继续，也不创建本轮新 Job，记录配置错误并按控制器错误退避策略重新入队。配置恢复后继续派发。已存在 Job 的观察和结果回收不受影响。
 
-Job annotation `ebs.io/build-resource-config` 记录 `build-resource`，`ebs.io/build-resource-config-generation` 记录本次解析对象的 generation，供审计；调度仍只依据 Job 中固化的资源值。
+资源配置来源不写入 Job annotation；调度只依据 Job 中固化的 `spec.resources`。
 
 ### 3.4 初始化、更新与容量
 

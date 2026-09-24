@@ -589,7 +589,7 @@ func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Jo
 			c.logf(round.key, "UnknownJobPhase", "job %s phase %q unknown; completion waits (6.5 step 4)", job.Name, job.Status.Phase)
 		}
 	}
-	own := filterJobsByUID(jobs, string(round.current.UID))
+	own := filterJobsByIdentity(jobs, string(round.current.UID))
 	for i := range own {
 		scan(&own[i])
 	}

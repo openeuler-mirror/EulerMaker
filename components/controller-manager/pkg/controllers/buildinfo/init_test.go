@@ -3,7 +3,7 @@
 // fixed-point downstream expansion, shared incremental/specified degradation,
 // single-only empty-set closeouts, the init deterministic
 // checks (E-16/E-19/E-26/E-27) and the single直通 path (assembly, direct
-// dispatch, Repo injection, empty-set closeout).
+// dispatch, repo injection, empty-set closeout).
 package buildinfo
 
 import (
@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"controller-manager/pkg/clients/gitserver"
+	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -81,6 +82,77 @@ func TestInitFullHappyPath(t *testing.T) {
 	}
 	if len(bi.Status.Conditions) != 0 {
 		t.Fatalf("conditions = %v, want none", bi.Status.Conditions)
+	}
+}
+
+func TestInitUnparsableSpecMatchesSpecName(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	bi := seedHealthyBasics(client, "full")
+	bi.Spec.BuildPayload = "unparsable_spec:\n- a\n- repo1\n"
+	client.SeedBuildInfo(bi)
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj(""))
+	git.repo(gitURL1, "c1", map[string]string{
+		"a.spec": specText("a", "missing-build-dependency"),
+		"b.spec": specText("b", "a"),
+	})
+
+	reconcileOnce(t, c)
+
+	got := getBuildInfo(t, client)
+	requirePhase(t, got, ebsv1.BuildInfoProcessing)
+	requireSpecNames(t, got, "a", "b")
+	if jobs := jobSpecNames(t, client); len(jobs) != 1 || !jobs["a"] {
+		t.Fatalf("jobs = %v, want only a; b must retain its build dependency", jobs)
+	}
+	view, ok := c.specDependsCache.Get(testNS + "/" + testBuild)
+	if !ok || len(view["a"].BuildRequires) != 0 || len(view["b"].BuildRequires) != 1 {
+		t.Fatalf("cached depends = %v, want only a's BuildRequires cleared", view)
+	}
+	raw, ok := c.specFiles.Get("c1", "a.spec")
+	if !ok || !strings.Contains(raw, "missing-build-dependency") {
+		t.Fatalf("raw spec cache = %q (found=%t), want original BuildRequires", raw, ok)
+	}
+	if payload := listJobs(t, client)[0].Spec.Payload; strings.Contains(payload, "unparsable_spec") {
+		t.Fatalf("Job payload leaked controller-only field: %s", payload)
+	}
+}
+
+func TestUnparsableSpecConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		clearA  bool
+	}{
+		{name: "missing key"},
+		{name: "empty list", payload: "unparsable_spec: []\n"},
+		{name: "non-list", payload: "unparsable_spec: a\n"},
+		{name: "mixed list", payload: "unparsable_spec: [42, a]\n", clearA: true},
+		{name: "unknown spec", payload: "unparsable_spec: [other]\n"},
+		{name: "case sensitive", payload: "unparsable_spec: [A]\n"},
+		{name: "repository name is not spec name", payload: "unparsable_spec: [repo1]\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _, _, _ := newTestController(t)
+			bi := testBuildInfoObj(ebsv1.BuildInfoPending)
+			bi.Spec.BuildPayload = tt.payload
+			round := &reconcileRound{key: testNS + "/" + testBuild, current: bi}
+			a := dependEntry("a")
+			a.BuildRequires = map[string]ebsv1.VersionConst{"dependency": {}}
+			b := dependEntry("b")
+			b.BuildRequires = map[string]ebsv1.VersionConst{"dependency": {}}
+			depends := map[string]specparse.SpecDepend{"a": a, "b": b}
+
+			c.ignoreBuildRequires(round, depends)
+
+			if cleared := len(depends["a"].BuildRequires) == 0; cleared != tt.clearA {
+				t.Fatalf("a BuildRequires cleared=%t, want %t", cleared, tt.clearA)
+			}
+			if len(depends["b"].BuildRequires) != 1 {
+				t.Fatalf("b BuildRequires = %v, want unchanged", depends["b"].BuildRequires)
+			}
+		})
 	}
 }
 
@@ -546,8 +618,8 @@ func TestSinglePassThrough(t *testing.T) {
 		if !strings.Contains(job.Spec.Payload, "spec_name: b") || !strings.Contains(job.Spec.Payload, "commitId: c2") {
 			t.Fatalf("payload = %q, want spec_name/commitId injected", job.Spec.Payload)
 		}
-		if strings.Contains(job.Spec.Payload, "Repo: ") {
-			t.Fatalf("payload = %q, want no Repo injection (404 RpmRepo, no bootstrap)", job.Spec.Payload)
+		if strings.Contains(job.Spec.Payload, "repo: ") {
+			t.Fatalf("payload = %q, want no repo injection (404 RpmRepo, no bootstrap)", job.Spec.Payload)
 		}
 	}
 }
@@ -574,7 +646,7 @@ func TestSingleRepoInjection(t *testing.T) {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
 	payload := jobs[0].Spec.Payload
-	if !strings.Contains(payload, "Repo: "+testRepoURL+" http://bootstrap.local/base") {
+	if !strings.Contains(payload, "repo: "+testRepoURL+" http://bootstrap.local/base") {
 		t.Fatalf("payload = %q, want contentURL first + bootstrap repo", payload)
 	}
 	if !strings.Contains(payload, "repo_priority: 10 10") {
