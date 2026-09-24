@@ -37,35 +37,19 @@ type ConfigList struct {
 	Items           []Config `json:"items"`
 }
 
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:deepcopy-gen=true
-type BuildConf struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              BuildConfSpec `json:"spec"`
+type BuildTargetContent struct {
+	Targets map[string]BuildTargetConfigEntry `json:"targets"`
 }
 
 // +k8s:deepcopy-gen=true
-type BuildConfSpec struct {
-	Targets map[string]BuildConfTarget `json:"targets"`
+type BuildTargetConfigEntry struct {
+	Arches map[string]BuildTargetArch `json:"arches"`
 }
 
 // +k8s:deepcopy-gen=true
-type BuildConfTarget struct {
-	Arches map[string]BuildConfArch `json:"arches"`
-}
-
-// +k8s:deepcopy-gen=true
-type BuildConfArch struct {
+type BuildTargetArch struct {
 	Image string `json:"image"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +k8s:deepcopy-gen=true
-type BuildConfList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []BuildConf `json:"items"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -309,13 +293,7 @@ type RpmRepoList struct {
 	Items           []RpmRepo `json:"items"`
 }
 
-type BuildResourceConfig struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              BuildResourceConfigSpec `json:"spec,omitempty"`
-}
-
-type BuildResourceConfigSpec struct {
+type BuildResourceContent struct {
 	Default  ResourceRequirements             `json:"default,omitempty"`
 	Packages map[string]PackageResourceConfig `json:"packages"`
 }
@@ -323,12 +301,6 @@ type BuildResourceConfigSpec struct {
 type PackageResourceConfig struct {
 	Default ResourceRequirements            `json:"default,omitempty"`
 	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
-}
-
-type BuildResourceConfigList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []BuildResourceConfig `json:"items"`
 }
 
 type Job struct {

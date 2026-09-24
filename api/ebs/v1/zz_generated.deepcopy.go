@@ -23,6 +23,8 @@ func copyValue[T any](in *T) *T {
 	return out
 }
 
+func (in *BuildResourceContent) DeepCopy() *BuildResourceContent { return copyValue(in) }
+
 func (in *Script) DeepCopyInto(out *Script) {
 	*out = *in
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
@@ -97,15 +99,6 @@ func (in *RpmRepo) DeepCopyObject() runtime.Object     { return in.DeepCopy() }
 func (in *RpmRepoList) DeepCopyInto(out *RpmRepoList)  { *out = *copyValue(in) }
 func (in *RpmRepoList) DeepCopy() *RpmRepoList         { return copyValue(in) }
 func (in *RpmRepoList) DeepCopyObject() runtime.Object { return in.DeepCopy() }
-
-func (in *BuildResourceConfig) DeepCopyInto(out *BuildResourceConfig) { *out = *copyValue(in) }
-func (in *BuildResourceConfig) DeepCopy() *BuildResourceConfig        { return copyValue(in) }
-func (in *BuildResourceConfig) DeepCopyObject() runtime.Object        { return in.DeepCopy() }
-func (in *BuildResourceConfigList) DeepCopyInto(out *BuildResourceConfigList) {
-	*out = *copyValue(in)
-}
-func (in *BuildResourceConfigList) DeepCopy() *BuildResourceConfigList { return copyValue(in) }
-func (in *BuildResourceConfigList) DeepCopyObject() runtime.Object     { return in.DeepCopy() }
 
 func (in *Job) DeepCopyInto(out *Job)              { *out = *copyValue(in) }
 func (in *Job) DeepCopy() *Job                     { return copyValue(in) }
