@@ -153,11 +153,11 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 		}
 		for _, depName := range sortedSpecNames(ss.Install.MissingDeps) {
 			vc := ss.Install.MissingDeps[depName].VersionRequests
-			entry, ok := sources.FindProvider(depName, vc, prefer)
+			selection, ok := sources.FindProvider(depName, vc, prefer)
 			if !ok {
 				continue // provider unresolvable: no edge (7.4.7 #8)
 			}
-			provider := entry.SpecName
+			provider := selection.Provider.SpecName
 			if dcg.Node(provider) == nil {
 				continue // provider not in this round's build set
 			}
@@ -263,7 +263,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if err != nil {
 			return controller.ReconcileResult{}, err
 		}
-		if result, err := c.dispatchSpec(ctx, round, name, &depend, snapshot, image, dispatch.contentURL); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err := c.dispatchSpec(ctx, round, name, &depend, snapshot, image, dispatch.contentURL, sources); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 	}

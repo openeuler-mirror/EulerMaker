@@ -249,7 +249,7 @@ type BootstrapRepo struct {
 | 字段     | Go 类型 | 说明                    |
 |--------|---------|-----------------------|
 | `name` | string | repo名称，如 `"everything"` |
-| `repo` | string | 软件源地址                 |
+| `repo` | string | 外部软件源的基础地址，不包含架构目录；BuildInfo Controller 使用时追加 `/{buildTarget.arch}` |
 
 ### BuildStatus
 

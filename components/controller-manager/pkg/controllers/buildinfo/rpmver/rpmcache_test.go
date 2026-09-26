@@ -294,36 +294,36 @@ func TestGetProvideInfoChain(t *testing.T) {
 		"dirty":  {"a": {Version: "", SpecName: "a"}, "b": {Version: "0:1.0-1", SpecName: "b"}},
 	})
 	// Miss.
-	if got := GetProvideInfo("absent", src, nil, ebsv1.VersionConst{}); got.SpecName != "" {
+	if got := GetProvideInfo("absent", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "" {
 		t.Fatalf("absent = %+v, want miss", got)
 	}
 	// Single candidate direct pick.
-	if got := GetProvideInfo("single", src, nil, ebsv1.VersionConst{}); got.SpecName != "only" {
+	if got := GetProvideInfo("single", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "only" || got.Reason != SelectionSingle {
 		t.Fatalf("single = %+v", got)
 	}
 	// Version-constraint filter leaves nobody.
-	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{GT: "0:9.9-1"}); got.SpecName != "" {
+	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{GT: "0:9.9-1"}); got.Provider.SpecName != "" {
 		t.Fatalf("over-constrained = %+v, want miss", got)
 	}
 	// Version-constraint filter selects the only survivor.
-	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{LT: "0:1.5-1"}); got.SpecName != "foo" {
+	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{LT: "0:1.5-1"}); got.Provider.SpecName != "foo" || got.Reason != SelectionSingle {
 		t.Fatalf("filtered single = %+v, want foo", got)
 	}
 	// prefer hits the @ base-name normalized candidate in order.
 	got := GetProvideInfo("libfoo", src, []string{"foo-ng", "foo"}, ebsv1.VersionConst{})
-	if got.SpecName != "foo-ng" {
+	if got.Provider.SpecName != "foo-ng" || got.Reason != SelectionPrefer || got.RPMName != "foo-ng" {
 		t.Fatalf("prefer first = %+v, want foo-ng", got)
 	}
 	got = GetProvideInfo("libfoo", src, []string{"foo"}, ebsv1.VersionConst{})
-	if got.SpecName != "foo-epel" && got.SpecName != "foo" {
+	if got.Provider.SpecName != "foo-epel" && got.Provider.SpecName != "foo" {
 		t.Fatalf("prefer foo base = %+v", got)
 	}
 	// Without prefer: highest version wins.
-	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{}); got.SpecName != "foo-epel" {
+	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "foo-epel" || got.Reason != SelectionHighestVersion {
 		t.Fatalf("highest = %+v, want foo-epel (0:3.0-1)", got)
 	}
 	// Empty candidate version on the highest-version step: whole provide miss.
-	if got := GetProvideInfo("dirty", src, nil, ebsv1.VersionConst{}); got.SpecName != "" {
+	if got := GetProvideInfo("dirty", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "" {
 		t.Fatalf("dirty = %+v, want miss", got)
 	}
 }
@@ -339,17 +339,43 @@ func TestFindProviderLayered(t *testing.T) {
 		})},
 	}
 	// Repo layer short-circuits the (higher-versioned) bootstrap candidate.
-	entry, ok := s.FindProvider("cap", ebsv1.VersionConst{}, nil)
-	if !ok || entry.SpecName != "repo-spec" {
-		t.Fatalf("FindProvider cap = %+v,%v, want repo-spec", entry, ok)
+	selection, ok := s.FindProvider("cap", ebsv1.VersionConst{}, nil)
+	if !ok || selection.Provider.SpecName != "repo-spec" {
+		t.Fatalf("FindProvider cap = %+v,%v, want repo-spec", selection, ok)
 	}
 	// Miss in repo layer falls through to bootstrap.
-	entry, ok = s.FindProvider("bootonly", ebsv1.VersionConst{}, nil)
-	if !ok || entry.SpecName != "b" {
-		t.Fatalf("FindProvider bootonly = %+v,%v", entry, ok)
+	selection, ok = s.FindProvider("bootonly", ebsv1.VersionConst{}, nil)
+	if !ok || selection.Provider.SpecName != "b" {
+		t.Fatalf("FindProvider bootonly = %+v,%v", selection, ok)
 	}
 	if _, ok = s.FindProvider("nowhere", ebsv1.VersionConst{}, nil); ok {
 		t.Fatal("nowhere must miss")
+	}
+}
+
+func TestFindProviderSelectionReason(t *testing.T) {
+	s := &RpmMetaSources{
+		RepoLayer: provideSource(map[string]map[string]ProvideEntry{
+			"cap": {
+				"rpm-a@spec-a": {Version: "0:1.0-1", SpecName: "spec-a"},
+				"rpm-b@spec-b": {Version: "0:2.0-1", SpecName: "spec-b"},
+			},
+		}),
+		BootstrapLayer: []*RpmMetaSource{provideSource(map[string]map[string]ProvideEntry{
+			"cap": {"rpm-boot": {Version: "0:9.0-1", SpecName: "boot"}},
+		})},
+	}
+	selection, ok := s.FindProvider("cap", ebsv1.VersionConst{}, []string{"rpm-a", "rpm-b"})
+	if !ok || selection.Provider.SpecName != "spec-a" || selection.Reason != SelectionPrefer || selection.RPMName != "rpm-a" {
+		t.Fatalf("prefer choice = %+v, %v", selection, ok)
+	}
+	selection, ok = s.FindProvider("cap", ebsv1.VersionConst{GT: "0:1.0-1"}, []string{"rpm-a", "rpm-b"})
+	if !ok || selection.Provider.SpecName != "spec-b" || selection.Reason != SelectionSingle {
+		t.Fatalf("single filtered choice = %+v, %v", selection, ok)
+	}
+	selection, ok = s.FindProvider("cap", ebsv1.VersionConst{}, []string{"absent"})
+	if !ok || selection.Provider.SpecName != "spec-b" || selection.Reason != SelectionHighestVersion {
+		t.Fatalf("version fallback = %+v, %v", selection, ok)
 	}
 }
 

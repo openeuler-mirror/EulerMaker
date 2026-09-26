@@ -302,7 +302,7 @@
             <button class="remove-target-button" type="button" :aria-label="t('project.removeBootstrap', { number: index + 1 })" :disabled="savingBootstrap" @click="removeBootstrapRepository(index)"><Delete /></button>
             <div class="form-grid bootstrap-fields">
               <label class="field required-field repository-name-field"><span>{{ t("project.sourceName") }}</span><input v-model.trim="repo.name" required autocomplete="off" :placeholder="t('project.repositoryNamePlaceholder')" /></label>
-              <label class="field required-field"><span>{{ t("project.sourceAddress") }}</span><input v-model.trim="repo.repo" required autocomplete="off" :placeholder="t('project.repositoryAddressPlaceholder')" /></label>
+              <label class="field required-field"><span>{{ t("project.sourceAddress") }}</span><input v-model.trim="repo.repo" type="url" required autocomplete="off" :placeholder="t('project.repositoryAddressPlaceholder')" /></label>
             </div>
           </fieldset>
         </div>
@@ -352,6 +352,7 @@ import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
 import ProjectJobs from "@/components/ProjectJobs.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
+import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "config";
@@ -939,6 +940,10 @@ async function saveBootstrapRepositories(): Promise<void> {
   const repositories = editingBootstrapRepositories.value.map((repo) => ({ name: repo.name?.trim(), repo: repo.repo?.trim() }));
   if (repositories.some((repo) => !repo.name || !repo.repo)) {
     bootstrapErrorKey.value = "project.bootstrapRequiredFields";
+    return;
+  }
+  if (repositories.some((repo) => !isValidBootstrapRepoUrl(repo.repo || ""))) {
+    bootstrapErrorKey.value = "project.bootstrapInvalidUrl";
     return;
   }
   savingBootstrap.value = true;

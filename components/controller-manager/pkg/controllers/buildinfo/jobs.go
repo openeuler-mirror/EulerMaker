@@ -38,13 +38,34 @@ const (
 	annDispatchGeneration = "ebs.io/dispatch-generation"
 )
 
-// jobNameFor derives the deterministic Job name (design 15.3.1): the hash is
-// SHA-256 over json.Marshal([buildInfoUID, specName, generation]) rendered as
-// 64 lowercase hex chars; the name is specName-generation-hash, untruncated.
+// jobNameFor derives the deterministic Job name from the first 8 bytes of
+// SHA-256 over json.Marshal([buildInfoUID, specName, generation]).
 func jobNameFor(buildInfoUID, specName string, generation int64) string {
-	identity, _ := json.Marshal([]string{buildInfoUID, specName, strconv.FormatInt(generation, 10)})
-	sum := sha256.Sum256(identity)
+	sum := jobNameHash(buildInfoUID, specName, generation)
+	return fmt.Sprintf("%s-%d-%x", specName, generation, sum[:8])
+}
+
+// previousJobNameFor recognizes the former 20-character hash suffix.
+func previousJobNameFor(buildInfoUID, specName string, generation int64) string {
+	sum := jobNameHash(buildInfoUID, specName, generation)
+	return fmt.Sprintf("%s-%d-%x", specName, generation, sum[:10])
+}
+
+// legacyJobNameFor recognizes the original full-length hash suffix.
+func legacyJobNameFor(buildInfoUID, specName string, generation int64) string {
+	sum := jobNameHash(buildInfoUID, specName, generation)
 	return fmt.Sprintf("%s-%d-%x", specName, generation, sum)
+}
+
+func jobNameHash(buildInfoUID, specName string, generation int64) [sha256.Size]byte {
+	identity, _ := json.Marshal([]string{buildInfoUID, specName, strconv.FormatInt(generation, 10)})
+	return sha256.Sum256(identity)
+}
+
+func matchesJobName(name, buildInfoUID, specName string, generation int64) bool {
+	return name == jobNameFor(buildInfoUID, specName, generation) ||
+		name == previousJobNameFor(buildInfoUID, specName, generation) ||
+		name == legacyJobNameFor(buildInfoUID, specName, generation)
 }
 
 // packageNameLabelValue encodes a package repository name for the
@@ -142,7 +163,7 @@ func missingBuildRequires(depend *specparse.SpecDepend, sources *rpmver.RpmMetaS
 // confirmed dispatch write-back. The E-19 arch check and the 7.4.1
 // dependency verdict run at the caller; image resolution happens once per
 // round at the caller (E-26).
-func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string) (controller.ReconcileResult, error) {
+func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, sources *rpmver.RpmMetaSources) (controller.ReconcileResult, error) {
 	namespace := round.current.Namespace
 	var generation int64
 	var name string
@@ -181,7 +202,18 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		return controller.ReconcileResult{}, err
 	}
 
-	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, name, generation)
+	if len(payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))) > 0 && sources == nil {
+		if !round.isSingle() {
+			return controller.ReconcileResult{}, fmt.Errorf("RPM metadata unavailable for Job %s prefer selection", name)
+		}
+		// Existing pending Jobs were GET-confirmed above. Only a new create
+		// needs repository metadata to derive this spec's prefer payload.
+		sources, err = c.loadSinglePreferSources(ctx, round, contentURL)
+		if err != nil {
+			return controller.ReconcileResult{}, err
+		}
+	}
+	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, name, generation, sources)
 	created, err := c.client.CreateJob(ctx, namespace, job)
 	var writeErr *clientpkg.WriteError
 	isWriteErr := errors.As(err, &writeErr)
@@ -350,8 +382,8 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 	if job.Namespace != buildInfo.Namespace {
 		return fmt.Errorf("namespace %q != %q", job.Namespace, buildInfo.Namespace)
 	}
-	if want := jobNameFor(string(buildInfo.UID), specName, generation); job.Name != want {
-		return fmt.Errorf("name %q != %q", job.Name, want)
+	if !matchesJobName(job.Name, string(buildInfo.UID), specName, generation) {
+		return fmt.Errorf("name %q does not match the deterministic name for spec %q generation %d", job.Name, specName, generation)
 	}
 	if job.Labels[ebsv1.JobBuildNameLabel] != buildInfo.Name {
 		return fmt.Errorf("build-name label %q != %q", job.Labels[ebsv1.JobBuildNameLabel], buildInfo.Name)
@@ -371,7 +403,7 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 // --- Job construction (design 15.3.1) ---
 
 // jobForSpec builds the Job object with every controller-filled field.
-func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *buildResourceRules, name string, generation int64) *ebsv1.Job {
+func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *buildResourceRules, name string, generation int64, sources *rpmver.RpmMetaSources) *ebsv1.Job {
 	buildInfo := round.current
 	target := round.build.Spec.BuildTarget
 	runtimeSpec, _ := json.Marshal(map[string]string{"image": image})
@@ -398,7 +430,7 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 			TimeoutSeconds: jobTimeoutSeconds,
 			Resources:      resolveResources(resource, specName, target.Arch),
 			NodeSelector:   map[string]string{runnerArchSelector: target.Arch},
-			Payload:        c.jobPayload(round, specName, depend, snapshot, contentURL),
+			Payload:        c.jobPayload(round, specName, depend, snapshot, contentURL, sources),
 		},
 	}
 }
@@ -406,8 +438,13 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 // jobPayload assembles the payload YAML (design 15.3.1 payload 构造契约):
 // the BuildInfo.spec.buildPayload base map with per-spec fields and the
 // build-level repo/repo_priority keys injected (overriding base keys).
-func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string) string {
+func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string, sources *rpmver.RpmMetaSources) string {
 	base := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
+	configuredPrefer := payloadPrefer(base)
+	delete(base, "prefer")
+	if matched := jobPrefer(depend, sources, configuredPrefer); len(matched) > 0 {
+		base["prefer"] = strings.Join(matched, " ")
+	}
 	delete(base, "unparsable_spec")
 	delete(base, "Repo")
 	base["spec_name"] = specName
@@ -432,10 +469,7 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 		base["spec_url"] = entry.CloneURL
 		base["commitId"] = entry.CommitID
 	}
-	var bootstrapRepos []string
-	for _, repo := range round.current.Spec.BootstrapRepo {
-		bootstrapRepos = append(bootstrapRepos, repo.Repo)
-	}
+	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
 	repoValue := joinRepoPayload(contentURL, bootstrapRepos)
 	if repoValue == "" {
 		// Nothing to inject: keep the base key as-is (15.3.1).
@@ -445,6 +479,25 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 	repoCount := len(strings.Fields(repoValue))
 	base["repo_priority"] = c.normalizeRepoPriority(round, base["repo_priority"], repoCount)
 	return c.marshalPayload(round, base)
+}
+
+// jobPrefer uses the same layered provider choice as dependency graph
+// construction, but records only choices made by the prefer step. Dependency
+// names are sorted so payloads are stable across reconciles.
+func jobPrefer(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources, configured []string) []string {
+	if sources == nil || len(configured) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var matched []string
+	for _, name := range sortedConstKeys(depend.BuildRequires, depend.BuildRemoves) {
+		selection, ok := sources.FindProvider(name, depend.BuildRequires[name], configured)
+		if ok && selection.Reason == rpmver.SelectionPrefer && !seen[selection.RPMName] {
+			seen[selection.RPMName] = true
+			matched = append(matched, selection.RPMName)
+		}
+	}
+	return matched
 }
 
 // joinRepoPayload joins the RpmRepo contentURL (first when non-empty) with
@@ -656,7 +709,7 @@ func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	for i := range jobs {
 		job := &jobs[i]
 		generation, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64)
-		if err == nil && generation > 0 && job.Annotations[annBuildInfoUID] == uid && job.Name == jobNameFor(uid, job.Labels[ebsv1.JobSpecNameLabel], generation) {
+		if err == nil && generation > 0 && job.Annotations[annBuildInfoUID] == uid && matchesJobName(job.Name, uid, job.Labels[ebsv1.JobSpecNameLabel], generation) {
 			out = append(out, jobs[i])
 		}
 	}

@@ -283,23 +283,23 @@ func BuildDcgNodes(buildSet map[string]specparse.SpecDepend, sources *rpmver.Rpm
 		depend := buildSet[name]
 		for _, reqName := range sortedConstKeys(depend.BuildRequires, depend.BuildRemoves) {
 			vc := depend.BuildRequires[reqName]
-			entry, ok := sources.FindProvider(reqName, vc, prefer)
+			selection, ok := sources.FindProvider(reqName, vc, prefer)
 			if !ok {
 				continue // miss: no edge; 7.4.1 condition 2 owns the verdict
 			}
-			if _, inSet := buildSet[entry.SpecName]; !inSet {
+			if _, inSet := buildSet[selection.Provider.SpecName]; !inSet {
 				continue // bootstrap/external provider: availability evidence only
 			}
-			addEdge(name, entry.SpecName, vc, false)
+			addEdge(name, selection.Provider.SpecName, vc, false)
 		}
 		installDeps := mergedInstallDeps(depend.Requires, sources.RepoRequires(name))
 		for _, reqName := range sortedConstKeys(installDeps, nil) {
 			vc := installDeps[reqName]
-			entry, ok := sources.FindProvider(reqName, vc, prefer)
+			selection, ok := sources.FindProvider(reqName, vc, prefer)
 			if !ok {
 				continue // miss: no edge and no dispatch gate (16.1 install 3)
 			}
-			provider := entry.SpecName
+			provider := selection.Provider.SpecName
 			if provider == name {
 				continue // same-spec subpackage self-dependency: filtered
 			}
