@@ -59,6 +59,9 @@ func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	if container.created.Image != "openeuler:22.03" {
 		t.Fatalf("image = %q", container.created.Image)
 	}
+	if container.created.Entrypoint != "" {
+		t.Fatalf("empty scriptRefs overrode image entrypoint: %q", container.created.Entrypoint)
+	}
 	if container.created.Labels["ebs.io/project"] != "project-a" || container.created.Labels["ebs.io/job"] != "job-a" || container.created.Labels["ebs.io/runner"] != "runner-a" {
 		t.Fatalf("labels = %#v", container.created.Labels)
 	}
@@ -78,6 +81,115 @@ func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	if string(logData) != "container log\n" {
 		t.Fatalf("container log = %q", string(logData))
 	}
+}
+
+func TestCTExecutorUsesJobScript(t *testing.T) {
+	dir := t.TempDir()
+	container := &fakeContainerRuntime{exitCode: 0}
+	source := &fakeScriptSource{script: testScript("rpmbuild", "uid-1", "rv-1", "#!/bin/sh\necho built\n")}
+	executor := &CTExecutor{
+		WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
+		Runtime: container, Scripts: NewScriptCache(source),
+	}
+	job := JobResource{
+		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec: JobSpec{
+			RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
+			ScriptRefs:  []ScriptRef{{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}},
+		},
+	}
+	if _, err := executor.Execute(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if container.created.Entrypoint != "/workspace/scripts/rpmbuild" || len(container.created.Command) != 0 || len(container.created.Args) != 0 {
+		t.Fatalf("container entrypoint = %q, command=%v, args=%v", container.created.Entrypoint, container.created.Command, container.created.Args)
+	}
+	path := filepath.Join(dir, "work", "project-a", "job-a", "scripts", "rpmbuild")
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != source.script.Spec.Content {
+		t.Fatalf("script file = %q, %v", content, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o555 {
+		t.Fatalf("script mode = %v", info.Mode())
+	}
+}
+
+func TestCTExecutorRejectsScriptAndRuntimeCommand(t *testing.T) {
+	executor := &CTExecutor{WorkDir: t.TempDir(), ResultRoot: t.TempDir()}
+	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: JobSpec{
+		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03", Command: []string{"echo"}}),
+		ScriptRefs:  []ScriptRef{{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}},
+	}}
+	if _, err := executor.Execute(context.Background(), job); err == nil {
+		t.Fatal("runtime command accepted with scriptRef")
+	}
+}
+
+func TestCTExecutorUsesFirstScriptAsEntrypoint(t *testing.T) {
+	dir := t.TempDir()
+	source := &fakeMultiScriptSource{scripts: map[string]ScriptResource{
+		"first":  testScript("first", "uid-1", "rv-1", "#!/bin/sh\necho first\n"),
+		"second": testScript("second", "uid-2", "rv-2", "#!/bin/sh\necho second\n"),
+	}}
+	container := &fakeContainerRuntime{exitCode: 0}
+	executor := &CTExecutor{WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"), Runtime: container, Scripts: NewScriptCache(source)}
+	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: JobSpec{
+		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
+		ScriptRefs: []ScriptRef{
+			{Name: "first", UID: "uid-1", ResourceVersion: "rv-1"},
+			{Name: "second", UID: "uid-2", ResourceVersion: "rv-2"},
+		},
+	}}
+	if _, err := executor.Execute(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if container.created.Entrypoint != "/workspace/scripts/first" {
+		t.Fatalf("entrypoint = %q, want first script", container.created.Entrypoint)
+	}
+	for name, script := range source.scripts {
+		content, err := os.ReadFile(filepath.Join(dir, "work", "project-a", "job-a", "scripts", name))
+		if err != nil || string(content) != script.Spec.Content {
+			t.Fatalf("script %s = %q, %v", name, content, err)
+		}
+	}
+	if len(source.calls) != 2 || source.calls[0] != "first" || source.calls[1] != "second" {
+		t.Fatalf("script read order = %v", source.calls)
+	}
+}
+
+func TestCTExecutorRejectsDuplicateOrUnsafeScriptNames(t *testing.T) {
+	for _, names := range [][]string{{"rpmbuild", "rpmbuild"}, {"../outside"}} {
+		executor := &CTExecutor{WorkDir: t.TempDir(), ResultRoot: t.TempDir()}
+		refs := make([]ScriptRef, 0, len(names))
+		for _, name := range names {
+			refs = append(refs, ScriptRef{Name: name, UID: "uid-1", ResourceVersion: "rv-1"})
+		}
+		job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: JobSpec{
+			RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
+			ScriptRefs:  refs,
+		}}
+		if _, err := executor.Execute(context.Background(), job); err == nil {
+			t.Fatalf("script names %v accepted", names)
+		}
+	}
+}
+
+type fakeMultiScriptSource struct {
+	scripts map[string]ScriptResource
+	calls   []string
+}
+
+func (f *fakeMultiScriptSource) GetScript(_ context.Context, name string) (*ScriptResource, error) {
+	f.calls = append(f.calls, name)
+	script, ok := f.scripts[name]
+	if !ok {
+		return nil, errors.New("Script not found")
+	}
+	return &script, nil
 }
 
 func TestCTExecutorReturnsContainerExitCode(t *testing.T) {

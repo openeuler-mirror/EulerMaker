@@ -126,6 +126,14 @@ PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status
 
 Runner 必须从 Job 的 `metadata.uid` 获取不可变的 `jobUID`。缺少 `metadata.namespace`、`metadata.name` 或 `metadata.uid` 的 Job 不能执行，也不能使用 Job 名称推导 UID。Job 被删除后以相同名称重建时，新 UID 对应独立的日志流、Artifact 和上传清单。
 
+CT Job 的 `spec.scriptRefs` 非空时，Runner 使用自身 token 经 Gateway 按名称读取每个全局 Script：
+
+```text
+GET /apis/ebs/v1/scripts/{name}
+```
+
+Runner 不列举或修改 Script。数组为空时不访问 Script API，沿用镜像入口；数组第一项是主脚本，其余脚本供主脚本调用。具体拉取、缓存与容器入口规则见 8.1。
+
 ### 3.4 Artifact Manager API
 
 Runner 使用 `--artifact-manager` 配置的独立地址直接访问 Artifact Manager，正文不经过 Gateway：
@@ -374,14 +382,19 @@ runner agent
 1. 解析 Job.spec.runtimeSpec，得到镜像、网络、权限、工作目录、挂载等容器配置
 2. 为 Job 创建本地 workDir 和 resultDir
 3. 将 Job.spec.payload 写入 workDir/payload.yaml，作为任务执行所需的 YAML 参数文件
-4. 拉取或确认业务镜像可用
-5. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label
-6. 启动容器，由业务入口读取 /workspace/payload.yaml 并执行任务
-7. 流式采集或落盘容器日志
-8. 等待容器退出，按退出码决定 Job 成功或失败
-9. 超时时先 stop，超过 grace period 后 kill
-10. 收集 resultDir，清理容器和临时目录
+4. `scriptRefs` 非空时按顺序解析全部脚本，写入 workDir/scripts/{name}；全部成功后才继续
+5. 拉取或确认业务镜像可用
+6. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label
+7. 启动容器：非空数组以第一项作为入口；空数组沿用镜像入口。业务入口读取 /workspace/payload.yaml 并执行任务
+8. 流式采集或落盘容器日志
+9. 等待容器退出，按退出码决定 Job 成功或失败
+10. 超时时先 stop，超过 grace period 后 kill
+11. 收集 resultDir，清理容器和临时目录
 ```
+
+`scriptRefs` 中的名称不得重复，Runner 也要拒绝不安全的文件名。每个引用包含创建 Job 时观察到的 name、UID、resourceVersion；进程内缓存仅在名称及 UID、resourceVersion 均匹配时复用，否则 GET 当前 Script。响应必须是同名、无 namespace、具备 UID 和 resourceVersion 的有效 Script，正文需满足 UTF-8、无 NUL 和绝对路径 shebang 校验。引用是观测信息，不锁定内容：响应的 UID 或 resourceVersion 与 Job 不同不构成错误，缓存以响应的实际元数据保存；Runner 重启后缓存失效。
+
+脚本通过临时文件写入并原子替换为可执行的 `0555` 文件，在容器中位于 `/workspace/scripts/{name}`。非空数组时覆盖镜像 ENTRYPOINT 为 `/workspace/scripts/{scriptRefs[0].name}`，不传镜像默认 CMD 参数；此时 `runtimeSpec.command/args` 不能同时指定。Runner 拒绝遮蔽 `/workspace` 或脚本目录的额外挂载。空数组时不覆盖镜像入口，仍按 `runtimeSpec.command/args` 的原有方式执行。拉取和退避计入 Job 既有执行期限；取消时停止拉取，不启动容器。
 
 `runtimeSpec` 对 `ct` runtime 可采用以下结构，字段由 ct executor 解释：
 
@@ -406,7 +419,7 @@ runtimeSpec:
 
 | 宿主机目录 | 容器目录 | 说明 |
 |------------|----------|------|
-| `${rootDir}/work/{project}/{jobUID}` | `/workspace` | payload YAML 参数文件和执行工作目录 |
+| `${rootDir}/work/{project}/{jobUID}` | `/workspace` | payload YAML、`scripts/{name}` 和执行工作目录 |
 | `${rootDir}/results/{project}/{jobUID}` | `/results` | 构建产物暂存目录；最终结果通过 Artifact Manager 定位 |
 
 容器 label 建议至少包含：
@@ -614,6 +627,9 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | Runner 重启 | 重新注册 Runner，恢复心跳，根据 Job、容器 label、本地 spool/checkpoint 和服务端日志 status 恢复或明确失败 |
 | 同名 Runner 注册 | `instanceId` 相同才允许恢复；不同则终止注册并报告冲突 |
 | 本地 instance ID 丢失 | 不接管已有同名 Runner；恢复 ID 文件或由管理员删除旧对象后重新注册 |
+| Script 读取网络失败、超时、429 或 5xx | 在 Job 剩余期限内指数退避重试；初始 1 秒、上限 30 秒并加抖动，429 遵循较长的 Retry-After；取消时停止 |
+| Script 不存在、无读取权限、响应或内容非法 | 不启动业务容器，按 Job 执行失败流程记录原因；不回退到镜像入口或其他脚本 |
+| `scriptRefs` 名称重复或路径不安全 | 拒绝执行；不能以后一项覆盖前一项或写出 Job 工作目录 |
 | Job 执行失败 | 先排空并封账已有日志，再更新 `Job.status.phase=Failed` 和 `message` |
 | Job 超时 | 终止执行进程并尝试封账已有日志，再更新 Job 为 Failed 或 Aborted |
 | 本地日志不可恢复 | 保留诊断文件，Job 写入 Failed 并记录原因，不得进入 Succeeded |
@@ -697,6 +713,8 @@ secrets:
 |------|------|
 | Runner identity | 首次启动原子生成规范 UUID v4；重启复用；同名同 ID 恢复；同名不同 ID 终止；POST 409 后 GET 并按 ID 分类；更新不能修改或清空 ID；ID 文件丢失时不接管已有对象 |
 | Job identity | 从 `metadata.uid` 取得 jobUID；缺少 namespace/name/UID 时拒绝执行；同名不同 UID 使用独立目录和日志流 |
+| Script 执行 | 空 `scriptRefs` 使用镜像入口；单脚本和多脚本均写入 `/workspace/scripts/{name}`，第一项作为入口；重复名称、路径逃逸、遮蔽挂载及与 `runtimeSpec.command/args` 冲突时拒绝 |
+| Script 缓存与失败 | 同 name/UID/resourceVersion 命中缓存，UID 或 resourceVersion 变化时重新 GET；响应元数据变化、无效正文、404、401/403、429/5xx、超时和取消分别按契约处理，不执行未完整拉取的脚本集合 |
 | Chunk | 256 KiB 聚合、500 ms 刷新、EOF 刷新、空日志不发送 chunk、SHA-256 针对原始字节、可选 gzip |
 | 顺序与确认 | 单请求在途、200 响应字段校验、相同 sequence/正文重试不重复推进、checkpoint 只在确认后更新 |
 | 本地持久化 | 正文先于索引、JSON Lines 残缺尾行恢复、正文未组块尾部继续聚合、正文短于索引时拒绝恢复 |

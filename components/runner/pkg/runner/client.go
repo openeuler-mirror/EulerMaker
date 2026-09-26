@@ -106,6 +106,14 @@ func (c *Client) GetJob(ctx context.Context, project, name string) (*JobResource
 	return &job, err
 }
 
+func (c *Client) GetScript(ctx context.Context, name string) (*ScriptResource, error) {
+	var script ScriptResource
+	if err := c.doJSON(ctx, http.MethodGet, apiPrefix+"/scripts/"+url.PathEscape(name), nil, &script); err != nil {
+		return nil, err
+	}
+	return &script, nil
+}
+
 func (c *Client) UpdateJobStatus(ctx context.Context, job JobResource, status JobStatus) (*JobResource, error) {
 	if job.Metadata.UID == "" || job.Metadata.ResourceVersion == "" {
 		return nil, fmt.Errorf("Job UID and resourceVersion are required")

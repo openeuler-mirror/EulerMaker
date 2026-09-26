@@ -95,6 +95,7 @@ func NewAgent(cfg Config) (*Agent, error) {
 					WorkDir:         workDir(cfg.RootDir),
 					ResultRoot:      resultRoot(cfg.RootDir),
 					RunnerName:      cfg.Name,
+					Scripts:         NewScriptCache(client),
 					LogFactory:      logFactory,
 					LogDrainTimeout: cfg.LogDrainTimeout,
 				},
