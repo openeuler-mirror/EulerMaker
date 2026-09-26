@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+func TestClientGetScript(t *testing.T) {
+	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || req.URL.Path != apiPrefix+"/scripts/rpmbuild" {
+			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+		}
+		return response(http.StatusOK, `{"apiVersion":"ebs/v1","kind":"Script","metadata":{"name":"rpmbuild","uid":"uid-1","resourceVersion":"rv-1"},"spec":{"content":"#!/bin/sh\necho ok\n"}}`), nil
+	})
+	script, err := client.GetScript(context.Background(), "rpmbuild")
+	if err != nil || script.Metadata.ResourceVersion != "rv-1" || script.Spec.Content == "" {
+		t.Fatalf("GetScript = %+v, %v", script, err)
+	}
+}
+
 func TestClientPatchRunnerStatus(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotContentType string
 	var gotBody struct {

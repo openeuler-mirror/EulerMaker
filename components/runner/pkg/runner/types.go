@@ -92,11 +92,28 @@ type JobSpec struct {
 	Priority       int64                `json:"priority,omitempty"`
 	Runtime        string               `json:"runtime,omitempty"`
 	RuntimeSpec    json.RawMessage      `json:"runtimeSpec,omitempty"`
+	ScriptRefs     []ScriptRef          `json:"scriptRefs,omitempty"`
 	TimeoutSeconds int64                `json:"timeoutSeconds,omitempty"`
 	Resources      ResourceRequirements `json:"resources,omitempty"`
 	NodeSelector   map[string]string    `json:"nodeSelector,omitempty"`
 	Tolerations    []Toleration         `json:"tolerations,omitempty"`
 	Payload        string               `json:"payload,omitempty"`
+}
+
+type ScriptRef struct {
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type ScriptResource struct {
+	TypeMeta `json:",inline"`
+	Metadata ObjectMeta `json:"metadata,omitempty"`
+	Spec     ScriptSpec `json:"spec,omitempty"`
+}
+
+type ScriptSpec struct {
+	Content string `json:"content"`
 }
 
 type ResourceRequirements struct {

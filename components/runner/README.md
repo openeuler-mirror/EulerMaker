@@ -2,6 +2,8 @@
 
 `ebs-runner` 是 EulerMaker 的任务执行代理。它通过 `ebs-gateway` 注册执行机、接收已分配的 Job，并将日志和产物上传到 Artifact Manager。
 
+CT Job 的 `spec.scriptRefs` 非空时，Runner 按顺序经 Gateway 拉取所有 Script，写入 `/workspace/scripts/{name}`，并将第一项作为容器 ENTRYPOINT。Runner 进程内按 Script 名称、UID、resourceVersion 缓存正文；Job 指定的 UID 或 resourceVersion 变化时重新拉取。数组为空时使用镜像入口。
+
 ## 构建与测试
 
 在当前目录执行：

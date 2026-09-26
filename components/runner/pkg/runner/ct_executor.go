@@ -26,6 +26,7 @@ type CTExecutor struct {
 	ResultRoot      string
 	RunnerName      string
 	Runtime         ContainerRuntime
+	Scripts         *ScriptCache
 	LogFactory      JobLogSinkFactory
 	LogDrainTimeout time.Duration
 	StopGracePeriod time.Duration
@@ -57,6 +58,7 @@ type ContainerSpec struct {
 	Env         map[string]string
 	Mounts      map[string]string
 	Labels      map[string]string
+	Entrypoint  string
 	Command     []string
 	Args        []string
 }
@@ -93,6 +95,19 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	if spec.Image == "" {
 		return "", fmt.Errorf("ct runtimeSpec.image is required")
 	}
+	if len(job.Spec.ScriptRefs) > 0 && (len(spec.Command) > 0 || len(spec.Args) > 0) {
+		return "", fmt.Errorf("ct runtimeSpec.command/args cannot be set with scriptRef")
+	}
+	seenScripts := make(map[string]struct{}, len(job.Spec.ScriptRefs))
+	for _, ref := range job.Spec.ScriptRefs {
+		if ref.Name == "" || ref.Name == "." || ref.Name == ".." || filepath.Base(ref.Name) != ref.Name || strings.ContainsAny(ref.Name, "/\\") {
+			return "", fmt.Errorf("invalid Job script name %q", ref.Name)
+		}
+		if _, exists := seenScripts[ref.Name]; exists {
+			return "", fmt.Errorf("duplicate Job script name %q", ref.Name)
+		}
+		seenScripts[ref.Name] = struct{}{}
+	}
 
 	executionID := job.Metadata.UID
 	if executionID == "" {
@@ -114,6 +129,23 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	}
 	if err := os.WriteFile(filepath.Join(workDir, "payload.yaml"), []byte(job.Spec.Payload), 0o644); err != nil {
 		return "", fmt.Errorf("write payload.yaml: %w", err)
+	}
+	var scriptPath string
+	if len(job.Spec.ScriptRefs) > 0 {
+		scriptsDir := filepath.Join(workDir, "scripts")
+		if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+			return resultRoot, fmt.Errorf("create Job scripts dir: %w", err)
+		}
+		for _, ref := range job.Spec.ScriptRefs {
+			content, err := e.Scripts.Resolve(ctx, ref)
+			if err != nil {
+				return resultRoot, fmt.Errorf("resolve Job script %q: %w", ref.Name, err)
+			}
+			if err := writeJobScript(filepath.Join(scriptsDir, ref.Name), content); err != nil {
+				return resultRoot, err
+			}
+		}
+		scriptPath = filepath.Join(defaultCTWorkingDir, "scripts", job.Spec.ScriptRefs[0].Name)
 	}
 
 	container := e.Runtime
@@ -150,6 +182,19 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		},
 		Command: spec.Command,
 		Args:    spec.Args,
+	}
+	if scriptPath != "" {
+		if containerSpec.Mounts[workDir] != defaultCTWorkingDir {
+			return resultRoot, fmt.Errorf("script Job requires work mount at %s", defaultCTWorkingDir)
+		}
+		for hostPath, target := range containerSpec.Mounts {
+			if hostPath != workDir && (target == "/" || target == defaultCTWorkingDir || strings.HasPrefix(target, defaultCTWorkingDir+"/")) {
+				return resultRoot, fmt.Errorf("container mount %q shadows Job script", target)
+			}
+		}
+		containerSpec.Entrypoint = scriptPath
+		containerSpec.Command = nil
+		containerSpec.Args = nil
 	}
 
 	id, err := container.Create(ctx, containerSpec)
@@ -226,6 +271,29 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return resultRoot, errors.Join(fmt.Errorf("container exited with code %d", exitCode), logErr)
 	}
 	return resultRoot, logErr
+}
+
+func writeJobScript(path, content string) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".build-script-")
+	if err != nil {
+		return fmt.Errorf("create build script: %w", err)
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write build script: %w", err)
+	}
+	if err := file.Chmod(0o555); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("chmod build script: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close build script: %w", err)
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("install build script: %w", err)
+	}
+	return nil
 }
 
 func ensureImage(ctx context.Context, runtime ContainerRuntime, image, policy string) error {
@@ -370,6 +438,9 @@ func (DockerCLI) Create(ctx context.Context, spec ContainerSpec) (string, error)
 	}
 	for key, value := range spec.Env {
 		args = append(args, "-e", key+"="+value)
+	}
+	if spec.Entrypoint != "" {
+		args = append(args, "--entrypoint", spec.Entrypoint)
 	}
 	args = append(args, spec.Image)
 	args = append(args, spec.Command...)
