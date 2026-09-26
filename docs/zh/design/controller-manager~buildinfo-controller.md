@@ -1353,7 +1353,7 @@ type RpmMetaSources struct {
 
 顶级 key 与 `Cache.dcgDict` 一致；单个 BuildInfo 内分两层：`RepoLayer`（RpmRepo 层，`contentURL` 对应仓库）+ `BootstrapLayer[]`（按 bootstrap 声明顺序），保持查询优先级与构建环境 repo 注入顺序（15.3.1）一致。每个来源独立维护 `RpmByName` 与 `ProvidesInfo` 两个索引，**来源间不合并**——保留逐层短路查询语义（见下）。
 
-**XML 下载与解析（两步寻址，repomd.xml → primary 元数据）**：每来源先下载仓库索引 `<URL>/repodata/repomd.xml`（createrepo_c 标准仓库元数据入口，非压缩 XML），解析出 `type="primary"` 的 data 记录、取其 `location href` 得 primary 元数据的真实文件路径（按 repomd 寻址，不假设固定文件名——路径通常为 `repodata/<checksum>-primary.xml.gz`，带校验和前缀且随仓库重新生成变化）；再按该路径下载 primary 元数据（gzip 压缩先解压，`checksum` 校验可选），逐 rpm 条目生成 `RpmMeta`：
+**XML 下载与解析（两步寻址，repomd.xml → primary 元数据）**：每来源先下载仓库索引 `<URL>/repodata/repomd.xml`（createrepo_c 标准仓库元数据入口，非压缩 XML），解析出 `type="primary"` 的 data 记录、取其 `location href` 得 primary 元数据的真实文件路径（按 repomd 寻址，不假设固定文件名——路径可能为 `repodata/<checksum>-primary.xml.gz` 或 `.zst`，带校验和前缀且随仓库重新生成变化）；再按该路径下载 primary 元数据（按 `.gz` / `.zst` 后缀解压，解压后仍受大小限制；`checksum` 校验可选），逐 rpm 条目生成 `RpmMeta`：
 
 - `name` → rpm 名（`RpmByName` key；同源内同名不同 arch 并存时取目标 arch 条目）；
 - `version` = `epoch:version-release` 拼接（版本约束比较输入）；

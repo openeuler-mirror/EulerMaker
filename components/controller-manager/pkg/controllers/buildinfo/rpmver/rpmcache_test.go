@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
+
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -32,6 +34,16 @@ func gz(t *testing.T, body string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+func zst(t *testing.T, body string) []byte {
+	t.Helper()
+	w, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	return w.EncodeAll([]byte(body), nil)
 }
 
 const repomdBody = `<?xml version="1.0" encoding="UTF-8"?>
@@ -130,6 +142,27 @@ func TestParseRepoSourceBasic(t *testing.T) {
 	// Common XML namespace prefixes must not break local-name matching.
 	if src.URL != "http://repo" {
 		t.Fatalf("URL = %q, want trailing slash trimmed", src.URL)
+	}
+}
+
+func TestParseRepoSourceZstd(t *testing.T) {
+	const href = "repodata/abc-primary.xml.zst"
+	f := fetchMap{
+		"http://repo/repodata/repomd.xml": []byte(`<repomd><data type="primary"><location href="` + href + `"/></data></repomd>`),
+		"http://repo/" + href:             zst(t, primaryBody),
+	}
+	src, err := ParseRepoSource(context.Background(), f.fetch, "http://repo", "x86_64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := src.RpmByName["glibc"].Version; got != "0:2.36-4" {
+		t.Fatalf("glibc version = %q, want 0:2.36-4", got)
+	}
+	f["http://repo/"+href] = []byte("not zstd")
+	_, err = ParseRepoSource(context.Background(), f.fetch, "http://repo", "x86_64")
+	var se *SourceError
+	if !errors.As(err, &se) || se.Kind != FailureParse {
+		t.Fatalf("err = %v, want SourceError Parse (zstd)", err)
 	}
 }
 

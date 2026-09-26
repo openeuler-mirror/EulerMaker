@@ -1,6 +1,6 @@
 // rpmcache.go implements the RpmMeta two-layer in-memory cache parsing and
 // structures (design 15.10): per-source repomd.xml -> primary metadata
-// two-step resolution, gzip decoding, RpmMeta extraction, and the RpmByName /
+// two-step resolution, gzip/zstd decoding, RpmMeta extraction, and the RpmByName /
 // ProvidesInfo indexes. The cache itself is a pure in-memory acceleration
 // layer — nothing is persisted to status.
 package rpmver
@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -115,7 +117,7 @@ func (e *SourceError) Unwrap() error { return e.Err }
 
 // ParseRepoSource downloads and parses one repository (design 15.10 two-step
 // resolution): <baseURL>/repodata/repomd.xml yields the primary metadata
-// location href, which is then downloaded (gzip decoded when *.gz) and parsed
+// location href, which is then downloaded (gzip/zstd decoded by suffix) and parsed
 // into RpmByName / ProvidesInfo.
 //
 // Arch selection: entries of the target arch plus noarch are indexed; on a
@@ -147,11 +149,14 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 	if err != nil {
 		return nil, &SourceError{Kind: FailureDownload, URL: primaryURL, Err: err}
 	}
-	if strings.HasSuffix(href, ".gz") {
+	switch {
+	case strings.HasSuffix(href, ".gz"):
 		body, err = gunzip(body)
-		if err != nil {
-			return nil, &SourceError{Kind: FailureParse, URL: primaryURL, Err: err}
-		}
+	case strings.HasSuffix(href, ".zst"):
+		body, err = unzstd(body)
+	}
+	if err != nil {
+		return nil, &SourceError{Kind: FailureParse, URL: primaryURL, Err: err}
 	}
 	var meta primaryXML
 	if err := xml.Unmarshal(body, &meta); err != nil {
@@ -328,6 +333,16 @@ func gunzip(body []byte) ([]byte, error) {
 	defer r.Close()
 	// The decompressed stream is capped too: a small compressed payload can
 	// expand far beyond maxMetadataBytes (gzip bomb).
+	return readLimited(r, "decompressed metadata")
+}
+
+func unzstd(body []byte) ([]byte, error) {
+	r, err := zstd.NewReader(bytes.NewReader(body),
+		zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxMetadataBytes))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
 	return readLimited(r, "decompressed metadata")
 }
 
