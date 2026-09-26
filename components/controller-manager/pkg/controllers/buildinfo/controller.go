@@ -1,4 +1,4 @@
-﻿// Package buildinfo implements the BuildInfo controller (design
+// Package buildinfo implements the BuildInfo controller (design
 // controller-manager~buildinfo-controller.md): it assembles the spec
 // dependency graph, determines the build set, dispatches Jobs under the
 // ordering gates and aggregates build results into BuildInfo.status.

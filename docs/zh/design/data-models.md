@@ -679,7 +679,7 @@ type ScriptList struct {
 }
 ```
 
-`content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限，仍受请求体限制；首行通过 shebang 指定容器内解释器。名称为集群内唯一的 DNS subdomain，不支持 generateName。完整约定见 [Script 设计](data-models~script.md)。目前实现资源 API，scriptRef 消费链路待接入。
+`content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限，仍受请求体限制；首行通过 shebang 指定容器内解释器。名称为集群内唯一的 DNS subdomain，不支持 generateName。完整约定见 [Script 设计](data-models~script.md)。资源 API、BuildInfo Controller 的 Job `scriptRefs` 观测信息生成及 Runner 拉取执行均已接入。
 
 ## 七、Job（任务）
 
@@ -703,10 +703,17 @@ BuildInfo Controller 创建的 Job 在 `metadata.labels` 中记录所属 Build�
 ### JobSpec
 
 ```go
+type ScriptRef struct {
+    Name            string `json:"name"`
+    UID             string `json:"uid"`
+    ResourceVersion string `json:"resourceVersion"`
+}
+
 type JobSpec struct {
     Priority     int64                `json:"priority,omitempty"`
     Runtime      string               `json:"runtime,omitempty"`
     RuntimeSpec  runtime.RawExtension `json:"runtimeSpec,omitempty"`
+    ScriptRefs   []ScriptRef          `json:"scriptRefs,omitempty"`
     TimeoutSeconds int64              `json:"timeoutSeconds,omitempty"`
     Resources    ResourceRequirements `json:"resources,omitempty"`
     NodeSelector map[string]string    `json:"nodeSelector,omitempty"`
@@ -720,6 +727,7 @@ type JobSpec struct {
 | `priority` | int64 | 否 | Job 调度优先级，值越大越优先，默认：0 |
 | `runtime` | string | 否 | 执行运行时类型，如 `ct`/`vm`/`hw`，默认 `ct` |
 | `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置，由对应 runtime 解释 |
+| `scriptRefs` | []ScriptRef | 否 | 为空时使用镜像入口；非空时按顺序拉取，第一项为主脚本，名称不得重复；记录创建 Job 时观察到的 Script name、UID、resourceVersion，不锁定执行时的脚本内容，见 [Script 设计](data-models~script.md) |
 | `timeoutSeconds` | int64 | 否 | 最大运行秒数，默认 10800 |
 | `resources` | ResourceRequirements | 否 | Job 资源请求与限制 |
 | `nodeSelector` | map[string]string | 否 | Runner label 精确匹配条件，如通过 `ebs.io/runner-arch` 选择架构 |

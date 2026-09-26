@@ -287,7 +287,7 @@ single 的 `Skipped` 不表示构建已经完成，也不表示没有可用过�
 
 ### 4.4 BuildInfo
 
-Build Controller 创建 BuildInfo 时，读取所属 Project 并深拷贝 `Project.spec.bootstrapRepo` 到 `BuildInfo.spec.bootstrapRepo`，同时将 `Project.spec.buildPayload` 原样复制到 `BuildInfo.spec.buildPayload`；不写 `status.specStatus`，由独立 BuildInfo Controller 填充并推进。仅在 Prepared 阶段 BuildInfo NotFound、即将创建时读取 Project，已有 BuildInfo 不重新读取 Project，也不覆盖 bootstrapRepo、buildPayload（包括已有空值）；Project 后续变更不影响已创建 BuildInfo。Project 未配置相应字段时保留为空。Project NotFound 返回 PermanentError，其他读取错误按 7.6 分类，不发送创建请求或写 Build.status。
+Build Controller 创建 BuildInfo 时，读取所属 Project 并深拷贝 `Project.spec.bootstrapRepo` 到 `BuildInfo.spec.bootstrapRepo`，同时复制 `Project.spec.buildPayload`；不写 `status.specStatus`，由独立 BuildInfo Controller 填充并推进。仅在 Prepared 阶段 BuildInfo NotFound、即将创建时读取 Project，已有 BuildInfo 不重新读取 Project，也不覆盖这些输入（包括已有空值）；Project 后续变更不影响已创建 BuildInfo。Project 未配置相应字段时保留为空。Project NotFound 返回 PermanentError，其他读取错误按 7.6 分类，不发送创建请求或写 Build.status。
 
 single 的 BuildInfo 只包含目标仓库解析出的 spec，不包含其他仓库或依赖仓库的 spec；`Build.spec.packages` 可以指定多个目标仓库，每个仓库也可以包含多个 spec，不能假设 specStatus 只有一个条目。BuildInfo Controller 保证进入 Completed 时所有目标仓库的 spec 结果齐全，不得只记录已成功的部分 spec 就宣布完成。Build Controller 在 Completed 后按 7.4 的统一规则汇总结果。
 

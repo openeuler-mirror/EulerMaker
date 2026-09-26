@@ -65,14 +65,51 @@ func TestRetryAfterRejectsUnsupportedOutcome(t *testing.T) {
 func TestValidateTargetScope(t *testing.T) {
 	jobs := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
 	runners := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}
+	scripts := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "scripts"}
 	if err := validateTarget(jobs, "", "job"); err == nil {
 		t.Fatal("namespace-scoped target accepted an empty namespace")
 	}
 	if err := validateTarget(runners, "project", "runner"); err == nil {
 		t.Fatal("cluster-scoped target accepted a namespace")
 	}
+	if err := validateTarget(scripts, "project", "rpmbuild"); err == nil {
+		t.Fatal("cluster-scoped Script accepted a namespace")
+	}
+	if err := validateTarget(scripts, "", "rpmbuild"); err != nil {
+		t.Fatal(err)
+	}
 	if err := validateTarget(jobs, "project", "job"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGetClusterScopedScript(t *testing.T) {
+	scripts := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "scripts"}
+	response := &ebsv1.Script{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Script"},
+		ObjectMeta: metav1.ObjectMeta{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "v1:1:1"},
+		Spec:       ebsv1.ScriptSpec{Content: "#!/bin/sh\n"},
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/scripts/rpmbuild" {
+			return nil, fmt.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		return jsonResponse(r, body), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Get(context.Background(), scripts, "", "rpmbuild")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(*ebsv1.Script).ResourceVersion != response.ResourceVersion {
+		t.Fatalf("Script resourceVersion = %q", got.(*ebsv1.Script).ResourceVersion)
 	}
 }
 

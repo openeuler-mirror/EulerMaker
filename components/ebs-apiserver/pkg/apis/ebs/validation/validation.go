@@ -289,11 +289,39 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	path := field.NewPath("spec", "scriptRefs")
+	seenNames := make(map[string]struct{}, len(obj.Spec.ScriptRefs))
+	for i, ref := range obj.Spec.ScriptRefs {
+		refPath := path.Index(i)
+		if ref.Name == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("name"), "Script name is required"))
+		} else {
+			if _, exists := seenNames[ref.Name]; exists {
+				allErrs = append(allErrs, field.Duplicate(refPath.Child("name"), ref.Name))
+			}
+			seenNames[ref.Name] = struct{}{}
+			for _, reason := range validation.IsDNS1123Subdomain(ref.Name) {
+				allErrs = append(allErrs, field.Invalid(refPath.Child("name"), ref.Name, reason))
+			}
+		}
+		if ref.UID == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("uid"), "Script UID is required"))
+		} else if !uuidPattern.MatchString(ref.UID) {
+			allErrs = append(allErrs, field.Invalid(refPath.Child("uid"), ref.UID, "must be a UUID"))
+		}
+		if ref.ResourceVersion == "" {
+			allErrs = append(allErrs, field.Required(refPath.Child("resourceVersion"), "Script resourceVersion is required"))
+		}
+	}
 	return allErrs
 }
 
 func ValidateJobUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
-	return ValidateJob(newObj)
+	allErrs := ValidateJob(newObj)
+	if !apiequality.Semantic.DeepEqual(newObj.Spec.ScriptRefs, oldObj.Spec.ScriptRefs) {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "scriptRefs"), "Script observations are immutable"))
+	}
+	return allErrs
 }
 
 func ValidateJobStatusUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {

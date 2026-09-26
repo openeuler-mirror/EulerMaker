@@ -66,6 +66,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.RunnerTaint":                       schema_ebs_api_ebs_v1_RunnerTaint(ref),
 		"ebs-api/ebs/v1.Script":                            schema_ebs_api_ebs_v1_Script(ref),
 		"ebs-api/ebs/v1.ScriptList":                        schema_ebs_api_ebs_v1_ScriptList(ref),
+		"ebs-api/ebs/v1.ScriptRef":                         schema_ebs_api_ebs_v1_ScriptRef(ref),
 		"ebs-api/ebs/v1.ScriptSpec":                        schema_ebs_api_ebs_v1_ScriptSpec(ref),
 		"ebs-api/ebs/v1.Snapshot":                          schema_ebs_api_ebs_v1_Snapshot(ref),
 		"ebs-api/ebs/v1.SnapshotList":                      schema_ebs_api_ebs_v1_SnapshotList(ref),
@@ -1012,6 +1013,19 @@ func schema_ebs_api_ebs_v1_JobSpec(ref common.ReferenceCallback) common.OpenAPID
 							Ref:     ref("k8s.io/apimachinery/pkg/runtime.RawExtension"),
 						},
 					},
+					"scriptRefs": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.ScriptRef"),
+									},
+								},
+							},
+						},
+					},
 					"timeoutSeconds": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"integer"},
@@ -1062,7 +1076,7 @@ func schema_ebs_api_ebs_v1_JobSpec(ref common.ReferenceCallback) common.OpenAPID
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.ResourceRequirements", "ebs-api/ebs/v1.Toleration", "k8s.io/apimachinery/pkg/runtime.RawExtension"},
+			"ebs-api/ebs/v1.ResourceRequirements", "ebs-api/ebs/v1.ScriptRef", "ebs-api/ebs/v1.Toleration", "k8s.io/apimachinery/pkg/runtime.RawExtension"},
 	}
 }
 
@@ -2281,6 +2295,41 @@ func schema_ebs_api_ebs_v1_ScriptList(ref common.ReferenceCallback) common.OpenA
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.Script", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_ScriptRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ScriptRef records the Script observed when a Job is created. It does not pin the content version used by a later execution attempt.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"uid": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"resourceVersion": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"name", "uid", "resourceVersion"},
+			},
+		},
 	}
 }
 
