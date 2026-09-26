@@ -7,6 +7,7 @@ package buildinfo
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -28,8 +30,16 @@ func TestJobNameForDeterministic(t *testing.T) {
 	if !strings.HasPrefix(first, "a-2-") {
 		t.Fatalf("jobNameFor = %q, want specName-generation- prefix", first)
 	}
-	if got := len(first) - len("a-2-"); got != 64 {
-		t.Fatalf("hash suffix length = %d, want 64 lowercase hex chars", got)
+	if got := len(first) - len("a-2-"); got != 16 {
+		t.Fatalf("hash suffix length = %d, want 16 lowercase hex chars", got)
+	}
+	previous := previousJobNameFor("uid-1", "a", 2)
+	if len(previous)-len("a-2-") != 20 || !strings.HasPrefix(previous, first) {
+		t.Fatalf("previous name = %q, want 20-character hash with new name as prefix", previous)
+	}
+	legacy := legacyJobNameFor("uid-1", "a", 2)
+	if len(legacy)-len("a-2-") != 64 || !strings.HasPrefix(legacy, previous) {
+		t.Fatalf("legacy name = %q, want full hash with previous name as prefix", legacy)
 	}
 	if jobNameFor("uid-1", "a", 3) == first || jobNameFor("uid-2", "a", 2) == first || jobNameFor("uid-1", "b", 2) == first {
 		t.Fatal("jobNameFor must vary with generation, uid and spec")
@@ -43,6 +53,28 @@ func TestFilterJobsByIdentityRequiresBuildInfoUID(t *testing.T) {
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
 		t.Fatalf("matching Job count = %d, want 1", len(got))
 	}
+	job.Name = previousJobNameFor(string(bi.UID), "a", 1)
+	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
+		t.Fatalf("previous Job identity rejected: %v", err)
+	}
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
+		t.Fatalf("matching previous Job count = %d, want 1", len(got))
+	}
+	job.Name = legacyJobNameFor(string(bi.UID), "a", 1)
+	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
+		t.Fatalf("legacy Job identity rejected: %v", err)
+	}
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
+		t.Fatalf("matching legacy Job count = %d, want 1", len(got))
+	}
+	job.Name = "a-1-unrelated"
+	if err := verifyJobIdentity(job, bi, "a", 1); err == nil {
+		t.Fatal("unrelated Job name accepted")
+	}
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 0 {
+		t.Fatalf("unrelated Job count = %d, want 0", len(got))
+	}
+	job.Name = legacyJobNameFor(string(bi.UID), "a", 1)
 	job.Annotations[annBuildInfoUID] = "previous-buildinfo"
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 0 {
 		t.Fatalf("foreign Job count = %d, want 0", len(got))
@@ -135,6 +167,21 @@ func TestJoinRepoPayload(t *testing.T) {
 	}
 }
 
+func TestBootstrapRepoURLs(t *testing.T) {
+	repos := []ebsv1.BootstrapRepo{
+		{Name: "base", Repo: "https://example.com/base"},
+		{Name: "updates", Repo: "https://example.com/updates/"},
+	}
+	got := bootstrapRepoURLs(repos, "aarch64")
+	want := []string{"https://example.com/base/aarch64", "https://example.com/updates/aarch64"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("bootstrapRepoURLs = %v, want %v", got, want)
+	}
+	if repos[0].Repo != "https://example.com/base" {
+		t.Fatalf("bootstrapRepoURLs modified input: %+v", repos)
+	}
+}
+
 func TestNormalizeRepoPriority(t *testing.T) {
 	c, _, _, _ := newTestController(t)
 	round := &reconcileRound{key: testNS + "/" + testBuild}
@@ -173,7 +220,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	depend := dependEntry("a")
 	resource := testBuildResourceRules()
 
-	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, "job-x", 2)
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, "job-x", 2, nil)
 
 	if job.Name != "job-x" || job.Namespace != testNS {
 		t.Fatalf("job meta = %s/%s, want %s/job-x", job.Namespace, job.Name, testNS)
@@ -222,7 +269,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 		"commitId: c1",
 		"custom: keep",
 		// The injected build-level keys override the base ones (15.3.1).
-		"repo: " + testRepoURL + " http://bootstrap.local/base",
+		"repo: " + testRepoURL + " http://bootstrap.local/base/" + testArch,
 		"repo_priority: 7 10",
 	} {
 		if !strings.Contains(payload, fragment) {
@@ -252,7 +299,7 @@ func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
 			bi.Spec.BuildPayload = tt.payload
 			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
 			depend := dependEntry("a")
-			job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, "", testBuildResourceRules(), "job-a", 1)
+			job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, "", testBuildResourceRules(), "job-a", 1, nil)
 			var payload map[string]any
 			if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
 				t.Fatal(err)
@@ -262,6 +309,51 @@ func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
 				t.Fatalf("disable_check_path = %v (present=%t), want present=%t and true when present", value, present, tt.wantPresent)
 			}
 		})
+	}
+}
+
+func TestJobPayloadPreferIsPerSpec(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Spec.BuildPayload = "prefer:\n- rpm-b\n- rpm-a\n- unused\n"
+	round := &reconcileRound{key: testNS + "/" + testBuild, current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
+	sources := &rpmver.RpmMetaSources{
+		RepoLayer: &rpmver.RpmMetaSource{ProvidesInfo: map[string]map[string]rpmver.ProvideEntry{
+			"cap-a": {
+				"rpm-a@spec-a": {Version: "0:1.0-1", SpecName: "spec-a"},
+				"rpm-b@spec-b": {Version: "0:2.0-1", SpecName: "spec-b"},
+			},
+			"cap-b": {
+				"rpm-b": {Version: "0:1.0-1", SpecName: "spec-b"},
+				"rpm-c": {Version: "0:2.0-1", SpecName: "spec-c"},
+			},
+			"single": {"rpm-a": {Version: "0:1.0-1", SpecName: "spec-a"}},
+		}},
+		BootstrapLayer: []*rpmver.RpmMetaSource{{ProvidesInfo: map[string]map[string]rpmver.ProvideEntry{
+			"cap-a": {"unused": {Version: "0:9.0-1", SpecName: "other"}},
+		}}},
+	}
+	depend := dependEntry("a")
+	depend.BuildRequires = map[string]ebsv1.VersionConst{
+		"cap-b": {}, "cap-a": {}, "single": {}, "removed": {},
+	}
+	depend.BuildRemoves = map[string]ebsv1.VersionConst{"removed": {}}
+	job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), "job-a", 1, sources)
+	var payload map[string]any
+	if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["prefer"]; got != "rpm-b" {
+		t.Fatalf("prefer = %v, want only selected rpm-b", got)
+	}
+	depend.BuildRequires = map[string]ebsv1.VersionConst{"single": {}}
+	job = c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), "job-b", 1, sources)
+	payload = nil
+	if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := payload["prefer"]; ok {
+		t.Fatalf("single-candidate payload kept prefer: %s", job.Spec.Payload)
 	}
 }
 
@@ -275,7 +367,7 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	snapshot := testSnapshotObj()
 	depend := dependEntry("a")
 
-	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceRules(), "job-y", 1)
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceRules(), "job-y", 1, nil)
 
 	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commitId") {
 		t.Fatalf("payload = %q, want no spec_url/commitId without a repo entry", job.Spec.Payload)
@@ -348,7 +440,7 @@ func TestDispatchSpecNotSentNotCountedAsSent(t *testing.T) {
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
 
-	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL)
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err == nil || !controller.IsPermanent(err) {
 		t.Fatalf("dispatchSpec error = %v, want a permanent NotSent error", err)
 	}
@@ -371,7 +463,7 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 
-	result, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL)
+	result, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("dispatchSpec = %v, %v, want success", result, err)
 	}
@@ -388,6 +480,31 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 	}
 }
 
+func TestSinglePendingJobConfirmDoesNotLoadPreferMetadata(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.UID = "single-pending"
+	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
+	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{"a": {}}
+	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
+		"a": {JobName: jobNameFor(string(bi.UID), "a", 1), DispatchGeneration: 1},
+	}
+	seeded := client.SeedBuildInfo(bi)
+	client.SeedJob(testJobObj(seeded, "a", 1, ebsv1.JobRunning))
+	round := &reconcileRound{
+		key: testNS + "/" + testBuild, current: seeded,
+		build: testBuildObj("single", "repo1"), failures: c.newRoundFailures(testNS + "/" + testBuild),
+	}
+	depend := dependEntry("a")
+	result, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil)
+	if err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("pending Job confirmation = %v, %v", result, err)
+	}
+	if got := len(listJobs(t, client)); got != 1 {
+		t.Fatalf("Jobs = %d, want existing Job only", got)
+	}
+}
+
 func TestDispatchSpecAlreadyExistsIdentityMismatch(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, seeded := dispatchRound(t, c, client, "bi-dispatch-mismatch", "a")
@@ -397,7 +514,7 @@ func TestDispatchSpecAlreadyExistsIdentityMismatch(t *testing.T) {
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
 
-	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL)
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err == nil || !controller.IsPermanent(err) {
 		t.Fatalf("dispatchSpec error = %v, want a permanent identity-mismatch error", err)
 	}
@@ -412,7 +529,7 @@ func TestDispatchSpecAlreadyExistsConfirm404Retried(t *testing.T) {
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
 
-	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL)
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err == nil || controller.IsPermanent(err) {
 		t.Fatalf("dispatchSpec error = %v, want a retryable confirmation-read error", err)
 	}
@@ -431,7 +548,7 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 
-	result, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL)
+	result, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("dispatchSpec = %v, %v, want success after the Unknown landing", result, err)
 	}
@@ -458,7 +575,7 @@ func TestDispatchSpecUnknownMissingKeepsEntry(t *testing.T) {
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
 
-	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL)
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err == nil {
 		t.Fatal("dispatchSpec error = nil, want the Unknown write error")
 	}

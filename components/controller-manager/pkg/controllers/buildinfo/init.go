@@ -184,7 +184,7 @@ func (c *Controller) dispatchInitSpec(ctx context.Context, round *reconcileRound
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	return c.dispatchSpec(ctx, round, specName, &depend, snapshot, image, dispatch.contentURL)
+	return c.dispatchSpec(ctx, round, specName, &depend, snapshot, image, dispatch.contentURL, sources)
 }
 
 // checkArchSupported applies the E-19 exclusiveArch whitelist: an arch miss
@@ -303,10 +303,7 @@ func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcile
 		rpmMetaRefreshes.Inc()
 	}
 	bootstrapBefore := sources.BootstrapLayer
-	var urls []string
-	for _, repo := range round.current.Spec.BootstrapRepo {
-		urls = append(urls, repo.Repo)
-	}
+	urls := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, arch)
 	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
 		c.logf(round.key, "BootstrapRepoXMLFailed", "bootstrap repo metadata unavailable: %v", err)
 		return c.rpmMetaUnavailable(ctx, round, ReasonBootstrapRepoXMLUnavail, err)
@@ -576,7 +573,7 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		if err != nil {
 			return controller.ReconcileResult{}, err
 		}
-		if result, err = c.dispatchSpec(ctx, round, name, &depend, snapshot, image, dispatch.contentURL); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err = c.dispatchSpec(ctx, round, name, &depend, snapshot, image, dispatch.contentURL, nil); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 	}
@@ -594,6 +591,26 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	}
 	next.Status.Phase = ebsv1.BuildInfoProcessing
 	return c.writeStatusIfChanged(ctx, round, next)
+}
+
+// loadSinglePreferSources is only used when single has a configured prefer.
+// It reads the repositories already injected into that Job, without enabling
+// DCG construction, dependency gates, or the non-single E-29 failure counter.
+func (c *Controller) loadSinglePreferSources(ctx context.Context, round *reconcileRound, contentURL string) (*rpmver.RpmMetaSources, error) {
+	sources, ok := c.rpmMetaSources.Get(round.key)
+	if !ok {
+		sources = &rpmver.RpmMetaSources{}
+	}
+	arch := round.build.Spec.BuildTarget.Arch
+	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
+		return nil, err
+	}
+	urls := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, arch)
+	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
+		return nil, err
+	}
+	c.rpmMetaSources.Set(round.key, sources)
+	return sources, nil
 }
 
 // singleContentURL reads the current same-name RpmRepo for the single Repo

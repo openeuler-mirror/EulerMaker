@@ -576,17 +576,17 @@ repeat:                                                                   # 迭�
 
 **2. 直通下发（跳过中间步骤与全部门禁依赖）**：
 
-- **跳过步骤 2（dcg 建图）**：无 dcgDict、**不填充 `status.dcg` 字段**（整个生命周期保持空，无 `DcgBuildFailed` 语义）、无破环选点；RpmRepo 就绪前置随之不适用——`single` 的建图/门禁均不查询本轮 RpmRepo（见 15.4；repo 注入读本轮同名 RpmRepo 的 contentURL，见第 3 条）；7.1 发布失败守卫同样豁免（rpm-repo-controller 对 single 不发布，release 恒非 Failed，无检查意义，见 E-28）；
+- **跳过步骤 2（dcg 建图）**：无 dcgDict、**不填充 `status.dcg` 字段**（整个生命周期保持空，无 `DcgBuildFailed` 语义）、无破环选点；RpmRepo 就绪前置随之不适用——`single` 的建图/门禁均不查询本轮 RpmRepo（见 15.4；repo 注入读本轮同名 RpmRepo 的 contentURL，见第 3 条；配置了 `prefer` 时读取同一仓库元数据仅供 Job payload 使用，见 15.3.1）；7.1 发布失败守卫同样豁免（rpm-repo-controller 对 single 不发布，release 恒非 Failed，无检查意义，见 E-28）；
 - **跳过步骤 4（破环）**：无图无环；
 - **步骤 3 为构建集全部 spec 直接创建 Job**（无入度概念、无上游语义，各指定包仓库全部 spec 并行直发、无构建排序、无下发顺序）：
   - **跳过的门禁**（不校验任何门禁依赖）：构建依赖统一存在性裁决（7.4.1 条件 2，含 RpmRepo 查询——守卫豁免，7.1）、发布确认门禁（7.4.6 第 2 条）、重建一致性门禁（7.4.6 第 1 条）、上游终态检查；
   - **保留的确定性校验**（非门禁依赖）：E-19 架构白名单（exclusiveArch 不含目标架构 → spec 标 `Failed` 不下发）、E-27 配置对象 404（spec 标 Failed）；**E-26 镜像配置及 E-27 非 404 配置错误为暂停语义**（读取失败/映射缺失 → 本轮不创建 Job 等待配置恢复，不标 Failed）；
-  - Job 字段填充照常按 15.3；payload `repo` 注入按本节第 3 条；
+  - Job 字段填充照常按 15.3；payload `repo` 注入按本节第 3 条；配置了 `prefer` 时仍按 15.3.1 逐 Job 计算，不因此启用建图或依赖门禁；
   - `ss.DispatchCount += 1`、`ss.Build.Status = Running` 照常。
 
 **3. Job payload `repo` 注入（上轮产物仓库 + 基础仓库两来源，同非 single 类型口径）**：
 
-- `repo` = **本轮（与 Build 同名）RpmRepo 的 `status.repository.contentURL`**（非空时**注入并置首**）+ `BuildInfo.spec.bootstrapRepo[].repo`（本 BuildInfo 自身字段，基础 repourl，按声明顺序），空格连接；
+- `repo` = **本轮（与 Build 同名）RpmRepo 的 `status.repository.contentURL`**（非空时**注入并置首**）+ `BuildInfo.spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序），空格连接；过程仓 `contentURL` 不追加架构目录；
 - **值语义**：`single` 不经 rpm-repo-controller 发布、本轮 RpmRepo 无 single 构建产物，读到的 contentURL 即建仓时预置的**继承基线**——上一次构建的已发布产物仓库地址（repourl 无本次构建的产物来源，以上轮产物仓库 + 基础仓库填充）；
 - 本轮同名 RpmRepo 的 `contentURL` 为空（无继承基线，如首轮构建）→ 不注入该项，仅 bootstrapRepo 填充；RpmRepo GET 404（对象不存在）→ 同样不注入该项（视同无上轮产物，正常推进）；GET 失败（5xx/超时）→ 返回 error 退避重试（瞬态失败语义，不静默丢弃上轮产物可见性）；
 - 结果为空 → 不注入（保留基底同名键）；`repo_priority` 按既有规则归一（见 15.3）。
@@ -1066,7 +1066,7 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 `BuildInfoSpec.BootstrapRepo: []BootstrapRepo`：Build Controller 创建 BuildInfo 时从 `Project.spec.bootstrapRepo` 深拷贝写入，已有 BuildInfo 不覆盖（data-models.md「BuildInfoSpec」）；本 controller **只读**、不参与组装（非步骤 0 组装对象）——Job payload `repo` 注入来源之一（按声明顺序，见 15.3.1）；上游 repo 源更新不触发本工程 spec 重新构建。
 
-`BuildInfoSpec.BuildPayload: string`：Build Controller 创建 BuildInfo 时从 `Project.spec.buildPayload` 深拷贝写入，已有 BuildInfo 不覆盖（与 BootstrapRepo 同一固化语义，data-models.md「BuildInfoSpec」）；本 controller **只读**，BuildInfo 生命周期内不随 Project 后续变更。其 YAML 输入用于 `prefer` 建边选择（16.1）、`macros` spec 解析（16.3）、`unparsable_spec` 依赖覆盖（7.2.2），并作为 Job payload 的基底（15.3.1）；控制器专用的 `unparsable_spec` 不下发。Job `spec.resources` 不取自本字段（由 Config/build-resource 解析，见 15.3.1）。
+`BuildInfoSpec.BuildPayload: string`：Build Controller 创建 BuildInfo 时从 `Project.spec.buildPayload` 深拷贝写入，已有 BuildInfo 不覆盖（与 BootstrapRepo 同一固化语义，data-models.md「BuildInfoSpec」）；本 controller **只读**，BuildInfo 生命周期内不随 Project 后续变更。其 YAML 输入用于 `prefer` 建边选择与逐 Job 计算（16.1/15.3.1）、`macros` spec 解析（16.3）、`unparsable_spec` 依赖覆盖（7.2.2），并作为 Job payload 的基底（15.3.1）；控制器专用的 `unparsable_spec` 不下发。Job `spec.resources` 不取自本字段（由 Config/build-resource 解析，见 15.3.1）。
 
 `SpecDepend` 字段（控制器内部类型，不属于公共 API：`*.spec` 解析产物与 per-BuildInfo 缓存条目类型，16.3/15.11；下表"消费点"同时标注了组装时的来源；条目取自缓存命中的 specDepends 内存视图）：
 
@@ -1125,9 +1125,9 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 **Job 命名与创建幂等**：
 
 - 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次，只有确认该代 Job 已存在后才更新派发计数。
-- hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，输出完整的 64 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
+- hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，新建 Job 只取摘要前 8 字节，输出 16 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
 - Job 名为 `specName + "-" + 十进制派发代次 + "-" + hash`，使用原始 specName，不截断。当前 Job 名称校验没有显式长度上限；若 specName 不能组成合法路径段，按本地输入错误返回 PermanentError，不静默改名。
-- Job annotations 写入 `ebs.io/buildinfo-uid` 和 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、上述身份 annotations 及重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
+- Job annotations 写入 `ebs.io/buildinfo-uid` 和 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、上述身份 annotations 及重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有的 20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填，但新派发仅生成 16 位名称；已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
 - **AlreadyExists 后 GET 返回 404**：返回可重试错误，由框架退避重新入队；不得套用主对象 NotFound 的结束规则，也不增加派发计数。后续重新调和仍需该代 Job 时，使用同一创建身份和名称，不生成替代名称；是否允许再次创建仍遵循停止派发及终态守卫。
 - 重启后通过完整 List 回填已有 Job；确定性命名 Job 按身份 annotations 核验，DispatchCount 至少恢复到已确认的最大派发代次，不因旧代 Job 被清理而回退。未找到本次目标代时再次计算同名 Job，保证同一创建身份不会生成第二个名称。历史无身份 annotations 的 Job 仍按 7.4.2 的兼容规则回填，不作为同名创建冲突的可沿用对象。
 
@@ -1173,7 +1173,8 @@ spec:
     disable_check_path: true                       # controller：仅所属包仓库命中 buildPayload.disable_check_path 名单时写入
     macros: ${buildinfo.spec.BuildPayload.macros}
     installPackages: ${buildinfo.spec.BuildPayload.installPackages}
-    repo: "http://.../rpmrepo/<uid> http://.../everything/openEuler-24.03-aarch64"  # controller 注入：本轮 RpmRepo 当前已发布物理版本 contentURL（status.repository.contentURL，非空时注入并置首；首批 Job 本轮尚无已发布版本则省略，15.4） + bootstrapRepo[].repo（BuildInfo.spec，本 BuildInfo 自身字段，按声明顺序），空格分隔；single 同口径（本轮同名 RpmRepo 的 contentURL，single 不经物化推进、恒为创建时预置的继承基线，见 7.2.3 第 3 条）
+    prefer: "java-11-openjdk-devel"               # 仅当前 spec 的多候选 BuildRequires 命中时写入；多个名称以空格分隔，无命中则省略
+    repo: "http://.../rpmrepo/<uid> http://.../everything/aarch64"  # controller 注入：过程仓 contentURL 原样置首，bootstrapRepo[].repo 追加目标架构目录后按声明顺序拼接
     repo_priority: "10 10"                     # 默认每仓库 "10"（0-99，越大优先级越低）；buildPayload 顶层 repo_priority 键可覆盖
     spec_url: ${snapshot.status.packageRepoStatuses[${本轮组装的 specDepends[${specName}].repoName}].cloneUrl
     commitId: ${snapshot.status.packageRepoStatuses[${本轮组装的 specDepends[${specName}].repoName}].commitId}
@@ -1206,7 +1207,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 **payload 构造契约**：
 
-1. **基底**：`BuildInfo.spec.buildPayload`（Build Controller 创建时从 `Project.spec.buildPayload` 深拷贝固化、已有 BuildInfo 不覆盖，本控制器只读、不随 Project 后续变更，见 15.2.2）经 YAML 解码 → map；解析失败或非 map → `{}` + warning（与 16.1 同一解析语义与告警义务）。项目级键（`macros` / `installPackages` / `cpu` / `memory` 等）原样保留（顶层 `cpu` / `memory` 键不再驱动 `spec.resources`——资源改由 Config/build-resource 解析（见 15.3.1），键本身仍随基底原样透传，不剔除）；控制器专用的 `unparsable_spec` 与旧的大写 `Repo` 键从基底移除；`disable_check_path` 输入为包仓库名列表，按下述规则转为单 Job 可选布尔值；`repo` / `repo_priority` 按下述注入规则处理。
+1. **基底**：`BuildInfo.spec.buildPayload`（Build Controller 创建时从 `Project.spec.buildPayload` 深拷贝固化、已有 BuildInfo 不覆盖，本控制器只读、不随 Project 后续变更，见 15.2.2）经 YAML 解码 → map；解析失败或非 map → `{}` + warning（与 16.1 同一解析语义与告警义务）。项目级键（`macros` / `installPackages` / `cpu` / `memory` 等）原样保留（顶层 `cpu` / `memory` 键不再驱动 `spec.resources`——资源改由 Config/build-resource 解析（见 15.3.1），键本身仍随基底原样透传，不剔除）；控制器专用的 `unparsable_spec` 与旧的大写 `Repo` 键从基底移除；`prefer` 是项目级候选配置，不能原样下发；`disable_check_path` 输入为包仓库名列表，按下述规则转为单 Job 可选布尔值；`repo` / `repo_priority` 按下述注入规则处理。
 2. **注入（覆盖基底同名键）**：
    - per-spec 四键（`specDepends` 统一为本轮组装的内存视图，15.11，不读主资源字段）：
      - `spec_name` = 本轮组装的 specDepends **map key**（条目内 `specName` 字段以 key 为准，不直读）；
@@ -1215,12 +1216,13 @@ status:                                             # 创建时恒 Pending/Pendi
      - `commitId` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].commitId`；
      - packageRepoStatuses 缺 `repoName` 条目或条目无 `commitId`（正常不出现：本轮组装的 specDepends 即按当前 Snapshot 的 url+commit 解析而来（15.11），且下发时必已就绪）→ 对应两键不注入 + warning 日志，**不阻断下发**。
    - `specDepends[specName].repoName` 在 `BuildInfo.spec.buildPayload.disable_check_path` 列表中时写入 `disable_check_path: true`，否则删除基底列表且不写该键；同仓库的多个 spec 得到相同结果。该字段仅向构建脚本传递意图，构建脚本负责落实 RPATH 检查开关；Runner 不解析它。
+   - `prefer` 按当前 spec 的 `buildRequires` 逐项计算，排除 `buildRemoves`；仅在当前优先级仓库层中满足版本约束的提供者至少有两个、并按 16.1 的候选名归一与配置顺序命中项目级 `prefer` 时，记录实际命中的 RPM 基名。按依赖名字典序遍历、首次出现保留以去重，多个名称以空格连接为 YAML 字符串写入当前 Job；无命中或配置为空则删除基底 `prefer` 键。计算复用 16.1 的分层候选选择与版本比较，不另建一套规则；选择结果须能区分 `prefer` 命中和单候选/最高版本兜底，后两者不写入。只考虑 buildRequires，不将 install 依赖写入 Job `prefer`。Runner 不负责计算。
    - 构建级两键：
-     - `repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时注入并**置首**；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4），上轮产物经该地址可见；后续批次 Job 注入当前已发布版本地址，本轮上游产物由此进入构建环境） + 本 BuildInfo `spec.bootstrapRepo[].repo`（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），空格连接；结果为空 → 不注入（保留基底同名键）；
+     - `repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时原样注入并**置首**；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4），上轮产物经该地址可见；后续批次 Job 注入当前已发布版本地址，本轮上游产物由此进入构建环境） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），空格连接；结果为空 → 不注入（保留基底同名键）；
      - `single` 类型专条：`repo` 注入规则见 7.2.3 第 3 条（本轮同名 RpmRepo 的 `contentURL` 非空时置首——single 不经物化推进，恒为创建时预置的继承基线；contentURL 为空/GET 404 → 不注入该项；结果为空 → 不注入，保留基底同名键）；
      - `repo_priority` = repo_priority 恒由 controller 归一为与 repo 条目数一致的序列（空格连接）：基底 repo_priority 非空字符串 → 以其为基底归一（不足位补 "10"、超出位截断，截断/补齐记一次 warning）；基底缺失/为空 → 全部取 "10"。取值 0-99，越大优先级越低；repo 为空时不注入本键。
 3. **序列化**：`yaml.Marshal` 生成单个 YAML 字符串（map 序列化，不保证键序）。
-4. **来源对象**：payload 基底 `BuildInfo.spec.buildPayload` 与 per-spec 注入键均取自 reconcile 持有的本 BuildInfo 对象（自身字段，无额外查询，见 15.2.2）；Project 仅由 parentAbortGuard 消费（不重复 GET，见 7.1/7.3 步骤 2.1），不再作为 payload 数据来源；父 Build 为 parentAbortGuard 已持有对象；当前 Snapshot（与本 Build 同名）——`initBuildInfo` 轮为步骤 0 已持有对象、Processing 轮经 7.3 步骤 2.2 显式获取（查询失败返回 error 退避重试，404 视为异常瞬态，不静默跳过注入）；`contentURL` 注入来源的本轮 RpmRepo 亦经步骤 2.2 按需获取（重建分支随建图上下文已持有；同一次持有亦用于 15.10 RpmMetaSources 缓存刷新）；`single` 的 contentURL 来源（本轮同名 RpmRepo）按名 get 获取（失败语义见 7.2.3 第 3 条：contentURL 为空/GET 404 不注入该项、5xx 退避重试）。
+4. **来源对象**：payload 基底 `BuildInfo.spec.buildPayload` 与 per-spec 注入键均取自 reconcile 持有的本 BuildInfo 对象（自身字段，无额外查询，见 15.2.2）；Project 仅由 parentAbortGuard 消费（不重复 GET，见 7.1/7.3 步骤 2.1），不再作为 payload 数据来源；父 Build 为 parentAbortGuard 已持有对象；当前 Snapshot（与本 Build 同名）——`initBuildInfo` 轮为步骤 0 已持有对象、Processing 轮经 7.3 步骤 2.2 显式获取（查询失败返回 error 退避重试，404 视为异常瞬态，不静默跳过注入）；`contentURL` 注入来源的本轮 RpmRepo 亦经步骤 2.2 按需获取（重建分支随建图上下文已持有；同一次持有亦用于 15.10 RpmMetaSources 缓存刷新）。逐 Job `prefer` 取相同 `contentURL` 与 `BuildInfo.spec.bootstrapRepo` 的元数据，创建 Job 前刷新到本轮仓库视图，不使用初始建图时可能已过期的缓存；XML 不可用时不创建新 Job，也不透传全局 `prefer`。`single` 的 contentURL 来源（本轮同名 RpmRepo）按名 get 获取（失败语义见 7.2.3 第 3 条：contentURL 为空/GET 404 不注入该项、5xx 退避重试）；仅配置了非空 `prefer` 时加载对应仓库元数据用于逐 Job 计算，下载/解析失败返回可重试错误并暂停本轮新 Job 派发，不套用非 single 的 E-29 停止派发规则。
 
 **apiserver 默认与覆写的字段（非 controller 写入，列明以免歧义）**：
 
@@ -1373,13 +1375,13 @@ type RpmMetaSources struct {
 
 | 消费点 | 数据源 |
 |--------|--------|
-| 建边反查（16.1 build/install 边）、构建依赖统一存在性裁决（7.4.1 条件 2）、运行期补边反查（7.4.7） | **分层查询**（RpmRepo 层 → BootstrapRepo 层按序） |
+| 建边反查（16.1 build/install 边）、构建依赖统一存在性裁决（7.4.1 条件 2）、运行期补边反查（7.4.7）、逐 Job `prefer`（15.3.1） | **分层查询**（RpmRepo 层 → BootstrapRepo 层按序） |
 | 下游扩散（7.2.2）、install 依赖集的 RpmMeta.requires（16.1） | **仅 RpmRepo 层**（本工程产出判定：bootstrap 层为外部上游包，其 sourcerpm 派生 specName 可能与 specDepends 同名，不得据此误判为本工程产出） |
 
 **错误语义**：
 
 - XML 下载/解析失败 → 计入 RpmRepo 就绪性连续失败计数（E-29，reason=`RpmRepoXmlDownloadFailed`/`RpmRepoXmlParseFailed`/`BootstrapRepoXmlUnavailable`）：未达阈值（`--rpmrepo-ready-retry-limit`，默认 3）视同数据暂不可用，本轮跳过相关判定等待下一轮（不误标 Failed，同 7.4.1 脏数据防御；建图分支同 `DcgBuildFailed` 之前的「等下一轮」语义，不写 condition）；连续达阈值 → condition `RpmRepoUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`（E-29，对齐 E-28 模式）。contentURL 为空正常空态不计入计数（空数据源照常消费，见 E-16）。
-- `single` 直通路径不适用本节（不查询 RpmRepo、不解析 XML、无任何 RpmMeta 消费）。
+- `single` 仅在配置了非空 `prefer` 时为 Job payload 读取当前同名 RpmRepo 的 `contentURL` 与 bootstrap 仓元数据；不建图、不执行构建依赖门禁，元数据错误按 15.3.1 的可重试规则处理。
 - 性能注：bootstrap 仓（如 everything）primary 元数据文件较大，per-BuildInfo 一次解析终身复用；跨 BuildInfo 不共享（后续可按 URL 全局共享优化，非本期范围）。repomd.xml 体积很小，两步寻址的额外开销可忽略。
 
 ### 15.11 Cache.specDependsCache 与 Cache.specFileCache：specDepends 与 spec 文件内容内存缓存
@@ -1466,6 +1468,8 @@ for rpmName, meta := range source.RpmByName {
 2. **单候选**：1 候选 → 直选。
 3. **prefer 命中**：多候选时按 BuildInfo `spec.buildPayload` 的 `prefer` 列表**顺序**匹配——候选 key 先按 `@` 前 base 名归一化（无 `@` 的 key base 名即自身），首个命中 prefer 项的候选即中选；无命中进入下一步。
 4. **最高版本**：迭代候选，`vrCompare(当前最高, "LT", 候选)` 为真则替换最高；**任一候选 `version` 为空串（S3 脏数据，Go string 零值短路）→ 该 provide 整体判未命中**（不可用，等下一轮——脏数据为查询级判定，不计入 E-29 就绪性失败计数），不再依赖上层异常兜底。
+
+同一选择链还用于 15.3.1 的逐 Job `prefer` 计算：返回提供方时同时标明选择是否由第 3 步触发，并返回命中的 RPM 基名；不得把第 2、4 步的结果当作 `prefer` 命中。Job 创建使用当前仓库元数据重新裁决，初始 DCG 仍按 G-02 冻结，不因当前物化版本更新而重建。
 
 命中即得提供方 `specName`：提供方 ∈ 本批待构建 spec 时建边（`outDep[提供方] += S`，`inDep[S][提供方] = versionConst`）；提供方为 S 自身时形成自环，视为环交破环处理（与 7.2.1/E-14 一致，破环时直接为该 spec 创建 Job）；Bootstrap 层命中且提供方 specName ∉ 本批待构建 spec → 不建边（仅作可用性依据）；未命中（分层全部未命中）则不建边（该依赖的可用性由构建依赖统一校验裁决，见 7.4.1 条件 2）。
 

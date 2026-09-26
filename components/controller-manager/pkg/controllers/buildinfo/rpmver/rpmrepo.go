@@ -1,6 +1,4 @@
-// rpmrepo.go implements the version-aware provider selection chain and the
-// RPM availability two-stage match (design 16.1), plus the Job payload Repo
-// string assembly (design 15.3.1 / 7.2.3).
+// rpmrepo.go selects RPM providers and checks dependency availability.
 package rpmver
 
 import (
@@ -10,30 +8,42 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// FindProvider runs the 16.1 selection chain layer by layer (RpmRepo layer
-// first, then BootstrapRepo layers in declaration order) with layer
-// short-circuit: the first layer with a hit wins. The bool reports a hit.
-func (s *RpmMetaSources) FindProvider(name string, constraint ebsv1.VersionConst, prefer []string) (ProvideEntry, bool) {
-	for _, src := range s.layers() {
-		if entry := GetProvideInfo(name, src, prefer, constraint); entry.SpecName != "" {
-			return entry, true
-		}
-	}
-	return ProvideEntry{}, false
+// ProviderSelection contains the selected provider, normalized RPM name, and
+// selection reason.
+type ProviderSelection struct {
+	Provider ProvideEntry
+	RPMName  string
+	Reason   SelectionReason
 }
 
-// GetProvideInfo runs the four-step selection chain within one source
-// (design 16.1): version-constraint filter -> single candidate direct pick ->
-// prefer list order match (@ base-name normalized) -> highest version. The
-// zero ProvideEntry means a miss; any empty candidate version on the
-// highest-version step fails the whole provide (dirty data, wait next round).
-func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint ebsv1.VersionConst) ProvideEntry {
+type SelectionReason string
+
+const (
+	SelectionSingle         SelectionReason = "Single"
+	SelectionPrefer         SelectionReason = "Prefer"
+	SelectionHighestVersion SelectionReason = "HighestVersion"
+)
+
+// FindProvider searches the RpmRepo layer first, then bootstrap layers in
+// order, and returns the first matching provider.
+func (s *RpmMetaSources) FindProvider(name string, constraint ebsv1.VersionConst, prefer []string) (ProviderSelection, bool) {
+	for _, src := range s.layers() {
+		if selected := GetProvideInfo(name, src, prefer, constraint); selected.Provider.SpecName != "" {
+			return selected, true
+		}
+	}
+	return ProviderSelection{}, false
+}
+
+// GetProvideInfo filters one source by version, then selects the sole
+// candidate, the first preferred candidate, or the highest version. A zero
+// result means no provider was selected.
+func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint ebsv1.VersionConst) ProviderSelection {
 	candidates := src.ProvidesInfo[name]
 	if len(candidates) == 0 {
-		return ProvideEntry{}
+		return ProviderSelection{}
 	}
-	// Step 1: version-constraint filter (every operator AND; an empty
-	// constraint set passes all).
+	// Every version constraint must match.
 	filtered := make(map[string]ProvideEntry, len(candidates))
 	for rpmName, entry := range candidates {
 		ok, err := VersionSatisfies(entry.Version, constraint)
@@ -44,55 +54,50 @@ func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint
 	}
 	switch len(filtered) {
 	case 0:
-		return ProvideEntry{}
+		return ProviderSelection{}
 	case 1:
-		// Step 2: single candidate — direct pick.
-		for _, entry := range filtered {
-			return entry
+		for rpmName, entry := range filtered {
+			return ProviderSelection{Provider: entry, RPMName: baseName(rpmName), Reason: SelectionSingle}
 		}
 	}
-	// Deterministic iteration for steps 3 and 4.
+	// Sort candidate names for deterministic tie-breaking.
 	names := make([]string, 0, len(filtered))
 	for rpmName := range filtered {
 		names = append(names, rpmName)
 	}
 	sort.Strings(names)
-	// Step 3: prefer hit — candidates normalize to their @ base name; the
-	// first prefer item matching any candidate's base name wins.
+	// Match prefer entries in order against normalized RPM names.
 	for _, want := range prefer {
 		for _, rpmName := range names {
 			if baseName(rpmName) == want {
-				return filtered[rpmName]
+				return ProviderSelection{Provider: filtered[rpmName], RPMName: want, Reason: SelectionPrefer}
 			}
 		}
 	}
-	// Step 4: highest version — vrCompare(current best, LT, candidate)
-	// replaces the best. Any empty candidate version fails the whole provide.
-	best := filtered[names[0]]
+	// Fall back to the highest version; an empty version invalidates the choice.
+	bestName := names[0]
+	best := filtered[bestName]
 	if best.Version == "" {
-		return ProvideEntry{}
+		return ProviderSelection{}
 	}
 	for _, rpmName := range names[1:] {
 		entry := filtered[rpmName]
 		if entry.Version == "" {
-			return ProvideEntry{}
+			return ProviderSelection{}
 		}
 		if less, err := VRCompare(best.Version, OpLT, entry.Version); err == nil && less {
 			best = entry
+			bestName = rpmName
 		}
 	}
-	return best
+	return ProviderSelection{Provider: best, RPMName: baseName(bestName), Reason: SelectionHighestVersion}
 }
 
-// Available reports whether the named RPM with the given constraint is
-// available in the layered sources (design 16.1 rpmAvailable): stage one is
-// the providesInfo reverse lookup (version filter built in, prefer nil);
-// stage two falls back to the rpm name direct index (self-provide). A dirty
-// fallback entry (empty version) only ends the current source's fallback —
-// later sources are still tried; every source failing means unavailable.
+// Available checks each layer for a matching provide, then for an RPM with
+// the requested name and version. A miss continues to the next layer.
 func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConst) bool {
 	for _, src := range s.layers() {
-		if GetProvideInfo(name, src, nil, constraint).SpecName != "" {
+		if GetProvideInfo(name, src, nil, constraint).Provider.SpecName != "" {
 			return true
 		}
 		if meta, ok := src.RpmByName[name]; ok && meta.Version != "" {
@@ -104,12 +109,8 @@ func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConst) b
 	return false
 }
 
-// RepoRequires returns the merged install-time requirement set of one spec's
-// own rpms (design 16.1 install edge input): RpmRepo layer entries whose
-// specName == spec. Only the RpmRepo layer participates (bootstrap layers are
-// external upstream). Returns nil when the layer or entries are absent. Rpms
-// are merged in name order for determinism; the intersection merge with the
-// explicit SpecDepend.requires set happens at the caller (16.1).
+// RepoRequires merges requirements from the spec's RPMs in the RpmRepo layer.
+// It returns nil when none are present and processes RPMs in name order.
 func (s *RpmMetaSources) RepoRequires(spec string) map[string]ebsv1.VersionConst {
 	if s.RepoLayer == nil {
 		return nil

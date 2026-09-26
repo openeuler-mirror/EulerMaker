@@ -12,7 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	yaml "gopkg.in/yaml.v2"
+
 	"controller-manager/pkg/clients/gitserver"
+	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -646,11 +649,43 @@ func TestSingleRepoInjection(t *testing.T) {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
 	payload := jobs[0].Spec.Payload
-	if !strings.Contains(payload, "repo: "+testRepoURL+" http://bootstrap.local/base") {
+	if !strings.Contains(payload, "repo: "+testRepoURL+" http://bootstrap.local/base/"+testArch) {
 		t.Fatalf("payload = %q, want contentURL first + bootstrap repo", payload)
 	}
 	if !strings.Contains(payload, "repo_priority: 10 10") {
 		t.Fatalf("payload = %q, want repo_priority aligned (10 10)", payload)
+	}
+}
+
+func TestSinglePreferWithoutDependencyGate(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+	client.SeedBuild(testBuildObj("single", "repo1"))
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildTargetContent(testBuildTargetContent())
+	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
+	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
+	client.SeedBuildInfo(bi)
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
+	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a", "cap", "missing")})
+	sources := testSources(
+		rpmver.RpmMeta{Name: "rpm-a", Version: "0:1.0-1", SpecName: "spec-a", Provides: map[string]string{"cap": "0:1.0-1"}},
+		rpmver.RpmMeta{Name: "rpm-b", Version: "0:2.0-1", SpecName: "spec-b", Provides: map[string]string{"cap": "0:2.0-1"}},
+	)
+	c.rpmMetaSources.Set(testNS+"/"+testBuild, sources)
+
+	reconcileOnce(t, c)
+	jobs := listJobs(t, client)
+	if len(jobs) != 1 {
+		t.Fatalf("single Jobs = %d, want 1 despite missing BuildRequires", len(jobs))
+	}
+	var payload map[string]any
+	if err := yaml.Unmarshal([]byte(jobs[0].Spec.Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["prefer"]; got != "rpm-a" {
+		t.Fatalf("single Job prefer = %v, want rpm-a", got)
 	}
 }
 
