@@ -5,6 +5,7 @@ go 1.21
 require (
 	ebs-api v0.0.0
 	github.com/distribution/reference v0.6.0
+	github.com/klauspost/compress v1.17.11
 	golang.org/x/sync v0.5.0
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/apimachinery v0.28.4
