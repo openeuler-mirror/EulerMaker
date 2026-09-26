@@ -37,6 +37,12 @@ func TestRepositoryUIDIsStableAndOrderIndependent(t *testing.T) {
 	if first != reordered {
 		t.Fatalf("repositoryUID must not depend on input order: %s != %s", first, reordered)
 	}
+	changedUIDs := append([]ebsv1.RepositoryInput(nil), base...)
+	changedUIDs[0].JobUID = "another-uid"
+	withoutUID, err := repositoryUID("project", "build-a", "base-1", changedUIDs)
+	if err != nil || withoutUID != first {
+		t.Fatalf("repositoryUID must depend on Job names, not UIDs: %s, %v", withoutUID, err)
+	}
 	if len(first) != 64 || strings.ToLower(first) != first {
 		t.Fatalf("repositoryUID must be a lowercase hex digest, got %q", first)
 	}
@@ -62,22 +68,22 @@ func TestRepositoryUIDIsStableAndOrderIndependent(t *testing.T) {
 	}
 }
 
-func TestUnionSortedUIDsDeduplicatesAndSorts(t *testing.T) {
-	got := unionSortedUIDs([]string{"b", "a"}, []ebsv1.RepositoryInput{{JobUID: "a"}, {JobUID: "c"}, {JobUID: ""}})
+func TestUnionSortedNamesDeduplicatesAndSorts(t *testing.T) {
+	got := unionSortedNames([]string{"b", "a"}, []ebsv1.RepositoryInput{{JobName: "a"}, {JobName: "c"}, {JobName: ""}})
 	want := []string{"a", "b", "c"}
 	if len(got) != len(want) {
-		t.Fatalf("unionSortedUIDs = %v, want %v", got, want)
+		t.Fatalf("unionSortedNames = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("unionSortedUIDs = %v, want %v", got, want)
+			t.Fatalf("unionSortedNames = %v, want %v", got, want)
 		}
 	}
 }
 
-func TestRepositoryRequestsAreOrderedByJobUID(t *testing.T) {
+func TestRepositoryRequestsAreOrderedByJobName(t *testing.T) {
 	manifests := repositoryRequests([]ebsv1.RepositoryInput{{JobName: "job-b", JobUID: "uid-b"}, {JobName: "job-a", JobUID: "uid-a"}})
-	if len(manifests) != 2 || manifests[0].JobUID != "uid-a" || manifests[1].JobUID != "uid-b" {
-		t.Fatalf("repositoryRequests must order manifests by Job UID, got %+v", manifests)
+	if len(manifests) != 2 || manifests[0].JobName != "job-a" || manifests[1].JobName != "job-b" {
+		t.Fatalf("repositoryRequests must order manifests by Job name, got %+v", manifests)
 	}
 }

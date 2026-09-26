@@ -115,7 +115,7 @@ func (r *reconciler) handleRepositoryResponse(repo *ebsv1.RpmRepo, transition *e
 		if response.Failure != nil && response.Failure.Retryable {
 			return r.retryRepository(repo, transition, build, info, response)
 		}
-		if response.Failure != nil && skippableInputFailure(response.Failure.Code) && transitionHasJob(transition, response.Failure.JobUID) {
+		if response.Failure != nil && skippableInputFailure(response.Failure.Code) && transitionHasJob(transition, response.Failure.JobName) {
 			return r.skipFailedJob(repo, transition, response.Failure)
 		}
 		return r.collectRepositoryFailure(repo, transition)
@@ -196,7 +196,7 @@ func (r *reconciler) collectRepositorySuccess(repo *ebsv1.RpmRepo, transition *e
 	}
 	target.Status.Repository.RepositoryUID = transition.RepositoryUID
 	target.Status.Repository.ContentURL = response.ContentURL
-	target.Status.Repository.SourceJobUIDs = unionSortedUIDs(target.Status.Repository.SourceJobUIDs, transition.Inputs)
+	target.Status.Repository.SourceJobNames = unionSortedNames(target.Status.Repository.SourceJobNames, transition.Inputs)
 	target.Status.Repository.Transition = nil
 	target.Status.Repository.UpdatedAt = r.nowPtr()
 	conditions, _ := MergeCondition(target.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonRepositoryCreated, "", target.Generation, r.now)
@@ -208,7 +208,7 @@ func (r *reconciler) collectRepositorySuccess(repo *ebsv1.RpmRepo, transition *e
 			return false
 		}
 		if current.RepositoryUID != wanted.RepositoryUID || current.ContentURL != wanted.ContentURL ||
-			!reflect.DeepEqual(current.SourceJobUIDs, wanted.SourceJobUIDs) {
+			!reflect.DeepEqual(current.SourceJobNames, wanted.SourceJobNames) {
 			return false
 		}
 		return conditionMatches(value.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonRepositoryCreated)
@@ -220,7 +220,7 @@ func (r *reconciler) collectRepositorySuccess(repo *ebsv1.RpmRepo, transition *e
 		return controller.ReconcileResult{}, nil
 	}
 	repositoryReady.Inc()
-	log.Printf("controller=%s key=%q uid=%q repository_uid=%q source_job_uids=%d reason=%s", Name, r.key, confirmed.UID, transition.RepositoryUID, len(confirmed.Status.Repository.SourceJobUIDs), ebsv1.RpmRepoReasonRepositoryCreated)
+	log.Printf("controller=%s key=%q uid=%q repository_uid=%q source_job_names=%d reason=%s", Name, r.key, confirmed.UID, transition.RepositoryUID, len(confirmed.Status.Repository.SourceJobNames), ebsv1.RpmRepoReasonRepositoryCreated)
 	return r.finishRepository(confirmed, build, info)
 }
 
@@ -270,7 +270,7 @@ func transitionHasJob(transition *ebsv1.RepositoryTransition, uid string) bool {
 		return false
 	}
 	for _, input := range transition.Inputs {
-		if input.JobUID == uid {
+		if input.JobName == uid {
 			return true
 		}
 	}
@@ -282,7 +282,7 @@ func transitionHasJob(transition *ebsv1.RepositoryTransition, uid string) bool {
 func (r *reconciler) skipFailedJob(repo *ebsv1.RpmRepo, transition *ebsv1.RepositoryTransition, failure *FailureInfo) (controller.ReconcileResult, error) {
 	target := repo.DeepCopy()
 	repository := target.Status.Repository
-	repository.SkippedJobUIDs = unionSortedStrings(repository.SkippedJobUIDs, failure.JobUID)
+	repository.SkippedJobNames = unionSortedStrings(repository.SkippedJobNames, failure.JobName)
 	repository.Transition = nil
 	repository.UpdatedAt = r.nowPtr()
 	confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
@@ -291,7 +291,7 @@ func (r *reconciler) skipFailedJob(repo *ebsv1.RpmRepo, transition *ebsv1.Reposi
 	if err != nil || confirmed == nil {
 		return controller.ReconcileResult{}, err
 	}
-	log.Printf("controller=%s key=%q uid=%q repository_uid=%q job_uid=%q code=%s result=InputSkipped", Name, r.key, confirmed.UID, transition.RepositoryUID, failure.JobUID, failure.Code)
+	log.Printf("controller=%s key=%q uid=%q repository_uid=%q job_name=%q code=%s result=InputSkipped", Name, r.key, confirmed.UID, transition.RepositoryUID, failure.JobName, failure.Code)
 	return controller.ReconcileResult{Requeue: true}, nil
 }
 
@@ -328,7 +328,7 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 		_, err := r.writeReleaseSkipped(repo)
 		return controller.ReconcileResult{}, err
 	}
-	if repo.Status.Repository == nil || len(repo.Status.Repository.SourceJobUIDs) == 0 {
+	if repo.Status.Repository == nil || len(repo.Status.Repository.SourceJobNames) == 0 {
 		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonNoPublishableArtifacts, countReleaseFailure)
 	}
 	r.controller.Enqueue(releaseKey(r.project, build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch))
@@ -350,15 +350,15 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 	}
 	consumed := make(map[string]struct{})
 	if repo.Status.Repository != nil {
-		for _, uid := range repo.Status.Repository.SourceJobUIDs {
+		for _, uid := range repo.Status.Repository.SourceJobNames {
 			consumed[uid] = struct{}{}
 		}
-		for _, uid := range repo.Status.Repository.SkippedJobUIDs {
+		for _, uid := range repo.Status.Repository.SkippedJobNames {
 			consumed[uid] = struct{}{}
 		}
 		if repo.Status.Repository.Transition != nil {
 			for _, input := range repo.Status.Repository.Transition.Inputs {
-				consumed[input.JobUID] = struct{}{}
+				consumed[input.JobName] = struct{}{}
 			}
 		}
 	}
@@ -371,12 +371,12 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 		if job.Status.Phase != ebsv1.JobSucceeded {
 			continue
 		}
-		if _, exists := consumed[string(job.UID)]; exists {
+		if _, exists := consumed[job.Name]; exists {
 			continue
 		}
 		specName := job.Labels[ebsv1.JobSpecNameLabel]
 		if specName == "" || job.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.Os || job.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch {
-			log.Printf("controller=%s key=%q uid=%q job_uid=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.UID)
+			log.Printf("controller=%s key=%q uid=%q job_name=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.UID)
 			continue
 		}
 		scan.candidates = append(scan.candidates, candidate{

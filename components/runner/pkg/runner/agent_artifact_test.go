@@ -46,14 +46,14 @@ func (f *fakeRunnerAPI) WatchAssignedJobs(context.Context, string, string) (<-ch
 func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	root := t.TempDir()
 	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}, Status: JobStatus{Phase: "Running", Runner: "runner-a"}}
-	resultDir := filepath.Join(root, "results", "project", "uid")
+	resultDir := filepath.Join(root, "results", "project", "job")
 	if err := os.MkdirAll(resultDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(resultDir, "result.txt"), []byte("success"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	logDir := filepath.Join(root, "logs", "project", "uid")
+	logDir := filepath.Join(root, "logs", "project", "job")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 
 func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	root := t.TempDir()
-	resultDir := filepath.Join(root, "results", "project", "uid")
+	resultDir := filepath.Join(root, "results", "project", "job")
 	if err := os.MkdirAll(resultDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	}
 	job := JobResource{
 		Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"},
-		Status:   JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a", ResultRoot: resultDir},
+		Status:   JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a"},
 	}
 	executor := &fakeExecutor{resultRoot: resultDir}
 	api := &fakeRunnerAPI{}

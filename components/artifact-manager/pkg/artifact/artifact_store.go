@@ -86,7 +86,7 @@ func (s *Store) load() error {
 			s.artifacts[v.ID] = &v
 		case "jobs":
 			var v JobUploadManifest
-			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobUID == "" {
+			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobName == "" {
 				return fmt.Errorf("load manifest metadata %s: invalid JSON", path)
 			}
 			key := manifestKey(v.Project, v.JobName, v.JobUID)
@@ -96,7 +96,7 @@ func (s *Store) load() error {
 			s.manifests[key] = &v
 		case "logs":
 			var v LogStream
-			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobUID == "" {
+			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobName == "" {
 				return fmt.Errorf("load log metadata %s: invalid JSON", path)
 			}
 			s.logs[logKey(v.Project, v.JobName, v.JobUID, v.Stream)] = &v
@@ -245,16 +245,18 @@ func (s *Store) artifactPath(a *Artifact) string {
 func (s *Store) artifactMeta(id string) string {
 	return filepath.Join(s.root, ".metadata/artifacts", id+".json")
 }
-func manifestKey(p, j, u string) string    { return p + "\x00" + j + "\x00" + u }
-func logKey(p, j, u, stream string) string { return p + "\x00" + j + "\x00" + u + "\x00" + stream }
+// The ignored UID argument keeps existing callers compatible; Job names are unique per Project.
+func manifestKey(p, j, _ string) string    { return p + "\x00" + j }
+func logKey(p, j, _, stream string) string { return p + "\x00" + j + "\x00" + stream }
 func hashText(v string) string             { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
 func (s *Store) idemPath(scope, key string) string {
 	return filepath.Join(s.root, ".metadata/idempotency", hashText(scope), hashText(key)+".json")
 }
 
 func metadataDigest(m UploadMetadata) string {
-	return "sha256:" + hashText(fmt.Sprintf("artifact-upload-v1\n%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\n", m.JobUID, m.Category, m.Name, m.FileName, m.RelativePath, m.ContentType, m.Size, m.SHA256))
+	return "sha256:" + hashText(fmt.Sprintf("artifact-upload-v1\n%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\n", m.Category, m.Name, m.FileName, m.RelativePath, m.ContentType, m.Size, m.SHA256))
 }
+
 func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, maxJobSize int64) (*Artifact, *IdempotencyRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -263,7 +265,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 		return nil, nil, false, e
 	}
 	m.RelativePath = rel
-	scope := "artifact-upload/" + project + "/" + m.JobUID
+	scope := "artifact-upload/" + project + "/" + job
 	ik := scope + "\x00" + key
 	digest := metadataDigest(m)
 	old := s.idempotency[ik]
@@ -310,7 +312,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 	}
 	var used int64
 	for _, artifact := range s.artifacts {
-		if artifact.Project == project && artifact.JobUID == m.JobUID && (artifact.State == Pending || artifact.State == Completed) {
+		if artifact.Project == project && artifact.JobName == job && (artifact.State == Pending || artifact.State == Completed) {
 			if artifact.RelativePath == rel {
 				return nil, nil, false, errors.New("ArtifactPathConflict")
 			}
@@ -322,7 +324,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 	}
 	now := time.Now().UTC()
 	id := newID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Project: project, JobName: job, JobUID: m.JobUID, RunnerName: runner, Category: m.Category, Name: m.Name, FileName: m.FileName, RelativePath: rel, ContentType: m.ContentType, Size: m.Size, SHA256: m.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", project, "jobs", m.JobUID, rel)), State: Pending, CreatedAt: now, UpdatedAt: now}
+	a := &Artifact{SchemaVersion: 1, ID: id, Project: project, JobName: job, JobUID: m.JobUID, RunnerName: runner, Category: m.Category, Name: m.Name, FileName: m.FileName, RelativePath: rel, ContentType: m.ContentType, Size: m.Size, SHA256: m.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", project, "jobs", job, rel)), State: Pending, CreatedAt: now, UpdatedAt: now}
 	ir := &IdempotencyRecord{SchemaVersion: 1, Scope: scope, Key: key, RequestDigest: digest, ArtifactID: id, State: IdempotencyProcessing, CreatedAt: now, UpdatedAt: now}
 	if e = atomicJSON(s.idemPath(scope, key), ir); e != nil {
 		return nil, nil, false, e
@@ -396,7 +398,7 @@ func (s *Store) ListArtifacts(project, job, uid string, cat Category) ([]Artifac
 	defer s.mu.RUnlock()
 	var out []Artifact
 	for _, a := range s.artifacts {
-		if a.State == Completed && a.Project == project && a.JobName == job && a.JobUID == uid && (cat == "" || a.Category == cat) {
+		if a.State == Completed && a.Project == project && a.JobName == job && (cat == "" || a.Category == cat) {
 			out = append(out, *a)
 		}
 	}

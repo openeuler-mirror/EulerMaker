@@ -16,7 +16,7 @@ const (
 
 type ManifestReference struct {
 	JobName string `json:"jobName"`
-	JobUID  string `json:"jobUID"`
+	JobUID  string `json:"jobUID,omitempty"`
 }
 
 type CreateRepositoryRequest struct {
@@ -101,7 +101,7 @@ type repositoryError struct {
 	code      string
 	retryable bool
 	status    int
-	jobUID    string
+	jobName   string
 }
 
 func (e *repositoryError) Error() string { return e.code }

@@ -218,21 +218,21 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 		if (repository.RepositoryUID == "") != (repository.ContentURL == "") {
 			allErrs = append(allErrs, field.Invalid(path, repository, "repositoryUID and contentURL must be provided together"))
 		}
-		if len(repository.SourceJobUIDs) > 0 && (repository.RepositoryUID == "" || repository.ContentURL == "") {
-			allErrs = append(allErrs, field.Invalid(path.Child("sourceJobUIDs"), repository.SourceJobUIDs, "requires repositoryUID and contentURL"))
+		if len(repository.SourceJobNames) > 0 && (repository.RepositoryUID == "" || repository.ContentURL == "") {
+			allErrs = append(allErrs, field.Invalid(path.Child("sourceJobNames"), repository.SourceJobNames, "requires repositoryUID and contentURL"))
 		}
-		seen := make(map[string]bool, len(repository.SourceJobUIDs)+len(repository.SkippedJobUIDs))
-		for _, uid := range repository.SourceJobUIDs {
-			seen[uid] = true
+		seen := make(map[string]bool, len(repository.SourceJobNames)+len(repository.SkippedJobNames))
+		for _, name := range repository.SourceJobNames {
+			seen[name] = true
 		}
-		for i, uid := range repository.SkippedJobUIDs {
-			itemPath := path.Child("skippedJobUIDs").Index(i)
-			if uid == "" {
-				allErrs = append(allErrs, field.Required(itemPath, "Job UID is required"))
-			} else if seen[uid] {
-				allErrs = append(allErrs, field.Duplicate(itemPath, uid))
+		for i, name := range repository.SkippedJobNames {
+			itemPath := path.Child("skippedJobNames").Index(i)
+			if name == "" {
+				allErrs = append(allErrs, field.Required(itemPath, "Job name is required"))
+			} else if seen[name] {
+				allErrs = append(allErrs, field.Duplicate(itemPath, name))
 			}
-			seen[uid] = true
+			seen[name] = true
 		}
 		if transition := repository.Transition; transition != nil {
 			if transition.RepositoryUID == "" {

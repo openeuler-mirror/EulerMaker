@@ -29,19 +29,19 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 		{"empty-repository", func(o *ebsv1.RpmRepo) { o.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{} }, ""},
 		{"baseline", func(o *ebsv1.RpmRepo) { o.Status.Repository.Transition = nil }, ""},
 		{"in-flight", func(o *ebsv1.RpmRepo) {}, ""},
-		{"consumed", func(o *ebsv1.RpmRepo) { o.Status.Repository.SourceJobUIDs = []string{"uid"} }, ""},
-		{"skipped", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobUIDs = []string{"bad-uid"} }, ""},
-		{"empty-skipped-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobUIDs = []string{""} }, "status.repository.skippedJobUIDs[0]"},
-		{"duplicate-skipped-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobUIDs = []string{"bad-uid", "bad-uid"} }, "status.repository.skippedJobUIDs[1]"},
+		{"consumed", func(o *ebsv1.RpmRepo) { o.Status.Repository.SourceJobNames = []string{"uid"} }, ""},
+		{"skipped", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobNames = []string{"bad-uid"} }, ""},
+		{"empty-skipped-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobNames = []string{""} }, "status.repository.skippedJobNames[0]"},
+		{"duplicate-skipped-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.SkippedJobNames = []string{"bad-uid", "bad-uid"} }, "status.repository.skippedJobNames[1]"},
 		{"skipped-source-overlap", func(o *ebsv1.RpmRepo) {
-			o.Status.Repository.SourceJobUIDs = []string{"uid"}
-			o.Status.Repository.SkippedJobUIDs = []string{"uid"}
-		}, "status.repository.skippedJobUIDs[0]"},
+			o.Status.Repository.SourceJobNames = []string{"uid"}
+			o.Status.Repository.SkippedJobNames = []string{"uid"}
+		}, "status.repository.skippedJobNames[0]"},
 		{"uid-only", func(o *ebsv1.RpmRepo) { o.Status.Repository.ContentURL = "" }, "status.repository"},
 		{"url-only", func(o *ebsv1.RpmRepo) { o.Status.Repository.RepositoryUID = "" }, "status.repository"},
 		{"consumed-without-version", func(o *ebsv1.RpmRepo) {
-			o.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{SourceJobUIDs: []string{"uid"}}
-		}, "status.repository.sourceJobUIDs"},
+			o.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{SourceJobNames: []string{"uid"}}
+		}, "status.repository.sourceJobNames"},
 		{"missing-transition-uid", func(o *ebsv1.RpmRepo) { o.Status.Repository.Transition.RepositoryUID = "" }, "status.repository.transition.repositoryUID"},
 		{"missing-inputs", func(o *ebsv1.RpmRepo) { o.Status.Repository.Transition.Inputs = nil }, "status.repository.transition.inputs"},
 		{"empty-phase", func(o *ebsv1.RpmRepo) { o.Status.Release = &ebsv1.RpmRepoReleaseStatus{} }, "status.release.phase"},

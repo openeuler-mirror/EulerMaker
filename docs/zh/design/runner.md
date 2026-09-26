@@ -124,7 +124,7 @@ PUT /apis/ebs/v1/projects/{project}/jobs/{name}/status
 
 `{project}` 来自 Job 对象的 `metadata.namespace`。Job spec 中不重复保存 `projectName`。
 
-Runner 必须从 Job 的 `metadata.uid` 获取不可变的 `jobUID`。缺少 `metadata.namespace`、`metadata.name` 或 `metadata.uid` 的 Job 不能执行，也不能使用 Job 名称推导 UID。Job 被删除后以相同名称重建时，新 UID 对应独立的日志流、Artifact 和上传清单。
+Runner 仍从 Job 的 `metadata.uid` 获取执行实例标识，并用它核验 Watch/GET 所见的对象；本地结果、日志及上传目录按 Project 和 Job 名组织。归档流程假定同一 Project 下 Job 名不复用，不再用 UID 阻止目录复用。
 
 CT Job 的 `spec.scriptRefs` 非空时，Runner 使用自身 token 经 Gateway 按名称读取每个全局 Script：
 
@@ -419,8 +419,8 @@ runtimeSpec:
 
 | 宿主机目录 | 容器目录 | 说明 |
 |------------|----------|------|
-| `${rootDir}/work/{project}/{jobUID}` | `/workspace` | payload YAML、`scripts/{name}` 和执行工作目录 |
-| `${rootDir}/results/{project}/{jobUID}` | `/results` | 构建产物暂存目录；最终结果通过 Artifact Manager 定位 |
+| `${rootDir}/work/{project}/{jobName}` | `/workspace` | payload YAML、`scripts/{name}` 和执行工作目录 |
+| `${rootDir}/results/{project}/{jobName}` | `/results` | 构建产物暂存目录；最终结果通过 Artifact Manager 定位 |
 
 容器 label 建议至少包含：
 
@@ -462,9 +462,9 @@ durable local spool -> chunk assembler -> one in-flight request -> artifact-mana
 
 #### 8.3.1 本地状态
 
-Runner 必须先把日志写入 `${rootDir}/logs/{project}/{jobUID}/combined.log`，再从该文件生成上传 chunk。该文件既是网络故障时的有界溢写区，也是 Runner 重启后的恢复来源。不得只把未确认日志保存在进程内存中。
+Runner 必须先把日志写入 `${rootDir}/logs/{project}/{jobName}/combined.log`，再从该文件生成上传 chunk。该文件既是网络故障时的有界溢写区，也是 Runner 重启后的恢复来源。不得只把未确认日志保存在进程内存中。
 
-每次确定一个 chunk 边界时，Runner 还必须向 `${rootDir}/logs/{project}/{jobUID}/chunks.jsonl` 追加一条完整 JSON Lines 记录并同步落盘：
+每次确定一个 chunk 边界时，Runner 还必须向 `${rootDir}/logs/{project}/{jobName}/chunks.jsonl` 追加一条完整 JSON Lines 记录并同步落盘：
 
 ```go
 type LocalLogChunk struct {
@@ -538,7 +538,7 @@ type LogUploadCheckpoint struct {
 
 容器无论成功、失败、超时或被取消，只要已经产生日志，Runner 都应在有限的 `--log-drain-timeout` 内执行：等待日志 EOF、刷新最后一个非空 chunk、确认所有 sequence、重新计算本地完整正文的 size 和 SHA-256，然后调用 `/logs/complete`。空日志使用 `lastSequence=-1`、`size=0` 和 SHA-256 空输入。
 
-完成请求使用稳定的 `Idempotency-Key={jobUID}-log-complete`。网络错误或结果未知时先查询 status；已 Completed 且返回的最终 size、SHA-256 与本地一致时视为成功。重复完成必须得到同一个 Artifact。封账摘要不匹配时保留 spool 和 checkpoint 供诊断，不重新从 sequence 0 上传，也不删除服务端活动日志。
+完成请求使用稳定的 `Idempotency-Key={jobName}-log-complete`。网络错误或结果未知时先查询 status；已 Completed 且返回的最终 size、SHA-256 与本地一致时视为成功。重复完成必须得到同一个 Artifact。封账摘要不匹配时保留 spool 和 checkpoint 供诊断，不重新从 sequence 0 上传，也不删除服务端活动日志。
 
 首版所有 `ct` Job 都把封账后的 `logs/container.log` 作为 JobUploadManifest 的必需文件。业务执行失败时，日志封账成功不会把 Job 改为 Succeeded；Runner 保留业务失败原因，并提交只包含日志的清单。业务执行成功但日志无法封账时，Job 必须 Failed，不能先发布 Succeeded 再后台补日志。
 
@@ -546,8 +546,8 @@ type LogUploadCheckpoint struct {
 
 首版使用以下固定策略，不由构建镜像、文件内容或扩展名之外的隐式规则改变：
 
-- 只有容器退出码为 0 时才扫描和上传普通产物。业务失败、超时或取消时只封账日志，不发布 `${rootDir}/results/{project}/{jobUID}` 中的部分文件。
-- 扫描根目录固定为 `${rootDir}/results/{project}/{jobUID}`。递归遍历其中的目录并上传全部普通文件，包括点文件；目录本身不生成 Artifact。
+- 只有容器退出码为 0 时才扫描和上传普通产物。业务失败、超时或取消时只封账日志，不发布 `${rootDir}/results/{project}/{jobName}` 中的部分文件。
+- 扫描根目录固定为 `${rootDir}/results/{project}/{jobName}`。递归遍历其中的目录并上传全部普通文件，包括点文件；目录本身不生成 Artifact。
 - `relativePath` 是文件相对扫描根目录的清理后 slash 路径。Runner 不增加、删除或重命名一级目录，也不根据扩展名自动移动文件；构建脚本需要自行把 RPM 写入希望发布的目录，例如 `/results/packages/`。
 - 所有普通文件使用 `category=artifact`、`required=true`。`fileName` 使用相对路径的最后一个路径段。
 - `.rpm` 文件使用 `contentType=application/x-rpm`；其他普通文件统一使用 `application/octet-stream`。首版不嗅探文件正文，也不依赖宿主机 MIME 数据库。
@@ -556,7 +556,7 @@ type LogUploadCheckpoint struct {
 - 扫描结果必须先完整排序并校验，再开始上传。排序键是规范化后的 `relativePath`，保证重试、回执和 Manifest 顺序确定。
 - 封账日志始终以 `relativePath=logs/container.log`、`category=log`、`required=true` 加入该 Job 的唯一 Manifest。普通产物不得使用 `logs/container.log`，发生路径冲突时 Job 失败。
 - 构建成功但结果目录没有普通文件时，仍提交只包含日志的 Manifest。
-- Manifest 完成请求结果未知时，Runner 查询相同 project 和 jobUID 的唯一清单；服务端已返回相同 Completed 清单时继续写回 Job，否则原样重试完成请求。Manifest 完成接口直接以 Job UID 保证幂等，不使用独立幂等键。
+- Manifest 完成请求结果未知时，Runner 查询相同 Project 和 Job 名的唯一清单；服务端已返回相同 Completed 清单时继续写回 Job，否则原样重试完成请求。Manifest 完成接口以 Project 和 Job 名保证幂等，不使用独立幂等键。
 - 任何必需普通产物上传或 Manifest 封账最终失败都会令 Job `phase=Failed`，并在 `message` 中记录原因；已经成功上传的 Artifact 和本地回执保留用于幂等恢复，不提交缺少文件的降级清单。
 
 ### 8.5 上传回执与本地文件清理
@@ -564,12 +564,12 @@ type LogUploadCheckpoint struct {
 Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续保存本地副本。每个文件必须使用以下顺序处理：
 
 1. 流式计算本地文件大小和 SHA-256，构造稳定的 `Idempotency-Key` 并上传。
-2. 只在收到 200/201 且响应 Artifact 为 `state=Completed`、project、jobName、jobUID、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。
-3. 将完整 Artifact 响应作为上传回执原子写入 `${rootDir}/uploads/{project}/{jobUID}/artifacts/{relativePath}.json`；实际文件名使用安全编码或路径摘要，不能直接信任 relativePath 拼接。
+2. 只在收到 200/201 且响应 Artifact 为 `state=Completed`、project、jobName、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。
+3. 将完整 Artifact 响应作为上传回执原子写入 `${rootDir}/uploads/{project}/{jobName}/artifacts/{relativePath}.json`；实际文件名使用安全编码或路径摘要，不能直接信任 relativePath 拼接。
 4. JobUploadManifest 从持久化回执生成。Manifest 完成且最终 Job Status 成功写回后即视为上传成功，原子写入 `notBefore=now` 的成功清理标记并立即执行清理；清理失败时保留标记供后台重试，不设置成功保留期。
-5. 后台清理器只处理具有有效清理标记且当前时间不早于 `notBefore` 的 Job，并在重新确认目录仍属于同一 project/jobUID 后删除本地内容。
+5. 后台清理器只处理具有有效清理标记且当前时间不早于 `notBefore` 的 Job；清理标记保存 Project 和 Job 名，并按该目录清理本地内容。
 
-普通产物的幂等键固定为 `{jobUID}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
+普通产物的幂等键固定为 `{jobName}-artifact-{sha256(normalizedRelativePath)}`；同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
 
 上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed` 并记录失败原因，再写入失败清理标记；失败现场从该状态写回时间起保留 `--artifact-failed-retention`，默认 24 小时。最终状态写回失败或结果仍可能恢复时不得启动保留期。到期删除意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
 
@@ -585,7 +585,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 实时日志的 `combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；随后等待 Manifest Completed 和最终 Job Status 成功写回，成功后与普通产物一起立即清理。日志封账或上传最终失败时使用失败保留期，不在错误路径立即删除。
 
-`${rootDir}/work/{project}/{jobUID}` 中的 payload 和临时执行文件在容器退出且不再需要恢复执行后清理，不受 Artifact 保留期影响。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobUID}`、`${rootDir}/logs/{project}/{jobUID}` 和 `${rootDir}/uploads/{project}/{jobUID}`。其他终态默认使用 `--artifact-failed-retention=24h`，到期后删除上述目录及失败清理标记；不得在保留期内按单文件提前删除。所有 Job 本地目录都使用 UID 而不是可复用的 Job 名。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
+`${rootDir}/work/{project}/{jobName}` 中的 payload 和临时执行文件在容器退出且不再需要恢复执行后清理，不受 Artifact 保留期影响。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobName}`、`${rootDir}/logs/{project}/{jobName}` 和 `${rootDir}/uploads/{project}/{jobName}`。其他终态默认使用 `--artifact-failed-retention=24h`，到期后删除上述目录及失败清理标记；不得在保留期内按单文件提前删除。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
 
 ### 8.6 Job 主动中止
 
@@ -712,7 +712,7 @@ secrets:
 | 模块 | 场景 |
 |------|------|
 | Runner identity | 首次启动原子生成规范 UUID v4；重启复用；同名同 ID 恢复；同名不同 ID 终止；POST 409 后 GET 并按 ID 分类；更新不能修改或清空 ID；ID 文件丢失时不接管已有对象 |
-| Job identity | 从 `metadata.uid` 取得 jobUID；缺少 namespace/name/UID 时拒绝执行；同名不同 UID 使用独立目录和日志流 |
+| Job identity | 从 `metadata.uid` 取得 jobUID；缺少 namespace/name/UID 时拒绝执行；本地目录按 Job 名组织，日志流和上传清单以 Project + Job 名标识，归档不比较 UID |
 | Script 执行 | 空 `scriptRefs` 使用镜像入口；单脚本和多脚本均写入 `/workspace/scripts/{name}`，第一项作为入口；重复名称、路径逃逸、遮蔽挂载及与 `runtimeSpec.command/args` 冲突时拒绝 |
 | Script 缓存与失败 | 同 name/UID/resourceVersion 命中缓存，UID 或 resourceVersion 变化时重新 GET；响应元数据变化、无效正文、404、401/403、429/5xx、超时和取消分别按契约处理，不执行未完整拉取的脚本集合 |
 | Chunk | 256 KiB 聚合、500 ms 刷新、EOF 刷新、空日志不发送 chunk、SHA-256 针对原始字节、可选 gzip |

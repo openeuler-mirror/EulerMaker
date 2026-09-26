@@ -23,7 +23,7 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 	u := r.Header.Get("X-Job-UID")
 	seq, e := strconv.ParseInt(r.Header.Get("X-Log-Sequence"), 10, 64)
 	sum := r.Header.Get("X-Content-SHA256")
-	if e != nil || u == "" || r.Header.Get("X-Log-Stream") != "combined" || !validHash(sum) {
+	if e != nil || r.Header.Get("X-Log-Stream") != "combined" || !validHash(sum) {
 		writeErr(w, r, 400, "InvalidLogChunk", "invalid log chunk", false, nil)
 		return
 	}
@@ -65,7 +65,7 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 			details["nextSequence"] = l.NextSequence
 		}
 		status := 422
-		if e.Error() == "SequenceGap" || e.Error() == "SequenceConflict" || e.Error() == "LogAlreadyFinalized" || e.Error() == "JobIdentityConflict" {
+		if e.Error() == "SequenceGap" || e.Error() == "SequenceConflict" || e.Error() == "LogAlreadyFinalized" {
 			status = 409
 		}
 		writeErr(w, r, status, e.Error(), e.Error(), false, details)
@@ -93,7 +93,7 @@ func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string)
 		writeErr(w, r, 404, "NotFound", "log not found", false, nil)
 		return
 	}
-	body, _, _ := s.store.logPaths(p, u)
+	body, _, _ := s.store.logPaths(p, j, u)
 	if l.State == LogCompleted {
 		if a, yes := s.store.GetArtifact(l.ArtifactID); yes {
 			body = s.store.artifactPath(a)

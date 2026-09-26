@@ -471,7 +471,7 @@ func (a *Agent) resumePostRun(parent context.Context, key string, job JobResourc
 	defer a.finishJob(key)
 	resultDir := job.Status.ResultRoot
 	if resultDir == "" || strings.HasPrefix(resultDir, "artifact://") {
-		resultDir = filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.UID)
+		resultDir = filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name)
 	}
 	var executionErr error
 	if job.Status.Message != "" {

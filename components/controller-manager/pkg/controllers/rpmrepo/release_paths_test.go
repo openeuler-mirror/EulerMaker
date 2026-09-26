@@ -68,7 +68,7 @@ func TestReconcileReleaseCandidatePredicateSkipsObjects(t *testing.T) {
 		},
 		{
 			name:   "no-own-version",
-			mutate: func(repo *ebsv1.RpmRepo) { repo.Status.Repository.SourceJobUIDs = nil },
+			mutate: func(repo *ebsv1.RpmRepo) { repo.Status.Repository.SourceJobNames = nil },
 		},
 		{
 			name: "deleting",

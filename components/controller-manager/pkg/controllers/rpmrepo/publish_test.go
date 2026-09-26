@@ -16,7 +16,7 @@ func releasableRpmRepo(name string) *ebsv1.RpmRepo {
 	repo := newRpmRepo(name)
 	repo.Status.Repository.RepositoryUID = "repo-1"
 	repo.Status.Repository.ContentURL = "/repositories/v1/repo-1/"
-	repo.Status.Repository.SourceJobUIDs = []string{"uid-job-a"}
+	repo.Status.Repository.SourceJobNames = []string{"job-a"}
 	conditions, _ := MergeCondition(nil, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonRepositoryCreated, "", 1, metav1.Now())
 	repo.Status.Conditions = conditions
 	return repo

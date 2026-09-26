@@ -76,13 +76,13 @@ func TestArtifactLogSinkUploadsChunksAndRemovesSpool(t *testing.T) {
 	if remote.completed.LastSequence != 2 || remote.completed.Size != 10 {
 		t.Fatalf("complete input = %#v", remote.completed)
 	}
-	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "uid-1", "completed.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "build", "completed.json")); err != nil {
 		t.Fatalf("completed receipt is missing: %v", err)
 	}
-	if err := factory.Cleanup(JobResource{Metadata: ObjectMeta{Namespace: "project", UID: "uid-1"}}); err != nil {
+	if err := factory.Cleanup(JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "uid-1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "build")); !os.IsNotExist(err) {
 		t.Fatalf("completed spool was not cleaned: %v", err)
 	}
 }
@@ -97,4 +97,20 @@ func TestArtifactLogSinkEnforcesSpoolLimit(t *testing.T) {
 		t.Fatal("expected spool limit error")
 	}
 	sink.Abort()
+}
+
+func TestArtifactLogFactoryUsesJobNameAcrossUIDChanges(t *testing.T) {
+	factory := &ArtifactLogFactory{Remote: &fakeLogRemote{}, RootDir: t.TempDir()}
+	first := JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}}
+	sink, err := factory.Open(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.Abort()
+	second := JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-2"}}
+	next, err := factory.Open(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.Abort()
 }

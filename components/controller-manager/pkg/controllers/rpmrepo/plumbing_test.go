@@ -178,8 +178,8 @@ func TestBatchHelpersHandleTiesAndInvalidInput(t *testing.T) {
 	if _, err := repositoryUID(testProject, "", "", []ebsv1.RepositoryInput{{JobUID: "uid-a"}}); err == nil {
 		t.Fatalf("an empty build name must be rejected")
 	}
-	if got := unionSortedUIDs([]string{"", "uid-a"}, []ebsv1.RepositoryInput{{JobUID: ""}, {JobUID: "uid-b"}}); len(got) != 2 {
-		t.Fatalf("empty UIDs must be skipped, got %v", got)
+	if got := unionSortedNames([]string{"", "job-a"}, []ebsv1.RepositoryInput{{JobName: ""}, {JobName: "job-b"}}); len(got) != 2 {
+		t.Fatalf("empty names must be skipped, got %v", got)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 type cleanupMarker struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	Project       string    `json:"project"`
+	JobName       string    `json:"jobName,omitempty"`
 	JobUID        string    `json:"jobUID"`
 	Outcome       string    `json:"outcome"`
 	CreatedAt     time.Time `json:"createdAt"`
@@ -43,10 +44,10 @@ func (m *ArtifactCleanupManager) mark(job JobResource, outcome string, retention
 		now = m.Now().UTC()
 	}
 	marker := cleanupMarker{
-		SchemaVersion: 1, Project: job.Metadata.Namespace, JobUID: job.Metadata.UID,
+		SchemaVersion: 1, Project: job.Metadata.Namespace, JobName: job.Metadata.Name, JobUID: job.Metadata.UID,
 		Outcome: outcome, CreatedAt: now, NotBefore: now.Add(retention),
 	}
-	path := m.markerPath(marker.Project, marker.JobUID)
+	path := m.markerPath(marker.Project, marker.JobName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
@@ -98,10 +99,14 @@ func (m *ArtifactCleanupManager) Sweep() error {
 			return err
 		}
 		var marker cleanupMarker
-		if err := json.Unmarshal(data, &marker); err != nil || marker.SchemaVersion != 1 || marker.Project == "" || marker.JobUID == "" {
+		if err := json.Unmarshal(data, &marker); err != nil || marker.SchemaVersion != 1 || marker.Project == "" || (marker.JobName == "" && marker.JobUID == "") {
 			return fmt.Errorf("invalid artifact cleanup marker %s", path)
 		}
-		if path != m.markerPath(marker.Project, marker.JobUID) {
+		name := marker.JobName
+		if name == "" {
+			name = marker.JobUID // Existing UID-based cleanup markers remain valid.
+		}
+		if path != m.markerPath(marker.Project, name) {
 			return fmt.Errorf("artifact cleanup marker identity mismatch: %s", path)
 		}
 		if now.Before(marker.NotBefore) {
@@ -121,11 +126,15 @@ func (m *ArtifactCleanupManager) clean(marker cleanupMarker, markerPath string, 
 	if now.Before(marker.NotBefore) {
 		return nil
 	}
-	if strings.ContainsAny(marker.Project, `/\\`) || strings.ContainsAny(marker.JobUID, `/\\`) {
+	name := marker.JobName
+	if name == "" {
+		name = marker.JobUID
+	}
+	if strings.ContainsAny(marker.Project, `/\\`) || strings.ContainsAny(name, `/\\`) || strings.ContainsAny(marker.JobUID, `/\\`) || name == "." || name == ".." {
 		return fmt.Errorf("invalid artifact cleanup identity")
 	}
 	for _, category := range []string{"results", "logs", "uploads"} {
-		path := filepath.Join(m.RootDir, category, marker.Project, marker.JobUID)
+		path := filepath.Join(m.RootDir, category, marker.Project, name)
 		if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("remove %s: %w", path, err)
 		}
@@ -137,6 +146,6 @@ func (m *ArtifactCleanupManager) clean(marker cleanupMarker, markerPath string, 
 	return nil
 }
 
-func (m *ArtifactCleanupManager) markerPath(project, uid string) string {
-	return filepath.Join(m.RootDir, "cleanup", project, uid+".json")
+func (m *ArtifactCleanupManager) markerPath(project, name string) string {
+	return filepath.Join(m.RootDir, "cleanup", project, name+".json")
 }

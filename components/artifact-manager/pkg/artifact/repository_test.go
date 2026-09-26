@@ -50,6 +50,23 @@ func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) 
 	return server, request
 }
 
+func TestRepositoryRequestIdentityIgnoresJobUID(t *testing.T) {
+	request := CreateRepositoryRequest{
+		RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64",
+		Manifests: []ManifestReference{{JobName: "job", JobUID: "first-uid"}},
+	}
+	request.RepositoryUID = repositoryUID(request.Project, request.BuildName, "", request.Manifests)
+	first, digest, err := normalizeRepositoryRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Manifests[0].JobUID = "second-uid"
+	second, secondDigest, err := normalizeRepositoryRequest(request)
+	if err != nil || digest != secondDigest || first.Manifests[0].JobUID != "" || second.Manifests[0].JobUID != "" {
+		t.Fatalf("UID changed repository request identity: %q, %q, %v", digest, secondDigest, err)
+	}
+}
+
 func repositoryRequest(t *testing.T, server http.Handler, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var data []byte

@@ -18,7 +18,7 @@ type candidate struct {
 	createdAt int64
 }
 
-// sortCandidates orders inputs by creation time, name and UID so a retry selects the same batch.
+// sortCandidates orders inputs by creation time and name so a retry selects the same batch.
 func sortCandidates(values []candidate) {
 	sort.SliceStable(values, func(i, j int) bool {
 		if values[i].createdAt != values[j].createdAt {
@@ -27,7 +27,7 @@ func sortCandidates(values []candidate) {
 		if values[i].name != values[j].name {
 			return values[i].name < values[j].name
 		}
-		return values[i].uid < values[j].uid
+		return false
 	})
 }
 
@@ -52,7 +52,7 @@ func selectBatch(candidates []candidate, maxJobs int) []candidate {
 }
 
 // repositoryUID reproduces the Artifact Manager identity: SHA-256 over length prefixed project, build name and
-// base repository UID followed by the length prefixed Job UIDs in ascending order.
+// base repository UID followed by the length prefixed Job names in ascending order.
 func repositoryUID(project, buildName, baseRepositoryUID string, inputs []ebsv1.RepositoryInput) (string, error) {
 	if project == "" || buildName == "" {
 		return "", fmt.Errorf("repository UID requires project and build name")
@@ -61,7 +61,7 @@ func repositoryUID(project, buildName, baseRepositoryUID string, inputs []ebsv1.
 		return "", fmt.Errorf("repository UID requires at least one input")
 	}
 	ordered := append([]ebsv1.RepositoryInput(nil), inputs...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].JobUID < ordered[j].JobUID })
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].JobName < ordered[j].JobName })
 	hash := sha256.New()
 	writeLengthPrefixed := func(value string) {
 		var length [8]byte
@@ -73,7 +73,7 @@ func repositoryUID(project, buildName, baseRepositoryUID string, inputs []ebsv1.
 	writeLengthPrefixed(buildName)
 	writeLengthPrefixed(baseRepositoryUID)
 	for _, item := range ordered {
-		writeLengthPrefixed(item.JobUID)
+		writeLengthPrefixed(item.JobName)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
@@ -82,24 +82,24 @@ func repositoryUID(project, buildName, baseRepositoryUID string, inputs []ebsv1.
 func repositoryInputs(selection []candidate) []ebsv1.RepositoryInput {
 	inputs := make([]ebsv1.RepositoryInput, 0, len(selection))
 	for _, item := range selection {
-		inputs = append(inputs, ebsv1.RepositoryInput{JobName: item.name, JobUID: item.uid, SpecName: item.specName})
+		inputs = append(inputs, ebsv1.RepositoryInput{JobName: item.name, SpecName: item.specName})
 	}
 	return inputs
 }
 
-// repositoryRequests maps frozen inputs onto the Artifact Manager request, ordered by Job UID.
+// repositoryRequests maps frozen inputs onto the Artifact Manager request, ordered by Job name.
 func repositoryRequests(inputs []ebsv1.RepositoryInput) []ManifestReference {
 	ordered := append([]ebsv1.RepositoryInput(nil), inputs...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].JobUID < ordered[j].JobUID })
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].JobName < ordered[j].JobName })
 	manifests := make([]ManifestReference, 0, len(ordered))
 	for _, item := range ordered {
-		manifests = append(manifests, ManifestReference{JobName: item.JobName, JobUID: item.JobUID})
+		manifests = append(manifests, ManifestReference{JobName: item.JobName})
 	}
 	return manifests
 }
 
-// unionSortedUIDs merges the already published source Job UIDs with the promoted batch.
-func unionSortedUIDs(existing []string, batch []ebsv1.RepositoryInput) []string {
+// unionSortedNames merges the already published source Job names with the promoted batch.
+func unionSortedNames(existing []string, batch []ebsv1.RepositoryInput) []string {
 	seen := make(map[string]struct{}, len(existing)+len(batch))
 	result := make([]string, 0, len(existing)+len(batch))
 	for _, value := range existing {
@@ -113,14 +113,14 @@ func unionSortedUIDs(existing []string, batch []ebsv1.RepositoryInput) []string 
 		result = append(result, value)
 	}
 	for _, item := range batch {
-		if item.JobUID == "" {
+		if item.JobName == "" {
 			continue
 		}
-		if _, exists := seen[item.JobUID]; exists {
+		if _, exists := seen[item.JobName]; exists {
 			continue
 		}
-		seen[item.JobUID] = struct{}{}
-		result = append(result, item.JobUID)
+		seen[item.JobName] = struct{}{}
+		result = append(result, item.JobName)
 	}
 	sort.Strings(result)
 	return result

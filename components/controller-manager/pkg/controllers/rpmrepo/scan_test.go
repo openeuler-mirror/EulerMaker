@@ -77,7 +77,7 @@ func TestScanRejectsJobsThatAreNotCandidates(t *testing.T) {
 func TestScanSkipsConsumedJobs(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
-	repo.Status.Repository.SourceJobUIDs = []string{"uid-job-a"}
+	repo.Status.Repository.SourceJobNames = []string{"job-a"}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
@@ -252,7 +252,7 @@ func TestRepositoryAdvancesWhileBuildInfoIsStillProcessing(t *testing.T) {
 		t.Fatalf("a promoted batch with an unfinished BuildInfo must just wait, got %+v", result)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Repository.Transition != nil || len(updated.Status.Repository.SourceJobUIDs) != 1 {
+	if updated.Status.Repository.Transition != nil || len(updated.Status.Repository.SourceJobNames) != 1 {
 		t.Fatalf("the batch must be promoted while BuildInfo is Processing: %+v", updated.Status.Repository)
 	}
 	if updated.Status.Release != nil {

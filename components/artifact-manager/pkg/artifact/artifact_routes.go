@@ -163,7 +163,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		return
 	}
 	var m UploadMetadata
-	if e = decodeJSON(mp, s.cfg.MaxMetadataSize, &m); e != nil || !validIdentifier(m.JobUID) || m.FileName == "" || len(m.FileName) > 255 || m.Size < 0 || m.Size > s.cfg.MaxFileSize || !validHash(m.SHA256) || (m.Category != CategoryArtifact && m.Category != CategoryLog) {
+	if e = decodeJSON(mp, s.cfg.MaxMetadataSize, &m); e != nil || m.FileName == "" || len(m.FileName) > 255 || m.Size < 0 || m.Size > s.cfg.MaxFileSize || !validHash(m.SHA256) || (m.Category != CategoryArtifact && m.Category != CategoryLog) {
 		writeErr(w, r, 422, "InvalidArtifactMetadata", "invalid metadata", false, nil)
 		return
 	}
@@ -242,7 +242,7 @@ func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
 	if code == "JobQuotaExceeded" {
 		status = 413
 	}
-	if code == "IdempotencyConflict" || code == "ArtifactPathConflict" || code == "UploadInProgress" || code == "SequenceGap" || code == "SequenceConflict" || code == "LogAlreadyFinalized" || code == "JobIdentityConflict" || code == "ManifestAlreadyCompleted" || strings.Contains(strings.ToLower(code), "conflict") {
+	if code == "IdempotencyConflict" || code == "ArtifactPathConflict" || code == "UploadInProgress" || code == "SequenceGap" || code == "SequenceConflict" || code == "LogAlreadyFinalized" || code == "ManifestAlreadyCompleted" || strings.Contains(strings.ToLower(code), "conflict") {
 		status = 409
 	}
 	writeErr(w, r, status, code, code, status >= 500, nil)
