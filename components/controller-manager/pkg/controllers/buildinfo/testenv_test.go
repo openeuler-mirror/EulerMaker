@@ -281,7 +281,6 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 				ebsv1.BuildTargetArchLabel: testArch,
 			},
 			Annotations: map[string]string{
-				annBuildInfoUID:       string(bi.UID),
 				annDispatchGeneration: strconv.FormatInt(generation, 10),
 			},
 		},

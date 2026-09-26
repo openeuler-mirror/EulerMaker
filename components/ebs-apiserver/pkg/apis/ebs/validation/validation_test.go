@@ -539,8 +539,37 @@ func TestValidateJob(t *testing.T) {
 	assertErrorList(t, errs, 0, nil)
 }
 
+func TestValidateJobScriptRef(t *testing.T) {
+	job := validJob()
+	if errs := ValidateJob(job); len(errs) != 0 {
+		t.Fatalf("empty scriptRefs rejected: %v", errs)
+	}
+	job.Spec.ScriptRefs = []ebsv1.ScriptRef{{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "v1:1:1"}}
+	if errs := ValidateJob(job); len(errs) != 0 {
+		t.Fatalf("valid scriptRef rejected: %v", errs)
+	}
+	old := job.DeepCopy()
+	job.Spec.ScriptRefs[0].ResourceVersion = "v1:1:2"
+	if len(ValidateJobUpdate(job, old)) == 0 {
+		t.Fatal("scriptRef mutation accepted")
+	}
+	job.Spec.ScriptRefs = []ebsv1.ScriptRef{{Name: "../bad"}}
+	if len(ValidateJob(job)) < 3 {
+		t.Fatalf("incomplete scriptRef accepted: %v", ValidateJob(job))
+	}
+	job.Spec.ScriptRefs = []ebsv1.ScriptRef{{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "v1:1:1"}, {Name: "other", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "v1:1:1"}}
+	if errs := ValidateJob(job); len(errs) != 0 {
+		t.Fatalf("multiple distinct scriptRefs rejected: %v", errs)
+	}
+	job.Spec.ScriptRefs[1].Name = "rpmbuild"
+	if len(ValidateJob(job)) == 0 {
+		t.Fatal("duplicate script names accepted")
+	}
+}
+
 func TestValidateJobUpdate(t *testing.T) {
-	errs := ValidateJobUpdate(&ebsv1.Job{}, validJob())
+	old := validJob()
+	errs := ValidateJobUpdate(old.DeepCopy(), old)
 	assertErrorList(t, errs, 0, nil)
 }
 

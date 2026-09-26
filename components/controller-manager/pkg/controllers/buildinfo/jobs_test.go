@@ -7,11 +7,13 @@ package buildinfo
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	yaml "gopkg.in/yaml.v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
@@ -46,7 +48,7 @@ func TestJobNameForDeterministic(t *testing.T) {
 	}
 }
 
-func TestFilterJobsByIdentityRequiresBuildInfoUID(t *testing.T) {
+func TestFilterJobsByIdentityRequiresBuildInfoUIDInName(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "current-buildinfo"
 	job := testJobObj(bi, "a", 1, ebsv1.JobRunning)
@@ -74,8 +76,10 @@ func TestFilterJobsByIdentityRequiresBuildInfoUID(t *testing.T) {
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 0 {
 		t.Fatalf("unrelated Job count = %d, want 0", len(got))
 	}
-	job.Name = legacyJobNameFor(string(bi.UID), "a", 1)
-	job.Annotations[annBuildInfoUID] = "previous-buildinfo"
+	job.Name = legacyJobNameFor("previous-buildinfo", "a", 1)
+	if err := verifyJobIdentity(job, bi, "a", 1); err == nil {
+		t.Fatal("foreign Job name accepted")
+	}
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 0 {
 		t.Fatalf("foreign Job count = %d, want 0", len(got))
 	}
@@ -220,7 +224,10 @@ func TestJobForSpecConstruction(t *testing.T) {
 	depend := dependEntry("a")
 	resource := testBuildResourceRules()
 
-	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, "job-x", 2, nil)
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, testRepoURL, resource, testScriptRef(), "job-x", 2, nil)
+	if len(job.Spec.ScriptRefs) != 1 || job.Spec.ScriptRefs[0].Name != "rpmbuild" {
+		t.Fatalf("scriptRefs = %+v", job.Spec.ScriptRefs)
+	}
 
 	if job.Name != "job-x" || job.Namespace != testNS {
 		t.Fatalf("job meta = %s/%s, want %s/job-x", job.Namespace, job.Name, testNS)
@@ -238,7 +245,6 @@ func TestJobForSpecConstruction(t *testing.T) {
 		}
 	}
 	wantAnnotations := map[string]string{
-		annBuildInfoUID:       "bi-job-construct",
 		annDispatchGeneration: "2",
 	}
 	if len(job.Annotations) != len(wantAnnotations) {
@@ -299,7 +305,7 @@ func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
 			bi.Spec.BuildPayload = tt.payload
 			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
 			depend := dependEntry("a")
-			job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, "", testBuildResourceRules(), "job-a", 1, nil)
+			job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, "", testBuildResourceRules(), testScriptRef(), "job-a", 1, nil)
 			var payload map[string]any
 			if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
 				t.Fatal(err)
@@ -338,7 +344,7 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 		"cap-b": {}, "cap-a": {}, "single": {}, "removed": {},
 	}
 	depend.BuildRemoves = map[string]ebsv1.VersionConst{"removed": {}}
-	job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), "job-a", 1, sources)
+	job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), testScriptRef(), "job-a", 1, sources)
 	var payload map[string]any
 	if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
 		t.Fatal(err)
@@ -347,7 +353,7 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 		t.Fatalf("prefer = %v, want only selected rpm-b", got)
 	}
 	depend.BuildRequires = map[string]ebsv1.VersionConst{"single": {}}
-	job = c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), "job-b", 1, sources)
+	job = c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), testScriptRef(), "job-b", 1, sources)
 	payload = nil
 	if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
 		t.Fatal(err)
@@ -367,7 +373,7 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	snapshot := testSnapshotObj()
 	depend := dependEntry("a")
 
-	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceRules(), "job-y", 1, nil)
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceRules(), testScriptRef(), "job-y", 1, nil)
 
 	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commitId") {
 		t.Fatalf("payload = %q, want no spec_url/commitId without a repo entry", job.Spec.Payload)
@@ -426,6 +432,130 @@ func dispatchRound(t *testing.T, c *Controller, client *fakeClient, uid, spec st
 	client.SeedBuildResourceRules(testBuildResourceRules())
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	return round, seeded
+}
+
+func testScriptRef() ebsv1.ScriptRef {
+	return ebsv1.ScriptRef{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "1"}
+}
+
+func TestDispatchSpecRecordsScriptObservation(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "bi-script", "a")
+	round.current.Spec.BuildPayload = "rpmbuild_script: custom-script\n"
+	client.buildinfos[testNS+"/"+testBuild].Spec.BuildPayload = round.current.Spec.BuildPayload
+	client.scripts["custom-script"] = &ebsv1.Script{ObjectMeta: metav1.ObjectMeta{Name: "custom-script", UID: "a56761f8-2058-4210-814b-3b8858508232", ResourceVersion: "v1:2:3"}, Spec: ebsv1.ScriptSpec{Content: "#!/bin/sh\n"}}
+	depend := dependEntry("a")
+	if _, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil); err != nil {
+		t.Fatal(err)
+	}
+	jobs := listJobs(t, client)
+	want := ebsv1.ScriptRef{Name: "custom-script", UID: "a56761f8-2058-4210-814b-3b8858508232", ResourceVersion: "v1:2:3"}
+	if len(jobs) != 1 || len(jobs[0].Spec.ScriptRefs) != 1 || jobs[0].Spec.ScriptRefs[0] != want {
+		t.Fatalf("Jobs and script refs = %+v", jobs)
+	}
+	if got := payloadScriptName(t, jobs[0].Spec.Payload); got != "" {
+		t.Fatalf("payload still carries rpmbuild_script = %q", got)
+	}
+}
+
+func TestDispatchSpecDefaultsScriptName(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "bi-script-default", "a")
+	depend := dependEntry("a")
+	if _, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil); err != nil {
+		t.Fatal(err)
+	}
+	jobs := listJobs(t, client)
+	if len(jobs) != 1 || len(jobs[0].Spec.ScriptRefs) != 1 || jobs[0].Spec.ScriptRefs[0] != testScriptRef() {
+		t.Fatalf("Jobs and script refs = %+v", jobs)
+	}
+}
+
+func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "bi-script-shared", "a")
+	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus["b"] = ebsv1.SpecStatus{}
+	round.current.Status.SpecStatus["b"] = ebsv1.SpecStatus{}
+	snapshot := testSnapshotObj()
+	for _, specName := range []string{"a", "b"} {
+		depend := dependEntry(specName)
+		if _, err := c.dispatchSpec(context.Background(), round, specName, &depend, snapshot, testImage, testRepoURL, nil); err != nil {
+			t.Fatalf("dispatch %s: %v", specName, err)
+		}
+		if specName == "a" {
+			client.scripts["rpmbuild"].ResourceVersion = "2"
+		}
+	}
+	if client.scriptReads != 1 {
+		t.Fatalf("Script reads in one round = %d, want 1", client.scriptReads)
+	}
+	for _, job := range listJobs(t, client) {
+		if len(job.Spec.ScriptRefs) != 1 || job.Spec.ScriptRefs[0].ResourceVersion != "1" {
+			t.Fatalf("Job %s ScriptRefs = %+v, want first round observation", job.Name, job.Spec.ScriptRefs)
+		}
+	}
+
+	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus["c"] = ebsv1.SpecStatus{}
+	newRound := &reconcileRound{
+		key: round.key, current: getBuildInfo(t, client), build: round.build,
+		failures: c.newRoundFailures(round.key),
+	}
+	depend := dependEntry("c")
+	if _, err := c.dispatchSpec(context.Background(), newRound, "c", &depend, snapshot, testImage, testRepoURL, nil); err != nil {
+		t.Fatalf("dispatch c in new round: %v", err)
+	}
+	if client.scriptReads != 2 {
+		t.Fatalf("Script reads across rounds = %d, want 2", client.scriptReads)
+	}
+	for _, job := range listJobs(t, client) {
+		if job.Labels[ebsv1.JobSpecNameLabel] == "c" && (len(job.Spec.ScriptRefs) != 1 || job.Spec.ScriptRefs[0].ResourceVersion != "2") {
+			t.Fatalf("new round Job ScriptRefs = %+v, want current observation", job.Spec.ScriptRefs)
+		}
+	}
+}
+
+func TestDispatchSpecMissingScriptDoesNotCreateJob(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "bi-script-missing", "a")
+	round.current.Spec.BuildPayload = "rpmbuild_script: missing-script\n"
+	client.buildinfos[testNS+"/"+testBuild].Spec.BuildPayload = round.current.Spec.BuildPayload
+	depend := dependEntry("a")
+	if _, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("dispatchSpec error = %v, want ErrNotFound", err)
+	}
+	if got := len(listJobs(t, client)); got != 0 {
+		t.Fatalf("Jobs = %d, want none", got)
+	}
+}
+
+func TestScriptNameFromPayload(t *testing.T) {
+	for _, tc := range []struct {
+		payload string
+		want    string
+		bad     bool
+	}{
+		{payload: "", want: "rpmbuild"},
+		{payload: "rpmbuild_script: ''\n", want: "rpmbuild"},
+		{payload: "rpmbuild_script: custom-script\n", want: "custom-script"},
+		{payload: "rpmbuild_script: [bad]\n", bad: true},
+		{payload: "rpmbuild_script: ../bad\n", bad: true},
+		{payload: "rpmbuild_script: [\n", bad: true},
+	} {
+		got, err := scriptNameFromPayload(tc.payload)
+		if (err != nil) != tc.bad || (!tc.bad && got != tc.want) {
+			t.Errorf("scriptNameFromPayload(%q) = %q, %v; want %q, bad=%v", tc.payload, got, err, tc.want, tc.bad)
+		}
+	}
+}
+
+func payloadScriptName(t *testing.T, payload string) string {
+	t.Helper()
+	var values map[string]any
+	if err := yaml.Unmarshal([]byte(payload), &values); err != nil {
+		t.Fatal(err)
+	}
+	name, _ := values["rpmbuild_script"].(string)
+	return name
 }
 
 func TestDispatchSpecNotSentNotCountedAsSent(t *testing.T) {
@@ -509,7 +639,7 @@ func TestDispatchSpecAlreadyExistsIdentityMismatch(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, seeded := dispatchRound(t, c, client, "bi-dispatch-mismatch", "a")
 	clash := testJobObj(seeded, "a", 1, ebsv1.JobRunning)
-	clash.Annotations[annBuildInfoUID] = "another-buildinfo"
+	clash.Labels[ebsv1.JobSpecNameLabel] = "another-spec"
 	client.SeedJob(clash)
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()

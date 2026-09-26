@@ -1048,6 +1048,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | `Project` | `GetProject` | `/apis/ebs/v1/projects/{project}` | **只读** | 每轮 reconcile 由 parentAbortGuard 查询一次、全轮复用（不重复 GET，见 7.1），仅供 parentAbortGuard 判定 `Terminating`（E-20/E-21）——buildPayload 已固化于 BuildInfo.spec（15.2.2），本控制器不再消费 Project 数据字段；字段消费明细见 15.6 |
 | `Config/build-resource` | `GetConfig` | `/apis/ebs/v1/configs/build-resource`（集群级单例） | **只读** | 创建 Job 时解析 `Job.spec.resources`（逐层覆盖契约见 [Config 设计](data-models~config.md) 3.2 / 15.3.1 / E-27） |
 | `Config/build-target` | `GetConfig` | `GET /apis/ebs/v1/configs/build-target`（集群级单例，无 project 段） | **只读** | 每轮创建新 Job 的 reconcile 读取一次快照（同轮批量共享），经 `BuildImage` 按 os/arch 解析写入 `Job.spec.runtimeSpec.image`（契约见 [Config 设计](data-models~config.md) 2.5.2 / 15.3.1 / E-26） |
+| `Script` | `GetScript` | `GET /apis/ebs/v1/scripts/{name}`（集群级） | **只读** | 本轮首次创建 Job 前读取所选脚本，将响应的 name/UID/resourceVersion 写入新 Job 的单元素 `spec.scriptRefs`；读取失败不创建 Job |
 
 ### 15.2 BuildInfo（读写，主资源）
 
@@ -1067,6 +1068,8 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 `BuildInfoSpec.BootstrapRepo: []BootstrapRepo`：Build Controller 创建 BuildInfo 时从 `Project.spec.bootstrapRepo` 深拷贝写入，已有 BuildInfo 不覆盖（data-models.md「BuildInfoSpec」）；本 controller **只读**、不参与组装（非步骤 0 组装对象）——Job payload `repo` 注入来源之一（按声明顺序，见 15.3.1）；上游 repo 源更新不触发本工程 spec 重新构建。
 
 `BuildInfoSpec.BuildPayload: string`：Build Controller 创建 BuildInfo 时从 `Project.spec.buildPayload` 深拷贝写入，已有 BuildInfo 不覆盖（与 BootstrapRepo 同一固化语义，data-models.md「BuildInfoSpec」）；本 controller **只读**，BuildInfo 生命周期内不随 Project 后续变更。其 YAML 输入用于 `prefer` 建边选择与逐 Job 计算（16.1/15.3.1）、`macros` spec 解析（16.3）、`unparsable_spec` 依赖覆盖（7.2.2），并作为 Job payload 的基底（15.3.1）；控制器专用的 `unparsable_spec` 不下发。Job `spec.resources` 不取自本字段（由 Config/build-resource 解析，见 15.3.1）。
+
+`BuildInfo.spec.buildPayload.rpmbuild_script` 可选择全局 Script；未配置或为空时固定选用 `rpmbuild`。BuildInfo Controller 校验名称，并在本轮首次需要创建 Job 时读取 Script；同一轮创建的 Job 共用观察到的 name、UID、resourceVersion，下一轮重新读取。确认已存在 Job 时不读取 Script。`rpmbuild_script` 不下发到 Job payload。错误类型或非法名称属于配置错误，不静默回退默认值。观测值不锁定 Runner 执行时的脚本正文。
 
 `SpecDepend` 字段（控制器内部类型，不属于公共 API：`*.spec` 解析产物与 per-BuildInfo 缓存条目类型，16.3/15.11；下表"消费点"同时标注了组装时的来源；条目取自缓存命中的 specDepends 内存视图）：
 
@@ -1127,9 +1130,9 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 - 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次，只有确认该代 Job 已存在后才更新派发计数。
 - hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，新建 Job 只取摘要前 8 字节，输出 16 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
 - Job 名为 `specName + "-" + 十进制派发代次 + "-" + hash`，使用原始 specName，不截断。当前 Job 名称校验没有显式长度上限；若 specName 不能组成合法路径段，按本地输入错误返回 PermanentError，不静默改名。
-- Job annotations 写入 `ebs.io/buildinfo-uid` 和 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、上述身份 annotations 及重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有的 20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填，但新派发仅生成 16 位名称；已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
+- Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有的 20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填，但新派发仅生成 16 位名称；已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
 - **AlreadyExists 后 GET 返回 404**：返回可重试错误，由框架退避重新入队；不得套用主对象 NotFound 的结束规则，也不增加派发计数。后续重新调和仍需该代 Job 时，使用同一创建身份和名称，不生成替代名称；是否允许再次创建仍遵循停止派发及终态守卫。
-- 重启后通过完整 List 回填已有 Job；确定性命名 Job 按身份 annotations 核验，DispatchCount 至少恢复到已确认的最大派发代次，不因旧代 Job 被清理而回退。未找到本次目标代时再次计算同名 Job，保证同一创建身份不会生成第二个名称。历史无身份 annotations 的 Job 仍按 7.4.2 的兼容规则回填，不作为同名创建冲突的可沿用对象。
+- 重启后通过完整 List 回填已有 Job；确定性命名 Job 按派发代次 annotation 和基于 BuildInfo UID 重算的名称核验，DispatchCount 至少恢复到已确认的最大派发代次，不因旧代 Job 被清理而回退。未找到本次目标代时再次计算同名 Job，保证同一创建身份不会生成第二个名称。缺少派发代次 annotation 的 Job 不参与身份匹配，也不作为同名创建冲突的可沿用对象。
 
 一次完整生命周期后的 Job 实例（行内注释标注各字段写入方）：
 
@@ -1150,7 +1153,6 @@ metadata:
     ebs.io/target-os: ${build.spec.buildTarget.os} # controller：同 Build.spec.buildTarget.os
     ebs.io/target-arch: ${build.spec.buildTarget.arch} # controller：同 Build.spec.buildTarget.arch
   annotations:                                      # controller：创建身份
-    ebs.io/buildinfo-uid: ${buildInfo.metadata.uid}
     ebs.io/dispatch-generation: "${dispatchGeneration}"
 spec:
   priority: 0                                       # 类型零值默认，不显式设置
@@ -1194,10 +1196,11 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.labels["ebs.io/package-name"]` | `specDepends[specName].repoName`（= `Snapshot.spec.packageRepos[].name`，spec 所属包仓库名）经 labels.md 第 7 节编码（合法原名截取前 63 字符并去尾 `-`/`_`/`.`；含非法字符或截断后冲突的名用 `sha256-` + SHA-256 Base32 摘要 52 字符；不写同名 annotation） | G-08 必写；必填归属标签（新建 Job 缺失不可创建，值语法由 apiserver 校验，labels.md 第 7 节）；供工程详情按软件包查询 Job 构建历史（同一仓库多 spec 共享同值）；本控制器查询不消费（list 仅按 build-name/spec-name，8.1） |
 | `metadata.labels["ebs.io/target-os"]` | `Build.spec.buildTarget.os` | G-08 必写；RpmRepo 物化队列过滤条件（labels.md 第 7 节 / artifact-manager.md 9.3.3，缺失的 Job 不进物化队列） |
 | `metadata.labels["ebs.io/target-arch"]` | `Build.spec.buildTarget.arch` | G-08 必写；同上 |
-| `metadata.annotations`（`ebs.io/buildinfo-uid` / `ebs.io/dispatch-generation`） | BuildInfo UID / 十进制派发代次 | 创建身份；资源配置来源不写入 Job annotation，调度以 `spec.resources` 为准 |
+| `metadata.annotations["ebs.io/dispatch-generation"]` | 十进制派发代次 | 与基于 BuildInfo UID 计算的 Job 名共同核验创建身份；资源配置来源不写入 Job annotation，调度以 `spec.resources` 为准 |
 | `spec.priority` | `0` | 类型零值即默认，不显式设置                                                                                                                 |
 | `spec.runtime` | `"ct"` | 常量；apiserver `SetDefaults_Job` 同值兜底（见下"apiserver 默认与覆写"）                                                                      |
 | `spec.runtimeSpec` | `{"image": Config/build-target 快照解析结果}` | RawExtension；ct 运行时的镜像来源：集群级 Config/build-target（name=build-target，`GET /apis/ebs/v1/configs/build-target`）——每轮创建新 Job 的 reconcile 经 `GetConfig` 读取一次快照、同轮批量创建共享，按 `Build.spec.buildTarget.os/arch` 解析 `content.targets[os].arches[arch].image`（复用共享 `BuildImage`）；读取失败或映射缺失 → 本轮不创建新 Job，返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 Failed，E-26）；已存在 Job 沿用固化镜像、不因配置更新重写（生效边界见 [Config 设计](data-models~config.md) 2.5.3） |
+| `spec.scriptRefs` | 创建时 Script 的 name、UID、resourceVersion，当前写入一个元素 | 从 `buildPayload.rpmbuild_script` 选名，未配置时使用 `rpmbuild`；GET Script 后写入观测值，不下发 `rpmbuild_script` 到 Job payload。读取失败不创建 Job；观测值不锁定 Runner 执行时的正文 |
 | `spec.timeoutSeconds` | `10800` | 常量（3 小时）；apiserver `SetDefaults_Job` 同值兜底                                                                                     |
 | `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET `Config/build-resource` 并解析 `spec.content`；404 时按 E-27 将当前 spec 标 Failed；其他查询失败或内容无效时暂停本轮新 Job 派发。内容按 `default` → `packages[specName].default` → `packages[specName].arches[arch]` 逐字段覆盖（[构建配置设计](data-models~config.md#32-匹配与校验)）；不再从 `BuildInfo.spec.buildPayload` 顶层 `cpu`/`memory` 取资源 |
 | `spec.nodeSelector` | `{"ebs.io/runner-arch": Build.spec.buildTarget.arch}` | scheduler 按 runner label 精确匹配架构                                                                                               |

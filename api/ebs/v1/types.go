@@ -73,6 +73,14 @@ type ScriptList struct {
 	Items           []Script `json:"items"`
 }
 
+// ScriptRef records the Script observed when a Job is created. It does not
+// pin the content version used by a later execution attempt.
+type ScriptRef struct {
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
 type Project struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -314,6 +322,7 @@ type JobSpec struct {
 	Priority       int64                `json:"priority,omitempty"`
 	Runtime        string               `json:"runtime,omitempty"`
 	RuntimeSpec    runtime.RawExtension `json:"runtimeSpec,omitempty"`
+	ScriptRefs     []ScriptRef          `json:"scriptRefs,omitempty"`
 	TimeoutSeconds int64                `json:"timeoutSeconds,omitempty"`
 	Resources      ResourceRequirements `json:"resources,omitempty"`
 	NodeSelector   map[string]string    `json:"nodeSelector,omitempty"`

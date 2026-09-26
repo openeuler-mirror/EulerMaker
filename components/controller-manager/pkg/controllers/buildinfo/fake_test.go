@@ -30,6 +30,8 @@ type fakeClient struct {
 	jobs               map[string]*ebsv1.Job
 	builds             map[string]*ebsv1.Build
 	projects           map[string]*ebsv1.Project
+	scripts            map[string]*ebsv1.Script
+	scriptReads        int
 	snapshots          map[string]*ebsv1.Snapshot
 	rpmrepos           map[string]*ebsv1.RpmRepo
 	buildResourceRules map[string]*buildResourceRules
@@ -63,10 +65,13 @@ var _ Client = (*fakeClient)(nil)
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{
-		buildinfos:         make(map[string]*ebsv1.BuildInfo),
-		jobs:               make(map[string]*ebsv1.Job),
-		builds:             make(map[string]*ebsv1.Build),
-		projects:           make(map[string]*ebsv1.Project),
+		buildinfos: make(map[string]*ebsv1.BuildInfo),
+		jobs:       make(map[string]*ebsv1.Job),
+		builds:     make(map[string]*ebsv1.Build),
+		projects:   make(map[string]*ebsv1.Project),
+		scripts: map[string]*ebsv1.Script{
+			"rpmbuild": {ObjectMeta: metav1.ObjectMeta{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "1"}, Spec: ebsv1.ScriptSpec{Content: "#!/bin/sh\n"}},
+		},
 		snapshots:          make(map[string]*ebsv1.Snapshot),
 		rpmrepos:           make(map[string]*ebsv1.RpmRepo),
 		buildResourceRules: make(map[string]*buildResourceRules),
@@ -403,6 +408,20 @@ func (f *fakeClient) GetProject(_ context.Context, project string) (*ebsv1.Proje
 		return nil, err
 	}
 	value, ok := f.projects[project]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *fakeClient) GetScript(_ context.Context, name string) (*ebsv1.Script, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scriptReads++
+	if err := f.consumeInjectedReadLocked("scripts"); err != nil {
+		return nil, err
+	}
+	value, ok := f.scripts[name]
 	if !ok {
 		return nil, ErrNotFound
 	}

@@ -61,7 +61,7 @@ spec:
 
 正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 保留 2 MiB 请求体上限。经 Gateway 访问时还受其请求体限制。不支持删除、watch、status、dryRun 或 Project-scoped 路径。
 
-可选启动参数 `--default-script-file=/path/to/script.yaml` 在就绪前加载一个 Script YAML，仅创建不存在的对象；已有对象不被覆盖，初始化失败则启动失败。未配置时不自动创建脚本。Gateway 已限制仅 Ops/Admin/System 可创建和修改 Script，普通登录用户只读、Runner 仅可读取具名对象；Controller 和 Runner 消费链路尚未接入。apiserver 仍属于内部服务，不应直接对外暴露。
+可选启动参数 `--default-script-file=/path/to/script.yaml` 在就绪前加载一个 Script YAML，仅创建不存在的对象；已有对象不被覆盖，初始化失败则启动失败。未配置时不自动创建脚本。Gateway 已限制仅 Ops/Admin/System 可创建和修改 Script，普通登录用户只读、Runner 仅可读取具名对象；BuildInfo Controller 将创建时观察到的 Script 元数据写入新 Job 的 `spec.scriptRefs`，Runner 按引用拉取并执行脚本。apiserver 仍属于内部服务，不应直接对外暴露。
 
 ## Build 创建互斥
 

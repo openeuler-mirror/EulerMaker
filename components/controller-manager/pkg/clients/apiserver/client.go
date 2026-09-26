@@ -272,7 +272,7 @@ func validateTarget(gvr schema.GroupVersionResource, namespace, name string) err
 	if name == "" {
 		return fmt.Errorf("resource name is required")
 	}
-	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "configs"
+	clusterScoped := gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "configs" || gvr.Resource == "scripts"
 	if clusterScoped && namespace != "" {
 		return fmt.Errorf("cluster-scoped resource %s requires an empty namespace", gvr.Resource)
 	}
@@ -289,7 +289,7 @@ func validateProjectScopedResource(gvr schema.GroupVersionResource, project stri
 	if project == "" {
 		return fmt.Errorf("project is required")
 	}
-	if gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "configs" {
+	if gvr.Resource == "projects" || gvr.Resource == "runners" || gvr.Resource == "configs" || gvr.Resource == "scripts" {
 		return fmt.Errorf("resource %s is not project-scoped", gvr.Resource)
 	}
 	return nil
@@ -373,6 +373,8 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 	switch gvr.Resource {
 	case "configs":
 		return &ebsv1.ConfigList{}, nil
+	case "scripts":
+		return &ebsv1.ScriptList{}, nil
 	case "projects":
 		return &ebsv1.ProjectList{}, nil
 	case "snapshots":
@@ -399,6 +401,8 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 	switch gvr.Resource {
 	case "configs":
 		return &ebsv1.Config{}, nil
+	case "scripts":
+		return &ebsv1.Script{}, nil
 	case "projects":
 		return &ebsv1.Project{}, nil
 	case "snapshots":

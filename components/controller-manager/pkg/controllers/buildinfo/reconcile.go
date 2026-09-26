@@ -37,6 +37,7 @@ type reconcileRound struct {
 	build       *ebsv1.Build
 	rpmRepo     *ebsv1.RpmRepo
 	rpmRepoHeld bool
+	scriptRef   *ebsv1.ScriptRef
 
 	failures *roundFailures
 }

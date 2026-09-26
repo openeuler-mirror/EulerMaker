@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
 	"controller-manager/pkg/clients/apiserver"
@@ -88,6 +89,7 @@ type Client interface {
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
+	GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
 	// GetBuildResourceRules reads the cluster-wide default resource table.
 	GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error)
 	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers
@@ -260,6 +262,21 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 	value, ok := obj.(*ebsv1.Project)
 	if !ok || value == nil || value.Name != project || value.Namespace != "" || value.UID == "" || value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected Project response for %s: %T", project, obj)
+	}
+	return value, nil
+}
+
+func (c *apiClient) GetScript(ctx context.Context, name string) (*ebsv1.Script, error) {
+	if reasons := kvalidation.IsDNS1123Subdomain(name); len(reasons) > 0 {
+		return nil, contractErrorf("invalid Script name %q: %s", name, strings.Join(reasons, ", "))
+	}
+	obj, err := c.readGet(ctx, source.ScriptsGVR, "", name)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := obj.(*ebsv1.Script)
+	if !ok || value == nil || value.Name != name || value.Namespace != "" || value.UID == "" || value.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected Script response for %s: %T", name, obj)
 	}
 	return value, nil
 }

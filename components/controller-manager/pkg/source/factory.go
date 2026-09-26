@@ -13,14 +13,15 @@ import (
 )
 
 var (
-	ProjectsGVR             = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "projects"}
-	SnapshotsGVR            = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "snapshots"}
-	BuildsGVR               = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
-	BuildInfosGVR           = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "buildinfos"}
-	ConfigsGVR              = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "configs"}
-	RpmReposGVR             = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "rpmrepos"}
-	JobsGVR                 = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
-	RunnersGVR              = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}
+	ProjectsGVR   = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "projects"}
+	SnapshotsGVR  = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "snapshots"}
+	BuildsGVR     = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "builds"}
+	BuildInfosGVR = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "buildinfos"}
+	ConfigsGVR    = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "configs"}
+	ScriptsGVR    = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "scripts"}
+	RpmReposGVR   = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "rpmrepos"}
+	JobsGVR       = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
+	RunnersGVR    = schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}
 )
 
 type WatchResource struct {

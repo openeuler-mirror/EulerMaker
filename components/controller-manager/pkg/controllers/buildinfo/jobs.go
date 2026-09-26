@@ -20,6 +20,7 @@ import (
 	yaml "gopkg.in/yaml.v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -34,7 +35,6 @@ const (
 	jobTimeoutSeconds  = 10800
 	runnerArchSelector = "ebs.io/runner-arch"
 
-	annBuildInfoUID       = "ebs.io/buildinfo-uid"
 	annDispatchGeneration = "ebs.io/dispatch-generation"
 )
 
@@ -202,6 +202,20 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		return controller.ReconcileResult{}, err
 	}
 
+	if round.scriptRef == nil {
+		scriptName, err := scriptNameFromPayload(round.current.Spec.BuildPayload)
+		if err != nil {
+			return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("select Script for Job %s: %w", name, err))
+		}
+		script, err := c.client.GetScript(ctx, scriptName)
+		if err != nil {
+			return controller.ReconcileResult{}, fmt.Errorf("get Script %q for Job %s: %w", scriptName, name, err)
+		}
+		round.scriptRef = &ebsv1.ScriptRef{Name: script.Name, UID: string(script.UID), ResourceVersion: script.ResourceVersion}
+	}
+	// A Job owns its observation; the round only shares the fetched value.
+	scriptRef := *round.scriptRef
+
 	if len(payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))) > 0 && sources == nil {
 		if !round.isSingle() {
 			return controller.ReconcileResult{}, fmt.Errorf("RPM metadata unavailable for Job %s prefer selection", name)
@@ -213,7 +227,7 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 			return controller.ReconcileResult{}, err
 		}
 	}
-	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, name, generation, sources)
+	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, scriptRef, name, generation, sources)
 	created, err := c.client.CreateJob(ctx, namespace, job)
 	var writeErr *clientpkg.WriteError
 	isWriteErr := errors.As(err, &writeErr)
@@ -376,8 +390,8 @@ func (c *Controller) markSpecFailed(ctx context.Context, round *reconcileRound, 
 }
 
 // verifyJobIdentity checks a found Job against the creation identity
-// (15.3.1): namespace, recomputed name, build/spec labels and the identity
-// annotations must all match.
+// (15.3.1): namespace, recomputed name, build/spec labels, and the
+// dispatch-generation annotation must all match.
 func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName string, generation int64) error {
 	if job.Namespace != buildInfo.Namespace {
 		return fmt.Errorf("namespace %q != %q", job.Namespace, buildInfo.Namespace)
@@ -391,9 +405,6 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 	if job.Labels[ebsv1.JobSpecNameLabel] != specName {
 		return fmt.Errorf("spec-name label %q != %q", job.Labels[ebsv1.JobSpecNameLabel], specName)
 	}
-	if job.Annotations[annBuildInfoUID] != string(buildInfo.UID) {
-		return fmt.Errorf("buildinfo-uid annotation %q != %q", job.Annotations[annBuildInfoUID], buildInfo.UID)
-	}
 	if job.Annotations[annDispatchGeneration] != strconv.FormatInt(generation, 10) {
 		return fmt.Errorf("dispatch-generation annotation %q != %d", job.Annotations[annDispatchGeneration], generation)
 	}
@@ -402,8 +413,33 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 
 // --- Job construction (design 15.3.1) ---
 
+// scriptNameFromPayload selects the script to observe before creating a Job.
+// A malformed selection must not silently fall back to the default.
+func scriptNameFromPayload(raw string) (string, error) {
+	name := "rpmbuild"
+	if strings.TrimSpace(raw) != "" {
+		var payload map[string]any
+		if err := yaml.Unmarshal([]byte(raw), &payload); err != nil {
+			return "", fmt.Errorf("decode buildPayload: %w", err)
+		}
+		if value, exists := payload["rpmbuild_script"]; exists {
+			selected, ok := value.(string)
+			if !ok {
+				return "", fmt.Errorf("buildPayload.rpmbuild_script must be a string")
+			}
+			if strings.TrimSpace(selected) != "" {
+				name = selected
+			}
+		}
+	}
+	if reasons := kvalidation.IsDNS1123Subdomain(name); len(reasons) > 0 {
+		return "", fmt.Errorf("invalid buildPayload.rpmbuild_script %q: %s", name, strings.Join(reasons, ", "))
+	}
+	return name, nil
+}
+
 // jobForSpec builds the Job object with every controller-filled field.
-func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *buildResourceRules, name string, generation int64, sources *rpmver.RpmMetaSources) *ebsv1.Job {
+func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *buildResourceRules, scriptRef ebsv1.ScriptRef, name string, generation int64, sources *rpmver.RpmMetaSources) *ebsv1.Job {
 	buildInfo := round.current
 	target := round.build.Spec.BuildTarget
 	runtimeSpec, _ := json.Marshal(map[string]string{"image": image})
@@ -420,11 +456,11 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 				ebsv1.BuildTargetArchLabel: target.Arch,
 			},
 			Annotations: map[string]string{
-				annBuildInfoUID:       string(buildInfo.UID),
 				annDispatchGeneration: strconv.FormatInt(generation, 10),
 			},
 		},
 		Spec: ebsv1.JobSpec{
+			ScriptRefs:     []ebsv1.ScriptRef{scriptRef},
 			Runtime:        jobRuntime,
 			RuntimeSpec:    runtime.RawExtension{Raw: runtimeSpec},
 			TimeoutSeconds: jobTimeoutSeconds,
@@ -440,6 +476,7 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 // build-level repo/repo_priority keys injected (overriding base keys).
 func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string, sources *rpmver.RpmMetaSources) string {
 	base := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
+	delete(base, "rpmbuild_script")
 	configuredPrefer := payloadPrefer(base)
 	delete(base, "prefer")
 	if matched := jobPrefer(depend, sources, configuredPrefer); len(matched) > 0 {
@@ -639,7 +676,7 @@ func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, sc
 // whether scoped specs without an entry get one (init yes — covers Jobs
 // created while the status write failed; Processing no, the init step-5
 // invariant already covers every build-set spec). Only Jobs carrying this
-// incarnation's UID annotation and deterministic name fold: a recreated same-name
+// incarnation's deterministic name fold: a recreated same-name
 // BuildInfo never inherits a previous incarnation's phases or counts
 // (15.3.1 identity; the returned groups are uid-filtered for the same
 // reason — the 7.4.6 gate inputs must not either).
@@ -702,14 +739,14 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 	return bySpec
 }
 
-// filterJobsByIdentity checks the UID annotation and deterministic name
+// filterJobsByIdentity checks the deterministic name
 // against the current BuildInfo UID, spec label and dispatch generation.
 func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	out := make([]ebsv1.Job, 0, len(jobs))
 	for i := range jobs {
 		job := &jobs[i]
 		generation, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64)
-		if err == nil && generation > 0 && job.Annotations[annBuildInfoUID] == uid && matchesJobName(job.Name, uid, job.Labels[ebsv1.JobSpecNameLabel], generation) {
+		if err == nil && generation > 0 && matchesJobName(job.Name, uid, job.Labels[ebsv1.JobSpecNameLabel], generation) {
 			out = append(out, jobs[i])
 		}
 	}
