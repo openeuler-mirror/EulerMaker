@@ -14,12 +14,18 @@ import (
 	"time"
 )
 
-func (s *Store) logPaths(p, u string) (string, string, string) {
-	base := filepath.Join(s.root, ".logs", p, u)
-	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/logs", p, u, "combined.json")
+func (s *Store) logPaths(p, j, u string) (string, string, string) {
+	base := filepath.Join(s.root, ".logs", p, j)
+	if _, err := os.Stat(base); os.IsNotExist(err) && validIdentifier(u) {
+		legacy := filepath.Join(s.root, ".logs", p, u)
+		if _, err := os.Stat(legacy); err == nil {
+			base = legacy // Continue an in-flight log created before the name-based layout.
+		}
+	}
+	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/logs", p, j, "combined.json")
 }
 func (s *Store) recoverLog(l *LogStream) error {
-	body, index, meta := s.logPaths(l.Project, l.JobUID)
+	body, index, meta := s.logPaths(l.Project, l.JobName, l.JobUID)
 	if l.State == LogFinalizing && l.ArtifactID != "" {
 		if a := s.artifacts[l.ArtifactID]; a != nil && verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil {
 			now := time.Now().UTC()
@@ -118,13 +124,13 @@ func (s *Store) AppendLog(p, j, u, runner string, seq int64, data []byte, sum st
 		l = &LogStream{SchemaVersion: 1, Project: p, JobName: j, JobUID: u, RunnerName: runner, Stream: "combined", State: LogOpen, CreatedAt: now, UpdatedAt: now}
 		s.logs[k] = l
 	}
-	if l.Project != p || l.JobName != j || l.JobUID != u || l.RunnerName != runner {
+	if l.Project != p || l.JobName != j || l.RunnerName != runner {
 		return l, errors.New("JobIdentityConflict")
 	}
 	if l.State != LogOpen {
 		return nil, errors.New("LogAlreadyFinalized")
 	}
-	body, index, meta := s.logPaths(p, u)
+	body, index, meta := s.logPaths(p, j, u)
 	if err := os.MkdirAll(filepath.Dir(body), 0750); err != nil {
 		return nil, err
 	}
@@ -201,7 +207,7 @@ func (s *Store) ReplayLog(p, j, u string, after int64, limit int) ([]logEvent, i
 	if after+1 < first {
 		return nil, l.NextSequence, errors.New("ReplayWindowExceeded")
 	}
-	body, index, _ := s.logPaths(p, u)
+	body, index, _ := s.logPaths(p, j, u)
 	if l.State == LogCompleted && l.ArtifactID != "" {
 		if a := s.artifacts[l.ArtifactID]; a != nil {
 			body = s.artifactPath(a)
@@ -285,7 +291,7 @@ func (s *Store) CompleteLog(p, j, u, runner string, r CompleteLogRequest) (*Arti
 	if r.Stream != "combined" || l.NextSequence != r.LastSequence+1 || l.CommittedBytes != r.Size {
 		return nil, errors.New("log mismatch")
 	}
-	body, _, meta := s.logPaths(p, u)
+	body, _, meta := s.logPaths(p, j, u)
 	h := sha256.New()
 	f, e := os.Open(body)
 	if os.IsNotExist(e) && r.Size == 0 {
@@ -305,13 +311,13 @@ func (s *Store) CompleteLog(p, j, u, runner string, r CompleteLogRequest) (*Arti
 		return nil, errors.New("log digest mismatch")
 	}
 	for _, existing := range s.artifacts {
-		if existing.Project == p && existing.JobUID == u && existing.RelativePath == "logs/container.log" && existing.State == Completed {
+		if existing.Project == p && existing.JobName == j && existing.RelativePath == "logs/container.log" && existing.State == Completed {
 			return nil, errors.New("ArtifactPathConflict")
 		}
 	}
 	now := time.Now().UTC()
 	id := newID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Project: p, JobName: j, JobUID: u, RunnerName: runner, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", u, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
+	a := &Artifact{SchemaVersion: 1, ID: id, Project: p, JobName: j, JobUID: u, RunnerName: runner, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
 	final := s.artifactPath(a)
 	if e = os.MkdirAll(filepath.Dir(final), 0750); e != nil {
 		return nil, e

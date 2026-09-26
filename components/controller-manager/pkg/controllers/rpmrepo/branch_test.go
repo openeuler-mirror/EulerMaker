@@ -121,7 +121,7 @@ func TestCommitStatusTreatsPreconditionFailureAsConflict(t *testing.T) {
 func TestBuildWithoutBuildInfoWaits(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
-	repo.Status.Repository.SourceJobUIDs = []string{"uid-job-a"}
+	repo.Status.Repository.SourceJobNames = []string{"job-a"}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()

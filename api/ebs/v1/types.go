@@ -256,8 +256,9 @@ type RpmRepo struct {
 type RpmRepoSpec struct{}
 
 type RepositoryInput struct {
-	JobName  string `json:"jobName"`
-	JobUID   string `json:"jobUID"`
+	JobName string `json:"jobName"`
+	// JobUID is retained for decoding older status objects; scheduling uses JobName.
+	JobUID   string `json:"jobUID,omitempty"`
 	SpecName string `json:"specName"`
 }
 
@@ -281,12 +282,12 @@ type RpmRepoReleaseStatus struct {
 }
 
 type RpmRepoRepositoryStatus struct {
-	RepositoryUID  string                `json:"repositoryUID,omitempty"`
-	ContentURL     string                `json:"contentURL,omitempty"`
-	SourceJobUIDs  []string              `json:"sourceJobUIDs,omitempty"`
-	SkippedJobUIDs []string              `json:"skippedJobUIDs,omitempty"`
-	Transition     *RepositoryTransition `json:"transition,omitempty"`
-	UpdatedAt      *metav1.Time          `json:"updatedAt,omitempty"`
+	RepositoryUID   string                `json:"repositoryUID,omitempty"`
+	ContentURL      string                `json:"contentURL,omitempty"`
+	SourceJobNames  []string              `json:"sourceJobNames,omitempty"`
+	SkippedJobNames []string              `json:"skippedJobNames,omitempty"`
+	Transition      *RepositoryTransition `json:"transition,omitempty"`
+	UpdatedAt       *metav1.Time          `json:"updatedAt,omitempty"`
 }
 
 type RpmRepoStatus struct {

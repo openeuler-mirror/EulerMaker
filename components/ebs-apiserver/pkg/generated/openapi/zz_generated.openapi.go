@@ -1528,9 +1528,9 @@ func schema_ebs_api_ebs_v1_RepositoryInput(ref common.ReferenceCallback) common.
 					},
 					"jobUID": {
 						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
+							Description: "JobUID is retained for decoding older status objects; scheduling uses JobName.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"specName": {
@@ -1541,7 +1541,7 @@ func schema_ebs_api_ebs_v1_RepositoryInput(ref common.ReferenceCallback) common.
 						},
 					},
 				},
-				Required: []string{"jobName", "jobUID", "specName"},
+				Required: []string{"jobName", "specName"},
 			},
 		},
 	}
@@ -1784,7 +1784,7 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 							Format: "",
 						},
 					},
-					"sourceJobUIDs": {
+					"sourceJobNames": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
 							Items: &spec.SchemaOrArray{
@@ -1798,7 +1798,7 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 							},
 						},
 					},
-					"skippedJobUIDs": {
+					"skippedJobNames": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
 							Items: &spec.SchemaOrArray{

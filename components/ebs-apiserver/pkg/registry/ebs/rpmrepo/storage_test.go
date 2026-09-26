@@ -63,7 +63,7 @@ func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 				Status: ebsv1.RpmRepoStatus{
 					Repository: &ebsv1.RpmRepoRepositoryStatus{
 						RepositoryUID: tc.uid, ContentURL: tc.url,
-						SourceJobUIDs: []string{"job-1"}, Transition: &ebsv1.RepositoryTransition{},
+						SourceJobNames: []string{"job-1"}, Transition: &ebsv1.RepositoryTransition{},
 						UpdatedAt: &metav1.Time{},
 					},
 					Release:    &ebsv1.RpmRepoReleaseStatus{},

@@ -129,13 +129,15 @@ func normalizeRepositoryRequest(in CreateRepositoryRequest) (CreateRepositoryReq
 	if !validIdentifier(in.RepositoryUID) || !validIdentifier(in.RepositoryName) || !validIdentifier(in.Project) || !validIdentifier(in.BuildName) || in.RepositoryName != in.BuildName || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || len(in.Manifests) == 0 || (in.BaseRepositoryUID != "" && (!validIdentifier(in.BaseRepositoryUID) || in.BaseRepositoryUID == in.RepositoryUID)) {
 		return in, "", &repositoryError{code: "InvalidRepositoryRequest", status: 422}
 	}
-	sort.Slice(in.Manifests, func(i, j int) bool { return in.Manifests[i].JobUID < in.Manifests[j].JobUID })
+	sort.Slice(in.Manifests, func(i, j int) bool { return in.Manifests[i].JobName < in.Manifests[j].JobName })
 	seen := map[string]bool{}
-	for _, ref := range in.Manifests {
-		if !validIdentifier(ref.JobName) || !validIdentifier(ref.JobUID) || seen[ref.JobUID] {
+	for i, ref := range in.Manifests {
+		if !validIdentifier(ref.JobName) || seen[ref.JobName] {
 			return in, "", &repositoryError{code: "InvalidManifestReference", status: 422}
 		}
-		seen[ref.JobUID] = true
+		seen[ref.JobName] = true
+		// Older clients may still send a UID; it is not part of repository identity.
+		in.Manifests[i].JobUID = ""
 	}
 	uid := repositoryUID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
 	if in.RepositoryUID != uid {
@@ -156,9 +158,9 @@ func repositoryUID(project, buildName, baseUID string, manifests []ManifestRefer
 	}
 	for _, ref := range manifests {
 		var length [8]byte
-		binary.BigEndian.PutUint64(length[:], uint64(len(ref.JobUID)))
+		binary.BigEndian.PutUint64(length[:], uint64(len(ref.JobName)))
 		h.Write(length[:])
-		h.Write([]byte(ref.JobUID))
+		h.Write([]byte(ref.JobName))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -281,7 +283,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 			typed = &repositoryError{code: "RepositoryMaterializationFailed", retryable: true}
 		}
 		record.State = RepositoryFailed
-		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobUID: typed.jobUID, Time: now}
+		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobName: typed.jobName, Time: now}
 	} else {
 		record.State, record.RepositoryDigest, record.RPMs = RepositoryReady, result.Digest, result.RPMs
 		record.ContentURL = "/repositories/v1/" + uid + "/"

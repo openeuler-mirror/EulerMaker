@@ -76,7 +76,7 @@ func TestReleaseRecheckReturnsToRepositoryWithoutManifestProbe(t *testing.T) {
 
 func TestReleaseRecheckSkipsCandidateWithoutOwnVersion(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, func(repo *ebsv1.RpmRepo) {
-		repo.Status.Repository.SourceJobUIDs = nil
+		repo.Status.Repository.SourceJobNames = nil
 	}, DefaultPublishPolicy{})
 	// The candidate predicate already filters this object; keep the test honest by asserting nothing happens.
 	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))

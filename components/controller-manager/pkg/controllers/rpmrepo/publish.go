@@ -42,7 +42,7 @@ func (r *reconciler) reconcileRelease(os, arch string) (controller.ReconcileResu
 		if repo.DeletionTimestamp != nil {
 			continue
 		}
-		if repo.Status.Repository == nil || repo.Status.Repository.Transition != nil || len(repo.Status.Repository.SourceJobUIDs) == 0 {
+		if repo.Status.Repository == nil || repo.Status.Repository.Transition != nil || len(repo.Status.Repository.SourceJobNames) == 0 {
 			continue
 		}
 		handled, result, err := r.tryStartRelease(repo)

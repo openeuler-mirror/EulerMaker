@@ -224,7 +224,7 @@ func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "container exited with code 7") {
 		t.Fatalf("error = %v", err)
 	}
-	if resultRoot != filepath.Join(dir, "results", "project-a", "uid-a") {
+	if resultRoot != filepath.Join(dir, "results", "project-a", "job-a") {
 		t.Fatalf("result root = %s", resultRoot)
 	}
 	if string(sink.data) != "container log\n" || !sink.completed {

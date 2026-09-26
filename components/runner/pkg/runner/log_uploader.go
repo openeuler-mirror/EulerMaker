@@ -85,14 +85,14 @@ func (f *ArtifactLogFactory) Open(job JobResource) (JobLogSink, error) {
 	if f.Remote == nil {
 		return nil, fmt.Errorf("artifact log remote is required")
 	}
-	if job.Metadata.UID == "" {
-		return nil, fmt.Errorf("job UID is required for log upload")
+	if !validLocalPathSegment(job.Metadata.Name) {
+		return nil, fmt.Errorf("invalid job name for log spool")
 	}
 	project := job.Metadata.Namespace
 	if project == "" {
 		project = "default"
 	}
-	dir := filepath.Join(f.RootDir, "logs", filepath.Clean(project), filepath.Clean(job.Metadata.UID))
+	dir := filepath.Join(f.RootDir, "logs", filepath.Clean(project), filepath.Clean(job.Metadata.Name))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create log spool: %w", err)
 	}
@@ -183,7 +183,7 @@ func (s *artifactLogSink) Complete(ctx context.Context) (CompletedLog, error) {
 	s.mu.Lock()
 	last := s.nextSequence - 1
 	s.mu.Unlock()
-	key := s.uid + "-log-complete"
+	key := s.job + "-log-complete"
 	result, err := s.completeWithRetry(ctx, key, CompleteLogInput{JobUID: s.uid, Stream: "combined", LastSequence: last, Size: size, SHA256: sum})
 	if err != nil {
 		return CompletedLog{}, err
@@ -203,14 +203,14 @@ func (s *artifactLogSink) Complete(ctx context.Context) (CompletedLog, error) {
 }
 
 func (f *ArtifactLogFactory) Cleanup(job JobResource) error {
-	if job.Metadata.UID == "" {
+	if !validLocalPathSegment(job.Metadata.Name) {
 		return nil
 	}
 	project := job.Metadata.Namespace
 	if project == "" {
 		project = "default"
 	}
-	dir := filepath.Join(f.RootDir, "logs", filepath.Clean(project), filepath.Clean(job.Metadata.UID))
+	dir := filepath.Join(f.RootDir, "logs", filepath.Clean(project), filepath.Clean(job.Metadata.Name))
 	if _, err := os.Stat(filepath.Join(dir, "completed.json")); err != nil {
 		if os.IsNotExist(err) {
 			return nil

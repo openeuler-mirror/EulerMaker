@@ -33,7 +33,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 		seenP[f.RelativePath] = true
 		seenA[f.ArtifactID] = true
 		a := s.artifacts[f.ArtifactID]
-		if a == nil || a.State != Completed || a.Project != project || a.JobName != job || a.JobUID != r.JobUID || a.RelativePath != f.RelativePath || a.Category != f.Category || a.Size != f.Size || a.SHA256 != f.SHA256 {
+		if a == nil || a.State != Completed || a.Project != project || a.JobName != job || a.RelativePath != f.RelativePath || a.Category != f.Category || a.Size != f.Size || a.SHA256 != f.SHA256 {
 			return nil, errors.New("artifact mismatch")
 		}
 	}
@@ -47,7 +47,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 	}
 	now := time.Now().UTC()
 	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, JobUID: r.JobUID, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
-	path := filepath.Join(s.root, ".metadata/jobs", project, r.JobUID, "manifest.json")
+	path := filepath.Join(s.root, ".metadata/jobs", project, job, "manifest.json")
 	if err := atomicJSON(path, m); err != nil {
 		return nil, err
 	}

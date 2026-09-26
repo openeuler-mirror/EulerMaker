@@ -91,7 +91,7 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 	if err != nil {
 		return CompletedManifest{}, err
 	}
-	if manifest.JobUID != job.Metadata.UID || manifest.State != "Completed" || manifest.ArtifactCount != len(files) {
+	if manifest.State != "Completed" || manifest.ArtifactCount != len(files) {
 		return CompletedManifest{}, fmt.Errorf("artifact manifest completion response does not match request")
 	}
 	return manifest, nil
@@ -247,7 +247,7 @@ func (p *ArtifactProcessor) uploadAll(ctx context.Context, job JobResource, cand
 
 func (p *ArtifactProcessor) uploadOne(ctx context.Context, job JobResource, candidate artifactCandidate) (ArtifactRecord, error) {
 	keySum := sha256.Sum256([]byte(candidate.RelativePath))
-	key := job.Metadata.UID + "-artifact-" + hex.EncodeToString(keySum[:])
+	key := job.Metadata.Name + "-artifact-" + hex.EncodeToString(keySum[:])
 	if receipt, ok := p.readReceipt(job, candidate, key); ok {
 		return receipt.Artifact, nil
 	}
@@ -295,7 +295,7 @@ func (p *ArtifactProcessor) completeManifestWithRetry(ctx context.Context, job J
 			return manifest, nil
 		}
 		known, getErr := p.Remote.GetManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, job.Metadata.UID)
-		if getErr == nil && known.JobUID == input.JobUID && known.State == "Completed" && known.ArtifactCount == len(input.Files) {
+		if getErr == nil && known.State == "Completed" && known.ArtifactCount == len(input.Files) {
 			return known, nil
 		}
 		if !retryableArtifactError(err) {
@@ -318,7 +318,7 @@ func (p *ArtifactProcessor) retryMaxBackoff() time.Duration {
 
 func validateUploadedArtifact(job JobResource, candidate artifactCandidate, artifact ArtifactRecord) error {
 	if artifact.ID == "" || artifact.State != "Completed" || artifact.Project != job.Metadata.Namespace ||
-		artifact.JobName != job.Metadata.Name || artifact.JobUID != job.Metadata.UID || artifact.Category != "artifact" ||
+		artifact.JobName != job.Metadata.Name || artifact.Category != "artifact" ||
 		artifact.RelativePath != candidate.RelativePath || artifact.Size != candidate.Size || artifact.SHA256 != candidate.SHA256 {
 		return fmt.Errorf("artifact upload response does not match %s", candidate.RelativePath)
 	}
@@ -327,7 +327,7 @@ func validateUploadedArtifact(job JobResource, candidate artifactCandidate, arti
 
 func (p *ArtifactProcessor) receiptPath(job JobResource, relative string) string {
 	sum := sha256.Sum256([]byte(relative))
-	return filepath.Join(p.RootDir, "uploads", job.Metadata.Namespace, job.Metadata.UID, "artifacts", hex.EncodeToString(sum[:])+".json")
+	return filepath.Join(p.RootDir, "uploads", job.Metadata.Namespace, job.Metadata.Name, "artifacts", hex.EncodeToString(sum[:])+".json")
 }
 
 func (p *ArtifactProcessor) writeReceipt(job JobResource, relative string, receipt artifactReceipt) error {
@@ -356,13 +356,17 @@ func (p *ArtifactProcessor) readReceipt(job JobResource, candidate artifactCandi
 }
 
 func validateJobIdentity(job JobResource) error {
-	if job.Metadata.Namespace == "" || job.Metadata.Name == "" || job.Metadata.UID == "" {
-		return fmt.Errorf("job namespace, name, and UID are required for artifact upload")
+	if job.Metadata.Namespace == "" || job.Metadata.Name == "" {
+		return fmt.Errorf("job namespace and name are required for artifact upload")
 	}
-	for _, value := range []string{job.Metadata.Namespace, job.Metadata.UID} {
-		if value == "." || value == ".." || strings.ContainsAny(value, `/\\`) {
+	for _, value := range []string{job.Metadata.Namespace, job.Metadata.Name} {
+		if !validLocalPathSegment(value) {
 			return fmt.Errorf("invalid job identity for local artifact path")
 		}
 	}
 	return nil
+}
+
+func validLocalPathSegment(value string) bool {
+	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, `/\\`)
 }

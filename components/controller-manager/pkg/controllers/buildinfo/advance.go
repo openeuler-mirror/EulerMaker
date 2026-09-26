@@ -238,7 +238,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 			}
 			// 7.4.6 gate 2 (publish confirmation): every Succeeded direct
 			// upstream's latest-generation Job UID must be in the RpmRepo
-			// sourceJobUIDs set; Failed upstreams are skipped.
+			// sourceJobNames set; Failed upstreams are skipped.
 			if !upstreamOutputsPublished(round, dcg, name, bySpec) {
 				continue
 			}
@@ -342,14 +342,14 @@ func rebuildConsistencySatisfied(dcg *DcgDict, round *reconcileRound, spec strin
 
 // upstreamOutputsPublished evaluates the 7.4.6 gate-2 publish confirmation:
 // for every Succeeded direct upstream, the latest-generation Job's UID must
-// be a member of the same-name RpmRepo status.repository.sourceJobUIDs (the
+// be a member of the same-name RpmRepo status.repository.sourceJobNames (the
 // only publish credential). Failed upstreams are skipped (their Job is never
 // consumed). The RpmRepo object is the guard-held one (15.4), the Jobs come
 // from this round's List — no extra queries.
 func upstreamOutputsPublished(round *reconcileRound, dcg *DcgDict, spec string, bySpec map[string][]ebsv1.Job) bool {
 	published := map[string]bool{}
 	if round.rpmRepoHeld && round.rpmRepo.Status.Repository != nil {
-		for _, uid := range round.rpmRepo.Status.Repository.SourceJobUIDs {
+		for _, uid := range round.rpmRepo.Status.Repository.SourceJobNames {
 			published[uid] = true
 		}
 	}

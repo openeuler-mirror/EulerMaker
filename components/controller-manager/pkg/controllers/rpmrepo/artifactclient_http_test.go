@@ -130,7 +130,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("get-manifest-query", func(t *testing.T) {
+	t.Run("get-manifest-by-name", func(t *testing.T) {
 		body := `{"project":"project","jobName":"job-a","jobUID":"uid-job-a","state":"Completed"}`
 		server := newScriptedArtifactServer(t, http.StatusOK, body, nil)
 		client := server.client(t)
@@ -145,8 +145,8 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		if request.URL.Path != "/artifacts/v1/projects/"+testProject+"/jobs/job-a/manifest" {
 			t.Fatalf("unexpected path %q", request.URL.Path)
 		}
-		if request.URL.Query().Get("jobUID") != "uid-job-a" {
-			t.Fatalf("unexpected jobUID query %q", request.URL.RawQuery)
+		if request.URL.RawQuery != "" {
+			t.Fatalf("unexpected manifest query %q", request.URL.RawQuery)
 		}
 	})
 

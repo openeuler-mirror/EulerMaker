@@ -10,10 +10,10 @@ import (
 type badManifestMaterializer struct{}
 
 func (badManifestMaterializer) Materialize(context.Context, RepositoryRecord) (repositoryResult, error) {
-	return repositoryResult{}, &repositoryError{code: "ManifestInvalid", status: 422, jobUID: "job-uid-1"}
+	return repositoryResult{}, &repositoryError{code: "ManifestInvalid", status: 422, jobName: "job-1"}
 }
 
-func TestRepositoryFailurePersistsOffendingJobUID(t *testing.T) {
+func TestRepositoryFailurePersistsOffendingJobName(t *testing.T) {
 	server, request := newRepositoryTestServer(t, badManifestMaterializer{})
 	if _, _, err := server.repositories.submit(request); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -22,8 +22,8 @@ func TestRepositoryFailurePersistsOffendingJobUID(t *testing.T) {
 	for time.Now().Before(deadline) {
 		record, ok := server.repositories.get(request.RepositoryUID)
 		if ok && record.State == RepositoryFailed {
-			if record.Failure == nil || record.Failure.JobUID != "job-uid-1" {
-				t.Fatalf("failure lost offending Job UID: %+v", record.Failure)
+			if record.Failure == nil || record.Failure.JobName != "job-1" {
+				t.Fatalf("failure lost offending Job name: %+v", record.Failure)
 			}
 			return
 		}
@@ -57,8 +57,8 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 			}
 			_, err := store.repositoryArtifacts(project, ref)
 			var typed *repositoryError
-			if !errors.As(err, &typed) || typed.code != tt.code || typed.jobUID != uid {
-				t.Fatalf("error = %v, want code %q and job UID %q", err, tt.code, uid)
+			if !errors.As(err, &typed) || typed.code != tt.code || typed.jobName != job {
+				t.Fatalf("error = %v, want code %q and job name %q", err, tt.code, job)
 			}
 		})
 	}

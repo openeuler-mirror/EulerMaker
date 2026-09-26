@@ -76,16 +76,16 @@ type ContainerRuntime interface {
 }
 
 func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, error) {
-	if e.LogFactory != nil && (job.Metadata.Namespace == "" || job.Metadata.UID == "") {
-		return "", fmt.Errorf("job namespace and UID are required for log upload")
+	if e.LogFactory != nil && (job.Metadata.Namespace == "" || job.Metadata.Name == "") {
+		return "", fmt.Errorf("job namespace and name are required for log upload")
 	}
 	project := job.Metadata.Namespace
 	if project == "" {
 		project = "default"
 	}
 	jobName := job.Metadata.Name
-	if jobName == "" {
-		return "", fmt.Errorf("job name is required")
+	if !validLocalPathSegment(jobName) {
+		return "", fmt.Errorf("invalid job name for local path")
 	}
 
 	spec, err := parseContainerRuntimeSpec(job.Spec.RuntimeSpec)
@@ -109,12 +109,8 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		seenScripts[ref.Name] = struct{}{}
 	}
 
-	executionID := job.Metadata.UID
-	if executionID == "" {
-		executionID = jobName
-	}
-	workDir := filepath.Join(e.WorkDir, project, executionID)
-	resultRoot := filepath.Join(e.ResultRoot, project, executionID)
+	workDir := filepath.Join(e.WorkDir, project, jobName)
+	resultRoot := filepath.Join(e.ResultRoot, project, jobName)
 	if err := os.RemoveAll(workDir); err != nil {
 		return "", fmt.Errorf("clean work dir: %w", err)
 	}
@@ -161,7 +157,11 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return resultRoot, err
 	}
 
-	containerName := containerName(project, executionID)
+	containerID := job.Metadata.UID
+	if containerID == "" {
+		containerID = jobName
+	}
+	containerName := containerName(project, containerID)
 	if err := ctx.Err(); err != nil {
 		return resultRoot, err
 	}

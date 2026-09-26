@@ -47,7 +47,7 @@ const (
 
 type ManifestReference struct {
 	JobName string `json:"jobName"`
-	JobUID  string `json:"jobUID"`
+	JobUID  string `json:"jobUID,omitempty"`
 }
 
 type CreateRepositoryRequest struct {
@@ -66,6 +66,7 @@ type FailureInfo struct {
 	Message   string    `json:"message"`
 	Retryable bool      `json:"retryable"`
 	JobUID    string    `json:"jobUID,omitempty"`
+	JobName   string    `json:"jobName,omitempty"`
 	Time      time.Time `json:"time"`
 }
 
@@ -253,13 +254,13 @@ func (c *httpArtifactClient) GetRepository(ctx context.Context, repositoryUID st
 	return response, err
 }
 
-func (c *httpArtifactClient) GetJobManifest(ctx context.Context, project, jobName, jobUID string) (JobUploadManifest, error) {
+func (c *httpArtifactClient) GetJobManifest(ctx context.Context, project, jobName, _ string) (JobUploadManifest, error) {
 	var manifest JobUploadManifest
-	if project == "" || jobName == "" || jobUID == "" {
+	if project == "" || jobName == "" {
 		return manifest, &artifactError{operation: "get-manifest", kind: artifactPermanent, code: "InvalidRequest", statusCode: http.StatusBadRequest,
 			err: fmt.Errorf("project, job name and job UID are required")}
 	}
-	path := "/artifacts/v1/projects/" + url.PathEscape(project) + "/jobs/" + url.PathEscape(jobName) + "/manifest?jobUID=" + url.QueryEscape(jobUID)
+	path := "/artifacts/v1/projects/" + url.PathEscape(project) + "/jobs/" + url.PathEscape(jobName) + "/manifest"
 	err := c.call(ctx, http.MethodGet, path, nil, &manifest)
 	return manifest, err
 }

@@ -49,7 +49,7 @@ func (f *fakeArtifactRemote) GetManifest(context.Context, string, string, string
 
 func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 	root := t.TempDir()
-	results := filepath.Join(root, "results", "project-a", "uid-a")
+	results := filepath.Join(root, "results", "project-a", "job-a")
 	if err := os.MkdirAll(filepath.Join(results, "packages"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +137,38 @@ func TestArtifactCleanupSuccessIsImmediateAndFailureIsRetained(t *testing.T) {
 	assertLocalArtifactState(t, root, job, false)
 }
 
+func TestArtifactCleanupUsesJobNameAcrossUIDChanges(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	manager := &ArtifactCleanupManager{RootDir: root, FailedRetention: time.Hour, Now: func() time.Time { return now }}
+	first := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid-1"}}
+	if err := manager.MarkFailure(first); err != nil {
+		t.Fatal(err)
+	}
+	second := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid-2"}}
+	if err := manager.MarkFailure(second); err != nil {
+		t.Fatal(err)
+	}
+	logDir := filepath.Join(root, "logs", "project", "job")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, ".job-uid"), []byte("uid-2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if err := manager.Sweep(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(logDir); !os.IsNotExist(err) {
+		t.Fatalf("log spool was not removed: %v", err)
+	}
+}
+
 func createLocalArtifactState(t *testing.T, root string, job JobResource) {
 	t.Helper()
 	for _, category := range []string{"results", "logs", "uploads"} {
-		dir := filepath.Join(root, category, job.Metadata.Namespace, job.Metadata.UID)
+		dir := filepath.Join(root, category, job.Metadata.Namespace, job.Metadata.Name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -153,7 +181,7 @@ func createLocalArtifactState(t *testing.T, root string, job JobResource) {
 func assertLocalArtifactState(t *testing.T, root string, job JobResource, want bool) {
 	t.Helper()
 	for _, category := range []string{"results", "logs", "uploads"} {
-		_, err := os.Stat(filepath.Join(root, category, job.Metadata.Namespace, job.Metadata.UID))
+		_, err := os.Stat(filepath.Join(root, category, job.Metadata.Namespace, job.Metadata.Name))
 		if got := err == nil; got != want {
 			t.Fatalf("%s existence = %v, want %v (err=%v)", category, got, want, err)
 		}

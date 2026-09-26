@@ -156,7 +156,7 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetRepositoryFunc = func(_ context.Context, uid string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: uid, State: RepositoryFailed, Attempt: 1, UpdatedAt: time.Now(),
-			Failure: &FailureInfo{Code: "ManifestInvalid", JobUID: "uid-job-a"}}, nil
+			Failure: &FailureInfo{Code: "ManifestInvalid", JobName: "job-a"}}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
@@ -164,10 +164,10 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 		t.Fatalf("skip result = %+v, %v", result, err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Repository.Transition != nil || !reflect.DeepEqual(updated.Status.Repository.SkippedJobUIDs, []string{"uid-job-a"}) {
+	if updated.Status.Repository.Transition != nil || !reflect.DeepEqual(updated.Status.Repository.SkippedJobNames, []string{"job-a"}) {
 		t.Fatalf("failed input was not durably skipped: %+v", updated.Status.Repository)
 	}
-	if updated.Status.Release != nil || len(updated.Status.Repository.SourceJobUIDs) != 0 {
+	if updated.Status.Release != nil || len(updated.Status.Repository.SourceJobNames) != 0 {
 		t.Fatalf("skipping must not create a release or mark input as materialized: %+v", updated.Status)
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -178,7 +178,7 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 		t.Fatalf("rebatch after restart: %v", err)
 	}
 	if len(artifacts.SubmitRepositoryRequests) != 1 || !reflect.DeepEqual(artifacts.SubmitRepositoryRequests[0].Manifests,
-		[]ManifestReference{{JobName: "job-b", JobUID: "uid-job-b"}}) {
+		[]ManifestReference{{JobName: "job-b"}}) {
 		t.Fatalf("rebatch must contain only the healthy Job: %+v", artifacts.SubmitRepositoryRequests)
 	}
 	if len(artifacts.ManifestRequests) != 0 {
@@ -194,14 +194,14 @@ func TestReconcileDoesNotSkipUnidentifiedManifestFailure(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetRepositoryFunc = func(_ context.Context, uid string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: uid, State: RepositoryFailed, Attempt: 1, UpdatedAt: time.Now(),
-			Failure: &FailureInfo{Code: "ManifestInvalid", JobUID: "foreign-uid"}}, nil
+			Failure: &FailureInfo{Code: "ManifestInvalid", JobName: "foreign-job"}}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if len(updated.Status.Repository.SkippedJobUIDs) != 0 || updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed {
+	if len(updated.Status.Repository.SkippedJobNames) != 0 || updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed {
 		t.Fatalf("unidentified failure must use the existing terminal path: %+v", updated.Status)
 	}
 }
@@ -234,7 +234,7 @@ func TestReconcileBuildSubmitsBatchAndWaitsForMaterialization(t *testing.T) {
 		t.Fatalf("expected exactly the checkpoint write, got %d", len(client.StatusWrites))
 	}
 	transition := client.StatusWrites[0].Status.Repository.Transition
-	if transition == nil || len(transition.Inputs) != 1 || transition.Inputs[0].JobUID != "uid-job-a" {
+	if transition == nil || len(transition.Inputs) != 1 || transition.Inputs[0].JobName != "job-a" {
 		t.Fatalf("checkpoint does not freeze the batch: %+v", transition)
 	}
 	if len(artifacts.SubmitRepositoryRequests) != 1 {
@@ -280,8 +280,8 @@ func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
 	if updated.Status.Repository.Transition != nil {
 		t.Fatalf("promotion must clear the checkpoint")
 	}
-	if len(updated.Status.Repository.SourceJobUIDs) != 1 || updated.Status.Repository.SourceJobUIDs[0] != "uid-job-a" {
-		t.Fatalf("unexpected sourceJobUIDs %+v", updated.Status.Repository.SourceJobUIDs)
+	if len(updated.Status.Repository.SourceJobNames) != 1 || updated.Status.Repository.SourceJobNames[0] != "job-a" {
+		t.Fatalf("unexpected sourceJobNames %+v", updated.Status.Repository.SourceJobNames)
 	}
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonRepositoryCreated) {
 		t.Fatalf("RepositoryReady=True/RepositoryCreated is missing: %+v", updated.Status.Conditions)
@@ -432,7 +432,7 @@ func TestReconcileBuildReplaysRetryableFailureWithinBudget(t *testing.T) {
 		t.Fatalf("the retry path must not write status, got %d writes", len(client.StatusWrites))
 	}
 	request := artifacts.SubmitRepositoryRequests[0]
-	if request.RepositoryUID != "next-1" || len(request.Manifests) != 1 || request.Manifests[0].JobUID != "uid-job-a" {
+	if request.RepositoryUID != "next-1" || len(request.Manifests) != 1 || request.Manifests[0].JobName != "job-a" {
 		t.Fatalf("the replay must reuse the frozen checkpoint: %+v", request)
 	}
 }
@@ -471,7 +471,7 @@ func TestReconcileBuildRegistersNoPublishableArtifacts(t *testing.T) {
 func TestReconcileBuildWaitsWhenBuildInfoIsNotCompleted(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
-	repo.Status.Repository.SourceJobUIDs = []string{"uid-job-a"}
+	repo.Status.Repository.SourceJobNames = []string{"job-a"}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
