@@ -20,7 +20,10 @@
           <thead><tr><th>{{ t('scripts.name') }}</th><th>{{ t('scripts.size') }}</th><th>{{ t('admin.actions') }}</th></tr></thead>
           <tbody><tr v-for="script in filtered" :key="script.metadata?.uid || script.metadata?.name">
             <td><strong>{{ script.metadata?.name }}</strong></td><td>{{ contentSize(script) }} KiB</td>
-            <td><button class="text-button" type="button" :disabled="busy || editorOpen" @click="openEdit(script)">{{ t(canManage ? 'common.edit' : 'scripts.view') }}</button></td>
+            <td class="admin-row-actions">
+              <button class="text-button" type="button" :disabled="busy || editorOpen || Boolean(deleting)" @click="openEdit(script)">{{ t(canManage ? 'common.edit' : 'scripts.view') }}</button>
+              <button v-if="canManage && script.metadata?.name !== 'rpmbuild'" class="text-button danger-link" type="button" :disabled="busy || editorOpen || Boolean(deleting) || !script.metadata?.uid || !script.metadata?.resourceVersion" @click="openDelete(script)">{{ t('scripts.delete') }}</button>
+            </td>
           </tr></tbody>
         </table>
       </div>
@@ -35,6 +38,16 @@
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t(canManage ? 'common.cancel' : 'common.close') }}</button><button v-if="canManage" class="primary-button" type="submit" :disabled="busy">{{ t(saving ? 'common.saving' : 'common.save') }}</button></div>
       </form>
     </section>
+    <ModalDialog v-if="deleting" title-id="delete-script-title" :title="t('scripts.delete')" :close-label="t('common.close')" @close="closeDelete">
+      <form class="project-form" @submit.prevent="confirmDelete">
+        <p>{{ t('scripts.deleteConfirm', { name: deleting.metadata?.name }) }}</p>
+        <p v-if="deleteError" class="form-error" role="alert">{{ t(deleteError) }}</p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" :disabled="deleteSaving" @click="closeDelete">{{ t('common.cancel') }}</button>
+          <button class="primary-button danger-button" type="submit" :disabled="deleteSaving">{{ t('scripts.delete') }}</button>
+        </div>
+      </form>
+    </ModalDialog>
   </section>
 </template>
 
@@ -44,6 +57,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ApiError, errorTranslationKey, list, request } from '@/api';
 import EmptyState from '@/components/EmptyState.vue';
+import ModalDialog from '@/components/ModalDialog.vue';
 import { useSessionStore } from '@/stores/session';
 import type { Script } from '@/types';
 
@@ -57,7 +71,8 @@ const filtered = computed(() => scripts.value.filter(script => (script.metadata?
 const loading = ref(false);
 const opening = ref(false);
 const saving = ref(false);
-const busy = computed(() => loading.value || opening.value || saving.value);
+const deleteSaving = ref(false);
+const busy = computed(() => loading.value || opening.value || saving.value || deleteSaving.value);
 const error = ref('');
 const success = ref('');
 const editorOpen = ref(false);
@@ -65,6 +80,8 @@ const editing = ref<Script | null>(null);
 const name = ref('');
 const content = ref('');
 const dialogError = ref('');
+const deleting = ref<Script | null>(null);
+const deleteError = ref('');
 
 onMounted(load);
 function contentSize(script: Script): string { return (new TextEncoder().encode(script.spec?.content || '').length / 1024).toFixed(1); }
@@ -115,6 +132,31 @@ async function openEdit(script: Script): Promise<void> {
   finally { opening.value = false; }
 }
 function closeEditor(): void { if (!saving.value) { editorOpen.value = false; editing.value = null; } }
+function openDelete(script: Script): void {
+  if (!canManage.value || busy.value || editorOpen.value || deleting.value || !script.metadata?.name || script.metadata.name === 'rpmbuild') return;
+  deleting.value = script;
+  deleteError.value = '';
+  success.value = '';
+}
+function closeDelete(): void { if (!deleteSaving.value) deleting.value = null; }
+async function confirmDelete(): Promise<void> {
+  const script = deleting.value;
+  const metadata = script?.metadata;
+  if (!canManage.value || deleteSaving.value || !metadata?.name || metadata.name === 'rpmbuild' || !metadata.uid || !metadata.resourceVersion) return;
+  deleteSaving.value = true;
+  deleteError.value = '';
+  try {
+    await request<Script>(`${path}/${encodeURIComponent(metadata.name)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ preconditions: { uid: metadata.uid, resourceVersion: metadata.resourceVersion } }),
+    });
+    deleting.value = null;
+    success.value = t('scripts.deleted', { name: metadata.name });
+    scripts.value = scripts.value.filter(item => item.metadata?.uid !== metadata.uid);
+  } catch (reason) {
+    deleteError.value = reason instanceof ApiError && reason.status === 409 ? 'scripts.deleteConflict' : errorTranslationKey(reason, 'scripts.deleteFailed');
+  } finally { deleteSaving.value = false; }
+}
 async function save(): Promise<void> {
   if (!canManage.value || busy.value || !editorOpen.value) return;
   const scriptName = name.value.trim();
