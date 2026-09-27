@@ -10,11 +10,11 @@ ENV GOOS=linux
 
 WORKDIR /build
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -ldflags="-s -w" -o ebs-gateway ./cmd/server/
+RUN go build -ldflags="-s -w" -o ebs-gateway ./cmd/
 
 FROM openeuler/openeuler:24.03-lts
 
