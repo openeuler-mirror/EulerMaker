@@ -56,7 +56,7 @@ artifact-manager ──Runner Token 校验──> ebs-gateway
 
 ### 2.1 内部访问与信任边界
 
-普通用户和外部系统不得直连 `ebs-apiserver`。`ebs-gateway`、scheduler 和 controller 是允许直连 `ebs-apiserver` 的受信任内部组件，各组件使用内部 CA 签发的独立 mTLS 客户端证书：
+普通用户和外部系统应只通过 `ebs-gateway` 访问资源 API。目标设计是由内部 CA 为 Gateway、Scheduler 和 Controller 分别签发 mTLS 客户端证书，仅允许这些受信任组件直连 `ebs-apiserver`：
 
 ```text
 用户 / 外部系统
@@ -73,9 +73,7 @@ artifact-manager ── Runner JWT ──> ebs-gateway /auth/check（公开）
 runner ── Runner JWT + 文件正文 ──> artifact-manager
 ```
 
-`ebs-apiserver` 根据客户端证书的 URI SAN 识别内部调用方，并按组件职责对 API group、资源、verb 和 subresource 执行授权。Gateway、scheduler 和 controller 必须使用不同的证书身份，不得共享客户端证书；不同 controller 在需要进一步限制权限时使用独立身份。
-
-建议的内部证书身份：
+目标实现中，`ebs-apiserver` 根据客户端证书的 URI SAN 识别内部调用方，并按 API group、资源、verb 和 subresource 授权。Gateway、Scheduler 和 Controller 不得共用证书；各 Controller 可进一步拆分身份。建议的证书身份为：
 
 ```text
 spiffe://eulermaker/internal/ebs-gateway
@@ -83,35 +81,37 @@ spiffe://eulermaker/internal/ebs-scheduler
 spiffe://eulermaker/internal/ebs-controller
 ```
 
-内部授权遵循最小权限和默认拒绝原则：
+内部授权默认拒绝，并遵循以下边界：
 
-- `ebs-gateway` 只访问代理请求、解析 User/MachineAccount 和调用 IAM 内部凭据接口所需的 API。
-- scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
-- controller 只访问其控制循环负责的资源和 status API；不同 controller 可以按职责继续拆分权限。
-- `artifact-manager` 不直接访问 etcd、Elasticsearch 或 `ebs-apiserver`，只调用 `ebs-gateway` 的公开 Token 校验接口；首版只校验 Token，不查询 Job/Runner 对象或校验两者关系。
-- 未被识别的客户端证书，以及已认证组件访问职责之外的资源或 verb，均由 `ebs-apiserver` 拒绝。
-- `/internal/iam/*` 只允许 `ebs-gateway` 的 mTLS 身份调用，scheduler 和 controller 不得访问。
+- Gateway 只访问代理请求、解析 User/MachineAccount 和调用 IAM 内部凭据接口所需的 API。
+- Scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
+- Controller 只访问控制循环负责的资源和 status API；不同 Controller 可按职责继续拆分权限。
+- `/internal/iam/*` 只允许 Gateway 的 mTLS 身份调用；未识别的证书以及组件越权访问均由 apiserver 拒绝。
+- Artifact Manager 不直连 apiserver，只通过 Gateway 的公开 Token 校验接口验证 Runner Token。
 
-Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；需要身份授权的认证请求只注入可信的 `X-EBS-User` 和 `X-EBS-Scopes`，公开读取使用 Gateway 内部身份访问 apiserver并原样转发对象响应。这些身份头只有在 mTLS 调用方确认为 `ebs-gateway` 时才可信。Scheduler 和 controller 直连 `ebs-apiserver` 时，权限来自各自的 mTLS 身份和 apiserver 内部授权，不使用外部 JWT scope，也不能通过伪造 `X-EBS-*` header 获得 gateway 权限。
+**当前实现状态：上述客户端证书认证和按组件身份授权尚未实现。** Gateway、Scheduler 和 Controller 目前通过 HTTPS 直连 apiserver，但 apiserver 无法验证其组件身份。部署时必须限制 apiserver 及内部 IAM 接口的网络访问；开发用 Compose 将 8443 端口映射到宿主机，不提供生产所需的隔离。
+
+Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；需要身份授权的认证请求只注入由 Gateway 生成的 `X-EBS-User` 和 `X-EBS-Scopes`。目标设计仅在 mTLS 调用方确认为 Gateway 时信任这些头；Scheduler 和 Controller 不通过伪造身份头获取 Gateway 权限。当前 apiserver 尚不能认证身份头来源，因此直连访问必须受控。
 
 用户、Runner和内部组件的认证链路分别为：
 
 ```text
-用户注册：注册资料 -> gateway 校验与注册限流 -> gateway mTLS -> apiserver IAM 创建 User 与凭据
-用户登录：账号密码 -> gateway 登录限流 -> gateway mTLS -> apiserver IAM 认证 -> gateway 签发 JWT
-用户写入或非公开请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> gateway mTLS -> apiserver
-匿名读取：无 Token GET/HEAD（公开对象、collection 或单对象 `/status`）-> gateway 公开资源白名单与限流 -> gateway mTLS -> apiserver -> 完整对象响应
-认证公开读取：JWT -> UserResolve -> gateway 公开资源白名单与认证限流 -> gateway mTLS -> apiserver -> 完整对象响应
+用户注册：注册资料 -> gateway 校验与注册限流 -> apiserver IAM 创建 User 与凭据
+用户登录：账号密码 -> gateway 登录限流 -> apiserver IAM 认证 -> gateway 签发 JWT
+用户写入或非公开请求：JWT -> UserResolve -> gateway Project 用户权限校验 -> apiserver
+匿名读取：无 Token GET/HEAD（公开对象、collection 或单对象 `/status`）-> gateway 公开资源白名单与限流 -> apiserver -> 完整对象响应
+认证公开读取：JWT -> UserResolve -> gateway 公开资源白名单与认证限流 -> apiserver -> 完整对象响应
 机机账号创建：管理员 -> gateway -> apiserver IAM 原子创建 MachineAccount 与凭据
 Runner换取token：MachineAccount client凭据和Runner名称 -> gateway交换限流 -> apiserver IAM认证 -> gateway签发短期Runner JWT
 Runner实例识别：首次启动生成并持久化UUID -> 创建时写入Runner.spec.instanceId -> 同名恢复时必须匹配
-Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> gateway mTLS -> apiserver
-系统请求：scheduler/controller mTLS -> apiserver 内部资源与 verb 授权
+Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> apiserver
+系统请求（当前）：scheduler/controller -> apiserver（未按客户端身份授权）
+系统请求（目标）：scheduler/controller mTLS -> apiserver 按组件身份授权资源和 verb
 ```
 
-自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `ebs:runner` JWT。所有 `/internal/iam/*` 接口只信任 gateway 的 mTLS 身份，不接受外部 JWT、scheduler 或 controller 调用。
+自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `ebs:runner` JWT。目标设计要求 `/internal/iam/*` 只接受 Gateway 的 mTLS 身份，不接受外部 JWT、Scheduler 或 Controller 调用；该限制当前尚未实现，必须依靠部署网络限制直连。
 
-部署时，`ebs-apiserver` 只暴露在内部网络，网络策略仅允许 gateway、scheduler 和 controller 连接。`ebs-gateway` 的 `/auth/check` 是公开接口：调用方无需服务身份且不提交请求正文，Gateway 校验请求携带的 Bearer Token 并返回身份与 scopes，同时执行限流。`artifact-manager` 根据响应确认 `ebs:runner` scope。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
+生产部署必须让 `ebs-apiserver` 仅在受控内部网络可达，并限制为 gateway、scheduler 和 controller 等内部组件连接；开发用 Compose 的宿主机端口映射不提供此隔离。`ebs-gateway` 的 `/auth/check` 是公开接口：调用方无需服务身份且不提交请求正文，Gateway 校验请求携带的 Bearer Token 并返回身份与 scopes，同时执行限流。`artifact-manager` 根据响应确认 `ebs:runner` scope。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
 
 ---
 
@@ -206,7 +206,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 
 ### 5.3 内部全局系统 API
 
-调度器和控制器使用各自的 mTLS 身份直连 apiserver，通过内部全局 API 跨 Project list。这些路径不经 Gateway，也不对外部客户端开放：
+调度器和控制器直连 apiserver，通过内部全局 API 跨 Project list。目标设计以各自的 mTLS 身份授权这些路径，不经 Gateway，也不对外部客户端开放；当前尚未实现客户端身份授权，部署时必须限制外部访问：
 
 ```text
 /apis/ebs/v1/snapshots
@@ -402,6 +402,6 @@ docker compose -f hacks/docker-compose.yml up -d
 当前架构后续主要完善方向：
 
 - 持续校验 OpenAPI schema 与实际资源模型的一致性。
-- 细化各 controller、scheduler 的内部 mTLS 最小权限策略。
+- 实现内部客户端证书认证，并按 Gateway、Scheduler 和各 Controller 的职责配置最小权限。
 - 补齐 controller，并完善 scheduler、runner 的生产级故障恢复与可观测性。
 - 接入正式的镜像构建和发布流程。

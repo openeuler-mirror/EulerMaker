@@ -1056,7 +1056,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 
 | 字段 | 类型 | 消费点 |
 |------|------|--------|
-| `metadata.name` | `{specName}-{dispatchGeneration}-{hash}` | 确定性命名及同名核验见本节命名规则；不得在冲突或超时后改用随机名称 |
+| `metadata.name` | `{specName}-{hash}` | 确定性命名及同名核验见本节命名规则；不得在冲突或超时后改用随机名称 |
 | `metadata.namespace` | string | 即 project；Job 创建/查询、Build/RpmRepo/Project 查询的命名空间 |
 | `metadata.resourceVersion` | string | 乐观锁；409 冲突延迟重入重算、Unknown 确认读取（10.2/10.3） |
 | `metadata.creationTimestamp` | metav1.Time | 不消费（仅 Job 侧用于多代 Job 排序，见 15.3.2） |
@@ -1129,8 +1129,8 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 - 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次，只有确认该代 Job 已存在后才更新派发计数。
 - hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，新建 Job 只取摘要前 8 字节，输出 16 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
-- Job 名为 `specName + "-" + 十进制派发代次 + "-" + hash`，使用原始 specName，不截断。当前 Job 名称校验没有显式长度上限；若 specName 不能组成合法路径段，按本地输入错误返回 PermanentError，不静默改名。
-- Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有的 20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填，但新派发仅生成 16 位名称；已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
+- Job 名为 `specName + "-" + hash`，使用原始 specName，不截断；派发代次仅参与 hash 计算，不直接显示在名称中。当前 Job 名称校验没有显式长度上限；若 specName 不能组成合法路径段，按本地输入错误返回 PermanentError，不静默改名。
+- Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有带可见派发代次的 16 位、20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填；新派发仅生成不显示代次的 16 位 hash 名称。已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
 - **AlreadyExists 后 GET 返回 404**：返回可重试错误，由框架退避重新入队；不得套用主对象 NotFound 的结束规则，也不增加派发计数。后续重新调和仍需该代 Job 时，使用同一创建身份和名称，不生成替代名称；是否允许再次创建仍遵循停止派发及终态守卫。
 - 重启后通过完整 List 回填已有 Job；确定性命名 Job 按派发代次 annotation 和基于 BuildInfo UID 重算的名称核验，DispatchCount 至少恢复到已确认的最大派发代次，不因旧代 Job 被清理而回退。未找到本次目标代时再次计算同名 Job，保证同一创建身份不会生成第二个名称。缺少派发代次 annotation 的 Job 不参与身份匹配，也不作为同名创建冲突的可沿用对象。
 
@@ -1141,7 +1141,7 @@ apiVersion: ebs/v1
 kind: Job
 metadata:
   uid: 7f3a2b10-9c4e-4d21-8b6a-1e5f0a2c3d44         # apiserver 写入
-  name: ${jobName}                                  # controller：specName-派发代次-hash，见下方命名规则
+  name: ${jobName}                                  # controller：specName-hash，见下方命名规则
   namespace: ${project.metadata.name}               # controller：同 BuildInfo
   resourceVersion: "102457"                         # apiserver 写入
   generation: 1                                     # apiserver 写入
@@ -1189,7 +1189,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | 字段 | 取值 | 契约说明                                                                                                                          |
 |------|------|-------------------------------------------------------------------------------------------------------------------------------|
 | `apiVersion` / `kind` | `ebs/v1` / `Job` | 固定值（`ebsv1.SchemeGroupVersion` / TypeMeta）                                                                                    |
-| `metadata.name` | `{specName}-{dispatchGeneration}-{hash}` | 确定性命名及同名核验见本节命名规则；冲突或超时后不得改用随机名称 |
+| `metadata.name` | `{specName}-{hash}` | 确定性命名及同名核验见本节命名规则；冲突或超时后不得改用随机名称 |
 | `metadata.namespace` | BuildInfo 所在 namespace | 与 BuildInfo 同 project                                                                                                         |
 | `metadata.labels["ebs.io/build-name"]` | 父 Build 名（= `BuildInfo.metadata.name`） | G-08 必写；list 过滤、状态归属的依据                                                                                                       |
 | `metadata.labels["ebs.io/spec-name"]` | specName | G-08 必写；回填时按此 label 归组到 spec |
@@ -1364,7 +1364,7 @@ type RpmMetaSources struct {
 
 解析完成即生成该来源的 `RpmByName` 与 `ProvidesInfo` 两个索引。
 
-`RpmMeta` 字段（以 data-models.md 为准）各消费点：`version`（epoch:ver-rel，版本约束比较输入）、`specName`（产出方 spec 名；步骤 0 扩散中用于归属 rpm 至 spec——`specName ∈ 本轮全量 specDepends` 即本工程产出 rpm，定位其 provides/requires；**仅 RpmRepo 层参与该判定**，bootstrap 层为外部上游包、其 sourcerpm 派生 specName 可能与 specDepends 同名，不得据此误判为本工程产出）、`provides`（map[string]string，生成 providesInfo 反查索引；步骤 0 扩散的 provides 收集来源）、`requires`（map[string]VersionConst，rpm 元数据 Requires 声明，安装期依赖；步骤 0 扩散的 requires 交集扫描来源，数据源为 RpmMetaSources RpmRepo 层（含继承版本），见 7.2.2）。
+`RpmMeta` 定义于 `pkg/controllers/buildinfo/rpmver/rpmcache.go`，属于控制器内部类型而非公共 API；其字段各消费点：`version`（epoch:ver-rel，版本约束比较输入）、`specName`（产出方 spec 名；步骤 0 扩散中用于归属 rpm 至 spec——`specName ∈ 本轮全量 specDepends` 即本工程产出 rpm，定位其 provides/requires；**仅 RpmRepo 层参与该判定**，bootstrap 层为外部上游包、其 sourcerpm 派生 specName 可能与 specDepends 同名，不得据此误判为本工程产出）、`provides`（map[string]string，生成 providesInfo 反查索引；步骤 0 扩散的 provides 收集来源）、`requires`（map[string]VersionConst，rpm 元数据 Requires 声明，安装期依赖；步骤 0 扩散的 requires 交集扫描来源，数据源为 RpmMetaSources RpmRepo 层（含继承版本），见 7.2.2）。
 
 **填充 / 刷新 / 失效**：
 

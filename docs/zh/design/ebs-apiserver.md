@@ -231,7 +231,7 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 {"authenticated":true,"username":"alice"}
 ```
 
-内部接口不加入 API discovery，只接受 URI SAN 被识别为 `ebs-gateway` 的 mTLS 客户端身份。请求体、密码、client secret及其哈希不得写入日志、审计事件或错误响应。
+内部接口不加入 API discovery。目标设计只接受 URI SAN 被识别为 `ebs-gateway` 的 mTLS 客户端身份；该校验当前尚未实现，部署时必须阻止外部直连 apiserver。请求体、密码、client secret及其哈希不得写入日志、审计事件或错误响应。
 
 用户密码和 MachineAccount client secret 均使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；两类凭据分别维护失败次数，同一主体连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分主体不存在、凭据错误、未设置凭据或账号被锁定。
 

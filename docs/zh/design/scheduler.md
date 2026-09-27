@@ -886,7 +886,7 @@ GET 返回目标 Runner 上的 Running Job 时，确认协程不能立即 Forget
 
 `ErrBindOutcomeUnknown` 产生的 assumed 使用上述同一确认机制。在其被确认或清理前，不得为同一 Job 启动新 Bind 或重放原 UpdateStatus。
 
-首版明确接受 BindUnknown 恢复窗口内可能短暂低估 Runner 占用：确认 GET 观察到 Job 仍为 Pending 并成功 Forget 后，原 UpdateStatus 仍可能在 apiserver 晚到成功；在对应 Running watch 事件进入 Cache 前，该 Job 暂时既不计入 assumed，也不计入 Running。该窗口可能造成短暂资源超卖，不属于首版的一致性保证。实现必须记录 `scheduler_bind_unknown_release_total`，并在日志中携带 Job Key、UID、Runner、Generation 和原 resourceVersion，便于评估该窗口；不得以此为由立即重放 UpdateStatus。后续可通过带调度周期幂等键的 Bind API 消除此限制。
+首版明确接受 BindUnknown 恢复窗口内可能短暂低估 Runner 占用：确认 GET 观察到 Job 仍为 Pending 并成功 Forget 后，原 UpdateStatus 仍可能在 apiserver 晚到成功；在对应 Running watch 事件进入 Cache 前，该 Job 暂时既不计入 assumed，也不计入 Running。该窗口可能造成短暂资源超卖，不属于首版的一致性保证。后续应补充 `scheduler_bind_unknown_release_total` 指标；若补充该窗口的诊断日志，应使用 Job Key、Runner、Generation 和原 resourceVersion 定位问题，不输出 Job UID。不得以此为由立即重放 UpdateStatus。后续可通过带调度周期幂等键的 Bind API 消除此限制。
 
 ## 九、调度结果与错误处理
 
@@ -971,7 +971,7 @@ worker 在终结前统一调用结果校验函数。未知 `QueueAction` 或空 
 | `--request-timeout` | `30s` | 非 watch 请求超时 |
 | `--health-address` | `:8080` | 健康检查和指标监听地址 |
 
-Scheduler 当前通过 HTTPS 直连 ebs-apiserver，不使用客户端证书。客户端身份认证与对应的最小权限控制，待 ebs-apiserver 提供客户端证书校验能力后再实现。
+目标设计要求 Scheduler 使用独立的 mTLS 客户端证书直连 ebs-apiserver，apiserver 根据证书身份仅授予调度所需的 Job、Runner 和相关 status 权限。当前尚未实现客户端证书配置、服务端身份校验及对应授权；Scheduler 目前通过 HTTPS 直连 apiserver，上表仅列出已实现参数。
 
 默认必须通过 `--apiserver-ca` 验证 ebs-apiserver 的服务端证书；未提供 CA 且未显式启用 `--insecure-skip-verify` 时启动失败。
 

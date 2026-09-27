@@ -29,15 +29,19 @@ func TestJobNameForDeterministic(t *testing.T) {
 	if first != jobNameFor("uid-1", "a", 2) {
 		t.Fatal("jobNameFor not deterministic")
 	}
-	if !strings.HasPrefix(first, "a-2-") {
-		t.Fatalf("jobNameFor = %q, want specName-generation- prefix", first)
+	if !strings.HasPrefix(first, "a-") {
+		t.Fatalf("jobNameFor = %q, want specName- prefix", first)
 	}
-	if got := len(first) - len("a-2-"); got != 16 {
+	if got := len(first) - len("a-"); got != 16 {
 		t.Fatalf("hash suffix length = %d, want 16 lowercase hex chars", got)
 	}
+	former := formerJobNameFor("uid-1", "a", 2)
+	if former != "a-2-"+strings.TrimPrefix(first, "a-") {
+		t.Fatalf("former name = %q, want visible generation and the same hash", former)
+	}
 	previous := previousJobNameFor("uid-1", "a", 2)
-	if len(previous)-len("a-2-") != 20 || !strings.HasPrefix(previous, first) {
-		t.Fatalf("previous name = %q, want 20-character hash with new name as prefix", previous)
+	if len(previous)-len("a-2-") != 20 || !strings.HasPrefix(previous, former) {
+		t.Fatalf("previous name = %q, want 20-character hash with former name as prefix", previous)
 	}
 	legacy := legacyJobNameFor("uid-1", "a", 2)
 	if len(legacy)-len("a-2-") != 64 || !strings.HasPrefix(legacy, previous) {
@@ -54,6 +58,13 @@ func TestFilterJobsByIdentityRequiresBuildInfoUIDInName(t *testing.T) {
 	job := testJobObj(bi, "a", 1, ebsv1.JobRunning)
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
 		t.Fatalf("matching Job count = %d, want 1", len(got))
+	}
+	job.Name = formerJobNameFor(string(bi.UID), "a", 1)
+	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
+		t.Fatalf("former Job identity rejected: %v", err)
+	}
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
+		t.Fatalf("matching former Job count = %d, want 1", len(got))
 	}
 	job.Name = previousJobNameFor(string(bi.UID), "a", 1)
 	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
