@@ -25,7 +25,7 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 	}
 	switch route.Resource {
 	case "projects":
-		if who.Scope == identity.RunnerScope {
+		if who.Type == identity.RunnerType {
 			return nil, deny("Runner cannot create Project")
 		}
 		meta := objectMap(object["metadata"])
@@ -38,7 +38,7 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		}
 		if who.Scope == identity.UserScope || who.Scope == identity.OpsScope {
 			labels["ebs.io/owner-user"] = who.Subject
-		} else if who.Scope == identity.AdminScope || who.Scope == identity.SystemScope {
+		} else if who.Scope == identity.AdminScope {
 			owner, ok := labels["ebs.io/owner-user"].(string)
 			if !ok || a.validateMember(ctx, owner) != nil {
 				return nil, deny("Project owner must be an enabled User or Ops")
@@ -59,7 +59,7 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		}
 		meta["labels"] = labels
 	case "runners":
-		if who.Scope != identity.RunnerScope {
+		if who.Type != identity.RunnerType {
 			break
 		}
 		if err := validateRunnerCreate(object, who.Runner); err != nil {

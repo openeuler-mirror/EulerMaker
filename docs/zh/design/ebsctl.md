@@ -76,7 +76,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
 
-Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。匿名、普通用户和 Runner 只能具名读取 `Public` 对象；`OpsOnly` 读取、list 和写入要求 Ops/Admin/System，更新保留最新 `metadata.resourceVersion`。内置对象 `build-target`、`build-resource` 不允许删除。
+Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。匿名、普通用户和 Runner 只能具名读取 `Public` 对象；`OpsOnly` 读取、list 和写入要求 Ops/Admin，更新保留最新 `metadata.resourceVersion`。内置对象 `build-target`、`build-resource` 不允许删除。
 
 ### 3.2 登录与 Context
 
@@ -118,7 +118,7 @@ ebsctl get jobs --watch
 
 watch 输出 table 时增加 `EVENT` 列；JSON/YAML 模式逐事件输出完整 WatchEvent。连接正常超时后使用最后的 `resourceVersion` 重连；收到资源版本过期响应时重新 list。用户主动中断返回 0，无法恢复的认证或协议错误返回非 0。
 
-`Config` 只提供集群级 list/get，不支持 watch。list 仅允许 Ops/Admin/System。例如：
+`Config` 只提供集群级 list/get，不支持 watch。list 仅允许 Ops/Admin。例如：
 
 ```bash
 ebsctl get configs
@@ -146,7 +146,7 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
-`Config` 支持 create、replace、patch，以及删除非内置对象。普通用户仅能具名读取 `Public` 对象，写入仅允许 Ops、Admin 或 System 身份执行。例如：
+`Config` 支持 create、replace、patch，以及删除非内置对象。普通用户仅能具名读取 `Public` 对象，写入仅允许 Ops 或 Admin 身份执行。例如：
 
 ```bash
 ebsctl create -f config.yaml

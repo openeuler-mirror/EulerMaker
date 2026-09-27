@@ -16,7 +16,7 @@
 
 ### 1.1 Config 公共资源与可见性
 
-`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。首批对象为 `build-target` 和 `build-resource`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin/System 读取。
+`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。首批对象为 `build-target` 和 `build-resource`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin 读取。
 
 ```yaml
 apiVersion: ebs/v1
@@ -29,7 +29,7 @@ spec:
     targets: {}
 ```
 
-`Config` 只负责持久化原文、并发版本和访问控制，不携带业务类型字段，也不将 YAML 内容展开为独立 API 字段。对象名称决定使用方采用哪种解析器。Gateway 对具名 `GET/HEAD` 只读取一次 apiserver 对象，并基于同一份响应的 `visibility` 决定是否返回。匿名、普通登录用户和 Runner 身份不允许 `list`，也不能读取 `OpsOnly` 对象；仅 Ops/Admin/System 可 `list`、创建和修改。`visibility` 只能由 Ops/Admin/System 修改，Gateway 不接受客户端自行声明“本次请求公开”；apiserver 校验枚举和资源版本。
+`Config` 只负责持久化原文、并发版本和访问控制，不携带业务类型字段，也不将 YAML 内容展开为独立 API 字段。对象名称决定使用方采用哪种解析器。Gateway 对具名 `GET/HEAD` 只读取一次 apiserver 对象，并基于同一份响应的 `visibility` 决定是否返回。匿名、普通登录用户和 Runner 身份不允许 `list`，也不能读取 `OpsOnly` 对象；仅 Ops/Admin 可 `list`、创建和修改。`visibility` 只能由 Ops/Admin 修改，Gateway 不接受客户端自行声明“本次请求公开”；apiserver 校验枚举和资源版本。
 
 ```text
 GET/HEAD /apis/ebs/v1/configs
@@ -39,7 +39,7 @@ PUT      /apis/ebs/v1/configs/{name}
 PATCH    /apis/ebs/v1/configs/{name}
 ```
 
-非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin/System。两个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
+非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。两个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
 
 apiserver 仅校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限，不解析目标 OS、镜像或资源数量。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设 `Public` 与 `OpsOnly`。内容错误可能成功保存：Build 创建方、BuildInfo Controller 和前端必须在使用前解析并按第 2、3 章校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
 
@@ -51,7 +51,7 @@ apiserver 仅校验名称、`visibility`、`content` 非空、UTF-8、无 NUL �
 
 - 前端从配置生成目标 OS、Arch 下拉选项。
 - BuildInfo Controller 根据 Build 的 OS、Arch 选择镜像，并写入 Job。
-- Ops、Admin、System 可以通过 Gateway 修改配置，无需重启服务。
+- Ops、Admin 可以通过 Gateway 修改配置，无需重启服务。
 
 ### 2.2 对象
 
@@ -96,7 +96,7 @@ spec:
 
 ### 2.3 API 与权限
 
-使用 1.1 节的 `/apis/ebs/v1/configs/build-target`。匿名具名读取仅在当前对象 `spec.visibility=Public` 时允许；写入仅允许 Ops/Admin/System。通用 `Config` 的校验不保证 `content.targets` 正确，使用方按 2.2.1 校验。`PUT/PATCH` 冲突时运维客户端重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧内容。
+使用 1.1 节的 `/apis/ebs/v1/configs/build-target`。匿名具名读取仅在当前对象 `spec.visibility=Public` 时允许；写入仅允许 Ops/Admin。通用 `Config` 的校验不保证 `content.targets` 正确，使用方按 2.2.1 校验。`PUT/PATCH` 冲突时运维客户端重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧内容。
 
 ### 2.4 存储与初始化
 
@@ -245,4 +245,4 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 
 更新整张表必须携带 `metadata.resourceVersion`；发生 409 时重新读取并按包名合并用户的修改，不得只替换版本重放旧对象。批量生成内容按包名稳定排序。规模达到数千至数万包时，应对最终序列化大小、请求上限及解析耗时做压测；BuildInfo Controller 可按 UID/resourceVersion 缓存已验证的解析结果，但每轮先读取当前对象，缓存失效或解析失败时必须停止新 Job 派发。首版不支持按软件包的独立 REST API 或存储分片。
 
-`Config/build-resource` 仅允许 Ops/Admin/System 经 Gateway 读取或写入；BuildInfo Controller 使用内部身份直连 apiserver 读取。Gateway 不允许删除该内置对象，也不提供 Watch 或 `/status`。
+`Config/build-resource` 仅允许 Ops/Admin 经 Gateway 读取或写入；BuildInfo Controller 使用内部身份直连 apiserver 读取。Gateway 不允许删除该内置对象，也不提供 Watch 或 `/status`。

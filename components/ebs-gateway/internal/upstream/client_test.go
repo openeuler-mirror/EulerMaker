@@ -20,7 +20,7 @@ func TestInternalRequestDoesNotForwardCallerCredentials(t *testing.T) {
 		if r.URL.Path != "/internal/iam/v1/authenticate" || r.URL.Query().Get("a") != "b" {
 			t.Errorf("unexpected upstream URL %s", r.URL.String())
 		}
-		if r.Header.Get("Authorization") != "" || r.Header.Get("X-EBS-User") != "" {
+		if r.Header.Get("Authorization") != "" || r.Header.Get("X-EBS-User") != "" || r.Header.Get("X-EBS-Type") != "" {
 			t.Error("caller credentials reached upstream")
 		}
 		return &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
@@ -32,6 +32,7 @@ func TestInternalRequestDoesNotForwardCallerCredentials(t *testing.T) {
 	response, err := client.Do(context.Background(), http.MethodPost, "/internal/iam/v1/authenticate?a=b", nil, http.Header{
 		"Authorization": []string{"Bearer forged"},
 		"X-EBS-User":    []string{"forged"},
+		"X-EBS-Type":    []string{"forged"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +45,7 @@ func TestInternalRequestDoesNotForwardCallerCredentials(t *testing.T) {
 
 func TestForwardReplacesIdentity(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.Header.Get("X-EBS-User") != "alice" || r.Header.Get("X-EBS-Scopes") != "ebs:user" || r.Header.Get("Authorization") != "" {
+		if r.Header.Get("X-EBS-User") != "alice" || r.Header.Get("X-EBS-Type") != "user" || r.Header.Get("X-EBS-Scopes") != "ebs:user" || r.Header.Get("Authorization") != "" {
 			t.Errorf("unexpected forwarded identity: %v", r.Header)
 		}
 		if r.Host != "api.example" || r.Header.Get("X-Forwarded-Host") != "" {
@@ -57,14 +58,37 @@ func TestForwardReplacesIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	router.GET("/test", func(c *gin.Context) { client.Forward(c, "alice", "ebs:user", false) })
+	router.GET("/test", func(c *gin.Context) { client.Forward(c, "alice", "user", "ebs:user", false) })
 	request := httptest.NewRequest(http.MethodGet, "/test", nil)
 	request.Header.Set("X-EBS-User", "mallory")
+	request.Header.Set("X-EBS-Type", "forged")
 	request.Header.Set("Authorization", "Bearer forged")
 	request.Header.Set("X-Forwarded-Host", "evil.example")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "ok" {
 		t.Fatalf("unexpected proxy result: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestForwardMachineIdentityHasNoUserScopes(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Header.Get("X-EBS-User") != "runner-a" || r.Header.Get("X-EBS-Type") != "runner" || r.Header.Get("X-EBS-Scopes") != "" {
+			t.Errorf("unexpected forwarded identity: %v", r.Header)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
+	})
+	client, err := New("https://api.example", transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	router.GET("/test", func(c *gin.Context) { client.Forward(c, "runner-a", "runner", "", false) })
+	request := httptest.NewRequest(http.MethodGet, "/test", nil)
+	request.Header.Set("X-EBS-Scopes", "ebs:admin")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected proxy status: %d", recorder.Code)
 	}
 }

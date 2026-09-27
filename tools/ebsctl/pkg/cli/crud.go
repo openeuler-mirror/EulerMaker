@@ -74,7 +74,7 @@ func (a *App) getCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if identity.Type != "user" && identity.Type != "admin" && identity.Type != "ops" {
+				if identity.Type != "user" {
 					return &ExitError{Code: 3, Err: fmt.Errorf("--mine requires a user identity")}
 				}
 				mineUser = identity.Name

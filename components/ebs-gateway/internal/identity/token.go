@@ -21,16 +21,18 @@ const (
 )
 
 type Scope string
+type Type string
 
 const (
-	UserScope   Scope = "ebs:user"
-	OpsScope    Scope = "ebs:ops"
-	AdminScope  Scope = "ebs:admin"
-	RunnerScope Scope = "ebs:runner"
-	SystemScope Scope = "ebs:system"
+	UserScope  Scope = "ebs:user"
+	OpsScope   Scope = "ebs:ops"
+	AdminScope Scope = "ebs:admin"
+	UserType   Type  = "user"
+	RunnerType Type  = "runner"
 )
 
 type Principal struct {
+	Type      Type
 	Subject   string
 	Runner    string
 	Scope     Scope
@@ -39,13 +41,14 @@ type Principal struct {
 }
 
 func (p Principal) IsUser() bool {
-	return p.Scope == UserScope || p.Scope == OpsScope || p.Scope == AdminScope
+	return p.Type == UserType
 }
 func (p Principal) IsPrivileged() bool {
-	return p.Scope == OpsScope || p.Scope == AdminScope || p.Scope == SystemScope
+	return p.Type == UserType && (p.Scope == OpsScope || p.Scope == AdminScope)
 }
 
 type claims struct {
+	Type      Type    `json:"type"`
 	Subject   string  `json:"sub"`
 	Runner    string  `json:"runner,omitempty"`
 	Scopes    []Scope `json:"scopes"`
@@ -67,16 +70,20 @@ func NewTokens(base64Secret string) (*Tokens, error) {
 	return &Tokens{secret: secret}, nil
 }
 
-func (t *Tokens) Issue(subject, runner string, scope Scope, ttl time.Duration, now time.Time) (string, error) {
-	if subject == "" || ttl <= 0 || ttl > maxAge || !validScope(scope, runner, subject) {
-		return "", errors.New("invalid token subject, scope or lifetime")
+func (t *Tokens) Issue(subject, runner string, kind Type, scope Scope, ttl time.Duration, now time.Time) (string, error) {
+	if subject == "" || ttl <= 0 || ttl > maxAge || !validIdentity(kind, scope, runner, subject) {
+		return "", errors.New("invalid token identity or lifetime")
 	}
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return "", fmt.Errorf("generate token ID: %w", err)
 	}
+	scopes := make([]Scope, 0, 1)
+	if scope != "" {
+		scopes = append(scopes, scope)
+	}
 	c := claims{
-		Subject: subject, Runner: runner, Scopes: []Scope{scope},
+		Type: kind, Subject: subject, Runner: runner, Scopes: scopes,
 		Issuer: issuer, Audience: audience, IssuedAt: now.Unix(),
 		NotBefore: now.Unix(), ExpiresAt: now.Add(ttl).Unix(), ID: hex.EncodeToString(random),
 	}
@@ -117,7 +124,11 @@ func (t *Tokens) Verify(token string, now time.Time) (Principal, error) {
 	if err := json.Unmarshal(payload, &c); err != nil || !validClaims(c, now) {
 		return Principal{}, errors.New("invalid token claims")
 	}
-	return Principal{Subject: c.Subject, Runner: c.Runner, Scope: c.Scopes[0], ID: c.ID, ExpiresAt: time.Unix(c.ExpiresAt, 0)}, nil
+	principal := Principal{Type: c.Type, Subject: c.Subject, Runner: c.Runner, ID: c.ID, ExpiresAt: time.Unix(c.ExpiresAt, 0)}
+	if len(c.Scopes) == 1 {
+		principal.Scope = c.Scopes[0]
+	}
+	return principal, nil
 }
 
 func (t *Tokens) signature(message string) []byte {
@@ -127,10 +138,14 @@ func (t *Tokens) signature(message string) []byte {
 }
 
 func validClaims(c claims, now time.Time) bool {
-	if c.Subject == "" || c.ID == "" || c.Issuer != issuer || c.Audience != audience || len(c.Scopes) != 1 {
+	if c.Subject == "" || c.ID == "" || c.Issuer != issuer || c.Audience != audience || c.Scopes == nil || len(c.Scopes) > 1 {
 		return false
 	}
-	if !validScope(c.Scopes[0], c.Runner, c.Subject) {
+	var scope Scope
+	if len(c.Scopes) == 1 {
+		scope = c.Scopes[0]
+	}
+	if !validIdentity(c.Type, scope, c.Runner, c.Subject) {
 		return false
 	}
 	if c.IssuedAt <= 0 || c.NotBefore <= 0 || c.ExpiresAt <= c.IssuedAt || c.ExpiresAt <= c.NotBefore {
@@ -141,12 +156,12 @@ func validClaims(c claims, now time.Time) bool {
 	return c.IssuedAt <= current+skew && c.NotBefore <= current+skew && c.ExpiresAt > current-skew && c.ExpiresAt-c.IssuedAt <= int64(maxAge/time.Second)
 }
 
-func validScope(scope Scope, runner, subject string) bool {
-	switch scope {
-	case RunnerScope:
-		return runner != "" && runner == subject
-	case UserScope, OpsScope, AdminScope, SystemScope:
-		return runner == ""
+func validIdentity(kind Type, scope Scope, runner, subject string) bool {
+	switch kind {
+	case RunnerType:
+		return scope == "" && runner != "" && runner == subject
+	case UserType:
+		return runner == "" && (scope == UserScope || scope == OpsScope || scope == AdminScope)
 	default:
 		return false
 	}

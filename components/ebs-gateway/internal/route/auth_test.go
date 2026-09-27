@@ -83,6 +83,90 @@ func TestLoginAndCheck(t *testing.T) {
 	if checkRecorder.Code != http.StatusOK {
 		t.Fatalf("token check failed: status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
 	}
+	var checked struct {
+		Authenticated bool `json:"authenticated"`
+		Identity      struct {
+			Type   string           `json:"type"`
+			Name   string           `json:"name"`
+			Scopes []identity.Scope `json:"scopes"`
+		} `json:"identity"`
+		ExpiresAt time.Time `json:"expiresAt"`
+	}
+	if err := json.NewDecoder(checkRecorder.Body).Decode(&checked); err != nil {
+		t.Fatal(err)
+	}
+	if !checked.Authenticated || checked.Identity.Type != "user" || checked.Identity.Name != "alice" ||
+		len(checked.Identity.Scopes) != 1 || checked.Identity.Scopes[0] != identity.UserScope || checked.ExpiresAt.IsZero() {
+		t.Fatalf("unexpected token check response: %+v", checked)
+	}
+}
+
+func TestCheckTokenUsesScopesForUserPermissions(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("token check must not call upstream")
+		return nil, nil
+	}))
+	for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
+		t.Run(string(scope), func(t *testing.T) {
+			token, err := api.tokens.Issue("alice", "", identity.UserType, scope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			api.Router().ServeHTTP(recorder, request)
+			var response struct {
+				Identity struct {
+					Type   string           `json:"type"`
+					Scopes []identity.Scope `json:"scopes"`
+				} `json:"identity"`
+			}
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("token check failed: status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+			if response.Identity.Type != "user" || len(response.Identity.Scopes) != 1 || response.Identity.Scopes[0] != scope {
+				t.Fatalf("unexpected token check response: %+v", response)
+			}
+		})
+	}
+}
+
+func TestCheckTokenMachineIdentityHasNoUserScopes(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("token check must not call upstream")
+		return nil, nil
+	}))
+	for _, test := range []struct {
+		kind   identity.Type
+		runner string
+	}{
+		{identity.RunnerType, "runner-a"},
+	} {
+		t.Run(string(test.kind), func(t *testing.T) {
+			token, err := api.tokens.Issue("runner-a", test.runner, test.kind, "", time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			api.Router().ServeHTTP(recorder, request)
+			var response struct {
+				Identity struct {
+					Type   identity.Type    `json:"type"`
+					Scopes []identity.Scope `json:"scopes"`
+				} `json:"identity"`
+			}
+			if recorder.Code != http.StatusOK || json.NewDecoder(recorder.Body).Decode(&response) != nil ||
+				response.Identity.Type != test.kind || response.Identity.Scopes == nil || len(response.Identity.Scopes) != 0 {
+				t.Fatalf("unexpected token check response: status=%d response=%+v", recorder.Code, response)
+			}
+		})
+	}
 }
 
 func TestRegisterRejectsUnknownFields(t *testing.T) {

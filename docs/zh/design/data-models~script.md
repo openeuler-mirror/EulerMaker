@@ -93,7 +93,7 @@ Gateway 负责身份与操作权限校验，Script 访问不按 Project 成员�
 
 | 身份 | 权限 |
 |------|------|
-| Ops、Admin、System | 创建、读取、列表、更新全局脚本正文和允许的 metadata；删除脚本 |
+| Ops、Admin | 创建、读取、列表、更新全局脚本正文和允许的 metadata；删除脚本 |
 | 普通登录用户 | 读取、列表全局脚本，不能写脚本；修改 Project 的脚本选择仍遵循 Project 更新权限 |
 | BuildInfo Controller 内部服务身份 | 按名称读取全局脚本，并将其元数据写入 Job |
 | Runner 机器身份 | 允许按名称 GET 全局脚本；不允许列表或写入 |

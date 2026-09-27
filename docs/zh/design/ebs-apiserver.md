@@ -483,7 +483,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + OS + Arch 执行下节的 ES 目标占用协议；省略 buildType 按 full 处理。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
 - 创建 `incremental` 或 `specified` Build 时，同一 Project + OS + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
-- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。User 不能持有 `ebs:runner` 或 `ebs:system`。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
+- User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。Runner 由 Token 的 `type` 区分，不是 User scope。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
 
 从旧模型升级时必须在启用新 Gateway 前迁移已有 User：`spec.admin=true` 转为 `spec.scopes=["ebs:admin"]`，其他 User 转为 `spec.scopes=["ebs:user"]`，迁移完成后删除旧 `spec.admin` 字段。存量对象读取不依赖创建默认值，不能把数据迁移交给 storage strategy 隐式完成。

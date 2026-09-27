@@ -66,7 +66,7 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 	if !equalMetadataExceptUserFields(oldMeta, newMeta, route.Resource == "runners") {
 		return deny("protected metadata changed")
 	}
-	if route.Resource == "runners" && who.Scope == identity.RunnerScope {
+	if route.Resource == "runners" && who.Type == identity.RunnerType {
 		return validateRunnerOrdinary(oldMeta, newMeta, objectMap(old["spec"]), objectMap(candidate["spec"]))
 	}
 	if route.Resource == "projects" {
@@ -116,10 +116,10 @@ func equalMetadataExceptUserFields(old, next map[string]any, allowVersion bool) 
 }
 
 func validateStatusUpdate(who identity.Principal, route Route, old, candidate mutation.Object) error {
-	if route.Resource == "jobs" && who.Scope != identity.RunnerScope && who.Scope != identity.SystemScope {
+	if route.Resource == "jobs" && who.Type != identity.RunnerType {
 		return deny("Job status is not user-writable")
 	}
-	if who.Scope != identity.RunnerScope {
+	if who.Type != identity.RunnerType {
 		return nil
 	}
 	oldStatus := objectMap(old["status"])

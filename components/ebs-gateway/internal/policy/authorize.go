@@ -93,7 +93,7 @@ func authorizeScript(who identity.Principal, route Route) error {
 	if route.Subresource != "" {
 		return deny("Script subresource is not exposed")
 	}
-	if who.Scope == identity.RunnerScope {
+	if who.Type == identity.RunnerType {
 		if route.Name != "" && (route.Method == http.MethodGet || route.Method == http.MethodHead) {
 			return nil
 		}
@@ -112,7 +112,7 @@ func authorizeRunner(who identity.Principal, route Route) error {
 	if who.IsPrivileged() {
 		return nil
 	}
-	if who.Scope != identity.RunnerScope || who.Runner == "" || who.Subject != who.Runner {
+	if who.Type != identity.RunnerType || who.Runner == "" || who.Subject != who.Runner {
 		return deny("Runner access denied")
 	}
 	if route.Name == "" {
@@ -142,7 +142,7 @@ func authorizeRunner(who identity.Principal, route Route) error {
 }
 
 func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal, route Route) error {
-	if who.Scope == identity.RunnerScope {
+	if who.Type == identity.RunnerType {
 		if route.Resource == "jobs" && route.Project != "" && route.Name != "" &&
 			((route.Subresource == "" && (route.Method == http.MethodGet || route.Method == http.MethodHead)) ||
 				(route.Subresource == "status" && (route.Method == http.MethodPut || route.Method == http.MethodPatch))) {
@@ -160,7 +160,7 @@ func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal
 		}
 		return nil
 	}
-	if who.Scope == identity.SystemScope || who.Scope == identity.AdminScope {
+	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
 		if route.Resource == "jobs" && route.Subresource == "status" && who.Scope == identity.AdminScope {
 			return deny("Admin cannot update Job status")
 		}

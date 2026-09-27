@@ -162,11 +162,11 @@ const form = reactive({
 });
 const canCreate = computed(() => {
   const identity = session.session?.identity;
-  return identity?.type === "user" || identity?.type === "ops" || identity?.type === "admin" || Boolean(identity?.scopes.includes("ebs:system"));
+	return Boolean(identity?.scopes.some((scope) => ["ebs:user", "ebs:ops", "ebs:admin"].includes(scope)));
 });
 const createForbidden = computed(() => session.authenticated && !canCreate.value);
-const canManageType = computed(() => session.role === "ops" || session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
-const requiresOwner = computed(() => session.role === "admin" || Boolean(session.session?.identity.scopes.includes("ebs:system")));
+const canManageType = computed(() => session.role === "ops" || session.role === "admin");
+const requiresOwner = computed(() => session.role === "admin");
 const totalPages = computed(() => {
   if (relatedOnly.value) return Math.max(1, Math.ceil(matchedProjects.value.length / pageSize.value));
   const estimated = remainingCount.value === undefined ? 0 : currentPage.value + Math.ceil(remainingCount.value / pageSize.value);
