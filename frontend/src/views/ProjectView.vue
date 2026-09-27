@@ -467,8 +467,7 @@ const tabs = computed<Array<{ id: ProjectTab; label: string }>>(() => [
 ]);
 const canEditProject = computed(() => {
   const identity = session.session?.identity;
-  if (!identity) return false;
-  if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
+  if (identity?.type !== "user" && identity?.type !== "ops") return false;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
 });
 const canStartBuild = computed(() => {
