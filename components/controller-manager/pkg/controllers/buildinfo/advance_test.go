@@ -79,15 +79,15 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 		t.Fatalf("specStatus[a] = %+v, want Failed with floor count 2", a)
 	}
 	requireCondition(t, a.Build.Conditions, ConditionRebuildFailed, ReasonRebuildJobFailed)
-	if want := jobNameFor(string(seeded.UID), "a", 2); a.Build.JobName != want {
-		t.Fatalf("specStatus[a].JobName = %q, want generation-2 job %q", a.Build.JobName, want)
+	if want := jobNameFor(string(seeded.UID), "a", 2); !strings.Contains(a.Build.Conditions[0].Message, want) {
+		t.Fatalf("specStatus[a] condition = %+v, want generation-2 job %q", a.Build.Conditions, want)
 	}
 	if _, ok := persisted.Status.SpecStatus["ghost"]; ok {
 		t.Fatalf("out-of-scope job leaked into specStatus: %v", persisted.Status.SpecStatus)
 	}
 	// A Failed upstream exempts both 7.4.6 gates (7.4.2): b dispatches at once.
 	b := persisted.Status.SpecStatus["b"]
-	if b.DispatchCount != 1 || b.Build.JobName == "" {
+	if b.DispatchCount != 1 {
 		t.Fatalf("specStatus[b] = %+v, want dispatched (gen 1)", b)
 	}
 }
@@ -109,9 +109,6 @@ func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 	a := persisted.Status.SpecStatus["a"]
 	if a.Build.Status != SpecBuildRunning {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Running (unknown phase unmapped)", a.Build.Status)
-	}
-	if a.Build.JobName == "" {
-		t.Fatal("specStatus[a].JobName empty, want the latest job name backfilled")
 	}
 	requireNoCondition(t, a.Build.Conditions, ConditionBuildFailed)
 }
@@ -243,7 +240,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 			t.Fatalf("dcg[b].InstallInDep = %v, want runtime edge on a", persisted.Status.Dcg["b"].InstallInDep)
 		}
 		a := persisted.Status.SpecStatus["a"]
-		if a.DispatchCount != 1 || a.Build.JobName == "" {
+		if a.DispatchCount != 1 {
 			t.Fatalf("specStatus[a] = %+v, want dispatched (gen 1)", a)
 		}
 	})
@@ -290,7 +287,7 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 
 	persisted = getBuildInfo(t, client)
 	b := persisted.Status.SpecStatus["b"]
-	if b.DispatchCount != 1 || b.Build.JobName == "" {
+	if b.DispatchCount != 1 {
 		t.Fatalf("specStatus[b] = %+v, want dispatched after publish", b)
 	}
 }

@@ -402,7 +402,7 @@ func specStatusMatches(a, b map[string]ebsv1.SpecStatus) bool {
 		if !ok {
 			return false
 		}
-		if left.Build.Status != right.Build.Status || left.Build.JobName != right.Build.JobName ||
+		if left.Build.Status != right.Build.Status ||
 			left.Install.Status != right.Install.Status || left.DispatchCount != right.DispatchCount {
 			return false
 		}

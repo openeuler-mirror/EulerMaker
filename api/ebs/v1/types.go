@@ -206,7 +206,6 @@ type SpecStatus struct {
 type SpecBuildStatus struct {
 	Status     string             `json:"status"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-	JobName    string             `json:"jobName,omitempty"`
 }
 
 type SpecInstallStatus struct {
