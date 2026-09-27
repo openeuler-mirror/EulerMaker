@@ -156,10 +156,10 @@ func TestAdapterReadsSucceedForMatchingObjects(t *testing.T) {
 func TestBatchHelpersHandleTiesAndInvalidInput(t *testing.T) {
 	// Equal creation timestamps fall back to name and then UID.
 	candidates := []candidate{
-		{name: "job-b", uid: "uid-2", specName: "kernel", createdAt: 5},
-		{name: "job-a", uid: "uid-3", specName: "gcc", createdAt: 5},
-		{name: "job-a", uid: "uid-1", specName: "glibc", createdAt: 5},
-		{name: "job-a", uid: "uid-1", specName: "extra", createdAt: 1},
+		{name: "job-b", specName: "kernel", createdAt: 5},
+		{name: "job-a", specName: "gcc", createdAt: 5},
+		{name: "job-a", specName: "glibc", createdAt: 5},
+		{name: "job-a", specName: "extra", createdAt: 1},
 	}
 	sortCandidates(candidates)
 	for i := 1; i < len(candidates); i++ {
@@ -172,10 +172,10 @@ func TestBatchHelpersHandleTiesAndInvalidInput(t *testing.T) {
 		}
 	}
 
-	if _, err := repositoryUID("", testBuild, "", []ebsv1.RepositoryInput{{JobUID: "uid-a"}}); err == nil {
+	if _, err := repositoryUID("", testBuild, "", []ebsv1.RepositoryInput{{JobName: "job-a"}}); err == nil {
 		t.Fatalf("an empty project must be rejected")
 	}
-	if _, err := repositoryUID(testProject, "", "", []ebsv1.RepositoryInput{{JobUID: "uid-a"}}); err == nil {
+	if _, err := repositoryUID(testProject, "", "", []ebsv1.RepositoryInput{{JobName: "job-a"}}); err == nil {
 		t.Fatalf("an empty build name must be rejected")
 	}
 	if got := unionSortedNames([]string{"", "job-a"}, []ebsv1.RepositoryInput{{JobName: ""}, {JobName: "job-b"}}); len(got) != 2 {
@@ -199,7 +199,7 @@ func TestArtifactErrorFormattingIsStable(t *testing.T) {
 func TestFakeArtifactManagerReportsMissingScripts(t *testing.T) {
 	fake := NewFakeArtifactManager()
 	ctx := context.Background()
-	if _, err := fake.SubmitRepository(ctx, CreateRepositoryRequest{Manifests: []ManifestReference{{JobUID: "uid"}}}); err == nil {
+	if _, err := fake.SubmitRepository(ctx, CreateRepositoryRequest{Manifests: []ManifestReference{{JobName: "job"}}}); err == nil {
 		t.Fatalf("an unscripted SubmitRepository must fail")
 	}
 	if _, err := fake.GetRepository(ctx, "repo-1"); err == nil {
@@ -214,7 +214,7 @@ func TestFakeArtifactManagerReportsMissingScripts(t *testing.T) {
 	if _, err := fake.ActivateRelease(ctx, testBuild); err == nil {
 		t.Fatalf("an unscripted ActivateRelease must fail")
 	}
-	if _, err := fake.GetJobManifest(ctx, testProject, "job-a", "uid"); !isArtifactNotFound(err) {
+	if _, err := fake.GetJobManifest(ctx, testProject, "job-a"); !isArtifactNotFound(err) {
 		t.Fatalf("an unscripted manifest lookup must look like a missing manifest, got %v", err)
 	}
 }

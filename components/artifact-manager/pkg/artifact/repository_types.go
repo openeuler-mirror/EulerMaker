@@ -16,7 +16,6 @@ const (
 
 type ManifestReference struct {
 	JobName string `json:"jobName"`
-	JobUID  string `json:"jobUID,omitempty"`
 }
 
 type CreateRepositoryRequest struct {

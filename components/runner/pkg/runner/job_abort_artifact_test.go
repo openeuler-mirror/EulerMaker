@@ -11,7 +11,7 @@ type waitingArtifactRemote struct {
 	started chan struct{}
 }
 
-func (r *waitingArtifactRemote) LogStatus(ctx context.Context, _, _, _ string) (LogStatus, error) {
+func (r *waitingArtifactRemote) LogStatus(ctx context.Context, _, _ string) (LogStatus, error) {
 	close(r.started)
 	<-ctx.Done()
 	return LogStatus{}, ctx.Err()

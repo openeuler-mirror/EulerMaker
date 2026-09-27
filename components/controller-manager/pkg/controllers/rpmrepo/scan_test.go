@@ -185,7 +185,7 @@ func TestScanDoesNotReadManifestBeforeSubmission(t *testing.T) {
 			client := NewFakeClient()
 			job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
 			artifacts := NewFakeArtifactManager()
-			artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+			artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 				return tc.manifest, tc.manifestErr
 			}
 			artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -210,7 +210,7 @@ func TestCandidateScanUsesTheBuildNameSelector(t *testing.T) {
 	client := NewFakeClient()
 	job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -236,7 +236,7 @@ func TestRepositoryAdvancesWhileBuildInfoIsStillProcessing(t *testing.T) {
 	client := NewFakeClient()
 	job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {

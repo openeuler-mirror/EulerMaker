@@ -23,7 +23,7 @@ func TestArtifactClientStreamsMultipartUpload(t *testing.T) {
 	if err := os.WriteFile(path, []byte("rpm-data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	input := UploadArtifactInput{JobUID: "uid-1", Category: "artifact", FileName: "package.rpm", RelativePath: "packages/package.rpm", ContentType: "application/x-rpm", Size: 8, SHA256: "sum"}
+	input := UploadArtifactInput{Category: "artifact", FileName: "package.rpm", RelativePath: "packages/package.rpm", ContentType: "application/x-rpm", Size: 8, SHA256: "sum"}
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Header.Get("Idempotency-Key") != "upload-key" || r.Header.Get("Authorization") != "Bearer token" {
 			t.Fatalf("unexpected headers: %#v", r.Header)
@@ -49,7 +49,7 @@ func TestArtifactClientStreamsMultipartUpload(t *testing.T) {
 		if string(body) != "rpm-data" {
 			t.Fatalf("file body = %q", body)
 		}
-		return &http.Response{StatusCode: 201, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"artifact":{"id":"a1","project":"project","jobName":"job","jobUID":"uid-1","category":"artifact","relativePath":"packages/package.rpm","size":8,"sha256":"sum","state":"Completed"}}`))}, nil
+		return &http.Response{StatusCode: 201, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"artifact":{"id":"a1","project":"project","jobName":"job","category":"artifact","relativePath":"packages/package.rpm","size":8,"sha256":"sum","state":"Completed"}}`))}, nil
 	})}
 	client, err := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
 	if err != nil {
@@ -79,7 +79,7 @@ func TestArtifactClientAppendLogBuildsProtocolRequest(t *testing.T) {
 		if r.URL.String() != "http://artifact-manager:8081/artifacts/v1/projects/project/jobs/build/logs/chunks" {
 			t.Fatalf("URL = %s", r.URL)
 		}
-		if r.Header.Get("Authorization") != "Bearer fresh" || r.Header.Get("X-Job-UID") != "uid-1" || r.Header.Get("X-Log-Sequence") != "3" {
+		if r.Header.Get("Authorization") != "Bearer fresh" || r.Header.Get("X-Log-Sequence") != "3" {
 			t.Fatalf("headers = %#v", r.Header)
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -92,7 +92,7 @@ func TestArtifactClientAppendLogBuildsProtocolRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := client.AppendLog(context.Background(), "project", "build", "uid-1", 3, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", []byte("line\n"))
+	result, err := client.AppendLog(context.Background(), "project", "build", 3, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", []byte("line\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestArtifactClientParsesAPIError(t *testing.T) {
 		return &http.Response{StatusCode: 409, Header: http.Header{"Retry-After": []string{"2"}}, Body: io.NopCloser(strings.NewReader(`{"code":"SequenceGap","message":"gap","retryable":false,"details":{"nextSequence":2}}`))}, nil
 	})}
 	client, _ := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
-	_, err := client.LogStatus(context.Background(), "project", "build", "uid")
+	_, err := client.LogStatus(context.Background(), "project", "build")
 	apiErr, ok := err.(ArtifactAPIError)
 	if !ok || apiErr.Code != "SequenceGap" || apiErr.RetryAfter.Seconds() != 2 {
 		t.Fatalf("error = %#v", err)

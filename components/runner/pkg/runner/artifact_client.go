@@ -41,7 +41,6 @@ type AppendLogResult struct {
 }
 
 type CompleteLogInput struct {
-	JobUID       string `json:"jobUID"`
 	Stream       string `json:"stream"`
 	LastSequence int64  `json:"lastSequence"`
 	Size         int64  `json:"size"`
@@ -60,7 +59,6 @@ type ArtifactRecord struct {
 	ID           string     `json:"id"`
 	Project      string     `json:"project"`
 	JobName      string     `json:"jobName"`
-	JobUID       string     `json:"jobUID"`
 	Category     string     `json:"category"`
 	FileName     string     `json:"fileName"`
 	RelativePath string     `json:"relativePath"`
@@ -72,7 +70,6 @@ type ArtifactRecord struct {
 }
 
 type UploadArtifactInput struct {
-	JobUID       string `json:"jobUID"`
 	Category     string `json:"category"`
 	FileName     string `json:"fileName"`
 	RelativePath string `json:"relativePath"`
@@ -91,12 +88,10 @@ type ManifestFile struct {
 }
 
 type CompleteManifestInput struct {
-	JobUID string         `json:"jobUID"`
-	Files  []ManifestFile `json:"files"`
+	Files []ManifestFile `json:"files"`
 }
 
 type CompletedManifest struct {
-	JobUID        string         `json:"jobUID"`
 	State         string         `json:"state"`
 	ArtifactCount int            `json:"artifactCount"`
 	Files         []ManifestFile `json:"files,omitempty"`
@@ -129,17 +124,16 @@ func NewArtifactClient(address string, tokens TokenSource, httpClient *http.Clie
 	return &ArtifactClient{baseURL: u, tokens: tokens, httpClient: httpClient}, nil
 }
 
-func (c *ArtifactClient) LogStatus(ctx context.Context, project, job, uid string) (LogStatus, error) {
+func (c *ArtifactClient) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
 	var out LogStatus
-	q := url.Values{"jobUID": {uid}, "stream": {"combined"}}
+	q := url.Values{"stream": {"combined"}}
 	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/logs/status?"+q.Encode(), nil, nil, &out)
 	return out, err
 }
 
-func (c *ArtifactClient) AppendLog(ctx context.Context, project, job, uid string, sequence int64, sum string, data []byte) (AppendLogResult, error) {
+func (c *ArtifactClient) AppendLog(ctx context.Context, project, job string, sequence int64, sum string, data []byte) (AppendLogResult, error) {
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/octet-stream")
-	headers.Set("X-Job-UID", uid)
 	headers.Set("X-Log-Stream", "combined")
 	headers.Set("X-Log-Sequence", strconv.FormatInt(sequence, 10))
 	headers.Set("X-Content-SHA256", sum)
@@ -260,10 +254,9 @@ func (c *ArtifactClient) CompleteManifest(ctx context.Context, project, job stri
 	return out, err
 }
 
-func (c *ArtifactClient) GetManifest(ctx context.Context, project, job, uid string) (CompletedManifest, error) {
-	q := url.Values{"jobUID": {uid}}
+func (c *ArtifactClient) GetManifest(ctx context.Context, project, job string) (CompletedManifest, error) {
 	var out CompletedManifest
-	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/manifest?"+q.Encode(), nil, nil, &out)
+	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/manifest", nil, nil, &out)
 	if out.ArtifactCount == 0 && len(out.Files) > 0 {
 		out.ArtifactCount = len(out.Files)
 	}

@@ -20,7 +20,6 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
-	u := r.Header.Get("X-Job-UID")
 	seq, e := strconv.ParseInt(r.Header.Get("X-Log-Sequence"), 10, 64)
 	sum := r.Header.Get("X-Content-SHA256")
 	if e != nil || r.Header.Get("X-Log-Stream") != "combined" || !validHash(sum) {
@@ -50,15 +49,15 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 		writeErr(w, r, 422, "LogChunkMismatch", "log chunk mismatch", true, nil)
 		return
 	}
-	if current, ok := s.store.GetLog(p, j, u); ok && seq < current.NextSequence-int64(s.cfg.LogDedupeWindow) {
+	if current, ok := s.store.GetLog(p, j); ok && seq < current.NextSequence-int64(s.cfg.LogDedupeWindow) {
 		writeErr(w, r, 409, "SequenceConflict", "sequence is outside the deduplication window", false, map[string]any{"nextSequence": current.NextSequence})
 		return
 	}
-	if current, ok := s.store.GetLog(p, j, u); ok && current.CommittedBytes+int64(len(data)) > s.cfg.MaxLogSize {
+	if current, ok := s.store.GetLog(p, j); ok && current.CommittedBytes+int64(len(data)) > s.cfg.MaxLogSize {
 		writeErr(w, r, 413, "LogQuotaExceeded", "log size limit exceeded", false, nil)
 		return
 	}
-	l, e := s.store.AppendLog(p, j, u, id.Name, seq, data, sum)
+	l, e := s.store.AppendLog(p, j, id.Name, seq, data, sum)
 	if e != nil {
 		details := map[string]any{}
 		if l != nil {
@@ -79,7 +78,7 @@ func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) 
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
-	l, ok := s.store.GetLog(p, j, r.URL.Query().Get("jobUID"))
+	l, ok := s.store.GetLog(p, j)
 	if !ok {
 		writeJSON(w, 200, map[string]any{"stream": "combined", "state": LogOpen, "nextSequence": 0, "committedBytes": 0})
 		return
@@ -87,13 +86,12 @@ func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) 
 	writeJSON(w, 200, l)
 }
 func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string) {
-	u := r.URL.Query().Get("jobUID")
-	l, ok := s.store.GetLog(p, j, u)
+	l, ok := s.store.GetLog(p, j)
 	if !ok {
 		writeErr(w, r, 404, "NotFound", "log not found", false, nil)
 		return
 	}
-	body, _, _ := s.store.logPaths(p, j, u)
+	body, _, _ := s.store.logPaths(p, j)
 	if l.State == LogCompleted {
 		if a, yes := s.store.GetArtifact(l.ArtifactID); yes {
 			body = s.store.artifactPath(a)
@@ -125,17 +123,16 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeErr(w, r, 500, "StreamingUnsupported", "streaming unsupported", false, nil)
 		return
 	}
-	u := r.URL.Query().Get("jobUID")
 	after, supplied, e := recoverySequence(r)
 	if e != nil {
 		writeErr(w, r, 400, "InvalidRequest", "invalid recovery sequence", false, nil)
 		return
 	}
-	ch, done := s.store.Subscribe(p, j, u)
+	ch, done := s.store.Subscribe(p, j)
 	defer done()
 	var replay []logEvent
 	if supplied {
-		replay, _, e = s.store.ReplayLog(p, j, u, after, s.cfg.LogReplayWindow)
+		replay, _, e = s.store.ReplayLog(p, j, after, s.cfg.LogReplayWindow)
 		if e != nil {
 			if e.Error() == "ReplayWindowExceeded" {
 				writeErr(w, r, 409, e.Error(), e.Error(), false, nil)
@@ -209,7 +206,7 @@ func (s *Server) completeLog(w http.ResponseWriter, r *http.Request, p, j string
 		writeErr(w, r, 400, "InvalidRequest", "invalid request", false, nil)
 		return
 	}
-	a, e := s.store.CompleteLog(p, j, in.JobUID, id.Name, in)
+	a, e := s.store.CompleteLog(p, j, id.Name, in)
 	if e != nil {
 		s.mapErr(w, r, e)
 		return

@@ -50,7 +50,7 @@ func uploadRequest(t *testing.T, data []byte, key string) *http.Request {
 	h.Set("Content-Disposition", `form-data; name="metadata"`)
 	h.Set("Content-Type", "application/json")
 	p, _ := mw.CreatePart(h)
-	_ = json.NewEncoder(p).Encode(UploadMetadata{JobUID: "uid-1", Category: CategoryArtifact, Name: "packages", FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
+	_ = json.NewEncoder(p).Encode(UploadMetadata{Category: CategoryArtifact, Name: "packages", FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
 	h = make(textproto.MIMEHeader)
 	h.Set("Content-Disposition", `form-data; name="file"; filename="ignored"`)
 	h.Set("Content-Type", "application/octet-stream")
@@ -105,7 +105,7 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/artifacts?jobUID=uid-1", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/artifacts", nil))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), created.Artifact.ID) {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
@@ -117,13 +117,13 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 	}
 }
 
-func TestJobNameDirectoryIgnoresUID(t *testing.T) {
+func TestJobNameDirectoryPersistsAcrossRestart(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := UploadMetadata{JobUID: "uid-1", Category: CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
+	meta := UploadMetadata{Category: CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
 	if _, _, _, err := store.BeginUpload("project", "job", "runner", "key-1", meta, 1024); err != nil {
 		t.Fatal(err)
 	}
@@ -131,53 +131,14 @@ func TestJobNameDirectoryIgnoresUID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta.JobUID = "uid-2"
 	if _, _, _, err := store.BeginUpload("project", "job", "runner", "key-2", meta, 1024); err != nil && err.Error() == "JobIdentityConflict" {
-		t.Fatalf("same name must not conflict because UID changed: %v", err)
+		t.Fatalf("same job name should remain valid after restart: %v", err)
 	}
-	if _, err := store.AppendLog("project", "job", "uid-2", "runner", 0, []byte("x"), sum([]byte("x"))); err != nil {
-		t.Fatalf("same name log with another UID: %v", err)
+	if _, err := store.AppendLog("project", "job", "runner", 0, []byte("x"), sum([]byte("x"))); err != nil {
+		t.Fatalf("same job name log: %v", err)
 	}
 	if _, _, _, err := store.BeginUpload("project", "another-job", "runner", "key-2", meta, 1024); err != nil {
 		t.Fatalf("different job name: %v", err)
-	}
-}
-
-func TestLogPathsIgnoreUnsafeLegacyUID(t *testing.T) {
-	store, err := NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _, _ := store.logPaths("project", "job", "../../escape")
-	if !strings.Contains(body, filepath.Join(".logs", "project", "job")) {
-		t.Fatalf("unsafe UID affected log path: %s", body)
-	}
-}
-
-func TestExistingUIDStorageKeyRemainsReadable(t *testing.T) {
-	root := t.TempDir()
-	oldKey := "projects/project/jobs/uid-1/packages/example.rpm"
-	oldPath := filepath.Join(root, filepath.FromSlash(oldKey))
-	if err := os.MkdirAll(filepath.Dir(oldPath), 0750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(oldPath, []byte("x"), 0640); err != nil {
-		t.Fatal(err)
-	}
-	old := &Artifact{ID: "old", Project: "project", JobName: "job", JobUID: "uid-1", StorageKey: oldKey, State: Completed}
-	if err := atomicJSON(filepath.Join(root, ".metadata/artifacts/old.json"), old); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, ok := store.GetArtifact("old")
-	if !ok {
-		t.Fatal("old artifact missing")
-	}
-	if content, err := os.ReadFile(store.artifactPath(loaded)); err != nil || string(content) != "x" {
-		t.Fatalf("old artifact content: %q, %v", content, err)
 	}
 }
 
@@ -190,7 +151,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		Artifact Artifact `json:"artifact"`
 	}](t, w).Artifact
 
-	manifest := CompleteManifestRequest{JobUID: "uid-1", Files: []ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
+	manifest := CompleteManifestRequest{Files: []ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
 	b, _ := json.Marshal(manifest)
 	r := httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/manifest/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
@@ -200,7 +161,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		t.Fatalf("manifest: %d %s", w.Code, w.Body.String())
 	}
 
-	r = httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/manifest?jobUID=uid-1", nil)
+	r = httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/manifest", nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -228,7 +189,6 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/chunks", bytes.NewReader(chunk))
 		r.Header.Set("Authorization", "Bearer runner-token")
 		r.Header.Set("Content-Type", "application/octet-stream")
-		r.Header.Set("X-Job-UID", "uid-1")
 		r.Header.Set("X-Log-Stream", "combined")
 		r.Header.Set("X-Log-Sequence", fmt.Sprint(sequence))
 		r.Header.Set("X-Content-SHA256", sum(chunk))
@@ -242,7 +202,6 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/chunks", bytes.NewReader(chunks[1]))
 	r.Header.Set("Authorization", "Bearer runner-token")
 	r.Header.Set("Content-Type", "application/octet-stream")
-	r.Header.Set("X-Job-UID", "uid-1")
 	r.Header.Set("X-Log-Stream", "combined")
 	r.Header.Set("X-Log-Sequence", "1")
 	r.Header.Set("X-Content-SHA256", sum(chunks[1]))
@@ -260,7 +219,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(activeDir, "combined.index.jsonl")); err != nil {
 		t.Fatalf("active log index at Job name path: %v", err)
 	}
-	complete := CompleteLogRequest{JobUID: "uid-1", Stream: "combined", LastSequence: 1, Size: int64(len(all)), SHA256: sum(all)}
+	complete := CompleteLogRequest{Stream: "combined", LastSequence: 1, Size: int64(len(all)), SHA256: sum(all)}
 	b, _ = json.Marshal(complete)
 	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
@@ -288,7 +247,7 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := UploadMetadata{JobUID: "uid-1", Category: CategoryArtifact, FileName: "x", RelativePath: "x", Size: 3, SHA256: sum([]byte("abc"))}
+	m := UploadMetadata{Category: CategoryArtifact, FileName: "x", RelativePath: "x", Size: 3, SHA256: sum([]byte("abc"))}
 	a, ir, _, err := s.BeginUpload("project", "job", "runner", "key", m, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -313,26 +272,21 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 	}
 
 	chunk := []byte("committed")
-	if _, err := s.AppendLog("project", "another-job", "uid-2", "runner", 0, chunk, sum(chunk)); err != nil {
+	if _, err := s.AppendLog("project", "another-job", "runner", 0, chunk, sum(chunk)); err != nil {
 		t.Fatal(err)
 	}
-	body, _, _ := s.logPaths("project", "another-job", "uid-2")
+	body, _, _ := s.logPaths("project", "another-job")
 	f, err := os.OpenFile(body, os.O_APPEND|os.O_WRONLY, 0640)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = io.WriteString(f, "uncommitted-tail")
 	_ = f.Close()
-	legacyDir := filepath.Join(root, ".logs", "project", "uid-2")
-	if err := os.Rename(filepath.Dir(body), legacyDir); err != nil {
-		t.Fatal(err)
-	}
-	body = filepath.Join(legacyDir, "combined.log")
 	s, err = NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, ok := s.GetLog("project", "another-job", "uid-2")
+	l, ok := s.GetLog("project", "another-job")
 	if !ok || l.CommittedBytes != int64(len(chunk)) {
 		t.Fatalf("log was not recovered: %#v", l)
 	}

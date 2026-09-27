@@ -21,10 +21,10 @@ type fakeLogRemote struct {
 	completed      CompleteLogInput
 }
 
-func (f *fakeLogRemote) LogStatus(context.Context, string, string, string) (LogStatus, error) {
+func (f *fakeLogRemote) LogStatus(context.Context, string, string) (LogStatus, error) {
 	return LogStatus{State: "Open"}, nil
 }
-func (f *fakeLogRemote) AppendLog(_ context.Context, _, _, _ string, sequence int64, _ string, data []byte) (AppendLogResult, error) {
+func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64, _ string, data []byte) (AppendLogResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.appendFailures > 0 {

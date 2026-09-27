@@ -37,7 +37,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 			return nil, errors.New("artifact mismatch")
 		}
 	}
-	k := manifestKey(project, job, r.JobUID)
+	k := manifestKey(project, job)
 	digest := manifestDigest(r.Files)
 	if old := s.manifests[k]; old != nil {
 		if old.Digest == digest && old.State == ManifestCompleted {
@@ -46,7 +46,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 		return nil, errors.New("manifest conflict")
 	}
 	now := time.Now().UTC()
-	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, JobUID: r.JobUID, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
+	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
 	path := filepath.Join(s.root, ".metadata/jobs", project, job, "manifest.json")
 	if err := atomicJSON(path, m); err != nil {
 		return nil, err
@@ -54,10 +54,10 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 	s.manifests[k] = m
 	return m, nil
 }
-func (s *Store) GetManifest(p, j, u string) (*JobUploadManifest, bool) {
+func (s *Store) GetManifest(p, j string) (*JobUploadManifest, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	m, ok := s.manifests[manifestKey(p, j, u)]
+	m, ok := s.manifests[manifestKey(p, j)]
 	if !ok {
 		return nil, false
 	}

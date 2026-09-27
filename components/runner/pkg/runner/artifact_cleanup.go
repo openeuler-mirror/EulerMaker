@@ -14,8 +14,7 @@ import (
 type cleanupMarker struct {
 	SchemaVersion int       `json:"schemaVersion"`
 	Project       string    `json:"project"`
-	JobName       string    `json:"jobName,omitempty"`
-	JobUID        string    `json:"jobUID"`
+	JobName       string    `json:"jobName"`
 	Outcome       string    `json:"outcome"`
 	CreatedAt     time.Time `json:"createdAt"`
 	NotBefore     time.Time `json:"notBefore"`
@@ -44,7 +43,7 @@ func (m *ArtifactCleanupManager) mark(job JobResource, outcome string, retention
 		now = m.Now().UTC()
 	}
 	marker := cleanupMarker{
-		SchemaVersion: 1, Project: job.Metadata.Namespace, JobName: job.Metadata.Name, JobUID: job.Metadata.UID,
+		SchemaVersion: 1, Project: job.Metadata.Namespace, JobName: job.Metadata.Name,
 		Outcome: outcome, CreatedAt: now, NotBefore: now.Add(retention),
 	}
 	path := m.markerPath(marker.Project, marker.JobName)
@@ -99,14 +98,10 @@ func (m *ArtifactCleanupManager) Sweep() error {
 			return err
 		}
 		var marker cleanupMarker
-		if err := json.Unmarshal(data, &marker); err != nil || marker.SchemaVersion != 1 || marker.Project == "" || (marker.JobName == "" && marker.JobUID == "") {
+		if err := json.Unmarshal(data, &marker); err != nil || marker.SchemaVersion != 1 || marker.Project == "" || marker.JobName == "" {
 			return fmt.Errorf("invalid artifact cleanup marker %s", path)
 		}
-		name := marker.JobName
-		if name == "" {
-			name = marker.JobUID // Existing UID-based cleanup markers remain valid.
-		}
-		if path != m.markerPath(marker.Project, name) {
+		if path != m.markerPath(marker.Project, marker.JobName) {
 			return fmt.Errorf("artifact cleanup marker identity mismatch: %s", path)
 		}
 		if now.Before(marker.NotBefore) {
@@ -127,10 +122,7 @@ func (m *ArtifactCleanupManager) clean(marker cleanupMarker, markerPath string, 
 		return nil
 	}
 	name := marker.JobName
-	if name == "" {
-		name = marker.JobUID
-	}
-	if strings.ContainsAny(marker.Project, `/\\`) || strings.ContainsAny(name, `/\\`) || strings.ContainsAny(marker.JobUID, `/\\`) || name == "." || name == ".." {
+	if strings.ContainsAny(marker.Project, `/\\`) || strings.ContainsAny(name, `/\\`) || name == "." || name == ".." {
 		return fmt.Errorf("invalid artifact cleanup identity")
 	}
 	for _, category := range []string{"results", "logs", "uploads"} {

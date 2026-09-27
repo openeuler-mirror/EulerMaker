@@ -259,7 +259,7 @@ status:
 - 取值来源是历史 Build 同名 RpmRepo 的 `status.repository.repositoryUID` 与 `status.repository.contentURL`，即过程仓的不可变版本标识与地址（形如 `https://artifact-manager/repositories/v1/{repositoryUID}`）；它们不是 `status.release.*`（正式发布信息）。两个字段都非空即可继承：种入后本轮过程仓的当前版本初期即继承版本，尚未产生本轮自己的版本。
 - 只有在「确定没有可继承基线」时降级：历史对象 NotFound，或历史对象存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空。此时降级为不带基线的创建（两个字段都不写入，避免版本 UID 与地址不匹配），输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryUnavailable base_build=<name> error=<error>`，本轮继续正常推进，不写 Build 终态、不 requeue。
 - 历史对象读取失败（网络错误、超时、408/429/5xx）不降级：本轮不创建 RpmRepo、不写 `Build.status`，把 `classifyReadError` 的分类结果返回给框架——临时错误走退避重试（依赖 15s 轮询复查，下一次读取成功后正常创建与推进），并输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryReadFailed base_build=<name> retryable=<bool> error=<error>`；`401/403/400/422` 与响应身份契约错误按 `controller.NewPermanentError` 返回（同一日志 `retryable=false`）；Manager context 取消返回 `ctx.Err()`，同样不创建、不写 status。
-- 创建请求携带成对的 `repositoryUID` / `contentURL`；single 额外携带 `release.phase=Skipped`。不初始化 transition、sourceJobUIDs 或 conditions；无可继承基线时 repository 保持 nil，但 single 仍写 Skipped。已有对象不补写或覆盖初始状态。
+- 创建请求携带成对的 `repositoryUID` / `contentURL`；single 额外携带 `release.phase=Skipped`。不初始化 transition、sourceJobNames 或 conditions；无可继承基线时 repository 保持 nil，但 single 仍写 Skipped。已有对象不补写或覆盖初始状态。
 - 创建时同时写入目标标签 `ebs.io/target-os` / `ebs.io/target-arch`（值取 `Build.spec.buildTarget.os` / `arch`），使 RpmRepo 可按构建目标查询与归组；标签只在创建请求中携带一次，已存在的同名 RpmRepo 不补写、不修改其 metadata。
 
 

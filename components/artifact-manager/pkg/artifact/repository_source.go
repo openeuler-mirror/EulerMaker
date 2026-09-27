@@ -12,7 +12,7 @@ func (s *Store) repositoryArtifacts(project string, refs []ManifestReference) ([
 	s.mu.RLock()
 	var result []repositoryArtifact
 	for _, ref := range refs {
-		manifest := s.manifests[manifestKey(project, ref.JobName, ref.JobUID)]
+		manifest := s.manifests[manifestKey(project, ref.JobName)]
 		if manifest == nil || manifest.State != ManifestCompleted {
 			s.mu.RUnlock()
 			return nil, &repositoryError{code: "ManifestNotReady", status: 422, jobName: ref.JobName}

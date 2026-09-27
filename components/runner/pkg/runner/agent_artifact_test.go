@@ -78,7 +78,7 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 		t.Fatalf("post-run status = %#v", statuses[1])
 	}
 	final := statuses[2]
-	if final.Phase != "Succeeded" || final.ResultRoot != "artifact://uid" {
+	if final.Phase != "Succeeded" || final.ResultRoot != "artifact://project/job" {
 		t.Fatalf("final status = %#v", final)
 	}
 	if _, err := os.Stat(resultDir); !os.IsNotExist(err) {

@@ -23,7 +23,6 @@ type JobUploadManifest struct {
 	SchemaVersion int            `json:"schemaVersion"`
 	Project       string         `json:"project"`
 	JobName       string         `json:"jobName"`
-	JobUID        string         `json:"jobUID"`
 	RunnerName    string         `json:"runnerName"`
 	Files         []ManifestFile `json:"files"`
 	Digest        string         `json:"digest,omitempty"`

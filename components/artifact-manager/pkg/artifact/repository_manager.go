@@ -131,13 +131,11 @@ func normalizeRepositoryRequest(in CreateRepositoryRequest) (CreateRepositoryReq
 	}
 	sort.Slice(in.Manifests, func(i, j int) bool { return in.Manifests[i].JobName < in.Manifests[j].JobName })
 	seen := map[string]bool{}
-	for i, ref := range in.Manifests {
+	for _, ref := range in.Manifests {
 		if !validIdentifier(ref.JobName) || seen[ref.JobName] {
 			return in, "", &repositoryError{code: "InvalidManifestReference", status: 422}
 		}
 		seen[ref.JobName] = true
-		// Older clients may still send a UID; it is not part of repository identity.
-		in.Manifests[i].JobUID = ""
 	}
 	uid := repositoryUID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
 	if in.RepositoryUID != uid {

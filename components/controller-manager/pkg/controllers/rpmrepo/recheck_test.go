@@ -32,7 +32,7 @@ func TestReleaseRecheckSkipsCandidateWithoutBuildInfo(t *testing.T) {
 func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-b", "kernel", "uid-job-b", time.Unix(2, 0))}
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 
@@ -58,7 +58,7 @@ func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 func TestReleaseRecheckReturnsToRepositoryWithoutManifestProbe(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-b", "kernel", "uid-job-b", time.Unix(2, 0))}
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return JobUploadManifest{State: ManifestOpen}, nil
 	}
 

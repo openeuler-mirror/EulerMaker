@@ -343,7 +343,7 @@ type JobStatus struct {
 }
 ```
 
-`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{jobUID}`，不能向其他组件公开 Runner 容器内的本地路径。Job 通过 `phase/stage` 表达执行进度，产物状态和文件数量由 Artifact Manager 的 Manifest 提供，不在 Job Status 中重复记录。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
+`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{project}/{jobName}`，不能向其他组件公开 Runner 容器内的本地路径。Job 通过 `phase/stage` 表达执行进度，产物状态和文件数量由 Artifact Manager 的 Manifest 提供，不在 Job Status 中重复记录。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 
@@ -484,7 +484,6 @@ type LogUploadCheckpoint struct {
     SchemaVersion   int       `json:"schemaVersion"`
     Project         string    `json:"project"`
     JobName         string    `json:"jobName"`
-    JobUID          string    `json:"jobUID"`
     Stream          string    `json:"stream"`
     NextSequence    int64     `json:"nextSequence"`
     ConfirmedOffset int64     `json:"confirmedOffset"`
@@ -508,7 +507,7 @@ type LogUploadCheckpoint struct {
 
 #### 8.3.3 启动与断线恢复
 
-开始或恢复 Job 日志前，Runner 调用 `/logs/status?jobUID={uid}&stream=combined`：
+开始或恢复 Job 日志前，Runner 调用 `/logs/status?stream=combined`：
 
 1. 服务端不存在日志流时，以 `nextSequence=0`、`committedBytes=0` 开始。
 2. 服务端 `state=Open` 时，以服务端值为事实来源；校验本地 spool 至少包含 `committedBytes`，将 checkpoint 回退或前进到该边界，并从对应 sequence 继续。
@@ -712,7 +711,6 @@ secrets:
 | 模块 | 场景 |
 |------|------|
 | Runner identity | 首次启动原子生成规范 UUID v4；重启复用；同名同 ID 恢复；同名不同 ID 终止；POST 409 后 GET 并按 ID 分类；更新不能修改或清空 ID；ID 文件丢失时不接管已有对象 |
-| Job identity | 从 `metadata.uid` 取得 jobUID；缺少 namespace/name/UID 时拒绝执行；本地目录按 Job 名组织，日志流和上传清单以 Project + Job 名标识，归档不比较 UID |
 | Script 执行 | 空 `scriptRefs` 使用镜像入口；单脚本和多脚本均写入 `/workspace/scripts/{name}`，第一项作为入口；重复名称、路径逃逸、遮蔽挂载及与 `runtimeSpec.command/args` 冲突时拒绝 |
 | Script 缓存与失败 | 同 name/UID/resourceVersion 命中缓存，UID 或 resourceVersion 变化时重新 GET；响应元数据变化、无效正文、404、401/403、429/5xx、超时和取消分别按契约处理，不执行未完整拉取的脚本集合 |
 | Chunk | 256 KiB 聚合、500 ms 刷新、EOF 刷新、空日志不发送 chunk、SHA-256 针对原始字节、可选 gzip |

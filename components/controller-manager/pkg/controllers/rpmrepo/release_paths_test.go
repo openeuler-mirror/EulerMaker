@@ -61,7 +61,7 @@ func TestReconcileReleaseCandidatePredicateSkipsObjects(t *testing.T) {
 			name: "repository-batch-in-flight",
 			mutate: func(repo *ebsv1.RpmRepo) {
 				repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
-					Inputs:        []ebsv1.RepositoryInput{{JobName: "job-b", JobUID: "uid-job-b", SpecName: "gcc"}},
+					Inputs:        []ebsv1.RepositoryInput{{JobName: "job-b", SpecName: "gcc"}},
 					RepositoryUID: "next-1",
 				}
 			},

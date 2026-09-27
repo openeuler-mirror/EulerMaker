@@ -18,10 +18,10 @@ import (
 )
 
 type ArtifactRemote interface {
-	LogStatus(context.Context, string, string, string) (LogStatus, error)
+	LogStatus(context.Context, string, string) (LogStatus, error)
 	UploadArtifact(context.Context, string, string, string, string, UploadArtifactInput) (ArtifactRecord, error)
 	CompleteManifest(context.Context, string, string, CompleteManifestInput) (CompletedManifest, error)
-	GetManifest(context.Context, string, string, string) (CompletedManifest, error)
+	GetManifest(context.Context, string, string) (CompletedManifest, error)
 }
 
 type ArtifactProcessor struct {
@@ -57,7 +57,7 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 		return CompletedManifest{}, err
 	}
 
-	logStatus, err := p.Remote.LogStatus(ctx, job.Metadata.Namespace, job.Metadata.Name, job.Metadata.UID)
+	logStatus, err := p.Remote.LogStatus(ctx, job.Metadata.Namespace, job.Metadata.Name)
 	if err != nil {
 		return CompletedManifest{}, fmt.Errorf("get completed log: %w", err)
 	}
@@ -86,7 +86,7 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 		}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].RelativePath < files[j].RelativePath })
-	input := CompleteManifestInput{JobUID: job.Metadata.UID, Files: files}
+	input := CompleteManifestInput{Files: files}
 	manifest, err := p.completeManifestWithRetry(ctx, job, input)
 	if err != nil {
 		return CompletedManifest{}, err
@@ -252,7 +252,7 @@ func (p *ArtifactProcessor) uploadOne(ctx context.Context, job JobResource, cand
 		return receipt.Artifact, nil
 	}
 	input := UploadArtifactInput{
-		JobUID: job.Metadata.UID, Category: "artifact", FileName: candidate.FileName,
+		Category: "artifact", FileName: candidate.FileName,
 		RelativePath: candidate.RelativePath, ContentType: candidate.ContentType,
 		Size: candidate.Size, SHA256: candidate.SHA256,
 	}
@@ -294,7 +294,7 @@ func (p *ArtifactProcessor) completeManifestWithRetry(ctx context.Context, job J
 		if err == nil {
 			return manifest, nil
 		}
-		known, getErr := p.Remote.GetManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, job.Metadata.UID)
+		known, getErr := p.Remote.GetManifest(ctx, job.Metadata.Namespace, job.Metadata.Name)
 		if getErr == nil && known.State == "Completed" && known.ArtifactCount == len(input.Files) {
 			return known, nil
 		}

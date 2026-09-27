@@ -64,7 +64,7 @@ func TestFinishRepositoryConvergesWhenTheObjectDissapears(t *testing.T) {
 		return updated, nil
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {

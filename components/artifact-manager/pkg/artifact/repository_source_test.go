@@ -33,8 +33,8 @@ func TestRepositoryFailurePersistsOffendingJobName(t *testing.T) {
 }
 
 func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
-	const project, job, uid = "project", "job", "job-uid"
-	ref := []ManifestReference{{JobName: job, JobUID: uid}}
+	const project, job = "project", "job"
+	ref := []ManifestReference{{JobName: job}}
 	tests := []struct {
 		name     string
 		manifest *JobUploadManifest
@@ -53,7 +53,7 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 				if tt.name == "no RPM" {
 					tt.manifest.Digest = manifestDigest(tt.manifest.Files)
 				}
-				store.manifests[manifestKey(project, job, uid)] = tt.manifest
+				store.manifests[manifestKey(project, job)] = tt.manifest
 			}
 			_, err := store.repositoryArtifacts(project, ref)
 			var typed *repositoryError

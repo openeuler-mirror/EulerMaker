@@ -498,7 +498,7 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 			status.Message = "artifact upload: " + artifactErr.Error()
 		}
 	} else {
-		status.ResultRoot = "artifact://" + job.Metadata.UID
+		status.ResultRoot = "artifact://" + job.Metadata.Namespace + "/" + job.Metadata.Name
 		if executionErr != nil {
 			status.Phase = "Failed"
 			status.Message = executionErr.Error()

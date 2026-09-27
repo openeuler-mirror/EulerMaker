@@ -473,7 +473,6 @@ RpmRepo 与 Build 一对一，`metadata.name` 与 Build name 相同。RpmRepo �
 ```go
 type RepositoryInput struct {
     JobName            string `json:"jobName"`
-    JobUID             string `json:"jobUID"`
     SpecName           string `json:"specName"`
 }
 
@@ -495,7 +494,6 @@ type ReleaseTransition struct {
 | 类型与字段 | 说明 |
 |------------|------|
 | `RepositoryInput.jobName` | 输入 Job 名称，用于 API 定位和诊断 |
-| `RepositoryInput.jobUID` | 仅为旧对象解码保留；新检查点不写入，物化身份以 `jobName` 为准 |
 | `RepositoryInput.specName` | Job 产出的 spec，用于批次去重和错误归属 |
 | `RepositoryTransition.inputs` | 已冻结并按稳定顺序保存的本批输入 |
 | `RepositoryTransition.baseRepositoryUID` | 本次物化继承的不可变基础仓；首次构建可为空 |

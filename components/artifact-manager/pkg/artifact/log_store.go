@@ -14,18 +14,12 @@ import (
 	"time"
 )
 
-func (s *Store) logPaths(p, j, u string) (string, string, string) {
+func (s *Store) logPaths(p, j string) (string, string, string) {
 	base := filepath.Join(s.root, ".logs", p, j)
-	if _, err := os.Stat(base); os.IsNotExist(err) && validIdentifier(u) {
-		legacy := filepath.Join(s.root, ".logs", p, u)
-		if _, err := os.Stat(legacy); err == nil {
-			base = legacy // Continue an in-flight log created before the name-based layout.
-		}
-	}
 	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/logs", p, j, "combined.json")
 }
 func (s *Store) recoverLog(l *LogStream) error {
-	body, index, meta := s.logPaths(l.Project, l.JobName, l.JobUID)
+	body, index, meta := s.logPaths(l.Project, l.JobName)
 	if l.State == LogFinalizing && l.ArtifactID != "" {
 		if a := s.artifacts[l.ArtifactID]; a != nil && verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil {
 			now := time.Now().UTC()
@@ -114,14 +108,14 @@ func bytesLines(data []byte) [][]byte {
 	}
 	return lines
 }
-func (s *Store) AppendLog(p, j, u, runner string, seq int64, data []byte, sum string) (*LogStream, error) {
+func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum string) (*LogStream, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := logKey(p, j, u, "combined")
+	k := logKey(p, j, "combined")
 	l := s.logs[k]
 	now := time.Now().UTC()
 	if l == nil {
-		l = &LogStream{SchemaVersion: 1, Project: p, JobName: j, JobUID: u, RunnerName: runner, Stream: "combined", State: LogOpen, CreatedAt: now, UpdatedAt: now}
+		l = &LogStream{SchemaVersion: 1, Project: p, JobName: j, RunnerName: runner, Stream: "combined", State: LogOpen, CreatedAt: now, UpdatedAt: now}
 		s.logs[k] = l
 	}
 	if l.Project != p || l.JobName != j || l.RunnerName != runner {
@@ -130,7 +124,7 @@ func (s *Store) AppendLog(p, j, u, runner string, seq int64, data []byte, sum st
 	if l.State != LogOpen {
 		return nil, errors.New("LogAlreadyFinalized")
 	}
-	body, index, meta := s.logPaths(p, j, u)
+	body, index, meta := s.logPaths(p, j)
 	if err := os.MkdirAll(filepath.Dir(body), 0750); err != nil {
 		return nil, err
 	}
@@ -193,10 +187,10 @@ func findLogRecord(path string, seq int64) (LogChunkRecord, error) {
 	}
 	return LogChunkRecord{}, errors.New("not found")
 }
-func (s *Store) ReplayLog(p, j, u string, after int64, limit int) ([]logEvent, int64, error) {
+func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]logEvent, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	l := s.logs[logKey(p, j, u, "combined")]
+	l := s.logs[logKey(p, j, "combined")]
 	if l == nil {
 		return nil, 0, errors.New("not found")
 	}
@@ -207,7 +201,7 @@ func (s *Store) ReplayLog(p, j, u string, after int64, limit int) ([]logEvent, i
 	if after+1 < first {
 		return nil, l.NextSequence, errors.New("ReplayWindowExceeded")
 	}
-	body, index, _ := s.logPaths(p, j, u)
+	body, index, _ := s.logPaths(p, j)
 	if l.State == LogCompleted && l.ArtifactID != "" {
 		if a := s.artifacts[l.ArtifactID]; a != nil {
 			body = s.artifactPath(a)
@@ -241,20 +235,20 @@ func (s *Store) ReplayLog(p, j, u string, after int64, limit int) ([]logEvent, i
 	}
 	return out, l.NextSequence, sc.Err()
 }
-func (s *Store) GetLog(p, j, u string) (*LogStream, bool) {
+func (s *Store) GetLog(p, j string) (*LogStream, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	l, ok := s.logs[logKey(p, j, u, "combined")]
+	l, ok := s.logs[logKey(p, j, "combined")]
 	if !ok {
 		return nil, false
 	}
 	cp := *l
 	return &cp, true
 }
-func (s *Store) Subscribe(p, j, u string) (chan logEvent, func()) {
+func (s *Store) Subscribe(p, j string) (chan logEvent, func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := logKey(p, j, u, "combined")
+	k := logKey(p, j, "combined")
 	ch := make(chan logEvent, 64)
 	if s.subscribers[k] == nil {
 		s.subscribers[k] = map[chan logEvent]struct{}{}
@@ -272,14 +266,14 @@ func (s *Store) publishLocked(k string, e logEvent) {
 		}
 	}
 }
-func (s *Store) CompleteLog(p, j, u, runner string, r CompleteLogRequest) (*Artifact, error) {
+func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifact, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := logKey(p, j, u, "combined")
+	k := logKey(p, j, "combined")
 	l := s.logs[k]
 	if l == nil {
 		now := time.Now().UTC()
-		l = &LogStream{SchemaVersion: 1, Project: p, JobName: j, JobUID: u, RunnerName: runner, Stream: "combined", State: LogOpen, CreatedAt: now, UpdatedAt: now}
+		l = &LogStream{SchemaVersion: 1, Project: p, JobName: j, RunnerName: runner, Stream: "combined", State: LogOpen, CreatedAt: now, UpdatedAt: now}
 		s.logs[k] = l
 	}
 	if l.State == LogCompleted {
@@ -291,7 +285,7 @@ func (s *Store) CompleteLog(p, j, u, runner string, r CompleteLogRequest) (*Arti
 	if r.Stream != "combined" || l.NextSequence != r.LastSequence+1 || l.CommittedBytes != r.Size {
 		return nil, errors.New("log mismatch")
 	}
-	body, _, meta := s.logPaths(p, j, u)
+	body, _, meta := s.logPaths(p, j)
 	h := sha256.New()
 	f, e := os.Open(body)
 	if os.IsNotExist(e) && r.Size == 0 {
@@ -317,7 +311,7 @@ func (s *Store) CompleteLog(p, j, u, runner string, r CompleteLogRequest) (*Arti
 	}
 	now := time.Now().UTC()
 	id := newID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Project: p, JobName: j, JobUID: u, RunnerName: runner, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
+	a := &Artifact{SchemaVersion: 1, ID: id, Project: p, JobName: j, RunnerName: runner, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
 	final := s.artifactPath(a)
 	if e = os.MkdirAll(filepath.Dir(final), 0750); e != nil {
 		return nil, e

@@ -1001,7 +1001,7 @@ Scheduler 当前通过 HTTPS 直连 ebs-apiserver，不使用客户端证书。�
 - `scheduler_invalid_jobs_total{reason}`
 - `scheduler_resource_overcommit_total{resource}`
 
-每次调度日志至少包含 `jobKey`、`jobUID`、`cycleUID`、`runner`、`result` 和 `reason`。
+每次调度日志至少包含 `jobKey`、`runner`、`result` 和 `reason`；不输出 Job UID。
 
 ## 十三、Go 实现结构
 

@@ -22,7 +22,6 @@ type LogStream struct {
 	SchemaVersion  int          `json:"schemaVersion"`
 	Project        string       `json:"project"`
 	JobName        string       `json:"jobName"`
-	JobUID         string       `json:"jobUID"`
 	RunnerName     string       `json:"runnerName"`
 	Stream         string       `json:"stream"`
 	State          LogState     `json:"state"`
