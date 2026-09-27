@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -98,4 +99,47 @@ func (a *Handler) limitAuthenticated(c *gin.Context) {
 		return
 	}
 	c.Next()
+}
+
+func (a *Handler) audit(c *gin.Context) {
+	started := a.now()
+	method := c.Request.Method
+	path := c.Request.URL.Path
+	c.Next()
+	user := principal(c)
+	subject := user.Subject
+	if subject == "" {
+		subject = "anonymous"
+	}
+	log.Printf("method=%q path=%q status=%d response_bytes=%d latency_ms=%d client_ip=%q user=%q request_id=%q", method, path, c.Writer.Status(), c.Writer.Size(), a.now().Sub(started).Milliseconds(), c.ClientIP(), subject, c.Writer.Header().Get("X-Request-ID"))
+}
+
+// Middleware and Endpoints expose HTTP handlers for route registration.
+// Authorization decisions and request processing remain owned by Handler.
+type Middleware struct {
+	Authenticate       gin.HandlerFunc
+	ResolveUser        gin.HandlerFunc
+	LimitAuthenticated gin.HandlerFunc
+	Audit              gin.HandlerFunc
+	RequireAdmin       gin.HandlerFunc
+}
+
+func (a *Handler) Middleware() Middleware {
+	return Middleware{a.authenticate, a.resolveUser, a.limitAuthenticated, a.audit, a.requireAdmin}
+}
+
+type Endpoints struct {
+	RegisterUser    gin.HandlerFunc
+	Login           gin.HandlerFunc
+	RunnerToken     gin.HandlerFunc
+	CheckToken      gin.HandlerFunc
+	ChangePassword  gin.HandlerFunc
+	RegisterMachine gin.HandlerFunc
+	GetUser         gin.HandlerFunc
+	ListUsers       gin.HandlerFunc
+}
+
+func (a *Handler) Endpoints() Endpoints {
+	return Endpoints{a.registerUser, a.login, a.runnerToken, a.checkToken, a.changePassword,
+		a.registerMachine, a.getOrdinaryUser, a.listOrdinaryUsers}
 }
