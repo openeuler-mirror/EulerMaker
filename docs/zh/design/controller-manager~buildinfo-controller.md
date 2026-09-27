@@ -374,7 +374,7 @@ E-28/E-29/E-30 统一采用：**停止派发 → 等待已有 Job 收敛 → Com
 所有写 Completed 的路径（包括正常 allTerminal、空构建集及 init 确定性失败）均检查该 map 为空；不可用部分 status 更新覆盖或丢弃未决条目。该限制不改变父 Build 中止等路径写 Aborted 的既有语义。
 
 1. **先登记再请求**：发出 CreateJob 前，先 PUT /status 保存条目；只有登记确认成功且当前对象仍允许派发，才发送请求。登记失败或登记结果尚未确认时不得发送。后续对象衔接遵循 10.2。
-2. **确认存在**：创建成功或 GET/List 找到身份匹配的 Job 后，在一次 /status 写入中回填 jobName、将 dispatchCount 提升到已确认代次并删除未决条目，不重复累加。清除写失败则保留条目，下轮重新确认；计数及回填规则不变。
+2. **确认存在**：创建成功或 GET/List 找到身份匹配的 Job 后，在一次 /status 写入中将 dispatchCount 提升到已确认代次并删除未决条目，不重复累加。清除写失败则保留条目，下轮重新确认；计数及回填规则不变。
 3. **确认未发送或明确拒绝**：只有能证明该身份没有此前未决请求的首次尝试，返回 NotSent 或明确未创建对象的 Rejected 时，才允许删除条目，再按 7.5 处理错误。AlreadyExists 不属于未创建证明，按 15.3.1 查询核验；同一身份已有 Unknown 或经历重启时，后续某次 NotSent/Rejected 不证明更早请求未成功，不据此清除条目。
 4. **正常调谐恢复**：优先处理已登记条目，GET 核验；404 且仍允许派发时，仅用条目中的同名、同代次重新调和创建，不计算下一代。停止派发后只 GET 确认，禁止补发；即使 List 未命中，也须逐条 GET。GET 失败按读取错误分类处理；身份不匹配返回 PermanentError 并保留条目。
 5. **停止后的 404**：保留条目，输出限频结构化告警 `reason=JobCreateUnresolved`，返回零值 + nil 等待下一轮轮询，不增加派发次数，不将 404、重试次数或等待时长视为失败证明。重启从 status 恢复，不能因内存意图丢失认定无未决创建。
@@ -643,14 +643,14 @@ repeat:                                                                   # 迭�
 破环 = 在 `initBuildInfo` 阶段从 `GetBootstrapBreaks()` 取得破环点集合，对每个破环点**无视入度**首次下发 Job（bootstrap），随后在 `Processing` 阶段环内所有节点其所有上游 `Succeeded` 后再次下发（重建）。下发次数由 `specStatus[spec].dispatchCount`（SpecStatus 平级字段，int64）累计，以 `required`（普通 spec = 1，环内所有节点 = 2）为门禁：
 
 - 首次下发（bootstrap）：`initBuildInfo` 阶段，破环点 `DispatchCount` 0 → 1（破环的死锁解开）。
-- 第二次下发（重建）：`Processing` 阶段，环内节点（含破环点与非破环节点）上游全部 `Succeeded` 且 `DispatchCount < required` 时再次创建 Job，`DispatchCount` 1 → 2，并回写新 `jobName`（覆盖）回到 `Running`。
+- 第二次下发（重建）：`Processing` 阶段，环内节点（含破环点与非破环节点）上游全部 `Succeeded` 且 `DispatchCount < required` 时再次创建 Job，`DispatchCount` 1 → 2，状态回到 `Running`。
 
-破环的**选点**只发生在 `initBuildInfo` 阶段（见 7.2.1）；`advanceBuildInfo` 阶段不再重新选点破环（G-09；**唯一例外**：运行期 install 补边引入的新环按同一选点规则追加破环点、初始已选破环点不重选，见 7.4.7/G-09），仅按已确定的 `DispatchRequirements()` 推进第二次下发。Job 下发次数的幂等边界由 `DispatchCount` 承担，不再以 "已有 `jobName` 即跳过" 为条件（G-03）；重建/普通下发后退出终态回到 `Running`，等待新 Job 回写，避免被误判为仍 `Succeeded`。
+破环的**选点**只发生在 `initBuildInfo` 阶段（见 7.2.1）；`advanceBuildInfo` 阶段不再重新选点破环（G-09；**唯一例外**：运行期 install 补边引入的新环按同一选点规则追加破环点、初始已选破环点不重选，见 7.4.7/G-09），仅按已确定的 `DispatchRequirements()` 推进第二次下发。Job 下发次数的幂等边界由 `DispatchCount` 承担（G-03）；重建/普通下发后退出终态回到 `Running`，等待新 Job 回写，避免被误判为仍 `Succeeded`。
 
 **失败场景的两条放宽规则（G-03 例外）**：
 
 1. **重建取消（有效 required）**：定义 `effectiveRequired(S) = 1` 当 S 的任一直接上游（`inDep ∪ installInDep`）为 `Failed`，否则 `DispatchRequirements(S)`（环内 2 / 普通 1）。任一上游 Failed ⟹ S 的重建（第 2 次下发）取消、v1 即终——重建的目的是"基于上游最终产物重建"，Failed 上游不会再产出新产物，重建无意义；已 `Succeeded` 未达 required 的节点**不翻转 Failed**。allTerminal（6.4）、7.3 步骤 4 的"未达下发次数"判断、7.4.6 一致性门禁均按**有效 required** 判定。
-2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外，`jobName` 一并回写为最新一代 Job 名），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。**不采用"保持 `Succeeded` + 不覆盖 `jobName`"的原因**：重建下发时 `MarkDispatched` 已将 `jobName` 覆盖为重建 Job 名，回填时"不覆盖"保留的是**失败的重建 Job 名**而非前代 Succeeded Job 名——发布确认门禁（7.4.6）按最新一代 Job 的名称是否进入同名 RpmRepo `sourceJobNames` 判定将永久等待（失败 Job 永不被消费、永不入集）→ livelock。
+2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。发布确认门禁（7.4.6）从本轮 Job 列表取得最新一代 Job 名称，不依赖 `SpecStatus.build` 保存名称。
 
 > **存量数据兼容**：`syncSpecStatusFromJobs` 回填时以 `DispatchCount = max(DispatchCount, 同 spec 现存 Job 数)` 兜底，旧数据（无 `dispatchCount` 字段）不会因 0 而误判重复下发或漏重建。
 
@@ -659,7 +659,7 @@ repeat:                                                                   # 迭�
 
 当同一 spec 对应多个 Job 时（多代 Job 共存，如 bootstrap + 重建），回填逻辑按 **`metadata.creationTimestamp` 最新**者取值（并列时取 `metadata.name` 字典序最大者）：
 
-1. 排序键为 `(CreationTimestamp.Time, Name)`，取最大者为目标 Job——`creationTimestamp` 为 RFC3339（可能带小数秒），反序列化为 `metav1.Time` 后直接比较（解析失败/零值按最早处理），name 字典序为次键兜底；`specStatus[spec].Build.JobName` 恒更新为目标 Job 名；
+1. 排序键为 `(CreationTimestamp.Time, Name)`，取最大者为目标 Job——`creationTimestamp` 为 RFC3339（可能带小数秒），反序列化为 `metav1.Time` 后直接比较（解析失败/零值按最早处理），name 字典序为次键兜底；
 2. 按目标 Job 的 `status.phase` 经 7.4.5 映射回写 `build.status`；目标 Job 为 `Pending`（无映射）时强制置 `Running`——最新一代 Job 尚未开始，spec 处于进行中，**不得沿用上一代终态**，否则完成度误判。
 
 > **为什么不用 `Job.status.startTime`**：重建 Job 在 runner 启动前 `startTime` 为空，若按 startTime 比较会被判为"最早"而回退到上一代 `Succeeded`，导致 `allTerminal` 提前成立、第二次下发（重建）永不发生。`creationTimestamp` 由 apiserver 在创建时写入，恒非空且单调，是代际判定的可靠依据。
@@ -897,7 +897,7 @@ install 校验通过（目标 Job `phase=Succeeded` 且 message 无缺失依赖�
 | 确认 GET 本身失败 | 按 7.5 读取错误分类返回（快速退避） |
 
 - reconcile context 已取消时不启动后台确认 goroutine，直接结束本轮。
-- **Job 创建的 Unknown**：以创建时确定性 Job 名 GET 确认存在性——存在则按 15.3.1 核验身份后沿用该 Job 回填（jobName/dispatchCount），不存在则返回可重试错误；下轮重新调和仍需该代 Job 时，按 15.3.1 使用同一名称创建，不增加代次。404 不证明原请求最终失败，迟到写入由同名创建互斥；停止派发路径不得借此补发新请求，也不得仅凭 404 宣告未决创建已结束。
+- **Job 创建的 Unknown**：以创建时确定性 Job 名 GET 确认存在性——存在则按 15.3.1 核验身份后沿用该 Job 回填 dispatchCount，不存在则返回可重试错误；下轮重新调和仍需该代 Job 时，按 15.3.1 使用同一名称创建，不增加代次。404 不证明原请求最终失败，迟到写入由同名创建互斥；停止派发路径不得借此补发新请求，也不得仅凭 404 宣告未决创建已结束。
 
 ---
 
@@ -980,7 +980,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | 崩在 specDepends 补源/组装（步骤 0） | 缓存丢失，首个到达轮按 Snapshot 各仓库 url+commit 重新组装回填（解析结果确定，内容与首次一致）；specFile 缓存命中部分不重复下载，失败条目不写回缓存（15.11） |
 | 崩在 `status.dcg` 落盘前 | 图未持久化、未创建 Job；下轮重建图并落盘（G-02：落盘先于 Job 创建） |
 | 崩在 `status.dcg` 落盘后、Job 创建前 | 从 `status.dcg` 加载图，按 `dispatchCount`/现存 Job 回填后继续（7.3 步骤 2/3） |
-| 崩在 Job 创建后、回写前 | 下轮 `ListJobs` 按 label 回填 jobName/dispatchCount 兜底（E-11），不重复创建 |
+| 崩在 Job 创建后、回写前 | 下轮 `ListJobs` 按 label 回填 dispatchCount 兜底（E-11），不重复创建 |
 | 崩在运行期补边落盘前 | 补边未持久化、未基于新图下发；下轮重反查重补（7.4.7 第 6 条，G-02 不变量） |
 | 崩在停止派发标记写入后 | 按 condition 直接进入 6.5，不恢复派发、不重新计数；完整 List 等待所有已有 Job 终态 |
 | 崩在终态（Completed/Aborted）写入前 | 下轮按当前 status 重算写入同一终态（幂等） |
@@ -1110,7 +1110,6 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
 | `status` | string | `""`（空，未下发——init 预建初始值，7.2 步骤 5）/ `Running` / `Succeeded` / `Failed`（`Aborted` 为历史版本透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5/6.2）；创建 Job 后回到 `Running`；终态集合 = {Succeeded, Failed}（空串与 `Running` 均非终态，allTerminal 见 6.4） |
-| `jobName` | string | 最近一次关联的远端 Job 名；每次下发**覆盖**为新一代 Job 名；多代 Job 共存时回填取 `(creationTimestamp, name)` 最大者（7.4.4） |
 | `conditions` | []metav1.Condition | spec 级 condition，目录见 9.1 |
 
 `SpecStatus.install`（SpecInstallStatus）：
@@ -1249,7 +1248,7 @@ status:                                             # 创建时恒 Pending/Pendi
 |------|--------|
 | `metadata.labels["ebs.io/spec-name"]` | 归组 key；缺失或指向本轮构建集外 spec（init 轮 = 步骤 0 构建集外、Processing 轮 = `specStatus` 键集外；specDepends 为超集不作基准）→ 跳过该 Job（E-05，仅日志） |
 | `metadata.creationTimestamp` | 多代 Job 排序键主键：`metav1.Time` 直接比较（零值按最早），apiserver 创建时写入，恒非空且单调（见 7.4.4） |
-| `metadata.name` | 排序键次键（并列时字典序最大）；回写 `specStatus[spec].Build.JobName`；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
+| `metadata.name` | 排序键次键（并列时字典序最大）；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
 | `status.phase` | 经 7.4.5 映射回写 `build.status`；`Pending` 无映射 → 强制 `Running`（不得沿用上一代终态） |
 | `status.message` | install 失败缺失依赖 JSON（runner 在 install 校验失败时写入，结构见 7.4.7）→ 解析回填 `specStatus[spec].install`（`phase=Succeeded` 时判定；解析失败不改写）；其余内容不按 install 语义消费 |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |

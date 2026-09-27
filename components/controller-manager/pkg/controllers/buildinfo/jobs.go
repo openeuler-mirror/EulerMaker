@@ -800,11 +800,9 @@ func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 
 // applyJobPhase maps the target Job phase onto build.status (design 7.4.5);
 // the bool reports a known phase. Pending forces Running (never inherit a
-// previous generation's terminal state). The jobName backfill is
-// unconditional — an unknown phase skips only the status mapping (7.4.4),
-// so the caller's "mapping skipped" log refers to build.status alone.
+// previous generation's terminal state). An unknown phase leaves the build
+// status unchanged.
 func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bool {
-	ss.Build.JobName = job.Name
 	switch job.Status.Phase {
 	case ebsv1.JobPending, ebsv1.JobRunning:
 		ss.Build.Status = SpecBuildRunning

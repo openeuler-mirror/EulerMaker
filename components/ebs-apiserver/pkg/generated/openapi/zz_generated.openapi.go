@@ -2546,12 +2546,6 @@ func schema_ebs_api_ebs_v1_SpecBuildStatus(ref common.ReferenceCallback) common.
 							},
 						},
 					},
-					"jobName": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 				},
 				Required: []string{"status"},
 			},

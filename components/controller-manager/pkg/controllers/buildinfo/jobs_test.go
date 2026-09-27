@@ -611,9 +611,12 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1 (no duplicate)", got)
 	}
+	if got := listJobs(t, client)[0].Name; got != existing.Name {
+		t.Fatalf("job name = %q, want existing job %q", got, existing.Name)
+	}
 	persisted := getBuildInfo(t, client)
 	a := persisted.Status.SpecStatus["a"]
-	if a.DispatchCount != 1 || a.Build.JobName != existing.Name || a.Build.Status != SpecBuildRunning {
+	if a.DispatchCount != 1 || a.Build.Status != SpecBuildRunning {
 		t.Fatalf("specStatus[a] = %+v, want confirmed Running dispatch of the existing job", a)
 	}
 	if len(persisted.Status.PendingJobCreates) != 0 {
@@ -695,7 +698,7 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 	}
 	persisted := getBuildInfo(t, client)
 	a := persisted.Status.SpecStatus["a"]
-	if a.DispatchCount != 1 || a.Build.JobName == "" {
+	if a.DispatchCount != 1 {
 		t.Fatalf("specStatus[a] = %+v, want the landed job confirmed", a)
 	}
 	if got := len(listJobs(t, client)); got != 1 {

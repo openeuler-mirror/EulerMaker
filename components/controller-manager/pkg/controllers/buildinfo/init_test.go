@@ -70,8 +70,8 @@ func TestInitFullHappyPath(t *testing.T) {
 		ss := bi.Status.SpecStatus[name]
 		// A freshly created Job carries no phase yet, so Build.Status stays
 		// empty until the first backfill maps Pending/Running.
-		if ss.DispatchCount != 1 || ss.Build.JobName == "" {
-			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1, job named)", name, ss)
+		if ss.DispatchCount != 1 {
+			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1)", name, ss)
 		}
 	}
 	if got := jobSpecNames(t, client); len(got) != 2 || !got["a"] || !got["b"] {
@@ -571,7 +571,7 @@ func TestInitBackfillsExistingJob(t *testing.T) {
 	bi = getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	ss := bi.Status.SpecStatus["a"]
-	if ss.DispatchCount != 1 || ss.Build.Status != SpecBuildRunning || ss.Build.JobName != existing.Name {
+	if ss.DispatchCount != 1 || ss.Build.Status != SpecBuildRunning {
 		t.Fatalf("specStatus[a] = %+v, want backfilled gen-1 Running (%s)", ss, existing.Name)
 	}
 	if got := len(listJobs(t, client)); got != 1 {
@@ -598,8 +598,8 @@ func TestSinglePassThrough(t *testing.T) {
 	requireSpecNames(t, bi, "a", "b")
 	for _, name := range []string{"a", "b"} {
 		ss := bi.Status.SpecStatus[name]
-		if ss.DispatchCount != 1 || ss.Build.JobName == "" {
-			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1, job named)", name, ss)
+		if ss.DispatchCount != 1 {
+			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1)", name, ss)
 		}
 	}
 	if got := jobSpecNames(t, client); len(got) != 2 {

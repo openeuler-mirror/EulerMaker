@@ -386,7 +386,6 @@ type SpecStatus struct {
 type SpecBuildStatus struct {
     Status     string             `json:"status"`
     Conditions []metav1.Condition `json:"conditions,omitempty"`
-    JobName    string             `json:"jobName,omitempty"`
 }
 ```
 
@@ -394,7 +393,6 @@ type SpecBuildStatus struct {
 |--------------|------|------|
 | `status`     | string | `"Running"` /`"Succeeded"` / `"Failed"` / `"Aborted"`|
 | `conditions` | []metav1.Condition | 构建状态条件 |
-| `jobName`    | string | 最近一次关联的远端 jobName |
 
 ---
 
