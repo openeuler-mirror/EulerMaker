@@ -1,69 +1,45 @@
 # ebs-gateway
 
-`ebs-gateway` 是 EulerMaker 对外的 HTTP 入口，负责认证、Project 权限校验、限流、审计，并将合法请求代理到 `ebs-apiserver`。
+EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理 JWT 认证、User 状态确认、Project 权限、限流和审计；业务对象仍由 `ebs-apiserver` 持久化。完整的资源和权限契约见[设计文档](../../docs/zh/design/ebs-gateway.md)。
 
-## 构建与测试
+## 目录
 
-在当前目录执行：
-
-```bash
-go test ./...
-CGO_ENABLED=0 go build -o ebs-gateway ./cmd/server
-```
-
-构建容器镜像：
-
-```bash
-docker build -t eulermaker/ebs-gateway:dev .
-```
-
-## 全局脚本权限
-
-`/apis/ebs/v1/scripts` 为需要认证的全局资源，不按 Project 成员关系过滤：
-
-- Ops/Admin/System：创建、读取、列表、PUT/PATCH 修改及删除脚本。
-- 普通登录用户：读取和列表，禁止写入。
-- Runner：仅 GET/HEAD `/apis/ebs/v1/scripts/{name}`，禁止列表和写入。
-
-不开放匿名访问、Watch、status 子资源和 Project-scoped 路径。脚本字段及写入冲突由 apiserver 校验；Gateway 不解析或执行脚本内容。前端不提供默认 `rpmbuild` 的删除入口，但 API 不按名称禁止删除。
+| 目录 | 职责 |
+| --- | --- |
+| `cmd/main.go` | 执行 Gateway 命令 |
+| `cmd/app/server.go` | 定义 Cobra 参数、配置上游 TLS、启动 HTTP 服务 |
+| `internal/route` | 注册 Gin 路由、组织中间件 |
+| `internal/handler` | 处理 Auth、IAM 与资源请求，执行鉴权和转发 |
+| `internal/identity` | JWT 签发、验证和身份类型 |
+| `internal/iam` | 调用 apiserver 的 IAM 接口 |
+| `internal/policy` | Project、Runner、Config、Script 等授权及写入保护 |
+| `internal/mutation` | 严格解析 PUT/PATCH 并生成完整候选对象 |
+| `internal/upstream` | 可信内部读取和流式反向代理 |
+| `internal/limit` | 请求令牌桶 |
 
 ## 本地运行
 
-Gateway 需要一个 Base64 编码的 HMAC 密钥。以下命令生成仅供本地开发使用的临时密钥：
+先准备仅包含一个 Base64 编码、解码后至少 32 字节的 HMAC 密钥文件，然后运行：
 
 ```bash
-openssl rand -base64 32 > /tmp/ebs-jwt-secret
-chmod 600 /tmp/ebs-jwt-secret
+go run ./cmd \
+  --apiserver-addr https://localhost:8443 \
+  --jwt-secret-file /path/to/jwt-secret
 ```
 
-先启动 `ebs-apiserver`，然后执行：
+开发环境连接自签名 apiserver 时，可以配置 `--apiserver-ca`；仅在隔离测试环境中使用 `--insecure-skip-verify`。默认监听 `:8080`，`GET /healthz` 返回健康状态。构建镜像时 Dockerfile 使用同一个 `cmd` 入口。
+
+## 路由与安全约束
+
+- `/auth/*` 负责注册、登录、Runner token 交换、token 校验和本人密码修改；只有 Admin 能创建 MachineAccount。
+- `/apis/iam.ebs/v1/*` 仅允许 Admin 管理非管理员 User 和 MachineAccount。
+- `/apis/ebs/v1/*` 只注册设计文档列出的资源、对象和子资源路径；匿名只读白名单业务对象，Config 按可见性读取。
+- Gateway 丢弃客户端传入的所有 `X-EBS-*` 头，只有授权成功后才向上游注入可信身份头。PUT/PATCH 先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。
+- Build 的 PUT/PATCH 不开放；Job `/abort` 仅 Project owner/member 用户可调用；Runner 只可管理自身对象和已分配 Job。
+
+验证代码：
 
 ```bash
-go run ./cmd/server \
-  --jwt-secret-file=/tmp/ebs-jwt-secret \
-  --apiserver-addr=https://localhost:8443 \
-  --insecure-skip-verify
-```
-
-`--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--apiserver-ca` 配置信任的 CA。
-
-服务启动后可以检查健康状态：
-
-```bash
-curl http://localhost:8080/healthz
-```
-
-完整参数请执行：
-
-```bash
-go run ./cmd/server --help
-```
-
-## Docker Compose
-
-在仓库根目录创建 Compose 使用的本地密钥，然后构建并启动完整开发环境：
-
-```bash
-openssl rand -base64 32 > hacks/ebs-gateway-jwt-secret
-docker compose -f hacks/docker-compose.yml up -d --build
+go test ./...
+go vet ./...
 ```

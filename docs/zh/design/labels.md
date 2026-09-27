@@ -42,7 +42,7 @@ metadata:
 
 普通用户创建 Project 时，Gateway 强制将 `ebs.io/owner-user` 设置为 JWT `sub`。客户端提交的值不可信。Admin 或 System 创建 Project 时必须显式指定一个已存在且启用的 User。
 
-Admin 与 System 均可修改 owner 标签；普通 Project owner 不能转移所有权。删除或设置为空同样视为修改，仍须满足 Gateway 对 owner 的校验规则。
+Project 创建后，Gateway 不允许任何身份修改、删除或清空 owner 标签；所有权转移不通过 Gateway 提供。
 
 ### 3.2 成员
 
@@ -52,7 +52,7 @@ metadata:
     ebs.io/member-user.bob: "true"
 ```
 
-成员标签的用户名位于标签 key 中，值只能是字符串 `"true"`。Project owner、Admin 和 System 可以增删成员；新增成员必须对应已存在且启用的 User。普通成员不能修改 owner 或成员标签。
+成员标签的用户名位于标签 key 中，值只能是字符串 `"true"`。仅 Project owner 可以增删成员；新增成员必须对应已存在且启用的 User。普通成员不能修改 owner 或成员标签。
 
 Project 子资源不重复保存访问标签，而是通过所属 Project 继承权限。apiserver 只存储这些标签，不解释其授权语义；授权由 Gateway 完成。
 
@@ -61,7 +61,7 @@ Project 子资源不重复保存访问标签，而是通过所属 Project 继承
 `project.ebs.io/type` 是系统保留的分类标签，只允许 `community`（社区工程）和 `personal`（个人工程），不增加对应 spec 字段。
 
 - apiserver 创建及普通更新时补齐缺失标签为 `personal`；显式空值或其他值返回 `422 Invalid`。读取旧对象不写回，缺失标签按个人工程解释。
-- 普通用户只能创建个人工程；不能修改或删除已有类型标签。旧对象可补写 `personal`。Ops、Admin、System 可以指定、修改类型，但仍遵循原有 Project 写权限；Ops 不因此获得跨工程编辑权限。
+- 普通用户只能创建个人工程；不能修改或删除已有类型标签。旧对象可补写 `personal`。Ops 在自己拥有的 Project 中可修改类型；Ops、Admin、System 创建 Project 时可以指定类型，但 Admin/System 不能通过 Gateway 修改已有 Project。
 - Gateway 负责上述权限；普通用户的 JSON/Merge PATCH 按最新对象计算完整候选对象，检查类型和访问标签后转为携带原 resourceVersion 的 PUT，避免通过替换 metadata/labels、move/copy 或并发修改绕过保护。
 - Project `/status` 更新保留服务端原 labels，不能借状态更新修改分类。
 - 分类不影响公开读取或 owner/member 权限；“个人工程”表示类型，不等于“我的工程”。

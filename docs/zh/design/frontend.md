@@ -95,8 +95,8 @@ ebs.io/member-user.<username>: "true"
 |------|------|------------|-------------|-----|--------|-------|
 | 浏览公开业务资源 | 是 | 是 | 是 | 是 | 是 | 是 |
 | 创建 Project | 否 | 是 | 是 | 是 | 是 | 是 |
-| 修改/删除 Project | 否 | 修改、删除 | 否 | 按 owner/member 关系同普通用户 | 是 | 是 |
-| 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
+| 修改/删除 Project | 否 | 修改、删除 | 否 | 仅自己拥有的 Project | 否 | 否 |
+| 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 否 | 否 |
 | 创建/修改 Project 子资源 | 否 | 是 | 是 | 按 owner/member 关系同普通用户 | 是 | 是 |
 | 删除 Project 子资源 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
 | 读取 Config | 仅具名 Public | 仅具名 Public | 仅具名 Public | 全部（含 list） | 全部（含 list） | 全部（含 list） |
@@ -188,9 +188,9 @@ System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队�
 
 软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
 
-工程配置中的 Build targets 使用列表展示 `os`、`arch`、`buildFlag` 和 `publishFlag`。工程 owner、Admin 和 System 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
+工程配置中的 Build targets 使用列表展示 `os`、`arch`、`buildFlag` 和 `publishFlag`。仅工程 owner 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
 
-Bootstrap repositories 同样向工程 owner、Admin 和 System 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。
+Bootstrap repositories 同样仅向工程 owner 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。
 
 工程配置采用左右分区：左侧依次展示基础配置、Build targets、Bootstrap repositories 和用户管理，右侧使用等高独立面板完整展示 `buildPayload`；Package repositories 位于工程详情 Tab。窄屏设备按左侧四个容器、Build payload 的顺序折叠为单列。
 
