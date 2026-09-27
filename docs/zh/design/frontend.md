@@ -519,10 +519,12 @@ Browser
    | HTTPS，同源
    v
 Ingress / Reverse Proxy
-   |-- /auth, /apis ----------> ebs-gateway ----mTLS----> ebs-apiserver
+   |-- /auth, /apis ----------> ebs-gateway ----mTLS（目标）----> ebs-apiserver
    |-- /artifacts ------------> artifact-manager
    `-- /* --------------------> frontend static files
 ```
+
+当前 Gateway 到 apiserver 使用 HTTPS，尚未实现图中的客户端证书认证；部署时须限制 apiserver 的网络访问。
 
 外部网络不能访问 apiserver。生产环境禁止配置 `insecureSkipVerify`，内部服务使用受信任 CA。
 

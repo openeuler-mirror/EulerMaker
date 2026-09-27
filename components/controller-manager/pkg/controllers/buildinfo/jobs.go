@@ -39,8 +39,16 @@ const (
 )
 
 // jobNameFor derives the deterministic Job name from the first 8 bytes of
-// SHA-256 over json.Marshal([buildInfoUID, specName, generation]).
+// SHA-256 over json.Marshal([buildInfoUID, specName, generation]). The
+// generation remains in the hash input, but is not shown in the name.
 func jobNameFor(buildInfoUID, specName string, generation int64) string {
+	sum := jobNameHash(buildInfoUID, specName, generation)
+	return fmt.Sprintf("%s-%x", specName, sum[:8])
+}
+
+// formerJobNameFor recognizes the former 16-character suffix with a visible
+// dispatch generation.
+func formerJobNameFor(buildInfoUID, specName string, generation int64) string {
 	sum := jobNameHash(buildInfoUID, specName, generation)
 	return fmt.Sprintf("%s-%d-%x", specName, generation, sum[:8])
 }
@@ -64,6 +72,7 @@ func jobNameHash(buildInfoUID, specName string, generation int64) [sha256.Size]b
 
 func matchesJobName(name, buildInfoUID, specName string, generation int64) bool {
 	return name == jobNameFor(buildInfoUID, specName, generation) ||
+		name == formerJobNameFor(buildInfoUID, specName, generation) ||
 		name == previousJobNameFor(buildInfoUID, specName, generation) ||
 		name == legacyJobNameFor(buildInfoUID, specName, generation)
 }

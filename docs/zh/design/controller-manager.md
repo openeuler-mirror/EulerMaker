@@ -721,7 +721,7 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--source-stale-threshold` | 2m | Source 持续未成功同步后 readiness 失败的最小阈值 |
 | `--health-bind-address` | `:8080` | 健康与指标监听地址 |
 
-每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；快速重试次数不得为负数，慢速初始延迟不得大于最大延迟，抖动必须位于 `[0, 1)`；配置非法时启动失败。当前不配置客户端证书，认证能力随 ebs-apiserver 的客户端契约另行扩展。
+每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；快速重试次数不得为负数，慢速初始延迟不得大于最大延迟，抖动必须位于 `[0, 1)`；配置非法时启动失败。目标设计要求 Controller Manager 使用与 Gateway、Scheduler 不同的 mTLS 客户端身份，apiserver 按控制器职责授权。当前尚未实现客户端证书配置与身份授权，上表仅列出已实现参数。
 
 ## 8. 健康检查与可观测性
 

@@ -16,7 +16,7 @@ The project uses a multi-module Go backend and a Vue 3 / TypeScript frontend. Ku
 - Access control: Gateway handles authentication, project authorization, and machine-account access; users interact through the Web console or ebsctl.
 - Build configuration: cluster-scoped `Config/build-target` defines target systems, architectures, and images; `Config/build-resource` defines build resource rules.
 
-Controller Manager currently registers Build, Snapshot, Job, and Runner Controllers. Business orchestration for BuildInfo Controller and RpmRepo Controller is not yet connected. Starting all services does not mean the complete end-to-end build pipeline is ready. Design documents include planned capabilities; component code and tests determine current support.
+Controller Manager currently registers Build, Snapshot, BuildInfo, RpmRepo, Job, and Runner Controllers. The complete build pipeline still requires validation with the deployment configuration and tests; component code and tests determine current support.
 
 ## Components and layout
 

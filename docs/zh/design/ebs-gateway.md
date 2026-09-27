@@ -731,6 +731,8 @@ gateway 需要支持流式响应：
 | `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
 | `--log-level` | `info` | 否 | 日志级别 |
 
+目标设计中，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；apiserver 校验证书 URI SAN 后才信任 Gateway 注入的内部身份头和 IAM 请求。当前尚未实现客户端证书配置与校验，上表仅列出已实现参数；部署时须限制 apiserver 的网络访问。
+
 密钥文件由 Secret 以只读方式挂载，文件权限应限制为 `0600`，内容为单个 base64 字符串，例如：
 
 ```text

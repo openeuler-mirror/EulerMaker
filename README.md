@@ -16,7 +16,7 @@ EulerMaker 是面向 openEuler 及其衍生发行版的软件包构建系统，�
 - 访问控制：Gateway 提供认证、工程级授权及机器账号访问；Web 控制台和 ebsctl 作为用户入口。
 - 构建配置：使用集群级 `Config/build-target` 管理目标系统、架构和镜像，使用 `Config/build-resource` 管理构建资源规则。
 
-当前 Controller Manager 已注册 Build、Snapshot、Job 和 Runner Controller。BuildInfo Controller 与 RpmRepo Controller 的业务编排尚未接通，不应将启动全部服务等同于完整的端到端构建流程已经就绪。设计文档中包含后续能力，实际支持范围以组件代码和测试为准。
+当前 Controller Manager 已注册 Build、Snapshot、BuildInfo、RpmRepo、Job 和 Runner Controller。完整构建流程仍需结合部署配置和测试验证；实际支持范围以组件代码和测试为准。
 
 ## 组件与目录
 
