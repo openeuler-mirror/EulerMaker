@@ -16,15 +16,17 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestGatewayAuthorizerRequiresRunnerIdentity(t *testing.T) {
 	for _, test := range []struct {
-		name, identityType, scope string
-		wantError                 bool
+		name, identityType string
+		scopes             string
+		wantError          bool
 	}{
-		{name: "runner", identityType: "runner", scope: "ebs:runner"},
-		{name: "user", identityType: "user", scope: "ebs:user", wantError: true},
-		{name: "runner without scope", identityType: "runner", scope: "ebs:user", wantError: true},
+		{name: "runner", identityType: "runner", scopes: `[]`},
+		{name: "runner with missing scopes", identityType: "runner", scopes: `null`, wantError: true},
+		{name: "user", identityType: "user", scopes: `["ebs:user"]`, wantError: true},
+		{name: "runner with user scope", identityType: "runner", scopes: `["ebs:user"]`, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			payload := fmt.Sprintf(`{"authenticated":true,"identity":{"type":%q,"name":"identity-1","scopes":[%q]},"expiresAt":%q}`, test.identityType, test.scope, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
+			payload := fmt.Sprintf(`{"authenticated":true,"identity":{"type":%q,"name":"identity-1","scopes":%s},"expiresAt":%q}`, test.identityType, test.scopes, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
 			authorizer := &GatewayAuthorizer{url: "https://gateway/auth/check", ttl: time.Second, cache: make(map[[32]byte]cachedIdentity)}
 			authorizer.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Path != "/auth/check" {

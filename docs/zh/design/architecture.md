@@ -91,7 +91,7 @@ spiffe://eulermaker/internal/ebs-controller
 
 **当前实现状态：上述客户端证书认证和按组件身份授权尚未实现。** Gateway、Scheduler 和 Controller 目前通过 HTTPS 直连 apiserver，但 apiserver 无法验证其组件身份。部署时必须限制 apiserver 及内部 IAM 接口的网络访问；开发用 Compose 将 8443 端口映射到宿主机，不提供生产所需的隔离。
 
-Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；需要身份授权的认证请求只注入由 Gateway 生成的 `X-EBS-User` 和 `X-EBS-Scopes`。目标设计仅在 mTLS 调用方确认为 Gateway 时信任这些头；Scheduler 和 Controller 不通过伪造身份头获取 Gateway 权限。当前 apiserver 尚不能认证身份头来源，因此直连访问必须受控。
+Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；需要身份授权的认证请求只注入由 Gateway 生成的 `X-EBS-User`、`X-EBS-Type` 和用户身份的 `X-EBS-Scopes`。目标设计仅在 mTLS 调用方确认为 Gateway 时信任这些头；Scheduler 和 Controller 不通过伪造身份头获取 Gateway 权限。当前 apiserver 尚不能认证身份头来源，因此直连访问必须受控。
 
 用户、Runner和内部组件的认证链路分别为：
 
@@ -109,9 +109,9 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> apiser
 系统请求（目标）：scheduler/controller mTLS -> apiserver 按组件身份授权资源和 verb
 ```
 
-自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `ebs:runner` JWT。目标设计要求 `/internal/iam/*` 只接受 Gateway 的 mTLS 身份，不接受外部 JWT、Scheduler 或 Controller 调用；该限制当前尚未实现，必须依靠部署网络限制直连。
+自助注册不自动签发 JWT。Gateway 只接受注册所需的普通用户字段，并通过单一内部注册接口提交；apiserver 负责用户名唯一性以及 User 与密码凭据的一致性。Runner 使用 MachineAccount client secret 换取最长 24 小时的 `type=runner`、`scopes=[]` JWT。目标设计要求 `/internal/iam/*` 只接受 Gateway 的 mTLS 身份，不接受外部 JWT、Scheduler 或 Controller 调用；该限制当前尚未实现，必须依靠部署网络限制直连。
 
-生产部署必须让 `ebs-apiserver` 仅在受控内部网络可达，并限制为 gateway、scheduler 和 controller 等内部组件连接；开发用 Compose 的宿主机端口映射不提供此隔离。`ebs-gateway` 的 `/auth/check` 是公开接口：调用方无需服务身份且不提交请求正文，Gateway 校验请求携带的 Bearer Token 并返回身份与 scopes，同时执行限流。`artifact-manager` 根据响应确认 `ebs:runner` scope。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
+生产部署必须让 `ebs-apiserver` 仅在受控内部网络可达，并限制为 gateway、scheduler 和 controller 等内部组件连接；开发用 Compose 的宿主机端口映射不提供此隔离。`ebs-gateway` 的 `/auth/check` 是公开接口：调用方无需服务身份且不提交请求正文，Gateway 校验请求携带的 Bearer Token 并返回身份类型与用户 scopes，同时执行限流。`artifact-manager` 根据响应确认 `type=runner`。Runner 仍统一通过 `ebs-gateway` 访问资源 API，不属于允许直连 `ebs-apiserver` 的组件；文件正文和实时日志则直接上传到 `artifact-manager`。
 
 ---
 
@@ -202,7 +202,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 /apis/ebs/v1/projects/{project}/jobs
 ```
 
-`{project}` 是上述对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。Config 使用集群级 `/apis/ebs/v1/configs`；`Public` 允许所有身份及匿名具名读取，`OpsOnly` 仅允许 Ops/Admin/System 读取，list 和写操作也仅允许这些运维身份；不提供 watch 或 `/status`。
+`{project}` 是上述对象的唯一项目归属来源，`spec` 中不重复保存 `projectName`。Config 使用集群级 `/apis/ebs/v1/configs`；`Public` 允许所有身份及匿名具名读取，`OpsOnly` 仅允许 Ops/Admin 读取，list 和写操作也仅允许这些运维身份；不提供 watch 或 `/status`。
 
 ### 5.3 内部全局系统 API
 
@@ -238,7 +238,7 @@ GET    /apis/ebs/v1/runners/{name}/jobs
 GET    /apis/ebs/v1/runners/{name}/jobs?watch=true
 ```
 
-上述是资源支持的完整 API 集合，不代表 Runner token 拥有全部 verb。Runner 使用受限自注册模型：只能创建、读取和受限更新名称与 JWT `sub`、`runner` claim 一致的自身对象，并更新自身 `/status`；`metadata.name` 本身不可修改。Runner 不能 list/watch Runner 集合、访问其他 Runner 或执行 DELETE。Runner 普通对象更新仅允许自身声明的 type、arch 和能力 labels，`unschedulable`、taints、zone 及其他管理字段由 system 调用方维护。详细字段规则见 [ebs-gateway.md](./ebs-gateway.md) 和 [runner.md](./runner.md)。
+上述是资源支持的完整 API 集合，不代表 Runner token 拥有全部 verb。Runner 使用受限自注册模型：只能创建、读取和受限更新名称与 JWT `sub`、`runner` claim 一致的自身对象，并更新自身 `/status`；`metadata.name` 本身不可修改。Runner 不能 list/watch Runner 集合、访问其他 Runner 或执行 DELETE。Runner 普通对象更新仅允许自身声明的 type、arch 和能力 labels，`unschedulable`、taints、zone 及其他管理字段由 Ops/Admin 维护。详细字段规则见 [ebs-gateway.md](./ebs-gateway.md) 和 [runner.md](./runner.md)。
 
 `/runners/{name}/jobs` 提供自身已分配 Job 的 list-watch，gateway强制路径名称与 Runner token身份一致，apiserver再按 `Job.status.runner={name}` 进行可信过滤。Runner先 list并记录 resourceVersion，再从该版本建立带超时和 BOOKMARK 的 watch；resourceVersion失效时重新 list。
 
@@ -343,7 +343,7 @@ runner -> artifact-manager: complete immutable Job upload manifest
 runner -> ebs-gateway -> ebs-apiserver: update Job.status
 ```
 
-Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资源容量和运行状态写入 `status`。系统保留标签及其写入权限统一见 [EulerMaker 标签约定](./labels.md)。runner 不直接访问 `ebs-apiserver`，资源操作统一访问 `ebs-gateway`，外部执行机和内部执行机使用同一套客户端逻辑。构建产物和日志正文直接上传到 `artifact-manager`，避免大文件经过 Gateway；Artifact Manager 将 Runner Token 发送给 Gateway 校验签名、有效期和 scope。
+Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资源容量和运行状态写入 `status`。系统保留标签及其写入权限统一见 [EulerMaker 标签约定](./labels.md)。runner 不直接访问 `ebs-apiserver`，资源操作统一访问 `ebs-gateway`，外部执行机和内部执行机使用同一套客户端逻辑。构建产物和日志正文直接上传到 `artifact-manager`，避免大文件经过 Gateway；Artifact Manager 将 Runner Token 发送给 Gateway 校验签名、有效期和 `type=runner`。
 
 ### 8.5 Artifact 与 repo 流程
 

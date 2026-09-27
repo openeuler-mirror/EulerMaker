@@ -36,7 +36,7 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerScope, time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRunnerCannotUpdateUnassignedJob(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(old))}, nil
 	}))
-	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerScope, time.Hour, api.now())
+	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}

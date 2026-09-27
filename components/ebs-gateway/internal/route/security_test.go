@@ -29,11 +29,11 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	userToken, err := api.tokens.Issue("alice", "", identity.UserScope, time.Hour, api.now())
+	userToken, err := api.tokens.Issue("alice", "", identity.UserType, identity.UserScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	runnerToken, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerScope, time.Hour, api.now())
+	runnerToken, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 	}
 }
 
-func TestAdminAndSystemCannotModifyProject(t *testing.T) {
+func TestAdminCannotModifyProject(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet || request.URL.Path != "/apis/iam.ebs/v1/users/admin" {
 			t.Fatalf("unexpected Project write or lookup: %s %s", request.Method, request.URL.Path)
@@ -79,10 +79,9 @@ func TestAdminAndSystemCannotModifyProject(t *testing.T) {
 	}{
 		{"admin update", "admin", identity.AdminScope, http.MethodPut, "/apis/ebs/v1/projects/team"},
 		{"admin delete", "admin", identity.AdminScope, http.MethodDelete, "/apis/ebs/v1/projects/team"},
-		{"system status update", "system", identity.SystemScope, http.MethodPatch, "/apis/ebs/v1/projects/team/status"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			token, err := api.tokens.Issue(test.subject, "", test.scope, time.Hour, api.now())
+			token, err := api.tokens.Issue(test.subject, "", identity.UserType, test.scope, time.Hour, api.now())
 			if err != nil {
 				t.Fatal(err)
 			}

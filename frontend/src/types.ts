@@ -98,7 +98,6 @@ export interface Job {
 }
 
 export interface SessionIdentity {
-  type: "user" | "ops" | "admin" | "service";
   name: string;
   scopes: string[];
 }

@@ -85,7 +85,7 @@ func (a *GatewayAuthorizer) Authenticate(ctx context.Context, token string) (Ide
 		} `json:"identity"`
 		ExpiresAt time.Time `json:"expiresAt"`
 	}
-	if json.NewDecoder(res.Body).Decode(&out) != nil || !out.Authenticated || out.Identity.Type != "runner" || out.Identity.Name == "" || !containsScope(out.Identity.Scopes, "ebs:runner") {
+	if json.NewDecoder(res.Body).Decode(&out) != nil || !out.Authenticated || out.Identity.Type != "runner" || out.Identity.Name == "" || out.Identity.Scopes == nil || len(out.Identity.Scopes) != 0 {
 		return Identity{}, fmt.Errorf("invalid auth response")
 	}
 	identity := Identity{Name: out.Identity.Name, ExpiresAt: out.ExpiresAt}
@@ -99,13 +99,4 @@ func (a *GatewayAuthorizer) Authenticate(ctx context.Context, token string) (Ide
 		a.mu.Unlock()
 	}
 	return identity, nil
-}
-
-func containsScope(scopes []string, required string) bool {
-	for _, scope := range scopes {
-		if scope == required {
-			return true
-		}
-	}
-	return false
 }

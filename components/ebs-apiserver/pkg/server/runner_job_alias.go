@@ -90,14 +90,9 @@ func globalJobRequestContext(ctx context.Context, path string) context.Context {
 }
 
 func runnerJobIdentityAllowed(req *http.Request, runner string) bool {
-	scopes := strings.Split(req.Header.Get("X-EBS-Scopes"), ",")
-	for _, scope := range scopes {
-		switch strings.TrimSpace(scope) {
-		case "ebs:system":
-			return true
-		case "ebs:runner":
-			return req.Header.Get("X-EBS-User") == runner
-		}
+	switch req.Header.Get("X-EBS-Type") {
+	case "runner":
+		return req.Header.Get("X-EBS-User") == runner
 	}
 	return false
 }

@@ -55,7 +55,7 @@ Content-Type: application/json
 }
 ```
 
-`accessToken` 是最长 24 小时的 `ebs:runner` JWT，token 的 `sub`、`runner` claim 和本地 Runner 名称完全相同；`tokenType` 固定为 `Bearer`；`expiresIn` 是从响应签发时间开始计算的有效秒数，范围为 300～86400。Runner 必须验证三个字段的类型和值，并使用发起交换请求时记录的本地单调时钟加 `expiresIn` 计算保守到期时间，不依赖解析 JWT claims。响应缺失字段、字段类型错误或值超出范围均视为交换失败。Runner 仅在内存中保存短期 token，不将 client secret、Basic header 或完整 token 写入日志和状态对象。
+`accessToken` 是最长 24 小时的 `type=runner`、`scopes=[]` JWT，token 的 `sub`、`runner` claim 和本地 Runner 名称完全相同；`tokenType` 固定为 `Bearer`；`expiresIn` 是从响应签发时间开始计算的有效秒数，范围为 300～86400。Runner 必须验证三个字段的类型和值，并使用发起交换请求时记录的本地单调时钟加 `expiresIn` 计算保守到期时间，不依赖解析 JWT claims。响应缺失字段、字段类型错误或值超出范围均视为交换失败。Runner 仅在内存中保存短期 token，不将 client secret、Basic header 或完整 token 写入日志和状态对象。
 
 Runner 在首次注册前获取 token，并在到期前重新交换。建议在剩余有效期小于 10 分钟或总有效期的 20%（取较小值）时刷新，并加入随机抖动避免大量实例同时请求。交换接口返回 401 表示长期凭据无效，400 表示 Runner 名称或请求格式错误，两者均进入低频退避并报告配置错误，不能无限快速重试。429 遵循 `Retry-After`，网络错误和 503 使用带抖动的指数退避。Runner 不使用 refresh token。
 
@@ -102,7 +102,7 @@ spec.type
 spec.arch
 ```
 
-`spec.instanceId` 必须是规范的小写 UUID，创建时必填，创建后不可修改或清空。`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 system 调用方维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
+`spec.instanceId` 必须是规范的小写 UUID，创建时必填，创建后不可修改或清空。`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 Ops/Admin 维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
 
 ### 3.3 Job API
 
@@ -146,7 +146,7 @@ POST /artifacts/v1/projects/{project}/jobs/{job}/artifacts
 POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
 ```
 
-这些写入和状态查询请求复用 3.1 节的并发安全 token provider，将当前 `ebs:runner` Token 作为 Bearer Token 直接交给 Artifact Manager。Artifact Manager 再通过 Gateway 校验 Token；Runner 不额外申请 Artifact Token。Artifact Manager 返回 401 时执行与普通业务请求相同的一次强制刷新和单次重放，但请求体必须可重建：日志 chunk 保留在本地待确认缓冲中，普通 Artifact 保留本地文件，JSON 请求从结构重新编码。403 不刷新 Token。
+这些写入和状态查询请求复用 3.1 节的并发安全 token provider，将当前 `type=runner` Token 作为 Bearer Token 直接交给 Artifact Manager。Artifact Manager 再通过 Gateway 校验 Token；Runner 不额外申请 Artifact Token。Artifact Manager 返回 401 时执行与普通业务请求相同的一次强制刷新和单次重放，但请求体必须可重建：日志 chunk 保留在本地待确认缓冲中，普通 Artifact 保留本地文件，JSON 请求从结构重新编码。403 不刷新 Token。
 
 Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用于 Gateway，`--artifact-manager-ca` 只用于 Artifact Manager；测试环境可以分别显式跳过校验，不能因为其中一个地址使用 HTTP 或跳过 TLS 而放宽另一个客户端。
 
@@ -183,7 +183,7 @@ type RunnerSpec struct {
 | `unschedulable` | 是否禁止调度新 Job |
 | `taints` | 反亲和污点 |
 
-`instanceId`、`type` 和 `arch` 由 Runner 自身声明；`instanceId` 创建后不可变，`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 system 调用方管理，Runner 自注册和更新时不得修改。
+`instanceId`、`type` 和 `arch` 由 Runner 自身声明；`instanceId` 创建后不可变，`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 Ops/Admin 管理，Runner 自注册和更新时不得修改。
 
 调度标签统一写入 `metadata.labels`，不在 `spec` 中重复定义。例如：
 

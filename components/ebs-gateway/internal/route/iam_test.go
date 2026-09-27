@@ -29,7 +29,7 @@ func TestAdminUserGetUsesCheckedResponse(t *testing.T) {
 			return nil, nil
 		}
 	}))
-	token, err := api.tokens.Issue("admin", "", identity.AdminScope, time.Hour, api.now())
+	token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
-	token, err := api.tokens.Issue("admin", "", identity.AdminScope, time.Hour, api.now())
+	token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
 	if err != nil {
 		t.Fatal(err)
 	}

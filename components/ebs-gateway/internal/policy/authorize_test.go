@@ -33,12 +33,12 @@ func TestProjectPermissions(t *testing.T) {
 		route Route
 		allow bool
 	}{
-		{"owner delete", identity.Principal{Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Method: http.MethodDelete}, true},
-		{"member update", identity.Principal{Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Method: http.MethodPut}, true},
-		{"member delete", identity.Principal{Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Method: http.MethodDelete}, false},
-		{"admin abort without membership", identity.Principal{Subject: "root", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Subresource: "abort", Method: http.MethodPost}, false},
-		{"owner abort", identity.Principal{Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Subresource: "abort", Method: http.MethodPost}, true},
-		{"Build update", identity.Principal{Subject: "alice", Scope: identity.UserScope}, Route{Resource: "builds", Project: "sample", Name: "build", Method: http.MethodPatch}, false},
+		{"owner delete", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Method: http.MethodDelete}, true},
+		{"member update", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Method: http.MethodPut}, true},
+		{"member delete", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Method: http.MethodDelete}, false},
+		{"admin abort without membership", identity.Principal{Type: identity.UserType, Subject: "root", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Subresource: "abort", Method: http.MethodPost}, false},
+		{"owner abort", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "sample", Name: "job", Subresource: "abort", Method: http.MethodPost}, true},
+		{"Build update", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "builds", Project: "sample", Name: "build", Method: http.MethodPatch}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -63,7 +63,7 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 			}
 			c.Set(principalKey, who)
 		}
-		if who.Scope == identity.RunnerScope && resolved.Resource != "configs" {
+		if who.Type == identity.RunnerType && resolved.Resource != "configs" {
 			public = false
 		}
 		if !allowedResourceMethod(resolved) {
@@ -104,7 +104,7 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 				c.AbortWithStatusJSON(status, gin.H{"error": err.Error()})
 				return
 			}
-			if who.Scope == identity.RunnerScope && resolved.Resource == "runners" && resolved.Subresource == "jobs" {
+			if who.Type == identity.RunnerType && resolved.Resource == "runners" && resolved.Subresource == "jobs" {
 				if !validRunnerJobsQuery(c.Request.URL.Query()) {
 					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "unsupported Runner Jobs query"})
 					return
@@ -153,7 +153,7 @@ func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 			return
 		}
 		who := principal(c)
-		if who.Scope == identity.RunnerScope && route.resource == "runners" && route.subresource == "jobs" && c.Query("watch") == "true" {
+		if who.Type == identity.RunnerType && route.resource == "runners" && route.subresource == "jobs" && c.Query("watch") == "true" {
 			if !a.acquireRunnerWatch(who.Runner) {
 				c.Header("Retry-After", "5")
 				c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many Runner watches"})
@@ -161,7 +161,7 @@ func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 			}
 			defer a.releaseRunnerWatch(who.Runner)
 		}
-		if who.Scope == identity.RunnerScope && route.resource == "jobs" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
+		if who.Type == identity.RunnerType && route.resource == "jobs" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
 			if !a.runnerOwnsJob(c, who.Runner) {
 				return
 			}
@@ -182,7 +182,7 @@ func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 			}
 		}
 		public, _ := c.Get("public")
-		a.upstream.Forward(c, who.Subject, string(who.Scope), public == true)
+		a.upstream.Forward(c, who.Subject, string(who.Type), string(who.Scope), public == true)
 	}
 }
 

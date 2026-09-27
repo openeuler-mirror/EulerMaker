@@ -20,7 +20,7 @@
 - 注册用户可以创建 Project，管理自己拥有或参与的 Project，并发起构建。
 - Ops 可以按 owner/member 关系管理 Project 并发起构建，同时管理 Config 和 Script，查看 Runner 运行状态并执行驱逐或取消驱逐。
 - Admin 可以管理普通 User 和 MachineAccount，并具备系统级资源能力。
-- 前端能力模型与 System 身份保持兼容，但 System 是受信任自动化身份，不提供账号密码登录入口。
+- 前端能力模型只根据用户权限和 Runner 身份展示功能。
 - 用户可以查看 Build、Job、RPM 仓库和产物状态，并实时查看 Job 日志。
 - 前端严格遵守 Gateway 的认证和授权边界，不直连 `ebs-apiserver`。
 - API 类型、查询和错误处理集中管理，避免页面直接拼装后端请求。
@@ -68,15 +68,14 @@ Project、资源名称、页签、搜索条件、筛选条件和当前页应进�
 
 ### 4.1 身份类型
 
-| 身份 | Scope | 前端职责 |
-|------|-------|----------|
-| 匿名用户 | 无 | 浏览公开 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job |
-| 普通用户 | `ebs:user` | 创建 Project；操作自己拥有或参与的 Project |
-| 运维用户 | `ebs:ops` | 继承普通用户的工程权限；管理 Config、Script 和 Runner，支持驱逐与取消驱逐 |
-| 管理员 | `ebs:admin` | 管理非管理员 User 和 MachineAccount；具备系统级业务资源能力 |
-| 系统身份 | `ebs:system` | 受信任自动化调用方；前端不提供登录入口 |
+| 身份 | Type | Scope | 前端职责 |
+|------|------|-------|----------|
+| 匿名用户 | 无 | 无 | 浏览公开 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job |
+| 普通用户 | `user` | `ebs:user` | 创建 Project；操作自己拥有或参与的 Project |
+| 运维用户 | `user` | `ebs:ops` | 继承普通用户的工程权限；管理 Config、Script 和 Runner，支持驱逐与取消驱逐 |
+| 管理员 | `user` | `ebs:admin` | 管理非管理员 User 和 MachineAccount；具备系统级业务资源能力 |
 
-这些 scope 是互斥身份，不在令牌中组合。`ebs:ops` 通过 Gateway 授权策略继承普通用户的 owner/member 工程权限，同时保留额外的运维能力。正常交互式登录只会获得 `ebs:user`、`ebs:ops` 或 `ebs:admin`。System 和 Runner 都是机机身份，不能通过 Web 控制台登录；能力矩阵保留 System 列是为了使界面判断与 Gateway 契约完整对应。
+用户 scope 互斥，不在令牌中组合。`ebs:ops` 通过 Gateway 授权策略继承普通用户的 owner/member 工程权限，同时保留额外的运维能力。正常交互式登录只会获得 `ebs:user`、`ebs:ops` 或 `ebs:admin`。Runner 是机机身份，不携带用户 scope，也不能通过 Web 控制台登录。
 
 ### 4.2 Project 关系
 
@@ -91,19 +90,19 @@ ebs.io/member-user.<username>: "true"
 
 ### 4.3 页面能力矩阵
 
-| 能力 | 匿名 | User Owner | User Member | Ops | System | Admin |
-|------|------|------------|-------------|-----|--------|-------|
-| 浏览公开业务资源 | 是 | 是 | 是 | 是 | 是 | 是 |
-| 创建 Project | 否 | 是 | 是 | 是 | 是 | 是 |
-| 修改/删除 Project | 否 | 修改、删除 | 否 | 仅自己拥有的 Project | 否 | 否 |
-| 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 否 | 否 |
-| 创建/修改 Project 子资源 | 否 | 是 | 是 | 按 owner/member 关系同普通用户 | 是 | 是 |
-| 删除 Project 子资源 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 | 是 |
-| 读取 Config | 仅具名 Public | 仅具名 Public | 仅具名 Public | 全部（含 list） | 全部（含 list） | 全部（含 list） |
-| 修改 Config | 否 | 否 | 否 | 是 | 是 | 是 |
-| 查看 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
-| 管理 Runner | 否 | 否 | 否 | 是 | 是 | 是 |
-| 管理 User/MachineAccount | 否 | 否 | 否 | 否 | 否 | 是 |
+| 能力 | 匿名 | User Owner | User Member | Ops | Admin |
+|------|------|------------|-------------|-----|-------|
+| 浏览公开业务资源 | 是 | 是 | 是 | 是 | 是 |
+| 创建 Project | 否 | 是 | 是 | 是 | 是 |
+| 修改/删除 Project | 否 | 修改、删除 | 否 | 仅自己拥有的 Project | 否 |
+| 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 否 |
+| 创建/修改 Project 子资源 | 否 | 是 | 是 | 按 owner/member 关系同普通用户 | 是 |
+| 删除 Project 子资源 | 否 | 是 | 否 | 仅自己拥有的 Project | 是 |
+| 读取 Config | 仅具名 Public | 仅具名 Public | 仅具名 Public | 全部（含 list） | 全部（含 list） |
+| 修改 Config | 否 | 否 | 否 | 是 | 是 |
+| 查看 Runner | 否 | 否 | 否 | 是 | 是 |
+| 管理 Runner | 否 | 否 | 否 | 是 | 是 |
+| 管理 User/MachineAccount | 否 | 否 | 否 | 否 | 是 |
 
 按钮是否显示由前端能力函数统一判断，例如 `canEditProject(identity, project)`；页面不得散落 scope 字符串比较。服务端返回 403 时，以服务端结果为准并刷新当前资源。
 
@@ -143,7 +142,7 @@ Project 详情的资源路由在桌面端表现为页签，在窄屏表现为二
 
 - 首页
 - 工程
-- Runner，仅 Ops、System 和 Admin 显示
+- Runner，仅 Ops 和 Admin 显示
 - 用户管理，仅 Admin 显示
 - 账号菜单：个人信息、语言、主题、退出
 
@@ -157,7 +156,7 @@ Project 详情的资源路由在桌面端表现为页签，在窄屏表现为二
 - Project 列表摘要。
 - 用户已登录时展示“我拥有的工程”和“我参与的工程”。
 
-System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队列深度和 Runner 状态。普通浏览页面不能为了全局统计对每个 Project 发起子资源请求，避免 N+1 请求和不完整统计。
+Admin 可以额外展示全局资源指标、Build 趋势、Job 队列深度和 Runner 状态。普通浏览页面不能为了全局统计对每个 Project 发起子资源请求，避免 N+1 请求和不完整统计。
 
 ### 5.4 工程列表
 
@@ -175,7 +174,7 @@ System 和 Admin 可以额外展示全局资源指标、Build 趋势、Job 队�
 
 工程列表提供两种创建入口：
 
-- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户和 Ops 创建的工程由 Gateway 注入 owner，Admin/System 创建时需指定已启用的普通用户或 Ops 用户作为 owner。
+- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户和 Ops 创建的工程由 Gateway 注入 owner，Admin 创建时需指定已启用的普通用户或 Ops 用户作为 owner。
 - “导入 YAML”读取或粘贴单个 `ebs/v1 Project` 清单。客户端解析 YAML，校验 `apiVersion`、`kind`、工程名和至少一个包含 `os`、`arch` 的 Build target；提交前移除 `status` 和服务器维护的 metadata 字段。该入口只用于创建 Project，不构成通用资源 YAML 编辑器。
 
 两个入口共用 `POST /apis/ebs/v1/projects`。匿名用户点击后进入登录页并返回工程列表。409 冲突、校验错误和权限错误都在弹窗中保留输入并以当前界面语言展示。
@@ -242,7 +241,7 @@ Runner 页面展示：
 - 地址、操作系统、内核、运行时和 Agent 版本。
 - labels、taints 和 conditions。
 
-Ops 和 Admin 均可进入运维页面查看 Runner，并执行驱逐和取消驱逐；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、删除、调度开关或 taint 编辑入口。System 保留 API 管理权限，但没有 Web 登录入口。
+Ops 和 Admin 均可进入运维页面查看 Runner，并执行驱逐和取消驱逐；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、删除、调度开关或 taint 编辑入口。
 
 - 非 `Evicted` Runner 显示“驱逐”，`Evicted` Runner 显示“取消驱逐”，操作均需二次确认。
 - 提交前 GET 最新 Runner，确认 UID 与选中对象一致，并携带最新 resourceVersion PATCH `/runners/{name}/status`；驱逐写 `Evicted`，取消驱逐写 `Offline`，等待新心跳恢复 `Online`，不修改 `spec.unschedulable`。
@@ -406,10 +405,11 @@ Token 只保存在 `sessionStorage`。应用启动时如果存在 Token，调用
 ```ts
 interface SessionIdentity {
   name: string;
-  scopes: Array<"ebs:user" | "ebs:ops" | "ebs:admin" | "ebs:system">;
-  expiresAt: number;
+  scopes: Array<"ebs:user" | "ebs:ops" | "ebs:admin">;
 }
 ```
+
+前端只读取身份名称和 `scopes`；界面权限和路由守卫根据 `scopes` 判断，不依赖 Gateway 响应中的 `identity.type`。
 
 不把密码、MachineAccount secret、完整 JWT payload 或认证响应写入日志。退出登录清除 Token、身份和用户私有缓存。
 
@@ -705,7 +705,7 @@ OpenAPI 生成差异检查
 - Job 和 Runner 页面。
 - Artifact、Manifest 和下载入口。
 - Range + SSE 实时日志。
-- System/Admin 全局监控。
+- Admin 全局监控。
 
 ### 阶段四：运维与管理
 
@@ -728,7 +728,7 @@ PR 165 可作为视觉和工程原型，以下内容可以选择性迁移：
 以下内容必须按本文重新实现：
 
 - 删除 `/public-apis` 及前端容器直连 apiserver 的代理。
-- 使用当前 `ebs:user`、`ebs:ops`、`ebs:admin`、`ebs:system` 权限模型。
+- 使用 `user` 身份的 `ebs:user`、`ebs:ops`、`ebs:admin` 权限模型。
 - 使用 `ebs.io/owner-user` 和 `ebs.io/member-user.*` Project labels。
 - 从当前 OpenAPI 生成类型，移除旧的 Build、Snapshot、RpmRepo、PackageRepo 和 Runner 字段。
 - 拆分大页面和语言文件，增加路由懒加载。
@@ -742,7 +742,7 @@ PR 165 可作为视觉和工程原型，以下内容可以选择性迁移：
 
 - 所有浏览器资源请求符合 Gateway 和 Artifact Manager 的公开契约。
 - 浏览器和前端容器均无法直连 apiserver。
-- 匿名、User Owner、User Member、Ops、System 和 Admin 六类访问场景的页面和操作与权限矩阵一致。
+- 匿名、User Owner、User Member、Ops 和 Admin 五类访问场景的页面和操作与权限矩阵一致。
 - 不再使用当前 API 已移除的字段。
 - 所有列表支持空、加载、错误、分页和刷新状态。
 - 写操作处理 401、403、409、429 和请求结果未知场景。

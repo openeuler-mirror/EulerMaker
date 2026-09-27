@@ -1462,7 +1462,7 @@ Content-Type: application/json
 
 服务端以日志流为粒度加锁，并执行：
 
-1. 重新校验 Runner Token 的签名、有效期和 `ebs:runner` scope。
+1. 重新校验 Runner Token 的签名、有效期和 `type=runner`。
 2. 检查 `nextSequence == lastSequence + 1`，且没有 sequence 缺口。
 3. 检查已提交字节数等于 `size`，重新流式计算完整正文 SHA-256。
 4. 将状态置为 `Finalizing`，把活动日志正文原子移动到 Artifact 的最终存储键；正文已经位于目标文件系统时不得复制整份文件。
@@ -1501,7 +1501,7 @@ Job 终止后长时间没有封账的 Open 日志流按 `--active-log-ttl` 过�
 
 ### 11.1 Runner 上传
 
-Runner 使用现有短期 `ebs:runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 公开 Token 校验接口：
+Runner 使用现有短期 `type=runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 公开 Token 校验接口：
 
 ```http
 POST /auth/check
@@ -1516,13 +1516,13 @@ Gateway 只验证 Token 的签名、issuer、audience、有效期和 scopes 结�
   "identity": {
     "type": "runner",
     "name": "runner-ct-aarch64-01",
-    "scopes": ["ebs:runner"]
+    "scopes": []
   },
   "expiresAt": "2026-08-11T12:00:00Z"
 }
 ```
 
-Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.scopes` 包含 `ebs:runner`，随后使用 `identity.name` 作为 Runner 名称；不能信任上传请求正文、查询参数或外部请求头提供的身份。其他合法 Token 类型由 Gateway 正常解析，但 Artifact Manager 必须拒绝。
+Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.scopes` 为空，随后使用 `identity.name` 作为 Runner 名称；不能信任上传请求正文、查询参数或外部请求头提供的身份。其他合法 Token 类型由 Gateway 正常解析，但 Artifact Manager 必须拒绝。
 
 首版明确不执行以下检查：
 
@@ -1694,7 +1694,7 @@ GET /readyz    # 本地持久化目录可用，元数据索引已加载
 
 1. 本地持久化文件系统。
 2. 本地元数据文件与启动时内存索引。
-3. Runner Token 签名、有效期和 `ebs:runner` scope 校验。
+3. Runner Token 签名、有效期和 `type=runner` 校验。
 4. 经 Artifact Manager 进行单请求整文件流式上传，支持整文件重试和幂等完成。
 5. 文件大小与 SHA-256 校验。
 6. Artifact 查询和本地文件流式下载。

@@ -73,7 +73,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader, he
 	return c.http.Do(request)
 }
 
-func (c *Client) Forward(ctx *gin.Context, subject, scope string, public bool) {
+func (c *Client) Forward(ctx *gin.Context, subject, kind, scope string, public bool) {
 	request := ctx.Request
 	if public {
 		request = request.WithContext(context.WithValue(request.Context(), publicRequestKey{}, true))
@@ -92,7 +92,10 @@ func (c *Client) Forward(ctx *gin.Context, subject, scope string, public bool) {
 	request.Host = c.endpoint.Host
 	if !public {
 		request.Header.Set("X-EBS-User", subject)
-		request.Header.Set("X-EBS-Scopes", scope)
+		request.Header.Set("X-EBS-Type", kind)
+		if scope != "" {
+			request.Header.Set("X-EBS-Scopes", scope)
+		}
 	} else {
 		// The public response header allowlist intentionally excludes
 		// Content-Encoding. Let the transport negotiate/decode gzip itself.

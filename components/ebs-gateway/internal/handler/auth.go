@@ -130,7 +130,7 @@ func (a *Handler) login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	token, err := a.tokens.Issue(input.Username, "", scope, 24*time.Hour, a.now())
+	token, err := a.tokens.Issue(input.Username, "", identity.UserType, scope, 24*time.Hour, a.now())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token unavailable"})
 		return
@@ -170,7 +170,7 @@ func (a *Handler) runnerToken(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid authentication response"})
 		return
 	}
-	token, err := a.tokens.Issue(input.Runner, input.Runner, identity.RunnerScope, time.Duration(ttl)*time.Second, a.now())
+	token, err := a.tokens.Issue(input.Runner, input.Runner, identity.RunnerType, "", time.Duration(ttl)*time.Second, a.now())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token unavailable"})
 		return
@@ -187,8 +187,24 @@ func (a *Handler) checkToken(c *gin.Context) {
 		return
 	}
 	user := principal(c)
+	name := user.Subject
+	if user.Type == identity.RunnerType {
+		name = user.Runner
+	}
+	scopes := make([]identity.Scope, 0, 1)
+	if user.Scope != "" {
+		scopes = append(scopes, user.Scope)
+	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"subject": user.Subject, "scopes": []identity.Scope{user.Scope}, "expiresAt": user.ExpiresAt.Unix()})
+	c.JSON(http.StatusOK, gin.H{
+		"authenticated": true,
+		"identity": gin.H{
+			"type":   user.Type,
+			"name":   name,
+			"scopes": scopes,
+		},
+		"expiresAt": user.ExpiresAt,
+	})
 }
 
 func (a *Handler) changePassword(c *gin.Context) {

@@ -8,7 +8,13 @@ export const useSessionStore = defineStore("session", {
   getters: {
     authenticated: (state) => Boolean(state.session),
     username: (state) => state.session?.identity.name || "",
-    role: (state) => state.session?.identity.type || "",
+    role: (state) => {
+      const scopes = state.session?.identity.scopes || [];
+      if (scopes.includes("ebs:admin")) return "admin";
+      if (scopes.includes("ebs:ops")) return "ops";
+      if (scopes.includes("ebs:user")) return "user";
+      return "";
+    },
   },
   actions: {
     async restore(): Promise<void> {

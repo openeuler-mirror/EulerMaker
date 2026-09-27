@@ -615,10 +615,10 @@ type ConfigList struct {
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `metadata.name` | 是 | 集群唯一；内置对象为 `build-target` 和 `build-resource` |
-| `spec.visibility` | 是 | `Public` 允许所有身份及匿名具名读取；`OpsOnly` 仅 Ops/Admin/System 读取 |
+| `spec.visibility` | 是 | `Public` 允许所有身份及匿名具名读取；`OpsOnly` 仅 Ops/Admin 读取 |
 | `spec.content` | 是 | 非空 UTF-8 YAML 文本；apiserver 不解析业务结构，按对象名称由消费方解释 |
 
-`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin/System list；匿名、普通用户和 Runner 只能具名读取 `Public` 对象，`OpsOnly` 仅 Ops/Admin/System 可读。Ops/Admin/System 可创建更新，两个内置对象不可经 Gateway 删除。apiserver 只校验公共字段和资源版本，不验证 YAML 内的 OS、镜像、CPU、内存等业务规则。
+`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin list；匿名、普通用户和 Runner 只能具名读取 `Public` 对象，`OpsOnly` 仅 Ops/Admin 可读。Ops/Admin 可创建更新，两个内置对象不可经 Gateway 删除。apiserver 只校验公共字段和资源版本，不验证 YAML 内的 OS、镜像、CPU、内存等业务规则。
 
 ### 内置内容格式
 

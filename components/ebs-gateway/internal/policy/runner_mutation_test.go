@@ -10,7 +10,7 @@ import (
 )
 
 func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
-	who := identity.Principal{Subject: "runner-1", Runner: "runner-1", Scope: identity.RunnerScope}
+	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
 	route := Route{Resource: "jobs", Project: "team", Name: "job-1", Subresource: "status", Method: http.MethodPatch}
 	old := mutation.Object{
 		"apiVersion": "ebs/v1", "kind": "Job",

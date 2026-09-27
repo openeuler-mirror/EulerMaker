@@ -467,19 +467,19 @@ const tabs = computed<Array<{ id: ProjectTab; label: string }>>(() => [
 ]);
 const canEditProject = computed(() => {
   const identity = session.session?.identity;
-  if (identity?.type !== "user" && identity?.type !== "ops") return false;
+  if (!identity || (!identity.scopes.includes("ebs:user") && !identity.scopes.includes("ebs:ops"))) return false;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
 });
 const canStartBuild = computed(() => {
   const identity = session.session?.identity;
   if (!identity) return false;
-  if (identity.type === "admin" || identity.scopes.includes("ebs:system")) return true;
+	if (identity.scopes.includes("ebs:admin")) return true;
   const labels = project.value?.metadata?.labels || {};
   return labels["ebs.io/owner-user"] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === "true";
 });
 const canAbortJobs = computed(() => {
   const identity = session.session?.identity;
-  if (!identity || identity.type === 'service') return false;
+  if (!identity || !identity.scopes.some((scope) => scope === 'ebs:user' || scope === 'ebs:ops' || scope === 'ebs:admin')) return false;
   const labels = project.value?.metadata?.labels || {};
   return labels['ebs.io/owner-user'] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === 'true';
 });

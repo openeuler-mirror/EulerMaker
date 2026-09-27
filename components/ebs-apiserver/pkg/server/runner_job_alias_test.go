@@ -10,21 +10,21 @@ import (
 
 func TestRunnerJobIdentityAllowed(t *testing.T) {
 	tests := []struct {
-		name   string
-		user   string
-		scopes string
-		want   bool
+		name string
+		user string
+		kind string
+		want bool
 	}{
-		{name: "matching runner", user: "runner-a", scopes: "ebs:runner", want: true},
-		{name: "other runner", user: "runner-b", scopes: "ebs:runner"},
-		{name: "system", user: "scheduler", scopes: "ebs:system", want: true},
-		{name: "user", user: "runner-a", scopes: "ebs:user"},
+		{name: "matching runner", user: "runner-a", kind: "runner", want: true},
+		{name: "other runner", user: "runner-b", kind: "runner"},
+		{name: "user", user: "runner-a", kind: "user"},
+		{name: "missing type", user: "runner-a"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/", nil)
 			req.Header.Set("X-EBS-User", tt.user)
-			req.Header.Set("X-EBS-Scopes", tt.scopes)
+			req.Header.Set("X-EBS-Type", tt.kind)
 			if got := runnerJobIdentityAllowed(req, "runner-a"); got != tt.want {
 				t.Fatalf("allowed=%v, want %v", got, tt.want)
 			}
