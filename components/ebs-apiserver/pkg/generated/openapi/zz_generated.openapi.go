@@ -1526,13 +1526,6 @@ func schema_ebs_api_ebs_v1_RepositoryInput(ref common.ReferenceCallback) common.
 							Format:  "",
 						},
 					},
-					"jobUID": {
-						SchemaProps: spec.SchemaProps{
-							Description: "JobUID is retained for decoding older status objects; scheduling uses JobName.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
 					"specName": {
 						SchemaProps: spec.SchemaProps{
 							Default: "",

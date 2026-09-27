@@ -39,7 +39,7 @@ func unknownWriteClient(t *testing.T, land bool) *FakeClient {
 func TestCommitStatusConfirmsUnknownWriteByReadingBackTheIntent(t *testing.T) {
 	client := unknownWriteClient(t, true)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -62,7 +62,7 @@ func TestCommitStatusConfirmsUnknownWriteByReadingBackTheIntent(t *testing.T) {
 func TestCommitStatusAbandonsUnconfirmedUnknownWrite(t *testing.T) {
 	client := unknownWriteClient(t, false)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -93,7 +93,7 @@ func TestCommitStatusDelaysOnConflict(t *testing.T) {
 		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: fmt.Errorf("conflict")}
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -121,7 +121,7 @@ func TestCommitStatusRejectsMissingObjectAsConvergence(t *testing.T) {
 		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 404, Err: fmt.Errorf("not found")}
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -155,7 +155,7 @@ func TestCommitStatusRejectsPartiallyMatchingUnknownWrite(t *testing.T) {
 		return nil, unknownWrite("update-status", source.RpmReposGVR, fmt.Errorf("connection reset while writing status"))
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -183,7 +183,7 @@ func statusWriteFailureClient(t *testing.T, failure error) (*FakeClient, *FakeAr
 		return nil, failure
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	return client, artifacts

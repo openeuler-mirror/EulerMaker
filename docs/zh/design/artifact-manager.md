@@ -50,11 +50,10 @@ Artifact、Job 上传清单和幂等记录均以元数据文件形式存放在�
 ```text
 project
 jobName
-jobUID
 runnerName
 ```
 
-`project` 和 `jobName` 唯一标识一次 Job，确定正文目录、Manifest 和日志流。传入的 `jobUID` 仅作为可选诊断信息，不参与身份、幂等或归属校验。
+`project` 和 `jobName` 唯一标识一次 Job，确定正文目录、Manifest 和日志流。
 
 存储键由服务端生成：
 
@@ -105,7 +104,6 @@ type Artifact struct {
     ID            string           `json:"id"`
     Project       string           `json:"project"`
     JobName       string           `json:"jobName"`
-    JobUID        string           `json:"jobUID"`
     RunnerName    string           `json:"runnerName"`
     Category      ArtifactCategory `json:"category"`
     Name          string           `json:"name,omitempty"`
@@ -171,7 +169,6 @@ type JobUploadManifest struct {
     SchemaVersion  int            `json:"schemaVersion"`
     Project        string         `json:"project"`
     JobName        string         `json:"jobName"`
-    JobUID         string         `json:"jobUID"`
     RunnerName     string         `json:"runnerName"`
     Files          []ManifestFile `json:"files"`
     Digest         string         `json:"digest,omitempty"`
@@ -230,7 +227,6 @@ type LogStream struct {
     SchemaVersion  int            `json:"schemaVersion"`
     Project        string         `json:"project"`
     JobName        string         `json:"jobName"`
-    JobUID         string         `json:"jobUID"`
     RunnerName     string         `json:"runnerName"`
     Stream         string         `json:"stream"`
     State          LogStreamState `json:"state"`
@@ -307,7 +303,7 @@ type FailureInfo struct {
     Code      string    `json:"code"`
     Message   string    `json:"message"`
     Retryable bool      `json:"retryable"`
-    JobUID    string    `json:"jobUID,omitempty"`
+    JobName   string    `json:"jobName,omitempty"`
     Time      Timestamp `json:"time"`
 }
 
@@ -334,7 +330,6 @@ API 错误响应的 `Content-Type` 为 `application/json`，客户端只能依�
 | `schemaVersion` | 首版固定为 1；读取未知主版本必须拒绝启动或隔离该记录 |
 | `id` | 服务端生成，Artifact 为 `art_<ULID>` |
 | `project`、`jobName` | 1–253 字节，必须与 ebs-apiserver 中对象一致 |
-| `jobUID` | 可选诊断字段，不参与身份或请求摘要 |
 | `runnerName` | 来自 Gateway 认证结果，客户端请求正文不得提供 |
 | `relativePath` | UTF-8 相对路径，规范化后不超过 1024 字节，不允许空段、`.`、`..`、反斜杠、控制字符和符号链接 |
 | `fileName`、`name` | UTF-8，分别不超过 255 和 256 字节；`name` 仅用于展示 |
@@ -349,7 +344,6 @@ API 错误响应的 `Content-Type` 为 `application/json`，客户端只能依�
 
 ```go
 type UploadArtifactMetadata struct {
-    JobUID       string           `json:"jobUID"`
     Category     ArtifactCategory `json:"category"`
     Name         string           `json:"name,omitempty"`
     FileName     string           `json:"fileName"`
@@ -364,12 +358,10 @@ type UploadArtifactResponse struct {
 }
 
 type CompleteManifestRequest struct {
-    JobUID string         `json:"jobUID"`
     Files  []ManifestFile `json:"files"`
 }
 
 type CompleteManifestResponse struct {
-    JobUID        string        `json:"jobUID"`
     State         ManifestState `json:"state"`
     ArtifactCount int           `json:"artifactCount"`
     Digest        string        `json:"digest"`
@@ -385,7 +377,6 @@ type LogStatusResponse struct {
 }
 
 type CompleteLogRequest struct {
-    JobUID       string `json:"jobUID"`
     Stream       string `json:"stream"`
     LastSequence int64  `json:"lastSequence"`
     Size         int64  `json:"size"`
@@ -435,7 +426,6 @@ Content-Type: multipart/form-data; boundary=...
 
 ```json
 {
-  "jobUID": "e32450b8-...",
   "category": "artifact",
   "fileName": "kernel-6.6.rpm",
   "relativePath": "packages/kernel-6.6.rpm",
@@ -530,7 +520,6 @@ Content-Type: application/json
 
 ```json
 {
-  "jobUID": "e32450b8-...",
   "files": [
     {
       "artifactID": "art-01...",
@@ -556,7 +545,6 @@ Content-Type: application/json
 
 ```json
 {
-  "jobUID": "e32450b8-...",
   "state": "Completed",
   "artifactCount": 1,
   "digest": "sha256:..."
@@ -601,7 +589,6 @@ Runner 执行完成后扫描 Job 结果目录并生成 manifest：
 
 ```json
 {
-  "jobUID": "e32450b8-...",
   "files": [
     {
       "relativePath": "packages/kernel.rpm",
@@ -757,7 +744,6 @@ type RpmRepoSpec struct {
 
 type RepositoryInput struct {
     JobName            string `json:"jobName"`
-    JobUID             string `json:"jobUID"`
     SpecName           string `json:"specName"`
 }
 
@@ -813,7 +799,6 @@ const (
 
 type ManifestReference struct {
     JobName    string `json:"jobName"`
-    JobUID     string `json:"jobUID,omitempty"` // 仅兼容旧客户端，服务端不用于身份判定
 }
 
 type CreateRepositoryRequest struct {
@@ -1293,7 +1278,7 @@ ${dataDir}/.logs/{project}/{jobName}/combined.index.jsonl
 ${dataDir}/.metadata/logs/{project}/{jobName}/combined.json
 ```
 
-新日志使用 Job 名目录；服务重启时，若该目录不存在但旧的 `.logs/{project}/{jobUID}` 目录存在，继续从旧目录恢复未封账的日志。旧 UID 仅用于兼容已有正文路径。
+日志始终使用 Job 名目录；服务重启时从该目录恢复未封账的日志。
 
 `combined.index.jsonl` 是 sequence、字节范围和 chunk 摘要的持久化索引；`combined.json` 只保存 `LogStream` 的小型汇总状态，不重复保存最近 chunk 列表。日志正文只追加到一个活动文件，不把每个 chunk 保存成长期独立对象。
 
@@ -1313,7 +1298,6 @@ POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
 Authorization: Bearer <runner-token>
 Content-Type: application/octet-stream
 Content-Encoding: identity | gzip
-X-Job-UID: e32450b8-...
 X-Log-Stream: combined
 X-Log-Sequence: 100
 X-Content-SHA256: <解压后正文的sha256>
@@ -1350,7 +1334,7 @@ Runner 在本地维护待确认缓冲区，每达到 256 KiB 或 500 ms 发送�
 #### 10.2.2 查询日志流状态
 
 ```http
-GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status?jobUID={uid}&stream=combined
+GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status?stream=combined
 Authorization: Bearer <runner-token>
 ```
 
@@ -1369,7 +1353,7 @@ Runner 启动、重连或遇到结果未知时查询该接口，并以 `nextSequ
 #### 10.2.3 SSE 实时读取
 
 ```http
-GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream?jobUID={uid}&stream=combined&afterSequence=100
+GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream?stream=combined&afterSequence=100
 Accept: text/event-stream
 Last-Event-ID: 100
 ```
@@ -1394,7 +1378,7 @@ SSE 只是展示通道，不参与持久化确认。慢客户端使用有界发�
 活动日志读取接口：
 
 ```http
-GET /artifacts/v1/projects/{project}/jobs/{job}/logs/content?jobUID={uid}&stream=combined
+GET /artifacts/v1/projects/{project}/jobs/{job}/logs/content?stream=combined
 Range: bytes=<start>-<end>
 ```
 
@@ -1469,7 +1453,6 @@ Content-Type: application/json
 
 ```json
 {
-  "jobUID": "e32450b8-...",
   "stream": "combined",
   "lastSequence": 100,
   "size": 18743291,
@@ -1546,7 +1529,7 @@ Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.s
 - 不读取 Job 或 Runner 对象。
 - 不校验 `job.status.runner` 是否等于 Token 中的 Runner。
 - 不校验 Job 当前 phase/stage 是否允许上传。
-- 不校验 Token 身份是否有权操作请求中的 project、jobName 或 jobUID。
+- 不校验 Token 身份是否有权操作请求中的 project 或 jobName。
 
 Artifact Manager 仍需校验同一个请求和已有本地记录之间的标识一致性，例如 URL Project、URL Job、Artifact 和 Manifest 归属不能互相冲突。这属于本地数据完整性校验，不是 Job/Runner 授权检查。
 
@@ -1696,7 +1679,7 @@ RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Art
 - 过期临时文件与孤儿文件清理数。
 - 各 Project 存储用量。
 
-结构化日志包含 `project`、`jobUID`、`artifactID` 和 `runnerName`，但不得记录 Token 或文件正文。
+结构化日志包含 `project`、`jobName`、`artifactID` 和 `runnerName`，但不得记录 Token 或文件正文。
 
 健康检查：
 

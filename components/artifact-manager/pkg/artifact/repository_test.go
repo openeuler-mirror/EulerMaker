@@ -45,26 +45,9 @@ func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { server.repositories.stop(); server.releases.stop() })
-	request := CreateRepositoryRequest{RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job-1", JobUID: "job-uid-1"}}}
+	request := CreateRepositoryRequest{RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job-1"}}}
 	request.RepositoryUID = repositoryUID(request.Project, request.BuildName, request.BaseRepositoryUID, request.Manifests)
 	return server, request
-}
-
-func TestRepositoryRequestIdentityIgnoresJobUID(t *testing.T) {
-	request := CreateRepositoryRequest{
-		RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64",
-		Manifests: []ManifestReference{{JobName: "job", JobUID: "first-uid"}},
-	}
-	request.RepositoryUID = repositoryUID(request.Project, request.BuildName, "", request.Manifests)
-	first, digest, err := normalizeRepositoryRequest(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Manifests[0].JobUID = "second-uid"
-	second, secondDigest, err := normalizeRepositoryRequest(request)
-	if err != nil || digest != secondDigest || first.Manifests[0].JobUID != "" || second.Manifests[0].JobUID != "" {
-		t.Fatalf("UID changed repository request identity: %q, %q, %v", digest, secondDigest, err)
-	}
 }
 
 func repositoryRequest(t *testing.T, server http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -151,7 +134,7 @@ func TestRepositoryContent(t *testing.T) {
 }
 
 func TestRepositoryRejectsUnsafeTargetOS(t *testing.T) {
-	request := CreateRepositoryRequest{RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "../other", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job", JobUID: "uid"}}}
+	request := CreateRepositoryRequest{RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "../other", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job"}}}
 	request.RepositoryUID = repositoryUID(request.Project, request.BuildName, "", request.Manifests)
 	if _, _, err := normalizeRepositoryRequest(request); err == nil {
 		t.Fatal("unsafe target OS accepted")

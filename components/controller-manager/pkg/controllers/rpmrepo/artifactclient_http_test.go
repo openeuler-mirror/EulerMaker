@@ -96,7 +96,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		response, err := client.SubmitRepository(ctx, CreateRepositoryRequest{
 			RepositoryUID: "repo-1", RepositoryName: testBuild, Project: testProject, BuildName: testBuild,
 			TargetOS: testOS, TargetArch: testArch,
-			Manifests: []ManifestReference{{JobName: "job-a", JobUID: "uid-job-a"}},
+			Manifests: []ManifestReference{{JobName: "job-a"}},
 		})
 		if err != nil {
 			t.Fatalf("SubmitRepository: %v", err)
@@ -114,7 +114,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		if err := json.Unmarshal([]byte(server.requestBody[0]), &sent); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if sent.RepositoryName != testBuild || len(sent.Manifests) != 1 || sent.Manifests[0].JobUID != "uid-job-a" {
+		if sent.RepositoryName != testBuild || len(sent.Manifests) != 1 || sent.Manifests[0].JobName != "job-a" {
 			t.Fatalf("unexpected request body %+v", sent)
 		}
 	})
@@ -131,10 +131,10 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 	})
 
 	t.Run("get-manifest-by-name", func(t *testing.T) {
-		body := `{"project":"project","jobName":"job-a","jobUID":"uid-job-a","state":"Completed"}`
+		body := `{"project":"project","jobName":"job-a","state":"Completed"}`
 		server := newScriptedArtifactServer(t, http.StatusOK, body, nil)
 		client := server.client(t)
-		manifest, err := client.GetJobManifest(ctx, testProject, "job-a", "uid-job-a")
+		manifest, err := client.GetJobManifest(ctx, testProject, "job-a")
 		if err != nil {
 			t.Fatalf("GetJobManifest: %v", err)
 		}
@@ -215,7 +215,7 @@ func TestArtifactClientValidatesRequestsLocally(t *testing.T) {
 		},
 		{
 			name: "manifest-without-job",
-			call: func() error { _, err := client.GetJobManifest(ctx, testProject, "", "uid"); return err },
+			call: func() error { _, err := client.GetJobManifest(ctx, testProject, ""); return err },
 		},
 		{
 			name: "release-without-source",

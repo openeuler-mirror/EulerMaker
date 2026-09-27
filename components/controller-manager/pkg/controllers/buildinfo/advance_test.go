@@ -264,7 +264,7 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	}, testSources())
 	a1 := seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 
-	// Round 1: gate 2 blocks b — the Succeeded upstream's Job UID is not in
+	// Round 1: gate 2 blocks b — the Succeeded upstream's Job name is not in
 	// the RpmRepo sourceJobNames set; no condition is written (7.4.6).
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
@@ -284,7 +284,7 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 
 	// Round 2: the upstream Job is published — b dispatches.
 	repo := testRpmRepoObj(testRepoURL)
-	repo.Status.Repository.SourceJobNames = []string{string(a1.UID)}
+	repo.Status.Repository.SourceJobNames = []string{a1.Name}
 	client.SeedRpmRepo(repo)
 	reconcileOnce(t, c)
 
@@ -317,7 +317,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 		repo.Status.Repository.SourceJobNames = uids
 		client.SeedRpmRepo(repo)
 	}
-	publish(string(a1.UID))
+	publish(a1.Name)
 
 	// Round 1: a's second dispatch is publish-gated on b; b's second dispatch
 	// is rebuild-consistency-gated on a (7.4.6 ①: upstream below its
@@ -340,7 +340,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	// still holds a's published generation-1 Job; the generation-2 Job was
 	// created after the List, 7.4.6 gate 2) — the cycle completes at the
 	// required counts in the same round (6.4).
-	publish(string(a1.UID), string(b1.UID))
+	publish(a1.Name, b1.Name)
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)

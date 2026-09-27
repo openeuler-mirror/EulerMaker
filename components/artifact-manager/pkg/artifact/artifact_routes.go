@@ -263,10 +263,10 @@ func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j s
 		s.mapErr(w, r, e)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"jobUID": m.JobUID, "state": m.State, "artifactCount": len(m.Files), "digest": m.Digest})
+	writeJSON(w, 200, map[string]any{"state": m.State, "artifactCount": len(m.Files), "digest": m.Digest})
 }
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string) {
-	m, ok := s.store.GetManifest(p, j, r.URL.Query().Get("jobUID"))
+	m, ok := s.store.GetManifest(p, j)
 	if !ok {
 		writeErr(w, r, 404, "NotFound", "manifest not found", false, nil)
 		return
@@ -275,7 +275,7 @@ func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string
 }
 func (s *Server) list(w http.ResponseWriter, r *http.Request, p, j string) {
 	cat := Category(r.URL.Query().Get("category"))
-	items, _ := s.store.ListArtifacts(p, j, r.URL.Query().Get("jobUID"), cat)
+	items, _ := s.store.ListArtifacts(p, j, cat)
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 func (s *Server) download(w http.ResponseWriter, r *http.Request, id string) {

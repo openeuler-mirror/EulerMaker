@@ -145,7 +145,7 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 	client := NewFakeClient()
 	repo := inFlightRepo()
 	repo.Status.Repository.Transition.Inputs = append(repo.Status.Repository.Transition.Inputs,
-		ebsv1.RepositoryInput{JobName: "job-b", JobUID: "uid-job-b", SpecName: "glibc"})
+		ebsv1.RepositoryInput{JobName: "job-b", SpecName: "glibc"})
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
@@ -215,7 +215,7 @@ func TestReconcileBuildSubmitsBatchAndWaitsForMaterialization(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -258,7 +258,7 @@ func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -305,7 +305,7 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -358,7 +358,7 @@ func TestReconcileBuildCollectsFailureAfterRetryBudget(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
 	repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
-		Inputs:            []ebsv1.RepositoryInput{{JobName: "job-a", JobUID: "uid-job-a", SpecName: "gcc"}},
+		Inputs:            []ebsv1.RepositoryInput{{JobName: "job-a", SpecName: "gcc"}},
 		BaseRepositoryUID: "base-1",
 		RepositoryUID:     "next-1",
 	}
@@ -401,7 +401,7 @@ func TestReconcileBuildReplaysRetryableFailureWithinBudget(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
 	repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
-		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", JobUID: "uid-job-a", SpecName: "gcc"}},
+		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", SpecName: "gcc"}},
 		RepositoryUID: "next-1",
 	}
 	client.RpmRepos[key(testProject, testBuild)] = repo
@@ -498,7 +498,7 @@ func TestReconcileBuildCollectsAbortedTerminal(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
 	repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
-		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", JobUID: "uid-job-a", SpecName: "gcc"}},
+		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", SpecName: "gcc"}},
 		RepositoryUID: "next-1",
 	}
 	client.RpmRepos[key(testProject, testBuild)] = repo

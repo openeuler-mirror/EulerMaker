@@ -15,8 +15,8 @@ import (
 )
 
 type LogRemote interface {
-	LogStatus(context.Context, string, string, string) (LogStatus, error)
-	AppendLog(context.Context, string, string, string, int64, string, []byte) (AppendLogResult, error)
+	LogStatus(context.Context, string, string) (LogStatus, error)
+	AppendLog(context.Context, string, string, int64, string, []byte) (AppendLogResult, error)
 	CompleteLog(context.Context, string, string, string, CompleteLogInput) (CompletedLog, error)
 }
 
@@ -50,7 +50,6 @@ type logUploadCheckpoint struct {
 	SchemaVersion   int       `json:"schemaVersion"`
 	Project         string    `json:"project"`
 	JobName         string    `json:"jobName"`
-	JobUID          string    `json:"jobUID"`
 	Stream          string    `json:"stream"`
 	NextSequence    int64     `json:"nextSequence"`
 	ConfirmedOffset int64     `json:"confirmedOffset"`
@@ -61,7 +60,7 @@ type logUploadCheckpoint struct {
 
 type artifactLogSink struct {
 	remote                         LogRemote
-	project, job, uid              string
+	project, job                   string
 	chunkSize, spoolLimit          int64
 	flushInterval, retryMaxBackoff time.Duration
 	dir                            string
@@ -111,7 +110,7 @@ func (f *ArtifactLogFactory) Open(job JobResource) (JobLogSink, error) {
 		return nil, fmt.Errorf("open log index: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &artifactLogSink{remote: f.Remote, project: project, job: job.Metadata.Name, uid: job.Metadata.UID,
+	s := &artifactLogSink{remote: f.Remote, project: project, job: job.Metadata.Name,
 		chunkSize: f.ChunkSize, spoolLimit: f.SpoolLimit, flushInterval: f.FlushInterval,
 		retryMaxBackoff: f.RetryMaxBackoff, dir: dir, file: file, index: index, produced: info.Size(),
 		wake: make(chan struct{}, 1), done: make(chan struct{}), cancel: cancel}
@@ -184,7 +183,7 @@ func (s *artifactLogSink) Complete(ctx context.Context) (CompletedLog, error) {
 	last := s.nextSequence - 1
 	s.mu.Unlock()
 	key := s.job + "-log-complete"
-	result, err := s.completeWithRetry(ctx, key, CompleteLogInput{JobUID: s.uid, Stream: "combined", LastSequence: last, Size: size, SHA256: sum})
+	result, err := s.completeWithRetry(ctx, key, CompleteLogInput{Stream: "combined", LastSequence: last, Size: size, SHA256: sum})
 	if err != nil {
 		return CompletedLog{}, err
 	}
@@ -311,7 +310,7 @@ func (s *artifactLogSink) run(ctx context.Context) {
 func (s *artifactLogSink) appendWithRetry(ctx context.Context, seq int64, sum string, data []byte) error {
 	backoff := 200 * time.Millisecond
 	for {
-		_, err := s.remote.AppendLog(ctx, s.project, s.job, s.uid, seq, sum, data)
+		_, err := s.remote.AppendLog(ctx, s.project, s.job, seq, sum, data)
 		if err == nil {
 			return nil
 		}
@@ -338,7 +337,7 @@ func (s *artifactLogSink) appendWithRetry(ctx context.Context, seq int64, sum st
 func (s *artifactLogSink) statusWithRetry(ctx context.Context) (LogStatus, error) {
 	backoff := 200 * time.Millisecond
 	for {
-		status, err := s.remote.LogStatus(ctx, s.project, s.job, s.uid)
+		status, err := s.remote.LogStatus(ctx, s.project, s.job)
 		if err == nil {
 			return status, nil
 		}
@@ -440,7 +439,7 @@ func (s *artifactLogSink) writeCheckpointState(forcedState string) error {
 	if forcedState != "" {
 		state = forcedState
 	}
-	checkpoint := logUploadCheckpoint{SchemaVersion: 1, Project: s.project, JobName: s.job, JobUID: s.uid, Stream: "combined", NextSequence: s.nextSequence, ConfirmedOffset: s.uploaded, ProducedBytes: s.produced, State: state, UpdatedAt: time.Now().UTC()}
+	checkpoint := logUploadCheckpoint{SchemaVersion: 1, Project: s.project, JobName: s.job, Stream: "combined", NextSequence: s.nextSequence, ConfirmedOffset: s.uploaded, ProducedBytes: s.produced, State: state, UpdatedAt: time.Now().UTC()}
 	s.mu.Unlock()
 	data, err := json.Marshal(checkpoint)
 	if err != nil {

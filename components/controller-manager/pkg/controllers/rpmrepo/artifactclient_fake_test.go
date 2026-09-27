@@ -10,14 +10,14 @@ import (
 type FakeArtifactManager struct {
 	SubmitRepositoryFunc func(context.Context, CreateRepositoryRequest) (RepositoryResponse, error)
 	GetRepositoryFunc    func(context.Context, string) (RepositoryResponse, error)
-	GetJobManifestFunc   func(context.Context, string, string, string) (JobUploadManifest, error)
+	GetJobManifestFunc   func(context.Context, string, string) (JobUploadManifest, error)
 	SubmitReleaseFunc    func(context.Context, CreateReleaseRequest) (ReleaseResponse, error)
 	GetReleaseFunc       func(context.Context, string) (ReleaseResponse, error)
 	ActivateReleaseFunc  func(context.Context, string) (ReleaseResponse, error)
 
 	SubmitRepositoryRequests []CreateRepositoryRequest
 	GetRepositoryUIDs        []string
-	ManifestRequests         [][3]string
+	ManifestRequests         [][2]string
 	SubmitReleaseRequests    []CreateReleaseRequest
 	GetReleaseBuildNames     []string
 	ActivateReleaseNames     []string
@@ -41,13 +41,13 @@ func (f *FakeArtifactManager) GetRepository(ctx context.Context, repositoryUID s
 	return f.GetRepositoryFunc(ctx, repositoryUID)
 }
 
-func (f *FakeArtifactManager) GetJobManifest(ctx context.Context, project, jobName, jobUID string) (JobUploadManifest, error) {
-	f.ManifestRequests = append(f.ManifestRequests, [3]string{project, jobName, jobUID})
+func (f *FakeArtifactManager) GetJobManifest(ctx context.Context, project, jobName string) (JobUploadManifest, error) {
+	f.ManifestRequests = append(f.ManifestRequests, [2]string{project, jobName})
 	if f.GetJobManifestFunc == nil {
 		return JobUploadManifest{}, &artifactError{operation: "get-manifest", kind: artifactNotFound, code: "NotFound",
 			err: fmt.Errorf("no manifest configured for %s/%s", project, jobName)}
 	}
-	return f.GetJobManifestFunc(ctx, project, jobName, jobUID)
+	return f.GetJobManifestFunc(ctx, project, jobName)
 }
 
 func (f *FakeArtifactManager) SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {

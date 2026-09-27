@@ -350,11 +350,11 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 	}
 	consumed := make(map[string]struct{})
 	if repo.Status.Repository != nil {
-		for _, uid := range repo.Status.Repository.SourceJobNames {
-			consumed[uid] = struct{}{}
+		for _, name := range repo.Status.Repository.SourceJobNames {
+			consumed[name] = struct{}{}
 		}
-		for _, uid := range repo.Status.Repository.SkippedJobNames {
-			consumed[uid] = struct{}{}
+		for _, name := range repo.Status.Repository.SkippedJobNames {
+			consumed[name] = struct{}{}
 		}
 		if repo.Status.Repository.Transition != nil {
 			for _, input := range repo.Status.Repository.Transition.Inputs {
@@ -380,7 +380,6 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 			continue
 		}
 		scan.candidates = append(scan.candidates, candidate{
-			uid:       string(job.UID),
 			name:      job.Name,
 			specName:  specName,
 			createdAt: job.CreationTimestamp.UnixNano(),

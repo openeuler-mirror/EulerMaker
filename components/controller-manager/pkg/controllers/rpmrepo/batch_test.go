@@ -9,10 +9,10 @@ import (
 
 func TestSelectBatchKeepsOneJobPerSpecAndHonoursJobLimit(t *testing.T) {
 	candidates := []candidate{
-		{name: "job-d", uid: "4", specName: "glibc", createdAt: 4},
-		{name: "job-b", uid: "2", specName: "gcc", createdAt: 2},
-		{name: "job-c", uid: "3", specName: "kernel", createdAt: 3},
-		{name: "job-a", uid: "1", specName: "gcc", createdAt: 1},
+		{name: "job-d", specName: "glibc", createdAt: 4},
+		{name: "job-b", specName: "gcc", createdAt: 2},
+		{name: "job-c", specName: "kernel", createdAt: 3},
+		{name: "job-a", specName: "gcc", createdAt: 1},
 	}
 	selection := selectBatch(candidates, 2)
 	if len(selection) != 2 || selection[0].name != "job-a" || selection[1].name != "job-c" {
@@ -25,7 +25,7 @@ func TestSelectBatchKeepsOneJobPerSpecAndHonoursJobLimit(t *testing.T) {
 }
 
 func TestRepositoryUIDIsStableAndOrderIndependent(t *testing.T) {
-	base := []ebsv1.RepositoryInput{{JobName: "job-a", JobUID: "uid-a", SpecName: "gcc"}, {JobName: "job-b", JobUID: "uid-b", SpecName: "kernel"}}
+	base := []ebsv1.RepositoryInput{{JobName: "job-a", SpecName: "gcc"}, {JobName: "job-b", SpecName: "kernel"}}
 	first, err := repositoryUID("project", "build-a", "base-1", base)
 	if err != nil {
 		t.Fatalf("repositoryUID: %v", err)
@@ -36,12 +36,6 @@ func TestRepositoryUIDIsStableAndOrderIndependent(t *testing.T) {
 	}
 	if first != reordered {
 		t.Fatalf("repositoryUID must not depend on input order: %s != %s", first, reordered)
-	}
-	changedUIDs := append([]ebsv1.RepositoryInput(nil), base...)
-	changedUIDs[0].JobUID = "another-uid"
-	withoutUID, err := repositoryUID("project", "build-a", "base-1", changedUIDs)
-	if err != nil || withoutUID != first {
-		t.Fatalf("repositoryUID must depend on Job names, not UIDs: %s, %v", withoutUID, err)
 	}
 	if len(first) != 64 || strings.ToLower(first) != first {
 		t.Fatalf("repositoryUID must be a lowercase hex digest, got %q", first)
@@ -82,7 +76,7 @@ func TestUnionSortedNamesDeduplicatesAndSorts(t *testing.T) {
 }
 
 func TestRepositoryRequestsAreOrderedByJobName(t *testing.T) {
-	manifests := repositoryRequests([]ebsv1.RepositoryInput{{JobName: "job-b", JobUID: "uid-b"}, {JobName: "job-a", JobUID: "uid-a"}})
+	manifests := repositoryRequests([]ebsv1.RepositoryInput{{JobName: "job-b"}, {JobName: "job-a"}})
 	if len(manifests) != 2 || manifests[0].JobName != "job-a" || manifests[1].JobName != "job-b" {
 		t.Fatalf("repositoryRequests must order manifests by Job name, got %+v", manifests)
 	}

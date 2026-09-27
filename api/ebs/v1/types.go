@@ -256,9 +256,7 @@ type RpmRepo struct {
 type RpmRepoSpec struct{}
 
 type RepositoryInput struct {
-	JobName string `json:"jobName"`
-	// JobUID is retained for decoding older status objects; scheduling uses JobName.
-	JobUID   string `json:"jobUID,omitempty"`
+	JobName  string `json:"jobName"`
 	SpecName string `json:"specName"`
 }
 

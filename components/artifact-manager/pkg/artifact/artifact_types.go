@@ -23,7 +23,6 @@ type FailureInfo struct {
 	Code      string    `json:"code"`
 	Message   string    `json:"message"`
 	Retryable bool      `json:"retryable"`
-	JobUID    string    `json:"jobUID,omitempty"`
 	JobName   string    `json:"jobName,omitempty"`
 	Time      time.Time `json:"time"`
 }
@@ -32,7 +31,6 @@ type Artifact struct {
 	ID            string       `json:"id"`
 	Project       string       `json:"project"`
 	JobName       string       `json:"jobName"`
-	JobUID        string       `json:"jobUID"`
 	RunnerName    string       `json:"runnerName"`
 	Category      Category     `json:"category"`
 	Name          string       `json:"name,omitempty"`

@@ -14,7 +14,7 @@ import (
 func inFlightRepo() *ebsv1.RpmRepo {
 	repo := newRpmRepo(testBuild)
 	repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
-		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", JobUID: "uid-job-a", SpecName: "gcc"}},
+		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", SpecName: "gcc"}},
 		RepositoryUID: "next-1",
 	}
 	return repo
@@ -160,7 +160,7 @@ func TestReconcileBuildDoesNotReadManifestBeforeSubmission(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return JobUploadManifest{}, &artifactError{operation: "get-manifest", kind: artifactPermanent, code: "InvalidRequest"}
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -188,7 +188,7 @@ func TestReconcileBuildDefersReadyWithoutContentURL(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string, string) (JobUploadManifest, error) {
+	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
 		return completedManifest(100), nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {

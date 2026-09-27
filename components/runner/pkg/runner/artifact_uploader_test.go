@@ -17,7 +17,7 @@ type fakeArtifactRemote struct {
 	manifestErr error
 }
 
-func (f *fakeArtifactRemote) LogStatus(context.Context, string, string, string) (LogStatus, error) {
+func (f *fakeArtifactRemote) LogStatus(context.Context, string, string) (LogStatus, error) {
 	size := int64(12)
 	return LogStatus{State: "Completed", ArtifactID: "log-1", FinalSize: &size, FinalSHA256: "log-sha"}, nil
 }
@@ -27,7 +27,7 @@ func (f *fakeArtifactRemote) UploadArtifact(_ context.Context, project, job, _ s
 	defer f.mu.Unlock()
 	f.uploads = append(f.uploads, input)
 	return ArtifactRecord{
-		ID: "artifact-" + input.FileName, Project: project, JobName: job, JobUID: input.JobUID,
+		ID: "artifact-" + input.FileName, Project: project, JobName: job,
 		Category: input.Category, FileName: input.FileName, RelativePath: input.RelativePath,
 		ContentType: input.ContentType, Size: input.Size, SHA256: input.SHA256, State: "Completed",
 	}, nil
@@ -40,10 +40,10 @@ func (f *fakeArtifactRemote) CompleteManifest(_ context.Context, _, _ string, in
 	if f.manifestErr != nil {
 		return CompletedManifest{}, f.manifestErr
 	}
-	return CompletedManifest{JobUID: input.JobUID, State: "Completed", ArtifactCount: len(input.Files)}, nil
+	return CompletedManifest{State: "Completed", ArtifactCount: len(input.Files)}, nil
 }
 
-func (f *fakeArtifactRemote) GetManifest(context.Context, string, string, string) (CompletedManifest, error) {
+func (f *fakeArtifactRemote) GetManifest(context.Context, string, string) (CompletedManifest, error) {
 	return CompletedManifest{}, os.ErrNotExist
 }
 
@@ -67,7 +67,7 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("finalize artifacts: %v", err)
 	}
-	if manifest.JobUID != "uid-a" || manifest.ArtifactCount != 3 {
+	if manifest.ArtifactCount != 3 {
 		t.Fatalf("unexpected manifest: %#v", manifest)
 	}
 	remote.mu.Lock()
@@ -151,9 +151,6 @@ func TestArtifactCleanupUsesJobNameAcrossUIDChanges(t *testing.T) {
 	}
 	logDir := filepath.Join(root, "logs", "project", "job")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logDir, ".job-uid"), []byte("uid-2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(time.Hour)

@@ -198,7 +198,7 @@ func (s *Scheduler) finish(item *queue.QueuedJob, result *framework.CycleResult)
 		s.queue.Done(item)
 		return
 	}
-	log.Printf("jobKey=%s jobUID=%s runner=%s result=%s reason=%s", result.JobKey, result.JobUID, result.RunnerName, result.Code, result.Reason)
+	log.Printf("jobKey=%s runner=%s result=%s reason=%s", result.JobKey, result.RunnerName, result.Code, result.Reason)
 	if result.QueueAction == framework.QueueAddBackoff {
 		s.queue.AddBackoff(item, result.Err)
 	} else {

@@ -152,7 +152,7 @@ type ArtifactManagerClient interface {
     SubmitRepository(ctx context.Context, req CreateRepositoryRequest) (RepositoryResponse, error)
     GetRepository(ctx context.Context, repositoryUID string) (RepositoryResponse, error)
     // GetJobManifest 仅保留为客户端能力；选批与发布复核不调用。
-    GetJobManifest(ctx context.Context, project, jobName, jobUID string) (JobUploadManifest, error)
+    GetJobManifest(ctx context.Context, project, jobName string) (JobUploadManifest, error)
     // SubmitRelease 幂等：相同 buildName 与相同请求摘要是重试，不重复发布。
     SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseRecord, error)
     GetRelease(ctx context.Context, buildName string) (ReleaseRecord, error)
@@ -163,7 +163,7 @@ type ArtifactManagerClient interface {
 
 - `SubmitRepository` 对应 `POST /internal/v1/repositories`；
 - `GetRepository` 对应 `GET /internal/v1/repositories/{repositoryUID}`；
-- `GetJobManifest` 对应 `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest`；`jobUID` 参数仅为旧客户端兼容，服务端按 Job 名读取。
+- `GetJobManifest` 对应 `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest`，按 Project 和 Job 名读取。
 - `SubmitRelease` 对应 `POST /internal/v1/releases`；
 - `GetRelease` 对应 `GET /internal/v1/releases/{buildName}`；
 - `ActivateRelease` 对应 `POST /internal/v1/releases/{buildName}/activate`；

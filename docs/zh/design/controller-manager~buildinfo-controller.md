@@ -50,7 +50,7 @@ components/controller-manager/
       specdepends.go               # 步骤 0：specDepends 组装（查 specdcache + miss 补源调度：specFileCache 命中直用/git-server 下载）、unparsable_spec 覆盖、以 Build.spec.packages 选种子/下游扩散；single 指定包仓库集直通组装（见 7.2.3）
       dcg.go                       # DcgDict/DcgNode、Kosaraju SCC、SCC 剥离选点、运行期 install 补边（含新环追加破环）、DispatchRequirements
       cache.go                     # dcgDict 缓存（RWMutex + tombstone + sweeper）
-      jobs.go                      # createJobForSpec、syncSpecStatusFromJobs、多代 Job 排序、发布确认门禁（RpmRepo.sourceJobUIDs）
+      jobs.go                      # createJobForSpec、syncSpecStatusFromJobs、多代 Job 排序、发布确认门禁（RpmRepo.sourceJobNames）
       conditions.go                # condition upsert/清除
       metrics.go                   # build_info_controller_* 指标注册
 ```
@@ -364,7 +364,7 @@ E-28/E-29/E-30 统一采用：**停止派发 → 等待已有 Job 收敛 → Com
 2. 入口先排除不存在、删除中及终态对象，再执行 parentAbortGuard。发现停止标记后直接进入本路径，不再读取 Snapshot/RpmRepo/Config/build-target，不解析 spec、建图或补边；重启按持久化标记恢复，不重新计数。
 3. 按 ebs.io/build-name 完整分页 List 全部关联 Job，回填已有 spec 的最新 Job 状态。完成检查覆盖所有代际及构建集外的关联 Job，不只检查最新 Job；任一页失败不得使用部分结果或写 Completed，按 7.5 重试。
 4. 任一 Job 为 Pending/Running 或未知、空 phase 时继续等待，未知值记录告警。所有已创建 Job 均为 Succeeded/Failed/Aborted，且 `status.pendingJobCreates` 为空时，才写 Completed。未决创建按 6.5.1 确认，不能仅凭一次空 List 宣告完成；无 Job 且无未决创建时可完成。
-5. 不中止或删除已有 Job，不等待物化/sourceJobUIDs，不要求环内重建次数；未派发 spec 保留空状态，不伪造失败 Job。Completed 保留停止原因，不写 AllSpecsSucceeded；父 Build 在 Completed 后按 2.5 的 condition 契约收口。
+5. 不中止或删除已有 Job，不等待物化/sourceJobNames，不要求环内重建次数；未派发 spec 保留空状态，不伪造失败 Job。Completed 保留停止原因，不写 AllSpecsSucceeded；父 Build 在 Completed 后按 2.5 的 condition 契约收口。
 6. 等待期间仅有状态变化才 PUT，返回零值 + nil 等下一轮；不设等待超时，不将运行中的 Job 当作已完成。Completed 写入成功（含 Unknown 确认成功）后才清理缓存；写失败保留停止标记，下轮重新 List 判断。父 Build 中止/删除及 Project Terminating 仍优先按原规则写 Aborted，不属于本 Completed 路径。
 
 ### 6.5.1 未决创建的持久化与确认
@@ -650,7 +650,7 @@ repeat:                                                                   # 迭�
 **失败场景的两条放宽规则（G-03 例外）**：
 
 1. **重建取消（有效 required）**：定义 `effectiveRequired(S) = 1` 当 S 的任一直接上游（`inDep ∪ installInDep`）为 `Failed`，否则 `DispatchRequirements(S)`（环内 2 / 普通 1）。任一上游 Failed ⟹ S 的重建（第 2 次下发）取消、v1 即终——重建的目的是"基于上游最终产物重建"，Failed 上游不会再产出新产物，重建无意义；已 `Succeeded` 未达 required 的节点**不翻转 Failed**。allTerminal（6.4）、7.3 步骤 4 的"未达下发次数"判断、7.4.6 一致性门禁均按**有效 required** 判定。
-2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外，`jobName` 一并回写为最新一代 Job 名），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。**不采用"保持 `Succeeded` + 不覆盖 `jobName`"的原因**：重建下发时 `MarkDispatched` 已将 `jobName` 覆盖为重建 Job 名，回填时"不覆盖"保留的是**失败的重建 Job 名**而非前代 Succeeded Job 名——发布确认门禁（7.4.6）按最新一代 Job 的 UID 是否进入同名 RpmRepo `sourceJobUIDs` 判定将永久等待（失败 Job 永不被消费、永不入集）→ livelock。
+2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外，`jobName` 一并回写为最新一代 Job 名），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。**不采用"保持 `Succeeded` + 不覆盖 `jobName`"的原因**：重建下发时 `MarkDispatched` 已将 `jobName` 覆盖为重建 Job 名，回填时"不覆盖"保留的是**失败的重建 Job 名**而非前代 Succeeded Job 名——发布确认门禁（7.4.6）按最新一代 Job 的名称是否进入同名 RpmRepo `sourceJobNames` 判定将永久等待（失败 Job 永不被消费、永不入集）→ livelock。
 
 > **存量数据兼容**：`syncSpecStatusFromJobs` 回填时以 `DispatchCount = max(DispatchCount, 同 spec 现存 Job 数)` 兜底，旧数据（无 `dispatchCount` 字段）不会因 0 而误判重复下发或漏重建。
 
@@ -682,7 +682,7 @@ repeat:                                                                   # 迭�
    - ① **非破环节点的第 2+ 次下发**：必须等待全部上游均已完成其**有效 required** 次下发且处于 `Succeeded`（`upstreamsFullyDispatched`，有效 required 定义见 7.4.2——上游因自身上游 Failed 而取消重建时其有效 required=1，按 1 判定，否则该门禁永不能满足），保证重建基于上游重建后的最终产物，而非上游 bootstrap 的临时产物。
    - ② **环内节点的环外直接下游的首次下发**：直接上游含环内节点（cycleNodes 判定，build/install 边合并上游全集）的环外下游，首次下发即须等待其全部**环内上游**完成有效 required 次下发且 `Succeeded`（环外上游仍按正常门禁：终态 + 发布确认），保证环外下游基于环内上游重建后的最终产物构建，而非其 bootstrap 的临时产物 v1——环外下游不在环上，等待关系无环，不构成活锁。
    - 破环点自身的重建豁免——按定义它只能基于上游 v1 产物破环重建，若同样等待上游完成重建，环内节点互相等待形成活锁。
-2. **发布确认门禁**（适用**所有下发**，破环点重建下发**不**豁免）：下发前，**Succeeded 直接上游**（build/install 边合并后的上游全集，Failed 上游跳过——失败的 Job 永不被消费，不应等待）**最新一代 `Succeeded` Job** 的产物须已发布（`upstreamOutputsPublished`）：以同名 RpmRepo 的 **`status.repository.sourceJobUIDs`** 为发布凭据——Succeeded 上游最新一代 Job 的 `metadata.uid` ∈ 该集合即已发布（rpm-repo-controller 成功物化批次后一次 CAS 累计写入的已消费 Job UID 集合，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobUIDs」；物化与消费语义见 [artifact-manager.md](artifact-manager.md) 9.3.3）——凭据直接读取本轮 reconcile 已 GET 的同名 RpmRepo 对象（守卫获取、各检查点复用不重复 GET，见 15.4），目标 Job 为本轮已 list 的对象（15.3，UID 取 `metadata.uid`），无额外查询；任一 Succeeded 上游最新一代 Job 的 UID 不在集合中（rpm-repo-controller 尚未物化该批次）即视为未发布，跳过等待。Succeeded 上游产物物化失败（不可重试失败/重试预算耗尽，artifact-manager.md 9.3.3 第 4 条）**不构成永久等待**——rpmrepo-controller 同次写 `release.phase=Failed`，经 E-28 前置守卫将 BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`（`ReleaseFailed`）、父 Build 收口 Failed，等待由外部终态信号终止。破环点不豁免的原因：`sourceJobUIDs` 随批次只增不减、无计数互相等待，不构成活锁。install 边上游同样受门禁约束（install 依赖的兑现 = 上游 rpm 已合并入构建环境 RpmRepo）。凭据判定对象为 Succeeded 上游**最新一代 Job**（7.4.4 无"保持前代"例外回写；Succeeded spec 的最新一代 Job 即其 Succeeded Job；同批物化的 Job 同批入集——一批一 CAS 累计，artifact-manager.md 9.3.3 第 3 条）。best-effort 上游（末代重建 Job 失败，见 7.4.2/7.4.5）按 Failed 上游同样跳过——其 v1 产物的可用性由构建依赖统一存在性裁决（7.4.1 条件 2）承担（依赖已发布 → 照常下发），不经发布确认门禁，亦不构成等待。该门禁扩展至首次下发的意义：确保其后构建依赖统一存在性裁决（7.4.1 条件 2）不把"成功未合并"窗口内的依赖缺失误判为真缺失。
+2. **发布确认门禁**（适用**所有下发**，破环点重建下发**不**豁免）：下发前，**Succeeded 直接上游**（build/install 边合并后的上游全集，Failed 上游跳过——失败的 Job 永不被消费，不应等待）**最新一代 `Succeeded` Job** 的产物须已发布（`upstreamOutputsPublished`）：以同名 RpmRepo 的 **`status.repository.sourceJobNames`** 为发布凭据——Succeeded 上游最新一代 Job 的 `metadata.name` ∈ 该集合即已发布（rpm-repo-controller 成功物化批次后一次 CAS 累计写入的已消费 Job 名称集合，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」；物化与消费语义见 [artifact-manager.md](artifact-manager.md) 9.3.3）——凭据直接读取本轮 reconcile 已 GET 的同名 RpmRepo 对象（守卫获取、各检查点复用不重复 GET，见 15.4），目标 Job 为本轮已 list 的对象（15.3，名称取 `metadata.name`），无额外查询；任一 Succeeded 上游最新一代 Job 的名称不在集合中（rpm-repo-controller 尚未物化该批次）即视为未发布，跳过等待。Succeeded 上游产物物化失败（不可重试失败/重试预算耗尽，artifact-manager.md 9.3.3 第 4 条）**不构成永久等待**——rpmrepo-controller 同次写 `release.phase=Failed`，经 E-28 前置守卫将 BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`（`ReleaseFailed`）、父 Build 收口 Failed，等待由外部终态信号终止。破环点不豁免的原因：`sourceJobNames` 随批次只增不减、无计数互相等待，不构成活锁。install 边上游同样受门禁约束（install 依赖的兑现 = 上游 rpm 已合并入构建环境 RpmRepo）。凭据判定对象为 Succeeded 上游**最新一代 Job**（7.4.4 无"保持前代"例外回写；Succeeded spec 的最新一代 Job 即其 Succeeded Job；同批物化的 Job 同批入集——一批一 CAS 累计，artifact-manager.md 9.3.3 第 3 条）。best-effort 上游（末代重建 Job 失败，见 7.4.2/7.4.5）按 Failed 上游同样跳过——其 v1 产物的可用性由构建依赖统一存在性裁决（7.4.1 条件 2）承担（依赖已发布 → 照常下发），不经发布确认门禁，亦不构成等待。该门禁扩展至首次下发的意义：确保其后构建依赖统一存在性裁决（7.4.1 条件 2）不把"成功未合并"窗口内的依赖缺失误判为真缺失。
 3. **bootstrap 豁免门禁**（破环点首次下发专属，挂载于 `initBuildInfo` 步骤 4；**含运行期 install 补边追加的破环点，及因 RpmRepo 依赖待定未能在 init 步骤 4 下发、而 BuildInfo 已随步骤 5 预建进入 Processing 的初始破环点残留**——两者的 bootstrap 下发均发生在 `advanceBuildInfo` 步骤 4（7.3），豁免语义完全相同，判据统一为 `BootstrapBreak` 标记且 `DispatchCount=0`，否则该残留会因上游非终态被步骤 4 跳过成为死点）：破环点 bootstrap 下发时**无视全部上游入度依赖**（build/install 边合并上游全集，cycleNodes 环内上游与非环上游一律同规则）——上游终态检查与发布确认门禁**全部跳过**（不等任何上游构建/发布，此为破环语义本身；`upstreamsFullyDispatched`/`upstreamOutputsPublished` 均不判），**唯一保留门禁为构建依赖统一存在性校验（7.4.1 条件 2）**——对破环点全部 `buildRequires`（剔除 `buildRemoves`，**不再区分环内/环外依赖**）逐项经两阶段匹配判依赖满足性：依赖在 RpmMetaSources 分层缓存可查且版本约束满足（RpmRepo 层先行——含增量轮 contentURL 指向的继承版本上轮产物；未命中时 BootstrapRepo 层按声明顺序兜底，见 15.10）→ 照常创建 bootstrap Job（`DispatchCount` 0 → 1）；**RpmRepo 就绪但依赖缺失或版本不满足 → specStatus[spec] 标 `Failed`（`BuildFailed`/`RpmDependsMissing`，message 记缺失依赖名），不创建 Job、不等待不重试**——破环点 bootstrap 基于当前 RpmRepo 内容构建，依赖不在仓库则 Job 必然失败，落确定性终态优于下发必败 Job；其下游（环内/环外）经 E-17 自判逐跳传导（各自依赖存在性裁决）。RpmRepo 不存在/查询失败/XML 下载解析失败 → 视为待定，本轮跳过 bootstrap 等待下一轮重入（7.4.1 条件 2 语义，不误标 Failed；contentURL 为空为正常空态——RpmRepo 层空数据源、仅 BootstrapRepo 层裁决，不构成待定，见 7.4.1 条件 2）。运行期追加的破环点若已下发过（`DispatchCount=1`）→ required 升 2 后经正常推进门禁（第 1/2 条）再下发一次，不再适用 bootstrap 豁免。
 
 > **为什么需要发布确认门禁**：RpmRepo 层 XML 元数据仅覆盖 `contentURL` 指向的**当前已发布物理版本**，"Job `Succeeded` 但产物尚未物化为当前版本（contentURL 未提升，XML 中无该条目）"是异步发布竞态，若仅凭 Job 终态放行重建，重建 Job 会在依赖未兑现的环境中运行。
@@ -1249,10 +1249,9 @@ status:                                             # 创建时恒 Pending/Pendi
 |------|--------|
 | `metadata.labels["ebs.io/spec-name"]` | 归组 key；缺失或指向本轮构建集外 spec（init 轮 = 步骤 0 构建集外、Processing 轮 = `specStatus` 键集外；specDepends 为超集不作基准）→ 跳过该 Job（E-05，仅日志） |
 | `metadata.creationTimestamp` | 多代 Job 排序键主键：`metav1.Time` 直接比较（零值按最早），apiserver 创建时写入，恒非空且单调（见 7.4.4） |
-| `metadata.name` | 排序键次键（并列时字典序最大）；回写 `specStatus[spec].Build.JobName`；失败 condition message 记录该名 |
+| `metadata.name` | 排序键次键（并列时字典序最大）；回写 `specStatus[spec].Build.JobName`；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
 | `status.phase` | 经 7.4.5 映射回写 `build.status`；`Pending` 无映射 → 强制 `Running`（不得沿用上一代终态） |
 | `status.message` | install 失败缺失依赖 JSON（runner 在 install 校验失败时写入，结构见 7.4.7）→ 解析回填 `specStatus[spec].install`（`phase=Succeeded` 时判定；解析失败不改写）；其余内容不按 install 语义消费 |
-| `metadata.uid` | 发布确认门禁成员判定（7.4.6，凭据为同名 RpmRepo `status.repository.sourceJobUIDs`，见 15.4）：Succeeded 直接上游最新一代 Job（7.4.4 目标 Job）UID ∈ 该集合 → 已发布；不在 → 未发布等待下一轮；失败 Job 永不入集（见 7.4.6） |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
 | `status.stage` / `runner` / `endTime` / `resultRoot` / `restartCount` | 不消费 |
 
@@ -1263,10 +1262,10 @@ status:                                             # 创建时恒 Pending/Pendi
 | 字段 | Go 类型 | 消费点 |
 |------|------|--------|
 | `status.repository.contentURL` | string | 本轮当前已发布物理版本地址（rpm-repo-controller 版本提升时更新；增量轮创建即指向继承版本）：Job payload `repo` 注入来源之一（非空时注入并置首；首轮/全量构建首批 Job 创建时为空即省略，见 15.3.1）；亦为 RpmMeta 内存缓存 RpmRepo 层的 XML 下载源（15.10）；`single` 的 `repo` 注入来源为本轮同名 RpmRepo 的本字段（继承基线，见 7.2.3 第 3 条） |
-| `status.repository.repositoryUID` | string | 当前物理版本标识（溯源；初始内容继承自上一轮已发布版本时为该版本 UID）；本控制器不做发布判定依据（发布判据为 `sourceJobUIDs`，见下行） |
-| `status.repository.sourceJobUIDs` | []string | **发布确认门禁凭据**（7.4.6 第 2 条）：本对象已成功消费的累计 Job UID 集合（rpm-repo-controller 成功物化批次后一次 CAS 累计写入，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobUIDs」）——Succeeded 直接上游最新一代 Job 的 `metadata.uid` ∈ 本集合 → 已发布；不在 → 未发布等待下一轮（15.3.2 `metadata.uid`）；对象读取自本轮 reconcile 守卫已 GET 的同名 RpmRepo（各检查点复用不重复 GET），无额外查询 |
+| `status.repository.repositoryUID` | string | 当前物理版本标识（溯源；初始内容继承自上一轮已发布版本时为该版本 UID）；本控制器不做发布判定依据（发布判据为 `sourceJobNames`，见下行） |
+| `status.repository.sourceJobNames` | []string | **发布确认门禁凭据**（7.4.6 第 2 条）：本对象已成功消费的累计 Job 名称集合（rpm-repo-controller 成功物化批次后一次 CAS 累计写入，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」）——Succeeded 直接上游最新一代 Job 的 `metadata.name` ∈ 本集合 → 已发布；不在 → 未发布等待下一轮（15.3.2 `metadata.name`）；对象读取自本轮 reconcile 守卫已 GET 的同名 RpmRepo（各检查点复用不重复 GET），无额外查询 |
 | `status.release.phase` | string | reconcile 前置守卫（7.1）判定正式发布失败：值为 `Failed`（稳定终态，E-28）→ 按 6.5 停止派发，等待已有 Job 全部终态后写 `Completed`；其余取值（含 `release` 缺失——整个 `release` 结构为 nil，如尚未进入发布流程）不触发、正常推进；`single` 不查询（7.2.3）。`release` 其余字段（`contentURL` 稳定入口等）不消费（属 Build Controller 消费域） |
-| `status.conditions` | []metav1.Condition | 不消费（发布凭据为 `status.repository.sourceJobUIDs`，见 7.4.6/上行） |
+| `status.conditions` | []metav1.Condition | 不消费（发布凭据为 `status.repository.sourceJobNames`，见 7.4.6/上行） |
 
 `RpmMeta` 字段语义（version/specName/provides/requires 各消费点）与 XML 解析规则见 15.10（RpmRepo 不存储 RpmMeta 数据——本控制器经 15.10 自行下载解析仓库 XML 生成）。
 
@@ -1724,7 +1723,7 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 
 **BI-01：成功 Job 的产物不可用时，下游收敛策略待定。**
 
-- **触发场景**：上游 Job 为 Succeeded，但 Artifact Manager 的 Manifest 返回 404 或 Failed；RpmRepo Controller 跳过该输入，不将其 UID 纳入 `sourceJobUIDs`，也未提供可供 BuildInfo Controller 消费的产物不可用结果。
+- **触发场景**：上游 Job 为 Succeeded，但 Artifact Manager 的 Manifest 返回 404 或 Failed；RpmRepo Controller 跳过该输入，不将其名称 纳入 `sourceJobNames`，也未提供可供 BuildInfo Controller 消费的产物不可用结果。
 - **当前行为与影响**：仍按 7.4.6 发布确认门禁等待，不自动放行或判定下游失败。依赖该产物的下游可能永久无法派发，进而阻塞 BuildInfo Completed 与后续发布；当前不保证该异常场景自动收敛，需人工排查、处置。
 - **后续待定**：由 RpmRepo Controller 暴露产物不可用结果，或由 BuildInfo Controller 查询 Manifest；再明确下游失败或降级策略，并补充跨组件契约及集成测试。
 - **范围**：作为后续事项跟踪，不阻塞当前版本主体开发；本版不增加 Manifest 查询、等待超时或自动降级逻辑。

@@ -12,7 +12,6 @@ import (
 
 // candidate is one succeeded Job eligible for materialization; its manifest is checked by Artifact Manager.
 type candidate struct {
-	uid       string
 	name      string
 	specName  string
 	createdAt int64

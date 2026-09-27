@@ -15,7 +15,7 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 				RepositoryUID: "base", ContentURL: "/repositories/v1/base/",
 				Transition: &ebsv1.RepositoryTransition{
 					RepositoryUID: "next", BaseRepositoryUID: "base",
-					Inputs: []ebsv1.RepositoryInput{{JobName: "job", JobUID: "uid", SpecName: "spec"}},
+					Inputs: []ebsv1.RepositoryInput{{JobName: "job", SpecName: "spec"}},
 				},
 			},
 		}}
