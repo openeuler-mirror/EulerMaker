@@ -89,6 +89,25 @@ export interface Build {
     startTime?: string;
     endTime?: string;
     baseBuildRef?: { name?: string };
+    conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
+  };
+}
+
+export interface BuildInfo {
+  metadata?: ObjectMeta;
+  spec?: {
+    buildPayload?: string;
+    bootstrapRepo?: BootstrapRepo[];
+  };
+  status?: {
+    phase?: string;
+    failedPackages?: string[];
+    specStatus?: Record<string, {
+      build?: { status?: string };
+      install?: { status?: string };
+      dispatchCount?: number;
+    }>;
+    conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
   };
 }
 

@@ -6,6 +6,7 @@ import { defineConfig, loadEnv } from "vite";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const gateway = env.VITE_EULERMAKER_GATEWAY || "http://localhost:8080";
+  const artifactManager = env.VITE_EULERMAKER_ARTIFACT_MANAGER || "http://localhost:8081";
 
   return {
     plugins: [vue()],
@@ -19,6 +20,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "/apis": { target: gateway, changeOrigin: true },
         "/auth": { target: gateway, changeOrigin: true },
+        "/artifacts": { target: artifactManager, changeOrigin: true },
       },
     },
   };

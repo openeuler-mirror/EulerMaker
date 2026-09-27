@@ -34,12 +34,6 @@
     </nav>
 
     <section v-if="activeTab === 'overview'" id="project-panel-overview" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-overview">
-      <section class="metrics compact resource-metrics" :aria-label="t('project.overview')">
-        <article class="metric-card"><div class="metric-icon violet"><Operation /></div><div><span>{{ t("project.builds") }}</span><strong>{{ resourceValue(builds) }}</strong><small>{{ t("project.buildsHint") }}</small></div></article>
-        <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong>{{ resourceValue(jobs) }}</strong><small>{{ t("project.jobsHint") }}</small></div></article>
-      </section>
-
-      <ProjectJobs :project="project.metadata?.name || ''" :can-abort="canAbortJobs" />
       <section class="detail-grid">
         <article class="content-panel">
           <div class="section-heading"><div><h2>{{ t("project.info") }}</h2></div></div>
@@ -51,18 +45,11 @@
           </dl>
         </article>
 
-        <article class="content-panel">
-          <div class="section-heading"><div><h2>{{ t("project.recentBuilds") }}</h2></div><button v-if="builds.length" class="text-button" type="button" @click="selectTab('builds')">{{ t("project.viewAllBuilds") }}</button></div>
-          <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('project.loadingResources')"><span v-for="item in 4" :key="item"></span></div>
-          <div v-else-if="resourcesError" class="inline-error compact-error"><WarningFilled /><span>{{ resourcesError }}</span></div>
-          <EmptyState v-else-if="!builds.length" :title="t('project.emptyBuilds')" :description="t('project.emptyBuildsHint')" />
-          <div v-else class="activity-list">
-            <div v-for="build in builds.slice(0, 6)" :key="build.metadata?.name" class="activity-row">
-              <div><strong>{{ build.metadata?.name }}</strong><small>{{ build.spec?.buildType || t("project.unspecifiedType") }} · {{ formatDate(build.status?.startTime) }}</small></div>
-              <StatusBadge :value="build.status?.phase" />
-            </div>
-          </div>
-        </article>
+        <section class="project-overview-cards" :aria-label="t('project.overview')">
+          <article class="metric-card"><div class="metric-icon violet"><Operation /></div><div><span>{{ t("project.builds") }}</span><strong>{{ resourcesLoading || buildTotalCount === null ? t("common.emptyValue") : buildTotalCount }}</strong><small>{{ t("project.buildsHint") }}</small></div></article>
+          <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong>{{ resourcesLoading || nonTerminalJobCount === null ? t("common.emptyValue") : nonTerminalJobCount }}</strong><small>{{ t("project.jobsHint") }}</small></div></article>
+          <div v-if="resourcesError" class="inline-error compact-error"><WarningFilled /><span>{{ resourcesError }}</span></div>
+        </section>
       </section>
 
       <div :class="['project-packages-layout', { 'has-selection': selectedPackageName }]">
@@ -101,7 +88,7 @@
           <p v-else-if="!packageHistoryJobs.length" class="config-empty">{{ t("project.noPackageJobs") }}</p>
           <div v-else class="package-job-list">
             <div v-for="job in packageHistoryJobs" :key="job.metadata?.name" class="package-job-item">
-              <div class="package-job-heading"><strong>{{ job.metadata?.name }}</strong><StatusBadge :value="job.status?.phase" /></div>
+              <div class="package-job-heading"><RouterLink v-if="job.metadata?.name" class="job-name-link" :to="{ name: 'job-logs', params: { name, job: job.metadata.name } }" :aria-label="t('jobLog.open', { name: job.metadata.name })">{{ job.metadata.name }}</RouterLink><StatusBadge :value="job.status?.phase" /></div>
               <span>{{ job.metadata?.labels?.["ebs.io/target-os"] || t("common.emptyValue") }} · {{ job.metadata?.labels?.["ebs.io/target-arch"] || t("common.emptyValue") }}</span>
               <time>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</time>
             </div>
@@ -117,34 +104,48 @@
       <EmptyState v-else-if="!builds.length" :title="t('project.emptyBuilds')" :description="t('project.emptyBuildsHint')" />
       <div v-else class="build-history-layout">
         <article class="content-panel build-history-list-panel">
-          <div class="section-heading"><div><h2>{{ t("project.buildHistory") }}</h2></div><span>{{ t("common.count", { count: builds.length }) }}</span></div>
+          <div class="section-heading"><div><h2>{{ t("project.buildHistory") }}</h2></div><span>{{ t("common.count", { count: buildTotalCount ?? builds.length }) }}</span></div>
+          <div v-if="buildPageErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(buildPageErrorKey) }}</span><button type="button" :disabled="buildPageLoading" @click="loadBuildPage(buildPageTokens[buildCurrentPage - 1] || '', buildCurrentPage)">{{ t('common.reload') }}</button></div>
           <div class="build-history-list">
             <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
               <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
-                <span class="build-history-item-heading"><strong>{{ build.metadata?.name }}</strong><StatusBadge :value="build.status?.phase" /></span>
+                <span class="build-history-item-heading"><strong>{{ build.metadata?.name }}</strong><StatusBadge :value="buildDisplayStatus(build)" /></span>
                 <small>{{ build.spec?.buildType || t("project.unspecifiedType") }} · {{ buildTargetLabel(build) }}</small>
                 <time>{{ formatDate(build.status?.startTime) }}</time>
               </button>
               <button v-if="canAbortBuild(build)" class="build-history-abort" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
             </div>
           </div>
+          <div class="table-footer">
+            <div class="page-summary">
+              <AppSelect :model-value="String(buildPageSize)" :options="buildPageSizes.map(size => ({ value: String(size), label: t('common.itemsPerPage', { count: size }) }))" :label="t('common.perPage')" compact @change="changeBuildPageSize" />
+              <nav class="pagination-row" :aria-label="t('common.pagination')">
+                <button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="buildCurrentPage === 1 || buildPageLoading" @click="goToBuildPage(buildCurrentPage - 1)"><ArrowLeft /></button>
+                <span class="page-button active" aria-current="page">{{ buildCurrentPage }} / {{ buildTotalPages }}</span>
+                <button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="!buildNextToken || buildPageLoading" @click="goToBuildPage(buildCurrentPage + 1)"><ArrowRight /></button>
+              </nav>
+            </div>
+          </div>
         </article>
 
-        <article class="content-panel build-detail-panel">
-          <template v-if="selectedBuild">
-            <div class="section-heading"><div><h2>{{ selectedBuild.metadata?.name }}</h2><p>{{ t("project.buildDetailHint") }}</p></div><StatusBadge :value="selectedBuild.status?.phase" /></div>
-            <dl class="detail-list build-detail-list">
-              <div><dt>{{ t("project.buildType") }}</dt><dd>{{ selectedBuild.spec?.buildType || t("project.unspecifiedType") }}</dd></div>
-              <div><dt>{{ t("project.buildTarget") }}</dt><dd>{{ buildTargetLabel(selectedBuild) }}</dd></div>
-              <div><dt>{{ t("project.stage") }}</dt><dd>{{ selectedBuild.status?.stage || t("common.emptyValue") }}</dd></div>
-              <div><dt>{{ t("project.startedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.startTime) }}</dd></div>
-              <div><dt>{{ t("project.finishedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.endTime) }}</dd></div>
-              <div><dt>{{ t("project.baseBuild") }}</dt><dd>{{ baseBuildLabel(selectedBuild) }}</dd></div>
-            </dl>
-            <section class="build-detail-section"><h3>{{ t("project.packages") }}</h3><div v-if="selectedBuild.spec?.packages?.length" class="value-chip-list"><code v-for="item in selectedBuild.spec.packages" :key="item">{{ item }}</code></div><p v-else>{{ t("project.noPackages") }}</p></section>
-          </template>
-          <EmptyState v-else :title="t('project.selectBuild')" :description="t('project.selectBuildHint')" />
-        </article>
+        <div class="build-history-detail-column">
+          <BuildInfoPanel v-if="selectedBuild" :project="name" :build-name="selectedBuildName" :can-abort-jobs="canAbortJobs" />
+          <article class="content-panel build-detail-panel">
+            <template v-if="selectedBuild">
+              <div class="section-heading"><div><h2>{{ selectedBuild.metadata?.name }}</h2><p>{{ t("project.buildDetailHint") }}</p></div><StatusBadge :value="buildDisplayStatus(selectedBuild)" /></div>
+              <dl class="detail-list build-detail-list">
+                <div><dt>{{ t("project.buildType") }}</dt><dd>{{ selectedBuild.spec?.buildType || t("project.unspecifiedType") }}</dd></div>
+                <div><dt>{{ t("project.buildTarget") }}</dt><dd>{{ buildTargetLabel(selectedBuild) }}</dd></div>
+                <div><dt>{{ t("project.stage") }}</dt><dd>{{ selectedBuild.status?.stage || t("common.emptyValue") }}</dd></div>
+                <div><dt>{{ t("project.startedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.startTime) }}</dd></div>
+                <div><dt>{{ t("project.finishedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.endTime) }}</dd></div>
+                <div><dt>{{ t("project.baseBuild") }}</dt><dd>{{ baseBuildLabel(selectedBuild) }}</dd></div>
+              </dl>
+              <section class="build-detail-section"><h3>{{ t("project.packages") }}</h3><div v-if="selectedBuild.spec?.packages?.length" class="value-chip-list"><code v-for="item in selectedBuild.spec.packages" :key="item">{{ item }}</code></div><p v-else>{{ t("project.noPackages") }}</p></section>
+            </template>
+            <EmptyState v-else :title="t('project.selectBuild')" :description="t('project.selectBuildHint')" />
+          </article>
+        </div>
       </div>
     </section>
 
@@ -350,7 +351,7 @@ import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
-import ProjectJobs from "@/components/ProjectJobs.vue";
+import BuildInfoPanel from "@/components/BuildInfoPanel.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
 import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
@@ -367,7 +368,17 @@ const name = computed(() => String(route.params.name || ""));
 const project = ref<Project | null>(null);
 const builds = ref<Build[]>([]);
 const selectedBuildName = ref("");
-const jobs = ref<Job[]>([]);
+const buildPageSizes = [10, 20, 50] as const;
+const buildPageSize = ref<number>(20);
+const buildCurrentPage = ref(1);
+const buildPageTokens = ref<string[]>([""]);
+const buildNextToken = ref("");
+const buildTotalCount = ref<number | null>(null);
+const buildTotalPages = computed(() => Math.max(1, Math.ceil((buildTotalCount.value ?? 0) / buildPageSize.value)));
+const buildPageLoading = ref(false);
+const buildPageErrorKey = ref("");
+let buildLoadSequence = 0;
+const nonTerminalJobCount = ref<number | null>(null);
 const loadingProject = ref(true);
 const resourcesLoading = ref(true);
 const projectErrorKey = ref("");
@@ -496,6 +507,15 @@ const memberUsernames = computed(() =>
 );
 const selectedBuild = computed(() => builds.value.find((build) => build.metadata?.name === selectedBuildName.value) || null);
 
+function buildDisplayStatus(build: Build): string | undefined {
+  const phase = build.status?.phase;
+  if (build.spec?.buildType !== "single" || !["Skipped", "Success", "Failed"].includes(phase || "")) return phase;
+  const result = build.status?.conditions?.find((condition) => condition.type === "BuildSucceed")?.status;
+  if (result === "True") return "Success";
+  if (result === "False") return "Failed";
+  return phase;
+}
+
 function canAbortBuild(build: Build): boolean {
   return canStartBuild.value && Boolean(build.metadata?.name) && ["Pending", "Prepared", "Processing"].includes(build.status?.phase || "");
 }
@@ -566,22 +586,90 @@ async function loadProject(): Promise<void> {
 
 async function loadResources(): Promise<void> {
   resourcesLoading.value = true;
+  nonTerminalJobCount.value = null;
+  resetBuildPagination();
   const base = `/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`;
   const results = await Promise.allSettled([
-    list<Build>(`${base}/builds?limit=100`),
-    list<Job>(`${base}/jobs?limit=20`),
+    loadBuildPage("", 1),
+    countNonTerminalJobs(base),
   ]);
-  if (results[0].status === "fulfilled") {
-    builds.value = results[0].value.items;
+  if (results[1].status === "fulfilled") nonTerminalJobCount.value = results[1].value;
+  resourceFailureCount.value = Number(results[0].status === "rejected" || !results[0].value) + Number(results[1].status === "rejected");
+  resourcesLoading.value = false;
+}
+
+function resetBuildPagination(): void {
+  buildLoadSequence += 1;
+  buildCurrentPage.value = 1;
+  buildPageTokens.value = [""];
+  buildNextToken.value = "";
+  buildTotalCount.value = null;
+  buildPageErrorKey.value = "";
+}
+
+async function loadBuildPage(token: string, page: number): Promise<boolean> {
+  const sequence = ++buildLoadSequence;
+  buildPageLoading.value = true;
+  buildPageErrorKey.value = "";
+  const query = new URLSearchParams({ limit: String(buildPageSize.value) });
+  if (token) query.set("continue", token);
+  try {
+    const result = await list<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds?${query}`);
+    if (sequence !== buildLoadSequence) return false;
+    builds.value = result.items;
+    buildCurrentPage.value = page;
+    buildPageTokens.value[page - 1] = token;
+    buildNextToken.value = result.next;
+    if (result.next) buildPageTokens.value[page] = result.next;
+    else buildPageTokens.value = buildPageTokens.value.slice(0, page);
+    buildTotalCount.value = (page - 1) * buildPageSize.value + result.items.length + (result.remaining ?? 0);
     if (!builds.value.some((build) => build.metadata?.name === selectedBuildName.value)) {
       selectedBuildName.value = builds.value[0]?.metadata?.name || "";
     }
+    buildLoadFailed.value = false;
+    return true;
+  } catch (error) {
+    if (sequence !== buildLoadSequence) return false;
+    if (token && error instanceof ApiError && error.status === 400) {
+      resetBuildPagination();
+      return loadBuildPage("", 1);
+    }
+    buildPageErrorKey.value = errorTranslationKey(error, "errors.loadBuilds");
+    buildLoadFailed.value = !builds.value.length;
+    return false;
+  } finally {
+    if (sequence === buildLoadSequence) buildPageLoading.value = false;
   }
-  if (results[1].status === "fulfilled") jobs.value = results[1].value.items;
-  const failures = results.filter((item) => item.status === "rejected");
-  buildLoadFailed.value = results[0].status === "rejected";
-  resourceFailureCount.value = failures.length;
-  resourcesLoading.value = false;
+}
+
+function changeBuildPageSize(value: string): void {
+  buildPageSize.value = Number(value);
+  resetBuildPagination();
+  void loadBuildPage("", 1);
+}
+
+function goToBuildPage(page: number): void {
+  if (buildPageLoading.value || page < 1 || page === buildCurrentPage.value) return;
+  const token = buildPageTokens.value[page - 1];
+  if (token === undefined || (page > buildCurrentPage.value && !buildNextToken.value)) return;
+  void loadBuildPage(token, page);
+}
+
+async function countNonTerminalJobs(base: string): Promise<number> {
+  const countPhase = async (phase: "Pending" | "Running"): Promise<number> => {
+    let total = 0;
+    let cursor = "";
+    do {
+      const query = new URLSearchParams({ limit: "100", fieldSelector: `status.phase=${phase}` });
+      if (cursor) query.set("continue", cursor);
+      const page = await list<Job>(`${base}/jobs?${query}`);
+      total += page.items.length;
+      cursor = page.next;
+    } while (cursor);
+    return total;
+  };
+  const [pending, running] = await Promise.all([countPhase("Pending"), countPhase("Running")]);
+  return pending + running;
 }
 
 function selectTab(tab: ProjectTab): void {
@@ -1197,10 +1285,6 @@ function fallbackCopy(value: string): void {
   const copied = document.execCommand("copy");
   input.remove();
   if (!copied) throw new Error("copy failed");
-}
-
-function resourceValue(items: unknown[]): string | number {
-  return resourcesLoading.value ? t("common.emptyValue") : items.length;
 }
 
 function buildTargetLabel(build: Build): string {
