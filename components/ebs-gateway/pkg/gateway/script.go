@@ -22,7 +22,7 @@ func authorizeScript(r *http.Request, ident Identity) (authzDecision, error) {
 		}
 	case http.MethodPost:
 		allowed = len(parts) == 1 && privileged
-	case http.MethodPut, http.MethodPatch:
+	case http.MethodPut, http.MethodPatch, http.MethodDelete:
 		allowed = len(parts) == 2 && privileged
 	}
 	if !allowed {

@@ -119,7 +119,7 @@ func TestScriptHTTP(t *testing.T) {
 	call("PATCH", "/scripts/rpmbuild", `{"metadata":{"name":"other"}}`, "application/merge-patch+json", 400)
 	call("PATCH", "/scripts/rpmbuild", `{"spec":{"content":null}}`, "application/merge-patch+json", 422)
 	call("POST", "/scripts", strings.Repeat(" ", maxScriptRequestSize+1), "application/json", 413)
-	call("DELETE", "/scripts/rpmbuild", "", "application/json", 405)
+	call("DELETE", "/scripts/rpmbuild", "", "application/json", 400)
 	call("GET", "/scripts/rpmbuild/status", "", "application/json", 404)
 	call("GET", "/projects/demo/scripts", "", "application/json", 404)
 	call("GET", "/scripts?watch=true", "", "application/json", 400)
@@ -131,8 +131,82 @@ func TestScriptHTTP(t *testing.T) {
 		t.Fatalf("rejected requests persisted data: writes=%d", writes)
 	}
 	for _, route := range container.RegisteredWebServices()[0].Routes() {
-		if route.Method == "DELETE" || strings.Contains(route.Path, "/status") || strings.Contains(route.Path, "/projects/") {
+		if route.Method == "DELETE" && route.Path != "/apis/ebs/v1/scripts/{name}" || strings.Contains(route.Path, "/status") || strings.Contains(route.Path, "/projects/") {
 			t.Fatalf("unexpected route %+v", route)
 		}
 	}
+}
+
+func TestScriptDelete(t *testing.T) {
+	for _, name := range []string{"custom", "rpmbuild"} {
+		t.Run(name, func(t *testing.T) { testScriptDelete(t, name) })
+	}
+}
+
+func testScriptDelete(t *testing.T, name string) {
+	t.Helper()
+	var document json.RawMessage
+	var seq int64
+	deletes := 0
+	client := es.NewClientForTesting("http://es", &http.Client{Transport: confTransport(func(r *http.Request) (*http.Response, error) {
+		code := 200
+		var body any
+		if r.URL.Path != "/ebs-scripts/_doc/"+name {
+			t.Fatalf("unexpected ES path %s", r.URL.Path)
+		}
+		switch r.Method {
+		case http.MethodGet:
+			if document == nil {
+				code, body = 404, map[string]any{"found": false}
+			} else {
+				body = map[string]any{"_id": name, "_seq_no": seq, "_primary_term": 1, "_source": document}
+			}
+		case http.MethodPut:
+			document, _ = io.ReadAll(r.Body)
+			seq++
+			body = map[string]any{"_seq_no": seq, "_primary_term": 1}
+		case http.MethodDelete:
+			deletes++
+			document = nil
+			body = map[string]any{"result": "deleted"}
+		default:
+			t.Fatalf("unexpected ES method %s", r.Method)
+		}
+		data, _ := json.Marshal(body)
+		return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data))}, nil
+	})})
+	container := restful.NewContainer()
+	container.Add(new(restful.WebService).Path("/apis/ebs/v1").Produces(restful.MIME_JSON))
+	if err := installScriptRoutes(container, newScriptStore(client)); err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body string, want int) *ebsv1.Script {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(method, "/apis/ebs/v1"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		container.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Fatalf("%s %s: status=%d want=%d body=%s", method, path, rec.Code, want, rec.Body.String())
+		}
+		obj := new(ebsv1.Script)
+		if want < 300 {
+			if err := json.Unmarshal(rec.Body.Bytes(), obj); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return obj
+	}
+	obj := call("POST", "/scripts", `{"metadata":{"name":"`+name+`"},"spec":{"content":"#!/bin/sh\necho custom\n"}}`, 201)
+	call("DELETE", "/scripts/"+name, `{}`, 400)
+	call("DELETE", "/scripts/"+name, `{"preconditions":{"uid":"wrong","resourceVersion":"`+obj.ResourceVersion+`"}}`, 409)
+	call("DELETE", "/scripts/"+name, `{"preconditions":{"uid":"`+string(obj.UID)+`","resourceVersion":"wrong"}}`, 409)
+	if deletes != 0 {
+		t.Fatalf("failed deletes reached ES: %d", deletes)
+	}
+	call("DELETE", "/scripts/"+name, `{"preconditions":{"uid":"`+string(obj.UID)+`","resourceVersion":"`+obj.ResourceVersion+`"}}`, 200)
+	if deletes != 1 || document != nil {
+		t.Fatalf("delete not persisted: deletes=%d", deletes)
+	}
+	call("GET", "/scripts/"+name, "", 404)
 }

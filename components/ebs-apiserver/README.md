@@ -57,7 +57,7 @@ spec:
     exec /usr/local/bin/build-rpm --config /workspace/payload.yaml
 ```
 
-示例入口需与构建镜像匹配，不是内置默认脚本。通过 `POST /apis/ebs/v1/scripts` 创建，`GET /apis/ebs/v1/scripts` 列表，`GET/PUT/PATCH /apis/ebs/v1/scripts/{name}` 读取和更新。PUT 必须携带 GET 返回的 resourceVersion；PATCH 支持 JSON Merge Patch 和 JSON Patch，并使用 ES 乐观锁避免并发覆盖。列表支持分页和 label/metadata.name 过滤。
+示例入口需与构建镜像匹配，不是内置默认脚本。通过 `POST /apis/ebs/v1/scripts` 创建，`GET /apis/ebs/v1/scripts` 列表，`GET/PUT/PATCH /apis/ebs/v1/scripts/{name}` 读取和更新，`DELETE /apis/ebs/v1/scripts/{name}` 删除。删除请求体必须提供 `preconditions.uid` 和 `preconditions.resourceVersion`；apiserver 不按脚本名称限制删除。PUT 必须携带 GET 返回的 resourceVersion；PATCH 支持 JSON Merge Patch 和 JSON Patch，并使用 ES 乐观锁避免并发覆盖。列表支持分页和 label/metadata.name 过滤。
 
 正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 保留 2 MiB 请求体上限。经 Gateway 访问时还受其请求体限制。不支持删除、watch、status、dryRun 或 Project-scoped 路径。
 

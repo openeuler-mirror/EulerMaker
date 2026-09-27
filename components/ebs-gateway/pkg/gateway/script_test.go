@@ -26,7 +26,7 @@ func TestScriptAuthorization(t *testing.T) {
 			{"GET", "/scripts?limit=10&labelSelector=type%3Drpm", "list"},
 			{"GET", "/scripts/rpmbuild?watch=false", "get"},
 			{"POST", "/scripts", "write"}, {"PUT", "/scripts/rpmbuild", "write"}, {"PATCH", "/scripts/rpmbuild", "write"},
-			{"DELETE", "/scripts/rpmbuild", "deny"}, {"DELETE", "/scripts", "deny"},
+			{"DELETE", "/scripts/custom", "write"}, {"DELETE", "/scripts", "deny"},
 			{"POST", "/scripts/rpmbuild", "deny"}, {"PUT", "/scripts", "deny"},
 			{"GET", "/scripts/rpmbuild/status", "deny"}, {"PUT", "/scripts/rpmbuild/status", "deny"},
 			{"GET", "/scripts?watch=true", "deny"}, {"GET", "/scripts?watch=false&watch=true", "deny"},

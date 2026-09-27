@@ -35,7 +35,7 @@ func installScriptRoutes(srv handlerServer, store *esstore.Store) error {
 		}
 		ws.Route(route)
 	}
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch} {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		ws.Route(ws.Method(method).Path("/scripts/{name}").To(h.handle).Produces(restful.MIME_JSON).Writes(ebsv1.Script{}))
 	}
 	return nil
@@ -100,6 +100,25 @@ func (h *scriptHandler) serve(req *restful.Request, resp *restful.Response) erro
 	}
 	if !utf8.Valid(data) {
 		return apierrors.NewBadRequest("Script must be UTF-8 JSON")
+	}
+	if method == http.MethodDelete {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		options := new(metav1.DeleteOptions)
+		if err := decoder.Decode(options); err != nil {
+			return apierrors.NewBadRequest(err.Error())
+		}
+		if err := ensureJSONEOF(decoder); err != nil {
+			return apierrors.NewBadRequest(err.Error())
+		}
+		if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" || options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion == "" {
+			return apierrors.NewBadRequest("Script deletion requires UID and resourceVersion preconditions")
+		}
+		out, _, err := h.store.Delete(ctx, name, nil, options)
+		if err != nil {
+			return err
+		}
+		return resp.WriteEntity(out)
 	}
 	if method == http.MethodPatch {
 		old, err := h.store.Get(ctx, name, &metav1.GetOptions{})

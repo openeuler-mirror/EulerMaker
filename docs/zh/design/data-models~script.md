@@ -29,10 +29,12 @@ spec:
 
 ```text
 GET/POST     /apis/ebs/v1/scripts
-GET/PUT/PATCH /apis/ebs/v1/scripts/{name}
+GET/PUT/PATCH/DELETE /apis/ebs/v1/scripts/{name}
 ```
 
-提供集群级列表，不注册`/status`。首版不开放 DELETE 和自动回收，避免尚未执行或需要重试的 Job 丢失引用对象；后续引入回收能力时另行定义引用与保留策略。
+删除请求必须携带 `DeleteOptions.preconditions.uid` 和 `preconditions.resourceVersion`，对象已变化时返回 409，避免误删同名重建或更新后的脚本。apiserver 不按脚本名称限制删除；前端不提供默认 `rpmbuild` 的删除入口。删除不会检查历史 Job 引用，引用该脚本且尚未成功拉取内容的 Job 可能执行失败。
+
+提供集群级列表，不注册 `/status`。不自动回收脚本；前端删除操作由运维人员显式确认，且不会阻止已引用该脚本的 Job 后续读取失败。
 
 apiserver 校验：
 
@@ -58,7 +60,7 @@ spec:
       resourceVersion: "v1:12:3"
 ```
 
-`scriptRefs` 是创建时的观测记录，不是内容锁定。数组为空时使用镜像入口；非空时按顺序拉取所有脚本，第一项为主脚本和容器入口，其余脚本供主脚本调用。脚本名称不能重复。Runner 缓存未命中后 GET Script，不要求响应的 UID 或 resourceVersion 与观测值相同。同名 Script 删除后重建也可被尚未拉取脚本的 Job 使用。
+`scriptRefs` 是创建时的观测记录，不是内容锁定。数组为空时使用镜像入口；非空时按顺序拉取所有脚本，第一项为主脚本和容器入口，其余脚本供主脚本调用。脚本名称不能重复。Runner 缓存未命中后 GET Script，不要求响应的 UID 或 resourceVersion 与观测值相同。Script 删除后同名重建，也可被尚未拉取脚本的 Job 使用。
 
 ## 4. Runner 拉取与执行
 
@@ -91,7 +93,7 @@ Gateway 负责身份与操作权限校验，Script 访问不按 Project 成员�
 
 | 身份 | 权限 |
 |------|------|
-| Ops、Admin、System | 创建、读取、列表、更新全局脚本正文和允许的 metadata |
+| Ops、Admin、System | 创建、读取、列表、更新全局脚本正文和允许的 metadata；删除脚本 |
 | 普通登录用户 | 读取、列表全局脚本，不能写脚本；修改 Project 的脚本选择仍遵循 Project 更新权限 |
 | BuildInfo Controller 内部服务身份 | 按名称读取全局脚本，并将其元数据写入 Job |
 | Runner 机器身份 | 允许按名称 GET 全局脚本；不允许列表或写入 |

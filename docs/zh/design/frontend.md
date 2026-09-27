@@ -264,11 +264,11 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 ### 5.9 脚本管理
 
-运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建和正文编辑。Ops 和 Admin 可编辑配置，Script 不提供删除入口。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
+运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建、正文编辑及删除。Ops 和 Admin 可管理脚本，但默认 `rpmbuild` 不显示删除入口；其他脚本删除前需要确认，并携带 UID/resourceVersion 前置条件。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
 
 编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。前端对两份内置 Config 的 YAML 内容做业务预检，但保存成功不代表服务端已验证业务内容，消费方仍须重新校验。Gateway 负责权限，apiserver 只校验 Config 通用字段。
 
-当前页面管理 Script 对象；Job 引用与 Runner 拉取执行尚未接入，不能将脚本保存成功视为构建执行已切换。
+当前页面管理 Script 对象；BuildInfo Controller 会在新建 Job 时记录脚本引用，Runner 按引用拉取并执行。修改或删除脚本不会改写已创建 Job 中记录的引用，脚本正文也不固定为历史版本。
 
 ---
 
