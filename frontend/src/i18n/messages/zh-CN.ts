@@ -240,6 +240,8 @@ export default {
     buildInfoMissing: "此构建的 BuildInfo 尚未创建",
     buildInfoFailedPackages: "失败软件包",
     buildInfoSpecStatus: "Spec 状态",
+    buildInfoSucceededCount: "成功包",
+    buildInfoFailedCount: "失败包",
     searchSpecs: "搜索 Spec 名称",
     noMatchingSpecs: "没有匹配的 Spec",
     buildInfoNoSpecs: "暂无 Spec 状态",

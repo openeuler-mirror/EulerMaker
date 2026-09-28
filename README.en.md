@@ -82,7 +82,11 @@ curl -fsS http://localhost:8080/healthz
 
 Compose builds application images from the current workspace. Its defaults skip TLS verification for development, disable Elasticsearch security, and expose several internal service ports. **Do not expose this configuration directly to the public internet or use it unchanged in production.** Production deployments require certificate management, network isolation, credential protection, persistent storage, and backups. Restrict Docker socket access to trusted Runners.
 
-For multi-host deployments, adjust git-server's `--clone-base-url` so that repository consumers and tasks can resolve and reach it.
+git-server returns `git://git-server:9418` as the clone URL by default, and Runner reaches Artifact Manager at `http://artifact-manager:8081`. For multi-host deployments, set `EXPORT_SERVER_ADDR` to a hostname or IPv4 address reachable by repository consumers and build tasks (without a scheme or port). Compose then uses `git://<EXPORT_SERVER_ADDR>:9418` for git-server and `http://<EXPORT_SERVER_ADDR>:8081` for Runner. Both host ports must be reachable. For example:
+
+```bash
+EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+```
 
 ## Local development and checks
 

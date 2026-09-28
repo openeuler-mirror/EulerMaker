@@ -9,7 +9,7 @@
     <p v-else-if="errorKey" class="inline-error" role="alert">{{ t(errorKey) }}</p>
     <template v-if="buildInfo">
       <dl class="detail-list build-detail-list">
-        <div><dt>{{ t('project.status') }}</dt><dd><StatusBadge :value="buildInfo.status?.phase" /></dd></div>
+        <div><dt>{{ t('project.status') }}</dt><dd class="build-info-status-row"><StatusBadge :value="buildInfo.status?.phase" /><span class="status-badge success"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoSucceededCount') }} {{ specBuildCounts.succeeded }}</span><span class="status-badge danger"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoFailedCount') }} {{ specBuildCounts.failed }}</span></dd></div>
         <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd>{{ buildInfo.status?.failedPackages?.join(', ') || t('common.emptyValue') }}</dd></div>
       </dl>
       <section class="build-detail-section">
@@ -58,6 +58,10 @@ const specSearch = ref('');
 const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStatus || {})
   .map(([name, value]) => ({ name, buildStatus: value.build?.status }))
   .sort((left, right) => left.name.localeCompare(right.name)));
+const specBuildCounts = computed(() => ({
+  succeeded: specRows.value.filter((row) => row.buildStatus === 'Succeeded').length,
+  failed: specRows.value.filter((row) => row.buildStatus === 'Failed').length,
+}));
 const filteredSpecRows = computed(() => {
   const query = specSearch.value.trim().toLowerCase();
   return query ? specRows.value.filter((row) => row.name.toLowerCase().includes(query)) : specRows.value;
