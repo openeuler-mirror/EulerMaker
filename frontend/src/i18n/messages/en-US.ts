@@ -244,6 +244,8 @@ export default {
     buildInfoMissing: "BuildInfo has not been created for this build",
     buildInfoFailedPackages: "Failed packages",
     buildInfoSpecStatus: "Spec status",
+    buildInfoSucceededCount: "Succeeded packages",
+    buildInfoFailedCount: "Failed packages",
     searchSpecs: "Search spec name",
     noMatchingSpecs: "No matching specs",
     buildInfoNoSpecs: "No spec status yet",

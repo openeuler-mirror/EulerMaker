@@ -119,6 +119,7 @@ services:
       - --apiserver=https://ebs-apiserver:8443
       - --insecure-skip-verify=true
       - --git-server-addr=http://git-server:8080
+      - --artifact-manager-addr=http://artifact-manager:8081
     ports:
       - "8083:8080"
     networks:
@@ -150,7 +151,7 @@ services:
       - --listen-address=:8080
       - --data-dir=/var/lib/ebs-git
       - --git-daemon-address=:9418
-      - --clone-base-url=git://git-server:9418
+      - --clone-base-url=git://${EXPORT_SERVER_ADDR:-git-server}:9418
     ports:
       - "8084:8080"
       - "9418:9418"
@@ -169,7 +170,7 @@ services:
       context: ../components/runner
     command:
       - --gateway=http://ebs-gateway:8080
-      - --artifact-manager=http://artifact-manager:8081
+      - --artifact-manager=http://${EXPORT_SERVER_ADDR:-artifact-manager}:8081
       - --machine-credential-file=/run/secrets/runner_machine_credential
       - --name=runner-ct-01
       - --type=ct

@@ -82,7 +82,11 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
-跨主机部署时，需要调整 git-server 的 `--clone-base-url`，确保使用仓库的组件和任务能够解析并访问该地址。
+git-server 默认返回 `git://git-server:9418` 作为仓库克隆地址，Runner 默认通过 `http://artifact-manager:8081` 访问 Artifact Manager。跨主机部署时，将 `EXPORT_SERVER_ADDR` 设为其他组件和构建任务均可访问的宿主机名或 IPv4 地址（不带协议和端口）；Compose 会为 git-server 生成 `git://<EXPORT_SERVER_ADDR>:9418`，并让 Runner 使用 `http://<EXPORT_SERVER_ADDR>:8081`。宿主机需开放这两个端口。例如：
+
+```bash
+EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+```
 
 ## 本地开发与验证
 
