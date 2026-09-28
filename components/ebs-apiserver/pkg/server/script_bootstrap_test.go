@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -45,35 +43,36 @@ func (f *bootstrapScriptStorage) Create(_ context.Context, obj runtime.Object, _
 }
 
 func TestBootstrapScript(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "script.yaml")
-	if err := os.WriteFile(filename, []byte("apiVersion: ebs/v1\nkind: Script\nmetadata:\n  name: rpmbuild\nspec:\n  content: |\n    #!/bin/sh\n    echo hello\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	data := []byte("apiVersion: ebs/v1\nkind: Script\nmetadata:\n  name: rpmbuild\nspec:\n  content: |\n    #!/bin/sh\n    echo hello\n")
 	for _, race := range []bool{false, true} {
 		f := &bootstrapScriptStorage{race: race}
-		if err := ensureDefaultScript(context.Background(), f, filename); err != nil {
+		if err := ensureScript(context.Background(), f, data); err != nil {
 			t.Fatal(err)
 		}
 		if f.object.Name != "rpmbuild" || f.object.Spec.Content != "#!/bin/sh\necho hello\n" {
 			t.Fatalf("invalid object: %+v", f.object)
 		}
 		f.object.Spec.Content = "#!/bin/sh\necho preserve\n"
-		if err := ensureDefaultScript(context.Background(), f, filename); err != nil || f.creates != 1 || f.object.Spec.Content != "#!/bin/sh\necho preserve\n" {
+		if err := ensureScript(context.Background(), f, data); err != nil || f.creates != 1 || f.object.Spec.Content != "#!/bin/sh\necho preserve\n" {
 			t.Fatalf("existing object overwritten: %v", err)
 		}
 	}
 	for _, f := range []*bootstrapScriptStorage{{getErr: errors.New("unavailable")}, {errorOnCreate: errors.New("invalid")}} {
-		if err := ensureDefaultScript(context.Background(), f, filename); err == nil {
+		if err := ensureScript(context.Background(), f, data); err == nil {
 			t.Fatal("storage error ignored")
 		}
 	}
-	if err := ensureDefaultScript(context.Background(), &bootstrapScriptStorage{}, filename+".missing"); err == nil {
-		t.Fatal("missing file ignored")
+	if err := ensureScript(context.Background(), &bootstrapScriptStorage{}, []byte("kind: Script\nmetadata:\n  name: rpmbuild\nspec:\n  content: hi\n  interpreter: /bin/sh\n")); err == nil {
+		t.Fatal("unknown field accepted")
 	}
-	if err := os.WriteFile(filename, []byte("kind: Script\nmetadata:\n  name: rpmbuild\nspec:\n  content: hi\n  interpreter: /bin/sh\n"), 0600); err != nil {
+}
+
+func TestDefaultRpmbuildScript(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureDefaultScript(context.Background(), &bootstrapScriptStorage{}, filename); err == nil {
-		t.Fatal("unknown field accepted")
+	if storage.object == nil || storage.object.Name != "rpmbuild" || storage.object.Spec.Content == "" {
+		t.Fatalf("invalid default rpmbuild Script: %+v", storage.object)
 	}
 }

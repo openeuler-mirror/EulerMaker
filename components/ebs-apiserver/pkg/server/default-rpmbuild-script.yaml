@@ -1,0 +1,81 @@
+apiVersion: ebs/v1
+kind: Script
+metadata:
+  name: rpmbuild
+spec:
+  content: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    payload=/workspace/payload.yaml
+    test -s "$payload" || { echo "missing $payload" >&2; exit 1; }
+    test "$(id -u)" -eq 0 || { echo "rpmbuild script requires root for dnf builddep" >&2; exit 1; }
+    for tool in git dnf rpmbuild rpmspec curl; do
+      command -v "$tool" >/dev/null || { echo "missing build tool: $tool" >&2; exit 1; }
+    done
+
+    # The controller writes these four top-level values as scalar YAML fields.
+    # Never eval payload content as shell code.
+    field() {
+      local value
+      value=$(sed -n "s/^$1:[[:space:]]*//p" "$payload" | head -n 1)
+      case "$value" in
+        \"*\") value=${value#\"}; value=${value%\"} ;;
+        \'*\') value=${value#\'}; value=${value%\'} ;;
+      esac
+      printf '%s' "$value"
+    }
+
+    spec_url=$(field spec_url)
+    commit_id=$(field commitId)
+    spec_file=$(field spec_file_name)
+    repo=$(field repo)
+    test -n "$spec_url" || { echo "payload.spec_url is required" >&2; exit 1; }
+    [[ "$commit_id" =~ ^[[:xdigit:]]{40}$|^[[:xdigit:]]{64}$ ]] || { echo "invalid payload.commitId" >&2; exit 1; }
+    [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
+
+    source_dir=/workspace/source
+    topdir=/workspace/rpmbuild
+    mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS} /results/packages
+    git clone -- "$spec_url" "$source_dir"
+    git -C "$source_dir" checkout --detach "$commit_id"
+    test -f "$source_dir/$spec_file" || { echo "spec not found: $spec_file" >&2; exit 1; }
+
+    shopt -s dotglob nullglob
+    for source in "$source_dir"/*; do
+      case "${source##*/}" in .git|*.spec) continue ;; esac
+      cp -a -- "$source" "$topdir/SOURCES/"
+    done
+    cp -- "$source_dir/$spec_file" "$topdir/SPECS/"
+    spec="$topdir/SPECS/$spec_file"
+
+    dnf_args=()
+    if [[ -n "$repo" ]]; then
+      dnf_args=(--disablerepo='*')
+      read -r -a repo_urls <<< "$repo"
+      for i in "${!repo_urls[@]}"; do
+        dnf_args+=("--repofrompath=ebs-$i,${repo_urls[$i]}" "--enablerepo=ebs-$i" "--setopt=ebs-$i.gpgcheck=0")
+      done
+    fi
+    dnf "${dnf_args[@]}" -y builddep "$spec"
+
+    expanded_spec=$(rpmspec --define "_topdir $topdir" -P "$spec")
+    while IFS= read -r url; do
+      file=${url##*/}
+      file=${file%%\?*}
+      test -n "$file" || { echo "source URL has no filename: $url" >&2; exit 1; }
+      if [[ ! -e "$topdir/SOURCES/$file" ]]; then
+        curl --fail --location --retry 2 --output "$topdir/SOURCES/$file" "$url"
+      fi
+    done < <(printf '%s\n' "$expanded_spec" | awk '$1 ~ /^(Source|Patch)[0-9]*:$/ && $2 ~ /^https?:\/\// {print $2}')
+
+    rpmbuild --define "_topdir $topdir" -ba "$spec"
+    count=0
+    while IFS= read -r -d '' rpm; do
+      cp -- "$rpm" /results/packages/
+      count=$((count + 1))
+    done < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
+    test "$count" -gt 0 || { echo "rpmbuild produced no binary RPM" >&2; exit 1; }
+    while IFS= read -r -d '' rpm; do
+      cp -- "$rpm" /results/packages/
+    done < <(find "$topdir/SRPMS" -type f -name '*.rpm' -print0)
