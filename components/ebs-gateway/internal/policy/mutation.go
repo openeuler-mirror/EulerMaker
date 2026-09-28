@@ -132,7 +132,7 @@ func validateStatusUpdate(who identity.Principal, route Route, old, candidate mu
 		if oldStatus["runner"] != who.Runner || newStatus["runner"] != who.Runner {
 			return deny("Job is not assigned to Runner")
 		}
-		allowed = map[string]bool{"phase": true, "stage": true, "startTime": true, "endTime": true, "resultRoot": true, "message": true}
+		allowed = map[string]bool{"phase": true, "stage": true, "startTime": true, "endTime": true, "message": true}
 	default:
 		return deny("Runner cannot update this status")
 	}

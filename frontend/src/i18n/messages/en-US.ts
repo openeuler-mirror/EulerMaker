@@ -9,8 +9,8 @@ export default {
     tailNotice: 'Showing only the last 256 KiB of this log', state: 'Log state',
   },
   jobControl: {
-    title: 'Build jobs', name: 'Job name', phase: 'Phase', next: 'Next page', load: 'Load jobs', loading: 'Loading jobs…', empty: 'No jobs for this spec',
-    abort: 'Abort job', reason: 'Reason (optional)', hint: 'Only this job is aborted, not the entire build. Execution stops after the runner receives the notification.',
+    name: 'Job name', phase: 'Phase', next: 'Next page', load: 'Load jobs', loading: 'Loading jobs…', empty: 'No jobs for this spec', refreshJob: 'Refresh job {name}',
+    abort: 'Abort', reason: 'Reason (optional)', hint: 'Only this job is aborted, not the entire build. Execution stops after the runner receives the notification.',
     aborted: 'Job aborted. Execution stops when the runner receives the notification.', finished: 'The job already finished; its result was not changed.',
     unknown: 'Abort is not confirmed and the job is still nonterminal. Refresh to confirm or submit again.',
   },
@@ -249,7 +249,6 @@ export default {
     buildInfoNoSpecs: "No spec status yet",
     buildInfoBuildStatus: "Build status",
     buildInfoConditions: "Conditions",
-    buildInfoRaw: "View full BuildInfo",
     buildName: "Build name",
     buildType: "Build type",
     buildTarget: "Build target",

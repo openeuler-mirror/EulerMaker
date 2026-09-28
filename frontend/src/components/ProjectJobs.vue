@@ -1,11 +1,10 @@
 <template>
   <section class="spec-jobs">
-    <div class="section-heading"><h2>{{ t('jobControl.title') }}</h2><button class="secondary-button" :disabled="loading || busy" @click="load('')">{{ t('common.refresh') }}</button></div>
     <p v-if="message" role="status">{{ message }}</p><p v-if="error" class="inline-error" role="alert">{{ error }}</p>
     <p v-if="loading && !jobs.length" class="config-empty">{{ t('jobControl.loading') }}</p>
     <p v-else-if="!error && !jobs.length" class="config-empty">{{ t('jobControl.empty') }}</p>
     <div v-else-if="jobs.length" class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t('jobControl.name') }}</th><th>{{ t('jobControl.phase') }}</th><th>Runner</th><th>{{ t('admin.actions') }}</th></tr></thead>
-      <tbody><tr v-for="job in jobs" :key="job.metadata?.uid"><td><RouterLink v-if="job.metadata?.name" class="job-name-link" :to="{ name: 'job-logs', params: { name: project, job: job.metadata.name } }" :aria-label="t('jobLog.open', { name: job.metadata.name })">{{ job.metadata.name }}</RouterLink><span v-else>—</span></td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || '—' }}</td><td><button v-if="canAbort && abortable(job)" class="text-button danger-link" :disabled="busy || !job.metadata?.uid" @click="open(job)">{{ t('jobControl.abort') }}</button></td></tr></tbody>
+      <tbody><tr v-for="job in jobs" :key="job.metadata?.uid"><td><RouterLink v-if="job.metadata?.name" class="job-name-link" :to="{ name: 'job-logs', params: { name: project, job: job.metadata.name } }" :aria-label="t('jobLog.open', { name: job.metadata.name })">{{ job.metadata.name }}</RouterLink><span v-else>—</span></td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || '—' }}</td><td><div class="spec-job-actions"><button class="text-button" type="button" :disabled="loading || busy || !!refreshingJob || !job.metadata?.name" :aria-label="t('jobControl.refreshJob', { name: job.metadata?.name })" @click="refreshJob(job)">{{ t('common.refresh') }}</button><button v-if="canAbort && abortable(job)" class="text-button danger-link" type="button" :disabled="busy || !!refreshingJob || !job.metadata?.uid" @click="open(job)">{{ t('jobControl.abort') }}</button></div></td></tr></tbody>
     </table></div>
     <button v-if="next" class="secondary-button" :disabled="loading || busy" @click="load(next)">{{ t('jobControl.next') }}</button>
     <ModalDialog v-if="selected" title-id="abort-job-title" :title="t('jobControl.abort')" :close-label="t('common.close')" @close="close">
@@ -32,6 +31,7 @@ const props = defineProps<{ project: string; buildName: string; specName: string
 const { t } = useI18n();
 const jobs = ref<Job[]>([]), next = ref('');
 const loading = ref(false), busy = ref(false), error = ref(''), message = ref('');
+const refreshingJob = ref('');
 const selected = ref<Job | null>(null), reason = ref(''), dialogError = ref('');
 let generation = 0;
 const path = (project: string) => `/apis/ebs/v1/projects/${encodeURIComponent(project)}/jobs`;
@@ -53,6 +53,21 @@ async function load(cursor: string): Promise<void> {
     if (current === generation) { jobs.value = page.items; next.value = page.next; }
   } catch (e) { if (current === generation) error.value = t(errorTranslationKey(e)); }
   finally { if (current === generation) loading.value = false; }
+}
+async function refreshJob(job: Job): Promise<void> {
+  const name = job.metadata?.name;
+  if (!name || refreshingJob.value || loading.value || busy.value) return;
+  const current = generation;
+  refreshingJob.value = name;
+  error.value = '';
+  try {
+    const updated = await request<Job>(`${path(props.project)}/${encodeURIComponent(name)}`);
+    if (current === generation) jobs.value = jobs.value.map((item) => item.metadata?.name === name ? updated : item);
+  } catch (e) {
+    if (current === generation) error.value = t(errorTranslationKey(e));
+  } finally {
+    refreshingJob.value = '';
+  }
 }
 function open(job: Job): void { selected.value = job; reason.value = ''; dialogError.value = ''; }
 function close(): void { if (!busy.value) selected.value = null; }

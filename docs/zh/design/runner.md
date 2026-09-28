@@ -338,12 +338,11 @@ type JobStatus struct {
     Runner             string      `json:"runner,omitempty"`
     StartTime          metav1.Time `json:"startTime,omitempty"`
     EndTime            metav1.Time `json:"endTime,omitempty"`
-    ResultRoot         string      `json:"resultRoot,omitempty"`
     Message            string      `json:"message,omitempty"`
 }
 ```
 
-`ResultRoot` 在本地执行期间可以表示 Runner 的结果目录；最终状态中应写为 `artifact://{project}/{jobName}`，不能向其他组件公开 Runner 容器内的本地路径。Job 通过 `phase/stage` 表达执行进度，产物状态和文件数量由 Artifact Manager 的 Manifest 提供，不在 Job Status 中重复记录。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
+Runner 执行和重启恢复时，按 `${rootDir}/results/{project}/{jobName}` 定位本地产物目录，不将本地路径写入 Job Status。Job 通过 `phase/stage` 表达执行进度，产物状态和文件数量由 Artifact Manager 的 Manifest 提供，不在 Job Status 中重复记录。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 

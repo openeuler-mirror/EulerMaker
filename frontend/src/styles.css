@@ -339,15 +339,12 @@ body.modal-open { overflow: hidden; }
 .build-info-condition strong, .build-info-condition span { display: block; }
 .build-info-condition span, .build-info-condition p { color: var(--muted); font-size: 13px; }
 .build-info-condition p { margin: 5px 0 0; }
-.build-info-raw { margin-top: 20px; }
-.build-info-raw summary { color: var(--blue); cursor: pointer; }
-.build-info-raw pre { max-height: 500px; padding: 16px; overflow: auto; background: #f5f7fb; border-radius: 8px; font-size: 12px; }
 .spec-expand-button { padding: 0; color: var(--blue); background: none; border: 0; font: inherit; font-weight: 650; cursor: pointer; }
 .spec-expand-button:hover { text-decoration: underline; }
 .spec-expand-button:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
 .spec-jobs-row > td { padding: 16px; background: #f7fafe; }
 .spec-jobs { min-width: 0; }
-.spec-jobs .section-heading { margin-bottom: 12px; }
+.spec-job-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
 .build-history-list-panel, .build-detail-panel { min-width: 0; }
 .build-history-list { border-top: 1px solid #edf1f6; }
 .build-history-item { width: 100%; display: flex; flex-direction: column; align-items: stretch; color: #536176; background: transparent; border-bottom: 1px solid #edf1f6; text-align: left; }

@@ -5,8 +5,8 @@ export default {
     tailNotice: '日志较长，仅显示最后 256 KiB', state: '日志状态',
   },
   jobControl: {
-    title: '构建任务', name: '任务名称', phase: '状态', next: '下一页', load: '加载任务', loading: '正在加载任务…', empty: '此 Spec 暂无任务',
-    abort: '中止任务', reason: '中止原因（可选）', hint: '中止仅影响此任务，不会中止整个构建。执行端收到通知后停止运行。',
+    name: '任务名称', phase: '状态', next: '下一页', load: '加载任务', loading: '正在加载任务…', empty: '此 Spec 暂无任务', refreshJob: '刷新任务 {name}',
+    abort: '中止', reason: '中止原因（可选）', hint: '中止仅影响此任务，不会中止整个构建。执行端收到通知后停止运行。',
     aborted: '已中止任务；执行端将在收到通知后停止运行。', finished: '任务已结束，未改变原结果。',
     unknown: '尚未确认中止结果，任务仍未结束。请刷新后确认，或再次提交中止请求。',
   },
@@ -245,7 +245,6 @@ export default {
     buildInfoNoSpecs: "暂无 Spec 状态",
     buildInfoBuildStatus: "构建状态",
     buildInfoConditions: "条件",
-    buildInfoRaw: "查看完整 BuildInfo",
     buildName: "构建名称",
     buildType: "构建类型",
     buildTarget: "构建目标",
