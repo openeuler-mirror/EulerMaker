@@ -84,7 +84,7 @@ RpmRepo PollingSource ─key──▶   reconcile（经包内 Client）      ─
 
 ### 2.3 Source 装配语义
 
-RpmRepo PollingSource 是唯一的外部变化触发源，周期沿用 `--poll-period`（默认 15s）。Job 完成由下一轮轮询发现；实际处理时间还受队列等待、请求耗时及错误重试影响。
+RpmRepo PollingSource 是唯一的外部变化触发源，周期沿用 `--poll-period`（默认 10s）。Job 完成由下一轮轮询发现；实际处理时间还受队列等待、请求耗时及错误重试影响。
 
 - `rpmrepos`：注册 `PollingSourceFactory.ForResource(RpmReposGVR, period, metav1.ListOptions{FieldSelector: "status.release.phase!=Ready,status.release.phase!=Failed,status.release.phase!=Skipped"})` 的 handler（`RpmReposGVR` 已由框架 `source` 包内置）。Add/Update 事件按 `build/{namespace}/{name}` 入队；Delete 事件仅记录日志；
   - 过滤语义：本源**只带** `fieldSelector`（驱动过程仓键、由单个对象重算），不带 `labelSelector`；只排除「发布终态（`release.phase ∈ {Ready, Failed, Skipped}`）」的 RpmRepo。过程仓不再有相位，apiserver 对 RpmRepo 的**字段**选择器只有 `metadata.name` / `metadata.namespace` / `status.release.phase`（labelSelector 另行支持，发布候选查询见 §7.3），因此不能按过程仓状态过滤。字段缺失（`release` 为 null）视为「不等于任何具体相位」，不会被排除。RpmRepo 的 `ebs.io/target-os` / `ebs.io/target-arch` 标签由 Build Controller 在创建时写入、apiserver 创建校验强制存在；
