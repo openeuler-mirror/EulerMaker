@@ -55,6 +55,9 @@ func TestProjectAuthorizationMatrix(t *testing.T) {
 		{"member may abort Job", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, true},
 		{"outsider admin cannot abort Job", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "jobs", Project: "team", Name: "j", Subresource: "abort", Method: http.MethodPost}, false},
 		{"Build PUT is never exposed", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodPut}, false},
+		{"admin cannot create Snapshot", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "snapshots", Project: "team", Method: http.MethodPost}, false},
+		{"owner cannot update BuildInfo", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "buildinfos", Project: "team", Name: "b", Method: http.MethodPut}, false},
+		{"admin cannot update RpmRepo status", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "rpmrepos", Project: "team", Name: "r", Subresource: "status", Method: http.MethodPatch}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
