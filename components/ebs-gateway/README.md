@@ -34,6 +34,7 @@ go run ./cmd \
 - `/auth/*` 负责注册、登录、Runner token 交换、token 校验和本人密码修改；只有 Admin 能创建 MachineAccount。
 - `/apis/iam.ebs/v1/*` 仅允许 Admin 管理非管理员 User 和 MachineAccount。
 - `/apis/ebs/v1/*` 只注册设计文档列出的资源、对象和子资源路径；匿名只读白名单业务对象，Config 按可见性读取。
+- Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET。
 - Gateway 丢弃客户端传入的所有 `X-EBS-*` 头，只有授权成功后才向上游注入可信身份头。PUT/PATCH 先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。
 - Build 的 PUT/PATCH 不开放；Job `/abort` 仅 Project owner/member 用户可调用；Runner 只可管理自身对象和已分配 Job。
 

@@ -37,6 +37,9 @@ func New(upstreamClient *upstream.Client) *Authorizer {
 }
 
 func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, route Route) error {
+	if IsReadOnlyProjectResource(route.Resource) && route.Method != http.MethodGet {
+		return deny("resource is read-only through Gateway")
+	}
 	if route.Subresource == "abort" && route.Resource == "jobs" {
 		return a.jobAbort(ctx, who, route)
 	}
@@ -59,6 +62,15 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 		return a.projectResource(ctx, who, route)
 	default:
 		return deny("resource is not exposed")
+	}
+}
+
+func IsReadOnlyProjectResource(resource string) bool {
+	switch resource {
+	case "snapshots", "buildinfos", "rpmrepos":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -236,6 +248,9 @@ func (a *Authorizer) projectAccess(ctx context.Context, project, subject string)
 
 func IsPublicRead(route Route) bool {
 	if route.Method != http.MethodGet && route.Method != http.MethodHead {
+		return false
+	}
+	if IsReadOnlyProjectResource(route.Resource) && route.Method != http.MethodGet {
 		return false
 	}
 	if route.Subresource != "" && route.Subresource != "status" {

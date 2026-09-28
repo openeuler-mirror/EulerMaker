@@ -204,6 +204,9 @@ func (a *Handler) limitWriteBody(c *gin.Context) bool {
 
 func allowedResourceMethod(route policy.Route) bool {
 	method := route.Method
+	if policy.IsReadOnlyProjectResource(route.Resource) {
+		return method == http.MethodGet && (route.Subresource == "" || (route.Subresource == "status" && route.Name != ""))
+	}
 	switch route.Subresource {
 	case "abort":
 		return route.Name != "" && method == http.MethodPost
@@ -222,6 +225,9 @@ func allowedResourceMethod(route policy.Route) bool {
 }
 
 func allowedResourceVerbs(route policy.Route) string {
+	if policy.IsReadOnlyProjectResource(route.Resource) {
+		return "GET"
+	}
 	switch route.Subresource {
 	case "abort":
 		return "POST"

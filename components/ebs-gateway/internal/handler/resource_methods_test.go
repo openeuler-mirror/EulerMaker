@@ -23,6 +23,12 @@ func TestResourceMethodBoundary(t *testing.T) {
 		{"abort get", policy.Route{Resource: "jobs", Name: "j", Subresource: "abort", Method: http.MethodGet}, false},
 		{"runner jobs watch", policy.Route{Resource: "runners", Name: "r", Subresource: "jobs", Method: http.MethodGet}, true},
 		{"runner jobs mutate", policy.Route{Resource: "runners", Name: "r", Subresource: "jobs", Method: http.MethodPatch}, false},
+		{"snapshot list", policy.Route{Resource: "snapshots", Project: "p", Method: http.MethodGet}, true},
+		{"snapshot create", policy.Route{Resource: "snapshots", Project: "p", Method: http.MethodPost}, false},
+		{"buildinfo update", policy.Route{Resource: "buildinfos", Project: "p", Name: "b", Method: http.MethodPut}, false},
+		{"rpmrepo status read", policy.Route{Resource: "rpmrepos", Project: "p", Name: "r", Subresource: "status", Method: http.MethodGet}, true},
+		{"rpmrepo status update", policy.Route{Resource: "rpmrepos", Project: "p", Name: "r", Subresource: "status", Method: http.MethodPatch}, false},
+		{"rpmrepo head", policy.Route{Resource: "rpmrepos", Project: "p", Name: "r", Method: http.MethodHead}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

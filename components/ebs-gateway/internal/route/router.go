@@ -54,15 +54,24 @@ func registerResources(router *gin.Engine, api *handler.Handler) {
 	registerCollection(group, api, "runners", "runner")
 	registerCollection(group, api, "configs", "name")
 	registerCollection(group, api, "scripts", "name")
-	for _, resource := range []string{"snapshots", "builds", "buildinfos", "rpmrepos", "jobs"} {
+	for _, resource := range []string{"snapshots", "buildinfos", "rpmrepos"} {
+		project := group.Group("/projects/:project/" + resource)
+		registerReadOnlyResource(project, api, "", resource, "")
+		registerReadOnlyResource(project, api, "/:name", resource, "")
+		registerReadOnlyResource(project, api, "/:name/status", resource, "status")
+	}
+	for _, resource := range []string{"builds", "jobs"} {
 		project := group.Group("/projects/:project/" + resource)
 		registerResource(project, api, "", resource, "project", "name", "")
 		registerResource(project, api, "/:name", resource, "project", "name", "")
 		registerResource(project, api, "/:name/status", resource, "project", "name", "status")
-		if resource == "builds" || resource == "jobs" {
-			registerResource(project, api, "/:name/abort", resource, "project", "name", "abort")
-		}
+		registerResource(project, api, "/:name/abort", resource, "project", "name", "abort")
 	}
+}
+
+func registerReadOnlyResource(group *gin.RouterGroup, api *handler.Handler, path, resource, subresource string) {
+	guard, endpoint := api.ResourceHandlers(resource, "project", "name", subresource)
+	group.GET(path, guard, endpoint)
 }
 
 func registerCollection(parent *gin.RouterGroup, api *handler.Handler, resource, nameKey string) {

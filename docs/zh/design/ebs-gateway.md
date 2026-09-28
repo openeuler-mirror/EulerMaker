@@ -154,7 +154,7 @@ Request
 
 ### 4.1 公开读取
 
-Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 Authorization header 的 GET/HEAD 请求可以直接进入该分支；携带 Token 时必须先完成 Token 和 User 状态校验，非法、过期、已禁用或身份不一致时返回 401/403，不能降级为匿名访问。校验通过后，公开 `GET/HEAD` 使用与匿名调用方相同的路由、完整对象、分页和响应头规则，不执行 Project owner/member 读取过滤。
+Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 Authorization header 的 GET/HEAD 请求可以直接进入该分支；携带 Token 时必须先完成 Token 和 User 状态校验，非法、过期、已禁用或身份不一致时返回 401/403，不能降级为匿名访问。校验通过后，公开读取使用与匿名调用方相同的路由、完整对象、分页和响应头规则，不执行 Project owner/member 读取过滤。Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET，不注册 HEAD 或写方法。
 
 对匿名和已认证调用方开放以下资源的 collection、单对象及单对象 `/status` 读取：
 
@@ -169,11 +169,11 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 
 Config 是单独的按对象可见性授权的例外：匿名、普通用户和 Runner 身份仅可 `GET/HEAD /apis/ebs/v1/configs/{name}` 且对象为 `Public`；Ops/Admin 也可具名读取 `OpsOnly` 对象及 list。Gateway 用可信内部身份读取一次完整对象，并依据同一响应的 `spec.visibility` 决定是否透传；无权读取返回 403，不暴露正文。非运维身份访问 `/configs` 集合一律拒绝；携带 Token 的请求先校验身份，不能失败后降级匿名。Config 的 `content` 不得包含凭据；需要保密内容应使用独立的受控存储，`OpsOnly` 不等同于机密级授权。
 
-匿名请求不开放 Runner、Runner 子资源、User、MachineAccount、非白名单资源的 `/status` 或其他未列入白名单的新资源。公开对象的 `/status` 仅允许单对象 `GET/HEAD` 并返回完整对象；collection 不存在 `/status`。所有 POST、PUT、PATCH、DELETE 均先认证，因此匿名调用方不能借公开 `/status` 修改状态。只要查询参数中出现非 `false` 的 `watch` 值就返回 401；匿名请求不能用 `watch=1`、重复 query 参数或其他等价值绕过。Project、Snapshot、Build、BuildInfo 和 RpmRepo 本身不支持 watch，也不能由 Gateway 模拟轮询。
+匿名请求不开放 Runner、Runner 子资源、User、MachineAccount、非白名单资源的 `/status` 或其他未列入白名单的新资源。公开对象的 `/status` 仅允许单对象读取并返回完整对象；collection 不存在 `/status`。所有 POST、PUT、PATCH、DELETE 均先认证，因此匿名调用方不能借公开 `/status` 修改状态。只要查询参数中出现非 `false` 的 `watch` 值就返回 401；匿名请求不能用 `watch=1`、重复 query 参数或其他等价值绕过。Project、Snapshot、Build、BuildInfo 和 RpmRepo 本身不支持 watch，也不能由 Gateway 模拟轮询。
 
 公开读取直接透传 apiserver 返回的完整单对象或 List，不解码、删除或重写对象字段。公开范围内的 `metadata`、`spec` 和 `status` 均可被匿名或已认证调用方读取，包括对象后续新增的字段。因此 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的 API 数据结构不得保存密码、Token、私钥或其他不应公开的信息；需要保密的数据必须存放在非公开资源或独立的受控存储中。
 
-匿名 HEAD 与对应 GET 使用相同的路由、query 和限流校验，但响应不包含正文，也不得透传可能泄露内部版本或存储实现的 header。公开 GET 可以保留 `Content-Type`、缓存策略和 requestID；不得透传内部 ETag、resourceVersion 或上游身份 header。
+支持 HEAD 的公开资源中，匿名 HEAD 与对应 GET 使用相同的路由、query 和限流校验，但响应不包含正文，也不得透传可能泄露内部版本或存储实现的 header。公开 GET 可以保留 `Content-Type`、缓存策略和 requestID；不得透传内部 ETag、resourceVersion 或上游身份 header。
 
 匿名请求按客户端 IP 使用独立令牌桶，额度应低于认证调用方；collection 必须设置服务端允许的 `limit` 上限，禁止匿名调用方请求无界列表。Gateway 不注入 `X-EBS-User`、`X-EBS-Type` 或 `X-EBS-Scopes`，而是使用受信任的内部身份读取 apiserver 并原样转发对象响应。审计日志使用固定身份 `anonymous`，记录资源、verb、客户端地址、响应数量和 requestID。
 
@@ -512,7 +512,8 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 | 资源范围 | Owner 用户 | Member 用户 | Ops | Runner | Admin |
 |----------|------------|-------------|-----|--------|-------|
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | `get/list/create`，禁止更新和删除 |
-| Project 子资源：Snapshot、Build、BuildInfo、RpmRepo | 全部支持的 verb | `get/list/create/update/patch`，禁止 `delete` | 按 owner/member 关系同普通用户 | 禁止 | 全部支持的 verb |
+| Project 子资源：Snapshot、BuildInfo、RpmRepo | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
+| Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建、删除和中止；禁止 PUT/PATCH |
 | 集群级 Config | 仅具名读取 `Public`，禁止 list/写入 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 仅具名读取 `Public` | 同 Ops |
 | Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 主资源全部支持的 verb，禁止 `/status` 写入 |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
@@ -698,7 +699,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/auth/runner-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner token；后者凭 Bearer Token 校验身份 |
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
 | `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改或删除 Project，包含 `/status`；member 不可写 Project |
-| `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`rpmrepos` | 匿名及已认证用户可读取 | owner 可写；member 可创建、修改但不可删除；Ops 按其 owner/member 关系授权；Admin 可写 |
+| `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
 | `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按 Project 关系创建、删除或中止；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | owner/member 可按 Project 权限写主资源，但不能写 `/status`；Admin 可写主资源；Runner 仅可更新已分配 Job 的 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
@@ -838,7 +839,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 
 | 风险 | 处理 |
 |------|------|
-| 未认证请求访问业务 API | 仅4.1节白名单资源及其单对象 `/status` 的GET/HEAD进入匿名读取流程；watch、Runner、IAM、写请求和未知资源返回401 |
+| 未认证请求访问业务 API | 仅4.1节白名单资源及其单对象 `/status` 的已注册读取方法进入匿名读取流程；watch、Runner、IAM、写请求和未知资源返回401 |
 | 公开对象包含敏感信息 | 匿名接口返回完整对象；公开资源的数据结构和写入校验必须禁止保存密码、Token、私钥等秘密，敏感数据使用非公开资源或独立受控存储 |
 | 匿名批量抓取 | 按客户端IP独立低额度限流，限制collection分页大小，禁止无界list和watch |
 | 注册接口被滥用或批量占用用户名 | 按客户端 IP 和用户名/IP 组合独立限流；限制请求体和字段；多实例生产部署使用共享计数 |
@@ -868,7 +869,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | 模块 | 场景 |
 |------|------|
 | Auth | 缺失 token、非法签名、非 HS256、非法 header、issuer/audience 错误、时间 claim 越界、缺失 `jti`、非法 scope 组合以及合法的 user/ops/runner/admin token；密钥文件缺失、非法或过短时启动失败 |
-| PublicRead | 匿名与已认证调用方对 Project 的 get/list，以及五类 Project 级公开资源的 Project 范围 get/list 和单对象 `/status` GET/HEAD 使用相同的完整对象透传与分页规则；已认证请求仍先校验 Token/User；非法Token不降级匿名；Runner 对常规公开资源、IAM/write/watch/未知资源及非白名单 `/status` 拒绝；Config 单对象按 visibility 另行授权，非运维身份不可 list；`watch=true`、`watch=1`和重复参数均不能绕过 |
+| PublicRead | 匿名与已认证调用方对 Project 的 get/list，以及五类 Project 级公开资源的 Project 范围 get/list 和单对象 `/status` 使用相同的完整对象透传与分页规则；Snapshot、BuildInfo、RpmRepo 仅 GET；已认证请求仍先校验 Token/User；非法Token不降级匿名；Runner 对常规公开资源、IAM/write/watch/未知资源及非白名单 `/status` 拒绝；Config 单对象按 visibility 另行授权，非运维身份不可 list；`watch=true`、`watch=1`和重复参数均不能绕过 |
 | ConfigRead | 匿名、普通用户和 Runner 仅具名读取 Public；Ops/Admin 可读取 Public/OpsOnly 并 list；具名 GET/HEAD 只读取一次上游对象，修改可见性后不沿用旧鉴权结果；非运维身份 list 和读取 OpsOnly 返回 403 |
 | Registration | User和密码哈希单文档原子创建、注册成功但不签发token、User固定启用、未知/越权字段、用户名和email校验、密码长度、重复用户名、请求体过大、限流、IAM不可用、REST响应不包含credential以及敏感字段不入日志 |
 | MachineAccountRegistration | 对象和凭据原子创建、重复名称409、非法名称/secret/TTL、响应不回显secret、通用资源POST返回405、非Admin返回403以及失败不保留可认证账号 |
