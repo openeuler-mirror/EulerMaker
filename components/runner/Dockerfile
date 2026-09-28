@@ -19,7 +19,7 @@ RUN go build -ldflags="-s -w" -o ebs-runner ./cmd/runner/
 FROM openeuler/openeuler:24.03-lts
 
 RUN dnf update -y && \
-    dnf install -y ca-certificates shadow-utils bash && \
+    dnf install -y ca-certificates shadow-utils bash libtool-ltdl && \
     dnf clean all
 
 RUN groupadd ebs && useradd -g ebs -s /sbin/nologin ebs

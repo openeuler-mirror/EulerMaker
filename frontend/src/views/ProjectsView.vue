@@ -16,9 +16,10 @@
       <button v-for="type in projectTypes" :key="type" type="button" :class="{ active: projectType === type }" :aria-current="projectType === type ? 'page' : undefined" @click="changeProjectType(type)">{{ t(`projects.${type}`) }}</button>
     </nav>
     <div class="list-toolbar">
-      <label class="related-projects-filter" :title="!session.authenticated ? t('projects.relatedSignIn') : undefined">
-        {{ t("projects.relatedOnly") }}
+      <label class="related-projects-filter" :class="{ selected: relatedOnly, disabled: !session.authenticated }" :title="!session.authenticated ? t('projects.relatedSignIn') : undefined">
         <input v-model="relatedOnly" type="checkbox" :disabled="!session.authenticated" />
+        <span class="spec-status-filter-check" aria-hidden="true"><Check /></span>
+        {{ t("projects.relatedOnly") }}
       </label>
       <label class="search-box">
         <Search />
@@ -101,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, ArrowRight, CircleCheckFilled, Plus, Refresh, Search, Upload, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowRight, Check, CircleCheckFilled, Plus, Refresh, Search, Upload, WarningFilled } from "@element-plus/icons-vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -388,6 +389,11 @@ function formatDate(value?: string): string {
 </script>
 
 <style scoped>
-.related-projects-filter { display: inline-flex; align-items: center; gap: 7px; margin-right: auto; white-space: nowrap; cursor: pointer; }
-.related-projects-filter input { width: 16px; height: 16px; accent-color: var(--blue); }
+.related-projects-filter { position: relative; display: inline-flex; align-items: center; gap: 8px; margin-right: auto; color: #536176; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.related-projects-filter:hover:not(.disabled), .related-projects-filter.selected { color: var(--blue); }
+.related-projects-filter.disabled { opacity: .5; cursor: not-allowed; }
+.related-projects-filter input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.related-projects-filter.selected .spec-status-filter-check { border-color: var(--blue); color: #fff; background: var(--blue); }
+.related-projects-filter.selected .spec-status-filter-check svg { display: block; }
+.related-projects-filter input:focus-visible + .spec-status-filter-check { outline: 2px solid #9bc5f5; outline-offset: 2px; }
 </style>

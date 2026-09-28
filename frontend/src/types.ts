@@ -103,7 +103,7 @@ export interface BuildInfo {
     phase?: string;
     failedPackages?: string[];
     specStatus?: Record<string, {
-      build?: { status?: string };
+      build?: { status?: string; conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }> };
       install?: { status?: string };
       dispatchCount?: number;
     }>;
@@ -113,7 +113,7 @@ export interface BuildInfo {
 
 export interface Job {
   metadata?: ObjectMeta;
-  status?: { phase?: string; stage?: string; runner?: string; startTime?: string };
+  status?: { phase?: string; stage?: string; runner?: string; startTime?: string; endTime?: string };
 }
 
 export interface SessionIdentity {

@@ -420,7 +420,13 @@ func (DockerCLI) Remove(ctx context.Context, name string) error {
 }
 
 func (DockerCLI) Create(ctx context.Context, spec ContainerSpec) (string, error) {
-	args := []string{"create", "--name", spec.Name}
+	// Some ARM hosts run Docker with a seccomp profile that denies clone3 with
+	// EPERM. glibc cannot fall back to clone in that case, so git inside the
+	// Job container fails to create its async fetch thread. The Runner
+	// container's seccomp setting does not carry over to containers it creates.
+	// TODO: Remove this override once the host Docker/seccomp stack returns
+	// ENOSYS for unsupported clone3 calls or permits them.
+	args := []string{"create", "--name", spec.Name, "--security-opt", "seccomp=unconfined"}
 	for key, value := range spec.Labels {
 		args = append(args, "--label", key+"="+value)
 	}

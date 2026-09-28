@@ -3,8 +3,8 @@
     <p v-if="message" role="status">{{ message }}</p><p v-if="error" class="inline-error" role="alert">{{ error }}</p>
     <p v-if="loading && !jobs.length" class="config-empty">{{ t('jobControl.loading') }}</p>
     <p v-else-if="!error && !jobs.length" class="config-empty">{{ t('jobControl.empty') }}</p>
-    <div v-else-if="jobs.length" class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t('jobControl.name') }}</th><th>{{ t('jobControl.phase') }}</th><th>Runner</th><th>{{ t('admin.actions') }}</th></tr></thead>
-      <tbody><template v-for="job in jobs" :key="job.metadata?.uid || job.metadata?.name"><tr><td><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedJob === job.metadata.name" :aria-label="t('jobLog.open', { name: job.metadata.name })" @click="toggleLog(job.metadata.name)">{{ job.metadata.name }}</button><span v-else>—</span></td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || '—' }}</td><td><div class="spec-job-actions"><button class="text-button" type="button" :disabled="loading || busy || !!refreshingJob || !job.metadata?.name" :aria-label="t('jobControl.refreshJob', { name: job.metadata?.name })" @click="refreshJob(job)">{{ t('common.refresh') }}</button><button v-if="canAbort && abortable(job)" class="text-button danger-link" type="button" :disabled="busy || !!refreshingJob || !job.metadata?.uid" @click="open(job)">{{ t('jobControl.abort') }}</button></div></td></tr><tr v-if="expandedJob === job.metadata?.name" class="spec-jobs-row"><td colspan="4"><JobLogInline :project="project" :job-name="job.metadata.name" /><PackageJobArtifacts :project="project" :job-name="job.metadata.name" :succeeded="job.status?.phase === 'Succeeded'" /></td></tr></template></tbody>
+    <div v-else-if="jobs.length" class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t('jobControl.name') }}</th><th>{{ t('jobControl.phase') }}</th><th>Runner</th><th>{{ t('jobControl.startedAt') }}</th><th>{{ t('jobControl.duration') }}</th><th>{{ t('admin.actions') }}</th></tr></thead>
+      <tbody><template v-for="job in jobs" :key="job.metadata?.uid || job.metadata?.name"><tr><td><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedJob === job.metadata.name" :aria-label="t('jobLog.open', { name: job.metadata.name })" @click="toggleLog(job.metadata.name)">{{ job.metadata.name }}</button><span v-else>—</span></td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || '—' }}</td><td>{{ formatDate(job.status?.startTime) }}</td><td>{{ formatDuration(job) }}</td><td><div class="spec-job-actions"><button class="text-button" type="button" :disabled="loading || busy || !!refreshingJob || !job.metadata?.name" :aria-label="t('jobControl.refreshJob', { name: job.metadata?.name })" @click="refreshJob(job)">{{ t('common.refresh') }}</button><button v-if="canAbort && abortable(job)" class="text-button danger-link" type="button" :disabled="busy || !!refreshingJob || !job.metadata?.uid" @click="open(job)">{{ t('jobControl.abort') }}</button></div></td></tr><tr v-if="expandedJob === job.metadata?.name" class="spec-jobs-row"><td colspan="6"><JobLogInline :project="project" :job-name="job.metadata.name" /><PackageJobArtifacts :project="project" :job-name="job.metadata.name" :succeeded="job.status?.phase === 'Succeeded'" /></td></tr></template></tbody>
     </table></div>
     <button v-if="next" class="secondary-button" :disabled="loading || busy" @click="load(next)">{{ t('jobControl.next') }}</button>
     <ModalDialog v-if="selected" title-id="abort-job-title" :title="t('jobControl.abort')" :close-label="t('common.close')" @close="close">
@@ -19,7 +19,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ApiError, errorTranslationKey, list, request } from '@/api';
 import type { Job } from '@/types';
@@ -35,9 +35,28 @@ const loading = ref(false), busy = ref(false), error = ref(''), message = ref(''
 const refreshingJob = ref('');
 const expandedJob = ref('');
 const selected = ref<Job | null>(null), reason = ref(''), dialogError = ref('');
+const now = ref(Date.now());
 let generation = 0;
+let durationTimer: number | undefined;
+onMounted(() => { durationTimer = window.setInterval(() => { now.value = Date.now(); }, 1000); });
+onBeforeUnmount(() => window.clearInterval(durationTimer));
 const path = (project: string) => `/apis/ebs/v1/projects/${encodeURIComponent(project)}/jobs`;
 const abortable = (job: Job) => job.status?.phase === 'Pending' || job.status?.phase === 'Running';
+function formatDate(value?: string): string {
+  if (!value) return t('common.emptyValue');
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return t('common.emptyValue');
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+function formatDuration(job: Job): string {
+  const start = Date.parse(job.status?.startTime || '');
+  const end = job.status?.endTime ? Date.parse(job.status.endTime) : job.status?.phase === 'Running' ? now.value : NaN;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return t('common.emptyValue');
+  const seconds = Math.floor((end - start) / 1000);
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor(seconds % 3600 / 60))}:${pad(seconds % 60)}`;
+}
 watch(() => [props.project, props.buildName, props.specName], () => {
   jobs.value = []; next.value = ''; error.value = '';
   selected.value = null; message.value = ''; expandedJob.value = '';
