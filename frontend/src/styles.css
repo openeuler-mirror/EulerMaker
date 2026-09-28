@@ -169,6 +169,7 @@ body.modal-open { overflow: hidden; }
 .project-table td .project-name-link strong { color: var(--blue); }
 .project-table td .project-name-link:hover strong, .project-table td .project-name-link:focus-visible strong { text-decoration: underline; text-underline-offset: 3px; }
 .job-name-link { color: var(--blue); font-weight: 650; overflow-wrap: anywhere; }
+.job-name-button { padding: 0; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; }
 .job-name-link:hover, .job-name-link:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
 .job-name-link:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
 .job-log-identity { overflow-wrap: anywhere; }
@@ -343,6 +344,8 @@ body.modal-open { overflow: hidden; }
 .spec-expand-button:hover { text-decoration: underline; }
 .spec-expand-button:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
 .spec-jobs-row > td { padding: 16px; background: #f7fafe; }
+.inline-job-log { min-width: 0; }
+.inline-job-log-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
 .spec-jobs { min-width: 0; }
 .spec-job-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
 .build-history-list-panel, .build-detail-panel { min-width: 0; }

@@ -4,7 +4,7 @@
     <p v-if="loading && !jobs.length" class="config-empty">{{ t('jobControl.loading') }}</p>
     <p v-else-if="!error && !jobs.length" class="config-empty">{{ t('jobControl.empty') }}</p>
     <div v-else-if="jobs.length" class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t('jobControl.name') }}</th><th>{{ t('jobControl.phase') }}</th><th>Runner</th><th>{{ t('admin.actions') }}</th></tr></thead>
-      <tbody><tr v-for="job in jobs" :key="job.metadata?.uid"><td><RouterLink v-if="job.metadata?.name" class="job-name-link" :to="{ name: 'job-logs', params: { name: project, job: job.metadata.name } }" :aria-label="t('jobLog.open', { name: job.metadata.name })">{{ job.metadata.name }}</RouterLink><span v-else>—</span></td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || '—' }}</td><td><div class="spec-job-actions"><button class="text-button" type="button" :disabled="loading || busy || !!refreshingJob || !job.metadata?.name" :aria-label="t('jobControl.refreshJob', { name: job.metadata?.name })" @click="refreshJob(job)">{{ t('common.refresh') }}</button><button v-if="canAbort && abortable(job)" class="text-button danger-link" type="button" :disabled="busy || !!refreshingJob || !job.metadata?.uid" @click="open(job)">{{ t('jobControl.abort') }}</button></div></td></tr></tbody>
+      <tbody><template v-for="job in jobs" :key="job.metadata?.uid || job.metadata?.name"><tr><td><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedJob === job.metadata.name" :aria-label="t('jobLog.open', { name: job.metadata.name })" @click="toggleLog(job.metadata.name)">{{ job.metadata.name }}</button><span v-else>—</span></td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || '—' }}</td><td><div class="spec-job-actions"><button class="text-button" type="button" :disabled="loading || busy || !!refreshingJob || !job.metadata?.name" :aria-label="t('jobControl.refreshJob', { name: job.metadata?.name })" @click="refreshJob(job)">{{ t('common.refresh') }}</button><button v-if="canAbort && abortable(job)" class="text-button danger-link" type="button" :disabled="busy || !!refreshingJob || !job.metadata?.uid" @click="open(job)">{{ t('jobControl.abort') }}</button></div></td></tr><tr v-if="expandedJob === job.metadata?.name" class="spec-jobs-row"><td colspan="4"><JobLogInline :project="project" :job-name="job.metadata.name" /></td></tr></template></tbody>
     </table></div>
     <button v-if="next" class="secondary-button" :disabled="loading || busy" @click="load(next)">{{ t('jobControl.next') }}</button>
     <ModalDialog v-if="selected" title-id="abort-job-title" :title="t('jobControl.abort')" :close-label="t('common.close')" @close="close">
@@ -20,11 +20,11 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { RouterLink } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { ApiError, errorTranslationKey, list, request } from '@/api';
 import type { Job } from '@/types';
 import ModalDialog from './ModalDialog.vue';
+import JobLogInline from './JobLogInline.vue';
 import StatusBadge from './StatusBadge.vue';
 
 const props = defineProps<{ project: string; buildName: string; specName: string; canAbort: boolean }>();
@@ -32,13 +32,14 @@ const { t } = useI18n();
 const jobs = ref<Job[]>([]), next = ref('');
 const loading = ref(false), busy = ref(false), error = ref(''), message = ref('');
 const refreshingJob = ref('');
+const expandedJob = ref('');
 const selected = ref<Job | null>(null), reason = ref(''), dialogError = ref('');
 let generation = 0;
 const path = (project: string) => `/apis/ebs/v1/projects/${encodeURIComponent(project)}/jobs`;
 const abortable = (job: Job) => job.status?.phase === 'Pending' || job.status?.phase === 'Running';
 watch(() => [props.project, props.buildName, props.specName], () => {
   jobs.value = []; next.value = ''; error.value = '';
-  selected.value = null; message.value = '';
+  selected.value = null; message.value = ''; expandedJob.value = '';
   void load('');
 }, { immediate: true });
 async function load(cursor: string): Promise<void> {
@@ -50,10 +51,14 @@ async function load(cursor: string): Promise<void> {
     query.set('labelSelector', `ebs.io/build-name=${props.buildName},ebs.io/spec-name=${props.specName}`);
     if (cursor) query.set('continue', cursor);
     const page = await list<Job>(`${path(props.project)}?${query}`);
-    if (current === generation) { jobs.value = page.items; next.value = page.next; }
+    if (current === generation) {
+      jobs.value = page.items; next.value = page.next;
+      if (!page.items.some((job) => job.metadata?.name === expandedJob.value)) expandedJob.value = '';
+    }
   } catch (e) { if (current === generation) error.value = t(errorTranslationKey(e)); }
   finally { if (current === generation) loading.value = false; }
 }
+function toggleLog(name: string): void { expandedJob.value = expandedJob.value === name ? '' : name; }
 async function refreshJob(job: Job): Promise<void> {
   const name = job.metadata?.name;
   if (!name || refreshingJob.value || loading.value || busy.value) return;
