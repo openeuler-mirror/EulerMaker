@@ -176,9 +176,17 @@ body.modal-open { overflow: hidden; }
 .job-log-summary { display: inline-flex; align-items: center; gap: 12px; min-width: 0; white-space: nowrap; }
 .job-log-summary > span:first-child { flex: none; }
 .job-log-summary .job-log-notice { overflow: hidden; text-overflow: ellipsis; }
-.job-log-output { max-height: min(70vh, 900px); margin: 0; padding: 18px; overflow: auto; color: #e5eaf2; background: #172334; border-radius: 8px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.job-log-actions { display: flex; align-items: center; gap: 12px; }
+.job-log-box { position: relative; min-height: 64px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.job-log-output { box-sizing: border-box; width: 100%; max-height: min(70vh, 900px); margin: 0; padding: 18px 88px 18px 18px; overflow: auto; color: var(--ink); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.job-log-box > .config-empty, .job-log-box > .inline-error { margin: 0; padding: 18px 88px 18px 18px; }
+.job-log-controls { position: absolute; z-index: 1; top: 10px; right: 10px; display: flex; gap: 6px; }
+.job-log-control-button { width: 28px; height: 28px; display: grid; place-items: center; color: var(--blue); background: #fff; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.job-log-control-button:hover:not(:disabled) { background: #edf6ff; }
+.job-log-control-button:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 2px; }
+.job-log-control-button:disabled { opacity: .5; cursor: not-allowed; }
+.job-log-control-button svg { width: 15px; height: 15px; }
 .inline-job-log:fullscreen { display: flex; flex-direction: column; min-height: 0; padding: 24px; overflow: hidden; background: var(--surface); }
+.inline-job-log:fullscreen .job-log-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .inline-job-log:fullscreen .job-log-output { flex: 1; min-height: 0; max-height: none; }
 .row-link { display: inline-flex; align-items: center; gap: 5px; color: var(--blue); font-weight: 650; white-space: nowrap; }
 .table-footer { margin-top: 22px; display: flex; align-items: center; gap: 24px; color: var(--muted); font-size: 13px; }

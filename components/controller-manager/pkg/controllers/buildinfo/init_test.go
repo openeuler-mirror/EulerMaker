@@ -657,6 +657,29 @@ func TestSingleRepoInjection(t *testing.T) {
 	}
 }
 
+func TestSingleArtifactRepoInjection(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	c.config.ArtifactManagerAddr = "http://artifact.example:8081"
+	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+	client.SeedBuild(testBuildObj("single", "repo1"))
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildTargetContent(testBuildTargetContent())
+	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj("artifact:///repositories/v1/repo-1/"))
+	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
+
+	reconcileOnce(t, c)
+
+	jobs := listJobs(t, client)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(jobs))
+	}
+	if want := "repo: http://artifact.example:8081/repositories/v1/repo-1/"; !strings.Contains(jobs[0].Spec.Payload, want) {
+		t.Fatalf("payload = %q, want %q", jobs[0].Spec.Payload, want)
+	}
+}
+
 func TestSinglePreferWithoutDependencyGate(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))

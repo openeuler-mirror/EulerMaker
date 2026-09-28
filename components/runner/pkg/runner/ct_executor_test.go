@@ -78,7 +78,7 @@ func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read container log: %v", err)
 	}
-	if string(logData) != "container log\n" {
+	if !strings.HasSuffix(string(logData), "] container log\n") {
 		t.Fatalf("container log = %q", string(logData))
 	}
 }
@@ -227,7 +227,7 @@ func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
 	if resultRoot != filepath.Join(dir, "results", "project-a", "job-a") {
 		t.Fatalf("result root = %s", resultRoot)
 	}
-	if string(sink.data) != "container log\n" || !sink.completed {
+	if !strings.HasSuffix(string(sink.data), "] container log\n") || !sink.completed {
 		t.Fatalf("sink data=%q completed=%v", sink.data, sink.completed)
 	}
 }

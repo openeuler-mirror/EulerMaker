@@ -1175,7 +1175,7 @@ spec:
     macros: ${buildinfo.spec.BuildPayload.macros}
     installPackages: ${buildinfo.spec.BuildPayload.installPackages}
     prefer: "java-11-openjdk-devel"               # 仅当前 spec 的多候选 BuildRequires 命中时写入；多个名称以空格分隔，无命中则省略
-    repo: "http://.../rpmrepo/<uid> http://.../everything/aarch64"  # controller 注入：过程仓 contentURL 原样置首，bootstrapRepo[].repo 追加目标架构目录后按声明顺序拼接
+    repo: "http://.../repositories/v1/<uid>/ http://.../everything/aarch64"  # controller 注入：过程仓 contentURL 先解析为 HTTP(S) URL 再置首，bootstrapRepo[].repo 追加目标架构目录后按声明顺序拼接
     repo_priority: "10 10"                     # 默认每仓库 "10"（0-99，越大优先级越低）；buildPayload 顶层 repo_priority 键可覆盖
     spec_url: ${snapshot.status.packageRepoStatuses[${本轮组装的 specDepends[${specName}].repoName}].cloneUrl
     commitId: ${snapshot.status.packageRepoStatuses[${本轮组装的 specDepends[${specName}].repoName}].commitId}
@@ -1220,7 +1220,7 @@ status:                                             # 创建时恒 Pending/Pendi
    - `specDepends[specName].repoName` 在 `BuildInfo.spec.buildPayload.disable_check_path` 列表中时写入 `disable_check_path: true`，否则删除基底列表且不写该键；同仓库的多个 spec 得到相同结果。该字段仅向构建脚本传递意图，构建脚本负责落实 RPATH 检查开关；Runner 不解析它。
    - `prefer` 按当前 spec 的 `buildRequires` 逐项计算，排除 `buildRemoves`；仅在当前优先级仓库层中满足版本约束的提供者至少有两个、并按 16.1 的候选名归一与配置顺序命中项目级 `prefer` 时，记录实际命中的 RPM 基名。按依赖名字典序遍历、首次出现保留以去重，多个名称以空格连接为 YAML 字符串写入当前 Job；无命中或配置为空则删除基底 `prefer` 键。计算复用 16.1 的分层候选选择与版本比较，不另建一套规则；选择结果须能区分 `prefer` 命中和单候选/最高版本兜底，后两者不写入。只考虑 buildRequires，不将 install 依赖写入 Job `prefer`。Runner 不负责计算。
    - 构建级两键：
-     - `repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时原样注入并**置首**；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4），上轮产物经该地址可见；后续批次 Job 注入当前已发布版本地址，本轮上游产物由此进入构建环境） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），空格连接；结果为空 → 不注入（保留基底同名键）；
+     - `repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时先用共享 `--artifact-manager-addr` 解析为 HTTP(S) URL，再**置首**；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4），上轮产物经该地址可见；后续批次 Job 注入当前已发布版本地址，本轮上游产物由此进入构建环境） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），空格连接；结果为空 → 不注入（保留基底同名键）；
      - `single` 类型专条：`repo` 注入规则见 7.2.3 第 3 条（本轮同名 RpmRepo 的 `contentURL` 非空时置首——single 不经物化推进，恒为创建时预置的继承基线；contentURL 为空/GET 404 → 不注入该项；结果为空 → 不注入，保留基底同名键）；
      - `repo_priority` = repo_priority 恒由 controller 归一为与 repo 条目数一致的序列（空格连接）：基底 repo_priority 非空字符串 → 以其为基底归一（不足位补 "10"、超出位截断，截断/补齐记一次 warning）；基底缺失/为空 → 全部取 "10"。取值 0-99，越大优先级越低；repo 为空时不注入本键。
 3. **序列化**：`yaml.Marshal` 生成单个 YAML 字符串（map 序列化，不保证键序）。
@@ -1260,7 +1260,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | Go 类型 | 消费点 |
 |------|------|--------|
-| `status.repository.contentURL` | string | 本轮当前已发布物理版本地址（rpm-repo-controller 版本提升时更新；增量轮创建即指向继承版本）：Job payload `repo` 注入来源之一（非空时注入并置首；首轮/全量构建首批 Job 创建时为空即省略，见 15.3.1）；亦为 RpmMeta 内存缓存 RpmRepo 层的 XML 下载源（15.10）；`single` 的 `repo` 注入来源为本轮同名 RpmRepo 的本字段（继承基线，见 7.2.3 第 3 条） |
+| `status.repository.contentURL` | string | 本轮当前已发布物理版本的 `artifact:///repositories/.../` 逻辑地址（rpm-repo-controller 版本提升时更新；增量轮创建即指向继承版本）；BuildInfo 用共享 `--artifact-manager-addr` 解析为 HTTP(S) URL，供 Job payload `repo` 注入和 RpmMeta 层 XML 下载共用；`single` 的注入来源也是本轮同名 RpmRepo 的本字段（继承基线，见 7.2.3 第 3 条） |
 | `status.repository.repositoryUID` | string | 当前物理版本标识（溯源；初始内容继承自上一轮已发布版本时为该版本 UID）；本控制器不做发布判定依据（发布判据为 `sourceJobNames`，见下行） |
 | `status.repository.sourceJobNames` | []string | **发布确认门禁凭据**（7.4.6 第 2 条）：本对象已成功消费的累计 Job 名称集合（rpm-repo-controller 成功物化批次后一次 CAS 累计写入，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」）——Succeeded 直接上游最新一代 Job 的 `metadata.name` ∈ 本集合 → 已发布；不在 → 未发布等待下一轮（15.3.2 `metadata.name`）；对象读取自本轮 reconcile 守卫已 GET 的同名 RpmRepo（各检查点复用不重复 GET），无额外查询 |
 | `status.release.phase` | string | reconcile 前置守卫（7.1）判定正式发布失败：值为 `Failed`（稳定终态，E-28）→ 按 6.5 停止派发，等待已有 Job 全部终态后写 `Completed`；其余取值（含 `release` 缺失——整个 `release` 结构为 nil，如尚未进入发布流程）不触发、正常推进；`single` 不查询（7.2.3）。`release` 其余字段（`contentURL` 稳定入口等）不消费（属 Build Controller 消费域） |
