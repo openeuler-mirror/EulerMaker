@@ -13,10 +13,17 @@ npm install
 npm run dev
 ```
 
-开发服务器默认将 `/apis` 和 `/auth` 转发到 `http://localhost:8080`。使用其他 Gateway 地址时：
+开发服务器默认将 `/apis` 和 `/auth` 转发到 `http://localhost:8080`，将 Job 日志使用的 `/artifacts` 转发到 `http://localhost:8081`。这两个地址都从运行 Vite 的机器访问；访问不到 8081 时，日志请求会在 Vite 代理层失败。使用其他后端地址时：
 
 ```bash
-VITE_EULERMAKER_GATEWAY=http://gateway.example npm run dev
+VITE_EULERMAKER_GATEWAY=http://gateway.example:8080 \
+VITE_EULERMAKER_ARTIFACT_MANAGER=http://artifact.example:8081 npm run dev
+```
+
+如果后端部署在 `ssh dev` 对应的机器，而本地不能直连 Artifact Manager，可以在运行 Vite 的机器上另开终端建立隧道，再启动或重启 Vite：
+
+```bash
+ssh -N -L 8081:127.0.0.1:8081 dev
 ```
 
 ## Docker Compose

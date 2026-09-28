@@ -3,8 +3,13 @@ import zhCN from "@/i18n/messages/zh-CN";
 type MessageShape<T> = { [K in keyof T]: T[K] extends string ? string : MessageShape<T[K]> };
 
 export default {
+  jobLog: {
+    title: 'Job logs', open: 'View logs for job {name}', back: 'Back to project', refresh: 'Refresh logs',
+    loading: 'Loading logs…', empty: 'No logs yet', loadFailed: 'Could not load logs. Try again.',
+    tailNotice: 'Showing only the last 256 KiB of this log', state: 'Log state',
+  },
   jobControl: {
-    title: 'Build jobs', name: 'Job name', phase: 'Phase', all: 'All', next: 'Next page', load: 'Load jobs',
+    title: 'Build jobs', name: 'Job name', phase: 'Phase', next: 'Next page', load: 'Load jobs', loading: 'Loading jobs…', empty: 'No jobs for this spec',
     abort: 'Abort job', reason: 'Reason (optional)', hint: 'Only this job is aborted, not the entire build. Execution stops after the runner receives the notification.',
     aborted: 'Job aborted. Execution stops when the runner receives the notification.', finished: 'The job already finished; its result was not changed.',
     unknown: 'Abort is not confirmed and the job is still nonterminal. Refresh to confirm or submit again.',
@@ -225,7 +230,7 @@ export default {
     builds: "Builds",
     buildsHint: "Build records",
     jobs: "Jobs",
-    jobsHint: "Execution jobs",
+    jobsHint: "Running jobs",
     configEyebrow: "Configuration",
     config: "Project configuration",
     info: "Project information",
@@ -234,6 +239,17 @@ export default {
     viewAllBuilds: "View all",
     historyEyebrow: "Builds",
     buildHistory: "Build history",
+    buildInfo: "Build details",
+    buildInfoLoading: "Loading BuildInfo…",
+    buildInfoMissing: "BuildInfo has not been created for this build",
+    buildInfoFailedPackages: "Failed packages",
+    buildInfoSpecStatus: "Spec status",
+    searchSpecs: "Search spec name",
+    noMatchingSpecs: "No matching specs",
+    buildInfoNoSpecs: "No spec status yet",
+    buildInfoBuildStatus: "Build status",
+    buildInfoConditions: "Conditions",
+    buildInfoRaw: "View full BuildInfo",
     buildName: "Build name",
     buildType: "Build type",
     buildTarget: "Build target",
