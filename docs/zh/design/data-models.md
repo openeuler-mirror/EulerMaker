@@ -772,7 +772,6 @@ type JobStatus struct {
     Runner     string      `json:"runner,omitempty"`
     StartTime  metav1.Time `json:"startTime,omitempty"`
     EndTime    metav1.Time `json:"endTime,omitempty"`
-    ResultRoot string      `json:"resultRoot,omitempty"`
     Message    string      `json:"message,omitempty"`
     RestartCount int64     `json:"restartCount,omitempty"`
 }
@@ -785,7 +784,6 @@ type JobStatus struct {
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
-| `resultRoot` | string | 结果存储路径 |
 | `message` | string | 状态消息 |
 | `restartCount` | int64 | 重试次数，默认 0。调度器可使用该字段计算重试退避时间 |
 

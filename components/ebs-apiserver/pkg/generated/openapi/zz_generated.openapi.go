@@ -1116,12 +1116,6 @@ func schema_ebs_api_ebs_v1_JobStatus(ref common.ReferenceCallback) common.OpenAP
 							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
-					"resultRoot": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
 					"message": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},

@@ -82,7 +82,7 @@ func (c *fakeClient) DeleteJob(ctx context.Context, namespace, name string, prec
 func runningJob() *ebsv1.Job {
 	return &ebsv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "project", Name: "job", UID: "job-uid", ResourceVersion: "10"},
-		Status:     ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun, Runner: "runner", StartTime: metav1.NewTime(time.Unix(100, 0)), ResultRoot: "result", Message: "old", RestartCount: 3},
+		Status:     ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun, Runner: "runner", StartTime: metav1.NewTime(time.Unix(100, 0)), Message: "old", RestartCount: 3},
 	}
 }
 
@@ -152,7 +152,7 @@ func TestRunnerLostGraceAndFailure(t *testing.T) {
 	if client.getRunnerCalls != 1 || client.updateCalls != 1 || request == nil {
 		t.Fatalf("calls: runner=%d update=%d", client.getRunnerCalls, client.updateCalls)
 	}
-	if request.Status.Phase != ebsv1.JobFailed || request.Status.Stage != ebsv1.JobStagePostRun || request.Status.Runner != "runner" || request.Status.ResultRoot != "result" || request.Status.RestartCount != 3 {
+	if request.Status.Phase != ebsv1.JobFailed || request.Status.Stage != ebsv1.JobStagePostRun || request.Status.Runner != "runner" || request.Status.RestartCount != 3 {
 		t.Fatalf("owned fields were not preserved: %+v", request.Status)
 	}
 	wantEnd := now.Add(5 * time.Minute)

@@ -123,7 +123,7 @@ func (c *Client) UpdateJobStatus(ctx context.Context, job JobResource, status Jo
 		"status": map[string]any{
 			"phase": status.Phase, "stage": status.Stage, "runner": status.Runner,
 			"startTime": status.StartTime, "endTime": status.EndTime,
-			"resultRoot": status.ResultRoot, "message": status.Message,
+			"message": status.Message,
 		},
 	}
 	path := apiPrefix + "/projects/" + url.PathEscape(job.Metadata.Namespace) + "/jobs/" + url.PathEscape(job.Metadata.Name) + "/status"

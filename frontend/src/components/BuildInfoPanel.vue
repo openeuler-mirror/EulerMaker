@@ -33,10 +33,6 @@
           <p v-if="condition.message">{{ condition.message }}</p>
         </div>
       </section>
-      <details class="build-info-raw">
-        <summary>{{ t('project.buildInfoRaw') }}</summary>
-        <pre>{{ JSON.stringify(buildInfo, null, 2) }}</pre>
-      </details>
     </template>
   </section>
 </template>

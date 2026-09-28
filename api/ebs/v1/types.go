@@ -346,7 +346,6 @@ type JobStatus struct {
 	Runner       string      `json:"runner,omitempty"`
 	StartTime    metav1.Time `json:"startTime,omitempty"`
 	EndTime      metav1.Time `json:"endTime,omitempty"`
-	ResultRoot   string      `json:"resultRoot,omitempty"`
 	Message      string      `json:"message,omitempty"`
 	RestartCount int64       `json:"restartCount,omitempty"`
 }

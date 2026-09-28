@@ -129,13 +129,12 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase      string     `json:"phase,omitempty"`
-	Stage      string     `json:"stage,omitempty"`
-	Runner     string     `json:"runner,omitempty"`
-	StartTime  *time.Time `json:"startTime,omitempty"`
-	EndTime    *time.Time `json:"endTime,omitempty"`
-	ResultRoot string     `json:"resultRoot,omitempty"`
-	Message    string     `json:"message,omitempty"`
+	Phase     string     `json:"phase,omitempty"`
+	Stage     string     `json:"stage,omitempty"`
+	Runner    string     `json:"runner,omitempty"`
+	StartTime *time.Time `json:"startTime,omitempty"`
+	EndTime   *time.Time `json:"endTime,omitempty"`
+	Message   string     `json:"message,omitempty"`
 }
 
 type WatchEvent struct {

@@ -1238,7 +1238,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | 写入方与时机 |
 |------|------|
-| `status.runner` / `startTime` / `endTime` / `resultRoot` / `message` / `restartCount` | runner 执行期/终态回写 |
+| `status.runner` / `startTime` / `endTime` / `message` / `restartCount` | runner 执行期/终态回写 |
 | `status.phase` / `status.stage` | runner 推进 stage：`Pending → Running → PostRun`；phase 终态：`Succeeded` / `Failed` / `Aborted`（PostRun 为 `status.stage` 值、非 phase，见 data-models.md；phase 映射见 7.4.5） |
 | `status.message`（install 失败缺失依赖 JSON） | runner 在 install 校验失败时写入（JSON 结构见 7.4.7）；buildinfo 回填消费（见 15.3.2）——其余场景为普通状态消息，buildinfo 不按 install 语义解析 |
 
@@ -1252,7 +1252,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `status.phase` | 经 7.4.5 映射回写 `build.status`；`Pending` 无映射 → 强制 `Running`（不得沿用上一代终态） |
 | `status.message` | install 失败缺失依赖 JSON（runner 在 install 校验失败时写入，结构见 7.4.7）→ 解析回填 `specStatus[spec].install`（`phase=Succeeded` 时判定；解析失败不改写）；其余内容不按 install 语义消费 |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
-| `status.stage` / `runner` / `endTime` / `resultRoot` / `restartCount` | 不消费 |
+| `status.stage` / `runner` / `endTime` / `restartCount` | 不消费 |
 
 ### 15.4 RpmRepo（只读）
 

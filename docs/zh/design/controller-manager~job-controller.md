@@ -100,10 +100,10 @@ if errors.As(err, &writeErr) {
 | 组件 | 拥有的 Job status 字段或迁移 |
 |------|-----------------------------|
 | Scheduler | 绑定时写 `phase=Running`、`runner=<name>` |
-| Runner | 写 `stage`、`startTime`、`endTime`、`resultRoot`、`message`、`restartCount` 以及正常执行产生的终态 |
+| Runner | 写 `stage`、`startTime`、`endTime`、`message`、`restartCount` 以及正常执行产生的终态 |
 | Job Controller | 仅在 Runner 丢失时写 `phase=Failed`、`endTime`、`message`，保留当前 `stage` |
 
-Job Controller 不修改 `runner`、`startTime`、`resultRoot` 和 `restartCount`。若数据模型包含 Artifact 摘要字段，也必须原样保留。
+Job Controller 不修改 `runner`、`startTime` 和 `restartCount`。若数据模型包含 Artifact 摘要字段，也必须原样保留。
 
 终态为：
 

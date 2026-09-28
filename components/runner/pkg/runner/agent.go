@@ -451,7 +451,6 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 	if parent.Err() != nil {
 		return
 	}
-	status.ResultRoot = resultRoot
 	status.Phase = "Running"
 	status.Stage = "PostRun"
 	if executionErr != nil {
@@ -469,10 +468,7 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 
 func (a *Agent) resumePostRun(parent context.Context, key string, job JobResource) {
 	defer a.finishJob(key)
-	resultDir := job.Status.ResultRoot
-	if resultDir == "" || strings.HasPrefix(resultDir, "artifact://") {
-		resultDir = filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name)
-	}
+	resultDir := filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name)
 	var executionErr error
 	if job.Status.Message != "" {
 		executionErr = errors.New(job.Status.Message)
@@ -498,7 +494,6 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, statu
 			status.Message = "artifact upload: " + artifactErr.Error()
 		}
 	} else {
-		status.ResultRoot = "artifact://" + job.Metadata.Namespace + "/" + job.Metadata.Name
 		if executionErr != nil {
 			status.Phase = "Failed"
 			status.Message = executionErr.Error()
