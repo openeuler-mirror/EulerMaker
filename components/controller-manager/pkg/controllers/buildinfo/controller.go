@@ -29,6 +29,8 @@ const Name = "buildinfo"
 
 // Config carries the BuildInfo controller settings (design 12.1).
 type Config struct {
+	// ArtifactManagerAddr is reachable by this controller and Job containers.
+	ArtifactManagerAddr string
 	// PollPeriod is the PollingSource resync period (--poll-period shared).
 	PollPeriod time.Duration
 	// MaxRetries is the fast-backoff budget before slow retry (shared).

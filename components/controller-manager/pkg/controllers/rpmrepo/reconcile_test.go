@@ -274,7 +274,7 @@ func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
 		t.Fatalf("unexpected result %+v", result)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Repository.RepositoryUID == "" || updated.Status.Repository.ContentURL != "/repositories/v1/next/" {
+	if updated.Status.Repository.RepositoryUID == "" || updated.Status.Repository.ContentURL != "artifact:///repositories/v1/next/" {
 		t.Fatalf("batch was not promoted: %+v", updated.Status.Repository)
 	}
 	if updated.Status.Repository.Transition != nil {
@@ -316,7 +316,7 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "/repositories/v1/next/" {
+	if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "artifact:///repositories/v1/next/" {
 		t.Fatalf("process repository was not materialized: %+v", updated.Status.Repository)
 	}
 	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || updated.Status.Release.UpdatedAt == nil || updated.Status.Release.ContentURL != "" {

@@ -3,6 +3,7 @@
 package rpmrepo
 
 import (
+	"fmt"
 	"log"
 	"reflect"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"controller-manager/pkg/artifacturl"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -194,8 +196,12 @@ func (r *reconciler) collectRepositorySuccess(repo *ebsv1.RpmRepo, transition *e
 	if target.Status.Repository == nil {
 		target.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{}
 	}
+	contentURL, err := artifacturl.Reference(response.ContentURL)
+	if err != nil {
+		return controller.ReconcileResult{}, fmt.Errorf("invalid Artifact Manager repository contentURL: %w", err)
+	}
 	target.Status.Repository.RepositoryUID = transition.RepositoryUID
-	target.Status.Repository.ContentURL = response.ContentURL
+	target.Status.Repository.ContentURL = contentURL
 	target.Status.Repository.SourceJobNames = unionSortedNames(target.Status.Repository.SourceJobNames, transition.Inputs)
 	target.Status.Repository.Transition = nil
 	target.Status.Repository.UpdatedAt = r.nowPtr()

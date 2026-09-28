@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"controller-manager/pkg/artifacturl"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -387,13 +388,17 @@ func (r *reconciler) setReleasePhase(repo *ebsv1.RpmRepo, phase ebsv1.RpmRepoRel
 }
 
 func (r *reconciler) collectReleaseSuccess(repo *ebsv1.RpmRepo, transition *ebsv1.ReleaseTransition, response ReleaseResponse) (controller.ReconcileResult, error) {
+	contentURL, err := artifacturl.Reference(response.ContentURL)
+	if err != nil {
+		return controller.ReconcileResult{}, fmt.Errorf("invalid Artifact Manager release contentURL: %w", err)
+	}
 	target := repo.DeepCopy()
 	if target.Status.Release == nil {
 		target.Status.Release = &ebsv1.RpmRepoReleaseStatus{}
 	}
 	target.Status.Release.Phase = ebsv1.RpmRepoReleaseReady
 	target.Status.Release.SourceRepositoryUID = transition.SourceRepositoryUID
-	target.Status.Release.ContentURL = response.ContentURL
+	target.Status.Release.ContentURL = contentURL
 	target.Status.Release.Transition = nil
 	target.Status.Release.UpdatedAt = r.nowPtr()
 	conditions, _ := MergeCondition(target.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionTrue, ebsv1.RpmRepoReasonReleaseActivated, "", target.Generation, r.now)

@@ -1,27 +1,28 @@
 <template>
   <section ref="fullscreenElement" class="inline-job-log" :aria-label="t('jobLog.title')">
-    <div class="inline-job-log-toolbar">
+    <div v-if="logState || (truncated && logText)" class="inline-job-log-toolbar">
       <div class="job-log-summary">
         <span v-if="logState">{{ t('jobLog.state') }}: {{ logState }}</span>
         <span v-if="truncated && logText" class="job-log-notice">{{ t('jobLog.tailNotice') }}</span>
       </div>
-      <div class="job-log-actions">
-        <button class="text-button" type="button" :disabled="loading" @click="load">{{ t('jobLog.refresh') }}</button>
-        <button class="text-button" type="button" @click="toggleFullscreen">{{ t(isFullscreen ? 'jobLog.exitFullscreen' : 'jobLog.fullscreen') }}</button>
-      </div>
     </div>
-    <p v-if="error" class="inline-error" role="alert">{{ t('jobLog.loadFailed') }}</p>
-    <p v-else-if="loading && !logText" class="config-empty">{{ t('jobLog.loading') }}</p>
-    <p v-else-if="!logText" class="config-empty">{{ t('jobLog.empty') }}</p>
-    <template v-else>
-      <pre class="job-log-output">{{ logText }}</pre>
-    </template>
+    <div class="job-log-box">
+      <div class="job-log-controls">
+        <button class="job-log-control-button" type="button" :aria-label="t('jobLog.refresh')" :title="t('jobLog.refresh')" :disabled="loading" @click="load"><Refresh /></button>
+        <button class="job-log-control-button" type="button" :aria-label="t(isFullscreen ? 'jobLog.exitFullscreen' : 'jobLog.fullscreen')" :title="t(isFullscreen ? 'jobLog.exitFullscreen' : 'jobLog.fullscreen')" @click="toggleFullscreen"><ScaleToOriginal v-if="isFullscreen" /><FullScreen v-else /></button>
+      </div>
+      <p v-if="error" class="inline-error" role="alert">{{ t('jobLog.loadFailed') }}</p>
+      <p v-else-if="loading && !logText" class="config-empty">{{ t('jobLog.loading') }}</p>
+      <p v-else-if="!logText" class="config-empty">{{ t('jobLog.empty') }}</p>
+      <pre v-else class="job-log-output">{{ logText }}</pre>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { FullScreen, Refresh, ScaleToOriginal } from '@element-plus/icons-vue';
 import { useElementFullscreen } from '@/composables/useElementFullscreen';
 import { LOG_TAIL_BYTES } from '@/utils/logPreview';
 

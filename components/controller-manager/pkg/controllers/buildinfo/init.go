@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"controller-manager/pkg/artifacturl"
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
@@ -99,7 +100,11 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	// Steps 3+4: dispatch zero-indegree specs and bootstrap break points. The
 	// build-target Config snapshot resolves lazily on the first actual Job creation and
 	// is shared by every creation of this round (E-26).
-	dispatch := &roundDispatch{arch: arch, contentURL: heldContentURL(round)}
+	contentURL, err := c.resolveContentURL(heldContentURL(round))
+	if err != nil {
+		return controller.ReconcileResult{}, err
+	}
+	dispatch := &roundDispatch{arch: arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
 		if dcg.Node(name).InDegree() != 0 {
 			continue
@@ -290,7 +295,11 @@ func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcile
 		sources = &rpmver.RpmMetaSources{}
 	}
 	repoBefore := sources.RepoLayer
-	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, heldContentURL(round), arch); err != nil {
+	contentURL, err := c.resolveContentURL(heldContentURL(round))
+	if err != nil {
+		return nil, controller.ReconcileResult{}, err
+	}
+	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
 		reason := ReasonRpmRepoXMLDownloadFailed
 		var srcErr *rpmver.SourceError
 		if errors.As(err, &srcErr) && srcErr.Kind == rpmver.FailureParse {
@@ -336,6 +345,10 @@ func heldContentURL(round *reconcileRound) string {
 		return ""
 	}
 	return round.rpmRepo.Status.Repository.ContentURL
+}
+
+func (c *Controller) resolveContentURL(reference string) (string, error) {
+	return artifacturl.Resolve(c.config.ArtifactManagerAddr, reference)
 }
 
 // listRoundJobs pages every Job of this Build (7.2 step 1 / 7.3 step 2).
@@ -627,5 +640,6 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	if repo.Status.Repository == nil {
 		return "", controller.ReconcileResult{}, nil
 	}
-	return repo.Status.Repository.ContentURL, controller.ReconcileResult{}, nil
+	contentURL, err := c.resolveContentURL(repo.Status.Repository.ContentURL)
+	return contentURL, controller.ReconcileResult{}, err
 }

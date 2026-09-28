@@ -52,9 +52,7 @@ components/controller-manager/pkg/controllers/rpmrepo/
   | --- | --- | --- |
   | `--rpmrepo-max-jobs-per-batch` | `100` | 必须 `> 0` |
   | `--rpmrepo-materialize-retry-limit` | `3` | 必须 `> 0`；物化可重试失败的重试次数上限，首次提交不计入，判定见第八章 |
-  | `--artifact-manager-addr` | 必填，无默认 | 非空且可解析为带 host 的 `http` / `https` URL |
-  | `--artifact-manager-timeout` | `30s` | 必须 `> 0` |
-  - 命名沿用现有风格（对照 `--git-server-addr` / `--git-server-timeout`、`--snapshot-failure-retry-limit`）；这些 flag 由本控制器独占，将来若被别的控制器复用再提升为共享段；
+- `--artifact-manager-addr` 和 `--artifact-manager-timeout` 是 controller-manager 共享配置。地址供 RpmRepo 客户端和 BuildInfo 解析过程仓地址共用，必须是带 host 的 HTTP(S) URL，且控制器与 Job 容器均可访问；超时默认 `30s`，必须大于零。
 - 框架配置沿用 `controller-manager.md`，不单独覆盖 worker 数和轮询周期；`--controllers` 控制本控制器启停。
 - 物化退避复用框架参数 `--controller-slow-retry-initial-delay`（30s）、`--controller-slow-retry-max-delay`（15m）、`--controller-slow-retry-jitter`（0.2）；计算、预算与等待规则统一见第八章。
 - 配置校验时机：所有静态配置在 `options.Parse` 阶段完成校验，非法时 controller-manager 直接启动失败，不得延迟到单个对象的 reconcile 中处理；
@@ -237,7 +235,7 @@ metadata:
 spec: {}
 status:
   repository:
-    contentURL: /repositories/v1/<base-repositoryUID>/  # Build Controller 创建时预置：上一个发布成功 Build 同名 RpmRepo 的 contentURL
+    contentURL: artifact:///repositories/v1/<base-repositoryUID>/  # Build Controller 创建时预置：上一个发布成功 Build 同名 RpmRepo 的 contentURL
     repositoryUID: <base-repositoryUID>                                       # Build Controller 创建时预置：同上
     sourceJobNames: []       # 为空表示本对象尚未产出过版本；仅有继承基线时不可发布
     transition: null
@@ -251,7 +249,7 @@ status:
 # 物化进行中（存在 repository.transition，尚无新版本）
 status:
   repository:
-    contentURL: /repositories/v1/<previous-repositoryUID>/
+    contentURL: artifact:///repositories/v1/<previous-repositoryUID>/
     repositoryUID: <previous-repositoryUID>
     sourceJobNames: ["job-0"]
     transition:
@@ -265,7 +263,7 @@ status:
 # 重试耗尽（或不可重试失败）：transition 原样保留，发布终局同次写入
 status:
   repository:
-    contentURL: /repositories/v1/<previous-repositoryUID>/
+    contentURL: artifact:///repositories/v1/<previous-repositoryUID>/
     repositoryUID: <previous-repositoryUID>
     sourceJobNames: ["job-0"]
     transition:
@@ -291,7 +289,7 @@ status:
 # 发布后
 status:
   repository:
-    contentURL: /repositories/v1/<repositoryUID>/
+    contentURL: artifact:///repositories/v1/<repositoryUID>/
     repositoryUID: <repositoryUID>
     sourceJobNames: ["job-1"]
     transition: null
@@ -299,7 +297,7 @@ status:
   release:
     phase: Ready            # 发布完成；single 或非 single 不发布时为 Skipped
     sourceRepositoryUID: <repositoryUID>
-    contentURL: /repositories/<project>/<os>/<arch>/
+    contentURL: artifact:///repositories/<project>/<os>/<arch>/
     transition: null
     updatedAt: "2026-09-14T10:00:00Z"
   conditions:
@@ -315,12 +313,12 @@ status:
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 Build 同名同 namespace |
 | `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-os` / `ebs.io/target-arch`，值取 `Build.spec.buildTarget.os` / `arch` ；本控制器只读、不补写、不改写，用于发布候选的服务端 `(os, arch)` 过滤 |
 | `RpmRepo.spec` | Build Controller | 空 `{}`，本控制器不修改 |
-| `RpmRepo.status.repository.contentURL` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为上一个发布成功 Build 同名 RpmRepo 的 `contentURL`，即本对象的基础仓；提升后为本对象当前可读版本的地址；失败路径不清空。取 Artifact Manager 返回的相对路径，形如 `/repositories/v1/{repositoryUID}/`；产出判据见 `sourceJobNames` |
+| `RpmRepo.status.repository.contentURL` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为上一个发布成功 Build 同名 RpmRepo 的 `contentURL`，即本对象的基础仓；提升后为本对象当前可读版本的地址；失败路径不清空。将 Artifact Manager 返回的相对路径记为逻辑地址 `artifact:///repositories/v1/{repositoryUID}/`；产出判据见 `sourceJobNames` |
 | `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为基础仓的 `repositoryUID`（`SubmitRepository` 的 `baseRepositoryUID` 来源）；提升后为本对象当前版本的物理标识。产出判据见 `sourceJobNames` |
 | `RpmRepo.status.repository.sourceJobNames` | RpmRepo Controller | 已成功纳入当前版本的 Job 名称；写入时去重并按字典序排序；不记录失败 Job。为空表示本对象尚未产出过版本（Build Controller 预置的继承基线不计入），其非空是「本对象已产出可发布版本」的唯一判据，不以 repositoryUID / contentURL 或 RepositoryReady 条件代替 |
 | `RpmRepo.status.repository.transition` | RpmRepo Controller | 在途批次或已放弃批次的固定输入（`inputs`）、`baseRepositoryUID` 与 `repositoryUID`；不承载重试计数（计数以 Artifact Manager 的 `attempt` 为准，见 §8）。成功提升时随 `transition=nil` 一起清除，失败收口时原样保留 |
 | `RpmRepo.status.repository.updatedAt` | RpmRepo Controller | 过程仓 status 最近一次有效写入时间（提交批次、失败收口、提升版本时更新）；**不用作退避锚点**（退避以 Artifact Manager 响应的 `updatedAt` 为准，见 §8） |
-| `RpmRepo.status.release` | Build Controller（single 创建时）/ RpmRepo Controller（非 single） | 发布状态：`phase`（`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Skipped`；single 初始为 Skipped）/ `sourceRepositoryUID` / `contentURL`（Project / OS / 架构的稳定仓库入口，取 Artifact Manager 返回的相对路径，形如 `/repositories/{project}/{os}/{arch}/`）/ `transition`（`sourceRepositoryUID` + 规范化 `excludeSpecs`）/ `updatedAt`；提交前先写 `release.transition`，它即请求的全部可变输入，重启后据此重放同一请求（请求摘要由 Artifact Manager 服务端计算，不落本状态） |
+| `RpmRepo.status.release` | Build Controller（single 创建时）/ RpmRepo Controller（非 single） | 发布状态：`phase`（`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Skipped`；single 初始为 Skipped）/ `sourceRepositoryUID` / `contentURL`（Project / OS / 架构的稳定仓库入口，将 Artifact Manager 返回的相对路径记为 `artifact:///repositories/{project}/{os}/{arch}/`）/ `transition`（`sourceRepositoryUID` + 规范化 `excludeSpecs`）/ `updatedAt`；提交前先写 `release.transition`，它即请求的全部可变输入，重启后据此重放同一请求（请求摘要由 Artifact Manager 服务端计算，不落本状态） |
 | `RpmRepo.status.conditions` | RpmRepo Controller | 过程仓与正式发布两类错误条件；type 必须区分二者（见第九章） |
 
 ## 五、状态机
@@ -468,7 +466,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | `200 Deleting`（该 `repositoryUID` 的记录正在删除） | 直接进入「失败收口」（不等待删除收尾，与 `409 RepositoryDeleting` 同口径），并记录 `reason=RepositoryCreationFailed` 告警 |
 
 4. **收口**（写入字段清单见第四章字段来源表，本节只列特有判定）：
-   - **成功收口**：把本批 Job 名称并入 `repository.sourceJobNames`（去重排序），一次 CAS 提交目标 status——`repository.contentURL` 取 Artifact Manager 的 Ready 响应、`repository.repositoryUID` 取本批 `repository.transition.repositoryUID`、`repository.transition=nil`、`repository.updatedAt` 与 `RepositoryReady=True/reason=RepositoryCreated` 条件；随后若仍有可入选 Job 则重新入队本键组下一批，否则进入第 5 步；
+   - **成功收口**：把本批 Job 名称并入 `repository.sourceJobNames`（去重排序），一次 CAS 提交目标 status——`repository.contentURL` 将 Artifact Manager 的 Ready 响应相对路径转为 `artifact:///` 逻辑地址、`repository.repositoryUID` 取本批 `repository.transition.repositoryUID`、`repository.transition=nil`、`repository.updatedAt` 与 `RepositoryReady=True/reason=RepositoryCreated` 条件；随后若仍有可入选 Job 则重新入队本键组下一批，否则进入第 5 步；
    - **重试**（`200 Failed{retryable=true}` 且响应 `attempt < --rpmrepo-materialize-retry-limit + 1` 且已过退避窗口，或 `429` / `503` / 网络 / 超时 / 未解析）：**不写 status**（`transition` 与版本字段原样保留），计一次 `rpmrepo_controller_materialize_retries_total`，按退避 `RequeueAfter` 用同一请求重放 `SubmitRepository`（`429`/`503` 优先按其 `Retry-After`；未落到记录的错误不影响预算）。退避窗口未过（锚点为响应 `updatedAt`）时本轮只返回剩余等待（`RequeueAfter`）+ `nil`：不调用 `SubmitRepository`、不写 status、不计 `rpmrepo_controller_materialize_retries_total`；
    - **失败收口**（可重试失败且响应 `attempt >= --rpmrepo-materialize-retry-limit + 1`，或遭遇不可重试失败）：一次 CAS 提交目标 status——`repository.transition` **原样保留**（`inputs` / `baseRepositoryUID` / `repositoryUID` 均为失败时刻取值）、`repository.updatedAt`、`RepositoryReady=False` 条件（reason `RepositoryCreationFailed`），并同次写发布失败终局 `release.phase=Failed`、`release.transition=nil`、`release.updatedAt` 与 `PublishSucceed=False` 条件（reason `RepositoryCreationFailed`）；计一次 `rpmrepo_controller_repository_failed_total`；不清空 `repository.repositoryUID` / `contentURL` 等版本字段；不调用 `SubmitRelease` / `ActivateRelease`、不额外入队发布键；本轮返回零值 + `nil`。
 5. **发布触发**：`BuildInfo.status.phase=Completed`、本轮候选扫描为空且 `repository.transition=nil` 后，若 `Build.spec.buildTarget.publishFlag=false`，一次 CAS 写 `release.phase=Skipped` 与 `release.updatedAt`，保留 `repository.*`，不写发布条件、不计发布成功或失败指标、不入队发布键；`sourceJobNames` 为空也按此处理。若允许发布，则 `repository.sourceJobNames` 非空时入队 `release/{project}/{os}/{arch}` 并返回零值 + `nil`；否则一次 CAS 写 `release.phase=Failed`、`release.transition=nil`、`release.updatedAt` 与 `PublishSucceed=False` 条件（reason `NoPublishableArtifacts`），计一次 `rpmrepo_controller_release_failed_total`，不写 `repository.*`、不调用 Artifact Manager、不入队发布键。前置条件未满足时等待，不写 status。
@@ -546,7 +544,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 
 - 激活（条件：Artifact Manager 返回 `Prepared`）：调 `ActivateRelease(buildName)`——`200`（切换成功或已是当前版本）→ 执行「成功收口」；可重试错误 → 保持 `release.phase=Prepared` 与检查点：带 `Retry-After` 的 `429` / `503` 返回 `ReconcileResult{RequeueAfter: <Retry-After>}` + `nil`，其余（网络 / 超时 / 响应无法解析 / 响应契约错误）返回原始可重试错误（框架退避），下一轮重新激活；不可重试错误 → 执行「失败收口」。
 - 收尾动作（本节定义完整写入字段；字段含义见第四章）：
-  - 成功收口（条件：`SubmitRelease` 返回 `200`+`Ready`、`GetRelease` 返回 `Ready` 或 `ActivateRelease` 返回 `200`）：一次 CAS 提交目标 status——`release.phase=Ready`、`release.sourceRepositoryUID`（取 `release.transition.sourceRepositoryUID`）、`release.contentURL`、`release.updatedAt`、`release.transition=nil` 与 `PublishSucceed=True` 条件（reason `ReleaseActivated`）；返回 `ReconcileResult{Requeue: true}` + `nil`，立即处理同目标下一个候选；
+  - 成功收口（条件：`SubmitRelease` 返回 `200`+`Ready`、`GetRelease` 返回 `Ready` 或 `ActivateRelease` 返回 `200`）：一次 CAS 提交目标 status——`release.phase=Ready`、`release.sourceRepositoryUID`（取 `release.transition.sourceRepositoryUID`）、`release.contentURL`（将响应相对路径转为 `artifact:///` 逻辑地址）、`release.updatedAt`、`release.transition=nil` 与 `PublishSucceed=True` 条件（reason `ReleaseActivated`）；返回 `ReconcileResult{Requeue: true}` + `nil`，立即处理同目标下一个候选；
   - 失败收口（条件：不可重试失败）：一次 CAS 提交目标 status——`release.phase=Failed`、`release.updatedAt`、`release.transition=nil`（检查点即「在途」判据，收口必须清空，否则会被反复驱动）与 `PublishSucceed=False` 条件（reason `ReleaseFailed`）；失败详情只进日志（`reason=ReleaseFailed`）；终态写入成功后返回零值 + `nil`，不因原始业务失败触发框架重试——发布终局已持久化，该对象随即被发布候选与轮询过滤排除，失败不会阻塞同 Project/OS/Arch 的其他 Build（后续候选由过程仓键 resync 重新入队）。
 
 重启恢复（任意阶段）：

@@ -11,16 +11,17 @@ import (
 )
 
 type Options struct {
-	API       APIOptions
-	Manager   ManagerOptions
-	Source    SourceOptions
-	Health    HealthOptions
-	Job       JobControllerOptions
-	Runner    RunnerControllerOptions
-	RpmRepo   RpmRepoControllerOptions
-	Snapshot  SnapshotControllerOptions
-	BuildInfo BuildInfoControllerOptions
-	GitServer GitServerOptions
+	API             APIOptions
+	Manager         ManagerOptions
+	ArtifactManager ArtifactManagerOptions
+	Source          SourceOptions
+	Health          HealthOptions
+	Job             JobControllerOptions
+	Runner          RunnerControllerOptions
+	RpmRepo         RpmRepoControllerOptions
+	Snapshot        SnapshotControllerOptions
+	BuildInfo       BuildInfoControllerOptions
+	GitServer       GitServerOptions
 }
 
 type APIOptions struct {
@@ -62,10 +63,13 @@ type RunnerControllerOptions struct {
 }
 
 type RpmRepoControllerOptions struct {
-	MaxJobsPerBatch        int
-	MaterializeRetryLimit  int
-	ArtifactManagerAddr    string
-	ArtifactManagerTimeout time.Duration
+	MaxJobsPerBatch       int
+	MaterializeRetryLimit int
+}
+
+type ArtifactManagerOptions struct {
+	Address string
+	Timeout time.Duration
 }
 
 type SnapshotControllerOptions struct {
@@ -95,16 +99,17 @@ type GitServerOptions struct {
 
 func Parse(args []string) (Options, error) {
 	o := Options{
-		API:       APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
-		Manager:   ManagerOptions{Controllers: "*", Workers: 6, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
-		Source:    SourceOptions{PollPeriod: 10 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
-		Health:    HealthOptions{Address: ":8080"},
-		Job:       JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
-		Runner:    RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
-		RpmRepo:   RpmRepoControllerOptions{MaxJobsPerBatch: 100, MaterializeRetryLimit: 3, ArtifactManagerTimeout: 30 * time.Second},
-		Snapshot:  SnapshotControllerOptions{ResolveWorkers: 10, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 5},
-		BuildInfo: BuildInfoControllerOptions{RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 10000, SpecParseEngine: "text"},
-		GitServer: GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
+		API:             APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
+		Manager:         ManagerOptions{Controllers: "*", Workers: 6, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
+		Source:          SourceOptions{PollPeriod: 10 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
+		Health:          HealthOptions{Address: ":8080"},
+		Job:             JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
+		Runner:          RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
+		RpmRepo:         RpmRepoControllerOptions{MaxJobsPerBatch: 100, MaterializeRetryLimit: 3},
+		ArtifactManager: ArtifactManagerOptions{Timeout: 30 * time.Second},
+		Snapshot:        SnapshotControllerOptions{ResolveWorkers: 10, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 5},
+		BuildInfo:       BuildInfoControllerOptions{RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 10000, SpecParseEngine: "text"},
+		GitServer:       GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
 	f.StringVar(&o.API.Server, "apiserver", "", "ebs-apiserver address")
@@ -133,8 +138,8 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Runner.StartupGracePeriod, "runner-startup-grace-period", o.Runner.StartupGracePeriod, "grace period for a new Runner to publish its first heartbeat")
 	f.IntVar(&o.RpmRepo.MaxJobsPerBatch, "rpmrepo-max-jobs-per-batch", o.RpmRepo.MaxJobsPerBatch, "maximum number of Jobs in one repository batch")
 	f.IntVar(&o.RpmRepo.MaterializeRetryLimit, "rpmrepo-materialize-retry-limit", o.RpmRepo.MaterializeRetryLimit, "retryable materialization failures before the batch is abandoned")
-	f.StringVar(&o.RpmRepo.ArtifactManagerAddr, "artifact-manager-addr", o.RpmRepo.ArtifactManagerAddr, "artifact-manager address")
-	f.DurationVar(&o.RpmRepo.ArtifactManagerTimeout, "artifact-manager-timeout", o.RpmRepo.ArtifactManagerTimeout, "artifact-manager request timeout")
+	f.StringVar(&o.ArtifactManager.Address, "artifact-manager-addr", o.ArtifactManager.Address, "Artifact Manager address reachable by the controller and Job containers")
+	f.DurationVar(&o.ArtifactManager.Timeout, "artifact-manager-timeout", o.ArtifactManager.Timeout, "artifact-manager request timeout")
 	f.IntVar(&o.Snapshot.ResolveWorkers, "snapshot-resolve-workers", o.Snapshot.ResolveWorkers, "concurrent repository resolution workers per Snapshot")
 	f.DurationVar(&o.Snapshot.ResolveBudget, "snapshot-resolve-budget", o.Snapshot.ResolveBudget, "total repository resolution budget per Snapshot reconcile")
 	f.DurationVar(&o.Snapshot.SyncRequeueDelay, "snapshot-sync-requeue-delay", o.Snapshot.SyncRequeueDelay, "delay before checking repositories that are still synchronizing")
@@ -157,8 +162,8 @@ func Parse(args []string) (Options, error) {
 	if o.API.Server == "" {
 		return o, fmt.Errorf("apiserver is required")
 	}
-	if o.RpmRepo.ArtifactManagerAddr != "" {
-		parsed, err := url.Parse(o.RpmRepo.ArtifactManagerAddr)
+	if o.ArtifactManager.Address != "" {
+		parsed, err := url.Parse(o.ArtifactManager.Address)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return o, fmt.Errorf("artifact-manager-addr must be an absolute http or https URL")
 		}
@@ -166,7 +171,7 @@ func Parse(args []string) (Options, error) {
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")
 	}
-	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.RpmRepo.ArtifactManagerTimeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.BuildInfo.DcgPruneGrace <= 0 || o.BuildInfo.RpmRepoReadyRetryLimit <= 0 || o.BuildInfo.SnapshotReadyRetryLimit <= 0 || o.BuildInfo.SpecFileCacheSize <= 0 || (o.BuildInfo.SpecParseEngine != "text" && o.BuildInfo.SpecParseEngine != "rpmspec") || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
+	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.ArtifactManager.Timeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.BuildInfo.DcgPruneGrace <= 0 || o.BuildInfo.RpmRepoReadyRetryLimit <= 0 || o.BuildInfo.SnapshotReadyRetryLimit <= 0 || o.BuildInfo.SpecFileCacheSize <= 0 || (o.BuildInfo.SpecParseEngine != "text" && o.BuildInfo.SpecParseEngine != "rpmspec") || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
 		return o, fmt.Errorf("workers, limits, periods, timeouts and addresses must be valid")
 	}
 	return o, nil

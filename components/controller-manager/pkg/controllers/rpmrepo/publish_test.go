@@ -57,6 +57,9 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 	if updated.Status.Release.SourceRepositoryUID != "repo-1" {
 		t.Fatalf("unexpected source repository UID %q", updated.Status.Release.SourceRepositoryUID)
 	}
+	if got, want := updated.Status.Release.ContentURL, "artifact:///repositories/"+testProject+"/"+testOS+"/"+testArch+"/"; got != want {
+		t.Fatalf("release contentURL = %q, want %q", got, want)
+	}
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionTrue, ebsv1.RpmRepoReasonReleaseActivated) {
 		t.Fatalf("PublishSucceed=True/ReleaseActivated missing: %+v", updated.Status.Conditions)
 	}

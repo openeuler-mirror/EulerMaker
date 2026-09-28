@@ -205,7 +205,11 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 // this round (no condition, 7.4.6).
 func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRound, dcg *DcgDict, asm *specAssembly, snapshot *ebsv1.Snapshot, sources *rpmver.RpmMetaSources, bySpec map[string][]ebsv1.Job) (controller.ReconcileResult, error) {
 	required := dcg.DispatchRequirements()
-	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: heldContentURL(round)}
+	contentURL, err := c.resolveContentURL(heldContentURL(round))
+	if err != nil {
+		return controller.ReconcileResult{}, err
+	}
+	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
 		ss := round.current.Status.SpecStatus[name]
 		node := dcg.Node(name)

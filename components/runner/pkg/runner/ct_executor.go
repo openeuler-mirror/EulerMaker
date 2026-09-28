@@ -225,6 +225,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		defer logFile.Close()
 		logOutput = logFile
 	}
+	logOutput = newTimestampLogWriter(logOutput, time.Now)
 
 	if err := ctx.Err(); err != nil {
 		return resultRoot, err
