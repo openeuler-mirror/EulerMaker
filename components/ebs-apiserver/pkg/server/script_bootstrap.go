@@ -2,9 +2,8 @@ package server
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
-	"io"
-	"os"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,20 +14,18 @@ import (
 	"ebs-apiserver/pkg/apis/ebs/validation"
 )
 
-func ensureDefaultScript(ctx context.Context, storage bootstrapStorage, filename string) error {
-	f, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxScriptRequestSize+1))
-	if err != nil {
-		return err
-	}
+//go:embed default-rpmbuild-script.yaml
+var defaultRpmbuildScript []byte
+
+func ensureDefaultScript(ctx context.Context, storage bootstrapStorage) error {
+	return ensureScript(ctx, storage, defaultRpmbuildScript)
+}
+
+func ensureScript(ctx context.Context, storage bootstrapStorage, data []byte) error {
 	if len(data) > maxScriptRequestSize {
 		return fmt.Errorf("Script initialization file exceeds request limit")
 	}
-	data, err = yaml.YAMLToJSONStrict(data)
+	data, err := yaml.YAMLToJSONStrict(data)
 	if err != nil {
 		return err
 	}

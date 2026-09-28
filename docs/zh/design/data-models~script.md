@@ -103,9 +103,9 @@ Gateway 负责身份与操作权限校验，Script 访问不按 Project 成员�
 
 ## 6. 初始化与落地范围
 
-apiserver 通过可选参数 `--default-script-file=/path/to/script.yaml` 加载一个全局 Script 清单；未指定时不自动创建脚本，不内置示例脚本。未配置 `rpmbuild_script` 的构建需要存在名为 `rpmbuild` 的全局 Script。初始化在服务就绪前完成，仅在对象不存在时创建，已存在时不覆盖运维修改；升级脚本通过 PUT/PATCH 更新原对象完成。真实入口需与构建镜像的工具及 payload 契约匹配，不能直接把第 2 节的示例当作可用默认脚本。
+apiserver 内置 `rpmbuild` Script 模板，在服务就绪前初始化同名全局对象，无需命令行参数。仅在对象不存在时创建，已存在时不覆盖运维修改；升级脚本通过 PUT/PATCH 更新原对象完成。真实入口需与构建镜像的工具及 payload 契约匹配，不能直接把第 2 节的示例当作可用默认脚本。
 
-当前已实现 Script 公共类型、deepcopy/OpenAPI、apiserver 接口、ES 存储、内容校验、更新冲突检查、可选文件初始化、Gateway 权限及前端运维脚本管理；BuildInfo Controller 已将创建时观察到的 Script 元数据写入新 Job 的 `scriptRefs`。Runner 已支持按该引用缓存或拉取脚本、校验内容并作为 CT 容器入口执行。
+当前已实现 Script 公共类型、deepcopy/OpenAPI、apiserver 接口、ES 存储、内容校验、更新冲突检查、内置 `rpmbuild` 初始化、Gateway 权限及前端运维脚本管理；BuildInfo Controller 已将创建时观察到的 Script 元数据写入新 Job 的 `scriptRefs`。Runner 已支持按该引用缓存或拉取脚本、校验内容并作为 CT 容器入口执行。
 
 后续接入范围：
 
