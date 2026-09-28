@@ -1,14 +1,19 @@
 <template>
-  <section class="inline-job-log" :aria-label="t('jobLog.title')">
+  <section ref="fullscreenElement" class="inline-job-log" :aria-label="t('jobLog.title')">
     <div class="inline-job-log-toolbar">
-      <span v-if="logState">{{ t('jobLog.state') }}: {{ logState }}</span>
-      <button class="text-button" type="button" :disabled="loading" @click="load">{{ t('jobLog.refresh') }}</button>
+      <div class="job-log-summary">
+        <span v-if="logState">{{ t('jobLog.state') }}: {{ logState }}</span>
+        <span v-if="truncated && logText" class="job-log-notice">{{ t('jobLog.tailNotice') }}</span>
+      </div>
+      <div class="job-log-actions">
+        <button class="text-button" type="button" :disabled="loading" @click="load">{{ t('jobLog.refresh') }}</button>
+        <button class="text-button" type="button" @click="toggleFullscreen">{{ t(isFullscreen ? 'jobLog.exitFullscreen' : 'jobLog.fullscreen') }}</button>
+      </div>
     </div>
     <p v-if="error" class="inline-error" role="alert">{{ t('jobLog.loadFailed') }}</p>
     <p v-else-if="loading && !logText" class="config-empty">{{ t('jobLog.loading') }}</p>
     <p v-else-if="!logText" class="config-empty">{{ t('jobLog.empty') }}</p>
     <template v-else>
-      <p v-if="truncated" class="job-log-notice">{{ t('jobLog.tailNotice') }}</p>
       <pre class="job-log-output">{{ logText }}</pre>
     </template>
   </section>
@@ -17,9 +22,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useElementFullscreen } from '@/composables/useElementFullscreen';
+import { LOG_TAIL_BYTES } from '@/utils/logPreview';
 
 const props = defineProps<{ project: string; jobName: string }>();
 const { t } = useI18n();
+const { element: fullscreenElement, isFullscreen, toggleFullscreen } = useElementFullscreen();
 const logText = ref('');
 const logState = ref('');
 const truncated = ref(false);
@@ -61,7 +69,7 @@ async function load(): Promise<void> {
   const path = `/artifacts/v1/projects/${encodeURIComponent(props.project)}/jobs/${encodeURIComponent(props.jobName)}`;
   try {
     const response = await fetch(`${path}/logs/content?stream=combined`, {
-      headers: { Range: 'bytes=-262144' }, cache: 'no-store', signal: active.signal,
+      headers: { Range: `bytes=-${LOG_TAIL_BYTES}` }, cache: 'no-store', signal: active.signal,
     });
     if (response.status === 404 || response.status === 416) {
       if (current === generation) { logText.value = ''; logState.value = ''; truncated.value = false; }
@@ -71,7 +79,7 @@ async function load(): Promise<void> {
       if (current === generation) {
         logText.value = content;
         logState.value = response.headers.get('X-Log-State') || '';
-        truncated.value = Number(response.headers.get('X-Committed-Bytes') || 0) > 262144;
+        truncated.value = Number(response.headers.get('X-Committed-Bytes') || 0) > LOG_TAIL_BYTES;
       }
     }
   } catch {

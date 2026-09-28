@@ -1,8 +1,8 @@
 export default {
   jobLog: {
-    title: '任务日志', open: '查看任务 {name} 的日志', back: '返回工程', refresh: '刷新日志',
+    title: '任务日志', open: '查看任务 {name} 的日志', expand: '展开日志', collapse: '收起日志', refresh: '刷新日志', fullscreen: '全屏', exitFullscreen: '退出全屏',
     loading: '正在加载日志…', empty: '暂无日志', loadFailed: '加载日志失败，请重试',
-    tailNotice: '日志较长，仅显示最后 256 KiB', state: '日志状态',
+    tailNotice: '日志较长，仅显示最后 1 MiB', state: '日志状态',
   },
   jobControl: {
     name: '任务名称', phase: '状态', next: '下一页', load: '加载任务', loading: '正在加载任务…', empty: '此 Spec 暂无任务', refreshJob: '刷新任务 {name}',
@@ -295,8 +295,12 @@ export default {
     repositoriesEyebrow: "软件仓",
     packageRepositories: "软件包仓库",
     closePackageDetails: "关闭软件包详情",
-    rpmDownloadAddress: "RPM 下载地址",
-    rpmDownloadPending: "暂无下载地址",
+    repoDownloadLink: "前往下载 Repo 源",
+    repoDownloadPending: "下载页面即将开放",
+    jobRPMs: "RPM 下载列表",
+    loadingJobRPMs: "正在加载 RPM…",
+    noJobRPMs: "该 Job 暂无可下载的 RPM",
+    loadJobRPMsFailed: "RPM 列表加载失败",
     packageJobHistory: "Job 构建历史",
     loadingPackageJobs: "正在加载 Job 构建历史",
     noPackageJobs: "暂无可关联的 Job 构建记录",

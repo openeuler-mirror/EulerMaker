@@ -4,9 +4,9 @@ type MessageShape<T> = { [K in keyof T]: T[K] extends string ? string : MessageS
 
 export default {
   jobLog: {
-    title: 'Job logs', open: 'View logs for job {name}', back: 'Back to project', refresh: 'Refresh logs',
+    title: 'Job logs', open: 'View logs for job {name}', expand: 'Show logs', collapse: 'Hide logs', refresh: 'Refresh logs', fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen',
     loading: 'Loading logs…', empty: 'No logs yet', loadFailed: 'Could not load logs. Try again.',
-    tailNotice: 'Showing only the last 256 KiB of this log', state: 'Log state',
+    tailNotice: 'Showing only the last 1 MiB of this log', state: 'Log state',
   },
   jobControl: {
     name: 'Job name', phase: 'Phase', next: 'Next page', load: 'Load jobs', loading: 'Loading jobs…', empty: 'No jobs for this spec', refreshJob: 'Refresh job {name}',
@@ -299,8 +299,12 @@ export default {
     repositoriesEyebrow: "Repositories",
     packageRepositories: "Package repositories",
     closePackageDetails: "Close package details",
-    rpmDownloadAddress: "RPM download URL",
-    rpmDownloadPending: "No download URL yet",
+    repoDownloadLink: "Browse RPM repositories",
+    repoDownloadPending: "The download page is not available yet",
+    jobRPMs: "RPM downloads",
+    loadingJobRPMs: "Loading RPMs…",
+    noJobRPMs: "No downloadable RPMs for this job",
+    loadJobRPMsFailed: "Could not load RPMs",
     packageJobHistory: "Job build history",
     loadingPackageJobs: "Loading Job build history",
     noPackageJobs: "No linked Job builds yet",

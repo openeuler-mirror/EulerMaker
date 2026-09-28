@@ -7,7 +7,6 @@ export const router = createRouter({
     { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
     { path: "/projects", name: "projects", component: () => import("@/views/ProjectsView.vue") },
     { path: "/projects/:name", name: "project", component: () => import("@/views/ProjectView.vue") },
-    { path: "/projects/:name/jobs/:job/logs", name: "job-logs", component: () => import("@/views/JobLogsView.vue") },
     { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
     { path: "/register", name: "register", component: () => import("@/views/RegisterView.vue") },
     {
