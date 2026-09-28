@@ -165,17 +165,30 @@ func missingBuildRequires(depend *specparse.SpecDepend, sources *rpmver.RpmMetaS
 
 // --- dispatch pipeline (design 15.3.1 / 6.5.1) ---
 
-// dispatchSpec runs the full single-spec dispatch pipeline: pending-entry
-// reuse with GET verification (6.5.1 #4) or registration (先登记再请求),
-// build-resource Config resolution (E-27), Job construction and CreateJob outcome
-// handling (success / AlreadyExists / Unknown / NotSent / Rejected), and the
-// confirmed dispatch write-back. The E-19 arch check and the 7.4.1
+const maxJobCreatesPerReconcile = 20
+
+type createdJob struct {
+	job        *ebsv1.Job
+	generation int64
+}
+
+// dispatchSpec creates one deterministically named Job and stages its
+// confirmation for a batched status write. Persisted pending entries from
+// earlier rounds retain their GET-based recovery path. Build-resource Config
+// is read once per round. The E-19 arch check and the 7.4.1
 // dependency verdict run at the caller; image resolution happens once per
 // round at the caller (E-26).
 func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, sources *rpmver.RpmMetaSources) (controller.ReconcileResult, error) {
+	if _, alreadyCreated := round.createdJobs[specName]; alreadyCreated {
+		return controller.ReconcileResult{}, nil
+	}
+	if round.jobCreateRequests >= maxJobCreatesPerReconcile {
+		return controller.ReconcileResult{Requeue: true}, nil
+	}
 	namespace := round.current.Namespace
 	var generation int64
 	var name string
+	var err error
 	entryExisted := false
 	if pend, ok := round.current.Status.PendingJobCreates[specName]; ok {
 		// 6.5.1 #4: registered entries are GET-verified first; a hit confirms
@@ -196,19 +209,20 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 	} else {
 		generation = round.current.Status.SpecStatus[specName].DispatchCount + 1
 		name = jobNameFor(string(round.current.UID), specName, generation)
-		if result, err := c.registerPendingCreate(ctx, round, specName, name, generation); err != nil || result != (controller.ReconcileResult{}) {
-			return result, err
-		}
 	}
 
 	// The cluster-wide default table is the sole source of Job resources.
-	resource, err := c.client.GetBuildResourceRules(ctx)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			message := "build-resource Config not found"
-			return c.markSpecFailed(ctx, round, specName, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound, message, !entryExisted)
+	resource := round.resourceRules
+	if resource == nil {
+		resource, err = c.client.GetBuildResourceRules(ctx)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				message := "build-resource Config not found"
+				return c.markSpecFailed(ctx, round, specName, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound, message, !entryExisted)
+			}
+			return controller.ReconcileResult{}, err
 		}
-		return controller.ReconcileResult{}, err
+		round.resourceRules = resource
 	}
 
 	if round.scriptRef == nil {
@@ -237,6 +251,7 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		}
 	}
 	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, scriptRef, name, generation, sources)
+	round.jobCreateRequests++
 	created, err := c.client.CreateJob(ctx, namespace, job)
 	var writeErr *clientpkg.WriteError
 	isWriteErr := errors.As(err, &writeErr)
@@ -247,7 +262,7 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		jobCreates.Inc()
 	}
 	if err == nil {
-		return c.confirmDispatchedJob(ctx, round, specName, generation, created)
+		return c.stageCreatedJob(round, specName, generation, created)
 	}
 	if !isWriteErr {
 		jobCreateFailures.Inc()
@@ -255,11 +270,9 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 	}
 	switch writeErr.Outcome {
 	case clientpkg.WriteNotSent:
-		// Local validation failure (client contract 4.1): the identity never
-		// had an in-flight request, so a this-round registration is removed
-		// (6.5.1 #3); a reused entry is kept by design.
+		// Local validation failed before the create request was sent.
 		jobCreateFailures.Inc()
-		return c.failCreateUnsent(ctx, round, specName, entryExisted, err)
+		return controller.ReconcileResult{}, controller.NewPermanentError(err)
 	case clientpkg.WriteRejected:
 		switch writeErr.StatusCode {
 		case 409:
@@ -275,11 +288,11 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 				c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch after AlreadyExists: %v", name, verr)
 				return controller.ReconcileResult{}, controller.NewPermanentError(verr)
 			}
-			return c.confirmDispatchedJob(ctx, round, specName, generation, existing)
+			return c.stageCreatedJob(round, specName, generation, existing)
 		case 400, 401, 403, 422:
-			// Provably not created: same entry-removal rule as NotSent.
+			// Provably not created; no status confirmation is needed.
 			jobCreateFailures.Inc()
-			return c.failCreateUnsent(ctx, round, specName, entryExisted, err)
+			return controller.ReconcileResult{}, controller.NewPermanentError(err)
 		default:
 			// 404/408/429/5xx and other retryable rejections.
 			jobCreateFailures.Inc()
@@ -294,48 +307,56 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 				c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch after Unknown: %v", name, verr)
 				return controller.ReconcileResult{}, controller.NewPermanentError(verr)
 			}
-			return c.confirmDispatchedJob(ctx, round, specName, generation, existing)
+			return c.stageCreatedJob(round, specName, generation, existing)
 		}
 		jobCreateFailures.Inc()
 		if errors.Is(gerr, ErrNotFound) {
-			// Unknown with no object: the entry stays registered (6.5.1 #6 —
-			// a GET can never prove the request never lands); the error
-			// return re-enters with backoff and the next round re-verifies.
+			// A late create can still land. Re-entry uses the same deterministic
+			// name; 409 and the initial Job list both recover it.
 			return controller.ReconcileResult{}, err
 		}
 		return controller.ReconcileResult{}, gerr
 	}
 }
 
-// failCreateUnsent handles a provably-unsent/uncreated CreateJob outcome
-// (6.5.1 #3): a this-round registration is removed before the permanent
-// error is returned; a reused entry stays (an earlier request may exist).
-func (c *Controller) failCreateUnsent(ctx context.Context, round *reconcileRound, specName string, entryExisted bool, createErr error) (controller.ReconcileResult, error) {
-	if !entryExisted {
-		if result, err := c.removePendingCreate(ctx, round, specName); err != nil || result != (controller.ReconcileResult{}) {
-			return result, err
+// stageCreatedJob records a confirmed Job in the current batch. The batch is
+// folded into the next status write, or flushed once at the end of the round.
+func (c *Controller) stageCreatedJob(round *reconcileRound, specName string, generation int64, job *ebsv1.Job) (controller.ReconcileResult, error) {
+	if round.createdJobs == nil {
+		round.createdJobs = make(map[string]createdJob)
+	}
+	created := createdJob{job: job, generation: generation}
+	round.createdJobs[specName] = created
+	round.current = round.current.DeepCopy()
+	applyCreatedJobs(round.current, map[string]createdJob{specName: created})
+	return controller.ReconcileResult{}, nil
+}
+
+func applyCreatedJobs(next *ebsv1.BuildInfo, jobs map[string]createdJob) {
+	if next.Status.SpecStatus == nil {
+		next.Status.SpecStatus = make(map[string]ebsv1.SpecStatus)
+	}
+	for name, created := range jobs {
+		ss := next.Status.SpecStatus[name]
+		if ss.DispatchCount < created.generation {
+			ss.DispatchCount = created.generation
 		}
+		applyJobPhase(&ss, created.job, false)
+		next.Status.SpecStatus[name] = ss
+		delete(next.Status.PendingJobCreates, name)
 	}
-	return controller.ReconcileResult{}, controller.NewPermanentError(createErr)
 }
 
-// registerPendingCreate persists the creation identity before any request is
-// sent (6.5.1 #1).
-func (c *Controller) registerPendingCreate(ctx context.Context, round *reconcileRound, specName, jobName string, generation int64) (controller.ReconcileResult, error) {
+func (c *Controller) flushCreatedJobs(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
-	if next.Status.PendingJobCreates == nil {
-		next.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{}
-	}
-	next.Status.PendingJobCreates[specName] = ebsv1.PendingJobCreate{JobName: jobName, DispatchGeneration: generation}
 	return c.writeStatus(ctx, round, next)
 }
 
-// removePendingCreate drops a registered entry (6.5.1 #3 first-attempt
-// proof only).
-func (c *Controller) removePendingCreate(ctx context.Context, round *reconcileRound, specName string) (controller.ReconcileResult, error) {
-	next := round.current.DeepCopy()
-	delete(next.Status.PendingJobCreates, specName)
-	return c.writeStatus(ctx, round, next)
+func (c *Controller) confirmCreatedJobs(round *reconcileRound) {
+	if len(round.createdJobs) > 0 {
+		dispatches.Add(uint64(len(round.createdJobs)))
+		round.createdJobs = nil
+	}
 }
 
 // confirmDispatchedJob persists the confirmed dispatch in one write (6.5.1

@@ -1,8 +1,8 @@
 // init.go implements the Pending-phase initialization (design 7.2 steps 0~6)
 // and the single-type直通 path (7.2.3): assembly and build-set determination,
 // existing-Job backfill, DCG obtain-and-persist (G-02), zero-indegree and
-// bootstrap dispatches, initialization closeout (empty set / pre-create
-// missing entries -> Processing), and the dirty-check write.
+// bootstrap dispatches, complete spec-status persistence before dispatch,
+// initialization closeout, and the dirty-check write.
 package buildinfo
 
 import (
@@ -96,6 +96,9 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	if err != nil || result != (controller.ReconcileResult{}) || dcg == nil {
 		return result, err
 	}
+	if result, err = c.persistBuildSetSpecStatuses(ctx, round, buildSet); err != nil || result != (controller.ReconcileResult{}) {
+		return result, err
+	}
 
 	// Steps 3+4: dispatch zero-indegree specs and bootstrap break points. The
 	// build-target Config snapshot resolves lazily on the first actual Job creation and
@@ -119,18 +122,26 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		}
 	}
 
-	// Step 5+6: pre-create missing entries (never overwrite backfilled or
-	// freshly written ones) and flip to Processing; dirty-checked write.
+	// Step 5+6: all build-set entries were persisted before dispatch; flip to
+	// Processing only after every initial dispatch candidate was considered.
 	next = round.current.DeepCopy()
+	next.Status.Phase = ebsv1.BuildInfoProcessing
+	return c.writeStatusIfChanged(ctx, round, next)
+}
+
+// persistBuildSetSpecStatuses establishes the complete traversal base before
+// the first Job is created. Re-entry only adds missing keys; it never resets
+// confirmed dispatches or terminal verdicts.
+func (c *Controller) persistBuildSetSpecStatuses(ctx context.Context, round *reconcileRound, buildSet map[string]specparse.SpecDepend) (controller.ReconcileResult, error) {
+	next := round.current.DeepCopy()
+	if next.Status.SpecStatus == nil {
+		next.Status.SpecStatus = make(map[string]ebsv1.SpecStatus, len(buildSet))
+	}
 	for name := range buildSet {
-		if _, ok := next.Status.SpecStatus[name]; !ok {
-			if next.Status.SpecStatus == nil {
-				next.Status.SpecStatus = map[string]ebsv1.SpecStatus{}
-			}
+		if _, exists := next.Status.SpecStatus[name]; !exists {
 			next.Status.SpecStatus[name] = ebsv1.SpecStatus{}
 		}
 	}
-	next.Status.Phase = ebsv1.BuildInfoProcessing
 	return c.writeStatusIfChanged(ctx, round, next)
 }
 
@@ -567,6 +578,9 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
+	if result, err = c.persistBuildSetSpecStatuses(ctx, round, buildSet); err != nil || result != (controller.ReconcileResult{}) {
+		return result, err
+	}
 
 	// 直通下发: no graph, no gates, no ordering — one direct dispatch per spec.
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
@@ -591,17 +605,9 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		}
 	}
 
-	// Pre-create missing entries and flip to Processing (7.2.3 keeps the
-	// 6.4 traversal-base invariant: every build-set spec gets an entry).
+	// Every build-set entry was persisted before dispatch; only the phase
+	// transition remains after all single specs were considered.
 	next = round.current.DeepCopy()
-	for name := range buildSet {
-		if _, ok := next.Status.SpecStatus[name]; !ok {
-			if next.Status.SpecStatus == nil {
-				next.Status.SpecStatus = map[string]ebsv1.SpecStatus{}
-			}
-			next.Status.SpecStatus[name] = ebsv1.SpecStatus{}
-		}
-	}
 	next.Status.Phase = ebsv1.BuildInfoProcessing
 	return c.writeStatusIfChanged(ctx, round, next)
 }

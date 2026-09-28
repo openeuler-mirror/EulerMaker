@@ -26,18 +26,21 @@ import (
 const conflictRequeueDelay = time.Second
 
 // reconcileRound carries the per-round shared state (design 10.1/10.2): the
-// current BuildInfo object — replaced wholesale after every confirmed write
-// — plus the guard-held objects the later steps reuse (15.4: single GET per
-// round) and the readiness counters (5.4).
+// current BuildInfo object — replaced after confirmed writes and updated
+// locally for Jobs awaiting batch confirmation — plus the guard-held objects
+// later steps reuse and the readiness counters.
 type reconcileRound struct {
 	key     string
 	current *ebsv1.BuildInfo
 
-	project     *ebsv1.Project
-	build       *ebsv1.Build
-	rpmRepo     *ebsv1.RpmRepo
-	rpmRepoHeld bool
-	scriptRef   *ebsv1.ScriptRef
+	project           *ebsv1.Project
+	build             *ebsv1.Build
+	rpmRepo           *ebsv1.RpmRepo
+	rpmRepoHeld       bool
+	scriptRef         *ebsv1.ScriptRef
+	resourceRules     *buildResourceRules
+	jobCreateRequests int
+	createdJobs       map[string]createdJob
 
 	failures *roundFailures
 }
@@ -119,6 +122,12 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 		// E-12: unknown phase — skip with an error log, no retry.
 		log.Printf("controller=%s key=%q reason=UnknownPhase phase=%q", Name, key, round.current.Status.Phase)
 		return controller.ReconcileResult{}, nil
+	}
+	if len(round.createdJobs) > 0 && err == nil && (result == (controller.ReconcileResult{}) || result.Requeue) && ctx.Err() == nil {
+		flushResult, flushErr := c.flushCreatedJobs(ctx, round)
+		if flushErr != nil || flushResult != (controller.ReconcileResult{}) {
+			return flushResult, flushErr
+		}
 	}
 	if err == nil {
 		c.logReconciledAfterStart(round.current)
@@ -269,11 +278,15 @@ func (c *Controller) escalateStop(ctx context.Context, round *reconcileRound, co
 // server-confirmed object and the zero result is returned. The caller passes
 // a deep copy of round.current with the intended status mutations.
 func (c *Controller) writeStatus(ctx context.Context, round *reconcileRound, next *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
+	if len(round.createdJobs) > 0 {
+		applyCreatedJobs(next, round.createdJobs)
+	}
 	// 10.3 intent snapshot: the full target status, saved before sending.
 	intent := next.DeepCopy()
 	updated, err := c.client.UpdateBuildInfoStatus(ctx, next)
 	if err == nil {
 		c.afterConfirmedWrite(round, updated, intent)
+		c.confirmCreatedJobs(round)
 		return controller.ReconcileResult{}, nil
 	}
 	var writeErr *clientpkg.WriteError
@@ -337,6 +350,7 @@ func (c *Controller) confirmStatusWrite(ctx context.Context, round *reconcileRou
 		return controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
 	}
 	c.afterConfirmedWrite(round, persisted, intent)
+	c.confirmCreatedJobs(round)
 	return controller.ReconcileResult{}, nil
 }
 

@@ -32,6 +32,8 @@ type fakeClient struct {
 	projects           map[string]*ebsv1.Project
 	scripts            map[string]*ebsv1.Script
 	scriptReads        int
+	statusWrites       int
+	resourceReads      int
 	snapshots          map[string]*ebsv1.Snapshot
 	rpmrepos           map[string]*ebsv1.RpmRepo
 	buildResourceRules map[string]*buildResourceRules
@@ -286,6 +288,7 @@ func (f *fakeClient) UpdateBuildInfoStatus(_ context.Context, obj *ebsv1.BuildIn
 func (f *fakeClient) applyStatusLocked(stored *ebsv1.BuildInfo, intent *ebsv1.BuildInfo) {
 	stored.Status = intent.DeepCopy().Status
 	stored.ResourceVersion = f.nextRVLocked()
+	f.statusWrites++
 }
 
 func (f *fakeClient) CreateJob(_ context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error) {
@@ -431,6 +434,7 @@ func (f *fakeClient) GetScript(_ context.Context, name string) (*ebsv1.Script, e
 func (f *fakeClient) GetBuildResourceRules(_ context.Context) (*buildResourceRules, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.resourceReads++
 	if err := f.consumeInjectedReadLocked("buildResourceRules"); err != nil {
 		return nil, err
 	}
