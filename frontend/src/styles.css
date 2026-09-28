@@ -353,7 +353,22 @@ body.modal-open { overflow: hidden; }
 .build-info-panel { min-width: 0; }
 .build-info-panel .build-detail-section { margin-top: 20px; }
 .build-info-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.spec-list-toolbar { margin: 12px 0 16px; }
+.spec-list-toolbar { margin: 12px 0 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.spec-status-filter-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; color: inherit; background: transparent; font: inherit; font-weight: inherit; cursor: pointer; }
+.spec-status-filter-trigger svg { width: 14px; height: 14px; }
+.spec-status-filter-trigger:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
+.spec-status-filter-count { min-width: 18px; padding: 0 4px; border-radius: 9px; color: #176fd4; background: #eaf4ff; font-size: 11px; line-height: 18px; text-align: center; }
+.spec-status-filter-menu { position: fixed; z-index: 120; width: 210px; max-height: 240px; padding: 6px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 12px 28px rgb(25 54 96 / 14%); }
+.spec-status-filter-option { position: relative; min-height: 36px; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 5px; color: #455269; font-size: 14px; white-space: nowrap; cursor: pointer; }
+.spec-status-filter-option:hover { color: var(--blue); background: #edf6ff; }
+.spec-status-filter-option.selected { color: var(--blue); background: #f4f9ff; font-weight: 650; }
+.spec-status-filter-option.all { margin-bottom: 5px; border-bottom: 1px solid #edf1f6; border-radius: 5px 5px 0 0; }
+.spec-status-filter-option input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.spec-status-filter-check { width: 16px; height: 16px; flex: none; display: grid; place-items: center; border: 1px solid #b9c7d8; border-radius: 4px; background: #fff; }
+.spec-status-filter-check svg { width: 12px; height: 12px; display: none; }
+.spec-status-filter-option.selected .spec-status-filter-check { border-color: var(--blue); color: #fff; background: var(--blue); }
+.spec-status-filter-option.selected .spec-status-filter-check svg { display: block; }
+.spec-status-filter-option input:focus-visible + .spec-status-filter-check { outline: 2px solid #9bc5f5; outline-offset: 2px; }
 .build-info-condition { padding: 10px 0; border-bottom: 1px solid #edf1f6; overflow-wrap: anywhere; }
 .build-info-condition strong, .build-info-condition span { display: block; }
 .build-info-condition span, .build-info-condition p { color: var(--muted); font-size: 13px; }
@@ -367,6 +382,13 @@ body.modal-open { overflow: hidden; }
 .spec-jobs { min-width: 0; }
 .spec-job-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
 .build-history-list-panel, .build-detail-panel { min-width: 0; }
+.build-history-heading { align-items: center; flex-wrap: wrap; }
+.build-history-filter { position: relative; display: inline-flex; align-items: center; gap: 8px; color: #536176; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.build-history-filter:hover, .build-history-filter.selected { color: var(--blue); }
+.build-history-filter input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.build-history-filter.selected .spec-status-filter-check { border-color: var(--blue); color: #fff; background: var(--blue); }
+.build-history-filter.selected .spec-status-filter-check svg { display: block; }
+.build-history-filter input:focus-visible + .spec-status-filter-check { outline: 2px solid #9bc5f5; outline-offset: 2px; }
 .build-history-list { border-top: 1px solid #edf1f6; }
 .build-history-item { width: 100%; display: flex; flex-direction: column; align-items: stretch; color: #536176; background: transparent; border-bottom: 1px solid #edf1f6; text-align: left; }
 .build-history-item:hover { background: #f6f9fd; }

@@ -94,12 +94,13 @@
       </section>
       <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('project.loadingResources')"><span v-for="item in 6" :key="item"></span></div>
       <div v-else-if="buildLoadFailed" class="inline-error compact-error"><WarningFilled /><span>{{ t("errors.loadBuilds") }}</span></div>
-      <EmptyState v-else-if="!builds.length" :title="t('project.emptyBuilds')" :description="t('project.emptyBuildsHint')" />
+      <EmptyState v-else-if="!builds.length && !hideSingleBuilds" :title="t('project.emptyBuilds')" :description="t('project.emptyBuildsHint')" />
       <div v-else class="build-history-layout">
         <article class="content-panel build-history-list-panel">
-          <div class="section-heading"><div><h2>{{ t("project.buildHistory") }}</h2></div><span>{{ t("common.count", { count: buildTotalCount ?? builds.length }) }}</span></div>
+          <div class="section-heading build-history-heading"><h2>{{ t("project.buildHistory") }}</h2><label class="build-history-filter" :class="{ selected: hideSingleBuilds }"><input v-model="hideSingleBuilds" type="checkbox" @change="changeBuildFilter" /><span class="spec-status-filter-check" aria-hidden="true"><Check /></span>{{ t("project.hideSingleBuilds") }}</label></div>
           <div v-if="buildPageErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(buildPageErrorKey) }}</span><button type="button" :disabled="buildPageLoading" @click="loadBuildPage(buildPageTokens[buildCurrentPage - 1] || '', buildCurrentPage)">{{ t('common.reload') }}</button></div>
-          <div class="build-history-list">
+          <p v-if="!builds.length" class="config-empty">{{ t("project.noMatchingBuilds") }}</p>
+          <div v-else class="build-history-list">
             <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
               <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
                 <span class="build-history-item-heading"><strong>{{ build.metadata?.name }}</strong><StatusBadge :value="buildDisplayStatus(build)" /></span>
@@ -362,6 +363,7 @@ const { t } = useI18n();
 const name = computed(() => String(route.params.name || ""));
 const project = ref<Project | null>(null);
 const builds = ref<Build[]>([]);
+const hideSingleBuilds = ref(false);
 const selectedBuildName = ref("");
 const buildPageSizes = [10, 20, 50] as const;
 const buildPageSize = ref<number>(20);
@@ -609,6 +611,7 @@ async function loadBuildPage(token: string, page: number): Promise<boolean> {
   buildPageLoading.value = true;
   buildPageErrorKey.value = "";
   const query = new URLSearchParams({ limit: String(buildPageSize.value) });
+  if (hideSingleBuilds.value) query.set("labelSelector", "ebs.io/build-type!=single");
   if (token) query.set("continue", token);
   try {
     const result = await list<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds?${query}`);
@@ -641,6 +644,11 @@ async function loadBuildPage(token: string, page: number): Promise<boolean> {
 
 function changeBuildPageSize(value: string): void {
   buildPageSize.value = Number(value);
+  resetBuildPagination();
+  void loadBuildPage("", 1);
+}
+
+function changeBuildFilter(): void {
   resetBuildPagination();
   void loadBuildPage("", 1);
 }
