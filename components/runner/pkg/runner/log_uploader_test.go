@@ -17,6 +17,7 @@ type recordedChunk struct {
 type fakeLogRemote struct {
 	mu             sync.Mutex
 	chunks         []recordedChunk
+	appended       chan struct{}
 	appendFailures int
 	completed      CompleteLogInput
 }
@@ -32,6 +33,12 @@ func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64
 		return AppendLogResult{}, errors.New("temporary network error")
 	}
 	f.chunks = append(f.chunks, recordedChunk{sequence: sequence, data: append([]byte(nil), data...)})
+	if f.appended != nil {
+		select {
+		case f.appended <- struct{}{}:
+		default:
+		}
+	}
 	return AppendLogResult{AcceptedSequence: sequence, NextSequence: sequence + 1}, nil
 }
 func (f *fakeLogRemote) CompleteLog(_ context.Context, _, _, _ string, input CompleteLogInput) (CompletedLog, error) {
@@ -84,6 +91,54 @@ func TestArtifactLogSinkUploadsChunksAndRemovesSpool(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "build")); !os.IsNotExist(err) {
 		t.Fatalf("completed spool was not cleaned: %v", err)
+	}
+}
+
+func TestArtifactLogSinkFlushesPartialChunkBeforeCompletion(t *testing.T) {
+	remote := &fakeLogRemote{appended: make(chan struct{}, 1)}
+	factory := &ArtifactLogFactory{
+		Remote: remote, RootDir: t.TempDir(), ChunkSize: 256, FlushInterval: 10 * time.Millisecond,
+		SpoolLimit: 1024,
+	}
+	sink, err := factory.Open(JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Abort()
+	if _, err := sink.Write([]byte("short log")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-remote.appended:
+	case <-time.After(time.Second):
+		t.Fatal("partial log was not uploaded before completion")
+	}
+	remote.mu.Lock()
+	chunks := append([]recordedChunk(nil), remote.chunks...)
+	remote.mu.Unlock()
+	if len(chunks) != 1 || string(chunks[0].data) != "short log" {
+		t.Fatalf("uploaded chunks = %#v", chunks)
+	}
+	if _, err := sink.Write([]byte(" more")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-remote.appended:
+	case <-time.After(time.Second):
+		t.Fatal("second partial log was not uploaded before completion")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := sink.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	remote.mu.Lock()
+	defer remote.mu.Unlock()
+	if len(remote.chunks) != 2 || remote.chunks[0].sequence != 0 || remote.chunks[1].sequence != 1 || string(remote.chunks[1].data) != " more" {
+		t.Fatalf("uploaded chunks = %#v", remote.chunks)
+	}
+	if remote.completed.LastSequence != 1 || remote.completed.Size != int64(len("short log more")) {
+		t.Fatalf("complete input = %#v", remote.completed)
 	}
 }
 

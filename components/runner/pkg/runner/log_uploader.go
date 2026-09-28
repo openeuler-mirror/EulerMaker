@@ -248,11 +248,13 @@ func (s *artifactLogSink) run(ctx context.Context) {
 	ticker := time.NewTicker(s.flushInterval)
 	defer ticker.Stop()
 	for {
+		flushPartial := false
 		select {
 		case <-ctx.Done():
 			s.setWorkerErr(ctx.Err())
 			return
 		case <-ticker.C:
+			flushPartial = true
 		case <-s.wake:
 		}
 		for {
@@ -267,7 +269,7 @@ func (s *artifactLogSink) run(ctx context.Context) {
 				}
 				break
 			}
-			if available < s.chunkSize && !closing {
+			if available < s.chunkSize && !closing && !flushPartial {
 				break
 			}
 			size := available
