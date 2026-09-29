@@ -272,7 +272,7 @@ init 确定性失败路径：仅 `single` 的 packages 为空或指定包全部�
 
 ### 6.2 SpecStatus.build 状态机
 
-`BuildInfo.status.specStatus[spec].build.status` 取值：`""`（空，未下发——init 步骤 5 预建初始值，见 7.2 步骤 5）/ `Running` / `Succeeded` / `Failed` / `Aborted`（历史版本 Job phase 透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5；父 Build `Aborted` 时 BuildInfo 由 parentAbortGuard 先行收口，不进入回填；防御性读取到残留值的处理见 6.4），本控制器推进，内嵌于 `BuildInfo.status.specStatus`：
+`BuildInfo.status.specStatus[spec].build.status` 取值：`""`（空，未下发——init 步骤 3 预建初始值，见 7.2 步骤 3）/ `Running` / `Succeeded` / `Failed` / `Aborted`（历史版本 Job phase 透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5；父 Build `Aborted` 时 BuildInfo 由 parentAbortGuard 先行收口，不进入回填；防御性读取到残留值的处理见 6.4），本控制器推进，内嵌于 `BuildInfo.status.specStatus`：
 
 ```
    （初始）"" ──创建 Job──→ ┌──────────┐
@@ -294,7 +294,7 @@ init 确定性失败路径：仅 `single` 的 packages 为空或指定包全部�
 
 | 状态 | 说明 |
 |------|------|
-| `""`（空） | 初始态：init 步骤 5 为构建集全部 spec 预建条目的初始值（尚未创建 Job、未标 Failed）；创建 Job 后置 `Running`，或经失败裁决（依赖缺失/架构不支持等）直接置 `Failed`；**非终态**（allTerminal 不计完成，见 6.4） |
+| `""`（空） | 初始态：init 步骤 3 为构建集全部 spec 预建条目的初始值（尚未创建 Job、未标 Failed）；创建 Job 后置 `Running`，或经失败裁决（依赖缺失/架构不支持等）直接置 `Failed`；**非终态**（allTerminal 不计完成，见 6.4） |
 | `Running` | spec 正在构建 |
 | `Succeeded` | 终态，Job 成功 |
 | `Failed` | 终态，Job 失败（末代重建 Job 失败同样标 `Failed`——spec 状态以最后一个 Job 为准，仅 condition 以 `RebuildFailed` 区分，见 7.4.2/7.4.5），或下发前裁决未通过：依赖存在性裁决（7.4.1 条件 2 / 7.4.6 第 3 条 bootstrap 路径）、创建 Job 前的确定性校验（E-19/E-27 中的 404）——均不提交 Job 直接标 `Failed`，自判非传播（E-17）；E-26 Config/build-target 读取失败/映射缺失为本轮暂停（不创建新 Job、不标 Failed，返回 error 按 7.5 标准退避分流等待配置恢复，见 E-26）；亦含 Job 单独 `Aborted` 的防御性视同 `Failed`（7.4.5 映射，condition 保留 `BuildAborted` 溯源） |
@@ -347,7 +347,7 @@ for spec, ss := range buildInfo.Status.SpecStatus {
 
 即：所有 spec 均进入终态（`Succeeded`/`Failed`），**且**每个 `Succeeded` spec 的 `DispatchCount` 达到其**有效 required**（环内节点需 2，普通 spec 需 1；任一直接上游 Failed 时有效 required=1，重建取消）。仅靠 status 终态无法判定整体完成——环内节点 bootstrap/首次下发后 status 已 `Succeeded`，若据此提前 `Completed` 将导致第二次下发（重建）永不发生；补边引入新环的节点（required 升 2）未达次数时同样由上述 `DispatchCount` 检查与终态检查天然覆盖，不会提前 `Completed`。`single` 类型无 dcgDict，全部 spec 有效 required 恒按 1 判定（见 7.2.3）。
 
-**遍历基准的正确性由 init 步骤 5 预建保证**：构建集非空的 BuildInfo 在进入 Processing 前已为构建集全部 spec 预建 `SpecStatus` 条目（`build.status=""`，7.2 步骤 5），specStatus 键集即构建集——被发布确认/重建一致性等门禁跳过而尚未下发的 spec 同样有条目，其空串 status 天然非终态，**不会因"无条目"漏判而提前 `Completed`**；空构建集在 init 步骤 5 已直接 `Completed`，不经本判定。
+**遍历基准的正确性由 init 步骤 3 预建保证**：构建集非空的 BuildInfo 在创建首个 Job 前已为构建集全部 spec 预建 `SpecStatus` 条目（`build.status=""`，7.2 步骤 3），specStatus 键集即构建集——被发布确认/重建一致性等门禁跳过而尚未下发的 spec 同样有条目，其空串 status 天然非终态，**不会因"无条目"漏判而提前 `Completed`**；空构建集在 init 步骤 5 已直接 `Completed`，不经本判定。
 
 - `Failed` 属终态，不再等待重建次数（上游 Failed 且产物不可用自判失败、或外部依赖缺失的 spec 无需 Job）。
 - Job 的 `Aborted` phase **不经 6.2 状态机持久化为 `Aborted` 状态值**：正常路径下 Job 被 `Aborted` 意味着父 Build 已 `Aborted`（或已删除），BuildInfo 会在 **reconcile 阶段被 parentAbortGuard 先行置为 `Aborted` 中止终态并保留对象**（G-06 / E-03），不进入回填与完成度判定；**防御分支**——回填时目标 Job `phase=Aborted` 而同轮 parentAbortGuard 已确认父 Build 非 `Aborted` 且存在（Job 单独 Aborted，异常事件），按 7.4.5 映射防御性视同 `Failed` 终态（condition 保留 `BuildAborted` 溯源）——两路均不产生"specStatus 条目停留 `Aborted`"的中间态，allTerminal 判定无需处理该值。
@@ -367,19 +367,17 @@ E-28/E-29/E-30 统一采用：**停止派发 → 等待已有 Job 收敛 → Com
 5. 不中止或删除已有 Job，不等待物化/sourceJobNames，不要求环内重建次数；未派发 spec 保留空状态，不伪造失败 Job。Completed 保留停止原因，不写 AllSpecsSucceeded；父 Build 在 Completed 后按 2.5 的 condition 契约收口。
 6. 等待期间仅有状态变化才 PUT，返回零值 + nil 等下一轮；不设等待超时，不将运行中的 Job 当作已完成。Completed 写入成功（含 Unknown 确认成功）后才清理缓存；写失败保留停止标记，下轮重新 List 判断。父 Build 中止/删除及 Project Terminating 仍优先按原规则写 Aborted，不属于本 Completed 路径。
 
-### 6.5.1 未决创建的持久化与确认
+### 6.5.1 批量创建确认与未决条目恢复
 
-未决创建指已登记但尚未确认结果的 Job 创建身份，不等同于运行中的 Job。使用 `BuildInfo.status.pendingJobCreates map[string]PendingJobCreate` 保存，key 为原始 specName；条目包含 `jobName string`、`dispatchGeneration int64`。BuildInfo UID 取对象自身，完整身份及名称算法见 15.3.1；同一 spec 同时至多一条未决创建。
+新派发使用确定性 Job 名称，不再逐 Job 写入 `pendingJobCreates`。每轮最多发起 20 次 CreateJob；已确认创建的 Job 在本轮内存态中立即更新 `dispatchCount` 与 build 状态，供后续门禁判断。正常情况下整批创建后只写一次 BuildInfo `/status`；本轮中途如需写入其他状态，该次写入合并已创建 Job 的确认。写入失败或进程崩溃时，下轮完整 List Job，按身份与代次回填；同名创建返回 409 时 GET 核验，Unknown 时 GET 命中则确认、404 则返回可重试错误。重试始终沿用相同名称，不因未收到响应另起新代次。停止派发后不补发 Job，仍通过完整 Job List 等待已有 Job 终态。
 
-所有写 Completed 的路径（包括正常 allTerminal、空构建集及 init 确定性失败）均检查该 map 为空；不可用部分 status 更新覆盖或丢弃未决条目。该限制不改变父 Build 中止等路径写 Aborted 的既有语义。
+不预登记的取舍是：若 CreateJob 返回 Unknown、确认 GET 为 404，随后又触发停止派发，迟到的创建请求可能在停止路径的 Job List 之后落库。停止收敛不能对这一窗口提供严格的“无迟到 Job”保证；后续 Job 事件与周期 List 仍会发现该 Job。若要求严格保证，需恢复批次级持久化创建意图，并承担额外的预登记写入。
 
-1. **先登记再请求**：发出 CreateJob 前，先 PUT /status 保存条目；只有登记确认成功且当前对象仍允许派发，才发送请求。登记失败或登记结果尚未确认时不得发送。后续对象衔接遵循 10.2。
-2. **确认存在**：创建成功或 GET/List 找到身份匹配的 Job 后，在一次 /status 写入中将 dispatchCount 提升到已确认代次并删除未决条目，不重复累加。清除写失败则保留条目，下轮重新确认；计数及回填规则不变。
-3. **确认未发送或明确拒绝**：只有能证明该身份没有此前未决请求的首次尝试，返回 NotSent 或明确未创建对象的 Rejected 时，才允许删除条目，再按 7.5 处理错误。AlreadyExists 不属于未创建证明，按 15.3.1 查询核验；同一身份已有 Unknown 或经历重启时，后续某次 NotSent/Rejected 不证明更早请求未成功，不据此清除条目。
-4. **正常调谐恢复**：优先处理已登记条目，GET 核验；404 且仍允许派发时，仅用条目中的同名、同代次重新调和创建，不计算下一代。停止派发后只 GET 确认，禁止补发；即使 List 未命中，也须逐条 GET。GET 失败按读取错误分类处理；身份不匹配返回 PermanentError 并保留条目。
-5. **停止后的 404**：保留条目，输出限频结构化告警 `reason=JobCreateUnresolved`，返回零值 + nil 等待下一轮轮询，不增加派发次数，不将 404、重试次数或等待时长视为失败证明。重启从 status 恢复，不能因内存意图丢失认定无未决创建。
-6. **明确限制**：仅凭 GET 无法证明此前请求永远不会落库。若请求实际未落库，或登记成功后尚未发请求就崩溃，停止路径可能一直等待；本版本选择不误报 Completed，需人工核实并处置（例如通过现有中止流程结束父 Build）。不设置自动清除超时，不新增后台重发或自动补建能力。
-7. **预派发失败收口的条目核验**：spec 预派发失败标 `Failed`（E-19/E-27 的 404/`RpmDependsMissing`）且存在复用未决条目时，随判决同轮 GET 核验一次——终态 spec 无第 4 条自愈路径，孤儿条目无人消解、永久阻塞 Completed：命中且身份匹配 → 保留条目，下轮按第 2 条消解；404 → 与判决同次写删除；身份不匹配 → PermanentError 并保留（同第 4 条）。E-26 和 E-27 非 404 配置错误暂停派发，不触发本条的失败收口；停止路径第 5/6 条保守语义不变。
+已有对象中的 `pendingJobCreates map[string]PendingJobCreate` 仍按以下规则恢复；新派发不新增条目。条目以 specName 为 key，保存 jobName 与 dispatchGeneration。所有写 Completed 的路径均要求该 map 为空，不得在普通状态写入中丢弃未决条目；父 Build 中止写 Aborted 的规则不变。
+
+1. 正常调谐先 GET 已登记的同名 Job；命中且身份匹配则回填并删除条目。404 且仍允许派发时以原名称、原代次重试；停止派发后只 GET，不补发。身份不匹配返回 PermanentError。
+2. 停止派发后 GET 仍为 404 时保留条目、记录 `JobCreateUnresolved` 并等待下一轮，不凭一次 404 推断此前请求不会迟到。条目长期无法确认需人工处置。
+3. spec 在派发前被判为 Failed 且存在既有未决条目时，GET 命中保留条目等待回填，404 与 Failed 判决同次删除，身份不匹配返回 PermanentError。
 
 ## 七、Reconcile 流程
 
@@ -460,10 +458,12 @@ ebs-apiserver (REST API)
 1. **回填既有 Job**：按 build-name List 并按 7.4.2、7.4.4～7.4.7 回填，覆盖上轮 Job 已创建但 status 写入未成功的情况。List 失败结束本轮。
 1.5. **确定目标架构**：复用 parentAbortGuard 持有的 Build；arch 为空时的防御行为见 E-19。
 2. **取得并持久化 DCG**：依次查内存缓存、status.dcg、首次建图（5.4/15.9）；首次建图要求本轮持有 RpmRepo 且所需元数据就绪。建边算法见 16.1、选点见 7.2.1。构图异常记录 DcgBuildFailed 并等待；持久化失败不更新缓存、不创建 Job。获取成功清除 DcgBuildFailed。single 跳过此步。
-3. **派发无上游 spec**：对 build/install 合并入度为零且尚无 Job 的节点，依次执行架构校验（E-19）、构建依赖校验（7.4.1）和 Job 构造（15.3.1）。本轮新 Job 共用一次 Config/build-target 快照；配置不可用按 E-26 暂停。成功创建后按 7.4.2 更新派发计数及状态。
+3. **预建状态并派发无上游 spec**：DCG 落盘后、创建任何 Job 前，先为筛选后的构建集全部 spec 补齐缺失的 `specStatus` 条目并持久化，保持 Pending、不覆盖回填状态；写入失败不派发。然后对 build/install 合并入度为零且尚无 Job 的节点，依次执行架构校验（E-19）、构建依赖校验（7.4.1）和 Job 构造（15.3.1）。本轮新 Job 共用一次 Config/build-target 快照；配置不可用按 E-26 暂停。成功创建后按 7.4.2 更新派发计数及状态。
 4. **派发 bootstrap**：按 7.2.1 的破环点和 7.4.6 第 3 条门禁执行首次下发；已下发的不重复 bootstrap。破环异常记录 DcgBuildFailed 并等待。
-5. **完成初始化**：构建集为空且未被步骤 0 的确定性失败分支截获时，直接 Completed。构建集非空时，为全部 spec 补建缺失 SpecStatus（build.status 空、dispatchCount=0、install.status 空），不覆盖回填或本轮创建已写入的条目，然后置 Processing。未派发条目也须预建，作为 6.4 完成判定的遍历基准。
+5. **完成初始化**：构建集为空且未被步骤 0 的确定性失败分支截获时，直接 Completed。构建集非空时，只有步骤 3、4 的派发遍历完成后才置 Processing；未派发条目已在步骤 3 预建，作为 6.4 完成判定的遍历基准。
 6. **写入**：仅实际状态变化才 PUT（见 7.3 回写约定），成功后由后续 Processing 调谐推进。
+
+每轮 reconcile 最多发起 20 次 `CreateJob` 请求，Pending、Processing 和 single 派发路径共用该预算。预算耗尽后遇到下一个待派发 spec，返回 `ReconcileResult{Requeue: true}` 立即重入；本轮不得提前执行 Pending → Processing 的阶段切换或 Processing 的完成判定。已确认派发写入 status，未决创建身份保持原有持久化和重入确认规则；下一轮从最新对象继续。
 
 #### 7.2.1 破环算法设计
 
@@ -565,7 +565,7 @@ repeat:                                                                   # 迭�
 
 #### 7.2.3 直通构建（`single`）直通路径
 
-`single` 类型走**直通路径**：specDepends 仅组装 `Build.spec.packages` 所列**全部**指定包仓库的条目，跳过建图与全部下发门禁，init 阶段将构建集全部 Job **一次性无顺序直接下发**——各 spec 之间无构建排序、无上下游等待、不分批次，全部直接下发。本节为 `single` 的语义总纲；其余章节通用流程对 `single` 的豁免均以本节为准。
+`single` 类型走**直通路径**：specDepends 仅组装 `Build.spec.packages` 所列**全部**指定包仓库的条目，跳过建图与全部下发门禁；先持久化构建集全部 `specStatus` 条目，再按每轮最多 20 次 `CreateJob` 请求分轮直接下发。各 spec 之间无构建排序、无上下游等待。本节为 `single` 的语义总纲；其余章节通用流程对 `single` 的豁免均以本节为准。
 
 **1. specDepends 指定包仓库集直组装（步骤 0）**：
 
@@ -578,7 +578,7 @@ repeat:                                                                   # 迭�
 
 - **跳过步骤 2（dcg 建图）**：无 dcgDict、**不填充 `status.dcg` 字段**（整个生命周期保持空，无 `DcgBuildFailed` 语义）、无破环选点；RpmRepo 就绪前置随之不适用——`single` 的建图/门禁均不查询本轮 RpmRepo（见 15.4；repo 注入读本轮同名 RpmRepo 的 contentURL，见第 3 条；配置了 `prefer` 时读取同一仓库元数据仅供 Job payload 使用，见 15.3.1）；7.1 发布失败守卫同样豁免（rpm-repo-controller 对 single 不发布，release 恒非 Failed，无检查意义，见 E-28）；
 - **跳过步骤 4（破环）**：无图无环；
-- **步骤 3 为构建集全部 spec 直接创建 Job**（无入度概念、无上游语义，各指定包仓库全部 spec 并行直发、无构建排序、无下发顺序）：
+- **步骤 3 预建全部 specStatus 条目后直接创建 Job**（无入度概念、无上游语义；仍遵守每轮 20 次创建请求的上限）：
   - **跳过的门禁**（不校验任何门禁依赖）：构建依赖统一存在性裁决（7.4.1 条件 2，含 RpmRepo 查询——守卫豁免，7.1）、发布确认门禁（7.4.6 第 2 条）、重建一致性门禁（7.4.6 第 1 条）、上游终态检查；
   - **保留的确定性校验**（非门禁依赖）：E-19 架构白名单（exclusiveArch 不含目标架构 → spec 标 `Failed` 不下发）、E-27 配置对象 404（spec 标 Failed）；**E-26 镜像配置及 E-27 非 404 配置错误为暂停语义**（读取失败/映射缺失 → 本轮不创建 Job 等待配置恢复，不标 Failed）；
   - Job 字段填充照常按 15.3；payload `repo` 注入按本节第 3 条；配置了 `prefer` 时仍按 15.3.1 逐 Job 计算，不因此启用建图或依赖门禁；
@@ -881,7 +881,7 @@ install 校验通过（目标 Job `phase=Succeeded` 且 message 无缺失依赖�
 
 `UpdateBuildInfoStatus` / `CreateJob` 返回 `WriteError{Outcome: Unknown}`（请求已发出但无法确认结果：连接中断、响应超时、响应无法解析）时，**禁止重放旧请求**，必须先执行确认读取再决定后续动作：
 
-- **写入意图**：发出写入前在内存保存本轮意图——目标对象 UID + 本次目标字段值（status 写：`phase`、按 specName 定位的 `specStatus` 条目、按 type 定位的 `conditions` 目标值、`dcg`、本次新增/删除的 `pendingJobCreates` 条目；Job 创建：15.3.1 定义的完整创建身份、确定性 Job 名与 label 集合）。status 写入的目标快照仅为本轮内存态；Job 创建身份按 6.5.1 在发送前持久化，基于深拷贝保存，不被后续流程就地修改。
+- **写入意图**：发出写入前在内存保存本轮意图——目标对象 UID + 本次目标字段值（status 写：`phase`、按 specName 定位的 `specStatus` 条目、按 type 定位的 `conditions` 目标值、`dcg`、已有 `pendingJobCreates` 条目的删除；Job 创建：15.3.1 定义的完整创建身份、确定性 Job 名与 label 集合）。status 写入的目标快照基于深拷贝保存；本轮已确认的 Job 可以合并到一次 status 写入，不逐 Job 预登记。
 - **确认读取**：用仍有效的 reconcile context GET 一次当前持久化对象，按语义比较（不比较 `resourceVersion`）：
   - map 字段 nil 与空 map 等价；
   - `conditions` 按 type 定位比较 `status`/`reason`/`message`，不依赖数组顺序，`lastTransitionTime` 不参与比较；
@@ -1092,9 +1092,9 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
 | `status.phase` | string | `Pending` → `Processing` → `Completed`，单向推进；`Completed` 为终态（G-05）；`Aborted` 中止终态（G-06/E-03/E-20） |
-| `status.pendingJobCreates` | map[string]PendingJobCreate | 未决创建身份，登记、确认、清除及重启恢复统一见 6.5.1；非空时不得写 Completed |
+| `status.pendingJobCreates` | map[string]PendingJobCreate | 既有未决创建身份的恢复见 6.5.1；新派发不再写入，非空时不得写 Completed |
 | `status.conditions` | []metav1.Condition | BuildInfo 级 condition，目录见 9.1；`status` 恒 `True`；DcgBuildFailed 恢复即清除 |
-| `status.specStatus` | map[string]SpecStatus | key 为 specName；init 步骤 5 为构建集全部 spec **预建**条目，写入 `build.status=""`、`dispatchCount=0`、`install.status=""`；后续原地更新，既有条目不覆盖，避免重置派发计数（G-03） |
+| `status.specStatus` | map[string]SpecStatus | key 为 specName；init 步骤 3 在派发 Job 前为构建集全部 spec **预建**条目，写入 `build.status=""`、`dispatchCount=0`、`install.status=""`；后续原地更新，既有条目不覆盖，避免重置派发计数（G-03） |
 | `status.failedPackages` | []string | Pending 组装时持久化仓库级确定性失败；`Completed` 时依据本轮 spec→仓库映射合并最终构建/安装失败的 spec 所属仓库，去重排序后与终态同次写入；恢复后不从 condition message 反推，规则见 7.2.2 |
 
 `SpecStatus`（**以 data-models.md 为准：`dispatchCount` 与 `build`/`install` 平级**）：
@@ -1109,7 +1109,7 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
-| `status` | string | `""`（空，未下发——init 预建初始值，7.2 步骤 5）/ `Running` / `Succeeded` / `Failed`（`Aborted` 为历史版本透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5/6.2）；创建 Job 后回到 `Running`；终态集合 = {Succeeded, Failed}（空串与 `Running` 均非终态，allTerminal 见 6.4） |
+| `status` | string | `""`（空，未下发——init 预建初始值，7.2 步骤 3）/ `Running` / `Succeeded` / `Failed`（`Aborted` 为历史版本透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5/6.2）；创建 Job 后回到 `Running`；终态集合 = {Succeeded, Failed}（空串与 `Running` 均非终态，allTerminal 见 6.4） |
 | `conditions` | []metav1.Condition | spec 级 condition，目录见 9.1 |
 
 `SpecStatus.install`（SpecInstallStatus）：
@@ -1126,7 +1126,7 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 **Job 命名与创建幂等**：
 
-- 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次，只有确认该代 Job 已存在后才更新派发计数。
+- 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次。新创建的 Job 在本轮内存态确认，整批合并写入 status；落盘失败由下轮 List 回填。
 - hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，新建 Job 只取摘要前 8 字节，输出 16 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
 - Job 名为 `specName + "-" + hash`，使用原始 specName，不截断；派发代次仅参与 hash 计算，不直接显示在名称中。当前 Job 名称校验没有显式长度上限；若 specName 不能组成合法路径段，按本地输入错误返回 PermanentError，不静默改名。
 - Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 使用既有 spec label 编码约定。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有带可见派发代次的 16 位、20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填；新派发仅生成不显示代次的 16 位 hash 名称。已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
@@ -1682,7 +1682,7 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 | 依赖图 | 7.2.1 自环、多环、交叉环、确定性选点；7.4.2 计数及失败放宽；7.4.6 三类门禁 |
 | Job 回填 | 7.4.4 多代排序、7.4.5 phase 映射、7.4.7 install 三分支和动态补边 |
 | Job 构造 | 15.3.1 确定性名称、AlreadyExists 身份核验及 GET 404 后可重试且同名同代次、超时迟到写入与重启恢复；payload、标签编码、Config/build-target 批次快照、Config/build-resource；E-19/E-26/E-27 |
-| 停止派发 | 6.5/6.5.1 全部分支（登记后发送前崩溃、Unknown 后重启、持续 404、确认清除失败）；E-28/E-29/E-30 分别覆盖 Pending/Processing、未决创建、多页 Job、旧代与构建集外 Job、重启、依赖恢复、中止优先级 |
+| 停止派发 | 6.5/6.5.1 的批次写入失败、Unknown 后重启与既有未决条目恢复；E-28/E-29/E-30 分别覆盖 Pending/Processing、多页 Job、旧代与构建集外 Job、重启、依赖恢复、中止优先级 |
 | 缓存 | 5.4 生命周期与计数边界；15.9 持久化顺序；15.10 刷新与分层；15.11 命中、LRU 淘汰、补源失败 |
 | 解析 | 16.1～16.3 版本选择、约束比较、宏、架构归一、buildRemoves 与解析回退 |
 | 写入与队列 | 7.5 所有错误分类；10.2 Conflict 及同轮连续写入的对象/resourceVersion 衔接（普通成功与 Unknown 确认成功）；10.3 Unknown 意图比较、UID 变化、确认失败及 context 取消 |

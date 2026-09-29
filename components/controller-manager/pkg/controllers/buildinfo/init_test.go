@@ -9,12 +9,14 @@ package buildinfo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	yaml "gopkg.in/yaml.v2"
 
 	"controller-manager/pkg/clients/gitserver"
+	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
@@ -85,6 +87,91 @@ func TestInitFullHappyPath(t *testing.T) {
 	}
 	if len(bi.Status.Conditions) != 0 {
 		t.Fatalf("conditions = %v, want none", bi.Status.Conditions)
+	}
+}
+
+func TestInitDispatchesAtMostTwentyJobsPerReconcile(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "full")
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj(""))
+	files := make(map[string]string, maxJobCreatesPerReconcile+1)
+	for i := 0; i <= maxJobCreatesPerReconcile; i++ {
+		name := fmt.Sprintf("pkg%02d", i)
+		files[name+".spec"] = specText(name)
+	}
+	git.repo(gitURL1, "c1", files)
+
+	result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+	if err != nil || !result.Requeue {
+		t.Fatalf("first reconcile = %+v, %v, want immediate requeue", result, err)
+	}
+	if got := len(listJobs(t, client)); got != maxJobCreatesPerReconcile {
+		t.Fatalf("first reconcile created %d Jobs, want %d", got, maxJobCreatesPerReconcile)
+	}
+	if phase := getBuildInfo(t, client).Status.Phase; phase != ebsv1.BuildInfoPending {
+		t.Fatalf("phase after partial dispatch = %s, want Pending", phase)
+	}
+	if got := len(getBuildInfo(t, client).Status.SpecStatus); got != maxJobCreatesPerReconcile+1 {
+		t.Fatalf("first reconcile persisted %d spec entries, want %d", got, maxJobCreatesPerReconcile+1)
+	}
+	if got := client.statusWrites; got > 5 {
+		t.Fatalf("first reconcile wrote status %d times for %d Jobs, want batched confirmation", got, maxJobCreatesPerReconcile)
+	}
+	for i := 0; i < maxJobCreatesPerReconcile; i++ {
+		name := fmt.Sprintf("pkg%02d", i)
+		if got := getBuildInfo(t, client).Status.SpecStatus[name].DispatchCount; got != 1 {
+			t.Fatalf("spec %s dispatch count = %d, want 1 after batch flush", name, got)
+		}
+	}
+	if ss := getBuildInfo(t, client).Status.SpecStatus["pkg20"]; ss.DispatchCount != 0 || ss.Build.Status != "" {
+		t.Fatalf("not-yet-dispatched spec status = %+v, want an empty entry", ss)
+	}
+
+	result, err = c.reconcile(context.Background(), testNS+"/"+testBuild)
+	if err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("second reconcile = %+v, %v", result, err)
+	}
+	if got := len(listJobs(t, client)); got != maxJobCreatesPerReconcile+1 {
+		t.Fatalf("second reconcile has %d Jobs, want %d", got, maxJobCreatesPerReconcile+1)
+	}
+	if phase := getBuildInfo(t, client).Status.Phase; phase != ebsv1.BuildInfoProcessing {
+		t.Fatalf("phase after complete dispatch = %s, want Processing", phase)
+	}
+}
+
+func TestSingleInitPersistsAllSpecsBeforeBatchedDispatch(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "single", "repo1")
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj(""))
+	files := make(map[string]string, maxJobCreatesPerReconcile+1)
+	for i := 0; i <= maxJobCreatesPerReconcile; i++ {
+		name := fmt.Sprintf("pkg%02d", i)
+		files[name+".spec"] = specText(name)
+	}
+	git.repo(gitURL1, "c1", files)
+
+	result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+	if err != nil || !result.Requeue {
+		t.Fatalf("first reconcile = %+v, %v, want immediate requeue", result, err)
+	}
+	if got := len(listJobs(t, client)); got != maxJobCreatesPerReconcile {
+		t.Fatalf("first reconcile created %d Jobs, want %d", got, maxJobCreatesPerReconcile)
+	}
+	if bi := getBuildInfo(t, client); bi.Status.Phase != ebsv1.BuildInfoPending || len(bi.Status.SpecStatus) != maxJobCreatesPerReconcile+1 {
+		t.Fatalf("partial single status = %+v, want Pending with all spec entries", bi.Status)
+	}
+
+	result, err = c.reconcile(context.Background(), testNS+"/"+testBuild)
+	if err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("second reconcile = %+v, %v", result, err)
+	}
+	if got := len(listJobs(t, client)); got != maxJobCreatesPerReconcile+1 {
+		t.Fatalf("second reconcile has %d Jobs, want %d", got, maxJobCreatesPerReconcile+1)
+	}
+	if phase := getBuildInfo(t, client).Status.Phase; phase != ebsv1.BuildInfoProcessing {
+		t.Fatalf("phase after complete single dispatch = %s, want Processing", phase)
 	}
 }
 
@@ -517,7 +604,10 @@ func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 	}
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoPending)
-	requireSpecNames(t, bi)
+	requireSpecNames(t, bi, "a")
+	if ss := bi.Status.SpecStatus["a"]; ss.Build.Status != "" || ss.DispatchCount != 0 {
+		t.Fatalf("specStatus[a] = %+v, want an undispatched entry", ss)
+	}
 	if len(bi.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want empty (image resolves before registration)", bi.Status.PendingJobCreates)
 	}

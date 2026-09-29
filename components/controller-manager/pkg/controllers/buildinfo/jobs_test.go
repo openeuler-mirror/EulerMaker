@@ -449,6 +449,70 @@ func testScriptRef() ebsv1.ScriptRef {
 	return ebsv1.ScriptRef{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "1"}
 }
 
+func TestDispatchBatchWritesStatusOnce(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.UID = "batch-dispatch"
+	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{"a": {}, "b": {}}
+	seeded := client.SeedBuildInfo(bi)
+	client.SeedBuildResourceRules(testBuildResourceRules())
+	key := testNS + "/" + testBuild
+	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
+	for _, name := range []string{"a", "b"} {
+		depend := dependEntry(name)
+		if _, err := c.dispatchSpec(context.Background(), round, name, &depend, testSnapshotObj(), testImage, testRepoURL, nil); err != nil {
+			t.Fatalf("dispatch %s: %v", name, err)
+		}
+	}
+	if client.statusWrites != 0 || client.resourceReads != 1 {
+		t.Fatalf("before flush: status writes=%d, resource reads=%d; want 0 and 1", client.statusWrites, client.resourceReads)
+	}
+	if _, err := c.flushCreatedJobs(context.Background(), round); err != nil {
+		t.Fatalf("flush created jobs: %v", err)
+	}
+	if client.statusWrites != 1 {
+		t.Fatalf("status writes=%d, want one batch confirmation", client.statusWrites)
+	}
+	for _, name := range []string{"a", "b"} {
+		if got := getBuildInfo(t, client).Status.SpecStatus[name].DispatchCount; got != 1 {
+			t.Fatalf("spec %s dispatch count=%d, want 1", name, got)
+		}
+	}
+}
+
+func TestDispatchBatchStatusConflictRecoversFromJobList(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "batch-conflict", "a")
+	depend := dependEntry("a")
+	if _, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	client.InjectWrite("update-status", clientpkg.WriteRejected, 409, false)
+	result, err := c.flushCreatedJobs(context.Background(), round)
+	if err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("conflicted flush = %+v, %v, want delayed requeue", result, err)
+	}
+	if got := getBuildInfo(t, client).Status.SpecStatus["a"].DispatchCount; got != 0 {
+		t.Fatalf("dispatch count after rejected flush = %d, want 0", got)
+	}
+
+	// A new reconcile starts from the persisted BuildInfo, not the discarded
+	// local batch, and recovers the confirmed Job by deterministic identity.
+	fresh := &reconcileRound{key: round.key, current: getBuildInfo(t, client), build: round.build, failures: c.newRoundFailures(round.key)}
+	jobs, err := c.listRoundJobs(context.Background(), fresh)
+	if err != nil {
+		t.Fatalf("list Jobs: %v", err)
+	}
+	next := fresh.current.DeepCopy()
+	c.backfillJobs(fresh, next, jobs, map[string]bool{"a": true}, false)
+	if _, err := c.writeStatusIfChanged(context.Background(), fresh, next); err != nil {
+		t.Fatalf("backfill status: %v", err)
+	}
+	if got := getBuildInfo(t, client).Status.SpecStatus["a"].DispatchCount; got != 1 {
+		t.Fatalf("recovered dispatch count = %d, want 1", got)
+	}
+}
+
 func TestDispatchSpecRecordsScriptObservation(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-script", "a")
@@ -614,6 +678,9 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 	if got := listJobs(t, client)[0].Name; got != existing.Name {
 		t.Fatalf("job name = %q, want existing job %q", got, existing.Name)
 	}
+	if _, err := c.flushCreatedJobs(context.Background(), round); err != nil {
+		t.Fatalf("flush created jobs: %v", err)
+	}
 	persisted := getBuildInfo(t, client)
 	a := persisted.Status.SpecStatus["a"]
 	if a.DispatchCount != 1 || a.Build.Status != SpecBuildRunning {
@@ -667,8 +734,7 @@ func TestDispatchSpecAlreadyExistsIdentityMismatch(t *testing.T) {
 func TestDispatchSpecAlreadyExistsConfirm404Retried(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-dispatch-409-404", "a")
-	// 409 without a stored object: the confirmation GET 404 is a retryable
-	// error, never the main-object NotFound rule; the entry stays registered.
+	// 409 without a stored object: the confirmation GET 404 is retryable.
 	client.InjectWrite("create", clientpkg.WriteRejected, 409, false)
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
@@ -678,8 +744,8 @@ func TestDispatchSpecAlreadyExistsConfirm404Retried(t *testing.T) {
 		t.Fatalf("dispatchSpec error = %v, want a retryable confirmation-read error", err)
 	}
 	persisted := getBuildInfo(t, client)
-	if len(persisted.Status.PendingJobCreates) != 1 {
-		t.Fatalf("pendingJobCreates = %v, want the registered entry kept", persisted.Status.PendingJobCreates)
+	if len(persisted.Status.PendingJobCreates) != 0 {
+		t.Fatalf("pendingJobCreates = %v, want no new registration", persisted.Status.PendingJobCreates)
 	}
 }
 
@@ -696,6 +762,9 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("dispatchSpec = %v, %v, want success after the Unknown landing", result, err)
 	}
+	if _, err := c.flushCreatedJobs(context.Background(), round); err != nil {
+		t.Fatalf("flush created jobs: %v", err)
+	}
 	persisted := getBuildInfo(t, client)
 	a := persisted.Status.SpecStatus["a"]
 	if a.DispatchCount != 1 {
@@ -709,12 +778,11 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 	}
 }
 
-func TestDispatchSpecUnknownMissingKeepsEntry(t *testing.T) {
+func TestDispatchSpecUnknownMissingRetriesDeterministicName(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-dispatch-unknown-404", "a")
-	// Unknown with nothing landed: the entry stays registered (6.5.1 #6 — a
-	// GET never proves the request never lands) and the error re-enters with
-	// backoff.
+	// Unknown with nothing landed: no pending entry is written. The next
+	// attempt uses the same deterministic name and can safely create it.
 	client.InjectWrite("create", clientpkg.WriteUnknown, 0, false)
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
@@ -724,10 +792,16 @@ func TestDispatchSpecUnknownMissingKeepsEntry(t *testing.T) {
 		t.Fatal("dispatchSpec error = nil, want the Unknown write error")
 	}
 	persisted := getBuildInfo(t, client)
-	if len(persisted.Status.PendingJobCreates) != 1 {
-		t.Fatalf("pendingJobCreates = %v, want the entry kept for next-round verification", persisted.Status.PendingJobCreates)
+	if len(persisted.Status.PendingJobCreates) != 0 {
+		t.Fatalf("pendingJobCreates = %v, want no new registration", persisted.Status.PendingJobCreates)
 	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
+	}
+	if _, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil); err != nil {
+		t.Fatalf("retry deterministic create: %v", err)
+	}
+	if got := len(listJobs(t, client)); got != 1 {
+		t.Fatalf("jobs after retry = %d, want 1", got)
 	}
 }
