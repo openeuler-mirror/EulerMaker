@@ -342,7 +342,32 @@ func (c *Client) write(ctx context.Context, method, resource, id string, doc Doc
 }
 
 func (c *Client) Get(ctx context.Context, resource, id string) (*Hit, error) {
+	return c.GetWithSourceFilter(ctx, resource, id, SourceFilter{})
+}
+
+// SourceFilter limits fields returned from Elasticsearch without changing stored documents.
+type SourceFilter struct {
+	Includes []string
+	Excludes []string
+}
+
+func (c *Client) GetWithSourceFilter(ctx context.Context, resource, id string, filter SourceFilter) (*Hit, error) {
 	u := fmt.Sprintf("%s/%s/_doc/%s", c.addr(), resourceIndex(resource), docPathID(id))
+	if len(filter.Includes) != 0 || len(filter.Excludes) != 0 {
+		parsed, err := url.Parse(u)
+		if err != nil {
+			return nil, err
+		}
+		query := parsed.Query()
+		if len(filter.Includes) != 0 {
+			query.Set("_source_includes", strings.Join(filter.Includes, ","))
+		}
+		if len(filter.Excludes) != 0 {
+			query.Set("_source_excludes", strings.Join(filter.Excludes, ","))
+		}
+		parsed.RawQuery = query.Encode()
+		u = parsed.String()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -422,6 +447,10 @@ func (c *Client) ClosePIT(ctx context.Context, id string) error {
 }
 
 func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query map[string]interface{}, size int64, searchAfter []json.RawMessage) (*SearchResult, error) {
+	return c.SearchPITWithSourceFilter(ctx, pitID, keepAlive, query, size, searchAfter, SourceFilter{})
+}
+
+func (c *Client) SearchPITWithSourceFilter(ctx context.Context, pitID, keepAlive string, query map[string]interface{}, size int64, searchAfter []json.RawMessage, filter SourceFilter) (*SearchResult, error) {
 	body := map[string]interface{}{
 		"pit":   map[string]string{"id": pitID, "keep_alive": keepAlive},
 		"query": query,
@@ -432,6 +461,16 @@ func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query m
 		},
 		"track_total_hits":    true,
 		"seq_no_primary_term": true,
+	}
+	if len(filter.Includes) != 0 || len(filter.Excludes) != 0 {
+		source := make(map[string]interface{})
+		if len(filter.Includes) != 0 {
+			source["includes"] = filter.Includes
+		}
+		if len(filter.Excludes) != 0 {
+			source["excludes"] = filter.Excludes
+		}
+		body["_source"] = source
 	}
 	if len(searchAfter) > 0 {
 		body["search_after"] = searchAfter

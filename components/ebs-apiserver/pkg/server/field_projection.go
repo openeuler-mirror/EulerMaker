@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	"ebs-apiserver/pkg/storage/es"
+	"ebs-apiserver/pkg/storage/esstore"
 )
 
 // Field paths are relative to one resource, including for list responses.
@@ -107,7 +111,13 @@ func withFieldProjection(next http.Handler) http.Handler {
 			return
 		}
 		buffer := httptest.NewRecorder()
-		next.ServeHTTP(buffer, r.WithContext(context.WithValue(r.Context(), projectionBypassKey{}, true)))
+		ctx := context.WithValue(r.Context(), projectionBypassKey{}, true)
+		if strings.HasPrefix(r.URL.Path, "/apis/ebs/v1/") {
+			if filter, ok := projection.sourceFilter(); ok {
+				ctx = esstore.WithSourceFilter(ctx, filter)
+			}
+		}
+		next.ServeHTTP(buffer, r.WithContext(ctx))
 		result := buffer.Result()
 		defer result.Body.Close()
 		if result.StatusCode < 200 || result.StatusCode >= 300 {
@@ -125,6 +135,54 @@ func withFieldProjection(next http.Handler) http.Handler {
 		}
 		copyProjectedResponse(w, result.Header, result.StatusCode, body)
 	})
+}
+
+// sourceFilter is deliberately conservative. The response projector still
+// enforces exact field semantics; unsafe nested paths retain a full ES read.
+func (p fieldProjection) sourceFilter() (es.SourceFilter, bool) {
+	filter := es.SourceFilter{}
+	if p.include != nil {
+		filter.Includes = []string{"data.apiVersion", "data.kind", "data.metadata"}
+		for field, node := range p.include.children {
+			switch field {
+			case "apiVersion", "kind", "metadata":
+				// The full metadata is required to decode a valid object.
+				if field == "metadata" && !node.terminal {
+					for child := range node.children {
+						if child != "name" && child != "namespace" && child != "uid" && child != "resourceVersion" {
+							return es.SourceFilter{}, false
+						}
+					}
+				}
+			case "spec", "status":
+				if node.terminal {
+					filter.Includes = append(filter.Includes, "data."+field)
+					continue
+				}
+				if field != "status" {
+					return es.SourceFilter{}, false
+				}
+				for child, nested := range node.children {
+					if !nested.terminal || (child != "phase" && child != "stage") {
+						return es.SourceFilter{}, false
+					}
+					filter.Includes = append(filter.Includes, "data.status."+child)
+				}
+			default:
+				return es.SourceFilter{}, false
+			}
+		}
+	}
+	if p.exclude != nil {
+		for field, node := range p.exclude.children {
+			if field == "spec" && node.terminal {
+				filter.Excludes = append(filter.Excludes, "data.spec")
+			}
+		}
+	}
+	sort.Strings(filter.Includes)
+	sort.Strings(filter.Excludes)
+	return filter, len(filter.Includes) != 0 || len(filter.Excludes) != 0
 }
 
 func (p fieldProjection) apply(body []byte) ([]byte, error) {

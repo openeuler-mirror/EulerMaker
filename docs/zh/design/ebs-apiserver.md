@@ -395,6 +395,7 @@ mapping 约束：
 - `metadata.creationTimestamp` 使用 `date`。
 - `metadata.labels` 使用包含 `key/value` 两个 `keyword` 字段的 `nested` 数组。这样既避免 label key 动态展开导致 mapping 膨胀，也能正确处理包含 `.`、`/` 的 Kubernetes label key。
 - 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中。通用 mapping 将 `data.status.phase`、`data.status.stage` 建立为 `keyword`；RpmRepo 使用独立 mapping，仅将 `data.status.release.phase` 建立为 `keyword`。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
+- GET/LIST 的字段选择可在查询时使用 ES `_source` filtering；它只控制本次响应中的字段，不修改 mapping 或已存文档，无需重建索引。`dynamic: false` 不影响保留在 `_source` 中的字段被选择。
 - 需要查询的业务字段必须显式定义 mapping，禁止将整个 `spec/status` 动态索引。
 
 Build 查询字段直接来自待持久化的完整 API 对象，不生成额外的查询投影。Create、Update、Patch、`/status` 和 `/abort` 更新 `data` 后，对应的索引字段随同一次 ES 写入更新。`status.stage` 为空时不写 `data.status.stage`。
@@ -817,7 +818,17 @@ curl -k --get \
   'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
 ```
 
-此例的每个 Build 只返回 `metadata.name`、`status.phase`，以及保留的类型信息；List 顶层的 `apiVersion`、`kind`、`metadata`（含分页 token）保持完整。两个参数均未指定时返回完整对象；字段路径不存在时直接略过，数组内对象也可按路径选择字段。该能力只修改 JSON 响应，不改变鉴权、过滤条件或存储对象，也不减少后端读取量。Watch 和非 JSON 表格响应不支持字段选择；它与用于服务端过滤的 `fieldSelector` 是不同参数。
+此例的每个 Build 只返回 `metadata.name`、`status.phase`，以及保留的类型信息；List 顶层的 `apiVersion`、`kind`、`metadata`（含分页 token）保持完整。两个参数均未指定时返回完整对象；字段路径不存在时直接略过，数组内对象也可按路径选择字段。Watch 和非 JSON 表格响应不支持字段选择；它与用于服务端过滤的 `fieldSelector` 是不同参数。
+
+当前实现对安全的字段选择下推 ES `_source` filtering，同时在响应端继续裁剪 JSON，保持上述返回语义：
+
+1. 在 GET/LIST 进入资源存储前解析一次字段选择，将只读的投影计划随请求传给 ESStore；不带参数、写操作和控制器内部读取仍使用完整对象。Job/Runner 的 etcd 读取及 IAM 资源暂不下推，继续在响应端裁剪。
+2. ES 文档以 `data` 保存完整 API 对象，因此对象字段 `spec`、`status.phase` 分别映射为 `_source` 路径 `data.spec`、`data.status.phase`。具名 GET 使用 `_source_includes` / `_source_excludes`，PIT Search 使用请求体的 `_source.includes` / `_source.excludes`。例如 `excludeFields=spec` 可让 ES 不返回 `data.spec`；`includeFields=metadata.name,status.phase` 只请求对应 `data` 字段及解码必需字段。`_seq_no`、`_primary_term`、排序值、总数和分页 token 不依赖这些 `_source` 字段，必须照常返回。
+3. 部分 `_source` 必须足以构造合法的只读对象：保留类型和对象身份所需字段，resourceVersion 仍由 ES 命中版本设置；不得把客户端排除的字段作为零值重新序列化到响应。响应端继续应用原有的先 include 后 exclude 规则，并移除仅为内部解码而读取的字段。ES 原始文档及写入、删除、冲突校验所用的完整读取路径不变。
+4. 当前下推顶层 `spec` 排除，以及 `apiVersion`、`kind`、`metadata`、顶层 `spec/status` 和 `status.phase/stage` 的选择；`metadata` 为对象解码完整读取，但响应端仍只显示请求的子字段。数组内对象、含点号的 map key、其他嵌套路径及无法安全转换的组合回退为完整 ES 读取，再由响应端裁剪。扩展路径前需增加等价性测试。
+5. Gateway 具名 Config GET 当前为了判断 `spec.visibility` 会自行向 apiserver 读取不带客户端投影参数的完整对象；这一路径不能直接套用客户端的 ES 投影，以免丢失鉴权字段。需先保证 Gateway 在鉴权后按请求裁剪返回值，再单独设计不会绕开可见性判断的下推方案。
+
+验证需比较下推和完整读取后的 GET/LIST JSON（含空值、数组、include/exclude 同时使用）、分页与选择器结果，并覆盖 Config 可见性和写入并发；另统计 ES 响应字节数。`_source` filtering 主要减少 ES 到 apiserver 的响应传输及解码量，不承诺减少 ES 对完整 `_source` 的加载和解析。
 
 所有 ES-backed 资源默认按创建时间倒序，因此通过 `ebs.io/target-os`、`ebs.io/target-arch` 完整指定构建目标后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 

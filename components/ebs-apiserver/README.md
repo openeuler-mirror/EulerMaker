@@ -41,7 +41,7 @@ spec:
 
 通过 `GET /apis/ebs/v1/configs/build-target` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。只有 `visibility: Public` 的对象可经 Gateway 匿名具名读取；列表和写入仅允许 Ops/Admin/System。Gateway 不允许删除内置 Config；apiserver 使用通用资源路由，不支持 watch 和 status 子资源。创建 Build 时目标未配置返回 422，配置读取或内容解析失败返回 503，均不申请构建目标占用。
 
-资源 GET/LIST 支持 `includeFields=metadata.name,status.phase` 和 `excludeFields=spec` 等响应字段选择参数；两者同时指定时先选择再排除。字段路径相对于单个资源对象，LIST 的顶层分页元数据保留。该能力只裁剪 JSON 返回值，不影响服务端过滤或存储；Watch 不支持。
+资源 GET/LIST 支持 `includeFields=metadata.name,status.phase` 和 `excludeFields=spec` 等响应字段选择参数；两者同时指定时先选择再排除。字段路径相对于单个资源对象，LIST 的顶层分页元数据保留。ES 资源的安全字段选择会下推至 `_source` filtering，复杂路径仍在响应端裁剪；不影响服务端过滤或存储。Watch 不支持。
 
 ## 全局脚本资源
 

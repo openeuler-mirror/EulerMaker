@@ -34,6 +34,18 @@ const (
 	scanBatchSize = int64(500)
 )
 
+type sourceFilterKey struct{}
+
+// WithSourceFilter limits only the read response of ES-backed resources.
+func WithSourceFilter(ctx context.Context, filter es.SourceFilter) context.Context {
+	return context.WithValue(ctx, sourceFilterKey{}, filter)
+}
+
+func sourceFilter(ctx context.Context) (es.SourceFilter, bool) {
+	filter, ok := ctx.Value(sourceFilterKey{}).(es.SourceFilter)
+	return filter, ok
+}
+
 type Store struct {
 	client            *es.Client
 	resource          schema.GroupResource
@@ -112,7 +124,13 @@ func (s *Store) ConvertToTable(ctx context.Context, obj runtime.Object, opts run
 }
 
 func (s *Store) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
-	hit, err := s.client.Get(ctx, s.resourceName, s.documentID(ctx, name))
+	var hit *es.Hit
+	var err error
+	if filter, ok := sourceFilter(ctx); ok {
+		hit, err = s.client.GetWithSourceFilter(ctx, s.resourceName, s.documentID(ctx, name), filter)
+	} else {
+		hit, err = s.client.Get(ctx, s.resourceName, s.documentID(ctx, name))
+	}
 	if err != nil {
 		return nil, s.apiError(err, name)
 	}
@@ -384,7 +402,13 @@ func (s *Store) List(ctx context.Context, options *internalversion.ListOptions) 
 		if size == 0 {
 			size = scanBatchSize
 		}
-		result, searchErr := s.client.SearchPIT(ctx, pitID, pitKeepAlive, query, size, searchAfter)
+		var result *es.SearchResult
+		var searchErr error
+		if filter, ok := sourceFilter(ctx); ok {
+			result, searchErr = s.client.SearchPITWithSourceFilter(ctx, pitID, pitKeepAlive, query, size, searchAfter, filter)
+		} else {
+			result, searchErr = s.client.SearchPIT(ctx, pitID, pitKeepAlive, query, size, searchAfter)
+		}
 		if searchErr != nil {
 			return nil, s.apiError(searchErr, "")
 		}
