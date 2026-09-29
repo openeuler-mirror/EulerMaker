@@ -127,8 +127,8 @@ UID 不编码在字符串键中。`Sync` 每次从缓存取得最新对象，并
 
 ### 4.2 Job 事件
 
-- `Add`：所有 Job 都入队；非终态且 `status.runner` 非空时还要更新反向索引。Running Job 执行 Runner 丢失判定，终态 Job 安排历史清理，其他 Job 会快速结束。
-- `Update`：先按旧对象删除索引，再按新对象增加索引。UID、phase、runner、`endTime` 或 Runner 丢失判定相关状态变化时入队；仅有无关字段变化不重复入队。Informer resync 事件仍需入队，作为历史清理计划和离线观察的恢复兜底。
+- `Add`：非终态 Job 立即入队，`status.runner` 非空时还要更新反向索引。终态 Job 在历史清理开启时按 `endTime + historyRetention` 入队：已到期立即入队，未到期延迟入队；缺少 `endTime` 时立即入队以记录异常。历史清理关闭或对象删除中时不入队。
+- `Update`：先按旧对象删除索引，再按新对象增加索引。UID、phase、runner、`endTime` 或 Runner 丢失判定相关状态变化时按上述规则入队；仅有无关字段变化不重复入队。Informer resync 事件也按上述规则重新安排，不能立即入队所有未到期的终态 Job。
 - `Delete`：删除反向索引和本地宽限期记录，不需要写 API。
 
 事件处理器只做类型检查、索引维护和入队，不调用外部 API，不执行状态机。
@@ -143,7 +143,7 @@ Runner 的普通心跳更新不应导致所有 Job 反复入队。只有 Runner 
 
 ### 4.4 周期性重同步
 
-Watch resync 作为丢事件后的兜底，但不能替代定时器。处于 Runner 丢失宽限期或历史保留期内的 Job 返回 `ReconcileResult{RequeueAfter: remaining}`，由 BaseController 在相应截止时间重新入队；进程重启后，初始 List 事件会重建两类计划。
+Watch resync 作为丢事件后的兜底，但不能替代定时器。Runner 丢失宽限期由调谐结果 `RequeueAfter` 安排；终态 Job 的历史保留期由事件处理器按截止时间延迟入队，调谐时仍按最新对象重新判断到期时间并在必要时再次延迟入队。进程重启后，初始 List 事件会重建两类计划。
 
 ## 五、状态判定
 

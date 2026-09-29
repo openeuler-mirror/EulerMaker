@@ -106,7 +106,7 @@ func (c *Controller) onJobAdd(obj runtime.Object) {
 		return
 	}
 	c.updateIndex(key, job)
-	c.Enqueue(key)
+	c.enqueueJob(key, job)
 }
 
 func (c *Controller) onJobUpdate(oldObj, newObj runtime.Object) {
@@ -126,8 +126,28 @@ func (c *Controller) onJobUpdate(oldObj, newObj runtime.Object) {
 	}
 	if oldJob.ResourceVersion == newJob.ResourceVersion || oldJob.UID != newJob.UID || oldJob.Status.Phase != newJob.Status.Phase ||
 		oldJob.Status.Runner != newJob.Status.Runner || !oldJob.Status.EndTime.Time.Equal(newJob.Status.EndTime.Time) || deletionTimeChanged(oldJob, newJob) {
-		c.Enqueue(key)
+		c.enqueueJob(key, newJob)
 	}
+}
+
+func (c *Controller) enqueueJob(key string, job *ebsv1.Job) {
+	if !job.Status.Phase.IsTerminal() {
+		c.Enqueue(key)
+		return
+	}
+	if !c.config.HistoryGCEnabled || job.DeletionTimestamp != nil {
+		return
+	}
+	if job.Status.EndTime.IsZero() {
+		c.Enqueue(key) // Reconcile reports the missing endTime; it cannot schedule GC.
+		return
+	}
+	remaining := job.Status.EndTime.Time.Add(c.config.HistoryRetention).Sub(c.clock.Now())
+	if remaining <= 0 {
+		c.Enqueue(key)
+		return
+	}
+	c.EnqueueAfter(key, remaining)
 }
 
 func (c *Controller) onJobDelete(obj runtime.Object) {

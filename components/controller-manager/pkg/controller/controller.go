@@ -126,6 +126,11 @@ func (c *BaseController) Enqueue(key string) {
 		c.queue.Add(key)
 	}
 }
+func (c *BaseController) EnqueueAfter(key string, delay time.Duration) {
+	if key != "" {
+		c.queue.AddAfter(key, delay)
+	}
+}
 func (c *BaseController) Queue() workqueue.RateLimitingInterface { return c.queue }
 func (c *BaseController) Run(ctx context.Context, workers int) error {
 	if workers <= 0 {

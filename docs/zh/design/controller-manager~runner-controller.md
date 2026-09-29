@@ -401,8 +401,8 @@ HTTP 2xx 并不代表 Controller 可以无条件结束成功。共享 Client 通
 
 Runner 事件处理器只更新队列，不执行 API 写入：
 
-- `Add`：所有 Runner 入队，用于安排首次心跳或超时检查；
-- `Update`：仅当下述 `shouldEnqueueRunnerUpdate` 返回 true 时，将新对象的 name 入队；
+- `Add`：可处理的 Runner 按心跳或创建时间计算健康检查截止时间；已到期立即入队，未到期通过延迟队列安排。`Offline`、`Evicted` 或删除中的对象不入队；状态或时间戳非法时立即入队，由调谐记录错误；
+- `Update`：仅当下述 `shouldEnqueueRunnerUpdate` 返回 true 时，按同一截止时间规则安排新对象；心跳更新和 informer resync 不立即入队健康的 Runner；
 - `Delete`：不需要入队。队列中已有 key 后续读取不到对象会自然结束。
 
 入队条件固定实现为：
@@ -426,10 +426,10 @@ func deletionTimestampChanged(oldTime, newTime *metav1.Time) bool {
 
 各条件语义如下：
 
-- UID 变化表示同名 Runner 已被删除重建，必须立即按新对象重新计算；
-- `old.ResourceVersion == new.ResourceVersion` 表示 informer resync，即使业务字段没有变化也要重新计算截止时间；
-- `deletionTimestamp` 的 nil/非 nil 转换或时间值变化必须入队，以便停止处理正在删除的对象；
-- phase 或 heartbeat 变化直接影响健康状态或截止时间，必须入队；
+- UID 变化表示同名 Runner 已被删除重建，必须按新对象重新安排检查；
+- `old.ResourceVersion == new.ResourceVersion` 表示 informer resync，即使业务字段没有变化也要重新安排截止时间；
+- `deletionTimestamp` 的 nil/非 nil 转换或时间值变化触发重新判断；删除中的对象不再安排检查；
+- phase 或 heartbeat 变化直接影响健康状态或截止时间，必须重新安排检查；
 - `Heartbeat.Equal` 同时正确处理零值和时间语义，不能比较指针地址或格式化字符串。
 
 若 resourceVersion 正常变化，但 UID、deletionTimestamp、phase 和 heartbeat 均未变化，则不入队。capacity、allocatable、conditions、addresses、info、spec、labels、annotations 或其他 metadata 的单独变化不影响 Runner 健康截止时间，因此不作为 Update 入队条件；已有 `AddAfter` 和 BaseController 慢速重入不受影响。
@@ -438,9 +438,9 @@ Update Handler 收到 nil、类型不符、`oldRunner.Name != newRunner.Name` �
 
 `BaseController` 的 dirty/processing 语义负责合并相同 Runner key。多个 worker 可以并发处理不同 Runner，同一 key 不会同时执行两个 `Sync`。Controller 不维护独立定时扫描 goroutine，也不直接调用工作队列的 `Done`、`Forget` 或 `AddRateLimited`。
 
-临时错误先由 BaseController 执行有上限的快速限速重试，耗尽后进入框架统一的慢速指数退避并持续 `AddAfter`，直到成功、对象删除或永久错误。Runner Controller 不维护自己的失败次数或退避表。该机制是健康收敛的必要保障：已经失联的 Runner 不再产生心跳事件，不能在快速重试耗尽后仅等待下一次 Watch 事件。普通 Runner 事件可以立即唤醒慢速 key，但只有一次成功调谐才清除其慢速失败历史。
+临时错误先由 BaseController 执行有上限的快速限速重试，耗尽后进入框架统一的慢速指数退避并持续 `AddAfter`，直到成功、对象删除或永久错误。Runner Controller 不维护自己的失败次数或退避表。该机制是健康收敛的必要保障：已经失联的 Runner 不再产生心跳事件，不能在快速重试耗尽后仅等待下一次 Watch 事件。新事件会按最新截止时间安排检查；只有一次成功调谐才清除其慢速失败历史。
 
-对象更新会重新 `Add` 相同 key。若此前存在较晚的延迟条目，立即事件必须使该 key尽快重新调谐；实现应使用 client-go delaying queue 的标准语义，不能自建一个无法被新事件提前唤醒的定时器表。
+对象更新会按最新截止时间对同一 key 调用 `Add` 或 `AddAfter`。旧的延迟条目可能在新心跳后提前唤醒；`Sync` 必须基于最新对象重新计算截止时间，未超时则再次延迟入队，不能仅凭定时器到点写 Offline。实现使用 client-go delaying queue 的标准语义，不维护独立的可取消定时器表。
 
 ## 8. 错误分类
 
