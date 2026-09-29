@@ -98,6 +98,78 @@ func TestESStoreDoesNotImplementWatch(t *testing.T) {
 	}
 }
 
+func TestProjectedReadUsesSourceFilterAndPreservesVersion(t *testing.T) {
+	client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.Query().Get("_source_excludes"); got != "data.spec" {
+			t.Fatalf("source excludes = %q", got)
+		}
+		return jsonResponse(http.StatusOK, map[string]interface{}{
+			"_id": "project-a", "_seq_no": 7, "_primary_term": 2,
+			"_source": map[string]interface{}{"data": map[string]interface{}{
+				"apiVersion": "ebs/v1", "kind": "Project", "metadata": map[string]string{"name": "project-a"},
+				"status": map[string]string{"phase": string(ebsv1.ProjectActive)},
+			}},
+		}), nil
+	})})
+	template := projectstore.NewStorage(runtime.NewScheme())
+	store := New(client, "project", "Project", template.Project.(*genericregistry.Store))
+	ctx := WithSourceFilter(context.Background(), es.SourceFilter{Excludes: []string{"data.spec"}})
+	obj, err := store.Get(ctx, "project-a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := obj.(*ebsv1.Project)
+	if project.Name != "project-a" || project.ResourceVersion != "v1:7:2" || project.Status.Phase != ebsv1.ProjectActive {
+		t.Fatalf("project = %#v", project)
+	}
+}
+
+func TestProjectedListUsesSourceFilterAndKeepsPagination(t *testing.T) {
+	client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/ebs-projects/_pit":
+			return jsonResponse(http.StatusOK, map[string]string{"id": "pit-a"}), nil
+		case "/_search":
+			var body struct {
+				Source es.SourceFilter `json:"_source"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(body.Source.Includes, ",") != "data.apiVersion,data.kind,data.metadata,data.status.phase" {
+				t.Fatalf("source includes = %#v", body.Source.Includes)
+			}
+			return jsonResponse(http.StatusOK, map[string]interface{}{
+				"pit_id": "pit-b", "hits": map[string]interface{}{
+					"total": map[string]int{"value": 2},
+					"hits": []interface{}{map[string]interface{}{
+						"_id": "project-a", "_seq_no": 3, "_primary_term": 1,
+						"sort": []string{"2026-09-29T00:00:00Z", "project-a"},
+						"_source": map[string]interface{}{"data": map[string]interface{}{
+							"apiVersion": "ebs/v1", "kind": "Project", "metadata": map[string]string{"name": "project-a"},
+							"status": map[string]string{"phase": string(ebsv1.ProjectActive)},
+						}},
+					}},
+				},
+			}), nil
+		default:
+			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+			return nil, nil
+		}
+	})})
+	template := projectstore.NewStorage(runtime.NewScheme())
+	store := New(client, "project", "Project", template.Project.(*genericregistry.Store))
+	ctx := WithSourceFilter(context.Background(), es.SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.phase"}})
+	obj, err := store.List(ctx, &internalversion.ListOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := obj.(*ebsv1.ProjectList)
+	if len(list.Items) != 1 || list.Items[0].Name != "project-a" || list.Items[0].ResourceVersion != "v1:3:1" || list.Continue == "" || list.RemainingItemCount == nil || *list.RemainingItemCount != 1 {
+		t.Fatalf("list = %#v", list)
+	}
+}
+
 func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 	fake := &fakeES{}
 	client := es.NewClientForTesting("http://elasticsearch", &http.Client{

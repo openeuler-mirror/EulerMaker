@@ -239,3 +239,41 @@ func TestSearchPITSortsByCreationTimeAndDocumentID(t *testing.T) {
 		t.Fatalf("PIT ID = %q, want pit-next", result.PITID)
 	}
 }
+
+func TestSourceFilterIsSentForFilteredReads(t *testing.T) {
+	requests := 0
+	client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		switch req.URL.EscapedPath() {
+		case "/ebs-builds/_doc/project-a%2Fbuild-a":
+			if req.URL.Query().Get("_source_includes") != "data.apiVersion,data.kind,data.metadata,data.status.phase" || req.URL.Query().Get("_source_excludes") != "data.spec" {
+				t.Fatalf("unexpected GET source filter: %s", req.URL.RawQuery)
+			}
+			return response(http.StatusOK, `{"_id":"project-a/build-a","_seq_no":1,"_primary_term":1,"_source":{"data":{"apiVersion":"ebs/v1","kind":"Build","metadata":{"name":"build-a"}}}}`), nil
+		case "/_search":
+			var body struct {
+				Source SourceFilter `json:"_source"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(body.Source.Includes, ",") != "data.apiVersion,data.kind,data.metadata,data.status.phase" || strings.Join(body.Source.Excludes, ",") != "data.spec" {
+				t.Fatalf("unexpected search source filter: %#v", body.Source)
+			}
+			return response(http.StatusOK, `{"hits":{"total":{"value":0},"hits":[]}}`), nil
+		default:
+			t.Fatalf("unexpected path %s", req.URL.Path)
+			return nil, nil
+		}
+	})})
+	filter := SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.phase"}, Excludes: []string{"data.spec"}}
+	if _, err := client.GetWithSourceFilter(context.Background(), "build", "project-a/build-a", filter); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SearchPITWithSourceFilter(context.Background(), "pit", "1m", map[string]interface{}{"match_all": map[string]interface{}{}}, 10, nil, filter); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
+	}
+}

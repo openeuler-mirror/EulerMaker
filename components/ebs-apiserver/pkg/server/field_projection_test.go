@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"ebs-apiserver/pkg/storage/es"
 )
 
 func TestFieldProjectionGETAndLIST(t *testing.T) {
@@ -64,6 +66,32 @@ func TestFieldProjectionGETAndLIST(t *testing.T) {
 			}
 			if !reflect.DeepEqual(actual, tt.want) {
 				t.Fatalf("response = %#v, want %#v", actual, tt.want)
+			}
+		})
+	}
+}
+
+func TestFieldProjectionSourceFilter(t *testing.T) {
+	tests := []struct {
+		path string
+		want es.SourceFilter
+		push bool
+	}{
+		{path: "/apis/ebs/v1/builds?excludeFields=spec", want: es.SourceFilter{Excludes: []string{"data.spec"}}, push: true},
+		{path: "/apis/ebs/v1/builds?includeFields=metadata.name,status.phase,status.stage", want: es.SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.phase", "data.status.stage"}}, push: true},
+		{path: "/apis/ebs/v1/projects?includeFields=spec.packageRepos.name", push: false},
+		{path: "/apis/ebs/v1/projects?excludeFields=spec.packageRepos.name", push: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			projection, _, err := parseFieldProjection(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, push := projection.sourceFilter()
+			if push != tt.push || (push && !reflect.DeepEqual(got, tt.want)) {
+				t.Fatalf("filter = %#v, push = %t; want %#v, %t", got, push, tt.want, tt.push)
 			}
 		})
 	}
