@@ -105,6 +105,69 @@ func newTestController(t *testing.T, now time.Time, job *ebsv1.Job, cachedRunner
 	return c, clk, jobs, runners
 }
 
+func TestTerminalJobEventsScheduleHistoryGC(t *testing.T) {
+	now := time.Unix(10_000_000, 0)
+	job := runningJob()
+	job.Status.Phase = ebsv1.JobSucceeded
+	job.Status.EndTime = metav1.NewTime(now.Add(-time.Hour))
+	jobs := &fakeCachedSource{objects: make(map[string]runtime.Object)}
+	runners := &fakeCachedSource{objects: make(map[string]runtime.Object)}
+	clk := clocktesting.NewFakeClock(now)
+	c, err := newController(jobs, runners, &fakeClient{}, clk, Config{
+		RunnerLostGracePeriod: time.Minute,
+		HistoryGCEnabled:      true,
+		HistoryRetention:      2 * time.Hour,
+		MaxRetries:            1,
+	}, controller.WithClock(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Queue().ShutDown()
+
+	c.onJobAdd(job)
+	if c.Queue().Len() != 0 {
+		t.Fatal("terminal Job was immediately enqueued before its retention deadline")
+	}
+	c.onJobUpdate(job.DeepCopy(), job.DeepCopy()) // Informer resync must not enqueue it immediately.
+	if c.Queue().Len() != 0 {
+		t.Fatal("resync immediately enqueued a terminal Job before its retention deadline")
+	}
+	clk.Step(time.Hour)
+	deadline := time.Now().Add(time.Second)
+	for c.Queue().Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if c.Queue().Len() != 1 {
+		t.Fatal("terminal Job was not enqueued at its retention deadline")
+	}
+}
+
+func TestTerminalJobEnqueueAtDeadlineAndWithMissingEndTime(t *testing.T) {
+	now := time.Unix(10_000_000, 0)
+	for _, tc := range []struct {
+		name    string
+		endTime metav1.Time
+		gc      bool
+		want    int
+	}{
+		{name: "expired", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour)), gc: true, want: 1},
+		{name: "missing endTime", gc: true, want: 1},
+		{name: "GC disabled", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := runningJob()
+			job.Status.Phase = ebsv1.JobFailed
+			job.Status.EndTime = tc.endTime
+			c, _, _, _ := newTestController(t, now, job, nil, &fakeClient{}, tc.gc)
+			defer c.Queue().ShutDown()
+			c.onJobAdd(job)
+			if got := c.Queue().Len(); got != tc.want {
+				t.Fatalf("queue length = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerAvailableOnlyWhenOnline(t *testing.T) {
 	for _, phase := range []ebsv1.RunnerPhase{ebsv1.RunnerOnline, ebsv1.RunnerOffline, "Unknown", ""} {
 		t.Run(string(phase), func(t *testing.T) {

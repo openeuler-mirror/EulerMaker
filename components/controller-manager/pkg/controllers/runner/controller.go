@@ -80,7 +80,7 @@ func (c *Controller) onAdd(obj runtime.Object) {
 		log.Printf("controller=%s reason=UnexpectedRunnerEvent type=%T", Name, obj)
 		return
 	}
-	c.Enqueue(runner.Name)
+	c.enqueueHealthCheck(runner)
 }
 
 func (c *Controller) onUpdate(oldObj, newObj runtime.Object) {
@@ -91,11 +91,27 @@ func (c *Controller) onUpdate(oldObj, newObj runtime.Object) {
 		return
 	}
 	if shouldEnqueueRunnerUpdate(oldRunner, newRunner) {
-		c.Enqueue(newRunner.Name)
+		c.enqueueHealthCheck(newRunner)
 	}
 }
 
 func (c *Controller) onDelete(runtime.Object) {}
+
+func (c *Controller) enqueueHealthCheck(runner *ebsv1.Runner) {
+	if runner.DeletionTimestamp != nil || runner.Status.Phase == ebsv1.RunnerOffline || runner.Status.Phase == ebsv1.RunnerEvicted {
+		return
+	}
+	if !processablePhase(runner.Status.Phase) {
+		c.Enqueue(runner.Name) // Reconcile reports unsupported phases.
+		return
+	}
+	deadline, err := calculateHealthDeadline(runner, c.clock.Now(), c.config)
+	if err != nil || deadline.Expired {
+		c.Enqueue(runner.Name) // Reconcile reports invalid timestamps or confirms expiry.
+		return
+	}
+	c.EnqueueAfter(runner.Name, deadline.RequeueAfter)
+}
 
 func shouldEnqueueRunnerUpdate(oldRunner, newRunner *ebsv1.Runner) bool {
 	return oldRunner.UID != newRunner.UID ||

@@ -268,6 +268,63 @@ func TestShouldEnqueueRunnerUpdate(t *testing.T) {
 	}
 }
 
+func TestRunnerEventsScheduleHealthCheckAtDeadline(t *testing.T) {
+	now := time.Unix(1000, 0)
+	clk := clocktesting.NewFakeClock(now)
+	s := &fakeCachedSource{objects: make(map[string]runtime.Object)}
+	c, err := newController(s, &fakeClient{}, clk, Config{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute, MaxRetries: 3}, controller.WithClock(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Queue().ShutDown()
+	runner := testRunner(ebsv1.RunnerOnline, now)
+	c.onAdd(runner)
+	c.onUpdate(runner.DeepCopy(), runner.DeepCopy()) // Informer resync must not enqueue it immediately.
+	newRunner := runner.DeepCopy()
+	newRunner.ResourceVersion = "8"
+	newRunner.Status.Heartbeat = metav1.NewTime(now.Add(time.Minute))
+	c.onUpdate(runner, newRunner) // A new heartbeat only moves the deadline.
+	if c.Queue().Len() != 0 {
+		t.Fatal("healthy Runner was immediately enqueued")
+	}
+	clk.Step(2 * time.Minute)
+	deadline := time.Now().Add(time.Second)
+	for c.Queue().Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if c.Queue().Len() != 1 {
+		t.Fatal("Runner was not enqueued at its heartbeat deadline")
+	}
+}
+
+func TestRunnerEventsEnqueueExpiredAndIgnoreInactive(t *testing.T) {
+	now := time.Unix(1000, 0)
+	for _, tc := range []struct {
+		name  string
+		phase ebsv1.RunnerPhase
+		beat  time.Time
+		want  int
+	}{
+		{name: "expired", phase: ebsv1.RunnerOnline, beat: now.Add(-3 * time.Minute), want: 1},
+		{name: "invalid timestamp", phase: ebsv1.RunnerOnline, want: 1},
+		{name: "offline", phase: ebsv1.RunnerOffline},
+		{name: "evicted", phase: ebsv1.RunnerEvicted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := testRunner(tc.phase, tc.beat)
+			if tc.name == "invalid timestamp" {
+				runner.CreationTimestamp = metav1.Time{}
+			}
+			c, _ := newTestController(t, now, runner, &fakeClient{})
+			defer c.Queue().ShutDown()
+			c.onAdd(runner)
+			if got := c.Queue().Len(); got != tc.want {
+				t.Fatalf("queue length = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateOfflineStatusResponseRejectsChangedFields(t *testing.T) {
 	request := testRunner("Offline", time.Unix(1000, 0))
 	response := request.DeepCopy()
