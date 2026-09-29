@@ -15,16 +15,56 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/manager"
 	"controller-manager/pkg/metrics"
+	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
 // --- 5.2 event handlers ---
 
-func TestEventAddUpdateEnqueue(t *testing.T) {
+type initializerSharedClient struct{ clientpkg.Interface }
+
+func (initializerSharedClient) GetBuildTargetContent(context.Context) (*ebsv1.BuildTargetContent, error) {
+	return nil, nil
+}
+
+type recordingPollingFactory struct {
+	gvr     schema.GroupVersionResource
+	options metav1.ListOptions
+}
+
+func (f *recordingPollingFactory) ForResource(gvr schema.GroupVersionResource, _ time.Duration, options metav1.ListOptions) (source.Source, error) {
+	f.gvr, f.options = gvr, options
+	return &fakeSource{}, nil
+}
+
+func (*recordingPollingFactory) Sources() []source.Source { return nil }
+
+func TestInitializerFiltersTerminalBuildInfos(t *testing.T) {
+	polling := &recordingPollingFactory{}
+	config := Config{
+		PollPeriod: time.Second, MaxRetries: 2, DcgPruneGrace: time.Minute,
+		RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 100,
+	}
+	init := manager.InitContext{
+		Dependencies: manager.Dependencies{Client: initializerSharedClient{}, PollingFactory: polling},
+		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute},
+	}
+	_, active, err := Initializer(config, newFakeGitServer())(context.Background(), init)
+	if err != nil || !active {
+		t.Fatalf("initializer active=%t err=%v", active, err)
+	}
+	if polling.gvr != source.BuildInfosGVR || polling.options.FieldSelector != nonTerminalBuildInfoFieldSelector {
+		t.Fatalf("polling source=%s options=%#v", polling.gvr, polling.options)
+	}
+}
+
+func TestEventAddUpdateEnqueueFilteredListObjects(t *testing.T) {
 	c, _, _, _ := newTestController(t)
 	c.onAdd(testBuildInfoObj(ebsv1.BuildInfoPending))
 	c.onAdd(testBuildInfoObj(ebsv1.BuildInfoProcessing))
@@ -35,13 +75,14 @@ func TestEventAddUpdateEnqueue(t *testing.T) {
 	if got := c.Queue().Len(); got != 1 {
 		t.Fatalf("queue len after update = %d, want 1", got)
 	}
-	// Terminal phases never enter the queue (G-05).
+	// The projected List does not carry phase; the server-side selector has
+	// already excluded terminal objects before the handler sees them.
 	c2, _, _, _ := newTestController(t)
-	c2.onAdd(testBuildInfoObj(ebsv1.BuildInfoCompleted))
-	c2.onAdd(testBuildInfoObj(ebsv1.BuildInfoAborted))
-	c2.onUpdate(nil, testBuildInfoObj(ebsv1.BuildInfoCompleted))
-	if got := c2.Queue().Len(); got != 0 {
-		t.Fatalf("terminal buildinfo enqueued, queue len = %d", got)
+	projected := testBuildInfoObj(ebsv1.BuildInfoPending)
+	projected.Status = ebsv1.BuildInfoStatus{}
+	c2.onAdd(projected)
+	if got := c2.Queue().Len(); got != 1 {
+		t.Fatalf("projected buildinfo queue len = %d, want 1", got)
 	}
 }
 

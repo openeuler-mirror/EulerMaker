@@ -502,7 +502,7 @@ type ListFunc func(
 ) (ListPage, error)
 ```
 
-`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。Source 在每一页请求中保留注册时指定的 `labelSelector` 和 `fieldSelector`，使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
+`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。Source 在每一页请求中保留注册时指定的 `labelSelector` 和 `fieldSelector`，使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。Build/BuildInfo/RpmRepo/Snapshot 轮询 List 使用 `includeFields=metadata`，仅用于事件映射；Worker 的 GET 仍读取完整对象。其他资源不设置 `includeFields`。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
 
 PollingSource 每轮执行：
 

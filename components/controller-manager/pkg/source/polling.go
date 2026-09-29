@@ -19,6 +19,17 @@ type ListPage struct {
 }
 type ListFunc func(context.Context, schema.GroupVersionResource, metav1.ListOptions) (ListPage, error)
 
+// PollingIncludeFields returns only fields needed by polling event handlers.
+// Reconcile workers fetch the complete object with a separate GET.
+func PollingIncludeFields(gvr schema.GroupVersionResource) string {
+	switch gvr {
+	case BuildsGVR, BuildInfosGVR, RpmReposGVR, SnapshotsGVR:
+		return "metadata"
+	default:
+		return ""
+	}
+}
+
 type pollingEntry struct {
 	uid, resourceVersion string
 	object               runtime.Object

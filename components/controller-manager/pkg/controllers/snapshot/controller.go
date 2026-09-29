@@ -90,7 +90,7 @@ func (c *Controller) enqueueSnapshot(obj runtime.Object) {
 		log.Printf("controller=%s reason=UnexpectedSnapshotEvent type=%T", Name, obj)
 		return
 	}
-	if snapshot.DeletionTimestamp == nil && (snapshot.Status.Phase == ebsv1.SnapshotPending || snapshot.Status.Phase == ebsv1.SnapshotProcessing) {
+	if snapshot.DeletionTimestamp == nil {
 		c.Enqueue(snapshot.Namespace + "/" + snapshot.Name)
 	}
 }

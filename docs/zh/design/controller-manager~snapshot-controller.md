@@ -204,7 +204,7 @@ if errors.As(err, &writeErr) {
 Active
 ```
 
-Snapshot Controller 自身把 `Active` 视为终态：观察到该 phase 后不再更新其 status，HandlerFuncs 不放行，不再入队。
+Snapshot Controller 自身把 `Active` 视为终态：观察到该 phase 后不再更新其 status；PollingSource 的服务端过滤不再返回该对象，Worker 重读到 `Active` 时也直接结束。
 
 ## 四、事件与本地索引
 
@@ -219,13 +219,13 @@ UID 不编码在字符串键中。`Sync` 通过 API Get 获取最新对象，并
 
 ### 4.2 Snapshot 事件（PollingSource）
 
-- `Add`：`phase ∈ {Pending, Processing}` 时入队；`Active` Snapshot 不入队。
-- `Update`：不比较新旧 `resourceVersion`；只要新对象的 `phase ∈ {Pending, Processing}` 就入队，新对象已经进入 `Active` 时不入队。PollingSource 每轮扫描都会产生 Update，同一 resourceVersion 的 Update 也必须入队，作为丢事件、慢速重试和外部依赖恢复后的 resync 兜底；工作队列负责合并同一 key。
+- `Add`：对服务端过滤后、未设置 `metadata.deletionTimestamp` 的 Snapshot 入队；`Active` 不在 List 结果中。
+- `Update`：不比较新旧 `resourceVersion`；对服务端过滤后、未删除的对象入队。PollingSource 每轮扫描都会产生 Update，同一 resourceVersion 的 Update 也必须入队，作为丢事件、慢速重试和外部依赖恢复后的 resync 兜底；工作队列负责合并同一 key。Worker GET 最新对象后仍检查 phase 和删除时间。
 - `Delete`：无需处理（Snapshot Controller 不删除 Snapshot）。
 
 事件处理器只做类型检查和入队，不调用外部 API，不执行状态机。
 
-**查询优化**：ebs-apiserver 已支持 Snapshot 的 `status.phase` fieldSelector（支持 `=`、`==`、`!=` 操作符），推荐使用 `status.phase!=Active` 在服务端过滤，减少查询数据量：
+**查询优化**：ebs-apiserver 已支持 Snapshot 的 `status.phase` fieldSelector（支持 `=`、`==`、`!=` 操作符），使用 `status.phase!=Active` 在服务端过滤，并以 `includeFields=metadata` 只获取入队所需字段。缺少或异常 phase 的对象可能通过过滤，但会在 Worker GET 后被跳过：
 
 ```go
 // 推荐：在 Initializer 中使用 PollingSourceFactory 创建带 fieldSelector 的 PollingSource

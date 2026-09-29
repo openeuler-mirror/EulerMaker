@@ -27,6 +27,10 @@ import (
 // Name is the controller identifier used in logs, metrics and --controllers.
 const Name = "buildinfo"
 
+// Terminal BuildInfos do not need periodic reconcile; a match leaving the
+// polling snapshot is only a filter transition, not proof of deletion.
+const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!=Aborted"
+
 // Config carries the BuildInfo controller settings (design 12.1).
 type Config struct {
 	// ArtifactManagerAddr is reachable by this controller and Job containers.
@@ -122,17 +126,15 @@ func New(buildInfos source.Source, client Client, gitServer gitserver.GitServerC
 	return c, nil
 }
 
-// Initializer wires the controller into the manager (design 2.2/12.1): the
-// BuildInfo polling source lists without a server-side selector (5.2 —
-// filtering happens in the in-memory handler), the typed API client wraps
-// the shared client, and the slow-retry policy reuses the global settings.
+// Initializer wires the controller into the manager with a non-terminal
+// BuildInfo polling source and the shared slow-retry policy.
 func Initializer(config Config, gitClient gitserver.GitServerClient) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		shared, ok := init.Dependencies.Client.(SharedClient)
 		if !ok {
 			return nil, false, fmt.Errorf("shared API client does not implement the BuildInfo SharedClient surface")
 		}
-		buildInfos, err := init.Dependencies.PollingFactory.ForResource(source.BuildInfosGVR, config.PollPeriod, metav1.ListOptions{})
+		buildInfos, err := init.Dependencies.PollingFactory.ForResource(source.BuildInfosGVR, config.PollPeriod, metav1.ListOptions{FieldSelector: nonTerminalBuildInfoFieldSelector})
 		if err != nil {
 			return nil, false, err
 		}
@@ -192,8 +194,8 @@ func (c *Controller) onDelete(obj runtime.Object) {
 	dedup.forgetKey(key)
 }
 
-// enqueueBuildInfo revokes pending tombstones and enqueues non-terminal
-// BuildInfos (G-05: Completed/Aborted never re-enter the queue).
+// enqueueBuildInfo revokes pending tombstones and enqueues every object in the
+// server-filtered polling result. Reconcile GET verifies the current phase.
 func (c *Controller) enqueueBuildInfo(obj runtime.Object) {
 	buildInfo, ok := obj.(*ebsv1.BuildInfo)
 	if !ok || buildInfo == nil || buildInfo.Name == "" || buildInfo.Namespace == "" {
@@ -202,9 +204,6 @@ func (c *Controller) enqueueBuildInfo(obj runtime.Object) {
 	}
 	key := cacheKey(buildInfo.Namespace, buildInfo.Name)
 	c.revokeTombstones(key)
-	if buildInfo.Status.Phase != ebsv1.BuildInfoPending && buildInfo.Status.Phase != ebsv1.BuildInfoProcessing {
-		return
-	}
 	c.Enqueue(key)
 }
 
