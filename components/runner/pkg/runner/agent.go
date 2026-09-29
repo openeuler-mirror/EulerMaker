@@ -493,6 +493,7 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 		log.Printf("update job post-run status failed: %v", err)
 		return
 	}
+	a.cleanupJobWork(job)
 	a.finalizeArtifacts(parent, job, status, resultRoot, executionErr)
 	a.sendHeartbeat(context.Background())
 }
@@ -503,6 +504,7 @@ func validJobResult(status string) bool {
 
 func (a *Agent) resumePostRun(parent context.Context, key string, job JobResource) {
 	defer a.finishJob(key)
+	a.cleanupJobWork(job)
 	resultDir := filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name)
 	var executionErr error
 	if job.Status.Message != "" {
@@ -510,6 +512,17 @@ func (a *Agent) resumePostRun(parent context.Context, key string, job JobResourc
 	}
 	a.finalizeArtifacts(parent, job, job.Status, resultDir, executionErr)
 	a.sendHeartbeat(context.Background())
+}
+
+func (a *Agent) cleanupJobWork(job JobResource) {
+	if err := validateJobIdentity(job); err != nil {
+		log.Printf("skip Job work cleanup: %v", err)
+		return
+	}
+	path := filepath.Join(workDir(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name)
+	if err := os.RemoveAll(path); err != nil {
+		log.Printf("clean Job work directory %s: %v", path, err)
+	}
 }
 
 func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, status JobStatus, resultDir string, executionErr error) {

@@ -1542,7 +1542,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 > **解析产物去向（15.11）**：spec 文件原始内容先写入全局 `Cache.specFileCache`（两层 key `commitId`→`specFileName`，LRU，写入与解析成败解耦），解析结果（`map[string]SpecDepend`）按 specName 合并为 BuildInfo 级全量视图后写入 per-BuildInfo 缓存 `Cache.specDependsCache`（key = `<namespace>/<buildinfo.name>`，7.2.2），不再落库至 `BuildInfo.spec`。
 
-**解析流程**：固定使用 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件> --define "_sourcedir <隔离SOURCES目录>"` 展开，再按下述行语法建模。明确报错隔离 `SOURCES` 目录内缺文件时，仅补取同一仓库、同一 commit 的根目录文件后重试；每个文件不超过 1 MiB，最多补取 3 个文件。其他路径或解析错误不补取。命令不可用、超时、最终非零退出码或 stdout 为空均视为该 spec 解析失败，不回退到原始文本解析；跳过该 spec、记录 `SpecParseFailed` 与所属仓库到 `failedPackages`，不阻断同仓库其余 spec。controller-manager 镜像必须安装提供 `rpmspec` 的 `rpm-build`。
+**解析流程**：固定使用 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件> --define "_sourcedir <隔离SOURCES目录>"` 展开，再按下述行语法建模。执行前静态扫描原始 spec 的 `SourceN` 声明，仅对 `%{load:%{SOURCEN}}` 和 Lua `io.open(rpm.expand("%SOURCEN"))` / `io.lines(...)` 中明确引用的根目录文本文件预取；文件名只允许字面量或使用字面量 `Name` 展开 `%{name}`，不解释任意宏或 Lua。普通 `SourceN` 声明不触发预取。明确报错隔离 `SOURCES` 目录内缺文件时，仍可补取同一仓库、同一 commit 的根目录文件后重试。预取与重试合计最多 3 个文件、每个不超过 1 MiB；其他路径或解析错误不补取。命令不可用、超时、最终非零退出码或 stdout 为空均视为该 spec 解析失败，不回退到原始文本解析；跳过该 spec、记录 `SpecParseFailed` 与所属仓库到 `failedPackages`，不阻断同仓库其余 spec。controller-manager 镜像必须安装提供 `rpmspec` 的 `rpm-build`。
 
 `rpmspec` 是本地子进程，`exec.Command` 不包装 shell，但 RPM 宏解析本身会执行 `%(...)` 和 `%{lua:...}`。包仓库中的 spec 与 `--load` 宏文件因此能以 controller-manager 身份执行代码；当前实现要求全部包源可信，尚未提供解析隔离。
 
