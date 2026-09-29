@@ -53,7 +53,7 @@ func TestReleaseSkipsCandidateWithoutBuild(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
 	delete(client.Builds, key(testProject, testBuild))
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestReleaseSkipsCandidateWithMismatchedLabels(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, artifacts, c := releaseCandidateFixture(t, tc.mutate, DefaultPublishPolicy{})
-			result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -99,7 +99,7 @@ func TestReleasePolicyErrorIsRetryable(t *testing.T) {
 	policy := &stubPolicy{err: errors.New("policy unavailable")}
 	client, artifacts, c := releaseCandidateFixture(t, nil, policy)
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
 		t.Fatalf("a policy error must surface as an error")
 	}
 	if policy.calls != 1 {
@@ -114,7 +114,7 @@ func TestReleaseCheckpointNormalizesExcludeSpecs(t *testing.T) {
 	policy := &stubPolicy{decision: PublishDecision{Publish: true, ExcludeSpecs: []string{"kernel", "gcc", "gcc", ""}}}
 	client, artifacts, c := releaseCandidateFixture(t, nil, policy)
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.SubmitReleaseRequests) != 1 {
@@ -155,7 +155,7 @@ func TestReleaseReplaysRetryableFailureWithFrozenCheckpoint(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.SubmitReleaseRequests) != 1 {
@@ -181,7 +181,7 @@ func TestReleaseIdentityConflictCollectsFailure(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}

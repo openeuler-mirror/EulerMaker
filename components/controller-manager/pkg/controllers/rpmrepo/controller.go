@@ -21,9 +21,6 @@ import (
 const Name = "rpmrepo"
 
 const (
-	buildKeyPrefix   = "build"
-	releaseKeyPrefix = "release"
-
 	// nonTerminalRpmRepoFieldSelector keeps the polling source on objects that still need repository or release
 	// work. The field selector only supports Equals/NotEquals, and a missing release field is not excluded.
 	nonTerminalRpmRepoFieldSelector = "status.release.phase!=Ready,status.release.phase!=Failed,status.release.phase!=Skipped"
@@ -156,7 +153,7 @@ func (c *Controller) onDelete(obj runtime.Object) {
 		log.Printf("controller=%s reason=UnexpectedRpmRepoEvent type=%T", Name, obj)
 		return
 	}
-	log.Printf("controller=%s key=%q uid=%q reason=RpmRepoLeftPollingSnapshot", Name, buildKey(repo.Namespace, repo.Name), repo.UID)
+	log.Printf("controller=%s key=%q uid=%q reason=RpmRepoLeftPollingSnapshot", Name, rpmRepoKey(repo.Namespace, repo.Name), repo.UID)
 }
 
 func (c *Controller) enqueueRpmRepo(obj runtime.Object) {
@@ -168,15 +165,11 @@ func (c *Controller) enqueueRpmRepo(obj runtime.Object) {
 	if repo.DeletionTimestamp != nil || releaseTerminal(repo) {
 		return
 	}
-	c.Enqueue(buildKey(repo.Namespace, repo.Name))
+	c.Enqueue(rpmRepoKey(repo.Namespace, repo.Name))
 }
 
-func buildKey(project, name string) string {
-	return buildKeyPrefix + "/" + project + "/" + name
-}
-
-func releaseKey(project, os, arch string) string {
-	return releaseKeyPrefix + "/" + project + "/" + os + "/" + arch
+func rpmRepoKey(project, name string) string {
+	return project + "/" + name
 }
 
 // releaseTerminal reports whether the formal release already reached a terminal phase. Skipped is written
@@ -190,34 +183,11 @@ func releaseTerminal(repo *ebsv1.RpmRepo) bool {
 	return phase == ebsv1.RpmRepoReleaseReady || phase == ebsv1.RpmRepoReleaseFailed || phase == ebsv1.RpmRepoReleaseSkipped
 }
 
-// splitKey parses a queue key into its kind, project and remaining segments.
-func splitKey(value string) (kind, project string, rest []string, ok bool) {
+// splitKey parses the single RpmRepo queue key: project/buildName.
+func splitKey(value string) (project, name string, ok bool) {
 	parts := strings.Split(value, "/")
-	if len(parts) < 3 {
-		return "", "", nil, false
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
 	}
-	kind, project = parts[0], parts[1]
-	if kind != buildKeyPrefix && kind != releaseKeyPrefix {
-		return "", "", nil, false
-	}
-	if project == "" {
-		return "", "", nil, false
-	}
-	rest = parts[2:]
-	for _, item := range rest {
-		if item == "" {
-			return "", "", nil, false
-		}
-	}
-	switch kind {
-	case buildKeyPrefix:
-		if len(rest) != 1 {
-			return "", "", nil, false
-		}
-	case releaseKeyPrefix:
-		if len(rest) != 2 {
-			return "", "", nil, false
-		}
-	}
-	return kind, project, rest, true
+	return parts[0], parts[1], true
 }

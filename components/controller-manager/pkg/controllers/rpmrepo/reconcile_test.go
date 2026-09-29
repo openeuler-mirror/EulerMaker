@@ -22,6 +22,16 @@ const (
 	testArch    = "aarch64"
 )
 
+// syncReleaseForTest exercises the release decision independently of the
+// repository-entry path. Production reaches it through the same RpmRepo key.
+func syncReleaseForTest(c *Controller, ctx context.Context, project, os, arch string) (controller.ReconcileResult, error) {
+	now := c.clock.Now().UTC()
+	r := &reconciler{controller: c, ctx: ctx, key: rpmRepoKey(project, testBuild), project: project,
+		now: metav1.NewTime(now), nowTime: now, sameRoundAttempts: 1}
+	result, err := r.reconcileRelease(os, arch)
+	return c.plan(result, err)
+}
+
 type stubSource struct {
 	handler source.ResourceEventHandler
 }
@@ -159,7 +169,7 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 			Failure: &FailureInfo{Code: "ManifestInvalid", JobName: "job-a"}}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil || !result.Requeue {
 		t.Fatalf("skip result = %+v, %v", result, err)
 	}
@@ -174,7 +184,7 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, UpdatedAt: time.Now()}, nil
 	}
 	c = newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("rebatch after restart: %v", err)
 	}
 	if len(artifacts.SubmitRepositoryRequests) != 1 || !reflect.DeepEqual(artifacts.SubmitRepositoryRequests[0].Manifests,
@@ -197,7 +207,7 @@ func TestReconcileDoesNotSkipUnidentifiedManifestFailure(t *testing.T) {
 			Failure: &FailureInfo{Code: "ManifestInvalid", JobName: "foreign-job"}}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
@@ -223,7 +233,7 @@ func TestReconcileBuildSubmitsBatchAndWaitsForMaterialization(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -249,7 +259,7 @@ func TestReconcileBuildSubmitsBatchAndWaitsForMaterialization(t *testing.T) {
 	}
 }
 
-func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
+func TestReconcileBuildPromotesBatchWithoutSeparateReleaseKey(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
 	client.RpmRepos[key(testProject, testBuild)] = repo
@@ -266,7 +276,7 @@ func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -286,12 +296,8 @@ func TestReconcileBuildPromotesBatchAndEnqueuesRelease(t *testing.T) {
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonRepositoryCreated) {
 		t.Fatalf("RepositoryReady=True/RepositoryCreated is missing: %+v", updated.Status.Conditions)
 	}
-	if c.Queue().Len() != 1 {
-		t.Fatalf("expected the release key to be enqueued, queue length %d", c.Queue().Len())
-	}
-	item, _ := c.Queue().Get()
-	if item != releaseKey(testProject, testOS, testArch) {
-		t.Fatalf("unexpected queued key %v", item)
+	if c.Queue().Len() != 0 {
+		t.Fatalf("release must not enqueue a separate key, queue length %d", c.Queue().Len())
 	}
 }
 
@@ -312,7 +318,7 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
@@ -325,7 +331,7 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 0 {
 		t.Fatal("a nonpublishing build must not submit or enqueue a release")
 	}
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 	if len(artifacts.SubmitRepositoryRequests) != 1 {
@@ -342,7 +348,7 @@ func TestReconcileBuildWithoutPublishingAndWithoutArtifactsSkipsRelease(t *testi
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
@@ -372,7 +378,7 @@ func TestReconcileBuildCollectsFailureAfterRetryBudget(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -418,7 +424,7 @@ func TestReconcileBuildReplaysRetryableFailureWithinBudget(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -449,7 +455,7 @@ func TestReconcileBuildRegistersNoPublishableArtifacts(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -479,7 +485,7 @@ func TestReconcileBuildWaitsWhenBuildInfoIsNotCompleted(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -509,7 +515,7 @@ func TestReconcileBuildCollectsAbortedTerminal(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -538,7 +544,7 @@ func TestReconcileBuildCountsOrphanRpmRepo(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -557,7 +563,7 @@ func TestReconcileBuildRetriesWhenRpmRepoIsMissing(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err == nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err == nil {
 		t.Fatalf("a readable Build without its RpmRepo must return a retryable error")
 	}
 }
@@ -565,7 +571,7 @@ func TestReconcileBuildRetriesWhenRpmRepoIsMissing(t *testing.T) {
 func TestReconcileRejectsMalformedKey(t *testing.T) {
 	client := NewFakeClient()
 	c := newTestController(t, client, NewFakeArtifactManager(), testConfig())
-	if _, err := c.sync(context.Background(), "release/project"); err == nil || !controller.IsPermanent(err) {
+	if _, err := c.sync(context.Background(), "release/project/openEuler/aarch64"); err == nil || !controller.IsPermanent(err) {
 		t.Fatalf("a malformed key must be permanent, got %v", err)
 	}
 }

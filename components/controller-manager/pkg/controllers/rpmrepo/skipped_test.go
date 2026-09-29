@@ -147,7 +147,7 @@ func TestReconcileBuildConvergesOnSkipped(t *testing.T) {
 			buildMissingBefore := buildMissing.Value()
 
 			for round := 0; round < 2; round++ {
-				result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+				result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 				if err != nil {
 					t.Fatalf("round %d: %v", round, err)
 				}
@@ -209,7 +209,7 @@ func TestReconcileReleaseSkipsSkippedObjectsFromAStaleSnapshot(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestInitializerSelectorExcludesSkipped(t *testing.T) {
 
 func TestReleaseCandidateQueryExcludesSkipped(t *testing.T) {
 	client, _, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(client.RpmRepoListOptions) == 0 {

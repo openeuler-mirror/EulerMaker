@@ -40,7 +40,7 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestReconcileReleaseFailureCollectsTerminal(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestReconcileReleaseReplaysMissingRecord(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestReconcileReleaseCollectsAbortedInFlight(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
@@ -199,7 +199,7 @@ func TestReconcileReleaseSkipsCandidateWhenPolicySaysNo(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestReconcileReleaseReplacesResidualReleaseWithSkipped(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(client.StatusWrites) != 1 {

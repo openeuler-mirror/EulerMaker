@@ -44,20 +44,13 @@ func (r *reconciler) takeSameRoundAttempt() bool {
 }
 
 func (c *Controller) sync(ctx context.Context, key string) (controller.ReconcileResult, error) {
-	kind, project, rest, ok := splitKey(key)
+	project, name, ok := splitKey(key)
 	if !ok {
 		return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("invalid RpmRepo key %q", key))
 	}
 	now := c.clock.Now().UTC()
 	r := &reconciler{controller: c, ctx: ctx, key: key, project: project, now: metav1.NewTime(now), nowTime: now, sameRoundAttempts: 1}
-	var result controller.ReconcileResult
-	var err error
-	switch kind {
-	case buildKeyPrefix:
-		result, err = r.reconcileBuild(rest[0])
-	default:
-		result, err = r.reconcileRelease(rest[0], rest[1])
-	}
+	result, err := r.reconcileBuild(name)
 	return c.plan(result, err)
 }
 
@@ -92,11 +85,10 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 	if build.Status.Phase == ebsv1.BuildAborted {
 		return r.collectBuildAborted(repo)
 	}
-	// The release key only needs the build target. Enqueue it before any other dependency is read so a failing
+	// Once release work starts, resume it before reading BuildInfo so a failed
 	// BuildInfo read cannot stall an in-flight release.
 	if repo.Status.Release != nil {
-		r.controller.Enqueue(releaseKey(r.project, build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch))
-		return controller.ReconcileResult{}, nil
+		return r.reconcileRelease(build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch)
 	}
 	info, err := r.controller.client.GetBuildInfo(r.ctx, r.project, name)
 	if err != nil {

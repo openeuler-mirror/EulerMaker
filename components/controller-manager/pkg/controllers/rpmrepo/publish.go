@@ -152,7 +152,7 @@ func (r *reconciler) recheckReleaseInputs(repo *ebsv1.RpmRepo, build *ebsv1.Buil
 		return nil, false, err
 	}
 	if len(scan.candidates) > 0 {
-		r.controller.Enqueue(buildKey(r.project, repo.Name))
+		r.controller.Enqueue(rpmRepoKey(r.project, repo.Name))
 		return nil, true, nil
 	}
 	if repo.Status.Repository == nil || repo.Status.Repository.RepositoryUID == "" {

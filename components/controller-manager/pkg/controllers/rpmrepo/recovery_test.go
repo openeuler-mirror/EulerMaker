@@ -24,7 +24,7 @@ func TestReconcileBuildReRegistersAbandonedBatchTerminal(t *testing.T) {
 	c := newTestController(t, client, artifacts, testConfig())
 	failedBefore := repositoryFailed.Value()
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestReconcileReleaseKeepsOnlyOneInFlightRelease(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.GetReleaseBuildNames) != 1 || artifacts.GetReleaseBuildNames[0] != testBuild {
@@ -113,7 +113,7 @@ func TestReconcileReleaseSkipsCandidateThatIsNotReady(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.SubmitReleaseRequests) != 1 || artifacts.SubmitReleaseRequests[0].BuildName != "build-b" {
@@ -141,7 +141,7 @@ func TestReconcileBuildNoPublishableArtifactsWritesReleaseSideOnly(t *testing.T)
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]

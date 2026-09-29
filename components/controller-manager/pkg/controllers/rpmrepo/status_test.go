@@ -47,7 +47,7 @@ func TestCommitStatusConfirmsUnknownWriteByReadingBackTheIntent(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("a confirmed unknown write must continue the round: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestCommitStatusAbandonsUnconfirmedUnknownWrite(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestCommitStatusDelaysOnConflict(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestCommitStatusRejectsMissingObjectAsConvergence(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestCommitStatusRejectsPartiallyMatchingUnknownWrite(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestCommitStatusClassifiesRejectedWrites(t *testing.T) {
 			client, artifacts := statusWriteFailureClient(t, failure)
 			c := newTestController(t, client, artifacts, testConfig())
 
-			_, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+			_, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 			if err == nil {
 				t.Fatalf("status write failure %d must surface as an error", tc.status)
 			}
@@ -226,7 +226,7 @@ func TestCommitStatusClassifiesNotSentWrites(t *testing.T) {
 		Outcome: clientpkg.WriteNotSent, Err: fmt.Errorf("metadata does not match target")}
 	client, artifacts := statusWriteFailureClient(t, local)
 	c := newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err == nil || !controller.IsPermanent(err) {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err == nil || !controller.IsPermanent(err) {
 		t.Fatalf("a local validation failure must be permanent, got %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestCommitStatusClassifiesNotSentWrites(t *testing.T) {
 	client, artifacts = statusWriteFailureClient(t, transient)
 	c = newTestController(t, client, artifacts, testConfig())
 	err := func() error {
-		_, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+		_, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 		return err
 	}()
 	if err == nil {
@@ -253,7 +253,7 @@ func TestCommitStatusStopsOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := c.sync(ctx, buildKey(testProject, testBuild))
+	_, err := c.sync(ctx, rpmRepoKey(testProject, testBuild))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("a canceled round must return the context error, got %v", err)
 	}

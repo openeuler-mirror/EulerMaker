@@ -17,7 +17,7 @@ func TestReleaseRecheckSkipsCandidateWithoutBuildInfo(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
 	delete(client.BuildInfos, key(testProject, testBuild))
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 		return completedManifest(100), nil
 	}
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 		t.Fatalf("the repository key must be re-enqueued for the remaining inputs")
 	}
 	item, _ := c.Queue().Get()
-	if item != buildKey(testProject, testBuild) {
+	if item != rpmRepoKey(testProject, testBuild) {
 		t.Fatalf("unexpected queued key %v", item)
 	}
 }
@@ -62,7 +62,7 @@ func TestReleaseRecheckReturnsToRepositoryWithoutManifestProbe(t *testing.T) {
 		return JobUploadManifest{State: ManifestOpen}, nil
 	}
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestReleaseRecheckSkipsCandidateWithoutOwnVersion(t *testing.T) {
 		repo.Status.Repository.SourceJobNames = nil
 	}, DefaultPublishPolicy{})
 	// The candidate predicate already filters this object; keep the test honest by asserting nothing happens.
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestReleaseRecheckDependencyErrorsKeepTheirClass(t *testing.T) {
 			client.GetBuildErr = tc.buildErr
 			client.GetBuildInfoErr = tc.buildInfoErr
 
-			_, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+			_, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 			if err == nil {
 				t.Fatalf("a dependency read failure must surface as an error")
 			}
