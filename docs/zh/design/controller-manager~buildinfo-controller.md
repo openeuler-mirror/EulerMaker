@@ -687,37 +687,42 @@ repeat:                                                                   # 迭�
 
 > **为什么需要发布确认门禁**：RpmRepo 层 XML 元数据仅覆盖 `contentURL` 指向的**当前已发布物理版本**，"Job `Succeeded` 但产物尚未物化为当前版本（contentURL 未提升，XML 中无该条目）"是异步发布竞态，若仅凭 Job 终态放行重建，重建 Job 会在依赖未兑现的环境中运行。
 
-#### 7.4.7 install 状态回填与运行期动态补边（Job status.message → SpecStatus.install）
+#### 7.4.7 install 状态回填与运行期动态补边（Job status.install → SpecStatus.install）
 
 > **前置消解与残余双层兜底**：spec 的安装期依赖参与建图（install 边，见 16.1），用于构建排序；运行期 install 失败后，先按本节规则动态补边。未能在本轮修复的失败 spec 所属仓库在 `Completed` 时写入 `status.failedPackages`，由下一轮 Build Controller 纳入 incremental 的 `Build.spec.packages`（见 build-controller 7.2）；本控制器不查询历史轮次。
 
-spec 的 install 校验结果由 **runner 仅在 install 校验失败时** 以 JSON 字符串写入 `Job.status.message`，controller 在 `syncSpecStatusFromJobs` 回填时解析消费。JSON 结构（键为 snake_case）：
+构建脚本将 RPM 构建与安装检查结果分别写入 `/workspace/job-result.json`，Runner 回写 `Job.status.build` 和 `Job.status.install`。Controller 在 `syncSpecStatusFromJobs` 中消费 `status.install`。结果示例：
 
 ```json
 {
-    "missing_deps": {
-        "acl": {
-            "needed_by": "glibc",
-            "version_requests": { "GE": "2.3.5", "LE": "2.3.6" }
+    "build": { "status": "Succeeded" },
+    "install": {
+        "status": "Failed",
+        "missingDeps": {
+            "acl": {
+                "neededBy": "glibc",
+                "versionRequests": { "ge": "2.3.5", "le": "2.3.6" }
+            }
         }
     }
 }
 ```
 
-解析映射：`missing_deps` 条目 → `MissingDep`——`needed_by` → `NeededBy`（依赖此 rpm 的上游 spec 名）；`version_requests` 的**大写操作符键**（`GT`/`GE`/`EQ`/`LE`/`LT`）由 controller 解析时归一映射至 `VersionConst` 小写 json tag（`gt`/`ge`/`eq`/`le`/`lt`）。回填判定（三分支，目标 Job = 多代取最新，7.4.4）：
+`missingDeps` 直接使用公共 `MissingDep` 结构，版本操作符使用 `VersionConst` 的小写 JSON 字段。回填判定（目标 Job = 多代取最新，7.4.4）：
 
-| 目标 Job 状态与 message 内容 | 回填动作 |
+| 目标 Job 状态与 install 结果 | 回填动作 |
 |------------------------------|----------|
-| `phase=Succeeded` 且 message 为空，或为合法 JSON 但 `missing_deps` 为空/缺失 | `specStatus[spec].install.status = Succeeded` |
-| `phase=Succeeded` 且 message 为合法 JSON、`missing_deps` 非空 | `install.status = Failed`；`missing_deps` 条目（键 = 缺失依赖名）逐项写入 `install.missingDeps`（幂等写入——已存在条目不覆盖）；并将失败详情幂等写入 `install.conditions`（type=`Install`，reason 固定 `InstallCheckFailed`，message 记录失败 jobName） |
-| message 非 JSON 文本/结构不符（解析失败，记 warning 日志），或 `phase != Succeeded`（`Running`/`Failed`/`Aborted`——Job 构建失败未达 install 阶段，runner 写普通文本消息属正常场景） | **不改写** install 状态（保留上一代结果） |
+| `phase=Succeeded` 且 `install.status=Succeeded` | `specStatus[spec].install.status = Succeeded`，清除旧缺失依赖 |
+| `phase=Succeeded` 且 `install.status=Failed` | `install.status = Failed`，用本次 `missingDeps` 替换旧结果，并写入 `InstallCheckFailed` condition |
+| `phase=Succeeded` 但缺少合法 install 结果 | `install.status = Failed`，condition reason 为 `InstallResultMissing` 或 `InstallResultInvalid`，不得推断安装成功 |
+| `phase != Succeeded` | 不改写 install 状态，保留上一代结果 |
 
 规则：
 
-1. **回填时机**：与 build.status 同步同源——目标 Job（多代取最新，7.4.4）`phase=Succeeded` 时按上表判定回填；Job 运行中（未终态）runner 尚未写入 message 终值，自然落入"不改写"分支，不产生中间态抖动。
-2. **代际覆盖**：install 状态来自最新一代 Job；重建下发后新 Job 未终态（`Succeeded`）前保留旧值，`Succeeded` 终态后按其 message 重新判定覆盖。best-effort 场景（7.4.2）：未达 install 阶段即失败的重建 Job（`phase=Failed`）不写缺失依赖 JSON，**不清空 v1 的既有 install 状态**。
+1. **回填时机**：目标 Job（多代取最新，7.4.4）`phase=Succeeded` 时按上表回填；运行中不改写。
+2. **代际覆盖**：install 状态来自最新一代 Job；新 Job 未成功终结前保留旧值。失败的重建 Job 不清空已有 install 状态。
 3. **与 build.status 独立**：install 回填不直接改写 build 状态机（`allTerminal` 仅看 build.status），也不参与有效 required 与下发门禁（无次数提升——补边重发由图语义（新环 required=2）承担，见下文子节）；最终 install 失败的仓库在 `Completed` 时汇入 `failedPackages`。
-4. **幂等性**：`missingDeps` 已存在条目不覆盖、`install.conditions` 用 upsert（`meta.SetStatusCondition`：status 未变化不更新 `lastTransitionTime`），reconcile 重复执行无副作用累积（10.3）。
+4. **幂等性**：每次按最新 Job 结果覆盖 `missingDeps`，`install.conditions` 用 upsert；reconcile 重复执行无副作用累积（10.3）。
 
 ##### 运行期动态补边（install 失败 → 补边 → 成环重建重发）
 
@@ -846,11 +851,11 @@ Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入
 
 | type | reason | 触发时机 |
 |------|--------|---------|
-| `Install` | 固定 `InstallCheckFailed` | 目标 Job（多代取最新）`phase=Succeeded` 且 `status.message` 含非空 `missing_deps`，即 install 校验失败（condition 的 message 记录失败 jobName；缺失依赖条目已写入 `install.missingDeps`，见 7.4.7） |
+| `Install` | `InstallCheckFailed` / `InstallResultMissing` / `InstallResultInvalid` | 目标 Job（多代取最新）`phase=Succeeded`，但安装检查失败、结果缺失或无效；缺失依赖写入 `install.missingDeps`（见 7.4.7） |
 
 （运行期动态补边不写 condition：出度入度统一补入、不提升下发次数，重发由图语义（新环 required=2）承担，见 7.4.7 子节第 4/7 条。）
 
-install 校验通过（目标 Job `phase=Succeeded` 且 message 无缺失依赖）时只更新 `install.status = Succeeded`，**不写** condition（正常结果非业务性事件）。
+install 校验通过（目标 Job `phase=Succeeded` 且 `status.install.status=Succeeded`）时更新 `install.status = Succeeded`，不写失败 condition。
 
 ### 9.2 时间来源
 
@@ -956,7 +961,6 @@ condition 对应的 reason 及含义以 9.1 为准；停止派发日志只表示
 | `--rpmrepo-ready-retry-limit` | 3 | flag | RpmRepo 就绪性连续失败计数升级阈值（E-29）：连续失败达阈值触发 condition `RpmRepoUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮就绪自动清零 |
 | `--snapshot-ready-retry-limit` | 3 | flag | 当前 Snapshot 查询连续失败计数升级阈值（E-30）：连续失败达阈值触发 condition `SnapshotUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮 GET 成功自动清零 |
 | `--specfile-cache-size` | 10000 | flag | 全局 spec 文件内容 LRU 缓存容量上限（15.11）：两层 key（`commitId`→`specFileName`），超限按 LRU 淘汰 |
-| `--spec-parse-engine` | `text` | flag | spec 解析引擎（16.3）：`text`＝包内文本语法+宏展开，不执行任何子进程，对不可信包仓库内容安全（默认）；`rpmspec`＝经本地 `rpmspec -P` 子进程展开——rpm 宏解析期求值 `%(...)`/`%{lua:...}` 于宿主执行，仅限可信包源，开启时启动打 `reason=SpecParseEngineRpmspec` 警告日志；stdout 为空/可执行缺失回退 text 解析 |
 | `--git-server-addr` | `http://localhost:8080` | flag / env `GIT_SERVER_ADDR` | git-server 服务地址（共享客户端 `pkg/clients/gitserver`） |
 | `--git-server-timeout` | 30s | flag / env `GIT_SERVER_TIMEOUT` | 单次 git-server HTTP 请求超时 |
 | `--git-server-retry` | 3 | flag / env `GIT_SERVER_RETRY` | git-server 请求尝试次数上限 |
@@ -1116,9 +1120,9 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
-| `status` | string | 由目标 Job（多代取最新，7.4.4）的 `status.message` 回填（见 7.4.7）：`phase=Succeeded` 且 message 为空/合法 JSON 无缺失 → `Succeeded`；含非空 `missing_deps` → `Failed`；message 解析失败或 `phase != Succeeded` 不改写（保留上一代结果） |
-| `missingDeps` | map[string]MissingDep | install 失败时逐项填充：message JSON 的 `missing_deps` 条目（键 = 缺失依赖名，值映射 `MissingDep`——`needed_by` → `NeededBy`、`version_requests` 大写操作符键归一映射 `VersionConst`，见 7.4.7），已存在条目不覆盖（幂等） |
-| `conditions` | []metav1.Condition | install 级 condition（type=`Install`，目录见 9.1）；install 失败时幂等写入失败详情（reason 固定 `InstallCheckFailed`，message 记录失败 jobName） |
+| `status` | string | 由最新目标 Job 的 `status.install.status` 回填；缺失或无效结果不得视为成功（见 7.4.7） |
+| `missingDeps` | map[string]MissingDep | 直接取最新 Job 的 `status.install.missingDeps`（见 7.4.7） |
+| `conditions` | []metav1.Condition | install 失败或结果缺失/无效时写入对应 reason（见 7.4.7） |
 
 ### 15.3 Job（创建 + 按 label list 回读）
 
@@ -1238,9 +1242,9 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | 写入方与时机 |
 |------|------|
-| `status.runner` / `startTime` / `endTime` / `message` / `restartCount` | runner 执行期/终态回写 |
+| `status.runner` / `startTime` / `endTime` / `message` / `restartCount` | runner 执行期/终态回写；`message` 仅记录执行或上传错误 |
 | `status.phase` / `status.stage` | runner 推进 stage：`Pending → Running → PostRun`；phase 终态：`Succeeded` / `Failed` / `Aborted`（PostRun 为 `status.stage` 值、非 phase，见 data-models.md；phase 映射见 7.4.5） |
-| `status.message`（install 失败缺失依赖 JSON） | runner 在 install 校验失败时写入（JSON 结构见 7.4.7）；buildinfo 回填消费（见 15.3.2）——其余场景为普通状态消息，buildinfo 不按 install 语义解析 |
+| `status.build` / `status.install` | runner 从脚本结果读取并回写；buildinfo 依据结构化结果回填（见 7.4.7） |
 
 #### 15.3.2 回读消费的字段（`syncSpecStatusFromJobs`）
 
@@ -1250,7 +1254,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.creationTimestamp` | 多代 Job 排序键主键：`metav1.Time` 直接比较（零值按最早），apiserver 创建时写入，恒非空且单调（见 7.4.4） |
 | `metadata.name` | 排序键次键（并列时字典序最大）；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
 | `status.phase` | 经 7.4.5 映射回写 `build.status`；`Pending` 无映射 → 强制 `Running`（不得沿用上一代终态） |
-| `status.message` | install 失败缺失依赖 JSON（runner 在 install 校验失败时写入，结构见 7.4.7）→ 解析回填 `specStatus[spec].install`（`phase=Succeeded` 时判定；解析失败不改写）；其余内容不按 install 语义消费 |
+| `status.install` | `phase=Succeeded` 时回填 `specStatus[spec].install`，缺失结果不得视为安装成功（见 7.4.7） |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
 | `status.stage` / `runner` / `endTime` / `restartCount` | 不消费 |
 
@@ -1538,23 +1542,20 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 > **解析产物去向（15.11）**：spec 文件原始内容先写入全局 `Cache.specFileCache`（两层 key `commitId`→`specFileName`，LRU，写入与解析成败解耦），解析结果（`map[string]SpecDepend`）按 specName 合并为 BuildInfo 级全量视图后写入 per-BuildInfo 缓存 `Cache.specDependsCache`（key = `<namespace>/<buildinfo.name>`，7.2.2），不再落库至 `BuildInfo.spec`。
 
-**解析引擎（`--spec-parse-engine`，`text` / `rpmspec`，见 12.1）**：
+**解析流程**：固定使用 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件>` 展开，再按下述行语法建模。命令不可用、超时、非零退出码或 stdout 为空均视为该 spec 解析失败，不回退到原始文本解析；跳过该 spec、记录 `SpecParseFailed` 与所属仓库到 `failedPackages`，不阻断同仓库其余 spec。controller-manager 镜像必须安装提供 `rpmspec` 的 `rpm-build`。
 
-1. **text 引擎（默认，对不可信源安全）**：直接以「输入文本行格式语法」+「解析产物模型」解析 spec 原文，宏展开由包内展开器承担（规则见「宏展开」），**不启动任何子进程、不消费 `--load` 宏文件**。spec 原文来自用户包仓库（16.2 git-server 拉取），属不可信输入：rpm 宏语言在解析期即求值 `%(...)`（经 /bin/sh 执行）与 `%{lua:...}`（openEuler rpm 默认启用 Lua），任何执行 spec 内容的解析方式都会在本宿主执行仓库内容，故默认引擎必须为纯文本解析；
-2. **rpmspec 引擎（显式开启，仅限可信包源）**：先经 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件>` 展开后建模；**判定依据为 stdout 是否非空**（不看 exitCode）；步骤 0 消费的 buildPayload 取自 BuildInfo.spec.buildPayload（与 dcg 建边上下文（16.1）/ Job payload（15.3.1）共用同一次 YAML 解析结果，见 15.2.2）。rpmspec 为**本地子进程调用**（`exec.Command` 直接启动、不经 shell，spec 文件先落临时文件供其读取）——**安全边界**："不经 shell"仅指 exec 层不包装 shell，rpm 宏展开（含 `-P` 解析期）本身求值 `%(...)` shell 转义与 `%{lua:...}` 块：spec 与 `--load` 宏文件内容将以 controller 进程身份在本宿主执行，启用前提是全部包仓库内容受控可信，开启时控制器启动打印 `reason=SpecParseEngineRpmspec` 警告日志；**部署前提**（仅本引擎需要）：controller-manager 运行环境（容器镜像）必须预装 `rpm-build`（提供 `rpmspec` 可执行文件，见二十一章）；
-   - rpmspec 引擎 stdout 为空 → 回退 text 引擎原始解析，**未经 rpmspec 宏展开**（系统宏不展开、解析精度降级）；**rpmspec 启动失败（含可执行文件缺失）视同本引擎失败**，同样落入 text 解析，不单独报错阻断——部署缺失由此表现为"全部 spec 走 text 解析"的静默降级，镜像构建时须显式保证 rpm-build 存在；
-3. 两个解析引擎均失败时，跳过对应 spec、记录 `SpecParseFailed` 与所属仓库到 `failedPackages`；`incremental` 和 `specified` 使用相同的降级规则，不阻断同仓库其余 spec。
+`rpmspec` 是本地子进程，`exec.Command` 不包装 shell，但 RPM 宏解析本身会执行 `%(...)` 和 `%{lua:...}`。包仓库中的 spec 与 `--load` 宏文件因此能以 controller-manager 身份执行代码；当前实现要求全部包源可信，尚未提供解析隔离。
 
 **`--load` 宏定义文件行语法**：
 
 - 文件为 **UTF-8 纯文本、非 JSON**；行内容来源为 `BuildInfo.spec.buildPayload`（YAML）解析后的 `macros` 键（**宏定义行列表**），**逐项原样写入并追加 `\n`**——不补 `%define`/`%global` 前缀、不做转义/排序/去重/校验，行内容语义完全交由 rpmspec 解释；
-- 列表项为空串 → 写出空行（rpmspec 忽略）；`macros` 缺失或非 list → **文件仍须创建但为空**（老实现固定创建该临时文件并把路径交给 `--load`），等价无宏展开；
-- 该文件的生命周期为单次解析调用（老实现以临时目录包裹整次 `rpmspec` 调用，调用结束即删除）；
-- **该文件仅 rpmspec 引擎消费**——text 引擎不读取 buildPayload 宏定义行（包内展开器仅使用 spec 内 `%define`/`%global` 与 spec 同名属性，见「宏展开」）。
+- 列表项为空串 → 写出空行（rpmspec 忽略）；`macros` 缺失或非 list → **文件仍须创建但为空**，表示没有额外的构建宏定义；
+- 该文件的生命周期为单次解析调用，调用结束即删除临时目录；
+- `--load` 文件由 rpmspec 消费；展开后的文本由包内解析器提取字段。
 
-**输入文本行格式语法**（rpmspec 引擎 stdout 与 text 引擎原始文本共用；pyrpm 0.11 等价）：
+**输入文本行格式语法**（输入为 rpmspec stdout）：
 
-- **行切分与续行**：按行独立解析（rpmspec 引擎对 stdout `splitlines()`，text 引擎逐行读原文）；**不支持续行**——行尾 `\` 不做拼接，作为普通字符保留在值内；空行与 `#` 注释行不命中任何 tag，直接忽略（仅「多行累积」期间例外）。
+- **行切分与续行**：按行独立解析；**不支持续行**——行尾 `\` 不做拼接，作为普通字符保留在值内；空行与 `#` 注释行不命中任何 tag，直接忽略（仅「多行累积」期间例外）。
 - **tag 命中**：每行按固定顺序尝试固定模式表，**首个命中的 tag 生效**（`%package`/`%define`/`%global`/`%description`/`%changelog` 优先，最后是"任意 `%<小写字母或下划线>` 开头宏行"兜底）；模式锚定行首，**tag 名大小写不敏感**（`Name:`/`name:`/`NAME:` 等价），tag 名与 `:` 之间允许任意空白；**值大小写敏感、原样保留**；既不命中 tag 模式、又不命中兜底宏行的行（如 `%Package devel`、纯文本行）整行丢弃（「多行累积」期间除外，见下）。
 - **值提取**：单值 tag（`Name`/`Version`/`Epoch`/`Release`/`URL` 等）只取 `:` 后首个非空白连续串，行内其余内容丢弃；约束/列表类 tag（`BuildRequires`/`Requires`/`Provides`/`ExclusiveArch`/`ExcludeArch`）取 `:` 后整行（含内部空白；尾部空白由后续 tokenizer / 字段切分消化）。
 - **分节边界**：`%package <name>` 与 `%package -n <name>`（**区分大小写**）切换"当前子包"上下文——`-n` 形式取该行**最后一个空白分隔字段**为子包名，其余形式为 `<主包名>-<name>`；`%prep`/`%build`/`%install`/`%files`/`%check`/`%setup`/`%ifarch`/`%if`/`%endif` 等宏行**不构成结构、整行忽略**，故 tag 采集**不受 section 与条件块边界限制**；`%changelog` 复位"当前子包"上下文。
@@ -1568,20 +1569,20 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
   | `Requires`/`BuildRequires`/`Provides` | 逐行**追加**（保序，多行均生效）；行内按「requirement 解析」归并，同名同操作符的版本**后者覆盖** |
   | `Source\d*`/`Patch\d*` | 列表追加 + 按 tag 名（含序号）建字典，同序号后者覆盖（本控制器不消费） |
   | `%define`/`%global` | 写入 spec 宏表，**同名后者覆盖**；宏名不属于既有 tag 名时同时写为 spec 属性 |
-- **多行累积**：`%description`/`%changelog` 行**不产出同名值**，而是开启多行模式——其后未命中任何 tag 的行被拼接到 `description`/`changelog` 字段（rpmspec 引擎按 stdout 已去换行、直接串接；text 引擎保留原行含换行符），直到下一个命中 tag 的行结束该模式。本控制器不消费这两个字段，但**必须正确终止多行模式**，否则其后的 tag 行会被误并入正文而丢字段。
+- **多行累积**：`%description`/`%changelog` 行**不产出同名值**，而是开启多行模式；直到下一个命中 tag 的行结束。本控制器不消费这两个字段。
 
-**宏展开（包内展开器语义；text 引擎为主要展开手段，rpmspec 引擎处理残留宏引用）**：
+**残留宏展开（`rpmspec -P` 后的包内字段解析）**：
 
 - 可识别形式仅 `%{...}` 且花括号内**不含空白**（`%{name}` ✓；`%{ name }` 不识别、原样保留）；不支持 `$(...)`/`%(...)` 与无花括号 `%name`；
-- 取值来源与优先级：spec 宏表（`%define`/`%global` 定义）→ spec 同名属性（`Name`/`Version`/`Release`/`Epoch` 等）；
-- **未定义或取值为空 → 原样保留字面量**（不删空）；因此系统宏（`%{_bindir}`、`%{_isa}` 等）在 text 引擎下以字面量残留，仅 rpmspec 引擎由 rpmspec 展开；
-- 条件宏：`%{?x}`/`%{?x:default}` 在 x 已定义时取 x 的值（有 default 也取 x 的值）、未定义时取 default（无 default → 空串）；`%{!x}`/`%{!x:default}` 取反；`%{!x}` 无 default 且 x 未定义时老实现返回非字符串 → 该 spec 解析失败（parseFailed）；
+- 取值来源与优先级：spec 宏表（`%define`/`%global` 定义，覆盖同名 `buildPayload.macros` 简单定义）→ `buildPayload.macros` 简单定义 → spec 同名属性（`Name`/`Version`/`Release`/`Epoch` 等）；
+- **未定义或取值为空 → 原样保留字面量**（不删空）；RPM 系统宏由前置 `rpmspec` 展开；
+- 条件宏：`%{?x}` 在 x 已定义时取 x 的值，否则为空串；`%{?x:body}` 在 x 已定义时展开 body，否则为空串；`%{!?x:body}` 在 x 未定义时展开 body，否则为空串。body 可包含嵌套 `%{...}`，按配对花括号解析；兼容旧写法 `%{!x:body}`。`%{!x}` 无 body 且 x 未定义时按现有规则视为 parseFailed；
 - 递归展开：替换结果若仍含 `%{...}` 继续展开，直至一轮替换无变化为止；
 - 应用点两处：约束/列表类整行值（在 tokenize **之前**）、各字段取值（`version`/`release`/`epoch`/`provides.name`/`specName`/`exclusiveArch` 逐项/版本约束值）。
 
 **解析产物模型（pyrpm 等价）**：
 
-spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为原始文本）按 pyrpm `Spec` 模型建模（行格式、分节边界与重复归并见上「输入文本行格式语法」），本控制器仅消费下列 tag（**只取 spec 级取值**，子包 section 内的同类 tag 不并入）：
+`rpmspec -P` 展开后的文本按上述行格式建模，本控制器仅消费下列 tag（**只取 spec 级取值**，子包 section 内的同类 tag 不并入）：
 
 | tag / 属性 | 产出字段 | 说明 |
 |---|---|---|
@@ -1592,10 +1593,9 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 | `provides` | `provides` | 仅 name，见「provides」 |
 | `exclusiveArchList` / `excludeArchList` | `exclusiveArch` | 见「exclusiveArch 归一」 |
 
-- 各字符串取值（`name` / `version` / `release` / `epoch` / `provide.name` / 版本约束）统一做宏展开（由 `expandMacros(value, spec)` 完成，规则见上「宏展开」：rpmspec 引擎下 `-P` 已展开主体、此处处理残留宏引用；text 引擎下此处为主要展开手段）；
+- 各字符串取值（`name` / `version` / `release` / `epoch` / `provide.name` / 版本约束）对残留宏引用调用 `expandMacros(value, spec)`；
 - 每个 spec 文件产出一条 `specparse.SpecDepend`（类型定义随生产者置于 specparse 包，不属于 API schema），附加 `specFileName`（`git show` 输出路径的 basename，含 `.spec`）与 `repoName`（包仓库名）；
 - 同仓库/跨仓库多 spec 按 `specName` 归并（同名后者覆盖，即 `depends[specName] = depend`）；
-- 两引擎共用同一套模型规则，仅"是否经 rpmspec 宏展开"不同。
 
 **requirement 解析**（requires 与 buildRequires 共用；两阶段，由 `tokenizeRequirements` 与 `parseRequirement` 完成；输入仅为 spec 级集合）：
 
@@ -1684,7 +1684,7 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 | Job 构造 | 15.3.1 确定性名称、AlreadyExists 身份核验及 GET 404 后可重试且同名同代次、超时迟到写入与重启恢复；payload、标签编码、Config/build-target 批次快照、Config/build-resource；E-19/E-26/E-27 |
 | 停止派发 | 6.5/6.5.1 的批次写入失败、Unknown 后重启与既有未决条目恢复；E-28/E-29/E-30 分别覆盖 Pending/Processing、多页 Job、旧代与构建集外 Job、重启、依赖恢复、中止优先级 |
 | 缓存 | 5.4 生命周期与计数边界；15.9 持久化顺序；15.10 刷新与分层；15.11 命中、LRU 淘汰、补源失败 |
-| 解析 | 16.1～16.3 版本选择、约束比较、宏、架构归一、buildRemoves 与解析回退 |
+| 解析 | 16.1～16.3 版本选择、约束比较、宏、架构归一、buildRemoves 与 rpmspec 失败不回退 |
 | 写入与队列 | 7.5 所有错误分类；10.2 Conflict 及同轮连续写入的对象/resourceVersion 衔接（普通成功与 Unknown 确认成功）；10.3 Unknown 意图比较、UID 变化、确认失败及 context 取消 |
 | condition 与观测 | 9.1 生命周期、9.2 FakeClock、11.2 指标计数时机 |
 
@@ -1715,7 +1715,7 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 
 - 单副本部署；并发与恢复边界见第十、十三章。
 - Snapshot 生命周期与条目稳定性是输入前提，见 15.7/15.11。
-- RPM 版本比较的精度边界见 16.2；rpmspec 的部署依赖与回退行为见 16.3。
+- RPM 版本比较的精度边界见 16.2；rpmspec 的部署依赖与失败行为见 16.3。
 - 正常等待与停止派发后的收敛均无等待超时，分别见 5.3/6.5；依赖失败计数见 5.4。
 
 ### 21.1 遗留事项
@@ -1726,3 +1726,10 @@ spec 文本（rpmspec 引擎为 `rpmspec -P` 展开后的文本，text 引擎为
 - **当前行为与影响**：仍按 7.4.6 发布确认门禁等待，不自动放行或判定下游失败。依赖该产物的下游可能永久无法派发，进而阻塞 BuildInfo Completed 与后续发布；当前不保证该异常场景自动收敛，需人工排查、处置。
 - **后续待定**：由 RpmRepo Controller 暴露产物不可用结果，或由 BuildInfo Controller 查询 Manifest；再明确下游失败或降级策略，并补充跨组件契约及集成测试。
 - **范围**：作为后续事项跟踪，不阻塞当前版本主体开发；本版不增加 Manifest 查询、等待超时或自动降级逻辑。
+
+**BI-02：隔离 `rpmspec` 对仓库 spec 的执行。**
+
+- **触发场景**：BuildInfo Controller 固定调用本地 `rpmspec -P` 解析包仓库中的 spec；`%(...)` 可以运行 shell 命令，`%{lua:...}` 可以执行 Lua。`buildPayload.macros` 的 `--load` 文件也属于可执行输入。即使解析最终返回错误，宏仍可能已执行。
+- **当前边界**：`rpmspec` 以 controller-manager 容器内的非 root 用户身份运行；当前 Compose 未为该服务挂载宿主机目录或 Docker socket。单次调用有 30 秒超时，但没有独立的网络、文件系统或资源隔离；超时也不能作为阻止宏产生副作用或子进程继续运行的安全保证。spec 内容可读取该容器可见的文件与环境、访问其可达的内部网络，并可能消耗资源或干扰控制进程。不能将“未使用 shell 包装 `exec.Command`”或“容器非 root”视为可信输入校验。
+- **使用前提**：在隔离能力落地前，只允许解析受控可信的包仓库和宏定义；不得把允许任意用户修改的仓库内容视为安全输入。此要求是部署约束，不是代码已执行的权限检查。
+- **后续方案**：将每次解析移入独立的低权限沙箱，移除凭据与不必要的挂载，默认禁止网络访问，并限制 CPU、内存、进程数及执行时间；确认子进程随解析结束被清理。保留 `rpmspec` 错误显式上报、不回退原文解析的行为，并补充恶意宏、超时和资源耗尽测试。

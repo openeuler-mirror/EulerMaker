@@ -1,15 +1,8 @@
-﻿// Package specparse parses *.spec file text into SpecDepend (design
-// 16.3). The default engine (text) uses the in-package raw-text grammar
-// with the macro expander only. The opt-in rpmspec engine first expands the
-// spec through a local rpmspec subprocess: rpm macro expansion evaluates
-// %(...) shell escapes and %{lua:...} blocks at parse time, so it executes
-// untrusted repo content on the controller host — enable it only for
-// trusted package sources (--spec-parse-engine, default text). When the
-// subprocess yields empty stdout (including a missing executable), that
-// engine falls back to the raw-text grammar. Both engines share the same
-// line grammar and product model. A spec whose Name/Version cannot be
-// resolved fails with an error — parseFailed, routed by E-23 — and never
-// blocks the remaining specs of the same repository.
+// Package specparse parses *.spec files into SpecDepend (design 16.3).
+// It first expands each spec with rpmspec. RPM macro expansion can execute
+// %(...) shell escapes and %{lua:...} blocks on the controller host, so
+// package sources must be trusted. rpmspec errors do not fall back to raw
+// text parsing. The expanded text is then converted into SpecDepend.
 package specparse
 
 import (
@@ -31,14 +24,14 @@ import (
 // 16.3). It is not part of the API schema: BuildInfoSpec no longer
 // persists specDepends, so the type lives with its producer.
 type SpecDepend struct {
-	RepoName      string                       `json:"repoName"`
-	SpecName      string                       `json:"specName"`
-	SpecFileName  string                       `json:"specFileName,omitempty"`
-	Version       string                       `json:"version"`
-	Release       string                       `json:"release,omitempty"`
-	Epoch         string                       `json:"epoch,omitempty"`
-	ExclusiveArch []string                     `json:"exclusiveArch,omitempty"`
-	Provides      []string                     `json:"provides,omitempty"`
+	RepoName      string                        `json:"repoName"`
+	SpecName      string                        `json:"specName"`
+	SpecFileName  string                        `json:"specFileName,omitempty"`
+	Version       string                        `json:"version"`
+	Release       string                        `json:"release,omitempty"`
+	Epoch         string                        `json:"epoch,omitempty"`
+	ExclusiveArch []string                      `json:"exclusiveArch,omitempty"`
+	Provides      []string                      `json:"provides,omitempty"`
 	Requires      map[string]ebsv1.VersionConst `json:"requires,omitempty"`
 	BuildRequires map[string]ebsv1.VersionConst `json:"buildRequires,omitempty"`
 	BuildRemoves  map[string]ebsv1.VersionConst `json:"buildRemoves,omitempty"`
@@ -49,64 +42,36 @@ type SpecDepend struct {
 // is never mutated.
 var defaultExclusiveArch = [...]string{"x86_64", "aarch64", "loongarch64", "riscv64", "ppc64le", "sw_64"}
 
-// rpmspecCommand is the executable of the opt-in rpmspec engine. It is a
-// package variable so tests can point it at a stub.
+// rpmspecCommand is a package variable so tests can point it at a stub.
 var rpmspecCommand = "rpmspec"
 
-// rpmspecTimeout bounds one rpmspec subprocess run; a hung process is a
-// primary-path failure and falls back to the raw-text path. It is a package
-// variable so tests can shorten it.
+// rpmspecTimeout bounds one rpmspec subprocess run.
 var rpmspecTimeout = 30 * time.Second
 
-// Engine selects the parse path (design 16.3, --spec-parse-engine).
-type Engine string
-
-const (
-	// EngineText parses with the in-package raw-text grammar and macro
-	// expander only — safe for untrusted repo content (default).
-	EngineText Engine = "text"
-	// EngineRpmspec first expands the spec through a local rpmspec
-	// subprocess; rpm macro expansion evaluates %(...) shell escapes and
-	// %{lua:...} at parse time, executing repo content on this host. Trusted
-	// sources only.
-	EngineRpmspec Engine = "rpmspec"
-)
-
-// Valid reports whether engine is a known value.
-func (e Engine) Valid() bool {
-	return e == EngineText || e == EngineRpmspec
-}
-
-// Parse parses one *.spec file with the selected engine. arch is the rpmspec
-// --target value (unused by the text engine); macros are the raw
-// macro-definition lines (buildPayload.macros) handed to rpmspec --load,
-// written verbatim one per line. specFileName is the basename of the file
-// inside the repository, repoName the owning package repository.
-func Parse(specText, specFileName, repoName, arch string, macros []string, engine Engine) (*SpecDepend, error) {
-	text := specText
-	if engine == EngineRpmspec {
-		if expanded, ok := tryRpmspec(specText, arch, macros); ok {
-			text = expanded
-		}
+// Parse expands one *.spec file using rpmspec and parses the result. arch is
+// the --target value; macros are buildPayload.macros lines passed to --load.
+func Parse(specText, specFileName, repoName, arch string, macros []string) (*SpecDepend, error) {
+	text, err := expandWithRpmspec(specText, arch, macros)
+	if err != nil {
+		return nil, fmt.Errorf("rpmspec %s: %w", specFileName, err)
 	}
-	return parseSpec(text, specFileName, repoName)
+	return parseSpec(text, specFileName, repoName, macros)
 }
 
-// tryRpmspec runs the primary path and reports whether stdout was non-empty.
-// Any startup failure — including a missing executable — is a primary-path
-// failure and falls through to the raw-text path silently (16.3).
-func tryRpmspec(specText, arch string, macros []string) (string, bool) {
+// expandWithRpmspec returns an error on startup, execution, timeout or empty
+// output instead of silently parsing the unexpanded input.
+func expandWithRpmspec(specText, arch string, macros []string) (string, error) {
 	if _, err := exec.LookPath(rpmspecCommand); err != nil {
-		return "", false
+		return "", err
 	}
 	dir, err := os.MkdirTemp("", "specparse-")
 	if err != nil {
-		return "", false
+		return "", err
 	}
 	defer os.RemoveAll(dir)
 	specPath := filepath.Join(dir, "input.spec")
 	if err := os.WriteFile(specPath, []byte(specText), 0o644); err != nil {
-		return "", false
+		return "", err
 	}
 	// The macro file is always created (empty when macros is unset); entries
 	// are written verbatim with a trailing newline, no %define prefix, no
@@ -118,29 +83,26 @@ func tryRpmspec(specText, arch string, macros []string) (string, bool) {
 	}
 	macroPath := filepath.Join(dir, "macros")
 	if err := os.WriteFile(macroPath, []byte(macroContent.String()), 0o644); err != nil {
-		return "", false
+		return "", err
 	}
-	// The subprocess is bounded by a timeout so a hung rpmspec cannot block
-	// the reconcile worker forever; a timeout is a primary-path failure and
-	// falls through to the raw-text path silently, like any startup failure.
 	ctx, cancel := context.WithTimeout(context.Background(), rpmspecTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, rpmspecCommand, "--target="+arch, "-P", specPath, "--load="+macroPath)
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", false
+			return "", ctx.Err()
 		}
 		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			return "", false
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		// exitCode is not consulted: stdout decides.
+		return "", err
 	}
 	if strings.TrimSpace(string(out)) == "" {
-		return "", false
+		return "", errors.New("empty output")
 	}
-	return string(out), true
+	return string(out), nil
 }
 
 // specModel accumulates the spec-level attributes during line parsing.
@@ -179,7 +141,7 @@ var (
 	tagLinePattern   = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_]*)\s*:\s*(.*)$`)
 	sourcePatchTag   = regexp.MustCompile(`^(source|patch)\d*$`)
 	macroLinePattern = regexp.MustCompile(`^%[a-z_]`)
-	macroRefPattern  = regexp.MustCompile(`%\{([^\s}]*)\}`)
+	macroNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	requirementSplit = regexp.MustCompile(`(.*?)\s+([<>]=?|=)\s+(\S+)`)
 )
 
@@ -198,10 +160,34 @@ func knownTag(name string) bool {
 }
 
 // parseSpec parses text (rpmspec-expanded or raw) into a SpecDepend.
-func parseSpec(text, specFileName, repoName string) (*SpecDepend, error) {
-	m := &specModel{macros: map[string]string{}, props: map[string]string{}}
+func parseSpec(text, specFileName, repoName string, macros []string) (*SpecDepend, error) {
+	m := &specModel{macros: payloadMacroDefinitions(macros), props: map[string]string{}}
 	parseLines(text, m)
 	return buildSpec(m, specFileName, repoName)
+}
+
+// payloadMacroDefinitions reads simple RPM macro-file forms for any macro
+// references left in rpmspec output. Definitions inside the spec override these.
+func payloadMacroDefinitions(lines []string) map[string]string {
+	definitions := make(map[string]string)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var name, value string
+		if body, ok := directiveLine(line, "%define"); ok {
+			name, value = splitDefine(body)
+		} else if body, ok := directiveLine(line, "%global"); ok {
+			name, value = splitDefine(body)
+		} else if strings.HasPrefix(line, "%") {
+			name, value = splitDefine(line[1:])
+		}
+		if macroNamePattern.MatchString(name) && value != "" {
+			definitions[name] = value
+		}
+	}
+	return definitions
 }
 
 // lineKind classifies one input line against the fixed pattern table.
@@ -420,7 +406,7 @@ func buildSpec(m *specModel, specFileName, repoName string) (*SpecDepend, error)
 	}, nil
 }
 
-// expandMacros expands %{...} references (no whitespace inside the braces)
+// expandMacros expands %{...} references, including nested conditional bodies,
 // with lookup order: spec macro table (%define/%global) then same-named spec
 // attributes. Undefined or empty references stay literal; conditional macros
 // follow %{?x}/%{!x} semantics; expansion recurses until a round changes
@@ -428,7 +414,6 @@ func buildSpec(m *specModel, specFileName, repoName string) (*SpecDepend, error)
 // maxExpandRounds and maxExpandLength bound macro expansion. Mutually
 // referencing macros (%define x %{y} + %define y %{x}) never reach a fixed
 // point, and self-referencing macros (%define x %{x}a) grow without bound;
-// the default text engine must stay safe for untrusted repo content, so
 // exceeding either bound fails the spec (parseFailed, routed by E-23).
 const (
 	maxExpandRounds = 32
@@ -440,23 +425,9 @@ func expandMacros(value string, m *specModel) (string, error) {
 		if round >= maxExpandRounds {
 			return "", fmt.Errorf("macro expansion exceeded %d rounds (mutually referencing macros?)", maxExpandRounds)
 		}
-		var firstErr error
-		out := macroRefPattern.ReplaceAllStringFunc(value, func(match string) string {
-			if firstErr != nil {
-				return match
-			}
-			replacement, keep, err := expandOne(match[2:len(match)-1], m)
-			if err != nil {
-				firstErr = err
-				return match
-			}
-			if keep {
-				return match
-			}
-			return replacement
-		})
-		if firstErr != nil {
-			return "", firstErr
+		out, err := expandMacroRound(value, m)
+		if err != nil {
+			return "", err
 		}
 		if out == value {
 			return out, nil
@@ -468,6 +439,57 @@ func expandMacros(value string, m *specModel) (string, error) {
 	}
 }
 
+// expandMacroRound walks complete outermost references. A regular expression
+// would stop at the inner '}' in %{?name:%{other}} and leave a stray brace.
+func expandMacroRound(value string, m *specModel) (string, error) {
+	var out strings.Builder
+	for offset := 0; offset < len(value); {
+		start := strings.Index(value[offset:], "%{")
+		if start < 0 {
+			out.WriteString(value[offset:])
+			break
+		}
+		start += offset
+		out.WriteString(value[offset:start])
+		end := macroEnd(value, start)
+		if end < 0 {
+			out.WriteString(value[start:])
+			break
+		}
+		match := value[start:end]
+		replacement, keep, err := expandOne(match[2:len(match)-1], m)
+		if err != nil {
+			return "", err
+		}
+		if keep {
+			out.WriteString(match)
+		} else {
+			out.WriteString(replacement)
+		}
+		offset = end
+	}
+	return out.String(), nil
+}
+
+// macroEnd returns the offset after the matching closing brace.
+func macroEnd(value string, start int) int {
+	depth := 1
+	for i := start + 2; i < len(value); i++ {
+		if strings.HasPrefix(value[i:], "%{") {
+			depth++
+			i++
+			continue
+		}
+		if value[i] == '}' {
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
 // expandOne resolves one %{...} body. keep reports that the literal must be
 // preserved (undefined or empty plain reference).
 func expandOne(inner string, m *specModel) (replacement string, keep bool, err error) {
@@ -475,11 +497,14 @@ func expandOne(inner string, m *specModel) (replacement string, keep bool, err e
 		return "", true, nil
 	}
 	conditional, negated := false, false
-	switch inner[0] {
-	case '?':
+	switch {
+	case strings.HasPrefix(inner, "!?"):
+		conditional, negated = true, true
+		inner = inner[2:]
+	case inner[0] == '?':
 		conditional = true
 		inner = inner[1:]
-	case '!':
+	case inner[0] == '!':
 		conditional, negated = true, true
 		inner = inner[1:]
 	}
@@ -498,10 +523,10 @@ func expandOne(inner string, m *specModel) (replacement string, keep bool, err e
 	}
 	if !negated {
 		if defined {
+			if hasDefault {
+				return defaultValue, false, nil
+			}
 			return value, false, nil
-		}
-		if hasDefault {
-			return defaultValue, false, nil
 		}
 		return "", false, nil
 	}

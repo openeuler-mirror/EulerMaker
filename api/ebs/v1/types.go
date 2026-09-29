@@ -341,13 +341,28 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase        JobPhase    `json:"phase,omitempty"`
-	Stage        JobStage    `json:"stage,omitempty"`
-	Runner       string      `json:"runner,omitempty"`
-	StartTime    metav1.Time `json:"startTime,omitempty"`
-	EndTime      metav1.Time `json:"endTime,omitempty"`
-	Message      string      `json:"message,omitempty"`
-	RestartCount int64       `json:"restartCount,omitempty"`
+	Phase        JobPhase          `json:"phase,omitempty"`
+	Stage        JobStage          `json:"stage,omitempty"`
+	Build        *JobBuildResult   `json:"build,omitempty"`
+	Install      *JobInstallResult `json:"install,omitempty"`
+	Runner       string            `json:"runner,omitempty"`
+	StartTime    metav1.Time       `json:"startTime,omitempty"`
+	EndTime      metav1.Time       `json:"endTime,omitempty"`
+	Message      string            `json:"message,omitempty"`
+	RestartCount int64             `json:"restartCount,omitempty"`
+}
+
+// JobBuildResult records the outcome of the build script, independently of
+// artifact upload and the Job's overall lifecycle.
+type JobBuildResult struct {
+	Status JobResultStatus `json:"status"`
+}
+
+// JobInstallResult records the post-build installability check. MissingDeps
+// is populated only for a deterministic dependency failure.
+type JobInstallResult struct {
+	Status      JobResultStatus       `json:"status"`
+	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
 }
 
 type JobList struct {

@@ -7,6 +7,8 @@ package buildinfo
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -130,6 +132,13 @@ func (g *fakeGitServer) callCount() int {
 
 func newTestController(t *testing.T) (*Controller, *fakeClient, *fakeGitServer, *clocktesting.FakeClock) {
 	t.Helper()
+	// Reconcile tests focus on controller behavior; a stub supplies expanded
+	// spec text without requiring rpm-build on the test host.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rpmspec"), []byte("#!/bin/sh\ncat \"$3\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	client := newFakeClient()
 	git := newFakeGitServer()
 	clk := clocktesting.NewFakeClock(testStart)
@@ -256,7 +265,7 @@ func seedHealthyBasics(client *fakeClient, buildType string, packages ...string)
 	return client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 }
 
-// specText renders a minimal spec file the fallback parser accepts.
+// specText renders a minimal spec file for controller tests.
 func specText(name string, buildRequires ...string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Name: %s\nVersion: 1.0\nRelease: 1\nSummary: %s\nLicense: MIT\n", name, name)
@@ -269,6 +278,11 @@ func specText(name string, buildRequires ...string) string {
 
 // testJobObj builds one identity-complete Job of the given generation.
 func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.JobPhase) *ebsv1.Job {
+	status := ebsv1.JobStatus{Phase: phase}
+	if phase == ebsv1.JobSucceeded {
+		status.Build = &ebsv1.JobBuildResult{Status: ebsv1.JobResultSucceeded}
+		status.Install = &ebsv1.JobInstallResult{Status: ebsv1.JobResultSucceeded}
+	}
 	return &ebsv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: bi.Namespace,
@@ -284,7 +298,7 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 				annDispatchGeneration: strconv.FormatInt(generation, 10),
 			},
 		},
-		Status: ebsv1.JobStatus{Phase: phase},
+		Status: status,
 	}
 }
 

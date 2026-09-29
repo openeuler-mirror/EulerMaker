@@ -771,6 +771,8 @@ type Toleration struct {
 type JobStatus struct {
     Phase      JobPhase    `json:"phase,omitempty"`
     Stage      JobStage    `json:"stage,omitempty"`
+    Build      *JobBuildResult   `json:"build,omitempty"`
+    Install    *JobInstallResult `json:"install,omitempty"`
     Runner     string      `json:"runner,omitempty"`
     StartTime  metav1.Time `json:"startTime,omitempty"`
     EndTime    metav1.Time `json:"endTime,omitempty"`
@@ -783,10 +785,12 @@ type JobStatus struct {
 |------|---------|------|
 | `phase` | `JobPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"Succeeded"` / `"Failed"` / `"Aborted"`；后三项为终态 |
 | `stage` | `JobStage` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"PostRun"`。失败时保留最后到达的执行阶段，不使用 `Failed` stage |
+| `build` | `*JobBuildResult` | 脚本构建结果，`status` 为 `Succeeded` 或 `Failed`；与产物上传后的 Job 终态分开记录 |
+| `install` | `*JobInstallResult` | 构建后安装检查结果，`status` 为 `Succeeded` 或 `Failed`，失败时可携带 `missingDeps`；缺失表示未得到可靠结果 |
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
-| `message` | string | 状态消息 |
+| `message` | string | 执行或上传错误说明，不承载安装检查的结构化结果 |
 | `restartCount` | int64 | 重试次数，默认 0。调度器可使用该字段计算重试退避时间 |
 
 ### JobList

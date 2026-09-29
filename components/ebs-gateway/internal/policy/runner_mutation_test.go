@@ -27,6 +27,32 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, old, allowed); err != nil {
 		t.Fatalf("allowed phase update was rejected: %v", err)
 	}
+	postRun := mutation.Object{
+		"apiVersion": "ebs/v1", "kind": "Job",
+		"metadata": map[string]any{"name": "job-1", "namespace": "team", "resourceVersion": "1"},
+		"spec":     map[string]any{"command": "build"},
+		"status": map[string]any{
+			"runner": "runner-1", "phase": "Running", "stage": "PostRun", "restartCount": 0,
+			"build":   map[string]any{"status": "Succeeded"},
+			"install": map[string]any{"status": "Failed", "missingDeps": map[string]any{"missing": map[string]any{}}},
+		},
+	}
+	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, old, postRun); err != nil {
+		t.Fatalf("first build/install result write was rejected: %v", err)
+	}
+	updatedResult := mutation.Object{
+		"apiVersion": "ebs/v1", "kind": "Job",
+		"metadata": map[string]any{"name": "job-1", "namespace": "team", "resourceVersion": "1"},
+		"spec":     map[string]any{"command": "build"},
+		"status": map[string]any{
+			"runner": "runner-1", "phase": "Succeeded", "stage": "PostRun", "restartCount": 0,
+			"build":   map[string]any{"status": "Succeeded"},
+			"install": map[string]any{"status": "Succeeded"},
+		},
+	}
+	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, postRun, updatedResult); err != nil {
+		t.Fatalf("subsequent install result update was rejected: %v", err)
+	}
 	for _, test := range []struct {
 		name   string
 		status map[string]any
