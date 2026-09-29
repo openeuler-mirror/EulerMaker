@@ -100,6 +100,8 @@ apiVersion: ebs/v1
 
 其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`Config` 和 `Script` 为集群级资源。
 
+`Config` 和 `Script` 与其他资源一起注册到 `ebs/v1` APIGroup，共用通用资源路由、请求处理规则与 ES 存储能力；两者均不支持 Watch，通用路由不注册 HEAD。删除可选用 UID 与 resourceVersion 前置条件来避免误删，Gateway 另行限制内置 Config 的删除权限。
+
 apiserver还为 Runner提供服务端过滤的 Job list-watch：
 
 ```text
@@ -805,6 +807,17 @@ curl -k --get \
   --data-urlencode 'limit=100' \
   'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
 ```
+
+对象 GET/LIST 可用 `includeFields` 选择返回字段、`excludeFields` 隐藏返回字段，字段路径相对于单个对象，使用 JSON 字段名和点号分隔；两个参数同时出现时先选择再排除。例如：
+
+```bash
+curl -k --get \
+  --data-urlencode 'includeFields=metadata.name,status.phase,status.stage' \
+  --data-urlencode 'excludeFields=status.stage' \
+  'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
+```
+
+此例的每个 Build 只返回 `metadata.name`、`status.phase`，以及保留的类型信息；List 顶层的 `apiVersion`、`kind`、`metadata`（含分页 token）保持完整。两个参数均未指定时返回完整对象；字段路径不存在时直接略过，数组内对象也可按路径选择字段。该能力只修改 JSON 响应，不改变鉴权、过滤条件或存储对象，也不减少后端读取量。Watch 和非 JSON 表格响应不支持字段选择；它与用于服务端过滤的 `fieldSelector` 是不同参数。
 
 所有 ES-backed 资源默认按创建时间倒序，因此通过 `ebs.io/target-os`、`ebs.io/target-arch` 完整指定构建目标后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 
