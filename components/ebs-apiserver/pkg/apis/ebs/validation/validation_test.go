@@ -583,6 +583,9 @@ func TestValidateJobStatusUpdate(t *testing.T) {
 		{name: "pending", status: ebsv1.JobStatus{Phase: ebsv1.JobPending, Stage: ebsv1.JobStagePending}},
 		{name: "running", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStageRunning}},
 		{name: "post run", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun}},
+		{name: "build and install results", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun, Build: &ebsv1.JobBuildResult{Status: ebsv1.JobResultSucceeded}, Install: &ebsv1.JobInstallResult{Status: ebsv1.JobResultFailed, MissingDeps: map[string]ebsv1.MissingDep{"dep": {}}}}},
+		{name: "rejects install without build", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun, Install: &ebsv1.JobInstallResult{Status: ebsv1.JobResultSucceeded}}, wantErrs: 1, wantFields: map[string]field.ErrorType{"status.install": field.ErrorTypeForbidden}},
+		{name: "rejects invalid build result", status: ebsv1.JobStatus{Phase: ebsv1.JobRunning, Stage: ebsv1.JobStagePostRun, Build: &ebsv1.JobBuildResult{Status: "Unknown"}}, wantErrs: 1, wantFields: map[string]field.ErrorType{"status.build.status": field.ErrorTypeNotSupported}},
 		{
 			name:     "rejects unsupported phase",
 			status:   ebsv1.JobStatus{Phase: ebsv1.JobPhase("Unknown"), Stage: ebsv1.JobStagePending},

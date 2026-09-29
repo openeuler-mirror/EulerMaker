@@ -304,7 +304,7 @@ func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, 
 			// the same commit even when parsing fails (15.11).
 			c.specFiles.Add(entry.CommitID, file, content)
 		}
-		depend, parseErr := specparse.Parse(content, file, repo, arch, macros, c.specEngine)
+		depend, parseErr := specparse.Parse(content, file, repo, arch, macros)
 		if parseErr != nil {
 			asm.markFailedRepo(repo)
 			item := fmt.Sprintf("%s/%s (%v)", repo, file, parseErr)

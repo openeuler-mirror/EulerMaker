@@ -150,7 +150,7 @@ func TestLatestJobOrdering(t *testing.T) {
 // --- 7.4.7 install backfill three branches + runtime edge appends ---
 
 func TestAdvanceInstallBackfillBranches(t *testing.T) {
-	t.Run("empty message marks install succeeded", func(t *testing.T) {
+	t.Run("structured install result marks succeeded", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 		bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
@@ -170,7 +170,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		requireCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded)
 	})
 
-	t.Run("non-JSON message leaves install untouched", func(t *testing.T) {
+	t.Run("missing install result is not success", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 		bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
@@ -181,16 +181,17 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		job := testJobObj(seeded, "a", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
 		job.Status.Message = "build ok"
+		job.Status.Install = nil
 		client.SeedJob(job)
 
 		reconcileOnce(t, c)
 
 		persisted := getBuildInfo(t, client)
 		a := persisted.Status.SpecStatus["a"]
-		if a.Install.Status != "" {
-			t.Fatalf("install status = %q, want untouched (unparseable message)", a.Install.Status)
+		if a.Install.Status != SpecBuildFailed {
+			t.Fatalf("install status = %q, want Failed", a.Install.Status)
 		}
-		requireNoCondition(t, a.Install.Conditions, ConditionInstall)
+		requireCondition(t, a.Install.Conditions, ConditionInstall, ReasonInstallResultMissing)
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	})
 
@@ -218,7 +219,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		}, testSources(testRpm("a", "a", "1.0")))
 		job := testJobObj(seeded, "b", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
-		job.Status.Message = `{"missing_deps":{"a":{"needed_by":"new","version_requests":{"GE":"2.0"}}}}`
+		job.Status.Install = &ebsv1.JobInstallResult{Status: ebsv1.JobResultFailed, MissingDeps: map[string]ebsv1.MissingDep{"a": {NeededBy: "new", VersionRequests: ebsv1.VersionConst{GE: "1.0"}}}}
 		client.SeedJob(job)
 
 		reconcileOnce(t, c)
@@ -229,9 +230,8 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		if b.Install.Status != SpecBuildFailed {
 			t.Fatalf("install status = %q, want Failed", b.Install.Status)
 		}
-		// Idempotent merge (7.4.7): the pre-existing entry is never overwritten.
-		if got := b.Install.MissingDeps["a"]; got.NeededBy != "old" || got.VersionRequests.GE != "1.0" {
-			t.Fatalf("missingDeps[a] = %+v, want the pre-existing entry kept", got)
+		if got := b.Install.MissingDeps["a"]; got.NeededBy != "new" || got.VersionRequests.GE != "1.0" {
+			t.Fatalf("missingDeps[a] = %+v, want the latest Job result", got)
 		}
 		requireCondition(t, b.Install.Conditions, ConditionInstall, ReasonInstallCheckFailed)
 		// Runtime edge: provider a is in the build set and non-terminal (7.4.7);

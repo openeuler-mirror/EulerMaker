@@ -10,9 +10,11 @@ spec:
     payload=/workspace/payload.yaml
     test -s "$payload" || { echo "missing $payload" >&2; exit 1; }
     test "$(id -u)" -eq 0 || { echo "rpmbuild script requires root for dnf builddep" >&2; exit 1; }
-    for tool in git dnf rpmbuild rpmspec curl; do
+    for tool in git dnf rpmbuild rpmspec curl python3; do
       command -v "$tool" >/dev/null || { echo "missing build tool: $tool" >&2; exit 1; }
     done
+    result_file=/workspace/job-result.json
+    printf '{"build":{"status":"Failed"}}\n' > "$result_file"
 
     # The controller writes these four top-level values as scalar YAML fields.
     # Never eval payload content as shell code.
@@ -79,3 +81,50 @@ spec:
     while IFS= read -r -d '' rpm; do
       cp -- "$rpm" /results/packages/
     done < <(find "$topdir/SRPMS" -type f -name '*.rpm' -print0)
+
+    printf '{"build":{"status":"Succeeded"}}\n' > "$result_file"
+    mapfile -d '' binary_rpms < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
+    install_log=/workspace/install-check.log
+    if LC_ALL=C dnf "${dnf_args[@]}" --installroot=/workspace/installroot --releasever=/ \
+      --setopt=tsflags=test --setopt=install_weak_deps=False --nogpgcheck \
+      -y install "${binary_rpms[@]}" > "$install_log" 2>&1; then
+      printf '{"build":{"status":"Succeeded"},"install":{"status":"Succeeded"}}\n' > "$result_file"
+    else
+      cat "$install_log"
+      # Only dependency-resolution failures are a completed check. Other DNF
+      # failures make the Job fail, while preserving the successful RPM build.
+      if ! grep -Eq 'nothing provides|is needed by|conflicting requests' "$install_log"; then
+        exit 1
+      fi
+      python3 - "$install_log" "$result_file" <<'PY'
+    import json
+    import os
+    import re
+    import sys
+
+    log_path, result_path = sys.argv[1:]
+    missing = {}
+    pattern = re.compile(r'(?:nothing provides )(.+?)(?: needed by (.+))?$')
+    for line in open(log_path, encoding='utf-8', errors='replace'):
+        match = pattern.search(line.strip())
+        if not match:
+            continue
+        requirement, needed_by = match.groups()
+        version = {}
+        parts = re.match(r'^(.+?)\s*(>=|<=|=|>|<)\s*(\S+)$', requirement)
+        if parts:
+            name, operator, value = parts.groups()
+            version[{'>': 'gt', '>=': 'ge', '=': 'eq', '<=': 'le', '<': 'lt'}[operator]] = value
+        else:
+            name = requirement
+        missing[name] = {'neededBy': needed_by or '', 'versionRequests': version}
+    if not missing:
+        sys.exit('install check failed without parseable missing dependencies')
+    result = {'build': {'status': 'Succeeded'},
+              'install': {'status': 'Failed', 'missingDeps': missing}}
+    temporary = result_path + '.tmp'
+    with open(temporary, 'w', encoding='utf-8') as output:
+        json.dump(result, output)
+    os.replace(temporary, result_path)
+    PY
+    fi

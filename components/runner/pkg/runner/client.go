@@ -122,6 +122,7 @@ func (c *Client) UpdateJobStatus(ctx context.Context, job JobResource, status Jo
 		"metadata": map[string]string{"resourceVersion": job.Metadata.ResourceVersion},
 		"status": map[string]any{
 			"phase": status.Phase, "stage": status.Stage, "runner": status.Runner,
+			"build": status.Build, "install": status.Install,
 			"startTime": status.StartTime, "endTime": status.EndTime,
 			"message": status.Message,
 		},

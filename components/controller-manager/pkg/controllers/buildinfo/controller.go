@@ -49,13 +49,6 @@ type Config struct {
 	// SpecFileCacheSize is the global spec file LRU capacity
 	// (--specfile-cache-size, default 10000; design 15.11).
 	SpecFileCacheSize int
-	// SpecParseEngine selects the spec parse engine (--spec-parse-engine,
-	// "text" or "rpmspec"; empty defaults to "text"). text parses with the
-	// in-package grammar only and is safe for untrusted repo content;
-	// rpmspec expands the spec through a local rpmspec subprocess, whose macro
-	// expansion evaluates %(...) shell escapes and %{lua:...} from the repo
-	// content on this host — enable only for trusted package sources.
-	SpecParseEngine string
 }
 
 func (c Config) validate() error {
@@ -70,9 +63,6 @@ func (c Config) validate() error {
 	}
 	if c.SpecFileCacheSize <= 0 {
 		return fmt.Errorf("BuildInfo controller spec file cache size must be positive")
-	}
-	if !specparse.Engine(c.SpecParseEngine).Valid() {
-		return fmt.Errorf("BuildInfo controller spec parse engine must be %q or %q", specparse.EngineText, specparse.EngineRpmspec)
 	}
 	return nil
 }
@@ -94,11 +84,7 @@ type Controller struct {
 	// specFiles is the global spec file LRU (design 15.11.2); it survives
 	// BuildInfo terminal states and is only capacity-evicted.
 	specFiles *specFileCache
-	// specEngine is the normalized parse engine passed to specparse.Parse
-	// (design 16.3, --spec-parse-engine).
-	specEngine specparse.Engine
-
-	counters *failureCounters
+	counters  *failureCounters
 }
 
 // New builds the controller and registers the BuildInfo event handler on the
@@ -107,9 +93,6 @@ type Controller struct {
 func New(buildInfos source.Source, client Client, gitServer gitserver.GitServerClient, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
 	if buildInfos == nil || client == nil || gitServer == nil || clk == nil {
 		return nil, fmt.Errorf("BuildInfo source, API client, git-server client and clock are required")
-	}
-	if config.SpecParseEngine == "" {
-		config.SpecParseEngine = string(specparse.EngineText)
 	}
 	if err := config.validate(); err != nil {
 		return nil, err
@@ -124,13 +107,10 @@ func New(buildInfos source.Source, client Client, gitServer gitserver.GitServerC
 		rpmMetaSources:   newPerBuildInfoCache[*rpmver.RpmMetaSources](clk, config.DcgPruneGrace),
 		specDependsCache: newPerBuildInfoCache[map[string]specparse.SpecDepend](clk, config.DcgPruneGrace),
 		specFiles:        newSpecFileCache(config.SpecFileCacheSize),
-		specEngine:       specparse.Engine(config.SpecParseEngine),
 		counters:         newFailureCounters(),
 	}
-	if c.specEngine == specparse.EngineRpmspec {
-		log.Printf("controller=%s reason=SpecParseEngineRpmspec warning=%q", Name,
-			"spec parsing via local rpmspec is enabled; %(...) and %{lua} in untrusted repo specs execute on this host")
-	}
+	log.Printf("controller=%s reason=SpecParseRpmspec warning=%q", Name,
+		"rpmspec expands package source on this host; %(...) and %{lua:...} can execute code, so only trusted repositories are safe")
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err

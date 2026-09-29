@@ -72,7 +72,7 @@ func main() {
 			ArtifactManagerAddr: o.ArtifactManager.Address,
 			DcgPruneGrace:       o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
 			SnapshotReadyRetryLimit: o.BuildInfo.SnapshotReadyRetryLimit, SpecFileCacheSize: o.BuildInfo.SpecFileCacheSize,
-			SpecParseEngine: o.BuildInfo.SpecParseEngine}, gitClient),
+		}, gitClient),
 	}
 	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout, SlowRetryInitial: o.Manager.SlowRetryInitialDelay, SlowRetryMax: o.Manager.SlowRetryMaxDelay, SlowRetryJitter: o.Manager.SlowRetryJitter}, healthServer)
 	if err != nil {

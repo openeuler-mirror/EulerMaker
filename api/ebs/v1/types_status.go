@@ -63,6 +63,19 @@ func (p BuildInfoPhase) IsTerminal() bool {
 // JobPhase describes the lifecycle state of a Job.
 type JobPhase string
 
+// JobResultStatus describes a completed build or install-check step. An
+// absent result means the step has not produced a reliable verdict.
+type JobResultStatus string
+
+const (
+	JobResultSucceeded JobResultStatus = "Succeeded"
+	JobResultFailed    JobResultStatus = "Failed"
+)
+
+func (s JobResultStatus) IsValid() bool {
+	return s == JobResultSucceeded || s == JobResultFailed
+}
+
 const (
 	JobPending   JobPhase = "Pending"
 	JobRunning   JobPhase = "Running"

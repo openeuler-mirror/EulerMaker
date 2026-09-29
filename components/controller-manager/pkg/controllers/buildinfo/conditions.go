@@ -75,19 +75,21 @@ const (
 
 // Spec-level condition types and reasons (design 9.1).
 const (
-	ConditionBuildFailed                  = "BuildFailed"
-	ReasonJobFailed                       = "JobFailed"
-	ConditionRebuildFailed                = "RebuildFailed"
-	ReasonRebuildJobFailed                = "RebuildJobFailed"
-	ReasonRpmDependsMissing               = "RpmDependsMissing"
-	ConditionArchUnsupported              = "ArchUnsupported"
-	ReasonArchUnsupported                 = "ArchUnsupported"
+	ConditionBuildFailed                        = "BuildFailed"
+	ReasonJobFailed                             = "JobFailed"
+	ConditionRebuildFailed                      = "RebuildFailed"
+	ReasonRebuildJobFailed                      = "RebuildJobFailed"
+	ReasonRpmDependsMissing                     = "RpmDependsMissing"
+	ConditionArchUnsupported                    = "ArchUnsupported"
+	ReasonArchUnsupported                       = "ArchUnsupported"
 	ConditionDefaultBuildResourceConfigNotFound = "DefaultBuildResourceConfigNotFound"
 	ReasonDefaultBuildResourceConfigNotFound    = "DefaultBuildResourceConfigNotFound"
-	ConditionBuildAborted                 = "BuildAborted"
-	ReasonBuildAborted                    = "BuildAborted"
-	ConditionInstall                      = "Install"
-	ReasonInstallCheckFailed              = "InstallCheckFailed"
+	ConditionBuildAborted                       = "BuildAborted"
+	ReasonBuildAborted                          = "BuildAborted"
+	ConditionInstall                            = "Install"
+	ReasonInstallCheckFailed                    = "InstallCheckFailed"
+	ReasonInstallResultMissing                  = "InstallResultMissing"
+	ReasonInstallResultInvalid                  = "InstallResultInvalid"
 )
 
 // conditionMessageMax bounds a persisted condition message (apiserver limit).

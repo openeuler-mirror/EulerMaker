@@ -633,7 +633,7 @@ metadata.ownerReferences
 | Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.8 节允许该调用方更新时允许 |
 | Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `runner` claim；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
 | Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `runner` claim；`spec` 和全部 metadata 保持不变 |
-| Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner` 或 `status.restartCount` |
+| Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.build`、`status.install`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner` 或 `status.restartCount`；构建和安装结果的结构与取值由 apiserver 校验 |
 | Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
 
 表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。Runner 的 `instanceId` 不可变、type/arch labels 一致性和 `resourceVersion` 冲突也只由 apiserver 判定，gateway 不重复实现。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。

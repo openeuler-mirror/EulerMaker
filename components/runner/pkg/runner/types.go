@@ -129,12 +129,36 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase     string     `json:"phase,omitempty"`
-	Stage     string     `json:"stage,omitempty"`
-	Runner    string     `json:"runner,omitempty"`
-	StartTime *time.Time `json:"startTime,omitempty"`
-	EndTime   *time.Time `json:"endTime,omitempty"`
-	Message   string     `json:"message,omitempty"`
+	Phase     string            `json:"phase,omitempty"`
+	Stage     string            `json:"stage,omitempty"`
+	Build     *JobBuildResult   `json:"build,omitempty"`
+	Install   *JobInstallResult `json:"install,omitempty"`
+	Runner    string            `json:"runner,omitempty"`
+	StartTime *time.Time        `json:"startTime,omitempty"`
+	EndTime   *time.Time        `json:"endTime,omitempty"`
+	Message   string            `json:"message,omitempty"`
+}
+
+type JobBuildResult struct {
+	Status string `json:"status"`
+}
+
+type JobInstallResult struct {
+	Status      string                `json:"status"`
+	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
+}
+
+type MissingDep struct {
+	NeededBy        string       `json:"neededBy,omitempty"`
+	VersionRequests VersionConst `json:"versionRequests,omitempty"`
+}
+
+type VersionConst struct {
+	GT string `json:"gt,omitempty"`
+	GE string `json:"ge,omitempty"`
+	EQ string `json:"eq,omitempty"`
+	LE string `json:"le,omitempty"`
+	LT string `json:"lt,omitempty"`
 }
 
 type WatchEvent struct {

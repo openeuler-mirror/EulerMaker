@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -451,6 +452,36 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 	if parent.Err() != nil {
 		return
 	}
+	resultFile := filepath.Join(workDir(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name, "job-result.json")
+	if info, err := os.Lstat(resultFile); err == nil {
+		if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			executionErr = errors.Join(executionErr, fmt.Errorf("job result is not a regular file of at most 1 MiB"))
+		} else if data, err := os.ReadFile(resultFile); err != nil {
+			executionErr = errors.Join(executionErr, fmt.Errorf("read job-result.json: %w", err))
+		} else {
+			var result struct {
+				Build   *JobBuildResult   `json:"build"`
+				Install *JobInstallResult `json:"install"`
+			}
+			if err := json.Unmarshal(data, &result); err != nil || result.Build == nil || !validJobResult(result.Build.Status) || result.Install != nil && !validJobResult(result.Install.Status) {
+				executionErr = errors.Join(executionErr, fmt.Errorf("invalid job-result.json: %v", err))
+			} else {
+				status.Build, status.Install = result.Build, result.Install
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		executionErr = errors.Join(executionErr, fmt.Errorf("read job-result.json: %w", err))
+	}
+	if status.Build == nil {
+		buildStatus := "Succeeded"
+		if executionErr != nil {
+			buildStatus = "Failed"
+		}
+		status.Build = &JobBuildResult{Status: buildStatus}
+	}
+	if status.Build.Status == "Failed" && executionErr == nil {
+		executionErr = errors.New("build script reported failure")
+	}
 	status.Phase = "Running"
 	status.Stage = "PostRun"
 	if executionErr != nil {
@@ -464,6 +495,10 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 	}
 	a.finalizeArtifacts(parent, job, status, resultRoot, executionErr)
 	a.sendHeartbeat(context.Background())
+}
+
+func validJobResult(status string) bool {
+	return status == "Succeeded" || status == "Failed"
 }
 
 func (a *Agent) resumePostRun(parent context.Context, key string, job JobResource) {

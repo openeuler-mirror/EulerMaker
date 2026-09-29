@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-func parseFallback(t *testing.T, spec string) *SpecDepend {
+func parseExpandedText(t *testing.T, spec string) *SpecDepend {
 	t.Helper()
-	depend, err := Parse(spec, "demo.spec", "demo-repo", "x86_64", nil, EngineText)
+	depend, err := parseSpec(spec, "demo.spec", "demo-repo", nil)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -18,7 +18,7 @@ func parseFallback(t *testing.T, spec string) *SpecDepend {
 }
 
 func TestBasicSpec(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 # a comment
 Name: demo
 Version: 1.2
@@ -63,14 +63,14 @@ Provides: demo-lib = 1.0
 }
 
 func TestVersionJoinZeroEpochAndNoRelease(t *testing.T) {
-	depend := parseFallback(t, "Name: a\nVersion: 1.0\nEpoch: 0\n")
+	depend := parseExpandedText(t, "Name: a\nVersion: 1.0\nEpoch: 0\n")
 	if depend.Version != "1.0" {
 		t.Fatalf("Version = %q, want 1.0", depend.Version)
 	}
 }
 
 func TestTagCaseInsensitiveAndLastWins(t *testing.T) {
-	depend := parseFallback(t, "NAME: first\nname: second\nVERSION : 9.9\n")
+	depend := parseExpandedText(t, "NAME: first\nname: second\nVERSION : 9.9\n")
 	if depend.SpecName != "second" {
 		t.Fatalf("SpecName = %q, want second (last wins, case-insensitive)", depend.SpecName)
 	}
@@ -80,14 +80,14 @@ func TestTagCaseInsensitiveAndLastWins(t *testing.T) {
 }
 
 func TestSingleValueTakesFirstToken(t *testing.T) {
-	depend := parseFallback(t, "Name: demo extra words\nVersion: 1.0 # trailing\n")
+	depend := parseExpandedText(t, "Name: demo extra words\nVersion: 1.0 # trailing\n")
 	if depend.SpecName != "demo" || depend.Version != "1.0" {
 		t.Fatalf("SpecName/Version = %q/%q", depend.SpecName, depend.Version)
 	}
 }
 
 func TestMacroExpansion(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 %define upstream 1.2
 %define releaseBase %{upstream}
 Name: demo
@@ -111,31 +111,80 @@ Requires: literal %{undefined} bar
 	}
 }
 
+func TestExpandedTextUsesBuildPayloadMacros(t *testing.T) {
+	depend, err := parseSpec("Name: %{_vendor}openEuler-indexhtml\nVersion: %{version}\n", "indexhtml.spec", "indexhtml", []string{
+		"%_vendor test-",
+		"%define version 1.0",
+	})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if depend.SpecName != "test-openEuler-indexhtml" || depend.Version != "1.0" {
+		t.Fatalf("payload macros not expanded: %+v", depend)
+	}
+}
+
+func TestSpecMacroOverridesBuildPayloadMacro(t *testing.T) {
+	depend, err := parseSpec("%global _vendor spec-\nName: %{_vendor}openEuler-indexhtml\nVersion: 1.0\n", "indexhtml.spec", "indexhtml", []string{"%_vendor payload-"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if depend.SpecName != "spec-openEuler-indexhtml" {
+		t.Fatalf("spec macro did not override payload: %q", depend.SpecName)
+	}
+}
+
 func TestConditionalMacros(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 %define flag yes
 Name: %{?flag:demo}%{!flag:other}
 Version: 1.0
 Release: %{!flag:neg}2
 `)
-	if depend.SpecName != "yes" {
-		// %{?flag:demo} takes flag's value (yes), %{!flag:other} is empty.
-		t.Fatalf("SpecName = %q, want yes", depend.SpecName)
+	if depend.SpecName != "demo" {
+		// %{?flag:demo} expands its body, %{!flag:other} is empty.
+		t.Fatalf("SpecName = %q, want demo", depend.SpecName)
 	}
 	if depend.Release != "2" {
 		t.Fatalf("Release = %q, want 2", depend.Release)
 	}
 }
 
+func TestNestedVendorConditional(t *testing.T) {
+	const spec = `%global vendor %{?_vendor:%{_vendor}}%{!?_vendor:openEuler}
+Name: %{vendor}-indexhtml
+Version: 7
+`
+	for _, tc := range []struct {
+		name   string
+		macros []string
+		want   string
+	}{
+		{name: "vendor defined", macros: []string{"%_vendor openEuler"}, want: "openEuler-indexhtml"},
+		{name: "vendor absent", want: "openEuler-indexhtml"},
+		{name: "different vendor", macros: []string{"%_vendor Example"}, want: "Example-indexhtml"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			depend, err := parseSpec(spec, "generic-indexhtml.spec", "openEuler-indexhtml", tc.macros)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if depend.SpecName != tc.want {
+				t.Fatalf("SpecName = %q, want %q", depend.SpecName, tc.want)
+			}
+		})
+	}
+}
+
 func TestNegatedConditionalWithoutDefaultFails(t *testing.T) {
-	_, err := Parse("Name: %{!undefined}\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil, EngineText)
+	_, err := parseSpec("Name: %{!undefined}\nVersion: 1.0\n", "x.spec", "repo", nil)
 	if err == nil {
 		t.Fatal("expected parseFailed for %{!undefined} without default")
 	}
 }
 
 func TestRequirementTwoPhase(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 Name: demo
 Version: 1.0
 Requires: binutils => 2.31
@@ -174,7 +223,7 @@ func TestDanglingOperatorDoesNotLeakToNextLine(t *testing.T) {
 	// the version, e.g. "glibc => %{?ver}") must be discarded at end of line:
 	// the dependency keeps its bare constraint and the next line's first
 	// token is never consumed as its version.
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 Name: demo
 Version: 1.0
 Requires: glibc =>
@@ -192,14 +241,14 @@ Requires: openssl
 }
 
 func TestOperatorWithoutPrecedingTokenFails(t *testing.T) {
-	_, err := Parse("Name: demo\nVersion: 1.0\nRequires: >= 1.0\n", "x.spec", "repo", "x86_64", nil, EngineText)
+	_, err := parseSpec("Name: demo\nVersion: 1.0\nRequires: >= 1.0\n", "x.spec", "repo", nil)
 	if err == nil {
 		t.Fatal("expected parseFailed for leading operator token")
 	}
 }
 
 func TestSubpackageTagsNotMerged(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 Name: demo
 Version: 1.0
 Requires: maindep
@@ -244,7 +293,7 @@ Requires: afterlog
 }
 
 func TestDescriptionMultilineTermination(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 Name: demo
 %description
 Some free text with Name: not-a-tag-inside
@@ -258,7 +307,7 @@ Version: 1.0
 }
 
 func TestExclusiveArchNormalize(t *testing.T) {
-	depend := parseFallback(t, "Name: a\nVersion: 1.0\nExclusiveArch: x86 aarch64\nExcludeArch: aarch64\n")
+	depend := parseExpandedText(t, "Name: a\nVersion: 1.0\nExclusiveArch: x86 aarch64\nExcludeArch: aarch64\n")
 	want := []string{"x86", "x86_64"}
 	if !reflect.DeepEqual(depend.ExclusiveArch, want) {
 		t.Fatalf("ExclusiveArch = %v, want %v (x86 normalized, aarch64 excluded)", depend.ExclusiveArch, want)
@@ -269,14 +318,14 @@ func TestExclusiveArchFullyExcludedFails(t *testing.T) {
 	// 16.3 invariant "归一后列表恒非空": a whitelist fully excluded by
 	// excludeArch means no buildable architecture, and an empty list would
 	// invert archSupported's empty=allow-all semantics — parseFailed instead.
-	_, err := Parse("Name: demo\nVersion: 1.0\nExclusiveArch: x86_64\nExcludeArch: x86\n", "x.spec", "repo", "x86_64", nil, EngineText)
+	_, err := parseSpec("Name: demo\nVersion: 1.0\nExclusiveArch: x86_64\nExcludeArch: x86\n", "x.spec", "repo", nil)
 	if err == nil || !strings.Contains(err.Error(), "exclusiveArch") {
 		t.Fatalf("error = %v, want a parseFailed mentioning exclusiveArch", err)
 	}
 }
 
 func TestMacroLineFallbackDiscarded(t *testing.T) {
-	depend := parseFallback(t, `
+	depend := parseExpandedText(t, `
 Name: demo
 %prep
 %setup -q
@@ -291,25 +340,21 @@ Release: 2
 }
 
 func TestMissingNameOrVersionFails(t *testing.T) {
-	if _, err := Parse("Version: 1.0\n", "x.spec", "repo", "x86_64", nil, EngineText); err == nil {
+	if _, err := parseSpec("Version: 1.0\n", "x.spec", "repo", nil); err == nil {
 		t.Fatal("missing Name must fail")
 	}
-	if _, err := Parse("Name: demo\n", "x.spec", "repo", "x86_64", nil, EngineText); err == nil {
+	if _, err := parseSpec("Name: demo\n", "x.spec", "repo", nil); err == nil {
 		t.Fatal("missing Version must fail")
 	}
 }
 
-// stubRpmspec installs a fake rpmspec executable that records its argv and
-// replays the spec file content as stdout.
+// stubRpmspec installs a fake rpmspec executable that records its argv.
 func stubRpmspec(t *testing.T, stdout string) (argvFile *string) {
 	t.Helper()
 	dir := t.TempDir()
 	argvPath := filepath.Join(dir, "argv")
 	script := filepath.Join(dir, "rpmspec-stub")
-	content := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvPath + "\ncat \"$3\"\n"
-	if stdout != "" {
-		content = "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvPath + "\nprintf '%s' " + shellQuote(stdout) + "\n"
-	}
+	content := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvPath + "\nprintf '%s' " + shellQuote(stdout) + "\n"
 	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -323,10 +368,10 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
-func TestPrimaryPathUsedWhenStdoutNonEmpty(t *testing.T) {
+func TestRpmspecOutputUsed(t *testing.T) {
 	// The stub echoes back an expanded spec with macros already resolved.
 	argvFile := stubRpmspec(t, "Name: expanded\nVersion: 9.9\n")
-	depend, err := Parse("Name: %{would_not_expand}\nVersion: 0.1\n", "x.spec", "repo", "aarch64", []string{"%define foo bar"}, EngineRpmspec)
+	depend, err := Parse("Name: %{would_not_expand}\nVersion: 0.1\n", "x.spec", "repo", "aarch64", []string{"%define foo bar"})
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -343,30 +388,32 @@ func TestPrimaryPathUsedWhenStdoutNonEmpty(t *testing.T) {
 	}
 }
 
-func TestPrimaryPathEmptyStdoutFallsBack(t *testing.T) {
+func TestRpmspecEmptyOutputFails(t *testing.T) {
 	stubRpmspec(t, "")
-	depend, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil, EngineRpmspec)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if depend.SpecName != "raw" {
-		t.Fatalf("fallback not used: %+v", depend)
+	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil || !strings.Contains(err.Error(), "empty output") {
+		t.Fatalf("expected empty output error, got %v", err)
 	}
 }
 
-// TestTextEngineIgnoresRpmspec pins the security default: even with a working
-// rpmspec stub on PATH, the text engine never spawns a subprocess.
-func TestTextEngineIgnoresRpmspec(t *testing.T) {
-	argvFile := stubRpmspec(t, "Name: expanded\nVersion: 9.9\n")
-	depend, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil, EngineText)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
+func TestRpmspecMissingFails(t *testing.T) {
+	old := rpmspecCommand
+	rpmspecCommand = filepath.Join(t.TempDir(), "missing-rpmspec")
+	t.Cleanup(func() { rpmspecCommand = old })
+	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil {
+		t.Fatal("missing rpmspec must not fall back to raw spec")
 	}
-	if depend.SpecName != "raw" || depend.Version != "1.0" {
-		t.Fatalf("text engine result polluted: %+v", depend)
+}
+
+func TestRpmspecExitFailureDoesNotUseStdout(t *testing.T) {
+	old := rpmspecCommand
+	script := filepath.Join(t.TempDir(), "rpmspec-stub")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'Name: expanded\\nVersion: 9.9\\n'\necho failed >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(*argvFile); !os.IsNotExist(err) {
-		t.Fatal("text engine must not run rpmspec (argv file written)")
+	rpmspecCommand = script
+	t.Cleanup(func() { rpmspecCommand = old })
+	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("expected rpmspec exit error, got %v", err)
 	}
 }
 
@@ -377,7 +424,7 @@ func TestParseFailedDoesNotBlockSiblings(t *testing.T) {
 	}
 	var succeeded []string
 	for name, text := range specs {
-		if depend, err := Parse(text, name, "repo", "x86_64", nil, EngineText); err == nil {
+		if depend, err := parseSpec(text, name, "repo", nil); err == nil {
 			succeeded = append(succeeded, depend.SpecName)
 		}
 	}
@@ -399,7 +446,7 @@ func TestMacroExpansionBounded(t *testing.T) {
 		{"self reference exponential", "%define x %{x}%{x}\nName: %{x}\nVersion: 1.0\n"},
 	}
 	for _, tc := range cases {
-		if _, err := Parse(tc.spec, "x.spec", "repo", "x86_64", nil, EngineText); err == nil {
+		if _, err := parseSpec(tc.spec, "x.spec", "repo", nil); err == nil {
 			t.Fatalf("%s: expected bounded-expansion failure, got success", tc.name)
 		}
 	}

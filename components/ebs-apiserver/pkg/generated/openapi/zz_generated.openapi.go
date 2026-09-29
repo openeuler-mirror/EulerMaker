@@ -35,6 +35,8 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.DcgNodeState":                      schema_ebs_api_ebs_v1_DcgNodeState(ref),
 		"ebs-api/ebs/v1.GitRef":                            schema_ebs_api_ebs_v1_GitRef(ref),
 		"ebs-api/ebs/v1.Job":                               schema_ebs_api_ebs_v1_Job(ref),
+		"ebs-api/ebs/v1.JobBuildResult":                    schema_ebs_api_ebs_v1_JobBuildResult(ref),
+		"ebs-api/ebs/v1.JobInstallResult":                  schema_ebs_api_ebs_v1_JobInstallResult(ref),
 		"ebs-api/ebs/v1.JobList":                           schema_ebs_api_ebs_v1_JobList(ref),
 		"ebs-api/ebs/v1.JobSpec":                           schema_ebs_api_ebs_v1_JobSpec(ref),
 		"ebs-api/ebs/v1.JobStatus":                         schema_ebs_api_ebs_v1_JobStatus(ref),
@@ -941,6 +943,64 @@ func schema_ebs_api_ebs_v1_Job(ref common.ReferenceCallback) common.OpenAPIDefin
 	}
 }
 
+func schema_ebs_api_ebs_v1_JobBuildResult(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "JobBuildResult records the outcome of the build script, independently of artifact upload and the Job's overall lifecycle.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+				},
+				Required: []string{"status"},
+			},
+		},
+	}
+}
+
+func schema_ebs_api_ebs_v1_JobInstallResult(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "JobInstallResult records the post-build installability check. MissingDeps is populated only for a deterministic dependency failure.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"missingDeps": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.MissingDep"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"status"},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.MissingDep"},
+	}
+}
+
 func schema_ebs_api_ebs_v1_JobList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1098,6 +1158,16 @@ func schema_ebs_api_ebs_v1_JobStatus(ref common.ReferenceCallback) common.OpenAP
 							Format: "",
 						},
 					},
+					"build": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/ebs/v1.JobBuildResult"),
+						},
+					},
+					"install": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("ebs-api/ebs/v1.JobInstallResult"),
+						},
+					},
 					"runner": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -1132,7 +1202,7 @@ func schema_ebs_api_ebs_v1_JobStatus(ref common.ReferenceCallback) common.OpenAP
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"ebs-api/ebs/v1.JobBuildResult", "ebs-api/ebs/v1.JobInstallResult", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }
 

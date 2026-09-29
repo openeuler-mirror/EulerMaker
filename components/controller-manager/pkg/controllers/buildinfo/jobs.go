@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -828,7 +827,12 @@ func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bo
 	case ebsv1.JobPending, ebsv1.JobRunning:
 		ss.Build.Status = SpecBuildRunning
 	case ebsv1.JobSucceeded:
-		ss.Build.Status = SpecBuildSucceeded
+		if job.Status.Build != nil && job.Status.Build.Status == ebsv1.JobResultFailed {
+			ss.Build.Status = SpecBuildFailed
+			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" reported build failure")
+		} else {
+			ss.Build.Status = SpecBuildSucceeded
+		}
 	case ebsv1.JobFailed:
 		ss.Build.Status = SpecBuildFailed
 		if succeededPrior {
@@ -845,66 +849,33 @@ func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bo
 	return true
 }
 
-// installMessagePayload mirrors the runner's install-check JSON (7.4.7).
-type installMessagePayload struct {
-	MissingDeps map[string]installMissingDep `json:"missing_deps"`
-}
-
-type installMissingDep struct {
-	NeededBy        string            `json:"needed_by"`
-	VersionRequests map[string]string `json:"version_requests"`
-}
-
-// backfillInstall folds the Succeeded target Job's message into install
-// status (design 7.4.7 three branches): empty message or empty missing_deps
-// -> Succeeded; non-empty valid missing_deps -> Failed with idempotent
-// missingDeps merge and the Install condition; unparseable message -> no
-// rewrite.
+// backfillInstall copies the runner's structured install-check verdict.
+// A missing result is not evidence of installability.
 func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus, job *ebsv1.Job) {
-	message := strings.TrimSpace(job.Status.Message)
-	if message == "" {
-		ss.Install.Status = SpecBuildSucceeded
+	result := job.Status.Install
+	if result == nil {
+		ss.Install.Status = SpecBuildFailed
+		upsertCondition(&ss.Install.Conditions, ConditionInstall, ReasonInstallResultMissing, "job "+job.Name+" has no install-check result")
 		return
 	}
-	var payload installMessagePayload
-	if err := json.Unmarshal([]byte(message), &payload); err != nil {
-		c.logf(round.key, "InstallMessageParseFailed", "job %s message is not install-check JSON, install status kept: %v", job.Name, err)
+	if result.Status == ebsv1.JobResultSucceeded {
+		ss.Install.Status = SpecBuildSucceeded
+		ss.Install.MissingDeps = nil
+		removeCondition(&ss.Install.Conditions, ConditionInstall)
 		return
 	}
-	if len(payload.MissingDeps) == 0 {
-		ss.Install.Status = SpecBuildSucceeded
+	if result.Status != ebsv1.JobResultFailed {
+		ss.Install.Status = SpecBuildFailed
+		upsertCondition(&ss.Install.Conditions, ConditionInstall, ReasonInstallResultInvalid, "job "+job.Name+" has invalid install-check result")
 		return
 	}
 	ss.Install.Status = SpecBuildFailed
-	if ss.Install.MissingDeps == nil {
-		ss.Install.MissingDeps = map[string]ebsv1.MissingDep{}
-	}
-	names := make([]string, 0, len(payload.MissingDeps))
-	for name := range payload.MissingDeps {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if _, ok := ss.Install.MissingDeps[name]; ok {
-			continue // idempotent: existing entries are never overwritten
-		}
-		dep := payload.MissingDeps[name]
-		ss.Install.MissingDeps[name] = ebsv1.MissingDep{
-			NeededBy:        dep.NeededBy,
-			VersionRequests: normalizeVersionRequests(dep.VersionRequests),
+	ss.Install.MissingDeps = nil
+	if len(result.MissingDeps) > 0 {
+		ss.Install.MissingDeps = make(map[string]ebsv1.MissingDep, len(result.MissingDeps))
+		for name, dep := range result.MissingDeps {
+			ss.Install.MissingDeps[name] = dep
 		}
 	}
 	installCondition(ss, job.Name)
-}
-
-// normalizeVersionRequests maps the runner's uppercase operator keys onto
-// the VersionConst lowercase fields (design 7.4.7).
-func normalizeVersionRequests(requests map[string]string) ebsv1.VersionConst {
-	return ebsv1.VersionConst{
-		GT: requests["GT"],
-		GE: requests["GE"],
-		EQ: requests["EQ"],
-		LE: requests["LE"],
-		LT: requests["LT"],
-	}
 }
