@@ -1,6 +1,8 @@
 package specparse
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -414,6 +416,82 @@ func TestRpmspecExitFailureDoesNotUseStdout(t *testing.T) {
 	t.Cleanup(func() { rpmspecCommand = old })
 	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil || !strings.Contains(err.Error(), "failed") {
 		t.Fatalf("expected rpmspec exit error, got %v", err)
+	}
+}
+
+func TestParseFetchesMissingSourceAndRetries(t *testing.T) {
+	old := rpmspecCommand
+	script := filepath.Join(t.TempDir(), "rpmspec-stub")
+	stub := `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in "_sourcedir "*) source_dir=${arg#_sourcedir };; esac
+done
+if [ ! -f "$source_dir/LanguageList" ]; then
+  echo "cannot open file '$source_dir/LanguageList' (No such file or directory)" >&2
+  exit 1
+fi
+printf 'Name: demo\nVersion: 1\n'
+`
+	if err := os.WriteFile(script, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rpmspecCommand = script
+	t.Cleanup(func() { rpmspecCommand = old })
+	calls := 0
+	result, err := ParseWithSources("Name: demo\nVersion: 1\n", "demo.spec", "demo", "x86_64", nil, func(name string) (string, error) {
+		calls++
+		if name != "LanguageList" {
+			t.Fatalf("unexpected source %q", name)
+		}
+		return "en_US", nil
+	})
+	if err != nil || result.SpecName != "demo" || calls != 1 {
+		t.Fatalf("result=%+v err=%v calls=%d", result, err, calls)
+	}
+}
+
+func TestParseDoesNotFetchOutsideIsolatedSources(t *testing.T) {
+	old := rpmspecCommand
+	script := filepath.Join(t.TempDir(), "rpmspec-stub")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'cannot open file /etc/passwd (No such file or directory)' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rpmspecCommand = script
+	t.Cleanup(func() { rpmspecCommand = old })
+	_, err := ParseWithSources("Name: demo\nVersion: 1\n", "demo.spec", "demo", "x86_64", nil, func(name string) (string, error) {
+		t.Fatalf("unexpected fetch %q", name)
+		return "", nil
+	})
+	if err == nil {
+		t.Fatal("expected rpmspec failure")
+	}
+}
+
+func TestParseSourceFetchErrorIsTyped(t *testing.T) {
+	old := rpmspecCommand
+	script := filepath.Join(t.TempDir(), "rpmspec-stub")
+	stub := `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in "_sourcedir "*) source_dir=${arg#_sourcedir };; esac
+done
+echo "Unable to open $source_dir/grub.macros: No such file or directory" >&2
+exit 1
+`
+	if err := os.WriteFile(script, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rpmspecCommand = script
+	t.Cleanup(func() { rpmspecCommand = old })
+	want := fmt.Errorf("git unavailable")
+	_, err := ParseWithSources("Name: demo\nVersion: 1\n", "demo.spec", "demo", "x86_64", nil, func(name string) (string, error) {
+		if name != "grub.macros" {
+			t.Fatalf("unexpected source %q", name)
+		}
+		return "", want
+	})
+	var fetchErr *SourceFetchError
+	if !errors.As(err, &fetchErr) || !errors.Is(err, want) {
+		t.Fatalf("expected wrapped source fetch error, got %v", err)
 	}
 }
 
