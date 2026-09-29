@@ -29,6 +29,7 @@ func TestResourceMethodBoundary(t *testing.T) {
 		{"rpmrepo status read", policy.Route{Resource: "rpmrepos", Project: "p", Name: "r", Subresource: "status", Method: http.MethodGet}, true},
 		{"rpmrepo status update", policy.Route{Resource: "rpmrepos", Project: "p", Name: "r", Subresource: "status", Method: http.MethodPatch}, false},
 		{"rpmrepo head", policy.Route{Resource: "rpmrepos", Project: "p", Name: "r", Method: http.MethodHead}, false},
+		{"script head", policy.Route{Resource: "scripts", Name: "s", Method: http.MethodHead}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -46,6 +47,7 @@ func TestRunnerJobsQueryRejectsCallerFieldSelector(t *testing.T) {
 	}{
 		{url.Values{"watch": {"true"}, "resourceVersion": {"7"}, "timeoutSeconds": {"300"}}, true},
 		{url.Values{"limit": {"100"}, "continue": {"next"}}, true},
+		{url.Values{"includeFields": {"metadata.name,status.phase"}, "excludeFields": {"status.stage"}}, true},
 		{url.Values{"fieldSelector": {"status.runner=other"}}, false},
 		{url.Values{"watch": {"true", "false"}}, false},
 		{url.Values{"timeoutSeconds": {"301"}}, false},

@@ -204,6 +204,9 @@ func (a *Handler) limitWriteBody(c *gin.Context) bool {
 
 func allowedResourceMethod(route policy.Route) bool {
 	method := route.Method
+	if route.Resource == "scripts" && method == http.MethodHead {
+		return false
+	}
 	if policy.IsReadOnlyProjectResource(route.Resource) {
 		return method == http.MethodGet && (route.Subresource == "" || (route.Subresource == "status" && route.Name != ""))
 	}
@@ -227,6 +230,12 @@ func allowedResourceMethod(route policy.Route) bool {
 func allowedResourceVerbs(route policy.Route) string {
 	if policy.IsReadOnlyProjectResource(route.Resource) {
 		return "GET"
+	}
+	if route.Resource == "scripts" {
+		if route.Name == "" {
+			return "GET, POST"
+		}
+		return "GET, PUT, PATCH, DELETE"
 	}
 	switch route.Subresource {
 	case "abort":
@@ -274,7 +283,7 @@ func validRunnerJobsQuery(query url.Values) bool {
 			if err != nil || limit < 1 || limit > 500 {
 				return false
 			}
-		case "continue", "labelSelector":
+		case "continue", "labelSelector", "includeFields", "excludeFields":
 			if len(values) != 1 {
 				return false
 			}

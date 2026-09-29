@@ -89,9 +89,17 @@
     <section v-else-if="activeTab === 'builds'" id="project-panel-builds" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-builds">
       <section class="build-history-metrics" :aria-label="t('project.buildHistory')">
         <article class="metric-card"><div class="metric-icon violet"><Operation /></div><div><span>{{ t("project.builds") }}</span><strong>{{ resourcesLoading || buildTotalCount === null ? t("common.emptyValue") : buildTotalCount }}</strong><small>{{ t("project.buildsHint") }}</small></div></article>
-        <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong>{{ resourcesLoading || nonTerminalJobCount === null ? t("common.emptyValue") : nonTerminalJobCount }}</strong><small>{{ t("project.jobsHint") }}</small></div></article>
+        <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong><button class="metric-value-button" type="button" :disabled="resourcesLoading || nonTerminalJobCount === null" :aria-label="t(showRunningJobs ? 'project.hideRunningJobs' : 'project.showRunningJobs')" :aria-expanded="showRunningJobs" aria-controls="project-running-jobs" @click="toggleRunningJobs">{{ resourcesLoading || nonTerminalJobCount === null ? t("common.emptyValue") : nonTerminalJobCount }}</button></strong><small>{{ t("project.jobsHint") }}</small></div></article>
         <div v-if="resourcesError" class="inline-error compact-error"><WarningFilled /><span>{{ resourcesError }}</span></div>
       </section>
+      <article v-if="showRunningJobs" id="project-running-jobs" class="content-panel running-jobs-panel">
+        <div class="section-heading"><h2>{{ t("project.jobsHint") }}</h2><button class="package-detail-close" type="button" :aria-label="t('project.hideRunningJobs')" @click="showRunningJobs = false"><Close /></button></div>
+        <p v-if="!nonTerminalJobs.length" class="config-empty">{{ t("project.noRunningJobs") }}</p>
+        <template v-else>
+          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th>{{ t("project.builds") }}</th><th>Spec</th><th>{{ t("jobControl.phase") }}</th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/spec-name"] || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td></tr></tbody></table></div>
+          <div v-if="runningJobsTotalPages > 1" class="table-footer"><nav class="pagination-row" :aria-label="t('common.pagination')"><button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="runningJobsPage === 1" @click="runningJobsPage -= 1"><ArrowLeft /></button><span class="page-button active" aria-current="page">{{ runningJobsPage }} / {{ runningJobsTotalPages }}</span><button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="runningJobsPage === runningJobsTotalPages" @click="runningJobsPage += 1"><ArrowRight /></button></nav></div>
+        </template>
+      </article>
       <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('project.loadingResources')"><span v-for="item in 6" :key="item"></span></div>
       <div v-else-if="buildLoadFailed" class="inline-error compact-error"><WarningFilled /><span>{{ t("errors.loadBuilds") }}</span></div>
       <EmptyState v-else-if="!builds.length && !hideSingleBuilds" :title="t('project.emptyBuilds')" :description="t('project.emptyBuildsHint')" />
@@ -376,6 +384,12 @@ const buildPageLoading = ref(false);
 const buildPageErrorKey = ref("");
 let buildLoadSequence = 0;
 const nonTerminalJobCount = ref<number | null>(null);
+const nonTerminalJobs = ref<Job[]>([]);
+const showRunningJobs = ref(false);
+const runningJobsPage = ref(1);
+const runningJobsPageSize = 20;
+const runningJobsTotalPages = computed(() => Math.max(1, Math.ceil(nonTerminalJobs.value.length / runningJobsPageSize)));
+const visibleRunningJobs = computed(() => nonTerminalJobs.value.slice((runningJobsPage.value - 1) * runningJobsPageSize, runningJobsPage.value * runningJobsPageSize));
 const loadingProject = ref(true);
 const resourcesLoading = ref(true);
 const projectErrorKey = ref("");
@@ -590,9 +604,16 @@ async function loadResources(): Promise<void> {
   const base = `/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`;
   const results = await Promise.allSettled([
     loadBuildPage("", 1),
-    countNonTerminalJobs(base),
+    listNonTerminalJobs(base),
   ]);
-  if (results[1].status === "fulfilled") nonTerminalJobCount.value = results[1].value;
+  if (results[1].status === "fulfilled") {
+    nonTerminalJobs.value = results[1].value;
+    nonTerminalJobCount.value = results[1].value.length;
+    runningJobsPage.value = Math.min(runningJobsPage.value, runningJobsTotalPages.value);
+  } else {
+    nonTerminalJobs.value = [];
+    showRunningJobs.value = false;
+  }
   resourceFailureCount.value = Number(results[0].status === "rejected" || !results[0].value) + Number(results[1].status === "rejected");
   resourcesLoading.value = false;
 }
@@ -660,21 +681,27 @@ function goToBuildPage(page: number): void {
   void loadBuildPage(token, page);
 }
 
-async function countNonTerminalJobs(base: string): Promise<number> {
-  const countPhase = async (phase: "Pending" | "Running"): Promise<number> => {
-    let total = 0;
+async function listNonTerminalJobs(base: string): Promise<Job[]> {
+  const listPhase = async (phase: "Pending" | "Running"): Promise<Job[]> => {
+    const jobs: Job[] = [];
     let cursor = "";
     do {
       const query = new URLSearchParams({ limit: "100", fieldSelector: `status.phase=${phase}` });
       if (cursor) query.set("continue", cursor);
       const page = await list<Job>(`${base}/jobs?${query}`);
-      total += page.items.length;
+      jobs.push(...page.items);
       cursor = page.next;
     } while (cursor);
-    return total;
+    return jobs;
   };
-  const [pending, running] = await Promise.all([countPhase("Pending"), countPhase("Running")]);
-  return pending + running;
+  const [pending, running] = await Promise.all([listPhase("Pending"), listPhase("Running")]);
+  const startedAt = (job: Job) => Date.parse(job.status?.startTime || job.metadata?.creationTimestamp || "") || 0;
+  return [...pending, ...running].sort((left, right) => startedAt(right) - startedAt(left));
+}
+
+function toggleRunningJobs(): void {
+  showRunningJobs.value = !showRunningJobs.value;
+  if (showRunningJobs.value) runningJobsPage.value = 1;
 }
 
 function selectTab(tab: ProjectTab): void {

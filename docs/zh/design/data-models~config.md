@@ -39,7 +39,7 @@ PUT      /apis/ebs/v1/configs/{name}
 PATCH    /apis/ebs/v1/configs/{name}
 ```
 
-非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。两个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
+上述 HEAD 由 Gateway 内部读取 Config 后响应；apiserver 通用资源路由本身不注册 HEAD。非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。两个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
 
 apiserver 仅校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限，不解析目标 OS、镜像或资源数量。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设 `Public` 与 `OpsOnly`。内容错误可能成功保存：Build 创建方、BuildInfo Controller 和前端必须在使用前解析并按第 2、3 章校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
 

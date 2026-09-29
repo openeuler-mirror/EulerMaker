@@ -32,13 +32,13 @@ GET/POST     /apis/ebs/v1/scripts
 GET/PUT/PATCH/DELETE /apis/ebs/v1/scripts/{name}
 ```
 
-删除请求必须携带 `DeleteOptions.preconditions.uid` 和 `preconditions.resourceVersion`，对象已变化时返回 409，避免误删同名重建或更新后的脚本。apiserver 不按脚本名称限制删除；前端不提供默认 `rpmbuild` 的删除入口。删除不会检查历史 Job 引用，引用该脚本且尚未成功拉取内容的 Job 可能执行失败。
+删除请求可携带 `DeleteOptions.preconditions.uid` 和 `preconditions.resourceVersion`，对象已变化时返回 409，避免误删同名重建或更新后的脚本；不携带前置条件也允许删除。apiserver 不按脚本名称限制删除；前端不提供默认 `rpmbuild` 的删除入口。删除不会检查历史 Job 引用，引用该脚本且尚未成功拉取内容的 Job 可能执行失败。
 
 提供集群级列表，不注册 `/status`。不自动回收脚本；前端删除操作由运维人员显式确认，且不会阻止已引用该脚本的 Job 后续读取失败。
 
 apiserver 校验：
 
-- `content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限；不规范化换行或尾部空白。apiserver 保留 2 MiB 请求体上限，经 Gateway 访问还受其请求体限制。
+- `content` 为非空 UTF-8 文本，不允许 NUL，不设独立正文大小上限；不规范化换行或尾部空白。apiserver 使用通用请求体大小限制（当前默认 3 MiB），经 Gateway 访问还受其请求体限制。
 - `content` 第一行必须以 `#!` 开头并指定非空的绝对解释器路径，例如 `#!/bin/bash`；解释器及其依赖由构建镜像提供。
 - PUT/PATCH 允许更新脚本正文和允许修改的 metadata，更新时遵循现有 `resourceVersion` 冲突检查。
 - 对象名称必填，使用 DNS subdomain 格式，集群内唯一；不允许设置 `metadata.namespace` 或 `generateName`。
