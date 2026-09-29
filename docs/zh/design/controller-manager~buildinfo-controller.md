@@ -205,10 +205,10 @@ BuildInfo 与父 Build 同名、namespace 即 Project。UID 不编码在字符�
 
 ### 5.2 BuildInfo 事件（PollingSource）
 
-- `Add` / `Update`：先撤销 dcg 缓存 tombstone（若存在，见 5.4），再按 `phase ∈ {Pending, Processing}` 纯内存过滤入队；终态（`Completed`）与 `Aborted` 不入队（G-05）；不比较新旧 `resourceVersion`——PollingSource 每轮扫描都会产生 Update，同一 resourceVersion 的 Update 也必须入队，作为丢事件、慢速重试和外部依赖恢复后的 resync 兜底；工作队列负责合并同一 key。
+- `Add` / `Update`：先撤销 dcg 缓存 tombstone（若存在，见 5.4），再将服务端过滤后的对象入队；终态（`Completed`）与 `Aborted` 不在 List 结果中（G-05），worker GET 最新对象后仍检查 phase；不比较新旧 `resourceVersion`——PollingSource 每轮扫描都会产生 Update，同一 resourceVersion 的 Update 也必须入队，作为丢事件、慢速重试和外部依赖恢复后的 resync 兜底；工作队列负责合并同一 key。
 - `Delete`：仅对 key 打 dcg 缓存 tombstone（宽限期后由 sweeper 清扫，见 5.4），不入队、不处理删除；过滤结果中消失不等于对象被物理删除，删除中的对象由 reconcile 入口 re-get 404 兜底（E-10）。
 
-事件处理器只做类型检查和入队，零 apiserver I/O、不执行状态机。服务端不使用 fieldSelector：buildinfos 全局 list 仅分页拉取，过滤在 Handler 内存完成（ebs-apiserver 的 fieldSelector 能力仅声明于 build，见十七章）。
+事件处理器只做类型检查、缓存 tombstone 管理和入队，零 apiserver I/O、不执行状态机。PollingSource 的全局 List 使用 `status.phase!=Completed,status.phase!=Aborted` 排除终态，并以 `includeFields=metadata` 获取入队所需字段；缺少 phase 的对象也会进入队列，但 worker GET 后会按当前 phase 跳过。终态转换导致对象离开过滤结果时产生的 Delete 只执行上述 tombstone 处理，不代表物理删除。
 
 ### 5.3 周期性重同步
 

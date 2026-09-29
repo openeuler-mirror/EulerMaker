@@ -112,24 +112,29 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 }
 
 func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, opts metav1.ListOptions) (source.ListPage, error) {
-	return c.listPage(ctx, gvr, "", opts)
+	// Polling sources only need the fields used to enqueue resource keys.
+	return c.listPage(ctx, gvr, "", opts, source.PollingIncludeFields(gvr))
 }
 
 func (c *Client) ListProjectPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
 	if err := validateProjectScopedResource(gvr, project); err != nil {
 		return source.ListPage{}, err
 	}
-	return c.listPage(ctx, gvr, project, opts)
+	return c.listPage(ctx, gvr, project, opts, "")
 }
 
-func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
+func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions, includeFields string) (source.ListPage, error) {
 	list, err := newList(gvr)
 	if err != nil {
 		return source.ListPage{}, err
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if err := c.rest.Get().AbsPath(resourcePath(gvr, project, "", "")).VersionedParams(&opts, metav1.ParameterCodec).Do(requestCtx).Into(list); err != nil {
+	request := c.rest.Get().AbsPath(resourcePath(gvr, project, "", "")).VersionedParams(&opts, metav1.ParameterCodec)
+	if includeFields != "" {
+		request.Param("includeFields", includeFields)
+	}
+	if err := request.Do(requestCtx).Into(list); err != nil {
 		return source.ListPage{}, err
 	}
 	return listPage(list)

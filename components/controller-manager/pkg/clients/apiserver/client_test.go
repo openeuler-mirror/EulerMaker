@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 
+	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -233,6 +234,37 @@ func TestListProjectPageRejectsClusterScopedResource(t *testing.T) {
 	_, err := (&Client{}).ListProjectPage(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}, "project", metav1.ListOptions{})
 	if err == nil {
 		t.Fatal("project-scoped Runner List was accepted")
+	}
+}
+
+func TestListPageIncludesOnlyEventFields(t *testing.T) {
+	response := &ebsv1.BuildInfoList{
+		TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "BuildInfoList"},
+		ListMeta: metav1.ListMeta{Continue: "next"},
+		Items: []ebsv1.BuildInfo{{
+			ObjectMeta: metav1.ObjectMeta{Name: "buildinfo-a", Namespace: "project", UID: "uid-a", ResourceVersion: "v1:3:1"},
+		}},
+	}
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/apis/ebs/v1/buildinfos" || r.URL.Query().Get("includeFields") != "metadata" || r.URL.Query().Get("continue") != "previous" || r.URL.Query().Get("limit") != "25" {
+			return nil, fmt.Errorf("unexpected polling request: %s", r.URL.String())
+		}
+		return jsonResponse(r, body), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ListPage(context.Background(), source.BuildInfosGVR, metav1.ListOptions{Continue: "previous", Limit: 25})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Continue != "next" || len(page.Items) != 1 || page.Items[0].(*ebsv1.BuildInfo).Name != "buildinfo-a" {
+		t.Fatalf("polling page = %#v", page)
 	}
 }
 

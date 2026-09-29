@@ -152,6 +152,25 @@ func TestPollingSourcePassesSelectorsToEveryPage(t *testing.T) {
 	}
 }
 
+func TestPollingIncludeFields(t *testing.T) {
+	tests := []struct {
+		gvr  schema.GroupVersionResource
+		want string
+	}{
+		{BuildsGVR, "metadata"},
+		{RpmReposGVR, "metadata"},
+		{SnapshotsGVR, "metadata"},
+		{BuildInfosGVR, "metadata"},
+		{ProjectsGVR, ""},
+		{JobsGVR, ""},
+	}
+	for _, tt := range tests {
+		if got := PollingIncludeFields(tt.gvr); got != tt.want {
+			t.Errorf("PollingIncludeFields(%s) = %q, want %q", tt.gvr, got, tt.want)
+		}
+	}
+}
+
 func TestPollingFactorySharesOnlyIdenticallyFilteredSources(t *testing.T) {
 	f := NewPollingSourceFactory(func(context.Context, schema.GroupVersionResource, metav1.ListOptions) (ListPage, error) {
 		return ListPage{}, nil

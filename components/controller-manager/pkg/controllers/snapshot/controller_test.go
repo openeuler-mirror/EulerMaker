@@ -223,9 +223,29 @@ func TestPollingUpdateWithSameResourceVersionEnqueues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.handler.OnUpdate(snapshot.DeepCopy(), snapshot.DeepCopy())
+	projected := snapshot.DeepCopy()
+	projected.Status = ebsv1.SnapshotStatus{} // includeFields=metadata omits phase.
+	s.handler.OnUpdate(projected.DeepCopy(), projected)
 	if c.Queue().Len() != 1 {
 		t.Fatalf("queue length=%d, want 1", c.Queue().Len())
+	}
+}
+
+func TestPollingDeletedSnapshotIsNotEnqueued(t *testing.T) {
+	snapshot, build := baseObjects(nil)
+	api := &fakeClient{snapshot: snapshot, build: build}
+	s := &fakeSource{}
+	c, err := New(s, api, &fakeGitClient{}, clock.RealClock{}, Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := snapshot.DeepCopy()
+	projected.Status = ebsv1.SnapshotStatus{}
+	now := metav1.Now()
+	projected.DeletionTimestamp = &now
+	s.handler.OnAdd(projected)
+	if c.Queue().Len() != 0 {
+		t.Fatalf("deleted Snapshot queued, length=%d", c.Queue().Len())
 	}
 }
 
