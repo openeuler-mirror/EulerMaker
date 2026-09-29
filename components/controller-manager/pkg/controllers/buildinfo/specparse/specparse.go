@@ -48,10 +48,36 @@ var rpmspecCommand = "rpmspec"
 // rpmspecTimeout bounds one rpmspec subprocess run.
 var rpmspecTimeout = 30 * time.Second
 
+const (
+	maxSourceFiles                = 3
+	maxSourceBytes                = 1 << 20
+	maxConcurrentRpmspecProcesses = 20
+)
+
+var sourceFileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+
+// Bound rpmspec subprocesses across all concurrent BuildInfo reconciles.
+var rpmspecProcessSlots = make(chan struct{}, maxConcurrentRpmspecProcesses)
+
+// SourceFetchError preserves the Git Server error classification for callers.
+type SourceFetchError struct {
+	Name string
+	Err  error
+}
+
+func (e *SourceFetchError) Error() string { return fmt.Sprintf("fetch source %s: %v", e.Name, e.Err) }
+func (e *SourceFetchError) Unwrap() error { return e.Err }
+
 // Parse expands one *.spec file using rpmspec and parses the result. arch is
 // the --target value; macros are buildPayload.macros lines passed to --load.
 func Parse(specText, specFileName, repoName, arch string, macros []string) (*SpecDepend, error) {
-	text, err := expandWithRpmspec(specText, arch, macros)
+	return ParseWithSources(specText, specFileName, repoName, arch, macros, nil)
+}
+
+// ParseWithSources may fetch a bounded number of missing, root-level text
+// files into an isolated SOURCES directory before retrying rpmspec.
+func ParseWithSources(specText, specFileName, repoName, arch string, macros []string, fetch func(string) (string, error)) (*SpecDepend, error) {
+	text, err := expandWithSources(specText, arch, macros, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("rpmspec %s: %w", specFileName, err)
 	}
@@ -61,6 +87,10 @@ func Parse(specText, specFileName, repoName, arch string, macros []string) (*Spe
 // expandWithRpmspec returns an error on startup, execution, timeout or empty
 // output instead of silently parsing the unexpanded input.
 func expandWithRpmspec(specText, arch string, macros []string) (string, error) {
+	return expandWithSources(specText, arch, macros, nil)
+}
+
+func expandWithSources(specText, arch string, macros []string, fetch func(string) (string, error)) (string, error) {
 	if _, err := exec.LookPath(rpmspecCommand); err != nil {
 		return "", err
 	}
@@ -69,6 +99,10 @@ func expandWithRpmspec(specText, arch string, macros []string) (string, error) {
 		return "", err
 	}
 	defer os.RemoveAll(dir)
+	sourceDir := filepath.Join(dir, "SOURCES")
+	if err := os.Mkdir(sourceDir, 0o700); err != nil {
+		return "", err
+	}
 	specPath := filepath.Join(dir, "input.spec")
 	if err := os.WriteFile(specPath, []byte(specText), 0o644); err != nil {
 		return "", err
@@ -85,24 +119,77 @@ func expandWithRpmspec(specText, arch string, macros []string) (string, error) {
 	if err := os.WriteFile(macroPath, []byte(macroContent.String()), 0o644); err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), rpmspecTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, rpmspecCommand, "--target="+arch, "-P", specPath, "--load="+macroPath)
-	out, err := cmd.Output()
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
+	loaded := make(map[string]struct{})
+	for attempt := 0; attempt <= maxSourceFiles; attempt++ {
+		rpmspecProcessSlots <- struct{}{}
+		ctx, cancel := context.WithTimeout(context.Background(), rpmspecTimeout)
+		cmd := exec.CommandContext(ctx, rpmspecCommand, "--target="+arch, "-P", specPath, "--load="+macroPath, "--define", "_sourcedir "+sourceDir)
+		out, runErr := cmd.Output()
+		ctxErr := ctx.Err()
+		cancel()
+		<-rpmspecProcessSlots
+		if ctxErr != nil {
+			return "", ctxErr
+		}
+		if runErr == nil {
+			if strings.TrimSpace(string(out)) == "" {
+				return "", errors.New("empty output")
+			}
+			return string(out), nil
 		}
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(exitErr.Stderr)))
+		if !errors.As(runErr, &exitErr) {
+			return "", runErr
 		}
-		return "", err
+		stderr := strings.TrimSpace(string(exitErr.Stderr))
+		name := missingSourceName(stderr, sourceDir)
+		if fetch == nil || name == "" || attempt == maxSourceFiles {
+			return "", fmt.Errorf("%w: %s", runErr, stderr)
+		}
+		if _, exists := loaded[name]; exists {
+			return "", fmt.Errorf("%w: %s", runErr, stderr)
+		}
+		content, fetchErr := fetch(name)
+		if fetchErr != nil {
+			if errors.Is(fetchErr, os.ErrNotExist) {
+				return "", fmt.Errorf("%w: %s", runErr, stderr)
+			}
+			return "", &SourceFetchError{Name: name, Err: fetchErr}
+		}
+		if len(content) > maxSourceBytes || strings.ContainsRune(content, '\x00') {
+			return "", fmt.Errorf("source %s exceeds the text-file limit", name)
+		}
+		if err := os.WriteFile(filepath.Join(sourceDir, name), []byte(content), 0o600); err != nil {
+			return "", err
+		}
+		loaded[name] = struct{}{}
 	}
-	if strings.TrimSpace(string(out)) == "" {
-		return "", errors.New("empty output")
+	return "", errors.New("source retry limit exceeded")
+}
+
+func missingSourceName(stderr, sourceDir string) string {
+	prefix := sourceDir + string(os.PathSeparator)
+	for _, line := range strings.Split(stderr, "\n") {
+		if !strings.Contains(line, "No such file or directory") {
+			continue
+		}
+		index := strings.Index(line, prefix)
+		if index < 0 {
+			continue
+		}
+		rest := line[index+len(prefix):]
+		parts := strings.FieldsFunc(rest, func(r rune) bool {
+			return r == '\'' || r == '"' || r == ':' || r == ')' || r == '(' || r == ' ' || r == '\t'
+		})
+		if len(parts) == 0 {
+			continue
+		}
+		name := parts[0]
+		if sourceFileNamePattern.MatchString(name) && name != "." && name != ".." {
+			return name
+		}
 	}
-	return string(out), nil
+	return ""
 }
 
 // specModel accumulates the spec-level attributes during line parsing.

@@ -10,8 +10,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	yaml "gopkg.in/yaml.v2"
 
@@ -52,6 +54,21 @@ type specAssembly struct {
 	// failedRepos records deterministic package-level failures independently
 	// of conditions, whose messages are not a reliable source of repo names.
 	failedRepos map[string]struct{}
+}
+
+const maxConcurrentRepoParses = 20
+
+type repoParseInput struct {
+	name      string
+	originURL string
+	status    ebsv1.PackageRepoStatus
+}
+
+type repoParseResult struct {
+	specs         map[string]specparse.SpecDepend
+	parseFailures []string
+	failedRepos   map[string]struct{}
+	ok            bool
 }
 
 func (a *specAssembly) markFailedRepo(name string) {
@@ -131,6 +148,7 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 	macros := payloadMacros(round.current.Spec.BuildPayload)
 	merged := map[string]specparse.SpecDepend{}
 	var parseFailures, commitMissing []string
+	var readyRepos []repoParseInput
 
 	for _, repo := range repos {
 		originURL, declared := originURLs[repo]
@@ -169,14 +187,44 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 			commitMissing = append(commitMissing, repo+" (origin URL missing from packageRepos)")
 			continue
 		}
-		specs, repoOK := c.fetchRepoSpecs(ctx, round, repo, originURL, entry, arch, macros, asm, &parseFailures)
-		if !repoOK {
+		readyRepos = append(readyRepos, repoParseInput{name: repo, originURL: originURL, status: entry})
+	}
+
+	results := make([]repoParseResult, len(readyRepos))
+	indices := make(chan int)
+	var group sync.WaitGroup
+	for worker := 0; worker < min(len(readyRepos), maxConcurrentRepoParses); worker++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for index := range indices {
+				input := readyRepos[index]
+				local := &specAssembly{}
+				var failures []string
+				specs, ok := c.fetchRepoSpecs(ctx, round, input.name, input.originURL, input.status, arch, macros, local, &failures)
+				results[index] = repoParseResult{specs: specs, parseFailures: failures, failedRepos: local.failedRepos, ok: ok}
+			}
+		}()
+	}
+	for index := range readyRepos {
+		indices <- index
+	}
+	close(indices)
+	group.Wait()
+
+	for index, input := range readyRepos {
+		result := results[index]
+		parseFailures = append(parseFailures, result.parseFailures...)
+		for failed := range result.failedRepos {
+			asm.markFailedRepo(failed)
+		}
+		if !result.ok {
 			asm.incomplete = true
 			continue
 		}
-		for name, depend := range specs {
+		for name, depend := range result.specs {
 			if _, clash := merged[name]; clash {
-				c.logf(round.key, "SpecNameClash", "spec %s produced by both %s and %s; keeping %s", name, merged[name].RepoName, repo, repo)
+				c.logf(round.key, "SpecNameClash", "spec %s produced by both %s and %s; keeping %s", name, merged[name].RepoName, input.name, input.name)
 			}
 			merged[name] = depend
 		}
@@ -270,47 +318,51 @@ func (c *Controller) enumerateRepos(round *reconcileRound, snapshot *ebsv1.Snaps
 // repository (design 7.2.2 spec 下载解析). A transient failure anywhere in the
 // repo drops the whole repo from this round (ok=false); deterministic
 // failures skip per spec (or the whole repo on an invalid commitId) and are
-// recorded as degraded conditions. Parses run outside any lock.
+// recorded as degraded conditions. Specs within one repository are sequential;
+// distinct repositories are processed by the bounded pool above.
+
+type parsedRepoSpec struct {
+	depend     *specparse.SpecDepend
+	err        error
+	gitFailure bool
+}
+
 func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, repo, originURL string, entry ebsv1.PackageRepoStatus, arch string, macros []string, asm *specAssembly, parseFailures *[]string) (map[string]specparse.SpecDepend, bool) {
 	listing, err := c.gitServer.ExecCommand(ctx, originURL, "git-ls-tree --name-only "+entry.CommitID)
 	if err != nil {
 		return nil, c.handleGitFailure(round, repo, "", asm, parseFailures, err)
 	}
 	var files []string
+	rootFiles := make(map[string]struct{})
 	for _, line := range strings.Split(listing, "\n") {
 		line = strings.TrimSpace(line)
 		// Root-level direct entries only, no subdirectories (7.2.2).
-		if line == "" || strings.Contains(line, "/") || !strings.HasSuffix(line, ".spec") {
+		if line == "" || strings.Contains(line, "/") {
 			continue
 		}
-		files = append(files, line)
+		rootFiles[line] = struct{}{}
+		if strings.HasSuffix(line, ".spec") {
+			files = append(files, line)
+		}
 	}
 	sort.Strings(files)
 
 	specs := map[string]specparse.SpecDepend{}
 	for _, file := range files {
-		content, hit := c.specFiles.Get(entry.CommitID, file)
-		if hit {
-			specFileCacheHits.Inc()
-		} else {
-			content, err = c.gitServer.ExecCommand(ctx, originURL, "git-show "+entry.CommitID+":"+file)
-			if err != nil {
-				if !c.handleGitFailure(round, repo, file, asm, parseFailures, err) {
+		result := c.parseRepoSpec(ctx, file, originURL, entry.CommitID, repo, arch, macros, rootFiles)
+		if result.err != nil {
+			if result.gitFailure {
+				if !c.handleGitFailure(round, repo, file, asm, parseFailures, result.err) {
 					return nil, false
 				}
 				continue
 			}
-			// Write-through before parsing: the raw content stays valid for
-			// the same commit even when parsing fails (15.11).
-			c.specFiles.Add(entry.CommitID, file, content)
-		}
-		depend, parseErr := specparse.Parse(content, file, repo, arch, macros)
-		if parseErr != nil {
 			asm.markFailedRepo(repo)
-			item := fmt.Sprintf("%s/%s (%v)", repo, file, parseErr)
+			item := fmt.Sprintf("%s/%s (%v)", repo, file, result.err)
 			*parseFailures = append(*parseFailures, item)
 			continue
 		}
+		depend := result.depend
 		if _, clash := specs[depend.SpecName]; clash {
 			// Same as the cross-repo clash below: files iterate in dictionary
 			// order, so the lexicographically later file wins — keep a trace.
@@ -319,6 +371,35 @@ func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, 
 		specs[depend.SpecName] = *depend
 	}
 	return specs, true
+}
+
+func (c *Controller) parseRepoSpec(ctx context.Context, file, originURL, commitID, repo, arch string, macros []string, rootFiles map[string]struct{}) parsedRepoSpec {
+	content, hit := c.specFiles.Get(commitID, file)
+	if hit {
+		specFileCacheHits.Inc()
+	} else {
+		var err error
+		content, err = c.gitServer.ExecCommand(ctx, originURL, "git-show "+commitID+":"+file)
+		if err != nil {
+			return parsedRepoSpec{err: err, gitFailure: true}
+		}
+		// Raw content remains valid at this commit even if parsing fails.
+		c.specFiles.Add(commitID, file, content)
+	}
+	depend, err := specparse.ParseWithSources(content, file, repo, arch, macros, func(name string) (string, error) {
+		if _, exists := rootFiles[name]; !exists {
+			return "", os.ErrNotExist
+		}
+		return c.gitServer.ExecCommand(ctx, originURL, "git-show "+commitID+":"+name)
+	})
+	if err != nil {
+		var fetchErr *specparse.SourceFetchError
+		if errors.As(err, &fetchErr) {
+			return parsedRepoSpec{err: fetchErr.Err, gitFailure: true}
+		}
+		return parsedRepoSpec{err: err}
+	}
+	return parsedRepoSpec{depend: depend}
 }
 
 // handleGitFailure routes a git-server failure (design E-23): transient
