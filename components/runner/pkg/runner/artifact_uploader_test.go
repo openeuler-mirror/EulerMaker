@@ -2,10 +2,12 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -135,6 +137,125 @@ func TestArtifactCleanupSuccessIsImmediateAndFailureIsRetained(t *testing.T) {
 		t.Fatalf("due sweep: %v", err)
 	}
 	assertLocalArtifactState(t, root, job, false)
+}
+
+func TestArtifactCleanupDiskPressureRemovesOldestFailedJobsFirst(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	checks := 0
+	manager := &ArtifactCleanupManager{
+		RootDir: root, FailedRetention: 24 * time.Hour,
+		Now: func() time.Time { return now },
+		DiskUsage: func(string) (float64, error) {
+			checks++
+			if checks == 1 {
+				return 0.86, nil
+			}
+			return 0.85, nil
+		},
+	}
+	oldest := JobResource{Metadata: ObjectMeta{Name: "oldest", Namespace: "project"}}
+	newer := JobResource{Metadata: ObjectMeta{Name: "newer", Namespace: "project"}}
+	active := JobResource{Metadata: ObjectMeta{Name: "active", Namespace: "project"}}
+	for _, job := range []JobResource{oldest, newer, active} {
+		createLocalArtifactState(t, root, job)
+	}
+	if err := manager.MarkFailure(oldest); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := manager.MarkFailure(newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Sweep(); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalArtifactState(t, root, oldest, false)
+	assertLocalArtifactState(t, root, newer, true)
+	assertLocalArtifactState(t, root, active, true)
+	if checks != 2 {
+		t.Fatalf("disk usage checks = %d, want 2", checks)
+	}
+}
+
+func TestArtifactCleanupDoesNotShortenRetentionBelowThreshold(t *testing.T) {
+	root := t.TempDir()
+	manager := &ArtifactCleanupManager{
+		RootDir: root, FailedRetention: 24 * time.Hour,
+		DiskUsage: func(string) (float64, error) { return 0.85, nil },
+	}
+	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}}
+	createLocalArtifactState(t, root, job)
+	if err := manager.MarkFailure(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Sweep(); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalArtifactState(t, root, job, true)
+}
+
+func TestArtifactCleanupReclaimsOldestFailedJobWhenMarkerWriteRunsOutOfSpace(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	manager := &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now }}
+	oldest := JobResource{Metadata: ObjectMeta{Name: "oldest", Namespace: "project"}}
+	newer := JobResource{Metadata: ObjectMeta{Name: "newer", Namespace: "project"}}
+	current := JobResource{Metadata: ObjectMeta{Name: "current", Namespace: "project"}}
+	for _, job := range []JobResource{oldest, newer, current} {
+		createLocalArtifactState(t, root, job)
+	}
+	if err := manager.MarkFailure(oldest); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := manager.MarkFailure(newer); err != nil {
+		t.Fatal(err)
+	}
+	manager.writeMarker = func(path string, data []byte) error {
+		if _, err := os.Stat(filepath.Join(root, "results", "project", "oldest")); err == nil {
+			return syscall.ENOSPC
+		}
+		return writeAtomicFile(path, data)
+	}
+	now = now.Add(time.Minute)
+	if err := manager.MarkFailure(current); err != nil {
+		t.Fatalf("mark failure after reclaim: %v", err)
+	}
+	assertLocalArtifactState(t, root, oldest, false)
+	assertLocalArtifactState(t, root, newer, true)
+	assertLocalArtifactState(t, root, current, true)
+	if _, err := os.Stat(manager.markerPath("project", "current")); err != nil {
+		t.Fatalf("current cleanup marker: %v", err)
+	}
+}
+
+func TestArtifactCleanupMarkerWriteNoSpaceReclaimsCurrentTerminalJob(t *testing.T) {
+	root := t.TempDir()
+	manager := &ArtifactCleanupManager{
+		RootDir:     root,
+		writeMarker: func(string, []byte) error { return syscall.ENOSPC },
+	}
+	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}}
+	createLocalArtifactState(t, root, job)
+	if err := manager.MarkFailure(job); err != nil {
+		t.Fatalf("mark failure after emergency reclaim: %v", err)
+	}
+	assertLocalArtifactState(t, root, job, false)
+}
+
+func TestArtifactCleanupMarkerWriteOtherErrorDoesNotReclaim(t *testing.T) {
+	root := t.TempDir()
+	manager := &ArtifactCleanupManager{
+		RootDir:     root,
+		writeMarker: func(string, []byte) error { return syscall.EACCES },
+	}
+	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}}
+	createLocalArtifactState(t, root, job)
+	if err := manager.MarkFailure(job); !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("mark failure error = %v, want EACCES", err)
+	}
+	assertLocalArtifactState(t, root, job, true)
 }
 
 func TestArtifactCleanupUsesJobNameAcrossUIDChanges(t *testing.T) {

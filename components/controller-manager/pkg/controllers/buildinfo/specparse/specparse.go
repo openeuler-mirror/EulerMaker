@@ -56,6 +56,13 @@ const (
 
 var sourceFileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
+var (
+	sourceTagPattern     = regexp.MustCompile(`(?im)^[ \t]*Source([0-9]*):[ \t]*(\S+)`)
+	literalNamePattern   = regexp.MustCompile(`(?im)^[ \t]*Name:[ \t]*([A-Za-z0-9][A-Za-z0-9._+-]*)[ \t]*$`)
+	loadSourcePattern    = regexp.MustCompile(`(?i)%\{load:[ \t]*%\{SOURCE([0-9]+)\}[ \t]*\}`)
+	luaOpenSourcePattern = regexp.MustCompile(`(?i)io\.(?:open|lines)[ \t]*\([ \t]*rpm\.expand[ \t]*\([ \t]*["']%SOURCE([0-9]+)["'][ \t]*\)`)
+)
+
 // Bound rpmspec subprocesses across all concurrent BuildInfo reconciles.
 var rpmspecProcessSlots = make(chan struct{}, maxConcurrentRpmspecProcesses)
 
@@ -120,6 +127,21 @@ func expandWithSources(specText, arch string, macros []string, fetch func(string
 		return "", err
 	}
 	loaded := make(map[string]struct{})
+	if fetch != nil {
+		names, err := explicitlyReadSources(specText)
+		if err != nil {
+			return "", err
+		}
+		for _, name := range names {
+			if err := writeFetchedSource(sourceDir, name, fetch); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return "", fmt.Errorf("referenced source %s is not available at this commit: %w", name, err)
+				}
+				return "", err
+			}
+			loaded[name] = struct{}{}
+		}
+	}
 	for attempt := 0; attempt <= maxSourceFiles; attempt++ {
 		rpmspecProcessSlots <- struct{}{}
 		ctx, cancel := context.WithTimeout(context.Background(), rpmspecTimeout)
@@ -143,28 +165,95 @@ func expandWithSources(specText, arch string, macros []string, fetch func(string
 		}
 		stderr := strings.TrimSpace(string(exitErr.Stderr))
 		name := missingSourceName(stderr, sourceDir)
-		if fetch == nil || name == "" || attempt == maxSourceFiles {
+		if fetch == nil || name == "" || len(loaded) >= maxSourceFiles || attempt == maxSourceFiles {
 			return "", fmt.Errorf("%w: %s", runErr, stderr)
 		}
 		if _, exists := loaded[name]; exists {
 			return "", fmt.Errorf("%w: %s", runErr, stderr)
 		}
-		content, fetchErr := fetch(name)
-		if fetchErr != nil {
+		if fetchErr := writeFetchedSource(sourceDir, name, fetch); fetchErr != nil {
 			if errors.Is(fetchErr, os.ErrNotExist) {
 				return "", fmt.Errorf("%w: %s", runErr, stderr)
 			}
-			return "", &SourceFetchError{Name: name, Err: fetchErr}
-		}
-		if len(content) > maxSourceBytes || strings.ContainsRune(content, '\x00') {
-			return "", fmt.Errorf("source %s exceeds the text-file limit", name)
-		}
-		if err := os.WriteFile(filepath.Join(sourceDir, name), []byte(content), 0o600); err != nil {
-			return "", err
+			return "", fetchErr
 		}
 		loaded[name] = struct{}{}
 	}
 	return "", errors.New("source retry limit exceeded")
+}
+
+// explicitlyReadSources recognizes only literal SourceN reads performed while
+// parsing the spec. It does not evaluate arbitrary Lua or RPM macros.
+func explicitlyReadSources(specText string) ([]string, error) {
+	name := ""
+	if match := literalNamePattern.FindStringSubmatch(specText); match != nil {
+		name = match[1]
+	}
+	sources := make(map[string]string)
+	for _, match := range sourceTagPattern.FindAllStringSubmatch(specText, -1) {
+		index := match[1]
+		if index == "" {
+			index = "0"
+		}
+		sources[index] = match[2]
+	}
+	var activeLines strings.Builder
+	for _, line := range strings.Split(specText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		activeLines.WriteString(line)
+		activeLines.WriteByte('\n')
+	}
+	indices := make(map[string]struct{})
+	activeText := activeLines.String()
+	for _, pattern := range []*regexp.Regexp{loadSourcePattern, luaOpenSourcePattern} {
+		for _, match := range pattern.FindAllStringSubmatch(activeText, -1) {
+			indices[match[1]] = struct{}{}
+		}
+	}
+	var names []string
+	seen := make(map[string]struct{})
+	for index := range indices {
+		value, exists := sources[index]
+		if !exists {
+			continue
+		}
+		if name != "" {
+			value = strings.ReplaceAll(value, "%{name}", name)
+		}
+		if !sourceFileNamePattern.MatchString(value) || value == "." || value == ".." {
+			continue
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		names = append(names, value)
+	}
+	sort.Strings(names)
+	if len(names) > maxSourceFiles {
+		return nil, fmt.Errorf("spec explicitly reads %d source files, limit is %d", len(names), maxSourceFiles)
+	}
+	return names, nil
+}
+
+func writeFetchedSource(sourceDir, name string, fetch func(string) (string, error)) error {
+	if !sourceFileNamePattern.MatchString(name) || name == "." || name == ".." {
+		return fmt.Errorf("invalid source file name %q", name)
+	}
+	content, err := fetch(name)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return &SourceFetchError{Name: name, Err: err}
+	}
+	if len(content) > maxSourceBytes || strings.ContainsRune(content, '\x00') {
+		return fmt.Errorf("source %s exceeds the text-file limit", name)
+	}
+	return os.WriteFile(filepath.Join(sourceDir, name), []byte(content), 0o600)
 }
 
 func missingSourceName(stderr, sourceDir string) string {

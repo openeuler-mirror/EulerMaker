@@ -450,6 +450,84 @@ printf 'Name: demo\nVersion: 1\n'
 	}
 }
 
+func TestExplicitlyReadSources(t *testing.T) {
+	spec := `Name: lodash
+Source0: lodash.tar.gz
+Source4: macros.ruby
+Source5: %{name}-modules.txt
+Source6: ../outside.txt
+Source7: %{dynamic}-modules.txt
+Source8: commented.txt
+%{load:%{SOURCE4}}
+# %{load:%{SOURCE8}}
+%{lua:
+for line in io.open(rpm.expand("%SOURCE5")):lines() do
+end}
+%{lua: io.open(rpm.expand("%SOURCE6")) }
+%{lua: io.open(rpm.expand("%SOURCE7")) }
+`
+	names, err := explicitlyReadSources(spec)
+	if err != nil || !reflect.DeepEqual(names, []string{"lodash-modules.txt", "macros.ruby"}) {
+		t.Fatalf("explicit sources = %v, err = %v", names, err)
+	}
+}
+
+func TestExplicitSourcesRespectFileLimit(t *testing.T) {
+	spec := `Name: demo
+Source1: one.txt
+Source2: two.txt
+Source3: three.txt
+Source4: four.txt
+%{load:%{SOURCE1}}
+%{load:%{SOURCE2}}
+%{load:%{SOURCE3}}
+%{load:%{SOURCE4}}
+`
+	if _, err := explicitlyReadSources(spec); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("expected source count limit, got %v", err)
+	}
+}
+
+func TestParsePrefetchesExplicitSources(t *testing.T) {
+	old := rpmspecCommand
+	script := filepath.Join(t.TempDir(), "rpmspec-stub")
+	stub := `#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in "_sourcedir "*) source_dir=${arg#_sourcedir };; esac
+done
+if [ ! -f "$source_dir/macros.ruby" ] || [ ! -f "$source_dir/lodash-modules.txt" ]; then
+  echo 'missing explicit source' >&2
+  exit 1
+fi
+printf 'Name: demo\nVersion: 1\n'
+`
+	if err := os.WriteFile(script, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rpmspecCommand = script
+	t.Cleanup(func() { rpmspecCommand = old })
+	spec := "Name: lodash\nSource0: source.tar.gz\nSource4: macros.ruby\nSource5: %{name}-modules.txt\n%{load:%{SOURCE4}}\n%{lua: io.open(rpm.expand(\"%SOURCE5\"))}\n"
+	var fetched []string
+	result, err := ParseWithSources(spec, "lodash.spec", "lodash", "x86_64", nil, func(name string) (string, error) {
+		fetched = append(fetched, name)
+		return "text", nil
+	})
+	if err != nil || result.SpecName != "demo" || !reflect.DeepEqual(fetched, []string{"lodash-modules.txt", "macros.ruby"}) {
+		t.Fatalf("result = %+v, err = %v, fetched = %v", result, err, fetched)
+	}
+}
+
+func TestExplicitSourceFetchFailureIsClassified(t *testing.T) {
+	stubRpmspec(t, "Name: demo\nVersion: 1\n")
+	spec := "Name: demo\nSource4: macros.ruby\n%{load:%{SOURCE4}}\n"
+	want := errors.New("git temporarily unavailable")
+	_, err := ParseWithSources(spec, "demo.spec", "demo", "x86_64", nil, func(string) (string, error) { return "", want })
+	var fetchErr *SourceFetchError
+	if !errors.As(err, &fetchErr) || !errors.Is(err, want) || fetchErr.Name != "macros.ruby" {
+		t.Fatalf("expected typed source fetch failure, got %v", err)
+	}
+}
+
 func TestParseDoesNotFetchOutsideIsolatedSources(t *testing.T) {
 	old := rpmspecCommand
 	script := filepath.Join(t.TempDir(), "rpmspec-stub")

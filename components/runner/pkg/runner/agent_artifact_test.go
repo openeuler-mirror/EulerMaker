@@ -57,6 +57,10 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	workDir := filepath.Join(root, "work", "project", "job")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	remote := &fakeArtifactRemote{}
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
@@ -87,6 +91,9 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	if _, err := os.Stat(logDir); !os.IsNotExist(err) {
 		t.Fatalf("successful log directory was not cleaned: %v", err)
 	}
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
+		t.Fatalf("Job work directory was not cleaned after PostRun: %v", err)
+	}
 }
 
 func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
@@ -102,6 +109,10 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 		Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"},
 		Status:   JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a"},
 	}
+	workDir := filepath.Join(root, "work", "project", "job")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	executor := &fakeExecutor{resultRoot: resultDir}
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
@@ -113,6 +124,9 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	agent.resumePostRun(context.Background(), jobKey(job), job)
 	if executor.called {
 		t.Fatal("PostRun recovery executed the build again")
+	}
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
+		t.Fatalf("recovered PostRun work directory was not cleaned: %v", err)
 	}
 	api.mu.Lock()
 	defer api.mu.Unlock()
