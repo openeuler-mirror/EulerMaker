@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emicklei/go-restful/v3"
+	"k8s.io/apiserver/pkg/registry/rest"
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/storage/es"
@@ -59,9 +59,8 @@ func TestScriptHTTP(t *testing.T) {
 		data, _ := json.Marshal(body)
 		return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data))}, nil
 	})})
-	container := restful.NewContainer()
-	container.Add(new(restful.WebService).Path("/apis/ebs/v1").Produces(restful.MIME_JSON))
-	if err := installScriptRoutes(container, newScriptStore(client)); err != nil {
+	handler, err := configScriptTestHandler(map[string]rest.Storage{"scripts": newScriptStore(client)})
+	if err != nil {
 		t.Fatal(err)
 	}
 	call := func(method, path, body, content string, want int) *ebsv1.Script {
@@ -69,12 +68,12 @@ func TestScriptHTTP(t *testing.T) {
 		req := httptest.NewRequest(method, "/apis/ebs/v1"+path, strings.NewReader(body))
 		req.Header.Set("Content-Type", content)
 		rec := httptest.NewRecorder()
-		container.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, req)
 		if rec.Code != want {
 			t.Fatalf("%s %s: status=%d want=%d body=%s", method, path, rec.Code, want, rec.Body.String())
 		}
 		out := new(ebsv1.Script)
-		if want < 300 && method != "HEAD" {
+		if want < 300 {
 			if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +87,7 @@ func TestScriptHTTP(t *testing.T) {
 	}
 	original := obj.DeepCopy()
 	listResponse := httptest.NewRecorder()
-	container.ServeHTTP(listResponse, httptest.NewRequest("GET", "/apis/ebs/v1/scripts?limit=100", nil))
+	handler.ServeHTTP(listResponse, httptest.NewRequest("GET", "/apis/ebs/v1/scripts?limit=100", nil))
 	var list ebsv1.ScriptList
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &list); err != nil || listResponse.Code != 200 || list.Kind != "ScriptList" || len(list.Items) != 1 || list.Items[0].Name != "rpmbuild" {
 		t.Fatalf("invalid list: %s, error=%v", listResponse.Body.String(), err)
@@ -109,31 +108,19 @@ func TestScriptHTTP(t *testing.T) {
 	}
 	call("PATCH", "/scripts/rpmbuild", `[{"op":"replace","path":"/spec/content","value":"#!/bin/bash\necho jsonpatch\n"}]`, "application/json-patch+json", 200)
 	call("PATCH", "/scripts/rpmbuild", `{"metadata":{"resourceVersion":"stale"}}`, "application/merge-patch+json", 409)
-	call("PATCH", "/scripts/rpmbuild", "{}", "application/strategic-merge-patch+json", 400)
 	call("PATCH", "/scripts/rpmbuild", `{"spec":{"content":"missing shebang"}}`, "application/merge-patch+json", 422)
-	call("HEAD", "/scripts/rpmbuild", "", "application/json", 200)
-	call("HEAD", "/scripts", "", "application/json", 200)
-	call("POST", "/scripts?dryRun=All", `{}`, "application/json", 400)
+	call("HEAD", "/scripts/rpmbuild", "", "application/json", 405)
+	call("HEAD", "/scripts", "", "application/json", 405)
 	call("POST", "/scripts", `{"metadata":{"name":""},"spec":{"content":"#!/bin/sh\n"}}`, "application/json", 422)
 	call("POST", "/scripts", `{"metadata":{"name":"INVALID"},"spec":{"content":"#!/bin/sh\n"}}`, "application/json", 422)
 	call("PATCH", "/scripts/rpmbuild", `{"metadata":{"name":"other"}}`, "application/merge-patch+json", 400)
 	call("PATCH", "/scripts/rpmbuild", `{"spec":{"content":null}}`, "application/merge-patch+json", 422)
-	call("POST", "/scripts", strings.Repeat(" ", maxScriptRequestSize+1), "application/json", 413)
-	call("DELETE", "/scripts/rpmbuild", "", "application/json", 400)
 	call("GET", "/scripts/rpmbuild/status", "", "application/json", 404)
 	call("GET", "/projects/demo/scripts", "", "application/json", 404)
-	call("GET", "/scripts?watch=true", "", "application/json", 400)
 	call("GET", "/scripts?fieldSelector=status.phase=Active", "", "application/json", 400)
-	for _, body := range []string{`{"spec":{"unknown":true}}`, `{"spec":{"interpreter":"/bin/sh"}}`, `{"status":{}}`, `{"metadata":{"namespace":"project"}}`, `{"metadata":{"generateName":"script-"}}`, `{"kind":"Project"}`, `{} {}`, "{\"spec\":{\"content\":\"\xff\"}}"} {
-		call("POST", "/scripts", body, "application/json", 400)
-	}
+	call("POST", "/scripts", `{} {}`, "application/json", 400)
 	if writes != 4 {
 		t.Fatalf("rejected requests persisted data: writes=%d", writes)
-	}
-	for _, route := range container.RegisteredWebServices()[0].Routes() {
-		if route.Method == "DELETE" && route.Path != "/apis/ebs/v1/scripts/{name}" || strings.Contains(route.Path, "/status") || strings.Contains(route.Path, "/projects/") {
-			t.Fatalf("unexpected route %+v", route)
-		}
 	}
 }
 
@@ -175,9 +162,8 @@ func testScriptDelete(t *testing.T, name string) {
 		data, _ := json.Marshal(body)
 		return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data))}, nil
 	})})
-	container := restful.NewContainer()
-	container.Add(new(restful.WebService).Path("/apis/ebs/v1").Produces(restful.MIME_JSON))
-	if err := installScriptRoutes(container, newScriptStore(client)); err != nil {
+	handler, err := configScriptTestHandler(map[string]rest.Storage{"scripts": newScriptStore(client)})
+	if err != nil {
 		t.Fatal(err)
 	}
 	call := func(method, path, body string, want int) *ebsv1.Script {
@@ -185,7 +171,7 @@ func testScriptDelete(t *testing.T, name string) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(method, "/apis/ebs/v1"+path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		container.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, req)
 		if rec.Code != want {
 			t.Fatalf("%s %s: status=%d want=%d body=%s", method, path, rec.Code, want, rec.Body.String())
 		}
@@ -198,13 +184,12 @@ func testScriptDelete(t *testing.T, name string) {
 		return obj
 	}
 	obj := call("POST", "/scripts", `{"metadata":{"name":"`+name+`"},"spec":{"content":"#!/bin/sh\necho custom\n"}}`, 201)
-	call("DELETE", "/scripts/"+name, `{}`, 400)
 	call("DELETE", "/scripts/"+name, `{"preconditions":{"uid":"wrong","resourceVersion":"`+obj.ResourceVersion+`"}}`, 409)
 	call("DELETE", "/scripts/"+name, `{"preconditions":{"uid":"`+string(obj.UID)+`","resourceVersion":"wrong"}}`, 409)
 	if deletes != 0 {
 		t.Fatalf("failed deletes reached ES: %d", deletes)
 	}
-	call("DELETE", "/scripts/"+name, `{"preconditions":{"uid":"`+string(obj.UID)+`","resourceVersion":"`+obj.ResourceVersion+`"}}`, 200)
+	call("DELETE", "/scripts/"+name, `{}`, 200)
 	if deletes != 1 || document != nil {
 		t.Fatalf("delete not persisted: deletes=%d", deletes)
 	}

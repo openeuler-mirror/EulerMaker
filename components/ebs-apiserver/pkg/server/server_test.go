@@ -78,7 +78,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.BaseBuildRef":                  {"name"},
 		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
-		"ebs-api/ebs/v1.BuildResourceContent":             {"default", "packages"},
+		"ebs-api/ebs/v1.BuildResourceContent":          {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
 		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
 		"ebs-api/ebs/v1.SnapshotStatus":                {"phase", "conditions"},
@@ -253,6 +253,28 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 	storageMap := apiGroup.VersionedResourcesStorageMap["v1"]
 	if _, ok := storageMap["buildresourceconfigs"]; ok {
 		t.Fatal("BuildResourceConfig must not register a global API storage")
+	}
+	for _, resource := range []string{"configs", "scripts"} {
+		store := storageMap[resource]
+		if store == nil {
+			t.Errorf("%s must register API storage", resource)
+			continue
+		}
+		if _, ok := store.(rest.Lister); !ok {
+			t.Errorf("%s must implement list", resource)
+		}
+		if _, ok := store.(rest.CreaterUpdater); !ok {
+			t.Errorf("%s must implement create and update", resource)
+		}
+		if _, ok := store.(rest.Watcher); ok {
+			t.Errorf("%s must not implement watch", resource)
+		}
+		if _, ok := store.(rest.CollectionDeleter); !ok {
+			t.Errorf("%s must implement collection delete", resource)
+		}
+		if _, ok := store.(rest.GracefulDeleter); !ok {
+			t.Errorf("%s must implement delete", resource)
+		}
 	}
 
 	for _, resource := range []string{"projects", "snapshots", "builds", "buildinfos", "rpmrepos"} {
