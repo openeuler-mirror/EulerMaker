@@ -107,34 +107,35 @@ func TestConfigValidationBranches(t *testing.T) {
 	}
 }
 
-func TestSplitKeyBranches(t *testing.T) {
+func TestSplitKey(t *testing.T) {
 	cases := []struct {
-		key      string
-		wantOK   bool
-		wantKind string
-		wantRest int
+		key     string
+		wantOK  bool
+		project string
+		name    string
 	}{
-		{key: buildKey(testProject, testBuild), wantOK: true, wantKind: buildKeyPrefix, wantRest: 1},
-		{key: releaseKey(testProject, testOS, testArch), wantOK: true, wantKind: releaseKeyPrefix, wantRest: 2},
-		{key: "build/project"},
+		{key: rpmRepoKey(testProject, testBuild), wantOK: true, project: testProject, name: testBuild},
+		{key: "build/project", wantOK: true, project: "build", name: "project"},
 		{key: "other/project/build-a"},
 		{key: "build//build-a"},
 		{key: "build/project/"},
 		{key: "build/project/build-a/extra"},
+		{key: "project/"},
+		{key: "/build-a"},
 		{key: "release/project/openEuler"},
 		{key: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
-			kind, project, rest, ok := splitKey(tc.key)
+			project, name, ok := splitKey(tc.key)
 			if ok != tc.wantOK {
 				t.Fatalf("splitKey(%q) ok = %t, want %t", tc.key, ok, tc.wantOK)
 			}
 			if !ok {
 				return
 			}
-			if kind != tc.wantKind || project != testProject || len(rest) != tc.wantRest {
-				t.Fatalf("unexpected split %q %q %v", kind, project, rest)
+			if project != tc.project || name != tc.name {
+				t.Fatalf("unexpected split %q %q", project, name)
 			}
 		})
 	}

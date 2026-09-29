@@ -323,7 +323,7 @@ func (r *reconciler) finishRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, i
 	return r.maybeTriggerRelease(fresh, build, info)
 }
 
-// maybeTriggerRelease enqueues the release key, or registers "no publishable artifacts" once the build really
+// maybeTriggerRelease starts release work, or registers "no publishable artifacts" once the build really
 // produced nothing for this repository.
 func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build, info *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
 	if info == nil || info.Status.Phase != ebsv1.BuildInfoCompleted {
@@ -337,8 +337,7 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 	if repo.Status.Repository == nil || len(repo.Status.Repository.SourceJobNames) == 0 {
 		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonNoPublishableArtifacts, countReleaseFailure)
 	}
-	r.controller.Enqueue(releaseKey(r.project, build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch))
-	return controller.ReconcileResult{}, nil
+	return r.reconcileRelease(build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch)
 }
 
 // candidateScan is the result of reading every input of one repository round.

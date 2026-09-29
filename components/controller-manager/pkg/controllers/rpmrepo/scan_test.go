@@ -54,7 +54,7 @@ func TestScanRejectsJobsThatAreNotCandidates(t *testing.T) {
 			artifacts := NewFakeArtifactManager()
 			c := scanFixture(t, job, artifacts, client)
 
-			result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+			result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -85,7 +85,7 @@ func TestScanSkipsConsumedJobs(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.ManifestRequests) != 0 || len(artifacts.SubmitRepositoryRequests) != 0 {
@@ -193,7 +193,7 @@ func TestScanDoesNotReadManifestBeforeSubmission(t *testing.T) {
 			}
 			c := scanFixture(t, job, artifacts, client)
 
-			if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+			if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 				t.Fatalf("sync: %v", err)
 			}
 			if len(artifacts.ManifestRequests) != 0 {
@@ -217,7 +217,7 @@ func TestCandidateScanUsesTheBuildNameSelector(t *testing.T) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := scanFixture(t, job, artifacts, client)
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(client.JobListOptions) != 1 {
@@ -244,7 +244,7 @@ func TestRepositoryAdvancesWhileBuildInfoIsStillProcessing(t *testing.T) {
 	}
 	c := scanFixture(t, job, artifacts, client)
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestGetRepositoryResponseDispatch(t *testing.T) {
 			}
 			c := newTestController(t, client, artifacts, testConfig())
 
-			result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+			result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -381,7 +381,7 @@ func TestDependencyReadFailuresKeepTheirClass(t *testing.T) {
 			artifacts := NewFakeArtifactManager()
 			c := newTestController(t, client, artifacts, testConfig())
 
-			_, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+			_, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected an error")
 			}

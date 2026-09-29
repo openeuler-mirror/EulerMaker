@@ -29,7 +29,7 @@ func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestFinishRepositoryConvergesWhenTheObjectDissapears(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestResumeReleaseSurfacesReadFailures(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
 		t.Fatalf("a failed re-read must surface as an error")
 	}
 	if len(artifacts.GetReleaseBuildNames) != 0 {
@@ -106,7 +106,7 @@ func TestCommitStatusTreatsPreconditionFailureAsConflict(t *testing.T) {
 	})
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestBuildWithoutBuildInfoWaits(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestRepositoryErrorPathHonoursCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := c.sync(ctx, buildKey(testProject, testBuild))
+	_, err := c.sync(ctx, rpmRepoKey(testProject, testBuild))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("a canceled round must return the context error, got %v", err)
 	}
@@ -168,7 +168,7 @@ func TestReleaseCandidateWithDeletedObjectIsSkipped(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestResumeReleaseToleratesAClearedCheckpoint(t *testing.T) {
 			artifacts := NewFakeArtifactManager()
 			c := newTestController(t, client, artifacts, testConfig())
 
-			result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -247,7 +247,7 @@ func TestReleaseReplayStopsWhenTheBuildIsGone(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("a missing Build must stop the round instead of failing it: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}

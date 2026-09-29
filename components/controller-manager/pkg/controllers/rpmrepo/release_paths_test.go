@@ -38,7 +38,7 @@ func TestReconcileReleaseListFailureKeepsItsClass(t *testing.T) {
 			artifacts := NewFakeArtifactManager()
 			c := newTestController(t, client, artifacts, testConfig())
 
-			_, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+			_, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 			if err == nil {
 				t.Fatalf("a list failure must surface as an error")
 			}
@@ -81,7 +81,7 @@ func TestReconcileReleaseCandidatePredicateSkipsObjects(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			client, artifacts, c := releaseCandidateFixture(t, tc.mutate, DefaultPublishPolicy{})
-			result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -107,7 +107,7 @@ func TestResumeReleaseStopsOnAbortOrMismatch(t *testing.T) {
 		artifacts := NewFakeArtifactManager()
 		c := newTestController(t, client, artifacts, testConfig())
 
-		if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+		if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 			t.Fatalf("sync: %v", err)
 		}
 		stored := client.RpmRepos[key(testProject, testBuild)]
@@ -132,7 +132,7 @@ func TestResumeReleaseStopsOnAbortOrMismatch(t *testing.T) {
 		artifacts := NewFakeArtifactManager()
 		c := newTestController(t, client, artifacts, testConfig())
 
-		if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+		if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 			t.Fatalf("sync: %v", err)
 		}
 		if len(client.StatusWrites) != 0 {
@@ -186,7 +186,7 @@ func TestHandleReleaseErrorPaths(t *testing.T) {
 			}
 			c := newTestController(t, client, artifacts, testConfig())
 
-			result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected an error")
 			}
@@ -226,7 +226,7 @@ func TestReleaseReplayIsDeferredAfterOneAttempt(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}

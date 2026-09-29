@@ -33,7 +33,7 @@ func TestReconcileBuildWaitsWhenBackoffAnchorIsMissing(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestReconcileBuildBoundsSameRoundReplays(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestReconcileBuildBoundsSameRoundReplays(t *testing.T) {
 	if result.RequeueAfter <= 0 {
 		t.Fatalf("a deferred replay must ask for a later round, got %+v", result)
 	}
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 	if len(artifacts.SubmitRepositoryRequests) != 2 {
@@ -101,7 +101,7 @@ func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	if result.RequeueAfter <= 0 {
 		t.Fatalf("a deferred replay must ask for a later round, got %+v", result)
 	}
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 	if len(artifacts.SubmitReleaseRequests) != 2 {
@@ -140,7 +140,7 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestReconcileBuildDoesNotReadManifestBeforeSubmission(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	_, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	_, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestReconcileBuildDefersReadyWithoutContentURL(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestReconcileReleaseDefersReadyWithoutContentURL(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	_, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch))
+	_, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
 	if err == nil {
 		t.Fatalf("a ready release without contentURL must not be collected")
 	}
@@ -249,7 +249,7 @@ func TestMaterializeRetriesCountsOnlyRealReplays(t *testing.T) {
 		return RepositoryResponse{}, &artifactError{operation: "get-repository", kind: artifactRetryable, code: "RepositoryQueueFull", retryAfter: 5 * time.Second}
 	}
 	c := newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if delta := materializeRetries.Value() - before; delta != 0 {
@@ -268,7 +268,7 @@ func TestMaterializeRetriesCountsOnlyRealReplays(t *testing.T) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 2, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c = newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), buildKey(testProject, testBuild)); err != nil {
+	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if delta := materializeRetries.Value() - before; delta != 1 {
@@ -299,7 +299,7 @@ func TestReconcileBuildRejectsForeignRepositoryResponse(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := c.sync(context.Background(), buildKey(testProject, testBuild))
+	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestReconcileReleaseRejectsForeignReleaseResponse(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
 		t.Fatalf("a foreign release response must not be collected")
 	}
 	if len(client.StatusWrites) != 0 {
@@ -359,7 +359,7 @@ func TestReconcileReleaseRejectsResponseWithoutUpdatedAt(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := c.sync(context.Background(), releaseKey(testProject, testOS, testArch)); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
 		t.Fatalf("a release response without updatedAt must be rejected")
 	}
 	if len(client.StatusWrites) != 0 {

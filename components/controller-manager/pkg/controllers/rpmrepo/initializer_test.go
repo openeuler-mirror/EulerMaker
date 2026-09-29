@@ -167,7 +167,7 @@ func TestEventHandlerEnqueuesTheBuildKey(t *testing.T) {
 		t.Fatalf("Add events must enqueue the build key")
 	}
 	item, _ := c.Queue().Get()
-	if item != buildKey(testProject, testBuild) {
+	if item != rpmRepoKey(testProject, testBuild) {
 		t.Fatalf("unexpected key %v", item)
 	}
 	c.Queue().Done(item)
