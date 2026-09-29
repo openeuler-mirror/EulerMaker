@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/spf13/pflag"
@@ -168,6 +169,10 @@ func (o *EulerMakerServerOptions) Complete() error {
 
 func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig, error) {
 	config := genericapiserver.NewRecommendedConfig(Codecs)
+	buildHandlerChain := config.BuildHandlerChainFunc
+	config.BuildHandlerChainFunc = func(handler http.Handler, serverConfig *genericapiserver.Config) http.Handler {
+		return buildHandlerChain(withFieldProjection(handler), serverConfig)
+	}
 	config.LongRunningFunc = runnerJobLongRunningCheck(config.LongRunningFunc)
 	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
 		getOpenAPIDefinitions,
@@ -205,7 +210,6 @@ func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig,
 	if err := o.RecommendedOptions.Features.ApplyTo(&config.Config); err != nil {
 		return nil, err
 	}
-
 	return config, nil
 }
 
@@ -276,12 +280,6 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	if err := ensureDefaultScript(context.Background(), newScriptStore(esClient)); err != nil {
 		return nil, fmt.Errorf("initialize default script: %w", err)
 	}
-	if err := installConfigRoutes(srv.Handler.GoRestfulContainer, configES); err != nil {
-		return nil, err
-	}
-	if err := installScriptRoutes(srv.Handler.GoRestfulContainer, newScriptStore(esClient)); err != nil {
-		return nil, err
-	}
 	if enableIAM {
 		if err := esClient.EnsureIAMIndices(); err != nil {
 			return nil, fmt.Errorf("ensure IAM indices: %w", err)
@@ -320,6 +318,8 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	storeOptions := &generic.StoreOptions{RESTOptions: restOptionsGetter}
 
 	v1Storage := map[string]rest.Storage{}
+	v1Storage["configs"] = newConfigStore(esClient)
+	v1Storage["scripts"] = newScriptStore(esClient)
 
 	projectStorage := projectstore.NewStorage(Scheme)
 	projectES := esstore.New(esClient, "project", "Project", projectStorage.Project.(*genericregistry.Store))

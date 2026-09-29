@@ -39,7 +39,9 @@ spec:
             image: registry.example/build:24.03-aarch64
 ```
 
-通过 `GET /apis/ebs/v1/configs/build-target` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。只有 `visibility: Public` 的对象可经 Gateway 匿名具名读取；列表和写入仅允许 Ops/Admin/System。不支持删除、watch、status 子资源。创建 Build 时目标未配置返回 422，配置读取或内容解析失败返回 503，均不申请构建目标占用。
+通过 `GET /apis/ebs/v1/configs/build-target` 读取，使用 PUT、JSON Merge Patch 或 JSON Patch 更新。只有 `visibility: Public` 的对象可经 Gateway 匿名具名读取；列表和写入仅允许 Ops/Admin/System。Gateway 不允许删除内置 Config；apiserver 使用通用资源路由，不支持 watch 和 status 子资源。创建 Build 时目标未配置返回 422，配置读取或内容解析失败返回 503，均不申请构建目标占用。
+
+资源 GET/LIST 支持 `includeFields=metadata.name,status.phase` 和 `excludeFields=spec` 等响应字段选择参数；两者同时指定时先选择再排除。字段路径相对于单个资源对象，LIST 的顶层分页元数据保留。该能力只裁剪 JSON 返回值，不影响服务端过滤或存储；Watch 不支持。
 
 ## 全局脚本资源
 
@@ -57,9 +59,9 @@ spec:
     exec /usr/local/bin/build-rpm --config /workspace/payload.yaml
 ```
 
-上述为接口示例；apiserver 使用内置的 [rpmbuild Script](pkg/server/default-rpmbuild-script.yaml) 初始化同名对象。通过 `POST /apis/ebs/v1/scripts` 创建，`GET /apis/ebs/v1/scripts` 列表，`GET/PUT/PATCH /apis/ebs/v1/scripts/{name}` 读取和更新，`DELETE /apis/ebs/v1/scripts/{name}` 删除。删除请求体必须提供 `preconditions.uid` 和 `preconditions.resourceVersion`；apiserver 不按脚本名称限制删除。PUT 必须携带 GET 返回的 resourceVersion；PATCH 支持 JSON Merge Patch 和 JSON Patch，并使用 ES 乐观锁避免并发覆盖。列表支持分页和 label/metadata.name 过滤。
+上述为接口示例；apiserver 使用内置的 [rpmbuild Script](pkg/server/default-rpmbuild-script.yaml) 初始化同名对象。通过 `POST /apis/ebs/v1/scripts` 创建，`GET /apis/ebs/v1/scripts` 列表，`GET/PUT/PATCH /apis/ebs/v1/scripts/{name}` 读取和更新，`DELETE /apis/ebs/v1/scripts/{name}` 删除。删除可选带 `preconditions.uid` 和 `preconditions.resourceVersion` 以防止误删；apiserver 不按脚本名称限制删除。PUT 必须携带 GET 返回的 resourceVersion；PATCH 支持 JSON Merge Patch 和 JSON Patch，并使用 ES 乐观锁避免并发覆盖。列表支持分页和 label/metadata.name 过滤。
 
-正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 保留 2 MiB 请求体上限。经 Gateway 访问时还受其请求体限制。不支持删除、watch、status、dryRun 或 Project-scoped 路径。
+正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 使用通用请求体大小限制（当前默认 3 MiB）。经 Gateway 访问时还受其请求体限制。不支持 watch、status 或 Project-scoped 路径；通用路由不注册 HEAD。
 
 apiserver 在就绪前从内置模板初始化 `rpmbuild` Script，仅创建不存在的对象；已有对象不被覆盖，初始化失败则启动失败，无需启动参数。Gateway 已限制仅 Ops/Admin/System 可创建和修改 Script，普通登录用户只读、Runner 仅可读取具名对象；BuildInfo Controller 将创建时观察到的 Script 元数据写入新 Job 的 `spec.scriptRefs`，Runner 按引用拉取并执行脚本。apiserver 仍属于内部服务，不应直接对外暴露。
 

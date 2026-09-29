@@ -12,8 +12,14 @@ import (
 
 	"github.com/emicklei/go-restful/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/managedfields"
+	"k8s.io/apimachinery/pkg/util/sets"
+	genericapi "k8s.io/apiserver/pkg/endpoints"
+	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/yaml"
 
@@ -24,6 +30,40 @@ import (
 type confTransport func(*http.Request) (*http.Response, error)
 
 func (f confTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func configScriptTestHandler(storage map[string]rest.Storage) (http.Handler, error) {
+	container := restful.NewContainer()
+	container.Router(restful.CurlyRouter{})
+	group := &genericapi.APIGroupVersion{
+		Storage:                    storage,
+		Root:                       "/apis",
+		GroupVersion:               ebsv1.SchemeGroupVersion,
+		OptionsExternalVersion:     &schema.GroupVersion{Version: "v1"},
+		Serializer:                 Codecs,
+		ParameterCodec:             metav1.ParameterCodec,
+		Creater:                    Scheme,
+		Convertor:                  Scheme,
+		TypeConverter:              managedfields.NewDeducedTypeConverter(),
+		UnsafeConvertor:            runtime.UnsafeObjectConvertor(Scheme),
+		Defaulter:                  Scheme,
+		Typer:                      Scheme,
+		Namer:                      runtime.Namer(meta.NewAccessor()),
+		EquivalentResourceRegistry: runtime.NewEquivalentResourceRegistry(),
+		MaxRequestBodyBytes:        3 << 20,
+	}
+	if _, _, err := group.InstallREST(container); err != nil {
+		return nil, err
+	}
+	resolver := &apirequest.RequestInfoFactory{APIPrefixes: sets.NewString("apis")}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info, err := resolver.NewRequestInfo(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		container.ServeHTTP(w, r.WithContext(apirequest.WithRequestInfo(r.Context(), info)))
+	}), nil
+}
 
 func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 	var document json.RawMessage
@@ -57,9 +97,8 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 		data, _ := json.Marshal(body)
 		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(data))}, nil
 	})})
-	container := restful.NewContainer()
-	container.Add(new(restful.WebService).Path("/apis/ebs/v1").Produces(restful.MIME_JSON))
-	if err := installConfigRoutes(container, newConfigStore(client)); err != nil {
+	handler, err := configScriptTestHandler(map[string]rest.Storage{"configs": newConfigStore(client)})
+	if err != nil {
 		t.Fatal(err)
 	}
 	call := func(method, body string, want int) ebsv1.Config {
@@ -68,7 +107,7 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 			req.URL.Path = "/apis/ebs/v1/configs"
 		}
 		rec := httptest.NewRecorder()
-		container.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, req)
 		if rec.Code != want {
 			t.Fatalf("%s: status=%d want=%d body=%s", method, rec.Code, want, rec.Body.String())
 		}
@@ -85,7 +124,7 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 	if obj.UID == "" || obj.ResourceVersion == "" || obj.Generation != 1 {
 		t.Fatalf("missing metadata: %+v", obj.ObjectMeta)
 	}
-	call(http.MethodHead, "", http.StatusOK)
+	call(http.MethodHead, "", http.StatusMethodNotAllowed)
 	call(http.MethodPut, `{"metadata":{"name":"build-target"},"spec":{"visibility":"Public","content":"targets: {}\n"}}`, http.StatusConflict)
 	obj.Spec.Content = "targets: {other: {arches: {x86_64: {image: build:v1}}}}\n"
 	data, _ := json.Marshal(obj)

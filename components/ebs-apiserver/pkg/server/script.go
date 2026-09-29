@@ -2,179 +2,33 @@ package server
 
 import (
 	"bytes"
+	"context"
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"strings"
 	"unicode/utf8"
 
-	"github.com/emicklei/go-restful/v3"
-	jsonpatch "github.com/evanphx/json-patch"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/apiserver/pkg/registry/rest"
+	"sigs.k8s.io/yaml"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/storage/esstore"
+	"ebs-apiserver/pkg/apis/ebs/validation"
 )
 
-const maxScriptRequestSize = 2 * 1024 * 1024
+const maxBootstrapScriptSize = 2 * 1024 * 1024
 
-func installScriptRoutes(srv handlerServer, store *esstore.Store) error {
-	ws := ebsV1WebService(srv)
-	if ws == nil {
-		return fmt.Errorf("ebs/v1 web service is not installed")
-	}
-	h := &scriptHandler{store}
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
-		route := ws.Method(method).Path("/scripts").To(h.handle).Produces(restful.MIME_JSON).Writes(ebsv1.ScriptList{})
-		if method == http.MethodPost {
-			route.Reads(ebsv1.Script{}).Writes(ebsv1.Script{})
-		}
-		ws.Route(route)
-	}
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
-		ws.Route(ws.Method(method).Path("/scripts/{name}").To(h.handle).Produces(restful.MIME_JSON).Writes(ebsv1.Script{}))
-	}
-	return nil
-}
-
-type scriptHandler struct{ store *esstore.Store }
-
-func (h *scriptHandler) handle(req *restful.Request, resp *restful.Response) {
-	if err := h.serve(req, resp); err != nil {
-		writeResourceError(resp, err)
-	}
-}
-
-func (h *scriptHandler) serve(req *restful.Request, resp *restful.Response) error {
-	ctx := apirequest.WithNamespace(req.Request.Context(), "")
-	name := req.PathParameter("name")
-	if values, exists := req.Request.URL.Query()["watch"]; exists {
-		for _, value := range values {
-			if value != "false" {
-				return apierrors.NewBadRequest("Script does not support watch")
-			}
-		}
-	}
-	method := req.Request.Method
-	var patchVersion string
-	if method == http.MethodGet || method == http.MethodHead {
-		if name == "" {
-			opts, err := resourceListOptions(req)
-			if err != nil {
-				return apierrors.NewBadRequest(err.Error())
-			}
-			obj, err := h.store.List(ctx, opts)
-			if err != nil {
-				return err
-			}
-			obj.GetObjectKind().SetGroupVersionKind(ebsv1.SchemeGroupVersion.WithKind("ScriptList"))
-			if method == http.MethodHead {
-				resp.WriteHeader(http.StatusOK)
-				return nil
-			}
-			return resp.WriteEntity(obj)
-		}
-		obj, err := h.store.Get(ctx, name, &metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		if method == http.MethodHead {
-			resp.WriteHeader(http.StatusOK)
-			return nil
-		}
-		return resp.WriteEntity(obj)
-	}
-	if req.QueryParameter("dryRun") != "" {
-		return apierrors.NewBadRequest("dryRun is not supported by Script")
-	}
-	data, err := io.ReadAll(io.LimitReader(req.Request.Body, maxScriptRequestSize+1))
-	if err != nil {
-		return apierrors.NewBadRequest(err.Error())
-	}
-	if len(data) > maxScriptRequestSize {
-		return apierrors.NewRequestEntityTooLargeError("Script exceeds request limit")
-	}
-	if !utf8.Valid(data) {
-		return apierrors.NewBadRequest("Script must be UTF-8 JSON")
-	}
-	if method == http.MethodDelete {
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		options := new(metav1.DeleteOptions)
-		if err := decoder.Decode(options); err != nil {
-			return apierrors.NewBadRequest(err.Error())
-		}
-		if err := ensureJSONEOF(decoder); err != nil {
-			return apierrors.NewBadRequest(err.Error())
-		}
-		if options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" || options.Preconditions.ResourceVersion == nil || *options.Preconditions.ResourceVersion == "" {
-			return apierrors.NewBadRequest("Script deletion requires UID and resourceVersion preconditions")
-		}
-		out, _, err := h.store.Delete(ctx, name, nil, options)
-		if err != nil {
-			return err
-		}
-		return resp.WriteEntity(out)
-	}
-	if method == http.MethodPatch {
-		old, err := h.store.Get(ctx, name, &metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		oldData, err := json.Marshal(old)
-		patchVersion = old.(*ebsv1.Script).ResourceVersion
-		if err != nil {
-			return err
-		}
-		switch strings.TrimSpace(strings.Split(req.HeaderParameter("Content-Type"), ";")[0]) {
-		case "application/merge-patch+json":
-			data, err = jsonpatch.MergePatch(oldData, data)
-		case "application/json-patch+json":
-			var patch jsonpatch.Patch
-			patch, err = jsonpatch.DecodePatch(data)
-			if err == nil {
-				data, err = patch.Apply(oldData)
-			}
-		default:
-			return apierrors.NewBadRequest("only JSON Patch and JSON Merge Patch are supported")
-		}
-		if err != nil {
-			return apierrors.NewBadRequest(err.Error())
-		}
-	}
-	obj, err := decodeScript(data)
-	if err != nil {
-		return apierrors.NewBadRequest(err.Error())
-	}
-	if name != "" && name != obj.Name {
-		return apierrors.NewBadRequest("metadata.name must match request path")
-	}
-	if method == http.MethodPatch && obj.ResourceVersion != patchVersion {
-		return apierrors.NewConflict(ebsv1.Resource("scripts"), name, fmt.Errorf("resourceVersion does not match the patched object"))
-	}
-	if method == http.MethodPost {
-		out, err := h.store.Create(ctx, obj, nil, &metav1.CreateOptions{})
-		if err != nil {
-			return err
-		}
-		return resp.WriteHeaderAndEntity(http.StatusCreated, out)
-	}
-	out, _, err := h.store.Update(ctx, name, rest.DefaultUpdatedObjectInfo(obj), nil, nil, false, &metav1.UpdateOptions{})
-	if err != nil {
-		return err
-	}
-	return resp.WriteEntity(out)
-}
+//go:embed default-rpmbuild-script.yaml
+var defaultRpmbuildScript []byte
 
 func decodeScript(data []byte) (*ebsv1.Script, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("Script must be UTF-8 JSON")
 	}
-	if len(data) > maxScriptRequestSize {
+	if len(data) > maxBootstrapScriptSize {
 		return nil, fmt.Errorf("Script exceeds request limit")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -183,8 +37,12 @@ func decodeScript(data []byte) (*ebsv1.Script, error) {
 	if err := decoder.Decode(obj); err != nil {
 		return nil, err
 	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return nil, err
+	var extra interface{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return nil, fmt.Errorf("decode trailing data: %w", err)
+		}
+		return nil, fmt.Errorf("request body must contain exactly one object")
 	}
 	if obj.Kind != "" && obj.Kind != "Script" || obj.APIVersion != "" && obj.APIVersion != "ebs/v1" {
 		return nil, fmt.Errorf("expected ebs/v1 Script")
@@ -194,4 +52,34 @@ func decodeScript(data []byte) (*ebsv1.Script, error) {
 		return nil, fmt.Errorf("Script does not support namespace or generateName")
 	}
 	return obj, nil
+}
+
+func ensureDefaultScript(ctx context.Context, storage bootstrapStorage) error {
+	return ensureScript(ctx, storage, defaultRpmbuildScript)
+}
+
+func ensureScript(ctx context.Context, storage bootstrapStorage, data []byte) error {
+	if len(data) > maxBootstrapScriptSize {
+		return fmt.Errorf("Script initialization file exceeds request limit")
+	}
+	data, err := yaml.YAMLToJSONStrict(data)
+	if err != nil {
+		return err
+	}
+	obj, err := decodeScript(data)
+	if err != nil {
+		return err
+	}
+	if errs := validation.ValidateScript(obj); len(errs) > 0 {
+		return apierrors.NewInvalid(ebsv1.Kind("Script"), obj.Name, errs)
+	}
+	ctx = apirequest.WithNamespace(ctx, "")
+	if _, err := storage.Get(ctx, obj.Name, &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		return err
+	}
+	_, err = storage.Create(ctx, obj, nil, &metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		_, err = storage.Get(ctx, obj.Name, &metav1.GetOptions{})
+	}
+	return err
 }

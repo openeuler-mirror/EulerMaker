@@ -16,6 +16,8 @@ var runnerJobQueryParameters = map[string]struct{}{
 	"resourceVersion":     {},
 	"timeoutSeconds":      {},
 	"allowWatchBookmarks": {},
+	"includeFields":       {},
+	"excludeFields":       {},
 }
 
 func runnerJobLongRunningCheck(base apirequest.LongRunningRequestCheck) apirequest.LongRunningRequestCheck {
