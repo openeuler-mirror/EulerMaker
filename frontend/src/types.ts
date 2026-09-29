@@ -102,11 +102,11 @@ export interface BuildInfo {
   status?: {
     phase?: string;
     failedPackages?: string[];
-    specStatus?: Record<string, {
-      build?: { status?: string; conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }> };
-      install?: { status?: string };
-      dispatchCount?: number;
-    }>;
+    specStatus?: {
+      build?: Record<string, { status?: string; conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }> }>;
+      install?: Record<string, { status?: string }>;
+      dispatchCount?: Record<string, number>;
+    };
     conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
   };
 }

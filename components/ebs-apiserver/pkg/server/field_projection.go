@@ -2,9 +2,11 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -117,7 +119,12 @@ func withFieldProjection(next http.Handler) http.Handler {
 				ctx = esstore.WithSourceFilter(ctx, filter)
 			}
 		}
-		next.ServeHTTP(buffer, r.WithContext(ctx))
+		innerRequest := r.Clone(ctx)
+		// The body is decoded as JSON below. Let an outer HTTP middleware
+		// negotiate compression after projection instead of compressing this
+		// intermediate response.
+		innerRequest.Header.Del("Accept-Encoding")
+		next.ServeHTTP(buffer, innerRequest)
 		result := buffer.Result()
 		defer result.Body.Close()
 		if result.StatusCode < 200 || result.StatusCode >= 300 {
@@ -128,12 +135,33 @@ func withFieldProjection(next http.Handler) http.Handler {
 			writeFieldProjectionError(w, fmt.Errorf("field projection requires a JSON resource response"))
 			return
 		}
-		body, err := projection.apply(buffer.Body.Bytes())
+		upstreamBody := buffer.Body.Bytes()
+		switch strings.ToLower(strings.TrimSpace(result.Header.Get("Content-Encoding"))) {
+		case "", "identity":
+		case "gzip":
+			reader, gzipErr := gzip.NewReader(bytes.NewReader(upstreamBody))
+			if gzipErr != nil {
+				writeFieldProjectionError(w, fmt.Errorf("decode compressed resource response: %w", gzipErr))
+				return
+			}
+			upstreamBody, err = io.ReadAll(reader)
+			closeErr := reader.Close()
+			if err != nil || closeErr != nil {
+				writeFieldProjectionError(w, fmt.Errorf("decode compressed resource response: read=%v, close=%v", err, closeErr))
+				return
+			}
+		default:
+			writeFieldProjectionError(w, fmt.Errorf("unsupported resource response encoding %q", result.Header.Get("Content-Encoding")))
+			return
+		}
+		body, err := projection.apply(upstreamBody)
 		if err != nil {
 			writeFieldProjectionError(w, err)
 			return
 		}
-		copyProjectedResponse(w, result.Header, result.StatusCode, body)
+		headers := result.Header.Clone()
+		headers.Del("Content-Encoding")
+		copyProjectedResponse(w, headers, result.StatusCode, body)
 	})
 }
 
@@ -163,10 +191,14 @@ func (p fieldProjection) sourceFilter() (es.SourceFilter, bool) {
 					return es.SourceFilter{}, false
 				}
 				for child, nested := range node.children {
-					if !nested.terminal || (child != "phase" && child != "stage") {
+					if nested.terminal && (child == "phase" || child == "stage" || child == "failedPackages" || child == "conditions") {
+						filter.Includes = append(filter.Includes, "data.status."+child)
+						continue
+					}
+					if child != "specStatus" || nested.terminal || len(nested.children) != 1 || nested.children["build"] == nil || !nested.children["build"].terminal {
 						return es.SourceFilter{}, false
 					}
-					filter.Includes = append(filter.Includes, "data.status."+child)
+					filter.Includes = append(filter.Includes, "data.status.specStatus.build")
 				}
 			default:
 				return es.SourceFilter{}, false
@@ -177,6 +209,12 @@ func (p fieldProjection) sourceFilter() (es.SourceFilter, bool) {
 		for field, node := range p.exclude.children {
 			if field == "spec" && node.terminal {
 				filter.Excludes = append(filter.Excludes, "data.spec")
+			} else if field == "status" {
+				if specStatus := node.children["specStatus"]; specStatus != nil {
+					if install := specStatus.children["install"]; install != nil && install.terminal {
+						filter.Excludes = append(filter.Excludes, "data.status.specStatus.install")
+					}
+				}
 			}
 		}
 	}

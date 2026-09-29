@@ -82,12 +82,12 @@ const statusFilterId = useId();
 const specPageSizes = [10, 20, 50] as const;
 const specPageSize = ref<number>(20);
 const specCurrentPage = ref(1);
-const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStatus || {})
+const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStatus?.build || {})
   .map(([name, value]) => ({
     name,
-    buildStatus: value.build?.status,
-    displayStatus: value.build?.status === 'Failed' && value.build.conditions?.some((condition) => condition.reason === 'ArchUnsupported')
-      ? 'ArchUnsupported' : value.build?.status,
+    buildStatus: value.status,
+    displayStatus: value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'ArchUnsupported')
+      ? 'ArchUnsupported' : value.status,
   }))
   .sort((left, right) => left.name.localeCompare(right.name)));
 const specBuildCounts = computed(() => ({
@@ -212,7 +212,7 @@ async function load(): Promise<void> {
   missing.value = false;
   errorKey.value = '';
   try {
-    const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}`;
+    const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build`;
     const result = await request<BuildInfo>(path, { signal: current.signal });
     if (!current.signal.aborted) buildInfo.value = result;
   } catch (error) {

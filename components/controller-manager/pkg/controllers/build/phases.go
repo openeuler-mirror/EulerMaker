@@ -237,17 +237,17 @@ func (r *reconciler) withCondition(conditions []metav1.Condition, condType strin
 
 // aggregateSpecStatus reports whether every spec of a completed BuildInfo succeeded. An empty result set is a
 // failure: a completed BuildInfo must describe every target spec of the build.
-func aggregateSpecStatus(specStatus map[string]ebsv1.SpecStatus) (bool, string) {
-	if len(specStatus) == 0 {
+func aggregateSpecStatus(specStatus ebsv1.SpecStatusGroup) (bool, string) {
+	if specStatus.Len() == 0 {
 		return false, ""
 	}
-	names := make([]string, 0, len(specStatus))
-	for name := range specStatus {
+	names := make([]string, 0, specStatus.Len())
+	for name := range specStatus.Build {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		status := specStatus[name]
+		status := specStatus.Entry(name)
 		if status.Build.Status != specStatusSucceeded || status.Install.Status != specStatusSucceeded {
 			return false, name
 		}

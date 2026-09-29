@@ -23,7 +23,7 @@ func specStatus(build, install string) ebsv1.SpecStatus {
 func newBuildInfoObject(project, name string, phase ebsv1.BuildInfoPhase, statuses map[string]ebsv1.SpecStatus) *ebsv1.BuildInfo {
 	return &ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
-		Status:     ebsv1.BuildInfoStatus{Phase: phase, SpecStatus: statuses},
+		Status:     ebsv1.BuildInfoStatus{Phase: phase, SpecStatus: ebsv1.NewSpecStatusGroup(statuses)},
 	}
 }
 
@@ -166,8 +166,8 @@ func TestAggregateSpecStatusIsIndependentOfMapOrder(t *testing.T) {
 	second := map[string]ebsv1.SpecStatus{}
 	second["glibc"] = specStatus("Failed", specStatusSucceeded)
 	second["gcc"] = specStatus(specStatusSucceeded, specStatusSucceeded)
-	firstResult, firstSpec := aggregateSpecStatus(first)
-	secondResult, secondSpec := aggregateSpecStatus(second)
+	firstResult, firstSpec := aggregateSpecStatus(ebsv1.NewSpecStatusGroup(first))
+	secondResult, secondSpec := aggregateSpecStatus(ebsv1.NewSpecStatusGroup(second))
 	if firstResult != secondResult || firstSpec != secondSpec || firstResult || firstSpec != "glibc" {
 		t.Fatalf("aggregation depends on map order: %v/%q vs %v/%q", firstResult, firstSpec, secondResult, secondSpec)
 	}

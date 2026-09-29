@@ -56,10 +56,10 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = dcgStateAB()
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 		"b": {},
-	}
+	})
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
 		"a": dependEntry("a"), "b": dependEntry("b"),
 	}, testSources())
@@ -74,7 +74,7 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	a := persisted.Status.SpecStatus["a"]
+	a := persisted.Status.SpecStatus.Entry("a")
 	if a.Build.Status != SpecBuildFailed || a.DispatchCount != 2 {
 		t.Fatalf("specStatus[a] = %+v, want Failed with floor count 2", a)
 	}
@@ -82,11 +82,11 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	if want := jobNameFor(string(seeded.UID), "a", 2); !strings.Contains(a.Build.Conditions[0].Message, want) {
 		t.Fatalf("specStatus[a] condition = %+v, want generation-2 job %q", a.Build.Conditions, want)
 	}
-	if _, ok := persisted.Status.SpecStatus["ghost"]; ok {
+	if _, ok := persisted.Status.SpecStatus.Lookup("ghost"); ok {
 		t.Fatalf("out-of-scope job leaked into specStatus: %v", persisted.Status.SpecStatus)
 	}
 	// A Failed upstream exempts both 7.4.6 gates (7.4.2): b dispatches at once.
-	b := persisted.Status.SpecStatus["b"]
+	b := persisted.Status.SpecStatus.Entry("b")
 	if b.DispatchCount != 1 {
 		t.Fatalf("specStatus[b] = %+v, want dispatched (gen 1)", b)
 	}
@@ -96,9 +96,9 @@ func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobPhase("Phasing"), testStart)
 
@@ -106,7 +106,7 @@ func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	a := persisted.Status.SpecStatus["a"]
+	a := persisted.Status.SpecStatus.Entry("a")
 	if a.Build.Status != SpecBuildRunning {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Running (unknown phase unmapped)", a.Build.Status)
 	}
@@ -117,16 +117,16 @@ func TestAdvanceBackfillJobAborted(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobAborted, testStart)
 
 	reconcileOnce(t, c)
 
 	persisted := getBuildInfo(t, client)
-	a := persisted.Status.SpecStatus["a"]
+	a := persisted.Status.SpecStatus.Entry("a")
 	if a.Build.Status != SpecBuildFailed {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Failed (Aborted treated as Failed)", a.Build.Status)
 	}
@@ -154,16 +154,16 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 		bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-		bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-		}
+		})
 		seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
 		seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 
 		reconcileOnce(t, c)
 
 		persisted := getBuildInfo(t, client)
-		if got := persisted.Status.SpecStatus["a"].Install.Status; got != SpecBuildSucceeded {
+		if got := persisted.Status.SpecStatus.Entry("a").Install.Status; got != SpecBuildSucceeded {
 			t.Fatalf("install status = %q, want Succeeded", got)
 		}
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
@@ -174,9 +174,9 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 		bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-		bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-		}
+		})
 		seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
 		job := testJobObj(seeded, "a", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
@@ -187,7 +187,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		reconcileOnce(t, c)
 
 		persisted := getBuildInfo(t, client)
-		a := persisted.Status.SpecStatus["a"]
+		a := persisted.Status.SpecStatus.Entry("a")
 		if a.Install.Status != SpecBuildFailed {
 			t.Fatalf("install status = %q, want Failed", a.Install.Status)
 		}
@@ -202,7 +202,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 			"a": {Version: "1.0-1"},
 			"b": {Version: "1.0-1"},
 		}
-		bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {},
 			"b": {
 				Build:         ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded},
@@ -213,7 +213,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 					},
 				},
 			},
-		}
+		})
 		seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
 			"a": dependEntry("a"), "b": dependEntry("b"),
 		}, testSources(testRpm("a", "a", "1.0")))
@@ -226,7 +226,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-		b := persisted.Status.SpecStatus["b"]
+		b := persisted.Status.SpecStatus.Entry("b")
 		if b.Install.Status != SpecBuildFailed {
 			t.Fatalf("install status = %q, want Failed", b.Install.Status)
 		}
@@ -239,7 +239,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		if _, ok := persisted.Status.Dcg["b"].InstallInDep["a"]; !ok {
 			t.Fatalf("dcg[b].InstallInDep = %v, want runtime edge on a", persisted.Status.Dcg["b"].InstallInDep)
 		}
-		a := persisted.Status.SpecStatus["a"]
+		a := persisted.Status.SpecStatus.Entry("a")
 		if a.DispatchCount != 1 {
 			t.Fatalf("specStatus[a] = %+v, want dispatched (gen 1)", a)
 		}
@@ -252,10 +252,10 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = dcgStateAB()
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 		"b": {},
-	}
+	})
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
 		"a": dependEntry("a"), "b": dependEntry("b"),
 	}, testSources())
@@ -266,14 +266,14 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	if got := persisted.Status.SpecStatus["a"].Build.Status; got != SpecBuildSucceeded {
+	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != SpecBuildSucceeded {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Succeeded", got)
 	}
-	if got := persisted.Status.SpecStatus["b"].DispatchCount; got != 0 {
+	if got := persisted.Status.SpecStatus.Entry("b").DispatchCount; got != 0 {
 		t.Fatalf("specStatus[b].DispatchCount = %d, want 0 (publish gate)", got)
 	}
-	if len(persisted.Status.SpecStatus["b"].Build.Conditions) != 0 {
-		t.Fatalf("specStatus[b] conditions = %v, want none", persisted.Status.SpecStatus["b"].Build.Conditions)
+	if len(persisted.Status.SpecStatus.Entry("b").Build.Conditions) != 0 {
+		t.Fatalf("specStatus[b] conditions = %v, want none", persisted.Status.SpecStatus.Entry("b").Build.Conditions)
 	}
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1", got)
@@ -286,7 +286,7 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	reconcileOnce(t, c)
 
 	persisted = getBuildInfo(t, client)
-	b := persisted.Status.SpecStatus["b"]
+	b := persisted.Status.SpecStatus.Entry("b")
 	if b.DispatchCount != 1 {
 		t.Fatalf("specStatus[b] = %+v, want dispatched after publish", b)
 	}
@@ -300,10 +300,10 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 		"a": {Version: "1.0-1", OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConst{"b": {}}, BootstrapBreak: true},
 		"b": {Version: "1.0-1", OutDep: []string{"a"}, InDep: map[string]ebsv1.VersionConst{"a": {}}},
 	}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, DispatchCount: 1},
 		"b": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, DispatchCount: 1},
-	}
+	})
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
 		"a": dependEntry("a"), "b": dependEntry("b"),
 	}, testSources())
@@ -322,10 +322,10 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	if got := persisted.Status.SpecStatus["a"].DispatchCount; got != 1 {
+	if got := persisted.Status.SpecStatus.Entry("a").DispatchCount; got != 1 {
 		t.Fatalf("round1 specStatus[a].DispatchCount = %d, want 1 (gate 2 blocks the rebuild)", got)
 	}
-	if got := persisted.Status.SpecStatus["b"].DispatchCount; got != 1 {
+	if got := persisted.Status.SpecStatus.Entry("b").DispatchCount; got != 1 {
 		t.Fatalf("round1 specStatus[b].DispatchCount = %d, want 1 (gate 1 blocks the rebuild)", got)
 	}
 	if got := len(listJobs(t, client)); got != 2 {
@@ -342,10 +342,10 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	persisted = getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	requireCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded)
-	if got := persisted.Status.SpecStatus["a"].DispatchCount; got != 2 {
+	if got := persisted.Status.SpecStatus.Entry("a").DispatchCount; got != 2 {
 		t.Fatalf("round2 specStatus[a].DispatchCount = %d, want 2", got)
 	}
-	if got := persisted.Status.SpecStatus["b"].DispatchCount; got != 2 {
+	if got := persisted.Status.SpecStatus.Entry("b").DispatchCount; got != 2 {
 		t.Fatalf("round2 specStatus[b].DispatchCount = %d, want 2", got)
 	}
 	if got := len(listJobs(t, client)); got != 4 {
@@ -362,10 +362,10 @@ func TestAdvanceCompletionPartialFailure(t *testing.T) {
 		"a": {Version: "1.0-1"},
 		"b": {Version: "1.0-1"},
 	}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 		"b": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
 		"a": dependEntry("a"), "b": dependEntry("b"),
 	}, testSources())
@@ -381,7 +381,7 @@ func TestAdvanceCompletionPartialFailure(t *testing.T) {
 		t.Fatalf("PartialFailure message = %q, want failed spec b listed", cond.Message)
 	}
 	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
-	requireCondition(t, persisted.Status.SpecStatus["b"].Build.Conditions, ConditionBuildFailed, ReasonJobFailed)
+	requireCondition(t, persisted.Status.SpecStatus.Entry("b").Build.Conditions, ConditionBuildFailed, ReasonJobFailed)
 	if got := persisted.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
 	}
@@ -391,13 +391,13 @@ func TestAdvanceCompletionRecordsInstallFailureRepository(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {
 			Build:         ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded},
 			Install:       ebsv1.SpecInstallStatus{Status: SpecBuildFailed},
 			DispatchCount: 1,
 		},
-	}
+	})
 	seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
 
 	reconcileOnce(t, c)
@@ -414,9 +414,9 @@ func TestAdvanceCompletionBlockedByPendingCreates(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-pending-block"
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
 		"a": {JobName: jobNameFor("bi-pending-block", "a", 2), DispatchGeneration: 2},
 	}
@@ -442,9 +442,9 @@ func TestConvergePendingCreateConfirmed(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-converge-confirm"
 	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound, "rpmrepo gone")
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
 		"a": {JobName: jobNameFor("bi-converge-confirm", "a", 1), DispatchGeneration: 1},
 	}
@@ -458,7 +458,7 @@ func TestConvergePendingCreateConfirmed(t *testing.T) {
 	if len(persisted.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want confirmed and removed (6.5.1 #2)", persisted.Status.PendingJobCreates)
 	}
-	if got := persisted.Status.SpecStatus["a"].Build.Status; got != SpecBuildSucceeded {
+	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != SpecBuildSucceeded {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Succeeded", got)
 	}
 	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
@@ -473,9 +473,9 @@ func TestConvergePendingCreate404Kept(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-converge-404"
 	upsertCondition(&bi.Status.Conditions, ConditionSnapshotUnavailable, ReasonSnapshotNotFound, "snapshot gone")
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
 		"a": {JobName: jobNameFor("bi-converge-404", "a", 1), DispatchGeneration: 1},
 	}
@@ -498,9 +498,9 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	upsertCondition(&bi.Status.Conditions, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed, "release failed")
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	seeded := client.SeedBuildInfo(bi)
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobPhase("Phasing"), testStart)
 
@@ -509,7 +509,7 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
 	requireCondition(t, persisted.Status.Conditions, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed)
-	if got := persisted.Status.SpecStatus["a"].Build.Status; got != SpecBuildRunning {
+	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != SpecBuildRunning {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Running (unknown phase unmapped)", got)
 	}
 }
@@ -521,9 +521,9 @@ func TestE28ReleaseFailedStopsDispatch(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	seeded := client.SeedBuildInfo(bi)
 	repo := testRpmRepoObj(testRepoURL)
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
@@ -550,9 +550,9 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-e29"
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
 		"a": {JobName: jobNameFor("bi-e29", "a", 2), DispatchGeneration: 2},
 	}
@@ -604,9 +604,9 @@ func TestE30SnapshotUnavailableEscalates(t *testing.T) {
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}}
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
-	}
+	})
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
@@ -661,16 +661,16 @@ func TestAdvanceResidualAbortedSkips(t *testing.T) {
 	client.SeedBuild(testBuildObj("full"))
 	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildAborted}, DispatchCount: 1},
-	}
+	})
 	client.SeedBuildInfo(bi)
 
 	reconcileOnce(t, c)
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	if got := persisted.Status.SpecStatus["a"].Build.Status; got != SpecBuildAborted {
+	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != SpecBuildAborted {
 		t.Fatalf("specStatus[a].Build.Status = %q, want the residual Aborted kept (6.4)", got)
 	}
 	if len(persisted.Status.Conditions) != 0 {

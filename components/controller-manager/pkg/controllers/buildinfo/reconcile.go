@@ -407,12 +407,12 @@ func conditionsMatch(a, b []metav1.Condition) bool {
 }
 
 // specStatusMatches compares specStatus maps per spec entry (10.3).
-func specStatusMatches(a, b map[string]ebsv1.SpecStatus) bool {
-	if len(a) != len(b) {
+func specStatusMatches(a, b ebsv1.SpecStatusGroup) bool {
+	if a.Len() != b.Len() {
 		return false
 	}
-	for spec, left := range a {
-		right, ok := b[spec]
+	for spec, left := range a.Entries() {
+		right, ok := b.Lookup(spec)
 		if !ok {
 			return false
 		}

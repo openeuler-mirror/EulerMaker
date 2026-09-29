@@ -134,12 +134,9 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 // confirmed dispatches or terminal verdicts.
 func (c *Controller) persistBuildSetSpecStatuses(ctx context.Context, round *reconcileRound, buildSet map[string]specparse.SpecDepend) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
-	if next.Status.SpecStatus == nil {
-		next.Status.SpecStatus = make(map[string]ebsv1.SpecStatus, len(buildSet))
-	}
 	for name := range buildSet {
-		if _, exists := next.Status.SpecStatus[name]; !exists {
-			next.Status.SpecStatus[name] = ebsv1.SpecStatus{}
+		if _, exists := next.Status.SpecStatus.Lookup(name); !exists {
+			next.Status.SpecStatus.Set(name, ebsv1.SpecStatus{})
 		}
 	}
 	return c.writeStatusIfChanged(ctx, round, next)
@@ -178,7 +175,7 @@ func (c *Controller) ensureImage(ctx context.Context, round *reconcileRound, dis
 // condition-2 availability verdict (the only gate kept for bootstrap breaks,
 // 7.4.6 #3), then the 15.3.1 creation pipeline.
 func (c *Controller) dispatchInitSpec(ctx context.Context, round *reconcileRound, dispatch *roundDispatch, specName string, depend specparse.SpecDepend, snapshot *ebsv1.Snapshot, sources *rpmver.RpmMetaSources) (controller.ReconcileResult, error) {
-	ss := round.current.Status.SpecStatus[specName]
+	ss := round.current.Status.SpecStatus.Entry(specName)
 	if ss.Build.Status != "" || ss.DispatchCount > 0 {
 		// Already dispatched (Job created, Running, or a Failed verdict) —
 		// re-entering init never re-dispatches nor repeats bootstrap.
@@ -187,13 +184,13 @@ func (c *Controller) dispatchInitSpec(ctx context.Context, round *reconcileRound
 	if result, err := c.checkArchSupported(ctx, round, specName, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if ss = round.current.Status.SpecStatus[specName]; ss.Build.Status == SpecBuildFailed {
+	if ss = round.current.Status.SpecStatus.Entry(specName); ss.Build.Status == SpecBuildFailed {
 		return controller.ReconcileResult{}, nil
 	}
 	if result, err := c.checkBuildRequires(ctx, round, specName, &depend, sources); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if ss = round.current.Status.SpecStatus[specName]; ss.Build.Status == SpecBuildFailed {
+	if ss = round.current.Status.SpecStatus.Entry(specName); ss.Build.Status == SpecBuildFailed {
 		return controller.ReconcileResult{}, nil
 	}
 	image, err := c.ensureImage(ctx, round, dispatch)
@@ -586,14 +583,14 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range sortedSpecNames(buildSet) {
 		depend := buildSet[name]
-		ss := round.current.Status.SpecStatus[name]
+		ss := round.current.Status.SpecStatus.Entry(name)
 		if ss.Build.Status != "" || ss.DispatchCount > 0 {
 			continue
 		}
 		if result, err = c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus[name]; ss.Build.Status == SpecBuildFailed {
+		if ss = round.current.Status.SpecStatus.Entry(name); ss.Build.Status == SpecBuildFailed {
 			continue
 		}
 		image, err := c.ensureImage(ctx, round, dispatch)
