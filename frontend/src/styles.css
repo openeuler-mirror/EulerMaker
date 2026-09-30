@@ -382,6 +382,7 @@ body.modal-open { overflow: hidden; }
 .spec-status-filter-option.selected .spec-status-filter-check { border-color: var(--blue); color: #fff; background: var(--blue); }
 .spec-status-filter-option.selected .spec-status-filter-check svg { display: block; }
 .spec-status-filter-option input:focus-visible + .spec-status-filter-check { outline: 2px solid #9bc5f5; outline-offset: 2px; }
+.column-filter-option-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .build-info-condition { padding: 10px 0; border-bottom: 1px solid #edf1f6; overflow-wrap: anywhere; }
 .build-info-condition strong, .build-info-condition span { display: block; }
 .build-info-condition span, .build-info-condition p { color: var(--muted); font-size: 13px; }
@@ -415,6 +416,8 @@ body.modal-open { overflow: hidden; }
 .build-history-abort:disabled { opacity: .5; cursor: not-allowed; }
 .build-history-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .build-history-item-heading strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.build-history-item-title { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.build-history-item-type { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 11px; line-height: 16px; }
 .build-history-item small, .build-history-item time { display: block; margin-top: 6px; color: #7e899a; font-size: 12px; }
 .build-history-item time { color: #9aa4b3; }
 .build-detail-panel .section-heading { flex-wrap: wrap; }

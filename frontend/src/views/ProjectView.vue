@@ -13,7 +13,7 @@
 
   <div v-if="loadingProject" class="skeleton-list page-skeleton" :aria-label="t('project.loading')"><span v-for="item in 5" :key="item"></span></div>
   <div v-else-if="projectError" class="inline-error page-error">
-    <WarningFilled /><span>{{ projectError }}</span><button type="button" @click="loadProject">{{ t("common.reload") }}</button>
+    <WarningFilled /><span>{{ projectError }}</span><button type="button" @click="loadProject()">{{ t("common.reload") }}</button>
   </div>
   <template v-else-if="project">
     <section class="project-hero">
@@ -45,7 +45,9 @@
         <div class="package-list-toolbar"><label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label></div>
         <div v-if="packageSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageSaved") }}</div>
         <div v-if="deletedPackageName" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageDeleted", { name: deletedPackageName }) }}</div>
-        <div v-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table package-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th v-if="!selectedPackageName">URL</th><th v-if="!selectedPackageName">Git ref</th><th v-if="canEditProject && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }"><td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td><td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td><td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td><td v-if="canEditProject && !selectedPackageName" class="package-actions-column"><button class="text-button" type="button" :disabled="!repo.name" :aria-label="t('project.editPackage', { name: repo.name })" @click="openPackageEdit(repo)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
+        <div v-if="packageReposLoading" class="skeleton-list" :aria-label="t('project.loadingPackages')"><span v-for="item in 3" :key="item"></span></div>
+        <div v-else-if="packageReposErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(packageReposErrorKey) }}</span><button type="button" @click="loadPackageRepos">{{ t("common.reload") }}</button></div>
+        <div v-else-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table package-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th v-if="!selectedPackageName">URL</th><th v-if="!selectedPackageName">Git ref</th><th v-if="canEditProject && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }"><td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td><td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td><td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td><td v-if="canEditProject && !selectedPackageName" class="package-actions-column"><button class="text-button" type="button" :disabled="!repo.name" :aria-label="t('project.editPackage', { name: repo.name })" @click="openPackageEdit(repo)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
         <p v-else class="config-empty">{{ t(project.spec?.packageRepos?.length ? "project.noMatchingPackages" : "project.noPackageRepositories") }}</p>
         <div v-if="filteredPackageRepos.length" class="table-footer">
           <div class="page-summary">
@@ -89,14 +91,16 @@
     <section v-else-if="activeTab === 'builds'" id="project-panel-builds" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-builds">
       <section class="build-history-metrics" :aria-label="t('project.buildHistory')">
         <article class="metric-card"><div class="metric-icon violet"><Operation /></div><div><span>{{ t("project.builds") }}</span><strong>{{ resourcesLoading || buildTotalCount === null ? t("common.emptyValue") : buildTotalCount }}</strong><small>{{ t("project.buildsHint") }}</small></div></article>
-        <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong><button class="metric-value-button" type="button" :disabled="resourcesLoading || nonTerminalJobCount === null" :aria-label="t(showRunningJobs ? 'project.hideRunningJobs' : 'project.showRunningJobs')" :aria-expanded="showRunningJobs" aria-controls="project-running-jobs" @click="toggleRunningJobs">{{ resourcesLoading || nonTerminalJobCount === null ? t("common.emptyValue") : nonTerminalJobCount }}</button></strong><small>{{ t("project.jobsHint") }}</small></div></article>
+        <article class="metric-card"><div class="metric-icon green"><Tickets /></div><div><span>{{ t("project.jobs") }}</span><strong><button class="metric-value-button" type="button" :disabled="runningJobCount === null" :aria-label="t(showRunningJobs ? 'project.hideRunningJobs' : 'project.showRunningJobs')" :aria-expanded="showRunningJobs" aria-controls="project-running-jobs" @click="toggleRunningJobs">{{ runningJobCount === null ? t("common.emptyValue") : runningJobCount }}</button></strong><small>{{ t("project.jobsHint") }}</small></div></article>
         <div v-if="resourcesError" class="inline-error compact-error"><WarningFilled /><span>{{ resourcesError }}</span></div>
       </section>
       <article v-if="showRunningJobs" id="project-running-jobs" class="content-panel running-jobs-panel">
-        <div class="section-heading"><h2>{{ t("project.jobsHint") }}</h2><button class="package-detail-close" type="button" :aria-label="t('project.hideRunningJobs')" @click="showRunningJobs = false"><Close /></button></div>
-        <p v-if="!nonTerminalJobs.length" class="config-empty">{{ t("project.noRunningJobs") }}</p>
-        <template v-else>
-          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th>{{ t("project.builds") }}</th><th>Spec</th><th>{{ t("jobControl.phase") }}</th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/spec-name"] || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td></tr></tbody></table></div>
+        <div class="section-heading"><h2>{{ t("project.activeJobs") }}</h2><button class="package-detail-close" type="button" :aria-label="t('project.hideRunningJobs')" @click="showRunningJobs = false"><Close /></button></div>
+        <p v-if="pendingJobsLoading" class="config-empty">{{ t("project.loadingPendingJobs") }}</p>
+        <p v-if="!nonTerminalJobs.length && !pendingJobsLoading" class="config-empty">{{ t("project.noRunningJobs") }}</p>
+        <template v-if="nonTerminalJobs.length">
+          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td></tr></tbody></table></div>
+          <p v-if="!filteredRunningJobs.length" class="config-empty">{{ t("project.noMatchingRunningJobs") }}</p>
           <div v-if="runningJobsTotalPages > 1" class="table-footer"><nav class="pagination-row" :aria-label="t('common.pagination')"><button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="runningJobsPage === 1" @click="runningJobsPage -= 1"><ArrowLeft /></button><span class="page-button active" aria-current="page">{{ runningJobsPage }} / {{ runningJobsTotalPages }}</span><button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="runningJobsPage === runningJobsTotalPages" @click="runningJobsPage += 1"><ArrowRight /></button></nav></div>
         </template>
       </article>
@@ -111,8 +115,8 @@
           <div v-else class="build-history-list">
             <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
               <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
-                <span class="build-history-item-heading"><strong>{{ build.metadata?.name }}</strong><StatusBadge :value="buildDisplayStatus(build)" /></span>
-                <small>{{ build.spec?.buildType || t("project.unspecifiedType") }} · {{ buildTargetLabel(build) }}</small>
+                <span class="build-history-item-heading"><span class="build-history-item-title"><span class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</span><strong>{{ build.metadata?.name }}</strong></span><StatusBadge :value="buildDisplayStatus(build)" /></span>
+                <small>{{ buildTargetLabel(build) }}</small>
                 <time>{{ formatDate(build.status?.startTime) }}</time>
               </button>
               <button v-if="canAbortBuild(build)" class="build-history-abort" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
@@ -345,9 +349,10 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { stringify } from "yaml";
 
-import { ApiError, errorTranslationKey, list, request } from "@/api";
+import { ApiError, errorTranslationKey, JOB_LIST_INCLUDE_FIELDS, list, request } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
+import ColumnMultiFilter from "@/components/ColumnMultiFilter.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
@@ -367,9 +372,14 @@ type BuildTargetDraft = BuildTarget & { selected: boolean };
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
-const { t } = useI18n();
+const { t, te } = useI18n();
 const name = computed(() => String(route.params.name || ""));
 const project = ref<Project | null>(null);
+const projectIsFull = ref(false);
+const projectSummaryFields = "metadata,spec.displayName,spec.description,spec.defaultRef,spec.buildTargets,spec.bootstrapRepo,spec.buildPayload";
+let projectLoadSequence = 0;
+let packageLoadPromise: Promise<boolean> | null = null;
+let packageLoadSequence = -1;
 const builds = ref<Build[]>([]);
 const hideSingleBuilds = ref(false);
 const selectedBuildName = ref("");
@@ -383,17 +393,36 @@ const buildTotalPages = computed(() => Math.max(1, Math.ceil((buildTotalCount.va
 const buildPageLoading = ref(false);
 const buildPageErrorKey = ref("");
 let buildLoadSequence = 0;
-const nonTerminalJobCount = ref<number | null>(null);
+const runningJobCount = ref<number | null>(null);
 const nonTerminalJobs = ref<Job[]>([]);
 const showRunningJobs = ref(false);
+const pendingJobsLoading = ref(false);
+const selectedRunningBuilds = ref<string[]>([]);
+const selectedRunningPhases = ref<string[]>([]);
+const runningBuildOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/build-name"] || ""))]
+  .sort((left, right) => left.localeCompare(right))
+  .map((value) => ({ value, label: value || t("common.emptyValue") })));
+const runningPhaseOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.status?.phase || ""))]
+  .sort((left, right) => left.localeCompare(right))
+  .map((value) => {
+    const key = `status.${value.toLowerCase()}`;
+    return { value, label: value && te(key) ? t(key) : value || t("common.unknown") };
+  }));
+const filteredRunningJobs = computed(() => nonTerminalJobs.value.filter((job) =>
+  (!selectedRunningBuilds.value.length || selectedRunningBuilds.value.includes(job.metadata?.labels?.["ebs.io/build-name"] || "")) &&
+  (!selectedRunningPhases.value.length || selectedRunningPhases.value.includes(job.status?.phase || "")),
+));
 const runningJobsPage = ref(1);
 const runningJobsPageSize = 20;
-const runningJobsTotalPages = computed(() => Math.max(1, Math.ceil(nonTerminalJobs.value.length / runningJobsPageSize)));
-const visibleRunningJobs = computed(() => nonTerminalJobs.value.slice((runningJobsPage.value - 1) * runningJobsPageSize, runningJobsPage.value * runningJobsPageSize));
+const runningJobsTotalPages = computed(() => Math.max(1, Math.ceil(filteredRunningJobs.value.length / runningJobsPageSize)));
+const visibleRunningJobs = computed(() => filteredRunningJobs.value.slice((runningJobsPage.value - 1) * runningJobsPageSize, runningJobsPage.value * runningJobsPageSize));
 const loadingProject = ref(true);
+const packageReposLoading = ref(false);
+const packageReposErrorKey = ref("");
 const resourcesLoading = ref(true);
 const projectErrorKey = ref("");
 const resourceFailureCount = ref(0);
+let resourcesLoadSequence = 0;
 const buildLoadFailed = ref(false);
 const exportErrorKey = ref("");
 const copyErrorKey = ref("");
@@ -490,6 +519,7 @@ const tabs = computed<Array<{ id: ProjectTab; label: string }>>(() => [
   { id: "config", label: t("project.configTab") },
 ]);
 const canEditProject = computed(() => {
+  if (!projectIsFull.value) return false;
   const identity = session.session?.identity;
   if (!identity || (!identity.scopes.includes("ebs:user") && !identity.scopes.includes("ebs:ops"))) return false;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
@@ -508,7 +538,7 @@ const canAbortJobs = computed(() => {
   return labels['ebs.io/owner-user'] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === 'true';
 });
 const buildConfigurationMissing = computed(() =>
-  !project.value?.spec?.buildTargets?.length || !project.value?.spec?.packageRepos?.some((repo) => repo.name),
+  !project.value?.spec?.buildTargets?.length || (projectIsFull.value && !project.value?.spec?.packageRepos?.some((repo) => repo.name)),
 );
 const ownerUsername = computed(() => project.value?.metadata?.labels?.["ebs.io/owner-user"] || "");
 const memberUsernames = computed(() =>
@@ -519,6 +549,16 @@ const memberUsernames = computed(() =>
     .sort((left, right) => left.localeCompare(right)),
 );
 const selectedBuild = computed(() => builds.value.find((build) => build.metadata?.name === selectedBuildName.value) || null);
+
+function buildTypeLabel(type?: string): string {
+  switch (type) {
+    case "full": return t("project.fullBuild");
+    case "incremental": return t("project.incrementalBuild");
+    case "single": return t("project.singleBuild");
+    case "specified": return t("project.specifiedBuild");
+    default: return type || t("project.unspecifiedType");
+  }
+}
 
 function buildDisplayStatus(build: Build): string | undefined {
   const phase = build.status?.phase;
@@ -581,41 +621,110 @@ watch(packageSearch, () => {
   packageCurrentPage.value = 1;
 });
 
+watch([selectedRunningBuilds, selectedRunningPhases], () => {
+  runningJobsPage.value = 1;
+});
+
 watch(packageTotalPages, (total) => {
   if (packageCurrentPage.value > total) packageCurrentPage.value = total;
 });
 
-async function loadProject(): Promise<void> {
+async function loadProject(forceFull = false): Promise<boolean> {
+  if (forceFull && project.value) return projectIsFull.value || loadPackageRepos();
+  const sequence = ++projectLoadSequence;
   loadingProject.value = true;
   projectErrorKey.value = "";
   try {
-    project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`);
+    const path = `/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`;
+    const loaded = await request<Project>(`${path}?includeFields=${encodeURIComponent(projectSummaryFields)}`);
+    if (sequence !== projectLoadSequence) return false;
+    project.value = loaded;
+    projectIsFull.value = false;
+    if (forceFull) return await loadPackageRepos();
+    if (activeTab.value !== "builds") void loadPackageRepos();
+    return true;
   } catch (reason) {
-    projectErrorKey.value = errorTranslationKey(reason, "errors.loadProject");
+    if (sequence === projectLoadSequence) projectErrorKey.value = errorTranslationKey(reason, "errors.loadProject");
+    return false;
   } finally {
-    loadingProject.value = false;
+    if (sequence === projectLoadSequence) loadingProject.value = false;
   }
 }
 
+function loadPackageRepos(): Promise<boolean> {
+  const sequence = projectLoadSequence;
+  if (packageLoadPromise && packageLoadSequence === sequence) return packageLoadPromise;
+  packageLoadSequence = sequence;
+  packageReposLoading.value = true;
+  packageReposErrorKey.value = "";
+  const path = `/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`;
+  const pending = (async (): Promise<boolean> => {
+    try {
+      const loaded = await request<Project>(`${path}?includeFields=metadata,spec.packageRepos`);
+      if (sequence !== projectLoadSequence || !project.value) return false;
+      if (loaded.metadata?.resourceVersion !== project.value.metadata?.resourceVersion) {
+        const refreshed = await request<Project>(path);
+        if (sequence !== projectLoadSequence) return false;
+        project.value = refreshed;
+      } else {
+        project.value = { ...project.value, metadata: loaded.metadata, spec: { ...project.value.spec, packageRepos: loaded.spec?.packageRepos || [] } };
+      }
+      if (sequence !== projectLoadSequence) return false;
+      projectIsFull.value = true;
+      return true;
+    } catch (reason) {
+      if (sequence === projectLoadSequence) packageReposErrorKey.value = errorTranslationKey(reason, "errors.loadProject");
+      return false;
+    } finally {
+      if (sequence === projectLoadSequence) packageReposLoading.value = false;
+    }
+  })();
+  packageLoadPromise = pending;
+  void pending.finally(() => { if (packageLoadPromise === pending) packageLoadPromise = null; });
+  return pending;
+}
+
 async function loadResources(): Promise<void> {
+  const sequence = ++resourcesLoadSequence;
   resourcesLoading.value = true;
-  nonTerminalJobCount.value = null;
+  runningJobCount.value = null;
+  nonTerminalJobs.value = [];
+  pendingJobsLoading.value = true;
+  resourceFailureCount.value = 0;
   resetBuildPagination();
   const base = `/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`;
-  const results = await Promise.allSettled([
-    loadBuildPage("", 1),
-    listNonTerminalJobs(base),
-  ]);
-  if (results[1].status === "fulfilled") {
-    nonTerminalJobs.value = results[1].value;
-    nonTerminalJobCount.value = results[1].value.length;
+  let runningJobs: Job[] = [];
+  let pendingJobs: Job[] = [];
+  const updateJobs = () => {
+    nonTerminalJobs.value = sortJobsByStartTime([...runningJobs, ...pendingJobs]);
     runningJobsPage.value = Math.min(runningJobsPage.value, runningJobsTotalPages.value);
-  } else {
-    nonTerminalJobs.value = [];
+  };
+  void listJobsByPhase(base, "Running").then((jobs) => {
+    if (sequence !== resourcesLoadSequence) return;
+    runningJobs = jobs;
+    runningJobCount.value = jobs.length;
+    updateJobs();
+  }).catch(() => {
+    if (sequence !== resourcesLoadSequence) return;
+    resourceFailureCount.value += 1;
     showRunningJobs.value = false;
+  });
+  void listJobsByPhase(base, "Pending").then((jobs) => {
+    if (sequence !== resourcesLoadSequence) return;
+    pendingJobs = jobs;
+    updateJobs();
+  }).catch(() => {
+    if (sequence === resourcesLoadSequence) resourceFailureCount.value += 1;
+  }).finally(() => {
+    if (sequence === resourcesLoadSequence) pendingJobsLoading.value = false;
+  });
+  try {
+    if (!await loadBuildPage("", 1) && sequence === resourcesLoadSequence) resourceFailureCount.value += 1;
+  } catch {
+    if (sequence === resourcesLoadSequence) resourceFailureCount.value += 1;
+  } finally {
+    if (sequence === resourcesLoadSequence) resourcesLoading.value = false;
   }
-  resourceFailureCount.value = Number(results[0].status === "rejected" || !results[0].value) + Number(results[1].status === "rejected");
-  resourcesLoading.value = false;
 }
 
 function resetBuildPagination(): void {
@@ -681,22 +790,22 @@ function goToBuildPage(page: number): void {
   void loadBuildPage(token, page);
 }
 
-async function listNonTerminalJobs(base: string): Promise<Job[]> {
-  const listPhase = async (phase: "Pending" | "Running"): Promise<Job[]> => {
-    const jobs: Job[] = [];
-    let cursor = "";
-    do {
-      const query = new URLSearchParams({ limit: "100", fieldSelector: `status.phase=${phase}` });
-      if (cursor) query.set("continue", cursor);
-      const page = await list<Job>(`${base}/jobs?${query}`);
-      jobs.push(...page.items);
-      cursor = page.next;
-    } while (cursor);
-    return jobs;
-  };
-  const [pending, running] = await Promise.all([listPhase("Pending"), listPhase("Running")]);
+async function listJobsByPhase(base: string, phase: "Pending" | "Running"): Promise<Job[]> {
+  const jobs: Job[] = [];
+  let cursor = "";
+  do {
+    const query = new URLSearchParams({ limit: "100", fieldSelector: `status.phase=${phase}`, includeFields: JOB_LIST_INCLUDE_FIELDS });
+    if (cursor) query.set("continue", cursor);
+    const page = await list<Job>(`${base}/jobs?${query}`);
+    jobs.push(...page.items);
+    cursor = page.next;
+  } while (cursor);
+  return jobs;
+}
+
+function sortJobsByStartTime(jobs: Job[]): Job[] {
   const startedAt = (job: Job) => Date.parse(job.status?.startTime || job.metadata?.creationTimestamp || "") || 0;
-  return [...pending, ...running].sort((left, right) => startedAt(right) - startedAt(left));
+  return jobs.sort((left, right) => startedAt(right) - startedAt(left));
 }
 
 function toggleRunningJobs(): void {
@@ -706,14 +815,17 @@ function toggleRunningJobs(): void {
 
 function selectTab(tab: ProjectTab): void {
   activeTab.value = tab;
+  if (tab !== "builds" && !projectIsFull.value) void loadPackageRepos();
   const query = { ...route.query };
   if (tab === "overview") delete query.tab;
   else query.tab = tab;
   void router.replace({ query });
 }
 
-function openBuildDialog(type: BuildType): void {
-  if (!project.value || !canStartBuild.value || buildConfigurationMissing.value) return;
+async function openBuildDialog(type: BuildType): Promise<void> {
+  if (!project.value || !canStartBuild.value) return;
+  if (!projectIsFull.value && !(await loadProject(true))) return;
+  if (buildConfigurationMissing.value) return;
   void reloadBuildTargetConfig();
   buildType.value = type;
   selectedBuildPackages.value = [];
@@ -921,7 +1033,7 @@ async function listPackageJobs(packageLabelValue: string): Promise<Job[]> {
   const items: Job[] = [];
   let next = "";
   do {
-    const query = new URLSearchParams({ limit: "100", labelSelector: `${PACKAGE_NAME_LABEL}=${packageLabelValue}` });
+    const query = new URLSearchParams({ limit: "100", labelSelector: `${PACKAGE_NAME_LABEL}=${packageLabelValue}`, includeFields: JOB_LIST_INCLUDE_FIELDS });
     if (next) query.set("continue", next);
     const page = await list<Job>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/jobs?${query}`);
     items.push(...page.items);
@@ -1280,10 +1392,11 @@ function buildPaginationItems(total: number, current: number): Array<{ key: stri
   return result;
 }
 
-function exportYaml(): void {
+async function exportYaml(): Promise<void> {
   if (!project.value) return;
   exportErrorKey.value = "";
   try {
+    if (!projectIsFull.value && !(await loadProject(true))) return;
     const yaml = stringify(project.value, { indent: 2, lineWidth: 0 });
     const blob = new Blob([yaml], { type: "application/yaml;charset=utf-8" });
     const url = URL.createObjectURL(blob);

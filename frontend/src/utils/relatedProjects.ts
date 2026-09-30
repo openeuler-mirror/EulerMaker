@@ -1,6 +1,8 @@
 import { list } from "@/api";
 import type { Project } from "@/types";
 
+export const PROJECT_LIST_INCLUDE_FIELDS = "metadata,spec.displayName,spec.description,spec.buildTargets";
+
 // Kubernetes label selectors do not support OR across different keys.
 // Fetch both filtered lists completely before merging and paginating locally.
 export async function listRelatedProjects(username: string, typeSelector: string, isCurrent: () => boolean): Promise<Project[]> {
@@ -14,7 +16,7 @@ export async function listRelatedProjects(username: string, typeSelector: string
     let token = "";
     do {
       if (!isCurrent()) return [];
-      const query = new URLSearchParams({ limit: "100", labelSelector: `${typeSelector},${relation}` });
+      const query = new URLSearchParams({ limit: "100", labelSelector: `${typeSelector},${relation}`, includeFields: PROJECT_LIST_INCLUDE_FIELDS });
       if (token) query.set("continue", token);
       const page = await list<Project>(`/apis/ebs/v1/projects?${query}`);
       items.push(...page.items);

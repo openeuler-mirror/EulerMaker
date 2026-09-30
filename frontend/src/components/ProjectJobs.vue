@@ -21,7 +21,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ApiError, errorTranslationKey, list, request } from '@/api';
+import { ApiError, errorTranslationKey, JOB_LIST_INCLUDE_FIELDS, list, request } from '@/api';
 import type { Job } from '@/types';
 import ModalDialog from './ModalDialog.vue';
 import JobLogInline from './JobLogInline.vue';
@@ -67,7 +67,7 @@ async function load(cursor: string): Promise<void> {
   if (!props.project || !props.buildName || !props.specName) { jobs.value = []; next.value = ''; loading.value = false; return; }
   loading.value = true; error.value = '';
   try {
-    const query = new URLSearchParams({ limit: '50' });
+    const query = new URLSearchParams({ limit: '50', includeFields: JOB_LIST_INCLUDE_FIELDS });
     query.set('labelSelector', `ebs.io/build-name=${props.buildName},ebs.io/spec-name=${props.specName}`);
     if (cursor) query.set('continue', cursor);
     const page = await list<Job>(`${path(props.project)}?${query}`);
