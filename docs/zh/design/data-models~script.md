@@ -2,7 +2,7 @@
 
 ## 1. 职责与更新模型
 
-Script 管理可执行脚本；`Config/build-target` 管理镜像，`Config/build-resource` 管理资源需求。`Project.spec.buildPayload` 和 `BuildInfo.spec.buildPayload` 中的 `rpmbuild_script` 选择全局脚本；Job 通过 `spec.scriptRefs` 记录创建时观察到的 Script 元数据。对于 CT 构建，Runner 仍将 Job payload 写成 `/workspace/payload.yaml`，由脚本读取。
+Script 管理可执行脚本；`Config/build-target` 管理镜像，`Config/build-resource` 管理资源需求。`Project.spec.buildPayload` 和 `BuildInfo.spec.buildPayload` 中的 `rpmbuild_script` 选择全局脚本；Job 通过 `spec.scriptRefs` 记录创建时观察到的 Script 元数据。对于 CT 构建，Runner 将 JSON 格式的 Job payload 写成 `/workspace/payload.json`，由脚本读取。
 
 Script 的 spec 只包含 `content`，支持原地修改，通过 `resourceVersion` 防止并发覆盖，不另设 revision 对象或历史内容存储。Job 记录创建时观察到的名称、UID 和 resourceVersion，但不固定内容版本。Runner 缓存匹配该观测值时复用内容；不匹配时 GET 当前 Script。
 
@@ -22,7 +22,7 @@ spec:
     #!/bin/bash
     set -euo pipefail
     # 示例入口；具体构建工具由镜像提供。
-    exec /usr/local/bin/build-rpm --config /workspace/payload.yaml
+    exec /usr/local/bin/build-rpm --config /workspace/payload.json
 ```
 
 接口路径：
@@ -72,7 +72,7 @@ Runner 接受已绑定给自己的 Job 后、启动业务容器前：
 2. 校验响应 GVK、name、namespace 为空、UID、resourceVersion 和内容限制（包括 shebang）。任一不符均禁止执行；响应的 UID/resourceVersion 可以与 Job 中的观测值不同。缓存使用实际响应元数据，下次遇到旧观测值会再次 GET。
 3. 在该 Job 的工作目录下，将每个脚本写入 `scripts/{name}`，使用临时文件后原子替换；与 payload 分开保存，并设置 `0555` 权限。工作目录挂载于 `/workspace`，脚本路径为 `/workspace/scripts/{name}`，拒绝覆盖该目录的额外挂载。所有脚本成功拉取后才启动容器。
 4. 容器入口明确设置为 `/workspace/scripts/{scriptRefs[0].name}`，清空镜像默认 CMD 参数，执行时按 shebang 启动容器内的解释器；不通过宿主机解释或执行脚本。需要覆盖镜像 ENTRYPOINT，而不只是向镜像追加 CMD。非空脚本数组与 `runtimeSpec.command/args` 同时设置时视为配置错误，不静默选择其中一个。
-5. 脚本读取 `/workspace/payload.yaml`，按现有约定输出产物、日志和退出码；沿用 Job 超时、中止、产物上传及清理流程。
+5. 脚本读取 `/workspace/payload.json`，按现有约定输出产物、日志和退出码；沿用 Job 超时、中止、产物上传及清理流程。
 
 拉取和重试消耗 Job 既有执行期限，不重新计算超时；等待期间响应中止。启动容器前仍检查取消及 Job 绑定状态。拉取本身不新增 Job phase/stage。
 

@@ -320,7 +320,7 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 3. 更新 Job.status.stage=Running
 4. 准备执行环境并开始业务执行；环境准备和业务运行统一属于 `Running` stage
 5. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
-6. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 YAML 参数提供给任务入口
+6. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 JSON 参数提供给任务入口
 7. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
 8. 将 Job 保持为 phase=Running 并推进到 stage=PostRun，封账日志；业务执行失败或超时也必须尝试封账已有日志
 9. 业务执行成功时收集并上传产物，完成 JobUploadManifest
@@ -384,11 +384,11 @@ runner agent
 ```text
 1. 解析 Job.spec.runtimeSpec，得到镜像、网络、权限、工作目录、挂载等容器配置
 2. 为 Job 创建本地 workDir 和 resultDir
-3. 将 Job.spec.payload 写入 workDir/payload.yaml，作为任务执行所需的 YAML 参数文件
+3. 将 Job.spec.payload 写入 workDir/payload.json，作为任务执行所需的 JSON 参数文件
 4. `scriptRefs` 非空时按顺序解析全部脚本，写入 workDir/scripts/{name}；全部成功后才继续
 5. 拉取或确认业务镜像可用
 6. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label
-7. 启动容器：非空数组以第一项作为入口；空数组沿用镜像入口。业务入口读取 /workspace/payload.yaml 并执行任务
+7. 启动容器：非空数组以第一项作为入口；空数组沿用镜像入口。业务入口读取 /workspace/payload.json 并执行任务
 8. 流式采集或落盘容器日志
 9. 等待容器退出，按退出码决定 Job 成功或失败
 10. 超时时先 stop，超过 grace period 后 kill
@@ -422,7 +422,7 @@ runtimeSpec:
 
 | 宿主机目录 | 容器目录 | 说明 |
 |------------|----------|------|
-| `${rootDir}/work/{project}/{jobName}` | `/workspace` | payload YAML、`scripts/{name}` 和执行工作目录 |
+| `${rootDir}/work/{project}/{jobName}` | `/workspace` | `payload.json`、`scripts/{name}` 和执行工作目录 |
 | `${rootDir}/results/{project}/{jobName}` | `/results` | 构建产物暂存目录；最终结果通过 Artifact Manager 定位 |
 
 容器 label 建议至少包含：

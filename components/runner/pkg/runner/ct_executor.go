@@ -123,8 +123,8 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	if err := os.MkdirAll(resultRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create result root: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "payload.yaml"), []byte(job.Spec.Payload), 0o644); err != nil {
-		return "", fmt.Errorf("write payload.yaml: %w", err)
+	if err := os.WriteFile(filepath.Join(workDir, "payload.json"), []byte(job.Spec.Payload), 0o644); err != nil {
+		return "", fmt.Errorf("write payload.json: %w", err)
 	}
 	var scriptPath string
 	if len(job.Spec.ScriptRefs) > 0 {

@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kvalidation "k8s.io/apimachinery/pkg/util/validation"
+	syaml "sigs.k8s.io/yaml"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -491,9 +492,8 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 	}
 }
 
-// jobPayload assembles the payload YAML (design 15.3.1 payload 构造契约):
-// the BuildInfo.spec.buildPayload base map with per-spec fields and the
-// build-level repo/repo_priority keys injected (overriding base keys).
+// jobPayload assembles the payload JSON (design 15.3.1 payload 构造契约):
+// the BuildInfo.spec.buildPayload base map with per-spec fields and repositories injected.
 func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string, sources *rpmver.RpmMetaSources) string {
 	base := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
 	delete(base, "rpmbuild_script")
@@ -504,6 +504,9 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 	}
 	delete(base, "unparsable_spec")
 	delete(base, "Repo")
+	delete(base, "repo_priority")
+	delete(base, "commitId")
+	delete(base, "commit_id")
 	base["spec_name"] = specName
 	base["spec_file_name"] = depend.SpecFileName
 	// The project-level list names package repositories, not spec files.
@@ -521,21 +524,37 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 	}
 	if entry, ok := snapshot.Status.PackageRepoStatuses[depend.RepoName]; !ok || entry.CommitID == "" {
 		// Cannot happen for assembled specs (15.3.1): never blocks dispatch.
-		c.logf(round.key, "SpecRepoEntryMissing", "packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commitId not injected", depend.RepoName)
+		c.logf(round.key, "SpecRepoEntryMissing", "packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commit_id not injected", depend.RepoName)
 	} else {
 		base["spec_url"] = entry.CloneURL
-		base["commitId"] = entry.CommitID
+		base["commit_id"] = entry.CommitID
 	}
 	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
-	repoValue := joinRepoPayload(contentURL, bootstrapRepos)
-	if repoValue == "" {
-		// Nothing to inject: keep the base key as-is (15.3.1).
+	repoURLs := repoPayloadURLs(contentURL, bootstrapRepos)
+	if len(repoURLs) == 0 {
+		// Preserve an explicitly configured fallback, but emit the same array
+		// shape as repositories resolved by the controller.
+		repoURLs = configuredRepoURLs(base["repo"])
+	}
+	if len(repoURLs) == 0 {
+		delete(base, "repo")
 		return c.marshalPayload(round, base)
 	}
-	base["repo"] = repoValue
-	repoCount := len(strings.Fields(repoValue))
-	base["repo_priority"] = c.normalizeRepoPriority(round, base["repo_priority"], repoCount)
+	repos := make([]payloadRepo, len(repoURLs))
+	for i, url := range repoURLs {
+		priority := 99
+		if i == 0 && contentURL != "" {
+			priority = 10
+		}
+		repos[i] = payloadRepo{URL: url, Priority: priority}
+	}
+	base["repo"] = repos
 	return c.marshalPayload(round, base)
+}
+
+type payloadRepo struct {
+	URL      string `json:"url"`
+	Priority int    `json:"priority"`
 }
 
 // jobPrefer uses the same layered provider choice as dependency graph
@@ -557,47 +576,47 @@ func jobPrefer(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources, con
 	return matched
 }
 
-// joinRepoPayload joins the RpmRepo contentURL (first when non-empty) with
+// repoPayloadURLs orders the RpmRepo contentURL (first when non-empty) before
 // the bootstrap repo URLs in declaration order (design 15.3.1 / 7.2.3).
-func joinRepoPayload(contentURL string, bootstrapRepos []string) string {
+func repoPayloadURLs(contentURL string, bootstrapRepos []string) []string {
 	parts := make([]string, 0, len(bootstrapRepos)+1)
 	if contentURL != "" {
 		parts = append(parts, contentURL)
 	}
 	parts = append(parts, bootstrapRepos...)
-	return strings.Join(parts, " ")
+	return parts
 }
 
-// normalizeRepoPriority renders the priority list aligned with the repo
-// entry count (design 15.3.1): a non-empty base string is the base (padded
-// with "10" or truncated with one warning), otherwise all "10".
-func (c *Controller) normalizeRepoPriority(round *reconcileRound, baseValue any, repoCount int) string {
-	var base []string
-	if s, ok := baseValue.(string); ok && strings.TrimSpace(s) != "" {
-		base = strings.Fields(s)
-	}
-	out := make([]string, repoCount)
-	copy(out, base)
-	if len(base) > repoCount {
-		c.logf(round.key, "RepoPriorityTruncated", "repo_priority %d entries truncated to %d", len(base), repoCount)
-	}
-	if len(base) > 0 && len(base) < repoCount {
-		c.logf(round.key, "RepoPriorityPadded", "repo_priority %d entries padded to %d", len(base), repoCount)
-	}
-	for i := range out {
-		if out[i] == "" {
-			out[i] = "10"
+func configuredRepoURLs(value any) []string {
+	switch value := value.(type) {
+	case string:
+		return strings.Fields(value)
+	case []any:
+		urls := make([]string, 0, len(value))
+		for _, item := range value {
+			if url, ok := item.(string); ok && strings.TrimSpace(url) != "" {
+				urls = append(urls, url)
+			}
 		}
+		return urls
+	default:
+		return nil
 	}
-	return strings.Join(out, " ")
 }
 
 func (c *Controller) marshalPayload(round *reconcileRound, base map[string]any) string {
-	payload, err := yaml.Marshal(base)
+	payloadYAML, err := yaml.Marshal(base)
 	if err != nil {
 		// Defensive: the base is a YAML-decoded map plus string values, so a
 		// marshal failure is a programming error; keep a trace.
 		c.logf(round.key, "PayloadMarshalFailed", "payload marshal failed: %v", err)
+		return ""
+	}
+	// buildPayload accepts YAML, including nested maps. Convert its assembled
+	// representation to JSON so scripts can parse long scalar values reliably.
+	payload, err := syaml.YAMLToJSON(payloadYAML)
+	if err != nil {
+		c.logf(round.key, "PayloadMarshalFailed", "payload JSON conversion failed: %v", err)
 		return ""
 	}
 	return string(payload)

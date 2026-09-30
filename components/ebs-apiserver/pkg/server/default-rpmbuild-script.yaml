@@ -7,7 +7,7 @@ spec:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    payload=/workspace/payload.yaml
+    payload=/workspace/payload.json
     test -s "$payload" || { echo "missing $payload" >&2; exit 1; }
     test "$(id -u)" -eq 0 || { echo "rpmbuild script requires root for dnf builddep" >&2; exit 1; }
     for tool in git dnf rpmbuild rpmspec curl python3; do
@@ -16,24 +16,54 @@ spec:
     result_file=/workspace/job-result.json
     printf '{"build":{"status":"Failed"}}\n' > "$result_file"
 
-    # The controller writes these four top-level values as scalar YAML fields.
+    # Parse the controller's JSON payload; long URLs must not be read by line.
     # Never eval payload content as shell code.
     field() {
-      local value
-      value=$(sed -n "s/^$1:[[:space:]]*//p" "$payload" | head -n 1)
-      case "$value" in
-        \"*\") value=${value#\"}; value=${value%\"} ;;
-        \'*\') value=${value#\'}; value=${value%\'} ;;
-      esac
-      printf '%s' "$value"
+      python3 - "$payload" "$1" <<'PY'
+    import json
+    import sys
+
+    with open(sys.argv[1], encoding='utf-8') as source:
+        payload = json.load(source)
+    value = payload.get(sys.argv[2], '')
+    if not isinstance(value, str):
+        sys.exit(f'payload.{sys.argv[2]} must be a string')
+    print(value, end='')
+    PY
     }
 
     spec_url=$(field spec_url)
-    commit_id=$(field commitId)
+    commit_id=$(field commit_id)
     spec_file=$(field spec_file_name)
-    repo=$(field repo)
+    repo_lines=$(python3 - "$payload" <<'PY'
+    import json
+    import sys
+
+    with open(sys.argv[1], encoding='utf-8') as source:
+        repos = json.load(source).get('repo', [])
+    if not isinstance(repos, list):
+        sys.exit('payload.repo must be an array')
+    entries = []
+    for repo in repos:
+        if not isinstance(repo, dict) or not isinstance(repo.get('url'), str) or not repo['url'] or any(char in repo['url'] for char in '\n\r\t'):
+            sys.exit('payload.repo entries must have a non-empty single-line url')
+        priority = repo.get('priority')
+        if type(priority) is not int or not 0 <= priority <= 99:
+            sys.exit('payload.repo entries must have an integer priority from 0 to 99')
+        entries.append(f"{priority}\t{repo['url']}")
+    print('\n'.join(entries), end='')
+    PY
+    )
+    repo_urls=()
+    repo_priorities=()
+    if [[ -n "$repo_lines" ]]; then
+      while IFS=$'\t' read -r priority url; do
+        repo_priorities+=("$priority")
+        repo_urls+=("$url")
+      done <<< "$repo_lines"
+    fi
     test -n "$spec_url" || { echo "payload.spec_url is required" >&2; exit 1; }
-    [[ "$commit_id" =~ ^[[:xdigit:]]{40}$|^[[:xdigit:]]{64}$ ]] || { echo "invalid payload.commitId" >&2; exit 1; }
+    [[ "$commit_id" =~ ^[[:xdigit:]]{40}$|^[[:xdigit:]]{64}$ ]] || { echo "invalid payload.commit_id" >&2; exit 1; }
     [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
 
     source_dir=/workspace/source
@@ -52,11 +82,10 @@ spec:
     spec="$topdir/SPECS/$spec_file"
 
     dnf_args=()
-    if [[ -n "$repo" ]]; then
+    if (( ${#repo_urls[@]} > 0 )); then
       dnf_args=(--disablerepo='*')
-      read -r -a repo_urls <<< "$repo"
       for i in "${!repo_urls[@]}"; do
-        dnf_args+=("--repofrompath=ebs-$i,${repo_urls[$i]}" "--enablerepo=ebs-$i" "--setopt=ebs-$i.gpgcheck=0")
+        dnf_args+=("--repofrompath=ebs-$i,${repo_urls[$i]}" "--enablerepo=ebs-$i" "--setopt=ebs-$i.gpgcheck=0" "--setopt=ebs-$i.priority=${repo_priorities[$i]}")
       done
     fi
     dnf "${dnf_args[@]}" -y builddep "$spec"

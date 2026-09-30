@@ -10,10 +10,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
-
-	yaml "gopkg.in/yaml.v2"
 
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
@@ -708,11 +707,12 @@ func TestSinglePassThrough(t *testing.T) {
 		if job.Labels[ebsv1.JobSpecNameLabel] != "b" {
 			continue
 		}
-		if !strings.Contains(job.Spec.Payload, "spec_name: b") || !strings.Contains(job.Spec.Payload, "commitId: c2") {
-			t.Fatalf("payload = %q, want spec_name/commitId injected", job.Spec.Payload)
+		payload := payloadFields(t, job.Spec.Payload)
+		if payload["spec_name"] != "b" || payload["commit_id"] != "c2" {
+			t.Fatalf("payload = %v, want spec_name/commit_id injected", payload)
 		}
-		if strings.Contains(job.Spec.Payload, "repo: ") {
-			t.Fatalf("payload = %q, want no repo injection (404 RpmRepo, no bootstrap)", job.Spec.Payload)
+		if _, exists := payload["repo"]; exists {
+			t.Fatalf("payload = %v, want no repo injection (404 RpmRepo, no bootstrap)", payload)
 		}
 	}
 }
@@ -738,12 +738,12 @@ func TestSingleRepoInjection(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
-	payload := jobs[0].Spec.Payload
-	if !strings.Contains(payload, "repo: "+testRepoURL+" http://bootstrap.local/base/"+testArch) {
-		t.Fatalf("payload = %q, want contentURL first + bootstrap repo", payload)
-	}
-	if !strings.Contains(payload, "repo_priority: 10 10") {
-		t.Fatalf("payload = %q, want repo_priority aligned (10 10)", payload)
+	payload := payloadFields(t, jobs[0].Spec.Payload)
+	if got, want := payload["repo"], []any{
+		map[string]any{"url": testRepoURL, "priority": float64(10)},
+		map[string]any{"url": "http://bootstrap.local/base/" + testArch, "priority": float64(99)},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("payload repo = %v, want %v", got, want)
 	}
 }
 
@@ -765,8 +765,8 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
-	if want := "repo: http://artifact.example:8081/repositories/v1/repo-1/"; !strings.Contains(jobs[0].Spec.Payload, want) {
-		t.Fatalf("payload = %q, want %q", jobs[0].Spec.Payload, want)
+	if want := []any{map[string]any{"url": "http://artifact.example:8081/repositories/v1/repo-1/", "priority": float64(10)}}; !reflect.DeepEqual(payloadFields(t, jobs[0].Spec.Payload)["repo"], want) {
+		t.Fatalf("payload = %q, want repo %v", jobs[0].Spec.Payload, want)
 	}
 }
 
@@ -793,10 +793,7 @@ func TestSinglePreferWithoutDependencyGate(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("single Jobs = %d, want 1 despite missing BuildRequires", len(jobs))
 	}
-	var payload map[string]any
-	if err := yaml.Unmarshal([]byte(jobs[0].Spec.Payload), &payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := payloadFields(t, jobs[0].Spec.Payload)
 	if got := payload["prefer"]; got != "rpm-a" {
 		t.Fatalf("single Job prefer = %v, want rpm-a", got)
 	}

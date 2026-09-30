@@ -56,16 +56,16 @@ spec:
   content: |
     #!/bin/bash
     set -euo pipefail
-    exec /usr/local/bin/build-rpm --config /workspace/payload.yaml
+    exec /usr/local/bin/build-rpm --config /workspace/payload.json
 ```
 
 上述为接口示例；apiserver 使用内置的 [rpmbuild Script](pkg/server/default-rpmbuild-script.yaml) 初始化同名对象。通过 `POST /apis/ebs/v1/scripts` 创建，`GET /apis/ebs/v1/scripts` 列表，`GET/PUT/PATCH /apis/ebs/v1/scripts/{name}` 读取和更新，`DELETE /apis/ebs/v1/scripts/{name}` 删除。删除可选带 `preconditions.uid` 和 `preconditions.resourceVersion` 以防止误删；apiserver 不按脚本名称限制删除。PUT 必须携带 GET 返回的 resourceVersion；PATCH 支持 JSON Merge Patch 和 JSON Patch，并使用 ES 乐观锁避免并发覆盖。列表支持分页和 label/metadata.name 过滤。
 
-正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 使用通用请求体大小限制（当前默认 3 MiB）。经 Gateway 访问时还受其请求体限制。不支持 watch、status 或 Project-scoped 路径；通用路由不注册 HEAD。
+正文不设独立大小上限，要求 UTF-8、无 NUL、首行是指定绝对解释器路径的 shebang（LF 换行）；apiserver 使用通用请求体大小限制（当前配置为 5 MiB）。经 Gateway 访问时还受其请求体限制。不支持 watch、status 或 Project-scoped 路径；通用路由不注册 HEAD。
 
 apiserver 在就绪前从内置模板初始化 `rpmbuild` Script，仅创建不存在的对象；已有对象不被覆盖，初始化失败则启动失败，无需启动参数。Gateway 已限制仅 Ops/Admin/System 可创建和修改 Script，普通登录用户只读、Runner 仅可读取具名对象；BuildInfo Controller 将创建时观察到的 Script 元数据写入新 Job 的 `spec.scriptRefs`，Runner 按引用拉取并执行脚本。apiserver 仍属于内部服务，不应直接对外暴露。
 
-内置 [rpmbuild Script 模板](pkg/server/default-rpmbuild-script.yaml) 可用于简单 RPM 包：读取 `/workspace/payload.yaml`，按 `spec_url` 和 `commitId` 检出仓库，通过 `dnf builddep` 安装依赖，以 `rpmbuild -ba` 构建；二进制 RPM 和源码 RPM 均放入 `/results/packages/`。构建镜像需预装 Bash、Git、curl、rpm-build 和 `dnf builddep` 插件，并以 root 执行；模板仅处理仓库根目录的 spec、仓库内文件及可直接下载的 HTTP(S) Source/Patch，不覆盖旧脚本的高级构建规则。
+内置 [rpmbuild Script 模板](pkg/server/default-rpmbuild-script.yaml) 可用于简单 RPM 包：读取 `/workspace/payload.json`，按 `spec_url` 和 `commit_id` 检出仓库，通过 `dnf builddep` 安装依赖，以 `rpmbuild -ba` 构建；二进制 RPM 和源码 RPM 均放入 `/results/packages/`。构建镜像需预装 Bash、Git、curl、rpm-build 和 `dnf builddep` 插件，并以 root 执行；模板仅处理仓库根目录的 spec、仓库内文件及可直接下载的 HTTP(S) Source/Patch，不覆盖旧脚本的高级构建规则。
 
 ## Build 创建互斥
 

@@ -7,12 +7,12 @@ package buildinfo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
-	yaml "gopkg.in/yaml.v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -170,15 +170,30 @@ func TestResolveResourcesMerge(t *testing.T) {
 
 // --- repo payload helpers ---
 
-func TestJoinRepoPayload(t *testing.T) {
-	if got := joinRepoPayload("", nil); got != "" {
-		t.Fatalf("empty join = %q, want empty", got)
+func TestRepoPayloadURLs(t *testing.T) {
+	if got := repoPayloadURLs("", nil); len(got) != 0 {
+		t.Fatalf("empty repo list = %v, want empty", got)
 	}
-	if got := joinRepoPayload("", []string{"u1", "u2"}); got != "u1 u2" {
-		t.Fatalf("bootstrap-only join = %q, want u1 u2", got)
+	if got := repoPayloadURLs("", []string{"u1", "u2"}); !reflect.DeepEqual(got, []string{"u1", "u2"}) {
+		t.Fatalf("bootstrap-only repos = %v, want u1/u2", got)
 	}
-	if got := joinRepoPayload(testRepoURL, []string{"u1"}); got != testRepoURL+" u1" {
-		t.Fatalf("contentURL join = %q, want contentURL first", got)
+	if got := repoPayloadURLs(testRepoURL, []string{"u1"}); !reflect.DeepEqual(got, []string{testRepoURL, "u1"}) {
+		t.Fatalf("repos = %v, want contentURL first", got)
+	}
+}
+
+func TestConfiguredRepoURLs(t *testing.T) {
+	for _, tc := range []struct {
+		input any
+		want  []string
+	}{
+		{input: "http://repo-a/ http://repo-b/", want: []string{"http://repo-a/", "http://repo-b/"}},
+		{input: []any{"http://repo-a/", "http://repo-b/"}, want: []string{"http://repo-a/", "http://repo-b/"}},
+		{input: nil},
+	} {
+		if got := configuredRepoURLs(tc.input); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("configuredRepoURLs(%v) = %v, want %v", tc.input, got, tc.want)
+		}
 	}
 }
 
@@ -194,29 +209,6 @@ func TestBootstrapRepoURLs(t *testing.T) {
 	}
 	if repos[0].Repo != "https://example.com/base" {
 		t.Fatalf("bootstrapRepoURLs modified input: %+v", repos)
-	}
-}
-
-func TestNormalizeRepoPriority(t *testing.T) {
-	c, _, _, _ := newTestController(t)
-	round := &reconcileRound{key: testNS + "/" + testBuild}
-	tests := []struct {
-		base  any
-		count int
-		want  string
-	}{
-		{nil, 2, "10 10"},
-		{"", 1, "10"},
-		{"  ", 1, "10"},
-		{"5", 3, "5 10 10"}, // padded
-		{"1 2 3", 2, "1 2"}, // truncated
-		{"7 8", 2, "7 8"},   // aligned
-		{42, 2, "10 10"},    // non-string base
-	}
-	for _, tc := range tests {
-		if got := c.normalizeRepoPriority(round, tc.base, tc.count); got != tc.want {
-			t.Errorf("normalizeRepoPriority(%v, %d) = %q, want %q", tc.base, tc.count, got, tc.want)
-		}
 	}
 }
 
@@ -278,23 +270,24 @@ func TestJobForSpecConstruction(t *testing.T) {
 	if job.Spec.Resources.Requests["cpu"] != "1" {
 		t.Errorf("resources = %+v, want the project default", job.Spec.Resources)
 	}
-	payload := job.Spec.Payload
-	for _, fragment := range []string{
-		"spec_name: a",
-		"spec_file_name: a.spec",
-		"spec_url: " + gitURL1,
-		"commitId: c1",
-		"custom: keep",
+	payload := payloadFields(t, job.Spec.Payload)
+	for key, want := range map[string]any{
+		"spec_name": "a", "spec_file_name": "a.spec", "spec_url": gitURL1,
+		"commit_id": "c1", "custom": "keep",
 		// The injected build-level keys override the base ones (15.3.1).
-		"repo: " + testRepoURL + " http://bootstrap.local/base/" + testArch,
-		"repo_priority: 7 10",
 	} {
-		if !strings.Contains(payload, fragment) {
-			t.Errorf("payload missing %q:\n%s", fragment, payload)
+		if got := payload[key]; got != want {
+			t.Errorf("payload[%s] = %v, want %v", key, got, want)
 		}
 	}
-	if strings.Contains(payload, "base-override") || strings.Contains(payload, "legacy-override") || strings.Contains(payload, "Repo:") {
-		t.Errorf("payload kept a base repo key:\n%s", payload)
+	if got, want := payload["repo"], []any{
+		map[string]any{"url": testRepoURL, "priority": float64(10)},
+		map[string]any{"url": "http://bootstrap.local/base/" + testArch, "priority": float64(99)},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("payload.repo = %v, want %v", got, want)
+	}
+	if _, exists := payload["repo_priority"]; exists {
+		t.Errorf("payload still contains removed repo_priority: %v", payload)
 	}
 }
 
@@ -317,10 +310,7 @@ func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
 			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
 			depend := dependEntry("a")
 			job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, "", testBuildResourceRules(), testScriptRef(), "job-a", 1, nil)
-			var payload map[string]any
-			if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
-				t.Fatal(err)
-			}
+			payload := payloadFields(t, job.Spec.Payload)
 			value, present := payload["disable_check_path"]
 			if present != tt.wantPresent || present && value != true {
 				t.Fatalf("disable_check_path = %v (present=%t), want present=%t and true when present", value, present, tt.wantPresent)
@@ -356,19 +346,13 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 	}
 	depend.BuildRemoves = map[string]ebsv1.VersionConst{"removed": {}}
 	job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), testScriptRef(), "job-a", 1, sources)
-	var payload map[string]any
-	if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
-		t.Fatal(err)
-	}
+	payload := payloadFields(t, job.Spec.Payload)
 	if got := payload["prefer"]; got != "rpm-b" {
 		t.Fatalf("prefer = %v, want only selected rpm-b", got)
 	}
 	depend.BuildRequires = map[string]ebsv1.VersionConst{"single": {}}
 	job = c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, testBuildResourceRules(), testScriptRef(), "job-b", 1, sources)
-	payload = nil
-	if err := yaml.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
-		t.Fatal(err)
-	}
+	payload = payloadFields(t, job.Spec.Payload)
 	if _, ok := payload["prefer"]; ok {
 		t.Fatalf("single-candidate payload kept prefer: %s", job.Spec.Payload)
 	}
@@ -380,17 +364,17 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	seeded := client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoProcessing))
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	// The snapshot has no packageRepoStatuses entry for repo1: spec_url and
-	// commitId are skipped (log only, never blocks dispatch, 15.3.1).
+	// commit_id are skipped (log only, never blocks dispatch, 15.3.1).
 	snapshot := testSnapshotObj()
 	depend := dependEntry("a")
 
 	job := c.jobForSpec(round, "a", &depend, snapshot, testImage, "", testBuildResourceRules(), testScriptRef(), "job-y", 1, nil)
 
-	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commitId") {
-		t.Fatalf("payload = %q, want no spec_url/commitId without a repo entry", job.Spec.Payload)
+	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commit_id") {
+		t.Fatalf("payload = %q, want no spec_url/commit_id without a repo entry", job.Spec.Payload)
 	}
-	if !strings.Contains(job.Spec.Payload, "spec_name: a") {
-		t.Fatalf("payload = %q, want the per-spec keys", job.Spec.Payload)
+	if got := payloadFields(t, job.Spec.Payload)["spec_name"]; got != "a" {
+		t.Fatalf("payload spec_name = %v, want a", got)
 	}
 }
 
@@ -625,12 +609,42 @@ func TestScriptNameFromPayload(t *testing.T) {
 
 func payloadScriptName(t *testing.T, payload string) string {
 	t.Helper()
-	var values map[string]any
-	if err := yaml.Unmarshal([]byte(payload), &values); err != nil {
-		t.Fatal(err)
-	}
+	values := payloadFields(t, payload)
 	name, _ := values["rpmbuild_script"].(string)
 	return name
+}
+
+func payloadFields(t *testing.T, payload string) map[string]any {
+	t.Helper()
+	var values map[string]any
+	if err := json.Unmarshal([]byte(payload), &values); err != nil {
+		t.Fatalf("decode Job payload JSON: %v: %s", err, payload)
+	}
+	return values
+}
+
+func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{
+		{Name: "local", Repo: "https://repo.example.com/openEuler-24.03-LTS-SP3/local"},
+		{Name: "everything", Repo: "https://repo.example.com/openEuler-24.03-LTS-SP3/everything"},
+	}
+	round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
+	contentURL := "http://artifact.example.com/repositories/v1/ceff5ee3568f76de0efdc98e2783f8c1adbf61944b305f736f5152322b5f19da/"
+	depend := dependEntry("a")
+	job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, contentURL, testBuildResourceRules(), testScriptRef(), "job-a", 1, nil)
+	if strings.Contains(job.Spec.Payload, "\n") {
+		t.Fatalf("Job payload should be compact JSON, got %q", job.Spec.Payload)
+	}
+	want := []any{
+		map[string]any{"url": contentURL, "priority": float64(10)},
+		map[string]any{"url": "https://repo.example.com/openEuler-24.03-LTS-SP3/local/" + round.build.Spec.BuildTarget.Arch, "priority": float64(99)},
+		map[string]any{"url": "https://repo.example.com/openEuler-24.03-LTS-SP3/everything/" + round.build.Spec.BuildTarget.Arch, "priority": float64(99)},
+	}
+	if got := payloadFields(t, job.Spec.Payload)["repo"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("repo = %v, want %v", got, want)
+	}
 }
 
 func TestDispatchSpecNotSentNotCountedAsSent(t *testing.T) {
