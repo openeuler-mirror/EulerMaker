@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"encoding/json"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -189,14 +191,105 @@ type BuildInfoSpec struct {
 type BuildInfoStatus struct {
 	Phase             BuildInfoPhase              `json:"phase,omitempty"`
 	Conditions        []metav1.Condition          `json:"conditions,omitempty"`
-	SpecStatus        map[string]SpecStatus       `json:"specStatus,omitempty"`
+	SpecStatus        SpecStatusGroup             `json:"specStatus"`
 	FailedPackages    []string                    `json:"failedPackages,omitempty"`
 	Dcg               map[string]DcgNodeState     `json:"dcg,omitempty"`
 	PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
 }
 
-// SpecStatus tracks per-spec build/install state plus the dispatch count
-// gate (G-03): required is 1 for plain specs and 2 for cycle members.
+// SpecStatusGroup stores per-spec fields in separate maps so callers can
+// project build and install results independently.
+type SpecStatusGroup struct {
+	Build         map[string]SpecBuildStatus   `json:"build,omitempty"`
+	Install       map[string]SpecInstallStatus `json:"install,omitempty"`
+	DispatchCount map[string]int64             `json:"dispatchCount,omitempty"`
+}
+
+// UnmarshalJSON accepts the former per-spec layout when reading stored
+// BuildInfo objects. Subsequent writes use the grouped layout.
+func (s *SpecStatusGroup) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	legacy := false
+	for name := range fields {
+		if name != "build" && name != "install" && name != "dispatchCount" {
+			legacy = true
+			break
+		}
+	}
+	if legacy {
+		var entries map[string]SpecStatus
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return err
+		}
+		*s = NewSpecStatusGroup(entries)
+		return nil
+	}
+	type grouped SpecStatusGroup
+	var value grouped
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = SpecStatusGroup(value)
+	return nil
+}
+
+// NewSpecStatusGroup converts per-spec statuses to the grouped API shape.
+func NewSpecStatusGroup(entries map[string]SpecStatus) SpecStatusGroup {
+	var group SpecStatusGroup
+	for name, entry := range entries {
+		group.Set(name, entry)
+	}
+	return group
+}
+
+func (s SpecStatusGroup) Entry(name string) SpecStatus {
+	return SpecStatus{Build: s.Build[name], Install: s.Install[name], DispatchCount: s.DispatchCount[name]}
+}
+
+func (s SpecStatusGroup) Lookup(name string) (SpecStatus, bool) {
+	_, build := s.Build[name]
+	_, install := s.Install[name]
+	_, count := s.DispatchCount[name]
+	return s.Entry(name), build || install || count
+}
+
+func (s *SpecStatusGroup) Set(name string, status SpecStatus) {
+	if s.Build == nil {
+		s.Build = make(map[string]SpecBuildStatus)
+	}
+	s.Build[name] = status.Build
+	if status.Install.Status != "" || len(status.Install.MissingDeps) > 0 || len(status.Install.Conditions) > 0 {
+		if s.Install == nil {
+			s.Install = make(map[string]SpecInstallStatus)
+		}
+		s.Install[name] = status.Install
+	} else {
+		delete(s.Install, name)
+	}
+	if status.DispatchCount != 0 {
+		if s.DispatchCount == nil {
+			s.DispatchCount = make(map[string]int64)
+		}
+		s.DispatchCount[name] = status.DispatchCount
+	} else {
+		delete(s.DispatchCount, name)
+	}
+}
+
+func (s SpecStatusGroup) Len() int { return len(s.Build) }
+
+func (s SpecStatusGroup) Entries() map[string]SpecStatus {
+	entries := make(map[string]SpecStatus, len(s.Build))
+	for name := range s.Build {
+		entries[name] = s.Entry(name)
+	}
+	return entries
+}
+
+// SpecStatus is the in-memory per-spec view of the grouped status fields.
 type SpecStatus struct {
 	Build         SpecBuildStatus   `json:"build,omitempty"`
 	Install       SpecInstallStatus `json:"install,omitempty"`

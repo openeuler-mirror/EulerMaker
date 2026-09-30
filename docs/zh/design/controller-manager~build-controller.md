@@ -438,7 +438,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 ### 7.4 Processing/build
 
 - 按第六章 Processing/build 行读取 BuildInfo，缺失时按第六章写 Failed/build 并结束；存在时等待 BuildInfo Completed。
-- 统一汇总规则（single 与非 single 共用）：`specStatus` 非空且每个目标 spec 的 `value.build.status == Succeeded` 且 `value.install.status == Succeeded` 才判定成功；空 map、任一 spec 的 `build` 或 `install` 不是 `Succeeded`（含缺失/未评估、未完成、Failed、Aborted）均判定失败。结果不依赖 map 遍历顺序，目标 spec 的完整性由 4.4 的 Completed 契约保证。
+- 统一汇总规则（single 与非 single 共用）：`specStatus.build` 非空，且其中每个目标 spec 的 `build[spec].status == Succeeded` 与 `install[spec].status == Succeeded` 才判定成功；构建集为空、任一结果缺失或非 `Succeeded` 均判定失败。结果不依赖 map 遍历顺序，目标 spec 的完整性由 4.4 的 Completed 契约保证。
 - 若 `Build.spec.buildType=single`：
   - 结果汇总失败（build 或 install 非 Succeeded）：
     - 写：

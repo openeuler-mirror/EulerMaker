@@ -270,9 +270,9 @@ init 确定性失败路径：仅 `single` 的 packages 为空或指定包全部�
 
 推进路径 `Pending → Processing → Completed` 单向，**禁止回退**；`Completed` 与 `Aborted` 均为终态，HandlerFuncs 不放行，不再入队（G-05）。
 
-### 6.2 SpecStatus.build 状态机
+### 6.2 SpecStatusGroup.build 状态机
 
-`BuildInfo.status.specStatus[spec].build.status` 取值：`""`（空，未下发——init 步骤 3 预建初始值，见 7.2 步骤 3）/ `Running` / `Succeeded` / `Failed` / `Aborted`（历史版本 Job phase 透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5；父 Build `Aborted` 时 BuildInfo 由 parentAbortGuard 先行收口，不进入回填；防御性读取到残留值的处理见 6.4），本控制器推进，内嵌于 `BuildInfo.status.specStatus`：
+`BuildInfo.status.specStatus.build[spec].status` 取值：`""`（空，未下发——init 步骤 3 预建初始值，见 7.2 步骤 3）/ `Running` / `Succeeded` / `Failed` / `Aborted`（历史版本 Job phase 透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5；父 Build `Aborted` 时 BuildInfo 由 parentAbortGuard 先行收口，不进入回填；防御性读取到残留值的处理见 6.4），本控制器推进，内嵌于 `BuildInfo.status.specStatus`：
 
 ```
    （初始）"" ──创建 Job──→ ┌──────────┐
@@ -300,9 +300,9 @@ init 确定性失败路径：仅 `single` 的 packages 为空或指定包全部�
 | `Failed` | 终态，Job 失败（末代重建 Job 失败同样标 `Failed`——spec 状态以最后一个 Job 为准，仅 condition 以 `RebuildFailed` 区分，见 7.4.2/7.4.5），或下发前裁决未通过：依赖存在性裁决（7.4.1 条件 2 / 7.4.6 第 3 条 bootstrap 路径）、创建 Job 前的确定性校验（E-19/E-27 中的 404）——均不提交 Job 直接标 `Failed`，自判非传播（E-17）；E-26 Config/build-target 读取失败/映射缺失为本轮暂停（不创建新 Job、不标 Failed，返回 error 按 7.5 标准退避分流等待配置恢复，见 E-26）；亦含 Job 单独 `Aborted` 的防御性视同 `Failed`（7.4.5 映射，condition 保留 `BuildAborted` 溯源） |
 | `Aborted` | 历史版本 Job phase=Aborted 直接透传写入的状态值，v1 起不再产生：父 Build `Aborted`/不存在时 BuildInfo 由 parentAbortGuard **先行**收口为 `Aborted` 终态（保留对象，G-06/E-03），不进入回填；Job 单独 `Aborted`（父 Build 正常）经 7.4.5 映射**防御性视同 `Failed`**（异常溯源 condition `BuildAborted`，message 注明"防御性视同 Failed：父 Build 非 Aborted"）；防御性读取到本值（历史脏数据/竞态残留）按 6.4 处理——本轮返回 nil 等下一轮 parentAbortGuard 收口，不参与 allTerminal 终态集合 |
 
-### 6.3 SpecStatus.install 状态机
+### 6.3 SpecStatusGroup.install 状态机
 
-`specStatus[spec].install.status` 取值 `""`（空，未回填）/ `Succeeded` / `Failed`；以最新一代 Job 为准**双向覆盖**（`Succeeded ↔ Failed`），新 Job 未终态前保留旧值；install.status 不参与 `allTerminal` 完成度判定（回填规则与三分支表见 7.4.7）：
+`specStatus.install[spec].status` 取值 `""`（空，未回填）/ `Succeeded` / `Failed`；以最新一代 Job 为准**双向覆盖**（`Succeeded ↔ Failed`），新 Job 未终态前保留旧值；install.status 不参与 `allTerminal` 完成度判定（回填规则与三分支表见 7.4.7）：
 
 ```
                     （初始）""
@@ -327,8 +327,8 @@ init 确定性失败路径：仅 `single` 的 packages 为空或指定包全部�
 ```go
 allTerminal := true
 required := dcg.DispatchRequirements() // map[string]int64，环内节点 2，默认 1
-for spec, ss := range buildInfo.Status.SpecStatus {
-    if ss.Build.Status != StatusSucceeded && ss.Build.Status != StatusFailed {
+for spec, build := range buildInfo.Status.SpecStatus.Build {
+    if build.Status != StatusSucceeded && build.Status != StatusFailed {
         allTerminal = false
         break
     }
@@ -336,7 +336,7 @@ for spec, ss := range buildInfo.Status.SpecStatus {
     if req == 0 {
         req = 1
     }
-    if ss.Build.Status == StatusSucceeded && ss.DispatchCount < effectiveRequired(spec, req) {
+    if build.Status == StatusSucceeded && buildInfo.Status.SpecStatus.DispatchCount[spec] < effectiveRequired(spec, req) {
         allTerminal = false
         break
     }
@@ -640,7 +640,7 @@ repeat:                                                                   # 迭�
 
 #### 7.4.2 "破环"的精确语义
 
-破环 = 在 `initBuildInfo` 阶段从 `GetBootstrapBreaks()` 取得破环点集合，对每个破环点**无视入度**首次下发 Job（bootstrap），随后在 `Processing` 阶段环内所有节点其所有上游 `Succeeded` 后再次下发（重建）。下发次数由 `specStatus[spec].dispatchCount`（SpecStatus 平级字段，int64）累计，以 `required`（普通 spec = 1，环内所有节点 = 2）为门禁：
+破环 = 在 `initBuildInfo` 阶段从 `GetBootstrapBreaks()` 取得破环点集合，对每个破环点**无视入度**首次下发 Job（bootstrap），随后在 `Processing` 阶段环内所有节点其所有上游 `Succeeded` 后再次下发（重建）。下发次数由 `specStatus.dispatchCount[spec]`（SpecStatus 平级字段，int64）累计，以 `required`（普通 spec = 1，环内所有节点 = 2）为门禁：
 
 - 首次下发（bootstrap）：`initBuildInfo` 阶段，破环点 `DispatchCount` 0 → 1（破环的死锁解开）。
 - 第二次下发（重建）：`Processing` 阶段，环内节点（含破环点与非破环节点）上游全部 `Succeeded` 且 `DispatchCount < required` 时再次创建 Job，`DispatchCount` 1 → 2，状态回到 `Running`。
@@ -650,7 +650,7 @@ repeat:                                                                   # 迭�
 **失败场景的两条放宽规则（G-03 例外）**：
 
 1. **重建取消（有效 required）**：定义 `effectiveRequired(S) = 1` 当 S 的任一直接上游（`inDep ∪ installInDep`）为 `Failed`，否则 `DispatchRequirements(S)`（环内 2 / 普通 1）。任一上游 Failed ⟹ S 的重建（第 2 次下发）取消、v1 即终——重建的目的是"基于上游最终产物重建"，Failed 上游不会再产出新产物，重建无意义；已 `Succeeded` 未达 required 的节点**不翻转 Failed**。allTerminal（6.4）、7.3 步骤 4 的"未达下发次数"判断、7.4.6 一致性门禁均按**有效 required** 判定。
-2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。发布确认门禁（7.4.6）从本轮 Job 列表取得最新一代 Job 名称，不依赖 `SpecStatus.build` 保存名称。
+2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。发布确认门禁（7.4.6）从本轮 Job 列表取得最新一代 Job 名称，不依赖 `SpecStatusGroup.build` 保存名称。
 
 > **存量数据兼容**：`syncSpecStatusFromJobs` 回填时以 `DispatchCount = max(DispatchCount, 同 spec 现存 Job 数)` 兜底，旧数据（无 `dispatchCount` 字段）不会因 0 而误判重复下发或漏重建。
 
@@ -666,7 +666,7 @@ repeat:                                                                   # 迭�
 
 #### 7.4.5 Job.status.phase → build.status 映射
 
-| `Job.status.phase` | `specStatus[spec].build.status` | 写入 condition |
+| `Job.status.phase` | `specStatus.build[spec].status` | 写入 condition |
 |--------------------|--------------------------------|---------------|
 | `Pending` | `Running`（最新 Job 尚未开始，强制进行中，不得沿用上一代终态） | - |
 | `Running` | `Running` | - |
@@ -683,11 +683,11 @@ repeat:                                                                   # 迭�
    - ② **环内节点的环外直接下游的首次下发**：直接上游含环内节点（cycleNodes 判定，build/install 边合并上游全集）的环外下游，首次下发即须等待其全部**环内上游**完成有效 required 次下发且 `Succeeded`（环外上游仍按正常门禁：终态 + 发布确认），保证环外下游基于环内上游重建后的最终产物构建，而非其 bootstrap 的临时产物 v1——环外下游不在环上，等待关系无环，不构成活锁。
    - 破环点自身的重建豁免——按定义它只能基于上游 v1 产物破环重建，若同样等待上游完成重建，环内节点互相等待形成活锁。
 2. **发布确认门禁**（适用**所有下发**，破环点重建下发**不**豁免）：下发前，**Succeeded 直接上游**（build/install 边合并后的上游全集，Failed 上游跳过——失败的 Job 永不被消费，不应等待）**最新一代 `Succeeded` Job** 的产物须已发布（`upstreamOutputsPublished`）：以同名 RpmRepo 的 **`status.repository.sourceJobNames`** 为发布凭据——Succeeded 上游最新一代 Job 的 `metadata.name` ∈ 该集合即已发布（rpm-repo-controller 成功物化批次后一次 CAS 累计写入的已消费 Job 名称集合，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」；物化与消费语义见 [artifact-manager.md](artifact-manager.md) 9.3.3）——凭据直接读取本轮 reconcile 已 GET 的同名 RpmRepo 对象（守卫获取、各检查点复用不重复 GET，见 15.4），目标 Job 为本轮已 list 的对象（15.3，名称取 `metadata.name`），无额外查询；任一 Succeeded 上游最新一代 Job 的名称不在集合中（rpm-repo-controller 尚未物化该批次）即视为未发布，跳过等待。Succeeded 上游产物物化失败（不可重试失败/重试预算耗尽，artifact-manager.md 9.3.3 第 4 条）**不构成永久等待**——rpmrepo-controller 同次写 `release.phase=Failed`，经 E-28 前置守卫将 BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`（`ReleaseFailed`）、父 Build 收口 Failed，等待由外部终态信号终止。破环点不豁免的原因：`sourceJobNames` 随批次只增不减、无计数互相等待，不构成活锁。install 边上游同样受门禁约束（install 依赖的兑现 = 上游 rpm 已合并入构建环境 RpmRepo）。凭据判定对象为 Succeeded 上游**最新一代 Job**（7.4.4 无"保持前代"例外回写；Succeeded spec 的最新一代 Job 即其 Succeeded Job；同批物化的 Job 同批入集——一批一 CAS 累计，artifact-manager.md 9.3.3 第 3 条）。best-effort 上游（末代重建 Job 失败，见 7.4.2/7.4.5）按 Failed 上游同样跳过——其 v1 产物的可用性由构建依赖统一存在性裁决（7.4.1 条件 2）承担（依赖已发布 → 照常下发），不经发布确认门禁，亦不构成等待。该门禁扩展至首次下发的意义：确保其后构建依赖统一存在性裁决（7.4.1 条件 2）不把"成功未合并"窗口内的依赖缺失误判为真缺失。
-3. **bootstrap 豁免门禁**（破环点首次下发专属，挂载于 `initBuildInfo` 步骤 4；**含运行期 install 补边追加的破环点，及因 RpmRepo 依赖待定未能在 init 步骤 4 下发、而 BuildInfo 已随步骤 5 预建进入 Processing 的初始破环点残留**——两者的 bootstrap 下发均发生在 `advanceBuildInfo` 步骤 4（7.3），豁免语义完全相同，判据统一为 `BootstrapBreak` 标记且 `DispatchCount=0`，否则该残留会因上游非终态被步骤 4 跳过成为死点）：破环点 bootstrap 下发时**无视全部上游入度依赖**（build/install 边合并上游全集，cycleNodes 环内上游与非环上游一律同规则）——上游终态检查与发布确认门禁**全部跳过**（不等任何上游构建/发布，此为破环语义本身；`upstreamsFullyDispatched`/`upstreamOutputsPublished` 均不判），**唯一保留门禁为构建依赖统一存在性校验（7.4.1 条件 2）**——对破环点全部 `buildRequires`（剔除 `buildRemoves`，**不再区分环内/环外依赖**）逐项经两阶段匹配判依赖满足性：依赖在 RpmMetaSources 分层缓存可查且版本约束满足（RpmRepo 层先行——含增量轮 contentURL 指向的继承版本上轮产物；未命中时 BootstrapRepo 层按声明顺序兜底，见 15.10）→ 照常创建 bootstrap Job（`DispatchCount` 0 → 1）；**RpmRepo 就绪但依赖缺失或版本不满足 → specStatus[spec] 标 `Failed`（`BuildFailed`/`RpmDependsMissing`，message 记缺失依赖名），不创建 Job、不等待不重试**——破环点 bootstrap 基于当前 RpmRepo 内容构建，依赖不在仓库则 Job 必然失败，落确定性终态优于下发必败 Job；其下游（环内/环外）经 E-17 自判逐跳传导（各自依赖存在性裁决）。RpmRepo 不存在/查询失败/XML 下载解析失败 → 视为待定，本轮跳过 bootstrap 等待下一轮重入（7.4.1 条件 2 语义，不误标 Failed；contentURL 为空为正常空态——RpmRepo 层空数据源、仅 BootstrapRepo 层裁决，不构成待定，见 7.4.1 条件 2）。运行期追加的破环点若已下发过（`DispatchCount=1`）→ required 升 2 后经正常推进门禁（第 1/2 条）再下发一次，不再适用 bootstrap 豁免。
+3. **bootstrap 豁免门禁**（破环点首次下发专属，挂载于 `initBuildInfo` 步骤 4；**含运行期 install 补边追加的破环点，及因 RpmRepo 依赖待定未能在 init 步骤 4 下发、而 BuildInfo 已随步骤 5 预建进入 Processing 的初始破环点残留**——两者的 bootstrap 下发均发生在 `advanceBuildInfo` 步骤 4（7.3），豁免语义完全相同，判据统一为 `BootstrapBreak` 标记且 `DispatchCount=0`，否则该残留会因上游非终态被步骤 4 跳过成为死点）：破环点 bootstrap 下发时**无视全部上游入度依赖**（build/install 边合并上游全集，cycleNodes 环内上游与非环上游一律同规则）——上游终态检查与发布确认门禁**全部跳过**（不等任何上游构建/发布，此为破环语义本身；`upstreamsFullyDispatched`/`upstreamOutputsPublished` 均不判），**唯一保留门禁为构建依赖统一存在性校验（7.4.1 条件 2）**——对破环点全部 `buildRequires`（剔除 `buildRemoves`，**不再区分环内/环外依赖**）逐项经两阶段匹配判依赖满足性：依赖在 RpmMetaSources 分层缓存可查且版本约束满足（RpmRepo 层先行——含增量轮 contentURL 指向的继承版本上轮产物；未命中时 BootstrapRepo 层按声明顺序兜底，见 15.10）→ 照常创建 bootstrap Job（`DispatchCount` 0 → 1）；**RpmRepo 就绪但依赖缺失或版本不满足 → specStatus.build[spec] 标 `Failed`（`BuildFailed`/`RpmDependsMissing`，message 记缺失依赖名），不创建 Job、不等待不重试**——破环点 bootstrap 基于当前 RpmRepo 内容构建，依赖不在仓库则 Job 必然失败，落确定性终态优于下发必败 Job；其下游（环内/环外）经 E-17 自判逐跳传导（各自依赖存在性裁决）。RpmRepo 不存在/查询失败/XML 下载解析失败 → 视为待定，本轮跳过 bootstrap 等待下一轮重入（7.4.1 条件 2 语义，不误标 Failed；contentURL 为空为正常空态——RpmRepo 层空数据源、仅 BootstrapRepo 层裁决，不构成待定，见 7.4.1 条件 2）。运行期追加的破环点若已下发过（`DispatchCount=1`）→ required 升 2 后经正常推进门禁（第 1/2 条）再下发一次，不再适用 bootstrap 豁免。
 
 > **为什么需要发布确认门禁**：RpmRepo 层 XML 元数据仅覆盖 `contentURL` 指向的**当前已发布物理版本**，"Job `Succeeded` 但产物尚未物化为当前版本（contentURL 未提升，XML 中无该条目）"是异步发布竞态，若仅凭 Job 终态放行重建，重建 Job 会在依赖未兑现的环境中运行。
 
-#### 7.4.7 install 状态回填与运行期动态补边（Job status.install → SpecStatus.install）
+#### 7.4.7 install 状态回填与运行期动态补边（Job status.install → SpecStatusGroup.install）
 
 > **前置消解与残余双层兜底**：spec 的安装期依赖参与建图（install 边，见 16.1），用于构建排序；运行期 install 失败后，先按本节规则动态补边。未能在本轮修复的失败 spec 所属仓库在 `Completed` 时写入 `status.failedPackages`，由下一轮 Build Controller 纳入 incremental 的 `Build.spec.packages`（见 build-controller 7.2）；本控制器不查询历史轮次。
 
@@ -712,7 +712,7 @@ repeat:                                                                   # 迭�
 
 | 目标 Job 状态与 install 结果 | 回填动作 |
 |------------------------------|----------|
-| `phase=Succeeded` 且 `install.status=Succeeded` | `specStatus[spec].install.status = Succeeded`，清除旧缺失依赖 |
+| `phase=Succeeded` 且 `install.status=Succeeded` | `specStatus.install[spec].status = Succeeded`，清除旧缺失依赖 |
 | `phase=Succeeded` 且 `install.status=Failed` | `install.status = Failed`，用本次 `missingDeps` 替换旧结果，并写入 `InstallCheckFailed` condition |
 | `phase=Succeeded` 但缺少合法 install 结果 | `install.status = Failed`，condition reason 为 `InstallResultMissing` 或 `InstallResultInvalid`，不得推断安装成功 |
 | `phase != Succeeded` | 不改写 install 状态，保留上一代结果 |
@@ -726,7 +726,7 @@ repeat:                                                                   # 迭�
 
 ##### 运行期动态补边（install 失败 → 补边 → 成环重建重发）
 
-`advanceBuildInfo` 步骤 3.1（7.3，位于取得 dcgDict 之后、推进下发之前；install 状态已在步骤 2 回填最新）对 **`specStatus[S].install.status == Failed`** 的每个 S（含环内/环外）执行：
+`advanceBuildInfo` 步骤 3.1（7.3，位于取得 dcgDict 之后、推进下发之前；install 状态已在步骤 2 回填最新）对 **`specStatus.install[S].status == Failed`** 的每个 S（含环内/环外）执行：
 
 1. **终止条件**：环内 S 已达 2 次下发（`DispatchCount >= 2`）→ 跳过（终态不再处理，维持第二层兜底）；环外 S 无重发语义（见第 7 条），补边仅修正图。
 2. **反查提供方**：对 `install.missingDeps` 逐项，经 providesInfo 选择链反查提供方 P——选择链与 16.1 四步完全一致（版本过滤 → 单候选 → prefer → 最高版本），版本约束取该条目 `MissingDep.versionRequests`（data-models.md「MissingDep」）；**数据源为当轮 reconcile 时点的 RpmMetaSources 分层缓存**（RpmRepo 层随 contentURL 变化重新解析、天然含最新物化批次——提供方刚物化才可能被反查命中，这正是补边优于初始建图的原因；15.10）。RpmRepo 未存在/查询失败/XML 下载解析失败 → 本轮不补边，返回 nil 等下一轮（不写 condition，见 9.1）。
@@ -890,7 +890,7 @@ install 校验通过（目标 Job `phase=Succeeded` 且 `status.install.status=S
 - **确认读取**：用仍有效的 reconcile context GET 一次当前持久化对象，按语义比较（不比较 `resourceVersion`）：
   - map 字段 nil 与空 map 等价；
   - `conditions` 按 type 定位比较 `status`/`reason`/`message`，不依赖数组顺序，`lastTransitionTime` 不参与比较；
-  - `specStatus` 按 specName 定位逐字段比较；
+  - `specStatus` 的 `build`、`install`、`dispatchCount` 按 specName 定位逐字段比较；
   - `dcg` 按节点集合与边集语义等价比较。
   - `pendingJobCreates` 按 specName 比较本次目标条目（jobName、dispatchGeneration），删除意图要求对应条目已不存在。
 
@@ -1098,25 +1098,25 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 | `status.phase` | string | `Pending` → `Processing` → `Completed`，单向推进；`Completed` 为终态（G-05）；`Aborted` 中止终态（G-06/E-03/E-20） |
 | `status.pendingJobCreates` | map[string]PendingJobCreate | 既有未决创建身份的恢复见 6.5.1；新派发不再写入，非空时不得写 Completed |
 | `status.conditions` | []metav1.Condition | BuildInfo 级 condition，目录见 9.1；`status` 恒 `True`；DcgBuildFailed 恢复即清除 |
-| `status.specStatus` | map[string]SpecStatus | key 为 specName；init 步骤 3 在派发 Job 前为构建集全部 spec **预建**条目，写入 `build.status=""`、`dispatchCount=0`、`install.status=""`；后续原地更新，既有条目不覆盖，避免重置派发计数（G-03） |
+| `status.specStatus` | SpecStatusGroup | 按 `build`、`install`、`dispatchCount` 分组，各组以 specName 为 key；init 步骤 3 在派发 Job 前为构建集全部 spec 预建 `build[specName]` 空状态，缺失的 `install` 与 `dispatchCount` 视为空状态和 0；后续不重置既有计数（G-03） |
 | `status.failedPackages` | []string | Pending 组装时持久化仓库级确定性失败；`Completed` 时依据本轮 spec→仓库映射合并最终构建/安装失败的 spec 所属仓库，去重排序后与终态同次写入；恢复后不从 condition message 反推，规则见 7.2.2 |
 
-`SpecStatus`（**以 data-models.md 为准：`dispatchCount` 与 `build`/`install` 平级**）：
+`SpecStatusGroup`（以 data-models.md 为准）：
 
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
-| `build` | SpecBuildStatus | 构建状态，见下表 |
-| `install` | SpecInstallStatus | 安装状态，见下表 |
-| `dispatchCount` | int64（默认 0） | 下发计数门禁（G-03）：创建 Job 成功后 `+= 1`；回填时以 `max(dispatchCount, 同 spec 现存 Job 数)` 对齐兜底（存量数据兼容）；达到**有效 required**（普通 1 / 环内 2；任一直接上游 Failed 时降为 1，重建取消，见 7.4.2）后不再下发 |
+| `build` | map[string]SpecBuildStatus | 构建状态，键集即本轮构建集，见下表 |
+| `install` | map[string]SpecInstallStatus | 安装状态，缺失视为未评估，见下表 |
+| `dispatchCount` | map[string]int64 | 下发计数门禁（G-03），缺失视为 0；创建 Job 成功后递增，回填时以现存 Job 数兜底，见 7.4.2 |
 
-`SpecStatus.build`（SpecBuildStatus）：
+`SpecStatusGroup.build[specName]`（SpecBuildStatus）：
 
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
 | `status` | string | `""`（空，未下发——init 预建初始值，7.2 步骤 3）/ `Running` / `Succeeded` / `Failed`（`Aborted` 为历史版本透传残留值，v1 起不再写入——Job 单独 `Aborted` 防御性视同 `Failed`，7.4.5/6.2）；创建 Job 后回到 `Running`；终态集合 = {Succeeded, Failed}（空串与 `Running` 均非终态，allTerminal 见 6.4） |
 | `conditions` | []metav1.Condition | spec 级 condition，目录见 9.1 |
 
-`SpecStatus.install`（SpecInstallStatus）：
+`SpecStatusGroup.install[specName]`（SpecInstallStatus）：
 
 | 字段 | Go 类型 | 写入契约 |
 |------|------|----------|
@@ -1250,11 +1250,11 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | 消费点 |
 |------|--------|
-| `metadata.labels["ebs.io/spec-name"]` | 归组 key；缺失或指向本轮构建集外 spec（init 轮 = 步骤 0 构建集外、Processing 轮 = `specStatus` 键集外；specDepends 为超集不作基准）→ 跳过该 Job（E-05，仅日志） |
+| `metadata.labels["ebs.io/spec-name"]` | 归组 key；缺失或指向本轮构建集外 spec（init 轮 = 步骤 0 构建集外、Processing 轮 = `specStatus.build` 键集外；specDepends 为超集不作基准）→ 跳过该 Job（E-05，仅日志） |
 | `metadata.creationTimestamp` | 多代 Job 排序键主键：`metav1.Time` 直接比较（零值按最早），apiserver 创建时写入，恒非空且单调（见 7.4.4） |
 | `metadata.name` | 排序键次键（并列时字典序最大）；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
 | `status.phase` | 经 7.4.5 映射回写 `build.status`；`Pending` 无映射 → 强制 `Running`（不得沿用上一代终态） |
-| `status.install` | `phase=Succeeded` 时回填 `specStatus[spec].install`，缺失结果不得视为安装成功（见 7.4.7） |
+| `status.install` | `phase=Succeeded` 时回填 `specStatus.install[spec]`，缺失结果不得视为安装成功（见 7.4.7） |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
 | `status.stage` / `runner` / `endTime` / `restartCount` | 不消费 |
 
@@ -1636,7 +1636,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 | 类型 | 变更 | 规则位置 |
 |------|------|----------|
-| SpecStatus | 增加 DispatchCount int64，与 Build/Install 平级 | 7.4.2 / 15.2.3 |
+| SpecStatusGroup | 以 `build`、`install`、`dispatchCount` 并列映射保存各 spec 状态 | 7.4.2 / 15.2.3 |
 | BuildInfoPhase | 增加 Aborted 枚举 | 6.1 |
 | BuildInfoStatus | 增加 Dcg map[string]DcgNodeState 及节点类型 | 15.9 |
 | BuildInfoStatus | 增加 PendingJobCreates map[string]PendingJobCreate；条目字段为 JobName string、DispatchGeneration int64（JSON 为 jobName、dispatchGeneration） | 6.5.1 |

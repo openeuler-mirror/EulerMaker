@@ -206,7 +206,7 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 			return controller.ReconcileResult{}, err
 		}
 	} else {
-		generation = round.current.Status.SpecStatus[specName].DispatchCount + 1
+		generation = round.current.Status.SpecStatus.Entry(specName).DispatchCount + 1
 		name = jobNameFor(string(round.current.UID), specName, generation)
 	}
 
@@ -332,16 +332,13 @@ func (c *Controller) stageCreatedJob(round *reconcileRound, specName string, gen
 }
 
 func applyCreatedJobs(next *ebsv1.BuildInfo, jobs map[string]createdJob) {
-	if next.Status.SpecStatus == nil {
-		next.Status.SpecStatus = make(map[string]ebsv1.SpecStatus)
-	}
 	for name, created := range jobs {
-		ss := next.Status.SpecStatus[name]
+		ss := next.Status.SpecStatus.Entry(name)
 		if ss.DispatchCount < created.generation {
 			ss.DispatchCount = created.generation
 		}
 		applyJobPhase(&ss, created.job, false)
-		next.Status.SpecStatus[name] = ss
+		next.Status.SpecStatus.Set(name, ss)
 		delete(next.Status.PendingJobCreates, name)
 	}
 }
@@ -364,16 +361,13 @@ func (c *Controller) confirmCreatedJobs(round *reconcileRound) {
 // Job's phase (7.4.5, prior-generation success unknown at this point).
 func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileRound, specName string, generation int64, job *ebsv1.Job) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
-	if next.Status.SpecStatus == nil {
-		next.Status.SpecStatus = map[string]ebsv1.SpecStatus{}
-	}
-	ss := next.Status.SpecStatus[specName]
+	ss := next.Status.SpecStatus.Entry(specName)
 	if ss.DispatchCount < generation {
 		ss.DispatchCount = generation
 	}
 	applyJobPhase(&ss, job, false)
 	delete(next.Status.PendingJobCreates, specName)
-	next.Status.SpecStatus[specName] = ss
+	next.Status.SpecStatus.Set(specName, ss)
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		dispatches.Inc()
@@ -392,13 +386,10 @@ func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileR
 // together with the Failed verdict.
 func (c *Controller) markSpecFailed(ctx context.Context, round *reconcileRound, specName, condType, reason, message string, clearPending bool) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
-	if next.Status.SpecStatus == nil {
-		next.Status.SpecStatus = map[string]ebsv1.SpecStatus{}
-	}
-	ss := next.Status.SpecStatus[specName]
+	ss := next.Status.SpecStatus.Entry(specName)
 	ss.Build.Status = SpecBuildFailed
 	specCondition(&ss, condType, reason, message)
-	next.Status.SpecStatus[specName] = ss
+	next.Status.SpecStatus.Set(specName, ss)
 	if clearPending {
 		delete(next.Status.PendingJobCreates, specName)
 	} else if pend, ok := next.Status.PendingJobCreates[specName]; ok {
@@ -712,11 +703,8 @@ func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, sc
 func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, jobs []ebsv1.Job, scope map[string]bool, createMissing bool) map[string][]ebsv1.Job {
 	bySpec := c.groupJobsBySpec(round, jobs, scope)
 	uid := string(round.current.UID)
-	if next.Status.SpecStatus == nil && createMissing {
-		next.Status.SpecStatus = map[string]ebsv1.SpecStatus{}
-	}
 	for spec, group := range bySpec {
-		ss, exists := next.Status.SpecStatus[spec]
+		ss, exists := next.Status.SpecStatus.Lookup(spec)
 		if !exists {
 			if !createMissing {
 				continue
@@ -762,7 +750,7 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 				}
 			}
 		}
-		next.Status.SpecStatus[spec] = ss
+		next.Status.SpecStatus.Set(spec, ss)
 		bySpec[spec] = own
 	}
 	return bySpec

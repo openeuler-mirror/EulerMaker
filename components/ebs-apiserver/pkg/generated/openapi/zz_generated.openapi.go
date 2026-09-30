@@ -78,6 +78,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.SpecCommitError":                   schema_ebs_api_ebs_v1_SpecCommitError(ref),
 		"ebs-api/ebs/v1.SpecInstallStatus":                 schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
 		"ebs-api/ebs/v1.SpecStatus":                        schema_ebs_api_ebs_v1_SpecStatus(ref),
+		"ebs-api/ebs/v1.SpecStatusGroup":                   schema_ebs_api_ebs_v1_SpecStatusGroup(ref),
 		"ebs-api/ebs/v1.Toleration":                        schema_ebs_api_ebs_v1_Toleration(ref),
 		"ebs-api/ebs/v1.VersionConst":                      schema_ebs_api_ebs_v1_VersionConst(ref),
 		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":     schema_pkg_apis_iam_v1_MachineAccount(ref),
@@ -332,16 +333,8 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 					},
 					"specStatus": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.SpecStatus"),
-									},
-								},
-							},
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-api/ebs/v1.SpecStatusGroup"),
 						},
 					},
 					"failedPackages": {
@@ -387,10 +380,11 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 						},
 					},
 				},
+				Required: []string{"specStatus"},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.DcgNodeState", "ebs-api/ebs/v1.PendingJobCreate", "ebs-api/ebs/v1.SpecStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.DcgNodeState", "ebs-api/ebs/v1.PendingJobCreate", "ebs-api/ebs/v1.SpecStatusGroup", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 
@@ -2702,7 +2696,7 @@ func schema_ebs_api_ebs_v1_SpecStatus(ref common.ReferenceCallback) common.OpenA
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "SpecStatus tracks per-spec build/install state plus the dispatch count gate (G-03): required is 1 for plain specs and 2 for cycle members.",
+				Description: "SpecStatus is the in-memory per-spec view of the grouped status fields.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"build": {
@@ -2721,6 +2715,64 @@ func schema_ebs_api_ebs_v1_SpecStatus(ref common.ReferenceCallback) common.OpenA
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"integer"},
 							Format: "int64",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.SpecBuildStatus", "ebs-api/ebs/v1.SpecInstallStatus"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_SpecStatusGroup(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SpecStatusGroup stores per-spec fields in separate maps so callers can project build and install results independently.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"build": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.SpecBuildStatus"),
+									},
+								},
+							},
+						},
+					},
+					"install": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.SpecInstallStatus"),
+									},
+								},
+							},
+						},
+					},
+					"dispatchCount": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: 0,
+										Type:    []string{"integer"},
+										Format:  "int64",
+									},
+								},
+							},
 						},
 					},
 				},

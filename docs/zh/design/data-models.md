@@ -63,7 +63,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 列表类型: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList ConfigList ScriptList JobList RunnerList
 辅助结构体: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
-                  BuildInfoSpec BuildInfoStatus SpecStatus SpecBuildStatus SpecInstallStatus MissingDep
+                  BuildInfoSpec BuildInfoStatus SpecStatusGroup SpecBuildStatus SpecInstallStatus MissingDep
                   RpmRepoSpec RpmRepoStatus
                   ConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
@@ -328,7 +328,7 @@ type BuildInfoSpec struct {
 type BuildInfoStatus struct {
     Phase       BuildInfoPhase           `json:"phase,omitempty"`
     Conditions  []metav1.Condition       `json:"conditions,omitempty"`
-    SpecStatus  map[string]SpecStatus    `json:"specStatus,omitempty"`
+    SpecStatus  SpecStatusGroup          `json:"specStatus"`
     FailedPackages []string           `json:"failedPackages,omitempty"`
     Dcg         map[string]DcgNodeState  `json:"dcg,omitempty"`
 }
@@ -338,7 +338,7 @@ type BuildInfoStatus struct {
 |------|---------|------|
 | `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Aborted"` |
 | `conditions` | []metav1.Condition | 状态条件 |
-| `specStatus` | map[string]SpecStatus | 各 spec 运行时状态 |
+| `specStatus` | SpecStatusGroup | 按字段分组的各 spec 运行时状态；`build` 键集为构建集 |
 | `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；Completed 时再合并最终构建/安装失败的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；已恢复成功的中途构建/安装失败不保留 |
 | `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 BuildInfo Controller 本轮解析结果 `specDepends` 的 `buildRequires`，不依赖本字段 |
 
@@ -362,21 +362,24 @@ type DcgNodeState struct {
 | `installInDep` | map[string]VersionConst | 本 spec 安装期依赖命中的上游 spec → 版本约束（install 边；运行期 install 补边可增量追加） |
 | `bootstrapBreak` | bool | 破环点标记：初始建图剥离选点或运行期新环追加选点写入；持久化为准、加载直读不重选（重选会漂移已下发的初始破环点） |
 
-### SpecStatus
+### SpecStatusGroup
 
 ```go
-type SpecStatus struct {
-    Build         SpecBuildStatus   `json:"build,omitempty"`
-    Install       SpecInstallStatus `json:"install,omitempty"`
-    DispatchCount int64             `json:"dispatchCount,omitempty"`    
+type SpecStatusGroup struct {
+    Build         map[string]SpecBuildStatus   `json:"build,omitempty"`
+    Install       map[string]SpecInstallStatus `json:"install,omitempty"`
+    DispatchCount map[string]int64             `json:"dispatchCount,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `build` | SpecBuildStatus | 构建状态 |
-| `install` | SpecInstallStatus | 安装状态 |
-| `dispatchCount` | int64（默认 0） | 下发计数门禁（G-03）：创建 Job 成功后 `+= 1`；回填时以 `max(dispatchCount, 同 spec 现存 Job 数)` 对齐兜底；达到**有效 required**（普通 1 / 环内 2；任一直接上游 Failed 时降为 1，重建取消）后不再下发，详见 build_info_controller.md 6.5.2/14.2.3 |
+| `build` | map[string]SpecBuildStatus | spec 名到构建状态；预建空状态也占一个键 |
+| `install` | map[string]SpecInstallStatus | spec 名到安装状态；未评估时可无对应键 |
+| `dispatchCount` | map[string]int64（缺失视为 0） | spec 名到下发计数；创建 Job 成功后 `+= 1`，回填时以同 spec 现存 Job 数兜底；达到有效 required 后不再下发 |
+
+例如 `status.specStatus.build.gcc.status` 为构建结果，`status.specStatus.install.gcc.status` 为安装结果；只需构建详情时，GET/LIST 可用 `includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build` 选择返回字段。
+读取旧的按 spec 名组织的 `specStatus` 时，API 类型会转换为分组结构；后续写入只使用新结构。
 
 ---
 
@@ -1082,7 +1085,7 @@ BuildInfoSpec
 └── BootstrapRepo
 
 BuildInfoStatus
-└── SpecStatus
+└── SpecStatusGroup
     ├── SpecBuildStatus
     └── SpecInstallStatus
         └── MissingDep ──▶ VersionConst

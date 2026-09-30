@@ -438,7 +438,7 @@ func dispatchRound(t *testing.T, c *Controller, client *fakeClient, uid, spec st
 	key := testNS + "/" + testBuild
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = types.UID(uid)
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{spec: {}}
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{spec: {}})
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedBuildResourceRules(testBuildResourceRules())
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
@@ -453,7 +453,7 @@ func TestDispatchBatchWritesStatusOnce(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "batch-dispatch"
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{"a": {}, "b": {}}
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {}, "b": {}})
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedBuildResourceRules(testBuildResourceRules())
 	key := testNS + "/" + testBuild
@@ -474,7 +474,7 @@ func TestDispatchBatchWritesStatusOnce(t *testing.T) {
 		t.Fatalf("status writes=%d, want one batch confirmation", client.statusWrites)
 	}
 	for _, name := range []string{"a", "b"} {
-		if got := getBuildInfo(t, client).Status.SpecStatus[name].DispatchCount; got != 1 {
+		if got := getBuildInfo(t, client).Status.SpecStatus.Entry(name).DispatchCount; got != 1 {
 			t.Fatalf("spec %s dispatch count=%d, want 1", name, got)
 		}
 	}
@@ -492,7 +492,7 @@ func TestDispatchBatchStatusConflictRecoversFromJobList(t *testing.T) {
 	if err != nil || result.RequeueAfter == 0 {
 		t.Fatalf("conflicted flush = %+v, %v, want delayed requeue", result, err)
 	}
-	if got := getBuildInfo(t, client).Status.SpecStatus["a"].DispatchCount; got != 0 {
+	if got := getBuildInfo(t, client).Status.SpecStatus.Entry("a").DispatchCount; got != 0 {
 		t.Fatalf("dispatch count after rejected flush = %d, want 0", got)
 	}
 
@@ -508,7 +508,7 @@ func TestDispatchBatchStatusConflictRecoversFromJobList(t *testing.T) {
 	if _, err := c.writeStatusIfChanged(context.Background(), fresh, next); err != nil {
 		t.Fatalf("backfill status: %v", err)
 	}
-	if got := getBuildInfo(t, client).Status.SpecStatus["a"].DispatchCount; got != 1 {
+	if got := getBuildInfo(t, client).Status.SpecStatus.Entry("a").DispatchCount; got != 1 {
 		t.Fatalf("recovered dispatch count = %d, want 1", got)
 	}
 }
@@ -549,8 +549,8 @@ func TestDispatchSpecDefaultsScriptName(t *testing.T) {
 func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-script-shared", "a")
-	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus["b"] = ebsv1.SpecStatus{}
-	round.current.Status.SpecStatus["b"] = ebsv1.SpecStatus{}
+	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
+	round.current.Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
 	snapshot := testSnapshotObj()
 	for _, specName := range []string{"a", "b"} {
 		depend := dependEntry(specName)
@@ -570,7 +570,7 @@ func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
 		}
 	}
 
-	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus["c"] = ebsv1.SpecStatus{}
+	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus.Set("c", ebsv1.SpecStatus{})
 	newRound := &reconcileRound{
 		key: round.key, current: getBuildInfo(t, client), build: round.build,
 		failures: c.newRoundFailures(round.key),
@@ -682,7 +682,7 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 		t.Fatalf("flush created jobs: %v", err)
 	}
 	persisted := getBuildInfo(t, client)
-	a := persisted.Status.SpecStatus["a"]
+	a := persisted.Status.SpecStatus.Entry("a")
 	if a.DispatchCount != 1 || a.Build.Status != SpecBuildRunning {
 		t.Fatalf("specStatus[a] = %+v, want confirmed Running dispatch of the existing job", a)
 	}
@@ -696,7 +696,7 @@ func TestSinglePendingJobConfirmDoesNotLoadPreferMetadata(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "single-pending"
 	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{"a": {}}
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {}})
 	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
 		"a": {JobName: jobNameFor(string(bi.UID), "a", 1), DispatchGeneration: 1},
 	}
@@ -766,7 +766,7 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 		t.Fatalf("flush created jobs: %v", err)
 	}
 	persisted := getBuildInfo(t, client)
-	a := persisted.Status.SpecStatus["a"]
+	a := persisted.Status.SpecStatus.Entry("a")
 	if a.DispatchCount != 1 {
 		t.Fatalf("specStatus[a] = %+v, want the landed job confirmed", a)
 	}

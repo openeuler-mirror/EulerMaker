@@ -225,9 +225,9 @@ func TestStopConditionRoutesToConverge(t *testing.T) {
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound, "rpmrepo gone")
-	bi.Status.SpecStatus = map[string]ebsv1.SpecStatus{
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, DispatchCount: 1},
-	}
+	})
 	client.SeedBuildInfo(bi)
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
@@ -438,7 +438,7 @@ func TestStatusMatchesIntent(t *testing.T) {
 	}
 	// nil maps equal empty maps.
 	withEmpty := copyStatus(base)
-	withEmpty.SpecStatus = map[string]ebsv1.SpecStatus{}
+	withEmpty.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{})
 	withEmpty.Dcg = map[string]ebsv1.DcgNodeState{}
 	withEmpty.PendingJobCreates = map[string]ebsv1.PendingJobCreate{}
 	if !statusMatchesIntent(base, withEmpty) {
@@ -461,9 +461,9 @@ func TestStatusMatchesIntent(t *testing.T) {
 		t.Fatal("phase mismatch must not match")
 	}
 	specA := copyStatus(base)
-	specA.SpecStatus = map[string]ebsv1.SpecStatus{"a": {DispatchCount: 1}}
+	specA.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {DispatchCount: 1}})
 	specB := copyStatus(base)
-	specB.SpecStatus = map[string]ebsv1.SpecStatus{"a": {DispatchCount: 2}}
+	specB.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {DispatchCount: 2}})
 	if statusMatchesIntent(specA, specB) {
 		t.Fatal("dispatchCount mismatch must not match")
 	}

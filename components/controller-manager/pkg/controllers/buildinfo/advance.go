@@ -27,7 +27,7 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 	}
 
 	// Step 1: specStatus sanity (E-01) and the residual-Aborted defense (6.4).
-	if len(round.current.Status.SpecStatus) == 0 {
+	if round.current.Status.SpecStatus.Len() == 0 {
 		c.logf(round.key, "SpecStatusEmpty", "processing buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept")
 		return controller.ReconcileResult{}, nil
 	}
@@ -139,8 +139,8 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 	prefer := payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))
 	var candidate *DcgDict
 	changed := 0
-	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus) {
-		ss := round.current.Status.SpecStatus[spec]
+	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
+		ss := round.current.Status.SpecStatus.Entry(spec)
 		if ss.Install.Status != SpecBuildFailed {
 			continue
 		}
@@ -161,7 +161,7 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 			if dcg.Node(provider) == nil {
 				continue // provider not in this round's build set
 			}
-			if pSS := round.current.Status.SpecStatus[provider]; pSS.Build.Status == SpecBuildSucceeded || pSS.Build.Status == SpecBuildFailed {
+			if pSS := round.current.Status.SpecStatus.Entry(provider); pSS.Build.Status == SpecBuildSucceeded || pSS.Build.Status == SpecBuildFailed {
 				continue // provider already terminal: no edge, no re-dispatch
 			}
 			if _, dup := node.InstallInDep[provider]; dup {
@@ -211,7 +211,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 	}
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
-		ss := round.current.Status.SpecStatus[name]
+		ss := round.current.Status.SpecStatus.Entry(name)
 		node := dcg.Node(name)
 		if ss.DispatchCount >= effectiveRequired(dcg, round, name, required) {
 			continue
@@ -251,7 +251,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if result, err := c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus[name]; ss.Build.Status == SpecBuildFailed {
+		if ss = round.current.Status.SpecStatus.Entry(name); ss.Build.Status == SpecBuildFailed {
 			continue
 		}
 		// 7.4.1 condition 2: build-requires availability verdict (the only
@@ -259,7 +259,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if result, err := c.checkBuildRequires(ctx, round, name, &depend, sources); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus[name]; ss.Build.Status == SpecBuildFailed {
+		if ss = round.current.Status.SpecStatus.Entry(name); ss.Build.Status == SpecBuildFailed {
 			continue
 		}
 		// E-26: the build-target Config snapshot resolves lazily, shared round-wide.
@@ -294,7 +294,7 @@ func upstreamNames(node *DcgNode) []string {
 // terminal state (Succeeded/Failed).
 func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		st := round.current.Status.SpecStatus[up].Build.Status
+		st := round.current.Status.SpecStatus.Entry(up).Build.Status
 		if st != SpecBuildSucceeded && st != SpecBuildFailed {
 			return false
 		}
@@ -306,7 +306,7 @@ func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 // the node's rebuild is cancelled; 7.4.6 gate 1 is exempt).
 func hasFailedUpstream(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		if round.current.Status.SpecStatus[up].Build.Status == SpecBuildFailed {
+		if round.current.Status.SpecStatus.Entry(up).Build.Status == SpecBuildFailed {
 			return true
 		}
 	}
@@ -323,7 +323,7 @@ func rebuildConsistencySatisfied(dcg *DcgDict, round *reconcileRound, spec strin
 	node := dcg.Node(spec)
 	if ss.DispatchCount >= 1 && !node.BootstrapBreak {
 		for _, up := range upstreamNames(node) {
-			upSS := round.current.Status.SpecStatus[up]
+			upSS := round.current.Status.SpecStatus.Entry(up)
 			if upSS.Build.Status != SpecBuildSucceeded || upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
@@ -335,7 +335,7 @@ func rebuildConsistencySatisfied(dcg *DcgDict, round *reconcileRound, spec strin
 			if !dcg.IsCycleNode(up) {
 				continue
 			}
-			upSS := round.current.Status.SpecStatus[up]
+			upSS := round.current.Status.SpecStatus.Entry(up)
 			if upSS.Build.Status != SpecBuildSucceeded || upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
@@ -358,7 +358,7 @@ func upstreamOutputsPublished(round *reconcileRound, dcg *DcgDict, spec string, 
 		}
 	}
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		if round.current.Status.SpecStatus[up].Build.Status != SpecBuildSucceeded {
+		if round.current.Status.SpecStatus.Entry(up).Build.Status != SpecBuildSucceeded {
 			continue
 		}
 		group := bySpec[up]
@@ -386,7 +386,7 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 	}
 	if node := dcg.Node(spec); node != nil {
 		for _, up := range upstreamNames(node) {
-			if round.current.Status.SpecStatus[up].Build.Status == SpecBuildFailed {
+			if round.current.Status.SpecStatus.Entry(up).Build.Status == SpecBuildFailed {
 				return 1
 			}
 		}
@@ -405,8 +405,8 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		required = dcg.DispatchRequirements()
 	}
 	var failed []string
-	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus) {
-		ss := round.current.Status.SpecStatus[spec]
+	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
+		ss := round.current.Status.SpecStatus.Entry(spec)
 		if ss.Build.Status != SpecBuildSucceeded && ss.Build.Status != SpecBuildFailed {
 			return controller.ReconcileResult{}, nil // not all terminal
 		}
@@ -421,8 +421,8 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		return controller.ReconcileResult{}, nil
 	}
 	needsRepoMap := len(failed) > 0
-	for _, ss := range round.current.Status.SpecStatus {
-		needsRepoMap = needsRepoMap || ss.Install.Status == SpecBuildFailed
+	for _, ss := range round.current.Status.SpecStatus.Install {
+		needsRepoMap = needsRepoMap || ss.Status == SpecBuildFailed
 	}
 	if asm == nil && needsRepoMap {
 		// The single path deliberately skips Snapshot reads while Jobs are in
@@ -446,8 +446,8 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		for repo := range asm.failedRepos {
 			failedRepos[repo] = struct{}{}
 		}
-		for _, spec := range sortedSpecNames(round.current.Status.SpecStatus) {
-			ss := round.current.Status.SpecStatus[spec]
+		for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
+			ss := round.current.Status.SpecStatus.Entry(spec)
 			if ss.Build.Status != SpecBuildFailed && ss.Install.Status != SpecBuildFailed {
 				continue
 			}
@@ -467,7 +467,7 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
-		c.logOnce(round.key, "BuildInfoCompleted", "completed: %d specs, %d failed", len(round.current.Status.SpecStatus), len(failed))
+		c.logOnce(round.key, "BuildInfoCompleted", "completed: %d specs, %d failed", round.current.Status.SpecStatus.Len(), len(failed))
 		c.invalidateCaches(round.key)
 	}
 	return result, err
@@ -478,7 +478,7 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 // advanceSingle runs the single-type Processing path: backfill plus the
 // completion check — no Snapshot/RpmMeta reads, no graph, no gates.
 func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
-	if len(round.current.Status.SpecStatus) == 0 {
+	if round.current.Status.SpecStatus.Len() == 0 {
 		c.logf(round.key, "SpecStatusEmpty", "processing single buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept")
 		return controller.ReconcileResult{}, nil
 	}
@@ -608,8 +608,8 @@ func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Jo
 // specStatusScope flattens the specStatus key set (Processing backfill
 // scope, E-05).
 func specStatusScope(buildInfo *ebsv1.BuildInfo) map[string]bool {
-	scope := make(map[string]bool, len(buildInfo.Status.SpecStatus))
-	for name := range buildInfo.Status.SpecStatus {
+	scope := make(map[string]bool, buildInfo.Status.SpecStatus.Len())
+	for name := range buildInfo.Status.SpecStatus.Build {
 		scope[name] = true
 	}
 	return scope
@@ -619,8 +619,8 @@ func specStatusScope(buildInfo *ebsv1.BuildInfo) map[string]bool {
 // value (6.4: legacy dirty data — the round returns nil and waits for the
 // parentAbortGuard, the value never joins the allTerminal set).
 func residualAbortedSpec(buildInfo *ebsv1.BuildInfo) (string, bool) {
-	for _, spec := range sortedSpecNames(buildInfo.Status.SpecStatus) {
-		if buildInfo.Status.SpecStatus[spec].Build.Status == SpecBuildAborted {
+	for _, spec := range sortedSpecNames(buildInfo.Status.SpecStatus.Build) {
+		if buildInfo.Status.SpecStatus.Entry(spec).Build.Status == SpecBuildAborted {
 			return spec, true
 		}
 	}
