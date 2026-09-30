@@ -13,15 +13,11 @@ Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史�
 - 保证状态更新幂等，并在并发更新时以 apiserver 中的最新对象为准；
 - 暴露必要的结构化日志和指标。
 
-首版不负责：
+职责边界：
 
-- 不选择 Runner，不写入或清除 `status.runner`；
-- 不创建、删除或重启 Runner 上的执行环境；
-- 不重复实现 `spec.timeoutSeconds`。业务执行超时仍由 Runner 负责停止任务、封账日志和产物并写入终态；
-- 不自动把失联 Job 改回 `Pending`，也不自动重新调度。控制面无法证明旧 Runner 已停止执行，自动重放可能产生两个并发构建；
-- 不维护 Build、BuildInfo 等上层资源状态，这些状态由对应业务 Controller 根据 Job 终态聚合；
-- 不级联删除日志、Artifact 或上层业务对象，这些数据由各自组件的保留策略管理；
-- 不负责把心跳超时的 Runner 标记为 `Offline`。该能力属于 Runner 健康管理；Job Controller 只消费持久化的 Runner 状态。
+- Job 的 Runner 绑定保持不变；失联 Job 直接收敛为失败，不自动重新调度，避免旧 Runner 尚在执行时产生并发构建。
+- Runner 健康状态由 Runner Controller 维护；Build、BuildInfo 状态由对应 Controller 聚合。
+- 历史回收仅删除 Job 对象；日志和 Artifact 由各自组件的保留策略管理。
 
 ## 二、依赖与组件边界
 

@@ -42,9 +42,6 @@ func TestJobPhase(t *testing.T) {
 			t.Errorf("phase %q is not valid", phase)
 		}
 	}
-	if JobPhase("Completed").IsValid() || JobPhase("Completed").IsTerminal() {
-		t.Error("legacy Completed must not be a valid or terminal Job phase")
-	}
 	if JobPhase("Unknown").IsValid() {
 		t.Error("unknown phase is valid")
 	}

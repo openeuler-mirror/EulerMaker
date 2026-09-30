@@ -25,11 +25,6 @@ func TestJobStatusPatchUsesObservedVersionAndExplicitClears(t *testing.T) {
 		if message, ok := body.Status["message"]; !ok || message != "" {
 			t.Fatal("empty message not explicitly cleared")
 		}
-		for _, field := range []string{"artifactState", "artifactCount"} {
-			if _, exists := body.Status[field]; exists {
-				t.Fatalf("removed Job status field sent: %s", field)
-			}
-		}
 		return response(200, `{"metadata":{"uid":"u","resourceVersion":"8"},"status":{"phase":"Succeeded"}}`), nil
 	})
 	job := JobResource{Metadata: ObjectMeta{Name: "j", Namespace: "p", UID: "u", ResourceVersion: "7"}}

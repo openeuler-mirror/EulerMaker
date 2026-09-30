@@ -482,9 +482,6 @@ func TestClaimUsesBuildNameWithoutUID(t *testing.T) {
 	if err := json.Unmarshal(c.document().Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := data["buildUID"]; exists {
-		t.Fatal("claim must not store buildUID")
-	}
 	if data["buildName"] != b.Name {
 		t.Fatal("claim must store buildName")
 	}

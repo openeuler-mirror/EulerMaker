@@ -69,7 +69,7 @@ apiserver 在就绪前从内置模板初始化 `rpmbuild` Script，仅创建不�
 
 ## Build 创建互斥
 
-full、incremental、specified 构建按 Project + OS + Arch 通过 ES 原子占用互斥，冲突返回 409；single 不占用目标。apiserver 在终态写入或实际删除成功后释放占用，并每 30 秒扫描补偿，不需要 controller 直接访问 ES。
+full、incremental、specified 构建按 Project + OS + Arch 通过 ES 原子占用互斥，冲突返回 409；single 不占用目标。apiserver 在终态写入或实际删除成功后释放占用，并每 30 秒扫描补偿。
 
 内部索引 alias 为 `ebs-build-target-claims`，仅保存目标占用。调用方保证 Build 名称不复用，apiserver 不保存历史名称记录。未知创建且无法确认结果时保留占用，不按超时自动释放；可通过 `ebs_build_claim_unconfirmed`、`ebs_build_claim_oldest_unconfirmed_seconds` 和结构化日志观察。
 

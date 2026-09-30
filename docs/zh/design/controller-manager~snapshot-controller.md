@@ -13,13 +13,7 @@ Snapshot Controller 是 `controller-manager` 中负责将 `Snapshot` 资源沿 `
 - 保证状态更新幂等，并在并发更新时以 apiserver 中的最新对象为准；
 - 暴露必要的结构化日志和指标。
 
-首版不负责：
-
-- 不创建或删除 Snapshot 资源（由 build_controller 负责）；
-- 不修改 `Snapshot.spec.defaultRef` 或 `Snapshot.spec.packageRepos`（从 Project 继承）；
-- 不维护 Build、BuildInfo、RpmRepo 等上层资源状态；
-- 不承担 `PackageRepo.ref` 的权威准入校验，该校验由 apiserver 负责；git-server 客户端仍在安全边界执行防御性复核，Snapshot Controller 只消费分类后的错误；
-- 不实现 leader election（首版单副本部署）。
+Snapshot 的创建及 spec 固化由 Build Controller 完成；Snapshot Controller 只更新其 status。`PackageRepo.ref` 由 apiserver 执行权威准入校验，git-server 客户端执行安全复核并返回分类错误。首版采用单副本部署。
 
 ## 二、依赖与组件边界
 

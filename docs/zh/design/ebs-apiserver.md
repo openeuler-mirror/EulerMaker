@@ -468,7 +468,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 默认值还包括：
 
-- `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是 GitRef 对象，仅支持 Branch/Tag，整体为空时默认 `{type: Branch, value: master}`。Project 和 Snapshot 均允许仓库 ref 整体为空，创建/普通更新不补齐；显式 ref 必须完整且合法。解析时优先使用包 ref，整体为空则回退到 Snapshot.spec.defaultRef，不回查 Project。旧字符串形式不再接受。
+- `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是 GitRef 对象，仅支持 Branch/Tag，整体为空时默认 `{type: Branch, value: master}`。Project 和 Snapshot 均允许仓库 ref 整体为空，创建/普通更新不补齐；显式 ref 必须完整且合法。解析时优先使用包 ref，整体为空则回退到 Snapshot.spec.defaultRef，不回查 Project。
 - `Build.spec.buildType` 必填，不设置默认值；缺失时返回 422。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
 - `Runner.spec.type` 默认为 `ct`。
@@ -480,7 +480,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
 - Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。创建后除 Build Controller 在 `incremental` 的 Pending 阶段固化 `spec.packages` 外，Build `spec` 不可修改；普通 Update 不能改变受保护的标签，`/status` 更新保留原对象 metadata。
 - Job 创建时若带有 `ebs.io/build-name`（由 BuildInfo Controller 创建的构建 Job），还必须带有 `ebs.io/spec-name` 和 `ebs.io/package-name` label；apiserver 校验标签存在且值符合 Kubernetes label 规则，缺失或非法返回 `422 Invalid`。包名标签由 BuildInfo Controller 按[标签约定](labels.md#7-job-构建归属标签)从 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 计算。普通更新不得修改已有归属标签，`/status` 更新保留原 metadata。没有 `ebs.io/build-name` 的通用 Job 不强制要求这些字段；存量构建 Job 即使缺少包名标签，普通更新和状态更新仍允许，且不会自动回填。
-- Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneUrl` 记录 git-server 确认同步后返回的只读地址；包解析成功时记录 commitId，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 只记录整体级异常，不使用包名作为 condition type。
+- Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneUrl` 记录 git-server 确认同步后返回的只读地址；包解析成功时记录 commitId，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 记录整体级异常。
 - Build 必须包含 `buildType`、`packages`，以及带 `os`、`arch` 的 `buildTarget`。创建和普通更新时，`metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4）；缺失或格式非法返回 `422 Invalid`，错误字段为 `metadata.name`。UUID 格式校验不替代调用方对名称不复用的保证。
 - 创建 full/incremental Build 时（含 dry-run），`spec.packages` 统一清空，不要求非空；前端请求不携带该字段。创建 `buildType=single` 或 `specified` 的 Build 时（含 dry-run），要求 packages 非空，额外读取一次所属 Project，校验每个包名均存在于 `Project.spec.packageRepos[].name`；允许多个包及重复包名。不存在的包返回 `422 Invalid`，错误字段定位到 `spec.packages[i]`；Project 不存在或读取失败时原样返回对应 API 错误，不创建 Build。`incremental` 创建后允许 Build Controller 在 Pending 阶段通过主资源 Update 幂等更新 `spec.packages`，由 Controller 保证名称来自本轮 Snapshot.spec.packageRepos，允许空数组；确认持久化且进入 Prepared 后禁止再次修改，其他 spec 字段仍不可变；普通用户不能修改该字段。
 - 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + OS + Arch 执行下节的 ES 目标占用协议；省略 buildType 按 full 处理。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。

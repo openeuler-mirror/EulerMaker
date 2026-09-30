@@ -114,11 +114,15 @@
           <p v-if="!builds.length" class="config-empty">{{ t("project.noMatchingBuilds") }}</p>
           <div v-else class="build-history-list">
             <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
-              <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
-                <span class="build-history-item-heading"><span class="build-history-item-title"><span class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</span><strong>{{ build.metadata?.name }}</strong></span><StatusBadge :value="buildDisplayStatus(build)" /></span>
-                <small>{{ buildTargetLabel(build) }}</small>
-                <time>{{ formatDate(build.status?.startTime) }}</time>
-              </button>
+              <div class="build-history-item-heading">
+                <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
+                  <span class="build-history-item-title"><span class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</span><strong>{{ build.metadata?.name }}</strong></span>
+                  <small>{{ buildTargetLabel(build) }}</small>
+                  <time>{{ formatDate(build.status?.startTime) }}</time>
+                </button>
+                <button class="build-history-copy" type="button" :disabled="!build.metadata?.name" :class="{ copied: copiedBuildName === build.metadata?.name }" :aria-label="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" :title="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" @click="copyBuildName(build.metadata?.name)"><Check v-if="copiedBuildName === build.metadata?.name" /><DocumentCopy v-else /></button>
+                <StatusBadge :value="buildDisplayStatus(build)" />
+              </div>
               <button v-if="canAbortBuild(build)" class="build-history-abort" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
             </div>
           </div>
@@ -428,6 +432,8 @@ const exportErrorKey = ref("");
 const copyErrorKey = ref("");
 const copiedId = ref(false);
 let copyResetTimer: number | undefined;
+const copiedBuildName = ref("");
+let buildCopyResetTimer: number | undefined;
 const buildDialogOpen = ref(false);
 const buildType = ref<BuildType>("full");
 const selectedBuildPackages = ref<string[]>([]);
@@ -615,7 +621,10 @@ onMounted(async () => {
   if (project.value) await loadResources();
 });
 
-onBeforeUnmount(() => window.clearTimeout(copyResetTimer));
+onBeforeUnmount(() => {
+  window.clearTimeout(copyResetTimer);
+  window.clearTimeout(buildCopyResetTimer);
+});
 
 watch(packageSearch, () => {
   packageCurrentPage.value = 1;
@@ -1426,6 +1435,20 @@ async function copyProjectId(): Promise<void> {
     }, 1800);
   } catch {
     copyErrorKey.value = "project.copyFailed";
+  }
+}
+
+async function copyBuildName(value?: string): Promise<void> {
+  if (!value) return;
+  copyErrorKey.value = "";
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+    else fallbackCopy(value);
+    copiedBuildName.value = value;
+    window.clearTimeout(buildCopyResetTimer);
+    buildCopyResetTimer = window.setTimeout(() => { copiedBuildName.value = ""; }, 1800);
+  } catch {
+    copyErrorKey.value = "project.copyBuildFailed";
   }
 }
 

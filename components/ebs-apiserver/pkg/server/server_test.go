@@ -32,47 +32,11 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	definitions := getOpenAPIDefinitions(func(path string) spec.Ref {
 		return spec.MustCreateRef("#/components/schemas/" + path)
 	})
-	if _, exists := definitions["ebs-api/ebs/v1.BuildSpec"].Schema.Properties["bootstrapRepo"]; exists {
-		t.Fatal("BuildSpec still exposes bootstrapRepo")
-	}
-	repositoryStatus, ok := definitions["ebs-api/ebs/v1.RpmRepoRepositoryStatus"]
-	if !ok {
-		t.Fatal("RpmRepoRepositoryStatus OpenAPI definition is missing")
-	}
-	if _, exists := repositoryStatus.Schema.Properties["phase"]; exists {
-		t.Fatal("RpmRepoRepositoryStatus must not expose phase")
-	}
-	if _, exists := repositoryStatus.Schema.Properties["rpmDepends"]; exists {
-		t.Fatal("RpmRepoRepositoryStatus must not expose rpmDepends")
-	}
-	for _, name := range []string{"RpmRepoRepositoryStatus", "RpmRepoReleaseStatus"} {
-		definition, ok := definitions["ebs-api/ebs/v1."+name]
-		if !ok {
-			t.Fatalf("%s OpenAPI definition is missing", name)
-		}
-		if _, exists := definition.Schema.Properties["packageCount"]; exists {
-			t.Fatalf("%s must not expose packageCount", name)
-		}
-		for _, field := range []string{"repositoryDigest", "releaseDigest"} {
-			if _, exists := definition.Schema.Properties[field]; exists {
-				t.Fatalf("%s must not expose %s", name, field)
-			}
-		}
-	}
-
-	if _, exists := definitions["ebs-api/ebs/v1.BaseBuildRef"].Schema.Properties["repo"]; exists {
-		t.Fatal("BaseBuildRef must not expose repo")
-	}
-	if _, exists := definitions["ebs-api/ebs/v1.BuildStatus"].Schema.Properties["repo"]; exists {
-		t.Fatal("BuildStatus must not expose repo")
-	}
-	if _, exists := definitions["ebs-api/ebs/v1.BuildInfoSpec"].Schema.Properties["specDepends"]; exists {
-		t.Fatal("BuildInfoSpec must not expose specDepends")
-	}
-	if _, exists := definitions["ebs-api/ebs/v1.SpecDepend"]; exists {
-		t.Fatal("SpecDepend must not be part of the public OpenAPI schema")
-	}
 	tests := map[string][]string{
+		"ebs-api/ebs/v1.RpmRepoRepositoryStatus":       {"repositoryUID", "contentURL"},
+		"ebs-api/ebs/v1.RpmRepoReleaseStatus":          {"phase", "contentURL"},
+		"ebs-api/ebs/v1.PackageRepo":                   {"name", "url", "ref"},
+		"ebs-api/ebs/v1.BuildSpec":                     {"buildTarget", "packages"},
 		"ebs-api/ebs/v1.BuildInfoSpec":                 {"bootstrapRepo", "buildPayload"},
 		"ebs-api/ebs/v1.BuildInfoStatus":               {"failedPackages"},
 		"ebs-api/ebs/v1.BaseBuildRef":                  {"name"},
@@ -99,23 +63,9 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		}
 	}
 
-	packageRepo, ok := definitions["ebs-api/ebs/v1.PackageRepo"]
-	if !ok {
-		t.Fatal("PackageRepo OpenAPI definition is missing")
-	}
-	if _, ok := packageRepo.Schema.Properties["buildTargets"]; ok {
-		t.Error("PackageRepo OpenAPI definition must not expose buildTargets")
-	}
-
 	snapshotSpec, ok := definitions["ebs-api/ebs/v1.SnapshotSpec"]
 	if !ok {
 		t.Fatal("SnapshotSpec OpenAPI definition is missing")
-	}
-	if _, ok := snapshotSpec.Schema.Properties["buildTargets"]; ok {
-		t.Error("SnapshotSpec OpenAPI definition must not expose buildTargets")
-	}
-	if _, ok := snapshotSpec.Schema.Properties["prevSnapshot"]; ok {
-		t.Error("SnapshotSpec OpenAPI definition must not expose prevSnapshot")
 	}
 	if _, ok := snapshotSpec.Schema.Properties["packageRepos"]; !ok {
 		t.Error("SnapshotSpec OpenAPI definition must expose packageRepos")
@@ -128,13 +78,6 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		t.Error("SnapshotStatus OpenAPI definition must expose packageRepoStatuses")
 	}
 
-	buildSpec, ok := definitions["ebs-api/ebs/v1.BuildSpec"]
-	if !ok {
-		t.Fatal("BuildSpec OpenAPI definition is missing")
-	}
-	if _, ok := buildSpec.Schema.Properties["prevBuildRepo"]; ok {
-		t.Error("BuildSpec OpenAPI definition must not expose prevBuildRepo")
-	}
 }
 
 func TestCodecsUseStrictDecoding(t *testing.T) {

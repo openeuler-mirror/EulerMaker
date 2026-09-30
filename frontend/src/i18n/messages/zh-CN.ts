@@ -216,6 +216,8 @@ export default {
     copyProjectId: "复制工程 ID",
     copied: "已复制",
     copyFailed: "工程 ID 复制失败",
+    copyBuildName: "复制构建名称",
+    copyBuildFailed: "构建名称复制失败",
     tabsLabel: "工程页面",
     overviewTab: "工程详情",
     buildHistoryTab: "构建历史",

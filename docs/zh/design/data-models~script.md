@@ -63,7 +63,7 @@ apiserver 校验：
 
 Project 可在 `spec.buildPayload` 中配置 `rpmbuild_script: custom-script`，只表示全局脚本名称，不定义 Project 私有脚本。Build Controller 创建 BuildInfo 时原样复制 `buildPayload`；Project 后续修改不影响已创建 BuildInfo。
 
-BuildInfo Controller 创建新 Job 时解析 `BuildInfo.spec.buildPayload`：未配置或配置空字符串时固定使用全局 `rpmbuild` 脚本；配置为非字符串、非法 DNS subdomain 名称或 YAML 无法解析时返回配置错误，不静默回退。同一轮 reconcile 首次需要创建 Job 时 GET 对应 Script，并将响应的 name、UID、resourceVersion 复用于本轮后续新 Job 的 `spec.scriptRefs`（当前写入一个元素）；下一轮重新读取。读取失败不创建 Job，确认已存在 Job 时不需要读取 Script。`rpmbuild_script` 是控制器配置，不再写入 Job payload，避免出现两处名称。已创建 Job 的名称不因 Project 配置变化而改变；脚本内容乃至同名对象本身可以在执行前变化。
+BuildInfo Controller 创建新 Job 时解析 `BuildInfo.spec.buildPayload`：未配置或配置空字符串时固定使用全局 `rpmbuild` 脚本；配置为非字符串、非法 DNS subdomain 名称或 YAML 无法解析时返回配置错误，不静默回退。同一轮 reconcile 首次需要创建 Job 时 GET 对应 Script，并将响应的 name、UID、resourceVersion 复用于本轮后续新 Job 的 `spec.scriptRefs`（当前写入一个元素）；下一轮重新读取。读取失败不创建 Job，确认已存在 Job 时不需要读取 Script。`rpmbuild_script` 由控制器解析为 Job 的 `spec.scriptRefs`。已创建 Job 的名称不因 Project 配置变化而改变；脚本内容乃至同名对象本身可以在执行前变化。
 
 ```yaml
 spec:

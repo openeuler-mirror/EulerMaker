@@ -13,17 +13,7 @@ Runner Controller 是 `controller-manager` 中负责 Runner 健康状态收敛�
 - 正确处理 Runner 心跳与 Controller 写入之间的并发、冲突和结果未知；
 - 暴露必要的结构化日志和指标。
 
-首版不负责：
-
-- 不创建、删除或重新注册 Runner；
-- 不生成或校验 `spec.instanceId` 的格式；该字段由 Runner 注册流程和 apiserver 校验，Controller 只在响应身份比较时保持其不变；
-- 不根据 Runner 数量扩缩执行机；
-- 不修改 `spec.unschedulable`、taints、labels 或其他 spec/metadata 字段；
-- 不把 `Offline` Runner 自动恢复为 `Online`，恢复由已经完成本地初始化的 Runner agent 在下一次成功状态上报时完成；
-- 不读取、更新或删除 Job。已绑定 Job 的失败收敛由 Job Controller 处理；
-- 不根据 Runner 上是否存在 Job 推导 Runner phase；
-- 不实现节点驱逐、Pod eviction、污点管理、zone health 或 Kubernetes Node Controller 的其他集群能力；
-- 不清理长期离线的 Runner。若以后需要历史 Runner 回收，应作为独立、显式启用的保留策略设计。
+Controller 的写入范围仅为 `Runner.status.phase`，健康判断以心跳为准。Runner agent 负责注册，以及完成本地初始化后通过状态上报恢复 `Online`；apiserver 校验 `spec.instanceId`，Controller 在响应身份比较时核对其一致性。已绑定 Job 的失败收敛由 Job Controller 处理。长期离线的 Runner 对象保留，删除由显式管理操作触发。
 
 Controller 之间的关系为：
 
