@@ -621,7 +621,7 @@ metadata.finalizers
 metadata.ownerReferences
 ```
 
-除 Runner 外，`metadata.resourceVersion` 只能保持为 `oldObject` 的值；Runner 的版本值由 gateway 原样转发并由 apiserver 校验。路径中的 namespace、name 必须与候选对象的 `metadata.namespace`、`metadata.name` 一致；Runner 的 `apiVersion`、`kind`、对象结构和字段类型由 apiserver 严格解码，gateway 只核对其身份名称。缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段，候选对象的 `status` 必须与旧对象完全相同；`/status` 路径只允许修改授权的 `status` 字段，`metadata`（除 `resourceVersion` 外）和 `spec` 必须与旧对象完全相同。
+除 Runner 外，`metadata.resourceVersion` 只能保持为 `oldObject` 的值；Runner 的版本值由 gateway 原样转发并由 apiserver 校验。路径中的 namespace、name 必须与候选对象的 `metadata.namespace`、`metadata.name` 一致；Runner 的 `apiVersion`、`kind`、对象结构和字段类型由 apiserver 严格解码，gateway 只核对其身份名称。缺失、冲突或试图跨 Project 移动对象均返回 400。普通对象路径只允许修改 `metadata` 和 `spec` 中角色有权修改的字段；Gateway 不比较候选对象与旧对象的 `status`，允许省略该字段。对于具有 `status` 的资源，apiserver 在普通 PUT/PATCH 时始终保留旧状态，即使请求携带不同的 `status` 也不生效。`/status` 路径只允许修改授权的 `status` 字段，`metadata`（除 `resourceVersion` 外）和 `spec` 必须与旧对象完全相同。
 
 字段比较后的角色规则：
 
