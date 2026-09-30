@@ -220,6 +220,8 @@ export default {
     copyProjectId: "Copy project ID",
     copied: "Copied",
     copyFailed: "Could not copy the project ID",
+    copyBuildName: "Copy build name",
+    copyBuildFailed: "Could not copy the build name",
     tabsLabel: "Project pages",
     overviewTab: "Project details",
     buildHistoryTab: "Build history",

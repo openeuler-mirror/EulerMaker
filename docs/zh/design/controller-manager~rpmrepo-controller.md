@@ -9,12 +9,7 @@ RpmRepo Controller 是 controller-manager 中负责把构建产物物化为 RPM 
 - 消费 BuildInfo、Job、Build 的信息，维护 RpmRepo.status，推进构建产物物化与仓库正式发布；
 - 支持重复调谐与重启恢复，提供结构化日志和指标。
 
-职责边界：
-
-- 不写 `Build.status`、`BuildInfo.status`、`Job.status`、`Project.status`；Build 侧由 Build Controller 自行复制发布结果；
-- 不创建或删除 Job，不修改 `Build.spec`，不修改 `RpmRepo.spec`（首版 `RpmRepo.spec` 为空 `{}`）；
-- 所有物化与发布动作只经 `ArtifactManagerClient` 的 HTTP 接口；
-- 不负责仓库签名、跨实例复制、镜像同步与 delta RPM。
+资源写入范围仅为 `RpmRepo.status`；Build Controller 根据发布结果推进 Build 状态。所有物化与发布动作通过 `ArtifactManagerClient` 的 HTTP 接口完成。
 
 ## 二、依赖与组件边界
 

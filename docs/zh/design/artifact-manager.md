@@ -781,7 +781,7 @@ type RpmRepoStatus struct {
 }
 ```
 
-`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。批次失败收口时保留 transition 作为已放弃批次，写 RepositoryReady=False 与发布失败终局，不清除已有可用版本。`repository` 不再定义 phase。 Build Controller 创建 RpmRepo 时仅种入基线 UID 与 URL；创建后由 RpmRepo Controller 维护 status。
+`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。批次失败收口时保留 transition 作为已放弃批次，写 RepositoryReady=False 与发布失败终局，不清除已有可用版本。Build Controller 创建 RpmRepo 时仅种入基线 UID 与 URL；创建后由 RpmRepo Controller 维护 status。
 
 所有构建类型均创建同名 RpmRepo。single 由 Build Controller 在创建时设置 `status.release.phase=Skipped`，只保存继承的 `status.repository.repositoryUID/contentURL`，供本轮 BuildInfo 使用；无基线时 repository 为 nil。Skipped 不要求 release.contentURL，不允许 release.transition；RpmRepo Controller 将其视为终态，不物化、不发布、不因 Build 中止改写为 Failed。Skipped 不是 Artifact Manager 的物理仓库或发布记录状态，也不表示 Build 已完成。
 

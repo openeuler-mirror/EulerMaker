@@ -187,7 +187,7 @@ status:
 | `Build.spec.buildTarget` | 用户提交 | 创建后不可修改 |
 | `Build.status.phase` / `Build.status.stage` | Build Controller | Pending → Prepared → Processing 由本控制器状态机推进；publish 终态由本控制器依据 `RpmRepo.status.release.phase` 判定，`stage` 由本控制器写 `publish` |
 | `Build.status.startTime` / `Build.status.endTime` / `Build.status.baseBuildRef` | Build Controller | 进入 Processing 时写 `startTime`，进入终态时写 `endTime`；`baseBuildRef` 在 Pending 阶段写入，`nil` 表示未解析，`{}` 表示无上一个发布成功的 Build |
-| `BuildSucceed` / `PublishSucceed`（`Build.status.conditions`） | Build Controller | `BuildSucceed` 由 `BuildInfo.status.specStatus` 计算；`PublishSucceed` 由 `RpmRepo.status.release.phase` 推导（`Ready`→`True`、`Failed`→`False`），不再从 `RpmRepo.status.conditions` 复制；直接依赖 NotFound 的失败条件见第六章 |
+| `BuildSucceed` / `PublishSucceed`（`Build.status.conditions`） | Build Controller | `BuildSucceed` 由 `BuildInfo.status.specStatus` 计算；`PublishSucceed` 由 `RpmRepo.status.release.phase` 推导（`Ready`→`True`、`Failed`→`False`）；直接依赖 NotFound 的失败条件见第六章 |
 
 ### 4.2 Snapshot
 

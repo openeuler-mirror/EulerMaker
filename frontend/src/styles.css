@@ -407,14 +407,21 @@ body.modal-open { overflow: hidden; }
 .build-history-item { width: 100%; display: flex; flex-direction: column; align-items: stretch; color: #536176; background: transparent; border-bottom: 1px solid #edf1f6; text-align: left; }
 .build-history-item:hover { background: #f6f9fd; }
 .build-history-item.active { background: #edf6ff; box-shadow: inset 3px 0 var(--blue); }
-.build-history-select { width: 100%; padding: 14px 12px; display: block; color: inherit; background: transparent; border: 0; text-align: left; }
+.build-history-select { min-width: 0; flex: 0 1 auto; padding: 14px 0 14px 12px; display: block; color: inherit; background: transparent; border: 0; text-align: left; }
 .build-history-item.has-abort .build-history-select { padding-bottom: 8px; }
 .build-history-select:focus-visible { position: relative; outline: 2px solid #9bc5f5; outline-offset: -2px; }
+.build-history-copy { flex: none; width: 26px; height: 26px; margin-top: 11px; padding: 0; display: grid; place-items: center; color: #728096; background: transparent; border: 0; border-radius: 5px; }
+.build-history-copy:hover:not(:disabled) { color: var(--blue); background: #eaf4ff; }
+.build-history-copy:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 1px; }
+.build-history-copy:disabled { opacity: .5; cursor: not-allowed; }
+.build-history-copy.copied { color: #21895c; }
+.build-history-copy svg { width: 15px; }
 .build-history-abort { margin: 0 12px 12px auto; padding: 0; color: #bd3f4b; background: transparent; border: 0; font-size: 12px; font-weight: 650; line-height: 20px; }
 .build-history-abort:hover:not(:disabled) { color: #a92f3c; text-decoration: underline; }
 .build-history-abort:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; }
 .build-history-abort:disabled { opacity: .5; cursor: not-allowed; }
-.build-history-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.build-history-item-heading { display: flex; align-items: flex-start; gap: 6px; padding-right: 12px; }
+.build-history-item-heading > .status-badge { flex: none; margin: 14px 0 0 auto; }
 .build-history-item-heading strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .build-history-item-title { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .build-history-item-type { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 11px; line-height: 16px; }

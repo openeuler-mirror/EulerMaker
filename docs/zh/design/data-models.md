@@ -107,7 +107,7 @@ type ProjectSpec struct {
 |------|---------|------|------|
 | `displayName` | string | 否 | 页面展示名称，默认使用创建时的 Project 名称 |
 | `description` | string | 否 | 项目描述 |
-| `defaultRef` | GitRef | 否 | 默认 spec 引用，仅允许 `Branch` / `Tag`；整体为空时默认 `{type: Branch, value: master}`，不接受旧字符串形式 |
+| `defaultRef` | GitRef | 否 | 默认 spec 引用，仅允许 `Branch` / `Tag`；整体为空时默认 `{type: Branch, value: master}` |
 | `buildPayload` | string | 否 | 构建环境参数，YAML 格式；`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz` 和 `unuse_gcc_secure` 是包仓库名列表，命中时向 Job payload 写入相应布尔标记；`unparsable_spec` 是 spec 名列表，仅供 BuildInfo Controller 组装依赖时使用 |
 | `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；创建和更新时 `os + arch` 组合必须唯一，其余配置不同也不能重复 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
@@ -186,7 +186,7 @@ type SnapshotStatus struct {
 |------|---------|------|
 | `phase` | `SnapshotPhase` | 公共 `ebs/v1` API 定义的稳定取值：`Pending` / `Processing` / `Active` |
 | `packageRepoStatuses` | map[string]PackageRepoStatus | Snapshot Controller 根据 `spec.packageRepos` 写入的各包解析状态；成功记录 commit，失败记录包级 error |
-| `conditions` | []metav1.Condition | 仅记录无法归属于具体包的 Snapshot 整体异常，不使用包名作为 condition type |
+| `conditions` | []metav1.Condition | 记录 Snapshot 整体异常；包级错误记录于 `packageRepoStatuses` |
 
 ### SnapshotList
 
@@ -544,7 +544,7 @@ type RpmRepoStatus struct {
 | `transition` | *RepositoryTransition | 在途版本的固定输入，或失败收口时原样保留的已放弃批次 |
 | `updatedAt` | *metav1.Time | 过程仓 status 最近一次有效写入时间（提交批次、失败收口或提升版本） |
 
-`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。可定位到单个异常 Job 的清单、产物或 RPM 输入失败会把其名称加入 `skippedJobNames`、清空检查点并重新组批；其它批次失败收口保留 transition、写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False，不清除已有可用版本。`repository` 不再定义 phase。
+`repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。可定位到单个异常 Job 的清单、产物或 RPM 输入失败会把其名称加入 `skippedJobNames`、清空检查点并重新组批；其它批次失败收口保留 transition、写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False，不清除已有可用版本。
 
 RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact:///repositories/.../` 逻辑地址，不绑定 Artifact Manager 部署地址。BuildInfo Controller 使用共享的 `--artifact-manager-addr` 将过程仓地址解析为可访问的 HTTP(S) URL，再用于 RPM 元数据读取和 Job `payload.repo` 下发。
 
@@ -1002,10 +1002,6 @@ type GitRef struct {
 | `ref`          | GitRef        | Git 引用；`type` 为 `Branch`、`Tag` 或 `Commit`，`value` 为对应分支名、标签名或完整 commit ID |
 
 `ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。Project 和 Snapshot 创建、普通更新时均允许省略仓库的 `ref`，或传入 `null` / `{}`（type、value 均为空）；apiserver 保留空 ref，不自动补齐。工程级 `defaultRef` 仅支持 Branch/Tag，整体为空时默认成 `{type: Branch, value: master}`；仅填写 type 或 value 均校验失败。仓库显式填写的 ref 保持不变，修改工程默认引用不会改写已有 ref；仓库仍可显式使用 Commit。Build Controller 复制 Project 的 defaultRef；single 仅复制 Build.spec.packages 指定的 packageRepos，其他类型复制全部，所选仓库字段保持原值；Snapshot Controller 实际使用时优先采用包 ref，整体为空时回退到 Snapshot 自身 defaultRef。显式 ref 必须完整且合法。
-
-旧清单及存量 Project 的 `spec.specBranch` 必须迁移为 `spec.defaultRef`：原字符串转换为 `{type: Branch, value: <原值>}`，原 GitRef 对象则保留 type/value 并重命名字段。不会自动读取旧字段作为默认引用。
-
-
 ### PackageRepoStatus
 
 ```go

@@ -730,7 +730,7 @@ PR 165 可作为视觉和工程原型，以下内容可以选择性迁移：
 - 删除 `/public-apis` 及前端容器直连 apiserver 的代理。
 - 使用 `user` 身份的 `ebs:user`、`ebs:ops`、`ebs:admin` 权限模型。
 - 使用 `ebs.io/owner-user` 和 `ebs.io/member-user.*` Project labels。
-- 从当前 OpenAPI 生成类型，移除旧的 Build、Snapshot、RpmRepo、PackageRepo 和 Runner 字段。
+- 从当前 OpenAPI 生成资源类型。
 - 拆分大页面和语言文件，增加路由懒加载。
 - 增加权限、表单、API 契约、日志和端到端测试。
 
@@ -743,7 +743,6 @@ PR 165 可作为视觉和工程原型，以下内容可以选择性迁移：
 - 所有浏览器资源请求符合 Gateway 和 Artifact Manager 的公开契约。
 - 浏览器和前端容器均无法直连 apiserver。
 - 匿名、User Owner、User Member、Ops 和 Admin 五类访问场景的页面和操作与权限矩阵一致。
-- 不再使用当前 API 已移除的字段。
 - 所有列表支持空、加载、错误、分页和刷新状态。
 - 写操作处理 401、403、409、429 和请求结果未知场景。
 - Job 日志可以从历史内容无缝衔接 SSE，断线后不丢失、不重复展示内容。

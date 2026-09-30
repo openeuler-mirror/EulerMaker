@@ -515,7 +515,7 @@ specDepends 的组装与缓存见 15.11；构建集只在 Pending 阶段判定�
 
 （`single` 之外的类型：种子仓库在全量组装阶段处理；`incremental` 的种子仓库已由 Build Controller 固化。）
 
-`incremental` 与 `specified` 的构建集为空时，均直接写入 `Completed`；已有的包级降级条件和 `failedPackages` 保留，不再使用 `SpecifiedBuildSetEmpty` 失败收口。
+`incremental` 与 `specified` 的构建集为空时，均直接写入 `Completed`；保留已有的包级降级条件和 `failedPackages`。
 
 **输入约定**：Build.spec.buildTarget.buildFlag=true 由发起侧保证；本控制器不设置额外仓库级构建开关。
 
@@ -1196,10 +1196,10 @@ status:                                             # 创建时恒 Pending/Pendi
 | `spec.runtimeSpec` | `{"image": Config/build-target 快照解析结果}` | RawExtension；ct 运行时的镜像来源：集群级 Config/build-target（name=build-target，`GET /apis/ebs/v1/configs/build-target`）——每轮创建新 Job 的 reconcile 经 `GetConfig` 读取一次快照、同轮批量创建共享，按 `Build.spec.buildTarget.os/arch` 解析 `content.targets[os].arches[arch].image`（复用共享 `BuildImage`）；读取失败或映射缺失 → 本轮不创建新 Job，返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 Failed，E-26）；已存在 Job 沿用固化镜像、不因配置更新重写（生效边界见 [Config 设计](data-models~config.md) 2.5.3） |
 | `spec.scriptRefs` | 创建时 Script 的 name、UID、resourceVersion，当前写入一个元素 | 从 `buildPayload.rpmbuild_script` 选名，未配置时使用 `rpmbuild`；GET Script 后写入观测值，不下发 `rpmbuild_script` 到 Job payload。读取失败不创建 Job；观测值不锁定 Runner 执行时的正文 |
 | `spec.timeoutSeconds` | `10800` | 常量（3 小时）；apiserver `SetDefaults_Job` 同值兜底                                                                                     |
-| `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET `Config/build-resource` 并解析 `spec.content`；404 时按 E-27 将当前 spec 标 Failed；其他查询失败或内容无效时暂停本轮新 Job 派发。内容按 `default` → `packages[specName].default` → `packages[specName].arches[arch]` 逐字段覆盖（[构建配置设计](data-models~config.md#32-匹配与校验)）；不再从 `BuildInfo.spec.buildPayload` 顶层 `cpu`/`memory` 取资源 |
+| `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET `Config/build-resource` 并解析 `spec.content`；404 时按 E-27 将当前 spec 标 Failed；其他查询失败或内容无效时暂停本轮新 Job 派发。内容按 `default` → `packages[specName].default` → `packages[specName].arches[arch]` 逐字段覆盖（[构建配置设计](data-models~config.md#32-匹配与校验)） |
 | `spec.nodeSelector` | `{"ebs.io/runner-arch": Build.spec.buildTarget.arch}` | scheduler 按 runner label 精确匹配架构                                                                                               |
 | `spec.tolerations` | 不设置（空） | 类型零值                                                                                                                          |
-| `spec.payload` | 构造 JSON 字符串（见下"payload 构造契约"） | **不再原样透传** `BuildInfo.spec.buildPayload`                                                                                        |
+| `spec.payload` | 构造 JSON 字符串（见下"payload 构造契约"） | 按白名单解析 `BuildInfo.spec.buildPayload` 并填充派生字段                                                                                        |
 | `status.phase` / `status.stage` | `"Pending"` / `"Pending"` | 初始状态；apiserver `PrepareForCreate` 强制覆写同值（服务端为权威）                                                                              |
 
 **payload 构造契约**：
@@ -1331,7 +1331,7 @@ DcgDict 派生状态（供流程消费）：
 
 ### 15.10 Cache.rpmMetaSources：RpmMeta 内存分层缓存
 
-RpmRepo 不存储 RpmMeta 数据（原 `status.repository.rpmDepends` 字段已删除，data-models.md「RpmRepoRepositoryStatus」无此字段）。本控制器自行下载解析仓库 XML 生成 RpmMeta，缓存于进程内存：**纯内存加速层、不写 status**（无持久化载体，区别于 dcgDict 的 status.dcg 落盘，G-02 落盘不变式不适用）。
+本控制器下载解析仓库 XML 生成 RpmMeta，并在进程内存中缓存。该缓存是可重新生成的加速层；dcgDict 则通过 `status.dcg` 持久化，两者的恢复方式不同。
 
 **分层结构（结构体定义）**：
 
