@@ -1,6 +1,7 @@
 import type { Project, ResourceList, Session, SessionIdentity } from "@/types";
 
 const TOKEN_KEY = "eulermaker.session.token";
+export const JOB_LIST_INCLUDE_FIELDS = "metadata,status.phase,status.runner,status.startTime,status.endTime";
 
 export class ApiError extends Error {
   constructor(

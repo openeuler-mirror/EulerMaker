@@ -34,13 +34,12 @@
     <EmptyState v-else-if="!filtered.length" :title="t('projects.noMatch')" :description="t('projects.noMatchHint')" />
     <div v-else class="project-table-wrap">
       <table class="project-table">
-        <thead><tr><th>{{ t("projects.project") }}</th><th>{{ t("projects.descriptionColumn") }}</th><th>{{ t("projects.targets") }}</th><th>{{ t("projects.repositories") }}</th><th>{{ t("projects.createdAt") }}</th></tr></thead>
+        <thead><tr><th>{{ t("projects.project") }}</th><th>{{ t("projects.descriptionColumn") }}</th><th>{{ t("projects.targets") }}</th><th>{{ t("projects.createdAt") }}</th></tr></thead>
         <tbody>
           <tr v-for="project in filtered" :key="project.metadata?.name">
             <td><RouterLink class="project-name-link" :to="`/projects/${encodeURIComponent(project.metadata?.name || '')}`"><strong>{{ project.spec?.displayName || project.metadata?.name }}</strong><small>{{ project.metadata?.name }}</small></RouterLink></td>
             <td class="project-description" :title="project.spec?.description || ''">{{ project.spec?.description || t("common.emptyValue") }}</td>
             <td>{{ targetLabel(project) }}</td>
-            <td>{{ project.spec?.packageRepos?.length || 0 }}</td>
             <td>{{ formatDate(project.metadata?.creationTimestamp) }}</td>
           </tr>
         </tbody>
@@ -118,7 +117,7 @@ import { useSessionStore } from "@/stores/session";
 import type { Project } from "@/types";
 import { ProjectManifestError, projectFromForm, projectFromYaml } from "@/utils/projectManifest";
 import { projectTypeSelector, PROJECT_TYPE_LABEL, type ProjectType } from "@/utils/projectType";
-import { listRelatedProjects } from "@/utils/relatedProjects";
+import { listRelatedProjects, PROJECT_LIST_INCLUDE_FIELDS } from "@/utils/relatedProjects";
 
 const { supports: supportsBuildTarget } = useBuildTargetConfig();
 const projects = ref<Project[]>([]);
@@ -199,7 +198,7 @@ async function loadPage(token: string, page = currentPage.value): Promise<boolea
   const sequence = ++loadSequence;
   loading.value = true;
   errorKey.value = "";
-  const query = new URLSearchParams({ limit: String(pageSize.value), labelSelector: projectTypeSelector(projectType.value) });
+  const query = new URLSearchParams({ limit: String(pageSize.value), labelSelector: projectTypeSelector(projectType.value), includeFields: PROJECT_LIST_INCLUDE_FIELDS });
   if (token) query.set("continue", token);
   try {
     if (relatedOnly.value) {
