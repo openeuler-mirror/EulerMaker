@@ -38,7 +38,7 @@ func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
 		Spec: JobSpec{
 			RuntimeSpec: runtimeSpec,
-			Payload:     "build:\n  target: rpm\n",
+			Payload:     `{"build":{"target":"rpm"}}`,
 		},
 	}
 
@@ -49,11 +49,11 @@ func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 	if resultRoot != filepath.Join(dir, "results", "project-a", "job-a") {
 		t.Fatalf("result root = %s", resultRoot)
 	}
-	payload, err := os.ReadFile(filepath.Join(dir, "work", "project-a", "job-a", "payload.yaml"))
+	payload, err := os.ReadFile(filepath.Join(dir, "work", "project-a", "job-a", "payload.json"))
 	if err != nil {
 		t.Fatalf("read payload: %v", err)
 	}
-	if string(payload) != "build:\n  target: rpm\n" {
+	if string(payload) != `{"build":{"target":"rpm"}}` {
 		t.Fatalf("payload = %q", string(payload))
 	}
 	if container.created.Image != "openeuler:22.03" {
