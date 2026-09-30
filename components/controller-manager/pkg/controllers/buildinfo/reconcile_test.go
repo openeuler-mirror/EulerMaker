@@ -16,6 +16,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -28,6 +29,10 @@ import (
 // --- 5.2 event handlers ---
 
 type initializerSharedClient struct{ clientpkg.Interface }
+
+func (initializerSharedClient) AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error) {
+	return nil, nil
+}
 
 func (initializerSharedClient) GetBuildTargetContent(context.Context) (*ebsv1.BuildTargetContent, error) {
 	return nil, nil
@@ -167,6 +172,98 @@ func TestReconcileUnknownPhaseSkips(t *testing.T) {
 }
 
 // --- 7.1 parent abort guard (E-20/E-21/E-03/G-06) ---
+
+func TestParentAbortAttemptsJobsBeforeTerminal(t *testing.T) {
+	for _, scenario := range []string{"success", "partial-failure", "list-failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, client, _, _ := newTestController(t)
+			client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+			build := testBuildObj("full")
+			build.Status.Phase = ebsv1.BuildAborted
+			client.SeedBuild(build)
+			client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoProcessing))
+			for name, phase := range map[string]ebsv1.JobPhase{"a": ebsv1.JobPending, "b": ebsv1.JobRunning, "done": ebsv1.JobSucceeded, "other": ebsv1.JobRunning} {
+				buildName := testBuild
+				if name == "other" {
+					buildName = "other-build"
+				}
+				client.SeedJob(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS, Labels: map[string]string{ebsv1.JobBuildNameLabel: buildName}}, Status: ebsv1.JobStatus{Phase: phase}})
+			}
+			if scenario == "partial-failure" {
+				client.abortErrors = map[string]error{"a": errors.New("abort unavailable")}
+			}
+			if scenario == "list-failure" {
+				client.InjectRead("jobs", 1, errors.New("list unavailable"))
+			}
+			reconcileOnce(t, c)
+			info := getBuildInfo(t, client)
+			requirePhase(t, info, ebsv1.BuildInfoAborted)
+			if scenario != "success" {
+				requireCondition(t, info.Status.Conditions, ConditionJobAbortFailed, ReasonJobAbortFailed)
+			}
+			if scenario != "list-failure" {
+				if strings.Join(client.abortCalls, ",") != "a,b" {
+					t.Fatalf("abort calls = %v", client.abortCalls)
+				}
+				job, _ := client.GetJob(context.Background(), testNS, "b")
+				if job.Status.Phase != ebsv1.JobAborted {
+					t.Fatalf("second Job phase = %s", job.Status.Phase)
+				}
+			}
+			reconcileOnce(t, c)
+			if len(client.abortCalls) > 2 {
+				t.Fatalf("terminal BuildInfo repeated abort: %v", client.abortCalls)
+			}
+		})
+	}
+}
+
+func TestParentAbortBatches(t *testing.T) {
+	for _, count := range []int{100, 101, 250} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			c, client, _, _ := newTestController(t)
+			client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+			build := testBuildObj("full")
+			build.Status.Phase = ebsv1.BuildAborted
+			client.SeedBuild(build)
+			client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoProcessing))
+			client.abortErrors = make(map[string]error)
+			for i := 0; i < count; i++ {
+				name := fmt.Sprintf("job-%03d", i)
+				client.SeedJob(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS, Labels: map[string]string{ebsv1.JobBuildNameLabel: testBuild}}, Status: ebsv1.JobStatus{Phase: ebsv1.JobRunning}})
+				if i < 100 {
+					client.abortErrors[name] = errors.New("abort unavailable")
+				}
+			}
+			for processed := 0; processed < count; {
+				result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+				if err != nil {
+					t.Fatal(err)
+				}
+				processed += min(100, count-processed)
+				if len(client.abortCalls) != processed {
+					t.Fatalf("abort calls = %d, want %d", len(client.abortCalls), processed)
+				}
+				info := getBuildInfo(t, client)
+				if processed < count {
+					requirePhase(t, info, ebsv1.BuildInfoProcessing)
+					if result.RequeueAfter <= 0 || client.statusWrites != 0 {
+						t.Fatalf("intermediate result = %+v, status writes = %d", result, client.statusWrites)
+					}
+				} else {
+					requirePhase(t, info, ebsv1.BuildInfoAborted)
+					requireCondition(t, info.Status.Conditions, ConditionJobAbortFailed, ReasonJobAbortFailed)
+					if !strings.Contains(findCondition(info.Status.Conditions, ConditionJobAbortFailed).Message, "100 Job abort requests") {
+						t.Fatal("earlier batch failures were lost")
+					}
+					if c.abortJobs.Len() != 0 {
+						t.Fatal("completed abort progress was not cleared")
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestParentAbortGuard(t *testing.T) {
 	tests := []struct {

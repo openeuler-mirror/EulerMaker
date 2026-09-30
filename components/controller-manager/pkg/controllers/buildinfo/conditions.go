@@ -86,6 +86,8 @@ const (
 	ReasonDefaultBuildResourceConfigNotFound    = "DefaultBuildResourceConfigNotFound"
 	ConditionBuildAborted                       = "BuildAborted"
 	ReasonBuildAborted                          = "BuildAborted"
+	ConditionJobAbortFailed                     = "JobAbortFailed"
+	ReasonJobAbortFailed                        = "JobAbortFailed"
 	ConditionInstall                            = "Install"
 	ReasonInstallCheckFailed                    = "InstallCheckFailed"
 	ReasonInstallResultMissing                  = "InstallResultMissing"

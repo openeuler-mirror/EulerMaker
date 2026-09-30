@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -15,6 +18,33 @@ import (
 )
 
 type fetchMap map[string][]byte
+
+type metadataTransportFunc func(*http.Request) (*http.Response, error)
+
+func (f metadataTransportFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestHTTPFetcherIdentifiesMetadataRequests(t *testing.T) {
+	for _, path := range []string{"repomd.xml", "primary.xml.zst"} {
+		t.Run(path, func(t *testing.T) {
+			url := "https://mirror.example/repodata/" + path
+			client := &http.Client{Transport: metadataTransportFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodGet || req.URL.String() != url {
+					t.Fatalf("request = %s %s, want GET %s", req.Method, req.URL, url)
+				}
+				if got := req.UserAgent(); got != "eulermaker-controller-manager/1.0" {
+					t.Fatalf("User-Agent = %q", got)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("metadata")), Header: make(http.Header)}, nil
+			})}
+			body, err := HTTPFetcher(client)(context.Background(), url)
+			if err != nil || string(body) != "metadata" {
+				t.Fatalf("body = %q, error = %v", body, err)
+			}
+		})
+	}
+}
 
 func (f fetchMap) fetch(_ context.Context, url string) ([]byte, error) {
 	if body, ok := f[url]; ok {

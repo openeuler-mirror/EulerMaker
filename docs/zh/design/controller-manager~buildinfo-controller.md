@@ -86,7 +86,7 @@ BuildInfo 与父 Build 同项目、同名；创建输入字段见 15.2。
   2. 读 `BuildInfo.status.conditions`：`ReleaseFailed`、`RpmRepoUnavailable`、`SnapshotUnavailable` 为停止派发标记，按 6.5 收敛；`SpecDependsFillFailed` 的 `SpecifiedBuildSetEmpty` 仅用于 `single` 空集失败收口。`incremental` 与 `specified` 的包级解析失败只记录降级和 `failedPackages`，不因种子失败或构建集为空直接失败收口。
   3. 读 `BuildInfo.status.specStatus` 汇总包级 build/install 结果：非 single 即使有失败 spec 也进入发布阶段，`BuildSucceed=False` 记录构建不完全成功；若发布 Ready，Build 仍可为 `Success/publish`，其失败 spec 供下一轮增量构建重试。`single` 按构建结果直接收口。增量构建集为空时按当前 Build Controller 的汇总契约处理；BuildInfo 只会在父 Build 进入 Prepared 后创建，此时种子已确认。
   - `Pending` / `Processing` → Build 重新入队等待。
-- 中止契约：abort 发起方经 Build 的 `/abort` 子资源请求中止，该请求**同步置 `Build.status.phase=Aborted`**（不等待 BuildInfo）；BuildInfo Controller 的 parentAbortGuard 观察到父 Build `Aborted`（或 404）后置 BuildInfo 为 `Aborted` 中止终态（保留对象）；Build Controller 在 abort 流程中确认 BuildInfo 进入 `Aborted` 终态后完成收尾（触发关联 Job 清理等）。Build `/abort` 子资源"立即置终态"的语义为跨组件契约（联调前置），消除"BuildInfo 等 Build 先 Aborted（G-06）而 Build 等 BuildInfo 先 Aborted"的循环等待。**abort 收尾竞态**：若竞态中 BuildInfo 先行进入 `Completed` 终态（G-05 不再入队，parentAbortGuard 不再执行），Build Controller 收尾确认按"BuildInfo 已为任意终态（`Aborted`/`Completed`）"放行——Job 清理照常按 label 进行，Build 终态保持 `Aborted`，不因 BuildInfo 为 `Completed` 而阻塞收尾或误改 Build 终态。
+- 中止契约：Build `/abort` 同步写入 `Build.status.phase=Aborted`。BuildInfo Controller 在每轮前置守卫中发现该状态后停止新 Job 派发，按 Project 和 `ebs.io/build-name` 分页查询 Job，对非终态 Job 每轮最多发起 100 次中止请求（固定代码常量），逐个调用 `/abort`（携带所观察的 UID）；已终态 Job 保持原状，404 视为已删除。采用尽力中止：单个请求失败或结果未知时记录结构化日志并继续其余 Job，批次之间保持 BuildInfo 非终态并延迟 1 秒重新入队，每轮重新列出 Job；已尝试的 Job（名称和 UID）及失败摘要按 BuildInfo UID 保存在进程内，避免失败 Job 占满后续批次。重启后重新扫描，可能再次尝试失败 Job，依靠 `/abort` 的幂等语义恢复；对象删除、终态或缓存过期时清理进度。全部批次尝试结束后，把累计失败数量及最多三个示例写入 `JobAbortFailed=True/reason=JobAbortFailed` condition；列表读取失败也记录同一 condition。批次处理中不写 BuildInfo 状态；最终写 BuildInfo 为 `Aborted`，不等待失败 Job 或 Runner 实际停止，也不因这些失败继续调谐。BuildInfo 终态写入失败按通用写错误规则重试；进程 context 取消时结束当前尝试，留待恢复。该策略可能留下继续运行的 Job，由运维通过 Job `/abort` 单独处理；终态后的 BuildInfo 不承担后台补偿。父 Build 删除及 Project Terminating 沿用直接终态规则；已经 Completed/Aborted 的 BuildInfo 也保持不变。
 
 ---
 
@@ -127,6 +127,7 @@ type Client interface {
     // Job（创建 + 按 label list 回读 + 创建 Unknown 按确定性名称 GET 确认）
     CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
     GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
+    AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error)
     ListJobs(ctx context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error)
 
     // 只读依赖
@@ -407,7 +408,7 @@ BuildInfoController:
           │     ├─ client.GetBuild（BuildInfo.metadata.name，与父 Build 同名）:
           │     │     ├─ 父 Build 查询失败（apiserver 错误）→ 返回 error 退避重试
           │     │     ├─ 父 Build 不存在（404，已删除）      → 视同中止，置 Aborted 终态 + 失效 dcgDict 缓存 (E-03)
-          │     │     ├─ 父 Build = Aborted        → 置 Aborted 终态 + 失效 dcgDict 缓存 (G-06)
+          │     │     ├─ 父 Build = Aborted        → 尽力中止已下发 Job，记录失败后置 Aborted 终态 + 失效 dcgDict 缓存 (G-06)
           │     │     └─ 父 Build 正常                      → 继续
           │
           ├─ 已有停止派发 condition → 按 6.5 仅 List/回填已有 Job，全部终态后 Completed

@@ -33,6 +33,8 @@ type fakeClient struct {
 	scripts            map[string]*ebsv1.Script
 	scriptReads        int
 	statusWrites       int
+	abortCalls         []string
+	abortErrors        map[string]error
 	resourceReads      int
 	snapshots          map[string]*ebsv1.Snapshot
 	rpmrepos           map[string]*ebsv1.RpmRepo
@@ -322,6 +324,27 @@ func (f *fakeClient) createJobLocked(key string, obj *ebsv1.Job) *ebsv1.Job {
 	}
 	f.jobs[key] = stored
 	return stored.DeepCopy()
+}
+
+func (f *fakeClient) AbortJob(_ context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abortCalls = append(f.abortCalls, name)
+	if err := f.abortErrors[name]; err != nil {
+		return nil, err
+	}
+	job := f.jobs[project+"/"+name]
+	if job == nil {
+		return nil, ErrNotFound
+	}
+	if job.UID != uid {
+		return nil, fmt.Errorf("Job UID changed")
+	}
+	if !job.Status.Phase.IsTerminal() {
+		job.Status.Phase = ebsv1.JobAborted
+		job.Status.Message = reason
+	}
+	return job.DeepCopy(), nil
 }
 
 func (f *fakeClient) GetJob(_ context.Context, project, name string) (*ebsv1.Job, error) {

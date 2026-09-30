@@ -27,6 +27,41 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+func TestAbortJob(t *testing.T) {
+	for _, phase := range []ebsv1.JobPhase{ebsv1.JobAborted, ebsv1.JobSucceeded} {
+		t.Run(string(phase), func(t *testing.T) {
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost || r.URL.Path != "/apis/ebs/v1/projects/project/jobs/job/abort" {
+					t.Fatalf("unexpected abort request: %s %s", r.Method, r.URL.Path)
+				}
+				var input map[string]string
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+					t.Fatal(err)
+				}
+				if input["uid"] != "uid" || input["reason"] != "parent Build aborted" {
+					t.Fatalf("abort body = %v", input)
+				}
+				body, err := json.Marshal(&ebsv1.Job{TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Job"}, ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "2"}, Status: ebsv1.JobStatus{Phase: phase}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return jsonResponse(r, body), nil
+			})
+			client, err := New(testRESTConfig(transport), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := client.AbortJob(context.Background(), "project", "job", "uid", "parent Build aborted")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Status.Phase != phase {
+				t.Fatalf("phase = %s, want %s", job.Status.Phase, phase)
+			}
+		})
+	}
+}
+
 func TestClassifyWriteStatusError(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
 	statusErr := apierrors.NewTooManyRequests("busy", 7)

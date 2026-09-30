@@ -69,6 +69,9 @@ func HTTPFetcher(client *http.Client) Fetcher {
 		if err != nil {
 			return nil, err
 		}
+		// Some mirror WAFs reject Go's default User-Agent. Identify this
+		// client explicitly for both repomd.xml and primary metadata downloads.
+		req.Header.Set("User-Agent", "eulermaker-controller-manager/1.0")
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err

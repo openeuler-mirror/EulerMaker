@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -188,6 +190,20 @@ func (c *Controller) parentAbortGuard(ctx context.Context, round *reconcileRound
 // per-BuildInfo caches after the write is confirmed (design 7.1).
 func (c *Controller) writeAborted(ctx context.Context, round *reconcileRound, reason string) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
+	if reason == "BuildAborted" {
+		message, more := c.abortBuildJobs(ctx, round)
+		if err := ctx.Err(); err != nil {
+			return controller.ReconcileResult{}, err
+		}
+		if more {
+			return controller.ReconcileResult{RequeueAfter: time.Second}, nil
+		}
+		if message != "" {
+			upsertCondition(&next.Status.Conditions, ConditionJobAbortFailed, ReasonJobAbortFailed, message)
+		} else {
+			removeCondition(&next.Status.Conditions, ConditionJobAbortFailed)
+		}
+	}
 	next.Status.Phase = ebsv1.BuildInfoAborted
 	result, err := c.writeStatus(ctx, round, next)
 	if err != nil || result != (controller.ReconcileResult{}) {
@@ -196,6 +212,64 @@ func (c *Controller) writeAborted(ctx context.Context, round *reconcileRound, re
 	log.Printf("controller=%s key=%q reason=%s result=Aborted buildinfo_uid=%q", Name, round.key, reason, round.current.UID)
 	c.invalidateCaches(round.key)
 	return controller.ReconcileResult{}, nil
+}
+
+const jobAbortBatchSize = 100
+
+// Progress is local to a BuildInfo UID. Restarting may retry previously failed
+// requests; UID-guarded abort is idempotent. The queue serializes each key.
+type jobAbortProgress struct {
+	uid       string
+	attempted map[string]bool
+	failed    int
+	examples  []string
+}
+
+// abortBuildJobs attempts at most 100 requests per round. Failed requests are
+// recorded and skipped in later batches so they cannot starve remaining Jobs.
+func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) (string, bool) {
+	progress, ok := c.abortJobs.Get(round.key)
+	if !ok || progress.uid != string(round.current.UID) {
+		progress = &jobAbortProgress{uid: string(round.current.UID), attempted: make(map[string]bool)}
+		c.abortJobs.Set(round.key, progress)
+	}
+	jobs, err := c.client.ListJobs(ctx, round.current.Namespace, labels.SelectorFromSet(labels.Set{ebsv1.JobBuildNameLabel: round.current.Name}))
+	if err != nil {
+		c.logf(round.key, ReasonJobAbortFailed, "list jobs for abort: %v", err)
+		return fmt.Sprintf("list jobs for abort failed: %v; prior abort failures: %d", err, progress.failed), false
+	}
+	slices.SortFunc(jobs, func(a, b ebsv1.Job) int { return strings.Compare(a.Name, b.Name) })
+	attempts := 0
+	for _, job := range jobs {
+		if ctx.Err() != nil {
+			break
+		}
+		identity := job.Name + "/" + string(job.UID)
+		if job.Status.Phase.IsTerminal() || progress.attempted[identity] {
+			continue
+		}
+		if attempts == jobAbortBatchSize {
+			return "", true
+		}
+		attempts++
+		_, err := c.client.AbortJob(ctx, job.Namespace, job.Name, job.UID, "parent Build aborted")
+		if ctx.Err() != nil {
+			break
+		}
+		progress.attempted[identity] = true
+		if err == nil || apierrors.IsNotFound(err) || errors.Is(err, ErrNotFound) {
+			continue
+		}
+		progress.failed++
+		c.logf(round.key, ReasonJobAbortFailed, "job=%s abort failed or result unknown: %v", job.Name, err)
+		if len(progress.examples) < 3 {
+			progress.examples = append(progress.examples, fmt.Sprintf("%s: %v", job.Name, err))
+		}
+	}
+	if progress.failed > 0 {
+		return fmt.Sprintf("%d Job abort requests failed or remain unconfirmed; %s", progress.failed, strings.Join(progress.examples, "; ")), false
+	}
+	return "", false
 }
 
 // releaseFailedGuard fetches the same-name RpmRepo once per round (design
