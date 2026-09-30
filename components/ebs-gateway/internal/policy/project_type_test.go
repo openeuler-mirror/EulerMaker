@@ -73,3 +73,25 @@ func TestProjectOwnerCannotBeChangedByAdmin(t *testing.T) {
 		t.Error("admin changed Project owner")
 	}
 }
+
+func TestProjectOrdinaryUpdateDelegatesStatusToAPIServer(t *testing.T) {
+	old := mutation.Object{
+		"apiVersion": "ebs/v1", "kind": "Project",
+		"metadata": map[string]any{"name": "team", "resourceVersion": "1", "labels": map[string]any{"ebs.io/owner-user": "alice"}},
+		"spec":     map[string]any{}, "status": map[string]any{"phase": "Active"},
+	}
+	who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
+	route := Route{Resource: "projects", Name: "team", Method: http.MethodPut}
+	for _, withStatus := range []bool{false, true} {
+		candidate := mutation.Object{
+			"apiVersion": old["apiVersion"], "kind": old["kind"], "metadata": old["metadata"],
+			"spec": map[string]any{"description": "updated"},
+		}
+		if withStatus {
+			candidate["status"] = map[string]any{"phase": "Terminating"}
+		}
+		if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, old, candidate); err != nil {
+			t.Fatalf("ordinary update with status=%v was rejected: %v", withStatus, err)
+		}
+	}
+}

@@ -60,9 +60,8 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 		}
 		return validateStatusUpdate(who, route, old, candidate)
 	}
-	if !reflect.DeepEqual(old["status"], candidate["status"]) {
-		return deny("ordinary update cannot modify status")
-	}
+	// The apiserver preserves stored status on ordinary updates, including
+	// when callers omit status or send a stale copy.
 	if !equalMetadataExceptUserFields(oldMeta, newMeta, route.Resource == "runners") {
 		return deny("protected metadata changed")
 	}

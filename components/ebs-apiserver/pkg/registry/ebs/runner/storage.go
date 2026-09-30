@@ -42,6 +42,7 @@ func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object
 	oldR := old.(*ebsv1.Runner)
 	newR.Spec.Type = oldR.Spec.Type
 	newR.Spec.Arch = oldR.Spec.Arch
+	newR.Status = oldR.Status
 }
 
 func (s *strategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
