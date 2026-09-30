@@ -204,6 +204,18 @@ func TestEnableIAMFlag(t *testing.T) {
 	}
 }
 
+func TestConfigRequestBodyLimit(t *testing.T) {
+	opts := NewEulerMakerServerOptions()
+	opts.RecommendedOptions.SecureServing.BindPort = 0
+	config, err := opts.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.MaxRequestBodyBytes; got != 5<<20 {
+		t.Fatalf("request body limit = %d, want 5 MiB", got)
+	}
+}
+
 func TestIAMStorageUsesESWithoutWatch(t *testing.T) {
 	client := esclient.NewClientForTesting("http://unused", http.DefaultClient)
 	group, _, _ := CreateIAMAPIGroupInfo(client)

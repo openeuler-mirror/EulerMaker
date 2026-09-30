@@ -492,53 +492,59 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 	}
 }
 
-// jobPayload assembles the payload JSON (design 15.3.1 payload 构造契约):
-// the BuildInfo.spec.buildPayload base map with per-spec fields and repositories injected.
+// jobPayload assembles only the recognized per-Job fields from buildPayload
+// and the resolved spec and repository inputs (design 15.3.1).
 func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string, sources *rpmver.RpmMetaSources) string {
-	base := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
-	delete(base, "rpmbuild_script")
-	configuredPrefer := payloadPrefer(base)
-	delete(base, "prefer")
-	if matched := jobPrefer(depend, sources, configuredPrefer); len(matched) > 0 {
-		base["prefer"] = strings.Join(matched, " ")
+	configured := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
+	payload := map[string]any{
+		"spec_name":      specName,
+		"spec_file_name": depend.SpecFileName,
+		"package_name":   depend.RepoName,
 	}
-	delete(base, "unparsable_spec")
-	delete(base, "Repo")
-	delete(base, "repo_priority")
-	delete(base, "commitId")
-	delete(base, "commit_id")
-	base["spec_name"] = specName
-	base["spec_file_name"] = depend.SpecFileName
+	if preinstall, exists := configured["preinstall"]; exists {
+		// Keep the declared value so the script can reject malformed input.
+		payload["preinstall"] = preinstall
+	}
+	configuredPrefer := payloadPrefer(configured)
+	if matched := jobPrefer(depend, sources, configuredPrefer); len(matched) > 0 {
+		payload["prefer"] = strings.Join(matched, " ")
+	}
 	// The project-level list names package repositories, not spec files.
 	// Only a matching Job receives the flag; otherwise omit the base list.
-	disableCheckPath := false
-	for _, repoName := range stringList(base["disable_check_path"]) {
-		if repoName == depend.RepoName {
-			disableCheckPath = true
-			break
-		}
+	if packageRepoListed(configured["disable_check_path"], depend.RepoName) {
+		payload["disable_check_path"] = true
 	}
-	delete(base, "disable_check_path")
-	if disableCheckPath {
-		base["disable_check_path"] = true
+	if packageRepoListed(configured["use_kmod_libs"], depend.RepoName) {
+		payload["use_kmod_libs"] = true
+	}
+	if packageRepoListed(configured["use_git_lfs"], depend.RepoName) {
+		payload["use_git_lfs"] = true
+	}
+	if packageRepoListed(configured["use_root"], depend.RepoName) {
+		payload["use_root"] = true
+	}
+	if packageRepoListed(configured["use_xz"], depend.RepoName) {
+		payload["use_xz"] = true
+	}
+	if packageRepoListed(configured["unuse_gcc_secure"], depend.RepoName) {
+		payload["unuse_gcc_secure"] = true
 	}
 	if entry, ok := snapshot.Status.PackageRepoStatuses[depend.RepoName]; !ok || entry.CommitID == "" {
 		// Cannot happen for assembled specs (15.3.1): never blocks dispatch.
 		c.logf(round.key, "SpecRepoEntryMissing", "packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commit_id not injected", depend.RepoName)
 	} else {
-		base["spec_url"] = entry.CloneURL
-		base["commit_id"] = entry.CommitID
+		payload["spec_url"] = entry.CloneURL
+		payload["commit_id"] = entry.CommitID
 	}
 	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
 	repoURLs := repoPayloadURLs(contentURL, bootstrapRepos)
 	if len(repoURLs) == 0 {
-		// Preserve an explicitly configured fallback, but emit the same array
+		// Use an explicitly configured fallback, but emit the same array
 		// shape as repositories resolved by the controller.
-		repoURLs = configuredRepoURLs(base["repo"])
+		repoURLs = configuredRepoURLs(configured["repo"])
 	}
 	if len(repoURLs) == 0 {
-		delete(base, "repo")
-		return c.marshalPayload(round, base)
+		return c.marshalPayload(round, payload)
 	}
 	repos := make([]payloadRepo, len(repoURLs))
 	for i, url := range repoURLs {
@@ -548,13 +554,22 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 		}
 		repos[i] = payloadRepo{URL: url, Priority: priority}
 	}
-	base["repo"] = repos
-	return c.marshalPayload(round, base)
+	payload["repo"] = repos
+	return c.marshalPayload(round, payload)
 }
 
 type payloadRepo struct {
 	URL      string `json:"url"`
 	Priority int    `json:"priority"`
+}
+
+func packageRepoListed(value any, repoName string) bool {
+	for _, configuredName := range stringList(value) {
+		if configuredName == repoName {
+			return true
+		}
+	}
+	return false
 }
 
 // jobPrefer uses the same layered provider choice as dependency graph
@@ -604,15 +619,15 @@ func configuredRepoURLs(value any) []string {
 	}
 }
 
-func (c *Controller) marshalPayload(round *reconcileRound, base map[string]any) string {
-	payloadYAML, err := yaml.Marshal(base)
+func (c *Controller) marshalPayload(round *reconcileRound, fields map[string]any) string {
+	payloadYAML, err := yaml.Marshal(fields)
 	if err != nil {
-		// Defensive: the base is a YAML-decoded map plus string values, so a
+		// Defensive: the fields are YAML-decoded values plus derived values, so a
 		// marshal failure is a programming error; keep a trace.
 		c.logf(round.key, "PayloadMarshalFailed", "payload marshal failed: %v", err)
 		return ""
 	}
-	// buildPayload accepts YAML, including nested maps. Convert its assembled
+	// buildPayload accepts YAML, including nested maps. Convert the assembled
 	// representation to JSON so scripts can parse long scalar values reliably.
 	payload, err := syaml.YAMLToJSON(payloadYAML)
 	if err != nil {

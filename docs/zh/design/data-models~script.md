@@ -6,6 +6,20 @@ Script 管理可执行脚本；`Config/build-target` 管理镜像，`Config/buil
 
 Script 的 spec 只包含 `content`，支持原地修改，通过 `resourceVersion` 防止并发覆盖，不另设 revision 对象或历史内容存储。Job 记录创建时观察到的名称、UID 和 resourceVersion，但不固定内容版本。Runner 缓存匹配该观测值时复用内容；不匹配时 GET 当前 Script。
 
+BuildInfo Controller 从空对象组装 Job payload，只下发已识别的配置和派生字段；`buildPayload` 中的其他自定义字段不会自动提供给 Script。
+
+默认 `rpmbuild` 脚本读取 Job payload 中的 `preinstall` 字符串数组（来自已固化的 `BuildInfo.spec.buildPayload`），使用 Job 配置的 RPM 仓库先执行 `dnf install`，再执行 `dnf builddep`。未配置、值为 null 或数组为空时跳过预装；其他非数组值或包含空包名时构建失败。此能力只处理工程级预装列表，不解释旧架构的 `exclude_*` 条件规则。
+
+`BuildInfo.spec.buildPayload.use_kmod_libs` 是包仓库名列表。BuildInfo Controller 仅为匹配仓库的 Job 写入 `use_kmod_libs: true`；默认脚本在 `dnf builddep` 之后、`rpmbuild` 之前从相同 RPM 仓库安装 `kmod-libs`。未命中时 Job 不带此字段，脚本跳过安装。
+
+`BuildInfo.spec.buildPayload.use_git_lfs` 也是包仓库名列表。命中时 Job 携带 `use_git_lfs: true` 与 `package_name`；默认脚本从固定地址 `https://atomgit.com/src-openeuler/${package_name}.git` 克隆，检出 Snapshot 的 `commit_id` 后执行 `git lfs pull`。非命中 Job 使用 `spec_url` 普通克隆。启用该选项的构建镜像必须预装 Git LFS；固定地址不存在或不包含目标 commit 时构建失败，不自动回退到 `spec_url`。
+
+`BuildInfo.spec.buildPayload.use_root` 也是包仓库名列表。命中时 Job 携带 `use_root: true`，默认脚本直接以 root 运行 `rpmbuild -ba`；未命中时，在安装构建依赖和准备源码后，将 `/workspace/rpmbuild` 交给 `eulermaker` 用户，并以该用户运行 `rpmbuild -ba`。其他准备、产物拷贝和安装检查步骤仍以 root 运行；Maven 配置目录暂不随此标记切换。构建镜像需提供 `useradd` 和 `runuser`。
+
+`BuildInfo.spec.buildPayload.use_xz` 也是包仓库名列表。命中时 Job 携带 `use_xz: true`；默认脚本在执行 `rpmbuild` 前，将 `SOURCES` 下每个非隐藏目录另打包为同名 `.tar.xz`，未命中时打包为 `.tar.gz`，原目录不删除。构建镜像需提供 `tar`，使用 `use_xz` 时还需提供 `xz`。
+
+`BuildInfo.spec.buildPayload.unuse_gcc_secure` 也是包仓库名列表。命中时 Job 携带 `unuse_gcc_secure: true`；默认脚本通常在预装包及 `dnf builddep` 前从 Job 仓库安装 `gcc_secure`，但该标记为 true 或 `package_name` 为 `gcc-10` 时跳过。`package_name` 始终由 BuildInfo Controller 从包仓库名写入，`gcc-10` 例外只在脚本中判断。
+
 缓存未命中时，尚未拉取脚本的 Job 可以使用更新后的内容；缓存命中时复用先前拉取的内容。已经启动的执行尝试使用本地副本，不热更新。同一 Build 的不同 Job，以及同一 Job 的不同执行尝试，可能使用不同内容，不承诺历史脚本可重放。
 
 ## 2. 资源与 API
