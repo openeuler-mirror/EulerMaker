@@ -104,7 +104,11 @@ func getOpenAPIDefinitions(ref openapicommon.ReferenceCallback) map[string]opena
 	return definitions
 }
 
-const etcdPrefix = "/registry/ebs"
+const (
+	etcdPrefix = "/registry/ebs"
+	// TODO: delete this after we have a better solution for large request body
+	maxRequestBodyBytes = 5 << 20
+)
 
 var (
 	Scheme = runtime.NewScheme()
@@ -169,6 +173,9 @@ func (o *EulerMakerServerOptions) Complete() error {
 
 func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig, error) {
 	config := genericapiserver.NewRecommendedConfig(Codecs)
+	// BuildInfo /status writes carry the full dependency graph and per-spec
+	// results. A large build can exceed the generic apiserver's 3 MiB default.
+	config.MaxRequestBodyBytes = maxRequestBodyBytes
 	buildHandlerChain := config.BuildHandlerChainFunc
 	config.BuildHandlerChainFunc = func(handler http.Handler, serverConfig *genericapiserver.Config) http.Handler {
 		return buildHandlerChain(withFieldProjection(handler), serverConfig)

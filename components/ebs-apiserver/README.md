@@ -65,7 +65,7 @@ spec:
 
 apiserver 在就绪前从内置模板初始化 `rpmbuild` Script，仅创建不存在的对象；已有对象不被覆盖，初始化失败则启动失败，无需启动参数。Gateway 已限制仅 Ops/Admin/System 可创建和修改 Script，普通登录用户只读、Runner 仅可读取具名对象；BuildInfo Controller 将创建时观察到的 Script 元数据写入新 Job 的 `spec.scriptRefs`，Runner 按引用拉取并执行脚本。apiserver 仍属于内部服务，不应直接对外暴露。
 
-内置 [rpmbuild Script 模板](pkg/server/default-rpmbuild-script.yaml) 可用于简单 RPM 包：读取 `/workspace/payload.json`，按 `spec_url` 和 `commit_id` 检出仓库，通过 `dnf builddep` 安装依赖，以 `rpmbuild -ba` 构建；二进制 RPM 和源码 RPM 均放入 `/results/packages/`。构建镜像需预装 Bash、Git、curl、rpm-build 和 `dnf builddep` 插件，并以 root 执行；模板仅处理仓库根目录的 spec、仓库内文件及可直接下载的 HTTP(S) Source/Patch，不覆盖旧脚本的高级构建规则。
+内置 [rpmbuild Script 模板](pkg/server/default-rpmbuild-script.yaml) 可用于简单 RPM 包：读取 `/workspace/payload.json`，按 `spec_url` 和 `commit_id` 检出仓库；`use_git_lfs: true` 时改从固定地址 `https://atomgit.com/src-openeuler/${package_name}.git` 克隆，并在检出 `commit_id` 后拉取 LFS 对象。默认先从 Job 仓库安装 `gcc_secure`，`unuse_gcc_secure: true` 或包名为 `gcc-10` 时跳过；若 payload 含 `preinstall` 包名数组，再执行 `dnf install`，随后通过 `dnf builddep` 安装依赖；`use_kmod_libs: true` 时再安装 `kmod-libs`。`SOURCES` 下的非隐藏目录在构建前另打包为 `.tar.gz`，`use_xz: true` 时改为 `.tar.xz`，最后以 `rpmbuild -ba` 构建。默认仅 `rpmbuild` 以 `eulermaker` 用户运行，`use_root: true` 时改为 root；其他准备和收尾步骤仍以 root 运行。二进制 RPM 和源码 RPM 均放入 `/results/packages/`。构建镜像需预装 Bash、Git、curl、rpm-build、`dnf builddep` 插件、`tar`、`useradd` 和 `runuser`；使用 Git LFS 的镜像还需预装 `git-lfs`，使用 `use_xz` 时还需预装 `xz`。模板仅处理仓库根目录的 spec、仓库内文件及可直接下载的 HTTP(S) Source/Patch，不覆盖旧脚本的高级构建规则。
 
 ## Build 创建互斥
 

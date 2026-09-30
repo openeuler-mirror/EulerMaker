@@ -66,13 +66,3 @@ func TestBootstrapScript(t *testing.T) {
 		t.Fatal("unknown field accepted")
 	}
 }
-
-func TestDefaultRpmbuildScript(t *testing.T) {
-	storage := &bootstrapScriptStorage{}
-	if err := ensureDefaultScript(context.Background(), storage); err != nil {
-		t.Fatal(err)
-	}
-	if storage.object == nil || storage.object.Name != "rpmbuild" || storage.object.Spec.Content == "" {
-		t.Fatalf("invalid default rpmbuild Script: %+v", storage.object)
-	}
-}

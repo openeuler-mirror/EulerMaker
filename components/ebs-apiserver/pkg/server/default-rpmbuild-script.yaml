@@ -8,13 +8,19 @@ spec:
     set -euo pipefail
 
     payload=/workspace/payload.json
-    test -s "$payload" || { echo "missing $payload" >&2; exit 1; }
-    test "$(id -u)" -eq 0 || { echo "rpmbuild script requires root for dnf builddep" >&2; exit 1; }
-    for tool in git dnf rpmbuild rpmspec curl python3; do
-      command -v "$tool" >/dev/null || { echo "missing build tool: $tool" >&2; exit 1; }
-    done
     result_file=/workspace/job-result.json
-    printf '{"build":{"status":"Failed"}}\n' > "$result_file"
+    source_dir=/workspace/source
+    topdir=/workspace/rpmbuild
+
+    check_environment() {
+      local tool
+      test -s "$payload" || { echo "missing $payload" >&2; exit 1; }
+      test "$(id -u)" -eq 0 || { echo "rpmbuild script requires root for dnf builddep" >&2; exit 1; }
+      for tool in git dnf rpmbuild rpmspec curl python3 tar; do
+        command -v "$tool" >/dev/null || { echo "missing build tool: $tool" >&2; exit 1; }
+      done
+      printf '{"build":{"status":"Failed"}}\n' > "$result_file"
+    }
 
     # Parse the controller's JSON payload; long URLs must not be read by line.
     # Never eval payload content as shell code.
@@ -32,10 +38,26 @@ spec:
     PY
     }
 
-    spec_url=$(field spec_url)
-    commit_id=$(field commit_id)
-    spec_file=$(field spec_file_name)
-    repo_lines=$(python3 - "$payload" <<'PY'
+    boolean_field() {
+      python3 - "$payload" "$1" <<'PY'
+    import json
+    import sys
+
+    with open(sys.argv[1], encoding='utf-8') as source:
+        enabled = json.load(source).get(sys.argv[2], False)
+    if type(enabled) is not bool:
+        sys.exit(f'payload.{sys.argv[2]} must be a boolean')
+    print('true' if enabled else 'false', end='')
+    PY
+    }
+
+    load_payload() {
+      local repo_lines preinstall_lines priority url
+      spec_url=$(field spec_url)
+      commit_id=$(field commit_id)
+      spec_file=$(field spec_file_name)
+      package_name=$(field package_name)
+      repo_lines=$(python3 - "$payload" <<'PY'
     import json
     import sys
 
@@ -53,79 +75,170 @@ spec:
         entries.append(f"{priority}\t{repo['url']}")
     print('\n'.join(entries), end='')
     PY
-    )
-    repo_urls=()
-    repo_priorities=()
-    if [[ -n "$repo_lines" ]]; then
-      while IFS=$'\t' read -r priority url; do
-        repo_priorities+=("$priority")
-        repo_urls+=("$url")
-      done <<< "$repo_lines"
-    fi
-    test -n "$spec_url" || { echo "payload.spec_url is required" >&2; exit 1; }
-    [[ "$commit_id" =~ ^[[:xdigit:]]{40}$|^[[:xdigit:]]{64}$ ]] || { echo "invalid payload.commit_id" >&2; exit 1; }
-    [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
+      )
+      repo_urls=()
+      repo_priorities=()
+      if [[ -n "$repo_lines" ]]; then
+        while IFS=$'\t' read -r priority url; do
+          repo_priorities+=("$priority")
+          repo_urls+=("$url")
+        done <<< "$repo_lines"
+      fi
+      preinstall_lines=$(python3 - "$payload" <<'PY'
+    import json
+    import sys
 
-    source_dir=/workspace/source
-    topdir=/workspace/rpmbuild
-    mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS} /results/packages
-    git clone -- "$spec_url" "$source_dir"
-    git -C "$source_dir" checkout --detach "$commit_id"
-    test -f "$source_dir/$spec_file" || { echo "spec not found: $spec_file" >&2; exit 1; }
+    with open(sys.argv[1], encoding='utf-8') as source:
+        packages = json.load(source).get('preinstall')
+    if packages is None:
+        packages = []
+    if not isinstance(packages, list):
+        sys.exit('payload.preinstall must be an array of package names')
+    for package in packages:
+        if not isinstance(package, str) or not package.strip() or any(char in package for char in '\n\r'):
+            sys.exit('payload.preinstall entries must be non-empty single-line strings')
+    print('\n'.join(packages), end='')
+    PY
+      )
+      preinstall_packages=()
+      if [[ -n "$preinstall_lines" ]]; then
+        mapfile -t preinstall_packages <<< "$preinstall_lines"
+      fi
+      use_kmod_libs=$(boolean_field use_kmod_libs)
+      use_git_lfs=$(boolean_field use_git_lfs)
+      use_root=$(boolean_field use_root)
+      use_xz=$(boolean_field use_xz)
+      unuse_gcc_secure=$(boolean_field unuse_gcc_secure)
+      if [[ "$use_xz" == true ]]; then
+        command -v xz >/dev/null || { echo "xz is required for payload.use_xz" >&2; exit 1; }
+      fi
+      test -n "$spec_url" || { echo "payload.spec_url is required" >&2; exit 1; }
+      test -n "$package_name" || { echo "payload.package_name is required" >&2; exit 1; }
+      [[ "$commit_id" =~ ^[[:xdigit:]]{40}$|^[[:xdigit:]]{64}$ ]] || { echo "invalid payload.commit_id" >&2; exit 1; }
+      [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
+    }
 
-    shopt -s dotglob nullglob
-    for source in "$source_dir"/*; do
-      case "${source##*/}" in .git|*.spec) continue ;; esac
-      cp -a -- "$source" "$topdir/SOURCES/"
-    done
-    cp -- "$source_dir/$spec_file" "$topdir/SPECS/"
-    spec="$topdir/SPECS/$spec_file"
+    prepare_sources() {
+      local lfs_url source
+      mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS} /results/packages
+      if [[ "$use_git_lfs" == true ]]; then
+        [[ "$package_name" =~ ^[[:alnum:]][[:alnum:]_.+-]*$ ]] || { echo "invalid payload.package_name for Git LFS" >&2; exit 1; }
+        git lfs version >/dev/null || { echo "git-lfs is required for payload.use_git_lfs" >&2; exit 1; }
+        lfs_url="https://atomgit.com/src-openeuler/${package_name}.git"
+        GIT_LFS_SKIP_SMUDGE=1 git clone -- "$lfs_url" "$source_dir"
+        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "$commit_id"
+        git -C "$source_dir" lfs pull
+      else
+        git clone -- "$spec_url" "$source_dir"
+        git -C "$source_dir" checkout --detach "$commit_id"
+      fi
+      test -f "$source_dir/$spec_file" || { echo "spec not found: $spec_file" >&2; exit 1; }
 
-    dnf_args=()
-    if (( ${#repo_urls[@]} > 0 )); then
-      dnf_args=(--disablerepo='*')
-      for i in "${!repo_urls[@]}"; do
-        dnf_args+=("--repofrompath=ebs-$i,${repo_urls[$i]}" "--enablerepo=ebs-$i" "--setopt=ebs-$i.gpgcheck=0" "--setopt=ebs-$i.priority=${repo_priorities[$i]}")
+      shopt -s dotglob nullglob
+      for source in "$source_dir"/*; do
+        case "${source##*/}" in .git|*.spec) continue ;; esac
+        cp -a -- "$source" "$topdir/SOURCES/"
       done
-    fi
-    dnf "${dnf_args[@]}" -y builddep "$spec"
+      cp -- "$source_dir/$spec_file" "$topdir/SPECS/"
+      spec="$topdir/SPECS/$spec_file"
+    }
 
-    expanded_spec=$(rpmspec --define "_topdir $topdir" -P "$spec")
-    while IFS= read -r url; do
-      file=${url##*/}
-      file=${file%%\?*}
-      test -n "$file" || { echo "source URL has no filename: $url" >&2; exit 1; }
-      if [[ ! -e "$topdir/SOURCES/$file" ]]; then
-        curl --fail --location --retry 2 --output "$topdir/SOURCES/$file" "$url"
+    configure_repositories() {
+      local i
+      dnf_args=()
+      if (( ${#repo_urls[@]} > 0 )); then
+        dnf_args=(--disablerepo='*')
+        for i in "${!repo_urls[@]}"; do
+          dnf_args+=("--repofrompath=ebs-$i,${repo_urls[$i]}" "--enablerepo=ebs-$i" "--setopt=ebs-$i.gpgcheck=0" "--setopt=ebs-$i.priority=${repo_priorities[$i]}")
+        done
       fi
-    done < <(printf '%s\n' "$expanded_spec" | awk '$1 ~ /^(Source|Patch)[0-9]*:$/ && $2 ~ /^https?:\/\// {print $2}')
+    }
 
-    rpmbuild --define "_topdir $topdir" -ba "$spec"
-    count=0
-    while IFS= read -r -d '' rpm; do
-      cp -- "$rpm" /results/packages/
-      count=$((count + 1))
-    done < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
-    test "$count" -gt 0 || { echo "rpmbuild produced no binary RPM" >&2; exit 1; }
-    while IFS= read -r -d '' rpm; do
-      cp -- "$rpm" /results/packages/
-    done < <(find "$topdir/SRPMS" -type f -name '*.rpm' -print0)
-
-    printf '{"build":{"status":"Succeeded"}}\n' > "$result_file"
-    mapfile -d '' binary_rpms < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
-    install_log=/workspace/install-check.log
-    if LC_ALL=C dnf "${dnf_args[@]}" --installroot=/workspace/installroot --releasever=/ \
-      --setopt=tsflags=test --setopt=install_weak_deps=False --nogpgcheck \
-      -y install "${binary_rpms[@]}" > "$install_log" 2>&1; then
-      printf '{"build":{"status":"Succeeded"},"install":{"status":"Succeeded"}}\n' > "$result_file"
-    else
-      cat "$install_log"
-      # Only dependency-resolution failures are a completed check. Other DNF
-      # failures make the Job fail, while preserving the successful RPM build.
-      if ! grep -Eq 'nothing provides|is needed by|conflicting requests' "$install_log"; then
-        exit 1
+    install_build_dependencies() {
+      if [[ "$package_name" != gcc-10 && "$unuse_gcc_secure" != true ]]; then
+        dnf "${dnf_args[@]}" -y install gcc_secure
       fi
-      python3 - "$install_log" "$result_file" <<'PY'
+      if (( ${#preinstall_packages[@]} > 0 )); then
+        dnf "${dnf_args[@]}" -y install "${preinstall_packages[@]}"
+      fi
+      dnf "${dnf_args[@]}" -y builddep "$spec"
+      if [[ "$use_kmod_libs" == true ]]; then
+        dnf "${dnf_args[@]}" -y install kmod-libs
+      fi
+    }
+
+    download_source_files() {
+      local expanded_spec url file
+      expanded_spec=$(rpmspec --define "_topdir $topdir" -P "$spec")
+      while IFS= read -r url; do
+        file=${url##*/}
+        file=${file%%\?*}
+        test -n "$file" || { echo "source URL has no filename: $url" >&2; exit 1; }
+        if [[ ! -e "$topdir/SOURCES/$file" ]]; then
+          curl --fail --location --retry 2 --output "$topdir/SOURCES/$file" "$url"
+        fi
+      done < <(printf '%s\n' "$expanded_spec" | awk '$1 ~ /^(Source|Patch)[0-9]*:$/ && $2 ~ /^https?:\/\// {print $2}')
+    }
+
+    # Match the legacy source-directory convention: every visible directory
+    # under SOURCES also becomes an archive, with use_xz selecting its format.
+    archive_source_directories() {
+      local source name
+      for source in "$topdir/SOURCES"/*; do
+        [[ -d "$source" && "${source##*/}" != .* ]] || continue
+        name=${source##*/}
+        if [[ "$use_xz" == true ]]; then
+          tar -Jcf "$topdir/SOURCES/$name.tar.xz" -C "$topdir/SOURCES" -- "$name"
+        else
+          tar -czf "$topdir/SOURCES/$name.tar.gz" -C "$topdir/SOURCES" -- "$name"
+        fi
+      done
+    }
+
+    build_rpm() {
+      local build_user
+      if [[ "$use_root" == true ]]; then
+        rpmbuild --define "_topdir $topdir" -ba "$spec"
+      else
+        build_user=eulermaker
+        if ! id -u "$build_user" >/dev/null 2>&1; then
+          command -v useradd >/dev/null || { echo "useradd is required for non-root rpmbuild" >&2; exit 1; }
+          useradd --create-home --shell /bin/bash "$build_user"
+        fi
+        command -v runuser >/dev/null || { echo "runuser is required for non-root rpmbuild" >&2; exit 1; }
+        chown -R "$build_user" "$topdir"
+        runuser -u "$build_user" -- rpmbuild --define "_topdir $topdir" -ba "$spec"
+      fi
+    }
+    collect_artifacts() {
+      local count=0 rpm
+      while IFS= read -r -d '' rpm; do
+        cp -- "$rpm" /results/packages/
+        count=$((count + 1))
+      done < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
+      test "$count" -gt 0 || { echo "rpmbuild produced no binary RPM" >&2; exit 1; }
+      while IFS= read -r -d '' rpm; do
+        cp -- "$rpm" /results/packages/
+      done < <(find "$topdir/SRPMS" -type f -name '*.rpm' -print0)
+    }
+
+    check_installation() {
+      local install_log=/workspace/install-check.log
+      local -a binary_rpms
+      printf '{"build":{"status":"Succeeded"}}\n' > "$result_file"
+      mapfile -d '' binary_rpms < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
+      if LC_ALL=C dnf "${dnf_args[@]}" --installroot=/workspace/installroot --releasever=/ \
+        --setopt=tsflags=test --setopt=install_weak_deps=False --nogpgcheck \
+        -y install "${binary_rpms[@]}" > "$install_log" 2>&1; then
+        printf '{"build":{"status":"Succeeded"},"install":{"status":"Succeeded"}}\n' > "$result_file"
+      else
+        cat "$install_log"
+        # Only dependency-resolution failures are a completed check. Other DNF
+        # failures make the Job fail, while preserving the successful RPM build.
+        if ! grep -Eq 'nothing provides|is needed by|conflicting requests' "$install_log"; then
+          exit 1
+        fi
+        python3 - "$install_log" "$result_file" <<'PY'
     import json
     import os
     import re
@@ -156,4 +269,20 @@ spec:
         json.dump(result, output)
     os.replace(temporary, result_path)
     PY
-    fi
+      fi
+    }
+
+    main() {
+      check_environment
+      load_payload
+      prepare_sources
+      configure_repositories
+      install_build_dependencies
+      download_source_files
+      archive_source_directories
+      build_rpm
+      collect_artifacts
+      check_installation
+    }
+
+    main "$@"
