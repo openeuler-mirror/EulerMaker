@@ -85,6 +85,7 @@ type Controller struct {
 	dcgDict          *perBuildInfoCache[*DcgDict]
 	rpmMetaSources   *perBuildInfoCache[*rpmver.RpmMetaSources]
 	specDependsCache *perBuildInfoCache[map[string]specparse.SpecDepend]
+	abortJobs        *perBuildInfoCache[*jobAbortProgress]
 	// specFiles is the global spec file LRU (design 15.11.2); it survives
 	// BuildInfo terminal states and is only capacity-evicted.
 	specFiles *specFileCache
@@ -110,6 +111,7 @@ func New(buildInfos source.Source, client Client, gitServer gitserver.GitServerC
 		dcgDict:          newPerBuildInfoCache[*DcgDict](clk, config.DcgPruneGrace),
 		rpmMetaSources:   newPerBuildInfoCache[*rpmver.RpmMetaSources](clk, config.DcgPruneGrace),
 		specDependsCache: newPerBuildInfoCache[map[string]specparse.SpecDepend](clk, config.DcgPruneGrace),
+		abortJobs:        newPerBuildInfoCache[*jobAbortProgress](clk, config.DcgPruneGrace),
 		specFiles:        newSpecFileCache(config.SpecFileCacheSize),
 		counters:         newFailureCounters(),
 	}
@@ -161,7 +163,7 @@ func (c *Controller) sweepLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed := c.dcgDict.SweepExpired() + c.rpmMetaSources.SweepExpired() + c.specDependsCache.SweepExpired()
+			removed := c.dcgDict.SweepExpired() + c.rpmMetaSources.SweepExpired() + c.specDependsCache.SweepExpired() + c.abortJobs.SweepExpired()
 			if removed > 0 {
 				log.Printf("controller=%s event=cache-sweep removed=%d", Name, removed)
 			}
@@ -214,6 +216,7 @@ func (c *Controller) invalidateCaches(key string) {
 	c.dcgDict.Invalidate(key)
 	c.rpmMetaSources.Invalidate(key)
 	c.specDependsCache.Invalidate(key)
+	c.abortJobs.Invalidate(key)
 	c.counters.Clear(key)
 	dedup.forgetKey(key)
 }
@@ -222,12 +225,14 @@ func (c *Controller) tombstoneCaches(key string) {
 	c.dcgDict.Tombstone(key)
 	c.rpmMetaSources.Tombstone(key)
 	c.specDependsCache.Tombstone(key)
+	c.abortJobs.Tombstone(key)
 }
 
 func (c *Controller) revokeTombstones(key string) {
 	c.dcgDict.RevokeTombstone(key)
 	c.rpmMetaSources.RevokeTombstone(key)
 	c.specDependsCache.RevokeTombstone(key)
+	c.abortJobs.RevokeTombstone(key)
 }
 
 // counterKind selects which readiness failure counter a checkpoint feeds.

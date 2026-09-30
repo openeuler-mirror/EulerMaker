@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
@@ -42,6 +43,7 @@ const apiServerReadRetries = 3
 // generic CRUD interface plus the build-target Config reader.
 type SharedClient interface {
 	apiserver.Interface
+	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 
@@ -82,6 +84,7 @@ type Client interface {
 	// outcomes are confirmed by GET on the deterministic Job name (10.3/E-11).
 	CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
 	GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
+	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
 	ListJobs(ctx context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error)
 
 	// GetBuild is read-only (G-01: Builds are never mutated here).
@@ -101,6 +104,10 @@ type Client interface {
 func newAPIClient(client SharedClient) Client { return &apiClient{client: client} }
 
 type apiClient struct{ client SharedClient }
+
+func (c *apiClient) AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
+	return c.client.AbortJob(ctx, project, name, uid, reason)
+}
 
 var _ Client = (*apiClient)(nil)
 

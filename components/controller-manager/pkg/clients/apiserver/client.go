@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -138,6 +139,31 @@ func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, 
 		return source.ListPage{}, err
 	}
 	return listPage(list)
+}
+
+// AbortJob requests an atomic, UID-guarded transition to a terminal Job state.
+func (c *Client) AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
+	gvr := source.JobsGVR
+	if err := validateTarget(gvr, project, name); err != nil {
+		return nil, notSent("abort", gvr, err)
+	}
+	if uid == "" {
+		return nil, notSent("abort", gvr, fmt.Errorf("Job UID is required"))
+	}
+	body, err := json.Marshal(map[string]string{"uid": string(uid), "reason": reason})
+	if err != nil {
+		return nil, notSent("abort", gvr, err)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	out := &ebsv1.Job{}
+	if err := c.rest.Post().AbsPath(resourcePath(gvr, project, name, "abort")).Body(body).Do(requestCtx).Into(out); err != nil {
+		return nil, classifyWrite("abort", gvr, err)
+	}
+	if out.Namespace != project || out.Name != name || out.UID != uid || !out.Status.Phase.IsTerminal() {
+		return nil, unknown("abort", gvr, fmt.Errorf("unexpected Job abort response identity or phase"))
+	}
+	return out, nil
 }
 
 func (c *Client) Create(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
