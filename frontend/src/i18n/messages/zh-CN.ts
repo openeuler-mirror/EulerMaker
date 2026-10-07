@@ -237,6 +237,7 @@ export default {
     noRunningJobs: "当前没有待处理或运行中的任务",
     noMatchingRunningJobs: "没有符合筛选条件的任务",
     allRunningBuilds: "全部构建",
+    allRunningSpecs: "全部 Spec",
     allRunningJobPhases: "全部状态",
     configEyebrow: "配置",
     config: "工程配置",

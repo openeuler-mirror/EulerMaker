@@ -4,15 +4,17 @@
   </button>
   <Teleport to="body">
     <div v-if="open" :id="menuId" ref="menu" class="spec-status-filter-menu" :style="menuStyle" role="group" :aria-label="label">
+      <label v-if="searchable" class="column-filter-search"><Search aria-hidden="true" /><input v-model="query" type="search" :placeholder="searchPlaceholder" :aria-label="searchPlaceholder" /></label>
       <label class="spec-status-filter-option all" :class="{ selected: !modelValue.length }"><input type="checkbox" :checked="!modelValue.length" @change="emit('update:modelValue', [])" /><span class="spec-status-filter-check" aria-hidden="true"><Check /></span><span>{{ allLabel }}</span></label>
-      <label v-for="option in options" :key="option.value" class="spec-status-filter-option" :class="{ selected: modelValue.includes(option.value) }" :title="option.label"><input type="checkbox" :checked="modelValue.includes(option.value)" @change="toggleOption(option.value, $event)" /><span class="spec-status-filter-check" aria-hidden="true"><Check /></span><span class="column-filter-option-label">{{ option.label }}</span></label>
+      <label v-for="option in filteredOptions" :key="option.value" class="spec-status-filter-option" :class="{ selected: modelValue.includes(option.value) }" :title="option.label"><input type="checkbox" :checked="modelValue.includes(option.value)" @change="toggleOption(option.value, $event)" /><span class="spec-status-filter-check" aria-hidden="true"><Check /></span><span class="column-filter-option-label">{{ option.label }}</span></label>
+      <p v-if="query && !filteredOptions.length" class="column-filter-empty">{{ noResultsLabel }}</p>
     </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
-import { Check, Filter } from '@element-plus/icons-vue';
-import { nextTick, onBeforeUnmount, onMounted, ref, useId, type CSSProperties } from 'vue';
+import { Check, Filter, Search } from '@element-plus/icons-vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, type CSSProperties } from 'vue';
 
 const props = withDefaults(defineProps<{
   label: string;
@@ -20,16 +22,25 @@ const props = withDefaults(defineProps<{
   options: Array<{ value: string; label: string }>;
   modelValue: string[];
   width?: number;
-}>(), { width: 210 });
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  noResultsLabel?: string;
+}>(), { width: 210, searchable: false, searchPlaceholder: 'Search', noResultsLabel: 'No matching options' });
 const emit = defineEmits<{ 'update:modelValue': [value: string[]] }>();
 const trigger = ref<HTMLElement | null>(null);
 const menu = ref<HTMLElement | null>(null);
 const menuStyle = ref<CSSProperties>({});
 const menuId = useId();
 const open = ref(false);
+const query = ref('');
+const filteredOptions = computed(() => {
+  const normalized = query.value.trim().toLowerCase();
+  return normalized ? props.options.filter((option) => option.label.toLowerCase().includes(normalized)) : props.options;
+});
 
 function toggleMenu(): void {
   open.value = !open.value;
+  if (!open.value) query.value = '';
   if (open.value) void nextTick(positionMenu);
 }
 
@@ -55,12 +66,16 @@ function toggleOption(value: string, event: Event): void {
 
 function closeOnOutsideClick(event: PointerEvent): void {
   const target = event.target as Node;
-  if (!trigger.value?.contains(target) && !menu.value?.contains(target)) open.value = false;
+  if (!trigger.value?.contains(target) && !menu.value?.contains(target)) {
+    open.value = false;
+    query.value = '';
+  }
 }
 
 function closeOnEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || !open.value) return;
   open.value = false;
+  query.value = '';
   trigger.value?.focus();
 }
 
