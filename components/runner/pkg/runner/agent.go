@@ -133,6 +133,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	go a.watchLoop(ctx)
 	go a.cleanup.Run(ctx)
+	go a.sweepJobWorkLoop(ctx)
 	if err := a.patchRunnerPhase(ctx, "Online"); err != nil {
 		log.Printf("update online status failed: %v", err)
 	}
@@ -450,6 +451,8 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 	}
 	resultRoot, executionErr := a.executor.Execute(execCtx, job)
 	if parent.Err() != nil {
+		// Execute does not return on cancellation until the container is stopped.
+		a.cleanupJobWork(job)
 		return
 	}
 	resultFile := filepath.Join(workDir(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name, "job-result.json")

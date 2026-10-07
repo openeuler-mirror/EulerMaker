@@ -589,7 +589,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 实时日志的 `combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；随后等待 Manifest Completed 和最终 Job Status 成功写回，成功后与普通产物一起立即清理。日志封账或上传最终失败时使用失败保留期，不在错误路径立即删除。
 
-`${rootDir}/work/{project}/{jobName}` 中的 payload 和临时执行文件在容器退出、`job-result.json` 已读取且 PostRun 状态写入成功后立即清理；重启恢复 PostRun 时也清理，不受 Artifact 保留期影响。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobName}`、`${rootDir}/logs/{project}/{jobName}` 和 `${rootDir}/uploads/{project}/{jobName}`。上传失败并成功写回终态后默认保留 24 小时；到期或磁盘压力清理时统一删除上述目录及失败清理标记，不按单文件提前删除。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
+`${rootDir}/work/{project}/{jobName}` 中的 payload 和临时执行文件在容器退出、`job-result.json` 已读取且 PostRun 状态写入成功后立即清理；重启恢复 PostRun 时也清理，不受 Artifact 保留期影响。Job 被中止后，Runner 等执行器确认容器停止并返回，再清理工作目录。完成容器恢复后的启动扫描和运行期间定期扫描，仅在无本地执行、且 apiserver 确认 Job 已终态或不存在时清理遗留工作目录；查询失败或 Job 非终态时保留。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobName}`、`${rootDir}/logs/{project}/{jobName}` 和 `${rootDir}/uploads/{project}/{jobName}`。上传失败并成功写回终态后默认保留 24 小时；到期或磁盘压力清理时统一删除上述目录及失败清理标记，不按单文件提前删除。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
 
 ### 8.6 Job 主动中止
 
