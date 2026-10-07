@@ -194,11 +194,19 @@ func (m *filesystemMaterializer) inspectRPMFile(ctx context.Context, path string
 	}
 	spec := fields[0]
 	if fields[5] != "(none)" && fields[5] != "" {
-		suffix := "-" + fields[2] + "-" + fields[3] + ".src.rpm"
-		if !strings.HasSuffix(fields[5], suffix) {
+		spec, err = sourceRPMSpecName(fields[5])
+		if err != nil {
 			return RepositoryRPMMeta{}, &repositoryError{code: "PackageMetadataInvalid", status: 422}
 		}
-		spec = strings.TrimSuffix(fields[5], suffix)
+	}
+	// Source RPM headers may report the build architecture rather than "src".
+	// Keep their identity distinct from a binary RPM with the same NEVRA.
+	arch := fields[4]
+	if strings.HasSuffix(path, ".src.rpm") || strings.HasSuffix(path, ".nosrc.rpm") {
+		if fields[5] != "(none)" {
+			return RepositoryRPMMeta{}, &repositoryError{code: "PackageMetadataInvalid", status: 422}
+		}
+		arch = "src"
 	}
 	if spec == "" {
 		return RepositoryRPMMeta{}, &repositoryError{code: "PackageMetadataInvalid", status: 422}
@@ -211,7 +219,28 @@ func (m *filesystemMaterializer) inspectRPMFile(ctx context.Context, path string
 	if err != nil {
 		return RepositoryRPMMeta{}, err
 	}
-	return RepositoryRPMMeta{FileName: filepath.Base(path), SHA256: sum, Size: info.Size(), Name: fields[0], Epoch: fields[1], Version: fields[2], Release: fields[3], Arch: fields[4], Source: fields[5], SpecName: spec, Provides: provides, Requires: requires}, nil
+	return RepositoryRPMMeta{FileName: filepath.Base(path), SHA256: sum, Size: info.Size(), Name: fields[0], Epoch: fields[1], Version: fields[2], Release: fields[3], Arch: arch, Source: fields[5], SpecName: spec, Provides: provides, Requires: requires}, nil
+}
+
+// sourceRPMSpecName uses the source package's own version and release, which
+// can differ from those of a binary subpackage (for example texlive-split).
+func sourceRPMSpecName(source string) (string, error) {
+	stem := strings.TrimSuffix(source, ".src.rpm")
+	if stem == source {
+		stem = strings.TrimSuffix(source, ".nosrc.rpm")
+		if stem == source {
+			return "", fmt.Errorf("invalid source RPM name %q", source)
+		}
+	}
+	release := strings.LastIndexByte(stem, '-')
+	if release <= 0 || release == len(stem)-1 {
+		return "", fmt.Errorf("invalid source RPM name %q", source)
+	}
+	version := strings.LastIndexByte(stem[:release], '-')
+	if version <= 0 || version == release-1 {
+		return "", fmt.Errorf("invalid source RPM name %q", source)
+	}
+	return stem[:version], nil
 }
 
 func (m *filesystemMaterializer) queryRPMList(ctx context.Context, option, path string) ([]string, error) {
