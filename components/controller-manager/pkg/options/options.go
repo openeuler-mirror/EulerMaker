@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/rest"
+	"k8s.io/klog/v2"
 )
 
 type Options struct {
@@ -111,6 +112,7 @@ func Parse(args []string) (Options, error) {
 		GitServer:       GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
+	klog.InitFlags(f)
 	f.StringVar(&o.API.Server, "apiserver", "", "ebs-apiserver address")
 	f.StringVar(&o.API.ServerCA, "apiserver-ca", "", "server CA file")
 	f.BoolVar(&o.API.InsecureSkipVerify, "insecure-skip-verify", false, "skip server certificate verification (development only)")

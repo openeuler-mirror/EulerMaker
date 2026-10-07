@@ -264,6 +264,55 @@ func TestParseRepoSourceArchSelection(t *testing.T) {
 	}
 }
 
+func TestPrimaryFileProviders(t *testing.T) {
+	var packages strings.Builder
+	for _, pkg := range []struct{ name, arch, version, files string }{
+		{"net-tools", "aarch64", "2.0", `<file>/usr/bin/netstat</file>`},
+		{"redis", "aarch64", "7.0", `<file>/usr/bin/redis-server</file><file>/usr/bin/redis-cli</file><file type="dir">/etc/redis</file><file type="ghost">/run/redis.pid</file>`},
+		{"scripts", "noarch", "1.0", `<file>/usr/bin/shared-script</file>`},
+		{"redis", "aarch64", "6.0", `<file>/usr/bin/old-redis</file>`},
+		{"net-tools", "noarch", "9.0", `<file>/usr/bin/noarch-netstat</file>`},
+		{"foreign", "x86_64", "1.0", `<file>/usr/bin/foreign</file>`},
+		{"source", "src", "1.0", `<file>/usr/bin/source</file>`},
+	} {
+		fmt.Fprintf(&packages, `<package type="rpm"><name>%s</name><arch>%s</arch><version epoch="0" ver="%s" rel="1"/><format><rpm:sourcerpm>%s-%s-1.src.rpm</rpm:sourcerpm><rpm:provides><rpm:entry name="%s" flags="EQ" epoch="0" ver="%s" rel="1"/></rpm:provides>%s</format></package>`, pkg.name, pkg.arch, pkg.version, pkg.name, pkg.version, pkg.name, pkg.version, pkg.files)
+	}
+	body := `<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm">` + packages.String() + `</metadata>`
+	f := fetchMap{
+		"http://repo/repodata/repomd.xml":         []byte(repomdBody),
+		"http://repo/repodata/abc-primary.xml.gz": gz(t, body),
+	}
+	src, err := ParseRepoSource(context.Background(), f.fetch, "http://repo", "aarch64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]string{
+		"net-tools": {"net-tools": "0:2.0-1", "/usr/bin/netstat": "0:2.0-1"},
+		"redis":     {"redis": "0:7.0-1", "/usr/bin/redis-server": "0:7.0-1", "/usr/bin/redis-cli": "0:7.0-1", "/etc/redis": "0:7.0-1", "/run/redis.pid": "0:7.0-1"},
+		"scripts":   {"scripts": "0:1.0-1", "/usr/bin/shared-script": "0:1.0-1"},
+	}
+	got := make(map[string]map[string]string)
+	for name, rpm := range src.RpmByName {
+		got[name] = rpm.Provides
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected RPM provides = %v, want %v", got, want)
+	}
+	for _, sources := range []*RpmMetaSources{{RepoLayer: src}, {BootstrapLayer: []*RpmMetaSource{src}}} {
+		for name, provides := range want {
+			for provide, version := range provides {
+				selected, ok := sources.FindProvider(provide, ebsv1.VersionConst{EQ: version}, nil)
+				if !ok || selected.RPMName != name || selected.Provider.SpecName != name || selected.Provider.Version != version {
+					t.Fatalf("provider for %s = %+v, found=%v", provide, selected, ok)
+				}
+				if !sources.Available(provide, ebsv1.VersionConst{}) {
+					t.Fatalf("dependency %s unavailable", provide)
+				}
+			}
+		}
+	}
+}
+
 func TestEnsureRepoLayer(t *testing.T) {
 	_, f := testRepo(t)
 	calls := 0
