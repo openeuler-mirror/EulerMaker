@@ -463,7 +463,7 @@ func scriptNameFromPayload(raw string) (string, error) {
 func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *buildResourceRules, scriptRef ebsv1.ScriptRef, name string, generation int64, sources *rpmver.RpmMetaSources) *ebsv1.Job {
 	buildInfo := round.current
 	target := round.build.Spec.BuildTarget
-	runtimeSpec, _ := json.Marshal(map[string]string{"image": image})
+	runtimeSpec, _ := json.Marshal(map[string]string{"image": image, "networkMode": "host"})
 	return &ebsv1.Job{
 		TypeMeta: metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "Job"},
 		ObjectMeta: metav1.ObjectMeta{
