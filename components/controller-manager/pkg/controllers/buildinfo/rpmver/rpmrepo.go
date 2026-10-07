@@ -43,12 +43,15 @@ func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint
 	if len(candidates) == 0 {
 		return ProviderSelection{}
 	}
-	// Every version constraint must match.
+	// An unversioned Provides matches by name regardless of the requested
+	// version. Only versioned capabilities are compared against constraints.
 	filtered := make(map[string]ProvideEntry, len(candidates))
 	for rpmName, entry := range candidates {
-		ok, err := VersionSatisfies(entry.Version, constraint)
-		if err != nil || !ok {
-			continue
+		if entry.Version != "" {
+			ok, err := VersionSatisfies(entry.Version, constraint)
+			if err != nil || !ok {
+				continue
+			}
 		}
 		filtered[rpmName] = entry
 	}
@@ -74,20 +77,30 @@ func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint
 			}
 		}
 	}
-	// Fall back to the highest version; an empty version invalidates the choice.
+	// Fall back to the highest version. An unversioned capability has no
+	// comparable version of its own, so rank it by the providing RPM's version.
+	rankVersion := func(rpmName string, entry ProvideEntry) string {
+		if entry.Version != "" {
+			return entry.Version
+		}
+		return src.RpmByName[rpmName].Version
+	}
 	bestName := names[0]
 	best := filtered[bestName]
-	if best.Version == "" {
+	bestVersion := rankVersion(bestName, best)
+	if bestVersion == "" {
 		return ProviderSelection{}
 	}
 	for _, rpmName := range names[1:] {
 		entry := filtered[rpmName]
-		if entry.Version == "" {
+		version := rankVersion(rpmName, entry)
+		if version == "" {
 			return ProviderSelection{}
 		}
-		if less, err := VRCompare(best.Version, OpLT, entry.Version); err == nil && less {
+		if less, err := VRCompare(bestVersion, OpLT, version); err == nil && less {
 			best = entry
 			bestName = rpmName
+			bestVersion = version
 		}
 	}
 	return ProviderSelection{Provider: best, RPMName: baseName(bestName), Reason: SelectionHighestVersion}

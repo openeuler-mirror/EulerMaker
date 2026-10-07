@@ -20,8 +20,8 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// ProvideEntry is one providesInfo leaf: the providing rpm's version and the
-// spec that produces it (design 15.10).
+// ProvideEntry is one providesInfo leaf: the capability version (empty for an
+// unversioned Provides) and the spec that produces it (design 15.10).
 type ProvideEntry struct {
 	Version  string
 	SpecName string
@@ -292,7 +292,8 @@ func specNameFromSourceRpm(sourceRpm, rpmName string) string {
 }
 
 // joinVersion concatenates epoch:version-release (design 15.10). An empty ver
-// yields "" (dirty data marker); a missing epoch defaults to 0.
+// yields "" (valid for unversioned Provides, invalid for RPM package versions);
+// a missing epoch defaults to 0.
 func joinVersion(epoch, ver, rel string) string {
 	if ver == "" {
 		return ""

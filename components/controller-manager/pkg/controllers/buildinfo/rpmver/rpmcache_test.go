@@ -160,6 +160,11 @@ func TestParseRepoSourceBasic(t *testing.T) {
 	if got, ok := glibc.Provides["libc.so.6()(64bit)"]; !ok || got != "" {
 		t.Fatalf("unversioned provide = %q,%v", got, ok)
 	}
+	// A versioned requirement still matches an unversioned capability by name.
+	sources := &RpmMetaSources{BootstrapLayer: []*RpmMetaSource{src}}
+	if !sources.Available("libc.so.6()(64bit)", ebsv1.VersionConst{GE: "99.0"}) {
+		t.Fatal("unversioned provide should satisfy a versioned requirement")
+	}
 	wantVC := ebsv1.VersionConst{GE: "0:11-1"}
 	if got := glibc.Requires["basesystem"]; !reflect.DeepEqual(got, wantVC) {
 		t.Fatalf("requires basesystem = %+v, want %+v", got, wantVC)
@@ -388,6 +393,25 @@ func TestGetProvideInfoChain(t *testing.T) {
 	// Empty candidate version on the highest-version step: whole provide miss.
 	if got := GetProvideInfo("dirty", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "" {
 		t.Fatalf("dirty = %+v, want miss", got)
+	}
+}
+
+func TestGetProvideInfoUnversionedProviders(t *testing.T) {
+	src := provideSource(map[string]map[string]ProvideEntry{
+		"virtual-devel": {
+			"older-rpm": {SpecName: "older-spec"},
+			"newer-rpm": {SpecName: "newer-spec"},
+		},
+	})
+	src.RpmByName["older-rpm"] = RpmMeta{Version: "0:1.0-1"}
+	src.RpmByName["newer-rpm"] = RpmMeta{Version: "0:2.0-1"}
+	selection := GetProvideInfo("virtual-devel", src, nil, ebsv1.VersionConst{GE: "99.0"})
+	if selection.Provider.SpecName != "newer-spec" || selection.Reason != SelectionHighestVersion {
+		t.Fatalf("unversioned providers = %+v, want newer-spec", selection)
+	}
+	selection = GetProvideInfo("virtual-devel", src, []string{"older-rpm"}, ebsv1.VersionConst{GE: "99.0"})
+	if selection.Provider.SpecName != "older-spec" || selection.Reason != SelectionPrefer {
+		t.Fatalf("preferred unversioned provider = %+v, want older-spec", selection)
 	}
 }
 
