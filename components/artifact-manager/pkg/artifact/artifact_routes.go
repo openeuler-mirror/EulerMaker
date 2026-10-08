@@ -17,7 +17,20 @@ import (
 	"time"
 )
 
-func (s *Server) route(w http.ResponseWriter, r *http.Request, p []string) {
+type jobHandler func(*Server, http.ResponseWriter, *http.Request, string, string)
+
+var jobRoutes = map[string]map[string]jobHandler{
+	"artifacts":         {http.MethodGet: (*Server).list, http.MethodPost: (*Server).upload},
+	"manifest":          {http.MethodGet: (*Server).getManifest},
+	"manifest/complete": {http.MethodPost: (*Server).completeManifest},
+	"logs/chunks":       {http.MethodPost: (*Server).appendLog},
+	"logs/status":       {http.MethodGet: (*Server).logStatus},
+	"logs/content":      {http.MethodGet: (*Server).logContent},
+	"logs/stream":       {http.MethodGet: (*Server).logSSE},
+	"logs/complete":     {http.MethodPost: (*Server).completeLog},
+}
+
+func (s *Server) routeArtifactAPI(w http.ResponseWriter, r *http.Request, p []string) {
 	if len(p) == 3 && p[0] == "artifacts" && p[1] != "" && p[2] == "content" && r.Method == http.MethodGet {
 		s.download(w, r, p[1])
 		return
@@ -31,52 +44,13 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, p []string) {
 		writeErr(w, r, 400, "InvalidRequest", "invalid project or job name", false, nil)
 		return
 	}
+	if handler := jobRoutes[strings.Join(p[4:], "/")][r.Method]; handler != nil {
+		handler(s, w, r, project, job)
+		return
+	}
 	if len(p) == 5 && p[4] == "artifacts" {
-		if r.Method == http.MethodPost {
-			s.upload(w, r, project, job)
-		} else if r.Method == http.MethodGet {
-			s.list(w, r, project, job)
-		} else {
-			method(w, "GET, POST")
-		}
+		method(w, "GET, POST")
 		return
-	}
-	if len(p) == 6 && p[4] == "manifest" && p[5] == "complete" && r.Method == http.MethodPost {
-		s.completeManifest(w, r, project, job)
-		return
-	}
-	if len(p) == 5 && p[4] == "manifest" && r.Method == http.MethodGet {
-		s.getManifest(w, r, project, job)
-		return
-	}
-	if len(p) >= 6 && p[4] == "logs" {
-		switch p[5] {
-		case "chunks":
-			if r.Method == http.MethodPost {
-				s.appendLog(w, r, project, job)
-				return
-			}
-		case "status":
-			if r.Method == http.MethodGet {
-				s.logStatus(w, r, project, job)
-				return
-			}
-		case "content":
-			if r.Method == http.MethodGet {
-				s.logContent(w, r, project, job)
-				return
-			}
-		case "stream":
-			if r.Method == http.MethodGet {
-				s.logSSE(w, r, project, job)
-				return
-			}
-		case "complete":
-			if r.Method == http.MethodPost {
-				s.completeLog(w, r, project, job)
-				return
-			}
-		}
 	}
 	writeErr(w, r, 404, "NotFound", "not found", false, nil)
 }

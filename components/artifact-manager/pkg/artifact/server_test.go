@@ -134,7 +134,7 @@ func TestJobNameDirectoryPersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.BeginUpload("project", "job", "runner", "key-2", meta, 1024); err != nil && err.Error() == "JobIdentityConflict" {
+	if _, _, _, err := store.BeginUpload("project", "job", "runner", "key-2", meta, 1024); err != nil {
 		t.Fatalf("same job name should remain valid after restart: %v", err)
 	}
 	if _, err := store.AppendLog("project", "job", "runner", 0, []byte("x"), sum([]byte("x"))); err != nil {

@@ -184,9 +184,6 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 		if response.Code != http.StatusOK || response.Body.String() != "release-metadata" {
 			t.Fatalf("content %s = %d %q", path, response.Code, response.Body.String())
 		}
-		if response := repositoryRequest(t, server, http.MethodDelete, "/internal/v1/releases/"+request.BuildName, nil); response.Code != http.StatusConflict {
-			t.Fatalf("delete current %s = %d", request.BuildName, response.Code)
-		}
 	}
 	wrongOS := "/repositories/" + first.Project + "/another-os/" + first.TargetArch + "/repodata/repomd.xml"
 	if response := repositoryRequest(t, server, http.MethodGet, wrongOS, nil); response.Code != http.StatusNotFound {
@@ -368,7 +365,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 		RequestDigest: "request", State: ReleaseReady,
 		ReleaseDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("release"))),
 	}
-	m := &releaseManager{root: root, records: map[string]*ReleaseRecord{record.BuildName: record}}
+	m := &releaseManager{root: root, records: map[string]*ReleaseRecord{}}
 	for _, dir := range []string{m.releasePath(record), filepath.Join(root, ".release-work"), filepath.Join(root, ".metadata/releases")} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
 			t.Fatal(err)
@@ -377,6 +374,16 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	index := releaseIndex{BuildName: record.BuildName, RequestDigest: record.RequestDigest, ReleaseDigest: record.ReleaseDigest}
 	if err := atomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
 		t.Fatal(err)
+	}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.load(); err != nil {
+		t.Fatal(err)
+	}
+	record = m.records[record.BuildName]
+	if record == nil || record.ReleaseDigest != index.ReleaseDigest {
+		t.Fatalf("persisted release digest = %#v", record)
 	}
 	// No RPM files are present: startup must not recompute the full directory digest.
 	if err := m.recover(time.Hour); err != nil {

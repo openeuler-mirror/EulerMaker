@@ -91,6 +91,9 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	}
 	for _, state := range []RepositoryState{RepositoryCreating, RepositoryDeleting, RepositoryReady, RepositoryFailed} {
 		record := &RepositoryRecord{RepositoryUID: string(state), State: state, Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch"}
+		if state == RepositoryReady {
+			record.RepositoryDigest = "repository-digest"
+		}
 		if err := m.persist(record); err != nil {
 			t.Fatal(err)
 		}
@@ -114,6 +117,9 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 		record, ok, err := m.get(string(state))
 		if err != nil || !ok || record.State != state {
 			t.Fatalf("get %s = %+v, %v", state, record, err)
+		}
+		if state == RepositoryReady && record.RepositoryDigest != "repository-digest" {
+			t.Fatalf("persisted repository digest = %q", record.RepositoryDigest)
 		}
 	}
 	if len(m.records) != 2 {

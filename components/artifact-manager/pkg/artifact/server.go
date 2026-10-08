@@ -57,38 +57,39 @@ func newArtifactServer(c Config, a Authorizer, store *Store, materializer reposi
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+	path := r.URL.Path
+	switch {
+	case path == "/healthz" || path == "/readyz":
 		w.WriteHeader(200)
 		w.Write([]byte("ok\n"))
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/internal/v1/repositories/") || r.URL.Path == "/internal/v1/repositories" {
+	case path == "/internal/v1/repositories" || strings.HasPrefix(path, "/internal/v1/repositories/"):
 		s.routeRepositoryManagement(w, r)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/internal/v1/releases/") || r.URL.Path == "/internal/v1/releases" {
+	case path == "/internal/v1/releases" || strings.HasPrefix(path, "/internal/v1/releases/"):
 		s.routeReleaseManagement(w, r)
-		return
+	case strings.HasPrefix(path, "/repositories/"):
+		s.routeRepositoryContent(w, r)
+	case strings.HasPrefix(path, "/artifacts/v1/"):
+		s.routeArtifactAPI(w, r, strings.Split(strings.TrimRight(path[len("/artifacts/v1/"):], "/"), "/"))
+	default:
+		writeErr(w, r, 404, "NotFound", "not found", false, nil)
 	}
-	if strings.HasPrefix(r.URL.Path, "/repositories/releases/v1/") {
-		name := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/releases/v1/"), "/", 2)[0]
+}
+
+func (s *Server) routeRepositoryContent(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/repositories/releases/v1/") {
+		name, _, _ := strings.Cut(strings.TrimPrefix(path, "/repositories/releases/v1/"), "/")
 		if _, ok := s.releases.get(name); ok {
 			s.releaseVersionContent(w, r)
 			return
 		}
 	}
-	if strings.HasPrefix(r.URL.Path, "/repositories/v1/") && validHash(strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/v1/"), "/", 2)[0]) {
-		s.repositoryContent(w, r)
-		return
+	if strings.HasPrefix(path, "/repositories/v1/") {
+		uid, _, _ := strings.Cut(strings.TrimPrefix(path, "/repositories/v1/"), "/")
+		if validHash(uid) {
+			s.repositoryContent(w, r)
+			return
+		}
 	}
-	if strings.HasPrefix(r.URL.Path, "/repositories/") {
-		s.releaseCurrentContent(w, r)
-		return
-	}
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) >= 2 && parts[0] == "artifacts" && parts[1] == "v1" {
-		s.route(w, r, parts[2:])
-		return
-	}
-	writeErr(w, r, 404, "NotFound", "not found", false, nil)
+	s.releaseCurrentContent(w, r)
 }
