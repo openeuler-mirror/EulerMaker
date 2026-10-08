@@ -44,16 +44,24 @@ func (m *releaseManager) recover(workTTL time.Duration) error {
 			}
 			continue
 		}
-		digest, err := digestReleaseDirectory(m.releasePath(record))
-		if err != nil || digest != index.ReleaseDigest {
-			if record.State == ReleaseReady {
+		digest := index.ReleaseDigest
+		if record.State == ReleaseReady {
+			// Ready releases were verified before activation. Avoid re-reading every
+			// RPM on each restart; only check the persisted digest against the index.
+			if !validHash(digest) || record.ReleaseDigest != digest {
 				record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
 				record.Failure = &FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
 				if err := m.persist(record); err != nil {
 					return err
 				}
+				continue
 			}
-			continue
+		} else {
+			var err error
+			digest, err = digestReleaseDirectory(m.releasePath(record))
+			if err != nil || digest != index.ReleaseDigest {
+				continue
+			}
 		}
 		if record.State == ReleaseCreating {
 			record.State, record.ReleaseDigest, record.UpdatedAt = ReleasePrepared, digest, now
@@ -84,7 +92,22 @@ func (m *releaseManager) recover(workTTL time.Duration) error {
 
 func readReleaseIndex(path string) (releaseIndex, error) {
 	var index releaseIndex
-	data, err := os.ReadFile(filepath.Join(path, "release.json"))
+	rootInfo, err := os.Lstat(path)
+	if err != nil {
+		return index, err
+	}
+	if !rootInfo.IsDir() {
+		return index, fmt.Errorf("invalid release directory %s", path)
+	}
+	indexPath := filepath.Join(path, "release.json")
+	indexInfo, err := os.Lstat(indexPath)
+	if err != nil {
+		return index, err
+	}
+	if !indexInfo.Mode().IsRegular() {
+		return index, fmt.Errorf("invalid release index %s", indexPath)
+	}
+	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		return index, err
 	}
