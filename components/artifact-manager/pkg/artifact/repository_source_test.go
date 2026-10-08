@@ -20,7 +20,10 @@ func TestRepositoryFailurePersistsOffendingJobName(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		record, ok := server.repositories.get(request.RepositoryUID)
+		record, ok, err := server.repositories.get(request.RepositoryUID)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if ok && record.State == RepositoryFailed {
 			if record.Failure == nil || record.Failure.JobName != "job-1" {
 				t.Fatalf("failure lost offending Job name: %+v", record.Failure)
