@@ -47,7 +47,7 @@ components/controller-manager/
       init.go                      # initBuildInfo（步骤 0~5；含 single 直通分支，见 7.2.3）
       advance.go                   # advanceBuildInfo（含步骤 3.1 install 补边处理）、advanceDownstream；single 简化路径（仅回填 + 完成度检查，见 7.2.3）
       specdcache.go                # Cache.specDependsCache（per-BuildInfo：RWMutex，失效/prune 复用 dcgDict 机制，无 TTL）与 Cache.specFileCache（全局 LRU：commitId/specFileName 两层 key，--specfile-cache-size 上限，15.11）
-      specdepends.go               # 步骤 0：specDepends 组装（查 specdcache + miss 补源调度：specFileCache 命中直用/git-server 下载）、unparsable_spec 覆盖、以 Build.spec.packages 选种子/下游扩散；single 指定包仓库集直通组装（见 7.2.3）
+      specdepends.go               # 步骤 0：specDepends 组装（查 specdcache + miss 补源调度：specFileCache 命中直用/git-server 下载）、unparsable_spec 覆盖、以 Build.spec.packages 选种子及直接下游；single 指定包仓库集直通组装（见 7.2.3）
       dcg.go                       # DcgDict/DcgNode、Kosaraju SCC、SCC 剥离选点、运行期 install 补边（含新环追加破环）、DispatchRequirements
       cache.go                     # dcgDict 缓存（RWMutex + tombstone + sweeper）
       jobs.go                      # createJobForSpec、syncSpecStatusFromJobs、多代 Job 排序、发布确认门禁（RpmRepo.sourceJobNames）
@@ -427,7 +427,7 @@ BuildInfoController:
           │     │     按 E-29 收口终态；未达阈值 → 记录日志（RpmRepoNotFound 瞬时事件），
           │     │     本轮不持有 RpmRepo、**流程继续**（非整轮返回——区别于 5xx 的
           │     │     error 整轮退出），各消费点按"未持有"分支处理（首次建图不进行、
-          │     │     扩散反查数据源为空等价无扩散、依赖裁决待定跳过、install 补边
+          │     │     RpmRepo 层反查为空、依赖裁决待定跳过、install 补边
           │     │     不补，各消费点明细见 E-16），等待下一轮
           │     └─ status.release.phase = Failed → 持久化 ReleaseFailed=True
           │           （reason=RpmRepoReleaseFailed），停止派发并转入 6.5；
@@ -507,11 +507,11 @@ specDepends 的组装与缓存见 15.11；构建集只在 Pending 阶段判定�
 
 **按构建类型的构建选 spec 规则与构建集**：
 
-| buildType | 构建集种子 | 下游扩散 | 构建集 |
+| buildType | 构建集种子 | 直接下游选择 | 构建集 |
 |-----------|-----------|----------|--------|
 | `full` | 全量 specDepends（全集） | 无（构建集即全集） | 全部 spec |
-| `incremental` | 父 Build 已固化的 `spec.packages` 所列仓库中的全部已解析 spec；变更仓库和上轮失败仓库由 Build Controller 计算，不在本控制器重算 | 有（迭代至不动点） | 种子 ∪ 扩散（仅重建受变更影响的包及其传递下游） |
-| `specified` | `Build.spec.packages` 指定仓库中的全部已解析 spec | 有（迭代至不动点） | 与 `incremental` 使用同一筛选和扩散逻辑；空构建集正常完成 |
+| `incremental` | 父 Build 已固化的 `spec.packages` 所列仓库中的全部已解析 spec；变更仓库和上轮失败仓库由 Build Controller 计算，不在本控制器重算 | 仅查找种子的直接下游 | 种子 ∪ 直接依赖种子的 spec，不递归扩散 |
+| `specified` | `Build.spec.packages` 指定仓库中的全部已解析 spec | 仅查找种子的直接下游 | 与 `incremental` 使用同一筛选逻辑；空构建集正常完成 |
 | `single` | `Build.spec.packages` 所列**全部**包仓库的 `*.spec`（不走全量组装流程，specDepends 即构建集） | 无 | 只构建指定包，其他包不关注；无扩散、无下发顺序——init 一次性全量直发（直通路径：不建图、门禁全免，见 7.2.3） |
 
 （`single` 之外的类型：种子仓库在全量组装阶段处理；`incremental` 的种子仓库已由 Build Controller 固化。）
@@ -531,36 +531,32 @@ specDepends 的组装与缓存见 15.11；构建集只在 Pending 阶段判定�
 
 单个 spec 下载/解析的确定性失败按 spec 粒度跳过，不影响同仓库其余 spec；仓库级读取失败跳过该仓库。`incremental`、`specified` 与 `single` 的包级错误分类一致，唯 `single` 构建集最终为空时执行 7.2.3 的失败收口。
 
-**下游扩散算法（incremental / specified，构建集种子就绪后单轮内迭代至不动点，纯内存计算）**：
+**直接下游选择（incremental / specified，种子就绪后单次反查，纯内存计算）**：
 
-扩散数据源为本轮组装的全量 specDepends 与本轮 RpmRepo；无继承过程仓时 RpmRepo 层无可解析 XML，安装期反查为空，但仍须执行基于 spec `buildRequires` 的下游扩散：
+反查数据源为本轮组装的全量 specDepends 与本轮 RpmRepo；无继承过程仓时 RpmRepo 层无可解析 XML，安装期反查为空，但仍须执行基于 spec `buildRequires` 的直接下游选择：
 
-- 本轮 RpmRepo：与 Build 同名（`RpmRepo.metadata.name = Build.metadata.name`，data-models.md 一对一约定），复用 7.1 前置守卫持有的本轮对象（守卫 404 → 本轮未持有，扩散反查数据源为空、迭代首轮即达不动点，等价无扩散，E-16）；RpmMeta 消费经 **RpmMetaSources RpmRepo 层**（`status.repository.contentURL` 对应仓库 XML 的解析产物，15.10——增量轮 contentURL 创建即指向继承版本、随本轮物化批次版本提升更新）：rpm → provides / requires / specName（specName 由 XML `sourcerpm` 派生，15.10）；**specName ∈ 本轮全量 specDepends = 本工程产出包**——本工程/上游继承判定依据（bootstrap 层为外部上游包，不参与扩散，15.10）
+- 本轮 RpmRepo：与 Build 同名（`RpmRepo.metadata.name = Build.metadata.name`，data-models.md 一对一约定），复用 7.1 前置守卫持有的本轮对象（守卫 404 → 本轮未持有，安装期反查数据源为空，E-16）；RpmMeta 消费经 **RpmMetaSources RpmRepo 层**（`status.repository.contentURL` 对应仓库 XML 的解析产物，15.10——增量轮 contentURL 创建即指向继承版本、随本轮物化批次版本提升更新）：rpm → provides / requires / specName（specName 由 XML `sourcerpm` 派生，15.10）；**specName ∈ 本轮全量 specDepends = 本工程产出包**——本工程/上游继承判定依据（bootstrap 层为外部上游包，不参与反查，15.10）
 
 ```text
 buildSet = 构建集种子（Build.spec.packages 所列仓库在本轮全量 specDepends 中对应的 spec）
-P        = { rpm.provides 键 : RpmMetaSources RpmRepo 层中 specName ∈ buildSet 的 rpm }
-repeat:                                                                   # 迭代至不动点（传递闭包）
-    newSpecs = { spec : spec ∈ 本轮全量 specDepends（候选池）且 spec ∉ buildSet
-                   且 buildRequires(spec) 键集合 ∩ P ≠ ∅ }                 # 反向构建期依赖（buildRequires 反查）
-             ∪ { rpm.specName : rpm ∈ RpmMetaSources RpmRepo 层
-                   且 rpm.specName ∈ 本轮全量 specDepends                   # 仅本工程产出 spec（本轮 specDepends 内），上游继承包不被本工程构建
-                   且 rpm.specName ∉ buildSet
-                   且 rpm.requires 键集合 ∩ P ≠ ∅ }                     # 反向安装期依赖（install requires 反查，含增量诱因 5）
-    if newSpecs = ∅ → break                                               # 不动点
-    buildSet = buildSet ∪ newSpecs
-    P        = P ∪ { rpm.provides 键 : RpmMetaSources RpmRepo 层中 specName ∈ newSpecs 的 rpm }
+P        = { 种子 spec 名、种子 spec.provides、RpmMetaSources RpmRepo 层中属于种子的 rpm.provides 键 }
+direct   = { spec : spec ∈ 本轮全量 specDepends（候选池）且 spec ∉ buildSet
+               且 buildRequires(spec) 键集合 ∩ P ≠ ∅ }                     # 反向构建期依赖
+         ∪ { rpm.specName : rpm ∈ RpmMetaSources RpmRepo 层
+               且 rpm.specName ∈ 本轮全量 specDepends                       # 仅本工程产出 spec
+               且 rpm.requires 键集合 ∩ P ≠ ∅ }                           # 反向安装期依赖
+buildSet = buildSet ∪ direct                                                # 不以 direct 的 provides 再次反查
 # 本阶段产出：buildSet = 构建集（specDepends 条目的子集）；条目直接取自本轮全量 specDepends
 ```
 
 要点：
 
-- **迭代至不动点**：扩散以种子的直接下游为第一轮结果，随后将新并入下游的 provides 并入 P 继续反查（buildRequires 反查 ∪ install requires 反查交替迭代），直至无新增 spec（不动点）——受变更影响的全链路传递下游均在本轮重建。`buildSet` 单调递增且以（本轮全量 specDepends ∪ RpmMetaSources RpmRepo 层的 specName 集）为有限上界，迭代必然终止。
+- **只选直接下游**：`P` 只包含原始种子的能力；反查命中的 spec 不再成为新种子。若 A 是种子、B 依赖 A、C 仅依赖 B，本轮只选 A 和 B；若 B 本身也是种子，则 C 也会入选。
 - **键集合交集，不做版本约束过滤**：扩散是粗粒度召回（宁多勿漏——多召回的包仅多一次不必要的重建）；精细的版本感知反查在建边阶段进行（7.4.1），两者职责分离。
-- **扫描一律基于 RpmMetaSources RpmRepo 层（`contentURL` 对应已发布物理版本的 XML 解析产物，增量轮含继承版本，15.10）**，不依赖本轮解析结果，迭代至不动点仍在单轮 reconcile 内以纯内存计算完成（XML 下载解析发生在缓存填充/刷新时机，15.10，不在迭代内），迭代本身无 apiserver/git-server I/O。
+- 种子能力来自本轮已解析的 spec 名及显式 provides，并补充 RpmMetaSources RpmRepo 层（含继承版本，15.10）中属于种子的 RPM provides；构建期反查使用本轮 specDepends，安装期反查仅使用 RpmRepo 层。单次反查不产生 apiserver/git-server I/O。
 - **buildRequires 反查候选池为本轮全量 specDepends**（不再是历史落库形态下的上一轮 BuildInfo.specDepends）：上一轮为增量构建时原候选池可能不全、未入池的包无法被反查发现的缺陷**由全量组装后全集候选池天然修复**；requires 反查候选仍限 RpmMetaSources RpmRepo 层本工程产出的 rpm 条目（specName 有 rpm 条目即基准轮次实际构建产出或本轮已合并产物）。
 - **requires 扫描候选限定本工程产出 spec**：rpm 的 `specName ∈ 本轮全量 specDepends`（本轮 specDepends 即本工程产出全集）才可因依赖命中被选入本工程构建集——上游继承包不因依赖命中被选入（其更新由上游 repo 直接提供、经 bootstrapRepo 注入构建环境），避免把上游包误当本工程下游重建。
-- 构建集种子 spec 在 RpmMetaSources RpmRepo 层无产物（新增包，继承版本亦无条目）时其 provides 为空，不影响其余种子的扩散。
+- 新增种子包即使在 RpmRepo 层尚无产物，仍以 spec 名和显式 provides 进行构建期直接反查；安装期反查依赖已有 RpmRepo 元数据。
 - `full` 与 `single` 不做扩散；所有类型均不由本控制器查询历史基准轮次。`incremental` 种子为空时扩散结果为空，构建集可为空。spec 下载/解析失败的处理见 E-23。
 - 本节及全文「本轮全量 specDepends / 本轮组装的 specDepends」均指本轮调谐持有的 BuildInfo 级 specDepends 视图（per-BuildInfo 内存缓存 `Cache.specDependsCache`，15.11——Processing 命中轮直接复用；Pending 重入 / miss 轮组装写入并覆盖写回），非落库字段。
 
@@ -1023,7 +1019,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | E-13 | 所有节点均在环中且未下发 | 选择破环点并执行 bootstrap 门禁 | 7.2.1 / 7.4.6 |
 | E-14 | 节点存在自环 | 按环节点参与选点及派发门禁 | 7.2.1 / 7.4.6 |
 | E-15 | 多代 Job 时间字段缺失或非法 | 按多代排序规则处理 | 7.4.4 |
-| E-16 | **RpmRepo 资源不存在** | 计入 RpmRepo 就绪性连续失败计数（reason=`RpmRepoNotFound`，E-29）：达阈值 → 按 E-29 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；未达阈值 → 记录日志（`RpmRepoNotFound` 瞬时事件），本轮不持有 RpmRepo、**流程继续**（非整轮返回），各消费点按"未持有"分支处理（首次建图不进行（status.dcg 加载分支不受影响，7.2 步骤 2）、扩散反查数据源为空等价无扩散（7.2.2）、依赖裁决待定跳过（7.4.1/E-18）、install 补边不补（7.4.7））等待下一轮（同名 RpmRepo 由 Build Controller 在 Build 创建后即前置创建，短时不存在为异常瞬态——创建时序竞态/误删）；contentURL 非空但其 XML 下载/解析失败 → 计入同一计数（E-29），未达阈值视同 RpmMeta 数据暂不可用（15.10）等待下一轮；contentURL 为空（首轮/全量构建本轮首个物理版本物化前，15.4）为正常空态，RpmRepo 层为空数据源照常消费（15.10）、不计入失败计数；7.1 前置守卫 404 分支同本条语义 | 7.1 守卫 404 分支 / 15.4 / 15.10 / E-29 |
+| E-16 | **RpmRepo 资源不存在** | 计入 RpmRepo 就绪性连续失败计数（reason=`RpmRepoNotFound`，E-29）：达阈值 → 按 E-29 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；未达阈值 → 记录日志（`RpmRepoNotFound` 瞬时事件），本轮不持有 RpmRepo、**流程继续**（非整轮返回），各消费点按"未持有"分支处理（首次建图不进行（status.dcg 加载分支不受影响，7.2 步骤 2）、安装期反查数据源为空但仍可按已解析 spec 查找直接构建依赖（7.2.2）、依赖裁决待定跳过（7.4.1/E-18）、install 补边不补（7.4.7））等待下一轮（同名 RpmRepo 由 Build Controller 在 Build 创建后即前置创建，短时不存在为异常瞬态——创建时序竞态/误删）；contentURL 非空但其 XML 下载/解析失败 → 计入同一计数（E-29），未达阈值视同 RpmMeta 数据暂不可用（15.10）等待下一轮；contentURL 为空（首轮/全量构建本轮首个物理版本物化前，15.4）为正常空态，RpmRepo 层为空数据源照常消费（15.10）、不计入失败计数；7.1 前置守卫 404 分支同本条语义 | 7.1 守卫 404 分支 / 15.4 / 15.10 / E-29 |
 | E-17 | 直接上游 Failed | 不递归传播失败；按有效 required 和依赖存在性裁决 | 7.4.2 / 7.4.1 |
 | E-18 | 构建依赖缺失或版本不满足 | 依赖不可满足与数据暂不可用分别处理 | 7.4.1 / 15.10 / E-29 |
 | E-19 | **目标架构不在 spec 的 exclusiveArch 白名单内** | spec 标 `Failed`（`ArchUnsupported`，message 记录目标架构），不提交 Job，其下游按 E-17 自判（不传播标记）；已有进行中 Job 的 spec 不回溯标记。判定基准/空列表解析期归一（运行期不出现空列表）/父 Build 同轮持有与查询失败处理/挂载点（initBuildInfo 步骤 3、advanceDownstream 步骤 4 创建 Job 前，`single` 同样在创建前执行）见权威节；**arch 为空**（Build/标签/buildTarget 缺失或 arch 值为空，异常数据）→ 本轮跳过 exclusiveArch 校验（视为通过，数据缺失不误杀构建）+ 告警日志，后续轮次数据恢复后恢复校验 | 7.2 步骤 1.5 / 7.2 步骤 3 / 16.3 / 9.1 |
@@ -1386,7 +1382,7 @@ type RpmMetaSources struct {
 | 消费点 | 数据源 |
 |--------|--------|
 | 建边反查（16.1 build/install 边）、构建依赖统一存在性裁决（7.4.1 条件 2）、运行期补边反查（7.4.7）、逐 Job `prefer`（15.3.1） | **分层查询**（RpmRepo 层 → BootstrapRepo 层按序） |
-| 下游扩散（7.2.2）、install 依赖集的 RpmMeta.requires（16.1） | **仅 RpmRepo 层**（本工程产出判定：bootstrap 层为外部上游包，其 sourcerpm 派生 specName 可能与 specDepends 同名，不得据此误判为本工程产出） |
+| 直接下游选择中的 RPM 能力及安装期依赖（7.2.2）、install 依赖集的 RpmMeta.requires（16.1） | **仅 RpmRepo 层**（构建期还使用已解析 spec；bootstrap 层为外部上游包，不参与本工程产出判定） |
 
 **错误语义**：
 
@@ -1682,7 +1678,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | 测试组 | 覆盖点与规则位置 |
 |--------|----------------|
 | 事件与状态 | 5.2 Add/Update/Delete；6.1～6.4 状态迁移、预建条目、空构建集、有效 required |
-| 构建集 | 7.2.2 各构建类型、父 Build 种子、扩散不动点；`unparsable_spec` 按 spec 名命中、多 spec 同仓库、缺失/无效项、重启重组装与缓存命中一致性，断言解析仍执行、buildRequires 边及门禁消失而 install 边保留；E-23/E-24 增量与指定增量共用的解析失败、空集和降级分支 |
+| 构建集 | 7.2.2 各构建类型、父 Build 种子、仅选择直接下游（含新种子无既有 RPM 产物、多种子）而不选择传递下游；`unparsable_spec` 按 spec 名命中、多 spec 同仓库、缺失/无效项、重启重组装与缓存命中一致性，断言解析仍执行、buildRequires 边及门禁消失而 install 边保留；E-23/E-24 增量与指定增量共用的解析失败、空集和降级分支 |
 | single | 7.2.3 的组装、直通派发、repo 注入、完成与失败分支 |
 | 依赖图 | 7.2.1 自环、多环、交叉环、确定性选点；7.4.2 计数及失败放宽；7.4.6 三类门禁 |
 | Job 回填 | 7.4.4 多代排序、7.4.5 phase 映射、7.4.7 install 三分支和动态补边 |

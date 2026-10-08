@@ -290,7 +290,7 @@ func TestInitEmptySnapshotCompletesEmpty(t *testing.T) {
 	}
 }
 
-func TestInitSpecifiedExpansionFixedPoint(t *testing.T) {
+func TestInitSpecifiedIncludesOnlyDirectDependents(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	key := testNS + "/" + testBuild
 	seedHealthyBasics(client, "specified", "repo1")
@@ -305,8 +305,8 @@ func TestInitSpecifiedExpansionFixedPoint(t *testing.T) {
 	git.repo(gitURL3, "c3", map[string]string{"c.spec": specText("c")})
 	git.repo(gitURL4, "c4", map[string]string{"d.spec": specText("d")})
 	// Pre-populated repo layer (URL match -> no download): b joins the build
-	// set via the buildRequires reverse lookup, c via install requires, and d
-	// one iteration later via c (fixed point).
+	// set via the buildRequires reverse lookup and c via install requires.
+	// d only depends on c, so it is not a direct dependent of the seed a.
 	c.rpmMetaSources.Set(key, testSources(
 		testRpm("a", "a", "1.0"),
 		testRpm("b", "b", "1.0"),
@@ -317,8 +317,8 @@ func TestInitSpecifiedExpansionFixedPoint(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	requireSpecNames(t, bi, "a", "b", "c", "d")
-	// Edges: b -build-> a, c -install-> a, d -install-> c; only a dispatches.
+	requireSpecNames(t, bi, "a", "b", "c")
+	// Edges: b -build-> a, c -install-> a; only a dispatches.
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
 		t.Fatalf("jobs = %v, want only {a} (zero indegree)", got)
 	}
@@ -328,9 +328,6 @@ func TestInitSpecifiedExpansionFixedPoint(t *testing.T) {
 	}
 	if _, ok := dcg["c"].InstallInDep["a"]; !ok {
 		t.Fatalf("dcg[c].InstallInDep = %v, want edge on a", dcg["c"].InstallInDep)
-	}
-	if _, ok := dcg["d"].InstallInDep["c"]; !ok {
-		t.Fatalf("dcg[d].InstallInDep = %v, want edge on c", dcg["d"].InstallInDep)
 	}
 	if len(dcg["a"].OutDep) != 2 {
 		t.Fatalf("dcg[a].OutDep = %v, want [b c]", dcg["a"].OutDep)
@@ -357,6 +354,46 @@ func TestInitIncrementalUsesParentSeeds(t *testing.T) {
 	requireSpecNames(t, bi, "a", "b", "c")
 	if got := jobSpecNames(t, client); len(got) != 3 {
 		t.Fatalf("jobs = %v, want {a,b,c} all dispatched", got)
+	}
+}
+
+func TestInitIncrementalIncludesOnlyDirectDependents(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "incremental", "repo1")
+	client.SeedSnapshot(testSnapshotObj(
+		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true},
+		repoEntry{name: "repo2", cloneURL: gitURL2, commitID: "c2", declare: true},
+		repoEntry{name: "repo3", cloneURL: gitURL3, commitID: "c3", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj(""))
+	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
+	git.repo(gitURL2, "c2", map[string]string{"b.spec": specText("b", "a")})
+	git.repo(gitURL3, "c3", map[string]string{"c.spec": specText("c", "b")})
+
+	reconcileOnce(t, c)
+
+	bi := getBuildInfo(t, client)
+	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
+	requireSpecNames(t, bi, "a", "b")
+	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
+		t.Fatalf("jobs = %v, want only {a}", got)
+	}
+}
+
+func TestExpandBuildSetUsesOnlyOriginalSeeds(t *testing.T) {
+	full := map[string]specparse.SpecDepend{
+		"a": {SpecName: "a", Provides: []string{"virtual-a"}},
+		"b": {SpecName: "b", BuildRequires: map[string]ebsv1.VersionConst{"virtual-a": {}}},
+		"c": {SpecName: "c", BuildRequires: map[string]ebsv1.VersionConst{"b": {}}},
+	}
+
+	got := expandBuildSet(map[string]specparse.SpecDepend{"a": full["a"]}, full, nil)
+	if len(got) != 2 || got["a"].SpecName != "a" || got["b"].SpecName != "b" {
+		t.Fatalf("build set = %v, want only a and b", got)
+	}
+
+	got = expandBuildSet(map[string]specparse.SpecDepend{"a": full["a"], "b": full["b"]}, full, nil)
+	if len(got) != 3 || got["c"].SpecName != "c" {
+		t.Fatalf("build set with two seeds = %v, want a, b and c", got)
 	}
 }
 

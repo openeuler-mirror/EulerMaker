@@ -3,7 +3,7 @@
 // packageRepoStatuses enumeration / specFileCache + git-server backfill /
 // E-23/E-24 failure handling / unified cache write-back), the build-set
 // determination per build type from the parent Build's package seeds, and
-// downstream expansion to a fixed point (RpmRepo layer only).
+// direct downstream selection from parsed specs and the RpmRepo layer.
 package buildinfo
 
 import (
@@ -495,22 +495,22 @@ func (c *Controller) determineBuildSet(round *reconcileRound, asm *specAssembly,
 	}
 }
 
-// expandBuildSet iterates the downstream expansion to a fixed point (design
-// 7.2.2 下游扩散算法): buildRequires reverse lookup over this round's full
-// assembly plus install-requires reverse lookup over the RpmRepo layer (本工
-// 程产出 only). Key-set intersection, no version filtering (coarse recall).
+// expandBuildSet selects only specs directly depending on a seed. BuildRequires
+// is checked against the full assembly, and install Requires against RPMs from
+// this project's repository layer. Newly selected specs do not become seeds.
 func expandBuildSet(seeds, full map[string]specparse.SpecDepend, repoLayer *rpmver.RpmMetaSource) map[string]specparse.SpecDepend {
 	buildSet := make(map[string]specparse.SpecDepend, len(seeds))
+	provides := map[string]struct{}{}
 	for name, depend := range seeds {
 		buildSet[name] = depend
-	}
-	provides := map[string]struct{}{}
-	collectProvides := func(specNames map[string]specparse.SpecDepend) {
-		if repoLayer == nil {
-			return
+		provides[name] = struct{}{}
+		for _, provide := range depend.Provides {
+			provides[provide] = struct{}{}
 		}
+	}
+	if repoLayer != nil {
 		for _, rpm := range repoLayer.RpmByName {
-			if _, ok := specNames[rpm.SpecName]; !ok {
+			if _, ok := seeds[rpm.SpecName]; !ok {
 				continue
 			}
 			for provide := range rpm.Provides {
@@ -518,42 +518,26 @@ func expandBuildSet(seeds, full map[string]specparse.SpecDepend, repoLayer *rpmv
 			}
 		}
 	}
-	collectProvides(buildSet)
-	for {
-		newSpecs := map[string]specparse.SpecDepend{}
-		for name, depend := range full {
-			if _, ok := buildSet[name]; ok {
-				continue
-			}
-			if keysIntersect(depend.BuildRequires, provides) {
-				newSpecs[name] = depend
-			}
+	for name, depend := range full {
+		if _, ok := seeds[name]; ok {
+			continue
 		}
-		if repoLayer != nil {
-			for _, rpm := range repoLayer.RpmByName {
-				depend, produced := full[rpm.SpecName]
-				if !produced {
-					continue // not本工程产出 (15.10)
-				}
-				if _, ok := buildSet[depend.SpecName]; ok {
-					continue
-				}
-				if _, ok := newSpecs[depend.SpecName]; ok {
-					continue
-				}
-				if keysIntersect(rpm.Requires, provides) {
-					newSpecs[depend.SpecName] = depend
-				}
-			}
-		}
-		if len(newSpecs) == 0 {
-			return buildSet
-		}
-		for name, depend := range newSpecs {
+		if keysIntersect(depend.BuildRequires, provides) {
 			buildSet[name] = depend
 		}
-		collectProvides(newSpecs)
 	}
+	if repoLayer != nil {
+		for _, rpm := range repoLayer.RpmByName {
+			depend, produced := full[rpm.SpecName]
+			if !produced {
+				continue
+			}
+			if keysIntersect(rpm.Requires, provides) {
+				buildSet[rpm.SpecName] = depend
+			}
+		}
+	}
+	return buildSet
 }
 
 // keysIntersect reports whether any constraint-map key is in the provide set.
