@@ -185,13 +185,14 @@ type BuildInfoSpec struct {
 
 // BuildInfoStatus is the desired/current state of a BuildInfo.
 // Dcg and PendingJobCreates are persisted working state owned by the
-// buildinfo controller: Dcg is the dependency graph snapshot (G-02) and
+// buildinfo controller: Dcg is the dependency graph snapshot and
 // PendingJobCreates tracks pending Job creations that are registered but
-// not yet confirmed (6.5.1).
+// not yet confirmed.
 type BuildInfoStatus struct {
 	Phase             BuildInfoPhase              `json:"phase,omitempty"`
 	Conditions        []metav1.Condition          `json:"conditions,omitempty"`
 	SpecStatus        SpecStatusGroup             `json:"specStatus"`
+	SpecRepoNames     map[string]string           `json:"specRepoNames,omitempty"`
 	FailedPackages    []string                    `json:"failedPackages,omitempty"`
 	Dcg               map[string]DcgNodeState     `json:"dcg,omitempty"`
 	PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
@@ -314,7 +315,7 @@ type MissingDep struct {
 
 // PendingJobCreate records a Job creation identity that has been registered
 // in status but whose creation result is not yet confirmed. Keyed by spec
-// name; a non-empty map blocks writing Completed (6.5.1).
+// name; a non-empty map blocks writing Completed.
 type PendingJobCreate struct {
 	JobName            string `json:"jobName,omitempty"`
 	DispatchGeneration int64  `json:"dispatchGeneration,omitempty"`
@@ -323,7 +324,7 @@ type PendingJobCreate struct {
 // DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep
 // lists downstream specs that depend on this spec; InDep/InstallInDep map
 // upstream specs to the matched version constraints. BootstrapBreak marks
-// a cycle-break node; it is persisted and never re-selected on load (G-09).
+// a cycle-break node; it is persisted and never re-selected on load.
 type DcgNodeState struct {
 	Version        string                  `json:"version,omitempty"`
 	OutDep         []string                `json:"outDep,omitempty"`

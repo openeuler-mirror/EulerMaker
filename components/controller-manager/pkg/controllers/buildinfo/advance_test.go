@@ -1,12 +1,8 @@
-// advance_test.go covers the 19.1 Job-backfill, dispatch-gate, completion and
-// stop-dispatch groups: 7.4.2 count floor, 7.4.4 multi-generation latest pick,
-// 7.4.5 phase mapping, 7.4.7 install three branches plus runtime edge
-// appends, the 7.4.6 gates, the 6.4 completion check, the 6.5/6.5.1
-// convergence branches and the E-28/E-29/E-30 escalations.
 package buildinfo
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +16,7 @@ import (
 
 // seedProcessingRound seeds the objects every Processing advance round needs:
 // active project, processing build, build resource, build conf, the given
-// BuildInfo, a one-repo snapshot and a held RpmRepo. depends feeds the 15.11
+// BuildInfo, a one-repo snapshot and a held RpmRepo. depends feeds the
 // Processing assembly cache (no git) and sources the metadata cache (URL
 // match, no download). Returns the stored BuildInfo (server-assigned UID).
 func seedProcessingRound(client *fakeClient, c *Controller, bi *ebsv1.BuildInfo, depends map[string]specparse.SpecDepend, sources *rpmver.RpmMetaSources) *ebsv1.BuildInfo {
@@ -50,7 +46,7 @@ func seedJobAt(client *fakeClient, bi *ebsv1.BuildInfo, spec string, generation 
 	return client.SeedJob(job)
 }
 
-// --- 7.4.2 count floor / 7.4.4 latest pick / 7.4.5 phase mapping ---
+// Job result backfill and phase mapping.
 
 func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -63,11 +59,10 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
 		"a": dependEntry("a"), "b": dependEntry("b"),
 	}, testSources())
-	// The older generation Succeeded, the latest (7.4.4) Failed: the rebuild
-	// maps to RebuildFailed and the count floor rises to 2 (7.4.2).
+	// The latest generation Failed, so the rebuild fails and the count rises to 2.
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 	seedJobAt(client, seeded, "a", 2, ebsv1.JobFailed, testStart.Add(time.Minute))
-	// Out-of-build-set Jobs are ignored by the scoped grouping (E-05).
+	// Out-of-build-set Jobs are ignored by the scoped grouping.
 	seedJobAt(client, seeded, "ghost", 1, ebsv1.JobSucceeded, testStart.Add(2*time.Minute))
 
 	reconcileOnce(t, c)
@@ -85,7 +80,7 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	if _, ok := persisted.Status.SpecStatus.Lookup("ghost"); ok {
 		t.Fatalf("out-of-scope job leaked into specStatus: %v", persisted.Status.SpecStatus)
 	}
-	// A Failed upstream exempts both 7.4.6 gates (7.4.2): b dispatches at once.
+	// A failed upstream allows b to dispatch without waiting for its output.
 	b := persisted.Status.SpecStatus.Entry("b")
 	if b.DispatchCount != 1 {
 		t.Fatalf("specStatus[b] = %+v, want dispatched (gen 1)", b)
@@ -147,7 +142,7 @@ func TestLatestJobOrdering(t *testing.T) {
 	}
 }
 
-// --- 7.4.7 install backfill three branches + runtime edge appends ---
+// Install result backfill and runtime edges.
 
 func TestAdvanceInstallBackfillBranches(t *testing.T) {
 	t.Run("structured install result marks succeeded", func(t *testing.T) {
@@ -234,8 +229,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 			t.Fatalf("missingDeps[a] = %+v, want the latest Job result", got)
 		}
 		requireCondition(t, b.Install.Conditions, ConditionInstall, ReasonInstallCheckFailed)
-		// Runtime edge: provider a is in the build set and non-terminal (7.4.7);
-		// the candidate graph is persisted before any dispatch (G-02).
+		// Provider a is non-terminal; persist the new edge before dispatch.
 		if _, ok := persisted.Status.Dcg["b"].InstallInDep["a"]; !ok {
 			t.Fatalf("dcg[b].InstallInDep = %v, want runtime edge on a", persisted.Status.Dcg["b"].InstallInDep)
 		}
@@ -246,7 +240,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 	})
 }
 
-// --- 7.4.6 dispatch gates ---
+// Dispatch gates.
 
 func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -261,8 +255,7 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	}, testSources())
 	a1 := seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 
-	// Round 1: gate 2 blocks b — the Succeeded upstream's Job name is not in
-	// the RpmRepo sourceJobNames set; no condition is written (7.4.6).
+	// b waits until the successful upstream Job appears in sourceJobNames.
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
@@ -317,7 +310,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	publish(a1.Name)
 
 	// Round 1: a's second dispatch is publish-gated on b; b's second dispatch
-	// is rebuild-consistency-gated on a (7.4.6 ①: upstream below its
+	// is rebuild-consistency-gated on a (upstream below its
 	// effective required).
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
@@ -335,8 +328,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	// Round 2: b published — a rebuilds (the break point skips gate 1). b then
 	// passes gate 1 (a Succeeded at count 2) and gate 2 (the round-start List
 	// still holds a's published generation-1 Job; the generation-2 Job was
-	// created after the List, 7.4.6 gate 2) — the cycle completes at the
-	// required counts in the same round (6.4).
+	// created after the List) — the cycle completes at the required counts.
 	publish(a1.Name, b1.Name)
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
@@ -353,7 +345,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	}
 }
 
-// --- 6.4 completion check ---
+// Completion checks.
 
 func TestAdvanceCompletionPartialFailure(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -433,7 +425,7 @@ func TestAdvanceCompletionBlockedByPendingCreates(t *testing.T) {
 	}
 }
 
-// --- 6.5/6.5.1 stop-dispatch convergence ---
+// Stop-dispatch convergence.
 
 func TestConvergePendingCreateConfirmed(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -480,7 +472,7 @@ func TestConvergePendingCreate404Kept(t *testing.T) {
 		"a": {JobName: jobNameFor("bi-converge-404", "a", 1), DispatchGeneration: 1},
 	}
 	client.SeedBuildInfo(bi)
-	// No Job stored: a 404 never proves an in-flight create (6.5.1 #5).
+	// A 404 does not prove an in-flight create did not happen.
 
 	reconcileOnce(t, c)
 
@@ -514,7 +506,7 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 	}
 }
 
-// --- E-28/E-29/E-30 escalations ---
+// Escalation after repeated child-resource failures.
 
 func TestE28ReleaseFailedStopsDispatch(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -560,7 +552,7 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	c.specDependsCache.Set(key, map[string]specparse.SpecDepend{"a": dependEntry("a")})
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
-	// No RpmRepo seeded: 404 rounds count towards E-29 (E-16 continues below
+	// No RpmRepo seeded: 404 rounds count towards the failure threshold; dispatch waits below
 	// the threshold).
 
 	for round := 1; round <= 2; round++ {
@@ -571,7 +563,7 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	}
 
 	// Round 3: the threshold escalates to the stop marker; the convergence
-	// path keeps the unresolved pending create on the 404 (6.5.1 #5).
+	// path keeps the unresolved pending create on 404.
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
@@ -579,13 +571,13 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	if len(persisted.Status.PendingJobCreates) != 1 {
 		t.Fatalf("pendingJobCreates = %v, want the 404 entry kept", persisted.Status.PendingJobCreates)
 	}
-	// The readiness counter is cleared after the escalation (5.4).
+	// Escalation clears the readiness counter.
 	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
 		t.Fatalf("rpmrepo failure counter = %d, want cleared after escalation", got)
 	}
 
 	// The created Job appears: the list confirms the pending entry and the
-	// convergence completes with the marker preserved (6.5).
+	// convergence completes with the marker preserved.
 	seedJobAt(client, seeded, "a", 2, ebsv1.JobSucceeded, testStart.Add(time.Minute))
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
@@ -594,6 +586,59 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
 	if len(persisted.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want confirmed and removed", persisted.Status.PendingJobCreates)
+	}
+}
+
+func TestStopConvergenceRecordsFailedAndUnfinishedPackages(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+	client.SeedBuild(testBuildObj("full"))
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Status.SpecRepoNames = map[string]string{
+		"failed":       "repo-failed",
+		"unfinished":   "repo-unfinished",
+		"succeeded":    "repo-succeeded",
+		"install":      "repo-install",
+		"undispatched": "repo-undispatched",
+	}
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
+		"failed":     {Build: ebsv1.SpecBuildStatus{Status: SpecBuildFailed}},
+		"unfinished": {Build: ebsv1.SpecBuildStatus{}},
+		"succeeded":  {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, Install: ebsv1.SpecInstallStatus{Status: SpecBuildSucceeded}},
+		"install":    {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, Install: ebsv1.SpecInstallStatus{Status: SpecBuildFailed}},
+	})
+	bi.Status.FailedPackages = []string{"parse-failed"}
+	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoXMLDownloadFailed, "repository unavailable")
+	client.SeedBuildInfo(bi)
+
+	reconcileOnce(t, c)
+	persisted := getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
+	want := []string{"parse-failed", "repo-failed", "repo-install", "repo-undispatched", "repo-unfinished"}
+	if !slices.Equal(persisted.Status.FailedPackages, want) {
+		t.Fatalf("failedPackages = %v, want %v", persisted.Status.FailedPackages, want)
+	}
+}
+
+func TestStopConvergenceFallsBackWithoutSpecRepoNames(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	project := testProjectObj(ebsv1.ProjectActive)
+	project.Spec.PackageRepos = []ebsv1.PackageRepo{{Name: "repo-a"}, {Name: "repo-b"}}
+	client.SeedProject(project)
+	client.SeedBuild(testBuildObj("full"))
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{"failed": {Version: "1.0"}}
+	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
+		"failed": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildFailed}},
+	})
+	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoXMLDownloadFailed, "repository unavailable")
+	client.SeedBuildInfo(bi)
+
+	reconcileOnce(t, c)
+	persisted := getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
+	if want := []string{"repo-a", "repo-b"}; !slices.Equal(persisted.Status.FailedPackages, want) {
+		t.Fatalf("failedPackages = %v, want conservative %v", persisted.Status.FailedPackages, want)
 	}
 }
 
@@ -610,7 +655,7 @@ func TestE30SnapshotUnavailableEscalates(t *testing.T) {
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
-	// No Snapshot seeded: 404 counts towards E-30 and fails the round below
+	// No Snapshot seeded: 404 counts towards the failure threshold and fails the round below
 	// the threshold.
 
 	for round := 1; round <= 2; round++ {
@@ -634,7 +679,7 @@ func TestE30SnapshotUnavailableEscalates(t *testing.T) {
 	}
 }
 
-// --- E-01 / residual-Aborted defenses ---
+// Inconsistent status handling.
 
 func TestAdvanceEmptySpecStatusWaits(t *testing.T) {
 	c, client, _, _ := newTestController(t)

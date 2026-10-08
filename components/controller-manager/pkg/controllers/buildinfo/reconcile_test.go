@@ -1,7 +1,3 @@
-// reconcile_test.go covers the 19.1 groups 事件与状态 (5.2/6.1-6.4), 写入与
-// 队列 (7.5/10.2/10.3) and condition 与观测 (9.1/9.2/11.2): event handlers,
-// front guards, the writeStatus outcome classification with the Unknown
-// confirmation read, semantic intent comparison and condition/metric timing.
 package buildinfo
 
 import (
@@ -26,7 +22,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// --- 5.2 event handlers ---
+// --- Event handlers ---
 
 type initializerSharedClient struct{ clientpkg.Interface }
 
@@ -119,14 +115,14 @@ func TestEventDeleteTombstoneAndRevoke(t *testing.T) {
 	}
 }
 
-// --- 6.1 reconcile entry ---
+// --- Reconcile entry ---
 
 func TestReconcileDeletedBuildInfo(t *testing.T) {
 	c, _, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
 	c.dcgDict.Set(key, NewDcgDict(graphWith(edge{"a", "b"})))
 	c.counters.Increment(counterRpmRepo, key, "r", "m")
-	// Nothing seeded: the entry GET 404s (E-10 silent exit + cache cleanup).
+	// A missing BuildInfo ends the round and clears local state.
 	reconcileOnce(t, c)
 	if got := c.dcgDict.Len(); got != 0 {
 		t.Fatalf("dcgDict len = %d, want 0 after 404 reconcile", got)
@@ -171,7 +167,7 @@ func TestReconcileUnknownPhaseSkips(t *testing.T) {
 	}
 }
 
-// --- 7.1 parent abort guard (E-20/E-21/E-03/G-06) ---
+// --- Parent abort handling ---
 
 func TestParentAbortAttemptsJobsBeforeTerminal(t *testing.T) {
 	for _, scenario := range []string{"success", "partial-failure", "list-failure"} {
@@ -314,7 +310,7 @@ func TestParentAbortGuard(t *testing.T) {
 	}
 }
 
-// --- 6.5 stop-condition routing ---
+// --- Stop-condition routing ---
 
 func TestStopConditionRoutesToConverge(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -329,13 +325,13 @@ func TestStopConditionRoutesToConverge(t *testing.T) {
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	// The stop marker is preserved; success conditions are never written (6.5).
+	// Preserve the stop marker without writing success conditions.
 	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
 	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
 	requireNoCondition(t, persisted.Status.Conditions, ConditionPartialFailure)
 }
 
-// --- 7.5/10.2 writeStatus outcome classification ---
+// --- Status write outcomes ---
 
 // writeRound drives writeStatus directly with a one-field intent change.
 func writeRound(t *testing.T, c *Controller, client *fakeClient, mutate func(*ebsv1.BuildInfo)) (controller.ReconcileResult, error) {
@@ -432,8 +428,7 @@ func TestWriteStatusUnknownMismatchRequeues(t *testing.T) {
 func TestWriteStatusUnknownUIDChangedEndsRound(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
-	// Recreate under the same name with a different UID (10.3 same-name
-	// delete-recreate isolation): the round ends silently.
+	// A same-name replacement with a different UID ends the old round.
 	recreated := testBuildInfoObj(ebsv1.BuildInfoPending)
 	recreated.UID = "another-uid"
 	client.SeedBuildInfo(recreated)
@@ -457,7 +452,7 @@ func TestWriteStatusUnknownConfirmNotFound(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	seeded := client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	client.InjectWrite("update-status", clientpkg.WriteUnknown, 0, false)
-	// The confirmation read 404s: the object was deleted mid-round (E-10).
+	// The object was deleted before the confirmation read.
 	client.InjectRead("buildinfos", 1, ErrNotFound)
 	result, err := writeSeededRound(t, c, seeded, func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoAborted })
 	if err != nil || result != (controller.ReconcileResult{}) {
@@ -485,8 +480,8 @@ func TestConfirmStatusWriteCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	intent := seeded.DeepCopy()
 	intent.Status.Phase = ebsv1.BuildInfoAborted
-	// The write goes out (fake ignores ctx), then the confirmation sees the
-	// cancelled context and refuses background confirmation (10.3).
+	// The fake sends the write despite cancellation; confirmation must not
+	// continue with a background context.
 	cancel()
 	_, err := c.writeStatus(ctx, round, intent)
 	if !errors.Is(err, context.Canceled) {
@@ -494,7 +489,7 @@ func TestConfirmStatusWriteCancelledContext(t *testing.T) {
 	}
 }
 
-// --- 10.2 chaining ---
+// --- Status write chaining ---
 
 func TestWriteStatusChaining(t *testing.T) {
 	c, client, _, _ := newTestController(t)
@@ -519,7 +514,7 @@ func TestWriteStatusChaining(t *testing.T) {
 	requireCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded)
 }
 
-// --- 10.3 semantic intent comparison ---
+// --- Status intent comparison ---
 
 // copyStatus deep-copies a BuildInfoStatus (the api package only generates
 // DeepCopy for the top-level object kinds).
@@ -536,6 +531,7 @@ func TestStatusMatchesIntent(t *testing.T) {
 	// nil maps equal empty maps.
 	withEmpty := copyStatus(base)
 	withEmpty.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{})
+	withEmpty.SpecRepoNames = map[string]string{}
 	withEmpty.Dcg = map[string]ebsv1.DcgNodeState{}
 	withEmpty.PendingJobCreates = map[string]ebsv1.PendingJobCreate{}
 	if !statusMatchesIntent(base, withEmpty) {
@@ -564,6 +560,11 @@ func TestStatusMatchesIntent(t *testing.T) {
 	if statusMatchesIntent(specA, specB) {
 		t.Fatal("dispatchCount mismatch must not match")
 	}
+	repos := copyStatus(base)
+	repos.SpecRepoNames = map[string]string{"a": "repo-a"}
+	if statusMatchesIntent(base, repos) {
+		t.Fatal("specRepoNames mismatch must not match")
+	}
 	dcgA := copyStatus(base)
 	dcgA.Dcg = map[string]ebsv1.DcgNodeState{"a": {OutDep: []string{"b"}}}
 	dcgB := copyStatus(base)
@@ -583,7 +584,7 @@ func TestStatusMatchesIntent(t *testing.T) {
 	}
 }
 
-// --- 9.1/9.2 conditions ---
+// --- Conditions ---
 
 func TestUpsertConditionLifecycle(t *testing.T) {
 	var conds []metav1.Condition
@@ -650,7 +651,7 @@ func TestStopConditionDetection(t *testing.T) {
 	}
 }
 
-// --- 11.2 metric counting timing ---
+// --- Metric counting ---
 
 func scrapeCounter(t *testing.T, name string) uint64 {
 	t.Helper()
@@ -716,7 +717,7 @@ func TestMetricsCountOnlyConfirmedWrites(t *testing.T) {
 	}
 }
 
-// --- 5.4 readiness counters (round-local single bump) ---
+// --- Round-local readiness counters ---
 
 func TestRoundFailuresBumpOncePerRound(t *testing.T) {
 	c, _, _, _ := newTestController(t)

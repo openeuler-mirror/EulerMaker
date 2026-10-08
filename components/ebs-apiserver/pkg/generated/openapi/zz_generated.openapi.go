@@ -309,7 +309,7 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "BuildInfoStatus is the desired/current state of a BuildInfo. Dcg and PendingJobCreates are persisted working state owned by the buildinfo controller: Dcg is the dependency graph snapshot (G-02) and PendingJobCreates tracks pending Job creations that are registered but not yet confirmed (6.5.1).",
+				Description: "BuildInfoStatus is the desired/current state of a BuildInfo. Dcg and PendingJobCreates are persisted working state owned by the buildinfo controller: Dcg is the dependency graph snapshot and PendingJobCreates tracks pending Job creations that are registered but not yet confirmed.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"phase": {
@@ -335,6 +335,21 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
 							Ref:     ref("ebs-api/ebs/v1.SpecStatusGroup"),
+						},
+					},
+					"specRepoNames": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
 						},
 					},
 					"failedPackages": {
@@ -802,7 +817,7 @@ func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.Ope
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep lists downstream specs that depend on this spec; InDep/InstallInDep map upstream specs to the matched version constraints. BootstrapBreak marks a cycle-break node; it is persisted and never re-selected on load (G-09).",
+				Description: "DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep lists downstream specs that depend on this spec; InDep/InstallInDep map upstream specs to the matched version constraints. BootstrapBreak marks a cycle-break node; it is persisted and never re-selected on load.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"version": {
@@ -1327,7 +1342,7 @@ func schema_ebs_api_ebs_v1_PendingJobCreate(ref common.ReferenceCallback) common
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "PendingJobCreate records a Job creation identity that has been registered in status but whose creation result is not yet confirmed. Keyed by spec name; a non-empty map blocks writing Completed (6.5.1).",
+				Description: "PendingJobCreate records a Job creation identity that has been registered in status but whose creation result is not yet confirmed. Keyed by spec name; a non-empty map blocks writing Completed.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"jobName": {
