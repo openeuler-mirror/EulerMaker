@@ -1027,7 +1027,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 7. `createrepo_c` 执行期间进程退出，重启后可恢复或清理，不暴露工作目录。
 8. Ready 后 RpmRepo Controller 更新 API 失败并重试时，不重新生成仓库。
 9. 基础仓或输入 Artifact 到期时可以直接删除；并行物化若尚未打开所需文件则以 `MaterializationInputExpired` 失败，且不得发布半成品仓库。
-10. 内容 API 不允许路径逃逸、符号链接跟随或目录列表。
+10. 过程仓内容 API 不允许路径逃逸、符号链接跟随或目录列表。
 11. RpmRepo Controller 在 transition 写入后任意时点重启，均使用原输入 Job 集合、基础仓和 repositoryUID 恢复，不产生分叉版本。
 
 ### 9.13 正式发布
@@ -1162,7 +1162,9 @@ GET /repositories/{project}/{os}/{arch}/{path...}
 https://artifact.example/repositories/{project}/{os}/{arch}/
 ```
 
-该地址是 Project、OS 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 OS/架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，内容读取、Range、ETag、路径规范化和目录列表规则与 9.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
+该地址是 Project、OS 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 OS/架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，文件内容读取、Range、ETag 与路径规范化规则与 9.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
+
+稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 展示有当前 Ready 发布版本的 OS，下一层展示对应架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 和不可变正式版本地址仍不提供目录浏览。
 
 路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{os}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
 
