@@ -616,10 +616,12 @@ func TestInitE19ArchUnsupported(t *testing.T) {
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.Build.Status != SpecBuildFailed {
-		t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
+	if ss.Build.Status != SpecBuildArchUnsupported {
+		t.Fatalf("specStatus[a].Build.Status = %q, want ArchUnsupported", ss.Build.Status)
 	}
-	requireCondition(t, ss.Build.Conditions, ConditionArchUnsupported, ReasonArchUnsupported)
+	if len(ss.Build.Conditions) != 0 {
+		t.Fatalf("specStatus[a].Build.Conditions = %v, want empty", ss.Build.Conditions)
+	}
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["b"] {
 		t.Fatalf("jobs = %v, want {b} only", got)
 	}
@@ -902,7 +904,7 @@ func TestSingleAllSkippedCloseout(t *testing.T) {
 }
 
 func TestSingleDeterministicFailures(t *testing.T) {
-	t.Run("E-19 arch unsupported marks Failed", func(t *testing.T) {
+	t.Run("E-19 arch unsupported has its own status", func(t *testing.T) {
 		c, client, git, _ := newTestController(t)
 		seedHealthyBasics(client, "single", "repo1")
 		client.SeedSnapshot(testSnapshotObj(
@@ -915,12 +917,20 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		bi := getBuildInfo(t, client)
 		requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 		ss := bi.Status.SpecStatus.Entry("a")
-		if ss.Build.Status != SpecBuildFailed {
-			t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
+		if ss.Build.Status != SpecBuildArchUnsupported {
+			t.Fatalf("specStatus[a].Build.Status = %q, want ArchUnsupported", ss.Build.Status)
 		}
-		requireCondition(t, ss.Build.Conditions, ConditionArchUnsupported, ReasonArchUnsupported)
+		if len(ss.Build.Conditions) != 0 {
+			t.Fatalf("specStatus[a].Build.Conditions = %v, want empty", ss.Build.Conditions)
+		}
 		if got := len(listJobs(t, client)); got != 0 {
 			t.Fatalf("jobs = %d, want 0", got)
+		}
+		reconcileOnce(t, c)
+		bi = getBuildInfo(t, client)
+		requirePhase(t, bi, ebsv1.BuildInfoCompleted)
+		if len(bi.Status.FailedPackages) != 1 || bi.Status.FailedPackages[0] != "repo1" {
+			t.Fatalf("failedPackages = %v, want [repo1]", bi.Status.FailedPackages)
 		}
 	})
 

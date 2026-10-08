@@ -145,7 +145,7 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 			if dcg.Node(provider) == nil {
 				continue // provider not in this round's build set
 			}
-			if pSS := round.current.Status.SpecStatus.Entry(provider); pSS.Build.Status == SpecBuildSucceeded || pSS.Build.Status == SpecBuildFailed {
+			if pSS := round.current.Status.SpecStatus.Entry(provider); terminalSpecBuildStatus(pSS.Build.Status) {
 				continue // provider already terminal: no edge, no re-dispatch
 			}
 			if _, dup := node.InstallInDep[provider]; dup {
@@ -197,7 +197,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if ss.DispatchCount >= effectiveRequired(dcg, round, name, required) {
 			continue
 		}
-		if ss.Build.Status == SpecBuildRunning || ss.Build.Status == SpecBuildFailed {
+		if ss.Build.Status == SpecBuildRunning || failedSpecBuildStatus(ss.Build.Status) {
 			continue // do not redispatch an in-flight or failed spec
 		}
 		depend, ok := asm.depends[name]
@@ -228,14 +228,14 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if result, err := c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus.Entry(name); ss.Build.Status == SpecBuildFailed {
+		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
 			continue
 		}
 		// Build-requires availability is checked even for bootstrap dispatches.
 		if result, err := c.checkBuildRequires(ctx, round, name, &depend, sources); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus.Entry(name); ss.Build.Status == SpecBuildFailed {
+		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
 			continue
 		}
 		// Resolve the build-target Config once per round when needed.
@@ -270,7 +270,7 @@ func upstreamNames(node *DcgNode) []string {
 func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
 		st := round.current.Status.SpecStatus.Entry(up).Build.Status
-		if st != SpecBuildSucceeded && st != SpecBuildFailed {
+		if !terminalSpecBuildStatus(st) {
 			return false
 		}
 	}
@@ -280,7 +280,7 @@ func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 // hasFailedUpstream reports whether any direct upstream failed.
 func hasFailedUpstream(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		if round.current.Status.SpecStatus.Entry(up).Build.Status == SpecBuildFailed {
+		if failedSpecBuildStatus(round.current.Status.SpecStatus.Entry(up).Build.Status) {
 			return true
 		}
 	}
@@ -359,7 +359,7 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 	}
 	if node := dcg.Node(spec); node != nil {
 		for _, up := range upstreamNames(node) {
-			if round.current.Status.SpecStatus.Entry(up).Build.Status == SpecBuildFailed {
+			if failedSpecBuildStatus(round.current.Status.SpecStatus.Entry(up).Build.Status) {
 				return 1
 			}
 		}
@@ -378,13 +378,13 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 	var failed []string
 	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
 		ss := round.current.Status.SpecStatus.Entry(spec)
-		if ss.Build.Status != SpecBuildSucceeded && ss.Build.Status != SpecBuildFailed {
+		if !terminalSpecBuildStatus(ss.Build.Status) {
 			return controller.ReconcileResult{}, nil // not all terminal
 		}
 		if ss.Build.Status == SpecBuildSucceeded && ss.DispatchCount < effectiveRequired(dcg, round, spec, required) {
 			return controller.ReconcileResult{}, nil // terminal but short of the effective required
 		}
-		if ss.Build.Status == SpecBuildFailed {
+		if failedSpecBuildStatus(ss.Build.Status) {
 			failed = append(failed, spec)
 		}
 	}
@@ -419,7 +419,7 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		}
 		for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
 			ss := round.current.Status.SpecStatus.Entry(spec)
-			if ss.Build.Status != SpecBuildFailed && ss.Install.Status != SpecBuildFailed {
+			if !failedSpecBuildStatus(ss.Build.Status) && ss.Install.Status != SpecBuildFailed {
 				continue
 			}
 			depend, ok := asm.depends[spec]

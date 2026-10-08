@@ -180,13 +180,13 @@ func (c *Controller) dispatchInitSpec(ctx context.Context, round *reconcileRound
 	if result, err := c.checkArchSupported(ctx, round, specName, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if ss = round.current.Status.SpecStatus.Entry(specName); ss.Build.Status == SpecBuildFailed {
+	if ss = round.current.Status.SpecStatus.Entry(specName); failedSpecBuildStatus(ss.Build.Status) {
 		return controller.ReconcileResult{}, nil
 	}
 	if result, err := c.checkBuildRequires(ctx, round, specName, &depend, sources); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if ss = round.current.Status.SpecStatus.Entry(specName); ss.Build.Status == SpecBuildFailed {
+	if ss = round.current.Status.SpecStatus.Entry(specName); failedSpecBuildStatus(ss.Build.Status) {
 		return controller.ReconcileResult{}, nil
 	}
 	image, err := c.ensureImage(ctx, round, dispatch)
@@ -197,7 +197,7 @@ func (c *Controller) dispatchInitSpec(ctx context.Context, round *reconcileRound
 }
 
 // checkArchSupported applies the exclusiveArch whitelist: an arch miss
-// marks the spec Failed (ArchUnsupported) without a Job; an empty target arch
+// marks the spec ArchUnsupported without a Job; an empty target arch
 // (abnormal data) skips the check with a warning.
 func (c *Controller) checkArchSupported(ctx context.Context, round *reconcileRound, specName string, depend *specparse.SpecDepend, arch string) (controller.ReconcileResult, error) {
 	if arch == "" {
@@ -208,9 +208,9 @@ func (c *Controller) checkArchSupported(ctx context.Context, round *reconcileRou
 		return controller.ReconcileResult{}, nil
 	}
 	message := fmt.Sprintf("target arch %q not in exclusiveArch %v", arch, depend.ExclusiveArch)
-	result, err := c.markSpecFailed(ctx, round, specName, ConditionArchUnsupported, ReasonArchUnsupported, message, false)
+	result, err := c.markSpecTerminal(ctx, round, specName, SpecBuildArchUnsupported, "", "", "", false)
 	if err == nil && result == (controller.ReconcileResult{}) {
-		c.logOnce(round.key, "ArchUnsupported", "spec %s marked Failed: %s", specName, message)
+		c.logOnce(round.key, "ArchUnsupported", "spec %s marked ArchUnsupported: %s", specName, message)
 	}
 	return result, err
 }
@@ -582,7 +582,7 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		if result, err = c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus.Entry(name); ss.Build.Status == SpecBuildFailed {
+		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
 			continue
 		}
 		image, err := c.ensureImage(ctx, round, dispatch)
