@@ -13,12 +13,16 @@ import (
 )
 
 type testReleaseMaterializer struct {
-	root    string
-	started chan struct{}
-	release chan struct{}
+	root     string
+	started  chan struct{}
+	release  chan struct{}
+	rpmCount chan int
 }
 
-func (m *testReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, _ RepositoryRecord) (releaseResult, error) {
+func (m *testReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source RepositoryRecord) (releaseResult, error) {
+	if m.rpmCount != nil {
+		m.rpmCount <- len(source.RPMs)
+	}
 	select {
 	case m.started <- struct{}{}:
 	default:
@@ -56,7 +60,7 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 		t.Fatal(err)
 	}
 	server.releases.stop()
-	releaseMaterializer := &testReleaseMaterializer{root: c.DataDir, started: make(chan struct{}, 1), release: make(chan struct{})}
+	releaseMaterializer := &testReleaseMaterializer{root: c.DataDir, started: make(chan struct{}, 1), release: make(chan struct{}), rpmCount: make(chan int, 2)}
 	releases, err := newReleaseManager(c, server.repositories, releaseMaterializer)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +72,21 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 	server.repositories.mu.Lock()
 	server.repositories.records[source.RepositoryUID] = source
 	server.repositories.mu.Unlock()
+	writeTestRepositoryIndex(t, server.repositories, source)
 	request := CreateReleaseRequest{BuildName: source.BuildName, Project: source.Project, TargetOS: source.TargetOS, TargetArch: source.TargetArch, SourceRepositoryUID: source.RepositoryUID, ExcludeSpecs: []string{"skip", "skip"}}
 	return server, request, releaseMaterializer
+}
+
+func writeTestRepositoryIndex(t *testing.T, manager *repositoryManager, record *RepositoryRecord) {
+	t.Helper()
+	path := manager.repositoryPath(record)
+	if err := os.MkdirAll(path, 0750); err != nil {
+		t.Fatal(err)
+	}
+	index := repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}
+	if err := atomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestReleaseLifecycleAndContent(t *testing.T) {
@@ -82,6 +99,9 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 	case <-materializer.started:
 	case <-time.After(time.Second):
 		t.Fatal("release creation did not start")
+	}
+	if count := <-materializer.rpmCount; count != 1 {
+		t.Fatalf("source RPM count = %d, want 1", count)
 	}
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
 		t.Fatalf("replay status = %d", response.Code)
@@ -127,12 +147,14 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 	second.SourceRepositoryUID = "source-repository-2"
 	now := time.Now().UTC()
 	server.repositories.mu.Lock()
-	server.repositories.records[second.SourceRepositoryUID] = &RepositoryRecord{
+	secondSource := &RepositoryRecord{
 		RepositoryUID: second.SourceRepositoryUID, RepositoryName: second.BuildName,
 		Project: second.Project, BuildName: second.BuildName, TargetOS: second.TargetOS,
 		TargetArch: second.TargetArch, State: RepositoryReady, CreatedAt: now, UpdatedAt: now,
 	}
+	server.repositories.records[second.SourceRepositoryUID] = secondSource
 	server.repositories.mu.Unlock()
+	writeTestRepositoryIndex(t, server.repositories, secondSource)
 
 	for _, request := range []CreateReleaseRequest{first, second} {
 		response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
@@ -178,7 +200,9 @@ func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	server.repositories.mu.Lock()
 	server.repositories.records[request.SourceRepositoryUID].Project = request.Project
 	server.repositories.records[request.SourceRepositoryUID].TargetOS = request.TargetOS
+	source := cloneRepository(server.repositories.records[request.SourceRepositoryUID])
 	server.repositories.mu.Unlock()
+	writeTestRepositoryIndex(t, server.repositories, source)
 	close(materializer.release)
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
 		t.Fatalf("submit = %d", response.Code)

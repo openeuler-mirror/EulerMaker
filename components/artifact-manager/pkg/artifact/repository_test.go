@@ -27,7 +27,7 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record Rep
 		return repositoryResult{}, ctx.Err()
 	case <-m.release:
 	}
-	return repositoryResult{Digest: "digest", RPMs: map[string]RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}, nil
+	return repositoryResult{Digest: "digest"}, nil
 }
 
 func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) (*Server, CreateRepositoryRequest) {
@@ -67,6 +67,42 @@ func repositoryRequest(t *testing.T, server http.Handler, method, path string, b
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	return response
+}
+
+func TestRepositoryManagerLoadsLegacyMetadataWithoutRPMs(t *testing.T) {
+	root := t.TempDir()
+	m := &repositoryManager{root: root, records: map[string]*RepositoryRecord{}}
+	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	legacy := &RepositoryRecord{
+		RepositoryUID: "repository-1",
+		State:         RepositoryReady,
+		RPMs: map[string]RepositoryRPMMeta{
+			"test.rpm": {FileName: "test.rpm"},
+		},
+	}
+	if err := atomicJSON(m.metaPath(legacy.RepositoryUID), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.load(); err != nil {
+		t.Fatal(err)
+	}
+	record, ok := m.get(legacy.RepositoryUID)
+	if !ok || record.State != RepositoryReady || record.RPMs != nil {
+		t.Fatalf("loaded record = %+v", record)
+	}
+	data, err := os.ReadFile(m.metaPath(legacy.RepositoryUID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored["rpms"]; ok {
+		t.Fatal("repository metadata still contains RPM index")
+	}
 }
 
 func TestRepositoryMaterializationLifecycle(t *testing.T) {
