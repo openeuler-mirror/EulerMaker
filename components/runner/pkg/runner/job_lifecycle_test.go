@@ -3,6 +3,8 @@ package runner
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -42,22 +44,31 @@ func (f *lifecycleAPI) UpdateJobStatus(_ context.Context, job JobResource, statu
 }
 
 type cancellingExecutor struct {
-	started chan struct{}
-	stopped chan struct{}
+	started     chan struct{}
+	stopped     chan struct{}
+	allowReturn chan struct{}
 }
 
 func (e *cancellingExecutor) Execute(ctx context.Context, _ JobResource) (string, error) {
 	close(e.started)
 	<-ctx.Done()
 	close(e.stopped)
+	if e.allowReturn != nil {
+		<-e.allowReturn
+	}
 	return "", ctx.Err()
 }
 
 func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	job := JobResource{Metadata: ObjectMeta{Name: "j", Namespace: "p", UID: "u", ResourceVersion: "1"}, Status: JobStatus{Phase: "Running", Runner: "r"}}
 	api := &lifecycleAPI{job: job}
-	executor := &cancellingExecutor{started: make(chan struct{}), stopped: make(chan struct{})}
-	a := &Agent{cfg: Config{Name: "r"}, client: api, executor: executor}
+	executor := &cancellingExecutor{started: make(chan struct{}), stopped: make(chan struct{}), allowReturn: make(chan struct{})}
+	root := t.TempDir()
+	workPath := filepath.Join(root, "work", "p", "j")
+	if err := os.MkdirAll(workPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{cfg: Config{Name: "r", RootDir: root}, client: api, executor: executor}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.handleEvent(ctx, WatchEvent{Type: "ADDED", Object: job})
@@ -75,6 +86,21 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	case <-executor.stopped:
 	case <-time.After(time.Second):
 		t.Fatal("execution did not stop")
+	}
+	if _, err := os.Stat(workPath); err != nil {
+		t.Fatalf("work directory removed before executor returned: %v", err)
+	}
+	close(executor.allowReturn)
+	deadline := time.After(time.Second)
+	for {
+		if _, err := os.Stat(workPath); os.IsNotExist(err) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("aborted Job work directory was not cleaned")
+		case <-time.After(time.Millisecond):
+		}
 	}
 	current, _ := api.GetJob(ctx, "p", "j")
 	if current.Status.Phase != "Aborted" {
