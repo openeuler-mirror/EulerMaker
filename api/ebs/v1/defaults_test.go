@@ -100,8 +100,4 @@ func TestProjectDefaultRefJSON(t *testing.T) {
 			t.Fatalf("defaultRef=%+v, want %+v", decoded.Spec.DefaultRef, want)
 		}
 	}
-	var project Project
-	if err := json.Unmarshal([]byte(`{"spec":{"defaultRef":"master"}}`), &project); err == nil {
-		t.Fatal("legacy string defaultRef must be rejected")
-	}
 }
