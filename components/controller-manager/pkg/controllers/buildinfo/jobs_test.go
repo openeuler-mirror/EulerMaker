@@ -31,14 +31,14 @@ func TestJobNameForDeterministic(t *testing.T) {
 	if first != jobNameFor("uid-1", "a", 2) {
 		t.Fatal("jobNameFor not deterministic")
 	}
-	if !strings.HasPrefix(first, "sa-") {
+	if !strings.HasPrefix(first, "a-") {
 		t.Fatalf("jobNameFor = %q, want specName- prefix", first)
 	}
-	if got := len(first) - len("sa-"); got != 16 {
+	if got := len(first) - len("a-"); got != 16 {
 		t.Fatalf("hash suffix length = %d, want 16 lowercase hex chars", got)
 	}
 	former := formerJobNameFor("uid-1", "a", 2)
-	if former != "a-2-"+strings.TrimPrefix(first, "sa-") {
+	if former != "a-2-"+strings.TrimPrefix(first, "a-") {
 		t.Fatalf("former name = %q, want visible generation and the same hash", former)
 	}
 	previous := previousJobNameFor("uid-1", "a", 2)
@@ -58,7 +58,7 @@ func TestEncodedSpecJobIdentityAndBackfill(t *testing.T) {
 	const raw = "dvd+rw-tools"
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	job := testJobObj(bi, raw, 1, ebsv1.JobRunning)
-	if !strings.HasPrefix(job.Name, "sdvd_2Brw-tools-") || job.Labels[ebsv1.JobSpecNameLabel] != "sdvd_2Brw-tools" {
+	if !strings.HasPrefix(job.Name, "dvd_2Brw-tools-") || job.Labels[ebsv1.JobSpecNameLabel] != "dvd_2Brw-tools" {
 		t.Fatalf("unsafe SPEC name was not encoded: name=%q label=%q", job.Name, job.Labels[ebsv1.JobSpecNameLabel])
 	}
 	if err := verifyJobIdentity(job, bi, raw, 1); err != nil {

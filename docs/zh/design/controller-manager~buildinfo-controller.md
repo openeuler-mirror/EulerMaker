@@ -1134,7 +1134,7 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 - 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次。新创建的 Job 在本轮内存态确认，整批合并写入 status；落盘失败由下轮 List 回填。
 - hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，新建 Job 只取摘要前 8 字节，输出 16 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
-- Job 名为 `EncodeSpecName(specName) + "-" + hash`；派发代次仅参与 hash 计算，不直接显示在名称中。`EncodeSpecName` 固定加 `s` 前缀，保留 ASCII 字母数字和非末尾的 `-`、`.`，其余 UTF-8 字节转义为 `_HH`（大写十六进制）；`_` 本身也转义，末尾 `-`、`.`同样转义。编码可逆，当前暂不处理超长名称。
+- Job 名为 `EncodeSpecName(specName) + "-" + hash`；派发代次仅参与 hash 计算，不直接显示在名称中。`EncodeSpecName` 不添加固定前缀；通常保留 ASCII 字母数字和非末尾的 `-`、`.`，其余 UTF-8 字节转义为 `_HH`（大写十六进制）。为保证标签首字符合法，以非字母数字或字面 `X` 开头时，首字节转义为 `X_HH`；`_` 本身及末尾的 `-`、`.`同样转义。编码可逆，当前暂不处理超长名称。
 - Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 由 spec label 可逆解码得到。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有带可见派发代次的 16 位、20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填；新派发仅生成不显示代次的 16 位 hash 名称。已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
 - **AlreadyExists 后 GET 返回 404**：返回可重试错误，由框架退避重新入队；不得套用主对象 NotFound 的结束规则，也不增加派发计数。后续重新调和仍需该代 Job 时，使用同一创建身份和名称，不生成替代名称；是否允许再次创建仍遵循停止派发及终态守卫。
 - 重启后通过完整 List 回填已有 Job；确定性命名 Job 按派发代次 annotation 和基于 BuildInfo UID 重算的名称核验，DispatchCount 至少恢复到已确认的最大派发代次，不因旧代 Job 被清理而回退。未找到本次目标代时再次计算同名 Job，保证同一创建身份不会生成第二个名称。缺少派发代次 annotation 的 Job 不参与身份匹配，也不作为同名创建冲突的可沿用对象。
