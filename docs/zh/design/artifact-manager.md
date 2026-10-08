@@ -943,8 +943,8 @@ GET /repositories/v1/{repositoryUID}/{path...}
 2. 校验基础仓存在且为 `Ready`，并且 Project、目标 OS 和架构与请求一致。
 3. 按 Job 名称逐个读取唯一的 Job 上传清单，要求状态为 `Completed`，并在 Artifact Manager 内部重新计算清单摘要以验证本地元数据完整性。
 4. 每个输入 Job 至少包含一个 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；流式计算 SHA-256 并与清单再次比对。缺少 RPM、清单损坏或输入产物过期时在失败记录中标明该 Job 名称。
-5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 使用 Source RPM 推导，source RPM 使用自身名称推导；无法确定归属时记录出错的 Job 名称并使本次请求失败。
-6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。
+5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 从 `SOURCERPM` 文件名末尾的版本、发行号分隔符推导源包名，不要求它与子包版本一致；source RPM 使用自身名称推导，并按 `src` 架构建立仓库身份，即使 RPM 头中报告了构建目标架构。无法确定归属时记录出错的 Job 名称并使本次请求失败。
+6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。源码包与同名同版本的二进制包不视为同一 NEVRA。
 7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
 8. 基础仓存在时，将其 `Packages` 中的 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用。基础仓和工作目录必须位于同一文件系统；首版硬链接失败不静默退化为完整复制。
 9. 从工作目录删除所有属于本次输入 spec 集合的旧 RPM，再将输入 Artifact 正文硬链接进去。Artifact 正文和仓库工作目录也必须位于同一文件系统。
