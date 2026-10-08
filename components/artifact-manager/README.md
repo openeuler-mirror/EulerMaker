@@ -8,7 +8,7 @@ Artifact Manager 接收 Runner 上传的构建产物和实时容器日志，并�
 
 ```bash
 go test ./...
-CGO_ENABLED=0 go build -o artifact-manager ./cmd/server
+CGO_ENABLED=0 go build -o artifact-manager ./cmd
 ```
 
 构建容器镜像：
@@ -22,7 +22,7 @@ docker build -t eulermaker/artifact-manager:dev .
 先启动 Gateway，然后执行：
 
 ```bash
-go run ./cmd/server \
+go run ./cmd \
   --listen=:8081 \
   --data-dir=/var/lib/ebs-artifacts \
   --gateway-url=http://localhost:8080
@@ -49,7 +49,7 @@ curl http://localhost:8081/readyz
 完整参数请执行：
 
 ```bash
-go run ./cmd/server --help
+go run ./cmd --help
 ```
 
 ## Docker Compose

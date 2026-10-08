@@ -17,44 +17,6 @@ import (
 	"time"
 )
 
-type jobHandler func(*Server, http.ResponseWriter, *http.Request, string, string)
-
-var jobRoutes = map[string]map[string]jobHandler{
-	"artifacts":         {http.MethodGet: (*Server).list, http.MethodPost: (*Server).upload},
-	"manifest":          {http.MethodGet: (*Server).getManifest},
-	"manifest/complete": {http.MethodPost: (*Server).completeManifest},
-	"logs/chunks":       {http.MethodPost: (*Server).appendLog},
-	"logs/status":       {http.MethodGet: (*Server).logStatus},
-	"logs/content":      {http.MethodGet: (*Server).logContent},
-	"logs/stream":       {http.MethodGet: (*Server).logSSE},
-	"logs/complete":     {http.MethodPost: (*Server).completeLog},
-}
-
-func (s *Server) routeArtifactAPI(w http.ResponseWriter, r *http.Request, p []string) {
-	if len(p) == 3 && p[0] == "artifacts" && p[1] != "" && p[2] == "content" && r.Method == http.MethodGet {
-		s.download(w, r, p[1])
-		return
-	}
-	if len(p) < 4 || p[0] != "projects" || p[2] != "jobs" {
-		writeErr(w, r, 404, "NotFound", "not found", false, nil)
-		return
-	}
-	project, job := p[1], p[3]
-	if !validIdentifier(project) || !validIdentifier(job) {
-		writeErr(w, r, 400, "InvalidRequest", "invalid project or job name", false, nil)
-		return
-	}
-	if handler := jobRoutes[strings.Join(p[4:], "/")][r.Method]; handler != nil {
-		handler(s, w, r, project, job)
-		return
-	}
-	if len(p) == 5 && p[4] == "artifacts" {
-		method(w, "GET, POST")
-		return
-	}
-	writeErr(w, r, 404, "NotFound", "not found", false, nil)
-}
-
 func method(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	http.Error(w, "method not allowed", 405)

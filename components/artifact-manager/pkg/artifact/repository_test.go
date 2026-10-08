@@ -214,6 +214,13 @@ func TestRepositoryContent(t *testing.T) {
 	if response.Code != http.StatusOK || response.Body.String() != "metadata" || response.Header().Get("ETag") == "" {
 		t.Fatalf("content response = %d %q, etag=%q", response.Code, response.Body.String(), response.Header().Get("ETag"))
 	}
+	rangeRequest := httptest.NewRequest(http.MethodGet, record.ContentURL+"repodata/repomd.xml", nil)
+	rangeRequest.Header.Set("Range", "bytes=0-3")
+	rangeResponse := httptest.NewRecorder()
+	server.ServeHTTP(rangeResponse, rangeRequest)
+	if rangeResponse.Code != http.StatusPartialContent || rangeResponse.Body.String() != "meta" {
+		t.Fatalf("range response = %d %q", rangeResponse.Code, rangeResponse.Body.String())
+	}
 }
 
 func TestRepositoryRejectsUnsafeTargetOS(t *testing.T) {
