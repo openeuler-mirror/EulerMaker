@@ -57,7 +57,7 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 		return CompletedManifest{}, err
 	}
 
-	logStatus, err := p.Remote.LogStatus(ctx, job.Metadata.Namespace, job.Metadata.Name)
+	logStatus, err := p.logStatusWithRetry(ctx, job)
 	if err != nil {
 		return CompletedManifest{}, fmt.Errorf("get completed log: %w", err)
 	}
@@ -95,6 +95,23 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 		return CompletedManifest{}, fmt.Errorf("artifact manifest completion response does not match request")
 	}
 	return manifest, nil
+}
+
+func (p *ArtifactProcessor) logStatusWithRetry(ctx context.Context, job JobResource) (LogStatus, error) {
+	delay := time.Second
+	for {
+		status, err := p.Remote.LogStatus(ctx, job.Metadata.Namespace, job.Metadata.Name)
+		if err == nil {
+			return status, nil
+		}
+		if !retryableArtifactError(err) {
+			return LogStatus{}, err
+		}
+		if waitErr := waitForRetry(ctx, retryDelay(err, delay)); waitErr != nil {
+			return LogStatus{}, errors.Join(err, waitErr)
+		}
+		delay = nextBackoff(delay, p.retryMaxBackoff())
+	}
 }
 
 func (p *ArtifactProcessor) scan(root string) ([]artifactCandidate, error) {
