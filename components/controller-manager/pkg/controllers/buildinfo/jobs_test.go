@@ -264,8 +264,15 @@ func TestJobForSpecConstruction(t *testing.T) {
 	if job.Spec.NodeSelector[runnerArchSelector] != testArch {
 		t.Errorf("nodeSelector = %v, want runner arch %q", job.Spec.NodeSelector, testArch)
 	}
-	if !strings.Contains(string(job.Spec.RuntimeSpec.Raw), testImage) {
-		t.Errorf("runtimeSpec = %s, want image %q", job.Spec.RuntimeSpec.Raw, testImage)
+	var runtimeSpec struct {
+		Image       string `json:"image"`
+		NetworkMode string `json:"networkMode"`
+	}
+	if err := json.Unmarshal(job.Spec.RuntimeSpec.Raw, &runtimeSpec); err != nil {
+		t.Fatalf("decode runtimeSpec: %v", err)
+	}
+	if runtimeSpec.Image != testImage || runtimeSpec.NetworkMode != "host" {
+		t.Errorf("runtimeSpec = %+v, want image %q and host network", runtimeSpec, testImage)
 	}
 	if job.Spec.Resources.Requests["cpu"] != "1" {
 		t.Errorf("resources = %+v, want the project default", job.Spec.Resources)

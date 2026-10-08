@@ -14,7 +14,7 @@ BuildInfo Controller 从空对象组装 Job payload，只下发已识别的配�
 
 `BuildInfo.spec.buildPayload.use_git_lfs` 也是包仓库名列表。命中时 Job 携带 `use_git_lfs: true` 与 `package_name`；默认脚本从固定地址 `https://atomgit.com/src-openeuler/${package_name}.git` 克隆，检出 Snapshot 的 `commit_id` 后执行 `git lfs pull`。非命中 Job 使用 `spec_url` 普通克隆。启用该选项的构建镜像必须预装 Git LFS；固定地址不存在或不包含目标 commit 时构建失败，不自动回退到 `spec_url`。
 
-`BuildInfo.spec.buildPayload.use_root` 也是包仓库名列表。命中时 Job 携带 `use_root: true`，默认脚本直接以 root 运行 `rpmbuild -ba`；未命中时，在安装构建依赖和准备源码后，将 `/workspace/rpmbuild` 交给 `eulermaker` 用户，并以该用户运行 `rpmbuild -ba`。其他准备、产物拷贝和安装检查步骤仍以 root 运行；Maven 配置目录暂不随此标记切换。构建镜像需提供 `useradd` 和 `runuser`。
+`BuildInfo.spec.buildPayload.use_root` 也是包仓库名列表。命中时 Job 携带 `use_root: true`，默认脚本直接以 root 运行 `rpmbuild -ba`；未命中时，在安装构建依赖和准备源码后，将 `/workspace/rpmbuild` 交给 `eulermaker` 用户，并以该用户运行 `rpmbuild -ba`。执行 `rpmbuild` 前，脚本为实际构建用户写入 Maven `settings.xml`：root 使用 `/root/.m2`，普通构建使用 `/home/eulermaker/.m2`；默认将全部 Maven 仓库请求转向华为云镜像，本地仓库位于对应的 `.m2/repository`，目录归构建用户所有。其他准备、产物拷贝和安装检查步骤仍以 root 运行。构建镜像需提供 `useradd` 和 `runuser`。
 
 `BuildInfo.spec.buildPayload.use_xz` 也是包仓库名列表。命中时 Job 携带 `use_xz: true`；默认脚本在执行 `rpmbuild` 前，将 `SOURCES` 下每个非隐藏目录另打包为同名 `.tar.xz`，未命中时打包为 `.tar.gz`，原目录不删除。构建镜像需提供 `tar`，使用 `use_xz` 时还需提供 `xz`。
 

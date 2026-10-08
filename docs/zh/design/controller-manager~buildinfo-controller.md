@@ -1163,6 +1163,7 @@ spec:
   runtime: ct                                       # controller 常量；apiserver 同值兜底
   runtimeSpec:
     image: ${resolvedBuildImage}                      # controller：从 Config/build-target.spec.content 按 OS/Arch 解析；失败按 E-26 暂停派发
+    networkMode: host                                 # controller：构建容器使用宿主机网络
   timeoutSeconds: 10800                             # controller 常量（3 小时）；apiserver 同值兜底
   resources:                                        # controller：查集群级 Config/build-resource 解析（逐层覆盖见 15.3.1 契约表）
     requests:
@@ -1194,7 +1195,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.annotations["ebs.io/dispatch-generation"]` | 十进制派发代次 | 与基于 BuildInfo UID 计算的 Job 名共同核验创建身份；资源配置来源不写入 Job annotation，调度以 `spec.resources` 为准 |
 | `spec.priority` | `0` | 类型零值即默认，不显式设置                                                                                                                 |
 | `spec.runtime` | `"ct"` | 常量；apiserver `SetDefaults_Job` 同值兜底（见下"apiserver 默认与覆写"）                                                                      |
-| `spec.runtimeSpec` | `{"image": Config/build-target 快照解析结果}` | RawExtension；ct 运行时的镜像来源：集群级 Config/build-target（name=build-target，`GET /apis/ebs/v1/configs/build-target`）——每轮创建新 Job 的 reconcile 经 `GetConfig` 读取一次快照、同轮批量创建共享，按 `Build.spec.buildTarget.os/arch` 解析 `content.targets[os].arches[arch].image`（复用共享 `BuildImage`）；读取失败或映射缺失 → 本轮不创建新 Job，返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 Failed，E-26）；已存在 Job 沿用固化镜像、不因配置更新重写（生效边界见 [Config 设计](data-models~config.md) 2.5.3） |
+| `spec.runtimeSpec` | `{"image": Config/build-target 快照解析结果, "networkMode":"host"}` | RawExtension；ct 运行时的镜像来源：集群级 Config/build-target（name=build-target，`GET /apis/ebs/v1/configs/build-target`）——每轮创建新 Job 的 reconcile 经 `GetConfig` 读取一次快照、同轮批量创建共享，按 `Build.spec.buildTarget.os/arch` 解析 `content.targets[os].arches[arch].image`（复用共享 `BuildImage`）；读取失败或映射缺失 → 本轮不创建新 Job，返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 Failed，E-26）；已存在 Job 沿用固化镜像、不因配置更新重写（生效边界见 [Config 设计](data-models~config.md) 2.5.3）。`networkMode=host` 由 Runner 转换为 Docker `--network host`，避免构建容器占用默认 bridge 地址。 |
 | `spec.scriptRefs` | 创建时 Script 的 name、UID、resourceVersion，当前写入一个元素 | 从 `buildPayload.rpmbuild_script` 选名，未配置时使用 `rpmbuild`；GET Script 后写入观测值，不下发 `rpmbuild_script` 到 Job payload。读取失败不创建 Job；观测值不锁定 Runner 执行时的正文 |
 | `spec.timeoutSeconds` | `10800` | 常量（3 小时）；apiserver `SetDefaults_Job` 同值兜底                                                                                     |
 | `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET `Config/build-resource` 并解析 `spec.content`；404 时按 E-27 将当前 spec 标 Failed；其他查询失败或内容无效时暂停本轮新 Job 派发。内容按 `default` → `packages[specName].default` → `packages[specName].arches[arch]` 逐字段覆盖（[构建配置设计](data-models~config.md#32-匹配与校验)） |

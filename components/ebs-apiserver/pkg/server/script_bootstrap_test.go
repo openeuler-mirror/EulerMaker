@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"os/exec"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -64,5 +66,29 @@ func TestBootstrapScript(t *testing.T) {
 	}
 	if err := ensureScript(context.Background(), &bootstrapScriptStorage{}, []byte("kind: Script\nmetadata:\n  name: rpmbuild\nspec:\n  content: hi\n  interpreter: /bin/sh\n")); err == nil {
 		t.Fatal("unknown field accepted")
+	}
+}
+
+func TestDefaultRpmbuildScriptConfiguresMaven(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script := storage.object.Spec.Content
+	for _, expected := range []string{
+		"configure_maven root",
+		"configure_maven \"$build_user\"",
+		"maven_dir=/root/.m2",
+		"<mirrorOf>*</mirrorOf>",
+		"https://repo.huaweicloud.com/repository/maven/",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("default rpmbuild script does not contain %q", expected)
+		}
+	}
+	cmd := exec.Command("bash", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("default rpmbuild script has invalid bash syntax: %v\n%s", err, output)
 	}
 }

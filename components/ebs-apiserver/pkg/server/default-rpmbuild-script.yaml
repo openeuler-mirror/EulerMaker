@@ -125,11 +125,11 @@ spec:
         [[ "$package_name" =~ ^[[:alnum:]][[:alnum:]_.+-]*$ ]] || { echo "invalid payload.package_name for Git LFS" >&2; exit 1; }
         git lfs version >/dev/null || { echo "git-lfs is required for payload.use_git_lfs" >&2; exit 1; }
         lfs_url="https://atomgit.com/src-openeuler/${package_name}.git"
-        GIT_LFS_SKIP_SMUDGE=1 git clone -- "$lfs_url" "$source_dir"
+        GIT_LFS_SKIP_SMUDGE=1 git clone --no-checkout -- "$lfs_url" "$source_dir"
         GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "$commit_id"
         git -C "$source_dir" lfs pull
       else
-        git clone -- "$spec_url" "$source_dir"
+        git clone --no-checkout -- "$spec_url" "$source_dir"
         git -C "$source_dir" checkout --detach "$commit_id"
       fi
       test -f "$source_dir/$spec_file" || { echo "spec not found: $spec_file" >&2; exit 1; }
@@ -195,9 +195,36 @@ spec:
       done
     }
 
+    configure_maven() {
+      local build_user=$1 maven_dir
+      if [[ "$build_user" == root ]]; then
+        maven_dir=/root/.m2
+      else
+        maven_dir="/home/$build_user/.m2"
+      fi
+      mkdir -p "$maven_dir/repository"
+      cat > "$maven_dir/settings.xml" <<XML
+    <settings>
+      <localRepository>${maven_dir}/repository</localRepository>
+      <mirrors>
+        <mirror>
+          <id>huaweicloud</id>
+          <name>huaweicloud</name>
+          <mirrorOf>*</mirrorOf>
+          <url>https://repo.huaweicloud.com/repository/maven/</url>
+        </mirror>
+      </mirrors>
+    </settings>
+    XML
+      if [[ "$build_user" != root ]]; then
+        chown -R "$build_user" "$maven_dir"
+      fi
+    }
+
     build_rpm() {
       local build_user
       if [[ "$use_root" == true ]]; then
+        configure_maven root
         rpmbuild --define "_topdir $topdir" -ba "$spec"
       else
         build_user=eulermaker
@@ -207,6 +234,7 @@ spec:
         fi
         command -v runuser >/dev/null || { echo "runuser is required for non-root rpmbuild" >&2; exit 1; }
         chown -R "$build_user" "$topdir"
+        configure_maven "$build_user"
         runuser -u "$build_user" -- rpmbuild --define "_topdir $topdir" -ba "$spec"
       fi
     }
