@@ -99,7 +99,7 @@
         <p v-if="pendingJobsLoading" class="config-empty">{{ t("project.loadingPendingJobs") }}</p>
         <p v-if="!nonTerminalJobs.length && !pendingJobsLoading" class="config-empty">{{ t("project.noRunningJobs") }}</p>
         <template v-if="nonTerminalJobs.length">
-          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td></tr></tbody></table></div>
+          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchSpecs')" :no-results-label="t('project.noMatchingSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/spec-name"] || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td></tr></tbody></table></div>
           <p v-if="!filteredRunningJobs.length" class="config-empty">{{ t("project.noMatchingRunningJobs") }}</p>
           <div v-if="runningJobsTotalPages > 1" class="table-footer"><nav class="pagination-row" :aria-label="t('common.pagination')"><button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="runningJobsPage === 1" @click="runningJobsPage -= 1"><ArrowLeft /></button><span class="page-button active" aria-current="page">{{ runningJobsPage }} / {{ runningJobsTotalPages }}</span><button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="runningJobsPage === runningJobsTotalPages" @click="runningJobsPage += 1"><ArrowRight /></button></nav></div>
         </template>
@@ -402,8 +402,12 @@ const nonTerminalJobs = ref<Job[]>([]);
 const showRunningJobs = ref(false);
 const pendingJobsLoading = ref(false);
 const selectedRunningBuilds = ref<string[]>([]);
+const selectedRunningSpecs = ref<string[]>([]);
 const selectedRunningPhases = ref<string[]>([]);
 const runningBuildOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/build-name"] || ""))]
+  .sort((left, right) => left.localeCompare(right))
+  .map((value) => ({ value, label: value || t("common.emptyValue") })));
+const runningSpecOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/spec-name"] || ""))]
   .sort((left, right) => left.localeCompare(right))
   .map((value) => ({ value, label: value || t("common.emptyValue") })));
 const runningPhaseOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.status?.phase || ""))]
@@ -414,6 +418,7 @@ const runningPhaseOptions = computed(() => [...new Set(nonTerminalJobs.value.map
   }));
 const filteredRunningJobs = computed(() => nonTerminalJobs.value.filter((job) =>
   (!selectedRunningBuilds.value.length || selectedRunningBuilds.value.includes(job.metadata?.labels?.["ebs.io/build-name"] || "")) &&
+  (!selectedRunningSpecs.value.length || selectedRunningSpecs.value.includes(job.metadata?.labels?.["ebs.io/spec-name"] || "")) &&
   (!selectedRunningPhases.value.length || selectedRunningPhases.value.includes(job.status?.phase || "")),
 ));
 const runningJobsPage = ref(1);
@@ -630,7 +635,7 @@ watch(packageSearch, () => {
   packageCurrentPage.value = 1;
 });
 
-watch([selectedRunningBuilds, selectedRunningPhases], () => {
+watch([selectedRunningBuilds, selectedRunningSpecs, selectedRunningPhases], () => {
   runningJobsPage.value = 1;
 });
 

@@ -372,6 +372,11 @@ body.modal-open { overflow: hidden; }
 .spec-status-filter-trigger:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
 .spec-status-filter-count { min-width: 18px; padding: 0 4px; border-radius: 9px; color: #176fd4; background: #eaf4ff; font-size: 11px; line-height: 18px; text-align: center; }
 .spec-status-filter-menu { position: fixed; z-index: 120; width: 210px; max-height: 240px; padding: 6px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 12px 28px rgb(25 54 96 / 14%); }
+.column-filter-search { position: sticky; top: -6px; z-index: 1; margin: -1px -1px 5px; padding: 5px; display: flex; align-items: center; gap: 7px; border-bottom: 1px solid #edf1f6; background: var(--surface); }
+.column-filter-search svg { width: 15px; height: 15px; flex: none; color: #7d899a; }
+.column-filter-search input { width: 100%; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid #d8e0eb; border-radius: 5px; color: var(--ink); background: #fff; font: inherit; font-size: 13px; }
+.column-filter-search input:focus { outline: 0; border-color: #68aaf4; box-shadow: 0 0 0 2px rgb(20 120 242 / 10%); }
+.column-filter-empty { margin: 8px 6px; color: var(--muted); font-size: 13px; text-align: center; }
 .spec-status-filter-option { position: relative; min-height: 36px; display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 5px; color: #455269; font-size: 14px; white-space: nowrap; cursor: pointer; }
 .spec-status-filter-option:hover { color: var(--blue); background: #edf6ff; }
 .spec-status-filter-option.selected { color: var(--blue); background: #f4f9ff; font-weight: 650; }

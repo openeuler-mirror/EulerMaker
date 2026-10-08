@@ -241,6 +241,7 @@ export default {
     noRunningJobs: "No jobs are pending or running",
     noMatchingRunningJobs: "No jobs match the selected filters",
     allRunningBuilds: "All builds",
+    allRunningSpecs: "All Specs",
     allRunningJobPhases: "All statuses",
     configEyebrow: "Configuration",
     config: "Project configuration",
