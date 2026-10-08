@@ -929,7 +929,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 优雅停机按以下顺序执行：停止接受新的 POST 和 DELETE，`/readyz` 立即失败；GET 状态和已打开的内容下载可继续；停止从队列取新任务；在 `--shutdown-timeout` 内等待运行任务完成。期限结束后取消命令，将对应记录持久化为 `Failed`，错误码为 `MaterializationInterrupted` 且 `retryable=true`。尚未启动的 Creating 记录保持不变，由下次启动重新入队。
 
-进程崩溃可能留下 Creating 记录。启动恢复若发现完整且校验通过的最终目录则补写 Ready；否则隔离残留工作目录，将记录改为 `Failed / MaterializationInterrupted / retryable=true`。恢复完成前不接受创建或删除请求，`/readyz` 保持失败。
+进程崩溃可能留下 Creating 记录。启动恢复若发现完整且校验通过的最终目录则补写 Ready；否则保持 Creating 并重新入队，过期工作目录按恢复宽限期清理。恢复完成前不接受创建或删除请求，`/readyz` 保持失败。
 
 ### 9.7 物化算法
 
@@ -977,13 +977,9 @@ GET /repositories/v1/{repositoryUID}/{path...}
 | 状态查询暂时失败 | RpmRepo Controller 指数退避，不重复提交不同请求 |
 | API 状态更新失败 | 仓库保持 Ready，RpmRepo Controller 继续重试 API 更新 |
 
-服务启动时先扫描 `.metadata/repositories` 和最终仓库目录：
+服务启动时扫描 `.metadata/repositories` 的 UID 和状态，只把 `Creating`、`Deleting` 记录载入内存以恢复任务；旧格式中重复保存的 RPM 明细在扫描时压缩移除。Ready 和 Failed 记录不常驻内存，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
 
-- 元数据为 Ready 且最终目录和 `repository.json` 摘要一致时恢复为 Ready；
-- Ready 元数据缺少最终目录或校验失败时标记 Failed，并阻止内容下载；
-- 最终目录存在但元数据仍为 Creating 时，校验 `repository.json` 和请求摘要；一致则补写 Ready，否则隔离并标记 Failed；
-- `.repository-work` 中超过恢复宽限期的目录在确认不对应活动 Worker 后安全清理；
-- 孤立最终目录不自动对外提供，记录指标并等待管理员处理。
+对于 Creating 记录，若最终目录中的 `repository.json`、请求摘要及目录摘要均校验通过，则补写 Ready；否则保持 Creating 并重新入队。Deleting 记录继续删除。`.repository-work` 中超过恢复宽限期的目录按过期时间清理。Ready 仓不在启动时逐个重算目录摘要，发布任务需要 RPM 明细时才读取其 `repository.json`。
 
 恢复扫描完成前 `/readyz` 返回失败。
 

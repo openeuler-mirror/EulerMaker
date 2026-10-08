@@ -69,9 +69,9 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 	t.Cleanup(func() { server.repositories.stop(); server.releases.stop() })
 	now := time.Now().UTC()
 	source := &RepositoryRecord{RepositoryUID: "source-repository", RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", State: RepositoryReady, CreatedAt: now, UpdatedAt: now}
-	server.repositories.mu.Lock()
-	server.repositories.records[source.RepositoryUID] = source
-	server.repositories.mu.Unlock()
+	if err := server.repositories.persist(source); err != nil {
+		t.Fatal(err)
+	}
 	writeTestRepositoryIndex(t, server.repositories, source)
 	request := CreateReleaseRequest{BuildName: source.BuildName, Project: source.Project, TargetOS: source.TargetOS, TargetArch: source.TargetArch, SourceRepositoryUID: source.RepositoryUID, ExcludeSpecs: []string{"skip", "skip"}}
 	return server, request, releaseMaterializer
@@ -146,14 +146,14 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 	second.TargetOS = "openEuler-mainline"
 	second.SourceRepositoryUID = "source-repository-2"
 	now := time.Now().UTC()
-	server.repositories.mu.Lock()
 	secondSource := &RepositoryRecord{
 		RepositoryUID: second.SourceRepositoryUID, RepositoryName: second.BuildName,
 		Project: second.Project, BuildName: second.BuildName, TargetOS: second.TargetOS,
 		TargetArch: second.TargetArch, State: RepositoryReady, CreatedAt: now, UpdatedAt: now,
 	}
-	server.repositories.records[second.SourceRepositoryUID] = secondSource
-	server.repositories.mu.Unlock()
+	if err := server.repositories.persist(secondSource); err != nil {
+		t.Fatal(err)
+	}
 	writeTestRepositoryIndex(t, server.repositories, secondSource)
 
 	for _, request := range []CreateReleaseRequest{first, second} {
@@ -197,11 +197,15 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	server, request, materializer := newReleaseTestServer(t)
 	request.Project, request.TargetOS = "releases", "v1"
-	server.repositories.mu.Lock()
-	server.repositories.records[request.SourceRepositoryUID].Project = request.Project
-	server.repositories.records[request.SourceRepositoryUID].TargetOS = request.TargetOS
-	source := cloneRepository(server.repositories.records[request.SourceRepositoryUID])
-	server.repositories.mu.Unlock()
+	source, ok, err := server.repositories.get(request.SourceRepositoryUID)
+	if err != nil || !ok {
+		t.Fatalf("load source: %v", err)
+	}
+	source.Project = request.Project
+	source.TargetOS = request.TargetOS
+	if err := server.repositories.persist(source); err != nil {
+		t.Fatal(err)
+	}
 	writeTestRepositoryIndex(t, server.repositories, source)
 	close(materializer.release)
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {

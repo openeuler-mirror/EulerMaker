@@ -15,6 +15,7 @@ import (
 type testRepositoryMaterializer struct {
 	started chan struct{}
 	release chan struct{}
+	root    string
 }
 
 func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record RepositoryRecord) (repositoryResult, error) {
@@ -27,6 +28,16 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record Rep
 		return repositoryResult{}, ctx.Err()
 	case <-m.release:
 	}
+	if m.root != "" {
+		path := repositoryVersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
+		if err := os.MkdirAll(path, 0750); err != nil {
+			return repositoryResult{}, err
+		}
+		index := repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}
+		if err := atomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+			return repositoryResult{}, err
+		}
+	}
 	return repositoryResult{Digest: "digest"}, nil
 }
 
@@ -34,6 +45,9 @@ func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) 
 	t.Helper()
 	c := DefaultConfig()
 	c.DataDir = t.TempDir()
+	if fake, ok := materializer.(*testRepositoryMaterializer); ok {
+		fake.root = c.DataDir
+	}
 	c.RepositoryWorkers = 1
 	c.RepositoryQueueCapacity = 2
 	store, err := NewStore(c.DataDir)
@@ -77,6 +91,10 @@ func TestRepositoryManagerLoadsLegacyMetadataWithoutRPMs(t *testing.T) {
 	}
 	legacy := &RepositoryRecord{
 		RepositoryUID: "repository-1",
+		Project:       "project",
+		BuildName:     "build",
+		TargetOS:      "openEuler",
+		TargetArch:    "x86_64",
 		State:         RepositoryReady,
 		RPMs: map[string]RepositoryRPMMeta{
 			"test.rpm": {FileName: "test.rpm"},
@@ -85,10 +103,23 @@ func TestRepositoryManagerLoadsLegacyMetadataWithoutRPMs(t *testing.T) {
 	if err := atomicJSON(m.metaPath(legacy.RepositoryUID), legacy); err != nil {
 		t.Fatal(err)
 	}
+	path := m.repositoryPath(legacy)
+	if err := os.MkdirAll(path, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicJSON(filepath.Join(path, "repository.json"), repositoryIndex{RepositoryUID: legacy.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.load(); err != nil {
 		t.Fatal(err)
 	}
-	record, ok := m.get(legacy.RepositoryUID)
+	if len(m.records) != 0 {
+		t.Fatalf("Ready records retained after startup: %d", len(m.records))
+	}
+	record, ok, err := m.get(legacy.RepositoryUID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok || record.State != RepositoryReady || record.RPMs != nil {
 		t.Fatalf("loaded record = %+v", record)
 	}
@@ -102,6 +133,52 @@ func TestRepositoryManagerLoadsLegacyMetadataWithoutRPMs(t *testing.T) {
 	}
 	if _, ok := stored["rpms"]; ok {
 		t.Fatal("repository metadata still contains RPM index")
+	}
+}
+
+func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
+	root := t.TempDir()
+	m := &repositoryManager{root: root, records: map[string]*RepositoryRecord{}}
+	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []RepositoryState{RepositoryCreating, RepositoryDeleting, RepositoryReady, RepositoryFailed} {
+		record := &RepositoryRecord{RepositoryUID: string(state), State: state, Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch"}
+		if err := m.persist(record); err != nil {
+			t.Fatal(err)
+		}
+		if state == RepositoryReady {
+			path := m.repositoryPath(record)
+			if err := os.MkdirAll(path, 0750); err != nil {
+				t.Fatal(err)
+			}
+			if err := atomicJSON(filepath.Join(path, "repository.json"), repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := m.load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.records) != 2 || m.records[string(RepositoryCreating)] == nil || m.records[string(RepositoryDeleting)] == nil {
+		t.Fatalf("cached states = %+v", m.records)
+	}
+	for _, state := range []RepositoryState{RepositoryReady, RepositoryFailed} {
+		record, ok, err := m.get(string(state))
+		if err != nil || !ok || record.State != state {
+			t.Fatalf("get %s = %+v, %v", state, record, err)
+		}
+	}
+	if len(m.records) != 2 {
+		t.Fatalf("on-demand reads were cached: %+v", m.records)
+	}
+	ready := &RepositoryRecord{RepositoryUID: string(RepositoryReady), Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch"}
+	if err := os.Remove(filepath.Join(m.repositoryPath(ready), "repository.json")); err != nil {
+		t.Fatal(err)
+	}
+	record, ok, err := m.get(ready.RepositoryUID)
+	if err != nil || !ok || record.State != RepositoryFailed || record.Failure == nil || record.Failure.Code != "RepositoryContentMissing" {
+		t.Fatalf("missing Ready content = %+v, %v", record, err)
 	}
 }
 
@@ -134,6 +211,12 @@ func TestRepositoryMaterializationLifecycle(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	server.repositories.mu.RLock()
+	_, retained := server.repositories.records[request.RepositoryUID]
+	server.repositories.mu.RUnlock()
+	if retained {
+		t.Fatal("Ready repository remained in memory")
+	}
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/repositories", request); response.Code != http.StatusOK {
 		t.Fatalf("ready replay status = %d", response.Code)
 	}
@@ -144,6 +227,17 @@ func TestRepositoryMaterializationLifecycle(t *testing.T) {
 	}
 	if response := repositoryRequest(t, server, http.MethodDelete, "/internal/v1/repositories/"+request.RepositoryUID, nil); response.Code != http.StatusAccepted {
 		t.Fatalf("delete status = %d", response.Code)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/repositories/"+request.RepositoryUID, nil)
+		if response.Code == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("repository was not removed: %d %s", response.Code, response.Body.String())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

@@ -87,7 +87,10 @@ func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, e
 	if err != nil {
 		return nil, 0, err
 	}
-	source, ok := m.repositories.get(in.SourceRepositoryUID)
+	source, ok, sourceErr := m.repositories.get(in.SourceRepositoryUID)
+	if sourceErr != nil {
+		return nil, 0, releaseStorageError()
+	}
 	if !ok || source.State != RepositoryReady || source.Project != in.Project || source.BuildName != in.BuildName || source.TargetOS != in.TargetOS || source.TargetArch != in.TargetArch {
 		return nil, 0, &releaseError{code: "SourceRepositoryNotReady", status: http.StatusUnprocessableEntity}
 	}
@@ -153,7 +156,11 @@ func (m *releaseManager) worker() {
 			if record == nil || record.State != ReleaseCreating {
 				continue
 			}
-			source, ok := m.repositories.get(record.SourceRepositoryUID)
+			source, ok, sourceErr := m.repositories.get(record.SourceRepositoryUID)
+			if sourceErr != nil {
+				m.finish(record, releaseResult{}, releaseStorageError())
+				continue
+			}
 			if !ok || source.State != RepositoryReady {
 				m.finish(record, releaseResult{}, &releaseError{code: "SourceRepositoryNotReady", status: 422})
 				continue

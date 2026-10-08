@@ -35,7 +35,11 @@ func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Reques
 	}
 	switch r.Method {
 	case http.MethodGet:
-		record, ok := s.repositories.get(uid)
+		record, ok, err := s.repositories.get(uid)
+		if err != nil {
+			s.writeRepositoryError(w, r, &repositoryError{code: "RepositoryStorageUnavailable", status: http.StatusServiceUnavailable, retryable: true})
+			return
+		}
 		if !ok {
 			writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 			return
@@ -85,7 +89,11 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
 	}
-	record, ok := s.repositories.get(parts[0])
+	record, ok, err := s.repositories.get(parts[0])
+	if err != nil {
+		s.writeRepositoryError(w, r, &repositoryError{code: "RepositoryStorageUnavailable", status: http.StatusServiceUnavailable, retryable: true})
+		return
+	}
 	if !ok {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
