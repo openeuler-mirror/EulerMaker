@@ -1469,10 +1469,10 @@ for rpmName, meta := range source.RpmByName {
 
 **建边反查选择链**：对 spec S 的每条 buildRequire `(name, versionConst)`，在 RpmMetaSources 分层缓存中**逐层执行同一选择链**（先 RpmRepo 层、后 BootstrapRepo 层按声明顺序，任一层命中即以该层结果为准——层间短路，与构建环境 repo 优先级对齐，15.10）：在当前层的 providesInfo 中查 `name` 的候选集，按以下顺序裁决提供方：
 
-1. **版本约束过滤**：`versionConstToRequests` 把 `VersionConst` 小写字段（gt/ge/eq/le/lt）转为大写操作符集合（跳过空值字段），`isResolvable` 逐操作符 AND 校验候选 version（空约束集合全部通过）；0 候选 → 未命中。
+1. **版本约束过滤**：有版本的 `Provides` 按 `VersionConst` 中非空的 gt/ge/eq/le/lt 约束逐项比较；无版本的 `Provides` 仅按能力名匹配，不比较提供方 RPM 包版本；0 候选 → 未命中。
 2. **单候选**：1 候选 → 直选。
 3. **prefer 命中**：多候选时按 BuildInfo `spec.buildPayload` 的 `prefer` 列表**顺序**匹配——候选 key 先按 `@` 前 base 名归一化（无 `@` 的 key base 名即自身），首个命中 prefer 项的候选即中选；无命中进入下一步。
-4. **最高版本**：迭代候选，`vrCompare(当前最高, "LT", 候选)` 为真则替换最高；**任一候选 `version` 为空串（S3 脏数据，Go string 零值短路）→ 该 provide 整体判未命中**（不可用，等下一轮——脏数据为查询级判定，不计入 E-29 就绪性失败计数），不再依赖上层异常兜底。
+4. **最高版本**：迭代候选，`vrCompare(当前最高, "LT", 候选)` 为真则替换最高；有版本的 `Provides` 使用能力版本排序，无版本的 `Provides` 使用提供方 RPM 包版本排序。若排序所需版本仍为空串（S3 脏数据），该 provide 整体判未命中；此查询级判定不计入 E-29 就绪性失败计数。
 
 同一选择链还用于 15.3.1 的逐 Job `prefer` 计算：返回提供方时同时标明选择是否由第 3 步触发，并返回命中的 RPM 基名；不得把第 2、4 步的结果当作 `prefer` 命中。Job 创建使用当前仓库元数据重新裁决，初始 DCG 仍按 G-02 冻结，不因当前物化版本更新而重建。
 
