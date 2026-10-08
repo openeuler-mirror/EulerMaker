@@ -295,3 +295,39 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 		t.Fatalf("uncommitted tail was not truncated: %q", content)
 	}
 }
+
+func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	artifact, record, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporary := filepath.Join(root, ".uploads", artifact.ID+".tmp")
+	if err := os.WriteFile(temporary, []byte("abc"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteUpload(artifact, record, temporary); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.artifactPath(artifact), []byte("bad"), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok := store.GetArtifact(artifact.ID)
+	if !ok || loaded.State != Completed {
+		t.Fatalf("completed upload changed during startup: %+v", loaded)
+	}
+	_, _, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	if err != nil || replay {
+		t.Fatalf("corrupted completed upload replayed: replay=%t, error=%v", replay, err)
+	}
+}
