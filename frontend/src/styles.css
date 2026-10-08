@@ -305,7 +305,9 @@ body.modal-open { overflow: hidden; }
 .project-hero-meta > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .project-hero-meta dt { color: var(--muted); font-size: 13px; }
 .project-hero-meta dd { margin: 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
-.project-repo-download-link { flex: none; align-self: flex-end; margin-left: auto; color: var(--blue); font-size: 14px; white-space: nowrap; cursor: not-allowed; }
+.project-repo-download-link { flex: none; align-self: flex-end; margin-left: auto; color: var(--blue); font-size: 14px; white-space: nowrap; }
+.project-repo-download-link:hover, .project-repo-download-link:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.project-repo-download-link:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; }
 .project-build-actions { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 10px; }
 .project-tabs { margin-top: 24px; display: flex; gap: 30px; border-bottom: 1px solid var(--line); }
 .content-panel > .project-tabs { margin-top: 0; }

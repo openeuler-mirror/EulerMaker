@@ -314,7 +314,6 @@ export default {
     packageRepositories: "软件包仓库",
     closePackageDetails: "关闭软件包详情",
     repoDownloadLink: "前往下载 Repo 源",
-    repoDownloadPending: "下载页面即将开放",
     jobRPMs: "RPM 下载列表",
     loadingJobRPMs: "正在加载 RPM…",
     noJobRPMs: "该 Job 暂无可下载的 RPM",

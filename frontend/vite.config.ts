@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => {
         "/apis": { target: gateway, changeOrigin: true },
         "/auth": { target: gateway, changeOrigin: true },
         "/artifacts": { target: artifactManager, changeOrigin: true },
+        "/repositories": { target: artifactManager, changeOrigin: true },
       },
     },
   };
