@@ -80,10 +80,12 @@ func (s *Server) route(w http.ResponseWriter, r *http.Request, p []string) {
 	}
 	writeErr(w, r, 404, "NotFound", "not found", false, nil)
 }
+
 func method(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	http.Error(w, "method not allowed", 405)
 }
+
 func token(r *http.Request) (string, error) {
 	v := strings.Fields(r.Header.Get("Authorization"))
 	if len(v) != 2 || v[0] != "Bearer" {
@@ -91,6 +93,7 @@ func token(r *http.Request) (string, error) {
 	}
 	return v[1], nil
 }
+
 func (s *Server) identity(r *http.Request) (Identity, error) {
 	t, e := token(r)
 	if e != nil {
@@ -98,14 +101,17 @@ func (s *Server) identity(r *http.Request) (Identity, error) {
 	}
 	return s.auth.Authenticate(r.Context(), t)
 }
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
 func writeErr(w http.ResponseWriter, r *http.Request, status int, code, msg string, retry bool, d map[string]any) {
 	writeJSON(w, status, APIError{Code: code, Message: msg, Retryable: retry, RequestID: r.Header.Get("X-Request-ID"), Details: d})
 }
+
 func decodeJSON(rd io.Reader, max int64, v any) error {
 	d := json.NewDecoder(io.LimitReader(rd, max+1))
 	d.DisallowUnknownFields()
@@ -117,6 +123,7 @@ func decodeJSON(rd io.Reader, max int64, v any) error {
 	}
 	return nil
 }
+
 func validHash(v string) bool {
 	if len(v) != 64 {
 		return false
@@ -124,6 +131,7 @@ func validHash(v string) bool {
 	_, e := hex.DecodeString(v)
 	return e == nil && v == strings.ToLower(v)
 }
+
 func validIdentifier(v string) bool {
 	if v == "" || len(v) > 128 {
 		return false
@@ -216,7 +224,11 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	}
 	writeJSON(w, 201, map[string]any{"artifact": a})
 }
-func mediaType(v string) string { t, _, _ := mime.ParseMediaType(v); return t }
+
+func mediaType(v string) string {
+	t, _, _ := mime.ParseMediaType(v)
+	return t
+}
 func (s *Server) validPartHeaders(p *multipart.Part) bool {
 	if len(p.Header) > s.cfg.MaxPartHeaders {
 		return false
@@ -236,6 +248,7 @@ func (s *Server) validPartHeaders(p *multipart.Part) bool {
 	}
 	return total <= s.cfg.MaxPartHeaderBytes
 }
+
 func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
 	code := e.Error()
 	status := 422
@@ -247,6 +260,7 @@ func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
 	}
 	writeErr(w, r, status, code, code, status >= 500, nil)
 }
+
 func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j string) {
 	id, e := s.identity(r)
 	if e != nil {
@@ -265,6 +279,7 @@ func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j s
 	}
 	writeJSON(w, 200, map[string]any{"state": m.State, "artifactCount": len(m.Files), "digest": m.Digest})
 }
+
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string) {
 	m, ok := s.store.GetManifest(p, j)
 	if !ok {
@@ -273,11 +288,13 @@ func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string
 	}
 	writeJSON(w, 200, m)
 }
+
 func (s *Server) list(w http.ResponseWriter, r *http.Request, p, j string) {
 	cat := Category(r.URL.Query().Get("category"))
 	items, _ := s.store.ListArtifacts(p, j, cat)
 	writeJSON(w, 200, map[string]any{"items": items})
 }
+
 func (s *Server) download(w http.ResponseWriter, r *http.Request, id string) {
 	a, ok := s.store.GetArtifact(id)
 	if !ok || a.State != Completed {

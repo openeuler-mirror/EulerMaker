@@ -30,6 +30,7 @@ func DefaultConfig() Config {
 	}
 	return Config{Listen: ":8081", DataDir: "/var/lib/ebs-artifacts", GatewayURL: "https://ebs-gateway:8443", MaxFileSize: 25 << 30, MaxJobSize: 100 << 30, MaxMetadataSize: 64 << 10, MaxLogSize: 4 << 30, LogChunkSize: 256 << 10, UploadTimeout: 2 * time.Hour, AuthCacheTTL: 30 * time.Second, SSEHeartbeat: 15 * time.Second, TemporaryUploadTTL: 24 * time.Hour, LogReplayWindow: 1024, LogDedupeWindow: 1024, MaxPartHeaders: 16, MaxHeaderLineSize: 8 << 10, MaxPartHeaderBytes: 32 << 10, CreateRepoCommand: "/usr/bin/createrepo_c", RPMQueryCommand: "/usr/bin/rpm", CreateRepoWorkers: createRepoWorkers, RepositoryTimeout: 30 * time.Minute, RepositoryWorkTTL: 24 * time.Hour, ReleaseTimeout: 30 * time.Minute, ReleaseWorkTTL: 24 * time.Hour, ReleaseHistoryTTL: 7 * 24 * time.Hour, ShutdownTimeout: 30 * time.Second, RepositoryWorkers: 2, RepositoryQueueCapacity: 100, ReleaseWorkers: 1, ReleaseQueueCapacity: 20, ReleaseHistoryCount: 2}
 }
+
 func LoadConfig(args []string) (Config, error) {
 	c := DefaultConfig()
 	fs := flag.NewFlagSet("artifact-manager", flag.ContinueOnError)

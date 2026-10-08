@@ -25,6 +25,7 @@ type Store struct {
 	idempotency map[string]*IdempotencyRecord
 	subscribers map[string]map[chan logEvent]struct{}
 }
+
 type logEvent struct {
 	Sequence int64
 	Data     []byte
@@ -46,6 +47,7 @@ func NewStore(root string) (*Store, error) {
 	}
 	return s, nil
 }
+
 func (s *Store) CleanupTemporary(ttl time.Duration) error {
 	entries, err := os.ReadDir(filepath.Join(s.root, ".uploads"))
 	if err != nil {
@@ -64,6 +66,7 @@ func (s *Store) CleanupTemporary(ttl time.Duration) error {
 	}
 	return nil
 }
+
 func (s *Store) load() error {
 	return filepath.WalkDir(filepath.Join(s.root, ".metadata"), func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -181,11 +184,13 @@ func (s *Store) failRecords(a *Artifact, ir *IdempotencyRecord, code, message st
 	_ = atomicJSON(s.artifactMeta(a.ID), a)
 	_ = atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
 }
+
 func newID(prefix string) string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return prefix + "_" + hex.EncodeToString(b)
 }
+
 func atomicJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return err
@@ -219,6 +224,7 @@ func atomicJSON(path string, v any) error {
 	}
 	return e
 }
+
 func safeRelative(p string) (string, error) {
 	if p == "" || filepath.IsAbs(p) || strings.Contains(p, "\\") || strings.ContainsAny(p, "\x00\r\n") {
 		return "", errors.New("invalid relative path")
@@ -234,16 +240,27 @@ func safeRelative(p string) (string, error) {
 	}
 	return c, nil
 }
+
 func (s *Store) artifactPath(a *Artifact) string {
 	return filepath.Join(s.root, filepath.FromSlash(a.StorageKey))
 }
+
 func (s *Store) artifactMeta(id string) string {
 	return filepath.Join(s.root, ".metadata/artifacts", id+".json")
 }
 
-func manifestKey(p, j string) string    { return p + "\x00" + j }
-func logKey(p, j, stream string) string { return p + "\x00" + j + "\x00" + stream }
-func hashText(v string) string          { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
+func manifestKey(p, j string) string {
+	return p + "\x00" + j
+}
+
+func logKey(p, j, stream string) string {
+	return p + "\x00" + j + "\x00" + stream
+}
+
+func hashText(v string) string {
+	h := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(h[:])
+}
 func (s *Store) idemPath(scope, key string) string {
 	return filepath.Join(s.root, ".metadata/idempotency", hashText(scope), hashText(key)+".json")
 }
@@ -328,6 +345,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 	s.idempotency[ik] = ir
 	return a, ir, false, nil
 }
+
 func (s *Store) CompleteUpload(a *Artifact, ir *IdempotencyRecord, tmp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -357,11 +375,13 @@ func (s *Store) CompleteUpload(a *Artifact, ir *IdempotencyRecord, tmp string) e
 	ir.CompletedAt = &now
 	return atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
 }
+
 func (s *Store) UploadCommitted(a *Artifact) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil
 }
+
 func (s *Store) FailUpload(a *Artifact, ir *IdempotencyRecord, code, msg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -375,6 +395,7 @@ func (s *Store) FailUpload(a *Artifact, ir *IdempotencyRecord, code, msg string)
 	_ = atomicJSON(s.artifactMeta(a.ID), a)
 	_ = atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
 }
+
 func (s *Store) GetArtifact(id string) (*Artifact, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -385,6 +406,7 @@ func (s *Store) GetArtifact(id string) (*Artifact, bool) {
 	cp := *a
 	return &cp, true
 }
+
 func (s *Store) ListArtifacts(project, job string, cat Category) ([]Artifact, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

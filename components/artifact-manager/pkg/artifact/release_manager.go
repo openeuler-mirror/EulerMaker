@@ -338,6 +338,7 @@ func (m *releaseManager) enqueue(name string) {
 	defer m.mu.Unlock()
 	m.enqueueLocked(name)
 }
+
 func (m *releaseManager) enqueueLocked(name string) {
 	if m.queued[name] {
 		return
@@ -368,13 +369,17 @@ func (m *releaseManager) recoverQueue() {
 	}
 }
 
-func (m *releaseManager) stop() { m.cancel() }
+func (m *releaseManager) stop() {
+	m.cancel()
+}
 func (m *releaseManager) persist(record *ReleaseRecord) error {
 	return atomicJSON(m.metaPath(record.BuildName), record)
 }
+
 func (m *releaseManager) metaPath(name string) string {
 	return filepath.Join(m.root, ".metadata/releases", name+".json")
 }
+
 func (m *releaseManager) releasePath(record *ReleaseRecord) string {
 	return filepath.Join(m.releaseTargetDir(record), "releases", record.BuildName)
 }

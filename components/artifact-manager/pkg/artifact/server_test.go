@@ -40,7 +40,10 @@ func testHandler(t *testing.T) (http.Handler, Config) {
 	return h, c
 }
 
-func sum(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
+func sum(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
 
 func uploadRequest(t *testing.T, data []byte, key string) *http.Request {
 	t.Helper()

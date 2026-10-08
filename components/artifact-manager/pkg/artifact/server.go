@@ -30,6 +30,7 @@ func NewServer(c Config, a Authorizer) (*http.Server, error) {
 	server.RegisterOnShutdown(func() { s.repositories.stop(); s.releases.stop() })
 	return server, nil
 }
+
 func NewHandler(c Config, a Authorizer) (http.Handler, error) {
 	st, e := NewStore(c.DataDir)
 	if e != nil {
@@ -53,6 +54,7 @@ func newArtifactServer(c Config, a Authorizer, store *Store, materializer reposi
 	}
 	return &Server{cfg: c, store: store, auth: a, repositories: repositories, releases: releases}, nil
 }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {

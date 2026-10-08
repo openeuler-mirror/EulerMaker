@@ -400,7 +400,9 @@ func (m *repositoryManager) recoverQueue() {
 	}
 }
 
-func (m *repositoryManager) stop() { m.cancel() }
+func (m *repositoryManager) stop() {
+	m.cancel()
+}
 
 func (m *repositoryManager) get(uid string) (*RepositoryRecord, bool, error) {
 	m.mu.RLock()
@@ -476,6 +478,7 @@ func (m *repositoryManager) repositoryPath(record *RepositoryRecord) string {
 func repositoryVersionPath(root, project, osName, arch, buildName, uid string) string {
 	return filepath.Join(root, "repositories", project, osName, arch, "history", buildName, "steps", uid)
 }
+
 func (m *repositoryManager) metaPath(uid string) string {
 	return filepath.Join(m.root, ".metadata/repositories", uid+".json")
 }

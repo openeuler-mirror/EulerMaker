@@ -18,6 +18,7 @@ type LogChunkRecord struct {
 	Size        int64  `json:"size"`
 	SHA256      string `json:"sha256"`
 }
+
 type LogStream struct {
 	SchemaVersion  int          `json:"schemaVersion"`
 	Project        string       `json:"project"`
