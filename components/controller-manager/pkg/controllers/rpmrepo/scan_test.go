@@ -24,6 +24,21 @@ func scanFixture(t *testing.T, job ebsv1.Job, artifacts *FakeArtifactManager, cl
 	return newTestController(t, client, artifacts, testConfig())
 }
 
+func TestScanDecodesSpecNameForRepositoryInput(t *testing.T) {
+	const raw = "dvd+rw-tools"
+	client := NewFakeClient()
+	job := newSucceededJob("job-a", raw, "uid-job-a", time.Unix(1, 0))
+	controller := scanFixture(t, job, NewFakeArtifactManager(), client)
+	reconciler := &reconciler{controller: controller, ctx: context.Background(), project: testProject, key: rpmRepoKey(testProject, testBuild)}
+	scan, err := reconciler.scanCandidates(client.RpmRepos[key(testProject, testBuild)], client.Builds[key(testProject, testBuild)])
+	if err != nil || len(scan.candidates) != 1 || scan.candidates[0].specName != raw {
+		t.Fatalf("scanCandidates = %+v, %v; want original SPEC name", scan, err)
+	}
+	if inputs := repositoryInputs(scan.candidates); len(inputs) != 1 || inputs[0].SpecName != raw {
+		t.Fatalf("repository inputs lost original SPEC name: %+v", inputs)
+	}
+}
+
 func TestScanRejectsJobsThatAreNotCandidates(t *testing.T) {
 	cases := []struct {
 		name   string

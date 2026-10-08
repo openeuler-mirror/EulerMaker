@@ -18,6 +18,7 @@ import (
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
+	"controller-manager/pkg/controllers/specname"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -33,7 +34,11 @@ func jobSpecNames(t *testing.T, client *fakeClient) map[string]bool {
 	t.Helper()
 	names := map[string]bool{}
 	for _, job := range listJobs(t, client) {
-		names[job.Labels[ebsv1.JobSpecNameLabel]] = true
+		name, ok := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
+		if !ok {
+			t.Fatalf("invalid spec-name label %q", job.Labels[ebsv1.JobSpecNameLabel])
+		}
+		names[name] = true
 	}
 	return names
 }
@@ -704,7 +709,7 @@ func TestSinglePassThrough(t *testing.T) {
 		t.Fatalf("conditions = %v, want none", bi.Status.Conditions)
 	}
 	for _, job := range listJobs(t, client) {
-		if job.Labels[ebsv1.JobSpecNameLabel] != "b" {
+		if job.Labels[ebsv1.JobSpecNameLabel] != specname.Encode("b") {
 			continue
 		}
 		payload := payloadFields(t, job.Spec.Payload)

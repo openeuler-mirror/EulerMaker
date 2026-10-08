@@ -23,6 +23,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ApiError, errorTranslationKey, JOB_LIST_INCLUDE_FIELDS, list, request } from '@/api';
 import type { Job } from '@/types';
+import { encodeSpecName } from '@/utils/specName';
 import ModalDialog from './ModalDialog.vue';
 import JobLogInline from './JobLogInline.vue';
 import PackageJobArtifacts from './PackageJobArtifacts.vue';
@@ -68,7 +69,7 @@ async function load(cursor: string): Promise<void> {
   loading.value = true; error.value = '';
   try {
     const query = new URLSearchParams({ limit: '50', includeFields: JOB_LIST_INCLUDE_FIELDS });
-    query.set('labelSelector', `ebs.io/build-name=${props.buildName},ebs.io/spec-name=${props.specName}`);
+    query.set('labelSelector', `ebs.io/build-name=${props.buildName},ebs.io/spec-name=${encodeSpecName(props.specName)}`);
     if (cursor) query.set('continue', cursor);
     const page = await list<Job>(`${path(props.project)}?${query}`);
     if (current === generation) {

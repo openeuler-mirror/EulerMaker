@@ -14,6 +14,7 @@ import (
 
 	"controller-manager/pkg/artifacturl"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/controllers/specname"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -379,8 +380,8 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 		if _, exists := consumed[job.Name]; exists {
 			continue
 		}
-		specName := job.Labels[ebsv1.JobSpecNameLabel]
-		if specName == "" || job.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.Os || job.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch {
+		specName, valid := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
+		if !valid || job.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.Os || job.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch {
 			log.Printf("controller=%s key=%q uid=%q job_name=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.UID)
 			continue
 		}

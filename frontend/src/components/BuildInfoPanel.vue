@@ -87,7 +87,9 @@ const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStat
     name,
     buildStatus: value.status,
     displayStatus: value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'ArchUnsupported')
-      ? 'ArchUnsupported' : value.status,
+      ? 'ArchUnsupported'
+      : value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'RpmDependsMissing')
+        ? 'RpmDependsMissing' : value.status,
   }))
   .sort((left, right) => left.name.localeCompare(right.name)));
 const specBuildCounts = computed(() => ({

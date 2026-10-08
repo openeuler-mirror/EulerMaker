@@ -26,6 +26,7 @@ import (
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
+	"controller-manager/pkg/controllers/specname"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -43,7 +44,7 @@ const (
 // generation remains in the hash input, but is not shown in the name.
 func jobNameFor(buildInfoUID, specName string, generation int64) string {
 	sum := jobNameHash(buildInfoUID, specName, generation)
-	return fmt.Sprintf("%s-%x", specName, sum[:8])
+	return fmt.Sprintf("%s-%x", specname.Encode(specName), sum[:8])
 }
 
 // formerJobNameFor recognizes the former 16-character suffix with a visible
@@ -441,8 +442,8 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 	if job.Labels[ebsv1.JobBuildNameLabel] != buildInfo.Name {
 		return fmt.Errorf("build-name label %q != %q", job.Labels[ebsv1.JobBuildNameLabel], buildInfo.Name)
 	}
-	if job.Labels[ebsv1.JobSpecNameLabel] != specName {
-		return fmt.Errorf("spec-name label %q != %q", job.Labels[ebsv1.JobSpecNameLabel], specName)
+	if job.Labels[ebsv1.JobSpecNameLabel] != specname.Encode(specName) {
+		return fmt.Errorf("spec-name label %q != %q", job.Labels[ebsv1.JobSpecNameLabel], specname.Encode(specName))
 	}
 	if job.Annotations[annDispatchGeneration] != strconv.FormatInt(generation, 10) {
 		return fmt.Errorf("dispatch-generation annotation %q != %d", job.Annotations[annDispatchGeneration], generation)
@@ -489,7 +490,7 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 			Namespace: buildInfo.Namespace,
 			Labels: map[string]string{
 				ebsv1.JobBuildNameLabel:    buildInfo.Name,
-				ebsv1.JobSpecNameLabel:     specName,
+				ebsv1.JobSpecNameLabel:     specname.Encode(specName),
 				ebsv1.JobPackageNameLabel:  packageNameLabelValue(depend.RepoName),
 				ebsv1.BuildTargetOSLabel:   target.Os,
 				ebsv1.BuildTargetArchLabel: target.Arch,
@@ -731,9 +732,10 @@ func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, sc
 	bySpec := map[string][]ebsv1.Job{}
 	for i := range jobs {
 		job := jobs[i]
-		spec := job.Labels[ebsv1.JobSpecNameLabel]
-		if spec == "" || !scope[spec] {
-			c.logf(round.key, "OrphanJob", "job %s spec-name %q out of scope, skipped", job.Name, spec)
+		encoded := job.Labels[ebsv1.JobSpecNameLabel]
+		spec, valid := specname.Decode(encoded)
+		if !valid || !scope[spec] {
+			c.logf(round.key, "OrphanJob", "job %s spec-name %q out of scope, skipped", job.Name, encoded)
 			continue
 		}
 		bySpec[spec] = append(bySpec[spec], job)
@@ -815,7 +817,8 @@ func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	for i := range jobs {
 		job := &jobs[i]
 		generation, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64)
-		if err == nil && generation > 0 && matchesJobName(job.Name, uid, job.Labels[ebsv1.JobSpecNameLabel], generation) {
+		spec, valid := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
+		if err == nil && generation > 0 && valid && matchesJobName(job.Name, uid, spec, generation) {
 			out = append(out, jobs[i])
 		}
 	}

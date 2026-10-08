@@ -96,10 +96,11 @@
       </section>
       <article v-if="showRunningJobs" id="project-running-jobs" class="content-panel running-jobs-panel">
         <div class="section-heading"><h2>{{ t("project.activeJobs") }}</h2><button class="package-detail-close" type="button" :aria-label="t('project.hideRunningJobs')" @click="showRunningJobs = false"><Close /></button></div>
+        <p v-if="abortJobMessageKey" role="status">{{ t(abortJobMessageKey) }}</p>
         <p v-if="pendingJobsLoading" class="config-empty">{{ t("project.loadingPendingJobs") }}</p>
         <p v-if="!nonTerminalJobs.length && !pendingJobsLoading" class="config-empty">{{ t("project.noRunningJobs") }}</p>
         <template v-if="nonTerminalJobs.length">
-          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchSpecs')" :no-results-label="t('project.noMatchingSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/spec-name"] || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td></tr></tbody></table></div>
+          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchSpecs')" :no-results-label="t('project.noMatchingSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th><th v-if="canAbortJobs">{{ t('admin.actions') }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ displaySpecName(job.metadata?.labels?.["ebs.io/spec-name"]) || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td><td v-if="canAbortJobs"><button v-if="job.metadata?.uid && abortableJob(job)" class="text-button danger-link" type="button" :disabled="abortingJob" @click="openJobAbortDialog(job)">{{ t('jobControl.abort') }}</button></td></tr></tbody></table></div>
           <p v-if="!filteredRunningJobs.length" class="config-empty">{{ t("project.noMatchingRunningJobs") }}</p>
           <div v-if="runningJobsTotalPages > 1" class="table-footer"><nav class="pagination-row" :aria-label="t('common.pagination')"><button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="runningJobsPage === 1" @click="runningJobsPage -= 1"><ArrowLeft /></button><span class="page-button active" aria-current="page">{{ runningJobsPage }} / {{ runningJobsTotalPages }}</span><button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="runningJobsPage === runningJobsTotalPages" @click="runningJobsPage += 1"><ArrowRight /></button></nav></div>
         </template>
@@ -253,6 +254,15 @@
       </form>
     </ModalDialog>
 
+    <ModalDialog v-if="abortJobTarget" title-id="abort-job-title" :title="t('jobControl.abort')" :close-label="t('common.close')" @close="closeJobAbortDialog">
+      <form class="project-form" @submit.prevent="confirmJobAbort">
+        <p>{{ name }} / {{ abortJobTarget.metadata?.name }} · {{ abortJobTarget.status?.phase }}</p>
+        <label class="field"><span>{{ t('jobControl.reason') }}</span><textarea v-model="abortJobReason" maxlength="1024" :disabled="abortingJob" /></label>
+        <p class="form-hint">{{ t('jobControl.hint') }}</p><p v-if="abortJobErrorKey" class="inline-error" role="alert">{{ t(abortJobErrorKey) }}</p>
+        <div class="modal-actions"><button type="button" class="secondary-button" :disabled="abortingJob" @click="closeJobAbortDialog">{{ t('common.cancel') }}</button><button class="primary-button danger-button" :disabled="abortingJob">{{ t('jobControl.abort') }}</button></div>
+      </form>
+    </ModalDialog>
+
     <ModalDialog v-if="basicEditorOpen" title-id="edit-basic-title" :title="t('project.editBasicConfig')" :close-label="t('common.close')" @close="closeBasicEditor">
       <form class="project-form" @submit.prevent="saveBasicConfig">
         <p class="form-hint">{{ t("project.editBasicConfigHint") }}</p>
@@ -366,6 +376,7 @@ import BuildInfoPanel from "@/components/BuildInfoPanel.vue";
 import JobLogInline from "@/components/JobLogInline.vue";
 import PackageJobArtifacts from "@/components/PackageJobArtifacts.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
+import { decodeSpecName } from "@/utils/specName";
 import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
 
@@ -401,15 +412,21 @@ const runningJobCount = ref<number | null>(null);
 const nonTerminalJobs = ref<Job[]>([]);
 const showRunningJobs = ref(false);
 const pendingJobsLoading = ref(false);
+const abortJobTarget = ref<Job | null>(null);
+const abortingJob = ref(false);
+const abortJobReason = ref("");
+const abortJobErrorKey = ref("");
+const abortJobMessageKey = ref("");
 const selectedRunningBuilds = ref<string[]>([]);
 const selectedRunningSpecs = ref<string[]>([]);
 const selectedRunningPhases = ref<string[]>([]);
 const runningBuildOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/build-name"] || ""))]
   .sort((left, right) => left.localeCompare(right))
   .map((value) => ({ value, label: value || t("common.emptyValue") })));
+const displaySpecName = (value?: string) => value ? decodeSpecName(value) || value : "";
 const runningSpecOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/spec-name"] || ""))]
   .sort((left, right) => left.localeCompare(right))
-  .map((value) => ({ value, label: value || t("common.emptyValue") })));
+  .map((value) => ({ value, label: displaySpecName(value) || t("common.emptyValue") })));
 const runningPhaseOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.status?.phase || ""))]
   .sort((left, right) => left.localeCompare(right))
   .map((value) => {
@@ -548,6 +565,49 @@ const canAbortJobs = computed(() => {
   const labels = project.value?.metadata?.labels || {};
   return labels['ebs.io/owner-user'] === identity.name || labels[`ebs.io/member-user.${identity.name}`] === 'true';
 });
+const abortableJob = (job: Job) => job.status?.phase === "Pending" || job.status?.phase === "Running";
+function openJobAbortDialog(job: Job): void {
+  if (!canAbortJobs.value || !job.metadata?.uid || !abortableJob(job)) return;
+  abortJobTarget.value = job;
+  abortJobReason.value = "";
+  abortJobErrorKey.value = "";
+  abortJobMessageKey.value = "";
+}
+function closeJobAbortDialog(): void {
+  if (!abortingJob.value) abortJobTarget.value = null;
+}
+async function confirmJobAbort(): Promise<void> {
+  const job = abortJobTarget.value;
+  const uid = job?.metadata?.uid;
+  const jobName = job?.metadata?.name;
+  if (!canAbortJobs.value || !uid || !jobName || !abortableJob(job) || abortingJob.value) return;
+  const projectName = name.value;
+  const url = `/apis/ebs/v1/projects/${encodeURIComponent(projectName)}/jobs/${encodeURIComponent(jobName)}`;
+  abortingJob.value = true;
+  abortJobErrorKey.value = "";
+  try {
+    let result: Job;
+    try {
+      result = await request<Job>(`${url}/abort`, { method: "POST", body: JSON.stringify({ uid, reason: abortJobReason.value }), signal: AbortSignal.timeout(15000) });
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500 && error.status !== 408) throw error;
+      result = await request<Job>(url, { signal: AbortSignal.timeout(15000) });
+      if (result.metadata?.uid === uid && abortableJob(result)) { abortJobErrorKey.value = "jobControl.unknown"; return; }
+    }
+    if (result.metadata?.uid !== uid) { abortJobErrorKey.value = "errors.conflict"; return; }
+    if (!["Aborted", "Succeeded", "Failed"].includes(result.status?.phase || "")) { abortJobErrorKey.value = "jobControl.unknown"; return; }
+    if (name.value !== projectName) return;
+    abortJobMessageKey.value = result.status?.phase === "Aborted" ? "jobControl.aborted" : "jobControl.finished";
+    nonTerminalJobs.value = nonTerminalJobs.value.filter((item) => item.metadata?.uid !== uid);
+    if (job.status?.phase === "Running" && runningJobCount.value !== null) runningJobCount.value = Math.max(0, runningJobCount.value - 1);
+    runningJobsPage.value = Math.min(runningJobsPage.value, runningJobsTotalPages.value);
+    abortJobTarget.value = null;
+  } catch (error) {
+    abortJobErrorKey.value = errorTranslationKey(error);
+  } finally {
+    abortingJob.value = false;
+  }
+}
 const buildConfigurationMissing = computed(() =>
   !project.value?.spec?.buildTargets?.length || (projectIsFull.value && !project.value?.spec?.packageRepos?.some((repo) => repo.name)),
 );
