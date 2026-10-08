@@ -186,6 +186,14 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 		for _, e := range p.Format.Provides {
 			rpm.Provides[e.Name] = joinVersion(e.Epoch, e.Ver, e.Rel)
 		}
+		// File dependencies (for example /usr/bin/netstat) are advertised
+		// separately from rpm:provides in primary metadata. Index them using
+		// the owning RPM's version, just like the legacy repository parser.
+		for _, path := range p.Format.Files {
+			if path != "" {
+				rpm.Provides[path] = rpm.Version
+			}
+		}
 		for _, e := range p.Format.Requires {
 			rpm.Requires[e.Name] = flagsToVersionConst(e.Flags, joinVersion(e.Epoch, e.Ver, e.Rel))
 		}
@@ -374,6 +382,7 @@ type packageXML struct {
 		SourceRpm string        `xml:"sourcerpm"`
 		Provides  []rpmEntryXML `xml:"provides>entry"`
 		Requires  []rpmEntryXML `xml:"requires>entry"`
+		Files     []string      `xml:"file"`
 	} `xml:"format"`
 }
 

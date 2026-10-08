@@ -272,7 +272,7 @@ func (c *Controller) obtainDcg(ctx context.Context, round *reconcileRound, build
 	breaks := d.GetBootstrapBreaks()
 	if len(breaks) > 0 {
 		bootstrapBreaks.Add(uint64(len(breaks)))
-		c.logOnce(round.key, "BootstrapBreaks", "dcg built with %d nodes, break points: %s", d.Len(), strings.Join(breaks, ","))
+		c.logBreakPoints(round.key, "BootstrapBreaks", fmt.Sprintf("dcg built with %d nodes, break points: %d", d.Len(), len(breaks)), breaks)
 	}
 	return d, controller.ReconcileResult{}, nil
 }

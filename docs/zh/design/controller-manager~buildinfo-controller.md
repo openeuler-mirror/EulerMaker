@@ -1361,7 +1361,8 @@ type RpmMetaSources struct {
 - `name` → rpm 名（`RpmByName` key；同源内同名不同 arch 并存时取目标 arch 条目）；
 - `version` = `epoch:version-release` 拼接（版本约束比较输入）；
 - `specName` 由 `sourcerpm` 派生：剥离 `-<version>-<release>.src.rpm` 后缀（与 artifact-manager 物化侧同一规则，见 [artifact-manager.md](artifact-manager.md) 9.3.3；sourcerpm 缺失/异常时以 rpm 名兜底）；
-- `provides` → map[string]string（能力名 → 版本）；`requires` → map[string]VersionConst（XML requires 条目的 flags/ver 映射为 VersionConst）。
+- `provides` → map[string]string（能力名 → 版本）：合并 `rpm:provides/rpm:entry` 和 `format/file`，文件路径使用所属 RPM 的完整版本。普通文件以及带 `type="dir"`、`type="ghost"` 的条目均按路径建立提供能力；同名路径使用文件条目的 RPM 版本。完成架构和同名 RPM 版本筛选后，再生成 `ProvidesInfo`，供过程仓及 bootstrap 仓的路径依赖匹配共用。
+- `requires` → map[string]VersionConst（XML requires 条目的 flags/ver 映射为 VersionConst）。
 
 解析完成即生成该来源的 `RpmByName` 与 `ProvidesInfo` 两个索引。
 

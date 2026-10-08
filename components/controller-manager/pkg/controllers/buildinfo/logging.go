@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"k8s.io/klog/v2"
+
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -64,6 +66,15 @@ func (c *Controller) logOnce(key, reason, format string, args ...any) {
 		message = fmt.Sprintf(format, args...)
 	}
 	log.Printf("controller=%s key=%q reason=%s %s", Name, key, reason, message)
+}
+
+// logBreakPoints keeps normal graph logs bounded; full names require debug verbosity.
+func (c *Controller) logBreakPoints(key, reason, summary string, names []string) {
+	if klog.V(4).Enabled() {
+		c.logOnce(key, reason, "%s, break points: %s", summary, strings.Join(names, ","))
+		return
+	}
+	c.logOnce(key, reason, "%s", summary)
 }
 
 // reconciledAfterStartOnce guards the once-per-process startup marker

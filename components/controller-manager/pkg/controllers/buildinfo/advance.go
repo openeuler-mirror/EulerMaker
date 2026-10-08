@@ -190,7 +190,7 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 	edgesAdded.Add(uint64(changed))
 	if len(newBreaks) > 0 {
 		bootstrapBreaks.Add(uint64(len(newBreaks)))
-		c.logOnce(round.key, "RuntimeBootstrapBreaks", "install edge appends added %d edges; new cycle break points: %s", changed, strings.Join(newBreaks, ","))
+		c.logBreakPoints(round.key, "RuntimeBootstrapBreaks", fmt.Sprintf("install edge appends added %d edges; new cycle break points: %d", changed, len(newBreaks)), newBreaks)
 	} else {
 		c.logOnce(round.key, "InstallEdgesAdded", "install edge appends added %d edges", changed)
 	}

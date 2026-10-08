@@ -1,9 +1,25 @@
 package options
 
 import (
+	"flag"
 	"testing"
 	"time"
+
+	"k8s.io/klog/v2"
 )
+
+func TestParseDebugVerbosity(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	klog.InitFlags(flags)
+	previous := flags.Lookup("v").Value.String()
+	t.Cleanup(func() { _ = flags.Set("v", previous) })
+	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--v=4"}); err != nil {
+		t.Fatal(err)
+	}
+	if !klog.V(4).Enabled() {
+		t.Fatal("debug verbosity was not enabled")
+	}
+}
 
 func TestParseDevelopmentOptions(t *testing.T) {
 	o, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true"})
