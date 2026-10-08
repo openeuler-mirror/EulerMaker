@@ -545,6 +545,7 @@ export default {
     prepared: "已准备",
     success: "成功",
     failed: "失败",
+    rpmdependsmissing: "依赖不满足",
     archunsupported: "架构不支持",
     aborted: "已中止",
     skipped: "已跳过",

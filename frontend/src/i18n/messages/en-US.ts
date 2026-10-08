@@ -549,6 +549,7 @@ export default {
     prepared: "Prepared",
     success: "Success",
     failed: "Failed",
+    rpmdependsmissing: "Dependencies unavailable",
     archunsupported: "Architecture unsupported",
     aborted: "Aborted",
     skipped: "Skipped",

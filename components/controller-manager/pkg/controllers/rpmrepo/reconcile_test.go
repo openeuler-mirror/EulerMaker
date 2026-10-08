@@ -11,6 +11,7 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/controllers/specname"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -119,7 +120,7 @@ func newSucceededJob(name, spec, uid string, created time.Time) ebsv1.Job {
 			CreationTimestamp: metav1.NewTime(created),
 			Labels: map[string]string{
 				ebsv1.JobBuildNameLabel:    testBuild,
-				ebsv1.JobSpecNameLabel:     spec,
+				ebsv1.JobSpecNameLabel:     specname.Encode(spec),
 				ebsv1.BuildTargetOSLabel:   testOS,
 				ebsv1.BuildTargetArchLabel: testArch,
 			},

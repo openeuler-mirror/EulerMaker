@@ -20,6 +20,7 @@ import (
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
+	"controller-manager/pkg/controllers/specname"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -30,14 +31,14 @@ func TestJobNameForDeterministic(t *testing.T) {
 	if first != jobNameFor("uid-1", "a", 2) {
 		t.Fatal("jobNameFor not deterministic")
 	}
-	if !strings.HasPrefix(first, "a-") {
+	if !strings.HasPrefix(first, "sa-") {
 		t.Fatalf("jobNameFor = %q, want specName- prefix", first)
 	}
-	if got := len(first) - len("a-"); got != 16 {
+	if got := len(first) - len("sa-"); got != 16 {
 		t.Fatalf("hash suffix length = %d, want 16 lowercase hex chars", got)
 	}
 	former := formerJobNameFor("uid-1", "a", 2)
-	if former != "a-2-"+strings.TrimPrefix(first, "a-") {
+	if former != "a-2-"+strings.TrimPrefix(first, "sa-") {
 		t.Fatalf("former name = %q, want visible generation and the same hash", former)
 	}
 	previous := previousJobNameFor("uid-1", "a", 2)
@@ -50,6 +51,26 @@ func TestJobNameForDeterministic(t *testing.T) {
 	}
 	if jobNameFor("uid-1", "a", 3) == first || jobNameFor("uid-2", "a", 2) == first || jobNameFor("uid-1", "b", 2) == first {
 		t.Fatal("jobNameFor must vary with generation, uid and spec")
+	}
+}
+
+func TestEncodedSpecJobIdentityAndBackfill(t *testing.T) {
+	const raw = "dvd+rw-tools"
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	job := testJobObj(bi, raw, 1, ebsv1.JobRunning)
+	if !strings.HasPrefix(job.Name, "sdvd_2Brw-tools-") || job.Labels[ebsv1.JobSpecNameLabel] != "sdvd_2Brw-tools" {
+		t.Fatalf("unsafe SPEC name was not encoded: name=%q label=%q", job.Name, job.Labels[ebsv1.JobSpecNameLabel])
+	}
+	if err := verifyJobIdentity(job, bi, raw, 1); err != nil {
+		t.Fatalf("encoded Job identity rejected: %v", err)
+	}
+	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
+		t.Fatalf("identity filter returned %d Jobs, want 1", len(got))
+	}
+	controller := &Controller{}
+	bySpec := controller.groupJobsBySpec(&reconcileRound{key: "test"}, []ebsv1.Job{*job}, map[string]bool{raw: true})
+	if len(bySpec[raw]) != 1 {
+		t.Fatalf("decoded SPEC group = %v, want one Job", bySpec)
 	}
 }
 
@@ -238,7 +259,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	}
 	wantLabels := map[string]string{
 		ebsv1.JobBuildNameLabel:    testBuild,
-		ebsv1.JobSpecNameLabel:     "a",
+		ebsv1.JobSpecNameLabel:     specname.Encode("a"),
 		ebsv1.JobPackageNameLabel:  packageNameLabelValue("repo1"),
 		ebsv1.BuildTargetOSLabel:   testOS,
 		ebsv1.BuildTargetArchLabel: testArch,
@@ -719,7 +740,7 @@ func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
 		t.Fatalf("Script reads across rounds = %d, want 2", client.scriptReads)
 	}
 	for _, job := range listJobs(t, client) {
-		if job.Labels[ebsv1.JobSpecNameLabel] == "c" && (len(job.Spec.ScriptRefs) != 1 || job.Spec.ScriptRefs[0].ResourceVersion != "2") {
+		if job.Labels[ebsv1.JobSpecNameLabel] == specname.Encode("c") && (len(job.Spec.ScriptRefs) != 1 || job.Spec.ScriptRefs[0].ResourceVersion != "2") {
 			t.Fatalf("new round Job ScriptRefs = %+v, want current observation", job.Spec.ScriptRefs)
 		}
 	}
@@ -849,7 +870,7 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 			if got := stored.Status.SpecStatus.Entry("b"); got.Build.Status == SpecBuildFailed || got.DispatchCount != 1 {
 				t.Fatalf("independent spec status = %+v", got)
 			}
-			if jobs := listJobs(t, client); len(jobs) != 1 || jobs[0].Labels[ebsv1.JobSpecNameLabel] != "b" {
+			if jobs := listJobs(t, client); len(jobs) != 1 || jobs[0].Labels[ebsv1.JobSpecNameLabel] != specname.Encode("b") {
 				t.Fatalf("created Jobs = %+v, want only b", jobs)
 			}
 		})
