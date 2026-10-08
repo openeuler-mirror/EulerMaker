@@ -1185,10 +1185,10 @@ GET /repositories/releases/v1/{buildName}/{path...}
 3. 在 `.release-work/{buildName}-{random}` 创建工作目录。
 4. 读取源仓 `repository.json` 和 RPM 元数据，删除 `specName` 位于 `excludeSpecs` 的 RPM，保留其余 RPM。
 5. 将选中的 RPM 从过程仓 `Packages` 硬链接到工作目录；源仓保持不可变。跨文件系统失败返回稳定错误，不退化为无界复制。
-6. 不复用源仓 repodata，执行一次完整 `createrepo_c`。正式发布集合通常经过删除，完整生成可以避免旧 metadata 残留；可在性能数据证明必要后再引入安全的 `--update` 优化。
+6. `excludeSpecs` 为空时，发布 RPM 集合与源过程仓一致，复制源仓 `repodata`，不再运行 `createrepo_c`；非空时完整执行 `createrepo_c`，避免旧 metadata 包含被排除的 RPM。
 7. 重新解析 repodata，核对文件集合、摘要、架构和 RPM 数量。
 8. 复制服务端配置的公钥并记录其实际摘要；首版不执行 RPM、repomd 或 updateinfo 签名。
-9. 计算 `releaseDigest`，写入包含请求摘要、源仓 UID、排除 spec 集合、RPM 摘要和完成时间的 `release.json`，fsync 文件和目录。
+9. 计算 `releaseDigest` 时复用源过程仓已验证的逐包 RPM SHA-256，并核对发布目录中的文件名、大小和数量；`repodata` 与公钥仍按实际文件计算摘要，保持原有 `releaseDigest` 格式。写入包含请求摘要、源仓 UID 和排除 spec 集合的 `release.json`，fsync 文件和目录。启动恢复仅对尚未完成的发布完整复核正文；已 Ready 的发布只核对记录与索引摘要，不重新读取全部 RPM。
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
 11. 获取 `{project}/{os}/{arch}` 发布锁，重新确认该版本完整且摘要正确。
 12. 读取 `current`；已经指向本次 `buildName` 时按幂等成功处理，否则继续切换。
@@ -1212,7 +1212,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 启动时在对外 Ready 前执行：
 
 1. 加载 `.metadata/releases` 中的记录；
-2. 校验每个 `current` 指向的 release、`release.json` 和整体摘要；
+2. 校验 `current` 指向的 release 身份与 `release.json`；已 Ready 的发布核对记录与索引摘要，Creating、Prepared 的发布完整复核目录摘要；
 3. `current` 已指向 Creating 或 Prepared 记录且正文有效时补写 Ready；
 4. Prepared 记录未激活时不由 Artifact Manager 自动切换 current，等待 RpmRepo Controller 查询状态、重新确认控制面意图后调用激活接口；
 5. 指针无效时不选择目录中“最新”的版本，保留服务未就绪并要求管理员修复或显式回滚；

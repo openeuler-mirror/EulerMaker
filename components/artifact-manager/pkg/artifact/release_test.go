@@ -2,7 +2,9 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -231,8 +233,8 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	}
 	materializer := newFilesystemReleaseMaterializer(c)
 	source := RepositoryRecord{RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64", RPMs: map[string]RepositoryRPMMeta{
-		"keep+1.rpm": {FileName: "keep+1.rpm", SpecName: "keep"},
-		"skip.rpm":   {FileName: "skip.rpm", SpecName: "skip"},
+		"keep+1.rpm": {FileName: "keep+1.rpm", SpecName: "keep", Size: int64(len("keep+1.rpm")), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("keep+1.rpm")))},
+		"skip.rpm":   {FileName: "skip.rpm", SpecName: "skip", Size: int64(len("skip.rpm")), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("skip.rpm")))},
 	}}
 	sourcePackages := filepath.Join(root, "repositories", source.Project, source.TargetOS, source.TargetArch, "history", source.BuildName, "steps", source.RepositoryUID, "Packages")
 	if err := os.MkdirAll(sourcePackages, 0750); err != nil {
@@ -261,5 +263,109 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	index, err := readReleaseIndex(releasePath)
 	if err != nil || index.PublicKeySHA256 == "" || index.ReleaseDigest != result.Digest {
 		t.Fatalf("release index = %#v, %v", index, err)
+	}
+	if fullDigest, err := digestReleaseDirectory(releasePath); err != nil || fullDigest != result.Digest {
+		t.Fatalf("reused release digest = %q, full digest = %q, error = %v", result.Digest, fullDigest, err)
+	}
+}
+
+func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
+	root := t.TempDir()
+	c := DefaultConfig()
+	c.DataDir = root
+	c.CreateRepoCommand = filepath.Join(root, "createrepo-must-not-run")
+	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	source := RepositoryRecord{
+		RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64",
+		RPMs: map[string]RepositoryRPMMeta{"keep.rpm": {FileName: "keep.rpm", SpecName: "keep", Size: 3, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("rpm")))}},
+	}
+	sourcePath := repositoryVersionPath(root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
+	if err := os.MkdirAll(filepath.Join(sourcePath, "Packages"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(sourcePath, "repodata"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	rpmPath := filepath.Join(sourcePath, "Packages", "keep.rpm")
+	if err := os.WriteFile(rpmPath, []byte("rpm"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	primary := []byte("source primary metadata")
+	if err := os.WriteFile(filepath.Join(sourcePath, "repodata", "primary.xml"), primary, 0640); err != nil {
+		t.Fatal(err)
+	}
+	repomd := fmt.Sprintf(`<repomd><data type="primary"><checksum type="sha256">%x</checksum><location href="repodata/primary.xml"/></data></repomd>`, sha256.Sum256(primary))
+	if err := os.WriteFile(filepath.Join(sourcePath, "repodata", "repomd.xml"), []byte(repomd), 0640); err != nil {
+		t.Fatal(err)
+	}
+	record := ReleaseRecord{BuildName: "build", Project: source.Project, TargetOS: source.TargetOS, TargetArch: source.TargetArch, SourceRepositoryUID: source.RepositoryUID, RequestDigest: "request"}
+	extraRPM := filepath.Join(sourcePath, "Packages", "untracked.rpm")
+	if err := os.WriteFile(extraRPM, []byte("untracked"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newFilesystemReleaseMaterializer(c).Create(context.Background(), record, source); err == nil {
+		t.Fatal("untracked source RPM was accepted with reused metadata")
+	}
+	if err := os.Remove(extraRPM); err != nil {
+		t.Fatal(err)
+	}
+	result, err := newFilesystemReleaseMaterializer(c).Create(context.Background(), record, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePath := filepath.Join(root, "repositories", source.Project, source.TargetOS, source.TargetArch, "releases", record.BuildName)
+	if fullDigest, err := digestReleaseDirectory(releasePath); err != nil || fullDigest != result.Digest {
+		t.Fatalf("reused release digest = %q, full digest = %q, error = %v", result.Digest, fullDigest, err)
+	}
+	got, err := os.ReadFile(filepath.Join(releasePath, "repodata", "repomd.xml"))
+	if err != nil || string(got) != repomd {
+		t.Fatalf("release repomd.xml = %q, %v", got, err)
+	}
+	sourceRPM, err := os.Stat(rpmPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseRPM, err := os.Stat(filepath.Join(releasePath, "Packages", "keep.rpm"))
+	if err != nil || !os.SameFile(sourceRPM, releaseRPM) {
+		t.Fatalf("release RPM does not link source: %v", err)
+	}
+}
+
+func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
+	root := t.TempDir()
+	record := &ReleaseRecord{
+		BuildName: "build", Project: "project", TargetOS: "openEuler", TargetArch: "x86_64",
+		RequestDigest: "request", State: ReleaseReady,
+		ReleaseDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("release"))),
+	}
+	m := &releaseManager{root: root, records: map[string]*ReleaseRecord{record.BuildName: record}}
+	for _, dir := range []string{m.releasePath(record), filepath.Join(root, ".release-work"), filepath.Join(root, ".metadata/releases")} {
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := releaseIndex{BuildName: record.BuildName, RequestDigest: record.RequestDigest, ReleaseDigest: record.ReleaseDigest}
+	if err := atomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
+		t.Fatal(err)
+	}
+	// No RPM files are present: startup must not recompute the full directory digest.
+	if err := m.recover(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if record.State != ReleaseReady {
+		t.Fatalf("matching metadata changed Ready release to %s", record.State)
+	}
+
+	index.ReleaseDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("different")))
+	if err := atomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.recover(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if record.State != ReleaseFailed || record.Failure == nil || record.Failure.Code != "ReleaseContentInvalid" {
+		t.Fatalf("mismatched metadata did not fail release: %#v", record)
 	}
 }
