@@ -493,20 +493,16 @@ Content-Type: multipart/form-data; boundary=...
 
 步骤 5 之后任何失败都不能删除最终正文；服务应返回可重试错误，由相同幂等键请求或启动恢复流程补齐元数据。步骤 5 之前失败则关闭并删除临时正文，将 IdempotencyRecord 和 Artifact 标记为 `Failed`，允许相同摘要整文件重传。
 
-服务启动时按以下规则恢复：
+服务启动时只校验 `Processing` 幂等记录关联的正文；`Completed` 和 `Failed` 记录仅加载元数据，不在启动路径重新计算正文摘要。未完成记录按以下规则恢复：
 
 | 现场状态 | 恢复动作 |
 |----------|----------|
 | Processing 记录 + Pending Artifact + 临时正文 | 删除临时正文，将幂等记录和 Artifact 标记为 Failed，允许相同摘要整文件重传 |
-| Processing 记录 + Pending Artifact + 最终正文 | 流式复核大小和 SHA-256；匹配则补写 Completed Artifact 和幂等记录，不匹配则隔离正文并标记 Corrupted |
+| Processing 记录 + 最终正文（Artifact 为 Pending 或 Completed） | 流式复核大小和 SHA-256；匹配则补写 Completed Artifact 和幂等记录，不匹配则隔离正文并标记 Corrupted |
 | Processing 记录存在但 Artifact 不存在 | 标记幂等记录 Failed；相同摘要重试时重新创建 Artifact |
-| Completed Artifact + Processing/Failed 幂等记录 | 核对 Artifact ID 和请求摘要后补写 Completed 幂等记录 |
-| Completed 幂等记录 + Pending Artifact + 最终正文 | 复核正文后补写 Completed Artifact；不匹配则标记 Corrupted，不能返回原成功响应 |
-| Completed Artifact 但最终正文缺失 | 将 Artifact 和幂等记录标记 Failed/Corrupted，内容接口不得返回成功 |
 | 只有临时正文 | 超过 `--temporary-upload-ttl` 后删除 |
-| 只有最终正文且没有 Artifact/幂等记录 | 移入隔离目录并记录告警，不能自动公开或按客户端路径猜测归属 |
 
-恢复和正常上传必须使用相同的 per-key/per-Artifact 锁，避免启动扫描与新请求同时修改一组记录。隔离目录中的正文只能由后台审计或管理员处理。
+已完成上传的幂等重放仍须校验最终正文，不得仅凭 Completed 状态返回成功。全面历史完整性检查不阻塞启动；隔离目录中的正文只能由后台审计或管理员处理。
 
 ### 6.2 提交并完成 Job 上传清单
 
@@ -946,11 +942,11 @@ GET /repositories/v1/{repositoryUID}/{path...}
 5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 从 `SOURCERPM` 文件名末尾的版本、发行号分隔符推导源包名，不要求它与子包版本一致；source RPM 使用自身名称推导，并按 `src` 架构建立仓库身份，即使 RPM 头中报告了构建目标架构。无法确定归属时记录出错的 Job 名称并使本次请求失败。
 6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。源码包与同名同版本的二进制包不视为同一 NEVRA。
 7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
-8. 基础仓存在时，将其 `Packages` 中的 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用。基础仓和工作目录必须位于同一文件系统；首版硬链接失败不静默退化为完整复制。
-9. 从工作目录删除所有属于本次输入 spec 集合的旧 RPM，再将输入 Artifact 正文硬链接进去。Artifact 正文和仓库工作目录也必须位于同一文件系统。
+8. 基础仓存在时，读取其不可变 `repository.json` 中的 RPM 元数据，只将非本批输入 spec 的旧 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用；校验目录项与元数据一致，但不重新解析或哈希旧 RPM。基础仓和工作目录必须位于同一文件系统；硬链接失败不静默退化为完整复制。
+9. 将本批输入 Artifact 正文硬链接到工作目录。Artifact 正文和仓库工作目录也必须位于同一文件系统。
 10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、最大输出、固定 locale、受限环境和资源限制。
-11. 重新解析生成的 primary metadata，确认 RPM 数量、文件摘要和解析结果与工作目录一致。
-12. 计算确定性的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256。
+11. 确认生成的 `repodata/repomd.xml` 存在且为普通文件。
+12. 计算确定性的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批输入摘要，其他文件现场计算摘要。
 13. 写入并 fsync `repository.json`，再将工作目录以不覆盖语义原子重命名为最终目录。
 14. 原子写入 `Ready` 元数据，并向等待该 UID 的请求广播完成。
 

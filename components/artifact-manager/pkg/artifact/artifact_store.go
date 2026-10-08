@@ -118,22 +118,17 @@ func (s *Store) recover() error {
 		}
 	}
 	for _, ir := range s.idempotency {
+		if ir.State != IdempotencyProcessing {
+			continue
+		}
 		a := s.artifacts[ir.ArtifactID]
 		if a == nil {
-			if ir.State == IdempotencyProcessing {
-				s.failIdempotency(ir, "ArtifactMissing", "artifact metadata is missing")
-			}
+			s.failIdempotency(ir, "ArtifactMissing", "artifact metadata is missing")
 			continue
 		}
 		tmp := filepath.Join(s.root, ".uploads", a.ID+".tmp")
 		final := s.artifactPath(a)
 		finalOK := verifyFile(final, a.Size, a.SHA256) == nil
-		if a.State == Completed && finalOK {
-			if ir.State != IdempotencyCompleted {
-				s.completeRecords(a, ir)
-			}
-			continue
-		}
 		if finalOK {
 			s.completeRecords(a, ir)
 			_ = os.Remove(tmp)
@@ -285,9 +280,6 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 		a := s.artifacts[old.ArtifactID]
 		if a != nil && verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil {
 			s.completeRecords(a, old)
-			return a, old, true, nil
-		}
-		if old.State == IdempotencyCompleted && a != nil && a.State == Completed {
 			return a, old, true, nil
 		}
 		if old.State == IdempotencyProcessing {

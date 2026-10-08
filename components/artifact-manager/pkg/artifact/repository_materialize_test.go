@@ -2,10 +2,88 @@ package artifact
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "base")
+	basePackages := filepath.Join(base, "Packages")
+	work := filepath.Join(root, "work")
+	workPackages := filepath.Join(work, "Packages")
+	for _, directory := range []string{basePackages, workPackages, filepath.Join(work, "repodata")} {
+		if err := os.MkdirAll(directory, 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseMetadata := make(map[string]RepositoryRPMMeta)
+	for name, spec := range map[string]string{"old-a.rpm": "a", "old-b.rpm": "b"} {
+		path := filepath.Join(basePackages, name)
+		if err := os.WriteFile(path, []byte(name), 0640); err != nil {
+			t.Fatal(err)
+		}
+		sum, err := fileSHA256(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		baseMetadata[name] = RepositoryRPMMeta{FileName: name, SpecName: spec, Size: int64(len(name)), SHA256: sum}
+	}
+	index, err := json.Marshal(repositoryIndex{RepositoryUID: "base-uid", RPMs: baseMetadata})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "repository.json"), index, 0640); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadRepositoryMetadata(base, "base-uid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := linkRPMDirectory(basePackages, workPackages, loaded, map[string]bool{"a": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) != 1 || retained["old-b.rpm"].SpecName != "b" {
+		t.Fatalf("retained RPMs = %+v", retained)
+	}
+	if _, err := os.Stat(filepath.Join(workPackages, "old-a.rpm")); !os.IsNotExist(err) {
+		t.Fatalf("replaced RPM still linked: %v", err)
+	}
+	baseInfo, err := os.Stat(filepath.Join(basePackages, "old-b.rpm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workInfo, err := os.Stat(filepath.Join(workPackages, "old-b.rpm"))
+	if err != nil || !os.SameFile(baseInfo, workInfo) {
+		t.Fatalf("retained RPM was not hard-linked: %v", err)
+	}
+	newPath := filepath.Join(workPackages, "new-a.rpm")
+	if err := os.WriteFile(newPath, []byte("new-a"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := fileSHA256(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained["new-a.rpm"] = RepositoryRPMMeta{FileName: "new-a.rpm", SpecName: "a", Size: 5, SHA256: sum}
+	if err := os.WriteFile(filepath.Join(work, "repodata", "repomd.xml"), []byte("metadata"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	cachedDigest, err := digestDirectoryWithRPMMetadata(work, retained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullDigest, err := digestDirectory(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cachedDigest != fullDigest {
+		t.Fatalf("cached digest = %s, full digest = %s", cachedDigest, fullDigest)
+	}
+}
 
 func TestInspectRPMSourceIdentityAndSubpackageOrigin(t *testing.T) {
 	dir := t.TempDir()

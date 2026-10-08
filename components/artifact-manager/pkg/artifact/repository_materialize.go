@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -45,21 +46,6 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		return result, retryableRepositoryError(err)
 	}
 
-	metadata := make(map[string]RepositoryRPMMeta)
-	if record.BaseRepositoryUID != "" {
-		if record.baseBuildName == "" {
-			return result, &repositoryError{code: "BaseRepositoryNotReady", status: 422}
-		}
-		baseRepository := repositoryVersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.baseBuildName, record.BaseRepositoryUID)
-		basePackages := filepath.Join(baseRepository, "Packages")
-		if err = linkRPMDirectory(basePackages, packages); err != nil {
-			return result, classifyLinkError(err)
-		}
-		if err = copyDirectory(filepath.Join(baseRepository, "repodata"), filepath.Join(work, "repodata")); err != nil && !os.IsNotExist(err) {
-			return result, retryableRepositoryError(err)
-		}
-	}
-
 	inputMetadata := make([]RepositoryRPMMeta, 0, len(inputs))
 	inputSpecs := make(map[string]bool)
 	for _, input := range inputs {
@@ -78,30 +64,23 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		inputSpecs[meta.SpecName] = true
 	}
 
-	baseEntries, err := os.ReadDir(packages)
-	if err != nil {
-		return result, retryableRepositoryError(err)
-	}
-	for _, entry := range baseEntries {
-		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() {
-			return result, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+	metadata := make(map[string]RepositoryRPMMeta)
+	if record.BaseRepositoryUID != "" {
+		if record.baseBuildName == "" {
+			return result, &repositoryError{code: "BaseRepositoryNotReady", status: 422}
 		}
-		path := filepath.Join(packages, entry.Name())
-		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
-			return result, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
-		}
-		meta, err := m.inspectRPMFile(ctx, path)
+		baseRepository := repositoryVersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.baseBuildName, record.BaseRepositoryUID)
+		baseMetadata, err := loadRepositoryMetadata(baseRepository, record.BaseRepositoryUID)
 		if err != nil {
 			return result, err
 		}
-		if inputSpecs[meta.SpecName] {
-			if err := os.Remove(path); err != nil {
-				return result, retryableRepositoryError(err)
-			}
-			continue
+		metadata, err = linkRPMDirectory(filepath.Join(baseRepository, "Packages"), packages, baseMetadata, inputSpecs)
+		if err != nil {
+			return result, err
 		}
-		metadata[meta.FileName] = meta
+		if err = copyDirectory(filepath.Join(baseRepository, "repodata"), filepath.Join(work, "repodata")); err != nil && !os.IsNotExist(err) {
+			return result, retryableRepositoryError(err)
+		}
 	}
 
 	nevra := make(map[string]string)
@@ -139,7 +118,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if info, err := os.Stat(filepath.Join(work, "repodata", "repomd.xml")); err != nil || !info.Mode().IsRegular() {
 		return result, &repositoryError{code: "RepositoryMetadataInvalid", retryable: true}
 	}
-	digest, err := digestDirectory(work)
+	digest, err := digestDirectoryWithRPMMetadata(work, metadata)
 	if err != nil {
 		return result, retryableRepositoryError(err)
 	}
@@ -263,20 +242,54 @@ func rpmIdentity(meta RepositoryRPMMeta) string {
 	return strings.Join([]string{meta.Name, meta.Epoch, meta.Version, meta.Release, meta.Arch}, "\x00")
 }
 
-func linkRPMDirectory(source, destination string) error {
+func loadRepositoryMetadata(directory, uid string) (map[string]RepositoryRPMMeta, error) {
+	data, err := os.ReadFile(filepath.Join(directory, "repository.json"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+		}
+		return nil, retryableRepositoryError(err)
+	}
+	var index repositoryIndex
+	if json.Unmarshal(data, &index) != nil || index.RepositoryUID != uid || index.RPMs == nil {
+		return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+	}
+	return index.RPMs, nil
+}
+
+// linkRPMDirectory reuses the immutable base index and links only RPMs whose
+// spec is not replaced by this batch. File contents are not read again.
+func linkRPMDirectory(source, destination string, base map[string]RepositoryRPMMeta, replacedSpecs map[string]bool) (map[string]RepositoryRPMMeta, error) {
 	entries, err := os.ReadDir(source)
 	if err != nil {
-		return err
+		return nil, retryableRepositoryError(err)
 	}
+	retained := make(map[string]RepositoryRPMMeta, len(base))
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(strings.ToLower(entry.Name()), ".rpm") {
-			return errors.New("invalid package directory")
+		name := entry.Name()
+		meta, ok := base[name]
+		if !ok || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(strings.ToLower(name), ".rpm") || meta.FileName != name || meta.SpecName == "" || meta.Size < 0 || !validHash(meta.SHA256) {
+			return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
 		}
-		if err := os.Link(filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
-			return err
+		info, err := entry.Info()
+		if err != nil {
+			return nil, retryableRepositoryError(err)
 		}
+		if !info.Mode().IsRegular() || info.Size() != meta.Size {
+			return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+		}
+		if replacedSpecs[meta.SpecName] {
+			continue
+		}
+		if err := os.Link(filepath.Join(source, name), filepath.Join(destination, name)); err != nil {
+			return nil, classifyLinkError(err)
+		}
+		retained[name] = meta
 	}
-	return nil
+	if len(entries) != len(base) {
+		return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+	}
+	return retained, nil
 }
 
 func copyDirectory(source, destination string) error {
@@ -328,6 +341,12 @@ func fileSHA256(path string) (string, error) {
 }
 
 func digestDirectory(root string) (string, error) {
+	return digestDirectoryWithRPMMetadata(root, nil)
+}
+
+// digestDirectoryWithRPMMetadata preserves the directory digest format while
+// reusing verified RPM hashes from the immutable base and new manifests.
+func digestDirectoryWithRPMMetadata(root string, rpms map[string]RepositoryRPMMeta) (string, error) {
 	var files []string
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -353,15 +372,27 @@ func digestDirectory(root string) (string, error) {
 	}
 	sort.Strings(files)
 	hash := sha256.New()
+	seenRPMs := 0
 	for _, relative := range files {
 		path := filepath.Join(root, filepath.FromSlash(relative))
 		info, err := os.Stat(path)
 		if err != nil {
 			return "", err
 		}
-		sum, err := fileSHA256(path)
-		if err != nil {
-			return "", err
+		var sum string
+		if rpms != nil && strings.HasPrefix(relative, "Packages/") {
+			name := strings.TrimPrefix(relative, "Packages/")
+			meta, ok := rpms[name]
+			if !ok || strings.Contains(name, "/") || meta.FileName != name || meta.Size != info.Size() || !validHash(meta.SHA256) {
+				return "", errors.New("repository package metadata mismatch")
+			}
+			sum = meta.SHA256
+			seenRPMs++
+		} else {
+			sum, err = fileSHA256(path)
+			if err != nil {
+				return "", err
+			}
 		}
 		for _, value := range []string{relative, fmt.Sprint(info.Size()), sum} {
 			var length [8]byte
@@ -369,6 +400,9 @@ func digestDirectory(root string) (string, error) {
 			hash.Write(length[:])
 			hash.Write([]byte(value))
 		}
+	}
+	if rpms != nil && seenRPMs != len(rpms) {
+		return "", errors.New("repository package count mismatch")
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
