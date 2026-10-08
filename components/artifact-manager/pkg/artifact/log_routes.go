@@ -72,7 +72,12 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 	}
 	writeJSON(w, 200, map[string]any{"stream": "combined", "acceptedSequence": seq, "nextSequence": l.NextSequence, "committedBytes": l.CommittedBytes})
 }
-func sha256sum(b []byte) []byte { h := sha256.Sum256(b); return h[:] }
+
+func sha256sum(b []byte) []byte {
+	h := sha256.Sum256(b)
+	return h[:]
+}
+
 func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) {
 	if _, e := s.identity(r); e != nil {
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
@@ -85,6 +90,7 @@ func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) 
 	}
 	writeJSON(w, 200, l)
 }
+
 func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string) {
 	l, ok := s.store.GetLog(p, j)
 	if !ok {
@@ -117,6 +123,7 @@ func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string)
 	}
 	http.ServeContent(w, r, "container.log", l.UpdatedAt, io.NewSectionReader(f, 0, l.CommittedBytes))
 }
+
 func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
@@ -180,6 +187,7 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 		}
 	}
 }
+
 func recoverySequence(r *http.Request) (int64, bool, error) {
 	v := r.Header.Get("Last-Event-ID")
 	if v == "" {
@@ -191,10 +199,12 @@ func recoverySequence(r *http.Request) (int64, bool, error) {
 	n, err := strconv.ParseInt(v, 10, 64)
 	return n, true, err
 }
+
 func writeSSELog(w io.Writer, e logEvent) {
 	b, _ := json.Marshal(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString(e.Data)})
 	fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", e.Sequence, b)
 }
+
 func (s *Server) completeLog(w http.ResponseWriter, r *http.Request, p, j string) {
 	id, e := s.identity(r)
 	if e != nil {

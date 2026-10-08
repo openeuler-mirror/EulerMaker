@@ -102,4 +102,6 @@ type repositoryError struct {
 	jobName   string
 }
 
-func (e *repositoryError) Error() string { return e.code }
+func (e *repositoryError) Error() string {
+	return e.code
+}

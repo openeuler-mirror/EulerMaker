@@ -79,4 +79,6 @@ type releaseError struct {
 	status    int
 }
 
-func (e *releaseError) Error() string { return e.code }
+func (e *releaseError) Error() string {
+	return e.code
+}

@@ -19,6 +19,7 @@ type ManifestFile struct {
 	SHA256       string   `json:"sha256"`
 	Required     bool     `json:"required"`
 }
+
 type JobUploadManifest struct {
 	SchemaVersion int            `json:"schemaVersion"`
 	Project       string         `json:"project"`

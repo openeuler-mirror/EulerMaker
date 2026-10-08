@@ -19,9 +19,11 @@ type Identity struct {
 	Name      string
 	ExpiresAt time.Time
 }
+
 type Authorizer interface {
 	Authenticate(context.Context, string) (Identity, error)
 }
+
 type GatewayAuthorizer struct {
 	url    string
 	client *http.Client
@@ -29,6 +31,7 @@ type GatewayAuthorizer struct {
 	mu     sync.Mutex
 	cache  map[[32]byte]cachedIdentity
 }
+
 type cachedIdentity struct {
 	identity Identity
 	until    time.Time
@@ -51,6 +54,7 @@ func NewGatewayAuthorizer(c Config) (*GatewayAuthorizer, error) {
 	tr.TLSClientConfig = tc
 	return &GatewayAuthorizer{url: strings.TrimRight(c.GatewayURL, "/") + "/auth/check", client: &http.Client{Transport: tr, Timeout: 10 * time.Second}, ttl: c.AuthCacheTTL, cache: make(map[[32]byte]cachedIdentity)}, nil
 }
+
 func (a *GatewayAuthorizer) Authenticate(ctx context.Context, token string) (Identity, error) {
 	key := sha256.Sum256([]byte(token))
 	now := time.Now()

@@ -26,6 +26,7 @@ type FailureInfo struct {
 	JobName   string    `json:"jobName,omitempty"`
 	Time      time.Time `json:"time"`
 }
+
 type Artifact struct {
 	SchemaVersion int          `json:"schemaVersion"`
 	ID            string       `json:"id"`

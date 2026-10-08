@@ -17,6 +17,7 @@ func manifestDigest(files []ManifestFile) string {
 	}
 	return "sha256:" + hashText(b.String())
 }
+
 func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifestRequest) (*JobUploadManifest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -54,6 +55,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 	s.manifests[k] = m
 	return m, nil
 }
+
 func (s *Store) GetManifest(p, j string) (*JobUploadManifest, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

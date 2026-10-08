@@ -18,6 +18,7 @@ func (s *Store) logPaths(p, j string) (string, string, string) {
 	base := filepath.Join(s.root, ".logs", p, j)
 	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/logs", p, j, "combined.json")
 }
+
 func (s *Store) recoverLog(l *LogStream) error {
 	body, index, meta := s.logPaths(l.Project, l.JobName)
 	if l.State == LogFinalizing && l.ArtifactID != "" {
@@ -108,6 +109,7 @@ func bytesLines(data []byte) [][]byte {
 	}
 	return lines
 }
+
 func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum string) (*LogStream, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,6 +174,7 @@ func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum strin
 	s.publishLocked(k, logEvent{Sequence: seq, Data: append([]byte(nil), data...)})
 	return l, nil
 }
+
 func findLogRecord(path string, seq int64) (LogChunkRecord, error) {
 	f, e := os.Open(path)
 	if e != nil {
@@ -187,6 +190,7 @@ func findLogRecord(path string, seq int64) (LogChunkRecord, error) {
 	}
 	return LogChunkRecord{}, errors.New("not found")
 }
+
 func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]logEvent, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -235,6 +239,7 @@ func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]logEvent, int6
 	}
 	return out, l.NextSequence, sc.Err()
 }
+
 func (s *Store) GetLog(p, j string) (*LogStream, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -245,6 +250,7 @@ func (s *Store) GetLog(p, j string) (*LogStream, bool) {
 	cp := *l
 	return &cp, true
 }
+
 func (s *Store) Subscribe(p, j string) (chan logEvent, func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,6 +262,7 @@ func (s *Store) Subscribe(p, j string) (chan logEvent, func()) {
 	s.subscribers[k][ch] = struct{}{}
 	return ch, func() { s.mu.Lock(); defer s.mu.Unlock(); delete(s.subscribers[k], ch); close(ch) }
 }
+
 func (s *Store) publishLocked(k string, e logEvent) {
 	for ch := range s.subscribers[k] {
 		select {
@@ -266,6 +273,7 @@ func (s *Store) publishLocked(k string, e logEvent) {
 		}
 	}
 }
+
 func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifact, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
