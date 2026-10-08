@@ -141,7 +141,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
-	return repositoryResult{Digest: digest, RPMs: metadata}, nil
+	return repositoryResult{Digest: digest}, nil
 }
 
 func (m *filesystemMaterializer) inspectRPM(ctx context.Context, path string, artifact Artifact) (RepositoryRPMMeta, error) {

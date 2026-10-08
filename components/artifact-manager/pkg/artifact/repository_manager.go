@@ -86,7 +86,7 @@ func (m *repositoryManager) recover(workTTL time.Duration) error {
 		if err != nil || digest != index.RepositoryDigest {
 			continue
 		}
-		record.State, record.RepositoryDigest, record.RPMs = RepositoryReady, digest, index.RPMs
+		record.State, record.RepositoryDigest = RepositoryReady, digest
 		record.ContentURL, record.UpdatedAt, record.CompletedAt = "/repositories/v1/"+uid+"/", now, &now
 		if err := m.persist(record); err != nil {
 			return err
@@ -115,10 +115,26 @@ func (m *repositoryManager) load() error {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		var record RepositoryRecord
-		data, err := os.ReadFile(filepath.Join(m.root, ".metadata/repositories", entry.Name()))
-		if err != nil || json.Unmarshal(data, &record) != nil || record.RepositoryUID == "" {
+		file, err := os.Open(filepath.Join(m.root, ".metadata/repositories", entry.Name()))
+		if err != nil {
+			return fmt.Errorf("load repository metadata %s: %w", entry.Name(), err)
+		}
+		// Legacy records contain a complete RPM index. Shadow that field so it is
+		// skipped during decoding instead of being retained for every Ready repo.
+		var stored struct {
+			RepositoryRecord
+			RPMs *struct{} `json:"rpms"`
+		}
+		decodeErr := json.NewDecoder(file).Decode(&stored)
+		closeErr := file.Close()
+		if decodeErr != nil || closeErr != nil || stored.RepositoryUID == "" {
 			return fmt.Errorf("load repository metadata %s: invalid record", entry.Name())
+		}
+		record := stored.RepositoryRecord
+		if stored.RPMs != nil {
+			if err := m.persist(&record); err != nil {
+				return fmt.Errorf("compact repository metadata %s: %w", entry.Name(), err)
+			}
 		}
 		m.records[record.RepositoryUID] = &record
 	}
@@ -283,7 +299,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 		record.State = RepositoryFailed
 		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobName: typed.jobName, Time: now}
 	} else {
-		record.State, record.RepositoryDigest, record.RPMs = RepositoryReady, result.Digest, result.RPMs
+		record.State, record.RepositoryDigest = RepositoryReady, result.Digest
 		record.ContentURL = "/repositories/v1/" + uid + "/"
 		record.CompletedAt = &now
 	}
@@ -361,7 +377,11 @@ func (m *repositoryManager) remove(uid string) {
 }
 
 func (m *repositoryManager) persist(record *RepositoryRecord) error {
-	return atomicJSON(m.metaPath(record.RepositoryUID), record)
+	// The immutable repository.json is the RPM index. Keep only control-plane
+	// state in metadata, otherwise every completed repository duplicates it.
+	light := *record
+	light.RPMs = nil
+	return atomicJSON(m.metaPath(record.RepositoryUID), &light)
 }
 
 func (m *repositoryManager) repositoryPath(record *RepositoryRecord) string {

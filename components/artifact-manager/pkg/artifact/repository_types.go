@@ -81,7 +81,6 @@ type RepositoryResponse struct {
 
 type repositoryResult struct {
 	Digest string
-	RPMs   map[string]RepositoryRPMMeta
 }
 
 type repositoryIndex struct {

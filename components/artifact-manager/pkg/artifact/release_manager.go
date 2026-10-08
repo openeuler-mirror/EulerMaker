@@ -158,6 +158,18 @@ func (m *releaseManager) worker() {
 				m.finish(record, releaseResult{}, &releaseError{code: "SourceRepositoryNotReady", status: 422})
 				continue
 			}
+			// Repository records stay lightweight in memory. Load the immutable RPM
+			// index only for the release currently being materialized.
+			rpms, err := loadRepositoryMetadata(m.repositories.repositoryPath(source), source.RepositoryUID)
+			if err != nil {
+				var repositoryErr *repositoryError
+				if errors.As(err, &repositoryErr) && !repositoryErr.retryable {
+					err = &releaseError{code: "SourceRepositoryInvalid", status: 422}
+				}
+				m.finish(record, releaseResult{}, err)
+				continue
+			}
+			source.RPMs = rpms
 			ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
 			result, err := m.materializer.Create(ctx, *record, *source)
 			cancel()
