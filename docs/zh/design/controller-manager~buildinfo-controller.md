@@ -364,7 +364,7 @@ E-28/E-29/E-30 统一采用：**停止派发 → 等待已有 Job 收敛 → Com
 1. 触发时立即停止本轮所有新 Job 创建（含 bootstrap、重建），持久化对应 condition（ReleaseFailed / RpmRepoUnavailable / SnapshotUnavailable，status=True），保留原 phase。condition 是停止派发标记，保留首次触发 reason/message，不因依赖恢复而清除或恢复派发。写入按 10.2/10.3 分流，失败即结束本轮，禁止继续下发；确认写成功后才清除相关内存计数。
 2. 入口先排除不存在、删除中及终态对象，再执行 parentAbortGuard。发现停止标记后直接进入本路径，不再读取 Snapshot/RpmRepo/Config/build-target，不解析 spec、建图或补边；重启按持久化标记恢复，不重新计数。
 3. 按 ebs.io/build-name 完整分页 List 全部关联 Job，回填已有 spec 的最新 Job 状态。完成检查覆盖所有代际及构建集外的关联 Job，不只检查最新 Job；任一页失败不得使用部分结果或写 Completed，按 7.5 重试。
-4. 任一 Job 为 Pending/Running 或未知、空 phase 时继续等待，未知值记录告警。所有已创建 Job 均为 Succeeded/Failed/Aborted，且 `status.pendingJobCreates` 为空时，才写 Completed。未决创建按 6.5.1 确认，不能仅凭一次空 List 宣告完成；无 Job 且无未决创建时可完成。
+4. 任一 Job 为 Pending/Running 或未知、空 phase 时继续等待，未知值记录告警。所有已创建 Job 均为 Succeeded/Failed/Aborted，且 `status.pendingJobCreates` 为空时，才写 Completed。写入时将构建或安装未成功的 spec 所属仓库并入 `failedPackages`，包含尚未派发的 spec；优先使用持久化的 `status.specRepoNames[spec]`，旧对象缺失时尝试内存 specDepends。仍无法确定时，`single` 或尚在 Pending 且指定了包的构建使用 `Build.spec.packages`，其他构建保守使用本轮已读取的 `Project.spec.packageRepos`，避免下一轮增量构建漏选。未决创建按 6.5.1 确认，不能仅凭一次空 List 宣告完成；无 Job 且无未决创建时可完成。
 5. 不中止或删除已有 Job，不等待物化/sourceJobNames，不要求环内重建次数；未派发 spec 保留空状态，不伪造失败 Job。Completed 保留停止原因，不写 AllSpecsSucceeded；父 Build 在 Completed 后按 2.5 的 condition 契约收口。
 6. 等待期间仅有状态变化才 PUT，返回零值 + nil 等下一轮；不设等待超时，不将运行中的 Job 当作已完成。Completed 写入成功（含 Unknown 确认成功）后才清理缓存；写失败保留停止标记，下轮重新 List 判断。父 Build 中止/删除及 Project Terminating 仍优先按原规则写 Aborted，不属于本 Completed 路径。
 
@@ -459,7 +459,7 @@ ebs-apiserver (REST API)
 1. **回填既有 Job**：按 build-name List 并按 7.4.2、7.4.4～7.4.7 回填，覆盖上轮 Job 已创建但 status 写入未成功的情况。List 失败结束本轮。
 1.5. **确定目标架构**：复用 parentAbortGuard 持有的 Build；arch 为空时的防御行为见 E-19。
 2. **取得并持久化 DCG**：依次查内存缓存、status.dcg、首次建图（5.4/15.9）；首次建图要求本轮持有 RpmRepo 且所需元数据就绪。建边算法见 16.1、选点见 7.2.1。构图异常记录 DcgBuildFailed 并等待；持久化失败不更新缓存、不创建 Job。获取成功清除 DcgBuildFailed。single 跳过此步。
-3. **预建状态并派发无上游 spec**：DCG 落盘后、创建任何 Job 前，先为筛选后的构建集全部 spec 补齐缺失的 `specStatus` 条目并持久化，保持 Pending、不覆盖回填状态；写入失败不派发。然后对 build/install 合并入度为零且尚无 Job 的节点，依次执行架构校验（E-19）、构建依赖校验（7.4.1）和 Job 构造（15.3.1）。本轮新 Job 共用一次 Config/build-target 快照；配置不可用按 E-26 暂停。成功创建后按 7.4.2 更新派发计数及状态。
+3. **预建状态并派发无上游 spec**：DCG 落盘后、创建任何 Job 前，先为筛选后的构建集全部 spec 补齐缺失的 `specStatus` 条目和 `specRepoNames` 映射并持久化，保持 Pending、不覆盖回填状态；写入失败不派发。然后对 build/install 合并入度为零且尚无 Job 的节点，依次执行架构校验（E-19）、构建依赖校验（7.4.1）和 Job 构造（15.3.1）。本轮新 Job 共用一次 Config/build-target 快照；配置不可用按 E-26 暂停。成功创建后按 7.4.2 更新派发计数及状态。
 4. **派发 bootstrap**：按 7.2.1 的破环点和 7.4.6 第 3 条门禁执行首次下发；已下发的不重复 bootstrap。破环异常记录 DcgBuildFailed 并等待。
 5. **完成初始化**：构建集为空且未被步骤 0 的确定性失败分支截获时，直接 Completed。构建集非空时，只有步骤 3、4 的派发遍历完成后才置 Processing；未派发条目已在步骤 3 预建，作为 6.4 完成判定的遍历基准。
 6. **写入**：仅实际状态变化才 PUT（见 7.3 回写约定），成功后由后续 Processing 调谐推进。
@@ -488,7 +488,7 @@ ebs-apiserver (REST API)
 specDepends 的组装与缓存见 15.11；构建集只在 Pending 阶段判定，分为全量解析和构建集筛选两阶段：
 
 - **阶段一：specDepends 全量组装**——per-BuildInfo 缓存（15.11）命中且 phase=Processing → 直接复用全量视图（本轮不下载不解析）；Pending 重入 / miss（首次组装 / 进程重启后）→ 遍历当前 Snapshot `packageRepoStatuses`（构建门禁为 build 级判断、恒通过无 repo 级过滤，见下文），逐仓经 git-server 下载解析补源（spec 文件内容经全局 `Cache.specFileCache` 去重：命中不下载，miss 经 git show 下载写入 LRU，15.11），按下述 `unparsable_spec` 规则覆盖依赖后写回全量视图缓存，得到**当前 Snapshot 全部包仓库的 spec 依赖全集**（纯内存视图，不落库；`full`/`incremental`/`specified` 适用；`single` 直通组装 `packages` 全部指定包仓库条目，即构建集语义；指定包仓库集直组装见 7.2.3）。
-- **阶段二：构建集判定**——按构建类型的"构建选 spec 规则"从本轮组装的全量 specDepends 中筛选需要构建的 spec 集合（**构建集**）。构建集为派生概念：内存中按确定性规则重算、不落库，DCG（status.dcg）与 `status.specStatus` 仅覆盖构建集；步骤 2 建图与步骤 3 下发的输入均为构建集筛选后的 specDepends 条目。
+- **阶段二：构建集判定**——按构建类型的"构建选 spec 规则"从本轮组装的全量 specDepends 中筛选需要构建的 spec 集合（**构建集**）。构建集为派生概念：内存中按确定性规则重算、不落库，DCG（status.dcg）、`status.specStatus` 与 `status.specRepoNames` 仅覆盖构建集；步骤 2 建图与步骤 3 下发的输入均为构建集筛选后的 specDepends 条目。
 
 **`unparsable_spec` 规则**：`BuildInfo.spec.buildPayload.unparsable_spec` 是 spec 名列表，按 `specDepends` 的 map key 精确匹配（区分大小写），不按 `repoName` 匹配。每次重新组装时，先正常下载和解析所有 spec、按 specName 合并，再对命中的条目将内存视图中的 `BuildRequires` 置为空 map，最后写入 per-BuildInfo 缓存；全局 specFileCache 只保存原始文件，不受覆盖影响。Processing 缓存命中直接复用已覆盖的视图；重启后按已固化的 BuildInfo payload 重组装，得到相同结果。列表缺失或为空时不覆盖；键值不是列表时记录 warning 且整体不生效；列表中的非字符串项记录 warning 并忽略，其余有效项仍参与匹配；列表中不存在的 spec 名无效果。
 
@@ -1104,7 +1104,8 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 | `status.pendingJobCreates` | map[string]PendingJobCreate | 既有未决创建身份的恢复见 6.5.1；新派发不再写入，非空时不得写 Completed |
 | `status.conditions` | []metav1.Condition | BuildInfo 级 condition，目录见 9.1；`status` 恒 `True`；DcgBuildFailed 恢复即清除 |
 | `status.specStatus` | SpecStatusGroup | 按 `build`、`install`、`dispatchCount` 分组，各组以 specName 为 key；init 步骤 3 在派发 Job 前为构建集全部 spec 预建 `build[specName]` 空状态，缺失的 `install` 与 `dispatchCount` 视为空状态和 0；后续不重置既有计数（G-03） |
-| `status.failedPackages` | []string | Pending 组装时持久化仓库级确定性失败；`Completed` 时依据本轮 spec→仓库映射合并最终构建/安装失败的 spec 所属仓库，去重排序后与终态同次写入；恢复后不从 condition message 反推，规则见 7.2.2 |
+| `status.specRepoNames` | map[string]string | init 在派发 Job 前将构建集每个 spec 的所属包仓库名与空状态一起持久化；重启后直接读取，不依赖 DCG 或内存缓存 |
+| `status.failedPackages` | []string | Pending 组装时持久化仓库级确定性失败；正常 `Completed` 时合并最终构建/安装失败的 spec 所属仓库；异常停止派发时还纳入未完成 spec，映射缺失时保守扩大到本轮包仓库范围。去重排序后与终态同次写入，不从 condition message 反推 |
 
 `SpecStatusGroup`（以 data-models.md 为准）：
 

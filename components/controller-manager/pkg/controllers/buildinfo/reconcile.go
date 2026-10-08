@@ -1,7 +1,3 @@
-// reconcile.go implements the reconcile entry, the front guards and the
-// status write helpers (design 7.1, 10.2, 10.3). The business sync returns
-// only (ReconcileResult, error); queue operations stay in BaseController
-// (7.5).
 package buildinfo
 
 import (
@@ -9,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -22,12 +19,12 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// conflictRequeueDelay is the 10.2 delayed-requeue after a 409 Conflict or
+// conflictRequeueDelay is the delayed requeue after a 409 Conflict or
 // an unmatched Unknown confirmation: the next round re-GETs the object and
 // recomputes the target status; replaying the old intent is forbidden.
 const conflictRequeueDelay = time.Second
 
-// reconcileRound carries the per-round shared state (design 10.1/10.2): the
+// reconcileRound carries the per-round shared state: the
 // current BuildInfo object — replaced after confirmed writes and updated
 // locally for Jobs awaiting batch confirmation — plus the guard-held objects
 // later steps reuse and the readiness counters.
@@ -47,11 +44,11 @@ type reconcileRound struct {
 	failures *roundFailures
 }
 
-// isSingle reports whether the parent Build is a single-type直通 build
-// (7.2.3): the guard-held Build is the only source of the build type.
+// isSingle reports whether the parent Build is a single build. The guard-held
+// Build is the only source of the build type.
 func (r *reconcileRound) isSingle() bool { return r.build.Spec.BuildType == "single" }
 
-// sync is the BaseController SyncFunc. It guards the 7.5 invalid-result rule
+// sync is the BaseController SyncFunc. It guards against invalid results
 // so a programming error is counted before the framework forgets the item.
 func (c *Controller) sync(ctx context.Context, key string) (controller.ReconcileResult, error) {
 	result, err := c.reconcile(ctx, key)
@@ -61,18 +58,18 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	return result, err
 }
 
-// reconcile drives one BuildInfo round (design 7.1).
+// reconcile drives one BuildInfo round.
 func (c *Controller) reconcile(ctx context.Context, key string) (controller.ReconcileResult, error) {
 	namespace, name, err := splitKey(key)
 	if err != nil {
 		return controller.ReconcileResult{}, controller.NewPermanentError(err)
 	}
 	// Entry re-get: the queued object may be stale; the entry GET is the
-	// optimistic-lock base for every write this round (7.1/10.2).
+	// optimistic-lock base for every write this round.
 	buildInfo, err := c.client.GetBuildInfo(ctx, namespace, name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			// E-10: deleted externally — silent exit, invalidate caches.
+			// A deleted object needs no further reconciliation.
 			c.logf(key, "BuildInfoDeleted", "buildinfo removed before reconcile")
 			c.invalidateCaches(key)
 			return controller.ReconcileResult{}, nil
@@ -81,14 +78,13 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 	}
 	if buildInfo.DeletionTimestamp != nil {
 		// A deleting object is never advanced; its caches, counters and dedup
-		// entries are dropped immediately (5.4: no tombstone grace) so a
+		// entries are dropped immediately so a
 		// recreated same-name BuildInfo starts from zero.
 		c.invalidateCaches(key)
 		return controller.ReconcileResult{}, nil
 	}
 	if buildInfo.Status.Phase.IsTerminal() {
-		// G-05 defensive check: terminal objects never advance (5.4 also
-		// invalidates the per-BuildInfo caches and counters here).
+		// Terminal objects never advance; release their caches and counters.
 		c.invalidateCaches(key)
 		return controller.ReconcileResult{}, nil
 	}
@@ -99,15 +95,14 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 		return result, err
 	}
 
-	// Persisted stop-dispatch marker (E-28/E-29/E-30): the round joins the
-	// 6.5 convergence path directly — no Snapshot/RpmRepo/build-target Config reads,
-	// no parsing, no graph work (6.5 step 2).
+	// A persisted stop marker goes directly to convergence without reading
+	// child resources, parsing specs, or working on the dependency graph.
 	if marker := stopCondition(round.current.Status.Conditions); marker != nil {
 		return c.convergeToCompleted(ctx, round)
 	}
 
 	// releaseFailedGuard runs every round for non-single builds; the held
-	// RpmRepo object is reused by init/advance (7.1/15.4).
+	// RpmRepo object is reused by initialization and advancement.
 	if !round.isSingle() {
 		if stop, result, err := c.releaseFailedGuard(ctx, round); stop {
 			return result, err
@@ -121,7 +116,7 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 	case ebsv1.BuildInfoProcessing:
 		result, err = c.advanceBuildInfo(ctx, round)
 	default:
-		// E-12: unknown phase — skip with an error log, no retry.
+		// An unknown phase is logged but not retried.
 		log.Printf("controller=%s key=%q reason=UnknownPhase phase=%q", Name, key, round.current.Status.Phase)
 		return controller.ReconcileResult{}, nil
 	}
@@ -137,7 +132,7 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 	return result, err
 }
 
-// splitKey parses the <namespace>/<name> queue key (design 5.1).
+// splitKey parses the <namespace>/<name> queue key.
 func splitKey(key string) (string, string, error) {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -146,15 +141,15 @@ func splitKey(key string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-// parentAbortGuard is the front guard of every round (design 7.1): Project
-// Terminating (E-20), parent Build missing (E-03) or Aborted (G-06) all
+// parentAbortGuard runs before business reconciliation: Project Terminating,
+// parent Build missing or Aborted all
 // terminate the BuildInfo as Aborted. The held Project/Build objects are
 // reused by the whole round.
 func (c *Controller) parentAbortGuard(ctx context.Context, round *reconcileRound) (bool, controller.ReconcileResult, error) {
 	project, err := c.client.GetProject(ctx, round.current.Namespace)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			// E-21: Project 404 never terminates; re-evaluate next round.
+			// A missing Project is retried rather than aborting BuildInfo.
 			c.logf(round.key, "ProjectNotFound", "project %s not found", round.current.Namespace)
 			return true, controller.ReconcileResult{}, nil
 		}
@@ -162,7 +157,7 @@ func (c *Controller) parentAbortGuard(ctx context.Context, round *reconcileRound
 	}
 	round.project = project
 	if project.Status.Phase == ebsv1.ProjectTerminating {
-		// E-20: project cascade recycling.
+		// Project termination cascades to BuildInfo.
 		result, err := c.writeAborted(ctx, round, "ProjectTerminating")
 		return true, result, err
 	}
@@ -170,16 +165,16 @@ func (c *Controller) parentAbortGuard(ctx context.Context, round *reconcileRound
 	build, err := c.client.GetBuild(ctx, round.current.Namespace, round.current.Name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			// E-03: a missing parent Build aborts the BuildInfo.
+			// A missing parent Build aborts BuildInfo.
 			result, err := c.writeAborted(ctx, round, "BuildDeleted")
 			return true, result, err
 		}
-		// BuildQueryFailed (9.1 no-condition list): transient, error backoff.
+		// A Build query failure is retried.
 		return true, controller.ReconcileResult{}, err
 	}
 	round.build = build
 	if build.Status.Phase == ebsv1.BuildAborted {
-		// G-06.
+		// Follow the parent Build abort.
 		result, err := c.writeAborted(ctx, round, "BuildAborted")
 		return true, result, err
 	}
@@ -187,7 +182,7 @@ func (c *Controller) parentAbortGuard(ctx context.Context, round *reconcileRound
 }
 
 // writeAborted persists the Aborted terminal phase and invalidates the
-// per-BuildInfo caches after the write is confirmed (design 7.1).
+// per-BuildInfo caches after the write is confirmed.
 func (c *Controller) writeAborted(ctx context.Context, round *reconcileRound, reason string) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	if reason == "BuildAborted" {
@@ -272,15 +267,14 @@ func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) 
 	return "", false
 }
 
-// releaseFailedGuard fetches the same-name RpmRepo once per round (design
-// 7.1/15.4): query failures count towards E-29 (whole-round error below the
-// threshold), 404 counts but lets the round continue without holding the
-// object (E-16), release.phase=Failed escalates to E-28.
+// releaseFailedGuard fetches the same-name RpmRepo once per round. Query
+// failures count toward the stop threshold; 404 lets the round continue
+// without holding the object, while a failed release stops dispatch.
 func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRound) (bool, controller.ReconcileResult, error) {
 	repo, err := c.client.GetRpmRepo(ctx, round.current.Namespace, round.current.Name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			// E-16: transient absence — count, escalate at the threshold,
+			// Transient absence: count, escalate at the threshold,
 			// otherwise continue the round without holding the RpmRepo.
 			_, escalated := round.failures.RpmRepoFailed(ReasonRpmRepoNotFound, fmt.Sprintf("RpmRepo %s/%s not found", round.current.Namespace, round.current.Name))
 			if escalated {
@@ -290,7 +284,7 @@ func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRou
 			c.logf(round.key, "RpmRepoNotFound", "rpmrepo %s/%s not found", round.current.Namespace, round.current.Name)
 			return false, controller.ReconcileResult{}, nil
 		}
-		// E-08: 5xx/timeout — count and fail the whole round (unlike E-16).
+		// Query failures count and fail the whole round, unlike 404.
 		_, escalated := round.failures.RpmRepoFailed(ReasonRpmRepoQueryFailed, err.Error())
 		if escalated {
 			result, err := c.escalateRpmRepoUnavailable(ctx, round)
@@ -301,16 +295,15 @@ func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRou
 	round.rpmRepo = repo
 	round.rpmRepoHeld = true
 	if repo.Status.Release != nil && repo.Status.Release.Phase == ebsv1.RpmRepoReleaseFailed {
-		// E-28: stop dispatching, converge to Completed (6.5).
+		// A failed release stops dispatch and converges to Completed.
 		result, err := c.escalateStop(ctx, round, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed, fmt.Sprintf("RpmRepo %s release failed", repo.Name))
 		return true, result, err
 	}
 	return false, controller.ReconcileResult{}, nil
 }
 
-// escalateRpmRepoUnavailable persists the E-29 stop marker with the last
-// failure checkpoint of the current streak (E-29 message: object name, last
-// error, consecutive failure count) and joins the 6.5 convergence path.
+// escalateRpmRepoUnavailable persists a stop marker with the last error and
+// consecutive failure count, then joins stop-dispatch convergence.
 func (c *Controller) escalateRpmRepoUnavailable(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	entry := c.counters.Entry(counterRpmRepo, round.key)
 	message := fmt.Sprintf("RpmRepo %s/%s unavailable: %s (consecutive failures: %d)", round.current.Namespace, round.current.Name, entry.LastMessage, entry.ConsecutiveFails)
@@ -321,8 +314,7 @@ func (c *Controller) escalateRpmRepoUnavailable(ctx context.Context, round *reco
 	return result, err
 }
 
-// escalateSnapshotUnavailable persists the E-30 stop marker and joins the
-// 6.5 convergence path (called from the current-Snapshot read points).
+// escalateSnapshotUnavailable persists a stop marker and joins convergence.
 func (c *Controller) escalateSnapshotUnavailable(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	entry := c.counters.Entry(counterSnapshot, round.key)
 	message := fmt.Sprintf("Snapshot %s/%s unavailable: %s (consecutive failures: %d)", round.current.Namespace, round.current.Name, entry.LastMessage, entry.ConsecutiveFails)
@@ -333,7 +325,7 @@ func (c *Controller) escalateSnapshotUnavailable(ctx context.Context, round *rec
 	return result, err
 }
 
-// escalateStop persists a stop-dispatch marker (design 6.5 step 1): the
+// escalateStop persists a stop-dispatch marker: the
 // condition write must be confirmed before the round joins the convergence
 // path; a failed write ends the round and forbids further dispatch.
 func (c *Controller) escalateStop(ctx context.Context, round *reconcileRound, condType, reason, message string) (controller.ReconcileResult, error) {
@@ -347,15 +339,14 @@ func (c *Controller) escalateStop(ctx context.Context, round *reconcileRound, co
 	return c.convergeToCompleted(ctx, round)
 }
 
-// writeStatus persists next.Status following 10.2/10.3 and routes write
-// failures per 7.5. On confirmed success round.current is replaced with the
-// server-confirmed object and the zero result is returned. The caller passes
-// a deep copy of round.current with the intended status mutations.
+// writeStatus persists next.Status and classifies write failures. After a
+// confirmed write, it replaces round.current with the server-returned object.
+// The caller passes a deep copy of round.current with the intended changes.
 func (c *Controller) writeStatus(ctx context.Context, round *reconcileRound, next *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
 	if len(round.createdJobs) > 0 {
 		applyCreatedJobs(next, round.createdJobs)
 	}
-	// 10.3 intent snapshot: the full target status, saved before sending.
+	// Save the full target status before sending for unknown-result confirmation.
 	intent := next.DeepCopy()
 	updated, err := c.client.UpdateBuildInfoStatus(ctx, next)
 	if err == nil {
@@ -369,17 +360,16 @@ func (c *Controller) writeStatus(ctx context.Context, round *reconcileRound, nex
 	}
 	switch writeErr.Outcome {
 	case clientpkg.WriteNotSent:
-		// The typed client only reports NotSent for local validation
-		// (client contract 4.1): retrying cannot fix it.
+		// NotSent means local validation failed; retrying cannot fix it.
 		return controller.ReconcileResult{}, controller.NewPermanentError(err)
 	case clientpkg.WriteRejected:
 		switch writeErr.StatusCode {
 		case 409:
-			// 10.2: delayed requeue, next round recomputes from a fresh GET.
+			// Recompute from a fresh GET rather than replaying the old intent.
 			conflictRequeues.Inc()
 			return controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
 		case 404:
-			// E-10: the object was deleted externally mid-round.
+			// The object was deleted externally mid-round.
 			c.logf(round.key, "BuildInfoDeleted", "status write rejected 404")
 			c.invalidateCaches(round.key)
 			return controller.ReconcileResult{}, nil
@@ -391,19 +381,18 @@ func (c *Controller) writeStatus(ctx context.Context, round *reconcileRound, nex
 			return controller.ReconcileResult{}, err
 		}
 	default:
-		// WriteUnknown: 10.3 confirmation read, never a replay.
+		// Unknown result: confirm by reading, never replay the write.
 		unknownWrites.Inc()
 		return c.confirmStatusWrite(ctx, round, intent)
 	}
 }
 
-// confirmStatusWrite resolves an Unknown status write (design 10.3): a
-// semantic match treats the write as landed (10.2 chaining continues), a
-// mismatch requeues for recomputation, 404/UID-mismatch ends the round, and
-// a failed confirmation GET follows the read-error classification.
+// confirmStatusWrite resolves an Unknown write. A semantic match confirms it;
+// a mismatch requeues for recomputation, a missing or replaced object ends the
+// round, and a failed GET follows the read-error classification.
 func (c *Controller) confirmStatusWrite(ctx context.Context, round *reconcileRound, intent *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
 	if ctx.Err() != nil {
-		// 10.3: no background confirmation on a cancelled context.
+		// Never confirm in the background after context cancellation.
 		return controller.ReconcileResult{}, ctx.Err()
 	}
 	persisted, err := c.client.GetBuildInfo(ctx, round.current.Namespace, round.current.Name)
@@ -428,9 +417,8 @@ func (c *Controller) confirmStatusWrite(ctx context.Context, round *reconcileRou
 	return controller.ReconcileResult{}, nil
 }
 
-// afterConfirmedWrite chains the confirmed object into the round (10.2) and
-// counts the state-change metrics only now, so retried rounds never
-// double-count (11.2).
+// afterConfirmedWrite chains the confirmed object into the round and counts
+// state-change metrics only after confirmation to avoid double-counting.
 func (c *Controller) afterConfirmedWrite(round *reconcileRound, confirmed *ebsv1.BuildInfo, intent *ebsv1.BuildInfo) {
 	if round.current.Status.Phase != confirmed.Status.Phase {
 		phaseTransitions.Inc()
@@ -442,7 +430,7 @@ func (c *Controller) afterConfirmedWrite(round *reconcileRound, confirmed *ebsv1
 }
 
 // statusMatchesIntent compares a persisted status with the write intent
-// semantically (design 10.3): nil maps equal empty maps, conditions match by
+// semantically: nil maps equal empty maps, conditions match by
 // type without order or lastTransitionTime, specStatus matches per spec
 // field-by-field, the DCG matches by node and edge set, pendingJobCreates
 // matches per spec entry.
@@ -457,6 +445,9 @@ func statusMatchesIntent(persisted, intent *ebsv1.BuildInfoStatus) bool {
 		return false
 	}
 	if !specStatusMatches(persisted.SpecStatus, intent.SpecStatus) {
+		return false
+	}
+	if !maps.Equal(persisted.SpecRepoNames, intent.SpecRepoNames) {
 		return false
 	}
 	if !dcgStateMatches(persisted.Dcg, intent.Dcg) {
@@ -480,7 +471,7 @@ func conditionsMatch(a, b []metav1.Condition) bool {
 	return true
 }
 
-// specStatusMatches compares specStatus maps per spec entry (10.3).
+// specStatusMatches compares specStatus maps per spec entry.
 func specStatusMatches(a, b ebsv1.SpecStatusGroup) bool {
 	if a.Len() != b.Len() {
 		return false
@@ -518,7 +509,7 @@ func missingDepsMatch(a, b map[string]ebsv1.MissingDep) bool {
 }
 
 // dcgStateMatches compares two persisted DCG states by node set and edge
-// set (10.3): outDep order carries no semantics and matches as a set.
+// set: outDep order carries no semantics and matches as a set.
 func dcgStateMatches(a, b map[string]ebsv1.DcgNodeState) bool {
 	if len(a) != len(b) {
 		return false
@@ -571,7 +562,7 @@ func versionConstMapEqual(a, b map[string]ebsv1.VersionConst) bool {
 	return true
 }
 
-// pendingCreatesMatch compares pendingJobCreates per spec entry (10.3): a
+// pendingCreatesMatch compares pendingJobCreates per spec entry: a
 // registration intent requires the entry, a removal intent requires it gone.
 func pendingCreatesMatch(a, b map[string]ebsv1.PendingJobCreate) bool {
 	if len(a) != len(b) {

@@ -99,7 +99,7 @@ func TestTwoCycleNameTieBreak(t *testing.T) {
 
 func TestCrossedCyclesSingleBreak(t *testing.T) {
 	// Two cycles sharing node a: a->b->c->a and a->d->c->a. Picking a (largest
-	// outDep) kills both cycles at once (design 7.2.1 rule 3).
+	// outDep) kills both cycles at once.
 	d := NewDcgDict(graphWith(
 		edge{"a", "b"}, edge{"b", "c"}, edge{"c", "a"},
 		edge{"a", "d"}, edge{"d", "c"},
@@ -178,7 +178,7 @@ func TestStateRoundTrip(t *testing.T) {
 }
 
 func TestLoadDoesNotReselectBreaks(t *testing.T) {
-	// G-09: a persisted cycle without break marks stays without breaks on
+	// A persisted cycle without break marks stays without breaks on
 	// load; cycleNodes is still recomputed from the edge set.
 	state := map[string]ebsv1.DcgNodeState{
 		"a": {OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConst{"b": {}}},
@@ -235,7 +235,7 @@ func TestRefreshCyclesAndBreaksAppendsNewCycle(t *testing.T) {
 	requireCycle(t, candidate, "c", false)
 	requireBreaks(t, candidate, []string{"b"})
 
-	// The live graph is untouched (candidate isolation, 7.4.7).
+	// The live graph is untouched while the candidate changes.
 	requireBreaks(t, d, nil)
 	requireCycle(t, d, "a", false)
 
@@ -249,7 +249,7 @@ func TestRefreshPreservesInitialBreaks(t *testing.T) {
 	// Initial cycle a<->b picks b (tie -> dictionary max). A runtime install
 	// edge pair a<->c merges c into the SCC and adds a new cycle a<->c that
 	// does not pass b: a new break is appended; b is never re-selected
-	// (G-09). a and c tie on full outDep length (a: [b c], c: [a e]), so the
+	// a and c tie on full outDep length (a: [b c], c: [a e]), so the
 	// dictionary-largest c wins.
 	d := NewDcgDict(graphWith(
 		edge{"a", "b"}, edge{"b", "a"},

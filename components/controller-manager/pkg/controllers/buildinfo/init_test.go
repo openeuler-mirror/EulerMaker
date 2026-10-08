@@ -1,9 +1,3 @@
-// init_test.go covers the 19.1 build-set (7.2.2/E-23/E-24) and single (7.2.3)
-// test groups: per-type build-set determination, parent Build package seeds,
-// fixed-point downstream expansion, shared incremental/specified degradation,
-// single-only empty-set closeouts, the init deterministic
-// checks (E-16/E-19/E-26/E-27) and the single直通 path (assembly, direct
-// dispatch, repo injection, empty-set closeout).
 package buildinfo
 
 import (
@@ -55,7 +49,7 @@ func requireSpecNames(t *testing.T, bi *ebsv1.BuildInfo, want ...string) {
 	}
 }
 
-// --- 7.2.2 build-set determination ---
+// --- Build-set determination ---
 
 func TestInitFullHappyPath(t *testing.T) {
 	c, client, git, _ := newTestController(t)
@@ -85,6 +79,11 @@ func TestInitFullHappyPath(t *testing.T) {
 	}
 	if len(bi.Status.Dcg) != 2 {
 		t.Fatalf("status.dcg size = %d, want 2 (G-02 persist)", len(bi.Status.Dcg))
+	}
+	for spec, want := range map[string]string{"a": "repo1", "b": "repo2"} {
+		if got := bi.Status.SpecRepoNames[spec]; got != want {
+			t.Fatalf("specRepoNames[%q] = %q, want %q", spec, got, want)
+		}
 	}
 	if got := c.dcgDict.Len(); got != 1 {
 		t.Fatalf("dcgDict len = %d, want 1", got)
@@ -552,8 +551,7 @@ func TestInitE16RpmRepoNotHeldDefers(t *testing.T) {
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
-	// No RpmRepo seeded: E-16 below the threshold — assembly completes but the
-	// verdict/dispatch steps wait for the next round.
+	// Without an RpmRepo, assembly completes but verdict and dispatch wait.
 
 	reconcileOnce(t, c)
 
@@ -593,8 +591,7 @@ func TestInitE19ArchUnsupported(t *testing.T) {
 func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
-	// build-target Config without the os/arch mapping: E-26 pauses the round (plain
-	// error backoff, no Failed marking, no condition).
+	// A missing image mapping pauses dispatch without marking the spec Failed.
 	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
 		Targets: map[string]ebsv1.BuildTargetConfigEntry{},
 	})
@@ -657,7 +654,7 @@ func TestInitBackfillsExistingJob(t *testing.T) {
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	client.SeedRpmRepo(testRpmRepoObj(""))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
-	// E-11: the Job was created but the dispatch write-back was lost.
+	// The Job was created but the dispatch write-back was lost.
 	existing := client.SeedJob(testJobObj(bi, "a", 1, ebsv1.JobRunning))
 
 	reconcileOnce(t, c)
@@ -673,7 +670,7 @@ func TestInitBackfillsExistingJob(t *testing.T) {
 	}
 }
 
-// --- 7.2.3 single直通 ---
+// --- Single-build dispatch ---
 
 func TestSinglePassThrough(t *testing.T) {
 	c, client, git, _ := newTestController(t)
@@ -701,6 +698,11 @@ func TestSinglePassThrough(t *testing.T) {
 	}
 	if len(bi.Status.Dcg) != 0 {
 		t.Fatalf("status.dcg = %v, want empty for single", bi.Status.Dcg)
+	}
+	for spec, want := range map[string]string{"a": "repo1", "b": "repo2"} {
+		if got := bi.Status.SpecRepoNames[spec]; got != want {
+			t.Fatalf("specRepoNames[%q] = %q, want %q", spec, got, want)
+		}
 	}
 	if got := c.dcgDict.Len(); got != 0 {
 		t.Fatalf("dcgDict len = %d, want 0 for single", got)

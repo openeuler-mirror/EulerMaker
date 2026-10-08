@@ -326,11 +326,13 @@ type BuildInfoSpec struct {
 
 ```go
 type BuildInfoStatus struct {
-    Phase       BuildInfoPhase           `json:"phase,omitempty"`
-    Conditions  []metav1.Condition       `json:"conditions,omitempty"`
-    SpecStatus  SpecStatusGroup          `json:"specStatus"`
-    FailedPackages []string           `json:"failedPackages,omitempty"`
-    Dcg         map[string]DcgNodeState  `json:"dcg,omitempty"`
+    Phase             BuildInfoPhase              `json:"phase,omitempty"`
+    Conditions        []metav1.Condition          `json:"conditions,omitempty"`
+    SpecStatus        SpecStatusGroup             `json:"specStatus"`
+    SpecRepoNames     map[string]string           `json:"specRepoNames,omitempty"`
+    FailedPackages    []string                    `json:"failedPackages,omitempty"`
+    Dcg               map[string]DcgNodeState     `json:"dcg,omitempty"`
+    PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
 }
 ```
 
@@ -339,8 +341,10 @@ type BuildInfoStatus struct {
 | `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Aborted"` |
 | `conditions` | []metav1.Condition | 状态条件 |
 | `specStatus` | SpecStatusGroup | 按字段分组的各 spec 运行时状态；`build` 键集为构建集 |
+| `specRepoNames` | map[string]string | spec 名到所属包仓库名的持久化映射；与构建集状态一起写入，供异常收敛及重启恢复时汇总 `failedPackages` |
 | `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；Completed 时再合并最终构建/安装失败的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；已恢复成功的中途构建/安装失败不保留 |
 | `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 BuildInfo Controller 本轮解析结果 `specDepends` 的 `buildRequires`，不依赖本字段 |
+| `pendingJobCreates` | map[string]PendingJobCreate | 已登记但尚未确认创建结果的 Job；非空时不得写入 Completed |
 
 ### DcgNodeState
 
