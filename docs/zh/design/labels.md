@@ -147,7 +147,7 @@ BuildInfo Controller 创建 Job 时必须写入以下 labels：
 | `ebs.io/spec-name` | 记录 SPEC 名的可逆编码，供 BuildInfo 回填和 RpmRepo 批次分组；实际 RPM 替换按产物元数据执行 |
 | `ebs.io/package-name` | 记录 Job 所属 `Project.spec.packageRepos[].name`，供工程详情按软件包查询 Job 历史；同一仓库有多个 spec 时，它们的 Job 使用相同包名标签 |
 
-`ebs.io/spec-name` 固定加 `s` 前缀，保留 ASCII 字母数字和非末尾的 `-`、`.`，其他 UTF-8 字节转义为 `_HH`（大写十六进制，包括 `_` 和末尾的 `-`、`.`）。读取时先解码；前端按原始 SPEC 名查询 Job 时先用同一规则计算 label selector。当前暂不处理编码后超过标签长度上限的名称。
+`ebs.io/spec-name` 不添加固定前缀，通常保留 ASCII 字母数字和非末尾的 `-`、`.`，其他 UTF-8 字节转义为 `_HH`（大写十六进制，包括 `_` 和末尾的 `-`、`.`）。以非字母数字或字面 `X` 开头时，首字节转义为 `X_HH`，保证标签首字符合法且编码可逆。读取时先解码；前端按原始 SPEC 名查询 Job 时先用同一规则计算 label selector。当前暂不处理编码后超过标签长度上限的名称。
 
 `ebs.io/package-name` 的来源是创建该 Job 时 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName`，而不是实时读取可能已修改的 Project，也不得从 spec 名或 Job 名推断。映射不存在时不创建 Job，应等待解析结果补齐或报告确定性错误。不写同名 annotation。
 
