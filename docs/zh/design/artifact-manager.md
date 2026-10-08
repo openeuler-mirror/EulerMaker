@@ -977,7 +977,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 | 状态查询暂时失败 | RpmRepo Controller 指数退避，不重复提交不同请求 |
 | API 状态更新失败 | 仓库保持 Ready，RpmRepo Controller 继续重试 API 更新 |
 
-服务启动时扫描 `.metadata/repositories` 的 UID 和状态，只把 `Creating`、`Deleting` 记录载入内存以恢复任务；旧格式中重复保存的 RPM 明细在扫描时压缩移除。Ready 和 Failed 记录不常驻内存，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
+服务启动时扫描 `.metadata/repositories` 的 UID 和状态，只把 `Creating`、`Deleting` 记录载入内存以恢复任务。Ready 和 Failed 记录不常驻内存，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
 
 对于 Creating 记录，若最终目录中的 `repository.json`、请求摘要及目录摘要均校验通过，则补写 Ready；否则保持 Creating 并重新入队。Deleting 记录继续删除。`.repository-work` 中超过恢复宽限期的目录按过期时间清理。Ready 仓不在启动时逐个重算目录摘要，发布任务需要 RPM 明细时才读取其 `repository.json`。
 

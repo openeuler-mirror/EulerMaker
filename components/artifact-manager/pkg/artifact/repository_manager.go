@@ -105,14 +105,14 @@ func (m *repositoryManager) load() error {
 			continue
 		}
 		uid := entry.Name()[:len(entry.Name())-len(".json")]
-		state, legacy, err := m.scanRecord(uid)
+		state, err := m.scanRecord(uid)
 		if err != nil {
 			return fmt.Errorf("load repository metadata %s: %w", entry.Name(), err)
 		}
-		if state != RepositoryCreating && state != RepositoryDeleting && !legacy {
+		if state != RepositoryCreating && state != RepositoryDeleting {
 			continue
 		}
-		record, err := m.readRecord(uid, legacy)
+		record, err := m.readRecord(uid)
 		if err != nil {
 			return fmt.Errorf("load repository metadata %s: %w", entry.Name(), err)
 		}
@@ -126,28 +126,27 @@ func (m *repositoryManager) load() error {
 	return nil
 }
 
-func (m *repositoryManager) scanRecord(uid string) (RepositoryState, bool, error) {
+func (m *repositoryManager) scanRecord(uid string) (RepositoryState, error) {
 	file, err := os.Open(m.metaPath(uid))
 	if os.IsNotExist(err) {
-		return "", false, nil
+		return "", nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	var header struct {
 		RepositoryUID string          `json:"repositoryUID"`
 		State         RepositoryState `json:"state"`
-		RPMs          *struct{}       `json:"rpms"`
 	}
 	decodeErr := json.NewDecoder(file).Decode(&header)
 	closeErr := file.Close()
 	if decodeErr != nil || closeErr != nil || header.RepositoryUID != uid || header.State == "" {
-		return "", false, fmt.Errorf("invalid repository metadata for %s", uid)
+		return "", fmt.Errorf("invalid repository metadata for %s", uid)
 	}
-	return header.State, header.RPMs != nil, nil
+	return header.State, nil
 }
 
-func (m *repositoryManager) readRecord(uid string, compact bool) (*RepositoryRecord, error) {
+func (m *repositoryManager) readRecord(uid string) (*RepositoryRecord, error) {
 	file, err := os.Open(m.metaPath(uid))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -155,24 +154,13 @@ func (m *repositoryManager) readRecord(uid string, compact bool) (*RepositoryRec
 	if err != nil {
 		return nil, err
 	}
-	// Legacy records may contain a full RPM index. Decode and discard it; the
-	// startup scan compacts those files for subsequent on-demand reads.
-	var stored struct {
-		RepositoryRecord
-		RPMs *struct{} `json:"rpms"`
-	}
-	decodeErr := json.NewDecoder(file).Decode(&stored)
+	var record RepositoryRecord
+	decodeErr := json.NewDecoder(file).Decode(&record)
 	closeErr := file.Close()
-	if decodeErr != nil || closeErr != nil || stored.RepositoryUID != uid {
+	if decodeErr != nil || closeErr != nil || record.RepositoryUID != uid {
 		return nil, fmt.Errorf("invalid repository metadata for %s", uid)
 	}
-	record := stored.RepositoryRecord
-	if compact && stored.RPMs != nil {
-		if err := m.persist(&record); err != nil {
-			return nil, err
-		}
-	}
-	if !compact && record.State == RepositoryReady {
+	if record.State == RepositoryReady {
 		if _, err := os.Stat(filepath.Join(m.repositoryPath(&record), "repository.json")); err != nil {
 			if !os.IsNotExist(err) {
 				return nil, err
@@ -191,7 +179,7 @@ func (m *repositoryManager) recordLocked(uid string) (*RepositoryRecord, error) 
 	if record := m.records[uid]; record != nil {
 		return record, nil
 	}
-	return m.readRecord(uid, false)
+	return m.readRecord(uid)
 }
 
 func normalizeRepositoryRequest(in CreateRepositoryRequest) (CreateRepositoryRequest, string, error) {

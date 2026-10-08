@@ -83,59 +83,6 @@ func repositoryRequest(t *testing.T, server http.Handler, method, path string, b
 	return response
 }
 
-func TestRepositoryManagerLoadsLegacyMetadataWithoutRPMs(t *testing.T) {
-	root := t.TempDir()
-	m := &repositoryManager{root: root, records: map[string]*RepositoryRecord{}}
-	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
-		t.Fatal(err)
-	}
-	legacy := &RepositoryRecord{
-		RepositoryUID: "repository-1",
-		Project:       "project",
-		BuildName:     "build",
-		TargetOS:      "openEuler",
-		TargetArch:    "x86_64",
-		State:         RepositoryReady,
-		RPMs: map[string]RepositoryRPMMeta{
-			"test.rpm": {FileName: "test.rpm"},
-		},
-	}
-	if err := atomicJSON(m.metaPath(legacy.RepositoryUID), legacy); err != nil {
-		t.Fatal(err)
-	}
-	path := m.repositoryPath(legacy)
-	if err := os.MkdirAll(path, 0750); err != nil {
-		t.Fatal(err)
-	}
-	if err := atomicJSON(filepath.Join(path, "repository.json"), repositoryIndex{RepositoryUID: legacy.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.load(); err != nil {
-		t.Fatal(err)
-	}
-	if len(m.records) != 0 {
-		t.Fatalf("Ready records retained after startup: %d", len(m.records))
-	}
-	record, ok, err := m.get(legacy.RepositoryUID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || record.State != RepositoryReady || record.RPMs != nil {
-		t.Fatalf("loaded record = %+v", record)
-	}
-	data, err := os.ReadFile(m.metaPath(legacy.RepositoryUID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stored map[string]json.RawMessage
-	if err := json.Unmarshal(data, &stored); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := stored["rpms"]; ok {
-		t.Fatal("repository metadata still contains RPM index")
-	}
-}
-
 func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	root := t.TempDir()
 	m := &repositoryManager{root: root, records: map[string]*RepositoryRecord{}}
