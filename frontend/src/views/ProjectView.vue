@@ -31,7 +31,7 @@
           <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('single')">{{ t("project.singleBuild") }}</button>
         </div>
       </div>
-      <a class="project-repo-download-link" href="#" aria-disabled="true" :title="t('project.repoDownloadPending')" @click.prevent>{{ t("project.repoDownloadLink") }}</a>
+      <a class="project-repo-download-link" :href="`/repositories/${encodeURIComponent(name)}/`">{{ t("project.repoDownloadLink") }}</a>
     </section>
 
     <nav class="project-tabs" role="tablist" :aria-label="t('project.tabsLabel')">
@@ -100,7 +100,12 @@
         <p v-if="pendingJobsLoading" class="config-empty">{{ t("project.loadingPendingJobs") }}</p>
         <p v-if="!nonTerminalJobs.length && !pendingJobsLoading" class="config-empty">{{ t("project.noRunningJobs") }}</p>
         <template v-if="nonTerminalJobs.length">
-          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchSpecs')" :no-results-label="t('project.noMatchingSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th><th v-if="canAbortJobs">{{ t('admin.actions') }}</th></tr></thead><tbody><tr v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name"><td>{{ job.metadata?.name || t("common.emptyValue") }}</td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ displaySpecName(job.metadata?.labels?.["ebs.io/spec-name"]) || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td><td v-if="canAbortJobs"><button v-if="job.metadata?.uid && abortableJob(job)" class="text-button danger-link" type="button" :disabled="abortingJob" @click="openJobAbortDialog(job)">{{ t('jobControl.abort') }}</button></td></tr></tbody></table></div>
+          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchSpecs')" :no-results-label="t('project.noMatchingSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th><th v-if="canAbortJobs">{{ t('admin.actions') }}</th></tr></thead><tbody>
+            <template v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name">
+              <tr><td><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedRunningJobName === job.metadata.name" :aria-label="t('jobLog.open', { name: job.metadata.name })" @click="toggleRunningJobLog(job.metadata.name)">{{ job.metadata.name }}</button><span v-else>{{ t("common.emptyValue") }}</span></td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ displaySpecName(job.metadata?.labels?.["ebs.io/spec-name"]) || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td><td v-if="canAbortJobs"><button v-if="job.metadata?.uid && abortableJob(job)" class="text-button danger-link" type="button" :disabled="abortingJob" @click="openJobAbortDialog(job)">{{ t('jobControl.abort') }}</button></td></tr>
+              <tr v-if="expandedRunningJobName === job.metadata?.name && job.metadata?.name" class="spec-jobs-row"><td :colspan="canAbortJobs ? 7 : 6"><JobLogInline :project="name" :job-name="job.metadata.name" /></td></tr>
+            </template>
+          </tbody></table></div>
           <p v-if="!filteredRunningJobs.length" class="config-empty">{{ t("project.noMatchingRunningJobs") }}</p>
           <div v-if="runningJobsTotalPages > 1" class="table-footer"><nav class="pagination-row" :aria-label="t('common.pagination')"><button class="page-button arrow-button" type="button" :aria-label="t('common.previous')" :disabled="runningJobsPage === 1" @click="runningJobsPage -= 1"><ArrowLeft /></button><span class="page-button active" aria-current="page">{{ runningJobsPage }} / {{ runningJobsTotalPages }}</span><button class="page-button arrow-button" type="button" :aria-label="t('common.next')" :disabled="runningJobsPage === runningJobsTotalPages" @click="runningJobsPage += 1"><ArrowRight /></button></nav></div>
         </template>
@@ -411,6 +416,7 @@ let buildLoadSequence = 0;
 const runningJobCount = ref<number | null>(null);
 const nonTerminalJobs = ref<Job[]>([]);
 const showRunningJobs = ref(false);
+const expandedRunningJobName = ref("");
 const pendingJobsLoading = ref(false);
 const abortJobTarget = ref<Job | null>(null);
 const abortingJob = ref(false);
@@ -885,6 +891,10 @@ function sortJobsByStartTime(jobs: Job[]): Job[] {
 function toggleRunningJobs(): void {
   showRunningJobs.value = !showRunningJobs.value;
   if (showRunningJobs.value) runningJobsPage.value = 1;
+}
+
+function toggleRunningJobLog(jobName: string): void {
+  expandedRunningJobName.value = expandedRunningJobName.value === jobName ? "" : jobName;
 }
 
 function selectTab(tab: ProjectTab): void {

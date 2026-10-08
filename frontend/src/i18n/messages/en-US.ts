@@ -318,7 +318,6 @@ export default {
     packageRepositories: "Package repositories",
     closePackageDetails: "Close package details",
     repoDownloadLink: "Browse RPM repositories",
-    repoDownloadPending: "The download page is not available yet",
     jobRPMs: "RPM downloads",
     loadingJobRPMs: "Loading RPMs…",
     noJobRPMs: "No downloadable RPMs for this job",
