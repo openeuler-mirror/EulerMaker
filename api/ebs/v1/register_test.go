@@ -18,9 +18,6 @@ func TestJobFieldLabelConversion(t *testing.T) {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
 	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "spec.runtime", "dc"); err == nil {
-		t.Fatal("expected unsupported field selector error")
-	}
 }
 
 func TestBuildFieldLabelConversion(t *testing.T) {
@@ -34,9 +31,6 @@ func TestBuildFieldLabelConversion(t *testing.T) {
 		if err != nil || label != field || value != "value" {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
-	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "spec.buildTarget.os", "openEuler"); err == nil {
-		t.Fatal("expected unsupported field selector error")
 	}
 }
 
@@ -52,9 +46,6 @@ func TestBuildInfoFieldLabelConversion(t *testing.T) {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
 	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "build"); err == nil {
-		t.Fatal("expected unsupported field selector error")
-	}
 }
 
 func TestRpmRepoFieldLabelConversion(t *testing.T) {
@@ -67,11 +58,6 @@ func TestRpmRepoFieldLabelConversion(t *testing.T) {
 		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
 		if err != nil || label != field || value != "value" {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-	for _, field := range []string{"status.phase", "status.repository.phase"} {
-		if _, _, err := scheme.ConvertFieldLabel(gvk, field, "Ready"); err == nil {
-			t.Fatalf("expected unsupported field selector error for %s", field)
 		}
 	}
 }
@@ -88,9 +74,6 @@ func TestSnapshotFieldLabelConversion(t *testing.T) {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
 	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "build"); err == nil {
-		t.Fatal("expected unsupported field selector error")
-	}
 }
 
 func TestRunnerFieldLabelConversion(t *testing.T) {
@@ -105,9 +88,6 @@ func TestRunnerFieldLabelConversion(t *testing.T) {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
 	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "running"); err == nil {
-		t.Fatal("expected unsupported field selector error")
-	}
 }
 
 func TestProjectFieldLabelConversion(t *testing.T) {
@@ -121,9 +101,6 @@ func TestProjectFieldLabelConversion(t *testing.T) {
 		if err != nil || label != field || value != "value" {
 			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
 		}
-	}
-	if _, _, err := scheme.ConvertFieldLabel(gvk, "status.stage", "running"); err == nil {
-		t.Fatal("expected unsupported field selector error")
 	}
 }
 

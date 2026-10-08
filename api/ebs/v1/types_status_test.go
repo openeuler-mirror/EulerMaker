@@ -20,7 +20,7 @@ func TestProjectPhase(t *testing.T) {
 }
 
 func TestBuildInfoPhase(t *testing.T) {
-	for _, phase := range []BuildInfoPhase{BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted} {
+	for _, phase := range []BuildInfoPhase{BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoAborted} {
 		if !phase.IsValid() {
 			t.Errorf("phase %q is not valid", phase)
 		}
