@@ -12,7 +12,7 @@ WORKDIR /build
 
 COPY go.mod ./
 COPY . .
-RUN go build -ldflags="-s -w" -o artifact-manager ./cmd/server/
+RUN go build -ldflags="-s -w" -o artifact-manager ./cmd/
 
 FROM openeuler/openeuler:24.03-lts
 

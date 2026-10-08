@@ -37,6 +37,7 @@ func testHandler(t *testing.T) (http.Handler, Config) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(h.Close)
 	return h, c
 }
 
