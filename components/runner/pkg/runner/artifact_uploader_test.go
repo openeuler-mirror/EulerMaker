@@ -19,6 +19,20 @@ type fakeArtifactRemote struct {
 	manifestErr error
 }
 
+type flakyLogStatusRemote struct {
+	*fakeArtifactRemote
+	calls int
+	err   error
+}
+
+func (f *flakyLogStatusRemote) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
+	f.calls++
+	if f.calls == 1 {
+		return LogStatus{}, f.err
+	}
+	return f.fakeArtifactRemote.LogStatus(ctx, project, job)
+}
+
 func (f *fakeArtifactRemote) LogStatus(context.Context, string, string) (LogStatus, error) {
 	size := int64(12)
 	return LogStatus{State: "Completed", ArtifactID: "log-1", FinalSize: &size, FinalSHA256: "log-sha"}, nil
@@ -93,6 +107,35 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 	defer remote.mu.Unlock()
 	if len(remote.uploads) != 2 {
 		t.Fatalf("completed receipts did not suppress re-upload: uploads=%d", len(remote.uploads))
+	}
+}
+
+func TestArtifactProcessorRetriesLogStatusBeforeUpload(t *testing.T) {
+	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: errors.New("connection refused")}
+	processor := &ArtifactProcessor{Remote: remote}
+	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	manifest, err := processor.Finalize(ctx, job, "", false)
+	if err != nil {
+		t.Fatalf("finalize after temporary log status failure: %v", err)
+	}
+	if remote.calls != 2 || manifest.ArtifactCount != 1 {
+		t.Fatalf("log status calls = %d, manifest = %#v", remote.calls, manifest)
+	}
+}
+
+func TestArtifactProcessorDoesNotRetryPermanentLogStatusError(t *testing.T) {
+	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: ArtifactAPIError{StatusCode: 400}}
+	processor := &ArtifactProcessor{Remote: remote}
+	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
+
+	if _, err := processor.Finalize(context.Background(), job, "", false); err == nil {
+		t.Fatal("expected permanent log status error")
+	}
+	if remote.calls != 1 {
+		t.Fatalf("log status calls = %d, want 1", remote.calls)
 	}
 }
 
