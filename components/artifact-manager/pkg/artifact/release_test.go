@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,6 +107,9 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
 		t.Fatalf("replay status = %d", response.Code)
 	}
+	if response := repositoryRequest(t, server, http.MethodGet, "/repositories/project-1/", nil); response.Code != http.StatusNotFound {
+		t.Fatalf("unpublished directory = %d", response.Code)
+	}
 	close(materializer.release)
 	var state ReleaseResponse
 	deadline := time.Now().Add(time.Second)
@@ -121,6 +125,26 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 	}
 	if state.ContentURL != "/repositories/project-1/openEuler/x86_64/" {
 		t.Fatalf("content URL = %q", state.ContentURL)
+	}
+	for path, want := range map[string]string{
+		"/repositories/project-1/":           "openEuler/",
+		"/repositories/project-1/openEuler/": "x86_64/",
+		state.ContentURL:                     "Packages/",
+		state.ContentURL + "repodata/":       "repomd.xml",
+	} {
+		response := repositoryRequest(t, server, http.MethodGet, path, nil)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("browse %s = %d %q, want %q", path, response.Code, response.Body.String(), want)
+		}
+	}
+	for _, path := range []string{
+		"/repositories/project-1/openEuler/x86_64/history/",
+		"/repositories/project-1/openEuler/x86_64/releases/",
+		"/repositories/project-1/openEuler/no-release/",
+	} {
+		if response := repositoryRequest(t, server, http.MethodGet, path, nil); response.Code != http.StatusNotFound {
+			t.Fatalf("hidden directory %s = %d", path, response.Code)
+		}
 	}
 	for _, path := range []string{state.ContentURL + "repodata/repomd.xml", "/repositories/releases/v1/build-1/repodata/repomd.xml"} {
 		response = repositoryRequest(t, server, http.MethodGet, path, nil)

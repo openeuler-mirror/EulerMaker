@@ -117,28 +117,38 @@ func (s *Server) releaseVersionContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/") {
+		s.browseCurrentRelease(w, r)
+		return
+	}
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 4)
 	if len(parts) != 4 || !validIdentifier(parts[0]) || !validIdentifier(parts[1]) || !validIdentifier(parts[2]) {
 		s.releaseNotFound(w, r)
 		return
 	}
-	current := filepath.Join(s.cfg.DataDir, "repositories", parts[0], parts[1], parts[2], "current")
-	target, err := os.Readlink(current)
-	if err != nil {
-		s.releaseNotFound(w, r)
-		return
-	}
-	targetParts := strings.Split(filepath.ToSlash(target), "/")
-	if len(targetParts) != 2 || targetParts[0] != "releases" || !validIdentifier(targetParts[1]) {
-		s.releaseNotFound(w, r)
-		return
-	}
-	record, ok := s.releases.get(targetParts[1])
-	if !ok || record.State != ReleaseReady || record.Project != parts[0] || record.TargetOS != parts[1] || record.TargetArch != parts[2] {
+	record := s.currentRelease(parts[0], parts[1], parts[2])
+	if record == nil {
 		s.releaseNotFound(w, r)
 		return
 	}
 	s.serveReleaseFile(w, r, record, parts[3])
+}
+
+func (s *Server) currentRelease(project, targetOS, targetArch string) *ReleaseRecord {
+	current := filepath.Join(s.cfg.DataDir, "repositories", project, targetOS, targetArch, "current")
+	target, err := os.Readlink(current)
+	if err != nil {
+		return nil
+	}
+	targetParts := strings.Split(filepath.ToSlash(target), "/")
+	if len(targetParts) != 2 || targetParts[0] != "releases" || !validIdentifier(targetParts[1]) {
+		return nil
+	}
+	record, ok := s.releases.get(targetParts[1])
+	if !ok || record.State != ReleaseReady || record.Project != project || record.TargetOS != targetOS || record.TargetArch != targetArch {
+		return nil
+	}
+	return record
 }
 
 func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *ReleaseRecord, value string) {
