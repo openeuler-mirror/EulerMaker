@@ -289,9 +289,25 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 				return controller.ReconcileResult{}, controller.NewPermanentError(verr)
 			}
 			return c.stageCreatedJob(round, specName, generation, existing)
-		case 400, 401, 403, 422:
-			// Provably not created; no status confirmation is needed.
+		case 400, 422:
+			// This Job was definitely rejected. Close only its spec so an
+			// independent spec can still be dispatched in the same round.
 			jobCreateFailures.Inc()
+			c.logf(round.key, ReasonJobCreateRejected, "job %s for spec %s rejected with HTTP %d: %v", name, specName, writeErr.StatusCode, err)
+			return c.markSpecFailed(ctx, round, specName, ConditionJobCreateRejected, ReasonJobCreateRejected,
+				fmt.Sprintf("Job creation rejected with HTTP %d", writeErr.StatusCode), true)
+		case 401, 403:
+			// An authorization failure can affect every Job. Stop the round
+			// and surface it on BuildInfo instead of failing this one spec.
+			jobCreateFailures.Inc()
+			c.logf(round.key, ReasonJobCreateForbidden, "job %s for spec %s rejected with HTTP %d: %v", name, specName, writeErr.StatusCode, err)
+			next := round.current.DeepCopy()
+			upsertCondition(&next.Status.Conditions, ConditionJobDispatchBlocked, ReasonJobCreateForbidden,
+				fmt.Sprintf("Job creation rejected with HTTP %d; check controller permissions", writeErr.StatusCode))
+			result, statusErr := c.writeStatusIfChanged(ctx, round, next)
+			if statusErr != nil || result != (controller.ReconcileResult{}) {
+				return result, statusErr
+			}
 			return controller.ReconcileResult{}, controller.NewPermanentError(err)
 		default:
 			// 404/408/429/5xx and other retryable rejections.
@@ -329,6 +345,7 @@ func (c *Controller) stageCreatedJob(round *reconcileRound, specName string, gen
 	round.createdJobs[specName] = created
 	round.current = round.current.DeepCopy()
 	applyCreatedJobs(round.current, map[string]createdJob{specName: created})
+	removeCondition(&round.current.Status.Conditions, ConditionJobDispatchBlocked)
 	return controller.ReconcileResult{}, nil
 }
 
@@ -369,6 +386,7 @@ func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileR
 	applyJobPhase(&ss, job, false)
 	delete(next.Status.PendingJobCreates, specName)
 	next.Status.SpecStatus.Set(specName, ss)
+	removeCondition(&next.Status.Conditions, ConditionJobDispatchBlocked)
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		dispatches.Inc()

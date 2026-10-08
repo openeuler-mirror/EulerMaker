@@ -459,6 +459,7 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		}
 	}
 	next.Status.FailedPackages = sortedFailedPackages(next.Status.FailedPackages, failedRepos)
+	removeCondition(&next.Status.Conditions, ConditionJobDispatchBlocked)
 	if len(failed) > 0 {
 		upsertCondition(&next.Status.Conditions, ConditionPartialFailure, ReasonPartialFailure, "failed specs: "+strings.Join(failed, ","))
 	} else {

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -820,6 +821,85 @@ func TestDispatchSpecNotSentNotCountedAsSent(t *testing.T) {
 	persisted := getBuildInfo(t, client)
 	if len(persisted.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want the this-round registration removed", persisted.Status.PendingJobCreates)
+	}
+}
+
+func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
+	for _, status := range []int{400, 422} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			c, client, _, _ := newTestController(t)
+			round, _ := dispatchRound(t, c, client, "rejected-job", "a")
+			client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
+			round.current.Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
+			client.InjectWrite("create", clientpkg.WriteRejected, status, false)
+			for _, spec := range []string{"a", "b"} {
+				depend := dependEntry(spec)
+				result, err := c.dispatchSpec(context.Background(), round, spec, &depend, testSnapshotObj(), testImage, testRepoURL, nil)
+				if err != nil || result != (controller.ReconcileResult{}) {
+					t.Fatalf("dispatch %s = %+v, %v", spec, result, err)
+				}
+			}
+			if _, err := c.flushCreatedJobs(context.Background(), round); err != nil {
+				t.Fatalf("flush created jobs: %v", err)
+			}
+			stored := getBuildInfo(t, client)
+			if got := stored.Status.SpecStatus.Entry("a"); got.Build.Status != SpecBuildFailed || findCondition(got.Build.Conditions, ConditionJobCreateRejected) == nil {
+				t.Fatalf("rejected spec status = %+v", got)
+			}
+			if got := stored.Status.SpecStatus.Entry("b"); got.Build.Status == SpecBuildFailed || got.DispatchCount != 1 {
+				t.Fatalf("independent spec status = %+v", got)
+			}
+			if jobs := listJobs(t, client); len(jobs) != 1 || jobs[0].Labels[ebsv1.JobSpecNameLabel] != "b" {
+				t.Fatalf("created Jobs = %+v, want only b", jobs)
+			}
+		})
+	}
+}
+
+func TestDispatchSpecForbiddenBlocksRoundAndRecovers(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "forbidden-job", "a")
+	client.InjectWrite("create", clientpkg.WriteRejected, 403, false)
+	depend := dependEntry("a")
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil)
+	if err == nil || !controller.IsPermanent(err) {
+		t.Fatalf("forbidden dispatch error = %v, want permanent error", err)
+	}
+	stored := getBuildInfo(t, client)
+	if cond := findCondition(stored.Status.Conditions, ConditionJobDispatchBlocked); cond == nil || cond.Reason != ReasonJobCreateForbidden {
+		t.Fatalf("dispatch-blocked condition = %+v", cond)
+	}
+	if got := stored.Status.SpecStatus.Entry("a").Build.Status; got == SpecBuildFailed {
+		t.Fatalf("forbidden dispatch marked spec failed")
+	}
+
+	retry := &reconcileRound{key: round.key, current: stored, build: round.build, failures: c.newRoundFailures(round.key)}
+	if result, err := c.dispatchSpec(context.Background(), retry, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil); err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("recovered dispatch = %+v, %v", result, err)
+	}
+	if _, err := c.flushCreatedJobs(context.Background(), retry); err != nil {
+		t.Fatalf("flush recovered Job: %v", err)
+	}
+	if cond := findCondition(getBuildInfo(t, client).Status.Conditions, ConditionJobDispatchBlocked); cond != nil {
+		t.Fatalf("stale dispatch-blocked condition = %+v", cond)
+	}
+}
+
+func TestDispatchSpecRateLimitRetainsPendingSpec(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "rate-limited-job", "a")
+	client.InjectWrite("create", clientpkg.WriteRejected, 429, false)
+	depend := dependEntry("a")
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil)
+	if err == nil || controller.IsPermanent(err) {
+		t.Fatalf("rate-limited dispatch error = %v, want retryable error", err)
+	}
+	stored := getBuildInfo(t, client)
+	if got := stored.Status.SpecStatus.Entry("a").Build.Status; got == SpecBuildFailed {
+		t.Fatalf("rate-limited dispatch marked spec failed")
+	}
+	if client.statusWrites != 0 {
+		t.Fatalf("status writes = %d, want none", client.statusWrites)
 	}
 }
 

@@ -53,6 +53,9 @@ const (
 	ConditionRpmRepoUnavailable = "RpmRepoUnavailable"
 	// ConditionSnapshotUnavailable is the persisted stop-dispatch marker (E-30).
 	ConditionSnapshotUnavailable = "SnapshotUnavailable"
+	// ConditionJobDispatchBlocked records a shared Job API authorization error.
+	// Unlike stop-dispatch markers, it is cleared when dispatch recovers.
+	ConditionJobDispatchBlocked = "JobDispatchBlocked"
 )
 
 // BuildInfo-level condition reasons (design 9.1/E-23/E-24/E-28/E-29/E-30).
@@ -71,6 +74,7 @@ const (
 	ReasonBootstrapRepoXMLUnavail  = "BootstrapRepoXmlUnavailable"
 	ReasonSnapshotNotFound         = "SnapshotNotFound"
 	ReasonSnapshotQueryFailed      = "SnapshotQueryFailed"
+	ReasonJobCreateForbidden       = "JobCreateForbidden"
 )
 
 // Spec-level condition types and reasons (design 9.1).
@@ -88,6 +92,8 @@ const (
 	ReasonBuildAborted                          = "BuildAborted"
 	ConditionJobAbortFailed                     = "JobAbortFailed"
 	ReasonJobAbortFailed                        = "JobAbortFailed"
+	ConditionJobCreateRejected                  = "JobCreateRejected"
+	ReasonJobCreateRejected                     = "JobCreateRejected"
 	ConditionInstall                            = "Install"
 	ReasonInstallCheckFailed                    = "InstallCheckFailed"
 	ReasonInstallResultMissing                  = "InstallResultMissing"
