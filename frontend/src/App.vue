@@ -1,7 +1,7 @@
 <template>
   <div class="app-shell">
     <header class="topbar">
-      <RouterLink class="brand" to="/" :aria-label="`${t('app.title')} ${t('app.home')}`">
+      <RouterLink class="brand" to="/projects" :aria-label="t('app.title')">
         <img src="@/assets/eulermaker-logo.svg" alt="" />
         <span>EulerMaker</span>
       </RouterLink>
@@ -11,7 +11,6 @@
       </button>
 
       <nav :class="['main-nav', { open: menuOpen }]" :aria-label="t('app.mainNavigation')" @click="menuOpen = false">
-        <RouterLink to="/">{{ t("app.home") }}</RouterLink>
         <RouterLink to="/projects">{{ t("app.projects") }}</RouterLink>
         <RouterLink v-if="session.role === 'ops' || session.role === 'admin'" to="/operations">{{ t("app.operations") }}</RouterLink>
         <RouterLink v-if="session.role === 'admin'" to="/admin">{{ t("app.userManagement") }}</RouterLink>
@@ -140,6 +139,6 @@ function openEulerLink(kind: "privacy" | "legal" | "cookies"): string {
 async function logout(): Promise<void> {
   accountMenuOpen.value = false;
   session.signOut();
-  await router.push("/");
+  await router.push("/projects");
 }
 </script>
