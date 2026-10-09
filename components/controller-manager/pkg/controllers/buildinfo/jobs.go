@@ -405,10 +405,16 @@ func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileR
 // keeps the entry (the backfill fold resolves it next round), a 404 drops it
 // together with the Failed verdict.
 func (c *Controller) markSpecFailed(ctx context.Context, round *reconcileRound, specName, condType, reason, message string, clearPending bool) (controller.ReconcileResult, error) {
+	return c.markSpecTerminal(ctx, round, specName, SpecBuildFailed, condType, reason, message, clearPending)
+}
+
+func (c *Controller) markSpecTerminal(ctx context.Context, round *reconcileRound, specName, status, condType, reason, message string, clearPending bool) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	ss := next.Status.SpecStatus.Entry(specName)
-	ss.Build.Status = SpecBuildFailed
-	specCondition(&ss, condType, reason, message)
+	ss.Build.Status = status
+	if condType != "" {
+		specCondition(&ss, condType, reason, message)
+	}
 	next.Status.SpecStatus.Set(specName, ss)
 	if clearPending {
 		delete(next.Status.PendingJobCreates, specName)

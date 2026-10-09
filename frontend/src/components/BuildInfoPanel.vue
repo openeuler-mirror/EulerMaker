@@ -86,16 +86,14 @@ const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStat
   .map(([name, value]) => ({
     name,
     buildStatus: value.status,
-    displayStatus: value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'ArchUnsupported')
-      ? 'ArchUnsupported'
-      : value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'RpmDependsMissing')
+    displayStatus: value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'RpmDependsMissing')
         ? 'RpmDependsMissing' : value.status,
   }))
   .sort((left, right) => left.name.localeCompare(right.name)));
 const specBuildCounts = computed(() => ({
   succeeded: specRows.value.filter((row) => row.buildStatus === 'Succeeded').length,
-  failed: specRows.value.filter((row) => row.buildStatus === 'Failed' && row.displayStatus !== 'ArchUnsupported').length,
-  archUnsupported: specRows.value.filter((row) => row.displayStatus === 'ArchUnsupported').length,
+  failed: specRows.value.filter((row) => row.buildStatus === 'Failed').length,
+  archUnsupported: specRows.value.filter((row) => row.buildStatus === 'ArchUnsupported').length,
 }));
 const specStatusOptions = computed(() => [
   ...[...new Set(specRows.value.map((row) => row.displayStatus || 'Unknown'))]

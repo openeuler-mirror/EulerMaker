@@ -24,8 +24,10 @@ const (
 	// SpecBuildSucceeded: terminal, the latest-generation Job succeeded.
 	SpecBuildSucceeded = "Succeeded"
 	// SpecBuildFailed: terminal, the latest-generation Job failed, or a
-	// pre-dispatch verdict failed the spec (E-17/E-18/E-19/E-27).
+	// pre-dispatch verdict failed the spec (E-17/E-18/E-27).
 	SpecBuildFailed = "Failed"
+	// SpecBuildArchUnsupported: terminal, the spec cannot build on the target architecture.
+	SpecBuildArchUnsupported = "ArchUnsupported"
 	// SpecBuildAborted: legacy residual value (pre-v1 Job phase passthrough).
 	// v1 never writes it; reading it stops the round and waits for
 	// parentAbortGuard (6.4).
@@ -84,8 +86,6 @@ const (
 	ConditionRebuildFailed                      = "RebuildFailed"
 	ReasonRebuildJobFailed                      = "RebuildJobFailed"
 	ReasonRpmDependsMissing                     = "RpmDependsMissing"
-	ConditionArchUnsupported                    = "ArchUnsupported"
-	ReasonArchUnsupported                       = "ArchUnsupported"
 	ConditionDefaultBuildResourceConfigNotFound = "DefaultBuildResourceConfigNotFound"
 	ReasonDefaultBuildResourceConfigNotFound    = "DefaultBuildResourceConfigNotFound"
 	ConditionBuildAborted                       = "BuildAborted"
@@ -99,6 +99,14 @@ const (
 	ReasonInstallResultMissing                  = "InstallResultMissing"
 	ReasonInstallResultInvalid                  = "InstallResultInvalid"
 )
+
+func failedSpecBuildStatus(status string) bool {
+	return status == SpecBuildFailed || status == SpecBuildArchUnsupported
+}
+
+func terminalSpecBuildStatus(status string) bool {
+	return status == SpecBuildSucceeded || failedSpecBuildStatus(status)
+}
 
 // conditionMessageMax bounds a persisted condition message (apiserver limit).
 const conditionMessageMax = 1024

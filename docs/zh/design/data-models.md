@@ -398,7 +398,7 @@ type SpecBuildStatus struct {
 
 | 字段           | Go 类型 | 说明 |
 |--------------|------|------|
-| `status`     | string | `"Running"` /`"Succeeded"` / `"Failed"` / `"Aborted"`|
+| `status`     | string | `"Running"` / `"Succeeded"` / `"Failed"` / `"ArchUnsupported"` / `"Aborted"`（历史残留值）|
 | `conditions` | []metav1.Condition | 构建状态条件 |
 
 ---
