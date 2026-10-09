@@ -529,7 +529,7 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 
 // Escalation after repeated child-resource failures.
 
-func TestE28ReleaseUnavailableStopsDispatch(t *testing.T) {
+func TestReleaseUnavailableStopsDispatch(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
@@ -677,7 +677,7 @@ func TestStopConvergenceFallsBackWithoutSpecRepoNames(t *testing.T) {
 	}
 }
 
-func TestE30SnapshotUnavailableEscalates(t *testing.T) {
+func TestSnapshotUnavailableEscalates(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
@@ -725,7 +725,7 @@ func TestAdvanceEmptySpecStatusWaits(t *testing.T) {
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
 	if len(persisted.Status.Conditions) != 0 {
-		t.Fatalf("conditions = %v, want none (E-01 waits silently)", persisted.Status.Conditions)
+		t.Fatalf("conditions = %v, want none while spec status is empty", persisted.Status.Conditions)
 	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)

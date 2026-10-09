@@ -469,7 +469,7 @@ func TestInitIncrementalAndSpecifiedRepoMissingDegrades(t *testing.T) {
 	}
 }
 
-func TestInitE24NonRetryableDegrades(t *testing.T) {
+func TestInitNonRetryableSnapshotRepoErrorDegrades(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	snapshot := testSnapshotObj(
@@ -495,7 +495,7 @@ func TestInitE24NonRetryableDegrades(t *testing.T) {
 	}
 }
 
-func TestInitE24RetryableStaysPending(t *testing.T) {
+func TestInitRetryableSnapshotRepoErrorStaysPending(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	snapshot := testSnapshotObj()
@@ -517,7 +517,7 @@ func TestInitE24RetryableStaysPending(t *testing.T) {
 	}
 }
 
-func TestInitE23ParseFailureSkipsSpec(t *testing.T) {
+func TestInitPermanentSpecReadFailureSkipsSpec(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	client.SeedSnapshot(testSnapshotObj(
@@ -543,7 +543,7 @@ func TestInitE23ParseFailureSkipsSpec(t *testing.T) {
 	}
 }
 
-func TestInitE23SpecifiedParseDegrades(t *testing.T) {
+func TestInitSpecifiedPermanentSpecReadFailureDegrades(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "specified", "repo1")
 	client.SeedSnapshot(testSnapshotObj(
@@ -566,7 +566,7 @@ func TestInitE23SpecifiedParseDegrades(t *testing.T) {
 	}
 }
 
-func TestInitE23TransientStaysPending(t *testing.T) {
+func TestInitTransientGitErrorStaysPending(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	client.SeedSnapshot(testSnapshotObj(
@@ -586,7 +586,7 @@ func TestInitE23TransientStaysPending(t *testing.T) {
 	}
 }
 
-func TestInitE16RpmRepoNotHeldDefers(t *testing.T) {
+func TestInitMissingRpmRepoDefersDispatch(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	client.SeedSnapshot(testSnapshotObj(
@@ -605,7 +605,7 @@ func TestInitE16RpmRepoNotHeldDefers(t *testing.T) {
 	}
 }
 
-func TestInitE19ArchUnsupported(t *testing.T) {
+func TestInitArchUnsupportedSkipsJob(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	client.SeedSnapshot(testSnapshotObj(
@@ -631,7 +631,7 @@ func TestInitE19ArchUnsupported(t *testing.T) {
 	}
 }
 
-func TestInitE26ImageMappingMissingPauses(t *testing.T) {
+func TestInitMissingImageMappingPauses(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	// A missing image mapping pauses dispatch without marking the spec Failed.
@@ -660,7 +660,7 @@ func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 	}
 }
 
-func TestInitE27BuildResourceConfigMissing(t *testing.T) {
+func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	// Seed everything except any BuildResourceConfig (project table and the cluster-wide default resource table is
 	// absent).
@@ -928,7 +928,7 @@ func TestSingleAllSkippedCloseout(t *testing.T) {
 }
 
 func TestSingleDeterministicFailures(t *testing.T) {
-	t.Run("E-19 arch unsupported has its own status", func(t *testing.T) {
+	t.Run("unsupported arch has its own status", func(t *testing.T) {
 		c, client, git, _ := newTestController(t)
 		seedHealthyBasics(client, "single", "repo1")
 		client.SeedSnapshot(testSnapshotObj(
@@ -959,7 +959,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("E-27 BuildResourceConfig missing marks Failed", func(t *testing.T) {
+	t.Run("missing BuildResourceConfig marks spec Failed", func(t *testing.T) {
 		c, client, git, _ := newTestController(t)
 		client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 		client.SeedBuild(testBuildObj("single", "repo1"))
@@ -986,7 +986,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 	})
 }
 
-func TestSingleE26Pauses(t *testing.T) {
+func TestSingleMissingImageMappingPauses(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "single", "repo1")
 	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
@@ -997,7 +997,7 @@ func TestSingleE26Pauses(t *testing.T) {
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 
 	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); err == nil {
-		t.Fatal("reconcile() error = nil, want build-target Config mapping failure (E-26 pause)")
+		t.Fatal("reconcile() error = nil, want build-target Config mapping failure")
 	}
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoPending)

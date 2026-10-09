@@ -45,12 +45,12 @@ components/controller-manager/
       controller.go                # Initializer：注册 PollingSource handler + 构造 BaseController；注入 apiserver / gitserver 客户端与 clock.Clock
       reconcile.go                 # reconcile 入口、parentAbortGuard、错误返回约定
       init.go                      # initBuildInfo（步骤 0~5；含 single 直通分支，见 7.2.3）
-      advance.go                   # advanceBuildInfo（含步骤 3.1 install 补边处理）、advanceDownstream；single 简化路径（仅回填 + 完成度检查，见 7.2.3）
+      advance.go                   # advanceBuildInfo（含步骤 3.1 install 补边处理）、advanceDownstream、发布确认门禁；single 简化路径（仅回填 + 完成度检查，见 7.2.3）
       specdcache.go                # Cache.specDependsCache（per-BuildInfo：RWMutex，失效/prune 复用 dcgDict 机制，无 TTL）与 Cache.specFileCache（全局 LRU：commitId/specFileName 两层 key，--specfile-cache-size 上限，15.11）
       specdepends.go               # 步骤 0：specDepends 组装（查 specdcache + miss 补源调度：specFileCache 命中直用/git-server 下载）、unparsable_spec 覆盖、以 Build.spec.packages 选种子及直接下游；single 指定包仓库集直通组装（见 7.2.3）
       dcg.go                       # DcgDict/DcgNode、Kosaraju SCC、SCC 剥离选点、运行期 install 补边（含新环追加破环）、DispatchRequirements
       cache.go                     # dcgDict 缓存（RWMutex + tombstone + sweeper）
-      jobs.go                      # createJobForSpec、syncSpecStatusFromJobs、多代 Job 排序、发布确认门禁（RpmRepo.sourceJobNames）
+      jobs.go                      # dispatchSpec、backfillJobs、多代 Job 排序
       conditions.go                # condition upsert/清除
       metrics.go                   # build_info_controller_* 指标注册
 ```
@@ -360,7 +360,7 @@ E-28/E-29/E-30 统一采用：**停止派发 → 等待已有 Job 收敛 → Com
 1. 触发时立即停止本轮所有新 Job 创建（含 bootstrap、重建），持久化对应 condition（ReleaseUnavailable / RpmRepoUnavailable / SnapshotUnavailable，status=True），保留原 phase。condition 是停止派发标记，保留首次触发 reason/message，不因依赖恢复而清除或恢复派发。写入按 10.2/10.3 分流，失败即结束本轮，禁止继续下发；确认写成功后才清除相关内存计数。
 2. 入口先排除不存在、删除中及终态对象，再执行 parentAbortGuard。发现停止标记后直接进入本路径，不再读取 Snapshot/RpmRepo/Config/build-target，不解析 spec、建图或补边；重启按持久化标记恢复，不重新计数。
 3. 按 ebs.io/build-name 完整分页 List 全部关联 Job，回填已有 spec 的最新 Job 状态。完成检查覆盖所有代际及构建集外的关联 Job，不只检查最新 Job；任一页失败不得使用部分结果或写 Completed，按 7.5 重试。
-4. 任一 Job 为 Pending/Running 或未知、空 phase 时继续等待，未知值记录告警。所有已创建 Job 均为 Succeeded/Failed/Aborted，且 `status.pendingJobCreates` 为空时，才写 Completed。写入时将构建或安装未成功的 spec 所属仓库并入 `failedPackages`，包含尚未派发的 spec；优先使用持久化的 `status.specRepoNames[spec]`，旧对象缺失时尝试内存 specDepends。仍无法确定时，`single` 或尚在 Pending 且指定了包的构建使用 `Build.spec.packages`，其他构建保守使用本轮已读取的 `Project.spec.packageRepos`，避免下一轮增量构建漏选。未决创建按 6.5.1 确认，不能仅凭一次空 List 宣告完成；无 Job 且无未决创建时可完成。
+4. 任一 Job 为 Pending/Running 或未知、空 phase 时继续等待，未知值记录告警。所有已创建 Job 均为 Succeeded/Failed/Aborted，且 `status.pendingJobCreates` 为空时，才写 Completed。写入时将构建或安装未成功的 spec 所属仓库并入 `failedPackages`，包含尚未派发的 spec；优先使用持久化的 `status.specRepoNames[spec]`，缺失时尝试内存 specDepends。仍无法确定时，`single` 或尚在 Pending 且指定了包的构建使用 `Build.spec.packages`，其他构建保守使用本轮已读取的 `Project.spec.packageRepos`，避免下一轮增量构建漏选。未决创建按 6.5.1 确认，不能仅凭一次空 List 宣告完成；无 Job 且无未决创建时可完成。
 5. 不中止或删除已有 Job，不等待物化/sourceJobNames，不要求环内重建次数；未派发 spec 保留空状态，不伪造失败 Job。Completed 保留停止原因；父 Build 在 Completed 后汇总 spec 构建与安装状态收口。
 6. 等待期间仅有状态变化才 PUT，返回零值 + nil 等下一轮；不设等待超时，不将运行中的 Job 当作已完成。Completed 写入成功（含 Unknown 确认成功）后才清理缓存；写失败保留停止标记，下轮重新 List 判断。父 Build 中止/删除及 Project Terminating 仍优先按原规则写 Aborted，不属于本 Completed 路径。
 
@@ -645,7 +645,7 @@ buildSet = buildSet ∪ direct                                                # 
 1. **重建取消（有效 required）**：定义 `effectiveRequired(S) = 1` 当 S 的任一直接上游（`inDep ∪ installInDep`）为 `Failed`，否则 `DispatchRequirements(S)`（环内 2 / 普通 1）。任一上游 Failed ⟹ S 的重建（第 2 次下发）取消、v1 即终——重建的目的是"基于上游最终产物重建"，Failed 上游不会再产出新产物，重建无意义；已 `Succeeded` 未达 required 的节点**不翻转 Failed**。allTerminal（6.4）、7.3 步骤 4 的"未达下发次数"判断、7.4.6 一致性门禁均按**有效 required** 判定。
 2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → build.status **以最后一个 Job 为准标 `Failed`**（spec 状态无"保持前代"例外），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。发布确认门禁（7.4.6）从本轮 Job 列表取得最新一代 Job 名称，不依赖 `SpecStatusGroup.build` 保存名称。
 
-> **存量数据兼容**：`syncSpecStatusFromJobs` 回填时以 `DispatchCount = max(DispatchCount, 同 spec 现存 Job 数)` 兜底，旧数据（无 `dispatchCount` 字段）不会因 0 而误判重复下发或漏重建。
+`backfillJobs` 回填时将 `DispatchCount` 提升到当前值与同 spec 已核验 Job 最大派发代次的较大值，避免状态写入丢失后重复下发；Job 缺少派发代次 annotation 时不参与回填。
 
 
 #### 7.4.4 "多 Job 取最新"的精确语义
@@ -684,7 +684,7 @@ buildSet = buildSet ∪ direct                                                # 
 
 > **前置消解与残余双层兜底**：spec 的安装期依赖参与建图（install 边，见 16.1），用于构建排序；运行期 install 失败后，先按本节规则动态补边。未能在本轮修复的失败 spec 所属仓库在 `Completed` 时写入 `status.failedPackages`，由下一轮 Build Controller 纳入 incremental 的 `Build.spec.packages`（见 build-controller 7.2）；本控制器不查询历史轮次。
 
-构建脚本将 RPM 构建与安装检查结果分别写入 `/workspace/job-result.json`，Runner 回写 `Job.status.build` 和 `Job.status.install`。Controller 在 `syncSpecStatusFromJobs` 中消费 `status.install`。结果示例：
+构建脚本将 RPM 构建与安装检查结果分别写入 `/workspace/job-result.json`，Runner 回写 `Job.status.build` 和 `Job.status.install`。Controller 在 `backfillJobs` 中通过 `backfillInstall` 消费 `status.install`。结果示例：
 
 ```json
 {
@@ -1038,7 +1038,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | 资源 | client 方法 | apiserver 路径 | 访问权限 | 用途 |
 |------|-----------|---------------|----------|------|
 | `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` | `/apis/ebs/v1/buildinfos`（全局 list 由 PollingSource 框架承担，不经本 Client 接口，见 2.4；reconcile 侧按 name 直接 get，无需 labelSelector）/ PUT /status | **读写**（get + /status 写） | reconcile 入口 re-get → status 写（乐观锁 409 延迟重入、Unknown 确认，见 10.2/10.3；specDepends 不落库——无 PUT spec 场景，15.11）；父 Build 中止/Project Terminating 时置 `Aborted` 终态并**保留对象**（G-06/E-03/E-20，不删除） |
-| `Job` | `CreateJob` / `GetJob` / `ListJobs` | `/apis/ebs/v1/projects/{project}/jobs`（单对象 `/{name}` 与 list 两种形态） | **读写**（创建 + 按名 get + 按 label list） | `createJobForSpec` 创建（字段契约见 15.3.1）；创建 Unknown 按确定性 Job 名 GET 确认（10.3/E-11）；按 `ebs.io/build-name` label list 回填（见 15.3.2） |
+| `Job` | `CreateJob` / `GetJob` / `ListJobs` | `/apis/ebs/v1/projects/{project}/jobs`（单对象 `/{name}` 与 list 两种形态） | **读写**（创建 + 按名 get + 按 label list） | `dispatchSpec` 创建（字段契约见 15.3.1）；创建 Unknown 按确定性 Job 名 GET 确认（10.3/E-11）；按 `ebs.io/build-name` label list 回填（见 15.3.2） |
 | `Build` | `GetBuild` | `/apis/ebs/v1/projects/{project}/builds/{name}` | **只读** | parentAbortGuard 按名读取本轮父 Build；步骤 0 使用已固化的 `spec.packages`，不查询历史 Build；字段消费明细见 15.5 |
 | `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 与 Build 同名按 name 直接 get（一对一约定，见 15.4；每轮由 7.1 前置守卫单点 GET 一次、本轮复用，不重复查询）：发布失败守卫判定（`status.release.phase`，7.1/E-28）、建图前置存在性判定、构建依赖裁决、步骤 0 扩散反查、payload `contentURL` 注入；`single` 直通路径另经本接口按名 get 获取 repo 注入用 contentURL（守卫豁免，7.2.3 第 3 条）；字段消费明细见 15.4 |
 | `Snapshot` | `GetSnapshot` | `/apis/ebs/v1/projects/{project}/snapshots/{name}` | **只读** | 仅读取本轮同名 Snapshot，用 `spec.packageRepos[].url` 与 `status.packageRepoStatuses[].commitId` 定位 git-server 命令输入，`cloneUrl` 用于 Job payload；其 GET 失败计入连续失败计数，达阈值按 E-30 收口；字段消费明细见 15.7 |
@@ -1120,14 +1120,14 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 
 ### 15.3 Job（创建 + 按 label list 回读）
 
-#### 15.3.1 创建时写入的字段（`createJobForSpec`）
+#### 15.3.1 创建时写入的字段（`dispatchSpec` / `jobForSpec`）
 
 **Job 命名与创建幂等**：
 
 - 创建身份为 `(BuildInfo.UID, specName, dispatchGeneration)`。已有未决条目时优先沿用，按 6.5.1 处理；仅无条目时分配新代次。派发代次从 1 开始，取回填既有 Job 后的 `DispatchCount + 1`；同一代的重试、Unknown 确认和 AlreadyExists 沿用均不增加代次。新创建的 Job 在本轮内存态确认，整批合并写入 status；落盘失败由下轮 List 回填。
 - hash 输入固定为 `json.Marshal([]string{string(buildInfo.UID), specName, strconv.FormatInt(dispatchGeneration, 10)})` 的字节结果；使用 SHA-256，新建 Job 只取摘要前 8 字节，输出 16 位小写十六进制字符串。不得加入时间、resourceVersion、随机数或会变化的 payload。
 - Job 名为 `EncodeSpecName(specName) + "-" + hash`；派发代次仅参与 hash 计算，不直接显示在名称中。`EncodeSpecName` 不添加固定前缀；通常保留 ASCII 字母数字和非末尾的 `-`、`.`，其余 UTF-8 字节转义为 `_HH`（大写十六进制）。为保证标签首字符合法，以非字母数字或字面 `X` 开头时，首字节转义为 `X_HH`；`_` 本身及末尾的 `-`、`.`同样转义。编码可逆，当前暂不处理超长名称。
-- Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 由 spec label 可逆解码得到。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。已有带可见派发代次的 16 位、20 位和完整 64 位 hash 名称仍可通过身份核验和 List 回填；新派发仅生成不显示代次的 16 位 hash 名称。已有 `pendingJobCreates.jobName` 始终沿用原值，GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
+- Job annotation 仅写入 `ebs.io/dispatch-generation`（十进制字符串），原始 specName 由 spec label 可逆解码得到。创建成功、Unknown GET 命中和 AlreadyExists GET 命中时，核验 namespace、build/spec labels、派发代次 annotation 及基于 BuildInfo UID 重算的名称；不匹配返回 PermanentError，不覆盖对象、不另起随机名称。只接受不显示代次的 16 位 hash 名称。已有 `pendingJobCreates.jobName` 必须与当前规则重算的名称一致，否则返回 PermanentError；一致时 GET 404 后仍用该名称重试。AlreadyExists 的核验沿用优先于通用 Conflict 重入规则；确认读取失败按读取错误分类返回。
 - **AlreadyExists 后 GET 返回 404**：返回可重试错误，由框架退避重新入队；不得套用主对象 NotFound 的结束规则，也不增加派发计数。后续重新调和仍需该代 Job 时，使用同一创建身份和名称，不生成替代名称；是否允许再次创建仍遵循停止派发及终态守卫。
 - 重启后通过完整 List 回填已有 Job；确定性命名 Job 按派发代次 annotation 和基于 BuildInfo UID 重算的名称核验，DispatchCount 至少恢复到已确认的最大派发代次，不因旧代 Job 被清理而回退。未找到本次目标代时再次计算同名 Job，保证同一创建身份不会生成第二个名称。缺少派发代次 annotation 的 Job 不参与身份匹配，也不作为同名创建冲突的可沿用对象。
 
@@ -1238,7 +1238,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `status.phase` / `status.stage` | runner 推进 stage：`Pending → Running → PostRun`；phase 终态：`Succeeded` / `Failed` / `Aborted`（PostRun 为 `status.stage` 值、非 phase，见 data-models.md；phase 映射见 7.4.5） |
 | `status.build` / `status.install` | runner 从脚本结果读取并回写；buildinfo 依据结构化结果回填（见 7.4.7） |
 
-#### 15.3.2 回读消费的字段（`syncSpecStatusFromJobs`）
+#### 15.3.2 回读消费的字段（`backfillJobs`）
 
 | 字段 | 消费点 |
 |------|--------|
@@ -1569,7 +1569,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 - 可识别形式仅 `%{...}` 且花括号内**不含空白**（`%{name}` ✓；`%{ name }` 不识别、原样保留）；不支持 `$(...)`/`%(...)` 与无花括号 `%name`；
 - 取值来源与优先级：spec 宏表（`%define`/`%global` 定义，覆盖同名 `buildPayload.macros` 简单定义）→ `buildPayload.macros` 简单定义 → spec 同名属性（`Name`/`Version`/`Release`/`Epoch` 等）；
 - **未定义或取值为空 → 原样保留字面量**（不删空）；RPM 系统宏由前置 `rpmspec` 展开；
-- 条件宏：`%{?x}` 在 x 已定义时取 x 的值，否则为空串；`%{?x:body}` 在 x 已定义时展开 body，否则为空串；`%{!?x:body}` 在 x 未定义时展开 body，否则为空串。body 可包含嵌套 `%{...}`，按配对花括号解析；兼容旧写法 `%{!x:body}`。`%{!x}` 无 body 且 x 未定义时按现有规则视为 parseFailed；
+- 条件宏：`%{?x}` 在 x 已定义时取 x 的值，否则为空串；`%{?x:body}` 在 x 已定义时展开 body，否则为空串；`%{!?x:body}` 与 `%{!x:body}` 在 x 未定义时展开 body，否则为空串。body 可包含嵌套 `%{...}`，按配对花括号解析；`%{!x}` 无 body 且 x 未定义时按现有规则视为 parseFailed；
 - 递归展开：替换结果若仍含 `%{...}` 继续展开，直至一轮替换无变化为止；
 - 应用点两处：约束/列表类整行值（在 tokenize **之前**）、各字段取值（`version`/`release`/`epoch`/`provides.name`/`specName`/`exclusiveArch` 逐项/版本约束值）。
 
