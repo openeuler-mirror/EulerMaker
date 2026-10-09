@@ -41,9 +41,9 @@ var (
 	// gitServerFailures counts git-server requests that failed after the
 	// in-process retry budget was exhausted.
 	gitServerFailures = metrics.NewCounter("build_info_controller_gitserver_request_failures_total", "Git-server requests that failed after the retry budget was exhausted.")
-	// rpmRepoEscalations counts E-29 escalations whose final Completed write
-	// succeeded.
-	rpmRepoEscalations = metrics.NewCounter("build_info_controller_rpmrepo_unavailable_escalations_total", "RpmRepoUnavailable escalations whose final Completed write succeeded.")
+	// rpmRepoEscalations counts E-29 deterministic failures whose final
+	// Completed write succeeded.
+	rpmRepoEscalations = metrics.NewCounter("build_info_controller_rpmrepo_unavailable_escalations_total", "RpmRepoUnavailable stops for deterministic errors or persistent XML parse failures whose final Completed write succeeded.")
 	// snapshotEscalations counts E-30 escalations whose final Completed write
 	// succeeded.
 	snapshotEscalations = metrics.NewCounter("build_info_controller_snapshot_unavailable_escalations_total", "SnapshotUnavailable escalations whose final Completed write succeeded.")

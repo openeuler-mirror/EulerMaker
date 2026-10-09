@@ -196,9 +196,16 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		}
 		// Existing pending Jobs were GET-confirmed above. Only a new create
 		// needs repository metadata to derive this spec's prefer payload.
-		sources, err = c.loadSinglePreferSources(ctx, round, contentURL)
+		var reason string
+		sources, reason, err = c.loadSinglePreferSources(ctx, round, contentURL)
 		if err != nil {
-			return controller.ReconcileResult{}, err
+			_, result, failureErr := c.rpmMetaUnavailable(ctx, round, reason, err)
+			if failureErr == nil && result == (controller.ReconcileResult{}) {
+				// A single build may have dispatched earlier specs this round.
+				// Requeue stops further dispatch and lets reconcile flush them.
+				return controller.ReconcileResult{Requeue: true}, nil
+			}
+			return result, failureErr
 		}
 	}
 	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, scriptRef, name, generation, sources)

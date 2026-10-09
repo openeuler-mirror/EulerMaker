@@ -46,6 +46,17 @@ func TestHTTPFetcherIdentifiesMetadataRequests(t *testing.T) {
 	}
 }
 
+func TestHTTPFetcherPreservesStatusCode(t *testing.T) {
+	client := &http.Client{Transport: metadataTransportFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader("denied"))}, nil
+	})}
+	_, err := HTTPFetcher(client)(context.Background(), "https://mirror.example/repodata/repomd.xml")
+	var status *HTTPStatusError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusForbidden {
+		t.Fatalf("error = %v, want HTTPStatusError 403", err)
+	}
+}
+
 func (f fetchMap) fetch(_ context.Context, url string) ([]byte, error) {
 	if body, ok := f[url]; ok {
 		return body, nil
@@ -202,9 +213,13 @@ func TestParseRepoSourceZstd(t *testing.T) {
 }
 
 func TestParseRepoSourceErrors(t *testing.T) {
-	// Download failure.
-	_, err := ParseRepoSource(context.Background(), fetchMap{}.fetch, "http://repo", "x86_64")
+	_, err := ParseRepoSource(context.Background(), fetchMap{}.fetch, "ftp://repo", "x86_64")
 	var se *SourceError
+	if !errors.As(err, &se) || se.Kind != FailureConfig {
+		t.Fatalf("err = %v, want SourceError Config", err)
+	}
+	// Download failure.
+	_, err = ParseRepoSource(context.Background(), fetchMap{}.fetch, "http://repo", "x86_64")
 	if !errors.As(err, &se) || se.Kind != FailureDownload {
 		t.Fatalf("err = %v, want SourceError Download", err)
 	}

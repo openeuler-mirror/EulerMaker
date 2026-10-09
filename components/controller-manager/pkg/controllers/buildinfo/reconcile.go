@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -267,29 +269,22 @@ func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) 
 	return "", false
 }
 
-// releaseFailedGuard fetches the same-name RpmRepo once per round. Query
-// failures count toward the stop threshold; 404 lets the round continue
-// without holding the object, while a failed release stops dispatch.
+// releaseFailedGuard fetches the same-name RpmRepo once per round. Temporary
+// absence and read failures retry; deterministic request failures stop dispatch.
 func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRound) (bool, controller.ReconcileResult, error) {
 	repo, err := c.client.GetRpmRepo(ctx, round.current.Namespace, round.current.Name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			// Transient absence: count, escalate at the threshold,
-			// otherwise continue the round without holding the RpmRepo.
-			_, escalated := round.failures.RpmRepoFailed(ReasonRpmRepoNotFound, fmt.Sprintf("RpmRepo %s/%s not found", round.current.Namespace, round.current.Name))
-			if escalated {
-				result, err := c.escalateRpmRepoUnavailable(ctx, round)
-				return true, result, err
-			}
+			// A missing RpmRepo may still be created by the Build controller.
+			round.failures.RpmRepoReady()
 			c.logf(round.key, "RpmRepoNotFound", "rpmrepo %s/%s not found", round.current.Namespace, round.current.Name)
 			return false, controller.ReconcileResult{}, nil
 		}
-		// Query failures count and fail the whole round, unlike 404.
-		_, escalated := round.failures.RpmRepoFailed(ReasonRpmRepoQueryFailed, err.Error())
-		if escalated {
-			result, err := c.escalateRpmRepoUnavailable(ctx, round)
+		if deterministicRpmRepoError(err) {
+			result, err := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoQueryRejected, fmt.Sprintf("RpmRepo %s/%s query rejected: %v", round.current.Namespace, round.current.Name, err))
 			return true, result, err
 		}
+		round.failures.RpmRepoReady()
 		return true, controller.ReconcileResult{}, err
 	}
 	round.rpmRepo = repo
@@ -300,6 +295,30 @@ func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRou
 		return true, result, err
 	}
 	return false, controller.ReconcileResult{}, nil
+}
+
+// deterministicRpmRepoError identifies failures that another reconcile cannot
+// repair without changing the request, permissions, or repository configuration.
+func deterministicRpmRepoError(err error) bool {
+	var contract contractError
+	if errors.As(err, &contract) {
+		return true
+	}
+	var source *rpmver.SourceError
+	if errors.As(err, &source) && source.Kind == rpmver.FailureConfig {
+		return true
+	}
+	var apiStatus apierrors.APIStatus
+	if errors.As(err, &apiStatus) && deterministicHTTPStatus(int(apiStatus.Status().Code)) {
+		return true
+	}
+	var httpStatus *rpmver.HTTPStatusError
+	return errors.As(err, &httpStatus) && deterministicHTTPStatus(httpStatus.StatusCode)
+}
+
+func deterministicHTTPStatus(code int) bool {
+	return code >= http.StatusBadRequest && code < http.StatusInternalServerError &&
+		code != http.StatusNotFound && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
 }
 
 // escalateRpmRepoUnavailable persists a stop marker with the last error and

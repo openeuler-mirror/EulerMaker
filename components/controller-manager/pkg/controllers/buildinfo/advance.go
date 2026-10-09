@@ -188,7 +188,7 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 	required := dcg.DispatchRequirements()
 	contentURL, err := c.resolveContentURL(heldContentURL(round))
 	if err != nil {
-		return controller.ReconcileResult{}, err
+		return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
 	}
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {

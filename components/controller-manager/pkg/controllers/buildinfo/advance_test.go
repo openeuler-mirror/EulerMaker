@@ -532,7 +532,7 @@ func TestE28ReleaseFailedStopsDispatch(t *testing.T) {
 	requireNoCondition(t, persisted.Status.Conditions, ConditionPartialFailure)
 }
 
-func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
+func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
@@ -552,38 +552,30 @@ func TestE29RpmRepoUnavailableEscalates(t *testing.T) {
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	c.specDependsCache.Set(key, map[string]specparse.SpecDepend{"a": dependEntry("a")})
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
-	// No RpmRepo seeded: 404 rounds count towards the failure threshold; dispatch waits below
-	// the threshold).
+	// The Build controller may create the RpmRepo later. Repeated 404s must
+	// leave the build resumable, even beyond the parse-failure threshold.
 
-	for round := 1; round <= 2; round++ {
+	for round := 1; round <= 5; round++ {
 		reconcileOnce(t, c)
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
 		requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 	}
-
-	// Round 3: the threshold escalates to the stop marker; the convergence
-	// path keeps the unresolved pending create on 404.
-	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
-	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
 	if len(persisted.Status.PendingJobCreates) != 1 {
 		t.Fatalf("pendingJobCreates = %v, want the 404 entry kept", persisted.Status.PendingJobCreates)
 	}
-	// Escalation clears the readiness counter.
 	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
-		t.Fatalf("rpmrepo failure counter = %d, want cleared after escalation", got)
+		t.Fatalf("parse failure counter = %d, want 0 for missing repo", got)
 	}
 
-	// The created Job appears: the list confirms the pending entry and the
-	// convergence completes with the marker preserved.
+	// The repo arrives and the pending Job is confirmed. Reconciliation can
+	// continue normally without a permanent stop marker.
+	client.SeedRpmRepo(testRpmRepoObj(""))
 	seedJobAt(client, seeded, "a", 2, ebsv1.JobSucceeded, testStart.Add(time.Minute))
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
-	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
+	requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 	if len(persisted.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want confirmed and removed", persisted.Status.PendingJobCreates)
 	}
