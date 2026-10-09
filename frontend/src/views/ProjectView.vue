@@ -1,9 +1,6 @@
 <template>
   <div class="detail-toolbar">
     <RouterLink class="back-link" to="/projects"><ArrowLeft /> {{ t("project.back") }}</RouterLink>
-    <div class="detail-actions">
-      <button v-if="project" class="secondary-button" type="button" @click="exportYaml"><Download />{{ t("project.exportYaml") }}</button>
-    </div>
   </div>
   <div v-if="exportErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(exportErrorKey) }}</div>
   <div v-if="copyErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(copyErrorKey) }}</div>
@@ -31,7 +28,10 @@
           <button class="secondary-button" type="button" :disabled="buildConfigurationMissing" :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''" @click="openBuildDialog('single')">{{ t("project.singleBuild") }}</button>
         </div>
       </div>
-      <a class="project-repo-download-link" :href="`/repositories/${encodeURIComponent(name)}/`">{{ t("project.repoDownloadLink") }}</a>
+      <div class="project-hero-actions">
+        <button class="secondary-button" type="button" @click="exportYaml"><Download />{{ t("project.exportYaml") }}</button>
+        <a class="project-repo-download-link" :href="`/repositories/${encodeURIComponent(name)}/`">{{ t("project.repoDownloadLink") }}</a>
+      </div>
     </section>
 
     <nav class="project-tabs" role="tablist" :aria-label="t('project.tabsLabel')">
@@ -100,10 +100,10 @@
         <p v-if="pendingJobsLoading" class="config-empty">{{ t("project.loadingPendingJobs") }}</p>
         <p v-if="!nonTerminalJobs.length && !pendingJobsLoading" class="config-empty">{{ t("project.noRunningJobs") }}</p>
         <template v-if="nonTerminalJobs.length">
-          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchSpecs')" :no-results-label="t('project.noMatchingSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th><th v-if="canAbortJobs">{{ t('admin.actions') }}</th></tr></thead><tbody>
+          <div class="project-table-wrap"><table class="project-table"><thead><tr><th>{{ t("jobControl.name") }}</th><th><ColumnMultiFilter v-model="selectedRunningBuilds" :label="t('project.builds')" :all-label="t('project.allRunningBuilds')" :options="runningBuildOptions" :width="300" /></th><th><ColumnMultiFilter v-model="selectedRunningSpecs" label="Spec" :all-label="t('project.allRunningSpecs')" :options="runningSpecOptions" :width="280" searchable :search-placeholder="t('project.searchRunningSpecs')" :no-results-label="t('project.noMatchingRunningSpecs')" /></th><th><ColumnMultiFilter v-model="selectedRunningPackages" :label="t('project.buildInfoPackageName')" :all-label="t('project.allRunningPackages')" :options="runningPackageOptions" :width="280" searchable :search-placeholder="t('project.searchRunningPackages')" :no-results-label="t('project.noMatchingRunningPackages')" /></th><th><ColumnMultiFilter v-model="selectedRunningPhases" :label="t('jobControl.phase')" :all-label="t('project.allRunningJobPhases')" :options="runningPhaseOptions" /></th><th>Runner</th><th>{{ t("jobControl.startedAt") }}</th><th v-if="canAbortJobs">{{ t('admin.actions') }}</th></tr></thead><tbody>
             <template v-for="job in visibleRunningJobs" :key="job.metadata?.uid || job.metadata?.name">
-              <tr><td><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedRunningJobName === job.metadata.name" :aria-label="t('jobLog.open', { name: job.metadata.name })" @click="toggleRunningJobLog(job.metadata.name)">{{ job.metadata.name }}</button><span v-else>{{ t("common.emptyValue") }}</span></td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ displaySpecName(job.metadata?.labels?.["ebs.io/spec-name"]) || t("common.emptyValue") }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td><td v-if="canAbortJobs"><button v-if="job.metadata?.uid && abortableJob(job)" class="text-button danger-link" type="button" :disabled="abortingJob" @click="openJobAbortDialog(job)">{{ t('jobControl.abort') }}</button></td></tr>
-              <tr v-if="expandedRunningJobName === job.metadata?.name && job.metadata?.name" class="spec-jobs-row"><td :colspan="canAbortJobs ? 7 : 6"><JobLogInline :project="name" :job-name="job.metadata.name" /></td></tr>
+              <tr><td><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedRunningJobName === job.metadata.name" :aria-label="t('jobLog.open', { name: job.metadata.name })" @click="toggleRunningJobLog(job.metadata.name)">{{ job.metadata.name }}</button><span v-else>{{ t("common.emptyValue") }}</span></td><td>{{ job.metadata?.labels?.["ebs.io/build-name"] || t("common.emptyValue") }}</td><td>{{ displayEncodedName(job.metadata?.labels?.["ebs.io/spec-name"]) || t("common.emptyValue") }}</td><td>{{ displayEncodedName(job.metadata?.labels?.[PACKAGE_NAME_LABEL]) || t('common.emptyValue') }}</td><td><StatusBadge :value="job.status?.phase" /></td><td>{{ job.status?.runner || t("common.emptyValue") }}</td><td>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</td><td v-if="canAbortJobs"><button v-if="job.metadata?.uid && abortableJob(job)" class="text-button danger-link" type="button" :disabled="abortingJob" @click="openJobAbortDialog(job)">{{ t('jobControl.abort') }}</button></td></tr>
+              <tr v-if="expandedRunningJobName === job.metadata?.name && job.metadata?.name" class="spec-jobs-row"><td :colspan="canAbortJobs ? 8 : 7"><JobLogInline :project="name" :job-name="job.metadata.name" /></td></tr>
             </template>
           </tbody></table></div>
           <p v-if="!filteredRunningJobs.length" class="config-empty">{{ t("project.noMatchingRunningJobs") }}</p>
@@ -122,7 +122,7 @@
             <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
               <div class="build-history-item-heading">
                 <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
-                  <span class="build-history-item-title"><span class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</span><strong>{{ build.metadata?.name }}</strong></span>
+                  <span class="build-history-item-title"><strong class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</strong><span class="build-history-item-name">{{ build.metadata?.name }}</span></span>
                   <small>{{ buildTargetLabel(build) }}</small>
                   <time>{{ formatDate(build.status?.startTime) }}</time>
                 </button>
@@ -425,14 +425,18 @@ const abortJobErrorKey = ref("");
 const abortJobMessageKey = ref("");
 const selectedRunningBuilds = ref<string[]>([]);
 const selectedRunningSpecs = ref<string[]>([]);
+const selectedRunningPackages = ref<string[]>([]);
 const selectedRunningPhases = ref<string[]>([]);
 const runningBuildOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/build-name"] || ""))]
   .sort((left, right) => left.localeCompare(right))
   .map((value) => ({ value, label: value || t("common.emptyValue") })));
-const displaySpecName = (value?: string) => value ? decodeSpecName(value) || value : "";
+const displayEncodedName = (value?: string) => value ? decodeSpecName(value) || value : "";
 const runningSpecOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.["ebs.io/spec-name"] || ""))]
   .sort((left, right) => left.localeCompare(right))
-  .map((value) => ({ value, label: displaySpecName(value) || t("common.emptyValue") })));
+  .map((value) => ({ value, label: displayEncodedName(value) || t("common.emptyValue") })));
+const runningPackageOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.metadata?.labels?.[PACKAGE_NAME_LABEL] || ""))]
+  .sort((left, right) => left.localeCompare(right))
+  .map((value) => ({ value, label: displayEncodedName(value) || t("common.emptyValue") })));
 const runningPhaseOptions = computed(() => [...new Set(nonTerminalJobs.value.map((job) => job.status?.phase || ""))]
   .sort((left, right) => left.localeCompare(right))
   .map((value) => {
@@ -442,6 +446,7 @@ const runningPhaseOptions = computed(() => [...new Set(nonTerminalJobs.value.map
 const filteredRunningJobs = computed(() => nonTerminalJobs.value.filter((job) =>
   (!selectedRunningBuilds.value.length || selectedRunningBuilds.value.includes(job.metadata?.labels?.["ebs.io/build-name"] || "")) &&
   (!selectedRunningSpecs.value.length || selectedRunningSpecs.value.includes(job.metadata?.labels?.["ebs.io/spec-name"] || "")) &&
+  (!selectedRunningPackages.value.length || selectedRunningPackages.value.includes(job.metadata?.labels?.[PACKAGE_NAME_LABEL] || "")) &&
   (!selectedRunningPhases.value.length || selectedRunningPhases.value.includes(job.status?.phase || "")),
 ));
 const runningJobsPage = ref(1);
@@ -701,7 +706,7 @@ watch(packageSearch, () => {
   packageCurrentPage.value = 1;
 });
 
-watch([selectedRunningBuilds, selectedRunningSpecs, selectedRunningPhases], () => {
+watch([selectedRunningBuilds, selectedRunningSpecs, selectedRunningPackages, selectedRunningPhases], () => {
   runningJobsPage.value = 1;
 });
 
@@ -1134,7 +1139,7 @@ async function loadPackageHistory(): Promise<void> {
   packageHistoryErrorKey.value = "";
   packageHistoryJobs.value = [];
   try {
-    const labelValue = await packageNameLabelValue(packageName);
+    const labelValue = packageNameLabelValue(packageName);
     const jobs = await listPackageJobs(labelValue);
     if (requestId !== packageHistoryRequestId) return;
     packageHistoryJobs.value = jobs.sort((left, right) => (Date.parse(right.status?.startTime || right.metadata?.creationTimestamp || "") || 0) - (Date.parse(left.status?.startTime || left.metadata?.creationTimestamp || "") || 0));

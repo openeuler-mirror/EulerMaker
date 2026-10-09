@@ -102,6 +102,7 @@ export interface BuildInfo {
   status?: {
     phase?: string;
     failedPackages?: string[];
+    specRepoNames?: Record<string, string>;
     specStatus?: {
       build?: Record<string, { status?: string; conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }> }>;
       install?: Record<string, { status?: string }>;

@@ -10,7 +10,7 @@
     <template v-if="buildInfo">
       <dl class="detail-list build-detail-list">
         <div><dt>{{ t('project.status') }}</dt><dd class="build-info-status-row"><StatusBadge :value="buildInfo.status?.phase" /><span class="status-badge success"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoSucceededCount') }} {{ specBuildCounts.succeeded }}</span><span class="status-badge danger"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoFailedCount') }} {{ specBuildCounts.failed }}</span><span class="status-badge"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoArchUnsupportedCount') }} {{ specBuildCounts.archUnsupported }}</span></dd></div>
-        <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd>{{ buildInfo.status?.failedPackages?.join(', ') || t('common.emptyValue') }}</dd></div>
+        <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd class="build-info-failed-packages"><template v-if="buildInfo.status?.failedPackages?.length"><span v-for="(item, index) in buildInfo.status.failedPackages" :key="`${item}-${index}`" class="status-badge">{{ item }}</span></template><span v-else>{{ t('common.emptyValue') }}</span></dd></div>
       </dl>
       <section class="build-detail-section">
         <h3>{{ t('project.buildInfoSpecStatus') }}</h3>
@@ -18,10 +18,10 @@
         <p v-if="!specRows.length" class="config-empty">{{ t('project.buildInfoNoSpecs') }}</p>
         <p v-else-if="!filteredSpecRows.length" class="config-empty">{{ t('project.noMatchingSpecs') }}</p>
         <div v-else class="project-table-wrap"><table class="project-table">
-          <thead><tr><th>Spec</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th></tr></thead>
+          <thead><tr><th>Spec</th><th>{{ t('project.buildInfoPackageName') }}</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th></tr></thead>
           <tbody><template v-for="row in paginatedSpecRows" :key="row.name">
-            <tr><td><button class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.name" @click="selectedSpecName = selectedSpecName === row.name ? '' : row.name">{{ row.name }}</button></td><td><StatusBadge :value="row.displayStatus" /></td></tr>
-            <tr v-if="selectedSpecName === row.name" class="spec-jobs-row"><td colspan="2"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.name" :can-abort="canAbortJobs" /></td></tr>
+            <tr><td><button class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.name" @click="selectedSpecName = selectedSpecName === row.name ? '' : row.name">{{ row.name }}</button></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><StatusBadge :value="row.displayStatus" /></td></tr>
+            <tr v-if="selectedSpecName === row.name" class="spec-jobs-row"><td colspan="3"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.name" :can-abort="canAbortJobs" /></td></tr>
           </template></tbody>
         </table></div>
         <div v-if="filteredSpecRows.length" class="table-footer">
@@ -85,6 +85,7 @@ const specCurrentPage = ref(1);
 const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStatus?.build || {})
   .map(([name, value]) => ({
     name,
+    packageName: buildInfo.value?.status?.specRepoNames?.[name],
     buildStatus: value.status,
     displayStatus: value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'RpmDependsMissing')
         ? 'RpmDependsMissing' : value.status,
@@ -106,7 +107,7 @@ const specStatusOptions = computed(() => [
 const filteredSpecRows = computed(() => {
   const query = specSearch.value.trim().toLowerCase();
   return specRows.value.filter((row) =>
-    (!query || row.name.toLowerCase().includes(query)) &&
+    (!query || row.name.toLowerCase().includes(query) || row.packageName?.toLowerCase().includes(query)) &&
     (!selectedSpecStatuses.value.length || selectedSpecStatuses.value.includes(row.displayStatus || 'Unknown')));
 });
 const specTotalPages = computed(() => Math.max(1, Math.ceil(filteredSpecRows.value.length / specPageSize.value)));
@@ -212,7 +213,7 @@ async function load(): Promise<void> {
   missing.value = false;
   errorKey.value = '';
   try {
-    const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build`;
+    const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build,status.specRepoNames`;
     const result = await request<BuildInfo>(path, { signal: current.signal });
     if (!current.signal.aborted) buildInfo.value = result;
   } catch (error) {
