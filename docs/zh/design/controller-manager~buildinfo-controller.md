@@ -1191,7 +1191,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.namespace` | BuildInfo 所在 namespace | 与 BuildInfo 同 project                                                                                                         |
 | `metadata.labels["ebs.io/build-name"]` | 父 Build 名（= `BuildInfo.metadata.name`） | G-08 必写；list 过滤、状态归属的依据                                                                                                       |
 | `metadata.labels["ebs.io/spec-name"]` | `EncodeSpecName(specName)` | G-08 必写；回填时先解码，再按原始 specName 归组 |
-| `metadata.labels["ebs.io/package-name"]` | `specDepends[specName].repoName`（= `Snapshot.spec.packageRepos[].name`，spec 所属包仓库名）经 labels.md 第 7 节编码（合法原名截取前 63 字符并去尾 `-`/`_`/`.`；含非法字符或截断后冲突的名用 `sha256-` + SHA-256 Base32 摘要 52 字符；不写同名 annotation） | G-08 必写；必填归属标签（新建 Job 缺失不可创建，值语法由 apiserver 校验，labels.md 第 7 节）；供工程详情按软件包查询 Job 构建历史（同一仓库多 spec 共享同值）；本控制器查询不消费（list 仅按 build-name/spec-name，8.1） |
+| `metadata.labels["ebs.io/package-name"]` | `specDepends[specName].repoName`（= `Snapshot.spec.packageRepos[].name`，spec 所属包仓库名）按 labels.md 第 7 节使用与 spec-name 相同的编码，超过 63 字符时截断并去掉末尾的 `-`/`_`/`.`；不写同名 annotation | G-08 必写；必填归属标签（新建 Job 缺失不可创建，值语法由 apiserver 校验，labels.md 第 7 节）；供工程详情按软件包查询 Job 构建历史（同一仓库多 spec 共享同值）；本控制器查询不消费（list 仅按 build-name/spec-name，8.1） |
 | `metadata.labels["ebs.io/target-os"]` | `Build.spec.buildTarget.os` | G-08 必写；RpmRepo 物化队列过滤条件（labels.md 第 7 节 / artifact-manager.md 9.3.3，缺失的 Job 不进物化队列） |
 | `metadata.labels["ebs.io/target-arch"]` | `Build.spec.buildTarget.arch` | G-08 必写；同上 |
 | `metadata.annotations["ebs.io/dispatch-generation"]` | 十进制派发代次 | 与基于 BuildInfo UID 计算的 Job 名共同核验创建身份；资源配置来源不写入 Job annotation，调度以 `spec.resources` 为准 |

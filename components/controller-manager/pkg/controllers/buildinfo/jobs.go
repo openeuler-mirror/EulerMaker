@@ -9,7 +9,6 @@ package buildinfo
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base32"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,63 +77,14 @@ func matchesJobName(name, buildInfoUID, specName string, generation int64) bool 
 		name == legacyJobNameFor(buildInfoUID, specName, generation)
 }
 
-// packageNameLabelValue encodes a package repository name for the
-// ebs.io/package-name label (labels.md §7): a name made of label-value
-// characters with alphanumeric ends is truncated to 63 chars with trailing
-// -_. stripped and used directly, unless it collides with the reserved
-// digest form; names with illegal characters or a reserved-form collision
-// use sha256- plus the 52-char lowercase Base32 (no padding) SHA-256 digest.
+// packageNameLabelValue uses the spec-name encoding for repository names.
+// Values over 63 bytes are truncated, so only untruncated values are reversible.
 func packageNameLabelValue(name string) string {
-	if validLabelValueChars(name) {
-		value := name
-		if len(value) > 63 {
-			value = value[:63]
-		}
-		value = strings.TrimRight(value, "-_.")
-		if value != "" && !reservedDigestForm(value) {
-			return value
-		}
+	value := specname.Encode(name)
+	if len(value) > 63 {
+		value = value[:63]
 	}
-	sum := sha256.Sum256([]byte(name))
-	digest := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:])
-	return "sha256-" + strings.ToLower(digest)
-}
-
-// validLabelValueChars reports whether name consists of Kubernetes label
-// value characters and starts and ends with an alphanumeric.
-func validLabelValueChars(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		ch := name[i]
-		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_' || ch == '.' {
-			continue
-		}
-		return false
-	}
-	return isAlphanumeric(name[0]) && isAlphanumeric(name[len(name)-1])
-}
-
-func isAlphanumeric(ch byte) bool {
-	return ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9'
-}
-
-// reservedDigestForm reports whether value matches the reserved digest shape
-// ^sha256-[a-z2-7]{52}$ (labels.md §7).
-func reservedDigestForm(value string) bool {
-	const prefix = "sha256-"
-	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+52 {
-		return false
-	}
-	for i := len(prefix); i < len(value); i++ {
-		ch := value[i]
-		if ch >= 'a' && ch <= 'z' || ch >= '2' && ch <= '7' {
-			continue
-		}
-		return false
-	}
-	return true
+	return strings.TrimRight(value, "-_.")
 }
 
 // archSupported runs the E-19 exclusiveArch whitelist check; an empty

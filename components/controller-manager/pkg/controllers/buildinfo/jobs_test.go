@@ -16,6 +16,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -119,38 +120,26 @@ func TestFilterJobsByIdentityRequiresBuildInfoUIDInName(t *testing.T) {
 }
 
 func TestPackageNameLabelValue(t *testing.T) {
-	digest := func(name string) string {
-		value := packageNameLabelValue(name)
-		if !strings.HasPrefix(value, "sha256-") || len(value) != len("sha256-")+52 {
-			t.Fatalf("packageNameLabelValue(%q) = %q, want sha256- plus 52-char digest", name, value)
-		}
-		return value
-	}
 	tests := []struct {
 		name, want string
 	}{
 		{"a", "a"},
-		{"my-pkg_1.0", "my-pkg_1.0"},
-		{strings.Repeat("x", 70), strings.Repeat("x", 63)}, // truncated to 63
-		// Truncation landing on a strippable tail: 63 chars, then strip -_..
+		{"my-pkg_1.0", "my-pkg_5F1.0"},
+		{"dvd+rw-tools", "dvd_2Brw-tools"},
+		{"pkg.", "pkg_2E"},
+		{"中文+包", specname.Encode("中文+包")},
+		{strings.Repeat("x", 70), strings.Repeat("x", 63)},
 		{strings.Repeat("a", 62) + "-" + strings.Repeat("b", 10), strings.Repeat("a", 62)},
+		{strings.Repeat("a", 62) + "+", strings.Repeat("a", 62)},
 	}
 	for _, tc := range tests {
-		if got := packageNameLabelValue(tc.name); got != tc.want {
+		got := packageNameLabelValue(tc.name)
+		if got != tc.want {
 			t.Errorf("packageNameLabelValue(%q) = %q, want %q", tc.name, got, tc.want)
 		}
-	}
-	// Illegal characters (/), illegal ends (trailing dot/dash) and the empty
-	// name all take the digest form.
-	digest("my_pkg/name")
-	digest("pkg.")
-	digest(strings.Repeat("a", 62) + "-")
-	digest("")
-	// A valid name colliding with the reserved digest form never passes
-	// through (labels.md §7).
-	reserved := "sha256-" + strings.Repeat("a", 52)
-	if got := digest(reserved); got == reserved {
-		t.Fatal("reserved digest form must be re-encoded, not passed through")
+		if reasons := kvalidation.IsValidLabelValue(got); len(reasons) != 0 {
+			t.Errorf("packageNameLabelValue(%q) = %q is invalid: %v", tc.name, got, reasons)
+		}
 	}
 }
 
