@@ -48,7 +48,7 @@ async function submit(): Promise<void> {
     const redirect =
       typeof route.query.redirect === "string" && route.query.redirect.startsWith("/") && !route.query.redirect.startsWith("//")
         ? route.query.redirect
-        : "/";
+        : "/projects";
     await router.push(redirect);
   } catch (reason) {
     errorKey.value = errorTranslationKey(reason, "errors.loginFailed");

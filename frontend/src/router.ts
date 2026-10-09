@@ -4,7 +4,7 @@ import { useSessionStore } from "@/stores/session";
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", name: "home", component: () => import("@/views/HomeView.vue") },
+    { path: "/", redirect: { name: "projects" } },
     { path: "/projects", name: "projects", component: () => import("@/views/ProjectsView.vue") },
     { path: "/projects/:name", name: "project", component: () => import("@/views/ProjectView.vue") },
     { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
@@ -19,7 +19,7 @@ export const router = createRouter({
     },
     { path: "/operations", alias: "/runners", name: "operations", component: () => import("@/views/OperationsView.vue"), meta: { roles: ["ops", "admin"] } },
     { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue"), meta: { authenticated: true } },
-    { path: "/:pathMatch(.*)*", redirect: "/" },
+    { path: "/:pathMatch(.*)*", redirect: { name: "projects" } },
   ],
   scrollBehavior: () => ({ top: 0 }),
 });
@@ -29,5 +29,5 @@ router.beforeEach((to) => {
   if (!roles && !to.meta.authenticated) return true;
   const session = useSessionStore();
   if (!session.authenticated) return { name: "login", query: { redirect: to.fullPath } };
-  return !roles || roles.includes(session.role) ? true : { name: "home" };
+  return !roles || roles.includes(session.role) ? true : { name: "projects" };
 });
