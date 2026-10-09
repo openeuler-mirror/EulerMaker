@@ -146,7 +146,7 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Snapshot.SyncRequeueDelay, "snapshot-sync-requeue-delay", o.Snapshot.SyncRequeueDelay, "delay before checking repositories that are still synchronizing")
 	f.IntVar(&o.Snapshot.FailureRetryLimit, "snapshot-failure-retry-limit", o.Snapshot.FailureRetryLimit, "confirmed temporary failures before a repository is skipped")
 	f.DurationVar(&o.BuildInfo.DcgPruneGrace, "build-info-dcg-prune-grace", o.BuildInfo.DcgPruneGrace, "BuildInfo dcg cache tombstone grace period (default 3x poll-period)")
-	f.IntVar(&o.BuildInfo.RpmRepoReadyRetryLimit, "rpmrepo-ready-retry-limit", o.BuildInfo.RpmRepoReadyRetryLimit, "consecutive RpmRepo readiness failures before RpmRepoUnavailable stop-dispatch")
+	f.IntVar(&o.BuildInfo.RpmRepoReadyRetryLimit, "rpmrepo-ready-retry-limit", o.BuildInfo.RpmRepoReadyRetryLimit, "consecutive repository XML parse failures before RpmRepoUnavailable stop-dispatch")
 	f.IntVar(&o.BuildInfo.SnapshotReadyRetryLimit, "snapshot-ready-retry-limit", o.BuildInfo.SnapshotReadyRetryLimit, "consecutive current-Snapshot query failures before SnapshotUnavailable stop-dispatch")
 	f.IntVar(&o.BuildInfo.SpecFileCacheSize, "specfile-cache-size", o.BuildInfo.SpecFileCacheSize, "global spec file content LRU cache capacity")
 	f.StringVar(&o.GitServer.Address, "git-server-addr", o.GitServer.Address, "git-server address")

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -62,6 +63,17 @@ const maxMetadataBytes = 512 << 20
 // Fetcher downloads a URL and returns the response body.
 type Fetcher func(ctx context.Context, url string) ([]byte, error)
 
+// HTTPStatusError preserves the response code so callers can distinguish a
+// rejected repository request from an unavailable repository.
+type HTTPStatusError struct {
+	URL        string
+	StatusCode int
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("GET %s: status %d", e.URL, e.StatusCode)
+}
+
 // HTTPFetcher returns a Fetcher backed by an *http.Client.
 func HTTPFetcher(client *http.Client) Fetcher {
 	return func(ctx context.Context, url string) ([]byte, error) {
@@ -78,7 +90,7 @@ func HTTPFetcher(client *http.Client) Fetcher {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+			return nil, &HTTPStatusError{URL: url, StatusCode: resp.StatusCode}
 		}
 		return readLimited(resp.Body, url)
 	}
@@ -103,6 +115,7 @@ type FailureKind string
 const (
 	FailureDownload FailureKind = "Download"
 	FailureParse    FailureKind = "Parse"
+	FailureConfig   FailureKind = "Config"
 )
 
 // SourceError is a repository metadata load failure with its kind and URL.
@@ -127,6 +140,13 @@ func (e *SourceError) Unwrap() error { return e.Err }
 // same-name conflict the target arch wins ("同源内同名不同 arch 并存时取目标
 // arch 条目"); on a same name+arch collision the highest version wins.
 func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (*RpmMetaSource, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, &SourceError{Kind: FailureConfig, URL: baseURL, Err: err}
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, &SourceError{Kind: FailureConfig, URL: baseURL, Err: fmt.Errorf("repository URL must be an absolute HTTP URL")}
+	}
 	base := strings.TrimSuffix(baseURL, "/")
 	repomdURL := base + "/repodata/repomd.xml"
 	body, err := fetch(ctx, repomdURL)

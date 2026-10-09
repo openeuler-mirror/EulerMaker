@@ -42,9 +42,9 @@ type Config struct {
 	// DcgPruneGrace is the tombstone grace of the per-BuildInfo caches
 	// (--build-info-dcg-prune-grace, default 3*PollPeriod; design 5.4).
 	DcgPruneGrace time.Duration
-	// RpmRepoReadyRetryLimit is the consecutive-failure threshold that
-	// escalates to RpmRepoUnavailable (--rpmrepo-ready-retry-limit,
-	// default 3; design E-29).
+	// RpmRepoReadyRetryLimit is the consecutive XML parse failure threshold
+	// that escalates to RpmRepoUnavailable (--rpmrepo-ready-retry-limit,
+	// default 3; design E-29). Temporary read/download failures do not count.
 	RpmRepoReadyRetryLimit int
 	// SnapshotReadyRetryLimit is the consecutive-failure threshold that
 	// escalates to SnapshotUnavailable (--snapshot-ready-retry-limit,
@@ -353,8 +353,8 @@ func (c *Controller) newRoundFailures(key string) *roundFailures {
 	}
 }
 
-// RpmRepoFailed records an RpmRepo readiness failure checkpoint and reports
-// whether the escalation threshold (E-29) is now reached.
+// RpmRepoFailed records an XML parse failure checkpoint and reports whether
+// the escalation threshold (E-29) is now reached.
 func (r *roundFailures) RpmRepoFailed(reason, message string) (count int, escalated bool) {
 	if r.rpmRepoBumped {
 		return r.counters.Count(counterRpmRepo, r.key), false

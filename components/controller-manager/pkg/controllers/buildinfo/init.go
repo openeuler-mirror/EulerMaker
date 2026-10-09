@@ -97,7 +97,7 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	// is shared by every creation of this round.
 	contentURL, err := c.resolveContentURL(heldContentURL(round))
 	if err != nil {
-		return controller.ReconcileResult{}, err
+		return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
 	}
 	dispatch := &roundDispatch{arch: arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
@@ -290,8 +290,8 @@ func (c *Controller) clearStaleDcgFailed(ctx context.Context, round *reconcileRo
 // refreshRpmMetaSources refreshes the layered RPM metadata:
 // the RpmRepo layer re-downloads only on a contentURL change (an empty URL is
 // a normal empty state), bootstrap layers parse once for the BuildInfo
-// lifetime. Download/parse failures count towards the stop threshold; before it
-// the round waits (nil sources, zero result, nil error).
+// lifetime. Downloads wait for recovery; consecutive parse failures stop at
+// the configured threshold, while invalid configuration stops immediately.
 func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcileRound) (*rpmver.RpmMetaSources, controller.ReconcileResult, error) {
 	arch := round.build.Spec.BuildTarget.Arch
 	sources, ok := c.rpmMetaSources.Get(round.key)
@@ -301,16 +301,12 @@ func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcile
 	repoBefore := sources.RepoLayer
 	contentURL, err := c.resolveContentURL(heldContentURL(round))
 	if err != nil {
-		return nil, controller.ReconcileResult{}, err
+		result, stopErr := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
+		return nil, result, stopErr
 	}
 	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
-		reason := ReasonRpmRepoXMLDownloadFailed
-		var srcErr *rpmver.SourceError
-		if errors.As(err, &srcErr) && srcErr.Kind == rpmver.FailureParse {
-			reason = ReasonRpmRepoXMLParseFailed
-		}
 		c.logf(round.key, "RpmRepoXMLFailed", "rpmrepo metadata unavailable: %v", err)
-		return c.rpmMetaUnavailable(ctx, round, reason, err)
+		return c.rpmMetaUnavailable(ctx, round, metadataFailureReason(err, false), err)
 	}
 	if sources.RepoLayer != repoBefore {
 		rpmMetaRefreshes.Inc()
@@ -319,7 +315,7 @@ func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcile
 	urls := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, arch)
 	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
 		c.logf(round.key, "BootstrapRepoXMLFailed", "bootstrap repo metadata unavailable: %v", err)
-		return c.rpmMetaUnavailable(ctx, round, ReasonBootstrapRepoXMLUnavail, err)
+		return c.rpmMetaUnavailable(ctx, round, metadataFailureReason(err, true), err)
 	}
 	if len(sources.BootstrapLayer) > 0 && bootstrapBefore == nil {
 		rpmMetaRefreshes.Inc()
@@ -330,10 +326,37 @@ func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcile
 	return sources, controller.ReconcileResult{}, nil
 }
 
-// rpmMetaUnavailable counts XML metadata failures:
-// below the threshold the round waits; at the threshold the stop marker is
-// persisted and the round joins stop-dispatch convergence.
+func metadataFailureReason(err error, bootstrap bool) string {
+	var source *rpmver.SourceError
+	parse := errors.As(err, &source) && source.Kind == rpmver.FailureParse
+	if bootstrap {
+		if parse {
+			return ReasonBootstrapRepoXMLParseFailed
+		}
+		return ReasonBootstrapRepoXMLUnavail
+	}
+	if parse {
+		return ReasonRpmRepoXMLParseFailed
+	}
+	return ReasonRpmRepoXMLDownloadFailed
+}
+
+// rpmMetaUnavailable retries download failures, immediately stops on bad
+// configuration, and escalates only consecutive XML parse failures.
 func (c *Controller) rpmMetaUnavailable(ctx context.Context, round *reconcileRound, reason string, cause error) (*rpmver.RpmMetaSources, controller.ReconcileResult, error) {
+	if deterministicRpmRepoError(cause) {
+		configReason := ReasonRpmRepoConfigInvalid
+		if reason == ReasonBootstrapRepoXMLUnavail || reason == ReasonBootstrapRepoXMLParseFailed {
+			configReason = ReasonBootstrapRepoConfigInvalid
+		}
+		result, err := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, configReason, cause.Error())
+		return nil, result, err
+	}
+	var source *rpmver.SourceError
+	if !errors.As(cause, &source) || source.Kind != rpmver.FailureParse {
+		round.failures.RpmRepoReady()
+		return nil, controller.ReconcileResult{}, nil
+	}
 	_, escalated := round.failures.RpmRepoFailed(reason, cause.Error())
 	if escalated {
 		result, err := c.escalateRpmRepoUnavailable(ctx, round)
@@ -602,39 +625,50 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 }
 
 // loadSinglePreferSources is only used when single has a configured prefer.
-// It reads the repositories already injected into that Job, without enabling
-// DCG construction, dependency gates, or the non-single failure counter.
-func (c *Controller) loadSinglePreferSources(ctx context.Context, round *reconcileRound, contentURL string) (*rpmver.RpmMetaSources, error) {
+// It reads the repositories already injected into that Job without enabling
+// DCG construction or dependency gates.
+func (c *Controller) loadSinglePreferSources(ctx context.Context, round *reconcileRound, contentURL string) (*rpmver.RpmMetaSources, string, error) {
 	sources, ok := c.rpmMetaSources.Get(round.key)
 	if !ok {
 		sources = &rpmver.RpmMetaSources{}
 	}
 	arch := round.build.Spec.BuildTarget.Arch
 	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
-		return nil, err
+		return nil, metadataFailureReason(err, false), err
 	}
 	urls := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, arch)
 	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
-		return nil, err
+		return nil, metadataFailureReason(err, true), err
 	}
 	c.rpmMetaSources.Set(round.key, sources)
-	return sources, nil
+	round.failures.RpmRepoReady()
+	return sources, "", nil
 }
 
 // singleContentURL reads the current same-name RpmRepo for the single Repo
-// injection: 404 or an empty contentURL injects nothing; a query failure is a
-// retryable error and does not increment the non-single failure counter.
+// injection: 404 or an empty contentURL injects nothing; temporary query
+// failures retry, while rejected requests and invalid URLs stop dispatch.
 func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound) (string, controller.ReconcileResult, error) {
 	repo, err := c.client.GetRpmRepo(ctx, round.current.Namespace, round.current.Name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			round.failures.RpmRepoReady()
 			return "", controller.ReconcileResult{}, nil
 		}
+		if deterministicRpmRepoError(err) {
+			result, stopErr := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoQueryRejected, err.Error())
+			return "", result, stopErr
+		}
+		round.failures.RpmRepoReady()
 		return "", controller.ReconcileResult{}, err
 	}
 	if repo.Status.Repository == nil {
 		return "", controller.ReconcileResult{}, nil
 	}
 	contentURL, err := c.resolveContentURL(repo.Status.Repository.ContentURL)
-	return contentURL, controller.ReconcileResult{}, err
+	if err != nil {
+		result, stopErr := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
+		return "", result, stopErr
+	}
+	return contentURL, controller.ReconcileResult{}, nil
 }
