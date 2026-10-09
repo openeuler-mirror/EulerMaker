@@ -594,9 +594,8 @@ func TestInitE16RpmRepoNotHeldDefers(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoPending)
-	if len(bi.Status.Conditions) != 0 {
-		t.Fatalf("conditions = %v, want none", bi.Status.Conditions)
-	}
+	requireCondition(t, bi.Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoNotFound)
+	requireNoCondition(t, bi.Status.Conditions, ConditionRpmRepoUnavailable)
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
 	}

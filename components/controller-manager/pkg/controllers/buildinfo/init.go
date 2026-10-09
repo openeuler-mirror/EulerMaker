@@ -30,7 +30,6 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		return c.initSingle(ctx, round)
 	}
 
-	// Assemble the full spec dependency view from the current Snapshot.
 	snapshot, stop, result, err := c.currentSnapshot(ctx, round)
 	if stop {
 		return result, err
@@ -51,19 +50,16 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		c.logf(round.key, "RpmRepoNotHeld", "rpmrepo not held this round; init dispatch deferred (E-16)")
 		return controller.ReconcileResult{}, nil
 	}
-	// Layered RPM metadata supplies graph edges and availability checks.
 	sources, result, err := c.refreshRpmMetaSources(ctx, round)
 	if err != nil || result != (controller.ReconcileResult{}) || sources == nil {
 		return result, err
 	}
 
-	// Select the specs to build.
 	buildSet, err := c.determineBuildSet(round, asm, sources.RepoLayer)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
 	if len(buildSet) == 0 {
-		// An empty build set completes without dispatching Jobs.
 		return c.completeInitEmpty(ctx, round, asm.degraded)
 	}
 
@@ -79,7 +75,6 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		return result, err
 	}
 
-	// The target architecture is checked at each dispatch candidate.
 	arch := round.build.Spec.BuildTarget.Arch
 
 	// Persist the graph before caching it or creating graph-based Jobs.
@@ -92,9 +87,8 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		return result, err
 	}
 
-	// Dispatch zero-indegree specs and bootstrap break points. The
-	// build-target Config snapshot resolves lazily on the first actual Job creation and
-	// is shared by every creation of this round.
+	// Resolve the build-target Config only when the first Job needs it, then
+	// reuse that image for the rest of this round.
 	contentURL, err := c.resolveContentURL(heldContentURL(round))
 	if err != nil {
 		return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
@@ -273,11 +267,8 @@ func (c *Controller) obtainDcg(ctx context.Context, round *reconcileRound, build
 	return d, controller.ReconcileResult{}, nil
 }
 
-// clearStaleDcgFailed removes a stale DcgBuildFailed condition once the DCG is
-// available again (recovery clears on any of the three
-// acquisition tiers — in-process cache hit, status.dcg load, rebuild).
-// Idempotent: an absent condition means no write; a failed or requeued
-// removal write returns the round for an idempotent retry next round.
+// clearStaleDcgFailed removes the stale condition after any successful graph
+// lookup or rebuild.
 func (c *Controller) clearStaleDcgFailed(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	if findCondition(round.current.Status.Conditions, ConditionDcgBuildFailed) == nil {
 		return controller.ReconcileResult{}, nil
@@ -321,8 +312,10 @@ func (c *Controller) refreshRpmMetaSources(ctx context.Context, round *reconcile
 		rpmMetaRefreshes.Inc()
 	}
 	c.rpmMetaSources.Set(round.key, sources)
-	// Ready this round: clear the failure streak.
 	round.failures.RpmRepoReady()
+	if result, err := c.clearRpmRepoRetrying(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
+		return nil, result, err
+	}
 	return sources, controller.ReconcileResult{}, nil
 }
 
@@ -355,14 +348,16 @@ func (c *Controller) rpmMetaUnavailable(ctx context.Context, round *reconcileRou
 	var source *rpmver.SourceError
 	if !errors.As(cause, &source) || source.Kind != rpmver.FailureParse {
 		round.failures.RpmRepoReady()
-		return nil, controller.ReconcileResult{}, nil
+		result, err := c.recordRpmRepoRetrying(ctx, round, reason, cause.Error())
+		return nil, result, err
 	}
 	_, escalated := round.failures.RpmRepoFailed(reason, cause.Error())
 	if escalated {
 		result, err := c.escalateRpmRepoUnavailable(ctx, round)
 		return nil, result, err
 	}
-	return nil, controller.ReconcileResult{}, nil
+	result, err := c.recordRpmRepoRetrying(ctx, round, reason, cause.Error())
+	return nil, result, err
 }
 
 // heldContentURL extracts the held RpmRepo contentURL (empty when unheld or
@@ -420,11 +415,8 @@ func applyDegradedConditions(conditions *[]metav1.Condition, degraded []degraded
 	}
 }
 
-// closeoutInit persists a deterministic initialization failure: condition
-// SpecDependsFillFailed + phase Completed in one write; specStatus stays
-// untouched by the closeout itself (no pre-creation, no flipping; a leftover
-// pending entry whose Job landed is confirmed first). The write is
-// idempotent — a failed write ends the round and the next round rewrites.
+// closeoutInit writes the failure condition and Completed together, after
+// confirming any pending Job creation. It leaves specStatus untouched.
 func (c *Controller) closeoutInit(ctx context.Context, round *reconcileRound, verdict *terminalVerdict, degraded []degradedCondition) (controller.ReconcileResult, error) {
 	result, blocked, err := c.resolvePendingCreates(ctx, round, "init closeout")
 	if err != nil || result != (controller.ReconcileResult{}) {
@@ -445,9 +437,8 @@ func (c *Controller) closeoutInit(ctx context.Context, round *reconcileRound, ve
 	return result, err
 }
 
-// completeInitEmpty persists the empty-build-set Completed:
-// full/incremental with nothing to build flips terminal directly; degraded
-// conditions are kept, AllSpecsSucceeded is left to the vacuous-success rule.
+// completeInitEmpty completes an empty build set and keeps degradation
+// conditions when present.
 func (c *Controller) completeInitEmpty(ctx context.Context, round *reconcileRound, degraded []degradedCondition) (controller.ReconcileResult, error) {
 	result, blocked, err := c.resolvePendingCreates(ctx, round, "empty build set")
 	if err != nil || result != (controller.ReconcileResult{}) {
@@ -467,9 +458,7 @@ func (c *Controller) completeInitEmpty(ctx context.Context, round *reconcileRoun
 	return result, err
 }
 
-// pendingCreatesBlock reports whether unresolved pendingJobCreates block a
-// Completed write (every Completed path requires an empty map; never
-// misreport Completed — wait for the normal dispatch path to resolve them).
+// pendingCreatesBlock prevents completion while Job creations remain uncertain.
 func (c *Controller) pendingCreatesBlock(round *reconcileRound, where string) bool {
 	if len(round.current.Status.PendingJobCreates) == 0 {
 		return false
@@ -478,18 +467,10 @@ func (c *Controller) pendingCreatesBlock(round *reconcileRound, where string) bo
 	return true
 }
 
-// resolvePendingCreates GET-verifies every registered pending entry before an
-// init closeout writes Completed. The closeout path short-circuits before the
-// normal Job backfill, so without this pass a leftover entry (an Unknown create
-// that actually landed, or a registration followed by a mid-round crash)
-// would block the Completed write forever — nothing else revisits it once the
-// terminal verdict persists. A landed Job is identity-checked and confirmed in
-// one write (entry removed, dispatch recorded); re-creation is forbidden on a
-// terminal verdict. A 404 keeps the entry with a warning — 404 is never
-// a non-existence proof for an in-flight request (same rule as the
-// stop path in convergeToCompleted); the next round's GET resolves it once it
-// lands. Other GET errors end the round and retry. Returns whether
-// unresolved entries still block the write.
+// resolvePendingCreates checks registrations before an init closeout, which
+// bypasses normal Job backfill. A found Job confirms its dispatch; a 404
+// leaves the entry because an in-flight create may still land. It reports
+// whether any unresolved entry blocks completion.
 func (c *Controller) resolvePendingCreates(ctx context.Context, round *reconcileRound, where string) (controller.ReconcileResult, bool, error) {
 	if len(round.current.Status.PendingJobCreates) == 0 {
 		return controller.ReconcileResult{}, false, nil
@@ -565,7 +546,6 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	}
 	buildSet := asm.depends
 	if len(buildSet) == 0 {
-		// Every designated package degraded away -> SpecifiedBuildSetEmpty.
 		return c.closeoutInit(ctx, round, &terminalVerdict{
 			reason:  ReasonSpecifiedBuildSetEmpty,
 			message: fmt.Sprintf("all designated packages %v were skipped: no buildable spec", round.build.Spec.Packages),
@@ -579,7 +559,6 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		return result, err
 	}
 
-	// Backfill existing Jobs and persist degraded conditions.
 	jobs, err := c.listRoundJobs(ctx, round)
 	if err != nil {
 		return controller.ReconcileResult{}, err
@@ -594,7 +573,7 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		return result, err
 	}
 
-	// 直通下发: no graph, no gates, no ordering — one direct dispatch per spec.
+	// Single builds dispatch each spec directly, without dependency gates.
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range sortedSpecNames(buildSet) {
 		depend := buildSet[name]
@@ -653,22 +632,36 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			round.failures.RpmRepoReady()
-			return "", controller.ReconcileResult{}, nil
+			return c.singleContentURLReady(ctx, round, "")
 		}
 		if deterministicRpmRepoError(err) {
 			result, stopErr := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoQueryRejected, err.Error())
 			return "", result, stopErr
 		}
 		round.failures.RpmRepoReady()
+		result, writeErr := c.recordRpmRepoRetrying(ctx, round, ReasonRpmRepoQueryFailed, err.Error())
+		if writeErr != nil || result != (controller.ReconcileResult{}) {
+			return "", result, writeErr
+		}
 		return "", controller.ReconcileResult{}, err
 	}
 	if repo.Status.Repository == nil {
-		return "", controller.ReconcileResult{}, nil
+		return c.singleContentURLReady(ctx, round, "")
 	}
 	contentURL, err := c.resolveContentURL(repo.Status.Repository.ContentURL)
 	if err != nil {
 		result, stopErr := c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
 		return "", result, stopErr
 	}
-	return contentURL, controller.ReconcileResult{}, nil
+	return c.singleContentURLReady(ctx, round, contentURL)
+}
+
+// Single builds with prefer clear the retry condition only after metadata is
+// ready; without prefer, a successful repository lookup is enough.
+func (c *Controller) singleContentURLReady(ctx context.Context, round *reconcileRound, contentURL string) (string, controller.ReconcileResult, error) {
+	if len(payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))) > 0 {
+		return contentURL, controller.ReconcileResult{}, nil
+	}
+	result, err := c.clearRpmRepoRetrying(ctx, round)
+	return contentURL, result, err
 }

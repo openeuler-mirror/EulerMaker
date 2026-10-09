@@ -47,8 +47,8 @@ func TestFieldProjectionGETAndLIST(t *testing.T) {
 		{
 			name: "include BuildInfo detail fields",
 			path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build",
-			body: `{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a"},"status":{"phase":"Completed","failedPackages":["gcc"],"conditions":[{"type":"PartialFailure"}],"specStatus":{"build":{"gcc":{"status":"Failed"}},"install":{"gcc":{"status":"Succeeded"}},"dispatchCount":{"gcc":1}},"dcg":{"gcc":{}}}}`,
-			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "BuildInfo", "status": map[string]interface{}{"phase": "Completed", "failedPackages": []interface{}{"gcc"}, "conditions": []interface{}{map[string]interface{}{"type": "PartialFailure"}}, "specStatus": map[string]interface{}{"build": map[string]interface{}{"gcc": map[string]interface{}{"status": "Failed"}}}}},
+			body: `{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a"},"status":{"phase":"Completed","failedPackages":["gcc"],"conditions":[{"type":"SpecCommitMissing"}],"specStatus":{"build":{"gcc":{"status":"Failed"}},"install":{"gcc":{"status":"Succeeded"}},"dispatchCount":{"gcc":1}},"dcg":{"gcc":{}}}}`,
+			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "BuildInfo", "status": map[string]interface{}{"phase": "Completed", "failedPackages": []interface{}{"gcc"}, "conditions": []interface{}{map[string]interface{}{"type": "SpecCommitMissing"}}, "specStatus": map[string]interface{}{"build": map[string]interface{}{"gcc": map[string]interface{}{"status": "Failed"}}}}},
 		},
 		{
 			name: "nested array fields",

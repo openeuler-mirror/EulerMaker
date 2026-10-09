@@ -38,6 +38,7 @@ func TestRpmRepoDownloadFailureRetriesUntilRecovery(t *testing.T) {
 		reconcileOnce(t, c)
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
+		requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
 		requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 	}
 	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
@@ -45,7 +46,9 @@ func TestRpmRepoDownloadFailureRetriesUntilRecovery(t *testing.T) {
 	}
 	c.rpmMetaSources.Set(key, testSources())
 	reconcileOnce(t, c)
-	requireNoCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable)
+	recovered := getBuildInfo(t, client)
+	requireNoCondition(t, recovered.Status.Conditions, ConditionRpmRepoRetrying)
+	requireNoCondition(t, recovered.Status.Conditions, ConditionRpmRepoUnavailable)
 }
 
 func TestRpmRepoPersistentParseFailureStopsWithReason(t *testing.T) {
@@ -60,8 +63,10 @@ func TestRpmRepoPersistentParseFailureStopsWithReason(t *testing.T) {
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
 		if i < c.config.RpmRepoReadyRetryLimit {
+			requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLParseFailed)
 			requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 		} else {
+			requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying)
 			requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoXMLParseFailed)
 			if got := findCondition(persisted.Status.Conditions, ConditionRpmRepoUnavailable).Message; !strings.Contains(got, "repomd.xml") || !strings.Contains(got, "consecutive failures: 3") {
 				t.Fatalf("condition message = %q, want source and failure count", got)
@@ -91,11 +96,13 @@ func TestRpmRepoDownloadFailureBreaksParseFailureStreak(t *testing.T) {
 	}
 	parseFailure = false
 	reconcileOnce(t, c)
+	requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
 	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
 		t.Fatalf("parse failure count = %d, want 0 after download failure", got)
 	}
 	parseFailure = true
 	reconcileOnce(t, c)
+	requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLParseFailed)
 	requireNoCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable)
 }
 
@@ -152,6 +159,7 @@ func TestRpmRepoQueryFailureClassification(t *testing.T) {
 				t.Fatal("temporary query failure must retry")
 			}
 			requireNoCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable)
+			requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoQueryFailed)
 		}
 		if got := c.counters.Count(counterRpmRepo, key); got != 0 {
 			t.Fatalf("parse failure count = %d, want 0 after query failures", got)
@@ -191,8 +199,11 @@ func TestRpmRepoMetadataHTTPStatusClassification(t *testing.T) {
 				if condition == nil || condition.Reason != ReasonRpmRepoConfigInvalid {
 					t.Fatalf("condition = %+v, want configuration failure", condition)
 				}
-			} else if condition != nil {
-				t.Fatalf("condition = %+v, want retry", condition)
+			} else {
+				if condition != nil {
+					t.Fatalf("condition = %+v, want retry", condition)
+				}
+				requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
 			}
 		})
 	}
@@ -221,6 +232,7 @@ func TestSinglePreferMetadataDownloadWaitsBeforeDispatch(t *testing.T) {
 		}
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoPending)
+		requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
 		requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 		if jobs := listJobs(t, client); len(jobs) != 0 {
 			t.Fatalf("Jobs = %d, want none before metadata recovers", len(jobs))
@@ -228,7 +240,9 @@ func TestSinglePreferMetadataDownloadWaitsBeforeDispatch(t *testing.T) {
 	}
 	c.rpmMetaSources.Set(testNS+"/"+testBuild, testSources())
 	reconcileOnce(t, c)
-	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoProcessing)
+	recovered := getBuildInfo(t, client)
+	requirePhase(t, recovered, ebsv1.BuildInfoProcessing)
+	requireNoCondition(t, recovered.Status.Conditions, ConditionRpmRepoRetrying)
 	if jobs := listJobs(t, client); len(jobs) != 1 {
 		t.Fatalf("Jobs = %d, want one after metadata recovers", len(jobs))
 	}

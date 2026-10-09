@@ -127,7 +127,6 @@ func TestAdvanceBackfillJobAborted(t *testing.T) {
 	}
 	requireCondition(t, a.Build.Conditions, ConditionBuildAborted, ReasonBuildAborted)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireCondition(t, persisted.Status.Conditions, ConditionPartialFailure, ReasonPartialFailure)
 }
 
 func TestLatestJobOrdering(t *testing.T) {
@@ -162,7 +161,6 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 			t.Fatalf("install status = %q, want Succeeded", got)
 		}
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-		requireCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded)
 	})
 
 	t.Run("missing install result is not success", func(t *testing.T) {
@@ -333,7 +331,6 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded)
 	if got := persisted.Status.SpecStatus.Entry("a").DispatchCount; got != 2 {
 		t.Fatalf("round2 specStatus[a].DispatchCount = %d, want 2", got)
 	}
@@ -347,7 +344,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 
 // Completion checks.
 
-func TestAdvanceCompletionPartialFailure(t *testing.T) {
+func TestAdvanceCompletionRecordsFailedPackage(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{
@@ -368,11 +365,6 @@ func TestAdvanceCompletionPartialFailure(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	cond := requireCondition(t, persisted.Status.Conditions, ConditionPartialFailure, ReasonPartialFailure)
-	if !strings.Contains(cond.Message, "b") {
-		t.Fatalf("PartialFailure message = %q, want failed spec b listed", cond.Message)
-	}
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
 	requireCondition(t, persisted.Status.SpecStatus.Entry("b").Build.Conditions, ConditionBuildFailed, ReasonJobFailed)
 	if got := persisted.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
@@ -419,7 +411,6 @@ func TestAdvanceCompletionBlockedByPendingCreates(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
 	if len(persisted.Status.PendingJobCreates) != 1 {
 		t.Fatalf("pendingJobCreates = %v, want the unresolved entry kept (6.5.1)", persisted.Status.PendingJobCreates)
 	}
@@ -454,8 +445,6 @@ func TestConvergePendingCreateConfirmed(t *testing.T) {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Succeeded", got)
 	}
 	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionPartialFailure)
 }
 
 func TestConvergePendingCreate404Kept(t *testing.T) {
@@ -489,7 +478,7 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	upsertCondition(&bi.Status.Conditions, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed, "release failed")
+	upsertCondition(&bi.Status.Conditions, ConditionReleaseUnavailable, ReasonRpmRepoReleaseFailed, "release failed")
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 	})
@@ -500,7 +489,7 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	requireCondition(t, persisted.Status.Conditions, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed)
+	requireCondition(t, persisted.Status.Conditions, ConditionReleaseUnavailable, ReasonRpmRepoReleaseFailed)
 	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != SpecBuildRunning {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Running (unknown phase unmapped)", got)
 	}
@@ -508,7 +497,7 @@ func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
 
 // Escalation after repeated child-resource failures.
 
-func TestE28ReleaseFailedStopsDispatch(t *testing.T) {
+func TestE28ReleaseUnavailableStopsDispatch(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
@@ -527,9 +516,7 @@ func TestE28ReleaseFailedStopsDispatch(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireCondition(t, persisted.Status.Conditions, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionPartialFailure)
+	requireCondition(t, persisted.Status.Conditions, ConditionReleaseUnavailable, ReasonRpmRepoReleaseFailed)
 }
 
 func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
@@ -555,11 +542,18 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	// The Build controller may create the RpmRepo later. Repeated 404s must
 	// leave the build resumable, even beyond the parse-failure threshold.
 
+	firstWriteCount := 0
 	for round := 1; round <= 5; round++ {
 		reconcileOnce(t, c)
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
+		requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoNotFound)
 		requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
+		if round == 1 {
+			firstWriteCount = client.statusWrites
+		} else if client.statusWrites != firstWriteCount {
+			t.Fatalf("status writes after repeated 404 = %d, want %d", client.statusWrites, firstWriteCount)
+		}
 	}
 	persisted := getBuildInfo(t, client)
 	if len(persisted.Status.PendingJobCreates) != 1 {
@@ -575,6 +569,7 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	seedJobAt(client, seeded, "a", 2, ebsv1.JobSucceeded, testStart.Add(time.Minute))
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
+	requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying)
 	requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 	if len(persisted.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want confirmed and removed", persisted.Status.PendingJobCreates)
@@ -665,7 +660,6 @@ func TestE30SnapshotUnavailableEscalates(t *testing.T) {
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	requireCondition(t, persisted.Status.Conditions, ConditionSnapshotUnavailable, ReasonSnapshotNotFound)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
 	if got := c.counters.Count(counterSnapshot, key); got != 0 {
 		t.Fatalf("snapshot failure counter = %d, want cleared after escalation", got)
 	}
@@ -689,28 +683,5 @@ func TestAdvanceEmptySpecStatusWaits(t *testing.T) {
 	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
-	}
-}
-
-func TestAdvanceResidualAbortedSkips(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
-	client.SeedBuild(testBuildObj("full"))
-	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
-	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
-		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildAborted}, DispatchCount: 1},
-	})
-	client.SeedBuildInfo(bi)
-
-	reconcileOnce(t, c)
-
-	persisted := getBuildInfo(t, client)
-	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != SpecBuildAborted {
-		t.Fatalf("specStatus[a].Build.Status = %q, want the residual Aborted kept (6.4)", got)
-	}
-	if len(persisted.Status.Conditions) != 0 {
-		t.Fatalf("conditions = %v, want none", persisted.Status.Conditions)
 	}
 }

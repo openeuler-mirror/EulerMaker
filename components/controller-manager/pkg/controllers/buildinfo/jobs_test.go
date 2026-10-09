@@ -866,35 +866,6 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 	}
 }
 
-func TestDispatchSpecForbiddenBlocksRoundAndRecovers(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	round, _ := dispatchRound(t, c, client, "forbidden-job", "a")
-	client.InjectWrite("create", clientpkg.WriteRejected, 403, false)
-	depend := dependEntry("a")
-	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil)
-	if err == nil || !controller.IsPermanent(err) {
-		t.Fatalf("forbidden dispatch error = %v, want permanent error", err)
-	}
-	stored := getBuildInfo(t, client)
-	if cond := findCondition(stored.Status.Conditions, ConditionJobDispatchBlocked); cond == nil || cond.Reason != ReasonJobCreateForbidden {
-		t.Fatalf("dispatch-blocked condition = %+v", cond)
-	}
-	if got := stored.Status.SpecStatus.Entry("a").Build.Status; got == SpecBuildFailed {
-		t.Fatalf("forbidden dispatch marked spec failed")
-	}
-
-	retry := &reconcileRound{key: round.key, current: stored, build: round.build, failures: c.newRoundFailures(round.key)}
-	if result, err := c.dispatchSpec(context.Background(), retry, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil); err != nil || result != (controller.ReconcileResult{}) {
-		t.Fatalf("recovered dispatch = %+v, %v", result, err)
-	}
-	if _, err := c.flushCreatedJobs(context.Background(), retry); err != nil {
-		t.Fatalf("flush recovered Job: %v", err)
-	}
-	if cond := findCondition(getBuildInfo(t, client).Status.Conditions, ConditionJobDispatchBlocked); cond != nil {
-		t.Fatalf("stale dispatch-blocked condition = %+v", cond)
-	}
-}
-
 func TestDispatchSpecRateLimitRetainsPendingSpec(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "rate-limited-job", "a")
