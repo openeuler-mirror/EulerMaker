@@ -11,8 +11,8 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// advanceBuildInfo advances a Processing BuildInfo. Single builds use a
-// simplified path without dependency graph or repository metadata reads.
+// advanceBuildInfo advances a Processing BuildInfo. Single builds use a simplified path without dependency graph or
+// repository metadata reads.
 func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	if round.isSingle() {
 		return c.advanceSingle(ctx, round)
@@ -20,7 +20,11 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 
 	// Do not advance an incomplete or inconsistent status snapshot.
 	if round.current.Status.SpecStatus.Len() == 0 {
-		c.logf(round.key, "SpecStatusEmpty", "processing buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept")
+		c.logf(
+			round.key,
+			"SpecStatusEmpty",
+			"processing buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept",
+		)
 		return controller.ReconcileResult{}, nil
 	}
 
@@ -68,7 +72,8 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		if err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if result, err = c.advanceDownstream(ctx, round, dcg, asm, snapshot, sources, bySpec); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err = c.advanceDownstream(ctx, round, dcg, asm, snapshot, sources, bySpec); err != nil ||
+			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 	}
@@ -76,9 +81,12 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 	return c.checkCompletion(ctx, round, dcg, asm)
 }
 
-// advanceDcg loads the graph from cache or BuildInfo status. A missing graph
-// in Processing is an anomaly; it is not rebuilt in this phase.
-func (c *Controller) advanceDcg(ctx context.Context, round *reconcileRound) (*DcgDict, controller.ReconcileResult, error) {
+// advanceDcg loads the graph from cache or BuildInfo status. A missing graph in Processing is an anomaly; it is not
+// rebuilt in this phase.
+func (c *Controller) advanceDcg(
+	ctx context.Context,
+	round *reconcileRound,
+) (*DcgDict, controller.ReconcileResult, error) {
 	if d, ok := c.dcgDict.Get(round.key); ok {
 		// A recovered graph clears the stale failure condition.
 		if result, err := c.clearStaleDcgFailed(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
@@ -94,22 +102,33 @@ func (c *Controller) advanceDcg(ctx context.Context, round *reconcileRound) (*Dc
 		}
 		return d, controller.ReconcileResult{}, nil
 	}
-	c.logf(round.key, "DcgMissing", "processing buildinfo without a persisted dcg; no first build in advance (15.9), waiting")
+	c.logf(
+		round.key,
+		"DcgMissing",
+		"processing buildinfo without a persisted dcg; no first build in advance (15.9), waiting",
+	)
 	next := round.current.DeepCopy()
-	upsertCondition(&next.Status.Conditions, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "processing buildinfo without a persisted dcg")
+	upsertCondition(
+		&next.Status.Conditions,
+		ConditionDcgBuildFailed,
+		ReasonDcgBuildFailed,
+		"processing buildinfo without a persisted dcg",
+	)
 	result, err := c.writeStatusIfChanged(ctx, round, next)
 	return nil, result, err
 }
 
-// appendInstallEdges checks every spec
-// with install.status=Failed (cycle nodes already at 2 dispatches excluded)
-// reverse-looks-up a provider per missing dep against the current-round
-// layered sources; an edge is appended on the candidate graph only when the
-// provider is a build-set spec, non-terminal and not already an install
-// upstream. New cycles get additional break points (initial picks never
-// re-selected). The candidate state is persisted before the in-memory
-// graph is replaced; a failed write leaves both untouched.
-func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRound, dcg *DcgDict, sources *rpmver.RpmMetaSources) (*DcgDict, controller.ReconcileResult, error) {
+// appendInstallEdges checks every spec with install.status=Failed (cycle nodes already at 2 dispatches excluded)
+// reverse-looks-up a provider per missing dep against the current-round layered sources; an edge is appended on the
+// candidate graph only when the provider is a build-set spec, non-terminal and not already an install upstream. New
+// cycles get additional break points (initial picks never re-selected). The candidate state is persisted before the
+// in-memory graph is replaced; a failed write leaves both untouched.
+func (c *Controller) appendInstallEdges(
+	ctx context.Context,
+	round *reconcileRound,
+	dcg *DcgDict,
+	sources *rpmver.RpmMetaSources,
+) (*DcgDict, controller.ReconcileResult, error) {
 	prefer := payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))
 	var candidate *DcgDict
 	changed := 0
@@ -164,17 +183,29 @@ func (c *Controller) appendInstallEdges(ctx context.Context, round *reconcileRou
 	edgesAdded.Add(uint64(changed))
 	if len(newBreaks) > 0 {
 		bootstrapBreaks.Add(uint64(len(newBreaks)))
-		c.logBreakPoints(round.key, "RuntimeBootstrapBreaks", fmt.Sprintf("install edge appends added %d edges; new cycle break points: %d", changed, len(newBreaks)), newBreaks)
+		c.logBreakPoints(
+			round.key,
+			"RuntimeBootstrapBreaks",
+			fmt.Sprintf("install edge appends added %d edges; new cycle break points: %d", changed, len(newBreaks)),
+			newBreaks,
+		)
 	} else {
 		c.logOnce(round.key, "InstallEdgesAdded", "install edge appends added %d edges", changed)
 	}
 	return candidate, controller.ReconcileResult{}, nil
 }
 
-// advanceDownstream traverses specs in graph order, skipping those already
-// complete or running. An initial bootstrap dispatch skips upstream gates but
-// still checks architecture and build-requires availability.
-func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRound, dcg *DcgDict, asm *specAssembly, snapshot *ebsv1.Snapshot, sources *rpmver.RpmMetaSources, bySpec map[string][]ebsv1.Job) (controller.ReconcileResult, error) {
+// advanceDownstream traverses specs in graph order, skipping those already complete or running. An initial bootstrap
+// dispatch skips upstream gates but still checks architecture and build-requires availability.
+func (c *Controller) advanceDownstream(
+	ctx context.Context,
+	round *reconcileRound,
+	dcg *DcgDict,
+	asm *specAssembly,
+	snapshot *ebsv1.Snapshot,
+	sources *rpmver.RpmMetaSources,
+	bySpec map[string][]ebsv1.Job,
+) (controller.ReconcileResult, error) {
 	required := dcg.DispatchRequirements()
 	contentURL, err := c.resolveContentURL(heldContentURL(round))
 	if err != nil {
@@ -192,10 +223,14 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		}
 		depend, ok := asm.depends[name]
 		if !ok {
-			// Defensive: graph nodes come from the build set, a subset of the
-			// assembled view; a miss means the views diverged — never craft a
-			// payload, wait for the next round's assembly.
-			c.logf(round.key, "SpecDependMissing", "graph node %s missing from this round's assembly; dispatch skipped", name)
+			// Defensive: graph nodes come from the build set, a subset of the assembled view; a miss means the views diverged —
+			// never craft a payload, wait for the next round's assembly.
+			c.logf(
+				round.key,
+				"SpecDependMissing",
+				"graph node %s missing from this round's assembly; dispatch skipped",
+				name,
+			)
 			continue
 		}
 		if !(node.BootstrapBreak && ss.DispatchCount == 0) {
@@ -215,14 +250,16 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 			}
 		}
 		// Unsupported architectures fail without creating a Job.
-		if result, err := c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err := c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil ||
+			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
 			continue
 		}
 		// Build-requires availability is checked even for bootstrap dispatches.
-		if result, err := c.checkBuildRequires(ctx, round, name, &depend, sources); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err := c.checkBuildRequires(ctx, round, name, &depend, sources); err != nil ||
+			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
@@ -233,15 +270,17 @@ func (c *Controller) advanceDownstream(ctx context.Context, round *reconcileRoun
 		if err != nil {
 			return controller.ReconcileResult{}, err
 		}
-		if result, err := c.dispatchSpec(ctx, round, name, &depend, snapshot, image, dispatch.contentURL, sources); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err := c.dispatchSpec(
+			ctx, round, name, &depend, snapshot, image, dispatch.contentURL, sources,
+		); err != nil ||
+			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 	}
 	return controller.ReconcileResult{}, nil
 }
 
-// upstreamNames returns the merged direct-upstream set (inDep ∪ installInDep)
-// in dictionary order.
+// upstreamNames returns the merged direct-upstream set (inDep ∪ installInDep) in dictionary order.
 func upstreamNames(node *DcgNode) []string {
 	names := make([]string, 0, len(node.InDep)+len(node.InstallInDep))
 	for name := range node.InDep {
@@ -277,17 +316,22 @@ func hasFailedUpstream(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	return false
 }
 
-// rebuildConsistencySatisfied checks whether a non-break-point node may be
-// dispatched again. An off-cycle node's first
-// dispatch with cycle upstreams waits for those cycle upstreams to be
-// Succeeded at their effective required (off-cycle upstreams follow the
-// normal terminal + publish gates). The break point's own rebuild is exempt.
-func rebuildConsistencySatisfied(dcg *DcgDict, round *reconcileRound, spec string, ss ebsv1.SpecStatus, required map[string]int64) bool {
+// rebuildConsistencySatisfied checks whether a non-break-point node may be dispatched again. An off-cycle node's first
+// dispatch with cycle upstreams waits for those cycle upstreams to be Succeeded at their effective required (off-cycle
+// upstreams follow the normal terminal + publish gates). The break point's own rebuild is exempt.
+func rebuildConsistencySatisfied(
+	dcg *DcgDict,
+	round *reconcileRound,
+	spec string,
+	ss ebsv1.SpecStatus,
+	required map[string]int64,
+) bool {
 	node := dcg.Node(spec)
 	if ss.DispatchCount >= 1 && !node.BootstrapBreak {
 		for _, up := range upstreamNames(node) {
 			upSS := round.current.Status.SpecStatus.Entry(up)
-			if upSS.Build.Status != SpecBuildSucceeded || upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
+			if upSS.Build.Status != SpecBuildSucceeded ||
+				upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
 		}
@@ -299,7 +343,8 @@ func rebuildConsistencySatisfied(dcg *DcgDict, round *reconcileRound, spec strin
 				continue
 			}
 			upSS := round.current.Status.SpecStatus.Entry(up)
-			if upSS.Build.Status != SpecBuildSucceeded || upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
+			if upSS.Build.Status != SpecBuildSucceeded ||
+				upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
 		}
@@ -308,11 +353,9 @@ func rebuildConsistencySatisfied(dcg *DcgDict, round *reconcileRound, spec strin
 }
 
 // upstreamOutputsPublished checks publish confirmation:
-// for every Succeeded direct upstream, the latest-generation Job's name must
-// be a member of the same-name RpmRepo status.repository.sourceJobNames (the
-// only publish credential). Failed upstreams are skipped (their Job is never
-// consumed). The RpmRepo object is the guard-held one, and Jobs come
-// from this round's List — no extra queries.
+// for every Succeeded direct upstream, the latest-generation Job's name must be a member of the same-name RpmRepo
+// status.repository.sourceJobNames (the only publish credential). Failed upstreams are skipped (their Job is never
+// consumed). The RpmRepo object is the guard-held one, and Jobs come from this round's List — no extra queries.
 func upstreamOutputsPublished(round *reconcileRound, dcg *DcgDict, spec string, bySpec map[string][]ebsv1.Job) bool {
 	published := map[string]bool{}
 	if round.rpmRepoHeld && round.rpmRepo.Status.Repository != nil {
@@ -337,8 +380,7 @@ func upstreamOutputsPublished(round *reconcileRound, dcg *DcgDict, spec string, 
 
 // effectiveRequired applies a relaxation: any Failed direct upstream
 // (inDep ∪ installInDep) cancels the rebuild — the effective required is 1;
-// otherwise the DispatchRequirements value (cycle 2 / normal 1, 0 defaults
-// to 1 for graph-less single paths).
+// otherwise the DispatchRequirements value (cycle 2 / normal 1, 0 defaults to 1 for graph-less single paths).
 func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, required map[string]int64) int64 {
 	req := required[spec]
 	if req == 0 {
@@ -357,10 +399,14 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 	return req
 }
 
-// checkCompletion requires every spec to be terminal, every successful spec
-// to reach its required dispatch count, and no pending Job creations. It
-// writes Completed; spec statuses and failedPackages carry the result.
-func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound, dcg *DcgDict, asm *specAssembly) (controller.ReconcileResult, error) {
+// checkCompletion requires every spec to be terminal, every successful spec to reach its required dispatch count, and
+// no pending Job creations. It writes Completed; spec statuses and failedPackages carry the result.
+func (c *Controller) checkCompletion(
+	ctx context.Context,
+	round *reconcileRound,
+	dcg *DcgDict,
+	asm *specAssembly,
+) (controller.ReconcileResult, error) {
 	var required map[string]int64
 	if dcg != nil {
 		required = dcg.DispatchRequirements()
@@ -386,8 +432,8 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		needsRepoMap = needsRepoMap || ss.Status == SpecBuildFailed
 	}
 	if asm == nil && needsRepoMap {
-		// The single path deliberately skips Snapshot reads while Jobs are in
-		// flight; recover the spec-to-repository map only for final failures.
+		// The single path deliberately skips Snapshot reads while Jobs are in flight; recover the spec-to-repository map only
+		// for final failures.
 		if cached, ok := c.specDependsCache.Get(round.key); ok {
 			asm = &specAssembly{depends: cached}
 		} else {
@@ -414,7 +460,9 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 			}
 			depend, ok := asm.depends[spec]
 			if !ok || depend.RepoName == "" {
-				return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("cannot resolve repository for failed spec %q", spec))
+				return controller.ReconcileResult{}, controller.NewPermanentError(
+					fmt.Errorf("cannot resolve repository for failed spec %q", spec),
+				)
 			}
 			failedRepos[depend.RepoName] = struct{}{}
 		}
@@ -424,17 +472,27 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
-		c.logOnce(round.key, "BuildInfoCompleted", "completed: %d specs, %d failed", round.current.Status.SpecStatus.Len(), len(failed))
+		c.logOnce(
+			round.key,
+			"BuildInfoCompleted",
+			"completed: %d specs, %d failed",
+			round.current.Status.SpecStatus.Len(),
+			len(failed),
+		)
 		c.invalidateCaches(round.key)
 	}
 	return result, err
 }
 
-// advanceSingle runs the single-type Processing path: backfill plus the
-// completion check — no Snapshot/RpmMeta reads, no graph, no gates.
+// advanceSingle runs the single-type Processing path: backfill plus the completion check — no Snapshot/RpmMeta reads,
+// no graph, no gates.
 func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	if round.current.Status.SpecStatus.Len() == 0 {
-		c.logf(round.key, "SpecStatusEmpty", "processing single buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept")
+		c.logf(
+			round.key,
+			"SpecStatusEmpty",
+			"processing single buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept",
+		)
 		return controller.ReconcileResult{}, nil
 	}
 	jobs, err := c.listRoundJobs(ctx, round)
@@ -449,11 +507,10 @@ func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (
 	return c.checkCompletion(ctx, round, nil, nil)
 }
 
-// stoppedFailedPackages retains every failed or unfinished spec for the next
-// incremental build. The persisted specRepoNames map supplies the repository
-// mapping after a restart; the assembly cache covers older objects.
-// If neither can identify a spec, conservatively retry the build's package
-// scope rather than silently dropping work from the published baseline.
+// stoppedFailedPackages retains every failed or unfinished spec for the next incremental build. The persisted
+// specRepoNames map supplies the repository mapping after a restart; the assembly cache covers older objects. If
+// neither can identify a spec, conservatively retry the build's package scope rather than silently dropping work from
+// the published baseline.
 func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 	failed := make(map[string]struct{})
 	depends, _ := c.specDependsCache.Get(round.key)
@@ -470,7 +527,8 @@ func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 		failed[repo] = struct{}{}
 	}
 	for spec, build := range round.current.Status.SpecStatus.Build {
-		if build.Status != SpecBuildSucceeded || round.current.Status.SpecStatus.Install[spec].Status != SpecBuildSucceeded {
+		if build.Status != SpecBuildSucceeded ||
+			round.current.Status.SpecStatus.Install[spec].Status != SpecBuildSucceeded {
 			addSpec(spec)
 		}
 	}
@@ -485,7 +543,8 @@ func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 		}
 	}
 	if unmapped {
-		if round.isSingle() || (round.current.Status.Phase == ebsv1.BuildInfoPending && len(round.build.Spec.Packages) > 0) {
+		if round.isSingle() ||
+			(round.current.Status.Phase == ebsv1.BuildInfoPending && len(round.build.Spec.Packages) > 0) {
 			for _, name := range round.build.Spec.Packages {
 				if name != "" {
 					failed[name] = struct{}{}
@@ -498,15 +557,21 @@ func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 				}
 			}
 		}
-		c.logf(round.key, "StopFailedPackagesFallback", "missing persisted spec-to-repository mapping; using conservative package scope")
+		c.logf(
+			round.key,
+			"StopFailedPackagesFallback",
+			"missing persisted spec-to-repository mapping; using conservative package scope",
+		)
 	}
 	return sortedFailedPackages(round.current.Status.FailedPackages, failed)
 }
 
-// convergeToCompleted waits for created Jobs to finish without further
-// dispatch. Pending creations must be confirmed before completion; a 404
-// keeps the entry because the create may still land. The stop marker remains.
-func (c *Controller) convergeToCompleted(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
+// convergeToCompleted waits for created Jobs to finish without further dispatch. Pending creations must be confirmed
+// before completion; a 404 keeps the entry because the create may still land. The stop marker remains.
+func (c *Controller) convergeToCompleted(
+	ctx context.Context,
+	round *reconcileRound,
+) (controller.ReconcileResult, error) {
 	jobs, err := c.listRoundJobs(ctx, round)
 	if err != nil {
 		return controller.ReconcileResult{}, err
@@ -517,8 +582,8 @@ func (c *Controller) convergeToCompleted(ctx context.Context, round *reconcileRo
 		return result, err
 	}
 
-	// Even when the List missed an entry, every registered pending
-	// create is GET-verified; re-creation is forbidden after the stop.
+	// Even when the List missed an entry, every registered pending create is GET-verified; re-creation is forbidden after
+	// the stop.
 	var confirmed []*ebsv1.Job
 	for _, spec := range sortedSpecNames(round.current.Status.PendingJobCreates) {
 		pend, ok := round.current.Status.PendingJobCreates[spec]
@@ -528,9 +593,16 @@ func (c *Controller) convergeToCompleted(ctx context.Context, round *reconcileRo
 		job, err := c.client.GetJob(ctx, round.current.Namespace, pend.JobName)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				// Keep the entry and wait: 404 is never a
-				// non-existence proof for an in-flight request.
-				c.logf(round.key, "JobCreateUnresolved", "pending job create for spec %s (job %s generation %d) unresolved after stop-dispatch; entry kept, waiting (6.5.1 #5)", spec, pend.JobName, pend.DispatchGeneration)
+				// Keep the entry and wait: 404 is never a non-existence proof for an in-flight request.
+				c.logf(
+					round.key,
+					"JobCreateUnresolved",
+					"pending job create for spec %s (job %s generation %d) unresolved after stop-dispatch; "+
+						"entry kept, waiting (6.5.1 #5)",
+					spec,
+					pend.JobName,
+					pend.DispatchGeneration,
+				)
 				continue
 			}
 			return controller.ReconcileResult{}, err
@@ -539,14 +611,15 @@ func (c *Controller) convergeToCompleted(ctx context.Context, round *reconcileRo
 			c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch: %v", pend.JobName, verr)
 			return controller.ReconcileResult{}, controller.NewPermanentError(verr)
 		}
-		if result, err := c.confirmDispatchedJob(ctx, round, spec, pend.DispatchGeneration, job); err != nil || result != (controller.ReconcileResult{}) {
+		if result, err := c.confirmDispatchedJob(ctx, round, spec, pend.DispatchGeneration, job); err != nil ||
+			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 		confirmed = append(confirmed, job)
 	}
 
-	// Completed requires an empty pending map and every created
-	// Job (all generations, including out-of-scope ones) terminal.
+	// Completed requires an empty pending map and every created Job (all generations, including out-of-scope ones)
+	// terminal.
 	if len(round.current.Status.PendingJobCreates) > 0 {
 		return controller.ReconcileResult{}, nil
 	}
@@ -569,15 +642,19 @@ func (c *Controller) convergeToCompleted(ctx context.Context, round *reconcileRo
 				snapshotEscalations.Inc()
 			}
 		}
-		c.logOnce(round.key, "StopConvergedCompleted", "completed after stop-dispatch (%s): all created jobs terminal", reason)
+		c.logOnce(
+			round.key,
+			"StopConvergedCompleted",
+			"completed after stop-dispatch (%s): all created jobs terminal",
+			reason,
+		)
 		c.invalidateCaches(round.key)
 	}
 	return result, err
 }
 
-// jobsAwaitingTerminal waits for all Jobs of this BuildInfo incarnation to
-// become terminal. Pending, Running, empty, and unknown phases keep it waiting;
-// Jobs of an older incarnation do not block convergence.
+// jobsAwaitingTerminal waits for all Jobs of this BuildInfo incarnation to become terminal. Pending, Running, empty,
+// and unknown phases keep it waiting; Jobs of an older incarnation do not block convergence.
 func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Job, confirmed []*ebsv1.Job) bool {
 	waiting := false
 	scan := func(job *ebsv1.Job) {
@@ -588,7 +665,13 @@ func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Jo
 			waiting = true
 		default:
 			waiting = true
-			c.logf(round.key, "UnknownJobPhase", "job %s phase %q unknown; completion waits (6.5 step 4)", job.Name, job.Status.Phase)
+			c.logf(
+				round.key,
+				"UnknownJobPhase",
+				"job %s phase %q unknown; completion waits (6.5 step 4)",
+				job.Name,
+				job.Status.Phase,
+			)
 		}
 	}
 	own := filterJobsByIdentity(jobs, string(round.current.UID))

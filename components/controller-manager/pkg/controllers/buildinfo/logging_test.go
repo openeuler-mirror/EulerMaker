@@ -27,7 +27,12 @@ func TestBreakPointLogVerbosity(t *testing.T) {
 			for _, reason := range []string{"BootstrapBreaks", "RuntimeBootstrapBreaks"} {
 				var buf bytes.Buffer
 				log.SetOutput(&buf)
-				(&Controller{}).logBreakPoints("project/build", reason, "nodes=4950 break_count=2", []string{"SDL2", "antlr4"})
+				(&Controller{}).logBreakPoints(
+					"project/build",
+					reason,
+					"nodes=4950 break_count=2",
+					[]string{"SDL2", "antlr4"},
+				)
 				got := buf.String()
 				if !strings.Contains(got, "nodes=4950 break_count=2") || !strings.Contains(got, "reason="+reason) {
 					t.Fatalf("missing summary: %s", got)

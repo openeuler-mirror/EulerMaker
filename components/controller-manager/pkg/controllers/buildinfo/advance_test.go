@@ -15,11 +15,16 @@ import (
 )
 
 // seedProcessingRound seeds the objects every Processing advance round needs:
-// active project, processing build, build resource, build conf, the given
-// BuildInfo, a one-repo snapshot and a held RpmRepo. depends feeds the
-// Processing assembly cache (no git) and sources the metadata cache (URL
-// match, no download). Returns the stored BuildInfo (server-assigned UID).
-func seedProcessingRound(client *fakeClient, c *Controller, bi *ebsv1.BuildInfo, depends map[string]specparse.SpecDepend, sources *rpmver.RpmMetaSources) *ebsv1.BuildInfo {
+// active project, processing build, build resource, build conf, the given BuildInfo, a one-repo snapshot and a held
+// RpmRepo. depends feeds the Processing assembly cache (no git) and sources the metadata cache (URL match, no
+// download). Returns the stored BuildInfo (server-assigned UID).
+func seedProcessingRound(
+	client *fakeClient,
+	c *Controller,
+	bi *ebsv1.BuildInfo,
+	depends map[string]specparse.SpecDepend,
+	sources *rpmver.RpmMetaSources,
+) *ebsv1.BuildInfo {
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
@@ -38,9 +43,16 @@ func dependEntry(spec string) specparse.SpecDepend {
 	return specparse.SpecDepend{RepoName: "repo1", SpecName: spec, SpecFileName: spec + ".spec", Version: "1.0"}
 }
 
-// seedJobAt seeds an identity-complete Job with an explicit creation time and
-// returns the stored copy (server-assigned UID).
-func seedJobAt(client *fakeClient, bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.JobPhase, at time.Time) *ebsv1.Job {
+// seedJobAt seeds an identity-complete Job with an explicit creation time and returns the stored copy (server-assigned
+// UID).
+func seedJobAt(
+	client *fakeClient,
+	bi *ebsv1.BuildInfo,
+	spec string,
+	generation int64,
+	phase ebsv1.JobPhase,
+	at time.Time,
+) *ebsv1.Job {
 	job := testJobObj(bi, spec, generation, phase)
 	job.CreationTimestamp = metav1.NewTime(at)
 	return client.SeedJob(job)
@@ -151,7 +163,13 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 		})
-		seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
+		seeded := seedProcessingRound(
+			client,
+			c,
+			bi,
+			map[string]specparse.SpecDepend{"a": dependEntry("a")},
+			testSources(),
+		)
 		seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 
 		reconcileOnce(t, c)
@@ -170,7 +188,13 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 		})
-		seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
+		seeded := seedProcessingRound(
+			client,
+			c,
+			bi,
+			map[string]specparse.SpecDepend{"a": dependEntry("a")},
+			testSources(),
+		)
 		job := testJobObj(seeded, "a", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
 		job.Status.Message = "build ok"
@@ -212,7 +236,12 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		}, testSources(testRpm("a", "a", "1.0")))
 		job := testJobObj(seeded, "b", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
-		job.Status.Install = &ebsv1.JobInstallResult{Status: ebsv1.JobResultFailed, MissingDeps: map[string]ebsv1.MissingDep{"a": {NeededBy: "new", VersionRequests: ebsv1.VersionConst{GE: "1.0"}}}}
+		job.Status.Install = &ebsv1.JobInstallResult{
+			Status: ebsv1.JobResultFailed,
+			MissingDeps: map[string]ebsv1.MissingDep{
+				"a": {NeededBy: "new", VersionRequests: ebsv1.VersionConst{GE: "1.0"}},
+			},
+		}
 		client.SeedJob(job)
 
 		reconcileOnce(t, c)
@@ -288,7 +317,12 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	// Cycle a<->b with a as the break point: both require 2 dispatches.
 	bi.Status.Dcg = map[string]ebsv1.DcgNodeState{
-		"a": {Version: "1.0-1", OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConst{"b": {}}, BootstrapBreak: true},
+		"a": {
+			Version:        "1.0-1",
+			OutDep:         []string{"b"},
+			InDep:          map[string]ebsv1.VersionConst{"b": {}},
+			BootstrapBreak: true,
+		},
 		"b": {Version: "1.0-1", OutDep: []string{"a"}, InDep: map[string]ebsv1.VersionConst{"a": {}}},
 	}
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
@@ -307,9 +341,8 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	}
 	publish(a1.Name)
 
-	// Round 1: a's second dispatch is publish-gated on b; b's second dispatch
-	// is rebuild-consistency-gated on a (upstream below its
-	// effective required).
+	// Round 1: a's second dispatch is publish-gated on b; b's second dispatch is rebuild-consistency-gated on a (upstream
+	// below its effective required).
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
@@ -323,10 +356,9 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 		t.Fatalf("round1 jobs = %d, want 2", got)
 	}
 
-	// Round 2: b published — a rebuilds (the break point skips gate 1). b then
-	// passes gate 1 (a Succeeded at count 2) and gate 2 (the round-start List
-	// still holds a's published generation-1 Job; the generation-2 Job was
-	// created after the List) — the cycle completes at the required counts.
+	// Round 2: b published — a rebuilds (the break point skips gate 1). b then passes gate 1 (a Succeeded at count 2) and
+	// gate 2 (the round-start List still holds a's published generation-1 Job; the generation-2 Job was created after the
+	// List) — the cycle completes at the required counts.
 	publish(a1.Name, b1.Name)
 	reconcileOnce(t, c)
 	persisted = getBuildInfo(t, client)
@@ -539,8 +571,8 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	c.specDependsCache.Set(key, map[string]specparse.SpecDepend{"a": dependEntry("a")})
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
-	// The Build controller may create the RpmRepo later. Repeated 404s must
-	// leave the build resumable, even beyond the parse-failure threshold.
+	// The Build controller may create the RpmRepo later. Repeated 404s must leave the build resumable, even beyond the
+	// parse-failure threshold.
 
 	firstWriteCount := 0
 	for round := 1; round <= 5; round++ {
@@ -563,8 +595,8 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 		t.Fatalf("parse failure counter = %d, want 0 for missing repo", got)
 	}
 
-	// The repo arrives and the pending Job is confirmed. Reconciliation can
-	// continue normally without a permanent stop marker.
+	// The repo arrives and the pending Job is confirmed. Reconciliation can continue normally without a permanent stop
+	// marker.
 	client.SeedRpmRepo(testRpmRepoObj(""))
 	seedJobAt(client, seeded, "a", 2, ebsv1.JobSucceeded, testStart.Add(time.Minute))
 	reconcileOnce(t, c)
@@ -591,11 +623,22 @@ func TestStopConvergenceRecordsFailedAndUnfinishedPackages(t *testing.T) {
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"failed":     {Build: ebsv1.SpecBuildStatus{Status: SpecBuildFailed}},
 		"unfinished": {Build: ebsv1.SpecBuildStatus{}},
-		"succeeded":  {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, Install: ebsv1.SpecInstallStatus{Status: SpecBuildSucceeded}},
-		"install":    {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, Install: ebsv1.SpecInstallStatus{Status: SpecBuildFailed}},
+		"succeeded": {
+			Build:   ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded},
+			Install: ebsv1.SpecInstallStatus{Status: SpecBuildSucceeded},
+		},
+		"install": {
+			Build:   ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded},
+			Install: ebsv1.SpecInstallStatus{Status: SpecBuildFailed},
+		},
 	})
 	bi.Status.FailedPackages = []string{"parse-failed"}
-	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoXMLDownloadFailed, "repository unavailable")
+	upsertCondition(
+		&bi.Status.Conditions,
+		ConditionRpmRepoUnavailable,
+		ReasonRpmRepoXMLDownloadFailed,
+		"repository unavailable",
+	)
 	client.SeedBuildInfo(bi)
 
 	reconcileOnce(t, c)
@@ -618,7 +661,12 @@ func TestStopConvergenceFallsBackWithoutSpecRepoNames(t *testing.T) {
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"failed": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildFailed}},
 	})
-	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoXMLDownloadFailed, "repository unavailable")
+	upsertCondition(
+		&bi.Status.Conditions,
+		ConditionRpmRepoUnavailable,
+		ReasonRpmRepoXMLDownloadFailed,
+		"repository unavailable",
+	)
 	client.SeedBuildInfo(bi)
 
 	reconcileOnce(t, c)
@@ -642,8 +690,7 @@ func TestE30SnapshotUnavailableEscalates(t *testing.T) {
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
-	// No Snapshot seeded: 404 counts towards the failure threshold and fails the round below
-	// the threshold.
+	// No Snapshot seeded: 404 counts towards the failure threshold and fails the round below the threshold.
 
 	for round := 1; round <= 2; round++ {
 		if _, err := c.reconcile(context.Background(), key); err == nil {
@@ -654,8 +701,7 @@ func TestE30SnapshotUnavailableEscalates(t *testing.T) {
 		requireNoCondition(t, persisted.Status.Conditions, ConditionSnapshotUnavailable)
 	}
 
-	// Round 3: the threshold escalates; the marker write and the convergence
-	// land in the same round.
+	// Round 3: the threshold escalates; the marker write and the convergence land in the same round.
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)

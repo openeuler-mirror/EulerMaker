@@ -7,8 +7,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// edge{up, down} means down depends on up: InDep[down][up] and
-// outDep[up] += down.
+// edge{up, down} means down depends on up: InDep[down][up] and outDep[up] += down.
 type edge struct{ up, down string }
 
 func graphWith(edges ...edge) map[string]*DcgNode {
@@ -98,8 +97,7 @@ func TestTwoCycleNameTieBreak(t *testing.T) {
 }
 
 func TestCrossedCyclesSingleBreak(t *testing.T) {
-	// Two cycles sharing node a: a->b->c->a and a->d->c->a. Picking a (largest
-	// outDep) kills both cycles at once.
+	// Two cycles sharing node a: a->b->c->a and a->d->c->a. Picking a (largest outDep) kills both cycles at once.
 	d := NewDcgDict(graphWith(
 		edge{"a", "b"}, edge{"b", "c"}, edge{"c", "a"},
 		edge{"a", "d"}, edge{"d", "c"},
@@ -117,8 +115,8 @@ func TestMultipleSCCsDeterministic(t *testing.T) {
 			edge{"a", "b"}, edge{"b", "a"},
 		))
 	}
-	// Each cycle picks its dictionary-largest member; the result is sorted
-	// and stable regardless of SCC processing order / map iteration.
+	// Each cycle picks its dictionary-largest member; the result is sorted and stable regardless of SCC processing order /
+	// map iteration.
 	want := []string{"b", "y"}
 	for i := 0; i < 20; i++ {
 		requireBreaks(t, build(), want)
@@ -126,8 +124,7 @@ func TestMultipleSCCsDeterministic(t *testing.T) {
 }
 
 func TestSortedNodesWithCycle(t *testing.T) {
-	// a<->b cycle, c depends on a: the traversal covers every node exactly
-	// once and is deterministic.
+	// a<->b cycle, c depends on a: the traversal covers every node exactly once and is deterministic.
 	d := NewDcgDict(graphWith(
 		edge{"a", "b"}, edge{"b", "a"}, edge{"a", "c"},
 	))
@@ -178,8 +175,8 @@ func TestStateRoundTrip(t *testing.T) {
 }
 
 func TestLoadDoesNotReselectBreaks(t *testing.T) {
-	// A persisted cycle without break marks stays without breaks on
-	// load; cycleNodes is still recomputed from the edge set.
+	// A persisted cycle without break marks stays without breaks on load; cycleNodes is still recomputed from the edge
+	// set.
 	state := map[string]ebsv1.DcgNodeState{
 		"a": {OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConst{"b": {}}},
 		"b": {OutDep: []string{"a"}, InDep: map[string]ebsv1.VersionConst{"a": {}}},
@@ -246,11 +243,9 @@ func TestRefreshCyclesAndBreaksAppendsNewCycle(t *testing.T) {
 }
 
 func TestRefreshPreservesInitialBreaks(t *testing.T) {
-	// Initial cycle a<->b picks b (tie -> dictionary max). A runtime install
-	// edge pair a<->c merges c into the SCC and adds a new cycle a<->c that
-	// does not pass b: a new break is appended; b is never re-selected
-	// a and c tie on full outDep length (a: [b c], c: [a e]), so the
-	// dictionary-largest c wins.
+	// Initial cycle a<->b picks b (tie -> dictionary max). A runtime install edge pair a<->c merges c into the SCC and
+	// adds a new cycle a<->c that does not pass b: a new break is appended; b is never re-selected a and c tie on full
+	// outDep length (a: [b c], c: [a e]), so the dictionary-largest c wins.
 	d := NewDcgDict(graphWith(
 		edge{"a", "b"}, edge{"b", "a"},
 		edge{"c", "e"},
@@ -272,16 +267,15 @@ func TestRefreshPreservesInitialBreaks(t *testing.T) {
 }
 
 func TestRefreshSkipsCycleAlreadyBroken(t *testing.T) {
-	// A new edge landing inside an already-broken cycle adds no break: the
-	// pre-removed break keeps the merged SCC peelable.
+	// A new edge landing inside an already-broken cycle adds no break: the pre-removed break keeps the merged SCC
+	// peelable.
 	d := NewDcgDict(graphWith(
 		edge{"a", "b"}, edge{"b", "a"}, edge{"b", "c"},
 	))
 	requireBreaks(t, d, []string{"b"})
 
 	candidate := d.Clone()
-	// c install-depends on a: edge a->c. Cycle b->c ... c has no path back,
-	// so no new cycle appears.
+	// c install-depends on a: edge a->c. Cycle b->c ... c has no path back, so no new cycle appears.
 	candidate.AddInstallEdge("c", "a", ebsv1.VersionConst{})
 	if picks := candidate.RefreshCyclesAndBreaks(); len(picks) != 0 {
 		t.Fatalf("no new cycle: picks = %v, want none", picks)

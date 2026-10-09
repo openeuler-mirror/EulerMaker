@@ -7,19 +7,14 @@ import (
 	"k8s.io/utils/clock"
 )
 
-// cache.go implements the shared per-BuildInfo cache lifecycle (design
-// 5.4/15.9): RWMutex map keyed by <namespace>/<buildinfo.name>; terminal
-// phase or re-get 404 invalidates immediately; OnDelete records a tombstone
-// (value retained) that OnAdd/OnUpdate revokes within the grace period
-// (--build-info-dcg-prune-grace); expiry is swept by the controller sweeper
-// or lazily on access. Graph building I/O happens outside the lock by
-// construction: callers fetch, compute, then Set.
+// Per-BuildInfo caches are keyed by namespace/name. Terminal objects and confirmed deletion invalidate entries
+// immediately; polling deletions leave a tombstone that can be revoked during the grace period. Expired tombstones are
+// swept or removed on access. Callers perform graph-building I/O outside the cache lock before storing results.
 
-// cacheKey builds the <namespace>/<buildinfo.name> cache key (design 15.9).
+// cacheKey builds the namespace/name cache key.
 func cacheKey(namespace, name string) string { return namespace + "/" + name }
 
-// perBuildInfoCache is the lifecycle mechanism shared by dcgDict,
-// rpmMetaSources and specDependsCache (design 5.4).
+// perBuildInfoCache is the lifecycle mechanism shared by dcgDict, rpmMetaSources and specDependsCache.
 type perBuildInfoCache[V any] struct {
 	mu    sync.RWMutex
 	clock clock.Clock
@@ -41,10 +36,8 @@ func newPerBuildInfoCache[V any](clk clock.Clock, grace time.Duration) *perBuild
 	}
 }
 
-// Get returns the cached value. A tombstoned entry is a miss; an expired
-// tombstone is lazily swept. Live entries are returned even while their
-// tombstone is pending revocation (the grace period exists to survive a
-// spurious empty list, 5.4).
+// Get returns a live cached value. Tombstoned entries are misses until OnAdd or OnUpdate revokes them; expired
+// tombstones are removed on access.
 func (c *perBuildInfoCache[V]) Get(key string) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -70,17 +63,15 @@ func (c *perBuildInfoCache[V]) Set(key string, value V) {
 	c.items[key] = &perBuildInfoEntry[V]{value: value}
 }
 
-// Invalidate removes the entry immediately: terminal phase observed or
-// re-get 404 during reconcile (design 5.4).
+// Invalidate removes the entry immediately: terminal phase observed or re-get 404 during reconcile.
 func (c *perBuildInfoCache[V]) Invalidate(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.items, key)
 }
 
-// Tombstone records an OnDelete: the value is retained for the grace period
-// so a spurious delete does not trigger a rebuild storm (5.4). Tombstoning a
-// key with no entry is a no-op.
+// Tombstone records an OnDelete: the value is retained for the grace period so a spurious delete does not trigger a
+// rebuild storm. Tombstoning a key with no entry is a no-op.
 func (c *perBuildInfoCache[V]) Tombstone(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -92,8 +83,7 @@ func (c *perBuildInfoCache[V]) Tombstone(key string) {
 	entry.tombstonedAt = c.clock.Now()
 }
 
-// RevokeTombstone clears a pending tombstone on OnAdd/OnUpdate. An expired
-// tombstone is swept instead of revoked.
+// RevokeTombstone clears a pending tombstone on OnAdd/OnUpdate. An expired tombstone is swept instead of revoked.
 func (c *perBuildInfoCache[V]) RevokeTombstone(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -109,8 +99,7 @@ func (c *perBuildInfoCache[V]) RevokeTombstone(key string) {
 	entry.tombstonedAt = time.Time{}
 }
 
-// SweepExpired removes all expired tombstones and returns the removal count.
-// Called by the controller sweeper (design 5.4).
+// SweepExpired removes all expired tombstones and returns the removal count. Called by the controller sweeper.
 func (c *perBuildInfoCache[V]) SweepExpired() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

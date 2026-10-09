@@ -1,8 +1,3 @@
-// client.go provides the typed API client used by the BuildInfo controller
-// (design 4.1). It wraps the shared controller-manager API client, so write
-// errors keep the shared NotSent / Rejected / Unknown classification, and
-// read misses are normalized to the ErrNotFound sentinel.
-
 package buildinfo
 
 import (
@@ -30,25 +25,23 @@ import (
 var configResourceArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 var configPackagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9][A-Za-z0-9+._-]*)*$`)
 
-// ErrNotFound is the sentinel returned by read methods when the requested
-// object does not exist, so callers distinguish "missing" from "query failed".
+// ErrNotFound is the sentinel returned by read methods when the requested object does not exist, so callers distinguish
+// "missing" from "query failed".
 var ErrNotFound = errors.New("object not found")
 
-// apiServerReadRetries is the fixed in-process retry budget for transient
-// apiserver query failures (network errors, timeouts, 5xx). It is a code
-// constant by design, unlike the configurable git-server retry (7.5/E-02).
+// apiServerReadRetries is the fixed in-process retry budget for transient apiserver query failures (network errors,
+// timeouts, 5xx). It is a code constant, unlike the configurable git-server retry budget.
 const apiServerReadRetries = 3
 
-// SharedClient is the shared client surface this typed client needs: the
-// generic CRUD interface plus the build-target Config reader.
+// SharedClient is the shared client surface this typed client needs: the generic CRUD interface plus the build-target
+// Config reader.
 type SharedClient interface {
 	apiserver.Interface
 	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 
-// buildResourceRules keeps the Config metadata together with its parsed
-// resource rules; it is not an API resource.
+// buildResourceRules keeps the Config metadata together with its parsed resource rules; it is not an API resource.
 type buildResourceRules struct {
 	metav1.ObjectMeta
 	Spec ebsv1.BuildResourceContent
@@ -68,26 +61,22 @@ var _ SharedClient = (*apiserver.Client)(nil)
 
 // Client is the typed API surface the BuildInfo controller depends on.
 //
-// BuildInfo status writes go through /status; the apiserver keeps the old
-// spec. specDepends is an in-memory view and is never persisted, so there is
-// no PUT on the main resource. Write failures are returned as *WriteError
-// identifiable via errors.As; the controller never re-derives the outcome
-// from status codes or error text.
+// BuildInfo status writes go through /status; the apiserver keeps the old spec. specDepends is an in-memory view and is
+// never persisted, so there is no PUT on the main resource. Write failures are returned as *WriteError identifiable via
+// errors.As; the controller never re-derives the outcome from status codes or error text.
 type Client interface {
-	// GetBuildInfo re-gets the latest BuildInfo (reconcile entry, E-10).
+	// GetBuildInfo re-gets the latest BuildInfo at reconcile entry.
 	GetBuildInfo(ctx context.Context, namespace, name string) (*ebsv1.BuildInfo, error)
-	// UpdateBuildInfoStatus writes BuildInfo.status via /status with the
-	// object's resourceVersion as an optimistic lock.
+	// UpdateBuildInfoStatus writes BuildInfo.status via /status with the object's resourceVersion as an optimistic lock.
 	UpdateBuildInfoStatus(ctx context.Context, obj *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
 
-	// CreateJob creates a Job (naming/label contract 15.3.1). Unknown
-	// outcomes are confirmed by GET on the deterministic Job name (10.3/E-11).
+	// CreateJob creates a Job. Unknown outcomes are confirmed by GET on its deterministic name.
 	CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
 	GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
 	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
 	ListJobs(ctx context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error)
 
-	// GetBuild is read-only (G-01: Builds are never mutated here).
+	// GetBuild reads the parent Build without modifying it.
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
@@ -95,8 +84,8 @@ type Client interface {
 	GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
 	// GetBuildResourceRules reads the cluster-wide default resource table.
 	GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error)
-	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers
-	// must not refetch it per Job, or use it to mutate a created Job (E-26).
+	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not refetch it per Job or use it
+	// to mutate a created Job.
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 
@@ -105,16 +94,20 @@ func newAPIClient(client SharedClient) Client { return &apiClient{client: client
 
 type apiClient struct{ client SharedClient }
 
-func (c *apiClient) AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
+func (c *apiClient) AbortJob(
+	ctx context.Context,
+	project, name string,
+	uid types.UID,
+	reason string,
+) (*ebsv1.Job, error) {
 	return c.client.AbortJob(ctx, project, name, uid, reason)
 }
 
 var _ Client = (*apiClient)(nil)
 
-// contractError reports a request or response contract violation: invalid
-// client input, or a server response that does not match the requested
-// resource identity. Retrying cannot fix it, so read paths classify it as a
-// permanent error instead of entering the retry backoff.
+// contractError reports a request or response contract violation: invalid client input, or a server response that does
+// not match the requested resource identity. Retrying cannot fix it, so read paths classify it as a permanent error
+// instead of entering the retry backoff.
 type contractError struct{ err error }
 
 func (e contractError) Error() string { return e.err.Error() }
@@ -134,7 +127,8 @@ func (c *apiClient) GetBuildInfo(ctx context.Context, namespace, name string) (*
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.BuildInfo)
-	if !ok || value == nil || value.Name != name || value.Namespace != namespace || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != name || value.Namespace != namespace || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected BuildInfo response for %s/%s: %T", namespace, name, obj)
 	}
 	return value, nil
@@ -149,8 +143,13 @@ func (c *apiClient) UpdateBuildInfoStatus(ctx context.Context, obj *ebsv1.BuildI
 		return nil, err
 	}
 	value, ok := updated.(*ebsv1.BuildInfo)
-	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace || value.ResourceVersion == "" {
-		return nil, unknownWrite("update-status", source.BuildInfosGVR, fmt.Errorf("unexpected BuildInfo status response: %T", updated))
+	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace ||
+		value.ResourceVersion == "" {
+		return nil, unknownWrite(
+			"update-status",
+			source.BuildInfosGVR,
+			fmt.Errorf("unexpected BuildInfo status response: %T", updated),
+		)
 	}
 	return value, nil
 }
@@ -164,7 +163,8 @@ func (c *apiClient) CreateJob(ctx context.Context, project string, obj *ebsv1.Jo
 		return nil, err
 	}
 	value, ok := created.(*ebsv1.Job)
-	if !ok || value == nil || value.Name != obj.Name || value.Namespace != obj.Namespace || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != obj.Name || value.Namespace != obj.Namespace || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, unknownWrite("create", source.JobsGVR, fmt.Errorf("unexpected Job create response: %T", created))
 	}
 	return value, nil
@@ -179,7 +179,8 @@ func (c *apiClient) GetJob(ctx context.Context, project, name string) (*ebsv1.Jo
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Job)
-	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected Job response for %s/%s: %T", project, name, obj)
 	}
 	return value, nil
@@ -222,7 +223,8 @@ func (c *apiClient) GetBuild(ctx context.Context, project, name string) (*ebsv1.
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Build)
-	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected Build response for %s/%s: %T", project, name, obj)
 	}
 	return value, nil
@@ -237,7 +239,8 @@ func (c *apiClient) GetRpmRepo(ctx context.Context, project, name string) (*ebsv
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.RpmRepo)
-	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected RpmRepo response for %s/%s: %T", project, name, obj)
 	}
 	return value, nil
@@ -252,7 +255,8 @@ func (c *apiClient) GetSnapshot(ctx context.Context, project, name string) (*ebs
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Snapshot)
-	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected Snapshot response for %s/%s: %T", project, name, obj)
 	}
 	return value, nil
@@ -267,7 +271,8 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Project)
-	if !ok || value == nil || value.Name != project || value.Namespace != "" || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != project || value.Namespace != "" || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected Project response for %s: %T", project, obj)
 	}
 	return value, nil
@@ -282,7 +287,8 @@ func (c *apiClient) GetScript(ctx context.Context, name string) (*ebsv1.Script, 
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Script)
-	if !ok || value == nil || value.Name != name || value.Namespace != "" || value.UID == "" || value.ResourceVersion == "" {
+	if !ok || value == nil || value.Name != name || value.Namespace != "" || value.UID == "" ||
+		value.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected Script response for %s: %T", name, obj)
 	}
 	return value, nil
@@ -294,7 +300,9 @@ func (c *apiClient) GetBuildResourceRules(ctx context.Context) (*buildResourceRu
 		return nil, err
 	}
 	config, ok := obj.(*ebsv1.Config)
-	if !ok || config == nil || config.Name != ebsv1.BuildResourceConfigName || config.Namespace != "" || config.UID == "" || config.ResourceVersion == "" {
+	if !ok || config == nil || config.Name != ebsv1.BuildResourceConfigName || config.Namespace != "" ||
+		config.UID == "" ||
+		config.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected build-resource Config response: %T", obj)
 	}
 	var content ebsv1.BuildResourceContent
@@ -386,9 +394,13 @@ func (c *apiClient) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTarg
 	return conf, nil
 }
 
-// readGet performs a Get with the fixed in-process retry for transient
-// failures (network/timeout/5xx) and normalizes 404 to ErrNotFound.
-func (c *apiClient) readGet(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (runtime.Object, error) {
+// readGet performs a Get with the fixed in-process retry for transient failures (network/timeout/5xx) and normalizes
+// 404 to ErrNotFound.
+func (c *apiClient) readGet(
+	ctx context.Context,
+	gvr schema.GroupVersionResource,
+	namespace, name string,
+) (runtime.Object, error) {
 	var obj runtime.Object
 	var err error
 	for attempt := 0; ; attempt++ {
@@ -405,9 +417,14 @@ func (c *apiClient) readGet(ctx context.Context, gvr schema.GroupVersionResource
 	}
 }
 
-// readListProjectPage performs a project-scoped list page fetch with the same
-// fixed in-process retry for transient failures.
-func (c *apiClient) readListProjectPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
+// readListProjectPage performs a project-scoped list page fetch with the same fixed in-process retry for transient
+// failures.
+func (c *apiClient) readListProjectPage(
+	ctx context.Context,
+	gvr schema.GroupVersionResource,
+	project string,
+	opts metav1.ListOptions,
+) (source.ListPage, error) {
 	var page source.ListPage
 	var err error
 	for attempt := 0; ; attempt++ {
@@ -421,9 +438,8 @@ func (c *apiClient) readListProjectPage(ctx context.Context, gvr schema.GroupVer
 	}
 }
 
-// isTransientReadError reports whether a read failure is transient and worth
-// an in-process retry: transport-level errors (no API status attached) plus
-// server-side timeouts and 5xx. 404 and other 4xx are deterministic.
+// isTransientReadError reports whether a read failure is transient and worth an in-process retry: transport-level
+// errors (no API status attached) plus server-side timeouts and 5xx. 404 and other 4xx are deterministic.
 func isTransientReadError(err error) bool {
 	var status apierrors.APIStatus
 	if !errors.As(err, &status) {
@@ -433,9 +449,19 @@ func isTransientReadError(err error) bool {
 }
 
 func notSentWrite(operation string, gvr schema.GroupVersionResource, err error) error {
-	return &apiserver.WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: apiserver.WriteNotSent, Err: err}
+	return &apiserver.WriteError{
+		Operation: operation,
+		Resource:  gvr.GroupResource(),
+		Outcome:   apiserver.WriteNotSent,
+		Err:       err,
+	}
 }
 
 func unknownWrite(operation string, gvr schema.GroupVersionResource, err error) error {
-	return &apiserver.WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: apiserver.WriteUnknown, Err: err}
+	return &apiserver.WriteError{
+		Operation: operation,
+		Resource:  gvr.GroupResource(),
+		Outcome:   apiserver.WriteUnknown,
+		Err:       err,
+	}
 }

@@ -12,8 +12,8 @@ func TestVRCompare(t *testing.T) {
 		x, y   string
 		result int // -1 x<y, 0 equal, 1 x>y
 	}{
-		// Release preprocessing: release participates only when both sides
-		// have one, so 1.0-2 equals 1.0 (declared deviation).
+		// Release preprocessing: release participates only when both sides have one, so 1.0-2 equals 1.0 (declared
+		// deviation).
 		{"release one-sided", "1.0-2", "1.0", 0},
 		{"release one-sided reversed", "1.0", "1.0-2", 0},
 		{"release both-sided", "1.0-2", "1.0-3", -1},
@@ -39,8 +39,8 @@ func TestVRCompare(t *testing.T) {
 		{"equal", "2:1.0-3", "2:1.0-3", 0},
 		// Empty values after padding still compare positionally.
 		{"empty vs version", "", "1.0", -1},
-		// Empty segments are preserved: malformed versions never collapse
-		// into well-formed ones ("" sorts below any digit segment).
+		// Empty segments are preserved: malformed versions never collapse into well-formed ones ("" sorts below any digit
+		// segment).
 		{"double dot not equal", "1..2", "1.2", -1},
 		{"double dot reversed", "1.2", "1..2", 1},
 		{"double dot equal", "1..2", "1..2", 0},

@@ -9,8 +9,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// DcgNode mirrors ebsv1.DcgNodeState. Version defaults to "NA"
-// when empty (normalized by ToState).
+// DcgNode mirrors ebsv1.DcgNodeState. Version defaults to "NA" when empty (normalized by ToState).
 type DcgNode struct {
 	Version        string
 	OutDep         []string
@@ -22,18 +21,16 @@ type DcgNode struct {
 // InDegree returns the merged build/install in-degree.
 func (n *DcgNode) InDegree() int { return len(n.InDep) + len(n.InstallInDep) }
 
-// DcgDict is the in-memory spec dependency graph. cycleNodes is
-// derived state: a pure function of the edge set, recomputed lazily via
-// ensureCycleDetection and after runtime edge appends; bootstrap break points
-// are persisted on the nodes (BootstrapBreak) and never re-selected on load.
+// DcgDict is the in-memory spec dependency graph. cycleNodes is derived state: a pure function of the edge set,
+// recomputed lazily via ensureCycleDetection and after runtime edge appends; bootstrap break points are persisted on
+// the nodes (BootstrapBreak) and never re-selected on load.
 type DcgDict struct {
 	nodes      map[string]*DcgNode
 	cycleNodes map[string]struct{}
 }
 
-// NewDcgDict builds the initial graph: runs SCC decomposition and selects
-// bootstrap break points by iterative peeling, marking them on the
-// nodes. nodes is adopted, not copied.
+// NewDcgDict builds the initial graph: runs SCC decomposition and selects bootstrap break points by iterative peeling,
+// marking them on the nodes. nodes is adopted, not copied.
 func NewDcgDict(nodes map[string]*DcgNode) *DcgDict {
 	d := &DcgDict{nodes: nodes}
 	for _, pick := range d.selectBreaks(nil) {
@@ -43,9 +40,8 @@ func NewDcgDict(nodes map[string]*DcgNode) *DcgDict {
 	return d
 }
 
-// DcgDictFromState loads a persisted graph. cycleNodes is recomputed
-// lazily; bootstrap break points are read from the persisted marks and never
-// re-selected.
+// DcgDictFromState loads a persisted graph. cycleNodes is recomputed lazily; bootstrap break points are read from the
+// persisted marks and never re-selected.
 func DcgDictFromState(state map[string]ebsv1.DcgNodeState) *DcgDict {
 	nodes := make(map[string]*DcgNode, len(state))
 	for name, st := range state {
@@ -79,8 +75,7 @@ func (d *DcgDict) ToState() map[string]ebsv1.DcgNodeState {
 	return out
 }
 
-// Clone deep-copies the graph so edge appends never touch the live graph
-// before persistence.
+// Clone deep-copies the graph so edge appends never touch the live graph before persistence.
 func (d *DcgDict) Clone() *DcgDict {
 	nodes := make(map[string]*DcgNode, len(d.nodes))
 	for name, n := range d.nodes {
@@ -119,8 +114,7 @@ func (d *DcgDict) IsCycleNode(name string) bool {
 	return ok
 }
 
-// GetBootstrapBreaks returns the break-point set: deduplicated, dictionary
-// ordered, read from the persisted node marks.
+// GetBootstrapBreaks returns the break-point set: deduplicated, dictionary ordered, read from the persisted node marks.
 func (d *DcgDict) GetBootstrapBreaks() []string {
 	var breaks []string
 	for name, n := range d.nodes {
@@ -132,8 +126,7 @@ func (d *DcgDict) GetBootstrapBreaks() []string {
 	return breaks
 }
 
-// DispatchRequirements returns the required dispatch count per spec: 2 for
-// cycle nodes, 1 for normal nodes.
+// DispatchRequirements returns the required dispatch count per spec: 2 for cycle nodes, 1 for normal nodes.
 func (d *DcgDict) DispatchRequirements() map[string]int64 {
 	d.ensureCycleDetection()
 	out := make(map[string]int64, len(d.nodes))
@@ -147,11 +140,9 @@ func (d *DcgDict) DispatchRequirements() map[string]int64 {
 	return out
 }
 
-// SortedNodes returns a deterministic topological-style traversal order used by
-// advanceDownstream: Kahn over the merged build/install graph,
-// dictionary-smallest first among ready nodes; on cycle remainder the
-// dictionary-smallest unvisited node is force-emitted. Upstreams precede
-// downstreams wherever the edge set allows.
+// SortedNodes returns a deterministic topological-style traversal order used by advanceDownstream: Kahn over the merged
+// build/install graph, dictionary-smallest first among ready nodes; on cycle remainder the dictionary-smallest
+// unvisited node is force-emitted. Upstreams precede downstreams wherever the edge set allows.
 func (d *DcgDict) SortedNodes() []string {
 	indeg := make(map[string]int, len(d.nodes))
 	ready := &stringHeap{}
@@ -213,11 +204,9 @@ func (d *DcgDict) AddInstallEdge(spec, provider string, vc ebsv1.VersionConst) b
 	return true
 }
 
-// RefreshCyclesAndBreaks recomputes cycles on the (candidate) graph after
-// runtime edge appends and appends break points for newly appeared cycles
-// Existing BootstrapBreak marks are treated as already removed for
-// the peeling computation and are never re-selected. Returns the newly
-// added break points (dictionary ordered).
+// RefreshCyclesAndBreaks recomputes cycles on the (candidate) graph after runtime edge appends and appends break points
+// for newly appeared cycles Existing BootstrapBreak marks are treated as already removed for the peeling computation
+// and are never re-selected. Returns the newly added break points (dictionary ordered).
 func (d *DcgDict) RefreshCyclesAndBreaks() []string {
 	preRemoved := map[string]bool{}
 	for name, n := range d.nodes {
@@ -234,16 +223,17 @@ func (d *DcgDict) RefreshCyclesAndBreaks() []string {
 	return picks
 }
 
-// BuildDcgNodes constructs the node map of the initial graph.
-// Build edges come from buildRequires (buildRemoves excluded), install edges
-// from the merged install dependency set (explicit SpecDepend.requires ∪
-// RpmRepo-layer rpm requires, intersection merge). Both run the same layered
-// selection chain; only providers inside the build set create edges. A build
-// self-provide stays as a self-loop (broken by the peel pick); an
-// install self-provide is filtered (same-spec subpackage dependencies are
-// self-consistent within one build). OutDep is a multiset aligned with the
+// BuildDcgNodes constructs the node map of the initial graph. Build edges come from buildRequires (buildRemoves
+// excluded), install edges from the merged install dependency set (explicit SpecDepend.requires ∪ RpmRepo-layer rpm
+// requires, intersection merge). Both run the same layered selection chain; only providers inside the build set create
+// edges. A build self-provide stays as a self-loop (broken by the peel pick); an install self-provide is filtered
+// (same-spec subpackage dependencies are self-consistent within one build). OutDep is a multiset aligned with the
 // merged in-degree: one entry per InDep/InstallInDep entry.
-func BuildDcgNodes(buildSet map[string]specparse.SpecDepend, sources *rpmver.RpmMetaSources, prefer []string) map[string]*DcgNode {
+func BuildDcgNodes(
+	buildSet map[string]specparse.SpecDepend,
+	sources *rpmver.RpmMetaSources,
+	prefer []string,
+) map[string]*DcgNode {
 	names := make([]string, 0, len(buildSet))
 	for name := range buildSet {
 		names = append(names, name)
@@ -308,8 +298,8 @@ func BuildDcgNodes(buildSet map[string]specparse.SpecDepend, sources *rpmver.Rpm
 	return nodes
 }
 
-// sortedConstKeys returns the constraint-map keys in dictionary order,
-// excluding keys present in exclude (buildRemoves; nil for no exclusions).
+// sortedConstKeys returns the constraint-map keys in dictionary order, excluding keys present in exclude (buildRemoves;
+// nil for no exclusions).
 func sortedConstKeys(constraints map[string]ebsv1.VersionConst, exclude map[string]ebsv1.VersionConst) []string {
 	keys := make([]string, 0, len(constraints))
 	for key := range constraints {
@@ -323,9 +313,8 @@ func sortedConstKeys(constraints map[string]ebsv1.VersionConst, exclude map[stri
 }
 
 // mergedInstallDeps computes a spec's install dependency set:
-// the explicit SpecDepend.requires ∪ the spec's own RpmRepo-layer rpm
-// requires. Same-name entries merge per field so both constraints apply; a
-// field conflict resolves to the RpmMeta.requires value.
+// the explicit SpecDepend.requires ∪ the spec's own RpmRepo-layer rpm requires. Same-name entries merge per field so
+// both constraints apply; a field conflict resolves to the RpmMeta.requires value.
 func mergedInstallDeps(explicit, rpm map[string]ebsv1.VersionConst) map[string]ebsv1.VersionConst {
 	if len(explicit) == 0 && len(rpm) == 0 {
 		return nil
@@ -344,10 +333,8 @@ func mergedInstallDeps(explicit, rpm map[string]ebsv1.VersionConst) map[string]e
 	return out
 }
 
-// intersectConst merges two constraints on the same dependency name field by
-// field: a field present in only one side is kept (both constraints apply,
-// the intersection tightens); a conflicting field resolves to the
-// RpmMeta.requires value.
+// intersectConst merges two constraints on the same dependency name field by field: a field present in only one side is
+// kept (both constraints apply, the intersection tightens); a conflicting field resolves to the RpmMeta.requires value.
 func intersectConst(explicit, rpm ebsv1.VersionConst) ebsv1.VersionConst {
 	merge := func(x, y string) string {
 		if x == "" {
@@ -396,9 +383,8 @@ func (d *DcgDict) refreshCycleNodes() {
 	d.cycleNodes = cycle
 }
 
-// sccs returns the strongly connected components of the merged build/install
-// graph via Kosaraju, each component's members dictionary
-// ordered, components ordered by their smallest member name.
+// sccs returns the strongly connected components of the merged build/install graph via Kosaraju, each component's
+// members dictionary ordered, components ordered by their smallest member name.
 func (d *DcgDict) sccs() [][]string {
 	names := d.Names()
 	succ := make(map[string][]string, len(d.nodes))
@@ -475,14 +461,11 @@ func (d *DcgDict) sccs() [][]string {
 	return sccs
 }
 
-// selectBreaks runs iterative-peeling break-point selection. SCCs are
-// processed in order of their smallest member name; within an
-// SCC, incremental Kahn over intra-SCC edges advances to deadlock, then the
-// unprocessed node with the largest outDep (tie: dictionary-largest spec name)
-// is picked, and peeling continues until the whole SCC is processed.
-// preRemoved marks nodes treated as already peeled (existing break points on
-// runtime refresh); they are never picked again. Bookkeeping only: the
-// actual graph is not modified.
+// selectBreaks runs iterative-peeling break-point selection. SCCs are processed in order of their smallest member name;
+// within an SCC, incremental Kahn over intra-SCC edges advances to deadlock, then the unprocessed node with the largest
+// outDep (tie: dictionary-largest spec name) is picked, and peeling continues until the whole SCC is processed.
+// preRemoved marks nodes treated as already peeled (existing break points on runtime refresh); they are never picked
+// again. Bookkeeping only: the actual graph is not modified.
 func (d *DcgDict) selectBreaks(preRemoved map[string]bool) []string {
 	var picks []string
 	for _, members := range d.sccs() {
@@ -536,9 +519,8 @@ func (d *DcgDict) peelSCC(members []string, preRemoved map[string]bool) []string
 		if ready.Len() > 0 {
 			name = heap.Pop(ready).(string)
 		} else {
-			// Deadlock: pick the unprocessed node with the largest outDep;
-			// tie broken by the dictionary-largest spec name. members is
-			// dictionary ordered, so the scan is deterministic.
+			// Deadlock: pick the unprocessed node with the largest outDep; tie broken by the dictionary-largest spec name.
+			// members is dictionary ordered, so the scan is deterministic.
 			best := ""
 			for _, candidate := range members {
 				if processed[candidate] {

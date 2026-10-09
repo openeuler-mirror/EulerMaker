@@ -1,22 +1,12 @@
-﻿package buildinfo
+package buildinfo
 
 import (
 	"container/list"
 	"sync"
 )
 
-// specdcache.go implements Cache.specFileCache (design 15.11.2): a global
-// two-level-key (commitId -> specFileName) LRU for raw spec file contents,
-// shared across BuildInfo/Snapshot/Project and never invalidated on BuildInfo
-// terminal — entries age out only by LRU capacity eviction
-// (--specfile-cache-size, default 10000). Reads and writes both refresh
-// entry hotness.
-//
-// Cache.specDependsCache needs no dedicated type: it reuses the shared
-// per-BuildInfo lifecycle mechanism in cache.go
-// (perBuildInfoCache[map[string]specparse.SpecDepend], design 15.11.1).
-
-// specFileCache is a standard LRU keyed by commitId + specFileName.
+// specFileCache is a global LRU of raw spec contents keyed by commit ID and filename. Entries survive BuildInfo
+// completion and expire only by capacity eviction; reads and writes refresh recency.
 type specFileCache struct {
 	mu    sync.Mutex
 	cap   int
@@ -56,8 +46,7 @@ func (c *specFileCache) Get(commitID, fileName string) (string, bool) {
 	return el.Value.(*specFileEntry).content, true
 }
 
-// Add inserts or refreshes an entry, evicting the least recently used entries
-// beyond capacity.
+// Add inserts or refreshes an entry, evicting the least recently used entries beyond capacity.
 func (c *specFileCache) Add(commitID, fileName, content string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

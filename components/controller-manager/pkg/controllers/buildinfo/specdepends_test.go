@@ -51,12 +51,19 @@ func (g *blockingRepoGitServer) ExecCommand(ctx context.Context, originURL, comm
 
 func TestAssembleSpecDependsBoundsParallelRepositories(t *testing.T) {
 	c, _, _, _ := newTestController(t)
-	git := &blockingRepoGitServer{entered: make(chan struct{}, maxConcurrentRepoParses+1), release: make(chan struct{}), specCount: 1}
+	git := &blockingRepoGitServer{
+		entered:   make(chan struct{}, maxConcurrentRepoParses+1),
+		release:   make(chan struct{}),
+		specCount: 1,
+	}
 	c.gitServer = git
 	snapshot := &ebsv1.Snapshot{Status: ebsv1.SnapshotStatus{PackageRepoStatuses: map[string]ebsv1.PackageRepoStatus{}}}
 	for i := 0; i <= maxConcurrentRepoParses; i++ {
 		name := fmt.Sprintf("repo%02d", i)
-		snapshot.Spec.PackageRepos = append(snapshot.Spec.PackageRepos, ebsv1.PackageRepo{Name: name, URL: "https://example.test/" + name})
+		snapshot.Spec.PackageRepos = append(
+			snapshot.Spec.PackageRepos,
+			ebsv1.PackageRepo{Name: name, URL: "https://example.test/" + name},
+		)
 		snapshot.Status.PackageRepoStatuses[name] = ebsv1.PackageRepoStatus{CommitID: fmt.Sprintf("commit%02d", i)}
 	}
 	round := &reconcileRound{key: "project/build", current: &ebsv1.BuildInfo{}, build: &ebsv1.Build{}}

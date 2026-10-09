@@ -17,11 +17,10 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// fakeClient is the in-package fake for the typed apiserver Client (design
-// 4.3). It keeps objects in memory maps and reproduces the server behaviors
-// the controller relies on: NotFound, 409 Conflict on stale resourceVersion,
-// 409 AlreadyExists on duplicate CreateJob, resourceVersion increments,
-// /status writes preserving the old spec, WriteError three-outcome injection
+// fakeClient is the in-package fake for the typed apiserver Client. It keeps
+// objects in memory and reproduces server behavior the controller relies on:
+// NotFound, 409 Conflict on stale resourceVersion, 409 AlreadyExists on duplicate CreateJob, resourceVersion
+// increments, /status writes preserving the old spec, WriteError three-outcome injection
 // (Unknown may optionally persist the write, so confirmation reads return the
 // actual persisted state), and label-filtered ListJobs.
 type fakeClient struct {
@@ -54,8 +53,8 @@ type fakeClient struct {
 type injectedWrite struct {
 	outcome    clientpkg.WriteOutcome
 	statusCode int
-	// persist applies the write to storage before returning the injected
-	// error (used to simulate an Unknown outcome whose intent landed).
+	// persist applies the write to storage before returning the injected error (used to simulate an Unknown outcome whose
+	// intent landed).
 	persist bool
 	err     error
 }
@@ -74,7 +73,14 @@ func newFakeClient() *fakeClient {
 		builds:     make(map[string]*ebsv1.Build),
 		projects:   make(map[string]*ebsv1.Project),
 		scripts: map[string]*ebsv1.Script{
-			"rpmbuild": {ObjectMeta: metav1.ObjectMeta{Name: "rpmbuild", UID: "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5", ResourceVersion: "1"}, Spec: ebsv1.ScriptSpec{Content: "#!/bin/sh\n"}},
+			"rpmbuild": {
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            "rpmbuild",
+					UID:             "61304b92-72cf-4a41-8bf7-8e0a9d14f6a5",
+					ResourceVersion: "1",
+				},
+				Spec: ebsv1.ScriptSpec{Content: "#!/bin/sh\n"},
+			},
 		},
 		snapshots:          make(map[string]*ebsv1.Snapshot),
 		rpmrepos:           make(map[string]*ebsv1.RpmRepo),
@@ -85,18 +91,17 @@ func newFakeClient() *fakeClient {
 	}
 }
 
-// InjectWrite makes the next write with the given operation ("update-status"
-// or "create") return a WriteError with the injected outcome instead of
-// performing the write. For Unknown, persist controls whether the write lands
-// in storage anyway, so a follow-up confirmation read observes the intent.
+// InjectWrite makes the next write with the given operation ("update-status" or "create") return a WriteError with the
+// injected outcome instead of performing the write. For Unknown, persist controls whether the write lands in storage
+// anyway, so a follow-up confirmation read observes the intent.
 func (f *fakeClient) InjectWrite(operation string, outcome clientpkg.WriteOutcome, statusCode int, persist bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.injectedWrites[operation] = &injectedWrite{outcome: outcome, statusCode: statusCode, persist: persist}
 }
 
-// InjectRead makes the next times reads of the given resource kind ("buildinfos",
-// "jobs", "rpmrepos", ...) return err instead of hitting storage.
+// InjectRead makes the next times reads of the given resource kind ("buildinfos", "jobs", "rpmrepos", ...) return err
+// instead of hitting storage.
 func (f *fakeClient) InjectRead(kind string, times int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -110,15 +115,14 @@ func (f *fakeClient) SetBuildTargetContent(conf *ebsv1.BuildTargetContent) {
 	f.buildTargetContent = conf
 }
 
-// FailBuildTargetContent makes GetBuildTargetContent return a query failure (E-26).
+// FailBuildTargetContent makes GetBuildTargetContent return a query failure.
 func (f *fakeClient) FailBuildTargetContent() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.buildTargetFailed = true
 }
 
-// Seed helpers pre-populate storage with server-assigned metadata and return
-// the stored copy.
+// Seed helpers pre-populate storage with server-assigned metadata and return the stored copy.
 
 func (f *fakeClient) SeedBuildInfo(value *ebsv1.BuildInfo) *ebsv1.BuildInfo {
 	f.mu.Lock()
@@ -285,8 +289,8 @@ func (f *fakeClient) UpdateBuildInfoStatus(_ context.Context, obj *ebsv1.BuildIn
 	return stored.DeepCopy(), nil
 }
 
-// applyStatusLocked replaces only the status of the stored BuildInfo (the
-// /status subresource keeps the old spec) and bumps resourceVersion.
+// applyStatusLocked replaces only the status of the stored BuildInfo (the /status subresource keeps the old spec) and
+// bumps resourceVersion.
 func (f *fakeClient) applyStatusLocked(stored *ebsv1.BuildInfo, intent *ebsv1.BuildInfo) {
 	stored.Status = intent.DeepCopy().Status
 	stored.ResourceVersion = f.nextRVLocked()
@@ -326,7 +330,12 @@ func (f *fakeClient) createJobLocked(key string, obj *ebsv1.Job) *ebsv1.Job {
 	return stored.DeepCopy()
 }
 
-func (f *fakeClient) AbortJob(_ context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
+func (f *fakeClient) AbortJob(
+	_ context.Context,
+	project, name string,
+	uid types.UID,
+	reason string,
+) (*ebsv1.Job, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.abortCalls = append(f.abortCalls, name)
@@ -481,11 +490,22 @@ func (f *fakeClient) GetBuildTargetContent(_ context.Context) (*ebsv1.BuildTarge
 }
 
 func notSentFake(operation, resource string, err error) error {
-	return &clientpkg.WriteError{Operation: operation, Resource: groupResource(resource), Outcome: clientpkg.WriteNotSent, Err: err}
+	return &clientpkg.WriteError{
+		Operation: operation,
+		Resource:  groupResource(resource),
+		Outcome:   clientpkg.WriteNotSent,
+		Err:       err,
+	}
 }
 
 func rejectedFake(operation, resource string, statusCode int, err error) error {
-	return &clientpkg.WriteError{Operation: operation, Resource: groupResource(resource), Outcome: clientpkg.WriteRejected, StatusCode: statusCode, Err: err}
+	return &clientpkg.WriteError{
+		Operation:  operation,
+		Resource:   groupResource(resource),
+		Outcome:    clientpkg.WriteRejected,
+		StatusCode: statusCode,
+		Err:        err,
+	}
 }
 
 func injectedFake(operation, resource string, injected *injectedWrite) error {

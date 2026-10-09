@@ -59,7 +59,10 @@ Provides: demo-lib = 1.0
 		t.Fatalf("Provides = %v", depend.Provides)
 	}
 	// No ExclusiveArch declared: platform default set.
-	if !reflect.DeepEqual(depend.ExclusiveArch, []string{"x86_64", "aarch64", "loongarch64", "riscv64", "ppc64le", "sw_64"}) {
+	if !reflect.DeepEqual(
+		depend.ExclusiveArch,
+		[]string{"x86_64", "aarch64", "loongarch64", "riscv64", "ppc64le", "sw_64"},
+	) {
 		t.Fatalf("ExclusiveArch = %v", depend.ExclusiveArch)
 	}
 }
@@ -104,8 +107,7 @@ Requires: literal %{undefined} bar
 	if got := depend.Requires["foo"]; got.GE != "1.2" {
 		t.Fatalf("Requires[foo] = %+v", got)
 	}
-	// Undefined plain macro stays literal, then the tokenizer splits on
-	// whitespace into separate names.
+	// Undefined plain macro stays literal, then the tokenizer splits on whitespace into separate names.
 	for _, key := range []string{"literal", "%{undefined}", "bar"} {
 		if _, ok := depend.Requires[key]; !ok {
 			t.Fatalf("literal macro key %q missing: %v", key, depend.Requires)
@@ -114,10 +116,15 @@ Requires: literal %{undefined} bar
 }
 
 func TestExpandedTextUsesBuildPayloadMacros(t *testing.T) {
-	depend, err := parseSpec("Name: %{_vendor}openEuler-indexhtml\nVersion: %{version}\n", "indexhtml.spec", "indexhtml", []string{
-		"%_vendor test-",
-		"%define version 1.0",
-	})
+	depend, err := parseSpec(
+		"Name: %{_vendor}openEuler-indexhtml\nVersion: %{version}\n",
+		"indexhtml.spec",
+		"indexhtml",
+		[]string{
+			"%_vendor test-",
+			"%define version 1.0",
+		},
+	)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -127,7 +134,12 @@ func TestExpandedTextUsesBuildPayloadMacros(t *testing.T) {
 }
 
 func TestSpecMacroOverridesBuildPayloadMacro(t *testing.T) {
-	depend, err := parseSpec("%global _vendor spec-\nName: %{_vendor}openEuler-indexhtml\nVersion: 1.0\n", "indexhtml.spec", "indexhtml", []string{"%_vendor payload-"})
+	depend, err := parseSpec(
+		"%global _vendor spec-\nName: %{_vendor}openEuler-indexhtml\nVersion: 1.0\n",
+		"indexhtml.spec",
+		"indexhtml",
+		[]string{"%_vendor payload-"},
+	)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -223,8 +235,7 @@ Requires: multi >= 2.0
 func TestDanglingOperatorDoesNotLeakToNextLine(t *testing.T) {
 	// A line-trailing bare operator (macro expansion can legitimately empty
 	// the version, e.g. "glibc => %{?ver}") must be discarded at end of line:
-	// the dependency keeps its bare constraint and the next line's first
-	// token is never consumed as its version.
+	// the dependency keeps its bare constraint and the next line's first token is never consumed as its version.
 	depend := parseExpandedText(t, `
 Name: demo
 Version: 1.0
@@ -317,9 +328,8 @@ func TestExclusiveArchNormalize(t *testing.T) {
 }
 
 func TestExclusiveArchFullyExcludedFails(t *testing.T) {
-	// 16.3 invariant "归一后列表恒非空": a whitelist fully excluded by
-	// excludeArch means no buildable architecture, and an empty list would
-	// invert archSupported's empty=allow-all semantics — parseFailed instead.
+	// A whitelist fully excluded by excludeArch means no buildable architecture, and an empty list would invert
+	// archSupported's empty=allow-all semantics — parseFailed instead.
 	_, err := parseSpec("Name: demo\nVersion: 1.0\nExclusiveArch: x86_64\nExcludeArch: x86\n", "x.spec", "repo", nil)
 	if err == nil || !strings.Contains(err.Error(), "exclusiveArch") {
 		t.Fatalf("error = %v, want a parseFailed mentioning exclusiveArch", err)
@@ -373,7 +383,13 @@ func shellQuote(s string) string {
 func TestRpmspecOutputUsed(t *testing.T) {
 	// The stub echoes back an expanded spec with macros already resolved.
 	argvFile := stubRpmspec(t, "Name: expanded\nVersion: 9.9\n")
-	depend, err := Parse("Name: %{would_not_expand}\nVersion: 0.1\n", "x.spec", "repo", "aarch64", []string{"%define foo bar"})
+	depend, err := Parse(
+		"Name: %{would_not_expand}\nVersion: 0.1\n",
+		"x.spec",
+		"repo",
+		"aarch64",
+		[]string{"%define foo bar"},
+	)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -385,14 +401,16 @@ func TestRpmspecOutputUsed(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := string(argv)
-	if !strings.Contains(joined, "--target=aarch64") || !strings.Contains(joined, "-P") || !strings.Contains(joined, "--load=") {
+	if !strings.Contains(joined, "--target=aarch64") || !strings.Contains(joined, "-P") ||
+		!strings.Contains(joined, "--load=") {
 		t.Fatalf("rpmspec argv = %q", joined)
 	}
 }
 
 func TestRpmspecEmptyOutputFails(t *testing.T) {
 	stubRpmspec(t, "")
-	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil || !strings.Contains(err.Error(), "empty output") {
+	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil ||
+		!strings.Contains(err.Error(), "empty output") {
 		t.Fatalf("expected empty output error, got %v", err)
 	}
 }
@@ -409,12 +427,14 @@ func TestRpmspecMissingFails(t *testing.T) {
 func TestRpmspecExitFailureDoesNotUseStdout(t *testing.T) {
 	old := rpmspecCommand
 	script := filepath.Join(t.TempDir(), "rpmspec-stub")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'Name: expanded\\nVersion: 9.9\\n'\necho failed >&2\nexit 1\n"), 0o755); err != nil {
+	stub := "#!/bin/sh\nprintf 'Name: expanded\\nVersion: 9.9\\n'\necho failed >&2\nexit 1\n"
+	if err := os.WriteFile(script, []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rpmspecCommand = script
 	t.Cleanup(func() { rpmspecCommand = old })
-	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil || !strings.Contains(err.Error(), "failed") {
+	if _, err := Parse("Name: raw\nVersion: 1.0\n", "x.spec", "repo", "x86_64", nil); err == nil ||
+		!strings.Contains(err.Error(), "failed") {
 		t.Fatalf("expected rpmspec exit error, got %v", err)
 	}
 }
@@ -438,13 +458,20 @@ printf 'Name: demo\nVersion: 1\n'
 	rpmspecCommand = script
 	t.Cleanup(func() { rpmspecCommand = old })
 	calls := 0
-	result, err := ParseWithSources("Name: demo\nVersion: 1\n", "demo.spec", "demo", "x86_64", nil, func(name string) (string, error) {
-		calls++
-		if name != "LanguageList" {
-			t.Fatalf("unexpected source %q", name)
-		}
-		return "en_US", nil
-	})
+	result, err := ParseWithSources(
+		"Name: demo\nVersion: 1\n",
+		"demo.spec",
+		"demo",
+		"x86_64",
+		nil,
+		func(name string) (string, error) {
+			calls++
+			if name != "LanguageList" {
+				t.Fatalf("unexpected source %q", name)
+			}
+			return "en_US", nil
+		},
+	)
 	if err != nil || result.SpecName != "demo" || calls != 1 {
 		t.Fatalf("result=%+v err=%v calls=%d", result, err, calls)
 	}
@@ -506,13 +533,16 @@ printf 'Name: demo\nVersion: 1\n'
 	}
 	rpmspecCommand = script
 	t.Cleanup(func() { rpmspecCommand = old })
-	spec := "Name: lodash\nSource0: source.tar.gz\nSource4: macros.ruby\nSource5: %{name}-modules.txt\n%{load:%{SOURCE4}}\n%{lua: io.open(rpm.expand(\"%SOURCE5\"))}\n"
+	spec := "Name: lodash\nSource0: source.tar.gz\nSource4: macros.ruby\n" +
+		"Source5: %{name}-modules.txt\n%{load:%{SOURCE4}}\n" +
+		"%{lua: io.open(rpm.expand(\"%SOURCE5\"))}\n"
 	var fetched []string
 	result, err := ParseWithSources(spec, "lodash.spec", "lodash", "x86_64", nil, func(name string) (string, error) {
 		fetched = append(fetched, name)
 		return "text", nil
 	})
-	if err != nil || result.SpecName != "demo" || !reflect.DeepEqual(fetched, []string{"lodash-modules.txt", "macros.ruby"}) {
+	if err != nil || result.SpecName != "demo" ||
+		!reflect.DeepEqual(fetched, []string{"lodash-modules.txt", "macros.ruby"}) {
 		t.Fatalf("result = %+v, err = %v, fetched = %v", result, err, fetched)
 	}
 }
@@ -521,7 +551,14 @@ func TestExplicitSourceFetchFailureIsClassified(t *testing.T) {
 	stubRpmspec(t, "Name: demo\nVersion: 1\n")
 	spec := "Name: demo\nSource4: macros.ruby\n%{load:%{SOURCE4}}\n"
 	want := errors.New("git temporarily unavailable")
-	_, err := ParseWithSources(spec, "demo.spec", "demo", "x86_64", nil, func(string) (string, error) { return "", want })
+	_, err := ParseWithSources(
+		spec,
+		"demo.spec",
+		"demo",
+		"x86_64",
+		nil,
+		func(string) (string, error) { return "", want },
+	)
 	var fetchErr *SourceFetchError
 	if !errors.As(err, &fetchErr) || !errors.Is(err, want) || fetchErr.Name != "macros.ruby" {
 		t.Fatalf("expected typed source fetch failure, got %v", err)
@@ -531,15 +568,23 @@ func TestExplicitSourceFetchFailureIsClassified(t *testing.T) {
 func TestParseDoesNotFetchOutsideIsolatedSources(t *testing.T) {
 	old := rpmspecCommand
 	script := filepath.Join(t.TempDir(), "rpmspec-stub")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'cannot open file /etc/passwd (No such file or directory)' >&2\nexit 1\n"), 0o755); err != nil {
+	stub := "#!/bin/sh\necho 'cannot open file /etc/passwd (No such file or directory)' >&2\nexit 1\n"
+	if err := os.WriteFile(script, []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rpmspecCommand = script
 	t.Cleanup(func() { rpmspecCommand = old })
-	_, err := ParseWithSources("Name: demo\nVersion: 1\n", "demo.spec", "demo", "x86_64", nil, func(name string) (string, error) {
-		t.Fatalf("unexpected fetch %q", name)
-		return "", nil
-	})
+	_, err := ParseWithSources(
+		"Name: demo\nVersion: 1\n",
+		"demo.spec",
+		"demo",
+		"x86_64",
+		nil,
+		func(name string) (string, error) {
+			t.Fatalf("unexpected fetch %q", name)
+			return "", nil
+		},
+	)
 	if err == nil {
 		t.Fatal("expected rpmspec failure")
 	}
@@ -561,12 +606,19 @@ exit 1
 	rpmspecCommand = script
 	t.Cleanup(func() { rpmspecCommand = old })
 	want := fmt.Errorf("git unavailable")
-	_, err := ParseWithSources("Name: demo\nVersion: 1\n", "demo.spec", "demo", "x86_64", nil, func(name string) (string, error) {
-		if name != "grub.macros" {
-			t.Fatalf("unexpected source %q", name)
-		}
-		return "", want
-	})
+	_, err := ParseWithSources(
+		"Name: demo\nVersion: 1\n",
+		"demo.spec",
+		"demo",
+		"x86_64",
+		nil,
+		func(name string) (string, error) {
+			if name != "grub.macros" {
+				t.Fatalf("unexpected source %q", name)
+			}
+			return "", want
+		},
+	)
 	var fetchErr *SourceFetchError
 	if !errors.As(err, &fetchErr) || !errors.Is(err, want) {
 		t.Fatalf("expected wrapped source fetch error, got %v", err)
@@ -589,9 +641,8 @@ func TestParseFailedDoesNotBlockSiblings(t *testing.T) {
 	}
 }
 
-// Mutually referencing macros never reach a fixed point and self-referencing
-// macros grow without bound; both must fail the spec quickly (bounded by
-// maxExpandRounds / maxExpandLength) instead of hanging or exhausting memory.
+// Mutually referencing macros never reach a fixed point and self-referencing macros grow without bound; both must fail
+// the spec quickly (bounded by maxExpandRounds / maxExpandLength) instead of hanging or exhausting memory.
 func TestMacroExpansionBounded(t *testing.T) {
 	cases := []struct {
 		name string

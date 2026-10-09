@@ -8,8 +8,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// ProviderSelection contains the selected provider, normalized RPM name, and
-// selection reason.
+// ProviderSelection contains the selected provider, normalized RPM name, and selection reason.
 type ProviderSelection struct {
 	Provider ProvideEntry
 	RPMName  string
@@ -24,9 +23,13 @@ const (
 	SelectionHighestVersion SelectionReason = "HighestVersion"
 )
 
-// FindProvider searches the RpmRepo layer first, then bootstrap layers in
-// order, and returns the first matching provider.
-func (s *RpmMetaSources) FindProvider(name string, constraint ebsv1.VersionConst, prefer []string) (ProviderSelection, bool) {
+// FindProvider searches the RpmRepo layer first, then bootstrap layers in order, and returns the first matching
+// provider.
+func (s *RpmMetaSources) FindProvider(
+	name string,
+	constraint ebsv1.VersionConst,
+	prefer []string,
+) (ProviderSelection, bool) {
 	for _, src := range s.layers() {
 		if selected := GetProvideInfo(name, src, prefer, constraint); selected.Provider.SpecName != "" {
 			return selected, true
@@ -35,16 +38,15 @@ func (s *RpmMetaSources) FindProvider(name string, constraint ebsv1.VersionConst
 	return ProviderSelection{}, false
 }
 
-// GetProvideInfo filters one source by version, then selects the sole
-// candidate, the first preferred candidate, or the highest version. A zero
-// result means no provider was selected.
+// GetProvideInfo filters one source by version, then selects the sole candidate, the first preferred candidate, or the
+// highest version. A zero result means no provider was selected.
 func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint ebsv1.VersionConst) ProviderSelection {
 	candidates := src.ProvidesInfo[name]
 	if len(candidates) == 0 {
 		return ProviderSelection{}
 	}
-	// An unversioned Provides matches by name regardless of the requested
-	// version. Only versioned capabilities are compared against constraints.
+	// An unversioned Provides matches by name regardless of the requested version. Only versioned capabilities are
+	// compared against constraints.
 	filtered := make(map[string]ProvideEntry, len(candidates))
 	for rpmName, entry := range candidates {
 		if entry.Version != "" {
@@ -77,8 +79,8 @@ func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint
 			}
 		}
 	}
-	// Fall back to the highest version. An unversioned capability has no
-	// comparable version of its own, so rank it by the providing RPM's version.
+	// Fall back to the highest version. An unversioned capability has no comparable version of its own, so rank it by the
+	// providing RPM's version.
 	rankVersion := func(rpmName string, entry ProvideEntry) string {
 		if entry.Version != "" {
 			return entry.Version
@@ -106,8 +108,8 @@ func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint
 	return ProviderSelection{Provider: best, RPMName: baseName(bestName), Reason: SelectionHighestVersion}
 }
 
-// Available checks each layer for a matching provide, then for an RPM with
-// the requested name and version. A miss continues to the next layer.
+// Available checks each layer for a matching provide, then for an RPM with the requested name and version. A miss
+// continues to the next layer.
 func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConst) bool {
 	for _, src := range s.layers() {
 		if GetProvideInfo(name, src, nil, constraint).Provider.SpecName != "" {
@@ -122,8 +124,8 @@ func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConst) b
 	return false
 }
 
-// RepoRequires merges requirements from the spec's RPMs in the RpmRepo layer.
-// It returns nil when none are present and processes RPMs in name order.
+// RepoRequires merges requirements from the spec's RPMs in the RpmRepo layer. It returns nil when none are present and
+// processes RPMs in name order.
 func (s *RpmMetaSources) RepoRequires(spec string) map[string]ebsv1.VersionConst {
 	if s.RepoLayer == nil {
 		return nil
@@ -147,8 +149,7 @@ func (s *RpmMetaSources) RepoRequires(spec string) map[string]ebsv1.VersionConst
 	return out
 }
 
-// baseName normalizes a candidate key to its @ base name (a key without "@"
-// is its own base name).
+// baseName normalizes a candidate key to its @ base name (a key without "@" is its own base name).
 func baseName(key string) string {
 	if i := strings.Index(key, "@"); i >= 0 {
 		return key[:i]

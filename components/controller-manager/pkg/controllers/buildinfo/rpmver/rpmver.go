@@ -1,8 +1,5 @@
-// Package rpmver implements the RPM version comparison used by the BuildInfo
-// controller (design 16.2). It is deliberately NOT a full rpmvercmp: mixed
-// alphanumeric segments compare as whole strings, and leading-zero digit
-// segments compare lexicographically ("02" != "2"). Both are declared,
-// accepted deviations.
+// Package rpmver implements the BuildInfo controller's RPM version comparison. It differs from rpmvercmp: mixed
+// alphanumeric segments compare as whole strings, and leading-zero digit segments compare lexicographically.
 package rpmver
 
 import (
@@ -21,9 +18,8 @@ const (
 	OpLT = "LT"
 )
 
-// VRCompare compares version strings x and y with the six-step algorithm and
-// evaluates op over the result. An unknown op is an error; the caller treats
-// it as a programming defect.
+// VRCompare compares version strings x and y with the six-step algorithm and evaluates op over the result. An unknown
+// op is an error; the caller treats it as a programming defect.
 func VRCompare(x, op, y string) (bool, error) {
 	switch op {
 	case OpGT, OpGE, OpEQ, OpLE, OpLT:
@@ -41,7 +37,7 @@ func VRCompare(x, op, y string) (bool, error) {
 }
 
 // VersionSatisfies evaluates whether actual meets the constraint, with the
-// three-state semantics of 16.2 (S3 dirty-data protection):
+// these cases:
 //   - an all-empty constraint passes unconditionally;
 //   - a non-empty constraint against an empty actual (missing artifact
 //     version, e.g. RpmRepo dirty data) fails as unavailable;
@@ -79,8 +75,8 @@ func VersionSatisfies(actual string, constraint ebsv1.VersionConst) (bool, error
 
 // compare returns -1, 0 or 1 for x < y, x == y, x > y.
 func compare(x, y string) int {
-	// Step 1: release preprocessing — the release segment participates only
-	// when both sides carry one; otherwise truncate both at the first "-".
+	// Step 1: release preprocessing — the release segment participates only when both sides carry one; otherwise truncate
+	// both at the first "-".
 	if !strings.Contains(x, "-") || !strings.Contains(y, "-") {
 		x = cutAtFirst(x, "-")
 		y = cutAtFirst(y, "-")
@@ -95,8 +91,7 @@ func compare(x, y string) int {
 	// Step 3: split into segments.
 	xs := splitSegments(x)
 	ys := splitSegments(y)
-	// Step 4: pairwise comparison within the common prefix length; the first
-	// decisive segment wins.
+	// Step 4: pairwise comparison within the common prefix length; the first decisive segment wins.
 	n := len(xs)
 	if len(ys) < n {
 		n = len(ys)
@@ -118,12 +113,11 @@ func compare(x, y string) int {
 	}
 }
 
-// compareSegment compares one segment: numeric only when both segments are
-// pure digits and neither has a leading zero; otherwise lexicographic.
+// compareSegment compares one segment: numeric only when both segments are pure digits and neither has a leading zero;
+// otherwise lexicographic.
 func compareSegment(x, y string) int {
 	if isPlainNumber(x) && isPlainNumber(y) {
-		// No leading zeros on either side: longer digit string is larger,
-		// equal lengths compare digit by digit.
+		// No leading zeros on either side: longer digit string is larger, equal lengths compare digit by digit.
 		if len(x) != len(y) {
 			if len(x) > len(y) {
 				return 1
@@ -135,8 +129,7 @@ func compareSegment(x, y string) int {
 	return strings.Compare(x, y)
 }
 
-// isPlainNumber reports whether s is non-empty, all ASCII digits, and has no
-// leading zero.
+// isPlainNumber reports whether s is non-empty, all ASCII digits, and has no leading zero.
 func isPlainNumber(s string) bool {
 	if s == "" || s[0] == '0' {
 		return false
@@ -149,9 +142,8 @@ func isPlainNumber(s string) bool {
 	return true
 }
 
-// splitSegments splits on ".", ":" and "-", keeping empty segments so that
-// positional differences are preserved ("1..2" != "1.2" — malformed versions
-// are never silently collapsed into well-formed ones).
+// splitSegments splits on ".", ":" and "-", keeping empty segments so that positional differences are preserved ("1..2"
+// != "1.2" — malformed versions are never silently collapsed into well-formed ones).
 func splitSegments(s string) []string {
 	segs := make([]string, 0, len(s)/2+1)
 	start := 0

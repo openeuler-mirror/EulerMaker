@@ -1,7 +1,3 @@
-// testenv_test.go is the shared reconcile-level test harness (design 19.1):
-// an in-memory fakeSource, a scripted fake git-server, per-test object
-// builders and assertion helpers. Tests drive the controller through
-// reconcile() with the fakeClient storage of fake_test.go.
 package buildinfo
 
 import (
@@ -76,7 +72,7 @@ func (g *fakeGitServer) on(originURL, command, out string) {
 	g.stubs[gitStubKey(originURL, command)] = gitStub{out: out}
 }
 
-// fail scripts a failing ExecCommand response of the given E-23 kind.
+// fail scripts a failing ExecCommand response of the given kind.
 func (g *fakeGitServer) fail(originURL, command string, kind gitserver.ErrorKind, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -109,8 +105,7 @@ func (g *fakeGitServer) ResolveCommit(context.Context, string, ebsv1.GitRef) (st
 
 var _ gitserver.GitServerClient = (*fakeGitServer)(nil)
 
-// repo scripts one repository mirror: the ls-tree listing plus one git-show
-// per file.
+// repo scripts one repository mirror: the ls-tree listing plus one git-show per file.
 func (g *fakeGitServer) repo(originURL, commitID string, files map[string]string) {
 	names := make([]string, 0, len(files))
 	for file := range files {
@@ -133,8 +128,8 @@ func (g *fakeGitServer) callCount() int {
 
 func newTestController(t *testing.T) (*Controller, *fakeClient, *fakeGitServer, *clocktesting.FakeClock) {
 	t.Helper()
-	// Reconcile tests focus on controller behavior; a stub supplies expanded
-	// spec text without requiring rpm-build on the test host.
+	// Reconcile tests focus on controller behavior; a stub supplies expanded spec text without requiring rpm-build on the
+	// test host.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "rpmspec"), []byte("#!/bin/sh\ncat \"$3\"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -303,8 +298,8 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 	}
 }
 
-// testSources builds one-layer RpmMetaSources whose URL matches testRepoURL,
-// so EnsureRepoLayer never downloads in tests.
+// testSources builds one-layer RpmMetaSources whose URL matches testRepoURL, so EnsureRepoLayer never downloads in
+// tests.
 func testSources(rpms ...rpmver.RpmMeta) *rpmver.RpmMetaSources {
 	layer := &rpmver.RpmMetaSource{
 		URL:          testRepoURL,
