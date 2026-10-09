@@ -187,6 +187,7 @@ func (c *Controller) parentAbortGuard(ctx context.Context, round *reconcileRound
 // per-BuildInfo caches after the write is confirmed.
 func (c *Controller) writeAborted(ctx context.Context, round *reconcileRound, reason string) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
+	removeCondition(&next.Status.Conditions, ConditionRpmRepoRetrying)
 	if reason == "BuildAborted" {
 		message, more := c.abortBuildJobs(ctx, round)
 		if err := ctx.Err(); err != nil {
@@ -277,6 +278,10 @@ func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRou
 		if errors.Is(err, ErrNotFound) {
 			// A missing RpmRepo may still be created by the Build controller.
 			round.failures.RpmRepoReady()
+			result, writeErr := c.recordRpmRepoRetrying(ctx, round, ReasonRpmRepoNotFound, fmt.Sprintf("RpmRepo %s/%s not found", round.current.Namespace, round.current.Name))
+			if writeErr != nil || result != (controller.ReconcileResult{}) {
+				return true, result, writeErr
+			}
 			c.logf(round.key, "RpmRepoNotFound", "rpmrepo %s/%s not found", round.current.Namespace, round.current.Name)
 			return false, controller.ReconcileResult{}, nil
 		}
@@ -285,13 +290,17 @@ func (c *Controller) releaseFailedGuard(ctx context.Context, round *reconcileRou
 			return true, result, err
 		}
 		round.failures.RpmRepoReady()
+		result, writeErr := c.recordRpmRepoRetrying(ctx, round, ReasonRpmRepoQueryFailed, err.Error())
+		if writeErr != nil || result != (controller.ReconcileResult{}) {
+			return true, result, writeErr
+		}
 		return true, controller.ReconcileResult{}, err
 	}
 	round.rpmRepo = repo
 	round.rpmRepoHeld = true
 	if repo.Status.Release != nil && repo.Status.Release.Phase == ebsv1.RpmRepoReleaseFailed {
 		// A failed release stops dispatch and converges to Completed.
-		result, err := c.escalateStop(ctx, round, ConditionReleaseFailed, ReasonRpmRepoReleaseFailed, fmt.Sprintf("RpmRepo %s release failed", repo.Name))
+		result, err := c.escalateStop(ctx, round, ConditionReleaseUnavailable, ReasonRpmRepoReleaseFailed, fmt.Sprintf("RpmRepo %s release failed", repo.Name))
 		return true, result, err
 	}
 	return false, controller.ReconcileResult{}, nil
@@ -319,6 +328,26 @@ func deterministicRpmRepoError(err error) bool {
 func deterministicHTTPStatus(code int) bool {
 	return code >= http.StatusBadRequest && code < http.StatusInternalServerError &&
 		code != http.StatusNotFound && code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
+}
+
+// recordRpmRepoRetrying preserves the first message for an unchanged reason,
+// avoiding a status write on every retry while keeping the current diagnosis.
+func (c *Controller) recordRpmRepoRetrying(ctx context.Context, round *reconcileRound, reason, message string) (controller.ReconcileResult, error) {
+	if existing := findCondition(round.current.Status.Conditions, ConditionRpmRepoRetrying); existing != nil && existing.Status == metav1.ConditionTrue && existing.Reason == reason {
+		return controller.ReconcileResult{}, nil
+	}
+	next := round.current.DeepCopy()
+	upsertCondition(&next.Status.Conditions, ConditionRpmRepoRetrying, reason, message)
+	return c.writeStatusIfChanged(ctx, round, next)
+}
+
+func (c *Controller) clearRpmRepoRetrying(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
+	if findCondition(round.current.Status.Conditions, ConditionRpmRepoRetrying) == nil {
+		return controller.ReconcileResult{}, nil
+	}
+	next := round.current.DeepCopy()
+	removeCondition(&next.Status.Conditions, ConditionRpmRepoRetrying)
+	return c.writeStatusIfChanged(ctx, round, next)
 }
 
 // escalateRpmRepoUnavailable persists a stop marker with the last error and
@@ -349,6 +378,7 @@ func (c *Controller) escalateSnapshotUnavailable(ctx context.Context, round *rec
 // path; a failed write ends the round and forbids further dispatch.
 func (c *Controller) escalateStop(ctx context.Context, round *reconcileRound, condType, reason, message string) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
+	removeCondition(&next.Status.Conditions, ConditionRpmRepoRetrying)
 	upsertCondition(&next.Status.Conditions, condType, reason, message)
 	result, err := c.writeStatus(ctx, round, next)
 	if err != nil || result != (controller.ReconcileResult{}) {

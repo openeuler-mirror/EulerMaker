@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
@@ -24,12 +23,7 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		c.logf(round.key, "SpecStatusEmpty", "processing buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept")
 		return controller.ReconcileResult{}, nil
 	}
-	if spec, ok := residualAbortedSpec(round.current); ok {
-		c.logf(round.key, "ResidualAbortedStatus", "spec %s holds a residual Aborted status; round skipped, waiting for the parent abort guard (6.4)", spec)
-		return controller.ReconcileResult{}, nil
-	}
 
-	// Sync Job results before deciding which specs can be dispatched.
 	jobs, err := c.listRoundJobs(ctx, round)
 	if err != nil {
 		return controller.ReconcileResult{}, err
@@ -40,14 +34,12 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		return result, err
 	}
 
-	// Prepare the current Snapshot and spec dependency view.
 	snapshot, stop, result, err := c.currentSnapshot(ctx, round)
 	if stop {
 		return result, err
 	}
 	asm := c.assembleSpecDepends(ctx, round, snapshot)
 	if asm.incomplete {
-		// A transient assembly gap is retried in the next round.
 		return controller.ReconcileResult{}, nil
 	}
 
@@ -76,13 +68,11 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		if err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		// Advance downstream specs in graph order.
 		if result, err = c.advanceDownstream(ctx, round, dcg, asm, snapshot, sources, bySpec); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
 		}
 	}
 
-	// Check whether all specs have reached their required dispatch count.
 	return c.checkCompletion(ctx, round, dcg, asm)
 }
 
@@ -369,7 +359,7 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 
 // checkCompletion requires every spec to be terminal, every successful spec
 // to reach its required dispatch count, and no pending Job creations. It
-// writes Completed with either PartialFailure or AllSpecsSucceeded.
+// writes Completed; spec statuses and failedPackages carry the result.
 func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound, dcg *DcgDict, asm *specAssembly) (controller.ReconcileResult, error) {
 	var required map[string]int64
 	if dcg != nil {
@@ -430,12 +420,7 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 		}
 	}
 	next.Status.FailedPackages = sortedFailedPackages(next.Status.FailedPackages, failedRepos)
-	removeCondition(&next.Status.Conditions, ConditionJobDispatchBlocked)
-	if len(failed) > 0 {
-		upsertCondition(&next.Status.Conditions, ConditionPartialFailure, ReasonPartialFailure, "failed specs: "+strings.Join(failed, ","))
-	} else {
-		upsertCondition(&next.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded, "all specs succeeded")
-	}
+	removeCondition(&next.Status.Conditions, ConditionRpmRepoRetrying)
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
@@ -450,10 +435,6 @@ func (c *Controller) checkCompletion(ctx context.Context, round *reconcileRound,
 func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	if round.current.Status.SpecStatus.Len() == 0 {
 		c.logf(round.key, "SpecStatusEmpty", "processing single buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept")
-		return controller.ReconcileResult{}, nil
-	}
-	if spec, ok := residualAbortedSpec(round.current); ok {
-		c.logf(round.key, "ResidualAbortedStatus", "spec %s holds a residual Aborted status; round skipped, waiting for the parent abort guard (6.4)", spec)
 		return controller.ReconcileResult{}, nil
 	}
 	jobs, err := c.listRoundJobs(ctx, round)
@@ -522,12 +503,9 @@ func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 	return sortedFailedPackages(round.current.Status.FailedPackages, failed)
 }
 
-// convergeToCompleted stops dispatching: no new Job creation and no
-// Snapshot/RpmRepo/build-target Config reads. The full Job List is backfilled (a
-// failed page retried, never partially used), registered pending creates are
-// GET-confirmed one by one (404 keeps the entry), and Completed is written only when
-// every created Job is terminal and the pending map is empty. The stop
-// marker is preserved; AllSpecsSucceeded/PartialFailure are never written.
+// convergeToCompleted waits for created Jobs to finish without further
+// dispatch. Pending creations must be confirmed before completion; a 404
+// keeps the entry because the create may still land. The stop marker remains.
 func (c *Controller) convergeToCompleted(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
 	jobs, err := c.listRoundJobs(ctx, round)
 	if err != nil {
@@ -630,16 +608,4 @@ func specStatusScope(buildInfo *ebsv1.BuildInfo) map[string]bool {
 		scope[name] = true
 	}
 	return scope
-}
-
-// residualAbortedSpec finds the first spec holding a residual Aborted status
-// value (legacy dirty data — the round returns nil and waits for the
-// parentAbortGuard, the value never joins the allTerminal set).
-func residualAbortedSpec(buildInfo *ebsv1.BuildInfo) (string, bool) {
-	for _, spec := range sortedSpecNames(buildInfo.Status.SpecStatus.Build) {
-		if buildInfo.Status.SpecStatus.Entry(spec).Build.Status == SpecBuildAborted {
-			return spec, true
-		}
-	}
-	return "", false
 }

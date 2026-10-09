@@ -1,8 +1,5 @@
-// conditions.go centralizes the condition catalog (design 9.1) and the
-// upsert/remove helpers. BuildInfo-level, spec-level and install-level
-// conditions are written with status=True via meta.SetStatusCondition and
-// removed via meta.RemoveStatusCondition; lastTransitionTime is managed by
-// the meta helpers, never by business code (9.2).
+// BuildInfo, spec, and install conditions share these helpers. Kubernetes
+// metadata helpers manage lastTransitionTime.
 package buildinfo
 
 import (
@@ -17,57 +14,46 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// Spec build/install status values persisted in SpecStatus (design 6.2/6.3).
+// Spec build/install status values persisted in SpecStatus.
 const (
 	// SpecBuildRunning: a Job has been dispatched and has not terminated.
 	SpecBuildRunning = "Running"
 	// SpecBuildSucceeded: terminal, the latest-generation Job succeeded.
 	SpecBuildSucceeded = "Succeeded"
 	// SpecBuildFailed: terminal, the latest-generation Job failed, or a
-	// pre-dispatch verdict failed the spec (E-17/E-18/E-27).
+	// pre-dispatch verdict failed the spec.
 	SpecBuildFailed = "Failed"
 	// SpecBuildArchUnsupported: terminal, the spec cannot build on the target architecture.
 	SpecBuildArchUnsupported = "ArchUnsupported"
-	// SpecBuildAborted: legacy residual value (pre-v1 Job phase passthrough).
-	// v1 never writes it; reading it stops the round and waits for
-	// parentAbortGuard (6.4).
-	SpecBuildAborted = "Aborted"
 )
 
-// BuildInfo-level condition types (design 9.1).
+// BuildInfo-level condition types.
 const (
 	// ConditionSpecDependsFillFailed carries spec parsing degradation and
 	// single-build empty-set closeouts.
 	ConditionSpecDependsFillFailed = "SpecDependsFillFailed"
 	// ConditionSpecCommitMissing records package-repo entries skipped for a
-	// non-retryable resolution failure (E-24 degraded path).
+	// non-retryable resolution failure.
 	ConditionSpecCommitMissing = "SpecCommitMissing"
 	// ConditionDcgBuildFailed records a DCG build/break failure; removed as
-	// soon as the DCG is obtained again (9.1).
+	// soon as the DCG is obtained again.
 	ConditionDcgBuildFailed = "DcgBuildFailed"
-	// ConditionPartialFailure marks Completed with at least one Failed spec.
-	ConditionPartialFailure = "PartialFailure"
-	// ConditionAllSpecsSucceeded marks Completed with every spec Succeeded.
-	ConditionAllSpecsSucceeded = "AllSpecsSucceeded"
-	// ConditionReleaseFailed is the persisted stop-dispatch marker (E-28).
-	ConditionReleaseFailed = "ReleaseFailed"
-	// ConditionRpmRepoUnavailable is the persisted stop-dispatch marker (E-29).
+	// ConditionReleaseUnavailable is a persisted stop-dispatch marker.
+	ConditionReleaseUnavailable = "ReleaseUnavailable"
+	// ConditionRpmRepoRetrying records a recoverable repository error.
+	ConditionRpmRepoRetrying = "RpmRepoRetrying"
+	// ConditionRpmRepoUnavailable is a persisted stop-dispatch marker.
 	ConditionRpmRepoUnavailable = "RpmRepoUnavailable"
-	// ConditionSnapshotUnavailable is the persisted stop-dispatch marker (E-30).
+	// ConditionSnapshotUnavailable is a persisted stop-dispatch marker.
 	ConditionSnapshotUnavailable = "SnapshotUnavailable"
-	// ConditionJobDispatchBlocked records a shared Job API authorization error.
-	// Unlike stop-dispatch markers, it is cleared when dispatch recovers.
-	ConditionJobDispatchBlocked = "JobDispatchBlocked"
 )
 
-// BuildInfo-level condition reasons (design 9.1/E-23/E-24/E-28/E-29/E-30).
+// BuildInfo-level condition reasons.
 const (
 	ReasonSpecParseFailed             = "SpecParseFailed"
 	ReasonSpecifiedBuildSetEmpty      = "SpecifiedBuildSetEmpty"
 	ReasonSpecCommitMissing           = "SpecCommitMissing"
 	ReasonDcgBuildFailed              = "DcgBuildFailed"
-	ReasonPartialFailure              = "PartialFailure"
-	ReasonAllSpecsSucceeded           = "AllSpecsSucceeded"
 	ReasonRpmRepoReleaseFailed        = "RpmRepoReleaseFailed"
 	ReasonRpmRepoNotFound             = "RpmRepoNotFound"
 	ReasonRpmRepoQueryFailed          = "RpmRepoQueryFailed"
@@ -80,10 +66,9 @@ const (
 	ReasonBootstrapRepoConfigInvalid  = "BootstrapRepoConfigInvalid"
 	ReasonSnapshotNotFound            = "SnapshotNotFound"
 	ReasonSnapshotQueryFailed         = "SnapshotQueryFailed"
-	ReasonJobCreateForbidden          = "JobCreateForbidden"
 )
 
-// Spec-level condition types and reasons (design 9.1).
+// Spec-level condition types and reasons.
 const (
 	ConditionBuildFailed                        = "BuildFailed"
 	ReasonJobFailed                             = "JobFailed"
@@ -115,11 +100,9 @@ func terminalSpecBuildStatus(status string) bool {
 // conditionMessageMax bounds a persisted condition message (apiserver limit).
 const conditionMessageMax = 1024
 
-// stopConditionTypes are the persisted stop-dispatch markers (design 6.5):
-// once written they never recover, and any of them routes the round to the
-// 6.5 convergence path.
+// stopConditionTypes persist across rounds and route directly to convergence.
 var stopConditionTypes = []string{
-	ConditionReleaseFailed,
+	ConditionReleaseUnavailable,
 	ConditionRpmRepoUnavailable,
 	ConditionSnapshotUnavailable,
 }
@@ -157,7 +140,7 @@ func stopCondition(conditions []metav1.Condition) *metav1.Condition {
 
 // missingDepsMessage renders the RpmDependsMissing message: dependency names
 // sorted, de-duplicated and comma-joined; over 1024 characters the list is
-// truncated and suffixed with `...(+N deps total)` (design 9.1).
+// truncated and suffixed with `...(+N deps total)`.
 func missingDepsMessage(names []string) string {
 	if len(names) == 0 {
 		return ""
@@ -216,7 +199,7 @@ func specCondition(spec *ebsv1.SpecStatus, condType, reason, message string) {
 	upsertCondition(&spec.Build.Conditions, condType, reason, message)
 }
 
-// installCondition writes the install-level condition (design 9.1).
+// installCondition writes the install-level condition.
 func installCondition(spec *ebsv1.SpecStatus, jobName string) {
 	upsertCondition(&spec.Install.Conditions, ConditionInstall, ReasonInstallCheckFailed, "job "+jobName+" install check failed")
 }

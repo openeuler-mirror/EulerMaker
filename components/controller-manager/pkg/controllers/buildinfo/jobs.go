@@ -1,9 +1,5 @@
-// jobs.go implements the Job lifecycle of the BuildInfo controller (design
-// 15.3 / 6.5.1): deterministic naming and dispatch generation, the G-08
-// label set, Config content resolution, the payload construction
-// contract, the register-then-create dispatch pipeline with AlreadyExists /
-// Unknown confirmation, and the List backfill (7.4.2 count floor, 7.4.4
-// latest pick, 7.4.5 phase mapping, 7.4.7 install backfill).
+// Job dispatch and backfill use deterministic names to recover from uncertain
+// create results without duplicating Jobs.
 package buildinfo
 
 import (
@@ -29,7 +25,6 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// Job field constants (design 15.3.1).
 const (
 	jobRuntime         = "ct"
 	jobTimeoutSeconds  = 10800
@@ -87,7 +82,7 @@ func packageNameLabelValue(name string) string {
 	return strings.TrimRight(value, "-_.")
 }
 
-// archSupported runs the E-19 exclusiveArch whitelist check; an empty
+// archSupported checks the exclusiveArch whitelist; an empty
 // whitelist means every arch (normalized at parse time, defensive here).
 func archSupported(depend *specparse.SpecDepend, arch string) bool {
 	if len(depend.ExclusiveArch) == 0 {
@@ -101,9 +96,8 @@ func archSupported(depend *specparse.SpecDepend, arch string) bool {
 	return false
 }
 
-// missingBuildRequires returns the buildRequires entries (buildRemoves
-// excluded) not available in the layered sources (design 7.4.1 condition 2),
-// sorted and de-duplicated.
+// missingBuildRequires returns unavailable build requirements, excluding
+// buildRemoves, in sorted order without duplicates.
 func missingBuildRequires(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources) []string {
 	var missing []string
 	for _, name := range sortedConstKeys(depend.BuildRequires, depend.BuildRemoves) {
@@ -114,7 +108,7 @@ func missingBuildRequires(depend *specparse.SpecDepend, sources *rpmver.RpmMetaS
 	return missing
 }
 
-// --- dispatch pipeline (design 15.3.1 / 6.5.1) ---
+// --- Dispatch ---
 
 const maxJobCreatesPerReconcile = 20
 
@@ -126,9 +120,8 @@ type createdJob struct {
 // dispatchSpec creates one deterministically named Job and stages its
 // confirmation for a batched status write. Persisted pending entries from
 // earlier rounds retain their GET-based recovery path. Build-resource Config
-// is read once per round. The E-19 arch check and the 7.4.1
-// dependency verdict run at the caller; image resolution happens once per
-// round at the caller (E-26).
+// is read once per round. Architecture and dependency checks and image
+// resolution happen at the caller.
 func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, sources *rpmver.RpmMetaSources) (controller.ReconcileResult, error) {
 	if _, alreadyCreated := round.createdJobs[specName]; alreadyCreated {
 		return controller.ReconcileResult{}, nil
@@ -142,7 +135,7 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 	var err error
 	entryExisted := false
 	if pend, ok := round.current.Status.PendingJobCreates[specName]; ok {
-		// 6.5.1 #4: registered entries are GET-verified first; a hit confirms
+		// Registered entries are GET-verified first; a hit confirms
 		// (no new generation), a 404 re-creates with the same identity.
 		entryExisted = true
 		generation, name = pend.DispatchGeneration, pend.JobName
@@ -207,6 +200,9 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 			}
 			return result, failureErr
 		}
+		if result, err := c.clearRpmRepoRetrying(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
+			return result, err
+		}
 	}
 	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, scriptRef, name, generation, sources)
 	round.jobCreateRequests++
@@ -235,7 +231,7 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		switch writeErr.StatusCode {
 		case 409:
 			// AlreadyExists: identity verification takes precedence over the
-			// generic conflict requeue (15.3.1); a 404 confirmation read is a
+			// generic conflict requeue; a 404 confirmation read is a
 			// retryable error, never the main-object NotFound rule.
 			existing, gerr := c.client.GetJob(ctx, namespace, name)
 			if gerr != nil {
@@ -254,26 +250,13 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 			c.logf(round.key, ReasonJobCreateRejected, "job %s for spec %s rejected with HTTP %d: %v", name, specName, writeErr.StatusCode, err)
 			return c.markSpecFailed(ctx, round, specName, ConditionJobCreateRejected, ReasonJobCreateRejected,
 				fmt.Sprintf("Job creation rejected with HTTP %d", writeErr.StatusCode), true)
-		case 401, 403:
-			// An authorization failure can affect every Job. Stop the round
-			// and surface it on BuildInfo instead of failing this one spec.
-			jobCreateFailures.Inc()
-			c.logf(round.key, ReasonJobCreateForbidden, "job %s for spec %s rejected with HTTP %d: %v", name, specName, writeErr.StatusCode, err)
-			next := round.current.DeepCopy()
-			upsertCondition(&next.Status.Conditions, ConditionJobDispatchBlocked, ReasonJobCreateForbidden,
-				fmt.Sprintf("Job creation rejected with HTTP %d; check controller permissions", writeErr.StatusCode))
-			result, statusErr := c.writeStatusIfChanged(ctx, round, next)
-			if statusErr != nil || result != (controller.ReconcileResult{}) {
-				return result, statusErr
-			}
-			return controller.ReconcileResult{}, controller.NewPermanentError(err)
 		default:
-			// 404/408/429/5xx and other retryable rejections.
+			// Let the controller handle any other rejected create.
 			jobCreateFailures.Inc()
 			return controller.ReconcileResult{}, err
 		}
 	default:
-		// WriteUnknown (10.3): confirm by GET on the deterministic name.
+		// An unknown create result needs a GET by deterministic name.
 		unknownWrites.Inc()
 		existing, gerr := c.client.GetJob(ctx, namespace, name)
 		if gerr == nil {
@@ -303,7 +286,6 @@ func (c *Controller) stageCreatedJob(round *reconcileRound, specName string, gen
 	round.createdJobs[specName] = created
 	round.current = round.current.DeepCopy()
 	applyCreatedJobs(round.current, map[string]createdJob{specName: created})
-	removeCondition(&round.current.Status.Conditions, ConditionJobDispatchBlocked)
 	return controller.ReconcileResult{}, nil
 }
 
@@ -331,10 +313,8 @@ func (c *Controller) confirmCreatedJobs(round *reconcileRound) {
 	}
 }
 
-// confirmDispatchedJob persists the confirmed dispatch in one write (6.5.1
-// #2): jobName backfill, dispatchCount raised to the confirmed generation,
-// the pending entry removed, and build.status mapped from the confirmed
-// Job's phase (7.4.5, prior-generation success unknown at this point).
+// confirmDispatchedJob persists the confirmed generation and Job phase, then
+// removes its pending entry in the same write.
 func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileRound, specName string, generation int64, job *ebsv1.Job) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	ss := next.Status.SpecStatus.Entry(specName)
@@ -344,7 +324,6 @@ func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileR
 	applyJobPhase(&ss, job, false)
 	delete(next.Status.PendingJobCreates, specName)
 	next.Status.SpecStatus.Set(specName, ss)
-	removeCondition(&next.Status.Conditions, ConditionJobDispatchBlocked)
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		dispatches.Inc()
@@ -352,15 +331,9 @@ func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileR
 	return result, err
 }
 
-// markSpecFailed persists a pre-dispatch Failed verdict (E-19/E-27/
-// RpmDependsMissing): build.status=Failed plus the condition, no Job. The
-// this-round pending registration is removed when clearPending holds (6.5.1
-// #3: the identity provably had no in-flight request). A reused registration
-// is GET-verified once: G-03 disables the dispatchSpec re-create self-heal
-// for a now-terminal spec, so a lost request (Unknown + 404) would otherwise
-// orphan the entry and block the Completed write forever — a listed Job
-// keeps the entry (the backfill fold resolves it next round), a 404 drops it
-// together with the Failed verdict.
+// markSpecFailed records a pre-dispatch failure without creating a Job. A
+// reused pending registration is checked before removal so an in-flight Job
+// cannot be lost when the spec becomes terminal.
 func (c *Controller) markSpecFailed(ctx context.Context, round *reconcileRound, specName, condType, reason, message string, clearPending bool) (controller.ReconcileResult, error) {
 	return c.markSpecTerminal(ctx, round, specName, SpecBuildFailed, condType, reason, message, clearPending)
 }
@@ -393,7 +366,7 @@ func (c *Controller) markSpecTerminal(ctx context.Context, round *reconcileRound
 }
 
 // verifyJobIdentity checks a found Job against the creation identity
-// (15.3.1): namespace, recomputed name, build/spec labels, and the
+// using its namespace, recomputed name, build/spec labels, and the
 // dispatch-generation annotation must all match.
 func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName string, generation int64) error {
 	if job.Namespace != buildInfo.Namespace {
@@ -414,7 +387,7 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 	return nil
 }
 
-// --- Job construction (design 15.3.1) ---
+// --- Job construction ---
 
 // scriptNameFromPayload selects the script to observe before creating a Job.
 // A malformed selection must not silently fall back to the default.
@@ -475,7 +448,7 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 }
 
 // jobPayload assembles only the recognized per-Job fields from buildPayload
-// and the resolved spec and repository inputs (design 15.3.1).
+// and the resolved spec and repository inputs.
 func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string, sources *rpmver.RpmMetaSources) string {
 	configured := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
 	payload := map[string]any{
@@ -512,7 +485,7 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 		payload["unuse_gcc_secure"] = true
 	}
 	if entry, ok := snapshot.Status.PackageRepoStatuses[depend.RepoName]; !ok || entry.CommitID == "" {
-		// Cannot happen for assembled specs (15.3.1): never blocks dispatch.
+		// Missing snapshot data does not block dispatch.
 		c.logf(round.key, "SpecRepoEntryMissing", "packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commit_id not injected", depend.RepoName)
 	} else {
 		payload["spec_url"] = entry.CloneURL
@@ -574,7 +547,7 @@ func jobPrefer(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources, con
 }
 
 // repoPayloadURLs orders the RpmRepo contentURL (first when non-empty) before
-// the bootstrap repo URLs in declaration order (design 15.3.1 / 7.2.3).
+// the bootstrap repo URLs in declaration order.
 func repoPayloadURLs(contentURL string, bootstrapRepos []string) []string {
 	parts := make([]string, 0, len(bootstrapRepos)+1)
 	if contentURL != "" {
@@ -619,10 +592,8 @@ func (c *Controller) marshalPayload(round *reconcileRound, fields map[string]any
 	return string(payload)
 }
 
-// resolveResources merges the build-resource Config levels (design 15.3.1 /
-// data-models~config.md 3.2): spec.default -> packages[spec].default ->
-// packages[spec].arches[arch], per-field override; each level's unset limits
-// take the same level's requests.
+// resolveResources overlays spec defaults, package defaults, then architecture
+// settings. Missing limits inherit requests from the same level.
 func resolveResources(resource *buildResourceRules, specName, arch string) ebsv1.ResourceRequirements {
 	merged := normalizeResourceLevel(resource.Spec.Default)
 	if pkg, ok := resource.Spec.Packages[specName]; ok {
@@ -635,7 +606,7 @@ func resolveResources(resource *buildResourceRules, specName, arch string) ebsv1
 }
 
 // normalizeResourceLevel fills a level's missing limits from its own
-// requests (data-models~config.md 3.2).
+// requests.
 func normalizeResourceLevel(level ebsv1.ResourceRequirements) ebsv1.ResourceRequirements {
 	out := deepCopyResources(level)
 	for _, key := range []string{"cpu", "memory"} {
@@ -687,10 +658,10 @@ func deepCopyResources(in ebsv1.ResourceRequirements) ebsv1.ResourceRequirements
 	return out
 }
 
-// --- List backfill (design 7.2 step 1 / 7.3 step 2) ---
+// --- Job backfill ---
 
 // groupJobsBySpec groups listed Jobs by their spec-name label; Jobs without
-// a label or outside the scope set are skipped (E-05, OrphanJob log).
+// a label or outside the scope set are skipped.
 func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, scope map[string]bool) map[string][]ebsv1.Job {
 	bySpec := map[string][]ebsv1.Job{}
 	for i := range jobs {
@@ -706,17 +677,10 @@ func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, sc
 	return bySpec
 }
 
-// backfillJobs folds one listed Job batch into next.Status in memory (design
-// 7.4.2 count floor, 7.4.4 latest pick, 7.4.5 mapping, 7.4.7 install
-// backfill, 6.5.1 #2 pending-entry confirmation). scope is the init build
-// set or the Processing specStatus key set (E-05); createMissing controls
-// whether scoped specs without an entry get one (init yes — covers Jobs
-// created while the status write failed; Processing no, the init step-5
-// invariant already covers every build-set spec). Only Jobs carrying this
-// incarnation's deterministic name fold: a recreated same-name
-// BuildInfo never inherits a previous incarnation's phases or counts
-// (15.3.1 identity; the returned groups are uid-filtered for the same
-// reason — the 7.4.6 gate inputs must not either).
+// backfillJobs folds listed Jobs into next.Status. Only Jobs named for this
+// BuildInfo UID count, so a replacement with the same name cannot inherit
+// old phases or dispatch counts. createMissing also recovers Jobs created
+// before their initial spec status was persisted.
 func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, jobs []ebsv1.Job, scope map[string]bool, createMissing bool) map[string][]ebsv1.Job {
 	bySpec := c.groupJobsBySpec(round, jobs, scope)
 	uid := string(round.current.UID)
@@ -733,9 +697,8 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 			c.logf(round.key, "ForeignIncarnationJob", "spec %s: %d of %d listed jobs belong to a previous same-name buildinfo; excluded from folding", spec, len(group)-len(own), len(group))
 		}
 		if len(own) > 0 {
-			// 7.4.2 floor: max(DispatchCount, listed generation count, max
-			// confirmed identity generation) — old data without the field and
-			// cleaned-up old generations never regress the count (15.3.1).
+			// Keep the count above both the listed Job count and the highest
+			// confirmed generation, even if older Jobs were cleaned up.
 			floor := int64(len(own))
 			for i := range own {
 				job := &own[i]
@@ -755,7 +718,7 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 				c.logf(round.key, "UnknownJobPhase", "job %s phase %q unknown, status mapping skipped", latest.Name, latest.Status.Phase)
 			}
 		}
-		// 6.5.1 #2: an identity-matched Job in the list confirms the pending
+		// An identity-matched Job in the list confirms the pending
 		// entry (removed in the same write, no double counting).
 		if pend, ok := next.Status.PendingJobCreates[spec]; ok {
 			for i := range own {
@@ -788,7 +751,7 @@ func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	return out
 }
 
-// latestJob picks the multi-generation target Job (design 7.4.4): the
+// latestJob picks the multi-generation target Job by the
 // greatest (creationTimestamp, name) pair; a zero timestamp sorts earliest.
 // An empty group yields nil — callers dispatching on the result must guard.
 func latestJob(group []ebsv1.Job) *ebsv1.Job {
@@ -811,9 +774,8 @@ func jobLess(a, b *ebsv1.Job) bool {
 	return a.Name < b.Name
 }
 
-// priorSucceeded reports whether the group holds a Succeeded Job older than
-// latest (7.4.2 best-effort last generation: a failed rebuild with a
-// previous Succeeded generation maps to the RebuildFailed condition).
+// priorSucceeded detects a previous successful generation so a failed rebuild
+// receives RebuildFailed instead of BuildFailed.
 func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 	for i := range group {
 		job := &group[i]
@@ -824,7 +786,7 @@ func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 	return false
 }
 
-// applyJobPhase maps the target Job phase onto build.status (design 7.4.5);
+// applyJobPhase maps the target Job phase onto build.status;
 // the bool reports a known phase. Pending forces Running (never inherit a
 // previous generation's terminal state). An unknown phase leaves the build
 // status unchanged.

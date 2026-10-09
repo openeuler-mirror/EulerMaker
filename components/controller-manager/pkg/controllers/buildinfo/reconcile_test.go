@@ -325,10 +325,8 @@ func TestStopConditionRoutesToConverge(t *testing.T) {
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	// Preserve the stop marker without writing success conditions.
+	// Preserve the stop marker while completing the round.
 	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded)
-	requireNoCondition(t, persisted.Status.Conditions, ConditionPartialFailure)
 }
 
 // --- Status write outcomes ---
@@ -504,14 +502,14 @@ func TestWriteStatusChaining(t *testing.T) {
 	}
 	// Second write reuses the confirmed object (fresh resourceVersion).
 	next = round.current.DeepCopy()
-	upsertCondition(&next.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded, "ok")
+	upsertCondition(&next.Status.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing, "repo skipped")
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	if result, err := c.writeStatus(context.Background(), round, next); err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("second writeStatus() = %v, %v (chained resourceVersion)", result, err)
 	}
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireCondition(t, persisted.Status.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded)
+	requireCondition(t, persisted.Status.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing)
 }
 
 // --- Status intent comparison ---
@@ -539,11 +537,11 @@ func TestStatusMatchesIntent(t *testing.T) {
 	}
 	// Condition order carries no semantics.
 	left := copyStatus(base)
-	upsertCondition(&left.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded, "m1")
+	upsertCondition(&left.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing, "m1")
 	upsertCondition(&left.Conditions, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "m2")
 	right := copyStatus(base)
 	upsertCondition(&right.Conditions, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "m2")
-	upsertCondition(&right.Conditions, ConditionAllSpecsSucceeded, ReasonAllSpecsSucceeded, "m1")
+	upsertCondition(&right.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing, "m1")
 	if !statusMatchesIntent(left, right) {
 		t.Fatal("condition order must not matter")
 	}
@@ -644,6 +642,10 @@ func TestStopConditionDetection(t *testing.T) {
 	upsertCondition(&conds, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "m")
 	if stopCondition(conds) != nil {
 		t.Fatal("DcgBuildFailed is not a stop marker")
+	}
+	upsertCondition(&conds, ConditionRpmRepoRetrying, ReasonRpmRepoNotFound, "waiting for repository")
+	if stopCondition(conds) != nil {
+		t.Fatal("RpmRepoRetrying must not stop dispatch")
 	}
 	upsertCondition(&conds, ConditionSnapshotUnavailable, ReasonSnapshotNotFound, "m")
 	if got := stopCondition(conds); got == nil || got.Type != ConditionSnapshotUnavailable {
