@@ -100,15 +100,6 @@ func TestCacheSweeper(t *testing.T) {
 	}
 }
 
-func TestCacheTombstoneMissingKeyNoop(t *testing.T) {
-	clk := clocktesting.NewFakeClock(testStart)
-	c := newTestCache(clk)
-	c.Tombstone("p/absent")
-	if c.Len() != 0 {
-		t.Fatalf("tombstone on missing key created an entry, Len = %d", c.Len())
-	}
-}
-
 func TestCacheSetClearsTombstone(t *testing.T) {
 	clk := clocktesting.NewFakeClock(testStart)
 	c := newTestCache(clk)

@@ -39,34 +39,9 @@ func jobNameFor(buildInfoUID, specName string, generation int64) string {
 	return fmt.Sprintf("%s-%x", specname.Encode(specName), sum[:8])
 }
 
-// formerJobNameFor recognizes the former 16-character suffix with a visible dispatch generation.
-func formerJobNameFor(buildInfoUID, specName string, generation int64) string {
-	sum := jobNameHash(buildInfoUID, specName, generation)
-	return fmt.Sprintf("%s-%d-%x", specName, generation, sum[:8])
-}
-
-// previousJobNameFor recognizes the former 20-character hash suffix.
-func previousJobNameFor(buildInfoUID, specName string, generation int64) string {
-	sum := jobNameHash(buildInfoUID, specName, generation)
-	return fmt.Sprintf("%s-%d-%x", specName, generation, sum[:10])
-}
-
-// legacyJobNameFor recognizes the original full-length hash suffix.
-func legacyJobNameFor(buildInfoUID, specName string, generation int64) string {
-	sum := jobNameHash(buildInfoUID, specName, generation)
-	return fmt.Sprintf("%s-%d-%x", specName, generation, sum)
-}
-
 func jobNameHash(buildInfoUID, specName string, generation int64) [sha256.Size]byte {
 	identity, _ := json.Marshal([]string{buildInfoUID, specName, strconv.FormatInt(generation, 10)})
 	return sha256.Sum256(identity)
-}
-
-func matchesJobName(name, buildInfoUID, specName string, generation int64) bool {
-	return name == jobNameFor(buildInfoUID, specName, generation) ||
-		name == formerJobNameFor(buildInfoUID, specName, generation) ||
-		name == previousJobNameFor(buildInfoUID, specName, generation) ||
-		name == legacyJobNameFor(buildInfoUID, specName, generation)
 }
 
 // packageNameLabelValue uses the spec-name encoding for repository names. Values over 63 bytes are truncated, so only
@@ -142,6 +117,11 @@ func (c *Controller) dispatchSpec(
 		// (no new generation), a 404 re-creates with the same identity.
 		entryExisted = true
 		generation, name = pend.DispatchGeneration, pend.JobName
+		if expected := jobNameFor(string(round.current.UID), specName, generation); name != expected {
+			return controller.ReconcileResult{}, controller.NewPermanentError(
+				fmt.Errorf("pending Job name %q does not match current deterministic name %q", name, expected),
+			)
+		}
 		existing, err := c.client.GetJob(ctx, namespace, name)
 		if err == nil {
 			if verr := verifyJobIdentity(existing, round.current, specName, generation); verr != nil {
@@ -429,7 +409,7 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 	if job.Namespace != buildInfo.Namespace {
 		return fmt.Errorf("namespace %q != %q", job.Namespace, buildInfo.Namespace)
 	}
-	if !matchesJobName(job.Name, string(buildInfo.UID), specName, generation) {
+	if job.Name != jobNameFor(string(buildInfo.UID), specName, generation) {
 		return fmt.Errorf(
 			"name %q does not match the deterministic name for spec %q generation %d",
 			job.Name,
@@ -795,18 +775,13 @@ func (c *Controller) backfillJobs(
 			)
 		}
 		if len(own) > 0 {
-			// Keep the count above both the listed Job count and the highest confirmed generation, even if older Jobs were
-			// cleaned up.
-			floor := int64(len(own))
+			// Preserve the highest confirmed generation even if older Jobs were cleaned up.
 			for i := range own {
 				job := &own[i]
 				if gen, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64); err == nil &&
-					gen > floor {
-					floor = gen
+					gen > ss.DispatchCount {
+					ss.DispatchCount = gen
 				}
-			}
-			if ss.DispatchCount < floor {
-				ss.DispatchCount = floor
 			}
 			latest := latestJob(own)
 			if applyJobPhase(&ss, latest, priorSucceeded(own, latest)) {
@@ -845,7 +820,7 @@ func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 		job := &jobs[i]
 		generation, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64)
 		spec, valid := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
-		if err == nil && generation > 0 && valid && matchesJobName(job.Name, uid, spec, generation) {
+		if err == nil && generation > 0 && valid && job.Name == jobNameFor(uid, spec, generation) {
 			out = append(out, jobs[i])
 		}
 	}

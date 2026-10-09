@@ -33,18 +33,6 @@ func TestJobNameForDeterministic(t *testing.T) {
 	if got := len(first) - len("a-"); got != 16 {
 		t.Fatalf("hash suffix length = %d, want 16 lowercase hex chars", got)
 	}
-	former := formerJobNameFor("uid-1", "a", 2)
-	if former != "a-2-"+strings.TrimPrefix(first, "a-") {
-		t.Fatalf("former name = %q, want visible generation and the same hash", former)
-	}
-	previous := previousJobNameFor("uid-1", "a", 2)
-	if len(previous)-len("a-2-") != 20 || !strings.HasPrefix(previous, former) {
-		t.Fatalf("previous name = %q, want 20-character hash with former name as prefix", previous)
-	}
-	legacy := legacyJobNameFor("uid-1", "a", 2)
-	if len(legacy)-len("a-2-") != 64 || !strings.HasPrefix(legacy, previous) {
-		t.Fatalf("legacy name = %q, want full hash with previous name as prefix", legacy)
-	}
 	if jobNameFor("uid-1", "a", 3) == first || jobNameFor("uid-2", "a", 2) == first ||
 		jobNameFor("uid-1", "b", 2) == first {
 		t.Fatal("jobNameFor must vary with generation, uid and spec")
@@ -78,27 +66,6 @@ func TestFilterJobsByIdentityRequiresBuildInfoUIDInName(t *testing.T) {
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
 		t.Fatalf("matching Job count = %d, want 1", len(got))
 	}
-	job.Name = formerJobNameFor(string(bi.UID), "a", 1)
-	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
-		t.Fatalf("former Job identity rejected: %v", err)
-	}
-	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
-		t.Fatalf("matching former Job count = %d, want 1", len(got))
-	}
-	job.Name = previousJobNameFor(string(bi.UID), "a", 1)
-	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
-		t.Fatalf("previous Job identity rejected: %v", err)
-	}
-	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
-		t.Fatalf("matching previous Job count = %d, want 1", len(got))
-	}
-	job.Name = legacyJobNameFor(string(bi.UID), "a", 1)
-	if err := verifyJobIdentity(job, bi, "a", 1); err != nil {
-		t.Fatalf("legacy Job identity rejected: %v", err)
-	}
-	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 1 {
-		t.Fatalf("matching legacy Job count = %d, want 1", len(got))
-	}
 	job.Name = "a-1-unrelated"
 	if err := verifyJobIdentity(job, bi, "a", 1); err == nil {
 		t.Fatal("unrelated Job name accepted")
@@ -106,7 +73,7 @@ func TestFilterJobsByIdentityRequiresBuildInfoUIDInName(t *testing.T) {
 	if got := filterJobsByIdentity([]ebsv1.Job{*job}, string(bi.UID)); len(got) != 0 {
 		t.Fatalf("unrelated Job count = %d, want 0", len(got))
 	}
-	job.Name = legacyJobNameFor("previous-buildinfo", "a", 1)
+	job.Name = jobNameFor("previous-buildinfo", "a", 1)
 	if err := verifyJobIdentity(job, bi, "a", 1); err == nil {
 		t.Fatal("foreign Job name accepted")
 	}
@@ -728,7 +695,7 @@ func TestEnsureImageRoundSnapshot(t *testing.T) {
 	}
 	client.FailBuildTargetContent()
 	if _, err = c.ensureImage(context.Background(), round, &roundDispatch{arch: testArch}); err == nil {
-		t.Fatal("ensureImage error = nil, want the build-target Config read failure (E-26 pause)")
+		t.Fatal("ensureImage error = nil, want the build-target Config read failure")
 	}
 }
 
@@ -831,6 +798,26 @@ func TestDispatchBatchStatusConflictRecoversFromJobList(t *testing.T) {
 	}
 	if got := getBuildInfo(t, client).Status.SpecStatus.Entry("a").DispatchCount; got != 1 {
 		t.Fatalf("recovered dispatch count = %d, want 1", got)
+	}
+}
+
+func TestBackfillDispatchCountUsesHighestGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		current int64
+		want    int64
+	}{
+		{current: 0, want: 3},
+		{current: 4, want: 4},
+	} {
+		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+		bi.Status.SpecStatus.Set("a", ebsv1.SpecStatus{DispatchCount: tc.current})
+		job := testJobObj(bi, "a", 3, ebsv1.JobRunning)
+		round := &reconcileRound{current: bi}
+		next := bi.DeepCopy()
+		(&Controller{}).backfillJobs(round, next, []ebsv1.Job{*job}, map[string]bool{"a": true}, false)
+		if got := next.Status.SpecStatus.Entry("a").DispatchCount; got != tc.want {
+			t.Errorf("current=%d, DispatchCount=%d, want %d", tc.current, got, tc.want)
+		}
 	}
 }
 
@@ -1269,5 +1256,22 @@ func TestDispatchSpecUnknownMissingRetriesDeterministicName(t *testing.T) {
 	}
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs after retry = %d, want 1", got)
+	}
+}
+
+func TestDispatchSpecRejectsPendingJobWithDifferentName(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	round, _ := dispatchRound(t, c, client, "bi-pending-name", "a")
+	round.current.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
+		"a": {JobName: "a-1-old-name", DispatchGeneration: 1},
+	}
+	depend := dependEntry("a")
+
+	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil)
+	if err == nil || !controller.IsPermanent(err) {
+		t.Fatalf("dispatchSpec error = %v, want permanent name mismatch", err)
+	}
+	if got := len(listJobs(t, client)); got != 0 {
+		t.Fatalf("jobs = %d, want none", got)
 	}
 }

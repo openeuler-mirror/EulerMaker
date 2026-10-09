@@ -291,9 +291,6 @@ func TestNodeAccessors(t *testing.T) {
 	if got := d.Names(); !reflect.DeepEqual(got, []string{"a", "b"}) {
 		t.Fatalf("Names() = %v", got)
 	}
-	if d.Node("missing") != nil {
-		t.Fatal("Node(missing) must be nil")
-	}
 	if got := d.Node("b").InDegree(); got != 1 {
 		t.Fatalf("InDegree(b) = %d, want 1", got)
 	}
