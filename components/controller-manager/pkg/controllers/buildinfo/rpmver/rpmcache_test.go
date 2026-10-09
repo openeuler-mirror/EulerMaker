@@ -36,7 +36,11 @@ func TestHTTPFetcherIdentifiesMetadataRequests(t *testing.T) {
 				if got := req.UserAgent(); got != "eulermaker-controller-manager/1.0" {
 					t.Fatalf("User-Agent = %q", got)
 				}
-				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("metadata")), Header: make(http.Header)}, nil
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("metadata")),
+					Header:     make(http.Header),
+				}, nil
 			})}
 			body, err := HTTPFetcher(client)(context.Background(), url)
 			if err != nil || string(body) != "metadata" {
@@ -194,8 +198,10 @@ func TestParseRepoSourceBasic(t *testing.T) {
 func TestParseRepoSourceZstd(t *testing.T) {
 	const href = "repodata/abc-primary.xml.zst"
 	f := fetchMap{
-		"http://repo/repodata/repomd.xml": []byte(`<repomd><data type="primary"><location href="` + href + `"/></data></repomd>`),
-		"http://repo/" + href:             zst(t, primaryBody),
+		"http://repo/repodata/repomd.xml": []byte(
+			`<repomd><data type="primary"><location href="` + href + `"/></data></repomd>`,
+		),
+		"http://repo/" + href: zst(t, primaryBody),
 	}
 	src, err := ParseRepoSource(context.Background(), f.fetch, "http://repo", "x86_64")
 	if err != nil {
@@ -288,16 +294,33 @@ func TestPrimaryFileProviders(t *testing.T) {
 	var packages strings.Builder
 	for _, pkg := range []struct{ name, arch, version, files string }{
 		{"net-tools", "aarch64", "2.0", `<file>/usr/bin/netstat</file>`},
-		{"redis", "aarch64", "7.0", `<file>/usr/bin/redis-server</file><file>/usr/bin/redis-cli</file><file type="dir">/etc/redis</file><file type="ghost">/run/redis.pid</file>`},
+		{"redis", "aarch64", "7.0", `<file>/usr/bin/redis-server</file><file>/usr/bin/redis-cli</file>` +
+			`<file type="dir">/etc/redis</file><file type="ghost">/run/redis.pid</file>`},
 		{"scripts", "noarch", "1.0", `<file>/usr/bin/shared-script</file>`},
 		{"redis", "aarch64", "6.0", `<file>/usr/bin/old-redis</file>`},
 		{"net-tools", "noarch", "9.0", `<file>/usr/bin/noarch-netstat</file>`},
 		{"foreign", "x86_64", "1.0", `<file>/usr/bin/foreign</file>`},
 		{"source", "src", "1.0", `<file>/usr/bin/source</file>`},
 	} {
-		fmt.Fprintf(&packages, `<package type="rpm"><name>%s</name><arch>%s</arch><version epoch="0" ver="%s" rel="1"/><format><rpm:sourcerpm>%s-%s-1.src.rpm</rpm:sourcerpm><rpm:provides><rpm:entry name="%s" flags="EQ" epoch="0" ver="%s" rel="1"/></rpm:provides>%s</format></package>`, pkg.name, pkg.arch, pkg.version, pkg.name, pkg.version, pkg.name, pkg.version, pkg.files)
+		fmt.Fprintf(
+			&packages,
+			`<package type="rpm"><name>%s</name><arch>%s</arch>`+
+				`<version epoch="0" ver="%s" rel="1"/><format>`+
+				`<rpm:sourcerpm>%s-%s-1.src.rpm</rpm:sourcerpm><rpm:provides>`+
+				`<rpm:entry name="%s" flags="EQ" epoch="0" ver="%s" rel="1"/>`+
+				`</rpm:provides>%s</format></package>`,
+			pkg.name,
+			pkg.arch,
+			pkg.version,
+			pkg.name,
+			pkg.version,
+			pkg.name,
+			pkg.version,
+			pkg.files,
+		)
 	}
-	body := `<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm">` + packages.String() + `</metadata>`
+	body := `<metadata xmlns="http://linux.duke.edu/metadata/common" ` +
+		`xmlns:rpm="http://linux.duke.edu/metadata/rpm">` + packages.String() + `</metadata>`
 	f := fetchMap{
 		"http://repo/repodata/repomd.xml":         []byte(repomdBody),
 		"http://repo/repodata/abc-primary.xml.gz": gz(t, body),
@@ -308,8 +331,14 @@ func TestPrimaryFileProviders(t *testing.T) {
 	}
 	want := map[string]map[string]string{
 		"net-tools": {"net-tools": "0:2.0-1", "/usr/bin/netstat": "0:2.0-1"},
-		"redis":     {"redis": "0:7.0-1", "/usr/bin/redis-server": "0:7.0-1", "/usr/bin/redis-cli": "0:7.0-1", "/etc/redis": "0:7.0-1", "/run/redis.pid": "0:7.0-1"},
-		"scripts":   {"scripts": "0:1.0-1", "/usr/bin/shared-script": "0:1.0-1"},
+		"redis": {
+			"redis":                 "0:7.0-1",
+			"/usr/bin/redis-server": "0:7.0-1",
+			"/usr/bin/redis-cli":    "0:7.0-1",
+			"/etc/redis":            "0:7.0-1",
+			"/run/redis.pid":        "0:7.0-1",
+		},
+		"scripts": {"scripts": "0:1.0-1", "/usr/bin/shared-script": "0:1.0-1"},
 	}
 	got := make(map[string]map[string]string)
 	for name, rpm := range src.RpmByName {
@@ -322,7 +351,8 @@ func TestPrimaryFileProviders(t *testing.T) {
 		for name, provides := range want {
 			for provide, version := range provides {
 				selected, ok := sources.FindProvider(provide, ebsv1.VersionConst{EQ: version}, nil)
-				if !ok || selected.RPMName != name || selected.Provider.SpecName != name || selected.Provider.Version != version {
+				if !ok || selected.RPMName != name || selected.Provider.SpecName != name ||
+					selected.Provider.Version != version {
 					t.Fatalf("provider for %s = %+v, found=%v", provide, selected, ok)
 				}
 				if !sources.Available(provide, ebsv1.VersionConst{}) {
@@ -384,7 +414,8 @@ func TestEnsureBootstrapLayersOnce(t *testing.T) {
 	if err := s.EnsureBootstrapLayers(context.Background(), counting, urls, "x86_64"); err != nil {
 		t.Fatalf("fill err = %v", err)
 	}
-	if len(s.BootstrapLayer) != 2 || s.BootstrapLayer[0].URL != "http://repo" || s.BootstrapLayer[1].URL != "http://repo2" {
+	if len(s.BootstrapLayer) != 2 || s.BootstrapLayer[0].URL != "http://repo" ||
+		s.BootstrapLayer[1].URL != "http://repo2" {
 		t.Fatalf("bootstrap layers not in declaration order: %+v", s.BootstrapLayer)
 	}
 	first := calls
@@ -430,7 +461,8 @@ func TestGetProvideInfoChain(t *testing.T) {
 		t.Fatalf("absent = %+v, want miss", got)
 	}
 	// Single candidate direct pick.
-	if got := GetProvideInfo("single", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "only" || got.Reason != SelectionSingle {
+	if got := GetProvideInfo("single", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "only" ||
+		got.Reason != SelectionSingle {
 		t.Fatalf("single = %+v", got)
 	}
 	// Version-constraint filter leaves nobody.
@@ -438,7 +470,8 @@ func TestGetProvideInfoChain(t *testing.T) {
 		t.Fatalf("over-constrained = %+v, want miss", got)
 	}
 	// Version-constraint filter selects the only survivor.
-	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{LT: "0:1.5-1"}); got.Provider.SpecName != "foo" || got.Reason != SelectionSingle {
+	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{LT: "0:1.5-1"}); got.Provider.SpecName != "foo" ||
+		got.Reason != SelectionSingle {
 		t.Fatalf("filtered single = %+v, want foo", got)
 	}
 	// prefer hits the @ base-name normalized candidate in order.
@@ -451,7 +484,8 @@ func TestGetProvideInfoChain(t *testing.T) {
 		t.Fatalf("prefer foo base = %+v", got)
 	}
 	// Without prefer: highest version wins.
-	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "foo-epel" || got.Reason != SelectionHighestVersion {
+	if got := GetProvideInfo("libfoo", src, nil, ebsv1.VersionConst{}); got.Provider.SpecName != "foo-epel" ||
+		got.Reason != SelectionHighestVersion {
 		t.Fatalf("highest = %+v, want foo-epel (0:3.0-1)", got)
 	}
 	// Empty candidate version on the highest-version step: whole provide miss.
@@ -517,7 +551,8 @@ func TestFindProviderSelectionReason(t *testing.T) {
 		})},
 	}
 	selection, ok := s.FindProvider("cap", ebsv1.VersionConst{}, []string{"rpm-a", "rpm-b"})
-	if !ok || selection.Provider.SpecName != "spec-a" || selection.Reason != SelectionPrefer || selection.RPMName != "rpm-a" {
+	if !ok || selection.Provider.SpecName != "spec-a" || selection.Reason != SelectionPrefer ||
+		selection.RPMName != "rpm-a" {
 		t.Fatalf("prefer choice = %+v, %v", selection, ok)
 	}
 	selection, ok = s.FindProvider("cap", ebsv1.VersionConst{GT: "0:1.0-1"}, []string{"rpm-a", "rpm-b"})
@@ -545,8 +580,7 @@ func TestAvailable(t *testing.T) {
 	if s.Available("cap", ebsv1.VersionConst{GT: "0:2.0-1"}) {
 		t.Fatal("unsatisfied constraint must be unavailable")
 	}
-	// Dirty repo-layer fallback entry (empty version) falls through to the
-	// bootstrap layer's clean entry.
+	// Dirty repo-layer fallback entry (empty version) falls through to the bootstrap layer's clean entry.
 	if !s.Available("dirty", ebsv1.VersionConst{}) {
 		t.Fatal("dirty repo entry must fall through to bootstrap layer")
 	}

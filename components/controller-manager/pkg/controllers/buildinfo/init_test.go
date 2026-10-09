@@ -68,8 +68,8 @@ func TestInitFullHappyPath(t *testing.T) {
 	requireSpecNames(t, bi, "a", "b")
 	for _, name := range []string{"a", "b"} {
 		ss := bi.Status.SpecStatus.Entry(name)
-		// A freshly created Job carries no phase yet, so Build.Status stays
-		// empty until the first backfill maps Pending/Running.
+		// A freshly created Job carries no phase yet, so Build.Status stays empty until the first backfill maps
+		// Pending/Running.
 		if ss.DispatchCount != 1 {
 			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1)", name, ss)
 		}
@@ -119,7 +119,11 @@ func TestInitDispatchesAtMostTwentyJobsPerReconcile(t *testing.T) {
 		t.Fatalf("first reconcile persisted %d spec entries, want %d", got, maxJobCreatesPerReconcile+1)
 	}
 	if got := client.statusWrites; got > 5 {
-		t.Fatalf("first reconcile wrote status %d times for %d Jobs, want batched confirmation", got, maxJobCreatesPerReconcile)
+		t.Fatalf(
+			"first reconcile wrote status %d times for %d Jobs, want batched confirmation",
+			got,
+			maxJobCreatesPerReconcile,
+		)
 	}
 	for i := 0; i < maxJobCreatesPerReconcile; i++ {
 		name := fmt.Sprintf("pkg%02d", i)
@@ -162,7 +166,8 @@ func TestSingleInitPersistsAllSpecsBeforeBatchedDispatch(t *testing.T) {
 	if got := len(listJobs(t, client)); got != maxJobCreatesPerReconcile {
 		t.Fatalf("first reconcile created %d Jobs, want %d", got, maxJobCreatesPerReconcile)
 	}
-	if bi := getBuildInfo(t, client); bi.Status.Phase != ebsv1.BuildInfoPending || bi.Status.SpecStatus.Len() != maxJobCreatesPerReconcile+1 {
+	if bi := getBuildInfo(t, client); bi.Status.Phase != ebsv1.BuildInfoPending ||
+		bi.Status.SpecStatus.Len() != maxJobCreatesPerReconcile+1 {
 		t.Fatalf("partial single status = %+v, want Pending with all spec entries", bi.Status)
 	}
 
@@ -304,9 +309,8 @@ func TestInitSpecifiedIncludesOnlyDirectDependents(t *testing.T) {
 	git.repo(gitURL2, "c2", map[string]string{"b.spec": specText("b", "a")})
 	git.repo(gitURL3, "c3", map[string]string{"c.spec": specText("c")})
 	git.repo(gitURL4, "c4", map[string]string{"d.spec": specText("d")})
-	// Pre-populated repo layer (URL match -> no download): b joins the build
-	// set via the buildRequires reverse lookup and c via install requires.
-	// d only depends on c, so it is not a direct dependent of the seed a.
+	// Pre-populated repo layer (URL match -> no download): b joins the build set via the buildRequires reverse lookup and
+	// c via install requires. d only depends on c, so it is not a direct dependent of the seed a.
 	c.rpmMetaSources.Set(key, testSources(
 		testRpm("a", "a", "1.0"),
 		testRpm("b", "b", "1.0"),
@@ -607,7 +611,8 @@ func TestInitE19ArchUnsupported(t *testing.T) {
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	client.SeedRpmRepo(testRpmRepoObj(""))
-	armSpec := "Name: a\nVersion: 1.0\nRelease: 1\nSummary: a\nLicense: MIT\nExclusiveArch: aarch64\n\n%description\ntest\n"
+	armSpec := "Name: a\nVersion: 1.0\nRelease: 1\nSummary: a\nLicense: MIT\n" +
+		"ExclusiveArch: aarch64\n\n%description\ntest\n"
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": armSpec, "b.spec": specText("b")})
 
 	reconcileOnce(t, c)
@@ -657,8 +662,8 @@ func TestInitE26ImageMappingMissingPauses(t *testing.T) {
 
 func TestInitE27BuildResourceConfigMissing(t *testing.T) {
 	c, client, git, _ := newTestController(t)
-	// Seed everything except any BuildResourceConfig (project table and the
-	// cluster-wide default resource table is absent).
+	// Seed everything except any BuildResourceConfig (project table and the cluster-wide default resource table is
+	// absent).
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	client.SetBuildTargetContent(testBuildTargetContent())
@@ -676,7 +681,12 @@ func TestInitE27BuildResourceConfigMissing(t *testing.T) {
 	if ss.Build.Status != SpecBuildFailed {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
 	}
-	requireCondition(t, ss.Build.Conditions, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound)
+	requireCondition(
+		t,
+		ss.Build.Conditions,
+		ConditionDefaultBuildResourceConfigNotFound,
+		ReasonDefaultBuildResourceConfigNotFound,
+	)
 	if len(bi.Status.PendingJobCreates) != 0 {
 		t.Fatalf("pendingJobCreates = %v, want empty (this-round registration removed)", bi.Status.PendingJobCreates)
 	}
@@ -810,7 +820,11 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
-	if want := []any{map[string]any{"url": "http://artifact.example:8081/repositories/v1/repo-1/", "priority": float64(10)}}; !reflect.DeepEqual(payloadFields(t, jobs[0].Spec.Payload)["repo"], want) {
+	want := []any{map[string]any{"url": "http://artifact.example:8081/repositories/v1/repo-1/", "priority": float64(10)}}
+	if !reflect.DeepEqual(
+		payloadFields(t, jobs[0].Spec.Payload)["repo"],
+		want,
+	) {
 		t.Fatalf("payload = %q, want repo %v", jobs[0].Spec.Payload, want)
 	}
 }
@@ -828,8 +842,18 @@ func TestSinglePreferWithoutDependencyGate(t *testing.T) {
 	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a", "cap", "missing")})
 	sources := testSources(
-		rpmver.RpmMeta{Name: "rpm-a", Version: "0:1.0-1", SpecName: "spec-a", Provides: map[string]string{"cap": "0:1.0-1"}},
-		rpmver.RpmMeta{Name: "rpm-b", Version: "0:2.0-1", SpecName: "spec-b", Provides: map[string]string{"cap": "0:2.0-1"}},
+		rpmver.RpmMeta{
+			Name:     "rpm-a",
+			Version:  "0:1.0-1",
+			SpecName: "spec-a",
+			Provides: map[string]string{"cap": "0:1.0-1"},
+		},
+		rpmver.RpmMeta{
+			Name:     "rpm-b",
+			Version:  "0:2.0-1",
+			SpecName: "spec-b",
+			Provides: map[string]string{"cap": "0:2.0-1"},
+		},
 	)
 	c.rpmMetaSources.Set(testNS+"/"+testBuild, sources)
 
@@ -872,7 +896,8 @@ func TestSingleDegradedPerPackage(t *testing.T) {
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	cond := requireCondition(t, bi.Status.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing)
-	if !strings.Contains(cond.Message, "repo1 (gone)") || !strings.Contains(cond.Message, "ghost (not in packageRepos)") {
+	if !strings.Contains(cond.Message, "repo1 (gone)") ||
+		!strings.Contains(cond.Message, "ghost (not in packageRepos)") {
 		t.Fatalf("condition message = %q, want both skipped repos", cond.Message)
 	}
 	requireSpecNames(t, bi, "b")
@@ -908,7 +933,8 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		seedHealthyBasics(client, "single", "repo1")
 		client.SeedSnapshot(testSnapshotObj(
 			repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-		armSpec := "Name: a\nVersion: 1.0\nRelease: 1\nSummary: a\nLicense: MIT\nExclusiveArch: aarch64\n\n%description\ntest\n"
+		armSpec := "Name: a\nVersion: 1.0\nRelease: 1\nSummary: a\nLicense: MIT\n" +
+			"ExclusiveArch: aarch64\n\n%description\ntest\n"
 		git.repo(gitURL1, "c1", map[string]string{"a.spec": armSpec})
 
 		reconcileOnce(t, c)
@@ -951,7 +977,12 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		if ss.Build.Status != SpecBuildFailed {
 			t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
 		}
-		requireCondition(t, ss.Build.Conditions, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound)
+		requireCondition(
+			t,
+			ss.Build.Conditions,
+			ConditionDefaultBuildResourceConfigNotFound,
+			ReasonDefaultBuildResourceConfigNotFound,
+		)
 	})
 }
 

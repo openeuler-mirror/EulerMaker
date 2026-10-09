@@ -1,8 +1,6 @@
-// Package specparse parses *.spec files into SpecDepend (design 16.3).
-// It first expands each spec with rpmspec. RPM macro expansion can execute
-// %(...) shell escapes and %{lua:...} blocks on the controller host, so
-// package sources must be trusted. rpmspec errors do not fall back to raw
-// text parsing. The expanded text is then converted into SpecDepend.
+// Package specparse parses *.spec files into SpecDepend. It first expands each spec with rpmspec. RPM macro expansion
+// can execute %(...) shell escapes and %{lua:...} blocks on the controller host, so package sources must be trusted.
+// rpmspec errors do not fall back to raw text parsing. The expanded text is then converted into SpecDepend.
 package specparse
 
 import (
@@ -20,9 +18,8 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// SpecDepend is the in-memory parse product of one *.spec file (design
-// 16.3). It is not part of the API schema: BuildInfoSpec no longer
-// persists specDepends, so the type lives with its producer.
+// SpecDepend is the in-memory parse product of one *.spec file. It is not an API type because BuildInfo does not
+// persist parsed spec dependencies.
 type SpecDepend struct {
 	RepoName      string                        `json:"repoName"`
 	SpecName      string                        `json:"specName"`
@@ -37,9 +34,8 @@ type SpecDepend struct {
 	BuildRemoves  map[string]ebsv1.VersionConst `json:"buildRemoves,omitempty"`
 }
 
-// defaultExclusiveArch is the platform default architecture set used when a
-// spec declares no ExclusiveArch. Callers receive a copy; the package array
-// is never mutated.
+// defaultExclusiveArch is the platform default architecture set used when a spec declares no ExclusiveArch. Callers
+// receive a copy; the package array is never mutated.
 var defaultExclusiveArch = [...]string{"x86_64", "aarch64", "loongarch64", "riscv64", "ppc64le", "sw_64"}
 
 // rpmspecCommand is a package variable so tests can point it at a stub.
@@ -60,7 +56,9 @@ var (
 	sourceTagPattern     = regexp.MustCompile(`(?im)^[ \t]*Source([0-9]*):[ \t]*(\S+)`)
 	literalNamePattern   = regexp.MustCompile(`(?im)^[ \t]*Name:[ \t]*([A-Za-z0-9][A-Za-z0-9._+-]*)[ \t]*$`)
 	loadSourcePattern    = regexp.MustCompile(`(?i)%\{load:[ \t]*%\{SOURCE([0-9]+)\}[ \t]*\}`)
-	luaOpenSourcePattern = regexp.MustCompile(`(?i)io\.(?:open|lines)[ \t]*\([ \t]*rpm\.expand[ \t]*\([ \t]*["']%SOURCE([0-9]+)["'][ \t]*\)`)
+	luaOpenSourcePattern = regexp.MustCompile(
+		`(?i)io\.(?:open|lines)[ \t]*\([ \t]*rpm\.expand[ \t]*\([ \t]*["']%SOURCE([0-9]+)["'][ \t]*\)`,
+	)
 )
 
 // Bound rpmspec subprocesses across all concurrent BuildInfo reconciles.
@@ -75,15 +73,19 @@ type SourceFetchError struct {
 func (e *SourceFetchError) Error() string { return fmt.Sprintf("fetch source %s: %v", e.Name, e.Err) }
 func (e *SourceFetchError) Unwrap() error { return e.Err }
 
-// Parse expands one *.spec file using rpmspec and parses the result. arch is
-// the --target value; macros are buildPayload.macros lines passed to --load.
+// Parse expands one *.spec file using rpmspec and parses the result. arch is the --target value; macros are
+// buildPayload.macros lines passed to --load.
 func Parse(specText, specFileName, repoName, arch string, macros []string) (*SpecDepend, error) {
 	return ParseWithSources(specText, specFileName, repoName, arch, macros, nil)
 }
 
-// ParseWithSources may fetch a bounded number of missing, root-level text
-// files into an isolated SOURCES directory before retrying rpmspec.
-func ParseWithSources(specText, specFileName, repoName, arch string, macros []string, fetch func(string) (string, error)) (*SpecDepend, error) {
+// ParseWithSources may fetch a bounded number of missing, root-level text files into an isolated SOURCES directory
+// before retrying rpmspec.
+func ParseWithSources(
+	specText, specFileName, repoName, arch string,
+	macros []string,
+	fetch func(string) (string, error),
+) (*SpecDepend, error) {
 	text, err := expandWithSources(specText, arch, macros, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("rpmspec %s: %w", specFileName, err)
@@ -91,8 +93,8 @@ func ParseWithSources(specText, specFileName, repoName, arch string, macros []st
 	return parseSpec(text, specFileName, repoName, macros)
 }
 
-// expandWithRpmspec returns an error on startup, execution, timeout or empty
-// output instead of silently parsing the unexpanded input.
+// expandWithRpmspec returns an error on startup, execution, timeout or empty output instead of silently parsing the
+// unexpanded input.
 func expandWithRpmspec(specText, arch string, macros []string) (string, error) {
 	return expandWithSources(specText, arch, macros, nil)
 }
@@ -114,9 +116,8 @@ func expandWithSources(specText, arch string, macros []string, fetch func(string
 	if err := os.WriteFile(specPath, []byte(specText), 0o644); err != nil {
 		return "", err
 	}
-	// The macro file is always created (empty when macros is unset); entries
-	// are written verbatim with a trailing newline, no %define prefix, no
-	// escaping, sorting or validation.
+	// The macro file is always created (empty when macros is unset); entries are written verbatim with a trailing newline,
+	// no %define prefix, no escaping, sorting or validation.
 	var macroContent strings.Builder
 	for _, line := range macros {
 		macroContent.WriteString(line)
@@ -145,7 +146,16 @@ func expandWithSources(specText, arch string, macros []string, fetch func(string
 	for attempt := 0; attempt <= maxSourceFiles; attempt++ {
 		rpmspecProcessSlots <- struct{}{}
 		ctx, cancel := context.WithTimeout(context.Background(), rpmspecTimeout)
-		cmd := exec.CommandContext(ctx, rpmspecCommand, "--target="+arch, "-P", specPath, "--load="+macroPath, "--define", "_sourcedir "+sourceDir)
+		cmd := exec.CommandContext(
+			ctx,
+			rpmspecCommand,
+			"--target="+arch,
+			"-P",
+			specPath,
+			"--load="+macroPath,
+			"--define",
+			"_sourcedir "+sourceDir,
+		)
 		out, runErr := cmd.Output()
 		ctxErr := ctx.Err()
 		cancel()
@@ -182,8 +192,8 @@ func expandWithSources(specText, arch string, macros []string, fetch func(string
 	return "", errors.New("source retry limit exceeded")
 }
 
-// explicitlyReadSources recognizes only literal SourceN reads performed while
-// parsing the spec. It does not evaluate arbitrary Lua or RPM macros.
+// explicitlyReadSources recognizes only literal SourceN reads performed while parsing the spec. It does not evaluate
+// arbitrary Lua or RPM macros.
 func explicitlyReadSources(specText string) ([]string, error) {
 	name := ""
 	if match := literalNamePattern.FindStringSubmatch(specText); match != nil {
@@ -292,9 +302,8 @@ type specModel struct {
 	excludeArch   []string
 }
 
-// Tag tables. Single-value tags keep the last occurrence; the five
-// constraint/list tags are the only ones this controller consumes; the
-// recognized-but-unconsumed names still terminate multiline accumulation.
+// Tag tables. Single-value tags keep the last occurrence; the five constraint/list tags are the only ones this
+// controller consumes; the recognized-but-unconsumed names still terminate multiline accumulation.
 var singleValueTags = map[string]bool{
 	"name": true, "version": true, "release": true, "epoch": true,
 	"url": true, "summary": true, "group": true, "license": true,
@@ -332,7 +341,8 @@ var mergeOperators = map[string]bool{
 }
 
 func knownTag(name string) bool {
-	return singleValueTags[name] || consumedListTags[name] || otherRecognizedTags[name] || sourcePatchTag.MatchString(name)
+	return singleValueTags[name] || consumedListTags[name] || otherRecognizedTags[name] ||
+		sourcePatchTag.MatchString(name)
 }
 
 // parseSpec parses text (rpmspec-expanded or raw) into a SpecDepend.
@@ -342,8 +352,8 @@ func parseSpec(text, specFileName, repoName string, macros []string) (*SpecDepen
 	return buildSpec(m, specFileName, repoName)
 }
 
-// payloadMacroDefinitions reads simple RPM macro-file forms for any macro
-// references left in rpmspec output. Definitions inside the spec override these.
+// payloadMacroDefinitions reads simple RPM macro-file forms for any macro references left in rpmspec output.
+// Definitions inside the spec override these.
 func payloadMacroDefinitions(lines []string) map[string]string {
 	definitions := make(map[string]string)
 	for _, line := range lines {
@@ -414,8 +424,8 @@ func classifyLine(line string) (kind lineKind, tag, value string) {
 	return lineNone, "", ""
 }
 
-// directiveLine reports whether line starts with the given %-directive as a
-// whole word and returns the remainder of the line.
+// directiveLine reports whether line starts with the given %-directive as a whole word and returns the remainder of the
+// line.
 func directiveLine(line, directive string) (string, bool) {
 	if !strings.HasPrefix(line, directive) {
 		return "", false
@@ -427,8 +437,8 @@ func directiveLine(line, directive string) (string, bool) {
 	return strings.TrimSpace(rest), true
 }
 
-// parseLines walks the text applying the line grammar: first-hit pattern
-// table, subpackage context, duplicate merging and multiline accumulation
+// parseLines walks the text applying the line grammar: first-hit pattern table, subpackage context, duplicate merging
+// and multiline accumulation
 // (description/changelog content is not consumed, but the mode must still be
 // terminated correctly or following tags would be lost).
 func parseLines(text string, m *specModel) {
@@ -458,15 +468,13 @@ func parseLines(text string, m *specModel) {
 			multiline = true
 			inSubpackage = false
 		case lineTagSingle:
-			// Tags inside a %package section belong to the subpackage and are
-			// never merged into the spec-level result.
+			// Tags inside a %package section belong to the subpackage and are never merged into the spec-level result.
 			if inSubpackage {
 				continue
 			}
 			m.props[tag] = firstToken(value)
 		case lineTagList:
-			// Tags inside a %package section belong to the subpackage and are
-			// never merged into the spec-level result.
+			// Tags inside a %package section belong to the subpackage and are never merged into the spec-level result.
 			if inSubpackage {
 				continue
 			}
@@ -478,8 +486,7 @@ func parseLines(text string, m *specModel) {
 			case "provides":
 				m.provides = append(m.provides, value)
 			case "exclusivearch":
-				// Per-line accumulation: a later line's items go before the
-				// existing list (order is not consumed).
+				// Per-line accumulation: a later line's items go before the existing list (order is not consumed).
 				m.exclusiveArch = append(strings.Fields(value), m.exclusiveArch...)
 			case "excludearch":
 				m.excludeArch = append(strings.Fields(value), m.excludeArch...)
@@ -507,8 +514,8 @@ func firstToken(value string) string {
 	return ""
 }
 
-// buildSpec resolves macros and derives the SpecDepend from the accumulated
-// model. Missing Name or Version is a parseFailed.
+// buildSpec resolves macros and derives the SpecDepend from the accumulated model. Missing Name or Version is a
+// parseFailed.
 func buildSpec(m *specModel, specFileName, repoName string) (*SpecDepend, error) {
 	specName, err := expandMacros(m.props["name"], m)
 	if err != nil {
@@ -561,9 +568,7 @@ func buildSpec(m *specModel, specFileName, repoName string) (*SpecDepend, error)
 	exclude = normalizeX86(exclude)
 	exclusive = removeAll(exclusive, exclude)
 	if len(exclusive) == 0 {
-		// 16.3 invariant "归一后列表恒非空": an empty whitelist would mean "no
-		// buildable architecture", but archSupported treats empty as
-		// allow-all — the inversion is a parseFailed (routed by E-23).
+		// An empty whitelist means no buildable architecture, but archSupported treats empty as allow-all, so reject it here.
 		return nil, fmt.Errorf("spec %s: exclusiveArch fully excluded by excludeArch", specName)
 	}
 	buildRequires, buildRemoves := splitBuildRequires(buildParsed)
@@ -582,15 +587,12 @@ func buildSpec(m *specModel, specFileName, repoName string) (*SpecDepend, error)
 	}, nil
 }
 
-// expandMacros expands %{...} references, including nested conditional bodies,
-// with lookup order: spec macro table (%define/%global) then same-named spec
-// attributes. Undefined or empty references stay literal; conditional macros
-// follow %{?x}/%{!x} semantics; expansion recurses until a round changes
-// nothing. %{!x} without a default and x undefined is a parseFailed.
-// maxExpandRounds and maxExpandLength bound macro expansion. Mutually
-// referencing macros (%define x %{y} + %define y %{x}) never reach a fixed
-// point, and self-referencing macros (%define x %{x}a) grow without bound;
-// exceeding either bound fails the spec (parseFailed, routed by E-23).
+// expandMacros expands %{...} references, including nested conditional bodies, with lookup order: spec macro table
+// (%define/%global) then same-named spec attributes. Undefined or empty references stay literal; conditional macros
+// follow %{?x}/%{!x} semantics; expansion recurses until a round changes nothing. %{!x} without a default and x
+// undefined is a parseFailed. maxExpandRounds and maxExpandLength bound macro expansion. Mutually referencing macros
+// (%define x %{y} + %define y %{x}) never reach a fixed point, and self-referencing macros (%define x %{x}a) grow
+// without bound; exceeding either bound fails the spec.
 const (
 	maxExpandRounds = 32
 	maxExpandLength = 64 * 1024
@@ -615,8 +617,8 @@ func expandMacros(value string, m *specModel) (string, error) {
 	}
 }
 
-// expandMacroRound walks complete outermost references. A regular expression
-// would stop at the inner '}' in %{?name:%{other}} and leave a stray brace.
+// expandMacroRound walks complete outermost references. A regular expression would stop at the inner '}' in
+// %{?name:%{other}} and leave a stray brace.
 func expandMacroRound(value string, m *specModel) (string, error) {
 	var out strings.Builder
 	for offset := 0; offset < len(value); {
@@ -666,8 +668,8 @@ func macroEnd(value string, start int) int {
 	return -1
 }
 
-// expandOne resolves one %{...} body. keep reports that the literal must be
-// preserved (undefined or empty plain reference).
+// expandOne resolves one %{...} body. keep reports that the literal must be preserved (undefined or empty plain
+// reference).
 func expandOne(inner string, m *specModel) (replacement string, keep bool, err error) {
 	if inner == "" {
 		return "", true, nil
@@ -715,8 +717,8 @@ func expandOne(inner string, m *specModel) (replacement string, keep bool, err e
 	return "", false, fmt.Errorf("macro %%{!%s} is undefined and has no default", name)
 }
 
-// lookupMacro resolves a macro name: macro table first, then same-named spec
-// attribute. defined means present with a non-empty value.
+// lookupMacro resolves a macro name: macro table first, then same-named spec attribute. defined means present with a
+// non-empty value.
 func lookupMacro(name string, m *specModel) (string, bool) {
 	if value, ok := m.macros[name]; ok && value != "" {
 		return value, true
@@ -727,13 +729,11 @@ func lookupMacro(name string, m *specModel) (string, bool) {
 	return "", false
 }
 
-// rawRequirement is one phase-A token: a name, optionally with operator and
-// version.
+// rawRequirement is one phase-A token: a name, optionally with operator and version.
 type rawRequirement struct{ name, op, version string }
 
-// tokenizeRequirements performs phase A: split on blanks/commas, merge
-// operator triples, then decompose with the拆解 regex. An operator token
-// without a preceding token is a parseFailed.
+// tokenizeRequirements performs phase A: split on blanks/commas, merge operator triples, then decompose with the拆解
+// regex. An operator token without a preceding token is a parseFailed.
 func tokenizeRequirements(line string) ([]rawRequirement, error) {
 	tokens := strings.FieldsFunc(line, func(r rune) bool {
 		return r == ' ' || r == '\t' || r == '\n' || r == ','
@@ -767,11 +767,10 @@ func tokenizeRequirements(line string) ([]rawRequirement, error) {
 	return out, nil
 }
 
-// parseRequirements performs the full two-phase requirement parsing over the
-// given raw line values: macro-expand each line, tokenize, then merge into
+// parseRequirements performs the full two-phase requirement parsing over the given raw line values: macro-expand each
+// line, tokenize, then merge into
 // {name: {op: version}} with the documented rules (with-skip, bare-operator
-// flag backfill, == inline whole-key replacement, paren stripping, same
-// name+op last-wins).
+// flag backfill, == inline whole-key replacement, paren stripping, same name+op last-wins).
 func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionConst, error) {
 	res := map[string]map[string]string{}
 	var stack []string
@@ -798,8 +797,7 @@ func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionCo
 		for _, requirement := range requirements {
 			name := requirement.name
 			if pendingOp != "" {
-				// A pending bare-operator flag consumes this token's name as
-				// the version of the last registered entry (LIFO).
+				// A pending bare-operator flag consumes this token's name as the version of the last registered entry (LIFO).
 				if err := backfill(name); err != nil {
 					return nil, err
 				}
@@ -845,11 +843,9 @@ func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionCo
 				res[name][operatorWords[requirement.op]] = expandedVersion
 			}
 		}
-		// A bare-operator flag dangling at end of line is discarded: the
-		// registered dependency keeps its bare (versionless) constraint, and
-		// the next line's first token is never consumed as its version.
-		// Dangling operators are legitimate input — macro expansion can
-		// empty a trailing version, e.g. "Requires: glibc => %{?ver}".
+		// A bare-operator flag dangling at end of line is discarded: the registered dependency keeps its bare (versionless)
+		// constraint, and the next line's first token is never consumed as its version. Dangling operators are legitimate
+		// input — macro expansion can empty a trailing version, e.g. "Requires: glibc => %{?ver}".
 		pendingOp, pendingName = "", ""
 	}
 	out := make(map[string]ebsv1.VersionConst, len(res))
@@ -859,8 +855,7 @@ func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionCo
 	return out, nil
 }
 
-// splitBuildRequires routes "-" prefixed keys to buildRemoves (prefix
-// stripped) and the rest to buildRequires.
+// splitBuildRequires routes "-" prefixed keys to buildRemoves (prefix stripped) and the rest to buildRequires.
 func splitBuildRequires(parsed map[string]ebsv1.VersionConst) (requires, removes map[string]ebsv1.VersionConst) {
 	requires = map[string]ebsv1.VersionConst{}
 	removes = map[string]ebsv1.VersionConst{}
@@ -874,8 +869,7 @@ func splitBuildRequires(parsed map[string]ebsv1.VersionConst) (requires, removes
 	return requires, removes
 }
 
-// expandArchList macro-expands each accumulated line and splits it into
-// items.
+// expandArchList macro-expands each accumulated line and splits it into items.
 func expandArchList(lines []string, m *specModel) ([]string, error) {
 	var out []string
 	for _, line := range lines {
@@ -888,8 +882,8 @@ func expandArchList(lines []string, m *specModel) ([]string, error) {
 	return out, nil
 }
 
-// normalizeExclusiveArch applies the default architecture set to an empty
-// declaration and the x86 → x86_64 normalization.
+// normalizeExclusiveArch applies the default architecture set to an empty declaration and the x86 → x86_64
+// normalization.
 func normalizeExclusiveArch(list []string) []string {
 	if len(list) == 0 {
 		out := make([]string, len(defaultExclusiveArch))
@@ -931,8 +925,8 @@ func removeAll(list, excludes []string) []string {
 	return out
 }
 
-// joinVersion composes the final version: a non-zero epoch is prefixed as
-// epoch:version, a non-empty release is appended as -release.
+// joinVersion composes the final version: a non-zero epoch is prefixed as epoch:version, a non-empty release is
+// appended as -release.
 func joinVersion(epoch, version, release string) string {
 	out := version
 	if epoch != "" && epoch != "0" {

@@ -1,7 +1,4 @@
-// Package buildinfo implements the BuildInfo controller (design
-// controller-manager~buildinfo-controller.md): it assembles the spec
-// dependency graph, determines the build set, dispatches Jobs under the
-// ordering gates and aggregates build results into BuildInfo.status.
+// Package buildinfo assembles spec dependencies, dispatches Jobs, and aggregates their results into BuildInfo status.
 package buildinfo
 
 import (
@@ -27,11 +24,11 @@ import (
 // Name is the controller identifier used in logs, metrics and --controllers.
 const Name = "buildinfo"
 
-// Terminal BuildInfos do not need periodic reconcile; a match leaving the
-// polling snapshot is only a filter transition, not proof of deletion.
+// Terminal BuildInfos do not need periodic reconcile; a match leaving the polling snapshot is only a filter transition,
+// not proof of deletion.
 const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!=Aborted"
 
-// Config carries the BuildInfo controller settings (design 12.1).
+// Config carries the BuildInfo controller settings.
 type Config struct {
 	// ArtifactManagerAddr is reachable by this controller and Job containers.
 	ArtifactManagerAddr string
@@ -39,19 +36,14 @@ type Config struct {
 	PollPeriod time.Duration
 	// MaxRetries is the fast-backoff budget before slow retry (shared).
 	MaxRetries int
-	// DcgPruneGrace is the tombstone grace of the per-BuildInfo caches
-	// (--build-info-dcg-prune-grace, default 3*PollPeriod; design 5.4).
+	// DcgPruneGrace is the tombstone grace of the per-BuildInfo caches.
 	DcgPruneGrace time.Duration
-	// RpmRepoReadyRetryLimit is the consecutive XML parse failure threshold
-	// that escalates to RpmRepoUnavailable (--rpmrepo-ready-retry-limit,
-	// default 3; design E-29). Temporary read/download failures do not count.
+	// RpmRepoReadyRetryLimit is the consecutive XML parse failure threshold for RpmRepoUnavailable. Temporary
+	// read/download failures do not count.
 	RpmRepoReadyRetryLimit int
-	// SnapshotReadyRetryLimit is the consecutive-failure threshold that
-	// escalates to SnapshotUnavailable (--snapshot-ready-retry-limit,
-	// default 3; design E-30).
+	// SnapshotReadyRetryLimit is the consecutive-failure threshold for SnapshotUnavailable.
 	SnapshotReadyRetryLimit int
-	// SpecFileCacheSize is the global spec file LRU capacity
-	// (--specfile-cache-size, default 10000; design 15.11).
+	// SpecFileCacheSize is the global spec file LRU capacity.
 	SpecFileCacheSize int
 }
 
@@ -80,22 +72,26 @@ type Controller struct {
 	clock      clock.Clock
 	config     Config
 
-	// Per-BuildInfo caches keyed by <namespace>/<name> with the shared
-	// tombstone lifecycle (design 5.4/15.9-15.11).
+	// Per-BuildInfo caches share a tombstone lifecycle and use namespace/name keys.
 	dcgDict          *perBuildInfoCache[*DcgDict]
 	rpmMetaSources   *perBuildInfoCache[*rpmver.RpmMetaSources]
 	specDependsCache *perBuildInfoCache[map[string]specparse.SpecDepend]
 	abortJobs        *perBuildInfoCache[*jobAbortProgress]
-	// specFiles is the global spec file LRU (design 15.11.2); it survives
-	// BuildInfo terminal states and is only capacity-evicted.
+	// specFiles is the global spec file LRU; it survives BuildInfo terminal states and is only capacity-evicted.
 	specFiles *specFileCache
 	counters  *failureCounters
 }
 
-// New builds the controller and registers the BuildInfo event handler on the
-// polling source (design 2.2/5.2). Event handlers are pure in-memory: type
-// check, tombstone bookkeeping and enqueue; zero apiserver I/O.
-func New(buildInfos source.Source, client Client, gitServer gitserver.GitServerClient, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
+// New builds the controller and registers the BuildInfo event handler on the polling source. Event handlers are pure
+// in-memory: type check, tombstone bookkeeping and enqueue; zero apiserver I/O.
+func New(
+	buildInfos source.Source,
+	client Client,
+	gitServer gitserver.GitServerClient,
+	clk clock.Clock,
+	config Config,
+	options ...controller.Option,
+) (*Controller, error) {
 	if buildInfos == nil || client == nil || gitServer == nil || clk == nil {
 		return nil, fmt.Errorf("BuildInfo source, API client, git-server client and clock are required")
 	}
@@ -115,46 +111,65 @@ func New(buildInfos source.Source, client Client, gitServer gitserver.GitServerC
 		specFiles:        newSpecFileCache(config.SpecFileCacheSize),
 		counters:         newFailureCounters(),
 	}
-	log.Printf("controller=%s reason=SpecParseRpmspec warning=%q", Name,
-		"rpmspec expands package source on this host; %(...) and %{lua:...} can execute code, so only trusted repositories are safe")
+	log.Printf(
+		"controller=%s reason=SpecParseRpmspec warning=%q",
+		Name,
+		"rpmspec expands package source on this host; %(...) and %{lua:...} can execute code, "+
+			"so only trusted repositories are safe",
+	)
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
 	}
 	c.BaseController = base
-	if err := buildInfos.AddEventHandler(source.ResourceEventHandlerFuncs{AddFunc: c.onAdd, UpdateFunc: c.onUpdate, DeleteFunc: c.onDelete}); err != nil {
+	if err := buildInfos.AddEventHandler(source.ResourceEventHandlerFuncs{
+		AddFunc: c.onAdd, UpdateFunc: c.onUpdate, DeleteFunc: c.onDelete,
+	}); err != nil {
 		return nil, fmt.Errorf("register BuildInfo handler: %w", err)
 	}
 	return c, nil
 }
 
-// Initializer wires the controller into the manager with a non-terminal
-// BuildInfo polling source and the shared slow-retry policy.
+// Initializer wires the controller into the manager with a non-terminal BuildInfo polling source and the shared
+// slow-retry policy.
 func Initializer(config Config, gitClient gitserver.GitServerClient) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		shared, ok := init.Dependencies.Client.(SharedClient)
 		if !ok {
 			return nil, false, fmt.Errorf("shared API client does not implement the BuildInfo SharedClient surface")
 		}
-		buildInfos, err := init.Dependencies.PollingFactory.ForResource(source.BuildInfosGVR, config.PollPeriod, metav1.ListOptions{FieldSelector: nonTerminalBuildInfoFieldSelector})
+		buildInfos, err := init.Dependencies.PollingFactory.ForResource(
+			source.BuildInfosGVR,
+			config.PollPeriod,
+			metav1.ListOptions{FieldSelector: nonTerminalBuildInfoFieldSelector},
+		)
 		if err != nil {
 			return nil, false, err
 		}
-		value, err := New(buildInfos, newAPIClient(shared), gitClient, clock.RealClock{}, config,
-			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
+		value, err := New(
+			buildInfos,
+			newAPIClient(shared),
+			gitClient,
+			clock.RealClock{},
+			config,
+			controller.WithSlowRetry(
+				init.Config.SlowRetryInitial,
+				init.Config.SlowRetryMax,
+				init.Config.SlowRetryJitter,
+			),
+		)
 		return value, err == nil, err
 	}
 }
 
-// Run starts the worker pool plus the tombstone sweeper (design 5.4).
+// Run starts the worker pool and tombstone sweeper.
 func (c *Controller) Run(ctx context.Context, workers int) error {
 	go c.sweepLoop(ctx)
 	return c.BaseController.Run(ctx, workers)
 }
 
-// sweepLoop periodically prunes expired tombstones from the per-BuildInfo
-// caches. Expiry is also applied lazily on access; the sweeper bounds memory
-// for keys that are never touched again.
+// sweepLoop periodically prunes expired tombstones from the per-BuildInfo caches. Expiry is also applied lazily on
+// access; the sweeper bounds memory for keys that are never touched again.
 func (c *Controller) sweepLoop(ctx context.Context) {
 	ticker := time.NewTicker(c.config.DcgPruneGrace)
 	defer ticker.Stop()
@@ -163,7 +178,8 @@ func (c *Controller) sweepLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			removed := c.dcgDict.SweepExpired() + c.rpmMetaSources.SweepExpired() + c.specDependsCache.SweepExpired() + c.abortJobs.SweepExpired()
+			removed := c.dcgDict.SweepExpired() + c.rpmMetaSources.SweepExpired() +
+				c.specDependsCache.SweepExpired() + c.abortJobs.SweepExpired()
 			if removed > 0 {
 				log.Printf("controller=%s event=cache-sweep removed=%d", Name, removed)
 			}
@@ -171,19 +187,16 @@ func (c *Controller) sweepLoop(ctx context.Context) {
 	}
 }
 
-// onAdd handles a BuildInfo entering the polling snapshot (design 5.2).
+// onAdd handles a BuildInfo entering the polling snapshot.
 func (c *Controller) onAdd(obj runtime.Object) { c.enqueueBuildInfo(obj) }
 
-// onUpdate handles a BuildInfo snapshot refresh. The same resourceVersion is
-// re-enqueued on purpose: polling Updates are the resync fallback for lost
-// events, slow retries and recovered external dependencies (5.2).
+// onUpdate handles a BuildInfo snapshot refresh. The same resourceVersion is re-enqueued on purpose: polling Updates
+// are the resync fallback for lost events, slow retries and recovered external dependencies.
 func (c *Controller) onUpdate(_, newObj runtime.Object) { c.enqueueBuildInfo(newObj) }
 
-// onDelete only tombstones the per-BuildInfo caches: disappearing from the
-// polling snapshot does not prove a physical delete, so the entry survives a
-// spurious empty list for the grace period (5.2/5.4). The failure counters
-// and the log-dedup entries carry no tombstone semantics (5.4: cleared on
-// delete, no grace) — a recreated same-name BuildInfo must start from zero.
+// onDelete only tombstones the per-BuildInfo caches: disappearing from the polling snapshot does not prove a physical
+// delete, so the entry survives a spurious empty list for the grace period. Failure counters and log-dedup entries are
+// cleared immediately, so a recreated BuildInfo starts from zero.
 func (c *Controller) onDelete(obj runtime.Object) {
 	buildInfo, ok := obj.(*ebsv1.BuildInfo)
 	if !ok || buildInfo == nil || buildInfo.Name == "" || buildInfo.Namespace == "" {
@@ -196,8 +209,8 @@ func (c *Controller) onDelete(obj runtime.Object) {
 	dedup.forgetKey(key)
 }
 
-// enqueueBuildInfo revokes pending tombstones and enqueues every object in the
-// server-filtered polling result. Reconcile GET verifies the current phase.
+// enqueueBuildInfo revokes pending tombstones and enqueues every object in the server-filtered polling result.
+// Reconcile GET verifies the current phase.
 func (c *Controller) enqueueBuildInfo(obj runtime.Object) {
 	buildInfo, ok := obj.(*ebsv1.BuildInfo)
 	if !ok || buildInfo == nil || buildInfo.Name == "" || buildInfo.Namespace == "" {
@@ -209,9 +222,8 @@ func (c *Controller) enqueueBuildInfo(obj runtime.Object) {
 	c.Enqueue(key)
 }
 
-// invalidateCaches drops the per-BuildInfo caches, counters and log-dedup
-// entries immediately: terminal phase observed or re-get 404 during
-// reconcile (design 5.4). The global spec file LRU is untouched.
+// invalidateCaches drops the per-BuildInfo caches, counters and log-dedup entries immediately: terminal phase observed
+// or re-get 404 during reconcile. The global spec file LRU is untouched.
 func (c *Controller) invalidateCaches(key string) {
 	c.dcgDict.Invalidate(key)
 	c.rpmMetaSources.Invalidate(key)
@@ -243,19 +255,17 @@ const (
 	counterSnapshot
 )
 
-// failureCounter is one per-BuildInfo readiness counter entry (design 5.4):
-// consecutive failures plus the last failure checkpoint of the current
-// streak for the escalated condition message.
+// failureCounter is one per-BuildInfo readiness counter entry:
+// consecutive failures plus the last failure checkpoint of the current streak for the escalated condition message.
 type failureCounter struct {
 	ConsecutiveFails int
 	LastReason       string
 	LastMessage      string
 }
 
-// failureCounters holds the rpmRepoReadyFailures and snapshotReadyFailures
-// maps (design 5.4): RWMutex-guarded, keyed by <namespace>/<name>, no TTL,
-// never persisted. Entries are cleared on success, after the escalated stop
-// marker write is confirmed, and on terminal/delete (no tombstone grace).
+// failureCounters holds the rpmRepoReadyFailures and snapshotReadyFailures maps: RWMutex-guarded, keyed by
+// namespace/name, with no TTL and never persisted. Entries are cleared on success, after the escalated stop marker
+// write is confirmed, and on terminal/delete (no tombstone grace).
 type failureCounters struct {
 	mu       sync.RWMutex
 	rpmRepo  map[string]*failureCounter
@@ -276,8 +286,8 @@ func (c *failureCounters) bucket(kind counterKind) map[string]*failureCounter {
 	return c.rpmRepo
 }
 
-// Increment records one consecutive failure and returns the new count.
-// Callers route through roundFailures so a round increments at most once.
+// Increment records one consecutive failure and returns the new count. Callers route through roundFailures so a round
+// increments at most once.
 func (c *failureCounters) Increment(kind counterKind, key, reason, message string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -304,8 +314,7 @@ func (c *failureCounters) Count(kind counterKind, key string) int {
 	return entry.ConsecutiveFails
 }
 
-// Entry snapshots the current counter for escalation message building
-// (E-29/E-30); a missing entry yields the zero value.
+// Entry snapshots the current counter for escalation messages. A missing entry yields the zero value.
 func (c *failureCounters) Entry(kind counterKind, key string) failureCounter {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -316,15 +325,14 @@ func (c *failureCounters) Entry(kind counterKind, key string) failureCounter {
 	return *entry
 }
 
-// Success clears one counter after a ready observation (design 5.4).
+// Success clears one counter after a ready observation.
 func (c *failureCounters) Success(kind counterKind, key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.bucket(kind), key)
 }
 
-// Clear drops both counters: terminal phase, delete, or after the stop
-// marker write is confirmed (design 5.4).
+// Clear drops both counters: terminal phase, delete, or after the stop marker write is confirmed.
 func (c *failureCounters) Clear(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -332,9 +340,8 @@ func (c *failureCounters) Clear(key string) {
 	delete(c.snapshot, key)
 }
 
-// roundFailures tracks which readiness counters a single reconcile round has
-// already bumped, enforcing "at most one increment per round, first failure
-// checkpoint wins" (design 5.4). One instance per reconcile round.
+// roundFailures tracks which readiness counters a single reconcile round has already bumped, enforcing "at most one
+// increment per round, first failure checkpoint wins". One instance per reconcile round.
 type roundFailures struct {
 	key            string
 	counters       *failureCounters
@@ -353,8 +360,7 @@ func (c *Controller) newRoundFailures(key string) *roundFailures {
 	}
 }
 
-// RpmRepoFailed records an XML parse failure checkpoint and reports whether
-// the escalation threshold (E-29) is now reached.
+// RpmRepoFailed records an XML parse failure checkpoint and reports whether the escalation threshold is now reached.
 func (r *roundFailures) RpmRepoFailed(reason, message string) (count int, escalated bool) {
 	if r.rpmRepoBumped {
 		return r.counters.Count(counterRpmRepo, r.key), false
@@ -364,8 +370,8 @@ func (r *roundFailures) RpmRepoFailed(reason, message string) (count int, escala
 	return count, count >= r.limitRpmRepo
 }
 
-// SnapshotFailed records a current-Snapshot query failure checkpoint and
-// reports whether the escalation threshold (E-30) is now reached.
+// SnapshotFailed records a current-Snapshot query failure checkpoint and reports whether the escalation threshold is
+// now reached.
 func (r *roundFailures) SnapshotFailed(reason, message string) (count int, escalated bool) {
 	if r.snapshotBumped {
 		return r.counters.Count(counterSnapshot, r.key), false

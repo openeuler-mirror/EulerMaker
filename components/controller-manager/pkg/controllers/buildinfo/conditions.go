@@ -1,5 +1,4 @@
-// BuildInfo, spec, and install conditions share these helpers. Kubernetes
-// metadata helpers manage lastTransitionTime.
+// BuildInfo, spec, and install conditions share these helpers. Kubernetes metadata helpers manage lastTransitionTime.
 package buildinfo
 
 import (
@@ -20,8 +19,7 @@ const (
 	SpecBuildRunning = "Running"
 	// SpecBuildSucceeded: terminal, the latest-generation Job succeeded.
 	SpecBuildSucceeded = "Succeeded"
-	// SpecBuildFailed: terminal, the latest-generation Job failed, or a
-	// pre-dispatch verdict failed the spec.
+	// SpecBuildFailed: terminal, the latest-generation Job failed, or a pre-dispatch verdict failed the spec.
 	SpecBuildFailed = "Failed"
 	// SpecBuildArchUnsupported: terminal, the spec cannot build on the target architecture.
 	SpecBuildArchUnsupported = "ArchUnsupported"
@@ -29,14 +27,11 @@ const (
 
 // BuildInfo-level condition types.
 const (
-	// ConditionSpecDependsFillFailed carries spec parsing degradation and
-	// single-build empty-set closeouts.
+	// ConditionSpecDependsFillFailed carries spec parsing degradation and single-build empty-set closeouts.
 	ConditionSpecDependsFillFailed = "SpecDependsFillFailed"
-	// ConditionSpecCommitMissing records package-repo entries skipped for a
-	// non-retryable resolution failure.
+	// ConditionSpecCommitMissing records package-repo entries skipped for a non-retryable resolution failure.
 	ConditionSpecCommitMissing = "SpecCommitMissing"
-	// ConditionDcgBuildFailed records a DCG build/break failure; removed as
-	// soon as the DCG is obtained again.
+	// ConditionDcgBuildFailed records a DCG build/break failure; removed as soon as the DCG is obtained again.
 	ConditionDcgBuildFailed = "DcgBuildFailed"
 	// ConditionReleaseUnavailable is a persisted stop-dispatch marker.
 	ConditionReleaseUnavailable = "ReleaseUnavailable"
@@ -107,8 +102,8 @@ var stopConditionTypes = []string{
 	ConditionSnapshotUnavailable,
 }
 
-// upsertCondition sets a status=True condition, preserving the original
-// lastTransitionTime when nothing changed (meta.SetStatusCondition).
+// upsertCondition sets a status=True condition, preserving the original lastTransitionTime when nothing changed
+// (meta.SetStatusCondition).
 func upsertCondition(conditions *[]metav1.Condition, condType, reason, message string) {
 	apiMeta.SetStatusCondition(conditions, metav1.Condition{
 		Type:    condType,
@@ -138,9 +133,8 @@ func stopCondition(conditions []metav1.Condition) *metav1.Condition {
 	return nil
 }
 
-// missingDepsMessage renders the RpmDependsMissing message: dependency names
-// sorted, de-duplicated and comma-joined; over 1024 characters the list is
-// truncated and suffixed with `...(+N deps total)`.
+// missingDepsMessage renders the RpmDependsMissing message: dependency names sorted, de-duplicated and comma-joined;
+// over 1024 characters the list is truncated and suffixed with `...(+N deps total)`.
 func missingDepsMessage(names []string) string {
 	if len(names) == 0 {
 		return ""
@@ -169,10 +163,9 @@ func missingDepsMessage(names []string) string {
 	if cut > 0 {
 		keep = cut
 	} else {
-		// No comma in the kept prefix (a single oversized dep name): back
-		// off to a rune boundary so the byte cut never splits a multi-byte
-		// UTF-8 sequence (the result is exactly conditionMessageMax bytes,
-		// so sanitizeMessage's own guard would not repair it).
+		// No comma in the kept prefix (a single oversized dep name): back off to a rune boundary so the byte cut never splits
+		// a multi-byte UTF-8 sequence (the result is exactly conditionMessageMax bytes, so sanitizeMessage's own guard would
+		// not repair it).
 		for keep > 0 && !utf8.RuneStart(message[keep]) {
 			keep--
 		}
@@ -185,8 +178,8 @@ func sanitizeMessage(message string) string {
 	if len(message) <= conditionMessageMax {
 		return message
 	}
-	// Back off to a rune boundary so the byte cut never splits a multi-byte
-	// UTF-8 sequence (a split would corrupt the tail with U+FFFD on marshal).
+	// Back off to a rune boundary so the byte cut never splits a multi-byte UTF-8 sequence (a split would corrupt the tail
+	// with U+FFFD on marshal).
 	cut := conditionMessageMax
 	for cut > 0 && !utf8.RuneStart(message[cut]) {
 		cut--
@@ -201,5 +194,10 @@ func specCondition(spec *ebsv1.SpecStatus, condType, reason, message string) {
 
 // installCondition writes the install-level condition.
 func installCondition(spec *ebsv1.SpecStatus, jobName string) {
-	upsertCondition(&spec.Install.Conditions, ConditionInstall, ReasonInstallCheckFailed, "job "+jobName+" install check failed")
+	upsertCondition(
+		&spec.Install.Conditions,
+		ConditionInstall,
+		ReasonInstallCheckFailed,
+		"job "+jobName+" install check failed",
+	)
 }

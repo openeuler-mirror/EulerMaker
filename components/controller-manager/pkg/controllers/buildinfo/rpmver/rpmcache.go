@@ -1,8 +1,3 @@
-// rpmcache.go implements the RpmMeta two-layer in-memory cache parsing and
-// structures (design 15.10): per-source repomd.xml -> primary metadata
-// two-step resolution, gzip/zstd decoding, RpmMeta extraction, and the RpmByName /
-// ProvidesInfo indexes. The cache itself is a pure in-memory acceleration
-// layer — nothing is persisted to status.
 package rpmver
 
 import (
@@ -21,14 +16,14 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// ProvideEntry is one providesInfo leaf: the capability version (empty for an
-// unversioned Provides) and the spec that produces it (design 15.10).
+// ProvideEntry is one providesInfo leaf: the capability version (empty for an unversioned Provides) and the spec that
+// produces it.
 type ProvideEntry struct {
 	Version  string
 	SpecName string
 }
 
-// RpmMeta is one parsed rpm entry (design 15.10; fields per data-models).
+// RpmMeta is one parsed RPM entry.
 type RpmMeta struct {
 	Name     string
 	Version  string // epoch:version-release, version-constraint compare input
@@ -37,34 +32,32 @@ type RpmMeta struct {
 	Requires map[string]ebsv1.VersionConst
 }
 
-// RpmMetaSource is the parse product of a single repository URL; sources are
-// never merged so per-layer short-circuit query semantics are preserved.
+// RpmMetaSource is the parse product of a single repository URL; sources are never merged so per-layer short-circuit
+// query semantics are preserved.
 type RpmMetaSource struct {
 	URL          string
 	RpmByName    map[string]RpmMeta
 	ProvidesInfo map[string]map[string]ProvideEntry
 }
 
-// RpmMetaSources is one BuildInfo's layered cache: the RpmRepo layer plus the
-// BootstrapRepo layers in declaration order (design 15.10).
+// RpmMetaSources is one BuildInfo's layered cache: the RpmRepo layer plus the BootstrapRepo layers in declaration
+// order.
 type RpmMetaSources struct {
 	RepoLayer      *RpmMetaSource
 	BootstrapLayer []*RpmMetaSource
 }
 
-// maxMetadataBytes bounds one repository metadata response body and its
-// decompressed size (design 15.10). primary.xml of large distributions can
-// legitimately reach hundreds of MiB, so the cap is generous — its purpose is
-// to stop an oversized or hostile payload (e.g. a gzip bomb) from ballooning
-// controller memory under concurrent reconcile rounds, not to police normal
-// repositories. The HTTP client timeout bounds time only, never size.
+// maxMetadataBytes bounds one repository metadata response body and its decompressed size. primary.xml of large
+// distributions can legitimately reach hundreds of MiB, so the cap is generous — its purpose is to stop an oversized or
+// hostile payload (e.g. a gzip bomb) from ballooning controller memory under concurrent reconcile rounds, not to police
+// normal repositories. The HTTP client timeout bounds time only, never size.
 const maxMetadataBytes = 512 << 20
 
 // Fetcher downloads a URL and returns the response body.
 type Fetcher func(ctx context.Context, url string) ([]byte, error)
 
-// HTTPStatusError preserves the response code so callers can distinguish a
-// rejected repository request from an unavailable repository.
+// HTTPStatusError preserves the response code so callers can distinguish a rejected repository request from an
+// unavailable repository.
 type HTTPStatusError struct {
 	URL        string
 	StatusCode int
@@ -81,8 +74,8 @@ func HTTPFetcher(client *http.Client) Fetcher {
 		if err != nil {
 			return nil, err
 		}
-		// Some mirror WAFs reject Go's default User-Agent. Identify this
-		// client explicitly for both repomd.xml and primary metadata downloads.
+		// Some mirror WAFs reject Go's default User-Agent. Identify this client explicitly for both repomd.xml and primary
+		// metadata downloads.
 		req.Header.Set("User-Agent", "eulermaker-controller-manager/1.0")
 		resp, err := client.Do(req)
 		if err != nil {
@@ -108,8 +101,7 @@ func readLimited(r io.Reader, what string) ([]byte, error) {
 	return body, nil
 }
 
-// FailureKind classifies a source load failure (design 15.10 error
-// semantics: download vs parse feed distinct E-29 reasons).
+// FailureKind distinguishes download, parse, and configuration failures.
 type FailureKind string
 
 const (
@@ -131,21 +123,22 @@ func (e *SourceError) Error() string {
 
 func (e *SourceError) Unwrap() error { return e.Err }
 
-// ParseRepoSource downloads and parses one repository (design 15.10 two-step
-// resolution): <baseURL>/repodata/repomd.xml yields the primary metadata
-// location href, which is then downloaded (gzip/zstd decoded by suffix) and parsed
-// into RpmByName / ProvidesInfo.
+// ParseRepoSource downloads and parses one repository. The repomd.xml file identifies primary metadata, which is
+// downloaded, decompressed if needed, and indexed by RPM and provided capability.
 //
-// Arch selection: entries of the target arch plus noarch are indexed; on a
-// same-name conflict the target arch wins ("同源内同名不同 arch 并存时取目标
-// arch 条目"); on a same name+arch collision the highest version wins.
+// Arch selection: entries of the target arch plus noarch are indexed; on a same-name conflict the target arch wins
+// ("同源内同名不同 arch 并存时取目标 arch 条目"); on a same name+arch collision the highest version wins.
 func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (*RpmMetaSource, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, &SourceError{Kind: FailureConfig, URL: baseURL, Err: err}
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, &SourceError{Kind: FailureConfig, URL: baseURL, Err: fmt.Errorf("repository URL must be an absolute HTTP URL")}
+		return nil, &SourceError{
+			Kind: FailureConfig,
+			URL:  baseURL,
+			Err:  fmt.Errorf("repository URL must be an absolute HTTP URL"),
+		}
 	}
 	base := strings.TrimSuffix(baseURL, "/")
 	repomdURL := base + "/repodata/repomd.xml"
@@ -165,7 +158,11 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 		}
 	}
 	if href == "" {
-		return nil, &SourceError{Kind: FailureParse, URL: repomdURL, Err: fmt.Errorf("repomd has no primary data record")}
+		return nil, &SourceError{
+			Kind: FailureParse,
+			URL:  repomdURL,
+			Err:  fmt.Errorf("repomd has no primary data record"),
+		}
 	}
 	primaryURL := base + "/" + href
 	body, err = fetch(ctx, primaryURL)
@@ -206,9 +203,8 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 		for _, e := range p.Format.Provides {
 			rpm.Provides[e.Name] = joinVersion(e.Epoch, e.Ver, e.Rel)
 		}
-		// File dependencies (for example /usr/bin/netstat) are advertised
-		// separately from rpm:provides in primary metadata. Index them using
-		// the owning RPM's version, just like the legacy repository parser.
+		// File dependencies (for example /usr/bin/netstat) are advertised separately from rpm:provides in primary metadata.
+		// Index them using the owning RPM's version, just like the legacy repository parser.
 		for _, path := range p.Format.Files {
 			if path != "" {
 				rpm.Provides[path] = rpm.Version
@@ -218,9 +214,8 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 			rpm.Requires[e.Name] = flagsToVersionConst(e.Flags, joinVersion(e.Epoch, e.Ver, e.Rel))
 		}
 		if existingArch, ok := archByName[rpm.Name]; ok {
-			// Same-name conflict: the target arch beats noarch; within one
-			// arch the highest version wins (compare failure keeps the first
-			// entry — dirty data stays unavailable, 7.4.1 defense).
+			// Same-name conflict: the target arch beats noarch; within one arch the highest version wins (compare failure keeps
+			// the first entry, leaving invalid metadata unavailable.
 			switch {
 			case p.Arch == arch && existingArch != arch:
 				// target arch replaces noarch
@@ -236,7 +231,7 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 		src.RpmByName[rpm.Name] = rpm
 		archByName[rpm.Name] = p.Arch
 	}
-	// providesInfo secondary index (design 16.1): per source, never merged.
+	// Build a separate providesInfo index for each source.
 	for rpmName, rpm := range src.RpmByName {
 		for provideName, version := range rpm.Provides {
 			bucket := src.ProvidesInfo[provideName]
@@ -250,10 +245,9 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 	return src, nil
 }
 
-// EnsureRepoLayer implements the RpmRepo layer refresh rule (design 15.10):
-// an empty contentURL is a normal empty state (nil layer, no failure count);
-// an unchanged URL reuses the cache without downloading; only a changed URL
-// re-downloads and overwrites.
+// EnsureRepoLayer refreshes the RpmRepo layer:
+// an empty contentURL is a normal empty state (nil layer, no failure count); an unchanged URL reuses the cache without
+// downloading; only a changed URL re-downloads and overwrites.
 func (s *RpmMetaSources) EnsureRepoLayer(ctx context.Context, fetch Fetcher, contentURL, arch string) error {
 	if contentURL == "" {
 		s.RepoLayer = nil
@@ -270,9 +264,8 @@ func (s *RpmMetaSources) EnsureRepoLayer(ctx context.Context, fetch Fetcher, con
 	return nil
 }
 
-// EnsureBootstrapLayers lazily parses the bootstrap repositories once, in
-// declaration order, and reuses them for the BuildInfo lifetime (design
-// 15.10: spec.bootstrapRepo never changes, no per-round refresh).
+// EnsureBootstrapLayers lazily parses the bootstrap repositories once, in declaration order, and reuses them for the
+// BuildInfo lifetime.
 func (s *RpmMetaSources) EnsureBootstrapLayers(ctx context.Context, fetch Fetcher, urls []string, arch string) error {
 	if s.BootstrapLayer != nil {
 		return nil
@@ -289,8 +282,7 @@ func (s *RpmMetaSources) EnsureBootstrapLayers(ctx context.Context, fetch Fetche
 	return nil
 }
 
-// layers returns the query order: RpmRepo layer first, then BootstrapRepo
-// layers in declaration order (design 15.10).
+// layers returns the query order: RpmRepo layer first, then BootstrapRepo layers in declaration order.
 func (s *RpmMetaSources) layers() []*RpmMetaSource {
 	var out []*RpmMetaSource
 	if s.RepoLayer != nil {
@@ -302,7 +294,7 @@ func (s *RpmMetaSources) layers() []*RpmMetaSource {
 
 // specNameFromSourceRpm derives the producing spec name by stripping the
 // -<version>-<release>.src.rpm suffix; missing or anomalous input falls back
-// to the rpm name (design 15.10, same rule as artifact-manager 9.3.3).
+// to the RPM name.
 func specNameFromSourceRpm(sourceRpm, rpmName string) string {
 	s := strings.TrimSuffix(sourceRpm, ".src.rpm")
 	if s == sourceRpm {
@@ -319,9 +311,8 @@ func specNameFromSourceRpm(sourceRpm, rpmName string) string {
 	return s[:j]
 }
 
-// joinVersion concatenates epoch:version-release (design 15.10). An empty ver
-// yields "" (valid for unversioned Provides, invalid for RPM package versions);
-// a missing epoch defaults to 0.
+// joinVersion concatenates epoch:version-release. An empty ver yields "" (valid for unversioned Provides, invalid for
+// RPM package versions); a missing epoch defaults to 0.
 func joinVersion(epoch, ver, rel string) string {
 	if ver == "" {
 		return ""
@@ -335,8 +326,8 @@ func joinVersion(epoch, ver, rel string) string {
 	return epoch + ":" + ver + "-" + rel
 }
 
-// flagsToVersionConst maps XML requires entry flags to a VersionConst; an
-// empty version or unknown flag means no version constraint.
+// flagsToVersionConst maps XML requires entry flags to a VersionConst; an empty version or unknown flag means no
+// version constraint.
 func flagsToVersionConst(flags, version string) ebsv1.VersionConst {
 	if version == "" {
 		return ebsv1.VersionConst{}
@@ -363,8 +354,8 @@ func gunzip(body []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer r.Close()
-	// The decompressed stream is capped too: a small compressed payload can
-	// expand far beyond maxMetadataBytes (gzip bomb).
+	// The decompressed stream is capped too: a small compressed payload can expand far beyond maxMetadataBytes (gzip
+	// bomb).
 	return readLimited(r, "decompressed metadata")
 }
 

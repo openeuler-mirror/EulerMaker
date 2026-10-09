@@ -1,9 +1,3 @@
-// specdepends.go implements step 0 of initBuildInfo (design 7.2.2): the
-// specDepends full assembly (per-BuildInfo cache lookup / Pending re-entry /
-// packageRepoStatuses enumeration / specFileCache + git-server backfill /
-// E-23/E-24 failure handling / unified cache write-back), the build-set
-// determination per build type from the parent Build's package seeds, and
-// direct downstream selection from parsed specs and the RpmRepo layer.
 package buildinfo
 
 import (
@@ -24,9 +18,8 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// degradedCondition is one business-degradation condition collected during
-// assembly; aggregated by (type, reason) before persisting (design 9.1:
-// messages list the affected specs/repos, sanitized and truncated).
+// degradedCondition is one business-degradation condition collected during assembly; entries are aggregated by (type,
+// reason) before persisting.
 type degradedCondition struct {
 	condType string
 	reason   string
@@ -44,15 +37,15 @@ type terminalVerdict struct {
 type specAssembly struct {
 	// depends is the full view keyed by specName (nil when incomplete).
 	depends map[string]specparse.SpecDepend
-	// snapshot is the current Snapshot held for the round (15.7).
+	// snapshot is the current Snapshot held for the round.
 	snapshot *ebsv1.Snapshot
 	// degraded collects the business-degradation conditions (skip paths).
 	degraded []degradedCondition
-	// incomplete marks transient gaps: stay Pending and re-assemble next
-	// round (no cache write-back, no build-set determination).
+	// incomplete marks transient gaps: stay Pending and re-assemble next round (no cache write-back, no build-set
+	// determination).
 	incomplete bool
-	// failedRepos records deterministic package-level failures independently
-	// of conditions, whose messages are not a reliable source of repo names.
+	// failedRepos records deterministic package-level failures independently of conditions, whose messages are not a
+	// reliable source of repo names.
 	failedRepos map[string]struct{}
 }
 
@@ -102,11 +95,12 @@ func sortedFailedPackages(existing []string, additions map[string]struct{}) []st
 	return result
 }
 
-// currentSnapshot fetches the same-name Snapshot with E-30 counting (design
-// 5.4/7.5): a successful GET clears the counter; 404/query failures count,
-// escalate to the SnapshotUnavailable stop marker at the threshold (6.5), and
-// below the threshold fail the round (含 404 异常瞬态, E-22 同语义).
-func (c *Controller) currentSnapshot(ctx context.Context, round *reconcileRound) (*ebsv1.Snapshot, bool, controller.ReconcileResult, error) {
+// currentSnapshot fetches the same-name Snapshot. A successful GET clears the failure counter; missing objects and
+// query failures count toward the SnapshotUnavailable threshold. Below the threshold, they fail this round.
+func (c *Controller) currentSnapshot(
+	ctx context.Context,
+	round *reconcileRound,
+) (*ebsv1.Snapshot, bool, controller.ReconcileResult, error) {
 	snapshot, err := c.client.GetSnapshot(ctx, round.current.Namespace, round.current.Name)
 	if err == nil {
 		round.failures.SnapshotReady()
@@ -124,13 +118,15 @@ func (c *Controller) currentSnapshot(ctx context.Context, round *reconcileRound)
 	return nil, true, controller.ReconcileResult{}, err
 }
 
-// assembleSpecDepends runs the full assembly (design 7.2.2/15.11.3). Pending
-// rounds always re-assemble and overwrite the cache; Processing rounds reuse
-// a cache hit without any download. The caller has already obtained the
-// current Snapshot for the round.
-func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRound, snapshot *ebsv1.Snapshot) *specAssembly {
+// assembleSpecDepends runs the full assembly. Pending rounds re-assemble and overwrite the cache; Processing rounds
+// reuse a cache hit without any download. The caller has already obtained the current Snapshot for the round.
+func (c *Controller) assembleSpecDepends(
+	ctx context.Context,
+	round *reconcileRound,
+	snapshot *ebsv1.Snapshot,
+) *specAssembly {
 	asm := &specAssembly{snapshot: snapshot}
-	// Step 1: cache lookup (15.11.3). Processing hits reuse the full view.
+	// Processing rounds reuse the cached full view.
 	if round.current.Status.Phase == ebsv1.BuildInfoProcessing {
 		if cached, ok := c.specDependsCache.Get(round.key); ok {
 			specDependsCacheHits.Inc()
@@ -154,10 +150,7 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 		originURL, declared := originURLs[repo]
 		entry, ok := snapshot.Status.PackageRepoStatuses[repo]
 		if !ok {
-			// Explicit seeds may lack a status entry:
-			// not in spec.packageRepos is deterministic (E-24 routing); in
-			// packageRepos without an entry is the defensive transient
-			// (条目就绪不变式, 7.2.2).
+			// An undeclared seed is invalid; a declared repo without status may still be resolving.
 			if !declared {
 				asm.markFailedRepo(repo)
 				commitMissing = append(commitMissing, repo+" (not in packageRepos)")
@@ -168,11 +161,11 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 		}
 		if entry.Error != nil {
 			if entry.Error.Retryable {
-				// Still resolving: defensive transient (E-24 ①).
+				// Still resolving; retry in a later round.
 				asm.incomplete = true
 				continue
 			}
-			// E-24: non-retryable resolution failure.
+			// Non-retryable resolution failure.
 			asm.markFailedRepo(repo)
 			commitMissing = append(commitMissing, fmt.Sprintf("%s (%s)", repo, entry.Error.Message))
 			continue
@@ -201,8 +194,23 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 				input := readyRepos[index]
 				local := &specAssembly{}
 				var failures []string
-				specs, ok := c.fetchRepoSpecs(ctx, round, input.name, input.originURL, input.status, arch, macros, local, &failures)
-				results[index] = repoParseResult{specs: specs, parseFailures: failures, failedRepos: local.failedRepos, ok: ok}
+				specs, ok := c.fetchRepoSpecs(
+					ctx,
+					round,
+					input.name,
+					input.originURL,
+					input.status,
+					arch,
+					macros,
+					local,
+					&failures,
+				)
+				results[index] = repoParseResult{
+					specs:         specs,
+					parseFailures: failures,
+					failedRepos:   local.failedRepos,
+					ok:            ok,
+				}
 			}
 		}()
 	}
@@ -224,23 +232,45 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 		}
 		for name, depend := range result.specs {
 			if _, clash := merged[name]; clash {
-				c.logf(round.key, "SpecNameClash", "spec %s produced by both %s and %s; keeping %s", name, merged[name].RepoName, input.name, input.name)
+				c.logf(
+					round.key,
+					"SpecNameClash",
+					"spec %s produced by both %s and %s; keeping %s",
+					name,
+					merged[name].RepoName,
+					input.name,
+					input.name,
+				)
 			}
 			merged[name] = depend
 		}
 	}
 
 	if len(parseFailures) > 0 {
-		asm.degraded = append(asm.degraded, degradedCondition{condType: ConditionSpecDependsFillFailed, reason: ReasonSpecParseFailed, items: parseFailures})
+		asm.degraded = append(
+			asm.degraded,
+			degradedCondition{
+				condType: ConditionSpecDependsFillFailed,
+				reason:   ReasonSpecParseFailed,
+				items:    parseFailures,
+			},
+		)
 	}
 	if len(commitMissing) > 0 {
-		asm.degraded = append(asm.degraded, degradedCondition{condType: ConditionSpecCommitMissing, reason: ReasonSpecCommitMissing, items: commitMissing})
+		asm.degraded = append(
+			asm.degraded,
+			degradedCondition{
+				condType: ConditionSpecCommitMissing,
+				reason:   ReasonSpecCommitMissing,
+				items:    commitMissing,
+			},
+		)
 	}
 	if asm.incomplete {
-		// Transient gap: stay Pending; nothing is written back (15.11.3).
+		// Transient gap: stay Pending without writing back.
 		return asm
 	}
-	// Step 4: unified write-back of the completed full view (15.11.3).
+	// Cache the completed full view only after all repos have been processed.
 	c.ignoreBuildRequires(round, merged)
 	c.specDependsCache.Set(round.key, merged)
 	specDependsFills.Inc()
@@ -248,9 +278,8 @@ func (c *Controller) assembleSpecDepends(ctx context.Context, round *reconcileRo
 	return asm
 }
 
-// ignoreBuildRequires applies the BuildInfo's frozen spec-name list to the
-// assembled view, not to the raw spec-file cache. Parsing still happens for
-// every spec; only the controller's build-dependency decisions change.
+// ignoreBuildRequires applies the BuildInfo's frozen spec-name list to the assembled view, not to the raw spec-file
+// cache. Parsing still happens for every spec; only the controller's build-dependency decisions change.
 func (c *Controller) ignoreBuildRequires(round *reconcileRound, depends map[string]specparse.SpecDepend) {
 	value, exists := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)["unparsable_spec"]
 	if !exists {
@@ -276,15 +305,14 @@ func (c *Controller) ignoreBuildRequires(round *reconcileRound, depends map[stri
 	}
 }
 
-// enumerateRepos assembles the current Snapshot. Incremental and specified
-// also include seeds absent from the status map so both report missing input
-// repositories identically; single only assembles its selected packages.
+// enumerateRepos assembles the current Snapshot. Incremental and specified also include seeds absent from the status
+// map so both report missing input repositories identically; single only assembles its selected packages.
 func (c *Controller) enumerateRepos(round *reconcileRound, snapshot *ebsv1.Snapshot) []string {
 	buildType := round.build.Spec.BuildType
 	var repos []string
 	if buildType == "single" {
-		// ebs-apiserver allows duplicate package names in Build.spec.packages;
-		// dedup here so one repo is assembled once per round (7.2.3).
+		// ebs-apiserver allows duplicate package names in Build.spec.packages; Deduplicate so one repo is assembled once per
+		// round.
 		seen := make(map[string]bool, len(round.build.Spec.Packages))
 		for _, pkg := range round.build.Spec.Packages {
 			if seen[pkg] {
@@ -314,12 +342,10 @@ func (c *Controller) enumerateRepos(round *reconcileRound, snapshot *ebsv1.Snaps
 	return repos
 }
 
-// fetchRepoSpecs downloads and parses every root-level *.spec of one
-// repository (design 7.2.2 spec 下载解析). A transient failure anywhere in the
-// repo drops the whole repo from this round (ok=false); deterministic
-// failures skip per spec (or the whole repo on an invalid commitId) and are
-// recorded as degraded conditions. Specs within one repository are sequential;
-// distinct repositories are processed by the bounded pool above.
+// fetchRepoSpecs downloads and parses every root-level *.spec of one repository. A transient failure anywhere in the
+// repo drops the whole repo from this round (ok=false); deterministic failures skip per spec (or the whole repo on an
+// invalid commitId) and are recorded as degraded conditions. Specs within one repository are sequential; distinct
+// repositories are processed by the bounded pool above.
 
 type parsedRepoSpec struct {
 	depend     *specparse.SpecDepend
@@ -327,7 +353,16 @@ type parsedRepoSpec struct {
 	gitFailure bool
 }
 
-func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, repo, originURL string, entry ebsv1.PackageRepoStatus, arch string, macros []string, asm *specAssembly, parseFailures *[]string) (map[string]specparse.SpecDepend, bool) {
+func (c *Controller) fetchRepoSpecs(
+	ctx context.Context,
+	round *reconcileRound,
+	repo, originURL string,
+	entry ebsv1.PackageRepoStatus,
+	arch string,
+	macros []string,
+	asm *specAssembly,
+	parseFailures *[]string,
+) (map[string]specparse.SpecDepend, bool) {
 	listing, err := c.gitServer.ExecCommand(ctx, originURL, "git-ls-tree --name-only "+entry.CommitID)
 	if err != nil {
 		return nil, c.handleGitFailure(round, repo, "", asm, parseFailures, err)
@@ -336,7 +371,7 @@ func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, 
 	rootFiles := make(map[string]struct{})
 	for _, line := range strings.Split(listing, "\n") {
 		line = strings.TrimSpace(line)
-		// Root-level direct entries only, no subdirectories (7.2.2).
+		// Only root-level entries can contain target specs.
 		if line == "" || strings.Contains(line, "/") {
 			continue
 		}
@@ -364,16 +399,28 @@ func (c *Controller) fetchRepoSpecs(ctx context.Context, round *reconcileRound, 
 		}
 		depend := result.depend
 		if _, clash := specs[depend.SpecName]; clash {
-			// Same as the cross-repo clash below: files iterate in dictionary
-			// order, so the lexicographically later file wins — keep a trace.
-			c.logf(round.key, "SpecNameClash", "spec %s produced by multiple files in repo %s; keeping %s", depend.SpecName, repo, file)
+			// Same as the cross-repo clash below: files iterate in dictionary order, so the lexicographically later file wins —
+			// keep a trace.
+			c.logf(
+				round.key,
+				"SpecNameClash",
+				"spec %s produced by multiple files in repo %s; keeping %s",
+				depend.SpecName,
+				repo,
+				file,
+			)
 		}
 		specs[depend.SpecName] = *depend
 	}
 	return specs, true
 }
 
-func (c *Controller) parseRepoSpec(ctx context.Context, file, originURL, commitID, repo, arch string, macros []string, rootFiles map[string]struct{}) parsedRepoSpec {
+func (c *Controller) parseRepoSpec(
+	ctx context.Context,
+	file, originURL, commitID, repo, arch string,
+	macros []string,
+	rootFiles map[string]struct{},
+) parsedRepoSpec {
 	content, hit := c.specFiles.Get(commitID, file)
 	if hit {
 		specFileCacheHits.Inc()
@@ -402,12 +449,16 @@ func (c *Controller) parseRepoSpec(ctx context.Context, file, originURL, commitI
 	return parsedRepoSpec{depend: depend}
 }
 
-// handleGitFailure routes a git-server failure (design E-23): transient
-// failures drop the repo from this round (false = incomplete); deterministic
-// failures skip the affected spec (or the repository for invalid commitId).
-// Returns whether the repo may
-// still contribute its already-parsed specs this round.
-func (c *Controller) handleGitFailure(round *reconcileRound, repo, file string, asm *specAssembly, parseFailures *[]string, err error) bool {
+// handleGitFailure routes a git-server failure: transient failures drop the repo from this round (false = incomplete);
+// deterministic failures skip the affected spec (or the repository for invalid commitId). It reports whether the repo
+// can contribute already-parsed specs this round.
+func (c *Controller) handleGitFailure(
+	round *reconcileRound,
+	repo, file string,
+	asm *specAssembly,
+	parseFailures *[]string,
+	err error,
+) bool {
 	gitServerFailures.Inc()
 	var gitErr *gitserver.Error
 	if !errors.As(err, &gitErr) || gitErr.Kind == gitserver.ErrorTemporary {
@@ -425,7 +476,7 @@ func (c *Controller) handleGitFailure(round *reconcileRound, repo, file string, 
 	return true
 }
 
-// parseBuildPayload decodes BuildInfo.spec.buildPayload (design 16.1/15.3.1):
+// parseBuildPayload decodes BuildInfo.spec.buildPayload:
 // YAML to map; a parse failure or a non-map root yields {} plus a warning
 // (prefer silently disabled would skew edge building — keep a trace).
 func (c *Controller) parseBuildPayload(key, raw string) map[string]any {
@@ -440,8 +491,7 @@ func (c *Controller) parseBuildPayload(key, raw string) map[string]any {
 	return decoded
 }
 
-// payloadMacros extracts the buildPayload macros list for specparse --load
-// (design 16.3); a non-list macros key yields nil.
+// payloadMacros extracts the buildPayload macros list for specparse --load; a non-list macros key yields nil.
 func payloadMacros(raw string) []string {
 	var decoded map[string]any
 	if err := yaml.Unmarshal([]byte(raw), &decoded); err != nil || decoded == nil {
@@ -450,8 +500,7 @@ func payloadMacros(raw string) []string {
 	return stringList(decoded["macros"])
 }
 
-// payloadPrefer extracts the buildPayload prefer list (design 16.1); a
-// non-list prefer key yields nil.
+// payloadPrefer extracts the buildPayload prefer list; a non-list prefer key yields nil.
 func payloadPrefer(base map[string]any) []string { return stringList(base["prefer"]) }
 
 func stringList(value any) []string {
@@ -468,15 +517,18 @@ func stringList(value any) []string {
 	return out
 }
 
-// --- build-set determination (design 7.2.2 阶段二) ---
+// --- Build-set determination ---
 
-// determineBuildSet filters this round's full assembly into the build set
-// per build type (design 7.2.2). single never reaches here (its assembly is
-// the build set, 7.2.3).
-func (c *Controller) determineBuildSet(round *reconcileRound, asm *specAssembly, repoLayer *rpmver.RpmMetaSource) (map[string]specparse.SpecDepend, error) {
+// determineBuildSet filters this round's full assembly into the build set per build type. Single builds use their
+// assembled specs directly.
+func (c *Controller) determineBuildSet(
+	round *reconcileRound,
+	asm *specAssembly,
+	repoLayer *rpmver.RpmMetaSource,
+) (map[string]specparse.SpecDepend, error) {
 	switch round.build.Spec.BuildType {
 	case "full":
-		// No base-round query, no expansion (7.2.2).
+		// Full builds use the complete assembly without expansion.
 		return asm.depends, nil
 	case "incremental", "specified":
 		seeds := map[string]specparse.SpecDepend{}
@@ -495,10 +547,12 @@ func (c *Controller) determineBuildSet(round *reconcileRound, asm *specAssembly,
 	}
 }
 
-// expandBuildSet selects only specs directly depending on a seed. BuildRequires
-// is checked against the full assembly, and install Requires against RPMs from
-// this project's repository layer. Newly selected specs do not become seeds.
-func expandBuildSet(seeds, full map[string]specparse.SpecDepend, repoLayer *rpmver.RpmMetaSource) map[string]specparse.SpecDepend {
+// expandBuildSet selects only specs directly depending on a seed. BuildRequires is checked against the full assembly,
+// and install Requires against RPMs from this project's repository layer. Newly selected specs do not become seeds.
+func expandBuildSet(
+	seeds, full map[string]specparse.SpecDepend,
+	repoLayer *rpmver.RpmMetaSource,
+) map[string]specparse.SpecDepend {
 	buildSet := make(map[string]specparse.SpecDepend, len(seeds))
 	provides := map[string]struct{}{}
 	for name, depend := range seeds {

@@ -39,7 +39,11 @@ type recordingPollingFactory struct {
 	options metav1.ListOptions
 }
 
-func (f *recordingPollingFactory) ForResource(gvr schema.GroupVersionResource, _ time.Duration, options metav1.ListOptions) (source.Source, error) {
+func (f *recordingPollingFactory) ForResource(
+	gvr schema.GroupVersionResource,
+	_ time.Duration,
+	options metav1.ListOptions,
+) (source.Source, error) {
 	f.gvr, f.options = gvr, options
 	return &fakeSource{}, nil
 }
@@ -76,8 +80,8 @@ func TestEventAddUpdateEnqueueFilteredListObjects(t *testing.T) {
 	if got := c.Queue().Len(); got != 1 {
 		t.Fatalf("queue len after update = %d, want 1", got)
 	}
-	// The projected List does not carry phase; the server-side selector has
-	// already excluded terminal objects before the handler sees them.
+	// The projected List does not carry phase; the server-side selector has already excluded terminal objects before the
+	// handler sees them.
 	c2, _, _, _ := newTestController(t)
 	projected := testBuildInfoObj(ebsv1.BuildInfoPending)
 	projected.Status = ebsv1.BuildInfoStatus{}
@@ -178,12 +182,25 @@ func TestParentAbortAttemptsJobsBeforeTerminal(t *testing.T) {
 			build.Status.Phase = ebsv1.BuildAborted
 			client.SeedBuild(build)
 			client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoProcessing))
-			for name, phase := range map[string]ebsv1.JobPhase{"a": ebsv1.JobPending, "b": ebsv1.JobRunning, "done": ebsv1.JobSucceeded, "other": ebsv1.JobRunning} {
+			phases := map[string]ebsv1.JobPhase{
+				"a": ebsv1.JobPending, "b": ebsv1.JobRunning,
+				"done": ebsv1.JobSucceeded, "other": ebsv1.JobRunning,
+			}
+			for name, phase := range phases {
 				buildName := testBuild
 				if name == "other" {
 					buildName = "other-build"
 				}
-				client.SeedJob(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS, Labels: map[string]string{ebsv1.JobBuildNameLabel: buildName}}, Status: ebsv1.JobStatus{Phase: phase}})
+				client.SeedJob(
+					&ebsv1.Job{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      name,
+							Namespace: testNS,
+							Labels:    map[string]string{ebsv1.JobBuildNameLabel: buildName},
+						},
+						Status: ebsv1.JobStatus{Phase: phase},
+					},
+				)
 			}
 			if scenario == "partial-failure" {
 				client.abortErrors = map[string]error{"a": errors.New("abort unavailable")}
@@ -226,7 +243,16 @@ func TestParentAbortBatches(t *testing.T) {
 			client.abortErrors = make(map[string]error)
 			for i := 0; i < count; i++ {
 				name := fmt.Sprintf("job-%03d", i)
-				client.SeedJob(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS, Labels: map[string]string{ebsv1.JobBuildNameLabel: testBuild}}, Status: ebsv1.JobStatus{Phase: ebsv1.JobRunning}})
+				client.SeedJob(
+					&ebsv1.Job{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      name,
+							Namespace: testNS,
+							Labels:    map[string]string{ebsv1.JobBuildNameLabel: testBuild},
+						},
+						Status: ebsv1.JobStatus{Phase: ebsv1.JobRunning},
+					},
+				)
 				if i < 100 {
 					client.abortErrors[name] = errors.New("abort unavailable")
 				}
@@ -249,7 +275,8 @@ func TestParentAbortBatches(t *testing.T) {
 				} else {
 					requirePhase(t, info, ebsv1.BuildInfoAborted)
 					requireCondition(t, info.Status.Conditions, ConditionJobAbortFailed, ReasonJobAbortFailed)
-					if !strings.Contains(findCondition(info.Status.Conditions, ConditionJobAbortFailed).Message, "100 Job abort requests") {
+					condition := findCondition(info.Status.Conditions, ConditionJobAbortFailed)
+					if !strings.Contains(condition.Message, "100 Job abort requests") {
 						t.Fatal("earlier batch failures were lost")
 					}
 					if c.abortJobs.Len() != 0 {
@@ -332,17 +359,30 @@ func TestStopConditionRoutesToConverge(t *testing.T) {
 // --- Status write outcomes ---
 
 // writeRound drives writeStatus directly with a one-field intent change.
-func writeRound(t *testing.T, c *Controller, client *fakeClient, mutate func(*ebsv1.BuildInfo)) (controller.ReconcileResult, error) {
+func writeRound(
+	t *testing.T,
+	c *Controller,
+	client *fakeClient,
+	mutate func(*ebsv1.BuildInfo),
+) (controller.ReconcileResult, error) {
 	t.Helper()
 	return writeSeededRound(t, c, getBuildInfo(t, client), mutate)
 }
 
-// writeSeededRound drives writeStatus directly without any preliminary client
-// read, so tests can count InjectRead consumptions precisely (the confirmation
-// read inside writeStatus must be the only one).
-func writeSeededRound(t *testing.T, c *Controller, seeded *ebsv1.BuildInfo, mutate func(*ebsv1.BuildInfo)) (controller.ReconcileResult, error) {
+// writeSeededRound drives writeStatus directly without any preliminary client read, so tests can count InjectRead
+// consumptions precisely (the confirmation read inside writeStatus must be the only one).
+func writeSeededRound(
+	t *testing.T,
+	c *Controller,
+	seeded *ebsv1.BuildInfo,
+	mutate func(*ebsv1.BuildInfo),
+) (controller.ReconcileResult, error) {
 	t.Helper()
-	round := &reconcileRound{key: testNS + "/" + testBuild, current: seeded, failures: c.newRoundFailures(testNS + "/" + testBuild)}
+	round := &reconcileRound{
+		key:      testNS + "/" + testBuild,
+		current:  seeded,
+		failures: c.newRoundFailures(testNS + "/" + testBuild),
+	}
 	next := seeded.DeepCopy()
 	mutate(next)
 	return c.writeStatus(context.Background(), round, next)
@@ -367,7 +407,12 @@ func TestWriteStatusRejectedOutcomes(t *testing.T) {
 			c, client, _, _ := newTestController(t)
 			client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 			client.InjectWrite("update-status", clientpkg.WriteRejected, tc.statusCode, false)
-			result, err := writeRound(t, c, client, func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoAborted })
+			result, err := writeRound(
+				t,
+				c,
+				client,
+				func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoAborted },
+			)
 			if tc.wantErr && err == nil {
 				t.Fatal("writeStatus() error = nil, want error")
 			}
@@ -433,7 +478,11 @@ func TestWriteStatusUnknownUIDChangedEndsRound(t *testing.T) {
 	client.InjectWrite("update-status", clientpkg.WriteUnknown, 0, false)
 	key := testNS + "/" + testBuild
 	c.dcgDict.Set(key, NewDcgDict(graphWith(edge{"a", "b"})))
-	round := &reconcileRound{key: key, current: testBuildInfoObj(ebsv1.BuildInfoPending), failures: c.newRoundFailures(key)}
+	round := &reconcileRound{
+		key:      key,
+		current:  testBuildInfoObj(ebsv1.BuildInfoPending),
+		failures: c.newRoundFailures(key),
+	}
 	round.current.UID = "original-uid"
 	next := round.current.DeepCopy()
 	next.Status.Phase = ebsv1.BuildInfoAborted
@@ -452,7 +501,12 @@ func TestWriteStatusUnknownConfirmNotFound(t *testing.T) {
 	client.InjectWrite("update-status", clientpkg.WriteUnknown, 0, false)
 	// The object was deleted before the confirmation read.
 	client.InjectRead("buildinfos", 1, ErrNotFound)
-	result, err := writeSeededRound(t, c, seeded, func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoAborted })
+	result, err := writeSeededRound(
+		t,
+		c,
+		seeded,
+		func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoAborted },
+	)
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("writeStatus() = %v, %v, want silent round end", result, err)
 	}
@@ -474,12 +528,15 @@ func TestConfirmStatusWriteCancelledContext(t *testing.T) {
 	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	client.InjectWrite("update-status", clientpkg.WriteUnknown, 0, false)
 	seeded := getBuildInfo(t, client)
-	round := &reconcileRound{key: testNS + "/" + testBuild, current: seeded, failures: c.newRoundFailures(testNS + "/" + testBuild)}
+	round := &reconcileRound{
+		key:      testNS + "/" + testBuild,
+		current:  seeded,
+		failures: c.newRoundFailures(testNS + "/" + testBuild),
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	intent := seeded.DeepCopy()
 	intent.Status.Phase = ebsv1.BuildInfoAborted
-	// The fake sends the write despite cancellation; confirmation must not
-	// continue with a background context.
+	// The fake sends the write despite cancellation; confirmation must not continue with a background context.
 	cancel()
 	_, err := c.writeStatus(ctx, round, intent)
 	if !errors.Is(err, context.Canceled) {
@@ -497,14 +554,16 @@ func TestWriteStatusChaining(t *testing.T) {
 	// First write: Pending -> Processing.
 	next := round.current.DeepCopy()
 	next.Status.Phase = ebsv1.BuildInfoProcessing
-	if result, err := c.writeStatus(context.Background(), round, next); err != nil || result != (controller.ReconcileResult{}) {
+	if result, err := c.writeStatus(context.Background(), round, next); err != nil ||
+		result != (controller.ReconcileResult{}) {
 		t.Fatalf("first writeStatus() = %v, %v", result, err)
 	}
 	// Second write reuses the confirmed object (fresh resourceVersion).
 	next = round.current.DeepCopy()
 	upsertCondition(&next.Status.Conditions, ConditionSpecCommitMissing, ReasonSpecCommitMissing, "repo skipped")
 	next.Status.Phase = ebsv1.BuildInfoCompleted
-	if result, err := c.writeStatus(context.Background(), round, next); err != nil || result != (controller.ReconcileResult{}) {
+	if result, err := c.writeStatus(context.Background(), round, next); err != nil ||
+		result != (controller.ReconcileResult{}) {
 		t.Fatalf("second writeStatus() = %v, %v (chained resourceVersion)", result, err)
 	}
 	persisted := getBuildInfo(t, client)
@@ -514,8 +573,7 @@ func TestWriteStatusChaining(t *testing.T) {
 
 // --- Status intent comparison ---
 
-// copyStatus deep-copies a BuildInfoStatus (the api package only generates
-// DeepCopy for the top-level object kinds).
+// copyStatus deep-copies a BuildInfoStatus (the api package only generates DeepCopy for the top-level object kinds).
 func copyStatus(in *ebsv1.BuildInfoStatus) *ebsv1.BuildInfoStatus {
 	out := (&ebsv1.BuildInfo{Status: *in}).DeepCopy()
 	return &out.Status
@@ -629,7 +687,9 @@ func TestMissingDepsMessage(t *testing.T) {
 		t.Fatalf("truncated message lacks total suffix: ...%q", got[len(got)-30:])
 	}
 	body := strings.TrimSuffix(got, "...(+200 deps total)")
-	if strings.HasSuffix(body, ",") || strings.Contains(body[strings.LastIndex(body, ",")+1:], "dep-") && strings.Count(body[strings.LastIndex(body, ",")+1:], "-") > 1 {
+	if strings.HasSuffix(body, ",") ||
+		strings.Contains(body[strings.LastIndex(body, ",")+1:], "dep-") &&
+			strings.Count(body[strings.LastIndex(body, ",")+1:], "-") > 1 {
 		// partial name check: the last segment before the suffix is empty or a full name
 	}
 }
@@ -699,7 +759,9 @@ func TestMetricsCountOnlyConfirmedWrites(t *testing.T) {
 	// A 409-conflict write counts the requeue, never the state changes.
 	client.InjectWrite("update-status", clientpkg.WriteRejected, 409, false)
 	phaseBefore = scrapeCounter(t, "build_info_controller_phase_transitions_total")
-	if _, err := writeRound(t, c, client, func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoCompleted }); err != nil {
+	if _, err := writeRound(t, c, client, func(bi *ebsv1.BuildInfo) {
+		bi.Status.Phase = ebsv1.BuildInfoCompleted
+	}); err != nil {
 		t.Fatalf("writeStatus() error = %v", err)
 	}
 	if got := scrapeCounter(t, "build_info_controller_conflict_requeues_total") - conflictBefore; got != 1 {
@@ -711,7 +773,9 @@ func TestMetricsCountOnlyConfirmedWrites(t *testing.T) {
 
 	// An Unknown write entering the confirmation read counts unknownWrites.
 	client.InjectWrite("update-status", clientpkg.WriteUnknown, 0, true)
-	if _, err := writeRound(t, c, client, func(bi *ebsv1.BuildInfo) { bi.Status.Phase = ebsv1.BuildInfoCompleted }); err != nil {
+	if _, err := writeRound(t, c, client, func(bi *ebsv1.BuildInfo) {
+		bi.Status.Phase = ebsv1.BuildInfoCompleted
+	}); err != nil {
 		t.Fatalf("writeStatus() error = %v", err)
 	}
 	if got := scrapeCounter(t, "build_info_controller_unknown_writes_total") - unknownBefore; got != 1 {

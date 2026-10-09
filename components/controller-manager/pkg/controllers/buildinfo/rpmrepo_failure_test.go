@@ -22,7 +22,13 @@ func seedRpmRepoMetadataRound(t *testing.T, c *Controller, client *fakeClient) s
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildRunning}, DispatchCount: 1},
 	})
-	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, &rpmver.RpmMetaSources{})
+	seeded := seedProcessingRound(
+		client,
+		c,
+		bi,
+		map[string]specparse.SpecDepend{"a": dependEntry("a")},
+		&rpmver.RpmMetaSources{},
+	)
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobRunning, testStart)
 	return testNS + "/" + testBuild
 }
@@ -68,7 +74,8 @@ func TestRpmRepoPersistentParseFailureStopsWithReason(t *testing.T) {
 		} else {
 			requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying)
 			requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoXMLParseFailed)
-			if got := findCondition(persisted.Status.Conditions, ConditionRpmRepoUnavailable).Message; !strings.Contains(got, "repomd.xml") || !strings.Contains(got, "consecutive failures: 3") {
+			got := findCondition(persisted.Status.Conditions, ConditionRpmRepoUnavailable).Message
+			if !strings.Contains(got, "repomd.xml") || !strings.Contains(got, "consecutive failures: 3") {
 				t.Fatalf("condition message = %q, want source and failure count", got)
 			}
 		}
@@ -96,13 +103,23 @@ func TestRpmRepoDownloadFailureBreaksParseFailureStreak(t *testing.T) {
 	}
 	parseFailure = false
 	reconcileOnce(t, c)
-	requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
+	requireCondition(
+		t,
+		getBuildInfo(t, client).Status.Conditions,
+		ConditionRpmRepoRetrying,
+		ReasonRpmRepoXMLDownloadFailed,
+	)
 	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
 		t.Fatalf("parse failure count = %d, want 0 after download failure", got)
 	}
 	parseFailure = true
 	reconcileOnce(t, c)
-	requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLParseFailed)
+	requireCondition(
+		t,
+		getBuildInfo(t, client).Status.Conditions,
+		ConditionRpmRepoRetrying,
+		ReasonRpmRepoXMLParseFailed,
+	)
 	requireNoCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable)
 }
 
@@ -113,7 +130,10 @@ func TestRpmRepoInvalidURLStopsImmediately(t *testing.T) {
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid)
-	if got := findCondition(persisted.Status.Conditions, ConditionRpmRepoUnavailable).Message; !strings.Contains(got, "unsupported repository URL scheme") {
+	if got := findCondition(persisted.Status.Conditions, ConditionRpmRepoUnavailable).Message; !strings.Contains(
+		got,
+		"unsupported repository URL scheme",
+	) {
 		t.Fatalf("condition message = %q, want configuration error", got)
 	}
 }
@@ -159,7 +179,12 @@ func TestRpmRepoQueryFailureClassification(t *testing.T) {
 				t.Fatal("temporary query failure must retry")
 			}
 			requireNoCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable)
-			requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoQueryFailed)
+			requireCondition(
+				t,
+				getBuildInfo(t, client).Status.Conditions,
+				ConditionRpmRepoRetrying,
+				ReasonRpmRepoQueryFailed,
+			)
 		}
 		if got := c.counters.Count(counterRpmRepo, key); got != 0 {
 			t.Fatalf("parse failure count = %d, want 0 after query failures", got)
@@ -168,11 +193,24 @@ func TestRpmRepoQueryFailureClassification(t *testing.T) {
 	t.Run("forbidden query", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		key := seedRpmRepoMetadataRound(t, c, client)
-		client.InjectRead("rpmrepos", 1, apierrors.NewForbidden(schema.GroupResource{Resource: "rpmrepos"}, testBuild, errors.New("permission denied")))
+		client.InjectRead(
+			"rpmrepos",
+			1,
+			apierrors.NewForbidden(
+				schema.GroupResource{Resource: "rpmrepos"},
+				testBuild,
+				errors.New("permission denied"),
+			),
+		)
 		if _, err := c.reconcile(context.Background(), key); err != nil {
 			t.Fatal(err)
 		}
-		requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoQueryRejected)
+		requireCondition(
+			t,
+			getBuildInfo(t, client).Status.Conditions,
+			ConditionRpmRepoUnavailable,
+			ReasonRpmRepoQueryRejected,
+		)
 	})
 }
 
@@ -203,7 +241,10 @@ func TestRpmRepoMetadataHTTPStatusClassification(t *testing.T) {
 				if condition != nil {
 					t.Fatalf("condition = %+v, want retry", condition)
 				}
-				requireCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
+				requireCondition(
+					t, getBuildInfo(t, client).Status.Conditions,
+					ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed,
+				)
 			}
 		})
 	}

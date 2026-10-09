@@ -1,5 +1,4 @@
-// Job dispatch and backfill use deterministic names to recover from uncertain
-// create results without duplicating Jobs.
+// Job dispatch and backfill use deterministic names to recover from uncertain create results without duplicating Jobs.
 package buildinfo
 
 import (
@@ -33,16 +32,14 @@ const (
 	annDispatchGeneration = "ebs.io/dispatch-generation"
 )
 
-// jobNameFor derives the deterministic Job name from the first 8 bytes of
-// SHA-256 over json.Marshal([buildInfoUID, specName, generation]). The
-// generation remains in the hash input, but is not shown in the name.
+// jobNameFor derives the deterministic Job name from the first 8 bytes of SHA-256 over json.Marshal([buildInfoUID,
+// specName, generation]). The generation remains in the hash input, but is not shown in the name.
 func jobNameFor(buildInfoUID, specName string, generation int64) string {
 	sum := jobNameHash(buildInfoUID, specName, generation)
 	return fmt.Sprintf("%s-%x", specname.Encode(specName), sum[:8])
 }
 
-// formerJobNameFor recognizes the former 16-character suffix with a visible
-// dispatch generation.
+// formerJobNameFor recognizes the former 16-character suffix with a visible dispatch generation.
 func formerJobNameFor(buildInfoUID, specName string, generation int64) string {
 	sum := jobNameHash(buildInfoUID, specName, generation)
 	return fmt.Sprintf("%s-%d-%x", specName, generation, sum[:8])
@@ -72,8 +69,8 @@ func matchesJobName(name, buildInfoUID, specName string, generation int64) bool 
 		name == legacyJobNameFor(buildInfoUID, specName, generation)
 }
 
-// packageNameLabelValue uses the spec-name encoding for repository names.
-// Values over 63 bytes are truncated, so only untruncated values are reversible.
+// packageNameLabelValue uses the spec-name encoding for repository names. Values over 63 bytes are truncated, so only
+// untruncated values are reversible.
 func packageNameLabelValue(name string) string {
 	value := specname.Encode(name)
 	if len(value) > 63 {
@@ -82,8 +79,8 @@ func packageNameLabelValue(name string) string {
 	return strings.TrimRight(value, "-_.")
 }
 
-// archSupported checks the exclusiveArch whitelist; an empty
-// whitelist means every arch (normalized at parse time, defensive here).
+// archSupported checks the exclusiveArch whitelist; an empty whitelist means every arch (normalized at parse time,
+// defensive here).
 func archSupported(depend *specparse.SpecDepend, arch string) bool {
 	if len(depend.ExclusiveArch) == 0 {
 		return true
@@ -96,8 +93,8 @@ func archSupported(depend *specparse.SpecDepend, arch string) bool {
 	return false
 }
 
-// missingBuildRequires returns unavailable build requirements, excluding
-// buildRemoves, in sorted order without duplicates.
+// missingBuildRequires returns unavailable build requirements, excluding buildRemoves, in sorted order without
+// duplicates.
 func missingBuildRequires(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources) []string {
 	var missing []string
 	for _, name := range sortedConstKeys(depend.BuildRequires, depend.BuildRemoves) {
@@ -117,12 +114,18 @@ type createdJob struct {
 	generation int64
 }
 
-// dispatchSpec creates one deterministically named Job and stages its
-// confirmation for a batched status write. Persisted pending entries from
-// earlier rounds retain their GET-based recovery path. Build-resource Config
-// is read once per round. Architecture and dependency checks and image
-// resolution happen at the caller.
-func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, sources *rpmver.RpmMetaSources) (controller.ReconcileResult, error) {
+// dispatchSpec creates one deterministically named Job and stages its confirmation for a batched status write.
+// Persisted pending entries from earlier rounds retain their GET-based recovery path. Build-resource Config is read
+// once per round. Architecture and dependency checks and image resolution happen at the caller.
+func (c *Controller) dispatchSpec(
+	ctx context.Context,
+	round *reconcileRound,
+	specName string,
+	depend *specparse.SpecDepend,
+	snapshot *ebsv1.Snapshot,
+	image, contentURL string,
+	sources *rpmver.RpmMetaSources,
+) (controller.ReconcileResult, error) {
 	if _, alreadyCreated := round.createdJobs[specName]; alreadyCreated {
 		return controller.ReconcileResult{}, nil
 	}
@@ -162,7 +165,15 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				message := "build-resource Config not found"
-				return c.markSpecFailed(ctx, round, specName, ConditionDefaultBuildResourceConfigNotFound, ReasonDefaultBuildResourceConfigNotFound, message, !entryExisted)
+				return c.markSpecFailed(
+					ctx,
+					round,
+					specName,
+					ConditionDefaultBuildResourceConfigNotFound,
+					ReasonDefaultBuildResourceConfigNotFound,
+					message,
+					!entryExisted,
+				)
 			}
 			return controller.ReconcileResult{}, err
 		}
@@ -172,30 +183,39 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 	if round.scriptRef == nil {
 		scriptName, err := scriptNameFromPayload(round.current.Spec.BuildPayload)
 		if err != nil {
-			return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("select Script for Job %s: %w", name, err))
+			return controller.ReconcileResult{}, controller.NewPermanentError(
+				fmt.Errorf("select Script for Job %s: %w", name, err),
+			)
 		}
 		script, err := c.client.GetScript(ctx, scriptName)
 		if err != nil {
 			return controller.ReconcileResult{}, fmt.Errorf("get Script %q for Job %s: %w", scriptName, name, err)
 		}
-		round.scriptRef = &ebsv1.ScriptRef{Name: script.Name, UID: string(script.UID), ResourceVersion: script.ResourceVersion}
+		round.scriptRef = &ebsv1.ScriptRef{
+			Name:            script.Name,
+			UID:             string(script.UID),
+			ResourceVersion: script.ResourceVersion,
+		}
 	}
 	// A Job owns its observation; the round only shares the fetched value.
 	scriptRef := *round.scriptRef
 
 	if len(payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))) > 0 && sources == nil {
 		if !round.isSingle() {
-			return controller.ReconcileResult{}, fmt.Errorf("RPM metadata unavailable for Job %s prefer selection", name)
+			return controller.ReconcileResult{}, fmt.Errorf(
+				"RPM metadata unavailable for Job %s prefer selection",
+				name,
+			)
 		}
-		// Existing pending Jobs were GET-confirmed above. Only a new create
-		// needs repository metadata to derive this spec's prefer payload.
+		// Existing pending Jobs were GET-confirmed above. Only a new create needs repository metadata to derive this spec's
+		// prefer payload.
 		var reason string
 		sources, reason, err = c.loadSinglePreferSources(ctx, round, contentURL)
 		if err != nil {
 			_, result, failureErr := c.rpmMetaUnavailable(ctx, round, reason, err)
 			if failureErr == nil && result == (controller.ReconcileResult{}) {
-				// A single build may have dispatched earlier specs this round.
-				// Requeue stops further dispatch and lets reconcile flush them.
+				// A single build may have dispatched earlier specs this round. Requeue stops further dispatch and lets reconcile
+				// flush them.
 				return controller.ReconcileResult{Requeue: true}, nil
 			}
 			return result, failureErr
@@ -204,15 +224,26 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 			return result, err
 		}
 	}
-	job := c.jobForSpec(round, specName, depend, snapshot, image, contentURL, resource, scriptRef, name, generation, sources)
+	job := c.jobForSpec(
+		round,
+		specName,
+		depend,
+		snapshot,
+		image,
+		contentURL,
+		resource,
+		scriptRef,
+		name,
+		generation,
+		sources,
+	)
 	round.jobCreateRequests++
 	created, err := c.client.CreateJob(ctx, namespace, job)
 	var writeErr *clientpkg.WriteError
 	isWriteErr := errors.As(err, &writeErr)
 	if !isWriteErr || writeErr.Outcome != clientpkg.WriteNotSent {
-		// jobCreates counts create requests actually sent (metrics.go);
-		// WriteNotSent failed local validation before any request left the
-		// controller, so it is not counted.
+		// jobCreates counts create requests actually sent (metrics.go); WriteNotSent failed local validation before any
+		// request left the controller, so it is not counted.
 		jobCreates.Inc()
 	}
 	if err == nil {
@@ -230,9 +261,8 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 	case clientpkg.WriteRejected:
 		switch writeErr.StatusCode {
 		case 409:
-			// AlreadyExists: identity verification takes precedence over the
-			// generic conflict requeue; a 404 confirmation read is a
-			// retryable error, never the main-object NotFound rule.
+			// AlreadyExists: identity verification takes precedence over the generic conflict requeue; a 404 confirmation read
+			// is a retryable error, never the main-object NotFound rule.
 			existing, gerr := c.client.GetJob(ctx, namespace, name)
 			if gerr != nil {
 				jobCreateFailures.Inc()
@@ -244,10 +274,18 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 			}
 			return c.stageCreatedJob(round, specName, generation, existing)
 		case 400, 422:
-			// This Job was definitely rejected. Close only its spec so an
-			// independent spec can still be dispatched in the same round.
+			// This Job was definitely rejected. Close only its spec so an independent spec can still be dispatched in the same
+			// round.
 			jobCreateFailures.Inc()
-			c.logf(round.key, ReasonJobCreateRejected, "job %s for spec %s rejected with HTTP %d: %v", name, specName, writeErr.StatusCode, err)
+			c.logf(
+				round.key,
+				ReasonJobCreateRejected,
+				"job %s for spec %s rejected with HTTP %d: %v",
+				name,
+				specName,
+				writeErr.StatusCode,
+				err,
+			)
 			return c.markSpecFailed(ctx, round, specName, ConditionJobCreateRejected, ReasonJobCreateRejected,
 				fmt.Sprintf("Job creation rejected with HTTP %d", writeErr.StatusCode), true)
 		default:
@@ -268,17 +306,22 @@ func (c *Controller) dispatchSpec(ctx context.Context, round *reconcileRound, sp
 		}
 		jobCreateFailures.Inc()
 		if errors.Is(gerr, ErrNotFound) {
-			// A late create can still land. Re-entry uses the same deterministic
-			// name; 409 and the initial Job list both recover it.
+			// A late create can still land. Re-entry uses the same deterministic name; 409 and the initial Job list both recover
+			// it.
 			return controller.ReconcileResult{}, err
 		}
 		return controller.ReconcileResult{}, gerr
 	}
 }
 
-// stageCreatedJob records a confirmed Job in the current batch. The batch is
-// folded into the next status write, or flushed once at the end of the round.
-func (c *Controller) stageCreatedJob(round *reconcileRound, specName string, generation int64, job *ebsv1.Job) (controller.ReconcileResult, error) {
+// stageCreatedJob records a confirmed Job in the current batch. The batch is folded into the next status write, or
+// flushed once at the end of the round.
+func (c *Controller) stageCreatedJob(
+	round *reconcileRound,
+	specName string,
+	generation int64,
+	job *ebsv1.Job,
+) (controller.ReconcileResult, error) {
 	if round.createdJobs == nil {
 		round.createdJobs = make(map[string]createdJob)
 	}
@@ -313,9 +356,15 @@ func (c *Controller) confirmCreatedJobs(round *reconcileRound) {
 	}
 }
 
-// confirmDispatchedJob persists the confirmed generation and Job phase, then
-// removes its pending entry in the same write.
-func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileRound, specName string, generation int64, job *ebsv1.Job) (controller.ReconcileResult, error) {
+// confirmDispatchedJob persists the confirmed generation and Job phase, then removes its pending entry in the same
+// write.
+func (c *Controller) confirmDispatchedJob(
+	ctx context.Context,
+	round *reconcileRound,
+	specName string,
+	generation int64,
+	job *ebsv1.Job,
+) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	ss := next.Status.SpecStatus.Entry(specName)
 	if ss.DispatchCount < generation {
@@ -331,14 +380,23 @@ func (c *Controller) confirmDispatchedJob(ctx context.Context, round *reconcileR
 	return result, err
 }
 
-// markSpecFailed records a pre-dispatch failure without creating a Job. A
-// reused pending registration is checked before removal so an in-flight Job
-// cannot be lost when the spec becomes terminal.
-func (c *Controller) markSpecFailed(ctx context.Context, round *reconcileRound, specName, condType, reason, message string, clearPending bool) (controller.ReconcileResult, error) {
+// markSpecFailed records a pre-dispatch failure without creating a Job. A reused pending registration is checked before
+// removal so an in-flight Job cannot be lost when the spec becomes terminal.
+func (c *Controller) markSpecFailed(
+	ctx context.Context,
+	round *reconcileRound,
+	specName, condType, reason, message string,
+	clearPending bool,
+) (controller.ReconcileResult, error) {
 	return c.markSpecTerminal(ctx, round, specName, SpecBuildFailed, condType, reason, message, clearPending)
 }
 
-func (c *Controller) markSpecTerminal(ctx context.Context, round *reconcileRound, specName, status, condType, reason, message string, clearPending bool) (controller.ReconcileResult, error) {
+func (c *Controller) markSpecTerminal(
+	ctx context.Context,
+	round *reconcileRound,
+	specName, status, condType, reason, message string,
+	clearPending bool,
+) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	ss := next.Status.SpecStatus.Entry(specName)
 	ss.Build.Status = status
@@ -365,15 +423,19 @@ func (c *Controller) markSpecTerminal(ctx context.Context, round *reconcileRound
 	return c.writeStatus(ctx, round, next)
 }
 
-// verifyJobIdentity checks a found Job against the creation identity
-// using its namespace, recomputed name, build/spec labels, and the
-// dispatch-generation annotation must all match.
+// verifyJobIdentity checks a found Job against the creation identity using its namespace, recomputed name, build/spec
+// labels, and the dispatch-generation annotation must all match.
 func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName string, generation int64) error {
 	if job.Namespace != buildInfo.Namespace {
 		return fmt.Errorf("namespace %q != %q", job.Namespace, buildInfo.Namespace)
 	}
 	if !matchesJobName(job.Name, string(buildInfo.UID), specName, generation) {
-		return fmt.Errorf("name %q does not match the deterministic name for spec %q generation %d", job.Name, specName, generation)
+		return fmt.Errorf(
+			"name %q does not match the deterministic name for spec %q generation %d",
+			job.Name,
+			specName,
+			generation,
+		)
 	}
 	if job.Labels[ebsv1.JobBuildNameLabel] != buildInfo.Name {
 		return fmt.Errorf("build-name label %q != %q", job.Labels[ebsv1.JobBuildNameLabel], buildInfo.Name)
@@ -389,8 +451,8 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 
 // --- Job construction ---
 
-// scriptNameFromPayload selects the script to observe before creating a Job.
-// A malformed selection must not silently fall back to the default.
+// scriptNameFromPayload selects the script to observe before creating a Job. A malformed selection must not silently
+// fall back to the default.
 func scriptNameFromPayload(raw string) (string, error) {
 	name := "rpmbuild"
 	if strings.TrimSpace(raw) != "" {
@@ -415,7 +477,18 @@ func scriptNameFromPayload(raw string) (string, error) {
 }
 
 // jobForSpec builds the Job object with every controller-filled field.
-func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, image, contentURL string, resource *buildResourceRules, scriptRef ebsv1.ScriptRef, name string, generation int64, sources *rpmver.RpmMetaSources) *ebsv1.Job {
+func (c *Controller) jobForSpec(
+	round *reconcileRound,
+	specName string,
+	depend *specparse.SpecDepend,
+	snapshot *ebsv1.Snapshot,
+	image, contentURL string,
+	resource *buildResourceRules,
+	scriptRef ebsv1.ScriptRef,
+	name string,
+	generation int64,
+	sources *rpmver.RpmMetaSources,
+) *ebsv1.Job {
 	buildInfo := round.current
 	target := round.build.Spec.BuildTarget
 	runtimeSpec, _ := json.Marshal(map[string]string{"image": image, "networkMode": "host"})
@@ -447,9 +520,16 @@ func (c *Controller) jobForSpec(round *reconcileRound, specName string, depend *
 	}
 }
 
-// jobPayload assembles only the recognized per-Job fields from buildPayload
-// and the resolved spec and repository inputs.
-func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *specparse.SpecDepend, snapshot *ebsv1.Snapshot, contentURL string, sources *rpmver.RpmMetaSources) string {
+// jobPayload assembles only the recognized per-Job fields from buildPayload and the resolved spec and repository
+// inputs.
+func (c *Controller) jobPayload(
+	round *reconcileRound,
+	specName string,
+	depend *specparse.SpecDepend,
+	snapshot *ebsv1.Snapshot,
+	contentURL string,
+	sources *rpmver.RpmMetaSources,
+) string {
 	configured := c.parseBuildPayload(round.key, round.current.Spec.BuildPayload)
 	payload := map[string]any{
 		"spec_name":      specName,
@@ -464,8 +544,8 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 	if matched := jobPrefer(depend, sources, configuredPrefer); len(matched) > 0 {
 		payload["prefer"] = strings.Join(matched, " ")
 	}
-	// The project-level list names package repositories, not spec files.
-	// Only a matching Job receives the flag; otherwise omit the base list.
+	// The project-level list names package repositories, not spec files. Only a matching Job receives the flag; otherwise
+	// omit the base list.
 	if packageRepoListed(configured["disable_check_path"], depend.RepoName) {
 		payload["disable_check_path"] = true
 	}
@@ -486,7 +566,12 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 	}
 	if entry, ok := snapshot.Status.PackageRepoStatuses[depend.RepoName]; !ok || entry.CommitID == "" {
 		// Missing snapshot data does not block dispatch.
-		c.logf(round.key, "SpecRepoEntryMissing", "packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commit_id not injected", depend.RepoName)
+		c.logf(
+			round.key,
+			"SpecRepoEntryMissing",
+			"packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commit_id not injected",
+			depend.RepoName,
+		)
 	} else {
 		payload["spec_url"] = entry.CloneURL
 		payload["commit_id"] = entry.CommitID
@@ -494,8 +579,7 @@ func (c *Controller) jobPayload(round *reconcileRound, specName string, depend *
 	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
 	repoURLs := repoPayloadURLs(contentURL, bootstrapRepos)
 	if len(repoURLs) == 0 {
-		// Use an explicitly configured fallback, but emit the same array
-		// shape as repositories resolved by the controller.
+		// Use an explicitly configured fallback, but emit the same array shape as repositories resolved by the controller.
 		repoURLs = configuredRepoURLs(configured["repo"])
 	}
 	if len(repoURLs) == 0 {
@@ -527,9 +611,8 @@ func packageRepoListed(value any, repoName string) bool {
 	return false
 }
 
-// jobPrefer uses the same layered provider choice as dependency graph
-// construction, but records only choices made by the prefer step. Dependency
-// names are sorted so payloads are stable across reconciles.
+// jobPrefer uses the same layered provider choice as dependency graph construction, but records only choices made by
+// the prefer step. Dependency names are sorted so payloads are stable across reconciles.
 func jobPrefer(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources, configured []string) []string {
 	if sources == nil || len(configured) == 0 {
 		return nil
@@ -546,8 +629,8 @@ func jobPrefer(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources, con
 	return matched
 }
 
-// repoPayloadURLs orders the RpmRepo contentURL (first when non-empty) before
-// the bootstrap repo URLs in declaration order.
+// repoPayloadURLs orders the RpmRepo contentURL (first when non-empty) before the bootstrap repo URLs in declaration
+// order.
 func repoPayloadURLs(contentURL string, bootstrapRepos []string) []string {
 	parts := make([]string, 0, len(bootstrapRepos)+1)
 	if contentURL != "" {
@@ -577,13 +660,13 @@ func configuredRepoURLs(value any) []string {
 func (c *Controller) marshalPayload(round *reconcileRound, fields map[string]any) string {
 	payloadYAML, err := yaml.Marshal(fields)
 	if err != nil {
-		// Defensive: the fields are YAML-decoded values plus derived values, so a
-		// marshal failure is a programming error; keep a trace.
+		// Defensive: the fields are YAML-decoded values plus derived values, so a marshal failure is a programming error;
+		// keep a trace.
 		c.logf(round.key, "PayloadMarshalFailed", "payload marshal failed: %v", err)
 		return ""
 	}
-	// buildPayload accepts YAML, including nested maps. Convert the assembled
-	// representation to JSON so scripts can parse long scalar values reliably.
+	// buildPayload accepts YAML, including nested maps. Convert the assembled representation to JSON so scripts can parse
+	// long scalar values reliably.
 	payload, err := syaml.YAMLToJSON(payloadYAML)
 	if err != nil {
 		c.logf(round.key, "PayloadMarshalFailed", "payload JSON conversion failed: %v", err)
@@ -592,8 +675,8 @@ func (c *Controller) marshalPayload(round *reconcileRound, fields map[string]any
 	return string(payload)
 }
 
-// resolveResources overlays spec defaults, package defaults, then architecture
-// settings. Missing limits inherit requests from the same level.
+// resolveResources overlays spec defaults, package defaults, then architecture settings. Missing limits inherit
+// requests from the same level.
 func resolveResources(resource *buildResourceRules, specName, arch string) ebsv1.ResourceRequirements {
 	merged := normalizeResourceLevel(resource.Spec.Default)
 	if pkg, ok := resource.Spec.Packages[specName]; ok {
@@ -605,8 +688,7 @@ func resolveResources(resource *buildResourceRules, specName, arch string) ebsv1
 	return merged
 }
 
-// normalizeResourceLevel fills a level's missing limits from its own
-// requests.
+// normalizeResourceLevel fills a level's missing limits from its own requests.
 func normalizeResourceLevel(level ebsv1.ResourceRequirements) ebsv1.ResourceRequirements {
 	out := deepCopyResources(level)
 	for _, key := range []string{"cpu", "memory"} {
@@ -660,9 +742,13 @@ func deepCopyResources(in ebsv1.ResourceRequirements) ebsv1.ResourceRequirements
 
 // --- Job backfill ---
 
-// groupJobsBySpec groups listed Jobs by their spec-name label; Jobs without
-// a label or outside the scope set are skipped.
-func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, scope map[string]bool) map[string][]ebsv1.Job {
+// groupJobsBySpec groups listed Jobs by their spec-name label; Jobs without a label or outside the scope set are
+// skipped.
+func (c *Controller) groupJobsBySpec(
+	round *reconcileRound,
+	jobs []ebsv1.Job,
+	scope map[string]bool,
+) map[string][]ebsv1.Job {
 	bySpec := map[string][]ebsv1.Job{}
 	for i := range jobs {
 		job := jobs[i]
@@ -677,11 +763,16 @@ func (c *Controller) groupJobsBySpec(round *reconcileRound, jobs []ebsv1.Job, sc
 	return bySpec
 }
 
-// backfillJobs folds listed Jobs into next.Status. Only Jobs named for this
-// BuildInfo UID count, so a replacement with the same name cannot inherit
-// old phases or dispatch counts. createMissing also recovers Jobs created
-// before their initial spec status was persisted.
-func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, jobs []ebsv1.Job, scope map[string]bool, createMissing bool) map[string][]ebsv1.Job {
+// backfillJobs folds listed Jobs into next.Status. Only Jobs named for this BuildInfo UID count, so a replacement with
+// the same name cannot inherit old phases or dispatch counts. createMissing also recovers Jobs created before their
+// initial spec status was persisted.
+func (c *Controller) backfillJobs(
+	round *reconcileRound,
+	next *ebsv1.BuildInfo,
+	jobs []ebsv1.Job,
+	scope map[string]bool,
+	createMissing bool,
+) map[string][]ebsv1.Job {
 	bySpec := c.groupJobsBySpec(round, jobs, scope)
 	uid := string(round.current.UID)
 	for spec, group := range bySpec {
@@ -694,15 +785,23 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 		}
 		own := filterJobsByIdentity(group, uid)
 		if len(own) < len(group) {
-			c.logf(round.key, "ForeignIncarnationJob", "spec %s: %d of %d listed jobs belong to a previous same-name buildinfo; excluded from folding", spec, len(group)-len(own), len(group))
+			c.logf(
+				round.key,
+				"ForeignIncarnationJob",
+				"spec %s: %d of %d listed jobs belong to a previous same-name buildinfo; excluded from folding",
+				spec,
+				len(group)-len(own),
+				len(group),
+			)
 		}
 		if len(own) > 0 {
-			// Keep the count above both the listed Job count and the highest
-			// confirmed generation, even if older Jobs were cleaned up.
+			// Keep the count above both the listed Job count and the highest confirmed generation, even if older Jobs were
+			// cleaned up.
 			floor := int64(len(own))
 			for i := range own {
 				job := &own[i]
-				if gen, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64); err == nil && gen > floor {
+				if gen, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64); err == nil &&
+					gen > floor {
 					floor = gen
 				}
 			}
@@ -715,11 +814,13 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 					c.backfillInstall(round, &ss, latest)
 				}
 			} else {
-				c.logf(round.key, "UnknownJobPhase", "job %s phase %q unknown, status mapping skipped", latest.Name, latest.Status.Phase)
+				c.logf(
+					round.key, "UnknownJobPhase", "job %s phase %q unknown, status mapping skipped",
+					latest.Name, latest.Status.Phase,
+				)
 			}
 		}
-		// An identity-matched Job in the list confirms the pending
-		// entry (removed in the same write, no double counting).
+		// An identity-matched Job in the list confirms the pending entry (removed in the same write, no double counting).
 		if pend, ok := next.Status.PendingJobCreates[spec]; ok {
 			for i := range own {
 				job := &own[i]
@@ -736,8 +837,8 @@ func (c *Controller) backfillJobs(round *reconcileRound, next *ebsv1.BuildInfo, 
 	return bySpec
 }
 
-// filterJobsByIdentity checks the deterministic name
-// against the current BuildInfo UID, spec label and dispatch generation.
+// filterJobsByIdentity checks the deterministic name against the current BuildInfo UID, spec label and dispatch
+// generation.
 func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	out := make([]ebsv1.Job, 0, len(jobs))
 	for i := range jobs {
@@ -751,9 +852,8 @@ func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	return out
 }
 
-// latestJob picks the multi-generation target Job by the
-// greatest (creationTimestamp, name) pair; a zero timestamp sorts earliest.
-// An empty group yields nil — callers dispatching on the result must guard.
+// latestJob picks the multi-generation target Job by the greatest (creationTimestamp, name) pair; a zero timestamp
+// sorts earliest. An empty group yields nil — callers dispatching on the result must guard.
 func latestJob(group []ebsv1.Job) *ebsv1.Job {
 	if len(group) == 0 {
 		return nil
@@ -774,8 +874,8 @@ func jobLess(a, b *ebsv1.Job) bool {
 	return a.Name < b.Name
 }
 
-// priorSucceeded detects a previous successful generation so a failed rebuild
-// receives RebuildFailed instead of BuildFailed.
+// priorSucceeded detects a previous successful generation so a failed rebuild receives RebuildFailed instead of
+// BuildFailed.
 func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 	for i := range group {
 		job := &group[i]
@@ -786,10 +886,8 @@ func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 	return false
 }
 
-// applyJobPhase maps the target Job phase onto build.status;
-// the bool reports a known phase. Pending forces Running (never inherit a
-// previous generation's terminal state). An unknown phase leaves the build
-// status unchanged.
+// applyJobPhase maps the target Job phase onto build.status; the bool reports a known phase. Pending forces Running
+// (never inherit a previous generation's terminal state). An unknown phase leaves the build status unchanged.
 func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bool {
 	switch job.Status.Phase {
 	case ebsv1.JobPending, ebsv1.JobRunning:
@@ -810,20 +908,30 @@ func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bo
 		}
 	case ebsv1.JobAborted:
 		ss.Build.Status = SpecBuildFailed
-		specCondition(ss, ConditionBuildAborted, ReasonBuildAborted, "job "+job.Name+" aborted (defensive: treated as Failed; parent Build is not Aborted)")
+		specCondition(
+			ss,
+			ConditionBuildAborted,
+			ReasonBuildAborted,
+			"job "+job.Name+" aborted (defensive: treated as Failed; parent Build is not Aborted)",
+		)
 	default:
 		return false
 	}
 	return true
 }
 
-// backfillInstall copies the runner's structured install-check verdict.
-// A missing result is not evidence of installability.
+// backfillInstall copies the runner's structured install-check verdict. A missing result is not evidence of
+// installability.
 func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus, job *ebsv1.Job) {
 	result := job.Status.Install
 	if result == nil {
 		ss.Install.Status = SpecBuildFailed
-		upsertCondition(&ss.Install.Conditions, ConditionInstall, ReasonInstallResultMissing, "job "+job.Name+" has no install-check result")
+		upsertCondition(
+			&ss.Install.Conditions,
+			ConditionInstall,
+			ReasonInstallResultMissing,
+			"job "+job.Name+" has no install-check result",
+		)
 		return
 	}
 	if result.Status == ebsv1.JobResultSucceeded {
@@ -834,7 +942,12 @@ func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus
 	}
 	if result.Status != ebsv1.JobResultFailed {
 		ss.Install.Status = SpecBuildFailed
-		upsertCondition(&ss.Install.Conditions, ConditionInstall, ReasonInstallResultInvalid, "job "+job.Name+" has invalid install-check result")
+		upsertCondition(
+			&ss.Install.Conditions,
+			ConditionInstall,
+			ReasonInstallResultInvalid,
+			"job "+job.Name+" has invalid install-check result",
+		)
 		return
 	}
 	ss.Install.Status = SpecBuildFailed
