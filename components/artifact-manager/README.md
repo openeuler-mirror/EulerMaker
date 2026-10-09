@@ -32,6 +32,8 @@ go run ./cmd \
 
 仓库物化依赖本机的 `rpm` 和 `createrepo_c`。当前内部仓库管理接口不校验 Token，只允许部署在受信任的内部网络，后续接入统一的组件身份认证。
 
+RPM 签名默认关闭。启用本地 GPG 签名时，配置 `--rpm-signing-mode=local-gpg`、`--release-public-key` 和 `--rpm-signing-gpg-home`，并以受限权限挂载私钥目录。启用 Signatrust 时，配置 `--rpm-signing-mode=signatrust`、`--release-public-key` 和 `--rpm-signing-signatrust-config`；密钥名默认使用 `openeuler-default-key`，可通过 `--rpm-signing-signatrust-key-name` 覆盖。镜像按 `x86_64` 或 `aarch64` 架构安装 Signatrust `v1.0.1.rc0` 客户端；部署时仍需挂载客户端配置及其 TLS 凭据。签名只作用于过程仓工作目录中的 RPM 副本，单次物化默认最多并发处理 8 个 RPM，可通过 `--rpm-signing-workers` 调整；密钥配置不匹配或验签失败时不会发布该过程仓。
+
 过程仓接口包括创建物理版本 `POST /internal/v1/repositories`、查询状态或删除 `GET/DELETE /internal/v1/repositories/{repositoryUID}`。Ready 过程仓通过只读地址 `GET /repositories/v1/{repositoryUID}/{path}` 提供内容。
 
 正式发布接口包括创建 `POST /internal/v1/releases`、查询或删除 `GET/DELETE /internal/v1/releases/{buildName}`，以及激活或回滚 `POST /internal/v1/releases/{buildName}/activate`。稳定 DNF 地址为 `/repositories/{project}/{os}/{arch}/`，不可变历史版本地址为 `/repositories/releases/v1/{buildName}/`。

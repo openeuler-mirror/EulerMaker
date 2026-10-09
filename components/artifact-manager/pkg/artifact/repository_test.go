@@ -135,6 +135,32 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	}
 }
 
+func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	m := &repositoryManager{root: root, signingFingerprint: "new-key", records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, queue: make(chan string, 1)}
+	in := CreateRepositoryRequest{RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch", BaseRepositoryUID: "base", Manifests: []ManifestReference{{JobName: "job"}}}
+	in.RepositoryUID = repositoryUID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
+	m.records["base"] = &RepositoryRecord{RepositoryUID: "base", Project: in.Project, TargetOS: in.TargetOS, TargetArch: in.TargetArch, State: RepositoryReady, SigningFingerprint: "old-key"}
+	_, _, err := m.submit(in)
+	if typed, ok := err.(*repositoryError); !ok || typed.code != "BaseRepositorySigningMismatch" {
+		t.Fatalf("submit = %v", err)
+	}
+	in.BaseRepositoryUID = ""
+	in.RepositoryUID = repositoryUID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
+	record, _, err := m.submit(in)
+	if err != nil || record.SigningFingerprint != "new-key" {
+		t.Fatalf("new record = %+v, %v", record, err)
+	}
+	m.signingFingerprint = "changed-key"
+	_, _, err = m.submit(in)
+	if typed, ok := err.(*repositoryError); !ok || typed.code != "SigningConfigurationChanged" {
+		t.Fatalf("retry = %v", err)
+	}
+}
+
 func TestRepositoryMaterializationLifecycle(t *testing.T) {
 	materializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
 	server, request := newRepositoryTestServer(t, materializer)

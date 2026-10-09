@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"artifact-manager/pkg/signing"
 )
 
 type filesystemReleaseMaterializer struct {
@@ -26,6 +28,18 @@ func newFilesystemReleaseMaterializer(c Config) releaseMaterializer {
 }
 
 func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source RepositoryRecord) (result releaseResult, resultErr error) {
+	if source.SigningFingerprint != "" {
+		if m.publicKey == "" {
+			return result, &releaseError{code: "ReleaseSigningKeyMismatch", status: 422}
+		}
+		fingerprint, err := signing.PublicKeyFingerprint(m.publicKey)
+		if err != nil {
+			return result, &releaseError{code: "ReleaseSigningKeyUnavailable", status: 503, retryable: true}
+		}
+		if fingerprint != source.SigningFingerprint {
+			return result, &releaseError{code: "ReleaseSigningKeyMismatch", status: 422}
+		}
+	}
 	work, err := os.MkdirTemp(filepath.Join(m.root, ".release-work"), record.BuildName+"-")
 	if err != nil {
 		return result, retryableReleaseError(err)
