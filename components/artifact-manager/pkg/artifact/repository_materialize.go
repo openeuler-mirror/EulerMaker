@@ -16,8 +16,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
+
+	"artifact-manager/pkg/signing"
 )
+
+type rpmSigner interface {
+	Fingerprint() string
+	Sign(context.Context, string) error
+}
 
 type filesystemMaterializer struct {
 	root              string
@@ -25,13 +33,18 @@ type filesystemMaterializer struct {
 	createRepoCommand string
 	rpmQueryCommand   string
 	createRepoWorkers int
+	signingWorkers    int
+	signer            rpmSigner
 }
 
-func newFilesystemMaterializer(c Config, store *Store) repositoryMaterializer {
-	return &filesystemMaterializer{root: c.DataDir, store: store, createRepoCommand: c.CreateRepoCommand, rpmQueryCommand: c.RPMQueryCommand, createRepoWorkers: c.CreateRepoWorkers}
+func newFilesystemMaterializer(c Config, store *Store, signer rpmSigner) repositoryMaterializer {
+	return &filesystemMaterializer{root: c.DataDir, store: store, createRepoCommand: c.CreateRepoCommand, rpmQueryCommand: c.RPMQueryCommand, createRepoWorkers: c.CreateRepoWorkers, signingWorkers: c.RPMSigningWorkers, signer: signer}
 }
 
 func (m *filesystemMaterializer) Materialize(ctx context.Context, record RepositoryRecord) (result repositoryResult, resultErr error) {
+	if record.SigningFingerprint != m.signingFingerprint() {
+		return result, &repositoryError{code: "SigningConfigurationChanged", status: 503, retryable: true}
+	}
 	inputs, err := m.store.repositoryArtifacts(record.Project, record.Manifests)
 	if err != nil {
 		return result, err
@@ -70,11 +83,14 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 			return result, &repositoryError{code: "BaseRepositoryNotReady", status: 422}
 		}
 		baseRepository := repositoryVersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.baseBuildName, record.BaseRepositoryUID)
-		baseMetadata, err := loadRepositoryMetadata(baseRepository, record.BaseRepositoryUID)
+		baseIndex, err := loadRepositoryIndex(baseRepository, record.BaseRepositoryUID)
 		if err != nil {
 			return result, err
 		}
-		metadata, err = linkRPMDirectory(filepath.Join(baseRepository, "Packages"), packages, baseMetadata, inputSpecs)
+		if baseIndex.SigningFingerprint != record.SigningFingerprint {
+			return result, &repositoryError{code: "BaseRepositorySigningMismatch", status: 422}
+		}
+		metadata, err = linkRPMDirectory(filepath.Join(baseRepository, "Packages"), packages, baseIndex.RPMs, inputSpecs)
 		if err != nil {
 			return result, err
 		}
@@ -82,26 +98,46 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 			return result, retryableRepositoryError(err)
 		}
 	}
+	signedMetadata := map[string]RepositoryRPMMeta{}
+	if record.SigningFingerprint != "" {
+		signedMetadata, err = m.signRPMs(ctx, packages, inputs, inputMetadata, metadata)
+		if err != nil {
+			return result, err
+		}
+	}
 
 	nevra := make(map[string]string)
+	inputHashes := make(map[string]string)
 	for name, meta := range metadata {
 		nevra[rpmIdentity(meta)] = name + "\x00" + meta.SHA256
 	}
 	for i, input := range inputs {
 		meta := inputMetadata[i]
-		if old, ok := metadata[meta.FileName]; ok && old.SHA256 != meta.SHA256 {
+		if old, ok := inputHashes[meta.FileName]; ok && old != meta.SHA256 {
 			return result, &repositoryError{code: "PackageConflict", status: 422, jobName: input.JobName}
 		}
-		if old, ok := nevra[rpmIdentity(meta)]; ok && !strings.HasSuffix(old, "\x00"+meta.SHA256) {
+		if old, ok := inputHashes[rpmIdentity(meta)]; ok && old != meta.SHA256 {
 			return result, &repositoryError{code: "PackageConflict", status: 422, jobName: input.JobName}
 		}
+		inputHashes[meta.FileName], inputHashes[rpmIdentity(meta)] = meta.SHA256, meta.SHA256
 		destination := filepath.Join(packages, meta.FileName)
-		if _, err := os.Stat(destination); os.IsNotExist(err) {
-			if err := os.Link(input.Path, destination); err != nil {
-				return result, classifyLinkError(err)
+		if record.SigningFingerprint != "" {
+			meta = signedMetadata[meta.FileName]
+		} else {
+			if _, err := os.Stat(destination); os.IsNotExist(err) {
+				if err := os.Link(input.Path, destination); err != nil {
+					return result, classifyLinkError(err)
+				}
+			} else if err != nil {
+				return result, retryableRepositoryError(err)
+			} else if old, ok := metadata[meta.FileName]; ok {
+				meta = old
 			}
 		}
 		metadata[meta.FileName] = meta
+		if old, ok := nevra[rpmIdentity(meta)]; ok && !strings.HasPrefix(old, meta.FileName+"\x00") {
+			return result, &repositoryError{code: "PackageConflict", status: 422, jobName: input.JobName}
+		}
 		nevra[rpmIdentity(meta)] = meta.FileName + "\x00" + meta.SHA256
 	}
 
@@ -122,7 +158,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if err != nil {
 		return result, retryableRepositoryError(err)
 	}
-	repositoryJSON := repositoryIndex{1, record.RepositoryUID, record.RequestDigest, digest, metadata}
+	repositoryJSON := repositoryIndex{SchemaVersion: 1, RepositoryUID: record.RepositoryUID, RequestDigest: record.RequestDigest, SigningFingerprint: record.SigningFingerprint, RepositoryDigest: digest, RPMs: metadata}
 	if err := atomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
 		return result, retryableRepositoryError(err)
 	}
@@ -142,6 +178,153 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		_ = dir.Close()
 	}
 	return repositoryResult{Digest: digest}, nil
+}
+
+func (m *filesystemMaterializer) signingFingerprint() string {
+	if m.signer == nil {
+		return ""
+	}
+	return m.signer.Fingerprint()
+}
+
+type rpmSigningTask struct {
+	input repositoryArtifact
+	meta  RepositoryRPMMeta
+}
+
+func (m *filesystemMaterializer) signRPMs(ctx context.Context, packages string, inputs []repositoryArtifact, inputMetadata []RepositoryRPMMeta, base map[string]RepositoryRPMMeta) (map[string]RepositoryRPMMeta, error) {
+	tasks := make([]rpmSigningTask, 0, len(inputs))
+	seenFiles := make(map[string]string, len(inputs))
+	seenIdentities := make(map[string]string, len(inputs))
+	baseIdentities := make(map[string]bool, len(base))
+	for _, meta := range base {
+		baseIdentities[rpmIdentity(meta)] = true
+	}
+	for i, input := range inputs {
+		meta := inputMetadata[i]
+		identity := rpmIdentity(meta)
+		if _, exists := base[meta.FileName]; exists || baseIdentities[identity] {
+			return nil, &repositoryError{code: "PackageConflict", status: 422, jobName: input.JobName}
+		}
+		if old, exists := seenFiles[meta.FileName]; exists {
+			if old != meta.SHA256 {
+				return nil, &repositoryError{code: "PackageConflict", status: 422, jobName: input.JobName}
+			}
+			continue
+		}
+		if old, exists := seenIdentities[identity]; exists && old != meta.FileName {
+			return nil, &repositoryError{code: "PackageConflict", status: 422, jobName: input.JobName}
+		}
+		seenFiles[meta.FileName] = meta.SHA256
+		seenIdentities[identity] = meta.FileName
+		tasks = append(tasks, rpmSigningTask{input: input, meta: meta})
+	}
+	workers := m.signingWorkers
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(tasks) {
+		workers = len(tasks)
+	}
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan int)
+	results := make([]RepositoryRPMMeta, len(tasks))
+	var wg sync.WaitGroup
+	var failOnce sync.Once
+	var firstErr error
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				meta, err := m.signRPM(workCtx, packages, tasks[index])
+				if err != nil {
+					failOnce.Do(func() { firstErr = err; cancel() })
+					return
+				}
+				results[index] = meta
+			}
+		}()
+	}
+dispatch:
+	for index := range tasks {
+		select {
+		case jobs <- index:
+		case <-workCtx.Done():
+			break dispatch
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, &repositoryError{code: "SigningBackendUnavailable", status: 503, retryable: true}
+	}
+	signed := make(map[string]RepositoryRPMMeta, len(tasks))
+	for index, task := range tasks {
+		signed[task.meta.FileName] = results[index]
+	}
+	return signed, nil
+}
+
+func (m *filesystemMaterializer) signRPM(ctx context.Context, packages string, task rpmSigningTask) (RepositoryRPMMeta, error) {
+	destination := filepath.Join(packages, task.meta.FileName)
+	if err := copyRPMFile(task.input.Path, destination); err != nil {
+		return RepositoryRPMMeta{}, retryableRepositoryError(err)
+	}
+	if err := m.signer.Sign(ctx, destination); err != nil {
+		if ctx.Err() != nil {
+			return RepositoryRPMMeta{}, &repositoryError{code: "SigningBackendUnavailable", status: 503, retryable: true, jobName: task.input.JobName}
+		}
+		if errors.Is(err, signing.ErrVerification) {
+			return RepositoryRPMMeta{}, &repositoryError{code: "SignedPackageVerificationFailed", status: 422, jobName: task.input.JobName}
+		}
+		return RepositoryRPMMeta{}, &repositoryError{code: "SigningBackendUnavailable", status: 503, retryable: true, jobName: task.input.JobName}
+	}
+	signed, err := m.inspectRPMFile(ctx, destination)
+	if err != nil {
+		if ctx.Err() != nil {
+			return RepositoryRPMMeta{}, &repositoryError{code: "SigningBackendUnavailable", status: 503, retryable: true, jobName: task.input.JobName}
+		}
+		return RepositoryRPMMeta{}, &repositoryError{code: "SignedPackageMetadataInvalid", status: 422, jobName: task.input.JobName}
+	}
+	if rpmIdentity(signed) != rpmIdentity(task.meta) || signed.Source != task.meta.Source || signed.SpecName != task.meta.SpecName || !equalRPMLists(signed.Provides, task.meta.Provides) || !equalRPMLists(signed.Requires, task.meta.Requires) {
+		return RepositoryRPMMeta{}, &repositoryError{code: "SignedPackageMetadataMismatch", status: 422, jobName: task.input.JobName}
+	}
+	return signed, nil
+}
+
+func equalRPMLists(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func copyRPMFile(source, destination string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0640)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 func (m *filesystemMaterializer) inspectRPM(ctx context.Context, path string, artifact Artifact) (RepositoryRPMMeta, error) {
@@ -243,18 +426,26 @@ func rpmIdentity(meta RepositoryRPMMeta) string {
 }
 
 func loadRepositoryMetadata(directory, uid string) (map[string]RepositoryRPMMeta, error) {
+	index, err := loadRepositoryIndex(directory, uid)
+	if err != nil {
+		return nil, err
+	}
+	return index.RPMs, nil
+}
+
+func loadRepositoryIndex(directory, uid string) (repositoryIndex, error) {
 	data, err := os.ReadFile(filepath.Join(directory, "repository.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+			return repositoryIndex{}, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
 		}
-		return nil, retryableRepositoryError(err)
+		return repositoryIndex{}, retryableRepositoryError(err)
 	}
 	var index repositoryIndex
 	if json.Unmarshal(data, &index) != nil || index.RepositoryUID != uid || index.RPMs == nil {
-		return nil, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
+		return repositoryIndex{}, &repositoryError{code: "RepositoryLayoutInvalid", status: 422}
 	}
-	return index.RPMs, nil
+	return index, nil
 }
 
 // linkRPMDirectory reuses the immutable base index and links only RPMs whose

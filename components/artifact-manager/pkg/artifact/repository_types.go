@@ -30,26 +30,27 @@ type CreateRepositoryRequest struct {
 }
 
 type RepositoryRecord struct {
-	SchemaVersion     int                          `json:"schemaVersion"`
-	RepositoryUID     string                       `json:"repositoryUID"`
-	RepositoryName    string                       `json:"repositoryName"`
-	Project           string                       `json:"project"`
-	BuildName         string                       `json:"buildName"`
-	TargetOS          string                       `json:"targetOS"`
-	TargetArch        string                       `json:"targetArch"`
-	BaseRepositoryUID string                       `json:"baseRepositoryUID,omitempty"`
-	Manifests         []ManifestReference          `json:"manifests"`
-	RequestDigest     string                       `json:"requestDigest"`
-	State             RepositoryState              `json:"state"`
-	Attempt           int                          `json:"attempt"`
-	RepositoryDigest  string                       `json:"repositoryDigest,omitempty"`
-	ContentURL        string                       `json:"contentURL,omitempty"`
-	RPMs              map[string]RepositoryRPMMeta `json:"rpms,omitempty"`
-	Failure           *FailureInfo                 `json:"failure,omitempty"`
-	CreatedAt         time.Time                    `json:"createdAt"`
-	UpdatedAt         time.Time                    `json:"updatedAt"`
-	CompletedAt       *time.Time                   `json:"completedAt,omitempty"`
-	baseBuildName     string
+	SchemaVersion      int                          `json:"schemaVersion"`
+	RepositoryUID      string                       `json:"repositoryUID"`
+	RepositoryName     string                       `json:"repositoryName"`
+	Project            string                       `json:"project"`
+	BuildName          string                       `json:"buildName"`
+	TargetOS           string                       `json:"targetOS"`
+	TargetArch         string                       `json:"targetArch"`
+	BaseRepositoryUID  string                       `json:"baseRepositoryUID,omitempty"`
+	Manifests          []ManifestReference          `json:"manifests"`
+	RequestDigest      string                       `json:"requestDigest"`
+	SigningFingerprint string                       `json:"signingFingerprint,omitempty"`
+	State              RepositoryState              `json:"state"`
+	Attempt            int                          `json:"attempt"`
+	RepositoryDigest   string                       `json:"repositoryDigest,omitempty"`
+	ContentURL         string                       `json:"contentURL,omitempty"`
+	RPMs               map[string]RepositoryRPMMeta `json:"rpms,omitempty"`
+	Failure            *FailureInfo                 `json:"failure,omitempty"`
+	CreatedAt          time.Time                    `json:"createdAt"`
+	UpdatedAt          time.Time                    `json:"updatedAt"`
+	CompletedAt        *time.Time                   `json:"completedAt,omitempty"`
+	baseBuildName      string
 }
 
 type RepositoryRPMMeta struct {
@@ -84,11 +85,12 @@ type repositoryResult struct {
 }
 
 type repositoryIndex struct {
-	SchemaVersion    int                          `json:"schemaVersion"`
-	RepositoryUID    string                       `json:"repositoryUID"`
-	RequestDigest    string                       `json:"requestDigest"`
-	RepositoryDigest string                       `json:"repositoryDigest"`
-	RPMs             map[string]RepositoryRPMMeta `json:"rpms"`
+	SchemaVersion      int                          `json:"schemaVersion"`
+	RepositoryUID      string                       `json:"repositoryUID"`
+	RequestDigest      string                       `json:"requestDigest"`
+	SigningFingerprint string                       `json:"signingFingerprint,omitempty"`
+	RepositoryDigest   string                       `json:"repositoryDigest"`
+	RPMs               map[string]RepositoryRPMMeta `json:"rpms"`
 }
 
 type repositoryMaterializer interface {

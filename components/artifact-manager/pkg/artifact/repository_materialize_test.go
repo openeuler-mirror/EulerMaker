@@ -3,9 +3,12 @@ package artifact
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
@@ -84,6 +87,148 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 		t.Fatalf("cached digest = %s, full digest = %s", cachedDigest, fullDigest)
 	}
 }
+
+func TestSigningUsesPrivateRPMCopy(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "artifact.rpm")
+	destination := filepath.Join(dir, "signed.rpm")
+	if err := os.WriteFile(source, []byte("original"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyRPMFile(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("signed"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil || string(data) != "original" {
+		t.Fatalf("artifact changed during signing: %q, %v", data, err)
+	}
+	sourceInfo, _ := os.Stat(source)
+	destinationInfo, _ := os.Stat(destination)
+	if os.SameFile(sourceInfo, destinationInfo) {
+		t.Fatal("signed RPM shares artifact inode")
+	}
+}
+
+func TestMaterializeRejectsChangedSigningKeyBeforeReadingInputs(t *testing.T) {
+	m := &filesystemMaterializer{signer: testRPMSigner{fingerprint: "configured"}}
+	_, err := m.Materialize(context.Background(), RepositoryRecord{SigningFingerprint: "recorded"})
+	if typed, ok := err.(*repositoryError); !ok || typed.code != "SigningConfigurationChanged" || !typed.retryable {
+		t.Fatalf("materialize error = %v", err)
+	}
+}
+
+type blockingRPMSigner struct {
+	active  atomic.Int32
+	maximum atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingRPMSigner) Fingerprint() string { return "test-key" }
+
+func (s *blockingRPMSigner) Sign(ctx context.Context, path string) error {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for {
+		maximum := s.maximum.Load()
+		if active <= maximum || s.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	s.started <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.release:
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write([]byte("-signed"))
+	closeErr := file.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
+func TestRPMSigningUsesBoundedWorkers(t *testing.T) {
+	root := t.TempDir()
+	packages := filepath.Join(root, "Packages")
+	if err := os.Mkdir(packages, 0750); err != nil {
+		t.Fatal(err)
+	}
+	rpmCommand := filepath.Join(root, "rpm")
+	command := `#!/bin/sh
+case "$2" in
+  --qf) name="${4##*/}"; name="${name%.rpm}"; printf '%s\t0\t1\t1\tx86_64\t(none)' "$name" ;;
+  --provides|--requires) ;;
+  *) exit 1 ;;
+esac
+`
+	if err := os.WriteFile(rpmCommand, []byte(command), 0755); err != nil {
+		t.Fatal(err)
+	}
+	var inputs []repositoryArtifact
+	var metadata []RepositoryRPMMeta
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("pkg-%d", i)
+		path := filepath.Join(root, name+".rpm")
+		if err := os.WriteFile(path, []byte("original"), 0640); err != nil {
+			t.Fatal(err)
+		}
+		sum, err := fileSHA256(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		inputs = append(inputs, repositoryArtifact{Path: path, JobName: name})
+		metadata = append(metadata, RepositoryRPMMeta{FileName: name + ".rpm", SHA256: sum, Name: name, Epoch: "0", Version: "1", Release: "1", Arch: "x86_64", Source: "(none)", SpecName: name})
+	}
+	signer := &blockingRPMSigner{started: make(chan struct{}, len(inputs)), release: make(chan struct{})}
+	m := &filesystemMaterializer{rpmQueryCommand: rpmCommand, signingWorkers: 2, signer: signer}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type outcome struct {
+		rpms map[string]RepositoryRPMMeta
+		err  error
+	}
+	done := make(chan outcome, 1)
+	go func() { rpms, err := m.signRPMs(ctx, packages, inputs, metadata, nil); done <- outcome{rpms, err} }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-signer.started:
+		case <-ctx.Done():
+			t.Fatal("signing workers did not start")
+		}
+	}
+	close(signer.release)
+	select {
+	case result := <-done:
+		if result.err != nil || len(result.rpms) != len(inputs) {
+			t.Fatalf("signed RPMs = %d, error = %v", len(result.rpms), result.err)
+		}
+		if signer.maximum.Load() != 2 {
+			t.Fatalf("maximum concurrent signers = %d", signer.maximum.Load())
+		}
+		for _, input := range inputs {
+			data, err := os.ReadFile(input.Path)
+			if err != nil || string(data) != "original" {
+				t.Fatalf("input changed: %q, %v", data, err)
+			}
+		}
+	case <-ctx.Done():
+		t.Fatal("signing did not finish")
+	}
+}
+
+type testRPMSigner struct{ fingerprint string }
+
+func (s testRPMSigner) Fingerprint() string                { return s.fingerprint }
+func (s testRPMSigner) Sign(context.Context, string) error { return nil }
 
 func TestInspectRPMSourceIdentityAndSubpackageOrigin(t *testing.T) {
 	dir := t.TempDir()

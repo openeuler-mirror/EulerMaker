@@ -655,7 +655,7 @@ Repository content URL
 6. 进程崩溃后能够区分 Ready、可继续清理的临时状态和失败状态。
 7. 仓库生成不直接修改业务 API 对象，避免数据面与控制面形成双写事务。
 
-首版不提供仓库签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。
+当前实现不提供 `repomd.xml` 签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。可选 RPM 签名由 Artifact Manager 内部实现，按 9.7.1 执行；未启用时，现有物化与发布流程保持不变。
 
 ### 9.3 职责边界
 
@@ -726,7 +726,7 @@ ${dataDir}/
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
-`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。首版正式发布只安装已经由可信发布流程提供的公钥，不在 Artifact Manager 内签名 RPM 或 repodata。
+`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 在过程仓物化阶段签名；正式发布仅复用已签名 RPM 并安装匹配的公钥，不重新签名 RPM 或 `repomd.xml`。
 
 Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、OS、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
 
@@ -809,25 +809,26 @@ type CreateRepositoryRequest struct {
 }
 
 type RepositoryRecord struct {
-    SchemaVersion     int                 `json:"schemaVersion"`
-    RepositoryUID     string              `json:"repositoryUID"`
-    RepositoryName    string              `json:"repositoryName"`
-    Project           string              `json:"project"`
-    BuildName         string              `json:"buildName"`
-    TargetOS          string              `json:"targetOS"`
-    TargetArch        string              `json:"targetArch"`
-    BaseRepositoryUID string              `json:"baseRepositoryUID,omitempty"`
-    Manifests         []ManifestReference `json:"manifests"`
-    RequestDigest     string              `json:"requestDigest"`
-    State             RepositoryState     `json:"state"`
-    Attempt           int                 `json:"attempt"`
-    RepositoryDigest  string              `json:"repositoryDigest,omitempty"`
-    ContentURL        string              `json:"contentURL,omitempty"`
-    RPMs              map[string]RPMMeta  `json:"rpms,omitempty"`
-    Failure           *FailureInfo        `json:"failure,omitempty"`
-    CreatedAt         Timestamp           `json:"createdAt"`
-    UpdatedAt         Timestamp           `json:"updatedAt"`
-    CompletedAt       *Timestamp          `json:"completedAt,omitempty"`
+    SchemaVersion      int                 `json:"schemaVersion"`
+    RepositoryUID      string              `json:"repositoryUID"`
+    RepositoryName     string              `json:"repositoryName"`
+    Project            string              `json:"project"`
+    BuildName          string              `json:"buildName"`
+    TargetOS           string              `json:"targetOS"`
+    TargetArch         string              `json:"targetArch"`
+    BaseRepositoryUID  string              `json:"baseRepositoryUID,omitempty"`
+    Manifests          []ManifestReference `json:"manifests"`
+    RequestDigest      string              `json:"requestDigest"`
+    SigningFingerprint string              `json:"signingFingerprint,omitempty"`
+    State              RepositoryState     `json:"state"`
+    Attempt            int                 `json:"attempt"`
+    RepositoryDigest   string              `json:"repositoryDigest,omitempty"`
+    ContentURL         string              `json:"contentURL,omitempty"`
+    RPMs               map[string]RPMMeta  `json:"rpms,omitempty"`
+    Failure            *FailureInfo        `json:"failure,omitempty"`
+    CreatedAt          Timestamp           `json:"createdAt"`
+    UpdatedAt          Timestamp           `json:"updatedAt"`
+    CompletedAt        *Timestamp          `json:"completedAt,omitempty"`
 }
 
 type RepositoryResponse struct {
@@ -943,14 +944,26 @@ GET /repositories/v1/{repositoryUID}/{path...}
 6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。源码包与同名同版本的二进制包不视为同一 NEVRA。
 7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
 8. 基础仓存在时，读取其不可变 `repository.json` 中的 RPM 元数据，只将非本批输入 spec 的旧 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用；校验目录项与元数据一致，但不重新解析或哈希旧 RPM。基础仓和工作目录必须位于同一文件系统；硬链接失败不静默退化为完整复制。
-9. 将本批输入 Artifact 正文硬链接到工作目录。Artifact 正文和仓库工作目录也必须位于同一文件系统。
-10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、最大输出、固定 locale、受限环境和资源限制。
+9. 未启用签名时，将本批输入 Artifact 正文硬链接到工作目录；Artifact 正文和仓库工作目录必须位于同一文件系统。启用签名时，本批新 RPM 复制到仓库工作目录内的独立普通文件，由内置后端仅在该副本上签名并验签；不得修改 Artifact 正文或基础仓硬链接。详见 9.7.1。
+10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、最大输出、固定 locale、受限环境和资源限制。签名模式下必须在本批 RPM 全部验签通过后执行。
 11. 确认生成的 `repodata/repomd.xml` 存在且为普通文件。
-12. 计算确定性的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批输入摘要，其他文件现场计算摘要。
+12. 计算本次最终内容的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批最终 RPM 摘要，其他文件现场计算摘要。签名模式下本批摘要取签名后的字节，不再复用上传 Artifact 的摘要；签名输出可能因重试而不同，UID 幂等性由原子发布保证，不要求摘要在发布前跨尝试相同。
 13. 写入并 fsync `repository.json`，再将工作目录以不覆盖语义原子重命名为最终目录。
 14. 原子写入 `Ready` 元数据，并向等待该 UID 的请求广播完成。
 
 任何一步失败都不得暴露工作目录为可下载仓库，也不得修改基础仓或输入 Artifact。
+
+#### 9.7.1 可选 RPM 签名
+
+签名是 Artifact Manager 物化流程中的可选步骤。签名配置是服务端部署配置，Job、Project 和物化请求均不能指定后端或密钥。模式为 `disabled`（默认）、`local-gpg` 或 `signatrust`；开启后仅对本批新引入的二进制 RPM 和 SRPM 签名，继承自基础仓的 RPM 保持原样。签名失败不得退化为无签名模式。正式发布不再次签名 RPM，也不签名 `repomd.xml`、updateinfo 或任意代码文件。
+
+本地模式调用固定的 `rpmsign --resign` 工具；私钥和口令由 Artifact Manager 进程可访问，因此不能声称私钥与 Artifact Manager 已隔离。密钥文件仅以受限权限挂载，口令从受保护文件或签名代理读取，不通过命令行参数、普通环境变量或日志传播。Signatrust 模式调用客户端对工作副本执行 RPM/PGP 签名，对应旧架构的 `--file-type rpm --key-type pgp`；其地址、TLS 客户端凭据和 `key-name` 由部署配置固定，私钥仍由远端平台持有。两种后端均使用参数数组和受限环境，不拼接 shell 命令，不运行请求方指定的程序。若 Signatrust 需上传 RPM 正文到远端平台，这部分网络传输仍然存在。本批新增 RPM 由有上限的 worker pool 并发签名、验签和元数据复核，默认 8 个 worker；所有任务成功后才运行 `createrepo_c`，任一失败都不发布工作目录。继承自基础仓的 RPM 不重复签名。
+
+Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来源 spec。签名工具只处理仓库工作目录内未与 Artifact 或基础仓共享 inode 的私有副本。签名完成后，使用服务端配置的公钥验证实际签名及完整指纹，复核 RPM 身份字段未改变，重新计算签名后 RPM 的大小和 SHA-256；只有全部本批文件通过校验才生成 `repodata`。签名输出可以因时间等因素在不同尝试间变化，仓库 UID 仍由固定物化请求确定，最终目录只允许一次性原子发布。
+
+首次接受物化时，将配置公钥的完整指纹写入 `RepositoryRecord.SigningFingerprint` 与 `repository.json`；签名关闭时该字段为空。它不由物化请求提供，也不改变当前 `repositoryUID` 计算规则。相同 UID 的重试和崩溃恢复只在当前部署配置得出的指纹与记录一致时继续；不一致时保持可重试失败，不用新密钥签名，也不把原定签名的仓库变成未签名。Ready 重放直接返回原结果。`local-gpg` 与 `signatrust` 仅是部署时选择的后端，不写入仓库记录；只要公钥指纹相同，后端切换不改变仓库身份。一次 Build 内不得切换签名指纹。启用签名时，基础仓必须是同一公钥指纹的已签名 Ready 仓；首次无基础仓的物化可直接签名。正式发布校验源仓指纹与 `--release-public-key` 一致，不匹配或缺少公钥时拒绝发布。密钥轮换应等待在途 Build 完成；跨密钥继承需要从空基础仓重新完整构建。
+
+输入 RPM 无效或签名后身份变化是不可重试输入错误，记录来源 Job；密钥、工具或配置不匹配是不可重试配置错误；Signatrust 暂不可达、命令超时及临时 I/O 错误可按既有物化预算与退避重试。签名成功但后续物化失败时，仅清理本次私有工作目录；原始 Artifact 和已 Ready 仓保持不变。日志与指标记录后端类型、指纹、耗时和错误分类，不记录私钥、口令或 RPM 正文。
 
 ### 9.8 并发和一致性
 
@@ -970,6 +983,10 @@ GET /repositories/v1/{repositoryUID}/{path...}
 | RPM 非法或 spec 无法识别 | 标记 `Failed / PackageMetadataInvalid / retryable=false`，记录对应 `jobName` |
 | 硬链接返回跨文件系统 | 标记 `Failed / RepositoryFilesystemMismatch / retryable=false` |
 | `createrepo_c` 超时或临时失败 | 标记 `Failed / RepositoryCommandFailed / retryable=true`，保存截断后的 stderr，不发布目录 |
+| 签名后 RPM 身份改变或验签失败 | 标记 `Failed / SignedPackageMetadataMismatch` 或 `SignedPackageVerificationFailed`，`retryable=false`，记录来源 `jobName`，不发布目录 |
+| 签名配置无效 | 服务启动失败；基础仓签名指纹不匹配时拒绝物化请求，不发布目录 |
+| 未完成物化记录的指纹与当前配置不一致 | 标记 `Failed / SigningConfigurationChanged / retryable=true`，保留原指纹，不发布目录 |
+| Signatrust 暂不可达、签名命令超时 | 标记 `Failed / SigningBackendUnavailable / retryable=true`，不发布目录 |
 | 磁盘空间不足 | 标记 `Failed / InsufficientStorage / retryable=true`，不发布目录 |
 | 输入 Manifest、Artifact 或基础仓在物化期间到期删除 | 标记 `Failed / MaterializationInputExpired / retryable=false`，不发布目录 |
 | 优雅停机超时或崩溃中断 | 标记 `Failed / MaterializationInterrupted / retryable=true`，相同请求可增加 attempt 重试 |
@@ -1012,9 +1029,15 @@ GET /repositories/v1/{repositoryUID}/{path...}
 | `--repository-timeout` | `30m` | 单次物化最大时间 |
 | `--repository-work-ttl` | `24h` | 无活动任务工作目录的清理期限 |
 | `--repository-command-output-limit` | `64KiB` | stdout/stderr 各自保存上限 |
+| `--rpm-signing-mode` | `disabled` | `disabled`、`local-gpg` 或 `signatrust`；启用时 `--release-public-key` 必填，并同时用作验签公钥 |
+| `--rpm-signing-gpg-home` | 空 | `local-gpg` 模式的受限 GPG 密钥目录；口令通过受保护文件或签名代理提供 |
+| `--rpm-signing-signatrust-config` | 空 | `signatrust` 模式的客户端配置文件，内含远端地址与 TLS 凭据路径 |
+| `--rpm-signing-signatrust-key-name` | `openeuler-default-key` | `signatrust` 模式的固定密钥名，可在部署时覆盖，不接受请求覆盖 |
+| `--rpm-signing-timeout` | `2m` | 单个 RPM 的签名超时，仍受整个 `--repository-timeout` 约束 |
+| `--rpm-signing-workers` | `8` | 单次仓库物化内并发签名、验签的 RPM 数量上限 |
 | `--shutdown-timeout` | `30s` | 停机时等待正在运行的物化任务完成的最长时间 |
 
-至少暴露：物化请求数、Ready/Failed 数、排队和执行耗时、继承 RPM 数、替换 spec 数、最终 RPM 数、硬链接失败数、`createrepo_c` 失败和超时数、恢复结果、工作目录清理数、仓库内容读取字节数。结构化日志包含 `repositoryUID`、Project、Build name 和输入 Job 名称，但不记录 Token。
+至少暴露：物化请求数、Ready/Failed 数、排队和执行耗时、继承 RPM 数、替换 spec 数、最终 RPM 数、硬链接失败数、`createrepo_c` 失败和超时数、可选签名后端的耗时与错误数、恢复结果、工作目录清理数、仓库内容读取字节数。结构化日志包含 `repositoryUID`、Project、Build name 和输入 Job 名称，但不记录 Token 或签名凭据。
 
 ### 9.12 首版验收场景
 
@@ -1185,7 +1208,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 5. 将选中的 RPM 从过程仓 `Packages` 硬链接到工作目录；源仓保持不可变。跨文件系统失败返回稳定错误，不退化为无界复制。
 6. `excludeSpecs` 为空时，发布 RPM 集合与源过程仓一致，复制源仓 `repodata`，不再运行 `createrepo_c`；非空时完整执行 `createrepo_c`，避免旧 metadata 包含被排除的 RPM。
 7. 重新解析 repodata，核对文件集合、摘要、架构和 RPM 数量。
-8. 复制服务端配置的公钥并记录其实际摘要；首版不执行 RPM、repomd 或 updateinfo 签名。
+8. 复制服务端配置的公钥并记录其实际摘要；当前实现不执行 RPM、repomd 或 updateinfo 签名。可选签名模式下，源过程仓 RPM 应已在物化时签名，此处核对公钥指纹，不重复签名。
 9. 计算 `releaseDigest` 时复用源过程仓已验证的逐包 RPM SHA-256，并核对发布目录中的文件名、大小和数量；`repodata` 与公钥仍按实际文件计算摘要，保持原有 `releaseDigest` 格式。写入包含请求摘要、源仓 UID 和排除 spec 集合的 `release.json`，fsync 文件和目录。启动恢复仅对尚未完成的发布完整复核正文；已 Ready 的发布只核对记录与索引摘要，不重新读取全部 RPM。
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
 11. 获取 `{project}/{os}/{arch}` 发布锁，重新确认该版本完整且摘要正确。
@@ -1704,4 +1727,4 @@ GET /readyz    # 本地持久化目录可用，元数据索引已加载
 
 - Artifact 内容扫描。
 - Project 自定义保留策略。
-- 仓库签名、跨实例复制和外部镜像发布流程。
+- 跨实例复制和外部镜像发布流程尚未实现。

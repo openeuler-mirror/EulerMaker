@@ -16,16 +16,17 @@ import (
 )
 
 type repositoryManager struct {
-	root         string
-	timeout      time.Duration
-	materializer repositoryMaterializer
-	mu           sync.RWMutex
-	records      map[string]*RepositoryRecord
-	queued       map[string]bool
-	running      map[string]bool
-	queue        chan string
-	ctx          context.Context
-	cancel       context.CancelFunc
+	root               string
+	timeout            time.Duration
+	signingFingerprint string
+	materializer       repositoryMaterializer
+	mu                 sync.RWMutex
+	records            map[string]*RepositoryRecord
+	queued             map[string]bool
+	running            map[string]bool
+	queue              chan string
+	ctx                context.Context
+	cancel             context.CancelFunc
 }
 
 func newRepositoryManager(c Config, materializer repositoryMaterializer) (*repositoryManager, error) {
@@ -35,7 +36,7 @@ func newRepositoryManager(c Config, materializer repositoryMaterializer) (*repos
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &repositoryManager{root: c.DataDir, timeout: c.RepositoryTimeout, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.RepositoryQueueCapacity), ctx: ctx, cancel: cancel}
+	m := &repositoryManager{root: c.DataDir, timeout: c.RepositoryTimeout, signingFingerprint: c.signingFingerprint, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.RepositoryQueueCapacity), ctx: ctx, cancel: cancel}
 	if err := m.load(); err != nil {
 		cancel()
 		return nil, err
@@ -65,9 +66,12 @@ func (m *repositoryManager) recover(workTTL time.Duration) error {
 		if record.State != RepositoryCreating {
 			continue
 		}
+		if record.SigningFingerprint != m.signingFingerprint {
+			continue
+		}
 		var index repositoryIndex
 		data, err := os.ReadFile(filepath.Join(final, "repository.json"))
-		if err != nil || json.Unmarshal(data, &index) != nil || index.RepositoryUID != uid || index.RequestDigest != record.RequestDigest {
+		if err != nil || json.Unmarshal(data, &index) != nil || index.RepositoryUID != uid || index.RequestDigest != record.RequestDigest || index.SigningFingerprint != record.SigningFingerprint {
 			continue
 		}
 		digest, err := digestDirectory(final)
@@ -227,6 +231,16 @@ func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecor
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	old, err := m.recordLocked(in.RepositoryUID)
+	if err != nil {
+		return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+	}
+	if old != nil && old.RequestDigest == digest && old.State == RepositoryReady {
+		return cloneRepository(old), 200, nil
+	}
+	if old != nil && old.RequestDigest == digest && (old.State == RepositoryCreating || old.State == RepositoryFailed) && old.SigningFingerprint != m.signingFingerprint {
+		return nil, 0, &repositoryError{code: "SigningConfigurationChanged", status: 503, retryable: true}
+	}
 	if in.BaseRepositoryUID != "" {
 		base, err := m.recordLocked(in.BaseRepositoryUID)
 		if err != nil {
@@ -235,10 +249,9 @@ func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecor
 		if base == nil || base.State != RepositoryReady || base.Project != in.Project || base.TargetOS != in.TargetOS || base.TargetArch != in.TargetArch {
 			return nil, 0, &repositoryError{code: "BaseRepositoryNotReady", status: 422}
 		}
-	}
-	old, err := m.recordLocked(in.RepositoryUID)
-	if err != nil {
-		return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+		if base.SigningFingerprint != m.signingFingerprint {
+			return nil, 0, &repositoryError{code: "BaseRepositorySigningMismatch", status: 422}
+		}
 	}
 	if old != nil {
 		if old.RequestDigest != digest {
@@ -272,7 +285,7 @@ func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecor
 		return nil, 0, &repositoryError{code: "RepositoryQueueFull", status: 429, retryable: true}
 	}
 	now := time.Now().UTC()
-	record := &RepositoryRecord{SchemaVersion: 1, RepositoryUID: in.RepositoryUID, RepositoryName: in.RepositoryName, Project: in.Project, BuildName: in.BuildName, TargetOS: in.TargetOS, TargetArch: in.TargetArch, BaseRepositoryUID: in.BaseRepositoryUID, Manifests: in.Manifests, RequestDigest: digest, State: RepositoryCreating, Attempt: 1, CreatedAt: now, UpdatedAt: now}
+	record := &RepositoryRecord{SchemaVersion: 1, RepositoryUID: in.RepositoryUID, RepositoryName: in.RepositoryName, Project: in.Project, BuildName: in.BuildName, TargetOS: in.TargetOS, TargetArch: in.TargetArch, BaseRepositoryUID: in.BaseRepositoryUID, Manifests: in.Manifests, RequestDigest: digest, SigningFingerprint: m.signingFingerprint, State: RepositoryCreating, Attempt: 1, CreatedAt: now, UpdatedAt: now}
 	if err := m.persist(record); err != nil {
 		return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
 	}

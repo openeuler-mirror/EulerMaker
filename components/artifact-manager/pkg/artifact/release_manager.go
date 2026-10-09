@@ -167,7 +167,7 @@ func (m *releaseManager) worker() {
 			}
 			// Repository records stay lightweight in memory. Load the immutable RPM
 			// index only for the release currently being materialized.
-			rpms, err := loadRepositoryMetadata(m.repositories.repositoryPath(source), source.RepositoryUID)
+			index, err := loadRepositoryIndex(m.repositories.repositoryPath(source), source.RepositoryUID)
 			if err != nil {
 				var repositoryErr *repositoryError
 				if errors.As(err, &repositoryErr) && !repositoryErr.retryable {
@@ -176,7 +176,11 @@ func (m *releaseManager) worker() {
 				m.finish(record, releaseResult{}, err)
 				continue
 			}
-			source.RPMs = rpms
+			if index.SigningFingerprint != source.SigningFingerprint {
+				m.finish(record, releaseResult{}, &releaseError{code: "SourceRepositoryInvalid", status: 422})
+				continue
+			}
+			source.RPMs = index.RPMs
 			ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
 			result, err := m.materializer.Create(ctx, *record, *source)
 			cancel()

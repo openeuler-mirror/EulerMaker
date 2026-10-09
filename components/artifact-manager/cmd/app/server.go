@@ -61,6 +61,12 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.IntVar(&c.ReleaseWorkers, "release-workers", c.ReleaseWorkers, "release creation workers")
 	flags.IntVar(&c.ReleaseQueueCapacity, "release-queue-capacity", c.ReleaseQueueCapacity, "release queue capacity")
 	flags.StringVar(&c.ReleasePublicKey, "release-public-key", c.ReleasePublicKey, "read-only public key copied into releases")
+	flags.StringVar(&c.RPMSigningMode, "rpm-signing-mode", c.RPMSigningMode, "RPM signing mode: disabled, local-gpg, or signatrust")
+	flags.StringVar(&c.RPMSigningGPGHome, "rpm-signing-gpg-home", c.RPMSigningGPGHome, "private GPG home for local RPM signing")
+	flags.StringVar(&c.RPMSigningSignatrustConfig, "rpm-signing-signatrust-config", c.RPMSigningSignatrustConfig, "Signatrust client configuration file")
+	flags.StringVar(&c.RPMSigningSignatrustKeyName, "rpm-signing-signatrust-key-name", c.RPMSigningSignatrustKeyName, "Signatrust RPM signing key name")
+	flags.DurationVar(&c.RPMSigningTimeout, "rpm-signing-timeout", c.RPMSigningTimeout, "timeout for signing one RPM")
+	flags.IntVar(&c.RPMSigningWorkers, "rpm-signing-workers", c.RPMSigningWorkers, "maximum concurrent RPM signing workers per repository")
 	flags.IntVar(&c.ReleaseHistoryCount, "release-history-count", c.ReleaseHistoryCount, "minimum ready releases retained per target")
 	flags.DurationVar(&c.ReleaseHistoryTTL, "release-history-ttl", c.ReleaseHistoryTTL, "minimum non-current release retention")
 	flags.IntVar(&c.MaxPartHeaders, "max-part-headers", c.MaxPartHeaders, "maximum headers per multipart part")
@@ -78,7 +84,7 @@ func NewServerCommand() *cobra.Command {
 
 func run(opts options) error {
 	c := opts.config
-	if opts.listen == "" || c.DataDir == "" || c.GatewayURL == "" || c.MaxFileSize <= 0 || c.MaxJobSize <= 0 || c.MaxMetadataSize <= 0 || c.LogChunkSize <= 0 || c.MaxPartHeaders <= 0 || c.MaxHeaderLineSize <= 0 || c.MaxPartHeaderBytes <= 0 || c.LogDedupeWindow <= 0 || c.LogReplayWindow <= 0 || c.CreateRepoCommand == "" || c.RPMQueryCommand == "" || c.CreateRepoWorkers <= 0 || c.RepositoryTimeout <= 0 || c.RepositoryWorkTTL <= 0 || c.ReleaseTimeout <= 0 || c.ReleaseWorkTTL <= 0 || c.ReleaseHistoryTTL <= 0 || opts.shutdownTimeout <= 0 || c.RepositoryWorkers <= 0 || c.RepositoryQueueCapacity <= 0 || c.ReleaseWorkers <= 0 || c.ReleaseQueueCapacity <= 0 || c.ReleaseHistoryCount <= 0 {
+	if opts.listen == "" || c.DataDir == "" || c.GatewayURL == "" || c.MaxFileSize <= 0 || c.MaxJobSize <= 0 || c.MaxMetadataSize <= 0 || c.LogChunkSize <= 0 || c.MaxPartHeaders <= 0 || c.MaxHeaderLineSize <= 0 || c.MaxPartHeaderBytes <= 0 || c.LogDedupeWindow <= 0 || c.LogReplayWindow <= 0 || c.CreateRepoCommand == "" || c.RPMQueryCommand == "" || c.CreateRepoWorkers <= 0 || c.RepositoryTimeout <= 0 || c.RepositoryWorkTTL <= 0 || c.ReleaseTimeout <= 0 || c.ReleaseWorkTTL <= 0 || c.ReleaseHistoryTTL <= 0 || opts.shutdownTimeout <= 0 || c.RepositoryWorkers <= 0 || c.RepositoryQueueCapacity <= 0 || c.ReleaseWorkers <= 0 || c.ReleaseQueueCapacity <= 0 || c.ReleaseHistoryCount <= 0 || c.RPMSigningTimeout <= 0 || c.RPMSigningWorkers <= 0 {
 		return fmt.Errorf("invalid configuration")
 	}
 	authorizer, err := artifact.NewGatewayAuthorizer(c)
