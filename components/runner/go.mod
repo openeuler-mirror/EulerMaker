@@ -1,3 +1,3 @@
 module ebs-runner
 
-go 1.21
+go 1.27.0

@@ -1,4 +1,4 @@
-FROM golang:1.21 AS builder
+FROM golang:1.27.2-bookworm AS builder
 
 ENV GOPROXY=https://goproxy.cn,direct
 

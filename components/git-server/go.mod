@@ -1,6 +1,6 @@
 module git-server
 
-go 1.21.0
+go 1.27.0
 
 require (
 	github.com/pelletier/go-toml/v2 v2.2.4

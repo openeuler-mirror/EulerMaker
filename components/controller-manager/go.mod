@@ -1,6 +1,6 @@
 module controller-manager
 
-go 1.21
+go 1.27.0
 
 require (
 	ebs-api v0.0.0
