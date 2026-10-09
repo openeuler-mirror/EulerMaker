@@ -1,8 +1,4 @@
-FROM openeuler/openeuler:24.03-lts AS builder
-
-RUN dnf update -y && \
-    dnf install -y golang git && \
-    dnf clean all
+FROM golang:1.27.2-bookworm AS builder
 
 ENV GOPROXY=https://goproxy.cn,direct
 ENV CGO_ENABLED=0
