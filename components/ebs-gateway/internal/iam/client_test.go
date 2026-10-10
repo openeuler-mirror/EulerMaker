@@ -18,7 +18,7 @@ func (f transportFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 func TestClientUsesInternalIAMContract(t *testing.T) {
 	paths := make([]string, 0, 3)
 	upstreamClient, err := upstream.New("https://api.example", transportFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Header.Get("Authorization") != "" || request.Header.Get("X-EBS-User") != "" {
+		if request.Header.Get("Authorization") != "" {
 			t.Error("caller credentials reached internal IAM")
 		}
 		paths = append(paths, request.Method+" "+request.URL.Path)

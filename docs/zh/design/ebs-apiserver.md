@@ -109,7 +109,7 @@ GET /apis/ebs/v1/runners/{runner}/jobs
 GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
 ```
 
-该路由在服务端固定添加 `status.runner={runner}` 过滤条件，不接受客户端提供的 `fieldSelector`。它支持 `resourceVersion`、`timeoutSeconds` 和 `allowWatchBookmarks`，list响应提供后续 watch使用的 resourceVersion。请求来自 Runner token时，路径名称必须由受信任 gateway身份头绑定到对应 Runner，过滤不能由客户端自行完成。
+该路由在服务端固定添加 `status.runner={runner}` 过滤条件，不接受客户端提供的 `fieldSelector`。它支持 `resourceVersion`、`timeoutSeconds` 和 `allowWatchBookmarks`，list响应提供后续 watch使用的 resourceVersion。Gateway 在转发前校验 Runner token 身份与路径名称一致；apiserver 不再依赖用户身份头判断 Runner 身份，服务端过滤仍不能由客户端自行完成。
 
 Project API 内部会重写为 scoped storage 请求，因此 Project 名需要满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`，不能包含 `.`。`default` 保留给全局默认资源，apiserver 拒绝创建同名 Project。页面展示名称使用 `Project.spec.displayName`。
 

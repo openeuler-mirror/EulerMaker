@@ -13,7 +13,7 @@ import (
 )
 
 // Client owns all traffic from the gateway to the API server. Its internal
-// requests never reuse caller-supplied authentication or identity headers.
+// requests never reuse caller-supplied bearer credentials.
 type Client struct {
 	endpoint *url.URL
 	http     *http.Client
@@ -65,7 +65,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader, he
 		return nil, err
 	}
 	for name, values := range headers {
-		if strings.EqualFold(name, "Authorization") || strings.HasPrefix(strings.ToLower(name), "x-ebs-") {
+		if strings.EqualFold(name, "Authorization") {
 			continue
 		}
 		request.Header[name] = append([]string(nil), values...)
@@ -73,15 +73,10 @@ func (c *Client) Do(ctx context.Context, method, path string, body io.Reader, he
 	return c.http.Do(request)
 }
 
-func (c *Client) Forward(ctx *gin.Context, subject, kind, scope string, public bool) {
+func (c *Client) Forward(ctx *gin.Context, public bool) {
 	request := ctx.Request
 	if public {
 		request = request.WithContext(context.WithValue(request.Context(), publicRequestKey{}, true))
-	}
-	for name := range request.Header {
-		if strings.HasPrefix(strings.ToLower(name), "x-ebs-") {
-			request.Header.Del(name)
-		}
 	}
 	request.Header.Del("Authorization")
 	request.Header.Del("Proxy-Authorization")
@@ -90,13 +85,7 @@ func (c *Client) Forward(ctx *gin.Context, subject, kind, scope string, public b
 	request.Header.Del("X-Forwarded-Host")
 	request.Header.Del("X-Forwarded-Proto")
 	request.Host = c.endpoint.Host
-	if !public {
-		request.Header.Set("X-EBS-User", subject)
-		request.Header.Set("X-EBS-Type", kind)
-		if scope != "" {
-			request.Header.Set("X-EBS-Scopes", scope)
-		}
-	} else {
+	if public {
 		// The public response header allowlist intentionally excludes
 		// Content-Encoding. Let the transport negotiate/decode gzip itself.
 		request.Header.Del("Accept-Encoding")

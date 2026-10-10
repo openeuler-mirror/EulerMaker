@@ -384,6 +384,39 @@ func TestResourceAuthorizationBoundaries(t *testing.T) {
 	}
 }
 
+func TestRunnerJobsIdentityIsCheckedBeforeProxy(t *testing.T) {
+	forwarded := 0
+	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		forwarded++
+		if request.URL.Path != "/apis/ebs/v1/runners/runner-1/jobs" {
+			t.Errorf("unexpected upstream path: %s", request.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"items":[]}`))}, nil
+	}))
+	token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		path string
+		want int
+	}{
+		{path: "/apis/ebs/v1/runners/runner-1/jobs", want: http.StatusOK},
+		{path: "/apis/ebs/v1/runners/runner-2/jobs", want: http.StatusForbidden},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		api.Router().ServeHTTP(response, request)
+		if response.Code != test.want {
+			t.Errorf("GET %s: status=%d, want %d, body=%q", test.path, response.Code, test.want, response.Body.String())
+		}
+	}
+	if forwarded != 1 {
+		t.Fatalf("forwarded %d requests, want 1", forwarded)
+	}
+}
+
 func TestControllerResourcesRegisterOnlyGet(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("route registration must not call upstream")

@@ -57,7 +57,7 @@ func (a *Handler) serveIAM(resource string) gin.HandlerFunc {
 				return
 			}
 		}
-		a.upstream.Forward(c, principal(c).Subject, string(identity.UserType), string(identity.AdminScope), false)
+		a.upstream.Forward(c, false)
 	}
 }
 
