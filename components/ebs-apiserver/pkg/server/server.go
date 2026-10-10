@@ -124,10 +124,12 @@ func init() {
 }
 
 type EulerMakerServerOptions struct {
-	RecommendedOptions *options.RecommendedOptions
-	EsServers          string
-	EnableIAM          bool
-	esConfig           *es.Config
+	RecommendedOptions                  *options.RecommendedOptions
+	EsServers                           string
+	EnableIAM                           bool
+	InternalClientCAFile                string
+	InsecureAllowUnauthenticatedClients bool
+	esConfig                            *es.Config
 }
 
 func NewEulerMakerServerOptions() *EulerMakerServerOptions {
@@ -155,10 +157,15 @@ func NewEulerMakerServerOptions() *EulerMakerServerOptions {
 func (o *EulerMakerServerOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.EsServers, "es-servers", o.EsServers, "elasticsearch server address")
 	fs.BoolVar(&o.EnableIAM, "enable-iam", o.EnableIAM, "enable the built-in IAM API and password authenticator")
+	fs.StringVar(&o.InternalClientCAFile, "internal-client-ca-file", "", "CA bundle for internal component client certificates")
+	fs.BoolVar(&o.InsecureAllowUnauthenticatedClients, "insecure-allow-unauthenticated-clients", false, "disable internal client certificate authentication (isolated development only)")
 	o.RecommendedOptions.AddFlags(fs)
 }
 
 func (o *EulerMakerServerOptions) Validate(args []string) error {
+	if err := o.validateInternalClientAuthentication(); err != nil {
+		return err
+	}
 	errs := o.RecommendedOptions.Validate()
 	if len(errs) > 0 {
 		return fmt.Errorf("validation errors: %v", errs)
@@ -172,6 +179,9 @@ func (o *EulerMakerServerOptions) Complete() error {
 }
 
 func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig, error) {
+	if err := o.validateInternalClientAuthentication(); err != nil {
+		return nil, err
+	}
 	config := genericapiserver.NewRecommendedConfig(Codecs)
 	// BuildInfo /status writes carry the full dependency graph and per-spec
 	// results. A large build can exceed the generic apiserver's 3 MiB default.
@@ -211,6 +221,11 @@ func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig,
 	if err := o.RecommendedOptions.Authorization.ApplyTo(&config.Config.Authorization); err != nil {
 		return nil, err
 	}
+	if o.InternalClientCAFile != "" {
+		if err := configureInternalClientAuthentication(&config.Config, o.InternalClientCAFile); err != nil {
+			return nil, err
+		}
+	}
 	if err := o.RecommendedOptions.Audit.ApplyTo(&config.Config); err != nil {
 		return nil, err
 	}
@@ -218,6 +233,16 @@ func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig,
 		return nil, err
 	}
 	return config, nil
+}
+
+func (o *EulerMakerServerOptions) validateInternalClientAuthentication() error {
+	if o.InternalClientCAFile == "" && !o.InsecureAllowUnauthenticatedClients {
+		return fmt.Errorf("internal-client-ca-file is required unless insecure-allow-unauthenticated-clients is enabled")
+	}
+	if o.InternalClientCAFile != "" && o.InsecureAllowUnauthenticatedClients {
+		return fmt.Errorf("internal-client-ca-file and insecure-allow-unauthenticated-clients cannot be used together")
+	}
+	return nil
 }
 
 func Run(stopCh <-chan struct{}) error {

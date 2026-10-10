@@ -524,7 +524,7 @@ Ingress / Reverse Proxy
    `-- /* --------------------> frontend static files
 ```
 
-当前 Gateway 到 apiserver 使用 HTTPS，尚未实现图中的客户端证书认证；部署时须限制 apiserver 的网络访问。
+Gateway 到 apiserver 的客户端证书认证已支持显式配置；默认开发 Compose 仍关闭该校验。apiserver 尚未按组件细分接口权限，部署时须限制 apiserver 的网络访问。
 
 外部网络不能访问 apiserver。生产环境禁止配置 `insecureSkipVerify`，内部服务使用受信任 CA。
 

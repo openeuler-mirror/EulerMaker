@@ -25,16 +25,18 @@ import (
 )
 
 type options struct {
-	port         int
-	apiServer    string
-	secretFile   string
-	caFile       string
-	insecureTLS  bool
-	maxBody      int64
-	rate         float64
-	burst        int
-	userCacheTTL time.Duration
-	logLevel     string
+	port           int
+	apiServer      string
+	secretFile     string
+	caFile         string
+	clientCertFile string
+	clientKeyFile  string
+	insecureTLS    bool
+	maxBody        int64
+	rate           float64
+	burst          int
+	userCacheTTL   time.Duration
+	logLevel       string
 }
 
 func newCommand(start func(options) error) *cobra.Command {
@@ -54,6 +56,8 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.StringVar(&opts.apiServer, "apiserver-addr", "https://ebs-apiserver:8443", "API server URL")
 	flags.StringVar(&opts.secretFile, "jwt-secret-file", "", "base64 HMAC secret file")
 	flags.StringVar(&opts.caFile, "apiserver-ca", "", "API server CA certificate")
+	flags.StringVar(&opts.clientCertFile, "apiserver-client-cert", "", "API server client certificate")
+	flags.StringVar(&opts.clientKeyFile, "apiserver-client-key", "", "API server client private key")
 	flags.BoolVar(&opts.insecureTLS, "insecure-skip-verify", false, "skip API server certificate verification (development only)")
 	flags.Int64Var(&opts.maxBody, "max-request-body-bytes", 1<<20, "maximum write request size")
 	flags.Float64Var(&opts.rate, "rate-limit-per-sec", 100, "authenticated requests per second")
@@ -71,6 +75,9 @@ func run(opts options) error {
 	if opts.port < 1 || opts.port > 65535 || opts.secretFile == "" || opts.maxBody <= 0 || opts.rate <= 0 || opts.burst <= 0 || opts.userCacheTTL < 0 {
 		return fmt.Errorf("invalid Gateway configuration")
 	}
+	if (opts.clientCertFile == "") != (opts.clientKeyFile == "") {
+		return fmt.Errorf("apiserver-client-cert and apiserver-client-key must be provided together")
+	}
 	switch opts.logLevel {
 	case "debug", "info", "warn", "error":
 	default:
@@ -86,6 +93,13 @@ func run(opts options) error {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: opts.insecureTLS} //nolint:gosec -- explicitly enabled for development
+	if opts.clientCertFile != "" {
+		certificate, err := tls.LoadX509KeyPair(opts.clientCertFile, opts.clientKeyFile)
+		if err != nil {
+			return fmt.Errorf("load API server client certificate: %w", err)
+		}
+		transport.TLSClientConfig.Certificates = []tls.Certificate{certificate}
+	}
 	if opts.caFile != "" {
 		data, err := os.ReadFile(opts.caFile)
 		if err != nil {

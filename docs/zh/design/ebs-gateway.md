@@ -477,7 +477,7 @@ HTTP 429 Too Many Requests
 
 ### 4.7 上游请求头
 
-Gateway 不向 apiserver 注入用户或 Runner 身份头，也不对 `X-EBS-*` 做特殊处理。用户和 Runner 权限在 Gateway 内完成校验；apiserver 后续只通过 mTLS 识别组件身份，不信任身份相关请求头。转发时删除外部 `Authorization`、`Proxy-Authorization` 和代理来源头，避免把客户端凭据传给 apiserver。
+用户和 Runner 权限由 Gateway 在转发前校验；apiserver 后续仅通过 mTLS 识别组件身份，不信任请求头中的身份信息。转发时删除外部 `Authorization`、`Proxy-Authorization` 和代理来源头，避免把客户端凭据传给 apiserver。
 
 Runner 范围的 Job list-watch 请求还需校验 token 中的 Runner 名与路径名称一致，随后由 apiserver 固定添加 `status.runner` 过滤条件；不依赖身份头绑定。
 
@@ -729,11 +729,12 @@ gateway 需要支持流式响应：
 | `--max-request-body-bytes` | `1048576` | 否 | 登录和代理写请求的最大请求体，以及 PATCH 后候选对象的最大字节数 |
 | `--insecure-skip-verify` | `false` | 否 | 是否跳过 apiserver TLS 校验，仅测试环境使用 |
 | `--apiserver-ca` | 空 | 否 | apiserver CA 文件路径 |
+| `--apiserver-client-cert` / `--apiserver-client-key` | 空 | 否 | apiserver 客户端证书与私钥，启用内部证书认证时成对提供 |
 | `--rate-limit-per-sec` | `100` | 否 | 每秒令牌数 |
 | `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
 | `--log-level` | `info` | 否 | 日志级别 |
 
-目标设计中，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；apiserver 根据证书 URI SAN 识别 Gateway 并授权其 IAM 请求，不依赖转发的用户身份头。当前尚未实现客户端证书配置与校验，上表仅列出已实现参数；部署时须限制 apiserver 的网络访问。
+配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。当前尚未按组件限制 IAM 等具体接口的操作权限；部署时须限制 apiserver 的网络访问。
 
 密钥文件由 Secret 以只读方式挂载，文件权限应限制为 `0600`，内容为单个 base64 字符串，例如：
 

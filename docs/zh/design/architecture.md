@@ -78,11 +78,11 @@ runner ── Runner JWT + 文件正文 ──> artifact-manager
 
 ```text
 spiffe://eulermaker/internal/ebs-gateway
-spiffe://eulermaker/internal/ebs-scheduler
-spiffe://eulermaker/internal/ebs-controller
+spiffe://eulermaker/internal/scheduler
+spiffe://eulermaker/internal/controller-manager
 ```
 
-内部授权默认拒绝，并遵循以下边界：
+目标内部授权默认拒绝，并遵循以下边界：
 
 - Gateway 只访问代理请求、解析 User/MachineAccount 和调用 IAM 内部凭据接口所需的 API。
 - Scheduler 只访问调度所需的全局 Job、Runner 和相关 status API，不访问 User、密码或 Project 权限管理接口。
@@ -90,9 +90,11 @@ spiffe://eulermaker/internal/ebs-controller
 - `/internal/iam/*` 只允许 Gateway 的 mTLS 身份调用；未识别的证书以及组件越权访问均由 apiserver 拒绝。
 - Artifact Manager 不直连 apiserver，只通过 Gateway 的公开 Token 校验接口验证 Runner Token。
 
-**当前实现状态：上述客户端证书认证和按组件身份授权尚未实现。** Gateway、Scheduler 和 Controller 目前通过 HTTPS 直连 apiserver，但 apiserver 无法验证其组件身份。部署时必须限制 apiserver 及内部 IAM 接口的网络访问；开发用 Compose 将 8443 端口映射到宿主机，不提供生产所需的隔离。
+**当前实现状态：客户端证书认证已实现，按组件划分 API 操作权限尚未实现。** apiserver 默认要求客户端 CA；开发 Compose 显式关闭客户端证书校验。启用认证后 apiserver 仅识别上述三个组件身份，但暂时不区分其资源和操作权限。部署时必须限制 apiserver 及内部 IAM 接口的网络访问；开发用 Compose 将 8443 端口映射到宿主机，不提供生产所需的隔离。
 
-Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 不向 apiserver 注入用户或 Runner 身份头；Runner 范围 Job 请求的身份校验由 Gateway 完成。目标 mTLS 设计只向 apiserver 提供组件身份。当前 apiserver 尚不能认证组件身份，因此直连访问必须受控。
+这三条链路的证书、授权、轮换和上线契约见 [ebs-apiserver 内部 mTLS 认证与授权](./ebs-apiserver.md#内部-mtls-认证与授权)。
+
+Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 不向 apiserver 注入用户或 Runner 身份头；Runner 范围 Job 请求的身份校验由 Gateway 完成。mTLS 只向 apiserver 提供组件身份，尚不提供按资源划分的权限；直连访问仍须受控。
 
 用户、Runner和内部组件的认证链路分别为：
 

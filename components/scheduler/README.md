@@ -26,6 +26,6 @@ Scheduler 通过 HTTPS 直连 ebs-apiserver：
   --apiserver-ca=/etc/ebs/certs/ca.crt
 ```
 
-开发环境可显式设置 `--insecure-skip-verify` 跳过服务端证书校验，生产环境不应启用。当前 Scheduler 不提供客户端证书配置；待 ebs-apiserver 支持客户端证书认证后再补充。进程在 `:8080` 暴露 `/healthz`、`/readyz` 和 `/metrics`。
+开发环境可显式设置 `--insecure-skip-verify` 跳过服务端证书校验，生产环境不应启用。启用 apiserver 内部证书认证时，还需设置 `--apiserver-client-cert` 和 `--apiserver-client-key`，证书的 URI SAN 为 `spiffe://eulermaker/internal/scheduler`。进程在 `:8080` 暴露 `/healthz`、`/readyz` 和 `/metrics`。
 
 完整设计、并发约束和错误恢复语义见 `docs/zh/design/scheduler.md`。

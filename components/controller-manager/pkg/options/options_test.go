@@ -8,6 +8,22 @@ import (
 	"k8s.io/klog/v2"
 )
 
+func TestClientCertificateOptions(t *testing.T) {
+	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--apiserver-client-cert=client.crt"}); err == nil {
+		t.Fatal("unpaired client certificate was accepted")
+	}
+	o, err := Parse([]string{
+		"--apiserver=https://api:8443", "--insecure-skip-verify=true",
+		"--apiserver-client-cert=client.crt", "--apiserver-client-key=client.key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.API.ClientCert != "client.crt" || o.API.ClientKey != "client.key" {
+		t.Fatalf("unexpected client certificate options: %+v", o.API)
+	}
+}
+
 func TestParseDebugVerbosity(t *testing.T) {
 	flags := flag.NewFlagSet("test", flag.ContinueOnError)
 	klog.InitFlags(flags)

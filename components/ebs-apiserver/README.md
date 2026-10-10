@@ -2,6 +2,14 @@
 
 `ebs-apiserver` 是 EulerMaker 的资源 API 服务，基于 `Kubernetes GenericAPIServer` 实现。服务使用 etcd 和 Elasticsearch 持久化资源，并可通过 `--enable-iam` 启用内置 IAM 模块。
 
+## 内部客户端证书
+
+默认必须提供 `--internal-client-ca-file` 才能启动；只有隔离开发环境可显式设置 `--insecure-allow-unauthenticated-clients=true`。启用认证后，资源和 IAM API 只接受由该 CA 签发、用途仅为 `clientAuth`、URI SAN 分别为 `spiffe://eulermaker/internal/ebs-gateway`、`spiffe://eulermaker/internal/scheduler` 或 `spiffe://eulermaker/internal/controller-manager` 的证书；无证书请求只可读取健康检查。服务端证书通过 `--tls-cert-file` 与 `--tls-private-key-file` 配置。
+
+开发验证可在仓库根目录运行 `bash hacks/generate-internal-certs.sh hacks/certs`，然后执行 `docker compose -f hacks/docker-compose.yml -f hacks/docker-compose.mtls.yml up --build`。脚本生成的 CA、服务端和客户端证书有效期均为 3650 天（约 10 年）；`hacks/certs/private` 中的 CA 私钥不得挂载到容器。脚本拒绝覆盖已有目录。默认开发 Compose 显式关闭客户端证书认证。
+
+当前只识别三个组件身份，尚未实现逐资源、逐操作授权；任一被认可的组件证书暂可访问全部业务 API。此过渡状态需要网络隔离，不宜作为生产最小权限配置。
+
 ## 构建与测试
 
 在当前目录执行：

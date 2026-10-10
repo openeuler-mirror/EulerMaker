@@ -12,6 +12,7 @@ func TestCommandParsesGatewayFlags(t *testing.T) {
 	cmd := newCommand(func(opts options) error {
 		called = true
 		if opts.port != 9090 || opts.apiServer != "https://api.example:8443" || opts.secretFile != "/tmp/jwt-secret" ||
+			opts.clientCertFile != "/tmp/client.crt" || opts.clientKeyFile != "/tmp/client.key" ||
 			!opts.insecureTLS || opts.maxBody != 2048 || opts.rate != 25 || opts.burst != 50 ||
 			opts.userCacheTTL != 45*time.Second || opts.logLevel != "debug" {
 			t.Errorf("unexpected options: %+v", opts)
@@ -21,6 +22,7 @@ func TestCommandParsesGatewayFlags(t *testing.T) {
 	cmd.SetArgs([]string{
 		"--port=9090", "--apiserver-addr=https://api.example:8443",
 		"--jwt-secret-file=/tmp/jwt-secret", "--insecure-skip-verify=true",
+		"--apiserver-client-cert=/tmp/client.crt", "--apiserver-client-key=/tmp/client.key",
 		"--max-request-body-bytes=2048", "--rate-limit-per-sec=25",
 		"--rate-limit-burst=50", "--user-cache-ttl=45s", "--log-level=debug",
 	})

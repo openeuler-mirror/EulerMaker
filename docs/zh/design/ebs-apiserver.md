@@ -237,6 +237,51 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 
 用户密码和 MachineAccount client secret 均使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；两类凭据分别维护失败次数，同一主体连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分主体不存在、凭据错误、未设置凭据或账号被锁定。
 
+## 内部 mTLS 认证与授权
+
+本节只覆盖 `ebs-gateway`、`scheduler`、`controller-manager` 到 `ebs-apiserver` 的连接。用户和 Runner 仍经 Gateway 访问资源 API；Git Server、Artifact Manager 及存储链路不在本节范围内。mTLS 证明直接调用组件的身份，不代替 Gateway 对最终用户的认证和 Project 权限判断。
+
+### 证书与连接
+
+- 部署环境使用专用的内部客户端 CA，为三个组件分别签发证书，不共用私钥。apiserver 的服务端证书可以由另一 CA 签发；客户端信任其 CA，并校验所连接域名与服务端 DNS SAN 一致。证书、私钥和 CA bundle 通过只读密钥卷提供，不写入 Config、镜像或命令行参数值。
+- 客户端证书必须具备 `clientAuth` EKU，且恰好包含一个用于组件身份的 URI SAN：`spiffe://eulermaker/internal/ebs-gateway`、`spiffe://eulermaker/internal/scheduler` 或 `spiffe://eulermaker/internal/controller-manager`。apiserver 验证证书链、有效期、用途、信任域和完整 URI；不使用 CN、User-Agent、来源 IP 或请求头推导组件身份。受信任 CA 签发的其他身份也不得自动获得权限。
+- apiserver 的资源 API 和 `/internal/iam/*` 必须在认证、授权之后执行。未提供有效客户端证书的请求不能访问这些接口；有效证书但未获相应权限的请求返回 403。健康检查可单独放行，但不得借健康检查访问资源、IAM 或 API 发现信息。
+- 继续使用一个 HTTPS apiserver 地址；生产部署不将其端口暴露给公共网络。现有 generic apiserver 的 loopback 客户端、启动钩子及健康检查必须在启用认证后保持可用，不得通过给外部请求开放匿名资源访问来迁就 loopback。
+
+三个客户端统一增加 `--apiserver-client-cert`、`--apiserver-client-key`，沿用 `--apiserver-ca` 验证服务端。证书和私钥必须成对提供，启动时检查可读取、可解析且匹配；缺少或错误时启动失败。`--insecure-skip-verify` 只适用于隔离开发环境，不能代替客户端证书，也不得出现在生产配置中。apiserver 默认要求 `--internal-client-ca-file`；只有隔离开发环境可显式设置 `--insecure-allow-unauthenticated-clients=true`，两者不可同时使用。证书身份采用 URI SAN，因此不能直接把 Kubernetes 默认的 CN 用户名映射当作组件身份实现；认证结果应以已验证的 URI SAN 写入请求上下文，供所有路由共用。
+
+### 授权规则
+
+配置 `--internal-client-ca-file` 后，generic apiserver 的认证器验证证书并识别组件身份；临时授权器只放行三个已识别组件和 apiserver loopback 身份，不区分业务资源和操作，拒绝客户端请求身份冒用。以下细粒度组件授权仍待实现，不能把当前证书认证视为已完成最小权限控制。后续应按已认证的组件身份，以及 API group、resource、verb、subresource 授权；非资源接口按规范化后的路径和方法授权。未列出的操作默认拒绝，集合 List/Watch、Project-scoped 路径、别名路由和手工注册的 `/internal/iam/*` 均经过同一套检查，不能只保护 generic REST storage。初始权限如下；实现时将每项落实为显式规则，并以实际客户端请求核对，不使用整个 `/apis/ebs/v1/*` 通配放行。
+
+| 身份 | 允许的操作 |
+| --- | --- |
+| Gateway | 仅转发 Gateway 已注册的资源与 IAM 路由；可调用 `/internal/iam/v1/*` 中注册、认证、改密等接口。资源写入继续受 Gateway 的用户/Runner 权限判断约束。 |
+| Scheduler | Job 的 List、Watch、Get 和 `/status` 更新；Runner 的 List、Watch。不得调用 IAM、创建 Job 或修改 Runner。 |
+| Controller Manager | 按下表访问业务资源；不授予 IAM 或 Config/Script 写权限。 |
+
+Controller Manager 首版权限逐项列出如下。`update/status` 与普通 `update` 是不同权限；`watch` 仅用于 Job 和 Runner。
+
+| 资源 | 允许的 verb / subresource |
+| --- | --- |
+| Project | get |
+| Build | get、list、update、update/status |
+| Snapshot、BuildInfo、RpmRepo | get、list、create、update/status |
+| Job | get、list、watch、create、update/status、create/abort、delete |
+| Runner | get、list、watch、update/status |
+| Config、Script | get |
+
+目标授权中，Gateway 的证书只允许访问当前已注册且经过 Gateway 策略检查的上游路由；apiserver 维护独立的静态操作白名单，不因 Gateway 将来新增路由而自动扩大权限。`/internal/iam/v1/*` 的每个方法和路径单独列入 Gateway 白名单。
+
+Gateway 不注入最终用户或 Runner 身份头。用户、Runner 和 Project 权限由 Gateway 在转发前检查；apiserver 只根据 mTLS 组件身份进行内部授权，不从 HTTP 头推导组件或最终用户身份。Gateway 的无用户身份操作（如密码认证）仍必须持有 Gateway 证书。Gateway 被攻陷时仍可能越过其用户级授权，这是本设计明确的信任边界。
+
+### 轮换、上线与验证
+
+- 服务端和客户端证书均需支持到期前轮换；首版允许通过滚动重启加载新证书，不要求热加载。更换 CA 时先发布同时信任新旧 CA 的 bundle，再换发叶子证书，最后移除旧 CA。长连接（含 Watch）在切换后重连；任一阶段不得退回跳过服务端校验或匿名 API。
+- 使用 `hacks/generate-internal-certs.sh` 可为开发验证签发有效期均为 3650 天（约 10 年）的 CA、服务端和三个组件的客户端证书；运行 `docker compose -f hacks/docker-compose.yml -f hacks/docker-compose.mtls.yml up` 启用证书认证。生成的 CA 私钥不得挂载到容器，客户端私钥按服务单独挂载。生产环境应使用受控 CA 签发，不使用该脚本生成的长期共享测试 CA。
+- 先签发证书并让三个客户端使用 `--apiserver-ca` 验证服务端，再部署客户端证书，最后通过 `--internal-client-ca-file` 启用 apiserver 的强制认证。过渡期间保持 apiserver 网络隔离；细粒度授权上线前，不得将“持证可调用所有业务 API”视为最小权限。最终移除生产部署中的 `--insecure-skip-verify=true` 和对外端口映射。
+- 集成测试覆盖三类组件的实际 API 请求、证书轮换及 Watch 重连；无证书、错误 CA、错误 URI SAN、过期证书和组件越权均必须失败。apiserver 不得把请求头当作组件或最终用户身份。审计日志记录组件身份、资源、verb 和授权结果，不记录私钥、JWT、密码或 client secret。
+
 ## 存储设计
 
 ### 存储路由

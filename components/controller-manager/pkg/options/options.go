@@ -1,6 +1,7 @@
 package options
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/url"
@@ -26,11 +27,11 @@ type Options struct {
 }
 
 type APIOptions struct {
-	Server, ServerCA   string
-	InsecureSkipVerify bool
-	RequestTimeout     time.Duration
-	ClientQPS          float64
-	ClientBurst        int
+	Server, ServerCA, ClientCert, ClientKey string
+	InsecureSkipVerify                      bool
+	RequestTimeout                          time.Duration
+	ClientQPS                               float64
+	ClientBurst                             int
 }
 
 type ManagerOptions struct {
@@ -115,6 +116,8 @@ func Parse(args []string) (Options, error) {
 	klog.InitFlags(f)
 	f.StringVar(&o.API.Server, "apiserver", "", "ebs-apiserver address")
 	f.StringVar(&o.API.ServerCA, "apiserver-ca", "", "server CA file")
+	f.StringVar(&o.API.ClientCert, "apiserver-client-cert", "", "API server client certificate")
+	f.StringVar(&o.API.ClientKey, "apiserver-client-key", "", "API server client private key")
 	f.BoolVar(&o.API.InsecureSkipVerify, "insecure-skip-verify", false, "skip server certificate verification (development only)")
 	f.StringVar(&o.Manager.Controllers, "controllers", o.Manager.Controllers, "controllers to enable (*, name, -name)")
 	f.IntVar(&o.Manager.Workers, "workers", o.Manager.Workers, "workers per controller")
@@ -171,16 +174,24 @@ func Parse(args []string) (Options, error) {
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")
 	}
+	if (o.API.ClientCert == "") != (o.API.ClientKey == "") {
+		return o, fmt.Errorf("apiserver-client-cert and apiserver-client-key must be provided together")
+	}
 	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.ArtifactManager.Timeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.BuildInfo.DcgPruneGrace <= 0 || o.BuildInfo.RpmRepoReadyRetryLimit <= 0 || o.BuildInfo.SnapshotReadyRetryLimit <= 0 || o.BuildInfo.SpecFileCacheSize <= 0 || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
 		return o, fmt.Errorf("workers, limits, periods, timeouts and addresses must be valid")
 	}
 	return o, nil
 }
 func (o Options) RESTConfig() (*rest.Config, error) {
+	if o.API.ClientCert != "" {
+		if _, err := tls.LoadX509KeyPair(o.API.ClientCert, o.API.ClientKey); err != nil {
+			return nil, fmt.Errorf("load API server client certificate: %w", err)
+		}
+	}
 	if o.API.ServerCA != "" {
 		if _, err := os.Stat(o.API.ServerCA); err != nil {
 			return nil, fmt.Errorf("read apiserver CA: %w", err)
 		}
 	}
-	return &rest.Config{Host: o.API.Server, QPS: float32(o.API.ClientQPS), Burst: o.API.ClientBurst, TLSClientConfig: rest.TLSClientConfig{CAFile: o.API.ServerCA, Insecure: o.API.InsecureSkipVerify}}, nil
+	return &rest.Config{Host: o.API.Server, QPS: float32(o.API.ClientQPS), Burst: o.API.ClientBurst, TLSClientConfig: rest.TLSClientConfig{CAFile: o.API.ServerCA, CertFile: o.API.ClientCert, KeyFile: o.API.ClientKey, Insecure: o.API.InsecureSkipVerify}}, nil
 }

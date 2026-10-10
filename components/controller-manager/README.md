@@ -36,7 +36,7 @@ docker build -f components/controller-manager/Dockerfile -t eulermaker/controlle
   --job-history-retention=720h
 ```
 
-生产环境应通过 `--apiserver-ca` 校验 ebs-apiserver 服务端证书。进程默认在 `:8080` 提供 `/healthz`、`/readyz` 和 `/metrics`。
+生产环境应通过 `--apiserver-ca` 校验 ebs-apiserver 服务端证书。启用 apiserver 内部证书认证时，还需设置 `--apiserver-client-cert` 和 `--apiserver-client-key`，证书的 URI SAN 为 `spiffe://eulermaker/internal/controller-manager`。进程默认在 `:8080` 提供 `/healthz`、`/readyz` 和 `/metrics`。
 
 BuildInfo Controller 固定使用 `rpmspec -P` 展开 spec；运行环境必须安装 `rpm-build`，解析失败不会回退到文本解析。RPM 宏可执行 shell/Lua 代码，当前解析未隔离，包仓库来源必须可信。仓库提供的 Dockerfile 已安装 `rpm-build`。
 
