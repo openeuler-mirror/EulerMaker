@@ -1,6 +1,7 @@
 package options
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"os"
@@ -10,7 +11,7 @@ import (
 )
 
 type Options struct {
-	APIServer, APIServerCA                                                                                           string
+	APIServer, APIServerCA, APIServerClientCert, APIServerClientKey                                                  string
 	InsecureSkipVerify                                                                                               bool
 	Workers                                                                                                          int
 	ResyncPeriod, BackoffInitial, BackoffMax, AssumeTimeout, AssumeScanInterval, AssumeRetryInterval, RequestTimeout time.Duration
@@ -25,6 +26,8 @@ func Parse(args []string) (Options, error) {
 	f := flag.NewFlagSet("scheduler", flag.ContinueOnError)
 	f.StringVar(&o.APIServer, "apiserver", "", "ebs-apiserver address")
 	f.StringVar(&o.APIServerCA, "apiserver-ca", "", "server CA file")
+	f.StringVar(&o.APIServerClientCert, "apiserver-client-cert", "", "API server client certificate")
+	f.StringVar(&o.APIServerClientKey, "apiserver-client-key", "", "API server client private key")
 	f.BoolVar(&o.InsecureSkipVerify, "insecure-skip-verify", false, "skip server certificate verification (development only)")
 	f.IntVar(&o.Workers, "workers", o.Workers, "scheduler workers")
 	f.DurationVar(&o.ResyncPeriod, "resync-period", o.ResyncPeriod, "informer resync period")
@@ -48,6 +51,9 @@ func Parse(args []string) (Options, error) {
 	if !o.InsecureSkipVerify && o.APIServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")
 	}
+	if (o.APIServerClientCert == "") != (o.APIServerClientKey == "") {
+		return o, fmt.Errorf("apiserver-client-cert and apiserver-client-key must be provided together")
+	}
 	if o.Workers <= 0 || o.AssumeWorkers <= 0 || o.AssumeBatchSize <= 0 || o.ClientQPS <= 0 || o.ClientBurst <= 0 {
 		return o, fmt.Errorf("worker, batch, QPS, and burst values must be positive")
 	}
@@ -57,10 +63,15 @@ func Parse(args []string) (Options, error) {
 	return o, nil
 }
 func (o Options) RESTConfig() (*rest.Config, error) {
+	if o.APIServerClientCert != "" {
+		if _, err := tls.LoadX509KeyPair(o.APIServerClientCert, o.APIServerClientKey); err != nil {
+			return nil, fmt.Errorf("load API server client certificate: %w", err)
+		}
+	}
 	if o.APIServerCA != "" {
 		if _, err := os.Stat(o.APIServerCA); err != nil {
 			return nil, fmt.Errorf("read apiserver CA: %w", err)
 		}
 	}
-	return &rest.Config{Host: o.APIServer, QPS: float32(o.ClientQPS), Burst: o.ClientBurst, TLSClientConfig: rest.TLSClientConfig{CAFile: o.APIServerCA, Insecure: o.InsecureSkipVerify}}, nil
+	return &rest.Config{Host: o.APIServer, QPS: float32(o.ClientQPS), Burst: o.ClientBurst, TLSClientConfig: rest.TLSClientConfig{CAFile: o.APIServerCA, CertFile: o.APIServerClientCert, KeyFile: o.APIServerClientKey, Insecure: o.InsecureSkipVerify}}, nil
 }

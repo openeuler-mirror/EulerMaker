@@ -707,6 +707,7 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | --- | --- | --- |
 | `--apiserver` | 必填 | ebs-apiserver 地址 |
 | `--apiserver-ca` | 空 | 服务端 CA |
+| `--apiserver-client-cert` / `--apiserver-client-key` | 空 | apiserver 客户端证书与私钥，启用内部证书认证时成对提供 |
 | `--insecure-skip-verify` | false | 仅开发环境允许关闭 TLS 校验 |
 | `--controllers` | `*` | 启用或禁用的 Controller 集合 |
 | `--workers` | 6 | 每个 Controller 默认 reconcile Worker 数量 |
@@ -721,7 +722,7 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--source-stale-threshold` | 2m | Source 持续未成功同步后 readiness 失败的最小阈值 |
 | `--health-bind-address` | `:8080` | 健康与指标监听地址 |
 
-每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；快速重试次数不得为负数，慢速初始延迟不得大于最大延迟，抖动必须位于 `[0, 1)`；配置非法时启动失败。目标设计要求 Controller Manager 使用与 Gateway、Scheduler 不同的 mTLS 客户端身份，apiserver 按控制器职责授权。当前尚未实现客户端证书配置与身份授权，上表仅列出已实现参数。
+每个 Controller 可以覆盖 worker 数量和轮询周期。Worker 数量、周期和超时必须为正值；快速重试次数不得为负数，慢速初始延迟不得大于最大延迟，抖动必须位于 `[0, 1)`；配置非法时启动失败。Controller Manager 已支持配置与 Gateway、Scheduler 不同的 mTLS 客户端证书；apiserver 按控制器职责授权仍待实现。
 
 ## 8. 健康检查与可观测性
 

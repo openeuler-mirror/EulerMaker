@@ -57,6 +57,7 @@ services:
       - --etcd-servers=http://etcd:2379
       - --es-servers=http://elasticsearch:9200
       - --enable-iam=true
+      - --insecure-allow-unauthenticated-clients=true
     ports:
       - "8443:8443"
     networks:

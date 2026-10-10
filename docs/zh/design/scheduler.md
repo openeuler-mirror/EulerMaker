@@ -956,6 +956,7 @@ worker 在终结前统一调用结果校验函数。未知 `QueueAction` 或空 
 |------|--------|------|
 | `--apiserver` | 必填 | ebs-apiserver 地址 |
 | `--apiserver-ca` | 条件必填 | 用于验证 ebs-apiserver 服务端证书的 CA 文件；启用 `--insecure-skip-verify` 时可省略 |
+| `--apiserver-client-cert` / `--apiserver-client-key` | 条件必填 | apiserver 启用内部证书认证时成对提供 |
 | `--insecure-skip-verify` | `false` | 跳过 ebs-apiserver 服务端证书校验，仅允许在开发环境显式启用 |
 | `--workers` | `4` | 调度 worker 数量 |
 | `--resync-period` | `60s` | informer resync 周期 |
@@ -971,7 +972,7 @@ worker 在终结前统一调用结果校验函数。未知 `QueueAction` 或空 
 | `--request-timeout` | `30s` | 非 watch 请求超时 |
 | `--health-address` | `:8080` | 健康检查和指标监听地址 |
 
-目标设计要求 Scheduler 使用独立的 mTLS 客户端证书直连 ebs-apiserver，apiserver 根据证书身份仅授予调度所需的 Job、Runner 和相关 status 权限。当前尚未实现客户端证书配置、服务端身份校验及对应授权；Scheduler 目前通过 HTTPS 直连 apiserver，上表仅列出已实现参数。
+Scheduler 已支持使用独立的 mTLS 客户端证书直连 ebs-apiserver，apiserver 可根据证书 URI SAN 识别其身份。仅授予调度所需的 Job、Runner 和相关 status 权限仍待实现；默认开发 Compose 不启用客户端证书校验。
 
 默认必须通过 `--apiserver-ca` 验证 ebs-apiserver 的服务端证书；未提供 CA 且未显式启用 `--insecure-skip-verify` 时启动失败。
 

@@ -149,6 +149,7 @@ func TestEnableIAMFlag(t *testing.T) {
 
 func TestConfigRequestBodyLimit(t *testing.T) {
 	opts := NewEulerMakerServerOptions()
+	opts.InsecureAllowUnauthenticatedClients = true
 	opts.RecommendedOptions.SecureServing.BindPort = 0
 	config, err := opts.Config()
 	if err != nil {
@@ -156,6 +157,17 @@ func TestConfigRequestBodyLimit(t *testing.T) {
 	}
 	if got := config.MaxRequestBodyBytes; got != 5<<20 {
 		t.Fatalf("request body limit = %d, want 5 MiB", got)
+	}
+}
+
+func TestInternalClientCARequired(t *testing.T) {
+	opts := NewEulerMakerServerOptions()
+	if err := opts.validateInternalClientAuthentication(); err == nil {
+		t.Fatal("missing internal client CA was accepted")
+	}
+	opts.InsecureAllowUnauthenticatedClients = true
+	if err := opts.validateInternalClientAuthentication(); err != nil {
+		t.Fatal(err)
 	}
 }
 
