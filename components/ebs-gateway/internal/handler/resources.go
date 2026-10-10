@@ -182,7 +182,7 @@ func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 			}
 		}
 		public, _ := c.Get("public")
-		a.upstream.Forward(c, who.Subject, string(who.Type), string(who.Scope), public == true)
+		a.upstream.Forward(c, public == true)
 	}
 }
 

@@ -8,30 +8,6 @@ import (
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 )
 
-func TestRunnerJobIdentityAllowed(t *testing.T) {
-	tests := []struct {
-		name string
-		user string
-		kind string
-		want bool
-	}{
-		{name: "matching runner", user: "runner-a", kind: "runner", want: true},
-		{name: "other runner", user: "runner-b", kind: "runner"},
-		{name: "user", user: "runner-a", kind: "user"},
-		{name: "missing type", user: "runner-a"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			req.Header.Set("X-EBS-User", tt.user)
-			req.Header.Set("X-EBS-Type", tt.kind)
-			if got := runnerJobIdentityAllowed(req, "runner-a"); got != tt.want {
-				t.Fatalf("allowed=%v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGlobalJobRequestContextRemovesAliasNameScope(t *testing.T) {
 	original := &apirequest.RequestInfo{
 		IsResourceRequest: true,

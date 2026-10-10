@@ -55,10 +55,6 @@ func installRunnerJobAliasRoutes(srv *genericapiserver.GenericAPIServer) {
 			http.Error(resp.ResponseWriter, "invalid runner name", http.StatusBadRequest)
 			return
 		}
-		if !runnerJobIdentityAllowed(req.Request, runner) {
-			http.Error(resp.ResponseWriter, "forbidden", http.StatusForbidden)
-			return
-		}
 		query := req.Request.URL.Query()
 		for key := range query {
 			if _, ok := runnerJobQueryParameters[key]; !ok {
@@ -89,12 +85,4 @@ func globalJobRequestContext(ctx context.Context, path string) context.Context {
 	global.Name = ""
 	global.Subresource = ""
 	return apirequest.WithRequestInfo(ctx, &global)
-}
-
-func runnerJobIdentityAllowed(req *http.Request, runner string) bool {
-	switch req.Header.Get("X-EBS-Type") {
-	case "runner":
-		return req.Header.Get("X-EBS-User") == runner
-	}
-	return false
 }

@@ -175,7 +175,7 @@ Config 是单独的按对象可见性授权的例外：匿名、普通用户和 
 
 支持 HEAD 的公开资源中，匿名 HEAD 与对应 GET 使用相同的路由、query 和限流校验，但响应不包含正文，也不得透传可能泄露内部版本或存储实现的 header。公开 GET 可以保留 `Content-Type`、缓存策略和 requestID；不得透传内部 ETag、resourceVersion 或上游身份 header。
 
-匿名请求按客户端 IP 使用独立令牌桶，额度应低于认证调用方；collection 必须设置服务端允许的 `limit` 上限，禁止匿名调用方请求无界列表。Gateway 不注入 `X-EBS-User`、`X-EBS-Type` 或 `X-EBS-Scopes`，而是使用受信任的内部身份读取 apiserver 并原样转发对象响应。审计日志使用固定身份 `anonymous`，记录资源、verb、客户端地址、响应数量和 requestID。
+匿名请求按客户端 IP 使用独立令牌桶，额度应低于认证调用方；collection 必须设置服务端允许的 `limit` 上限，禁止匿名调用方请求无界列表。Gateway 不注入最终用户身份，使用自身内部身份读取 apiserver 并原样转发对象响应。审计日志使用固定身份 `anonymous`，记录资源、verb、客户端地址、响应数量和 requestID。
 
 ### 4.2 Audit
 
@@ -475,25 +475,11 @@ gateway 按调用方和客户端地址限流：
 HTTP 429 Too Many Requests
 ```
 
-### 4.7 InjectHeaders
+### 4.7 上游请求头
 
-gateway 在转发前删除客户端伪造的内部身份头，再写入可信身份头。
+Gateway 不向 apiserver 注入用户或 Runner 身份头，也不对 `X-EBS-*` 做特殊处理。用户和 Runner 权限在 Gateway 内完成校验；apiserver 后续只通过 mTLS 识别组件身份，不信任身份相关请求头。转发时删除外部 `Authorization`、`Proxy-Authorization` 和代理来源头，避免把客户端凭据传给 apiserver。
 
-删除客户端传入的所有内部身份头：
-
-```text
-X-EBS-*
-```
-
-注入：
-
-```text
-X-EBS-User: <jwt.sub>
-X-EBS-Type: <jwt.type>
-X-EBS-Scopes: <jwt.scopes>  # 仅用户身份设置
-```
-
-这些 header 只来自 gateway，客户端传入值一律丢弃。Runner 身份由 `X-EBS-Type: runner` 和 `X-EBS-User` 表达。
+Runner 范围的 Job list-watch 请求还需校验 token 中的 Runner 名与路径名称一致，随后由 apiserver 固定添加 `status.runner` 过滤条件；不依赖身份头绑定。
 
 ### 4.8 ProjectAuthorize
 
@@ -684,7 +670,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 
 路由使用 Gin 按认证、IAM、Project、Runner、Config、Script 和 Project 子资源分组注册。`internal/route` 负责路径注册和中间件组装，`internal/handler` 负责认证、授权、请求准备及最终业务响应或代理。全局中间件负责审计与 panic 恢复；各路由链完成认证、User 状态确认、限流和授权。身份、IAM 客户端、权限、完整对象 PATCH、上游通信和限流分别位于 `internal/identity`、`iam`、`policy`、`mutation`、`upstream`、`limit`。Handler 直接接收 Gin context，只有流式反向代理需要响应 Writer 适配。
 
-`/healthz` 和登录、注册、Token 换取/校验接口使用各自的 Handler，其中 Token 校验保留独立的认证与限流语义。密码、MachineAccount 和 IAM 路由使用需要认证的中间件链。业务 API 在认证前隐藏内部全局路径；没有 Authorization header 时仅公开读取可进入匿名分支，携带 header 的请求必须先验证身份，不能失败后降级。认证后的公开读取也使用公开读取 Handler；其他业务请求完成资源授权后才注入可信身份头，最后由专用 Handler 或代理处理。具名 Config 读取必须由同一次上游响应完成可见性判断和内容返回。
+`/healthz` 和登录、注册、Token 换取/校验接口使用各自的 Handler，其中 Token 校验保留独立的认证与限流语义。密码、MachineAccount 和 IAM 路由使用需要认证的中间件链。业务 API 在认证前隐藏内部全局路径；没有 Authorization header 时仅公开读取可进入匿名分支，携带 header 的请求必须先验证身份，不能失败后降级。认证后的公开读取也使用公开读取 Handler；其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。具名 Config 读取必须由同一次上游响应完成可见性判断和内容返回。
 
 对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
 
@@ -747,7 +733,7 @@ gateway 需要支持流式响应：
 | `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
 | `--log-level` | `info` | 否 | 日志级别 |
 
-目标设计中，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；apiserver 校验证书 URI SAN 后才信任 Gateway 注入的内部身份头和 IAM 请求。当前尚未实现客户端证书配置与校验，上表仅列出已实现参数；部署时须限制 apiserver 的网络访问。
+目标设计中，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；apiserver 根据证书 URI SAN 识别 Gateway 并授权其 IAM 请求，不依赖转发的用户身份头。当前尚未实现客户端证书配置与校验，上表仅列出已实现参数；部署时须限制 apiserver 的网络访问。
 
 密钥文件由 Secret 以只读方式挂载，文件权限应限制为 `0600`，内容为单个 base64 字符串，例如：
 
@@ -851,7 +837,6 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
 | User API 不可用 | 仅使用仍有效的短期缓存；无有效缓存时返回 503，不默认放行 |
 | Admin 越权操作管理员 User | User list 过滤 `spec.scopes=["ebs:admin"]` 对象；单对象读取和写入先校验旧对象；PUT/PATCH 保护管理员角色 |
-| 客户端伪造内部身份头 | 转发前删除所有客户端 `X-EBS-*`，只重建 `X-EBS-User`、`X-EBS-Type` 和用户身份的 `X-EBS-Scopes` |
 | 客户端伪造 Project owner | 普通用户创建 Project 时强制覆盖 `metadata.labels["ebs.io/owner-user"]`；Admin 创建时校验指定 owner User |
 | 客户端越权修改 Project members | 仅 owner user 可以修改 member user labels，新增成员必须是已启用 User |
 | 用户写入未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403；公开 `GET/HEAD` 不受该写权限限制 |
@@ -877,7 +862,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | RunnerTokenExchange | MachineAccount认证成功、不存在/错误secret统一401、非法Runner名称400、固定scope和TTL、独立限流、响应no-store以及凭据不入日志 |
 | TokenCheck | 公开访问、合法身份与 scopes 响应、非法 Token 401、非空请求正文 400 和调用方限流 |
 | UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、Token scope 与当前唯一 User scope 不一致、缓存命中和 User API 不可用；runner token 跳过 User 查询 |
-| Header | 删除伪造 `X-EBS-*` 并注入可信身份 |
+| Header | 不向上游转发外部 Bearer Token，也不注入最终用户身份 |
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |
 | Admin | user 和 runner 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询和删除对象 |
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |

@@ -92,7 +92,7 @@ spiffe://eulermaker/internal/ebs-controller
 
 **当前实现状态：上述客户端证书认证和按组件身份授权尚未实现。** Gateway、Scheduler 和 Controller 目前通过 HTTPS 直连 apiserver，但 apiserver 无法验证其组件身份。部署时必须限制 apiserver 及内部 IAM 接口的网络访问；开发用 Compose 将 8443 端口映射到宿主机，不提供生产所需的隔离。
 
-Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 必须删除客户端传入的所有 `X-EBS-*` 身份头；需要身份授权的认证请求只注入由 Gateway 生成的 `X-EBS-User`、`X-EBS-Type` 和用户身份的 `X-EBS-Scopes`。目标设计仅在 mTLS 调用方确认为 Gateway 时信任这些头；Scheduler 和 Controller 不通过伪造身份头获取 Gateway 权限。当前 apiserver 尚不能认证身份头来源，因此直连访问必须受控。
+Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 不向 apiserver 注入用户或 Runner 身份头；Runner 范围 Job 请求的身份校验由 Gateway 完成。目标 mTLS 设计只向 apiserver 提供组件身份。当前 apiserver 尚不能认证组件身份，因此直连访问必须受控。
 
 用户、Runner和内部组件的认证链路分别为：
 
