@@ -45,8 +45,7 @@ Job 和 Runner 存储在 etcd 中，支持 List/Watch；其他业务资源和 IA
 在启动 [Compose](hacks/docker-compose.yml) 前：
 
 1. 准备 `hacks/ebs-gateway-jwt-secret`，内容为 Base64 编码的随机 HMAC 密钥，生成方法见 [Gateway README](components/ebs-gateway/README.md)。
-2. 启用 Runner 前，在系统中创建有效的 MachineAccount，并将其 `clientID` 和 `clientSecret` 写入 `hacks/runner-machine-credential.json`，格式见 [Runner README](components/runner/README.md)。不要提交凭据文件。
-3. 创建并检查以下宿主机目录，确保对应容器用户具有读写权限。绑定挂载不会自动继承镜像内目录的所有权。
+2. 创建并检查以下宿主机目录，确保对应容器用户具有读写权限。绑定挂载不会自动继承镜像内目录的所有权。
 
 | 宿主机目录 | 用途 |
 | --- | --- |
@@ -54,9 +53,7 @@ Job 和 Runner 存储在 etcd 中，支持 List/Watch；其他业务资源和 IA
 | `/srv/es` | Elasticsearch 数据 |
 | `/srv/git` | Git 仓库 |
 | `/srv/artifact` | 产物、日志及 RPM 仓库 |
-| `/var/lib/ebs-runner` | Runner 身份和任务工作目录 |
-
-Runner 使用宿主机 Docker socket。设置 `DOCKER_GID` 为该 socket 的实际组 ID，并确认宿主机存在 `/usr/bin/docker`。Runner 数据目录在宿主机和容器中必须保持相同的绝对路径。
+Runner 独立部署前，还需在系统中创建有效的 MachineAccount，并将其 `clientID` 和 `clientSecret` 写入 `hacks/runner-machine-credential.json`，格式见 [Runner README](components/runner/README.md)。不要提交凭据文件。Runner 使用宿主机 Docker socket：设置 `DOCKER_GID` 为该 socket 的实际组 ID，并确认宿主机存在 `/usr/bin/docker`。在 Runner 节点准备 `/var/lib/ebs-runner`，且宿主机与容器内必须使用相同的绝对路径。
 
 ### 启动与检查
 
@@ -82,11 +79,15 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
-git-server 默认返回 `git://git-server:9418` 作为仓库克隆地址，Runner 默认通过 `http://artifact-manager:8081` 访问 Artifact Manager。跨主机部署时，将 `EXPORT_SERVER_ADDR` 设为其他组件和构建任务均可访问的宿主机名或 IPv4 地址（不带协议和端口）；Compose 会为 git-server 生成 `git://<EXPORT_SERVER_ADDR>:9418`，并让 Runner 使用 `http://<EXPORT_SERVER_ADDR>:8081`。宿主机需开放这两个端口。例如：
+要运行构建任务，控制面必须设置 `EXPORT_SERVER_ADDR` 为控制面容器和构建节点都可访问的宿主机名或 IPv4 地址（不带协议和端口）。它用于生成 Git clone URL 和下发给 Job 的 Artifact Manager 地址；默认的 `git-server`、`artifact-manager` 仅在控制面 Compose 网络内可解析。即使同机联调，也不能填 `127.0.0.1`，因为 Controller Manager 容器中的回环地址指向自身。需开放 Gateway `8080`、Artifact Manager `8081` 和 Git daemon `9418` 端口。以下地址仅为示例，使用前替换为实际内网地址：
 
 ```bash
 EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
+  docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
+
+Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认通过宿主机网络访问 `127.0.0.1:8080/8081`，不会随控制面启动。跨主机运行时，在 Runner 节点设置 `RUNNER_GATEWAY_URL`、`RUNNER_ARTIFACT_MANAGER_URL` 和唯一的 `RUNNER_NAME`，地址必须从该节点可达；启动前先确认控制面服务就绪。可用相同的 `-p eulermaker-runner -f hacks/docker-compose.runner.yml` 参数查看状态和日志。
 
 ## 本地开发与验证
 

@@ -1,0 +1,26 @@
+services:
+  ebs-runner:
+    build:
+      context: ../components/runner
+    command:
+      - --gateway=${RUNNER_GATEWAY_URL:-http://127.0.0.1:8080}
+      - --artifact-manager=${RUNNER_ARTIFACT_MANAGER_URL:-http://127.0.0.1:8081}
+      - --machine-credential-file=/run/secrets/runner_machine_credential
+      - --name=${RUNNER_NAME:-runner-ct-01}
+      - --type=ct
+      - --root-dir=/var/lib/ebs-runner
+    secrets:
+      - runner_machine_credential
+    group_add:
+      - "${DOCKER_GID:-989}"
+    volumes:
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The host Docker daemon resolves bind mounts. Keep this absolute path
+      # identical in the Runner and on the host for Job work/results uploads.
+      - /var/lib/ebs-runner:/var/lib/ebs-runner
+    network_mode: host
+
+secrets:
+  runner_machine_credential:
+    file: ./runner-machine-credential.json

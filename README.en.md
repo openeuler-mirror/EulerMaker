@@ -45,8 +45,7 @@ Use a Linux host with Docker Engine and Docker Compose v2. Image builds need acc
 Before starting [Compose](hacks/docker-compose.yml):
 
 1. Prepare `hacks/ebs-gateway-jwt-secret` with a Base64-encoded random HMAC key. See the [Gateway README](components/ebs-gateway/README.md) for generation instructions.
-2. Before enabling Runner, create a valid MachineAccount in the system and save its `clientID` and `clientSecret` in `hacks/runner-machine-credential.json`. See the [Runner README](components/runner/README.md) for the format. Never commit credentials.
-3. Create and check the following host directories, granting read/write access to the corresponding container users. Bind mounts do not inherit directory ownership from the image.
+2. Create and check the following host directories, granting read/write access to the corresponding container users. Bind mounts do not inherit directory ownership from the image.
 
 | Host directory | Purpose |
 | --- | --- |
@@ -54,9 +53,7 @@ Before starting [Compose](hacks/docker-compose.yml):
 | `/srv/es` | Elasticsearch data |
 | `/srv/git` | Git repositories |
 | `/srv/artifact` | Artifacts, logs, and RPM repositories |
-| `/var/lib/ebs-runner` | Runner identity and task working directories |
-
-Runner accesses the host Docker socket. Set `DOCKER_GID` to the socket's actual group ID and ensure `/usr/bin/docker` exists on the host. The Runner data directory must use the same absolute path on the host and inside the container.
+Before deploying Runner separately, create a valid MachineAccount and save its `clientID` and `clientSecret` in `hacks/runner-machine-credential.json`; see the [Runner README](components/runner/README.md). Never commit credentials. Runner accesses the host Docker socket: set `DOCKER_GID` to the socket's actual group ID and ensure `/usr/bin/docker` exists. Prepare `/var/lib/ebs-runner` on each Runner node, using the same absolute path on the host and in the container.
 
 ### Start and inspect
 
@@ -82,11 +79,15 @@ curl -fsS http://localhost:8080/healthz
 
 Compose builds application images from the current workspace. Its defaults skip TLS verification for development, disable Elasticsearch security, and expose several internal service ports. **Do not expose this configuration directly to the public internet or use it unchanged in production.** Production deployments require certificate management, network isolation, credential protection, persistent storage, and backups. Restrict Docker socket access to trusted Runners.
 
-git-server returns `git://git-server:9418` as the clone URL by default, and Runner reaches Artifact Manager at `http://artifact-manager:8081`. For multi-host deployments, set `EXPORT_SERVER_ADDR` to a hostname or IPv4 address reachable by repository consumers and build tasks (without a scheme or port). Compose then uses `git://<EXPORT_SERVER_ADDR>:9418` for git-server and `http://<EXPORT_SERVER_ADDR>:8081` for Runner. Both host ports must be reachable. For example:
+To run build jobs, set `EXPORT_SERVER_ADDR` on the control-plane host to a hostname or IPv4 address reachable from both control-plane containers and build nodes (without a scheme or port). This forms the Git clone URL and the Artifact Manager URL sent to Jobs; the default `git-server` and `artifact-manager` names resolve only within the control-plane Compose network. Even for same-host testing, do not use `127.0.0.1`: inside Controller Manager it points back to that container. Open Gateway `8080`, Artifact Manager `8081`, and Git daemon `9418`. Replace this example address with the actual private address:
 
 ```bash
 EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
+  docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
+
+Runner uses a [separate Compose file](hacks/docker-compose.runner.yml), defaults to host-network access to `127.0.0.1:8080/8081`, and does not start with the control plane. On a remote Runner node, set `RUNNER_GATEWAY_URL`, `RUNNER_ARTIFACT_MANAGER_URL`, and a unique `RUNNER_NAME` to addresses reachable from that node. Start it after the control-plane services are ready. Use the same `-p eulermaker-runner -f hacks/docker-compose.runner.yml` options for status and logs.
 
 ## Local development and checks
 
