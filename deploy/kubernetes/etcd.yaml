@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: ebs
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: etcd
+  ports:
+    - name: client
+      port: 2379
+    - name: peer
+      port: 2380
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: etcd
+  namespace: ebs
+spec:
+  serviceName: etcd
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: etcd
+    spec:
+      terminationGracePeriodSeconds: 60
+      nodeSelector:
+        node-role.kubernetes.io/etcd: ""
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: etcd
+              topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: etcd
+                topologyKey: topology.kubernetes.io/zone
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.13
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: ETCDCTL_API
+              value: "3"
+          command: [etcd]
+          args:
+            - --name=$(POD_NAME)
+            - --data-dir=/var/lib/etcd
+            - --listen-client-urls=https://0.0.0.0:2379
+            - --advertise-client-urls=https://$(POD_NAME).etcd.$(POD_NAMESPACE).svc.cluster.local:2379
+            - --cert-file=/etc/etcd/client-tls/server.crt
+            - --key-file=/etc/etcd/client-tls/server.key
+            - --trusted-ca-file=/etc/etcd/client-tls/client-ca.crt
+            - --client-cert-auth=true
+            - --client-cert-file=/etc/etcd/client-tls/internal-client.crt
+            - --client-key-file=/etc/etcd/client-tls/internal-client.key
+            - --listen-peer-urls=https://0.0.0.0:2380
+            - --initial-advertise-peer-urls=https://$(POD_NAME).etcd.$(POD_NAMESPACE).svc.cluster.local:2380
+            - --initial-cluster=etcd-0=https://etcd-0.etcd.$(POD_NAMESPACE).svc.cluster.local:2380,etcd-1=https://etcd-1.etcd.$(POD_NAMESPACE).svc.cluster.local:2380,etcd-2=https://etcd-2.etcd.$(POD_NAMESPACE).svc.cluster.local:2380
+            - --peer-cert-file=/etc/etcd/peer-tls/peer.crt
+            - --peer-key-file=/etc/etcd/peer-tls/peer.key
+            - --peer-trusted-ca-file=/etc/etcd/peer-tls/peer-ca.crt
+            - --peer-client-cert-auth=true
+            - --initial-cluster-state=new
+            - --initial-cluster-token=eulermaker-etcd-$(POD_NAMESPACE)
+            - --listen-metrics-urls=http://0.0.0.0:2381
+          ports:
+            - name: client
+              containerPort: 2379
+            - name: peer
+              containerPort: 2380
+            - name: metrics
+              containerPort: 2381
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/etcd
+            - name: client-tls
+              mountPath: /etc/etcd/client-tls
+              readOnly: true
+            - name: peer-tls
+              mountPath: /etc/etcd/peer-tls
+              readOnly: true
+      volumes:
+        - name: client-tls
+          secret:
+            secretName: etcd-client-tls
+        - name: peer-tls
+          secret:
+            secretName: etcd-peer-tls
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: ebs-disk-ssd-retain
+        resources:
+          requests:
+            storage: 100Gi
