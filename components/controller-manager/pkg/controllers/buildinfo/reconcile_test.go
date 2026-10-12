@@ -171,6 +171,97 @@ func TestReconcileUnknownPhaseSkips(t *testing.T) {
 	}
 }
 
+func TestInvalidBuildPayloadAbortsJobsAndFails(t *testing.T) {
+	for _, scenario := range []string{"success", "abort-failure", "list-failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			c, client, _, _ := newTestController(t)
+			client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+			client.SeedBuild(testBuildObj("full"))
+			info := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+			info.Spec.BuildPayload = "rpmbuild_script:\n- invalid\n"
+			client.SeedBuildInfo(info)
+			for _, phase := range []struct {
+				name  string
+				value ebsv1.JobPhase
+			}{{"running", ebsv1.JobRunning}, {"done", ebsv1.JobSucceeded}} {
+				client.SeedJob(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{
+					Name: phase.name, Namespace: testNS, Labels: map[string]string{ebsv1.JobBuildNameLabel: testBuild},
+				}, Status: ebsv1.JobStatus{Phase: phase.value}})
+			}
+			if scenario == "abort-failure" {
+				client.abortErrors = map[string]error{"running": errors.New("unavailable")}
+			}
+			if scenario == "list-failure" {
+				client.InjectRead("jobs", 1, errors.New("list unavailable"))
+			}
+			result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored := getBuildInfo(t, client)
+			requireCondition(t, stored.Status.Conditions, ConditionBuildPayloadInvalid, ReasonBuildPayloadParseFailed)
+			if scenario == "list-failure" {
+				requirePhase(t, stored, ebsv1.BuildInfoProcessing)
+				if result.RequeueAfter <= 0 {
+					t.Fatalf("list failure did not requeue: %+v", result)
+				}
+				reconcileOnce(t, c)
+				stored = getBuildInfo(t, client)
+			}
+			requirePhase(t, stored, ebsv1.BuildInfoFailed)
+			if scenario == "abort-failure" || scenario == "list-failure" {
+				requireCondition(t, stored.Status.Conditions, ConditionJobAbortFailed, ReasonJobAbortFailed)
+			}
+			if len(client.abortCalls) != 1 || client.abortCalls[0] != "running" {
+				t.Fatalf("abort calls = %v", client.abortCalls)
+			}
+			reconcileOnce(t, c)
+			if len(client.abortCalls) != 1 {
+				t.Fatal("terminal BuildInfo retried abort")
+			}
+		})
+	}
+}
+
+func TestInvalidBuildPayloadRejectsNonMapRoot(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+	client.SeedBuild(testBuildObj("full"))
+	info := testBuildInfoObj(ebsv1.BuildInfoPending)
+	info.Spec.BuildPayload = "null"
+	client.SeedBuildInfo(info)
+	reconcileOnce(t, c)
+	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoFailed)
+}
+
+func TestInvalidBuildPayloadAbortsJobsInBatches(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
+	client.SeedBuild(testBuildObj("full"))
+	info := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	info.Spec.BuildPayload = "rpmbuild_script: [invalid]"
+	client.SeedBuildInfo(info)
+	for number := 0; number <= jobAbortBatchSize; number++ {
+		client.SeedJob(&ebsv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("job-%03d", number), Namespace: testNS,
+			Labels: map[string]string{ebsv1.JobBuildNameLabel: testBuild},
+		}, Status: ebsv1.JobStatus{Phase: ebsv1.JobRunning}})
+	}
+	result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequeueAfter <= 0 || len(client.abortCalls) != jobAbortBatchSize {
+		t.Fatalf("first batch: result=%+v, aborts=%d", result, len(client.abortCalls))
+	}
+	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoProcessing)
+	reconcileOnce(t, c)
+	if len(client.abortCalls) != jobAbortBatchSize+1 {
+		t.Fatalf("abort calls = %d", len(client.abortCalls))
+	}
+	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoFailed)
+}
+
 // --- Parent abort handling ---
 
 func TestParentAbortAttemptsJobsBeforeTerminal(t *testing.T) {

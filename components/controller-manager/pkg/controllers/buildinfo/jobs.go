@@ -440,6 +440,9 @@ func scriptNameFromPayload(raw string) (string, error) {
 		if err := yaml.Unmarshal([]byte(raw), &payload); err != nil {
 			return "", fmt.Errorf("decode buildPayload: %w", err)
 		}
+		if payload == nil {
+			return "", fmt.Errorf("buildPayload must be a map")
+		}
 		if value, exists := payload["rpmbuild_script"]; exists {
 			selected, ok := value.(string)
 			if !ok {

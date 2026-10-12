@@ -26,7 +26,7 @@ const Name = "buildinfo"
 
 // Terminal BuildInfos do not need periodic reconcile; a match leaving the polling snapshot is only a filter transition,
 // not proof of deletion.
-const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!=Aborted"
+const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!=Failed,status.phase!=Aborted"
 
 // Config carries the BuildInfo controller settings.
 type Config struct {

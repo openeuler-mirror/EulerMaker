@@ -30,6 +30,7 @@ const (
 	BuildInfoPending    BuildInfoPhase = "Pending"
 	BuildInfoProcessing BuildInfoPhase = "Processing"
 	BuildInfoCompleted  BuildInfoPhase = "Completed"
+	BuildInfoFailed     BuildInfoPhase = "Failed"
 	BuildInfoAborted    BuildInfoPhase = "Aborted"
 )
 
@@ -37,6 +38,7 @@ var buildInfoPhaseValues = []string{
 	string(BuildInfoPending),
 	string(BuildInfoProcessing),
 	string(BuildInfoCompleted),
+	string(BuildInfoFailed),
 	string(BuildInfoAborted),
 }
 
@@ -48,7 +50,7 @@ func BuildInfoPhaseValues() []string {
 // IsValid reports whether p is a supported BuildInfo phase.
 func (p BuildInfoPhase) IsValid() bool {
 	switch p {
-	case BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoAborted:
+	case BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoFailed, BuildInfoAborted:
 		return true
 	default:
 		return false
@@ -57,7 +59,7 @@ func (p BuildInfoPhase) IsValid() bool {
 
 // IsTerminal reports whether no more BuildInfo work is expected for p.
 func (p BuildInfoPhase) IsTerminal() bool {
-	return p == BuildInfoCompleted || p == BuildInfoAborted
+	return p == BuildInfoCompleted || p == BuildInfoFailed || p == BuildInfoAborted
 }
 
 // JobPhase describes the lifecycle state of a Job.
@@ -267,6 +269,7 @@ const (
 	RpmRepoReasonReleaseFailed            = "ReleaseFailed"
 	RpmRepoReasonNoPublishableArtifacts   = "NoPublishableArtifacts"
 	RpmRepoReasonBuildAborted             = "BuildAborted"
+	RpmRepoReasonBuildInfoFailed          = "BuildInfoFailed"
 )
 
 // RpmRepoReleasePhase describes formal release preparation and activation.

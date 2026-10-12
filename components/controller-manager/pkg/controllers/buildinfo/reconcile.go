@@ -92,11 +92,17 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 	if stop, result, err := c.parentAbortGuard(ctx, round); stop {
 		return result, err
 	}
+	if condition := findCondition(round.current.Status.Conditions, ConditionBuildPayloadInvalid); condition != nil && condition.Status == metav1.ConditionTrue {
+		return c.failBuildPayload(ctx, round, "")
+	}
 
 	// A persisted stop marker goes directly to convergence without reading child resources, parsing specs, or working on
 	// the dependency graph.
 	if marker := stopCondition(round.current.Status.Conditions); marker != nil {
 		return c.convergeToCompleted(ctx, round)
+	}
+	if _, err := scriptNameFromPayload(round.current.Spec.BuildPayload); err != nil {
+		return c.failBuildPayload(ctx, round, err.Error())
 	}
 
 	// releaseFailedGuard runs every round for non-single builds; the held RpmRepo object is reused by initialization and
@@ -129,6 +135,42 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 		c.logReconciledAfterStart(round.current)
 	}
 	return result, err
+}
+
+func (c *Controller) failBuildPayload(ctx context.Context, round *reconcileRound, detail string) (controller.ReconcileResult, error) {
+	if detail != "" {
+		next := round.current.DeepCopy()
+		upsertCondition(&next.Status.Conditions, ConditionBuildPayloadInvalid, ReasonBuildPayloadParseFailed, detail)
+		result, err := c.writeStatus(ctx, round, next)
+		if err != nil || result != (controller.ReconcileResult{}) {
+			return result, err
+		}
+	}
+	message, more, listFailed := c.abortJobsWithReason(ctx, round, "buildPayload invalid")
+	if err := ctx.Err(); err != nil {
+		return controller.ReconcileResult{}, err
+	}
+	if more {
+		return controller.ReconcileResult{RequeueAfter: time.Second}, nil
+	}
+	next := round.current.DeepCopy()
+	if message != "" {
+		upsertCondition(&next.Status.Conditions, ConditionJobAbortFailed, ReasonJobAbortFailed, message)
+	}
+	if listFailed {
+		result, err := c.writeStatus(ctx, round, next)
+		if err != nil || result != (controller.ReconcileResult{}) {
+			return result, err
+		}
+		return controller.ReconcileResult{RequeueAfter: time.Second}, nil
+	}
+	next.Status.Phase = ebsv1.BuildInfoFailed
+	result, err := c.writeStatus(ctx, round, next)
+	if err != nil || result != (controller.ReconcileResult{}) {
+		return result, err
+	}
+	c.invalidateCaches(round.key)
+	return controller.ReconcileResult{}, nil
 }
 
 // splitKey parses the <namespace>/<name> queue key.
@@ -234,6 +276,11 @@ type jobAbortProgress struct {
 // abortBuildJobs attempts at most 100 requests per round. Failed requests are recorded and skipped in later batches so
 // they cannot starve remaining Jobs.
 func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) (string, bool) {
+	message, more, _ := c.abortJobsWithReason(ctx, round, "parent Build aborted")
+	return message, more
+}
+
+func (c *Controller) abortJobsWithReason(ctx context.Context, round *reconcileRound, reason string) (string, bool, bool) {
 	progress, ok := c.abortJobs.Get(round.key)
 	if !ok || progress.uid != string(round.current.UID) {
 		progress = &jobAbortProgress{uid: string(round.current.UID), attempted: make(map[string]bool)}
@@ -246,7 +293,7 @@ func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) 
 	)
 	if err != nil {
 		c.logf(round.key, ReasonJobAbortFailed, "list jobs for abort: %v", err)
-		return fmt.Sprintf("list jobs for abort failed: %v; prior abort failures: %d", err, progress.failed), false
+		return fmt.Sprintf("list jobs for abort failed: %v; prior abort failures: %d", err, progress.failed), false, true
 	}
 	slices.SortFunc(jobs, func(a, b ebsv1.Job) int { return strings.Compare(a.Name, b.Name) })
 	attempts := 0
@@ -259,10 +306,10 @@ func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) 
 			continue
 		}
 		if attempts == jobAbortBatchSize {
-			return "", true
+			return "", true, false
 		}
 		attempts++
-		_, err := c.client.AbortJob(ctx, job.Namespace, job.Name, job.UID, "parent Build aborted")
+		_, err := c.client.AbortJob(ctx, job.Namespace, job.Name, job.UID, reason)
 		if ctx.Err() != nil {
 			break
 		}
@@ -281,9 +328,9 @@ func (c *Controller) abortBuildJobs(ctx context.Context, round *reconcileRound) 
 			"%d Job abort requests failed or remain unconfirmed; %s",
 			progress.failed,
 			strings.Join(progress.examples, "; "),
-		), false
+		), false, false
 	}
-	return "", false
+	return "", false, false
 }
 
 // releaseFailedGuard fetches the same-name RpmRepo once per round. Temporary absence and read failures retry;
