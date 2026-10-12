@@ -45,6 +45,32 @@ func TestProcessingBuildWaitsForCompletedBuildInfo(t *testing.T) {
 	}
 }
 
+func TestProcessingBuildFailsOnFailedBuildInfo(t *testing.T) {
+	for _, buildType := range []string{"single", "full"} {
+		t.Run(buildType, func(t *testing.T) {
+			api := newFakeAPI()
+			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", buildType, []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoFailed,
+				map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)})
+			c := newTestController(t, api, newTestClock())
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatal(err)
+			}
+			stored := api.build("project-a", "build-a")
+			if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stageBuild || stored.Status.EndTime.IsZero() {
+				t.Fatalf("status = %+v", stored.Status)
+			}
+			condition := findCondition(t, stored.Status.Conditions, ConditionBuildSucceed)
+			if condition.Status != metav1.ConditionFalse || condition.Reason != ReasonBuildPayloadParseFailed {
+				t.Fatalf("condition = %+v", condition)
+			}
+			if _, exists := testCondition(stored.Status.Conditions, ConditionPublishSucceed); exists {
+				t.Fatal("failed BuildInfo reached publish")
+			}
+		})
+	}
+}
+
 func TestProcessingBuildFailsWhenBuildInfoIsMissing(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)

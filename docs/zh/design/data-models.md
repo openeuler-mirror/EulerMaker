@@ -275,7 +275,7 @@ type BaseBuildRef struct {
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `baseBuildRef` | BaseBuildRef | 基础 Build 名称；未设置表示尚未查询，`{}` 表示已查询但没有基础 Build；过程仓 UID 和地址从同名 RpmRepo 获取 |
-| `conditions` | []metav1.Condition | 状态条件 |
+| `conditions` | []metav1.Condition | 状态条件；BuildInfo 因 buildPayload 配置错误进入 `Failed` 时，`BuildSucceed=False/reason=BuildPayloadParseFailed`，错误详情见同名 BuildInfo 的 condition message |
 
 ### BuildList
 
@@ -338,13 +338,15 @@ type BuildInfoStatus struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Aborted"` |
-| `conditions` | []metav1.Condition | 状态条件 |
+| `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Failed"` / `"Aborted"`；`Failed` 为 buildPayload 配置无效的终态，不代表已有 Job 均已终态 |
+| `conditions` | []metav1.Condition | 状态条件；`BuildPayloadInvalid=True/reason=BuildPayloadParseFailed` 表示 buildPayload 配置无效，错误详情见 message；`JobAbortFailed=True` 表示已有 Job 的中止尝试失败 |
 | `specStatus` | SpecStatusGroup | 按字段分组的各 spec 运行时状态；`build` 键集为构建集 |
 | `specRepoNames` | map[string]string | spec 名到所属包仓库名的持久化映射；与构建集状态一起写入，供异常收敛及重启恢复时汇总 `failedPackages` |
-| `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；Completed 时再合并最终构建/安装失败的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；已恢复成功的中途构建/安装失败不保留 |
+| `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；写入 Completed 时再合并最终构建/安装未成功的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；Failed 时保留当前值，不涵盖仍运行的 Job；已恢复成功的中途构建/安装失败不保留 |
 | `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 BuildInfo Controller 本轮解析结果 `specDepends` 的 `buildRequires`，不依赖本字段 |
-| `pendingJobCreates` | map[string]PendingJobCreate | 已登记但尚未确认创建结果的 Job；非空时不得写入 Completed |
+| `pendingJobCreates` | map[string]PendingJobCreate | 已登记但尚未确认创建结果的 Job；非空时不得写入 Completed，Failed 时可保留条目供诊断 |
+
+BuildInfo `/status` 校验：`Failed` 为不可回退终态，且必须包含 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed`；不要求 `pendingJobCreates` 为空。包级构建失败不映射为 BuildInfo Failed。具体调谐流程见 [BuildInfo Controller 设计](controller-manager~buildinfo-controller.md)。
 
 ### DcgNodeState
 
@@ -550,11 +552,11 @@ type RpmRepoStatus struct {
 
 `repositoryUID` 与 `contentURL` 成对记录最近一次确认可用的不可变过程仓版本；没有可用版本时为空。生成下一版本期间保留这两个字段，以 `transition` 记录未完成的生成意图（包括重试和结果确认）；成功后以一次 CAS 替换当前版本并清空 `transition`。可定位到单个异常 Job 的清单、产物或 RPM 输入失败会把其名称加入 `skippedJobNames`、清空检查点并重新组批；其它批次失败收口保留 transition、写 RepositoryReady=False 与 release.phase=Failed、PublishSucceed=False，不清除已有可用版本。
 
-RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact:///repositories/.../` 逻辑地址，不绑定 Artifact Manager 部署地址。BuildInfo Controller 使用共享的 `--artifact-manager-addr` 将过程仓地址解析为可访问的 HTTP(S) URL，再用于 RPM 元数据读取和 Job `payload.repo` 下发。
+RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact:///repositories/.../` 逻辑地址，不绑定 Artifact Manager 部署地址。
 
 所有构建类型均创建同名 RpmRepo。single 由 Build Controller 在创建时设置 `status.release.phase=Skipped`，只保存继承的 `status.repository.repositoryUID/contentURL`，供本轮 BuildInfo 使用；无基线时 repository 为 nil。非 single 且 `publishFlag=false` 的对象先由 RpmRepo Controller 完成过程仓处理，再写 `release.phase=Skipped`，保留已生成的过程仓。Skipped 不要求 release.contentURL，不允许 release.transition；RpmRepo Controller 将其视为发布终态，不执行正式发布、不因 Build 中止改写为 Failed。Skipped 不是 Artifact Manager 的物理仓库或发布记录状态，也不表示 Build 已完成。
 
-`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Skipped`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。中止使用 `Failed`，由 RpmRepo Controller 在确认对象存在、未删除且非终态，并读到同名 `Build.status.phase=Aborted` 时写入，属**发布终局**：清除 `release.transition`、写 `PublishSucceed=False/reason=BuildAborted`，`release.contentURL` 保持为空，此后不再提交、激活或重放；发布终态为 `Ready`、`Failed`、`Skipped`，轮询与发布候选过滤必须一并排除。
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Skipped`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。因同名 `Build.status.phase=Aborted` 或 `BuildInfo.status.phase=Failed` 而终止发布时，`release.phase=Failed`、`release.transition=nil`，分别记录 `PublishSucceed=False/reason=BuildAborted` 或 `BuildInfoFailed`；`release.contentURL` 为空，`repository.*` 保留。已终态对象（包括 single 预置的 Skipped）不改写。发布终态为 `Ready`、`Failed`、`Skipped`。
 
 RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`/status` 保留原 spec 与受保护 metadata。
 
@@ -567,6 +569,7 @@ RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；r
 | `PublishSucceed` | `False` | `RepositoryCreationFailed` | 过程仓失败导致无法发布 |
 | `PublishSucceed` | `False` | `NoPublishableArtifacts` | 已完成构建没有可发布产物 |
 | `PublishSucceed` | `False` | `BuildAborted` | 同名 Build 被中止 |
+| `PublishSucceed` | `False` | `BuildInfoFailed` | 同名 BuildInfo 因配置校验失败而进入 Failed |
 
 
 | `release` 字段 | Go 类型 | 说明 |
@@ -1061,7 +1064,7 @@ type VersionConst struct {
 | Project | `Active` / `Terminating`                                                              |
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
-| BuildInfo | `Pending` / `Processing` / `Completed`                                                |
+| BuildInfo | `Pending` / `Processing` / `Completed` / `Failed` / `Aborted`                         |
 | RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Skipped` |
 | Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |

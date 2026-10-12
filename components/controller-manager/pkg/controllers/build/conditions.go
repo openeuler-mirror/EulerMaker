@@ -14,11 +14,12 @@ const (
 )
 
 const (
-	ReasonBuildSucceeded       = "BuildSucceeded"
-	ReasonBuildFailed          = "BuildFailed"
-	ReasonPublishSucceeded     = "PublishSucceeded"
-	ReasonPublishFailed        = "PublishFailed"
-	ReasonChildResourceMissing = "ChildResourceMissing"
+	ReasonBuildSucceeded          = "BuildSucceeded"
+	ReasonBuildFailed             = "BuildFailed"
+	ReasonBuildPayloadParseFailed = "BuildPayloadParseFailed"
+	ReasonPublishSucceeded        = "PublishSucceeded"
+	ReasonPublishFailed           = "PublishFailed"
+	ReasonChildResourceMissing    = "ChildResourceMissing"
 )
 
 // MergeCondition is a pure helper that merges one condition of condType into conditions.

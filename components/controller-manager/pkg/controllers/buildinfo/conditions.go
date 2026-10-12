@@ -40,7 +40,9 @@ const (
 	// ConditionRpmRepoUnavailable is a persisted stop-dispatch marker.
 	ConditionRpmRepoUnavailable = "RpmRepoUnavailable"
 	// ConditionSnapshotUnavailable is a persisted stop-dispatch marker.
-	ConditionSnapshotUnavailable = "SnapshotUnavailable"
+	ConditionSnapshotUnavailable  = "SnapshotUnavailable"
+	ConditionBuildPayloadInvalid  = "BuildPayloadInvalid"
+	ReasonBuildPayloadParseFailed = "BuildPayloadParseFailed"
 )
 
 // BuildInfo-level condition reasons.

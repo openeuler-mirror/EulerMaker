@@ -85,11 +85,6 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 	if build.Status.Phase == ebsv1.BuildAborted {
 		return r.collectBuildAborted(repo)
 	}
-	// Once release work starts, resume it before reading BuildInfo so a failed
-	// BuildInfo read cannot stall an in-flight release.
-	if repo.Status.Release != nil {
-		return r.reconcileRelease(build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch)
-	}
 	info, err := r.controller.client.GetBuildInfo(r.ctx, r.project, name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -97,6 +92,12 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 		}
 		log.Printf("controller=%s key=%q uid=%q reason=BuildInfoNotReady", Name, r.key, repo.UID)
 		info = nil
+	}
+	if info != nil && info.Status.Phase == ebsv1.BuildInfoFailed {
+		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonBuildInfoFailed, countNoFailure)
+	}
+	if repo.Status.Release != nil {
+		return r.reconcileRelease(build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch)
 	}
 	return r.advanceRepository(repo, build, info)
 }

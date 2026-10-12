@@ -100,6 +100,10 @@ func (r *reconciler) tryStartRelease(candidate ebsv1.RpmRepo) (bool, controller.
 	if err != nil || skip {
 		return err != nil, controller.ReconcileResult{}, err
 	}
+	if info.Status.Phase == ebsv1.BuildInfoFailed {
+		result, err := r.writeReleaseFailure(target.repo, ebsv1.RpmRepoReasonBuildInfoFailed, countNoFailure)
+		return true, result, err
+	}
 	return r.startRelease(target, info)
 }
 
@@ -129,6 +133,15 @@ func (r *reconciler) loadReleaseTarget(candidate ebsv1.RpmRepo) (*releaseTarget,
 		result, err := r.collectBuildAborted(repo)
 		return nil, releaseFinished, result, err
 	}
+	info, err := r.controller.client.GetBuildInfo(r.ctx, r.project, repo.Name)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, releaseFinished, controller.ReconcileResult{}, classifyReadError(err)
+		}
+	} else if info.Status.Phase == ebsv1.BuildInfoFailed {
+		result, err := r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonBuildInfoFailed, countNoFailure)
+		return nil, releaseFinished, result, err
+	}
 	return &releaseTarget{repo: repo, build: build}, releaseLoaded, controller.ReconcileResult{}, nil
 }
 
@@ -144,6 +157,9 @@ func (r *reconciler) recheckReleaseInputs(repo *ebsv1.RpmRepo, build *ebsv1.Buil
 		return nil, true, nil
 	}
 	if info.Status.Phase != ebsv1.BuildInfoCompleted {
+		if info.Status.Phase == ebsv1.BuildInfoFailed {
+			return info, false, nil
+		}
 		log.Printf("controller=%s key=%q uid=%q phase=%q reason=BuildInfoNotReady", Name, r.key, repo.UID, info.Status.Phase)
 		return nil, true, nil
 	}

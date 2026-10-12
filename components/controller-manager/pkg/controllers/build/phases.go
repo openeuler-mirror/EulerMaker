@@ -106,6 +106,9 @@ func (r *reconciler) processingBuild() (controller.ReconcileResult, error) {
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
 	if info.Status.Phase != ebsv1.BuildInfoCompleted {
+		if info.Status.Phase == ebsv1.BuildInfoFailed {
+			return r.failBuildPayload()
+		}
 		return controller.ReconcileResult{}, nil
 	}
 	succeeded, failing := aggregateSpecStatus(info.Status.SpecStatus)
@@ -113,6 +116,20 @@ func (r *reconciler) processingBuild() (controller.ReconcileResult, error) {
 		return r.finishSingleBuild(succeeded, failing)
 	}
 	return r.advanceNonSingleBuild(succeeded, failing)
+}
+
+func (r *reconciler) failBuildPayload() (controller.ReconcileResult, error) {
+	target := r.current.DeepCopy()
+	target.Status.Phase = ebsv1.BuildFailed
+	target.Status.Stage = stageBuild
+	target.Status.EndTime = r.now
+	merged, intent := r.withCondition(target.Status.Conditions, ConditionBuildSucceed, metav1.ConditionFalse, ReasonBuildPayloadParseFailed)
+	target.Status.Conditions = merged
+	return r.apply(target, writeIntent{
+		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
+		setEndTime: true, endTime: r.now,
+		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
+	}, controller.ReconcileResult{}, nil)
 }
 
 // finishSingleBuild ends a single build directly: it never creates, reads or publishes a repository.

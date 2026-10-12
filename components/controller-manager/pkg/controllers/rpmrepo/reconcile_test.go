@@ -110,6 +110,45 @@ func newBuildInfo(name string, phase ebsv1.BuildInfoPhase) *ebsv1.BuildInfo {
 	}
 }
 
+func TestFailedBuildInfoStopsRpmRepo(t *testing.T) {
+	for _, scenario := range []string{"repository", "release", "terminal"} {
+		t.Run(scenario, func(t *testing.T) {
+			client := NewFakeClient()
+			repo := newRpmRepo(testBuild)
+			if scenario == "release" {
+				repo = inFlightReleaseRepo(testBuild)
+			}
+			if scenario == "terminal" {
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
+			}
+			client.RpmRepos[key(testProject, testBuild)] = repo
+			client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+			client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoFailed)
+			artifacts := NewFakeArtifactManager()
+			controller := newTestController(t, client, artifacts, testConfig())
+			if _, err := controller.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
+				t.Fatal(err)
+			}
+			stored := client.RpmRepos[key(testProject, testBuild)]
+			if scenario == "terminal" {
+				if stored.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || len(client.StatusWrites) != 0 {
+					t.Fatalf("terminal RpmRepo changed: %+v", stored.Status.Release)
+				}
+				return
+			}
+			if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition != nil {
+				t.Fatalf("release = %+v", stored.Status.Release)
+			}
+			if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildInfoFailed) {
+				t.Fatalf("conditions = %+v", stored.Status.Conditions)
+			}
+			if len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+				t.Fatal("failed BuildInfo called Artifact Manager")
+			}
+		})
+	}
+}
+
 func newSucceededJob(name, spec, uid string, created time.Time) ebsv1.Job {
 	return ebsv1.Job{
 		ObjectMeta: metav1.ObjectMeta{

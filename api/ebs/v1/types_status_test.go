@@ -20,13 +20,16 @@ func TestProjectPhase(t *testing.T) {
 }
 
 func TestBuildInfoPhase(t *testing.T) {
-	for _, phase := range []BuildInfoPhase{BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoAborted} {
+	for _, phase := range []BuildInfoPhase{BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoFailed, BuildInfoAborted} {
 		if !phase.IsValid() {
 			t.Errorf("phase %q is not valid", phase)
 		}
 	}
 	if BuildInfoPhase("Unknown").IsValid() {
 		t.Error("unknown phase is valid")
+	}
+	if !BuildInfoFailed.IsTerminal() || BuildInfoProcessing.IsTerminal() {
+		t.Error("BuildInfo terminal phase classification is incorrect")
 	}
 
 	values := BuildInfoPhaseValues()

@@ -187,7 +187,7 @@ status:
 | `Build.spec.buildTarget` | 用户提交 | 创建后不可修改 |
 | `Build.status.phase` / `Build.status.stage` | Build Controller | Pending → Prepared → Processing 由本控制器状态机推进；publish 终态由本控制器依据 `RpmRepo.status.release.phase` 判定，`stage` 由本控制器写 `publish` |
 | `Build.status.startTime` / `Build.status.endTime` / `Build.status.baseBuildRef` | Build Controller | 进入 Processing 时写 `startTime`，进入终态时写 `endTime`；`baseBuildRef` 在 Pending 阶段写入，`nil` 表示未解析，`{}` 表示无上一个发布成功的 Build |
-| `BuildSucceed` / `PublishSucceed`（`Build.status.conditions`） | Build Controller | `BuildSucceed` 由 `BuildInfo.status.specStatus` 计算；`PublishSucceed` 由 `RpmRepo.status.release.phase` 推导（`Ready`→`True`、`Failed`→`False`）；直接依赖 NotFound 的失败条件见第六章 |
+| `BuildSucceed` / `PublishSucceed`（`Build.status.conditions`） | Build Controller | `BuildInfo.status.phase=Failed` 时 `BuildSucceed=False/BuildPayloadParseFailed`；`Completed` 时由 `specStatus` 计算；`PublishSucceed` 由 `RpmRepo.status.release.phase` 推导（`Ready`→`True`、`Failed`→`False`）；直接依赖 NotFound 的失败条件见第六章 |
 
 ### 4.2 Snapshot
 
@@ -374,7 +374,7 @@ ensure 不推进子资源状态、不等待子资源就绪、不覆盖已存在 
 | --- | --- | --- |
 | Pending（baseBuildRef 已固化） | ensure Snapshot → 等待 Active → incremental 固化 packages → ensure RpmRepo（所有类型，按 4.3 固化基线；single 写 Skipped）→ 进入 Prepared | 在本阶段按顺序创建 |
 | Prepared | ensure BuildInfo，存在且未删除后进入 Processing/build；不重新查询 Snapshot/RpmRepo | 从 Project 复制 bootstrapRepo、buildPayload 并创建 BuildInfo |
-| Processing/build | GET BuildInfo，等待 Completed；不查询 Snapshot/RpmRepo | 记录异常，不创建任何子资源，写入 Failed/build |
+| Processing/build | GET BuildInfo，等待 Completed 或 Failed；Failed 时直接写 Failed/build，不查询 Snapshot/RpmRepo | 记录异常，不创建任何子资源，写入 Failed/build |
 | Processing/publish（仅非 single） | GET RpmRepo，判断 release.phase；不查询 Snapshot/BuildInfo | 记录异常，不创建任何子资源，写入 Failed/publish |
 
 Processing 阶段 GET 直接依赖返回 NotFound 时，输出结构化日志 `reason=ChildResourceMissing`，包含 controller、Build key/UID、phase/stage、子资源 kind/name；不重建，按第九章写入前校验与并发协议，通过一次 `/status` 写入 `phase=Failed`、保留当前 `stage`、填写 `endTime`。build 阶段写 `BuildSucceed=False/ChildResourceMissing`，publish 阶段写 `PublishSucceed=False/ChildResourceMissing`；保留其他状态字段与条件。终态写入成功（含 Unknown 确认成功）后返回业务 PermanentError，写入失败按 7.6 / 9.3 分类处理，不覆盖外部 Aborted。仅明确的 NotFound 触发此规则，读取超时、权限错误等不视为缺失。对象正在删除但仍存在时继续等待，不创建、不推进；终态或删除中的 Build 由入口守卫直接结束。
@@ -437,7 +437,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 
 ### 7.4 Processing/build
 
-- 按第六章 Processing/build 行读取 BuildInfo，缺失时按第六章写 Failed/build 并结束；存在时等待 BuildInfo Completed。
+- 按第六章 Processing/build 行读取 BuildInfo，缺失时按第六章写 Failed/build 并结束；存在且为 Pending/Processing 时等待。若 `BuildInfo.status.phase=Failed`，优先于 specStatus 汇总，一次 status 写入 `Build.status.phase=Failed`、`stage=build`、`endTime` 与 `BuildSucceed=False/reason=BuildPayloadParseFailed`，message 使用同名固定短语；配置错误详情留在 BuildInfo 的 condition message。single 与非 single 均不进入 publish，不以已有成功 spec 或 `publishFlag` 覆盖该结果；写入遵守第九章并发规则，不覆盖外部 Aborted。
 - 统一汇总规则（single 与非 single 共用）：`specStatus.build` 非空，且其中每个目标 spec 的 `build[spec].status == Succeeded` 与 `install[spec].status == Succeeded` 才判定成功；构建集为空、任一结果缺失或非 `Succeeded` 均判定失败。结果不依赖 map 遍历顺序，目标 spec 的完整性由 4.4 的 Completed 契约保证。
 - 若 `Build.spec.buildType=single`：
   - 结果汇总失败（build 或 install 非 Succeeded）：
@@ -520,7 +520,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 
 | type             | 含义           | `status="True"` 的写入时机                                     | `status="False"` 的写入时机                                    |
 | ---------------- | -------------- | ----------------------------------------------------------- | ------------------------------------------------------------ |
-| `BuildSucceed` | 构建与安装依赖是否全部成功 | BuildInfo Completed 后，按 7.4 汇总成功（reason/message 为 BuildSucceeded） | BuildInfo Completed 后，按 7.4 汇总失败（reason/message 为 BuildFailed）；Processing/build 的 BuildInfo NotFound 时为 ChildResourceMissing |
+| `BuildSucceed` | 构建与安装依赖是否全部成功 | BuildInfo Completed 后，按 7.4 汇总成功（reason/message 为 BuildSucceeded） | BuildInfo Completed 后，按 7.4 汇总失败（reason/message 为 BuildFailed）；BuildInfo Failed 时为 BuildPayloadParseFailed；Processing/build 的 BuildInfo NotFound 时为 ChildResourceMissing |
 | `PublishSucceed` | 发布是否成功   | `RpmRepo.status.release.phase=Ready`（本控制器写 `reason/message=PublishSucceeded`） | `RpmRepo.status.release.phase=Failed`（本控制器写 `reason/message=PublishFailed`）；Processing/publish 的 RpmRepo NotFound 时为 ChildResourceMissing；对象存在且 `release.phase` 未到终态时不写 |
 
 各阶段写入规则：
@@ -528,7 +528,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 - Pending/Prepared、Processing/build 与 Processing/publish 的等待/运行阶段：不写任何条件。
 - 构建和发布阶段按上表记录结果；PublishSucceed 直接依据 release.phase，不从 RpmRepo.status.conditions 复制。
 - 跳过发布时不产生发布结果条件，具体写入清单见 7.4。
-- 条件一旦写入即保留到终态，不因后续阶段变化删除或改写；`reason` 固定为 `BuildSucceeded`、`BuildFailed`、`PublishSucceeded`、`PublishFailed` 或 `ChildResourceMissing`，不再细分中间原因。
+- 条件一旦写入即保留到终态，不因后续阶段变化删除或改写；`reason` 固定为 `BuildSucceeded`、`BuildFailed`、`BuildPayloadParseFailed`、`PublishSucceeded`、`PublishFailed` 或 `ChildResourceMissing`，不再细分其他中间原因。
 
 condition merge helper：
 
@@ -545,7 +545,7 @@ func MergeCondition(
 
 - 按 `type` 定位并更新 `status`、`reason`、`message`、`observedGeneration`；
 - `observedGeneration` 取 `Build.metadata.generation`（apiserver 仅在 spec 变化时递增该值）；
-- `message` 写与 `reason` 同族的固定短语：`BuildSucceeded` / `BuildFailed` / `PublishSucceeded` / `PublishFailed` / `ChildResourceMissing`；动态错误详情只进日志，不写入 condition；
+- `message` 写与 `reason` 同族的固定短语：`BuildSucceeded` / `BuildFailed` / `BuildPayloadParseFailed` / `PublishSucceeded` / `PublishFailed` / `ChildResourceMissing`；动态错误详情留在 BuildInfo condition 或日志，不写入 Build condition；
 - `now` 由调用方传入，取本轮 Sync 唯一一次 `clock.Now()` 的 UTC 值（见 8.2）；helper 是纯函数，不持有 Clock，也不调用 `time.Now()`；
 - 首次插入该 type 时设置 `lastTransitionTime=now`，返回 `changed=true`；
 - 已有该 type 且 `status` 变化时设置 `lastTransitionTime=now`；`status` 不变时保留原时间，即使 reason、message 或 observedGeneration 变化也不更新时间；
@@ -712,6 +712,7 @@ buildinfos:     get, create
 - 删除中守卫：`deletionTimestamp` 非空时断言不调用 `UpdateBuildStatus`、不调用 `Create`，且返回零值 + `nil`；
 - PollingSource：非终态 fieldSelector 生效、Add/Update/Delete 事件映射正确、List 失败时退避重试且不替换旧快照；
 - conditions 生命周期：只写 `BuildSucceed` 与 `PublishSucceed`，未确定时不出现，等待/重试阶段不写条件，`message` 取固定短语。
+- BuildInfo 配置失败：`phase=Failed` 时，不论 specStatus、buildType、publishFlag，均写 `Build.phase=Failed/stage=build` 与 `BuildSucceed=False/BuildPayloadParseFailed`，不进入 publish、不写 `PublishSucceed`；覆盖状态写入 Conflict/Unknown 与外部 Aborted 竞态。
 
 ### 14.2 集成测试
 

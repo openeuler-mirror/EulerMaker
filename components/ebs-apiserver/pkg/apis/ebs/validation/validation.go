@@ -205,7 +205,29 @@ func ValidateBuildInfo(obj *ebsv1.BuildInfo) field.ErrorList { return nil }
 func ValidateBuildInfoUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
 	return ValidateBuildInfo(newObj)
 }
-func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList { return nil }
+func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
+	var allErrs field.ErrorList
+	phase := newObj.Status.Phase
+	if !phase.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), phase, ebsv1.BuildInfoPhaseValues()))
+	}
+	if oldObj.Status.Phase.IsTerminal() && phase != oldObj.Status.Phase {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "phase"), "terminal BuildInfo phase is immutable"))
+	}
+	if phase == ebsv1.BuildInfoFailed {
+		valid := false
+		for _, condition := range newObj.Status.Conditions {
+			if condition.Type == "BuildPayloadInvalid" && condition.Status == metav1.ConditionTrue && condition.Reason == "BuildPayloadParseFailed" {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			allErrs = append(allErrs, field.Required(field.NewPath("status", "conditions"), "Failed requires BuildPayloadInvalid=True/BuildPayloadParseFailed"))
+		}
+	}
+	return allErrs
+}
 
 func ValidateRpmRepo(obj *ebsv1.RpmRepo) field.ErrorList { return nil }
 func ValidateRpmRepoUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
@@ -273,7 +295,7 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 		case condition.Type == ebsv1.RpmRepoConditionPublishSucceed && condition.Status == metav1.ConditionTrue:
 			reasons = []string{ebsv1.RpmRepoReasonReleaseActivated}
 		case condition.Type == ebsv1.RpmRepoConditionPublishSucceed && condition.Status == metav1.ConditionFalse:
-			reasons = []string{ebsv1.RpmRepoReasonReleaseFailed, ebsv1.RpmRepoReasonRepositoryCreationFailed, ebsv1.RpmRepoReasonNoPublishableArtifacts, ebsv1.RpmRepoReasonBuildAborted}
+			reasons = []string{ebsv1.RpmRepoReasonReleaseFailed, ebsv1.RpmRepoReasonRepositoryCreationFailed, ebsv1.RpmRepoReasonNoPublishableArtifacts, ebsv1.RpmRepoReasonBuildAborted, ebsv1.RpmRepoReasonBuildInfoFailed}
 		}
 		validReason := false
 		for _, reason := range reasons {
