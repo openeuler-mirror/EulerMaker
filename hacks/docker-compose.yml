@@ -166,33 +166,6 @@ services:
       timeout: 5s
       retries: 5
 
-  ebs-runner:
-    build:
-      context: ../components/runner
-    command:
-      - --gateway=http://ebs-gateway:8080
-      - --artifact-manager=http://${EXPORT_SERVER_ADDR:-artifact-manager}:8081
-      - --machine-credential-file=/run/secrets/runner_machine_credential
-      - --name=runner-ct-01
-      - --type=ct
-      - --root-dir=/var/lib/ebs-runner
-    secrets:
-      - runner_machine_credential
-    group_add:
-      - "${DOCKER_GID:-989}"
-    volumes:
-      - /usr/bin/docker:/usr/bin/docker:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Docker mounts are resolved by the host daemon. Keep the runner data
-      # root at the same absolute path on both the host and runner container so
-      # Job containers can mount work/results and the runner can upload them.
-      - /var/lib/ebs-runner:/var/lib/ebs-runner
-    networks:
-      - ebs-net
-    depends_on:
-      - ebs-gateway
-      - artifact-manager
-
 networks:
   ebs-net:
     driver: bridge
@@ -200,5 +173,3 @@ networks:
 secrets:
   ebs_gateway_jwt_secret:
     file: ./ebs-gateway-jwt-secret
-  runner_machine_credential:
-    file: ./runner-machine-credential.json

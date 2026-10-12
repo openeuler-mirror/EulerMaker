@@ -379,13 +379,15 @@ Elasticsearch
 ebs-apiserver
 ebs-gateway
 artifact-manager
-ebs-runner
 ```
+
+Runner 使用独立的 `hacks/docker-compose.runner.yml`，可在同机或专用构建节点启动；它不随控制面 Compose 自动启动。
 
 启动命令：
 
 ```bash
 docker compose -f hacks/docker-compose.yml up -d
+docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d
 ```
 
 关键服务地址：

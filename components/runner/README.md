@@ -52,8 +52,10 @@ Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭�
 go run ./cmd/runner --help
 ```
 
-也可以在仓库根目录构建并启动完整开发环境：
+也可以在仓库根目录先启动控制面，再独立启动 Runner。示例中的 `EXPORT_SERVER_ADDR` 需替换为控制面容器及构建节点均可访问的实际内网地址。Runner 使用宿主机网络；异机部署时需设置从 Runner 节点可访问的 `RUNNER_GATEWAY_URL`、`RUNNER_ARTIFACT_MANAGER_URL` 和唯一的 `RUNNER_NAME`：
 
 ```bash
-docker compose -f hacks/docker-compose.yml up -d --build
+EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
+  docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
