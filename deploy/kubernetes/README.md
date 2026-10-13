@@ -194,3 +194,16 @@ kubectl -n ebs get pods,pvc
 ```
 
 apiserver 使用三个 etcd 成员地址，通过服务端 CA 校验成员身份；etcd 校验其客户端证书。确认 `/readyz` 正常、默认 Config/Script 和 ES 索引初始化成功，再由实际内部客户端验证 Job、Runner 读写及 List/Watch。
+
+## 5. 部署 Scheduler
+
+Scheduler 只依赖已就绪的 ebs-apiserver，通过独立的内部客户端证书访问 Job 和 Runner；此时尚无 Job 也可以启动。
+
+```sh
+kubectl -n ebs create secret generic scheduler-apiserver-tls \
+  --from-file=ca.crt="$internal_cert_dir/runtime/server-ca.crt" \
+  --from-file=tls.crt="$internal_cert_dir/runtime/scheduler.crt" \
+  --from-file=tls.key="$internal_cert_dir/runtime/scheduler.key"
+kubectl apply -f deploy/kubernetes/scheduler.yaml
+kubectl -n ebs rollout status deployment/scheduler --timeout=10m
+```
