@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-bootstrap
+  namespace: ebs
+data:
+  initialMasterNodes: elasticsearch-0,elasticsearch-1,elasticsearch-2
