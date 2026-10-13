@@ -207,3 +207,14 @@ kubectl -n ebs create secret generic scheduler-apiserver-tls \
 kubectl apply -f deploy/kubernetes/scheduler.yaml
 kubectl -n ebs rollout status deployment/scheduler --timeout=10m
 ```
+
+## 6. 部署 Git Server
+
+`git-server.yaml` 创建普通 ClusterIP Service，Git Server 通过 `GIT_SERVER_SERVICE_HOST` 获取其地址，并返回 `git://<Service ClusterIP>:9418/...` 作为 clone URL。先创建 Service，再启动 Pod；应用同一文件时 Service 已排在 Deployment 之前。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
+
+Job 容器由宿主机 Docker 启动并使用宿主机网络，不在 Kubernetes Pod 网络内。启用 Snapshot Controller 前，必须从实际构建节点验证 Git Service ClusterIP 的 9418 端口可达；集群外构建节点通常不能直接访问 ClusterIP，若验证失败，应改用构建节点可达的固定内网入口。
+
+```sh
+kubectl apply -f deploy/kubernetes/git-server.yaml
+kubectl -n ebs rollout status deployment/git-server --timeout=20m
+```
