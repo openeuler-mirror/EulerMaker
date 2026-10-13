@@ -10,6 +10,7 @@ type Config struct {
 	Addresses []string
 	Username  string
 	Password  string
+	APIKey    string
 }
 
 func DefaultConfig() *Config {
@@ -24,6 +25,10 @@ func NewClientForTesting(address string, httpClient *http.Client) *Client {
 }
 
 func (c *Config) NewClient() (*Client, error) {
+	if c.APIKey != "" && (c.Username != "" || c.Password != "") {
+		return nil, fmt.Errorf("elasticsearch API key and basic authentication cannot be configured together")
+	}
+
 	transport := &http.Transport{
 		MaxIdleConns:    10,
 		IdleConnTimeout: 30 * time.Second,
@@ -39,6 +44,7 @@ func (c *Config) NewClient() (*Client, error) {
 		httpClient: httpClient,
 		username:   c.Username,
 		password:   c.Password,
+		apiKey:     c.APIKey,
 	}
 
 	if err := cli.ping(); err != nil {

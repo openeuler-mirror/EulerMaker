@@ -21,6 +21,28 @@ func response(status int, body string) *http.Response {
 	}
 }
 
+func TestAPIKeyAuthenticatesPingAndAliasCheck(t *testing.T) {
+	var methods []string
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		methods = append(methods, req.Method)
+		if got := req.Header.Get("Authorization"); got != "ApiKey encoded-key" {
+			t.Errorf("Authorization = %q, want API key", got)
+		}
+		return response(http.StatusOK, `{}`), nil
+	})}
+	client := NewClientForTesting("http://elasticsearch", httpClient)
+	client.apiKey = "encoded-key"
+	if err := client.ping(); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if err := client.ensureResourceIndices([]string{"project"}); err != nil {
+		t.Fatalf("ensure index: %v", err)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodHead {
+		t.Fatalf("request methods = %v, want GET and HEAD", methods)
+	}
+}
+
 func TestCreateUsesCreateOnlyAndRefresh(t *testing.T) {
 	var requestPath string
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

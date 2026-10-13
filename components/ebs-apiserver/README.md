@@ -125,3 +125,5 @@ curl -k https://localhost:8443/apis/ebs/v1
 ```bash
 ./ebs-apiserver --help
 ```
+
+Elasticsearch 启用认证后，可用 `--es-api-key-file=/path/to/api-key` 指定仅 apiserver 可读的文件，内容为创建 API Key 时返回的 `encoded` 值。生产环境应通过 HTTPS 连接 ES，不要将密钥写入命令行或仓库。

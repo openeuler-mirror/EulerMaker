@@ -128,6 +128,7 @@ type Client struct {
 	httpClient *http.Client
 	username   string
 	password   string
+	apiKey     string
 }
 
 type Label struct {
@@ -325,7 +326,9 @@ func resourcePhysicalIndex(resource string) string {
 }
 
 func (c *Client) setAuth(req *http.Request) {
-	if c.username != "" {
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "ApiKey "+c.apiKey)
+	} else if c.username != "" {
 		req.SetBasicAuth(c.username, c.password)
 	}
 }

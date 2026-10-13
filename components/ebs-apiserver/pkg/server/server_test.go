@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -27,6 +29,21 @@ import (
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	esclient "ebs-apiserver/pkg/storage/es"
 )
+
+func TestCompleteLoadsElasticsearchAPIKey(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "api-key")
+	if err := os.WriteFile(keyFile, []byte("encoded-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	opts := NewEulerMakerServerOptions()
+	opts.EsAPIKeyFile = keyFile
+	if err := opts.Complete(); err != nil {
+		t.Fatalf("complete options: %v", err)
+	}
+	if opts.esConfig.APIKey != "encoded-key" {
+		t.Fatal("Elasticsearch API key was not loaded")
+	}
+}
 
 func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 	definitions := getOpenAPIDefinitions(func(path string) spec.Ref {
