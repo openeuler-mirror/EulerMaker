@@ -10,7 +10,7 @@
 
 在 ES 节点持久设置 `vm.max_map_count >= 262144`，核对文件描述符上限，并确保成员间 `:2380`、`:9300` 可达。通过 VPC 和安全组限制数据服务端口，不要暴露到公网。`ebs-disk-ssd-retain` 使用 `WaitForFirstConsumer` 和 `Retain`；删除 PVC 不会自动删除底层 EVS。
 
-先创建基础资源。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀；部署各组件前将 Manifest 中的 `latest` 替换为已推送且节点可拉取的版本或 digest。
+先创建基础资源。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀，当前 Manifest 暂用 `dev` tag 和 `imagePullPolicy: Always`；部署前确认镜像已推送且节点可拉取，正式部署时改用不可变 digest。
 
 ```sh
 kubectl apply -f deploy/kubernetes/namespace.yaml
@@ -138,3 +138,59 @@ kubectl -n ebs exec -it elasticsearch-0 -- curl -fsS \
 ```
 
 后续重启或重新应用 `elasticsearch.yaml` 不会重新引导集群；**已有集群恢复时不要重新应用 `elasticsearch-bootstrap.yaml`**。[Elasticsearch 建群说明](https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-discovery-bootstrap-cluster.html)。apiserver 创建的新 ES 索引设置 1 个副本；该配置不会自动更新已有索引。
+
+## 4. 部署 ebs-apiserver
+
+### 4.1 创建入站证书 Secret
+
+第 2 节已创建 apiserver 访问 etcd 的 Secret。本组件还要求独立的入站证书 Secret：服务端证书须覆盖客户端使用的 Service DNS，客户端 CA 须信任 Gateway、Scheduler、Controller Manager 的证书。它们与 etcd 的 CA 相互独立。在受控环境签发证书，输出目录必须不存在：
+
+```sh
+bash deploy/kubernetes/generate-internal-certs.sh /secure/path/to/internal-certs
+```
+
+脚本默认 CA 有效期 3650 天、服务端与客户端证书 365 天，可用 `--ca-days`、`--cert-days` 调整。服务端证书覆盖 `ebs-apiserver`、`ebs-apiserver.ebs.svc` 和 `ebs-apiserver.ebs.svc.cluster.local`；三个客户端证书分别使用 Gateway、Scheduler、Controller Manager 的 URI SAN。脚本按 `ebs` Namespace 和 `cluster.local` 域名签发，地址变化时先修改 SAN。`private/` 中的 CA 私钥不能上传集群或提交仓库；只从 `runtime/` 创建 Secret。
+
+```sh
+internal_cert_dir=/secure/path/to/internal-certs
+kubectl -n ebs create secret generic ebs-apiserver-serving-tls \
+  --from-file=tls.crt="$internal_cert_dir/runtime/ebs-apiserver.crt" \
+  --from-file=tls.key="$internal_cert_dir/runtime/ebs-apiserver.key"
+kubectl -n ebs create secret generic ebs-apiserver-internal-client-ca \
+  --from-file=ca.crt="$internal_cert_dir/runtime/client-ca.crt"
+```
+
+### 4.2 创建 ES API Key Secret
+
+待 ES 集群健康后，在能解析集群内 Service DNS 的受控环境执行；`elastic` 密码由终端交互输入。API Key 的有效权限是角色描述与创建者权限的交集；`cluster: ["monitor"]` 用于 apiserver 启动时访问 ES 根路径的健康检查，`ebs-*` 索引权限用于资源读写和索引初始化。将响应中的 `encoded` 保存到受控文件，不提交仓库或放入 Pod 参数。[Elastic Create API Key API](https://www.elastic.co/docs/api/doc/elasticsearch/v8/operation/operation-security-create-api-key)。
+
+```sh
+curl --cacert "$es_cert_dir/runtime/es-http-ca.crt" -u elastic \
+  -H 'Content-Type: application/json' \
+  -X POST 'https://elasticsearch.ebs.svc.cluster.local:9200/_security/api_key' \
+  -d '{
+    "name": "ebs-apiserver",
+    "role_descriptors": {
+      "ebs-storage": {
+        "cluster": ["monitor"],
+        "indices": [{"names": ["ebs-*"], "privileges": ["all"]}]
+      }
+    }
+  }'
+
+kubectl -n ebs create secret generic ebs-apiserver-es-auth \
+  --from-file=api-key=/secure/path/to/es-api-key \
+  --from-file=ca.crt="$es_cert_dir/runtime/es-http-ca.crt"
+```
+
+`ebs-apiserver.yaml` 从 Secret 文件读取 API Key，并通过 `SSL_CERT_FILE` 信任 ES HTTP CA。轮换密钥或 CA 后须重启 apiserver Pod 以重新加载，不要关闭证书校验。
+
+### 4.3 部署与检查
+
+```sh
+kubectl apply -f deploy/kubernetes/ebs-apiserver.yaml
+kubectl -n ebs rollout status deployment/ebs-apiserver --timeout=10m
+kubectl -n ebs get pods,pvc
+```
+
+apiserver 使用三个 etcd 成员地址，通过服务端 CA 校验成员身份；etcd 校验其客户端证书。确认 `/readyz` 正常、默认 Config/Script 和 ES 索引初始化成功，再由实际内部客户端验证 Job、Runner 读写及 List/Watch。

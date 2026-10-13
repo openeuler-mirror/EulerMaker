@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebs-apiserver
+  namespace: ebs
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: ebs-apiserver
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ebs-apiserver
+  namespace: ebs
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ebs-apiserver
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ebs-apiserver
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: ebs-apiserver
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:dev
+          imagePullPolicy: Always
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/ebs/es/ca.crt
+          args:
+            - --etcd-servers=https://etcd-0.etcd:2379,https://etcd-1.etcd:2379,https://etcd-2.etcd:2379
+            - --etcd-cafile=/etc/ebs/etcd/server-ca.crt
+            - --etcd-certfile=/etc/ebs/etcd/client.crt
+            - --etcd-keyfile=/etc/ebs/etcd/client.key
+            - --es-servers=https://elasticsearch:9200
+            - --es-api-key-file=/etc/ebs/es/api-key
+            - --enable-iam=true
+            - --tls-cert-file=/etc/ebs/serving/tls.crt
+            - --tls-private-key-file=/etc/ebs/serving/tls.key
+            - --internal-client-ca-file=/etc/ebs/internal-client-ca/ca.crt
+          ports:
+            - name: https
+              containerPort: 8443
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+          volumeMounts:
+            - name: etcd-tls
+              mountPath: /etc/ebs/etcd
+              readOnly: true
+            - name: serving-tls
+              mountPath: /etc/ebs/serving
+              readOnly: true
+            - name: internal-client-ca
+              mountPath: /etc/ebs/internal-client-ca
+              readOnly: true
+            - name: es-auth
+              mountPath: /etc/ebs/es
+              readOnly: true
+      volumes:
+        - name: etcd-tls
+          secret:
+            secretName: ebs-apiserver-etcd-tls
+        - name: serving-tls
+          secret:
+            secretName: ebs-apiserver-serving-tls
+        - name: internal-client-ca
+          secret:
+            secretName: ebs-apiserver-internal-client-ca
+        - name: es-auth
+          secret:
+            secretName: ebs-apiserver-es-auth
