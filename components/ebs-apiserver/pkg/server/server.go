@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -126,6 +127,7 @@ func init() {
 type EulerMakerServerOptions struct {
 	RecommendedOptions                  *options.RecommendedOptions
 	EsServers                           string
+	EsAPIKeyFile                        string
 	EnableIAM                           bool
 	InternalClientCAFile                string
 	InsecureAllowUnauthenticatedClients bool
@@ -156,6 +158,7 @@ func NewEulerMakerServerOptions() *EulerMakerServerOptions {
 
 func (o *EulerMakerServerOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.EsServers, "es-servers", o.EsServers, "elasticsearch server address")
+	fs.StringVar(&o.EsAPIKeyFile, "es-api-key-file", "", "file containing the encoded Elasticsearch API key")
 	fs.BoolVar(&o.EnableIAM, "enable-iam", o.EnableIAM, "enable the built-in IAM API and password authenticator")
 	fs.StringVar(&o.InternalClientCAFile, "internal-client-ca-file", "", "CA bundle for internal component client certificates")
 	fs.BoolVar(&o.InsecureAllowUnauthenticatedClients, "insecure-allow-unauthenticated-clients", false, "disable internal client certificate authentication (isolated development only)")
@@ -175,6 +178,16 @@ func (o *EulerMakerServerOptions) Validate(args []string) error {
 
 func (o *EulerMakerServerOptions) Complete() error {
 	o.esConfig.Addresses = []string{o.EsServers}
+	if o.EsAPIKeyFile != "" {
+		data, err := os.ReadFile(o.EsAPIKeyFile)
+		if err != nil {
+			return fmt.Errorf("read Elasticsearch API key file: %w", err)
+		}
+		o.esConfig.APIKey = strings.TrimSpace(string(data))
+		if o.esConfig.APIKey == "" {
+			return fmt.Errorf("Elasticsearch API key file is empty")
+		}
+	}
 	return nil
 }
 
