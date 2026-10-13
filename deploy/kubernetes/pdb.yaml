@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: etcd
+  namespace: ebs
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: elasticsearch
+  namespace: ebs
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
