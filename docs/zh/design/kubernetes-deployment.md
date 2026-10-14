@@ -34,7 +34,6 @@ Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Art
 | controller-manager | Deployment，`Recreate` | 1 | 仅内部 `:8080/healthz`、`/readyz`、`/metrics` | 当前没有 Leader Election，不允许两实例同时运行控制器 |
 | git-server | Deployment（`Recreate`）+ 独占 PVC | 1 | HTTP `:8080/healthz`、`/readyz`；Git daemon `:9418` | 同一数据目录不能由两个写入实例共享；HTTP 管理口仅供 Controller Manager 访问 |
 | artifact-manager | Deployment（`Recreate`）+ 节点本地目录 | 1 | HTTP `:8081/healthz`、`/readyz` | 固定到唯一带 `node-role.kubernetes.io/artifact=` 标签的节点；Artifact、过程仓、正式仓及临时目录必须在同一文件系统 |
-| ebs-runner（可选） | DaemonSet + 节点本地目录 | 每个专用 Docker 节点 1 个 | 通过 Gateway 注册与心跳 | 仅在 Docker Engine 节点使用；默认仍推荐集群外部署 |
 | etcd | StatefulSet + 每成员独立 EVS PVC | 生产 3；开发 1 | 仅集群内客户端和成员通信地址 | 跨可用区部署前验证成员间延迟 |
 | Elasticsearch | StatefulSet + 每数据节点独立 EVS PVC | 生产至少 3；开发 1 | 集群内 HTTPS、API Key 认证和节点间双向 TLS | 自部署与当前应用兼容的版本；生产配置副本分片和节点反亲和，不以共享卷代替节点副本 |
 
@@ -42,11 +41,9 @@ Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Art
 
 ### Runner 的首版形态
 
-优先在专用 Docker 构建节点上以现有容器或宿主机服务运行 Runner，由 Kubernetes 管理控制面。每台节点使用独立 Runner 名称、MachineAccount 凭据和持久化的 `instanceId` 文件；重启后必须沿用同一身份。该方案保留当前 `docker create/start` 执行路径，不把 Kubernetes 集群的 containerd socket 当作 Docker API 使用。
+首版在专用 Docker 构建节点上以现有容器或宿主机服务运行 Runner，由 Kubernetes 管理控制面。每台节点使用独立 Runner 名称、MachineAccount 凭据和持久化的 `instanceId` 文件；重启后必须沿用同一身份。该方案保留当前 `docker create/start` 执行路径，不把 Kubernetes 集群的 containerd socket 当作 Docker API 使用。
 
-若必须由 Kubernetes 管理 Runner，只能在安装并维护 Docker Engine 的专用节点上使用 DaemonSet：以节点标签限定范围，挂载 Docker socket 与 `/var/lib/ebs-runner`，并保持 Runner 容器及宿主机 Docker daemon 看到的该目录**绝对路径一致**。每个 Pod 的 Runner 名称须由稳定的节点身份构造，实例 ID 持久化到该节点目录。Docker socket 等同于高权限宿主机接口，不能把这种 Pod 安排到混合租户或控制面节点；更换为 Kubernetes Job/CRI 执行器属于后续独立改造。[Kubernetes 对 hostPath 的安全警告](https://kubernetes.io/docs/concepts/storage/volumes/#hostpath)同样适用于此处的宿主机挂载。
-
-当前 Job 容器使用宿主机网络，且由宿主机 Docker daemon 创建，并不在 Runner Pod 网络或 DNS 命名空间内。Git Server 默认使用 Service ClusterIP 生成 clone URL；Service 必须在依赖它的 Pod 创建之前存在。ClusterIP 对集群外构建节点通常不可达，启用构建前必须从实际 Job 容器验证 Git clone 地址。若不可达，应改用构建节点可访问的固定内网入口。Service 重建后 ClusterIP 可能变化，已固化到对象中的旧 URL 不会自动更新。
+当前 Job 容器使用宿主机网络，且由宿主机 Docker daemon 创建，并不在 Kubernetes Pod 网络或 DNS 命名空间内。Git Server 默认使用 Service ClusterIP 生成 clone URL；Service 必须在依赖它的 Pod 创建之前存在。ClusterIP 对集群外构建节点通常不可达，启用构建前必须从实际 Job 容器验证 Git clone 地址。若不可达，应改用构建节点可访问的固定内网入口。Service 重建后 ClusterIP 可能变化，已固化到对象中的旧 URL 不会自动更新。
 
 Controller Manager 的 `--artifact-manager-addr` 只用于管理请求，通过集群内 Service 访问；下发给 Job 的过程仓保持 `artifact:///...` 逻辑 URL，由 Runner 使用其可访问的 Artifact Manager 地址解析。启用构建前须从 Runner 和实际 Job 容器验证该地址，不应直接将 Artifact Manager 原始管理端口暴露到公网。
 
@@ -96,7 +93,7 @@ Gateway JWT、ES API Key、各组件 TLS 私钥、Runner MachineAccount 凭据�
 | 入口与构建网络 | 控制面使用集群 DNS；Runner 和 Job 容器需访问集群外也可达的 Gateway、Artifact Manager、Git daemon 地址 | 提供构建节点可达的入口、内部 DNS、证书和防火墙规则。`*.svc.cluster.local` 只用于集群内连接，不直接下发给集群外构建节点；限制 Artifact Manager 管理接口的网络可达范围。 |
 | Runner 执行环境 | 现有 Runner 调用 Docker CLI 创建 Job 容器 | 使用独立 Docker 构建节点；若要在只有 containerd 的 Kubernetes 节点上执行 Job，先改造执行器，不能将 containerd socket 当作 Docker API。 |
 | 备份与凭据 | 文档以 OBS 保存 etcd、ES 备份；Manifest 已配置 etcd 和 ES 的 TLS/认证，但尚无备份任务或自动轮换 | 将备份目的地换成实际可用的对象存储或备份系统，验证 etcd 逻辑快照与 ES 快照仓库恢复；为生产落实 Secret 管理和轮换。不能用在线 PVC 文件复制代替一致性备份。 |
-| 应用组件 | 目录已有 frontend、Gateway、apiserver、Scheduler、Controller Manager、Git Server、Artifact Manager 及可选 Runner DaemonSet 模板 | 提供实际镜像、Secret、内网入口与构建节点路由；仅应用模板不能替代私有入口隔离和端到端验收。 |
+| 应用组件 | 目录已有 frontend、Gateway、apiserver、Scheduler、Controller Manager、Git Server 和 Artifact Manager 模板；Runner 在 Kubernetes 外部署 | 提供实际镜像、Secret、内网入口与构建节点路由；仅应用模板不能替代私有入口隔离和端到端验收。 |
 
 首次部署前先检查 `kubectl get storageclass`、`kubectl get nodes -L kubernetes.io/hostname,topology.kubernetes.io/zone`，并确认 CSI 能创建所需 PVC。沿用 CCE 模板的 3 成员集群时，仍按 [部署说明](../../../deploy/kubernetes/README.md) 的顺序仅执行一次 ES 初始引导；自建环境也不能在已有集群恢复时重新应用引导配置。适配完成后，至少验证三个 etcd 成员健康、ES 集群与分片健康、PVC 在节点故障后的恢复路径，以及从实际 Runner/Job 容器到各内部入口的访问。
 

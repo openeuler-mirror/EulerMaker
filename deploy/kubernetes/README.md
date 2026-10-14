@@ -8,7 +8,7 @@
 
 确认 CCE 已安装 Everest CSI，所选可用区提供 SSD EVS。为至少 3 个 etcd 节点设置空值标签 `node-role.kubernetes.io/etcd=`，为另外至少 3 个 Elasticsearch 节点设置 `node-role.kubernetes.io/elasticsearch=`；两个 StatefulSet 都要求副本分布在不同节点。可用 `kubectl get nodes` 的 ROLES 列核对。
 
-ebs-apiserver、Gateway、Scheduler、Controller Manager 和 Git Server 只调度到带 `node-role.kubernetes.io/ebs-control-plane=` 标签的节点。部署前为目标节点设置该标签并核对容量。
+ebs-apiserver、Gateway、frontend、Scheduler、Controller Manager 和 Git Server 只调度到带 `node-role.kubernetes.io/ebs-control-plane=` 标签的节点。部署前为目标节点设置该标签并核对容量。
 
 在 ES 节点持久设置 `vm.max_map_count >= 262144`，核对文件描述符上限，并确保成员间 `:2380`、`:9300` 可达。通过 VPC 和安全组限制数据服务端口，不要暴露到公网。`ebs-disk-ssd-retain` 使用 `WaitForFirstConsumer` 和 `Retain`；删除 PVC 不会自动删除底层 EVS。
 
@@ -286,3 +286,21 @@ kubectl -n ebs create secret generic controller-manager-apiserver-tls \
 kubectl apply -f deploy/kubernetes/controller-manager.yaml
 kubectl -n ebs rollout status deployment/controller-manager --timeout=10m
 ```
+
+## 10. 部署前端
+
+```sh
+kubectl apply -f deploy/kubernetes/frontend.yaml
+kubectl -n ebs rollout status deployment/frontend --timeout=10m
+```
+
+模板只创建前端的 ClusterIP Service。如需从集群外访问，请自行创建指向 `frontend:8080` 的 Ingress，或将前端 Service 配置为 NodePort；访问地址与 TLS 按实际环境配置。不要直接对外暴露 apiserver、Git Server HTTP 管理口或 Artifact Manager 内部接口。
+
+## 运维边界
+
+- 不直接修改 StatefulSet `replicas` 扩缩已有 etcd 集群；使用 etcd `member add/remove` 并调整配置，避免同时重启多数成员。ES 扩缩容须核对分片迁移与节点状态。
+- 定期执行 etcd 逻辑快照和 ES 快照并备份到 OBS；本目录尚无备份任务或 OBS 快照仓库配置。EVS 快照不能代替应用一致性备份。
+- 不要通过删除有数据的 PVC 解决启动故障。Compose 的 `/srv/etcd`、`/srv/es` 不能在服务运行时直接复制到 PVC；迁移前须停止写入并分别制定恢复流程。
+- Secret 明文、TLS 私钥、Git 认证和 MachineAccount 凭据不能写入 ConfigMap、镜像或仓库；轮换证书时先更新信任链，再滚动重启相关组件。
+
+CCE 的 [StorageClass 参数与回收策略](https://support.huaweicloud.com/usermanual-cce/cce_10_0380.html)以及 [etcd StatefulSet 部署示例](https://etcd.io/docs/v3.5/op-guide/kubernetes/)可用于核对集群版本差异。
