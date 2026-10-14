@@ -587,7 +587,7 @@ buildSet = buildSet ∪ direct                                                # 
 
 **3. Job payload `repo` 注入（上轮产物仓库 + 基础仓库两来源，同非 single 类型口径）**：
 
-- `repo` = **本轮（与 Build 同名）RpmRepo 的 `status.repository.contentURL`**（非空时**注入并置首**）+ `BuildInfo.spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序），写为 JSON 对象数组，每项包含 `url` 和整数 `priority`；过程仓 `contentURL` 不追加架构目录；
+- `repo` = **本轮（与 Build 同名）RpmRepo 的 `status.repository.contentURL`**（非空时保留 `artifact:///...` 逻辑地址并置首）+ `BuildInfo.spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序），写为 JSON 对象数组，每项包含 `url` 和整数 `priority`；过程仓 `contentURL` 不追加架构目录；
 - **值语义**：`single` 不经 rpm-repo-controller 发布、本轮 RpmRepo 无 single 构建产物，读到的 contentURL 即建仓时预置的**继承基线**——上一次构建的已发布产物仓库地址（repourl 无本次构建的产物来源，以上轮产物仓库 + 基础仓库填充）；
 - 本轮同名 RpmRepo 的 `contentURL` 为空（无继承基线，如首轮构建）→ 不注入该项，仅 bootstrapRepo 填充；RpmRepo GET 404（对象不存在）→ 同样不注入该项（视同无上轮产物，正常推进）；GET 失败（5xx/超时）→ 返回 error 退避重试（瞬态失败语义，不静默丢弃上轮产物可见性）；
 - 结果为空 → 将配置中的 `repo`（空格分隔字符串或 YAML 列表）归一为 URL 列表；仍为空则不写 `repo`。回退仓的优先级固定为 99。
@@ -1229,10 +1229,10 @@ status:                                             # 创建时恒 Pending/Pendi
    - `unuse_gcc_secure` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `unuse_gcc_secure: true`，否则不写。默认脚本在预装包和 `dnf builddep` 前安装 `gcc_secure`；标记为 true 或 `package_name` 为 `gcc-10` 时跳过。`gcc-10` 特例只由脚本判断，不由管理面写入标记。
    - `prefer` 按当前 spec 的 `buildRequires` 逐项计算，排除 `buildRemoves`；仅在当前优先级仓库层中满足版本约束的提供者至少有两个、并按 16.1 的候选名归一与配置顺序命中项目级 `prefer` 时，记录实际命中的 RPM 基名。按依赖名字典序遍历、首次出现保留以去重，多个名称以空格连接为 JSON 字符串写入当前 Job；无命中或配置为空则不写 `prefer` 键。计算复用 16.1 的分层候选选择与版本比较，不另建一套规则；选择结果须能区分 `prefer` 命中和单候选/最高版本兜底，后两者不写入。只考虑 buildRequires，不将 install 依赖写入 Job `prefer`。Runner 不负责计算。
    - 构建级仓库字段：
-     - `repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时先用共享 `--artifact-manager-addr` 解析为 HTTP(S) URL，再**置首**；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4），上轮产物经该地址可见；后续批次 Job 注入当前已发布版本地址，本轮上游产物由此进入构建环境） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），写成有序 `{url, priority}` 对象数组；结果为空时使用配置中的 `repo` 字符串或列表并归一，仍为空则不写该键；
+     - `repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时保留 `artifact:///...` 逻辑地址并置首；若为 `/repositories/...` 路径，则规范化为 `artifact:///repositories/...`；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4）；后续批次 Job 注入当前已发布版本地址） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），写成有序 `{url, priority}` 对象数组；结果为空时使用配置中的 `repo` 字符串或列表并归一，仍为空则不写该键；
      - `single` 类型专条：`repo` 注入规则见 7.2.3 第 3 条（本轮同名 RpmRepo 的 `contentURL` 非空时置首——single 不经物化推进，恒为创建时预置的继承基线；contentURL 为空/GET 404 → 不注入该项；结果为空 → 使用配置中的 `repo`，归一后仍为空则不写）；
      - `repo` 每项的 `priority` 由来源固定：过程仓为 10，bootstrap 仓与配置回退仓为 99。Job payload 不包含顶层 `repo_priority`；默认脚本将每项 `priority` 配置到 DNF，供 builddep 和构建后安装检查共同使用。
-3. **序列化**：将组装后的白名单字段转为 JSON 字符串写入 Job `spec.payload`；Project/BuildInfo 的 `buildPayload` 输入仍为 YAML。Runner 将 JSON 原样保存为 `/workspace/payload.json`，构建脚本按 JSON 解析，不按行截取长 URL。
+3. **序列化**：将组装后的白名单字段转为 JSON 字符串写入 Job `spec.payload`；Project/BuildInfo 的 `buildPayload` 输入仍为 YAML。Job 中的 `artifact:///...` 不包含管理面内网地址；Runner 适配后应使用其可访问的 Artifact Manager 地址解析该引用，再写入 `/workspace/payload.json`，构建脚本按 JSON 解析。Runner 尚未实现该解析，部署本变更前须完成 Runner 适配。
 4. **来源对象**：已识别配置键取自 reconcile 持有的本 BuildInfo 对象（自身字段，无额外查询，见 15.2.2）；Project 仅由 parentAbortGuard 消费（不重复 GET，见 7.1/7.3 步骤 2.1），不再作为 payload 数据来源；父 Build 为 parentAbortGuard 已持有对象；当前 Snapshot（与本 Build 同名）——`initBuildInfo` 轮为步骤 0 已持有对象、Processing 轮经 7.3 步骤 2.2 显式获取（查询失败返回 error 退避重试，404 视为异常瞬态，不静默跳过注入）；`contentURL` 注入来源的本轮 RpmRepo 亦经步骤 2.2 按需获取（重建分支随建图上下文已持有；同一次持有亦用于 15.10 RpmMetaSources 缓存刷新）。逐 Job `prefer` 取相同 `contentURL` 与 `BuildInfo.spec.bootstrapRepo` 的元数据，创建 Job 前刷新到本轮仓库视图，不使用初始建图时可能已过期的缓存；XML 不可用时不创建新 Job，也不透传全局 `prefer`。`single` 的 contentURL 来源（本轮同名 RpmRepo）按名 get 获取（失败语义见 7.2.3 第 3 条：contentURL 为空/GET 404 不注入该项、5xx 退避重试）；仅配置了非空 `prefer` 时加载对应仓库元数据用于逐 Job 计算，下载失败继续重试并暂停新 Job 派发；连续解析失败达阈值或确定性配置错误按 E-29 停止。
 
 **apiserver 默认与覆写的字段（非 controller 写入，列明以免歧义）**：
@@ -1269,7 +1269,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | Go 类型 | 消费点 |
 |------|------|--------|
-| `status.repository.contentURL` | string | 本轮当前已发布物理版本的 `artifact:///repositories/.../` 逻辑地址（rpm-repo-controller 版本提升时更新；增量轮创建即指向继承版本）；BuildInfo 用共享 `--artifact-manager-addr` 解析为 HTTP(S) URL，供 Job payload `repo` 注入和 RpmMeta 层 XML 下载共用；`single` 的注入来源也是本轮同名 RpmRepo 的本字段（继承基线，见 7.2.3 第 3 条） |
+| `status.repository.contentURL` | string | 本轮当前已发布物理版本的 `artifact:///repositories/.../` 逻辑地址（rpm-repo-controller 版本提升时更新；增量轮创建即指向继承版本）；Job payload 保留逻辑地址，BuildInfo 仅在下载 RpmMeta 层 XML 时用共享 `--artifact-manager-addr` 解析为管理面内网 HTTP(S) URL；`single` 的注入来源也是本轮同名 RpmRepo 的本字段（继承基线，见 7.2.3 第 3 条） |
 | `status.repository.repositoryUID` | string | 当前物理版本标识（溯源；初始内容继承自上一轮已发布版本时为该版本 UID）；本控制器不做发布判定依据（发布判据为 `sourceJobNames`，见下行） |
 | `status.repository.sourceJobNames` | []string | **发布确认门禁凭据**（7.4.6 第 2 条）：本对象已成功消费的累计 Job 名称集合（rpm-repo-controller 成功物化批次后一次 CAS 累计写入，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」）——Succeeded 直接上游最新一代 Job 的 `metadata.name` ∈ 本集合 → 已发布；不在 → 未发布等待下一轮（15.3.2 `metadata.name`）；对象读取自本轮 reconcile 守卫已 GET 的同名 RpmRepo（各检查点复用不重复 GET），无额外查询 |
 | `status.release.phase` | string | reconcile 前置守卫（7.1）判定正式发布失败：值为 `Failed`（稳定终态，E-28）→ 按 6.5 停止派发，等待已有 Job 全部终态后写 `Completed`；其余取值（含 `release` 缺失——整个 `release` 结构为 nil，如尚未进入发布流程）不触发、正常推进；`single` 不查询（7.2.3）。`release` 其余字段（`contentURL` 稳定入口等）不消费（属 Build Controller 消费域） |

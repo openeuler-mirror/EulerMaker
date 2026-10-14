@@ -751,6 +751,8 @@ func (c *Controller) singleContentURL(
 		}
 		return "", controller.ReconcileResult{}, err
 	}
+	round.rpmRepo = repo
+	round.rpmRepoHeld = true
 	if repo.Status.Repository == nil {
 		return c.singleContentURLReady(ctx, round, "")
 	}

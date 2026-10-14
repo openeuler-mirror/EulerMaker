@@ -820,7 +820,7 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
-	want := []any{map[string]any{"url": "http://artifact.example:8081/repositories/v1/repo-1/", "priority": float64(10)}}
+	want := []any{map[string]any{"url": "artifact:///repositories/v1/repo-1/", "priority": float64(10)}}
 	if !reflect.DeepEqual(
 		payloadFields(t, jobs[0].Spec.Payload)["repo"],
 		want,

@@ -560,7 +560,8 @@ func (c *Controller) jobPayload(
 		payload["commit_id"] = entry.CommitID
 	}
 	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
-	repoURLs := repoPayloadURLs(contentURL, bootstrapRepos)
+	repoReference := jobRepositoryReference(round, contentURL)
+	repoURLs := repoPayloadURLs(repoReference, bootstrapRepos)
 	if len(repoURLs) == 0 {
 		// Use an explicitly configured fallback, but emit the same array shape as repositories resolved by the controller.
 		repoURLs = configuredRepoURLs(configured["repo"])
@@ -571,13 +572,27 @@ func (c *Controller) jobPayload(
 	repos := make([]payloadRepo, len(repoURLs))
 	for i, url := range repoURLs {
 		priority := 99
-		if i == 0 && contentURL != "" {
+		if i == 0 && repoReference != "" {
 			priority = 10
 		}
 		repos[i] = payloadRepo{URL: url, Priority: priority}
 	}
 	payload["repo"] = repos
 	return c.marshalPayload(round, payload)
+}
+
+// jobRepositoryReference keeps the RpmRepo's location independent of the controller's internal Artifact Manager
+// address. The controller resolves that location separately when downloading repository metadata.
+func jobRepositoryReference(round *reconcileRound, resolvedURL string) string {
+	if !round.rpmRepoHeld {
+		return resolvedURL
+	}
+	reference := heldContentURL(round)
+	if strings.HasPrefix(reference, "/") {
+		// Bare paths are accepted by the metadata reader; normalize them to the same logical form as new RpmRepo objects.
+		return "artifact://" + reference
+	}
+	return reference
 }
 
 type payloadRepo struct {
@@ -612,12 +627,11 @@ func jobPrefer(depend *specparse.SpecDepend, sources *rpmver.RpmMetaSources, con
 	return matched
 }
 
-// repoPayloadURLs orders the RpmRepo contentURL (first when non-empty) before the bootstrap repo URLs in declaration
-// order.
-func repoPayloadURLs(contentURL string, bootstrapRepos []string) []string {
+// repoPayloadURLs orders the RpmRepo reference (first when non-empty) before the bootstrap repo URLs in declaration order.
+func repoPayloadURLs(repoReference string, bootstrapRepos []string) []string {
 	parts := make([]string, 0, len(bootstrapRepos)+1)
-	if contentURL != "" {
-		parts = append(parts, contentURL)
+	if repoReference != "" {
+		parts = append(parts, repoReference)
 	}
 	parts = append(parts, bootstrapRepos...)
 	return parts

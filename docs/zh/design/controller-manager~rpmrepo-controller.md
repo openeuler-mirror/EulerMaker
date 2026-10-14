@@ -46,7 +46,7 @@ components/controller-manager/pkg/controllers/rpmrepo/
   | --- | --- | --- |
   | `--rpmrepo-max-jobs-per-batch` | `100` | 必须 `> 0` |
   | `--rpmrepo-materialize-retry-limit` | `3` | 必须 `> 0`；物化可重试失败的重试次数上限，首次提交不计入，判定见第八章 |
-- `--artifact-manager-addr` 和 `--artifact-manager-timeout` 是 controller-manager 共享配置。地址供 RpmRepo 客户端和 BuildInfo 解析过程仓地址共用，必须是带 host 的 HTTP(S) URL，且控制器与 Job 容器均可访问；超时默认 `30s`，必须大于零。
+- `--artifact-manager-addr` 和 `--artifact-manager-timeout` 是 controller-manager 共享配置。地址供 RpmRepo 客户端和 BuildInfo 下载过程仓元数据使用，必须是 controller-manager 可访问的带 host 的 HTTP(S) 内网 URL；Job 中保留 `artifact:///...` 逻辑地址，由 Runner 使用 Job 可访问的地址解析。超时默认 `30s`，必须大于零。
 - 框架配置沿用 `controller-manager.md`，不单独覆盖 worker 数和轮询周期；`--controllers` 控制本控制器启停。
 - 物化退避复用框架参数 `--controller-slow-retry-initial-delay`（30s）、`--controller-slow-retry-max-delay`（15m）、`--controller-slow-retry-jitter`（0.2）；计算、预算与等待规则统一见第八章。
 - 配置校验时机：所有静态配置在 `options.Parse` 阶段完成校验，非法时 controller-manager 直接启动失败，不得延迟到单个对象的 reconcile 中处理；

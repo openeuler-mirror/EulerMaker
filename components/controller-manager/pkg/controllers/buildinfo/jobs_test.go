@@ -294,6 +294,45 @@ func TestJobForSpecConstruction(t *testing.T) {
 	}
 }
 
+func TestJobPayloadKeepsArtifactReference(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
+	round := &reconcileRound{
+		key:         testNS + "/" + testBuild,
+		current:     client.SeedBuildInfo(bi),
+		build:       testBuildObj("full"),
+		rpmRepo:     testRpmRepoObj("artifact:///repositories/v1/repo-1/"),
+		rpmRepoHeld: true,
+		failures:    c.newRoundFailures(testNS + "/" + testBuild),
+	}
+	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
+	depend := dependEntry("a")
+	job := c.jobForSpec(round, "a", &depend, snapshot, testImage,
+		"http://artifact.internal:8081/repositories/v1/repo-1/", testBuildResourceRules(), testScriptRef(),
+		"job-x", 1, nil)
+
+	got := payloadFields(t, job.Spec.Payload)["repo"]
+	want := []any{
+		map[string]any{"url": "artifact:///repositories/v1/repo-1/", "priority": float64(10)},
+		map[string]any{"url": "http://bootstrap.local/base/" + testArch, "priority": float64(99)},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("payload.repo = %v, want %v", got, want)
+	}
+}
+
+func TestJobRepositoryReferenceNormalizesArtifactPath(t *testing.T) {
+	round := &reconcileRound{
+		rpmRepo:     testRpmRepoObj("/repositories/v1/repo-1/"),
+		rpmRepoHeld: true,
+	}
+	got := jobRepositoryReference(round, "http://artifact.internal:8081/repositories/v1/repo-1/")
+	if want := "artifact:///repositories/v1/repo-1/"; got != want {
+		t.Fatalf("repository reference = %q, want %q", got, want)
+	}
+}
+
 func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
 	tests := []struct {
 		name        string
