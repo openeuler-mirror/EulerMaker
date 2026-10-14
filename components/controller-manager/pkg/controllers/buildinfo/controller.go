@@ -30,7 +30,7 @@ const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!
 
 // Config carries the BuildInfo controller settings.
 type Config struct {
-	// ArtifactManagerAddr is reachable by this controller and Job containers.
+	// ArtifactManagerAddr is the controller's internal Artifact Manager address for repository metadata requests.
 	ArtifactManagerAddr string
 	// PollPeriod is the PollingSource resync period (--poll-period shared).
 	PollPeriod time.Duration
