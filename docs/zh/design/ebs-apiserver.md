@@ -320,6 +320,27 @@ Job 按 `{project}/{name}` 存在全局资源前缀下。全局 list/watch 监�
 
 etcd store 继续使用 Kubernetes 原生 label selector、field selector、resourceVersion、冲突检测和 watch 语义。
 
+### etcd 传输与客户端证书认证
+
+本节定义 `ebs-apiserver` 与 etcd 的存储连接，以及 etcd 成员间通信的证书边界；不改变 Job、Runner 的存储路径或 API 语义。Compose 仍使用 HTTP 明文 etcd；CCE Manifest 已为 apiserver → etcd 的客户端入口和成员间 peer 连接启用双向 TLS。此处的 etcd CA 和客户端证书与前述 Gateway 等组件访问 apiserver 的内部 mTLS 证书相互独立，不复用私钥或信任域。
+
+| 连接 | 服务端证书与信任 | 客户端证书与信任 |
+| --- | --- | --- |
+| apiserver → etcd `:2379` | 三个 etcd 成员共用一套由 etcd 服务端 CA 签发的 `serverAuth` 证书；apiserver 信任该 CA 并校验连接地址的 DNS SAN | apiserver 持有 `clientAuth` 证书，由专用 etcd 客户端 CA 签发；etcd 用该 CA 强制验证客户端证书 |
+| etcd 成员 ↔ 成员 `:2380` | 三个成员共用一套 `serverAuth`、`clientAuth` 双用途 peer 证书，由专用 peer CA 签发；双向验证 peer 证书与连接地址 | 同左；peer CA 不签发 apiserver 客户端证书 |
+
+- apiserver 使用 `https://etcd-0.etcd:2379`、`https://etcd-1.etcd:2379`、`https://etcd-2.etcd:2379` 连接三个成员。共用服务端证书和 peer 证书均包含 `etcd-N.etcd`、`etcd-N.etcd.ebs.svc`、`etcd-N.etcd.ebs.svc.cluster.local` DNS SAN（N 为 0、1、2）；不带 Namespace 的短名仅用于同 Namespace 内访问。若使用其他 Namespace、集群域名或 IP 直连，必须按实际连接地址签发相应 SAN，不关闭主机名校验。CA 私钥不进入 Pod。
+- [签发脚本](../../../deploy/kubernetes/generate-etcd-apiserver-certs.sh)已覆盖客户端入口服务端、apiserver 客户端及成员间 peer 的三套 CA 和对应证书；[CCE Manifest](../../../deploy/kubernetes/README.md#22-创建-secret)通过 Secret 挂载。脚本固定 `ebs` Namespace 与 `cluster.local` 域名，适配其他环境时须调整 SAN。
+- CCE Manifest 的 etcd 客户端入口和成员间 peer URL 均使用 `https://`。客户端入口配置 `--cert-file`、`--key-file`、`--trusted-ca-file`、`--client-cert-auth=true`；成员间配置 `--peer-cert-file`、`--peer-key-file`、`--peer-trusted-ca-file`、`--peer-client-cert-auth=true`。三个 Pod 共用客户端入口及 peer 私钥；任一副本泄露时须轮换全部成员对应的密钥。共用 peer 证书只能认证集群身份，不能区分具体成员；按成员隔离私钥需另行设计每个 Pod 独立的 Secret 分发。
+- apiserver 已通过 `RecommendedOptions.Etcd.AddFlags` 暴露 `--etcd-servers`、`--etcd-cafile`、`--etcd-certfile`、`--etcd-keyfile`，无需新增 etcd 客户端参数。Compose 可继续使用 HTTP；CCE Manifest 已配置 HTTPS 地址、etcd 服务端 CA、apiserver 客户端证书及私钥，不跳过服务端证书校验。入站的 `--insecure-allow-unauthenticated-clients` 与 etcd 连接无关。
+- etcd 客户端证书证明连接者持有受信任的密钥，但**不提供逐 key 的访问授权**：获信任的客户端实际上可读写 etcd 数据。客户端 CA 只给 apiserver 和受控的备份/恢复任务签发证书；备份凭据单独保管，etcd `:2379` 只允许 apiserver 和受控运维任务访问。健康与 metrics 端口不作为业务数据入口，限制在内部网络。
+
+Kubernetes 部署中，CA bundle 与叶子证书/私钥分别以只读 Secret 或受控证书卷挂载；apiserver 只挂载 etcd 服务端 CA 和自己的客户端证书/私钥，不挂载任何签发 CA 私钥。证书到期前轮换：先让服务端和客户端同时信任新旧 CA，再换发各成员及 apiserver 证书，确认新连接与 watch 重连正常，最后撤销旧 CA；首版允许逐实例重启加载，不要求热更新。三个 etcd 成员逐个重启并保持多数派，apiserver 在成员轮换期间应通过其他成员地址重连。
+
+新集群先部署具备证书的 etcd，再启动仅使用 HTTPS 的 apiserver。存量明文集群切换前暂停写入并取得可验证的 etcd snapshot；优先恢复到独立的 TLS 集群，校验 `/registry/ebs` 下的 Job、Runner、List/Watch 后切换 apiserver，最后关闭旧明文入口。不要对运行中的三成员集群直接批量替换 peer URL、证书或 PVC，也不要用空集群覆盖原数据。
+
+验收至少覆盖：正常读写与 List/Watch；无客户端证书、错误客户端 CA、过期或错误用途证书被拒；apiserver 对错误服务端 CA、错误 DNS SAN 拒绝连接；无 peer 证书或错误 peer CA 不能入群；单成员轮换后集群仍有 quorum；备份和恢复任务在 TLS 下可执行。证书错误应体现在就绪状态和结构化日志中，但日志不得输出私钥、证书正文或 Job/Runner 数据。etcd [传输安全模型](https://etcd.io/docs/v3.5/op-guide/security/)与 Kubernetes [etcd 安全配置](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/)是上述参数的依据。
+
 ### Elasticsearch 存储
 
 ESStore 直接实现 GenericAPIServer 所需的 REST storage 接口：
