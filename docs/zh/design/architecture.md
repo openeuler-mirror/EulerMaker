@@ -371,6 +371,8 @@ Web UI 通过 Artifact API 查询和下载 Completed Artifact。实时日志先�
 
 ## 九、部署
 
+Kubernetes 部署的工作负载、存储、网络和 Runner 边界见 [Kubernetes 部署方案](./kubernetes-deployment.md)。
+
 测试环境使用 `hacks/docker-compose.yml` 启动：
 
 ```text
