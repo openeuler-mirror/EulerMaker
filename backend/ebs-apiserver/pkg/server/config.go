@@ -19,6 +19,15 @@ var defaultBuildTargetTemplate []byte
 //go:embed default-build-resource.yaml
 var defaultBuildResourceTemplate []byte
 
+//go:embed default-artifact-manager-conf.yaml
+var defaultArtifactManagerTemplate []byte
+
+type artifactManagerConfigContent struct {
+	Instances map[string]struct {
+		InternalURL string `json:"internalURL"`
+	} `json:"instances"`
+}
+
 type bootstrapStorage interface {
 	rest.Getter
 	rest.Creater
@@ -33,6 +42,10 @@ func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 	if err := yaml.UnmarshalStrict(defaultBuildResourceTemplate, &resources); err != nil {
 		return err
 	}
+	var artifactManagers artifactManagerConfigContent
+	if err := yaml.UnmarshalStrict(defaultArtifactManagerTemplate, &artifactManagers); err != nil {
+		return err
+	}
 	for _, item := range []struct {
 		name       string
 		visibility ebsv1.ConfigVisibility
@@ -40,6 +53,7 @@ func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 	}{
 		{ebsv1.BuildTargetConfigName, ebsv1.ConfigVisibilityPublic, target},
 		{ebsv1.BuildResourceConfigName, ebsv1.ConfigVisibilityOpsOnly, resources},
+		{ebsv1.ArtifactManagerConfigName, ebsv1.ConfigVisibilityOpsOnly, artifactManagers},
 	} {
 		content, err := yaml.Marshal(item.value)
 		if err != nil {

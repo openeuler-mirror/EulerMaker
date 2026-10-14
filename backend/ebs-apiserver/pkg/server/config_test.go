@@ -162,12 +162,14 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if err := ensureDefaultConfigs(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
-	if store.creates != 2 {
-		t.Fatalf("created %d configs, want 2", store.creates)
+	if store.creates != 3 {
+		t.Fatalf("created %d configs, want 3", store.creates)
 	}
 	target := store.objects[ebsv1.BuildTargetConfigName]
 	resource := store.objects[ebsv1.BuildResourceConfigName]
-	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
+	artifactManager := store.objects[ebsv1.ArtifactManagerConfigName]
+	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly ||
+		artifactManager.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
 		t.Fatal("incorrect default visibility")
 	}
 	var targets ebsv1.BuildTargetContent
@@ -181,11 +183,23 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if resources.Default.Requests["cpu"] != "4" || resources.Default.Requests["memory"] != "8Gi" {
 		t.Fatalf("default resources: %+v", resources.Default)
 	}
+	var artifactManagers artifactManagerConfigContent
+	if err := yaml.UnmarshalStrict([]byte(artifactManager.Spec.Content), &artifactManagers); err != nil {
+		t.Fatal(err)
+	}
+	if got := artifactManagers.Instances["default"].InternalURL; got != "http://artifact-manager:8081" {
+		t.Fatalf("default Compose artifact manager URL: %q", got)
+	}
+	if got := artifactManagers.Instances["art-01"].InternalURL; got != "http://artifact-manager.art-01:8081" {
+		t.Fatalf("default Kubernetes artifact manager URL: %q", got)
+	}
 	target.Spec.Content = "operator change"
+	artifactManager.Spec.Content = "operator artifact manager change"
 	if err := ensureDefaultConfigs(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
-	if store.creates != 2 || store.objects[ebsv1.BuildTargetConfigName].Spec.Content != "operator change" {
+	if store.creates != 3 || store.objects[ebsv1.BuildTargetConfigName].Spec.Content != "operator change" ||
+		store.objects[ebsv1.ArtifactManagerConfigName].Spec.Content != "operator artifact manager change" {
 		t.Fatal("existing Config was overwritten")
 	}
 }

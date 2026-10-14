@@ -20,10 +20,11 @@ type Config struct {
 type ConfigVisibility string
 
 const (
-	ConfigVisibilityPublic  ConfigVisibility = "Public"
-	ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
-	BuildTargetConfigName                    = "build-target"
-	BuildResourceConfigName                  = "build-resource"
+	ConfigVisibilityPublic    ConfigVisibility = "Public"
+	ConfigVisibilityOpsOnly   ConfigVisibility = "OpsOnly"
+	BuildTargetConfigName                      = "build-target"
+	BuildResourceConfigName                    = "build-resource"
+	ArtifactManagerConfigName                  = "artifact-manager-conf"
 )
 
 type ConfigSpec struct {
