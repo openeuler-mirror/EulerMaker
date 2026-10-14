@@ -77,7 +77,7 @@ spec:
 
 - `metadata.name` 是稳定用户标识，与用户 JWT 的 `sub` 一致。
 - `spec.enabled` 控制用户是否可以访问业务 API。
-- `spec.scopes` 必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项；自助注册固定为 `["ebs:user"]`。
+- `spec.scopes` 必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项；注册用户名为 `admin` 时由 apiserver 赋予 `["ebs:admin"]`，其他用户名赋予 `["ebs:user"]`。
 - 管理员标记由受信任内部流程通过 apiserver User API 设置，gateway 不提供对外提升管理员的接口。
 - apiserver IAM 模块验证用户密码或 MachineAccount client secret，gateway 签发 JWT；IAM资源保存gateway鉴权需要的主体状态和token TTL。
 - 普通用户通过公开注册接口创建自己的 User 和初始密码。
@@ -364,7 +364,7 @@ POST /auth/register
 - `username` 必填，必须原样满足 DNS1123 label 约束且不超过 63 个字符；gateway 不做 trim、大小写折叠或其他规范化，避免多个输入映射到同一账号。
 - `password` 必填，长度为 12 到 128 个字符，按客户端提交的原值处理，不做 trim 或 Unicode 规范化。
 - `displayName` 和 `email` 可选；非空 email 必须是合法地址。
-- 客户端不能提交 `metadata`、labels、scopes、`enabled` 或其他 User 字段；新注册 User 的 `spec.enabled` 固定为 `true`、`spec.scopes` 固定为 `["ebs:user"]`。
+- 客户端不能提交 `metadata`、labels、scopes、`enabled` 或其他 User 字段；新注册 User 的 `spec.enabled` 固定为 `true`，`spec.scopes` 由 apiserver 按用户名赋值：`admin` 为 `["ebs:admin"]`，其他用户名为 `["ebs:user"]`。部署时应在开放匿名注册入口前由运维人员注册 `admin`，避免该名称被他人抢注。
 
 gateway 完成请求格式和基础校验后，调用 apiserver 的原子语义注册接口：
 
