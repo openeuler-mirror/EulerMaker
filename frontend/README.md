@@ -42,6 +42,8 @@ EULERMAKER_FRONTEND_PORT=8088 docker compose -f hacks/docker-compose.yml up -d -
 
 前端容器通过同源路径代理 `/auth`、`/apis`、`/artifacts` 和 `/repositories`，浏览器不需要感知 Compose 内部服务地址。
 
+Artifact 和仓库访问还支持 `/art-01/artifacts/...`、`/art-01/repositories/...` 形式：前端 Nginx 去掉实例前缀后转发到对应 Namespace 的 `artifact-manager` Service。未带实例前缀的 `/artifacts/...`、`/repositories/...` 保持转发到 `DEFAULT_ARTIFACT_MANAGER`，Docker Compose 默认是 `artifact-manager:8081`。动态路由的 DNS Resolver 默认读取容器 `/etc/resolv.conf`，也可通过 `NGINX_DNS_RESOLVER` 显式指定；实例命名匹配 `art-` 加数字编号。
+
 ## 检查和构建
 
 ```bash
