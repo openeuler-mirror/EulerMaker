@@ -29,11 +29,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
-      tolerations:
-        - key: node-role.kubernetes.io/control-plane
-          operator: Exists
-          effect: NoSchedule
+        node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: ebs-apiserver
           image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:dev

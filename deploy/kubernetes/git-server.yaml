@@ -46,6 +46,8 @@ spec:
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: true
+      nodeSelector:
+        node-role.kubernetes.io/ebs-control-plane: ""
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch

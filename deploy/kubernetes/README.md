@@ -8,6 +8,8 @@
 
 确认 CCE 已安装 Everest CSI，所选可用区提供 SSD EVS。为至少 3 个 etcd 节点设置空值标签 `node-role.kubernetes.io/etcd=`，为另外至少 3 个 Elasticsearch 节点设置 `node-role.kubernetes.io/elasticsearch=`；两个 StatefulSet 都要求副本分布在不同节点。可用 `kubectl get nodes` 的 ROLES 列核对。
 
+ebs-apiserver、Gateway、Scheduler 和 Git Server 只调度到带 `node-role.kubernetes.io/ebs-control-plane=` 标签的节点。部署前为目标节点设置该标签并核对容量。
+
 在 ES 节点持久设置 `vm.max_map_count >= 262144`，核对文件描述符上限，并确保成员间 `:2380`、`:9300` 可达。通过 VPC 和安全组限制数据服务端口，不要暴露到公网。`ebs-disk-ssd-retain` 使用 `WaitForFirstConsumer` 和 `Retain`；删除 PVC 不会自动删除底层 EVS。
 
 先创建基础资源。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀，当前 Manifest 暂用 `dev` tag 和 `imagePullPolicy: Always`；部署前确认镜像已推送且节点可拉取，正式部署时改用不可变 digest。
@@ -217,4 +219,28 @@ Job 容器由宿主机 Docker 启动并使用宿主机网络，不在 Kubernetes
 ```sh
 kubectl apply -f deploy/kubernetes/git-server.yaml
 kubectl -n ebs rollout status deployment/git-server --timeout=20m
+```
+
+## 7. 部署 Gateway
+
+Gateway 需要独立客户端证书和 JWT 签名密钥；证书须由 apiserver 信任的内部客户端 CA 签发，其 URI SAN 对应 Gateway 身份。在受控主机上生成一次 JWT 密钥文件，文件内容是单个 Base64 字符串，解码后为 32 字节随机密钥：
+
+```sh
+gateway_jwt_dir=/secure/path/to
+install -d -m 0700 "$gateway_jwt_dir"
+umask 077
+openssl rand -base64 32 > "$gateway_jwt_dir/gateway-jwt-secret"
+```
+
+保管该文件并让所有 Gateway 副本使用同一份密钥；重新生成会使已签发的 Token 失效。创建 Kubernetes Secret 时直接使用文件内容，不要再次编码：
+
+```sh
+kubectl -n ebs create secret generic ebs-gateway-apiserver-tls \
+  --from-file=ca.crt="$internal_cert_dir/runtime/server-ca.crt" \
+  --from-file=tls.crt="$internal_cert_dir/runtime/ebs-gateway.crt" \
+  --from-file=tls.key="$internal_cert_dir/runtime/ebs-gateway.key"
+kubectl -n ebs create secret generic ebs-gateway-jwt \
+  --from-file=secret="$gateway_jwt_dir/gateway-jwt-secret"
+kubectl apply -f deploy/kubernetes/ebs-gateway.yaml
+kubectl -n ebs rollout status deployment/ebs-gateway --timeout=10m
 ```

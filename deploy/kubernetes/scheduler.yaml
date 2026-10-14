@@ -30,6 +30,8 @@ spec:
         app.kubernetes.io/name: scheduler
     spec:
       automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: scheduler
           image: swr.cn-north-4.myhuaweicloud.com/eulermaker/scheduler:dev
