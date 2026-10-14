@@ -84,6 +84,24 @@ func TestRegisterCreatesEnabledUserAndCredential(t *testing.T) {
 	}
 }
 
+func TestRegisterAdminReceivesAdminScope(t *testing.T) {
+	users := &fakeUserStorage{}
+	h := &Handler{users: users}
+	req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/users/register", strings.NewReader(`{"username":"admin","password":"correct password"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	response := restful.NewResponse(rec)
+	response.SetRequestAccepts(restful.MIME_JSON)
+	h.register(restful.NewRequest(req), response)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if users.user == nil || len(users.user.Spec.Scopes) != 1 || users.user.Spec.Scopes[0] != "ebs:admin" {
+		t.Fatalf("admin registration has wrong scope: %#v", users.user)
+	}
+}
+
 func TestValidRegistration(t *testing.T) {
 	if !validRegistration("alice", "correct password", "alice@example.com") {
 		t.Fatal("valid registration rejected")

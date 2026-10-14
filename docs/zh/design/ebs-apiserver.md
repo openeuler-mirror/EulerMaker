@@ -183,7 +183,7 @@ POST /internal/iam/v1/machineaccounts/{name}/authenticate
 {"username":"alice"}
 ```
 
-注册接口以 201 返回成功结果，并提供“创建普通 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`、`spec.scopes` 固定为 `["ebs:user"]`，请求不能设置 metadata、labels、scopes、enabled 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。
+注册接口以 201 返回成功结果，并提供“创建 User 和初始凭据”的单一原子语义。`username` 必须满足 DNS1123 label 约束且不超过 63 个字符，密码长度为 12 到 128 个字符，非空 email 必须合法；新 User 的 `spec.enabled` 固定为 `true`，用户名为 `admin` 时 `spec.scopes` 为 `["ebs:admin"]`，其他用户名为 `["ebs:user"]`。请求不能设置 metadata、labels、scopes、enabled 或其他权限相关字段。用户名已存在返回 409，非法请求返回 400。部署时应在开放匿名注册入口前由运维人员注册 `admin`，避免该名称被他人抢注。
 
 apiserver 将 User 对象和 Argon2id 密码哈希通过一次 create-only 请求写入同一 ES 文档。创建成功后账号即可认证；名称已存在返回 409，不需要注册中状态或补偿流程。
 
