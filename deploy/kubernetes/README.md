@@ -8,7 +8,7 @@
 
 确认 CCE 已安装 Everest CSI，所选可用区提供 SSD EVS。为至少 3 个 etcd 节点设置空值标签 `node-role.kubernetes.io/etcd=`，为另外至少 3 个 Elasticsearch 节点设置 `node-role.kubernetes.io/elasticsearch=`；两个 StatefulSet 都要求副本分布在不同节点。可用 `kubectl get nodes` 的 ROLES 列核对。
 
-ebs-apiserver、Gateway、Scheduler 和 Git Server 只调度到带 `node-role.kubernetes.io/ebs-control-plane=` 标签的节点。部署前为目标节点设置该标签并核对容量。
+ebs-apiserver、Gateway、Scheduler、Controller Manager 和 Git Server 只调度到带 `node-role.kubernetes.io/ebs-control-plane=` 标签的节点。部署前为目标节点设置该标签并核对容量。
 
 在 ES 节点持久设置 `vm.max_map_count >= 262144`，核对文件描述符上限，并确保成员间 `:2380`、`:9300` 可达。通过 VPC 和安全组限制数据服务端口，不要暴露到公网。`ebs-disk-ssd-retain` 使用 `WaitForFirstConsumer` 和 `Retain`；删除 PVC 不会自动删除底层 EVS。
 
@@ -272,4 +272,17 @@ Controller Manager 通过 `http://artifact-manager:8081` 访问 Artifact Manager
 ```sh
 kubectl apply -f deploy/kubernetes/artifact-manager.yaml
 kubectl -n ebs rollout status deployment/artifact-manager --timeout=20m
+```
+
+## 9. 部署 Controller Manager
+
+客户端证书的 URI SAN 须对应 Controller Manager 身份，不能复用 Gateway 证书。确认 Git Server 和 Artifact Manager 的 Service 已创建，且 Controller Manager Pod 可访问它们。
+
+```sh
+kubectl -n ebs create secret generic controller-manager-apiserver-tls \
+  --from-file=ca.crt="$internal_cert_dir/runtime/server-ca.crt" \
+  --from-file=tls.crt="$internal_cert_dir/runtime/controller-manager.crt" \
+  --from-file=tls.key="$internal_cert_dir/runtime/controller-manager.key"
+kubectl apply -f deploy/kubernetes/controller-manager.yaml
+kubectl -n ebs rollout status deployment/controller-manager --timeout=10m
 ```
