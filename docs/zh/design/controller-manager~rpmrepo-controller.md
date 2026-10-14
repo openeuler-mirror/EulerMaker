@@ -16,7 +16,7 @@ RpmRepo Controller 是 controller-manager 中负责把构建产物物化为 RPM 
 RpmRepo Controller 运行在现有 `controller-manager` 框架内，建议实现目录为：
 
 ```text
-components/controller-manager/pkg/controllers/rpmrepo/
+backend/controller-manager/pkg/controllers/rpmrepo/
   controller.go            # Controller 定义与 initializer：依赖注入、Source handler 注册、BaseController 组装
   reconciler.go            # Sync(ctx, key) 主流程：键分派、确保对象、选批、恢复、发布驱动、收口
   batch.go                 # 候选 Job 过滤、稳定排序、批次上限、repositoryUID 计算

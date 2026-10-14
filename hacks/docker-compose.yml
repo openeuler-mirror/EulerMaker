@@ -52,7 +52,7 @@ services:
   ebs-apiserver:
     build:
       context: ..
-      dockerfile: components/ebs-apiserver/Dockerfile
+      dockerfile: backend/ebs-apiserver/Dockerfile
     command:
       - --etcd-servers=http://etcd:2379
       - --es-servers=http://elasticsearch:9200
@@ -70,7 +70,7 @@ services:
 
   ebs-gateway:
     build:
-      context: ../components/ebs-gateway
+      context: ../backend/ebs-gateway
     command:
       - --apiserver-addr=https://ebs-apiserver:8443
       - --jwt-secret-file=/run/secrets/ebs_gateway_jwt_secret
@@ -101,7 +101,7 @@ services:
   scheduler:
     build:
       context: ..
-      dockerfile: components/scheduler/Dockerfile
+      dockerfile: backend/scheduler/Dockerfile
     command:
       - --apiserver=https://ebs-apiserver:8443
       - --insecure-skip-verify=true
@@ -115,7 +115,7 @@ services:
   controller-manager:
     build:
       context: ..
-      dockerfile: components/controller-manager/Dockerfile
+      dockerfile: backend/controller-manager/Dockerfile
     command:
       - --apiserver=https://ebs-apiserver:8443
       - --insecure-skip-verify=true
@@ -131,7 +131,7 @@ services:
 
   artifact-manager:
     build:
-      context: ../components/artifact-manager
+      context: ../backend/artifact-manager
     command:
       - --listen=:8081
       - --data-dir=/var/lib/ebs-artifacts
@@ -147,7 +147,7 @@ services:
 
   git-server:
     build:
-      context: ../components/git-server
+      context: ../backend/git-server
     command:
       - --listen-address=:8080
       - --data-dir=/var/lib/ebs-git

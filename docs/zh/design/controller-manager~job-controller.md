@@ -24,7 +24,7 @@ Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史�
 Job Controller 运行在现有 `controller-manager` 框架内，建议实现目录为：
 
 ```text
-components/controller-manager/pkg/controllers/job/
+backend/controller-manager/pkg/controllers/job/
   controller.go       # 初始化、事件注册和 Sync
   reconciler.go       # 纯业务状态判断
   status.go           # Job status 更新与冲突处理

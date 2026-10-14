@@ -75,7 +75,7 @@ Manager 创建共享客户端及事件源工厂，通过显式 initializer 构�
 建议使用以下包结构：
 
 ```text
-components/controller-manager/
+backend/controller-manager/
   cmd/controller-manager/
   pkg/app/
   pkg/controller/

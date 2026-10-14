@@ -23,13 +23,13 @@ Controller Manager currently registers Build, Snapshot, BuildInfo, RpmRepo, Job,
 | Directory | Responsibility |
 | --- | --- |
 | [api](api/README.md) | Independent Go module providing shared `ebs/v1` API types |
-| [components/ebs-apiserver](components/ebs-apiserver/README.md) | Resource APIs, validation, status updates, and persistence |
-| [components/ebs-gateway](components/ebs-gateway/README.md) | External resource access, authentication, authorization, rate limiting, and auditing |
-| [components/controller-manager](components/controller-manager/README.md) | Controller framework and resource reconciliation |
-| [components/scheduler](components/scheduler/README.md) | Job scheduling and Runner binding |
-| [components/runner](components/runner/README.md) | Task execution, heartbeats, and log/artifact uploads |
-| [components/git-server](components/git-server/README.md) | Git repository synchronization, queries, and cloning |
-| [components/artifact-manager](components/artifact-manager/README.md) | Artifacts, logs, process repositories, and formal releases |
+| [backend/ebs-apiserver](backend/ebs-apiserver/README.md) | Resource APIs, validation, status updates, and persistence |
+| [backend/ebs-gateway](backend/ebs-gateway/README.md) | External resource access, authentication, authorization, rate limiting, and auditing |
+| [backend/controller-manager](backend/controller-manager/README.md) | Controller framework and resource reconciliation |
+| [backend/scheduler](backend/scheduler/README.md) | Job scheduling and Runner binding |
+| [backend/runner](backend/runner/README.md) | Task execution, heartbeats, and log/artifact uploads |
+| [backend/git-server](backend/git-server/README.md) | Git repository synchronization, queries, and cloning |
+| [backend/artifact-manager](backend/artifact-manager/README.md) | Artifacts, logs, process repositories, and formal releases |
 | [frontend](frontend/README.md) | Vue 3 Web console with Chinese and English localization |
 | [tools/ebsctl](tools/ebsctl/README.md) | Gateway-based command-line client |
 | [hacks](hacks/docker-compose.yml) | Docker Compose configuration for local development |
@@ -44,7 +44,7 @@ Use a Linux host with Docker Engine and Docker Compose v2. Image builds need acc
 
 Before starting [Compose](hacks/docker-compose.yml):
 
-1. Prepare `hacks/ebs-gateway-jwt-secret` with a Base64-encoded random HMAC key. See the [Gateway README](components/ebs-gateway/README.md) for generation instructions.
+1. Prepare `hacks/ebs-gateway-jwt-secret` with a Base64-encoded random HMAC key. See the [Gateway README](backend/ebs-gateway/README.md) for generation instructions.
 2. Create and check the following host directories, granting read/write access to the corresponding container users. Bind mounts do not inherit directory ownership from the image.
 
 | Host directory | Purpose |
@@ -53,7 +53,7 @@ Before starting [Compose](hacks/docker-compose.yml):
 | `/srv/es` | Elasticsearch data |
 | `/srv/git` | Git repositories |
 | `/srv/artifact` | Artifacts, logs, and RPM repositories |
-Before deploying Runner separately, create a valid MachineAccount and save its `clientID` and `clientSecret` in `hacks/runner-machine-credential.json`; see the [Runner README](components/runner/README.md). Never commit credentials. Runner accesses the host Docker socket: set `DOCKER_GID` to the socket's actual group ID and ensure `/usr/bin/docker` exists. Prepare `/var/lib/ebs-runner` on each Runner node, using the same absolute path on the host and in the container.
+Before deploying Runner separately, create a valid MachineAccount and save its `clientID` and `clientSecret` in `hacks/runner-machine-credential.json`; see the [Runner README](backend/runner/README.md). Never commit credentials. Runner accesses the host Docker socket: set `DOCKER_GID` to the socket's actual group ID and ensure `/usr/bin/docker` exists. Prepare `/var/lib/ebs-runner` on each Runner node, using the same absolute path on the host and in the container.
 
 ### Start and inspect
 
@@ -95,8 +95,8 @@ The backend consists of independent Go modules. Some reference the root `api` mo
 
 ```bash
 (cd api && go test ./...)
-(cd components/ebs-apiserver && go test ./...)
-(cd components/controller-manager && go test ./...)
+(cd backend/ebs-apiserver && go test ./...)
+(cd backend/controller-manager && go test ./...)
 (cd tools/ebsctl && go test ./...)
 ```
 
@@ -110,7 +110,7 @@ npm run build
 npm run dev
 ```
 
-After changing shared API types, follow the [API README](api/README.md) to update DeepCopy code, then run `bash hacks/update-openapi.sh` in `components/ebs-apiserver` to regenerate OpenAPI. Component READMEs provide build commands and runtime options.
+After changing shared API types, follow the [API README](api/README.md) to update DeepCopy code, then run `bash hacks/update-openapi.sh` in `backend/ebs-apiserver` to regenerate OpenAPI. Component READMEs provide build commands and runtime options.
 
 ## Design documentation
 

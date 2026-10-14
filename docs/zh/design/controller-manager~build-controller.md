@@ -21,7 +21,7 @@ Build Controller 根据 Snapshot、BuildInfo 和 RpmRepo 的状态推进 Build �
 Build Controller 运行在现有 `controller-manager` 框架内，建议实现目录为：
 
 ```text
-components/controller-manager/pkg/controllers/build/
+backend/controller-manager/pkg/controllers/build/
   controller.go         # 配置、initializer、PollingSource 事件入队与 BaseController 组装
   reconciler.go         # Sync 入口守卫、单轮时间获取与 phase/stage 分派
   phases.go             # Pending、Prepared、Processing/build、Processing/publish 的业务决策
@@ -67,7 +67,7 @@ Snapshot/BuildInfo/RpmRepo            reconcile（仅经包内 Client）──�
 
 - 分页 List 的 fieldSelector 通过 `PollingSourceFactory.ForResource(gvr, period, options)` 注入；
 - 项目级 List 与子资源创建使用共享 client 的 `ListProjectPage` 与 `Create`；
-- 在 `components/controller-manager/cmd/controller-manager/main.go` 的 `initializers` map 中加入 `build.Initializer(...)`。
+- 在 `backend/controller-manager/cmd/controller-manager/main.go` 的 `initializers` map 中加入 `build.Initializer(...)`。
 
 ### 2.3 PollingSource 装配语义
 

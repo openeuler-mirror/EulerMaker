@@ -20,7 +20,7 @@ Snapshot 的创建及 spec 固化由 Build Controller 完成；Snapshot Controll
 Snapshot Controller 运行在现有 `controller-manager` 框架内，建议实现目录为：
 
 ```text
-components/controller-manager/pkg/controllers/snapshot/
+backend/controller-manager/pkg/controllers/snapshot/
   controller.go       # 初始化、事件注册和 Sync
   reconcile.go        # reconcile 入口、父 Build 读取和目标范围判定
   resolve.go          # 单次状态检查、异步同步提交及解析（固定 worker pool + 轮转派发 + budgetCtx）

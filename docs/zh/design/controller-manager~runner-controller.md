@@ -39,7 +39,7 @@ Runner Controller 的离线超时与 Job Controller 的 Runner 丢失宽限期�
 建议实现目录：
 
 ```text
-components/controller-manager/pkg/controllers/runner/
+backend/controller-manager/pkg/controllers/runner/
   client.go       # 最小 API Client 和共享客户端适配器
   controller.go   # 初始化、事件处理和队列接入
   reconciler.go   # 超时判断、权威确认和状态更新

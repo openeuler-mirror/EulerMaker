@@ -1007,7 +1007,7 @@ Scheduler 已支持使用独立的 mTLS 客户端证书直连 ebs-apiserver，ap
 ## 十三、Go 实现结构
 
 ```text
-components/scheduler/
+backend/scheduler/
 ├── cmd/scheduler/
 │   └── main.go
 ├── pkg/

@@ -29,7 +29,7 @@ BuildInfo Controller 运行在现有 `controller-manager` 框架内。
 建议实现目录：
 
 ```
-components/controller-manager/
+backend/controller-manager/
   pkg/
     clients/
       apiserver/                   # 跨控制器共享的 API 客户端：REST 与通用 CRUD、写错误分类
@@ -64,7 +64,7 @@ components/controller-manager/
 - `Controller` 持有 `BaseController`（队列/Worker）、`Client`（apiserver）、`GitServerClient`、`clock.Clock` 与配置；
 - 构造时注入 `clock.Clock`（`k8s.io/utils/clock`）：生产用 `clock.RealClock{}`，测试用 `k8s.io/utils/clock/testing.FakeClock`；业务代码不得直接调用 `time.Now()` / `time.Since()`（见 9.2）；
 - initializer 负责构造 `Client`、注册 `buildinfos` PollingSource handler 并创建 `BaseController`；
-- 在 `components/controller-manager/cmd/controller-manager/main.go` 的 `initializers` map 中加入 `buildinfo.Initializer(...)`。
+- 在 `backend/controller-manager/cmd/controller-manager/main.go` 的 `initializers` map 中加入 `buildinfo.Initializer(...)`。
 
 事件进入队列及 reconcile 的执行顺序分别见第五章、7.1。
 
@@ -1046,7 +1046,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 
 ### 15.1 资源访问矩阵
 
-依赖的 API 统一经 `components/controller-manager/pkg/controllers/buildinfo/client.go` 的 typed `Client` 方法访问 ebs-apiserver（接口定义见 4.1）；该适配层包装 `pkg/clients/apiserver` 的共享客户端，按 `pkg/source` 的 GVR 常量调用 `Get` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus`，并做响应校验与哨兵错误归一，不直接使用裸 `net/http`。下表“client 方法”即向 reconciler 暴露的方法。资源 × client 方法 × HTTP 路径 × 权限 × 用途的**唯一清单**（各资源字段级消费明细见 15.2~15.7）：
+依赖的 API 统一经 `backend/controller-manager/pkg/controllers/buildinfo/client.go` 的 typed `Client` 方法访问 ebs-apiserver（接口定义见 4.1）；该适配层包装 `pkg/clients/apiserver` 的共享客户端，按 `pkg/source` 的 GVR 常量调用 `Get` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus`，并做响应校验与哨兵错误归一，不直接使用裸 `net/http`。下表“client 方法”即向 reconciler 暴露的方法。资源 × client 方法 × HTTP 路径 × 权限 × 用途的**唯一清单**（各资源字段级消费明细见 15.2~15.7）：
 
 | 资源 | client 方法 | apiserver 路径 | 访问权限 | 用途 |
 |------|-----------|---------------|----------|------|

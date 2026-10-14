@@ -13,7 +13,7 @@ CGO_ENABLED=0 go build -o scheduler ./cmd/scheduler
 从仓库根目录构建镜像：
 
 ```bash
-docker build -f components/scheduler/Dockerfile -t eulermaker/scheduler:dev .
+docker build -f backend/scheduler/Dockerfile -t eulermaker/scheduler:dev .
 ```
 
 ## 运行

@@ -2,13 +2,13 @@ FROM golang:1.27.2-bookworm AS builder
 
 ENV GOPROXY=https://goproxy.cn,direct
 
-WORKDIR /build/components/scheduler
+WORKDIR /build/backend/scheduler
 COPY api/go.mod api/go.sum /build/api/
-COPY components/scheduler/go.mod components/scheduler/go.sum ./
+COPY backend/scheduler/go.mod backend/scheduler/go.sum ./
 RUN go mod download
 
 COPY api /build/api
-COPY components/scheduler .
+COPY backend/scheduler .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /scheduler ./cmd/scheduler
 
 FROM openeuler/openeuler:24.03-lts
