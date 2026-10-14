@@ -16,7 +16,7 @@ CGO_ENABLED=0 go build -o controller-manager ./cmd/controller-manager
 从仓库根目录构建镜像：
 
 ```bash
-docker build -f components/controller-manager/Dockerfile -t eulermaker/controller-manager:dev .
+docker build -f backend/controller-manager/Dockerfile -t eulermaker/controller-manager:dev .
 ```
 
 ## 运行

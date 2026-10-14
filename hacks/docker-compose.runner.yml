@@ -1,7 +1,7 @@
 services:
   ebs-runner:
     build:
-      context: ../components/runner
+      context: ../backend/runner
     command:
       - --gateway=${RUNNER_GATEWAY_URL:-http://127.0.0.1:8080}
       - --artifact-manager=${RUNNER_ARTIFACT_MANAGER_URL:-http://127.0.0.1:8081}

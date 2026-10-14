@@ -23,13 +23,13 @@ EulerMaker 是面向 openEuler 及其衍生发行版的软件包构建系统，�
 | 目录 | 职责 |
 | --- | --- |
 | [api](api/README.md) | 独立 Go module，提供共享的 `ebs/v1` API 类型 |
-| [components/ebs-apiserver](components/ebs-apiserver/README.md) | 资源 API、校验、状态更新与持久化 |
-| [components/ebs-gateway](components/ebs-gateway/README.md) | 外部资源访问入口、认证、授权、限流与审计 |
-| [components/controller-manager](components/controller-manager/README.md) | 控制器框架及资源调谐 |
-| [components/scheduler](components/scheduler/README.md) | Job 调度与 Runner 绑定 |
-| [components/runner](components/runner/README.md) | 任务执行、心跳及日志和产物上传 |
-| [components/git-server](components/git-server/README.md) | Git 仓库同步、查询和克隆服务 |
-| [components/artifact-manager](components/artifact-manager/README.md) | 产物、日志、过程仓和正式发布服务 |
+| [backend/ebs-apiserver](backend/ebs-apiserver/README.md) | 资源 API、校验、状态更新与持久化 |
+| [backend/ebs-gateway](backend/ebs-gateway/README.md) | 外部资源访问入口、认证、授权、限流与审计 |
+| [backend/controller-manager](backend/controller-manager/README.md) | 控制器框架及资源调谐 |
+| [backend/scheduler](backend/scheduler/README.md) | Job 调度与 Runner 绑定 |
+| [backend/runner](backend/runner/README.md) | 任务执行、心跳及日志和产物上传 |
+| [backend/git-server](backend/git-server/README.md) | Git 仓库同步、查询和克隆服务 |
+| [backend/artifact-manager](backend/artifact-manager/README.md) | 产物、日志、过程仓和正式发布服务 |
 | [frontend](frontend/README.md) | Vue 3 Web 控制台，支持中文与英文 |
 | [tools/ebsctl](tools/ebsctl/README.md) | 面向 Gateway 的命令行客户端 |
 | [hacks](hacks/docker-compose.yml) | 本地开发环境的 Docker Compose 配置 |
@@ -44,7 +44,7 @@ Job 和 Runner 存储在 etcd 中，支持 List/Watch；其他业务资源和 IA
 
 在启动 [Compose](hacks/docker-compose.yml) 前：
 
-1. 准备 `hacks/ebs-gateway-jwt-secret`，内容为 Base64 编码的随机 HMAC 密钥，生成方法见 [Gateway README](components/ebs-gateway/README.md)。
+1. 准备 `hacks/ebs-gateway-jwt-secret`，内容为 Base64 编码的随机 HMAC 密钥，生成方法见 [Gateway README](backend/ebs-gateway/README.md)。
 2. 创建并检查以下宿主机目录，确保对应容器用户具有读写权限。绑定挂载不会自动继承镜像内目录的所有权。
 
 | 宿主机目录 | 用途 |
@@ -53,7 +53,7 @@ Job 和 Runner 存储在 etcd 中，支持 List/Watch；其他业务资源和 IA
 | `/srv/es` | Elasticsearch 数据 |
 | `/srv/git` | Git 仓库 |
 | `/srv/artifact` | 产物、日志及 RPM 仓库 |
-Runner 独立部署前，还需在系统中创建有效的 MachineAccount，并将其 `clientID` 和 `clientSecret` 写入 `hacks/runner-machine-credential.json`，格式见 [Runner README](components/runner/README.md)。不要提交凭据文件。Runner 使用宿主机 Docker socket：设置 `DOCKER_GID` 为该 socket 的实际组 ID，并确认宿主机存在 `/usr/bin/docker`。在 Runner 节点准备 `/var/lib/ebs-runner`，且宿主机与容器内必须使用相同的绝对路径。
+Runner 独立部署前，还需在系统中创建有效的 MachineAccount，并将其 `clientID` 和 `clientSecret` 写入 `hacks/runner-machine-credential.json`，格式见 [Runner README](backend/runner/README.md)。不要提交凭据文件。Runner 使用宿主机 Docker socket：设置 `DOCKER_GID` 为该 socket 的实际组 ID，并确认宿主机存在 `/usr/bin/docker`。在 Runner 节点准备 `/var/lib/ebs-runner`，且宿主机与容器内必须使用相同的绝对路径。
 
 ### 启动与检查
 
@@ -95,8 +95,8 @@ Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认�
 
 ```bash
 (cd api && go test ./...)
-(cd components/ebs-apiserver && go test ./...)
-(cd components/controller-manager && go test ./...)
+(cd backend/ebs-apiserver && go test ./...)
+(cd backend/controller-manager && go test ./...)
 (cd tools/ebsctl && go test ./...)
 ```
 
@@ -110,7 +110,7 @@ npm run build
 npm run dev
 ```
 
-修改共享 API 类型后，按 [API README](api/README.md) 更新 DeepCopy，并在 `components/ebs-apiserver` 中执行 `bash hacks/update-openapi.sh` 更新 OpenAPI。各组件的构建命令和运行参数见对应 README。
+修改共享 API 类型后，按 [API README](api/README.md) 更新 DeepCopy，并在 `backend/ebs-apiserver` 中执行 `bash hacks/update-openapi.sh` 更新 OpenAPI。各组件的构建命令和运行参数见对应 README。
 
 ## 设计文档
 

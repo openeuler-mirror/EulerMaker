@@ -2,7 +2,7 @@
 
 ## 概述
 
-`ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `components/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
+`ebs-apiserver` 是 EulerMaker 的资源 API 服务，代码位于 `backend/ebs-apiserver`。服务基于 `k8s.io/apiserver` 的 `GenericAPIServer`，提供 Kubernetes 风格的 REST API、`/status` 子资源，以及按资源类型选择的 etcd 或 Elasticsearch 持久化能力。
 
 apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块，提供 User、MachineAccount 资源及相关认证接口。
 
@@ -18,7 +18,7 @@ apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块，提供 User、Ma
 client / ebs-gateway
         │
         ▼
-components/ebs-apiserver
+backend/ebs-apiserver
         │
         ├── k8s.io/apiserver GenericAPIServer
         │   ├── REST storage
@@ -39,7 +39,7 @@ components/ebs-apiserver
 ## 项目结构
 
 ```
-components/ebs-apiserver/
+backend/ebs-apiserver/
 ├── cmd/server/main.go                 # 进程入口
 ├── pkg/
 │   ├── apis/ebs/
@@ -673,7 +673,7 @@ Content-Type: application/json
 入口为：
 
 ```text
-components/ebs-apiserver/cmd/server/main.go
+backend/ebs-apiserver/cmd/server/main.go
 ```
 
 关键默认参数：
@@ -690,7 +690,7 @@ IAM 模块只增加 `--enable-iam` 这一项启动配置。User、MachineAccount
 示例：
 
 ```bash
-cd components/ebs-apiserver
+cd backend/ebs-apiserver
 go run ./cmd/server \
   --etcd-servers=http://localhost:2379 \
   --es-servers=http://localhost:9200 \
@@ -703,7 +703,7 @@ go run ./cmd/server \
 组件使用顶层 `Dockerfile` 构建镜像，它基于 openEuler 构建并运行：
 
 ```bash
-cd components/ebs-apiserver
+cd backend/ebs-apiserver
 docker build -t ebs-apiserver:latest .
 ```
 

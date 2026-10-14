@@ -8,6 +8,6 @@
 ./hacks/update-codegen.sh
 ```
 
-随后在 `components/ebs-apiserver` 下运行 `./hacks/update-openapi.sh`，同步更新服务端 OpenAPI 定义。
+随后在 `backend/ebs-apiserver` 下运行 `./hacks/update-openapi.sh`，同步更新服务端 OpenAPI 定义。
 
 所有公共 API 类型的 DeepCopy 方法统一由生成器写入 `ebs/v1/zz_generated.deepcopy.go`。脚本使用专用临时目录，重复执行不会在仓库根目录生成额外的 import-path 目录。

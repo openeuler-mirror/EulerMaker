@@ -4,14 +4,14 @@ ENV GOPROXY=https://goproxy.cn,direct
 ENV CGO_ENABLED=0
 ENV GOOS=linux
 
-WORKDIR /build/components/ebs-apiserver
+WORKDIR /build/backend/ebs-apiserver
 
 COPY api/go.mod api/go.sum /build/api/
-COPY components/ebs-apiserver/go.mod components/ebs-apiserver/go.sum ./
+COPY backend/ebs-apiserver/go.mod backend/ebs-apiserver/go.sum ./
 RUN go mod download
 
 COPY api /build/api
-COPY components/ebs-apiserver .
+COPY backend/ebs-apiserver .
 RUN go mod tidy && go build -ldflags="-s -w" -o ebs-apiserver ./cmd/server/
 
 FROM openeuler/openeuler:24.03-lts
@@ -24,7 +24,7 @@ RUN groupadd ebs && useradd -g ebs -s /sbin/nologin ebs
 
 WORKDIR /app
 
-COPY --from=builder /build/components/ebs-apiserver/ebs-apiserver .
+COPY --from=builder /build/backend/ebs-apiserver/ebs-apiserver .
 
 RUN mkdir -p /etc/ebs/certs && \
     chown -R ebs:ebs /app /etc/ebs

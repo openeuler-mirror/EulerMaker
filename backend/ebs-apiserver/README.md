@@ -22,7 +22,7 @@ CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
 在仓库根目录构建容器镜像：
 
 ```bash
-docker build -f components/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:dev .
+docker build -f backend/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:dev .
 ```
 
 ## 构建环境配置
