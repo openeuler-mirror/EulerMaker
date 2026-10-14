@@ -1,6 +1,6 @@
 # CCE 部署 Manifest（自建集群适配模板）
 
-本目录提供 EulerMaker 的 CCE 部署模板。etcd 和 Elasticsearch 各部署 3 个成员，每个 etcd 成员独占 100Gi EVS 卷，每个 Elasticsearch 成员独占 1Ti EVS 卷；Git Server 和 Artifact Manager 分别使用单实例独占 PVC。容量和资源请求是起始值，上线前按数据量与压测结果调整。自建 Kubernetes 集群须按实际环境调整存储、节点和网络，不直接应用 CCE 专用 StorageClass。
+本目录提供 EulerMaker 的 CCE 部署模板。etcd 和 Elasticsearch 各部署 3 个成员，每个 etcd 成员独占 100Gi EVS 卷，每个 Elasticsearch 成员独占 1Ti EVS 卷；Git Server 使用独占 PVC，Artifact Manager 使用专用节点的 `/srv/artifacts` 本地目录。容量和资源请求是起始值，上线前按数据量与压测结果调整。自建 Kubernetes 集群须按实际环境调整存储、节点和网络，不直接应用 CCE 专用 StorageClass。
 
 以下按首次部署顺序组织。不要对整个目录执行 `kubectl apply -f`：`elasticsearch-bootstrap.yaml` 只能用于首次建群。已有数据的集群须制定独立迁移和恢复方案。
 
@@ -243,4 +243,33 @@ kubectl -n ebs create secret generic ebs-gateway-jwt \
   --from-file=secret="$gateway_jwt_dir/gateway-jwt-secret"
 kubectl apply -f deploy/kubernetes/ebs-gateway.yaml
 kubectl -n ebs rollout status deployment/ebs-gateway --timeout=10m
+```
+
+## 8. 部署 Artifact Manager
+
+Artifact Manager 通过 Gateway 的 `/auth/check` 验证 Runner Token，因此先确认 Gateway 已就绪。只给存放 Artifact 数据的节点设置空值标签 `node-role.kubernetes.io/artifact=`，并在该节点预先挂载 `/srv`、创建 `/srv/artifacts`。模板使用 `hostPath` 的 `Directory` 类型；目录不存在时 Pod 会启动失败，不会自动写入节点根文件系统。不要给多个持有不同数据的节点打同一标签；节点故障时须先恢复数据，再调整标签或启动 Pod。本地目录不提供自动故障转移，应单独安排备份。
+
+在 Artifact 节点上以 root 执行以下命令。`findmnt /srv` 必须显示预期的数据盘，否则先停止，不要在节点根盘创建目录。容器内的 `ebs` 用户需要对挂载目录有写权限；模板的 `fsGroup: 1000` 不保证自动修改 `hostPath` 权限，因此将目录的组设为 `1000` 并开放组写入。`2` 设置 setgid，使新建子目录继承该组。
+
+```sh
+findmnt /srv
+mkdir -p /srv/artifacts
+stat -c '%U:%G %a %n' /srv/artifacts
+chgrp 1000 /srv/artifacts
+chmod 2770 /srv/artifacts
+stat -c '%U:%G %a %n' /srv/artifacts
+```
+
+不要对已有大量产物递归执行 `chown`；若迁入了旧数据，需单独检查其中不可写的目录。当前模板由宿主机预置权限，不使用 root initContainer；如需在 Pod 启动时自动修复，只应针对挂载目录顶层做有限的权限调整。
+
+```sh
+kubectl label node <artifact-node> node-role.kubernetes.io/artifact=
+kubectl get nodes -l node-role.kubernetes.io/artifact
+```
+
+Controller Manager 通过 `http://artifact-manager:8081` 访问 Artifact Manager 的集群内 Service，用于管理请求和读取仓库元数据；下发给 Job 的过程仓地址仍为 `artifact:///...` 逻辑地址，由 Runner 使用其可访问的地址解析。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
+
+```sh
+kubectl apply -f deploy/kubernetes/artifact-manager.yaml
+kubectl -n ebs rollout status deployment/artifact-manager --timeout=20m
 ```
