@@ -92,3 +92,28 @@ func TestRunnerAndScriptAuthorization(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigAuthorization(t *testing.T) {
+	a := projectAuthorizer(t)
+	ordinary := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
+	ops := identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}
+	for _, test := range []struct {
+		who    identity.Principal
+		name   string
+		method string
+		allow  bool
+	}{
+		{ordinary, "artifact-manager-conf", http.MethodGet, false},
+		{ops, "artifact-manager-conf", http.MethodGet, true},
+		{ops, "artifact-manager-conf", http.MethodPut, true},
+		{ops, "build-target", http.MethodDelete, false},
+		{ops, "build-resource", http.MethodDelete, false},
+		{ops, "artifact-manager-conf", http.MethodDelete, false},
+		{ops, "custom", http.MethodDelete, true},
+	} {
+		route := Route{Resource: "configs", Name: test.name, Method: test.method}
+		if err := a.Authorize(context.Background(), test.who, route); (err == nil) != test.allow {
+			t.Errorf("Authorize(%s, %s, %s) error=%v, want allow=%v", test.who.Scope, test.name, test.method, err, test.allow)
+		}
+	}
+}

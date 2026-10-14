@@ -27,7 +27,7 @@ docker build -f backend/ebs-apiserver/Dockerfile -t eulermaker/ebs-apiserver:dev
 
 ## 构建环境配置
 
-启动时以 create-only 方式初始化集群级 `Config/build-target`（公开读取）和 `Config/build-resource`（仅 Ops/Admin/System 读取），不覆盖已有对象；ES alias 为 `ebs-configs`。两者的业务 YAML 保存在 `spec.content` 中。
+启动时以 create-only 方式初始化集群级 `Config/build-target`（公开读取）、`Config/build-resource` 和 `Config/artifact-manager-conf`（后两者仅 Ops/Admin 读取），不覆盖已有对象；ES alias 为 `ebs-configs`。业务 YAML 保存在 `spec.content` 中。
 
 ```yaml
 apiVersion: ebs/v1

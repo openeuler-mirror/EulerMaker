@@ -1,0 +1,5 @@
+instances:
+  default:
+    internalURL: http://artifact-manager:8081
+  art-01:
+    internalURL: http://artifact-manager.art-01:8081

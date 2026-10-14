@@ -95,10 +95,19 @@ func authorizeConfig(who identity.Principal, route Route) error {
 	if route.Subresource != "" {
 		return deny("Config subresource is not exposed")
 	}
-	if route.Method == http.MethodDelete && (route.Name == "build-target" || route.Name == "build-resource") {
+	if route.Method == http.MethodDelete && isBuiltInConfig(route.Name) {
 		return deny("built-in Config cannot be deleted")
 	}
 	return nil
+}
+
+func isBuiltInConfig(name string) bool {
+	switch name {
+	case "build-target", "build-resource", "artifact-manager-conf":
+		return true
+	default:
+		return false
+	}
 }
 
 func authorizeScript(who identity.Principal, route Route) error {

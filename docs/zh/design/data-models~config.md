@@ -8,15 +8,17 @@
 |------|----------|--------|-------------|
 | `Config/build-target` | 支持的 OS、Arch 和构建镜像 | 集群级，`Public` | `spec.runtimeSpec.image` |
 | `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
+| `Config/artifact-manager-conf` | Artifact Manager 实例与内部管理地址 | 集群级，`OpsOnly` | 当前不写入 Job |
 
-`Config` 对象只验证通用元数据、可见性和内容大小，不在 apiserver 解码业务内容。使用方必须解析、校验并明确处理非法内容；当前两份配置的业务结构见第 2、3 章，公共资源字段见 [数据模型](data-models.md)。
+`Config` 对象只验证通用元数据、可见性和内容大小，不在 apiserver 解码业务内容。使用方必须解析、校验并明确处理非法内容；配置的业务结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
 
 - [构建目标内容](#2-构建目标内容)
 - [构建资源内容](#3-构建资源内容)
+- [Artifact Manager 实例内容](#4-artifact-manager-实例内容)
 
 ### 1.1 Config 公共资源与可见性
 
-`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。首批对象为 `build-target` 和 `build-resource`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin 读取。
+`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。内置对象为 `build-target`、`build-resource` 和 `artifact-manager-conf`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin 读取。
 
 ```yaml
 apiVersion: ebs/v1
@@ -39,9 +41,9 @@ PUT      /apis/ebs/v1/configs/{name}
 PATCH    /apis/ebs/v1/configs/{name}
 ```
 
-上述 HEAD 由 Gateway 内部读取 Config 后响应；apiserver 通用资源路由本身不注册 HEAD。非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。两个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
+上述 HEAD 由 Gateway 内部读取 Config 后响应；apiserver 通用资源路由本身不注册 HEAD。非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。三个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
 
-apiserver 仅校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限，不解析目标 OS、镜像或资源数量。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设 `Public` 与 `OpsOnly`。内容错误可能成功保存：Build 创建方、BuildInfo Controller 和前端必须在使用前解析并按第 2、3 章校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
+apiserver 仅校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限，不解析具体业务内容。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设置相应可见性。内容错误可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
 
 ## 2. 构建目标内容
 
@@ -163,7 +165,7 @@ Job 创建沿用确定性名称及幂等流程：已存在的同一任务 Job �
 - 旧工程不受支持的目标仍显示原值并标注“不再支持”；不静默删除或替换。未修改的旧目标不阻止保存其他工程配置。
 - 发起 Build 时，对不支持的目标禁用提交并给出提示；最终仍以 apiserver 校验为准。
 
-ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改变其路径。两个内置对象不允许 delete，watch 不支持。不导入镜像仓库凭据。
+ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改变其路径。内置对象不允许 delete，watch 不支持。不导入镜像仓库凭据。
 
 ### 2.7 实现与验收
 
@@ -246,3 +248,24 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 更新整张表必须携带 `metadata.resourceVersion`；发生 409 时重新读取并按包名合并用户的修改，不得只替换版本重放旧对象。批量生成内容按包名稳定排序。规模达到数千至数万包时，应对最终序列化大小、请求上限及解析耗时做压测；BuildInfo Controller 可按 UID/resourceVersion 缓存已验证的解析结果，但每轮先读取当前对象，缓存失效或解析失败时必须停止新 Job 派发。首版不支持按软件包的独立 REST API 或存储分片。
 
 `Config/build-resource` 仅允许 Ops/Admin 经 Gateway 读取或写入；BuildInfo Controller 使用内部身份直连 apiserver 读取。Gateway 不允许删除该内置对象，也不提供 Watch 或 `/status`。
+
+## 4. Artifact Manager 实例内容
+
+`Config/artifact-manager-conf` 记录实例标识到内部管理面 URL 的映射，默认 `visibility: OpsOnly`。`instances` 的键为 `default` 或 `art-` 加数字编号；`default` 对应 Docker Compose 的服务地址，`art-01` 对应首个 Kubernetes 实例。`internalURL` 是控制面可访问的 HTTP(S) 服务地址，不是 Runner 上传地址或浏览器公开地址。
+
+```yaml
+apiVersion: ebs/v1
+kind: Config
+metadata:
+  name: artifact-manager-conf
+spec:
+  visibility: OpsOnly
+  content: |
+    instances:
+      default:
+        internalURL: http://artifact-manager:8081
+      art-01:
+        internalURL: http://artifact-manager.art-01:8081
+```
+
+apiserver 在 Ready 前从 `default-artifact-manager-conf.yaml` 以 create-only 语义初始化该对象，已有内容不覆盖。Gateway 仅允许 Ops/Admin 读取和修改，不允许删除。当前仅提供配置存储和默认值；Controller Manager、Runner 与前端尚未从此对象选择实例，仍沿用各自现有的地址配置。
