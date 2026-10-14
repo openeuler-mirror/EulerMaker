@@ -12,7 +12,7 @@ ebs-apiserver、Gateway、frontend、Scheduler、Controller Manager 和 Git Serv
 
 在 ES 节点持久设置 `vm.max_map_count >= 262144`，核对文件描述符上限，并确保成员间 `:2380`、`:9300` 可达。通过 VPC 和安全组限制数据服务端口，不要暴露到公网。`ebs-disk-ssd-retain` 使用 `WaitForFirstConsumer` 和 `Retain`；删除 PVC 不会自动删除底层 EVS。
 
-先创建基础资源。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀，当前 Manifest 暂用 `dev` tag 和 `imagePullPolicy: Always`；部署前确认镜像已推送且节点可拉取，正式部署时改用不可变 digest。
+先创建基础资源。`namespace.yaml` 只创建控制面 `ebs` 命名空间；首个 Artifact Manager 实例的 `art-01` 命名空间由其自身 Manifest 创建，本模板只部署这一个实例。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀，当前 Manifest 暂用 `dev` tag 和 `imagePullPolicy: Always`；部署前确认镜像已推送且节点可拉取，正式部署时改用不可变 digest。
 
 ```sh
 kubectl apply -f deploy/kubernetes/namespace.yaml
@@ -247,7 +247,7 @@ kubectl -n ebs rollout status deployment/ebs-gateway --timeout=10m
 
 ## 8. 部署 Artifact Manager
 
-Artifact Manager 通过 Gateway 的 `/auth/check` 验证 Runner Token，因此先确认 Gateway 已就绪。只给存放 Artifact 数据的节点设置空值标签 `node-role.kubernetes.io/artifact=`，并在该节点预先挂载 `/srv`、创建 `/srv/artifacts`。模板使用 `hostPath` 的 `Directory` 类型；目录不存在时 Pod 会启动失败，不会自动写入节点根文件系统。不要给多个持有不同数据的节点打同一标签；节点故障时须先恢复数据，再调整标签或启动 Pod。本地目录不提供自动故障转移，应单独安排备份。
+`artifact-manager.yaml` 先创建 `art-01` 命名空间，再在其中创建 Service 和 Deployment。Artifact Manager 通过 `ebs` 命名空间 Gateway 的 `/auth/check` 验证 Runner Token，部署前先确认 Gateway 已就绪。只给存放 Artifact 数据的节点设置空值标签 `node-role.kubernetes.io/art-01=`，并在该节点预先挂载 `/srv`、创建 `/srv/artifacts`。模板使用 `hostPath` 的 `Directory` 类型；目录不存在时 Pod 会启动失败，不会自动写入节点根文件系统。不要给多个持有不同数据的节点打同一标签；节点故障时须先恢复数据，再调整标签或启动 Pod。本地目录不提供自动故障转移，应单独安排备份。
 
 在 Artifact 节点上以 root 执行以下命令。`findmnt /srv` 必须显示预期的数据盘，否则先停止，不要在节点根盘创建目录。容器内的 `ebs` 用户需要对挂载目录有写权限；模板的 `fsGroup: 1000` 不保证自动修改 `hostPath` 权限，因此将目录的组设为 `1000` 并开放组写入。`2` 设置 setgid，使新建子目录继承该组。
 
@@ -263,15 +263,17 @@ stat -c '%U:%G %a %n' /srv/artifacts
 不要对已有大量产物递归执行 `chown`；若迁入了旧数据，需单独检查其中不可写的目录。当前模板由宿主机预置权限，不使用 root initContainer；如需在 Pod 启动时自动修复，只应针对挂载目录顶层做有限的权限调整。
 
 ```sh
-kubectl label node <artifact-node> node-role.kubernetes.io/artifact=
-kubectl get nodes -l node-role.kubernetes.io/artifact
+kubectl label node <artifact-node> node-role.kubernetes.io/art-01=
+kubectl get nodes -l node-role.kubernetes.io/art-01
 ```
 
-Controller Manager 通过 `http://artifact-manager:8081` 访问 Artifact Manager 的集群内 Service，用于管理请求和读取仓库元数据；下发给 Job 的过程仓地址仍为 `artifact:///...` 逻辑地址，由 Runner 使用其可访问的地址解析。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
+Controller Manager 使用 `artifact-manager.art-01:8081` 访问 Artifact Manager。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。下发给 Job 的过程仓地址仍为 `artifact:///...` 逻辑地址，由 Runner 使用其可访问的地址解析。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
+
+如果已经在 `ebs` 部署旧版 Artifact Manager，迁移前须停止旧 Deployment，确认其 Pod 已退出，避免两个实例同时写入同一 `/srv/artifacts`；保留宿主机数据目录。删除旧 Deployment 和旧 Service 后再应用下方 Manifest，并确认 `art-01` Pod 仍调度到原数据节点，不能因切换命名空间而指向空目录。前端和 Controller Manager 需使用本次更新的镜像或 Manifest，才能访问新地址。
 
 ```sh
 kubectl apply -f deploy/kubernetes/artifact-manager.yaml
-kubectl -n ebs rollout status deployment/artifact-manager --timeout=20m
+kubectl -n art-01 rollout status deployment/artifact-manager --timeout=20m
 ```
 
 ## 9. 部署 Controller Manager

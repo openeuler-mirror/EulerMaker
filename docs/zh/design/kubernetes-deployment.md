@@ -18,7 +18,7 @@ scheduler ── ebs-apiserver
 Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Artifact Manager、Git daemon
 ```
 
-- 首版将前端、Gateway、apiserver、Scheduler、Controller Manager、Git Server 和 Artifact Manager 放在同一 `ebs` Namespace。构建节点可在集群外；不要求 Runner 使用集群 ServiceAccount，也不让 Job 容器直接访问 Kubernetes API。
+- 首版将前端、Gateway、apiserver、Scheduler、Controller Manager 和 Git Server 放在 `ebs` Namespace，Artifact Manager 单独放在 `art-01` Namespace。前端和 Controller Manager 使用 `artifact-manager.art-01` 访问它。构建节点可在集群外；不要求 Runner 使用集群 ServiceAccount，也不让 Job 容器直接访问 Kubernetes API。
 - etcd 和 Elasticsearch 在目标集群中自部署，数据使用持久卷。
 - 自研组件镜像从仓库内各组件 Dockerfile 构建，推送到 `swr.cn-north-4.myhuaweicloud.com/eulermaker/`。模板暂用 `:dev` 标签；投产时应固定到不可变 digest。应用参数由容器 `args` 传递；非敏感参数由部署模板管理，JWT 密钥、仓库凭据、签名凭据和私钥由 Secret 或外部密钥系统只读挂载。
 - `Config` 和 `Script` 是 EulerMaker API 对象，不用 Kubernetes ConfigMap 替代。apiserver 初始化默认对象后，后续修改仍走 EulerMaker API。
@@ -27,13 +27,13 @@ Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Art
 
 | 组件 | Kubernetes 资源 | 首版副本 | 服务与探针 | 约束 |
 | --- | --- | ---: | --- | --- |
-| frontend | Deployment | 3 | ClusterIP `:8080`；`/healthz` | 调度到 `ebs-control-plane` 节点；保持现有 Nginx 的同 Namespace 上游名称 `ebs-gateway`、`artifact-manager` |
+| frontend | Deployment | 3 | ClusterIP `:8080`；`/healthz` | 调度到 `ebs-control-plane` 节点；`/art-xx/artifacts/...` 和 `/art-xx/repositories/...` 按实例 Namespace 转发，原有无前缀路径继续访问配置的 Artifact Manager |
 | ebs-gateway | Deployment | 3 | ClusterIP `:8080`；`/healthz` | 调度到 `ebs-control-plane` 节点；所有副本使用同一个 JWT 签名密钥；当前限流是单副本本地计数 |
 | ebs-apiserver | Deployment | 3 | 仅集群内 ClusterIP `:8443`；HTTPS `/livez`、`/readyz` | 三副本共用 ES 和 etcd 存储；不直接对外暴露 |
 | scheduler | Deployment，`Recreate` | 1 | 仅内部 `:8080/healthz`、`/readyz`、`/metrics` | 当前没有 Leader Election，不允许两实例同时调度；更新时先停旧 Pod |
 | controller-manager | Deployment，`Recreate` | 1 | 仅内部 `:8080/healthz`、`/readyz`、`/metrics` | 当前没有 Leader Election，不允许两实例同时运行控制器 |
 | git-server | Deployment（`Recreate`）+ 独占 PVC | 1 | HTTP `:8080/healthz`、`/readyz`；Git daemon `:9418` | 同一数据目录不能由两个写入实例共享；HTTP 管理口仅供 Controller Manager 访问 |
-| artifact-manager | Deployment（`Recreate`）+ 节点本地目录 | 1 | HTTP `:8081/healthz`、`/readyz` | 固定到唯一带 `node-role.kubernetes.io/artifact=` 标签的节点；Artifact、过程仓、正式仓及临时目录必须在同一文件系统 |
+| artifact-manager | `art-01` Namespace 中的 Deployment（`Recreate`）+ 节点本地目录 | 1 | HTTP `:8081/healthz`、`/readyz` | 固定到唯一带 `node-role.kubernetes.io/art-01=` 标签的节点；Artifact、过程仓、正式仓及临时目录必须在同一文件系统 |
 | etcd | StatefulSet + 每成员独立 EVS PVC | 生产 3；开发 1 | 仅集群内客户端和成员通信地址 | 跨可用区部署前验证成员间延迟 |
 | Elasticsearch | StatefulSet + 每数据节点独立 EVS PVC | 生产至少 3；开发 1 | 集群内 HTTPS、API Key 认证和节点间双向 TLS | 自部署与当前应用兼容的版本；生产配置副本分片和节点反亲和，不以共享卷代替节点副本 |
 
@@ -88,7 +88,7 @@ Gateway JWT、ES API Key、各组件 TLS 私钥、Runner MachineAccount 凭据�
 | 范围 | CCE 模板中的假设 | 自建集群需调整或验证 |
 | --- | --- | --- |
 | 存储类与 PVC | `storageclass.yaml` 使用 Everest CSI、EVS SSD；etcd、ES 的 `volumeClaimTemplates` 和 Git Server 的独立 PVC 引用 `ebs-disk-ssd-retain`；Artifact Manager 使用 `/srv/artifacts` 本地目录 | 换成已安装的 CSI 和适用的块存储类，或预置 PV；同步修改两个 StatefulSet 的 `volumeClaimTemplates` 和 Git Server PVC 的 `storageClassName`。确认独立 `ReadWriteOnce` 卷、`Retain` 回收策略、扩容能力及绑定模式；另在唯一 Artifact 节点准备可写的 `/srv/artifacts` 并安排备份，节点故障后不会自动迁移数据。 |
-| 节点与调度 | etcd 使用空值标签 `node-role.kubernetes.io/etcd=`，ES 使用 `node-role.kubernetes.io/elasticsearch=`；apiserver、Gateway、前端、Scheduler、Controller Manager 和 Git Server 使用 `node-role.kubernetes.io/ebs-control-plane=`；Artifact Manager 使用 `node-role.kubernetes.io/artifact=` | 分别准备至少 3 个 etcd、3 个 ES 专属节点，并只给持有 `/srv/artifacts` 数据的节点打 Artifact 标签；为业务控制面节点设置自定义标签并核对容量。通过 `kubectl get nodes` 的 ROLES 列核对。开发集群若减少 etcd 或 ES 副本，须同步调整初始成员、首次引导名单和 PDB 的 `minAvailable`，不能只改 `replicas`。 |
+| 节点与调度 | etcd 使用空值标签 `node-role.kubernetes.io/etcd=`，ES 使用 `node-role.kubernetes.io/elasticsearch=`；apiserver、Gateway、前端、Scheduler、Controller Manager 和 Git Server 使用 `node-role.kubernetes.io/ebs-control-plane=`；Artifact Manager 使用 `node-role.kubernetes.io/art-01=` | 分别准备至少 3 个 etcd、3 个 ES 专属节点，并只给持有 `/srv/artifacts` 数据的节点打 `art-01` 标签；为业务控制面节点设置自定义标签并核对容量。通过 `kubectl get nodes` 的 ROLES 列核对。开发集群若减少 etcd 或 ES 副本，须同步调整初始成员、首次引导名单和 PDB 的 `minAvailable`，不能只改 `replicas`。 |
 | 节点内核与镜像 | ES 需要宿主机 `vm.max_map_count >= 262144`；镜像来自 `quay.io` 和 `docker.elastic.co` | 在 ES 目标节点持久配置内核参数；确认目标架构有对应镜像，节点能拉取，或改成私有镜像仓库地址。按实际容量重新评估资源请求和 PVC 大小。 |
 | 入口与构建网络 | 控制面使用集群 DNS；Runner 和 Job 容器需访问集群外也可达的 Gateway、Artifact Manager、Git daemon 地址 | 提供构建节点可达的入口、内部 DNS、证书和防火墙规则。`*.svc.cluster.local` 只用于集群内连接，不直接下发给集群外构建节点；限制 Artifact Manager 管理接口的网络可达范围。 |
 | Runner 执行环境 | 现有 Runner 调用 Docker CLI 创建 Job 容器 | 使用独立 Docker 构建节点；若要在只有 containerd 的 Kubernetes 节点上执行 Job，先改造执行器，不能将 containerd socket 当作 Docker API。 |
