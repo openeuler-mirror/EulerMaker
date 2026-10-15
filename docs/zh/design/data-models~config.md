@@ -268,4 +268,4 @@ spec:
         internalURL: http://artifact-manager.art-01:8081
 ```
 
-apiserver 在 Ready 前从 `default-artifact-manager-conf.yaml` 以 create-only 语义初始化该对象，已有内容不覆盖。Gateway 仅允许 Ops/Admin 读取和修改，不允许删除。当前仅提供配置存储和默认值；Controller Manager、Runner 与前端尚未从此对象选择实例，仍沿用各自现有的地址配置。
+apiserver 在 Ready 前从 `default-artifact-manager-conf.yaml` 以 create-only 语义初始化该对象，已有内容不覆盖。Gateway 仅允许 Ops/Admin 读取和修改，不允许删除。RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 选择实例并使用其 `internalURL`，写入带实例名的过程仓和正式仓逻辑 URL；BuildInfo Controller 使用 `instances` 为过程仓元数据查询解析内部地址。Runner 与前端尚未从此对象选择实例。

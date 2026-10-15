@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"net/url"
 	"os"
 	"time"
 
@@ -70,7 +69,6 @@ type RpmRepoControllerOptions struct {
 }
 
 type ArtifactManagerOptions struct {
-	Address string
 	Timeout time.Duration
 }
 
@@ -142,7 +140,6 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Runner.StartupGracePeriod, "runner-startup-grace-period", o.Runner.StartupGracePeriod, "grace period for a new Runner to publish its first heartbeat")
 	f.IntVar(&o.RpmRepo.MaxJobsPerBatch, "rpmrepo-max-jobs-per-batch", o.RpmRepo.MaxJobsPerBatch, "maximum number of Jobs in one repository batch")
 	f.IntVar(&o.RpmRepo.MaterializeRetryLimit, "rpmrepo-materialize-retry-limit", o.RpmRepo.MaterializeRetryLimit, "retryable materialization failures before the batch is abandoned")
-	f.StringVar(&o.ArtifactManager.Address, "artifact-manager-addr", o.ArtifactManager.Address, "internal Artifact Manager address used by the controller")
 	f.DurationVar(&o.ArtifactManager.Timeout, "artifact-manager-timeout", o.ArtifactManager.Timeout, "artifact-manager request timeout")
 	f.IntVar(&o.Snapshot.ResolveWorkers, "snapshot-resolve-workers", o.Snapshot.ResolveWorkers, "concurrent repository resolution workers per Snapshot")
 	f.DurationVar(&o.Snapshot.ResolveBudget, "snapshot-resolve-budget", o.Snapshot.ResolveBudget, "total repository resolution budget per Snapshot reconcile")
@@ -164,12 +161,6 @@ func Parse(args []string) (Options, error) {
 	}
 	if o.API.Server == "" {
 		return o, fmt.Errorf("apiserver is required")
-	}
-	if o.ArtifactManager.Address != "" {
-		parsed, err := url.Parse(o.ArtifactManager.Address)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return o, fmt.Errorf("artifact-manager-addr must be an absolute http or https URL")
-		}
 	}
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")

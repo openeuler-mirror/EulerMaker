@@ -40,6 +40,8 @@ type fakeClient struct {
 	buildResourceRules map[string]*buildResourceRules
 	buildTargetContent *ebsv1.BuildTargetContent
 	buildTargetFailed  bool
+	artifactEndpoints  map[string]string
+	artifactReads      int
 
 	// injected per-operation write failures, consumed once each.
 	injectedWrites map[string]*injectedWrite
@@ -85,10 +87,25 @@ func newFakeClient() *fakeClient {
 		snapshots:          make(map[string]*ebsv1.Snapshot),
 		rpmrepos:           make(map[string]*ebsv1.RpmRepo),
 		buildResourceRules: make(map[string]*buildResourceRules),
+		artifactEndpoints:  map[string]string{"default": "http://artifact.example:8081"},
 		injectedWrites:     make(map[string]*injectedWrite),
 		injectedReads:      make(map[string]*injectedRead),
 		rv:                 100,
 	}
+}
+
+func (f *fakeClient) GetArtifactManagerEndpoints(_ context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.artifactReads++
+	if err := f.consumeInjectedReadLocked("configs"); err != nil {
+		return nil, err
+	}
+	endpoints := make(map[string]string, len(f.artifactEndpoints))
+	for instance, address := range f.artifactEndpoints {
+		endpoints[instance] = address
+	}
+	return endpoints, nil
 }
 
 // InjectWrite makes the next write with the given operation ("update-status" or "create") return a WriteError with the

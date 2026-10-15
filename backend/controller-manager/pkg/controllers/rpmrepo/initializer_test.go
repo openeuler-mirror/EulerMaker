@@ -45,9 +45,7 @@ func (f *stubPollingFactory) Sources() []source.Source {
 }
 
 func initializedConfig() Config {
-	config := testConfig()
-	config.ArtifactManagerAddr = "http://artifact-manager:8080"
-	return config
+	return testConfig()
 }
 
 func initContext(factory source.PollingSourceFactory) manager.InitContext {
@@ -59,23 +57,6 @@ func initContext(factory source.PollingSourceFactory) manager.InitContext {
 			SlowRetryMax:     15 * time.Minute,
 			SlowRetryJitter:  0.2,
 		},
-	}
-}
-
-func TestInitializerStaysInactiveWithoutArtifactManager(t *testing.T) {
-	factory := &stubPollingFactory{}
-	config := testConfig()
-	config.ArtifactManagerAddr = ""
-
-	instance, active, err := Initializer(config)(context.Background(), initContext(factory))
-	if err != nil {
-		t.Fatalf("Initializer: %v", err)
-	}
-	if active || instance != nil {
-		t.Fatalf("an unconfigured controller must stay inactive")
-	}
-	if factory.calls != 0 {
-		t.Fatalf("an inactive controller must not build the polling source")
 	}
 }
 
@@ -113,11 +94,6 @@ func TestInitializerRejectsBadConfiguration(t *testing.T) {
 		config Config
 		init   manager.InitContext
 	}{
-		{
-			name:   "invalid-address",
-			config: func() Config { c := initializedConfig(); c.ArtifactManagerAddr = "ftp://artifact-manager"; return c }(),
-			init:   initContext(&stubPollingFactory{}),
-		},
 		{
 			name:   "zero-retry-limit",
 			config: func() Config { c := initializedConfig(); c.MaterializeRetryLimit = 0; return c }(),

@@ -84,10 +84,6 @@ func TestConfigValidationBranches(t *testing.T) {
 		name   string
 		mutate func(*Config)
 	}{
-		{name: "empty-address", mutate: func(c *Config) { c.ArtifactManagerAddr = "" }},
-		{name: "bad-scheme", mutate: func(c *Config) { c.ArtifactManagerAddr = "ftp://artifact-manager" }},
-		{name: "no-host", mutate: func(c *Config) { c.ArtifactManagerAddr = "http://" }},
-		{name: "unparsable", mutate: func(c *Config) { c.ArtifactManagerAddr = "://bad" }},
 		{name: "timeout", mutate: func(c *Config) { c.ArtifactManagerTimeout = 0 }},
 		{name: "jobs", mutate: func(c *Config) { c.MaxJobsPerBatch = 0 }},
 		{name: "retry-limit", mutate: func(c *Config) { c.MaterializeRetryLimit = 0 }},

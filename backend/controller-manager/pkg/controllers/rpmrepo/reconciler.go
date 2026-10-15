@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"net/url"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,6 +27,8 @@ type reconciler struct {
 	ctx        context.Context
 	key        string
 	project    string
+	instance   string
+	artifacts  ArtifactManagerClient
 	now        metav1.Time
 	nowTime    time.Time
 
@@ -41,6 +44,59 @@ func (r *reconciler) takeSameRoundAttempt() bool {
 	}
 	r.sameRoundAttempts--
 	return true
+}
+
+func (r *reconciler) artifactClient() ArtifactManagerClient {
+	if r.artifacts != nil {
+		return r.artifacts
+	}
+	return r.controller.artifacts
+}
+
+func (r *reconciler) selectArtifactManager(repo *ebsv1.RpmRepo) error {
+	if r.controller.artifactFactory == nil {
+		return nil
+	}
+	project, err := r.controller.client.GetProject(r.ctx, r.project)
+	if err != nil {
+		return classifyReadError(err)
+	}
+	instance := project.Annotations[ebsv1.ProjectArtifactsAnnotation]
+	if instance == "" {
+		instance = "default"
+	}
+	if repo.Status.Repository != nil && repo.Status.Repository.ContentURL != "" {
+		if parsed, parseErr := url.Parse(repo.Status.Repository.ContentURL); parseErr == nil {
+			if parsed.Scheme == "artifact" || parsed.Scheme == "" {
+				instance = parsed.Host
+				if instance == "" {
+					instance = "default"
+				}
+			}
+		}
+	}
+	endpoints, err := r.controller.client.GetArtifactManagerEndpoints(r.ctx)
+	if err != nil {
+		return classifyReadError(err)
+	}
+	address, ok := endpoints[instance]
+	if !ok {
+		return controller.NewPermanentError(fmt.Errorf("artifact manager instance %q is not configured", instance))
+	}
+	r.controller.artifactMu.Lock()
+	artifacts := r.controller.artifactClients[address]
+	if artifacts == nil {
+		artifacts, err = r.controller.artifactFactory(address)
+		if err == nil {
+			r.controller.artifactClients[address] = artifacts
+		}
+	}
+	r.controller.artifactMu.Unlock()
+	if err != nil {
+		return controller.NewPermanentError(err)
+	}
+	r.instance, r.artifacts = instance, artifacts
+	return nil
 }
 
 func (c *Controller) sync(ctx context.Context, key string) (controller.ReconcileResult, error) {
@@ -95,6 +151,9 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 	}
 	if info != nil && info.Status.Phase == ebsv1.BuildInfoFailed {
 		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonBuildInfoFailed, countNoFailure)
+	}
+	if err := r.selectArtifactManager(repo); err != nil {
+		return controller.ReconcileResult{}, err
 	}
 	if repo.Status.Release != nil {
 		return r.reconcileRelease(build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch)

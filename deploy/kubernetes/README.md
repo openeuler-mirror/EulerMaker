@@ -267,7 +267,7 @@ kubectl label node <artifact-node> node-role.kubernetes.io/art-01=
 kubectl get nodes -l node-role.kubernetes.io/art-01
 ```
 
-Controller Manager 使用 `artifact-manager.art-01:8081` 访问 Artifact Manager。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。下发给 Job 的过程仓地址仍为 `artifact:///...` 逻辑地址，由 Runner 使用其可访问的地址解析。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
+RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 从 `Config/artifact-manager-conf` 选择实例内部地址；BuildInfo Controller 也从该 Config 解析过程仓地址。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。下发给 Job 的过程仓地址仍为 `artifact://...` 逻辑地址，由 Runner 使用其可访问的地址解析。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
 
 如果已经在 `ebs` 部署旧版 Artifact Manager，迁移前须停止旧 Deployment，确认其 Pod 已退出，避免两个实例同时写入同一 `/srv/artifacts`；保留宿主机数据目录。删除旧 Deployment 和旧 Service 后再应用下方 Manifest，并确认 `art-01` Pod 仍调度到原数据节点，不能因切换命名空间而指向空目录。前端和 Controller Manager 需使用本次更新的镜像或 Manifest，才能访问新地址。
 

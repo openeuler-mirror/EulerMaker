@@ -55,7 +55,6 @@ func main() {
 		jobcontroller.Name:    jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
 		runnercontroller.Name: runnercontroller.Initializer(runnercontroller.Config{HeartbeatTimeout: o.Runner.HeartbeatTimeout, StartupGracePeriod: o.Runner.StartupGracePeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
 		rpmrepocontroller.Name: rpmrepocontroller.Initializer(rpmrepocontroller.Config{
-			ArtifactManagerAddr:    o.ArtifactManager.Address,
 			ArtifactManagerTimeout: o.ArtifactManager.Timeout,
 			MaxJobsPerBatch:        o.RpmRepo.MaxJobsPerBatch,
 			MaterializeRetryLimit:  o.RpmRepo.MaterializeRetryLimit,
@@ -69,8 +68,7 @@ func main() {
 		}),
 		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, gitClient),
 		buildinfocontroller.Name: buildinfocontroller.Initializer(buildinfocontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries,
-			ArtifactManagerAddr: o.ArtifactManager.Address,
-			DcgPruneGrace:       o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
+			DcgPruneGrace: o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
 			SnapshotReadyRetryLimit: o.BuildInfo.SnapshotReadyRetryLimit, SpecFileCacheSize: o.BuildInfo.SpecFileCacheSize,
 		}, gitClient),
 	}

@@ -82,7 +82,7 @@ func (r *reconciler) resumeRelease(candidate ebsv1.RpmRepo) (controller.Reconcil
 		return controller.ReconcileResult{}, nil
 	}
 	transition := target.repo.Status.Release.Transition
-	response, err := r.controller.artifacts.GetRelease(r.ctx, target.repo.Name)
+	response, err := r.artifactClient().GetRelease(r.ctx, target.repo.Name)
 	if err != nil {
 		return r.handleReleaseError(target.repo, transition, err)
 	}
@@ -220,7 +220,7 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 	if err != nil || confirmed == nil {
 		return true, controller.ReconcileResult{}, err
 	}
-	response, err := r.controller.artifacts.SubmitRelease(r.ctx, CreateReleaseRequest{
+	response, err := r.artifactClient().SubmitRelease(r.ctx, CreateReleaseRequest{
 		BuildName:           confirmed.Name,
 		Project:             confirmed.Namespace,
 		TargetOS:            build.Spec.BuildTarget.Os,
@@ -292,7 +292,7 @@ func (r *reconciler) handleReleaseResponse(repo *ebsv1.RpmRepo, transition *ebsv
 			log.Printf("controller=%s key=%q uid=%q result=ActivationDeferred reason=%s", Name, r.key, updated.UID, ebsv1.RpmRepoReasonReleaseFailed)
 			return controller.ReconcileResult{RequeueAfter: pollAfter(response.PollAfterSeconds)}, nil
 		}
-		activated, err := r.controller.artifacts.ActivateRelease(r.ctx, updated.Name)
+		activated, err := r.artifactClient().ActivateRelease(r.ctx, updated.Name)
 		if err != nil {
 			return r.handleReleaseError(updated, transition, err)
 		}
@@ -367,7 +367,7 @@ func (r *reconciler) replayRelease(repo *ebsv1.RpmRepo, transition *ebsv1.Releas
 		}
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
-	response, err := r.controller.artifacts.SubmitRelease(r.ctx, CreateReleaseRequest{
+	response, err := r.artifactClient().SubmitRelease(r.ctx, CreateReleaseRequest{
 		BuildName:           repo.Name,
 		Project:             repo.Namespace,
 		TargetOS:            build.Spec.BuildTarget.Os,
@@ -404,7 +404,7 @@ func (r *reconciler) setReleasePhase(repo *ebsv1.RpmRepo, phase ebsv1.RpmRepoRel
 }
 
 func (r *reconciler) collectReleaseSuccess(repo *ebsv1.RpmRepo, transition *ebsv1.ReleaseTransition, response ReleaseResponse) (controller.ReconcileResult, error) {
-	contentURL, err := artifacturl.Reference(response.ContentURL)
+	contentURL, err := artifacturl.ReferenceForInstance(r.instance, response.ContentURL)
 	if err != nil {
 		return controller.ReconcileResult{}, fmt.Errorf("invalid Artifact Manager release contentURL: %w", err)
 	}

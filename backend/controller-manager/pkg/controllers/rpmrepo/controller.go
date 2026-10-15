@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +45,6 @@ func (b Backoff) validate() error {
 }
 
 type Config struct {
-	ArtifactManagerAddr    string
 	ArtifactManagerTimeout time.Duration
 	MaxJobsPerBatch        int
 	MaterializeRetryLimit  int
@@ -55,13 +54,6 @@ type Config struct {
 }
 
 func (c Config) validate() error {
-	if strings.TrimSpace(c.ArtifactManagerAddr) == "" {
-		return fmt.Errorf("artifact manager address is required")
-	}
-	parsed, err := url.Parse(c.ArtifactManagerAddr)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return fmt.Errorf("artifact manager address must be an absolute http or https URL")
-	}
 	if c.ArtifactManagerTimeout <= 0 {
 		return fmt.Errorf("artifact manager timeout must be positive")
 	}
@@ -76,12 +68,15 @@ func (c Config) validate() error {
 
 type Controller struct {
 	*controller.BaseController
-	rpmrepos  source.Source
-	client    Client
-	artifacts ArtifactManagerClient
-	policy    PublishPolicy
-	clock     clock.Clock
-	config    Config
+	rpmrepos        source.Source
+	client          Client
+	artifacts       ArtifactManagerClient
+	artifactFactory func(string) (ArtifactManagerClient, error)
+	artifactMu      sync.Mutex
+	artifactClients map[string]ArtifactManagerClient
+	policy          PublishPolicy
+	clock           clock.Clock
+	config          Config
 }
 
 // New wires one RpmRepo controller. The source is expected to deliver the non-terminal RpmRepo polling stream;
@@ -95,13 +90,22 @@ func New(
 	config Config,
 	options ...controller.Option,
 ) (*Controller, error) {
-	if rpmrepos == nil || client == nil || artifacts == nil || policy == nil || clk == nil {
+	return newController(rpmrepos, client, artifacts, nil, policy, clk, config, options...)
+}
+
+func newController(
+	rpmrepos source.Source, client Client, artifacts ArtifactManagerClient,
+	factory func(string) (ArtifactManagerClient, error), policy PublishPolicy, clk clock.Clock,
+	config Config, options ...controller.Option,
+) (*Controller, error) {
+	if rpmrepos == nil || client == nil || (artifacts == nil && factory == nil) || policy == nil || clk == nil {
 		return nil, fmt.Errorf("RpmRepo source, API client, Artifact Manager client, publish policy and clock are required")
 	}
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	c := &Controller{rpmrepos: rpmrepos, client: client, artifacts: artifacts, policy: policy, clock: clk, config: config}
+	c := &Controller{rpmrepos: rpmrepos, client: client, artifacts: artifacts, artifactFactory: factory,
+		artifactClients: make(map[string]ArtifactManagerClient), policy: policy, clock: clk, config: config}
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
@@ -115,12 +119,6 @@ func New(
 
 func Initializer(config Config) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
-		// M1 keeps the controller inactive until an Artifact Manager is configured, so a deployment that has
-		// not adopted the RpmRepo controller yet still starts with the default --controllers=* selection.
-		if strings.TrimSpace(config.ArtifactManagerAddr) == "" {
-			log.Printf("controller=%s result=inactive reason=ArtifactManagerNotConfigured", Name)
-			return nil, false, nil
-		}
 		if err := config.validate(); err != nil {
 			return nil, false, err
 		}
@@ -132,11 +130,10 @@ func Initializer(config Config) manager.InitFunc {
 		if err != nil {
 			return nil, false, err
 		}
-		artifacts, err := newArtifactManagerClient(config.ArtifactManagerAddr, config.ArtifactManagerTimeout)
-		if err != nil {
-			return nil, false, err
+		factory := func(address string) (ArtifactManagerClient, error) {
+			return newArtifactManagerClient(address, config.ArtifactManagerTimeout)
 		}
-		value, err := New(rpmrepos, newAPIClient(init.Dependencies.Client), artifacts, DefaultPublishPolicy{}, clock.RealClock{}, config,
+		value, err := newController(rpmrepos, newAPIClient(init.Dependencies.Client), nil, factory, DefaultPublishPolicy{}, clock.RealClock{}, config,
 			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
 		return value, err == nil, err
 	}
