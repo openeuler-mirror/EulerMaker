@@ -87,7 +87,7 @@ DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 
-Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认通过宿主机网络访问 `127.0.0.1:8080/8081`，不会随控制面启动。跨主机运行时，在 Runner 节点设置 `RUNNER_GATEWAY_URL`、`RUNNER_ARTIFACT_MANAGER_URL` 和唯一的 `RUNNER_NAME`，地址必须从该节点可达；启动前先确认控制面服务就绪。可用相同的 `-p eulermaker-runner -f hacks/docker-compose.runner.yml` 参数查看状态和日志。
+Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认通过宿主机网络访问 `127.0.0.1:8080`，不会随控制面启动。Artifact Manager 地址由 Runner 从 Gateway 获取。跨主机运行时，在 Runner 节点设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并配置该节点可达的 Artifact Manager 实例地址；启动前先确认控制面服务就绪。可用相同的 `-p eulermaker-runner -f hacks/docker-compose.runner.yml` 参数查看状态和日志。
 
 ## 本地开发与验证
 

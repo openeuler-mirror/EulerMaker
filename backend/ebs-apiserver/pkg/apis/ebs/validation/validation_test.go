@@ -591,6 +591,18 @@ func TestValidateJobUpdate(t *testing.T) {
 	assertErrorList(t, errs, 0, nil)
 }
 
+func TestValidateJobArtifactInstance(t *testing.T) {
+	job := validJob()
+	job.Annotations = map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}
+	assertErrorList(t, ValidateJob(job), 0, nil)
+
+	updated := job.DeepCopy()
+	updated.Annotations[ebsv1.ProjectArtifactsAnnotation] = "art-02"
+	assertErrorList(t, ValidateJobUpdate(updated, job), 1, map[string]field.ErrorType{
+		"metadata.annotations[ebs.io/artifacts]": field.ErrorTypeForbidden,
+	})
+}
+
 func TestValidateJobStatusUpdate(t *testing.T) {
 	tests := []struct {
 		name       string

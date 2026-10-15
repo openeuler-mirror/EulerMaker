@@ -13,7 +13,7 @@ import (
 
 type Config struct {
 	Gateway                           string
-	ArtifactManager                   string
+	ArtifactAccessMode                string
 	MachineCredentialFile             string
 	Name                              string
 	Type                              string
@@ -42,7 +42,7 @@ func LoadConfig(args []string) (Config, error) {
 	hostname, _ := os.Hostname()
 	cfg := Config{
 		Gateway:                   "https://ebs-gateway:8443",
-		ArtifactManager:           "http://artifact-manager:8081",
+		ArtifactAccessMode:        "internal",
 		Name:                      hostname,
 		Type:                      "ct",
 		Arch:                      runtimeArch(),
@@ -64,7 +64,7 @@ func LoadConfig(args []string) (Config, error) {
 
 	fs := flag.NewFlagSet("ebs-runner", flag.ContinueOnError)
 	fs.StringVar(&cfg.Gateway, "gateway", cfg.Gateway, "ebs-gateway address")
-	fs.StringVar(&cfg.ArtifactManager, "artifact-manager", cfg.ArtifactManager, "artifact-manager address")
+	fs.StringVar(&cfg.ArtifactAccessMode, "artifact-access-mode", cfg.ArtifactAccessMode, "artifact access mode: internal or external")
 	fs.StringVar(&cfg.MachineCredentialFile, "machine-credential-file", cfg.MachineCredentialFile, "MachineAccount credential JSON file")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
@@ -93,8 +93,8 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.Gateway == "" {
 		return Config{}, fmt.Errorf("gateway is required")
 	}
-	if cfg.ArtifactManager == "" {
-		return Config{}, fmt.Errorf("artifact manager is required")
+	if cfg.ArtifactAccessMode != "internal" && cfg.ArtifactAccessMode != "external" {
+		return Config{}, fmt.Errorf("artifact access mode must be internal or external")
 	}
 	if cfg.MachineCredentialFile == "" {
 		return Config{}, fmt.Errorf("machine credential file is required")

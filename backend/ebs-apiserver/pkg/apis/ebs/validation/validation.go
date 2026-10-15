@@ -311,6 +311,11 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	if instance := obj.Annotations[ebsv1.ProjectArtifactsAnnotation]; instance != "" {
+		for _, reason := range validation.IsDNS1123Label(instance) {
+			allErrs = append(allErrs, field.Invalid(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), instance, reason))
+		}
+	}
 	path := field.NewPath("spec", "scriptRefs")
 	seenNames := make(map[string]struct{}, len(obj.Spec.ScriptRefs))
 	for i, ref := range obj.Spec.ScriptRefs {
@@ -340,6 +345,9 @@ func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 
 func ValidateJobUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 	allErrs := ValidateJob(newObj)
+	if newObj.Annotations[ebsv1.ProjectArtifactsAnnotation] != oldObj.Annotations[ebsv1.ProjectArtifactsAnnotation] {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), "artifact instance is immutable"))
+	}
 	if !apiequality.Semantic.DeepEqual(newObj.Spec.ScriptRefs, oldObj.Spec.ScriptRefs) {
 		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "scriptRefs"), "Script observations are immutable"))
 	}

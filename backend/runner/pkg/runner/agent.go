@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -31,14 +32,16 @@ type RunnerAPI interface {
 }
 
 type Agent struct {
-	cfg        Config
-	client     RunnerAPI
-	tokens     *TokenProvider
-	executor   Executor
-	logFactory *ArtifactLogFactory
-	artifacts  *ArtifactProcessor
-	cleanup    *ArtifactCleanupManager
-	instanceID string
+	cfg            Config
+	client         RunnerAPI
+	endpointClient *Client
+	artifactRoutes *artifactRoutes
+	tokens         *TokenProvider
+	executor       Executor
+	logFactory     *ArtifactLogFactory
+	artifacts      *ArtifactProcessor
+	cleanup        *ArtifactCleanupManager
+	instanceID     string
 
 	mu         sync.Mutex
 	executions map[string]*jobExecution
@@ -66,12 +69,9 @@ func NewAgent(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	artifactClient, err := NewArtifactClient(cfg.ArtifactManager, tokens, artifactHTTPClient)
-	if err != nil {
-		return nil, err
-	}
+	artifactRoutes := newArtifactRoutes(cfg.ArtifactAccessMode, tokens, artifactHTTPClient)
 	logFactory := &ArtifactLogFactory{
-		Remote:          artifactClient,
+		Remote:          artifactRoutes,
 		RootDir:         cfg.RootDir,
 		ChunkSize:       cfg.LogChunkSize,
 		FlushInterval:   cfg.LogFlushInterval,
@@ -79,16 +79,18 @@ func NewAgent(cfg Config) (*Agent, error) {
 		RetryMaxBackoff: cfg.LogRetryMaxBackoff,
 	}
 	artifactProcessor := &ArtifactProcessor{
-		Remote: artifactClient, RootDir: cfg.RootDir,
+		Remote: artifactRoutes, RootDir: cfg.RootDir,
 		MaxFileSize: cfg.ArtifactMaxFileSize, MaxJobSize: cfg.ArtifactMaxJobSize,
 		MaxFiles: cfg.ArtifactMaxFiles, Concurrency: cfg.ArtifactUploadConcurrency,
 		RetryMaxBackoff: cfg.ArtifactRetryMaxBackoff,
 	}
 	cleanupManager := &ArtifactCleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.ArtifactFailedRetention}
 	return &Agent{
-		cfg:    cfg,
-		client: client,
-		tokens: tokens,
+		cfg:            cfg,
+		client:         client,
+		endpointClient: client,
+		artifactRoutes: artifactRoutes,
+		tokens:         tokens,
 		executor: &RuntimeManager{
 			RunnerType: cfg.Type,
 			Executors: map[string]Executor{
@@ -98,6 +100,7 @@ func NewAgent(cfg Config) (*Agent, error) {
 					RunnerName:      cfg.Name,
 					Scripts:         NewScriptCache(client),
 					LogFactory:      logFactory,
+					ResolvePayload:  artifactRoutes.resolvePayload,
 					LogDrainTimeout: cfg.LogDrainTimeout,
 				},
 			},
@@ -123,6 +126,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.waitForInitialToken(ctx); err != nil {
 		return err
 	}
+	if err := a.waitForInitialEndpoints(ctx); err != nil {
+		return err
+	}
 
 	if err := a.register(ctx); err != nil {
 		return err
@@ -132,6 +138,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	go a.watchLoop(ctx)
+	go a.refreshEndpointsLoop(ctx)
 	go a.cleanup.Run(ctx)
 	go a.sweepJobWorkLoop(ctx)
 	if err := a.patchRunnerPhase(ctx, "Online"); err != nil {
@@ -146,6 +153,65 @@ func (a *Agent) Run(ctx context.Context) error {
 		log.Printf("update offline status failed: %v", err)
 	}
 	return nil
+}
+
+func (a *Agent) refreshEndpoints(ctx context.Context) error {
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	endpoints, err := a.endpointClient.GetArtifactEndpoints(readCtx)
+	if err != nil {
+		return err
+	}
+	return a.artifactRoutes.update(endpoints)
+}
+
+func (a *Agent) waitForInitialEndpoints(ctx context.Context) error {
+	backoff := 5 * time.Second
+	for {
+		if err := a.refreshEndpoints(ctx); err == nil {
+			return nil
+		} else {
+			log.Printf("load artifact endpoints failed; retrying in %s: %v", backoff, err)
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < 5*time.Minute {
+			backoff *= 2
+			if backoff > 5*time.Minute {
+				backoff = 5 * time.Minute
+			}
+		}
+	}
+}
+
+func (a *Agent) refreshEndpointsLoop(ctx context.Context) {
+	interval := func() time.Duration { return time.Duration(570+rand.Intn(61)) * time.Second }
+	delay := interval()
+	backoff := 5 * time.Second
+	for {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if err := a.refreshEndpoints(ctx); err != nil {
+			log.Printf("refresh artifact endpoints failed: %v", err)
+			delay = backoff
+			if backoff < 5*time.Minute {
+				backoff *= 2
+			}
+		} else {
+			backoff = 5 * time.Second
+			delay = interval()
+		}
+	}
 }
 
 func (a *Agent) waitForInitialToken(ctx context.Context) error {
@@ -423,6 +489,12 @@ func (a *Agent) handleEvent(ctx context.Context, event WatchEvent) {
 			a.finishJob(key)
 			return
 		}
+		if a.artifactRoutes != nil {
+			if err := a.artifactRoutes.pin(execCtx, *current); err != nil {
+				a.finishJob(key)
+				return
+			}
+		}
 		if current.Status.Stage == "PostRun" {
 			a.resumePostRun(execCtx, key, *current)
 		} else {
@@ -573,6 +645,9 @@ func (a *Agent) finishJob(key string) {
 	delete(a.executions, key)
 	a.mu.Unlock()
 	if execution != nil {
+		if a.artifactRoutes != nil {
+			a.artifactRoutes.release(execution.job)
+		}
 		execution.cancel()
 	}
 }

@@ -199,6 +199,9 @@ func TestJobForSpecConstruction(t *testing.T) {
 	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
 	seeded := client.SeedBuildInfo(bi)
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
+	round.project = &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+		ebsv1.ProjectArtifactsAnnotation: "art-01",
+	}}}
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
 	resource := testBuildResourceRules()
@@ -236,7 +239,8 @@ func TestJobForSpecConstruction(t *testing.T) {
 		}
 	}
 	wantAnnotations := map[string]string{
-		annDispatchGeneration: "2",
+		annDispatchGeneration:            "2",
+		ebsv1.ProjectArtifactsAnnotation: "art-01",
 	}
 	if len(job.Annotations) != len(wantAnnotations) {
 		t.Fatalf("annotations = %v, want only %v", job.Annotations, wantAnnotations)

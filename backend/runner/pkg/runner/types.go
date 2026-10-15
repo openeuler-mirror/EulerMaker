@@ -16,6 +16,7 @@ type ObjectMeta struct {
 	UID             string            `json:"uid,omitempty"`
 	ResourceVersion string            `json:"resourceVersion,omitempty"`
 	Labels          map[string]string `json:"labels,omitempty"`
+	Annotations     map[string]string `json:"annotations,omitempty"`
 }
 
 type ListMeta struct {
