@@ -1,6 +1,6 @@
 # Artifact Manager
 
-Artifact Manager 接收 Runner 上传的构建产物和实时容器日志，并把正文、元数据、幂等记录和日志 JSON Lines 索引保存到独立的本地持久化目录。它同时接受 RpmRepo Controller 的内部请求，基于已经封账的 Job Manifest 生成不可变 RPM 过程仓，并从 Ready 过程仓生成和切换正式 release。
+Artifact Manager 接收 Runner 上传的构建产物和实时容器日志，并把正文、含上传幂等信息的 Artifact 元数据和日志 JSON Lines 索引保存到独立的本地持久化目录。它同时接受 RpmRepo Controller 的内部请求，基于已经封账的 Job Manifest 生成不可变 RPM 过程仓，并从 Ready 过程仓生成和切换正式 release。
 
 ## 构建与测试
 

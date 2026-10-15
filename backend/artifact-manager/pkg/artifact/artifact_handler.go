@@ -116,7 +116,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeErr(w, r, 400, "InvalidMultipartRequest", "file must be second", false, nil)
 		return
 	}
-	a, ir, replay, e := s.store.BeginUpload(p, j, id.Name, key, m, s.cfg.Upload.MaxJobSize)
+	a, replay, e := s.store.BeginUpload(p, j, id.Name, key, m, s.cfg.Upload.MaxJobSize)
 	if e != nil {
 		s.mapErr(w, r, e)
 		return
@@ -128,7 +128,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	tmp := filepath.Join(s.cfg.DataDir, ".uploads", a.ID+".tmp")
 	f, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
-		s.store.FailUpload(a, ir, "StorageError", e.Error())
+		s.store.FailUpload(a, "StorageError", e.Error())
 		writeErr(w, r, 503, "StorageError", "storage unavailable", true, nil)
 		return
 	}
@@ -141,19 +141,19 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	extra, xe := mr.NextPart()
 	if e != nil || xe != io.EOF || extra != nil || n != m.Size || hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
 		os.Remove(tmp)
-		s.store.FailUpload(a, ir, "ArtifactChecksumMismatch", "file size or digest mismatch")
+		s.store.FailUpload(a, "ArtifactChecksumMismatch", "file size or digest mismatch")
 		writeErr(w, r, 422, "ArtifactChecksumMismatch", "file size or digest mismatch", true, nil)
 		return
 	}
 	if time.Now().After(id.ExpiresAt) {
 		os.Remove(tmp)
-		s.store.FailUpload(a, ir, "TokenExpired", "token expired")
+		s.store.FailUpload(a, "TokenExpired", "token expired")
 		writeErr(w, r, 401, "Unauthorized", "token expired", false, nil)
 		return
 	}
-	if e = s.store.CompleteUpload(a, ir, tmp); e != nil {
+	if e = s.store.CompleteUpload(a, tmp); e != nil {
 		if !s.store.UploadCommitted(a) {
-			s.store.FailUpload(a, ir, "StorageError", e.Error())
+			s.store.FailUpload(a, "StorageError", e.Error())
 		}
 		writeErr(w, r, 503, "StorageError", "storage unavailable", true, nil)
 		return

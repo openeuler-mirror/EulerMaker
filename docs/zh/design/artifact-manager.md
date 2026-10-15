@@ -37,7 +37,7 @@ graph LR
 
 Runner 直接访问 Artifact Manager，上传正文不经过 ebs-gateway，避免 Gateway 承担构建产物和日志文件带宽。Artifact Manager 只通过 Gateway 校验 Runner Token 的签名、有效期和 scope。首版不查询 Job/Runner 对象，也不校验 Job 与 Runner 的绑定关系或 Job 阶段。Artifact 查询和下载公开访问，不经过 Gateway 鉴权。
 
-Artifact、Job 上传清单和幂等记录均以元数据文件形式存放在本地持久化目录，不依赖独立数据库。服务启动时加载元数据并建立内存索引，本地元数据文件是事实来源。
+Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件形式存放在本地持久化目录，不依赖独立数据库。服务启动时加载元数据并建立内存索引，本地元数据文件是事实来源。
 
 文件正文写入 Artifact Manager 管理的本地持久化目录。使用节点本地目录时只能部署单实例。
 
@@ -96,7 +96,7 @@ runnerName
 projects/{project}/jobs/{jobName}/{safeRelativePath}
 ```
 
-服务对 `relativePath` 进行规范化后生成 `safeRelativePath`。路径不能为空或为绝对路径，不得包含 `..`、控制字符和符号链接；规范化后的路径必须位于该 Job 目录内。同一个 Job 中的 `safeRelativePath` 必须唯一，已存在时只有请求摘要相同的幂等重试可以返回原 Artifact。
+服务对 `relativePath` 进行规范化后生成 `safeRelativePath`。路径不能为空或为绝对路径，不得包含 `..`、控制字符和符号链接；规范化后的路径必须位于该 Job 目录内。同一个 Job 中的 `safeRelativePath` 必须唯一，已存在时只有上传元数据相同的幂等重试可以返回原 Artifact。
 
 本地后端以 `--data-dir` 为根目录，将存储键映射为正文路径。上传中的文件写入 `${dataDir}/.uploads/{artifactID}.tmp`，校验完成后在同一文件系统内原子重命名到最终路径。服务不得跟随符号链接，并必须验证规范化后的路径始终位于数据根目录内。
 
@@ -127,7 +127,6 @@ const (
     ArtifactUploading ArtifactState = "Uploading"
     ArtifactCompleted ArtifactState = "Completed"
     ArtifactFailed    ArtifactState = "Failed"
-    ArtifactExpired   ArtifactState = "Expired"
 )
 ```
 
@@ -135,25 +134,24 @@ const (
 
 ```go
 type Artifact struct {
-    SchemaVersion int              `json:"schemaVersion"`
-    ID            string           `json:"id"`
-    Project       string           `json:"project"`
-    JobName       string           `json:"jobName"`
-    RunnerName    string           `json:"runnerName"`
-    Category      ArtifactCategory `json:"category"`
-    Name          string           `json:"name,omitempty"`
-    FileName      string           `json:"fileName"`
-    RelativePath  string           `json:"relativePath"`
-    ContentType   string           `json:"contentType,omitempty"`
-    Size          int64            `json:"size"`
-    SHA256        string           `json:"sha256"`
-    StorageKey    string           `json:"storageKey"`
-    State         ArtifactState    `json:"state"`
-    Failure       *FailureInfo     `json:"failure,omitempty"`
-    CreatedAt     Timestamp        `json:"createdAt"`
-    UpdatedAt     Timestamp        `json:"updatedAt"`
-    CompletedAt   *Timestamp       `json:"completedAt,omitempty"`
-    ExpiresAt     *Timestamp       `json:"expiresAt,omitempty"`
+    SchemaVersion  int              `json:"schemaVersion"`
+    ID             string           `json:"id"`
+    Project        string           `json:"project"`
+    JobName        string           `json:"jobName"`
+    RunnerName     string           `json:"runnerName"`
+    Category       ArtifactCategory `json:"category"`
+    FileName       string           `json:"fileName"`
+    RelativePath   string           `json:"relativePath"`
+    ContentType    string           `json:"contentType,omitempty"`
+    Size           int64            `json:"size"`
+    SHA256         string           `json:"sha256"`
+    StorageKey     string           `json:"storageKey"`
+    IdempotencyKey string           `json:"idempotencyKey,omitempty"`
+    State          ArtifactState    `json:"state"`
+    Failure        *FailureInfo     `json:"failure,omitempty"`
+    CreatedAt      Timestamp        `json:"createdAt"`
+    UpdatedAt      Timestamp        `json:"updatedAt"`
+    CompletedAt    *Timestamp       `json:"completedAt,omitempty"`
 }
 ```
 
@@ -171,12 +169,11 @@ Artifact 状态：
 ```text
 Pending -> Uploading -> Completed
                      \-> Failed
-Completed -> Expired
 ```
 
 只有 `Completed` Artifact 可以公开下载。
 
-`ID`、归属字段、路径、大小、摘要和 `StorageKey` 创建后不可变。`Size` 必须大于等于 0；`SHA256` 是 64 位小写十六进制，不带 `sha256:` 前缀。`FileName` 必须等于规范化后 `RelativePath` 的最后一段。`StorageKey` 仅由服务端生成，不接受客户端赋值，也不在普通列表响应中用于构造本地路径。
+`ID`、归属字段、路径、大小、摘要、`StorageKey` 和 `IdempotencyKey` 创建后不可变。`IdempotencyKey` 仅用于普通文件上传，由服务端根据请求填写；日志流封账产生的 Artifact 不设置。`Size` 必须大于等于 0；`SHA256` 是 64 位小写十六进制，不带 `sha256:` 前缀。`FileName` 必须等于规范化后 `RelativePath` 的最后一段。`StorageKey` 仅由服务端生成，不接受客户端赋值，也不在普通列表响应中用于构造本地路径。
 
 ### 5.2 JobUploadManifest
 
@@ -289,47 +286,13 @@ type LogStream struct {
 
 字段顺序不是读取协议的一部分；实现必须按 JSON 字段名解析并拒绝未知字段。`sha256` 是对应 chunk 解压后正文的 64 位小写十六进制摘要。索引只能追加，不能就地修改已有记录。
 
-### 5.4 IdempotencyRecord
+### 5.4 上传幂等
 
-整文件上传使用独立的本地幂等记录，在服务重启和 Artifact 临时状态清理后仍能识别重复请求。
+整文件上传的幂等键保存在 Artifact 元数据中，不创建独立幂等记录。服务启动时以 `(project, jobName, idempotencyKey)` 建立内存索引；相同作用域和 key 只能对应一个 Artifact，重启后仍能识别重复请求。
 
-```go
-type IdempotencyState string
-const (
-    IdempotencyProcessing IdempotencyState = "Processing"
-    IdempotencyCompleted  IdempotencyState = "Completed"
-    IdempotencyFailed     IdempotencyState = "Failed"
-)
+重复请求须与原 Artifact 的 `category`、`fileName`、规范化后的 `relativePath`、`contentType`、`size` 和 `sha256` 逐项一致；不比较 multipart boundary、header 顺序或文件正文。
 
-type IdempotencyRecord struct {
-    SchemaVersion int              `json:"schemaVersion"`
-    Scope         string           `json:"scope"`
-    Key           string           `json:"key"`
-    RequestDigest string           `json:"requestDigest"`
-    ArtifactID    string           `json:"artifactID"`
-    State         IdempotencyState `json:"state"`
-    Failure       *FailureInfo     `json:"failure,omitempty"`
-    CreatedAt     Timestamp        `json:"createdAt"`
-    UpdatedAt     Timestamp        `json:"updatedAt"`
-    CompletedAt   *Timestamp       `json:"completedAt,omitempty"`
-    ExpiresAt     *Timestamp       `json:"expiresAt,omitempty"`
-}
-```
-
-上传作用域固定为 `artifact-upload/{project}/{jobName}`。本地路径使用作用域和 key 的 SHA-256，客户端输入不得直接成为文件名：
-
-```text
-${dataDir}/.metadata/idempotency/{scopeSHA256}/{keySHA256}.json
-```
-
-`RequestDigest` 对规范化后的 `UploadArtifactMetadata` 计算，不包含 multipart boundary、header 顺序或文件正文；摘要格式为 `sha256:<64位小写十六进制>`。摘要输入固定为：
-
-```text
-artifact-upload-v1\n
-category\0name\0fileName\0relativePath\0contentType\0size\0sha256\n
-```
-
-创建 `Processing` 记录和 `Pending` Artifact 时必须持有 `(scope,key)` 进程内锁。相同作用域和 key 的并发请求只能有一个进入正文读取阶段。`Completed` 记录与对应 Completed Artifact 的保留期限一致；`Failed` 记录默认保留 24 小时，并允许相同摘要的请求复用原 Artifact ID 整文件重传。
+创建 `Pending` Artifact 时必须持有 `(project,jobName,idempotencyKey)` 进程内锁，并先持久化元数据再读取正文。相同作用域和 key 的并发请求只能有一个进入正文读取阶段。`Failed` Artifact 保留幂等键，允许上传元数据相同的请求复用原 Artifact ID 整文件重传。
 
 ### 5.5 通用失败、错误和分页结构
 
@@ -380,7 +343,6 @@ API 错误响应的 `Content-Type` 为 `application/json`，客户端只能依�
 ```go
 type UploadArtifactMetadata struct {
     Category     ArtifactCategory `json:"category"`
-    Name         string           `json:"name,omitempty"`
     FileName     string           `json:"fileName"`
     RelativePath string           `json:"relativePath"`
     ContentType  string           `json:"contentType,omitempty"`
@@ -492,9 +454,9 @@ Content-Type: multipart/form-data; boundary=...
 4. 原子写入 `Completed` Artifact 元数据。
 5. 返回完整 Artifact。
 
-请求中断或校验失败时删除临时正文，并将未提交的 Artifact 元数据删除或标记为 `Failed` 供后台清理。首版不提供上传进度查询、继续上传或中止接口；Runner 必须保留本地文件并使用相同 `Idempotency-Key` 整文件重传。
+请求中断或校验失败时删除临时正文，并将 Artifact 标记为 `Failed`，保留幂等键供重试。首版不提供上传进度查询、继续上传或中止接口；Runner 必须保留本地文件并使用相同 `Idempotency-Key` 整文件重传。
 
-服务持久化 `(project, jobName, idempotencyKey)`、规范化请求元数据摘要和响应 Artifact ID。相同键且元数据摘要相同时：已有 Artifact 为 `Completed` 则直接返回原结果；仍有上传请求进行中则返回 409 `UploadInProgress`；前次失败或中断则清理旧临时文件并允许整文件重传。相同键但元数据摘要不同返回 409 `IdempotencyConflict`。
+Artifact 元数据持久化 `(project, jobName, idempotencyKey)` 和上传元数据。相同键且上传元数据逐项一致时：已有 Artifact 为 `Completed` 则直接返回原结果；仍有上传请求进行中则返回 409 `UploadInProgress`；前次失败或中断则清理旧临时文件并允许整文件重传。相同键但上传元数据不一致时返回 409 `IdempotencyConflict`。
 
 #### 6.1.1 Multipart 解析限制
 
@@ -517,24 +479,21 @@ Content-Type: multipart/form-data; boundary=...
 
 整文件上传不是跨多个文件的原子事务。实现必须使用以下固定、可重放的提交顺序，以最终正文的原子 rename 作为正文提交点：
 
-1. 获取 `(scope,idempotencyKey)` 锁，原子写入 `Processing` IdempotencyRecord。
-2. 原子写入 `Pending` Artifact 元数据，其中已经包含最终 `StorageKey`。
-3. 以独占方式创建 `.uploads/{artifactID}.tmp`，流式写入并计算大小和 SHA-256。
-4. 校验成功后对临时正文执行 `fdatasync`。
-5. 将临时正文原子 rename 到最终 `StorageKey`，随后 `fsync` 最终正文的父目录；该 rename 是正文提交点。
-6. 原子更新 Artifact 元数据为 `Completed` 并 `fsync` 元数据父目录。
-7. 原子更新 IdempotencyRecord 为 `Completed`，设置 `CompletedAt`，并 `fsync` 幂等记录父目录。
-8. 返回成功响应并释放锁。
+1. 获取 `(project,jobName,idempotencyKey)` 锁，原子写入含幂等键、上传元数据和最终 `StorageKey` 的 `Pending` Artifact 元数据。
+2. 以独占方式创建 `.uploads/{artifactID}.tmp`，流式写入并计算大小和 SHA-256。
+3. 校验成功后对临时正文执行 `fdatasync`。
+4. 将临时正文原子 rename 到最终 `StorageKey`，随后 `fsync` 最终正文的父目录；该 rename 是正文提交点。
+5. 原子更新 Artifact 元数据为 `Completed`，设置 `CompletedAt` 并 `fsync` 元数据父目录。
+6. 返回成功响应并释放锁。
 
-步骤 5 之后任何失败都不能删除最终正文；服务应返回可重试错误，由相同幂等键请求或启动恢复流程补齐元数据。步骤 5 之前失败则关闭并删除临时正文，将 IdempotencyRecord 和 Artifact 标记为 `Failed`，允许相同摘要整文件重传。
+步骤 4 之后任何失败都不能删除最终正文；服务应返回可重试错误，由相同幂等键请求或启动恢复流程补齐元数据。步骤 4 之前失败则关闭并删除临时正文，将 Artifact 标记为 `Failed`，允许上传元数据相同的请求整文件重传。
 
-服务启动时只校验 `Processing` 幂等记录关联的正文；`Completed` 和 `Failed` 记录仅加载元数据，不在启动路径重新计算正文摘要。未完成记录按以下规则恢复：
+服务启动时只校验带有幂等键且处于 `Pending` 或 `Uploading` 的 Artifact 正文；`Completed` 和 `Failed` Artifact 仅加载元数据，不在启动路径重新计算正文摘要。未完成上传按以下规则恢复：
 
 | 现场状态 | 恢复动作 |
 |----------|----------|
-| Processing 记录 + Pending Artifact + 临时正文 | 删除临时正文，将幂等记录和 Artifact 标记为 Failed，允许相同摘要整文件重传 |
-| Processing 记录 + 最终正文（Artifact 为 Pending 或 Completed） | 流式复核大小和 SHA-256；匹配则补写 Completed Artifact 和幂等记录，不匹配则隔离正文并标记 Corrupted |
-| Processing 记录存在但 Artifact 不存在 | 标记幂等记录 Failed；相同摘要重试时重新创建 Artifact |
+| Pending/Uploading Artifact + 临时正文 | 删除临时正文，将 Artifact 标记为 Failed，允许上传元数据相同的请求整文件重传 |
+| Pending/Uploading Artifact + 最终正文 | 流式复核大小和 SHA-256；匹配则补写 Completed Artifact，不匹配则隔离正文并标记 Corrupted |
 | 只有临时正文 | 超过 `--temporary-upload-ttl` 后删除 |
 
 已完成上传的幂等重放仍须校验最终正文，不得仅凭 Completed 状态返回成功。全面历史完整性检查不阻塞启动；隔离目录中的正文只能由后台审计或管理员处理。
@@ -1589,7 +1548,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 后台清理任务负责：
 
 - 清理请求中断或服务崩溃遗留的 `.uploads/*.tmp` 临时文件。
-- 清理到期的 Failed IdempotencyRecord；Completed 记录随对应 Artifact 生命周期清理。
+- 清理到期的 Failed Artifact；其幂等信息随 Artifact 元数据一并清理。
 - 删除超过保留期限的 Artifact。
 - 清理无元数据记录的孤儿文件或对象。
 - 处理 Project 或 Job 删除产生的异步清理任务。
@@ -1651,7 +1610,6 @@ RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Art
 | `--data-dir` | `/var/lib/ebs-artifacts` | 本地持久化目录 |
 | `--upload-timeout` | 按最大文件和最小允许速率配置 | 单次整文件上传的最大持续时间 |
 | `--temporary-upload-ttl` | `24h` | 中断后遗留临时正文的最长保留时间 |
-| `--failed-idempotency-retention` | `24h` | Failed 幂等记录的保留时间 |
 | `--max-metadata-size` | `64KiB` | multipart metadata part 的最大正文大小 |
 | `--max-part-headers` | `16` | 单个 multipart part 的最大 header 数量 |
 | `--max-header-line-size` | `8KiB` | 单个 multipart header 行的最大长度 |

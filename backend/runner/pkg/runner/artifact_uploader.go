@@ -264,7 +264,7 @@ func (p *ArtifactProcessor) uploadAll(ctx context.Context, job JobResource, cand
 
 func (p *ArtifactProcessor) uploadOne(ctx context.Context, job JobResource, candidate artifactCandidate) (ArtifactRecord, error) {
 	keySum := sha256.Sum256([]byte(candidate.RelativePath))
-	key := job.Metadata.Name + "-artifact-" + hex.EncodeToString(keySum[:])
+	key := "artifact-" + hex.EncodeToString(keySum[:])
 	if receipt, ok := p.readReceipt(job, candidate, key); ok {
 		return receipt.Artifact, nil
 	}
