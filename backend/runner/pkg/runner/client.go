@@ -114,6 +114,12 @@ func (c *Client) GetScript(ctx context.Context, name string) (*ScriptResource, e
 	return &script, nil
 }
 
+func (c *Client) GetArtifactEndpoints(ctx context.Context) (ArtifactEndpoints, error) {
+	var endpoints ArtifactEndpoints
+	err := c.doJSON(ctx, http.MethodGet, apiPrefix+"/artifact-endpoints", nil, &endpoints)
+	return endpoints, err
+}
+
 func (c *Client) UpdateJobStatus(ctx context.Context, job JobResource, status JobStatus) (*JobResource, error) {
 	if job.Metadata.UID == "" || job.Metadata.ResourceVersion == "" {
 		return nil, fmt.Errorf("Job UID and resourceVersion are required")

@@ -474,6 +474,10 @@ func (c *Controller) jobForSpec(
 ) *ebsv1.Job {
 	buildInfo := round.current
 	target := round.build.Spec.BuildTarget
+	artifactInstance := "default"
+	if round.project != nil && round.project.Annotations[ebsv1.ProjectArtifactsAnnotation] != "" {
+		artifactInstance = round.project.Annotations[ebsv1.ProjectArtifactsAnnotation]
+	}
 	runtimeSpec, _ := json.Marshal(map[string]string{"image": image, "networkMode": "host"})
 	return &ebsv1.Job{
 		TypeMeta: metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "Job"},
@@ -488,7 +492,8 @@ func (c *Controller) jobForSpec(
 				ebsv1.BuildTargetArchLabel: target.Arch,
 			},
 			Annotations: map[string]string{
-				annDispatchGeneration: strconv.FormatInt(generation, 10),
+				annDispatchGeneration:            strconv.FormatInt(generation, 10),
+				ebsv1.ProjectArtifactsAnnotation: artifactInstance,
 			},
 		},
 		Spec: ebsv1.JobSpec{

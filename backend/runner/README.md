@@ -21,7 +21,7 @@ docker build -t eulermaker/ebs-runner:dev .
 
 ## 本地运行
 
-Runner 启动前需要可访问的 Gateway、Artifact Manager，以及包含 MachineAccount 凭据的 JSON 文件：
+Runner 启动前需要可访问的 Gateway，以及包含 MachineAccount 凭据的 JSON 文件。Artifact Manager 地址由 Runner 启动时从 Gateway 获取：
 
 ```json
 {
@@ -35,7 +35,6 @@ Runner 启动前需要可访问的 Gateway、Artifact Manager，以及包含 Mac
 ```bash
 go run ./cmd/runner \
   --gateway=http://localhost:8080 \
-  --artifact-manager=http://localhost:8081 \
   --machine-credential-file=./runner-machine-credential.json \
   --name=runner-ct-x86-01 \
   --type=ct \
@@ -43,6 +42,8 @@ go run ./cmd/runner \
 ```
 
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
+
+Runner 会在写入 `payload.json` 前，将 `repo[].url` 中的 `artifact://{instance}/repositories/...` 转换为该实例的 Runner 可访问 HTTP(S) 地址；普通仓库 URL 不变。Job 对象中的原始 payload 不会被修改。
 
 Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭据和签发的 Token 不应写入日志或 Runner 状态。
 
@@ -52,7 +53,7 @@ Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭�
 go run ./cmd/runner --help
 ```
 
-也可以在仓库根目录先启动控制面，再独立启动 Runner。示例中的 `EXPORT_SERVER_ADDR` 需替换为控制面容器及构建节点均可访问的实际内网地址。Runner 使用宿主机网络；异机部署时需设置从 Runner 节点可访问的 `RUNNER_GATEWAY_URL`、`RUNNER_ARTIFACT_MANAGER_URL` 和唯一的 `RUNNER_NAME`：
+也可以在仓库根目录先启动控制面，再独立启动 Runner。示例中的 `EXPORT_SERVER_ADDR` 需替换为控制面容器及构建节点均可访问的实际内网地址。Runner 使用宿主机网络；异机部署时需设置从 Runner 节点可访问的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/artifact-manager-conf` 中配置 Runner 可访问的实例地址：
 
 ```bash
 EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build

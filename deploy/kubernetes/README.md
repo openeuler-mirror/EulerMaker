@@ -267,7 +267,7 @@ kubectl label node <artifact-node> node-role.kubernetes.io/art-01=
 kubectl get nodes -l node-role.kubernetes.io/art-01
 ```
 
-RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 从 `Config/artifact-manager-conf` 选择实例内部地址；BuildInfo Controller 也从该 Config 解析过程仓地址。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。下发给 Job 的过程仓地址仍为 `artifact://...` 逻辑地址，由 Runner 使用其可访问的地址解析。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
+RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 从 `Config/artifact-manager-conf` 选择实例内部地址；BuildInfo Controller 也从该 Config 解析过程仓地址。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
 
 如果已经在 `ebs` 部署旧版 Artifact Manager，迁移前须停止旧 Deployment，确认其 Pod 已退出，避免两个实例同时写入同一 `/srv/artifacts`；保留宿主机数据目录。删除旧 Deployment 和旧 Service 后再应用下方 Manifest，并确认 `art-01` Pod 仍调度到原数据节点，不能因切换命名空间而指向空目录。前端和 Controller Manager 需使用本次更新的镜像或 Manifest，才能访问新地址。
 
@@ -275,6 +275,28 @@ RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 从 `Config/
 kubectl apply -f deploy/kubernetes/artifact-manager.yaml
 kubectl -n art-01 rollout status deployment/artifact-manager --timeout=20m
 ```
+
+### 8.1 配置实例地址与 Runner 接入
+
+apiserver 初始化的 `Config/artifact-manager-conf` 是 Docker Compose 默认值，已有对象不会被初始化流程覆盖。Kubernetes 部署后，由 Ops/Admin 通过 Gateway 更新该 Config 的 `spec.content`，至少将 `default` 和 `art-01` 的 `internalURL` 指向已部署的 `art-01` Service；为实际使用的 Runner 网络模式填写可达的 `runnerInternalURL` 或 `runnerExternalURL`。例如，Runner 在集群内且能够解析 Service DNS 时可使用：
+
+```yaml
+instances:
+  default:
+    internalURL: http://artifact-manager.art-01:8081
+    runnerInternalURL: http://artifact-manager.art-01.svc.cluster.local:8081
+    runnerExternalURL: ""
+  art-01:
+    internalURL: http://artifact-manager.art-01:8081
+    runnerInternalURL: http://artifact-manager.art-01.svc.cluster.local:8081
+    runnerExternalURL: ""
+```
+
+`default` 是未设置 `ebs.io/artifacts` 的 Project 使用的实例；若将 Project 指向 `art-01`，创建或修改该 annotation 时也须确认 Config 中存在此键。BuildInfo Controller 创建 Job 时会将选中的实例名固化到 Job 的同名 annotation，Runner 据此选择日志和产物上传地址。不要将 Docker Compose 使用的 `127.0.0.1:8081` 原样用于异机 Runner。
+
+本目录尚无 Runner Manifest。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway 和 Artifact Manager 地址。集群外 Runner 需要另外提供可达入口；使用 `--artifact-access-mode=external` 时，`runnerExternalURL` 必须是 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
+
+Runner 在写入 `payload.json` 前，按逻辑 URL 中的实例名将 `repo[].url` 的 `artifact://{instance}/repositories/...` 转换为选定网络模式下的 HTTP(S) URL；省略实例名时使用 `default`。普通 HTTP(S) 仓库地址保持不变。仓库所在实例缺失或对应 Runner 地址为空时，Job 会报出明确的仓库解析错误，因此上线前应从构建节点验证所需实例的地址及仓库路径可达。
 
 ## 9. 部署 Controller Manager
 

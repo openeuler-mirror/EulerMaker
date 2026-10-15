@@ -87,7 +87,7 @@ DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 
-Runner uses a [separate Compose file](hacks/docker-compose.runner.yml), defaults to host-network access to `127.0.0.1:8080/8081`, and does not start with the control plane. On a remote Runner node, set `RUNNER_GATEWAY_URL`, `RUNNER_ARTIFACT_MANAGER_URL`, and a unique `RUNNER_NAME` to addresses reachable from that node. Start it after the control-plane services are ready. Use the same `-p eulermaker-runner -f hacks/docker-compose.runner.yml` options for status and logs.
+Runner uses a [separate Compose file](hacks/docker-compose.runner.yml), defaults to host-network access to `127.0.0.1:8080`, and does not start with the control plane. It obtains Artifact Manager addresses from Gateway. On a remote Runner node, set a reachable `RUNNER_GATEWAY_URL` and a unique `RUNNER_NAME`, and configure Artifact Manager instance addresses reachable from that node. Start it after the control-plane services are ready. Use the same `-p eulermaker-runner -f hacks/docker-compose.runner.yml` options for status and logs.
 
 ## Local development and checks
 

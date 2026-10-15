@@ -4,7 +4,6 @@ services:
       context: ../backend/runner
     command:
       - --gateway=${RUNNER_GATEWAY_URL:-http://127.0.0.1:8080}
-      - --artifact-manager=${RUNNER_ARTIFACT_MANAGER_URL:-http://127.0.0.1:8081}
       - --machine-credential-file=/run/secrets/runner_machine_credential
       - --name=${RUNNER_NAME:-runner-ct-01}
       - --type=ct

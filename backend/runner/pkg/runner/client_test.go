@@ -22,6 +22,19 @@ func TestClientGetScript(t *testing.T) {
 	}
 }
 
+func TestClientGetArtifactEndpoints(t *testing.T) {
+	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || req.URL.Path != apiPrefix+"/artifact-endpoints" {
+			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+		}
+		return response(http.StatusOK, `{"instances":{"art-01":{"runnerInternalURL":"http://art-01:8081"}}}`), nil
+	})
+	endpoints, err := client.GetArtifactEndpoints(context.Background())
+	if err != nil || endpoints.Instances["art-01"].RunnerInternalURL != "http://art-01:8081" {
+		t.Fatalf("GetArtifactEndpoints = %+v, %v", endpoints, err)
+	}
+}
+
 func TestClientPatchRunnerStatus(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotContentType string
 	var gotBody struct {

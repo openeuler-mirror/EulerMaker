@@ -710,6 +710,8 @@ type Job struct {
 
 BuildInfo Controller 创建的 Job 在 `metadata.labels` 中记录所属 Build、spec 与软件包仓库：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/package-name`。包名 label 的值遵循[标签约定](labels.md#7-job-构建归属标签)中的截断及编码规则，从创建时的 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 取得。
 
+Job 的 `metadata.annotations["ebs.io/artifacts"]` 固化创建时 Project 的 Artifact Manager 实例名，未配置时为 `default`。Runner 用该值从 Gateway 获取的实例地址列表中选择日志和产物上传目标；创建后该 annotation 不可修改。
+
 ### JobSpec
 
 ```go

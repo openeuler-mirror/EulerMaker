@@ -28,6 +28,7 @@ type CTExecutor struct {
 	Runtime         ContainerRuntime
 	Scripts         *ScriptCache
 	LogFactory      JobLogSinkFactory
+	ResolvePayload  func(JobResource) (string, error)
 	LogDrainTimeout time.Duration
 	StopGracePeriod time.Duration
 }
@@ -98,6 +99,13 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	if len(job.Spec.ScriptRefs) > 0 && (len(spec.Command) > 0 || len(spec.Args) > 0) {
 		return "", fmt.Errorf("ct runtimeSpec.command/args cannot be set with scriptRef")
 	}
+	payload := job.Spec.Payload
+	if e.ResolvePayload != nil {
+		payload, err = e.ResolvePayload(job)
+		if err != nil {
+			return "", fmt.Errorf("resolve Job repositories: %w", err)
+		}
+	}
 	seenScripts := make(map[string]struct{}, len(job.Spec.ScriptRefs))
 	for _, ref := range job.Spec.ScriptRefs {
 		if ref.Name == "" || ref.Name == "." || ref.Name == ".." || filepath.Base(ref.Name) != ref.Name || strings.ContainsAny(ref.Name, "/\\") {
@@ -123,7 +131,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	if err := os.MkdirAll(resultRoot, 0o755); err != nil {
 		return "", fmt.Errorf("create result root: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "payload.json"), []byte(job.Spec.Payload), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workDir, "payload.json"), []byte(payload), 0o644); err != nil {
 		return "", fmt.Errorf("write payload.json: %w", err)
 	}
 	var scriptPath string

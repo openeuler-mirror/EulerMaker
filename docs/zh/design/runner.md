@@ -136,7 +136,7 @@ Runner 不列举或修改 Script。数组为空时不访问 Script API，沿用�
 
 ### 3.4 Artifact Manager API
 
-Runner 使用 `--artifact-manager` 配置的独立地址直接访问 Artifact Manager，正文不经过 Gateway：
+Runner 启动时使用 Runner Token 请求 Gateway 的 `GET /apis/ebs/v1/artifact-endpoints` 获取实例地址列表，此后每 600 秒加少量随机抖动刷新。上传请求直接访问选中的 Artifact Manager，不经 Gateway：
 
 ```text
 POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
@@ -150,9 +150,9 @@ POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
 
 Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用于 Gateway，`--artifact-manager-ca` 只用于 Artifact Manager；测试环境可以分别显式跳过校验，不能因为其中一个地址使用 HTTP 或跳过 TLS 而放宽另一个客户端。
 
-后续支持多 Artifact Manager 时，Runner 用 Runner Token 请求 Gateway 的专用地址投影接口（见 `ebs-gateway.md` 4.11），获取所有实例的 Runner 地址列表；该接口不按 Job 查询，也不返回某个 Job 的上传实例。Runner 部署时显式选择 `internal` 或 `external` 网络模式；内部模式只使用 `runnerInternalURL`，外部模式只使用 `runnerExternalURL`，不根据来源 IP 自动切换。上传实例须由独立的 Job 契约确定，不从地址列表推断；该契约尚待设计。`artifact://{实例}/...` 过程仓引用按其中的实例名解析。执行中的 Job 固定已选地址，配置变更只影响后续 Job。所需实例或模式对应地址为空、不可达时按传输错误处理，不回退到控制面 `internalURL` 或另一网络模式。外部模式要求 HTTPS；TLS 校验仍由独立的 Artifact Manager 客户端配置控制。
+地址列表不按 Job 查询，也不返回 Job 的上传实例。BuildInfo Controller 创建 Job 时，将 Project 的 `ebs.io/artifacts` annotation 固化到 Job 的同名 annotation；未设置时写入 `default`。Runner 据此选址：`internal` 模式使用 `runnerInternalURL`，`external` 模式使用 `runnerExternalURL`，不根据来源 IP 自动切换。运行中的 Job 固定已选地址，刷新只影响新启动的 Job。实例或对应地址不可用时等待配置恢复，不回退到其他实例或模式。外部模式要求 HTTPS；TLS 校验由独立的 Artifact Manager 客户端配置控制。
 
-地址投影与多实例选址目前尚未实现；现有 Runner 仍通过单个 `--artifact-manager` 地址访问 Artifact Manager。
+构建执行前，Runner 仅转换 JSON payload 的 `repo[].url`：`artifact://{instance}/repositories/...` 使用该实例在当前模式下的 Runner 地址，`artifact:///repositories/...` 使用 `default`；HTTP(S) URL 原样保留。转换结果写入本地 `payload.json`，不回写 `Job.spec.payload`。同一 Job 上传实例的地址使用已固定值，其他仓库实例从本次地址快照取值；实例缺失、地址为空或逻辑路径无效时，不启动构建容器并记录明确错误。
 
 ## 四、Runner 资源模型
 
@@ -656,7 +656,7 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--gateway` | `https://ebs-gateway:8443` | gateway 地址 |
-| `--artifact-manager` | `http://artifact-manager:8081` | Artifact Manager 地址，必填 |
+| `--artifact-access-mode` | `internal` | 使用实例的 `runnerInternalURL` 或 `runnerExternalURL`；外网模式设置为 `external` |
 | `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
 | `--name` | hostname | Runner 资源名称 |
 | `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |
@@ -689,7 +689,6 @@ services:
     image: ebs-runner:latest
     command:
       - --gateway=https://ebs-gateway:8443
-      - --artifact-manager=http://artifact-manager:8081
       - --machine-credential-file=/run/secrets/runner-machine-credential
       - --name=runner-ct-aarch64-01
       - --type=ct
