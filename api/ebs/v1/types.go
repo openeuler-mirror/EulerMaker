@@ -84,6 +84,8 @@ type ScriptRef struct {
 	ResourceVersion string `json:"resourceVersion"`
 }
 
+const ProjectArtifactsAnnotation = "ebs.io/artifacts"
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type Project struct {
 	metav1.TypeMeta   `json:",inline"`

@@ -363,11 +363,14 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	storeOptions := &generic.StoreOptions{RESTOptions: restOptionsGetter}
 
 	v1Storage := map[string]rest.Storage{}
-	v1Storage["configs"] = newConfigStore(esClient)
+	configES := newConfigStore(esClient)
+	v1Storage["configs"] = configES
 	v1Storage["scripts"] = newScriptStore(esClient)
 
 	projectStorage := projectstore.NewStorage(Scheme)
 	projectES := esstore.New(esClient, "project", "Project", projectStorage.Project.(*genericregistry.Store))
+	projectES.SetCreateHook(projectstore.ValidateArtifactsConfig(configES))
+	projectES.SetUpdateHook(projectstore.ValidateArtifactsConfigUpdate(configES))
 	v1Storage["projects"] = projectES
 	v1Storage["projects/status"] = esstore.NewStatus(projectES, projectStorage.Status.(*genericregistry.Store))
 

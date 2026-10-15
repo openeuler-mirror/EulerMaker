@@ -64,10 +64,15 @@ func TestPackageRefPreservedBeforeValidation(t *testing.T) {
 func TestStatusPreservesProjectType(t *testing.T) {
 	old := &ebsv1.Project{}
 	old.Labels = map[string]string{ebsv1.ProjectTypeLabel: ebsv1.ProjectTypeCommunity}
+	old.Annotations = map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}
 	candidate := old.DeepCopy()
 	candidate.Labels[ebsv1.ProjectTypeLabel] = ebsv1.ProjectTypePersonal
+	candidate.Annotations[ebsv1.ProjectArtifactsAnnotation] = "art-02"
 	(&statusStrategy{}).PrepareForUpdate(context.Background(), candidate, old)
 	if candidate.Labels[ebsv1.ProjectTypeLabel] != ebsv1.ProjectTypeCommunity {
 		t.Fatal("status update changed project type")
+	}
+	if candidate.Annotations[ebsv1.ProjectArtifactsAnnotation] != "art-01" {
+		t.Fatal("status update changed artifact instance")
 	}
 }

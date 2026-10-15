@@ -89,6 +89,8 @@ type Project struct {
 }
 ```
 
+`metadata.annotations["ebs.io/artifacts"]` 指定 Project 使用的 Artifact Manager 实例，值须是 `Config/artifact-manager-conf` 的 `instances` 中已有的键；未设置时按 `default` 解释。创建 Project 或修改该 annotation 时，apiserver 实时读取 Config 确认实例存在；其他 Project 更新不重新校验。`/status` 更新不修改该 annotation。当前该字段只记录实例选择，组件尚未据此切换访问地址。
+
 ### ProjectSpec
 
 ```go
