@@ -12,6 +12,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"artifact-manager/pkg/upload"
 )
 
 func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) {
@@ -85,7 +87,7 @@ func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) 
 	}
 	l, ok := s.store.GetLog(p, j)
 	if !ok {
-		writeJSON(w, 200, map[string]any{"stream": "combined", "state": LogOpen, "nextSequence": 0, "committedBytes": 0})
+		writeJSON(w, 200, map[string]any{"stream": "combined", "state": upload.LogOpen, "nextSequence": 0, "committedBytes": 0})
 		return
 	}
 	writeJSON(w, 200, l)
@@ -97,10 +99,10 @@ func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string)
 		writeErr(w, r, 404, "NotFound", "log not found", false, nil)
 		return
 	}
-	body, _, _ := s.store.logPaths(p, j)
-	if l.State == LogCompleted {
+	body, _, _ := s.store.LogPaths(p, j)
+	if l.State == upload.LogCompleted {
 		if a, yes := s.store.GetArtifact(l.ArtifactID); yes {
-			body = s.store.artifactPath(a)
+			body = s.store.ArtifactPath(a)
 		}
 	}
 	f, e := os.Open(body)
@@ -137,7 +139,7 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 	}
 	ch, done := s.store.Subscribe(p, j)
 	defer done()
-	var replay []logEvent
+	var replay []upload.LogEvent
 	if supplied {
 		replay, _, e = s.store.ReplayLog(p, j, after, s.cfg.Log.ReplayWindow)
 		if e != nil {
@@ -200,7 +202,7 @@ func recoverySequence(r *http.Request) (int64, bool, error) {
 	return n, true, err
 }
 
-func writeSSELog(w io.Writer, e logEvent) {
+func writeSSELog(w io.Writer, e upload.LogEvent) {
 	b, _ := json.Marshal(map[string]string{"encoding": "base64", "content": base64.StdEncoding.EncodeToString(e.Data)})
 	fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", e.Sequence, b)
 }
@@ -211,7 +213,7 @@ func (s *Server) completeLog(w http.ResponseWriter, r *http.Request, p, j string
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
-	var in CompleteLogRequest
+	var in upload.CompleteLogRequest
 	if decodeJSON(r.Body, 1<<20, &in) != nil || !validHash(in.SHA256) {
 		writeErr(w, r, 400, "InvalidRequest", "invalid request", false, nil)
 		return
@@ -221,5 +223,5 @@ func (s *Server) completeLog(w http.ResponseWriter, r *http.Request, p, j string
 		s.mapErr(w, r, e)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"state": LogCompleted, "artifactID": a.ID, "relativePath": a.RelativePath, "size": a.Size, "sha256": a.SHA256})
+	writeJSON(w, 200, map[string]any{"state": upload.LogCompleted, "artifactID": a.ID, "relativePath": a.RelativePath, "size": a.Size, "sha256": a.SHA256})
 }

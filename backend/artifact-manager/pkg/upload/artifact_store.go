@@ -1,4 +1,4 @@
-package artifact
+package upload
 
 import (
 	"crypto/rand"
@@ -23,17 +23,17 @@ type Store struct {
 	manifests   map[string]*JobUploadManifest
 	logs        map[string]*LogStream
 	uploads     map[string]*Artifact
-	subscribers map[string]map[chan logEvent]struct{}
+	subscribers map[string]map[chan LogEvent]struct{}
 }
 
-type logEvent struct {
+type LogEvent struct {
 	Sequence int64
 	Data     []byte
 	Complete *Artifact
 }
 
 func NewStore(root string) (*Store, error) {
-	s := &Store{root: root, artifacts: map[string]*Artifact{}, manifests: map[string]*JobUploadManifest{}, logs: map[string]*LogStream{}, uploads: map[string]*Artifact{}, subscribers: map[string]map[chan logEvent]struct{}{}}
+	s := &Store{root: root, artifacts: map[string]*Artifact{}, manifests: map[string]*JobUploadManifest{}, logs: map[string]*LogStream{}, uploads: map[string]*Artifact{}, subscribers: map[string]map[chan LogEvent]struct{}{}}
 	for _, d := range []string{".uploads", ".metadata/artifacts", ".metadata/jobs", ".metadata/logs", ".logs", "projects", ".quarantine"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0750); err != nil {
 			return nil, err
@@ -126,8 +126,8 @@ func (s *Store) recover() error {
 			continue
 		}
 		tmp := filepath.Join(s.root, ".uploads", a.ID+".tmp")
-		final := s.artifactPath(a)
-		finalOK := verifyFile(final, a.Size, a.SHA256) == nil
+		final := s.ArtifactPath(a)
+		finalOK := VerifyFile(final, a.Size, a.SHA256) == nil
 		if finalOK {
 			if err := s.completeArtifact(a); err != nil {
 				return err
@@ -147,7 +147,7 @@ func (s *Store) recover() error {
 	return nil
 }
 
-func verifyFile(path string, size int64, sum string) error {
+func VerifyFile(path string, size int64, sum string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -164,27 +164,27 @@ func verifyFile(path string, size int64, sum string) error {
 func (s *Store) completeArtifact(a *Artifact) error {
 	now := time.Now().UTC()
 	a.State, a.UpdatedAt, a.CompletedAt, a.Failure = Completed, now, &now, nil
-	return atomicJSON(s.artifactMeta(a.ID), a)
+	return AtomicJSON(s.artifactMeta(a.ID), a)
 }
 
 func (s *Store) failArtifact(a *Artifact, code, message string) error {
 	now := time.Now().UTC()
 	f := &FailureInfo{Code: code, Message: message, Retryable: code != "Corrupted", Time: now}
 	a.State, a.UpdatedAt, a.Failure = Failed, now, f
-	return atomicJSON(s.artifactMeta(a.ID), a)
+	return AtomicJSON(s.artifactMeta(a.ID), a)
 }
 
-func newID(prefix string) string {
+func NewID(prefix string) string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return prefix + "_" + hex.EncodeToString(b)
 }
 
-func atomicJSON(path string, v any) error {
+func AtomicJSON(path string, v any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return err
 	}
-	tmp := path + ".tmp-" + newID("m")
+	tmp := path + ".tmp-" + NewID("m")
 	f, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		return e
@@ -214,7 +214,7 @@ func atomicJSON(path string, v any) error {
 	return e
 }
 
-func safeRelative(p string) (string, error) {
+func SafeRelative(p string) (string, error) {
 	if p == "" || filepath.IsAbs(p) || strings.Contains(p, "\\") || strings.ContainsAny(p, "\x00\r\n") {
 		return "", errors.New("invalid relative path")
 	}
@@ -230,7 +230,7 @@ func safeRelative(p string) (string, error) {
 	return c, nil
 }
 
-func (s *Store) artifactPath(a *Artifact) string {
+func (s *Store) ArtifactPath(a *Artifact) string {
 	return filepath.Join(s.root, filepath.FromSlash(a.StorageKey))
 }
 
@@ -263,7 +263,7 @@ func sameUploadMetadata(a *Artifact, m UploadMetadata) bool {
 func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, maxJobSize int64) (*Artifact, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rel, e := safeRelative(m.RelativePath)
+	rel, e := SafeRelative(m.RelativePath)
 	if e != nil {
 		return nil, false, e
 	}
@@ -271,7 +271,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 	ik := uploadKey(project, job, key)
 	old := s.uploads[ik]
 	if s.manifests[manifestKey(project, job)] != nil {
-		if old != nil && sameUploadMetadata(old, m) && old.State == Completed && verifyFile(s.artifactPath(old), old.Size, old.SHA256) == nil {
+		if old != nil && sameUploadMetadata(old, m) && old.State == Completed && VerifyFile(s.ArtifactPath(old), old.Size, old.SHA256) == nil {
 			return old, true, nil
 		}
 		return nil, false, errors.New("ManifestAlreadyCompleted")
@@ -280,7 +280,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 		if !sameUploadMetadata(old, m) {
 			return nil, false, fmt.Errorf("IdempotencyConflict")
 		}
-		if verifyFile(s.artifactPath(old), old.Size, old.SHA256) == nil {
+		if VerifyFile(s.ArtifactPath(old), old.Size, old.SHA256) == nil {
 			if err := s.completeArtifact(old); err != nil {
 				return nil, false, err
 			}
@@ -299,7 +299,7 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 		old.Failure = nil
 		old.CompletedAt = nil
 		old.UpdatedAt = time.Now().UTC()
-		if e := atomicJSON(s.artifactMeta(old.ID), old); e != nil {
+		if e := AtomicJSON(s.artifactMeta(old.ID), old); e != nil {
 			return nil, false, e
 		}
 		return old, false, nil
@@ -317,9 +317,9 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 		return nil, false, errors.New("JobQuotaExceeded")
 	}
 	now := time.Now().UTC()
-	id := newID("art")
+	id := NewID("art")
 	a := &Artifact{SchemaVersion: 1, ID: id, Project: project, JobName: job, RunnerName: runner, Category: m.Category, FileName: m.FileName, RelativePath: rel, ContentType: m.ContentType, Size: m.Size, SHA256: m.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", project, "jobs", job, rel)), IdempotencyKey: key, State: Pending, CreatedAt: now, UpdatedAt: now}
-	if e = atomicJSON(s.artifactMeta(id), a); e != nil {
+	if e = AtomicJSON(s.artifactMeta(id), a); e != nil {
 		return nil, false, e
 	}
 	s.artifacts[id] = a
@@ -333,7 +333,7 @@ func (s *Store) CompleteUpload(a *Artifact, tmp string) error {
 	if s.manifests[manifestKey(a.Project, a.JobName)] != nil {
 		return errors.New("ManifestAlreadyCompleted")
 	}
-	final := s.artifactPath(a)
+	final := s.ArtifactPath(a)
 	if err := os.MkdirAll(filepath.Dir(final), 0750); err != nil {
 		return err
 	}
@@ -350,7 +350,7 @@ func (s *Store) CompleteUpload(a *Artifact, tmp string) error {
 func (s *Store) UploadCommitted(a *Artifact) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil
+	return VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil
 }
 
 func (s *Store) FailUpload(a *Artifact, code, msg string) {

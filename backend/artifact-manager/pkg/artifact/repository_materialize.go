@@ -20,6 +20,7 @@ import (
 	"syscall"
 
 	"artifact-manager/pkg/signing"
+	"artifact-manager/pkg/upload"
 )
 
 type rpmSigner interface {
@@ -29,7 +30,7 @@ type rpmSigner interface {
 
 type filesystemMaterializer struct {
 	root              string
-	store             *Store
+	store             *upload.Store
 	createRepoCommand string
 	rpmQueryCommand   string
 	createRepoWorkers int
@@ -37,7 +38,7 @@ type filesystemMaterializer struct {
 	signer            rpmSigner
 }
 
-func newFilesystemMaterializer(c Config, store *Store, signer rpmSigner) repositoryMaterializer {
+func newFilesystemMaterializer(c Config, store *upload.Store, signer rpmSigner) repositoryMaterializer {
 	return &filesystemMaterializer{root: c.DataDir, store: store, createRepoCommand: c.Repository.CreateRepoCommand, rpmQueryCommand: c.Repository.RPMQueryCommand, createRepoWorkers: c.Repository.CreateRepoWorkers, signingWorkers: c.Signing.Workers, signer: signer}
 }
 
@@ -45,7 +46,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if record.SigningFingerprint != m.signingFingerprint() {
 		return result, &repositoryError{code: "SigningConfigurationChanged", status: 503, retryable: true}
 	}
-	inputs, err := m.store.repositoryArtifacts(record.Project, record.Manifests)
+	inputs, err := repositoryArtifacts(m.store, record.Project, record.Manifests)
 	if err != nil {
 		return result, err
 	}
@@ -159,7 +160,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		return result, retryableRepositoryError(err)
 	}
 	repositoryJSON := repositoryIndex{SchemaVersion: 1, RepositoryUID: record.RepositoryUID, RequestDigest: record.RequestDigest, SigningFingerprint: record.SigningFingerprint, RepositoryDigest: digest, RPMs: metadata}
-	if err := atomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
+	if err := upload.AtomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
 		return result, retryableRepositoryError(err)
 	}
 	finalParent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "history", record.BuildName, "steps")
@@ -327,7 +328,7 @@ func copyRPMFile(source, destination string) error {
 	return closeErr
 }
 
-func (m *filesystemMaterializer) inspectRPM(ctx context.Context, path string, artifact Artifact) (RepositoryRPMMeta, error) {
+func (m *filesystemMaterializer) inspectRPM(ctx context.Context, path string, artifact upload.Artifact) (RepositoryRPMMeta, error) {
 	meta, err := m.inspectRPMFile(ctx, path)
 	if err != nil {
 		return meta, err

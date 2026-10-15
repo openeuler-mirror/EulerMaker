@@ -1,4 +1,4 @@
-package artifact
+package upload
 
 type UploadMetadata struct {
 	Category     Category `json:"category"`
@@ -18,12 +18,4 @@ type CompleteLogRequest struct {
 	LastSequence int64  `json:"lastSequence"`
 	Size         int64  `json:"size"`
 	SHA256       string `json:"sha256"`
-}
-
-type APIError struct {
-	Code      string         `json:"code"`
-	Message   string         `json:"message"`
-	Retryable bool           `json:"retryable"`
-	RequestID string         `json:"requestID"`
-	Details   map[string]any `json:"details,omitempty"`
 }

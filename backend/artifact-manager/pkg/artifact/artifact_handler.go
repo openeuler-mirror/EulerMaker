@@ -15,6 +15,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/upload"
 )
 
 func method(w http.ResponseWriter, allow string) {
@@ -30,10 +33,10 @@ func token(r *http.Request) (string, error) {
 	return v[1], nil
 }
 
-func (s *Server) identity(r *http.Request) (Identity, error) {
+func (s *Server) identity(r *http.Request) (auth.Identity, error) {
 	t, e := token(r)
 	if e != nil {
-		return Identity{}, e
+		return auth.Identity{}, e
 	}
 	return s.auth.Authenticate(r.Context(), t)
 }
@@ -106,8 +109,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeErr(w, r, 400, "InvalidMultipartRequest", "metadata must be first", false, nil)
 		return
 	}
-	var m UploadMetadata
-	if e = decodeJSON(mp, s.cfg.Upload.MaxMetadataSize, &m); e != nil || m.FileName == "" || len(m.FileName) > 255 || m.Size < 0 || m.Size > s.cfg.Upload.MaxFileSize || !validHash(m.SHA256) || (m.Category != CategoryArtifact && m.Category != CategoryLog) {
+	var m upload.UploadMetadata
+	if e = decodeJSON(mp, s.cfg.Upload.MaxMetadataSize, &m); e != nil || m.FileName == "" || len(m.FileName) > 255 || m.Size < 0 || m.Size > s.cfg.Upload.MaxFileSize || !validHash(m.SHA256) || (m.Category != upload.CategoryArtifact && m.Category != upload.CategoryLog) {
 		writeErr(w, r, 422, "InvalidArtifactMetadata", "invalid metadata", false, nil)
 		return
 	}
@@ -203,7 +206,7 @@ func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j s
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
-	var in CompleteManifestRequest
+	var in upload.CompleteManifestRequest
 	if decodeJSON(r.Body, 1<<20, &in) != nil {
 		writeErr(w, r, 400, "InvalidRequest", "invalid request", false, nil)
 		return
@@ -226,18 +229,18 @@ func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string
 }
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request, p, j string) {
-	cat := Category(r.URL.Query().Get("category"))
+	cat := upload.Category(r.URL.Query().Get("category"))
 	items, _ := s.store.ListArtifacts(p, j, cat)
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 
 func (s *Server) download(w http.ResponseWriter, r *http.Request, id string) {
 	a, ok := s.store.GetArtifact(id)
-	if !ok || a.State != Completed {
+	if !ok || a.State != upload.Completed {
 		writeErr(w, r, 404, "NotFound", "artifact not found", false, nil)
 		return
 	}
-	f, e := os.Open(s.store.artifactPath(a))
+	f, e := os.Open(s.store.ArtifactPath(a))
 	if e != nil {
 		writeErr(w, r, 404, "NotFound", "artifact content not found", false, nil)
 		return

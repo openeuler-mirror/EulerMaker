@@ -1,4 +1,4 @@
-package artifact
+package upload
 
 import (
 	"errors"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func manifestDigest(files []ManifestFile) string {
+func ManifestDigest(files []ManifestFile) string {
 	var b strings.Builder
 	b.WriteString("artifact-manifest-v1\n")
 	for _, f := range files {
@@ -39,7 +39,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 		}
 	}
 	k := manifestKey(project, job)
-	digest := manifestDigest(r.Files)
+	digest := ManifestDigest(r.Files)
 	if old := s.manifests[k]; old != nil {
 		if old.Digest == digest && old.State == ManifestCompleted {
 			return old, nil
@@ -49,7 +49,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 	now := time.Now().UTC()
 	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
 	path := filepath.Join(s.root, ".metadata/jobs", project, job, "manifest.json")
-	if err := atomicJSON(path, m); err != nil {
+	if err := AtomicJSON(path, m); err != nil {
 		return nil, err
 	}
 	s.manifests[k] = m

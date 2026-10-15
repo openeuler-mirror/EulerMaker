@@ -3,8 +3,11 @@ package artifact
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"artifact-manager/pkg/upload"
 )
 
 type badManifestMaterializer struct{}
@@ -40,25 +43,33 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 	ref := []ManifestReference{{JobName: job}}
 	tests := []struct {
 		name     string
-		manifest *JobUploadManifest
+		manifest *upload.JobUploadManifest
 		code     string
 	}{
 		{name: "missing", code: "ManifestNotReady"},
-		{name: "open", manifest: &JobUploadManifest{State: ManifestOpen}, code: "ManifestNotReady"},
-		{name: "invalid digest", manifest: &JobUploadManifest{State: ManifestCompleted, Digest: "bad"}, code: "ManifestInvalid"},
-		{name: "no RPM", manifest: &JobUploadManifest{State: ManifestCompleted,
-			Files: []ManifestFile{{RelativePath: "logs/build.log", Category: CategoryLog}}}, code: "ManifestContainsNoPackages"},
+		{name: "open", manifest: &upload.JobUploadManifest{State: upload.ManifestOpen}, code: "ManifestNotReady"},
+		{name: "invalid digest", manifest: &upload.JobUploadManifest{State: upload.ManifestCompleted, Digest: "bad"}, code: "ManifestInvalid"},
+		{name: "no RPM", manifest: &upload.JobUploadManifest{State: upload.ManifestCompleted,
+			Files: []upload.ManifestFile{{RelativePath: "logs/build.log", Category: upload.CategoryLog}}}, code: "ManifestContainsNoPackages"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &Store{manifests: make(map[string]*JobUploadManifest)}
+			root := t.TempDir()
 			if tt.manifest != nil {
+				tt.manifest.Project = project
+				tt.manifest.JobName = job
 				if tt.name == "no RPM" {
-					tt.manifest.Digest = manifestDigest(tt.manifest.Files)
+					tt.manifest.Digest = upload.ManifestDigest(tt.manifest.Files)
 				}
-				store.manifests[manifestKey(project, job)] = tt.manifest
+				if err := upload.AtomicJSON(filepath.Join(root, ".metadata/jobs", project, job, "manifest.json"), tt.manifest); err != nil {
+					t.Fatal(err)
+				}
 			}
-			_, err := store.repositoryArtifacts(project, ref)
+			store, err := upload.NewStore(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = repositoryArtifacts(store, project, ref)
 			var typed *repositoryError
 			if !errors.As(err, &typed) || typed.code != tt.code || typed.jobName != job {
 				t.Fatalf("error = %v, want code %q and job name %q", err, tt.code, job)

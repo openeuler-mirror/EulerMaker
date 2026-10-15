@@ -1,51 +1,49 @@
 package artifact
 
-import "strings"
+import (
+	"strings"
+
+	"artifact-manager/pkg/upload"
+)
 
 type repositoryArtifact struct {
-	Metadata Artifact
+	Metadata upload.Artifact
 	Path     string
 	JobName  string
 }
 
-func (s *Store) repositoryArtifacts(project string, refs []ManifestReference) ([]repositoryArtifact, error) {
-	s.mu.RLock()
+func repositoryArtifacts(s *upload.Store, project string, refs []ManifestReference) ([]repositoryArtifact, error) {
 	var result []repositoryArtifact
 	for _, ref := range refs {
-		manifest := s.manifests[manifestKey(project, ref.JobName)]
-		if manifest == nil || manifest.State != ManifestCompleted {
-			s.mu.RUnlock()
+		manifest, ok := s.GetManifest(project, ref.JobName)
+		if !ok || manifest.State != upload.ManifestCompleted {
 			return nil, &repositoryError{code: "ManifestNotReady", status: 422, jobName: ref.JobName}
 		}
-		if manifest.Digest != manifestDigest(append([]ManifestFile(nil), manifest.Files...)) {
-			s.mu.RUnlock()
+		if manifest.Digest != upload.ManifestDigest(append([]upload.ManifestFile(nil), manifest.Files...)) {
 			return nil, &repositoryError{code: "ManifestInvalid", status: 422, jobName: ref.JobName}
 		}
 		packages := 0
 		for _, file := range manifest.Files {
-			if file.Category != CategoryArtifact || !strings.HasPrefix(file.RelativePath, "packages/") || !strings.HasSuffix(strings.ToLower(file.RelativePath), ".rpm") {
+			if file.Category != upload.CategoryArtifact || !strings.HasPrefix(file.RelativePath, "packages/") || !strings.HasSuffix(strings.ToLower(file.RelativePath), ".rpm") {
 				continue
 			}
-			artifact := s.artifacts[file.ArtifactID]
-			if artifact == nil || artifact.State != Completed || artifact.Project != project || artifact.JobName != ref.JobName || artifact.Size != file.Size || artifact.SHA256 != file.SHA256 {
-				s.mu.RUnlock()
+			artifact, ok := s.GetArtifact(file.ArtifactID)
+			if !ok || artifact.State != upload.Completed || artifact.Project != project || artifact.JobName != ref.JobName || artifact.Size != file.Size || artifact.SHA256 != file.SHA256 {
 				return nil, &repositoryError{code: "MaterializationInputExpired", status: 410, jobName: ref.JobName}
 			}
 			copy := *artifact
-			result = append(result, repositoryArtifact{Metadata: copy, Path: s.artifactPath(&copy), JobName: ref.JobName})
+			result = append(result, repositoryArtifact{Metadata: copy, Path: s.ArtifactPath(&copy), JobName: ref.JobName})
 			packages++
 		}
 		if packages == 0 {
-			s.mu.RUnlock()
 			return nil, &repositoryError{code: "ManifestContainsNoPackages", status: 422, jobName: ref.JobName}
 		}
 	}
-	s.mu.RUnlock()
 	if len(result) == 0 {
 		return nil, &repositoryError{code: "ManifestContainsNoPackages", status: 422}
 	}
 	for _, artifact := range result {
-		if err := verifyFile(artifact.Path, artifact.Metadata.Size, artifact.Metadata.SHA256); err != nil {
+		if err := upload.VerifyFile(artifact.Path, artifact.Metadata.Size, artifact.Metadata.SHA256); err != nil {
 			return nil, &repositoryError{code: "MaterializationInputExpired", status: 410, jobName: artifact.JobName}
 		}
 	}
