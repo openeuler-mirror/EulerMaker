@@ -38,7 +38,7 @@ type filesystemMaterializer struct {
 }
 
 func newFilesystemMaterializer(c Config, store *Store, signer rpmSigner) repositoryMaterializer {
-	return &filesystemMaterializer{root: c.DataDir, store: store, createRepoCommand: c.CreateRepoCommand, rpmQueryCommand: c.RPMQueryCommand, createRepoWorkers: c.CreateRepoWorkers, signingWorkers: c.RPMSigningWorkers, signer: signer}
+	return &filesystemMaterializer{root: c.DataDir, store: store, createRepoCommand: c.Repository.CreateRepoCommand, rpmQueryCommand: c.Repository.RPMQueryCommand, createRepoWorkers: c.Repository.CreateRepoWorkers, signingWorkers: c.Signing.Workers, signer: signer}
 }
 
 func (m *filesystemMaterializer) Materialize(ctx context.Context, record RepositoryRecord) (result repositoryResult, resultErr error) {

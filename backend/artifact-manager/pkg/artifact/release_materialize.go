@@ -24,7 +24,7 @@ type filesystemReleaseMaterializer struct {
 }
 
 func newFilesystemReleaseMaterializer(c Config) releaseMaterializer {
-	return &filesystemReleaseMaterializer{root: c.DataDir, createRepoCommand: c.CreateRepoCommand, createRepoWorkers: c.CreateRepoWorkers, publicKey: c.ReleasePublicKey}
+	return &filesystemReleaseMaterializer{root: c.DataDir, createRepoCommand: c.Repository.CreateRepoCommand, createRepoWorkers: c.Repository.CreateRepoWorkers, publicKey: c.Release.PublicKey}
 }
 
 func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source RepositoryRecord) (result releaseResult, resultErr error) {

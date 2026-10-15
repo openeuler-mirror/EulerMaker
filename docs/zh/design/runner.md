@@ -510,7 +510,7 @@ type LogUploadCheckpoint struct {
 - 上传器使用有界内存队列；未确认正文始终可从本地 spool 重新读取。单 Job 的 spool 总大小达到 `--log-spool-limit` 时暂停读取容器日志，让容器运行时或其日志文件承担背压，不能静默丢弃、跳过或伪造日志。服务端确认不会立即释放本地正文，因为封账和崩溃恢复仍需要完整文件；只有 8.3.5 节的终态清理才能回收。
 - 采集 goroutine、chunk 上传 goroutine和容器等待 goroutine由同一 Job context 管理。业务超时取消容器执行，但日志读取使用独立的排空期限；必须先等待运行时日志 EOF，再关闭 chunk 输入，不能在 `Wait` 返回时立即取消日志读取。
 
-追加请求严格使用 Artifact Manager 10.2.1 节定义的 header。200 响应只有在 `acceptedSequence` 等于请求 sequence、`nextSequence` 等于请求 sequence+1 且 `committedBytes` 等于本 chunk 结束 offset 时才算确认；响应字段不一致按结果未知处理并查询状态。
+追加请求严格使用 Artifact Manager 9.2.1 节定义的 header。200 响应只有在 `acceptedSequence` 等于请求 sequence、`nextSequence` 等于请求 sequence+1 且 `committedBytes` 等于本 chunk 结束 offset 时才算确认；响应字段不一致按结果未知处理并查询状态。
 
 #### 8.3.3 启动与断线恢复
 

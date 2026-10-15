@@ -29,23 +29,23 @@ type repositoryManager struct {
 	cancel             context.CancelFunc
 }
 
-func newRepositoryManager(c Config, materializer repositoryMaterializer) (*repositoryManager, error) {
+func newRepositoryManager(c Config, materializer repositoryMaterializer, signingFingerprint string) (*repositoryManager, error) {
 	for _, dir := range []string{"repositories", ".repository-work", ".metadata/repositories", ".repository-trash"} {
 		if err := os.MkdirAll(filepath.Join(c.DataDir, dir), 0750); err != nil {
 			return nil, err
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &repositoryManager{root: c.DataDir, timeout: c.RepositoryTimeout, signingFingerprint: c.signingFingerprint, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.RepositoryQueueCapacity), ctx: ctx, cancel: cancel}
+	m := &repositoryManager{root: c.DataDir, timeout: c.Repository.Timeout, signingFingerprint: signingFingerprint, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.Repository.QueueCapacity), ctx: ctx, cancel: cancel}
 	if err := m.load(); err != nil {
 		cancel()
 		return nil, err
 	}
-	if err := m.recover(c.RepositoryWorkTTL); err != nil {
+	if err := m.recover(c.Repository.WorkTTL); err != nil {
 		cancel()
 		return nil, err
 	}
-	for i := 0; i < c.RepositoryWorkers; i++ {
+	for i := 0; i < c.Repository.Workers; i++ {
 		go m.worker()
 	}
 	for uid, record := range m.records {

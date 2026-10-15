@@ -6,26 +6,68 @@ import (
 )
 
 type Config struct {
-	DataDir, GatewayURL, GatewayCA                                     string
-	CreateRepoCommand, RPMQueryCommand                                 string
-	InsecureSkipVerify                                                 bool
-	MaxFileSize, MaxJobSize, MaxMetadataSize, MaxLogSize, LogChunkSize int64
-	UploadTimeout, AuthCacheTTL, SSEHeartbeat, TemporaryUploadTTL      time.Duration
-	RepositoryTimeout, RepositoryWorkTTL                               time.Duration
-	ReleaseTimeout, ReleaseWorkTTL                                     time.Duration
-	LogReplayWindow, LogDedupeWindow, MaxPartHeaders                   int
-	CreateRepoWorkers, RepositoryWorkers, RepositoryQueueCapacity      int
-	ReleaseWorkers, ReleaseQueueCapacity, ReleaseHistoryCount          int
-	ReleasePublicKey                                                   string
-	RPMSigningMode                                                     string
-	RPMSigningGPGHome                                                  string
-	RPMSigningSignatrustConfig                                         string
-	RPMSigningSignatrustKeyName                                        string
-	RPMSigningTimeout                                                  time.Duration
-	RPMSigningWorkers                                                  int
-	signingFingerprint                                                 string
-	ReleaseHistoryTTL                                                  time.Duration
-	MaxHeaderLineSize, MaxPartHeaderBytes                              int64
+	DataDir    string
+	Gateway    GatewayConfig
+	Upload     UploadConfig
+	Log        LogConfig
+	Repository RepositoryConfig
+	Release    ReleaseConfig
+	Signing    SigningConfig
+}
+
+type GatewayConfig struct {
+	URL                string
+	CA                 string
+	InsecureSkipVerify bool
+	AuthCacheTTL       time.Duration
+}
+
+type UploadConfig struct {
+	MaxFileSize        int64
+	MaxJobSize         int64
+	MaxMetadataSize    int64
+	Timeout            time.Duration
+	TemporaryUploadTTL time.Duration
+	MaxPartHeaders     int
+	MaxHeaderLineSize  int64
+	MaxPartHeaderBytes int64
+}
+
+type LogConfig struct {
+	MaxLogSize   int64
+	ChunkSize    int64
+	SSEHeartbeat time.Duration
+	ReplayWindow int
+	DedupeWindow int
+}
+
+type RepositoryConfig struct {
+	CreateRepoCommand string
+	RPMQueryCommand   string
+	CreateRepoWorkers int
+	Timeout           time.Duration
+	WorkTTL           time.Duration
+	Workers           int
+	QueueCapacity     int
+}
+
+type ReleaseConfig struct {
+	Timeout       time.Duration
+	WorkTTL       time.Duration
+	HistoryTTL    time.Duration
+	Workers       int
+	QueueCapacity int
+	HistoryCount  int
+	PublicKey     string
+}
+
+type SigningConfig struct {
+	Mode              string
+	GPGHome           string
+	SignatrustConfig  string
+	SignatrustKeyName string
+	Timeout           time.Duration
+	Workers           int
 }
 
 func DefaultConfig() Config {
@@ -33,5 +75,51 @@ func DefaultConfig() Config {
 	if createRepoWorkers > 8 {
 		createRepoWorkers = 8
 	}
-	return Config{DataDir: "/var/lib/ebs-artifacts", GatewayURL: "https://ebs-gateway:8443", MaxFileSize: 25 << 30, MaxJobSize: 100 << 30, MaxMetadataSize: 64 << 10, MaxLogSize: 4 << 30, LogChunkSize: 256 << 10, UploadTimeout: 2 * time.Hour, AuthCacheTTL: 30 * time.Second, SSEHeartbeat: 15 * time.Second, TemporaryUploadTTL: 24 * time.Hour, LogReplayWindow: 1024, LogDedupeWindow: 1024, MaxPartHeaders: 16, MaxHeaderLineSize: 8 << 10, MaxPartHeaderBytes: 32 << 10, CreateRepoCommand: "/usr/bin/createrepo_c", RPMQueryCommand: "/usr/bin/rpm", CreateRepoWorkers: createRepoWorkers, RepositoryTimeout: 30 * time.Minute, RepositoryWorkTTL: 24 * time.Hour, ReleaseTimeout: 30 * time.Minute, ReleaseWorkTTL: 24 * time.Hour, ReleaseHistoryTTL: 7 * 24 * time.Hour, RepositoryWorkers: 2, RepositoryQueueCapacity: 100, ReleaseWorkers: 1, ReleaseQueueCapacity: 20, ReleaseHistoryCount: 2, RPMSigningMode: "disabled", RPMSigningSignatrustKeyName: "openeuler-default-key", RPMSigningTimeout: 2 * time.Minute, RPMSigningWorkers: 8}
+	return Config{
+		DataDir: "/var/lib/ebs-artifacts",
+		Gateway: GatewayConfig{
+			URL:          "https://ebs-gateway:8443",
+			AuthCacheTTL: time.Hour,
+		},
+		Upload: UploadConfig{
+			MaxFileSize:        25 << 30,  // 25 GiB
+			MaxJobSize:         100 << 30, // 100 GiB
+			MaxMetadataSize:    64 << 10,  // 64 KiB
+			Timeout:            2 * time.Hour,
+			TemporaryUploadTTL: 24 * time.Hour,
+			MaxPartHeaders:     16,
+			MaxHeaderLineSize:  8 << 10,  // 8 KiB
+			MaxPartHeaderBytes: 32 << 10, // 32 KiB
+		},
+		Log: LogConfig{
+			MaxLogSize:   1 << 30,   // 1 GiB
+			ChunkSize:    256 << 10, // 256 KiB
+			SSEHeartbeat: 15 * time.Second,
+			ReplayWindow: 1024,
+			DedupeWindow: 1024,
+		},
+		Repository: RepositoryConfig{
+			CreateRepoCommand: "/usr/bin/createrepo_c",
+			RPMQueryCommand:   "/usr/bin/rpm",
+			CreateRepoWorkers: createRepoWorkers,
+			Timeout:           30 * time.Minute,
+			WorkTTL:           24 * time.Hour,
+			Workers:           2,
+			QueueCapacity:     100,
+		},
+		Release: ReleaseConfig{
+			Timeout:       30 * time.Minute,
+			WorkTTL:       24 * time.Hour,
+			HistoryTTL:    7 * 24 * time.Hour,
+			Workers:       1,
+			QueueCapacity: 20,
+			HistoryCount:  2,
+		},
+		Signing: SigningConfig{
+			Mode:              "disabled",
+			SignatrustKeyName: "openeuler-default-key",
+			Timeout:           2 * time.Minute,
+			Workers:           8,
+		},
+	}
 }

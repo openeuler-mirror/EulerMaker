@@ -50,13 +50,13 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 	t.Helper()
 	c := DefaultConfig()
 	c.DataDir = t.TempDir()
-	c.RepositoryWorkers, c.ReleaseWorkers = 1, 1
+	c.Repository.Workers, c.Release.Workers = 1, 1
 	store, err := NewStore(c.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	repositoryMaterializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
-	server, err := newArtifactServer(c, testAuthorizer{}, store, repositoryMaterializer)
+	server, err := newArtifactServer(c, testAuthorizer{}, store, repositoryMaterializer, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := DefaultConfig()
-	c.DataDir, c.CreateRepoCommand, c.ReleasePublicKey = root, command, publicKey
+	c.DataDir, c.Repository.CreateRepoCommand, c.Release.PublicKey = root, command, publicKey
 	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	root := t.TempDir()
 	c := DefaultConfig()
 	c.DataDir = root
-	c.CreateRepoCommand = filepath.Join(root, "createrepo-must-not-run")
+	c.Repository.CreateRepoCommand = filepath.Join(root, "createrepo-must-not-run")
 	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
 		t.Fatal(err)
 	}

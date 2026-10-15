@@ -81,7 +81,7 @@ func validIdentifier(v string) bool {
 }
 
 func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.UploadTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Upload.Timeout)
 	defer cancel()
 	r = r.WithContext(ctx)
 	id, e := s.identity(r)
@@ -99,7 +99,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeErr(w, r, 400, "InvalidMultipartRequest", "invalid multipart request", false, nil)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxFileSize+s.cfg.MaxMetadataSize+(1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.Upload.MaxFileSize+s.cfg.Upload.MaxMetadataSize+(1<<20))
 	mr := multipart.NewReader(r.Body, params["boundary"])
 	mp, e := mr.NextPart()
 	if e != nil || !s.validPartHeaders(mp) || mp.FormName() != "metadata" || mediaType(mp.Header.Get("Content-Type")) != "application/json" {
@@ -107,7 +107,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		return
 	}
 	var m UploadMetadata
-	if e = decodeJSON(mp, s.cfg.MaxMetadataSize, &m); e != nil || m.FileName == "" || len(m.FileName) > 255 || m.Size < 0 || m.Size > s.cfg.MaxFileSize || !validHash(m.SHA256) || (m.Category != CategoryArtifact && m.Category != CategoryLog) {
+	if e = decodeJSON(mp, s.cfg.Upload.MaxMetadataSize, &m); e != nil || m.FileName == "" || len(m.FileName) > 255 || m.Size < 0 || m.Size > s.cfg.Upload.MaxFileSize || !validHash(m.SHA256) || (m.Category != CategoryArtifact && m.Category != CategoryLog) {
 		writeErr(w, r, 422, "InvalidArtifactMetadata", "invalid metadata", false, nil)
 		return
 	}
@@ -116,7 +116,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeErr(w, r, 400, "InvalidMultipartRequest", "file must be second", false, nil)
 		return
 	}
-	a, ir, replay, e := s.store.BeginUpload(p, j, id.Name, key, m, s.cfg.MaxJobSize)
+	a, ir, replay, e := s.store.BeginUpload(p, j, id.Name, key, m, s.cfg.Upload.MaxJobSize)
 	if e != nil {
 		s.mapErr(w, r, e)
 		return
@@ -166,7 +166,7 @@ func mediaType(v string) string {
 	return t
 }
 func (s *Server) validPartHeaders(p *multipart.Part) bool {
-	if len(p.Header) > s.cfg.MaxPartHeaders {
+	if len(p.Header) > s.cfg.Upload.MaxPartHeaders {
 		return false
 	}
 	var total int64
@@ -177,12 +177,12 @@ func (s *Server) validPartHeaders(p *multipart.Part) bool {
 		for _, value := range values {
 			line := int64(len(name) + len(value) + 2)
 			total += line
-			if line > s.cfg.MaxHeaderLineSize || strings.ContainsAny(value, "\x00\r\n") {
+			if line > s.cfg.Upload.MaxHeaderLineSize || strings.ContainsAny(value, "\x00\r\n") {
 				return false
 			}
 		}
 	}
-	return total <= s.cfg.MaxPartHeaderBytes
+	return total <= s.cfg.Upload.MaxPartHeaderBytes
 }
 
 func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {

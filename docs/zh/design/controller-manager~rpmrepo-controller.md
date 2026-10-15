@@ -204,7 +204,7 @@ type DefaultPublishPolicy struct{}
 - `PublishPolicyInput` 覆盖当前可得的全部依据（Project、Build、BuildInfo、源过程仓 UID、目标 OS/Arch），后续策略调整只需替换实现；
 - `Decide` 一次返回两项决策：`Publish`（是否需要正式发布）与 `ExcludeSpecs`（发布时排除的 spec 集合），避免两次调用之间依据不一致；
 - 首版默认实现 `DefaultPublishPolicy`：`Publish=false` **当且仅当** `buildTarget.publishFlag=false`；其余情形 `Publish=true`；`ExcludeSpecs` 恒为空；`buildType` 不参与判定；
-- `ExcludeSpecs` 在构造请求前**去重并按字典序排序**，与 Artifact Manager §9.13.2 中 `requestDigest`（服务端计算）的规范化口径一致；
+- `ExcludeSpecs` 在构造请求前**去重并按字典序排序**，与 Artifact Manager §8.13.2 中 `requestDigest`（服务端计算）的规范化口径一致；
 - 策略返回 error 时按**可重试错误**处理：不提交发布、不写 `PublishSucceed`，记录日志与指标；
 - 策略在 initializer 注入；首版固定 `DefaultPublishPolicy`。
 
@@ -587,7 +587,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 
 ## 八、Artifact Manager 契约
 
-接口路径与类型统一见 3.3，Artifact Manager 完整协议见 `artifact-manager.md` 第九章；本节规定响应、幂等与重试语义。控制器不删除仓库或直接读取仓库文件。
+接口路径与类型统一见 3.3，Artifact Manager 完整协议见 `artifact-manager.md` 第八章；本节规定响应、幂等与重试语义。控制器不删除仓库或直接读取仓库文件。
 
 提交响应处理：
 
@@ -618,7 +618,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 - 提交响应里不会出现 `200 + Failed{retryable=true}`：可重试失败被重放时服务端返回 `202` 且 `attempt` +1；`Failed{retryable=true}` 只通过 `GetRepository` 观察（查询不改变 `state` 与 `attempt`）；
 - 结果未知一律按"先 GET 确认、不重放不同请求"处理；
 - `Ready` 响应必须包含 `contentURL`；服务端在需要客户端轮询的响应中应返回 `pollAfterSeconds`，客户端在该字段缺失或非正值时按 5 秒兜底，不因此判定响应契约错误。该规则统一适用于过程仓与发布流程。响应体可能携带 `rpms`，控制器不解析、不持久化该字段；内容与发布摘要只由 Artifact Manager 服务端持有，不在响应中返回，控制器不做本地摘要比对。
-- `GetRepository` 返回 `404 RepositoryNotFound` 表示 Artifact Manager 侧不存在该 `repositoryUID` 记录，控制器按"提交未被接受"用同一请求重放 `SubmitRepository`（与 `artifact-manager.md` §9.3.3 第 2 步"查询或重新提交"一致），不视为不可重试失败。
+- `GetRepository` 返回 `404 RepositoryNotFound` 表示 Artifact Manager 侧不存在该 `repositoryUID` 记录，控制器按"提交未被接受"用同一请求重放 `SubmitRepository`（与 `artifact-manager.md` §8.3.3 第 2 步"查询或重新提交"一致），不视为不可重试失败。
 
 ## 九、条件与时间
 
@@ -823,7 +823,7 @@ buildinfos:      get
 - 永久错误仅日志暴露：撤销控制器读取权限（或注入 `401` / `403`）后断言对象不丢、`RpmRepo.status` 不变、每轮仅产生 `result=permanent-error` 日志且不新增计数；恢复权限后断言下一轮自动继续推进（自愈）。
 - 发布重启（逐崩溃窗口）：① 策略判定后未写检查点 → 重启后重新判定得到相同 `excludeSpecs`，不产生第二个 release；② 检查点已写、`SubmitRelease` 未被接受 → `GetRelease` 返回 `404` 时用同一请求重放；③ 提交已受理、相位未补齐 → `GetRelease` 返回 `Creating` / `Prepared` 时补齐相位后继续等待或激活；④ 激活成功后收口写入前 → `GetRelease` 返回 `Ready` 时直接成功收口；⑤ 失败收口写入前 → `GetRelease` 仍不可重试失败时重新收口；⑥ 收口写入结果未知后重启 → 基于最新对象恢复，终态或删除中则结束，否则重新读取依赖与发布结果计算决策；不沿用旧收口目标；⑦ `Requeue: true` 丢失 → 由 RpmRepo 轮询按同一对象 key 重新入队；全部窗口均不产生第二个 release 版本。
 
-验收场景沿用 `docs/zh/design/artifact-manager.md` §9.12 的 11 条并改写为可断言用例。
+验收场景沿用 `docs/zh/design/artifact-manager.md` §8.12 的 11 条并改写为可断言用例。
 
 ## 十五、实施顺序
 

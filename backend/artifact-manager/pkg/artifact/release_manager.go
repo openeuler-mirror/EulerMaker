@@ -37,16 +37,16 @@ func newReleaseManager(c Config, repositories *repositoryManager, materializer r
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &releaseManager{root: c.DataDir, publicKey: c.ReleasePublicKey, timeout: c.ReleaseTimeout, historyTTL: c.ReleaseHistoryTTL, historyCount: c.ReleaseHistoryCount, repositories: repositories, materializer: materializer, records: map[string]*ReleaseRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.ReleaseQueueCapacity), ctx: ctx, cancel: cancel}
+	m := &releaseManager{root: c.DataDir, publicKey: c.Release.PublicKey, timeout: c.Release.Timeout, historyTTL: c.Release.HistoryTTL, historyCount: c.Release.HistoryCount, repositories: repositories, materializer: materializer, records: map[string]*ReleaseRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.Release.QueueCapacity), ctx: ctx, cancel: cancel}
 	if err := m.load(); err != nil {
 		cancel()
 		return nil, err
 	}
-	if err := m.recover(c.ReleaseWorkTTL); err != nil {
+	if err := m.recover(c.Release.WorkTTL); err != nil {
 		cancel()
 		return nil, err
 	}
-	for i := 0; i < c.ReleaseWorkers; i++ {
+	for i := 0; i < c.Release.Workers; i++ {
 		go m.worker()
 	}
 	for name, record := range m.records {

@@ -41,7 +41,42 @@ Artifact、Job 上传清单和幂等记录均以元数据文件形式存放在�
 
 文件正文写入 Artifact Manager 管理的本地持久化目录。使用节点本地目录时只能部署单实例。
 
-首版由 Runner 单请求上传完整文件，Artifact Manager 流式写入本地文件系统。首版不支持普通 Artifact 的分片传输和断点续传；请求中断后 Runner 使用相同幂等键重新上传整个文件。实时日志仍使用第十章定义的 chunk/sequence 追加协议，该协议用于实时展示和日志流恢复，不属于普通 Artifact 分片上传。
+首版由 Runner 单请求上传完整文件，Artifact Manager 流式写入本地文件系统。首版不支持普通 Artifact 的分片传输和断点续传；请求中断后 Runner 使用相同幂等键重新上传整个文件。实时日志仍使用第九章定义的 chunk/sequence 追加协议，该协议用于实时展示和日志流恢复，不属于普通 Artifact 分片上传。
+
+### 3.1 API 通信矩阵
+
+下表中的路径是 Artifact Manager 或 Gateway 实际接收的路径；前端可经 Nginx 代理访问 Artifact Manager，但代理前缀不属于 Artifact Manager API。`{project}` 和 `{job}` 标识同一 Job。
+
+| 调用方 → 接收方 | 方法与路径 | 用途 | 当前认证与访问约束 |
+|---|---|---|---|
+| Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/artifacts` | 上传产物 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
+| Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete` | 封账 Job 上传清单 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
+| Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks` | 追加实时日志 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
+| Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/logs/complete` | 封账实时日志 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
+| Runner → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status` | 查询日志流状态，恢复上传 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
+| Artifact Manager → Gateway | `POST /auth/check` | 验证 Runner Token 并获取 Runner 身份和过期时间 | 转发 Runner Bearer Token；调用方无独立服务凭据 |
+| RpmRepo Controller → Artifact Manager | `POST /internal/v1/repositories` | 提交过程仓物化 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `GET /internal/v1/releases/{buildName}` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/releases/{buildName}` | 删除正式发布记录 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases/{buildName}/activate` | 激活指定正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
+| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest` | 查询 Job 上传清单 | 公开只读，不经 Gateway 鉴权 |
+| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts` | 列出 Job 产物 | 公开只读，不经 Gateway 鉴权 |
+| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/artifacts/{artifactID}/content` | 下载产物正文 | 公开只读，不经 Gateway 鉴权 |
+| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/content` | 读取日志正文 | 公开只读，不经 Gateway 鉴权 |
+| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream` | 订阅实时日志 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/v1/{repositoryUID}/{path...}` | 读取过程仓文件 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/v1/{repositoryUID}/{path...}` | 查询过程仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/{project}/{os}/{arch}/{path...}` | 读取当前正式仓文件 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/{project}/{os}/{arch}/{path...}` | 查询当前正式仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/releases/v1/{buildName}/{path...}` | 读取指定发布版本的仓库文件 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/releases/v1/{buildName}/{path...}` | 查询指定发布版本的仓库文件元数据 | 公开只读，不经 Gateway 鉴权 |
+| 健康检查 → Artifact Manager | `GET /healthz` | 存活探测 | 无认证 |
+| 健康检查 → Artifact Manager | `GET /readyz` | 就绪探测 | 无认证 |
+
+各接口的请求、响应及错误语义分别见第六、七、八、九、十章。内部管理接口尚未实现组件身份认证，部署时需限制访问来源；公开只读接口的访问边界由部署方控制。
 
 ## 四、文件归属与存储键
 
@@ -579,54 +614,9 @@ GET /artifacts/v1/artifacts/{artifactID}/content
 
 公开查询和下载是系统明确的数据访问策略。部署方必须通过网络边界决定 Artifact Manager 是否向公网开放，并为公开接口配置请求速率和下载带宽限制。
 
-## 八、Runner 上传流程
+## 八、RPM 仓库物化
 
-Runner 执行完成后扫描 Job 结果目录并生成 manifest：
-
-```json
-{
-  "files": [
-    {
-      "relativePath": "packages/kernel.rpm",
-      "category": "artifact",
-      "size": 183746291,
-      "sha256": "..."
-    },
-    {
-      "relativePath": "logs/container.log",
-      "category": "log",
-      "size": 738291,
-      "sha256": "..."
-    }
-  ]
-}
-```
-
-上传流程：
-
-1. Runner 完成执行，Job 进入 `stage=PostRun`。
-2. 扫描结果目录并计算文件大小和 SHA-256。
-3. 对每个文件发起单请求流式上传，Artifact Manager 完成大小和 SHA-256 校验后返回 `Completed` Artifact。
-4. 上传请求失败时使用相同幂等键整文件重传。
-5. 确认每个必需文件均已返回 `Completed`。
-6. 调用 Job 上传清单完成接口，由 Artifact Manager 校验并封账全部必需文件。
-7. 必需清单完成后再将 Job 更新为 `phase=Succeeded`；必需产物上传或清单封账失败时更新为 `Failed`。Manifest digest 只由 Artifact Manager 保存，不写入 Job Status。
-
-Runner 默认并发上传 2–4 个文件，并对总带宽和同时上传的文件数量限流。上传成功前保留本地文件。
-
-扫描结果目录时必须：
-
-- 拒绝或忽略符号链接。
-- 确保所有规范化路径仍位于结果根目录。
-- 忽略 socket、device 和 named pipe。
-- 限制单文件大小、文件数量和总大小。
-- 保证同一个相对路径只生成一条 manifest 记录。
-
-推荐使用 `packages/`、`logs/` 等一级目录组织产物；RpmRepo Controller 提交固定版本清单，Artifact Manager 将 `packages/` 下的 RPM 重新组织到不可变仓库的 `Packages/` 目录。
-
-## 九、RPM 仓库物化
-
-### 9.1 定位
+### 8.1 定位
 
 Artifact Manager 在已经接管 Job 构建产物的基础上，提供 RPM 仓库物化能力。Controller Manager 中的 RpmRepo Controller 负责持续感知构建结果、选择基础仓和输入 Job，并只更新 `RpmRepo.status`；Artifact Manager 只负责校验固定版本的 Job 上传清单、组织 RPM、生成 repodata、原子发布仓库正文和保存本地物化状态。
 
@@ -643,9 +633,9 @@ Repository content URL
     └── RpmRepo Controller 更新 RpmRepo.status
 ```
 
-该能力替代老 repo-manager 的 Job JSON 目录扫描、ES 直接写入和 etcd 队列通知。控制面与数据面的职责边界见 9.3。
+该能力替代老 repo-manager 的 Job JSON 目录扫描、ES 直接写入和 etcd 队列通知。控制面与数据面的职责边界见 8.3。
 
-### 9.2 设计目标
+### 8.2 设计目标
 
 1. 从一个显式基础仓和一组已封账的 Job 上传清单生成完整 RPM 仓库。
 2. 同一请求可安全重试，不重复生成仓库或重复替换内容。
@@ -655,21 +645,21 @@ Repository content URL
 6. 进程崩溃后能够区分 Ready、可继续清理的临时状态和失败状态。
 7. 仓库生成不直接修改业务 API 对象，避免数据面与控制面形成双写事务。
 
-当前实现不提供 `repomd.xml` 签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。可选 RPM 签名由 Artifact Manager 内部实现，按 9.7.1 执行；未启用时，现有物化与发布流程保持不变。
+当前实现不提供 `repomd.xml` 签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。可选 RPM 签名由 Artifact Manager 内部实现，按 8.7.1 执行；未启用时，现有物化与发布流程保持不变。
 
-### 9.3 职责边界
+### 8.3 职责边界
 
-#### 9.3.1 RpmRepo Controller
+#### 8.3.1 RpmRepo Controller
 
-RpmRepo Controller 负责选择基础仓与输入 Job、持久化推进意图，以及更新业务 API 状态；控制面串行推进、批次选择、冲突处理和重启恢复统一遵循 9.3.3。
+RpmRepo Controller 负责选择基础仓与输入 Job、持久化推进意图，以及更新业务 API 状态；控制面串行推进、批次选择、冲突处理和重启恢复统一遵循 8.3.3。
 
-#### 9.3.2 Artifact Manager
+#### 8.3.2 Artifact Manager
 
-Artifact Manager 负责校验固定输入、执行 9.7 的物化算法，保存本地状态并提供内容下载；失败及重启恢复见 9.9。输入或基础仓已因保留策略删除时返回稳定失败。
+Artifact Manager 负责校验固定输入、执行 8.7 的物化算法，保存本地状态并提供内容下载；失败及重启恢复见 8.9。输入或基础仓已因保留策略删除时返回稳定失败。
 
-Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etcd，不更新 `RpmRepo`、`Build` 或 `Job`，也不提供隐式“取最新仓库”接口。过程仓物化不维护可变的 `last`、`current` 软链接，调用方必须使用返回的不可变仓库 URL；9.13 节正式发布的 `current` 只属于稳定发布入口，不参与过程仓版本选择。
+Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etcd，不更新 `RpmRepo`、`Build` 或 `Job`，也不提供隐式“取最新仓库”接口。过程仓物化不维护可变的 `last`、`current` 软链接，调用方必须使用返回的不可变仓库 URL；8.13 节正式发布的 `current` 只属于稳定发布入口，不参与过程仓版本选择。
 
-#### 9.3.3 主动持续生成流程
+#### 8.3.3 主动持续生成流程
 
 控制面流程以 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 为准。Controller 只轮询非发布终态 RpmRepo，不注册 Job Watch；过程仓键为 `build/{project}/{buildName}`，发布键为 `release/{project}/{os}/{arch}`。
 
@@ -683,7 +673,7 @@ Build Controller 为非 single Build 创建同名 RpmRepo，并可预置继承�
 
 Job labels 由 BuildInfo Controller 写入：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/target-os`、`ebs.io/target-arch`；Project 取 metadata.namespace。single 没有本轮 RpmRepo，不进入该物化流程。重启由 RpmRepo 轮询恢复键，再按持久化检查点查询或重放。首版只允许单活动 Controller 实例。
 
-### 9.4 标识与存储布局
+### 8.4 标识与存储布局
 
 一个 RpmRepo 是可持续推进的逻辑仓库，其 `metadata.uid` 不能直接作为物理版本标识。每次推进根据 Project、Build name、`baseRepositoryUID` 和按字典序排列的全部输入 Job 名称计算 SHA-256，将其十六进制结果作为稳定 `repositoryUID`。Build name 本身由唯一 UUID 生成且不复用。相同批次重试自然复用同一幂等键；基础仓或批次成员变化一定生成不同的不可变版本。摘要编码必须使用带长度前缀的字段序列，避免字符串拼接歧义。
 
@@ -726,11 +716,11 @@ ${dataDir}/
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
-`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 9.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 在过程仓物化阶段签名；正式发布仅复用已签名 RPM 并安装匹配的公钥，不重新签名 RPM 或 `repomd.xml`。
+`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由 8.13 节的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 在过程仓物化阶段签名；正式发布仅复用已签名 RPM 并安装匹配的公钥，不重新签名 RPM 或 `repomd.xml`。
 
 Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、OS、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
 
-### 9.5 数据模型
+### 8.5 数据模型
 
 控制面中 RpmRepo 与 Build 一对一，`metadata.name` 与 Build name 相同。Build name、目标 OS 和架构均可从同名 Build 获取，因此 spec 保持为空：
 
@@ -848,15 +838,15 @@ type RepositoryResponse struct {
 
 `RPMMeta` 至少记录文件名、SHA-256、大小、RPM name、epoch/version/release、arch、source RPM、specName、provides 和 requires。键使用仓库内唯一文件名，不沿用老实现中容易碰撞的 `<rpmName>@<specName>` 作为唯一标识。
 
-### 9.6 内部 API
+### 8.6 内部 API
 
-当前实现只暴露 Artifact 上传/查询/下载、Manifest、实时日志和健康检查接口，不能支撑 RpmRepo Controller 请求仓库生成，也不能把 Artifact Manager 的私有 `${dataDir}` 暴露给其他组件。实现本章流程必须新增以下内部物化接口和仓库内容接口。RpmRepo Controller 不得通过现有 Artifact 下载接口逐个下载 RPM 后在 Controller Manager 本地生成仓库，否则会重复存储、传输和实现清理恢复逻辑。
+RpmRepo Controller 通过以下内部物化接口请求仓库生成，不访问 Artifact Manager 的私有 `${dataDir}`，也不通过 Artifact 下载接口逐个下载 RPM 后在 Controller Manager 本地生成仓库。
 
 所有内部管理接口使用 `application/json`。成功响应统一返回 `RepositoryResponse`；失败响应使用第五章的 `APIError`，其中 `code` 是稳定的机器可读错误码，`message` 只供诊断，`retryable` 决定调用方能否自动重试。响应均包含 `X-Request-ID`。需要延迟重试的响应同时返回整数秒 `Retry-After`；调用方优先使用该 header，否则采用自身指数退避。
 
 `attempt` 从 1 开始，只在服务端接受一次新的执行尝试时增加。查询、相同请求的并发提交以及 Ready 结果重放均不增加。`pollAfterSeconds` 只在 `Creating` 时返回，首版固定为 5；它是轮询下限，不是完成期限。
 
-#### 9.6.1 提交物化
+#### 8.6.1 提交物化
 
 ```http
 POST /internal/v1/repositories
@@ -882,7 +872,7 @@ Content-Type: application/json
 
 只有成功持久化 Creating 记录后才能返回接受成功并入队。入队操作与记录写入不可能形成单一本地文件事务，因此服务必须在启动恢复和周期扫描时重新入队所有没有活动 worker 的 Creating 记录。响应不等待 `createrepo_c` 完成。
 
-#### 9.6.2 查询状态
+#### 8.6.2 查询状态
 
 ```http
 GET /internal/v1/repositories/{repositoryUID}
@@ -898,7 +888,7 @@ GET /internal/v1/repositories/{repositoryUID}
 
 记录不存在或 tombstone 已完成清理时返回 `404 Not Found / RepositoryNotFound`。GET 从不改变状态或 attempt。
 
-#### 9.6.3 删除仓库
+#### 8.6.3 删除仓库
 
 ```http
 DELETE /internal/v1/repositories/{repositoryUID}
@@ -914,7 +904,7 @@ DELETE /internal/v1/repositories/{repositoryUID}
 
 DELETE 不使用请求体。进入 Deleting 后，相同 UID 的 POST 返回 `409 Conflict / RepositoryDeleting`，不能通过重提物化请求撤销删除。Artifact Manager 不因 Project、Build 或 RpmRepo API 对象删除而自行推断清理；保留期限到达或显式删除请求均可直接推进删除。
 
-#### 9.6.4 仓库内容
+#### 8.6.4 仓库内容
 
 ```http
 GET /repositories/v1/{repositoryUID}/{path...}
@@ -924,7 +914,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 当前内部管理 API 暂不执行 Token 校验，只能暴露在受信任的组件网络中，并通过网络策略限制为 Controller Manager 访问。后续接入统一的组件身份认证时再增加认证，不改变接口业务语义。
 
-### 9.6.5 错误分类与停机
+### 8.6.5 错误分类与停机
 
 以下错误不可使用相同 UID 自动重试：请求或身份冲突、Manifest 内容非法、RPM 无法解析、包冲突、架构不兼容、输入已经过期以及本地文件系统布局不满足硬链接要求。单个 Job 的清单、RPM 或产物错误在失败记录的 `failure.jobName` 中标明对应输入；无法归属到单个 Job 时留空。命令超时、`createrepo_c` 临时失败、瞬时 I/O 错误和磁盘空间不足标记为 `retryable=true`；调用方仍必须遵守退避，不能无限快速重试。服务端错误信息不得包含本地绝对路径、Token 或命令环境。
 
@@ -932,7 +922,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 进程崩溃可能留下 Creating 记录。启动恢复若发现完整且校验通过的最终目录则补写 Ready；否则保持 Creating 并重新入队，过期工作目录按恢复宽限期清理。恢复完成前不接受创建或删除请求，`/readyz` 保持失败。
 
-### 9.7 物化算法
+### 8.7 物化算法
 
 单次物化按以下顺序执行：
 
@@ -944,7 +934,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。源码包与同名同版本的二进制包不视为同一 NEVRA。
 7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
 8. 基础仓存在时，读取其不可变 `repository.json` 中的 RPM 元数据，只将非本批输入 spec 的旧 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用；校验目录项与元数据一致，但不重新解析或哈希旧 RPM。基础仓和工作目录必须位于同一文件系统；硬链接失败不静默退化为完整复制。
-9. 未启用签名时，将本批输入 Artifact 正文硬链接到工作目录；Artifact 正文和仓库工作目录必须位于同一文件系统。启用签名时，本批新 RPM 复制到仓库工作目录内的独立普通文件，由内置后端仅在该副本上签名并验签；不得修改 Artifact 正文或基础仓硬链接。详见 9.7.1。
+9. 未启用签名时，将本批输入 Artifact 正文硬链接到工作目录；Artifact 正文和仓库工作目录必须位于同一文件系统。启用签名时，本批新 RPM 复制到仓库工作目录内的独立普通文件，由内置后端仅在该副本上签名并验签；不得修改 Artifact 正文或基础仓硬链接。详见 8.7.1。
 10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、最大输出、固定 locale、受限环境和资源限制。签名模式下必须在本批 RPM 全部验签通过后执行。
 11. 确认生成的 `repodata/repomd.xml` 存在且为普通文件。
 12. 计算本次最终内容的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批最终 RPM 摘要，其他文件现场计算摘要。签名模式下本批摘要取签名后的字节，不再复用上传 Artifact 的摘要；签名输出可能因重试而不同，UID 幂等性由原子发布保证，不要求摘要在发布前跨尝试相同。
@@ -953,7 +943,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 任何一步失败都不得暴露工作目录为可下载仓库，也不得修改基础仓或输入 Artifact。
 
-#### 9.7.1 可选 RPM 签名
+#### 8.7.1 可选 RPM 签名
 
 签名是 Artifact Manager 物化流程中的可选步骤。签名配置是服务端部署配置，Job、Project 和物化请求均不能指定后端或密钥。模式为 `disabled`（默认）、`local-gpg` 或 `signatrust`；开启后仅对本批新引入的二进制 RPM 和 SRPM 签名，继承自基础仓的 RPM 保持原样。签名失败不得退化为无签名模式。正式发布不再次签名 RPM，也不签名 `repomd.xml`、updateinfo 或任意代码文件。
 
@@ -965,15 +955,15 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 
 输入 RPM 无效或签名后身份变化是不可重试输入错误，记录来源 Job；密钥、工具或配置不匹配是不可重试配置错误；Signatrust 暂不可达、命令超时及临时 I/O 错误可按既有物化预算与退避重试。签名成功但后续物化失败时，仅清理本次私有工作目录；原始 Artifact 和已 Ready 仓保持不变。日志与指标记录后端类型、指纹、耗时和错误分类，不记录私钥、口令或 RPM 正文。
 
-### 9.8 并发和一致性
+### 8.8 并发和一致性
 
 - 同一 `repositoryUID` 同时最多一个写操作；状态查询和 Ready 内容读取可并发。
 - 不同仓库可以并发物化，即使它们引用同一个 Ready 基础仓；基础仓不可变，因此读取无需串行化。
-- 清理与物化之间不建立引用或锁协调；生命周期总则见第十三章，仓库删除并发语义见 9.10。
+- 清理与物化之间不建立引用或锁协调；生命周期总则见第十二章，仓库删除并发语义见 8.10。
 - `baseRepositoryUID` 必须指向已经 Ready 的仓库，禁止引用 Creating、Failed 或自身；由此仓库依赖图保持无环。
-- 多个请求可以从同一基础仓产生不同分支；某个 Build 的唯一后续版本由 9.3.3 的控制面串行推进及恢复契约确定。
+- 多个请求可以从同一基础仓产生不同分支；某个 Build 的唯一后续版本由 8.3.3 的控制面串行推进及恢复契约确定。
 
-### 9.9 失败、重试和恢复
+### 8.9 失败、重试和恢复
 
 | 场景 | 处理 |
 |------|------|
@@ -1000,9 +990,9 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 
 恢复扫描完成前 `/readyz` 返回失败。
 
-### 9.10 清理与保留
+### 8.10 清理与保留
 
-仓库和 Artifact 生命周期按第十三章独立管理。仓库中的 RPM 使用硬链接后拥有独立目录项，删除原 Artifact 不会破坏 Ready 仓库。若删除与物化并发，已经打开的文件或已经建立的硬链接仍可继续使用；其他读取可能失败，物化任务必须终止且不得发布半成品。
+仓库和 Artifact 生命周期按第十二章独立管理。仓库中的 RPM 使用硬链接后拥有独立目录项，删除原 Artifact 不会破坏 Ready 仓库。若删除与物化并发，已经打开的文件或已经建立的硬链接仍可继续使用；其他读取可能失败，物化任务必须终止且不得发布半成品。
 
 删除顺序：
 
@@ -1014,7 +1004,7 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 
 崩溃恢复时继续处理 tombstone。不得直接对由请求字段拼接出的路径执行递归删除。
 
-### 9.11 配置和可观测性
+### 8.11 配置和可观测性
 
 新增配置：
 
@@ -1039,7 +1029,7 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 
 至少暴露：物化请求数、Ready/Failed 数、排队和执行耗时、继承 RPM 数、替换 spec 数、最终 RPM 数、硬链接失败数、`createrepo_c` 失败和超时数、可选签名后端的耗时与错误数、恢复结果、工作目录清理数、仓库内容读取字节数。结构化日志包含 `repositoryUID`、Project、Build name 和输入 Job 名称，但不记录 Token 或签名凭据。
 
-### 9.12 首版验收场景
+### 8.12 首版验收场景
 
 1. 无基础仓时从多个 Completed Manifest 生成可被 DNF 使用的首个物理版本。
 2. 基于 Ready 仓库替换一个 spec，未涉及的 RPM 保持不变，旧 spec RPM 全部消失。
@@ -1053,9 +1043,9 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 10. 过程仓内容 API 不允许路径逃逸、符号链接跟随或目录列表。
 11. RpmRepo Controller 在 transition 写入后任意时点重启，均使用原输入 Job 集合、基础仓和 repositoryUID 恢复，不产生分叉版本。
 
-### 9.13 正式发布
+### 8.13 正式发布
 
-#### 9.13.1 职责边界
+#### 8.13.1 职责边界
 
 正式发布由 RpmRepo Controller 驱动。其控制面职责包括：
 
@@ -1066,11 +1056,11 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 - 调用 Artifact Manager、轮询结果，并在确认 Ready 后更新控制面发布状态；
 - 对控制面冲突、未知提交结果和重启恢复进行幂等处理。
 
-Artifact Manager 按 9.13.2 的请求契约校验源仓与排除集合，执行 9.13.4 的正文生成和原子切换，并负责状态查询、内容读取以及 9.13.6 的恢复与保留。Artifact Manager 不根据 Build type 推导删除集合：全量和增量 Build 均提交最终过程仓的 repositoryUID，由调用方根据 Project、BuildInfo 和发布策略完整计算 excludeSpecs。
+Artifact Manager 按 8.13.2 的请求契约校验源仓与排除集合，执行 8.13.4 的正文生成和原子切换，并负责状态查询、内容读取以及 8.13.6 的恢复与保留。Artifact Manager 不根据 Build type 推导删除集合：全量和增量 Build 均提交最终过程仓的 repositoryUID，由调用方根据 Project、BuildInfo 和发布策略完整计算 excludeSpecs。
 
 RpmRepo Controller 的过程仓推进仍以 `{project}/{buildName}` 为队列 key；正式发布另以 `{project}/{os}/{arch}` 为串行 key，保证同一稳定入口不会由不同 Build 并发推进。两类动作由同一个控制器实现，但使用独立的状态迁移和队列键，过程仓 Ready 不等同于正式发布 Ready。
 
-#### 9.13.2 标识与数据模型
+#### 8.13.2 标识与数据模型
 
 同一个 Project、OS 和架构只有一个稳定发布入口，但可以保存多个不可变发布版本。Build name 由唯一 UUID 生成且不复用，一个 Build 最多对应一个正式发布版本，因此直接使用 `buildName` 作为发布记录和 release 目录的唯一标识，不再生成独立的发布 ID。
 
@@ -1141,7 +1131,7 @@ Creating/Prepared/Ready/Failed -> Deleting
 
 `Prepared` 表示不可变正文已经完整落盘但尚未切换稳定入口；它不能通过稳定或不可变内容 API 对外读取。`Ready` 表示该版本至少成功激活过，即使后续被新版本替代也保持 Ready。Failed 不会破坏此前的 current。
 
-#### 9.13.3 内部 API
+#### 8.13.3 内部 API
 
 提交发布：
 
@@ -1185,7 +1175,7 @@ GET /repositories/{project}/{os}/{arch}/{path...}
 https://artifact.example/repositories/{project}/{os}/{arch}/
 ```
 
-该地址是 Project、OS 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 OS/架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，文件内容读取、Range、ETag 与路径规范化规则与 9.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
+该地址是 Project、OS 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 OS/架构目录中服务自身创建的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，文件内容读取、Range、ETag 与路径规范化规则与 8.6.4 相同。服务端必须先读取并校验链接值严格符合 `releases/{buildName}`，再从预先打开的 releases 目录 FD 解析内容，不能跟随任意链接。
 
 稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 展示有当前 Ready 发布版本的 OS，下一层展示对应架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 和不可变正式版本地址仍不提供目录浏览。
 
@@ -1197,7 +1187,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 
 稳定 URL 不返回重定向，避免客户端缓存历史 Build name；服务端在单次请求开始时取得 `current` 的目标快照，该请求的全部文件读取只能落到同一个 release。根目录的 `Packages`、`repodata` 和公钥链接固定指向 `current` 下的对应名称，因此切换时只需要替换一条 `current` 链接。
 
-#### 9.13.4 发布算法与原子切换
+#### 8.13.4 发布算法与原子切换
 
 一次发布按以下顺序执行：
 
@@ -1218,7 +1208,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 
 第 13 步是唯一生效点。在它之前失败，旧版本继续服务；在它之后进程崩溃，启动恢复根据 `current` 和 release 元数据补写 Ready。不能用依次删除再创建 `Packages`、`repodata` 两个链接作为切换机制，否则客户端可能观察到混合版本。
 
-#### 9.13.5 并发、失败和回滚
+#### 8.13.5 并发、失败和回滚
 
 - 同一 `{project}/{os}/{arch}` 同时最多执行一个激活操作；不同目标可以并行创建和激活。
 - 相同 `buildName` 的提交由 Build name 锁和请求摘要实现幂等；不同 Build 可以并行准备正文，但进入激活临界区后按取得锁的顺序切换。
@@ -1226,9 +1216,9 @@ GET /repositories/releases/v1/{buildName}/{path...}
 - `createrepo_c`、磁盘或读取配置公钥失败时不得切换指针；错误按是否可重试写入 Failed。
 - 提交响应超时属于结果未知，调用方必须先 GET 相同 Build name，不能改用其他 Build name 盲目重试。
 - 回滚不修改旧 release，而是通过受控激活接口把当前指针切回仍然完整的历史 Build name。回滚也必须经过目标锁、审计记录和摘要校验。
-- 当前版本保护及旧版本保留规则见 9.13.6；旧版本的保留期从被替换时开始计算。
+- 当前版本保护及旧版本保留规则见 8.13.6；旧版本的保留期从被替换时开始计算。
 
-#### 9.13.6 恢复与保留
+#### 8.13.6 恢复与保留
 
 启动时在对外 Ready 前执行：
 
@@ -1254,7 +1244,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 
 当前版本不能由自动保留清理删除。历史清理候选必须同时满足：不是当前指针、超出保留数量且超过最短保留时间。清理只处理 `releases`，不得连带删除源过程仓；过程仓和 Artifact 仍按各自策略独立清理。
 
-#### 9.13.7 可观测性与验收
+#### 8.13.7 可观测性与验收
 
 结构化日志至少包含 Build name、Project、架构、源 repositoryUID、请求摘要、状态迁移和被排除的 spec 数量。指标至少覆盖请求、队列和执行耗时、输入与发布 RPM 数量、排除 spec 数量、命令失败、指针切换、恢复、回滚和历史清理。
 
@@ -1269,13 +1259,13 @@ GET /repositories/releases/v1/{buildName}/{path...}
 7. 配置公钥时 release 包含该公钥且 `release.json` 记录实际摘要；未配置公钥时仓库仍可正常使用。
 8. 显式回滚后稳定 URL 指向目标历史版本，原新版本仍保持不可变并可审计。
 
-## 十、日志处理
+## 九、日志处理
 
-### 10.1 最终日志文件
+### 9.1 最终日志文件
 
 容器运行期间的实时日志和 Job 结束后的最终日志使用同一份活动日志正文。Artifact Manager 持续追加实时日志；Runner 封账后，服务将该正文原子转换为 `relativePath=logs/container.log`、`category=log` 的普通 `Completed` Artifact，用于长期归档、查询和下载，不再要求 Runner 重复上传完整日志文件。
 
-### 10.2 实时日志
+### 9.2 实时日志
 
 实时日志使用独立于 Artifact 分片上传的追加协议。每个 Job 首版只允许一个 `stream=combined` 的日志流，按 Runner 捕获顺序合并 stdout 和 stderr。服务端以 `(project, jobName, stream)` 唯一标识日志流。
 
@@ -1308,7 +1298,7 @@ ${dataDir}/.metadata/logs/{project}/{jobName}/combined.json
 
 `combined.index.jsonl` 是已提交 chunk 边界的事实来源，`combined.json` 是可重建的汇总和状态来源。步骤 1 或 2 后崩溃产生的未提交尾部必须在恢复阶段截断，不能直接对 Runner 返回成功。
 
-#### 10.2.1 追加日志块
+#### 9.2.1 追加日志块
 
 ```http
 POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
@@ -1348,7 +1338,7 @@ X-Content-SHA256: <解压后正文的sha256>
 
 Runner 在本地维护待确认缓冲区，每达到 256 KiB 或 500 ms 发送一个 chunk，同一日志流同一时间最多发送一个未确认请求。只有服务端确认后才能丢弃对应本地字节；网络错误使用相同 sequence 和正文重试。服务端返回 429 或 503 时，Runner 按 `Retry-After` 和指数退避重试，并限制本地缓冲区大小；超过上限时应暂停读取或将日志溢写到本地文件，不能静默丢弃日志。
 
-#### 10.2.2 查询日志流状态
+#### 9.2.2 查询日志流状态
 
 ```http
 GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status?stream=combined
@@ -1367,7 +1357,7 @@ Authorization: Bearer <runner-token>
 
 Runner 启动、重连或遇到结果未知时查询该接口，并以 `nextSequence` 作为恢复点。Runner 必须在本地保留尚未被服务端确认的日志；如果服务端请求的 sequence 已不在 Runner 本地缓冲或落盘文件中，Runner 将 Job 标记为日志不完整，不能伪造缺失数据继续封账。
 
-#### 10.2.3 SSE 实时读取
+#### 9.2.3 SSE 实时读取
 
 ```http
 GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream?stream=combined&afterSequence=100
@@ -1412,7 +1402,7 @@ X-Artifact-ID: art-log-01
 
 `X-Artifact-ID` 只在日志已经封账时返回。日志流完成后，接口继续返回相同正文和这些响应头，避免 Web UI 因重定向产生不同处理流程；最终日志的独立下载仍使用 Artifact 内容接口。
 
-#### 10.2.4 Web UI 展示流程
+#### 9.2.4 Web UI 展示流程
 
 Web UI 使用 Range 获取已有日志，再用 SSE 接收新增日志：
 
@@ -1457,7 +1447,7 @@ data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
 
 前端刷新 `TextDecoder` 剩余内容、关闭 `EventSource`、将状态更新为 Completed，并显示 `/artifacts/v1/artifacts/{artifactID}/content` 的完整日志下载入口。页面隐藏时可以降低渲染频率，但仍需持续消费事件并保存 byte offset 和 sequence。
 
-#### 10.2.5 日志封账
+#### 9.2.5 日志封账
 
 Job 执行结束且全部日志 chunk 已确认后，Runner 调用：
 
@@ -1499,7 +1489,7 @@ Content-Type: application/json
 
 重复完成请求必须返回同一个 Artifact；相同幂等键或已完成日志流携带不同的 `lastSequence`、大小或摘要时返回 409。最终日志 Artifact 可以加入 JobUploadManifest；日志是否为必需文件由 Job 类型决定。日志封账失败时保留活动正文和可恢复状态，不能要求 Runner 从头上传。
 
-#### 10.2.6 崩溃恢复和清理
+#### 9.2.6 崩溃恢复和清理
 
 服务启动时加载日志元数据并校验正文长度：
 
@@ -1514,9 +1504,9 @@ Content-Type: application/json
 
 Job 终止后长时间没有封账的 Open 日志流按 `--active-log-ttl` 过期并异步清理；仍处于可运行阶段的 Job 不得仅因长时间无日志而过期。最终日志 Artifact 进入普通 `category=log` 保留策略。
 
-## 十一、上传 Token 校验
+## 十、上传 Token 校验
 
-### 11.1 Runner 上传
+### 10.1 Runner 上传
 
 Runner 使用现有短期 `type=runner` Token 直接请求 Artifact Manager。Artifact Manager 不自行签发 Token，也不依赖 Gateway 注入身份头，而是将 Token 发送给 ebs-gateway 公开 Token 校验接口：
 
@@ -1561,13 +1551,13 @@ Artifact Manager 仍需校验同一个请求和已有本地记录之间的标识
 
 SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 Runner Token；部署方必须通过网络边界、并发连接数、读取速率和带宽限制控制访问。若后续将构建日志调整为非公开数据，这两个接口必须统一接入用户或服务身份鉴权，不能依赖不可伪造的 URL。
 
-认证结果可以按 Token 摘要缓存，缓存时间不得超过 `min(30s, tokenExpiresAt-now)`；完成 Artifact、Manifest 和日志流时不得使用过期缓存。认证失败结果不做长期缓存。
+认证结果可以按 Token 摘要缓存，缓存时间不得超过 `min(1h, tokenExpiresAt-now)`；完成 Artifact、Manifest 和日志流时不得使用过期缓存。认证失败结果不做长期缓存。
 
 `/auth/check` 是公开接口，调用方无需提供独立的服务身份、mTLS 客户端证书或服务凭据，也不提交请求正文；请求中的 Bearer Token 是该接口唯一验证的凭据。接口必须通过 TLS 暴露并按 Token 身份和客户端地址限流。Artifact Manager、Gateway 以及其他调用方均不得记录 Token 原文或用于缓存的完整 Token。
 
 `/auth/check` 不接受调用方指定待校验 scope；scope 检查与资源授权边界遵循本节前述约定。上传和下载文件正文不会经过 Gateway。后续若需加强权限，可扩展基于 Job/Runner 状态的动态授权。
 
-## 十二、配额与安全
+## 十一、配额与安全
 
 至少配置以下限制：
 
@@ -1594,7 +1584,7 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 - 可选接入恶意文件扫描；扫描完成前 Artifact 保持不可下载。
 - 服务端不得自动解压客户端上传的归档文件。
 
-## 十三、清理与保留
+## 十二、清理与保留
 
 后台清理任务负责：
 
@@ -1615,13 +1605,13 @@ SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 
 | artifact | 由 Project 策略决定 |
 | log | 30 天 |
 
-## 十四、与 Job Status 的关系
+## 十三、与 Job Status 的关系
 
 Job Status 只保留执行结果，不记录产物路径，也不增加 artifactState、artifactCount、repositoryState 或 repositoryUID。Runner 在必需产物与 manifest 封账后写 Succeeded；完整产物集合及封账状态由 Artifact Manager 的 JobUploadManifest 提供。
 
 RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Artifact Manager 在物化时校验输入。控制器在 RpmRepo.status.repository.sourceJobNames 中记录已消费 Job，在 skippedJobNames 中记录可定位的异常 Job，不回写 Job status。Manifest digest 仅供 Artifact Manager 内部校验，不进入公共 Job 或 RpmRepo 状态。
 
-## 十五、错误处理
+## 十四、错误处理
 
 | 场景 | 处理 |
 |------|------|
@@ -1650,14 +1640,14 @@ RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Art
 | SSE 普通网络中断 | 浏览器携带 `Last-Event-ID` 自动重连，服务端从下一 sequence 继续 |
 | Web UI 无法确认 SSE 恢复点 | 关闭 SSE，从已记录的 byte offset 通过 Range 补齐后重新连接 |
 
-## 十六、配置
+## 十五、配置
 
 | 配置 | 建议默认值 | 说明 |
 |------|------------|------|
 | `--listen` | `:8081` | HTTP 监听地址 |
 | `--gateway-url` | `https://ebs-gateway:8443` | Gateway 公开 Token 校验接口所在地址 |
 | `--gateway-ca` | 必填 | 校验 Gateway 服务证书的 CA |
-| `--auth-cache-ttl` | `30s` | Token 认证结果最大缓存时间 |
+| `--auth-cache-ttl` | `1h` | Token 认证结果最大缓存时间 |
 | `--data-dir` | `/var/lib/ebs-artifacts` | 本地持久化目录 |
 | `--upload-timeout` | 按最大文件和最小允许速率配置 | 单次整文件上传的最大持续时间 |
 | `--temporary-upload-ttl` | `24h` | 中断后遗留临时正文的最长保留时间 |
@@ -1678,7 +1668,7 @@ RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Art
 | `--max-log-size` | 按部署配置 | 单 Job 实时日志总大小上限 |
 | `--max-log-rate` | 按部署配置 | 单 Runner 或单 Job 日志写入速率上限 |
 
-## 十七、可观测性
+## 十六、可观测性
 
 指标至少包括：
 
@@ -1705,7 +1695,7 @@ GET /healthz   # 进程存活
 GET /readyz    # 本地持久化目录可用，元数据索引已加载
 ```
 
-## 十八、首版实现范围
+## 十七、首版实现范围
 
 首版实现：
 

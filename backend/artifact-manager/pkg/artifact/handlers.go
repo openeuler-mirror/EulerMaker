@@ -23,15 +23,14 @@ func NewHandler(c Config, a Authorizer) (*Server, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e = st.CleanupTemporary(c.TemporaryUploadTTL); e != nil {
+	if e = st.CleanupTemporary(c.Upload.TemporaryUploadTTL); e != nil {
 		return nil, e
 	}
-	signer, err := signing.New(signing.Config{Mode: c.RPMSigningMode, PublicKey: c.ReleasePublicKey, GPGHome: c.RPMSigningGPGHome, SignatrustConfig: c.RPMSigningSignatrustConfig, SignatrustKeyName: c.RPMSigningSignatrustKeyName, Timeout: c.RPMSigningTimeout})
+	signer, err := signing.New(signing.Config{Mode: c.Signing.Mode, PublicKey: c.Release.PublicKey, GPGHome: c.Signing.GPGHome, SignatrustConfig: c.Signing.SignatrustConfig, SignatrustKeyName: c.Signing.SignatrustKeyName, Timeout: c.Signing.Timeout})
 	if err != nil {
 		return nil, err
 	}
-	c.signingFingerprint = signer.Fingerprint()
-	s, err := newArtifactServer(c, a, st, newFilesystemMaterializer(c, st, signer))
+	s, err := newArtifactServer(c, a, st, newFilesystemMaterializer(c, st, signer), signer.Fingerprint())
 	if err != nil {
 		_ = signer.Close()
 		return nil, err
@@ -48,8 +47,8 @@ func (s *Server) Close() {
 	}
 }
 
-func newArtifactServer(c Config, a Authorizer, store *Store, materializer repositoryMaterializer) (*Server, error) {
-	repositories, err := newRepositoryManager(c, materializer)
+func newArtifactServer(c Config, a Authorizer, store *Store, materializer repositoryMaterializer, signingFingerprint string) (*Server, error) {
+	repositories, err := newRepositoryManager(c, materializer, signingFingerprint)
 	if err != nil {
 		return nil, err
 	}
