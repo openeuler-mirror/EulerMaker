@@ -16,7 +16,9 @@ import (
 
 type artifactManagerConfig struct {
 	Instances map[string]struct {
-		InternalURL string `json:"internalURL"`
+		InternalURL       string `json:"internalURL"`
+		RunnerInternalURL string `json:"runnerInternalURL,omitempty"`
+		RunnerExternalURL string `json:"runnerExternalURL,omitempty"`
 	} `json:"instances"`
 }
 

@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"sigs.k8s.io/yaml"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -71,23 +69,9 @@ func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string
 	if !ok || config == nil || config.Name != ebsv1.ArtifactManagerConfigName || config.Namespace != "" || config.UID == "" {
 		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
 	}
-	var content struct {
-		Instances map[string]struct {
-			InternalURL string `json:"internalURL"`
-		} `json:"instances"`
-	}
-	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
-		return nil, contractErrorf("invalid artifact-manager-conf Config content: %v", err)
-	}
-	if len(content.Instances) == 0 {
-		return nil, contractErrorf("artifact-manager-conf Config has no instances")
-	}
-	endpoints := make(map[string]string, len(content.Instances))
-	for name, entry := range content.Instances {
-		if name == "" || entry.InternalURL == "" {
-			return nil, contractErrorf("invalid artifact-manager-conf instance %q", name)
-		}
-		endpoints[name] = entry.InternalURL
+	endpoints, err := clientpkg.ParseArtifactManagerEndpoints(config.Spec.Content)
+	if err != nil {
+		return nil, contractErrorf("%v", err)
 	}
 	return endpoints, nil
 }

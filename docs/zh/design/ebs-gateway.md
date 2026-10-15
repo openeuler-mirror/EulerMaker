@@ -169,6 +169,8 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 
 Config 是单独的按对象可见性授权的例外：匿名、普通用户和 Runner 身份仅可 `GET/HEAD /apis/ebs/v1/configs/{name}` 且对象为 `Public`；Ops/Admin 也可具名读取 `OpsOnly` 对象及 list。Gateway 用可信内部身份读取一次完整对象，并依据同一响应的 `spec.visibility` 决定是否透传；无权读取返回 403，不暴露正文。非运维身份访问 `/configs` 集合一律拒绝；携带 Token 的请求先校验身份，不能失败后降级匿名。Config 的 `content` 不得包含凭据；需要保密内容应使用独立的受控存储，`OpsOnly` 不等同于机密级授权。
 
+Runner 通过专用 Artifact Manager 地址投影接口读取各实例的 Runner 地址，不改变上述 Config 读取权限。接口、授权和响应契约见 4.11 节。
+
 匿名请求不开放 Runner、Runner 子资源、User、MachineAccount、非白名单资源的 `/status` 或其他未列入白名单的新资源。公开对象的 `/status` 仅允许单对象读取并返回完整对象；collection 不存在 `/status`。所有 POST、PUT、PATCH、DELETE 均先认证，因此匿名调用方不能借公开 `/status` 修改状态。只要查询参数中出现非 `false` 的 `watch` 值就返回 401；匿名请求不能用 `watch=1`、重复 query 参数或其他等价值绕过。Project、Snapshot、Build、BuildInfo 和 RpmRepo 本身不支持 watch，也不能由 Gateway 模拟轮询。
 
 公开读取直接透传 apiserver 返回的完整单对象或 List，不解码、删除或重写对象字段。公开范围内的 `metadata`、`spec` 和 `status` 均可被匿名或已认证调用方读取，包括对象后续新增的字段。因此 Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的 API 数据结构不得保存密码、Token、私钥或其他不应公开的信息；需要保密的数据必须存放在非公开资源或独立的受控存储中。
@@ -664,6 +666,23 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 - 透传 apiserver 返回的状态码和响应体。
 - 使用 `--apiserver-addr` 设置上游地址。
 
+### 4.11 Runner Artifact Manager 地址投影
+
+固定路径为 `GET /apis/ebs/v1/artifact-endpoints`。仅 `type=runner` 的有效 Token 可调用，所有 Runner 获取同一份地址列表，无需在路径或参数中指定 Runner 名。Gateway 每次读取 `Config/artifact-manager-conf`，返回所有实例的 Runner 地址；接口不接收 Job 或 Project 参数，也不查询 Job、Project 或选择上传实例。Runner 无需获得 `OpsOnly` Config 的直接读取权限。
+
+响应示例：
+
+```json
+{
+  "instances": {
+    "default": {"runnerInternalURL": "http://127.0.0.1:8081", "runnerExternalURL": ""},
+    "art-01": {"runnerInternalURL": "http://artifact-manager.art-01:8081", "runnerExternalURL": "https://artifacts.example.com"}
+  }
+}
+```
+
+Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回 `internalURL`、原始 `spec.content` 或其他 Config 字段；响应设置 `Cache-Control: no-store`。Config 读取失败、缺失或格式无效时返回服务不可用错误，不使用旧缓存地址。地址不是凭据，但此接口仍须校验 Runner 身份。上传实例的选择不属于此接口；原 Config 继续为 `OpsOnly`，不得通过普通 Config GET 向 Runner 放行。Runner 客户端尚未接入此接口，仍使用现有单地址配置。
+
 ## 五、路由设计
 
 Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”。路由显式匹配对外资源、对象和受支持子资源的完整路径，并绑定该资源的授权策略；中间件按顺序执行认证、用户状态确认、限流及资源授权；Handler 执行具体认证/IAM 操作、公开读取、Job 中止或反向代理。审计日志覆盖整个请求链。未注册的资源与子资源不得透传 apiserver；增加 apiserver 资源时，必须同步登记 Gateway 对外路由和授权策略。
@@ -673,6 +692,8 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 `/healthz` 和登录、注册、Token 换取/校验接口使用各自的 Handler，其中 Token 校验保留独立的认证与限流语义。密码、MachineAccount 和 IAM 路由使用需要认证的中间件链。业务 API 在认证前隐藏内部全局路径；没有 Authorization header 时仅公开读取可进入匿名分支，携带 header 的请求必须先验证身份，不能失败后降级。认证后的公开读取也使用公开读取 Handler；其他业务请求完成资源授权后由专用 Handler 或代理处理，不向上游注入最终用户身份。具名 Config 读取必须由同一次上游响应完成可见性判断和内容返回。
 
 对外注册范围包括：Project 的集合、对象和 `/status`；Runner 的集合、对象、`/status` 与 `{runner}/jobs`；Config、Script 的集合与对象；Project 范围 Snapshot、Build、BuildInfo、RpmRepo、Job 的集合、对象和 `/status`，以及 Build、Job 的 `/abort`。IAM User、MachineAccount 按集合与对象路径注册。Project 范围资源的原生全局路径不向外开放。
+
+另注册固定路径 `GET /apis/ebs/v1/artifact-endpoints`，仅供 Runner 身份读取地址投影，不作为 apiserver 资源代理。
 
 ### 5.1 路由与权限速览
 
@@ -691,6 +712,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
 | `/apis/ebs/v1/runners[/{name}][/status]`、`/apis/ebs/v1/runners/{name}/jobs` | Ops/Admin 可读；Runner 仅可读自身对象及自身范围 Job | Ops/Admin 可管理 Runner；Runner 仅可创建、受限修改自身对象和 `/status`，不得删除 |
 | `/apis/ebs/v1/configs[/{name}]` | `Public` 可匿名及各身份具名读取；`OpsOnly` 与列表仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource` 不可删除 |
+| `/apis/ebs/v1/artifact-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
 | `/apis/ebs/v1/scripts[/{name}]` | 登录用户和 Ops/Admin 可读取、列表；Runner 仅可具名读取 | 仅 Ops/Admin 可创建、修改、删除 |
 | `/apis/iam.ebs/v1/users[/{name}]`、`/machineaccounts[/{name}]` | 仅 Admin；User 不含管理员对象 | 仅 Admin 可修改/删除非管理员 User、删除 MachineAccount；创建分别使用 `/auth/register`、`/auth/machineaccounts` |
 

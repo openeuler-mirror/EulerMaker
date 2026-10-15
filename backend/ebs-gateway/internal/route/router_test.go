@@ -213,6 +213,104 @@ func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
 	}
 }
 
+func TestRunnerArtifactEndpoints(t *testing.T) {
+	content := `instances:
+  default:
+    internalURL: http://artifact-manager:8081
+    runnerInternalURL: http://127.0.0.1:8081
+    runnerExternalURL: ""
+  art-01:
+    internalURL: http://artifact-manager.art-01:8081
+    runnerInternalURL: http://artifact-manager.art-01:8081
+    runnerExternalURL: https://artifacts.example.com
+`
+	config, err := json.Marshal(map[string]any{
+		"metadata": map[string]string{"name": "artifact-manager-conf"},
+		"spec":     map[string]string{"visibility": "OpsOnly", "content": content},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/apis/iam.ebs/v1/users/alice" {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`))}, nil
+		}
+		calls++
+		if request.URL.Path != "/apis/ebs/v1/configs/artifact-manager-conf" || request.Method != http.MethodGet ||
+			request.Header.Get("Authorization") != "" {
+			t.Errorf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(config)))}, nil
+	}))
+	for _, runner := range []string{"runner-a", "runner-b"} {
+		token, err := api.tokens.Issue(runner, runner, identity.RunnerType, "", time.Hour, api.now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		api.Router().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("runner=%s status=%d body=%s", runner, response.Code, response.Body.String())
+		}
+		var endpoints struct {
+			Instances map[string]struct {
+				RunnerInternalURL string `json:"runnerInternalURL"`
+				RunnerExternalURL string `json:"runnerExternalURL"`
+			} `json:"instances"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &endpoints); err != nil {
+			t.Fatal(err)
+		}
+		if len(endpoints.Instances) != 2 || endpoints.Instances["art-01"].RunnerExternalURL != "https://artifacts.example.com" ||
+			strings.Contains(response.Body.String(), `"internalURL"`) || strings.Contains(response.Body.String(), "http://artifact-manager:8081") {
+			t.Fatalf("unexpected Runner projection: %s", response.Body.String())
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("upstream reads=%d, want one per request", calls)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+	response := httptest.NewRecorder()
+	api.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized || calls != 2 {
+		t.Fatalf("anonymous status=%d upstream reads=%d", response.Code, calls)
+	}
+	userToken, err := api.tokens.Issue("alice", "", identity.UserType, identity.UserScope, time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+	request.Header.Set("Authorization", "Bearer "+userToken)
+	response = httptest.NewRecorder()
+	api.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || calls != 2 {
+		t.Fatalf("user status=%d Config reads=%d", response.Code, calls)
+	}
+}
+
+func TestRunnerArtifactEndpointsRejectsInvalidConfig(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `{"metadata":{"name":"artifact-manager-conf"},"spec":{"visibility":"OpsOnly","content":"instances:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	api.Router().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "hidden") ||
+		response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdminUserGetUsesCheckedResponse(t *testing.T) {
 	calls := 0
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {

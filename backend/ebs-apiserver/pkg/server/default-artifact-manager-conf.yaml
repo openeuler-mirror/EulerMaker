@@ -1,5 +1,9 @@
 instances:
   default:
     internalURL: http://artifact-manager:8081
+    runnerInternalURL: http://127.0.0.1:8081
+    runnerExternalURL: ""
   art-01:
     internalURL: http://artifact-manager.art-01:8081
+    runnerInternalURL: ""
+    runnerExternalURL: ""

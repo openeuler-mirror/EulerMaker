@@ -150,6 +150,10 @@ POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
 
 Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用于 Gateway，`--artifact-manager-ca` 只用于 Artifact Manager；测试环境可以分别显式跳过校验，不能因为其中一个地址使用 HTTP 或跳过 TLS 而放宽另一个客户端。
 
+后续支持多 Artifact Manager 时，Runner 用 Runner Token 请求 Gateway 的专用地址投影接口（见 `ebs-gateway.md` 4.11），获取所有实例的 Runner 地址列表；该接口不按 Job 查询，也不返回某个 Job 的上传实例。Runner 部署时显式选择 `internal` 或 `external` 网络模式；内部模式只使用 `runnerInternalURL`，外部模式只使用 `runnerExternalURL`，不根据来源 IP 自动切换。上传实例须由独立的 Job 契约确定，不从地址列表推断；该契约尚待设计。`artifact://{实例}/...` 过程仓引用按其中的实例名解析。执行中的 Job 固定已选地址，配置变更只影响后续 Job。所需实例或模式对应地址为空、不可达时按传输错误处理，不回退到控制面 `internalURL` 或另一网络模式。外部模式要求 HTTPS；TLS 校验仍由独立的 Artifact Manager 客户端配置控制。
+
+地址投影与多实例选址目前尚未实现；现有 Runner 仍通过单个 `--artifact-manager` 地址访问 Artifact Manager。
+
 ## 四、Runner 资源模型
 
 Runner 使用 `ebs/v1` 数据模型：

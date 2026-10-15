@@ -6,6 +6,7 @@ require (
 	github.com/evanphx/json-patch v5.7.0+incompatible
 	github.com/gin-gonic/gin v1.10.0
 	github.com/spf13/cobra v1.7.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -37,5 +38,4 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/protobuf v1.34.1 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

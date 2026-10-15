@@ -190,8 +190,14 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if got := artifactManagers.Instances["default"].InternalURL; got != "http://artifact-manager:8081" {
 		t.Fatalf("default Compose artifact manager URL: %q", got)
 	}
+	if got := artifactManagers.Instances["default"].RunnerInternalURL; got != "http://127.0.0.1:8081" {
+		t.Fatalf("default Compose Runner artifact manager URL: %q", got)
+	}
 	if got := artifactManagers.Instances["art-01"].InternalURL; got != "http://artifact-manager.art-01:8081" {
 		t.Fatalf("default Kubernetes artifact manager URL: %q", got)
+	}
+	if artifactManagers.Instances["art-01"].RunnerInternalURL != "" || artifactManagers.Instances["art-01"].RunnerExternalURL != "" {
+		t.Fatal("Kubernetes Runner URLs must be configured for the deployment")
 	}
 	target.Spec.Content = "operator change"
 	artifactManager.Spec.Content = "operator artifact manager change"
