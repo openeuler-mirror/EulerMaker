@@ -33,6 +33,35 @@ func syncReleaseForTest(c *Controller, ctx context.Context, project, os, arch st
 	return c.plan(result, err)
 }
 
+func TestSelectArtifactManagerUsesProjectInstance(t *testing.T) {
+	client := NewFakeClient()
+	client.Projects[testProject] = &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{
+		Name: testProject, UID: "project-uid", Annotations: map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"},
+	}}
+	client.ArtifactEndpoints["art-01"] = "http://artifact-manager.art-01:8081"
+	selected := ""
+	c := newTestController(t, client, NewFakeArtifactManager(), testConfig())
+	c.artifactFactory = func(address string) (ArtifactManagerClient, error) {
+		selected = address
+		return NewFakeArtifactManager(), nil
+	}
+	r := &reconciler{controller: c, ctx: context.Background(), project: testProject}
+	if err := r.selectArtifactManager(newRpmRepo(testBuild)); err != nil {
+		t.Fatal(err)
+	}
+	if r.instance != "art-01" || selected != "http://artifact-manager.art-01:8081" || r.artifactClient() == nil {
+		t.Fatalf("selected instance=%q address=%q client=%v", r.instance, selected, r.artifactClient())
+	}
+	client.ArtifactEndpoints["art-02"] = "http://artifact-manager.art-02:8081"
+	client.Projects[testProject].Annotations[ebsv1.ProjectArtifactsAnnotation] = "art-02"
+	repo := newRpmRepo(testBuild)
+	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{ContentURL: "artifact://art-01/repositories/v1/previous/"}
+	r = &reconciler{controller: c, ctx: context.Background(), project: testProject}
+	if err := r.selectArtifactManager(repo); err != nil || r.instance != "art-01" {
+		t.Fatalf("existing repository must remain on its instance: %q, %v", r.instance, err)
+	}
+}
+
 type stubSource struct {
 	handler source.ResourceEventHandler
 }
@@ -55,7 +84,6 @@ func (s *stubSource) Ready() bool { return true }
 
 func testConfig() Config {
 	return Config{
-		ArtifactManagerAddr:    "http://artifact-manager",
 		ArtifactManagerTimeout: 5 * time.Second,
 		MaxJobsPerBatch:        20,
 		MaterializeRetryLimit:  3,

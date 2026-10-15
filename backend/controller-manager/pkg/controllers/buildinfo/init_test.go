@@ -804,7 +804,6 @@ func TestSingleRepoInjection(t *testing.T) {
 
 func TestSingleArtifactRepoInjection(t *testing.T) {
 	c, client, git, _ := newTestController(t)
-	c.config.ArtifactManagerAddr = "http://artifact.example:8081"
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
 	client.SeedBuildResourceRules(testBuildResourceRules())
@@ -826,6 +825,35 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 		want,
 	) {
 		t.Fatalf("payload = %q, want repo %v", jobs[0].Spec.Payload, want)
+	}
+}
+
+func TestResolveContentURLUsesConfiguredInstance(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	client.artifactEndpoints["art-01"] = "http://artifact-manager.art-01:8081"
+	round := &reconcileRound{}
+	for _, tc := range []struct {
+		reference string
+		want      string
+	}{
+		{"artifact://art-01/repositories/v1/repo-1/", "http://artifact-manager.art-01:8081/repositories/v1/repo-1/"},
+		{"artifact:///repositories/v1/repo-2/", "http://artifact.example:8081/repositories/v1/repo-2/"},
+	} {
+		got, err := c.resolveContentURL(context.Background(), round, tc.reference)
+		if err != nil || got != tc.want {
+			t.Fatalf("resolveContentURL(%q) = %q, %v; want %q", tc.reference, got, err, tc.want)
+		}
+	}
+	if client.artifactReads != 1 {
+		t.Fatalf("Config reads = %d, want 1 for this reconcile", client.artifactReads)
+	}
+	for _, reference := range []string{"", "https://repo.example/repositories/v1/repo-3/"} {
+		if _, err := c.resolveContentURL(context.Background(), &reconcileRound{}, reference); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if client.artifactReads != 1 {
+		t.Fatalf("direct or empty URL read Config %d times", client.artifactReads-1)
 	}
 }
 

@@ -45,7 +45,7 @@ Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Art
 
 当前 Job 容器使用宿主机网络，且由宿主机 Docker daemon 创建，并不在 Kubernetes Pod 网络或 DNS 命名空间内。Git Server 默认使用 Service ClusterIP 生成 clone URL；Service 必须在依赖它的 Pod 创建之前存在。ClusterIP 对集群外构建节点通常不可达，启用构建前必须从实际 Job 容器验证 Git clone 地址。若不可达，应改用构建节点可访问的固定内网入口。Service 重建后 ClusterIP 可能变化，已固化到对象中的旧 URL 不会自动更新。
 
-Controller Manager 的 `--artifact-manager-addr` 只用于管理请求，通过集群内 Service 访问；下发给 Job 的过程仓保持 `artifact:///...` 逻辑 URL，由 Runner 使用其可访问的 Artifact Manager 地址解析。启用构建前须从 Runner 和实际 Job 容器验证该地址，不应直接将 Artifact Manager 原始管理端口暴露到公网。
+Controller Manager 从 `Config/artifact-manager-conf` 取得管理请求使用的集群内地址；RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 选择实例。下发给 Job 的过程仓保持 `artifact://{instance}/...` 逻辑 URL，由 Runner 使用其可访问的 Artifact Manager 地址解析。启用构建前须从 Runner 和实际 Job 容器验证该地址，不应直接将 Artifact Manager 原始管理端口暴露到公网。
 
 ## 存储与恢复
 

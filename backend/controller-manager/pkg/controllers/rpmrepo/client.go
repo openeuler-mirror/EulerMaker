@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"sigs.k8s.io/yaml"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -23,6 +25,8 @@ const maxListPages = 1000
 // Client is the typed API surface this controller depends on. It is implemented on top of the shared
 // controller-manager client so write errors keep the NotSent / Rejected / Unknown classification.
 type Client interface {
+	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
+	GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error)
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
 	GetBuildInfo(ctx context.Context, project, name string) (*ebsv1.BuildInfo, error)
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
@@ -44,6 +48,48 @@ func (e contractError) Unwrap() error { return e.err }
 
 func contractErrorf(format string, args ...any) error {
 	return contractError{err: fmt.Errorf(format, args...)}
+}
+
+func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Project, error) {
+	obj, err := c.client.Get(ctx, source.ProjectsGVR, "", project)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := obj.(*ebsv1.Project)
+	if !ok || value == nil || value.Name != project || value.UID == "" {
+		return nil, contractErrorf("unexpected Project response for %s: %T", project, obj)
+	}
+	return value, nil
+}
+
+func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error) {
+	obj, err := c.client.Get(ctx, source.ConfigsGVR, "", ebsv1.ArtifactManagerConfigName)
+	if err != nil {
+		return nil, err
+	}
+	config, ok := obj.(*ebsv1.Config)
+	if !ok || config == nil || config.Name != ebsv1.ArtifactManagerConfigName || config.Namespace != "" || config.UID == "" {
+		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
+	}
+	var content struct {
+		Instances map[string]struct {
+			InternalURL string `json:"internalURL"`
+		} `json:"instances"`
+	}
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
+		return nil, contractErrorf("invalid artifact-manager-conf Config content: %v", err)
+	}
+	if len(content.Instances) == 0 {
+		return nil, contractErrorf("artifact-manager-conf Config has no instances")
+	}
+	endpoints := make(map[string]string, len(content.Instances))
+	for name, entry := range content.Instances {
+		if name == "" || entry.InternalURL == "" {
+			return nil, contractErrorf("invalid artifact-manager-conf instance %q", name)
+		}
+		endpoints[name] = entry.InternalURL
+	}
+	return endpoints, nil
 }
 
 func (c *apiClient) GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error) {

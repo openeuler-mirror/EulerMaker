@@ -87,6 +87,7 @@ type Client interface {
 	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not refetch it per Job or use it
 	// to mutate a created Job.
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
+	GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error)
 }
 
 // newAPIClient wraps the shared controller-manager API client.
@@ -292,6 +293,37 @@ func (c *apiClient) GetScript(ctx context.Context, name string) (*ebsv1.Script, 
 		return nil, contractErrorf("unexpected Script response for %s: %T", name, obj)
 	}
 	return value, nil
+}
+
+func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error) {
+	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.ArtifactManagerConfigName)
+	if err != nil {
+		return nil, err
+	}
+	config, ok := obj.(*ebsv1.Config)
+	if !ok || config == nil || config.Name != ebsv1.ArtifactManagerConfigName || config.Namespace != "" ||
+		config.UID == "" || config.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
+	}
+	var content struct {
+		Instances map[string]struct {
+			InternalURL string `json:"internalURL"`
+		} `json:"instances"`
+	}
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
+		return nil, contractErrorf("invalid artifact-manager-conf Config content: %v", err)
+	}
+	if len(content.Instances) == 0 {
+		return nil, contractErrorf("artifact-manager-conf Config has no instances")
+	}
+	endpoints := make(map[string]string, len(content.Instances))
+	for name, entry := range content.Instances {
+		if name == "" || entry.InternalURL == "" {
+			return nil, contractErrorf("invalid artifact-manager-conf instance %q", name)
+		}
+		endpoints[name] = entry.InternalURL
+	}
+	return endpoints, nil
 }
 
 func (c *apiClient) GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error) {

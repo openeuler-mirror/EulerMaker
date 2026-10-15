@@ -88,9 +88,9 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	}
 
 	// Resolve the build-target Config only when the first Job needs it, then reuse that image for the rest of this round.
-	contentURL, err := c.resolveContentURL(heldContentURL(round))
+	contentURL, err := c.resolveContentURL(ctx, round, heldContentURL(round))
 	if err != nil {
-		return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
+		return c.handleArtifactURLFailure(ctx, round, err)
 	}
 	dispatch := &roundDispatch{arch: arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
@@ -330,15 +330,9 @@ func (c *Controller) refreshRpmMetaSources(
 		sources = &rpmver.RpmMetaSources{}
 	}
 	repoBefore := sources.RepoLayer
-	contentURL, err := c.resolveContentURL(heldContentURL(round))
+	contentURL, err := c.resolveContentURL(ctx, round, heldContentURL(round))
 	if err != nil {
-		result, stopErr := c.escalateStop(
-			ctx,
-			round,
-			ConditionRpmRepoUnavailable,
-			ReasonRpmRepoConfigInvalid,
-			err.Error(),
-		)
+		result, stopErr := c.handleArtifactURLFailure(ctx, round, err)
 		return nil, result, stopErr
 	}
 	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
@@ -420,8 +414,35 @@ func heldContentURL(round *reconcileRound) string {
 	return round.rpmRepo.Status.Repository.ContentURL
 }
 
-func (c *Controller) resolveContentURL(reference string) (string, error) {
-	return artifacturl.Resolve(c.config.ArtifactManagerAddr, reference)
+func (c *Controller) resolveContentURL(ctx context.Context, round *reconcileRound, reference string) (string, error) {
+	var readErr error
+	resolved, err := artifacturl.Resolve(func(instance string) (string, error) {
+		if round.artifactEndpoints == nil {
+			round.artifactEndpoints, readErr = c.client.GetArtifactManagerEndpoints(ctx)
+			if readErr != nil {
+				return "", readErr
+			}
+		}
+		address, exists := round.artifactEndpoints[instance]
+		if !exists {
+			return "", contractErrorf("artifact manager instance %q is not configured", instance)
+		}
+		return address, nil
+	}, reference)
+	if readErr != nil {
+		return "", readErr
+	}
+	if err != nil {
+		return "", contractError{err: err}
+	}
+	return resolved, nil
+}
+
+func (c *Controller) handleArtifactURLFailure(ctx context.Context, round *reconcileRound, err error) (controller.ReconcileResult, error) {
+	if errors.Is(err, ErrNotFound) || !deterministicRpmRepoError(err) {
+		return controller.ReconcileResult{}, err
+	}
+	return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
 }
 
 // listRoundJobs pages every Job of this Build.
@@ -756,15 +777,9 @@ func (c *Controller) singleContentURL(
 	if repo.Status.Repository == nil {
 		return c.singleContentURLReady(ctx, round, "")
 	}
-	contentURL, err := c.resolveContentURL(repo.Status.Repository.ContentURL)
+	contentURL, err := c.resolveContentURL(ctx, round, repo.Status.Repository.ContentURL)
 	if err != nil {
-		result, stopErr := c.escalateStop(
-			ctx,
-			round,
-			ConditionRpmRepoUnavailable,
-			ReasonRpmRepoConfigInvalid,
-			err.Error(),
-		)
+		result, stopErr := c.handleArtifactURLFailure(ctx, round, err)
 		return "", result, stopErr
 	}
 	return c.singleContentURLReady(ctx, round, contentURL)

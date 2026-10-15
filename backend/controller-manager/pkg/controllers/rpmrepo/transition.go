@@ -67,7 +67,7 @@ func (r *reconciler) advanceRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, 
 
 // observeRepository recovers an in-flight or abandoned batch from its frozen checkpoint.
 func (r *reconciler) observeRepository(repo *ebsv1.RpmRepo, transition *ebsv1.RepositoryTransition, build *ebsv1.Build, info *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
-	response, err := r.controller.artifacts.GetRepository(r.ctx, transition.RepositoryUID)
+	response, err := r.artifactClient().GetRepository(r.ctx, transition.RepositoryUID)
 	if err != nil {
 		return r.handleRepositoryError(repo, transition, build, info, err)
 	}
@@ -86,7 +86,7 @@ func (r *reconciler) submitRepository(repo *ebsv1.RpmRepo, transition *ebsv1.Rep
 		BaseRepositoryUID: transition.BaseRepositoryUID,
 		Manifests:         repositoryRequests(transition.Inputs),
 	}
-	response, err := r.controller.artifacts.SubmitRepository(r.ctx, request)
+	response, err := r.artifactClient().SubmitRepository(r.ctx, request)
 	if err != nil {
 		return r.handleRepositoryError(repo, transition, build, info, err)
 	}
@@ -197,7 +197,7 @@ func (r *reconciler) collectRepositorySuccess(repo *ebsv1.RpmRepo, transition *e
 	if target.Status.Repository == nil {
 		target.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{}
 	}
-	contentURL, err := artifacturl.Reference(response.ContentURL)
+	contentURL, err := artifacturl.ReferenceForInstance(r.instance, response.ContentURL)
 	if err != nil {
 		return controller.ReconcileResult{}, fmt.Errorf("invalid Artifact Manager repository contentURL: %w", err)
 	}

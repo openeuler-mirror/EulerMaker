@@ -17,11 +17,13 @@ import (
 // FakeClient is an in-memory Client for unit tests. It records the request options and status writes so a test
 // can assert selector pass-through and that no intermediate status was persisted.
 type FakeClient struct {
-	Builds     map[string]*ebsv1.Build
-	BuildInfos map[string]*ebsv1.BuildInfo
-	RpmRepos   map[string]*ebsv1.RpmRepo
-	Jobs       map[string][]ebsv1.Job
-	RpmRepoSet map[string][]ebsv1.RpmRepo
+	Projects          map[string]*ebsv1.Project
+	ArtifactEndpoints map[string]string
+	Builds            map[string]*ebsv1.Build
+	BuildInfos        map[string]*ebsv1.BuildInfo
+	RpmRepos          map[string]*ebsv1.RpmRepo
+	Jobs              map[string][]ebsv1.Job
+	RpmRepoSet        map[string][]ebsv1.RpmRepo
 
 	GetBuildErr     error
 	GetBuildInfoErr error
@@ -47,12 +49,30 @@ type FakeClient struct {
 
 func NewFakeClient() *FakeClient {
 	return &FakeClient{
-		Builds:     map[string]*ebsv1.Build{},
-		BuildInfos: map[string]*ebsv1.BuildInfo{},
-		RpmRepos:   map[string]*ebsv1.RpmRepo{},
-		Jobs:       map[string][]ebsv1.Job{},
-		RpmRepoSet: map[string][]ebsv1.RpmRepo{},
+		Projects:          map[string]*ebsv1.Project{},
+		ArtifactEndpoints: map[string]string{"default": "http://artifact-manager:8081"},
+		Builds:            map[string]*ebsv1.Build{},
+		BuildInfos:        map[string]*ebsv1.BuildInfo{},
+		RpmRepos:          map[string]*ebsv1.RpmRepo{},
+		Jobs:              map[string][]ebsv1.Job{},
+		RpmRepoSet:        map[string][]ebsv1.RpmRepo{},
 	}
+}
+
+func (f *FakeClient) GetProject(_ context.Context, project string) (*ebsv1.Project, error) {
+	value, ok := f.Projects[project]
+	if !ok {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "ebs", Resource: "projects"}, project)
+	}
+	return value.DeepCopy(), nil
+}
+
+func (f *FakeClient) GetArtifactManagerEndpoints(context.Context) (map[string]string, error) {
+	endpoints := make(map[string]string, len(f.ArtifactEndpoints))
+	for instance, address := range f.ArtifactEndpoints {
+		endpoints[instance] = address
+	}
+	return endpoints, nil
 }
 
 func key(project, name string) string { return project + "/" + name }

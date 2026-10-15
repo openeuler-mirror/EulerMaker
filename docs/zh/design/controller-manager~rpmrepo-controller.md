@@ -46,11 +46,11 @@ backend/controller-manager/pkg/controllers/rpmrepo/
   | --- | --- | --- |
   | `--rpmrepo-max-jobs-per-batch` | `100` | 必须 `> 0` |
   | `--rpmrepo-materialize-retry-limit` | `3` | 必须 `> 0`；物化可重试失败的重试次数上限，首次提交不计入，判定见第八章 |
-- `--artifact-manager-addr` 和 `--artifact-manager-timeout` 是 controller-manager 共享配置。地址供 RpmRepo 客户端和 BuildInfo 下载过程仓元数据使用，必须是 controller-manager 可访问的带 host 的 HTTP(S) 内网 URL；Job 中保留 `artifact:///...` 逻辑地址，由 Runner 使用 Job 可访问的地址解析。超时默认 `30s`，必须大于零。
+- 每轮从 Project 的 `ebs.io/artifacts` annotation 选择 Artifact Manager 实例（未设置时为 `default`）；已有过程仓 `contentURL` 带实例名时沿用其实例，旧的无实例地址沿用 `default`。再从 `Config/artifact-manager-conf` 读取对应 `internalURL`；BuildInfo 下载过程仓元数据时也从该 Config 解析逻辑 URL。`--artifact-manager-timeout` 默认 `30s`，必须大于零。Job 中保留 `artifact://{instance}/...` 逻辑地址，由 Runner 使用 Job 可访问的地址解析。首批物化尚未生成 `contentURL` 时，不应变更 Project 的实例 annotation。
 - 框架配置沿用 `controller-manager.md`，不单独覆盖 worker 数和轮询周期；`--controllers` 控制本控制器启停。
 - 物化退避复用框架参数 `--controller-slow-retry-initial-delay`（30s）、`--controller-slow-retry-max-delay`（15m）、`--controller-slow-retry-jitter`（0.2）；计算、预算与等待规则统一见第八章。
 - 配置校验时机：所有静态配置在 `options.Parse` 阶段完成校验，非法时 controller-manager 直接启动失败，不得延迟到单个对象的 reconcile 中处理；
-- `ArtifactManagerClient` 构造失败必须返回初始化错误，不得通过 HealthChecker 表达。
+- `ArtifactManagerClient` 使用配置地址构造失败时，该对象本轮调谐返回配置错误；不能使用其他实例地址兜底。
 - 慢速重试参数从框架 `init.Config` 读取并传入 `controller.WithSlowRetry(...)`，同时供物化退避计算使用；控制器自有 Config 不重复承载这三项。
 
 ### 2.2 组件依赖与最小框架改动

@@ -207,9 +207,9 @@ func (c *Controller) advanceDownstream(
 	bySpec map[string][]ebsv1.Job,
 ) (controller.ReconcileResult, error) {
 	required := dcg.DispatchRequirements()
-	contentURL, err := c.resolveContentURL(heldContentURL(round))
+	contentURL, err := c.resolveContentURL(ctx, round, heldContentURL(round))
 	if err != nil {
-		return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonRpmRepoConfigInvalid, err.Error())
+		return c.handleArtifactURLFailure(ctx, round, err)
 	}
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {

@@ -48,7 +48,6 @@ services:
       - --apiserver-client-cert=/run/ebs-certs/controller-manager.crt
       - --apiserver-client-key=/run/secrets/controller_manager_client_key
       - --git-server-addr=http://git-server:8080
-      - --artifact-manager-addr=http://${EXPORT_SERVER_ADDR:-artifact-manager}:8081
     volumes:
       - ./certs/runtime/server-ca.crt:/run/ebs-certs/server-ca.crt:ro
       - ./certs/runtime/controller-manager.crt:/run/ebs-certs/controller-manager.crt:ro
