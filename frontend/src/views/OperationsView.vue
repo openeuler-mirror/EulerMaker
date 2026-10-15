@@ -6,6 +6,7 @@
     </nav>
     <main class="operations-content">
       <section v-if="activeSection === 'build'" id="operations-panel-build" role="tabpanel" aria-labelledby="operations-tab-build"><BuildTargetConfigEditor /></section>
+      <section v-else-if="activeSection === 'artifacts'" id="operations-panel-artifacts" role="tabpanel" aria-labelledby="operations-tab-artifacts"><ArtifactManagerConfigEditor /></section>
       <section v-else-if="activeSection === 'scripts'" id="operations-panel-scripts" role="tabpanel" aria-labelledby="operations-tab-scripts"><ScriptManager /></section>
 
       <section v-else-if="activeSection === 'resources'" id="operations-panel-resources" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-resources">
@@ -52,10 +53,11 @@ import EmptyState from "@/components/EmptyState.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
 import BuildResourceContentEditor from "@/components/BuildResourceContentEditor.vue";
 import BuildTargetConfigEditor from "@/components/BuildTargetConfigEditor.vue";
+import ArtifactManagerConfigEditor from "@/components/ArtifactManagerConfigEditor.vue";
 import ScriptManager from "@/components/ScriptManager.vue";
 import type { BuildResourceContent, Config, Runner } from "@/types";
 
-type OperationsSection = "build" | "resources" | "scripts" | "runners";
+type OperationsSection = "build" | "artifacts" | "resources" | "scripts" | "runners";
 type ResourceConfigView = { config: Config; content: BuildResourceContent };
 
 const { t } = useI18n();
@@ -63,6 +65,7 @@ const session = useSessionStore();
 const activeSection = ref<OperationsSection>("build");
 const operationSections = computed<Array<{ id: OperationsSection; label: string }>>(() => [
   { id: "build", label: t("operations.buildConfiguration") },
+  { id: "artifacts", label: t("artifactManagerConfig.title") },
   { id: "resources", label: t("operations.resourceConfiguration") },
   { id: "scripts", label: t("scripts.title") },
   { id: "runners", label: t("operations.runnerManagement") },
