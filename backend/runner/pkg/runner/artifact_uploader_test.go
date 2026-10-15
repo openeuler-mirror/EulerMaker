@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 type fakeArtifactRemote struct {
 	mu          sync.Mutex
 	uploads     []UploadArtifactInput
+	keys        []string
 	manifest    CompleteManifestInput
 	manifestErr error
 }
@@ -38,10 +41,11 @@ func (f *fakeArtifactRemote) LogStatus(context.Context, string, string) (LogStat
 	return LogStatus{State: "Completed", ArtifactID: "log-1", FinalSize: &size, FinalSHA256: "log-sha"}, nil
 }
 
-func (f *fakeArtifactRemote) UploadArtifact(_ context.Context, project, job, _ string, _ string, input UploadArtifactInput) (ArtifactRecord, error) {
+func (f *fakeArtifactRemote) UploadArtifact(_ context.Context, project, job, key string, _ string, input UploadArtifactInput) (ArtifactRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.uploads = append(f.uploads, input)
+	f.keys = append(f.keys, key)
 	return ArtifactRecord{
 		ID: "artifact-" + input.FileName, Project: project, JobName: job,
 		Category: input.Category, FileName: input.FileName, RelativePath: input.RelativePath,
@@ -89,6 +93,12 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 	remote.mu.Lock()
 	if len(remote.uploads) != 2 {
 		t.Fatalf("uploads = %d, want 2", len(remote.uploads))
+	}
+	for i, upload := range remote.uploads {
+		sum := sha256.Sum256([]byte(upload.RelativePath))
+		if want := "artifact-" + hex.EncodeToString(sum[:]); remote.keys[i] != want {
+			t.Fatalf("upload key = %q, want %q", remote.keys[i], want)
+		}
 	}
 	files := append([]ManifestFile(nil), remote.manifest.Files...)
 	remote.mu.Unlock()

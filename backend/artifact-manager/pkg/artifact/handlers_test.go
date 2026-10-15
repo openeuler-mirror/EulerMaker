@@ -54,7 +54,7 @@ func uploadRequest(t *testing.T, data []byte, key string) *http.Request {
 	h.Set("Content-Disposition", `form-data; name="metadata"`)
 	h.Set("Content-Type", "application/json")
 	p, _ := mw.CreatePart(h)
-	_ = json.NewEncoder(p).Encode(UploadMetadata{Category: CategoryArtifact, Name: "packages", FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
+	_ = json.NewEncoder(p).Encode(UploadMetadata{Category: CategoryArtifact, FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
 	h = make(textproto.MIMEHeader)
 	h.Set("Content-Disposition", `form-data; name="file"; filename="ignored"`)
 	h.Set("Content-Type", "application/octet-stream")
@@ -128,20 +128,20 @@ func TestJobNameDirectoryPersistsAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := UploadMetadata{Category: CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
-	if _, _, _, err := store.BeginUpload("project", "job", "runner", "key-1", meta, 1024); err != nil {
+	if _, _, err := store.BeginUpload("project", "job", "runner", "key-1", meta, 1024); err != nil {
 		t.Fatal(err)
 	}
 	store, err = NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := store.BeginUpload("project", "job", "runner", "key-2", meta, 1024); err != nil {
+	if _, _, err := store.BeginUpload("project", "job", "runner", "key-2", meta, 1024); err != nil {
 		t.Fatalf("same job name should remain valid after restart: %v", err)
 	}
 	if _, err := store.AppendLog("project", "job", "runner", 0, []byte("x"), sum([]byte("x"))); err != nil {
 		t.Fatalf("same job name log: %v", err)
 	}
-	if _, _, _, err := store.BeginUpload("project", "another-job", "runner", "key-2", meta, 1024); err != nil {
+	if _, _, err := store.BeginUpload("project", "another-job", "runner", "key-2", meta, 1024); err != nil {
 		t.Fatalf("different job name: %v", err)
 	}
 }
@@ -252,7 +252,7 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := UploadMetadata{Category: CategoryArtifact, FileName: "x", RelativePath: "x", Size: 3, SHA256: sum([]byte("abc"))}
-	a, ir, _, err := s.BeginUpload("project", "job", "runner", "key", m, 1024)
+	a, _, err := s.BeginUpload("project", "job", "runner", "key", m, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,9 +262,6 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 	}
 	if err := os.WriteFile(final, []byte("abc"), 0640); err != nil {
 		t.Fatal(err)
-	}
-	if ir.State != IdempotencyProcessing {
-		t.Fatal("unexpected setup state")
 	}
 	s, err = NewStore(root)
 	if err != nil {
@@ -307,7 +304,7 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 		t.Fatal(err)
 	}
 	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
-	artifact, record, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	artifact, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +312,7 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 	if err := os.WriteFile(temporary, []byte("abc"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteUpload(artifact, record, temporary); err != nil {
+	if err := store.CompleteUpload(artifact, temporary); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(store.artifactPath(artifact), []byte("bad"), 0640); err != nil {
@@ -330,8 +327,65 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 	if !ok || loaded.State != Completed {
 		t.Fatalf("completed upload changed during startup: %+v", loaded)
 	}
-	_, _, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	_, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
 	if err != nil || replay {
 		t.Fatalf("corrupted completed upload replayed: replay=%t, error=%v", replay, err)
+	}
+}
+
+func TestStoreUploadIdempotencySurvivesRestart(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	artifact, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	if err != nil || replay {
+		t.Fatalf("begin upload: replay=%t, error=%v", replay, err)
+	}
+	temporary := filepath.Join(root, ".uploads", artifact.ID+".tmp")
+	if err := os.WriteFile(temporary, []byte("abc"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteUpload(artifact, temporary); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, ok := store.GetArtifact(artifact.ID)
+	if !ok || loaded.IdempotencyKey != "key" {
+		t.Fatalf("upload identity was not persisted: %+v", loaded)
+	}
+	replayed, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	if err != nil || !replay || replayed.ID != artifact.ID {
+		t.Fatalf("replay after restart: artifact=%+v, replay=%t, error=%v", replayed, replay, err)
+	}
+	metadata.ContentType = "application/x-rpm"
+	if _, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024); err == nil || err.Error() != "IdempotencyConflict" {
+		t.Fatalf("changed request reused key: %v", err)
+	}
+}
+
+func TestStoreRetryFailedUploadAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	artifact, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
+	if err != nil || replay || retried.ID != artifact.ID || retried.State != Pending {
+		t.Fatalf("retry after restart: artifact=%+v, replay=%t, error=%v", retried, replay, err)
 	}
 }

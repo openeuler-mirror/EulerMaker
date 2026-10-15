@@ -22,7 +22,7 @@ type Store struct {
 	artifacts   map[string]*Artifact
 	manifests   map[string]*JobUploadManifest
 	logs        map[string]*LogStream
-	idempotency map[string]*IdempotencyRecord
+	uploads     map[string]*Artifact
 	subscribers map[string]map[chan logEvent]struct{}
 }
 
@@ -33,8 +33,8 @@ type logEvent struct {
 }
 
 func NewStore(root string) (*Store, error) {
-	s := &Store{root: root, artifacts: map[string]*Artifact{}, manifests: map[string]*JobUploadManifest{}, logs: map[string]*LogStream{}, idempotency: map[string]*IdempotencyRecord{}, subscribers: map[string]map[chan logEvent]struct{}{}}
-	for _, d := range []string{".uploads", ".metadata/artifacts", ".metadata/jobs", ".metadata/idempotency", ".metadata/logs", ".logs", "projects", ".quarantine"} {
+	s := &Store{root: root, artifacts: map[string]*Artifact{}, manifests: map[string]*JobUploadManifest{}, logs: map[string]*LogStream{}, uploads: map[string]*Artifact{}, subscribers: map[string]map[chan logEvent]struct{}{}}
+	for _, d := range []string{".uploads", ".metadata/artifacts", ".metadata/jobs", ".metadata/logs", ".logs", "projects", ".quarantine"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0750); err != nil {
 			return nil, err
 		}
@@ -86,6 +86,13 @@ func (s *Store) load() error {
 			if e := json.Unmarshal(b, &v); e != nil || v.ID == "" {
 				return fmt.Errorf("load artifact metadata %s: invalid JSON", path)
 			}
+			if v.IdempotencyKey != "" {
+				key := uploadKey(v.Project, v.JobName, v.IdempotencyKey)
+				if _, exists := s.uploads[key]; exists {
+					return fmt.Errorf("load artifact metadata %s: duplicate idempotency key", path)
+				}
+				s.uploads[key] = &v
+			}
 			s.artifacts[v.ID] = &v
 		case "jobs":
 			var v JobUploadManifest
@@ -103,12 +110,6 @@ func (s *Store) load() error {
 				return fmt.Errorf("load log metadata %s: invalid JSON", path)
 			}
 			s.logs[logKey(v.Project, v.JobName, v.Stream)] = &v
-		case "idempotency":
-			var v IdempotencyRecord
-			if e := json.Unmarshal(b, &v); e != nil || v.Scope == "" || v.Key == "" {
-				return fmt.Errorf("load idempotency metadata %s: invalid JSON", path)
-			}
-			s.idempotency[v.Scope+"\x00"+v.Key] = &v
 		}
 		return nil
 	})
@@ -120,20 +121,17 @@ func (s *Store) recover() error {
 			return err
 		}
 	}
-	for _, ir := range s.idempotency {
-		if ir.State != IdempotencyProcessing {
-			continue
-		}
-		a := s.artifacts[ir.ArtifactID]
-		if a == nil {
-			s.failIdempotency(ir, "ArtifactMissing", "artifact metadata is missing")
+	for _, a := range s.artifacts {
+		if a.IdempotencyKey == "" || (a.State != Pending && a.State != Uploading) {
 			continue
 		}
 		tmp := filepath.Join(s.root, ".uploads", a.ID+".tmp")
 		final := s.artifactPath(a)
 		finalOK := verifyFile(final, a.Size, a.SHA256) == nil
 		if finalOK {
-			s.completeRecords(a, ir)
+			if err := s.completeArtifact(a); err != nil {
+				return err
+			}
 			_ = os.Remove(tmp)
 			continue
 		}
@@ -142,7 +140,9 @@ func (s *Store) recover() error {
 			_ = os.Rename(final, filepath.Join(s.root, ".quarantine", a.ID+".corrupted"))
 		}
 		_ = os.Remove(tmp)
-		s.failRecords(a, ir, "Corrupted", "committed content is missing or invalid")
+		if err := s.failArtifact(a, "Corrupted", "committed content is missing or invalid"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -161,28 +161,17 @@ func verifyFile(path string, size int64, sum string) error {
 	return nil
 }
 
-func (s *Store) completeRecords(a *Artifact, ir *IdempotencyRecord) {
+func (s *Store) completeArtifact(a *Artifact) error {
 	now := time.Now().UTC()
 	a.State, a.UpdatedAt, a.CompletedAt, a.Failure = Completed, now, &now, nil
-	ir.State, ir.UpdatedAt, ir.CompletedAt, ir.Failure = IdempotencyCompleted, now, &now, nil
-	_ = atomicJSON(s.artifactMeta(a.ID), a)
-	_ = atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
+	return atomicJSON(s.artifactMeta(a.ID), a)
 }
 
-func (s *Store) failIdempotency(ir *IdempotencyRecord, code, message string) {
-	now := time.Now().UTC()
-	ir.State, ir.UpdatedAt = IdempotencyFailed, now
-	ir.Failure = &FailureInfo{Code: code, Message: message, Retryable: true, Time: now}
-	_ = atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
-}
-
-func (s *Store) failRecords(a *Artifact, ir *IdempotencyRecord, code, message string) {
+func (s *Store) failArtifact(a *Artifact, code, message string) error {
 	now := time.Now().UTC()
 	f := &FailureInfo{Code: code, Message: message, Retryable: code != "Corrupted", Time: now}
 	a.State, a.UpdatedAt, a.Failure = Failed, now, f
-	ir.State, ir.UpdatedAt, ir.Failure = IdempotencyFailed, now, f
-	_ = atomicJSON(s.artifactMeta(a.ID), a)
-	_ = atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
+	return atomicJSON(s.artifactMeta(a.ID), a)
 }
 
 func newID(prefix string) string {
@@ -261,92 +250,84 @@ func hashText(v string) string {
 	h := sha256.Sum256([]byte(v))
 	return hex.EncodeToString(h[:])
 }
-func (s *Store) idemPath(scope, key string) string {
-	return filepath.Join(s.root, ".metadata/idempotency", hashText(scope), hashText(key)+".json")
+
+func uploadKey(project, job, key string) string {
+	return project + "\x00" + job + "\x00" + key
 }
 
-func metadataDigest(m UploadMetadata) string {
-	return "sha256:" + hashText(fmt.Sprintf("artifact-upload-v1\n%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%s\n", m.Category, m.Name, m.FileName, m.RelativePath, m.ContentType, m.Size, m.SHA256))
+func sameUploadMetadata(a *Artifact, m UploadMetadata) bool {
+	return a.Category == m.Category && a.FileName == m.FileName &&
+		a.RelativePath == m.RelativePath && a.ContentType == m.ContentType && a.Size == m.Size && a.SHA256 == m.SHA256
 }
 
-func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, maxJobSize int64) (*Artifact, *IdempotencyRecord, bool, error) {
+func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, maxJobSize int64) (*Artifact, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rel, e := safeRelative(m.RelativePath)
 	if e != nil {
-		return nil, nil, false, e
+		return nil, false, e
 	}
 	m.RelativePath = rel
-	scope := "artifact-upload/" + project + "/" + job
-	ik := scope + "\x00" + key
-	digest := metadataDigest(m)
-	old := s.idempotency[ik]
+	ik := uploadKey(project, job, key)
+	old := s.uploads[ik]
 	if s.manifests[manifestKey(project, job)] != nil {
-		if old != nil && old.RequestDigest == digest {
-			a := s.artifacts[old.ArtifactID]
-			if old.State == IdempotencyCompleted && a != nil && a.State == Completed && verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil {
-				return a, old, true, nil
-			}
+		if old != nil && sameUploadMetadata(old, m) && old.State == Completed && verifyFile(s.artifactPath(old), old.Size, old.SHA256) == nil {
+			return old, true, nil
 		}
-		return nil, nil, false, errors.New("ManifestAlreadyCompleted")
+		return nil, false, errors.New("ManifestAlreadyCompleted")
 	}
 	if old != nil {
-		if old.RequestDigest != digest {
-			return nil, nil, false, fmt.Errorf("IdempotencyConflict")
+		if !sameUploadMetadata(old, m) {
+			return nil, false, fmt.Errorf("IdempotencyConflict")
 		}
-		a := s.artifacts[old.ArtifactID]
-		if a != nil && verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil {
-			s.completeRecords(a, old)
-			return a, old, true, nil
-		}
-		if old.State == IdempotencyProcessing {
-			return nil, nil, false, fmt.Errorf("UploadInProgress")
-		}
-		if a != nil {
-			_ = os.Remove(filepath.Join(s.root, ".uploads", a.ID+".tmp"))
-			a.State = Pending
-			a.Failure = nil
-			a.UpdatedAt = time.Now().UTC()
-			if e := atomicJSON(s.artifactMeta(a.ID), a); e != nil {
-				return nil, nil, false, e
+		if verifyFile(s.artifactPath(old), old.Size, old.SHA256) == nil {
+			if err := s.completeArtifact(old); err != nil {
+				return nil, false, err
 			}
-			old.State = IdempotencyProcessing
-			old.Failure = nil
-			old.UpdatedAt = a.UpdatedAt
-			if e := atomicJSON(s.idemPath(scope, key), old); e != nil {
-				return nil, nil, false, e
-			}
-			return a, old, false, nil
+			return old, true, nil
 		}
+		if old.State == Pending || old.State == Uploading {
+			return nil, false, fmt.Errorf("UploadInProgress")
+		}
+		for _, other := range s.artifacts {
+			if other != old && other.Project == project && other.JobName == job && other.RelativePath == rel && (other.State == Pending || other.State == Uploading || other.State == Completed) {
+				return nil, false, errors.New("ArtifactPathConflict")
+			}
+		}
+		_ = os.Remove(filepath.Join(s.root, ".uploads", old.ID+".tmp"))
+		old.State = Pending
+		old.Failure = nil
+		old.CompletedAt = nil
+		old.UpdatedAt = time.Now().UTC()
+		if e := atomicJSON(s.artifactMeta(old.ID), old); e != nil {
+			return nil, false, e
+		}
+		return old, false, nil
 	}
 	var used int64
 	for _, artifact := range s.artifacts {
 		if artifact.Project == project && artifact.JobName == job && (artifact.State == Pending || artifact.State == Completed) {
 			if artifact.RelativePath == rel {
-				return nil, nil, false, errors.New("ArtifactPathConflict")
+				return nil, false, errors.New("ArtifactPathConflict")
 			}
 			used += artifact.Size
 		}
 	}
 	if used+m.Size > maxJobSize {
-		return nil, nil, false, errors.New("JobQuotaExceeded")
+		return nil, false, errors.New("JobQuotaExceeded")
 	}
 	now := time.Now().UTC()
 	id := newID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Project: project, JobName: job, RunnerName: runner, Category: m.Category, Name: m.Name, FileName: m.FileName, RelativePath: rel, ContentType: m.ContentType, Size: m.Size, SHA256: m.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", project, "jobs", job, rel)), State: Pending, CreatedAt: now, UpdatedAt: now}
-	ir := &IdempotencyRecord{SchemaVersion: 1, Scope: scope, Key: key, RequestDigest: digest, ArtifactID: id, State: IdempotencyProcessing, CreatedAt: now, UpdatedAt: now}
-	if e = atomicJSON(s.idemPath(scope, key), ir); e != nil {
-		return nil, nil, false, e
-	}
+	a := &Artifact{SchemaVersion: 1, ID: id, Project: project, JobName: job, RunnerName: runner, Category: m.Category, FileName: m.FileName, RelativePath: rel, ContentType: m.ContentType, Size: m.Size, SHA256: m.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", project, "jobs", job, rel)), IdempotencyKey: key, State: Pending, CreatedAt: now, UpdatedAt: now}
 	if e = atomicJSON(s.artifactMeta(id), a); e != nil {
-		return nil, nil, false, e
+		return nil, false, e
 	}
 	s.artifacts[id] = a
-	s.idempotency[ik] = ir
-	return a, ir, false, nil
+	s.uploads[ik] = a
+	return a, false, nil
 }
 
-func (s *Store) CompleteUpload(a *Artifact, ir *IdempotencyRecord, tmp string) error {
+func (s *Store) CompleteUpload(a *Artifact, tmp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.manifests[manifestKey(a.Project, a.JobName)] != nil {
@@ -363,17 +344,7 @@ func (s *Store) CompleteUpload(a *Artifact, ir *IdempotencyRecord, tmp string) e
 		_ = d.Sync()
 		_ = d.Close()
 	}
-	now := time.Now().UTC()
-	a.State = Completed
-	a.UpdatedAt = now
-	a.CompletedAt = &now
-	if err := atomicJSON(s.artifactMeta(a.ID), a); err != nil {
-		return err
-	}
-	ir.State = IdempotencyCompleted
-	ir.UpdatedAt = now
-	ir.CompletedAt = &now
-	return atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
+	return s.completeArtifact(a)
 }
 
 func (s *Store) UploadCommitted(a *Artifact) bool {
@@ -382,18 +353,10 @@ func (s *Store) UploadCommitted(a *Artifact) bool {
 	return verifyFile(s.artifactPath(a), a.Size, a.SHA256) == nil
 }
 
-func (s *Store) FailUpload(a *Artifact, ir *IdempotencyRecord, code, msg string) {
+func (s *Store) FailUpload(a *Artifact, code, msg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
-	f := &FailureInfo{Code: code, Message: msg, Retryable: true, Time: now}
-	a.State = Failed
-	a.Failure = f
-	a.UpdatedAt = now
-	ir.State = IdempotencyFailed
-	ir.Failure = f
-	_ = atomicJSON(s.artifactMeta(a.ID), a)
-	_ = atomicJSON(s.idemPath(ir.Scope, ir.Key), ir)
+	_ = s.failArtifact(a, code, msg)
 }
 
 func (s *Store) GetArtifact(id string) (*Artifact, bool) {

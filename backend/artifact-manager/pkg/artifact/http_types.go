@@ -2,7 +2,6 @@ package artifact
 
 type UploadMetadata struct {
 	Category     Category `json:"category"`
-	Name         string   `json:"name,omitempty"`
 	FileName     string   `json:"fileName"`
 	RelativePath string   `json:"relativePath"`
 	ContentType  string   `json:"contentType,omitempty"`
