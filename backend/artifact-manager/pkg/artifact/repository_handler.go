@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"artifact-manager/pkg/upload"
 )
 
 func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +108,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusGone, "RepositoryUnavailable", "repository is unavailable", false, nil)
 		return
 	}
-	relative, err := safeRelative(parts[1])
+	relative, err := upload.SafeRelative(parts[1])
 	if err != nil {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
 		return

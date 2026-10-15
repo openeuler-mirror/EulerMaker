@@ -13,6 +13,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"artifact-manager/pkg/upload"
 )
 
 type repositoryManager struct {
@@ -171,7 +173,7 @@ func (m *repositoryManager) readRecord(uid string) (*RepositoryRecord, error) {
 			}
 			now := time.Now().UTC()
 			record.State = RepositoryFailed
-			record.Failure = &FailureInfo{Code: "RepositoryContentMissing", Message: "RepositoryContentMissing", Retryable: false, Time: now}
+			record.Failure = &upload.FailureInfo{Code: "RepositoryContentMissing", Message: "RepositoryContentMissing", Retryable: false, Time: now}
 			record.ContentURL = ""
 			record.UpdatedAt = now
 		}
@@ -371,7 +373,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 			typed = &repositoryError{code: "RepositoryMaterializationFailed", retryable: true}
 		}
 		record.State = RepositoryFailed
-		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobName: typed.jobName, Time: now}
+		record.Failure = &upload.FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobName: typed.jobName, Time: now}
 	} else {
 		record.State, record.RepositoryDigest = RepositoryReady, result.Digest
 		record.ContentURL = "/repositories/v1/" + uid + "/"
@@ -451,7 +453,7 @@ func (m *repositoryManager) remove(uid string) {
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
-	trash := filepath.Join(trashDir, uid+"-"+newID("d"))
+	trash := filepath.Join(trashDir, uid+"-"+upload.NewID("d"))
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
@@ -469,7 +471,7 @@ func (m *repositoryManager) persist(record *RepositoryRecord) error {
 	// state in metadata, otherwise every completed repository duplicates it.
 	light := *record
 	light.RPMs = nil
-	return atomicJSON(m.metaPath(record.RepositoryUID), &light)
+	return upload.AtomicJSON(m.metaPath(record.RepositoryUID), &light)
 }
 
 func (m *repositoryManager) repositoryPath(record *RepositoryRecord) string {

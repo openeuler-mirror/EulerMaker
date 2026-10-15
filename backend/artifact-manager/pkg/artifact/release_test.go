@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"artifact-manager/pkg/upload"
 )
 
 type testReleaseMaterializer struct {
@@ -51,7 +53,7 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 	c := DefaultConfig()
 	c.DataDir = t.TempDir()
 	c.Repository.Workers, c.Release.Workers = 1, 1
-	store, err := NewStore(c.DataDir)
+	store, err := upload.NewStore(c.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func writeTestRepositoryIndex(t *testing.T, manager *repositoryManager, record *
 		t.Fatal(err)
 	}
 	index := repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}
-	if err := atomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+	if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -396,7 +398,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 		}
 	}
 	index := releaseIndex{BuildName: record.BuildName, RequestDigest: record.RequestDigest, ReleaseDigest: record.ReleaseDigest}
-	if err := atomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
+	if err := upload.AtomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.persist(record); err != nil {
@@ -418,7 +420,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	}
 
 	index.ReleaseDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("different")))
-	if err := atomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
+	if err := upload.AtomicJSON(filepath.Join(m.releasePath(record), "release.json"), index); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.recover(time.Hour); err != nil {

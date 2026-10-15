@@ -3,23 +3,18 @@ package artifact
 import (
 	"runtime"
 	"time"
+
+	"artifact-manager/pkg/auth"
 )
 
 type Config struct {
 	DataDir    string
-	Gateway    GatewayConfig
+	Gateway    auth.Config
 	Upload     UploadConfig
 	Log        LogConfig
 	Repository RepositoryConfig
 	Release    ReleaseConfig
 	Signing    SigningConfig
-}
-
-type GatewayConfig struct {
-	URL                string
-	CA                 string
-	InsecureSkipVerify bool
-	AuthCacheTTL       time.Duration
 }
 
 type UploadConfig struct {
@@ -77,7 +72,7 @@ func DefaultConfig() Config {
 	}
 	return Config{
 		DataDir: "/var/lib/ebs-artifacts",
-		Gateway: GatewayConfig{
+		Gateway: auth.Config{
 			URL:          "https://ebs-gateway:8443",
 			AuthCacheTTL: time.Hour,
 		},

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"artifact-manager/pkg/signing"
+	"artifact-manager/pkg/upload"
 )
 
 type filesystemReleaseMaterializer struct {
@@ -115,7 +116,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		return result, retryableReleaseError(err)
 	}
 	index := releaseIndex{SchemaVersion: 1, BuildName: record.BuildName, SourceRepositoryUID: record.SourceRepositoryUID, RequestDigest: record.RequestDigest, ReleaseDigest: digest, ExcludeSpecs: record.ExcludeSpecs, PublicKeySHA256: publicKeyDigest}
-	if err := atomicJSON(filepath.Join(work, "release.json"), index); err != nil {
+	if err := upload.AtomicJSON(filepath.Join(work, "release.json"), index); err != nil {
 		return result, retryableReleaseError(err)
 	}
 	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "releases")
@@ -159,7 +160,7 @@ func validateReleaseMetadata(root string) error {
 		return errors.New("invalid repomd.xml")
 	}
 	for _, record := range metadata.Records {
-		relative, err := safeRelative(record.Location.Href)
+		relative, err := upload.SafeRelative(record.Location.Href)
 		if err != nil || !strings.HasPrefix(relative, "repodata/") || record.Checksum.Type != "sha256" || !validHash(strings.TrimSpace(record.Checksum.Value)) {
 			return errors.New("invalid repository metadata reference")
 		}

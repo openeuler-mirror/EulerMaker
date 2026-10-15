@@ -13,6 +13,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"artifact-manager/pkg/upload"
 )
 
 type releaseManager struct {
@@ -205,7 +207,7 @@ func (m *releaseManager) finish(completed *ReleaseRecord, result releaseResult, 
 			typed = &releaseError{code: "ReleaseCreationFailed", retryable: true}
 		}
 		record.State = ReleaseFailed
-		record.Failure = &FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, Time: now}
+		record.Failure = &upload.FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, Time: now}
 		_ = m.persist(record)
 		m.mu.Unlock()
 		return
@@ -235,7 +237,7 @@ func (m *releaseManager) activate(name string) (*ReleaseRecord, int, error) {
 	if existing, err := os.Readlink(current); err == nil && existing == target {
 		// Already activated.
 	} else {
-		temporary := filepath.Join(targetDir, ".current-"+newID("r"))
+		temporary := filepath.Join(targetDir, ".current-"+upload.NewID("r"))
 		if err := os.Symlink(target, temporary); err != nil {
 			return nil, 0, releaseStorageError()
 		}
@@ -324,7 +326,7 @@ func (m *releaseManager) remove(name string) {
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
-	trash := filepath.Join(trashDir, name+"-"+newID("d"))
+	trash := filepath.Join(trashDir, name+"-"+upload.NewID("d"))
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
@@ -377,7 +379,7 @@ func (m *releaseManager) stop() {
 	m.cancel()
 }
 func (m *releaseManager) persist(record *ReleaseRecord) error {
-	return atomicJSON(m.metaPath(record.BuildName), record)
+	return upload.AtomicJSON(m.metaPath(record.BuildName), record)
 }
 
 func (m *releaseManager) metaPath(name string) string {

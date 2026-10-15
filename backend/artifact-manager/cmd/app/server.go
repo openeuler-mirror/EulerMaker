@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"artifact-manager/pkg/artifact"
+	"artifact-manager/pkg/auth"
 )
 
 type options struct {
@@ -87,7 +88,7 @@ func run(opts options) error {
 	if opts.listen == "" || c.DataDir == "" || c.Gateway.URL == "" || c.Upload.MaxFileSize <= 0 || c.Upload.MaxJobSize <= 0 || c.Upload.MaxMetadataSize <= 0 || c.Log.ChunkSize <= 0 || c.Upload.MaxPartHeaders <= 0 || c.Upload.MaxHeaderLineSize <= 0 || c.Upload.MaxPartHeaderBytes <= 0 || c.Log.DedupeWindow <= 0 || c.Log.ReplayWindow <= 0 || c.Repository.CreateRepoCommand == "" || c.Repository.RPMQueryCommand == "" || c.Repository.CreateRepoWorkers <= 0 || c.Repository.Timeout <= 0 || c.Repository.WorkTTL <= 0 || c.Release.Timeout <= 0 || c.Release.WorkTTL <= 0 || c.Release.HistoryTTL <= 0 || opts.shutdownTimeout <= 0 || c.Repository.Workers <= 0 || c.Repository.QueueCapacity <= 0 || c.Release.Workers <= 0 || c.Release.QueueCapacity <= 0 || c.Release.HistoryCount <= 0 || c.Signing.Timeout <= 0 || c.Signing.Workers <= 0 {
 		return fmt.Errorf("invalid configuration")
 	}
-	authorizer, err := artifact.NewGatewayAuthorizer(c)
+	authorizer, err := auth.NewGatewayAuthorizer(c.Gateway)
 	if err != nil {
 		return err
 	}

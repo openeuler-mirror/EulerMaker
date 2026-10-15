@@ -17,12 +17,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/upload"
 )
 
 type testAuthorizer struct{}
 
-func (testAuthorizer) Authenticate(context.Context, string) (Identity, error) {
-	return Identity{Name: "runner-1", ExpiresAt: time.Now().Add(time.Hour)}, nil
+func (testAuthorizer) Authenticate(context.Context, string) (auth.Identity, error) {
+	return auth.Identity{Name: "runner-1", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
 func testHandler(t *testing.T) (http.Handler, Config) {
@@ -54,7 +57,7 @@ func uploadRequest(t *testing.T, data []byte, key string) *http.Request {
 	h.Set("Content-Disposition", `form-data; name="metadata"`)
 	h.Set("Content-Type", "application/json")
 	p, _ := mw.CreatePart(h)
-	_ = json.NewEncoder(p).Encode(UploadMetadata{Category: CategoryArtifact, FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
+	_ = json.NewEncoder(p).Encode(upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
 	h = make(textproto.MIMEHeader)
 	h.Set("Content-Disposition", `form-data; name="file"; filename="ignored"`)
 	h.Set("Content-Type", "application/octet-stream")
@@ -86,7 +89,7 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
 	}
 	created := decodeBody[struct {
-		Artifact Artifact `json:"artifact"`
+		Artifact upload.Artifact `json:"artifact"`
 	}](t, w)
 	wantKey := "projects/project-1/jobs/build/RPMS/kernel.rpm"
 	if created.Artifact.StorageKey != wantKey {
@@ -102,7 +105,7 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 		t.Fatalf("replay: %d %s", w.Code, w.Body.String())
 	}
 	replayed := decodeBody[struct {
-		Artifact Artifact `json:"artifact"`
+		Artifact upload.Artifact `json:"artifact"`
 	}](t, w)
 	if replayed.Artifact.ID != created.Artifact.ID {
 		t.Fatal("idempotent replay returned another artifact")
@@ -123,15 +126,15 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 
 func TestJobNameDirectoryPersistsAcrossRestart(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewStore(root)
+	store, err := upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := UploadMetadata{Category: CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
+	meta := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
 	if _, _, err := store.BeginUpload("project", "job", "runner", "key-1", meta, 1024); err != nil {
 		t.Fatal(err)
 	}
-	store, err = NewStore(root)
+	store, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,10 +155,10 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, uploadRequest(t, data, "upload-1"))
 	a := decodeBody[struct {
-		Artifact Artifact `json:"artifact"`
+		Artifact upload.Artifact `json:"artifact"`
 	}](t, w).Artifact
 
-	manifest := CompleteManifestRequest{Files: []ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
+	manifest := upload.CompleteManifestRequest{Files: []upload.ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
 	b, _ := json.Marshal(manifest)
 	r := httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/manifest/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
@@ -223,7 +226,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(activeDir, "combined.index.jsonl")); err != nil {
 		t.Fatalf("active log index at Job name path: %v", err)
 	}
-	complete := CompleteLogRequest{Stream: "combined", LastSequence: 1, Size: int64(len(all)), SHA256: sum(all)}
+	complete := upload.CompleteLogRequest{Stream: "combined", LastSequence: 1, Size: int64(len(all)), SHA256: sum(all)}
 	b, _ = json.Marshal(complete)
 	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
@@ -247,28 +250,28 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 
 func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 	root := t.TempDir()
-	s, err := NewStore(root)
+	s, err := upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := UploadMetadata{Category: CategoryArtifact, FileName: "x", RelativePath: "x", Size: 3, SHA256: sum([]byte("abc"))}
+	m := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "x", RelativePath: "x", Size: 3, SHA256: sum([]byte("abc"))}
 	a, _, err := s.BeginUpload("project", "job", "runner", "key", m, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	final := s.artifactPath(a)
+	final := s.ArtifactPath(a)
 	if err := os.MkdirAll(filepath.Dir(final), 0750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(final, []byte("abc"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	s, err = NewStore(root)
+	s, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recovered, ok := s.GetArtifact(a.ID)
-	if !ok || recovered.State != Completed {
+	if !ok || recovered.State != upload.Completed {
 		t.Fatalf("artifact was not recovered: %#v", recovered)
 	}
 
@@ -276,14 +279,14 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 	if _, err := s.AppendLog("project", "another-job", "runner", 0, chunk, sum(chunk)); err != nil {
 		t.Fatal(err)
 	}
-	body, _, _ := s.logPaths("project", "another-job")
+	body, _, _ := s.LogPaths("project", "another-job")
 	f, err := os.OpenFile(body, os.O_APPEND|os.O_WRONLY, 0640)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, _ = io.WriteString(f, "uncommitted-tail")
 	_ = f.Close()
-	s, err = NewStore(root)
+	s, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,11 +302,11 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 
 func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewStore(root)
+	store, err := upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
 	artifact, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -315,16 +318,16 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 	if err := store.CompleteUpload(artifact, temporary); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.artifactPath(artifact), []byte("bad"), 0640); err != nil {
+	if err := os.WriteFile(store.ArtifactPath(artifact), []byte("bad"), 0640); err != nil {
 		t.Fatal(err)
 	}
 
-	store, err = NewStore(root)
+	store, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	loaded, ok := store.GetArtifact(artifact.ID)
-	if !ok || loaded.State != Completed {
+	if !ok || loaded.State != upload.Completed {
 		t.Fatalf("completed upload changed during startup: %+v", loaded)
 	}
 	_, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
@@ -335,11 +338,11 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 
 func TestStoreUploadIdempotencySurvivesRestart(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewStore(root)
+	store, err := upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
 	artifact, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
 	if err != nil || replay {
 		t.Fatalf("begin upload: replay=%t, error=%v", replay, err)
@@ -351,7 +354,7 @@ func TestStoreUploadIdempotencySurvivesRestart(t *testing.T) {
 	if err := store.CompleteUpload(artifact, temporary); err != nil {
 		t.Fatal(err)
 	}
-	store, err = NewStore(root)
+	store, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,21 +374,21 @@ func TestStoreUploadIdempotencySurvivesRestart(t *testing.T) {
 
 func TestStoreRetryFailedUploadAfterRestart(t *testing.T) {
 	root := t.TempDir()
-	store, err := NewStore(root)
+	store, err := upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := UploadMetadata{Category: CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
 	artifact, _, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err = NewStore(root)
+	store, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	retried, replay, err := store.BeginUpload("project", "job", "runner", "key", metadata, 1024)
-	if err != nil || replay || retried.ID != artifact.ID || retried.State != Pending {
+	if err != nil || replay || retried.ID != artifact.ID || retried.State != upload.Pending {
 		t.Fatalf("retry after restart: artifact=%+v, replay=%t, error=%v", retried, replay, err)
 	}
 }

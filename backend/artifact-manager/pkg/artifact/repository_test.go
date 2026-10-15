@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"artifact-manager/pkg/upload"
 )
 
 type testRepositoryMaterializer struct {
@@ -34,7 +36,7 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record Rep
 			return repositoryResult{}, err
 		}
 		index := repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}
-		if err := atomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+		if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
 			return repositoryResult{}, err
 		}
 	}
@@ -50,7 +52,7 @@ func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) 
 	}
 	c.Repository.Workers = 1
 	c.Repository.QueueCapacity = 2
-	store, err := NewStore(c.DataDir)
+	store, err := upload.NewStore(c.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +104,7 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 			if err := os.MkdirAll(path, 0750); err != nil {
 				t.Fatal(err)
 			}
-			if err := atomicJSON(filepath.Join(path, "repository.json"), repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
+			if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
 				t.Fatal(err)
 			}
 		}

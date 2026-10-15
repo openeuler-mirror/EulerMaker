@@ -1,4 +1,4 @@
-package artifact
+package auth
 
 import (
 	"context"
@@ -24,6 +24,13 @@ type Authorizer interface {
 	Authenticate(context.Context, string) (Identity, error)
 }
 
+type Config struct {
+	URL                string
+	CA                 string
+	InsecureSkipVerify bool
+	AuthCacheTTL       time.Duration
+}
+
 type GatewayAuthorizer struct {
 	url    string
 	client *http.Client
@@ -39,9 +46,9 @@ type cachedIdentity struct {
 
 func NewGatewayAuthorizer(c Config) (*GatewayAuthorizer, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tc := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: c.Gateway.InsecureSkipVerify}
-	if c.Gateway.CA != "" {
-		b, e := os.ReadFile(c.Gateway.CA)
+	tc := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: c.InsecureSkipVerify}
+	if c.CA != "" {
+		b, e := os.ReadFile(c.CA)
 		if e != nil {
 			return nil, e
 		}
@@ -52,7 +59,7 @@ func NewGatewayAuthorizer(c Config) (*GatewayAuthorizer, error) {
 		tc.RootCAs = p
 	}
 	tr.TLSClientConfig = tc
-	return &GatewayAuthorizer{url: strings.TrimRight(c.Gateway.URL, "/") + "/auth/check", client: &http.Client{Transport: tr, Timeout: 10 * time.Second}, ttl: c.Gateway.AuthCacheTTL, cache: make(map[[32]byte]cachedIdentity)}, nil
+	return &GatewayAuthorizer{url: strings.TrimRight(c.URL, "/") + "/auth/check", client: &http.Client{Transport: tr, Timeout: 10 * time.Second}, ttl: c.AuthCacheTTL, cache: make(map[[32]byte]cachedIdentity)}, nil
 }
 
 func (a *GatewayAuthorizer) Authenticate(ctx context.Context, token string) (Identity, error) {

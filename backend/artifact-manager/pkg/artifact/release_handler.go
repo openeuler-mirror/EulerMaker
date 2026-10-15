@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"artifact-manager/pkg/upload"
 )
 
 func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +162,7 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 		writeErr(w, r, http.StatusRequestedRangeNotSatisfiable, "MultipleRangesNotSupported", "multiple ranges are not supported", false, nil)
 		return
 	}
-	relative, err := safeRelative(value)
+	relative, err := upload.SafeRelative(value)
 	if err != nil {
 		s.releaseNotFound(w, r)
 		return

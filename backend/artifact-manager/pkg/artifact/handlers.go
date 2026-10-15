@@ -5,21 +5,23 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"artifact-manager/pkg/auth"
 	"artifact-manager/pkg/signing"
+	"artifact-manager/pkg/upload"
 )
 
 type Server struct {
 	cfg          Config
-	store        *Store
-	auth         Authorizer
+	store        *upload.Store
+	auth         auth.Authorizer
 	repositories *repositoryManager
 	releases     *releaseManager
 	router       *gin.Engine
 	signer       *signing.Signer
 }
 
-func NewHandler(c Config, a Authorizer) (*Server, error) {
-	st, e := NewStore(c.DataDir)
+func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
+	st, e := upload.NewStore(c.DataDir)
 	if e != nil {
 		return nil, e
 	}
@@ -47,7 +49,7 @@ func (s *Server) Close() {
 	}
 }
 
-func newArtifactServer(c Config, a Authorizer, store *Store, materializer repositoryMaterializer, signingFingerprint string) (*Server, error) {
+func newArtifactServer(c Config, a auth.Authorizer, store *upload.Store, materializer repositoryMaterializer, signingFingerprint string) (*Server, error) {
 	repositories, err := newRepositoryManager(c, materializer, signingFingerprint)
 	if err != nil {
 		return nil, err
