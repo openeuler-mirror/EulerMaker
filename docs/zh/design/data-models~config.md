@@ -8,7 +8,7 @@
 |------|----------|--------|-------------|
 | `Config/build-target` | 支持的 OS、Arch 和构建镜像 | 集群级，`Public` | `spec.runtimeSpec.image` |
 | `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
-| `Config/artifact-manager-conf` | Artifact Manager 实例与内部管理地址 | 集群级，`OpsOnly` | 当前不写入 Job |
+| `Config/artifact-manager-conf` | Artifact Manager 实例及控制面、Runner 访问地址 | 集群级，`OpsOnly` | 当前不写入 Job |
 
 `Config` 对象只验证通用元数据、可见性和内容大小，不在 apiserver 解码业务内容。使用方必须解析、校验并明确处理非法内容；配置的业务结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
 
@@ -251,7 +251,15 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 
 ## 4. Artifact Manager 实例内容
 
-`Config/artifact-manager-conf` 记录实例标识到内部管理面 URL 的映射，默认 `visibility: OpsOnly`。`instances` 包含 `default` 及部署使用的实例名；`default` 对应 Docker Compose 的服务地址，`art-01` 对应首个 Kubernetes 实例。Project 创建或修改 `ebs.io/artifacts` annotation 时，以当前 `instances` 的键作为有效值。`internalURL` 是控制面可访问的 HTTP(S) 服务地址，不是 Runner 上传地址或浏览器公开地址。
+`Config/artifact-manager-conf` 记录 Artifact Manager 实例地址，默认 `visibility: OpsOnly`。`instances` 包含 `default` 及部署使用的实例名；`default` 对应 Docker Compose，`art-01` 对应首个 Kubernetes 实例。Project 创建或修改 `ebs.io/artifacts` annotation 时，以当前 `instances` 的键作为有效值。每个实例的地址按访问方区分：
+
+| 字段 | 用途 |
+|------|------|
+| `internalURL` | Controller Manager 访问 Artifact Manager 的内部 HTTP(S) 地址；实例必须配置 |
+| `runnerInternalURL` | 内网 Runner 上传日志和产物、读取过程仓的地址；未部署内网 Runner 时可为空 |
+| `runnerExternalURL` | 外网 Runner 使用的 HTTPS 地址；未开放外网 Runner 时可为空 |
+
+这些字段只保存服务地址，不保存凭据。Gateway 向已认证的 Runner 提供所有实例的 `runnerInternalURL` 和 `runnerExternalURL` 列表，不按 Job 或 Project 过滤；不得把整个 `OpsOnly` Config 改为 `Public`。Runner 的“内网/外网”模式须显式配置，不根据请求来源自动判断；所需实例在选定模式下的地址为空时停止该 Job 的产物传输，不回退到另一地址或 `internalURL`。
 
 ```yaml
 apiVersion: ebs/v1
@@ -264,8 +272,12 @@ spec:
     instances:
       default:
         internalURL: http://artifact-manager:8081
+        runnerInternalURL: http://127.0.0.1:8081
+        runnerExternalURL: ""
       art-01:
         internalURL: http://artifact-manager.art-01:8081
+        runnerInternalURL: ""
+        runnerExternalURL: ""
 ```
 
-apiserver 在 Ready 前从 `default-artifact-manager-conf.yaml` 以 create-only 语义初始化该对象，已有内容不覆盖。Gateway 仅允许 Ops/Admin 读取和修改，不允许删除。RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 选择实例并使用其 `internalURL`，写入带实例名的过程仓和正式仓逻辑 URL；BuildInfo Controller 使用 `instances` 为过程仓元数据查询解析内部地址。Runner 与前端尚未从此对象选择实例。
+apiserver 在 Ready 前从 `default-artifact-manager-conf.yaml` 以 create-only 语义初始化该对象，已有内容不覆盖。Gateway 仅允许 Ops/Admin 读取和修改原 Config，不允许删除；Runner 只能读取地址投影。RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 选择实例并使用其 `internalURL`，写入带实例名的过程仓和正式仓逻辑 URL；BuildInfo Controller 使用 `instances` 为过程仓元数据查询解析内部地址。默认的 `127.0.0.1` 仅适用于与 Artifact Manager 同机运行的 Docker Compose Runner；其他部署必须填写 Runner 实际可达的地址。Runner 按实例选址尚未实现，现阶段仍使用单个 `--artifact-manager` 地址。

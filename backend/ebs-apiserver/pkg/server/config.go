@@ -24,7 +24,9 @@ var defaultArtifactManagerTemplate []byte
 
 type artifactManagerConfigContent struct {
 	Instances map[string]struct {
-		InternalURL string `json:"internalURL"`
+		InternalURL       string `json:"internalURL"`
+		RunnerInternalURL string `json:"runnerInternalURL"`
+		RunnerExternalURL string `json:"runnerExternalURL"`
 	} `json:"instances"`
 }
 
