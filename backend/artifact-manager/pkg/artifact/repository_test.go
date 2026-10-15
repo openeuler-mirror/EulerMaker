@@ -48,13 +48,13 @@ func newRepositoryTestServer(t *testing.T, materializer repositoryMaterializer) 
 	if fake, ok := materializer.(*testRepositoryMaterializer); ok {
 		fake.root = c.DataDir
 	}
-	c.RepositoryWorkers = 1
-	c.RepositoryQueueCapacity = 2
+	c.Repository.Workers = 1
+	c.Repository.QueueCapacity = 2
 	store, err := NewStore(c.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := newArtifactServer(c, testAuthorizer{}, store, materializer)
+	server, err := newArtifactServer(c, testAuthorizer{}, store, materializer, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,9 +233,10 @@ func TestRepositoryContent(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	record := &RepositoryRecord{RepositoryUID: request.RepositoryUID, Project: request.Project, BuildName: request.BuildName, TargetOS: request.TargetOS, TargetArch: request.TargetArch, State: RepositoryReady, ContentURL: "/repositories/v1/" + request.RepositoryUID + "/", CreatedAt: now, UpdatedAt: now}
-	server.repositories.mu.Lock()
-	server.repositories.records[request.RepositoryUID] = record
-	server.repositories.mu.Unlock()
+	writeTestRepositoryIndex(t, server.repositories, record)
+	if err := server.repositories.persist(record); err != nil {
+		t.Fatal(err)
+	}
 	response := repositoryRequest(t, server, http.MethodGet, record.ContentURL+"repodata/repomd.xml", nil)
 	if response.Code != http.StatusOK || response.Body.String() != "metadata" || response.Header().Get("ETag") == "" {
 		t.Fatalf("content response = %d %q, etag=%q", response.Code, response.Body.String(), response.Header().Get("ETag"))

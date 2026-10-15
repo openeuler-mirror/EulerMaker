@@ -15,7 +15,7 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		var request CreateReleaseRequest
-		if err := decodeJSON(r.Body, s.cfg.MaxMetadataSize, &request); err != nil {
+		if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &request); err != nil {
 			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
 			return
 		}

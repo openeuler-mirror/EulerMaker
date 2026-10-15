@@ -20,6 +20,8 @@ func TestRouterResponses(t *testing.T) {
 		{http.MethodGet, "/internal/v1/repositories", http.StatusMethodNotAllowed, http.MethodPost},
 		{http.MethodPut, "/artifacts/v1/projects/project/jobs/build/artifacts", http.StatusMethodNotAllowed, "GET, POST"},
 		{http.MethodGet, "/artifacts/v1/projects/bad%20name/jobs/build/artifacts", http.StatusBadRequest, ""},
+		{http.MethodGet, "/artifacts/v1/projects/project/jobs/job/logs/status/extra", http.StatusNotFound, ""},
+		{http.MethodGet, "/artifacts/v1//projects/project/jobs/job/logs/status", http.StatusNotFound, ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, ""},
 	}
 	for _, tt := range tests {
