@@ -39,6 +39,37 @@ func hookProject() *ebsv1.Project {
 	return &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{BuildTargets: []ebsv1.BuildTarget{{Os: "os", Arch: "arch"}}}}
 }
 
+func TestUpdateHookOnlyRunsForOrdinaryUpdates(t *testing.T) {
+	store, status, _ := hookStore()
+	ctx := request.WithNamespace(context.Background(), "")
+	created, err := store.Create(ctx, hookProject(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	store.SetUpdateHook(func(context.Context, runtime.Object, runtime.Object) error {
+		calls++
+		return nil
+	})
+	project := created.(*ebsv1.Project).DeepCopy()
+	project.Status.Phase = ebsv1.ProjectTerminating
+	updated, _, err := status.Update(ctx, project.Name, rest.DefaultUpdatedObjectInfo(project), nil, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("status update called ordinary update hook %d times", calls)
+	}
+	project = updated.(*ebsv1.Project).DeepCopy()
+	project.Spec.Description = "updated"
+	if _, _, err := store.Update(ctx, project.Name, rest.DefaultUpdatedObjectInfo(project), nil, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("ordinary update hook calls = %d, want 1", calls)
+	}
+}
+
 func TestCreateTransactionOrdering(t *testing.T) {
 	for _, dry := range []bool{false, true} {
 		store, _, writes := hookStore()

@@ -251,7 +251,7 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 
 ## 4. Artifact Manager 实例内容
 
-`Config/artifact-manager-conf` 记录实例标识到内部管理面 URL 的映射，默认 `visibility: OpsOnly`。`instances` 的键为 `default` 或 `art-` 加数字编号；`default` 对应 Docker Compose 的服务地址，`art-01` 对应首个 Kubernetes 实例。`internalURL` 是控制面可访问的 HTTP(S) 服务地址，不是 Runner 上传地址或浏览器公开地址。
+`Config/artifact-manager-conf` 记录实例标识到内部管理面 URL 的映射，默认 `visibility: OpsOnly`。`instances` 包含 `default` 及部署使用的实例名；`default` 对应 Docker Compose 的服务地址，`art-01` 对应首个 Kubernetes 实例。Project 创建或修改 `ebs.io/artifacts` annotation 时，以当前 `instances` 的键作为有效值。`internalURL` 是控制面可访问的 HTTP(S) 服务地址，不是 Runner 上传地址或浏览器公开地址。
 
 ```yaml
 apiVersion: ebs/v1

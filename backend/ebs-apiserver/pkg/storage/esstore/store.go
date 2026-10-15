@@ -61,6 +61,7 @@ type Store struct {
 	tableConvertor    rest.TableConvertor
 	deleteHook        func(context.Context, string) error
 	createHook        rest.ValidateObjectFunc
+	updateHook        rest.ValidateObjectUpdateFunc
 	createTransaction func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error)
 	afterWrite        func(context.Context, runtime.Object, bool)
 }
@@ -96,6 +97,9 @@ func (s *Store) SetDeleteHook(hook func(context.Context, string) error) { s.dele
 
 // SetCreateHook registers resource-specific validation after defaulting and before persistence.
 func (s *Store) SetCreateHook(hook rest.ValidateObjectFunc) { s.createHook = hook }
+
+// SetUpdateHook registers resource-specific validation for ordinary updates.
+func (s *Store) SetUpdateHook(hook rest.ValidateObjectUpdateFunc) { s.updateHook = hook }
 
 // SetCreateTransaction wraps persistence after all validation and admission.
 // The callback must not invoke persist more than once.
@@ -199,6 +203,17 @@ func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, cr
 }
 
 func (s *Store) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	if s.updateHook != nil {
+		admission := updateValidation
+		updateValidation = func(ctx context.Context, newObj, oldObj runtime.Object) error {
+			if admission != nil {
+				if err := admission(ctx, newObj, oldObj); err != nil {
+					return err
+				}
+			}
+			return s.updateHook(ctx, newObj, oldObj)
+		}
+	}
 	return s.update(ctx, name, objInfo, createValidation, updateValidation, forceAllowCreate, options, s.updateStrategy)
 }
 
