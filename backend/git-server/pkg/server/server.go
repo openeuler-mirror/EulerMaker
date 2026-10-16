@@ -39,7 +39,7 @@ type repositoryManager interface {
 	WithRepository(context.Context, string, func(string) error) error
 }
 
-func New(manager repositoryManager, commands *command.Executor, maxRequestBody int64) *Server {
+func New(manager repositoryManager, commands *command.Executor, maxRequestBody int64, clone http.Handler) *Server {
 	s := &Server{manager: manager, commands: commands, maxRequestBody: maxRequestBody, mux: http.NewServeMux()}
 	s.mux.HandleFunc("/healthz", method(http.MethodGet, s.health))
 	s.mux.HandleFunc("/readyz", method(http.MethodGet, s.ready))
@@ -48,6 +48,9 @@ func New(manager repositoryManager, commands *command.Executor, maxRequestBody i
 	s.mux.HandleFunc("/api/v1/repo/status", method(http.MethodPost, s.status))
 	s.mux.HandleFunc("/api/v1/repo/delete", method(http.MethodPost, s.delete))
 	s.mux.HandleFunc("/command", method(http.MethodPost, s.command))
+	if clone != nil {
+		s.mux.Handle("/git/", clone)
+	}
 	return s
 }
 

@@ -18,8 +18,7 @@ type Options struct {
 	TempCleanupInterval   time.Duration
 	MaxRequestBodyBytes   int64
 	MaxCommandOutputBytes int64
-	GitDaemonEnabled      bool
-	GitDaemonAddress      string
+	CloneWorkers          int
 	CloneBaseURL          string
 	AllowInsecureHTTPAuth bool
 	AuthConfig            string
@@ -39,9 +38,8 @@ func Parse(args []string) (Options, error) {
 	fs.DurationVar(&result.TempCleanupInterval, "temp-cleanup-interval", 10*time.Minute, "temporary directory cleanup interval")
 	fs.Int64Var(&result.MaxRequestBodyBytes, "max-request-body-bytes", 65536, "maximum JSON request body")
 	fs.Int64Var(&result.MaxCommandOutputBytes, "max-command-output-bytes", 16777216, "maximum command output")
-	fs.BoolVar(&result.GitDaemonEnabled, "git-daemon-enabled", true, "run the read-only Git daemon")
-	fs.StringVar(&result.GitDaemonAddress, "git-daemon-address", ":9418", "Git daemon listen address")
-	fs.StringVar(&result.CloneBaseURL, "clone-base-url", "git://git-server:9418", "base URL returned to clone clients")
+	fs.IntVar(&result.CloneWorkers, "clone-workers", 20, "maximum concurrent Smart HTTP requests")
+	fs.StringVar(&result.CloneBaseURL, "clone-base-url", "http://git-server:8080/git", "HTTP(S) base URL returned to clone clients, including /git")
 	fs.BoolVar(&result.AllowInsecureHTTPAuth, "allow-insecure-http-auth", false, "allow credentials over plain HTTP")
 	fs.StringVar(&result.AuthConfig, "auth-config", "", "authentication TOML file")
 	fs.DurationVar(&result.ShutdownTimeout, "shutdown-timeout", 30*time.Second, "graceful HTTP shutdown timeout")
@@ -52,8 +50,11 @@ func Parse(args []string) (Options, error) {
 		return Options{}, fmt.Errorf("invalid git-server options")
 	}
 	parsed, err := url.Parse(result.CloneBaseURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return Options{}, fmt.Errorf("clone-base-url must be an absolute URL")
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return Options{}, fmt.Errorf("clone-base-url must be an absolute HTTP(S) URL without credentials, query or fragment")
+	}
+	if result.CloneWorkers <= 0 {
+		return Options{}, fmt.Errorf("clone-workers must be positive")
 	}
 	return result, nil
 }

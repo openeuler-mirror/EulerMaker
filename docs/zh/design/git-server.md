@@ -13,7 +13,7 @@ Controller / internal client
           |
           +-------------> Local bare repository
           |
-          +-------------> Read-only git daemon
+          +-------------> Read-only Smart HTTP (/git/)
 ```
 
 首版约束：
@@ -31,7 +31,7 @@ Controller / internal client
 4. 查询仓库最近一次成功同步时间；
 5. 异步删除本地仓库；
 6. 执行构建流程需要的有限 Git 只读查询；
-7. 通过 git daemon 提供只读 clone。
+7. 通过 Smart HTTP 提供只读 clone/fetch。
 
 首版只持久化最近成功同步时间，不持久化队列意图、错误和重试状态；不支持 Git LFS、submodule 递归同步、Snapshot commit 保留、磁盘配额和自动 GC。
 
@@ -196,7 +196,7 @@ Content-Type: application/json
 ```json
 {
   "key": "gitee.com/src-openeuler/gcc.git",
-  "clone_url": "git://git-server:9418/gitee.com/src-openeuler/gcc.git",
+  "clone_url": "http://git-server:8080/git/gitee.com/src-openeuler/gcc.git",
   "sync_time": "2026-09-09T02:30:00Z"
 }
 ```
@@ -221,7 +221,7 @@ Content-Type: application/json
 ```json
 {
   "key": "gitee.com/src-openeuler/gcc.git",
-  "clone_url": "git://git-server:9418/gitee.com/src-openeuler/gcc.git",
+  "clone_url": "http://git-server:8080/git/gitee.com/src-openeuler/gcc.git",
   "sync_time": "2026-09-09T02:30:00Z"
 }
 ```
@@ -478,18 +478,11 @@ Worker 每次只终结一次队列项：成功、不可重试失败、重试耗�
 
 `/command` 先在全局锁内取得稳定的 RepositoryState 指针，释放全局锁后再获取 operationLock 的读锁，最后校验最终路径是合法 bare repository。校验通过即可执行，不要求 SyncTime 非空；校验失败返回 `404 RepositoryNotAvailable`。command 和写操作的先后顺序以 operationLock 为线性化顺序：command 先取得读锁则先执行，否则等待写操作结束并重新检查目录。
 
-同步和删除持有写锁，因此不会与 `/command` 并发。git daemon 不经过进程内锁：fetch 期间 Git 自身的引用更新保持原子，已有 clone 可以继续；仓库删除或重新创建期间，新 clone 可能短暂失败，首版接受该行为，客户端可以重试。
+Smart HTTP 请求按仓库 key 查找已登记且可用的仓库，持有同一 operationLock 的读锁直到响应完成。同步和删除持有写锁，因此不会与 `/command` 或正在执行的 Smart HTTP 请求并发。等待读锁期间响应请求取消和超时。一次 clone/fetch 可能包含多个 HTTP 请求，两个请求之间仍可能发生同步或删除，客户端需要处理仓库变化和重试。
 
 ### 5.6 关闭
 
-服务关闭时按以下顺序执行：
-
-1. readiness 置为失败并停止接受新的 sync/delete/command 请求；
-2. 关闭队列，不再开始新操作；
-3. 等待正在运行的 Worker 和 command 在优雅退出期限内结束；
-4. 超时后取消对应 context 并终止 Git 子进程；
-5. 停止 git daemon；
-6. 关闭 HTTP Server。
+服务关闭时取消根 context，readiness 置为失败，关闭工作队列并开始 HTTP Shutdown。Smart HTTP 请求继承根 context，取消时终止 Git backend 及其子进程；HTTP 等待期限由 `--shutdown-timeout` 控制，主进程退出前等待同步 Worker 停止。
 
 ## 6. 凭证与安全
 
@@ -567,23 +560,28 @@ Git stderr 在进入 RepositoryError、`CommandResponse`、日志或指标标签
 
 ## 7. 只读 clone
 
-首版保留只读 git daemon：
-
-```text
-git daemon --base-path=${dataDir} --export-all --reuseaddr
-```
+使用 Git 官方 `git-http-backend`，由 Go HTTP Handler 管理子进程并流式转发响应。管理 API 与克隆入口共用 `--listen-address`，克隆路径固定为 `/git/{key}`。
 
 访问示例：
 
 ```text
-git://git-server:9418/gitee.com/src-openeuler/gcc.git
+http://git-server:8080/git/gitee.com/src-openeuler/gcc.git
 ```
 
-git daemon 使用 `--export-all`，不要求仓库包含 `git-daemon-export-ok`。它没有认证和加密，只能通过内部 Service 和 NetworkPolicy 对受信任组件开放，不得暴露到集群外，也不得启用 receive-pack。
+只允许以下请求：
 
-由于 `${dataDir}/.tmp` 位于 git daemon 的 base path 下，知道完整随机临时路径的内部客户端理论上可以在 clone 完成、原子移动之前访问临时裸仓库。首版接受该短暂风险：git daemon 不提供仓库目录枚举，临时目录名必须使用具有足够熵的随机值，失败和过期临时目录应及时清理，且端口只对受信任的内部组件开放。
+| 方法 | 路径 | 用途 |
+|------|------|------|
+| GET | `/git/{key}/info/refs?service=git-upload-pack` | 引用与协议能力发现 |
+| POST | `/git/{key}/git-upload-pack` | clone/fetch；正文类型为 `application/x-git-upload-pack-request` |
 
-HTTP API 和 git daemon 使用同一 Pod 的两个容器，或由主进程明确管理子进程生命周期；Dockerfile 不使用 shell 后台运行两个进程。
+每次执行显式配置 `http.uploadpack=true`、`http.receivepack=false`、`http.getanyfile=false`，不受仓库中同名配置覆盖。透传 `Git-Protocol` 支持协议 v2，不提供 push、Dumb HTTP、LFS 或任意文件下载。
+
+Handler 只允许访问 Manager 登记的可用仓库，拒绝 `.tmp` 和非法路径；最终目录经过现有安全路径检查后才交给 backend。`GIT_PROJECT_ROOT` 固定为本次选中的仓库目录，使用 `GIT_HTTP_EXPORT_ALL=1`，不要求创建 `git-daemon-export-ok`。启动恢复确认可用的仓库允许克隆，不要求 SyncTime 非空。仓库 key 中的百分号等字符在生成 clone URL 时再次进行 URL path 编码，以保持 URL 解码后的 key 与磁盘目录一致。
+
+并发请求由 `--clone-workers` 限制，达到上限返回 `503 CloneBusy` 和 `Retry-After: 5`。单个请求复用 `--operation-timeout`，取消或超时终止整个 backend 进程组。协商请求正文上限为 10 MiB，pack 响应流式传输，不整体缓存；输出开始后的错误中断连接，不向 Git 数据流追加 JSON。
+
+HTTP 服务本身不终止 TLS。对外接入时由反向代理提供 HTTPS，只暴露 `/git/`；`/api/v1/repo/*` 和 `/command` 仅供受信任的内部组件访问。反向代理应使用适合大仓库的超时和流式转发配置。
 
 ## 8. 配置
 
@@ -601,16 +599,15 @@ git-server \
   --temp-cleanup-interval=10m \
   --max-request-body-bytes=65536 \
   --max-command-output-bytes=16777216 \
-  --git-daemon-enabled=true \
-  --git-daemon-address=:9418 \
-  --clone-base-url=git://git-server:9418 \
+  --clone-workers=20 \
+  --clone-base-url=http://git-server:8080/git \
   --allow-insecure-http-auth=false \
   --auth-config=/etc/git-server/auth.toml
 ```
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--listen-address` | `:8080` | HTTP API 监听地址 |
+| `--listen-address` | `:8080` | HTTP API 与 Smart HTTP 监听地址 |
 | `--data-dir` | `/srv/git` | 裸仓库根目录，临时目录固定为 `{data-dir}/.tmp` |
 | `--workers` | `20` | 同步和删除 Worker 数量 |
 | `--operation-timeout` | `10m` | 单次 Git 操作超时 |
@@ -620,13 +617,12 @@ git-server \
 | `--temp-cleanup-interval` | `10m` | 临时目录清理失败后的重试周期，必须大于 0 |
 | `--max-request-body-bytes` | `65536` | HTTP JSON 请求正文的最大字节数 |
 | `--max-command-output-bytes` | `16777216` | `/command` 最大输出字节数 |
-| `--git-daemon-enabled` | `true` | 是否启动只读 git daemon |
-| `--git-daemon-address` | `:9418` | git daemon 监听地址 |
-| `--clone-base-url` | `git://git-server:9418` | 生成响应中 `clone_url` 的基础地址 |
+| `--clone-workers` | `20` | Smart HTTP 同时处理的最大请求数，与同步 Worker 独立 |
+| `--clone-base-url` | `http://git-server:8080/git` | 生成 `clone_url` 的 HTTP(S) 基础地址，包含 `/git` 或代理映射的路径 |
 | `--allow-insecure-http-auth` | `false` | 是否允许通过明文 HTTP 使用用户名和密码；生产环境必须保持关闭 |
 | `--auth-config` | 无 | 远端 Git 认证 TOML 文件，未配置时只允许匿名访问远端仓库 |
 
-`clone-base-url` 必须来自启动参数，不能根据 HTTP 请求的 `Host` header 推断。`workers`、超时、重试次数、退避参数和输出限制必须在启动时完成范围校验，非法值导致进程启动失败。
+`clone-base-url` 必须来自启动参数，不能根据 HTTP 请求的 `Host` header 推断；只允许不带 userinfo、query、fragment 的 HTTP(S) URL。`workers`、`clone-workers`、超时、重试次数、退避参数和输出限制必须在启动时完成范围校验，非法值导致进程启动失败。
 
 只有远端 Git 认证信息保存在 TOML 文件中：
 
@@ -659,7 +655,7 @@ ca = """-----BEGIN CERTIFICATE-----
 
 ## 9. 部署
 
-`hacks/docker-compose.yaml` 增加 Git Server、`git-data` 持久卷、凭证挂载以及调用方使用的地址。
+`hacks/docker-compose.yml` 使用宿主机 `/srv/git` 持久化仓库，管理与克隆共用 `8084:8084`，通过 `EXPORT_SERVER_ADDR` 配置构建节点可达地址。Kubernetes 模板使用单副本 Deployment、独占 PVC 和 8080 端口。
 
 生产部署要求：
 
@@ -667,7 +663,7 @@ ca = """-----BEGIN CERTIFICATE-----
 - 使用非 root 用户和只读根文件系统；
 - 数据目录和临时目录显式可写；
 - 配置 liveness、readiness 和优雅终止；
-- 分别限制 HTTP 管理端口和 git daemon 端口的访问来源。
+- HTTP 管理路径仅向受信任组件开放；对外代理只转发 `/git/`。
 
 readiness 检查数据目录可读写且 Worker 已启动；单个远端仓库不可访问不影响整个服务的 readiness。
 

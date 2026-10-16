@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -230,7 +231,7 @@ func (m *Manager) responseLocked(s *state) Response {
 	if s.SyncTime != nil {
 		t := *s.SyncTime
 		response.SyncTime = &t
-		response.CloneURL = strings.TrimRight(m.config.CloneBaseURL, "/") + "/" + s.Key
+		response.CloneURL = strings.TrimRight(m.config.CloneBaseURL, "/") + "/" + (&url.URL{Path: s.Key}).EscapedPath()
 	}
 	return response
 }
@@ -490,6 +491,44 @@ func (m *Manager) WithRepository(ctx context.Context, originURL string, fn func(
 		return fsNotFound{}
 	}
 	if err := m.git.ValidateBare(ctx, path); err != nil {
+		return fsNotFound{}
+	}
+	return fn(path)
+}
+
+// WithCloneRepository serves only published repositories and holds deletion/fetch until the request finishes.
+func (m *Manager) WithCloneRepository(ctx context.Context, key string, fn func(string) error) error {
+	m.mu.Lock()
+	s := m.states[key]
+	m.mu.Unlock()
+	if s == nil {
+		return fsNotFound{}
+	}
+	// A fetch may hold the lock for minutes; canceled HTTP requests must not keep clone slots occupied.
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for !s.operationLock.TryRLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	defer s.operationLock.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	available := s.Available
+	m.mu.Unlock()
+	if !available {
+		return fsNotFound{}
+	}
+	path, exists, err := m.store.RepositoryPath(key)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		return fsNotFound{}
 	}
 	return fn(path)

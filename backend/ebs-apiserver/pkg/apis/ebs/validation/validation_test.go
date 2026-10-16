@@ -876,7 +876,7 @@ func validSnapshot() *ebsv1.Snapshot {
 		Status: ebsv1.SnapshotStatus{
 			PackageRepoStatuses: map[string]ebsv1.PackageRepoStatus{
 				"pkg-a": {
-					CloneURL: "git://git-server:9418/gitee.com/src-openeuler/pkg-a.git",
+					CloneURL: "http://git-server:8080/git/gitee.com/src-openeuler/pkg-a.git",
 					CommitID: "abc123",
 				},
 			},

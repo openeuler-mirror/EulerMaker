@@ -256,7 +256,7 @@ func TestUnparsableSpecConfigValidation(t *testing.T) {
 
 func TestInitGitCommandsUseOriginURL(t *testing.T) {
 	const originURL = "https://gitee.com/src-openeuler/repo1.git"
-	const cloneURL = "git://git-server:9418/gitee.com/src-openeuler/repo1.git"
+	const cloneURL = "http://git-server:8080/git/gitee.com/src-openeuler/repo1.git"
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
 	client.SeedSnapshot(testSnapshotObj(repoEntry{

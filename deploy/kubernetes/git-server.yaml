@@ -11,9 +11,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-    - name: git
-      port: 9418
-      targetPort: git
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -58,13 +55,10 @@ spec:
           args:
             - --listen-address=:8080
             - --data-dir=/var/lib/ebs-git
-            - --git-daemon-address=:9418
-            - --clone-base-url=git://$(GIT_SERVER_SERVICE_HOST):9418
+            - --clone-base-url=http://$(GIT_SERVER_SERVICE_HOST):8080/git
           ports:
             - name: http
               containerPort: 8080
-            - name: git
-              containerPort: 9418
           startupProbe:
             httpGet:
               path: /readyz

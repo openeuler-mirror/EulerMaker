@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,7 +12,6 @@ import (
 
 	"git-server/pkg/auth"
 	"git-server/pkg/command"
-	"git-server/pkg/daemon"
 	"git-server/pkg/gitops"
 	"git-server/pkg/options"
 	"git-server/pkg/repository"
@@ -47,28 +47,30 @@ func main() {
 		log.Fatal(err)
 	}
 	commandExecutor := command.New(config.OperationTimeout, config.MaxCommandOutputBytes)
-	handler := server.New(manager, commandExecutor, config.MaxRequestBodyBytes)
-	httpServer := &http.Server{Addr: config.ListenAddress, Handler: handler, ReadHeaderTimeout: config.OperationTimeout}
+	clone, err := server.NewSmartHTTP(manager, config.OperationTimeout, config.CloneWorkers)
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler := server.New(manager, commandExecutor, config.MaxRequestBodyBytes, clone)
+	httpServer := &http.Server{
+		Addr: config.ListenAddress, Handler: handler, ReadHeaderTimeout: config.OperationTimeout,
+		BaseContext: func(net.Listener) context.Context { return ctx },
+	}
 
 	managerDone := make(chan struct{})
 	go func() {
 		manager.Run(ctx)
 		close(managerDone)
 	}()
-	if config.GitDaemonEnabled {
-		go func() {
-			err := daemon.Run(ctx, config.GitDaemonAddress, store.DataDir())
-			if ctx.Err() == nil {
-				log.Printf("git daemon stopped unexpectedly: %v", err)
-				stop()
-			}
-		}()
-	}
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), config.ShutdownTimeout)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			_ = httpServer.Close()
+		}
 	}()
 	log.Printf("git-server listening on %s", config.ListenAddress)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -76,4 +78,5 @@ func main() {
 	}
 	stop()
 	<-managerDone
+	<-shutdownDone
 }
