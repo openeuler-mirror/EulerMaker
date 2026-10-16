@@ -22,7 +22,7 @@ func TestServerCommandBindsOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.listen != ":9000" || got.config.Gateway.URL != "https://gateway.example" || got.config.Gateway.AuthCacheTTL != 2*time.Hour ||
-		got.config.Upload.MaxJobSize != 1048576 || got.config.Log.ChunkSize != 131072 ||
+		got.config.Upload.MaxJobSize != 1048576 || got.config.Upload.LogChunkSize != 131072 ||
 		got.config.Repository.Workers != 4 || got.config.Release.HistoryTTL != 48*time.Hour || got.config.Signing.Workers != 3 {
 		t.Fatalf("unexpected command options: %+v", got)
 	}

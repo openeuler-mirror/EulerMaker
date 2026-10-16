@@ -29,6 +29,7 @@ type Config struct {
 	SignatrustConfig  string
 	SignatrustKeyName string
 	Timeout           time.Duration
+	Workers           int
 }
 
 type Signer struct {

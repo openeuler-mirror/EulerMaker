@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/release"
 	"artifact-manager/pkg/repository"
+	"artifact-manager/pkg/signing"
 	"artifact-manager/pkg/upload"
 )
 
@@ -13,37 +15,9 @@ type Config struct {
 	DataDir    string
 	Gateway    auth.Config
 	Upload     upload.Config
-	Log        LogConfig
 	Repository repository.Config
-	Release    ReleaseConfig
-	Signing    SigningConfig
-}
-
-type LogConfig struct {
-	MaxLogSize   int64
-	ChunkSize    int64
-	SSEHeartbeat time.Duration
-	ReplayWindow int
-	DedupeWindow int
-}
-
-type ReleaseConfig struct {
-	Timeout       time.Duration
-	WorkTTL       time.Duration
-	HistoryTTL    time.Duration
-	Workers       int
-	QueueCapacity int
-	HistoryCount  int
-	PublicKey     string
-}
-
-type SigningConfig struct {
-	Mode              string
-	GPGHome           string
-	SignatrustConfig  string
-	SignatrustKeyName string
-	Timeout           time.Duration
-	Workers           int
+	Release    release.Config
+	Signing    signing.Config
 }
 
 func DefaultConfig() Config {
@@ -64,15 +38,13 @@ func DefaultConfig() Config {
 			Timeout:            2 * time.Hour,
 			TemporaryUploadTTL: 24 * time.Hour,
 			MaxPartHeaders:     16,
-			MaxHeaderLineSize:  8 << 10,  // 8 KiB
-			MaxPartHeaderBytes: 32 << 10, // 32 KiB
-		},
-		Log: LogConfig{
-			MaxLogSize:   1 << 30,   // 1 GiB
-			ChunkSize:    256 << 10, // 256 KiB
-			SSEHeartbeat: 15 * time.Second,
-			ReplayWindow: 1024,
-			DedupeWindow: 1024,
+			MaxHeaderLineSize:  8 << 10,   // 8 KiB
+			MaxPartHeaderBytes: 32 << 10,  // 32 KiB
+			MaxLogSize:         1 << 30,   // 1 GiB
+			LogChunkSize:       256 << 10, // 256 KiB
+			SSEHeartbeat:       15 * time.Second,
+			ReplayWindow:       1024,
+			DedupeWindow:       1024,
 		},
 		Repository: repository.Config{
 			CreateRepoCommand: "/usr/bin/createrepo_c",
@@ -83,7 +55,7 @@ func DefaultConfig() Config {
 			Workers:           2,
 			QueueCapacity:     100,
 		},
-		Release: ReleaseConfig{
+		Release: release.Config{
 			Timeout:       30 * time.Minute,
 			WorkTTL:       24 * time.Hour,
 			HistoryTTL:    7 * 24 * time.Hour,
@@ -91,7 +63,7 @@ func DefaultConfig() Config {
 			QueueCapacity: 20,
 			HistoryCount:  2,
 		},
-		Signing: SigningConfig{
+		Signing: signing.Config{
 			Mode:              "disabled",
 			SignatrustKeyName: "openeuler-default-key",
 			Timeout:           2 * time.Minute,

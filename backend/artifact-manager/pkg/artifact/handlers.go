@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/release"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/signing"
 	"artifact-manager/pkg/upload"
@@ -16,7 +17,7 @@ type Server struct {
 	store        *upload.Store
 	auth         auth.Authorizer
 	repositories *repository.Manager
-	releases     *releaseManager
+	releases     *release.Manager
 	router       *gin.Engine
 	signer       *signing.Signer
 }
@@ -29,7 +30,9 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	if e = st.CleanupTemporary(c.Upload.TemporaryUploadTTL); e != nil {
 		return nil, e
 	}
-	signer, err := signing.New(signing.Config{Mode: c.Signing.Mode, PublicKey: c.Release.PublicKey, GPGHome: c.Signing.GPGHome, SignatrustConfig: c.Signing.SignatrustConfig, SignatrustKeyName: c.Signing.SignatrustKeyName, Timeout: c.Signing.Timeout})
+	signingConfig := c.Signing
+	signingConfig.PublicKey = c.Release.PublicKey
+	signer, err := signing.New(signingConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +47,7 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 
 func (s *Server) Close() {
 	s.repositories.Stop()
-	s.releases.stop()
+	s.releases.Stop()
 	if s.signer != nil {
 		_ = s.signer.Close()
 	}
@@ -55,7 +58,7 @@ func newArtifactServer(c Config, a auth.Authorizer, store *upload.Store, materia
 	if err != nil {
 		return nil, err
 	}
-	releases, err := newReleaseManager(c, repositories, newFilesystemReleaseMaterializer(c))
+	releases, err := release.NewManager(c.DataDir, c.Release, repositories, release.NewFilesystemMaterializer(c.DataDir, c.Release, c.Repository))
 	if err != nil {
 		repositories.Stop()
 		return nil, err

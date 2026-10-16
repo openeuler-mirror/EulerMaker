@@ -1,4 +1,4 @@
-package artifact
+package release
 
 import (
 	"context"
@@ -18,13 +18,13 @@ import (
 	"artifact-manager/pkg/upload"
 )
 
-type releaseManager struct {
+type Manager struct {
 	root, publicKey string
 	timeout         time.Duration
 	historyTTL      time.Duration
 	historyCount    int
 	repositories    *repository.Manager
-	materializer    releaseMaterializer
+	materializer    Materializer
 	mu              sync.RWMutex
 	records         map[string]*ReleaseRecord
 	queued, running map[string]bool
@@ -33,23 +33,23 @@ type releaseManager struct {
 	cancel          context.CancelFunc
 }
 
-func newReleaseManager(c Config, repositories *repository.Manager, materializer releaseMaterializer) (*releaseManager, error) {
+func NewManager(root string, c Config, repositories *repository.Manager, materializer Materializer) (*Manager, error) {
 	for _, dir := range []string{".release-work", ".metadata/releases", ".release-trash"} {
-		if err := os.MkdirAll(filepath.Join(c.DataDir, dir), 0750); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0750); err != nil {
 			return nil, err
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &releaseManager{root: c.DataDir, publicKey: c.Release.PublicKey, timeout: c.Release.Timeout, historyTTL: c.Release.HistoryTTL, historyCount: c.Release.HistoryCount, repositories: repositories, materializer: materializer, records: map[string]*ReleaseRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.Release.QueueCapacity), ctx: ctx, cancel: cancel}
+	m := &Manager{root: root, publicKey: c.PublicKey, timeout: c.Timeout, historyTTL: c.HistoryTTL, historyCount: c.HistoryCount, repositories: repositories, materializer: materializer, records: map[string]*ReleaseRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.QueueCapacity), ctx: ctx, cancel: cancel}
 	if err := m.load(); err != nil {
 		cancel()
 		return nil, err
 	}
-	if err := m.recover(c.Release.WorkTTL); err != nil {
+	if err := m.recover(c.WorkTTL); err != nil {
 		cancel()
 		return nil, err
 	}
-	for i := 0; i < c.Release.Workers; i++ {
+	for i := 0; i < c.Workers; i++ {
 		go m.worker()
 	}
 	for name, record := range m.records {
@@ -67,13 +67,13 @@ func newReleaseManager(c Config, repositories *repository.Manager, materializer 
 
 func normalizeReleaseRequest(in CreateReleaseRequest) (CreateReleaseRequest, string, error) {
 	if !validIdentifier(in.BuildName) || !validIdentifier(in.Project) || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || !validIdentifier(in.SourceRepositoryUID) {
-		return in, "", &releaseError{code: "InvalidReleaseRequest", status: http.StatusUnprocessableEntity}
+		return in, "", &Error{Code: "InvalidReleaseRequest", Status: http.StatusUnprocessableEntity}
 	}
 	sort.Strings(in.ExcludeSpecs)
 	clean := in.ExcludeSpecs[:0]
 	for _, spec := range in.ExcludeSpecs {
 		if !validIdentifier(spec) {
-			return in, "", &releaseError{code: "InvalidExcludeSpec", status: http.StatusUnprocessableEntity}
+			return in, "", &Error{Code: "InvalidExcludeSpec", Status: http.StatusUnprocessableEntity}
 		}
 		if len(clean) == 0 || clean[len(clean)-1] != spec {
 			clean = append(clean, spec)
@@ -85,7 +85,7 @@ func normalizeReleaseRequest(in CreateReleaseRequest) (CreateReleaseRequest, str
 	return in, hex.EncodeToString(digest[:]), nil
 }
 
-func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
+func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	in, digest, err := normalizeReleaseRequest(in)
 	if err != nil {
 		return nil, 0, err
@@ -95,19 +95,19 @@ func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, e
 		return nil, 0, releaseStorageError()
 	}
 	if !ok || source.State != repository.RepositoryReady || source.Project != in.Project || source.BuildName != in.BuildName || source.TargetOS != in.TargetOS || source.TargetArch != in.TargetArch {
-		return nil, 0, &releaseError{code: "SourceRepositoryNotReady", status: http.StatusUnprocessableEntity}
+		return nil, 0, &Error{Code: "SourceRepositoryNotReady", Status: http.StatusUnprocessableEntity}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if old := m.records[in.BuildName]; old != nil {
 		if old.RequestDigest != digest {
-			return nil, 0, &releaseError{code: "ReleaseIdentityConflict", status: http.StatusConflict}
+			return nil, 0, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
 		}
 		switch old.State {
 		case ReleaseReady:
 			return cloneRelease(old), http.StatusOK, nil
 		case ReleaseDeleting:
-			return nil, 0, &releaseError{code: "ReleaseDeleting", status: http.StatusConflict}
+			return nil, 0, &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
 		case ReleaseCreating, ReleasePrepared:
 			return cloneRelease(old), http.StatusAccepted, nil
 		case ReleaseFailed:
@@ -115,7 +115,7 @@ func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, e
 				return cloneRelease(old), http.StatusOK, nil
 			}
 			if len(m.queue) >= cap(m.queue) {
-				return nil, 0, &releaseError{code: "ReleaseQueueFull", status: http.StatusTooManyRequests, retryable: true}
+				return nil, 0, &Error{Code: "ReleaseQueueFull", Status: http.StatusTooManyRequests, Retryable: true}
 			}
 			old.Attempt++
 			old.State, old.Failure, old.UpdatedAt = ReleaseCreating, nil, time.Now().UTC()
@@ -127,7 +127,7 @@ func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, e
 		}
 	}
 	if len(m.queue) >= cap(m.queue) {
-		return nil, 0, &releaseError{code: "ReleaseQueueFull", status: http.StatusTooManyRequests, retryable: true}
+		return nil, 0, &Error{Code: "ReleaseQueueFull", Status: http.StatusTooManyRequests, Retryable: true}
 	}
 	now := time.Now().UTC()
 	record := &ReleaseRecord{SchemaVersion: 1, BuildName: in.BuildName, Project: in.Project, TargetOS: in.TargetOS, TargetArch: in.TargetArch, SourceRepositoryUID: in.SourceRepositoryUID, ExcludeSpecs: in.ExcludeSpecs, RequestDigest: digest, State: ReleaseCreating, Attempt: 1, CreatedAt: now, UpdatedAt: now}
@@ -140,10 +140,10 @@ func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, e
 }
 
 func releaseStorageError() error {
-	return &releaseError{code: "ReleaseStorageUnavailable", status: http.StatusServiceUnavailable, retryable: true}
+	return &Error{Code: "ReleaseStorageUnavailable", Status: http.StatusServiceUnavailable, Retryable: true}
 }
 
-func (m *releaseManager) worker() {
+func (m *Manager) worker() {
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -161,11 +161,11 @@ func (m *releaseManager) worker() {
 			}
 			source, ok, sourceErr := m.repositories.Get(record.SourceRepositoryUID)
 			if sourceErr != nil {
-				m.finish(record, releaseResult{}, releaseStorageError())
+				m.finish(record, Result{}, releaseStorageError())
 				continue
 			}
 			if !ok || source.State != repository.RepositoryReady {
-				m.finish(record, releaseResult{}, &releaseError{code: "SourceRepositoryNotReady", status: 422})
+				m.finish(record, Result{}, &Error{Code: "SourceRepositoryNotReady", Status: 422})
 				continue
 			}
 			// Repository records stay lightweight in memory. Load the immutable RPM
@@ -174,13 +174,13 @@ func (m *releaseManager) worker() {
 			if err != nil {
 				var repositoryErr *repository.Error
 				if errors.As(err, &repositoryErr) && !repositoryErr.Retryable {
-					err = &releaseError{code: "SourceRepositoryInvalid", status: 422}
+					err = &Error{Code: "SourceRepositoryInvalid", Status: 422}
 				}
-				m.finish(record, releaseResult{}, err)
+				m.finish(record, Result{}, err)
 				continue
 			}
 			if index.SigningFingerprint != source.SigningFingerprint {
-				m.finish(record, releaseResult{}, &releaseError{code: "SourceRepositoryInvalid", status: 422})
+				m.finish(record, Result{}, &Error{Code: "SourceRepositoryInvalid", Status: 422})
 				continue
 			}
 			source.RPMs = index.RPMs
@@ -192,7 +192,7 @@ func (m *releaseManager) worker() {
 	}
 }
 
-func (m *releaseManager) finish(completed *ReleaseRecord, result releaseResult, createErr error) {
+func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr error) {
 	m.mu.Lock()
 	record := m.records[completed.BuildName]
 	delete(m.running, completed.BuildName)
@@ -203,12 +203,12 @@ func (m *releaseManager) finish(completed *ReleaseRecord, result releaseResult, 
 	now := time.Now().UTC()
 	record.UpdatedAt = now
 	if createErr != nil {
-		var typed *releaseError
+		var typed *Error
 		if !errors.As(createErr, &typed) {
-			typed = &releaseError{code: "ReleaseCreationFailed", retryable: true}
+			typed = &Error{Code: "ReleaseCreationFailed", Retryable: true}
 		}
 		record.State = ReleaseFailed
-		record.Failure = &upload.FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, Time: now}
+		record.Failure = &upload.FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, Time: now}
 		_ = m.persist(record)
 		m.mu.Unlock()
 		return
@@ -216,18 +216,18 @@ func (m *releaseManager) finish(completed *ReleaseRecord, result releaseResult, 
 	record.State, record.ReleaseDigest = ReleasePrepared, result.Digest
 	_ = m.persist(record)
 	m.mu.Unlock()
-	_, _, _ = m.activate(completed.BuildName)
+	_, _, _ = m.Activate(completed.BuildName)
 }
 
-func (m *releaseManager) activate(name string) (*ReleaseRecord, int, error) {
+func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record := m.records[name]
 	if record == nil {
-		return nil, 0, &releaseError{code: "ReleaseNotFound", status: http.StatusNotFound}
+		return nil, 0, &Error{Code: "ReleaseNotFound", Status: http.StatusNotFound}
 	}
 	if record.State != ReleasePrepared && record.State != ReleaseReady {
-		return nil, 0, &releaseError{code: "ReleaseNotReady", status: http.StatusConflict}
+		return nil, 0, &Error{Code: "ReleaseNotReady", Status: http.StatusConflict}
 	}
 	targetDir := m.releaseTargetDir(record)
 	if err := ensureStableLinks(targetDir, m.publicKey != ""); err != nil {
@@ -287,14 +287,14 @@ func ensureStableLinks(targetDir string, publicKey bool) error {
 	return nil
 }
 
-func (m *releaseManager) get(name string) (*ReleaseRecord, bool) {
+func (m *Manager) Get(name string) (*ReleaseRecord, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	record := m.records[name]
 	return cloneRelease(record), record != nil
 }
 
-func (m *releaseManager) delete(name string) (*ReleaseRecord, int, error) {
+func (m *Manager) Delete(name string) (*ReleaseRecord, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record := m.records[name]
@@ -303,7 +303,7 @@ func (m *releaseManager) delete(name string) (*ReleaseRecord, int, error) {
 	}
 	current := filepath.Join(m.releaseTargetDir(record), "current")
 	if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", name)) {
-		return nil, 0, &releaseError{code: "ReleaseInUse", status: http.StatusConflict}
+		return nil, 0, &Error{Code: "ReleaseInUse", Status: http.StatusConflict}
 	}
 	if record.State != ReleaseDeleting {
 		record.State, record.UpdatedAt = ReleaseDeleting, time.Now().UTC()
@@ -315,14 +315,14 @@ func (m *releaseManager) delete(name string) (*ReleaseRecord, int, error) {
 	return cloneRelease(record), http.StatusAccepted, nil
 }
 
-func (m *releaseManager) remove(name string) {
+func (m *Manager) remove(name string) {
 	m.mu.RLock()
 	record := cloneRelease(m.records[name])
 	m.mu.RUnlock()
 	if record == nil {
 		return
 	}
-	source := m.releasePath(record)
+	source := m.Path(record)
 	trashDir := filepath.Join(m.root, ".release-trash", record.Project, record.TargetOS, record.TargetArch)
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
@@ -340,13 +340,13 @@ func (m *releaseManager) remove(name string) {
 	}
 }
 
-func (m *releaseManager) enqueue(name string) {
+func (m *Manager) enqueue(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.enqueueLocked(name)
 }
 
-func (m *releaseManager) enqueueLocked(name string) {
+func (m *Manager) enqueueLocked(name string) {
 	if m.queued[name] {
 		return
 	}
@@ -357,7 +357,7 @@ func (m *releaseManager) enqueueLocked(name string) {
 	}
 }
 
-func (m *releaseManager) recoverQueue() {
+func (m *Manager) recoverQueue() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -376,22 +376,22 @@ func (m *releaseManager) recoverQueue() {
 	}
 }
 
-func (m *releaseManager) stop() {
+func (m *Manager) Stop() {
 	m.cancel()
 }
-func (m *releaseManager) persist(record *ReleaseRecord) error {
+func (m *Manager) persist(record *ReleaseRecord) error {
 	return upload.AtomicJSON(m.metaPath(record.BuildName), record)
 }
 
-func (m *releaseManager) metaPath(name string) string {
+func (m *Manager) metaPath(name string) string {
 	return filepath.Join(m.root, ".metadata/releases", name+".json")
 }
 
-func (m *releaseManager) releasePath(record *ReleaseRecord) string {
+func (m *Manager) Path(record *ReleaseRecord) string {
 	return filepath.Join(m.releaseTargetDir(record), "releases", record.BuildName)
 }
 
-func (m *releaseManager) releaseTargetDir(record *ReleaseRecord) string {
+func (m *Manager) releaseTargetDir(record *ReleaseRecord) string {
 	return filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch)
 }
 
@@ -409,7 +409,7 @@ func cloneRelease(in *ReleaseRecord) *ReleaseRecord {
 	return &out
 }
 
-func releaseResponse(record *ReleaseRecord) ReleaseResponse {
+func ResponseFor(record *ReleaseRecord) ReleaseResponse {
 	response := ReleaseResponse{BuildName: record.BuildName, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
 	if record.State == ReleaseCreating || record.State == ReleasePrepared {
 		response.PollAfterSeconds = 5

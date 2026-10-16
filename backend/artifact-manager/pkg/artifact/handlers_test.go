@@ -34,8 +34,8 @@ func testHandler(t *testing.T) (http.Handler, Config) {
 	c.DataDir = t.TempDir()
 	c.Upload.MaxFileSize = 1 << 20
 	c.Upload.MaxJobSize = 2 << 20
-	c.Log.MaxLogSize = 1 << 20
-	c.Log.ChunkSize = 64 << 10
+	c.Upload.MaxLogSize = 1 << 20
+	c.Upload.LogChunkSize = 64 << 10
 	h, err := NewHandler(c, testAuthorizer{})
 	if err != nil {
 		t.Fatal(err)

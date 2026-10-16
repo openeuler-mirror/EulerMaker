@@ -47,8 +47,8 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.Int64Var(&c.Upload.MaxFileSize, "max-file-size", c.Upload.MaxFileSize, "maximum artifact size")
 	flags.Int64Var(&c.Upload.MaxJobSize, "max-job-size", c.Upload.MaxJobSize, "maximum job artifacts size")
 	flags.Int64Var(&c.Upload.MaxMetadataSize, "max-metadata-size", c.Upload.MaxMetadataSize, "maximum metadata bytes")
-	flags.Int64Var(&c.Log.MaxLogSize, "max-log-size", c.Log.MaxLogSize, "maximum log bytes")
-	flags.Int64Var(&c.Log.ChunkSize, "log-chunk-size", c.Log.ChunkSize, "maximum log chunk bytes")
+	flags.Int64Var(&c.Upload.MaxLogSize, "max-log-size", c.Upload.MaxLogSize, "maximum log bytes")
+	flags.Int64Var(&c.Upload.LogChunkSize, "log-chunk-size", c.Upload.LogChunkSize, "maximum log chunk bytes")
 	flags.DurationVar(&c.Upload.Timeout, "upload-timeout", c.Upload.Timeout, "upload timeout")
 	flags.DurationVar(&c.Gateway.AuthCacheTTL, "auth-cache-ttl", c.Gateway.AuthCacheTTL, "auth cache ttl")
 	flags.DurationVar(&c.Upload.TemporaryUploadTTL, "temporary-upload-ttl", c.Upload.TemporaryUploadTTL, "orphan temporary upload retention")
@@ -73,9 +73,9 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.IntVar(&c.Upload.MaxPartHeaders, "max-part-headers", c.Upload.MaxPartHeaders, "maximum headers per multipart part")
 	flags.Int64Var(&c.Upload.MaxHeaderLineSize, "max-header-line-size", c.Upload.MaxHeaderLineSize, "maximum multipart header line size")
 	flags.Int64Var(&c.Upload.MaxPartHeaderBytes, "max-part-header-bytes", c.Upload.MaxPartHeaderBytes, "maximum multipart part header bytes")
-	flags.DurationVar(&c.Log.SSEHeartbeat, "log-sse-heartbeat", c.Log.SSEHeartbeat, "SSE heartbeat")
-	flags.IntVar(&c.Log.ReplayWindow, "log-replay-window", c.Log.ReplayWindow, "SSE replay chunks")
-	flags.IntVar(&c.Log.DedupeWindow, "log-dedupe-window", c.Log.DedupeWindow, "log chunk deduplication window")
+	flags.DurationVar(&c.Upload.SSEHeartbeat, "log-sse-heartbeat", c.Upload.SSEHeartbeat, "SSE heartbeat")
+	flags.IntVar(&c.Upload.ReplayWindow, "log-replay-window", c.Upload.ReplayWindow, "SSE replay chunks")
+	flags.IntVar(&c.Upload.DedupeWindow, "log-dedupe-window", c.Upload.DedupeWindow, "log chunk deduplication window")
 	return cmd
 }
 
@@ -85,7 +85,7 @@ func NewServerCommand() *cobra.Command {
 
 func run(opts options) error {
 	c := opts.config
-	if opts.listen == "" || c.DataDir == "" || c.Gateway.URL == "" || c.Upload.MaxFileSize <= 0 || c.Upload.MaxJobSize <= 0 || c.Upload.MaxMetadataSize <= 0 || c.Log.ChunkSize <= 0 || c.Upload.MaxPartHeaders <= 0 || c.Upload.MaxHeaderLineSize <= 0 || c.Upload.MaxPartHeaderBytes <= 0 || c.Log.DedupeWindow <= 0 || c.Log.ReplayWindow <= 0 || c.Repository.CreateRepoCommand == "" || c.Repository.RPMQueryCommand == "" || c.Repository.CreateRepoWorkers <= 0 || c.Repository.Timeout <= 0 || c.Repository.WorkTTL <= 0 || c.Release.Timeout <= 0 || c.Release.WorkTTL <= 0 || c.Release.HistoryTTL <= 0 || opts.shutdownTimeout <= 0 || c.Repository.Workers <= 0 || c.Repository.QueueCapacity <= 0 || c.Release.Workers <= 0 || c.Release.QueueCapacity <= 0 || c.Release.HistoryCount <= 0 || c.Signing.Timeout <= 0 || c.Signing.Workers <= 0 {
+	if opts.listen == "" || c.DataDir == "" || c.Gateway.URL == "" || c.Upload.MaxFileSize <= 0 || c.Upload.MaxJobSize <= 0 || c.Upload.MaxMetadataSize <= 0 || c.Upload.LogChunkSize <= 0 || c.Upload.MaxPartHeaders <= 0 || c.Upload.MaxHeaderLineSize <= 0 || c.Upload.MaxPartHeaderBytes <= 0 || c.Upload.DedupeWindow <= 0 || c.Upload.ReplayWindow <= 0 || c.Repository.CreateRepoCommand == "" || c.Repository.RPMQueryCommand == "" || c.Repository.CreateRepoWorkers <= 0 || c.Repository.Timeout <= 0 || c.Repository.WorkTTL <= 0 || c.Release.Timeout <= 0 || c.Release.WorkTTL <= 0 || c.Release.HistoryTTL <= 0 || opts.shutdownTimeout <= 0 || c.Repository.Workers <= 0 || c.Repository.QueueCapacity <= 0 || c.Release.Workers <= 0 || c.Release.QueueCapacity <= 0 || c.Release.HistoryCount <= 0 || c.Signing.Timeout <= 0 || c.Signing.Workers <= 0 {
 		return fmt.Errorf("invalid configuration")
 	}
 	authorizer, err := auth.NewGatewayAuthorizer(c.Gateway)

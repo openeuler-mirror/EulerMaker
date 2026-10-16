@@ -71,12 +71,12 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(parts) == 3 {
 			entries = []releaseBrowseEntry{{Name: "Packages/", URL: "Packages/"}, {Name: "repodata/", URL: "repodata/"}}
-			key := filepath.Join(s.releases.releasePath(record), "RPM-GPG-KEY-openEuler")
+			key := filepath.Join(s.releases.Path(record), "RPM-GPG-KEY-openEuler")
 			if info, err := os.Lstat(key); err == nil && info.Mode().IsRegular() {
 				entries = append(entries, releaseBrowseEntry{Name: "RPM-GPG-KEY-openEuler", URL: "RPM-GPG-KEY-openEuler"})
 			}
 		} else {
-			contentDir := filepath.Join(s.releases.releasePath(record), parts[3])
+			contentDir := filepath.Join(s.releases.Path(record), parts[3])
 			for _, name := range browseFileNames(contentDir) {
 				entries = append(entries, releaseBrowseEntry{Name: name, URL: url.PathEscape(name)})
 			}

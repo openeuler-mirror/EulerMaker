@@ -1,4 +1,4 @@
-package artifact
+package release
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"artifact-manager/pkg/upload"
 )
 
-func (m *releaseManager) load() error {
+func (m *Manager) load() error {
 	entries, err := os.ReadDir(filepath.Join(m.root, ".metadata/releases"))
 	if err != nil {
 		return err
@@ -29,13 +29,13 @@ func (m *releaseManager) load() error {
 	return nil
 }
 
-func (m *releaseManager) recover(workTTL time.Duration) error {
+func (m *Manager) recover(workTTL time.Duration) error {
 	now := time.Now().UTC()
 	for name, record := range m.records {
 		if record.State != ReleaseCreating && record.State != ReleasePrepared && record.State != ReleaseReady {
 			continue
 		}
-		index, err := readReleaseIndex(m.releasePath(record))
+		index, err := readReleaseIndex(m.Path(record))
 		if err != nil || index.BuildName != name || index.RequestDigest != record.RequestDigest {
 			if record.State == ReleaseReady {
 				record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
@@ -60,7 +60,7 @@ func (m *releaseManager) recover(workTTL time.Duration) error {
 			}
 		} else {
 			var err error
-			digest, err = digestReleaseDirectory(m.releasePath(record))
+			digest, err = digestReleaseDirectory(m.Path(record))
 			if err != nil || digest != index.ReleaseDigest {
 				continue
 			}

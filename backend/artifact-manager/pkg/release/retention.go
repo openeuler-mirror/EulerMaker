@@ -1,4 +1,4 @@
-package artifact
+package release
 
 import (
 	"os"
@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func (m *releaseManager) retentionLoop() {
+func (m *Manager) retentionLoop() {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
@@ -20,7 +20,7 @@ func (m *releaseManager) retentionLoop() {
 	}
 }
 
-func (m *releaseManager) cleanupHistory(now time.Time) {
+func (m *Manager) cleanupHistory(now time.Time) {
 	type target struct{ project, os, arch string }
 	m.mu.Lock()
 	groups := map[target][]*ReleaseRecord{}

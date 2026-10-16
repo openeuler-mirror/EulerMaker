@@ -1,4 +1,4 @@
-package artifact
+package release
 
 import (
 	"context"
@@ -25,21 +25,21 @@ type filesystemReleaseMaterializer struct {
 	createRepoWorkers                  int
 }
 
-func newFilesystemReleaseMaterializer(c Config) releaseMaterializer {
-	return &filesystemReleaseMaterializer{root: c.DataDir, createRepoCommand: c.Repository.CreateRepoCommand, createRepoWorkers: c.Repository.CreateRepoWorkers, publicKey: c.Release.PublicKey}
+func NewFilesystemMaterializer(root string, c Config, repo repository.Config) Materializer {
+	return &filesystemReleaseMaterializer{root: root, createRepoCommand: repo.CreateRepoCommand, createRepoWorkers: repo.CreateRepoWorkers, publicKey: c.PublicKey}
 }
 
-func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source repository.RepositoryRecord) (result releaseResult, resultErr error) {
+func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source repository.RepositoryRecord) (result Result, resultErr error) {
 	if source.SigningFingerprint != "" {
 		if m.publicKey == "" {
-			return result, &releaseError{code: "ReleaseSigningKeyMismatch", status: 422}
+			return result, &Error{Code: "ReleaseSigningKeyMismatch", Status: 422}
 		}
 		fingerprint, err := signing.PublicKeyFingerprint(m.publicKey)
 		if err != nil {
-			return result, &releaseError{code: "ReleaseSigningKeyUnavailable", status: 503, retryable: true}
+			return result, &Error{Code: "ReleaseSigningKeyUnavailable", Status: 503, Retryable: true}
 		}
 		if fingerprint != source.SigningFingerprint {
-			return result, &releaseError{code: "ReleaseSigningKeyMismatch", status: 422}
+			return result, &Error{Code: "ReleaseSigningKeyMismatch", Status: 422}
 		}
 	}
 	work, err := os.MkdirTemp(filepath.Join(m.root, ".release-work"), record.BuildName+"-")
@@ -62,7 +62,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 			continue
 		}
 		if meta.FileName == "" || filepath.Base(meta.FileName) != meta.FileName || filepath.Ext(meta.FileName) != ".rpm" {
-			return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
+			return result, &Error{Code: "SourceRepositoryInvalid", Status: 422}
 		}
 		from := filepath.Join(sourcePath, "Packages", meta.FileName)
 		to := filepath.Join(packages, meta.FileName)
@@ -78,16 +78,16 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 			return result, retryableReleaseError(err)
 		}
 		if len(entries) != len(source.RPMs) {
-			return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
+			return result, &Error{Code: "SourceRepositoryInvalid", Status: 422}
 		}
 		for _, entry := range entries {
 			if _, ok := source.RPMs[entry.Name()]; !ok || !entry.Type().IsRegular() {
-				return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
+				return result, &Error{Code: "SourceRepositoryInvalid", Status: 422}
 			}
 		}
 		if err := repository.CopyDirectory(filepath.Join(sourcePath, "repodata"), filepath.Join(work, "repodata")); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
+				return result, &Error{Code: "SourceRepositoryInvalid", Status: 422}
 			}
 			return result, retryableReleaseError(err)
 		}
@@ -97,13 +97,13 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		if output, err := command.CombinedOutput(); err != nil {
 			_ = output
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
-				return result, &releaseError{code: "ReleaseCommandTimeout", retryable: true}
+				return result, &Error{Code: "ReleaseCommandTimeout", Retryable: true}
 			}
-			return result, &releaseError{code: "ReleaseCommandFailed", retryable: true}
+			return result, &Error{Code: "ReleaseCommandFailed", Retryable: true}
 		}
 	}
 	if err := validateReleaseMetadata(work); err != nil {
-		return result, &releaseError{code: "ReleaseMetadataInvalid", retryable: true}
+		return result, &Error{Code: "ReleaseMetadataInvalid", Retryable: true}
 	}
 	publicKeyDigest := ""
 	if m.publicKey != "" {
@@ -127,7 +127,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 	final := filepath.Join(parent, record.BuildName)
 	if err := os.Rename(work, final); err != nil {
 		if _, statErr := os.Stat(final); statErr == nil {
-			return result, &releaseError{code: "ReleaseIdentityConflict", status: 409}
+			return result, &Error{Code: "ReleaseIdentityConflict", Status: 409}
 		}
 		return result, retryableReleaseError(err)
 	}
@@ -135,7 +135,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
-	return releaseResult{Digest: digest}, nil
+	return Result{Digest: digest}, nil
 }
 
 type repoMetadata struct {
@@ -277,12 +277,12 @@ func retryableReleaseError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return &releaseError{code: "ReleaseStorageUnavailable", retryable: true, status: 503}
+	return &Error{Code: "ReleaseStorageUnavailable", Retryable: true, Status: 503}
 }
 
 func classifyReleaseLinkError(err error) error {
 	if errors.Is(err, os.ErrNotExist) {
-		return &releaseError{code: "SourceRepositoryInvalid", status: 422}
+		return &Error{Code: "SourceRepositoryInvalid", Status: 422}
 	}
 	return retryableReleaseError(err)
 }
