@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -52,6 +53,7 @@ func (s *fakeCachedSource) set(key string, obj runtime.Object) {
 }
 
 type fakeClient struct {
+	listHistoryFn  func(context.Context, ebsv1.JobPhase, string, int64) (source.ListPage, error)
 	getJobFn       func(context.Context, string, string) (*ebsv1.Job, error)
 	getRunnerFn    func(context.Context, string) (*ebsv1.Runner, error)
 	updateFn       func(context.Context, *ebsv1.Job) (*ebsv1.Job, error)
@@ -60,6 +62,10 @@ type fakeClient struct {
 	getRunnerCalls int
 	updateCalls    int
 	deleteCalls    int
+}
+
+func (c *fakeClient) ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error) {
+	return c.listHistoryFn(ctx, phase, token, limit)
 }
 
 func (c *fakeClient) GetJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
@@ -105,7 +111,7 @@ func newTestController(t *testing.T, now time.Time, job *ebsv1.Job, cachedRunner
 	return c, clk, jobs, runners
 }
 
-func TestTerminalJobEventsScheduleHistoryGC(t *testing.T) {
+func TestJobEventsQueueOnlyLiveJobs(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	job := runningJob()
 	job.Status.Phase = ebsv1.JobSucceeded
@@ -133,16 +139,14 @@ func TestTerminalJobEventsScheduleHistoryGC(t *testing.T) {
 		t.Fatal("resync immediately enqueued a terminal Job before its retention deadline")
 	}
 	clk.Step(time.Hour)
-	deadline := time.Now().Add(time.Second)
-	for c.Queue().Len() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	job.Status.Phase = ebsv1.JobRunning
+	c.onJobAdd(job)
 	if c.Queue().Len() != 1 {
-		t.Fatal("terminal Job was not enqueued at its retention deadline")
+		t.Fatal("live Job was not enqueued")
 	}
 }
 
-func TestTerminalJobEnqueueAtDeadlineAndWithMissingEndTime(t *testing.T) {
+func TestTerminalJobEventsLeaveGCToScanner(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	for _, tc := range []struct {
 		name    string
@@ -150,8 +154,8 @@ func TestTerminalJobEnqueueAtDeadlineAndWithMissingEndTime(t *testing.T) {
 		gc      bool
 		want    int
 	}{
-		{name: "expired", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour)), gc: true, want: 1},
-		{name: "missing endTime", gc: true, want: 1},
+		{name: "expired", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour)), gc: true},
+		{name: "missing endTime", gc: true},
 		{name: "GC disabled", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -305,12 +309,110 @@ func TestHistoryGCUsesLatestPreconditions(t *testing.T) {
 		return nil
 	}
 	c, _, _, _ := newTestController(t, now, job, nil, client, true)
-	result, err := c.sync(context.Background(), "project/job")
+	result, err := c.reconcileHistory(context.Background(), "project/job", job, now)
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if got.UID != latest.UID || got.ResourceVersion != "22" {
 		t.Fatalf("preconditions=%+v", got)
+	}
+}
+
+func TestHistoryScanPagesAndContinuesAfterDeleteFailure(t *testing.T) {
+	now := time.Unix(10_000_000, 0)
+	expired := runningJob()
+	expired.Status.Phase = ebsv1.JobSucceeded
+	expired.Status.EndTime = metav1.NewTime(now.Add(-31 * 24 * time.Hour))
+	recent := expired.DeepCopy()
+	recent.Name = "recent"
+	recent.Status.EndTime = metav1.NewTime(now.Add(-time.Hour))
+	second := expired.DeepCopy()
+	second.Name = "second"
+	client := &fakeClient{}
+	var calls []string
+	client.listHistoryFn = func(_ context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error) {
+		if limit != 500 {
+			t.Fatalf("page size = %d", limit)
+		}
+		calls = append(calls, string(phase)+":"+token)
+		if phase == ebsv1.JobSucceeded {
+			if token == "" {
+				return source.ListPage{Items: []runtime.Object{expired, recent}, Continue: "next"}, nil
+			}
+			return source.ListPage{Items: []runtime.Object{second}}, nil
+		}
+		return source.ListPage{}, nil
+	}
+	client.getJobFn = func(_ context.Context, _, name string) (*ebsv1.Job, error) {
+		latest := expired.DeepCopy()
+		latest.Name, latest.ResourceVersion = name, "22"
+		return latest, nil
+	}
+	client.deleteFn = func(_ context.Context, _, name string, pre clientpkg.DeletePreconditions) error {
+		if pre.UID != expired.UID || pre.ResourceVersion != "22" {
+			t.Fatalf("delete preconditions = %+v", pre)
+		}
+		if name == expired.Name {
+			return &clientpkg.WriteError{Outcome: clientpkg.WriteRejected, StatusCode: http.StatusConflict}
+		}
+		return nil
+	}
+	c, _, _, _ := newTestController(t, now, expired, nil, client, true)
+	defer c.Queue().ShutDown()
+	if err := c.scanHistory(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(calls); got != "[Succeeded: Succeeded:next Failed: Aborted:]" {
+		t.Fatalf("list calls = %s", got)
+	}
+	if client.deleteCalls != 2 || client.getJobCalls != 2 || c.Queue().Len() != 0 {
+		t.Fatalf("deletes=%d gets=%d queued=%d", client.deleteCalls, client.getJobCalls, c.Queue().Len())
+	}
+}
+
+func TestHistoryLoopScansAtStartupAndDaily(t *testing.T) {
+	scans := make(chan struct{}, 2)
+	client := &fakeClient{listHistoryFn: func(_ context.Context, phase ebsv1.JobPhase, _ string, _ int64) (source.ListPage, error) {
+		if phase == ebsv1.JobSucceeded {
+			scans <- struct{}{}
+		}
+		return source.ListPage{}, nil
+	}}
+	c, clk, _, _ := newTestController(t, time.Unix(1000, 0), runningJob(), nil, client, true)
+	defer c.Queue().ShutDown()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); c.historyLoop(ctx) }()
+	waitScan := func() {
+		t.Helper()
+		select {
+		case <-scans:
+		case <-time.After(time.Second):
+			t.Fatal("history scan did not start")
+		}
+	}
+	waitScan()
+	deadline := time.Now().Add(time.Second)
+	for !clk.HasWaiters() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !clk.HasWaiters() {
+		t.Fatal("daily timer was not started")
+	}
+	clk.Step(23 * time.Hour)
+	select {
+	case <-scans:
+		t.Fatal("history scanned before 24 hours")
+	default:
+	}
+	clk.Step(time.Hour)
+	waitScan()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("history scan did not stop")
 	}
 }
 
@@ -326,12 +428,12 @@ func TestHistoryGCWaitsAndCanBeDisabled(t *testing.T) {
 		deleteFn:    func(context.Context, string, string, clientpkg.DeletePreconditions) error { return nil },
 	}
 	c, _, _, _ := newTestController(t, now, job, nil, client, true)
-	result, err := c.sync(context.Background(), "project/job")
-	if err != nil || result.RequeueAfter != 30*24*time.Hour-time.Hour {
+	result, err := c.reconcileHistory(context.Background(), "project/job", job, now)
+	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	c.config.HistoryGCEnabled = false
-	result, err = c.sync(context.Background(), "project/job")
+	result, err = c.reconcileHistory(context.Background(), "project/job", job, now)
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("disabled GC result=%+v err=%v", result, err)
 	}

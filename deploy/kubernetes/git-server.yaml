@@ -54,7 +54,6 @@ spec:
           imagePullPolicy: Always
           args:
             - --listen-address=:8080
-            - --data-dir=/var/lib/ebs-git
             - --clone-base-url=http://$(GIT_SERVER_SERVICE_HOST):8080/git
           ports:
             - name: http

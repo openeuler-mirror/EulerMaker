@@ -149,7 +149,6 @@ services:
       context: ../backend/git-server
     command:
       - --listen-address=:8084
-      - --data-dir=/var/lib/ebs-git
       - --clone-base-url=http://${EXPORT_SERVER_ADDR:-git-server}:8084/git
     ports:
       - "8084:8084"

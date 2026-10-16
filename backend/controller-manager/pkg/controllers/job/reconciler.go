@@ -39,7 +39,7 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	}
 	if job.Status.Phase.IsTerminal() {
 		c.clearObservation(key)
-		return c.reconcileHistory(ctx, key, job, now)
+		return controller.ReconcileResult{}, nil
 	}
 	if !processable(job) {
 		c.clearObservation(key)
@@ -183,7 +183,7 @@ func (c *Controller) confirmUnknownStatus(ctx context.Context, key string, reque
 }
 
 func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *ebsv1.Job, now time.Time) (controller.ReconcileResult, error) {
-	if !c.config.HistoryGCEnabled || cached.DeletionTimestamp != nil {
+	if !c.config.HistoryGCEnabled || !cached.Status.Phase.IsTerminal() || cached.DeletionTimestamp != nil {
 		return controller.ReconcileResult{}, nil
 	}
 	if cached.Status.EndTime.IsZero() {
@@ -193,8 +193,7 @@ func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *e
 	}
 	remaining := cached.Status.EndTime.Time.Add(c.config.HistoryRetention).Sub(now)
 	if remaining > 0 {
-		historyGCScheduled.Inc()
-		return controller.ReconcileResult{RequeueAfter: remaining}, nil
+		return controller.ReconcileResult{}, nil
 	}
 	latest, err := c.client.GetJob(ctx, cached.Namespace, cached.Name)
 	if err != nil {

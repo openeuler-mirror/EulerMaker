@@ -113,6 +113,9 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 }
 
 func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, opts metav1.ListOptions) (source.ListPage, error) {
+	if gvr == source.JobsGVR {
+		return c.listPage(ctx, gvr, "", opts, "metadata,status.phase,status.endTime")
+	}
 	// Polling sources only need the fields used to enqueue resource keys.
 	return c.listPage(ctx, gvr, "", opts, source.PollingIncludeFields(gvr))
 }
@@ -212,6 +215,9 @@ func (c *Client) ResolveWatch(ctx context.Context, gvr schema.GroupVersionResour
 		objectType = &ebsv1.Runner{}
 	}
 	lw := &listerWatcher{ctx: ctx, client: c, gvr: gvr}
+	if gvr == source.JobsGVR {
+		lw.fieldSelector = "status.phase!=Succeeded,status.phase!=Failed,status.phase!=Aborted"
+	}
 	return source.WatchResource{ListerWatcher: lw, ObjectType: objectType}, nil
 }
 
@@ -375,12 +381,24 @@ func classifyWrite(operation string, gvr schema.GroupVersionResource, err error)
 }
 
 type listerWatcher struct {
-	ctx    context.Context
-	client *Client
-	gvr    schema.GroupVersionResource
+	ctx           context.Context
+	client        *Client
+	gvr           schema.GroupVersionResource
+	fieldSelector string
+}
+
+func (l *listerWatcher) options(opts metav1.ListOptions) metav1.ListOptions {
+	if l.fieldSelector != "" {
+		if opts.FieldSelector != "" {
+			opts.FieldSelector += ","
+		}
+		opts.FieldSelector += l.fieldSelector
+	}
+	return opts
 }
 
 func (l *listerWatcher) List(opts metav1.ListOptions) (runtime.Object, error) {
+	opts = l.options(opts)
 	list, err := newList(l.gvr)
 	if err != nil {
 		return nil, err
@@ -391,6 +409,7 @@ func (l *listerWatcher) List(opts metav1.ListOptions) (runtime.Object, error) {
 	return list, err
 }
 func (l *listerWatcher) Watch(opts metav1.ListOptions) (watch.Interface, error) {
+	opts = l.options(opts)
 	opts.Watch = true
 	return l.client.rest.Get().AbsPath("/apis/"+l.gvr.Group+"/"+l.gvr.Version+"/"+l.gvr.Resource).VersionedParams(&opts, metav1.ParameterCodec).Watch(l.ctx)
 }

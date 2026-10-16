@@ -29,7 +29,7 @@ func Parse(args []string) (Options, error) {
 	var result Options
 	fs := flag.NewFlagSet("git-server", flag.ContinueOnError)
 	fs.StringVar(&result.ListenAddress, "listen-address", ":8080", "HTTP API listen address")
-	fs.StringVar(&result.DataDir, "data-dir", "/srv/git", "bare repository root")
+	fs.StringVar(&result.DataDir, "data-dir", "/var/lib/ebs-git", "bare repository root")
 	fs.IntVar(&result.Workers, "workers", 20, "repository worker count")
 	fs.DurationVar(&result.OperationTimeout, "operation-timeout", 10*time.Minute, "Git operation timeout")
 	fs.IntVar(&result.MaxRetries, "max-retries", 5, "maximum automatic retries after the first attempt")

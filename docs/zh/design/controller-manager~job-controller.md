@@ -25,10 +25,10 @@ Job Controller 运行在现有 `controller-manager` 框架内，建议实现目�
 
 ```text
 backend/controller-manager/pkg/controllers/job/
-  controller.go       # 初始化、事件注册和 Sync
-  reconciler.go       # 纯业务状态判断
-  status.go           # Job status 更新与冲突处理
-  gc.go               # 终态 Job 保留期判断与安全删除
+  controller.go       # 初始化、事件注册和入队
+  reconciler.go       # Runner 丢失处理、安全删除及写结果确认
+  history.go          # 启动及每日分页清理循环
+  client.go           # 类型化 API 适配
   index.go            # runner -> Job Key 反向索引
   metrics.go
 ```
@@ -36,15 +36,19 @@ backend/controller-manager/pkg/controllers/job/
 依赖关系如下：
 
 ```text
-Job Watch Source ---------> Job Controller queue ------> Job DELETE
+Job Watch Source ---------> Job Controller queue
                                   |
 Runner Watch Source ------> runner -> jobs index
                                   |
                                   v
                          Job status subresource
+
+Daily history scan -------> paginated Job List -------> GET + guarded DELETE
 ```
 
 Job 和 Runner 均支持 watch，应使用 `WatchSourceFactory` 创建并共享 Source。事件处理器必须在 `Manager.Run` 之前注册；控制器启动后不得再注册 handler。Manager 完成全部 Source 的首次同步后才启动 worker，因此 `Sync` 可以依赖两个本地缓存已经完成初始 List。
+
+Job 的 List 和 Watch 均携带 `status.phase!=Succeeded,status.phase!=Failed,status.phase!=Aborted`，仅缓存非终态对象。历史 Job 使用独立的分页扫描，不进入 informer 缓存或工作队列。
 
 Initializer 保存 Factory 返回的两个 `source.CachedSource`：
 
@@ -67,6 +71,7 @@ Job Controller 在包内声明最小客户端接口，共享 API Client 通过�
 
 ```go
 type Client interface {
+    ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error)
     GetJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error)
     GetRunner(ctx context.Context, name string) (*ebsv1.Runner, error)
     UpdateJobStatus(ctx context.Context, job *ebsv1.Job) (*ebsv1.Job, error)
@@ -107,7 +112,7 @@ Job Controller 不修改 `runner`、`startTime` 和 `restartCount`。若数据�
 Succeeded | Failed | Aborted
 ```
 
-Job Controller 自身把 `Succeeded`、`Failed`、`Aborted` 视为终态：观察到这些 phase 后不再更新其 status，只根据 `endTime` 安排历史对象清理。首版不要求 apiserver 强制校验终态不可回退，该约束暂由 Scheduler、Runner 和各 Controller 共同遵守。
+Job Controller 把 `Succeeded`、`Failed`、`Aborted` 视为终态，不再更新其 status；历史对象按 6.2 的每日扫描规则清理。
 
 ## 四、事件与本地索引
 
@@ -123,9 +128,9 @@ UID 不编码在字符串键中。`Sync` 每次从缓存取得最新对象，并
 
 ### 4.2 Job 事件
 
-- `Add`：非终态 Job 立即入队，`status.runner` 非空时还要更新反向索引。终态 Job 在历史清理开启时按 `endTime + historyRetention` 入队：已到期立即入队，未到期延迟入队；缺少 `endTime` 时立即入队以记录异常。历史清理关闭或对象删除中时不入队。
-- `Update`：先按旧对象删除索引，再按新对象增加索引。UID、phase、runner、`endTime` 或 Runner 丢失判定相关状态变化时按上述规则入队；仅有无关字段变化不重复入队。Informer resync 事件也按上述规则重新安排，不能立即入队所有未到期的终态 Job。
-- `Delete`：删除反向索引和本地宽限期记录，不需要写 API。
+- `Add`：非终态 Job 立即入队，`status.runner` 非空时还要更新反向索引。
+- `Update`：先按旧对象删除索引，再按新对象增加索引。UID、phase、runner、`endTime` 或删除状态变化时入队；仅有无关字段变化不重复入队。Informer resync 重新入队非终态 Job。
+- `Delete`：删除反向索引和本地宽限期记录，不需要写 API。Job 进入终态后离开 selector 也产生删除事件，不代表 API 对象已删除。
 
 事件处理器只做类型检查、索引维护和入队，不调用外部 API，不执行状态机。
 
@@ -139,7 +144,7 @@ Runner 的普通心跳更新不应导致所有 Job 反复入队。只有 Runner 
 
 ### 4.4 周期性重同步
 
-Watch resync 作为丢事件后的兜底，但不能替代定时器。Runner 丢失宽限期由调谐结果 `RequeueAfter` 安排；终态 Job 的历史保留期由事件处理器按截止时间延迟入队，调谐时仍按最新对象重新判断到期时间并在必要时再次延迟入队。进程重启后，初始 List 事件会重建两类计划。
+Watch resync 作为丢事件后的兜底，但不能替代 Runner 丢失宽限期的 `RequeueAfter`。历史清理由独立扫描循环驱动，不为每个终态 Job 保存延迟条目；重启时重新扫描。
 
 ## 五、状态判定
 
@@ -251,7 +256,9 @@ status:
 
 ### 6.2 历史 Job 清理
 
-历史清理是同一个 Job Controller 的第二条调和分支，共用 Job Watch Source、队列、worker 和单键串行保证，不注册单独的顶层 Controller。Job 进入终态后，`Sync` 按以下流程处理：
+历史清理仍由 Job Controller 承载，但使用独立串行扫描循环，不共用实时 Job 队列。Controller 启动时扫描一次，每轮结束后等待 24 小时再扫描；不是固定自然日零点执行，也不新增命令行参数。正常情况下删除最多滞后一个扫描周期及扫描耗时。
+
+依次按 `status.phase=Succeeded`、`Failed`、`Aborted` 分页 List，每页 500 个，只取 `metadata,status.phase,status.endTime`，完整透传 `continue`。每页处理后释放，不积累全量对象或候选队列。List 失败（包括分页 token 过期）结束本轮，下次从首页重新扫描；单个对象处理失败不阻塞后续对象。每个候选按以下流程处理：
 
 1. 仅接受 `Succeeded`、`Failed`、`Aborted`；其他 phase 不参与 GC。
 2. `metadata.deletionTimestamp` 非空时不重复删除。
@@ -264,7 +271,7 @@ deleteAfter = status.endTime + jobHistoryRetention
 
 默认 `jobHistoryRetention=720h`，即 30×24 小时，不表达自然月。
 
-5. 截止时间未到时，返回 `ReconcileResult{RequeueAfter: deleteAfter-now}, nil`，由 BaseController 安排重新检查，不增加 rate-limit 次数。
+5. 截止时间未到时跳过，等待下次扫描，不登记延迟任务。
 6. 截止时间到达后，GET apiserver 中的最新 Job，重新校验 namespace、name、UID、phase、`endTime`、deletionTimestamp 和截止时间。
 7. 使用下列删除前置条件调用 Job DELETE：
 
@@ -274,14 +281,14 @@ preconditions:
   resourceVersion: <latest-job-resource-version>
 ```
 
-8. 删除成功或返回 404 时结束。UID/resourceVersion 前置条件冲突时重新入队，不放宽条件重试。
-9. 删除请求超时或结果未知时先 GET 相同名称：对象不存在则视为删除成功；对象仍存在则基于其最新 UID 和状态重新调和，不盲目重复旧删除请求。
+8. 删除成功或返回 404 时结束。UID/resourceVersion 前置条件冲突时记录并留待下次每日扫描，不放宽条件重试。
+9. 删除请求超时或结果未知时先 GET 相同名称：对象不存在则视为删除成功；对象仍存在且符合清理条件时记录并留待下次扫描，不重复旧删除请求。其他读取、删除错误同样记录后继续处理下一对象。
 
 GC 只删除 Job API 对象。Artifact Manager 中的日志、产物和清单可能具有不同的合规及存储保留要求，Job Controller 不调用 Artifact Manager，也不把 Job 删除成功解释为 Artifact 可以同步删除。
 
-终态 Job 的 `endTime` 由产生终态的 Runner 或 Job Controller 写入。首版不依赖 apiserver 保证终态或 `endTime` 不可修改；相关字段发生变化时，Job Update 事件会重新入队并按最新值重建或取消清理计划。真正删除前必须 GET 最新对象并重新校验全部 GC 条件，同时使用最新 UID/resourceVersion 作为删除前置条件，因此字段变化与删除并发时不会基于旧版本误删对象。
+终态 Job 的 `endTime` 由产生终态的 Runner 或 Job Controller 写入。删除前必须 GET 最新对象并重新校验全部 GC 条件，使用最新 UID/resourceVersion 作为删除前置条件，不基于分页摘要直接删除。
 
-`--job-history-gc-enabled=false` 时，终态分支直接结束且不设置延迟条目；Runner 丢失处理不受影响。
+`--job-history-gc-enabled=false` 时不启动历史扫描循环；Runner 丢失处理不受影响。扫描使用 Manager context，退出时取消在途请求并等待扫描循环结束。
 
 ## 七、并发与一致性
 
@@ -344,20 +351,20 @@ Runner GET 只有 2xx 的非 Offline 对象、2xx 的 Offline 对象和 404 能�
 
 #### 7.4.2 明确收到写响应
 
-下表同时适用于 `UpdateJobStatus` 和 `DeleteJob`。非 2xx 行对应 `WriteRejected`，其中 404 的业务语义按操作区分：
+非 2xx 行对应 `WriteRejected`，其中 404 的业务语义按操作区分。历史扫描不使用 BaseController 重试队列，删除失败统一按 6.2 延后处理：
 
 | HTTP 结果 | status 更新 | Job 删除 |
 |-----------|-------------|----------|
-| 完整 2xx 且成功响应校验通过 | 清理宽限期记录，记录成功日志和指标，成功结束 | 记录删除日志和指标，成功结束；存在 finalizer 时等待后续资源事件观察最终消失 |
+| 完整 2xx 且成功响应校验通过 | 清理宽限期记录，记录成功日志和指标，成功结束 | 记录删除日志和指标，成功结束；存在 finalizer 时由后续扫描观察 |
 | 2xx 但响应为空、解码失败或成功对象校验失败 | WriteUnknown，进入 7.4.4 | DELETE 的完整空 2xx 响应合法并视为成功；响应截断或无法确认完整响应时为 WriteUnknown |
 | 400、405、410、422、其他未单列 4xx | PermanentError，记录请求或 API 契约错误 | PermanentError，记录请求或 API 契约错误 |
 | 401、403 | PermanentError，记录鉴权失败 | PermanentError，记录鉴权失败 |
 | 404 | Job 已删除，成功结束 | Job 已不存在，成功结束 |
-| 408 | 临时错误，`AddRateLimited` | 临时错误，`AddRateLimited` |
-| 409、412 | `Requeue=true`，下一周期重新 GET 并重算 | `Requeue=true`，下一周期重新 GET 并重新校验 UID、终态和保留期 |
-| 429、503，且 `WriteError.RetryAfter > 0` | 原样返回 WriteError，由 BaseController 执行 `Forget + AddAfter` | 同左 |
-| 429、503，但无合法 RetryAfter | 临时错误，`AddRateLimited` | 同左 |
-| 其他 5xx | 临时错误，`AddRateLimited` | 同左 |
+| 408 | 临时错误，`AddRateLimited` | 记录并等待下次每日扫描 |
+| 409、412 | `Requeue=true`，下一周期重新 GET 并重算 | 记录并等待下次每日扫描 |
+| 429、503，且 `WriteError.RetryAfter > 0` | 原样返回 WriteError，由 BaseController 执行 `Forget + AddAfter` | 记录并等待下次每日扫描 |
+| 429、503，但无合法 RetryAfter | 临时错误，`AddRateLimited` | 记录并等待下次每日扫描 |
+| 其他 5xx | 临时错误，`AddRateLimited` | 记录并等待下次每日扫描 |
 | 最终 3xx 或其他完整非 2xx 响应 | PermanentError，记录非预期协议错误 | 同左 |
 
 写入 2xx 只有在 typed client 完成第二节定义的响应校验后才算成功。HTTP 1xx、截断响应以及无法确认完整 2xx 的情况不属于本表，必须归入 `WriteUnknown`。
@@ -397,8 +404,8 @@ status 更新结果未知后执行 Job GET：
 | 404 | 删除已生效，成功结束 |
 | UID 不同 | 原对象已经消失，成功结束，绝不删除同名新对象 |
 | 同一 UID，但不再是终态、endTime/保留期变化或正在删除 | 按最新对象成功结束，不重放旧删除 |
-| 同一 UID，且仍满足历史清理条件 | 返回 `Requeue=true`；下一周期使用最新 UID/resourceVersion 重新校验并构造删除请求 |
-| GET 失败 | 严格按 7.4.1 的 GET 矩阵处理 |
+| 同一 UID，且仍满足历史清理条件 | 记录并等待下次每日扫描，重新 GET 后构造删除请求 |
+| GET 失败 | 记录并等待下次每日扫描 |
 
 确认 GET 自身超时或失败时只返回该读取错误，保留原始 WriteUnknown 作为日志上下文，不得因为无法确认而推断写入失败。
 
@@ -408,13 +415,13 @@ status 更新结果未知后执行 Job GET：
 
 ## 八、错误与重试
 
+下表仅描述实时 Job 调谐；历史扫描的失败和重试行为统一见 6.2，不进入 BaseController 队列。
+
 | 结果 | 队列行为 |
 |------|----------|
 | 对象不存在、无需处理、已经终态且 GC 关闭 | `ReconcileResult{}, nil`，BaseController Forget |
 | Runner 丢失宽限期未到 | `ReconcileResult{RequeueAfter: remaining}, nil` |
 | status 更新成功或 GET 确认已达到预期 | `ReconcileResult{}, nil` |
-| 历史保留期未到 | `ReconcileResult{RequeueAfter: remaining}, nil` |
-| DELETE 成功、404 或 GET 确认对象已不存在 | `ReconcileResult{}, nil` |
 | resourceVersion Conflict | `ReconcileResult{Requeue: true}, nil`，清除旧退避后立即重读 |
 | 429/503 且 WriteError 带合法 RetryAfter | 零值 Result 和原始错误，由 BaseController Forget 后 AddAfter |
 | 读取或写入临时错误 | 零值 Result 和临时错误，由 BaseController AddRateLimited |
@@ -501,7 +508,7 @@ job_controller_history_delete_unknown_total
 - delete WriteUnknown 确认得到 404、不同 UID、不再满足 GC 条件和仍满足 GC 条件时分别正确收敛；
 - 写方法返回普通 error、`(nil, nil)` 或异常成功对象时按 Client 契约违例进入确认流程；
 - Manager context 取消后不启动 Unknown 确认请求，重启后的初始 List 可以继续收敛；
-- 关闭 GC 后不创建终态 Job 的延迟队列条目；
+- 关闭 GC 后不启动历史扫描；启动扫描、24 小时间隔、分页续读、失败后继续扫描和取消退出均可测试；
 - 多 worker 并发和 `go test -race` 下索引、观察 map 无竞态。
 
 ### 11.2 集成测试
@@ -514,7 +521,7 @@ job_controller_history_delete_unknown_total
 - Runner 丢失超过宽限期时 Job 进入 Failed，并保留已有结果和计数字段；
 - Runner 与 Job watch 重连、410 relist、resync 不会重复覆盖状态；
 - 在 Scheduler、Runner 和 Controller 均遵守终态不回退约定时，Runner 完成 Job 与 Controller 标记失败的并发更新最终保持终态；
-- 初始 List 中的历史终态 Job 能按剩余保留时间重建清理计划；
+- Watch 仅缓存非终态 Job；历史终态 Job 在启动及每日分页扫描中处理，不进入长期缓存或延迟队列；
 - 超过 30 天的终态 Job 被删除，未到期或缺少 `endTime` 的对象被保留；
 - Job 同名删除重建以及删除前发生状态变化时，删除前置条件可以防止误删；
 - 删除请求结果未知时通过 GET 收敛，不产生紧密重复删除；
@@ -525,7 +532,7 @@ job_controller_history_delete_unknown_total
 
 1. 为 Controller Manager client 增加 Job、Runner 的 GET、Job `/status` 更新和带 UID/resourceVersion 前置条件的 Job DELETE 接口，并明确写入及删除结果未知的错误分类。
 2. 实现反向索引、宽限期记录、历史保留期计算和纯状态判定函数。
-3. 注册 Job、Runner Source handler，实现 Runner 丢失与历史 GC 两条 Reconcile 分支及队列结果映射。
+3. 注册非终态 Job、Runner Source handler，实现 Runner 丢失调谐及独立的每日历史 GC 分页扫描。
 4. 注册 `job` initializer、命令行参数、删除权限和指标；Job Controller 没有独立关键后台循环，不实现自定义 HealthChecker，使用框架默认 ping checker。
 5. 完成 race、单元及集成测试后，再启用默认 `--controllers=*` 中的 Job Controller。
 
