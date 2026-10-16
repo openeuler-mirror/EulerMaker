@@ -41,23 +41,21 @@ func NewManager(root string, c Config, repositories *repository.Manager, materia
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{root: root, publicKey: c.PublicKey, timeout: c.Timeout, historyTTL: c.HistoryTTL, historyCount: c.HistoryCount, repositories: repositories, materializer: materializer, records: map[string]*ReleaseRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.QueueCapacity), ctx: ctx, cancel: cancel}
-	if err := m.load(); err != nil {
-		cancel()
-		return nil, err
-	}
 	if err := m.recover(c.WorkTTL); err != nil {
 		cancel()
 		return nil, err
 	}
-	for i := 0; i < c.Workers; i++ {
-		go m.worker()
-	}
+	m.mu.Lock()
 	for name, record := range m.records {
 		if record.State == ReleaseCreating {
-			m.enqueue(name)
+			m.enqueueLocked(name)
 		} else if record.State == ReleaseDeleting {
 			go m.remove(name)
 		}
+	}
+	m.mu.Unlock()
+	for i := 0; i < c.Workers; i++ {
+		go m.worker()
 	}
 	go m.recoverQueue()
 	go m.retentionLoop()
@@ -99,7 +97,11 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if old := m.records[in.BuildName]; old != nil {
+	old, err := m.recordLocked(in.BuildName)
+	if err != nil {
+		return nil, 0, releaseStorageError()
+	}
+	if old != nil {
 		if old.RequestDigest != digest {
 			return nil, 0, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
 		}
@@ -134,7 +136,6 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	if err := m.persist(record); err != nil {
 		return nil, 0, releaseStorageError()
 	}
-	m.records[record.BuildName] = record
 	m.enqueueLocked(record.BuildName)
 	return cloneRelease(record), http.StatusAccepted, nil
 }
@@ -194,7 +195,7 @@ func (m *Manager) worker() {
 
 func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr error) {
 	m.mu.Lock()
-	record := m.records[completed.BuildName]
+	record := cloneRelease(m.records[completed.BuildName])
 	delete(m.running, completed.BuildName)
 	if record == nil || record.State != ReleaseCreating {
 		m.mu.Unlock()
@@ -214,7 +215,10 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 		return
 	}
 	record.State, record.ReleaseDigest = ReleasePrepared, result.Digest
-	_ = m.persist(record)
+	if err := m.persist(record); err != nil {
+		m.mu.Unlock()
+		return
+	}
 	m.mu.Unlock()
 	_, _, _ = m.Activate(completed.BuildName)
 }
@@ -222,7 +226,10 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	record := m.records[name]
+	record, err := m.recordLocked(name)
+	if err != nil {
+		return nil, 0, releaseStorageError()
+	}
 	if record == nil {
 		return nil, 0, &Error{Code: "ReleaseNotFound", Status: http.StatusNotFound}
 	}
@@ -287,17 +294,23 @@ func ensureStableLinks(targetDir string, publicKey bool) error {
 	return nil
 }
 
-func (m *Manager) Get(name string) (*ReleaseRecord, bool) {
+func (m *Manager) Get(name string) (*ReleaseRecord, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	record := m.records[name]
-	return cloneRelease(record), record != nil
+	record, err := m.recordLocked(name)
+	if err != nil {
+		return nil, false, releaseStorageError()
+	}
+	return record, record != nil, nil
 }
 
 func (m *Manager) Delete(name string) (*ReleaseRecord, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	record := m.records[name]
+	record, err := m.recordLocked(name)
+	if err != nil {
+		return nil, 0, releaseStorageError()
+	}
 	if record == nil {
 		return nil, http.StatusNoContent, nil
 	}
@@ -331,19 +344,17 @@ func (m *Manager) remove(name string) {
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
-	_ = os.RemoveAll(trash)
+	if err := os.RemoveAll(trash); err != nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if current := m.records[name]; current != nil && current.State == ReleaseDeleting {
-		_ = os.Remove(m.metaPath(name))
+		if err := os.Remove(m.metaPath(name)); err != nil && !os.IsNotExist(err) {
+			return
+		}
 		delete(m.records, name)
 	}
-}
-
-func (m *Manager) enqueue(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.enqueueLocked(name)
 }
 
 func (m *Manager) enqueueLocked(name string) {
@@ -379,8 +390,51 @@ func (m *Manager) recoverQueue() {
 func (m *Manager) Stop() {
 	m.cancel()
 }
+
 func (m *Manager) persist(record *ReleaseRecord) error {
-	return fileutil.AtomicJSON(m.metaPath(record.BuildName), record)
+	if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
+		return err
+	}
+	m.cacheActive(record)
+	return nil
+}
+
+// cacheActive is called with the write lock held, or before workers start.
+func (m *Manager) cacheActive(record *ReleaseRecord) {
+	switch record.State {
+	case ReleaseCreating, ReleasePrepared, ReleaseDeleting:
+		m.records[record.BuildName] = cloneRelease(record)
+	default:
+		delete(m.records, record.BuildName)
+	}
+}
+
+func (m *Manager) recordLocked(name string) (*ReleaseRecord, error) {
+	if record := m.records[name]; record != nil {
+		return cloneRelease(record), nil
+	}
+	return m.readRecord(name)
+}
+
+func (m *Manager) readRecord(name string) (*ReleaseRecord, error) {
+	if !validIdentifier(name) {
+		return nil, errors.New("invalid release name")
+	}
+	data, err := os.ReadFile(m.metaPath(name))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var record ReleaseRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, err
+	}
+	if record.BuildName != name || !validIdentifier(record.Project) || !validIdentifier(record.TargetOS) || !validIdentifier(record.TargetArch) {
+		return nil, errors.New("invalid release metadata")
+	}
+	return &record, nil
 }
 
 func (m *Manager) metaPath(name string) string {

@@ -60,7 +60,11 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 	}
 	switch r.Method {
 	case http.MethodGet:
-		record, ok := s.releases.Get(parts[0])
+		record, ok, err := s.releases.Get(parts[0])
+		if err != nil {
+			s.writeReleaseError(w, r, err)
+			return
+		}
 		if !ok {
 			s.releaseNotFound(w, r)
 			return
@@ -107,7 +111,11 @@ func (s *Server) releaseVersionContent(w http.ResponseWriter, r *http.Request) {
 		s.releaseNotFound(w, r)
 		return
 	}
-	record, ok := s.releases.Get(parts[0])
+	record, ok, err := s.releases.Get(parts[0])
+	if err != nil {
+		s.writeReleaseError(w, r, err)
+		return
+	}
 	if !ok {
 		s.releaseNotFound(w, r)
 		return
@@ -129,7 +137,11 @@ func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
 		s.releaseNotFound(w, r)
 		return
 	}
-	record := s.currentRelease(parts[0], parts[1], parts[2])
+	record, err := s.currentRelease(parts[0], parts[1], parts[2])
+	if err != nil {
+		s.writeReleaseError(w, r, err)
+		return
+	}
 	if record == nil {
 		s.releaseNotFound(w, r)
 		return
@@ -137,21 +149,27 @@ func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
 	s.serveReleaseFile(w, r, record, parts[3])
 }
 
-func (s *Server) currentRelease(project, targetOS, targetArch string) *release.ReleaseRecord {
+func (s *Server) currentRelease(project, targetOS, targetArch string) (*release.ReleaseRecord, error) {
 	current := filepath.Join(s.cfg.DataDir, "repositories", project, targetOS, targetArch, "current")
 	target, err := os.Readlink(current)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, &release.Error{Code: "ReleaseStorageUnavailable", Status: http.StatusServiceUnavailable, Retryable: true}
 	}
 	targetParts := strings.Split(filepath.ToSlash(target), "/")
 	if len(targetParts) != 2 || targetParts[0] != "releases" || !validIdentifier(targetParts[1]) {
-		return nil
+		return nil, nil
 	}
-	record, ok := s.releases.Get(targetParts[1])
+	record, ok, err := s.releases.Get(targetParts[1])
+	if err != nil {
+		return nil, err
+	}
 	if !ok || record.State != release.ReleaseReady || record.Project != project || record.TargetOS != targetOS || record.TargetArch != targetArch {
-		return nil
+		return nil, nil
 	}
-	return record
+	return record, nil
 }
 
 func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *release.ReleaseRecord, value string) {

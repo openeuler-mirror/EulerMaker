@@ -51,7 +51,12 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 	case 1:
 		for _, targetOS := range browseDirectoryNames(filepath.Join(root, parts[0])) {
 			for _, targetArch := range browseDirectoryNames(filepath.Join(root, parts[0], targetOS)) {
-				if s.currentRelease(parts[0], targetOS, targetArch) != nil {
+				record, err := s.currentRelease(parts[0], targetOS, targetArch)
+				if err != nil {
+					s.writeReleaseError(w, r, err)
+					return
+				}
+				if record != nil {
 					entries = append(entries, releaseBrowseEntry{Name: targetOS + "/", URL: url.PathEscape(targetOS) + "/"})
 					break
 				}
@@ -59,12 +64,21 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 		}
 	case 2:
 		for _, targetArch := range browseDirectoryNames(filepath.Join(root, parts[0], parts[1])) {
-			if s.currentRelease(parts[0], parts[1], targetArch) != nil {
+			record, err := s.currentRelease(parts[0], parts[1], targetArch)
+			if err != nil {
+				s.writeReleaseError(w, r, err)
+				return
+			}
+			if record != nil {
 				entries = append(entries, releaseBrowseEntry{Name: targetArch + "/", URL: url.PathEscape(targetArch) + "/"})
 			}
 		}
 	case 3, 4:
-		record := s.currentRelease(parts[0], parts[1], parts[2])
+		record, err := s.currentRelease(parts[0], parts[1], parts[2])
+		if err != nil {
+			s.writeReleaseError(w, r, err)
+			return
+		}
 		if record == nil {
 			s.releaseNotFound(w, r)
 			return

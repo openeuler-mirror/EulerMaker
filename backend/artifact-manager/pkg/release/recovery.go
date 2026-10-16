@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func (m *Manager) load() error {
+func (m *Manager) scanRecords(visit func(*ReleaseRecord) error) error {
 	entries, err := os.ReadDir(filepath.Join(m.root, ".metadata/releases"))
 	if err != nil {
 		return err
@@ -17,65 +17,30 @@ func (m *Manager) load() error {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
 		}
-		var record ReleaseRecord
-		data, err := os.ReadFile(filepath.Join(m.root, ".metadata/releases", entry.Name()))
-		if err != nil || json.Unmarshal(data, &record) != nil || record.BuildName == "" {
-			return fmt.Errorf("load release metadata %s: invalid record", entry.Name())
+		name := entry.Name()[:len(entry.Name())-len(".json")]
+		record, err := m.readRecord(name)
+		if err != nil {
+			return fmt.Errorf("load release metadata %s: %w", entry.Name(), err)
 		}
-		m.records[record.BuildName] = &record
+		if record != nil {
+			if err := visit(record); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
 func (m *Manager) recover(workTTL time.Duration) error {
 	now := time.Now().UTC()
-	for name, record := range m.records {
-		if record.State != ReleaseCreating && record.State != ReleasePrepared && record.State != ReleaseReady {
-			continue
+	if err := m.scanRecords(func(record *ReleaseRecord) error {
+		if err := m.recoverRecord(record, now); err != nil {
+			return err
 		}
-		index, err := readReleaseIndex(m.Path(record))
-		if err != nil || index.BuildName != name || index.RequestDigest != record.RequestDigest {
-			if record.State == ReleaseReady {
-				record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
-				record.Failure = &FailureInfo{Code: "ReleaseContentMissing", Message: "ReleaseContentMissing", Time: now}
-				if err := m.persist(record); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-		digest := index.ReleaseDigest
-		if record.State == ReleaseReady {
-			// Ready releases were verified before activation. Avoid re-reading every
-			// RPM on each restart; only check the persisted digest against the index.
-			if !validHash(digest) || record.ReleaseDigest != digest {
-				record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
-				record.Failure = &FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
-				if err := m.persist(record); err != nil {
-					return err
-				}
-				continue
-			}
-		} else {
-			var err error
-			digest, err = digestReleaseDirectory(m.Path(record))
-			if err != nil || digest != index.ReleaseDigest {
-				continue
-			}
-		}
-		if record.State == ReleaseCreating {
-			record.State, record.ReleaseDigest, record.UpdatedAt = ReleasePrepared, digest, now
-			if err := m.persist(record); err != nil {
-				return err
-			}
-		}
-		current := filepath.Join(m.releaseTargetDir(record), "current")
-		if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", name)) {
-			record.State, record.ContentURL, record.UpdatedAt, record.CompletedAt = ReleaseReady, releaseContentURL(record), now, &now
-			if err := m.persist(record); err != nil {
-				return err
-			}
-		}
+		m.cacheActive(record)
+		return nil
+	}); err != nil {
+		return err
 	}
 	entries, err := os.ReadDir(filepath.Join(m.root, ".release-work"))
 	if err != nil {
@@ -86,6 +51,47 @@ func (m *Manager) recover(workTTL time.Duration) error {
 		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
 			_ = os.RemoveAll(filepath.Join(m.root, ".release-work", entry.Name()))
 		}
+	}
+	return nil
+}
+
+func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
+	if record.State != ReleaseCreating && record.State != ReleasePrepared && record.State != ReleaseReady {
+		return nil
+	}
+	index, err := readReleaseIndex(m.Path(record))
+	if err != nil || index.BuildName != record.BuildName || index.RequestDigest != record.RequestDigest {
+		if record.State == ReleaseReady {
+			record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
+			record.Failure = &FailureInfo{Code: "ReleaseContentMissing", Message: "ReleaseContentMissing", Time: now}
+			return m.persist(record)
+		}
+		return nil
+	}
+	digest := index.ReleaseDigest
+	if record.State == ReleaseReady {
+		// Ready releases need only an index check, not a full RPM digest calculation.
+		if !validHash(digest) || record.ReleaseDigest != digest {
+			record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
+			record.Failure = &FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
+			return m.persist(record)
+		}
+	} else {
+		digest, err = digestReleaseDirectory(m.Path(record))
+		if err != nil || digest != index.ReleaseDigest {
+			return nil
+		}
+	}
+	if record.State == ReleaseCreating {
+		record.State, record.ReleaseDigest, record.UpdatedAt = ReleasePrepared, digest, now
+		if err := m.persist(record); err != nil {
+			return err
+		}
+	}
+	current := filepath.Join(m.releaseTargetDir(record), "current")
+	if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", record.BuildName)) {
+		record.State, record.ContentURL, record.UpdatedAt, record.CompletedAt = ReleaseReady, releaseContentURL(record), now, &now
+		return m.persist(record)
 	}
 	return nil
 }
