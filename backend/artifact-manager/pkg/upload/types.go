@@ -13,7 +13,6 @@ type State string
 
 const (
 	Pending   State = "Pending"
-	Uploading State = "Uploading"
 	Completed State = "Completed"
 	Failed    State = "Failed"
 )
@@ -22,7 +21,6 @@ type FailureInfo struct {
 	Code      string    `json:"code"`
 	Message   string    `json:"message"`
 	Retryable bool      `json:"retryable"`
-	JobName   string    `json:"jobName,omitempty"`
 	Time      time.Time `json:"time"`
 }
 
@@ -49,12 +47,7 @@ type Artifact struct {
 
 type ManifestState string
 
-const (
-	ManifestOpen       ManifestState = "Open"
-	ManifestCompleting ManifestState = "Completing"
-	ManifestCompleted  ManifestState = "Completed"
-	ManifestFailed     ManifestState = "Failed"
-)
+const ManifestCompleted ManifestState = "Completed"
 
 type ManifestFile struct {
 	ArtifactID   string   `json:"artifactID"`

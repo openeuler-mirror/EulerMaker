@@ -7,13 +7,20 @@ import (
 	"artifact-manager/pkg/upload"
 )
 
+// ArtifactReader provides sealed upload metadata and local artifact paths.
+type ArtifactReader interface {
+	GetManifest(project, jobName string) (*upload.JobUploadManifest, bool)
+	GetArtifact(id string) (*upload.Artifact, bool)
+	ArtifactPath(artifact *upload.Artifact) string
+}
+
 type repositoryArtifact struct {
 	Metadata upload.Artifact
 	Path     string
 	JobName  string
 }
 
-func repositoryArtifacts(s *upload.Store, project string, refs []ManifestReference) ([]repositoryArtifact, error) {
+func repositoryArtifacts(s ArtifactReader, project string, refs []ManifestReference) ([]repositoryArtifact, error) {
 	var result []repositoryArtifact
 	for _, ref := range refs {
 		manifest, ok := s.GetManifest(project, ref.JobName)

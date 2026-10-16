@@ -16,7 +16,6 @@ import (
 
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
-	"artifact-manager/pkg/upload"
 )
 
 type Manager struct {
@@ -209,7 +208,7 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 			typed = &Error{Code: "ReleaseCreationFailed", Retryable: true}
 		}
 		record.State = ReleaseFailed
-		record.Failure = &upload.FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, Time: now}
+		record.Failure = &FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, Time: now}
 		_ = m.persist(record)
 		m.mu.Unlock()
 		return

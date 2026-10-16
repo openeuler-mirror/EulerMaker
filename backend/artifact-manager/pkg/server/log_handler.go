@@ -16,6 +16,12 @@ import (
 	"artifact-manager/pkg/upload"
 )
 
+const (
+	logSSEHeartbeat = 15 * time.Second
+	logReplayWindow = 1024
+	logDedupeWindow = 1024
+)
+
 func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) {
 	id, e := s.identity(r)
 	if e != nil {
@@ -51,7 +57,7 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 		writeErr(w, r, 422, "LogChunkMismatch", "log chunk mismatch", true, nil)
 		return
 	}
-	if current, ok := s.store.GetLog(p, j); ok && seq < current.NextSequence-int64(s.cfg.Upload.DedupeWindow) {
+	if current, ok := s.store.GetLog(p, j); ok && seq < current.NextSequence-int64(logDedupeWindow) {
 		writeErr(w, r, 409, "SequenceConflict", "sequence is outside the deduplication window", false, map[string]any{"nextSequence": current.NextSequence})
 		return
 	}
@@ -141,7 +147,7 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 	defer done()
 	var replay []upload.LogEvent
 	if supplied {
-		replay, _, e = s.store.ReplayLog(p, j, after, s.cfg.Upload.ReplayWindow)
+		replay, _, e = s.store.ReplayLog(p, j, after, logReplayWindow)
 		if e != nil {
 			if e.Error() == "ReplayWindowExceeded" {
 				writeErr(w, r, 409, e.Error(), e.Error(), false, nil)
@@ -161,7 +167,7 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 		lastSent = e.Sequence
 	}
 	fl.Flush()
-	tick := time.NewTicker(s.cfg.Upload.SSEHeartbeat)
+	tick := time.NewTicker(logSSEHeartbeat)
 	defer tick.Stop()
 	for {
 		select {

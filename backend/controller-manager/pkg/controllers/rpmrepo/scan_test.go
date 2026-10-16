@@ -179,18 +179,6 @@ func TestScanDoesNotReadManifestBeforeSubmission(t *testing.T) {
 			manifestErr: &artifactError{operation: "get-manifest", kind: artifactNotFound, code: "NotFound"},
 		},
 		{
-			name:     "not-ready",
-			manifest: JobUploadManifest{State: ManifestOpen},
-		},
-		{
-			name:     "completing",
-			manifest: JobUploadManifest{State: ManifestCompleting},
-		},
-		{
-			name:     "failed",
-			manifest: JobUploadManifest{State: ManifestFailed},
-		},
-		{
 			name:     "completed",
 			manifest: completedManifest(100),
 		},

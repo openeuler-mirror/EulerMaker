@@ -36,7 +36,8 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := newServer(c, a, st, repository.NewFilesystemMaterializer(c.DataDir, c.Repository, c.Signing.Workers, st, signer), signer.Fingerprint())
+	materializer := repository.NewFilesystemMaterializer(c.DataDir, c.Repository, c.Signing.Workers, st, signer)
+	s, err := newServer(c, a, st, materializer, signer.Fingerprint())
 	if err != nil {
 		_ = signer.Close()
 		return nil, err

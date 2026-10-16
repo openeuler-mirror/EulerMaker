@@ -37,14 +37,8 @@ func DefaultConfig() Config {
 			MaxMetadataSize:    64 << 10,  // 64 KiB
 			Timeout:            2 * time.Hour,
 			TemporaryUploadTTL: 24 * time.Hour,
-			MaxPartHeaders:     16,
-			MaxHeaderLineSize:  8 << 10,   // 8 KiB
-			MaxPartHeaderBytes: 32 << 10,  // 32 KiB
 			MaxLogSize:         1 << 30,   // 1 GiB
 			LogChunkSize:       256 << 10, // 256 KiB
-			SSEHeartbeat:       15 * time.Second,
-			ReplayWindow:       1024,
-			DedupeWindow:       1024,
 		},
 		Repository: repository.Config{
 			CreateRepoCommand: "/usr/bin/createrepo_c",
