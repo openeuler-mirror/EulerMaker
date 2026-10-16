@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"artifact-manager/pkg/upload"
 )
 
 func (m *Manager) load() error {
@@ -39,7 +37,7 @@ func (m *Manager) recover(workTTL time.Duration) error {
 		if err != nil || index.BuildName != name || index.RequestDigest != record.RequestDigest {
 			if record.State == ReleaseReady {
 				record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
-				record.Failure = &upload.FailureInfo{Code: "ReleaseContentMissing", Message: "ReleaseContentMissing", Time: now}
+				record.Failure = &FailureInfo{Code: "ReleaseContentMissing", Message: "ReleaseContentMissing", Time: now}
 				if err := m.persist(record); err != nil {
 					return err
 				}
@@ -52,7 +50,7 @@ func (m *Manager) recover(workTTL time.Duration) error {
 			// RPM on each restart; only check the persisted digest against the index.
 			if !validHash(digest) || record.ReleaseDigest != digest {
 				record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
-				record.Failure = &upload.FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
+				record.Failure = &FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
 				if err := m.persist(record); err != nil {
 					return err
 				}

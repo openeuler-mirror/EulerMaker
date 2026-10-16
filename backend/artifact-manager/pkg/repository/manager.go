@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"artifact-manager/pkg/fileutil"
-	"artifact-manager/pkg/upload"
 )
 
 type Manager struct {
@@ -174,7 +173,7 @@ func (m *Manager) readRecord(uid string) (*RepositoryRecord, error) {
 			}
 			now := time.Now().UTC()
 			record.State = RepositoryFailed
-			record.Failure = &upload.FailureInfo{Code: "RepositoryContentMissing", Message: "RepositoryContentMissing", Retryable: false, Time: now}
+			record.Failure = &FailureInfo{Code: "RepositoryContentMissing", Message: "RepositoryContentMissing", Retryable: false, Time: now}
 			record.ContentURL = ""
 			record.UpdatedAt = now
 		}
@@ -374,7 +373,7 @@ func (m *Manager) finish(completed *RepositoryRecord, result Result, materialize
 			typed = &Error{Code: "RepositoryMaterializationFailed", Retryable: true}
 		}
 		record.State = RepositoryFailed
-		record.Failure = &upload.FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, JobName: typed.JobName, Time: now}
+		record.Failure = &FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, JobName: typed.JobName, Time: now}
 	} else {
 		record.State, record.RepositoryDigest = RepositoryReady, result.Digest
 		record.ContentURL = "/repositories/v1/" + uid + "/"

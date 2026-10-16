@@ -27,12 +27,7 @@ const (
 // ManifestState is the sealing state of a Job upload manifest.
 type ManifestState string
 
-const (
-	ManifestOpen       ManifestState = "Open"
-	ManifestCompleting ManifestState = "Completing"
-	ManifestCompleted  ManifestState = "Completed"
-	ManifestFailed     ManifestState = "Failed"
-)
+const ManifestCompleted ManifestState = "Completed"
 
 // Formal release states reported by Artifact Manager.
 type ReleaseState string

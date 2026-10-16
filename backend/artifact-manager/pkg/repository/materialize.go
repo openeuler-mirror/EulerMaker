@@ -31,7 +31,7 @@ type Signer interface {
 
 type filesystemMaterializer struct {
 	root              string
-	store             *upload.Store
+	store             ArtifactReader
 	createRepoCommand string
 	rpmQueryCommand   string
 	createRepoWorkers int
@@ -39,7 +39,7 @@ type filesystemMaterializer struct {
 	signer            Signer
 }
 
-func NewFilesystemMaterializer(root string, c Config, signingWorkers int, store *upload.Store, signer Signer) Materializer {
+func NewFilesystemMaterializer(root string, c Config, signingWorkers int, store ArtifactReader, signer Signer) Materializer {
 	return &filesystemMaterializer{root: root, store: store, createRepoCommand: c.CreateRepoCommand, rpmQueryCommand: c.RPMQueryCommand, createRepoWorkers: c.CreateRepoWorkers, signingWorkers: signingWorkers, signer: signer}
 }
 

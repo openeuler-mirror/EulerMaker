@@ -122,7 +122,7 @@ func (s *Store) recover() error {
 		}
 	}
 	for _, a := range s.artifacts {
-		if a.IdempotencyKey == "" || (a.State != Pending && a.State != Uploading) {
+		if a.IdempotencyKey == "" || a.State != Pending {
 			continue
 		}
 		tmp := filepath.Join(s.root, ".uploads", a.ID+".tmp")
@@ -216,11 +216,11 @@ func (s *Store) BeginUpload(project, job, runner, key string, m UploadMetadata, 
 			}
 			return old, true, nil
 		}
-		if old.State == Pending || old.State == Uploading {
+		if old.State == Pending {
 			return nil, false, fmt.Errorf("UploadInProgress")
 		}
 		for _, other := range s.artifacts {
-			if other != old && other.Project == project && other.JobName == job && other.RelativePath == rel && (other.State == Pending || other.State == Uploading || other.State == Completed) {
+			if other != old && other.Project == project && other.JobName == job && other.RelativePath == rel && (other.State == Pending || other.State == Completed) {
 				return nil, false, errors.New("ArtifactPathConflict")
 			}
 		}

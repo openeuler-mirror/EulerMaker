@@ -20,6 +20,12 @@ import (
 	"artifact-manager/pkg/upload"
 )
 
+const (
+	maxPartHeaders     = 16
+	maxHeaderLineSize  = 8 << 10  // 8 KiB
+	maxPartHeaderBytes = 32 << 10 // 32 KiB
+)
+
 func method(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	http.Error(w, "method not allowed", 405)
@@ -169,7 +175,7 @@ func mediaType(v string) string {
 	return t
 }
 func (s *Server) validPartHeaders(p *multipart.Part) bool {
-	if len(p.Header) > s.cfg.Upload.MaxPartHeaders {
+	if len(p.Header) > maxPartHeaders {
 		return false
 	}
 	var total int64
@@ -180,12 +186,12 @@ func (s *Server) validPartHeaders(p *multipart.Part) bool {
 		for _, value := range values {
 			line := int64(len(name) + len(value) + 2)
 			total += line
-			if line > s.cfg.Upload.MaxHeaderLineSize || strings.ContainsAny(value, "\x00\r\n") {
+			if line > maxHeaderLineSize || strings.ContainsAny(value, "\x00\r\n") {
 				return false
 			}
 		}
 	}
-	return total <= s.cfg.Upload.MaxPartHeaderBytes
+	return total <= maxPartHeaderBytes
 }
 
 func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {

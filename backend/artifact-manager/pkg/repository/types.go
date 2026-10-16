@@ -3,11 +3,17 @@ package repository
 import (
 	"context"
 	"time"
-
-	"artifact-manager/pkg/upload"
 )
 
 type RepositoryState string
+
+type FailureInfo struct {
+	Code      string    `json:"code"`
+	Message   string    `json:"message"`
+	Retryable bool      `json:"retryable"`
+	JobName   string    `json:"jobName,omitempty"`
+	Time      time.Time `json:"time"`
+}
 
 type Config struct {
 	CreateRepoCommand string
@@ -58,7 +64,7 @@ type RepositoryRecord struct {
 	RepositoryDigest   string                       `json:"repositoryDigest,omitempty"`
 	ContentURL         string                       `json:"contentURL,omitempty"`
 	RPMs               map[string]RepositoryRPMMeta `json:"rpms,omitempty"`
-	Failure            *upload.FailureInfo          `json:"failure,omitempty"`
+	Failure            *FailureInfo                 `json:"failure,omitempty"`
 	CreatedAt          time.Time                    `json:"createdAt"`
 	UpdatedAt          time.Time                    `json:"updatedAt"`
 	CompletedAt        *time.Time                   `json:"completedAt,omitempty"`
@@ -81,15 +87,15 @@ type RepositoryRPMMeta struct {
 }
 
 type RepositoryResponse struct {
-	RepositoryUID    string              `json:"repositoryUID"`
-	State            RepositoryState     `json:"state"`
-	Attempt          int                 `json:"attempt"`
-	PollAfterSeconds int                 `json:"pollAfterSeconds,omitempty"`
-	ContentURL       string              `json:"contentURL,omitempty"`
-	Failure          *upload.FailureInfo `json:"failure,omitempty"`
-	CreatedAt        time.Time           `json:"createdAt"`
-	UpdatedAt        time.Time           `json:"updatedAt"`
-	CompletedAt      *time.Time          `json:"completedAt,omitempty"`
+	RepositoryUID    string          `json:"repositoryUID"`
+	State            RepositoryState `json:"state"`
+	Attempt          int             `json:"attempt"`
+	PollAfterSeconds int             `json:"pollAfterSeconds,omitempty"`
+	ContentURL       string          `json:"contentURL,omitempty"`
+	Failure          *FailureInfo    `json:"failure,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
 }
 
 type Result struct {
