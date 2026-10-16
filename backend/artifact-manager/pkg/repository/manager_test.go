@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"artifact-manager/pkg/upload"
+	"artifact-manager/pkg/fileutil"
 )
 
 func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
@@ -27,7 +27,7 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 			if err := os.MkdirAll(path, 0750); err != nil {
 				t.Fatal(err)
 			}
-			if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
+			if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
 				t.Fatal(err)
 			}
 		}

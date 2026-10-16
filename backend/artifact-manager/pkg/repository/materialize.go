@@ -19,6 +19,7 @@ import (
 	"sync"
 	"syscall"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/signing"
 	"artifact-manager/pkg/upload"
 )
@@ -95,7 +96,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		if err != nil {
 			return result, err
 		}
-		if err = CopyDirectory(filepath.Join(baseRepository, "repodata"), filepath.Join(work, "repodata")); err != nil && !os.IsNotExist(err) {
+		if err = fileutil.CopyDirectory(filepath.Join(baseRepository, "repodata"), filepath.Join(work, "repodata")); err != nil && !os.IsNotExist(err) {
 			return result, retryableRepositoryError(err)
 		}
 	}
@@ -160,7 +161,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		return result, retryableRepositoryError(err)
 	}
 	repositoryJSON := Index{SchemaVersion: 1, RepositoryUID: record.RepositoryUID, RequestDigest: record.RequestDigest, SigningFingerprint: record.SigningFingerprint, RepositoryDigest: digest, RPMs: metadata}
-	if err := upload.AtomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
 		return result, retryableRepositoryError(err)
 	}
 	finalParent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "history", record.BuildName, "steps")
@@ -351,7 +352,7 @@ func (m *filesystemMaterializer) inspectRPMFile(ctx context.Context, path string
 	if err != nil {
 		return RepositoryRPMMeta{}, retryableRepositoryError(err)
 	}
-	sum, err := FileSHA256(path)
+	sum, err := fileutil.FileSHA256(path)
 	if err != nil {
 		return RepositoryRPMMeta{}, retryableRepositoryError(err)
 	}
@@ -484,54 +485,6 @@ func linkRPMDirectory(source, destination string, base map[string]RepositoryRPMM
 	return retained, nil
 }
 
-func CopyDirectory(source, destination string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, _ := filepath.Rel(source, path)
-		target := filepath.Join(destination, relative)
-		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("symbolic links are not allowed")
-		}
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0750)
-		}
-		info, err := entry.Info()
-		if err != nil || !info.Mode().IsRegular() {
-			return errors.New("invalid repository file")
-		}
-		input, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer input.Close()
-		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0640)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(output, input)
-		closeErr := output.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
-}
-
-func FileSHA256(path string) (string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
 func digestDirectory(root string) (string, error) {
 	return digestDirectoryWithRPMMetadata(root, nil)
 }
@@ -581,7 +534,7 @@ func digestDirectoryWithRPMMetadata(root string, rpms map[string]RepositoryRPMMe
 			sum = meta.SHA256
 			seenRPMs++
 		} else {
-			sum, err = FileSHA256(path)
+			sum, err = fileutil.FileSHA256(path)
 			if err != nil {
 				return "", err
 			}

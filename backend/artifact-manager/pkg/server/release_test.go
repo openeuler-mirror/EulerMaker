@@ -1,4 +1,4 @@
-package artifact
+package server
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/release"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
@@ -58,7 +59,7 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 		t.Fatal(err)
 	}
 	materializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
-	server, err := newArtifactServer(c, testAuthorizer{}, store, materializer, "")
+	server, err := newServer(c, testAuthorizer{}, store, materializer, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +86,7 @@ func writeTestRepositoryIndex(t *testing.T, manager *repository.Manager, record 
 		t.Fatal(err)
 	}
 	index := repository.Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]repository.RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}
-	if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -95,7 +96,7 @@ func writeTestRepositoryRecord(t *testing.T, server *Server, record *repository.
 	light := *record
 	light.RPMs = nil
 	path := filepath.Join(server.cfg.DataDir, ".metadata", "repositories", record.RepositoryUID+".json")
-	if err := upload.AtomicJSON(path, &light); err != nil {
+	if err := fileutil.AtomicJSON(path, &light); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/upload"
 )
 
@@ -453,7 +454,7 @@ func (m *Manager) remove(uid string) {
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
-	trash := filepath.Join(trashDir, uid+"-"+upload.NewID("d"))
+	trash := filepath.Join(trashDir, uid+"-"+fileutil.NewID("d"))
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
@@ -471,7 +472,7 @@ func (m *Manager) persist(record *RepositoryRecord) error {
 	// state in metadata, otherwise every completed repository duplicates it.
 	light := *record
 	light.RPMs = nil
-	return upload.AtomicJSON(m.metaPath(record.RepositoryUID), &light)
+	return fileutil.AtomicJSON(m.metaPath(record.RepositoryUID), &light)
 }
 
 func (m *Manager) RepositoryPath(record *RepositoryRecord) string {

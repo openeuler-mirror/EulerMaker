@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
-	"artifact-manager/pkg/upload"
 )
 
 func TestReleaseRequestNormalization(t *testing.T) {
@@ -163,7 +163,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 		}
 	}
 	index := releaseIndex{BuildName: record.BuildName, RequestDigest: record.RequestDigest, ReleaseDigest: record.ReleaseDigest}
-	if err := upload.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.persist(record); err != nil {
@@ -185,7 +185,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	}
 
 	index.ReleaseDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("different")))
-	if err := upload.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.recover(time.Hour); err != nil {

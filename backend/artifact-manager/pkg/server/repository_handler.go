@@ -1,4 +1,4 @@
-package artifact
+package server
 
 import (
 	"errors"
@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
-	"artifact-manager/pkg/upload"
 )
 
 func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +109,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusGone, "RepositoryUnavailable", "repository is unavailable", false, nil)
 		return
 	}
-	relative, err := upload.SafeRelative(parts[1])
+	relative, err := fileutil.SafeRelative(parts[1])
 	if err != nil {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
 		return
@@ -126,7 +126,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	sum, err := repository.FileSHA256(path)
+	sum, err := fileutil.FileSHA256(path)
 	if err != nil {
 		writeErr(w, r, http.StatusServiceUnavailable, "RepositoryStorageUnavailable", "repository storage unavailable", true, nil)
 		return

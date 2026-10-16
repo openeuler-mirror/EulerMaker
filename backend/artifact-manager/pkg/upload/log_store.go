@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"artifact-manager/pkg/fileutil"
 )
 
 func (s *Store) LogPaths(p, j string) (string, string, string) {
@@ -22,27 +24,27 @@ func (s *Store) LogPaths(p, j string) (string, string, string) {
 func (s *Store) recoverLog(l *LogStream) error {
 	body, index, meta := s.LogPaths(l.Project, l.JobName)
 	if l.State == LogFinalizing && l.ArtifactID != "" {
-		if a := s.artifacts[l.ArtifactID]; a != nil && VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
+		if a := s.artifacts[l.ArtifactID]; a != nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
 			now := time.Now().UTC()
 			a.State, a.UpdatedAt, a.CompletedAt = Completed, now, &now
 			l.State, l.UpdatedAt, l.CompletedAt = LogCompleted, now, &now
-			if err := AtomicJSON(s.artifactMeta(a.ID), a); err != nil {
+			if err := fileutil.AtomicJSON(s.artifactMeta(a.ID), a); err != nil {
 				return err
 			}
-			return AtomicJSON(meta, l)
+			return fileutil.AtomicJSON(meta, l)
 		}
 		if _, err := os.Stat(body); err == nil {
 			l.State, l.ArtifactID, l.FinalSize, l.FinalSHA256 = LogOpen, "", nil, ""
-			return AtomicJSON(meta, l)
+			return fileutil.AtomicJSON(meta, l)
 		}
 	}
 	if l.State == LogCompleted && l.ArtifactID != "" {
-		if a := s.artifacts[l.ArtifactID]; a != nil && VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
+		if a := s.artifacts[l.ArtifactID]; a != nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
 			return nil
 		}
 		l.State = LogFailed
 		l.Failure = &FailureInfo{Code: "Corrupted", Message: "completed log artifact is missing or invalid", Retryable: false, Time: time.Now().UTC()}
-		return AtomicJSON(meta, l)
+		return fileutil.AtomicJSON(meta, l)
 	}
 	data, err := os.ReadFile(index)
 	if os.IsNotExist(err) {
@@ -66,7 +68,7 @@ func (s *Store) recoverLog(l *LogStream) error {
 		if json.Unmarshal(line, &rec) != nil || rec.Sequence != next || rec.StartOffset != offset || rec.Size < 0 {
 			l.State = LogFailed
 			l.Failure = &FailureInfo{Code: "Corrupted", Message: "invalid log index", Retryable: false, Time: time.Now().UTC()}
-			return AtomicJSON(meta, l)
+			return fileutil.AtomicJSON(meta, l)
 		}
 		next++
 		offset += rec.Size
@@ -81,7 +83,7 @@ func (s *Store) recoverLog(l *LogStream) error {
 	if st.Size() < offset {
 		l.State = LogFailed
 		l.Failure = &FailureInfo{Code: "Corrupted", Message: "log body is shorter than its index", Retryable: false, Time: time.Now().UTC()}
-		return AtomicJSON(meta, l)
+		return fileutil.AtomicJSON(meta, l)
 	}
 	if l.State == LogOpen && st.Size() > offset {
 		if err := os.Truncate(body, offset); err != nil {
@@ -90,7 +92,7 @@ func (s *Store) recoverLog(l *LogStream) error {
 	}
 	if l.State == LogOpen && (l.NextSequence != next || l.CommittedBytes != offset) {
 		l.NextSequence, l.CommittedBytes, l.UpdatedAt = next, offset, time.Now().UTC()
-		return AtomicJSON(meta, l)
+		return fileutil.AtomicJSON(meta, l)
 	}
 	return nil
 }
@@ -168,7 +170,7 @@ func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum strin
 	l.NextSequence++
 	l.CommittedBytes += int64(n)
 	l.UpdatedAt = now
-	if e = AtomicJSON(meta, l); e != nil {
+	if e = fileutil.AtomicJSON(meta, l); e != nil {
 		return nil, e
 	}
 	s.publishLocked(k, LogEvent{Sequence: seq, Data: append([]byte(nil), data...)})
@@ -318,7 +320,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 		}
 	}
 	now := time.Now().UTC()
-	id := NewID("art")
+	id := fileutil.NewID("art")
 	a := &Artifact{SchemaVersion: 1, ID: id, Project: p, JobName: j, RunnerName: runner, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
 	final := s.ArtifactPath(a)
 	if e = os.MkdirAll(filepath.Dir(final), 0750); e != nil {
@@ -326,17 +328,17 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	}
 	l.State, l.ArtifactID, l.FinalSize, l.FinalSHA256, l.UpdatedAt = LogFinalizing, id, &r.Size, r.SHA256, now
 	s.artifacts[id] = a
-	if e = AtomicJSON(s.artifactMeta(id), a); e != nil {
+	if e = fileutil.AtomicJSON(s.artifactMeta(id), a); e != nil {
 		return nil, e
 	}
-	if e = AtomicJSON(meta, l); e != nil {
+	if e = fileutil.AtomicJSON(meta, l); e != nil {
 		return nil, e
 	}
 	if e = os.Rename(body, final); e != nil {
 		return nil, e
 	}
 	a.State, a.CompletedAt = Completed, &now
-	if e = AtomicJSON(s.artifactMeta(id), a); e != nil {
+	if e = fileutil.AtomicJSON(s.artifactMeta(id), a); e != nil {
 		return nil, e
 	}
 	l.State = LogCompleted
@@ -345,7 +347,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	l.FinalSHA256 = r.SHA256
 	l.CompletedAt = &now
 	l.UpdatedAt = now
-	if e = AtomicJSON(meta, l); e != nil {
+	if e = fileutil.AtomicJSON(meta, l); e != nil {
 		return nil, e
 	}
 	s.publishLocked(k, LogEvent{Complete: a})

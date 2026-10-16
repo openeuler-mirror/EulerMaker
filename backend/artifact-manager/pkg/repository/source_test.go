@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/upload"
 )
 
@@ -31,7 +32,7 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 				if tt.name == "no RPM" {
 					tt.manifest.Digest = upload.ManifestDigest(tt.manifest.Files)
 				}
-				if err := upload.AtomicJSON(filepath.Join(root, ".metadata/jobs", project, job, "manifest.json"), tt.manifest); err != nil {
+				if err := fileutil.AtomicJSON(filepath.Join(root, ".metadata/jobs", project, job, "manifest.json"), tt.manifest); err != nil {
 					t.Fatal(err)
 				}
 			}

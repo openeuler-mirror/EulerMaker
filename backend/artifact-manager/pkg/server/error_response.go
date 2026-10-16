@@ -1,4 +1,4 @@
-package artifact
+package server
 
 type APIError struct {
 	Code      string         `json:"code"`

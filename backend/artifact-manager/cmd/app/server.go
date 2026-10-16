@@ -12,18 +12,18 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"artifact-manager/pkg/artifact"
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/server"
 )
 
 type options struct {
-	config          artifact.Config
+	config          server.Config
 	listen          string
 	shutdownTimeout time.Duration
 }
 
 func newCommand(start func(options) error) *cobra.Command {
-	opts := options{config: artifact.DefaultConfig(), listen: ":8081", shutdownTimeout: 30 * time.Second}
+	opts := options{config: server.DefaultConfig(), listen: ":8081", shutdownTimeout: 30 * time.Second}
 	cmd := &cobra.Command{
 		Use:           "artifact-manager",
 		Short:         "Run the EulerMaker artifact manager",
@@ -92,7 +92,7 @@ func run(opts options) error {
 	if err != nil {
 		return err
 	}
-	handler, err := artifact.NewHandler(c, authorizer)
+	handler, err := server.NewHandler(c, authorizer)
 	if err != nil {
 		return err
 	}
