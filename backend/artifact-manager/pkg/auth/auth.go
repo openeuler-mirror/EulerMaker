@@ -32,11 +32,14 @@ type Config struct {
 }
 
 type GatewayAuthorizer struct {
-	url    string
-	client *http.Client
-	ttl    time.Duration
-	mu     sync.Mutex
-	cache  map[[32]byte]cachedIdentity
+	url       string
+	client    *http.Client
+	ttl       time.Duration
+	mu        sync.Mutex
+	cache     map[[32]byte]cachedIdentity
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type cachedIdentity struct {
@@ -59,7 +62,56 @@ func NewGatewayAuthorizer(c Config) (*GatewayAuthorizer, error) {
 		tc.RootCAs = p
 	}
 	tr.TLSClientConfig = tc
-	return &GatewayAuthorizer{url: strings.TrimRight(c.URL, "/") + "/auth/check", client: &http.Client{Transport: tr, Timeout: 10 * time.Second}, ttl: c.AuthCacheTTL, cache: make(map[[32]byte]cachedIdentity)}, nil
+	a := &GatewayAuthorizer{
+		url:    strings.TrimRight(c.URL, "/") + "/auth/check",
+		client: &http.Client{Transport: tr, Timeout: 10 * time.Second},
+		ttl:    c.AuthCacheTTL,
+		cache:  make(map[[32]byte]cachedIdentity),
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
+	}
+	go a.cleanupLoop()
+	return a, nil
+}
+
+func (a *GatewayAuthorizer) cleanupLoop() {
+	defer close(a.done)
+	interval := time.Minute
+	if a.ttl > 0 && a.ttl < interval {
+		interval = a.ttl
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stop:
+			return
+		case now := <-ticker.C:
+			a.removeExpired(now)
+		}
+	}
+}
+
+func (a *GatewayAuthorizer) removeExpired(now time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for key, entry := range a.cache {
+		if !now.Before(entry.until) || !now.Before(entry.identity.ExpiresAt) {
+			delete(a.cache, key)
+		}
+	}
+}
+
+// Close stops cache cleanup and releases cached identities and idle connections.
+func (a *GatewayAuthorizer) Close() {
+	a.closeOnce.Do(func() {
+		close(a.stop)
+		<-a.done
+		a.mu.Lock()
+		clear(a.cache)
+		a.mu.Unlock()
+		a.client.CloseIdleConnections()
+	})
 }
 
 func (a *GatewayAuthorizer) Authenticate(ctx context.Context, token string) (Identity, error) {
@@ -104,9 +156,13 @@ func (a *GatewayAuthorizer) Authenticate(ctx context.Context, token string) (Ide
 	if out.ExpiresAt.Before(until) {
 		until = out.ExpiresAt
 	}
-	if until.After(now) {
+	if until.After(time.Now()) {
 		a.mu.Lock()
-		a.cache[key] = cachedIdentity{identity: identity, until: until}
+		select {
+		case <-a.stop:
+		default:
+			a.cache[key] = cachedIdentity{identity: identity, until: until}
+		}
 		a.mu.Unlock()
 	}
 	return identity, nil

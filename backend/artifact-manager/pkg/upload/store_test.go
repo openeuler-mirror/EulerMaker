@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +19,78 @@ import (
 func sum(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
+}
+
+func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
+	root := t.TempDir()
+	store, err := upload.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetManifest("project", "job"); !os.IsNotExist(err) {
+		t.Fatalf("missing manifest: %v", err)
+	}
+	data := []byte("rpm")
+	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: int64(len(data)), SHA256: sum(data)}
+	a, _, err := store.BeginUpload("project", "job", "key", metadata, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(root, ".uploads", a.ID+".tmp")
+	if err := os.WriteFile(tmp, data, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteUpload("project", "job", a, tmp); err != nil {
+		t.Fatal(err)
+	}
+	request := upload.CompleteManifestRequest{Files: []upload.ManifestFile{{
+		ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256,
+	}}}
+	manifest, err := store.CompleteManifest("project", "job", "runner", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.RunnerName = "updated-runner"
+	path := filepath.Join(root, ".metadata/jobs/project/job/manifest.json")
+	if err := fileutil.AtomicJSON(path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.GetManifest("project", "job")
+	if err != nil || loaded.RunnerName != manifest.RunnerName {
+		t.Fatalf("disk manifest: %+v, %v", loaded, err)
+	}
+	replayed, err := store.CompleteManifest("project", "job", "runner", request)
+	if err != nil || replayed.RunnerName != manifest.RunnerName || replayed.Digest != manifest.Digest {
+		t.Fatalf("seal replay from disk: %+v, %v", replayed, err)
+	}
+	if _, _, err := store.BeginUpload("project", "job", "new-key", metadata, 1024); err == nil || err.Error() != "ManifestAlreadyCompleted" {
+		t.Fatalf("sealed Job upload: %v", err)
+	}
+	// Corrupted metadata must block writes instead of being treated as an unsealed Job.
+	corrupted := []byte("{")
+	if err := os.WriteFile(path, corrupted, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store, err = upload.NewStore(root)
+	if err != nil {
+		t.Fatalf("startup should not load historical manifests: %v", err)
+	}
+	if _, err := store.GetManifest("project", "job"); !errors.Is(err, upload.ErrInvalidManifest) {
+		t.Fatalf("read corrupted manifest: %v", err)
+	}
+	if _, _, err := store.BeginUpload("project", "job", "key", metadata, 1024); !errors.Is(err, upload.ErrInvalidManifest) {
+		t.Fatalf("reserve upload with corrupted manifest: %v", err)
+	}
+	if err := store.CompleteUpload("project", "job", a, tmp); !errors.Is(err, upload.ErrInvalidManifest) {
+		t.Fatalf("commit upload with corrupted manifest: %v", err)
+	}
+	if _, err := store.CompleteManifest("project", "job", "runner", request); !errors.Is(err, upload.ErrInvalidManifest) {
+		t.Fatalf("seal corrupted manifest: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(content, corrupted) {
+		t.Fatalf("manifest was overwritten: %q, %v", content, err)
+	}
 }
 
 func TestArtifactMetadataReadOnDemand(t *testing.T) {
@@ -227,9 +300,9 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 		if !ok || artifact.ID != job.artifact.ID || artifact.State != upload.Completed {
 			t.Fatalf("loaded Job artifact: %+v", artifact)
 		}
-		manifest, ok := store.GetManifest(job.project, job.job)
-		if !ok || manifest.State != upload.ManifestCompleted || len(manifest.Files) != 2 {
-			t.Fatalf("loaded manifest: %+v", manifest)
+		manifest, err := store.GetManifest(job.project, job.job)
+		if err != nil || manifest.State != upload.ManifestCompleted || len(manifest.Files) != 2 {
+			t.Fatalf("loaded manifest: %+v, %v", manifest, err)
 		}
 		items, err := store.ListArtifacts(job.project, job.job, "")
 		if err != nil || len(items) != 2 {

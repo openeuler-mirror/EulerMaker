@@ -35,7 +35,7 @@ graph LR
 
 Runner 直接访问 Artifact Manager，上传正文不经过 ebs-gateway，避免 Gateway 承担构建产物和日志文件带宽。Artifact Manager 通过 Gateway 校验 Token，并确认身份为 Runner，认证契约见第十章。Artifact 查询和下载公开访问，不经过 Gateway 鉴权。
 
-Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件形式存放在本地持久化目录，不依赖独立数据库。Artifact 元数据按需读取，Job 清单和日志流状态在启动时加载到内存，本地元数据文件是事实来源。
+Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件形式存放在本地持久化目录，不依赖独立数据库。Artifact、LogStream 和 JobUploadManifest 元数据均按需读取，本地元数据文件是事实来源。
 
 文件正文写入 Artifact Manager 管理的本地持久化目录。使用节点本地目录时只能部署单实例。
 
@@ -105,7 +105,9 @@ ${dataDir}/.metadata/jobs/{project}/{jobName}/
 
 Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Store 锁串行保护。
 
-启动时逐条扫描 Artifact 元数据并恢复未完成上传，处理完即释放，不将历史产物常驻内存。`logs/combined.json` 和 `manifest.json` 仍加载到内存，重建日志流及 Job 清单索引。
+启动时逐条扫描 Artifact 和 LogStream 元数据并执行恢复，处理完即释放，不将历史产物或日志流状态常驻内存。`manifest.json` 不在启动时加载，按 Project、JobName 定位读取，用完释放。
+
+上传前及提交正文前，在 Store 锁内读取 Manifest 检查是否已封账；封账时在同一锁内读取已有清单、比较摘要并原子写入。只有文件不存在才视为未封账，JSON 损坏、归属不匹配和 I/O 错误均阻止写入。清单 GET 对不存在返回 404，对读取失败返回存储错误，不返回空清单。
 
 元数据先写入临时文件并 `fsync`，再原子重命名，最后 `fsync` 父目录。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
 
@@ -931,6 +933,8 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 | 场景 | 处理 |
 |------|------|
 | 清单不存在或未 Completed | 标记 `Failed / ManifestNotReady / retryable=false`，记录对应 `jobName`，不发布目录 |
+| 清单 JSON 损坏或归属不匹配 | 标记 `Failed / ManifestInvalid / retryable=false`，记录对应 `jobName` |
+| 清单读取发生 I/O 错误 | 标记 `Failed / StorageError / retryable=true`，记录对应 `jobName`，允许重试 |
 | 基础仓不存在或不是 Ready | `422 BaseRepositoryNotReady` |
 | 同 UID 不同请求 | `409 RepositoryIdentityConflict` |
 | RPM 非法或 spec 无法识别 | 标记 `Failed / PackageMetadataInvalid / retryable=false`，记录对应 `jobName` |
@@ -1256,6 +1260,10 @@ ${dataDir}/.metadata/jobs/{project}/{jobName}/logs/combined.json
 
 `combined.index.jsonl` 是 sequence、字节范围和 chunk 摘要的持久化索引；`combined.json` 只保存 `LogStream` 的小型汇总状态，不重复保存最近 chunk 列表。日志正文只追加到一个活动文件，不把每个 chunk 保存成长期独立对象。
 
+查询、追加、重放和封账按需读取 `combined.json`，在 Store 锁内完成读取、校验及状态写入。首次追加前先持久化 Open 元数据，保证正文或索引写入中断后仍可恢复。内存只保留写入中断的轻量恢复标记；下一次访问先按索引校准正文和进度，恢复成功后删除标记。正常请求不重复扫描完整索引，Finalizing 状态按封账恢复规则处理。
+
+SSE 仅保留活跃连接的订阅通道，最后一个连接退出或被移除后删除对应订阅条目，不保留历史 Job 的空订阅表。
+
 接收新 chunk 时，提交顺序固定为：
 
 1. 将解压后的正文追加到 `combined.log`，执行 `fdatasync`。
@@ -1458,7 +1466,7 @@ Content-Type: application/json
 
 #### 9.2.6 崩溃恢复和清理
 
-服务启动时加载日志元数据并校验正文长度：
+服务启动时逐条读取日志元数据、执行恢复后释放，不建立 LogStream 常驻缓存：
 
 - 逐行解析 `combined.index.jsonl`；最后一行不是完整 JSON 或缺少结尾换行时，删除该残缺尾行并 `fdatasync`，文件中部存在无效 JSON 时标记为 `Failed/Corrupted`。
 - 验证索引从 sequence 0 开始连续，首条 `startOffset=0`，且每条 `startOffset` 等于上一条的 `startOffset+size`；不满足时标记为 `Failed/Corrupted`。
@@ -1511,7 +1519,7 @@ Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.s
 
 SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 Runner Token；部署方必须通过网络边界、并发连接数、读取速率和带宽限制控制访问。若后续将构建日志调整为非公开数据，这两个接口必须统一接入用户或服务身份鉴权，不能依赖不可伪造的 URL。
 
-认证结果可以按 Token 摘要缓存，缓存时间不得超过 `min(1h, tokenExpiresAt-now)`；完成 Artifact、Manifest 和日志流时不得使用过期缓存。认证失败结果不做长期缓存。
+认证结果按 Token 摘要存入自动过期清理的 TTL 缓存，有效期不超过 `min(authCacheTTL, tokenExpiresAt-now)`，`authCacheTTL` 默认 1 小时。读取时立即拒绝过期条目；后台每 `min(authCacheTTL, 1min)` 清扫过期记录，不依赖 Token 再次访问。服务退出或后续初始化失败时停止清理任务并释放缓存。完成 Artifact、Manifest 和日志流时同样不得使用过期缓存，认证失败结果不缓存。
 
 `/auth/check` 是公开接口，调用方无需提供独立的服务身份、mTLS 客户端证书或服务凭据，也不提交请求正文；请求中的 Bearer Token 是该接口唯一验证的凭据。接口必须通过 TLS 暴露并按 Token 身份和客户端地址限流。Artifact Manager、Gateway 以及其他调用方均不得记录 Token 原文或用于缓存的完整 Token。
 
@@ -1633,7 +1641,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 当前实现：
 
 1. 本地持久化文件系统。
-2. 本地元数据文件、Artifact 按需读取与日志流及 Job 清单内存索引。
+2. 本地元数据文件及 Artifact、LogStream、JobUploadManifest 按需读取。
 3. Runner Token 签名、有效期和 `type=runner` 校验。
 4. 经 Artifact Manager 进行单请求整文件流式上传，支持整文件重试和幂等完成。
 5. 文件大小与 SHA-256 校验。

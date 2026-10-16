@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 
 	"artifact-manager/pkg/fileutil"
 )
+
+var ErrInvalidManifest = errors.New("invalid manifest metadata")
 
 func ManifestDigest(files []ManifestFile) string {
 	var b strings.Builder
@@ -47,9 +50,12 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 			return nil, errors.New("artifact mismatch")
 		}
 	}
-	k := manifestKey(project, job)
 	digest := ManifestDigest(r.Files)
-	if old := s.manifests[k]; old != nil {
+	old, err := s.readManifest(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if old != nil {
 		if old.Digest == digest && old.State == ManifestCompleted {
 			return old, nil
 		}
@@ -61,16 +67,33 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 	if err := fileutil.AtomicJSON(path, m); err != nil {
 		return nil, err
 	}
-	s.manifests[k] = m
 	return m, nil
 }
 
-func (s *Store) GetManifest(p, j string) (*JobUploadManifest, bool) {
+func (s *Store) GetManifest(p, j string) (*JobUploadManifest, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	m, ok := s.manifests[manifestKey(p, j)]
-	if !ok {
-		return nil, false
+	return s.readManifest(p, j)
+}
+
+// readManifest is called with the store lock held; only a missing file means the Job is unsealed.
+func (s *Store) readManifest(project, job string) (*JobUploadManifest, error) {
+	for _, part := range []string{project, job} {
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "/\\\x00") {
+			return nil, ErrInvalidManifest
+		}
 	}
-	return m, true
+	path := filepath.Join(s.root, ".metadata/jobs", project, job, "manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var manifest JobUploadManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+	}
+	if manifest.Project != project || manifest.JobName != job {
+		return nil, ErrInvalidManifest
+	}
+	return &manifest, nil
 }

@@ -19,8 +19,7 @@ import (
 type Store struct {
 	root        string
 	mu          sync.RWMutex
-	manifests   map[string]*JobUploadManifest
-	logs        map[string]*LogStream
+	logRecovery map[string]struct{}
 	subscribers map[string]map[chan LogEvent]struct{}
 }
 
@@ -33,8 +32,7 @@ type LogEvent struct {
 func NewStore(root string) (*Store, error) {
 	s := &Store{
 		root:        root,
-		manifests:   make(map[string]*JobUploadManifest),
-		logs:        make(map[string]*LogStream),
+		logRecovery: make(map[string]struct{}),
 		subscribers: make(map[string]map[chan LogEvent]struct{}),
 	}
 	for _, d := range []string{".uploads", ".metadata/jobs", ".logs", "projects", ".quarantine"} {
@@ -43,9 +41,6 @@ func NewStore(root string) (*Store, error) {
 		}
 	}
 	if err := s.load(); err != nil {
-		return nil, err
-	}
-	if err := s.recover(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -81,9 +76,8 @@ func (s *Store) load() error {
 		rel, _ := filepath.Rel(filepath.Join(s.root, ".metadata"), path)
 		parts := strings.Split(filepath.ToSlash(rel), "/")
 		isArtifact := len(parts) == 5 && parts[0] == "jobs" && parts[3] == "artifacts"
-		isManifest := len(parts) == 4 && parts[0] == "jobs" && parts[3] == "manifest.json"
 		isLog := len(parts) == 5 && parts[0] == "jobs" && parts[3] == "logs" && parts[4] == "combined.json"
-		if !isArtifact && !isManifest && !isLog {
+		if !isArtifact && !isLog {
 			return nil
 		}
 		b, e := os.ReadFile(path)
@@ -97,34 +91,15 @@ func (s *Store) load() error {
 				return fmt.Errorf("load artifact metadata %s: invalid JSON", path)
 			}
 			return s.recoverArtifact(parts[1], parts[2], &v)
-		case isManifest:
-			var v JobUploadManifest
-			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobName == "" {
-				return fmt.Errorf("load manifest metadata %s: invalid JSON", path)
-			}
-			key := manifestKey(v.Project, v.JobName)
-			if _, exists := s.manifests[key]; exists {
-				return fmt.Errorf("load manifest metadata %s: duplicate completed manifest for job", path)
-			}
-			s.manifests[key] = &v
 		case isLog:
 			var v LogStream
-			if e := json.Unmarshal(b, &v); e != nil || v.Project == "" || v.JobName == "" {
+			if e := json.Unmarshal(b, &v); e != nil || v.Project != parts[1] || v.JobName != parts[2] || v.Stream != "combined" {
 				return fmt.Errorf("load log metadata %s: invalid JSON", path)
 			}
-			s.logs[logKey(v.Project, v.JobName, v.Stream)] = &v
+			return s.recoverLog(&v)
 		}
 		return nil
 	})
-}
-
-func (s *Store) recover() error {
-	for _, l := range s.logs {
-		if err := s.recoverLog(l); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Store) recoverArtifact(project, job string, a *Artifact) error {
@@ -221,10 +196,6 @@ func (s *Store) readJobArtifacts(project, job string) ([]Artifact, error) {
 	return artifacts, nil
 }
 
-func manifestKey(p, j string) string {
-	return p + "\x00" + j
-}
-
 func logKey(p, j, stream string) string {
 	return p + "\x00" + j + "\x00" + stream
 }
@@ -260,7 +231,11 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 			old = &artifacts[i]
 		}
 	}
-	if s.manifests[manifestKey(project, job)] != nil {
+	manifest, err := s.readManifest(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, false, err
+	}
+	if manifest != nil {
 		if old != nil && sameUploadMetadata(old, m) && old.State == Completed && fileutil.VerifyFile(s.ArtifactPath(old), old.Size, old.SHA256) == nil {
 			return old, true, nil
 		}
@@ -318,7 +293,11 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 func (s *Store) CompleteUpload(project, job string, a *Artifact, tmp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.manifests[manifestKey(project, job)] != nil {
+	manifest, err := s.readManifest(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if manifest != nil {
 		return errors.New("ManifestAlreadyCompleted")
 	}
 	final := s.ArtifactPath(a)

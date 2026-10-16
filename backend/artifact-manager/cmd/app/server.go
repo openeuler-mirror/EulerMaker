@@ -144,6 +144,7 @@ func run(opts options) error {
 	if err != nil {
 		return err
 	}
+	defer authorizer.Close()
 	handler, err := server.NewHandler(c, authorizer)
 	if err != nil {
 		return err
