@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"artifact-manager/pkg/release"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
@@ -17,18 +18,18 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 			method(w, http.MethodPost)
 			return
 		}
-		var request CreateReleaseRequest
+		var request release.CreateReleaseRequest
 		if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &request); err != nil {
 			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
 			return
 		}
-		record, status, err := s.releases.submit(request)
+		record, status, err := s.releases.Submit(request)
 		if err != nil {
 			s.writeReleaseError(w, r, err)
 			return
 		}
 		w.Header().Set("Location", "/internal/v1/releases/"+record.BuildName)
-		writeJSON(w, status, releaseResponse(record))
+		writeJSON(w, status, release.ResponseFor(record))
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/internal/v1/releases/")
@@ -46,12 +47,12 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "request body is not allowed", false, nil)
 			return
 		}
-		record, status, err := s.releases.activate(parts[0])
+		record, status, err := s.releases.Activate(parts[0])
 		if err != nil {
 			s.writeReleaseError(w, r, err)
 			return
 		}
-		writeJSON(w, status, releaseResponse(record))
+		writeJSON(w, status, release.ResponseFor(record))
 		return
 	}
 	if len(parts) != 1 || !validIdentifier(parts[0]) {
@@ -60,14 +61,14 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 	}
 	switch r.Method {
 	case http.MethodGet:
-		record, ok := s.releases.get(parts[0])
+		record, ok := s.releases.Get(parts[0])
 		if !ok {
 			s.releaseNotFound(w, r)
 			return
 		}
-		writeJSON(w, http.StatusOK, releaseResponse(record))
+		writeJSON(w, http.StatusOK, release.ResponseFor(record))
 	case http.MethodDelete:
-		record, status, err := s.releases.delete(parts[0])
+		record, status, err := s.releases.Delete(parts[0])
 		if err != nil {
 			s.writeReleaseError(w, r, err)
 			return
@@ -76,24 +77,24 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 			w.WriteHeader(status)
 			return
 		}
-		writeJSON(w, status, releaseResponse(record))
+		writeJSON(w, status, release.ResponseFor(record))
 	default:
 		method(w, "GET, DELETE")
 	}
 }
 
 func (s *Server) writeReleaseError(w http.ResponseWriter, r *http.Request, err error) {
-	var typed *releaseError
+	var typed *release.Error
 	if !errors.As(err, &typed) {
-		typed = &releaseError{code: "ReleaseInternalError", status: 500, retryable: true}
+		typed = &release.Error{Code: "ReleaseInternalError", Status: 500, Retryable: true}
 	}
-	if typed.status == 0 {
-		typed.status = http.StatusInternalServerError
+	if typed.Status == 0 {
+		typed.Status = http.StatusInternalServerError
 	}
-	if typed.status == http.StatusTooManyRequests || typed.status == http.StatusServiceUnavailable {
+	if typed.Status == http.StatusTooManyRequests || typed.Status == http.StatusServiceUnavailable {
 		w.Header().Set("Retry-After", "5")
 	}
-	writeErr(w, r, typed.status, typed.code, typed.code, typed.retryable, nil)
+	writeErr(w, r, typed.Status, typed.Code, typed.Code, typed.Retryable, nil)
 }
 
 func (s *Server) releaseNotFound(w http.ResponseWriter, r *http.Request) {
@@ -107,12 +108,12 @@ func (s *Server) releaseVersionContent(w http.ResponseWriter, r *http.Request) {
 		s.releaseNotFound(w, r)
 		return
 	}
-	record, ok := s.releases.get(parts[0])
+	record, ok := s.releases.Get(parts[0])
 	if !ok {
 		s.releaseNotFound(w, r)
 		return
 	}
-	if record.State != ReleaseReady {
+	if record.State != release.ReleaseReady {
 		writeErr(w, r, http.StatusConflict, "ReleaseNotReady", "release is not ready", true, nil)
 		return
 	}
@@ -137,7 +138,7 @@ func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
 	s.serveReleaseFile(w, r, record, parts[3])
 }
 
-func (s *Server) currentRelease(project, targetOS, targetArch string) *ReleaseRecord {
+func (s *Server) currentRelease(project, targetOS, targetArch string) *release.ReleaseRecord {
 	current := filepath.Join(s.cfg.DataDir, "repositories", project, targetOS, targetArch, "current")
 	target, err := os.Readlink(current)
 	if err != nil {
@@ -147,14 +148,14 @@ func (s *Server) currentRelease(project, targetOS, targetArch string) *ReleaseRe
 	if len(targetParts) != 2 || targetParts[0] != "releases" || !validIdentifier(targetParts[1]) {
 		return nil
 	}
-	record, ok := s.releases.get(targetParts[1])
-	if !ok || record.State != ReleaseReady || record.Project != project || record.TargetOS != targetOS || record.TargetArch != targetArch {
+	record, ok := s.releases.Get(targetParts[1])
+	if !ok || record.State != release.ReleaseReady || record.Project != project || record.TargetOS != targetOS || record.TargetArch != targetArch {
 		return nil
 	}
 	return record
 }
 
-func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *ReleaseRecord, value string) {
+func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *release.ReleaseRecord, value string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		method(w, "GET, HEAD")
 		return
@@ -168,7 +169,7 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 		s.releaseNotFound(w, r)
 		return
 	}
-	path := s.releases.releasePath(record)
+	path := s.releases.Path(record)
 	path = filepath.Join(path, filepath.FromSlash(relative))
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {

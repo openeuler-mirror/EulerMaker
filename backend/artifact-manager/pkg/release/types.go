@@ -1,4 +1,4 @@
-package artifact
+package release
 
 import (
 	"context"
@@ -68,20 +68,20 @@ type releaseIndex struct {
 	PublicKeySHA256     string   `json:"publicKeySHA256,omitempty"`
 }
 
-type releaseResult struct {
+type Result struct {
 	Digest string
 }
 
-type releaseMaterializer interface {
-	Create(context.Context, ReleaseRecord, repository.RepositoryRecord) (releaseResult, error)
+type Materializer interface {
+	Create(context.Context, ReleaseRecord, repository.RepositoryRecord) (Result, error)
 }
 
-type releaseError struct {
-	code      string
-	retryable bool
-	status    int
+type Error struct {
+	Code      string
+	Retryable bool
+	Status    int
 }
 
-func (e *releaseError) Error() string {
-	return e.code
+func (e *Error) Error() string {
+	return e.Code
 }

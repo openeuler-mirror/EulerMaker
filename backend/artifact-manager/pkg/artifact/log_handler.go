@@ -32,7 +32,7 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 		writeErr(w, r, 415, "UnsupportedMediaType", "log chunks require application/octet-stream", false, nil)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.Log.ChunkSize*2+(64<<10))
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.Upload.LogChunkSize*2+(64<<10))
 	var rd io.Reader = r.Body
 	if r.Header.Get("Content-Encoding") == "gzip" {
 		gz, er := gzip.NewReader(r.Body)
@@ -46,16 +46,16 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 		writeErr(w, r, 415, "UnsupportedEncoding", "unsupported encoding", false, nil)
 		return
 	}
-	data, e := io.ReadAll(io.LimitReader(rd, s.cfg.Log.ChunkSize+1))
-	if e != nil || int64(len(data)) > s.cfg.Log.ChunkSize || hex.EncodeToString(sha256sum(data)) != sum {
+	data, e := io.ReadAll(io.LimitReader(rd, s.cfg.Upload.LogChunkSize+1))
+	if e != nil || int64(len(data)) > s.cfg.Upload.LogChunkSize || hex.EncodeToString(sha256sum(data)) != sum {
 		writeErr(w, r, 422, "LogChunkMismatch", "log chunk mismatch", true, nil)
 		return
 	}
-	if current, ok := s.store.GetLog(p, j); ok && seq < current.NextSequence-int64(s.cfg.Log.DedupeWindow) {
+	if current, ok := s.store.GetLog(p, j); ok && seq < current.NextSequence-int64(s.cfg.Upload.DedupeWindow) {
 		writeErr(w, r, 409, "SequenceConflict", "sequence is outside the deduplication window", false, map[string]any{"nextSequence": current.NextSequence})
 		return
 	}
-	if current, ok := s.store.GetLog(p, j); ok && current.CommittedBytes+int64(len(data)) > s.cfg.Log.MaxLogSize {
+	if current, ok := s.store.GetLog(p, j); ok && current.CommittedBytes+int64(len(data)) > s.cfg.Upload.MaxLogSize {
 		writeErr(w, r, 413, "LogQuotaExceeded", "log size limit exceeded", false, nil)
 		return
 	}
@@ -141,7 +141,7 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 	defer done()
 	var replay []upload.LogEvent
 	if supplied {
-		replay, _, e = s.store.ReplayLog(p, j, after, s.cfg.Log.ReplayWindow)
+		replay, _, e = s.store.ReplayLog(p, j, after, s.cfg.Upload.ReplayWindow)
 		if e != nil {
 			if e.Error() == "ReplayWindowExceeded" {
 				writeErr(w, r, 409, e.Error(), e.Error(), false, nil)
@@ -161,7 +161,7 @@ func (s *Server) logSSE(w http.ResponseWriter, r *http.Request, p, j string) {
 		lastSent = e.Sequence
 	}
 	fl.Flush()
-	tick := time.NewTicker(s.cfg.Log.SSEHeartbeat)
+	tick := time.NewTicker(s.cfg.Upload.SSEHeartbeat)
 	defer tick.Stop()
 	for {
 		select {
