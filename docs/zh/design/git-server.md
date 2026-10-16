@@ -608,7 +608,7 @@ git-server \
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--listen-address` | `:8080` | HTTP API 与 Smart HTTP 监听地址 |
-| `--data-dir` | `/srv/git` | 裸仓库根目录，临时目录固定为 `{data-dir}/.tmp` |
+| `--data-dir` | `/var/lib/ebs-git` | 裸仓库根目录，临时目录固定为 `{data-dir}/.tmp` |
 | `--workers` | `20` | 同步和删除 Worker 数量 |
 | `--operation-timeout` | `10m` | 单次 Git 操作超时 |
 | `--max-retries` | `5` | 首次执行之外的最大自动重试次数，允许为 0 |

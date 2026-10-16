@@ -2,6 +2,21 @@ package options
 
 import "testing"
 
+func TestDataDirOptions(t *testing.T) {
+	for _, dataDir := range []string{"", "/tmp/git-repositories"} {
+		var args []string
+		want := "/var/lib/ebs-git"
+		if dataDir != "" {
+			args = []string{"--data-dir=" + dataDir}
+			want = dataDir
+		}
+		got, err := Parse(args)
+		if err != nil || got.DataDir != want {
+			t.Fatalf("Parse(%v) dataDir = %q, error = %v; want %q", args, got.DataDir, err, want)
+		}
+	}
+}
+
 func TestSmartHTTPOptions(t *testing.T) {
 	defaults, err := Parse(nil)
 	if err != nil || defaults.CloneBaseURL != "http://git-server:8080/git" || defaults.CloneWorkers != 20 {

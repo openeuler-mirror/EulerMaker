@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -300,6 +301,49 @@ func TestListPageIncludesOnlyEventFields(t *testing.T) {
 	}
 	if page.Continue != "next" || len(page.Items) != 1 || page.Items[0].(*ebsv1.BuildInfo).Name != "buildinfo-a" {
 		t.Fatalf("polling page = %#v", page)
+	}
+}
+
+func TestJobHistoryListProjectionAndLiveWatchFilter(t *testing.T) {
+	const liveSelector = "status.phase!=Succeeded,status.phase!=Failed,status.phase!=Aborted"
+	var queries []url.Values
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		queries = append(queries, r.URL.Query())
+		if r.URL.Query().Get("watch") == "true" {
+			return jsonResponse(r, nil), nil
+		}
+		return jsonResponse(r, []byte(`{"apiVersion":"ebs/v1","kind":"JobList","metadata":{"resourceVersion":"10"},"items":[]}`)), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ListPage(context.Background(), source.JobsGVR, metav1.ListOptions{
+		FieldSelector: "status.phase=Succeeded", Limit: 500, Continue: "next",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := queries[0]
+	if q.Get("includeFields") != "metadata,status.phase,status.endTime" || q.Get("fieldSelector") != "status.phase=Succeeded" || q.Get("limit") != "500" || q.Get("continue") != "next" {
+		t.Fatalf("history query = %v", q)
+	}
+	resource, err := client.ResolveWatch(context.Background(), source.JobsGVR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resource.ListerWatcher.List(metav1.ListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := resource.ListerWatcher.Watch(metav1.ListOptions{ResourceVersion: "10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream.Stop()
+	for _, q := range queries[1:] {
+		if q.Get("fieldSelector") != liveSelector {
+			t.Fatalf("live query = %v", q)
+		}
 	}
 }
 

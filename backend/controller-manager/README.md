@@ -4,6 +4,8 @@ Go Controller Manager 提供 Kubernetes 风格的 Controller 公共运行框架�
 
 当前只有 `Job` 和 `Runner` 使用 List/Watch；`Build`、`Snapshot`、`BuildInfo` 和 `RpmRepo` 使用 PollingSource，其中 `Build`、`Snapshot` 和 `RpmRepo` 的列表带状态过滤条件。入口已注册这六个 Controller。Snapshot Controller 固化代码仓库 commit，并通过 git-server 驱动仓库同步和 ref 解析。
 
+Job Watch 仅缓存非终态对象。历史 Job 清理在启动时执行一次，之后每轮结束等待 24 小时再分页扫描，每页 500 个摘要对象；默认清理结束超过 30 天的 Job，失败对象留待下一轮扫描。
+
 ## 构建与测试
 
 ```bash

@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
 type Client interface {
+	ListHistoryPage(context.Context, ebsv1.JobPhase, string, int64) (source.ListPage, error)
 	GetJob(context.Context, string, string) (*ebsv1.Job, error)
 	GetRunner(context.Context, string) (*ebsv1.Runner, error)
 	UpdateJobStatus(context.Context, *ebsv1.Job) (*ebsv1.Job, error)
@@ -19,6 +22,12 @@ type Client interface {
 type apiClient struct{ client clientpkg.Interface }
 
 func newAPIClient(value clientpkg.Interface) Client { return &apiClient{client: value} }
+
+func (c *apiClient) ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error) {
+	return c.client.ListPage(ctx, source.JobsGVR, metav1.ListOptions{
+		FieldSelector: "status.phase=" + string(phase), Continue: token, Limit: limit,
+	})
+}
 
 func (c *apiClient) GetJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
 	obj, err := c.client.Get(ctx, source.JobsGVR, namespace, name)

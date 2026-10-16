@@ -262,6 +262,8 @@ type Client interface {
 
 `ListPage` 读取资源的集群范围集合路径；`ListProjectPage` 仅接受 namespace-scoped 资源和非空 Project，并读取 `/projects/{project}/{resource}`。两者都完整传递分页和 selector 相关的 `ListOptions`。
 
+Job 的集群范围 `ListPage` 用于历史清理，投影 `metadata,status.phase,status.endTime`；Project-scoped Job List 仍返回完整对象。Job 的 Watch 初始 List 和增量 Watch 均过滤掉 `Succeeded`、`Failed`、`Aborted`，不缓存历史对象。历史清理独立按日分页执行，见 Job Controller 设计。
+
 namespace-scoped 写资源要求 `namespace` 非空；cluster-scoped 写资源要求为空。`name`、GVR、对象类型和删除前置条件必须在发起请求前校验。Create 请求对象的 namespace 必须与目标一致，并且不得预填 UID 或 resourceVersion；Update 请求必须携带服务端返回的 UID 和 resourceVersion。首版 Controller 发起的删除必须同时提供非空 UID 和 resourceVersion，不提供无条件删除接口。
 
 所有非 Watch 请求使用共享 `--request-timeout` 派生子 context；调用方 context 更早取消时必须立即返回。Watch 不使用该短超时，由 `ListOptions.timeoutSeconds` 和生命周期 context 控制。
@@ -502,7 +504,7 @@ type ListFunc func(
 ) (ListPage, error)
 ```
 
-`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。Source 在每一页请求中保留注册时指定的 `labelSelector` 和 `fieldSelector`，使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。Build/BuildInfo/RpmRepo/Snapshot 轮询 List 使用 `includeFields=metadata`，仅用于事件映射；Worker 的 GET 仍读取完整对象。其他资源不设置 `includeFields`。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
+`PollingSourceFactory` 从共享 API Client 构造 `ListFunc`。Source 在每一页请求中保留注册时指定的 `labelSelector` 和 `fieldSelector`，使用响应中的 `continue` 请求下一页，直到返回空 token；`limit` 默认 500，可配置。Build/BuildInfo/RpmRepo/Snapshot 轮询 List 使用 `includeFields=metadata`，仅用于事件映射；Worker 的 GET 仍读取完整对象。Job 历史摘要 List 的投影规则见共享 Client 契约，其余资源不设置 `includeFields`。对象元数据统一通过 `meta.Accessor` 读取，无法读取 name、namespace、UID 或 resourceVersion 的对象使整轮扫描失败。
 
 PollingSource 每轮执行：
 
