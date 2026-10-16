@@ -1,6 +1,7 @@
 package release
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,11 +25,16 @@ func (m *Manager) cleanupHistory(now time.Time) {
 	type target struct{ project, os, arch string }
 	m.mu.Lock()
 	groups := map[target][]*ReleaseRecord{}
-	for _, record := range m.records {
+	if err := m.scanRecords(func(record *ReleaseRecord) error {
 		if record.State == ReleaseReady {
 			key := target{record.Project, record.TargetOS, record.TargetArch}
 			groups[key] = append(groups[key], record)
 		}
+		return nil
+	}); err != nil {
+		m.mu.Unlock()
+		log.Printf("scan release history: %v", err)
+		return
 	}
 	var remove []string
 	for key, records := range groups {

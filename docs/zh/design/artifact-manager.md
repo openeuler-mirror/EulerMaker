@@ -1190,7 +1190,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 
 启动时在 HTTP 监听前执行：
 
-1. 加载 `.metadata/releases` 中的记录；
+1. 逐条扫描 `.metadata/releases` 中的记录并恢复，只将 Creating、Prepared、Deleting 活动记录保留在内存；
 2. 校验 `current` 指向的 release 身份与 `release.json`；已 Ready 的发布核对记录与索引摘要，Creating、Prepared 的发布完整复核目录摘要；
 3. `current` 已指向 Creating 或 Prepared 记录且正文有效时补写 Ready；
 4. Prepared 记录未激活时不由 Artifact Manager 自动切换 current，等待 RpmRepo Controller 查询状态、重新确认控制面意图后调用激活接口；
@@ -1198,7 +1198,9 @@ GET /repositories/releases/v1/{buildName}/{path...}
 6. 清理超过 `--release-work-ttl` 且不属于活动 worker 的工作目录；
 7. 对 Deleting 记录继续执行删除；trash 残留风险与过程仓相同，见 8.10。
 
-历史清理每小时执行一次，按 Ready 记录的 `UpdatedAt` 倒序保留指定数量，并额外保护当前版本；非当前且超出数量的记录，只有 `UpdatedAt` 距今超过 TTL 才可删除。当前没有独立激活历史，也不以被替换时刻计时；重复激活或恢复可能刷新 `UpdatedAt`。配置如下：
+Ready、Failed 记录在查询、重复提交、激活或删除时按需从磁盘读取，不加入常驻缓存。状态成功持久化后同步更新缓存：进入活动状态时加入，进入 Ready、Failed 时移除。存储读取错误与记录不存在分开处理，前者返回可重试错误，不作为新请求创建记录。
+
+历史清理在启动时及之后每小时执行一次，扫描磁盘上的 Ready 记录并临时分组，处理后释放扫描结果。按 `UpdatedAt` 倒序保留指定数量，并额外保护当前版本；非当前且超出数量的记录，只有 `UpdatedAt` 距今超过 TTL 才可删除。当前没有独立激活历史，也不以被替换时刻计时；重复激活或恢复可能刷新 `UpdatedAt`。配置如下：
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|

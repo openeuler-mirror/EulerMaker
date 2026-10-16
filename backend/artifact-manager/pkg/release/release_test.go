@@ -169,16 +169,13 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	if err := m.persist(record); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.load(); err != nil {
-		t.Fatal(err)
-	}
-	record = m.records[record.BuildName]
-	if record == nil || record.ReleaseDigest != index.ReleaseDigest {
-		t.Fatalf("persisted release digest = %#v", record)
-	}
 	// No RPM files are present: startup must not recompute the full directory digest.
 	if err := m.recover(time.Hour); err != nil {
 		t.Fatal(err)
+	}
+	record, ok, err := m.Get(record.BuildName)
+	if err != nil || !ok || record.ReleaseDigest != index.ReleaseDigest || len(m.records) != 0 {
+		t.Fatalf("persisted release = %#v, cached=%d, error=%v", record, len(m.records), err)
 	}
 	if record.State != ReleaseReady {
 		t.Fatalf("matching metadata changed Ready release to %s", record.State)
@@ -191,7 +188,120 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	if err := m.recover(time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	record, ok, err = m.Get(record.BuildName)
+	if err != nil || !ok || len(m.records) != 0 {
+		t.Fatalf("recovered release = %#v, cached=%d, error=%v", record, len(m.records), err)
+	}
 	if record.State != ReleaseFailed || record.Failure == nil || record.Failure.Code != "ReleaseContentInvalid" {
 		t.Fatalf("mismatched metadata did not fail release: %#v", record)
+	}
+}
+
+func TestReleaseCacheTracksActiveStates(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}}
+	record := &ReleaseRecord{BuildName: "build", Project: "project", TargetOS: "os", TargetArch: "arch"}
+	for _, state := range []ReleaseState{ReleaseCreating, ReleasePrepared, ReleaseReady, ReleaseDeleting, ReleaseFailed} {
+		record.State = state
+		if err := m.persist(record); err != nil {
+			t.Fatal(err)
+		}
+		active := state == ReleaseCreating || state == ReleasePrepared || state == ReleaseDeleting
+		if _, cached := m.records[record.BuildName]; cached != active {
+			t.Fatalf("state %s: cached=%t, want %t", state, cached, active)
+		}
+		got, ok, err := m.Get(record.BuildName)
+		if err != nil || !ok || got.State != state {
+			t.Fatalf("Get(%s) = %#v, %t, %v", state, got, ok, err)
+		}
+		got.State = ReleaseFailed
+		if cached := m.records[record.BuildName]; active && cached.State != state {
+			t.Fatal("mutating returned record changed cached state")
+		}
+	}
+	// Terminal reads observe the persisted record without retaining a copy.
+	record.Attempt = 5
+	if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := m.Get(record.BuildName)
+	if err != nil || !ok || got.Attempt != 5 || len(m.records) != 0 {
+		t.Fatalf("disk record = %#v, cached=%d, error=%v", got, len(m.records), err)
+	}
+}
+
+func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}}
+	if err := os.MkdirAll(filepath.Join(m.root, ".release-work"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	states := []ReleaseState{ReleaseCreating, ReleasePrepared, ReleaseDeleting, ReleaseFailed}
+	for _, state := range states {
+		record := &ReleaseRecord{BuildName: string(state), Project: "project", TargetOS: "os", TargetArch: "arch", State: state}
+		if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := m.recover(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.records) != 3 {
+		t.Fatalf("cached records = %d, want 3", len(m.records))
+	}
+	for _, state := range states {
+		got, ok, err := m.Get(string(state))
+		if err != nil || !ok || got.State != state {
+			t.Fatalf("recovered %s = %#v, %t, %v", state, got, ok, err)
+		}
+	}
+}
+
+func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}, historyCount: 1, historyTTL: time.Hour}
+	now := time.Now().UTC()
+	for i, name := range []string{"latest", "old", "current"} {
+		record := &ReleaseRecord{
+			BuildName: name, Project: "project", TargetOS: "os", TargetArch: "arch", State: ReleaseReady,
+			UpdatedAt: now.Add(-time.Duration(i+2) * time.Hour),
+		}
+		if err := os.MkdirAll(m.Path(record), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.persist(record); err != nil {
+			t.Fatal(err)
+		}
+		if name == "current" {
+			if err := os.Symlink("releases/current", filepath.Join(m.releaseTargetDir(record), "current")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(m.records) != 0 {
+		t.Fatalf("historical records cached: %d", len(m.records))
+	}
+	m.cleanupHistory(now)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, ok, err := m.Get("old")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("old release was not removed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	for _, name := range []string{"latest", "current"} {
+		got, ok, err := m.Get(name)
+		if err != nil || !ok || got.State != ReleaseReady {
+			t.Fatalf("retained %s = %#v, %t, %v", name, got, ok, err)
+		}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.records) != 0 {
+		t.Fatalf("completed cleanup retained %d records", len(m.records))
 	}
 }

@@ -84,7 +84,12 @@ func (s *Server) routeRepositoryContent(c *gin.Context) {
 	path := c.Request.URL.Path
 	if strings.HasPrefix(path, "/repositories/releases/v1/") {
 		name := strings.SplitN(strings.TrimPrefix(path, "/repositories/releases/v1/"), "/", 2)[0]
-		if _, ok := s.releases.Get(name); ok {
+		_, ok, err := s.releases.Get(name)
+		if err != nil {
+			s.writeReleaseError(c.Writer, c.Request, err)
+			return
+		}
+		if ok {
 			s.releaseVersionContent(c.Writer, c.Request)
 			return
 		}
