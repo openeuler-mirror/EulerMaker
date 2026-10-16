@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"artifact-manager/pkg/artifact"
+	"artifact-manager/pkg/server"
 )
 
 func TestServerCommandBindsOptions(t *testing.T) {
@@ -26,10 +26,10 @@ func TestServerCommandBindsOptions(t *testing.T) {
 		got.config.Repository.Workers != 4 || got.config.Release.HistoryTTL != 48*time.Hour || got.config.Signing.Workers != 3 {
 		t.Fatalf("unexpected command options: %+v", got)
 	}
-	if got.config.Upload.MaxFileSize != artifact.DefaultConfig().Upload.MaxFileSize {
+	if got.config.Upload.MaxFileSize != server.DefaultConfig().Upload.MaxFileSize {
 		t.Fatal("default artifact size was not retained")
 	}
-	if artifact.DefaultConfig().Signing.Workers != 8 {
+	if server.DefaultConfig().Signing.Workers != 8 {
 		t.Fatal("default signing concurrency must be eight")
 	}
 	if got.config.Signing.SignatrustKeyName != "openeuler-default-key" {

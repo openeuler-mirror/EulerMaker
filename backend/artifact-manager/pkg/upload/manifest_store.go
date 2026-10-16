@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"artifact-manager/pkg/fileutil"
 )
 
 func ManifestDigest(files []ManifestFile) string {
@@ -49,7 +51,7 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 	now := time.Now().UTC()
 	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
 	path := filepath.Join(s.root, ".metadata/jobs", project, job, "manifest.json")
-	if err := AtomicJSON(path, m); err != nil {
+	if err := fileutil.AtomicJSON(path, m); err != nil {
 		return nil, err
 	}
 	s.manifests[k] = m

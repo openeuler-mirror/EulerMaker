@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
@@ -238,7 +239,7 @@ func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	if existing, err := os.Readlink(current); err == nil && existing == target {
 		// Already activated.
 	} else {
-		temporary := filepath.Join(targetDir, ".current-"+upload.NewID("r"))
+		temporary := filepath.Join(targetDir, ".current-"+fileutil.NewID("r"))
 		if err := os.Symlink(target, temporary); err != nil {
 			return nil, 0, releaseStorageError()
 		}
@@ -327,7 +328,7 @@ func (m *Manager) remove(name string) {
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
-	trash := filepath.Join(trashDir, name+"-"+upload.NewID("d"))
+	trash := filepath.Join(trashDir, name+"-"+fileutil.NewID("d"))
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
@@ -380,7 +381,7 @@ func (m *Manager) Stop() {
 	m.cancel()
 }
 func (m *Manager) persist(record *ReleaseRecord) error {
-	return upload.AtomicJSON(m.metaPath(record.BuildName), record)
+	return fileutil.AtomicJSON(m.metaPath(record.BuildName), record)
 }
 
 func (m *Manager) metaPath(name string) string {

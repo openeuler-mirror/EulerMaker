@@ -1,4 +1,4 @@
-package artifact
+package server
 
 import (
 	"net/http"
@@ -36,7 +36,7 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := newArtifactServer(c, a, st, repository.NewFilesystemMaterializer(c.DataDir, c.Repository, c.Signing.Workers, st, signer), signer.Fingerprint())
+	s, err := newServer(c, a, st, repository.NewFilesystemMaterializer(c.DataDir, c.Repository, c.Signing.Workers, st, signer), signer.Fingerprint())
 	if err != nil {
 		_ = signer.Close()
 		return nil, err
@@ -53,7 +53,7 @@ func (s *Server) Close() {
 	}
 }
 
-func newArtifactServer(c Config, a auth.Authorizer, store *upload.Store, materializer repository.Materializer, signingFingerprint string) (*Server, error) {
+func newServer(c Config, a auth.Authorizer, store *upload.Store, materializer repository.Materializer, signingFingerprint string) (*Server, error) {
 	repositories, err := repository.NewManager(c.DataDir, c.Repository, materializer, signingFingerprint)
 	if err != nil {
 		return nil, err

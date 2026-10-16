@@ -3,6 +3,7 @@ package repository
 import (
 	"strings"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/upload"
 )
 
@@ -43,7 +44,7 @@ func repositoryArtifacts(s *upload.Store, project string, refs []ManifestReferen
 		return nil, &Error{Code: "ManifestContainsNoPackages", Status: 422}
 	}
 	for _, artifact := range result {
-		if err := upload.VerifyFile(artifact.Path, artifact.Metadata.Size, artifact.Metadata.SHA256); err != nil {
+		if err := fileutil.VerifyFile(artifact.Path, artifact.Metadata.Size, artifact.Metadata.SHA256); err != nil {
 			return nil, &Error{Code: "MaterializationInputExpired", Status: 410, JobName: artifact.JobName}
 		}
 	}

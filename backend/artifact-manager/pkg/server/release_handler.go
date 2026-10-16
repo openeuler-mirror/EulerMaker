@@ -1,4 +1,4 @@
-package artifact
+package server
 
 import (
 	"errors"
@@ -7,9 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/release"
-	"artifact-manager/pkg/repository"
-	"artifact-manager/pkg/upload"
 )
 
 func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +163,7 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 		writeErr(w, r, http.StatusRequestedRangeNotSatisfiable, "MultipleRangesNotSupported", "multiple ranges are not supported", false, nil)
 		return
 	}
-	relative, err := upload.SafeRelative(value)
+	relative, err := fileutil.SafeRelative(value)
 	if err != nil {
 		s.releaseNotFound(w, r)
 		return
@@ -182,7 +181,7 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 		return
 	}
 	defer file.Close()
-	sum, err := repository.FileSHA256(path)
+	sum, err := fileutil.FileSHA256(path)
 	if err != nil {
 		writeErr(w, r, http.StatusServiceUnavailable, "ReleaseStorageUnavailable", "release storage unavailable", true, nil)
 		return

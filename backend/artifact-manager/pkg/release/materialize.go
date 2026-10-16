@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"strings"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/signing"
-	"artifact-manager/pkg/upload"
 )
 
 type filesystemReleaseMaterializer struct {
@@ -85,7 +85,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 				return result, &Error{Code: "SourceRepositoryInvalid", Status: 422}
 			}
 		}
-		if err := repository.CopyDirectory(filepath.Join(sourcePath, "repodata"), filepath.Join(work, "repodata")); err != nil {
+		if err := fileutil.CopyDirectory(filepath.Join(sourcePath, "repodata"), filepath.Join(work, "repodata")); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return result, &Error{Code: "SourceRepositoryInvalid", Status: 422}
 			}
@@ -117,7 +117,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		return result, retryableReleaseError(err)
 	}
 	index := releaseIndex{SchemaVersion: 1, BuildName: record.BuildName, SourceRepositoryUID: record.SourceRepositoryUID, RequestDigest: record.RequestDigest, ReleaseDigest: digest, ExcludeSpecs: record.ExcludeSpecs, PublicKeySHA256: publicKeyDigest}
-	if err := upload.AtomicJSON(filepath.Join(work, "release.json"), index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(work, "release.json"), index); err != nil {
 		return result, retryableReleaseError(err)
 	}
 	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "releases")
@@ -161,11 +161,11 @@ func validateReleaseMetadata(root string) error {
 		return errors.New("invalid repomd.xml")
 	}
 	for _, record := range metadata.Records {
-		relative, err := upload.SafeRelative(record.Location.Href)
+		relative, err := fileutil.SafeRelative(record.Location.Href)
 		if err != nil || !strings.HasPrefix(relative, "repodata/") || record.Checksum.Type != "sha256" || !validHash(strings.TrimSpace(record.Checksum.Value)) {
 			return errors.New("invalid repository metadata reference")
 		}
-		actual, err := repository.FileSHA256(filepath.Join(root, filepath.FromSlash(relative)))
+		actual, err := fileutil.FileSHA256(filepath.Join(root, filepath.FromSlash(relative)))
 		if err != nil || actual != strings.TrimSpace(record.Checksum.Value) {
 			return errors.New("repository metadata checksum mismatch")
 		}
@@ -257,7 +257,7 @@ func digestReleaseDirectoryWithRPMMetadata(root string, rpms map[string]reposito
 			seenRPMs++
 		} else {
 			var err error
-			value, err = repository.FileSHA256(path)
+			value, err = fileutil.FileSHA256(path)
 			if err != nil {
 				return "", err
 			}

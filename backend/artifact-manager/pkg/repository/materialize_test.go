@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"artifact-manager/pkg/fileutil"
 )
 
 func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
@@ -28,7 +30,7 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 		if err := os.WriteFile(path, []byte(name), 0640); err != nil {
 			t.Fatal(err)
 		}
-		sum, err := FileSHA256(path)
+		sum, err := fileutil.FileSHA256(path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +69,7 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 	if err := os.WriteFile(newPath, []byte("new-a"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	sum, err := FileSHA256(newPath)
+	sum, err := fileutil.FileSHA256(newPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +183,7 @@ esac
 		if err := os.WriteFile(path, []byte("original"), 0640); err != nil {
 			t.Fatal(err)
 		}
-		sum, err := FileSHA256(path)
+		sum, err := fileutil.FileSHA256(path)
 		if err != nil {
 			t.Fatal(err)
 		}

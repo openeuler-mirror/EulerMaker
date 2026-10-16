@@ -1,4 +1,4 @@
-package artifact
+package server
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
@@ -19,6 +20,34 @@ type testRepositoryMaterializer struct {
 	started chan struct{}
 	release chan struct{}
 	root    string
+}
+
+type badManifestMaterializer struct{}
+
+func (badManifestMaterializer) Materialize(context.Context, repository.RepositoryRecord) (repository.Result, error) {
+	return repository.Result{}, &repository.Error{Code: "ManifestInvalid", Status: 422, JobName: "job-1"}
+}
+
+func TestRepositoryFailurePersistsOffendingJobName(t *testing.T) {
+	server, request := newRepositoryTestServer(t, badManifestMaterializer{})
+	if _, _, err := server.repositories.Submit(request); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		record, ok, err := server.repositories.Get(request.RepositoryUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok && record.State == repository.RepositoryFailed {
+			if record.Failure == nil || record.Failure.JobName != "job-1" {
+				t.Fatalf("failure lost offending Job name: %+v", record.Failure)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("repository did not fail")
 }
 
 func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record repository.RepositoryRecord) (repository.Result, error) {
@@ -37,7 +66,7 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record rep
 			return repository.Result{}, err
 		}
 		index := repository.Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]repository.RepositoryRPMMeta{}}
-		if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+		if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
 			return repository.Result{}, err
 		}
 	}
@@ -57,7 +86,7 @@ func newRepositoryTestServer(t *testing.T, materializer repository.Materializer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := newArtifactServer(c, testAuthorizer{}, store, materializer, "")
+	server, err := newServer(c, testAuthorizer{}, store, materializer, "")
 	if err != nil {
 		t.Fatal(err)
 	}
