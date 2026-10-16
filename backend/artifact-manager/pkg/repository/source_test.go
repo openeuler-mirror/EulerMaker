@@ -11,13 +11,43 @@ import (
 )
 
 type memoryArtifactReader struct {
-	manifest *upload.JobUploadManifest
-	artifact *upload.Artifact
-	path     string
+	manifest      *upload.JobUploadManifest
+	manifestError error
+	artifact      *upload.Artifact
+	path          string
 }
 
-func (r *memoryArtifactReader) GetManifest(project, jobName string) (*upload.JobUploadManifest, bool) {
-	return r.manifest, r.manifest.Project == project && r.manifest.JobName == jobName
+func (r *memoryArtifactReader) GetManifest(project, jobName string) (*upload.JobUploadManifest, error) {
+	if r.manifestError != nil {
+		return nil, r.manifestError
+	}
+	if r.manifest == nil || r.manifest.Project != project || r.manifest.JobName != jobName {
+		return nil, os.ErrNotExist
+	}
+	return r.manifest, nil
+}
+
+func TestRepositoryManifestReadErrors(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		err       error
+		code      string
+		status    int
+		retryable bool
+	}{
+		{name: "missing", err: os.ErrNotExist, code: "ManifestNotReady", status: 422},
+		{name: "corrupted", err: upload.ErrInvalidManifest, code: "ManifestInvalid", status: 422},
+		{name: "storage unavailable", err: &os.PathError{Op: "read", Path: "manifest.json", Err: os.ErrPermission}, code: "StorageError", status: 503, retryable: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := &memoryArtifactReader{manifestError: test.err}
+			_, err := repositoryArtifacts(reader, "project", []ManifestReference{{JobName: "job"}})
+			var typed *Error
+			if !errors.As(err, &typed) || typed.Code != test.code || typed.Status != test.status || typed.Retryable != test.retryable || typed.JobName != "job" {
+				t.Fatalf("manifest read error: %+v", err)
+			}
+		})
+	}
 }
 
 func (r *memoryArtifactReader) GetJobArtifact(project, jobName, id string) (*upload.Artifact, bool) {

@@ -198,7 +198,7 @@ func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
 	var pathErr *os.PathError
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
-	if errors.As(e, &pathErr) || errors.As(e, &syntaxErr) || errors.As(e, &typeErr) {
+	if errors.As(e, &pathErr) || errors.As(e, &syntaxErr) || errors.As(e, &typeErr) || errors.Is(e, upload.ErrInvalidManifest) {
 		writeErr(w, r, http.StatusInternalServerError, "StorageError", "artifact storage operation failed", true, nil)
 		return
 	}
@@ -233,9 +233,13 @@ func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j s
 }
 
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string) {
-	m, ok := s.store.GetManifest(p, j)
-	if !ok {
+	m, err := s.store.GetManifest(p, j)
+	if os.IsNotExist(err) {
 		writeErr(w, r, 404, "NotFound", "manifest not found", false, nil)
+		return
+	}
+	if err != nil {
+		s.mapErr(w, r, err)
 		return
 	}
 	writeJSON(w, 200, m)

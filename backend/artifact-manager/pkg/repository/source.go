@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+	"os"
 	"strings"
 
 	"artifact-manager/pkg/fileutil"
@@ -9,7 +11,7 @@ import (
 
 // ArtifactReader provides sealed upload metadata and local artifact paths.
 type ArtifactReader interface {
-	GetManifest(project, jobName string) (*upload.JobUploadManifest, bool)
+	GetManifest(project, jobName string) (*upload.JobUploadManifest, error)
 	GetJobArtifact(project, jobName, id string) (*upload.Artifact, bool)
 	ArtifactPath(artifact *upload.Artifact) string
 }
@@ -23,8 +25,17 @@ type repositoryArtifact struct {
 func repositoryArtifacts(s ArtifactReader, project string, refs []ManifestReference) ([]repositoryArtifact, error) {
 	var result []repositoryArtifact
 	for _, ref := range refs {
-		manifest, ok := s.GetManifest(project, ref.JobName)
-		if !ok || manifest.State != upload.ManifestCompleted {
+		manifest, err := s.GetManifest(project, ref.JobName)
+		if os.IsNotExist(err) {
+			return nil, &Error{Code: "ManifestNotReady", Status: 422, JobName: ref.JobName}
+		}
+		if errors.Is(err, upload.ErrInvalidManifest) {
+			return nil, &Error{Code: "ManifestInvalid", Status: 422, JobName: ref.JobName}
+		}
+		if err != nil {
+			return nil, &Error{Code: "StorageError", Status: 503, Retryable: true, JobName: ref.JobName}
+		}
+		if manifest.State != upload.ManifestCompleted {
 			return nil, &Error{Code: "ManifestNotReady", Status: 422, JobName: ref.JobName}
 		}
 		if manifest.Digest != upload.ManifestDigest(append([]upload.ManifestFile(nil), manifest.Files...)) {
