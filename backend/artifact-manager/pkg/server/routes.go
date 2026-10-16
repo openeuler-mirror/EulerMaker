@@ -39,13 +39,6 @@ func (s *Server) newRouter() *gin.Engine {
 	})
 
 	router.Any("/repositories/*path", s.routeRepositoryContent)
-	router.Any("/artifacts/v1/artifacts/:id/content", func(c *gin.Context) {
-		if c.Request.Method != http.MethodGet {
-			notFound(c)
-			return
-		}
-		s.download(c.Writer, c.Request, c.Param("id"))
-	})
 
 	jobs := router.Group("/artifacts/v1/projects/:project/jobs/:job")
 	jobs.Use(func(c *gin.Context) {
@@ -63,6 +56,9 @@ func (s *Server) newRouter() *gin.Engine {
 		default:
 			method(c.Writer, "GET, POST")
 		}
+	})
+	jobs.GET("/artifacts/:id/content", func(c *gin.Context) {
+		s.download(c.Writer, c.Request, c.Param("project"), c.Param("job"), c.Param("id"))
 	})
 	jobs.Any("/manifest/complete", s.jobMethod(http.MethodPost, s.completeManifest))
 	jobs.Any("/manifest", s.jobMethod(http.MethodGet, s.getManifest))

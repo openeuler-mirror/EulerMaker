@@ -3,6 +3,7 @@ package upload
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -35,8 +36,14 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 		}
 		seenP[f.RelativePath] = true
 		seenA[f.ArtifactID] = true
-		a := s.artifacts[f.ArtifactID]
-		if a == nil || a.State != Completed || a.Project != project || a.JobName != job || a.RelativePath != f.RelativePath || a.Category != f.Category || a.Size != f.Size || a.SHA256 != f.SHA256 {
+		a, err := s.readArtifact(project, job, f.ArtifactID)
+		if os.IsNotExist(err) {
+			return nil, errors.New("artifact mismatch")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read manifest artifact: %w", err)
+		}
+		if a.State != Completed || a.RelativePath != f.RelativePath || a.Category != f.Category || a.Size != f.Size || a.SHA256 != f.SHA256 {
 			return nil, errors.New("artifact mismatch")
 		}
 	}

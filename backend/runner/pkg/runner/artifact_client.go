@@ -57,8 +57,6 @@ type CompletedLog struct {
 
 type ArtifactRecord struct {
 	ID           string     `json:"id"`
-	Project      string     `json:"project"`
-	JobName      string     `json:"jobName"`
 	Category     string     `json:"category"`
 	FileName     string     `json:"fileName"`
 	RelativePath string     `json:"relativePath"`

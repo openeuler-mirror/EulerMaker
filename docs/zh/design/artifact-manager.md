@@ -35,7 +35,7 @@ graph LR
 
 Runner 直接访问 Artifact Manager，上传正文不经过 ebs-gateway，避免 Gateway 承担构建产物和日志文件带宽。Artifact Manager 通过 Gateway 校验 Token，并确认身份为 Runner，认证契约见第十章。Artifact 查询和下载公开访问，不经过 Gateway 鉴权。
 
-Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件形式存放在本地持久化目录，不依赖独立数据库。服务启动时加载元数据并建立内存索引，本地元数据文件是事实来源。
+Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件形式存放在本地持久化目录，不依赖独立数据库。Artifact 元数据按需读取，Job 清单和日志流状态在启动时加载到内存，本地元数据文件是事实来源。
 
 文件正文写入 Artifact Manager 管理的本地持久化目录。使用节点本地目录时只能部署单实例。
 
@@ -62,7 +62,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases/{buildName}/activate` | 激活指定正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest` | 查询 Job 上传清单 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts` | 列出 Job 产物 | 公开只读，不经 Gateway 鉴权 |
-| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/artifacts/{artifactID}/content` | 下载产物正文 | 公开只读，不经 Gateway 鉴权 |
+| Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content` | 下载产物正文 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/content` | 读取日志正文 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream` | 订阅实时日志 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/v1/{repositoryUID}/{path...}` | 读取过程仓文件 | 公开只读，不经 Gateway 鉴权 |
@@ -78,15 +78,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 
 ## 四、文件归属与存储键
 
-产物必须关联到具体的一次 Job 执行：
-
-```text
-project
-jobName
-runnerName
-```
-
-`project` 和 `jobName` 唯一标识一次 Job，确定正文目录、Manifest 和日志流。
+产物由上传管理层关联到具体的一次 Job 执行。`project` 和 `jobName` 来自请求路径，唯一标识一次 Job，确定正文目录、Manifest 和日志流。Runner Token 用于上传认证；Artifact 本身只记录文件信息，不保存 Project、JobName 或 RunnerName。
 
 存储键由服务端生成：
 
@@ -100,7 +92,22 @@ projects/{project}/jobs/{jobName}/{safeRelativePath}
 
 已有 Artifact 的 `StorageKey` 不改写，仍按记录中的原路径读取；新上传使用上述按 Job 名组织的路径。
 
-Artifact 元数据写入 `${dataDir}/.metadata/artifacts/{artifactID}.json`，Job 上传清单写入 `${dataDir}/.metadata/jobs/{project}/{jobName}/manifest.json`。元数据先写入临时文件并 `fsync`，再原子重命名，最后 `fsync` 父目录。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
+Artifact、日志流元数据和上传清单按 Job 聚合存储，普通产物及日志封账生成的 Artifact 使用相同目录结构：
+
+```text
+${dataDir}/.metadata/jobs/{project}/{jobName}/
+├── artifacts/
+│   └── {artifactID}.json
+├── logs/
+│   └── combined.json
+└── manifest.json
+```
+
+Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Store 锁串行保护。
+
+启动时逐条扫描 Artifact 元数据并恢复未完成上传，处理完即释放，不将历史产物常驻内存。`logs/combined.json` 和 `manifest.json` 仍加载到内存，重建日志流及 Job 清单索引。
+
+元数据先写入临时文件并 `fsync`，再原子重命名，最后 `fsync` 父目录。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
 
 RPM 路径使用 `packages/{fileName}`，例如 `packages/kernel-6.6.rpm`。日志使用 `logs/` 作为一级目录。
 
@@ -133,9 +140,6 @@ const (
 type Artifact struct {
     SchemaVersion  int              `json:"schemaVersion"`
     ID             string           `json:"id"`
-    Project        string           `json:"project"`
-    JobName        string           `json:"jobName"`
-    RunnerName     string           `json:"runnerName"`
     Category       ArtifactCategory `json:"category"`
     FileName       string           `json:"fileName"`
     RelativePath   string           `json:"relativePath"`
@@ -174,7 +178,7 @@ Failed -> Pending（相同上传元数据重试）
 最终正文已提交但元数据未完成时，重试或启动恢复可补写 `Completed`，详见 6.1.2。
 只有 `Completed` Artifact 可以公开下载。
 
-`ID`、归属字段、路径、大小、摘要、`StorageKey` 和 `IdempotencyKey` 创建后不可变。`IdempotencyKey` 仅用于普通文件上传，由服务端根据请求填写；日志流封账产生的 Artifact 不设置。`Size` 必须大于等于 0；`SHA256` 是 64 位小写十六进制，不带 `sha256:` 前缀。`FileName` 用于展示，当前不校验其是否等于 `RelativePath` 的最后一段。`StorageKey` 仅由服务端生成，不接受客户端赋值，也不在普通列表响应中用于构造本地路径。
+`ID`、路径、大小、摘要、`StorageKey` 和 `IdempotencyKey` 创建后不可变；上传管理层维护的 Job 归属也不可变。`IdempotencyKey` 仅用于普通文件上传，由服务端根据请求填写；日志流封账产生的 Artifact 不设置。`Size` 必须大于等于 0；`SHA256` 是 64 位小写十六进制，不带 `sha256:` 前缀。`FileName` 用于展示，当前不校验其是否等于 `RelativePath` 的最后一段。`StorageKey` 仅由服务端生成，不接受客户端赋值，也不在普通列表响应中用于构造本地路径。
 
 ### 5.2 JobUploadManifest
 
@@ -284,7 +288,7 @@ type LogStream struct {
 
 ### 5.4 上传幂等
 
-整文件上传的幂等键保存在 Artifact 元数据中，不创建独立幂等记录。服务启动时以 `(project, jobName, idempotencyKey)` 建立内存索引；相同作用域和 key 只能对应一个 Artifact，重启后仍能识别重复请求。
+整文件上传的幂等键保存在 Artifact 元数据中，不创建独立幂等记录。上传时在 Store 锁内读取当前 Job 的 Artifact 元数据，按 `idempotencyKey` 查找已有记录；相同作用域和 key 只能对应一个 Artifact，重启后仍能识别重复请求。
 
 重复请求须与原 Artifact 的 `category`、`fileName`、规范化后的 `relativePath`、`contentType`、`size` 和 `sha256` 逐项一致；不比较 multipart boundary、header 顺序或文件正文。
 
@@ -399,7 +403,7 @@ type SSECompleteData struct {
 }
 ```
 
-HTTP 路径中的 `{project}`、`{job}` 是归属来源，上传元数据不得重复提供或覆盖。`RunnerName`、ID、状态、存储键和时间均由服务端填写。空文件使用长度为 0 的正文上传；空日志封账时 `lastSequence=-1`、`size=0`、`sha256` 为 SHA-256 空输入。JobUploadManifest 首版不允许空 `files`；没有需要归档文件的 Job 不创建 manifest，Job Status 不增加 artifactCount 或 artifactState 字段。
+HTTP 路径中的 `{project}`、`{job}` 是归属来源，上传元数据不得重复提供或覆盖。Artifact 的 ID、状态、存储键和时间由服务端填写；Manifest 和 LogStream 的 `RunnerName` 来自认证结果。空文件使用长度为 0 的正文上传；空日志封账时 `lastSequence=-1`、`size=0`、`sha256` 为 SHA-256 空输入。JobUploadManifest 首版不允许空 `files`；没有需要归档文件的 Job 不创建 manifest，Job Status 不增加 artifactCount 或 artifactState 字段。
 
 ## 六、上传 API
 
@@ -455,7 +459,7 @@ Content-Type: multipart/form-data; boundary=...
 
 请求中断或校验失败时删除临时正文，并将 Artifact 标记为 `Failed`，保留幂等键供重试。首版不提供上传进度查询、继续上传或中止接口；Runner 必须保留本地文件并使用相同 `Idempotency-Key` 整文件重传。
 
-Artifact 元数据持久化 `(project, jobName, idempotencyKey)` 和上传元数据。相同键且上传元数据逐项一致时：已有 Artifact 为 `Completed` 则直接返回原结果；仍有上传请求进行中则返回 409 `UploadInProgress`；前次失败或中断则清理旧临时文件并允许整文件重传。相同键但上传元数据不一致时返回 409 `IdempotencyConflict`。
+Artifact 元数据持久化 `idempotencyKey` 和上传元数据，所在目录提供 Project 和 JobName，共同确定幂等作用域。相同键且上传元数据逐项一致时：已有 Artifact 为 `Completed` 则直接返回原结果；仍有上传请求进行中则返回 409 `UploadInProgress`；前次失败或中断则清理旧临时文件并允许整文件重传。相同键但上传元数据不一致时返回 409 `IdempotencyConflict`。
 
 #### 6.1.1 Multipart 解析限制
 
@@ -487,7 +491,7 @@ Artifact 元数据持久化 `(project, jobName, idempotencyKey)` 和上传元数
 
 步骤 4 之后任何失败都不能删除最终正文；服务应返回可重试错误，由相同幂等键请求或启动恢复流程补齐元数据。步骤 4 之前失败则关闭并删除临时正文，将 Artifact 标记为 `Failed`，允许上传元数据相同的请求整文件重传。
 
-服务启动时只校验带有幂等键且处于 `Pending` 的 Artifact 正文；`Completed` 和 `Failed` Artifact 仅加载元数据，不在启动路径重新计算正文摘要。未完成上传按以下规则恢复：
+服务启动时逐条读取 Artifact 元数据，只校验带有幂等键且处于 `Pending` 的 Artifact 正文；`Completed` 和 `Failed` Artifact 读取后即释放，不在启动路径重新计算正文摘要。未完成上传按以下规则恢复：
 
 | 现场状态 | 恢复动作 |
 |----------|----------|
@@ -565,7 +569,7 @@ GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts
 ### 7.2 下载文件
 
 ```http
-GET /artifacts/v1/artifacts/{artifactID}/content
+GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content
 ```
 
 正文接口支持 `Range`、`ETag`、`If-None-Match` 和 `Content-Disposition`。Artifact Manager 流式读取文件并返回，下载过程中不得将完整文件载入内存。
@@ -1245,7 +1249,7 @@ Open -> Finalizing -> Completed
 ```text
 ${dataDir}/.logs/{project}/{jobName}/combined.log
 ${dataDir}/.logs/{project}/{jobName}/combined.index.jsonl
-${dataDir}/.metadata/logs/{project}/{jobName}/combined.json
+${dataDir}/.metadata/jobs/{project}/{jobName}/logs/combined.json
 ```
 
 日志始终使用 Job 名目录；服务重启时从该目录恢复未封账的日志。
@@ -1408,7 +1412,7 @@ event: complete
 data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
 ```
 
-前端刷新 `TextDecoder` 剩余内容、关闭 `EventSource`、将状态更新为 Completed，并显示 `/artifacts/v1/artifacts/{artifactID}/content` 的完整日志下载入口。页面隐藏时可以降低渲染频率，但仍需持续消费事件并保存 byte offset 和 sequence。
+前端刷新 `TextDecoder` 剩余内容、关闭 `EventSource`、将状态更新为 Completed，并显示 `/artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content` 的完整日志下载入口。页面隐藏时可以降低渲染频率，但仍需持续消费事件并保存 byte offset 和 sequence。
 
 #### 9.2.5 日志封账
 
@@ -1629,7 +1633,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 当前实现：
 
 1. 本地持久化文件系统。
-2. 本地元数据文件与启动时内存索引。
+2. 本地元数据文件、Artifact 按需读取与日志流及 Job 清单内存索引。
 3. Runner Token 签名、有效期和 `type=runner` 校验。
 4. 经 Artifact Manager 进行单请求整文件流式上传，支持整文件重试和幂等完成。
 5. 文件大小与 SHA-256 校验。

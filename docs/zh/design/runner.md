@@ -577,7 +577,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 写入清理标记时若遇到 `ENOSPC` 或 `EDQUOT`（包括创建标记目录失败），从已有失败标记中按创建时间由早到晚逐个清理，并在每次清理后重试写入；成功即停止。旧候选耗尽仍无法写入时，当前 Job 已确认终态，可作为最后兜底删除其本地结果、日志、上传回执和工作目录，不再写清理标记。其他写入错误不触发提前清理，也不删除没有有效失败标记的其他 Job 目录。
 
-普通产物的幂等键固定为 `artifact-{sha256(normalizedRelativePath)}`；服务端以 Project 和 Job 名限定键的作用域。同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执至少保存 Artifact Manager 返回的 Artifact ID、归属字段、relativePath、size、SHA-256、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。
+普通产物的幂等键固定为 `artifact-{sha256(normalizedRelativePath)}`；服务端以 Project 和 Job 名限定键的作用域。同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执保存 Artifact Manager 返回的 Artifact ID、文件类别、relativePath、size、SHA-256、状态、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。归属由上传请求和本地回执的 Project/Job 目录确定，Artifact 响应不携带 Project、JobName 或 RunnerName。
 
 上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed` 并记录失败原因，再写入失败清理标记；失败现场从该状态写回时间起默认保留 `--artifact-failed-retention=24h`，磁盘使用率超过 85% 时可能提前回收。最终状态写回失败或结果仍可能恢复时不得启动保留期。回收意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
 

@@ -27,9 +27,6 @@ type FailureInfo struct {
 type Artifact struct {
 	SchemaVersion  int          `json:"schemaVersion"`
 	ID             string       `json:"id"`
-	Project        string       `json:"project"`
-	JobName        string       `json:"jobName"`
-	RunnerName     string       `json:"runnerName"`
 	Category       Category     `json:"category"`
 	FileName       string       `json:"fileName"`
 	RelativePath   string       `json:"relativePath"`

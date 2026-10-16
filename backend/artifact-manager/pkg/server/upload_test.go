@@ -117,9 +117,17 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/artifacts/"+created.Artifact.ID+"/content", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/artifacts/"+created.Artifact.ID+"/content", nil))
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data) {
 		t.Fatalf("download: %d %q", w.Code, w.Body.Bytes())
+	}
+	for _, scope := range []string{"project-2/jobs/build", "project-1/jobs/another-job"} {
+		w = httptest.NewRecorder()
+		path := "/artifacts/v1/projects/" + scope + "/artifacts/" + created.Artifact.ID + "/content"
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("download outside artifact scope %s: %d %s", scope, w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -130,20 +138,20 @@ func TestJobNameDirectoryPersistsAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	meta := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
-	if _, _, err := store.BeginUpload("project", "job", "runner", "key-1", meta, 1024); err != nil {
+	if _, _, err := store.BeginUpload("project", "job", "key-1", meta, 1024); err != nil {
 		t.Fatal(err)
 	}
 	store, err = upload.NewStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.BeginUpload("project", "job", "runner", "key-2", meta, 1024); err != nil {
+	if _, _, err := store.BeginUpload("project", "job", "key-2", meta, 1024); err != nil {
 		t.Fatalf("same job name should remain valid after restart: %v", err)
 	}
 	if _, err := store.AppendLog("project", "job", "runner", 0, []byte("x"), sum([]byte("x"))); err != nil {
 		t.Fatalf("same job name log: %v", err)
 	}
-	if _, _, err := store.BeginUpload("project", "another-job", "runner", "key-2", meta, 1024); err != nil {
+	if _, _, err := store.BeginUpload("project", "another-job", "key-2", meta, 1024); err != nil {
 		t.Fatalf("different job name: %v", err)
 	}
 }
@@ -241,7 +249,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		t.Fatalf("stored log: %q, %v", content, err)
 	}
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/artifacts/"+result.ArtifactID+"/content", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/artifacts/"+result.ArtifactID+"/content", nil))
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), all) {
 		t.Fatalf("log artifact: %d %q", w.Code, w.Body.Bytes())
 	}
