@@ -10,7 +10,7 @@ import (
 // ArtifactReader provides sealed upload metadata and local artifact paths.
 type ArtifactReader interface {
 	GetManifest(project, jobName string) (*upload.JobUploadManifest, bool)
-	GetArtifact(id string) (*upload.Artifact, bool)
+	GetJobArtifact(project, jobName, id string) (*upload.Artifact, bool)
 	ArtifactPath(artifact *upload.Artifact) string
 }
 
@@ -35,8 +35,8 @@ func repositoryArtifacts(s ArtifactReader, project string, refs []ManifestRefere
 			if file.Category != upload.CategoryArtifact || !strings.HasPrefix(file.RelativePath, "packages/") || !strings.HasSuffix(strings.ToLower(file.RelativePath), ".rpm") {
 				continue
 			}
-			artifact, ok := s.GetArtifact(file.ArtifactID)
-			if !ok || artifact.State != upload.Completed || artifact.Project != project || artifact.JobName != ref.JobName || artifact.Size != file.Size || artifact.SHA256 != file.SHA256 {
+			artifact, ok := s.GetJobArtifact(project, ref.JobName, file.ArtifactID)
+			if !ok || artifact.State != upload.Completed || artifact.Size != file.Size || artifact.SHA256 != file.SHA256 {
 				return nil, &Error{Code: "MaterializationInputExpired", Status: 410, JobName: ref.JobName}
 			}
 			copy := *artifact

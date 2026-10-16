@@ -47,7 +47,7 @@ func (f *fakeArtifactRemote) UploadArtifact(_ context.Context, project, job, key
 	f.uploads = append(f.uploads, input)
 	f.keys = append(f.keys, key)
 	return ArtifactRecord{
-		ID: "artifact-" + input.FileName, Project: project, JobName: job,
+		ID:       "artifact-" + input.FileName,
 		Category: input.Category, FileName: input.FileName, RelativePath: input.RelativePath,
 		ContentType: input.ContentType, Size: input.Size, SHA256: input.SHA256, State: "Completed",
 	}, nil

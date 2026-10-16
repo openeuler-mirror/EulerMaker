@@ -49,7 +49,7 @@ func TestArtifactClientStreamsMultipartUpload(t *testing.T) {
 		if string(body) != "rpm-data" {
 			t.Fatalf("file body = %q", body)
 		}
-		return &http.Response{StatusCode: 201, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"artifact":{"id":"a1","project":"project","jobName":"job","category":"artifact","relativePath":"packages/package.rpm","size":8,"sha256":"sum","state":"Completed"}}`))}, nil
+		return &http.Response{StatusCode: 201, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"artifact":{"id":"a1","category":"artifact","relativePath":"packages/package.rpm","size":8,"sha256":"sum","state":"Completed"}}`))}, nil
 	})}
 	client, err := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
 	if err != nil {

@@ -20,8 +20,8 @@ func (r *memoryArtifactReader) GetManifest(project, jobName string) (*upload.Job
 	return r.manifest, r.manifest.Project == project && r.manifest.JobName == jobName
 }
 
-func (r *memoryArtifactReader) GetArtifact(id string) (*upload.Artifact, bool) {
-	return r.artifact, r.artifact.ID == id
+func (r *memoryArtifactReader) GetJobArtifact(project, jobName, id string) (*upload.Artifact, bool) {
+	return r.artifact, r.artifact.ID == id && r.manifest.Project == project && r.manifest.JobName == jobName
 }
 
 func (r *memoryArtifactReader) ArtifactPath(_ *upload.Artifact) string {
@@ -39,7 +39,7 @@ func TestRepositoryArtifactsReadFromInterface(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifact := &upload.Artifact{
-		ID: "artifact", Project: "project", JobName: "job", State: upload.Completed,
+		ID: "artifact", State: upload.Completed,
 		Size: int64(len(data)), SHA256: digest,
 	}
 	manifest := &upload.JobUploadManifest{

@@ -125,7 +125,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeErr(w, r, 400, "InvalidMultipartRequest", "file must be second", false, nil)
 		return
 	}
-	a, replay, e := s.store.BeginUpload(p, j, id.Name, key, m, s.cfg.Upload.MaxJobSize)
+	a, replay, e := s.store.BeginUpload(p, j, key, m, s.cfg.Upload.MaxJobSize)
 	if e != nil {
 		s.mapErr(w, r, e)
 		return
@@ -137,7 +137,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	tmp := filepath.Join(s.cfg.DataDir, ".uploads", a.ID+".tmp")
 	f, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
-		s.store.FailUpload(a, "StorageError", e.Error())
+		s.store.FailUpload(p, j, a, "StorageError", e.Error())
 		writeErr(w, r, 503, "StorageError", "storage unavailable", true, nil)
 		return
 	}
@@ -150,19 +150,19 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	extra, xe := mr.NextPart()
 	if e != nil || xe != io.EOF || extra != nil || n != m.Size || hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
 		os.Remove(tmp)
-		s.store.FailUpload(a, "ArtifactChecksumMismatch", "file size or digest mismatch")
+		s.store.FailUpload(p, j, a, "ArtifactChecksumMismatch", "file size or digest mismatch")
 		writeErr(w, r, 422, "ArtifactChecksumMismatch", "file size or digest mismatch", true, nil)
 		return
 	}
 	if time.Now().After(id.ExpiresAt) {
 		os.Remove(tmp)
-		s.store.FailUpload(a, "TokenExpired", "token expired")
+		s.store.FailUpload(p, j, a, "TokenExpired", "token expired")
 		writeErr(w, r, 401, "Unauthorized", "token expired", false, nil)
 		return
 	}
-	if e = s.store.CompleteUpload(a, tmp); e != nil {
+	if e = s.store.CompleteUpload(p, j, a, tmp); e != nil {
 		if !s.store.UploadCommitted(a) {
-			s.store.FailUpload(a, "StorageError", e.Error())
+			s.store.FailUpload(p, j, a, "StorageError", e.Error())
 		}
 		writeErr(w, r, 503, "StorageError", "storage unavailable", true, nil)
 		return
@@ -195,6 +195,13 @@ func (s *Server) validPartHeaders(p *multipart.Part) bool {
 }
 
 func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
+	var pathErr *os.PathError
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(e, &pathErr) || errors.As(e, &syntaxErr) || errors.As(e, &typeErr) {
+		writeErr(w, r, http.StatusInternalServerError, "StorageError", "artifact storage operation failed", true, nil)
+		return
+	}
 	code := e.Error()
 	status := 422
 	if code == "JobQuotaExceeded" {
@@ -236,12 +243,16 @@ func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string
 
 func (s *Server) list(w http.ResponseWriter, r *http.Request, p, j string) {
 	cat := upload.Category(r.URL.Query().Get("category"))
-	items, _ := s.store.ListArtifacts(p, j, cat)
+	items, err := s.store.ListArtifacts(p, j, cat)
+	if err != nil {
+		writeErr(w, r, http.StatusInternalServerError, "StorageError", "read artifact metadata failed", true, nil)
+		return
+	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 
-func (s *Server) download(w http.ResponseWriter, r *http.Request, id string) {
-	a, ok := s.store.GetArtifact(id)
+func (s *Server) download(w http.ResponseWriter, r *http.Request, project, job, id string) {
+	a, ok := s.store.GetJobArtifact(project, job, id)
 	if !ok || a.State != upload.Completed {
 		writeErr(w, r, 404, "NotFound", "artifact not found", false, nil)
 		return

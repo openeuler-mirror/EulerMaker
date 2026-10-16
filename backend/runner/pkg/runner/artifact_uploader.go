@@ -277,7 +277,7 @@ func (p *ArtifactProcessor) uploadOne(ctx context.Context, job JobResource, cand
 	if err != nil {
 		return ArtifactRecord{}, fmt.Errorf("upload artifact %s: %w", candidate.RelativePath, err)
 	}
-	if err := validateUploadedArtifact(job, candidate, artifact); err != nil {
+	if err := validateUploadedArtifact(candidate, artifact); err != nil {
 		return ArtifactRecord{}, err
 	}
 	receipt := artifactReceipt{SchemaVersion: 1, IdempotencyKey: key, Artifact: artifact}
@@ -333,9 +333,8 @@ func (p *ArtifactProcessor) retryMaxBackoff() time.Duration {
 	return maximum
 }
 
-func validateUploadedArtifact(job JobResource, candidate artifactCandidate, artifact ArtifactRecord) error {
-	if artifact.ID == "" || artifact.State != "Completed" || artifact.Project != job.Metadata.Namespace ||
-		artifact.JobName != job.Metadata.Name || artifact.Category != "artifact" ||
+func validateUploadedArtifact(candidate artifactCandidate, artifact ArtifactRecord) error {
+	if artifact.ID == "" || artifact.State != "Completed" || artifact.Category != "artifact" ||
 		artifact.RelativePath != candidate.RelativePath || artifact.Size != candidate.Size || artifact.SHA256 != candidate.SHA256 {
 		return fmt.Errorf("artifact upload response does not match %s", candidate.RelativePath)
 	}
@@ -366,7 +365,7 @@ func (p *ArtifactProcessor) readReceipt(job JobResource, candidate artifactCandi
 	}
 	var receipt artifactReceipt
 	if json.Unmarshal(data, &receipt) != nil || receipt.SchemaVersion != 1 || receipt.IdempotencyKey != key ||
-		validateUploadedArtifact(job, candidate, receipt.Artifact) != nil {
+		validateUploadedArtifact(candidate, receipt.Artifact) != nil {
 		return artifactReceipt{}, false
 	}
 	return receipt, true

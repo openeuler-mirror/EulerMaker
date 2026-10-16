@@ -18,17 +18,17 @@ import (
 
 func (s *Store) LogPaths(p, j string) (string, string, string) {
 	base := filepath.Join(s.root, ".logs", p, j)
-	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/logs", p, j, "combined.json")
+	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/jobs", p, j, "logs", "combined.json")
 }
 
 func (s *Store) recoverLog(l *LogStream) error {
 	body, index, meta := s.LogPaths(l.Project, l.JobName)
 	if l.State == LogFinalizing && l.ArtifactID != "" {
-		if a := s.artifacts[l.ArtifactID]; a != nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
+		if a, err := s.readArtifact(l.Project, l.JobName, l.ArtifactID); err == nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
 			now := time.Now().UTC()
 			a.State, a.UpdatedAt, a.CompletedAt = Completed, now, &now
 			l.State, l.UpdatedAt, l.CompletedAt = LogCompleted, now, &now
-			if err := fileutil.AtomicJSON(s.artifactMeta(a.ID), a); err != nil {
+			if err := s.persistArtifact(l.Project, l.JobName, a); err != nil {
 				return err
 			}
 			return fileutil.AtomicJSON(meta, l)
@@ -39,7 +39,7 @@ func (s *Store) recoverLog(l *LogStream) error {
 		}
 	}
 	if l.State == LogCompleted && l.ArtifactID != "" {
-		if a := s.artifacts[l.ArtifactID]; a != nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
+		if a, err := s.readArtifact(l.Project, l.JobName, l.ArtifactID); err == nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
 			return nil
 		}
 		l.State = LogFailed
@@ -209,9 +209,11 @@ func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]LogEvent, int6
 	}
 	body, index, _ := s.LogPaths(p, j)
 	if l.State == LogCompleted && l.ArtifactID != "" {
-		if a := s.artifacts[l.ArtifactID]; a != nil {
-			body = s.ArtifactPath(a)
+		a, err := s.readArtifact(p, j, l.ArtifactID)
+		if err != nil {
+			return nil, l.NextSequence, err
 		}
+		body = s.ArtifactPath(a)
 	}
 	bf, err := os.Open(body)
 	if err != nil {
@@ -290,7 +292,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 		if r.Stream != "combined" || l.NextSequence != r.LastSequence+1 || l.FinalSize == nil || *l.FinalSize != r.Size || l.FinalSHA256 != r.SHA256 {
 			return nil, errors.New("LogCompletionConflict")
 		}
-		return s.artifacts[l.ArtifactID], nil
+		return s.readArtifact(p, j, l.ArtifactID)
 	}
 	if r.Stream != "combined" || l.NextSequence != r.LastSequence+1 || l.CommittedBytes != r.Size {
 		return nil, errors.New("log mismatch")
@@ -314,21 +316,24 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	if e != nil || hex.EncodeToString(h.Sum(nil)) != r.SHA256 {
 		return nil, errors.New("log digest mismatch")
 	}
-	for _, existing := range s.artifacts {
-		if existing.Project == p && existing.JobName == j && existing.RelativePath == "logs/container.log" && existing.State == Completed {
+	artifacts, err := s.readJobArtifacts(p, j)
+	if err != nil {
+		return nil, err
+	}
+	for _, existing := range artifacts {
+		if existing.RelativePath == "logs/container.log" && existing.State == Completed {
 			return nil, errors.New("ArtifactPathConflict")
 		}
 	}
 	now := time.Now().UTC()
 	id := fileutil.NewID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Project: p, JobName: j, RunnerName: runner, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
+	a := &Artifact{SchemaVersion: 1, ID: id, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
 	final := s.ArtifactPath(a)
 	if e = os.MkdirAll(filepath.Dir(final), 0750); e != nil {
 		return nil, e
 	}
 	l.State, l.ArtifactID, l.FinalSize, l.FinalSHA256, l.UpdatedAt = LogFinalizing, id, &r.Size, r.SHA256, now
-	s.artifacts[id] = a
-	if e = fileutil.AtomicJSON(s.artifactMeta(id), a); e != nil {
+	if e = s.persistArtifact(p, j, a); e != nil {
 		return nil, e
 	}
 	if e = fileutil.AtomicJSON(meta, l); e != nil {
@@ -338,7 +343,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 		return nil, e
 	}
 	a.State, a.CompletedAt = Completed, &now
-	if e = fileutil.AtomicJSON(s.artifactMeta(id), a); e != nil {
+	if e = s.persistArtifact(p, j, a); e != nil {
 		return nil, e
 	}
 	l.State = LogCompleted

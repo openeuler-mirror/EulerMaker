@@ -107,7 +107,7 @@ func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string)
 	}
 	body, _, _ := s.store.LogPaths(p, j)
 	if l.State == upload.LogCompleted {
-		if a, yes := s.store.GetArtifact(l.ArtifactID); yes {
+		if a, yes := s.store.GetJobArtifact(p, j, l.ArtifactID); yes {
 			body = s.store.ArtifactPath(a)
 		}
 	}
