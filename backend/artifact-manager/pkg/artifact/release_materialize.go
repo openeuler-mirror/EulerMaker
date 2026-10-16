@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/signing"
 	"artifact-manager/pkg/upload"
 )
@@ -28,7 +29,7 @@ func newFilesystemReleaseMaterializer(c Config) releaseMaterializer {
 	return &filesystemReleaseMaterializer{root: c.DataDir, createRepoCommand: c.Repository.CreateRepoCommand, createRepoWorkers: c.Repository.CreateRepoWorkers, publicKey: c.Release.PublicKey}
 }
 
-func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source RepositoryRecord) (result releaseResult, resultErr error) {
+func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source repository.RepositoryRecord) (result releaseResult, resultErr error) {
 	if source.SigningFingerprint != "" {
 		if m.publicKey == "" {
 			return result, &releaseError{code: "ReleaseSigningKeyMismatch", status: 422}
@@ -54,8 +55,8 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 	for _, spec := range record.ExcludeSpecs {
 		excluded[spec] = true
 	}
-	selectedRPMs := make(map[string]RepositoryRPMMeta, len(source.RPMs))
-	sourcePath := repositoryVersionPath(m.root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
+	selectedRPMs := make(map[string]repository.RepositoryRPMMeta, len(source.RPMs))
+	sourcePath := repository.VersionPath(m.root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
 	for _, meta := range source.RPMs {
 		if excluded[meta.SpecName] {
 			continue
@@ -84,7 +85,7 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 				return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
 			}
 		}
-		if err := copyDirectory(filepath.Join(sourcePath, "repodata"), filepath.Join(work, "repodata")); err != nil {
+		if err := repository.CopyDirectory(filepath.Join(sourcePath, "repodata"), filepath.Join(work, "repodata")); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return result, &releaseError{code: "SourceRepositoryInvalid", status: 422}
 			}
@@ -164,7 +165,7 @@ func validateReleaseMetadata(root string) error {
 		if err != nil || !strings.HasPrefix(relative, "repodata/") || record.Checksum.Type != "sha256" || !validHash(strings.TrimSpace(record.Checksum.Value)) {
 			return errors.New("invalid repository metadata reference")
 		}
-		actual, err := fileSHA256(filepath.Join(root, filepath.FromSlash(relative)))
+		actual, err := repository.FileSHA256(filepath.Join(root, filepath.FromSlash(relative)))
 		if err != nil || actual != strings.TrimSpace(record.Checksum.Value) {
 			return errors.New("repository metadata checksum mismatch")
 		}
@@ -208,7 +209,7 @@ func digestReleaseDirectory(root string) (string, error) {
 
 // digestReleaseDirectoryWithRPMMetadata preserves the release digest format while
 // reusing hashes verified when the immutable source repository was created.
-func digestReleaseDirectoryWithRPMMetadata(root string, rpms map[string]RepositoryRPMMeta) (string, error) {
+func digestReleaseDirectoryWithRPMMetadata(root string, rpms map[string]repository.RepositoryRPMMeta) (string, error) {
 	var files []string
 	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -256,7 +257,7 @@ func digestReleaseDirectoryWithRPMMetadata(root string, rpms map[string]Reposito
 			seenRPMs++
 		} else {
 			var err error
-			value, err = fileSHA256(path)
+			value, err = repository.FileSHA256(path)
 			if err != nil {
 				return "", err
 			}

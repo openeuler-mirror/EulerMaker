@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
 
@@ -72,7 +73,7 @@ type releaseResult struct {
 }
 
 type releaseMaterializer interface {
-	Create(context.Context, ReleaseRecord, RepositoryRecord) (releaseResult, error)
+	Create(context.Context, ReleaseRecord, repository.RepositoryRecord) (releaseResult, error)
 }
 
 type releaseError struct {

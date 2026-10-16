@@ -5,27 +5,18 @@ import (
 	"time"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/repository"
+	"artifact-manager/pkg/upload"
 )
 
 type Config struct {
 	DataDir    string
 	Gateway    auth.Config
-	Upload     UploadConfig
+	Upload     upload.Config
 	Log        LogConfig
-	Repository RepositoryConfig
+	Repository repository.Config
 	Release    ReleaseConfig
 	Signing    SigningConfig
-}
-
-type UploadConfig struct {
-	MaxFileSize        int64
-	MaxJobSize         int64
-	MaxMetadataSize    int64
-	Timeout            time.Duration
-	TemporaryUploadTTL time.Duration
-	MaxPartHeaders     int
-	MaxHeaderLineSize  int64
-	MaxPartHeaderBytes int64
 }
 
 type LogConfig struct {
@@ -34,16 +25,6 @@ type LogConfig struct {
 	SSEHeartbeat time.Duration
 	ReplayWindow int
 	DedupeWindow int
-}
-
-type RepositoryConfig struct {
-	CreateRepoCommand string
-	RPMQueryCommand   string
-	CreateRepoWorkers int
-	Timeout           time.Duration
-	WorkTTL           time.Duration
-	Workers           int
-	QueueCapacity     int
 }
 
 type ReleaseConfig struct {
@@ -76,7 +57,7 @@ func DefaultConfig() Config {
 			URL:          "https://ebs-gateway:8443",
 			AuthCacheTTL: time.Hour,
 		},
-		Upload: UploadConfig{
+		Upload: upload.Config{
 			MaxFileSize:        25 << 30,  // 25 GiB
 			MaxJobSize:         100 << 30, // 100 GiB
 			MaxMetadataSize:    64 << 10,  // 64 KiB
@@ -93,7 +74,7 @@ func DefaultConfig() Config {
 			ReplayWindow: 1024,
 			DedupeWindow: 1024,
 		},
-		Repository: RepositoryConfig{
+		Repository: repository.Config{
 			CreateRepoCommand: "/usr/bin/createrepo_c",
 			RPMQueryCommand:   "/usr/bin/rpm",
 			CreateRepoWorkers: createRepoWorkers,

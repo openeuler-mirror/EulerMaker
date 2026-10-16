@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/signing"
 	"artifact-manager/pkg/upload"
 )
@@ -14,7 +15,7 @@ type Server struct {
 	cfg          Config
 	store        *upload.Store
 	auth         auth.Authorizer
-	repositories *repositoryManager
+	repositories *repository.Manager
 	releases     *releaseManager
 	router       *gin.Engine
 	signer       *signing.Signer
@@ -32,7 +33,7 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := newArtifactServer(c, a, st, newFilesystemMaterializer(c, st, signer), signer.Fingerprint())
+	s, err := newArtifactServer(c, a, st, repository.NewFilesystemMaterializer(c.DataDir, c.Repository, c.Signing.Workers, st, signer), signer.Fingerprint())
 	if err != nil {
 		_ = signer.Close()
 		return nil, err
@@ -42,21 +43,21 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 }
 
 func (s *Server) Close() {
-	s.repositories.stop()
+	s.repositories.Stop()
 	s.releases.stop()
 	if s.signer != nil {
 		_ = s.signer.Close()
 	}
 }
 
-func newArtifactServer(c Config, a auth.Authorizer, store *upload.Store, materializer repositoryMaterializer, signingFingerprint string) (*Server, error) {
-	repositories, err := newRepositoryManager(c, materializer, signingFingerprint)
+func newArtifactServer(c Config, a auth.Authorizer, store *upload.Store, materializer repository.Materializer, signingFingerprint string) (*Server, error) {
+	repositories, err := repository.NewManager(c.DataDir, c.Repository, materializer, signingFingerprint)
 	if err != nil {
 		return nil, err
 	}
 	releases, err := newReleaseManager(c, repositories, newFilesystemReleaseMaterializer(c))
 	if err != nil {
-		repositories.stop()
+		repositories.Stop()
 		return nil, err
 	}
 	s := &Server{cfg: c, store: store, auth: a, repositories: repositories, releases: releases}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
 
@@ -180,7 +181,7 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 		return
 	}
 	defer file.Close()
-	sum, err := fileSHA256(path)
+	sum, err := repository.FileSHA256(path)
 	if err != nil {
 		writeErr(w, r, http.StatusServiceUnavailable, "ReleaseStorageUnavailable", "release storage unavailable", true, nil)
 		return

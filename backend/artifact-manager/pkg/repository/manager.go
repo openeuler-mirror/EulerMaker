@@ -1,4 +1,4 @@
-package artifact
+package repository
 
 import (
 	"context"
@@ -17,11 +17,11 @@ import (
 	"artifact-manager/pkg/upload"
 )
 
-type repositoryManager struct {
+type Manager struct {
 	root               string
 	timeout            time.Duration
 	signingFingerprint string
-	materializer       repositoryMaterializer
+	materializer       Materializer
 	mu                 sync.RWMutex
 	records            map[string]*RepositoryRecord
 	queued             map[string]bool
@@ -31,23 +31,23 @@ type repositoryManager struct {
 	cancel             context.CancelFunc
 }
 
-func newRepositoryManager(c Config, materializer repositoryMaterializer, signingFingerprint string) (*repositoryManager, error) {
+func NewManager(root string, c Config, materializer Materializer, signingFingerprint string) (*Manager, error) {
 	for _, dir := range []string{"repositories", ".repository-work", ".metadata/repositories", ".repository-trash"} {
-		if err := os.MkdirAll(filepath.Join(c.DataDir, dir), 0750); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0750); err != nil {
 			return nil, err
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &repositoryManager{root: c.DataDir, timeout: c.Repository.Timeout, signingFingerprint: signingFingerprint, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.Repository.QueueCapacity), ctx: ctx, cancel: cancel}
+	m := &Manager{root: root, timeout: c.Timeout, signingFingerprint: signingFingerprint, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.QueueCapacity), ctx: ctx, cancel: cancel}
 	if err := m.load(); err != nil {
 		cancel()
 		return nil, err
 	}
-	if err := m.recover(c.Repository.WorkTTL); err != nil {
+	if err := m.recover(c.WorkTTL); err != nil {
 		cancel()
 		return nil, err
 	}
-	for i := 0; i < c.Repository.Workers; i++ {
+	for i := 0; i < c.Workers; i++ {
 		go m.worker()
 	}
 	for uid, record := range m.records {
@@ -61,17 +61,17 @@ func newRepositoryManager(c Config, materializer repositoryMaterializer, signing
 	return m, nil
 }
 
-func (m *repositoryManager) recover(workTTL time.Duration) error {
+func (m *Manager) recover(workTTL time.Duration) error {
 	now := time.Now().UTC()
 	for uid, record := range m.records {
-		final := m.repositoryPath(record)
+		final := m.RepositoryPath(record)
 		if record.State != RepositoryCreating {
 			continue
 		}
 		if record.SigningFingerprint != m.signingFingerprint {
 			continue
 		}
-		var index repositoryIndex
+		var index Index
 		data, err := os.ReadFile(filepath.Join(final, "repository.json"))
 		if err != nil || json.Unmarshal(data, &index) != nil || index.RepositoryUID != uid || index.RequestDigest != record.RequestDigest || index.SigningFingerprint != record.SigningFingerprint {
 			continue
@@ -101,7 +101,7 @@ func (m *repositoryManager) recover(workTTL time.Duration) error {
 	return nil
 }
 
-func (m *repositoryManager) load() error {
+func (m *Manager) load() error {
 	entries, err := os.ReadDir(filepath.Join(m.root, ".metadata/repositories"))
 	if err != nil {
 		return err
@@ -132,7 +132,7 @@ func (m *repositoryManager) load() error {
 	return nil
 }
 
-func (m *repositoryManager) scanRecord(uid string) (RepositoryState, error) {
+func (m *Manager) scanRecord(uid string) (RepositoryState, error) {
 	file, err := os.Open(m.metaPath(uid))
 	if os.IsNotExist(err) {
 		return "", nil
@@ -152,7 +152,7 @@ func (m *repositoryManager) scanRecord(uid string) (RepositoryState, error) {
 	return header.State, nil
 }
 
-func (m *repositoryManager) readRecord(uid string) (*RepositoryRecord, error) {
+func (m *Manager) readRecord(uid string) (*RepositoryRecord, error) {
 	file, err := os.Open(m.metaPath(uid))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -167,7 +167,7 @@ func (m *repositoryManager) readRecord(uid string) (*RepositoryRecord, error) {
 		return nil, fmt.Errorf("invalid repository metadata for %s", uid)
 	}
 	if record.State == RepositoryReady {
-		if _, err := os.Stat(filepath.Join(m.repositoryPath(&record), "repository.json")); err != nil {
+		if _, err := os.Stat(filepath.Join(m.RepositoryPath(&record), "repository.json")); err != nil {
 			if !os.IsNotExist(err) {
 				return nil, err
 			}
@@ -181,7 +181,7 @@ func (m *repositoryManager) readRecord(uid string) (*RepositoryRecord, error) {
 	return &record, nil
 }
 
-func (m *repositoryManager) recordLocked(uid string) (*RepositoryRecord, error) {
+func (m *Manager) recordLocked(uid string) (*RepositoryRecord, error) {
 	if record := m.records[uid]; record != nil {
 		return record, nil
 	}
@@ -190,26 +190,26 @@ func (m *repositoryManager) recordLocked(uid string) (*RepositoryRecord, error) 
 
 func normalizeRepositoryRequest(in CreateRepositoryRequest) (CreateRepositoryRequest, string, error) {
 	if !validIdentifier(in.RepositoryUID) || !validIdentifier(in.RepositoryName) || !validIdentifier(in.Project) || !validIdentifier(in.BuildName) || in.RepositoryName != in.BuildName || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || len(in.Manifests) == 0 || (in.BaseRepositoryUID != "" && (!validIdentifier(in.BaseRepositoryUID) || in.BaseRepositoryUID == in.RepositoryUID)) {
-		return in, "", &repositoryError{code: "InvalidRepositoryRequest", status: 422}
+		return in, "", &Error{Code: "InvalidRepositoryRequest", Status: 422}
 	}
 	sort.Slice(in.Manifests, func(i, j int) bool { return in.Manifests[i].JobName < in.Manifests[j].JobName })
 	seen := map[string]bool{}
 	for _, ref := range in.Manifests {
 		if !validIdentifier(ref.JobName) || seen[ref.JobName] {
-			return in, "", &repositoryError{code: "InvalidManifestReference", status: 422}
+			return in, "", &Error{Code: "InvalidManifestReference", Status: 422}
 		}
 		seen[ref.JobName] = true
 	}
-	uid := repositoryUID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
+	uid := UID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
 	if in.RepositoryUID != uid {
-		return in, "", &repositoryError{code: "RepositoryUIDMismatch", status: 422}
+		return in, "", &Error{Code: "RepositoryUIDMismatch", Status: 422}
 	}
 	data, _ := json.Marshal(in)
 	digest := sha256.Sum256(data)
 	return in, hex.EncodeToString(digest[:]), nil
 }
 
-func repositoryUID(project, buildName, baseUID string, manifests []ManifestReference) string {
+func UID(project, buildName, baseUID string, manifests []ManifestReference) string {
 	h := sha256.New()
 	for _, value := range []string{project, buildName, baseUID} {
 		var length [8]byte
@@ -226,7 +226,7 @@ func repositoryUID(project, buildName, baseUID string, manifests []ManifestRefer
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecord, int, error) {
+func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, error) {
 	in, digest, err := normalizeRepositoryRequest(in)
 	if err != nil {
 		return nil, 0, err
@@ -235,35 +235,35 @@ func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecor
 	defer m.mu.Unlock()
 	old, err := m.recordLocked(in.RepositoryUID)
 	if err != nil {
-		return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+		return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 	}
 	if old != nil && old.RequestDigest == digest && old.State == RepositoryReady {
 		return cloneRepository(old), 200, nil
 	}
 	if old != nil && old.RequestDigest == digest && (old.State == RepositoryCreating || old.State == RepositoryFailed) && old.SigningFingerprint != m.signingFingerprint {
-		return nil, 0, &repositoryError{code: "SigningConfigurationChanged", status: 503, retryable: true}
+		return nil, 0, &Error{Code: "SigningConfigurationChanged", Status: 503, Retryable: true}
 	}
 	if in.BaseRepositoryUID != "" {
 		base, err := m.recordLocked(in.BaseRepositoryUID)
 		if err != nil {
-			return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+			return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 		}
 		if base == nil || base.State != RepositoryReady || base.Project != in.Project || base.TargetOS != in.TargetOS || base.TargetArch != in.TargetArch {
-			return nil, 0, &repositoryError{code: "BaseRepositoryNotReady", status: 422}
+			return nil, 0, &Error{Code: "BaseRepositoryNotReady", Status: 422}
 		}
 		if base.SigningFingerprint != m.signingFingerprint {
-			return nil, 0, &repositoryError{code: "BaseRepositorySigningMismatch", status: 422}
+			return nil, 0, &Error{Code: "BaseRepositorySigningMismatch", Status: 422}
 		}
 	}
 	if old != nil {
 		if old.RequestDigest != digest {
-			return nil, 0, &repositoryError{code: "RepositoryIdentityConflict", status: 409}
+			return nil, 0, &Error{Code: "RepositoryIdentityConflict", Status: 409}
 		}
 		switch old.State {
 		case RepositoryReady:
 			return cloneRepository(old), 200, nil
 		case RepositoryDeleting:
-			return nil, 0, &repositoryError{code: "RepositoryDeleting", status: 409}
+			return nil, 0, &Error{Code: "RepositoryDeleting", Status: 409}
 		case RepositoryCreating:
 			return cloneRepository(old), 202, nil
 		case RepositoryFailed:
@@ -271,12 +271,12 @@ func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecor
 				return cloneRepository(old), 200, nil
 			}
 			if len(m.queue) >= cap(m.queue) {
-				return nil, 0, &repositoryError{code: "RepositoryQueueFull", status: 429, retryable: true}
+				return nil, 0, &Error{Code: "RepositoryQueueFull", Status: 429, Retryable: true}
 			}
 			old.Attempt++
 			old.State, old.Failure, old.UpdatedAt = RepositoryCreating, nil, time.Now().UTC()
 			if err := m.persist(old); err != nil {
-				return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+				return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 			}
 			m.records[old.RepositoryUID] = old
 			m.enqueueLocked(old.RepositoryUID)
@@ -284,25 +284,25 @@ func (m *repositoryManager) submit(in CreateRepositoryRequest) (*RepositoryRecor
 		}
 	}
 	if len(m.queue) >= cap(m.queue) {
-		return nil, 0, &repositoryError{code: "RepositoryQueueFull", status: 429, retryable: true}
+		return nil, 0, &Error{Code: "RepositoryQueueFull", Status: 429, Retryable: true}
 	}
 	now := time.Now().UTC()
 	record := &RepositoryRecord{SchemaVersion: 1, RepositoryUID: in.RepositoryUID, RepositoryName: in.RepositoryName, Project: in.Project, BuildName: in.BuildName, TargetOS: in.TargetOS, TargetArch: in.TargetArch, BaseRepositoryUID: in.BaseRepositoryUID, Manifests: in.Manifests, RequestDigest: digest, SigningFingerprint: m.signingFingerprint, State: RepositoryCreating, Attempt: 1, CreatedAt: now, UpdatedAt: now}
 	if err := m.persist(record); err != nil {
-		return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+		return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 	}
 	m.records[record.RepositoryUID] = record
 	m.enqueueLocked(record.RepositoryUID)
 	return cloneRepository(record), 202, nil
 }
 
-func (m *repositoryManager) enqueue(uid string) {
+func (m *Manager) enqueue(uid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.enqueueLocked(uid)
 }
 
-func (m *repositoryManager) enqueueLocked(uid string) {
+func (m *Manager) enqueueLocked(uid string) {
 	if m.queued[uid] {
 		return
 	}
@@ -313,7 +313,7 @@ func (m *repositoryManager) enqueueLocked(uid string) {
 	}
 }
 
-func (m *repositoryManager) worker() {
+func (m *Manager) worker() {
 	for {
 		select {
 		case <-m.ctx.Done():
@@ -328,9 +328,9 @@ func (m *repositoryManager) worker() {
 				if record.BaseRepositoryUID != "" {
 					base, err := m.recordLocked(record.BaseRepositoryUID)
 					if err != nil {
-						baseErr = &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+						baseErr = &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 					} else if base == nil || base.State != RepositoryReady {
-						baseErr = &repositoryError{code: "BaseRepositoryNotReady", status: 422}
+						baseErr = &Error{Code: "BaseRepositoryNotReady", Status: 422}
 					} else {
 						record.baseBuildName = base.BuildName
 					}
@@ -341,7 +341,7 @@ func (m *repositoryManager) worker() {
 				continue
 			}
 			if baseErr != nil {
-				m.finish(record, repositoryResult{}, baseErr)
+				m.finish(record, Result{}, baseErr)
 				continue
 			}
 			ctx, cancel := context.WithTimeout(m.ctx, m.timeout)
@@ -352,7 +352,7 @@ func (m *repositoryManager) worker() {
 	}
 }
 
-func (m *repositoryManager) finish(completed *RepositoryRecord, result repositoryResult, materializeErr error) {
+func (m *Manager) finish(completed *RepositoryRecord, result Result, materializeErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	uid := completed.RepositoryUID
@@ -360,7 +360,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 	if record == nil || record.State != RepositoryCreating {
 		delete(m.running, uid)
 		if materializeErr == nil {
-			go os.RemoveAll(m.repositoryPath(completed))
+			go os.RemoveAll(m.RepositoryPath(completed))
 		}
 		return
 	}
@@ -368,12 +368,12 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 	now := time.Now().UTC()
 	record.UpdatedAt = now
 	if materializeErr != nil {
-		var typed *repositoryError
+		var typed *Error
 		if !errors.As(materializeErr, &typed) {
-			typed = &repositoryError{code: "RepositoryMaterializationFailed", retryable: true}
+			typed = &Error{Code: "RepositoryMaterializationFailed", Retryable: true}
 		}
 		record.State = RepositoryFailed
-		record.Failure = &upload.FailureInfo{Code: typed.code, Message: typed.code, Retryable: typed.retryable, JobName: typed.jobName, Time: now}
+		record.Failure = &upload.FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, JobName: typed.JobName, Time: now}
 	} else {
 		record.State, record.RepositoryDigest = RepositoryReady, result.Digest
 		record.ContentURL = "/repositories/v1/" + uid + "/"
@@ -384,7 +384,7 @@ func (m *repositoryManager) finish(completed *RepositoryRecord, result repositor
 	}
 }
 
-func (m *repositoryManager) recoverQueue() {
+func (m *Manager) recoverQueue() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -403,11 +403,11 @@ func (m *repositoryManager) recoverQueue() {
 	}
 }
 
-func (m *repositoryManager) stop() {
+func (m *Manager) Stop() {
 	m.cancel()
 }
 
-func (m *repositoryManager) get(uid string) (*RepositoryRecord, bool, error) {
+func (m *Manager) Get(uid string) (*RepositoryRecord, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	record, err := m.recordLocked(uid)
@@ -420,12 +420,12 @@ func (m *repositoryManager) get(uid string) (*RepositoryRecord, bool, error) {
 	return record, record != nil, nil
 }
 
-func (m *repositoryManager) delete(uid string) (*RepositoryRecord, int, error) {
+func (m *Manager) Delete(uid string) (*RepositoryRecord, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record, err := m.recordLocked(uid)
 	if err != nil {
-		return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+		return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 	}
 	if record == nil {
 		return nil, 204, nil
@@ -433,7 +433,7 @@ func (m *repositoryManager) delete(uid string) (*RepositoryRecord, int, error) {
 	if record.State != RepositoryDeleting {
 		record.State, record.UpdatedAt = RepositoryDeleting, time.Now().UTC()
 		if err := m.persist(record); err != nil {
-			return nil, 0, &repositoryError{code: "RepositoryStorageUnavailable", status: 503, retryable: true}
+			return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 		}
 		m.records[uid] = record
 		go m.remove(uid)
@@ -441,14 +441,14 @@ func (m *repositoryManager) delete(uid string) (*RepositoryRecord, int, error) {
 	return cloneRepository(record), 202, nil
 }
 
-func (m *repositoryManager) remove(uid string) {
+func (m *Manager) remove(uid string) {
 	m.mu.RLock()
 	record := cloneRepository(m.records[uid])
 	m.mu.RUnlock()
 	if record == nil {
 		return
 	}
-	source := m.repositoryPath(record)
+	source := m.RepositoryPath(record)
 	trashDir := filepath.Join(m.root, ".repository-trash", record.Project, record.TargetOS, record.TargetArch)
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
@@ -466,7 +466,7 @@ func (m *repositoryManager) remove(uid string) {
 	}
 }
 
-func (m *repositoryManager) persist(record *RepositoryRecord) error {
+func (m *Manager) persist(record *RepositoryRecord) error {
 	// The immutable repository.json is the RPM index. Keep only control-plane
 	// state in metadata, otherwise every completed repository duplicates it.
 	light := *record
@@ -474,15 +474,15 @@ func (m *repositoryManager) persist(record *RepositoryRecord) error {
 	return upload.AtomicJSON(m.metaPath(record.RepositoryUID), &light)
 }
 
-func (m *repositoryManager) repositoryPath(record *RepositoryRecord) string {
-	return repositoryVersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
+func (m *Manager) RepositoryPath(record *RepositoryRecord) string {
+	return VersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
 }
 
-func repositoryVersionPath(root, project, osName, arch, buildName, uid string) string {
+func VersionPath(root, project, osName, arch, buildName, uid string) string {
 	return filepath.Join(root, "repositories", project, osName, arch, "history", buildName, "steps", uid)
 }
 
-func (m *repositoryManager) metaPath(uid string) string {
+func (m *Manager) metaPath(uid string) string {
 	return filepath.Join(m.root, ".metadata/repositories", uid+".json")
 }
 
@@ -496,7 +496,7 @@ func cloneRepository(in *RepositoryRecord) *RepositoryRecord {
 	return &out
 }
 
-func repositoryResponse(record *RepositoryRecord) RepositoryResponse {
+func ResponseFor(record *RepositoryRecord) RepositoryResponse {
 	response := RepositoryResponse{RepositoryUID: record.RepositoryUID, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
 	if record.State == RepositoryCreating {
 		response.PollAfterSeconds = 5

@@ -1,4 +1,4 @@
-package artifact
+package repository
 
 import (
 	"strings"
@@ -17,10 +17,10 @@ func repositoryArtifacts(s *upload.Store, project string, refs []ManifestReferen
 	for _, ref := range refs {
 		manifest, ok := s.GetManifest(project, ref.JobName)
 		if !ok || manifest.State != upload.ManifestCompleted {
-			return nil, &repositoryError{code: "ManifestNotReady", status: 422, jobName: ref.JobName}
+			return nil, &Error{Code: "ManifestNotReady", Status: 422, JobName: ref.JobName}
 		}
 		if manifest.Digest != upload.ManifestDigest(append([]upload.ManifestFile(nil), manifest.Files...)) {
-			return nil, &repositoryError{code: "ManifestInvalid", status: 422, jobName: ref.JobName}
+			return nil, &Error{Code: "ManifestInvalid", Status: 422, JobName: ref.JobName}
 		}
 		packages := 0
 		for _, file := range manifest.Files {
@@ -29,22 +29,22 @@ func repositoryArtifacts(s *upload.Store, project string, refs []ManifestReferen
 			}
 			artifact, ok := s.GetArtifact(file.ArtifactID)
 			if !ok || artifact.State != upload.Completed || artifact.Project != project || artifact.JobName != ref.JobName || artifact.Size != file.Size || artifact.SHA256 != file.SHA256 {
-				return nil, &repositoryError{code: "MaterializationInputExpired", status: 410, jobName: ref.JobName}
+				return nil, &Error{Code: "MaterializationInputExpired", Status: 410, JobName: ref.JobName}
 			}
 			copy := *artifact
 			result = append(result, repositoryArtifact{Metadata: copy, Path: s.ArtifactPath(&copy), JobName: ref.JobName})
 			packages++
 		}
 		if packages == 0 {
-			return nil, &repositoryError{code: "ManifestContainsNoPackages", status: 422, jobName: ref.JobName}
+			return nil, &Error{Code: "ManifestContainsNoPackages", Status: 422, JobName: ref.JobName}
 		}
 	}
 	if len(result) == 0 {
-		return nil, &repositoryError{code: "ManifestContainsNoPackages", status: 422}
+		return nil, &Error{Code: "ManifestContainsNoPackages", Status: 422}
 	}
 	for _, artifact := range result {
 		if err := upload.VerifyFile(artifact.Path, artifact.Metadata.Size, artifact.Metadata.SHA256); err != nil {
-			return nil, &repositoryError{code: "MaterializationInputExpired", status: 410, jobName: artifact.JobName}
+			return nil, &Error{Code: "MaterializationInputExpired", Status: 410, JobName: artifact.JobName}
 		}
 	}
 	return result, nil

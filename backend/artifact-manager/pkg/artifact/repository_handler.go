@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
 
@@ -16,18 +17,18 @@ func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Reques
 			method(w, http.MethodPost)
 			return
 		}
-		var request CreateRepositoryRequest
+		var request repository.CreateRepositoryRequest
 		if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &request); err != nil {
 			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
 			return
 		}
-		record, status, err := s.repositories.submit(request)
+		record, status, err := s.repositories.Submit(request)
 		if err != nil {
 			s.writeRepositoryError(w, r, err)
 			return
 		}
 		w.Header().Set("Location", "/internal/v1/repositories/"+record.RepositoryUID)
-		writeJSON(w, status, repositoryResponse(record))
+		writeJSON(w, status, repository.ResponseFor(record))
 		return
 	}
 	uid := strings.TrimPrefix(r.URL.Path, "/internal/v1/repositories/")
@@ -37,18 +38,18 @@ func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Reques
 	}
 	switch r.Method {
 	case http.MethodGet:
-		record, ok, err := s.repositories.get(uid)
+		record, ok, err := s.repositories.Get(uid)
 		if err != nil {
-			s.writeRepositoryError(w, r, &repositoryError{code: "RepositoryStorageUnavailable", status: http.StatusServiceUnavailable, retryable: true})
+			s.writeRepositoryError(w, r, &repository.Error{Code: "RepositoryStorageUnavailable", Status: http.StatusServiceUnavailable, Retryable: true})
 			return
 		}
 		if !ok {
 			writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 			return
 		}
-		writeJSON(w, http.StatusOK, repositoryResponse(record))
+		writeJSON(w, http.StatusOK, repository.ResponseFor(record))
 	case http.MethodDelete:
-		record, status, err := s.repositories.delete(uid)
+		record, status, err := s.repositories.Delete(uid)
 		if err != nil {
 			s.writeRepositoryError(w, r, err)
 			return
@@ -57,24 +58,24 @@ func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Reques
 			w.WriteHeader(status)
 			return
 		}
-		writeJSON(w, status, repositoryResponse(record))
+		writeJSON(w, status, repository.ResponseFor(record))
 	default:
 		method(w, "GET, DELETE")
 	}
 }
 
 func (s *Server) writeRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
-	var typed *repositoryError
+	var typed *repository.Error
 	if !errors.As(err, &typed) {
-		typed = &repositoryError{code: "RepositoryInternalError", status: http.StatusInternalServerError, retryable: true}
+		typed = &repository.Error{Code: "RepositoryInternalError", Status: http.StatusInternalServerError, Retryable: true}
 	}
-	if typed.status == 0 {
-		typed.status = http.StatusInternalServerError
+	if typed.Status == 0 {
+		typed.Status = http.StatusInternalServerError
 	}
-	if typed.status == http.StatusTooManyRequests || typed.status == http.StatusServiceUnavailable {
+	if typed.Status == http.StatusTooManyRequests || typed.Status == http.StatusServiceUnavailable {
 		w.Header().Set("Retry-After", "5")
 	}
-	writeErr(w, r, typed.status, typed.code, typed.code, typed.retryable, nil)
+	writeErr(w, r, typed.Status, typed.Code, typed.Code, typed.Retryable, nil)
 }
 
 func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
@@ -91,20 +92,20 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
 	}
-	record, ok, err := s.repositories.get(parts[0])
+	record, ok, err := s.repositories.Get(parts[0])
 	if err != nil {
-		s.writeRepositoryError(w, r, &repositoryError{code: "RepositoryStorageUnavailable", status: http.StatusServiceUnavailable, retryable: true})
+		s.writeRepositoryError(w, r, &repository.Error{Code: "RepositoryStorageUnavailable", Status: http.StatusServiceUnavailable, Retryable: true})
 		return
 	}
 	if !ok {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
 	}
-	if record.State == RepositoryCreating {
+	if record.State == repository.RepositoryCreating {
 		writeErr(w, r, http.StatusConflict, "RepositoryNotReady", "repository is not ready", true, nil)
 		return
 	}
-	if record.State != RepositoryReady {
+	if record.State != repository.RepositoryReady {
 		writeErr(w, r, http.StatusGone, "RepositoryUnavailable", "repository is unavailable", false, nil)
 		return
 	}
@@ -113,7 +114,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
 		return
 	}
-	path := filepath.Join(repositoryVersionPath(s.cfg.DataDir, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID), filepath.FromSlash(relative))
+	path := filepath.Join(repository.VersionPath(s.cfg.DataDir, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID), filepath.FromSlash(relative))
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
@@ -125,7 +126,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	sum, err := fileSHA256(path)
+	sum, err := repository.FileSHA256(path)
 	if err != nil {
 		writeErr(w, r, http.StatusServiceUnavailable, "RepositoryStorageUnavailable", "repository storage unavailable", true, nil)
 		return
