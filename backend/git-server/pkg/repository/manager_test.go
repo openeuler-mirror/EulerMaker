@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +15,34 @@ import (
 
 type fakeGit struct {
 	origin string
+}
+
+func TestCloneURLPreservesRepositoryKey(t *testing.T) {
+	now := time.Now()
+	m := &Manager{config: ManagerConfig{CloneBaseURL: "http://git-server:8080/git"}}
+	key := "example.com/team/repo%2Bname.git"
+	response := m.responseLocked(&state{Key: key, Available: true, SyncTime: &now})
+	parsed, err := url.Parse(response.CloneURL)
+	if err != nil || parsed.Path != "/git/"+key {
+		t.Fatalf("clone URL does not preserve key: %q, %v", response.CloneURL, err)
+	}
+}
+
+func TestCloneRepositoryWaitHonorsCancellation(t *testing.T) {
+	s := &state{Available: true}
+	s.operationLock.Lock()
+	defer s.operationLock.Unlock()
+	m := &Manager{states: map[string]*state{"example.com/repo.git": s}}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := m.WithCloneRepository(ctx, "example.com/repo.git", func(string) error {
+		t.Fatal("clone started while a writer held the repository")
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("waiting clone = %v after %s", err, time.Since(started))
+	}
 }
 
 func (f *fakeGit) Clone(_ context.Context, remote gitops.Remote, destination, _ string) error {
@@ -31,7 +61,7 @@ func TestManagerSyncAndDelete(t *testing.T) {
 	defer store.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeGit{}
-	manager, err := NewManager(ctx, store, client, ManagerConfig{Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond, CloneBaseURL: "git://git-server:9418", CleanupPeriod: time.Hour})
+	manager, err := NewManager(ctx, store, client, ManagerConfig{Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond, CloneBaseURL: "http://git-server:8080/git", CleanupPeriod: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +99,7 @@ func TestManagerSyncCoalescesPendingRequest(t *testing.T) {
 	defer store.Close()
 	manager, err := NewManager(context.Background(), store, &fakeGit{}, ManagerConfig{
 		Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond,
-		CloneBaseURL: "git://git-server:9418", CleanupPeriod: time.Hour,
+		CloneBaseURL: "http://git-server:8080/git", CleanupPeriod: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)

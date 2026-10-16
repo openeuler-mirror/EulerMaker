@@ -34,7 +34,7 @@ func (f *fakeManager) WithRepository(context.Context, string, func(string) error
 
 func TestSync(t *testing.T) {
 	manager := &fakeManager{ready: true, syncResponse: repository.Response{Key: "example.com/repo.git"}}
-	handler := New(manager, nil, 1024)
+	handler := New(manager, nil, 1024, nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/repo/sync", bytes.NewBufferString(`{"origin_url":"https://example.com/repo.git"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -46,7 +46,7 @@ func TestSync(t *testing.T) {
 
 func TestDecodeErrorWritesOneResponse(t *testing.T) {
 	manager := &fakeManager{ready: true}
-	handler := New(manager, nil, 1024)
+	handler := New(manager, nil, 1024, nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/repo/sync", bytes.NewBufferString(`{"unknown":true}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
@@ -61,7 +61,7 @@ func TestDecodeErrorWritesOneResponse(t *testing.T) {
 }
 
 func TestNotReadyBeforeDecode(t *testing.T) {
-	handler := New(&fakeManager{}, nil, 1024)
+	handler := New(&fakeManager{}, nil, 1024, nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/repo/status", bytes.NewBufferString("not-json"))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

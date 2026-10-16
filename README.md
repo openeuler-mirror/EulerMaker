@@ -79,7 +79,7 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
-要运行构建任务，控制面必须设置 `EXPORT_SERVER_ADDR` 为控制面容器和构建节点都可访问的宿主机名或 IPv4 地址（不带协议和端口）。它用于生成 Git clone URL 和下发给 Job 的 Artifact Manager 地址；默认的 `git-server`、`artifact-manager` 仅在控制面 Compose 网络内可解析。即使同机联调，也不能填 `127.0.0.1`，因为 Controller Manager 容器中的回环地址指向自身。需开放 Gateway `8080`、Artifact Manager `8081` 和 Git daemon `9418` 端口。以下地址仅为示例，使用前替换为实际内网地址：
+要运行构建任务，控制面必须设置 `EXPORT_SERVER_ADDR` 为控制面容器和构建节点都可访问的宿主机名或 IPv4 地址（不带协议和端口）。它用于生成 Git clone URL 和下发给 Job 的 Artifact Manager 地址；默认的 `git-server`、`artifact-manager` 仅在控制面 Compose 网络内可解析。即使同机联调，也不能填 `127.0.0.1`，因为 Controller Manager 容器中的回环地址指向自身。需开放 Gateway `8080`、Artifact Manager `8081` 和 Git Smart HTTP `8084` 端口。以下地址仅为示例，使用前替换为实际内网地址：
 
 ```bash
 EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build

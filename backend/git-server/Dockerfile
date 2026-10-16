@@ -13,7 +13,8 @@ RUN go build -ldflags="-s -w" -o git-server ./cmd/git-server
 FROM openeuler/openeuler:24.03-lts
 
 RUN dnf update -y && \
-    dnf install -y ca-certificates curl git git-daemon openssh-clients shadow-utils && \
+    dnf install -y ca-certificates curl git openssh-clients shadow-utils && \
+    test -x "$(git --exec-path)/git-http-backend" && \
     dnf clean all && \
     groupadd ebs && useradd -g ebs -s /sbin/nologin ebs
 
@@ -23,5 +24,5 @@ RUN mkdir -p /var/lib/ebs-git && chown -R ebs:ebs /app /var/lib/ebs-git
 
 USER ebs
 VOLUME ["/var/lib/ebs-git"]
-EXPOSE 8080 9418
+EXPOSE 8080
 ENTRYPOINT ["/app/git-server"]
