@@ -1,4 +1,4 @@
-package artifact
+package repository
 
 import (
 	"context"
@@ -28,13 +28,13 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 		if err := os.WriteFile(path, []byte(name), 0640); err != nil {
 			t.Fatal(err)
 		}
-		sum, err := fileSHA256(path)
+		sum, err := FileSHA256(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		baseMetadata[name] = RepositoryRPMMeta{FileName: name, SpecName: spec, Size: int64(len(name)), SHA256: sum}
 	}
-	index, err := json.Marshal(repositoryIndex{RepositoryUID: "base-uid", RPMs: baseMetadata})
+	index, err := json.Marshal(Index{RepositoryUID: "base-uid", RPMs: baseMetadata})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 	if err := os.WriteFile(newPath, []byte("new-a"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	sum, err := fileSHA256(newPath)
+	sum, err := FileSHA256(newPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestSigningUsesPrivateRPMCopy(t *testing.T) {
 func TestMaterializeRejectsChangedSigningKeyBeforeReadingInputs(t *testing.T) {
 	m := &filesystemMaterializer{signer: testRPMSigner{fingerprint: "configured"}}
 	_, err := m.Materialize(context.Background(), RepositoryRecord{SigningFingerprint: "recorded"})
-	if typed, ok := err.(*repositoryError); !ok || typed.code != "SigningConfigurationChanged" || !typed.retryable {
+	if typed, ok := err.(*Error); !ok || typed.Code != "SigningConfigurationChanged" || !typed.Retryable {
 		t.Fatalf("materialize error = %v", err)
 	}
 }
@@ -181,7 +181,7 @@ esac
 		if err := os.WriteFile(path, []byte("original"), 0640); err != nil {
 			t.Fatal(err)
 		}
-		sum, err := fileSHA256(path)
+		sum, err := FileSHA256(path)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
 
@@ -22,7 +23,7 @@ type testReleaseMaterializer struct {
 	rpmCount chan int
 }
 
-func (m *testReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source RepositoryRecord) (releaseResult, error) {
+func (m *testReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source repository.RepositoryRecord) (releaseResult, error) {
 	if m.rpmCount != nil {
 		m.rpmCount <- len(source.RPMs)
 	}
@@ -57,8 +58,8 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 	if err != nil {
 		t.Fatal(err)
 	}
-	repositoryMaterializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
-	server, err := newArtifactServer(c, testAuthorizer{}, store, repositoryMaterializer, "")
+	materializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
+	server, err := newArtifactServer(c, testAuthorizer{}, store, materializer, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,25 +70,33 @@ func newReleaseTestServer(t *testing.T) (*Server, CreateReleaseRequest, *testRel
 		t.Fatal(err)
 	}
 	server.releases = releases
-	t.Cleanup(func() { server.repositories.stop(); server.releases.stop() })
+	t.Cleanup(func() { server.repositories.Stop(); server.releases.stop() })
 	now := time.Now().UTC()
-	source := &RepositoryRecord{RepositoryUID: "source-repository", RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", State: RepositoryReady, CreatedAt: now, UpdatedAt: now}
-	if err := server.repositories.persist(source); err != nil {
-		t.Fatal(err)
-	}
+	source := &repository.RepositoryRecord{RepositoryUID: "source-repository", RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", State: repository.RepositoryReady, CreatedAt: now, UpdatedAt: now}
+	writeTestRepositoryRecord(t, server, source)
 	writeTestRepositoryIndex(t, server.repositories, source)
 	request := CreateReleaseRequest{BuildName: source.BuildName, Project: source.Project, TargetOS: source.TargetOS, TargetArch: source.TargetArch, SourceRepositoryUID: source.RepositoryUID, ExcludeSpecs: []string{"skip", "skip"}}
 	return server, request, releaseMaterializer
 }
 
-func writeTestRepositoryIndex(t *testing.T, manager *repositoryManager, record *RepositoryRecord) {
+func writeTestRepositoryIndex(t *testing.T, manager *repository.Manager, record *repository.RepositoryRecord) {
 	t.Helper()
-	path := manager.repositoryPath(record)
+	path := manager.RepositoryPath(record)
 	if err := os.MkdirAll(path, 0750); err != nil {
 		t.Fatal(err)
 	}
-	index := repositoryIndex{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}
+	index := repository.Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]repository.RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}
 	if err := upload.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestRepositoryRecord(t *testing.T, server *Server, record *repository.RepositoryRecord) {
+	t.Helper()
+	light := *record
+	light.RPMs = nil
+	path := filepath.Join(server.cfg.DataDir, ".metadata", "repositories", record.RepositoryUID+".json")
+	if err := upload.AtomicJSON(path, &light); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -172,14 +181,12 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 	second.TargetOS = "openEuler-mainline"
 	second.SourceRepositoryUID = "source-repository-2"
 	now := time.Now().UTC()
-	secondSource := &RepositoryRecord{
+	secondSource := &repository.RepositoryRecord{
 		RepositoryUID: second.SourceRepositoryUID, RepositoryName: second.BuildName,
 		Project: second.Project, BuildName: second.BuildName, TargetOS: second.TargetOS,
-		TargetArch: second.TargetArch, State: RepositoryReady, CreatedAt: now, UpdatedAt: now,
+		TargetArch: second.TargetArch, State: repository.RepositoryReady, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := server.repositories.persist(secondSource); err != nil {
-		t.Fatal(err)
-	}
+	writeTestRepositoryRecord(t, server, secondSource)
 	writeTestRepositoryIndex(t, server.repositories, secondSource)
 
 	for _, request := range []CreateReleaseRequest{first, second} {
@@ -220,15 +227,13 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	server, request, materializer := newReleaseTestServer(t)
 	request.Project, request.TargetOS = "releases", "v1"
-	source, ok, err := server.repositories.get(request.SourceRepositoryUID)
+	source, ok, err := server.repositories.Get(request.SourceRepositoryUID)
 	if err != nil || !ok {
 		t.Fatalf("load source: %v", err)
 	}
 	source.Project = request.Project
 	source.TargetOS = request.TargetOS
-	if err := server.repositories.persist(source); err != nil {
-		t.Fatal(err)
-	}
+	writeTestRepositoryRecord(t, server, source)
 	writeTestRepositoryIndex(t, server.repositories, source)
 	close(materializer.release)
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
@@ -283,7 +288,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		t.Fatal(err)
 	}
 	materializer := newFilesystemReleaseMaterializer(c)
-	source := RepositoryRecord{RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64", RPMs: map[string]RepositoryRPMMeta{
+	source := repository.RepositoryRecord{RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64", RPMs: map[string]repository.RepositoryRPMMeta{
 		"keep+1.rpm": {FileName: "keep+1.rpm", SpecName: "keep", Size: int64(len("keep+1.rpm")), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("keep+1.rpm")))},
 		"skip.rpm":   {FileName: "skip.rpm", SpecName: "skip", Size: int64(len("skip.rpm")), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("skip.rpm")))},
 	}}
@@ -328,11 +333,11 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
 		t.Fatal(err)
 	}
-	source := RepositoryRecord{
+	source := repository.RepositoryRecord{
 		RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64",
-		RPMs: map[string]RepositoryRPMMeta{"keep.rpm": {FileName: "keep.rpm", SpecName: "keep", Size: 3, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("rpm")))}},
+		RPMs: map[string]repository.RepositoryRPMMeta{"keep.rpm": {FileName: "keep.rpm", SpecName: "keep", Size: 3, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("rpm")))}},
 	}
-	sourcePath := repositoryVersionPath(root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
+	sourcePath := repository.VersionPath(root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
 	if err := os.MkdirAll(filepath.Join(sourcePath, "Packages"), 0750); err != nil {
 		t.Fatal(err)
 	}

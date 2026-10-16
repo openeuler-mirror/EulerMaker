@@ -1,4 +1,4 @@
-package artifact
+package repository
 
 import (
 	"context"
@@ -8,6 +8,16 @@ import (
 )
 
 type RepositoryState string
+
+type Config struct {
+	CreateRepoCommand string
+	RPMQueryCommand   string
+	CreateRepoWorkers int
+	Timeout           time.Duration
+	WorkTTL           time.Duration
+	Workers           int
+	QueueCapacity     int
+}
 
 const (
 	RepositoryCreating RepositoryState = "Creating"
@@ -82,11 +92,11 @@ type RepositoryResponse struct {
 	CompletedAt      *time.Time          `json:"completedAt,omitempty"`
 }
 
-type repositoryResult struct {
+type Result struct {
 	Digest string
 }
 
-type repositoryIndex struct {
+type Index struct {
 	SchemaVersion      int                          `json:"schemaVersion"`
 	RepositoryUID      string                       `json:"repositoryUID"`
 	RequestDigest      string                       `json:"requestDigest"`
@@ -95,17 +105,17 @@ type repositoryIndex struct {
 	RPMs               map[string]RepositoryRPMMeta `json:"rpms"`
 }
 
-type repositoryMaterializer interface {
-	Materialize(context.Context, RepositoryRecord) (repositoryResult, error)
+type Materializer interface {
+	Materialize(context.Context, RepositoryRecord) (Result, error)
 }
 
-type repositoryError struct {
-	code      string
-	retryable bool
-	status    int
-	jobName   string
+type Error struct {
+	Code      string
+	Retryable bool
+	Status    int
+	JobName   string
 }
 
-func (e *repositoryError) Error() string {
-	return e.code
+func (e *Error) Error() string {
+	return e.Code
 }

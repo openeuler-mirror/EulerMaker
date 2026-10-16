@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
 
@@ -22,7 +23,7 @@ type releaseManager struct {
 	timeout         time.Duration
 	historyTTL      time.Duration
 	historyCount    int
-	repositories    *repositoryManager
+	repositories    *repository.Manager
 	materializer    releaseMaterializer
 	mu              sync.RWMutex
 	records         map[string]*ReleaseRecord
@@ -32,7 +33,7 @@ type releaseManager struct {
 	cancel          context.CancelFunc
 }
 
-func newReleaseManager(c Config, repositories *repositoryManager, materializer releaseMaterializer) (*releaseManager, error) {
+func newReleaseManager(c Config, repositories *repository.Manager, materializer releaseMaterializer) (*releaseManager, error) {
 	for _, dir := range []string{".release-work", ".metadata/releases", ".release-trash"} {
 		if err := os.MkdirAll(filepath.Join(c.DataDir, dir), 0750); err != nil {
 			return nil, err
@@ -89,11 +90,11 @@ func (m *releaseManager) submit(in CreateReleaseRequest) (*ReleaseRecord, int, e
 	if err != nil {
 		return nil, 0, err
 	}
-	source, ok, sourceErr := m.repositories.get(in.SourceRepositoryUID)
+	source, ok, sourceErr := m.repositories.Get(in.SourceRepositoryUID)
 	if sourceErr != nil {
 		return nil, 0, releaseStorageError()
 	}
-	if !ok || source.State != RepositoryReady || source.Project != in.Project || source.BuildName != in.BuildName || source.TargetOS != in.TargetOS || source.TargetArch != in.TargetArch {
+	if !ok || source.State != repository.RepositoryReady || source.Project != in.Project || source.BuildName != in.BuildName || source.TargetOS != in.TargetOS || source.TargetArch != in.TargetArch {
 		return nil, 0, &releaseError{code: "SourceRepositoryNotReady", status: http.StatusUnprocessableEntity}
 	}
 	m.mu.Lock()
@@ -158,21 +159,21 @@ func (m *releaseManager) worker() {
 			if record == nil || record.State != ReleaseCreating {
 				continue
 			}
-			source, ok, sourceErr := m.repositories.get(record.SourceRepositoryUID)
+			source, ok, sourceErr := m.repositories.Get(record.SourceRepositoryUID)
 			if sourceErr != nil {
 				m.finish(record, releaseResult{}, releaseStorageError())
 				continue
 			}
-			if !ok || source.State != RepositoryReady {
+			if !ok || source.State != repository.RepositoryReady {
 				m.finish(record, releaseResult{}, &releaseError{code: "SourceRepositoryNotReady", status: 422})
 				continue
 			}
 			// Repository records stay lightweight in memory. Load the immutable RPM
 			// index only for the release currently being materialized.
-			index, err := loadRepositoryIndex(m.repositories.repositoryPath(source), source.RepositoryUID)
+			index, err := repository.LoadIndex(m.repositories.RepositoryPath(source), source.RepositoryUID)
 			if err != nil {
-				var repositoryErr *repositoryError
-				if errors.As(err, &repositoryErr) && !repositoryErr.retryable {
+				var repositoryErr *repository.Error
+				if errors.As(err, &repositoryErr) && !repositoryErr.Retryable {
 					err = &releaseError{code: "SourceRepositoryInvalid", status: 422}
 				}
 				m.finish(record, releaseResult{}, err)
