@@ -6,7 +6,7 @@
 
 默认必须提供 `--internal-client-ca-file` 才能启动；只有隔离开发环境可显式设置 `--insecure-allow-unauthenticated-clients=true`。启用认证后，资源和 IAM API 只接受由该 CA 签发、用途仅为 `clientAuth`、URI SAN 分别为 `spiffe://eulermaker/internal/ebs-gateway`、`spiffe://eulermaker/internal/scheduler` 或 `spiffe://eulermaker/internal/controller-manager` 的证书；无证书请求只可读取健康检查。服务端证书通过 `--tls-cert-file` 与 `--tls-private-key-file` 配置。
 
-开发验证可在仓库根目录运行 `bash hacks/generate-internal-certs.sh hacks/certs`，然后执行 `docker compose -f hacks/docker-compose.yml -f hacks/docker-compose.mtls.yml up --build`。脚本生成的 CA、服务端和客户端证书有效期均为 3650 天（约 10 年）；`hacks/certs/private` 中的 CA 私钥不得挂载到容器。脚本拒绝覆盖已有目录。默认开发 Compose 显式关闭客户端证书认证。
+开发验证使用 `hacks/docker-compose.yml` 与 `hacks/docker-compose.tls.yml` 组合：内部组件到 apiserver、apiserver 到 etcd 使用 mTLS，apiserver 到 Elasticsearch 使用 HTTPS 和 API Key。证书生成、存储启动、API Key 初始化和权限设置见 [Compose TLS 部署说明](../../hacks/README.md)。必须先准备 API Key，再启动 apiserver。基础 Compose 仍保留显式关闭内部证书认证的开发模式。
 
 当前只识别三个组件身份，尚未实现逐资源、逐操作授权；任一被认可的组件证书暂可访问全部业务 API。此过渡状态需要网络隔离，不宜作为生产最小权限配置。
 

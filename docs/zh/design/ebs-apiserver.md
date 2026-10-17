@@ -278,7 +278,7 @@ Gateway 不注入最终用户或 Runner 身份头。用户、Runner 和 Project 
 ### 轮换、上线与验证
 
 - 服务端和客户端证书均需支持到期前轮换；首版允许通过滚动重启加载新证书，不要求热加载。更换 CA 时先发布同时信任新旧 CA 的 bundle，再换发叶子证书，最后移除旧 CA。长连接（含 Watch）在切换后重连；任一阶段不得退回跳过服务端校验或匿名 API。
-- 使用 `hacks/generate-internal-certs.sh` 可为开发验证签发有效期均为 3650 天（约 10 年）的 CA、服务端和三个组件的客户端证书；运行 `docker compose -f hacks/docker-compose.yml -f hacks/docker-compose.mtls.yml up` 启用证书认证。生成的 CA 私钥不得挂载到容器，客户端私钥按服务单独挂载。生产环境应使用受控 CA 签发，不使用该脚本生成的长期共享测试 CA。
+- 使用 `hacks/generate-internal-certs.sh` 可为开发验证签发有效期均为 3650 天（约 10 年）的内部组件、etcd 和 Elasticsearch 证书。`hacks/docker-compose.tls.yml` 覆盖基础 Compose，启用内部组件到 apiserver、apiserver 到 etcd 的 mTLS，以及 apiserver 到 ES 的 HTTPS/API Key；部署顺序见 [Compose TLS 部署说明](../../../hacks/README.md)。生成的 CA 私钥不得挂载到容器，运行时私钥按服务单独挂载。生产环境应使用受控 CA 签发，不使用该脚本生成的长期共享测试 CA。
 - 先签发证书并让三个客户端使用 `--apiserver-ca` 验证服务端，再部署客户端证书，最后通过 `--internal-client-ca-file` 启用 apiserver 的强制认证。过渡期间保持 apiserver 网络隔离；细粒度授权上线前，不得将“持证可调用所有业务 API”视为最小权限。最终移除生产部署中的 `--insecure-skip-verify=true` 和对外端口映射。
 - 集成测试覆盖三类组件的实际 API 请求、证书轮换及 Watch 重连；无证书、错误 CA、错误 URI SAN、过期证书和组件越权均必须失败。apiserver 不得把请求头当作组件或最终用户身份。审计日志记录组件身份、资源、verb 和授权结果，不记录私钥、JWT、密码或 client secret。
 

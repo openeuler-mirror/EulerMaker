@@ -1,0 +1,158 @@
+# Development TLS override: internal clients -> apiserver and apiserver -> etcd use mTLS;
+# apiserver -> Elasticsearch uses HTTPS and an API key. See hacks/README.md for bootstrap.
+# Use with the base file; image/build, ports, networks and other services are inherited:
+#   bash hacks/generate-internal-certs.sh hacks/certs
+#   docker compose -f hacks/docker-compose.yml -f hacks/docker-compose.tls.yml up -d --build
+# command replaces the base command, removing its insecure authentication/TLS flags.
+# Git Server, Artifact Manager and the external Gateway listener remain unchanged.
+# File-backed Compose secrets retain host permissions. The generator makes runtime keys
+# readable (0444) inside non-root containers while keeping host certificate directories
+# private (0700). Mount individual keys only; never mount certs/private or a whole runtime directory.
+services:
+  etcd:
+    command:
+      - etcd
+      - --name=etcd0
+      - --data-dir=/etcd-data
+      - --listen-client-urls=https://0.0.0.0:2379
+      - --advertise-client-urls=https://etcd:2379
+      - --cert-file=/run/ebs-certs/etcd.crt
+      - --key-file=/run/secrets/etcd_key
+      - --trusted-ca-file=/run/ebs-certs/etcd-ca.crt
+      - --client-cert-auth=true
+      - --listen-peer-urls=https://0.0.0.0:2380
+      - --initial-advertise-peer-urls=https://etcd:2380
+      - --peer-cert-file=/run/ebs-certs/etcd.crt
+      - --peer-key-file=/run/secrets/etcd_key
+      - --peer-trusted-ca-file=/run/ebs-certs/etcd-ca.crt
+      - --peer-client-cert-auth=true
+      - --initial-cluster=etcd0=https://etcd:2380
+      - --initial-cluster-token=ebs-cluster
+      - --initial-cluster-state=new
+    volumes:
+      - ./certs/runtime/etcd-ca.crt:/run/ebs-certs/etcd-ca.crt:ro
+      - ./certs/runtime/etcd.crt:/run/ebs-certs/etcd.crt:ro
+    secrets:
+      - etcd_key
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=https://localhost:2379", "--cacert=/run/ebs-certs/etcd-ca.crt", "--cert=/run/ebs-certs/etcd.crt", "--key=/run/secrets/etcd_key"]
+
+  elasticsearch:
+    environment:
+      xpack.security.enabled: "true"
+      xpack.security.autoconfiguration.enabled: "false"
+      xpack.security.http.ssl.enabled: "true"
+      xpack.security.http.ssl.certificate_authorities: /usr/share/elasticsearch/config/certs/es-ca.crt
+      xpack.security.http.ssl.certificate: /usr/share/elasticsearch/config/certs/es-http.crt
+      xpack.security.http.ssl.key: /usr/share/elasticsearch/config/certs/es-http.key
+      xpack.security.transport.ssl.enabled: "true"
+      xpack.security.transport.ssl.verification_mode: certificate
+      xpack.security.transport.ssl.client_authentication: required
+      xpack.security.transport.ssl.certificate_authorities: /usr/share/elasticsearch/config/certs/es-ca.crt
+      xpack.security.transport.ssl.certificate: /usr/share/elasticsearch/config/certs/es-transport.crt
+      xpack.security.transport.ssl.key: /usr/share/elasticsearch/config/certs/es-transport.key
+      ELASTIC_PASSWORD_FILE: /run/secrets/es_elastic_password
+    volumes:
+      - ./certs/runtime/es-ca.crt:/usr/share/elasticsearch/config/certs/es-ca.crt:ro
+      - ./certs/runtime/es-http.crt:/usr/share/elasticsearch/config/certs/es-http.crt:ro
+      - ./certs/runtime/es-transport.crt:/usr/share/elasticsearch/config/certs/es-transport.crt:ro
+    secrets:
+      # Elasticsearch requires TLS key files to be under its config directory.
+      - source: es_http_key
+        target: /usr/share/elasticsearch/config/certs/es-http.key
+      - source: es_transport_key
+        target: /usr/share/elasticsearch/config/certs/es-transport.key
+      - es_elastic_password
+    healthcheck:
+      # TLS and authentication readiness; authenticated cluster health is checked during API-key bootstrap.
+      test: ["CMD-SHELL", "test \"$$(curl --silent --cacert /usr/share/elasticsearch/config/certs/es-ca.crt -o /dev/null -w '%{http_code}' https://localhost:9200/)\" = 401"]
+
+  ebs-apiserver:
+    command:
+      - --etcd-servers=https://etcd:2379
+      - --etcd-cafile=/run/ebs-certs/etcd-ca.crt
+      - --etcd-certfile=/run/ebs-certs/ebs-apiserver-etcd.crt
+      - --etcd-keyfile=/run/secrets/ebs_apiserver_etcd_key
+      - --es-servers=https://elasticsearch:9200
+      - --es-api-key-file=/run/secrets/ebs_apiserver_es_api_key
+      - --enable-iam=true
+      - --tls-cert-file=/run/ebs-certs/ebs-apiserver.crt
+      - --tls-private-key-file=/run/secrets/ebs_apiserver_key
+      - --internal-client-ca-file=/run/ebs-certs/client-ca.crt
+    environment:
+      SSL_CERT_FILE: /run/ebs-certs/es-ca.crt
+    volumes:
+      - ./certs/runtime/ebs-apiserver.crt:/run/ebs-certs/ebs-apiserver.crt:ro
+      - ./certs/runtime/client-ca.crt:/run/ebs-certs/client-ca.crt:ro
+      - ./certs/runtime/etcd-ca.crt:/run/ebs-certs/etcd-ca.crt:ro
+      - ./certs/runtime/ebs-apiserver-etcd.crt:/run/ebs-certs/ebs-apiserver-etcd.crt:ro
+      - ./certs/runtime/es-ca.crt:/run/ebs-certs/es-ca.crt:ro
+    secrets:
+      - ebs_apiserver_key
+      - ebs_apiserver_etcd_key
+      - ebs_apiserver_es_api_key
+
+  ebs-gateway:
+    command:
+      - --apiserver-addr=https://ebs-apiserver:8443
+      - --jwt-secret-file=/run/secrets/ebs_gateway_jwt_secret
+      - --apiserver-ca=/run/ebs-certs/server-ca.crt
+      - --apiserver-client-cert=/run/ebs-certs/ebs-gateway.crt
+      - --apiserver-client-key=/run/secrets/ebs_gateway_client_key
+      - --rate-limit-per-sec=100
+      - --rate-limit-burst=200
+    volumes:
+      - ./certs/runtime/server-ca.crt:/run/ebs-certs/server-ca.crt:ro
+      - ./certs/runtime/ebs-gateway.crt:/run/ebs-certs/ebs-gateway.crt:ro
+    secrets:
+      - ebs_gateway_jwt_secret
+      - ebs_gateway_client_key
+
+  scheduler:
+    command:
+      - --apiserver=https://ebs-apiserver:8443
+      - --apiserver-ca=/run/ebs-certs/server-ca.crt
+      - --apiserver-client-cert=/run/ebs-certs/scheduler.crt
+      - --apiserver-client-key=/run/secrets/scheduler_client_key
+    volumes:
+      - ./certs/runtime/server-ca.crt:/run/ebs-certs/server-ca.crt:ro
+      - ./certs/runtime/scheduler.crt:/run/ebs-certs/scheduler.crt:ro
+    secrets:
+      - scheduler_client_key
+
+  controller-manager:
+    command:
+      - --apiserver=https://ebs-apiserver:8443
+      - --apiserver-ca=/run/ebs-certs/server-ca.crt
+      - --apiserver-client-cert=/run/ebs-certs/controller-manager.crt
+      - --apiserver-client-key=/run/secrets/controller_manager_client_key
+      - --git-server-addr=http://git-server:8084
+    volumes:
+      - ./certs/runtime/server-ca.crt:/run/ebs-certs/server-ca.crt:ro
+      - ./certs/runtime/controller-manager.crt:/run/ebs-certs/controller-manager.crt:ro
+    secrets:
+      - controller_manager_client_key
+
+secrets:
+  ebs_gateway_jwt_secret:
+    file: ./certs/runtime/ebs-gateway-jwt-secret
+  etcd_key:
+    file: ./certs/runtime/etcd.key
+  ebs_apiserver_etcd_key:
+    file: ./certs/runtime/ebs-apiserver-etcd.key
+  es_http_key:
+    file: ./certs/runtime/es-http.key
+  es_transport_key:
+    file: ./certs/runtime/es-transport.key
+  es_elastic_password:
+    file: ./certs/runtime/es-elastic-password
+  ebs_apiserver_es_api_key:
+    file: ./certs/runtime/es-api-key
+  ebs_apiserver_key:
+    file: ./certs/runtime/ebs-apiserver.key
+  ebs_gateway_client_key:
+    file: ./certs/runtime/ebs-gateway.key
+  scheduler_client_key:
+    file: ./certs/runtime/scheduler.key
+  controller_manager_client_key:
+    file: ./certs/runtime/controller-manager.key
