@@ -5,6 +5,7 @@ services:
       - etcd
       - --name=etcd0
       - --data-dir=/etcd-data
+      - --quota-backend-bytes=8589934592 # 8 GiB
       - --listen-client-urls=http://0.0.0.0:2379
       - --advertise-client-urls=http://etcd:2379
       - --listen-peer-urls=http://0.0.0.0:2380

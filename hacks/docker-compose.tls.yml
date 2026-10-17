@@ -14,6 +14,7 @@ services:
       - etcd
       - --name=etcd0
       - --data-dir=/etcd-data
+      - --quota-backend-bytes=8589934592 # 8 GiB
       - --listen-client-urls=https://0.0.0.0:2379
       - --advertise-client-urls=https://etcd:2379
       - --cert-file=/run/ebs-certs/etcd.crt

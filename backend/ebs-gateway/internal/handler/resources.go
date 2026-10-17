@@ -71,8 +71,8 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusMethodNotAllowed)
 			return
 		}
-		if policy.HasWatch(c.Request.URL.Query()) && (resolved.Resource == "configs" || resolved.Resource == "scripts") {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this resource"})
+		if policy.HasWatch(c.Request.URL.Query()) && !policy.SupportsWatch(resolved) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "watch is not supported for this route"})
 			return
 		}
 		if public {

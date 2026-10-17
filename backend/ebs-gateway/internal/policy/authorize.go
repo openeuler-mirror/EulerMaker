@@ -58,7 +58,7 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 			return deny("IAM administration requires Admin")
 		}
 		return nil
-	case "projects", "snapshots", "builds", "buildinfos", "rpmrepos", "jobs":
+	case "projects", "snapshots", "builds", "buildinfos", "rpmrepos", "jobs", "oldjobs":
 		return a.projectResource(ctx, who, route)
 	default:
 		return deny("resource is not exposed")
@@ -67,7 +67,7 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 
 func IsReadOnlyProjectResource(resource string) bool {
 	switch resource {
-	case "snapshots", "buildinfos", "rpmrepos":
+	case "snapshots", "buildinfos", "rpmrepos", "oldjobs":
 		return true
 	default:
 		return false
@@ -256,6 +256,9 @@ func (a *Authorizer) projectAccess(ctx context.Context, project, subject string)
 }
 
 func IsPublicRead(route Route) bool {
+	if route.Resource == "oldjobs" && route.Subresource != "" {
+		return false
+	}
 	if route.Method != http.MethodGet && route.Method != http.MethodHead {
 		return false
 	}
@@ -275,8 +278,24 @@ func IsPublicRead(route Route) bool {
 		return false
 	}
 	switch route.Resource {
-	case "snapshots", "builds", "buildinfos", "rpmrepos", "jobs":
+	case "snapshots", "builds", "buildinfos", "rpmrepos", "jobs", "oldjobs":
 		return true
+	default:
+		return false
+	}
+}
+
+// SupportsWatch identifies Job collection routes exposed for watch through Gateway.
+// Authentication and resource permissions are checked separately.
+func SupportsWatch(route Route) bool {
+	if route.Method != http.MethodGet {
+		return false
+	}
+	switch route.Resource {
+	case "jobs":
+		return route.Project != "" && route.Name == "" && route.Subresource == ""
+	case "runners":
+		return route.Project == "" && route.Name != "" && route.Subresource == "jobs"
 	default:
 		return false
 	}
