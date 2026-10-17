@@ -2,11 +2,37 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
 	"ebs-runner/pkg/gateway"
 )
+
+func TestArtifactRoutesSelectExternalAddress(t *testing.T) {
+	routes := NewRoutes("external", &staticTokens{token: "token"}, http.DefaultClient)
+	if err := routes.Update(gateway.ArtifactEndpoints{Instances: map[string]gateway.ArtifactEndpoint{
+		"default": {RunnerInternalURL: "http://internal:8081", RunnerExternalURL: "https://external.example"},
+		"art-01":  {RunnerInternalURL: "http://internal:8081"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job-external"}}
+	if err := routes.Pin(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	client, err := routes.client("project", "job-external")
+	if err != nil || client.baseURL.Host != "external.example" {
+		t.Fatalf("client=%v error=%v", client, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	job.Metadata.Name = "job-waiting"
+	job.Metadata.Annotations = map[string]string{"ebs.io/artifacts": "art-01"}
+	if err := routes.Pin(ctx, job); !errors.Is(err, context.Canceled) {
+		t.Fatalf("missing external address: %v", err)
+	}
+}
 
 func TestArtifactRoutesPinJobAnnotation(t *testing.T) {
 	routes := NewRoutes("internal", &staticTokens{token: "token"}, http.DefaultClient)
