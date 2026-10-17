@@ -3,17 +3,11 @@ package apiserver
 import (
 	"context"
 	"fmt"
-	"regexp"
-	"strings"
 
-	"github.com/distribution/reference"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
-
-var configArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 // GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not
 // refetch it per Job, or use it to mutate an already created Job.
@@ -29,20 +23,6 @@ func (c *Client) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetC
 	var content ebsv1.BuildTargetContent
 	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
 		return nil, fmt.Errorf("decode build-target Config: %w", err)
-	}
-	if content.Targets == nil {
-		return nil, fmt.Errorf("build-target Config requires targets map")
-	}
-	for os, target := range content.Targets {
-		if os == "" || strings.TrimSpace(os) != os || len(validation.IsValidLabelValue(os)) != 0 || len(target.Arches) == 0 {
-			return nil, fmt.Errorf("invalid build-target OS %q", os)
-		}
-		for arch, entry := range target.Arches {
-			_, imageErr := reference.ParseNormalizedNamed(entry.Image)
-			if !configArchPattern.MatchString(arch) || imageErr != nil || strings.ContainsAny(entry.Image, " \t\r\n") {
-				return nil, fmt.Errorf("invalid build-target %s/%s image", os, arch)
-			}
-		}
 	}
 	return &content, nil
 }

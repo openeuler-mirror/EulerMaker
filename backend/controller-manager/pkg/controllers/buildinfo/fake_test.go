@@ -24,24 +24,24 @@ import (
 // (Unknown may optionally persist the write, so confirmation reads return the
 // actual persisted state), and label-filtered ListJobs.
 type fakeClient struct {
-	mu                 sync.Mutex
-	buildinfos         map[string]*ebsv1.BuildInfo
-	jobs               map[string]*ebsv1.Job
-	builds             map[string]*ebsv1.Build
-	projects           map[string]*ebsv1.Project
-	scripts            map[string]*ebsv1.Script
-	scriptReads        int
-	statusWrites       int
-	abortCalls         []string
-	abortErrors        map[string]error
-	resourceReads      int
-	snapshots          map[string]*ebsv1.Snapshot
-	rpmrepos           map[string]*ebsv1.RpmRepo
-	buildResourceRules map[string]*buildResourceRules
-	buildTargetContent *ebsv1.BuildTargetContent
-	buildTargetFailed  bool
-	artifactEndpoints  map[string]string
-	artifactReads      int
+	mu                   sync.Mutex
+	buildinfos           map[string]*ebsv1.BuildInfo
+	jobs                 map[string]*ebsv1.Job
+	builds               map[string]*ebsv1.Build
+	projects             map[string]*ebsv1.Project
+	scripts              map[string]*ebsv1.Script
+	scriptReads          int
+	statusWrites         int
+	abortCalls           []string
+	abortErrors          map[string]error
+	resourceReads        int
+	snapshots            map[string]*ebsv1.Snapshot
+	rpmrepos             map[string]*ebsv1.RpmRepo
+	buildResourceContent *ebsv1.BuildResourceContent
+	buildTargetContent   *ebsv1.BuildTargetContent
+	buildTargetFailed    bool
+	artifactEndpoints    map[string]string
+	artifactReads        int
 
 	// injected per-operation write failures, consumed once each.
 	injectedWrites map[string]*injectedWrite
@@ -84,13 +84,12 @@ func newFakeClient() *fakeClient {
 				Spec: ebsv1.ScriptSpec{Content: "#!/bin/sh\n"},
 			},
 		},
-		snapshots:          make(map[string]*ebsv1.Snapshot),
-		rpmrepos:           make(map[string]*ebsv1.RpmRepo),
-		buildResourceRules: make(map[string]*buildResourceRules),
-		artifactEndpoints:  map[string]string{"default": "http://artifact.example:8081"},
-		injectedWrites:     make(map[string]*injectedWrite),
-		injectedReads:      make(map[string]*injectedRead),
-		rv:                 100,
+		snapshots:         make(map[string]*ebsv1.Snapshot),
+		rpmrepos:          make(map[string]*ebsv1.RpmRepo),
+		artifactEndpoints: map[string]string{"default": "http://artifact.example:8081"},
+		injectedWrites:    make(map[string]*injectedWrite),
+		injectedReads:     make(map[string]*injectedRead),
+		rv:                100,
 	}
 }
 
@@ -230,17 +229,11 @@ func (f *fakeClient) SeedRpmRepo(value *ebsv1.RpmRepo) *ebsv1.RpmRepo {
 	return stored.DeepCopy()
 }
 
-func (f *fakeClient) SeedBuildResourceRules(value *buildResourceRules) *buildResourceRules {
+func (f *fakeClient) SetBuildResourceContent(value *ebsv1.BuildResourceContent) *ebsv1.BuildResourceContent {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	stored := value.DeepCopy()
-	if stored.UID == "" {
-		stored.UID = types.UID(f.nextUIDLocked())
-	}
-	if stored.ResourceVersion == "" {
-		stored.ResourceVersion = f.nextRVLocked()
-	}
-	f.buildResourceRules[stored.Name] = stored
+	f.buildResourceContent = stored
 	return stored.DeepCopy()
 }
 
@@ -480,18 +473,17 @@ func (f *fakeClient) GetScript(_ context.Context, name string) (*ebsv1.Script, e
 	return value.DeepCopy(), nil
 }
 
-func (f *fakeClient) GetBuildResourceRules(_ context.Context) (*buildResourceRules, error) {
+func (f *fakeClient) GetBuildResourceContent(_ context.Context) (*ebsv1.BuildResourceContent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resourceReads++
-	if err := f.consumeInjectedReadLocked("buildResourceRules"); err != nil {
+	if err := f.consumeInjectedReadLocked("buildResourceContent"); err != nil {
 		return nil, err
 	}
-	value, ok := f.buildResourceRules[ebsv1.BuildResourceConfigName]
-	if !ok {
+	if f.buildResourceContent == nil {
 		return nil, ErrNotFound
 	}
-	return value.DeepCopy(), nil
+	return f.buildResourceContent.DeepCopy(), nil
 }
 
 func (f *fakeClient) GetBuildTargetContent(_ context.Context) (*ebsv1.BuildTargetContent, error) {

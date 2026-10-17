@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,9 +20,6 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-var configResourceArchPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
-var configPackagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9+._-]*(:[A-Za-z0-9][A-Za-z0-9+._-]*)*$`)
-
 // ErrNotFound is the sentinel returned by read methods when the requested object does not exist, so callers distinguish
 // "missing" from "query failed".
 var ErrNotFound = errors.New("object not found")
@@ -32,22 +27,6 @@ var ErrNotFound = errors.New("object not found")
 // apiServerReadRetries is the fixed in-process retry budget for transient apiserver query failures (network errors,
 // timeouts, 5xx). It is a code constant, unlike the configurable git-server retry budget.
 const apiServerReadRetries = 3
-
-// buildResourceRules keeps the Config metadata together with its parsed resource rules; it is not an API resource.
-type buildResourceRules struct {
-	metav1.ObjectMeta
-	Spec ebsv1.BuildResourceContent
-}
-
-func (r *buildResourceRules) DeepCopy() *buildResourceRules {
-	if r == nil {
-		return nil
-	}
-	out := *r
-	out.ObjectMeta = *r.ObjectMeta.DeepCopy()
-	out.Spec = *r.Spec.DeepCopy()
-	return &out
-}
 
 // Client is the typed API surface the BuildInfo controller depends on.
 //
@@ -72,8 +51,8 @@ type Client interface {
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
 	GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
-	// GetBuildResourceRules reads the cluster-wide default resource table.
-	GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error)
+	// GetBuildResourceContent reads the cluster-wide default resource table.
+	GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error)
 	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not refetch it per Job or use it
 	// to mutate a created Job.
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
@@ -302,7 +281,7 @@ func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string
 	return endpoints, nil
 }
 
-func (c *apiClient) GetBuildResourceRules(ctx context.Context) (*buildResourceRules, error) {
+func (c *apiClient) GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error) {
 	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.BuildResourceConfigName)
 	if err != nil {
 		return nil, err
@@ -317,68 +296,7 @@ func (c *apiClient) GetBuildResourceRules(ctx context.Context) (*buildResourceRu
 	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
 		return nil, fmt.Errorf("decode build-resource Config: %w", err)
 	}
-	if content.Default.Requests["cpu"] == "" || content.Default.Requests["memory"] == "" {
-		return nil, fmt.Errorf("build-resource Config requires default CPU and memory requests")
-	}
-	if err := validateConfigResourceLevel(content.Default); err != nil {
-		return nil, fmt.Errorf("invalid build-resource default: %w", err)
-	}
-	parsed := &buildResourceRules{ObjectMeta: config.ObjectMeta, Spec: content}
-	if err := validateEffectiveResources(resolveResources(parsed, "", "")); err != nil {
-		return nil, err
-	}
-	for name, pkg := range content.Packages {
-		if !configPackagePattern.MatchString(name) || strings.TrimSpace(name) != name {
-			return nil, fmt.Errorf("invalid build-resource package name %q", name)
-		}
-		if len(pkg.Default.Requests) == 0 && len(pkg.Default.Limits) == 0 && len(pkg.Arches) == 0 {
-			return nil, fmt.Errorf("package %q has no resource rules", name)
-		}
-		if err := validateConfigResourceLevel(pkg.Default); err != nil {
-			return nil, fmt.Errorf("invalid package %q default: %w", name, err)
-		}
-		if err := validateEffectiveResources(resolveResources(parsed, name, "")); err != nil {
-			return nil, fmt.Errorf("invalid package %q resources: %w", name, err)
-		}
-		for arch, level := range pkg.Arches {
-			if !configResourceArchPattern.MatchString(arch) {
-				return nil, fmt.Errorf("invalid build-resource architecture %q", arch)
-			}
-			if err := validateConfigResourceLevel(level); err != nil {
-				return nil, fmt.Errorf("invalid package %q architecture %q: %w", name, arch, err)
-			}
-			if err := validateEffectiveResources(resolveResources(parsed, name, arch)); err != nil {
-				return nil, fmt.Errorf("invalid package %q architecture %q resources: %w", name, arch, err)
-			}
-		}
-	}
-	return parsed, nil
-}
-
-func validateEffectiveResources(level ebsv1.ResourceRequirements) error {
-	for _, key := range []string{"cpu", "memory"} {
-		request, reqErr := resource.ParseQuantity(level.Requests[key])
-		limit, limitErr := resource.ParseQuantity(level.Limits[key])
-		if reqErr != nil || limitErr != nil || request.Sign() <= 0 || limit.Cmp(request) < 0 {
-			return fmt.Errorf("invalid effective %s requests/limits", key)
-		}
-	}
-	return nil
-}
-
-func validateConfigResourceLevel(level ebsv1.ResourceRequirements) error {
-	for _, values := range []map[string]string{level.Requests, level.Limits} {
-		for key, value := range values {
-			if key != "cpu" && key != "memory" {
-				return fmt.Errorf("unsupported resource %q", key)
-			}
-			quantity, err := resource.ParseQuantity(value)
-			if err != nil || quantity.Sign() <= 0 {
-				return fmt.Errorf("invalid %s quantity %q", key, value)
-			}
-		}
-	}
-	return nil
+	return &content, nil
 }
 
 func (c *apiClient) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error) {

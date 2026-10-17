@@ -37,7 +37,7 @@ type reconcileRound struct {
 	rpmRepo           *ebsv1.RpmRepo
 	rpmRepoHeld       bool
 	scriptRef         *ebsv1.ScriptRef
-	resourceRules     *buildResourceRules
+	resourceContent   *ebsv1.BuildResourceContent
 	artifactEndpoints map[string]string
 	jobCreateRequests int
 	createdJobs       map[string]createdJob

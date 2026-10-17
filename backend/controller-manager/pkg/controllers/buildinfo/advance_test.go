@@ -28,7 +28,7 @@ func seedProcessingRound(
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
-	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildResourceContent(testBuildResourceContent())
 	client.SetBuildTargetContent(testBuildTargetContent())
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
@@ -556,7 +556,7 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	key := testNS + "/" + testBuild
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
-	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildResourceContent(testBuildResourceContent())
 	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-e29"
