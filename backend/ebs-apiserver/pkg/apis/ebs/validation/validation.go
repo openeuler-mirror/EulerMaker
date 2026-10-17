@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -13,11 +12,11 @@ import (
 )
 
 var (
-	uuidPattern         = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	uuidV4Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	gitRefNamePattern   = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
-	gitCommitPattern    = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	gitRefDotSegment    = regexp.MustCompile(`(^|/)\.\.?($|/)`)
+	uuidPattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	uuidV4Pattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	gitRefNamePattern = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
+	gitCommitPattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	gitRefDotSegment  = regexp.MustCompile(`(^|/)\.\.?($|/)`)
 )
 
 func validateDefaultRef(ref ebsv1.GitRef, refPath *field.Path) field.ErrorList {
@@ -64,176 +63,6 @@ func validatePackageRepos(repos []ebsv1.PackageRepo, path *field.Path) field.Err
 			if !gitCommitPattern.MatchString(repo.Ref.Value) {
 				allErrs = append(allErrs, field.Invalid(refPath.Child("value"), repo.Ref.Value, "must be a full 40-character lowercase commit ID"))
 			}
-		}
-	}
-	return allErrs
-}
-
-func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
-	var allErrs field.ErrorList
-	namePath := field.NewPath("metadata", "name")
-	if obj.Name == "" {
-		allErrs = append(allErrs, field.Required(namePath, "Build name is required"))
-	} else if !uuidPattern.MatchString(obj.Name) {
-		allErrs = append(allErrs, field.Invalid(namePath, obj.Name, "must be a canonical lowercase UUID"))
-	}
-	if len(obj.Spec.BuildType) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildType"), "buildType is required"))
-	}
-	if len(obj.Spec.Packages) == 0 && obj.Spec.BuildType != "full" && obj.Spec.BuildType != "incremental" {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "packages"), "at least one package is required"))
-	}
-	if len(obj.Spec.BuildTarget.Os) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTarget", "os"), "os is required"))
-	}
-	if len(obj.Spec.BuildTarget.Arch) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTarget", "arch"), "arch is required"))
-	}
-	labelsPath := field.NewPath("metadata", "labels")
-	if value, ok := obj.Labels[ebsv1.BuildTargetOSLabel]; !ok || len(value) == 0 {
-		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetOSLabel), "target OS label is required"))
-	} else if value != obj.Spec.BuildTarget.Os {
-		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTargetOSLabel), value, "must match spec.buildTarget.os"))
-	}
-	if value, ok := obj.Labels[ebsv1.BuildTargetArchLabel]; !ok || len(value) == 0 {
-		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetArchLabel), "target architecture label is required"))
-	} else if value != obj.Spec.BuildTarget.Arch {
-		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTargetArchLabel), value, "must match spec.buildTarget.arch"))
-	}
-	if value, ok := obj.Labels[ebsv1.BuildTypeLabel]; !ok || len(value) == 0 {
-		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTypeLabel), "build type label is required"))
-	} else if value != obj.Spec.BuildType {
-		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTypeLabel), value, "must match spec.buildType"))
-	}
-	return allErrs
-}
-
-func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
-	allErrs := ValidateBuild(newObj)
-	if !apiequality.Semantic.DeepEqual(newObj.Spec, oldObj.Spec) {
-		previous, next := oldObj.Spec, newObj.Spec
-		previous.Packages, next.Packages = nil, nil
-		if oldObj.Spec.BuildType != "incremental" || oldObj.Status.Phase != ebsv1.BuildPending || !apiequality.Semantic.DeepEqual(previous, next) {
-			allErrs = append(allErrs, field.Invalid(field.NewPath("spec"), newObj.Spec, "field is immutable except incremental packages while Pending"))
-		}
-	}
-	return allErrs
-}
-
-func ValidateBuildStatusUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
-	var allErrs field.ErrorList
-	if oldObj.Status.Phase.IsTerminal() && newObj.Status.Phase != oldObj.Status.Phase {
-		allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "phase"), "terminal Build phase is immutable"))
-	}
-	if !newObj.Status.Phase.IsValid() {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), newObj.Status.Phase, ebsv1.BuildPhaseValues()))
-	}
-	return allErrs
-}
-
-func ValidateBuildInfo(obj *ebsv1.BuildInfo) field.ErrorList { return nil }
-func ValidateBuildInfoUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
-	return ValidateBuildInfo(newObj)
-}
-func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
-	var allErrs field.ErrorList
-	phase := newObj.Status.Phase
-	if !phase.IsValid() {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), phase, ebsv1.BuildInfoPhaseValues()))
-	}
-	if oldObj.Status.Phase.IsTerminal() && phase != oldObj.Status.Phase {
-		allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "phase"), "terminal BuildInfo phase is immutable"))
-	}
-	if phase == ebsv1.BuildInfoFailed {
-		valid := false
-		for _, condition := range newObj.Status.Conditions {
-			if condition.Type == "BuildPayloadInvalid" && condition.Status == metav1.ConditionTrue && condition.Reason == "BuildPayloadParseFailed" {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			allErrs = append(allErrs, field.Required(field.NewPath("status", "conditions"), "Failed requires BuildPayloadInvalid=True/BuildPayloadParseFailed"))
-		}
-	}
-	return allErrs
-}
-
-func ValidateRpmRepo(obj *ebsv1.RpmRepo) field.ErrorList { return nil }
-func ValidateRpmRepoUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
-	return ValidateRpmRepo(newObj)
-}
-func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList {
-	var allErrs field.ErrorList
-	if repository := newObj.Status.Repository; repository != nil {
-		path := field.NewPath("status", "repository")
-		if (repository.RepositoryUID == "") != (repository.ContentURL == "") {
-			allErrs = append(allErrs, field.Invalid(path, repository, "repositoryUID and contentURL must be provided together"))
-		}
-		if len(repository.SourceJobNames) > 0 && (repository.RepositoryUID == "" || repository.ContentURL == "") {
-			allErrs = append(allErrs, field.Invalid(path.Child("sourceJobNames"), repository.SourceJobNames, "requires repositoryUID and contentURL"))
-		}
-		seen := make(map[string]bool, len(repository.SourceJobNames)+len(repository.SkippedJobNames))
-		for _, name := range repository.SourceJobNames {
-			seen[name] = true
-		}
-		for i, name := range repository.SkippedJobNames {
-			itemPath := path.Child("skippedJobNames").Index(i)
-			if name == "" {
-				allErrs = append(allErrs, field.Required(itemPath, "Job name is required"))
-			} else if seen[name] {
-				allErrs = append(allErrs, field.Duplicate(itemPath, name))
-			}
-			seen[name] = true
-		}
-		if transition := repository.Transition; transition != nil {
-			if transition.RepositoryUID == "" {
-				allErrs = append(allErrs, field.Required(path.Child("transition", "repositoryUID"), "repository UID is required"))
-			}
-			if len(transition.Inputs) == 0 {
-				allErrs = append(allErrs, field.Required(path.Child("transition", "inputs"), "at least one input is required"))
-			}
-		}
-	}
-	if release := newObj.Status.Release; release != nil {
-		path := field.NewPath("status", "release")
-		if !release.Phase.IsValid() {
-			allErrs = append(allErrs, field.NotSupported(path.Child("phase"), release.Phase, ebsv1.RpmRepoReleasePhaseValues()))
-		}
-		if release.Transition != nil && release.Phase != ebsv1.RpmRepoReleasePending &&
-			release.Phase != ebsv1.RpmRepoReleaseCreating && release.Phase != ebsv1.RpmRepoReleasePrepared {
-			allErrs = append(allErrs, field.Forbidden(path.Child("transition"), "only allowed for Pending, Creating or Prepared releases"))
-		}
-		if release.Phase == ebsv1.RpmRepoReleaseReady && release.ContentURL == "" {
-			allErrs = append(allErrs, field.Required(path.Child("contentURL"), "content URL is required for Ready releases"))
-		}
-	}
-	for i, condition := range newObj.Status.Conditions {
-		path := field.NewPath("status", "conditions").Index(i)
-		if condition.Type != ebsv1.RpmRepoConditionRepositoryReady && condition.Type != ebsv1.RpmRepoConditionPublishSucceed {
-			allErrs = append(allErrs, field.NotSupported(path.Child("type"), condition.Type, []string{ebsv1.RpmRepoConditionRepositoryReady, ebsv1.RpmRepoConditionPublishSucceed}))
-		}
-		if condition.Status != metav1.ConditionTrue && condition.Status != metav1.ConditionFalse {
-			allErrs = append(allErrs, field.NotSupported(path.Child("status"), condition.Status, []string{string(metav1.ConditionTrue), string(metav1.ConditionFalse)}))
-		}
-		var reasons []string
-		switch {
-		case condition.Type == ebsv1.RpmRepoConditionRepositoryReady && condition.Status == metav1.ConditionTrue:
-			reasons = []string{ebsv1.RpmRepoReasonRepositoryCreated}
-		case condition.Type == ebsv1.RpmRepoConditionRepositoryReady && condition.Status == metav1.ConditionFalse:
-			reasons = []string{ebsv1.RpmRepoReasonRepositoryCreationFailed}
-		case condition.Type == ebsv1.RpmRepoConditionPublishSucceed && condition.Status == metav1.ConditionTrue:
-			reasons = []string{ebsv1.RpmRepoReasonReleaseActivated}
-		case condition.Type == ebsv1.RpmRepoConditionPublishSucceed && condition.Status == metav1.ConditionFalse:
-			reasons = []string{ebsv1.RpmRepoReasonReleaseFailed, ebsv1.RpmRepoReasonRepositoryCreationFailed, ebsv1.RpmRepoReasonNoPublishableArtifacts, ebsv1.RpmRepoReasonBuildAborted, ebsv1.RpmRepoReasonBuildInfoFailed}
-		}
-		validReason := false
-		for _, reason := range reasons {
-			validReason = validReason || condition.Reason == reason
-		}
-		if len(reasons) > 0 && !validReason {
-			allErrs = append(allErrs, field.NotSupported(path.Child("reason"), condition.Reason,
-				reasons))
 		}
 	}
 	return allErrs
