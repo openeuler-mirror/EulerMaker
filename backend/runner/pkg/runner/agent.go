@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"ebs-runner/pkg/artifact"
+	containerruntime "ebs-runner/pkg/container"
 	execution "ebs-runner/pkg/executor"
 	"ebs-runner/pkg/gateway"
+	"ebs-runner/pkg/options"
 )
 
 const agentVersion = "v0.1.0"
@@ -36,12 +38,13 @@ type RunnerAPI interface {
 }
 
 type Agent struct {
-	cfg            Config
+	cfg            options.Config
 	client         RunnerAPI
 	endpointClient *gateway.Client
 	artifactRoutes *artifact.Routes
 	tokens         *gateway.TokenProvider
 	executor       execution.Executor
+	containers     containerruntime.ManagedRuntime
 	logFactory     *artifact.LogFactory
 	artifacts      *artifact.Processor
 	cleanup        *artifact.CleanupManager
@@ -52,60 +55,64 @@ type Agent struct {
 	lastRV     string
 }
 
-func NewAgent(cfg Config) (*Agent, error) {
-	httpClient, err := cfg.HTTPClient()
+func NewAgent(cfg options.Config) (*Agent, error) {
+	httpClient, err := cfg.Gateway.HTTPClient()
 	if err != nil {
 		return nil, err
 	}
-	credential, err := gateway.LoadMachineCredential(cfg.MachineCredentialFile)
+	credential, err := gateway.LoadMachineCredential(cfg.Gateway.MachineCredentialFile)
 	if err != nil {
 		return nil, err
 	}
-	tokens, err := gateway.NewTokenProvider(cfg.Gateway, cfg.Name, credential, httpClient)
+	tokens, err := gateway.NewTokenProvider(cfg.Gateway.URL, cfg.Name, credential, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	client, err := gateway.NewClient(cfg.Gateway, tokens, httpClient)
+	client, err := gateway.NewClient(cfg.Gateway.URL, tokens, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	artifactHTTPClient, err := cfg.ArtifactManagerHTTPClient()
+	artifactHTTPClient, err := cfg.Artifact.HTTPClient()
 	if err != nil {
 		return nil, err
 	}
-	artifactRoutes := artifact.NewRoutes(cfg.ArtifactAccessMode, tokens, artifactHTTPClient)
+	artifactRoutes := artifact.NewRoutes(cfg.Artifact.AccessMode, tokens, artifactHTTPClient)
 	logFactory := &artifact.LogFactory{
 		Remote:          artifactRoutes,
 		RootDir:         cfg.RootDir,
-		ChunkSize:       cfg.LogChunkSize,
-		FlushInterval:   cfg.LogFlushInterval,
-		SpoolLimit:      cfg.LogSpoolLimit,
-		RetryMaxBackoff: cfg.LogRetryMaxBackoff,
+		ChunkSize:       cfg.Artifact.Log.ChunkSize,
+		FlushInterval:   cfg.Artifact.Log.FlushInterval,
+		SpoolLimit:      cfg.Artifact.Log.SpoolLimit,
+		RetryMaxBackoff: cfg.Artifact.Log.RetryMaxBackoff,
 	}
 	artifactProcessor := &artifact.Processor{
 		Remote: artifactRoutes, RootDir: cfg.RootDir,
-		MaxFileSize: cfg.ArtifactMaxFileSize, MaxJobSize: cfg.ArtifactMaxJobSize,
-		MaxFiles: cfg.ArtifactMaxFiles, Concurrency: cfg.ArtifactUploadConcurrency,
-		RetryMaxBackoff: cfg.ArtifactRetryMaxBackoff,
+		MaxFileSize: cfg.Artifact.Upload.MaxFileSize, MaxJobSize: cfg.Artifact.Upload.MaxJobSize,
+		MaxFiles: cfg.Artifact.Upload.MaxFiles, Concurrency: cfg.Artifact.Upload.Concurrency,
+		RetryMaxBackoff: cfg.Artifact.Upload.RetryMaxBackoff,
 	}
-	cleanupManager := &artifact.CleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.ArtifactFailedRetention}
+	cleanupManager := &artifact.CleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.Artifact.Upload.FailedRetention}
+	var containers containerruntime.ManagedRuntime = containerruntime.DockerCLI{}
+
 	return &Agent{
 		cfg:            cfg,
 		client:         client,
 		endpointClient: client,
 		artifactRoutes: artifactRoutes,
 		tokens:         tokens,
+		containers:     containers,
 		executor: &execution.Manager{
 			RunnerType: cfg.Type,
 			Executors: map[string]execution.Executor{
 				"ct": &execution.CTExecutor{
+					Runtime:         containers,
 					WorkDir:         workDir(cfg.RootDir),
 					ResultRoot:      resultRoot(cfg.RootDir),
 					RunnerName:      cfg.Name,
 					Scripts:         execution.NewScriptCache(client),
 					LogFactory:      logFactory,
 					ResolvePayload:  artifactRoutes.ResolvePayload,
-					LogDrainTimeout: cfg.LogDrainTimeout,
+					LogDrainTimeout: cfg.Artifact.Log.DrainTimeout,
 				},
 			},
 		},
@@ -113,6 +120,13 @@ func NewAgent(cfg Config) (*Agent, error) {
 		artifacts:  artifactProcessor,
 		cleanup:    cleanupManager,
 	}, nil
+}
+
+func (a *Agent) Close() error {
+	if a.containers != nil {
+		return a.containers.Close()
+	}
+	return nil
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -605,7 +619,7 @@ func (a *Agent) cleanupJobWork(job gateway.JobResource) {
 }
 
 func (a *Agent) finalizeArtifacts(parent context.Context, job gateway.JobResource, status gateway.JobStatus, resultDir string, executionErr error) {
-	artifactCtx, cancelArtifacts := context.WithTimeout(parent, a.cfg.ArtifactUploadTimeout)
+	artifactCtx, cancelArtifacts := context.WithTimeout(parent, a.cfg.Artifact.Upload.Timeout)
 	_, artifactErr := a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
 	cancelArtifacts()
 	if parent.Err() != nil {

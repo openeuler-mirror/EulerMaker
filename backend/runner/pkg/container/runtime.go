@@ -31,3 +31,11 @@ type Runtime interface {
 	Stop(ctx context.Context, id string, gracePeriod time.Duration) error
 	Kill(ctx context.Context, id string) error
 }
+
+// ManagedRuntime also discovers durable containers during Runner recovery.
+type ManagedRuntime interface {
+	Runtime
+	List(ctx context.Context, labels map[string]string) ([]string, error)
+	Labels(ctx context.Context, id string) (map[string]string, error)
+	Close() error
+}

@@ -8,6 +8,7 @@ CT Job 的 `spec.scriptRefs` 非空时，Runner 按顺序经 Gateway 拉取所�
 
 ```text
 cmd/runner/     命令入口
+pkg/options/    顶层配置装配、默认值、命令行解析和校验
 pkg/runner/     Agent 装配、注册心跳、Job 生命周期和工作目录清理
 pkg/gateway/    Gateway 客户端、资源传输类型、机器凭据与 Token 刷新
 pkg/executor/   执行器、脚本缓存、payload 落盘和日志时间戳
@@ -16,6 +17,8 @@ pkg/artifact/  Artifact 地址路由、产物与日志上传、上传回执和�
 ```
 
 测试随所属模块放置。`runner` 装配各模块；底层包不反向依赖 `runner`。当前 CT 执行后端仍为 Docker。
+
+Go 配置按 `Gateway`、`Artifact.Log` 和 `Artifact.Upload` 分组，业务配置类型分别定义在 `pkg/gateway`、`pkg/artifact` 的 `config.go` 中，由 `pkg/options` 组合；命令行参数保持扁平命名。
 
 ## 构建与测试
 

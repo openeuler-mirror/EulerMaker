@@ -7,11 +7,10 @@ import (
 	"log"
 	"time"
 
-	containerruntime "ebs-runner/pkg/container"
 	"ebs-runner/pkg/gateway"
 )
 
-// Docker labels are the durable execution identity, including the window
+// Container labels are the durable execution identity, including the window
 // between daemon create and receipt of its response. Recover before watching
 // new assignments. Never touch containers without our Runner and Job UID.
 func (a *Agent) recoverContainers(ctx context.Context) error {
@@ -20,7 +19,7 @@ func (a *Agent) recoverContainers(ctx context.Context) error {
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	ids, err := (containerruntime.DockerCLI{}).List(queryCtx, map[string]string{
+	ids, err := a.containers.List(queryCtx, map[string]string{
 		"ebs.io/runner":  a.cfg.Name,
 		"ebs.io/job-uid": "",
 	})
@@ -37,7 +36,7 @@ func (a *Agent) recoverContainers(ctx context.Context) error {
 
 func (a *Agent) recoverContainer(ctx context.Context, id string) error {
 	inspectCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	labels, err := (containerruntime.DockerCLI{}).Labels(inspectCtx, id)
+	labels, err := a.containers.Labels(inspectCtx, id)
 	cancel()
 	if err != nil {
 		return err
@@ -56,10 +55,10 @@ func (a *Agent) recoverContainer(ctx context.Context, id string) error {
 	// The agent cannot reattach an executor after restart. Stop the old process
 	// first; a still-Running Job will then be resumed by normal list handling.
 	stopCtx, cancelStop := context.WithTimeout(ctx, 15*time.Second)
-	stopErr := (containerruntime.DockerCLI{}).Stop(stopCtx, id, 10*time.Second)
+	stopErr := a.containers.Stop(stopCtx, id, 10*time.Second)
 	cancelStop()
 	removeCtx, cancelRemove := context.WithTimeout(ctx, 15*time.Second)
-	removeErr := (containerruntime.DockerCLI{}).Remove(removeCtx, id)
+	removeErr := a.containers.Remove(removeCtx, id)
 	cancelRemove()
 	if removeErr != nil {
 		return fmt.Errorf("container %s cleanup unconfirmed: stop=%v remove=%w", id, stopErr, removeErr)
