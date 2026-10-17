@@ -6,21 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type workCleanupAPI struct {
 	fakeRunnerAPI
-	jobs map[string]JobResource
+	jobs map[string]gateway.JobResource
 	err  error
 }
 
-func (f *workCleanupAPI) GetJob(_ context.Context, project, name string) (*JobResource, error) {
+func (f *workCleanupAPI) GetJob(_ context.Context, project, name string) (*gateway.JobResource, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
 	job, ok := f.jobs[project+"/"+name]
 	if !ok {
-		return nil, StatusError{Code: 404}
+		return nil, gateway.StatusError{Code: 404}
 	}
 	return &job, nil
 }
@@ -33,13 +35,13 @@ func TestSweepJobWork(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	api := &workCleanupAPI{jobs: map[string]JobResource{
-		"project/aborted": {Status: JobStatus{Phase: "Aborted"}},
-		"project/running": {Status: JobStatus{Phase: "Running"}},
-		"project/active":  {Status: JobStatus{Phase: "Aborted"}},
+	api := &workCleanupAPI{jobs: map[string]gateway.JobResource{
+		"project/aborted": {Status: gateway.JobStatus{Phase: "Aborted"}},
+		"project/running": {Status: gateway.JobStatus{Phase: "Running"}},
+		"project/active":  {Status: gateway.JobStatus{Phase: "Aborted"}},
 	}}
 	a := &Agent{cfg: Config{RootDir: root}, client: api, executions: map[string]*jobExecution{
-		"uid": {job: JobResource{Metadata: ObjectMeta{Namespace: "project", Name: "active"}}},
+		"uid": {job: gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "active"}}},
 	}}
 	a.sweepJobWork(context.Background())
 	for name, wantPresent := range map[string]bool{

@@ -1,4 +1,4 @@
-package runner
+package executor
 
 import (
 	"context"
@@ -11,6 +11,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ebs-runner/pkg/artifact"
+	containerruntime "ebs-runner/pkg/container"
+	"ebs-runner/pkg/gateway"
 )
 
 func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
@@ -34,9 +38,9 @@ func TestCTExecutorCreatesContainerWithPayloadFile(t *testing.T) {
 		RunnerName: "runner-a",
 		Runtime:    container,
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec: JobSpec{
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec: gateway.JobSpec{
 			RuntimeSpec: runtimeSpec,
 			Payload:     `{"build":{"target":"rpm"}}`,
 		},
@@ -91,11 +95,11 @@ func TestCTExecutorUsesJobScript(t *testing.T) {
 		WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
 		Runtime: container, Scripts: NewScriptCache(source),
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec: JobSpec{
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec: gateway.JobSpec{
 			RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
-			ScriptRefs:  []ScriptRef{{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}},
+			ScriptRefs:  []gateway.ScriptRef{{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}},
 		},
 	}
 	if _, err := executor.Execute(context.Background(), job); err != nil {
@@ -120,9 +124,9 @@ func TestCTExecutorUsesJobScript(t *testing.T) {
 
 func TestCTExecutorRejectsScriptAndRuntimeCommand(t *testing.T) {
 	executor := &CTExecutor{WorkDir: t.TempDir(), ResultRoot: t.TempDir()}
-	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: JobSpec{
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: gateway.JobSpec{
 		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03", Command: []string{"echo"}}),
-		ScriptRefs:  []ScriptRef{{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}},
+		ScriptRefs:  []gateway.ScriptRef{{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}},
 	}}
 	if _, err := executor.Execute(context.Background(), job); err == nil {
 		t.Fatal("runtime command accepted with scriptRef")
@@ -131,15 +135,15 @@ func TestCTExecutorRejectsScriptAndRuntimeCommand(t *testing.T) {
 
 func TestCTExecutorUsesFirstScriptAsEntrypoint(t *testing.T) {
 	dir := t.TempDir()
-	source := &fakeMultiScriptSource{scripts: map[string]ScriptResource{
+	source := &fakeMultiScriptSource{scripts: map[string]gateway.ScriptResource{
 		"first":  testScript("first", "uid-1", "rv-1", "#!/bin/sh\necho first\n"),
 		"second": testScript("second", "uid-2", "rv-2", "#!/bin/sh\necho second\n"),
 	}}
 	container := &fakeContainerRuntime{exitCode: 0}
 	executor := &CTExecutor{WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"), Runtime: container, Scripts: NewScriptCache(source)}
-	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: JobSpec{
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: gateway.JobSpec{
 		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
-		ScriptRefs: []ScriptRef{
+		ScriptRefs: []gateway.ScriptRef{
 			{Name: "first", UID: "uid-1", ResourceVersion: "rv-1"},
 			{Name: "second", UID: "uid-2", ResourceVersion: "rv-2"},
 		},
@@ -164,11 +168,11 @@ func TestCTExecutorUsesFirstScriptAsEntrypoint(t *testing.T) {
 func TestCTExecutorRejectsDuplicateOrUnsafeScriptNames(t *testing.T) {
 	for _, names := range [][]string{{"rpmbuild", "rpmbuild"}, {"../outside"}} {
 		executor := &CTExecutor{WorkDir: t.TempDir(), ResultRoot: t.TempDir()}
-		refs := make([]ScriptRef, 0, len(names))
+		refs := make([]gateway.ScriptRef, 0, len(names))
 		for _, name := range names {
-			refs = append(refs, ScriptRef{Name: name, UID: "uid-1", ResourceVersion: "rv-1"})
+			refs = append(refs, gateway.ScriptRef{Name: name, UID: "uid-1", ResourceVersion: "rv-1"})
 		}
-		job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: JobSpec{
+		job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"}, Spec: gateway.JobSpec{
 			RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
 			ScriptRefs:  refs,
 		}}
@@ -179,11 +183,11 @@ func TestCTExecutorRejectsDuplicateOrUnsafeScriptNames(t *testing.T) {
 }
 
 type fakeMultiScriptSource struct {
-	scripts map[string]ScriptResource
+	scripts map[string]gateway.ScriptResource
 	calls   []string
 }
 
-func (f *fakeMultiScriptSource) GetScript(_ context.Context, name string) (*ScriptResource, error) {
+func (f *fakeMultiScriptSource) GetScript(_ context.Context, name string) (*gateway.ScriptResource, error) {
 	f.calls = append(f.calls, name)
 	script, ok := f.scripts[name]
 	if !ok {
@@ -200,9 +204,9 @@ func TestCTExecutorReturnsContainerExitCode(t *testing.T) {
 		ResultRoot: filepath.Join(dir, "results"),
 		Runtime:    container,
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})},
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec:     gateway.JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})},
 	}
 
 	_, err := executor.Execute(context.Background(), job)
@@ -219,7 +223,7 @@ func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
 		WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
 		Runtime: container, LogFactory: staticLogFactory{sink: sink}, LogDrainTimeout: time.Second,
 	}
-	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a", UID: "uid-a"}, Spec: JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a", UID: "uid-a"}, Spec: gateway.JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})}}
 	resultRoot, err := executor.Execute(context.Background(), job)
 	if err == nil || !strings.Contains(err.Error(), "container exited with code 7") {
 		t.Fatalf("error = %v", err)
@@ -241,9 +245,9 @@ func TestCTExecutorDoesNotCreateContainerAfterContextCancel(t *testing.T) {
 		Runtime:         container,
 		StopGracePeriod: time.Millisecond,
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})},
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec:     gateway.JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"})},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -269,12 +273,12 @@ func TestWaitContainerStopsOnCancellation(t *testing.T) {
 
 func TestRuntimeManagerDispatchesCT(t *testing.T) {
 	executor := &fakeExecutor{resultRoot: "/results/project/job"}
-	manager := &RuntimeManager{
+	manager := &Manager{
 		RunnerType: "ct",
 		Executors:  map[string]Executor{"ct": executor},
 	}
 
-	resultRoot, err := manager.Execute(context.Background(), JobResource{})
+	resultRoot, err := manager.Execute(context.Background(), gateway.JobResource{})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -287,12 +291,12 @@ func TestRuntimeManagerDispatchesCT(t *testing.T) {
 }
 
 func TestRuntimeManagerRejectsMismatchedRuntime(t *testing.T) {
-	manager := &RuntimeManager{
+	manager := &Manager{
 		RunnerType: "ct",
 		Executors:  map[string]Executor{"ct": &fakeExecutor{}},
 	}
 
-	_, err := manager.Execute(context.Background(), JobResource{Spec: JobSpec{Runtime: "vm"}})
+	_, err := manager.Execute(context.Background(), gateway.JobResource{Spec: gateway.JobSpec{Runtime: "vm"}})
 	if err == nil {
 		t.Fatalf("expected runtime mismatch error")
 	}
@@ -300,7 +304,7 @@ func TestRuntimeManagerRejectsMismatchedRuntime(t *testing.T) {
 
 type fakeContainerRuntime struct {
 	mu        sync.Mutex
-	created   ContainerSpec
+	created   containerruntime.Spec
 	started   bool
 	stopped   bool
 	removed   bool
@@ -309,9 +313,9 @@ type fakeContainerRuntime struct {
 	waitBlock chan struct{}
 }
 
-type staticLogFactory struct{ sink JobLogSink }
+type staticLogFactory struct{ sink artifact.JobLogSink }
 
-func (f staticLogFactory) Open(JobResource) (JobLogSink, error) { return f.sink, nil }
+func (f staticLogFactory) Open(gateway.JobResource) (artifact.JobLogSink, error) { return f.sink, nil }
 
 type recordingLogSink struct {
 	data      []byte
@@ -322,10 +326,12 @@ func (s *recordingLogSink) Write(p []byte) (int, error) {
 	s.data = append(s.data, p...)
 	return len(p), nil
 }
-func (s *recordingLogSink) Complete(context.Context) (CompletedLog, error) {
+
+func (s *recordingLogSink) Complete(context.Context) (artifact.CompletedLog, error) {
 	s.completed = true
-	return CompletedLog{State: "Completed"}, nil
+	return artifact.CompletedLog{State: "Completed"}, nil
 }
+
 func (s *recordingLogSink) Abort() {}
 
 func (f *fakeContainerRuntime) ImageExists(context.Context, string) (bool, error) {
@@ -342,7 +348,7 @@ func (f *fakeContainerRuntime) Remove(context.Context, string) error {
 	return nil
 }
 
-func (f *fakeContainerRuntime) Create(_ context.Context, spec ContainerSpec) (string, error) {
+func (f *fakeContainerRuntime) Create(_ context.Context, spec containerruntime.Spec) (string, error) {
 	f.created = spec
 	return "container-a", nil
 }
@@ -394,7 +400,7 @@ type fakeExecutor struct {
 	err        error
 }
 
-func (f *fakeExecutor) Execute(context.Context, JobResource) (string, error) {
+func (f *fakeExecutor) Execute(context.Context, gateway.JobResource) (string, error) {
 	f.called = true
 	return f.resultRoot, f.err
 }

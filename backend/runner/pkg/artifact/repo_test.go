@@ -1,38 +1,38 @@
-package runner
+package artifact
 
 import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"ebs-runner/pkg/gateway"
 )
 
 func TestResolveArtifactRepositories(t *testing.T) {
-	routes := newArtifactRoutes("internal", &staticTokens{token: "token"}, http.DefaultClient)
-	if err := routes.update(ArtifactEndpoints{Instances: map[string]ArtifactEndpoint{
+	routes := NewRoutes("internal", &staticTokens{token: "token"}, http.DefaultClient)
+	if err := routes.Update(gateway.ArtifactEndpoints{Instances: map[string]gateway.ArtifactEndpoint{
 		"default": {RunnerInternalURL: "http://default:8081"},
 		"art-01":  {RunnerInternalURL: "http://art-01-old:8081"},
 		"art-02":  {RunnerInternalURL: "http://art-02:8081"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	job := JobResource{Metadata: ObjectMeta{Namespace: "project", Name: "job", Annotations: map[string]string{
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job", Annotations: map[string]string{
 		"ebs.io/artifacts": "art-01",
-	}}, Spec: JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/v1/one/","priority":10},{"url":"artifact://art-02/repositories/v1/two/","priority":20},{"url":"artifact:///repositories/v1/three/","priority":30},{"url":"https://bootstrap.example/repo/","priority":99}],"commit_id":"abc"}`}}
-	if err := routes.pin(context.Background(), job); err != nil {
+	}}, Spec: gateway.JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/v1/one/","priority":10},{"url":"artifact://art-02/repositories/v1/two/","priority":20},{"url":"artifact:///repositories/v1/three/","priority":30},{"url":"https://bootstrap.example/repo/","priority":99}],"commit_id":"abc"}`}}
+	if err := routes.Pin(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
-	if err := routes.update(ArtifactEndpoints{Instances: map[string]ArtifactEndpoint{
+	if err := routes.Update(gateway.ArtifactEndpoints{Instances: map[string]gateway.ArtifactEndpoint{
 		"default": {RunnerInternalURL: "http://default:8081"},
 		"art-01":  {RunnerInternalURL: "http://art-01-new:8081"},
 		"art-02":  {RunnerInternalURL: "http://art-02:8081"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := routes.resolvePayload(job)
+	resolved, err := routes.ResolvePayload(job)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,14 +63,14 @@ func TestResolveArtifactRepositories(t *testing.T) {
 }
 
 func TestResolveArtifactRepositoryExternal(t *testing.T) {
-	routes := newArtifactRoutes("external", &staticTokens{token: "token"}, http.DefaultClient)
-	if err := routes.update(ArtifactEndpoints{Instances: map[string]ArtifactEndpoint{
+	routes := NewRoutes("external", &staticTokens{token: "token"}, http.DefaultClient)
+	if err := routes.Update(gateway.ArtifactEndpoints{Instances: map[string]gateway.ArtifactEndpoint{
 		"art-01": {RunnerInternalURL: "http://internal:8081", RunnerExternalURL: "https://external.example/art-01"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	job := JobResource{Spec: JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/v1/repo/","priority":10}]}`}}
-	resolved, err := routes.resolvePayload(job)
+	job := gateway.JobResource{Spec: gateway.JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/v1/repo/","priority":10}]}`}}
+	resolved, err := routes.ResolvePayload(job)
 	if err != nil || !strings.Contains(resolved, "https://external.example/art-01/repositories/v1/repo/") {
 		t.Fatalf("resolvePayload = %q, %v", resolved, err)
 	}
@@ -93,31 +93,5 @@ func TestResolveArtifactRepositoryErrors(t *testing.T) {
 				t.Fatalf("resolveArtifactRepository(%q) error = %v", tc.reference, err)
 			}
 		})
-	}
-}
-
-func TestCTExecutorWritesResolvedRepository(t *testing.T) {
-	dir := t.TempDir()
-	routes := newArtifactRoutes("internal", &staticTokens{token: "token"}, http.DefaultClient)
-	if err := routes.update(ArtifactEndpoints{Instances: map[string]ArtifactEndpoint{
-		"default": {RunnerInternalURL: "http://artifact-manager:8081"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}, Spec: JobSpec{
-		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
-		Payload:     `{"repo":[{"url":"artifact:///repositories/v1/repo/","priority":10}]}`,
-	}}
-	executor := &CTExecutor{WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
-		Runtime: &fakeContainerRuntime{exitCode: 0}, ResolvePayload: routes.resolvePayload}
-	if _, err := executor.Execute(context.Background(), job); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "work", "project", "job", "payload.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "http://artifact-manager:8081/repositories/v1/repo/") {
-		t.Fatalf("payload.json = %s", data)
 	}
 }

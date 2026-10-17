@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"ebs-runner/pkg/artifact"
+	"ebs-runner/pkg/gateway"
 )
 
 const jobWorkSweepInterval = 10 * time.Minute
@@ -39,7 +42,7 @@ func (a *Agent) sweepJobWork(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !project.IsDir() || !validLocalPathSegment(project.Name()) {
+		if !project.IsDir() || !artifact.ValidLocalPathSegment(project.Name()) {
 			continue
 		}
 		projectPath := filepath.Join(root, project.Name())
@@ -52,13 +55,13 @@ func (a *Agent) sweepJobWork(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			if !entry.IsDir() || !validLocalPathSegment(entry.Name()) {
+			if !entry.IsDir() || !artifact.ValidLocalPathSegment(entry.Name()) {
 				continue
 			}
 			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			job, getErr := a.client.GetJob(checkCtx, project.Name(), entry.Name())
 			cancel()
-			var statusErr StatusError
+			var statusErr gateway.StatusError
 			if getErr != nil && !(errors.As(getErr, &statusErr) && statusErr.Code == 404) {
 				log.Printf("confirm Job work directory %s/%s: %v", project.Name(), entry.Name(), getErr)
 				continue

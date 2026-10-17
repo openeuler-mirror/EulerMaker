@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -8,12 +8,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type recordedChunk struct {
 	sequence int64
 	data     []byte
 }
+
 type fakeLogRemote struct {
 	mu             sync.Mutex
 	chunks         []recordedChunk
@@ -25,6 +28,7 @@ type fakeLogRemote struct {
 func (f *fakeLogRemote) LogStatus(context.Context, string, string) (LogStatus, error) {
 	return LogStatus{State: "Open"}, nil
 }
+
 func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64, _ string, data []byte) (AppendLogResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -41,6 +45,7 @@ func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64
 	}
 	return AppendLogResult{AcceptedSequence: sequence, NextSequence: sequence + 1}, nil
 }
+
 func (f *fakeLogRemote) CompleteLog(_ context.Context, _, _, _ string, input CompleteLogInput) (CompletedLog, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -50,8 +55,8 @@ func (f *fakeLogRemote) CompleteLog(_ context.Context, _, _, _ string, input Com
 
 func TestArtifactLogSinkUploadsChunksAndRemovesSpool(t *testing.T) {
 	remote := &fakeLogRemote{appendFailures: 1}
-	factory := &ArtifactLogFactory{Remote: remote, RootDir: t.TempDir(), ChunkSize: 4, FlushInterval: 10 * time.Millisecond, SpoolLimit: 1024, RetryMaxBackoff: 10 * time.Millisecond}
-	sink, err := factory.Open(JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}})
+	factory := &LogFactory{Remote: remote, RootDir: t.TempDir(), ChunkSize: 4, FlushInterval: 10 * time.Millisecond, SpoolLimit: 1024, RetryMaxBackoff: 10 * time.Millisecond}
+	sink, err := factory.Open(gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +91,7 @@ func TestArtifactLogSinkUploadsChunksAndRemovesSpool(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "build", "completed.json")); err != nil {
 		t.Fatalf("completed receipt is missing: %v", err)
 	}
-	if err := factory.Cleanup(JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}}); err != nil {
+	if err := factory.Cleanup(gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(factory.RootDir, "logs", "project", "build")); !os.IsNotExist(err) {
@@ -96,11 +101,11 @@ func TestArtifactLogSinkUploadsChunksAndRemovesSpool(t *testing.T) {
 
 func TestArtifactLogSinkFlushesPartialChunkBeforeCompletion(t *testing.T) {
 	remote := &fakeLogRemote{appended: make(chan struct{}, 1)}
-	factory := &ArtifactLogFactory{
+	factory := &LogFactory{
 		Remote: remote, RootDir: t.TempDir(), ChunkSize: 256, FlushInterval: 10 * time.Millisecond,
 		SpoolLimit: 1024,
 	}
-	sink, err := factory.Open(JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project"}})
+	sink, err := factory.Open(gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", Namespace: "project"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +148,8 @@ func TestArtifactLogSinkFlushesPartialChunkBeforeCompletion(t *testing.T) {
 }
 
 func TestArtifactLogSinkEnforcesSpoolLimit(t *testing.T) {
-	factory := &ArtifactLogFactory{Remote: &fakeLogRemote{}, RootDir: t.TempDir(), ChunkSize: 4, FlushInterval: time.Hour, SpoolLimit: 5}
-	sink, err := factory.Open(JobResource{Metadata: ObjectMeta{Name: "build", UID: "uid-2"}})
+	factory := &LogFactory{Remote: &fakeLogRemote{}, RootDir: t.TempDir(), ChunkSize: 4, FlushInterval: time.Hour, SpoolLimit: 5}
+	sink, err := factory.Open(gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", UID: "uid-2"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,14 +160,14 @@ func TestArtifactLogSinkEnforcesSpoolLimit(t *testing.T) {
 }
 
 func TestArtifactLogFactoryUsesJobNameAcrossUIDChanges(t *testing.T) {
-	factory := &ArtifactLogFactory{Remote: &fakeLogRemote{}, RootDir: t.TempDir()}
-	first := JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}}
+	factory := &LogFactory{Remote: &fakeLogRemote{}, RootDir: t.TempDir()}
+	first := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", Namespace: "project", UID: "uid-1"}}
 	sink, err := factory.Open(first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sink.Abort()
-	second := JobResource{Metadata: ObjectMeta{Name: "build", Namespace: "project", UID: "uid-2"}}
+	second := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", Namespace: "project", UID: "uid-2"}}
 	next, err := factory.Open(second)
 	if err != nil {
 		t.Fatal(err)

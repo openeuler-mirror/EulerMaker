@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -8,30 +8,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
-type ArtifactEndpoints struct {
-	Instances map[string]ArtifactEndpoint `json:"instances"`
-}
-
-type ArtifactEndpoint struct {
-	RunnerInternalURL string `json:"runnerInternalURL"`
-	RunnerExternalURL string `json:"runnerExternalURL"`
-}
-
-// artifactRoutes pins a destination for each active Job while allowing newly started Jobs to use refreshed addresses.
-type artifactRoutes struct {
+// Routes pins each active Job's destination while new Jobs use refreshed addresses.
+type Routes struct {
 	mu        sync.Mutex
-	instances map[string]ArtifactEndpoint
-	jobs      map[string]*ArtifactClient
+	instances map[string]gateway.ArtifactEndpoint
+	jobs      map[string]*Client
 	changed   chan struct{}
 	mode      string
-	tokens    TokenSource
+	tokens    gateway.TokenSource
 	http      *http.Client
 }
 
-func newArtifactRoutes(mode string, tokens TokenSource, client *http.Client) *artifactRoutes {
-	return &artifactRoutes{mode: mode, tokens: tokens, http: client, jobs: make(map[string]*ArtifactClient),
+func NewRoutes(mode string, tokens gateway.TokenSource, client *http.Client) *Routes {
+	return &Routes{mode: mode, tokens: tokens, http: client, jobs: make(map[string]*Client),
 		changed: make(chan struct{})}
 }
 
@@ -44,7 +37,7 @@ func validEndpointURL(raw string, external bool) bool {
 		((external && u.Scheme == "https") || (!external && (u.Scheme == "http" || u.Scheme == "https")))
 }
 
-func (r *artifactRoutes) update(endpoints ArtifactEndpoints) error {
+func (r *Routes) Update(endpoints gateway.ArtifactEndpoints) error {
 	if len(endpoints.Instances) == 0 {
 		return fmt.Errorf("artifact endpoint list is empty")
 	}
@@ -55,7 +48,7 @@ func (r *artifactRoutes) update(endpoints ArtifactEndpoints) error {
 		}
 	}
 	r.mu.Lock()
-	r.instances = make(map[string]ArtifactEndpoint, len(endpoints.Instances))
+	r.instances = make(map[string]gateway.ArtifactEndpoint, len(endpoints.Instances))
 	for name, entry := range endpoints.Instances {
 		r.instances[name] = entry
 	}
@@ -65,7 +58,7 @@ func (r *artifactRoutes) update(endpoints ArtifactEndpoints) error {
 	return nil
 }
 
-func (r *artifactRoutes) pin(ctx context.Context, job JobResource) error {
+func (r *Routes) Pin(ctx context.Context, job gateway.JobResource) error {
 	key := job.Metadata.Namespace + "/" + job.Metadata.Name
 	instance := artifactInstance(job)
 	for {
@@ -80,7 +73,7 @@ func (r *artifactRoutes) pin(ctx context.Context, job JobResource) error {
 			address = entry.RunnerExternalURL
 		}
 		if exists && address != "" {
-			client, err := NewArtifactClient(address, r.tokens, r.http)
+			client, err := NewClient(address, r.tokens, r.http)
 			if err == nil {
 				r.jobs[key] = client
 			}
@@ -106,13 +99,13 @@ func (r *artifactRoutes) pin(ctx context.Context, job JobResource) error {
 	}
 }
 
-func (r *artifactRoutes) release(job JobResource) {
+func (r *Routes) Release(job gateway.JobResource) {
 	r.mu.Lock()
 	delete(r.jobs, job.Metadata.Namespace+"/"+job.Metadata.Name)
 	r.mu.Unlock()
 }
 
-func (r *artifactRoutes) client(project, job string) (*ArtifactClient, error) {
+func (r *Routes) client(project, job string) (*Client, error) {
 	r.mu.Lock()
 	client := r.jobs[project+"/"+job]
 	r.mu.Unlock()
@@ -122,7 +115,7 @@ func (r *artifactRoutes) client(project, job string) (*ArtifactClient, error) {
 	return client, nil
 }
 
-func (r *artifactRoutes) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
+func (r *Routes) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
 	client, err := r.client(project, job)
 	if err != nil {
 		return LogStatus{}, err
@@ -130,7 +123,7 @@ func (r *artifactRoutes) LogStatus(ctx context.Context, project, job string) (Lo
 	return client.LogStatus(ctx, project, job)
 }
 
-func (r *artifactRoutes) AppendLog(ctx context.Context, project, job string, sequence int64, sum string, data []byte) (AppendLogResult, error) {
+func (r *Routes) AppendLog(ctx context.Context, project, job string, sequence int64, sum string, data []byte) (AppendLogResult, error) {
 	client, err := r.client(project, job)
 	if err != nil {
 		return AppendLogResult{}, err
@@ -138,7 +131,7 @@ func (r *artifactRoutes) AppendLog(ctx context.Context, project, job string, seq
 	return client.AppendLog(ctx, project, job, sequence, sum, data)
 }
 
-func (r *artifactRoutes) CompleteLog(ctx context.Context, project, job, key string, input CompleteLogInput) (CompletedLog, error) {
+func (r *Routes) CompleteLog(ctx context.Context, project, job, key string, input CompleteLogInput) (CompletedLog, error) {
 	client, err := r.client(project, job)
 	if err != nil {
 		return CompletedLog{}, err
@@ -146,7 +139,7 @@ func (r *artifactRoutes) CompleteLog(ctx context.Context, project, job, key stri
 	return client.CompleteLog(ctx, project, job, key, input)
 }
 
-func (r *artifactRoutes) UploadArtifact(ctx context.Context, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, error) {
+func (r *Routes) UploadArtifact(ctx context.Context, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, error) {
 	client, err := r.client(project, job)
 	if err != nil {
 		return ArtifactRecord{}, err
@@ -154,7 +147,7 @@ func (r *artifactRoutes) UploadArtifact(ctx context.Context, project, job, key, 
 	return client.UploadArtifact(ctx, project, job, key, path, input)
 }
 
-func (r *artifactRoutes) CompleteManifest(ctx context.Context, project, job string, input CompleteManifestInput) (CompletedManifest, error) {
+func (r *Routes) CompleteManifest(ctx context.Context, project, job string, input CompleteManifestInput) (CompletedManifest, error) {
 	client, err := r.client(project, job)
 	if err != nil {
 		return CompletedManifest{}, err
@@ -162,7 +155,7 @@ func (r *artifactRoutes) CompleteManifest(ctx context.Context, project, job stri
 	return client.CompleteManifest(ctx, project, job, input)
 }
 
-func (r *artifactRoutes) GetManifest(ctx context.Context, project, job string) (CompletedManifest, error) {
+func (r *Routes) GetManifest(ctx context.Context, project, job string) (CompletedManifest, error) {
 	client, err := r.client(project, job)
 	if err != nil {
 		return CompletedManifest{}, err
@@ -170,7 +163,7 @@ func (r *artifactRoutes) GetManifest(ctx context.Context, project, job string) (
 	return client.GetManifest(ctx, project, job)
 }
 
-func artifactInstance(job JobResource) string {
+func artifactInstance(job gateway.JobResource) string {
 	instance := strings.TrimSpace(job.Metadata.Annotations["ebs.io/artifacts"])
 	if instance == "" {
 		return "default"

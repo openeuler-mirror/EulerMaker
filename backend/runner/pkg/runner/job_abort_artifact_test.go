@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"ebs-runner/pkg/artifact"
+	"ebs-runner/pkg/gateway"
 )
 
 type waitingArtifactRemote struct {
@@ -11,17 +14,17 @@ type waitingArtifactRemote struct {
 	started chan struct{}
 }
 
-func (r *waitingArtifactRemote) LogStatus(ctx context.Context, _, _ string) (LogStatus, error) {
+func (r *waitingArtifactRemote) LogStatus(ctx context.Context, _, _ string) (artifact.LogStatus, error) {
 	close(r.started)
 	<-ctx.Done()
-	return LogStatus{}, ctx.Err()
+	return artifact.LogStatus{}, ctx.Err()
 }
 
 func TestAbortCancelsPostRunWithoutFinalStatusWrite(t *testing.T) {
-	job := JobResource{Metadata: ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: JobStatus{Phase: "Running", Runner: "r", Stage: "PostRun"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: gateway.JobStatus{Phase: "Running", Runner: "r", Stage: "PostRun"}}
 	api := &lifecycleAPI{job: job}
 	remote := &waitingArtifactRemote{started: make(chan struct{})}
-	a := &Agent{cfg: Config{Name: "r", ArtifactUploadTimeout: time.Minute}, client: api, artifacts: &ArtifactProcessor{Remote: remote}}
+	a := &Agent{cfg: Config{Name: "r", ArtifactUploadTimeout: time.Minute}, client: api, artifacts: &artifact.Processor{Remote: remote}}
 	ctx, key, _ := a.registerExecution(context.Background(), job)
 	done := make(chan struct{})
 	go func() { a.resumePostRun(ctx, key, job); close(done) }()
@@ -34,7 +37,7 @@ func TestAbortCancelsPostRunWithoutFinalStatusWrite(t *testing.T) {
 	api.lock.Lock()
 	api.job = job
 	api.lock.Unlock()
-	a.handleEvent(context.Background(), WatchEvent{Type: "MODIFIED", Object: job})
+	a.handleEvent(context.Background(), gateway.WatchEvent{Type: "MODIFIED", Object: job})
 	select {
 	case <-done:
 	case <-time.After(time.Second):

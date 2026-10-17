@@ -4,6 +4,19 @@
 
 CT Job 的 `spec.scriptRefs` 非空时，Runner 按顺序经 Gateway 拉取所有 Script，写入 `/workspace/scripts/{name}`，并将第一项作为容器 ENTRYPOINT。Runner 进程内按 Script 名称、UID、resourceVersion 缓存正文；Job 指定的 UID 或 resourceVersion 变化时重新拉取。数组为空时使用镜像入口。
 
+## 代码结构
+
+```text
+cmd/runner/     命令入口
+pkg/runner/     Agent 装配、注册心跳、Job 生命周期和工作目录清理
+pkg/gateway/    Gateway 客户端、资源传输类型、机器凭据与 Token 刷新
+pkg/executor/   执行器、脚本缓存、payload 落盘和日志时间戳
+pkg/container/ 容器运行时接口与 Docker CLI 实现
+pkg/artifact/  Artifact 地址路由、产物与日志上传、上传回执和保留期清理
+```
+
+测试随所属模块放置。`runner` 装配各模块；底层包不反向依赖 `runner`。当前 CT 执行后端仍为 Docker。
+
 ## 构建与测试
 
 在当前目录执行：

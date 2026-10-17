@@ -5,23 +5,25 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"ebs-runner/pkg/gateway"
 )
 
 const testRunnerInstanceID = "01234567-89ab-4def-8123-456789abcdef"
 
 type registrationAPI struct {
-	getResults []*RunnerResource
+	getResults []*gateway.RunnerResource
 	getErrors  []error
 	getCalls   int
 	createErr  error
-	created    *RunnerResource
-	updated    *RunnerResource
+	created    *gateway.RunnerResource
+	updated    *gateway.RunnerResource
 }
 
-func (f *registrationAPI) GetRunner(context.Context, string) (*RunnerResource, error) {
+func (f *registrationAPI) GetRunner(context.Context, string) (*gateway.RunnerResource, error) {
 	index := f.getCalls
 	f.getCalls++
-	var result *RunnerResource
+	var result *gateway.RunnerResource
 	var err error
 	if index < len(f.getResults) {
 		result = f.getResults[index]
@@ -32,26 +34,34 @@ func (f *registrationAPI) GetRunner(context.Context, string) (*RunnerResource, e
 	return result, err
 }
 
-func (f *registrationAPI) CreateRunner(_ context.Context, runner RunnerResource) error {
+func (f *registrationAPI) CreateRunner(_ context.Context, runner gateway.RunnerResource) error {
 	f.created = &runner
 	return f.createErr
 }
 
-func (f *registrationAPI) UpdateRunner(_ context.Context, runner RunnerResource) error {
+func (f *registrationAPI) UpdateRunner(_ context.Context, runner gateway.RunnerResource) error {
 	f.updated = &runner
 	return nil
 }
 
-func (*registrationAPI) PatchRunnerStatus(context.Context, string, RunnerStatus) error { return nil }
-func (*registrationAPI) GetJob(context.Context, string, string) (*JobResource, error) {
+func (*registrationAPI) PatchRunnerStatus(context.Context, string, gateway.RunnerStatus) error {
+	return nil
+}
+
+func (*registrationAPI) GetJob(context.Context, string, string) (*gateway.JobResource, error) {
 	return nil, os.ErrNotExist
 }
-func (*registrationAPI) UpdateJobStatus(_ context.Context, job JobResource, status JobStatus) (*JobResource, error) {
+
+func (*registrationAPI) UpdateJobStatus(_ context.Context, job gateway.JobResource, status gateway.JobStatus) (*gateway.JobResource, error) {
 	job.Status = status
 	return &job, nil
 }
-func (*registrationAPI) ListAssignedJobs(context.Context, string) (*JobList, error) { return nil, nil }
-func (*registrationAPI) WatchAssignedJobs(context.Context, string, string) (<-chan WatchEvent, <-chan error) {
+
+func (*registrationAPI) ListAssignedJobs(context.Context, string) (*gateway.JobList, error) {
+	return nil, nil
+}
+
+func (*registrationAPI) WatchAssignedJobs(context.Context, string, string) (<-chan gateway.WatchEvent, <-chan error) {
 	return nil, nil
 }
 
@@ -63,7 +73,7 @@ func newRegistrationAgent(client RunnerAPI) *Agent {
 }
 
 func TestRegisterCreatesRunnerWithInstanceID(t *testing.T) {
-	client := &registrationAPI{getErrors: []error{StatusError{Code: 404}}}
+	client := &registrationAPI{getErrors: []error{gateway.StatusError{Code: 404}}}
 	if err := newRegistrationAgent(client).register(context.Background()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -73,11 +83,11 @@ func TestRegisterCreatesRunnerWithInstanceID(t *testing.T) {
 }
 
 func TestRegisterUpdatesMatchingInstance(t *testing.T) {
-	existing := &RunnerResource{
-		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{"custom": "value"}},
-		Spec:     RunnerSpec{InstanceID: testRunnerInstanceID, Type: "vm", Arch: "aarch64", Unschedulable: true},
+	existing := &gateway.RunnerResource{
+		Metadata: gateway.ObjectMeta{Name: "runner-a", Labels: map[string]string{"custom": "value"}},
+		Spec:     gateway.RunnerSpec{InstanceID: testRunnerInstanceID, Type: "vm", Arch: "aarch64", Unschedulable: true},
 	}
-	client := &registrationAPI{getResults: []*RunnerResource{existing}}
+	client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
 	if err := newRegistrationAgent(client).register(context.Background()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -90,8 +100,8 @@ func TestRegisterUpdatesMatchingInstance(t *testing.T) {
 }
 
 func TestRegisterRejectsDifferentInstance(t *testing.T) {
-	existing := &RunnerResource{Spec: RunnerSpec{InstanceID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}}
-	client := &registrationAPI{getResults: []*RunnerResource{existing}}
+	existing := &gateway.RunnerResource{Spec: gateway.RunnerSpec{InstanceID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}}
+	client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
 	err := newRegistrationAgent(client).register(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "different instance") {
 		t.Fatalf("expected instance conflict, got %v", err)
@@ -102,11 +112,11 @@ func TestRegisterRejectsDifferentInstance(t *testing.T) {
 }
 
 func TestRegisterResolvesCreateConflictByInstanceID(t *testing.T) {
-	existing := &RunnerResource{Spec: RunnerSpec{InstanceID: testRunnerInstanceID}}
+	existing := &gateway.RunnerResource{Spec: gateway.RunnerSpec{InstanceID: testRunnerInstanceID}}
 	client := &registrationAPI{
-		getResults: []*RunnerResource{nil, existing},
-		getErrors:  []error{StatusError{Code: 404}, nil},
-		createErr:  StatusError{Code: 409},
+		getResults: []*gateway.RunnerResource{nil, existing},
+		getErrors:  []error{gateway.StatusError{Code: 404}, nil},
+		createErr:  gateway.StatusError{Code: 409},
 	}
 	if err := newRegistrationAgent(client).register(context.Background()); err != nil {
 		t.Fatalf("register after matching conflict: %v", err)

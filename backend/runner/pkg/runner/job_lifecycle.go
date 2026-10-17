@@ -7,10 +7,12 @@ import (
 	"log"
 	"reflect"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type jobExecution struct {
-	job    JobResource
+	job    gateway.JobResource
 	cancel context.CancelFunc
 	ctx    context.Context
 }
@@ -19,7 +21,7 @@ func terminalJob(phase string) bool {
 	return phase == "Succeeded" || phase == "Failed" || phase == "Aborted"
 }
 
-func (a *Agent) registerExecution(parent context.Context, job JobResource) (context.Context, string, bool) {
+func (a *Agent) registerExecution(parent context.Context, job gateway.JobResource) (context.Context, string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := job.Metadata.UID
@@ -57,7 +59,7 @@ func (a *Agent) cancelExecution(uid string) {
 // object or a new incarnation must stop the old execution, not start a new one.
 func (a *Agent) reconcileExecutions(ctx context.Context) {
 	a.mu.Lock()
-	jobs := make([]JobResource, 0, len(a.executions))
+	jobs := make([]gateway.JobResource, 0, len(a.executions))
 	for _, execution := range a.executions {
 		jobs = append(jobs, execution.job)
 	}
@@ -66,7 +68,7 @@ func (a *Agent) reconcileExecutions(ctx context.Context) {
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		current, err := a.client.GetJob(checkCtx, job.Metadata.Namespace, job.Metadata.Name)
 		cancel()
-		var statusErr StatusError
+		var statusErr gateway.StatusError
 		if errors.As(err, &statusErr) && statusErr.Code == 404 || err == nil && (current.Metadata.UID != job.Metadata.UID || current.Status.Runner != a.cfg.Name || terminalJob(current.Status.Phase)) {
 			a.cancelExecution(job.Metadata.UID)
 		} else if err != nil {
@@ -77,7 +79,7 @@ func (a *Agent) reconcileExecutions(ctx context.Context) {
 
 // Never replay a status derived from an old version. After an ambiguous write,
 // confirm the entire intent; otherwise let the next list/watch reconcile it.
-func (a *Agent) writeJobStatus(ctx context.Context, job *JobResource, status JobStatus) error {
+func (a *Agent) writeJobStatus(ctx context.Context, job *gateway.JobResource, status gateway.JobStatus) error {
 	if status.StartTime != nil {
 		t := status.StartTime.UTC().Truncate(time.Second)
 		status.StartTime = &t

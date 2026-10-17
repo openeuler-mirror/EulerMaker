@@ -29,6 +29,22 @@ runner -> artifact-manager -> local persistent storage
 | 上传日志和产物 | 容器运行期间向 Artifact Manager 实时追加日志，执行结束后封账日志、上传产物并完成 Job 上传清单 |
 | 回写结果 | 通过 Project API 更新 Job status，推进 Job phase/stage，并记录 Artifact 完成摘要 |
 
+### 2.1 实现模块
+
+Runner 实现在 `backend/runner`，按职责分包：
+
+| 包 | 职责 |
+|---|---|
+| `pkg/runner` | Agent 装配、注册心跳、Job 生命周期、启动恢复与工作目录清理 |
+| `pkg/gateway` | Gateway API 客户端及资源传输类型、MachineAccount 凭据、Token 交换与刷新 |
+| `pkg/executor` | 执行器选择、CT 执行流程、Script 缓存、payload 写入与日志时间戳 |
+| `pkg/container` | 容器运行时接口、Docker CLI 命令及容器查询 |
+| `pkg/artifact` | 实例地址刷新与 Job 地址固定、过程仓 URL 解析、日志与产物上传、回执与保留期清理 |
+
+依赖方向为 `runner → executor/artifact/gateway/container`，`executor → artifact/gateway/container`，
+`artifact → gateway`。`gateway` 承载 Runner 使用的轻量资源传输类型；`container` 不依赖业务资源。
+现有 CT 后端使用 Docker，目录拆分不改变 Job 协议、运行时参数或本地存储布局。
+
 ## 三、API 交互
 
 Runner 访问 `ebs-gateway`，API 路径保持 `ebs-apiserver` 的资源路径不变，由 gateway 转发。

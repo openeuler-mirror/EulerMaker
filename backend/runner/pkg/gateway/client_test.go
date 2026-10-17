@@ -1,4 +1,4 @@
-package runner
+package gateway
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 )
+
+const testRunnerInstanceID = "01234567-89ab-4def-8123-456789abcdef"
 
 func TestClientGetScript(t *testing.T) {
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {

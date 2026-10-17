@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type ArtifactRemote interface {
@@ -24,7 +26,7 @@ type ArtifactRemote interface {
 	GetManifest(context.Context, string, string) (CompletedManifest, error)
 }
 
-type ArtifactProcessor struct {
+type Processor struct {
 	Remote          ArtifactRemote
 	RootDir         string
 	MaxFileSize     int64
@@ -49,11 +51,11 @@ type artifactReceipt struct {
 	Artifact       ArtifactRecord `json:"artifact"`
 }
 
-func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resultDir string, includeOrdinary bool) (CompletedManifest, error) {
+func (p *Processor) Finalize(ctx context.Context, job gateway.JobResource, resultDir string, includeOrdinary bool) (CompletedManifest, error) {
 	if p.Remote == nil {
 		return CompletedManifest{}, fmt.Errorf("artifact remote is required")
 	}
-	if err := validateJobIdentity(job); err != nil {
+	if err := ValidateJobIdentity(job); err != nil {
 		return CompletedManifest{}, err
 	}
 
@@ -97,7 +99,7 @@ func (p *ArtifactProcessor) Finalize(ctx context.Context, job JobResource, resul
 	return manifest, nil
 }
 
-func (p *ArtifactProcessor) logStatusWithRetry(ctx context.Context, job JobResource) (LogStatus, error) {
+func (p *Processor) logStatusWithRetry(ctx context.Context, job gateway.JobResource) (LogStatus, error) {
 	delay := time.Second
 	for {
 		status, err := p.Remote.LogStatus(ctx, job.Metadata.Namespace, job.Metadata.Name)
@@ -114,7 +116,7 @@ func (p *ArtifactProcessor) logStatusWithRetry(ctx context.Context, job JobResou
 	}
 }
 
-func (p *ArtifactProcessor) scan(root string) ([]artifactCandidate, error) {
+func (p *Processor) scan(root string) ([]artifactCandidate, error) {
 	info, err := os.Lstat(root)
 	if err != nil {
 		return nil, fmt.Errorf("inspect result root: %w", err)
@@ -213,7 +215,7 @@ func validateArtifactRelativePath(path string) error {
 	return nil
 }
 
-func (p *ArtifactProcessor) uploadAll(ctx context.Context, job JobResource, candidates []artifactCandidate) ([]ArtifactRecord, error) {
+func (p *Processor) uploadAll(ctx context.Context, job gateway.JobResource, candidates []artifactCandidate) ([]ArtifactRecord, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -262,7 +264,7 @@ func (p *ArtifactProcessor) uploadAll(ctx context.Context, job JobResource, cand
 	return artifacts, nil
 }
 
-func (p *ArtifactProcessor) uploadOne(ctx context.Context, job JobResource, candidate artifactCandidate) (ArtifactRecord, error) {
+func (p *Processor) uploadOne(ctx context.Context, job gateway.JobResource, candidate artifactCandidate) (ArtifactRecord, error) {
 	keySum := sha256.Sum256([]byte(candidate.RelativePath))
 	key := "artifact-" + hex.EncodeToString(keySum[:])
 	if receipt, ok := p.readReceipt(job, candidate, key); ok {
@@ -287,7 +289,7 @@ func (p *ArtifactProcessor) uploadOne(ctx context.Context, job JobResource, cand
 	return artifact, nil
 }
 
-func (p *ArtifactProcessor) uploadWithRetry(ctx context.Context, job JobResource, key string, candidate artifactCandidate, input UploadArtifactInput) (ArtifactRecord, error) {
+func (p *Processor) uploadWithRetry(ctx context.Context, job gateway.JobResource, key string, candidate artifactCandidate, input UploadArtifactInput) (ArtifactRecord, error) {
 	delay := time.Second
 	for {
 		artifact, uploadErr := p.Remote.UploadArtifact(ctx, job.Metadata.Namespace, job.Metadata.Name, key, candidate.Path, input)
@@ -304,7 +306,7 @@ func (p *ArtifactProcessor) uploadWithRetry(ctx context.Context, job JobResource
 	}
 }
 
-func (p *ArtifactProcessor) completeManifestWithRetry(ctx context.Context, job JobResource, input CompleteManifestInput) (CompletedManifest, error) {
+func (p *Processor) completeManifestWithRetry(ctx context.Context, job gateway.JobResource, input CompleteManifestInput) (CompletedManifest, error) {
 	delay := time.Second
 	for {
 		manifest, err := p.Remote.CompleteManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, input)
@@ -325,7 +327,7 @@ func (p *ArtifactProcessor) completeManifestWithRetry(ctx context.Context, job J
 	}
 }
 
-func (p *ArtifactProcessor) retryMaxBackoff() time.Duration {
+func (p *Processor) retryMaxBackoff() time.Duration {
 	maximum := p.RetryMaxBackoff
 	if maximum <= 0 {
 		maximum = 30 * time.Second
@@ -341,12 +343,12 @@ func validateUploadedArtifact(candidate artifactCandidate, artifact ArtifactReco
 	return nil
 }
 
-func (p *ArtifactProcessor) receiptPath(job JobResource, relative string) string {
+func (p *Processor) receiptPath(job gateway.JobResource, relative string) string {
 	sum := sha256.Sum256([]byte(relative))
 	return filepath.Join(p.RootDir, "uploads", job.Metadata.Namespace, job.Metadata.Name, "artifacts", hex.EncodeToString(sum[:])+".json")
 }
 
-func (p *ArtifactProcessor) writeReceipt(job JobResource, relative string, receipt artifactReceipt) error {
+func (p *Processor) writeReceipt(job gateway.JobResource, relative string, receipt artifactReceipt) error {
 	path := p.receiptPath(job, relative)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -358,7 +360,7 @@ func (p *ArtifactProcessor) writeReceipt(job JobResource, relative string, recei
 	return writeAtomicFile(path, data)
 }
 
-func (p *ArtifactProcessor) readReceipt(job JobResource, candidate artifactCandidate, key string) (artifactReceipt, bool) {
+func (p *Processor) readReceipt(job gateway.JobResource, candidate artifactCandidate, key string) (artifactReceipt, bool) {
 	data, err := os.ReadFile(p.receiptPath(job, candidate.RelativePath))
 	if err != nil {
 		return artifactReceipt{}, false
@@ -371,18 +373,18 @@ func (p *ArtifactProcessor) readReceipt(job JobResource, candidate artifactCandi
 	return receipt, true
 }
 
-func validateJobIdentity(job JobResource) error {
+func ValidateJobIdentity(job gateway.JobResource) error {
 	if job.Metadata.Namespace == "" || job.Metadata.Name == "" {
 		return fmt.Errorf("job namespace and name are required for artifact upload")
 	}
 	for _, value := range []string{job.Metadata.Namespace, job.Metadata.Name} {
-		if !validLocalPathSegment(value) {
+		if !ValidLocalPathSegment(value) {
 			return fmt.Errorf("invalid job identity for local artifact path")
 		}
 	}
 	return nil
 }
 
-func validLocalPathSegment(value string) bool {
+func ValidLocalPathSegment(value string) bool {
 	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, `/\\`)
 }

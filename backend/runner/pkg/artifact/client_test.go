@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -12,6 +12,12 @@ import (
 	"strings"
 	"testing"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 type staticTokens struct {
 	token     string
@@ -51,7 +57,7 @@ func TestArtifactClientStreamsMultipartUpload(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 201, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"artifact":{"id":"a1","category":"artifact","relativePath":"packages/package.rpm","size":8,"sha256":"sum","state":"Completed"}}`))}, nil
 	})}
-	client, err := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
+	client, err := NewClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +71,7 @@ func TestArtifactClientStreamsMultipartUpload(t *testing.T) {
 }
 
 func (s *staticTokens) Token(context.Context) (string, error) { return s.token, nil }
+
 func (s *staticTokens) RefreshAfterUnauthorized(context.Context, string) (string, error) {
 	return s.refreshed, nil
 }
@@ -88,7 +95,7 @@ func TestArtifactClientAppendLogBuildsProtocolRequest(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"acceptedSequence":3,"nextSequence":4,"committedBytes":5}`))}, nil
 	})}
-	client, err := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "stale", refreshed: "fresh"}, httpClient)
+	client, err := NewClient("http://artifact-manager:8081", &staticTokens{token: "stale", refreshed: "fresh"}, httpClient)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,9 +112,9 @@ func TestArtifactClientParsesAPIError(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 409, Header: http.Header{"Retry-After": []string{"2"}}, Body: io.NopCloser(strings.NewReader(`{"code":"SequenceGap","message":"gap","retryable":false,"details":{"nextSequence":2}}`))}, nil
 	})}
-	client, _ := NewArtifactClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
+	client, _ := NewClient("http://artifact-manager:8081", &staticTokens{token: "token"}, httpClient)
 	_, err := client.LogStatus(context.Background(), "project", "build")
-	apiErr, ok := err.(ArtifactAPIError)
+	apiErr, ok := err.(APIError)
 	if !ok || apiErr.Code != "SequenceGap" || apiErr.RetryAfter.Seconds() != 2 {
 		t.Fatalf("error = %#v", err)
 	}

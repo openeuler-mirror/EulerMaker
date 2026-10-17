@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"bytes"
@@ -14,12 +14,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
-type ArtifactClient struct {
+type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
-	tokens     TokenSource
+	tokens     gateway.TokenSource
 }
 
 type LogStatus struct {
@@ -95,7 +97,7 @@ type CompletedManifest struct {
 	Files         []ManifestFile `json:"files,omitempty"`
 }
 
-type ArtifactAPIError struct {
+type APIError struct {
 	StatusCode int
 	Code       string
 	Message    string
@@ -104,14 +106,14 @@ type ArtifactAPIError struct {
 	Details    map[string]any
 }
 
-func (e ArtifactAPIError) Error() string {
+func (e APIError) Error() string {
 	if e.Code == "" {
 		return fmt.Sprintf("artifact-manager returned HTTP %d: %s", e.StatusCode, e.Message)
 	}
 	return fmt.Sprintf("artifact-manager returned %s: %s", e.Code, e.Message)
 }
 
-func NewArtifactClient(address string, tokens TokenSource, httpClient *http.Client) (*ArtifactClient, error) {
+func NewClient(address string, tokens gateway.TokenSource, httpClient *http.Client) (*Client, error) {
 	u, err := url.Parse(address)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		return nil, fmt.Errorf("artifact-manager must be an http or https URL with scheme and host")
@@ -119,17 +121,17 @@ func NewArtifactClient(address string, tokens TokenSource, httpClient *http.Clie
 	if tokens == nil || httpClient == nil {
 		return nil, fmt.Errorf("token source and HTTP client are required")
 	}
-	return &ArtifactClient{baseURL: u, tokens: tokens, httpClient: httpClient}, nil
+	return &Client{baseURL: u, tokens: tokens, httpClient: httpClient}, nil
 }
 
-func (c *ArtifactClient) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
+func (c *Client) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
 	var out LogStatus
 	q := url.Values{"stream": {"combined"}}
 	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/logs/status?"+q.Encode(), nil, nil, &out)
 	return out, err
 }
 
-func (c *ArtifactClient) AppendLog(ctx context.Context, project, job string, sequence int64, sum string, data []byte) (AppendLogResult, error) {
+func (c *Client) AppendLog(ctx context.Context, project, job string, sequence int64, sum string, data []byte) (AppendLogResult, error) {
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/octet-stream")
 	headers.Set("X-Log-Stream", "combined")
@@ -140,7 +142,7 @@ func (c *ArtifactClient) AppendLog(ctx context.Context, project, job string, seq
 	return out, err
 }
 
-func (c *ArtifactClient) CompleteLog(ctx context.Context, project, job, key string, input CompleteLogInput) (CompletedLog, error) {
+func (c *Client) CompleteLog(ctx context.Context, project, job, key string, input CompleteLogInput) (CompletedLog, error) {
 	data, err := json.Marshal(input)
 	if err != nil {
 		return CompletedLog{}, err
@@ -153,7 +155,7 @@ func (c *ArtifactClient) CompleteLog(ctx context.Context, project, job, key stri
 	return out, err
 }
 
-func (c *ArtifactClient) UploadArtifact(ctx context.Context, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, error) {
+func (c *Client) UploadArtifact(ctx context.Context, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, error) {
 	token, err := c.tokens.Token(ctx)
 	if err != nil {
 		return ArtifactRecord{}, fmt.Errorf("get runner token: %w", err)
@@ -170,7 +172,7 @@ func (c *ArtifactClient) UploadArtifact(ctx context.Context, project, job, key, 
 	return result, err
 }
 
-func (c *ArtifactClient) uploadArtifactOnce(ctx context.Context, token, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, bool, error) {
+func (c *Client) uploadArtifactOnce(ctx context.Context, token, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return ArtifactRecord{}, false, err
@@ -240,7 +242,7 @@ func (c *ArtifactClient) uploadArtifactOnce(ctx context.Context, token, project,
 	return out.Artifact, false, nil
 }
 
-func (c *ArtifactClient) CompleteManifest(ctx context.Context, project, job string, input CompleteManifestInput) (CompletedManifest, error) {
+func (c *Client) CompleteManifest(ctx context.Context, project, job string, input CompleteManifestInput) (CompletedManifest, error) {
 	data, err := json.Marshal(input)
 	if err != nil {
 		return CompletedManifest{}, err
@@ -252,7 +254,7 @@ func (c *ArtifactClient) CompleteManifest(ctx context.Context, project, job stri
 	return out, err
 }
 
-func (c *ArtifactClient) GetManifest(ctx context.Context, project, job string) (CompletedManifest, error) {
+func (c *Client) GetManifest(ctx context.Context, project, job string) (CompletedManifest, error) {
 	var out CompletedManifest
 	err := c.do(ctx, http.MethodGet, c.jobPath(project, job)+"/manifest", nil, nil, &out)
 	if out.ArtifactCount == 0 && len(out.Files) > 0 {
@@ -261,11 +263,11 @@ func (c *ArtifactClient) GetManifest(ctx context.Context, project, job string) (
 	return out, err
 }
 
-func (c *ArtifactClient) jobPath(project, job string) string {
+func (c *Client) jobPath(project, job string) string {
 	return "/artifacts/v1/projects/" + url.PathEscape(project) + "/jobs/" + url.PathEscape(job)
 }
 
-func (c *ArtifactClient) do(ctx context.Context, method, path string, body []byte, headers http.Header, out any) error {
+func (c *Client) do(ctx context.Context, method, path string, body []byte, headers http.Header, out any) error {
 	makeRequest := func(token string) (*http.Request, error) {
 		u := *c.baseURL
 		parsed, err := url.Parse(path)
@@ -324,6 +326,19 @@ func (c *ArtifactClient) do(ctx context.Context, method, path string, body []byt
 	return nil
 }
 
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	default:
+		return a + b
+	}
+}
+
 func artifactResponseError(resp *http.Response) error {
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	var envelope struct {
@@ -338,7 +353,7 @@ func artifactResponseError(resp *http.Response) error {
 	if envelope.Message == "" {
 		envelope.Message = resp.Status
 	}
-	e := ArtifactAPIError{StatusCode: resp.StatusCode, Code: envelope.Code, Message: envelope.Message, Retryable: envelope.Retryable, Details: envelope.Details}
+	e := APIError{StatusCode: resp.StatusCode, Code: envelope.Code, Message: envelope.Message, Retryable: envelope.Retryable, Details: envelope.Details}
 	if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
 		e.RetryAfter = time.Duration(seconds) * time.Second
 	}

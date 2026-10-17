@@ -1,4 +1,4 @@
-package runner
+package executor
 
 import (
 	"bytes"
@@ -10,18 +10,20 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type Executor interface {
-	Execute(ctx context.Context, job JobResource) (string, error)
+	Execute(ctx context.Context, job gateway.JobResource) (string, error)
 }
 
-type RuntimeManager struct {
+type Manager struct {
 	RunnerType string
 	Executors  map[string]Executor
 }
 
-func (m *RuntimeManager) Execute(ctx context.Context, job JobResource) (string, error) {
+func (m *Manager) Execute(ctx context.Context, job gateway.JobResource) (string, error) {
 	runtimeName := job.Spec.Runtime
 	if runtimeName == "" {
 		runtimeName = "ct"
@@ -41,7 +43,7 @@ type ShellExecutor struct {
 	ResultRoot string
 }
 
-func (e *ShellExecutor) Execute(ctx context.Context, job JobResource) (string, error) {
+func (e *ShellExecutor) Execute(ctx context.Context, job gateway.JobResource) (string, error) {
 	project := job.Metadata.Namespace
 	if project == "" {
 		project = "default"
