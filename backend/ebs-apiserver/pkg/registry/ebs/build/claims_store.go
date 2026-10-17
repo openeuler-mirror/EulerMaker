@@ -9,6 +9,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	request "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
@@ -52,14 +53,19 @@ type claimRecord struct {
 	version es.Version
 }
 
+type buildQueries interface {
+	rest.Lister
+	Exists(context.Context, *internalversion.ListOptions) (bool, error)
+}
+
 type claimManager struct {
 	backend coordinationBackend
 	builds  rest.Getter
-	list    rest.Lister
+	list    buildQueries
 	now     func() time.Time
 }
 
-func newClaimManager(backend coordinationBackend, builds rest.Getter, list rest.Lister) *claimManager {
+func newClaimManager(backend coordinationBackend, builds rest.Getter, list buildQueries) *claimManager {
 	registerClaimMetrics()
 	return &claimManager{backend: backend, builds: builds, list: list, now: time.Now}
 }

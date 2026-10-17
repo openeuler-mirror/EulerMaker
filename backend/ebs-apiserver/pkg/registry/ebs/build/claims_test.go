@@ -151,6 +151,17 @@ func (s coordinationBuilds) List(ctx context.Context, opts *internalversion.List
 	}
 	return list, nil
 }
+
+func (s coordinationBuilds) Exists(ctx context.Context, opts *internalversion.ListOptions) (bool, error) {
+	query := *opts
+	query.Limit = 1
+	obj, err := s.List(ctx, &query)
+	if err != nil {
+		return false, err
+	}
+	return len(obj.(*ebsv1.BuildList).Items) != 0, nil
+}
+
 func testManager(f *coordinationFake) *claimManager {
 	s := coordinationBuilds{f: f}
 	return newClaimManager(f, s, s)

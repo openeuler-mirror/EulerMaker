@@ -561,6 +561,8 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进程内锁或 etcd。Build Controller 更新 Build 状态，并在 incremental 的 Pending 阶段固化 `spec.packages`；不读写占用索引。占用编排和恢复位于 `pkg/registry/ebs/build/claims_*.go`，底层复用 `pkg/storage/es` 的 create-only、实时 GET、CAS 与 PIT 扫描能力。
 
+创建准入中的最新非 single Build 查询保留创建时间排序、`Limit=1`，只返回 `data.metadata.name` 和 `data.status.phase`。成功 full Build 的存在性检查使用内部 `ESStore.Exists`，复用 List 的 Project、labelSelector 和 fieldSelector 转换；发送单次普通 `_search`，设置 `size=1`、`_source=false`、`track_total_hits=false`，不创建 PIT、不排序、不解码 Build 对象。根据 hits 是否为空判断存在性；查询超时、分片失败或响应不完整按错误返回，不当作不存在。这些优化不改变准入条件、Mapping 或对外 API。
+
 ### 范围与存储
 
 - 目标键为 Project 名、`spec.buildTarget.os`、`spec.buildTarget.arch` 三元组；不同目标可并行，同一目标最多有一个通过本协议创建的非终态 full/incremental/specified Build。single 创建和完成均不影响占用。
