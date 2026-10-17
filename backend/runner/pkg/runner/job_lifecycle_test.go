@@ -11,6 +11,7 @@ import (
 
 	"ebs-runner/pkg/artifact"
 	"ebs-runner/pkg/gateway"
+	"ebs-runner/pkg/options"
 )
 
 type fakeArtifactRemote struct{}
@@ -109,7 +110,11 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	remote := &fakeArtifactRemote{}
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
-		cfg:       Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second},
+		cfg: options.Config{
+			Name:     "runner-a",
+			RootDir:  root,
+			Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Second}},
+		},
 		client:    api,
 		executor:  &fakeExecutor{resultRoot: resultDir},
 		artifacts: &artifact.Processor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
@@ -161,7 +166,13 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	executor := &fakeExecutor{resultRoot: resultDir}
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
-		cfg: Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second}, client: api, executor: executor,
+		cfg: options.Config{
+			Name:     "runner-a",
+			RootDir:  root,
+			Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Second}},
+		},
+		client:    api,
+		executor:  executor,
 		artifacts: &artifact.Processor{Remote: &fakeArtifactRemote{}, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
 		cleanup:   &artifact.CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
 	}
@@ -239,7 +250,7 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	if err := os.MkdirAll(workPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	a := &Agent{cfg: Config{Name: "r", RootDir: root}, client: api, executor: executor}
+	a := &Agent{cfg: options.Config{Name: "r", RootDir: root}, client: api, executor: executor}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a.handleEvent(ctx, gateway.WatchEvent{Type: "ADDED", Object: job})
@@ -332,7 +343,14 @@ func TestAbortCancelsPostRunWithoutFinalStatusWrite(t *testing.T) {
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: gateway.JobStatus{Phase: "Running", Runner: "r", Stage: "PostRun"}}
 	api := &lifecycleAPI{job: job}
 	remote := &waitingArtifactRemote{started: make(chan struct{})}
-	a := &Agent{cfg: Config{Name: "r", ArtifactUploadTimeout: time.Minute}, client: api, artifacts: &artifact.Processor{Remote: remote}}
+	a := &Agent{
+		cfg: options.Config{
+			Name:     "r",
+			Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Minute}},
+		},
+		client:    api,
+		artifacts: &artifact.Processor{Remote: remote},
+	}
 	ctx, key, _ := a.registerExecution(context.Background(), job)
 	done := make(chan struct{})
 	go func() { a.resumePostRun(ctx, key, job); close(done) }()

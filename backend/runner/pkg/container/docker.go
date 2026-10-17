@@ -13,7 +13,9 @@ import (
 
 type DockerCLI struct{}
 
-var _ Runtime = DockerCLI{}
+var _ ManagedRuntime = DockerCLI{}
+
+func (DockerCLI) Close() error { return nil }
 
 func (DockerCLI) ImageExists(ctx context.Context, image string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image)

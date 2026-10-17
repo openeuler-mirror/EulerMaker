@@ -35,6 +35,7 @@ Runner 实现在 `backend/runner`，按职责分包：
 
 | 包 | 职责 |
 |---|---|
+| `pkg/options` | 组合 Gateway、Artifact 各业务包的配置，提供默认值、命令行解析与校验；命令行参数保持扁平 |
 | `pkg/runner` | Agent 装配、注册心跳、Job 生命周期、启动恢复与工作目录清理 |
 | `pkg/gateway` | Gateway API 客户端及资源传输类型、MachineAccount 凭据、Token 交换与刷新 |
 | `pkg/executor` | 执行器选择、CT 执行流程、Script 缓存、payload 写入与日志时间戳 |

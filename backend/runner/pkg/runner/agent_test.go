@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"ebs-runner/pkg/gateway"
+	"ebs-runner/pkg/options"
 )
 
 func TestMemoryQuantityFromMeminfo(t *testing.T) {
@@ -84,7 +85,7 @@ func (*registrationAPI) WatchAssignedJobs(context.Context, string, string) (<-ch
 
 func newRegistrationAgent(client RunnerAPI) *Agent {
 	return &Agent{
-		cfg:    Config{Name: "runner-a", Type: "ct", Arch: "x86_64"},
+		cfg:    options.Config{Name: "runner-a", Type: "ct", Arch: "x86_64"},
 		client: client, instanceID: testRunnerInstanceID,
 	}
 }

@@ -7,11 +7,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"ebs-runner/pkg/options"
 	"ebs-runner/pkg/runner"
 )
 
 func main() {
-	cfg, err := runner.LoadConfig(os.Args[1:])
+	cfg, err := options.LoadConfig(os.Args[1:])
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
@@ -24,6 +25,10 @@ func main() {
 		log.Fatalf("create runner: %v", err)
 	}
 	if err := agent.Run(ctx); err != nil {
+		_ = agent.Close()
 		log.Fatalf("runner stopped: %v", err)
+	}
+	if err := agent.Close(); err != nil {
+		log.Printf("close container runtime: %v", err)
 	}
 }
