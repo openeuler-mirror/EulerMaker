@@ -82,10 +82,10 @@ Snapshot/BuildInfo/RpmRepo            reconcile（仅经包内 Client）──�
 每轮 scan 只对 `builds` 发起分页 List（`status.phase` 只支持 `=`/`==`/`!=`，故用四个 `!=` AND）：
 
 ```text
-GET /apis/ebs/v1/builds?fieldSelector=status.phase!=Success,status.phase!=Failed,status.phase!=Aborted,status.phase!=Skipped&limit=100
+GET /apis/ebs/v1/builds?fieldSelector=status.phase!=Success,status.phase!=Failed,status.phase!=Aborted,status.phase!=Skipped&includeFields=metadata&limit=100
 ```
 
-首轮不发送 continue，后续携带响应中的 `metadata.continue`，直到为空。List 响应结构为 BuildList，items 为完整 Build 对象；对象样例见 4.1，项目级 GET 路径见 3.2。
+首轮不发送 continue，后续携带响应中的 `metadata.continue`，直到为空。List 响应结构为 BuildList，items 仅投影 metadata，用于入队；worker 再通过项目级 GET 获取完整对象。对象样例见 4.1，GET 路径见 3.2。
 
 ## 三、类型化客户端与 Fake（在 build controller 内实现）
 
@@ -645,9 +645,9 @@ rpmrepos:       get, create
 buildinfos:     get, create
 ```
 
-权限严格限制在上述操作：只读 Project（`projects: get`）；不能 create / update / delete Build（不做删除级联），不能写子资源的 status，不能访问 Job / Runner。
+控制器调用范围限于上述操作：只读 Project（`projects: get`）；允许更新 Build.status，并仅在 incremental 的 Pending 阶段更新 Build.spec.packages；不创建或删除 Build，不写子资源的 status，不访问 Job / Runner。
 
-身份侧：本轮不配置部署侧 mTLS 身份与 apiserver 授权；Build Controller 不调用发布后端、不持有发布凭据，发布后端的调用身份由 RpmRepo Controller 负责。
+身份侧：复用 Controller Manager 的 mTLS 客户端身份，组件级接口授权尚未实现，认证及部署边界见 [apiserver 设计](ebs-apiserver.md#内部-mtls-认证与授权)；Build Controller 不调用发布后端、不持有发布凭据，发布后端的调用身份由 RpmRepo Controller 负责。
 
 ## 十二、重启与可用性
 
@@ -716,8 +716,8 @@ buildinfos:     get, create
 
 ### 14.2 集成测试
 
-- 发布收口映射（成功）：`RpmRepo.status.release.phase=Ready` 时，断言同一次 `/status` 写入 `Build.status.phase=Success`、`stage=publish`、`repo=RpmRepo.status.release.contentURL`、`endTime` 非空与 `PublishSucceed=True/PublishSucceeded`；
-- 发布收口映射（失败）：`release.phase=Failed` 时，断言同一次 `/status` 写入 `phase=Failed`、`stage=publish`、`endTime` 非空与 `PublishSucceed=False/PublishFailed`，不写 `repo`，且不覆盖已写入的 `BuildSucceed`；
+- 发布收口映射（成功）：`RpmRepo.status.release.phase=Ready` 时，断言同一次 `/status` 写入 `Build.status.phase=Success`、`stage=publish`、`endTime` 非空与 `PublishSucceed=True/PublishSucceeded`；
+- 发布收口映射（失败）：`release.phase=Failed` 时，断言同一次 `/status` 写入 `phase=Failed`、`stage=publish`、`endTime` 非空与 `PublishSucceed=False/PublishFailed`，不覆盖已写入的 `BuildSucceed`；
 - 等待语义：`RpmRepo.status.release` 缺失或 `release.phase` 为 `Pending` / `Creating` / `Prepared` 时断言不写 `Build.status`、返回零值 + `nil`；收口完成后下一轮收敛到同一终态；
 - 跳过发布：`buildType=single` 结果汇总成功、非 single 的 `buildTarget.publishFlag=false` 两种输入都断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo，single 仅在 Pending ensure 本轮同名 RpmRepo，后续不消费其发布结果；
 - `Build.spec.buildType=single` 分支：验证 Pending 创建本轮同名 RpmRepo 且 release.phase=Skipped，后续阶段不巡检或重建该对象；覆盖目标仓库含多个 spec、build 与 install 全部成功、部分失败、空 map、缺失 build.status、缺失 install.status；只有非空且每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，其余进入 Failed/build。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
@@ -726,18 +726,14 @@ buildinfos:     get, create
 - 启动打点：断言进程内首次 reconcile 成功时只输出一次 `reconciled-after-start` 日志；
 - 可观测性：断言第十章列出的指标已注册，且 Conflict、Unknown 等场景对应计数递增。
 
-## 十五、实施顺序
+## 十五、运行装配
 
-1. 客户端：在 build controller 包内实现类型化 `Client` 与 fake，复用共享 client 的 `Get` / `ListProjectPage` / `Create` / `UpdateStatus`，并实现写错误三分类。
-2. 纯函数：状态机判定与 `MergeCondition`。
-3. Reconcile：注册 PollingSource handler，实现 Pending / Prepared / Processing-build / Processing-publish 四条分支与队列结果映射。
-4. 装配：注册 `build` initializer（注入 `clock.RealClock{}`）、在 initializer 阶段校验静态配置、轮询周期沿用全局 `--poll-period`、指标与权限就位。
-5. 测试：完成单元、集成与崩溃恢复测试后，再纳入默认 `--controllers=*`。
+`build` initializer 已注册，默认随 `--controllers=*` 启用；客户端、时钟与 PollingSource 的装配见第二章，验证范围见第十四章。
 
 ## 十六、假设与限制
 
 - `Build.metadata.name` 为 uuid，不存在同名重建。
-- 配套 API 契约：增加 `RpmRepoReleaseSkipped` 枚举；创建 RpmRepo 时保留成对的 repositoryUID / contentURL，以及显式传入的 `release.phase=Skipped`。Skipped 不要求 release.contentURL，不允许 release.transition；未提供 repository 时保持 nil。当前创建策略与状态校验需同步实现，不能清除 single 的 Skipped。
+- 配套 API 契约：使用 `RpmRepoReleaseSkipped` 枚举；创建 RpmRepo 时保留成对的 repositoryUID / contentURL，以及显式传入的 `release.phase=Skipped`。Skipped 不要求 release.contentURL，不允许 release.transition；未提供 repository 时保持 nil。创建保留规则与状态校验见 [apiserver 设计](ebs-apiserver.md)。
 - `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 由创建方或 apiserver 补齐，且必须与 spec 一致；`GetLastPublishedBuild` 依赖 `ebs.io/target-os` / `ebs.io/target-arch` 两个 label 与 `status.phase` / `status.stage` 字段，`PollingSource` 只依赖 `status.phase` 字段，不依赖任何 label。
 - 本轮不设未就绪超时。
 - 启动入队、单副本和重启恢复的取舍见第十二章；部署身份与授权的范围见第十一章。

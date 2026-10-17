@@ -615,7 +615,7 @@ Repository content URL
 
 #### 8.3.1 RpmRepo Controller
 
-RpmRepo Controller 负责选择基础仓与输入 Job、持久化推进意图，以及更新业务 API 状态；控制面串行推进、批次选择、冲突处理和重启恢复统一遵循 8.3.3。
+RpmRepo Controller 负责选择基础仓与输入 Job、持久化推进意图，以及更新业务 API 状态；详细规则统一见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md)，本节仅保留调用契约。
 
 #### 8.3.2 Artifact Manager
 
@@ -623,19 +623,11 @@ Artifact Manager 负责校验固定输入、执行 8.7 的物化算法，保存�
 
 Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etcd，不更新 `RpmRepo`、`Build` 或 `Job`，也不提供隐式“取最新仓库”接口。过程仓物化不维护可变的 `last`、`current` 软链接，调用方必须使用返回的不可变仓库 URL；8.13 节正式发布的 `current` 只属于稳定发布入口，不参与过程仓版本选择。
 
-#### 8.3.3 主动持续生成流程
+#### 8.3.3 控制面调用契约
 
-控制面流程以 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 为准。Controller 只轮询非发布终态 RpmRepo，不注册 Job Watch；过程仓推进和正式发布统一使用 `{project}/{buildName}` 队列键，在同一调谐流程中按持久化状态推进。
+Build Controller 创建 RpmRepo；RpmRepo Controller 选择基础仓和输入 Job，持久化检查点，再调用本章内部接口并根据结果更新 `RpmRepo.status`。single 或不发布构建的处理、批次选择、发布门禁及控制面重启恢复统一见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md)。
 
-Build Controller 为所有构建类型创建同名 RpmRepo，并可预置继承基线的 repositoryUID / contentURL；single 的 release.phase 在创建时设为 Skipped。RpmRepo Controller 不补建对象，只写其 status；Build 状态由 Build Controller 推进，Job 状态由执行侧维护。
-
-1. 按 Build label 完整分页读取 Job。候选需为 Succeeded、携带正确的归属和目标 labels，且未被 sourceJobNames 消费或列入 skippedJobNames；控制器不预查 manifest。Artifact Manager 在物化时逐个校验输入，并在可定位的 Manifest 输入失败记录中返回出错的 jobName，供控制器持久跳过后重新组批；不依赖 Job 上的 artifactState、artifactCount 或 repositoryState。
-2. 按稳定顺序和批次上限选输入，同一批每个 spec 最多一个 Job；基础仓取当前 repository.repositoryUID。先 CAS 写入固定 inputs、baseRepositoryUID、repositoryUID 的 transition，再提交物化请求。
-3. Ready 后一次 CAS 提升 repositoryUID / contentURL、累计去重排序的 sourceJobNames、更新时间与条件，并清空 transition；不向 RpmRepo 写摘要或 RPM 元数据，不向 Job 回写消费标记。
-4. 可重试失败沿用原检查点，按 Artifact Manager attempt 与 updatedAt 控制预算和退避。不可重试的单 Job 输入错误携带本批 `jobName` 时，控制器持久记录到 `skippedJobNames`、清除失败检查点并用剩余 Job 重新组批；无法定位的错误或重试预算耗尽才按批次失败收口。旧可读版本始终保留，不修改 Job。
-5. BuildInfo 未 Completed 时允许持续生成过程仓；Completed 表示所有 Job 已收敛。首次发布前仍须复核无剩余候选、无过程仓 transition，且本对象已产出版本（sourceJobNames 非空）；发布策略与在途恢复按 Controller 设计执行。
-
-Job labels 由 BuildInfo Controller 写入：`ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/target-os`、`ebs.io/target-arch`；Project 取 metadata.namespace。single 的 RpmRepo 为 Skipped，不进入该物化流程。重启由 RpmRepo 轮询恢复键，再按持久化检查点查询或重放。首版只允许单活动 Controller 实例。
+Artifact Manager 校验每个输入的 Completed Manifest。可定位的输入错误通过 `failure.jobName` 返回，供调用方跳过异常输入并重新组批；服务端状态与错误契约分别见 8.5、8.6.5 和 8.9。
 
 ### 8.4 标识与存储布局
 
@@ -1379,50 +1371,14 @@ X-Artifact-ID: art-log-01
 
 `X-Artifact-ID` 只在日志已经封账时返回。日志流完成后，接口继续返回相同正文和这些响应头，避免 Web UI 因重定向产生不同处理流程；最终日志的独立下载仍使用 Artifact 内容接口。
 
-#### 9.2.4 Web UI 展示流程
+#### 9.2.4 日志客户端接入
 
-Web UI 使用 Range 获取已有日志，再用 SSE 接收新增日志：
+当前 Web UI 使用末尾 Range 轮询，见 [前端日志设计](frontend.md#八实时日志与产物)。服务端同时提供 9.2.3 的 SSE 接口，接入方可按以下规则实现增量读取：
 
-```text
-LoadingHistory -> ConnectingSSE -> Streaming -> Completed
-                         ^              |
-                         |              v
-                  CatchingUpByRange <- Disconnected
-```
-
-首次打开页面时：
-
-1. 请求 `/logs/content`，首屏可使用 `Range: bytes=0-`；日志很大时可以只请求末尾窗口，并提供加载更早内容的入口。
-2. 记录响应正文结束位置 `committedOffset=X-Committed-Bytes`，以及 `lastSequence=X-Log-Next-Sequence-1`。
-3. 如果 `X-Log-State=Completed`，直接展示正文和完整日志下载入口，不建立 SSE。
-4. 如果日志仍为 Open，使用 `afterSequence={lastSequence}` 创建 `EventSource`。由于响应正文和 sequence 来自同一个一致性快照，SSE 会从下一 chunk 开始，不会遗漏 Range 请求与 SSE 建连之间到达的日志。
-
-前端处理 `log` 事件时应：
-
-1. Base64 解码 `content` 得到原始字节。
-2. 使用 `TextDecoder("utf-8")` 的 `{stream:true}` 模式增量解码，正确处理跨 chunk 的 UTF-8 字符。
-3. 将字节长度累加到 `committedOffset`，把 `event.lastEventId` 保存为 `lastSequence`。
-4. 批量刷新终端组件，不能为每一行创建永久 DOM 节点。
-
-SSE 使用 Base64 是因为日志可能包含非 UTF-8 字节、不完整的多字节字符、换行和 SSE 控制格式。页面推荐使用 xterm.js 或虚拟列表，只保留有限可视行；完整内容通过 Range 分段加载或 Artifact 下载。用户离开底部时只暂停自动滚动，不暂停接收和位置记录。
-
-浏览器自动重连会携带 `Last-Event-ID`。如果发生普通网络错误，Web UI 保持当前 `committedOffset` 和 `lastSequence` 等待自动重连；如果持续失败或服务端报告 `ReplayWindowExceeded`，则关闭 `EventSource`，执行：
-
-```http
-GET .../logs/content
-Range: bytes={committedOffset}-
-```
-
-页面追加补齐内容，从新响应头更新 `committedOffset` 和 `lastSequence`，再以新的 `afterSequence` 创建 SSE。由于原生 `EventSource` 无法可靠读取非 200 响应体，前端不能依赖解析 409 的 JSON 正文，应在错误后主动走 Range 补齐流程。
-
-收到：
-
-```text
-event: complete
-data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
-```
-
-前端刷新 `TextDecoder` 剩余内容、关闭 `EventSource`、将状态更新为 Completed，并显示 `/artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content` 的完整日志下载入口。页面隐藏时可以降低渲染频率，但仍需持续消费事件并保存 byte offset 和 sequence。
+1. 先读取 Range 一致性快照，保存 `X-Committed-Bytes` 与 `X-Log-Next-Sequence-1`；Completed 时无需建立 SSE。
+2. 使用该 sequence 作为 `afterSequence`，按事件 ID 更新进度；Base64 解码后按字节累计 offset，以流式 UTF-8 解码处理跨 chunk 字符。
+3. 回放窗口失效时关闭 SSE，从已读取的 byte offset 发起 Range 补齐，再使用新快照的 sequence 重连。不能依赖原生 EventSource 读取 409 响应正文。
+4. 收到 complete 后刷新解码器并关闭连接；完整日志下载使用带 Project、Job 和 Artifact ID 的内容接口。
 
 #### 9.2.5 日志封账
 
@@ -1652,7 +1608,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 8. 容器日志实时分块追加、sequence 幂等和断点续传。
 9. Job 上传清单的本地持久化、完整性校验、单次成功封账、幂等完成和查询。
 10. Runner 的 manifest 封账顺序与 RpmRepo Controller 基于清单、sourceJobNames 的消费约定。
-11. 活动日志一致性 Range 读取、SSE 实时展示、Web UI 断线补齐及 `container.log` Artifact 幂等封账。
+11. 活动日志一致性 Range 读取、SSE 事件接口及 `container.log` Artifact 幂等封账；Web UI 当前使用 Range 轮询。
 12. 实时日志的崩溃恢复、大小限制和慢消费者断开。
 13. 由 RpmRepo Controller 驱动、基于 Completed Manifest 和显式基础仓的 RPM 仓库物化。
 14. 正式发布的正文生成、指针切换、恢复与按数量和时间清理历史版本。
