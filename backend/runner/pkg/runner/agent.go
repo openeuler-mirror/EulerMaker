@@ -98,7 +98,7 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 			containers, err = containerruntime.NewContainerd(cfg.Container.Containerd.Address, cfg.Container.Containerd.Namespace,
 				cfg.Container.Containerd.Snapshotter, cfg.RootDir)
 		} else {
-			containers = containerruntime.DockerCLI{}
+			containers, err = containerruntime.NewDocker()
 		}
 		if err != nil {
 			return nil, err

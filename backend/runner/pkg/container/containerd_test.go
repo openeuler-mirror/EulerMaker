@@ -3,10 +3,13 @@ package container
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -16,16 +19,147 @@ import (
 	tasktypes "github.com/containerd/containerd/api/types/task"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/core/snapshots"
 	"github.com/containerd/containerd/v2/pkg/filters"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/containerd/v2/plugins/content/local"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/errdefs/pkg/errgrpc"
+	"github.com/opencontainers/go-digest"
+	imagespec "github.com/opencontainers/image-spec/specs-go/v1"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+type configImage struct {
+	store content.Store
+	desc  imagespec.Descriptor
+}
+
+func (i configImage) Config(context.Context) (imagespec.Descriptor, error) { return i.desc, nil }
+func (i configImage) ContentStore() content.Store                          { return i.store }
+
+func TestContainerdSpec(t *testing.T) {
+	store, err := local.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(imagespec.Image{
+		Platform: imagespec.Platform{OS: "linux", Architecture: "amd64"},
+		Config: imagespec.ImageConfig{Entrypoint: []string{"/bin/sh"}, Cmd: []string{"-c", "echo image"},
+			Env: []string{"PATH=/usr/bin", "VALUE=image"}, WorkingDir: "/image"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := imagespec.Descriptor{MediaType: imagespec.MediaTypeImageConfig, Digest: digest.FromBytes(body), Size: int64(len(body))}
+	if err := content.WriteBlob(context.Background(), store, "config", bytes.NewReader(body), desc); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		spec Spec
+		args []string
+	}{
+		{"image defaults", Spec{}, []string{"/bin/sh", "-c", "echo image"}},
+		{"command override", Spec{Command: []string{"-c"}, Args: []string{"echo job"}}, []string{"/bin/sh", "-c", "echo job"}},
+		{"script entrypoint", Spec{Entrypoint: "/workspace/scripts/rpmbuild"}, []string{"/workspace/scripts/rpmbuild"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.spec.Env = map[string]string{"VALUE": "job"}
+			tt.spec.Mounts = map[string]string{"/srv/work": "/workspace", "/srv/sub": "/workspace/sub"}
+			opts, err := containerdSpecOptions(configImage{store, desc}, tt.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts = append([]oci.SpecOpts{oci.WithRootFSPath(t.TempDir())}, opts...)
+			ctx := namespaces.WithNamespace(context.Background(), "eulermaker")
+			spec, err := oci.GenerateSpec(ctx, nil, &containers.Container{ID: "test"}, opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(spec.Process.Args, tt.args) || spec.Process.Cwd != "/image" {
+				t.Fatalf("process = %+v", spec.Process)
+			}
+			if !slices.Contains(spec.Process.Env, "VALUE=job") || !slices.Contains(spec.Process.Env, "PATH=/usr/bin") {
+				t.Fatalf("env = %v", spec.Process.Env)
+			}
+			for _, ns := range spec.Linux.Namespaces {
+				if ns.Type == specs.NetworkNamespace {
+					t.Fatal("host network should share the host namespace")
+				}
+			}
+			mounts := spec.Mounts[len(spec.Mounts)-2:]
+			if mounts[0].Source != "/srv/work" || mounts[1].Destination != "/workspace/sub" {
+				t.Fatalf("bind mount ordering = %v", mounts)
+			}
+		})
+	}
+}
+
+func TestContainerdImageReference(t *testing.T) {
+	for input, want := range map[string]string{
+		"busybox": "docker.io/library/busybox:latest",
+		"swr.cn-north-4.myhuaweicloud.com/eulermaker/build:dev": "swr.cn-north-4.myhuaweicloud.com/eulermaker/build:dev",
+	} {
+		got, err := imageReference(input)
+		if err != nil || got != want {
+			t.Fatalf("imageReference(%q) = %q, %v", input, got, err)
+		}
+	}
+}
+
+func TestContainerdLogsFollowAndDrain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task.log")
+	writer, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	execution := &containerdExecution{done: make(chan struct{})}
+	var output bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- followContainerdLog(ctx, reader, &output, execution) }()
+	for _, line := range []string{"stdout\n", "stderr\n", "final bytes without newline"} {
+		if _, err := writer.WriteString(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(execution.done)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "stdout\nstderr\nfinal bytes without newline" {
+		t.Fatalf("logs = %q", output.String())
+	}
+}
+
+func TestContainerdWaitCancellation(t *testing.T) {
+	r := &Containerd{tasks: map[string]*containerdExecution{"job": {done: make(chan struct{})}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.Wait(ctx, "job"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v", err)
+	}
+	r.tasks["job"].code = 7
+	close(r.tasks["job"].done)
+	if code, err := r.Wait(context.Background(), "job"); err != nil || code != 7 {
+		t.Fatalf("wait = %d, %v", code, err)
+	}
+}
 
 type runtimeStore struct {
 	containers.Store
@@ -222,5 +356,125 @@ func TestContainerdTaskLifecycle(t *testing.T) {
 				t.Fatalf("signals = %v", taskService.signals)
 			}
 		})
+	}
+}
+
+// Opt in on a disposable Linux node with containerd, runc and image access.
+func TestContainerdIntegration(t *testing.T) {
+	address := os.Getenv("EBS_TEST_CONTAINERD_ADDRESS")
+	if address == "" {
+		t.Skip("set EBS_TEST_CONTAINERD_ADDRESS to run against a real daemon")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	namespace := "ebs-test-" + time.Now().Format("20060102150405.000000000")
+	root := t.TempDir()
+	r, err := NewContainerd(address, namespace, "overlayfs", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := r.Remove(ctx, "job"); err != nil {
+			t.Errorf("clean test container: %v", err)
+		}
+		if err := r.client.ImageService().Delete(r.context(ctx), "docker.io/library/busybox:latest", images.SynchronousDelete()); err != nil && !errdefs.IsNotFound(err) {
+			t.Errorf("clean test image: %v", err)
+		}
+		if err := r.client.NamespaceService().Delete(ctx, namespace); err != nil {
+			t.Errorf("clean test namespace: %v", err)
+		}
+		if err := r.Close(); err != nil {
+			t.Errorf("close test client: %v", err)
+		}
+	})
+	if err := r.Pull(ctx, "busybox"); err != nil {
+		t.Fatal(err)
+	}
+	if found, err := r.ImageExists(ctx, "busybox"); err != nil || !found {
+		t.Fatalf("image exists = %v, %v", found, err)
+	}
+	id, err := r.Create(ctx, Spec{Name: "job", Image: "busybox", NetworkMode: "host",
+		Command: []string{"sh", "-c", "printf stdout; printf stderr >&2; exit 7"},
+		Labels:  map[string]string{"ebs.io/runner": "test", "ebs.io/job-uid": "test-job"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if code, err := r.Wait(ctx, id); err != nil || code != 7 {
+		t.Fatalf("wait = %d, %v", code, err)
+	}
+	var output bytes.Buffer
+	if err := r.Logs(ctx, id, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output.Bytes(), []byte("stdout")) || !bytes.Contains(output.Bytes(), []byte("stderr")) {
+		t.Fatalf("logs = %q", output.String())
+	}
+	c, err := r.client.LoadContainer(r.context(ctx), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := c.Info(r.context(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Remove(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.client.SnapshotService("overlayfs").Stat(r.context(ctx), info.SnapshotKey); err == nil {
+		t.Fatal("task rootfs snapshot remains after removal")
+	}
+
+	id, err = r.Create(ctx, Spec{Name: "job", Image: "busybox", NetworkMode: "host",
+		Command: []string{"sh", "-c", "trap '' TERM; echo ready; while :; do sleep 1; done"},
+		Labels:  map[string]string{"ebs.io/runner": "test", "ebs.io/job-uid": "test-job"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	path, err := r.logPath(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(body, []byte("ready")) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := NewContainerd(address, namespace, "overlayfs", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = recovered
+	ids, err := r.List(ctx, map[string]string{"ebs.io/runner": "test", "ebs.io/job-uid": ""})
+	if err != nil || !reflect.DeepEqual(ids, []string{"job"}) {
+		t.Fatalf("recovered containers = %v, %v", ids, err)
+	}
+	if err := r.Stop(ctx, id, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Remove(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("runtime log remains after recovery: %v", err)
 	}
 }

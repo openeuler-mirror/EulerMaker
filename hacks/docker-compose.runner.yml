@@ -13,7 +13,6 @@ services:
     group_add:
       - "${DOCKER_GID:-989}"
     volumes:
-      - /usr/bin/docker:/usr/bin/docker:ro
       - /var/run/docker.sock:/var/run/docker.sock
       # The host Docker daemon resolves bind mounts. Keep this absolute path
       # identical in the Runner and on the host for Job work/results uploads.
