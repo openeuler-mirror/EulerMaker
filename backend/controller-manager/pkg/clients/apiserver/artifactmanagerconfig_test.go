@@ -21,3 +21,9 @@ func TestParseArtifactManagerEndpoints(t *testing.T) {
 		t.Fatalf("unexpected endpoints: %#v", endpoints)
 	}
 }
+
+func TestParseArtifactManagerEndpointsDecodeError(t *testing.T) {
+	if _, err := ParseArtifactManagerEndpoints("instances: ["); err == nil {
+		t.Fatal("expected configuration decode error")
+	}
+}

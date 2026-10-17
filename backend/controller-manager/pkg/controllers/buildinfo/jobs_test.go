@@ -109,15 +109,13 @@ func TestPackageNameLabelValue(t *testing.T) {
 // --- Resource merge ---
 
 func TestResolveResourcesMerge(t *testing.T) {
-	resource := &buildResourceRules{
-		Spec: ebsv1.BuildResourceContent{
-			Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
-			Packages: map[string]ebsv1.PackageResourceConfig{
-				"a": {
-					Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "2"}},
-					Arches: map[string]ebsv1.ResourceRequirements{
-						testArch: {Requests: map[string]string{"memory": "4Gi"}},
-					},
+	resource := &ebsv1.BuildResourceContent{
+		Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
+		Packages: map[string]ebsv1.PackageResourceConfig{
+			"a": {
+				Default: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "2"}},
+				Arches: map[string]ebsv1.ResourceRequirements{
+					testArch: {Requests: map[string]string{"memory": "4Gi"}},
 				},
 			},
 		},
@@ -204,7 +202,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	}}}
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
-	resource := testBuildResourceRules()
+	resource := testBuildResourceContent()
 
 	job := c.jobForSpec(
 		round,
@@ -313,7 +311,7 @@ func TestJobPayloadKeepsArtifactReference(t *testing.T) {
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
 	job := c.jobForSpec(round, "a", &depend, snapshot, testImage,
-		"http://artifact.internal:8081/repositories/v1/repo-1/", testBuildResourceRules(), testScriptRef(),
+		"http://artifact.internal:8081/repositories/v1/repo-1/", testBuildResourceContent(), testScriptRef(),
 		"job-x", 1, nil)
 
 	got := payloadFields(t, job.Spec.Payload)["repo"]
@@ -362,7 +360,7 @@ func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
 				testSnapshotObj(),
 				testImage,
 				"",
-				testBuildResourceRules(),
+				testBuildResourceContent(),
 				testScriptRef(),
 				"job-a",
 				1,
@@ -407,7 +405,7 @@ func TestJobPayloadUseKmodLibsMatchesPackageRepo(t *testing.T) {
 				testSnapshotObj(),
 				testImage,
 				"",
-				testBuildResourceRules(),
+				testBuildResourceContent(),
 				testScriptRef(),
 				"job-a",
 				1,
@@ -451,7 +449,7 @@ func TestJobPayloadUseGitLFSMatchesPackageRepo(t *testing.T) {
 				testSnapshotObj(),
 				testImage,
 				"",
-				testBuildResourceRules(),
+				testBuildResourceContent(),
 				testScriptRef(),
 				"job-a",
 				1,
@@ -498,7 +496,7 @@ func TestJobPayloadUseRootMatchesPackageRepo(t *testing.T) {
 				testSnapshotObj(),
 				testImage,
 				"",
-				testBuildResourceRules(),
+				testBuildResourceContent(),
 				testScriptRef(),
 				"job-a",
 				1,
@@ -542,7 +540,7 @@ func TestJobPayloadUseXZMatchesPackageRepo(t *testing.T) {
 				testSnapshotObj(),
 				testImage,
 				"",
-				testBuildResourceRules(),
+				testBuildResourceContent(),
 				testScriptRef(),
 				"job-a",
 				1,
@@ -589,7 +587,7 @@ func TestJobPayloadUnuseGCCSecureMatchesPackageRepo(t *testing.T) {
 				testSnapshotObj(),
 				testImage,
 				"",
-				testBuildResourceRules(),
+				testBuildResourceContent(),
 				testScriptRef(),
 				"job-a",
 				1,
@@ -646,7 +644,7 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 		testSnapshotObj(),
 		testImage,
 		testRepoURL,
-		testBuildResourceRules(),
+		testBuildResourceContent(),
 		testScriptRef(),
 		"job-a",
 		1,
@@ -664,7 +662,7 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 		testSnapshotObj(),
 		testImage,
 		testRepoURL,
-		testBuildResourceRules(),
+		testBuildResourceContent(),
 		testScriptRef(),
 		"job-b",
 		1,
@@ -693,7 +691,7 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 		snapshot,
 		testImage,
 		"",
-		testBuildResourceRules(),
+		testBuildResourceContent(),
 		testScriptRef(),
 		"job-y",
 		1,
@@ -758,7 +756,7 @@ func dispatchRound(
 	bi.UID = types.UID(uid)
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{spec: {}})
 	seeded := client.SeedBuildInfo(bi)
-	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildResourceContent(testBuildResourceContent())
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	return round, seeded
 }
@@ -773,7 +771,7 @@ func TestDispatchBatchWritesStatusOnce(t *testing.T) {
 	bi.UID = "batch-dispatch"
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {}, "b": {}})
 	seeded := client.SeedBuildInfo(bi)
-	client.SeedBuildResourceRules(testBuildResourceRules())
+	client.SetBuildResourceContent(testBuildResourceContent())
 	key := testNS + "/" + testBuild
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	for _, name := range []string{"a", "b"} {
@@ -1033,7 +1031,7 @@ func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
 		testSnapshotObj(),
 		testImage,
 		contentURL,
-		testBuildResourceRules(),
+		testBuildResourceContent(),
 		testScriptRef(),
 		"job-a",
 		1,

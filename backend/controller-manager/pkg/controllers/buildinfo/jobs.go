@@ -139,9 +139,9 @@ func (c *Controller) dispatchSpec(
 	}
 
 	// The cluster-wide default table is the sole source of Job resources.
-	resource := round.resourceRules
+	resource := round.resourceContent
 	if resource == nil {
-		resource, err = c.client.GetBuildResourceRules(ctx)
+		resource, err = c.client.GetBuildResourceContent(ctx)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				message := "build-resource Config not found"
@@ -157,7 +157,7 @@ func (c *Controller) dispatchSpec(
 			}
 			return controller.ReconcileResult{}, err
 		}
-		round.resourceRules = resource
+		round.resourceContent = resource
 	}
 
 	if round.scriptRef == nil {
@@ -466,7 +466,7 @@ func (c *Controller) jobForSpec(
 	depend *specparse.SpecDepend,
 	snapshot *ebsv1.Snapshot,
 	image, contentURL string,
-	resource *buildResourceRules,
+	resource *ebsv1.BuildResourceContent,
 	scriptRef ebsv1.ScriptRef,
 	name string,
 	generation int64,
@@ -679,9 +679,9 @@ func (c *Controller) marshalPayload(round *reconcileRound, fields map[string]any
 
 // resolveResources overlays spec defaults, package defaults, then architecture settings. Missing limits inherit
 // requests from the same level.
-func resolveResources(resource *buildResourceRules, specName, arch string) ebsv1.ResourceRequirements {
-	merged := normalizeResourceLevel(resource.Spec.Default)
-	if pkg, ok := resource.Spec.Packages[specName]; ok {
+func resolveResources(resource *ebsv1.BuildResourceContent, specName, arch string) ebsv1.ResourceRequirements {
+	merged := normalizeResourceLevel(resource.Default)
+	if pkg, ok := resource.Packages[specName]; ok {
 		merged = overlayResources(merged, pkg.Default)
 		if archLevel, ok := pkg.Arches[arch]; ok {
 			merged = overlayResources(merged, archLevel)
