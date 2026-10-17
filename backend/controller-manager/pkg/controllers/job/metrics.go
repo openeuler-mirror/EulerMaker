@@ -11,4 +11,10 @@ var (
 	historyDeleted         = metrics.NewCounter("job_controller_history_deleted_total", "Number of expired terminal Jobs deleted.")
 	historyMissingEndTime  = metrics.NewCounter("job_controller_history_missing_end_time_total", "Number of terminal Jobs observed without an end time.")
 	historyDeleteUnknown   = metrics.NewCounter("job_controller_history_delete_unknown_total", "Number of Job deletes with an unknown result.")
+	historyArchive         = map[string]*metrics.Counter{
+		"confirmed": metrics.NewCounter("job_controller_history_archive_confirmed_total", "Number of confirmed Job archive snapshots."),
+		"conflict":  metrics.NewCounter("job_controller_history_archive_conflict_total", "Number of Job archive conflicts."),
+		"unknown":   metrics.NewCounter("job_controller_history_archive_unknown_total", "Number of unconfirmed Job archives."),
+		"error":     metrics.NewCounter("job_controller_history_archive_error_total", "Number of failed Job archives."),
+	}
 )

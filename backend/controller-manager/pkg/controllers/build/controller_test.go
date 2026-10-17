@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
 
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -39,7 +40,7 @@ func TestNewValidatesDependenciesAndConfig(t *testing.T) {
 func TestInitializerRegistersNonTerminalPollingSource(t *testing.T) {
 	polling := &fakePollingFactory{}
 	init := manager.InitContext{
-		Dependencies: manager.Dependencies{Client: &stubSharedClient{}, PollingFactory: polling},
+		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
 		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute, SlowRetryJitter: 0.2},
 	}
 	value, ok, err := Initializer(Config{PollPeriod: 25 * time.Second, MaxRetries: 3})(context.Background(), init)
@@ -71,7 +72,7 @@ func TestInitializerRegistersNonTerminalPollingSource(t *testing.T) {
 func TestInitializerFailsFastOnInvalidConfig(t *testing.T) {
 	polling := &fakePollingFactory{}
 	init := manager.InitContext{
-		Dependencies: manager.Dependencies{Client: &stubSharedClient{}, PollingFactory: polling},
+		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
 		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute, SlowRetryJitter: 0.2},
 	}
 	value, ok, err := Initializer(Config{PollPeriod: 0, MaxRetries: 1})(context.Background(), init)

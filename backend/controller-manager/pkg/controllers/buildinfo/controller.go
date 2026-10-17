@@ -132,10 +132,6 @@ func New(
 // slow-retry policy.
 func Initializer(config Config, gitClient gitserver.GitServerClient) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
-		shared, ok := init.Dependencies.Client.(SharedClient)
-		if !ok {
-			return nil, false, fmt.Errorf("shared API client does not implement the BuildInfo SharedClient surface")
-		}
 		buildInfos, err := init.Dependencies.PollingFactory.ForResource(
 			source.BuildInfosGVR,
 			config.PollPeriod,
@@ -146,7 +142,7 @@ func Initializer(config Config, gitClient gitserver.GitServerClient) manager.Ini
 		}
 		value, err := New(
 			buildInfos,
-			newAPIClient(shared),
+			newAPIClient(init.Dependencies.Client),
 			gitClient,
 			clock.RealClock{},
 			config,

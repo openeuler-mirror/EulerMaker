@@ -8,6 +8,19 @@ import (
 	"k8s.io/klog/v2"
 )
 
+func TestJobHistoryAction(t *testing.T) {
+	base := []string{"--apiserver=https://api:8443", "--insecure-skip-verify=true"}
+	for _, action := range []string{"delete", "archive"} {
+		o, err := Parse(append(base, "--job-history-action="+action))
+		if err != nil || o.Job.HistoryAction != action {
+			t.Fatalf("action=%s options=%+v error=%v", action, o.Job, err)
+		}
+	}
+	if _, err := Parse(append(base, "--job-history-action=unknown", "--job-history-gc-enabled=false")); err == nil {
+		t.Fatal("invalid action must be rejected even when GC is disabled")
+	}
+}
+
 func TestClientCertificateOptions(t *testing.T) {
 	if _, err := Parse([]string{"--apiserver=https://api:8443", "--insecure-skip-verify=true", "--apiserver-client-cert=client.crt"}); err == nil {
 		t.Fatal("unpaired client certificate was accepted")
@@ -54,7 +67,7 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if o.Manager.SlowRetryInitialDelay != 30*time.Second || o.Manager.SlowRetryMaxDelay != 15*time.Minute || o.Manager.SlowRetryJitter != 0.2 {
 		t.Fatalf("unexpected slow retry defaults: %+v", o.Manager)
 	}
-	if o.Job.RunnerLostGracePeriod != 5*time.Minute || !o.Job.HistoryGCEnabled || o.Job.HistoryRetention != 720*time.Hour {
+	if o.Job.RunnerLostGracePeriod != 5*time.Minute || !o.Job.HistoryGCEnabled || o.Job.HistoryRetention != 720*time.Hour || o.Job.HistoryAction != "delete" {
 		t.Fatalf("unexpected Job controller defaults: %+v", o)
 	}
 	if o.Runner.HeartbeatTimeout != 2*time.Minute || o.Runner.StartupGracePeriod != 5*time.Minute {

@@ -53,6 +53,8 @@ func (s *fakeCachedSource) set(key string, obj runtime.Object) {
 }
 
 type fakeClient struct {
+	archiveFn      func(context.Context, string, string, clientpkg.DeletePreconditions) (*ebsv1.Job, error)
+	getOldJobFn    func(context.Context, string, string) (*ebsv1.Job, error)
 	listHistoryFn  func(context.Context, ebsv1.JobPhase, string, int64) (source.ListPage, error)
 	getJobFn       func(context.Context, string, string) (*ebsv1.Job, error)
 	getRunnerFn    func(context.Context, string) (*ebsv1.Runner, error)
@@ -62,6 +64,13 @@ type fakeClient struct {
 	getRunnerCalls int
 	updateCalls    int
 	deleteCalls    int
+}
+
+func (c *fakeClient) ArchiveJob(ctx context.Context, namespace, name string, pre clientpkg.DeletePreconditions) (*ebsv1.Job, error) {
+	return c.archiveFn(ctx, namespace, name, pre)
+}
+func (c *fakeClient) GetOldJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
+	return c.getOldJobFn(ctx, namespace, name)
 }
 
 func (c *fakeClient) ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error) {
@@ -289,6 +298,134 @@ func TestCanceledContextDoesNotConfirmUnknownWrite(t *testing.T) {
 	_, err := c.handleStatusWriteError(ctx, "project/job", job, errors.New("unknown"))
 	if !errors.Is(err, context.Canceled) || client.getJobCalls != 0 {
 		t.Fatalf("err=%v getJobCalls=%d", err, client.getJobCalls)
+	}
+}
+
+func TestHistoryArchiveConfirmation(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		outcome            clientpkg.WriteOutcome
+		code               int
+		responseChange     string
+		confirmationChange string
+		confirmError       bool
+		cancel             bool
+		wantDelete         bool
+		wantConfirm        bool
+	}{
+		{name: "success", wantDelete: true},
+		{name: "response lost", outcome: clientpkg.WriteUnknown, wantConfirm: true, wantDelete: true},
+		{name: "plain error", outcome: "plain", wantConfirm: true, wantDelete: true},
+		{name: "unexpected success", responseChange: "spec", wantConfirm: true, wantDelete: true},
+		{name: "different stored spec", outcome: clientpkg.WriteUnknown, confirmationChange: "spec", wantConfirm: true},
+		{name: "different stored version", outcome: clientpkg.WriteUnknown, confirmationChange: "version", wantConfirm: true},
+		{name: "confirmation unavailable", outcome: clientpkg.WriteUnknown, confirmError: true, wantConfirm: true},
+		{name: "shutdown", outcome: clientpkg.WriteUnknown, cancel: true},
+		{name: "not sent", outcome: clientpkg.WriteNotSent},
+		{name: "source deleted", outcome: clientpkg.WriteRejected, code: 404},
+		{name: "source changed", outcome: clientpkg.WriteRejected, code: 409},
+		{name: "ES unavailable", outcome: clientpkg.WriteRejected, code: 503},
+		{name: "forbidden", outcome: clientpkg.WriteRejected, code: 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(10_000_000, 0)
+			job := runningJob()
+			job.Status.Phase = ebsv1.JobSucceeded
+			job.Status.EndTime = metav1.NewTime(now.Add(-31 * 24 * time.Hour))
+			change := func(j *ebsv1.Job, kind string) {
+				if kind == "spec" {
+					j.Spec.Priority++
+				}
+				if kind == "version" {
+					j.ResourceVersion = "11"
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			client := &fakeClient{}
+			client.getJobFn = func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil }
+			client.archiveFn = func(_ context.Context, _, _ string, pre clientpkg.DeletePreconditions) (*ebsv1.Job, error) {
+				if pre.UID != job.UID || pre.ResourceVersion != job.ResourceVersion {
+					t.Fatalf("preconditions=%+v", pre)
+				}
+				if tc.cancel {
+					cancel()
+				}
+				if tc.outcome == "plain" {
+					return nil, errors.New("response lost")
+				}
+				if tc.outcome != "" {
+					return nil, &clientpkg.WriteError{Outcome: tc.outcome, StatusCode: tc.code, Err: errors.New("archive failed")}
+				}
+				out := job.DeepCopy()
+				change(out, tc.responseChange)
+				return out, nil
+			}
+			confirmCalls := 0
+			client.getOldJobFn = func(context.Context, string, string) (*ebsv1.Job, error) {
+				confirmCalls++
+				if tc.confirmError {
+					return nil, errors.New("read unavailable")
+				}
+				out := job.DeepCopy()
+				change(out, tc.confirmationChange)
+				return out, nil
+			}
+			client.deleteFn = func(_ context.Context, _, _ string, pre clientpkg.DeletePreconditions) error {
+				if pre.UID != job.UID || pre.ResourceVersion != job.ResourceVersion {
+					t.Fatalf("unsafe delete: %+v", pre)
+				}
+				return nil
+			}
+			c, _, _, _ := newTestController(t, now, job, nil, client, true)
+			c.config.HistoryAction = "archive"
+			_, _ = c.reconcileHistory(ctx, "project/job", job, now)
+			if (client.deleteCalls == 1) != tc.wantDelete || (confirmCalls == 1) != tc.wantConfirm {
+				t.Fatalf("delete calls=%d confirm calls=%d", client.deleteCalls, confirmCalls)
+			}
+		})
+	}
+}
+
+func TestHistoryArchiveRestartAfterDeleteConflict(t *testing.T) {
+	now := time.Unix(10_000_000, 0)
+	job := runningJob()
+	job.Status.Phase = ebsv1.JobSucceeded
+	job.Status.EndTime = metav1.NewTime(now.Add(-31 * 24 * time.Hour))
+	latest := job.DeepCopy()
+	var archived *ebsv1.Job
+	client := &fakeClient{}
+	client.getJobFn = func(context.Context, string, string) (*ebsv1.Job, error) { return latest.DeepCopy(), nil }
+	client.archiveFn = func(_ context.Context, _, _ string, pre clientpkg.DeletePreconditions) (*ebsv1.Job, error) {
+		if pre.ResourceVersion != latest.ResourceVersion {
+			t.Fatal("archive must use latest version")
+		}
+		archived = latest.DeepCopy()
+		return archived.DeepCopy(), nil
+	}
+	client.deleteFn = func(_ context.Context, _, _ string, pre clientpkg.DeletePreconditions) error {
+		if archived == nil || archived.ResourceVersion != pre.ResourceVersion {
+			t.Fatal("delete before archive")
+		}
+		if client.deleteCalls == 1 {
+			latest.ResourceVersion = "11"
+			latest.Labels = map[string]string{"note": "changed"}
+			return &clientpkg.WriteError{Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: errors.New("source changed")}
+		}
+		if !sameArchivedJob(archived, latest) {
+			t.Fatal("latest snapshot must be archived")
+		}
+		return nil
+	}
+	for range 2 {
+		c, _, _, _ := newTestController(t, now, job, nil, client, true)
+		c.config.HistoryAction = "archive"
+		if _, err := c.reconcileHistory(context.Background(), "project/job", job, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if client.deleteCalls != 2 || archived.ResourceVersion != "11" {
+		t.Fatalf("archive=%+v delete calls=%d", archived, client.deleteCalls)
 	}
 }
 

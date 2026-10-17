@@ -33,14 +33,6 @@ var ErrNotFound = errors.New("object not found")
 // timeouts, 5xx). It is a code constant, unlike the configurable git-server retry budget.
 const apiServerReadRetries = 3
 
-// SharedClient is the shared client surface this typed client needs: the generic CRUD interface plus the build-target
-// Config reader.
-type SharedClient interface {
-	apiserver.Interface
-	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
-	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
-}
-
 // buildResourceRules keeps the Config metadata together with its parsed resource rules; it is not an API resource.
 type buildResourceRules struct {
 	metav1.ObjectMeta
@@ -56,8 +48,6 @@ func (r *buildResourceRules) DeepCopy() *buildResourceRules {
 	out.Spec = *r.Spec.DeepCopy()
 	return &out
 }
-
-var _ SharedClient = (*apiserver.Client)(nil)
 
 // Client is the typed API surface the BuildInfo controller depends on.
 //
@@ -91,9 +81,9 @@ type Client interface {
 }
 
 // newAPIClient wraps the shared controller-manager API client.
-func newAPIClient(client SharedClient) Client { return &apiClient{client: client} }
+func newAPIClient(client *apiserver.Client) Client { return &apiClient{client: client} }
 
-type apiClient struct{ client SharedClient }
+type apiClient struct{ client *apiserver.Client }
 
 func (c *apiClient) AbortJob(
 	ctx context.Context,

@@ -6,6 +6,8 @@ Go Controller Manager 提供 Kubernetes 风格的 Controller 公共运行框架�
 
 Job Watch 仅缓存非终态对象。历史 Job 清理在启动时执行一次，之后每轮结束等待 24 小时再分页扫描，每页 500 个摘要对象；默认清理结束超过 30 天的 Job，失败对象留待下一轮扫描。
 
+`--job-history-action=delete` 为默认策略；设置为 `archive` 时，先通过 apiserver 将完整 Job 保存至 ES `ebs-oldjobs`，确认同一版本后才从 etcd 删除。归档失败保留源 Job，下次扫描重试。历史查询使用 `/apis/ebs/v1/projects/{project}/oldjobs`，不参与 Job Watch；归档不包含产物和日志文件，ES 历史暂不自动过期。
+
 ## 构建与测试
 
 ```bash

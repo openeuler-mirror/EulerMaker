@@ -17,11 +17,13 @@ type Client interface {
 	GetRunner(context.Context, string) (*ebsv1.Runner, error)
 	UpdateJobStatus(context.Context, *ebsv1.Job) (*ebsv1.Job, error)
 	DeleteJob(context.Context, string, string, clientpkg.DeletePreconditions) error
+	GetOldJob(context.Context, string, string) (*ebsv1.Job, error)
+	ArchiveJob(context.Context, string, string, clientpkg.DeletePreconditions) (*ebsv1.Job, error)
 }
 
-type apiClient struct{ client clientpkg.Interface }
+type apiClient struct{ client *clientpkg.Client }
 
-func newAPIClient(value clientpkg.Interface) Client { return &apiClient{client: value} }
+func newAPIClient(value *clientpkg.Client) Client { return &apiClient{client: value} }
 
 func (c *apiClient) ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error) {
 	return c.client.ListPage(ctx, source.JobsGVR, metav1.ListOptions{
@@ -71,6 +73,23 @@ func (c *apiClient) UpdateJobStatus(ctx context.Context, request *ebsv1.Job) (*e
 
 func (c *apiClient) DeleteJob(ctx context.Context, namespace, name string, preconditions clientpkg.DeletePreconditions) error {
 	return c.client.Delete(ctx, source.JobsGVR, namespace, name, preconditions)
+}
+
+func (c *apiClient) GetOldJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
+	gvr := ebsv1.SchemeGroupVersion.WithResource("oldjobs")
+	obj, err := c.client.Get(ctx, gvr, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	job, ok := obj.(*ebsv1.Job)
+	if !ok || job == nil || job.Namespace != namespace || job.Name != name || job.UID == "" || job.ResourceVersion == "" {
+		return nil, fmt.Errorf("unexpected archived Job response for %s/%s: %T", namespace, name, obj)
+	}
+	return job, nil
+}
+
+func (c *apiClient) ArchiveJob(ctx context.Context, namespace, name string, pre clientpkg.DeletePreconditions) (*ebsv1.Job, error) {
+	return c.client.ArchiveJob(ctx, namespace, name, pre)
 }
 
 func writeUnknown(operation string, err error) error {

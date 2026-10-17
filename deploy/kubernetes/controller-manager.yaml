@@ -43,6 +43,7 @@ spec:
             - --apiserver-client-cert=/etc/ebs/apiserver/tls.crt
             - --apiserver-client-key=/etc/ebs/apiserver/tls.key
             - --git-server-addr=http://git-server:8080
+            - --job-history-action=archive
           ports:
             - name: health
               containerPort: 8080

@@ -28,6 +28,42 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+func TestArchiveJobAndReadSnapshot(t *testing.T) {
+	job := &ebsv1.Job{TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Job"}, ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "123"}}
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodPost {
+			if r.URL.Path != "/apis/ebs/v1/projects/project/jobs/job/archive" {
+				t.Fatalf("path=%s", r.URL.Path)
+			}
+			var input struct {
+				Preconditions metav1.Preconditions `json:"preconditions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Fatal(err)
+			}
+			if input.Preconditions.UID == nil || *input.Preconditions.UID != "uid" || input.Preconditions.ResourceVersion == nil || *input.Preconditions.ResourceVersion != "123" {
+				t.Fatalf("input=%+v", input)
+			}
+		} else if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/projects/project/oldjobs/job" || r.URL.RawQuery != "" {
+			t.Fatalf("request=%s %s", r.Method, r.URL)
+		}
+		body, _ := json.Marshal(job)
+		return jsonResponse(r, body), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := client.ArchiveJob(context.Background(), "project", "job", DeletePreconditions{UID: "uid", ResourceVersion: "123"})
+	if err != nil || out.ResourceVersion != "123" {
+		t.Fatalf("archive=%+v err=%v", out, err)
+	}
+	obj, err := client.Get(context.Background(), ebsv1.SchemeGroupVersion.WithResource("oldjobs"), "project", "job")
+	if err != nil || obj.(*ebsv1.Job).ResourceVersion != "123" {
+		t.Fatalf("GET=%+v err=%v", obj, err)
+	}
+}
+
 func TestAbortJob(t *testing.T) {
 	for _, phase := range []ebsv1.JobPhase{ebsv1.JobAborted, ebsv1.JobSucceeded} {
 		t.Run(string(phase), func(t *testing.T) {
