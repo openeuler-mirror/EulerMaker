@@ -29,6 +29,12 @@ go run ./cmd \
 
 开发环境连接自签名 apiserver 时，可以配置 `--apiserver-ca`；仅在隔离测试环境中使用 `--insecure-skip-verify`。启用 apiserver 内部证书认证时，还需设置 `--apiserver-client-cert` 和 `--apiserver-client-key`，证书的 URI SAN 为 `spiffe://eulermaker/internal/ebs-gateway`。默认监听 `:8080`，`GET /healthz` 返回健康状态。构建镜像时 Dockerfile 使用同一个 `cmd` 入口。
 
+Gateway 依赖仓库中的公共 `api` module，镜像构建上下文使用仓库根目录：
+
+```sh
+docker build -f backend/ebs-gateway/Dockerfile -t ebs-gateway:dev .
+```
+
 ## 路由与安全约束
 
 - `/auth/*` 负责注册、登录、Runner token 交换、token 校验和本人密码修改；只有 Admin 能创建 MachineAccount。

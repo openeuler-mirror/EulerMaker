@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 )
 
@@ -18,16 +18,6 @@ const maxArtifactConfigResponse = 5 << 20
 type artifactEndpoint struct {
 	RunnerInternalURL string `json:"runnerInternalURL" yaml:"runnerInternalURL"`
 	RunnerExternalURL string `json:"runnerExternalURL" yaml:"runnerExternalURL"`
-}
-
-type artifactManagerInstance struct {
-	InternalURL       string `yaml:"internalURL"`
-	RunnerInternalURL string `yaml:"runnerInternalURL"`
-	RunnerExternalURL string `yaml:"runnerExternalURL"`
-}
-
-type artifactManagerContent struct {
-	Instances map[string]artifactManagerInstance `yaml:"instances"`
 }
 
 // ArtifactEndpoints returns the Runner-facing addresses without exposing the OpsOnly Config.
@@ -42,7 +32,7 @@ func (a *Handler) ArtifactEndpoints(c *gin.Context) {
 		return
 	}
 	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet,
-		apiPrefix+"/configs/artifact-manager-conf", nil, nil)
+		apiPrefix+"/configs/"+ebsv1.ArtifactManagerConfigName, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact manager configuration unavailable"})
 		return
@@ -66,41 +56,25 @@ func (a *Handler) ArtifactEndpoints(c *gin.Context) {
 			Content    string `json:"content"`
 		} `json:"spec"`
 	}
-	if json.Unmarshal(data, &config) != nil || config.Metadata.Name != "artifact-manager-conf" ||
-		config.Spec.Visibility != "OpsOnly" {
+	if json.Unmarshal(data, &config) != nil || config.Metadata.Name != ebsv1.ArtifactManagerConfigName ||
+		config.Spec.Visibility != string(ebsv1.ConfigVisibilityOpsOnly) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid artifact manager configuration"})
 		return
 	}
-	var content artifactManagerContent
+	var content ebsv1.ArtifactManagerContent
 	decoder := yaml.NewDecoder(strings.NewReader(config.Spec.Content))
 	decoder.KnownFields(true)
 	var trailing any
-	if decoder.Decode(&content) != nil || len(content.Instances) == 0 || decoder.Decode(&trailing) != io.EOF {
+	if decoder.Decode(&content) != nil || decoder.Decode(&trailing) != io.EOF {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid artifact manager configuration"})
 		return
 	}
 	instances := make(map[string]artifactEndpoint, len(content.Instances))
 	for name, instance := range content.Instances {
-		if name == "" || !validArtifactEndpoint(instance.InternalURL, false) ||
-			!validArtifactEndpoint(instance.RunnerInternalURL, true) ||
-			!validArtifactEndpoint(instance.RunnerExternalURL, true) ||
-			(instance.RunnerExternalURL != "" && !strings.HasPrefix(instance.RunnerExternalURL, "https://")) {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid artifact manager configuration"})
-			return
-		}
 		instances[name] = artifactEndpoint{
 			RunnerInternalURL: instance.RunnerInternalURL,
 			RunnerExternalURL: instance.RunnerExternalURL,
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"instances": instances})
-}
-
-func validArtifactEndpoint(value string, allowEmpty bool) bool {
-	if value == "" {
-		return allowEmpty
-	}
-	parsed, err := url.Parse(value)
-	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") &&
-		parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
 }
