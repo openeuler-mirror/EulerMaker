@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -28,24 +27,9 @@ func NewRoutes(mode string, tokens gateway.TokenSource, client *http.Client) *Ro
 		changed: make(chan struct{})}
 }
 
-func validEndpointURL(raw string, external bool) bool {
-	if raw == "" {
-		return true
-	}
-	u, err := url.Parse(raw)
-	return err == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" &&
-		((external && u.Scheme == "https") || (!external && (u.Scheme == "http" || u.Scheme == "https")))
-}
-
 func (r *Routes) Update(endpoints gateway.ArtifactEndpoints) error {
 	if len(endpoints.Instances) == 0 {
 		return fmt.Errorf("artifact endpoint list is empty")
-	}
-	for name, entry := range endpoints.Instances {
-		if name == "" || !validEndpointURL(entry.RunnerInternalURL, false) ||
-			!validEndpointURL(entry.RunnerExternalURL, true) {
-			return fmt.Errorf("invalid artifact endpoint for instance %q", name)
-		}
 	}
 	r.mu.Lock()
 	r.instances = make(map[string]gateway.ArtifactEndpoint, len(endpoints.Instances))
