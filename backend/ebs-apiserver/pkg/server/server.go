@@ -201,7 +201,7 @@ func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig,
 	config.MaxRequestBodyBytes = maxRequestBodyBytes
 	buildHandlerChain := config.BuildHandlerChainFunc
 	config.BuildHandlerChainFunc = func(handler http.Handler, serverConfig *genericapiserver.Config) http.Handler {
-		return buildHandlerChain(withFieldProjection(handler), serverConfig)
+		return buildHandlerChain(withOldJobReadOptions(withFieldProjection(handler)), serverConfig)
 	}
 	config.LongRunningFunc = runnerJobLongRunningCheck(config.LongRunningFunc)
 	config.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
@@ -404,6 +404,9 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	v1Storage["jobs"] = jobStorage.Job
 	v1Storage["jobs/status"] = jobStorage.Status
 	v1Storage["jobs/abort"] = jobstore.NewAbortStorage(jobStorage.Job, jobStorage.Status.(rest.Updater))
+	oldJobs := esstore.NewOldJobs(esClient, jobStorage.Job)
+	v1Storage["oldjobs"] = oldJobs
+	v1Storage["jobs/archive"] = jobstore.NewArchiveStorage(jobStorage.Job, oldJobs)
 
 	runnerStorage := runnerstore.NewStorage(Scheme)
 	if err := runnerStorage.CompleteWithOptions(storeOptions); err != nil {

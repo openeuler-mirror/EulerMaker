@@ -24,9 +24,10 @@ var indices = map[string]string{
 	"user":           "ebs-users",
 	"machineaccount": "ebs-machineaccounts",
 	"buildclaim":     "ebs-build-target-claims",
+	"oldjob":         "ebs-oldjobs",
 }
 
-var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "config", "script", "buildclaim"}
+var coreResources = []string{"project", "snapshot", "build", "buildinfo", "rpmrepo", "config", "script", "buildclaim", "oldjob"}
 var iamResources = []string{"user", "machineaccount"}
 
 const defaultIndexMapping = `{
@@ -48,6 +49,34 @@ const defaultIndexMapping = `{
       "status":{"type":"object","dynamic":false,"properties":{
         "phase":{"type":"keyword"},
         "stage":{"type":"keyword"}
+      }}
+    }}
+  }}
+}`
+
+const oldJobIndexMapping = `{
+  "settings":{"number_of_shards":1,"number_of_replicas":1},
+  "mappings":{"dynamic":"strict","properties":{
+    "apiVersion":{"type":"keyword"},
+    "kind":{"type":"keyword"},
+    "documentID":{"type":"keyword"},
+    "archivedAt":{"type":"date"},
+    "metadata":{"properties":{
+      "name":{"type":"keyword"},
+      "namespace":{"type":"keyword"},
+      "creationTimestamp":{"type":"date"},
+      "labels":{"type":"nested","properties":{
+        "key":{"type":"keyword"},
+        "value":{"type":"keyword"}
+      }}
+    }},
+    "data":{"type":"object","dynamic":false,"properties":{
+      "status":{"type":"object","dynamic":false,"properties":{
+        "phase":{"type":"keyword"},
+        "stage":{"type":"keyword"},
+        "runner":{"type":"keyword"},
+        "startTime":{"type":"date"},
+        "endTime":{"type":"date"}
       }}
     }}
   }}
@@ -144,6 +173,7 @@ type Metadata struct {
 }
 
 type Document struct {
+	ArchivedAt string          `json:"archivedAt,omitempty"`
 	APIVersion string          `json:"apiVersion"`
 	Kind       string          `json:"kind"`
 	DocumentID string          `json:"documentID"`
@@ -304,6 +334,8 @@ func mappingForResource(resource string) string {
 	switch resource {
 	case "buildclaim":
 		return buildCoordinationMapping
+	case "oldjob":
+		return oldJobIndexMapping
 	case "rpmrepo":
 		return rpmRepoIndexMapping
 	case "user", "machineaccount":

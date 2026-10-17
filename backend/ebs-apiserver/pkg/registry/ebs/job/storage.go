@@ -96,6 +96,7 @@ func jobAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
 		"metadata.namespace": job.Namespace,
 		"status.runner":      job.Status.Runner,
 		"status.phase":       string(job.Status.Phase),
+		"status.stage":       string(job.Status.Stage),
 	}, nil
 }
 

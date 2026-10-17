@@ -35,6 +35,12 @@ const (
 )
 
 type sourceFilterKey struct{}
+type projectionQueryKey struct{}
+
+// WithProjectionQuery binds archive pagination to the requested projection, including fields filtered after decoding.
+func WithProjectionQuery(ctx context.Context, query string) context.Context {
+	return context.WithValue(ctx, projectionQueryKey{}, query)
+}
 
 // WithSourceFilter limits only the read response of ES-backed resources.
 func WithSourceFilter(ctx context.Context, filter es.SourceFilter) context.Context {
@@ -64,6 +70,8 @@ type Store struct {
 	updateHook        rest.ValidateObjectUpdateFunc
 	createTransaction func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error)
 	afterWrite        func(context.Context, runtime.Object, bool)
+
+	preserveSourceVersion bool
 }
 
 type StatusStore struct {
@@ -409,6 +417,14 @@ func (s *Store) List(ctx context.Context, options *internalversion.ListOptions) 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 	fingerprint := queryFingerprint(s.resourceName, namespace, options)
+	if s.preserveSourceVersion {
+		// Bind archive cursors to projection as well as resource and selectors.
+		filter, _ := sourceFilter(ctx)
+		encoded, _ := json.Marshal(filter)
+		query, _ := ctx.Value(projectionQueryKey{}).(string)
+		sum := sha256.Sum256([]byte(fingerprint + "\x00" + query + "\x00" + string(encoded)))
+		fingerprint = hex.EncodeToString(sum[:])
+	}
 	token, err := decodeContinue(options.Continue, fingerprint)
 	if err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
@@ -565,7 +581,9 @@ func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
-	accessor.SetResourceVersion(encodeVersion(hit.SeqNo, hit.PrimaryTerm))
+	if !s.preserveSourceVersion {
+		accessor.SetResourceVersion(encodeVersion(hit.SeqNo, hit.PrimaryTerm))
+	}
 	return obj, nil
 }
 
@@ -577,6 +595,8 @@ func (s *Store) apiError(err error, name string) error {
 		return apierrors.NewConflict(s.resource, name, fmt.Errorf("resourceVersion conflict"))
 	case es.IsStatus(err, 400):
 		return apierrors.NewBadRequest(err.Error())
+	case es.IsStatus(err, 429):
+		return apierrors.NewTooManyRequests(err.Error(), 0)
 	default:
 		return apierrors.NewServiceUnavailable(err.Error())
 	}
@@ -724,6 +744,10 @@ func selectorQuery(resource, namespace string, options *internalversion.ListOpti
 
 func fieldSelectorMapping(resource, field string) (queryField string, requireExists, supported bool) {
 	switch field {
+	case "status.runner":
+		if resource == "oldjob" {
+			return "data.status.runner", false, true
+		}
 	case "metadata.name", "metadata.namespace":
 		return field, false, true
 	case "status.phase":
@@ -744,7 +768,7 @@ func fieldSelectorMapping(resource, field string) (queryField string, requireExi
 
 func supportsStatusFieldSelectors(resource string) bool {
 	switch resource {
-	case "project", "snapshot", "build", "buildinfo":
+	case "project", "snapshot", "build", "buildinfo", "oldjob":
 		return true
 	default:
 		return false

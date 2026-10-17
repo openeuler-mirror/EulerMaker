@@ -151,13 +151,18 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	if err := client.ensureIndices(); err != nil {
 		t.Fatalf("ensure indices: %v", err)
 	}
-	for _, index := range []string{"ebs-projects-v1", "ebs-snapshots-v1", "ebs-builds-v1", "ebs-buildinfos-v1", "ebs-rpmrepos-v1", "ebs-configs-v1", "ebs-build-target-claims-v1"} {
+	for _, index := range []string{"ebs-projects-v1", "ebs-snapshots-v1", "ebs-builds-v1", "ebs-buildinfos-v1", "ebs-rpmrepos-v1", "ebs-configs-v1", "ebs-build-target-claims-v1", "ebs-oldjobs-v1"} {
 		if !created[index] {
 			t.Errorf("index %s was not created", index)
 		}
 	}
 	if created["ebs-jobs-v1"] || created["ebs-runners-v1"] {
 		t.Fatalf("etcd resources must not have ES indices: %#v", created)
+	}
+	for _, field := range []string{"archivedAt", "phase", "stage", "runner", "startTime", "endTime"} {
+		if !strings.Contains(mappings["ebs-oldjobs-v1"], `"`+field+`"`) {
+			t.Errorf("oldjobs mapping is missing %s", field)
+		}
 	}
 	if !strings.Contains(mappings["ebs-builds-v1"], `"phase"`) || !strings.Contains(mappings["ebs-builds-v1"], `"stage"`) {
 		t.Fatalf("build index does not use the default mapping: %s", mappings["ebs-builds-v1"])

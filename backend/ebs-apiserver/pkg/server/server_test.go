@@ -3,15 +3,23 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/emicklei/go-restful/v3"
 	"github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/managedfields"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/endpoints"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
@@ -29,6 +37,66 @@ import (
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	esclient "ebs-apiserver/pkg/storage/es"
 )
+
+func TestOldJobsHTTPRoutes(t *testing.T) {
+	client := esclient.NewClientForTesting("http://es", &http.Client{Transport: confTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/ebs-oldjobs/_doc/project/job" {
+			t.Fatalf("ES path=%s", r.URL.Path)
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"_id":"project/job","_seq_no":99,"_primary_term":1,"_source":{"data":{"apiVersion":"ebs/v1","kind":"Job","metadata":{"name":"job","namespace":"project","uid":"uid","resourceVersion":"123"},"spec":{"priority":1},"status":{"phase":"Succeeded"}}}}`))}, nil
+	})})
+	info, err := CreateAPIGroupInfo(testRESTOptions(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := info.VersionedResourcesStorageMap["v1"]
+	container := restful.NewContainer()
+	group := &endpoints.APIGroupVersion{
+		Storage: map[string]rest.Storage{"oldjobs": storage["oldjobs"], "jobs": storage["jobs"], "jobs/archive": storage["jobs/archive"]},
+		Root:    "/apis", GroupVersion: ebsv1.SchemeGroupVersion, OptionsExternalVersion: &schema.GroupVersion{Version: "v1"},
+		Creater: Scheme, Convertor: Scheme, UnsafeConvertor: runtime.UnsafeObjectConvertor(Scheme),
+		Defaulter: Scheme, Typer: Scheme, Namer: meta.NewAccessor(),
+		TypeConverter:              managedfields.NewDeducedTypeConverter(),
+		EquivalentResourceRegistry: runtime.NewEquivalentResourceRegistry(),
+		ParameterCodec:             metav1.ParameterCodec, Serializer: Codecs,
+	}
+	if _, _, err := group.InstallREST(container); err != nil {
+		t.Fatal(err)
+	}
+	methods := map[string][]string{}
+	for _, service := range container.RegisteredWebServices() {
+		for _, route := range service.Routes() {
+			methods[route.Path] = append(methods[route.Path], route.Method)
+		}
+	}
+	for _, path := range []string{"/apis/ebs/v1/oldjobs", "/apis/ebs/v1/namespaces/{namespace}/oldjobs", "/apis/ebs/v1/namespaces/{namespace}/oldjobs/{name}"} {
+		if strings.Join(methods[path], ",") != "GET" {
+			t.Fatalf("route %s methods=%v", path, methods[path])
+		}
+	}
+	if strings.Join(methods["/apis/ebs/v1/namespaces/{namespace}/jobs/{name}/archive"], ",") != "POST" {
+		t.Fatalf("archive route=%v", methods)
+	}
+	for _, tc := range []struct {
+		query  string
+		status int
+	}{
+		{"?includeFields=metadata,status.phase", 200},
+		{"?watch=true", 400}, {"?resourceVersion=123", 400}, {"?resourceVersionMatch=Exact", 400},
+	} {
+		r := httptest.NewRequest("GET", "/apis/ebs/v1/namespaces/project/oldjobs/job"+tc.query, nil)
+		ctx := genericapirequest.WithRequestInfo(r.Context(), &genericapirequest.RequestInfo{IsResourceRequest: true, APIGroup: "ebs", APIVersion: "v1", Resource: "oldjobs", Namespace: "project", Name: "job", Verb: "get"})
+		r = r.WithContext(genericapirequest.WithNamespace(ctx, "project"))
+		w := httptest.NewRecorder()
+		withOldJobReadOptions(withFieldProjection(container)).ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("query=%s status=%d body=%s", tc.query, w.Code, w.Body)
+		}
+		if tc.status == 200 && (!strings.Contains(w.Body.String(), `"resourceVersion":"123"`) || strings.Contains(w.Body.String(), `"spec"`)) {
+			t.Fatalf("projected Job=%s", w.Body)
+		}
+	}
+}
 
 func TestCompleteLoadsElasticsearchAPIKey(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "api-key")

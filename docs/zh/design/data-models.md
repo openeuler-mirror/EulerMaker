@@ -817,6 +817,21 @@ type JobList struct {
 }
 ```
 
+### 历史 Job 快照（oldjobs）
+
+Job Controller 可选择将到期的终态 Job 归档至 Elasticsearch，再从 etcd 删除；默认仍直接删除。归档复用 `Job` / `JobList`，不新增 `OldJob` 类型。
+
+| 项目 | 约定 |
+| --- | --- |
+| 工程内查询 | `GET /apis/ebs/v1/projects/{project}/oldjobs[/{name}]` |
+| 内部跨工程查询 | `GET /apis/ebs/v1/oldjobs` |
+| ES alias / 初始索引 | `ebs-oldjobs` / `ebs-oldjobs-v1` |
+| 文档 ID | `{project}/{jobName}` |
+| 快照内容 | 完整 metadata、spec、status，保留源 UID 和 resourceVersion |
+| 归档时间 | ES 存储元数据 `archivedAt`，不新增 Job API 字段 |
+
+历史入口只读，不参与调度和 Watch；普通 `jobs` 查询不自动合并历史对象。归档仅保存对象，不延长日志和产物的保留期。接口、mapping、版本冲突及保留规则统一见 [历史 Job 归档](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
+
 ---
 
 ## 八、Runner（执行机）
