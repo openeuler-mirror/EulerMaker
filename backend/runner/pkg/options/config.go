@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ebs-runner/pkg/artifact"
+	"ebs-runner/pkg/container"
 	"ebs-runner/pkg/gateway"
 )
 
@@ -18,8 +19,9 @@ type Config struct {
 	RootDir           string
 	HeartbeatInterval time.Duration
 
-	Gateway  gateway.Config
-	Artifact artifact.Config
+	Gateway   gateway.Config
+	Container container.Config
+	Artifact  artifact.Config
 }
 
 func LoadConfig(args []string) (Config, error) {
@@ -32,6 +34,14 @@ func LoadConfig(args []string) (Config, error) {
 		HeartbeatInterval: 30 * time.Second,
 		Gateway: gateway.Config{
 			URL: "https://ebs-gateway:8443",
+		},
+		Container: container.Config{
+			Runtime: "docker",
+			Containerd: container.ContainerdConfig{
+				Address:     "/run/containerd/containerd.sock",
+				Namespace:   "eulermaker",
+				Snapshotter: "overlayfs",
+			},
 		},
 		Artifact: artifact.Config{
 			AccessMode: "internal",
@@ -61,6 +71,10 @@ func LoadConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
 	fs.StringVar(&cfg.RootDir, "root-dir", cfg.RootDir, "runner root directory")
+	fs.StringVar(&cfg.Container.Runtime, "container-runtime", cfg.Container.Runtime, "CT runtime: docker or containerd")
+	fs.StringVar(&cfg.Container.Containerd.Address, "containerd-address", cfg.Container.Containerd.Address, "containerd socket address")
+	fs.StringVar(&cfg.Container.Containerd.Namespace, "containerd-namespace", cfg.Container.Containerd.Namespace, "containerd namespace for Runner containers")
+	fs.StringVar(&cfg.Container.Containerd.Snapshotter, "containerd-snapshotter", cfg.Container.Containerd.Snapshotter, "containerd rootfs snapshotter")
 	fs.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", cfg.HeartbeatInterval, "heartbeat interval")
 	fs.BoolVar(&cfg.Gateway.InsecureSkipVerify, "insecure-skip-verify", cfg.Gateway.InsecureSkipVerify, "skip gateway TLS verification")
 	fs.StringVar(&cfg.Gateway.CA, "gateway-ca", cfg.Gateway.CA, "gateway CA file")
@@ -96,6 +110,9 @@ func LoadConfig(args []string) (Config, error) {
 	}
 	if cfg.Type != "ct" && cfg.Type != "vm" && cfg.Type != "hw" {
 		return Config{}, fmt.Errorf("runner type must be one of ct, vm, hw")
+	}
+	if cfg.Container.Runtime != "docker" && cfg.Container.Runtime != "containerd" {
+		return Config{}, fmt.Errorf("container runtime must be docker or containerd")
 	}
 	if cfg.Artifact.Upload.MaxFileSize <= 0 || cfg.Artifact.Upload.MaxJobSize <= 0 ||
 		cfg.Artifact.Upload.MaxFiles <= 0 || cfg.Artifact.Upload.Concurrency <= 0 {

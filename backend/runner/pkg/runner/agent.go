@@ -92,8 +92,18 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 		RetryMaxBackoff: cfg.Artifact.Upload.RetryMaxBackoff,
 	}
 	cleanupManager := &artifact.CleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.Artifact.Upload.FailedRetention}
-	var containers containerruntime.ManagedRuntime = containerruntime.DockerCLI{}
-
+	var containers containerruntime.ManagedRuntime
+	if cfg.Type == "ct" {
+		if cfg.Container.Runtime == "containerd" {
+			containers, err = containerruntime.NewContainerd(cfg.Container.Containerd.Address, cfg.Container.Containerd.Namespace,
+				cfg.Container.Containerd.Snapshotter, cfg.RootDir)
+		} else {
+			containers = containerruntime.DockerCLI{}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &Agent{
 		cfg:            cfg,
 		client:         client,

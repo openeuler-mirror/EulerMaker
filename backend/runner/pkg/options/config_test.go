@@ -78,6 +78,26 @@ func TestRuntimeArchMapsGoArch(t *testing.T) {
 	}
 }
 
+func TestContainerRuntimeConfig(t *testing.T) {
+	args := []string{"--machine-credential-file=/credential", "--name=runner-a"}
+	cfg, err := LoadConfig(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Container.Runtime != "docker" || cfg.Container.Containerd.Namespace != "eulermaker" || cfg.Container.Containerd.Snapshotter != "overlayfs" {
+		t.Fatalf("runtime defaults = %+v", cfg)
+	}
+	cfg, err = LoadConfig(append(args, "--container-runtime=containerd", "--containerd-address=/run/test.sock",
+		"--containerd-namespace=builds", "--containerd-snapshotter=native"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Container.Runtime != "containerd" || cfg.Container.Containerd.Address != "/run/test.sock" ||
+		cfg.Container.Containerd.Namespace != "builds" || cfg.Container.Containerd.Snapshotter != "native" {
+		t.Fatalf("runtime config = %+v", cfg)
+	}
+}
+
 func TestArtifactConfigDefaultsAndValidation(t *testing.T) {
 	cfg, err := LoadConfig([]string{"--machine-credential-file=/credential", "--name=runner-a"})
 	if err != nil {

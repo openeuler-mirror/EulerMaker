@@ -35,16 +35,16 @@ Runner 实现在 `backend/runner`，按职责分包：
 
 | 包 | 职责 |
 |---|---|
-| `pkg/options` | 组合 Gateway、Artifact 各业务包的配置，提供默认值、命令行解析与校验；命令行参数保持扁平 |
+| `pkg/options` | 组合 Gateway、Container、Artifact 各业务包的配置，提供默认值、命令行解析与校验；命令行参数保持扁平 |
 | `pkg/runner` | Agent 装配、注册心跳、Job 生命周期、启动恢复与工作目录清理 |
 | `pkg/gateway` | Gateway API 客户端及资源传输类型、MachineAccount 凭据、Token 交换与刷新 |
 | `pkg/executor` | 执行器选择、CT 执行流程、Script 缓存、payload 写入与日志时间戳 |
-| `pkg/container` | 容器运行时接口、Docker CLI 命令及容器查询 |
+| `pkg/container` | 容器运行时接口、Docker CLI 与 containerd 原生 Go Client 后端、容器查询 |
 | `pkg/artifact` | 实例地址刷新与 Job 地址固定、过程仓 URL 解析、日志与产物上传、回执与保留期清理 |
 
 依赖方向为 `runner → executor/artifact/gateway/container`，`executor → artifact/gateway/container`，
 `artifact → gateway`。`gateway` 承载 Runner 使用的轻量资源传输类型；`container` 不依赖业务资源。
-现有 CT 后端使用 Docker，目录拆分不改变 Job 协议、运行时参数或本地存储布局。
+CT 后端由 Runner 部署参数选择，默认 Docker；containerd 后端复用相同 Job 协议与执行器。
 
 ## 三、API 交互
 
@@ -400,6 +400,14 @@ runner agent
 
 `ct` executor 负责启动实际业务容器，而不是在 runner agent 进程内直接执行构建命令。runner agent 容器自身只是控制面进程，业务容器应作为独立容器创建、启动、等待、停止和清理。
 
+Agent 为执行器和启动恢复注入同一个运行时实例。Docker 后端通过 CLI 调用；containerd 后端使用原生 Go Client 和独立 namespace（默认 `eulermaker`），不经过 CRI 或创建 PodSandbox。
+
+containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默认入口、CMD、用户及环境变量，Job 的入口、命令、环境变量和挂载按既有 CT 规则覆盖。镜像采用原生 resolver 拉取公开仓库，不隐式使用 Docker 或 CRI 的仓库凭据。使用 `io.containerd.runc.v2`，快照驱动默认 `overlayfs`。
+
+创建容器时持久化归属标签和可写快照；启动前订阅退出结果，stdout/stderr 由 shim 合并落盘到 `${rootDir}/containerd/{namespace}/{containerID}.log`。Runner 跟读并复用既有日志上传流程。进程退出后删除 task 以排空 shim 输出，再完成日志读取；执行器结束时清理容器元数据、可写快照和运行时日志，不删除镜像缓存。停止操作先发送 SIGTERM，宽限期结束后 SIGKILL 并确认退出；启动响应丢失时同样查询、停止并清理 task。
+
+启动恢复仅处理所选后端、namespace 中属于本 Runner 的容器，沿用 8.6 的恢复规则。切换后端或 namespace 前应排空原后端任务。containerd 模式需要宿主机 socket、快照文件访问及挂载权限；容器部署须同路径挂载 Runner 根目录和 containerd 存储目录。namespace 不提供安全隔离，运行时日志无自动轮转，部署侧需监控磁盘。
+
 推荐的容器生命周期：
 
 ```text
@@ -428,7 +436,7 @@ runtimeSpec:
   image: openeuler:22.03
   imagePullPolicy: IfNotPresent
   privileged: false
-  networkMode: bridge
+  networkMode: host
   workingDir: /workspace
   env:
     BUILD_ENV: production
@@ -678,6 +686,10 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--name` | hostname | Runner 资源名称 |
 | `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |
 | `--root-dir` | `/var/lib/ebs-runner` | Runner 工作目录和结果目录的根路径 |
+| `--container-runtime` | `docker` | CT 后端：`docker` 或 `containerd` |
+| `--containerd-address` | `/run/containerd/containerd.sock` | containerd socket 地址 |
+| `--containerd-namespace` | `eulermaker` | containerd 对象 namespace |
+| `--containerd-snapshotter` | `overlayfs` | containerd 可写 rootfs 快照驱动 |
 | `--heartbeat-interval` | `30s` | 心跳上报周期 |
 | `--gateway-ca` | 无 | gateway 服务端证书的 CA 文件 |
 | `--insecure-skip-verify` | `false` | 跳过 gateway TLS 校验，仅用于测试环境 |
