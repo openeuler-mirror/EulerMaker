@@ -10,7 +10,7 @@
 | `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
 | `Config/artifact-manager-conf` | Artifact Manager 实例及控制面、Runner 访问地址 | 集群级，`OpsOnly` | 当前不写入 Job |
 
-`Config` 对象只验证通用元数据、可见性和内容大小，不在 apiserver 解码业务内容。使用方必须解析、校验并明确处理非法内容；配置的业务结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
+`Config` 对象验证通用元数据、可见性和内容格式；apiserver 还在创建、更新 `Config/build-target`、`Config/build-resource` 和 `Config/artifact-manager-conf` 时解析并校验业务内容。使用方必须处理读取和解析错误；具体业务校验职责及配置结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
 
 - [构建目标内容](#2-构建目标内容)
 - [构建资源内容](#3-构建资源内容)
@@ -43,7 +43,7 @@ PATCH    /apis/ebs/v1/configs/{name}
 
 上述 HEAD 由 Gateway 内部读取 Config 后响应；apiserver 通用资源路由本身不注册 HEAD。非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。三个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
 
-apiserver 仅校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限，不解析具体业务内容。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设置相应可见性。内容错误可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
+apiserver 校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限；对 `Config/build-target`、`Config/build-resource` 和 `Config/artifact-manager-conf` 分别执行第 2.2.1、3.2、4 章的内容校验。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设置相应可见性。其他 Config 的业务内容错误仍可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
 
 ## 2. 构建目标内容
 
@@ -98,7 +98,7 @@ spec:
 
 ### 2.3 API 与权限
 
-使用 1.1 节的 `/apis/ebs/v1/configs/build-target`。匿名具名读取仅在当前对象 `spec.visibility=Public` 时允许；写入仅允许 Ops/Admin。通用 `Config` 的校验不保证 `content.targets` 正确，使用方按 2.2.1 校验。`PUT/PATCH` 冲突时运维客户端重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧内容。
+使用 1.1 节的 `/apis/ebs/v1/configs/build-target`。匿名具名读取仅在当前对象 `spec.visibility=Public` 时允许；写入仅允许 Ops/Admin。apiserver 在创建、更新时按 2.2.1 严格解析并校验 `content.targets`，拒绝未知字段、重复键和非法目标配置，返回 422。`PUT/PATCH` 冲突时运维客户端重新读取并提示合并，不能仅替换 resourceVersion 后盲目重放旧内容。
 
 ### 2.4 存储与初始化
 
@@ -123,21 +123,21 @@ spec:
 
 Project.spec.buildTargets 仍记录工程自己的构建目标。Project 创建/更新只做现有字段校验，不强制所有目标当前都在 `Config/build-target` 中，避免全局配置变更后工程无法进行其他编辑。
 
-创建任意类型 Build 时，apiserver 在申请非 single 目标占用、写入 Build 之前读取 `Config/build-target`，解析并校验 `spec.buildTarget.os/arch` 是否有对应映射：
+创建任意类型 Build 时，apiserver 在申请非 single 目标占用、写入 Build 之前读取 `Config/build-target`，反序列化后只检查 `spec.buildTarget.os/arch` 是否有对应映射，不重复校验整张目标表：
 
 - 目标不存在：`422 Invalid`，错误定位到 `spec.buildTarget`，不创建 Build、不申请占用。
-- 配置对象不存在、读取失败或内容无效：`503 ServiceUnavailable`，不得当成用户输入错误或使用硬编码回退。
+- 配置对象不存在、读取失败、响应类型错误或反序列化失败：`503 ServiceUnavailable`，不得当成用户输入错误或使用硬编码回退。
 - 成功：继续已有 Project 目标、packages、并发占用等校验流程。
 
-该检查不是锁定配置：Build 创建成功后配置仍可能变化，因此 Job 创建方必须再次检查。
+该检查不是锁定配置：Build 创建成功后配置仍可能变化，因此 Job 创建方仍须确认所选 OS/Arch 的镜像映射存在。
 
 #### 2.5.2 BuildInfo Controller 创建 Job
 
-每次需要创建新 Job 的 reconcile，读取一次最新 `Config/build-target`，解析并校验其 `content`；该轮批量创建使用同一个内存快照，按所属 Build 的 OS、Arch 查询镜像。
+每次需要创建新 Job 的 reconcile，读取一次最新 `Config/build-target`，反序列化其 `content`，不重复校验 OS、架构和镜像格式；该轮批量创建使用同一个内存快照，按所属 Build 的 OS、Arch 查询镜像。
 
 镜像写入 `Job.spec.runtimeSpec.image`。该字段由配置解析结果确定，Job 模板不得覆盖它；runtimeSpec 其他字段及 `Config/build-resource` 解析按原规则执行。首版面向现有容器 rpmbuild Job，不把容器镜像解释为 VM 镜像。
 
-读取失败、内容无效或映射缺失时，不创建本轮的新 Job，输出结构化错误，按 controller 框架的错误分类及慢速重入策略等待配置恢复；不把配置问题直接写成构建失败。无需注册 Config watch。已有 Job 的观察、结果回收不依赖本轮配置可用性。
+读取失败、响应类型错误、反序列化失败或映射缺失时，不创建本轮的新 Job，输出结构化错误，按 controller 框架的错误分类及慢速重入策略等待配置恢复；不把配置问题直接写成构建失败。无需注册 Config watch。已有 Job 的观察、结果回收不依赖本轮配置可用性。
 
 Job 创建沿用确定性名称及幂等流程：已存在的同一任务 Job 直接沿用，不能因配置改变更新其镜像；Create 返回结果未知时先确认原请求的写入意图，不能读取新配置后用不同镜像盲目重试同一次创建。
 
@@ -172,7 +172,7 @@ ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改
 | 模块 | 修改范围 |
 |------|----------|
 | 公共 api | Config 类型、List、scheme/deepcopy 注册；业务内容结构作为使用方解析类型 |
-| apiserver | Config storage、通用校验、初始化、ES alias、OpenAPI、Build create 时解析目标内容 |
+| apiserver | Config storage、通用与内置构建配置内容校验、初始化、ES alias、OpenAPI、Build create 时检查目标映射 |
 | gateway | 按 visibility 授权具名读取、禁止匿名 list、Ops 及以上写权限 |
 | controller-manager | 读取 Config 并解析对应 content，创建 Job 时固化镜像 |
 | frontend | 运维配置编辑、OS/Arch 选项、不可用目标提示 |
@@ -225,7 +225,7 @@ spec:
 
 按 `content.default` → `content.packages[specName].default` → `content.packages[specName].arches[arch]` 逐字段覆盖 `requests` 和 `limits` 的 `cpu`、`memory`。同一级声明 request 而未声明对应 limit 时，limit 取该级 request；该级没有声明该项 request 时，request 和 limit 均继承上一级。最终有效结果必须包含 CPU、内存的 requests 与 limits，且每项 limit ≥ request。资源单位使用现有 Kubernetes quantity 语义，数值须大于 0。
 
-消费方解析内容时校验：
+apiserver 创建、更新 `Config/build-resource` 时完整校验：
 
 - 顶层 `default.requests` 必须同时包含 `cpu`、`memory`；`limits` 可缺省。
 - 仅允许 `cpu`、`memory`，未知字段或资源键（如 `memroy`）报错，不静默忽略。
@@ -233,23 +233,25 @@ spec:
 - 架构 key 满足 `^[a-z0-9][a-z0-9._-]{0,62}$`，与 Build Target/Runner 使用的名称精确匹配，不做别名转换。
 - 每层 quantity 可解析且大于 0；合并后的 limits 不小于 requests。
 
-以上是 **`build-resource` 内容解析器**的规则，不是 apiserver 对所有 Config 的创建/更新校验。未知的其他 Config 名称可存储不同格式的 `content`。为避免错误内容已保存却影响 Job 派发，运维 UI 和 ebsctl 可提供保存前预检，但消费方仍必须独立校验。新规则仅影响后续创建的 Job，已有 Job 的资源不回写。
+以上规则仅用于具名 `Config/build-resource`，创建、更新时严格解析 YAML/JSON，拒绝未知字段、重复键和非法资源规则，返回 422。未知的其他 Config 名称可存储不同格式的 `content`。运维 UI 和 ebsctl 可提供保存前预检。BuildInfo Controller 信任 apiserver 保存的资源规则，只读取、反序列化并按继承规则合并，不重复校验包名、架构、quantity 或最终 requests/limits。新规则仅影响后续创建的 Job，已有 Job 的资源不回写。
 
 ### 3.3 读取与失败处理
 
-BuildInfo Controller 在需要创建 Job 的 reconcile 中，GET `/apis/ebs/v1/configs/build-resource`，解析一次当前对象内容，本轮新 Job 共用同一解析结果。返回 404 时沿用现有 E-27 契约，将当前 spec 标为 `Failed`（`DefaultBuildResourceConfigNotFound`），不创建 Job；读取失败、内容非法或无法得到有效资源时，不以空规则/旧缓存继续，也不创建本轮新 Job，记录配置错误并按控制器错误退避策略重新入队。配置恢复后继续派发。已存在 Job 的观察和结果回收不受影响。
+BuildInfo Controller 在需要创建 Job 的 reconcile 中，GET `/apis/ebs/v1/configs/build-resource`，解析一次当前对象内容，本轮新 Job 共用同一解析结果。返回 404 时沿用现有 E-27 契约，将当前 spec 标为 `Failed`（`DefaultBuildResourceConfigNotFound`），不创建 Job；读取失败、响应类型/对象身份不符合契约或反序列化失败时，不以空规则/旧缓存继续，也不创建本轮新 Job，记录配置错误并按控制器错误退避策略重新入队。配置恢复后继续派发。已存在 Job 的观察和结果回收不受影响。
 
 资源配置来源不写入 Job annotation；调度只依据 Job 中固化的 `spec.resources`。
 
 ### 3.4 初始化、更新与容量
 
-apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存在，初始化模板 `default-build-resource.yaml` 包含 4 CPU、8Gi 的表级默认值及软件包覆盖规则。已存在对象不覆盖；多实例创建冲突后读取获胜对象。启动模板不是持续同步源。初始化必须通过 Config API 的默认化与通用校验，不能直接写 Elasticsearch；运维更新业务内容后不会被新版本部署覆盖。
+apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存在，初始化模板 `default-build-resource.yaml` 包含 4 CPU、8Gi 的表级默认值及软件包覆盖规则。已存在对象不覆盖；多实例创建冲突后读取获胜对象。启动模板不是持续同步源。初始化必须通过 Config API 的默认化、通用校验与资源规则校验，不能直接写 Elasticsearch；运维更新业务内容后不会被新版本部署覆盖。
 
-更新整张表必须携带 `metadata.resourceVersion`；发生 409 时重新读取并按包名合并用户的修改，不得只替换版本重放旧对象。批量生成内容按包名稳定排序。规模达到数千至数万包时，应对最终序列化大小、请求上限及解析耗时做压测；BuildInfo Controller 可按 UID/resourceVersion 缓存已验证的解析结果，但每轮先读取当前对象，缓存失效或解析失败时必须停止新 Job 派发。首版不支持按软件包的独立 REST API 或存储分片。
+更新整张表必须携带 `metadata.resourceVersion`；发生 409 时重新读取并按包名合并用户的修改，不得只替换版本重放旧对象。批量生成内容按包名稳定排序。规模达到数千至数万包时，应对最终序列化大小、请求上限及解析耗时做压测；BuildInfo Controller 可按 UID/resourceVersion 缓存解析结果，但每轮先读取当前对象，缓存失效或解析失败时必须停止新 Job 派发。首版不支持按软件包的独立 REST API 或存储分片。
 
 `Config/build-resource` 仅允许 Ops/Admin 经 Gateway 读取或写入；BuildInfo Controller 使用内部身份直连 apiserver 读取。Gateway 不允许删除该内置对象，也不提供 Watch 或 `/status`。
 
 ## 4. Artifact Manager 实例内容
+
+配置结构由公共 `ebs/v1.ArtifactManagerContent` 和 `ArtifactManagerInstance` 定义，apiserver、Controller Manager 与 Gateway 共用；它们是 `Config.spec.content` 的解析类型，不是独立 API 资源。Gateway 返回给 Runner 的地址投影仍只包含 Runner 访问地址，不包含 `internalURL`。
 
 `Config/artifact-manager-conf` 记录 Artifact Manager 实例地址，默认 `visibility: OpsOnly`。`instances` 包含 `default` 及部署使用的实例名；`default` 对应 Docker Compose，`art-01` 对应首个 Kubernetes 实例。Project 创建或修改 `ebs.io/artifacts` annotation 时，以当前 `instances` 的键作为有效值。每个实例的地址按访问方区分：
 
@@ -257,7 +259,11 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 |------|------|
 | `internalURL` | Controller Manager 访问 Artifact Manager 的内部 HTTP(S) 地址；实例必须配置 |
 | `runnerInternalURL` | 内网 Runner 上传日志和产物、读取过程仓的地址；未部署内网 Runner 时可为空 |
-| `runnerExternalURL` | 外网 Runner 使用的 HTTPS 地址；未开放外网 Runner 时可为空 |
+| `runnerExternalURL` | 外网 Runner 使用的 HTTP(S) 地址；未开放外网 Runner 时可为空 |
+
+apiserver 在创建、更新时严格解析并校验整个配置：`instances` 必须非空；实例名符合 DNS1123 label 规则；所有实例的 `internalURL` 必填；地址必须是带主机名的绝对 HTTP(S) URL，显式端口范围为 1～65535，不得包含凭据、query、fragment 或空白。内外网地址均允许 HTTP 或 HTTPS，两个 Runner 地址均可省略或为空；允许 URL 路径前缀。不要求一定包含 `default`，使用默认实例的 Project 创建时仍须确认该键存在。未知字段、重复键或任一实例非法时返回 422。
+
+Project 创建或修改 annotation 时只检查实例键存在，不重新校验配置内容。Controller Manager 读取并反序列化后提取内部地址，Gateway 保留权限检查并投影 Runner 地址，Runner 更新地址表时不逐项重复校验；使用时仍检查所选实例和所需地址是否存在，保留读取、响应契约、解析和连接错误处理。
 
 这些字段只保存服务地址，不保存凭据。Gateway 向已认证的 Runner 提供所有实例的 `runnerInternalURL` 和 `runnerExternalURL` 列表，不按 Job 或 Project 过滤；不得把整个 `OpsOnly` Config 改为 `Public`。Runner 的“内网/外网”模式须显式配置，不根据请求来源自动判断；所需实例在选定模式下的地址为空时停止该 Job 的产物传输，不回退到另一地址或 `internalURL`。
 
