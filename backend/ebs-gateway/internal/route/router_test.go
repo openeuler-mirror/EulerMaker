@@ -407,6 +407,47 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 	}
 }
 
+func TestRunnerJobReadPreservesNotFound(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			path := "/apis/ebs/v1/projects/team/jobs/deleted-job"
+			calls := 0
+			api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.Method != http.MethodGet || request.URL.Path != path {
+					t.Fatalf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
+				}
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"reason":"NotFound"}`)),
+				}, nil
+			}))
+			token, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(method, path, nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound || calls != 1 {
+				t.Fatalf("status=%d calls=%d body=%q", response.Code, calls, response.Body.String())
+			}
+			if method == http.MethodGet {
+				var body struct {
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Error != "Job not found" {
+					t.Fatalf("unexpected response: %s, error=%v", response.Body.String(), err)
+				}
+			} else if response.Body.Len() != 0 {
+				t.Fatalf("HEAD response contains a body: %q", response.Body.String())
+			}
+		})
+	}
+}
+
 func TestRunnerCannotUpdateUnassignedJob(t *testing.T) {
 	old := `{"apiVersion":"ebs/v1","kind":"Job","metadata":{"name":"job-1","namespace":"team","resourceVersion":"7"},"spec":{},"status":{"runner":"runner-2","phase":"Running"}}`
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
