@@ -1,13 +1,18 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/emicklei/go-restful/v3"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 var projectScopedResources = map[string]struct{}{
@@ -16,6 +21,27 @@ var projectScopedResources = map[string]struct{}{
 	"buildinfos": {},
 	"rpmrepos":   {},
 	"jobs":       {},
+	"oldjobs":    {},
+}
+
+// Named GET handlers do not decode ListOptions, so reject watch/version options before routing.
+func withOldJobReadOptions(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info, ok := genericapirequest.RequestInfoFrom(r.Context())
+		if ok && info.APIGroup == "ebs" && (info.Resource == "oldjobs" || info.Resource == "projects" && info.Subresource == "oldjobs") {
+			for key, values := range r.URL.Query() {
+				for _, value := range values {
+					invalid := (key == "resourceVersion" || key == "resourceVersionMatch") && value != ""
+					invalid = invalid || key == "watch" && value != "" && value != "false" && value != "0"
+					if invalid {
+						responsewriters.ErrorNegotiated(apierrors.NewBadRequest(fmt.Sprintf("oldjobs does not support %s", key)), Codecs, ebsv1.SchemeGroupVersion, w, r)
+						return
+					}
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func installProjectAliasRoutes(srv *genericapiserver.GenericAPIServer) {

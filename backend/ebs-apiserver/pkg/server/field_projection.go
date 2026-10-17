@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -115,6 +116,8 @@ func withFieldProjection(next http.Handler) http.Handler {
 		buffer := httptest.NewRecorder()
 		ctx := context.WithValue(r.Context(), projectionBypassKey{}, true)
 		if strings.HasPrefix(r.URL.Path, "/apis/ebs/v1/") {
+			query := r.URL.Query()
+			ctx = esstore.WithProjectionQuery(ctx, (url.Values{"includeFields": query["includeFields"], "excludeFields": query["excludeFields"]}).Encode())
 			if filter, ok := projection.sourceFilter(); ok {
 				ctx = esstore.WithSourceFilter(ctx, filter)
 			}

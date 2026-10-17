@@ -93,10 +93,13 @@ apiVersion: ebs/v1
 | Build | Elasticsearch | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | 否 | `/status`, `/abort` |
 | BuildInfo | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | 否 | `/status` |
 | RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
-| Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status` |
+| Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status`, `/abort`, `/archive` |
+| 历史 Job（oldjobs） | Elasticsearch | `/apis/ebs/v1/projects/{project}/oldjobs` | `/apis/ebs/v1/oldjobs`（仅 List） | 否 | - |
 | Runner | etcd | - | `/apis/ebs/v1/runners` | 是 | `/status` |
 | Config | Elasticsearch | - | `/apis/ebs/v1/configs` | 否 | - |
 | Script | Elasticsearch | - | `/apis/ebs/v1/scripts` | 否 | - |
+
+历史 Job 归档提供只读 `oldjobs` 路由和 Job `/archive` 子资源，接口与存储契约见 [历史 Job 归档](#历史-job-归档ebs-oldjobs)。Job 的主存储仍为 etcd。
 
 其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`Config` 和 `Script` 为集群级资源。
 
@@ -267,7 +270,8 @@ Controller Manager 首版权限逐项列出如下。`update/status` 与普通 `u
 | Project | get |
 | Build | get、list、update、update/status |
 | Snapshot、BuildInfo、RpmRepo | get、list、create、update/status |
-| Job | get、list、watch、create、update/status、create/abort、delete |
+| Job | get、list、watch、create、update/status、create/abort、create/archive、delete |
+| oldjobs（历史 Job 归档） | get、list |
 | Runner | get、list、watch、update/status |
 | Config、Script | get |
 
@@ -364,6 +368,7 @@ ebs-configs
 ebs-scripts
 ebs-users
 ebs-machineaccounts
+ebs-oldjobs
 ```
 
 此外，内部索引 `ebs-build-target-claims` 用于构建目标互斥，不作为 API 资源暴露。
@@ -501,7 +506,7 @@ IAM 资源不支持 `status.phase` 和 `status.stage`。多个 requirement 以�
 - continue token 保存创建时间和 documentID 两个 `search_after` 值；排序策略版本必须进入 token fingerprint，分页 token 还必须带格式版本并进行完整性校验。
 - List 返回值设置 `metadata.continue`；可可靠取得时设置 `remainingItemCount`。
 - Create/Update 使用 `refresh=wait_for`，保证写请求成功后紧随其后的 List/Search 能看到结果。
-- ES-only 对象的 `metadata.resourceVersion` 由 ES `_seq_no` 和 `_primary_term` 编码生成。
+- ES-only 对象的 `metadata.resourceVersion` 由 ES `_seq_no` 和 `_primary_term` 编码生成；历史 Job 只读快照保留源 Job 版本，例外规则见归档章节。
 - Update、Patch、Delete 使用 `if_seq_no` 和 `if_primary_term` 做乐观并发控制，版本不匹配返回 `409 Conflict`。
 - `resourceVersion` 只用于单对象并发控制，不承诺 etcd watch revision 语义；ES-only 资源不接受基于 resourceVersion 的 watch。
 - ES 批量查询应使用 Point in Time 与 `search_after` 保持同一分页过程的一致视图；PIT 标识封装在 continue token 中并设置有限有效期。
@@ -669,6 +674,115 @@ Content-Type: application/json
 - Pending/Running 中止、重复中止、已有三种终态不变、404、UID 不匹配、非法请求和原因长度边界。
 - 中止与绑定、Runner 完成、Job Controller 写 Failed 并发；终态第一写入获胜，PUT/PATCH 均不能覆盖终态。
 - 中止响应丢失后的 GET 确认和同 UID 重试；返回对象保留 runner，使已分配 Job 的 Watch 能感知 Aborted。
+
+## 历史 Job 归档（ebs-oldjobs）
+
+历史处理策略由 Job Controller 的 `--job-history-action=delete|archive` 控制，默认 `delete`；`archive` 在保留期到达后先保存完整 Job 快照，再删除 etcd 中的 Job。保留期和每日扫描规则见 [Job Controller 历史清理](controller-manager~job-controller.md#62-历史-job-清理)。
+
+### 接口与边界
+
+| 方法与路径 | 调用方与用途 | 返回 |
+| --- | --- | --- |
+| `POST /apis/ebs/v1/projects/{project}/jobs/{name}/archive` | Controller Manager 请求归档指定版本；不删除源 Job | `200`，已持久化的 `ebs/v1 Job` 快照 |
+| `GET /apis/ebs/v1/projects/{project}/oldjobs/{name}` | 读取归档；Controller 用于确认未知写结果 | `200 Job` 或 `404 Status` |
+| `GET /apis/ebs/v1/projects/{project}/oldjobs` | 工程内历史查询 | `200 JobList` |
+| `GET /apis/ebs/v1/oldjobs` | 内部跨工程 List | `200 JobList` |
+
+`oldjobs` 是同一 Job 模型的独立只读存储入口，不新增 `OldJob` Go 类型或 GVK；discovery 的资源名为 `oldjobs`，kind 为 `Job`，仅声明 get/list。全局路径只注册集合 GET。不注册 Watch、普通写入或 `/status`、`/abort`；归档写入仅经 `/jobs/{name}/archive`。实现应使用专用 archive REST storage，避免把 Job 的 etcd 主存储或状态子资源切换到 ES。
+
+Gateway 仅公开 Project-scoped oldjobs 的 GET/LIST，沿用普通 Job 的公开读取与限流规则，Runner 身份不开放该入口。Gateway 不注册 `/archive` 或全局 oldjobs。内部组件细粒度授权实施时，仅 Controller Manager 可以 `create jobs/archive`，并允许其 get/list oldjobs；当前 apiserver mTLS 只识别组件而未完成细粒度授权，不能将该目标规则描述为现有安全保证。
+
+归档不自动替代普通 DELETE：手工删除 Job/Project 不触发归档；已删除的 Job 无法补档。`jobs` GET/LIST/Watch 不回退或合并 oldjobs，避免历史 Job 重新进入执行链路。前端历史查询应显式切换到 oldjobs，自动混合分页不在本次范围。归档只保存 API 对象，不复制日志、RPM 或 Manifest；其 URL 对应文件能否访问仍由 Artifact Manager 保留策略决定。
+
+### 请求与成功响应
+
+归档请求使用以下 JSON 请求体，两个前置条件均必填；不接收客户端提供的 Job 正文，也不接受强制覆盖选项：
+
+```json
+{
+  "preconditions": {
+    "uid": "3ba54647-c46c-4361-93c3-d5874a4c4faa",
+    "resourceVersion": "123456789"
+  }
+}
+```
+
+apiserver GET etcd 中的当前 Job，校验路径、UID 和 resourceVersion 一致，只允许 `Succeeded`、`Failed`、`Aborted` 且 `endTime` 非零、无 deletionTimestamp、无 finalizers 的对象。是否超过保留期由 Controller 判断，不向 apiserver 复制 Controller 配置。读取、归档和删除不构成跨存储事务；最后的条件 DELETE 是防止并发修改导致数据丢失的必要步骤。
+
+返回值是实际归档的完整 Job，包括原 metadata、spec 和 status；不替换 UID、creationTimestamp、generation、resourceVersion，也不重新执行创建默认值或生成 managedFields。`200` 表示对应快照已写入 ES，或此前已写入完全相同的快照，不表示源 Job 已删除。API 错误统一使用 Kubernetes `Status`。
+
+| 情况 | HTTP / 语义 |
+| --- | --- |
+| 请求格式或前置条件缺失 | `400 BadRequest` |
+| 源 Job 不存在 | `404 NotFound`；即使归档已存在，也不据此伪造新的归档成功响应 |
+| 源 Job UID/resourceVersion 与请求不符 | `409 Conflict` |
+| 非终态、缺少 endTime、删除中或含 finalizers | `422 Invalid` |
+| 归档已有其他 UID、较新源版本，或同版本不同正文 | `409 Conflict`，不覆盖 |
+| ES CAS 冲突 | `409 Conflict`，调用方重新读取后处理 |
+| etcd/ES 不可用、限流、超时 | 返回对应 `5xx` / `429`，不转换为 NotFound，不删除源对象 |
+| 请求已发送但响应丢失、截断或异常成功对象 | 客户端分类为 `WriteUnknown`，进入确认读取 |
+
+成功响应必须满足同一 namespace/name/UID/resourceVersion，且与 Controller 读取的完整 Job 快照在 API 语义上相等。响应缺失或不匹配不得触发 DELETE；归档客户端只执行完整 GET，不使用字段投影来确认。
+
+### 文档、mapping 与并发写入
+
+稳定 alias 为 `ebs-oldjobs`，物理索引为 `ebs-oldjobs-v1`，`is_write_index: true`。apiserver 启动时按其他 ES 索引规则检查和初始化，即使 Controller 使用默认 delete 模式也可读取已有归档。使用独立 `oldJobIndexMapping`，设置 1 shard、1 replica；后续 mapping 升级沿用 alias 切换方案。
+
+文档 `_id` 为 `{project}/{jobName}`（请求路径正确转义），基于同一 Project 下 Job 名不复用的约定；仍核对 UID，避免意外重名覆盖归档。顶层投影与其他 ES 资源保持一致：
+
+```json
+{
+  "apiVersion": "ebs/v1",
+  "kind": "Job",
+  "documentID": "project-name/job-name",
+  "metadata": {
+    "name": "job-name",
+    "namespace": "project-name",
+    "creationTimestamp": "2026-10-17T00:00:00Z",
+    "labels": [{"key": "ebs.io/build-name", "value": "build-name"}]
+  },
+  "archivedAt": "2026-11-17T00:00:00Z",
+  "data": {"apiVersion": "ebs/v1", "kind": "Job", "metadata": {}, "spec": {}, "status": {}}
+}
+```
+
+示例的 `data` 省略具体字段，实际必须包含完整源 Job。`archivedAt` 是 apiserver 写入快照的 UTC 时间，属于存储元数据，不注入 Job annotations 或公共 status；同版本幂等重试保持原值，新版本替换时更新。
+
+| ES 字段 | mapping |
+| --- | --- |
+| `apiVersion`、`kind`、`documentID`、`metadata.name`、`metadata.namespace` | `keyword` |
+| `metadata.creationTimestamp`、`archivedAt` | `date` |
+| `metadata.labels` | `nested`，子字段 `key/value` 为 `keyword` |
+| `data` | `object, dynamic: false`，保留完整 `_source` |
+| `data.status.phase`、`data.status.stage`、`data.status.runner` | `keyword` |
+| `data.status.startTime`、`data.status.endTime` | `date` |
+
+根 mapping 使用 `dynamic: strict`；`data.spec`、payload、message、missingDeps 和 managedFields 仅保存，不动态索引。映射日期供后续查询扩展，首版不因此开放额外的时间范围查询参数。
+
+归档 storage 使用实时 ES GET、create-only 和带 `_seq_no`/`_primary_term` 的 CAS 更新：
+
+1. 不存在时 create-only；存在时先核对源 UID。
+2. 同一 UID、同源版本且完整 Job 语义相同，返回已有快照；同版本不同内容视为冲突，不覆盖。
+3. 同一 UID 的较新源版本可以 CAS 替换旧快照；较旧版本不得覆盖新版本。比较只发生在内部归档 storage，按 etcd 源 Job resourceVersion 的十进制 revision 解析比较，不能按字符串字典序，也不能把此规则推广到 ES 对象的 resourceVersion。解析失败按内部契约错误返回 5xx。
+4. CAS/create-only 冲突直接返回 409，不循环套用旧快照。ES 故障、进程退出或响应丢失时，源 Job 仍由 Controller 的条件删除协议保护。
+
+归档写入使用 `refresh=wait_for`；GET 从实时文档接口读取而非 Search，避免将尚未 refresh 的文档误判为不存在。Job 的源 resourceVersion 与 ES 并发版本分开保存和使用，公共归档 Job 不暴露 ES `_seq_no`/`_primary_term`。
+
+### 查询与保留
+
+oldjobs GET/LIST 支持 `includeFields`、`excludeFields` 下推 `_source`，labelSelector 沿用公共 ES 查询规则。fieldSelector 支持 `metadata.name`、`metadata.namespace`、`status.phase`、`status.stage`、`status.runner` 的 `=`、`==`、`!=`；stage 缺失语义沿用通用规则。由于复用 Job GVK，不能只依赖 scheme 字段转换放行，oldjobs storage 必须验证自己的允许字段集合。
+
+List 按源 `metadata.creationTimestamp desc, documentID desc` 排序，复用 PIT、limit/continue 及 token 过期处理；token 绑定 oldjobs 资源、Project、过滤条件与字段选择，不能与 jobs 或其他工程互换。单对象 `metadata.resourceVersion` 仍是源 etcd 版本，仅用于快照身份核验；JobList 不提供可用于 Watch 的 resourceVersion，拒绝非空 `resourceVersion`、`resourceVersionMatch`、`watch=true`。归档源版本不能当成 ES List 的一致性游标。
+
+首版不设置归档 TTL，不开放 oldjobs DELETE，也不随 Project/Build 删除自动清除归档。需要独立配置 ES 容量监控、备份和后续保留策略；改变 Controller 为 delete 模式只影响以后到期的 Job，不清除已有 ES 归档。etcd 已删除的对象不能仅靠回退配置恢复，需要另外的恢复操作。
+
+### 验证要求
+
+- alias 初始化、独立 mapping、完整 Job 往返及 label/field selector、字段选择和分页。
+- 同 UID/同版本重试幂等、较新版本 CAS 更新、旧请求晚到不覆盖、重名不同 UID 冲突。
+- 归档成功后再删除、归档失败保留源对象、归档后源版本变化使条件删除失败。
+- 响应丢失后的实时确认、重启恢复、并发 apiserver/Controller 的重复请求均不丢数据。
+- Gateway 只开放 Project-scoped 历史 GET，不向 Runner、公开调用方或 Scheduler 增加归档写入口。
 
 ## 启动参数
 
