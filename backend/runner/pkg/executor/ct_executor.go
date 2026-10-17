@@ -130,7 +130,12 @@ func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (stri
 
 	container := e.Runtime
 	if container == nil {
-		container = containerruntime.DockerCLI{}
+		docker, err := containerruntime.NewDocker()
+		if err != nil {
+			return resultRoot, err
+		}
+		defer docker.Close()
+		container = docker
 	}
 	gracePeriod := e.StopGracePeriod
 	if gracePeriod <= 0 {

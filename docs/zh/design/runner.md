@@ -39,7 +39,7 @@ Runner 实现在 `backend/runner`，按职责分包：
 | `pkg/runner` | Agent 装配、注册心跳、Job 生命周期、启动恢复与工作目录清理 |
 | `pkg/gateway` | Gateway API 客户端及资源传输类型、MachineAccount 凭据、Token 交换与刷新 |
 | `pkg/executor` | 执行器选择、CT 执行流程、Script 缓存、payload 写入与日志时间戳 |
-| `pkg/container` | 容器运行时接口、Docker CLI 与 containerd 原生 Go Client 后端、容器查询 |
+| `pkg/container` | 容器运行时接口、Docker 与 containerd 原生 Go Client 后端、容器查询 |
 | `pkg/artifact` | 实例地址刷新与 Job 地址固定、过程仓 URL 解析、日志与产物上传、回执与保留期清理 |
 
 依赖方向为 `runner → executor/artifact/gateway/container`，`executor → artifact/gateway/container`，
@@ -400,7 +400,9 @@ runner agent
 
 `ct` executor 负责启动实际业务容器，而不是在 runner agent 进程内直接执行构建命令。runner agent 容器自身只是控制面进程，业务容器应作为独立容器创建、启动、等待、停止和清理。
 
-Agent 为执行器和启动恢复注入同一个运行时实例。Docker 后端通过 CLI 调用；containerd 后端使用原生 Go Client 和独立 namespace（默认 `eulermaker`），不经过 CRI 或创建 PodSandbox。
+Agent 为执行器和启动恢复注入同一个运行时实例。Docker 后端使用 Docker Engine Go SDK，默认连接 `/var/run/docker.sock`，不依赖 Docker 可执行文件；containerd 后端使用原生 Go Client 和独立 namespace（默认 `eulermaker`），不经过 CRI 或创建 PodSandbox。
+
+Docker 后端读取 SDK 的 `DOCKER_HOST`、`DOCKER_TLS_VERIFY`、`DOCKER_CERT_PATH` 等环境变量并自动协商 API 版本（最低 1.40）。镜像拉取读取 Runner 用户的 Docker 登录配置，credential helper 需自行安装；不读取 Docker CLI context。日志采集对非 TTY 的 stdout/stderr 复用流解码后交给日志收集器，保留现有时间戳与上传流程。
 
 containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默认入口、CMD、用户及环境变量，Job 的入口、命令、环境变量和挂载按既有 CT 规则覆盖。镜像采用原生 resolver 拉取公开仓库，不隐式使用 Docker 或 CRI 的仓库凭据。使用 `io.containerd.runc.v2`，快照驱动默认 `overlayfs`。
 

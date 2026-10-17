@@ -12,7 +12,7 @@ pkg/options/    顶层配置装配、默认值、命令行解析和校验
 pkg/runner/     Agent 装配、注册心跳、Job 生命周期和工作目录清理
 pkg/gateway/    Gateway 客户端、资源传输类型、机器凭据与 Token 刷新
 pkg/executor/   执行器、脚本缓存、payload 落盘和日志时间戳
-pkg/container/ 容器运行时接口、Docker CLI 与 containerd 原生 Go Client 后端
+pkg/container/ 容器运行时接口、Docker 与 containerd 原生 Go Client 后端
 pkg/artifact/  Artifact 地址路由、产物与日志上传、上传回执和保留期清理
 ```
 
@@ -77,6 +77,12 @@ DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 
+## Docker 后端
+
+默认通过 Docker Engine Go SDK 连接 `/var/run/docker.sock`，支持 `DOCKER_HOST`、`DOCKER_TLS_VERIFY`、`DOCKER_CERT_PATH` 等 SDK 环境变量，自动协商 API 版本（最低 1.40）。不读取 Docker CLI 的 context 配置；非默认端点请显式设置 `DOCKER_HOST`。
+
+Runner 无需安装或挂载 `docker` 可执行文件；容器化运行仍需挂载 Docker socket 和同路径的 Runner 工作目录，并保证 socket 访问权限。拉取私有镜像时读取 Runner 用户的 Docker 登录配置（`DOCKER_CONFIG` 或 `~/.docker/config.json`）；若配置了 credential helper，需单独提供对应 helper 可执行文件。
+
 ## containerd 后端
 
 在 Linux 构建节点上安装并启动 containerd、`containerd-shim-runc-v2` 和 runc，然后以有权访问 socket、快照及挂载的用户运行 Runner（建议直接在宿主机以 root 运行）：
@@ -104,3 +110,10 @@ containerd 后端直接调用 Go Client，不依赖 Docker、ctr、nerdctl 或 C
 日志由 shim 写入 `${rootDir}/containerd/{namespace}/{containerID}.log`，Runner 实时读取并上传；退出后删除 task、排空日志，再清理容器元数据、可写快照及运行时日志。镜像缓存保留。Runner 重启后按容器标签核对归属并停止、移除旧任务，再处理服务端分配的 Job。切换运行时或 namespace 前应先排空原后端的任务。
 
 容器化部署时，除 containerd socket 外，`${rootDir}` 与 containerd 存储目录（通常 `/var/lib/containerd`）都必须以相同绝对路径挂载，保证宿主机 shim 的日志路径、Job bind mount 和镜像用户解析能访问同一文件；Runner 还需要相应的宿主机文件访问和挂载权限，不能直接沿用仅挂载 Docker socket 的 Compose 配置。运行时日志文件不做轮转，需监控构建节点磁盘空间。
+
+可在独立测试节点验证真实运行时（测试会拉取 BusyBox，并在独立测试 namespace 中创建、删除容器）：
+
+```bash
+EBS_TEST_CONTAINERD_ADDRESS=/run/containerd/containerd.sock \
+  go test ./pkg/container -run TestContainerdIntegration -v
+```
