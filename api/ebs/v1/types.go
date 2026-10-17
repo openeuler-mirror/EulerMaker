@@ -55,6 +55,29 @@ type BuildTargetArch struct {
 	Image string `json:"image"`
 }
 
+type BuildResourceContent struct {
+	Default  ResourceRequirements             `json:"default,omitempty"`
+	Packages map[string]PackageResourceConfig `json:"packages"`
+}
+
+type PackageResourceConfig struct {
+	Default ResourceRequirements            `json:"default,omitempty"`
+	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
+}
+
+// ArtifactManagerContent defines the content of Config/artifact-manager-conf.
+// +k8s:deepcopy-gen=true
+type ArtifactManagerContent struct {
+	Instances map[string]ArtifactManagerInstance `json:"instances" yaml:"instances"`
+}
+
+// +k8s:deepcopy-gen=true
+type ArtifactManagerInstance struct {
+	InternalURL       string `json:"internalURL" yaml:"internalURL"`
+	RunnerInternalURL string `json:"runnerInternalURL,omitempty" yaml:"runnerInternalURL,omitempty"`
+	RunnerExternalURL string `json:"runnerExternalURL,omitempty" yaml:"runnerExternalURL,omitempty"`
+}
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:deepcopy-gen=true
 type Script struct {
@@ -404,16 +427,6 @@ type RpmRepoList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []RpmRepo `json:"items"`
-}
-
-type BuildResourceContent struct {
-	Default  ResourceRequirements             `json:"default,omitempty"`
-	Packages map[string]PackageResourceConfig `json:"packages"`
-}
-
-type PackageResourceConfig struct {
-	Default ResourceRequirements            `json:"default,omitempty"`
-	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

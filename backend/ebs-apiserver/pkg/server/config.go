@@ -22,14 +22,6 @@ var defaultBuildResourceTemplate []byte
 //go:embed default-artifact-manager-conf.yaml
 var defaultArtifactManagerTemplate []byte
 
-type artifactManagerConfigContent struct {
-	Instances map[string]struct {
-		InternalURL       string `json:"internalURL"`
-		RunnerInternalURL string `json:"runnerInternalURL"`
-		RunnerExternalURL string `json:"runnerExternalURL"`
-	} `json:"instances"`
-}
-
 type bootstrapStorage interface {
 	rest.Getter
 	rest.Creater
@@ -44,7 +36,7 @@ func ensureDefaultConfigs(ctx context.Context, storage bootstrapStorage) error {
 	if err := yaml.UnmarshalStrict(defaultBuildResourceTemplate, &resources); err != nil {
 		return err
 	}
-	var artifactManagers artifactManagerConfigContent
+	var artifactManagers ebsv1.ArtifactManagerContent
 	if err := yaml.UnmarshalStrict(defaultArtifactManagerTemplate, &artifactManagers); err != nil {
 		return err
 	}

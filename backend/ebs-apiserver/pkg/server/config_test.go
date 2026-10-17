@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/apis/ebs/validation"
 	"ebs-apiserver/pkg/storage/es"
 )
 
@@ -66,12 +67,22 @@ func configScriptTestHandler(storage map[string]rest.Storage) (http.Handler, err
 }
 
 func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
+	for _, tc := range []struct{ name, initial, updated string }{
+		{"build-target", "targets: {}", "targets: {other: {arches: {x86_64: {image: build:v1}}}}"},
+		{"build-resource", "default: {requests: {cpu: '4', memory: 8Gi}}", "default: {requests: {cpu: '8', memory: 16Gi}}"},
+		{"artifact-manager-conf", "instances: {default: {internalURL: 'http://artifact-manager:8081'}}", "instances: {art-01: {internalURL: 'http://artifact-manager.art-01:8081', runnerExternalURL: 'https://artifacts.example.com'}}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testConfigHTTPCreateUpdateAndRead(t, tc.name, tc.initial, tc.updated) })
+	}
+}
+
+func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updatedContent string) {
 	var document json.RawMessage
 	var seq int64
 	client := es.NewClientForTesting("http://es", &http.Client{Transport: confTransport(func(r *http.Request) (*http.Response, error) {
 		status := http.StatusOK
 		var body any
-		if r.URL.Path != "/ebs-configs/_doc/build-target" {
+		if r.URL.Path != "/ebs-configs/_doc/"+name {
 			t.Fatalf("unexpected ES path %s", r.URL.Path)
 		}
 		switch r.Method {
@@ -80,7 +91,7 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 				status = http.StatusNotFound
 				body = map[string]any{"found": false}
 			} else {
-				body = map[string]any{"_id": "build-target", "_seq_no": seq, "_primary_term": 1, "_source": document}
+				body = map[string]any{"_id": name, "_seq_no": seq, "_primary_term": 1, "_source": document}
 			}
 		case http.MethodPut:
 			if r.URL.Query().Get("op_type") == "create" && document != nil {
@@ -102,7 +113,7 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := func(method, body string, want int) ebsv1.Config {
-		req := httptest.NewRequest(method, "/apis/ebs/v1/configs/build-target", strings.NewReader(body))
+		req := httptest.NewRequest(method, "/apis/ebs/v1/configs/"+name, strings.NewReader(body))
 		if method == http.MethodPost {
 			req.URL.Path = "/apis/ebs/v1/configs"
 		}
@@ -120,13 +131,41 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 		return obj
 	}
 	call(http.MethodGet, "", http.StatusNotFound)
-	obj := call(http.MethodPost, `{"apiVersion":"ebs/v1","kind":"Config","metadata":{"name":"build-target"},"spec":{"visibility":"Public","content":"targets: {}\n"}}`, http.StatusCreated)
+	candidate := ebsv1.Config{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Config"},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: initialContent},
+	}
+	encode := func(obj ebsv1.Config) string {
+		data, err := json.Marshal(obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	invalid := candidate
+	invalid.Spec.Content = "{}"
+	call(http.MethodPost, encode(invalid), http.StatusUnprocessableEntity)
+	obj := call(http.MethodPost, encode(candidate), http.StatusCreated)
 	if obj.UID == "" || obj.ResourceVersion == "" || obj.Generation != 1 {
 		t.Fatalf("missing metadata: %+v", obj.ObjectMeta)
 	}
 	call(http.MethodHead, "", http.StatusMethodNotAllowed)
-	call(http.MethodPut, `{"metadata":{"name":"build-target"},"spec":{"visibility":"Public","content":"targets: {}\n"}}`, http.StatusConflict)
-	obj.Spec.Content = "targets: {other: {arches: {x86_64: {image: build:v1}}}}\n"
+	call(http.MethodPut, encode(candidate), http.StatusConflict)
+	invalid = obj
+	if name == ebsv1.BuildResourceConfigName {
+		invalid.Spec.Content = "default: {requests: {cpu: '4', memory: 8Gi}, limits: {cpu: '2'}}"
+	} else if name == ebsv1.BuildTargetConfigName {
+		invalid.Spec.Content = "targets: {os: {arches: {x86_64: {image: 'https://invalid/image'}}}}"
+	} else {
+		invalid.Spec.Content = "instances: {default: {internalURL: 'http://artifact-manager:8081', runnerExternalURL: 'ftp://external'}}"
+	}
+	call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
+	unchanged := call(http.MethodGet, "", http.StatusOK)
+	if unchanged.ResourceVersion != obj.ResourceVersion || unchanged.Spec.Content != initialContent {
+		t.Fatal("rejected update modified stored Config")
+	}
+	obj.Spec.Content = updatedContent
 	data, _ := json.Marshal(obj)
 	updated := call(http.MethodPut, string(data), http.StatusOK)
 	if updated.Generation != 2 {
@@ -166,8 +205,17 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 		t.Fatalf("created %d configs, want 3", store.creates)
 	}
 	target := store.objects[ebsv1.BuildTargetConfigName]
+	if errs := validation.ValidateConfig(target); len(errs) != 0 {
+		t.Fatalf("default build-target Config: %v", errs)
+	}
 	resource := store.objects[ebsv1.BuildResourceConfigName]
+	if errs := validation.ValidateConfig(resource); len(errs) != 0 {
+		t.Fatalf("default build-resource Config: %v", errs)
+	}
 	artifactManager := store.objects[ebsv1.ArtifactManagerConfigName]
+	if errs := validation.ValidateConfig(artifactManager); len(errs) != 0 {
+		t.Fatalf("default artifact-manager-conf Config: %v", errs)
+	}
 	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly ||
 		artifactManager.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
 		t.Fatal("incorrect default visibility")
@@ -183,7 +231,7 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if resources.Default.Requests["cpu"] != "4" || resources.Default.Requests["memory"] != "8Gi" {
 		t.Fatalf("default resources: %+v", resources.Default)
 	}
-	var artifactManagers artifactManagerConfigContent
+	var artifactManagers ebsv1.ArtifactManagerContent
 	if err := yaml.UnmarshalStrict([]byte(artifactManager.Spec.Content), &artifactManagers); err != nil {
 		t.Fatal(err)
 	}
