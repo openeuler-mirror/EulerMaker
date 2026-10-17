@@ -2,7 +2,7 @@
 
 ## 一、定位与范围
 
-BuildInfo Controller 负责组装 spec 依赖、构建和持久化依赖图、破环派发 Job，以及汇总构建结果。运行框架沿用 [controller-manager.md](controller-manager.md)，公共数据模型见 [data-models.md](data-models.md)，开发前置变更见第十七章。
+BuildInfo Controller 负责组装 spec 依赖、构建和持久化依赖图、破环派发 Job，以及汇总构建结果。运行框架沿用 [controller-manager.md](controller-manager.md)，公共数据模型见 [data-models.md](data-models.md)，上游协作契约见第十七章。
 
 职责边界：
 
@@ -21,7 +21,7 @@ BuildInfo Controller 运行在现有 `controller-manager` 框架内。
 ### 2.1 装配与配置
 
 - 队列 key 为 `{BuildInfo.metadata.namespace}/{BuildInfo.metadata.name}`，`BuildInfo.metadata.namespace` 即 Project 名，`BuildInfo.metadata.name` 与父 Build 同名。
-- Controller 配置项：轮询周期沿用框架全局 `--poll-period`（默认 10s），worker 数沿用框架全局 `--workers`（默认 2）；本控制器专有配置见 12.1。
+- Controller 配置项：轮询周期沿用框架全局 `--poll-period`（默认 10s），worker 数沿用框架全局 `--workers`（默认 6）；本控制器专有配置见 12.1。
 - 配置校验时机：所有静态配置（apiserver 地址与 CA、git-server 地址/超时/重试、请求超时）必须在 initializer 阶段完成校验；配置非法时 controller-manager 直接启动失败，不得延迟到单个 BuildInfo 的 reconcile 中处理，也不通过 HealthChecker 表达。镜像映射不再是本地静态配置：创建 Job 时运行期经 apiserver 读取集群级 Config/build-target（见 15.3.1/E-26）。
 
 ### 2.2 组件依赖与框架接口
@@ -748,16 +748,8 @@ buildSet = buildSet ∪ direct                                                # 
 
 统一约定（以 [controller-manager.md](controller-manager.md) 5.1/5.2 与 `pkg/controller.BaseController` 为准）：`SyncFunc` 签名为 `func(ctx context.Context, key string) (ReconcileResult, error)`，业务 `Sync` **只返回结构化结果 `ReconcileResult` 与 `error`**；`Done`/`Forget`/`Add`/`AddAfter`/`AddRateLimited` 一律由 `BaseController` 唯一执行，业务侧不得直接调用队列。
 
-`ReconcileResult` 语义（`RequeueAfter < 0`，或 `Requeue=true` 且 `RequeueAfter>0` 为非法组合，`Valid()` 返回 false）：
+队列操作与退避统一由 [公共框架](controller-manager.md) 定义。本控制器用零值结果等待下一轮轮询，用 `RequeueAfter: 1s` 处理冲突或确认后需重算的写入；临时错误交框架退避，永久错误只终结当前周期，不屏蔽后续轮询。全文“返回 nil 等下一轮”均指零值 `ReconcileResult` + nil。必要的业务状态写入须先完成；写入失败按下表分类返回，不被业务错误覆盖。
 
-- 返回零值 `ReconcileResult{}` + `nil` → `Forget`：本轮收敛或等待外部就绪，由下一轮 poll（默认 10s，`--poll-period`，NFR-03）重新驱动（PollingSource 每轮对存活 key 无条件分发 OnUpdate，5.2/5.3）。**全文流程图、边界表与本节表格中的"返回 nil 等下一轮"均指此语义。**
-- 返回 `ReconcileResult{Requeue: true}` + `nil` → 先 `Forget` 再 `Add`：作为一次不带旧退避的立即重入队。
-- 返回 `ReconcileResult{RequeueAfter: d}` + `nil`（`d>0`）→ 先 `Forget` 再 `AddAfter(d)`：延迟调谐，不计为失败重试、不累计退避。409 Conflict 延迟重入（`RequeueAfter: 1s`）即走本行（见 10.2）。
-- 返回 `error` → `AddRateLimited`：快速阶段使用 client-go `DefaultControllerRateLimiter`（基础退避 5ms 指数增长，默认最多连续重试 `maxRetries`=15 次，`--controller-max-retries`）；**达上限后不丢弃 key**，而是 `Forget` + 进入框架慢速阶段以 `AddAfter` 持续重入队（默认 30s 起 2 倍增长至 15m 封顶、`[0.8, 1.2]` 抖动，`--controller-slow-retry-*`），慢速阶段每次临时失败直接计算下一次慢速延迟，不再回退快速重试。
-- 返回 `controller.NewPermanentError(err)` → `Forget` + 日志，不重试；仅终结本次调谐并清除该 key 的退避状态，**不永久屏蔽 key**（后续 poll/Watch 事件仍可重新入队）。优先级高于 `RetryAfter`。**返回永久错误前必须先完成必要且幂等的状态/condition 写入；若该写入本身失败，必须返回可重试 error。**
-- 返回携带合法 `RetryAfter` 的写入错误（apiserver 429/503 且响应含 `Retry-After`）→ `Forget` + `AddAfter(RetryAfter)`：不叠加本地 rate limiter，不增加慢速失败次数，也不清除已有慢速状态。
-- 结果非法（`!result.Valid()`）→ 记录 `result=invalid-result` 日志与指标后 `Forget`，视为编程错误，不重试。
-- 控制器停机（`ctx` 取消）→ 当前 item `Forget` 后 Worker 退出，不再重入队；进程重启后由 PollingSource 重新驱动（5.2/5.3）。
 - 网络请求瞬时失败（apiserver/git-server 超时、5xx、网络错误）在进程内重试最多 3 次（git-server 侧经 `--git-server-retry` 配置，默认 3；apiserver 查询为固定代码常量 3 次，无独立配置项——区别于 git-server 的 `--git-server-retry`，12.1/E-02），重试上限后报错退出；跳过还是失败由各业务条目裁决（全局边界 E-02）。
 
 **写错误分流（`WriteError.Outcome` 三分类）**：`UpdateBuildInfoStatus` / `CreateJob` 的失败先经 `errors.As` 取 `WriteError.Outcome`（客户端契约见 4.1），按下表分流；**禁止对任何 Outcome 重放旧请求**（10.2/10.3）：
@@ -768,7 +760,7 @@ buildSet = buildSet ∪ direct                                                # 
 | `NotSent` | 临时网络错误（连接失败等，可证明未发出） | error（快速退避，达上限转慢速退避） |
 | `Rejected`（收到明确响应） | 409 Conflict（resourceVersion 过期） | `ReconcileResult{RequeueAfter: 1s}` + nil：延迟重入，下轮从入口 GET 最新对象重算目标 status（10.2，禁止重放合并） |
 | `Rejected` | 404（写入时对象已被外部删除） | 记录日志 + 失效 dcgDict 缓存，返回 nil（与 E-10 一致） |
-| `Rejected` | 408 / 429 / 5xx / 其他未单独处理的响应 | error（快速退避，达上限转慢速退避）；429/503 含 `Retry-After` 时按上文 `RetryAfter` 行原样返回 |
+| `Rejected` | 408 / 429 / 5xx / 其他未单独处理的响应 | 返回 error；429/503 含 `Retry-After` 时由公共框架采用服务端延迟 |
 | `Rejected` | BuildInfo status 写入返回 400 / 401 / 403 / 422 | `controller.NewPermanentError` |
 | `Rejected` | CreateJob 返回 400 / 422（仅该 Job 的确定性拒绝） | 将对应 spec 的 `build.status` 写为 `Failed`，记录 `JobCreateRejected` condition，继续派发其他可用 spec；拒绝响应已证明 Job 未创建，无须 GET 确认 |
 | `Unknown`（无法确认写入结果） | 请求发出后连接中断/响应超时/响应无法解析 | 先按 10.3 执行确认读取：意图已实现 → 按成功继续本轮后续动作；未实现 → `ReconcileResult{RequeueAfter: 1s}` 下轮重算；404/UID 不同 → 返回 nil 结束本轮；确认 GET 失败按读取错误分类 |
@@ -780,7 +772,7 @@ buildSet = buildSet ∪ direct                                                # 
 | PollingSource list 失败                         | 框架内退避重试（PollingSource 自带 backoff 1s→period 封顶），不进入 reconcile | -（不经 Sync） |
 | apiserver get 失败（reconcile 内）                 | 记录日志 | error（快速退避，达上限转慢速退避） |
 | BuildInfo status 写入失败                          | 按上表 WriteError 三分类分流 | 见上表 |
-| Job 创建失败                                      | `NotSent`/`Rejected` 临时类：记录日志；`Unknown`：以确定性 Job 名 GET 确认（存在 → 核验后沿用回填；不存在 → 可重试错误，下轮按同一身份/名称重新调和，E-11） | error（快速退避，达上限转慢速退避）；确定性拒绝为 `NewPermanentError` |
+| Job 创建失败                                      | 按上表 WriteError 分类；Unknown 使用确定性 Job 名确认，见 10.3 / E-11 | 按错误范围处理：单 Job 的 400/422 拒绝记录该 spec 失败并继续，其余按写错误分类返回 |
 | dcgDict 构建失败                                  | 记录 condition `DcgBuildFailed` | `ReconcileResult{}`（等下一轮） |
 | 父 Build 查询失败                                  | 记录日志 | error（快速退避，达上限转慢速退避） |
 | buildPayload 配置校验失败（E-31） | 先写 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed` 停止派发，再尽力中止已有 Job；所有可见非终态 Job 已尝试后写 `phase=Failed`，不等待中止成功或 Job 终态，不以 `PermanentError` 留下 Pending | 批次未结束时延迟重入；Failed 成功写入返回零值 + nil；List/写入失败按 7.5、10.2/10.3 分流 |
@@ -959,15 +951,15 @@ condition 对应的 reason 及含义以 9.1 为准；停止派发日志只表示
 
 | 配置项 | 默认值 | 来源 | 说明 |
 |--------|--------|------|------|
-| `--workers` | 2 | flag（全局） | worker goroutine 数（各 controller 共用全局值；如需独立可增 `--build-info-workers`） |
+| `--workers` | 6 | flag（全局） | 各 controller 使用的 worker goroutine 数 |
 | `--poll-period` | 10s | flag（全局） | PollingSource list 周期 |
 | `--build-info-dcg-prune-grace` | 3×pollPeriod | flag | dcg 缓存 tombstone 宽限期（5.4） |
 | `--rpmrepo-ready-retry-limit` | 3 | flag | 过程仓/bootstrap 仓 XML 连续解析失败的停止阈值（E-29）；暂时缺失、查询/下载失败不受该阈值限制，确定性配置或权限错误立即停止 |
 | `--snapshot-ready-retry-limit` | 3 | flag | 当前 Snapshot 查询连续失败计数升级阈值（E-30）：连续失败达阈值触发 condition `SnapshotUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮 GET 成功自动清零 |
 | `--specfile-cache-size` | 10000 | flag | 全局 spec 文件内容 LRU 缓存容量上限（15.11）：两层 key（`commitId`→`specFileName`），超限按 LRU 淘汰 |
-| `--git-server-addr` | `http://localhost:8080` | flag / env `GIT_SERVER_ADDR` | git-server 服务地址（共享客户端 `pkg/clients/gitserver`） |
-| `--git-server-timeout` | 30s | flag / env `GIT_SERVER_TIMEOUT` | 单次 git-server HTTP 请求超时 |
-| `--git-server-retry` | 3 | flag / env `GIT_SERVER_RETRY` | git-server 请求尝试次数上限 |
+| `--git-server-addr` | `http://localhost:8080` | flag | git-server 服务地址（共享客户端 `pkg/clients/gitserver`） |
+| `--git-server-timeout` | 30s | flag | 单次 git-server HTTP 请求超时 |
+| `--git-server-retry` | 3 | flag | git-server 请求尝试次数上限 |
 
 框架级重试沿用全局配置：快速退避 `--controller-max-retries`（默认 15），慢速退避 `--controller-slow-retry-*`（默认 30s 起 2 倍增长至 15m 封顶、`[0.8, 1.2]` 抖动，见 7.5）。409 冲突与 Unknown 不做进程内重放重试（10.2/10.3），无对应配置项。apiserver 查询的进程内重试上限为固定代码常量 3 次，无独立配置项（区别于 git-server 的 `--git-server-retry`，E-02）。
 
@@ -1226,7 +1218,7 @@ status:                                             # 创建时恒 Pending/Pendi
    - `specDepends[specName].repoName` 在 `BuildInfo.spec.buildPayload.disable_check_path` 列表中时写入 `disable_check_path: true`，否则不写该键；同仓库的多个 spec 得到相同结果。该字段仅向构建脚本传递意图，构建脚本负责落实 RPATH 检查开关；Runner 不解析它。
    - `use_kmod_libs` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `use_kmod_libs: true`，否则不写该键；默认脚本在 `dnf builddep` 后、`rpmbuild` 前用 Job 仓库安装 `kmod-libs`，Runner 不解析它。
    - `use_git_lfs` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `use_git_lfs: true`，否则不写；默认脚本使用固定的 `https://atomgit.com/src-openeuler/${package_name}.git` 拉取，并检出 `commit_id` 后拉取该提交的 LFS 对象。非命中 Job 仍使用 Snapshot 的 `cloneUrl`。Runner 不解析此标记。
-   - `use_root` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `use_root: true`，否则不写。默认脚本仅对 `rpmbuild -ba` 切换身份：命中时直接以 root 运行，未命中时以普通用户 `eulermaker` 运行；准备源码、安装依赖和拷贝产物仍以 root 执行。构建目录均为 `/workspace/rpmbuild`，本阶段不改变 Maven 配置目录。
+   - `use_root` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `use_root: true`，否则不写。默认脚本仅对 `rpmbuild -ba` 切换身份：命中时直接以 root 运行，未命中时以普通用户 `eulermaker` 运行；准备源码、安装依赖和拷贝产物仍以 root 执行。构建目录均为 `/workspace/rpmbuild`，Maven 配置随构建用户写入 `/root/.m2` 或 `/home/eulermaker/.m2`。
    - `use_xz` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `use_xz: true`，否则不写。默认脚本在构建前把 `SOURCES` 下每个非隐藏目录另打包为同名 `.tar.xz`，未命中时打包为 `.tar.gz`；原目录保留。
    - `unuse_gcc_secure` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `unuse_gcc_secure: true`，否则不写。默认脚本在预装包和 `dnf builddep` 前安装 `gcc_secure`；标记为 true 或 `package_name` 为 `gcc-10` 时跳过。`gcc-10` 特例只由脚本判断，不由管理面写入标记。
    - `prefer` 按当前 spec 的 `buildRequires` 逐项计算，排除 `buildRemoves`；仅在当前优先级仓库层中满足版本约束的提供者至少有两个、并按 16.1 的候选名归一与配置顺序命中项目级 `prefer` 时，记录实际命中的 RPM 基名。按依赖名字典序遍历、首次出现保留以去重，多个名称以空格连接为 JSON 字符串写入当前 Job；无命中或配置为空则不写 `prefer` 键。计算复用 16.1 的分层候选选择与版本比较，不另建一套规则；选择结果须能区分 `prefer` 命中和单候选/最高版本兜底，后两者不写入。只考虑 buildRequires，不将 install 依赖写入 Job `prefer`。Runner 不负责计算。
@@ -1636,22 +1628,22 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 ---
 
-## 十七、前置条件
+## 十七、上游契约
 
-### 17.1 公共 API 前置变更
+### 17.1 公共 API
 
-按 data-models.md 与本设计补齐以下 API，再同步生成代码及 OpenAPI：
+当前使用以下公共类型；字段定义以 [数据模型](data-models.md) 和 `api/ebs/v1` 为准：
 
-| 类型 | 变更 | 规则位置 |
+| 类型 | 用途 | 规则位置 |
 |------|------|----------|
 | SpecStatusGroup | 以 `build`、`install`、`dispatchCount` 并列映射保存各 spec 状态 | 7.4.2 / 15.2.3 |
-| BuildInfoPhase | 增加 Aborted 枚举 | 6.1 |
-| BuildInfoStatus | 增加 Dcg map[string]DcgNodeState 及节点类型 | 15.9 |
-| BuildInfoStatus | 增加 PendingJobCreates map[string]PendingJobCreate；条目字段为 JobName string、DispatchGeneration int64（JSON 为 jobName、dispatchGeneration） | 6.5.1 |
+| BuildInfoPhase | Aborted 中止终态 | 6.1 |
+| BuildInfoStatus | 以 Dcg map[string]DcgNodeState 保存依赖图检查点 | 15.9 |
+| BuildInfoStatus | 以 PendingJobCreates 保存未决 Job 创建意图 | 6.5.1 |
 
 资源查询与标签前提见 15.1、7.2.2 和 labels.md。
 
-### 17.2 联调前置契约
+### 17.2 协作契约
 
 | 协作方 | 应验证的契约 |
 |--------|--------------|
@@ -1667,7 +1659,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | 编号     | 指标 | 目标值 |
 |--------|------|--------|
 | NFR-01 | 吞吐量 | 单 worker 每秒可处理 ≥ 10 个 BuildInfo reconcile |
-| NFR-02 | 并发度（worker goroutine 池） | 默认 N=2，可配置（全局 `--workers`，或本控制器 flag 覆盖） |
+| NFR-02 | 并发度（worker goroutine 池） | 默认 N=6，由全局 `--workers` 配置 |
 | NFR-03 | list 周期 | 默认 10s（全局 `--poll-period`），可配置 |
 | NFR-04 | `Cache.dcgDict` 内存占用 | 单 BuildInfo < 2MB（2000 spec 场景，与 NFR-06 基准一致） |
 | NFR-05 | 可用性 | 控制器进程崩溃重启后，2 个 list 周期内恢复处理 |
@@ -1708,16 +1700,9 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 ---
 
-## 二十、实施顺序
+## 二十、运行装配
 
-1. **客户端**：apiserver 类型化 Client（含 `WriteError` 三分类与路径约定，4.1）+ git-server `ExecCommand` 客户端（4.2）+ Fake（4.3）。
-2. **纯函数与算法**：`rpmver`（16.2）、`specparse`（16.3）、`dcg`（SCC/选点/DispatchRequirements/补边，7.2.1/7.4.7）。
-3. **缓存**：`specDependsCache`（per-BuildInfo，失效/prune 复用 dcgDict 机制）、`specFileCache`（全局 LRU，`--specfile-cache-size`）、`rpmMetaSources`、`rpmRepoReadyFailures`（XML 连续解析失败计数，E-29）、`dcgDict`（含 tombstone/sweeper，5.4/15.11）。
-4. **Reconcile**：PollingSource handler 注册（5.2）、parentAbortGuard、releaseFailedGuard（E-28）、RpmRepo 错误分类与 E-29 收口、init/advance 分支（7.2/7.3）、错误分类与队列结果映射（7.5）。
-5. **装配**：initializer 注册（2.1）、静态配置启动期校验、指标（11.2）与最小权限（12.2）就位。
-6. 测试完成后纳入默认 `--controllers=*`。
-
----
+`buildinfo` initializer 已注册，默认随 `--controllers=*` 启用；装配依赖见第二章，配置见第十二章，验收范围见第十九章。
 
 ## 二十一、假设与限制
 

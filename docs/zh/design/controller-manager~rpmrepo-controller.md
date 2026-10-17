@@ -824,12 +824,3 @@ buildinfos:      get
 - 发布重启（逐崩溃窗口）：① 策略判定后未写检查点 → 重启后重新判定得到相同 `excludeSpecs`，不产生第二个 release；② 检查点已写、`SubmitRelease` 未被接受 → `GetRelease` 返回 `404` 时用同一请求重放；③ 提交已受理、相位未补齐 → `GetRelease` 返回 `Creating` / `Prepared` 时补齐相位后继续等待或激活；④ 激活成功后收口写入前 → `GetRelease` 返回 `Ready` 时直接成功收口；⑤ 失败收口写入前 → `GetRelease` 仍不可重试失败时重新收口；⑥ 收口写入结果未知后重启 → 基于最新对象恢复，终态或删除中则结束，否则重新读取依赖与发布结果计算决策；不沿用旧收口目标；⑦ `Requeue: true` 丢失 → 由 RpmRepo 轮询按同一对象 key 重新入队；全部窗口均不产生第二个 release 版本。
 
 验收场景沿用 `docs/zh/design/artifact-manager.md` §8.12 的 11 条并改写为可断言用例。
-
-## 十五、实施顺序
-
-1. 按第十三章上游契约准备客户端 Fake 与联调数据。
-2. 实现类型化客户端及 Fake，包括完整分页、写错误分类和 Artifact Manager 响应契约。
-3. 实现批次选择、UID 计算、条件合并与重试判定等纯函数。
-4. 实现过程仓调谐、发布策略与发布调谐，覆盖检查点恢复和候选扫描。
-5. 按第二章接入配置、时钟、指标与 initializer；权限按第十二章配置。
-6. 联调期用 `--controllers=-rpmrepo` 关闭；第十四章测试通过后恢复 `--controllers=*` 启用。

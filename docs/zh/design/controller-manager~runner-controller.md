@@ -533,13 +533,3 @@ runner_controller_invalid_timestamp_total
 5. 在 Runner Controller 写入前恢复心跳时，resourceVersion 冲突或权威 GET 能阻止错误覆盖；
 6. Controller Manager 重启后，已超时 Runner 不会重新获得完整超时窗口；
 7. Runner agent恢复并成功上报新心跳后，可以把 Offline 状态恢复为有效运行状态。
-
-## 13. 实施顺序
-
-1. 为 Controller Manager client 增加 Runner GET 和 Runner `/status` 更新适配，并复用现有写入结果分类。
-2. 实现纯健康判定函数和响应校验，以 FakeClock 完成边界测试。
-3. 实现事件处理、延迟重入、权威确认和结果未知确认。
-4. 增加 `RunnerControllerOptions`，由组装层把 Runner 时间参数和全局 `ManagerOptions.ControllerMaxRetries` 转换为 `runnercontroller.Config`，并在 initializer map 中注册 `runner`。
-5. 增加指标、README 参数说明和 dev Compose 集成验证。
-
-完成上述内容后，Runner Controller 可以为 Job Controller 提供稳定的 `Offline` 状态生产者，形成“心跳失联判定”和“已绑定 Job 失败收敛”相互独立的两级控制流程。

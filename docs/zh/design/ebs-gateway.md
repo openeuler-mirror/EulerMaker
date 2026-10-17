@@ -145,7 +145,6 @@ Request
   -> PublicRead / Auth
   -> UserResolve（认证用户）
   -> RateLimit
-  -> InjectHeaders
   -> ProjectAuthorize
   -> AccessLabels
   -> ReverseProxy

@@ -76,7 +76,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
 
-Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。匿名、普通用户和 Runner 只能具名读取 `Public` 对象；`OpsOnly` 读取、list 和写入要求 Ops/Admin，更新保留最新 `metadata.resourceVersion`。内置对象 `build-target`、`build-resource` 不允许删除。
+Config 支持 get/list/create/replace/patch，`-p/-n` 不改变其集群级路径；不支持 watch。匿名、普通用户和 Runner 只能具名读取 `Public` 对象；`OpsOnly` 读取、list 和写入要求 Ops/Admin，更新保留最新 `metadata.resourceVersion`。当前 CLI 禁用所有 Config 的删除；Gateway 的内置对象保护规则见 [Gateway 设计](ebs-gateway.md)。
 
 ### 3.2 登录与 Context
 
@@ -146,13 +146,12 @@ ebsctl delete job build-kernel -p openeuler-mainline
 - `patch --type merge --patch <JSON>` 使用 `application/merge-patch+json`；首版只支持 merge patch。`-p` 已作为全局 Project 参数，不复用于 patch 内容；
 - `delete` 默认要求交互确认仅限危险的批量删除；指定单个名称直接删除，`--all` 必须显式给出，并支持 `--yes` 跳过确认。
 
-`Config` 支持 create、replace、patch，以及删除非内置对象。普通用户仅能具名读取 `Public` 对象，写入仅允许 Ops 或 Admin 身份执行。例如：
+`Config` 在当前 CLI 中支持 create、replace、patch，不提供 delete；Gateway 对非内置 Config 的删除能力尚未接入 CLI。普通用户仅能具名读取 `Public` 对象，写入仅允许 Ops 或 Admin 身份执行。例如：
 
 ```bash
 ebsctl create -f config.yaml
 ebsctl replace -f config.yaml
 ebsctl patch cfg custom-config --type merge --patch '{"spec":{"visibility":"OpsOnly"}}'
-ebsctl delete cfg custom-config
 ```
 
 `ebsctl` 不提供 `apply`。声明式对象的创建和更新分别使用 `create` 与 `replace`，局部字段更新使用 `patch`。

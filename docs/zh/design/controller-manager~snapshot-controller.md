@@ -527,7 +527,7 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | 永久 HTTP、输入或客户端错误 | 零值 Result 和 PermanentError，记录分类指标，不改变 Controller 健康状态 |
 | 无法解析对象或违反内部不变量 | 零值 Result 和错误，记录并限速重试；持续失败必须可观测 |
 
-超过 `--controller-max-retries` 后仍不能静默丢弃。框架应记录错误日志和 dropped 指标，并在周期性 resync 时允许对象再次进入队列。
+临时错误耗尽快速重试后，由 BaseController 转入慢速退避并自动重新入队；不依赖下一轮 resync 恢复。队列结果、退避参数和指标统一见 [公共框架设计](controller-manager.md)。
 
 客户端地址、TLS 和认证等静态配置必须在 initializer 阶段完成校验；配置非法时 Controller Manager 启动失败，不得延迟到单个 Snapshot 的 Reconcile 中处理，也不通过 HealthChecker 表达。
 
@@ -675,31 +675,3 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 - 同名 Snapshot 删除重建时不误更新新对象；
 - 认证失败不产生紧密重试，也不由单个对象错误改变 Controller 健康状态；
 - 临时网络错误能够恢复；
-
-## 十二、开发顺序
-
-1. **前置准备**：
-   - 确认 `SnapshotStatus.Conditions` 字段已扩展（已完成）
-   - 执行 `api/hacks/update-codegen.sh` 生成 DeepCopy 方法
-
-2. **git-server 客户端**（`pkg/clients/gitserver/`）：
-   - `validate.go`：不可信输入白名单校验
-   - `client.go`：实现 Controller 接口 `PublishSyncTask`、`CheckSynced`、`ResolveCommit`；内部封装 GetSyncStatus、ExecuteCommand（重试 3 次，30s 超时）
-   - `revparse.go`：rev-parse 输出解析（提取 40 字符十六进制 SHA）
-   - `cache.go`：L1 TTL 进程内缓存包装
-
-3. **Snapshot Controller**（`pkg/controllers/snapshot/`）：
-   - `conditions.go`：condition upsert/清理/消毒
-   - `update.go`：advancePhase + updateSnapshot
-   - `resolve.go`：单次状态检查、按需异步同步及 ref 解析（固定 worker pool + 轮转派发 + jobs/results 通道 + budgetCtx）
-   - `reconcile.go`：reconcile 入口、父 Build 读取、目标范围判定和错误返回约定
-   - `controller.go`：Initializer、事件注册、Client 接口定义
-
-4. **集成与配置**：
-   - 注册 `snapshot` initializer、命令行参数和指标
-   - Snapshot Controller 没有独立关键后台循环，不实现自定义 HealthChecker，使用框架默认 ping checker
-
-5. **测试**：
-   - 单元测试（race、边界情况）
-   - 集成测试（git-server 交互）
-   - 完成后启用默认 `--controllers=*` 中的 Snapshot Controller
