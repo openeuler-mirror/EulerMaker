@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type LogRemote interface {
@@ -27,10 +29,10 @@ type JobLogSink interface {
 }
 
 type JobLogSinkFactory interface {
-	Open(JobResource) (JobLogSink, error)
+	Open(gateway.JobResource) (JobLogSink, error)
 }
 
-type ArtifactLogFactory struct {
+type LogFactory struct {
 	Remote          LogRemote
 	RootDir         string
 	ChunkSize       int64
@@ -80,11 +82,11 @@ type artifactLogSink struct {
 	workerErr    error
 }
 
-func (f *ArtifactLogFactory) Open(job JobResource) (JobLogSink, error) {
+func (f *LogFactory) Open(job gateway.JobResource) (JobLogSink, error) {
 	if f.Remote == nil {
 		return nil, fmt.Errorf("artifact log remote is required")
 	}
-	if !validLocalPathSegment(job.Metadata.Name) {
+	if !ValidLocalPathSegment(job.Metadata.Name) {
 		return nil, fmt.Errorf("invalid job name for log spool")
 	}
 	project := job.Metadata.Namespace
@@ -201,8 +203,8 @@ func (s *artifactLogSink) Complete(ctx context.Context) (CompletedLog, error) {
 	return result, nil
 }
 
-func (f *ArtifactLogFactory) Cleanup(job JobResource) error {
-	if !validLocalPathSegment(job.Metadata.Name) {
+func (f *LogFactory) Cleanup(job gateway.JobResource) error {
+	if !ValidLocalPathSegment(job.Metadata.Name) {
 		return nil
 	}
 	project := job.Metadata.Namespace
@@ -316,7 +318,7 @@ func (s *artifactLogSink) appendWithRetry(ctx context.Context, seq int64, sum st
 		if err == nil {
 			return nil
 		}
-		var apiErr ArtifactAPIError
+		var apiErr APIError
 		if errors.As(err, &apiErr) && !apiErr.Retryable && apiErr.StatusCode < 500 {
 			return err
 		}
@@ -371,16 +373,18 @@ func (s *artifactLogSink) completeWithRetry(ctx context.Context, key string, inp
 }
 
 func retryableArtifactError(err error) bool {
-	var apiErr ArtifactAPIError
+	var apiErr APIError
 	return !errors.As(err, &apiErr) || apiErr.Retryable || apiErr.StatusCode >= 500 || apiErr.StatusCode == 429
 }
+
 func retryDelay(err error, fallback time.Duration) time.Duration {
-	var apiErr ArtifactAPIError
+	var apiErr APIError
 	if errors.As(err, &apiErr) && apiErr.RetryAfter > fallback {
 		return apiErr.RetryAfter
 	}
 	return fallback
 }
+
 func waitForRetry(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -391,6 +395,7 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 		return ctx.Err()
 	}
 }
+
 func nextBackoff(current, maximum time.Duration) time.Duration {
 	current *= 2
 	if current > maximum {
@@ -405,6 +410,7 @@ func (s *artifactLogSink) signal() {
 	default:
 	}
 }
+
 func (s *artifactLogSink) setWorkerErr(err error) {
 	s.mu.Lock()
 	if s.workerErr == nil {
@@ -412,6 +418,7 @@ func (s *artifactLogSink) setWorkerErr(err error) {
 	}
 	s.mu.Unlock()
 }
+
 func (s *artifactLogSink) closeFiles() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -8,23 +8,26 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type lifecycleAPI struct {
 	fakeRunnerAPI
 	lock          sync.Mutex
-	job           JobResource
+	job           gateway.JobResource
 	writeErr      error
 	confirmIntent bool
 }
 
-func (f *lifecycleAPI) GetJob(context.Context, string, string) (*JobResource, error) {
+func (f *lifecycleAPI) GetJob(context.Context, string, string) (*gateway.JobResource, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	job := f.job
 	return &job, nil
 }
-func (f *lifecycleAPI) UpdateJobStatus(_ context.Context, job JobResource, status JobStatus) (*JobResource, error) {
+
+func (f *lifecycleAPI) UpdateJobStatus(_ context.Context, job gateway.JobResource, status gateway.JobStatus) (*gateway.JobResource, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	if f.writeErr != nil {
@@ -35,7 +38,7 @@ func (f *lifecycleAPI) UpdateJobStatus(_ context.Context, job JobResource, statu
 		return nil, f.writeErr
 	}
 	if terminalJob(f.job.Status.Phase) {
-		return nil, StatusError{Code: 409}
+		return nil, gateway.StatusError{Code: 409}
 	}
 	job.Status = status
 	job.Metadata.ResourceVersion = "2"
@@ -49,7 +52,7 @@ type cancellingExecutor struct {
 	allowReturn chan struct{}
 }
 
-func (e *cancellingExecutor) Execute(ctx context.Context, _ JobResource) (string, error) {
+func (e *cancellingExecutor) Execute(ctx context.Context, _ gateway.JobResource) (string, error) {
 	close(e.started)
 	<-ctx.Done()
 	close(e.stopped)
@@ -60,7 +63,7 @@ func (e *cancellingExecutor) Execute(ctx context.Context, _ JobResource) (string
 }
 
 func TestAbortWatchCancelsActiveExecution(t *testing.T) {
-	job := JobResource{Metadata: ObjectMeta{Name: "j", Namespace: "p", UID: "u", ResourceVersion: "1"}, Status: JobStatus{Phase: "Running", Runner: "r"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "j", Namespace: "p", UID: "u", ResourceVersion: "1"}, Status: gateway.JobStatus{Phase: "Running", Runner: "r"}}
 	api := &lifecycleAPI{job: job}
 	executor := &cancellingExecutor{started: make(chan struct{}), stopped: make(chan struct{}), allowReturn: make(chan struct{})}
 	root := t.TempDir()
@@ -71,7 +74,7 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	a := &Agent{cfg: Config{Name: "r", RootDir: root}, client: api, executor: executor}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a.handleEvent(ctx, WatchEvent{Type: "ADDED", Object: job})
+	a.handleEvent(ctx, gateway.WatchEvent{Type: "ADDED", Object: job})
 	select {
 	case <-executor.started:
 	case <-time.After(time.Second):
@@ -81,7 +84,7 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	api.lock.Lock()
 	api.job = job
 	api.lock.Unlock()
-	a.handleEvent(ctx, WatchEvent{Type: "MODIFIED", Object: job})
+	a.handleEvent(ctx, gateway.WatchEvent{Type: "MODIFIED", Object: job})
 	select {
 	case <-executor.stopped:
 	case <-time.After(time.Second):
@@ -109,7 +112,7 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 }
 
 func TestTerminalEventDuringStartupAndStaleRunning(t *testing.T) {
-	job := JobResource{Metadata: ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: JobStatus{Phase: "Running", Runner: "r"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: gateway.JobStatus{Phase: "Running", Runner: "r"}}
 	a := &Agent{}
 	ctx, key, ok := a.registerExecution(context.Background(), job)
 	if !ok {
@@ -127,13 +130,13 @@ func TestTerminalEventDuringStartupAndStaleRunning(t *testing.T) {
 
 func TestStatusWriteUnknownConfirmsIntent(t *testing.T) {
 	for _, confirmed := range []bool{true, false} {
-		job := JobResource{Metadata: ObjectMeta{UID: "u", ResourceVersion: "1"}, Status: JobStatus{Phase: "Running"}}
+		job := gateway.JobResource{Metadata: gateway.ObjectMeta{UID: "u", ResourceVersion: "1"}, Status: gateway.JobStatus{Phase: "Running"}}
 		api := &lifecycleAPI{job: job, writeErr: errors.New("lost response"), confirmIntent: confirmed}
 		if !confirmed {
 			api.job.Status.Phase = "Aborted"
 		}
 		a := &Agent{client: api}
-		err := a.writeJobStatus(context.Background(), &job, JobStatus{Phase: "Succeeded"})
+		err := a.writeJobStatus(context.Background(), &job, gateway.JobStatus{Phase: "Succeeded"})
 		if (err == nil) != confirmed {
 			t.Fatalf("confirmed=%v err=%v", confirmed, err)
 		}

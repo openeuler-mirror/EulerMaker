@@ -7,36 +7,46 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ebs-runner/pkg/artifact"
+	"ebs-runner/pkg/gateway"
 )
 
 type fakeRunnerAPI struct {
 	mu          sync.Mutex
-	jobStatuses []JobStatus
+	jobStatuses []gateway.JobStatus
 }
 
-func (f *fakeRunnerAPI) GetRunner(context.Context, string) (*RunnerResource, error) {
+func (f *fakeRunnerAPI) GetRunner(context.Context, string) (*gateway.RunnerResource, error) {
 	return nil, os.ErrNotExist
 }
-func (f *fakeRunnerAPI) CreateRunner(context.Context, RunnerResource) error { return nil }
-func (f *fakeRunnerAPI) UpdateRunner(context.Context, RunnerResource) error { return nil }
-func (f *fakeRunnerAPI) PatchRunnerStatus(context.Context, string, RunnerStatus) error {
+
+func (f *fakeRunnerAPI) CreateRunner(context.Context, gateway.RunnerResource) error { return nil }
+
+func (f *fakeRunnerAPI) UpdateRunner(context.Context, gateway.RunnerResource) error { return nil }
+
+func (f *fakeRunnerAPI) PatchRunnerStatus(context.Context, string, gateway.RunnerStatus) error {
 	return nil
 }
-func (f *fakeRunnerAPI) GetJob(context.Context, string, string) (*JobResource, error) {
+
+func (f *fakeRunnerAPI) GetJob(context.Context, string, string) (*gateway.JobResource, error) {
 	return nil, os.ErrNotExist
 }
-func (f *fakeRunnerAPI) UpdateJobStatus(_ context.Context, job JobResource, status JobStatus) (*JobResource, error) {
+
+func (f *fakeRunnerAPI) UpdateJobStatus(_ context.Context, job gateway.JobResource, status gateway.JobStatus) (*gateway.JobResource, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.jobStatuses = append(f.jobStatuses, status)
 	job.Status = status
 	return &job, nil
 }
-func (f *fakeRunnerAPI) ListAssignedJobs(context.Context, string) (*JobList, error) {
-	return &JobList{}, nil
+
+func (f *fakeRunnerAPI) ListAssignedJobs(context.Context, string) (*gateway.JobList, error) {
+	return &gateway.JobList{}, nil
 }
-func (f *fakeRunnerAPI) WatchAssignedJobs(context.Context, string, string) (<-chan WatchEvent, <-chan error) {
-	events := make(chan WatchEvent)
+
+func (f *fakeRunnerAPI) WatchAssignedJobs(context.Context, string, string) (<-chan gateway.WatchEvent, <-chan error) {
+	events := make(chan gateway.WatchEvent)
 	errs := make(chan error)
 	close(events)
 	close(errs)
@@ -45,7 +55,7 @@ func (f *fakeRunnerAPI) WatchAssignedJobs(context.Context, string, string) (<-ch
 
 func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 	root := t.TempDir()
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}, Status: JobStatus{Phase: "Running", Runner: "runner-a"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}, Status: gateway.JobStatus{Phase: "Running", Runner: "runner-a"}}
 	resultDir := filepath.Join(root, "results", "project", "job")
 	if err := os.MkdirAll(resultDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -67,13 +77,13 @@ func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
 		cfg:       Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second},
 		client:    api,
 		executor:  &fakeExecutor{resultRoot: resultDir},
-		artifacts: &ArtifactProcessor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
-		cleanup:   &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
+		artifacts: &artifact.Processor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
+		cleanup:   &artifact.CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
 	}
 
 	agent.runJob(context.Background(), jobKey(job), job)
 	api.mu.Lock()
-	statuses := append([]JobStatus(nil), api.jobStatuses...)
+	statuses := append([]gateway.JobStatus(nil), api.jobStatuses...)
 	api.mu.Unlock()
 	if len(statuses) != 3 {
 		t.Fatalf("job status updates = %d, want 3", len(statuses))
@@ -105,9 +115,9 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(resultDir, "result.txt"), []byte("success"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"},
-		Status:   JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a"},
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"},
+		Status:   gateway.JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a"},
 	}
 	workDir := filepath.Join(root, "work", "project", "job")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -117,8 +127,8 @@ func TestResumePostRunDoesNotExecuteJobAgain(t *testing.T) {
 	api := &fakeRunnerAPI{}
 	agent := &Agent{
 		cfg: Config{Name: "runner-a", RootDir: root, ArtifactUploadTimeout: time.Second}, client: api, executor: executor,
-		artifacts: &ArtifactProcessor{Remote: &fakeArtifactRemote{}, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
-		cleanup:   &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
+		artifacts: &artifact.Processor{Remote: &fakeArtifactRemote{}, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
+		cleanup:   &artifact.CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
 	}
 
 	agent.resumePostRun(context.Background(), jobKey(job), job)

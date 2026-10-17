@@ -1,7 +1,6 @@
-package runner
+package executor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,11 +8,14 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"ebs-runner/pkg/artifact"
+	containerruntime "ebs-runner/pkg/container"
+	"ebs-runner/pkg/gateway"
 )
 
 const (
@@ -25,10 +27,10 @@ type CTExecutor struct {
 	WorkDir         string
 	ResultRoot      string
 	RunnerName      string
-	Runtime         ContainerRuntime
+	Runtime         containerruntime.Runtime
 	Scripts         *ScriptCache
-	LogFactory      JobLogSinkFactory
-	ResolvePayload  func(JobResource) (string, error)
+	LogFactory      artifact.JobLogSinkFactory
+	ResolvePayload  func(gateway.JobResource) (string, error)
 	LogDrainTimeout time.Duration
 	StopGracePeriod time.Duration
 }
@@ -50,33 +52,7 @@ type ContainerMount struct {
 	MountPath string `json:"mountPath,omitempty"`
 }
 
-type ContainerSpec struct {
-	Name        string
-	Image       string
-	Privileged  bool
-	NetworkMode string
-	WorkingDir  string
-	Env         map[string]string
-	Mounts      map[string]string
-	Labels      map[string]string
-	Entrypoint  string
-	Command     []string
-	Args        []string
-}
-
-type ContainerRuntime interface {
-	ImageExists(ctx context.Context, image string) (bool, error)
-	Pull(ctx context.Context, image string) error
-	Remove(ctx context.Context, name string) error
-	Create(ctx context.Context, spec ContainerSpec) (string, error)
-	Start(ctx context.Context, id string) error
-	Logs(ctx context.Context, id string, output io.Writer) error
-	Wait(ctx context.Context, id string) (int, error)
-	Stop(ctx context.Context, id string, gracePeriod time.Duration) error
-	Kill(ctx context.Context, id string) error
-}
-
-func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, error) {
+func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (string, error) {
 	if e.LogFactory != nil && (job.Metadata.Namespace == "" || job.Metadata.Name == "") {
 		return "", fmt.Errorf("job namespace and name are required for log upload")
 	}
@@ -85,7 +61,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		project = "default"
 	}
 	jobName := job.Metadata.Name
-	if !validLocalPathSegment(jobName) {
+	if !artifact.ValidLocalPathSegment(jobName) {
 		return "", fmt.Errorf("invalid job name for local path")
 	}
 
@@ -154,7 +130,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 
 	container := e.Runtime
 	if container == nil {
-		container = DockerCLI{}
+		container = containerruntime.DockerCLI{}
 	}
 	gracePeriod := e.StopGracePeriod
 	if gracePeriod <= 0 {
@@ -174,7 +150,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 		return resultRoot, err
 	}
 
-	containerSpec := ContainerSpec{
+	containerSpec := containerruntime.Spec{
 		Name:        containerName,
 		Image:       spec.Image,
 		Privileged:  spec.Privileged,
@@ -218,7 +194,7 @@ func (e *CTExecutor) Execute(ctx context.Context, job JobResource) (string, erro
 	}()
 
 	var logOutput io.Writer
-	var logSink JobLogSink
+	var logSink artifact.JobLogSink
 	if e.LogFactory != nil {
 		logSink, err = e.LogFactory.Open(job)
 		if err != nil {
@@ -305,7 +281,7 @@ func writeJobScript(path, content string) error {
 	return nil
 }
 
-func ensureImage(ctx context.Context, runtime ContainerRuntime, image, policy string) error {
+func ensureImage(ctx context.Context, runtime containerruntime.Runtime, image, policy string) error {
 	switch strings.ToLower(policy) {
 	case "always":
 		if err := runtime.Pull(ctx, image); err != nil {
@@ -363,7 +339,7 @@ func containerMounts(specMounts []ContainerMount, workDir, resultRoot string) ma
 	}
 }
 
-func waitContainer(ctx context.Context, runtime ContainerRuntime, id string, gracePeriod time.Duration) (int, error) {
+func waitContainer(ctx context.Context, runtime containerruntime.Runtime, id string, gracePeriod time.Duration) (int, error) {
 	type waitResult struct {
 		exitCode int
 		err      error
@@ -391,7 +367,7 @@ func waitContainer(ctx context.Context, runtime ContainerRuntime, id string, gra
 
 // Keep the execution registered until the daemon confirms a stop. Each call
 // is bounded; persistent daemon failure retries without releasing capacity.
-func stopContainer(runtime ContainerRuntime, id string, gracePeriod time.Duration) error {
+func stopContainer(runtime containerruntime.Runtime, id string, gracePeriod time.Duration) error {
 	for {
 		stopCtx, cancel := context.WithTimeout(context.Background(), gracePeriod+5*time.Second)
 		err := runtime.Stop(stopCtx, id, gracePeriod)
@@ -408,124 +384,6 @@ func stopContainer(runtime ContainerRuntime, id string, gracePeriod time.Duratio
 		log.Printf("Job container %s stop not confirmed; retaining execution: stop=%v kill=%v", id, err, killErr)
 		time.Sleep(5 * time.Second)
 	}
-}
-
-type DockerCLI struct{}
-
-func (DockerCLI) ImageExists(ctx context.Context, image string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", image)
-	if err := cmd.Run(); err != nil {
-		return false, nil
-	}
-	return true, nil
-}
-
-func (DockerCLI) Pull(ctx context.Context, image string) error {
-	return runDocker(ctx, "pull", image)
-}
-
-func (DockerCLI) Remove(ctx context.Context, name string) error {
-	return runDocker(ctx, "rm", "-f", name)
-}
-
-func (DockerCLI) Create(ctx context.Context, spec ContainerSpec) (string, error) {
-	// Some ARM hosts run Docker with a seccomp profile that denies clone3 with
-	// EPERM. glibc cannot fall back to clone in that case, so git inside the
-	// Job container fails to create its async fetch thread. The Runner
-	// container's seccomp setting does not carry over to containers it creates.
-	// TODO: Remove this override once the host Docker/seccomp stack returns
-	// ENOSYS for unsupported clone3 calls or permits them.
-	args := []string{"create", "--name", spec.Name, "--security-opt", "seccomp=unconfined"}
-	for key, value := range spec.Labels {
-		args = append(args, "--label", key+"="+value)
-	}
-	for hostPath, containerPath := range spec.Mounts {
-		args = append(args, "-v", hostPath+":"+containerPath)
-	}
-	if spec.WorkingDir != "" {
-		args = append(args, "--workdir", spec.WorkingDir)
-	}
-	if spec.NetworkMode != "" {
-		args = append(args, "--network", spec.NetworkMode)
-	}
-	if spec.Privileged {
-		args = append(args, "--privileged")
-	}
-	for key, value := range spec.Env {
-		args = append(args, "-e", key+"="+value)
-	}
-	if spec.Entrypoint != "" {
-		args = append(args, "--entrypoint", spec.Entrypoint)
-	}
-	args = append(args, spec.Image)
-	args = append(args, spec.Command...)
-	args = append(args, spec.Args...)
-
-	output, err := outputDocker(ctx, args...)
-	if err != nil {
-		return "", err
-	}
-	id := strings.TrimSpace(output)
-	if id == "" {
-		return "", fmt.Errorf("docker create returned empty container id")
-	}
-	return id, nil
-}
-
-func (DockerCLI) Start(ctx context.Context, id string) error {
-	return runDocker(ctx, "start", id)
-}
-
-func (DockerCLI) Logs(ctx context.Context, id string, output io.Writer) error {
-	cmd := exec.CommandContext(ctx, "docker", "logs", "-f", id)
-	cmd.Stdout = output
-	cmd.Stderr = output
-	return cmd.Run()
-}
-
-func (DockerCLI) Wait(ctx context.Context, id string) (int, error) {
-	output, err := outputDocker(ctx, "wait", id)
-	if err != nil {
-		return -1, err
-	}
-	codeText := strings.TrimSpace(output)
-	var code int
-	if _, err := fmt.Sscanf(codeText, "%d", &code); err != nil {
-		return -1, fmt.Errorf("parse docker wait exit code %q: %w", codeText, err)
-	}
-	return code, nil
-}
-
-func (DockerCLI) Stop(ctx context.Context, id string, gracePeriod time.Duration) error {
-	seconds := int(gracePeriod.Seconds())
-	if seconds < 1 {
-		seconds = 1
-	}
-	return runDocker(ctx, "stop", "-t", fmt.Sprintf("%d", seconds), id)
-}
-
-func (DockerCLI) Kill(ctx context.Context, id string) error {
-	return runDocker(ctx, "kill", id)
-}
-
-func runDocker(ctx context.Context, args ...string) error {
-	_, err := outputDocker(ctx, args...)
-	return err
-}
-
-func outputDocker(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(output.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return "", fmt.Errorf("docker %s failed: %s", strings.Join(args, " "), msg)
-	}
-	return output.String(), nil
 }
 
 func containerName(project, job string) string {

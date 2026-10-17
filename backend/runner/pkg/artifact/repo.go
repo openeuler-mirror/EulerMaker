@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"encoding/json"
@@ -6,10 +6,12 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"ebs-runner/pkg/gateway"
 )
 
-// resolvePayload replaces logical repository URLs only in the Job's repo array.
-func (r *artifactRoutes) resolvePayload(job JobResource) (string, error) {
+// ResolvePayload replaces logical repository URLs only in the Job's repo array.
+func (r *Routes) ResolvePayload(job gateway.JobResource) (string, error) {
 	if !strings.Contains(job.Spec.Payload, "artifact:") {
 		return job.Spec.Payload, nil
 	}

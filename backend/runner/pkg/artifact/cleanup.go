@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 const artifactCleanupDiskThreshold = 0.85
@@ -25,7 +27,7 @@ type cleanupMarker struct {
 	NotBefore     time.Time `json:"notBefore"`
 }
 
-type ArtifactCleanupManager struct {
+type CleanupManager struct {
 	RootDir         string
 	FailedRetention time.Duration
 	Now             func() time.Time
@@ -33,16 +35,16 @@ type ArtifactCleanupManager struct {
 	writeMarker     func(string, []byte) error
 }
 
-func (m *ArtifactCleanupManager) MarkSuccess(job JobResource) error {
+func (m *CleanupManager) MarkSuccess(job gateway.JobResource) error {
 	return m.mark(job, "Completed", 0)
 }
 
-func (m *ArtifactCleanupManager) MarkFailure(job JobResource) error {
+func (m *CleanupManager) MarkFailure(job gateway.JobResource) error {
 	return m.mark(job, "Failed", m.FailedRetention)
 }
 
-func (m *ArtifactCleanupManager) mark(job JobResource, outcome string, retention time.Duration) error {
-	if err := validateJobIdentity(job); err != nil {
+func (m *CleanupManager) mark(job gateway.JobResource, outcome string, retention time.Duration) error {
+	if err := ValidateJobIdentity(job); err != nil {
 		return err
 	}
 	now := time.Now().UTC()
@@ -67,7 +69,7 @@ func (m *ArtifactCleanupManager) mark(job JobResource, outcome string, retention
 	return nil
 }
 
-func (m *ArtifactCleanupManager) writeMarkerWithReclaim(marker cleanupMarker, data []byte, now time.Time) error {
+func (m *CleanupManager) writeMarkerWithReclaim(marker cleanupMarker, data []byte, now time.Time) error {
 	path := m.markerPath(marker.Project, marker.JobName)
 	write := m.writeMarker
 	if write == nil {
@@ -119,7 +121,7 @@ type cleanupCandidate struct {
 	path   string
 }
 
-func (m *ArtifactCleanupManager) failedCleanupCandidates(excludePath string) ([]cleanupCandidate, error) {
+func (m *CleanupManager) failedCleanupCandidates(excludePath string) ([]cleanupCandidate, error) {
 	var candidates []cleanupCandidate
 	err := filepath.WalkDir(filepath.Join(m.RootDir, "cleanup"), func(path string, entry os.DirEntry, walkErr error) error {
 		if os.IsNotExist(walkErr) {
@@ -159,7 +161,7 @@ func (m *ArtifactCleanupManager) failedCleanupCandidates(excludePath string) ([]
 	return candidates, nil
 }
 
-func (m *ArtifactCleanupManager) Run(ctx context.Context) {
+func (m *CleanupManager) Run(ctx context.Context) {
 	m.sweepAndLog()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -173,7 +175,7 @@ func (m *ArtifactCleanupManager) Run(ctx context.Context) {
 	}
 }
 
-func (m *ArtifactCleanupManager) Sweep() error {
+func (m *CleanupManager) Sweep() error {
 	root := filepath.Join(m.RootDir, "cleanup")
 	now := time.Now().UTC()
 	if m.Now != nil {
@@ -260,13 +262,13 @@ func filesystemUsage(path string) (float64, error) {
 	return 1 - float64(stat.Bavail)/float64(stat.Blocks), nil
 }
 
-func (m *ArtifactCleanupManager) sweepAndLog() {
+func (m *CleanupManager) sweepAndLog() {
 	if err := m.Sweep(); err != nil {
 		log.Printf("artifact cleanup sweep failed: %v", err)
 	}
 }
 
-func (m *ArtifactCleanupManager) clean(marker cleanupMarker, markerPath string, now time.Time, diskPressure bool) error {
+func (m *CleanupManager) clean(marker cleanupMarker, markerPath string, now time.Time, diskPressure bool) error {
 	if !diskPressure && now.Before(marker.NotBefore) {
 		return nil
 	}
@@ -287,6 +289,6 @@ func (m *ArtifactCleanupManager) clean(marker cleanupMarker, markerPath string, 
 	return nil
 }
 
-func (m *ArtifactCleanupManager) markerPath(project, name string) string {
+func (m *CleanupManager) markerPath(project, name string) string {
 	return filepath.Join(m.RootDir, "cleanup", project, name+".json")
 }

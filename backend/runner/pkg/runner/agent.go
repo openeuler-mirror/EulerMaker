@@ -16,31 +16,35 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"ebs-runner/pkg/artifact"
+	execution "ebs-runner/pkg/executor"
+	"ebs-runner/pkg/gateway"
 )
 
 const agentVersion = "v0.1.0"
 
 type RunnerAPI interface {
-	GetRunner(context.Context, string) (*RunnerResource, error)
-	CreateRunner(context.Context, RunnerResource) error
-	UpdateRunner(context.Context, RunnerResource) error
-	PatchRunnerStatus(context.Context, string, RunnerStatus) error
-	GetJob(context.Context, string, string) (*JobResource, error)
-	UpdateJobStatus(context.Context, JobResource, JobStatus) (*JobResource, error)
-	ListAssignedJobs(context.Context, string) (*JobList, error)
-	WatchAssignedJobs(context.Context, string, string) (<-chan WatchEvent, <-chan error)
+	GetRunner(context.Context, string) (*gateway.RunnerResource, error)
+	CreateRunner(context.Context, gateway.RunnerResource) error
+	UpdateRunner(context.Context, gateway.RunnerResource) error
+	PatchRunnerStatus(context.Context, string, gateway.RunnerStatus) error
+	GetJob(context.Context, string, string) (*gateway.JobResource, error)
+	UpdateJobStatus(context.Context, gateway.JobResource, gateway.JobStatus) (*gateway.JobResource, error)
+	ListAssignedJobs(context.Context, string) (*gateway.JobList, error)
+	WatchAssignedJobs(context.Context, string, string) (<-chan gateway.WatchEvent, <-chan error)
 }
 
 type Agent struct {
 	cfg            Config
 	client         RunnerAPI
-	endpointClient *Client
-	artifactRoutes *artifactRoutes
-	tokens         *TokenProvider
-	executor       Executor
-	logFactory     *ArtifactLogFactory
-	artifacts      *ArtifactProcessor
-	cleanup        *ArtifactCleanupManager
+	endpointClient *gateway.Client
+	artifactRoutes *artifact.Routes
+	tokens         *gateway.TokenProvider
+	executor       execution.Executor
+	logFactory     *artifact.LogFactory
+	artifacts      *artifact.Processor
+	cleanup        *artifact.CleanupManager
 	instanceID     string
 
 	mu         sync.Mutex
@@ -53,15 +57,15 @@ func NewAgent(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	credential, err := LoadMachineCredential(cfg.MachineCredentialFile)
+	credential, err := gateway.LoadMachineCredential(cfg.MachineCredentialFile)
 	if err != nil {
 		return nil, err
 	}
-	tokens, err := NewTokenProvider(cfg.Gateway, cfg.Name, credential, httpClient)
+	tokens, err := gateway.NewTokenProvider(cfg.Gateway, cfg.Name, credential, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	client, err := NewClient(cfg.Gateway, tokens, httpClient)
+	client, err := gateway.NewClient(cfg.Gateway, tokens, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +73,8 @@ func NewAgent(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	artifactRoutes := newArtifactRoutes(cfg.ArtifactAccessMode, tokens, artifactHTTPClient)
-	logFactory := &ArtifactLogFactory{
+	artifactRoutes := artifact.NewRoutes(cfg.ArtifactAccessMode, tokens, artifactHTTPClient)
+	logFactory := &artifact.LogFactory{
 		Remote:          artifactRoutes,
 		RootDir:         cfg.RootDir,
 		ChunkSize:       cfg.LogChunkSize,
@@ -78,29 +82,29 @@ func NewAgent(cfg Config) (*Agent, error) {
 		SpoolLimit:      cfg.LogSpoolLimit,
 		RetryMaxBackoff: cfg.LogRetryMaxBackoff,
 	}
-	artifactProcessor := &ArtifactProcessor{
+	artifactProcessor := &artifact.Processor{
 		Remote: artifactRoutes, RootDir: cfg.RootDir,
 		MaxFileSize: cfg.ArtifactMaxFileSize, MaxJobSize: cfg.ArtifactMaxJobSize,
 		MaxFiles: cfg.ArtifactMaxFiles, Concurrency: cfg.ArtifactUploadConcurrency,
 		RetryMaxBackoff: cfg.ArtifactRetryMaxBackoff,
 	}
-	cleanupManager := &ArtifactCleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.ArtifactFailedRetention}
+	cleanupManager := &artifact.CleanupManager{RootDir: cfg.RootDir, FailedRetention: cfg.ArtifactFailedRetention}
 	return &Agent{
 		cfg:            cfg,
 		client:         client,
 		endpointClient: client,
 		artifactRoutes: artifactRoutes,
 		tokens:         tokens,
-		executor: &RuntimeManager{
+		executor: &execution.Manager{
 			RunnerType: cfg.Type,
-			Executors: map[string]Executor{
-				"ct": &CTExecutor{
+			Executors: map[string]execution.Executor{
+				"ct": &execution.CTExecutor{
 					WorkDir:         workDir(cfg.RootDir),
 					ResultRoot:      resultRoot(cfg.RootDir),
 					RunnerName:      cfg.Name,
-					Scripts:         NewScriptCache(client),
+					Scripts:         execution.NewScriptCache(client),
 					LogFactory:      logFactory,
-					ResolvePayload:  artifactRoutes.resolvePayload,
+					ResolvePayload:  artifactRoutes.ResolvePayload,
 					LogDrainTimeout: cfg.LogDrainTimeout,
 				},
 			},
@@ -162,7 +166,7 @@ func (a *Agent) refreshEndpoints(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return a.artifactRoutes.update(endpoints)
+	return a.artifactRoutes.Update(endpoints)
 }
 
 func (a *Agent) waitForInitialEndpoints(ctx context.Context) error {
@@ -221,7 +225,7 @@ func (a *Agent) waitForInitialToken(ctx context.Context) error {
 			return nil
 		} else {
 			wait := backoff
-			var statusErr StatusError
+			var statusErr gateway.StatusError
 			if errors.As(err, &statusErr) {
 				switch statusErr.Code {
 				case 400, 401:
@@ -261,7 +265,7 @@ func (a *Agent) register(ctx context.Context) error {
 	if err == nil {
 		return a.updateExistingRunner(ctx, existing)
 	}
-	var statusErr StatusError
+	var statusErr gateway.StatusError
 	if !errors.As(err, &statusErr) || statusErr.Code != 404 {
 		return fmt.Errorf("get runner: %w", err)
 	}
@@ -278,12 +282,12 @@ func (a *Agent) register(ctx context.Context) error {
 	return a.updateExistingRunner(ctx, existing)
 }
 
-func (a *Agent) updateExistingRunner(ctx context.Context, existing *RunnerResource) error {
+func (a *Agent) updateExistingRunner(ctx context.Context, existing *gateway.RunnerResource) error {
 	if existing.Spec.InstanceID != a.instanceID {
 		return fmt.Errorf("runner %q is registered by a different instance", a.cfg.Name)
 	}
 	desired := *existing
-	desired.TypeMeta = TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
+	desired.TypeMeta = gateway.TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
 	if desired.Metadata.Labels == nil {
 		desired.Metadata.Labels = map[string]string{}
 	}
@@ -298,10 +302,10 @@ func (a *Agent) updateExistingRunner(ctx context.Context, existing *RunnerResour
 	return nil
 }
 
-func (a *Agent) runnerObject(resourceVersion string) RunnerResource {
-	return RunnerResource{
-		TypeMeta: TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"},
-		Metadata: ObjectMeta{
+func (a *Agent) runnerObject(resourceVersion string) gateway.RunnerResource {
+	return gateway.RunnerResource{
+		TypeMeta: gateway.TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"},
+		Metadata: gateway.ObjectMeta{
 			Name:            a.cfg.Name,
 			ResourceVersion: resourceVersion,
 			Labels: map[string]string{
@@ -309,7 +313,7 @@ func (a *Agent) runnerObject(resourceVersion string) RunnerResource {
 				"ebs.io/runner-arch": a.cfg.Arch,
 			},
 		},
-		Spec: RunnerSpec{
+		Spec: gateway.RunnerSpec{
 			InstanceID: a.instanceID,
 			Type:       a.cfg.Type,
 			Arch:       a.cfg.Arch,
@@ -344,15 +348,15 @@ func (a *Agent) patchRunnerPhase(ctx context.Context, phase string) error {
 	return a.client.PatchRunnerStatus(ctx, a.cfg.Name, status)
 }
 
-func (a *Agent) currentStatus() RunnerStatus {
+func (a *Agent) currentStatus() gateway.RunnerStatus {
 	now := time.Now().UTC()
 	capacity, allocatable := nodeResources(workDir(a.cfg.RootDir))
-	return RunnerStatus{
+	return gateway.RunnerStatus{
 		Phase:       "Online",
 		Capacity:    capacity,
 		Allocatable: allocatable,
 		Addresses:   runnerAddresses(a.cfg.Name),
-		Info: RunnerInfo{
+		Info: gateway.RunnerInfo{
 			OS:            runtime.GOOS,
 			Arch:          a.cfg.Arch,
 			AgentVersion:  agentVersion,
@@ -381,7 +385,7 @@ func (a *Agent) watchLoop(ctx context.Context) {
 		if err != nil {
 			wait = backoff
 			log.Printf("watch jobs failed: %v", err)
-			var statusErr StatusError
+			var statusErr gateway.StatusError
 			if errors.As(err, &statusErr) {
 				if statusErr.Code == 410 {
 					a.resetLastResourceVersion()
@@ -432,7 +436,7 @@ func (a *Agent) watchOnce(ctx context.Context) error {
 			return err
 		}
 		for _, job := range list.Items {
-			a.handleEvent(ctx, WatchEvent{Type: "ADDED", Object: job})
+			a.handleEvent(ctx, gateway.WatchEvent{Type: "ADDED", Object: job})
 		}
 		a.reconcileExecutions(ctx)
 		a.setLastResourceVersion(list.Metadata.ResourceVersion)
@@ -467,7 +471,7 @@ func (a *Agent) watchOnce(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) handleEvent(ctx context.Context, event WatchEvent) {
+func (a *Agent) handleEvent(ctx context.Context, event gateway.WatchEvent) {
 	job := event.Object
 	if event.Type == "DELETED" || terminalJob(job.Status.Phase) {
 		a.cancelExecution(job.Metadata.UID)
@@ -490,7 +494,7 @@ func (a *Agent) handleEvent(ctx context.Context, event WatchEvent) {
 			return
 		}
 		if a.artifactRoutes != nil {
-			if err := a.artifactRoutes.pin(execCtx, *current); err != nil {
+			if err := a.artifactRoutes.Pin(execCtx, *current); err != nil {
 				a.finishJob(key)
 				return
 			}
@@ -503,7 +507,7 @@ func (a *Agent) handleEvent(ctx context.Context, event WatchEvent) {
 	}()
 }
 
-func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
+func (a *Agent) runJob(parent context.Context, key string, job gateway.JobResource) {
 	defer a.finishJob(key)
 
 	now := time.Now().UTC()
@@ -535,8 +539,8 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 			executionErr = errors.Join(executionErr, fmt.Errorf("read job-result.json: %w", err))
 		} else {
 			var result struct {
-				Build   *JobBuildResult   `json:"build"`
-				Install *JobInstallResult `json:"install"`
+				Build   *gateway.JobBuildResult   `json:"build"`
+				Install *gateway.JobInstallResult `json:"install"`
 			}
 			if err := json.Unmarshal(data, &result); err != nil || result.Build == nil || !validJobResult(result.Build.Status) || result.Install != nil && !validJobResult(result.Install.Status) {
 				executionErr = errors.Join(executionErr, fmt.Errorf("invalid job-result.json: %v", err))
@@ -552,7 +556,7 @@ func (a *Agent) runJob(parent context.Context, key string, job JobResource) {
 		if executionErr != nil {
 			buildStatus = "Failed"
 		}
-		status.Build = &JobBuildResult{Status: buildStatus}
+		status.Build = &gateway.JobBuildResult{Status: buildStatus}
 	}
 	if status.Build.Status == "Failed" && executionErr == nil {
 		executionErr = errors.New("build script reported failure")
@@ -577,7 +581,7 @@ func validJobResult(status string) bool {
 	return status == "Succeeded" || status == "Failed"
 }
 
-func (a *Agent) resumePostRun(parent context.Context, key string, job JobResource) {
+func (a *Agent) resumePostRun(parent context.Context, key string, job gateway.JobResource) {
 	defer a.finishJob(key)
 	a.cleanupJobWork(job)
 	resultDir := filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name)
@@ -589,8 +593,8 @@ func (a *Agent) resumePostRun(parent context.Context, key string, job JobResourc
 	a.sendHeartbeat(context.Background())
 }
 
-func (a *Agent) cleanupJobWork(job JobResource) {
-	if err := validateJobIdentity(job); err != nil {
+func (a *Agent) cleanupJobWork(job gateway.JobResource) {
+	if err := artifact.ValidateJobIdentity(job); err != nil {
 		log.Printf("skip Job work cleanup: %v", err)
 		return
 	}
@@ -600,7 +604,7 @@ func (a *Agent) cleanupJobWork(job JobResource) {
 	}
 }
 
-func (a *Agent) finalizeArtifacts(parent context.Context, job JobResource, status JobStatus, resultDir string, executionErr error) {
+func (a *Agent) finalizeArtifacts(parent context.Context, job gateway.JobResource, status gateway.JobStatus, resultDir string, executionErr error) {
 	artifactCtx, cancelArtifacts := context.WithTimeout(parent, a.cfg.ArtifactUploadTimeout)
 	_, artifactErr := a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
 	cancelArtifacts()
@@ -646,7 +650,7 @@ func (a *Agent) finishJob(key string) {
 	a.mu.Unlock()
 	if execution != nil {
 		if a.artifactRoutes != nil {
-			a.artifactRoutes.release(execution.job)
+			a.artifactRoutes.Release(execution.job)
 		}
 		execution.cancel()
 	}
@@ -673,7 +677,7 @@ func (a *Agent) resetLastResourceVersion() {
 	a.lastRV = ""
 }
 
-func jobKey(job JobResource) string {
+func jobKey(job gateway.JobResource) string {
 	if job.Metadata.Namespace == "" {
 		return job.Metadata.Name
 	}
@@ -688,10 +692,10 @@ func resultRoot(rootDir string) string {
 	return filepath.Join(rootDir, "results")
 }
 
-func runnerAddresses(hostname string) []RunnerAddress {
-	addresses := []RunnerAddress{{Type: "Hostname", Address: hostname}}
+func runnerAddresses(hostname string) []gateway.RunnerAddress {
+	addresses := []gateway.RunnerAddress{{Type: "Hostname", Address: hostname}}
 	if ip := firstNonLoopbackIP(); ip != "" {
-		addresses = append(addresses, RunnerAddress{Type: "InternalIP", Address: ip})
+		addresses = append(addresses, gateway.RunnerAddress{Type: "InternalIP", Address: ip})
 	}
 	return addresses
 }

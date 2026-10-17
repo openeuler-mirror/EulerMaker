@@ -1,4 +1,4 @@
-package runner
+package artifact
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type fakeArtifactRemote struct {
@@ -80,8 +82,8 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote := &fakeArtifactRemote{}
-	processor := &ArtifactProcessor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 2}
-	job := JobResource{Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a", UID: "uid-a"}}
+	processor := &Processor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 2}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a", UID: "uid-a"}}
 
 	manifest, err := processor.Finalize(context.Background(), job, results, true)
 	if err != nil {
@@ -122,8 +124,8 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 
 func TestArtifactProcessorRetriesLogStatusBeforeUpload(t *testing.T) {
 	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: errors.New("connection refused")}
-	processor := &ArtifactProcessor{Remote: remote}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
+	processor := &Processor{Remote: remote}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -137,9 +139,9 @@ func TestArtifactProcessorRetriesLogStatusBeforeUpload(t *testing.T) {
 }
 
 func TestArtifactProcessorDoesNotRetryPermanentLogStatusError(t *testing.T) {
-	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: ArtifactAPIError{StatusCode: 400}}
-	processor := &ArtifactProcessor{Remote: remote}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
+	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: APIError{StatusCode: 400}}
+	processor := &Processor{Remote: remote}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
 
 	if _, err := processor.Finalize(context.Background(), job, "", false); err == nil {
 		t.Fatal("expected permanent log status error")
@@ -158,8 +160,8 @@ func TestArtifactProcessorRejectsSymlinkBeforeUpload(t *testing.T) {
 	if err := os.Symlink("/etc/passwd", filepath.Join(results, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	processor := &ArtifactProcessor{Remote: &fakeArtifactRemote{}, RootDir: root}
-	_, err := processor.Finalize(context.Background(), JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}, results, true)
+	processor := &Processor{Remote: &fakeArtifactRemote{}, RootDir: root}
+	_, err := processor.Finalize(context.Background(), gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}, results, true)
 	if err == nil {
 		t.Fatal("expected symlink scan to fail")
 	}
@@ -168,8 +170,8 @@ func TestArtifactProcessorRejectsSymlinkBeforeUpload(t *testing.T) {
 func TestArtifactCleanupSuccessIsImmediateAndFailureIsRetained(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	manager := &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now }}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
+	manager := &CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now }}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
 	createLocalArtifactState(t, root, job)
 	if err := manager.MarkSuccess(job); err != nil {
 		t.Fatalf("mark success: %v", err)
@@ -196,7 +198,7 @@ func TestArtifactCleanupDiskPressureRemovesOldestFailedJobsFirst(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	checks := 0
-	manager := &ArtifactCleanupManager{
+	manager := &CleanupManager{
 		RootDir: root, FailedRetention: 24 * time.Hour,
 		Now: func() time.Time { return now },
 		DiskUsage: func(string) (float64, error) {
@@ -207,10 +209,10 @@ func TestArtifactCleanupDiskPressureRemovesOldestFailedJobsFirst(t *testing.T) {
 			return 0.85, nil
 		},
 	}
-	oldest := JobResource{Metadata: ObjectMeta{Name: "oldest", Namespace: "project"}}
-	newer := JobResource{Metadata: ObjectMeta{Name: "newer", Namespace: "project"}}
-	active := JobResource{Metadata: ObjectMeta{Name: "active", Namespace: "project"}}
-	for _, job := range []JobResource{oldest, newer, active} {
+	oldest := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "oldest", Namespace: "project"}}
+	newer := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "newer", Namespace: "project"}}
+	active := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "active", Namespace: "project"}}
+	for _, job := range []gateway.JobResource{oldest, newer, active} {
 		createLocalArtifactState(t, root, job)
 	}
 	if err := manager.MarkFailure(oldest); err != nil {
@@ -233,11 +235,11 @@ func TestArtifactCleanupDiskPressureRemovesOldestFailedJobsFirst(t *testing.T) {
 
 func TestArtifactCleanupDoesNotShortenRetentionBelowThreshold(t *testing.T) {
 	root := t.TempDir()
-	manager := &ArtifactCleanupManager{
+	manager := &CleanupManager{
 		RootDir: root, FailedRetention: 24 * time.Hour,
 		DiskUsage: func(string) (float64, error) { return 0.85, nil },
 	}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project"}}
 	createLocalArtifactState(t, root, job)
 	if err := manager.MarkFailure(job); err != nil {
 		t.Fatal(err)
@@ -251,11 +253,11 @@ func TestArtifactCleanupDoesNotShortenRetentionBelowThreshold(t *testing.T) {
 func TestArtifactCleanupReclaimsOldestFailedJobWhenMarkerWriteRunsOutOfSpace(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	manager := &ArtifactCleanupManager{RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now }}
-	oldest := JobResource{Metadata: ObjectMeta{Name: "oldest", Namespace: "project"}}
-	newer := JobResource{Metadata: ObjectMeta{Name: "newer", Namespace: "project"}}
-	current := JobResource{Metadata: ObjectMeta{Name: "current", Namespace: "project"}}
-	for _, job := range []JobResource{oldest, newer, current} {
+	manager := &CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now }}
+	oldest := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "oldest", Namespace: "project"}}
+	newer := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "newer", Namespace: "project"}}
+	current := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "current", Namespace: "project"}}
+	for _, job := range []gateway.JobResource{oldest, newer, current} {
 		createLocalArtifactState(t, root, job)
 	}
 	if err := manager.MarkFailure(oldest); err != nil {
@@ -285,11 +287,11 @@ func TestArtifactCleanupReclaimsOldestFailedJobWhenMarkerWriteRunsOutOfSpace(t *
 
 func TestArtifactCleanupMarkerWriteNoSpaceReclaimsCurrentTerminalJob(t *testing.T) {
 	root := t.TempDir()
-	manager := &ArtifactCleanupManager{
+	manager := &CleanupManager{
 		RootDir:     root,
 		writeMarker: func(string, []byte) error { return syscall.ENOSPC },
 	}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project"}}
 	createLocalArtifactState(t, root, job)
 	if err := manager.MarkFailure(job); err != nil {
 		t.Fatalf("mark failure after emergency reclaim: %v", err)
@@ -299,11 +301,11 @@ func TestArtifactCleanupMarkerWriteNoSpaceReclaimsCurrentTerminalJob(t *testing.
 
 func TestArtifactCleanupMarkerWriteOtherErrorDoesNotReclaim(t *testing.T) {
 	root := t.TempDir()
-	manager := &ArtifactCleanupManager{
+	manager := &CleanupManager{
 		RootDir:     root,
 		writeMarker: func(string, []byte) error { return syscall.EACCES },
 	}
-	job := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project"}}
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project"}}
 	createLocalArtifactState(t, root, job)
 	if err := manager.MarkFailure(job); !errors.Is(err, syscall.EACCES) {
 		t.Fatalf("mark failure error = %v, want EACCES", err)
@@ -314,12 +316,12 @@ func TestArtifactCleanupMarkerWriteOtherErrorDoesNotReclaim(t *testing.T) {
 func TestArtifactCleanupUsesJobNameAcrossUIDChanges(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	manager := &ArtifactCleanupManager{RootDir: root, FailedRetention: time.Hour, Now: func() time.Time { return now }}
-	first := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid-1"}}
+	manager := &CleanupManager{RootDir: root, FailedRetention: time.Hour, Now: func() time.Time { return now }}
+	first := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid-1"}}
 	if err := manager.MarkFailure(first); err != nil {
 		t.Fatal(err)
 	}
-	second := JobResource{Metadata: ObjectMeta{Name: "job", Namespace: "project", UID: "uid-2"}}
+	second := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid-2"}}
 	if err := manager.MarkFailure(second); err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +338,7 @@ func TestArtifactCleanupUsesJobNameAcrossUIDChanges(t *testing.T) {
 	}
 }
 
-func createLocalArtifactState(t *testing.T, root string, job JobResource) {
+func createLocalArtifactState(t *testing.T, root string, job gateway.JobResource) {
 	t.Helper()
 	for _, category := range []string{"results", "logs", "uploads"} {
 		dir := filepath.Join(root, category, job.Metadata.Namespace, job.Metadata.Name)
@@ -349,7 +351,7 @@ func createLocalArtifactState(t *testing.T, root string, job JobResource) {
 	}
 }
 
-func assertLocalArtifactState(t *testing.T, root string, job JobResource, want bool) {
+func assertLocalArtifactState(t *testing.T, root string, job gateway.JobResource, want bool) {
 	t.Helper()
 	for _, category := range []string{"results", "logs", "uploads"} {
 		_, err := os.Stat(filepath.Join(root, category, job.Metadata.Namespace, job.Metadata.Name))

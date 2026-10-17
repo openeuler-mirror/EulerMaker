@@ -1,4 +1,4 @@
-package runner
+package executor
 
 import (
 	"context"
@@ -11,11 +11,13 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"ebs-runner/pkg/gateway"
 )
 
 // ScriptSource reads the current global Script through the Gateway.
 type ScriptSource interface {
-	GetScript(context.Context, string) (*ScriptResource, error)
+	GetScript(context.Context, string) (*gateway.ScriptResource, error)
 }
 
 type cachedScript struct {
@@ -36,7 +38,7 @@ func NewScriptCache(source ScriptSource) *ScriptCache {
 	return &ScriptCache{source: source, entries: make(map[string]cachedScript)}
 }
 
-func (c *ScriptCache) Resolve(ctx context.Context, ref ScriptRef) (string, error) {
+func (c *ScriptCache) Resolve(ctx context.Context, ref gateway.ScriptRef) (string, error) {
 	if ref.Name == "" || ref.UID == "" || ref.ResourceVersion == "" {
 		return "", fmt.Errorf("Job scriptRef must contain name, UID, and resourceVersion")
 	}
@@ -70,7 +72,7 @@ func (c *ScriptCache) Resolve(ctx context.Context, ref ScriptRef) (string, error
 	return script.Spec.Content, nil
 }
 
-func (c *ScriptCache) fetch(ctx context.Context, name string) (*ScriptResource, error) {
+func (c *ScriptCache) fetch(ctx context.Context, name string) (*gateway.ScriptResource, error) {
 	delay := time.Second
 	for {
 		script, err := c.source.GetScript(ctx, name)
@@ -81,7 +83,7 @@ func (c *ScriptCache) fetch(ctx context.Context, name string) (*ScriptResource, 
 			return script, err
 		}
 		wait := time.Duration(float64(delay) * (0.8 + 0.4*rand.Float64()))
-		var status StatusError
+		var status gateway.StatusError
 		if errors.As(err, &status) && status.RetryAfter > wait {
 			wait = status.RetryAfter
 		}
@@ -102,7 +104,7 @@ func (c *ScriptCache) fetch(ctx context.Context, name string) (*ScriptResource, 
 }
 
 func retryableScriptRead(err error) bool {
-	var status StatusError
+	var status gateway.StatusError
 	if errors.As(err, &status) {
 		return status.Code == 429 || status.Code >= 500
 	}
@@ -114,7 +116,7 @@ func retryableScriptRead(err error) bool {
 	return errors.As(err, &networkError)
 }
 
-func validateFetchedScript(script *ScriptResource, name string) error {
+func validateFetchedScript(script *gateway.ScriptResource, name string) error {
 	if script == nil || script.APIVersion != "ebs/v1" || script.Kind != "Script" ||
 		script.Metadata.Name != name || script.Metadata.Namespace != "" ||
 		script.Metadata.UID == "" || script.Metadata.ResourceVersion == "" {

@@ -1,10 +1,12 @@
-package runner
+package executor
 
 import (
 	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"ebs-runner/pkg/gateway"
 )
 
 func TestShellExecutorRunsPayload(t *testing.T) {
@@ -13,9 +15,9 @@ func TestShellExecutorRunsPayload(t *testing.T) {
 		WorkDir:    filepath.Join(dir, "work"),
 		ResultRoot: filepath.Join(dir, "results"),
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{Payload: "MESSAGE=ok\nprintf '%s' \"$MESSAGE\" > output.txt"},
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec:     gateway.JobSpec{Payload: "MESSAGE=ok\nprintf '%s' \"$MESSAGE\" > output.txt"},
 	}
 
 	resultRoot, err := executor.Execute(context.Background(), job)
@@ -40,9 +42,9 @@ func TestShellExecutorReturnsCommandError(t *testing.T) {
 		WorkDir:    filepath.Join(dir, "work"),
 		ResultRoot: filepath.Join(dir, "results"),
 	}
-	job := JobResource{
-		Metadata: ObjectMeta{Name: "job-a", Namespace: "project-a"},
-		Spec:     JobSpec{Payload: "echo boom >&2; exit 7"},
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job-a", Namespace: "project-a"},
+		Spec:     gateway.JobSpec{Payload: "echo boom >&2; exit 7"},
 	}
 
 	if _, err := executor.Execute(context.Background(), job); err == nil {

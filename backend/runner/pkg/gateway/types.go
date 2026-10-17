@@ -1,9 +1,18 @@
-package runner
+package gateway
 
 import (
 	"encoding/json"
 	"time"
 )
+
+type ArtifactEndpoints struct {
+	Instances map[string]ArtifactEndpoint `json:"instances"`
+}
+
+type ArtifactEndpoint struct {
+	RunnerInternalURL string `json:"runnerInternalURL"`
+	RunnerExternalURL string `json:"runnerExternalURL"`
+}
 
 type TypeMeta struct {
 	APIVersion string `json:"apiVersion,omitempty"`

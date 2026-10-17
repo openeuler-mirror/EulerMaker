@@ -1,17 +1,19 @@
-package runner
+package executor
 
 import (
 	"context"
 	"fmt"
 	"testing"
+
+	"ebs-runner/pkg/gateway"
 )
 
 type fakeScriptSource struct {
-	script ScriptResource
+	script gateway.ScriptResource
 	calls  int
 }
 
-func (f *fakeScriptSource) GetScript(_ context.Context, name string) (*ScriptResource, error) {
+func (f *fakeScriptSource) GetScript(_ context.Context, name string) (*gateway.ScriptResource, error) {
 	f.calls++
 	if name != f.script.Metadata.Name {
 		return nil, fmt.Errorf("Script %q not found", name)
@@ -20,18 +22,18 @@ func (f *fakeScriptSource) GetScript(_ context.Context, name string) (*ScriptRes
 	return &script, nil
 }
 
-func testScript(name, uid, resourceVersion, content string) ScriptResource {
-	return ScriptResource{
-		TypeMeta: TypeMeta{APIVersion: "ebs/v1", Kind: "Script"},
-		Metadata: ObjectMeta{Name: name, UID: uid, ResourceVersion: resourceVersion},
-		Spec:     ScriptSpec{Content: content},
+func testScript(name, uid, resourceVersion, content string) gateway.ScriptResource {
+	return gateway.ScriptResource{
+		TypeMeta: gateway.TypeMeta{APIVersion: "ebs/v1", Kind: "Script"},
+		Metadata: gateway.ObjectMeta{Name: name, UID: uid, ResourceVersion: resourceVersion},
+		Spec:     gateway.ScriptSpec{Content: content},
 	}
 }
 
 func TestScriptCacheRefreshesOnJobUIDOrResourceVersionChange(t *testing.T) {
 	source := &fakeScriptSource{script: testScript("rpmbuild", "uid-1", "rv-1", "#!/bin/sh\necho first\n")}
 	cache := NewScriptCache(source)
-	ref := ScriptRef{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}
+	ref := gateway.ScriptRef{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}
 	for i := 0; i < 2; i++ {
 		content, err := cache.Resolve(context.Background(), ref)
 		if err != nil || content != source.script.Spec.Content {
@@ -56,7 +58,7 @@ func TestScriptCacheRefreshesOnJobUIDOrResourceVersionChange(t *testing.T) {
 func TestScriptCacheDoesNotCacheInvalidContent(t *testing.T) {
 	source := &fakeScriptSource{script: testScript("rpmbuild", "uid-1", "rv-1", "echo unsafe\n")}
 	cache := NewScriptCache(source)
-	ref := ScriptRef{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}
+	ref := gateway.ScriptRef{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}
 	if _, err := cache.Resolve(context.Background(), ref); err == nil {
 		t.Fatal("invalid Script accepted")
 	}
@@ -69,7 +71,7 @@ func TestScriptCacheDoesNotCacheInvalidContent(t *testing.T) {
 func TestScriptCacheRefetchesWhenObservedVersionIsStale(t *testing.T) {
 	source := &fakeScriptSource{script: testScript("rpmbuild", "uid-1", "rv-2", "#!/bin/sh\necho current\n")}
 	cache := NewScriptCache(source)
-	ref := ScriptRef{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}
+	ref := gateway.ScriptRef{Name: "rpmbuild", UID: "uid-1", ResourceVersion: "rv-1"}
 	for i := 0; i < 2; i++ {
 		content, err := cache.Resolve(context.Background(), ref)
 		if err != nil || content != source.script.Spec.Content {
