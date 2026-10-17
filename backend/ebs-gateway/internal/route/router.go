@@ -70,6 +70,9 @@ func registerResources(router *gin.Engine, api *handler.Handler) {
 		registerResource(project, api, "/:name/status", resource, "project", "name", "status")
 		registerResource(project, api, "/:name/abort", resource, "project", "name", "abort")
 	}
+	history := group.Group("/projects/:project/oldjobs")
+	registerReadOnlyResource(history, api, "", "oldjobs", "")
+	registerReadOnlyResource(history, api, "/:name", "oldjobs", "")
 }
 
 func registerReadOnlyResource(group *gin.RouterGroup, api *handler.Handler, path, resource, subresource string) {

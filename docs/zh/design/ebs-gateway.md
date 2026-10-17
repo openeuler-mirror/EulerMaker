@@ -37,7 +37,7 @@ etcd / Elasticsearch
 | 用户校验 | 通过 apiserver 的 User API 检查用户是否存在并启用 |
 | 机机认证 | 验证 MachineAccount 长期凭据和请求中的 Runner 名称格式，签发短期 Runner token |
 | 请求转发 | 将合法请求反向代理到 `ebs-apiserver` |
-| Watch 透传 | 为 apiserver 支持 watch 的 Job、Runner 透传长连接和流式响应 |
+| Watch 透传 | 为已授权的 Project 范围和 Runner 范围 Job 列表透传长连接和流式响应 |
 | 审计记录 | 记录请求路径、方法、状态码、耗时和调用方信息 |
 | 限流保护 | 对调用方进行基础限流，保护 apiserver |
 | 写入隔离 | 基于用户身份和 Project labels 限制写入范围，支持 Project 在用户间共享 |
@@ -155,7 +155,7 @@ Request
 
 Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 Authorization header 的 GET/HEAD 请求可以直接进入该分支；携带 Token 时必须先完成 Token 和 User 状态校验，非法、过期、已禁用或身份不一致时返回 401/403，不能降级为匿名访问。校验通过后，公开读取使用与匿名调用方相同的路由、完整对象、分页和响应头规则，不执行 Project owner/member 读取过滤。Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET，不注册 HEAD 或写方法。
 
-对匿名和已认证调用方开放以下资源的 collection、单对象及单对象 `/status` 读取：
+对匿名和已认证调用方开放以下读取路径：
 
 | 资源 | 对外公开 API |
 |------|--------------|
@@ -165,6 +165,7 @@ Gateway 在要求 Bearer Token 前先识别匿名公开读取。只有不携带 
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos[/{name}]`、`/projects/{project}/buildinfos/{name}/status` |
 | RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos[/{name}]`、`/projects/{project}/rpmrepos/{name}/status` |
 | Job | `/apis/ebs/v1/projects/{project}/jobs[/{name}]`、`/projects/{project}/jobs/{name}/status` |
+| 历史 Job | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]`，仅 GET，无 `/status` |
 
 Config 是单独的按对象可见性授权的例外：匿名、普通用户和 Runner 身份仅可 `GET/HEAD /apis/ebs/v1/configs/{name}` 且对象为 `Public`；Ops/Admin 也可具名读取 `OpsOnly` 对象及 list。Gateway 用可信内部身份读取一次完整对象，并依据同一响应的 `spec.visibility` 决定是否透传；无权读取返回 403，不暴露正文。非运维身份访问 `/configs` 集合一律拒绝；携带 Token 的请求先校验身份，不能失败后降级匿名。Config 的 `content` 不得包含凭据；需要保密内容应使用独立的受控存储，`OpsOnly` 不等同于机密级授权。
 
@@ -500,12 +501,13 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 |----------|------------|-------------|-----|--------|-------|
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | `get/list/create`，禁止更新和删除 |
 | Project 子资源：Snapshot、BuildInfo、RpmRepo | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
+| Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建、删除和中止；禁止 PUT/PATCH |
 | 集群级 Config | 仅具名读取 `Public`，禁止 list/写入 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 仅具名读取 `Public` | 同 Ops |
 | Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 主资源全部支持的 verb，禁止 `/status` 写入 |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
 | Runner 范围 Job list/watch | 禁止 | 禁止 | 允许 | 自身路径 `get/list/watch`，由 apiserver 按 `status.runner` 强制过滤 | 允许 |
-| Runner | 禁止 | 禁止 | 全部支持的 verb，包括 `/status` | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 全部支持的 verb |
+| Runner | 禁止 | 禁止 | `get/list/create/update/patch/delete`，包括 `/status` 读写；禁止 Watch | 自身 `create/get/update/patch`，其中普通对象和 `/status` 分别受字段白名单约束；禁止 `list/watch/delete` | 同 Ops |
 | User 与用户密码 | 仅本人修改密码，禁止 User API | 仅本人修改密码，禁止 User API | 仅修改本人密码，禁止 User API | 禁止 | 非 Admin User 支持 `get/list/update/patch/delete`，另可修改本人密码 |
 | MachineAccount | 禁止 | 禁止 | 禁止 | 禁止 | 通过专用接口 `create`；资源 API 支持 `get/list/delete` |
 
@@ -661,7 +663,7 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 - 保持查询参数。
 - 除 access label 注入和 4.9.1 节生成完整候选对象外，保持请求体。
 - 支持 watch 长连接，不缓冲完整响应。
-- 不为不支持 watch 的 Project、Snapshot、Build、BuildInfo、RpmRepo 模拟轮询；相关错误由 apiserver 原样返回。
+- Watch 按路由允许列表放行，仅支持 Project 范围 Job 列表及具名 Runner 的 Job 列表；其他路由由 Gateway 拒绝，不模拟轮询。
 - 透传 apiserver 返回的状态码和响应体。
 - 使用 `--apiserver-addr` 设置上游地址。
 
@@ -709,6 +711,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按 Project 关系创建、删除或中止；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | owner/member 可按 Project 权限写主资源，但不能写 `/status`；Admin 可写主资源；Runner 仅可更新已分配 Job 的 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
+| `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]` | 匿名及已认证用户仅可 GET；Runner 不开放 | 无；只注册 GET |
 | `/apis/ebs/v1/runners[/{name}][/status]`、`/apis/ebs/v1/runners/{name}/jobs` | Ops/Admin 可读；Runner 仅可读自身对象及自身范围 Job | Ops/Admin 可管理 Runner；Runner 仅可创建、受限修改自身对象和 `/status`，不得删除 |
 | `/apis/ebs/v1/configs[/{name}]` | `Public` 可匿名及各身份具名读取；`OpsOnly` 与列表仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource` 不可删除 |
 | `/apis/ebs/v1/artifact-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
@@ -717,16 +720,18 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 
 未列出的资源、子资源和 `/api/*` 别名不对外开放；匿名不能 watch 或写入。Project 范围资源的原生全局路径也不开放。完整的角色差异、Runner 字段限制和 Job 中止特例以第 4.8 节为准。
 
+历史 Job 的 [oldjobs 路由](ebs-apiserver.md#历史-job-归档ebs-oldjobs) 加入公开读取白名单，沿用普通 Job 读取的 Token 校验、限流、分页及字段选择透传规则。不注册 HEAD、`/status`、Watch 或写方法；全局 oldjobs 和 Job `/archive` 仅用于内部访问，不经过 Gateway 对外开放。既有 jobs 路由不自动回退到归档数据。
+
 ### 5.2 Watch 透传
 
 Runner 和已授权用户可能通过 gateway 对支持 watch 的资源建立连接：
 
 ```text
 GET /apis/ebs/v1/runners/{runner}/jobs?watch=true
-GET /apis/ebs/v1/runners?watch=true
+GET /apis/ebs/v1/projects/{project}/jobs?watch=true
 ```
 
-当前只有 etcd 主存储的 Job、Runner 支持 watch；Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch 主存储，不支持 watch。所有对外 watch 请求必须认证。Runner token通过自身 Runner范围接口 watch Job。普通用户通过 Project范围的 API访问资源，Project范围的 Job watch在权限校验后透传；匿名 Job watch返回401。
+Gateway 仅对上述两类 GET 列表路由开放 Watch，且仍须通过身份与资源权限校验。Runner 列表、具名 Job/Runner 的 GET、`/status`、其他资源及新增加的资源默认不开放 Watch；已认证调用方请求这些路由的 Watch 时返回 403。所有对外 Watch 请求必须认证，匿名请求返回 401。Runner token 通过自身 Runner 范围接口 Watch Job；用户通过已授权的 Job 列表建立 Watch。
 
 每个 Runner token 同时最多建立一个 Runner 范围 Job watch。超过限制返回429并包含 `Retry-After`；连接正常结束、上游失败或客户端断开时必须释放计数。Runner watch建议使用不超过300秒的 `timeoutSeconds` 定期重连，使 token和权限能够重新校验。
 
@@ -888,12 +893,12 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |
 | Admin | user 和 runner 均不能管理 MachineAccount，仅 `ebs:admin` 可以创建、查询和删除对象 |
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |
-| Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（包含 watch、普通对象写入、`/status` 和 Runner 范围 Job list/watch） |
+| Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（包含普通对象写入、`/status` 和 Runner 范围 Job list/watch，不开放 Runner 对象 Watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户和 Ops 创建 Project 时强制写入 owner user label；Admin 创建时校验 owner 为已启用的普通用户或 Ops；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、restartCount、spec 或 metadata |
 | RateLimit | 超过令牌桶容量后返回 429 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |
-| Watch | 已授权用户的 Job/Runner watch 和 Runner 自身范围 Job list-watch能够流式转发；校验强制过滤、fieldSelector注入、BOOKMARK、410重建、timeoutSeconds和每 Runner单连接限制；路径身份不匹配和普通用户全局 watch返回403；ES-only资源不支持 watch |
+| Watch | 已授权用户的 Project 范围 Job Watch 和已授权调用方的 Runner 范围 Job Watch 能够流式转发；校验强制过滤、fieldSelector 注入、BOOKMARK、410 重建、timeoutSeconds 和每 Runner 单连接限制；Runner 列表及其他非允许列表路由的 Watch 均拒绝 |
 | Audit | 请求结束后记录 method/path/status/latency/user |

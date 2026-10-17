@@ -69,6 +69,7 @@ spec:
           args:
             - --name=$(POD_NAME)
             - --data-dir=/var/lib/etcd
+            - --quota-backend-bytes=8589934592 # 8 GiB
             - --listen-client-urls=https://0.0.0.0:2379
             - --advertise-client-urls=https://$(POD_NAME).etcd.$(POD_NAMESPACE).svc.cluster.local:2379
             - --cert-file=/etc/etcd/client-tls/server.crt

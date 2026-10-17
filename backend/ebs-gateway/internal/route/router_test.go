@@ -48,6 +48,114 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	return &testAPI{Handler: api, tokens: tokens, now: now}
 }
 
+func TestOldJobsReadRoutes(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.HasPrefix(r.URL.Path, "/apis/ebs/v1/projects/project/oldjobs") {
+			t.Fatalf("upstream=%s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"apiVersion":"ebs/v1","kind":"JobList","items":[]}`))}, nil
+	}))
+	router := api.Router()
+	for _, path := range []string{"/apis/ebs/v1/projects/project/oldjobs?includeFields=metadata&fieldSelector=status.phase=Succeeded", "/apis/ebs/v1/projects/project/oldjobs/job"} {
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, httptest.NewRequest("GET", path, nil))
+		if r.Code != 200 {
+			t.Fatalf("path=%s status=%d body=%s", path, r.Code, r.Body)
+		}
+	}
+	token, err := api.tokens.Issue("runner", "runner", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "/apis/ebs/v1/projects/project/oldjobs/job", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
+	if w.Code != 403 {
+		t.Fatalf("runner status=%d body=%s", w.Code, w.Body)
+	}
+	for _, route := range router.Routes() {
+		if strings.Contains(route.Path, "oldjobs") && (route.Method != "GET" || strings.HasSuffix(route.Path, "/status") || !strings.Contains(route.Path, "/projects/:project/")) {
+			t.Fatalf("unexpected route=%+v", route)
+		}
+		if strings.HasSuffix(route.Path, "/archive") {
+			t.Fatalf("archive exposed: %+v", route)
+		}
+	}
+}
+
+func TestWatchRouteAllowlist(t *testing.T) {
+	forwarded := 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body := `{}`
+		if r.URL.Path == "/apis/iam.ebs/v1/users/admin" {
+			body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
+		} else {
+			forwarded++
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	adminToken, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerToken, err := api.tokens.Issue("runner-1", "runner-1", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	cases := []struct {
+		path, token string
+		status      int
+	}{
+		{"/projects/team/jobs?watch=true", adminToken, http.StatusOK},
+		{"/runners", adminToken, http.StatusOK},
+		{"/runners?watch=false", adminToken, http.StatusOK},
+		{"/runners/runner-1/jobs?watch=true", adminToken, http.StatusOK},
+		{"/runners/runner-1/jobs?watch=true", runnerToken, http.StatusOK},
+		{"/runners?watch=true", runnerToken, http.StatusForbidden},
+		{"/runners/runner-2/jobs?watch=true", runnerToken, http.StatusForbidden},
+		{"/projects/team/jobs?watch=true", runnerToken, http.StatusForbidden},
+		{"/projects/team/jobs?watch=true", "", http.StatusUnauthorized},
+		{"/projects?watch=false", adminToken, http.StatusOK},
+	}
+	for _, path := range []string{
+		"/projects", "/projects/team", "/projects/team/builds",
+		"/projects/team/snapshots", "/projects/team/buildinfos", "/projects/team/rpmrepos",
+		"/projects/team/oldjobs", "/configs", "/scripts",
+		"/projects/team/jobs/job", "/projects/team/jobs/job/status",
+		"/runners", "/runners/runner-1", "/runners/runner-1/status",
+	} {
+		for _, query := range []string{"watch=true", "watch=1", "watch=false&watch=true"} {
+			cases = append(cases, struct {
+				path, token string
+				status      int
+			}{path + "?" + query, adminToken, http.StatusForbidden})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			forwarded = 0
+			r := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1"+tc.path, nil)
+			if tc.token != "" {
+				r.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, r)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d want=%d body=%s", w.Code, tc.status, w.Body)
+			}
+			wantForwarded := 0
+			if tc.status == http.StatusOK {
+				wantForwarded = 1
+			}
+			if forwarded != wantForwarded {
+				t.Fatalf("forwarded=%d want=%d", forwarded, wantForwarded)
+			}
+		})
+	}
+}
+
 func TestLoginAndCheck(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body string
