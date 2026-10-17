@@ -56,8 +56,9 @@ func TestRecoveryUsesSelectedRuntime(t *testing.T) {
 	client := &recoveryAPI{}
 	agent := &Agent{
 		cfg: options.Config{
-			Type: "ct",
-			Name: "runner-a",
+			Type:      "ct",
+			Name:      "runner-a",
+			Container: containerruntime.Config{Runtime: "containerd"},
 		},
 		containers: runtime,
 		client:     client,
