@@ -9,6 +9,32 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+func TestArtifactManagerContentRoundTripAndDeepCopy(t *testing.T) {
+	original := &ArtifactManagerContent{Instances: map[string]ArtifactManagerInstance{
+		"art-01": {
+			InternalURL:       "http://artifact-manager.art-01:8081",
+			RunnerInternalURL: "http://runner-endpoint:8081",
+			RunnerExternalURL: "https://artifacts.example.com",
+		},
+	}}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ArtifactManagerContent
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(original, &decoded) {
+		t.Fatalf("round trip changed content: %#v", decoded)
+	}
+	copy := original.DeepCopy()
+	copy.Instances["art-01"] = ArtifactManagerInstance{InternalURL: "http://changed:8081"}
+	if !reflect.DeepEqual(original, &decoded) {
+		t.Fatal("copy changed original instance map")
+	}
+}
+
 func TestBuildInfoBootstrapRepo(t *testing.T) {
 	info := &BuildInfo{Spec: BuildInfoSpec{BuildPayload: "macros:\n  dist: .oe2403\n", BootstrapRepo: []BootstrapRepo{{Name: "base", Repo: "https://example.com/repo"}}}}
 	data, err := json.Marshal(info)

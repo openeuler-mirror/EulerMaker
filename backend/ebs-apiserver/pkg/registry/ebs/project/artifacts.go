@@ -14,14 +14,6 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-type artifactManagerConfig struct {
-	Instances map[string]struct {
-		InternalURL       string `json:"internalURL"`
-		RunnerInternalURL string `json:"runnerInternalURL,omitempty"`
-		RunnerExternalURL string `json:"runnerExternalURL,omitempty"`
-	} `json:"instances"`
-}
-
 func ValidateArtifactsConfig(configs rest.Getter) rest.ValidateObjectFunc {
 	return func(ctx context.Context, obj runtime.Object) error {
 		return validateArtifactsConfig(ctx, obj.(*ebsv1.Project), configs)
@@ -54,19 +46,15 @@ func validateArtifactsConfig(ctx context.Context, project *ebsv1.Project, config
 	if !ok || config == nil {
 		return apierrors.NewServiceUnavailable("invalid artifact-manager-conf Config response")
 	}
-	var content artifactManagerConfig
-	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil || len(content.Instances) == 0 {
+	var content ebsv1.ArtifactManagerContent
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
 		return apierrors.NewServiceUnavailable("invalid artifact-manager-conf Config content")
 	}
-	entry, found := content.Instances[instance]
-	if !found {
+	if _, found := content.Instances[instance]; !found {
 		return apierrors.NewInvalid(ebsv1.Kind("Project"), project.Name, field.ErrorList{
 			field.Invalid(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), instance,
 				"instance is not configured in artifact-manager-conf"),
 		})
-	}
-	if entry.InternalURL == "" {
-		return apierrors.NewServiceUnavailable("invalid artifact-manager-conf Config content")
 	}
 	return nil
 }
