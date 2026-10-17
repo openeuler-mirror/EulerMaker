@@ -167,7 +167,7 @@ POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
 
 Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用于 Gateway，`--artifact-manager-ca` 只用于 Artifact Manager；测试环境可以分别显式跳过校验，不能因为其中一个地址使用 HTTP 或跳过 TLS 而放宽另一个客户端。
 
-地址列表不按 Job 查询，也不返回 Job 的上传实例。BuildInfo Controller 创建 Job 时，将 Project 的 `ebs.io/artifacts` annotation 固化到 Job 的同名 annotation；未设置时写入 `default`。Runner 据此选址：`internal` 模式使用 `runnerInternalURL`，`external` 模式使用 `runnerExternalURL`，不根据来源 IP 自动切换。运行中的 Job 固定已选地址，刷新只影响新启动的 Job。实例或对应地址不可用时等待配置恢复，不回退到其他实例或模式。外部模式要求 HTTPS；TLS 校验由独立的 Artifact Manager 客户端配置控制。
+地址列表不按 Job 查询，也不返回 Job 的上传实例。BuildInfo Controller 创建 Job 时，将 Project 的 `ebs.io/artifacts` annotation 固化到 Job 的同名 annotation；未设置时写入 `default`。Runner 据此选址：`internal` 模式使用 `runnerInternalURL`，`external` 模式使用 `runnerExternalURL`，不根据来源 IP 自动切换。运行中的 Job 固定已选地址，刷新只影响新启动的 Job。实例或对应地址不可用时等待配置恢复，不回退到其他实例或模式。内外网地址均允许 HTTP 或 HTTPS，由 apiserver 在 Config 创建、更新时校验地址格式，Runner 不逐项重复校验地址表；选址与客户端初始化错误仍正常处理。TLS 校验由独立的 Artifact Manager 客户端配置控制。
 
 构建执行前，Runner 仅转换 JSON payload 的 `repo[].url`：`artifact://{instance}/repositories/...` 使用该实例在当前模式下的 Runner 地址，`artifact:///repositories/...` 使用 `default`；HTTP(S) URL 原样保留。转换结果写入本地 `payload.json`，不回写 `Job.spec.payload`。同一 Job 上传实例的地址使用已固定值，其他仓库实例从本次地址快照取值；实例缺失、地址为空或逻辑路径无效时，不启动构建容器并记录明确错误。
 
