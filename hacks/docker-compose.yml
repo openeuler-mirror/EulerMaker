@@ -71,7 +71,8 @@ services:
 
   ebs-gateway:
     build:
-      context: ../backend/ebs-gateway
+      context: ..
+      dockerfile: backend/ebs-gateway/Dockerfile
     command:
       - --apiserver-addr=https://ebs-apiserver:8443
       - --jwt-secret-file=/run/secrets/ebs_gateway_jwt_secret

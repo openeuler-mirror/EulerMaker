@@ -326,7 +326,7 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
   default:
     internalURL: http://artifact-manager:8081
     runnerInternalURL: http://127.0.0.1:8081
-    runnerExternalURL: ""
+    runnerExternalURL: http://artifacts.example.com:8081
   art-01:
     internalURL: http://artifact-manager.art-01:8081
     runnerInternalURL: http://artifact-manager.art-01:8081
@@ -373,7 +373,8 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
 		if err := json.Unmarshal(response.Body.Bytes(), &endpoints); err != nil {
 			t.Fatal(err)
 		}
-		if len(endpoints.Instances) != 2 || endpoints.Instances["art-01"].RunnerExternalURL != "https://artifacts.example.com" ||
+		if len(endpoints.Instances) != 2 || endpoints.Instances["default"].RunnerExternalURL != "http://artifacts.example.com:8081" ||
+			endpoints.Instances["art-01"].RunnerExternalURL != "https://artifacts.example.com" ||
 			strings.Contains(response.Body.String(), `"internalURL"`) || strings.Contains(response.Body.String(), "http://artifact-manager:8081") {
 			t.Fatalf("unexpected Runner projection: %s", response.Body.String())
 		}
