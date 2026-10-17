@@ -209,6 +209,12 @@ func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *e
 		return controller.ReconcileResult{}, nil
 	}
 	preconditions := clientpkg.DeletePreconditions{UID: latest.UID, ResourceVersion: latest.ResourceVersion}
+	if c.config.HistoryAction == "archive" {
+		confirmed, archiveErr := c.archiveHistory(ctx, latest)
+		if archiveErr != nil || !confirmed {
+			return controller.ReconcileResult{}, archiveErr
+		}
+	}
 	err = c.client.DeleteJob(ctx, latest.Namespace, latest.Name, preconditions)
 	if err == nil {
 		historyDeleted.Inc()

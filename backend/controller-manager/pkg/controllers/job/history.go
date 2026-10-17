@@ -2,10 +2,14 @@ package job
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
+
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -13,6 +17,56 @@ const (
 	historyScanInterval = 24 * time.Hour
 	historyPageSize     = 500
 )
+
+// archiveHistory confirms the exact snapshot that the caller will conditionally delete.
+func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) (bool, error) {
+	deferred := func(result string, err error) (bool, error) {
+		historyArchive[result].Inc()
+		log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchiveDeferred error=%v",
+			Name, job.Namespace, job.Name, job.UID, job.ResourceVersion, err)
+		return false, err
+	}
+	if len(job.Finalizers) > 0 {
+		return deferred("error", fmt.Errorf("Job has finalizers"))
+	}
+	archived, err := c.client.ArchiveJob(ctx, job.Namespace, job.Name, clientpkg.DeletePreconditions{
+		UID: job.UID, ResourceVersion: job.ResourceVersion,
+	})
+	if err == nil && !sameArchivedJob(job, archived) {
+		err = writeUnknown("archive", fmt.Errorf("archive response does not match source snapshot"))
+	}
+	if err != nil {
+		var writeErr *clientpkg.WriteError
+		if errors.As(err, &writeErr) && writeErr.Outcome != clientpkg.WriteUnknown {
+			if writeErr.Outcome == clientpkg.WriteRejected && writeErr.StatusCode == 404 {
+				return false, nil
+			}
+			result := "error"
+			if writeErr.Outcome == clientpkg.WriteRejected && (writeErr.StatusCode == 409 || writeErr.StatusCode == 412) {
+				result = "conflict"
+			}
+			return deferred(result, err)
+		}
+		if ctx.Err() != nil {
+			return deferred("unknown", err)
+		}
+		confirmed, getErr := c.client.GetOldJob(ctx, job.Namespace, job.Name)
+		if getErr != nil || !sameArchivedJob(job, confirmed) {
+			return deferred("unknown", fmt.Errorf("archive unconfirmed: write=%v, confirmation=%v", err, getErr))
+		}
+	}
+	historyArchive["confirmed"].Inc()
+	log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchived",
+		Name, job.Namespace, job.Name, job.UID, job.ResourceVersion)
+	return true, nil
+}
+
+func sameArchivedJob(source, archived *ebsv1.Job) bool {
+	return source != nil && archived != nil &&
+		equality.Semantic.DeepEqual(source.ObjectMeta, archived.ObjectMeta) &&
+		equality.Semantic.DeepEqual(source.Spec, archived.Spec) &&
+		equality.Semantic.DeepEqual(source.Status, archived.Status)
+}
 
 // Run keeps history scanning separate from the live Job queue and waits for both on shutdown.
 func (c *Controller) Run(ctx context.Context, workers int) error {

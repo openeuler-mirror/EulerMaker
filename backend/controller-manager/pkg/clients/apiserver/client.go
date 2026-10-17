@@ -144,6 +144,35 @@ func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, 
 	return listPage(list)
 }
 
+// ArchiveJob persists a snapshot without deleting its source.
+func (c *Client) ArchiveJob(ctx context.Context, project, name string, pre DeletePreconditions) (*ebsv1.Job, error) {
+	gvr := source.JobsGVR
+	if err := validateTarget(gvr, project, name); err != nil {
+		return nil, notSent("archive", gvr, err)
+	}
+	if pre.UID == "" || pre.ResourceVersion == "" {
+		return nil, notSent("archive", gvr, fmt.Errorf("Job UID and resourceVersion are required"))
+	}
+	body, err := json.Marshal(struct {
+		Preconditions metav1.Preconditions `json:"preconditions"`
+	}{
+		Preconditions: metav1.Preconditions{UID: &pre.UID, ResourceVersion: &pre.ResourceVersion},
+	})
+	if err != nil {
+		return nil, notSent("archive", gvr, err)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	out := &ebsv1.Job{}
+	if err := c.rest.Post().AbsPath(resourcePath(gvr, project, name, "archive")).Body(body).Do(requestCtx).Into(out); err != nil {
+		return nil, classifyWrite("archive", gvr, err)
+	}
+	if out.Namespace != project || out.Name != name || out.UID != pre.UID || out.ResourceVersion != pre.ResourceVersion {
+		return nil, unknown("archive", gvr, fmt.Errorf("unexpected Job archive response identity or version"))
+	}
+	return out, nil
+}
+
 // AbortJob requests an atomic, UID-guarded transition to a terminal Job state.
 func (c *Client) AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
 	gvr := source.JobsGVR
@@ -435,7 +464,7 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildInfoList{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepoList{}, nil
-	case "jobs":
+	case "jobs", "oldjobs":
 		return &ebsv1.JobList{}, nil
 	case "runners":
 		return &ebsv1.RunnerList{}, nil
@@ -463,7 +492,7 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildInfo{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepo{}, nil
-	case "jobs":
+	case "jobs", "oldjobs":
 		return &ebsv1.Job{}, nil
 	case "runners":
 		return &ebsv1.Runner{}, nil

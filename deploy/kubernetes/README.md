@@ -304,6 +304,8 @@ Runner 在写入 `payload.json` 前，按逻辑 URL 中的实例名将 `repo[].u
 
 客户端证书的 URI SAN 须对应 Controller Manager 身份，不能复用 Gateway 证书。确认 Git Server 和 Artifact Manager 的 Service 已创建，且 Controller Manager Pod 可访问它们。
 
+Kubernetes 模板设置 `--job-history-action=archive`：终态 Job 默认保留 30 天，到期后先通过 apiserver 归档到 ES `ebs-oldjobs`，确认成功后再从 etcd 删除；归档失败则保留源 Job。归档仅包含 Job 对象，不包含日志和产物文件。
+
 ```sh
 kubectl -n ebs create secret generic controller-manager-apiserver-tls \
   --from-file=ca.crt="$internal_cert_dir/runtime/server-ca.crt" \

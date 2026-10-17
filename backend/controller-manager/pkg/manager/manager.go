@@ -20,7 +20,7 @@ type HealthServer interface {
 	AddHealthChecker(string, controller.HealthChecker) error
 }
 type Dependencies struct {
-	Client         clientpkg.Interface
+	Client         *clientpkg.Client
 	WatchFactory   source.WatchSourceFactory
 	PollingFactory source.PollingSourceFactory
 }

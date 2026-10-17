@@ -52,7 +52,7 @@ func main() {
 	}
 	initializers := map[string]manager.InitFunc{
 		buildcontroller.Name:  buildcontroller.Initializer(buildcontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
-		jobcontroller.Name:    jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, MaxRetries: o.Manager.ControllerMaxRetries}),
+		jobcontroller.Name:    jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, HistoryAction: o.Job.HistoryAction, MaxRetries: o.Manager.ControllerMaxRetries}),
 		runnercontroller.Name: runnercontroller.Initializer(runnercontroller.Config{HeartbeatTimeout: o.Runner.HeartbeatTimeout, StartupGracePeriod: o.Runner.StartupGracePeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
 		rpmrepocontroller.Name: rpmrepocontroller.Initializer(rpmrepocontroller.Config{
 			ArtifactManagerTimeout: o.ArtifactManager.Timeout,

@@ -53,6 +53,7 @@ type HealthOptions struct {
 }
 
 type JobControllerOptions struct {
+	HistoryAction         string
 	RunnerLostGracePeriod time.Duration
 	HistoryRetention      time.Duration
 	HistoryGCEnabled      bool
@@ -102,7 +103,7 @@ func Parse(args []string) (Options, error) {
 		Manager:         ManagerOptions{Controllers: "*", Workers: 6, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
 		Source:          SourceOptions{PollPeriod: 10 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
 		Health:          HealthOptions{Address: ":8080"},
-		Job:             JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour},
+		Job:             JobControllerOptions{RunnerLostGracePeriod: 5 * time.Minute, HistoryGCEnabled: true, HistoryRetention: 720 * time.Hour, HistoryAction: "delete"},
 		Runner:          RunnerControllerOptions{HeartbeatTimeout: 2 * time.Minute, StartupGracePeriod: 5 * time.Minute},
 		RpmRepo:         RpmRepoControllerOptions{MaxJobsPerBatch: 100, MaterializeRetryLimit: 3},
 		ArtifactManager: ArtifactManagerOptions{Timeout: 30 * time.Second},
@@ -136,6 +137,7 @@ func Parse(args []string) (Options, error) {
 	f.DurationVar(&o.Job.RunnerLostGracePeriod, "job-runner-lost-grace-period", o.Job.RunnerLostGracePeriod, "grace period before failing a Job whose Runner is unavailable")
 	f.BoolVar(&o.Job.HistoryGCEnabled, "job-history-gc-enabled", o.Job.HistoryGCEnabled, "delete terminal Jobs after their history retention period")
 	f.DurationVar(&o.Job.HistoryRetention, "job-history-retention", o.Job.HistoryRetention, "retention period for terminal Jobs")
+	f.StringVar(&o.Job.HistoryAction, "job-history-action", o.Job.HistoryAction, "expired Job action: delete or archive to Elasticsearch before deletion")
 	f.DurationVar(&o.Runner.HeartbeatTimeout, "runner-heartbeat-timeout", o.Runner.HeartbeatTimeout, "timeout since the last persisted Runner heartbeat")
 	f.DurationVar(&o.Runner.StartupGracePeriod, "runner-startup-grace-period", o.Runner.StartupGracePeriod, "grace period for a new Runner to publish its first heartbeat")
 	f.IntVar(&o.RpmRepo.MaxJobsPerBatch, "rpmrepo-max-jobs-per-batch", o.RpmRepo.MaxJobsPerBatch, "maximum number of Jobs in one repository batch")
@@ -161,6 +163,9 @@ func Parse(args []string) (Options, error) {
 	}
 	if o.API.Server == "" {
 		return o, fmt.Errorf("apiserver is required")
+	}
+	if o.Job.HistoryAction != "delete" && o.Job.HistoryAction != "archive" {
+		return o, fmt.Errorf("job-history-action must be delete or archive")
 	}
 	if !o.API.InsecureSkipVerify && o.API.ServerCA == "" {
 		return o, fmt.Errorf("apiserver-ca is required unless insecure-skip-verify is enabled")

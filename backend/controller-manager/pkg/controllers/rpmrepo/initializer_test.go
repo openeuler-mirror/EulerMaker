@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -50,7 +51,7 @@ func initializedConfig() Config {
 
 func initContext(factory source.PollingSourceFactory) manager.InitContext {
 	return manager.InitContext{
-		Dependencies: manager.Dependencies{Client: &stubSharedClient{}, PollingFactory: factory},
+		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: factory},
 		Config: manager.ControllerConfig{
 			Workers:          6,
 			SlowRetryInitial: 30 * time.Second,

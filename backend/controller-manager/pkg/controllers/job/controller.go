@@ -23,11 +23,15 @@ const Name = "job"
 type Config struct {
 	RunnerLostGracePeriod time.Duration
 	HistoryGCEnabled      bool
+	HistoryAction         string
 	HistoryRetention      time.Duration
 	MaxRetries            int
 }
 
 func (c Config) validate() error {
+	if c.HistoryAction != "delete" && c.HistoryAction != "archive" {
+		return fmt.Errorf("Job history action must be delete or archive")
+	}
 	if c.RunnerLostGracePeriod <= 0 || c.MaxRetries < 0 || (c.HistoryGCEnabled && c.HistoryRetention <= 0) {
 		return fmt.Errorf("Job controller grace period, retention and retry count are invalid")
 	}
@@ -57,6 +61,9 @@ func New(jobs, runners source.CachedSource, client Client, clk clock.Clock, conf
 }
 
 func newController(jobs, runners source.CachedSource, client Client, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
+	if config.HistoryAction == "" {
+		config.HistoryAction = "delete"
+	}
 	if jobs == nil || runners == nil || client == nil || clk == nil {
 		return nil, fmt.Errorf("Job and Runner sources, client and clock are required")
 	}

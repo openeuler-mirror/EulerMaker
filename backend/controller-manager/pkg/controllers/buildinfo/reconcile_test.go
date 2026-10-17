@@ -12,7 +12,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -23,16 +22,6 @@ import (
 )
 
 // --- Event handlers ---
-
-type initializerSharedClient struct{ clientpkg.Interface }
-
-func (initializerSharedClient) AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error) {
-	return nil, nil
-}
-
-func (initializerSharedClient) GetBuildTargetContent(context.Context) (*ebsv1.BuildTargetContent, error) {
-	return nil, nil
-}
 
 type recordingPollingFactory struct {
 	gvr     schema.GroupVersionResource
@@ -57,7 +46,7 @@ func TestInitializerFiltersTerminalBuildInfos(t *testing.T) {
 		RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 100,
 	}
 	init := manager.InitContext{
-		Dependencies: manager.Dependencies{Client: initializerSharedClient{}, PollingFactory: polling},
+		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
 		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute},
 	}
 	_, active, err := Initializer(config, newFakeGitServer())(context.Background(), init)
