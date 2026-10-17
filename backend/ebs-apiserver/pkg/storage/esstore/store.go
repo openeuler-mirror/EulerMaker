@@ -383,6 +383,22 @@ func (s *Store) DeleteCollection(ctx context.Context, admission rest.ValidateObj
 	return list, nil
 }
 
+// Exists applies the resource selectors without pagination or object decoding.
+func (s *Store) Exists(ctx context.Context, options *internalversion.ListOptions) (bool, error) {
+	if options == nil {
+		options = &internalversion.ListOptions{}
+	}
+	query, err := selectorQuery(s.resourceName, s.requestNamespace(ctx), options)
+	if err != nil {
+		return false, apierrors.NewBadRequest(err.Error())
+	}
+	exists, err := s.client.Exists(ctx, s.resourceName, query)
+	if err != nil {
+		return false, s.apiError(err, "")
+	}
+	return exists, nil
+}
+
 func (s *Store) List(ctx context.Context, options *internalversion.ListOptions) (runtime.Object, error) {
 	if options == nil {
 		options = &internalversion.ListOptions{}

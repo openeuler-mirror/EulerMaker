@@ -8,10 +8,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -27,6 +29,59 @@ import (
 )
 
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
+
+func TestExistsUsesScopedSelectors(t *testing.T) {
+	opts := &internalversion.ListOptions{
+		LabelSelector: labels.SelectorFromSet(labels.Set{
+			ebsv1.BuildTargetOSLabel: "openEuler", ebsv1.BuildTargetArchLabel: "aarch64", ebsv1.BuildTypeLabel: "full",
+		}),
+		FieldSelector: fields.OneTermEqualSelector("status.phase", string(ebsv1.BuildSuccess)),
+	}
+	wantQuery, err := selectorQuery("build", "project-a", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(
+			func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path != "/ebs-builds/_search" {
+					t.Fatalf("unexpected request %s", req.URL)
+				}
+				var body struct {
+					Query json.RawMessage `json:"query"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				want, err := json.Marshal(wantQuery)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var gotQuery, expected interface{}
+				if err := json.Unmarshal(body.Query, &gotQuery); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(want, &expected); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(gotQuery, expected) {
+					t.Fatalf("query = %s, want %s", body.Query, want)
+				}
+				return jsonResponse(status, map[string]interface{}{
+					"hits": map[string]interface{}{"hits": []interface{}{map[string]string{"_id": "project-a/full"}}},
+				}), nil
+			})})
+		store := &Store{client: client, resourceName: "build", namespaceScoped: true}
+		ctx := genericapirequest.WithNamespace(context.Background(), "project-a")
+		exists, err := store.Exists(ctx, opts)
+		if status == http.StatusOK && (!exists || err != nil) {
+			t.Fatalf("Exists = %t, %v", exists, err)
+		}
+		if status == http.StatusServiceUnavailable && !apierrors.IsServiceUnavailable(err) {
+			t.Fatalf("expected ServiceUnavailable, got %v", err)
+		}
+	}
+}
 
 func TestCreateHookBeforePersistence(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {

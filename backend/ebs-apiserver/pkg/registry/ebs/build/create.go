@@ -55,6 +55,7 @@ func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.B
 	}
 	// ES lists newest creationTimestamp first. Do not filter phase: only the
 	// latest non-single Build is the gate, not all historical active Builds.
+	ctx = esstore.WithSourceFilter(ctx, es.SourceFilter{Includes: []string{"data.metadata.name", "data.status.phase"}})
 	obj, err := builds.List(ctx, &internalversion.ListOptions{LabelSelector: selector.Add(*nonSingle), Limit: 1})
 	if err != nil {
 		return err
@@ -71,27 +72,22 @@ func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.B
 		fmt.Errorf("latest non-single build %q for target %s/%s is not terminal (phase %q)", previous.Name, build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch, previous.Status.Phase))
 }
 
-func validateFullBuildBaseline(ctx context.Context, builds rest.Lister, build *ebsv1.Build) error {
+func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *ebsv1.Build) error {
 	if build.Spec.BuildType != "incremental" && build.Spec.BuildType != "specified" {
 		return nil
 	}
-	obj, err := builds.List(ctx, &internalversion.ListOptions{
+	exists, err := builds.Exists(ctx, &internalversion.ListOptions{
 		LabelSelector: labels.SelectorFromSet(labels.Set{
 			ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
 			ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
 			ebsv1.BuildTypeLabel:       "full",
 		}),
 		FieldSelector: fields.OneTermEqualSelector("status.phase", string(ebsv1.BuildSuccess)),
-		Limit:         1,
 	})
 	if err != nil {
 		return err
 	}
-	list, ok := obj.(*ebsv1.BuildList)
-	if !ok {
-		return apierrors.NewInternalError(fmt.Errorf("expected BuildList, got %T", obj))
-	}
-	if len(list.Items) != 0 {
+	if exists {
 		return nil
 	}
 	return &apierrors.StatusError{ErrStatus: metav1.Status{

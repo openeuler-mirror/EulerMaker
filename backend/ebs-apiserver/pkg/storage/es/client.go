@@ -503,6 +503,43 @@ func (c *Client) ClosePIT(ctx context.Context, id string) error {
 	return nil
 }
 
+// Exists checks for a matching document without opening a PIT or fetching its source.
+func (c *Client) Exists(ctx context.Context, resource string, query map[string]interface{}) (bool, error) {
+	data, err := json.Marshal(map[string]interface{}{
+		"query": query, "size": 1, "_source": false, "track_total_hits": false,
+	})
+	if err != nil {
+		return false, err
+	}
+	u := fmt.Sprintf("%s/%s/_search?allow_partial_search_results=false", c.addr(), resourceIndex(resource))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(data))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		TimedOut bool `json:"timed_out"`
+		Shards   struct {
+			Failed int `json:"failed"`
+		} `json:"_shards"`
+		Hits *struct {
+			Hits []json.RawMessage `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return false, err
+	}
+	if result.TimedOut || result.Shards.Failed > 0 || result.Hits == nil || result.Hits.Hits == nil {
+		return false, fmt.Errorf("elasticsearch existence query returned an incomplete result")
+	}
+	return len(result.Hits.Hits) != 0, nil
+}
+
 func (c *Client) SearchPIT(ctx context.Context, pitID, keepAlive string, query map[string]interface{}, size int64, searchAfter []json.RawMessage) (*SearchResult, error) {
 	return c.SearchPITWithSourceFilter(ctx, pitID, keepAlive, query, size, searchAfter, SourceFilter{})
 }

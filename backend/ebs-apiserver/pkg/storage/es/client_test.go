@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -18,6 +19,58 @@ func response(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestExists(t *testing.T) {
+	query := map[string]interface{}{"term": map[string]interface{}{"data.status.phase": "Success"}}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		exists bool
+		err    bool
+	}{
+		{"match", 200, `{"hits":{"hits":[{"_id":"project/build"}]}}`, true, false},
+		{"empty", 200, `{"hits":{"hits":[]}}`, false, false},
+		{"unavailable", 503, `{"error":"unavailable"}`, false, true},
+		{"timeout", 200, `{"timed_out":true,"hits":{"hits":[]}}`, false, true},
+		{"partial", 200, `{"_shards":{"failed":1},"hits":{"hits":[]}}`, false, true},
+		{"malformed", 200, `{`, false, true},
+		{"missing hits", 200, `{}`, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(
+				func(req *http.Request) (*http.Response, error) {
+					requests++
+					if req.Method != http.MethodPost || req.URL.Path != "/ebs-builds/_search" ||
+						req.URL.Query().Get("allow_partial_search_results") != "false" {
+						t.Fatalf("unexpected request %s %s", req.Method, req.URL)
+					}
+					var body map[string]interface{}
+					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					want := map[string]interface{}{
+						"query": query, "size": float64(1), "_source": false, "track_total_hits": false,
+					}
+					if !reflect.DeepEqual(body, want) {
+						t.Fatalf("request body = %#v, want %#v", body, want)
+					}
+					return response(tc.status, tc.body), nil
+				})})
+			exists, err := client.Exists(context.Background(), "build", query)
+			if exists != tc.exists || (err != nil) != tc.err {
+				t.Fatalf("Exists = %t, %v; want %t, error=%t", exists, err, tc.exists, tc.err)
+			}
+			if tc.status == 503 && !IsStatus(err, 503) {
+				t.Fatalf("HTTP status not preserved: %v", err)
+			}
+			if requests != 1 {
+				t.Fatalf("requests = %d, want 1", requests)
+			}
+		})
 	}
 }
 
