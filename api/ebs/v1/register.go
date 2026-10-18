@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -31,6 +32,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&Job{}, &JobList{},
 		&Runner{}, &RunnerList{},
 	)
+	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Project"), func(label, value string) (string, string, error) {
 		switch label {
 		case "metadata.name", "metadata.namespace", "status.phase":
