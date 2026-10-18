@@ -1,7 +1,6 @@
 package ebs
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -12,7 +11,7 @@ const GroupName = "ebs"
 
 var SchemeGroupVersion = schema.GroupVersion{
 	Group:   GroupName,
-	Version: "v1",
+	Version: runtime.APIVersionInternal,
 }
 
 var (
@@ -26,37 +25,15 @@ func Resource(resource string) schema.GroupResource {
 
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
-		&ebsv1.Project{},
-		&ebsv1.ProjectList{},
-		&ebsv1.Snapshot{},
-		&ebsv1.SnapshotList{},
-		&ebsv1.Build{},
-		&ebsv1.BuildList{},
-		&ebsv1.BuildInfo{},
-		&ebsv1.BuildInfoList{},
-		&ebsv1.RpmRepo{},
-		&ebsv1.RpmRepoList{},
-		&ebsv1.Job{},
-		&ebsv1.JobList{},
-		&ebsv1.Runner{},
-		&ebsv1.RunnerList{},
+		&ebsv1.Config{}, &ebsv1.ConfigList{},
+		&ebsv1.Script{}, &ebsv1.ScriptList{},
+		&ebsv1.Project{}, &ebsv1.ProjectList{},
+		&ebsv1.Snapshot{}, &ebsv1.SnapshotList{},
+		&ebsv1.Build{}, &ebsv1.BuildList{},
+		&ebsv1.BuildInfo{}, &ebsv1.BuildInfoList{},
+		&ebsv1.RpmRepo{}, &ebsv1.RpmRepoList{},
+		&ebsv1.Job{}, &ebsv1.JobList{},
+		&ebsv1.Runner{}, &ebsv1.RunnerList{},
 	)
-	scheme.AddKnownTypes(schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal},
-		&ebsv1.Project{},
-		&ebsv1.ProjectList{},
-		&ebsv1.Snapshot{},
-		&ebsv1.SnapshotList{},
-		&ebsv1.Build{},
-		&ebsv1.BuildList{},
-		&ebsv1.BuildInfo{},
-		&ebsv1.BuildInfoList{},
-		&ebsv1.RpmRepo{},
-		&ebsv1.RpmRepoList{},
-		&ebsv1.Job{},
-		&ebsv1.JobList{},
-		&ebsv1.Runner{},
-		&ebsv1.RunnerList{},
-	)
-	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }

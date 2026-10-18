@@ -64,12 +64,3 @@ func validatePackageRepos(repos []ebsv1.PackageRepo, path *field.Path) field.Err
 	}
 	return allErrs
 }
-
-func containsString(values []string, value string) bool {
-	for _, candidate := range values {
-		if candidate == value {
-			return true
-		}
-	}
-	return false
-}

@@ -10,7 +10,7 @@ import (
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 
-	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
+	iamv1 "ebs-api/iam/v1"
 )
 
 type Storage struct{ MachineAccount rest.StandardStorage }

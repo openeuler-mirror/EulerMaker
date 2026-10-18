@@ -38,24 +38,22 @@ backend/ebs-apiserver
 
 ## 项目结构
 
+公共资源类型、DeepCopy 和版本注册位于 `api/ebs/v1`、`api/iam/v1`；服务端仅在 `pkg/apis` 注册内部版本。IAM 的存储、校验、认证和凭证管理保留在 apiserver，Gateway 复用公共类型并维护自身身份与权限逻辑。
+
 ```
 backend/ebs-apiserver/
 ├── cmd/server/main.go                 # 进程入口
 ├── pkg/
-│   ├── apis/ebs/
-│   │   ├── register.go                # API group 注册
-│   │   ├── v1/
-│   │   │   ├── types.go               # 资源类型
-│   │   │   ├── register.go            # 版本资源注册
-│   │   │   ├── defaults.go            # 默认值
-│   │   │   └── zz_generated.deepcopy.go
-│   │   └── validation/validation.go   # admission 校验
+│   ├── apis/
+│   │   ├── ebs/
+│   │   │   ├── register.go            # EBS 内部版本注册
+│   │   │   └── validation/            # 按资源组织的校验
+│   │   └── iam/register.go            # IAM 内部版本注册
 │   ├── iam/                           # 可选 IAM 模块
-│   │   ├── api/                       # iam.ebs/v1 User、MachineAccount 类型与注册
-│   │   ├── registry/                  # User、MachineAccount REST storage
 │   │   ├── credential/                # Argon2id 哈希与凭据验证
 │   │   └── install.go                 # IAM 路由安装
 │   ├── registry/
+│   │   ├── iam/                       # User、MachineAccount REST storage 与校验
 │   │   ├── scoped_store.go            # 命名空间作用域 store 包装
 │   │   └── ebs/
 │   │       ├── */storage.go            # 各资源 REST storage

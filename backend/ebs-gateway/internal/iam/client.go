@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 
+	iamv1 "ebs-api/iam/v1"
+
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
@@ -32,19 +34,17 @@ func (c *Client) GetUser(ctx context.Context, name string) (User, int, error) {
 	if response.StatusCode != http.StatusOK {
 		return User{}, response.StatusCode, nil
 	}
-	var object struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Spec struct {
-			Enabled bool             `json:"enabled"`
-			Scopes  []identity.Scope `json:"scopes"`
-		} `json:"spec"`
-	}
+	var object iamv1.User
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&object); err != nil {
 		return User{}, response.StatusCode, fmt.Errorf("decode IAM user: %w", err)
 	}
-	return User{Name: object.Metadata.Name, Enabled: object.Spec.Enabled, Scopes: object.Spec.Scopes}, response.StatusCode, nil
+	scopes := make([]identity.Scope, len(object.Spec.Scopes))
+	for i, scope := range object.Spec.Scopes {
+		scopes[i] = identity.Scope(scope)
+	}
+	return User{
+		Name: object.Name, Enabled: object.Spec.Enabled != nil && *object.Spec.Enabled, Scopes: scopes,
+	}, response.StatusCode, nil
 }
 
 func (c *Client) AuthenticateUser(ctx context.Context, name, password string) (bool, int, error) {

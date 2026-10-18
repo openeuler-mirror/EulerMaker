@@ -7,6 +7,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	iamv1 "ebs-api/iam/v1"
+
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/policy"
 )
@@ -77,16 +79,12 @@ func (a *Handler) getOrdinaryUser(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User response"})
 		return
 	}
-	var object struct {
-		Spec struct {
-			Scopes []identity.Scope `json:"scopes"`
-		} `json:"spec"`
-	}
+	var object iamv1.User
 	if err := json.Unmarshal(data, &object); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User response"})
 		return
 	}
-	if len(object.Spec.Scopes) != 1 || object.Spec.Scopes[0] == identity.AdminScope {
+	if len(object.Spec.Scopes) != 1 || object.Spec.Scopes[0] == string(identity.AdminScope) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Admin User is protected"})
 		return
 	}
@@ -108,16 +106,12 @@ func (a *Handler) ordinaryUserObject(c *gin.Context) bool {
 		c.Status(response.StatusCode)
 		return false
 	}
-	var object struct {
-		Spec struct {
-			Scopes []identity.Scope `json:"scopes"`
-		} `json:"spec"`
-	}
+	var object iamv1.User
 	if err := json.NewDecoder(io.LimitReader(response.Body, a.bodyLimit+1)).Decode(&object); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User response"})
 		return false
 	}
-	if len(object.Spec.Scopes) != 1 || object.Spec.Scopes[0] == identity.AdminScope {
+	if len(object.Spec.Scopes) != 1 || object.Spec.Scopes[0] == string(identity.AdminScope) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Admin User is protected"})
 		return false
 	}
@@ -135,30 +129,33 @@ func (a *Handler) listOrdinaryUsers(c *gin.Context) {
 		c.Status(response.StatusCode)
 		return
 	}
-	var result map[string]any
+	var result map[string]json.RawMessage
 	if err := json.NewDecoder(io.LimitReader(response.Body, a.bodyLimit+1)).Decode(&result); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User list response"})
 		return
 	}
-	items, ok := result["items"].([]any)
-	if !ok {
+	var items []json.RawMessage
+	if raw, ok := result["items"]; !ok || string(raw) == "null" || json.Unmarshal(raw, &items) != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User list response"})
 		return
 	}
-	filtered := make([]any, 0, len(items))
+	filtered := make([]json.RawMessage, 0, len(items))
 	for _, item := range items {
-		object, ok := item.(map[string]any)
-		if !ok {
+		var object iamv1.User
+		if string(item) == "null" || json.Unmarshal(item, &object) != nil {
 			continue
 		}
-		spec, _ := object["spec"].(map[string]any)
-		scopes, _ := spec["scopes"].([]any)
+		scopes := object.Spec.Scopes
 		if len(scopes) == 1 && scopes[0] == string(identity.AdminScope) {
 			continue
 		}
 		filtered = append(filtered, item)
 	}
-	result["items"] = filtered
+	result["items"], err = json.Marshal(filtered)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid User list response"})
+		return
+	}
 	if c.Request.Method == http.MethodHead {
 		c.Status(http.StatusOK)
 		return
