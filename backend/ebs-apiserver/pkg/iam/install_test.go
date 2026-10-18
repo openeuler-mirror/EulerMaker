@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/registry/rest"
 
-	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
+	iamv1 "ebs-api/iam/v1"
 )
 
 type fakeUserStorage struct {

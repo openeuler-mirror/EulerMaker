@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	openapinamer "k8s.io/apiserver/pkg/endpoints/openapi"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
@@ -23,9 +24,9 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	ebsv1 "ebs-api/ebs/v1"
+	iamv1 "ebs-api/iam/v1"
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	iamapi "ebs-apiserver/pkg/apis/iam"
-	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
 	generatedopenapi "ebs-apiserver/pkg/generated/openapi"
 	iammodule "ebs-apiserver/pkg/iam"
 	"ebs-apiserver/pkg/iam/credential"
@@ -118,10 +119,10 @@ var (
 
 func init() {
 	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
-	ebsapi.AddToScheme(Scheme)
-	ebsv1.AddToScheme(Scheme)
-	iamapi.AddToScheme(Scheme)
-	iamv1.AddToScheme(Scheme)
+	utilruntime.Must(ebsapi.AddToScheme(Scheme))
+	utilruntime.Must(ebsv1.AddToScheme(Scheme))
+	utilruntime.Must(iamapi.AddToScheme(Scheme))
+	utilruntime.Must(iamv1.AddToScheme(Scheme))
 }
 
 type EulerMakerServerOptions struct {

@@ -18,7 +18,7 @@ import (
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/klog/v2"
 
-	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
+	iamv1 "ebs-api/iam/v1"
 	"ebs-apiserver/pkg/iam/credential"
 )
 

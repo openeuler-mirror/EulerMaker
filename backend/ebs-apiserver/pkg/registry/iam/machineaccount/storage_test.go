@@ -6,7 +6,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	iamv1 "ebs-apiserver/pkg/apis/iam/v1"
+	iamv1 "ebs-api/iam/v1"
 )
 
 func TestMachineAccountDefaultsAndValidation(t *testing.T) {

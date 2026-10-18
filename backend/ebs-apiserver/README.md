@@ -85,7 +85,7 @@ full、incremental、specified 构建按 Project + OS + Arch 通过 ES 原子占
 
 ## OpenAPI 代码生成
 
-修改 `../../api/ebs/v1` 或 `pkg/apis/iam/v1` 下的 API 类型后，需要重新生成 OpenAPI 定义：
+修改 `../../api/ebs/v1` 或 `../../api/iam/v1` 下的 API 类型后，需要重新生成 OpenAPI 定义：
 
 ```bash
 ./hacks/update-openapi.sh

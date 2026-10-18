@@ -40,7 +40,7 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 	}
 	client := New(upstreamClient)
 	user, status, err := client.GetUser(context.Background(), "alice")
-	if err != nil || status != http.StatusOK || user.Name != "alice" || len(user.Scopes) != 1 || user.Scopes[0] != identity.UserScope {
+	if err != nil || status != http.StatusOK || user.Name != "alice" || !user.Enabled || len(user.Scopes) != 1 || user.Scopes[0] != identity.UserScope {
 		t.Fatalf("GetUser() = %+v, %d, %v", user, status, err)
 	}
 	valid, status, err := client.AuthenticateUser(context.Background(), "alice", "password")
@@ -53,5 +53,32 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 	}
 	if got := strings.Join(paths, ", "); got != "GET /apis/iam.ebs/v1/users/alice, POST /internal/iam/v1/authenticate, POST /internal/iam/v1/machineaccounts/worker/authenticate" {
 		t.Fatalf("unexpected IAM request sequence %q", got)
+	}
+}
+
+func TestGetUserEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		spec    string
+		enabled bool
+	}{
+		{"enabled", `{"enabled":true,"scopes":["ebs:user"]}`, true},
+		{"disabled", `{"enabled":false,"scopes":["ebs:user"]}`, false},
+		{"omitted", `{"scopes":["ebs:user"]}`, false},
+		{"null", `{"enabled":null,"scopes":["ebs:user"]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := upstream.New("https://api.example", transportFunc(func(*http.Request) (*http.Response, error) {
+				body := `{"metadata":{"name":"alice"},"spec":` + tc.spec + `}`
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			user, status, err := New(client).GetUser(context.Background(), "alice")
+			if err != nil || status != http.StatusOK || user.Enabled != tc.enabled {
+				t.Fatalf("GetUser()=%+v, %d, %v", user, status, err)
+			}
+		})
 	}
 }

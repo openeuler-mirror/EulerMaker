@@ -637,7 +637,7 @@ func MergeCondition(conditions []metav1.Condition, condType string, status metav
 
 - `now` 由调用方传入本轮 `Sync` 唯一一次 `clock.Now()` 的结果；helper 内部不读取系统时间或时钟。首次插入条件或 `status` 变化时，将 `lastTransitionTime` 设置为 `metav1.NewTime(now.UTC())`；仅 reason / message / observedGeneration 变化时保留原转换时间；
 - `observedGeneration` 取 `RpmRepo.metadata.generation`；结果按 `type` 排序；所有字段无变化时返回 `changed=false` 并跳过 `/status` 写入，不能仅因传入的 `now` 不同而更新条件；
-- Type / Reason 常量复用 `api/ebs/v1/types_status.go` 中的 `RpmRepoCondition*` / `RpmRepoReason*`；Status 复用 `metav1.ConditionTrue` / `ConditionFalse`，控制器不重复定义。
+- Type / Reason 常量复用 `api/ebs/v1/status.go` 中的 `RpmRepoCondition*` / `RpmRepoReason*`；Status 复用 `metav1.ConditionTrue` / `ConditionFalse`，控制器不重复定义。
 - Type、Status、Reason 的合法组合统一见 `data-models.md` 第五章条件表；过程仓成功使用 `RepositoryCreated`，正式发布成功使用 `ReleaseActivated`。动态错误详情只进日志。
 - 时间来源：每次 `Sync` 只调用一次 `clock.Now()`，写入统一为 `metav1.NewTime(now.UTC())`；`status.repository.updatedAt` 与 `status.release.updatedAt` 仅在对应字段有效写入时更新。
 

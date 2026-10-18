@@ -31,12 +31,62 @@ import (
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
 	ebsv1 "ebs-api/ebs/v1"
+	iamv1 "ebs-api/iam/v1"
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
+	iamapi "ebs-apiserver/pkg/apis/iam"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	esclient "ebs-apiserver/pkg/storage/es"
 )
+
+func TestEBSSchemeRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		version  string
+		register func(*runtime.Scheme) error
+	}{
+		{"v1", ebsv1.AddToScheme},
+		{runtime.APIVersionInternal, ebsapi.AddToScheme},
+	} {
+		scheme := runtime.NewScheme()
+		if err := tc.register(scheme); err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []string{"Config", "Script", "Project", "Snapshot", "Build", "BuildInfo", "RpmRepo", "Job", "Runner"} {
+			for _, suffix := range []string{"", "List"} {
+				gvk := schema.GroupVersionKind{Group: ebsapi.GroupName, Version: tc.version, Kind: kind + suffix}
+				for _, registered := range []*runtime.Scheme{scheme, Scheme} {
+					if _, err := registered.New(gvk); err != nil {
+						t.Fatalf("create %s: %v", gvk, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestIAMSchemeRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		version  string
+		register func(*runtime.Scheme) error
+	}{
+		{"v1", iamv1.AddToScheme},
+		{runtime.APIVersionInternal, iamapi.AddToScheme},
+	} {
+		scheme := runtime.NewScheme()
+		if err := tc.register(scheme); err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []string{"User", "UserList", "MachineAccount", "MachineAccountList"} {
+			gvk := schema.GroupVersionKind{Group: iamapi.GroupName, Version: tc.version, Kind: kind}
+			for _, registered := range []*runtime.Scheme{scheme, Scheme} {
+				if _, err := registered.New(gvk); err != nil {
+					t.Fatalf("create %s: %v", gvk, err)
+				}
+			}
+		}
+	}
+}
 
 func TestOldJobsHTTPRoutes(t *testing.T) {
 	client := esclient.NewClientForTesting("http://es", &http.Client{Transport: confTransport(func(r *http.Request) (*http.Response, error) {
@@ -118,22 +168,22 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		return spec.MustCreateRef("#/components/schemas/" + path)
 	})
 	tests := map[string][]string{
-		"ebs-api/ebs/v1.RpmRepoRepositoryStatus":       {"repositoryUID", "contentURL"},
-		"ebs-api/ebs/v1.RpmRepoReleaseStatus":          {"phase", "contentURL"},
-		"ebs-api/ebs/v1.PackageRepo":                   {"name", "url", "ref"},
-		"ebs-api/ebs/v1.BuildSpec":                     {"buildTarget", "packages"},
-		"ebs-api/ebs/v1.BuildInfoSpec":                 {"bootstrapRepo", "buildPayload"},
-		"ebs-api/ebs/v1.BuildInfoStatus":               {"failedPackages"},
-		"ebs-api/ebs/v1.BaseBuildRef":                  {"name"},
-		"ebs-api/ebs/v1.BuildStatus":                   {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
-		"ebs-api/ebs/v1.ProjectSpec":                   {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
-		"ebs-api/ebs/v1.BuildResourceContent":          {"default", "packages"},
-		"ebs-api/ebs/v1.PackageResourceConfig":         {"default", "arches"},
-		"ebs-api/ebs/v1.JobSpec":                       {"priority", "runtime", "runtimeSpec", "payload"},
-		"ebs-api/ebs/v1.SnapshotStatus":                {"phase", "conditions"},
-		"ebs-api/ebs/v1.RunnerStatus":                  {"phase", "capacity", "heartbeat"},
-		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":       {"enabled", "scopes", "email"},
-		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount": {"apiVersion", "kind", "metadata", "spec"},
+		"ebs-api/ebs/v1.RpmRepoRepositoryStatus": {"repositoryUID", "contentURL"},
+		"ebs-api/ebs/v1.RpmRepoReleaseStatus":    {"phase", "contentURL"},
+		"ebs-api/ebs/v1.PackageRepo":             {"name", "url", "ref"},
+		"ebs-api/ebs/v1.BuildSpec":               {"buildTarget", "packages"},
+		"ebs-api/ebs/v1.BuildInfoSpec":           {"bootstrapRepo", "buildPayload"},
+		"ebs-api/ebs/v1.BuildInfoStatus":         {"failedPackages"},
+		"ebs-api/ebs/v1.BaseBuildRef":            {"name"},
+		"ebs-api/ebs/v1.BuildStatus":             {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
+		"ebs-api/ebs/v1.ProjectSpec":             {"displayName", "buildTargets", "packageRepos", "bootstrapRepo"},
+		"ebs-api/ebs/v1.BuildResourceContent":    {"default", "packages"},
+		"ebs-api/ebs/v1.PackageResourceConfig":   {"default", "arches"},
+		"ebs-api/ebs/v1.JobSpec":                 {"priority", "runtime", "runtimeSpec", "payload"},
+		"ebs-api/ebs/v1.SnapshotStatus":          {"phase", "conditions"},
+		"ebs-api/ebs/v1.RunnerStatus":            {"phase", "capacity", "heartbeat"},
+		"ebs-api/iam/v1.UserSpec":                {"enabled", "scopes", "email"},
+		"ebs-api/iam/v1.MachineAccount":          {"apiVersion", "kind", "metadata", "spec"},
 	}
 	for name, fields := range tests {
 		definition, ok := definitions[name]

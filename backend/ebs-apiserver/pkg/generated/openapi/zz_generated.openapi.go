@@ -14,81 +14,81 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"ebs-api/ebs/v1.ArtifactManagerContent":            schema_ebs_api_ebs_v1_ArtifactManagerContent(ref),
-		"ebs-api/ebs/v1.ArtifactManagerInstance":           schema_ebs_api_ebs_v1_ArtifactManagerInstance(ref),
-		"ebs-api/ebs/v1.BaseBuildRef":                      schema_ebs_api_ebs_v1_BaseBuildRef(ref),
-		"ebs-api/ebs/v1.BootstrapRepo":                     schema_ebs_api_ebs_v1_BootstrapRepo(ref),
-		"ebs-api/ebs/v1.Build":                             schema_ebs_api_ebs_v1_Build(ref),
-		"ebs-api/ebs/v1.BuildInfo":                         schema_ebs_api_ebs_v1_BuildInfo(ref),
-		"ebs-api/ebs/v1.BuildInfoList":                     schema_ebs_api_ebs_v1_BuildInfoList(ref),
-		"ebs-api/ebs/v1.BuildInfoSpec":                     schema_ebs_api_ebs_v1_BuildInfoSpec(ref),
-		"ebs-api/ebs/v1.BuildInfoStatus":                   schema_ebs_api_ebs_v1_BuildInfoStatus(ref),
-		"ebs-api/ebs/v1.BuildList":                         schema_ebs_api_ebs_v1_BuildList(ref),
-		"ebs-api/ebs/v1.BuildResourceContent":              schema_ebs_api_ebs_v1_BuildResourceContent(ref),
-		"ebs-api/ebs/v1.BuildSpec":                         schema_ebs_api_ebs_v1_BuildSpec(ref),
-		"ebs-api/ebs/v1.BuildStatus":                       schema_ebs_api_ebs_v1_BuildStatus(ref),
-		"ebs-api/ebs/v1.BuildTarget":                       schema_ebs_api_ebs_v1_BuildTarget(ref),
-		"ebs-api/ebs/v1.BuildTargetArch":                   schema_ebs_api_ebs_v1_BuildTargetArch(ref),
-		"ebs-api/ebs/v1.BuildTargetConfigEntry":            schema_ebs_api_ebs_v1_BuildTargetConfigEntry(ref),
-		"ebs-api/ebs/v1.BuildTargetContent":                schema_ebs_api_ebs_v1_BuildTargetContent(ref),
-		"ebs-api/ebs/v1.Config":                            schema_ebs_api_ebs_v1_Config(ref),
-		"ebs-api/ebs/v1.ConfigList":                        schema_ebs_api_ebs_v1_ConfigList(ref),
-		"ebs-api/ebs/v1.ConfigSpec":                        schema_ebs_api_ebs_v1_ConfigSpec(ref),
-		"ebs-api/ebs/v1.DcgNodeState":                      schema_ebs_api_ebs_v1_DcgNodeState(ref),
-		"ebs-api/ebs/v1.GitRef":                            schema_ebs_api_ebs_v1_GitRef(ref),
-		"ebs-api/ebs/v1.Job":                               schema_ebs_api_ebs_v1_Job(ref),
-		"ebs-api/ebs/v1.JobBuildResult":                    schema_ebs_api_ebs_v1_JobBuildResult(ref),
-		"ebs-api/ebs/v1.JobInstallResult":                  schema_ebs_api_ebs_v1_JobInstallResult(ref),
-		"ebs-api/ebs/v1.JobList":                           schema_ebs_api_ebs_v1_JobList(ref),
-		"ebs-api/ebs/v1.JobSpec":                           schema_ebs_api_ebs_v1_JobSpec(ref),
-		"ebs-api/ebs/v1.JobStatus":                         schema_ebs_api_ebs_v1_JobStatus(ref),
-		"ebs-api/ebs/v1.MissingDep":                        schema_ebs_api_ebs_v1_MissingDep(ref),
-		"ebs-api/ebs/v1.PackageRepo":                       schema_ebs_api_ebs_v1_PackageRepo(ref),
-		"ebs-api/ebs/v1.PackageRepoStatus":                 schema_ebs_api_ebs_v1_PackageRepoStatus(ref),
-		"ebs-api/ebs/v1.PackageResourceConfig":             schema_ebs_api_ebs_v1_PackageResourceConfig(ref),
-		"ebs-api/ebs/v1.PendingJobCreate":                  schema_ebs_api_ebs_v1_PendingJobCreate(ref),
-		"ebs-api/ebs/v1.Project":                           schema_ebs_api_ebs_v1_Project(ref),
-		"ebs-api/ebs/v1.ProjectList":                       schema_ebs_api_ebs_v1_ProjectList(ref),
-		"ebs-api/ebs/v1.ProjectSpec":                       schema_ebs_api_ebs_v1_ProjectSpec(ref),
-		"ebs-api/ebs/v1.ProjectStatus":                     schema_ebs_api_ebs_v1_ProjectStatus(ref),
-		"ebs-api/ebs/v1.ReleaseTransition":                 schema_ebs_api_ebs_v1_ReleaseTransition(ref),
-		"ebs-api/ebs/v1.RepositoryInput":                   schema_ebs_api_ebs_v1_RepositoryInput(ref),
-		"ebs-api/ebs/v1.RepositoryTransition":              schema_ebs_api_ebs_v1_RepositoryTransition(ref),
-		"ebs-api/ebs/v1.ResourceRequirements":              schema_ebs_api_ebs_v1_ResourceRequirements(ref),
-		"ebs-api/ebs/v1.RpmRepo":                           schema_ebs_api_ebs_v1_RpmRepo(ref),
-		"ebs-api/ebs/v1.RpmRepoList":                       schema_ebs_api_ebs_v1_RpmRepoList(ref),
-		"ebs-api/ebs/v1.RpmRepoReleaseStatus":              schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref),
-		"ebs-api/ebs/v1.RpmRepoRepositoryStatus":           schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref),
-		"ebs-api/ebs/v1.RpmRepoSpec":                       schema_ebs_api_ebs_v1_RpmRepoSpec(ref),
-		"ebs-api/ebs/v1.RpmRepoStatus":                     schema_ebs_api_ebs_v1_RpmRepoStatus(ref),
-		"ebs-api/ebs/v1.Runner":                            schema_ebs_api_ebs_v1_Runner(ref),
-		"ebs-api/ebs/v1.RunnerAddress":                     schema_ebs_api_ebs_v1_RunnerAddress(ref),
-		"ebs-api/ebs/v1.RunnerInfo":                        schema_ebs_api_ebs_v1_RunnerInfo(ref),
-		"ebs-api/ebs/v1.RunnerList":                        schema_ebs_api_ebs_v1_RunnerList(ref),
-		"ebs-api/ebs/v1.RunnerSpec":                        schema_ebs_api_ebs_v1_RunnerSpec(ref),
-		"ebs-api/ebs/v1.RunnerStatus":                      schema_ebs_api_ebs_v1_RunnerStatus(ref),
-		"ebs-api/ebs/v1.RunnerTaint":                       schema_ebs_api_ebs_v1_RunnerTaint(ref),
-		"ebs-api/ebs/v1.Script":                            schema_ebs_api_ebs_v1_Script(ref),
-		"ebs-api/ebs/v1.ScriptList":                        schema_ebs_api_ebs_v1_ScriptList(ref),
-		"ebs-api/ebs/v1.ScriptRef":                         schema_ebs_api_ebs_v1_ScriptRef(ref),
-		"ebs-api/ebs/v1.ScriptSpec":                        schema_ebs_api_ebs_v1_ScriptSpec(ref),
-		"ebs-api/ebs/v1.Snapshot":                          schema_ebs_api_ebs_v1_Snapshot(ref),
-		"ebs-api/ebs/v1.SnapshotList":                      schema_ebs_api_ebs_v1_SnapshotList(ref),
-		"ebs-api/ebs/v1.SnapshotSpec":                      schema_ebs_api_ebs_v1_SnapshotSpec(ref),
-		"ebs-api/ebs/v1.SnapshotStatus":                    schema_ebs_api_ebs_v1_SnapshotStatus(ref),
-		"ebs-api/ebs/v1.SpecBuildStatus":                   schema_ebs_api_ebs_v1_SpecBuildStatus(ref),
-		"ebs-api/ebs/v1.SpecCommitError":                   schema_ebs_api_ebs_v1_SpecCommitError(ref),
-		"ebs-api/ebs/v1.SpecInstallStatus":                 schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
-		"ebs-api/ebs/v1.SpecStatus":                        schema_ebs_api_ebs_v1_SpecStatus(ref),
-		"ebs-api/ebs/v1.SpecStatusGroup":                   schema_ebs_api_ebs_v1_SpecStatusGroup(ref),
-		"ebs-api/ebs/v1.Toleration":                        schema_ebs_api_ebs_v1_Toleration(ref),
-		"ebs-api/ebs/v1.VersionConst":                      schema_ebs_api_ebs_v1_VersionConst(ref),
-		"ebs-apiserver/pkg/apis/iam/v1.MachineAccount":     schema_pkg_apis_iam_v1_MachineAccount(ref),
-		"ebs-apiserver/pkg/apis/iam/v1.MachineAccountList": schema_pkg_apis_iam_v1_MachineAccountList(ref),
-		"ebs-apiserver/pkg/apis/iam/v1.MachineAccountSpec": schema_pkg_apis_iam_v1_MachineAccountSpec(ref),
-		"ebs-apiserver/pkg/apis/iam/v1.User":               schema_pkg_apis_iam_v1_User(ref),
-		"ebs-apiserver/pkg/apis/iam/v1.UserList":           schema_pkg_apis_iam_v1_UserList(ref),
-		"ebs-apiserver/pkg/apis/iam/v1.UserSpec":           schema_pkg_apis_iam_v1_UserSpec(ref),
+		"ebs-api/ebs/v1.ArtifactManagerContent":  schema_ebs_api_ebs_v1_ArtifactManagerContent(ref),
+		"ebs-api/ebs/v1.ArtifactManagerInstance": schema_ebs_api_ebs_v1_ArtifactManagerInstance(ref),
+		"ebs-api/ebs/v1.BaseBuildRef":            schema_ebs_api_ebs_v1_BaseBuildRef(ref),
+		"ebs-api/ebs/v1.BootstrapRepo":           schema_ebs_api_ebs_v1_BootstrapRepo(ref),
+		"ebs-api/ebs/v1.Build":                   schema_ebs_api_ebs_v1_Build(ref),
+		"ebs-api/ebs/v1.BuildInfo":               schema_ebs_api_ebs_v1_BuildInfo(ref),
+		"ebs-api/ebs/v1.BuildInfoList":           schema_ebs_api_ebs_v1_BuildInfoList(ref),
+		"ebs-api/ebs/v1.BuildInfoSpec":           schema_ebs_api_ebs_v1_BuildInfoSpec(ref),
+		"ebs-api/ebs/v1.BuildInfoStatus":         schema_ebs_api_ebs_v1_BuildInfoStatus(ref),
+		"ebs-api/ebs/v1.BuildList":               schema_ebs_api_ebs_v1_BuildList(ref),
+		"ebs-api/ebs/v1.BuildResourceContent":    schema_ebs_api_ebs_v1_BuildResourceContent(ref),
+		"ebs-api/ebs/v1.BuildSpec":               schema_ebs_api_ebs_v1_BuildSpec(ref),
+		"ebs-api/ebs/v1.BuildStatus":             schema_ebs_api_ebs_v1_BuildStatus(ref),
+		"ebs-api/ebs/v1.BuildTarget":             schema_ebs_api_ebs_v1_BuildTarget(ref),
+		"ebs-api/ebs/v1.BuildTargetArch":         schema_ebs_api_ebs_v1_BuildTargetArch(ref),
+		"ebs-api/ebs/v1.BuildTargetConfigEntry":  schema_ebs_api_ebs_v1_BuildTargetConfigEntry(ref),
+		"ebs-api/ebs/v1.BuildTargetContent":      schema_ebs_api_ebs_v1_BuildTargetContent(ref),
+		"ebs-api/ebs/v1.Config":                  schema_ebs_api_ebs_v1_Config(ref),
+		"ebs-api/ebs/v1.ConfigList":              schema_ebs_api_ebs_v1_ConfigList(ref),
+		"ebs-api/ebs/v1.ConfigSpec":              schema_ebs_api_ebs_v1_ConfigSpec(ref),
+		"ebs-api/ebs/v1.DcgNodeState":            schema_ebs_api_ebs_v1_DcgNodeState(ref),
+		"ebs-api/ebs/v1.GitRef":                  schema_ebs_api_ebs_v1_GitRef(ref),
+		"ebs-api/ebs/v1.Job":                     schema_ebs_api_ebs_v1_Job(ref),
+		"ebs-api/ebs/v1.JobBuildResult":          schema_ebs_api_ebs_v1_JobBuildResult(ref),
+		"ebs-api/ebs/v1.JobInstallResult":        schema_ebs_api_ebs_v1_JobInstallResult(ref),
+		"ebs-api/ebs/v1.JobList":                 schema_ebs_api_ebs_v1_JobList(ref),
+		"ebs-api/ebs/v1.JobSpec":                 schema_ebs_api_ebs_v1_JobSpec(ref),
+		"ebs-api/ebs/v1.JobStatus":               schema_ebs_api_ebs_v1_JobStatus(ref),
+		"ebs-api/ebs/v1.MissingDep":              schema_ebs_api_ebs_v1_MissingDep(ref),
+		"ebs-api/ebs/v1.PackageRepo":             schema_ebs_api_ebs_v1_PackageRepo(ref),
+		"ebs-api/ebs/v1.PackageRepoStatus":       schema_ebs_api_ebs_v1_PackageRepoStatus(ref),
+		"ebs-api/ebs/v1.PackageResourceConfig":   schema_ebs_api_ebs_v1_PackageResourceConfig(ref),
+		"ebs-api/ebs/v1.PendingJobCreate":        schema_ebs_api_ebs_v1_PendingJobCreate(ref),
+		"ebs-api/ebs/v1.Project":                 schema_ebs_api_ebs_v1_Project(ref),
+		"ebs-api/ebs/v1.ProjectList":             schema_ebs_api_ebs_v1_ProjectList(ref),
+		"ebs-api/ebs/v1.ProjectSpec":             schema_ebs_api_ebs_v1_ProjectSpec(ref),
+		"ebs-api/ebs/v1.ProjectStatus":           schema_ebs_api_ebs_v1_ProjectStatus(ref),
+		"ebs-api/ebs/v1.ReleaseTransition":       schema_ebs_api_ebs_v1_ReleaseTransition(ref),
+		"ebs-api/ebs/v1.RepositoryInput":         schema_ebs_api_ebs_v1_RepositoryInput(ref),
+		"ebs-api/ebs/v1.RepositoryTransition":    schema_ebs_api_ebs_v1_RepositoryTransition(ref),
+		"ebs-api/ebs/v1.ResourceRequirements":    schema_ebs_api_ebs_v1_ResourceRequirements(ref),
+		"ebs-api/ebs/v1.RpmRepo":                 schema_ebs_api_ebs_v1_RpmRepo(ref),
+		"ebs-api/ebs/v1.RpmRepoList":             schema_ebs_api_ebs_v1_RpmRepoList(ref),
+		"ebs-api/ebs/v1.RpmRepoReleaseStatus":    schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref),
+		"ebs-api/ebs/v1.RpmRepoRepositoryStatus": schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref),
+		"ebs-api/ebs/v1.RpmRepoSpec":             schema_ebs_api_ebs_v1_RpmRepoSpec(ref),
+		"ebs-api/ebs/v1.RpmRepoStatus":           schema_ebs_api_ebs_v1_RpmRepoStatus(ref),
+		"ebs-api/ebs/v1.Runner":                  schema_ebs_api_ebs_v1_Runner(ref),
+		"ebs-api/ebs/v1.RunnerAddress":           schema_ebs_api_ebs_v1_RunnerAddress(ref),
+		"ebs-api/ebs/v1.RunnerInfo":              schema_ebs_api_ebs_v1_RunnerInfo(ref),
+		"ebs-api/ebs/v1.RunnerList":              schema_ebs_api_ebs_v1_RunnerList(ref),
+		"ebs-api/ebs/v1.RunnerSpec":              schema_ebs_api_ebs_v1_RunnerSpec(ref),
+		"ebs-api/ebs/v1.RunnerStatus":            schema_ebs_api_ebs_v1_RunnerStatus(ref),
+		"ebs-api/ebs/v1.RunnerTaint":             schema_ebs_api_ebs_v1_RunnerTaint(ref),
+		"ebs-api/ebs/v1.Script":                  schema_ebs_api_ebs_v1_Script(ref),
+		"ebs-api/ebs/v1.ScriptList":              schema_ebs_api_ebs_v1_ScriptList(ref),
+		"ebs-api/ebs/v1.ScriptRef":               schema_ebs_api_ebs_v1_ScriptRef(ref),
+		"ebs-api/ebs/v1.ScriptSpec":              schema_ebs_api_ebs_v1_ScriptSpec(ref),
+		"ebs-api/ebs/v1.Snapshot":                schema_ebs_api_ebs_v1_Snapshot(ref),
+		"ebs-api/ebs/v1.SnapshotList":            schema_ebs_api_ebs_v1_SnapshotList(ref),
+		"ebs-api/ebs/v1.SnapshotSpec":            schema_ebs_api_ebs_v1_SnapshotSpec(ref),
+		"ebs-api/ebs/v1.SnapshotStatus":          schema_ebs_api_ebs_v1_SnapshotStatus(ref),
+		"ebs-api/ebs/v1.SpecBuildStatus":         schema_ebs_api_ebs_v1_SpecBuildStatus(ref),
+		"ebs-api/ebs/v1.SpecCommitError":         schema_ebs_api_ebs_v1_SpecCommitError(ref),
+		"ebs-api/ebs/v1.SpecInstallStatus":       schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
+		"ebs-api/ebs/v1.SpecStatus":              schema_ebs_api_ebs_v1_SpecStatus(ref),
+		"ebs-api/ebs/v1.SpecStatusGroup":         schema_ebs_api_ebs_v1_SpecStatusGroup(ref),
+		"ebs-api/ebs/v1.Toleration":              schema_ebs_api_ebs_v1_Toleration(ref),
+		"ebs-api/ebs/v1.VersionConst":            schema_ebs_api_ebs_v1_VersionConst(ref),
+		"ebs-api/iam/v1.MachineAccount":          schema_ebs_api_iam_v1_MachineAccount(ref),
+		"ebs-api/iam/v1.MachineAccountList":      schema_ebs_api_iam_v1_MachineAccountList(ref),
+		"ebs-api/iam/v1.MachineAccountSpec":      schema_ebs_api_iam_v1_MachineAccountSpec(ref),
+		"ebs-api/iam/v1.User":                    schema_ebs_api_iam_v1_User(ref),
+		"ebs-api/iam/v1.UserList":                schema_ebs_api_iam_v1_UserList(ref),
+		"ebs-api/iam/v1.UserSpec":                schema_ebs_api_iam_v1_UserSpec(ref),
 	}
 }
 
@@ -2940,7 +2940,7 @@ func schema_ebs_api_ebs_v1_VersionConst(ref common.ReferenceCallback) common.Ope
 	}
 }
 
-func schema_pkg_apis_iam_v1_MachineAccount(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_iam_v1_MachineAccount(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2969,18 +2969,18 @@ func schema_pkg_apis_iam_v1_MachineAccount(ref common.ReferenceCallback) common.
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("ebs-apiserver/pkg/apis/iam/v1.MachineAccountSpec"),
+							Ref:     ref("ebs-api/iam/v1.MachineAccountSpec"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-apiserver/pkg/apis/iam/v1.MachineAccountSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"ebs-api/iam/v1.MachineAccountSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
 	}
 }
 
-func schema_pkg_apis_iam_v1_MachineAccountList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_iam_v1_MachineAccountList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3013,7 +3013,7 @@ func schema_pkg_apis_iam_v1_MachineAccountList(ref common.ReferenceCallback) com
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-apiserver/pkg/apis/iam/v1.MachineAccount"),
+										Ref:     ref("ebs-api/iam/v1.MachineAccount"),
 									},
 								},
 							},
@@ -3024,11 +3024,11 @@ func schema_pkg_apis_iam_v1_MachineAccountList(ref common.ReferenceCallback) com
 			},
 		},
 		Dependencies: []string{
-			"ebs-apiserver/pkg/apis/iam/v1.MachineAccount", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"ebs-api/iam/v1.MachineAccount", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
 	}
 }
 
-func schema_pkg_apis_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3046,7 +3046,7 @@ func schema_pkg_apis_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) com
 	}
 }
 
-func schema_pkg_apis_iam_v1_User(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_iam_v1_User(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3075,18 +3075,18 @@ func schema_pkg_apis_iam_v1_User(ref common.ReferenceCallback) common.OpenAPIDef
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("ebs-apiserver/pkg/apis/iam/v1.UserSpec"),
+							Ref:     ref("ebs-api/iam/v1.UserSpec"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-apiserver/pkg/apis/iam/v1.UserSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"ebs-api/iam/v1.UserSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
 	}
 }
 
-func schema_pkg_apis_iam_v1_UserList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_iam_v1_UserList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3119,7 +3119,7 @@ func schema_pkg_apis_iam_v1_UserList(ref common.ReferenceCallback) common.OpenAP
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-apiserver/pkg/apis/iam/v1.User"),
+										Ref:     ref("ebs-api/iam/v1.User"),
 									},
 								},
 							},
@@ -3130,11 +3130,11 @@ func schema_pkg_apis_iam_v1_UserList(ref common.ReferenceCallback) common.OpenAP
 			},
 		},
 		Dependencies: []string{
-			"ebs-apiserver/pkg/apis/iam/v1.User", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+			"ebs-api/iam/v1.User", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
 	}
 }
 
-func schema_pkg_apis_iam_v1_UserSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_iam_v1_UserSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{

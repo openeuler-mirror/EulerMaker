@@ -458,7 +458,7 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 		case "/apis/iam.ebs/v1/users/admin":
 			body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
 		case "/apis/iam.ebs/v1/users":
-			body = `{"items":[{"metadata":{"name":"admin"},"spec":{"scopes":["ebs:admin"]}},{"metadata":{"name":"alice"},"spec":{"scopes":["ebs:user"]}}]}`
+			body = `{"apiVersion":"iam.ebs/v1","kind":"UserList","metadata":{"continue":"next-page","resourceVersion":"42"},"items":[{"metadata":{"name":"admin"},"spec":{"scopes":["ebs:admin"]}},{"metadata":{"name":"alice"},"spec":{"scopes":["ebs:user"],"displayName":"Alice"}}]}`
 		default:
 			t.Fatalf("unexpected path %s", request.URL.Path)
 		}
@@ -474,6 +474,11 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 	api.Router().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), `"name":"admin"`) || !strings.Contains(response.Body.String(), `"name":"alice"`) {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	for _, field := range []string{`"apiVersion":"iam.ebs/v1"`, `"kind":"UserList"`, `"continue":"next-page"`, `"resourceVersion":"42"`, `"displayName":"Alice"`} {
+		if !strings.Contains(response.Body.String(), field) {
+			t.Fatalf("missing %s in response: %s", field, response.Body.String())
+		}
 	}
 }
 
