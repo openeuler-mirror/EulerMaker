@@ -562,7 +562,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 ## 非 single Build 的 ES 目标占用
 
-apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进程内锁或 etcd。Build Controller 更新 Build 状态，并在 incremental 的 Pending 阶段固化 `spec.packages`；不读写占用索引。占用编排和恢复位于 `pkg/registry/ebs/build/claims_*.go`，底层复用 `pkg/storage/es` 的 create-only、实时 GET、CAS 与 PIT 扫描能力。
+apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进程内锁或 etcd。Build Controller 更新 Build 状态，并在 incremental 的 Pending 阶段固化 `spec.packages`；不读写占用索引。占用编排和恢复位于 `pkg/registry/ebs/build/claims.go`，底层复用 `pkg/storage/es` 的 create-only、实时 GET、CAS 与 PIT 扫描能力。
 
 创建准入中的最新非 single Build 查询保留创建时间排序、`Limit=1`，只返回 `data.metadata.name` 和 `data.status.phase`。成功 full Build 的存在性检查使用内部 `ESStore.Exists`，复用 List 的 Project、labelSelector 和 fieldSelector 转换；发送单次普通 `_search`，设置 `size=1`、`_source=false`、`track_total_hits=false`，不创建 PIT、不排序、不解码 Build 对象。根据 hits 是否为空判断存在性；查询超时、分片失败或响应不完整按错误返回，不当作不存在。这些优化不改变准入条件、Mapping 或对外 API。
 
@@ -638,7 +638,7 @@ dry-run 只检查现有占用和历史门禁，不创建占用、不写 Build，
 
 ### 实现边界与验证
 
-- `pkg/storage/es` 提供内部索引 mapping、alias 校验及 create-only、实时 GET、CAS 更新/删除、分页扫描；`claims_store.go` 封装占用记录与原始 ES 版本，与公共 EBS 资源隔离。
+- `pkg/storage/es` 提供内部索引 mapping、alias 校验及 create-only、实时 GET、CAS 更新/删除、分页扫描；`claims.go` 封装占用记录与原始 ES 版本，与公共 EBS 资源隔离。
 - Build 创建编排统一封装在 build storage，拆开本地校验与最终持久化，避免校验/admission 被重复执行；本地目标锁可移除，或仅作为减少竞争的优化，不参与正确性证明。
 - 终态与删除释放使用持久化成功后的回调，不能复用“删除前必须成功”的清理 hook；扫描器由 server 生命周期管理。Build Controller 不新增 ES 权限或释放调用。
 - 测试至少覆盖：两个 apiserver 同目标同时创建仅一方成功、不同目标并行、single 绕过、缺失 buildType 拒绝、dry-run 无写入、历史门禁拒绝、各步骤崩溃与 Unknown、迟到写入不误释放、Reserved 清理与 Creating CAS 竞争、终态不可回退、删除前置条件失败不释放、释放 CAS 防误删、多实例重复扫描和重启恢复。
