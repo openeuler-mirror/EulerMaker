@@ -162,7 +162,7 @@ func (s coordinationBuilds) Exists(ctx context.Context, opts *internalversion.Li
 	return len(obj.(*ebsv1.BuildList).Items) != 0, nil
 }
 
-func testManager(f *coordinationFake) *claimManager {
+func testManager(f *coordinationFake) *ClaimManager {
 	s := coordinationBuilds{f: f}
 	return newClaimManager(f, s, s)
 }
@@ -187,9 +187,9 @@ func TestClaimConcurrentServers(t *testing.T) {
 	m1, m2 := testManager(f), testManager(f)
 	start := make(chan struct{})
 	results := make(chan error, 2)
-	for i, m := range []*claimManager{m1, m2} {
+	for i, m := range []*ClaimManager{m1, m2} {
 		b := testBuild([]string{"a", "b"}[i], "full")
-		go func(m *claimManager, b *ebsv1.Build) {
+		go func(m *ClaimManager, b *ebsv1.Build) {
 			<-start
 			_, err := m.create(context.Background(), b, false, f.persist(b))
 			results <- err
@@ -614,7 +614,7 @@ func TestClaimDryRunOccupiedAndCanceledRecovery(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	m.run(ctx)
+	m.Run(ctx)
 	if len(f.docs) != before {
 		t.Fatal("canceled recovery changed reservations")
 	}

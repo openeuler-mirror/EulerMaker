@@ -297,7 +297,7 @@ func Run(stopCh <-chan struct{}) error {
 func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.Client, enableIAM bool) (*genericapiserver.GenericAPIServer, error) {
 	completedConfig := config.Complete()
 
-	apiGroupInfo, err := CreateAPIGroupInfo(completedConfig.RESTOptionsGetter, esClient)
+	apiGroupInfo, buildClaims, err := CreateAPIGroupInfo(completedConfig.RESTOptionsGetter, esClient)
 	if err != nil {
 		return nil, err
 	}
@@ -310,11 +310,10 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 	if err := srv.InstallAPIGroup(apiGroupInfo); err != nil {
 		return nil, err
 	}
-	buildCoordination := apiGroupInfo.VersionedResourcesStorageMap["v1"]["builds"].(*buildstore.CreateStorage)
 	if err := srv.AddPostStartHook("build-target-claim-recovery", func(hook genericapiserver.PostStartHookContext) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() { <-hook.StopCh; cancel() }()
-		go buildCoordination.RunRecovery(ctx)
+		go buildClaims.Run(ctx)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -353,7 +352,7 @@ func CreateIAMAPIGroupInfo(esClient *es.Client) (*genericapiserver.APIGroupInfo,
 	return &apiGroupInfo, userES, machineES
 }
 
-func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *es.Client) (*genericapiserver.APIGroupInfo, error) {
+func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *es.Client) (*genericapiserver.APIGroupInfo, *buildstore.ClaimManager, error) {
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(
 		ebsapi.GroupName,
 		Scheme,
@@ -384,7 +383,8 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	buildES := esstore.New(esClient, "build", "Build", buildStorage.Build.(*genericregistry.Store))
 	buildES.SetCreateHook(buildstore.ValidateBuildTargetConfig(newConfigStore(esClient), buildstore.ValidateProjectPackages(projectES)))
 	buildStatusES := esstore.NewStatus(buildES, buildStorage.Status.(*genericregistry.Store))
-	v1Storage["builds"] = buildstore.NewCreateStorage(buildES, esClient)
+	buildClaims := buildstore.NewClaimManager(buildES, esClient)
+	v1Storage["builds"] = buildES
 	v1Storage["builds/status"] = buildStatusES
 	v1Storage["builds/abort"] = buildstore.NewAbortStorage(buildES, buildStatusES)
 
@@ -400,7 +400,7 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 	jobStorage := jobstore.NewStorage(Scheme)
 	if err := jobStorage.CompleteWithOptions(storeOptions); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	v1Storage["jobs"] = jobStorage.Job
 	v1Storage["jobs/status"] = jobStorage.Status
@@ -411,14 +411,14 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 
 	runnerStorage := runnerstore.NewStorage(Scheme)
 	if err := runnerStorage.CompleteWithOptions(storeOptions); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	v1Storage["runners"] = runnerStorage.Runner
 	v1Storage["runners/status"] = runnerStorage.Status
 
 	apiGroupInfo.VersionedResourcesStorageMap["v1"] = v1Storage
 
-	return &apiGroupInfo, nil
+	return &apiGroupInfo, buildClaims, nil
 }
 
 func newConfigStore(client *es.Client) *esstore.Store {

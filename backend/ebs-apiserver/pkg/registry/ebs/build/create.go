@@ -18,21 +18,6 @@ import (
 	"ebs-apiserver/pkg/storage/esstore"
 )
 
-// CreateStorage exposes normal Build storage and owns its coordination service.
-type CreateStorage struct {
-	*esstore.Store
-	claims *claimManager
-}
-
-func NewCreateStorage(store *esstore.Store, backend coordinationBackend) *CreateStorage {
-	manager := newClaimManager(backend, store, store)
-	store.SetCreateTransaction(manager.create)
-	store.SetAfterWrite(manager.afterWrite)
-	return &CreateStorage{Store: store, claims: manager}
-}
-
-func (s *CreateStorage) RunRecovery(ctx context.Context) { s.claims.run(ctx) }
-
 func limitedBuild(build *ebsv1.Build) bool {
 	switch build.Spec.BuildType {
 	case "", "full", "incremental", "specified":
