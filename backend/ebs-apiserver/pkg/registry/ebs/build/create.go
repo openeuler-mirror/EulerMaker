@@ -10,10 +10,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/selection"
+	request "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"sigs.k8s.io/yaml"
 
 	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/apis/ebs/validation"
 	"ebs-apiserver/pkg/storage/es"
 	"ebs-apiserver/pkg/storage/esstore"
 )
@@ -82,4 +86,60 @@ func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *
 		Message:  "No complete full build exists yet for this project and target",
 		Code:     http.StatusPreconditionFailed,
 	}}
+}
+
+func ValidateBuildTargetConfig(configs rest.Getter, next rest.ValidateObjectFunc) rest.ValidateObjectFunc {
+	return func(ctx context.Context, obj runtime.Object) error {
+		build := obj.(*ebsv1.Build)
+		configuration, err := configs.Get(request.WithNamespace(ctx, ""), ebsv1.BuildTargetConfigName, &metav1.GetOptions{})
+		if err != nil {
+			return apierrors.NewServiceUnavailable("build-target Config is unavailable")
+		}
+		conf, ok := configuration.(*ebsv1.Config)
+		if !ok || conf == nil {
+			return apierrors.NewServiceUnavailable("invalid build-target Config response")
+		}
+		var content ebsv1.BuildTargetContent
+		if err := yaml.UnmarshalStrict([]byte(conf.Spec.Content), &content); err != nil {
+			return apierrors.NewServiceUnavailable("invalid build-target Config content")
+		}
+		if errs := validation.ValidateBuildTarget(build, &content); len(errs) > 0 {
+			return apierrors.NewInvalid(ebsv1.Kind("Build"), build.Name, errs)
+		}
+		if next != nil {
+			return next(ctx, obj)
+		}
+		return nil
+	}
+}
+
+// ValidateProjectPackages checks requested packages against the current Project.
+// Project changes after creation are still handled by the snapshot controller.
+func ValidateProjectPackages(projects rest.Getter) rest.ValidateObjectFunc {
+	return func(ctx context.Context, obj runtime.Object) error {
+		build, ok := obj.(*ebsv1.Build)
+		if !ok || build == nil {
+			return apierrors.NewInternalError(fmt.Errorf("expected Build, got %T", obj))
+		}
+		if build.Spec.BuildType != "single" && build.Spec.BuildType != "specified" {
+			return nil
+		}
+		project, ok := request.NamespaceFrom(ctx)
+		if !ok || project == "" {
+			return apierrors.NewBadRequest("project namespace is required")
+		}
+		// Projects are cluster-scoped; never carry the Build namespace into their GET.
+		parent, err := projects.Get(request.WithNamespace(ctx, ""), project, &metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		p, ok := parent.(*ebsv1.Project)
+		if !ok || p == nil {
+			return apierrors.NewInternalError(fmt.Errorf("expected Project, got %T", parent))
+		}
+		if errs := validation.ValidateBuildPackages(build, p); len(errs) > 0 {
+			return apierrors.NewInvalid(ebsv1.Kind("Build"), build.Name, errs)
+		}
+		return nil
+	}
 }

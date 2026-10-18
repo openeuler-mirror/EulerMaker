@@ -46,6 +46,29 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	return allErrs
 }
 
+func ValidateBuildTarget(build *ebsv1.Build, content *ebsv1.BuildTargetContent) field.ErrorList {
+	if _, exists := content.Targets[build.Spec.BuildTarget.Os].Arches[build.Spec.BuildTarget.Arch]; !exists {
+		return field.ErrorList{field.Invalid(field.NewPath("spec", "buildTarget"), build.Spec.BuildTarget,
+			"target is not configured in build-target Config")}
+	}
+	return nil
+}
+
+func ValidateBuildPackages(build *ebsv1.Build, project *ebsv1.Project) field.ErrorList {
+	names := make(map[string]struct{}, len(project.Spec.PackageRepos))
+	for _, repo := range project.Spec.PackageRepos {
+		names[repo.Name] = struct{}{}
+	}
+	var errs field.ErrorList
+	for i, name := range build.Spec.Packages {
+		if _, exists := names[name]; !exists {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "packages").Index(i), name,
+				"package does not exist in Project.spec.packageRepos"))
+		}
+	}
+	return errs
+}
+
 func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	allErrs := ValidateBuild(newObj)
 	if !apiequality.Semantic.DeepEqual(newObj.Spec, oldObj.Spec) {

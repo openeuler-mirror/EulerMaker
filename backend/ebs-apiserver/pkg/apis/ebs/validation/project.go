@@ -58,6 +58,20 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	return allErrs
 }
 
+func ValidateProjectArtifactInstance(project *ebsv1.Project, content *ebsv1.ArtifactManagerContent) field.ErrorList {
+	instance, exists := project.Annotations[ebsv1.ProjectArtifactsAnnotation]
+	if !exists {
+		instance = "default"
+	}
+	if _, found := content.Instances[instance]; !found {
+		return field.ErrorList{
+			field.Invalid(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), instance,
+				"instance is not configured in artifact-manager-conf"),
+		}
+	}
+	return nil
+}
+
 func ValidateProjectUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList {
 	return ValidateProject(newObj)
 }
