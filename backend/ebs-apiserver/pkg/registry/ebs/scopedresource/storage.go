@@ -17,14 +17,17 @@ import (
 )
 
 type Config struct {
-	Resource       string
-	Singular       string
-	Kind           string
-	ClusterScoped  bool
-	New            func() runtime.Object
-	NewList        func() runtime.Object
-	PrepareCreate  func(runtime.Object)
-	CopyStatus     func(runtime.Object, runtime.Object)
+	Resource      string
+	Singular      string
+	Kind          string
+	ClusterScoped bool
+	New           func() runtime.Object
+	NewList       func() runtime.Object
+	PrepareCreate func(runtime.Object)
+	CopyStatus    func(runtime.Object, runtime.Object)
+
+	// CopySpec preserves fields owned by the main resource during status updates.
+	// A nil callback means the resource has no status subresource.
 	CopySpec       func(runtime.Object, runtime.Object)
 	Validate       func(runtime.Object) field.ErrorList
 	ValidateUpdate func(runtime.Object, runtime.Object) field.ErrorList
@@ -48,29 +51,33 @@ func NewStorage(c Config) *Storage {
 			UpdateStrategy:            update,
 			DeleteStrategy:            strategy,
 			TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource(c.Resource)),
-			KeyRootFunc:               keyRootFunc(c.Resource),
-			KeyFunc:                   keyFunc(c.Resource),
+			KeyRootFunc:               keyRootFunc(c.Resource, c.ClusterScoped),
+			KeyFunc:                   keyFunc(c.Resource, c.ClusterScoped),
 		}
 		if update == strategy {
 			store.CreateStrategy = strategy
 		}
 		return store
 	}
-	return &Storage{Resource: newStore(strategy), Status: newStore(statusStrategy)}
+	storage := &Storage{Resource: newStore(strategy)}
+	if c.CopySpec != nil {
+		storage.Status = newStore(statusStrategy)
+	}
+	return storage
 }
 
-func keyRootFunc(resource string) func(context.Context) string {
+func keyRootFunc(resource string, clusterScoped bool) func(context.Context) string {
 	return func(ctx context.Context) string {
 		project, ok := genericapirequest.NamespaceFrom(ctx)
-		if !ok || project == "" {
+		if clusterScoped || !ok || project == "" {
 			return "/registry/ebs/" + resource
 		}
 		return "/registry/ebs/" + resource + "/" + project
 	}
 }
 
-func keyFunc(resource string) func(context.Context, string) (string, error) {
-	root := keyRootFunc(resource)
+func keyFunc(resource string, clusterScoped bool) func(context.Context, string) (string, error) {
+	root := keyRootFunc(resource, clusterScoped)
 	return func(ctx context.Context, name string) (string, error) {
 		if name == "" {
 			return "", fmt.Errorf("name parameter required")
@@ -88,10 +95,14 @@ func (s *strategy) NamespaceScoped() bool          { return !s.config.ClusterSco
 func (s *strategy) AllowCreateOnUpdate() bool      { return false }
 func (s *strategy) AllowUnconditionalUpdate() bool { return false }
 func (s *strategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
-	s.config.PrepareCreate(obj)
+	if s.config.PrepareCreate != nil {
+		s.config.PrepareCreate(obj)
+	}
 }
 func (s *strategy) PrepareForUpdate(_ context.Context, obj, old runtime.Object) {
-	s.config.CopyStatus(obj, old)
+	if s.config.CopyStatus != nil {
+		s.config.CopyStatus(obj, old)
+	}
 }
 func (s *strategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList {
 	return s.config.Validate(obj)

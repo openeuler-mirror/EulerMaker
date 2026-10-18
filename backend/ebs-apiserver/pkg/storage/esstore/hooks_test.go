@@ -31,8 +31,8 @@ func hookStore() (*Store, *StatusStore, *int) {
 		}
 		return fake.roundTrip(r)
 	})})
-	template := projectstore.NewStorage(runtime.NewScheme())
-	store := New(client, "project", "Project", template.Project.(*genericregistry.Store))
+	template := projectstore.NewStorage()
+	store := New(client, "project", "Project", template.Resource.(*genericregistry.Store))
 	return store, NewStatus(store, template.Status.(*genericregistry.Store)), writes
 }
 func hookProject() *ebsv1.Project {

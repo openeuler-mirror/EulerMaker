@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -35,9 +36,15 @@ import (
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	iamapi "ebs-apiserver/pkg/apis/iam"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
+	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
+	configstore "ebs-apiserver/pkg/registry/ebs/config"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
+	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
+	"ebs-apiserver/pkg/registry/ebs/scopedresource"
+	scriptstore "ebs-apiserver/pkg/registry/ebs/script"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
 	esclient "ebs-apiserver/pkg/storage/es"
+	"ebs-apiserver/pkg/storage/esstore"
 )
 
 func TestEBSSchemeRegistration(t *testing.T) {
@@ -243,6 +250,69 @@ func TestBuildInfoFailedPackagesDecoding(t *testing.T) {
 	}
 }
 
+func TestResourceStorageConstruction(t *testing.T) {
+	for _, tt := range []struct {
+		resource      string
+		kind          string
+		newStorage    func() *scopedresource.Storage
+		clusterScoped bool
+		hasStatus     bool
+	}{
+		{"configs", "Config", configstore.NewStorage, true, false},
+		{"scripts", "Script", scriptstore.NewStorage, true, false},
+		{"projects", "Project", projectstore.NewStorage, true, true},
+		{"snapshots", "Snapshot", snapshotstore.NewStorage, false, true},
+		{"builds", "Build", buildstore.NewStorage, false, true},
+		{"buildinfos", "BuildInfo", buildinfostore.NewStorage, false, true},
+		{"rpmrepos", "RpmRepo", rpmrepostore.NewStorage, false, true},
+	} {
+		t.Run(tt.resource, func(t *testing.T) {
+			stores := tt.newStorage()
+			resource := stores.Resource.(*genericregistry.Store)
+			for _, suffix := range []string{"", "List"} {
+				want, err := Scheme.New(ebsv1.SchemeGroupVersion.WithKind(tt.kind + suffix))
+				if err != nil {
+					t.Fatal(err)
+				}
+				obj := resource.New()
+				if suffix == "List" {
+					obj = resource.NewList()
+				}
+				if reflect.TypeOf(obj) != reflect.TypeOf(want) {
+					t.Fatalf("object type = %T, want %T", obj, want)
+				}
+			}
+			if resource.NamespaceScoped() != !tt.clusterScoped {
+				t.Fatalf("namespace scoped = %v", resource.NamespaceScoped())
+			}
+			if (stores.Status != nil) != tt.hasStatus {
+				t.Fatalf("status storage = %v, want present = %v", stores.Status, tt.hasStatus)
+			}
+			for _, namespace := range []string{"", "project-a"} {
+				ctx := genericapirequest.WithNamespace(context.Background(), namespace)
+				wantRoot := "/registry/ebs/" + tt.resource
+				if !tt.clusterScoped && namespace != "" {
+					wantRoot += "/" + namespace
+				}
+				if root := resource.KeyRootFunc(ctx); root != wantRoot {
+					t.Fatalf("key root = %q, want %q", root, wantRoot)
+				}
+				key, err := resource.KeyFunc(ctx, "example")
+				if err != nil || key != wantRoot+"/example" {
+					t.Fatalf("key = %q, error = %v", key, err)
+				}
+				if stores.Status != nil {
+					status := stores.Status.(*genericregistry.Store)
+					statusKey, err := status.KeyFunc(ctx, "example")
+					if err != nil || statusKey != key || status.NamespaceScoped() != resource.NamespaceScoped() {
+						t.Fatalf("status storage scope or key differs: key = %q, error = %v", statusKey, err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
 	storeOptions := &generic.StoreOptions{RESTOptions: testRESTOptions()}
 
@@ -250,9 +320,9 @@ func TestCompleteStoreInitializesStatusStorage(t *testing.T) {
 		name  string
 		store *genericregistry.Store
 	}{
-		{name: "projects/status", store: projectstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
-		{name: "snapshots/status", store: snapshotstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
-		{name: "builds/status", store: buildstore.NewStorage(Scheme).Status.(*genericregistry.Store)},
+		{name: "projects/status", store: projectstore.NewStorage().Status.(*genericregistry.Store)},
+		{name: "snapshots/status", store: snapshotstore.NewStorage().Status.(*genericregistry.Store)},
+		{name: "builds/status", store: buildstore.NewStorage().Status.(*genericregistry.Store)},
 	}
 
 	for _, tt := range tests {
@@ -345,7 +415,7 @@ func testRESTOptions() generic.RESTOptions {
 }
 
 func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
-	apiGroup, _, err := CreateAPIGroupInfo(
+	apiGroup, claims, err := CreateAPIGroupInfo(
 		testRESTOptions(),
 		esclient.NewClientForTesting("http://unused", http.DefaultClient),
 	)
@@ -353,6 +423,12 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 		t.Fatalf("create API group info: %v", err)
 	}
 	storageMap := apiGroup.VersionedResourcesStorageMap["v1"]
+	if claims == nil {
+		t.Fatal("Build claim manager was not returned")
+	}
+	if _, ok := storageMap["builds"].(*esstore.Store); !ok {
+		t.Fatalf("Build route storage = %T, want *esstore.Store", storageMap["builds"])
+	}
 	if _, ok := storageMap["buildresourceconfigs"]; ok {
 		t.Fatal("BuildResourceConfig must not register a global API storage")
 	}

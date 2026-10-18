@@ -57,7 +57,7 @@ backend/ebs-apiserver/
 │   │   ├── scoped_store.go            # 命名空间作用域 store 包装
 │   │   └── ebs/
 │   │       ├── */storage.go            # 各资源 REST storage
-│   │       └── scopedresource/         # Project 子资源通用 storage
+│   │       └── scopedresource/         # 集群级及 Project 级 ES 资源通用 storage
 │   ├── server/
 │   │   ├── project_alias.go           # Project API 路由适配
 │   │   └── server.go                  # apiserver 配置与资源安装

@@ -19,7 +19,7 @@ import (
 func TestUnconfiguredBuildDoesNotAcquireClaim(t *testing.T) {
 	for _, buildType := range []string{"single", "full", "incremental", "specified"} {
 		t.Run(buildType, func(t *testing.T) {
-			store := esstore.New(nil, "build", "Build", NewStorage(runtime.NewScheme()).Build.(*genericregistry.Store))
+			store := esstore.New(nil, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
 			calls := 0
 			hook := ValidateBuildTargetConfig(confGetter{obj: configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), t: t}, nil)
 			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error { calls++; return hook(ctx, obj) })
