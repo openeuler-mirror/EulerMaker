@@ -9,6 +9,44 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestValidateBuildTarget(t *testing.T) {
+	content := &ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
+		"os": {Arches: map[string]ebsv1.BuildTargetArch{"arch": {}}},
+	}}
+	for _, tc := range []struct {
+		os, arch   string
+		wantErrors int
+	}{
+		{"os", "arch", 0},
+		{"other", "arch", 1},
+		{"os", "other", 1},
+	} {
+		t.Run(tc.os+"/"+tc.arch, func(t *testing.T) {
+			build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: tc.os, Arch: tc.arch}}}
+			errs := ValidateBuildTarget(build, content)
+			if len(errs) != tc.wantErrors {
+				t.Fatalf("errors = %v, want %d", errs, tc.wantErrors)
+			}
+			if len(errs) > 0 && errs[0].Field != "spec.buildTarget" {
+				t.Fatalf("field = %q", errs[0].Field)
+			}
+		})
+	}
+}
+
+func TestValidateBuildPackages(t *testing.T) {
+	project := &ebsv1.Project{Spec: ebsv1.ProjectSpec{PackageRepos: []ebsv1.PackageRepo{{Name: "gcc"}, {Name: "bash"}}}}
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{Packages: []string{"gcc", "bash", "gcc"}}}
+	if errs := ValidateBuildPackages(build, project); len(errs) != 0 {
+		t.Fatalf("configured packages: %v", errs)
+	}
+	build.Spec.Packages = append(build.Spec.Packages, "missing", "")
+	errs := ValidateBuildPackages(build, project)
+	if len(errs) != 2 || errs[0].Field != "spec.packages[3]" || errs[1].Field != "spec.packages[4]" {
+		t.Fatalf("package errors = %v", errs)
+	}
+}
+
 func TestValidateBuildEmptyPackagesByType(t *testing.T) {
 	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
 		t.Run(buildType, func(t *testing.T) {

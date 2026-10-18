@@ -265,6 +265,36 @@ func validProject() *ebsv1.Project {
 	}
 }
 
+func TestValidateProjectArtifactInstance(t *testing.T) {
+	content := &ebsv1.ArtifactManagerContent{Instances: map[string]ebsv1.ArtifactManagerInstance{
+		"default": {},
+		"art-01":  {},
+		"art-x":   {},
+	}}
+	for _, tc := range []struct {
+		name        string
+		annotations map[string]string
+		wantErrors  int
+	}{
+		{"default", nil, 0},
+		{"named instance", map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}, 0},
+		{"nonnumeric instance", map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-x"}, 0},
+		{"missing instance", map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-02"}, 1},
+		{"explicit empty instance", map[string]string{ebsv1.ProjectArtifactsAnnotation: ""}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Annotations: tc.annotations}}
+			errs := ValidateProjectArtifactInstance(project, content)
+			if len(errs) != tc.wantErrors {
+				t.Fatalf("errors = %v, want %d", errs, tc.wantErrors)
+			}
+			if len(errs) > 0 && errs[0].Field != "metadata.annotations[ebs.io/artifacts]" {
+				t.Fatalf("field = %q", errs[0].Field)
+			}
+		})
+	}
+}
+
 func validProjectSpec() ebsv1.ProjectSpec {
 	return ebsv1.ProjectSpec{
 		BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},

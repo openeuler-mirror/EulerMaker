@@ -40,6 +40,8 @@ backend/ebs-apiserver
 
 公共资源类型、DeepCopy 和版本注册位于 `api/ebs/v1`、`api/iam/v1`；服务端仅在 `pkg/apis` 注册内部版本。IAM 的存储、校验、认证和凭证管理保留在 apiserver，Gateway 复用公共类型并维护自身身份与权限逻辑。
 
+EBS 业务校验集中在 `pkg/apis/ebs/validation`，仅依赖传入对象；涉及 Config 或 Project 引用时，由 registry Hook 负责读取、反序列化和接口错误处理，再传入校验模块。Project 的 Hook 与存储装配统一放在 `registry/ebs/project/storage.go`。
+
 ```
 backend/ebs-apiserver/
 ├── cmd/server/main.go                 # 进程入口

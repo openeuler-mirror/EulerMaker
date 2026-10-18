@@ -151,6 +151,35 @@ type admissionRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f admissionRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+func TestClaimManagerAttachesCreateHook(t *testing.T) {
+	reads := 0
+	client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: admissionRoundTripper(
+		func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet || !strings.HasPrefix(req.URL.Path, "/ebs-builds/_doc/") {
+				t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+			}
+			reads++
+			return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader(`{"found":false}`))}, nil
+		})})
+	store := esstore.New(client, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
+	manager := NewClaimManager(store, newCoordinationFake())
+	ctx := request.WithNamespace(context.Background(), "project-a")
+	build := testBuild("01234567-89ab-4cde-8fab-0123456789ab", "single")
+	build.Spec.Packages = []string{"gcc"}
+	build.UID = ""
+	obj, err := store.Create(ctx, build, nil, &metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 || obj.(*ebsv1.Build).Status.Phase != ebsv1.BuildPending {
+		t.Fatalf("reads = %d, created Build = %+v", reads, obj)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+	manager.Run(ctx)
+}
+
 func TestAdmissionQueriesUseMinimalSource(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -234,5 +263,136 @@ func TestAdmissionQueriesUseMinimalSource(t *testing.T) {
 				t.Fatalf("baseline requests = %d, want 1", requests)
 			}
 		})
+	}
+}
+
+func TestUnconfiguredBuildDoesNotAcquireClaim(t *testing.T) {
+	for _, buildType := range []string{"single", "full", "incremental", "specified"} {
+		t.Run(buildType, func(t *testing.T) {
+			store := esstore.New(nil, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
+			calls := 0
+			hook := ValidateBuildTargetConfig(confGetter{obj: configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), t: t}, nil)
+			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error { calls++; return hook(ctx, obj) })
+			store.SetCreateTransaction(func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error) {
+				t.Fatal("invalid target acquired claim")
+				return nil, nil
+			})
+			obj := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "01234567-89ab-4cde-8fab-0123456789ab", Namespace: "project"}, Spec: ebsv1.BuildSpec{BuildType: buildType, Packages: []string{"gcc"}, BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+			_, err := store.Create(request.WithNamespace(context.Background(), "project"), obj, nil, &metav1.CreateOptions{})
+			if !apierrors.IsInvalid(err) || calls != 1 {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+		})
+	}
+}
+
+type confGetter struct {
+	obj runtime.Object
+	err error
+	t   *testing.T
+}
+
+func (g confGetter) New() runtime.Object { return &ebsv1.Config{} }
+func (g confGetter) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
+	if request.NamespaceValue(ctx) != "" || name != ebsv1.BuildTargetConfigName {
+		g.t.Fatal("Config must be read cluster-wide")
+	}
+	return g.obj, g.err
+}
+
+func TestBuildTargetConfigCreateHook(t *testing.T) {
+	conf := configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{"os": {Arches: map[string]ebsv1.BuildTargetArch{"arch": {Image: "build:v1"}}}}})
+	for _, tc := range []struct {
+		name string
+		obj  runtime.Object
+		err  error
+		arch string
+		code int
+	}{
+		{"allowed", conf, nil, "arch", 0},
+		{"unsupported", conf, nil, "other", 422},
+		{"empty", configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), nil, "arch", 422},
+		{"unavailable", nil, errors.New("unavailable"), "arch", 503},
+		{"missing", nil, apierrors.NewNotFound(ebsv1.Resource("configs"), ebsv1.BuildTargetConfigName), "arch", 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			hook := ValidateBuildTargetConfig(confGetter{tc.obj, tc.err, t}, func(context.Context, runtime.Object) error { calls++; return nil })
+			err := hook(request.WithNamespace(context.Background(), "project"), &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "os", Arch: tc.arch}}})
+			if tc.code == 0 {
+				if err != nil || calls != 1 {
+					t.Fatalf("calls=%d error=%v", calls, err)
+				}
+				return
+			}
+			status, ok := err.(apierrors.APIStatus)
+			if !ok || int(status.Status().Code) != tc.code || calls != 0 {
+				t.Fatalf("calls=%d error=%v", calls, err)
+			}
+		})
+	}
+}
+
+func configForTest(spec ebsv1.BuildTargetContent) *ebsv1.Config {
+	content, _ := json.Marshal(spec)
+	return &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: string(content)}}
+}
+
+type projectGetter struct {
+	t     *testing.T
+	err   error
+	calls int
+}
+
+func (g *projectGetter) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
+	g.calls++
+	if ns, _ := request.NamespaceFrom(ctx); ns != "" || name != "project-a" {
+		g.t.Fatalf("unexpected project GET: namespace=%q name=%q", ns, name)
+	}
+	return &ebsv1.Project{Spec: ebsv1.ProjectSpec{PackageRepos: []ebsv1.PackageRepo{{Name: "gcc"}, {Name: "bash"}}}}, g.err
+}
+
+func TestValidateProjectPackages(t *testing.T) {
+	for _, typ := range []string{"single", "specified", "full", "incremental"} {
+		for _, missing := range []bool{false, true} {
+			t.Run(typ+"/"+map[bool]string{true: "missing", false: "valid"}[missing], func(t *testing.T) {
+				g := &projectGetter{t: t}
+				packages := []string{"gcc", "bash", "gcc"}
+				if missing {
+					packages = append(packages, "unknown", "")
+				}
+				b := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a"}, Spec: ebsv1.BuildSpec{BuildType: typ, Packages: packages}}
+				err := ValidateProjectPackages(g)(request.WithNamespace(context.Background(), "project-a"), b)
+				checked := typ == "single" || typ == "specified"
+				if checked && missing {
+					if !apierrors.IsInvalid(err) {
+						t.Fatalf("expected Invalid, got %v", err)
+					}
+					causes := err.(apierrors.APIStatus).Status().Details.Causes
+					if len(causes) != 2 || causes[0].Field != "spec.packages[3]" || causes[1].Field != "spec.packages[4]" {
+						t.Fatalf("unexpected causes: %#v", causes)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				wantCalls := 0
+				if checked {
+					wantCalls = 1
+				}
+				if g.calls != wantCalls {
+					t.Fatalf("GET count = %d, want %d", g.calls, wantCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestProjectReadErrorsPreserved(t *testing.T) {
+	for _, err := range []error{apierrors.NewNotFound(ebsv1.Resource("projects"), "project-a"), apierrors.NewServiceUnavailable("unavailable"), context.Canceled} {
+		g := &projectGetter{t: t, err: err}
+		b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "single", Packages: []string{"gcc"}}}
+		if got := ValidateProjectPackages(g)(request.WithNamespace(context.Background(), "project-a"), b); got != err {
+			t.Fatalf("got %v, want original %v", got, err)
+		}
 	}
 }
