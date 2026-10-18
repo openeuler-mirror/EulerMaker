@@ -212,8 +212,8 @@ func TestAdmissionQueriesUseMinimalSource(t *testing.T) {
 					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
 						Body: io.NopCloser(strings.NewReader(body))}, nil
 				})})
-			template := NewStorage(runtime.NewScheme())
-			store := esstore.New(client, "build", "Build", template.Build.(*genericregistry.Store))
+			template := NewStorage()
+			store := esstore.New(client, "build", "Build", template.Resource.(*genericregistry.Store))
 			ctx := request.WithNamespace(context.Background(), "project-a")
 			var err error
 			if tc.baseline {

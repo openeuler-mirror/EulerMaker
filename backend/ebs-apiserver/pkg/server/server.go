@@ -367,20 +367,20 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	v1Storage["configs"] = configES
 	v1Storage["scripts"] = newScriptStore(esClient)
 
-	projectStorage := projectstore.NewStorage(Scheme)
-	projectES := esstore.New(esClient, "project", "Project", projectStorage.Project.(*genericregistry.Store))
+	projectStorage := projectstore.NewStorage()
+	projectES := esstore.New(esClient, "project", "Project", projectStorage.Resource.(*genericregistry.Store))
 	projectES.SetCreateHook(projectstore.ValidateArtifactsConfig(configES))
 	projectES.SetUpdateHook(projectstore.ValidateArtifactsConfigUpdate(configES))
 	v1Storage["projects"] = projectES
 	v1Storage["projects/status"] = esstore.NewStatus(projectES, projectStorage.Status.(*genericregistry.Store))
 
-	snapshotStorage := snapshotstore.NewStorage(Scheme)
-	snapshotES := esstore.New(esClient, "snapshot", "Snapshot", snapshotStorage.Snapshot.(*genericregistry.Store))
+	snapshotStorage := snapshotstore.NewStorage()
+	snapshotES := esstore.New(esClient, "snapshot", "Snapshot", snapshotStorage.Resource.(*genericregistry.Store))
 	v1Storage["snapshots"] = snapshotES
 	v1Storage["snapshots/status"] = esstore.NewStatus(snapshotES, snapshotStorage.Status.(*genericregistry.Store))
 
-	buildStorage := buildstore.NewStorage(Scheme)
-	buildES := esstore.New(esClient, "build", "Build", buildStorage.Build.(*genericregistry.Store))
+	buildStorage := buildstore.NewStorage()
+	buildES := esstore.New(esClient, "build", "Build", buildStorage.Resource.(*genericregistry.Store))
 	buildES.SetCreateHook(buildstore.ValidateBuildTargetConfig(newConfigStore(esClient), buildstore.ValidateProjectPackages(projectES)))
 	buildStatusES := esstore.NewStatus(buildES, buildStorage.Status.(*genericregistry.Store))
 	buildClaims := buildstore.NewClaimManager(buildES, esClient)
@@ -422,11 +422,11 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 }
 
 func newConfigStore(client *es.Client) *esstore.Store {
-	return esstore.New(client, "config", "Config", configstore.NewStorage().(*genericregistry.Store))
+	return esstore.New(client, "config", "Config", configstore.NewStorage().Resource.(*genericregistry.Store))
 }
 
 func newScriptStore(client *es.Client) *esstore.Store {
-	return esstore.New(client, "script", "Script", scriptstore.NewStorage(Scheme).Script.(*genericregistry.Store))
+	return esstore.New(client, "script", "Script", scriptstore.NewStorage().Resource.(*genericregistry.Store))
 }
 
 func completeStore(storage rest.Storage, storeOptions *generic.StoreOptions) error {

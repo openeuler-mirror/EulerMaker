@@ -86,9 +86,9 @@ func TestExistsUsesScopedSelectors(t *testing.T) {
 func TestCreateHookBeforePersistence(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		t.Run(map[bool]string{false: "create", true: "dry-run"}[dryRun], func(t *testing.T) {
-			templates := projectstore.NewStorage(runtime.NewScheme())
+			templates := projectstore.NewStorage()
 			// A rejected hook must return before accessing the nil ES client.
-			store := New(nil, "project", "Project", templates.Project.(*genericregistry.Store))
+			store := New(nil, "project", "Project", templates.Resource.(*genericregistry.Store))
 			wantErr := errors.New("project dependency unavailable")
 			calls := 0
 			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error {
@@ -146,7 +146,7 @@ func jsonResponse(status int, value interface{}) *http.Response {
 }
 
 func TestESStoreDoesNotImplementWatch(t *testing.T) {
-	template := projectstore.NewStorage(nil).Project
+	template := projectstore.NewStorage().Resource
 	store := New(nil, "project", "Project", template.(*genericregistry.Store))
 	if _, ok := interface{}(store).(rest.Watcher); ok {
 		t.Fatal("ESStore must not implement rest.Watcher")
@@ -166,8 +166,8 @@ func TestProjectedReadUsesSourceFilterAndPreservesVersion(t *testing.T) {
 			}},
 		}), nil
 	})})
-	template := projectstore.NewStorage(runtime.NewScheme())
-	store := New(client, "project", "Project", template.Project.(*genericregistry.Store))
+	template := projectstore.NewStorage()
+	store := New(client, "project", "Project", template.Resource.(*genericregistry.Store))
 	ctx := WithSourceFilter(context.Background(), es.SourceFilter{Excludes: []string{"data.spec"}})
 	obj, err := store.Get(ctx, "project-a", nil)
 	if err != nil {
@@ -212,8 +212,8 @@ func TestProjectedListUsesSourceFilterAndKeepsPagination(t *testing.T) {
 			return nil, nil
 		}
 	})})
-	template := projectstore.NewStorage(runtime.NewScheme())
-	store := New(client, "project", "Project", template.Project.(*genericregistry.Store))
+	template := projectstore.NewStorage()
+	store := New(client, "project", "Project", template.Resource.(*genericregistry.Store))
 	ctx := WithSourceFilter(context.Background(), es.SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.phase"}})
 	obj, err := store.List(ctx, &internalversion.ListOptions{Limit: 1})
 	if err != nil {
@@ -230,8 +230,8 @@ func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 	client := es.NewClientForTesting("http://elasticsearch", &http.Client{
 		Transport: fakeRoundTripper(fake.roundTrip),
 	})
-	templates := projectstore.NewStorage(runtime.NewScheme())
-	store := New(client, "project", "Project", templates.Project.(*genericregistry.Store))
+	templates := projectstore.NewStorage()
+	store := New(client, "project", "Project", templates.Resource.(*genericregistry.Store))
 	statusStore := NewStatus(store, templates.Status.(*genericregistry.Store))
 	ctx := genericapirequest.WithNamespace(context.Background(), "")
 

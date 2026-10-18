@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -32,17 +33,17 @@ func TestPackageRefPreservedBeforeValidation(t *testing.T) {
 					PackageRepos: []ebsv1.PackageRepo{{Name: "gcc", Ref: tc.ref}},
 				}}
 				ctx := context.Background()
-				s := &strategy{}
+				store := NewStorage().Resource.(*genericregistry.Store)
 				old := obj.DeepCopy()
 				old.Status.Phase = ebsv1.ProjectActive
 				if operation == "create" {
-					s.PrepareForCreate(ctx, obj)
+					store.CreateStrategy.PrepareForCreate(ctx, obj)
 				} else {
-					s.PrepareForUpdate(ctx, obj, old)
+					store.UpdateStrategy.PrepareForUpdate(ctx, obj, old)
 				}
-				errs := s.Validate(ctx, obj)
+				errs := store.CreateStrategy.Validate(ctx, obj)
 				if operation == "update" {
-					errs = s.ValidateUpdate(ctx, obj, old)
+					errs = store.UpdateStrategy.ValidateUpdate(ctx, obj, old)
 				}
 				if (len(errs) > 0) != tc.invalid {
 					t.Fatalf("validation=%v, want invalid=%v", errs, tc.invalid)
@@ -68,7 +69,7 @@ func TestStatusPreservesProjectType(t *testing.T) {
 	candidate := old.DeepCopy()
 	candidate.Labels[ebsv1.ProjectTypeLabel] = ebsv1.ProjectTypePersonal
 	candidate.Annotations[ebsv1.ProjectArtifactsAnnotation] = "art-02"
-	(&statusStrategy{}).PrepareForUpdate(context.Background(), candidate, old)
+	NewStorage().Status.(*genericregistry.Store).UpdateStrategy.PrepareForUpdate(context.Background(), candidate, old)
 	if candidate.Labels[ebsv1.ProjectTypeLabel] != ebsv1.ProjectTypeCommunity {
 		t.Fatal("status update changed project type")
 	}

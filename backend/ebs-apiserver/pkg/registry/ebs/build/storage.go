@@ -4,27 +4,54 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/validation/path"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/apis/ebs/validation"
+	"ebs-apiserver/pkg/registry/ebs/scopedresource"
 )
 
-type Storage struct {
-	Build  rest.StandardStorage
-	Status rest.StandardStorage
-	Abort  rest.Storage
+func NewStorage() *scopedresource.Storage {
+	return scopedresource.NewStorage(scopedresource.Config{
+		Resource: "builds", Singular: "build", Kind: "Build",
+		New:     func() runtime.Object { return &ebsv1.Build{} },
+		NewList: func() runtime.Object { return &ebsv1.BuildList{} },
+		PrepareCreate: func(obj runtime.Object) {
+			b := obj.(*ebsv1.Build)
+			if b.Spec.BuildType == "full" || b.Spec.BuildType == "incremental" {
+				b.Spec.Packages = nil
+			}
+			ensureBuildTargetLabels(b)
+			b.Status = ebsv1.BuildStatus{Phase: ebsv1.BuildPending}
+		},
+		CopyStatus: func(obj, old runtime.Object) {
+			newB := obj.(*ebsv1.Build)
+			oldB := old.(*ebsv1.Build)
+			ensureBuildTargetLabels(newB)
+			newB.Status = oldB.Status
+		},
+		CopySpec: func(obj, old runtime.Object) {
+			newB := obj.(*ebsv1.Build)
+			oldB := old.(*ebsv1.Build)
+			metav1.ResetObjectMetaForStatus(&newB.ObjectMeta, &oldB.ObjectMeta)
+			newB.Spec = oldB.Spec
+		},
+		Validate: func(obj runtime.Object) field.ErrorList {
+			return validation.ValidateBuild(obj.(*ebsv1.Build))
+		},
+		ValidateUpdate: func(obj, old runtime.Object) field.ErrorList {
+			return validation.ValidateBuildUpdate(obj.(*ebsv1.Build), old.(*ebsv1.Build))
+		},
+		ValidateStatus: func(obj, old runtime.Object) field.ErrorList {
+			return validation.ValidateBuildStatusUpdate(obj.(*ebsv1.Build), old.(*ebsv1.Build))
+		},
+	})
 }
 
 type abort struct {
@@ -74,117 +101,6 @@ func NewAbortStorage(getter rest.Getter, updater rest.Updater) rest.Storage {
 	return &abort{getter: getter, updater: updater, now: time.Now}
 }
 
-func NewStorage(scheme *runtime.Scheme) *Storage {
-	strategy := &strategy{}
-	statusStrategy := &statusStrategy{}
-
-	store := &genericregistry.Store{
-		NewFunc:                   func() runtime.Object { return &ebsv1.Build{} },
-		NewListFunc:               func() runtime.Object { return &ebsv1.BuildList{} },
-		DefaultQualifiedResource:  ebsv1.Resource("builds"),
-		SingularQualifiedResource: ebsv1.Resource("build"),
-		CreateStrategy:            strategy,
-		UpdateStrategy:            strategy,
-		DeleteStrategy:            strategy,
-		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("builds")),
-
-		KeyRootFunc: keyRootFunc,
-		KeyFunc:     keyFunc,
-	}
-
-	statusStore := &genericregistry.Store{
-		NewFunc:                   func() runtime.Object { return &ebsv1.Build{} },
-		NewListFunc:               func() runtime.Object { return &ebsv1.BuildList{} },
-		DefaultQualifiedResource:  ebsv1.Resource("builds"),
-		SingularQualifiedResource: ebsv1.Resource("build"),
-		UpdateStrategy:            statusStrategy,
-		DeleteStrategy:            strategy,
-		TableConvertor:            rest.NewDefaultTableConvertor(ebsv1.Resource("builds")),
-
-		KeyRootFunc: keyRootFunc,
-		KeyFunc:     keyFunc,
-	}
-
-	return &Storage{
-		Build:  store,
-		Status: statusStore,
-	}
-}
-
-func keyRootFunc(ctx context.Context) string {
-	ns, ok := genericapirequest.NamespaceFrom(ctx)
-	if !ok || ns == "" {
-		return "/registry/ebs/builds"
-	}
-	return "/registry/ebs/builds/" + ns
-}
-
-func keyFunc(ctx context.Context, name string) (string, error) {
-	if len(name) == 0 {
-		return "", fmt.Errorf("name parameter required")
-	}
-	if msgs := path.IsValidPathSegmentName(name); len(msgs) != 0 {
-		return "", fmt.Errorf("name parameter invalid: %q: %s", name, strings.Join(msgs, ";"))
-	}
-	return keyRootFunc(ctx) + "/" + name, nil
-}
-
-type strategy struct{}
-
-func (s *strategy) NamespaceScoped() bool          { return true }
-func (s *strategy) AllowCreateOnUpdate() bool      { return false }
-func (s *strategy) AllowUnconditionalUpdate() bool { return false }
-
-func (s *strategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
-	b := obj.(*ebsv1.Build)
-	if b.Spec.BuildType == "full" || b.Spec.BuildType == "incremental" {
-		b.Spec.Packages = nil
-	}
-	ensureBuildTargetLabels(b)
-	b.Status = ebsv1.BuildStatus{Phase: ebsv1.BuildPending}
-}
-
-func (s *strategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
-	newB := obj.(*ebsv1.Build)
-	oldB := old.(*ebsv1.Build)
-	ensureBuildTargetLabels(newB)
-	newB.Status = oldB.Status
-}
-
-func (s *strategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
-	return validation.ValidateBuild(obj.(*ebsv1.Build))
-}
-
-func (s *strategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return validation.ValidateBuildUpdate(obj.(*ebsv1.Build), old.(*ebsv1.Build))
-}
-
-func (s *strategy) Canonicalize(obj runtime.Object) {}
-func (s *strategy) ObjectKinds(obj runtime.Object) ([]schema.GroupVersionKind, bool, error) {
-	return []schema.GroupVersionKind{{Group: "ebs", Version: "v1", Kind: "Build"}}, false, nil
-}
-func (s *strategy) GenerateName(base string) string { return base }
-func (s *strategy) Recognizes(gvk schema.GroupVersionKind) bool {
-	return gvk.Group == "ebs" && gvk.Version == "v1"
-}
-func (s *strategy) WarningsOnCreate(ctx context.Context, obj runtime.Object) []string { return nil }
-func (s *strategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {
-	return nil
-}
-
-type statusStrategy struct{}
-
-func (s *statusStrategy) NamespaceScoped() bool          { return true }
-func (s *statusStrategy) AllowCreateOnUpdate() bool      { return false }
-func (s *statusStrategy) AllowUnconditionalUpdate() bool { return false }
-
-func (s *statusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
-	newB := obj.(*ebsv1.Build)
-	oldB := old.(*ebsv1.Build)
-	metav1.ResetObjectMetaForStatus(&newB.ObjectMeta, &oldB.ObjectMeta)
-	newB.Spec = oldB.Spec
-}
-
 func ensureBuildTargetLabels(build *ebsv1.Build) {
 	if build.Labels == nil {
 		build.Labels = make(map[string]string, 3)
@@ -198,23 +114,4 @@ func ensureBuildTargetLabels(build *ebsv1.Build) {
 	if _, ok := build.Labels[ebsv1.BuildTypeLabel]; !ok && len(build.Spec.BuildType) > 0 {
 		build.Labels[ebsv1.BuildTypeLabel] = build.Spec.BuildType
 	}
-}
-
-func (s *statusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return validation.ValidateBuildStatusUpdate(obj.(*ebsv1.Build), old.(*ebsv1.Build))
-}
-
-func (s *statusStrategy) Canonicalize(obj runtime.Object) {}
-func (s *statusStrategy) ObjectKinds(obj runtime.Object) ([]schema.GroupVersionKind, bool, error) {
-	return []schema.GroupVersionKind{{Group: "ebs", Version: "v1", Kind: "Build"}}, false, nil
-}
-func (s *statusStrategy) GenerateName(base string) string { return base }
-func (s *statusStrategy) Recognizes(gvk schema.GroupVersionKind) bool {
-	return gvk.Group == "ebs" && gvk.Version == "v1"
-}
-func (s *statusStrategy) WarningsOnCreate(ctx context.Context, obj runtime.Object) []string {
-	return nil
-}
-func (s *statusStrategy) WarningsOnUpdate(ctx context.Context, obj, old runtime.Object) []string {
-	return nil
 }
