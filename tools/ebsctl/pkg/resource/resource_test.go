@@ -38,6 +38,26 @@ func TestConfigScopeAndOperations(t *testing.T) {
 	}
 }
 
+func TestAnonymousReadResources(t *testing.T) {
+	for _, test := range []struct {
+		kind   string
+		public bool
+	}{
+		{"Project", true},
+		{"Snapshot", true},
+		{"Build", true},
+		{"Job", true},
+		{"BuildInfo", true},
+		{"RpmRepo", true},
+		{"Config", false},
+	} {
+		definition, err := Resolve(test.kind)
+		if err != nil || definition.SupportsAnonymousRead() != test.public {
+			t.Fatalf("%s public=%v, want %v: %v", test.kind, definition.SupportsAnonymousRead(), test.public, err)
+		}
+	}
+}
+
 func TestReadManifestsInjectsProjectAndValidates(t *testing.T) {
 	input := `apiVersion: ebs/v1
 kind: Job

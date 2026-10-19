@@ -32,4 +32,8 @@ Use `-p/--project` or its alias `-n/--namespace` to override the current Project
 
 For CI, set `EBS_GATEWAY` and `EBS_TOKEN` instead of persisting a context. The default configuration file is `$HOME/.config/ebs/config.yaml` and must use mode `0600` in a mode `0700` directory.
 
+If an authenticated `get` or `describe` of Project, Snapshot, Build, Job, BuildInfo, or RpmRepo returns HTTP 401, ebsctl prints a warning to stderr and retries the read once without the token. Successful anonymous reads exit with code 0; JSON/YAML stdout remains unchanged by the warning. The saved token, environment variables, and current context are not modified.
+
+Writes, watch/wait commands, `--mine`, and Config reads do not fall back to anonymous access. Config visibility is object-dependent and cannot be determined from a failed authenticated request. HTTP 401 errors prompt you to run `ebsctl login`; HTTP 403 remains a permission error. A failed anonymous retry is returned without further retries.
+
 The first version intentionally excludes Runner, Artifact, log, `apply`, plugin, exec, and port-forward commands. See `docs/zh/design/ebsctl.md` for the complete command and compatibility contract.

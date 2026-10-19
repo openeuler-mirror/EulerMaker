@@ -96,6 +96,16 @@ func (d Definition) SupportsPatch() bool { return !d.NoPatch }
 
 func (d Definition) SupportsWatch() bool { return !d.NoWatch }
 
+// SupportsAnonymousRead identifies resources whose reads are public regardless of object contents.
+func (d Definition) SupportsAnonymousRead() bool {
+	switch d.Kind {
+	case "Project", "Snapshot", "Build", "Job", "BuildInfo", "RpmRepo":
+		return true
+	default:
+		return false
+	}
+}
+
 func StrictDecode(definition Definition, data []byte) error {
 	object := definition.Object()
 	decoder := json.NewDecoder(strings.NewReader(string(data)))

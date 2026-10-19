@@ -253,7 +253,16 @@ Command
   -> Printer
 ```
 
-普通 GET 在网络错误、429 和 503 时允许带抖动的有限指数退避；遵循 `Retry-After`。非幂等 POST 不自动重试。PUT、PATCH、DELETE 只有在请求明确未发送时才能自动重试，结果未知时返回错误交由用户重新读取对象判断。401 不使用密码静默重新登录，清除内存 Token 并提示执行 login。
+普通 GET 在网络错误、429 和 503 时允许带抖动的有限指数退避；遵循 `Retry-After`。非幂等 POST 不自动重试。PUT、PATCH、DELETE 只有在请求明确未发送时才能自动重试，结果未知时返回错误交由用户重新读取对象判断。
+
+Token 失效后的处理以 Gateway 返回的 HTTP 状态为准，不在客户端根据未经验证的 Token 内容判断：
+
+- 普通 `get`、`describe` 读取 Project、Snapshot、Build、Job、BuildInfo、RpmRepo，携带 Token 的请求返回 401 时，向 stderr 提示认证失败及重新登录方式，然后移除该次重试的认证头，以相同路径和查询参数匿名重试一次。
+- 匿名重试成功按正常读取输出并返回 0；失败直接返回其错误，不再进入网络或状态码重试循环。
+- 写操作、Watch/`wait`（包括初始 GET/LIST 和 relist）、`--mine` 及受保护资源访问不降级。Config 的可见性取决于对象内容，认证失败时无法确认是否 Public，因此 Config get/list/describe 均不自动降级。
+- 403 按权限错误处理，不视为 Token 过期，也不匿名重试。原请求未携带 Token 时，401 直接返回。
+- 401 错误提示执行 `ebsctl login`，不使用密码静默重新登录；不删除已保存 Token、不修改环境变量和当前 context。匿名重试使用临时客户端副本，不改变原客户端凭据。
+- 提示仅写入 stderr，不污染 stdout 的 JSON/YAML 等机器可读输出，不输出 Token 内容。
 
 每次请求生成 `X-Request-ID`，接收服务端 requestID 并在错误中展示。HTTP response body 设置读取上限；watch 响应使用流式 reader，不进入通用 JSON 缓冲。
 

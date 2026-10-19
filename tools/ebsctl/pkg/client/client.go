@@ -82,7 +82,11 @@ func (e *APIError) Error() string {
 	if e.RequestID != "" {
 		detail += " requestID=" + e.RequestID
 	}
-	return prefix + message + " (" + detail + ")"
+	result := prefix + message + " (" + detail + ")"
+	if e.StatusCode == http.StatusUnauthorized {
+		result += "; run 'ebsctl login' to authenticate again"
+	}
+	return result
 }
 
 func New(options Options) (*Client, error) {
@@ -149,6 +153,20 @@ func (c *Client) Do(ctx context.Context, method, path, contentType string, body 
 		}
 	}
 	return nil, nil, last
+}
+
+// Get permits one anonymous retry only when the caller identifies the read as public.
+func (c *Client) Get(ctx context.Context, path, resource, name string, publicRead bool) ([]byte, http.Header, error) {
+	data, header, err := c.Do(ctx, http.MethodGet, path, "", nil, resource, name)
+	var apiError *APIError
+	if !publicRead || c.token == "" || !errors.As(err, &apiError) || apiError.StatusCode != http.StatusUnauthorized {
+		return data, header, err
+	}
+	fmt.Fprintln(c.diagnostic, "Warning: authentication failed; retrying this public read anonymously.\nRun 'ebsctl login' to authenticate again.")
+	anonymous := *c
+	anonymous.token = ""
+	data, header, _, err = anonymous.doOnce(ctx, anonymous.http, http.MethodGet, path, "", nil, resource, name, maxResponseBytes)
+	return data, header, err
 }
 
 func (c *Client) OpenWatch(ctx context.Context, path, resource string) (*http.Response, error) {
