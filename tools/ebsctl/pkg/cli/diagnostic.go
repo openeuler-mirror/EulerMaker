@@ -31,7 +31,7 @@ func (a *App) describeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body, _, err := api.Do(cmd.Context(), http.MethodGet, path, "", nil, definition.Singular, args[1])
+			body, _, err := api.Get(cmd.Context(), path, definition.Singular, args[1], definition.SupportsAnonymousRead())
 			if err != nil {
 				return err
 			}

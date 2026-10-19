@@ -108,7 +108,7 @@ func (a *App) getCommand() *cobra.Command {
 				}
 				return a.runWatch(cmd.Context(), api, definition, path, query, output, watchOnly)
 			}
-			body, _, err := api.Do(cmd.Context(), http.MethodGet, client.AddQuery(path, query), "", nil, definition.Singular, objectName(args))
+			body, _, err := api.Get(cmd.Context(), client.AddQuery(path, query), definition.Singular, objectName(args), definition.SupportsAnonymousRead() && !mine)
 			if err != nil {
 				return err
 			}
