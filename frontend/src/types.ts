@@ -77,7 +77,10 @@ export interface Project {
 
 export interface Snapshot {
   metadata?: ObjectMeta;
-  status?: { phase?: string };
+  status?: {
+    phase?: string;
+    packageRepoStatuses?: Record<string, { commitId?: string; cloneUrl?: string }>;
+  };
 }
 
 export interface Build {

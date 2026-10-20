@@ -269,6 +269,8 @@ export default {
     searchSpecs: "Search spec or package name",
     noMatchingSpecs: "No matching specs or packages",
     buildInfoNoSpecs: "No spec status yet",
+    buildInfoSnapshotMissing: "The Snapshot is not available, so package commit IDs cannot be displayed.",
+    buildInfoSnapshotLoadFailed: "Could not load the Snapshot for package commit IDs. Please refresh to retry.",
     buildInfoBuildStatus: "Build status",
     allBuildStatuses: "All statuses",
     buildInfoConditions: "Conditions",

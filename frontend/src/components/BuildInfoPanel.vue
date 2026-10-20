@@ -2,7 +2,8 @@
   <section class="content-panel build-info-panel">
     <div class="section-heading">
       <h2>{{ t('project.buildInfo') }}</h2>
-      <button class="secondary-button" type="button" :disabled="loading" @click="load">{{ t('common.refresh') }}</button>
+      <button class="secondary-button compact-button" type="button" :disabled="loading || snapshotLoading"
+        :title="t('common.refresh')" :aria-label="t('common.refresh')" @click="load"><Refresh aria-hidden="true" /></button>
     </div>
     <p v-if="loading && !buildInfo" class="config-empty">{{ t('project.buildInfoLoading') }}</p>
     <p v-else-if="missing" class="config-empty">{{ t('project.buildInfoMissing') }}</p>
@@ -14,14 +15,15 @@
       </dl>
       <section class="build-detail-section">
         <h3>{{ t('project.buildInfoSpecStatus') }}</h3>
+        <p v-if="snapshotErrorKey" class="inline-error" role="alert">{{ t(snapshotErrorKey) }}</p>
         <div v-if="specRows.length" class="spec-list-toolbar"><label class="search-box"><Search /><input v-model="specSearch" type="search" :placeholder="t('project.searchSpecs')" :aria-label="t('project.searchSpecs')" /></label></div>
         <p v-if="!specRows.length" class="config-empty">{{ t('project.buildInfoNoSpecs') }}</p>
         <p v-else-if="!filteredSpecRows.length" class="config-empty">{{ t('project.noMatchingSpecs') }}</p>
         <div v-else class="project-table-wrap"><table class="project-table">
-          <thead><tr><th>Spec</th><th>{{ t('project.buildInfoPackageName') }}</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th></tr></thead>
+          <thead><tr><th>Spec</th><th>{{ t('project.buildInfoPackageName') }}</th><th>Commit ID</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th></tr></thead>
           <tbody><template v-for="row in paginatedSpecRows" :key="row.name">
-            <tr><td><button class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.name" @click="selectedSpecName = selectedSpecName === row.name ? '' : row.name">{{ row.name }}</button></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><StatusBadge :value="row.displayStatus" /></td></tr>
-            <tr v-if="selectedSpecName === row.name" class="spec-jobs-row"><td colspan="3"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.name" :can-abort="canAbortJobs" /></td></tr>
+            <tr><td><button class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.name" @click="selectedSpecName = selectedSpecName === row.name ? '' : row.name">{{ row.name }}</button></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><code v-if="row.commitId" :title="row.commitId">{{ row.commitId.slice(0, 12) }}</code><span v-else>{{ snapshotLoading ? '…' : t('common.emptyValue') }}</span></td><td><StatusBadge :value="row.displayStatus" /></td></tr>
+            <tr v-if="selectedSpecName === row.name" class="spec-jobs-row"><td colspan="4"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.name" :can-abort="canAbortJobs" /></td></tr>
           </template></tbody>
         </table></div>
         <div v-if="filteredSpecRows.length" class="table-footer">
@@ -55,12 +57,13 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, ArrowRight, Check, Filter, Search } from '@element-plus/icons-vue';
+import { ArrowLeft, ArrowRight, Check, Filter, Refresh, Search } from '@element-plus/icons-vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type CSSProperties } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { ApiError, errorTranslationKey, request } from '@/api';
-import type { BuildInfo } from '@/types';
+import type { BuildInfo, Snapshot } from '@/types';
+import { buildInfoSpecRows } from '@/utils/buildInfo';
 import AppSelect from './AppSelect.vue';
 import ProjectJobs from './ProjectJobs.vue';
 import StatusBadge from './StatusBadge.vue';
@@ -68,6 +71,9 @@ import StatusBadge from './StatusBadge.vue';
 const props = defineProps<{ project: string; buildName: string; canAbortJobs: boolean }>();
 const { t, te } = useI18n();
 const buildInfo = ref<BuildInfo | null>(null);
+const snapshot = ref<Snapshot | null>(null);
+const snapshotLoading = ref(false);
+const snapshotErrorKey = ref('');
 const loading = ref(false);
 const missing = ref(false);
 const errorKey = ref('');
@@ -82,15 +88,7 @@ const statusFilterId = useId();
 const specPageSizes = [10, 20, 50] as const;
 const specPageSize = ref<number>(20);
 const specCurrentPage = ref(1);
-const specRows = computed(() => Object.entries(buildInfo.value?.status?.specStatus?.build || {})
-  .map(([name, value]) => ({
-    name,
-    packageName: buildInfo.value?.status?.specRepoNames?.[name],
-    buildStatus: value.status,
-    displayStatus: value.status === 'Failed' && value.conditions?.some((condition) => condition.reason === 'RpmDependsMissing')
-        ? 'RpmDependsMissing' : value.status,
-  }))
-  .sort((left, right) => left.name.localeCompare(right.name)));
+const specRows = computed(() => buildInfoSpecRows(buildInfo.value, snapshot.value));
 const specBuildCounts = computed(() => ({
   succeeded: specRows.value.filter((row) => row.buildStatus === 'Succeeded').length,
   failed: specRows.value.filter((row) => row.buildStatus === 'Failed').length,
@@ -120,6 +118,7 @@ watch(specSearch, () => {
 });
 watch(() => [props.project, props.buildName], () => {
   buildInfo.value = null;
+  snapshot.value = null;
   selectedSpecName.value = '';
   specSearch.value = '';
   selectedSpecStatuses.value = [];
@@ -209,9 +208,13 @@ async function load(): Promise<void> {
   const current = new AbortController();
   controller = current;
   buildInfo.value = null;
+  snapshot.value = null;
+  snapshotErrorKey.value = '';
+  snapshotLoading.value = true;
   loading.value = true;
   missing.value = false;
   errorKey.value = '';
+  void loadSnapshot(current);
   try {
     const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build,status.specRepoNames`;
     const result = await request<BuildInfo>(path, { signal: current.signal });
@@ -223,6 +226,19 @@ async function load(): Promise<void> {
     }
   } finally {
     if (!current.signal.aborted) loading.value = false;
+  }
+}
+
+async function loadSnapshot(current: AbortController): Promise<void> {
+  const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/snapshots/${encodeURIComponent(props.buildName)}?includeFields=status.packageRepoStatuses`;
+  try {
+    const result = await request<Snapshot>(path, { signal: current.signal });
+    if (!current.signal.aborted) snapshot.value = result;
+  } catch (error) {
+    if (!current.signal.aborted) snapshotErrorKey.value = error instanceof ApiError && error.status === 404
+      ? 'project.buildInfoSnapshotMissing' : 'project.buildInfoSnapshotLoadFailed';
+  } finally {
+    if (!current.signal.aborted) snapshotLoading.value = false;
   }
 }
 </script>

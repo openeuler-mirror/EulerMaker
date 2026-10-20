@@ -265,6 +265,8 @@ export default {
     searchSpecs: "搜索 Spec 名称或包名",
     noMatchingSpecs: "没有匹配的 Spec 或包名",
     buildInfoNoSpecs: "暂无 Spec 状态",
+    buildInfoSnapshotMissing: "Snapshot 暂不存在，无法显示包的 Commit ID。",
+    buildInfoSnapshotLoadFailed: "Snapshot 加载失败，暂无法显示包的 Commit ID，请刷新重试。",
     buildInfoBuildStatus: "构建状态",
     allBuildStatuses: "全部状态",
     buildInfoConditions: "条件",
