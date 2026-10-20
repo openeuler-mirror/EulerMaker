@@ -35,7 +35,7 @@ type projectionBypassKey struct{}
 
 var projectableResourceKinds = map[string]struct{}{
 	"Config": {}, "Script": {}, "Project": {}, "Snapshot": {}, "Build": {},
-	"BuildInfo": {}, "RpmRepo": {}, "Job": {}, "Runner": {},
+	"BuildInfo": {}, "BuildGraph": {}, "RpmRepo": {}, "Job": {}, "Runner": {},
 	"User": {}, "MachineAccount": {},
 }
 

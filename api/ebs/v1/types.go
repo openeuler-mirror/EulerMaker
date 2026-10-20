@@ -216,19 +216,33 @@ type BuildInfoSpec struct {
 	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
 }
 
-// BuildInfoStatus is the desired/current state of a BuildInfo.
-// Dcg and PendingJobCreates are persisted working state owned by the
-// buildinfo controller: Dcg is the dependency graph snapshot and
-// PendingJobCreates tracks pending Job creations that are registered but
-// not yet confirmed.
+// BuildInfoStatus records build results and unconfirmed Job creations.
 type BuildInfoStatus struct {
 	Phase             BuildInfoPhase              `json:"phase,omitempty"`
 	Conditions        []metav1.Condition          `json:"conditions,omitempty"`
 	SpecStatus        SpecStatusGroup             `json:"specStatus"`
 	SpecRepoNames     map[string]string           `json:"specRepoNames,omitempty"`
 	FailedPackages    []string                    `json:"failedPackages,omitempty"`
-	Dcg               map[string]DcgNodeState     `json:"dcg,omitempty"`
 	PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// BuildGraph persists the dependency graph owned by the same-name BuildInfo.
+type BuildGraph struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Status            BuildGraphStatus `json:"status"`
+}
+
+type BuildGraphStatus struct {
+	Nodes map[string]DcgNodeState `json:"nodes"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type BuildGraphList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []BuildGraph `json:"items"`
 }
 
 // SpecStatusGroup stores per-spec fields in separate maps so callers can

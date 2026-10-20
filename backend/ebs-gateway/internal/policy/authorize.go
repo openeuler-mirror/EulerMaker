@@ -58,7 +58,7 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 			return deny("IAM administration requires Admin")
 		}
 		return nil
-	case "projects", "snapshots", "builds", "buildinfos", "rpmrepos", "jobs", "oldjobs":
+	case "projects", "snapshots", "builds", "buildinfos", "buildgraphs", "rpmrepos", "jobs", "oldjobs":
 		return a.projectResource(ctx, who, route)
 	default:
 		return deny("resource is not exposed")
@@ -67,7 +67,7 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 
 func IsReadOnlyProjectResource(resource string) bool {
 	switch resource {
-	case "snapshots", "buildinfos", "rpmrepos", "oldjobs":
+	case "snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs":
 		return true
 	default:
 		return false
@@ -278,7 +278,7 @@ func IsPublicRead(route Route) bool {
 		return false
 	}
 	switch route.Resource {
-	case "snapshots", "builds", "buildinfos", "rpmrepos", "jobs", "oldjobs":
+	case "snapshots", "builds", "buildinfos", "buildgraphs", "rpmrepos", "jobs", "oldjobs":
 		return true
 	default:
 		return false

@@ -31,6 +31,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ebsv1.Snapshot{}, &ebsv1.SnapshotList{},
 		&ebsv1.Build{}, &ebsv1.BuildList{},
 		&ebsv1.BuildInfo{}, &ebsv1.BuildInfoList{},
+		&ebsv1.BuildGraph{}, &ebsv1.BuildGraphList{},
 		&ebsv1.RpmRepo{}, &ebsv1.RpmRepoList{},
 		&ebsv1.Job{}, &ebsv1.JobList{},
 		&ebsv1.Runner{}, &ebsv1.RunnerList{},

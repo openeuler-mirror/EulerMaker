@@ -34,6 +34,7 @@ var definitions = []Definition{
 	{Kind: "Build", Singular: "build", Plural: "builds", Short: "build", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Build{} }},
 	{Kind: "Job", Singular: "job", Plural: "jobs", Short: "job", Namespaced: true, Object: func() runtime.Object { return &ebsv1.Job{} }},
 	{Kind: "BuildInfo", Singular: "buildinfo", Plural: "buildinfos", Short: "bi", Namespaced: true, Object: func() runtime.Object { return &ebsv1.BuildInfo{} }},
+	{Kind: "BuildGraph", Singular: "buildgraph", Plural: "buildgraphs", Short: "bg", Namespaced: true, Object: func() runtime.Object { return &ebsv1.BuildGraph{} }},
 	{Kind: "RpmRepo", Singular: "rpmrepo", Plural: "rpmrepos", Short: "repo", Namespaced: true, Object: func() runtime.Object { return &ebsv1.RpmRepo{} }},
 }
 
