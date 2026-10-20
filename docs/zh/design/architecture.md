@@ -6,11 +6,13 @@ EulerMaker 采用 Kubernetes-like 架构组织核心组件：以 `ebs-apiserver`
 
 当前架构目标：
 
-- 统一资源 API：Project、Snapshot、Build、BuildInfo、RpmRepo、Config、Script、Job、Runner 统一通过 `ebs/v1` API 暴露。
+BuildGraph 独立保存依赖图检查点，由 BuildInfo Controller 持久化，避免普通构建状态更新重复传输图数据；不增加独立控制器。
+
+- 统一资源 API：Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Config、Script、Job、Runner 统一通过 `ebs/v1` API 暴露。
 - 统一数据访问：业务组件不直接访问 etcd 和 Elasticsearch，统一通过 `ebs-apiserver` 读写资源。
 - 声明式对象模型：资源由 `metadata/spec/status` 组成；提供 status 的资源将普通更新和 `/status` 更新分离。
 - 事件与查询驱动协作：etcd 中的 Job、Runner 支持 watch；Elasticsearch 中的资源使用 list/get，不模拟 watch。
-- Project 业务作用域：Snapshot、Build、BuildInfo、RpmRepo、Job 归属于 Project；Config 和 Script 为集群级资源。只有 Job 的全局 API 支持 watch。
+- Project 业务作用域：Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 归属于 Project；Config 和 Script 为集群级资源。只有 Job 的全局 API 支持 watch。
 - 构建结果数据面：`artifact-manager` 独立承载构建产物与实时日志正文，避免大文件流量经过资源 API 和 Gateway 数据转发链路。
 - 可选 RPM 签名：Artifact Manager 在过程仓物化阶段使用内置的本地 GPG 或 Signatrust 后端；未启用时不执行签名。
 - 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch、`ebs-apiserver` 等组件。
@@ -94,7 +96,7 @@ spiffe://eulermaker/internal/controller-manager
 
 这三条链路的证书、授权、轮换和上线契约见 [ebs-apiserver 内部 mTLS 认证与授权](./ebs-apiserver.md#内部-mtls-认证与授权)。
 
-Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 不向 apiserver 注入用户或 Runner 身份头；Runner 范围 Job 请求的身份校验由 Gateway 完成。mTLS 只向 apiserver 提供组件身份，尚不提供按资源划分的权限；直连访问仍须受控。
+Gateway 允许匿名和已认证调用方通过 Project API get/list Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo 和 Job 的完整对象，并允许读取这些公开对象的单对象 `/status`；公开读取不按 Project owner/member 过滤。匿名请求不能 watch、写入或访问 Runner/IAM；携带 Token 的公开读取仍先完成 Token 和 User 状态校验。认证用户的写权限由 JWT、User 状态和 Project 用户权限确定。Gateway 不向 apiserver 注入用户或 Runner 身份头；Runner 范围 Job 请求的身份校验由 Gateway 完成。mTLS 只向 apiserver 提供组件身份，尚不提供按资源划分的权限；直连访问仍须受控。
 
 用户、Runner和内部组件的认证链路分别为：
 
@@ -125,7 +127,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> apiser
 | `ebs-gateway` | 系统入口，负责匿名公开读取、认证、鉴权、审计和请求转发 |
 | `ebs-apiserver` | 统一资源 API，负责对象校验、默认值、存储访问、list，以及 Job/Runner watch 和各资源子资源 |
 | `etcd` | Job、Runner 的主存储，提供原生 resourceVersion 和 list/watch |
-| `Elasticsearch` | Project、Snapshot、Build、BuildInfo、RpmRepo、Config、Script 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
+| `Elasticsearch` | Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Config、Script 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
 | `controller-manager` | 运行 Snapshot、BuildInfo、Job、Runner、RpmRepo 等控制器 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
 | `runner` | 持久化安装实例 UUID，通过 ebs-gateway 注册或恢复同一 `instanceId` 的 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
@@ -152,6 +154,7 @@ apiVersion: ebs/v1
 | Snapshot | Project 级 | 项目快照 |
 | Build | Project 级 | 构建任务 |
 | BuildInfo | Project 级 | 软件包构建依赖与结果信息 |
+| BuildGraph | Project 级 | 与 BuildInfo 同名的依赖图检查点 |
 | RpmRepo | Project 级 | RPM 仓库解析和发布信息 |
 | Config | 集群级 | 构建目标与资源策略等配置，以 `spec.content` 存储内容 |
 | Script | 集群级 | 构建脚本 |
@@ -201,6 +204,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 /apis/ebs/v1/projects/{project}/snapshots
 /apis/ebs/v1/projects/{project}/builds
 /apis/ebs/v1/projects/{project}/buildinfos
+/apis/ebs/v1/projects/{project}/buildgraphs
 /apis/ebs/v1/projects/{project}/rpmrepos
 /apis/ebs/v1/projects/{project}/jobs
 ```
@@ -215,6 +219,7 @@ PUT    /apis/ebs/v1/projects/{name}/status
 /apis/ebs/v1/snapshots
 /apis/ebs/v1/builds
 /apis/ebs/v1/buildinfos
+/apis/ebs/v1/buildgraphs
 /apis/ebs/v1/rpmrepos
 /apis/ebs/v1/jobs
 ```
@@ -287,6 +292,7 @@ ebs-projects
 ebs-snapshots
 ebs-builds
 ebs-buildinfos
+ebs-buildgraphs
 ebs-rpmrepos
 ebs-configs
 ebs-users
@@ -312,10 +318,10 @@ Project scoped 的 ES 对象统一使用 `{project}/{name}` 作为文档 ID。Us
 ### 8.2 Controller 流程
 
 ```text
-controller -> list/get Project、Snapshot、Build、BuildInfo、RpmRepo
+controller -> list/get Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo
 controller -> watch Job（需要事件流时）
 buildinfo controller -> get 集群级 Config/build-target、Config/build-resource
-controller -> create/update Snapshot、Build、BuildInfo、RpmRepo、Job
+controller -> create/update Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job
 controller -> update status
 ```
 
