@@ -22,7 +22,10 @@ func ParseAllocatable(values map[string]string) (Resource, error) {
 }
 
 func parseResource(values map[string]string) (Resource, error) {
-	result := Resource{CPU: *resource.NewQuantity(0, resource.DecimalSI), Memory: *resource.NewQuantity(0, resource.BinarySI)}
+	result := Resource{
+		CPU:    *resource.NewQuantity(0, resource.DecimalSI),
+		Memory: *resource.NewQuantity(0, resource.BinarySI),
+	}
 	for name, target := range map[string]*resource.Quantity{"cpu": &result.CPU, "memory": &result.Memory} {
 		value, found := values[name]
 		if !found || value == "" {

@@ -599,7 +599,7 @@ git-server \
   --temp-cleanup-interval=10m \
   --max-request-body-bytes=65536 \
   --max-command-output-bytes=16777216 \
-  --clone-workers=20 \
+  --clone-workers=100 \
   --clone-base-url=http://git-server:8080/git \
   --allow-insecure-http-auth=false \
   --auth-config=/etc/git-server/auth.toml
@@ -617,7 +617,7 @@ git-server \
 | `--temp-cleanup-interval` | `10m` | 临时目录清理失败后的重试周期，必须大于 0 |
 | `--max-request-body-bytes` | `65536` | HTTP JSON 请求正文的最大字节数 |
 | `--max-command-output-bytes` | `16777216` | `/command` 最大输出字节数 |
-| `--clone-workers` | `20` | Smart HTTP 同时处理的最大请求数，与同步 Worker 独立 |
+| `--clone-workers` | `100` | Smart HTTP 同时处理的最大请求数，与同步 Worker 独立 |
 | `--clone-base-url` | `http://git-server:8080/git` | 生成 `clone_url` 的 HTTP(S) 基础地址，包含 `/git` 或代理映射的路径 |
 | `--allow-insecure-http-auth` | `false` | 是否允许通过明文 HTTP 使用用户名和密码；生产环境必须保持关闭 |
 | `--auth-config` | 无 | 远端 Git 认证 TOML 文件，未配置时只允许匿名访问远端仓库 |

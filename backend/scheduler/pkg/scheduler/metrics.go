@@ -22,8 +22,14 @@ type metrics struct {
 }
 
 func newMetrics() *metrics {
-	return &metrics{attempts: map[string]uint64{}, bind: map[string]uint64{}, confirm: map[string]uint64{}, invalid: map[string]uint64{}}
+	return &metrics{
+		attempts: map[string]uint64{},
+		bind:     map[string]uint64{},
+		confirm:  map[string]uint64{},
+		invalid:  map[string]uint64{},
+	}
 }
+
 func (m *metrics) recordCycle(result *framework.CycleResult, d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -37,6 +43,7 @@ func (m *metrics) recordCycle(result *framework.CycleResult, d time.Duration) {
 		m.invalid[result.Reason]++
 	}
 }
+
 func (m *metrics) recordConfirm(result string, released bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -45,6 +52,7 @@ func (m *metrics) recordConfirm(result string, released bool) {
 		m.unknownReleased++
 	}
 }
+
 func keys(values map[string]uint64) []string {
 	result := make([]string, 0, len(values))
 	for key := range values {
@@ -53,13 +61,17 @@ func keys(values map[string]uint64) []string {
 	sort.Strings(result)
 	return result
 }
+
 func (m *metrics) write(w io.Writer, assumed int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, key := range keys(m.attempts) {
 		fmt.Fprintf(w, "scheduler_scheduling_attempts_total{result=%q} %d\n", key, m.attempts[key])
 	}
-	fmt.Fprintf(w, "scheduler_scheduling_duration_seconds_count %d\nscheduler_scheduling_duration_seconds_sum %.9f\n", m.cycles, m.duration.Seconds())
+	fmt.Fprintf(w,
+		"scheduler_scheduling_duration_seconds_count %d\nscheduler_scheduling_duration_seconds_sum %.9f\n",
+		m.cycles, m.duration.Seconds(),
+	)
 	for _, key := range keys(m.bind) {
 		fmt.Fprintf(w, "scheduler_bind_total{result=%q} %d\n", key, m.bind[key])
 	}
@@ -70,5 +82,10 @@ func (m *metrics) write(w io.Writer, assumed int) {
 	for _, key := range keys(m.invalid) {
 		fmt.Fprintf(w, "scheduler_invalid_jobs_total{reason=%q} %d\n", key, m.invalid[key])
 	}
-	fmt.Fprint(w, "scheduler_plugin_duration_seconds_count 0\nscheduler_filter_rejections_total{plugin=\"none\",reason=\"none\"} 0\nscheduler_resource_overcommit_total{resource=\"cpu\"} 0\nscheduler_resource_overcommit_total{resource=\"memory\"} 0\n")
+	fmt.Fprint(w,
+		"scheduler_plugin_duration_seconds_count 0\n"+
+			"scheduler_filter_rejections_total{plugin=\"none\",reason=\"none\"} 0\n"+
+			"scheduler_resource_overcommit_total{resource=\"cpu\"} 0\n"+
+			"scheduler_resource_overcommit_total{resource=\"memory\"} 0\n",
+	)
 }

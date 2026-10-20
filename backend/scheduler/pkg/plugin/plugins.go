@@ -18,13 +18,17 @@ type filter struct {
 }
 
 func (f filter) Name() string { return f.name }
+
 func (f filter) Filter(_ context.Context, s *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 	return f.fn(s, r)
 }
+
 func ok(name string) *framework.Status { return framework.SuccessStatus(name) }
+
 func reject(name, reason string) *framework.Status {
 	return &framework.Status{Code: framework.Unschedulable, Plugin: name, Reason: reason}
 }
+
 func fail(name string, err error) *framework.Status {
 	return &framework.Status{Code: framework.Error, Plugin: name, Reason: err.Error(), Err: err}
 }
@@ -40,6 +44,7 @@ func Phase() framework.FilterPlugin {
 		return ok("PhaseFilter")
 	}}
 }
+
 func Unschedulable() framework.FilterPlugin {
 	return filter{"UnschedulableFilter", func(_ *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 		if r.Runner.Spec.Unschedulable {
@@ -48,6 +53,7 @@ func Unschedulable() framework.FilterPlugin {
 		return ok("UnschedulableFilter")
 	}}
 }
+
 func Runtime() framework.FilterPlugin {
 	return filter{"RuntimeFilter", func(s *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 		runtime := s.Job.Spec.Runtime
@@ -64,6 +70,7 @@ func Runtime() framework.FilterPlugin {
 		return ok("RuntimeFilter")
 	}}
 }
+
 func NodeSelector() framework.FilterPlugin {
 	return filter{"NodeSelectorFilter", func(s *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 		keys := make([]string, 0, len(s.Job.Spec.NodeSelector))
@@ -95,6 +102,7 @@ func validateTolerations(items []ebsv1.Toleration) error {
 	}
 	return nil
 }
+
 func tolerated(t ebsv1.RunnerTaint, items []ebsv1.Toleration) bool {
 	for _, x := range items {
 		op := x.Operator
@@ -113,6 +121,7 @@ func tolerated(t ebsv1.RunnerTaint, items []ebsv1.Toleration) bool {
 	}
 	return false
 }
+
 func Taint() framework.FilterPlugin {
 	return filter{"TaintFilter", func(s *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 		if err := validateTolerations(s.Job.Spec.Tolerations); err != nil {
@@ -126,6 +135,7 @@ func Taint() framework.FilterPlugin {
 		return ok("TaintFilter")
 	}}
 }
+
 func Capacity() framework.FilterPlugin {
 	return filter{"CapacityFilter", func(s *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 		if r.Invalid != nil {
@@ -144,15 +154,20 @@ type scorer struct {
 	fn     func(*framework.Session, *framework.RunnerSnapshot) (int64, error)
 }
 
-func (s scorer) Name() string  { return s.name }
+func (s scorer) Name() string { return s.name }
+
 func (s scorer) Weight() int64 { return s.weight }
-func (s scorer) Score(_ context.Context, se *framework.Session, r *framework.RunnerSnapshot) (int64, *framework.Status) {
+
+func (s scorer) Score(
+	_ context.Context, se *framework.Session, r *framework.RunnerSnapshot,
+) (int64, *framework.Status) {
 	v, err := s.fn(se, r)
 	if err != nil {
 		return 0, fail(s.name, err)
 	}
 	return clamp(v), ok(s.name)
 }
+
 func clamp(v int64) int64 {
 	if v < 0 {
 		return 0
@@ -162,6 +177,7 @@ func clamp(v int64) int64 {
 	}
 	return v
 }
+
 func quantityScore(remaining, allocatable resource.Quantity) (int64, bool) {
 	if allocatable.Sign() <= 0 {
 		return 0, false
@@ -191,11 +207,13 @@ func quantityScore(remaining, allocatable resource.Quantity) (int64, bool) {
 	}
 	return clamp(ri.Int64()), true
 }
+
 func remaining(available, requested resource.Quantity) resource.Quantity {
 	result := available.DeepCopy()
 	result.Sub(requested)
 	return result
 }
+
 func LeastAllocated() framework.ScorePlugin {
 	return scorer{"LeastAllocated", 60, func(s *framework.Session, r *framework.RunnerSnapshot) (int64, error) {
 		scores := []int64{}
@@ -215,11 +233,13 @@ func LeastAllocated() framework.ScorePlugin {
 		return sum / int64(len(scores)), nil
 	}}
 }
+
 func BalancedJobs() framework.ScorePlugin {
 	return scorer{"BalancedJobs", 40, func(_ *framework.Session, r *framework.RunnerSnapshot) (int64, error) {
 		return 100 / (1 + r.RunningJobCount + r.AssumedJobCount), nil
 	}}
 }
+
 func TaintPreference() framework.ScorePlugin {
 	return scorer{"TaintPreference", 10, func(s *framework.Session, r *framework.RunnerSnapshot) (int64, error) {
 		if err := validateTolerations(s.Job.Spec.Tolerations); err != nil {
@@ -234,9 +254,11 @@ func TaintPreference() framework.ScorePlugin {
 		return clamp(score), nil
 	}}
 }
+
 func DefaultFilters() []framework.FilterPlugin {
 	return []framework.FilterPlugin{Phase(), Unschedulable(), Runtime(), NodeSelector(), Taint(), Capacity()}
 }
+
 func DefaultScores() []framework.ScorePlugin {
 	return []framework.ScorePlugin{LeastAllocated(), BalancedJobs(), TaintPreference()}
 }

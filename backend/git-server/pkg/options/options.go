@@ -38,7 +38,7 @@ func Parse(args []string) (Options, error) {
 	fs.DurationVar(&result.TempCleanupInterval, "temp-cleanup-interval", 10*time.Minute, "temporary directory cleanup interval")
 	fs.Int64Var(&result.MaxRequestBodyBytes, "max-request-body-bytes", 65536, "maximum JSON request body")
 	fs.Int64Var(&result.MaxCommandOutputBytes, "max-command-output-bytes", 16777216, "maximum command output")
-	fs.IntVar(&result.CloneWorkers, "clone-workers", 20, "maximum concurrent Smart HTTP requests")
+	fs.IntVar(&result.CloneWorkers, "clone-workers", 100, "maximum concurrent Smart HTTP requests")
 	fs.StringVar(&result.CloneBaseURL, "clone-base-url", "http://git-server:8080/git", "HTTP(S) base URL returned to clone clients, including /git")
 	fs.BoolVar(&result.AllowInsecureHTTPAuth, "allow-insecure-http-auth", false, "allow credentials over plain HTTP")
 	fs.StringVar(&result.AuthConfig, "auth-config", "", "authentication TOML file")

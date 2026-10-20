@@ -19,9 +19,15 @@ type Action struct {
 }
 
 func New(c cache.Interface, jobs client.JobInterface) *Action { return &Action{cache: c, jobs: jobs} }
-func (a *Action) Name() string                                { return "Allocate" }
+
+func (a *Action) Name() string { return "Allocate" }
+
 func (a *Action) Execute(ctx context.Context, s *framework.Session) *framework.CycleResult {
-	base := &framework.CycleResult{JobKey: s.Job.Namespace + "/" + s.Job.Name, JobUID: s.Job.UID, QueueAction: framework.QueueAddBackoff}
+	base := &framework.CycleResult{
+		JobKey:      s.Job.Namespace + "/" + s.Job.Name,
+		JobUID:      s.Job.UID,
+		QueueAction: framework.QueueAddBackoff,
+	}
 	if _, err := framework.ParseRequests(s.Job.Spec.Resources); err != nil {
 		base.Code = framework.UnschedulableError
 		base.Reason = "invalid-job-resources"
@@ -86,7 +92,15 @@ func (a *Action) Execute(ctx context.Context, s *framework.Session) *framework.C
 		return base
 	}
 	runner := s.Runners[best]
-	st, err := statement.New(a.cache, a.jobs, statement.Request{JobKey: base.JobKey, JobUID: s.Job.UID, RunnerName: best, RunnerUID: runner.Runner.UID, RunnerRevision: runner.Revision, Requests: s.Requests, JobResourceVersion: s.Job.ResourceVersion})
+	st, err := statement.New(a.cache, a.jobs, statement.Request{
+		JobKey:             base.JobKey,
+		JobUID:             s.Job.UID,
+		RunnerName:         best,
+		RunnerUID:          runner.Runner.UID,
+		RunnerRevision:     runner.Revision,
+		Requests:           s.Requests,
+		JobResourceVersion: s.Job.ResourceVersion,
+	})
 	if err != nil {
 		base.Code = framework.InternalError
 		base.Err = err

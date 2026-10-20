@@ -26,7 +26,11 @@ func TestServerCARequiredByDefault(t *testing.T) {
 }
 
 func TestClientCertificateOptions(t *testing.T) {
-	if _, err := Parse([]string{"--apiserver=https://localhost:8443", "--insecure-skip-verify=true", "--apiserver-client-cert=client.crt"}); err == nil {
+	if _, err := Parse([]string{
+		"--apiserver=https://localhost:8443",
+		"--insecure-skip-verify=true",
+		"--apiserver-client-cert=client.crt",
+	}); err == nil {
 		t.Fatal("unpaired client certificate was accepted")
 	}
 	o, err := Parse([]string{
