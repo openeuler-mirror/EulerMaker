@@ -6,7 +6,7 @@ BuildInfo Controller 负责组装 spec 依赖、构建和持久化依赖图、�
 
 职责边界：
 
-- 本控制器创建 Job，仅更新 BuildInfo.status；Job 创建后只读，资源访问矩阵见 15.1。
+- 本控制器创建 Job 和 BuildGraph，更新 BuildInfo.status 与 BuildGraph.status；父 Build 中止时调用 Job `/abort`，资源访问矩阵见 15.1。
 - Build Controller 创建同名 BuildInfo 并消费其终态；Snapshot Controller 解析仓库 commit；Runner 执行 Job 并提供 install 结果；RpmRepo Controller 物化和发布产物。
 - 关联 Job 的独立回收机制见 8.4；首版单副本部署。
 
@@ -49,6 +49,7 @@ backend/controller-manager/
       specdcache.go                # Cache.specDependsCache（per-BuildInfo：RWMutex，失效/prune 复用 dcgDict 机制，无 TTL）与 Cache.specFileCache（全局 LRU：commitId/specFileName 两层 key，--specfile-cache-size 上限，15.11）
       specdepends.go               # 步骤 0：specDepends 组装（查 specdcache + miss 补源调度：specFileCache 命中直用/git-server 下载）、unparsable_spec 覆盖、以 Build.spec.packages 选种子及直接下游；single 指定包仓库集直通组装（见 7.2.3）
       dcg.go                       # DcgDict/DcgNode、Kosaraju SCC、SCC 剥离选点、运行期 install 补边（含新环追加破环）、DispatchRequirements
+      graph.go                     # BuildGraph 获取、创建、补边持久化、写入确认与缓存版本核对
       cache.go                     # dcgDict 缓存（RWMutex + tombstone + sweeper）
       jobs.go                      # dispatchSpec、backfillJobs、多代 Job 排序
       conditions.go                # condition upsert/清除
@@ -57,7 +58,7 @@ backend/controller-manager/
 
 > **客户端分层**：通用 apiserver 与 git-server 客户端位于 `pkg/clients/apiserver`、`pkg/clients/gitserver`，供多个控制器复用。`controllers/buildinfo/client.go` 定义本控制器所需的最小 `Client` 接口及 typed 适配层；git-server 侧注入共享的 `gitserver.GitServerClient` 接口，本控制器仅调用其中的 `ExecCommand` 方法。
 >
-> 本控制器仅消费 `ExecCommand`（7.2.2 spec 下载，以 `Snapshot.spec.packageRepos[].url` 和对应状态的 `commitId` 请求；**不做就绪判定、不发布同步任务**——镜像同步任务发布与新鲜度等待由 Snapshot Controller 在 Snapshot 解析期完成，本控制器直接复用其同步完成的本地镜像，接口见 4.2）。新增资源 GVR 常量（`BuildInfosGVR` / `ProjectsGVR` / `RpmReposGVR` / `ConfigsGVR`）加入 `pkg/source`（复用已有 `SnapshotsGVR` / `BuildsGVR` / `JobsGVR`）。
+> 本控制器仅消费 `ExecCommand`（7.2.2 spec 下载，以 `Snapshot.spec.packageRepos[].url` 和对应状态的 `commitId` 请求；**不做就绪判定、不发布同步任务**——镜像同步任务发布与新鲜度等待由 Snapshot Controller 在 Snapshot 解析期完成，本控制器直接复用其同步完成的本地镜像，接口见 4.2）。新增资源 GVR 常量（`BuildInfosGVR` / `BuildGraphsGVR` / `ProjectsGVR` / `RpmReposGVR` / `ConfigsGVR`）加入 `pkg/source`（复用已有 `SnapshotsGVR` / `BuildsGVR` / `JobsGVR`）。
 
 依赖与注入：
 
@@ -98,7 +99,7 @@ BuildInfo 与父 Build 同项目、同名；创建输入字段见 15.2。
 | 编号 | 不变量与规则位置 |
 |------|------------------|
 | G-01 | 禁止修改 Build；访问权限见 15.1。 |
-| G-02 | DCG 持久化先于缓存更新及基于该图的 Job 创建，见 15.9。 |
+| G-02 | BuildGraph 持久化先于缓存更新及基于该图的 Job 创建；与 BuildInfo 分别进行版本控制，见 15.9。 |
 | G-03 | 派发计数与失败放宽按 7.4.2，不重复创建 Job。 |
 | G-04 | Job 不跨 BuildInfo 共享，关联规则见 8.1。 |
 | G-05 | 终态不再推进，事件与入口检查见 5.2/7.1。 |
@@ -121,9 +122,14 @@ package buildinfo
 type Client interface {
     // BuildInfo（主资源）
     GetBuildInfo(ctx context.Context, namespace, name string) (*ebsv1.BuildInfo, error)
-    // UpdateBuildInfoStatus 走 /status：写 BuildInfo.status（phase/specStatus/conditions/dcg），
+    // UpdateBuildInfoStatus 走 /status：写 BuildInfo.status，不携带依赖图，
     // apiserver 保留旧 spec；specDepends 不落库，无 PUT spec 场景，不设 PUT 主资源方法
     UpdateBuildInfoStatus(ctx context.Context, obj *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
+
+    // metadataOnly=true 时使用 includeFields=metadata，完整读图时不设置投影。
+    GetBuildGraph(ctx context.Context, project, name string, metadataOnly bool) (*ebsv1.BuildGraph, error)
+    CreateBuildGraph(ctx context.Context, project string, obj *ebsv1.BuildGraph) (*ebsv1.BuildGraph, error)
+    UpdateBuildGraphStatus(ctx context.Context, obj *ebsv1.BuildGraph) (*ebsv1.BuildGraph, error)
 
     // Job（创建 + 按 label list 回读 + 创建 Unknown 按确定性名称 GET 确认）
     CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
@@ -144,6 +150,7 @@ type Client interface {
 路径约定：
 
 - BuildInfo：`GET /apis/ebs/v1/buildinfos`（全局 list，PollingSource 复用 `ListPage`）；单对象 `GET /apis/ebs/v1/projects/{project}/buildinfos/{name}`；status 写 `PUT /apis/ebs/v1/projects/{project}/buildinfos/{name}/status`；
+- BuildGraph：创建 `POST /apis/ebs/v1/projects/{project}/buildgraphs`；读取 `GET .../buildgraphs/{name}`；补边 `PUT .../buildgraphs/{name}/status`。不注册独立 PollingSource/Watch，随 BuildInfo 调谐按确定性名称访问；返回的 metadata 与完整读取时的 status.nodes 均须校验，见 15.9。
 - Job：创建 `POST /apis/ebs/v1/projects/{project}/jobs`；单对象 `GET /apis/ebs/v1/projects/{project}/jobs/{name}`（创建 Unknown 按确定性 Job 名确认，10.3/E-11）；list `GET /apis/ebs/v1/projects/{project}/jobs?labelSelector=ebs.io/build-name=<name>`；
 - Build：`GET /apis/ebs/v1/projects/{project}/builds/{name}`；只读取本轮父 Build，不 List 历史 Build；
 - RpmRepo / Snapshot：`GET /apis/ebs/v1/projects/{project}/{resource}/{name}`（均与 Build 同名）；
@@ -152,7 +159,7 @@ type Client interface {
 
 HTTP 实现复用共享 client 的 `Get` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus` 等能力；写请求使用对象 `metadata.resourceVersion` 触发乐观锁。
 
-**写错误契约**：`UpdateBuildInfoStatus` 与 `CreateJob` 的失败必须返回可由 `errors.As` 识别的 `WriteError`，Controller 不解析错误文本或底层 HTTP 状态自行推断 Outcome：
+**写错误契约**：`UpdateBuildInfoStatus`、`CreateJob`、`CreateBuildGraph` 与 `UpdateBuildGraphStatus` 的失败必须返回可由 `errors.As` 识别的 `WriteError`，Controller 不解析错误文本或底层 HTTP 状态自行推断 Outcome。BuildGraph 的同名创建冲突和结果未知确认优先按 15.9 处理：
 
 ```go
 var writeErr *apiserver.WriteError
@@ -220,7 +227,7 @@ PollingSource 默认每 10s（`--poll-period`）轮询一次，作为丢事件�
 
 缓存结构与读写策略分别见 15.9（DCG）、15.10（RPM 元数据）、15.11（specDepends 与 spec 文件）。本节定义它们共享的生命周期及两个失败计数器。
 
-**DCG 获取顺序**：内存命中 → status.dcg 加载 → 首次建图并持久化。加载时重算 cycleNodes、直读 bootstrapBreak 标记，不重选破环点；首次建图及补边均遵循 15.9 的先持久化后更新缓存/派发规则。
+**DCG 获取顺序**：每轮需要图时先核对 BuildGraph 元数据；同 UID/resourceVersion 的内存命中直接复用，否则完整 GET 加载。仅满足首次建图条件的 NotFound 可以创建，具体边界见 15.9。加载时重算 cycleNodes、直读 bootstrapBreak 标记，不重选破环点。
 
 **共享失效规则**：dcgDict、rpmMetaSources、specDependsCache 按 namespace/name 隔离。reconcile 观察到终态或 GET 404 时立即失效；OnDelete 仅记录 tombstone，在宽限期内 OnAdd/OnUpdate 撤销标记，超时由 sweeper 或事件惰性清扫。宽限期见 12.1，用于避免一次空列表引发缓存重建风暴。全局 specFileCache 仅按 LRU 淘汰，不随 BuildInfo 终态失效。
 
@@ -460,10 +467,10 @@ ebs-apiserver (REST API)
 本节只定义执行顺序；各步骤失败按 7.5 返回，写入按 10.2/10.3 处理。single 的差异以 7.2.3 为准。
 
 0. **组装与构建集判定**：读取当前 Snapshot 和父 Build 已固化的 `spec.packages`，按 7.2.2 判定构建集；不查询历史 Build、BuildInfo 或 Snapshot。specDepends 补源和缓存见 15.11。当前 Snapshot 查询失败计数见 5.4/E-30；触发停止条件立即转 6.5。瞬态补源失败不进入后续步骤；确定性失败按 E-23/E-24 分流。
-1. **回填既有 Job**：按 build-name List 并按 7.4.2、7.4.4～7.4.7 回填，覆盖上轮 Job 已创建但 status 写入未成功的情况。List 失败结束本轮。
+1. **读取既有 Job**：按 build-name 完整 List，供首次建图判定及后续回填共用。List 失败结束本轮。
 1.5. **确定目标架构**：复用 parentAbortGuard 持有的 Build；arch 为空时的防御行为见 E-19。
-2. **取得并持久化 DCG**：依次查内存缓存、status.dcg、首次建图（5.4/15.9）；首次建图要求本轮持有 RpmRepo 且所需元数据就绪。建边算法见 16.1、选点见 7.2.1。构图异常记录 DcgBuildFailed 并等待；持久化失败不更新缓存、不创建 Job。获取成功清除 DcgBuildFailed。single 跳过此步。
-3. **预建状态并派发无上游 spec**：DCG 落盘后、创建任何 Job 前，先为筛选后的构建集全部 spec 补齐缺失的 `specStatus` 条目和 `specRepoNames` 映射并持久化，保持 Pending、不覆盖回填状态；写入失败不派发。然后对 build/install 合并入度为零且尚无 Job 的节点，依次执行架构校验（E-19）、构建依赖校验（7.4.1）和 Job 构造（15.3.1）。本轮新 Job 共用一次 Config/build-target 快照；配置不可用按 E-26 暂停。成功创建后按 7.4.2 更新派发计数及状态。
+2. **取得并持久化 DCG**：按 15.9 核对或创建 BuildGraph；首次建图要求本轮持有 RpmRepo 且所需元数据就绪。建边算法见 16.1、选点见 7.2.1。构图异常记录 DcgBuildFailed 并等待；持久化失败不更新缓存、不创建 Job。获取成功清除 DcgBuildFailed；图对象不可用按 15.9 记录 BuildGraphUnavailable。single 跳过此步。
+3. **回填、预建状态并派发无上游 spec**：DCG 落盘后，以图节点集合确定构建集，按 7.4.2、7.4.4～7.4.7 回填步骤 1 读取的 Job，覆盖上轮创建成功但 status 写入失败的情况。创建任何 Job 前，为构建集全部 spec 补齐缺失的 `specStatus` 条目和 `specRepoNames` 映射并持久化，保持 Pending、不覆盖回填状态；写入失败不派发。然后对 build/install 合并入度为零且尚无 Job 的节点，依次执行架构校验（E-19）、构建依赖校验（7.4.1）和 Job 构造（15.3.1）。本轮新 Job 共用一次 Config/build-target 快照；配置不可用按 E-26 暂停。成功创建后按 7.4.2 更新派发计数及状态。
 4. **派发 bootstrap**：按 7.2.1 的破环点和 7.4.6 第 3 条门禁执行首次下发；已下发的不重复 bootstrap。破环异常记录 DcgBuildFailed 并等待。
 5. **完成初始化**：构建集为空且未被步骤 0 的确定性失败分支截获时，直接 Completed。构建集非空时，只有步骤 3、4 的派发遍历完成后才置 Processing；未派发条目已在步骤 3 预建，作为 6.4 完成判定的遍历基准。
 6. **写入**：仅实际状态变化才 PUT（见 7.3 回写约定），成功后由后续 Processing 调谐推进。
@@ -472,7 +479,7 @@ ebs-apiserver (REST API)
 
 #### 7.2.1 破环算法设计
 
-`Cache.dcgDict` 是 BuildInfo Controller 进程内缓存的 spec 依赖关系图（DAG），Go 实现为 `pkg/controllers/buildinfo/` 内 `DcgDict` 类型（普通 struct + 方法，非接口）；建图结果持久化至 `BuildInfo.status.dcg`（G-02），进程内缓存仅为加速层，重启后从 status.dcg 加载替代重建（三级获取顺序见 5.4，schema 见 15.9）。
+`Cache.dcgDict` 是 BuildInfo Controller 进程内缓存的 spec 依赖关系图，Go 实现为 `pkg/controllers/buildinfo/` 内 `DcgDict` 类型（普通 struct + 方法，非接口）；建图结果持久化至 `BuildGraph.status.nodes`（G-02），进程内缓存仅为加速层。获取、首次建图和重启加载规则见 15.9。
 
 节点字段见 15.9；入度按 len(InDep) + len(InstallInDep) 计算，无独立 inDegree 字段。
 
@@ -492,7 +499,7 @@ ebs-apiserver (REST API)
 specDepends 的组装与缓存见 15.11；构建集只在 Pending 阶段判定，分为全量解析和构建集筛选两阶段：
 
 - **阶段一：specDepends 全量组装**——per-BuildInfo 缓存（15.11）命中且 phase=Processing → 直接复用全量视图（本轮不下载不解析）；Pending 重入 / miss（首次组装 / 进程重启后）→ 遍历当前 Snapshot `packageRepoStatuses`（构建门禁为 build 级判断、恒通过无 repo 级过滤，见下文），逐仓经 git-server 下载解析补源（spec 文件内容经全局 `Cache.specFileCache` 去重：命中不下载，miss 经 git show 下载写入 LRU，15.11），按下述 `unparsable_spec` 规则覆盖依赖后写回全量视图缓存，得到**当前 Snapshot 全部包仓库的 spec 依赖全集**（纯内存视图，不落库；`full`/`incremental`/`specified` 适用；`single` 直通组装 `packages` 全部指定包仓库条目，即构建集语义；指定包仓库集直组装见 7.2.3）。
-- **阶段二：构建集判定**——按构建类型的"构建选 spec 规则"从本轮组装的全量 specDepends 中筛选需要构建的 spec 集合（**构建集**）。构建集为派生概念：内存中按确定性规则重算、不落库，DCG（status.dcg）、`status.specStatus` 与 `status.specRepoNames` 仅覆盖构建集；步骤 2 建图与步骤 3 下发的输入均为构建集筛选后的 specDepends 条目。
+- **阶段二：构建集判定**——按构建类型的"构建选 spec 规则"从本轮组装的全量 specDepends 中筛选需要构建的 spec 集合（**构建集**）。构建集为派生概念：内存中按确定性规则重算、不落库，DCG（BuildGraph.status.nodes）、`status.specStatus` 与 `status.specRepoNames` 仅覆盖构建集；步骤 2 建图与步骤 3 下发的输入均为构建集筛选后的 specDepends 条目。
 
 **`unparsable_spec` 规则**：`BuildInfo.spec.buildPayload.unparsable_spec` 是 spec 名列表，按 `specDepends` 的 map key 精确匹配（区分大小写），不按 `repoName` 匹配。每次重新组装时，先正常下载和解析所有 spec、按 specName 合并，再对命中的条目将内存视图中的 `BuildRequires` 置为空 map，最后写入 per-BuildInfo 缓存；全局 specFileCache 只保存原始文件，不受覆盖影响。Processing 缓存命中直接复用已覆盖的视图；重启后按已固化的 BuildInfo payload 重组装，得到相同结果。列表缺失或为空时不覆盖；键值不是列表时记录 warning 且整体不生效；列表中的非字符串项记录 warning 并忽略，其余有效项仍参与匹配；列表中不存在的 spec 名无效果。
 
@@ -577,7 +584,7 @@ buildSet = buildSet ∪ direct                                                # 
 
 **2. 直通下发（跳过中间步骤与全部门禁依赖）**：
 
-- **跳过步骤 2（dcg 建图）**：无 dcgDict、**不填充 `status.dcg` 字段**（整个生命周期保持空，无 `DcgBuildFailed` 语义）、无破环选点；RpmRepo 就绪前置随之不适用——`single` 的建图/门禁均不查询本轮 RpmRepo（见 15.4；repo 注入读本轮同名 RpmRepo 的 contentURL，见第 3 条；配置了 `prefer` 时读取同一仓库元数据仅供 Job payload 使用，见 15.3.1）；7.1 发布失败守卫同样豁免（rpm-repo-controller 对 single 不发布，release 恒非 Failed，无检查意义，见 E-28）；
+- **跳过步骤 2（dcg 建图）**：无 dcgDict、**不创建或读取 BuildGraph**，无 `DcgBuildFailed` 语义或破环选点；RpmRepo 就绪前置随之不适用——`single` 的建图/门禁均不查询本轮 RpmRepo（见 15.4；repo 注入读本轮同名 RpmRepo 的 contentURL，见第 3 条；配置了 `prefer` 时读取同一仓库元数据仅供 Job payload 使用，见 15.3.1）；7.1 发布失败守卫同样豁免（rpm-repo-controller 对 single 不发布，release 恒非 Failed，无检查意义，见 E-28）；
 - **跳过步骤 4（破环）**：无图无环；
 - **步骤 3 预建全部 specStatus 条目后直接创建 Job**（无入度概念、无上游语义；仍遵守每轮 20 次创建请求的上限）：
   - **跳过的门禁**（不校验任何门禁依赖）：构建依赖统一存在性裁决（7.4.1 条件 2，含 RpmRepo 查询——守卫豁免，7.1）、发布确认门禁（7.4.6 第 2 条）、重建一致性门禁（7.4.6 第 1 条）、上游终态检查；
@@ -595,7 +602,7 @@ buildSet = buildSet ∪ direct                                                # 
 **4. Processing 简化路径（advanceBuildInfo）**：
 
 - 仅执行：ListJobs 回填（步骤 1/2，多代取最新 / dispatchCount 兜底照常）+ 完成度检查（步骤 5）；
-- 跳过：步骤 2.1/2.2（Project 复用确认 / Snapshot / RpmRepo 获取——无建图与 payload 注入需求）、步骤 3（无 dcg——`status.dcg` 保持空，`DispatchRequirements` 不被调用）、步骤 3.1（**install 运行期补边不适用**——无图；install 失败仅回填状态）、步骤 4（构建集 spec 已在 init 直通下发完毕，本步骤无操作）；
+- 跳过：步骤 2.1/2.2（Project 复用确认 / Snapshot / RpmRepo 获取——无建图与 payload 注入需求）、步骤 3（不读取 BuildGraph，`DispatchRequirements` 不被调用）、步骤 3.1（**install 运行期补边不适用**——无图；install 失败仅回填状态）、步骤 4（构建集 spec 已在 init 直通下发完毕，本步骤无操作）；
 - 完成度判定：全部 spec 有效 required **恒为 1**（无环无重建语义；无 dcgDict/`DispatchRequirements` 调用，`required` 缺省按 1 判定），allTerminal 语义同 6.4。
 
 **5. 失败与幂等**：
@@ -737,7 +744,7 @@ buildSet = buildSet ∪ direct                                                # 
    - P ∉ S 的现有 `installInDep[S]`（真漏边；幂等判据——已补过的边自然跳过）。
 4. **补边计算（候选图，不动内存图）**：`installInDep[S][P] = versionRequests`、`outDep[P] += S`（**出度入度统一补入**，环内/环外 S 一视同仁）；**不写 condition、不提升有效 required**——补边仅修正图，重发与否由图语义决定（补边成环 → 环内节点 required=2 经重建重发，见第 5 条；不成环 → 环外不重发，第二层兜底，见第 7 条）。
 5. **新环处理**：图变更后对 build/install 合并图**重跑 SCC**（`cycleNodes` 为边集确定性纯函数，重算即得初始环 ∪ 新环）；对**新出现**的环按 15.9 同一选点规则（环内 outDep 最大、并列字典序最大者）**追加破环点**，以 `DcgNodeState.BootstrapBreak` 标记持久化；**初始已选破环点不重选**（G-09——重选会漂移已按 0→1 下发过的初始破环点）。新环内节点 `DispatchRequirements()` 自然返回 2；追加破环点的 bootstrap 下发适用 7.4.6 第 3 条豁免（破环点已下发过则 required 升 2 后经正常门禁再下发一次）。
-6. **落盘与推进顺序**：补边成功 → 先基于补边结果（installInDep/outDep + 新环追加破环点标记）生成 `ToState()` 并 PUT /status 落盘（脏检查：无图变更不 PUT）→ **落盘成功后才更新内存 DcgDict**（installInDep/outDep + 新环追加破环点标记写入进程内缓存）→ 基于新图进入步骤 4 推进下发（维持"落盘先于 Job 创建"不变量，G-02）；落盘失败 → 记日志返回 nil 等下一轮（**不更新内存**、不基于未持久化图下发，见 9.1）。
+6. **落盘与推进顺序**：补边候选经 `ToState()` 写入 BuildGraph `/status`（无图变更不写）；按 15.9 确认成功后才更新内存 DcgDict 并进入步骤 4 下发。失败按图写入错误分类返回，不更新内存、不基于候选图下发；Conflict 后丢弃候选并基于最新图重算。
 7. **S 的重发（完全由图语义决定，无 install 专属重发路径）**：补边引入新环 → 环内节点（含 S 及新追加破环点）`DispatchRequirements()` 返回 2，`DispatchCount` 1 → 2 经步骤 4 正常门禁推进（上游全终态——新补 install 边上游 P 未终态则自然等待，语义正确：P 构建完成才重发 S；发布确认；依赖裁决），创建 Job 后 status 回 Running、jobName 覆盖（与 7.4.2 重建路径同机制）。补边不成环（环外 S）→ required 仍为 1、`DispatchCount` 已达，**不重发**；若 install 仍失败，由下一轮 Build Controller 纳入增量种子。
 8. **无边可补**（提供方不可寻/已终态/不在 specDepends）→ 不补边、不重发，维持第二层兜底（下轮 incremental 自愈）。
 9. **收敛保证**：补边成环的残余本轮收敛（重建基于新补上游产物）；不成环残余至多下轮 incremental 收敛（install.status=Failed 并入种子）；初始建图仍冻结（不随 RpmRepo/prefer 变化重建），install 补边为唯一受控增量（G-02）。
@@ -785,7 +792,7 @@ buildSet = buildSet ∪ direct                                                # 
 | packageRepoStatuses 条目不可重试失败（E-24） | 所有构建类型均跳过受影响仓库，记录 `SpecCommitMissing` 和 `failedPackages`；条目仍在解析时保持 Pending；`single` 空集按 7.2.3 收口 | 其余可用 spec 继续推进；`incremental`/`specified` 空集正常完成 |
 | `incremental` / `specified` 构建集为空 | 种子为空、均无可用 spec 或全部降级；保留已记录的包级错误 | 直接写 `Completed`，不生成 Job |
 | install 补边反查的 RpmRepo 未持有（守卫 404，E-16） | 见 7.4.7 子节第 2 条（本轮不补边） | `ReconcileResult{}`（等下一轮） |
-| install 补边后 status.dcg 重落盘失败 | 见 7.4.7 子节第 6 条（不基于未持久化图下发，G-02 不变量） | `ReconcileResult{}`（等下一轮） |
+| BuildGraph 创建、补边或确认失败 | 见 15.9，不更新图缓存、不基于未确认图下发 | 按 WriteError 分类；创建 AlreadyExists、确认 NotFound 和图丢失使用 15.9 专用规则 |
 
 > 说明：`409 Conflict`、写入结果未知（Unknown）与一般瞬时 apiserver 错误属于"可重试异常"，不写 condition，仅日志 + 延迟重入/退避重试；RpmRepo 查询和元数据读取异常按 9.1 写 `RpmRepoRetrying`，同一 reason 重试不重复写 status。
 
@@ -819,7 +826,8 @@ Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入
 | `SpecCommitMissing` | 步骤 0 组装阶段，当前 Snapshot 的包仓库条目不可重试失败（`packageRepoStatuses[R].error` 且 `retryable=false`，E-24，message 列出仓库名），按包降级跳过 | 业务性（降级结果，init 继续推进） |
 | `BuildPayloadInvalid` | E-31：`BuildInfo.spec.buildPayload` YAML 解析失败、顶层不是 map，或 `rpmbuild_script` 非字符串/名称非法；统一 `reason=BuildPayloadParseFailed`，message 写字段路径及具体错误，不回显完整 payload | status=True 先于 Job 中止尝试持久化，立即停止派发；尝试结束后写 Failed，同一 BuildInfo 不因配置变化恢复 |
 | `JobAbortFailed` | 父 Build 中止或 E-31 尽力中止 Job 时，列表读取失败或个别 `/abort` 失败/结果未知；`reason=JobAbortFailed`，message 记录失败数量与最多三个示例 | status=True 记录尽力中止未完全成功，不阻止最终写 Aborted 或 Failed；不代表 Job 已终态 |
-| `DcgBuildFailed` | 从构建集筛选后的 specDepends 条目构建 dcgDict 失败（数据异常）；破环算法异常兜底亦复用此 type | 终态性（需人工）；**恢复即清除**：dcgDict 获取成功（进程内缓存命中 / status.dcg 加载 / 重建成功，见 7.2 步骤 2 三级获取顺序）后立即 `meta.RemoveStatusCondition` 移除该 condition，瞬时数据异常恢复后不留误导状态 |
+| `BuildGraphUnavailable` | 已过首次建图阶段图丢失、归属不匹配、删除中或图结构无效；reason 分别为 `BuildGraphMissing`、`BuildGraphOwnerMismatch`、`BuildGraphDeleting`、`BuildGraphInvalid` | 暂停新 Job 派发和依赖图驱动的 Completed 判定，保留已有结果；父级中止守卫仍执行。相同原因不重复写，恢复到有效图后清除；读取网络失败不写此条件 |
+| `DcgBuildFailed` | 从构建集筛选后的 specDepends 条目首次建图失败（数据异常）；破环算法异常兜底亦复用此 type | 恢复即清除：按 15.9 取得有效图后移除该 condition；已有图不可用使用 `BuildGraphUnavailable`，不重建 |
 | `ReleaseUnavailable` | E-28：非 single 的 release.phase=Failed，reason/message 见对应错误条目 | status=True 为持久化停止派发标记，不因依赖恢复移除；按 6.5 等待已有 Job 收敛后 Completed，保留条件 |
 | `RpmRepoRetrying` | 非 single 的 RpmRepo GET 404/网络错误、过程仓或 bootstrap 仓 XML 下载失败、未达阈值的 XML 解析失败；single 的 RpmRepo 查询网络错误或配置了 prefer 时的元数据错误 | status=True 仅描述当前可重试异常，不是停止派发标记；同一 reason 重试不重复写入；仓库及所需元数据恢复时清除，构建终止时也清除。single 的 GET 404 是正常空态，不写此条件 |
 | `RpmRepoUnavailable` | E-29：无效 URL、确定性请求拒绝，或过程仓/bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮） | status=True 为持久化停止派发标记；按 6.5 等待已有 Job 收敛后 Completed，保留明确 reason/message |
@@ -873,21 +881,21 @@ install 校验通过（目标 Job `phase=Succeeded` 且 `status.install.status=S
 
 ### 10.2 乐观并发
 
-- **写入对象衔接**：入口 GET 的 BuildInfo 是本轮初始对象；每次 `UpdateBuildInfoStatus` 成功后，以通过响应校验的服务端返回对象整体替换本轮当前对象。Unknown 按 10.3 确认成功后，以确认 GET 返回的对象整体替换当前对象。后续步骤从当前对象深拷贝并计算下一次变更，写 `/status` 时携带其 `metadata.resourceVersion`；不得继续使用入口对象、旧请求对象，或只替换 resourceVersion 后提交旧 status。写入辅助方法须将该对象返回给调用方，或更新本轮共享的当前对象，确保 DCG 持久化、Job 回填和最终状态写入遵循同一规则。
+- **写入对象衔接**：入口 GET 的 BuildInfo 是本轮初始对象；每次 `UpdateBuildInfoStatus` 成功后，以通过响应校验的服务端返回对象整体替换本轮当前对象。Unknown 按 10.3 确认成功后，以确认 GET 返回的对象整体替换当前对象。后续步骤从当前对象深拷贝并计算下一次变更，写 `/status` 时携带其 `metadata.resourceVersion`；不得继续使用入口对象、旧请求对象，或只替换 resourceVersion 后提交旧 status。写入辅助方法须将该对象返回给调用方，或更新本轮共享的当前对象，确保 Job 回填和最终状态写入使用最新 BuildInfo。BuildGraph 持久化单独按 15.9 衔接图对象。
 - **409 Conflict → 延迟重入重算**：返回 `ReconcileResult{RequeueAfter: 1s}` + nil，下一轮从入口重新 GET 最新对象、基于最新状态**重新计算**目标 status 再写；**禁止重 GET 后把本轮已算好的 status 重放合并到 fresh 对象上重试**（旧请求的目标值可能已基于过期输入，重放会覆盖他方已写入的新事实，且破坏 G-02 落盘不变量的可推理边界）。
-- 本控制器仅写 `BuildInfo.status`（经 `/status` 子资源）；不直接修改 `BuildInfo.spec`、不写 metadata；不读改其他控制器拥有的资源状态。
-- 并发写方枚举：本控制器是 `BuildInfo.status` 的唯一写方（Build Controller 仅创建 BuildInfo、不更新）；因此 409 的实质来源是自身上一轮 Unknown 写入实际已成功后的重复写入，或 apiserver 侧管理性变更——两者均由"延迟重入 + 重算"正确收敛。
+- 本控制器维护 `BuildInfo.status` 和 `BuildGraph.status`；创建 BuildGraph 时写入归属 metadata，之后不修改归属。两者分别携带自己的 resourceVersion，图的对象衔接与冲突处理见 15.9。
+- 本控制器是这两个 status 的业务写方（Build Controller 仅创建 BuildInfo）；自身上一轮 Unknown 写入实际成功或管理性变更均可能产生版本冲突，按延迟重入重算处理。
 
 ### 10.3 写入结果未知确认
 
 `UpdateBuildInfoStatus` / `CreateJob` 返回 `WriteError{Outcome: Unknown}`（请求已发出但无法确认结果：连接中断、响应超时、响应无法解析）时，**禁止重放旧请求**，必须先执行确认读取再决定后续动作：
 
-- **写入意图**：发出写入前在内存保存本轮意图——目标对象 UID + 本次目标字段值（status 写：`phase`、按 specName 定位的 `specStatus` 条目、按 type 定位的 `conditions` 目标值、`dcg`、已有 `pendingJobCreates` 条目的删除；Job 创建：15.3.1 定义的完整创建身份、确定性 Job 名与 label 集合）。status 写入的目标快照基于深拷贝保存；本轮已确认的 Job 可以合并到一次 status 写入，不逐 Job 预登记。
+- **写入意图**：发出写入前在内存保存本轮意图——目标对象 UID + 本次目标字段值（status 写：`phase`、按 specName 定位的 `specStatus` 条目、按 type 定位的 `conditions` 目标值、`specRepoNames`、`failedPackages`、已有 `pendingJobCreates` 条目的删除；Job 创建：15.3.1 定义的完整创建身份、确定性 Job 名与 label 集合）。status 写入的目标快照基于深拷贝保存；本轮已确认的 Job 可以合并到一次 status 写入，不逐 Job 预登记。
 - **确认读取**：用仍有效的 reconcile context GET 一次当前持久化对象，按语义比较（不比较 `resourceVersion`）：
   - map 字段 nil 与空 map 等价；
   - `conditions` 按 type 定位比较 `status`/`reason`/`message`，不依赖数组顺序，`lastTransitionTime` 不参与比较；
   - `specStatus` 的 `build`、`install`、`dispatchCount` 按 specName 定位逐字段比较；
-  - `dcg` 按节点集合与边集语义等价比较。
+  - `specRepoNames` 和 `failedPackages` 比较本次目标值；BuildGraph 的图写入确认独立按 15.9 执行。
   - `pendingJobCreates` 按 specName 比较本次目标条目（jobName、dispatchGeneration），删除意图要求对应条目已不存在。
 
 | 确认结果 | 后续动作 |
@@ -971,15 +979,16 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 
 ## 十三、重启与可用性
 
-恢复所需业务状态由 BuildInfo.status 持久化；缓存丢失和失败计数恢复规则统一见 5.4、15.9～15.11，已停止派发的恢复入口见 6.5。
+恢复所需业务状态分别由 BuildInfo.status 和 BuildGraph.status.nodes 持久化；缓存丢失和失败计数恢复规则统一见 5.4、15.9～15.11，已停止派发的恢复入口见 6.5。
 
 崩溃点与重启后行为：
 
 | 崩溃点 | 重启后行为 |
 |--------|-----------|
 | 崩在 specDepends 补源/组装（步骤 0） | 缓存丢失，首个到达轮按 Snapshot 各仓库 url+commit 重新组装回填（解析结果确定，内容与首次一致）；specFile 缓存命中部分不重复下载，失败条目不写回缓存（15.11） |
-| 崩在 `status.dcg` 落盘前 | 图未持久化、未创建 Job；下轮重建图并落盘（G-02：落盘先于 Job 创建） |
-| 崩在 `status.dcg` 落盘后、Job 创建前 | 从 `status.dcg` 加载图，按 `dispatchCount`/现存 Job 回填后继续（7.3 步骤 2/3） |
+| 崩在首次 BuildGraph POST 返回前 | 下轮 GET 同名图；存在则核验归属后沿用，NotFound 且满足 15.9 首次创建条件才允许建图 |
+| 图已持久化，BuildInfo 构建集写入失败或尚未创建 Job | 加载已有图，继续回填 BuildInfo 构建集并分批派发；不回滚或重建图 |
+| 已派发后图丢失、删除中或归属异常 | 记录 `BuildGraphUnavailable`，暂停图驱动动作；父级中止守卫仍执行 |
 | 崩在 Job 创建后、回写前 | 下轮 `ListJobs` 按 label 回填 dispatchCount 兜底（E-11），不重复创建 |
 | 崩在运行期补边落盘前 | 补边未持久化、未基于新图下发；下轮重反查重补（7.4.7 第 6 条，G-02 不变量） |
 | 崩在 E-28/E-29/E-30 停止派发标记写入后 | 按 condition 直接进入 6.5，不恢复派发、不重新计数；完整 List 等待所有已有 Job 终态 |
@@ -1043,6 +1052,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | 资源 | client 方法 | apiserver 路径 | 访问权限 | 用途 |
 |------|-----------|---------------|----------|------|
 | `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` | `/apis/ebs/v1/buildinfos`（全局 list 由 PollingSource 框架承担，不经本 Client 接口，见 2.4；reconcile 侧按 name 直接 get，无需 labelSelector）/ PUT /status | **读写**（get + /status 写） | reconcile 入口 re-get → status 写（乐观锁 409 延迟重入、Unknown 确认，见 10.2/10.3；specDepends 不落库——无 PUT spec 场景，15.11）；父 Build 中止/Project Terminating 时置 `Aborted` 终态并**保留对象**（G-06/E-03/E-20，不删除） |
+| `BuildGraph` | `GetBuildGraph` / `CreateBuildGraph` / `UpdateBuildGraphStatus` | `/apis/ebs/v1/projects/{project}/buildgraphs`、`/{name}`、`/{name}/status` | **读写**（get + create + /status 写） | 独立持久化依赖图，无 PollingSource；恢复与确认规则见 15.9 |
 | `Job` | `CreateJob` / `GetJob` / `ListJobs` | `/apis/ebs/v1/projects/{project}/jobs`（单对象 `/{name}` 与 list 两种形态） | **读写**（创建 + 按名 get + 按 label list） | `dispatchSpec` 创建（字段契约见 15.3.1）；创建 Unknown 按确定性 Job 名 GET 确认（10.3/E-11）；按 `ebs.io/build-name` label list 回填（见 15.3.2） |
 | `Build` | `GetBuild` | `/apis/ebs/v1/projects/{project}/builds/{name}` | **只读** | parentAbortGuard 按名读取本轮父 Build；步骤 0 使用已固化的 `spec.packages`，不查询历史 Build；字段消费明细见 15.5 |
 | `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 与 Build 同名按 name 直接 get（一对一约定，见 15.4；每轮由 7.1 前置守卫单点 GET 一次、本轮复用，不重复查询）：发布失败守卫判定（`status.release.phase`，7.1/E-28）、建图前置存在性判定、构建依赖裁决、步骤 0 扩散反查、payload `contentURL` 注入；`single` 直通路径另经本接口按名 get 获取 repo 注入用 contentURL（守卫豁免，7.2.3 第 3 条）；字段消费明细见 15.4 |
@@ -1302,13 +1312,42 @@ status:                                             # 创建时恒 Pending/Pendi
 - `metav1.Condition`（`k8s.io/apimachinery/pkg/apis/meta/v1`）：字段结构见 data-models.md；本 controller 写入/清除约定（type PascalCase、status 恒 `True`、`meta.SetStatusCondition` upsert 幂等等）以 9.1 引言为唯一权威。
 - `VersionConst`（版本约束，RPM 比较操作符）：`GT` / `GE` / `EQ` / `LE` / `LT`（均 string，omitempty）；空约束表示无版本要求。用于 buildRequires/requires 约束表达与 `VersionSatisfies` 判定。
 
-### 15.9 Cache.dcgDict 与 status.dcg 持久化（G-02）
+### 15.9 BuildGraph 持久化与 DCG 缓存（G-02）
 
-进程内缓存，Go 实现：`sync.RWMutex` 保护的 `map[string]*DcgDict`，key = `<namespace>/<build.name>`（build.name 即 `BuildInfo.metadata.name`，与父 Build 同名）；建图（含 apiserver I/O）在锁外；生命周期与 prune 见 5.4。`single` 类型直通路径不建图：无 dcgDict、**`status.dcg` 不填充**（整个生命周期保持空，见 7.2.3），本节机制对 `single` 全部不适用。
+BuildGraph 与 BuildInfo 同 Project、同名，由本控制器单独持久化；结构和生命周期以 [数据模型](data-models.md#buildgraph构建依赖图) 为准。single 不创建或查询 BuildGraph，不新增独立 Controller 或轮询源。
 
-进程内 `DcgCache` 仅为加速层：建图结果经 `ToState()` 持久化至 `BuildInfo.status.dcg`（G-02），重启后 `DcgDictFromState` 加载替代重建（三级获取顺序见 5.4，落盘先于 Job 创建不变式见 G-02）；初始建图结果不随 RpmRepo/prefer 变化重建（冻结），**唯一受控增量**为运行期 install 补边（7.4.7）——每次补边后先 PUT /status 落盘（脏检查：无图变更不 PUT），**落盘成功后方将补边结果写入进程内缓存**，落盘先于内存更新与基于新图的 Job 创建。
+#### 获取与缓存
 
-`DcgNode`（struct，内存态）：字段与 `DcgNodeState` 持久化契约一一对应（镜像，见下表；仅 `Version` 为 string 且默认 `"NA"`）；字段语义、入度计算（`len(InDep) + len(InstallInDep)`，无独立 inDegree 字段）与选点规则见 7.2.1。
+- `DcgCache` 用 `sync.RWMutex` 保护，key 为 `<namespace>/<buildinfo.name>`；条目保存 BuildInfo UID、BuildGraph UID/resourceVersion 和解析后的 DcgDict。I/O 与图计算在锁外，缓存不承担持久化职责，失效策略沿用 5.4。
+- 每轮需要图时调用 `GetBuildGraph(metadataOnly=true)`，请求 `includeFields=metadata`，核对归属、删除标记和图 UID/resourceVersion。同版本缓存可复用；未命中或版本变化时完整 GET，核对完整响应后替换缓存，本轮后续步骤共用同一图快照。投影响应不参与完整图校验或写入。
+- 首次创建只允许：BuildInfo 为 Pending，`specStatus.build`、`specRepoNames`、`pendingJobCreates` 均为空，所有 dispatchCount 为 0，本轮完整 Job List 为空，且没有已确认图的缓存记录或 `BuildGraphUnavailable` 条件。此时 GET NotFound 才可按当前输入建图。初始构建集为空也可持久化空 nodes；不能以 `len(nodes)==0` 判定未创建。
+- 不满足首次创建条件的 NotFound、归属不匹配、删除中或完整图无效，均按 `BuildGraphUnavailable` 暂停派发，不基于最新 RpmRepo 重建。已有缓存不能掩盖明确的图丢失。父级中止/配置失败等前置守卫优先，避免图不可用阻碍这些终态路径。
+- 创建成功但尚未写入任何 BuildInfo 构建状态时，如果图被外部删除并且进程重启，仅靠现有状态无法识别其曾存在；这个狭窄窗口允许按首次创建规则重建，此时按 G-02 尚未派发任何 Job。开始写入构建集或进入 Processing 后不再自动重建。
+
+#### 首次创建与补边
+
+1. 首次建图通过 `POST buildgraphs` 原子写入 metadata.ownerReferences 和完整 `status.nodes`；确认成功后保存服务端图对象及缓存，再写 BuildInfo 的构建集状态，最后派发 Job。
+2. 已存在的同归属对象是权威图，不随 RpmRepo/prefer 变化重新构建。恢复时以图节点集合恢复构建集，重新组装的 specDepends 仅提供对应节点的解析数据，不增删图节点；所需节点解析数据缺失时等待恢复或按既有解析错误规则处理，不派发图外 spec。POST 的 AlreadyExists 优先于通用 Conflict：完整 GET，核验身份后沿用已有图，而不是用新计算的图覆盖；确认 GET NotFound 延迟 1s 重入，本轮不再次 POST。
+3. 运行期补边从已确认图深拷贝出候选，通过 `PUT buildgraphs/{name}/status` 携带图自己的 resourceVersion 提交；只修改 installInDep、对应 outDep 和新增破环点，节点集合、版本、初始 build 边及既有破环点保持不变。无图变更不写。
+4. 成功响应必须包含预期 Project/name、有效 UID/resourceVersion、正确 owner 和语义匹配的完整图。更新还要求 UID 与原图相同；创建采用服务端生成 UID。异常成功响应按 Unknown 处理。写入成功或确认成功后，均使用服务端对象继续，不能只替换版本重放旧图。
+5. BuildInfo 与 BuildGraph 没有跨对象事务：图先写成功、BuildInfo 回填失败时保留图，下轮加载它并回填，不回滚图；Job 列表与派发计数的恢复仍按 7.4.2。补边后崩溃只会延后派发，不得凭未落盘候选派发。
+
+#### 图写入错误与确认
+
+| 结果 | 处理 |
+|------|------|
+| NotSent | 按 7.5 区分本地永久错误与临时错误，不执行 Unknown 确认 |
+| PUT 409 Conflict | 丢弃候选并失效图缓存，延迟 1s 重入；下轮读取最新图重新计算 |
+| PUT 404 或确认发现 UID 改变 | 失效图缓存并停止本轮图驱动动作；下轮重新 GET，按上述图不可用/归属规则处理，不重建旧图 |
+| 400/401/403/422 | PermanentError，不基于失败图派发，不将此错误转换成 spec 构建失败 |
+| 408/429/5xx 或读取网络/超时错误 | 可重试错误，使用框架退避；429/503 遵循 Retry-After |
+| Unknown | 使用仍有效的 reconcile context 完整 GET 同名 BuildGraph 一次，按下述原意图确认；失败不重放旧请求 |
+
+Unknown 写入前保存身份和目标 nodes：创建用 Project/name + owner BuildInfo UID 确认身份，更新另外要求原 BuildGraph UID。只有身份匹配且**全部目标图字段**按节点、边集、版本约束和 bootstrapBreak 语义等价时才成功；map nil/空等价，outDep 按多重集合比较（保留重复次数），不要求数组顺序。相同身份但目标不匹配时失效缓存、延迟 1s，基于最新对象重算；创建确认 NotFound 也延迟重入，下轮仍使用同名创建，防止迟到请求生成重复图。owner 不匹配按图不可用记录异常。确认 GET 失败按读取错误分类，context 取消后不启动后台确认。
+
+#### 派生状态
+
+`DcgNode` 是 `DcgNodeState` 的内存镜像，Version 默认规范化为 `"NA"`；入度为 `len(InDep) + len(InstallInDep)`。字段定义只在数据模型维护。
 
 DcgDict 派生状态（供流程消费）：
 
@@ -1317,23 +1356,11 @@ DcgDict 派生状态（供流程消费）：
 | `cycleNodes: map[string]struct{}` | 环内节点集合（build/install 合并图上原图 SCC>1 全体 ∪ 自环节点）；`DispatchRequirements()` 据此返回 required=2，普通节点 required=1；**纯函数可惰性重算**（边集确定，加载后经 `ensureCycleDetection` 重算，install 补边后重跑 SCC 即得初始环 ∪ 新环） |
 | `bootstrapBreaks: []string` | 破环点集合——**持久化为准**（`DcgNodeState.BootstrapBreak` 标记，初始建图 `ToState()` 写入、运行期新环追加写入、加载直读**不重选**）；选点规则：每 SCC 增量 Kahn 推进至僵局时取未处理节点中 outDep 最大、并列字典序最大者，标记后继续推进直至全部处理，去重字典序稳定 |
 
-`BuildInfo.status.dcg`（持久化载体，G-02）为**单层结构**：`map[string]DcgNodeState`（spec → 图节点，初始建图时刻冻结、运行期 install 补边为唯一受控增量（7.4.7），镜像内存 DcgNode），无 `DcgState` 包装层——`SpecRequires` 删除后包装层仅剩 `Nodes` 一个字段，故去掉包装层、`Nodes` 提升为 dcg 本体。
-
-`DcgNodeState`（镜像内存 DcgNode，InDep/OutDep 语义一致，勿翻转）：
-
-| 字段 | Go 类型 | 语义 |
-|------|------|------|
-| `Version` | string | spec 完整版本号（溯源展示，不参与调度判定） |
-| `OutDep` | []string | **依赖本 spec 的下游** spec 列表（build/install 边合并；命名与直觉相反，勿混淆） |
-| `InDep` | map[string]VersionConst | **本 spec 依赖的上游** spec → 命中的版本约束（build 边） |
-| `InstallInDep` | map[string]VersionConst | **本 spec 安装期依赖命中的上游** spec → 版本约束（install 边，见 16.1）；入度 = len(InDep) + len(InstallInDep) |
-| `BootstrapBreak` | bool | 破环点标记（`json:"bootstrapBreak,omitempty"`）：初始建图剥离选点或运行期新环追加选点（7.4.7）写入 `true`；持久化为准、加载直读不重选（见 data-models.md「DcgNodeState」/15.9 派生状态表） |
-
-> 环数据处理分为两类：`cycleNodes` **不持久化**——SCC 为边集确定性纯函数，处理序（各 SCC 最小节点名字典序）与选点全序规则（outDep 最大、并列 spec 名字典序最大）保证跨进程确定，加载后经 `ensureCycleDetection` 惰性重算，与重建等价（install 补边后重跑 SCC 即得初始环 ∪ 新环）；`bootstrapBreaks` **持久化**（`DcgNodeState.BootstrapBreak`）——运行期新环追加选点后，全图重选会漂移初始已选破环点（已按 0→1 下发过），故以持久化标记为准、加载直读不重选（G-09）。install 边（installInDep）**随 DcgNodeState 持久化**——其输入含 RpmMetaSources RpmRepo 层继承版本的 RpmMeta.requires（15.10），该数据会被本轮构建产物覆盖，重启后重建将得到不同结果、破坏幂等（G-02）。构建依赖统一校验的输入取自本轮组装的 specDepends 的 buildRequires（15.2.2/15.11），不依赖 status.dcg，单层节点集持久化充分。
+> 环数据处理分为两类：`cycleNodes` **不持久化**——SCC 为边集确定性纯函数，处理序（各 SCC 最小节点名字典序）与选点全序规则（outDep 最大、并列 spec 名字典序最大）保证跨进程确定，加载后经 `ensureCycleDetection` 惰性重算，与重建等价（install 补边后重跑 SCC 即得初始环 ∪ 新环）；`bootstrapBreaks` **持久化**（`DcgNodeState.BootstrapBreak`）——运行期新环追加选点后，全图重选会漂移初始已选破环点（已按 0→1 下发过），故以持久化标记为准、加载直读不重选（G-09）。install 边（installInDep）**随 DcgNodeState 持久化**——其输入含 RpmMetaSources RpmRepo 层继承版本的 RpmMeta.requires（15.10），该数据会被本轮构建产物覆盖，重启后重建将得到不同结果、破坏幂等（G-02）。构建依赖统一校验的输入取自本轮组装的 specDepends 的 buildRequires（15.2.2/15.11），不依赖 BuildGraph.status.nodes，单层节点集持久化充分。
 
 ### 15.10 Cache.rpmMetaSources：RpmMeta 内存分层缓存
 
-本控制器下载解析仓库 XML 生成 RpmMeta，并在进程内存中缓存。该缓存是可重新生成的加速层；dcgDict 则通过 `status.dcg` 持久化，两者的恢复方式不同。
+本控制器下载解析仓库 XML 生成 RpmMeta，并在进程内存中缓存。该缓存是可重新生成的加速层；dcgDict 则通过 `BuildGraph.status.nodes` 持久化，两者的恢复方式不同。
 
 **分层结构（结构体定义）**：
 
@@ -1427,7 +1454,7 @@ specDepends 使用 per-BuildInfo 解析结果缓存和全局 spec 文件内容 L
 4. **统一刷新回缓存**：一轮补源**全部完成后**（无瞬态失败），按 7.2.2 的 `unparsable_spec` 规则覆盖合并视图中的 `BuildRequires`，再加 Lock 将结果统一写回 specDependsCache（key = `<namespace>/<buildinfo.name>`，value = 各仓 `map[string]SpecDepend` 按 specName 合并的 BuildInfo 级全量视图）；存在瞬态失败仓库 → 本轮不判组装完成、保持 Pending（写回与否不影响正确性：Pending 下轮重新组装覆盖；进入 Processing 的前提是最近一轮组装无瞬态失败缺口——确定性失败降级仓库为有意排除，不算缺口）；
 5. **组装完成**：写回后的缓存条目即本轮 specDepends 视图，供本轮构建集判定、建图、统一校验与 Job payload 注入消费（15.3.1）；Processing 后续轮次回到步骤 1 直接命中（Pending 轮重入则每轮重新组装，7.2.2）。
 
-同一 url+commit 解析结果确定且 Snapshot 生命周期内 url/commit 不变，故重组装（Pending 每轮重入 / 进程重启或缓存失效后回填）内容稳定——等价原"进入 Processing 后冻结"语义（稳定性权威载体仍为 status.dcg，G-02；构建门禁为 build 级判断、无 repo 级过滤，组装结果不含门禁过滤视图，7.2.2）。
+同一 url+commit 解析结果确定且 Snapshot 生命周期内 url/commit 不变，故重组装（Pending 每轮重入 / 进程重启或缓存失效后回填）内容稳定——等价原"进入 Processing 后冻结"语义（稳定性权威载体仍为 BuildGraph.status.nodes，G-02；构建门禁为 build 级判断、无 repo 级过滤，组装结果不含门禁过滤视图，7.2.2）。
 
 
 **错误语义**：
@@ -1632,13 +1659,13 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 ### 17.1 公共 API
 
-当前使用以下公共类型；字段定义以 [数据模型](data-models.md) 和 `api/ebs/v1` 为准：
+本设计使用以下公共类型，字段定义以 [数据模型](data-models.md) 和 `api/ebs/v1` 为准：
 
 | 类型 | 用途 | 规则位置 |
 |------|------|----------|
 | SpecStatusGroup | 以 `build`、`install`、`dispatchCount` 并列映射保存各 spec 状态 | 7.4.2 / 15.2.3 |
 | BuildInfoPhase | Aborted 中止终态 | 6.1 |
-| BuildInfoStatus | 以 Dcg map[string]DcgNodeState 保存依赖图检查点 | 15.9 |
+| BuildGraph / BuildGraphStatus | 以 Nodes map[string]DcgNodeState 保存依赖图检查点；BuildInfoStatus 不再携带 Dcg | 15.9 |
 | BuildInfoStatus | 以 PendingJobCreates 保存未决 Job 创建意图 | 6.5.1 |
 
 资源查询与标签前提见 15.1、7.2.2 和 labels.md。
@@ -1648,6 +1675,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | 协作方 | 应验证的契约 |
 |--------|--------------|
 | apiserver / Build Controller | 2.5 的中止与异常 condition 汇总；15.2 的创建输入固化 |
+| Build Controller | 仍只 ensure BuildInfo 等既有子资源；BuildGraph 由 BuildInfo Controller 首次建图后创建，不加入 Build Controller 的 ensure 流程 |
 | apiserver | 15.1 资源访问、7.2.2 基准查询所需选择器与排序、labels.md 标签约束 |
 | Runner | 7.4.5 phase 映射、7.4.7 install 结果消息 |
 | RpmRepo Controller | 7.4.6 产物消费凭据及 6.5 Completed 收敛语义 |
@@ -1680,6 +1708,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | 构建集 | 7.2.2 各构建类型、父 Build 种子、仅选择直接下游（含新种子无既有 RPM 产物、多种子）而不选择传递下游；`unparsable_spec` 按 spec 名命中、多 spec 同仓库、缺失/无效项、重启重组装与缓存命中一致性，断言解析仍执行、buildRequires 边及门禁消失而 install 边保留；E-23/E-24 增量与指定增量共用的解析失败、空集和降级分支 |
 | single | 7.2.3 的组装、直通派发、repo 注入、完成与失败分支 |
 | 依赖图 | 7.2.1 自环、多环、交叉环、确定性选点；7.4.2 计数及失败放宽；7.4.6 三类门禁 |
+| BuildGraph | 15.9 同名归属与版本校验、metadata 投影/完整加载、空图和 single、先图后状态再派发、AlreadyExists/Conflict/Unknown 分流、补边持久化、图缺失后的暂停与恢复 |
 | Job 回填 | 7.4.4 多代排序、7.4.5 phase 映射、7.4.7 install 三分支和动态补边 |
 | Job 构造 | 15.3.1 确定性名称、AlreadyExists 身份核验及 GET 404 后可重试且同名同代次、超时迟到写入与重启恢复；payload、标签编码、Config/build-target 批次快照、Config/build-resource；E-19/E-26/E-27 |
 | 停止派发 | E-28/E-29/E-30 覆盖 6.5/6.5.1 的多页 Job、旧代与构建集外 Job、重启和未决条目恢复，全部已创建 Job 终态后写 Completed；E-31 覆盖 Pending/Processing、YAML 语法、非 map 顶层、`rpmbuild_script` 列表/非法名称、空 payload 默认值、message 不含完整 payload、标记与 Failed 写入 Conflict/Unknown、分页/批次中止、单个失败或结果未知、重启重复尝试、运行中 Job 与未决创建仍存在时写 Failed、零新 Job，以及 Project 修改后不恢复旧 BuildInfo 派发；Failed 从 PollingSource 过滤且不再调谐 |
@@ -1696,6 +1725,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 - 产物异步物化后的下游放行（7.4.6）。
 - E-28/E-29/E-30 停止派发后等待已有 Job；E-31 先停止派发、尽力中止，再在运行中 Job 仍存在时写 Failed。配置错误需验证 BuildInfo 的 `BuildPayloadInvalid=True`、中止失败时的 `JobAbortFailed` 和 `Failed`，父 Build 为 `Failed/build`，RpmRepo 为发布失败终局且不再提交过程仓或正式发布。
 - 十三章各崩溃点恢复；同名删除重建隔离（10.3）。
+- 图已写入但 BuildInfo 写失败时恢复同一 BuildGraph；常规结果回填不传输 nodes、不更新图版本；显式历史清理按 owner 和删除前置条件处理图。
 - Config/build-target 配置失效与恢复后的派发行为（15.3.1）。
 
 ---

@@ -72,6 +72,7 @@ ebsctl [全局参数] <命令> [资源] [名称] [命令参数]
 | Build | `build/builds` | `build` | Project |
 | Job | `job/jobs` | `job` | Project |
 | BuildInfo | `buildinfo/buildinfos` | `bi` | Project |
+| BuildGraph | `buildgraph/buildgraphs` | `bg` | Project |
 | RpmRepo | `rpmrepo/rpmrepos` | `repo` | Project |
 
 首版使用编译期静态资源表，不依赖 Kubernetes discovery API。客户端版本新增资源时同步更新资源表；遇到未知 `apiVersion` 或 Kind 必须报错，不能猜测请求路径。
@@ -221,6 +222,7 @@ credentials:
 | Build | NAME、PHASE、SNAPSHOT、AGE |
 | Job | NAME、PHASE、STAGE、RUNNER、AGE |
 | BuildInfo | NAME、STATUS、AGE |
+| BuildGraph | NAME、AGE |
 | RpmRepo | NAME、STATUS、AGE |
 | Config | NAME、VISIBILITY、AGE |
 

@@ -9,7 +9,7 @@ apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块，提供 User、Ma
 资源存储分配如下：
 
 - Job、Runner 使用 etcd。Runner 表示执行节点；两类资源需要可靠的 resourceVersion 和 list/watch，用于调度、心跳和执行状态协作。
-- Project、Snapshot、Build、BuildInfo、RpmRepo 使用 Elasticsearch，提供分页、selector 和搜索能力，不支持 watch。
+- Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo 使用 Elasticsearch，提供分页、selector 和搜索能力，不支持 watch。
 - User、MachineAccount 使用 Elasticsearch和专用IAM Storage，公开对象与认证字段保存在同一文档中，不支持watch。
 
 ## 架构
@@ -82,7 +82,7 @@ Version: v1
 apiVersion: ebs/v1
 ```
 
-已安装到 apiserver 的资源如下：
+资源契约如下：
 
 集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target` 和 `build-resource`。Config 创建、更新时完整校验 `build-target`、`build-resource` 和 `artifact-manager-conf` 的内容；创建 Build 前读取 `build-target`，只检查所选 OS/Arch 是否存在。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
 
@@ -92,6 +92,7 @@ apiVersion: ebs/v1
 | Snapshot | Elasticsearch | `/apis/ebs/v1/projects/{project}/snapshots` | `/apis/ebs/v1/snapshots` | 否 | `/status` |
 | Build | Elasticsearch | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | 否 | `/status`, `/abort` |
 | BuildInfo | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | 否 | `/status` |
+| BuildGraph | Elasticsearch | `/apis/ebs/v1/projects/{project}/buildgraphs` | `/apis/ebs/v1/buildgraphs` | 否 | `/status` |
 | RpmRepo | Elasticsearch | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | 否 | `/status` |
 | Job | etcd | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | 是 | `/status`, `/abort`, `/archive` |
 | 历史 Job（oldjobs） | Elasticsearch | `/apis/ebs/v1/projects/{project}/oldjobs` | `/apis/ebs/v1/oldjobs`（仅 List） | 否 | - |
@@ -101,7 +102,7 @@ apiVersion: ebs/v1
 
 历史 Job 归档提供只读 `oldjobs` 路由和 Job `/archive` 子资源，接口与存储契约见 [历史 Job 归档](#历史-job-归档ebs-oldjobs)。Job 的主存储仍为 etcd。
 
-其中 `Snapshot`、`Build`、`BuildInfo`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`Config` 和 `Script` 为集群级资源。
+其中 `Snapshot`、`Build`、`BuildInfo`、`BuildGraph`、`RpmRepo`、`Job` 是 Project 下的子资源，路径中的 `{project}` 是项目归属来源。Job 的全局 API 用于调度器跨 Project list/watch；Snapshot、Build、BuildInfo、BuildGraph 和 RpmRepo 的全局 API 用于跨 Project list 和查询。`Project`、`Runner`、`Config` 和 `Script` 为集群级资源。
 
 `Config` 和 `Script` 与其他资源一起注册到 `ebs/v1` APIGroup，共用通用资源路由、请求处理规则与 ES 存储能力；两者均不支持 Watch，通用路由不注册 HEAD。删除可选用 UID 与 resourceVersion 前置条件来避免误删，Gateway 另行限制内置 Config 的删除权限。
 
@@ -269,7 +270,7 @@ Controller Manager 首版权限逐项列出如下。`update/status` 与普通 `u
 | --- | --- |
 | Project | get |
 | Build | get、list、update、update/status |
-| Snapshot、BuildInfo、RpmRepo | get、list、create、update/status |
+| Snapshot、BuildInfo、BuildGraph、RpmRepo | get、list、create、update/status |
 | Job | get、list、watch、create、update/status、create/abort、create/archive、delete |
 | oldjobs（历史 Job 归档） | get、list |
 | Runner | get、list、watch、update/status |
@@ -295,7 +296,7 @@ REST storage 按资源静态路由：
 | Storage | 资源 | 能力 |
 |---------|------|------|
 | generic etcd store | Job、Runner | CRUD、List、Watch、原生 resourceVersion |
-| ESStore | Project、Snapshot、Build、BuildInfo、RpmRepo | CRUD、List、分页、label selector、有限的 field selector、搜索 |
+| ESStore | Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo | CRUD、List、分页、label selector、有限的 field selector、搜索 |
 | User store | User | 单文档CRUD、List、密码设置和认证 |
 | MachineAccount store | MachineAccount | 单文档内部原子创建、Get、List、Delete和凭据认证 |
 
@@ -363,6 +364,7 @@ ebs-projects
 ebs-snapshots
 ebs-builds
 ebs-buildinfos
+ebs-buildgraphs
 ebs-rpmrepos
 ebs-configs
 ebs-scripts
@@ -494,7 +496,9 @@ Project、Snapshot、Build 和 BuildInfo 使用通用状态字段；Config 无 s
 | `status.release.phase`（仅 RpmRepo） | `data.status.release.phase` | `=`、`==`、`!=` |
 | `status.stage` | `data.status.stage` | `=`、`==`、`!=` |
 
-IAM 资源不支持 `status.phase` 和 `status.stage`。多个 requirement 以及 label selector、Project 路径隐含的 namespace 条件均按 AND 组合；客户端提供与路径不同的 namespace 时返回空列表，不能查询到其他 Project。无法识别或不支持的字段、操作符和语法必须返回 `BadRequest`，不能静默忽略。
+IAM 资源和 BuildGraph 不支持 `status.phase` 和 `status.stage`。多个 requirement 以及 label selector、Project 路径隐含的 namespace 条件均按 AND 组合；客户端提供与路径不同的 namespace 时返回空列表，不能查询到其他 Project。无法识别或不支持的字段、操作符和语法必须返回 `BadRequest`，不能静默忽略。
+
+BuildGraph 复用通用资源 mapping，别名 `ebs-buildgraphs` 指向初始索引 `ebs-buildgraphs-v1`；图存储在 `_source.data.status.nodes`，不为 spec 名或图的边动态建索引。支持通用 metadata/label 查询及 `includeFields=metadata` 投影，查询不支持按节点或边过滤。
 
 `status.stage` 具有特殊的存在性语义：只有字段存在且非空的对象才参与 stage requirement 匹配。`status.stage=publish` 只匹配明确处于 publish 阶段的对象；`status.stage!=publish` 也只匹配 stage 存在、非空且不等于 publish 的对象。缺少 stage、值为 `null` 或空字符串的对象对两种查询都不匹配。ES 查询必须为两种操作符都附加 `exists(data.status.stage)`；不等值查询不能只生成 `must_not term`。
 
@@ -527,6 +531,11 @@ Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `perso
 - `Snapshot` 创建默认 `status.phase = Pending`。
 - `Build` 创建默认 `status.phase = Pending`。
 - `BuildInfo` 创建默认 `status.phase = Pending`。
+- `BuildGraph` 创建时保留完整 `status.nodes`，不默认 phase/stage。其字段及归属见 [数据模型](data-models.md#buildgraph构建依赖图)，校验要求如下：
+  - 不含 spec；nodes 必须为对象，可为 `{}`。必须有同 Project、同名 BuildInfo 的 controller ownerReference，创建时核验其 UID，创建后 owner 不可变。
+  - 每个节点的边必须引用图内节点，outDep 与 build/install 入边对应；允许环和自环，不按 DAG 拒绝。
+  - `/status` 使用图自身 resourceVersion，保留 metadata；普通更新不得修改 status。状态更新保持节点集合、Version、初始 InDep 和既有 BootstrapBreak，不删除已记录 install 边，仅允许运行期补边、对应 outDep 更新和新增破环点。
+  - 复用通用请求大小限制。拆分降低 BuildInfo 高频写入的正文大小，但不取消完整图创建、更新的大小限制。
 - `RpmRepo` 创建时仅保留 `status.repository.repositoryUID` 与 `status.repository.contentURL` 作为过程仓基线，两者必须成对提供，否则返回 422；未提供 `status.repository` 时保持 `nil`。显式传入的 `status.release.phase=Skipped` 保留；`repository`、`release` 的其余字段及 `status.conditions` 清空。过程仓没有 phase 字段，创建后的 status 由 RpmRepo Controller 维护。
 - `RpmRepo` 创建时还要求 `metadata.labels[ebs.io/target-os]` 与 `metadata.labels[ebs.io/target-arch]` 存在且非空（由 Build Controller 写入，取值等于同名 Build 的 `spec.buildTarget.os` / `arch`），缺失或为空返回 422；该校验只在创建路径生效，不影响普通更新与 `/status` 更新。
 - `Job` 创建默认 `status.phase = Pending`。
@@ -900,7 +909,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
   }'
 ```
 
-查询 Project 下的 BuildInfo 和 RpmRepo：
+查询 Project 下的 BuildInfo、BuildGraph 和 RpmRepo：
 
 ```bash
 curl -k 'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/buildinfos'
@@ -1004,7 +1013,7 @@ curl -k --get \
 
 当前实现对安全的字段选择下推 ES `_source` filtering，同时在响应端继续裁剪 JSON，保持上述返回语义：
 
-1. 在 GET/LIST 进入资源存储前解析一次字段选择，将只读的投影计划随请求传给 ESStore；不带参数、写操作和控制器内部读取仍使用完整对象。Job/Runner 的 etcd 读取及 IAM 资源暂不下推，继续在响应端裁剪。
+1. 在 GET/LIST 进入资源存储前解析一次字段选择，将只读的投影计划随请求传给 ESStore；不带参数和写操作使用完整对象。控制器可以显式请求只读投影，例如 BuildGraph 版本探测使用 `includeFields=metadata`；存储内部用于写入校验的读取仍须完整。Job/Runner 的 etcd 读取及 IAM 资源暂不下推，继续在响应端裁剪。
 2. ES 文档以 `data` 保存完整 API 对象，因此对象字段 `spec`、`status.phase` 分别映射为 `_source` 路径 `data.spec`、`data.status.phase`。具名 GET 使用 `_source_includes` / `_source_excludes`，PIT Search 使用请求体的 `_source.includes` / `_source.excludes`。例如 `excludeFields=spec` 可让 ES 不返回 `data.spec`；`includeFields=metadata.name,status.phase` 只请求对应 `data` 字段及解码必需字段。`_seq_no`、`_primary_term`、排序值、总数和分页 token 不依赖这些 `_source` 字段，必须照常返回。
 3. 部分 `_source` 必须足以构造合法的只读对象：保留类型和对象身份所需字段，resourceVersion 仍由 ES 命中版本设置；不得把客户端排除的字段作为零值重新序列化到响应。响应端继续应用原有的先 include 后 exclude 规则，并移除仅为内部解码而读取的字段。ES 原始文档及写入、删除、冲突校验所用的完整读取路径不变。
 4. 当前下推顶层 `spec` 排除，以及 `apiVersion`、`kind`、`metadata`、顶层 `spec/status` 和 `status.phase/stage` 的选择；`metadata` 为对象解码完整读取，但响应端仍只显示请求的子字段。数组内对象、含点号的 map key、其他嵌套路径及无法安全转换的组合回退为完整 ES 读取，再由响应端裁剪。扩展路径前需增加等价性测试。
@@ -1019,7 +1028,7 @@ curl -k --get \
 存储实现需要完成：
 
 - 新增 ESStore，并实现 CRUD、List、selector、分页和乐观并发控制。
-- 将 Project、Snapshot、Build、BuildInfo、RpmRepo 及其子资源切换为 ESStore。
+- 将 Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo 及其子资源切换为 ESStore。
 - Job、Runner 使用 generic etcd store。
 - 更新 API discovery，确保只有 Job、Runner 暴露 watch verb。
 - OpenAPI schema 当前是空对象占位，需要生成真实 schema。

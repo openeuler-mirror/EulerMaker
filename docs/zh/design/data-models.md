@@ -18,8 +18,8 @@ metav1.ObjectMeta `json:"metadata,omitempty"`
 | 字段 | Go 类型 | JSON | 说明 |
 |------|---------|------|------|
 | `apiVersion` | string | `apiVersion` | `ebs/v1` |
-| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / RpmRepo / Config / Script / Job / Runner |
-| `name` | string | `name` | 资源名称。Project/Runner/Config/Script 为集群内唯一；Snapshot/Build/BuildInfo/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
+| `kind` | string | `kind` | Project / Snapshot / Build / BuildInfo / BuildGraph / RpmRepo / Config / Script / Job / Runner |
+| `name` | string | `name` | 资源名称。Project/Runner/Config/Script 为集群内唯一；Snapshot/Build/BuildInfo/BuildGraph/RpmRepo/Job 在所属 Project 内唯一。Project 名需满足 DNS1123 label 约束，只能使用小写字母、数字和 `-`；`default` 是系统保留名称，不能用于 Project |
 | `uid` | string | `uid` | 系统生成的唯一 ID |
 | `resourceVersion` | string | `resourceVersion` | 乐观锁版本号 |
 | `generation` | int64 | `generation` | spec 变更递增 |
@@ -37,7 +37,7 @@ metav1.ListMeta `json:"metadata,omitempty"`
 Items           []Xxx `json:"items"`
 ```
 
-Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、RpmRepo、Job 的唯一项目归属来源。Config 和 Script 为集群级资源。
+Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 的唯一项目归属来源。Config 和 Script 为集群级资源。
 
 调度器和控制器可使用全局系统 API 跨 Project list 大部分对象。在 Project 级资源中，只有 Job 的全局 API 支持 watch。集群级资源 Runner 的 API 同样支持 list/watch。用户侧和项目侧调用使用 Project API。
 
@@ -49,6 +49,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 | Build | `/apis/ebs/v1/projects/{project}/builds` | `/apis/ebs/v1/builds` | Elasticsearch | `ebs-builds` / `{project}/{name}` |
 | Job | `/apis/ebs/v1/projects/{project}/jobs` | `/apis/ebs/v1/jobs` | etcd | `/registry/ebs/jobs/{project}/{name}` |
 | BuildInfo | `/apis/ebs/v1/projects/{project}/buildinfos` | `/apis/ebs/v1/buildinfos` | Elasticsearch | `ebs-buildinfos` / `{project}/{name}` |
+| BuildGraph | `/apis/ebs/v1/projects/{project}/buildgraphs` | `/apis/ebs/v1/buildgraphs` | Elasticsearch | `ebs-buildgraphs` / `{project}/{name}` |
 | RpmRepo | `/apis/ebs/v1/projects/{project}/rpmrepos` | `/apis/ebs/v1/rpmrepos` | Elasticsearch | `ebs-rpmrepos` / `{project}/{name}` |
 | Config | 不提供 | `/apis/ebs/v1/configs` | Elasticsearch | `ebs-configs` / `{name}` |
 
@@ -59,11 +60,12 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 ## 结构体总览
 
 ```
-主资源: Project Snapshot Build BuildInfo RpmRepo Config Script Job Runner
-列表类型: ProjectList SnapshotList BuildList BuildInfoList RpmRepoList ConfigList ScriptList JobList RunnerList
+主资源: Project Snapshot Build BuildInfo BuildGraph RpmRepo Config Script Job Runner
+列表类型: ProjectList SnapshotList BuildList BuildInfoList BuildGraphList RpmRepoList ConfigList ScriptList JobList RunnerList
 辅助结构体: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecStatusGroup SpecBuildStatus SpecInstallStatus MissingDep
+                  BuildGraphStatus DcgNodeState
                   RpmRepoSpec RpmRepoStatus
                   ConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
@@ -333,7 +335,6 @@ type BuildInfoStatus struct {
     SpecStatus        SpecStatusGroup             `json:"specStatus"`
     SpecRepoNames     map[string]string           `json:"specRepoNames,omitempty"`
     FailedPackages    []string                    `json:"failedPackages,omitempty"`
-    Dcg               map[string]DcgNodeState     `json:"dcg,omitempty"`
     PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
 }
 ```
@@ -345,30 +346,9 @@ type BuildInfoStatus struct {
 | `specStatus` | SpecStatusGroup | 按字段分组的各 spec 运行时状态；`build` 键集为构建集 |
 | `specRepoNames` | map[string]string | spec 名到所属包仓库名的持久化映射；与构建集状态一起写入，供异常收敛及重启恢复时汇总 `failedPackages` |
 | `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；写入 Completed 时再合并最终构建/安装未成功的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；Failed 时保留当前值，不涵盖仍运行的 Job；已恢复成功的中途构建/安装失败不保留 |
-| `dcg` | map[string]DcgNodeState | dcgDict 建图结果持久化载体（单层结构：spec → 图节点，建图时刻冻结；重启后加载替代重建，保证调谐器重启幂等；终态后保留不清理）。依赖图仅用于处理下发顺序，构建依赖统一校验的输入取自 BuildInfo Controller 本轮解析结果 `specDepends` 的 `buildRequires`，不依赖本字段 |
 | `pendingJobCreates` | map[string]PendingJobCreate | 已登记但尚未确认创建结果的 Job；非空时不得写入 Completed，Failed 时可保留条目供诊断 |
 
 BuildInfo `/status` 校验：`Failed` 为不可回退终态，且必须包含 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed`；不要求 `pendingJobCreates` 为空。包级构建失败不映射为 BuildInfo Failed。具体调谐流程见 [BuildInfo Controller 设计](controller-manager~buildinfo-controller.md)。
-
-### DcgNodeState
-
-```go
-type DcgNodeState struct {
-    Version        string                  `json:"version,omitempty"`
-    OutDep         []string                `json:"outDep,omitempty"`
-    InDep          map[string]VersionConst `json:"inDep,omitempty"`
-    InstallInDep   map[string]VersionConst `json:"installInDep,omitempty"`
-    BootstrapBreak bool                    `json:"bootstrapBreak,omitempty"`
-}
-```
-
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `version` | string | spec 完整版本号（溯源展示，不参与调度判定） |
-| `outDep` | []string | 依赖本 spec 的下游 spec 列表（build/install 边合并；命名与直觉相反，勿混淆） |
-| `inDep` | map[string]VersionConst | 本 spec 依赖的上游 spec → 版本约束（build 边） |
-| `installInDep` | map[string]VersionConst | 本 spec 安装期依赖命中的上游 spec → 版本约束（install 边；运行期 install 补边可增量追加） |
-| `bootstrapBreak` | bool | 破环点标记：初始建图剥离选点或运行期新环追加选点写入；持久化为准、加载直读不重选（重选会漂移已下发的初始破环点） |
 
 ### SpecStatusGroup
 
@@ -452,6 +432,59 @@ type BuildInfoList struct {
 ```
 
 ---
+
+## BuildGraph（构建依赖图）
+
+**API**: `/apis/ebs/v1/projects/{project}/buildgraphs`
+
+**全局 API**: `/apis/ebs/v1/buildgraphs`
+
+**Elasticsearch**: 别名 `ebs-buildgraphs`，初始物理索引 `ebs-buildgraphs-v1`，文档 ID `{project}/{name}`
+
+```go
+type BuildGraph struct {
+    metav1.TypeMeta   `json:",inline"`
+    metav1.ObjectMeta `json:"metadata,omitempty"`
+    Status BuildGraphStatus `json:"status"`
+}
+
+type BuildGraphStatus struct {
+    Nodes map[string]DcgNodeState `json:"nodes"`
+}
+
+type BuildGraphList struct {
+    metav1.TypeMeta `json:",inline"`
+    metav1.ListMeta `json:"metadata,omitempty"`
+    Items []BuildGraph `json:"items"`
+}
+```
+
+- BuildGraph 是 BuildInfo Controller 生成的依赖图检查点，不是用户输入，因此不设 spec，也不维护独立 phase/stage。
+- 与所属 BuildInfo 同 Project、同名；`metadata.ownerReferences` 指向该 BuildInfo 的 `ebs/v1`、kind、name、UID，标记 `controller=true`。所属关系创建后不可修改，不单独在 BuildInfo 中保存引用字段。
+- 非 single 构建首次建图后一次 POST 创建完整对象；后续只有运行期 install 补边和追加破环点通过 `PUT /status` 更新。初始构建集为空时允许 `nodes: {}`，以对象存在性而非节点数量判断是否已持久化。single 不创建 BuildGraph。
+- BuildInfo 的常规结果回填不携带图；BuildGraph 使用独立 UID 和 resourceVersion。构建依赖存在性校验仍消费本轮解析的 `buildRequires`，图负责派发顺序和恢复。
+- BuildInfo 终态后保留图供诊断；历史构建或 Project 清理时，将 BuildGraph 纳入显式清理清单，核对 owner UID 并使用对象 UID/resourceVersion 删除前置条件。ownerReferences 只记录归属，不假定已有通用垃圾回收器；仅删除 BuildInfo 不自动删除图，不清理仍在构建的图。
+- 获取、缓存版本核对、写入确认及丢失处理以 [BuildInfo Controller 15.9](controller-manager~buildinfo-controller.md#159-buildgraph-持久化与-dcg-缓存g-02) 为准。
+
+### DcgNodeState
+
+```go
+type DcgNodeState struct {
+    Version        string                  `json:"version,omitempty"`
+    OutDep         []string                `json:"outDep,omitempty"`
+    InDep          map[string]VersionConst `json:"inDep,omitempty"`
+    InstallInDep   map[string]VersionConst `json:"installInDep,omitempty"`
+    BootstrapBreak bool                    `json:"bootstrapBreak,omitempty"`
+}
+```
+
+| 字段 | Go 类型 | 说明 |
+|------|---------|------|
+| `version` | string | spec 完整版本号，初始建图后冻结 |
+| `outDep` | []string | 依赖本 spec 的下游 spec 列表，与 build/install 入边的次数保持一致；同一下游同时具有两类入边时记录两次 |
+| `inDep` | map[string]VersionConst | 本 spec 依赖的上游 spec → 版本约束，初始建图后冻结 |
+| `installInDep` | map[string]VersionConst | 安装期依赖的上游 spec → 版本约束；运行期只追加缺失边 |
+| `bootstrapBreak` | bool | 破环点标记；已有标记保留，新环可追加，重启不重选 |
 
 ## 五、RpmRepo（过程仓与正式发布状态）
 
@@ -1111,6 +1144,9 @@ BuildInfoStatus
     ├── SpecBuildStatus
     └── SpecInstallStatus
         └── MissingDep ──▶ VersionConst
+
+BuildGraphStatus
+└── DcgNodeState ──▶ VersionConst
 
 RpmRepoStatus
 ├── RpmRepoRepositoryStatus
