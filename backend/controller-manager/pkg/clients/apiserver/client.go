@@ -251,6 +251,13 @@ func (c *Client) ResolveWatch(ctx context.Context, gvr schema.GroupVersionResour
 }
 
 func (c *Client) Get(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (runtime.Object, error) {
+	return c.GetWithFields(ctx, gvr, namespace, name, "")
+}
+
+// GetWithFields returns a read-only projection when includeFields is nonempty.
+func (c *Client) GetWithFields(
+	ctx context.Context, gvr schema.GroupVersionResource, namespace, name, includeFields string,
+) (runtime.Object, error) {
 	if err := validateTarget(gvr, namespace, name); err != nil {
 		return nil, err
 	}
@@ -260,7 +267,11 @@ func (c *Client) Get(ctx context.Context, gvr schema.GroupVersionResource, names
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	err = c.rest.Get().AbsPath(resourcePath(gvr, namespace, name, "")).Do(requestCtx).Into(out)
+	request := c.rest.Get().AbsPath(resourcePath(gvr, namespace, name, ""))
+	if includeFields != "" {
+		request.Param("includeFields", includeFields)
+	}
+	err = request.Do(requestCtx).Into(out)
 	if err != nil {
 		return nil, err
 	}
@@ -462,6 +473,8 @@ func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.BuildList{}, nil
 	case "buildinfos":
 		return &ebsv1.BuildInfoList{}, nil
+	case "buildgraphs":
+		return &ebsv1.BuildGraphList{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepoList{}, nil
 	case "jobs", "oldjobs":
@@ -490,6 +503,8 @@ func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
 		return &ebsv1.Build{}, nil
 	case "buildinfos":
 		return &ebsv1.BuildInfo{}, nil
+	case "buildgraphs":
+		return &ebsv1.BuildGraph{}, nil
 	case "rpmrepos":
 		return &ebsv1.RpmRepo{}, nil
 	case "jobs", "oldjobs":
@@ -525,6 +540,11 @@ func listPage(list runtime.Object) (source.ListPage, error) {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())
 		}
 	case *ebsv1.BuildInfoList:
+		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
+		for i := range value.Items {
+			page.Items = append(page.Items, value.Items[i].DeepCopy())
+		}
+	case *ebsv1.BuildGraphList:
 		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
 		for i := range value.Items {
 			page.Items = append(page.Items, value.Items[i].DeepCopy())

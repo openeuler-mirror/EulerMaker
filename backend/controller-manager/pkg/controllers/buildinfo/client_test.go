@@ -76,3 +76,63 @@ func TestAPIClientGetBuildResourceContent(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIClientBuildGraph(t *testing.T) {
+	info := testBuildInfoObj(ebsv1.BuildInfoPending)
+	info.UID = "info-uid"
+	stored := newBuildGraph(info, dcgStateAB())
+	stored.UID, stored.ResourceVersion = "graph-uid", "1"
+	path := "/apis/ebs/v1/projects/" + info.Namespace + "/buildgraphs"
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		response := stored.DeepCopy()
+		switch r.Method {
+		case http.MethodGet:
+			if r.URL.Query().Get("includeFields") == "metadata" {
+				response.Status = ebsv1.BuildGraphStatus{}
+			}
+		case http.MethodPost, http.MethodPut:
+			if err := json.NewDecoder(r.Body).Decode(response); err != nil {
+				t.Error(err)
+			}
+			response.UID, response.ResourceVersion = stored.UID, "2"
+			stored = response.DeepCopy()
+		}
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	shared, err := apiserver.New(&rest.Config{Host: server.URL}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newAPIClient(shared)
+	ctx := context.Background()
+	meta, err := client.GetBuildGraph(ctx, info.Namespace, info.Name, true)
+	if err != nil || meta == nil || meta.UID != stored.UID || meta.Status.Nodes != nil {
+		t.Fatalf("metadata read: %v %v", meta, err)
+	}
+	graph, err := client.GetBuildGraph(ctx, info.Namespace, info.Name, false)
+	if err != nil || graph == nil || !dcgStateMatches(graph.Status.Nodes, stored.Status.Nodes) {
+		t.Fatalf("full read: %v", err)
+	}
+	graph, err = client.CreateBuildGraph(ctx, info.Namespace, newBuildGraph(info, dcgStateAB()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateBuildGraphStatus(ctx, graph); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"GET " + path + "/" + info.Name + "?includeFields=metadata",
+		"GET " + path + "/" + info.Name,
+		"POST " + path,
+		"PUT " + path + "/" + info.Name + "/status",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("requests: %v", requests)
+	}
+}

@@ -24,6 +24,9 @@ import (
 // (Unknown may optionally persist the write, so confirmation reads return the
 // actual persisted state), and label-filtered ListJobs.
 type fakeClient struct {
+	graphs               map[string]*ebsv1.BuildGraph
+	graphWrites          int
+	graphReads           []bool
 	mu                   sync.Mutex
 	buildinfos           map[string]*ebsv1.BuildInfo
 	jobs                 map[string]*ebsv1.Job
@@ -70,6 +73,7 @@ var _ Client = (*fakeClient)(nil)
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{
+		graphs:     make(map[string]*ebsv1.BuildGraph),
 		buildinfos: make(map[string]*ebsv1.BuildInfo),
 		jobs:       make(map[string]*ebsv1.Job),
 		builds:     make(map[string]*ebsv1.Build),

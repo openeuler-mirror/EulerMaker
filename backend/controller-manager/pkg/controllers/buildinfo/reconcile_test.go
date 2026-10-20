@@ -93,7 +93,7 @@ func TestEventWrongTypeNoPanic(t *testing.T) {
 func TestEventDeleteTombstoneAndRevoke(t *testing.T) {
 	c, _, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
-	c.dcgDict.Set(key, NewDcgDict(graphWith(edge{"a", "b"})))
+	c.dcgDict.Set(key, &graphCacheEntry{dcg: NewDcgDict(graphWith(edge{"a", "b"}))})
 	if got := c.dcgDict.Len(); got != 1 {
 		t.Fatalf("dcgDict len = %d, want 1", got)
 	}
@@ -113,7 +113,7 @@ func TestEventDeleteTombstoneAndRevoke(t *testing.T) {
 func TestReconcileDeletedBuildInfo(t *testing.T) {
 	c, _, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
-	c.dcgDict.Set(key, NewDcgDict(graphWith(edge{"a", "b"})))
+	c.dcgDict.Set(key, &graphCacheEntry{dcg: NewDcgDict(graphWith(edge{"a", "b"}))})
 	c.counters.Increment(counterRpmRepo, key, "r", "m")
 	// A missing BuildInfo ends the round and clears local state.
 	reconcileOnce(t, c)
@@ -129,7 +129,7 @@ func TestReconcileTerminalSkips(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
 	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoCompleted))
-	c.dcgDict.Set(key, NewDcgDict(graphWith(edge{"a", "b"})))
+	c.dcgDict.Set(key, &graphCacheEntry{dcg: NewDcgDict(graphWith(edge{"a", "b"}))})
 	reconcileOnce(t, c)
 	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoCompleted)
 	if got := c.dcgDict.Len(); got != 0 {
@@ -557,7 +557,7 @@ func TestWriteStatusUnknownUIDChangedEndsRound(t *testing.T) {
 	client.SeedBuildInfo(recreated)
 	client.InjectWrite("update-status", clientpkg.WriteUnknown, 0, false)
 	key := testNS + "/" + testBuild
-	c.dcgDict.Set(key, NewDcgDict(graphWith(edge{"a", "b"})))
+	c.dcgDict.Set(key, &graphCacheEntry{dcg: NewDcgDict(graphWith(edge{"a", "b"}))})
 	round := &reconcileRound{
 		key:      key,
 		current:  testBuildInfoObj(ebsv1.BuildInfoPending),
@@ -668,7 +668,6 @@ func TestStatusMatchesIntent(t *testing.T) {
 	withEmpty := copyStatus(base)
 	withEmpty.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{})
 	withEmpty.SpecRepoNames = map[string]string{}
-	withEmpty.Dcg = map[string]ebsv1.DcgNodeState{}
 	withEmpty.PendingJobCreates = map[string]ebsv1.PendingJobCreate{}
 	if !statusMatchesIntent(base, withEmpty) {
 		t.Fatal("nil maps must match empty maps")
@@ -700,13 +699,6 @@ func TestStatusMatchesIntent(t *testing.T) {
 	repos.SpecRepoNames = map[string]string{"a": "repo-a"}
 	if statusMatchesIntent(base, repos) {
 		t.Fatal("specRepoNames mismatch must not match")
-	}
-	dcgA := copyStatus(base)
-	dcgA.Dcg = map[string]ebsv1.DcgNodeState{"a": {OutDep: []string{"b"}}}
-	dcgB := copyStatus(base)
-	dcgB.Dcg = map[string]ebsv1.DcgNodeState{"a": {}}
-	if statusMatchesIntent(dcgA, dcgB) {
-		t.Fatal("dcg edge-set mismatch must not match")
 	}
 	pendA := copyStatus(base)
 	pendA.PendingJobCreates = map[string]ebsv1.PendingJobCreate{"a": {JobName: "j", DispatchGeneration: 1}}
