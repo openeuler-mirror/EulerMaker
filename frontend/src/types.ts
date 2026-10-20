@@ -112,6 +112,21 @@ export interface BuildInfo {
   };
 }
 
+export type VersionConstraint = Partial<Record<"gt" | "ge" | "eq" | "le" | "lt", string>>;
+
+export interface BuildGraphNode {
+  version?: string;
+  inDep?: Record<string, VersionConstraint>;
+  installInDep?: Record<string, VersionConstraint>;
+  outDep?: string[];
+  bootstrapBreak?: boolean;
+}
+
+export interface BuildGraph {
+  metadata?: ObjectMeta;
+  status: { nodes: Record<string, BuildGraphNode> };
+}
+
 export interface Job {
   metadata?: ObjectMeta;
   status?: { phase?: string; stage?: string; runner?: string; startTime?: string; endTime?: string };

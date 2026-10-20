@@ -3,6 +3,29 @@ import zhCN from "@/i18n/messages/zh-CN";
 type MessageShape<T> = { [K in keyof T]: T[K] extends string ? string : MessageShape<T[K]> };
 
 export default {
+  graph: {
+    hint: 'Select a build, then search and select a spec to explore its direct dependencies.',
+    selectBuild: 'Select build',
+    buildPage: 'Page {page}',
+    loading: 'Loading dependency graph…',
+    missing: 'No graph is available for this build yet. Please wait for dependency resolution to finish.',
+    noBuilds: 'No non-single-package builds available.',
+    empty: 'This build has an empty dependency graph.',
+    loadFailed: 'Could not load the dependency graph. Please refresh to retry.',
+    summary: '{nodes} nodes · {edges} dependencies',
+    buildEdge: 'Build dependency',
+    installEdge: 'Install dependency',
+    breakLegend: '★ Bootstrap break point',
+    breakPoint: 'Bootstrap break point',
+    direction: 'Arrows point from providers to consumers. Only direct neighbors are shown. Select a node to explore it; hover over an edge for version constraints.',
+    upstream: 'Direct upstream ({count})',
+    downstream: 'Direct downstream ({count})',
+    findNodes: 'Find package in graph',
+    clearFind: 'Clear search',
+    neighborhood: 'Direct dependencies of {name}',
+    selfDependency: 'Self-dependency: ',
+    isolated: 'This node has no dependencies within the graph.',
+  },
   jobLog: {
     title: 'Job logs', open: 'View logs for job {name}', expand: 'Show logs', collapse: 'Hide logs', refresh: 'Refresh logs', fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen',
     loading: 'Loading logs…', empty: 'No logs yet', loadFailed: 'Could not load logs. Try again.',
@@ -200,6 +223,7 @@ export default {
     tabsLabel: "Project pages",
     overviewTab: "Project details",
     buildHistoryTab: "Build history",
+    graphTab: "Dependency graph",
     configTab: "Project configuration",
     loading: "Loading project",
     loadingPackages: "Loading package repositories…",
