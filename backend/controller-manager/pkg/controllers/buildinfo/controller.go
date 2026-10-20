@@ -71,7 +71,7 @@ type Controller struct {
 	config     Config
 
 	// Per-BuildInfo caches share a tombstone lifecycle and use namespace/name keys.
-	dcgDict          *perBuildInfoCache[*DcgDict]
+	dcgDict          *perBuildInfoCache[*graphCacheEntry]
 	rpmMetaSources   *perBuildInfoCache[*rpmver.RpmMetaSources]
 	specDependsCache *perBuildInfoCache[map[string]specparse.SpecDepend]
 	abortJobs        *perBuildInfoCache[*jobAbortProgress]
@@ -102,7 +102,7 @@ func New(
 		gitServer:        gitServer,
 		clock:            clk,
 		config:           config,
-		dcgDict:          newPerBuildInfoCache[*DcgDict](clk, config.DcgPruneGrace),
+		dcgDict:          newPerBuildInfoCache[*graphCacheEntry](clk, config.DcgPruneGrace),
 		rpmMetaSources:   newPerBuildInfoCache[*rpmver.RpmMetaSources](clk, config.DcgPruneGrace),
 		specDependsCache: newPerBuildInfoCache[map[string]specparse.SpecDepend](clk, config.DcgPruneGrace),
 		abortJobs:        newPerBuildInfoCache[*jobAbortProgress](clk, config.DcgPruneGrace),

@@ -58,28 +58,36 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	if len(buildSet) == 0 {
-		return c.completeInitEmpty(ctx, round, asm.degraded)
-	}
 
 	// Backfill Jobs that may have been created before a lost status write.
 	jobs, err := c.listRoundJobs(ctx, round)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	next := round.current.DeepCopy()
-	applyDegradedConditions(&next.Status.Conditions, asm.degraded)
-	c.backfillJobs(round, next, jobs, specNameSet(buildSet), true)
-	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
-		return result, err
-	}
-
 	arch := round.build.Spec.BuildTarget.Arch
 
 	// Persist the graph before caching it or creating graph-based Jobs.
 	prefer := payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))
 	dcg, result, err := c.obtainDcg(ctx, round, buildSet, sources, prefer)
 	if err != nil || result != (controller.ReconcileResult{}) || dcg == nil {
+		return result, err
+	}
+	// Once persisted, the graph defines the build set even if current repository metadata has changed.
+	buildSet = make(map[string]specparse.SpecDepend, dcg.Len())
+	for _, name := range dcg.SortedNodes() {
+		dep, ok := asm.depends[name]
+		if !ok {
+			return controller.ReconcileResult{}, fmt.Errorf("BuildGraph node %s has no parsed spec", name)
+		}
+		buildSet[name] = dep
+	}
+	if len(buildSet) == 0 {
+		return c.completeInitEmpty(ctx, round, asm.degraded)
+	}
+	next := round.current.DeepCopy()
+	applyDegradedConditions(&next.Status.Conditions, asm.degraded)
+	c.backfillJobs(round, next, jobs, specNameSet(buildSet), true)
+	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
 	if result, err = c.persistBuildSetSpecStatuses(ctx, round, buildSet); err != nil ||
@@ -263,34 +271,18 @@ func (c *Controller) obtainDcg(
 	sources *rpmver.RpmMetaSources,
 	prefer []string,
 ) (*DcgDict, controller.ReconcileResult, error) {
-	if d, ok := c.dcgDict.Get(round.key); ok {
-		// A recovered graph clears the stale failure condition.
-		if result, err := c.clearStaleDcgFailed(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
-			return nil, result, err
-		}
-		return d, controller.ReconcileResult{}, nil
-	}
-	if len(round.current.Status.Dcg) > 0 {
-		d := DcgDictFromState(round.current.Status.Dcg)
-		c.dcgDict.Set(round.key, d)
-		if result, err := c.clearStaleDcgFailed(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
-			return nil, result, err
-		}
-		return d, controller.ReconcileResult{}, nil
+	if d, stop, result, err := c.loadGraph(ctx, round); stop {
+		return d, result, err
 	}
 	// First build requires the held RpmRepo and ready metadata (the caller refreshed the sources this round).
 	nodes := BuildDcgNodes(buildSet, sources, prefer)
 	d := NewDcgDict(nodes)
-	next := round.current.DeepCopy()
-	next.Status.Dcg = d.ToState()
-	removeCondition(&next.Status.Conditions, ConditionDcgBuildFailed)
-	result, err := c.writeStatus(ctx, round, next)
-	if err != nil || result != (controller.ReconcileResult{}) {
+	persisted, result, err := c.writeGraph(ctx, round, d)
+	if err != nil || result != (controller.ReconcileResult{}) || persisted == nil {
 		// A failed write leaves the cache untouched and prevents Job creation.
 		return nil, result, err
 	}
-	c.dcgDict.Set(round.key, d)
-	breaks := d.GetBootstrapBreaks()
+	breaks := persisted.GetBootstrapBreaks()
 	if len(breaks) > 0 {
 		bootstrapBreaks.Add(uint64(len(breaks)))
 		c.logBreakPoints(
@@ -300,20 +292,7 @@ func (c *Controller) obtainDcg(
 			breaks,
 		)
 	}
-	return d, controller.ReconcileResult{}, nil
-}
-
-// clearStaleDcgFailed removes the stale condition after any successful graph lookup or rebuild.
-func (c *Controller) clearStaleDcgFailed(
-	ctx context.Context,
-	round *reconcileRound,
-) (controller.ReconcileResult, error) {
-	if findCondition(round.current.Status.Conditions, ConditionDcgBuildFailed) == nil {
-		return controller.ReconcileResult{}, nil
-	}
-	next := round.current.DeepCopy()
-	removeCondition(&next.Status.Conditions, ConditionDcgBuildFailed)
-	return c.writeStatusIfChanged(ctx, round, next)
+	return persisted, controller.ReconcileResult{}, nil
 }
 
 // refreshRpmMetaSources refreshes the layered RPM metadata:
@@ -447,8 +426,16 @@ func (c *Controller) handleArtifactURLFailure(ctx context.Context, round *reconc
 
 // listRoundJobs pages every Job of this Build.
 func (c *Controller) listRoundJobs(ctx context.Context, round *reconcileRound) ([]ebsv1.Job, error) {
+	if round.jobsLoaded {
+		return round.jobs, nil
+	}
 	selector := labels.SelectorFromSet(labels.Set{ebsv1.JobBuildNameLabel: round.current.Name})
-	return c.client.ListJobs(ctx, round.current.Namespace, selector)
+	jobs, err := c.client.ListJobs(ctx, round.current.Namespace, selector)
+	if err != nil {
+		return nil, err
+	}
+	round.jobs, round.jobsLoaded = jobs, true
+	return jobs, nil
 }
 
 // writeStatusIfChanged writes only semantic status changes.

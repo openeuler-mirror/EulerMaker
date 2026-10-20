@@ -29,8 +29,11 @@ const conflictRequeueDelay = time.Second
 // updated locally for Jobs awaiting batch confirmation — plus the guard-held objects later steps reuse and the
 // readiness counters.
 type reconcileRound struct {
-	key     string
-	current *ebsv1.BuildInfo
+	key        string
+	current    *ebsv1.BuildInfo
+	graph      *ebsv1.BuildGraph
+	jobs       []ebsv1.Job
+	jobsLoaded bool
 
 	project           *ebsv1.Project
 	build             *ebsv1.Build
@@ -615,9 +618,6 @@ func statusMatchesIntent(persisted, intent *ebsv1.BuildInfoStatus) bool {
 		return false
 	}
 	if !maps.Equal(persisted.SpecRepoNames, intent.SpecRepoNames) {
-		return false
-	}
-	if !dcgStateMatches(persisted.Dcg, intent.Dcg) {
 		return false
 	}
 	return pendingCreatesMatch(persisted.PendingJobCreates, intent.PendingJobCreates)

@@ -69,7 +69,7 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 	if dispatchReady {
 		// Persist new install edges before using them for dispatch.
 		dcg, result, err = c.appendInstallEdges(ctx, round, dcg, sources)
-		if err != nil || result != (controller.ReconcileResult{}) {
+		if err != nil || result != (controller.ReconcileResult{}) || dcg == nil {
 			return result, err
 		}
 		if result, err = c.advanceDownstream(ctx, round, dcg, asm, snapshot, sources, bySpec); err != nil ||
@@ -81,41 +81,13 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 	return c.checkCompletion(ctx, round, dcg, asm)
 }
 
-// advanceDcg loads the graph from cache or BuildInfo status. A missing graph in Processing is an anomaly; it is not
-// rebuilt in this phase.
+// advanceDcg loads the persisted graph. Processing never creates a new graph.
 func (c *Controller) advanceDcg(
 	ctx context.Context,
 	round *reconcileRound,
 ) (*DcgDict, controller.ReconcileResult, error) {
-	if d, ok := c.dcgDict.Get(round.key); ok {
-		// A recovered graph clears the stale failure condition.
-		if result, err := c.clearStaleDcgFailed(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
-			return nil, result, err
-		}
-		return d, controller.ReconcileResult{}, nil
-	}
-	if len(round.current.Status.Dcg) > 0 {
-		d := DcgDictFromState(round.current.Status.Dcg)
-		c.dcgDict.Set(round.key, d)
-		if result, err := c.clearStaleDcgFailed(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
-			return nil, result, err
-		}
-		return d, controller.ReconcileResult{}, nil
-	}
-	c.logf(
-		round.key,
-		"DcgMissing",
-		"processing buildinfo without a persisted dcg; no first build in advance (15.9), waiting",
-	)
-	next := round.current.DeepCopy()
-	upsertCondition(
-		&next.Status.Conditions,
-		ConditionDcgBuildFailed,
-		ReasonDcgBuildFailed,
-		"processing buildinfo without a persisted dcg",
-	)
-	result, err := c.writeStatusIfChanged(ctx, round, next)
-	return nil, result, err
+	d, _, result, err := c.loadGraph(ctx, round)
+	return d, result, err
 }
 
 // appendInstallEdges checks every spec with install.status=Failed (cycle nodes already at 2 dispatches excluded)
@@ -172,14 +144,11 @@ func (c *Controller) appendInstallEdges(
 		return dcg, controller.ReconcileResult{}, nil
 	}
 	newBreaks := candidate.RefreshCyclesAndBreaks()
-	next := round.current.DeepCopy()
-	next.Status.Dcg = candidate.ToState()
-	result, err := c.writeStatus(ctx, round, next)
-	if err != nil || result != (controller.ReconcileResult{}) {
+	persisted, result, err := c.writeGraph(ctx, round, candidate)
+	if err != nil || result != (controller.ReconcileResult{}) || persisted == nil {
 		// Keep the in-memory graph unchanged if persistence fails.
-		return dcg, result, err
+		return nil, result, err
 	}
-	c.dcgDict.Set(round.key, candidate)
 	edgesAdded.Add(uint64(changed))
 	if len(newBreaks) > 0 {
 		bootstrapBreaks.Add(uint64(len(newBreaks)))
@@ -192,7 +161,7 @@ func (c *Controller) appendInstallEdges(
 	} else {
 		c.logOnce(round.key, "InstallEdgesAdded", "install edge appends added %d edges", changed)
 	}
-	return candidate, controller.ReconcileResult{}, nil
+	return persisted, controller.ReconcileResult{}, nil
 }
 
 // advanceDownstream traverses specs in graph order, skipping those already complete or running. An initial bootstrap

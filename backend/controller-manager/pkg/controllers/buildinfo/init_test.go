@@ -77,8 +77,8 @@ func TestInitFullHappyPath(t *testing.T) {
 	if got := jobSpecNames(t, client); len(got) != 2 || !got["a"] || !got["b"] {
 		t.Fatalf("jobs = %v, want {a,b}", got)
 	}
-	if len(bi.Status.Dcg) != 2 {
-		t.Fatalf("status.dcg size = %d, want 2 (G-02 persist)", len(bi.Status.Dcg))
+	if graph := testGraph(t, client, bi); len(graph.Status.Nodes) != 2 {
+		t.Fatalf("graph nodes size = %d, want 2", len(graph.Status.Nodes))
 	}
 	for spec, want := range map[string]string{"a": "repo1", "b": "repo2"} {
 		if got := bi.Status.SpecRepoNames[spec]; got != want {
@@ -326,7 +326,7 @@ func TestInitSpecifiedIncludesOnlyDirectDependents(t *testing.T) {
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
 		t.Fatalf("jobs = %v, want only {a} (zero indegree)", got)
 	}
-	dcg := bi.Status.Dcg
+	dcg := testGraph(t, client, bi).Status.Nodes
 	if _, ok := dcg["b"].InDep["a"]; !ok {
 		t.Fatalf("dcg[b].InDep = %v, want edge on a", dcg["b"].InDep)
 	}
@@ -698,6 +698,7 @@ func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 func TestInitBackfillsExistingJob(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	bi := seedHealthyBasics(client, "full")
+	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0"}})
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	client.SeedRpmRepo(testRpmRepoObj(""))
@@ -744,8 +745,8 @@ func TestSinglePassThrough(t *testing.T) {
 	if got := jobSpecNames(t, client); len(got) != 2 {
 		t.Fatalf("jobs = %v, want {a,b} (直通无顺序)", got)
 	}
-	if len(bi.Status.Dcg) != 0 {
-		t.Fatalf("status.dcg = %v, want empty for single", bi.Status.Dcg)
+	if len(client.graphs) != 0 {
+		t.Fatalf("single build created graphs: %v", client.graphs)
 	}
 	for spec, want := range map[string]string{"a": "repo1", "b": "repo2"} {
 		if got := bi.Status.SpecRepoNames[spec]; got != want {

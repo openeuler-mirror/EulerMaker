@@ -38,6 +38,9 @@ type Client interface {
 	GetBuildInfo(ctx context.Context, namespace, name string) (*ebsv1.BuildInfo, error)
 	// UpdateBuildInfoStatus writes BuildInfo.status via /status with the object's resourceVersion as an optimistic lock.
 	UpdateBuildInfoStatus(ctx context.Context, obj *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
+	GetBuildGraph(ctx context.Context, project, name string, metadataOnly bool) (*ebsv1.BuildGraph, error)
+	CreateBuildGraph(ctx context.Context, project string, obj *ebsv1.BuildGraph) (*ebsv1.BuildGraph, error)
+	UpdateBuildGraphStatus(ctx context.Context, obj *ebsv1.BuildGraph) (*ebsv1.BuildGraph, error)
 
 	// CreateJob creates a Job. Unknown outcomes are confirmed by GET on its deterministic name.
 	CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
@@ -138,6 +141,49 @@ func (c *apiClient) CreateJob(ctx context.Context, project string, obj *ebsv1.Jo
 		return nil, unknownWrite("create", source.JobsGVR, fmt.Errorf("unexpected Job create response: %T", created))
 	}
 	return value, nil
+}
+
+func (c *apiClient) GetBuildGraph(ctx context.Context, project, name string, metadataOnly bool) (*ebsv1.BuildGraph, error) {
+	fields := ""
+	if metadataOnly {
+		fields = "metadata"
+	}
+	obj, err := c.readGet(ctx, source.BuildGraphsGVR, project, name, fields)
+	if err != nil {
+		return nil, err
+	}
+	graph, ok := obj.(*ebsv1.BuildGraph)
+	if !ok || graph == nil || graph.Name != name || graph.Namespace != project || graph.UID == "" || graph.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected BuildGraph response for %s/%s: %T", project, name, obj)
+	}
+	return graph, nil
+}
+
+func (c *apiClient) CreateBuildGraph(ctx context.Context, project string, obj *ebsv1.BuildGraph) (*ebsv1.BuildGraph, error) {
+	if obj == nil {
+		return nil, notSentWrite("create", source.BuildGraphsGVR, fmt.Errorf("BuildGraph is required"))
+	}
+	result, err := c.client.Create(ctx, source.BuildGraphsGVR, project, obj)
+	return buildGraphWriteResponse("create", obj, result, err)
+}
+
+func (c *apiClient) UpdateBuildGraphStatus(ctx context.Context, obj *ebsv1.BuildGraph) (*ebsv1.BuildGraph, error) {
+	if obj == nil {
+		return nil, notSentWrite("update-status", source.BuildGraphsGVR, fmt.Errorf("BuildGraph is required"))
+	}
+	result, err := c.client.UpdateStatus(ctx, source.BuildGraphsGVR, obj.Namespace, obj)
+	return buildGraphWriteResponse("update-status", obj, result, err)
+}
+
+func buildGraphWriteResponse(operation string, intent *ebsv1.BuildGraph, result runtime.Object, err error) (*ebsv1.BuildGraph, error) {
+	if err != nil {
+		return nil, err
+	}
+	graph, ok := result.(*ebsv1.BuildGraph)
+	if !ok || !graphWriteMatches(graph, intent) {
+		return nil, unknownWrite(operation, source.BuildGraphsGVR, fmt.Errorf("unexpected BuildGraph write response"))
+	}
+	return graph, nil
 }
 
 func (c *apiClient) GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error) {
@@ -326,11 +372,16 @@ func (c *apiClient) readGet(
 	ctx context.Context,
 	gvr schema.GroupVersionResource,
 	namespace, name string,
+	includeFields ...string,
 ) (runtime.Object, error) {
 	var obj runtime.Object
 	var err error
 	for attempt := 0; ; attempt++ {
-		obj, err = c.client.Get(ctx, gvr, namespace, name)
+		fields := ""
+		if len(includeFields) > 0 {
+			fields = includeFields[0]
+		}
+		obj, err = c.client.GetWithFields(ctx, gvr, namespace, name, fields)
 		if err == nil {
 			return obj, nil
 		}

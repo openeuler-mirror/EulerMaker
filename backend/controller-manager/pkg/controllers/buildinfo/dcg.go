@@ -56,7 +56,7 @@ func DcgDictFromState(state map[string]ebsv1.DcgNodeState) *DcgDict {
 	return &DcgDict{nodes: nodes}
 }
 
-// ToState exports the graph for persistence to BuildInfo.status.dcg.
+// ToState exports the graph for persistence to BuildGraph.status.nodes.
 func (d *DcgDict) ToState() map[string]ebsv1.DcgNodeState {
 	out := make(map[string]ebsv1.DcgNodeState, len(d.nodes))
 	for name, n := range d.nodes {
