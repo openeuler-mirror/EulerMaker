@@ -32,6 +32,7 @@ type Request struct {
 	Requests           framework.Resource
 	JobResourceVersion string
 }
+
 type State string
 
 const (
@@ -55,17 +56,28 @@ func New(c cache.Interface, jobs client.JobInterface, request Request) (*Stateme
 	if c == nil || jobs == nil {
 		return nil, fmt.Errorf("cache and job client are required")
 	}
-	if request.JobKey == "" || request.JobUID == "" || request.RunnerName == "" || request.RunnerUID == "" || request.JobResourceVersion == "" || !strings.Contains(request.JobKey, "/") {
+	if request.JobKey == "" || request.JobUID == "" || request.RunnerName == "" || request.RunnerUID == "" ||
+		request.JobResourceVersion == "" || !strings.Contains(request.JobKey, "/") {
 		return nil, fmt.Errorf("invalid statement request")
 	}
 	return &Statement{cache: c, jobs: jobs, request: request, state: StateNew}, nil
 }
+
 func (s *Statement) State() State { return s.state }
+
 func (s *Statement) Commit(ctx context.Context) error {
 	if s.state != StateNew {
 		return s.commitErr
 	}
-	generation, err := s.cache.Assume(cache.AssumeRequest{JobKey: s.request.JobKey, JobUID: s.request.JobUID, RunnerName: s.request.RunnerName, RunnerUID: s.request.RunnerUID, RunnerRevision: s.request.RunnerRevision, Requests: s.request.Requests, JobResourceVersion: s.request.JobResourceVersion})
+	generation, err := s.cache.Assume(cache.AssumeRequest{
+		JobKey:             s.request.JobKey,
+		JobUID:             s.request.JobUID,
+		RunnerName:         s.request.RunnerName,
+		RunnerUID:          s.request.RunnerUID,
+		RunnerRevision:     s.request.RunnerRevision,
+		Requests:           s.request.Requests,
+		JobResourceVersion: s.request.JobResourceVersion,
+	})
 	if err != nil {
 		return s.discard(err)
 	}
@@ -76,7 +88,8 @@ func (s *Statement) Commit(ctx context.Context) error {
 	if err != nil {
 		return s.discard(err)
 	}
-	if current == nil || current.UID != s.request.JobUID || current.Status.Phase != ebsv1.JobPending || current.Status.Runner != "" || current.ResourceVersion != s.request.JobResourceVersion {
+	if current == nil || current.UID != s.request.JobUID || current.Status.Phase != ebsv1.JobPending ||
+		current.Status.Runner != "" || current.ResourceVersion != s.request.JobResourceVersion {
 		return s.discard(ErrJobNoLongerSchedulable)
 	}
 	updated := current.DeepCopy()
@@ -97,7 +110,8 @@ func (s *Statement) Commit(ctx context.Context) error {
 				s.commitErr = getErr
 				return getErr
 			}
-			if latest != nil && latest.UID == s.request.JobUID && latest.Status.Phase == ebsv1.JobPending && latest.Status.Runner == "" {
+			if latest != nil && latest.UID == s.request.JobUID &&
+				latest.Status.Phase == ebsv1.JobPending && latest.Status.Runner == "" {
 				s.commitErr = ErrConflictRetryable
 			} else {
 				s.commitErr = ErrJobNoLongerSchedulable
@@ -106,7 +120,8 @@ func (s *Statement) Commit(ctx context.Context) error {
 		}
 		return s.commitErr
 	}
-	if response == nil || response.UID != s.request.JobUID || response.Status.Phase != ebsv1.JobRunning || response.Status.Runner != s.request.RunnerName || response.ResourceVersion == "" {
+	if response == nil || response.UID != s.request.JobUID || response.Status.Phase != ebsv1.JobRunning ||
+		response.Status.Runner != s.request.RunnerName || response.ResourceVersion == "" {
 		s.state = StateUnknown
 		s.commitErr = fmt.Errorf("%w: unexpected-success-response", ErrBindOutcomeUnknown)
 		return s.commitErr
@@ -115,6 +130,7 @@ func (s *Statement) Commit(ctx context.Context) error {
 	s.commitErr = nil
 	return nil
 }
+
 func (s *Statement) discard(err error) error {
 	if s.state == StateAssumed {
 		s.cache.Forget(s.request.JobKey, s.request.JobUID, s.assumeGeneration)
@@ -123,6 +139,7 @@ func (s *Statement) discard(err error) error {
 	s.commitErr = err
 	return err
 }
+
 func (s *Statement) Discard() {
 	if s.state == StateNew {
 		s.discard(ErrStatementDiscarded)

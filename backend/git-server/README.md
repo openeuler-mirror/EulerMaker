@@ -45,7 +45,7 @@ curl -i -X POST http://localhost:8080/api/v1/repo/delete \
 git clone http://localhost:8080/git/gitee.com/src-openeuler/gcc.git
 ```
 
-`--clone-workers` 默认为 20，限制同时处理的 Smart HTTP 请求数；`--operation-timeout` 同时限制单个克隆请求，默认 10 分钟。入口只接受 Git clone/fetch，不提供 push、裸仓库文件浏览或 LFS 服务。需要集群外访问时，通过反向代理仅暴露 `/git/` 并配置 HTTPS，内部管理接口保持受限。
+`--clone-workers` 默认为 100，限制同时处理的 Smart HTTP 请求数；`--operation-timeout` 同时限制单个克隆请求，默认 10 分钟。入口只接受 Git clone/fetch，不提供 push、裸仓库文件浏览或 LFS 服务。需要集群外访问时，通过反向代理仅暴露 `/git/` 并配置 HTTPS，内部管理接口保持受限。
 
 Compose 使用 `8084:8084`，`EXPORT_SERVER_ADDR` 用于生成构建节点可访问的 `http://<地址>:8084/git/...`。Kubernetes 模板使用 Service 的 `8080` 端口。
 

@@ -34,21 +34,25 @@ type listerWatcher struct {
 func (l *listerWatcher) List(opts metav1.ListOptions) (runtime.Object, error) {
 	return l.list(l.ctx, opts)
 }
+
 func (l *listerWatcher) Watch(opts metav1.ListOptions) (watch.Interface, error) {
 	return l.watch(l.ctx, opts)
 }
 
 type Scheduler struct {
-	options                             options.Options
-	client                              client.Interface
-	cache                               *schedcache.SchedulerCache
-	queue                               *queue.Queue
-	jobInformer, runnerInformer         kcache.SharedIndexInformer
-	jobRegistration, runnerRegistration kcache.ResourceEventHandlerRegistration
-	action                              *allocate.Action
-	ready, healthy                      atomic.Bool
-	cycles                              atomic.Uint64
-	metrics                             *metrics
+	options            options.Options
+	client             client.Interface
+	cache              *schedcache.SchedulerCache
+	queue              *queue.Queue
+	jobInformer        kcache.SharedIndexInformer
+	runnerInformer     kcache.SharedIndexInformer
+	jobRegistration    kcache.ResourceEventHandlerRegistration
+	runnerRegistration kcache.ResourceEventHandlerRegistration
+	action             *allocate.Action
+	ready              atomic.Bool
+	healthy            atomic.Bool
+	cycles             atomic.Uint64
+	metrics            *metrics
 }
 
 func New(ctx context.Context, o options.Options, c client.Interface) (*Scheduler, error) {
@@ -59,18 +63,44 @@ func New(ctx context.Context, o options.Options, c client.Interface) (*Scheduler
 	q := queue.New(o.BackoffInitial, o.BackoffMax)
 	s := &Scheduler{options: o, client: c, cache: sc, queue: q, metrics: newMetrics()}
 	s.action = allocate.New(sc, c.Jobs())
-	jlw := &listerWatcher{ctx: ctx, list: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) { return c.Jobs().List(ctx, o) }, watch: c.Jobs().Watch}
-	rlw := &listerWatcher{ctx: ctx, list: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
-		return c.Runners().List(ctx, o)
-	}, watch: c.Runners().Watch}
-	s.jobInformer = kcache.NewSharedIndexInformer(jlw, &ebsv1.Job{}, o.ResyncPeriod, kcache.Indexers{kcache.NamespaceIndex: kcache.MetaNamespaceIndexFunc, "status.runner": func(obj any) ([]string, error) { return []string{obj.(*ebsv1.Job).Status.Runner}, nil }, "status.phase": func(obj any) ([]string, error) { return []string{string(obj.(*ebsv1.Job).Status.Phase)}, nil }})
+	jlw := &listerWatcher{
+		ctx: ctx,
+		list: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+			return c.Jobs().List(ctx, o)
+		},
+		watch: c.Jobs().Watch,
+	}
+	rlw := &listerWatcher{
+		ctx: ctx,
+		list: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+			return c.Runners().List(ctx, o)
+		},
+		watch: c.Runners().Watch,
+	}
+	s.jobInformer = kcache.NewSharedIndexInformer(jlw, &ebsv1.Job{}, o.ResyncPeriod, kcache.Indexers{
+		kcache.NamespaceIndex: kcache.MetaNamespaceIndexFunc,
+		"status.runner": func(obj any) ([]string, error) {
+			return []string{obj.(*ebsv1.Job).Status.Runner}, nil
+		},
+		"status.phase": func(obj any) ([]string, error) {
+			return []string{string(obj.(*ebsv1.Job).Status.Phase)}, nil
+		},
+	})
 	s.runnerInformer = kcache.NewSharedIndexInformer(rlw, &ebsv1.Runner{}, o.ResyncPeriod, kcache.Indexers{})
 	var err error
-	s.jobRegistration, err = s.jobInformer.AddEventHandler(kcache.ResourceEventHandlerFuncs{AddFunc: s.onJobAdd, UpdateFunc: s.onJobUpdate, DeleteFunc: s.onJobDelete})
+	s.jobRegistration, err = s.jobInformer.AddEventHandler(kcache.ResourceEventHandlerFuncs{
+		AddFunc:    s.onJobAdd,
+		UpdateFunc: s.onJobUpdate,
+		DeleteFunc: s.onJobDelete,
+	})
 	if err != nil {
 		return nil, err
 	}
-	s.runnerRegistration, err = s.runnerInformer.AddEventHandler(kcache.ResourceEventHandlerFuncs{AddFunc: s.onRunnerAdd, UpdateFunc: s.onRunnerUpdate, DeleteFunc: s.onRunnerDelete})
+	s.runnerRegistration, err = s.runnerInformer.AddEventHandler(kcache.ResourceEventHandlerFuncs{
+		AddFunc:    s.onRunnerAdd,
+		UpdateFunc: s.onRunnerUpdate,
+		DeleteFunc: s.onRunnerDelete,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -85,9 +115,12 @@ func (s *Scheduler) onJobAdd(obj any) {
 	s.cache.UpsertJob(job)
 	s.queue.Add(job)
 }
+
 func schedulingJobChanged(a, b *ebsv1.Job) bool {
-	return a.UID != b.UID || a.Spec.Priority != b.Spec.Priority || !reflect.DeepEqual(a.Spec, b.Spec) || a.Status.Phase != b.Status.Phase || a.Status.Runner != b.Status.Runner
+	return a.UID != b.UID || !reflect.DeepEqual(a.Spec, b.Spec) ||
+		a.Status.Phase != b.Status.Phase || a.Status.Runner != b.Status.Runner
 }
+
 func (s *Scheduler) onJobUpdate(oldObj, newObj any) {
 	old, ok1 := oldObj.(*ebsv1.Job)
 	job, ok2 := newObj.(*ebsv1.Job)
@@ -102,14 +135,16 @@ func (s *Scheduler) onJobUpdate(oldObj, newObj any) {
 		}
 	}
 }
-func tombstone(obj any) (any, bool) {
+
+func tombstone(obj any) any {
 	if t, ok := obj.(kcache.DeletedFinalStateUnknown); ok {
-		return t.Obj, true
+		return t.Obj
 	}
-	return obj, true
+	return obj
 }
+
 func (s *Scheduler) onJobDelete(obj any) {
-	obj, _ = tombstone(obj)
+	obj = tombstone(obj)
 	job, ok := obj.(*ebsv1.Job)
 	if !ok {
 		return
@@ -121,12 +156,14 @@ func (s *Scheduler) onJobDelete(obj any) {
 		s.queue.ActivateAll()
 	}
 }
+
 func (s *Scheduler) onRunnerAdd(obj any) {
 	if r, ok := obj.(*ebsv1.Runner); ok {
 		s.cache.UpsertRunner(r)
 		s.queue.ActivateAll()
 	}
 }
+
 func (s *Scheduler) onRunnerUpdate(oldObj, newObj any) {
 	old, ok1 := oldObj.(*ebsv1.Runner)
 	r, ok2 := newObj.(*ebsv1.Runner)
@@ -134,12 +171,14 @@ func (s *Scheduler) onRunnerUpdate(oldObj, newObj any) {
 		return
 	}
 	s.cache.UpsertRunner(r)
-	if old.UID != r.UID || !reflect.DeepEqual(old.Labels, r.Labels) || !reflect.DeepEqual(old.Spec, r.Spec) || old.Status.Phase != r.Status.Phase || !reflect.DeepEqual(old.Status.Allocatable, r.Status.Allocatable) {
+	if old.UID != r.UID || !reflect.DeepEqual(old.Labels, r.Labels) || !reflect.DeepEqual(old.Spec, r.Spec) ||
+		old.Status.Phase != r.Status.Phase || !reflect.DeepEqual(old.Status.Allocatable, r.Status.Allocatable) {
 		s.queue.ActivateAll()
 	}
 }
+
 func (s *Scheduler) onRunnerDelete(obj any) {
-	obj, _ = tombstone(obj)
+	obj = tombstone(obj)
 	if r, ok := obj.(*ebsv1.Runner); ok {
 		s.cache.DeleteRunner(r.Name, r.UID)
 	}
@@ -156,23 +195,36 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}()
 	go s.jobInformer.Run(ctx.Done())
 	go s.runnerInformer.Run(ctx.Done())
-	if !kcache.WaitForCacheSync(ctx.Done(), s.jobInformer.HasSynced, s.runnerInformer.HasSynced, s.jobRegistration.HasSynced, s.runnerRegistration.HasSynced) {
+	if !kcache.WaitForCacheSync(
+		ctx.Done(),
+		s.jobInformer.HasSynced,
+		s.runnerInformer.HasSynced,
+		s.jobRegistration.HasSynced,
+		s.runnerRegistration.HasSynced,
+	) {
 		return fmt.Errorf("informer synchronization failed")
 	}
 	s.ready.Store(true)
 	var wg sync.WaitGroup
 	for i := 0; i < s.options.Workers; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); s.worker(ctx) }()
+		go func() {
+			defer wg.Done()
+			s.worker(ctx)
+		}()
 	}
 	wg.Add(1)
-	go func() { defer wg.Done(); s.confirmAssumed(ctx) }()
+	go func() {
+		defer wg.Done()
+		s.confirmAssumed(ctx)
+	}()
 	<-ctx.Done()
 	s.ready.Store(false)
 	s.queue.ShutDown()
 	wg.Wait()
 	return nil
 }
+
 func (s *Scheduler) worker(ctx context.Context) {
 	for {
 		item, ok := s.queue.Pop()
@@ -183,17 +235,34 @@ func (s *Scheduler) worker(ctx context.Context) {
 		snapshot, err := s.cache.Snapshot(item.Key, item.UID)
 		var result *framework.CycleResult
 		if err != nil {
-			result = &framework.CycleResult{Code: framework.Conflict, JobKey: item.Key, JobUID: item.UID, Reason: "stale-queue-entry", Err: err, QueueAction: framework.QueueDone}
+			result = &framework.CycleResult{
+				Code:        framework.Conflict,
+				JobKey:      item.Key,
+				JobUID:      item.UID,
+				Reason:      "stale-queue-entry",
+				Err:         err,
+				QueueAction: framework.QueueDone,
+			}
 		} else {
-			session := &framework.Session{CycleID: fmt.Sprintf("%d", s.cycles.Add(1)), Job: snapshot.Job, Requests: snapshot.Requests, Runners: snapshot.Runners, OpenedAt: time.Now(), FilterPlugins: plugin.DefaultFilters(), ScorePlugins: plugin.DefaultScores()}
+			session := &framework.Session{
+				CycleID:       fmt.Sprintf("%d", s.cycles.Add(1)),
+				Job:           snapshot.Job,
+				Requests:      snapshot.Requests,
+				Runners:       snapshot.Runners,
+				OpenedAt:      time.Now(),
+				FilterPlugins: plugin.DefaultFilters(),
+				ScorePlugins:  plugin.DefaultScores(),
+			}
 			result = s.action.Execute(ctx, session)
 		}
 		s.metrics.recordCycle(result, time.Since(started))
 		s.finish(item, result)
 	}
 }
+
 func (s *Scheduler) finish(item *queue.QueuedJob, result *framework.CycleResult) {
-	if result == nil || result.JobUID == "" || (result.QueueAction != framework.QueueDone && result.QueueAction != framework.QueueAddBackoff) {
+	if result == nil || result.JobUID == "" ||
+		(result.QueueAction != framework.QueueDone && result.QueueAction != framework.QueueAddBackoff) {
 		s.ready.Store(false)
 		s.queue.Done(item)
 		return
@@ -209,6 +278,7 @@ func (s *Scheduler) finish(item *queue.QueuedJob, result *framework.CycleResult)
 		s.queue.ShutDown()
 	}
 }
+
 func (s *Scheduler) confirmAssumed(ctx context.Context) {
 	ticker := time.NewTicker(s.options.AssumeScanInterval)
 	defer ticker.Stop()
@@ -238,6 +308,7 @@ func (s *Scheduler) confirmAssumed(ctx context.Context) {
 		}
 	}
 }
+
 func (s *Scheduler) confirmOne(ctx context.Context, a *schedcache.AssumedJob) {
 	job, err := s.client.Jobs().Get(ctx, project(a.JobKey), name(a.JobKey), metav1.GetOptions{})
 	if err != nil {
@@ -257,6 +328,7 @@ func (s *Scheduler) confirmOne(ctx context.Context, a *schedcache.AssumedJob) {
 		s.queue.Add(job)
 	}
 }
+
 func project(key string) string {
 	for i, c := range key {
 		if c == '/' {
@@ -265,6 +337,7 @@ func project(key string) string {
 	}
 	return ""
 }
+
 func name(key string) string {
 	for i, c := range key {
 		if c == '/' {
@@ -273,6 +346,7 @@ func name(key string) string {
 	}
 	return ""
 }
+
 func (s *Scheduler) serveHealth() *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -292,7 +366,12 @@ func (s *Scheduler) serveHealth() *http.Server {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		active, backoff, inflight := s.queue.Depths()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		fmt.Fprintf(w, "scheduler_queue_depth{queue=\"active\"} %d\nscheduler_queue_depth{queue=\"backoff\"} %d\nscheduler_queue_depth{queue=\"inflight\"} %d\n", active, backoff, inflight)
+		fmt.Fprintf(w,
+			"scheduler_queue_depth{queue=\"active\"} %d\n"+
+				"scheduler_queue_depth{queue=\"backoff\"} %d\n"+
+				"scheduler_queue_depth{queue=\"inflight\"} %d\n",
+			active, backoff, inflight,
+		)
 		s.metrics.write(w, s.cache.AssumedCount())
 	})
 	server := &http.Server{Addr: s.options.HealthAddress, Handler: mux, ReadHeaderTimeout: 5 * time.Second}

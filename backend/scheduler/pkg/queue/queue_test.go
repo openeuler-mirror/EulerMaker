@@ -12,8 +12,13 @@ import (
 )
 
 func job(name string, priority int64) *ebsv1.Job {
-	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: types.UID("uid-" + name)}, Spec: ebsv1.JobSpec{Priority: priority}, Status: ebsv1.JobStatus{Phase: ebsv1.JobPending}}
+	return &ebsv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: types.UID("uid-" + name)},
+		Spec:       ebsv1.JobSpec{Priority: priority},
+		Status:     ebsv1.JobStatus{Phase: ebsv1.JobPending},
+	}
 }
+
 func TestPriorityFIFOAndDirtyWinsBackoff(t *testing.T) {
 	q := New(time.Hour, time.Hour)
 	q.Add(job("low", 1))
@@ -35,10 +40,14 @@ func TestPriorityFIFOAndDirtyWinsBackoff(t *testing.T) {
 		t.Fatalf("next=%+v", next)
 	}
 }
+
 func TestShutdownWakesPop(t *testing.T) {
 	q := New(time.Second, time.Second)
 	done := make(chan bool, 1)
-	go func() { _, ok := q.Pop(); done <- ok }()
+	go func() {
+		_, ok := q.Pop()
+		done <- ok
+	}()
 	q.ShutDown()
 	select {
 	case ok := <-done:
@@ -69,7 +78,10 @@ func TestMultipleWaitingPopsAreWoken(t *testing.T) {
 	q := New(time.Second, time.Second)
 	results := make(chan *QueuedJob, 2)
 	for i := 0; i < 2; i++ {
-		go func() { item, _ := q.Pop(); results <- item }()
+		go func() {
+			item, _ := q.Pop()
+			results <- item
+		}()
 	}
 	q.Add(job("a", 1))
 	q.Add(job("b", 1))

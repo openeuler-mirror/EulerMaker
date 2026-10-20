@@ -38,6 +38,7 @@ type jobHeap struct {
 }
 
 func (h jobHeap) Len() int { return len(h.items) }
+
 func (h jobHeap) Less(i, j int) bool {
 	if h.active {
 		if h.items[i].Priority != h.items[j].Priority {
@@ -50,16 +51,19 @@ func (h jobHeap) Less(i, j int) bool {
 	}
 	return h.items[i].Sequence < h.items[j].Sequence
 }
+
 func (h jobHeap) Swap(i, j int) {
 	h.items[i], h.items[j] = h.items[j], h.items[i]
 	h.items[i].index = i
 	h.items[j].index = j
 }
+
 func (h *jobHeap) Push(x any) {
 	q := x.(*QueuedJob)
 	q.index = len(h.items)
 	h.items = append(h.items, q)
 }
+
 func (h *jobHeap) Pop() any {
 	old := h.items
 	q := old[len(old)-1]
@@ -69,27 +73,52 @@ func (h *jobHeap) Pop() any {
 }
 
 type Queue struct {
-	mu                        sync.Mutex
-	active, backoff           jobHeap
-	activeByKey, backoffByKey map[string]*QueuedJob
-	inFlight, dirty           map[string]*QueuedJob
-	activated                 map[string]types.UID
-	nextSequence              uint64
-	initial, maximum          time.Duration
-	now                       func() time.Time
-	rand                      *rand.Rand
-	notify                    chan struct{}
-	shutdown                  chan struct{}
-	closed                    bool
+	mu           sync.Mutex
+	active       jobHeap
+	backoff      jobHeap
+	activeByKey  map[string]*QueuedJob
+	backoffByKey map[string]*QueuedJob
+	inFlight     map[string]*QueuedJob
+	dirty        map[string]*QueuedJob
+	activated    map[string]types.UID
+	nextSequence uint64
+	initial      time.Duration
+	maximum      time.Duration
+	now          func() time.Time
+	rand         *rand.Rand
+	notify       chan struct{}
+	shutdown     chan struct{}
+	closed       bool
 }
 
 func New(initial, maximum time.Duration) *Queue {
-	return &Queue{active: jobHeap{active: true}, backoff: jobHeap{}, activeByKey: map[string]*QueuedJob{}, backoffByKey: map[string]*QueuedJob{}, inFlight: map[string]*QueuedJob{}, dirty: map[string]*QueuedJob{}, activated: map[string]types.UID{}, initial: initial, maximum: maximum, now: time.Now, rand: rand.New(rand.NewSource(time.Now().UnixNano())), notify: make(chan struct{}, 1), shutdown: make(chan struct{})}
+	return &Queue{
+		active:       jobHeap{active: true},
+		backoff:      jobHeap{},
+		activeByKey:  map[string]*QueuedJob{},
+		backoffByKey: map[string]*QueuedJob{},
+		inFlight:     map[string]*QueuedJob{},
+		dirty:        map[string]*QueuedJob{},
+		activated:    map[string]types.UID{},
+		initial:      initial,
+		maximum:      maximum,
+		now:          time.Now,
+		rand:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		notify:       make(chan struct{}, 1),
+		shutdown:     make(chan struct{}),
+	}
 }
 
 func fromJob(job *ebsv1.Job) *QueuedJob {
-	return &QueuedJob{Key: job.Namespace + "/" + job.Name, UID: job.UID, Priority: job.Spec.Priority, Schedulable: job.Status.Phase == ebsv1.JobPending && job.Status.Runner == "", index: -1}
+	return &QueuedJob{
+		Key:         job.Namespace + "/" + job.Name,
+		UID:         job.UID,
+		Priority:    job.Spec.Priority,
+		Schedulable: job.Status.Phase == ebsv1.JobPending && job.Status.Runner == "",
+		index:       -1,
+	}
 }
+
 func clone(q *QueuedJob) *QueuedJob {
 	if q == nil {
 		return nil
@@ -98,13 +127,19 @@ func clone(q *QueuedJob) *QueuedJob {
 	c.index = -1
 	return &c
 }
+
 func (q *Queue) signal() {
 	select {
 	case q.notify <- struct{}{}:
 	default:
 	}
 }
-func (q *Queue) sequence(item *QueuedJob) { q.nextSequence++; item.Sequence = q.nextSequence }
+
+func (q *Queue) sequence(item *QueuedJob) {
+	q.nextSequence++
+	item.Sequence = q.nextSequence
+}
+
 func (q *Queue) pushActive(item *QueuedJob) {
 	q.sequence(item)
 	item.ReadyAt = time.Time{}
@@ -112,10 +147,12 @@ func (q *Queue) pushActive(item *QueuedJob) {
 	q.activeByKey[item.Key] = item
 	q.signal()
 }
+
 func (q *Queue) removeActive(item *QueuedJob) {
 	heap.Remove(&q.active, item.index)
 	delete(q.activeByKey, item.Key)
 }
+
 func (q *Queue) removeBackoff(item *QueuedJob) {
 	heap.Remove(&q.backoff, item.index)
 	delete(q.backoffByKey, item.Key)
@@ -199,6 +236,7 @@ func (q *Queue) promote(now time.Time) {
 		q.pushActive(item)
 	}
 }
+
 func (q *Queue) Pop() (*QueuedJob, bool) {
 	for {
 		q.mu.Lock()
@@ -325,6 +363,7 @@ func (q *Queue) ActivateAll() {
 		q.activated[key] = item.UID
 	}
 }
+
 func (q *Queue) ShutDown() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -334,6 +373,7 @@ func (q *Queue) ShutDown() {
 	q.closed = true
 	close(q.shutdown)
 }
+
 func (q *Queue) Depths() (int, int, int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

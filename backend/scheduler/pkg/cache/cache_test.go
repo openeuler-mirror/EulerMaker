@@ -13,11 +13,26 @@ import (
 )
 
 func testJob(name string, uid types.UID) *ebsv1.Job {
-	return &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: uid, ResourceVersion: "1"}, Spec: ebsv1.JobSpec{Resources: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "1Gi"}}}, Status: ebsv1.JobStatus{Phase: ebsv1.JobPending}}
+	return &ebsv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "p", Name: name, UID: uid, ResourceVersion: "1"},
+		Spec: ebsv1.JobSpec{
+			Resources: ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "1Gi"}},
+		},
+		Status: ebsv1.JobStatus{Phase: ebsv1.JobPending},
+	}
 }
+
 func testRunner() *ebsv1.Runner {
-	return &ebsv1.Runner{ObjectMeta: metav1.ObjectMeta{Name: "r", UID: "runner"}, Spec: ebsv1.RunnerSpec{Type: "ct"}, Status: ebsv1.RunnerStatus{Phase: "Online", Allocatable: map[string]string{"cpu": "1", "memory": "1Gi"}}}
+	return &ebsv1.Runner{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", UID: "runner"},
+		Spec:       ebsv1.RunnerSpec{Type: "ct"},
+		Status: ebsv1.RunnerStatus{
+			Phase:       "Online",
+			Allocatable: map[string]string{"cpu": "1", "memory": "1Gi"},
+		},
+	}
 }
+
 func TestAssumeIsAtomicAndGenerationProtectsForget(t *testing.T) {
 	c := New(time.Minute)
 	j1, j2 := testJob("a", "a"), testJob("b", "b")
@@ -34,7 +49,15 @@ func TestAssumeIsAtomicAndGenerationProtectsForget(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := c.Assume(AssumeRequest{JobKey: JobKey(j), JobUID: j.UID, RunnerName: "r", RunnerUID: "runner", RunnerRevision: snap.Runners["r"].Revision, Requests: req, JobResourceVersion: "1"})
+			_, err := c.Assume(AssumeRequest{
+				JobKey:             JobKey(j),
+				JobUID:             j.UID,
+				RunnerName:         "r",
+				RunnerUID:          "runner",
+				RunnerRevision:     snap.Runners["r"].Revision,
+				Requests:           req,
+				JobResourceVersion: "1",
+			})
 			results <- err
 		}()
 	}
@@ -50,6 +73,7 @@ func TestAssumeIsAtomicAndGenerationProtectsForget(t *testing.T) {
 		t.Fatalf("got %d successful assumptions, want 1", success)
 	}
 }
+
 func TestResyncDoesNotDoubleCountRunningJob(t *testing.T) {
 	c := New()
 	r := testRunner()

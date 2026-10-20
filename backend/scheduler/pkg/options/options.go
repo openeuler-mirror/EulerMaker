@@ -11,24 +11,52 @@ import (
 )
 
 type Options struct {
-	APIServer, APIServerCA, APIServerClientCert, APIServerClientKey                                                  string
-	InsecureSkipVerify                                                                                               bool
-	Workers                                                                                                          int
-	ResyncPeriod, BackoffInitial, BackoffMax, AssumeTimeout, AssumeScanInterval, AssumeRetryInterval, RequestTimeout time.Duration
-	AssumeBatchSize, AssumeWorkers                                                                                   int
-	ClientQPS                                                                                                        float64
-	ClientBurst                                                                                                      int
-	HealthAddress                                                                                                    string
+	APIServer           string
+	APIServerCA         string
+	APIServerClientCert string
+	APIServerClientKey  string
+	InsecureSkipVerify  bool
+	ClientQPS           float64
+	ClientBurst         int
+	RequestTimeout      time.Duration
+
+	Workers        int
+	ResyncPeriod   time.Duration
+	BackoffInitial time.Duration
+	BackoffMax     time.Duration
+
+	AssumeTimeout       time.Duration
+	AssumeScanInterval  time.Duration
+	AssumeRetryInterval time.Duration
+	AssumeBatchSize     int
+	AssumeWorkers       int
+
+	HealthAddress string
 }
 
 func Parse(args []string) (Options, error) {
-	o := Options{Workers: 4, ResyncPeriod: 60 * time.Second, BackoffInitial: time.Second, BackoffMax: 300 * time.Second, AssumeTimeout: 30 * time.Second, AssumeScanInterval: 5 * time.Second, AssumeRetryInterval: 5 * time.Second, AssumeBatchSize: 100, AssumeWorkers: 4, ClientQPS: 20, ClientBurst: 40, RequestTimeout: 30 * time.Second, HealthAddress: ":8080"}
+	o := Options{
+		Workers:             4,
+		ResyncPeriod:        60 * time.Second,
+		BackoffInitial:      time.Second,
+		BackoffMax:          300 * time.Second,
+		AssumeTimeout:       30 * time.Second,
+		AssumeScanInterval:  5 * time.Second,
+		AssumeRetryInterval: 5 * time.Second,
+		AssumeBatchSize:     100,
+		AssumeWorkers:       4,
+		ClientQPS:           20,
+		ClientBurst:         40,
+		RequestTimeout:      30 * time.Second,
+		HealthAddress:       ":8080",
+	}
 	f := flag.NewFlagSet("scheduler", flag.ContinueOnError)
 	f.StringVar(&o.APIServer, "apiserver", "", "ebs-apiserver address")
 	f.StringVar(&o.APIServerCA, "apiserver-ca", "", "server CA file")
 	f.StringVar(&o.APIServerClientCert, "apiserver-client-cert", "", "API server client certificate")
 	f.StringVar(&o.APIServerClientKey, "apiserver-client-key", "", "API server client private key")
-	f.BoolVar(&o.InsecureSkipVerify, "insecure-skip-verify", false, "skip server certificate verification (development only)")
+	f.BoolVar(&o.InsecureSkipVerify, "insecure-skip-verify", false,
+		"skip server certificate verification (development only)")
 	f.IntVar(&o.Workers, "workers", o.Workers, "scheduler workers")
 	f.DurationVar(&o.ResyncPeriod, "resync-period", o.ResyncPeriod, "informer resync period")
 	f.DurationVar(&o.BackoffInitial, "backoff-initial", o.BackoffInitial, "initial retry backoff")
@@ -57,11 +85,13 @@ func Parse(args []string) (Options, error) {
 	if o.Workers <= 0 || o.AssumeWorkers <= 0 || o.AssumeBatchSize <= 0 || o.ClientQPS <= 0 || o.ClientBurst <= 0 {
 		return o, fmt.Errorf("worker, batch, QPS, and burst values must be positive")
 	}
-	if o.AssumeScanInterval <= 0 || o.AssumeScanInterval > o.AssumeTimeout || o.BackoffInitial <= 0 || o.BackoffMax < o.BackoffInitial || o.RequestTimeout <= 0 {
+	if o.AssumeScanInterval <= 0 || o.AssumeScanInterval > o.AssumeTimeout ||
+		o.BackoffInitial <= 0 || o.BackoffMax < o.BackoffInitial || o.RequestTimeout <= 0 {
 		return o, fmt.Errorf("invalid timeout or backoff configuration")
 	}
 	return o, nil
 }
+
 func (o Options) RESTConfig() (*rest.Config, error) {
 	if o.APIServerClientCert != "" {
 		if _, err := tls.LoadX509KeyPair(o.APIServerClientCert, o.APIServerClientKey); err != nil {
@@ -73,5 +103,15 @@ func (o Options) RESTConfig() (*rest.Config, error) {
 			return nil, fmt.Errorf("read apiserver CA: %w", err)
 		}
 	}
-	return &rest.Config{Host: o.APIServer, QPS: float32(o.ClientQPS), Burst: o.ClientBurst, TLSClientConfig: rest.TLSClientConfig{CAFile: o.APIServerCA, CertFile: o.APIServerClientCert, KeyFile: o.APIServerClientKey, Insecure: o.InsecureSkipVerify}}, nil
+	return &rest.Config{
+		Host:  o.APIServer,
+		QPS:   float32(o.ClientQPS),
+		Burst: o.ClientBurst,
+		TLSClientConfig: rest.TLSClientConfig{
+			CAFile:   o.APIServerCA,
+			CertFile: o.APIServerClientCert,
+			KeyFile:  o.APIServerClientKey,
+			Insecure: o.InsecureSkipVerify,
+		},
+	}, nil
 }
