@@ -54,6 +54,29 @@ func TestBuildInfoBootstrapRepo(t *testing.T) {
 	}
 }
 
+func TestBuildGraphRoundTripAndDeepCopy(t *testing.T) {
+	graph := &BuildGraph{Status: BuildGraphStatus{Nodes: map[string]DcgNodeState{
+		"a": {OutDep: []string{"b"}}, "b": {InDep: map[string]VersionConst{"a": {GE: "1"}}},
+	}}}
+	data, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded BuildGraph
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(graph, &decoded) {
+		t.Fatal("graph round trip changed nodes")
+	}
+	copy := graph.DeepCopy()
+	copy.Status.Nodes["a"].OutDep[0] = "changed"
+	copy.Status.Nodes["b"].InDep["a"] = VersionConst{GE: "2"}
+	if !reflect.DeepEqual(graph, &decoded) {
+		t.Fatal("DeepCopy changed original graph")
+	}
+}
+
 func TestScriptDeepCopy(t *testing.T) {
 	original := &ScriptList{Items: []Script{{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"owner": "ops"}}, Spec: ScriptSpec{Content: "#!/bin/sh\n"}}}}
 	copied := original.DeepCopy()

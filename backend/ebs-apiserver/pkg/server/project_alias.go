@@ -16,12 +16,13 @@ import (
 )
 
 var projectScopedResources = map[string]struct{}{
-	"snapshots":  {},
-	"builds":     {},
-	"buildinfos": {},
-	"rpmrepos":   {},
-	"jobs":       {},
-	"oldjobs":    {},
+	"snapshots":   {},
+	"builds":      {},
+	"buildinfos":  {},
+	"buildgraphs": {},
+	"rpmrepos":    {},
+	"jobs":        {},
+	"oldjobs":     {},
 }
 
 // Named GET handlers do not decode ListOptions, so reject watch/version options before routing.

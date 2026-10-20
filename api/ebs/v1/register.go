@@ -28,6 +28,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&Snapshot{}, &SnapshotList{},
 		&Build{}, &BuildList{},
 		&BuildInfo{}, &BuildInfoList{},
+		&BuildGraph{}, &BuildGraphList{},
 		&RpmRepo{}, &RpmRepoList{},
 		&Job{}, &JobList{},
 		&Runner{}, &RunnerList{},
@@ -63,6 +64,14 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 			return label, value, nil
 		default:
 			return "", "", fmt.Errorf("field label not supported for BuildInfo: %s", label)
+		}
+	})
+	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("BuildGraph"), func(label, value string) (string, string, error) {
+		switch label {
+		case "metadata.name", "metadata.namespace":
+			return label, value, nil
+		default:
+			return "", "", fmt.Errorf("field label not supported for BuildGraph: %s", label)
 		}
 	})
 	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("RpmRepo"), func(label, value string) (string, string, error) {

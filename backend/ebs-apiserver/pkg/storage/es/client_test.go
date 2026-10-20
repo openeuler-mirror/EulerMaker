@@ -151,7 +151,7 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	if err := client.ensureIndices(); err != nil {
 		t.Fatalf("ensure indices: %v", err)
 	}
-	for _, index := range []string{"ebs-projects-v1", "ebs-snapshots-v1", "ebs-builds-v1", "ebs-buildinfos-v1", "ebs-rpmrepos-v1", "ebs-configs-v1", "ebs-build-target-claims-v1", "ebs-oldjobs-v1"} {
+	for _, index := range []string{"ebs-projects-v1", "ebs-snapshots-v1", "ebs-builds-v1", "ebs-buildinfos-v1", "ebs-buildgraphs-v1", "ebs-rpmrepos-v1", "ebs-configs-v1", "ebs-build-target-claims-v1", "ebs-oldjobs-v1"} {
 		if !created[index] {
 			t.Errorf("index %s was not created", index)
 		}

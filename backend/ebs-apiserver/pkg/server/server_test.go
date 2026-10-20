@@ -36,6 +36,7 @@ import (
 	ebsapi "ebs-apiserver/pkg/apis/ebs"
 	iamapi "ebs-apiserver/pkg/apis/iam"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
+	buildgraphstore "ebs-apiserver/pkg/registry/ebs/buildgraph"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	configstore "ebs-apiserver/pkg/registry/ebs/config"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
@@ -59,7 +60,7 @@ func TestEBSSchemeRegistration(t *testing.T) {
 		if err := tc.register(scheme); err != nil {
 			t.Fatal(err)
 		}
-		for _, kind := range []string{"Config", "Script", "Project", "Snapshot", "Build", "BuildInfo", "RpmRepo", "Job", "Runner"} {
+		for _, kind := range []string{"Config", "Script", "Project", "Snapshot", "Build", "BuildInfo", "BuildGraph", "RpmRepo", "Job", "Runner"} {
 			for _, suffix := range []string{"", "List"} {
 				gvk := schema.GroupVersionKind{Group: ebsapi.GroupName, Version: tc.version, Kind: kind + suffix}
 				for _, registered := range []*runtime.Scheme{scheme, Scheme} {
@@ -264,6 +265,7 @@ func TestResourceStorageConstruction(t *testing.T) {
 		{"snapshots", "Snapshot", snapshotstore.NewStorage, false, true},
 		{"builds", "Build", buildstore.NewStorage, false, true},
 		{"buildinfos", "BuildInfo", buildinfostore.NewStorage, false, true},
+		{"buildgraphs", "BuildGraph", buildgraphstore.NewStorage, false, true},
 		{"rpmrepos", "RpmRepo", rpmrepostore.NewStorage, false, true},
 	} {
 		t.Run(tt.resource, func(t *testing.T) {
@@ -455,7 +457,7 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 		}
 	}
 
-	for _, resource := range []string{"projects", "snapshots", "builds", "buildinfos", "rpmrepos"} {
+	for _, resource := range []string{"projects", "snapshots", "builds", "buildinfos", "buildgraphs", "rpmrepos"} {
 		if _, ok := storageMap[resource].(rest.Watcher); ok {
 			t.Errorf("%s unexpectedly implements watch", resource)
 		}

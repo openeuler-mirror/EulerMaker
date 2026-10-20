@@ -57,7 +57,7 @@ func registerResources(router *gin.Engine, api *handler.Handler) {
 	registerCollection(group, api, "runners", "runner")
 	registerCollection(group, api, "configs", "name")
 	registerCollection(group, api, "scripts", "name")
-	for _, resource := range []string{"snapshots", "buildinfos", "rpmrepos"} {
+	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
 		project := group.Group("/projects/:project/" + resource)
 		registerReadOnlyResource(project, api, "", resource, "")
 		registerReadOnlyResource(project, api, "/:name", resource, "")

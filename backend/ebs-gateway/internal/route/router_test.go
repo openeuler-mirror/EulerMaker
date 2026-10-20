@@ -122,7 +122,7 @@ func TestWatchRouteAllowlist(t *testing.T) {
 	for _, path := range []string{
 		"/projects", "/projects/team", "/projects/team/builds",
 		"/projects/team/snapshots", "/projects/team/buildinfos", "/projects/team/rpmrepos",
-		"/projects/team/oldjobs", "/configs", "/scripts",
+		"/projects/team/oldjobs", "/projects/team/buildgraphs", "/configs", "/scripts",
 		"/projects/team/jobs/job", "/projects/team/jobs/job/status",
 		"/runners", "/runners/runner-1", "/runners/runner-1/status",
 	} {
@@ -676,7 +676,7 @@ func TestControllerResourcesRegisterOnlyGet(t *testing.T) {
 		return nil, nil
 	}))
 	routes := api.Router().Routes()
-	for _, resource := range []string{"snapshots", "buildinfos", "rpmrepos"} {
+	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos"} {
 		prefix := "/apis/ebs/v1/projects/:project/" + resource
 		seen := map[string]bool{}
 		for _, route := range routes {

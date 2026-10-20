@@ -31,6 +31,7 @@ import (
 	iammodule "ebs-apiserver/pkg/iam"
 	"ebs-apiserver/pkg/iam/credential"
 	buildstore "ebs-apiserver/pkg/registry/ebs/build"
+	buildgraphstore "ebs-apiserver/pkg/registry/ebs/buildgraph"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	configstore "ebs-apiserver/pkg/registry/ebs/config"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
@@ -197,8 +198,7 @@ func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig,
 		return nil, err
 	}
 	config := genericapiserver.NewRecommendedConfig(Codecs)
-	// BuildInfo /status writes carry the full dependency graph and per-spec
-	// results. A large build can exceed the generic apiserver's 3 MiB default.
+	// Large per-spec results and dependency graphs can exceed the 3 MiB default.
 	config.MaxRequestBodyBytes = maxRequestBodyBytes
 	buildHandlerChain := config.BuildHandlerChainFunc
 	config.BuildHandlerChainFunc = func(handler http.Handler, serverConfig *genericapiserver.Config) http.Handler {
@@ -392,6 +392,11 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	buildInfoES := esstore.New(esClient, "buildinfo", "BuildInfo", buildInfoStorage.Resource.(*genericregistry.Store))
 	v1Storage["buildinfos"] = buildInfoES
 	v1Storage["buildinfos/status"] = esstore.NewStatus(buildInfoES, buildInfoStorage.Status.(*genericregistry.Store))
+	buildGraphStorage := buildgraphstore.NewStorage()
+	buildGraphES := esstore.New(esClient, "buildgraph", "BuildGraph", buildGraphStorage.Resource.(*genericregistry.Store))
+	buildGraphES.SetCreateHook(buildgraphstore.ValidateOwner(buildInfoES))
+	v1Storage["buildgraphs"] = buildGraphES
+	v1Storage["buildgraphs/status"] = esstore.NewStatus(buildGraphES, buildGraphStorage.Status.(*genericregistry.Store))
 
 	rpmRepoStorage := rpmrepostore.NewStorage()
 	rpmRepoES := esstore.New(esClient, "rpmrepo", "RpmRepo", rpmRepoStorage.Resource.(*genericregistry.Store))
