@@ -165,6 +165,11 @@
       </div>
     </section>
 
+    <section v-else-if="activeTab === 'graph'" id="project-panel-graph" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-graph">
+      <BuildGraphPanel :project="name"
+        :initial-build-name="selectedBuild && selectedBuild.spec?.buildType !== 'single' ? selectedBuildName : ''" />
+    </section>
+
     <section v-else id="project-panel-config" class="project-tab-panel config-layout" role="tabpanel" aria-labelledby="project-tab-config">
       <div class="config-split config-wide-panel">
         <div class="config-left-column">
@@ -378,6 +383,7 @@ import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 import StatusBadge from "@/components/StatusBadge.vue";
 import { useSessionStore } from "@/stores/session";
 import BuildInfoPanel from "@/components/BuildInfoPanel.vue";
+import BuildGraphPanel from "@/components/BuildGraphPanel.vue";
 import JobLogInline from "@/components/JobLogInline.vue";
 import PackageJobArtifacts from "@/components/PackageJobArtifacts.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
@@ -385,7 +391,7 @@ import { decodeSpecName } from "@/utils/specName";
 import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
 import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
 
-type ProjectTab = "overview" | "builds" | "config";
+type ProjectTab = "overview" | "builds" | "graph" | "config";
 type BuildType = "full" | "incremental" | "single" | "specified";
 type BuildTargetDraft = BuildTarget & { selected: boolean };
 
@@ -555,6 +561,7 @@ const resourcesError = computed(() =>
 const tabs = computed<Array<{ id: ProjectTab; label: string }>>(() => [
   { id: "overview", label: t("project.overviewTab") },
   { id: "builds", label: t("project.buildHistoryTab") },
+  { id: "graph", label: t("project.graphTab") },
   { id: "config", label: t("project.configTab") },
 ]);
 const canEditProject = computed(() => {
@@ -726,7 +733,7 @@ async function loadProject(forceFull = false): Promise<boolean> {
     project.value = loaded;
     projectIsFull.value = false;
     if (forceFull) return await loadPackageRepos();
-    if (activeTab.value !== "builds") void loadPackageRepos();
+    if (activeTab.value === "overview" || activeTab.value === "config") void loadPackageRepos();
     return true;
   } catch (reason) {
     if (sequence === projectLoadSequence) projectErrorKey.value = errorTranslationKey(reason, "errors.loadProject");
@@ -904,7 +911,7 @@ function toggleRunningJobLog(jobName: string): void {
 
 function selectTab(tab: ProjectTab): void {
   activeTab.value = tab;
-  if (tab !== "builds" && !projectIsFull.value) void loadPackageRepos();
+  if ((tab === "overview" || tab === "config") && !projectIsFull.value) void loadPackageRepos();
   const query = { ...route.query };
   if (tab === "overview") delete query.tab;
   else query.tab = tab;
@@ -1452,7 +1459,7 @@ async function saveMembers(): Promise<void> {
 }
 
 function normalizeTab(value: unknown): ProjectTab {
-  return value === "builds" || value === "config" ? value : "overview";
+  return value === "builds" || value === "graph" || value === "config" ? value : "overview";
 }
 
 function buildPaginationItems(total: number, current: number): Array<{ key: string; page: number | null }> {
