@@ -91,7 +91,14 @@ func newRepositoryTestServer(t *testing.T, materializer repository.Materializer)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { server.repositories.Stop(); server.releases.Stop() })
-	request := repository.CreateRepositoryRequest{RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", Manifests: []repository.ManifestReference{{JobName: "job-1"}}}
+	request := repository.CreateRepositoryRequest{
+		RepositoryName: "build-1",
+		Project:        "project-1",
+		BuildName:      "build-1",
+		TargetOS:       "openEuler",
+		TargetArch:     "x86_64",
+		Manifests:      []repository.ManifestReference{{JobName: "job-1"}},
+	}
 	request.RepositoryUID = repository.UID(request.Project, request.BuildName, request.BaseRepositoryUID, request.Manifests)
 	return server, request
 }
@@ -180,7 +187,17 @@ func TestRepositoryContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	record := &repository.RepositoryRecord{RepositoryUID: request.RepositoryUID, Project: request.Project, BuildName: request.BuildName, TargetOS: request.TargetOS, TargetArch: request.TargetArch, State: repository.RepositoryReady, ContentURL: "/repositories/v1/" + request.RepositoryUID + "/", CreatedAt: now, UpdatedAt: now}
+	record := &repository.RepositoryRecord{
+		RepositoryUID: request.RepositoryUID,
+		Project:       request.Project,
+		BuildName:     request.BuildName,
+		TargetOS:      request.TargetOS,
+		TargetArch:    request.TargetArch,
+		State:         repository.RepositoryReady,
+		ContentURL:    "/repositories/v1/" + request.RepositoryUID + "/",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
 	writeTestRepositoryIndex(t, server.repositories, record)
 	writeTestRepositoryRecord(t, server, record)
 	response := repositoryRequest(t, server, http.MethodGet, record.ContentURL+"repodata/repomd.xml", nil)

@@ -40,7 +40,11 @@ func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Reques
 	case http.MethodGet:
 		record, ok, err := s.repositories.Get(uid)
 		if err != nil {
-			s.writeRepositoryError(w, r, &repository.Error{Code: "RepositoryStorageUnavailable", Status: http.StatusServiceUnavailable, Retryable: true})
+			s.writeRepositoryError(w, r, &repository.Error{
+				Code:      "RepositoryStorageUnavailable",
+				Status:    http.StatusServiceUnavailable,
+				Retryable: true,
+			})
 			return
 		}
 		if !ok {
@@ -94,7 +98,11 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 	}
 	record, ok, err := s.repositories.Get(parts[0])
 	if err != nil {
-		s.writeRepositoryError(w, r, &repository.Error{Code: "RepositoryStorageUnavailable", Status: http.StatusServiceUnavailable, Retryable: true})
+		s.writeRepositoryError(w, r, &repository.Error{
+			Code:      "RepositoryStorageUnavailable",
+			Status:    http.StatusServiceUnavailable,
+			Retryable: true,
+		})
 		return
 	}
 	if !ok {

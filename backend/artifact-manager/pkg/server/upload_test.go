@@ -56,7 +56,14 @@ func uploadRequest(t *testing.T, data []byte, key string) *http.Request {
 	h.Set("Content-Disposition", `form-data; name="metadata"`)
 	h.Set("Content-Type", "application/json")
 	p, _ := mw.CreatePart(h)
-	_ = json.NewEncoder(p).Encode(upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "kernel.rpm", RelativePath: "RPMS/kernel.rpm", ContentType: "application/x-rpm", Size: int64(len(data)), SHA256: sum(data)})
+	_ = json.NewEncoder(p).Encode(upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "kernel.rpm",
+		RelativePath: "RPMS/kernel.rpm",
+		ContentType:  "application/x-rpm",
+		Size:         int64(len(data)),
+		SHA256:       sum(data),
+	})
 	h = make(textproto.MIMEHeader)
 	h.Set("Content-Disposition", `form-data; name="file"; filename="ignored"`)
 	h.Set("Content-Type", "application/octet-stream")
@@ -137,7 +144,13 @@ func TestJobNameDirectoryPersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "example.rpm", RelativePath: "packages/example.rpm", Size: 1, SHA256: sum([]byte("x"))}
+	meta := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "example.rpm",
+		RelativePath: "packages/example.rpm",
+		Size:         1,
+		SHA256:       sum([]byte("x")),
+	}
 	if _, _, err := store.BeginUpload("project", "job", "key-1", meta, 1024); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +178,18 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		Artifact upload.Artifact `json:"artifact"`
 	}](t, w).Artifact
 
-	manifest := upload.CompleteManifestRequest{Files: []upload.ManifestFile{{ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true}}}
+	manifest := upload.CompleteManifestRequest{
+		Files: []upload.ManifestFile{
+			{
+				ArtifactID:   a.ID,
+				RelativePath: a.RelativePath,
+				Category:     a.Category,
+				Size:         a.Size,
+				SHA256:       a.SHA256,
+				Required:     true,
+			},
+		},
+	}
 	b, _ := json.Marshal(manifest)
 	r := httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/manifest/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
