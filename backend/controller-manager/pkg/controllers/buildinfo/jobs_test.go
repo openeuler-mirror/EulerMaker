@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -275,8 +276,8 @@ func TestJobForSpecConstruction(t *testing.T) {
 	}
 	payload := payloadFields(t, job.Spec.Payload)
 	for key, want := range map[string]any{
-		"spec_name": "a", "spec_file_name": "a.spec", "spec_url": gitURL1,
-		"commit_id": "c1", "package_name": "repo1",
+		"spec_name": "a", "spec_file_name": "a.spec", "clone_url": gitURL1,
+		"commit_id": "c1", "package_name": "repo1", "origin_url": gitURL1,
 	} {
 		if got := payload[key]; got != want {
 			t.Errorf("payload[%s] = %v, want %v", key, got, want)
@@ -291,8 +292,36 @@ func TestJobForSpecConstruction(t *testing.T) {
 	if got, want := payload["preinstall"], []any{"rpm-build", "systemd-rpm-macros"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("payload.preinstall = %v, want %v", got, want)
 	}
-	if len(payload) != 7 {
-		t.Errorf("payload = %v, want only the seven recognized fields", payload)
+	if len(payload) != 8 {
+		t.Errorf("payload = %v, want only the eight recognized fields", payload)
+	}
+}
+
+func TestJobPayloadOriginURL(t *testing.T) {
+	for _, buildType := range []string{"full", "incremental", "specified", "single"} {
+		for _, useLFS := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/lfs=%t", buildType, useLFS), func(t *testing.T) {
+				c, _, _, _ := newTestController(t)
+				bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+				bi.Spec.BuildPayload = "origin_url: https://override.example/repo.git\n"
+				if useLFS {
+					bi.Spec.BuildPayload += "use_git_lfs: [repo1]\n"
+				}
+				round := &reconcileRound{key: testNS + "/" + testBuild, current: bi, build: testBuildObj(buildType)}
+				const originURL = "https://atomgit.com/src-openeuler/example.git"
+				snapshot := testSnapshotObj(
+					repoEntry{name: "other", originURL: "https://example.com/other.git", declare: true},
+					repoEntry{name: "repo1", originURL: originURL, cloneURL: gitURL1, commitID: "c1", declare: true},
+				)
+				depend := dependEntry("a")
+				payload := payloadFields(t, c.jobPayload(round, "a", &depend, snapshot, "", nil))
+				for key, want := range map[string]any{"origin_url": originURL, "clone_url": gitURL1, "commit_id": "c1"} {
+					if got := payload[key]; got != want {
+						t.Errorf("payload[%s] = %v, want %v", key, got, want)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -679,8 +708,7 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 	key := testNS + "/" + testBuild
 	seeded := client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoProcessing))
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
-	// The snapshot has no packageRepoStatuses entry for repo1: spec_url and Entries without commit_id are logged and
-	// skipped without blocking dispatch.
+	// A missing repository status is logged; dispatch continues without clone_url or commit_id.
 	snapshot := testSnapshotObj()
 	depend := dependEntry("a")
 
@@ -698,8 +726,8 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 		nil,
 	)
 
-	if strings.Contains(job.Spec.Payload, "spec_url") || strings.Contains(job.Spec.Payload, "commit_id") {
-		t.Fatalf("payload = %q, want no spec_url/commit_id without a repo entry", job.Spec.Payload)
+	if strings.Contains(job.Spec.Payload, "clone_url") || strings.Contains(job.Spec.Payload, "commit_id") {
+		t.Fatalf("payload = %q, want no clone_url/commit_id without a repo entry", job.Spec.Payload)
 	}
 	if got := payloadFields(t, job.Spec.Payload)["spec_name"]; got != "a" {
 		t.Fatalf("payload spec_name = %v, want a", got)

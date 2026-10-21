@@ -524,6 +524,12 @@ func (c *Controller) jobPayload(
 		"spec_file_name": depend.SpecFileName,
 		"package_name":   depend.RepoName,
 	}
+	for _, repo := range snapshot.Spec.PackageRepos {
+		if repo.Name == depend.RepoName {
+			payload["origin_url"] = repo.URL
+			break
+		}
+	}
 	if preinstall, exists := configured["preinstall"]; exists {
 		// Keep the declared value so the script can reject malformed input.
 		payload["preinstall"] = preinstall
@@ -557,11 +563,11 @@ func (c *Controller) jobPayload(
 		c.logf(
 			round.key,
 			"SpecRepoEntryMissing",
-			"packageRepoStatuses entry for repo %s missing or without commitId; spec_url/commit_id not injected",
+			"packageRepoStatuses entry for repo %s missing or without commitId; clone_url/commit_id not injected",
 			depend.RepoName,
 		)
 	} else {
-		payload["spec_url"] = entry.CloneURL
+		payload["clone_url"] = entry.CloneURL
 		payload["commit_id"] = entry.CommitID
 	}
 	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)

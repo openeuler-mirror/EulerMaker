@@ -181,7 +181,7 @@ if errors.As(err, &writeErr) {
 gitServer gitserver.GitServerClient
 ```
 
-- 共享接口包含同步任务发布、同步状态检查、Commit 解析和命令执行；本控制器仅调用 `ExecCommand`，在已就绪的本地镜像上执行只读命令并获取 stdout。镜像定位由 git-server 服务端按仓库 key 完成，客户端不持有 storePath。7.2.2 spec 下载使用 `git ls-tree --name-only <commitId>` 枚举仓库根目录 spec 文件、`git show <commitId>:<path>` 读取内容。请求中的 `repo` 必须是 `Snapshot.spec.packageRepos` 对应仓库的原始 `url`，`commitId` 取自 `status.packageRepoStatuses`；`cloneUrl` 只用于 Job payload 的 `spec_url`，不能传给 `/command`；
+- 共享接口包含同步任务发布、同步状态检查、Commit 解析和命令执行；本控制器仅调用 `ExecCommand`，在已就绪的本地镜像上执行只读命令并获取 stdout。镜像定位由 git-server 服务端按仓库 key 完成，客户端不持有 storePath。7.2.2 spec 下载使用 `git ls-tree --name-only <commitId>` 枚举仓库根目录 spec 文件、`git show <commitId>:<path>` 读取内容。请求中的 `repo` 必须是 `Snapshot.spec.packageRepos` 对应仓库的原始 `url`，`commitId` 取自 `status.packageRepoStatuses`；`cloneUrl` 只用于 Job payload 的 `clone_url`，不能传给 `/command`；
 - **不做就绪判定、不发布同步任务**：镜像同步任务发布与新鲜度等待由 Snapshot Controller 在 Snapshot 解析期完成，本控制器直接复用其同步完成的本地镜像；
 - 请求错误按性质二分：网络/超时/5xx 类瞬态失败使本轮组装不完整，保持 Pending；git 内容缺失或 spec 解析失败类确定性失败按仓库/spec 降级，记录 `failedPackages`，其余可用 spec 继续处理。`incremental` 与 `specified` 采用相同规则。
 - 配置：`--git-server-addr` / `--git-server-timeout` / `--git-server-retry`（见 12.1）。
@@ -1184,7 +1184,7 @@ spec:
   nodeSelector:
     ebs.io/runner-arch: ${build.spec.buildTarget.arch}                     # controller：Build.spec.buildTarget.arch
   payload: |                                        # controller：构造 JSON 字符串（见下方"payload 构造契约"）
-    {"spec_name":"example","spec_file_name":"example.spec","repo":[{"url":"http://.../repositories/v1/<uid>/","priority":10},{"url":"http://.../everything/aarch64","priority":99}],"spec_url":"http://git.example/example.git","commit_id":"<commit>"}
+    {"spec_name":"example","spec_file_name":"example.spec","repo":[{"url":"http://.../repositories/v1/<uid>/","priority":10},{"url":"http://.../everything/aarch64","priority":99}],"clone_url":"http://git.example/example.git","commit_id":"<commit>"}
 status:                                             # 创建时恒 Pending/Pending（apiserver 强制覆写）；以下值为执行侧回写示例
   phase: Pending
 ```
@@ -1222,7 +1222,8 @@ status:                                             # 创建时恒 Pending/Pendi
      - `spec_name` = 本轮组装的 specDepends **map key**（条目内 `specName` 字段以 key 为准，不直读）；
      - `package_name` = 当前条目的 `repoName`，始终写入，供脚本判断包仓库名相关规则；
      - `spec_file_name` = `本轮组装的 specDepends[spec].specFileName`；
-     - `spec_url` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].cloneUrl`（git-server 返回的只读 clone URL；`use_git_lfs` 命中时默认脚本改用固定 AtomGit URL）；
+     - `origin_url` = 当前 Snapshot `spec.packageRepos` 中按 `entry.repoName` 匹配的仓库 `url`。所有构建类型均传递，包含启用 Git LFS 的 Job；使用 Snapshot 固化值，不从实时 Project 或用户 buildPayload 取值；
+     - `clone_url` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].cloneUrl`（git-server 返回的只读 clone URL；`use_git_lfs` 命中时默认脚本改用固定 AtomGit URL）；
      - `commit_id` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].commitId`；
      - packageRepoStatuses 缺 `repoName` 条目或条目无 `commitId`（正常不出现：本轮组装的 specDepends 即按当前 Snapshot 的 url+commit 解析而来（15.11），且下发时必已就绪）→ 对应两键不注入 + warning 日志，**不阻断下发**。
    - `specDepends[specName].repoName` 在 `BuildInfo.spec.buildPayload.disable_check_path` 列表中时写入 `disable_check_path: true`，否则不写该键；同仓库的多个 spec 得到相同结果。该字段仅向构建脚本传递意图，构建脚本负责落实 RPATH 检查开关；Runner 不解析它。
@@ -1304,7 +1305,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | 字段 | 消费点 |
 |------|--------|
 | `spec.packageRepos` | 指定包仓库存在性判定输入；处理规则见 7.2.2/7.2.3。仓库解析枚举使用 status.packageRepoStatuses，不使用本字段 |
-| `status.packageRepoStatuses` | 本轮 spec 下载使用其中的 `commitId`，配合 `spec.packageRepos[].url` 调用 git-server；`cloneUrl` / `commitId` 是 Job payload `spec_url` / `commit_id` 的数据源。不与历史 Snapshot 比较。条目三态语义见 data-models.md「PackageRepoStatus」：不存在或 `retryable=true` 为防御性瞬态失败，`retryable=false` 按 E-24 降级或收口。`packageRepos` 在 SnapshotSpec、`packageRepoStatuses` 在 SnapshotStatus |
+| `status.packageRepoStatuses` | 本轮 spec 下载使用其中的 `commitId`，配合 `spec.packageRepos[].url` 调用 git-server；`cloneUrl` / `commitId` 是 Job payload `clone_url` / `commit_id` 的数据源。不与历史 Snapshot 比较。条目三态语义见 data-models.md「PackageRepoStatus」：不存在或 `retryable=true` 为防御性瞬态失败，`retryable=false` 按 E-24 降级或收口。`packageRepos` 在 SnapshotSpec、`packageRepoStatuses` 在 SnapshotStatus |
 | `status.phase` | 不消费（Snapshot 就绪由 Build Controller 的 Prepared 门禁保证：Active 前不会创建 BuildInfo） |
 
 ### 15.8 公共子结构
