@@ -54,7 +54,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, status int, code, msg string, retry bool, d map[string]any) {
-	writeJSON(w, status, APIError{Code: code, Message: msg, Retryable: retry, RequestID: r.Header.Get("X-Request-ID"), Details: d})
+	writeJSON(w, status, APIError{
+		Code:      code,
+		Message:   msg,
+		Retryable: retry,
+		RequestID: r.Header.Get("X-Request-ID"),
+		Details:   d,
+	})
 }
 
 func decodeJSON(rd io.Reader, max int64, v any) error {

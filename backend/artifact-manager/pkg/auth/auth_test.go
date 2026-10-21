@@ -120,7 +120,11 @@ func TestGatewayAuthorizerRequiresRunnerIdentity(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			payload := fmt.Sprintf(`{"authenticated":true,"identity":{"type":%q,"name":"identity-1","scopes":%s},"expiresAt":%q}`, test.identityType, test.scopes, time.Now().Add(time.Hour).UTC().Format(time.RFC3339))
-			authorizer := &GatewayAuthorizer{url: "https://gateway/auth/check", ttl: time.Second, cache: make(map[[32]byte]cachedIdentity)}
+			authorizer := &GatewayAuthorizer{
+				url:   "https://gateway/auth/check",
+				ttl:   time.Second,
+				cache: make(map[[32]byte]cachedIdentity),
+			}
 			authorizer.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Path != "/auth/check" {
 					t.Errorf("unexpected path %s", r.URL.Path)
@@ -131,7 +135,11 @@ func TestGatewayAuthorizerRequiresRunnerIdentity(t *testing.T) {
 						t.Errorf("unexpected request body %q", body)
 					}
 				}
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewBufferString(payload))}, nil
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewBufferString(payload)),
+				}, nil
 			})}
 			_, err := authorizer.Authenticate(context.Background(), "token")
 			if (err != nil) != test.wantError {

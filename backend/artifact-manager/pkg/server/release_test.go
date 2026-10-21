@@ -64,7 +64,12 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 		t.Fatal(err)
 	}
 	server.releases.Stop()
-	releaseMaterializer := &testReleaseMaterializer{root: c.DataDir, started: make(chan struct{}, 1), release: make(chan struct{}), rpmCount: make(chan int, 2)}
+	releaseMaterializer := &testReleaseMaterializer{
+		root:     c.DataDir,
+		started:  make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		rpmCount: make(chan int, 2),
+	}
 	releases, err := release.NewManager(c.DataDir, c.Release, server.repositories, releaseMaterializer)
 	if err != nil {
 		t.Fatal(err)
@@ -72,10 +77,27 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 	server.releases = releases
 	t.Cleanup(func() { server.repositories.Stop(); server.releases.Stop() })
 	now := time.Now().UTC()
-	source := &repository.RepositoryRecord{RepositoryUID: "source-repository", RepositoryName: "build-1", Project: "project-1", BuildName: "build-1", TargetOS: "openEuler", TargetArch: "x86_64", State: repository.RepositoryReady, CreatedAt: now, UpdatedAt: now}
+	source := &repository.RepositoryRecord{
+		RepositoryUID:  "source-repository",
+		RepositoryName: "build-1",
+		Project:        "project-1",
+		BuildName:      "build-1",
+		TargetOS:       "openEuler",
+		TargetArch:     "x86_64",
+		State:          repository.RepositoryReady,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
 	writeTestRepositoryRecord(t, server, source)
 	writeTestRepositoryIndex(t, server.repositories, source)
-	request := release.CreateReleaseRequest{BuildName: source.BuildName, Project: source.Project, TargetOS: source.TargetOS, TargetArch: source.TargetArch, SourceRepositoryUID: source.RepositoryUID, ExcludeSpecs: []string{"skip", "skip"}}
+	request := release.CreateReleaseRequest{
+		BuildName:           source.BuildName,
+		Project:             source.Project,
+		TargetOS:            source.TargetOS,
+		TargetArch:          source.TargetArch,
+		SourceRepositoryUID: source.RepositoryUID,
+		ExcludeSpecs:        []string{"skip", "skip"},
+	}
 	return server, request, releaseMaterializer
 }
 
@@ -85,7 +107,10 @@ func writeTestRepositoryIndex(t *testing.T, manager *repository.Manager, record 
 	if err := os.MkdirAll(path, 0750); err != nil {
 		t.Fatal(err)
 	}
-	index := repository.Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]repository.RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}}}
+	index := repository.Index{
+		RepositoryUID: record.RepositoryUID,
+		RPMs:          map[string]repository.RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}},
+	}
 	if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
 		t.Fatal(err)
 	}
