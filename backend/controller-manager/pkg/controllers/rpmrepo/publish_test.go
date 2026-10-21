@@ -33,10 +33,10 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, Attempt: 1, ContentURL: "/repositories/" + testProject + "/" + testOS + "/" + testArch + "/", UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/" + testProject + "/" + testOS + "/" + testArch + "/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -92,7 +92,7 @@ func TestReconcileReleaseFailureCollectsTerminal(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Attempt: 1, Failure: &FailureInfo{Code: "ReleaseMaterializationFailed", Retryable: false}, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Code: "ReleaseMaterializationFailed", Retryable: false}, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -134,7 +134,7 @@ func TestReconcileReleaseReplaysMissingRecord(t *testing.T) {
 		return ReleaseResponse{}, &artifactError{operation: "get-release", kind: artifactNotFound, code: "ReleaseNotFound"}
 	}
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, Attempt: 2, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 

@@ -74,7 +74,7 @@ func TestReconcileReleaseKeepsOnlyOneInFlightRelease(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -109,7 +109,7 @@ func TestReconcileReleaseSkipsCandidateThatIsNotReady(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 

@@ -546,7 +546,7 @@ type LogUploadCheckpoint struct {
 1. 服务端不存在日志流时，以 `nextSequence=0`、`committedBytes=0` 开始。
 2. 服务端 `state=Open` 时，以服务端值为事实来源；校验本地 spool 至少包含 `committedBytes`，将 checkpoint 回退或前进到该边界，并从对应 sequence 继续。
 3. 服务端 `state=Completed` 时，不再追加；记录其 `artifactID`。如果本地仍认为容器正在运行，这是不可继续写入的状态冲突，停止该 Job 并报告错误。
-4. 服务端 `state=Failed/Expired` 时停止上传，Job 的 Artifact 状态标记为 Failed。
+4. 服务端 `state=Failed` 时停止上传，Job 的 Artifact 状态标记为 Failed。
 
 本地文件短于服务端 `committedBytes`、无法从本地索引确定 `nextSequence` 对应 offset，或未确认区间已经被删除时，日志不可恢复。Runner 必须保留已有数据、停止封账并将 Job 标记为失败，不能从新的 sequence 继续制造一份不连续日志。
 

@@ -26,10 +26,19 @@ type filesystemReleaseMaterializer struct {
 }
 
 func NewFilesystemMaterializer(root string, c Config, repo repository.Config) Materializer {
-	return &filesystemReleaseMaterializer{root: root, createRepoCommand: repo.CreateRepoCommand, createRepoWorkers: repo.CreateRepoWorkers, publicKey: c.PublicKey}
+	return &filesystemReleaseMaterializer{
+		root:              root,
+		createRepoCommand: repo.CreateRepoCommand,
+		createRepoWorkers: repo.CreateRepoWorkers,
+		publicKey:         c.PublicKey,
+	}
 }
 
-func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record ReleaseRecord, source repository.RepositoryRecord) (result Result, resultErr error) {
+func (m *filesystemReleaseMaterializer) Create(
+	ctx context.Context,
+	record ReleaseRecord,
+	source repository.RepositoryRecord,
+) (result Result, resultErr error) {
 	if source.SigningFingerprint != "" {
 		if m.publicKey == "" {
 			return result, &Error{Code: "ReleaseSigningKeyMismatch", Status: 422}
@@ -56,7 +65,14 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 		excluded[spec] = true
 	}
 	selectedRPMs := make(map[string]repository.RepositoryRPMMeta, len(source.RPMs))
-	sourcePath := repository.VersionPath(m.root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
+	sourcePath := repository.VersionPath(
+		m.root,
+		source.Project,
+		source.TargetOS,
+		source.TargetArch,
+		source.BuildName,
+		source.RepositoryUID,
+	)
 	for _, meta := range source.RPMs {
 		if excluded[meta.SpecName] {
 			continue
@@ -116,7 +132,15 @@ func (m *filesystemReleaseMaterializer) Create(ctx context.Context, record Relea
 	if err != nil {
 		return result, retryableReleaseError(err)
 	}
-	index := releaseIndex{SchemaVersion: 1, BuildName: record.BuildName, SourceRepositoryUID: record.SourceRepositoryUID, RequestDigest: record.RequestDigest, ReleaseDigest: digest, ExcludeSpecs: record.ExcludeSpecs, PublicKeySHA256: publicKeyDigest}
+	index := releaseIndex{
+		SchemaVersion:       1,
+		BuildName:           record.BuildName,
+		SourceRepositoryUID: record.SourceRepositoryUID,
+		RequestDigest:       record.RequestDigest,
+		ReleaseDigest:       digest,
+		ExcludeSpecs:        record.ExcludeSpecs,
+		PublicKeySHA256:     publicKeyDigest,
+	}
 	if err := fileutil.AtomicJSON(filepath.Join(work, "release.json"), index); err != nil {
 		return result, retryableReleaseError(err)
 	}
@@ -162,7 +186,10 @@ func validateReleaseMetadata(root string) error {
 	}
 	for _, record := range metadata.Records {
 		relative, err := fileutil.SafeRelative(record.Location.Href)
-		if err != nil || !strings.HasPrefix(relative, "repodata/") || record.Checksum.Type != "sha256" || !validHash(strings.TrimSpace(record.Checksum.Value)) {
+		if err != nil ||
+			!strings.HasPrefix(relative, "repodata/") ||
+			record.Checksum.Type != "sha256" ||
+			!validHash(strings.TrimSpace(record.Checksum.Value)) {
 			return errors.New("invalid repository metadata reference")
 		}
 		actual, err := fileutil.FileSHA256(filepath.Join(root, filepath.FromSlash(relative)))
@@ -250,7 +277,11 @@ func digestReleaseDirectoryWithRPMMetadata(root string, rpms map[string]reposito
 			if err != nil {
 				return "", err
 			}
-			if !ok || strings.Contains(name, "/") || meta.FileName != name || meta.Size != info.Size() || !validHash(meta.SHA256) {
+			if !ok ||
+				strings.Contains(name, "/") ||
+				meta.FileName != name ||
+				meta.Size != info.Size() ||
+				!validHash(meta.SHA256) {
 				return "", errors.New("release package metadata mismatch")
 			}
 			value = meta.SHA256

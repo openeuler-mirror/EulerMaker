@@ -62,7 +62,7 @@ func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
 	index, err := readReleaseIndex(m.Path(record))
 	if err != nil || index.BuildName != record.BuildName || index.RequestDigest != record.RequestDigest {
 		if record.State == ReleaseReady {
-			record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
+			record.State, record.UpdatedAt = ReleaseFailed, now
 			record.Failure = &FailureInfo{Code: "ReleaseContentMissing", Message: "ReleaseContentMissing", Time: now}
 			return m.persist(record)
 		}
@@ -72,7 +72,7 @@ func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
 	if record.State == ReleaseReady {
 		// Ready releases need only an index check, not a full RPM digest calculation.
 		if !validHash(digest) || record.ReleaseDigest != digest {
-			record.State, record.ContentURL, record.UpdatedAt = ReleaseFailed, "", now
+			record.State, record.UpdatedAt = ReleaseFailed, now
 			record.Failure = &FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
 			return m.persist(record)
 		}
@@ -89,8 +89,11 @@ func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
 		}
 	}
 	current := filepath.Join(m.releaseTargetDir(record), "current")
-	if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", record.BuildName)) {
-		record.State, record.ContentURL, record.UpdatedAt, record.CompletedAt = ReleaseReady, releaseContentURL(record), now, &now
+	if target, err := os.Readlink(
+		current,
+	); err == nil &&
+		target == filepath.ToSlash(filepath.Join("releases", record.BuildName)) {
+		record.State, record.UpdatedAt, record.CompletedAt = ReleaseReady, now, &now
 		return m.persist(record)
 	}
 	return nil
