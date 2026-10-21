@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -45,12 +46,15 @@ type WriteError struct {
 	Err        error
 }
 
+// Error describes the failed write operation and its outcome.
 func (e *WriteError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
 	return fmt.Sprintf("%s %s failed (%s): %v", e.Operation, e.Resource.String(), e.Outcome, e.Err)
 }
+
+// Unwrap exposes the underlying write error.
 func (e *WriteError) Unwrap() error {
 	if e == nil {
 		return nil
@@ -58,6 +62,7 @@ func (e *WriteError) Unwrap() error {
 	return e.Err
 }
 
+// RetryAfter returns the server retry delay for rejected writes with HTTP 429 or 503.
 func RetryAfter(err error) time.Duration {
 	var writeErr *WriteError
 	if !errors.As(err, &writeErr) || writeErr.Outcome != WriteRejected || writeErr.RetryAfter <= 0 {
@@ -70,23 +75,43 @@ func RetryAfter(err error) time.Duration {
 }
 
 type Client struct {
-	rest    *rest.RESTClient
-	timeout time.Duration
+	rest      *rest.RESTClient
+	scheme    *runtime.Scheme
+	resources map[string]resourceKinds
+	timeout   time.Duration
+}
+
+type resourceKinds struct {
+	object schema.GroupVersionKind
+	list   schema.GroupVersionKind
 }
 
 type Interface interface {
+	// ListPage reads one cluster-wide page with resource-specific polling or history-cleanup field projections.
 	ListPage(context.Context, schema.GroupVersionResource, metav1.ListOptions) (source.ListPage, error)
+	// ListProjectPage reads one page of complete objects within the specified Project.
 	ListProjectPage(context.Context, schema.GroupVersionResource, string, metav1.ListOptions) (source.ListPage, error)
+	// ResolveWatch provides a list/watch source for nonterminal Jobs or all Runners.
 	ResolveWatch(context.Context, schema.GroupVersionResource) (source.WatchResource, error)
+	// Get reads a complete object by name and optional Project namespace.
 	Get(context.Context, schema.GroupVersionResource, string, string) (runtime.Object, error)
+	// GetWithFields reads a complete object or a read-only projection when includeFields is nonempty.
+	GetWithFields(context.Context, schema.GroupVersionResource, string, string, string) (runtime.Object, error)
+	// PostSubresource sends JSON to a subresource and returns an object of the parent resource type.
+	PostSubresource(context.Context, schema.GroupVersionResource, string, string, string, any) (runtime.Object, error)
+	// Create posts a new object and returns the server-assigned metadata.
 	Create(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
+	// Update puts an object on its main resource endpoint using its resourceVersion.
 	Update(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
+	// UpdateStatus puts an object on its status subresource using its resourceVersion.
 	UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error)
+	// Delete removes an object with required UID and resourceVersion preconditions.
 	Delete(context.Context, schema.GroupVersionResource, string, string, DeletePreconditions) error
 }
 
 var _ Interface = (*Client)(nil)
 
+// New creates an EBS API client with a per-request timeout.
 func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 	if config == nil || timeout <= 0 {
 		return nil, fmt.Errorf("REST config and positive timeout are required")
@@ -97,6 +122,18 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 	}
 	if err := ebsv1.AddToScheme(scheme); err != nil {
 		return nil, err
+	}
+	resources := make(map[string]resourceKinds)
+	for _, resource := range ebsv1.ResourceRegistrations() {
+		objectKinds, _, err := scheme.ObjectKinds(resource.Object)
+		if err != nil {
+			return nil, err
+		}
+		listKinds, _, err := scheme.ObjectKinds(resource.List)
+		if err != nil {
+			return nil, err
+		}
+		resources[resource.Resource] = resourceKinds{object: objectKinds[0], list: listKinds[0]}
 	}
 	cfg := rest.CopyConfig(config)
 	cfg.GroupVersion = &ebsv1.SchemeGroupVersion
@@ -109,9 +146,10 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{rest: rc, timeout: timeout}, nil
+	return &Client{rest: rc, scheme: scheme, resources: resources, timeout: timeout}, nil
 }
 
+// ListPage reads one cluster-wide page with resource-specific polling or history-cleanup field projections.
 func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, opts metav1.ListOptions) (source.ListPage, error) {
 	if gvr == source.JobsGVR {
 		return c.listPage(ctx, gvr, "", opts, "metadata,status.phase,status.endTime")
@@ -120,15 +158,16 @@ func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 	return c.listPage(ctx, gvr, "", opts, source.PollingIncludeFields(gvr))
 }
 
+// ListProjectPage reads one page of complete objects within the specified Project.
 func (c *Client) ListProjectPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
-	if err := validateProjectScopedResource(gvr, project); err != nil {
+	if err := c.validateProjectScopedResource(gvr, project); err != nil {
 		return source.ListPage{}, err
 	}
 	return c.listPage(ctx, gvr, project, opts, "")
 }
 
 func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions, includeFields string) (source.ListPage, error) {
-	list, err := newList(gvr)
+	list, err := c.newList(gvr)
 	if err != nil {
 		return source.ListPage{}, err
 	}
@@ -147,7 +186,7 @@ func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, 
 // ArchiveJob persists a snapshot without deleting its source.
 func (c *Client) ArchiveJob(ctx context.Context, project, name string, pre DeletePreconditions) (*ebsv1.Job, error) {
 	gvr := source.JobsGVR
-	if err := validateTarget(gvr, project, name); err != nil {
+	if err := c.validateTarget(gvr, project, name); err != nil {
 		return nil, notSent("archive", gvr, err)
 	}
 	if pre.UID == "" || pre.ResourceVersion == "" {
@@ -173,31 +212,40 @@ func (c *Client) ArchiveJob(ctx context.Context, project, name string, pre Delet
 	return out, nil
 }
 
-// AbortJob requests an atomic, UID-guarded transition to a terminal Job state.
-func (c *Client) AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error) {
-	gvr := source.JobsGVR
-	if err := validateTarget(gvr, project, name); err != nil {
-		return nil, notSent("abort", gvr, err)
+// PostSubresource posts a JSON request and decodes a response of the parent resource type.
+func (c *Client) PostSubresource(ctx context.Context, gvr schema.GroupVersionResource, namespace, name, subresource string, body any) (runtime.Object, error) {
+	const operation = "post-subresource"
+	if err := c.validateTarget(gvr, namespace, name); err != nil {
+		return nil, notSent(operation, gvr, err)
 	}
-	if uid == "" {
-		return nil, notSent("abort", gvr, fmt.Errorf("Job UID is required"))
+	if reasons := kvalidation.IsDNS1123Label(subresource); len(reasons) != 0 {
+		return nil, notSent(operation, gvr, fmt.Errorf("invalid subresource %q: %v", subresource, reasons))
 	}
-	body, err := json.Marshal(map[string]string{"uid": string(uid), "reason": reason})
+	data, err := json.Marshal(body)
 	if err != nil {
-		return nil, notSent("abort", gvr, err)
+		return nil, notSent(operation, gvr, err)
+	}
+	out, err := c.newObject(gvr)
+	if err != nil {
+		return nil, notSent(operation, gvr, err)
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	out := &ebsv1.Job{}
-	if err := c.rest.Post().AbsPath(resourcePath(gvr, project, name, "abort")).Body(body).Do(requestCtx).Into(out); err != nil {
-		return nil, classifyWrite("abort", gvr, err)
+	if err := c.rest.Post().AbsPath(resourcePath(gvr, namespace, name, subresource)).Body(data).
+		Do(requestCtx).Into(out); err != nil {
+		return nil, classifyWrite(operation, gvr, err)
 	}
-	if out.Namespace != project || out.Name != name || out.UID != uid || !out.Status.Phase.IsTerminal() {
-		return nil, unknown("abort", gvr, fmt.Errorf("unexpected Job abort response identity or phase"))
+	if err := validateResponseObject(out); err != nil {
+		return nil, unknown(operation, gvr, err)
+	}
+	accessor, err := apiMeta.Accessor(out)
+	if err != nil || accessor.GetName() != name || accessor.GetNamespace() != namespace {
+		return nil, unknown(operation, gvr, fmt.Errorf("response object identity does not match request"))
 	}
 	return out, nil
 }
 
+// Create posts a new object and returns the server-assigned metadata.
 func (c *Client) Create(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
 	if obj == nil {
 		return nil, notSent("create", gvr, fmt.Errorf("object is required"))
@@ -206,13 +254,13 @@ func (c *Client) Create(ctx context.Context, gvr schema.GroupVersionResource, na
 	if err != nil {
 		return nil, notSent("create", gvr, err)
 	}
-	if err := validateTarget(gvr, namespace, accessor.GetName()); err != nil {
+	if err := c.validateTarget(gvr, namespace, accessor.GetName()); err != nil {
 		return nil, notSent("create", gvr, err)
 	}
 	if accessor.GetNamespace() != namespace || accessor.GetUID() != "" || accessor.GetResourceVersion() != "" {
 		return nil, notSent("create", gvr, fmt.Errorf("object metadata does not match target or contains server-assigned UID/resourceVersion"))
 	}
-	out, err := newObject(gvr)
+	out, err := c.newObject(gvr)
 	if err != nil {
 		return nil, notSent("create", gvr, err)
 	}
@@ -235,6 +283,7 @@ func (c *Client) Create(ctx context.Context, gvr schema.GroupVersionResource, na
 	return out, nil
 }
 
+// ResolveWatch provides a list/watch source for nonterminal Jobs or all Runners.
 func (c *Client) ResolveWatch(ctx context.Context, gvr schema.GroupVersionResource) (source.WatchResource, error) {
 	if gvr != source.JobsGVR && gvr != source.RunnersGVR {
 		return source.WatchResource{}, source.ErrWatchUnsupported
@@ -250,18 +299,17 @@ func (c *Client) ResolveWatch(ctx context.Context, gvr schema.GroupVersionResour
 	return source.WatchResource{ListerWatcher: lw, ObjectType: objectType}, nil
 }
 
+// Get reads a complete object by name and optional Project namespace.
 func (c *Client) Get(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (runtime.Object, error) {
 	return c.GetWithFields(ctx, gvr, namespace, name, "")
 }
 
 // GetWithFields returns a read-only projection when includeFields is nonempty.
-func (c *Client) GetWithFields(
-	ctx context.Context, gvr schema.GroupVersionResource, namespace, name, includeFields string,
-) (runtime.Object, error) {
-	if err := validateTarget(gvr, namespace, name); err != nil {
+func (c *Client) GetWithFields(ctx context.Context, gvr schema.GroupVersionResource, namespace, name, includeFields string) (runtime.Object, error) {
+	if err := c.validateTarget(gvr, namespace, name); err != nil {
 		return nil, err
 	}
-	out, err := newObject(gvr)
+	out, err := c.newObject(gvr)
 	if err != nil {
 		return nil, err
 	}
@@ -281,10 +329,12 @@ func (c *Client) GetWithFields(
 	return out, nil
 }
 
+// UpdateStatus puts an object on its status subresource using its resourceVersion.
 func (c *Client) UpdateStatus(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
 	return c.update(ctx, "update-status", gvr, namespace, "status", obj)
 }
 
+// Update puts an object on its main resource endpoint using its resourceVersion.
 func (c *Client) Update(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj runtime.Object) (runtime.Object, error) {
 	return c.update(ctx, "update", gvr, namespace, "", obj)
 }
@@ -297,13 +347,13 @@ func (c *Client) update(ctx context.Context, operation string, gvr schema.GroupV
 	if err != nil {
 		return nil, notSent(operation, gvr, err)
 	}
-	if err := validateTarget(gvr, namespace, accessor.GetName()); err != nil {
+	if err := c.validateTarget(gvr, namespace, accessor.GetName()); err != nil {
 		return nil, notSent(operation, gvr, err)
 	}
 	if accessor.GetNamespace() != namespace || accessor.GetUID() == "" || accessor.GetResourceVersion() == "" {
 		return nil, notSent(operation, gvr, fmt.Errorf("object metadata does not match target or lacks UID/resourceVersion"))
 	}
-	out, err := newObject(gvr)
+	out, err := c.newObject(gvr)
 	if err != nil {
 		return nil, notSent(operation, gvr, err)
 	}
@@ -326,8 +376,9 @@ func (c *Client) update(ctx context.Context, operation string, gvr schema.GroupV
 	return out, nil
 }
 
+// Delete removes an object with required UID and resourceVersion preconditions.
 func (c *Client) Delete(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, preconditions DeletePreconditions) error {
-	if err := validateTarget(gvr, namespace, name); err != nil {
+	if err := c.validateTarget(gvr, namespace, name); err != nil {
 		return notSent("delete", gvr, err)
 	}
 	if preconditions.UID == "" || preconditions.ResourceVersion == "" {
@@ -342,8 +393,8 @@ func (c *Client) Delete(ctx context.Context, gvr schema.GroupVersionResource, na
 	return nil
 }
 
-func validateTarget(gvr schema.GroupVersionResource, namespace, name string) error {
-	if _, err := newObject(gvr); err != nil {
+func (c *Client) validateTarget(gvr schema.GroupVersionResource, namespace, name string) error {
+	if _, err := c.resourceKinds(gvr); err != nil {
 		return err
 	}
 	if name == "" {
@@ -359,8 +410,8 @@ func validateTarget(gvr schema.GroupVersionResource, namespace, name string) err
 	return nil
 }
 
-func validateProjectScopedResource(gvr schema.GroupVersionResource, project string) error {
-	if _, err := newList(gvr); err != nil {
+func (c *Client) validateProjectScopedResource(gvr schema.GroupVersionResource, project string) error {
+	if _, err := c.resourceKinds(gvr); err != nil {
 		return err
 	}
 	if project == "" {
@@ -437,9 +488,10 @@ func (l *listerWatcher) options(opts metav1.ListOptions) metav1.ListOptions {
 	return opts
 }
 
+// List loads objects with the source's field selector for the informer cache.
 func (l *listerWatcher) List(opts metav1.ListOptions) (runtime.Object, error) {
 	opts = l.options(opts)
-	list, err := newList(l.gvr)
+	list, err := l.client.newList(l.gvr)
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +500,8 @@ func (l *listerWatcher) List(opts metav1.ListOptions) (runtime.Object, error) {
 	err = l.client.rest.Get().AbsPath("/apis/"+l.gvr.Group+"/"+l.gvr.Version+"/"+l.gvr.Resource).VersionedParams(&opts, metav1.ParameterCodec).Do(requestCtx).Into(list)
 	return list, err
 }
+
+// Watch streams object changes with the source's field selector.
 func (l *listerWatcher) Watch(opts metav1.ListOptions) (watch.Interface, error) {
 	opts = l.options(opts)
 	opts.Watch = true
@@ -456,116 +510,45 @@ func (l *listerWatcher) Watch(opts metav1.ListOptions) (watch.Interface, error) 
 
 var _ cache.ListerWatcher = (*listerWatcher)(nil)
 
-func newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
-	if gvr.Group != "ebs" || gvr.Version != "v1" {
-		return nil, fmt.Errorf("unsupported resource %s", gvr)
+func (c *Client) resourceKinds(gvr schema.GroupVersionResource) (resourceKinds, error) {
+	kinds, ok := c.resources[gvr.Resource]
+	if gvr.GroupVersion() != ebsv1.SchemeGroupVersion || !ok {
+		return resourceKinds{}, fmt.Errorf("unsupported resource %s", gvr)
 	}
-	switch gvr.Resource {
-	case "configs":
-		return &ebsv1.ConfigList{}, nil
-	case "scripts":
-		return &ebsv1.ScriptList{}, nil
-	case "projects":
-		return &ebsv1.ProjectList{}, nil
-	case "snapshots":
-		return &ebsv1.SnapshotList{}, nil
-	case "builds":
-		return &ebsv1.BuildList{}, nil
-	case "buildinfos":
-		return &ebsv1.BuildInfoList{}, nil
-	case "buildgraphs":
-		return &ebsv1.BuildGraphList{}, nil
-	case "rpmrepos":
-		return &ebsv1.RpmRepoList{}, nil
-	case "jobs", "oldjobs":
-		return &ebsv1.JobList{}, nil
-	case "runners":
-		return &ebsv1.RunnerList{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported resource %s", gvr)
-	}
+	return kinds, nil
 }
 
-func newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
-	if gvr.Group != "ebs" || gvr.Version != "v1" {
-		return nil, fmt.Errorf("unsupported resource %s", gvr)
+func (c *Client) newList(gvr schema.GroupVersionResource) (runtime.Object, error) {
+	kinds, err := c.resourceKinds(gvr)
+	if err != nil {
+		return nil, err
 	}
-	switch gvr.Resource {
-	case "configs":
-		return &ebsv1.Config{}, nil
-	case "scripts":
-		return &ebsv1.Script{}, nil
-	case "projects":
-		return &ebsv1.Project{}, nil
-	case "snapshots":
-		return &ebsv1.Snapshot{}, nil
-	case "builds":
-		return &ebsv1.Build{}, nil
-	case "buildinfos":
-		return &ebsv1.BuildInfo{}, nil
-	case "buildgraphs":
-		return &ebsv1.BuildGraph{}, nil
-	case "rpmrepos":
-		return &ebsv1.RpmRepo{}, nil
-	case "jobs", "oldjobs":
-		return &ebsv1.Job{}, nil
-	case "runners":
-		return &ebsv1.Runner{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported resource %s", gvr)
+	return c.scheme.New(kinds.list)
+}
+
+func (c *Client) newObject(gvr schema.GroupVersionResource) (runtime.Object, error) {
+	kinds, err := c.resourceKinds(gvr)
+	if err != nil {
+		return nil, err
 	}
+	return c.scheme.New(kinds.object)
 }
 
 func listPage(list runtime.Object) (source.ListPage, error) {
-	page := source.ListPage{}
-	switch value := list.(type) {
-	case *ebsv1.ConfigList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.ProjectList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.SnapshotList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.BuildList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.BuildInfoList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.BuildGraphList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.RpmRepoList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.JobList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	case *ebsv1.RunnerList:
-		page.Continue, page.ResourceVersion = value.Continue, value.ResourceVersion
-		for i := range value.Items {
-			page.Items = append(page.Items, value.Items[i].DeepCopy())
-		}
-	default:
-		return source.ListPage{}, fmt.Errorf("unsupported list type %T", list)
+	accessor, err := apiMeta.ListAccessor(list)
+	if err != nil {
+		return source.ListPage{}, fmt.Errorf("read list metadata: %w", err)
+	}
+	items, err := apiMeta.ExtractList(list)
+	if err != nil {
+		return source.ListPage{}, fmt.Errorf("extract list items: %w", err)
+	}
+	page := source.ListPage{
+		Continue:        accessor.GetContinue(),
+		ResourceVersion: accessor.GetResourceVersion(),
+	}
+	for _, item := range items {
+		page.Items = append(page.Items, item.DeepCopyObject())
 	}
 	return page, nil
 }

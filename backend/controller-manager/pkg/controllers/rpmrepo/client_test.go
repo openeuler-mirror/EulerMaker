@@ -48,6 +48,18 @@ func (p *pagingSharedClient) Get(context.Context, schema.GroupVersionResource, s
 	return nil, nil
 }
 
+func (p *pagingSharedClient) GetWithFields(
+	context.Context, schema.GroupVersionResource, string, string, string,
+) (runtime.Object, error) {
+	return nil, errors.New("unexpected GetWithFields call")
+}
+
+func (p *pagingSharedClient) PostSubresource(
+	context.Context, schema.GroupVersionResource, string, string, string, any,
+) (runtime.Object, error) {
+	return nil, errors.New("unexpected PostSubresource call")
+}
+
 func (p *pagingSharedClient) Create(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error) {
 	return nil, nil
 }

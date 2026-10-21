@@ -476,11 +476,8 @@ func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (
 	return c.checkCompletion(ctx, round, nil, nil)
 }
 
-// stoppedFailedPackages retains every failed or unfinished spec for the next incremental build. The persisted
-// specRepoNames map supplies the repository mapping after a restart; the assembly cache covers older objects. If
-// neither can identify a spec, conservatively retry the build's package scope rather than silently dropping work from
-// the published baseline.
-func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
+// stoppedFailedPackages retains failed or unfinished repositories, using the Build or Snapshot scope for unmapped specs.
+func (c *Controller) stoppedFailedPackages(ctx context.Context, round *reconcileRound) ([]string, error) {
 	failed := make(map[string]struct{})
 	depends, _ := c.specDependsCache.Get(round.key)
 	unmapped := len(round.current.Status.SpecStatus.Build) == 0
@@ -520,7 +517,13 @@ func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 				}
 			}
 		} else {
-			for _, repo := range round.project.Spec.PackageRepos {
+			snapshot, err := c.client.GetSnapshot(
+				ctx, round.current.Namespace, round.current.Name, "metadata,spec.packageRepos.name",
+			)
+			if err != nil {
+				return nil, fmt.Errorf("read Snapshot repository scope for failed packages: %w", err)
+			}
+			for _, repo := range snapshot.Spec.PackageRepos {
 				if repo.Name != "" {
 					failed[repo.Name] = struct{}{}
 				}
@@ -532,7 +535,7 @@ func (c *Controller) stoppedFailedPackages(round *reconcileRound) []string {
 			"missing persisted spec-to-repository mapping; using conservative package scope",
 		)
 	}
-	return sortedFailedPackages(round.current.Status.FailedPackages, failed)
+	return sortedFailedPackages(round.current.Status.FailedPackages, failed), nil
 }
 
 // convergeToCompleted waits for created Jobs to finish without further dispatch. Pending creations must be confirmed
@@ -596,8 +599,12 @@ func (c *Controller) convergeToCompleted(
 		return controller.ReconcileResult{}, nil
 	}
 	marker := stopCondition(round.current.Status.Conditions)
+	failedPackages, err := c.stoppedFailedPackages(ctx, round)
+	if err != nil {
+		return controller.ReconcileResult{}, err
+	}
 	next = round.current.DeepCopy()
-	next.Status.FailedPackages = c.stoppedFailedPackages(round)
+	next.Status.FailedPackages = failedPackages
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {

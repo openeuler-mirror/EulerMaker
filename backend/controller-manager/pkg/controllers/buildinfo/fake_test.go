@@ -39,6 +39,7 @@ type fakeClient struct {
 	abortErrors          map[string]error
 	resourceReads        int
 	snapshots            map[string]*ebsv1.Snapshot
+	snapshotReadFields   []string
 	rpmrepos             map[string]*ebsv1.RpmRepo
 	buildResourceContent *ebsv1.BuildResourceContent
 	buildTargetContent   *ebsv1.BuildTargetContent
@@ -437,9 +438,16 @@ func (f *fakeClient) GetRpmRepo(_ context.Context, project, name string) (*ebsv1
 	return value.DeepCopy(), nil
 }
 
-func (f *fakeClient) GetSnapshot(_ context.Context, project, name string) (*ebsv1.Snapshot, error) {
+func (f *fakeClient) GetSnapshot(
+	_ context.Context, project, name string, includeFields ...string,
+) (*ebsv1.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	fields := ""
+	if len(includeFields) > 0 {
+		fields = includeFields[0]
+	}
+	f.snapshotReadFields = append(f.snapshotReadFields, fields)
 	if err := f.consumeInjectedReadLocked("snapshots"); err != nil {
 		return nil, err
 	}

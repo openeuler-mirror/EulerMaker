@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"controller-manager/pkg/artifacturl"
-	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
@@ -164,11 +163,22 @@ func (c *Controller) ensureImage(ctx context.Context, round *reconcileRound, dis
 	if err != nil {
 		return "", err
 	}
-	image, err := clientpkg.BuildImage(conf, round.build.Spec.BuildTarget)
+	image, err := buildImage(conf, round.build.Spec.BuildTarget)
 	if err != nil {
 		return "", err
 	}
 	dispatch.image, dispatch.imageReady = image, true
+	return image, nil
+}
+
+func buildImage(conf *ebsv1.BuildTargetContent, target ebsv1.BuildTarget) (string, error) {
+	if conf == nil {
+		return "", fmt.Errorf("build-target Config is unavailable")
+	}
+	image := conf.Targets[target.Os].Arches[target.Arch].Image
+	if image == "" {
+		return "", fmt.Errorf("build-target Config has no image for %s/%s", target.Os, target.Arch)
+	}
 	return image, nil
 }
 
