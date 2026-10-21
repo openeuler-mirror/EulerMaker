@@ -205,7 +205,7 @@ type DeletePreconditions struct {
     ResourceVersion string
 }
 
-type Client interface {
+type Interface interface {
     ListPage(
         ctx context.Context,
         gvr schema.GroupVersionResource,
@@ -228,6 +228,19 @@ type Client interface {
         ctx context.Context,
         gvr schema.GroupVersionResource,
         namespace, name string,
+    ) (runtime.Object, error)
+
+    GetWithFields(
+        ctx context.Context,
+        gvr schema.GroupVersionResource,
+        namespace, name, includeFields string,
+    ) (runtime.Object, error)
+
+    PostSubresource(
+        ctx context.Context,
+        gvr schema.GroupVersionResource,
+        namespace, name, subresource string,
+        body any,
     ) (runtime.Object, error)
 
     Create(
@@ -310,7 +323,9 @@ func RetryAfter(err error) time.Duration
 
 收到 2xx 但对象响应为空、解码失败，或者成功对象缺少 UID/resourceVersion，Client 返回 `WriteUnknown`。资源特有的成功条件由对应业务适配器继续验证；例如 Job status 更新响应与请求 Job UID 不同，必须包装为 `WriteUnknown`，不能当作普通业务校验失败。
 
-每个 Controller 应在自己的包中声明所需的最小 typed client 接口，并由共享 Client 适配实现，便于单元测试且避免业务代码重复传递 GVR。业务接口仍必须保留上述 WriteError，不得把结果未知压缩为普通 error。
+每个 Controller 应在自己的包中声明所需的最小 typed client 接口，并由共享 `apiserver.Interface` 适配实现，便于单元测试且避免业务代码重复传递 GVR。`GetWithFields` 的 includeFields 为空时读取完整对象，非空时返回只读投影，不可直接用于完整对象更新；投影字段须包含调用方身份校验所需的 metadata。业务接口仍必须保留上述 WriteError，不得把结果未知压缩为普通 error。
+
+`PostSubresource` 将 body 编码为 JSON，向指定资源的单段子资源路径发送 POST，返回与父资源类型相同的 `runtime.Object`。公共层检查响应名称、命名空间和 UID/resourceVersion 的完整性，沿用 NotSent/Rejected/Unknown 分类；业务响应语义由类型化适配层检查。BuildInfo 的 `AbortJob` 在该适配层组装 `/abort` 的 uid/reason 请求，检查响应 UID 与 Job 终态；成功响应不满足这些条件时返回 WriteUnknown。
 
 ## 4. 事件源
 

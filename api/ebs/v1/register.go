@@ -20,19 +20,34 @@ var (
 	AddToScheme   = SchemeBuilder.AddToScheme
 )
 
+// ResourceRegistration associates an API resource path with its object and list types.
+type ResourceRegistration struct {
+	Resource string
+	Object   runtime.Object
+	List     runtime.Object
+}
+
+// ResourceRegistrations returns the resource catalog with fresh object and list prototypes.
+func ResourceRegistrations() []ResourceRegistration {
+	return []ResourceRegistration{
+		{"configs", &Config{}, &ConfigList{}},
+		{"scripts", &Script{}, &ScriptList{}},
+		{"projects", &Project{}, &ProjectList{}},
+		{"snapshots", &Snapshot{}, &SnapshotList{}},
+		{"builds", &Build{}, &BuildList{}},
+		{"buildinfos", &BuildInfo{}, &BuildInfoList{}},
+		{"buildgraphs", &BuildGraph{}, &BuildGraphList{}},
+		{"rpmrepos", &RpmRepo{}, &RpmRepoList{}},
+		{"jobs", &Job{}, &JobList{}},
+		{"oldjobs", &Job{}, &JobList{}},
+		{"runners", &Runner{}, &RunnerList{}},
+	}
+}
+
 func addKnownTypes(scheme *runtime.Scheme) error {
-	scheme.AddKnownTypes(SchemeGroupVersion,
-		&Config{}, &ConfigList{},
-		&Script{}, &ScriptList{},
-		&Project{}, &ProjectList{},
-		&Snapshot{}, &SnapshotList{},
-		&Build{}, &BuildList{},
-		&BuildInfo{}, &BuildInfoList{},
-		&BuildGraph{}, &BuildGraphList{},
-		&RpmRepo{}, &RpmRepoList{},
-		&Job{}, &JobList{},
-		&Runner{}, &RunnerList{},
-	)
+	for _, resource := range ResourceRegistrations() {
+		scheme.AddKnownTypes(SchemeGroupVersion, resource.Object, resource.List)
+	}
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("Project"), func(label, value string) (string, string, error) {
 		switch label {

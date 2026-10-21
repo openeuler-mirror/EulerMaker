@@ -9,11 +9,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
@@ -26,6 +29,92 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+func TestResourceObjectsAndListPages(t *testing.T) {
+	client, err := New(testRESTConfig(nil), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range ebsv1.ResourceRegistrations() {
+		t.Run(resource.Resource, func(t *testing.T) {
+			gvr := ebsv1.SchemeGroupVersion.WithResource(resource.Resource)
+			obj, err := client.newObject(gvr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			list, err := client.newList(gvr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reflect.TypeOf(obj) != reflect.TypeOf(resource.Object) || reflect.TypeOf(list) != reflect.TypeOf(resource.List) {
+				t.Fatalf("object=%T list=%T, want %T and %T", obj, list, resource.Object, resource.List)
+			}
+			meta, err := apiMeta.Accessor(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta.SetName("item")
+			meta.SetLabels(map[string]string{"key": "original"})
+			if err := apiMeta.SetList(list, []runtime.Object{obj}); err != nil {
+				t.Fatal(err)
+			}
+			listMeta, err := apiMeta.ListAccessor(list)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listMeta.SetContinue("next")
+			listMeta.SetResourceVersion("123")
+			page, err := listPage(list)
+			if err != nil || len(page.Items) != 1 || page.Continue != "next" || page.ResourceVersion != "123" {
+				t.Fatalf("page=%+v err=%v", page, err)
+			}
+			itemMeta, err := apiMeta.Accessor(page.Items[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if itemMeta.GetName() != "item" || itemMeta.GetLabels()["key"] != "original" {
+				t.Fatalf("unexpected item: %+v", page.Items[0])
+			}
+			itemMeta.GetLabels()["key"] = "changed"
+			unchanged, err := listPage(list)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalMeta, err := apiMeta.Accessor(unchanged.Items[0])
+			if err != nil || originalMeta.GetLabels()["key"] != "original" {
+				t.Fatalf("list item shares mutable labels with page: %v", err)
+			}
+			if err := apiMeta.SetList(list, nil); err != nil {
+				t.Fatal(err)
+			}
+			empty, err := listPage(list)
+			if err != nil || len(empty.Items) != 0 || empty.Continue != "next" || empty.ResourceVersion != "123" {
+				t.Fatalf("empty page=%+v err=%v", empty, err)
+			}
+		})
+	}
+}
+
+func TestListScripts(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/scripts" || r.URL.Query().Get("continue") != "cursor" {
+			t.Fatalf("request=%s %s", r.Method, r.URL)
+		}
+		return jsonResponse(r, []byte(`{"apiVersion":"ebs/v1","kind":"ScriptList","metadata":{"continue":"next","resourceVersion":"123"},"items":[{"metadata":{"name":"rpmbuild"},"spec":{"content":"echo build"}}]}`)), nil
+	})
+	client, err := New(testRESTConfig(transport), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ListPage(context.Background(), source.ScriptsGVR, metav1.ListOptions{Continue: "cursor"})
+	if err != nil || len(page.Items) != 1 || page.Continue != "next" || page.ResourceVersion != "123" {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	script, ok := page.Items[0].(*ebsv1.Script)
+	if !ok || script.Name != "rpmbuild" || script.Spec.Content != "echo build" {
+		t.Fatalf("script=%+v", page.Items[0])
+	}
 }
 
 func TestArchiveJobAndReadSnapshot(t *testing.T) {
@@ -64,8 +153,8 @@ func TestArchiveJobAndReadSnapshot(t *testing.T) {
 	}
 }
 
-func TestAbortJob(t *testing.T) {
-	for _, phase := range []ebsv1.JobPhase{ebsv1.JobAborted, ebsv1.JobSucceeded} {
+func TestPostSubresource(t *testing.T) {
+	for _, phase := range []ebsv1.JobPhase{ebsv1.JobAborted, ebsv1.JobSucceeded, ebsv1.JobRunning} {
 		t.Run(string(phase), func(t *testing.T) {
 			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if r.Method != http.MethodPost || r.URL.Path != "/apis/ebs/v1/projects/project/jobs/job/abort" {
@@ -88,12 +177,63 @@ func TestAbortJob(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			job, err := client.AbortJob(context.Background(), "project", "job", "uid", "parent Build aborted")
+			obj, err := client.PostSubresource(
+				context.Background(), source.JobsGVR, "project", "job", "abort",
+				map[string]string{"uid": "uid", "reason": "parent Build aborted"},
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
+			job, ok := obj.(*ebsv1.Job)
+			if !ok {
+				t.Fatalf("unexpected response type: %T", obj)
+			}
 			if job.Status.Phase != phase {
 				t.Fatalf("phase = %s, want %s", job.Status.Phase, phase)
+			}
+		})
+	}
+}
+
+func TestPostSubresourceWriteOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		subresource string
+		body        any
+		status      int
+		err         error
+		outcome     WriteOutcome
+	}{
+		{name: "invalid path", subresource: "../abort", outcome: WriteNotSent},
+		{name: "encoding failure", subresource: "abort", body: make(chan int), outcome: WriteNotSent},
+		{name: "rejected", subresource: "abort", status: http.StatusForbidden, outcome: WriteRejected},
+		{name: "transport failure", subresource: "abort", err: io.ErrUnexpectedEOF, outcome: WriteUnknown},
+		{name: "invalid response", subresource: "abort", status: http.StatusOK, outcome: WriteUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client, err := New(testRESTConfig(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if tc.err != nil {
+					return nil, tc.err
+				}
+				response := jsonResponse(r, []byte(`{}`))
+				response.StatusCode = tc.status
+				return response, nil
+			})), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.PostSubresource(context.Background(), source.JobsGVR, "project", "job", tc.subresource, tc.body)
+			var writeErr *WriteError
+			if !errors.As(err, &writeErr) || writeErr.Outcome != tc.outcome {
+				t.Fatalf("error = %v, want %s", err, tc.outcome)
+			}
+			if tc.outcome == WriteNotSent && calls != 0 {
+				t.Fatalf("local failure sent %d requests", calls)
+			}
+			if tc.outcome == WriteRejected && writeErr.StatusCode != tc.status {
+				t.Fatalf("status = %d, want %d", writeErr.StatusCode, tc.status)
 			}
 		})
 	}
@@ -136,22 +276,26 @@ func TestRetryAfterRejectsUnsupportedOutcome(t *testing.T) {
 }
 
 func TestValidateTargetScope(t *testing.T) {
+	client, err := New(testRESTConfig(nil), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
 	jobs := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}
 	runners := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}
 	scripts := schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "scripts"}
-	if err := validateTarget(jobs, "", "job"); err == nil {
+	if err := client.validateTarget(jobs, "", "job"); err == nil {
 		t.Fatal("namespace-scoped target accepted an empty namespace")
 	}
-	if err := validateTarget(runners, "project", "runner"); err == nil {
+	if err := client.validateTarget(runners, "project", "runner"); err == nil {
 		t.Fatal("cluster-scoped target accepted a namespace")
 	}
-	if err := validateTarget(scripts, "project", "rpmbuild"); err == nil {
+	if err := client.validateTarget(scripts, "project", "rpmbuild"); err == nil {
 		t.Fatal("cluster-scoped Script accepted a namespace")
 	}
-	if err := validateTarget(scripts, "", "rpmbuild"); err != nil {
+	if err := client.validateTarget(scripts, "", "rpmbuild"); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateTarget(jobs, "project", "job"); err != nil {
+	if err := client.validateTarget(jobs, "project", "job"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -303,7 +447,11 @@ func TestListProjectPageUsesScopedPathAndOptions(t *testing.T) {
 }
 
 func TestListProjectPageRejectsClusterScopedResource(t *testing.T) {
-	_, err := (&Client{}).ListProjectPage(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}, "project", metav1.ListOptions{})
+	client, err := New(testRESTConfig(nil), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ListProjectPage(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "runners"}, "project", metav1.ListOptions{})
 	if err == nil {
 		t.Fatal("project-scoped Runner List was accepted")
 	}

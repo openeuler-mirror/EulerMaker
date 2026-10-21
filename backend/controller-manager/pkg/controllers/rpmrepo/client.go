@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"controller-manager/pkg/artifacturl"
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -69,7 +70,7 @@ func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string
 	if !ok || config == nil || config.Name != ebsv1.ArtifactManagerConfigName || config.Namespace != "" || config.UID == "" {
 		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
 	}
-	endpoints, err := clientpkg.ParseArtifactManagerEndpoints(config.Spec.Content)
+	endpoints, err := artifacturl.ParseArtifactManagerEndpoints(config.Spec.Content)
 	if err != nil {
 		return nil, contractErrorf("%v", err)
 	}

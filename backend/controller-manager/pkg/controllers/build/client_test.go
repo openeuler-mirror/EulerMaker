@@ -65,6 +65,18 @@ func (s *stubSharedClient) Get(_ context.Context, gvr schema.GroupVersionResourc
 	return s.getResult, s.getErr
 }
 
+func (s *stubSharedClient) GetWithFields(
+	context.Context, schema.GroupVersionResource, string, string, string,
+) (runtime.Object, error) {
+	return nil, errors.New("unexpected GetWithFields call")
+}
+
+func (s *stubSharedClient) PostSubresource(
+	context.Context, schema.GroupVersionResource, string, string, string, any,
+) (runtime.Object, error) {
+	return nil, errors.New("unexpected PostSubresource call")
+}
+
 func (s *stubSharedClient) Create(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error) {
 	return s.createResult, s.createErr
 }

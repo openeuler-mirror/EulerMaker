@@ -424,6 +424,7 @@ func TestStopConditionRoutesToConverge(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Status.SpecRepoNames = map[string]string{"a": "repo-a"}
 	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound, "rpmrepo gone")
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: SpecBuildSucceeded}, DispatchCount: 1},

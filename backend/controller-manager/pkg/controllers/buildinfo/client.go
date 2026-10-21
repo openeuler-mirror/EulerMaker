@@ -15,6 +15,7 @@ import (
 	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
+	"controller-manager/pkg/artifacturl"
 	"controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -51,7 +52,7 @@ type Client interface {
 	// GetBuild reads the parent Build without modifying it.
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
-	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
+	GetSnapshot(ctx context.Context, project, name string, includeFields ...string) (*ebsv1.Snapshot, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
 	GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
 	// GetBuildResourceContent reads the cluster-wide default resource table.
@@ -63,9 +64,9 @@ type Client interface {
 }
 
 // newAPIClient wraps the shared controller-manager API client.
-func newAPIClient(client *apiserver.Client) Client { return &apiClient{client: client} }
+func newAPIClient(client apiserver.Interface) Client { return &apiClient{client: client} }
 
-type apiClient struct{ client *apiserver.Client }
+type apiClient struct{ client apiserver.Interface }
 
 func (c *apiClient) AbortJob(
 	ctx context.Context,
@@ -73,7 +74,23 @@ func (c *apiClient) AbortJob(
 	uid types.UID,
 	reason string,
 ) (*ebsv1.Job, error) {
-	return c.client.AbortJob(ctx, project, name, uid, reason)
+	if project == "" || name == "" || uid == "" {
+		return nil, notSentWrite("abort", source.JobsGVR, fmt.Errorf("project, Job name and UID are required"))
+	}
+	body := struct {
+		UID    types.UID `json:"uid"`
+		Reason string    `json:"reason"`
+	}{UID: uid, Reason: reason}
+	obj, err := c.client.PostSubresource(ctx, source.JobsGVR, project, name, "abort", body)
+	if err != nil {
+		return nil, err
+	}
+	job, ok := obj.(*ebsv1.Job)
+	if !ok || job == nil || job.Namespace != project || job.Name != name || job.UID != uid ||
+		job.ResourceVersion == "" || !job.Status.Phase.IsTerminal() {
+		return nil, unknownWrite("abort", source.JobsGVR, fmt.Errorf("unexpected Job abort response identity or phase"))
+	}
+	return job, nil
 }
 
 var _ Client = (*apiClient)(nil)
@@ -262,11 +279,13 @@ func (c *apiClient) GetRpmRepo(ctx context.Context, project, name string) (*ebsv
 	return value, nil
 }
 
-func (c *apiClient) GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error) {
+func (c *apiClient) GetSnapshot(
+	ctx context.Context, project, name string, includeFields ...string,
+) (*ebsv1.Snapshot, error) {
 	if project == "" || name == "" {
 		return nil, contractErrorf("project and name are required")
 	}
-	obj, err := c.readGet(ctx, source.SnapshotsGVR, project, name)
+	obj, err := c.readGet(ctx, source.SnapshotsGVR, project, name, includeFields...)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +301,7 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 	if project == "" {
 		return nil, contractErrorf("project is required")
 	}
-	obj, err := c.readGet(ctx, source.ProjectsGVR, "", project)
+	obj, err := c.readGet(ctx, source.ProjectsGVR, "", project, "metadata,status.phase")
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +339,7 @@ func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string
 		config.UID == "" || config.ResourceVersion == "" {
 		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
 	}
-	endpoints, err := apiserver.ParseArtifactManagerEndpoints(config.Spec.Content)
+	endpoints, err := artifacturl.ParseArtifactManagerEndpoints(config.Spec.Content)
 	if err != nil {
 		return nil, contractErrorf("%v", err)
 	}
@@ -346,24 +365,23 @@ func (c *apiClient) GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildRe
 }
 
 func (c *apiClient) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error) {
-	var conf *ebsv1.BuildTargetContent
-	var err error
-	for attempt := 0; ; attempt++ {
-		conf, err = c.client.GetBuildTargetContent(ctx)
-		if err == nil {
-			break
-		}
-		if apierrors.IsNotFound(err) {
-			return nil, ErrNotFound
-		}
-		if ctx.Err() != nil || !isTransientReadError(err) || attempt >= apiServerReadRetries {
-			return nil, err
-		}
+	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.BuildTargetConfigName)
+	if err != nil {
+		return nil, err
 	}
-	if conf == nil || conf.Targets == nil {
-		return nil, contractErrorf("unexpected build-target content: %T", conf)
+	config, ok := obj.(*ebsv1.Config)
+	if !ok || config == nil || config.Name != ebsv1.BuildTargetConfigName || config.Namespace != "" ||
+		config.UID == "" || config.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected build-target Config response: %T", obj)
 	}
-	return conf, nil
+	var content ebsv1.BuildTargetContent
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
+		return nil, fmt.Errorf("decode build-target Config: %w", err)
+	}
+	if content.Targets == nil {
+		return nil, contractErrorf("unexpected build-target content: targets is missing")
+	}
+	return &content, nil
 }
 
 // readGet performs a Get with the fixed in-process retry for transient failures (network/timeout/5xx) and normalizes

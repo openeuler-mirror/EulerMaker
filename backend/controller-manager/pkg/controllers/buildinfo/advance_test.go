@@ -2,6 +2,7 @@ package buildinfo
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -650,10 +651,10 @@ func TestStopConvergenceRecordsFailedAndUnfinishedPackages(t *testing.T) {
 	}
 }
 
-func TestStopConvergenceFallsBackWithoutSpecRepoNames(t *testing.T) {
+func TestStopConvergenceFallsBackToSnapshotScope(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	project := testProjectObj(ebsv1.ProjectActive)
-	project.Spec.PackageRepos = []ebsv1.PackageRepo{{Name: "repo-a"}, {Name: "repo-b"}}
+	project.Spec.PackageRepos = []ebsv1.PackageRepo{{Name: "new-project-repo"}}
 	client.SeedProject(project)
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
@@ -669,11 +670,24 @@ func TestStopConvergenceFallsBackWithoutSpecRepoNames(t *testing.T) {
 	)
 	client.SeedBuildInfo(bi)
 
+	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reconcile with missing Snapshot = %v, want NotFound", err)
+	}
+	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoProcessing)
+	client.SeedSnapshot(testSnapshotObj(
+		repoEntry{name: "repo-a", declare: true},
+		repoEntry{name: "repo-b", declare: true},
+	))
+
 	reconcileOnce(t, c)
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	if want := []string{"repo-a", "repo-b"}; !slices.Equal(persisted.Status.FailedPackages, want) {
 		t.Fatalf("failedPackages = %v, want conservative %v", persisted.Status.FailedPackages, want)
+	}
+	wantFields := []string{"metadata,spec.packageRepos.name", "metadata,spec.packageRepos.name"}
+	if !slices.Equal(client.snapshotReadFields, wantFields) {
+		t.Fatalf("Snapshot read fields = %v, want %v", client.snapshotReadFields, wantFields)
 	}
 }
 
