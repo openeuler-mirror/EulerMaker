@@ -37,7 +37,13 @@ func TestRepositoryManifestReadErrors(t *testing.T) {
 	}{
 		{name: "missing", err: os.ErrNotExist, code: "ManifestNotReady", status: 422},
 		{name: "corrupted", err: upload.ErrInvalidManifest, code: "ManifestInvalid", status: 422},
-		{name: "storage unavailable", err: &os.PathError{Op: "read", Path: "manifest.json", Err: os.ErrPermission}, code: "StorageError", status: 503, retryable: true},
+		{
+			name:      "storage unavailable",
+			err:       &os.PathError{Op: "read", Path: "manifest.json", Err: os.ErrPermission},
+			code:      "StorageError",
+			status:    503,
+			retryable: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reader := &memoryArtifactReader{manifestError: test.err}
@@ -99,9 +105,24 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 		code     string
 	}{
 		{name: "missing", code: "ManifestNotReady"},
-		{name: "invalid digest", manifest: &upload.JobUploadManifest{State: upload.ManifestCompleted, Digest: "bad"}, code: "ManifestInvalid"},
-		{name: "no RPM", manifest: &upload.JobUploadManifest{State: upload.ManifestCompleted,
-			Files: []upload.ManifestFile{{RelativePath: "logs/build.log", Category: upload.CategoryLog}}}, code: "ManifestContainsNoPackages"},
+		{
+			name:     "invalid digest",
+			manifest: &upload.JobUploadManifest{State: upload.ManifestCompleted, Digest: "bad"},
+			code:     "ManifestInvalid",
+		},
+		{
+			name: "no RPM",
+			manifest: &upload.JobUploadManifest{
+				State: upload.ManifestCompleted,
+				Files: []upload.ManifestFile{
+					{
+						RelativePath: "logs/build.log",
+						Category:     upload.CategoryLog,
+					},
+				},
+			},
+			code: "ManifestContainsNoPackages",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

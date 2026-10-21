@@ -38,7 +38,18 @@ func NewManager(root string, c Config, materializer Materializer, signingFingerp
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{root: root, timeout: c.Timeout, signingFingerprint: signingFingerprint, materializer: materializer, records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.QueueCapacity), ctx: ctx, cancel: cancel}
+	m := &Manager{
+		root:               root,
+		timeout:            c.Timeout,
+		signingFingerprint: signingFingerprint,
+		materializer:       materializer,
+		records:            map[string]*RepositoryRecord{},
+		queued:             map[string]bool{},
+		running:            map[string]bool{},
+		queue:              make(chan string, c.QueueCapacity),
+		ctx:                ctx,
+		cancel:             cancel,
+	}
 	if err := m.load(); err != nil {
 		cancel()
 		return nil, err
@@ -173,7 +184,12 @@ func (m *Manager) readRecord(uid string) (*RepositoryRecord, error) {
 			}
 			now := time.Now().UTC()
 			record.State = RepositoryFailed
-			record.Failure = &FailureInfo{Code: "RepositoryContentMissing", Message: "RepositoryContentMissing", Retryable: false, Time: now}
+			record.Failure = &FailureInfo{
+				Code:      "RepositoryContentMissing",
+				Message:   "RepositoryContentMissing",
+				Retryable: false,
+				Time:      now,
+			}
 			record.ContentURL = ""
 			record.UpdatedAt = now
 		}
@@ -287,7 +303,23 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 		return nil, 0, &Error{Code: "RepositoryQueueFull", Status: 429, Retryable: true}
 	}
 	now := time.Now().UTC()
-	record := &RepositoryRecord{SchemaVersion: 1, RepositoryUID: in.RepositoryUID, RepositoryName: in.RepositoryName, Project: in.Project, BuildName: in.BuildName, TargetOS: in.TargetOS, TargetArch: in.TargetArch, BaseRepositoryUID: in.BaseRepositoryUID, Manifests: in.Manifests, RequestDigest: digest, SigningFingerprint: m.signingFingerprint, State: RepositoryCreating, Attempt: 1, CreatedAt: now, UpdatedAt: now}
+	record := &RepositoryRecord{
+		SchemaVersion:      1,
+		RepositoryUID:      in.RepositoryUID,
+		RepositoryName:     in.RepositoryName,
+		Project:            in.Project,
+		BuildName:          in.BuildName,
+		TargetOS:           in.TargetOS,
+		TargetArch:         in.TargetArch,
+		BaseRepositoryUID:  in.BaseRepositoryUID,
+		Manifests:          in.Manifests,
+		RequestDigest:      digest,
+		SigningFingerprint: m.signingFingerprint,
+		State:              RepositoryCreating,
+		Attempt:            1,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
 	if err := m.persist(record); err != nil {
 		return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 	}
@@ -373,7 +405,13 @@ func (m *Manager) finish(completed *RepositoryRecord, result Result, materialize
 			typed = &Error{Code: "RepositoryMaterializationFailed", Retryable: true}
 		}
 		record.State = RepositoryFailed
-		record.Failure = &FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, JobName: typed.JobName, Time: now}
+		record.Failure = &FailureInfo{
+			Code:      typed.Code,
+			Message:   typed.Code,
+			Retryable: typed.Retryable,
+			JobName:   typed.JobName,
+			Time:      now,
+		}
 	} else {
 		record.State, record.RepositoryDigest = RepositoryReady, result.Digest
 		record.ContentURL = "/repositories/v1/" + uid + "/"
@@ -497,7 +535,16 @@ func cloneRepository(in *RepositoryRecord) *RepositoryRecord {
 }
 
 func ResponseFor(record *RepositoryRecord) RepositoryResponse {
-	response := RepositoryResponse{RepositoryUID: record.RepositoryUID, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
+	response := RepositoryResponse{
+		RepositoryUID: record.RepositoryUID,
+		State:         record.State,
+		Attempt:       record.Attempt,
+		ContentURL:    record.ContentURL,
+		Failure:       record.Failure,
+		CreatedAt:     record.CreatedAt,
+		UpdatedAt:     record.UpdatedAt,
+		CompletedAt:   record.CompletedAt,
+	}
 	if record.State == RepositoryCreating {
 		response.PollAfterSeconds = 5
 	}

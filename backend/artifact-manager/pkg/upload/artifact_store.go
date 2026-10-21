@@ -283,7 +283,21 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 	}
 	now := time.Now().UTC()
 	id := fileutil.NewID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Category: m.Category, FileName: m.FileName, RelativePath: rel, ContentType: m.ContentType, Size: m.Size, SHA256: m.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", project, "jobs", job, rel)), IdempotencyKey: key, State: Pending, CreatedAt: now, UpdatedAt: now}
+	a := &Artifact{
+		SchemaVersion:  1,
+		ID:             id,
+		Category:       m.Category,
+		FileName:       m.FileName,
+		RelativePath:   rel,
+		ContentType:    m.ContentType,
+		Size:           m.Size,
+		SHA256:         m.SHA256,
+		StorageKey:     filepath.ToSlash(filepath.Join("projects", project, "jobs", job, rel)),
+		IdempotencyKey: key,
+		State:          Pending,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
 	if e = s.persistArtifact(project, job, a); e != nil {
 		return nil, false, e
 	}

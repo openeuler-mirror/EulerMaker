@@ -40,7 +40,15 @@ type filesystemMaterializer struct {
 }
 
 func NewFilesystemMaterializer(root string, c Config, signingWorkers int, store ArtifactReader, signer Signer) Materializer {
-	return &filesystemMaterializer{root: root, store: store, createRepoCommand: c.CreateRepoCommand, rpmQueryCommand: c.RPMQueryCommand, createRepoWorkers: c.CreateRepoWorkers, signingWorkers: signingWorkers, signer: signer}
+	return &filesystemMaterializer{
+		root:              root,
+		store:             store,
+		createRepoCommand: c.CreateRepoCommand,
+		rpmQueryCommand:   c.RPMQueryCommand,
+		createRepoWorkers: c.CreateRepoWorkers,
+		signingWorkers:    signingWorkers,
+		signer:            signer,
+	}
 }
 
 func (m *filesystemMaterializer) Materialize(ctx context.Context, record RepositoryRecord) (result Result, resultErr error) {
@@ -160,7 +168,14 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if err != nil {
 		return result, retryableRepositoryError(err)
 	}
-	repositoryJSON := Index{SchemaVersion: 1, RepositoryUID: record.RepositoryUID, RequestDigest: record.RequestDigest, SigningFingerprint: record.SigningFingerprint, RepositoryDigest: digest, RPMs: metadata}
+	repositoryJSON := Index{
+		SchemaVersion:      1,
+		RepositoryUID:      record.RepositoryUID,
+		RequestDigest:      record.RequestDigest,
+		SigningFingerprint: record.SigningFingerprint,
+		RepositoryDigest:   digest,
+		RPMs:               metadata,
+	}
 	if err := fileutil.AtomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
 		return result, retryableRepositoryError(err)
 	}
@@ -279,17 +294,32 @@ func (m *filesystemMaterializer) signRPM(ctx context.Context, packages string, t
 	}
 	if err := m.signer.Sign(ctx, destination); err != nil {
 		if ctx.Err() != nil {
-			return RepositoryRPMMeta{}, &Error{Code: "SigningBackendUnavailable", Status: 503, Retryable: true, JobName: task.input.JobName}
+			return RepositoryRPMMeta{}, &Error{
+				Code:      "SigningBackendUnavailable",
+				Status:    503,
+				Retryable: true,
+				JobName:   task.input.JobName,
+			}
 		}
 		if errors.Is(err, signing.ErrVerification) {
 			return RepositoryRPMMeta{}, &Error{Code: "SignedPackageVerificationFailed", Status: 422, JobName: task.input.JobName}
 		}
-		return RepositoryRPMMeta{}, &Error{Code: "SigningBackendUnavailable", Status: 503, Retryable: true, JobName: task.input.JobName}
+		return RepositoryRPMMeta{}, &Error{
+			Code:      "SigningBackendUnavailable",
+			Status:    503,
+			Retryable: true,
+			JobName:   task.input.JobName,
+		}
 	}
 	signed, err := m.inspectRPMFile(ctx, destination)
 	if err != nil {
 		if ctx.Err() != nil {
-			return RepositoryRPMMeta{}, &Error{Code: "SigningBackendUnavailable", Status: 503, Retryable: true, JobName: task.input.JobName}
+			return RepositoryRPMMeta{}, &Error{
+				Code:      "SigningBackendUnavailable",
+				Status:    503,
+				Retryable: true,
+				JobName:   task.input.JobName,
+			}
 		}
 		return RepositoryRPMMeta{}, &Error{Code: "SignedPackageMetadataInvalid", Status: 422, JobName: task.input.JobName}
 	}
@@ -383,7 +413,20 @@ func (m *filesystemMaterializer) inspectRPMFile(ctx context.Context, path string
 	if err != nil {
 		return RepositoryRPMMeta{}, err
 	}
-	return RepositoryRPMMeta{FileName: filepath.Base(path), SHA256: sum, Size: info.Size(), Name: fields[0], Epoch: fields[1], Version: fields[2], Release: fields[3], Arch: arch, Source: fields[5], SpecName: spec, Provides: provides, Requires: requires}, nil
+	return RepositoryRPMMeta{
+		FileName: filepath.Base(path),
+		SHA256:   sum,
+		Size:     info.Size(),
+		Name:     fields[0],
+		Epoch:    fields[1],
+		Version:  fields[2],
+		Release:  fields[3],
+		Arch:     arch,
+		Source:   fields[5],
+		SpecName: spec,
+		Provides: provides,
+		Requires: requires,
+	}, nil
 }
 
 // sourceRPMSpecName uses the source package's own version and release, which
