@@ -662,13 +662,6 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		}, asm.degraded)
 	}
 
-	// Repo injection source: the current same-name RpmRepo contentURL (creation-time inherited baseline; single never
-	// materializes).
-	contentURL, result, err := c.singleContentURL(ctx, round)
-	if err != nil || result != (controller.ReconcileResult{}) {
-		return result, err
-	}
-
 	jobs, err := c.listRoundJobs(ctx, round)
 	if err != nil {
 		return controller.ReconcileResult{}, err
@@ -685,7 +678,7 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	}
 
 	// Single builds dispatch each spec directly, without dependency gates.
-	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
+	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch}
 	for _, name := range sortedSpecNames(buildSet) {
 		depend := buildSet[name]
 		ss := round.current.Status.SpecStatus.Entry(name)
@@ -723,10 +716,10 @@ func (c *Controller) loadSinglePreferSources(
 	round *reconcileRound,
 	contentURL string,
 ) (*rpmver.RpmMetaSources, string, error) {
-	sources, ok := c.rpmMetaSources.Get(round.key)
-	if !ok {
-		sources = &rpmver.RpmMetaSources{}
+	if round.singlePreferSources != nil {
+		return round.singlePreferSources, "", nil
 	}
+	sources := &rpmver.RpmMetaSources{}
 	arch := round.build.Spec.BuildTarget.Arch
 	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
 		return nil, metadataFailureReason(err, false), err
@@ -735,63 +728,7 @@ func (c *Controller) loadSinglePreferSources(
 	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
 		return nil, metadataFailureReason(err, true), err
 	}
-	c.rpmMetaSources.Set(round.key, sources)
+	round.singlePreferSources = sources
 	round.failures.RpmRepoReady()
 	return sources, "", nil
-}
-
-// singleContentURL reads the current same-name RpmRepo for the single Repo injection: 404 or an empty contentURL
-// injects nothing; temporary query failures retry, while rejected requests and invalid URLs stop dispatch.
-func (c *Controller) singleContentURL(
-	ctx context.Context,
-	round *reconcileRound,
-) (string, controller.ReconcileResult, error) {
-	repo, err := c.client.GetRpmRepo(ctx, round.current.Namespace, round.current.Name)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			round.failures.RpmRepoReady()
-			return c.singleContentURLReady(ctx, round, "")
-		}
-		if deterministicRpmRepoError(err) {
-			result, stopErr := c.escalateStop(
-				ctx,
-				round,
-				ConditionRpmRepoUnavailable,
-				ReasonRpmRepoQueryRejected,
-				err.Error(),
-			)
-			return "", result, stopErr
-		}
-		round.failures.RpmRepoReady()
-		result, writeErr := c.recordRpmRepoRetrying(ctx, round, ReasonRpmRepoQueryFailed, err.Error())
-		if writeErr != nil || result != (controller.ReconcileResult{}) {
-			return "", result, writeErr
-		}
-		return "", controller.ReconcileResult{}, err
-	}
-	round.rpmRepo = repo
-	round.rpmRepoHeld = true
-	if repo.Status.Repository == nil {
-		return c.singleContentURLReady(ctx, round, "")
-	}
-	contentURL, err := c.resolveContentURL(ctx, round, repo.Status.Repository.ContentURL)
-	if err != nil {
-		result, stopErr := c.handleArtifactURLFailure(ctx, round, err)
-		return "", result, stopErr
-	}
-	return c.singleContentURLReady(ctx, round, contentURL)
-}
-
-// Single builds with prefer clear the retry condition only after metadata is ready; without prefer, a successful
-// repository lookup is enough.
-func (c *Controller) singleContentURLReady(
-	ctx context.Context,
-	round *reconcileRound,
-	contentURL string,
-) (string, controller.ReconcileResult, error) {
-	if len(payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))) > 0 {
-		return contentURL, controller.ReconcileResult{}, nil
-	}
-	result, err := c.clearRpmRepoRetrying(ctx, round)
-	return contentURL, result, err
 }

@@ -260,7 +260,6 @@ func TestSinglePreferMetadataDownloadWaitsBeforeDispatch(t *testing.T) {
 	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
 	client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 	oldFetch := rpmMetaFetch
 	t.Cleanup(func() { rpmMetaFetch = oldFetch })
@@ -268,18 +267,17 @@ func TestSinglePreferMetadataDownloadWaitsBeforeDispatch(t *testing.T) {
 
 	for i := 0; i < c.config.RpmRepoReadyRetryLimit+2; i++ {
 		result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
-		if err != nil || !result.Requeue {
+		if err == nil {
 			t.Fatalf("reconcile = %+v, %v, want retry", result, err)
 		}
 		persisted := getBuildInfo(t, client)
 		requirePhase(t, persisted, ebsv1.BuildInfoPending)
-		requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying, ReasonRpmRepoXMLDownloadFailed)
 		requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
 		if jobs := listJobs(t, client); len(jobs) != 0 {
 			t.Fatalf("Jobs = %d, want none before metadata recovers", len(jobs))
 		}
 	}
-	c.rpmMetaSources.Set(testNS+"/"+testBuild, testSources())
+	rpmMetaFetch = singleMetadataFixture
 	reconcileOnce(t, c)
 	recovered := getBuildInfo(t, client)
 	requirePhase(t, recovered, ebsv1.BuildInfoProcessing)

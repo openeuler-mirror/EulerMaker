@@ -10,7 +10,6 @@ import (
 
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
-	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	"controller-manager/pkg/controllers/specname"
 	ebsv1 "ebs-api/ebs/v1"
@@ -767,8 +766,8 @@ func TestSinglePassThrough(t *testing.T) {
 		if payload["spec_name"] != "b" || payload["commit_id"] != "c2" {
 			t.Fatalf("payload = %v, want spec_name/commit_id injected", payload)
 		}
-		if _, exists := payload["repo"]; exists {
-			t.Fatalf("payload = %v, want no repo injection (404 RpmRepo, no bootstrap)", payload)
+		if got, want := payload["repo"], []any{map[string]any{"url": testReleaseReference, "priority": float64(10)}}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("payload repo = %v, want %v", got, want)
 		}
 	}
 }
@@ -784,8 +783,6 @@ func TestSingleRepoInjection(t *testing.T) {
 	client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	// Same-name RpmRepo contentURL is the creation-time inherited baseline.
-	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 
 	reconcileOnce(t, c)
@@ -796,7 +793,7 @@ func TestSingleRepoInjection(t *testing.T) {
 	}
 	payload := payloadFields(t, jobs[0].Spec.Payload)
 	if got, want := payload["repo"], []any{
-		map[string]any{"url": testRepoURL, "priority": float64(10)},
+		map[string]any{"url": testReleaseReference, "priority": float64(10)},
 		map[string]any{"url": "http://bootstrap.local/base/" + testArch, "priority": float64(99)},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("payload repo = %v, want %v", got, want)
@@ -811,7 +808,6 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 	client.SetBuildTargetContent(testBuildTargetContent())
 	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	client.SeedRpmRepo(testRpmRepoObj("artifact:///repositories/v1/repo-1/"))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
 
 	reconcileOnce(t, c)
@@ -820,7 +816,7 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("jobs = %d, want 1", len(jobs))
 	}
-	want := []any{map[string]any{"url": "artifact:///repositories/v1/repo-1/", "priority": float64(10)}}
+	want := []any{map[string]any{"url": testReleaseReference, "priority": float64(10)}}
 	if !reflect.DeepEqual(
 		payloadFields(t, jobs[0].Spec.Payload)["repo"],
 		want,
@@ -868,23 +864,10 @@ func TestSinglePreferWithoutDependencyGate(t *testing.T) {
 	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
 	client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	client.SeedRpmRepo(testRpmRepoObj(testRepoURL))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a", "cap", "missing")})
-	sources := testSources(
-		rpmver.RpmMeta{
-			Name:     "rpm-a",
-			Version:  "0:1.0-1",
-			SpecName: "spec-a",
-			Provides: map[string]string{"cap": "0:1.0-1"},
-		},
-		rpmver.RpmMeta{
-			Name:     "rpm-b",
-			Version:  "0:2.0-1",
-			SpecName: "spec-b",
-			Provides: map[string]string{"cap": "0:2.0-1"},
-		},
-	)
-	c.rpmMetaSources.Set(testNS+"/"+testBuild, sources)
+	oldFetch := rpmMetaFetch
+	t.Cleanup(func() { rpmMetaFetch = oldFetch })
+	rpmMetaFetch = singleMetadataFixture
 
 	reconcileOnce(t, c)
 	jobs := listJobs(t, client)
