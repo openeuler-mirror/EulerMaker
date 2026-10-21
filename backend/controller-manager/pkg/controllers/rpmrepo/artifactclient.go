@@ -108,7 +108,6 @@ type CreateReleaseRequest struct {
 type ReleaseResponse struct {
 	BuildName        string       `json:"buildName"`
 	State            ReleaseState `json:"state"`
-	Attempt          int          `json:"attempt"`
 	PollAfterSeconds int          `json:"pollAfterSeconds,omitempty"`
 	ContentURL       string       `json:"contentURL,omitempty"`
 	Failure          *FailureInfo `json:"failure,omitempty"`

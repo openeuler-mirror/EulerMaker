@@ -322,8 +322,6 @@ func releaseContractViolation(repo *ebsv1.RpmRepo, response ReleaseResponse) str
 	switch {
 	case response.BuildName != repo.Name:
 		return "ReleaseIdentityMismatch"
-	case response.Attempt < 1:
-		return "InvalidAttempt"
 	case response.UpdatedAt.IsZero():
 		return "MissingUpdatedAt"
 	}

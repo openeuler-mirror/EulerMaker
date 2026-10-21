@@ -43,9 +43,7 @@ type ReleaseRecord struct {
 	ExcludeSpecs        []string     `json:"excludeSpecs,omitempty"`
 	RequestDigest       string       `json:"requestDigest"`
 	State               ReleaseState `json:"state"`
-	Attempt             int          `json:"attempt"`
 	ReleaseDigest       string       `json:"releaseDigest,omitempty"`
-	ContentURL          string       `json:"contentURL,omitempty"`
 	Failure             *FailureInfo `json:"failure,omitempty"`
 	CreatedAt           time.Time    `json:"createdAt"`
 	UpdatedAt           time.Time    `json:"updatedAt"`
@@ -55,7 +53,6 @@ type ReleaseRecord struct {
 type ReleaseResponse struct {
 	BuildName        string       `json:"buildName"`
 	State            ReleaseState `json:"state"`
-	Attempt          int          `json:"attempt"`
 	PollAfterSeconds int          `json:"pollAfterSeconds,omitempty"`
 	ContentURL       string       `json:"contentURL,omitempty"`
 	Failure          *FailureInfo `json:"failure,omitempty"`

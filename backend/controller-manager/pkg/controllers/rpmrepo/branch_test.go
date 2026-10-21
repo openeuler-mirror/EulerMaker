@@ -25,7 +25,7 @@ func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, Attempt: 2, PollAfterSeconds: 9, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 9, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -282,10 +282,10 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 	}
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, Attempt: 1, ContentURL: "/repositories/project/openEuler/aarch64/", UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/project/openEuler/aarch64/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 

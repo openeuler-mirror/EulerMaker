@@ -40,7 +40,21 @@ func NewManager(root string, c Config, repositories *repository.Manager, materia
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{root: root, publicKey: c.PublicKey, timeout: c.Timeout, historyTTL: c.HistoryTTL, historyCount: c.HistoryCount, repositories: repositories, materializer: materializer, records: map[string]*ReleaseRecord{}, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, c.QueueCapacity), ctx: ctx, cancel: cancel}
+	m := &Manager{
+		root:         root,
+		publicKey:    c.PublicKey,
+		timeout:      c.Timeout,
+		historyTTL:   c.HistoryTTL,
+		historyCount: c.HistoryCount,
+		repositories: repositories,
+		materializer: materializer,
+		records:      map[string]*ReleaseRecord{},
+		queued:       map[string]bool{},
+		running:      map[string]bool{},
+		queue:        make(chan string, c.QueueCapacity),
+		ctx:          ctx,
+		cancel:       cancel,
+	}
 	if err := m.recover(c.WorkTTL); err != nil {
 		cancel()
 		return nil, err
@@ -64,7 +78,11 @@ func NewManager(root string, c Config, repositories *repository.Manager, materia
 }
 
 func normalizeReleaseRequest(in CreateReleaseRequest) (CreateReleaseRequest, string, error) {
-	if !validIdentifier(in.BuildName) || !validIdentifier(in.Project) || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || !validIdentifier(in.SourceRepositoryUID) {
+	if !validIdentifier(in.BuildName) ||
+		!validIdentifier(in.Project) ||
+		!validIdentifier(in.TargetOS) ||
+		!validIdentifier(in.TargetArch) ||
+		!validIdentifier(in.SourceRepositoryUID) {
 		return in, "", &Error{Code: "InvalidReleaseRequest", Status: http.StatusUnprocessableEntity}
 	}
 	sort.Strings(in.ExcludeSpecs)
@@ -92,7 +110,12 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	if sourceErr != nil {
 		return nil, 0, releaseStorageError()
 	}
-	if !ok || source.State != repository.RepositoryReady || source.Project != in.Project || source.BuildName != in.BuildName || source.TargetOS != in.TargetOS || source.TargetArch != in.TargetArch {
+	if !ok ||
+		source.State != repository.RepositoryReady ||
+		source.Project != in.Project ||
+		source.BuildName != in.BuildName ||
+		source.TargetOS != in.TargetOS ||
+		source.TargetArch != in.TargetArch {
 		return nil, 0, &Error{Code: "SourceRepositoryNotReady", Status: http.StatusUnprocessableEntity}
 	}
 	m.mu.Lock()
@@ -119,7 +142,6 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 			if len(m.queue) >= cap(m.queue) {
 				return nil, 0, &Error{Code: "ReleaseQueueFull", Status: http.StatusTooManyRequests, Retryable: true}
 			}
-			old.Attempt++
 			old.State, old.Failure, old.UpdatedAt = ReleaseCreating, nil, time.Now().UTC()
 			if err := m.persist(old); err != nil {
 				return nil, 0, releaseStorageError()
@@ -132,7 +154,19 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 		return nil, 0, &Error{Code: "ReleaseQueueFull", Status: http.StatusTooManyRequests, Retryable: true}
 	}
 	now := time.Now().UTC()
-	record := &ReleaseRecord{SchemaVersion: 1, BuildName: in.BuildName, Project: in.Project, TargetOS: in.TargetOS, TargetArch: in.TargetArch, SourceRepositoryUID: in.SourceRepositoryUID, ExcludeSpecs: in.ExcludeSpecs, RequestDigest: digest, State: ReleaseCreating, Attempt: 1, CreatedAt: now, UpdatedAt: now}
+	record := &ReleaseRecord{
+		SchemaVersion:       1,
+		BuildName:           in.BuildName,
+		Project:             in.Project,
+		TargetOS:            in.TargetOS,
+		TargetArch:          in.TargetArch,
+		SourceRepositoryUID: in.SourceRepositoryUID,
+		ExcludeSpecs:        in.ExcludeSpecs,
+		RequestDigest:       digest,
+		State:               ReleaseCreating,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
 	if err := m.persist(record); err != nil {
 		return nil, 0, releaseStorageError()
 	}
@@ -259,7 +293,7 @@ func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 		}
 	}
 	now := time.Now().UTC()
-	record.State, record.ContentURL, record.UpdatedAt = ReleaseReady, releaseContentURL(record), now
+	record.State, record.UpdatedAt = ReleaseReady, now
 	if record.CompletedAt == nil {
 		record.CompletedAt = &now
 	}
@@ -431,7 +465,10 @@ func (m *Manager) readRecord(name string) (*ReleaseRecord, error) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return nil, err
 	}
-	if record.BuildName != name || !validIdentifier(record.Project) || !validIdentifier(record.TargetOS) || !validIdentifier(record.TargetArch) {
+	if record.BuildName != name ||
+		!validIdentifier(record.Project) ||
+		!validIdentifier(record.TargetOS) ||
+		!validIdentifier(record.TargetArch) {
 		return nil, errors.New("invalid release metadata")
 	}
 	return &record, nil
@@ -464,7 +501,17 @@ func cloneRelease(in *ReleaseRecord) *ReleaseRecord {
 }
 
 func ResponseFor(record *ReleaseRecord) ReleaseResponse {
-	response := ReleaseResponse{BuildName: record.BuildName, State: record.State, Attempt: record.Attempt, ContentURL: record.ContentURL, Failure: record.Failure, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, CompletedAt: record.CompletedAt}
+	response := ReleaseResponse{
+		BuildName:   record.BuildName,
+		State:       record.State,
+		Failure:     record.Failure,
+		CreatedAt:   record.CreatedAt,
+		UpdatedAt:   record.UpdatedAt,
+		CompletedAt: record.CompletedAt,
+	}
+	if record.State == ReleaseReady {
+		response.ContentURL = releaseContentURL(record)
+	}
 	if record.State == ReleaseCreating || record.State == ReleasePrepared {
 		response.PollAfterSeconds = 5
 	}

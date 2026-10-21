@@ -216,7 +216,7 @@ func TestReleaseReplayIsDeferredAfterOneAttempt(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
 	response := func(buildName string) ReleaseResponse {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Attempt: 1, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}
+		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}
 	}
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
 		return response(buildName), nil

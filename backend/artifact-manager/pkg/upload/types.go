@@ -77,7 +77,6 @@ const (
 	LogFinalizing LogState = "Finalizing"
 	LogCompleted  LogState = "Completed"
 	LogFailed     LogState = "Failed"
-	LogExpired    LogState = "Expired"
 )
 
 type LogChunkRecord struct {
@@ -103,5 +102,4 @@ type LogStream struct {
 	CreatedAt      time.Time    `json:"createdAt"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
 	CompletedAt    *time.Time   `json:"completedAt,omitempty"`
-	ExpiresAt      *time.Time   `json:"expiresAt,omitempty"`
 }

@@ -39,7 +39,7 @@ func releaseCandidateFixture(t *testing.T, mutate func(*ebsv1.RpmRepo), policy P
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 	c, err := New(&stubSource{}, client, artifacts, policy, clocktesting.NewFakeClock(now), testConfig())
@@ -148,10 +148,10 @@ func TestReleaseReplaysRetryableFailureWithFrozenCheckpoint(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Attempt: 1, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, Attempt: 2, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 

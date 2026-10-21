@@ -14,7 +14,14 @@ import (
 )
 
 func TestReleaseRequestNormalization(t *testing.T) {
-	request := CreateReleaseRequest{BuildName: "build", Project: "project", TargetOS: "os", TargetArch: "arch", SourceRepositoryUID: "repository", ExcludeSpecs: []string{"z", "a", "a"}}
+	request := CreateReleaseRequest{
+		BuildName:           "build",
+		Project:             "project",
+		TargetOS:            "os",
+		TargetArch:          "arch",
+		SourceRepositoryUID: "repository",
+		ExcludeSpecs:        []string{"z", "a", "a"},
+	}
 	normalized, first, err := normalizeReleaseRequest(request)
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +29,16 @@ func TestReleaseRequestNormalization(t *testing.T) {
 	if len(normalized.ExcludeSpecs) != 2 || normalized.ExcludeSpecs[0] != "a" || normalized.ExcludeSpecs[1] != "z" {
 		t.Fatalf("exclude specs = %#v", normalized.ExcludeSpecs)
 	}
-	_, second, err := normalizeReleaseRequest(CreateReleaseRequest{BuildName: "build", Project: "project", TargetOS: "os", TargetArch: "arch", SourceRepositoryUID: "repository", ExcludeSpecs: []string{"a", "z"}})
+	_, second, err := normalizeReleaseRequest(
+		CreateReleaseRequest{
+			BuildName:           "build",
+			Project:             "project",
+			TargetOS:            "os",
+			TargetArch:          "arch",
+			SourceRepositoryUID: "repository",
+			ExcludeSpecs:        []string{"a", "z"},
+		},
+	)
 	if err != nil || first != second {
 		t.Fatalf("digest mismatch: %q %q, %v", first, second, err)
 	}
@@ -35,7 +51,13 @@ func TestReleaseRequestNormalization(t *testing.T) {
 func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	root := t.TempDir()
 	command := filepath.Join(root, "createrepo-test")
-	script := "#!/bin/sh\nfor last; do :; done\nmkdir -p \"$last/repodata\"\nprintf primary > \"$last/repodata/primary.xml\"\nsum=$(sha256sum \"$last/repodata/primary.xml\" | cut -d' ' -f1)\nprintf '<repomd><data type=\"primary\"><checksum type=\"sha256\">%s</checksum><location href=\"repodata/primary.xml\"/></data></repomd>' \"$sum\" > \"$last/repodata/repomd.xml\"\n"
+	script := "#!/bin/sh\n" +
+		"for last; do :; done\n" +
+		"mkdir -p \"$last/repodata\"\n" +
+		"printf primary > \"$last/repodata/primary.xml\"\n" +
+		"sum=$(sha256sum \"$last/repodata/primary.xml\" | cut -d' ' -f1)\n" +
+		"printf '<repomd><data type=\"primary\"><checksum type=\"sha256\">%s</checksum>" +
+		"<location href=\"repodata/primary.xml\"/></data></repomd>' \"$sum\" > \"$last/repodata/repomd.xml\"\n"
 	if err := os.WriteFile(command, []byte(script), 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +71,39 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		t.Fatal(err)
 	}
 	materializer := NewFilesystemMaterializer(root, c, repoConfig)
-	source := repository.RepositoryRecord{RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64", RPMs: map[string]repository.RepositoryRPMMeta{
-		"keep+1.rpm": {FileName: "keep+1.rpm", SpecName: "keep", Size: int64(len("keep+1.rpm")), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("keep+1.rpm")))},
-		"skip.rpm":   {FileName: "skip.rpm", SpecName: "skip", Size: int64(len("skip.rpm")), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("skip.rpm")))},
-	}}
-	sourcePackages := filepath.Join(root, "repositories", source.Project, source.TargetOS, source.TargetArch, "history", source.BuildName, "steps", source.RepositoryUID, "Packages")
+	source := repository.RepositoryRecord{
+		RepositoryUID: "source",
+		Project:       "project",
+		BuildName:     "build",
+		TargetOS:      "openEuler",
+		TargetArch:    "x86_64",
+		RPMs: map[string]repository.RepositoryRPMMeta{
+			"keep+1.rpm": {
+				FileName: "keep+1.rpm",
+				SpecName: "keep",
+				Size:     int64(len("keep+1.rpm")),
+				SHA256:   fmt.Sprintf("%x", sha256.Sum256([]byte("keep+1.rpm"))),
+			},
+			"skip.rpm": {
+				FileName: "skip.rpm",
+				SpecName: "skip",
+				Size:     int64(len("skip.rpm")),
+				SHA256:   fmt.Sprintf("%x", sha256.Sum256([]byte("skip.rpm"))),
+			},
+		},
+	}
+	sourcePackages := filepath.Join(
+		root,
+		"repositories",
+		source.Project,
+		source.TargetOS,
+		source.TargetArch,
+		"history",
+		source.BuildName,
+		"steps",
+		source.RepositoryUID,
+		"Packages",
+	)
 	if err := os.MkdirAll(sourcePackages, 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +112,15 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	record := ReleaseRecord{BuildName: "build", Project: "project", TargetOS: "openEuler", TargetArch: "x86_64", SourceRepositoryUID: "source", RequestDigest: "request", ExcludeSpecs: []string{"skip"}}
+	record := ReleaseRecord{
+		BuildName:           "build",
+		Project:             "project",
+		TargetOS:            "openEuler",
+		TargetArch:          "x86_64",
+		SourceRepositoryUID: "source",
+		RequestDigest:       "request",
+		ExcludeSpecs:        []string{"skip"},
+	}
 	result, err := materializer.Create(context.Background(), record, source)
 	if err != nil {
 		t.Fatal(err)
@@ -89,15 +147,32 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	root := t.TempDir()
 	c := Config{}
-	repoConfig := repository.Config{CreateRepoCommand: filepath.Join(root, "createrepo-must-not-run"), CreateRepoWorkers: 1}
+	repoConfig := repository.Config{
+		CreateRepoCommand: filepath.Join(root, "createrepo-must-not-run"),
+		CreateRepoWorkers: 1,
+	}
 	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
 		t.Fatal(err)
 	}
 	source := repository.RepositoryRecord{
 		RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64",
-		RPMs: map[string]repository.RepositoryRPMMeta{"keep.rpm": {FileName: "keep.rpm", SpecName: "keep", Size: 3, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("rpm")))}},
+		RPMs: map[string]repository.RepositoryRPMMeta{
+			"keep.rpm": {
+				FileName: "keep.rpm",
+				SpecName: "keep",
+				Size:     3,
+				SHA256:   fmt.Sprintf("%x", sha256.Sum256([]byte("rpm"))),
+			},
+		},
 	}
-	sourcePath := repository.VersionPath(root, source.Project, source.TargetOS, source.TargetArch, source.BuildName, source.RepositoryUID)
+	sourcePath := repository.VersionPath(
+		root,
+		source.Project,
+		source.TargetOS,
+		source.TargetArch,
+		source.BuildName,
+		source.RepositoryUID,
+	)
 	if err := os.MkdirAll(filepath.Join(sourcePath, "Packages"), 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +187,21 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sourcePath, "repodata", "primary.xml"), primary, 0640); err != nil {
 		t.Fatal(err)
 	}
-	repomd := fmt.Sprintf(`<repomd><data type="primary"><checksum type="sha256">%x</checksum><location href="repodata/primary.xml"/></data></repomd>`, sha256.Sum256(primary))
+	repomd := fmt.Sprintf(
+		`<repomd><data type="primary"><checksum type="sha256">%x</checksum><location href="repodata/primary.xml"/></data></repomd>`,
+		sha256.Sum256(primary),
+	)
 	if err := os.WriteFile(filepath.Join(sourcePath, "repodata", "repomd.xml"), []byte(repomd), 0640); err != nil {
 		t.Fatal(err)
 	}
-	record := ReleaseRecord{BuildName: "build", Project: source.Project, TargetOS: source.TargetOS, TargetArch: source.TargetArch, SourceRepositoryUID: source.RepositoryUID, RequestDigest: "request"}
+	record := ReleaseRecord{
+		BuildName:           "build",
+		Project:             source.Project,
+		TargetOS:            source.TargetOS,
+		TargetArch:          source.TargetArch,
+		SourceRepositoryUID: source.RepositoryUID,
+		RequestDigest:       "request",
+	}
 	extraRPM := filepath.Join(sourcePath, "Packages", "untracked.rpm")
 	if err := os.WriteFile(extraRPM, []byte("untracked"), 0640); err != nil {
 		t.Fatal(err)
@@ -131,7 +216,15 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	releasePath := filepath.Join(root, "repositories", source.Project, source.TargetOS, source.TargetArch, "releases", record.BuildName)
+	releasePath := filepath.Join(
+		root,
+		"repositories",
+		source.Project,
+		source.TargetOS,
+		source.TargetArch,
+		"releases",
+		record.BuildName,
+	)
 	if fullDigest, err := digestReleaseDirectory(releasePath); err != nil || fullDigest != result.Digest {
 		t.Fatalf("reused release digest = %q, full digest = %q, error = %v", result.Digest, fullDigest, err)
 	}
@@ -157,12 +250,20 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 		ReleaseDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("release"))),
 	}
 	m := &Manager{root: root, records: map[string]*ReleaseRecord{}}
-	for _, dir := range []string{m.Path(record), filepath.Join(root, ".release-work"), filepath.Join(root, ".metadata/releases")} {
+	for _, dir := range []string{
+		m.Path(record),
+		filepath.Join(root, ".release-work"),
+		filepath.Join(root, ".metadata/releases"),
+	} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
 			t.Fatal(err)
 		}
 	}
-	index := releaseIndex{BuildName: record.BuildName, RequestDigest: record.RequestDigest, ReleaseDigest: record.ReleaseDigest}
+	index := releaseIndex{
+		BuildName:     record.BuildName,
+		RequestDigest: record.RequestDigest,
+		ReleaseDigest: record.ReleaseDigest,
+	}
 	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +280,10 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	}
 	if record.State != ReleaseReady {
 		t.Fatalf("matching metadata changed Ready release to %s", record.State)
+	}
+	response := ResponseFor(record)
+	if response.ContentURL != "/repositories/project/openEuler/x86_64/" {
+		t.Fatalf("recovered release content URL = %q", response.ContentURL)
 	}
 
 	index.ReleaseDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("different")))
@@ -219,12 +324,12 @@ func TestReleaseCacheTracksActiveStates(t *testing.T) {
 		}
 	}
 	// Terminal reads observe the persisted record without retaining a copy.
-	record.Attempt = 5
+	record.UpdatedAt = time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
 	if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
 		t.Fatal(err)
 	}
 	got, ok, err := m.Get(record.BuildName)
-	if err != nil || !ok || got.Attempt != 5 || len(m.records) != 0 {
+	if err != nil || !ok || !got.UpdatedAt.Equal(record.UpdatedAt) || len(m.records) != 0 {
 		t.Fatalf("disk record = %#v, cached=%d, error=%v", got, len(m.records), err)
 	}
 }
@@ -236,7 +341,13 @@ func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 	}
 	states := []ReleaseState{ReleaseCreating, ReleasePrepared, ReleaseDeleting, ReleaseFailed}
 	for _, state := range states {
-		record := &ReleaseRecord{BuildName: string(state), Project: "project", TargetOS: "os", TargetArch: "arch", State: state}
+		record := &ReleaseRecord{
+			BuildName:  string(state),
+			Project:    "project",
+			TargetOS:   "os",
+			TargetArch: "arch",
+			State:      state,
+		}
 		if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
 			t.Fatal(err)
 		}

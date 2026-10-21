@@ -132,11 +132,11 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
 		// Activation never converges: the round must still stop after one activation.
-		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -224,7 +224,7 @@ func TestReconcileReleaseDefersReadyWithoutContentURL(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, Attempt: 1, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -327,7 +327,7 @@ func TestReconcileReleaseRejectsForeignReleaseResponse(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: "other-build", State: ReleaseReady, Attempt: 1, ContentURL: "/repositories/other/", UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: "other-build", State: ReleaseReady, ContentURL: "/repositories/other/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -355,7 +355,7 @@ func TestReconcileReleaseRejectsResponseWithoutUpdatedAt(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, Attempt: 1, PollAfterSeconds: 5}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
