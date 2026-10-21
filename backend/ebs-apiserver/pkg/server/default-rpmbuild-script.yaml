@@ -53,7 +53,7 @@ spec:
 
     load_payload() {
       local repo_lines preinstall_lines priority url
-      spec_url=$(field spec_url)
+      clone_url=$(field clone_url)
       commit_id=$(field commit_id)
       spec_file=$(field spec_file_name)
       package_name=$(field package_name)
@@ -112,7 +112,7 @@ spec:
       if [[ "$use_xz" == true ]]; then
         command -v xz >/dev/null || { echo "xz is required for payload.use_xz" >&2; exit 1; }
       fi
-      test -n "$spec_url" || { echo "payload.spec_url is required" >&2; exit 1; }
+      test -n "$clone_url" || { echo "payload.clone_url is required" >&2; exit 1; }
       test -n "$package_name" || { echo "payload.package_name is required" >&2; exit 1; }
       [[ "$commit_id" =~ ^[[:xdigit:]]{40}$|^[[:xdigit:]]{64}$ ]] || { echo "invalid payload.commit_id" >&2; exit 1; }
       [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
@@ -129,7 +129,7 @@ spec:
         GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "$commit_id"
         git -C "$source_dir" lfs pull
       else
-        git clone --no-checkout -- "$spec_url" "$source_dir"
+        git clone --no-checkout -- "$clone_url" "$source_dir"
         git -C "$source_dir" checkout --detach "$commit_id"
       fi
       test -f "$source_dir/$spec_file" || { echo "spec not found: $spec_file" >&2; exit 1; }

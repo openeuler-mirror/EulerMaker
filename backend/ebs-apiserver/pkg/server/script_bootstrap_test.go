@@ -96,6 +96,44 @@ func TestDefaultRpmbuildScriptConfiguresMaven(t *testing.T) {
 	}
 }
 
+func TestDefaultRpmbuildScriptReadsCloneURL(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script := storage.object.Spec.Content
+	mainCall := strings.LastIndex(script, "\nmain \"$@\"")
+	if mainCall < 0 {
+		t.Fatal("default script main call not found")
+	}
+	script = script[:mainCall] + "\npayload=$TEST_PAYLOAD\nload_payload\nprintf '%s' \"$clone_url\"\n"
+	const cloneURL = "https://git.example/repositories/example.git"
+	data, err := json.Marshal(map[string]string{
+		"clone_url":      cloneURL,
+		"origin_url":     "https://atomgit.com/src-openeuler/example.git",
+		"commit_id":      strings.Repeat("a", 40),
+		"package_name":   "example",
+		"spec_file_name": "example.spec",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadPath := filepath.Join(t.TempDir(), "payload.json")
+	if err := os.WriteFile(payloadPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash")
+	cmd.Stdin = strings.NewReader(script)
+	cmd.Env = append(os.Environ(), "TEST_PAYLOAD="+payloadPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("load payload: %v\n%s", err, output)
+	}
+	if string(output) != cloneURL {
+		t.Fatalf("clone_url = %q, want %q", output, cloneURL)
+	}
+}
+
 func TestDefaultRpmbuildScriptIgnoresOtherInstallErrors(t *testing.T) {
 	storage := &bootstrapScriptStorage{}
 	if err := ensureDefaultScript(context.Background(), storage); err != nil {

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ func TestCTExecutorWritesResolvedRepository(t *testing.T) {
 	}
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project"}, Spec: gateway.JobSpec{
 		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
-		Payload:     `{"repo":[{"url":"artifact:///repositories/v1/repo/","priority":10}]}`,
+		Payload:     `{"origin_url":"https://atomgit.com/src-openeuler/example.git","repo":[{"url":"artifact:///repositories/v1/repo/","priority":10}]}`,
 	}}
 	executor := &CTExecutor{WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
 		Runtime: &fakeContainerRuntime{exitCode: 0}, ResolvePayload: routes.ResolvePayload}
@@ -43,5 +44,12 @@ func TestCTExecutorWritesResolvedRepository(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "http://artifact-manager:8081/repositories/v1/repo/") {
 		t.Fatalf("payload.json = %s", data)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["origin_url"]; got != "https://atomgit.com/src-openeuler/example.git" {
+		t.Fatalf("origin_url = %v", got)
 	}
 }
