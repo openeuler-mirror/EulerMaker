@@ -35,15 +35,19 @@ type reconcileRound struct {
 	jobs       []ebsv1.Job
 	jobsLoaded bool
 
-	project           *ebsv1.Project
-	build             *ebsv1.Build
-	rpmRepo           *ebsv1.RpmRepo
-	rpmRepoHeld       bool
-	scriptRef         *ebsv1.ScriptRef
-	resourceContent   *ebsv1.BuildResourceContent
-	artifactEndpoints map[string]string
-	jobCreateRequests int
-	createdJobs       map[string]createdJob
+	project             *ebsv1.Project
+	build               *ebsv1.Build
+	rpmRepo             *ebsv1.RpmRepo
+	rpmRepoHeld         bool
+	scriptRef           *ebsv1.ScriptRef
+	resourceContent     *ebsv1.BuildResourceContent
+	artifactEndpoints   map[string]string
+	singleRepoChecked   bool
+	singleRepoReference string
+	singleRepoURL       string
+	singlePreferSources *rpmver.RpmMetaSources
+	jobCreateRequests   int
+	createdJobs         map[string]createdJob
 
 	failures *roundFailures
 }

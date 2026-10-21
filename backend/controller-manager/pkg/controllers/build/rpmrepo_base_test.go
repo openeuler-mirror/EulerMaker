@@ -146,33 +146,27 @@ func TestPendingDoesNotBackfillLabelsOnExistingRpmRepo(t *testing.T) {
 	}
 }
 
-func TestPendingCreatesSkippedRpmRepoForSingleBuild(t *testing.T) {
+func TestPendingSingleBuildPreparesWithoutRepository(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", "single", []string{"gcc"}), "build-prev")
+	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "single", []string{"gcc"})
 	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if api.CallCount("GetRpmRepo") != 2 || api.CallCount("CreateRpmRepo") != 1 {
-		t.Fatal("single builds must resolve the baseline and create their RpmRepo")
-	}
-	repo := api.rpmRepo("project-a", "build-a")
-	if repo.Status.Release == nil || repo.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || repo.Status.Repository != nil {
-		t.Fatalf("expected Skipped without a missing historical baseline: %+v", repo.Status)
+	if api.CallCount("GetRpmRepo") != 0 || api.CallCount("CreateRpmRepo") != 0 ||
+		api.CallCount("GetLastPublishedBuild") != 0 {
+		t.Fatalf("single build queried repository history: %v", api.calls)
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared {
 		t.Fatalf("phase = %q", stored.Status.Phase)
 	}
 }
 
-func TestSingleRpmRepoKeepsBaseline(t *testing.T) {
+func TestRpmRepoKeepsBaseline(t *testing.T) {
 	for _, base := range []repositoryBase{{}, {repositoryUID: "version", contentURL: "https://artifact/repositories/v1/version/"}} {
-		build := newBuild("project-a", "build-a", "single", []string{"gcc"})
+		build := newBuild("project-a", "build-a", "full", []string{"gcc"})
 		repo := newRpmRepo(build, base)
-		if repo.Status.Release == nil || repo.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || repo.Status.Release.ContentURL != "" || repo.Status.Release.Transition != nil {
-			t.Fatalf("unexpected release: %+v", repo.Status.Release)
-		}
 		if base.repositoryUID == "" {
 			if repo.Status.Repository != nil {
 				t.Fatal("empty baseline must stay nil")

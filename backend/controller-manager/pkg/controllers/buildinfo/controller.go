@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -30,6 +31,8 @@ const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!
 
 // Config carries the BuildInfo controller settings.
 type Config struct {
+	// ArtifactManagerTimeout bounds a stable release probe.
+	ArtifactManagerTimeout time.Duration
 	// PollPeriod is the PollingSource resync period (--poll-period shared).
 	PollPeriod time.Duration
 	// MaxRetries is the fast-backoff budget before slow retry (shared).
@@ -64,11 +67,12 @@ func (c Config) validate() error {
 // Controller assembles, dispatches and aggregates one BuildInfo.
 type Controller struct {
 	*controller.BaseController
-	buildInfos source.Source
-	client     Client
-	gitServer  gitserver.GitServerClient
-	clock      clock.Clock
-	config     Config
+	buildInfos    source.Source
+	client        Client
+	gitServer     gitserver.GitServerClient
+	clock         clock.Clock
+	config        Config
+	releaseClient *http.Client
 
 	// Per-BuildInfo caches share a tombstone lifecycle and use namespace/name keys.
 	dcgDict          *perBuildInfoCache[*graphCacheEntry]
@@ -96,7 +100,11 @@ func New(
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
+	if config.ArtifactManagerTimeout <= 0 {
+		config.ArtifactManagerTimeout = 30 * time.Second
+	}
 	c := &Controller{
+		releaseClient:    newReleaseClient(config.ArtifactManagerTimeout),
 		buildInfos:       buildInfos,
 		client:           client,
 		gitServer:        gitServer,

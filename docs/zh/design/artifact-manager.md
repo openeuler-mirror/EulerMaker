@@ -59,6 +59,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
+| BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{os}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/releases/{buildName}` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/releases/{buildName}` | 删除正式发布记录 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases/{buildName}/activate` | 激活指定正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
@@ -647,7 +648,7 @@ Artifact Manager 不监听 Job，不访问 ebs-apiserver、Elasticsearch 或 etc
 
 #### 8.3.3 控制面调用契约
 
-Build Controller 创建 RpmRepo；RpmRepo Controller 选择基础仓和输入 Job，持久化检查点，再调用本章内部接口并根据结果更新 `RpmRepo.status`。single 或不发布构建的处理、批次选择、发布门禁及控制面重启恢复统一见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md)。
+仅非 single 的 Build Controller 创建 RpmRepo；RpmRepo Controller 选择基础仓和输入 Job，持久化检查点，再调用本章内部接口并根据结果更新 `RpmRepo.status`。不发布构建的处理、批次选择、发布门禁及控制面重启恢复统一见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md)。
 
 Artifact Manager 校验每个输入的 Completed Manifest。可定位的输入错误通过 `failure.jobName` 返回，供调用方跳过异常输入并重新组批；服务端状态与错误契约分别见 8.5、8.6.5 和 8.9。
 
@@ -1102,6 +1103,30 @@ GET /repositories/releases/v1/{buildName}/{path...}
 稳定 URL 不返回重定向，避免客户端缓存历史 Build name；服务端在单次请求开始时取得 `current` 的目标快照，该请求的全部文件读取只能落到同一个 release。根目录的 `Packages`、`repodata` 和公钥链接固定指向 `current` 下的对应名称，因此切换时只需要替换一条 `current` 链接。
 
 原子切换只保证单次请求的版本一致性，不提供跨 HTTP 请求的快照。DNF 在切换前取得旧 repomd、切换后按旧文件名读取元数据时可能遇到 404；当前不在稳定入口合并保留旧版本文件。需要固定版本的调用方使用不可变版本 URL，并与保留策略协调；稳定入口的调用方在切换期间可能需要刷新元数据后重试。
+
+#### 稳定入口的发布可用性确认
+
+single 构建不创建 RpmRepo。BuildInfo Controller 在派发前直接 GET 已有稳定内容接口：
+
+```http
+GET /repositories/{project}/{os}/{arch}/repodata/repomd.xml
+```
+
+此请求不触发发布、物化或状态推进，不扫描历史发布记录，也不遍历或校验全部 RPM。只按当前指针读取对应目标的发布状态与 repomd.xml，响应如下：
+
+| 场景 | 响应 | 调用方行为 |
+| --- | --- | --- |
+| current 指向匹配目标的 Ready 发布，repomd.xml 可读 | 200，XML 正文，沿用内容接口的 ETag/Range 等规则 | 校验有效 XML 后使用稳定 base URL |
+| 合法目标路径尚无 current 指针 | 404，APIError.code=ReleaseNotPublished，retryable=false | 仅使用 bootstrapRepo |
+| current 已存在，但目标记录缺失、身份不匹配、未 Ready，或 repomd.xml 缺失/不可读 | 503，APIError.code=ReleaseContentUnavailable，retryable=true | 暂停新派发并重试，不作为尚未发布 |
+| 文件系统访问失败、恢复尚未完成 | 503，APIError.code=ReleaseStorageUnavailable，retryable=true | 重试 |
+| 参数非法 | 400，APIError.code=InvalidRequest | 修正请求，不能按未发布处理 |
+
+错误正文使用统一 APIError JSON。只有明确的 current 不存在才能返回 ReleaseNotPublished；权限错误、I/O 错误、损坏链接、缺失目标文件不能混为该结果。其他内容路径仍沿用原有文件不存在语义，客户端不能把普通 404 或 ReleaseNotFound 当作未发布。启动恢复未能判定目标可用性时返回 503。
+
+single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{os}/{arch}/`，不是某个 buildName 的发布版本或过程仓。它与当前发布指针同步更新；探测成功不保证后续所有请求属于同一版本，切换时的跨请求一致性边界沿用上文。
+
+验收覆盖：未发布目标的专用错误码、Ready 响应、current/记录/repomd 损坏或权限错误、恢复中返回 503、普通 404 不被降级、确认请求不触发写入或全量仓库扫描。
 
 ### 9.4 发布算法与原子切换
 

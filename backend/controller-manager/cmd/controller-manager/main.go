@@ -68,7 +68,8 @@ func main() {
 		}),
 		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, gitClient),
 		buildinfocontroller.Name: buildinfocontroller.Initializer(buildinfocontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries,
-			DcgPruneGrace: o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
+			ArtifactManagerTimeout: o.ArtifactManager.Timeout,
+			DcgPruneGrace:          o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
 			SnapshotReadyRetryLimit: o.BuildInfo.SnapshotReadyRetryLimit, SpecFileCacheSize: o.BuildInfo.SpecFileCacheSize,
 		}, gitClient),
 	}

@@ -101,6 +101,72 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 	return server, request, releaseMaterializer
 }
 
+func TestStableReleaseAvailability(t *testing.T) {
+	server, request, materializer := newReleaseTestServer(t)
+	base := "/repositories/" + request.Project + "/" + request.TargetOS + "/" + request.TargetArch + "/"
+	targetDir := filepath.Join(server.cfg.DataDir, "repositories", request.Project, request.TargetOS, request.TargetArch)
+	assertResponse := func(status int, code string) {
+		t.Helper()
+		response := repositoryRequest(t, server, http.MethodGet, base+"repodata/repomd.xml", nil)
+		var body struct {
+			Code string `json:"code"`
+		}
+		if status != http.StatusOK {
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if response.Code != status || body.Code != code {
+			t.Fatalf("probe = %d %s, want %d %s", response.Code, response.Body.String(), status, code)
+		}
+	}
+	assertResponse(http.StatusNotFound, "ReleaseNotPublished")
+	if err := os.MkdirAll(targetDir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	current := filepath.Join(targetDir, "current")
+	for _, target := range []string{"invalid", "releases/missing"} {
+		if err := os.Symlink(target, current); err != nil {
+			t.Fatal(err)
+		}
+		assertResponse(http.StatusServiceUnavailable, "ReleaseContentUnavailable")
+		if err := os.Remove(current); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(materializer.release)
+	response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("submit = %d: %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(time.Second)
+	var ready *release.ReleaseRecord
+	for {
+		record, exists, err := server.releases.Get(request.BuildName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists && record.State == release.ReleaseReady {
+			ready = record
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("release did not become ready")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	assertResponse(http.StatusOK, "")
+	if err := os.Remove(filepath.Join(server.releases.Path(ready), "repodata", "repomd.xml")); err != nil {
+		t.Fatal(err)
+	}
+	assertResponse(http.StatusServiceUnavailable, "ReleaseContentUnavailable")
+	// Other missing content still uses the ordinary content-route response.
+	response = repositoryRequest(t, server, http.MethodGet, base+"Packages/missing.rpm", nil)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing RPM = %d", response.Code)
+	}
+}
+
 func writeTestRepositoryIndex(t *testing.T, manager *repository.Manager, record *repository.RepositoryRecord) {
 	t.Helper()
 	path := manager.RepositoryPath(record)

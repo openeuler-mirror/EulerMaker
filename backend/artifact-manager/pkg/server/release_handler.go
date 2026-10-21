@@ -134,23 +134,34 @@ func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 4)
 	if len(parts) != 4 || !validIdentifier(parts[0]) || !validIdentifier(parts[1]) || !validIdentifier(parts[2]) {
-		s.releaseNotFound(w, r)
+		writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid release path", false, nil)
 		return
 	}
-	record, err := s.currentRelease(parts[0], parts[1], parts[2])
+	record, err := s.lookupCurrentRelease(parts[0], parts[1], parts[2], parts[3] == "repodata/repomd.xml")
 	if err != nil {
 		s.writeReleaseError(w, r, err)
 		return
 	}
 	if record == nil {
-		s.releaseNotFound(w, r)
+		if parts[3] == "repodata/repomd.xml" {
+			writeErr(w, r, http.StatusNotFound, "ReleaseNotPublished", "release not published", false, nil)
+		} else {
+			s.releaseNotFound(w, r)
+		}
 		return
 	}
-	s.serveReleaseFile(w, r, record, parts[3])
+	s.serveReleaseContent(w, r, record, parts[3], parts[3] == "repodata/repomd.xml")
 }
 
 func (s *Server) currentRelease(project, targetOS, targetArch string) (*release.ReleaseRecord, error) {
+	return s.lookupCurrentRelease(project, targetOS, targetArch, false)
+}
+
+func (s *Server) lookupCurrentRelease(project, targetOS, targetArch string, probe bool) (*release.ReleaseRecord, error) {
 	current := filepath.Join(s.cfg.DataDir, "repositories", project, targetOS, targetArch, "current")
+	if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink == 0 && probe {
+		return nil, releaseContentUnavailable()
+	}
 	target, err := os.Readlink(current)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -160,6 +171,9 @@ func (s *Server) currentRelease(project, targetOS, targetArch string) (*release.
 	}
 	targetParts := strings.Split(filepath.ToSlash(target), "/")
 	if len(targetParts) != 2 || targetParts[0] != "releases" || !validIdentifier(targetParts[1]) {
+		if probe {
+			return nil, releaseContentUnavailable()
+		}
 		return nil, nil
 	}
 	record, ok, err := s.releases.Get(targetParts[1])
@@ -167,12 +181,23 @@ func (s *Server) currentRelease(project, targetOS, targetArch string) (*release.
 		return nil, err
 	}
 	if !ok || record.State != release.ReleaseReady || record.Project != project || record.TargetOS != targetOS || record.TargetArch != targetArch {
+		if probe {
+			return nil, releaseContentUnavailable()
+		}
 		return nil, nil
 	}
 	return record, nil
 }
 
 func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *release.ReleaseRecord, value string) {
+	s.serveReleaseContent(w, r, record, value, false)
+}
+
+func releaseContentUnavailable() error {
+	return &release.Error{Code: "ReleaseContentUnavailable", Status: http.StatusServiceUnavailable, Retryable: true}
+}
+
+func (s *Server) serveReleaseContent(w http.ResponseWriter, r *http.Request, record *release.ReleaseRecord, value string, probe bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		method(w, "GET, HEAD")
 		return
@@ -190,12 +215,20 @@ func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record
 	path = filepath.Join(path, filepath.FromSlash(relative))
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
-		s.releaseNotFound(w, r)
+		if probe {
+			s.writeReleaseError(w, r, releaseContentUnavailable())
+		} else {
+			s.releaseNotFound(w, r)
+		}
 		return
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		s.releaseNotFound(w, r)
+		if probe {
+			s.writeReleaseError(w, r, releaseContentUnavailable())
+		} else {
+			s.releaseNotFound(w, r)
+		}
 		return
 	}
 	defer file.Close()

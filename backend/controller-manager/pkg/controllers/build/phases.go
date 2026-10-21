@@ -22,10 +22,9 @@ const (
 	specStatusSucceeded = "Succeeded"
 )
 
-// pending fixes the base build reference once, then ensures the Snapshot (and, for non single builds, the
-// RpmRepo) before advancing to Prepared.
+// pending ensures the Snapshot before advancing to Prepared. Non-single builds also resolve the base and ensure RpmRepo.
 func (r *reconciler) pending() (controller.ReconcileResult, error) {
-	if r.current.Status.BaseBuildRef == nil {
+	if r.current.Spec.BuildType != buildTypeSingle && r.current.Status.BaseBuildRef == nil {
 		return r.recordBaseBuildRef()
 	}
 	snapshot, outcome := r.ensureSnapshot()
@@ -48,8 +47,10 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 			r.current = updated
 		}
 	}
-	if _, outcome := r.ensureRpmRepo(); !outcome.ready {
-		return outcome.result(), outcome.err
+	if r.current.Spec.BuildType != buildTypeSingle {
+		if _, outcome := r.ensureRpmRepo(); !outcome.ready {
+			return outcome.result(), outcome.err
+		}
 	}
 	target := r.current.DeepCopy()
 	target.Status.Phase = ebsv1.BuildPrepared

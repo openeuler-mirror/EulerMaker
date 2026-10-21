@@ -138,6 +138,13 @@ func (c *Controller) dispatchSpec(
 		name = jobNameFor(string(round.current.UID), specName, generation)
 	}
 
+	if round.isSingle() {
+		contentURL, err = c.singleContentURL(ctx, round)
+		if err != nil {
+			return controller.ReconcileResult{}, err
+		}
+	}
+
 	// The cluster-wide default table is the sole source of Job resources.
 	resource := round.resourceContent
 	if resource == nil {
@@ -192,13 +199,10 @@ func (c *Controller) dispatchSpec(
 		var reason string
 		sources, reason, err = c.loadSinglePreferSources(ctx, round, contentURL)
 		if err != nil {
-			_, result, failureErr := c.rpmMetaUnavailable(ctx, round, reason, err)
-			if failureErr == nil && result == (controller.ReconcileResult{}) {
-				// A single build may have dispatched earlier specs this round. Requeue stops further dispatch and lets reconcile
-				// flush them.
-				return controller.ReconcileResult{Requeue: true}, nil
+			if deterministicRpmRepoError(err) {
+				return controller.ReconcileResult{}, controller.NewPermanentError(err)
 			}
-			return result, failureErr
+			return controller.ReconcileResult{}, fmt.Errorf("single repository metadata (%s): %w", reason, err)
 		}
 		if result, err := c.clearRpmRepoRetrying(ctx, round); err != nil || result != (controller.ReconcileResult{}) {
 			return result, err
@@ -573,7 +577,7 @@ func (c *Controller) jobPayload(
 	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
 	repoReference := jobRepositoryReference(round, contentURL)
 	repoURLs := repoPayloadURLs(repoReference, bootstrapRepos)
-	if len(repoURLs) == 0 {
+	if len(repoURLs) == 0 && !round.isSingle() {
 		// Use an explicitly configured fallback, but emit the same array shape as repositories resolved by the controller.
 		repoURLs = configuredRepoURLs(configured["repo"])
 	}
@@ -592,9 +596,11 @@ func (c *Controller) jobPayload(
 	return c.marshalPayload(round, payload)
 }
 
-// jobRepositoryReference keeps the RpmRepo's location independent of the controller's internal Artifact Manager
-// address. The controller resolves that location separately when downloading repository metadata.
+// jobRepositoryReference keeps Job repository locations independent of the controller's internal Artifact Manager address.
 func jobRepositoryReference(round *reconcileRound, resolvedURL string) string {
+	if round.isSingle() {
+		return round.singleRepoReference
+	}
 	if !round.rpmRepoHeld {
 		return resolvedURL
 	}

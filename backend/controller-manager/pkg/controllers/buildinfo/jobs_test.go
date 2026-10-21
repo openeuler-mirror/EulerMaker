@@ -355,6 +355,7 @@ func TestJobPayloadKeepsArtifactReference(t *testing.T) {
 
 func TestJobRepositoryReferenceNormalizesArtifactPath(t *testing.T) {
 	round := &reconcileRound{
+		build:       testBuildObj("full"),
 		rpmRepo:     testRpmRepoObj("/repositories/v1/repo-1/"),
 		rpmRepoHeld: true,
 	}

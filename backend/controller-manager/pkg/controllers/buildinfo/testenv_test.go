@@ -3,6 +3,8 @@ package buildinfo
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,13 +25,34 @@ import (
 )
 
 const (
-	testNS      = "proj1"
-	testBuild   = "build1"
-	testOS      = "openEuler"
-	testArch    = "x86_64"
-	testRepoURL = "http://repo.local/rpms"
-	testImage   = "img:latest"
+	testNS               = "proj1"
+	testBuild            = "build1"
+	testOS               = "openEuler"
+	testArch             = "x86_64"
+	testRepoURL          = "http://repo.local/rpms"
+	testImage            = "img:latest"
+	testReleaseReference = "artifact://default/repositories/" + testNS + "/" + testOS + "/" + testArch + "/"
+	testRepomd           = `<repomd><data type="primary"><location href="repodata/primary.xml"/></data></repomd>`
 )
+
+type releaseTransportFunc func(*http.Request) (*http.Response, error)
+
+func (f releaseTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func singleMetadataFixture(_ context.Context, url string) ([]byte, error) {
+	if strings.HasSuffix(url, "/repomd.xml") {
+		return []byte(testRepomd), nil
+	}
+	return []byte(`<metadata xmlns:rpm="http://linux.duke.edu/metadata/rpm"><package>
+		<name>rpm-a</name><arch>noarch</arch><version epoch="0" ver="1.0" rel="1"/>
+		<format><rpm:sourcerpm>spec-a-1.0-1.src.rpm</rpm:sourcerpm>
+		<rpm:provides><rpm:entry name="cap" flags="EQ" epoch="0" ver="1.0" rel="1"/></rpm:provides>
+		</format></package><package>
+		<name>rpm-b</name><arch>noarch</arch><version epoch="0" ver="2.0" rel="1"/>
+		<format><rpm:sourcerpm>spec-b-2.0-1.src.rpm</rpm:sourcerpm>
+		<rpm:provides><rpm:entry name="cap" flags="EQ" epoch="0" ver="2.0" rel="1"/></rpm:provides>
+		</format></package></metadata>`), nil
+}
 
 // --- fakeSource ---
 
@@ -149,6 +172,9 @@ func newTestController(t *testing.T) (*Controller, *fakeClient, *fakeGitServer, 
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	c.releaseClient.Transport = releaseTransportFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(testRepomd))}, nil
+	})
 	return c, client, git, clk
 }
 
