@@ -59,7 +59,16 @@ func (s *Store) loadOrCreateLog(p, j, runner string) (*LogStream, error) {
 		return nil, err
 	}
 	now := time.Now().UTC()
-	l = &LogStream{SchemaVersion: 1, Project: p, JobName: j, RunnerName: runner, Stream: "combined", State: LogOpen, CreatedAt: now, UpdatedAt: now}
+	l = &LogStream{
+		SchemaVersion: 1,
+		Project:       p,
+		JobName:       j,
+		RunnerName:    runner,
+		Stream:        "combined",
+		State:         LogOpen,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
 	_, _, meta := s.LogPaths(p, j)
 	// Persist identity before touching the body or index, including the first chunk.
 	if err := fileutil.AtomicJSON(meta, l); err != nil {
@@ -90,7 +99,12 @@ func (s *Store) recoverLog(l *LogStream) error {
 			return nil
 		}
 		l.State = LogFailed
-		l.Failure = &FailureInfo{Code: "Corrupted", Message: "completed log artifact is missing or invalid", Retryable: false, Time: time.Now().UTC()}
+		l.Failure = &FailureInfo{
+			Code:      "Corrupted",
+			Message:   "completed log artifact is missing or invalid",
+			Retryable: false,
+			Time:      time.Now().UTC(),
+		}
 		return fileutil.AtomicJSON(meta, l)
 	}
 	data, err := os.ReadFile(index)
@@ -129,7 +143,12 @@ func (s *Store) recoverLog(l *LogStream) error {
 	}
 	if st.Size() < offset {
 		l.State = LogFailed
-		l.Failure = &FailureInfo{Code: "Corrupted", Message: "log body is shorter than its index", Retryable: false, Time: time.Now().UTC()}
+		l.Failure = &FailureInfo{
+			Code:      "Corrupted",
+			Message:   "log body is shorter than its index",
+			Retryable: false,
+			Time:      time.Now().UTC(),
+		}
 		return fileutil.AtomicJSON(meta, l)
 	}
 	if l.State == LogOpen && st.Size() > offset {
@@ -386,7 +405,20 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	}
 	now := time.Now().UTC()
 	id := fileutil.NewID("art")
-	a := &Artifact{SchemaVersion: 1, ID: id, Category: CategoryLog, FileName: "container.log", RelativePath: "logs/container.log", ContentType: "text/plain", Size: r.Size, SHA256: r.SHA256, StorageKey: filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")), State: Pending, CreatedAt: now, UpdatedAt: now}
+	a := &Artifact{
+		SchemaVersion: 1,
+		ID:            id,
+		Category:      CategoryLog,
+		FileName:      "container.log",
+		RelativePath:  "logs/container.log",
+		ContentType:   "text/plain",
+		Size:          r.Size,
+		SHA256:        r.SHA256,
+		StorageKey:    filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")),
+		State:         Pending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
 	final := s.ArtifactPath(a)
 	if e = os.MkdirAll(filepath.Dir(final), 0750); e != nil {
 		return nil, e

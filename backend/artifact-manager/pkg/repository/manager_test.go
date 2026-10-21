@@ -15,7 +15,14 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, state := range []RepositoryState{RepositoryCreating, RepositoryDeleting, RepositoryReady, RepositoryFailed} {
-		record := &RepositoryRecord{RepositoryUID: string(state), State: state, Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch"}
+		record := &RepositoryRecord{
+			RepositoryUID: string(state),
+			State:         state,
+			Project:       "project",
+			BuildName:     "build",
+			TargetOS:      "os",
+			TargetArch:    "arch",
+		}
 		if state == RepositoryReady {
 			record.RepositoryDigest = "repository-digest"
 		}
@@ -27,7 +34,10 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 			if err := os.MkdirAll(path, 0750); err != nil {
 				t.Fatal(err)
 			}
-			if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]RepositoryRPMMeta{}}); err != nil {
+			if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), Index{
+				RepositoryUID: record.RepositoryUID,
+				RPMs:          map[string]RepositoryRPMMeta{},
+			}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -50,7 +60,13 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	if len(m.records) != 2 {
 		t.Fatalf("on-demand reads were cached: %+v", m.records)
 	}
-	ready := &RepositoryRecord{RepositoryUID: string(RepositoryReady), Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch"}
+	ready := &RepositoryRecord{
+		RepositoryUID: string(RepositoryReady),
+		Project:       "project",
+		BuildName:     "build",
+		TargetOS:      "os",
+		TargetArch:    "arch",
+	}
 	if err := os.Remove(filepath.Join(m.RepositoryPath(ready), "repository.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +81,31 @@ func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
 		t.Fatal(err)
 	}
-	m := &Manager{root: root, signingFingerprint: "new-key", records: map[string]*RepositoryRecord{}, queued: map[string]bool{}, queue: make(chan string, 1)}
-	in := CreateRepositoryRequest{RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "os", TargetArch: "arch", BaseRepositoryUID: "base", Manifests: []ManifestReference{{JobName: "job"}}}
+	m := &Manager{
+		root:               root,
+		signingFingerprint: "new-key",
+		records:            map[string]*RepositoryRecord{},
+		queued:             map[string]bool{},
+		queue:              make(chan string, 1),
+	}
+	in := CreateRepositoryRequest{
+		RepositoryName:    "build",
+		Project:           "project",
+		BuildName:         "build",
+		TargetOS:          "os",
+		TargetArch:        "arch",
+		BaseRepositoryUID: "base",
+		Manifests:         []ManifestReference{{JobName: "job"}},
+	}
 	in.RepositoryUID = UID(in.Project, in.BuildName, in.BaseRepositoryUID, in.Manifests)
-	m.records["base"] = &RepositoryRecord{RepositoryUID: "base", Project: in.Project, TargetOS: in.TargetOS, TargetArch: in.TargetArch, State: RepositoryReady, SigningFingerprint: "old-key"}
+	m.records["base"] = &RepositoryRecord{
+		RepositoryUID:      "base",
+		Project:            in.Project,
+		TargetOS:           in.TargetOS,
+		TargetArch:         in.TargetArch,
+		State:              RepositoryReady,
+		SigningFingerprint: "old-key",
+	}
 	_, _, err := m.Submit(in)
 	if typed, ok := err.(*Error); !ok || typed.Code != "BaseRepositorySigningMismatch" {
 		t.Fatalf("submit = %v", err)
@@ -87,7 +124,14 @@ func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 }
 
 func TestRepositoryRejectsUnsafeTargetOS(t *testing.T) {
-	request := CreateRepositoryRequest{RepositoryName: "build", Project: "project", BuildName: "build", TargetOS: "../other", TargetArch: "x86_64", Manifests: []ManifestReference{{JobName: "job"}}}
+	request := CreateRepositoryRequest{
+		RepositoryName: "build",
+		Project:        "project",
+		BuildName:      "build",
+		TargetOS:       "../other",
+		TargetArch:     "x86_64",
+		Manifests:      []ManifestReference{{JobName: "job"}},
+	}
 	request.RepositoryUID = UID(request.Project, request.BuildName, "", request.Manifests)
 	if _, _, err := normalizeRepositoryRequest(request); err == nil {
 		t.Fatal("unsafe target OS accepted")

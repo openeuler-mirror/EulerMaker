@@ -188,7 +188,17 @@ esac
 			t.Fatal(err)
 		}
 		inputs = append(inputs, repositoryArtifact{Path: path, JobName: name})
-		metadata = append(metadata, RepositoryRPMMeta{FileName: name + ".rpm", SHA256: sum, Name: name, Epoch: "0", Version: "1", Release: "1", Arch: "x86_64", Source: "(none)", SpecName: name})
+		metadata = append(metadata, RepositoryRPMMeta{
+			FileName: name + ".rpm",
+			SHA256:   sum,
+			Name:     name,
+			Epoch:    "0",
+			Version:  "1",
+			Release:  "1",
+			Arch:     "x86_64",
+			Source:   "(none)",
+			SpecName: name,
+		})
 	}
 	signer := &blockingRPMSigner{started: make(chan struct{}, len(inputs)), release: make(chan struct{})}
 	m := &filesystemMaterializer{rpmQueryCommand: rpmCommand, signingWorkers: 2, signer: signer}

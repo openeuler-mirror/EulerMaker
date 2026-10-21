@@ -62,7 +62,18 @@ func (s *Store) CompleteManifest(project, job, runner string, r CompleteManifest
 		return nil, errors.New("manifest conflict")
 	}
 	now := time.Now().UTC()
-	m := &JobUploadManifest{SchemaVersion: 1, Project: project, JobName: job, RunnerName: runner, Files: r.Files, Digest: digest, State: ManifestCompleted, CreatedAt: now, UpdatedAt: now, CompletedAt: &now}
+	m := &JobUploadManifest{
+		SchemaVersion: 1,
+		Project:       project,
+		JobName:       job,
+		RunnerName:    runner,
+		Files:         r.Files,
+		Digest:        digest,
+		State:         ManifestCompleted,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		CompletedAt:   &now,
+	}
 	path := filepath.Join(s.root, ".metadata/jobs", project, job, "manifest.json")
 	if err := fileutil.AtomicJSON(path, m); err != nil {
 		return nil, err

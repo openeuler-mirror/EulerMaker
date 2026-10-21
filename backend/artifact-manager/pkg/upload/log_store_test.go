@@ -70,7 +70,12 @@ func TestLogAppendRecoversInterruptedWrite(t *testing.T) {
 			}
 			body, index, _ := s.LogPaths("project", "job")
 			appendTestFile(t, body, next)
-			record, err := json.Marshal(LogChunkRecord{Sequence: 1, StartOffset: int64(len(first)), Size: int64(len(next)), SHA256: hashText(string(next))})
+			record, err := json.Marshal(LogChunkRecord{
+				Sequence:    1,
+				StartOffset: int64(len(first)),
+				Size:        int64(len(next)),
+				SHA256:      hashText(string(next)),
+			})
 			if err != nil {
 				t.Fatal(err)
 			}

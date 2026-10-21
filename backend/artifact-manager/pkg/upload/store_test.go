@@ -31,7 +31,13 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 		t.Fatalf("missing manifest: %v", err)
 	}
 	data := []byte("rpm")
-	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: int64(len(data)), SHA256: sum(data)}
+	metadata := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "package.rpm",
+		RelativePath: "packages/package.rpm",
+		Size:         int64(len(data)),
+		SHA256:       sum(data),
+	}
 	a, _, err := store.BeginUpload("project", "job", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -43,9 +49,17 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 	if err := store.CompleteUpload("project", "job", a, tmp); err != nil {
 		t.Fatal(err)
 	}
-	request := upload.CompleteManifestRequest{Files: []upload.ManifestFile{{
-		ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256,
-	}}}
+	request := upload.CompleteManifestRequest{
+		Files: []upload.ManifestFile{
+			{
+				ArtifactID:   a.ID,
+				RelativePath: a.RelativePath,
+				Category:     a.Category,
+				Size:         a.Size,
+				SHA256:       a.SHA256,
+			},
+		},
+	}
 	manifest, err := store.CompleteManifest("project", "job", "runner", request)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +113,13 @@ func TestArtifactMetadataReadOnDemand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("rpm"))}
+	metadata := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "package.rpm",
+		RelativePath: "packages/package.rpm",
+		Size:         3,
+		SHA256:       sum([]byte("rpm")),
+	}
 	a, _, err := store.BeginUpload("project", "job", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +157,13 @@ func TestConcurrentUploadReservationAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("rpm"))}
+	metadata := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "package.rpm",
+		RelativePath: "packages/package.rpm",
+		Size:         3,
+		SHA256:       sum([]byte("rpm")),
+	}
 	const requests = 16
 	accepted := make(chan *upload.Artifact, requests)
 	var workers sync.WaitGroup
@@ -284,7 +310,9 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 				Size: artifact.Size, SHA256: artifact.SHA256, Required: true,
 			})
 		}
-		if _, err := store.CompleteManifest(job.project, job.job, "runner", upload.CompleteManifestRequest{Files: files}); err != nil {
+		if _, err := store.CompleteManifest(job.project, job.job, "runner", upload.CompleteManifestRequest{
+			Files: files,
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(filepath.Join(root, ".metadata/jobs", job.project, job.job, "manifest.json")); err != nil {
@@ -341,9 +369,17 @@ func TestArtifactOwnershipSurvivesRestart(t *testing.T) {
 	if err := store.CompleteUpload("project", "job", a, temporary); err != nil {
 		t.Fatal(err)
 	}
-	request := upload.CompleteManifestRequest{Files: []upload.ManifestFile{{
-		ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256,
-	}}}
+	request := upload.CompleteManifestRequest{
+		Files: []upload.ManifestFile{
+			{
+				ArtifactID:   a.ID,
+				RelativePath: a.RelativePath,
+				Category:     a.Category,
+				Size:         a.Size,
+				SHA256:       a.SHA256,
+			},
+		},
+	}
 	for _, restart := range []bool{false, true} {
 		if restart {
 			store, err = upload.NewStore(root)
@@ -371,7 +407,13 @@ func TestStoreRecoversPendingCommittedUploadAndLogTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "x", RelativePath: "x", Size: 3, SHA256: sum([]byte("abc"))}
+	m := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "x",
+		RelativePath: "x",
+		Size:         3,
+		SHA256:       sum([]byte("abc")),
+	}
 	a, _, err := s.BeginUpload("project", "job", "key", m, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +465,13 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	metadata := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "package.rpm",
+		RelativePath: "packages/package.rpm",
+		Size:         3,
+		SHA256:       sum([]byte("abc")),
+	}
 	artifact, _, err := store.BeginUpload("project", "job", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +507,13 @@ func TestStoreUploadIdempotencySurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	metadata := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "package.rpm",
+		RelativePath: "packages/package.rpm",
+		Size:         3,
+		SHA256:       sum([]byte("abc")),
+	}
 	artifact, replay, err := store.BeginUpload("project", "job", "key", metadata, 1024)
 	if err != nil || replay {
 		t.Fatalf("begin upload: replay=%t, error=%v", replay, err)
@@ -495,7 +549,13 @@ func TestStoreRetryFailedUploadAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata := upload.UploadMetadata{Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm", Size: 3, SHA256: sum([]byte("abc"))}
+	metadata := upload.UploadMetadata{
+		Category:     upload.CategoryArtifact,
+		FileName:     "package.rpm",
+		RelativePath: "packages/package.rpm",
+		Size:         3,
+		SHA256:       sum([]byte("abc")),
+	}
 	artifact, _, err := store.BeginUpload("project", "job", "key", metadata, 1024)
 	if err != nil {
 		t.Fatal(err)
