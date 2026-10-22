@@ -127,7 +127,6 @@ services:
       - --apiserver-ca=/run/ebs-certs/server-ca.crt
       - --apiserver-client-cert=/run/ebs-certs/controller-manager.crt
       - --apiserver-client-key=/run/secrets/controller_manager_client_key
-      - --git-server-addr=http://git-server:8084
     volumes:
       - ./certs/runtime/server-ca.crt:/run/ebs-certs/server-ca.crt:ro
       - ./certs/runtime/controller-manager.crt:/run/ebs-certs/controller-manager.crt:ro

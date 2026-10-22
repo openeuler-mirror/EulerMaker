@@ -51,17 +51,19 @@ Project apiserver 在创建和更新 Project 时保证 `spec.packageRepos[].name
 
 Snapshot 不支持 watch，应使用 `PollingSourceFactory` 创建 Source。事件处理器必须在 `Manager.Run` 之前注册；控制器启动后不得再注册 handler。Manager 完成全部 Source 的首次同步后才启动 worker。PollingSource 仅负责通过 List 差异发现事件并将键加入队列，不向 Snapshot Controller 提供对象缓存读取接口；`Sync` 必须通过 API GET 获取最新 Snapshot，不能把事件携带的对象或 PollingSource 内部快照作为调和依据。
 
-Initializer 保存 Factory 返回的 `source.Source` 和共享客户端：
+Initializer 保存 Factory 返回的 `source.Source`、共享 API 客户端及服务配置提供者：
 
 ```go
 type Controller struct {
     snapshots source.Source
     client    Client
-    gitClient GitServerClient
+    services  serviceconfig.Provider
     clock     clock.Clock
     // queue、跨轮失败计数 map 省略
 }
 ```
+
+需要解析仓库时，由服务配置提供者读取本轮配置，使用 `gitServer.internalURL` 取得固定地址的 `GitServerClient`，供本轮所有包任务共享。配置读取不属于包级同步尝试；失败分类和客户端缓存边界见 [服务配置消费规则](data-models~config.md#45-controller-manager-消费与更新边界)。提供者使用公共 API 客户端读取 Config，不扩充下面的 Snapshot 专用接口。
 
 `clock.Clock` 使用 `k8s.io/utils/clock`。生产 initializer 注入 `clock.RealClock{}`，单元测试注入 `clocktesting.FakeClock`；业务代码不得直接调用 `time.Now()`、`time.Since()` 或 `time.Until()`。
 
@@ -549,7 +551,7 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | `--snapshot-resolve-budget` | 120s | 单轮解析总预算（budgetCtx） |
 | `--snapshot-sync-requeue-delay` | 30s | 存在 Waiting 或 Deferred 包时延迟重入的时间；轮内不等待同步 |
 | `--snapshot-failure-retry-limit` | 5 | 非确定性失败跨轮重试预算，必须大于 0；`nextCount >= limit` 时写入不可重试的 `RetryExhausted` error 并跳过 |
-| `--git-server-addr` | `http://localhost:8080` | git-server 地址 |
+| `Config/service-config` 的 `gitServer.internalURL` | `http://git-server:8080` | Git Server 管理地址 |
 | `--git-server-timeout` | 30s | 单次请求超时 |
 | `--git-server-retry` | 3 | 客户端固定尝试次数 |
 | `--git-server-cache-ttl` | 30s | git-server 同步状态的 L1 缓存 TTL |
@@ -562,6 +564,7 @@ Snapshot Controller 所需最小权限：
 snapshots:        get, list, update
 snapshots/status: update
 builds:           get
+configs:          get (service-config)
 ```
 
 权限严格限制在上述操作：Controller 不能创建或删除 Snapshot。
