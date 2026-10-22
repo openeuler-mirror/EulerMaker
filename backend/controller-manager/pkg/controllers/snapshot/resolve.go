@@ -27,9 +27,8 @@ const (
 )
 
 type resolveTask struct {
-	index   int
-	repo    ebsv1.PackageRepo
-	fullRef string
+	index int
+	repo  ebsv1.PackageRepo
 }
 
 type resolveResult struct {
@@ -44,10 +43,6 @@ type resolveResult struct {
 var errResolveBudget = errors.New("snapshot resolve budget exhausted")
 
 func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot, targets []ebsv1.PackageRepo) ([]resolveResult, error) {
-	fullRef, override := snapshot.Annotations[ebsv1.BuildGitRefAnnotation]
-	if override && (fullRef == "" || len(snapshot.Spec.PackageRepos) != 1) {
-		return nil, controller.NewPermanentError(fmt.Errorf("git-ref override requires a nonempty ref and exactly one package repository"))
-	}
 	started := c.clock.Now()
 	defer func() {
 		resolveBatches.Inc()
@@ -76,7 +71,7 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 			c.failures.set(snapshot.UID, repo.Name, 0)
 			continue
 		}
-		tasks = append(tasks, resolveTask{index: index, repo: repo, fullRef: fullRef})
+		tasks = append(tasks, resolveTask{index: index, repo: repo})
 	}
 	if len(tasks) == 0 {
 		sortResults(results)
@@ -176,7 +171,7 @@ func (c *Controller) resolveOne(ctx context.Context, gitClient gitserver.GitServ
 		return c.requestFailure(ctx, task, "sync", err)
 	}
 	repo := task.repo
-	if task.fullRef == "" && repo.Ref == "" && repo.CommitID == "" {
+	if repo.Ref == "" && repo.CommitID == "" {
 		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository commitID, ref and snapshot defaultRef are empty")
 	}
 	check, err := gitClient.CheckSynced(ctx, repo.URL, baseline)
@@ -192,15 +187,11 @@ func (c *Controller) resolveOne(ctx context.Context, gitClient gitserver.GitServ
 		}
 		return resolveResult{index: task.index, repo: repo, state: stateWaiting}
 	}
-	ref := task.fullRef
-	if ref == "" {
-		ref = repo.Ref
-	}
 	var commit string
-	if task.fullRef == "" && repo.CommitID != "" {
+	if repo.CommitID != "" {
 		commit, err = gitClient.ResolveCommitID(ctx, repo.URL, repo.CommitID)
 	} else {
-		commit, err = gitClient.ResolveFullRef(ctx, repo.URL, ref)
+		commit, err = gitClient.ResolveFullRef(ctx, repo.URL, repo.Ref)
 	}
 	if err != nil {
 		result := c.requestFailure(ctx, task, "resolve", err)
@@ -257,10 +248,9 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 		snapshot.Status.PackageRepoStatuses = make(map[string]ebsv1.PackageRepoStatus)
 	}
 	accepted := make(map[string]string)
-	fullRef := snapshot.Annotations[ebsv1.BuildGitRefAnnotation]
 	for _, repo := range snapshot.Spec.PackageRepos {
 		if status := snapshot.Status.PackageRepoStatuses[repo.Name]; status.CommitID != "" {
-			accepted[repoIdentity(effectiveRepo(repo, snapshot.Spec.DefaultRef), fullRef)] = status.CommitID
+			accepted[repoIdentity(effectiveRepo(repo, snapshot.Spec.DefaultRef))] = status.CommitID
 		}
 	}
 	changes := make([]trackerChange, 0, len(results))
@@ -269,7 +259,7 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 		name := result.repo.Name
 		switch result.state {
 		case stateResolved:
-			identity := repoIdentity(result.repo, fullRef)
+			identity := repoIdentity(result.repo)
 			if commit, ok := accepted[identity]; ok && commit != result.status.CommitID {
 				cloneURL := result.status.CloneURL
 				result = skippedResult(result.index, result.repo, ebsv1.SpecCommitCommitConflict, "repository ref resolved to conflicting commits")
@@ -319,13 +309,10 @@ func sortResults(results []resolveResult) {
 	sort.Slice(results, func(i, j int) bool { return results[i].index < results[j].index })
 }
 
-func repoIdentity(repo ebsv1.PackageRepo, fullRef string) string {
+func repoIdentity(repo ebsv1.PackageRepo) string {
 	key, err := gitserver.RepositoryKey(repo.URL)
 	if err != nil {
 		key = "invalid:" + repo.URL
-	}
-	if fullRef != "" {
-		return key + "\x00" + fullRef
 	}
 	return key + "\x00" + repo.Ref + "\x00" + repo.CommitID
 }

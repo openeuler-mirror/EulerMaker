@@ -79,15 +79,15 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
-要运行构建任务，控制面必须设置 `EXPORT_SERVER_ADDR` 为控制面容器和构建节点都可访问的宿主机名或 IPv4 地址（不带协议和端口）。它用于生成 Git clone URL 和下发给 Job 的 Artifact Manager 地址；默认的 `git-server`、`artifact-manager` 仅在控制面 Compose 网络内可解析。即使同机联调，也不能填 `127.0.0.1`，因为 Controller Manager 容器中的回环地址指向自身。需开放 Gateway `8080`、Artifact Manager `8081` 和 Git Smart HTTP `8084` 端口。以下地址仅为示例，使用前替换为实际内网地址：
+构建服务地址由 `Config/service-config` 管理，可由 Ops/Admin 在运维页面的“服务配置”中修改。控制面的 `internalURL` 使用 Compose 服务名；Runner 通过 Gateway 获取 `runnerInternalURL` 或 `runnerExternalURL`。同机、宿主机网络的 Runner 可使用初始化默认值：Artifact Manager 为 `http://127.0.0.1:8081`，Git Server 为 `http://127.0.0.1:8084`；异机 Runner 必须改为构建节点及 Job 容器可达的地址。所选网络需能访问 Gateway `8080`、Artifact Manager `8081` 和 Git Smart HTTP `8084` 端口，不应将内部端口直接开放到公网。
 
 ```bash
-EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+docker compose -f hacks/docker-compose.yml up -d --build
 DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 
-Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认通过宿主机网络访问 `127.0.0.1:8080`，不会随控制面启动。Artifact Manager 地址由 Runner 从 Gateway 获取。跨主机运行时，在 Runner 节点设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并配置该节点可达的 Artifact Manager 实例地址；启动前先确认控制面服务就绪。可用相同的 `-p eulermaker-runner -f hacks/docker-compose.runner.yml` 参数查看状态和日志。
+Runner 单独使用 [Compose 文件](hacks/docker-compose.runner.yml)，默认通过宿主机网络访问 `127.0.0.1:8080`，不会随控制面启动。跨主机运行时，在 Runner 节点设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`。`RUNNER_SERVICE_ACCESS_MODE` 默认为 `internal`，两类服务均使用 `runnerInternalURL`；设为 `external` 时均使用 `runnerExternalURL`，不会自动回退。先填写所选模式的服务地址并确认控制面就绪，再启动 Runner。可用相同的 `-p eulermaker-runner -f hacks/docker-compose.runner.yml` 参数查看状态和日志。
 
 ## 本地开发与验证
 

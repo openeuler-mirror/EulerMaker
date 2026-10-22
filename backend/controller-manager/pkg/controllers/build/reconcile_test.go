@@ -242,7 +242,7 @@ func TestPendingReusesExistingSnapshotWithoutReadingProject(t *testing.T) {
 	assertCounterDelta(t, metricEnsureTerminating, beforeTerminating, 0)
 }
 
-func TestPendingCreatesAndReusesSnapshotWithstring(t *testing.T) {
+func TestPendingCreatesAndReusesSnapshotWithGitRef(t *testing.T) {
 	for _, outcome := range []clientpkg.WriteOutcome{"", clientpkg.WriteRejected, clientpkg.WriteUnknown} {
 		t.Run(string(outcome), func(t *testing.T) {
 			api := newFakeAPI()
@@ -267,11 +267,14 @@ func TestPendingCreatesAndReusesSnapshotWithstring(t *testing.T) {
 				t.Fatalf("sync: %v", err)
 			}
 			snapshot := api.snapshot("project-a", "build-a")
-			if snapshot == nil || !reflect.DeepEqual(snapshot.Annotations, build.Annotations) {
-				t.Fatalf("Snapshot annotations: %+v", snapshot)
+			if snapshot == nil {
+				t.Fatal("Snapshot was not created")
 			}
 			project := api.getProject("project-a")
-			if !reflect.DeepEqual(snapshot.Spec.PackageRepos, project.Spec.PackageRepos[:1]) ||
+			wantRepo := project.Spec.PackageRepos[0]
+			wantRepo.Ref = build.Annotations[ebsv1.BuildGitRefAnnotation]
+			wantRepo.CommitID = ""
+			if !reflect.DeepEqual(snapshot.Spec.PackageRepos, []ebsv1.PackageRepo{wantRepo}) ||
 				snapshot.Spec.DefaultRef != project.Spec.DefaultRef {
 				t.Fatalf("Snapshot input: %+v", snapshot.Spec)
 			}
@@ -687,10 +690,12 @@ func TestNewSnapshotKeepsFullRepositoryListForNonSingleBuilds(t *testing.T) {
 	}
 }
 
-func TestNewSnapshotCopiesGitRefAnnotation(t *testing.T) {
-	project := newProject("project-a", newPackageRepo("gcc"))
+func TestNewSnapshotFreezesGitRefInPackageRepo(t *testing.T) {
+	project := newProject("project-a", newPackageRepo("glibc"), newPackageRepo("gcc"))
 	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	project.Spec.PackageRepos[0].CommitID = commitID
+	project.Spec.PackageRepos[1].CommitID = commitID
+	project.Spec.PackageRepos[1].Ref = "refs/heads/main"
+	originalProject := project.DeepCopy()
 	build := newBuild("project-a", "build-a", "single", []string{"gcc"})
 	if got := newSnapshot(build, project).Spec.PackageRepos[0].CommitID; got != commitID {
 		t.Fatalf("copied commitID=%q", got)
@@ -698,15 +703,20 @@ func TestNewSnapshotCopiesGitRefAnnotation(t *testing.T) {
 	ref := "refs/merge-requests/501/head"
 	build.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref, "example.com/note": "build only"}
 	snapshot := newSnapshot(build, project)
-	if snapshot.Spec.PackageRepos[0].CommitID != "" || project.Spec.PackageRepos[0].CommitID != commitID {
-		t.Fatal("PR override must clear only the Snapshot commitID")
+	wantRepo := project.Spec.PackageRepos[1]
+	wantRepo.Ref, wantRepo.CommitID = ref, ""
+	if !reflect.DeepEqual(snapshot.Spec.PackageRepos, []ebsv1.PackageRepo{wantRepo}) {
+		t.Fatalf("packageRepos = %+v, want %+v", snapshot.Spec.PackageRepos, wantRepo)
 	}
-	if want := (map[string]string{ebsv1.BuildGitRefAnnotation: ref}); !reflect.DeepEqual(snapshot.Annotations, want) {
-		t.Fatalf("annotations = %v, want %v", snapshot.Annotations, want)
+	if !reflect.DeepEqual(project, originalProject) {
+		t.Fatal("Snapshot ref override changed the Project")
 	}
-	snapshot.Annotations[ebsv1.BuildGitRefAnnotation] = "refs/merge-requests/502/head"
+	if len(snapshot.Annotations) != 0 {
+		t.Fatalf("Snapshot annotations = %v", snapshot.Annotations)
+	}
+	snapshot.Spec.PackageRepos[0].Ref = "refs/merge-requests/502/head"
 	if build.Annotations[ebsv1.BuildGitRefAnnotation] != ref {
-		t.Fatal("Snapshot annotations must be independent of the Build")
+		t.Fatal("Snapshot ref must be independent of the Build annotation")
 	}
 }
 

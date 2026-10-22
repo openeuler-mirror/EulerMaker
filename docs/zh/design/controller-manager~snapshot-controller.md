@@ -342,7 +342,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 
 引用或 commitID 非空的未完成包每轮从 `CheckSynced` 开始。已满足 baseline 时解析 ref 或验证固定提交，不再提交 Sync；未就绪时调用 `PublishSyncTask`，成功后立即返回 Waiting 并释放 worker，由下一轮重新检查。git-server 异步完成同步，Controller 不创建脱离 reconcile 的后台轮询 goroutine，也不在 worker 内等待仓库同步完成。
 
-完整引用覆盖：若 Snapshot 携带 `ebs.io/git-ref`，先确认 packageRepos 恰好一个条目，使用 annotation 作为该仓库的有效引用，不读取父 Build 的 annotation 或实时 Project。该覆盖优先于包 commitID、ref 与 defaultRef，必须走 CheckSynced/PublishSyncTask；同步满足 baseline 后调用 ResolveFullRef，成功时保存 commitId 和 cloneUrl。引用不存在按不可重试 ResolveFailed 记录，不回退其他输入。覆盖为空或 packageRepos 数量不为一时返回 PermanentError；完整 ref 语法无效时记录包级 ValidationFailed。均不解析其他引用。
+提交输入统一按 `PackageRepo.commitID → PackageRepo.ref → Snapshot.spec.defaultRef` 选择。Build 的引用覆盖由创建方固化到包级 ref，规则见 [Build Controller](controller-manager~build-controller.md)。同步满足 baseline 后，commitID 调用 ResolveCommitID，完整 ref 调用 ResolveFullRef；成功时保存 commitId 和 cloneUrl，不存在时记录不可重试 ResolveFailed，不回退其他输入。
 
 成功持久化的 commitId/cloneUrl 在后续 reconcile 和重启后沿用。
 
@@ -373,7 +373,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 - 每包每轮最多调用一次 `CheckSynced`，随后根据结果调用一次 `PublishSyncTask`、`ResolveFullRef` 或 `ResolveCommitID`，不进行轮内重复检查。调用间预算到期，或请求因 `budgetCtx` 到期而中断，返回 Deferred；单请求自身超时且非总预算中断才返回 Failed。请求返回时即判定并记录分类，不因之后总预算到期改写已取得的 Resolved、Waiting、Skipped 或真实 Failed 结果。主 goroutine 根据稳定索引与已收到结果的差集为未领取/未返回结果项补充 Deferred，每个目标项恰好汇总一次。Manager context 取消直接结束，不生成业务结果。
 - 主 goroutine 收齐结果后，按稳定索引升序合并，而不是按 goroutine 完成顺序合并。因此相同输入在不同调度时序下必须生成相同的 `packageRepoStatuses`、conditions 和日志结果。
 - 合并以 API GET 得到对象的 DeepCopy 为基础。原始仓库地址始终从不可变的 `Snapshot.spec.packageRepos` 读取，不在 status 中重复保存。已有成功结果或不可重试 error 保持不变；Resolved 结果写入 `commitId` 并清空旧 error；所有引用在 `CheckSynced` 成功后写入其返回的 `cloneUrl`；Waiting 结果不创建 `packageRepoStatuses` 条目，并清除该包已有的可重试 error；Skipped 结果写入不可重试 error；Failed 结果写入可重试 error，若此前已经取得 clone URL 则保留该值，达到跨轮预算时改写为不可重试的 `RetryExhausted`。任何 worker 结果都不能覆盖其他组件拥有的字段。
-- 并发结果身份为规范化 URL、有效 ref、commitID；annotation 覆盖时仅使用 URL 和覆盖 ref。同一身份已有持久化 commitId 时，以该值为基准；本轮解析结果不同则按 `CommitConflict` 跳过，不覆盖已有结果。同一身份在本轮产生多个结果且没有已有基准时，按稳定索引处理：第一个已接受的 commit 作为本轮基准；后续结果相同则正常接受，不同则按 `CommitConflict` 跳过。
+- 并发结果身份为规范化 URL、有效 ref、commitID。同一身份已有持久化 commitId 时，以该值为基准；本轮解析结果不同则按 `CommitConflict` 跳过，不覆盖已有结果。同一身份在本轮产生多个结果且没有已有基准时，按稳定索引处理：第一个已接受的 commit 作为本轮基准；后续结果相同则正常接受，不同则按 `CommitConflict` 跳过。
 - 主 goroutine 按 4.4 计算 failure tracker 的候选增量及清理项，用于生成目标 status；计数的提交和丢弃同样遵循 4.4。
 - Deferred 不修改该包的 `packageRepoStatuses` 或失败计数，也不能作为 Resolved/Skipped 参与完成判定；它与 Waiting 一起触发延迟重入。
 - 汇总完成后最多执行一次本轮最终 `/status` 写入；并发阶段不得执行状态写入。若在写入前发现 reconcile context 已取消，则丢弃尚未持久化的合并结果，由后续 List 重新触发。
@@ -637,7 +637,7 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 
 ### 11.1 单元测试
 
-- 完整引用覆盖优先于包 ref/defaultRef，先同步再解析；不存在时写 ResolveFailed，不回退；固化后远端 ref 更新与重启均沿用已保存 commit；
+- 提交输入按 `commitID → ref → defaultRef` 选择，先同步再解析；不存在时写 ResolveFailed，不回退；固化后远端 ref 更新与重启均沿用已保存 commit；
 
 - Active Snapshot 不处理；
 - Pending Snapshot 推进到 Processing；

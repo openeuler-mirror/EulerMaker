@@ -24,17 +24,22 @@ type fakeBuildStorage struct {
 
 func TestPrepareForCreatePackagesByBuildType(t *testing.T) {
 	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
-		t.Run(buildType, func(t *testing.T) {
-			b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: buildType, Packages: []string{"gcc"}}}
-			NewStorage().Resource.(*genericregistry.Store).CreateStrategy.PrepareForCreate(context.Background(), b)
-			if buildType == "full" || buildType == "incremental" {
-				if b.Spec.Packages != nil {
-					t.Fatalf("packages not cleared: %v", b.Spec.Packages)
+		for _, ref := range []string{"", "refs/merge-requests/501/head"} {
+			t.Run(buildType+"/"+ref, func(t *testing.T) {
+				b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: buildType, Packages: []string{"gcc"}}}
+				if ref != "" {
+					b.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref}
 				}
-			} else if len(b.Spec.Packages) != 1 || b.Spec.Packages[0] != "gcc" {
-				t.Fatalf("explicit packages changed: %v", b.Spec.Packages)
-			}
-		})
+				NewStorage().Resource.(*genericregistry.Store).CreateStrategy.PrepareForCreate(context.Background(), b)
+				if buildType == "full" || buildType == "incremental" {
+					if b.Spec.Packages != nil {
+						t.Fatalf("packages not cleared: %v", b.Spec.Packages)
+					}
+				} else if len(b.Spec.Packages) != 1 || b.Spec.Packages[0] != "gcc" {
+					t.Fatalf("explicit packages changed: %v", b.Spec.Packages)
+				}
+			})
+		}
 	}
 }
 

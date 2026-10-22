@@ -104,14 +104,12 @@ func TestResolvePinnedCommit(t *testing.T) {
 	}
 }
 
-func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
-	for _, ref := range []string{"", "refs/heads/main", "refs/tags/v1", "refs/merge-requests/500/head"} {
+func TestResolvePackageRefAndReuseCommit(t *testing.T) {
+	for _, ref := range []string{"refs/heads/main", "refs/tags/v1", "refs/merge-requests/501/head"} {
 		t.Run(ref, func(t *testing.T) {
 			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ref}})
 			build.Spec.BuildType = "single"
 			snapshot.Spec.DefaultRef = "refs/heads/default"
-			snapshot.Spec.PackageRepos[0].CommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-			snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
 			api := &fakeClient{snapshot: snapshot, build: build}
 			git := &fakeGitClient{}
 			c := newTestController(t, api, git, Config{})
@@ -120,11 +118,11 @@ func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
 			}
 			status := api.snapshot.Status.PackageRepoStatuses["pkg"]
 			if api.snapshot.Status.Phase != ebsv1.SnapshotActive || status.CommitID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
-				status.CloneURL != "git-server:///git/example.com/repo.git" || git.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] {
+				status.CloneURL != "git-server:///git/example.com/repo.git" || git.fullRef != ref {
 				t.Fatalf("phase=%s status=%+v resolved ref=%q", api.snapshot.Status.Phase, status, git.fullRef)
 			}
 			if api.snapshot.Spec.PackageRepos[0].Ref != ref {
-				t.Fatal("full ref override must leave original refs unchanged and use only full ref resolution")
+				t.Fatal("resolution must preserve the frozen package ref")
 			}
 			// A new controller also reuses a committed package result while the Snapshot is Processing.
 			api.snapshot.Status.Phase = ebsv1.SnapshotProcessing

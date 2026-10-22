@@ -14,7 +14,7 @@ func TestBusinessConfigFlagBindings(t *testing.T) {
 	cfg, err := LoadConfig([]string{
 		"--name=runner-test", "--machine-credential-file=/etc/ebs/credential.json",
 		"--gateway=https://gateway.example", "--gateway-ca=/etc/ebs/gateway.crt", "--insecure-skip-verify",
-		"--artifact-access-mode=external", "--artifact-manager-ca=/etc/ebs/artifact.crt",
+		"--service-access-mode=external", "--artifact-manager-ca=/etc/ebs/artifact.crt",
 		"--artifact-manager-insecure-skip-verify",
 		"--log-chunk-size=1024", "--log-flush-interval=2s", "--log-spool-limit=4096",
 		"--log-drain-timeout=12s", "--log-retry-max-backoff=8s",
@@ -34,8 +34,10 @@ func TestBusinessConfigFlagBindings(t *testing.T) {
 	if !reflect.DeepEqual(cfg.Gateway, wantGateway) {
 		t.Fatalf("gateway config = %+v, want %+v", cfg.Gateway, wantGateway)
 	}
+	if cfg.ServiceAccessMode != "external" {
+		t.Fatalf("service access mode = %q, want external", cfg.ServiceAccessMode)
+	}
 	wantArtifact := artifact.Config{
-		AccessMode:         "external",
 		CA:                 "/etc/ebs/artifact.crt",
 		InsecureSkipVerify: true,
 		Log: artifact.LogConfig{
@@ -57,6 +59,16 @@ func TestBusinessConfigFlagBindings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Artifact, wantArtifact) {
 		t.Fatalf("artifact config = %+v, want %+v", cfg.Artifact, wantArtifact)
+	}
+}
+
+func TestServiceAccessModeDefault(t *testing.T) {
+	cfg, err := LoadConfig([]string{"--machine-credential-file=/credential", "--name=runner-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ServiceAccessMode != "internal" {
+		t.Fatalf("service access mode = %q, want internal", cfg.ServiceAccessMode)
 	}
 }
 

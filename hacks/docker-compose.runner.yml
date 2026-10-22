@@ -4,6 +4,7 @@ services:
       context: ../backend/runner
     command:
       - --gateway=${RUNNER_GATEWAY_URL:-http://127.0.0.1:8080}
+      - --service-access-mode=${RUNNER_SERVICE_ACCESS_MODE:-internal}
       - --machine-credential-file=/run/secrets/runner_machine_credential
       - --name=${RUNNER_NAME:-runner-ct-01}
       - --type=ct

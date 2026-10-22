@@ -79,15 +79,15 @@ curl -fsS http://localhost:8080/healthz
 
 Compose builds application images from the current workspace. Its defaults skip TLS verification for development, disable Elasticsearch security, and expose several internal service ports. **Do not expose this configuration directly to the public internet or use it unchanged in production.** Production deployments require certificate management, network isolation, credential protection, persistent storage, and backups. Restrict Docker socket access to trusted Runners.
 
-To run build jobs, set `EXPORT_SERVER_ADDR` on the control-plane host to a hostname or IPv4 address reachable from both control-plane containers and build nodes (without a scheme or port). This forms the Git clone URL and the Artifact Manager URL sent to Jobs; the default `git-server` and `artifact-manager` names resolve only within the control-plane Compose network. Even for same-host testing, do not use `127.0.0.1`: inside Controller Manager it points back to that container. Open Gateway `8080`, Artifact Manager `8081`, and Git Smart HTTP `8084`. Replace this example address with the actual private address:
+Build service addresses are managed by `Config/service-config`, editable by Ops/Admin in the operations Service configuration page. Control-plane `internalURL` values use Compose service names; Runner obtains `runnerInternalURL` or `runnerExternalURL` through Gateway. A same-host Runner using host networking can use the initialized defaults: `http://127.0.0.1:8081` for Artifact Manager and `http://127.0.0.1:8084` for Git Server. Remote Runners require addresses reachable from the build nodes and Job containers. The selected network must reach Gateway `8080`, Artifact Manager `8081`, and Git Smart HTTP `8084`; do not expose internal service ports directly to the public internet.
 
 ```bash
-EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+docker compose -f hacks/docker-compose.yml up -d --build
 DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 
-Runner uses a [separate Compose file](hacks/docker-compose.runner.yml), defaults to host-network access to `127.0.0.1:8080`, and does not start with the control plane. It obtains Artifact Manager addresses from Gateway. On a remote Runner node, set a reachable `RUNNER_GATEWAY_URL` and a unique `RUNNER_NAME`, and configure Artifact Manager instance addresses reachable from that node. Start it after the control-plane services are ready. Use the same `-p eulermaker-runner -f hacks/docker-compose.runner.yml` options for status and logs.
+Runner uses a [separate Compose file](hacks/docker-compose.runner.yml), defaults to host-network access to `127.0.0.1:8080`, and does not start with the control plane. On a remote Runner node, set a reachable `RUNNER_GATEWAY_URL` and a unique `RUNNER_NAME`. `RUNNER_SERVICE_ACCESS_MODE` defaults to `internal`, selecting `runnerInternalURL` for both services; `external` selects `runnerExternalURL`, without automatic fallback. Configure the selected service addresses and ensure the control plane is ready before starting Runner. Use the same `-p eulermaker-runner -f hacks/docker-compose.runner.yml` options for status and logs.
 
 ## Local development and checks
 

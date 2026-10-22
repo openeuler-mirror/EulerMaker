@@ -248,11 +248,13 @@ User 只能通过 `/auth/register` 创建。前端不提供“管理员创建 Us
 
 MachineAccount 页面支持通过专用接口创建账号、列出和删除账号。创建时由浏览器 Web Crypto API 生成至少 32 字节随机值并编码为无填充 Base64URL client secret，再与账号配置一并提交。Gateway 成功响应不会回显 secret，因此页面只使用提交前的内存副本展示一次；离开结果页面后不再保留，不写入日志、Pinia、localStorage 或 sessionStorage。用户关闭一次性凭据页面前，界面必须明确提示其通过受保护渠道完成下发。
 
-### 5.9 脚本管理
+### 5.9 配置与脚本管理
 
 运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建、正文编辑及删除。Ops 和 Admin 可管理脚本，但默认 `rpmbuild` 不显示删除入口；其他脚本删除前需要确认，并携带 UID/resourceVersion 前置条件。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
 
-编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。前端对两份内置 Config 的 YAML 内容做业务预检，但保存成功不代表服务端已验证业务内容，消费方仍须重新校验。Gateway 负责权限，apiserver 只校验 Config 通用字段。
+“服务配置”页签管理 `Config/service-config`，将 Git Server 与 Artifact Manager 实例列表作为同级区域展示，分别编辑控制面地址、内网 Runner 访问地址和外网 Runner 访问地址；支持增删 Artifact Manager 实例。该 Config 固定为 `OpsOnly`，仅 Ops/Admin 可管理；服务地址不包含认证凭据。字段及消费契约见 [服务配置](data-models~config.md#4-服务配置内容)。
+
+编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。前端对三份内置 Config 的 YAML 内容做保存前预检；apiserver 在创建、更新时完整校验通用字段与对应业务内容，Gateway 负责访问权限。消费方读取并反序列化已校验的配置，不重复执行完整业务校验；仍处理接口读取失败、响应契约异常和实际使用项缺失。
 
 当前页面管理 Script 对象；BuildInfo Controller 会在新建 Job 时记录脚本引用，Runner 按引用拉取并执行。修改或删除脚本不会改写已创建 Job 中记录的引用，脚本正文也不固定为历史版本。
 
