@@ -414,6 +414,8 @@ body.modal-open { overflow: hidden; }
 .build-history-item-type { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 13px; font-weight: 700; line-height: 18px; }
 .build-history-item small, .build-history-item time { display: block; margin-top: 6px; color: #7e899a; font-size: 12px; }
 .build-history-item time { color: #9aa4b3; }
+.build-history-git-ref, .build-history-packages { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.build-history-git-ref code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: inherit; }
 .build-detail-panel .section-heading { flex-wrap: wrap; }
 .build-detail-panel .section-heading > div:first-child { min-width: 0; flex: 1 1 240px; }
 .build-detail-panel .section-heading h2 { overflow-wrap: anywhere; }
