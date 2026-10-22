@@ -47,7 +47,32 @@
         <div v-if="deletedPackageName" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageDeleted", { name: deletedPackageName }) }}</div>
         <div v-if="packageReposLoading" class="skeleton-list" :aria-label="t('project.loadingPackages')"><span v-for="item in 3" :key="item"></span></div>
         <div v-else-if="packageReposErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(packageReposErrorKey) }}</span><button type="button" @click="loadPackageRepos">{{ t("common.reload") }}</button></div>
-        <div v-else-if="filteredPackageRepos.length" class="project-table-wrap"><table class="project-table config-table package-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th v-if="!selectedPackageName">URL</th><th v-if="!selectedPackageName">Git ref</th><th v-if="canEditProject && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th></tr></thead><tbody><tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }"><td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td><td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td><td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td><td v-if="canEditProject && !selectedPackageName" class="package-actions-column"><button class="text-button" type="button" :disabled="!repo.name" :aria-label="t('project.editPackage', { name: repo.name })" @click="openPackageEdit(repo)">{{ t("common.edit") }}</button><button class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button></td></tr></tbody></table></div>
+        <div v-else-if="filteredPackageRepos.length" class="project-table-wrap">
+          <table class="project-table config-table package-table">
+            <thead><tr>
+              <th>{{ t("project.repositoryName") }}</th>
+              <th v-if="!selectedPackageName">URL</th>
+              <th v-if="!selectedPackageName">Git ref</th>
+              <th v-if="(canEditProject || canStartBuild) && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }">
+                <td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td>
+                <td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td>
+                <td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td>
+                <td v-if="(canEditProject || canStartBuild) && !selectedPackageName" class="package-actions-column">
+                  <button v-if="canStartBuild" class="text-button" type="button"
+                    :disabled="!repo.name || buildConfigurationMissing || creatingBuild"
+                    :aria-label="t('project.buildPackage', { name: repo.name })"
+                    :title="buildConfigurationMissing ? t('project.buildConfigurationRequired') : ''"
+                    @click="openBuildDialog('single', repo.name || '')">{{ t("project.buildPackageAction") }}</button>
+                  <button v-if="canEditProject" class="text-button" type="button" :disabled="!repo.name" :aria-label="t('project.editPackage', { name: repo.name })" @click="openPackageEdit(repo)">{{ t("common.edit") }}</button>
+                  <button v-if="canEditProject" class="text-button danger-link" type="button" :aria-label="t('project.deletePackage', { name: repo.name })" :disabled="!repo.name" @click="openPackageDelete(repo.name || '')">{{ t("project.deletePackageAction") }}</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p v-else class="config-empty">{{ t(project.spec?.packageRepos?.length ? "project.noMatchingPackages" : "project.noPackageRepositories") }}</p>
         <div v-if="filteredPackageRepos.length" class="table-footer">
           <div class="page-summary">
@@ -225,8 +250,11 @@
 
     <ModalDialog v-if="buildDialogOpen" title-id="create-build-title" :title="t(buildDialogTitle)" :close-label="t('common.close')" @close="closeBuildDialog">
       <form class="project-form" @submit.prevent="createBuild">
-        <p class="form-hint">{{ t("project.createBuildHint") }}</p>
-        <fieldset v-if="requiresBuildPackages" class="target-fieldset build-package-fieldset">
+        <fieldset v-if="fixedBuildPackage" class="target-fieldset">
+          <legend>{{ t("project.repositoryName") }}</legend>
+          <code class="build-package-name">{{ fixedBuildPackage }}</code>
+        </fieldset>
+        <fieldset v-else-if="requiresBuildPackages" class="target-fieldset build-package-fieldset">
           <legend>{{ t("project.selectBuildPackages") }}</legend>
           <p class="form-hint build-package-hint">{{ t("project.selectBuildPackagesHint") }}</p>
           <label class="search-box build-package-search"><Search /><input v-model="buildPackageSearch" type="search" :placeholder="t('project.searchBuildPackages')" :aria-label="t('project.searchBuildPackages')" /></label>
@@ -236,6 +264,13 @@
           </div>
           <p class="build-package-count">{{ t("project.selectedBuildPackages", { count: selectedBuildPackages.length }) }}</p>
         </fieldset>
+        <label v-if="fixedBuildPackage" class="field">
+          <span>{{ t("project.buildGitRef") }}</span>
+          <input v-model="buildGitRef" :disabled="creatingBuild" autocomplete="off" spellcheck="false"
+            @keydown.tab.exact="completeBuildGitRef"
+            placeholder="refs/merge-requests/501/head" pattern="refs/.+" aria-describedby="build-git-ref-hint" />
+          <span id="build-git-ref-hint" class="form-hint build-git-ref-hint">{{ t("project.buildGitRefHint") }}</span>
+        </label>
         <p v-if="unsupportedBuildSelection" class="form-error">{{ t('buildTargetConfig.unsupported') }} <button type="button" @click="reloadBuildTargetConfig">{{ t('common.reload') }}</button></p>
         <fieldset class="target-fieldset">
           <legend>{{ t("project.buildTarget") }}</legend>
@@ -475,6 +510,8 @@ const copiedBuildName = ref("");
 let buildCopyResetTimer: number | undefined;
 const buildDialogOpen = ref(false);
 const buildType = ref<BuildType>("full");
+const fixedBuildPackage = ref("");
+const buildGitRef = ref("");
 const selectedBuildPackages = ref<string[]>([]);
 const buildPackageSearch = ref("");
 const requiresBuildPackages = computed(() => buildType.value === "single" || buildType.value === "specified");
@@ -918,13 +955,26 @@ function selectTab(tab: ProjectTab): void {
   void router.replace({ query });
 }
 
-async function openBuildDialog(type: BuildType): Promise<void> {
-  if (!project.value || !canStartBuild.value) return;
+function completeBuildGitRef(event: KeyboardEvent): void {
+  if (buildGitRef.value || creatingBuild.value) return;
+  const input = event.currentTarget as HTMLInputElement;
+  event.preventDefault();
+  buildGitRef.value = input.placeholder;
+}
+
+async function openBuildDialog(type: BuildType, packageName = ""): Promise<void> {
+  if (!project.value || !canStartBuild.value || creatingBuild.value) return;
   if (!projectIsFull.value && !(await loadProject(true))) return;
-  if (buildConfigurationMissing.value) return;
+  if (buildConfigurationMissing.value || !canStartBuild.value) return;
+  if (packageName && !availableBuildPackages.value.includes(packageName)) {
+    buildActionErrorKey.value = "errors.notFound";
+    return;
+  }
   void reloadBuildTargetConfig();
   buildType.value = type;
-  selectedBuildPackages.value = [];
+  fixedBuildPackage.value = type === "single" ? packageName : "";
+  buildGitRef.value = "";
+  selectedBuildPackages.value = fixedBuildPackage.value ? [fixedBuildPackage.value] : [];
   buildPackageSearch.value = "";
   buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os,
@@ -965,15 +1015,22 @@ async function createBuild(): Promise<void> {
     buildDialogErrorKey.value = "project.selectBuildPackagesError";
     return;
   }
+  const selectedType = buildType.value;
+  const packages = fixedBuildPackage.value ? [fixedBuildPackage.value]
+    : requiresBuildPackages.value ? [...selectedBuildPackages.value] : undefined;
+  const gitRef = selectedType === "single" && fixedBuildPackage.value ? buildGitRef.value : "";
   creatingBuild.value = true;
   buildDialogErrorKey.value = "";
-  const selectedType = buildType.value;
-  const packages = requiresBuildPackages.value ? [...selectedBuildPackages.value] : undefined;
+  const annotations = gitRef ? { "ebs.io/git-ref": gitRef } : undefined;
   const buildNames = targets.map(() => createBuildName());
   const results = await Promise.allSettled(targets.map((target, index) =>
     request<Build>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds`, {
       method: "POST",
-      body: JSON.stringify({ apiVersion: "ebs/v1", kind: "Build", metadata: { name: buildNames[index] }, spec: { buildType: selectedType, buildTarget: { ...target }, ...(packages ? { packages } : {}) } }),
+      body: JSON.stringify({
+        apiVersion: "ebs/v1", kind: "Build",
+        metadata: { name: buildNames[index], ...(annotations ? { annotations } : {}) },
+        spec: { buildType: selectedType, buildTarget: { ...target }, ...(packages ? { packages } : {}) },
+      }),
     }),
   ));
   const successfulNames = results.flatMap((result, index) => result.status === "fulfilled" ? [result.value.metadata?.name || buildNames[index]] : []);
