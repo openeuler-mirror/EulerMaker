@@ -13,7 +13,8 @@ pkg/runner/     Agent 装配、注册心跳、Job 生命周期和工作目录清
 pkg/gateway/    Gateway 客户端、资源传输类型、机器凭据与 Token 刷新
 pkg/executor/   执行器、脚本缓存、payload 落盘和日志时间戳
 pkg/container/ 容器运行时接口、Docker 与 containerd 原生 Go Client 后端
-pkg/artifact/  Artifact 地址路由、产物与日志上传、上传回执和保留期清理
+pkg/service/   服务地址快照、Job 选址、Artifact 与 Git 逻辑地址解析
+pkg/artifact/  产物与日志上传、上传回执和保留期清理
 ```
 
 测试随所属模块放置。`runner` 装配各模块；底层包不反向依赖 `runner`。CT 后端默认使用 Docker，也可选择 containerd。
@@ -37,7 +38,7 @@ docker build -t eulermaker/ebs-runner:dev .
 
 ## 本地运行
 
-Runner 启动前需要可访问的 Gateway，以及包含 MachineAccount 凭据的 JSON 文件。Artifact Manager 地址由 Runner 启动时从 Gateway 获取：
+Runner 启动前需要可访问的 Gateway，以及包含 MachineAccount 凭据的 JSON 文件。Artifact Manager 和 Git Server 地址通过 Gateway 的 `GET /apis/ebs/v1/service-endpoints` 获取：
 
 ```json
 {
@@ -59,7 +60,9 @@ go run ./cmd/runner \
 
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
-Runner 会在写入 `payload.json` 前，将 `repo[].url` 中的 `artifact://{instance}/repositories/...` 转换为该实例的 Runner 可访问 HTTP(S) 地址；普通仓库 URL 不变。Job 对象中的原始 payload 不会被修改。
+Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--artifact-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`，`external` 使用 `runnerExternalURL`，不跨模式回退。配置来自 `Config/service-config`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
+
+Runner 会在写入 `payload.json` 前，将 `repo[].url` 中的 `artifact://{instance}/repositories/...` 和 `clone_url` 中的 `git-server:///git/...` 转换为对应服务的 Runner 可访问 HTTP(S) 地址；普通 URL、`origin_url` 和 `commit_id` 不变。Git Server 基础地址不附加 `/git`，可以包含代理前缀。上传与 Git 地址在 Job 启动时固定，刷新只影响新 Job；Git 所选地址缺失时明确报错，不启动构建容器。Job 对象中的原始 payload 不会被修改。Git 克隆由构建脚本执行，HTTPS CA 信任由构建镜像配置。
 
 Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭据和签发的 Token 不应写入日志或 Runner 状态。
 

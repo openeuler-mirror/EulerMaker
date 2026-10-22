@@ -32,7 +32,6 @@
               <code v-else>{{ gitServer.runnerExternalURL || t('common.emptyValue') }}</code>
             </label>
           </div>
-          <p class="form-hint">{{ t('serviceConfig.gitRunnerPending') }}</p>
         </section>
         <section class="content-panel service-card">
           <div class="section-heading service-card-heading">

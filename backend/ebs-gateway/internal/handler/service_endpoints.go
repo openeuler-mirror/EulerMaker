@@ -15,13 +15,13 @@ import (
 
 const maxServiceConfigResponse = 5 << 20
 
-type artifactEndpoint struct {
+type runnerServiceEndpoint struct {
 	RunnerInternalURL string `json:"runnerInternalURL" yaml:"runnerInternalURL"`
 	RunnerExternalURL string `json:"runnerExternalURL" yaml:"runnerExternalURL"`
 }
 
-// ArtifactEndpoints returns the Runner-facing addresses without exposing the OpsOnly Config.
-func (a *Handler) ArtifactEndpoints(c *gin.Context) {
+// ServiceEndpoints returns Runner-facing addresses without exposing management URLs or the OpsOnly Config.
+func (a *Handler) ServiceEndpoints(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	if principal(c).Type != identity.RunnerType {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Runner identity required"})
@@ -69,12 +69,18 @@ func (a *Handler) ArtifactEndpoints(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid service configuration"})
 		return
 	}
-	instances := make(map[string]artifactEndpoint, len(content.ArtifactManagers))
+	instances := make(map[string]runnerServiceEndpoint, len(content.ArtifactManagers))
 	for name, instance := range content.ArtifactManagers {
-		instances[name] = artifactEndpoint{
+		instances[name] = runnerServiceEndpoint{
 			RunnerInternalURL: instance.RunnerInternalURL,
 			RunnerExternalURL: instance.RunnerExternalURL,
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"instances": instances})
+	c.JSON(http.StatusOK, gin.H{
+		"artifactManagers": instances,
+		"gitServer": runnerServiceEndpoint{
+			RunnerInternalURL: content.GitServer.RunnerInternalURL,
+			RunnerExternalURL: content.GitServer.RunnerExternalURL,
+		},
+	})
 }

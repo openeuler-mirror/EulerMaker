@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"ebs-runner/pkg/artifact"
 	"ebs-runner/pkg/gateway"
+	"ebs-runner/pkg/service"
 )
 
 type staticTokens struct{ token string }
@@ -21,17 +21,17 @@ func (s *staticTokens) RefreshAfterUnauthorized(context.Context, string) (string
 	return s.token, nil
 }
 
-func TestCTExecutorWritesResolvedRepository(t *testing.T) {
+func TestCTExecutorWritesResolvedServiceURLs(t *testing.T) {
 	dir := t.TempDir()
-	routes := artifact.NewRoutes("internal", &staticTokens{token: "token"}, http.DefaultClient)
-	if err := routes.Update(gateway.ArtifactEndpoints{Instances: map[string]gateway.ArtifactEndpoint{
+	routes := service.NewRoutes("internal", &staticTokens{token: "token"}, http.DefaultClient)
+	if err := routes.Update(gateway.ServiceEndpoints{ArtifactManagers: map[string]gateway.ServiceEndpoint{
 		"default": {RunnerInternalURL: "http://artifact-manager:8081"},
-	}}); err != nil {
+	}, GitServer: gateway.ServiceEndpoint{RunnerInternalURL: "http://git-server:8080/proxy"}}); err != nil {
 		t.Fatal(err)
 	}
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project"}, Spec: gateway.JobSpec{
 		RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
-		Payload:     `{"origin_url":"https://atomgit.com/src-openeuler/example.git","repo":[{"url":"artifact:///repositories/v1/repo/","priority":10}]}`,
+		Payload:     `{"origin_url":"https://atomgit.com/src-openeuler/example.git","clone_url":"git-server:///git/atomgit.com/src-openeuler/example.git","commit_id":"abc","repo":[{"url":"artifact:///repositories/v1/repo/","priority":10}]}`,
 	}}
 	executor := &CTExecutor{WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
 		Runtime: &fakeContainerRuntime{exitCode: 0}, ResolvePayload: routes.ResolvePayload}
@@ -51,5 +51,8 @@ func TestCTExecutorWritesResolvedRepository(t *testing.T) {
 	}
 	if got := payload["origin_url"]; got != "https://atomgit.com/src-openeuler/example.git" {
 		t.Fatalf("origin_url = %v", got)
+	}
+	if payload["clone_url"] != "http://git-server:8080/proxy/git/atomgit.com/src-openeuler/example.git" || payload["commit_id"] != "abc" {
+		t.Fatalf("source fields = %v", payload)
 	}
 }

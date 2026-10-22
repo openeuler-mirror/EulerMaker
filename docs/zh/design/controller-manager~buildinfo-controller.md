@@ -1234,7 +1234,7 @@ status:                                             # 创建时恒 Pending/Pendi
      - `package_name` = 当前条目的 `repoName`，始终写入，供脚本判断包仓库名相关规则；
      - `spec_file_name` = `本轮组装的 specDepends[spec].specFileName`；
      - `origin_url` = 当前 Snapshot `spec.packageRepos` 中按 `entry.repoName` 匹配的仓库 `url`。所有构建类型均传递，包含启用 Git LFS 的 Job；使用 Snapshot 固化值，不从实时 Project 或用户 buildPayload 取值；
-     - `clone_url` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].cloneUrl`（Git Server 客户端生成的 `git-server:///git/...` 逻辑地址，原样下发；Runner 解析尚未实现，完成前默认脚本不能直接克隆该地址；`use_git_lfs` 命中时默认脚本改用固定 AtomGit URL）；
+     - `clone_url` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].cloneUrl`（Git Server 客户端生成的 `git-server:///git/...` 逻辑地址，原样下发；Runner 按网络模式解析为 HTTP(S) URL 后交给脚本；`use_git_lfs` 命中时默认脚本改用固定 AtomGit URL）；
      - `commit_id` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].commitId`；
      - packageRepoStatuses 缺 `repoName` 条目或条目无 `commitId`（正常不出现：本轮组装的 specDepends 即按当前 Snapshot 的 url+commit 解析而来（15.11），且下发时必已就绪）→ 对应两键不注入 + warning 日志，**不阻断下发**。
    - `specDepends[specName].repoName` 在 `BuildInfo.spec.buildPayload.disable_check_path` 列表中时写入 `disable_check_path: true`，否则不写该键；同仓库的多个 spec 得到相同结果。该字段仅向构建脚本传递意图，构建脚本负责落实 RPATH 检查开关；Runner 不解析它。
@@ -1248,7 +1248,7 @@ status:                                             # 创建时恒 Pending/Pendi
      - 非 single：`repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时保留 `artifact://{instance}/repositories/...` 逻辑地址并置首；无实例标识的旧地址继续有效；若为 `/repositories/...` 路径，则规范化为 `artifact:///repositories/...`；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4）；后续批次 Job 注入当前已发布版本地址） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），写成有序 `{url, priority}` 对象数组；结果为空时使用配置中的 `repo` 字符串或列表并归一，仍为空则不写该键；
      - single：稳定 release 的确认、bootstrapRepo 追加、优先级与错误处理统一见 7.2.3 第 3 条，不读取 RpmRepo、不回退 buildPayload.repo；
      - `repo` 每项的 `priority` 由来源固定：过程仓为 10，bootstrap 仓与配置回退仓为 99。Job payload 不包含顶层 `repo_priority`；默认脚本将每项 `priority` 配置到 DNF，供 builddep 和构建后安装检查共同使用。
-3. **序列化**：将组装后的白名单字段转为 JSON 字符串写入 Job `spec.payload`；Project/BuildInfo 的 `buildPayload` 输入仍为 YAML。Job 中的 `artifact://...` 不包含管理面内网地址；Runner 适配后应使用其可访问的 Artifact Manager 地址解析该引用，再写入 `/workspace/payload.json`，构建脚本按 JSON 解析。Runner 尚未实现该解析，部署本变更前须完成 Runner 适配。
+3. **序列化**：将组装后的白名单字段转为 JSON 字符串写入 Job `spec.payload`；Project/BuildInfo 的 `buildPayload` 输入仍为 YAML。Job 中的 `artifact://...` 不包含管理面内网地址；Runner 使用其可访问的 Artifact Manager 地址解析该引用，再写入 `/workspace/payload.json`，构建脚本按 JSON 解析。
 4. **来源对象**：已识别配置键取自 reconcile 持有的本 BuildInfo 对象（自身字段，无额外查询，见 15.2.2）；Project 复用 parentAbortGuard 已读取对象，其 metadata 用于选择 Artifact Manager 实例，不额外 GET；父 Build 为 parentAbortGuard 已持有对象；当前 Snapshot（与本 Build 同名）——`initBuildInfo` 轮为步骤 0 已持有对象、Processing 轮经 7.3 步骤 2.2 显式获取（查询失败返回 error 退避重试，404 视为异常瞬态，不静默跳过注入）；非 single 的 `contentURL` 注入来源的本轮 RpmRepo 亦经步骤 2.2 按需获取（重建分支随建图上下文已持有；同一次持有亦用于 15.10 RpmMetaSources 缓存刷新）。非 single 逐 Job `prefer` 取相同 `contentURL` 与 `BuildInfo.spec.bootstrapRepo` 的元数据，创建 Job 前刷新到本轮仓库视图，不使用初始建图时可能已过期的缓存；XML 不可用时不创建新 Job，也不透传全局 `prefer`。single 的稳定发布入口选择与 prefer 输入见 7.2.3 第 3 条。
 
 **apiserver 默认与覆写的字段（非 controller 写入，列明以免歧义）**：

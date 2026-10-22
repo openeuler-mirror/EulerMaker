@@ -24,16 +24,17 @@ func TestClientGetScript(t *testing.T) {
 	}
 }
 
-func TestClientGetArtifactEndpoints(t *testing.T) {
+func TestClientGetServiceEndpoints(t *testing.T) {
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
-		if req.Method != http.MethodGet || req.URL.Path != apiPrefix+"/artifact-endpoints" {
+		if req.Method != http.MethodGet || req.URL.Path != apiPrefix+"/service-endpoints" {
 			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
 		}
-		return response(http.StatusOK, `{"instances":{"art-01":{"runnerInternalURL":"http://art-01:8081"}}}`), nil
+		return response(http.StatusOK, `{"artifactManagers":{"art-01":{"runnerInternalURL":"http://art-01:8081"}},"gitServer":{"runnerInternalURL":"http://git:8084","runnerExternalURL":"https://git.example.com"}}`), nil
 	})
-	endpoints, err := client.GetArtifactEndpoints(context.Background())
-	if err != nil || endpoints.Instances["art-01"].RunnerInternalURL != "http://art-01:8081" {
-		t.Fatalf("GetArtifactEndpoints = %+v, %v", endpoints, err)
+	endpoints, err := client.GetServiceEndpoints(context.Background())
+	if err != nil || endpoints.ArtifactManagers["art-01"].RunnerInternalURL != "http://art-01:8081" ||
+		endpoints.GitServer.RunnerInternalURL != "http://git:8084" || endpoints.GitServer.RunnerExternalURL != "https://git.example.com" {
+		t.Fatalf("GetServiceEndpoints = %+v, %v", endpoints, err)
 	}
 }
 
