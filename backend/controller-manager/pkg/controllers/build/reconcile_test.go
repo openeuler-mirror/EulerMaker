@@ -242,6 +242,53 @@ func TestPendingReusesExistingSnapshotWithoutReadingProject(t *testing.T) {
 	assertCounterDelta(t, metricEnsureTerminating, beforeTerminating, 0)
 }
 
+func TestPendingCreatesAndReusesSnapshotWithGitRef(t *testing.T) {
+	for _, outcome := range []clientpkg.WriteOutcome{"", clientpkg.WriteRejected, clientpkg.WriteUnknown} {
+		t.Run(string(outcome), func(t *testing.T) {
+			api := newFakeAPI()
+			build := newBuild("project-a", "build-a", "single", []string{"gcc"})
+			build.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
+			api.builds[key(build.Namespace, build.Name)] = build
+			api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"), newPackageRepo("glibc"))
+			if outcome != "" {
+				api.hooks.createSnapshot = func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
+					api.storeSnapshot(request)
+					if outcome == clientpkg.WriteRejected {
+						return nil, &clientpkg.WriteError{
+							Operation: "create", Outcome: outcome, StatusCode: 409,
+							Err: apierrors.NewAlreadyExists(snapshotsResource, request.Name),
+						}
+					}
+					return nil, &clientpkg.WriteError{Operation: "create", Outcome: outcome, Err: errors.New("lost response")}
+				}
+			}
+			c := newTestController(t, api, newTestClock())
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			snapshot := api.snapshot("project-a", "build-a")
+			if snapshot == nil || !reflect.DeepEqual(snapshot.Annotations, build.Annotations) {
+				t.Fatalf("Snapshot annotations: %+v", snapshot)
+			}
+			project := api.getProject("project-a")
+			if !reflect.DeepEqual(snapshot.Spec.PackageRepos, project.Spec.PackageRepos[:1]) ||
+				snapshot.Spec.DefaultRef != project.Spec.DefaultRef {
+				t.Fatalf("Snapshot input: %+v", snapshot.Spec)
+			}
+			api.projects["project-a"] = newProject("project-a", newPackageRepo("changed"))
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatalf("repeated sync: %v", err)
+			}
+			if got := api.snapshot("project-a", "build-a"); !reflect.DeepEqual(got, snapshot) {
+				t.Fatalf("reused Snapshot = %+v, want %+v", got, snapshot)
+			}
+			if api.CallCount("CreateSnapshot") != 1 || api.CallCount("GetProject") != 1 {
+				t.Fatalf("create calls = %d, Project reads = %d", api.CallCount("CreateSnapshot"), api.CallCount("GetProject"))
+			}
+		})
+	}
+}
+
 func TestPendingWaitsForTerminatingSnapshot(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
@@ -637,6 +684,21 @@ func TestNewSnapshotKeepsFullRepositoryListForNonSingleBuilds(t *testing.T) {
 	snapshot := newSnapshot(build, project)
 	if !reflect.DeepEqual(repoNames(snapshot.Spec.PackageRepos), []string{"gcc", "glibc"}) {
 		t.Fatalf("packageRepos = %v", repoNames(snapshot.Spec.PackageRepos))
+	}
+}
+
+func TestNewSnapshotCopiesGitRefAnnotation(t *testing.T) {
+	project := newProject("project-a", newPackageRepo("gcc"))
+	build := newBuild("project-a", "build-a", "single", []string{"gcc"})
+	ref := "refs/merge-requests/501/head"
+	build.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref, "example.com/note": "build only"}
+	snapshot := newSnapshot(build, project)
+	if want := (map[string]string{ebsv1.BuildGitRefAnnotation: ref}); !reflect.DeepEqual(snapshot.Annotations, want) {
+		t.Fatalf("annotations = %v, want %v", snapshot.Annotations, want)
+	}
+	snapshot.Annotations[ebsv1.BuildGitRefAnnotation] = "refs/merge-requests/502/head"
+	if build.Annotations[ebsv1.BuildGitRefAnnotation] != ref {
+		t.Fatal("Snapshot annotations must be independent of the Build")
 	}
 }
 

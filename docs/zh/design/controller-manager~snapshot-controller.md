@@ -98,12 +98,16 @@ type GitServerClient interface {
     // 不得调用该方法。
     ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (string, error)
 
+    // ResolveFullRef 解析 Snapshot annotation 中的完整引用。
+    // 使用与 ResolveCommit 相同的错误分类及 commit SHA 校验。
+    ResolveFullRef(ctx context.Context, originURL, ref string) (string, error)
+
     // ExecCommand 供 BuildInfo Controller 读取已就绪镜像中的 spec。
     ExecCommand(ctx context.Context, originURL, command string) (string, error)
 }
 ```
 
-Snapshot Controller 仅调用前三个方法；`ExecCommand` 由 BuildInfo Controller 使用。
+Snapshot Controller 调用同步、状态查询和两种引用解析方法；`ExecCommand` 由 BuildInfo Controller 使用。
 
 `GitServerClient` 的失败必须返回可由 `errors.As` 识别的分类错误，Controller 不解析错误文本或底层 HTTP 状态：
 
@@ -130,15 +134,15 @@ type GitServerError struct {
 |-------|-------------------------|
 | `nil` | 调用成功；`CheckSynced` 的正常未就绪也返回 `Synced=false, nil` |
 | `GitServerError{Kind: Validation}` | Controller 提供的 URL 或 ref 不符合约束，确定性包级 `ValidationFailed`，当轮进入 Skipped |
-| `GitServerError{Kind: NotFound}` | `ResolveCommit` 确认 Branch/Tag 不存在，确定性包级 `ResolveFailed`，当轮进入 Skipped |
-| `GitServerError{Kind: Temporary}` | 408、429、5xx、临时网络错误、异常/不完整响应等；`PublishSyncTask`/`CheckSynced` 映射为 `SyncFailed`，`ResolveCommit` 映射为 `ResolveFailed`，均设置 `retryable=true` 并计入跨轮失败预算 |
+| `GitServerError{Kind: NotFound}` | `ResolveCommit` / `ResolveFullRef` 确认引用不存在，确定性包级 `ResolveFailed`，当轮进入 Skipped，不回退其他引用 |
+| `GitServerError{Kind: Temporary}` | 408、429、5xx、临时网络错误、异常/不完整响应等；`PublishSyncTask`/`CheckSynced` 映射为 `SyncFailed`，`ResolveCommit`/`ResolveFullRef` 映射为 `ResolveFailed`，均设置 `retryable=true` 并计入跨轮失败预算 |
 | `GitServerError{Kind: Permanent}` | 401、403 或无法通过重试修复的协议错误；Controller 返回 `PermanentError`，不得把基础设施配置错误固化成包级 Skipped |
 | `context.Canceled` | 原样返回；Manager context 取消时停止本周期，不生成业务错误 |
 | `context.DeadlineExceeded` | 单请求自身超时归入 `SyncTimeout` 并计失败；单轮 `budgetCtx` 到期导致的中断归入 Deferred，不计失败；Manager context 已取消时仍原样结束。客户端保留错误链，Controller 根据 context 取消原因区分，不能只检查错误字符串 |
 
 客户端内部固定重试耗尽后只返回一次最终分类错误，并保留 `errors.Is(err, context.Canceled)`、`errors.Is(err, context.DeadlineExceeded)`，以及通过 `var gitErr *GitServerError; errors.As(err, &gitErr)` 读取分类的能力。Controller 对未知且无法分类的 error 按 `Temporary` 处理并记录 `unexpected-git-server-error` 指标，避免误把暂时故障永久固化到 Snapshot。
 
-HTTP 及协议结果必须在客户端内按以下规则归一化：400/422 且明确表示输入 URL/ref 非法时为 `Validation`；`CheckSynced` 的仓库 404 为正常未就绪；`ResolveCommit` 明确确认 ref 不存在时为 `NotFound`；401/403、接口不存在导致的 404/405 和其他不可恢复协议错误为 `Permanent`；408、429、5xx、网络错误及无法解析或字段不完整的成功响应为 `Temporary`。不得将服务端异常响应归为输入 `Validation`，避免把基础设施故障永久写入包状态。
+HTTP 及协议结果必须在客户端内按以下规则归一化：400/422 且明确表示输入 URL/ref 非法时为 `Validation`；`CheckSynced` 的仓库 404 为正常未就绪；`ResolveCommit` / `ResolveFullRef` 明确确认 ref 不存在时为 `NotFound`；401/403、接口不存在导致的 404/405 和其他不可恢复协议错误为 `Permanent`；408、429、5xx、网络错误及无法解析或字段不完整的成功响应为 `Temporary`。不得将服务端异常响应归为输入 `Validation`，避免把基础设施故障永久写入包状态。
 
 接口边界约定：
 
@@ -336,9 +340,13 @@ build_controller 在 Prepared 阶段创建 Snapshot
 
 ### 6.2 单包 commit 解析子状态机（reconcile 内瞬时状态，不持久化）
 
+完整引用覆盖：若 Snapshot 携带 `ebs.io/git-ref`，先确认 packageRepos 恰好一个条目，使用 annotation 作为该仓库的有效引用，不读取父 Build 的 annotation 或实时 Project。该覆盖优先于包 ref（包括 Commit）与 defaultRef，必须走 CheckSynced/PublishSyncTask；同步满足 baseline 后调用 ResolveFullRef，成功时保存 commitId 和 cloneUrl。引用不存在按不可重试 ResolveFailed 记录，不回退包 ref/defaultRef。覆盖为空或 packageRepos 数量不为一时返回 PermanentError；完整 ref 语法无效时记录包级 ValidationFailed。均不解析其他引用。
+
+成功持久化的 commitId/cloneUrl 在后续 reconcile 和重启后沿用。
+
 `ref.type=Branch/Tag` 每轮从 `CheckSynced` 开始。已满足 baseline 时直接解析 ref，不再提交 Sync；未就绪时调用 `PublishSyncTask`，成功后立即返回 Waiting 并释放 worker，由下一轮重新检查。git-server 异步完成同步，Controller 不创建脱离 reconcile 的后台轮询 goroutine，也不在 worker 内等待仓库同步完成。
 
-`ref.type=Commit` 校验 `ref.value` 后直接进入 Resolved，不访问 git-server。瞬时状态不持久化；进程重启后从 Snapshot 已持久化结果和 git-server 同步状态恢复，不需要持久化同步请求 ID。
+没有完整引用覆盖时，`ref.type=Commit` 校验 `ref.value` 后直接进入 Resolved，不访问 git-server。瞬时状态不持久化；进程重启后从 Snapshot 已持久化结果和 git-server 同步状态恢复，不需要持久化同步请求 ID。
 
 | 瞬时状态 | 含义 | 迁移条件 |
 |----------|------|----------|
@@ -414,7 +422,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `SyncFailed` | `true` | 发布同步任务或查询同步状态发生临时错误，且跨轮预算尚未耗尽 |
 | `SyncTimeout` | `true` | 实际 git-server 请求自身超时，且跨轮失败预算尚未耗尽；单轮预算中断为 Deferred，正常同步等待为 Waiting，二者均不产生该错误 |
 | `ResolveFailed` | `false` | Branch/Tag 指向的 ref 不存在或命令返回确定性失败 |
-| `ResolveFailed` | `true` | `ResolveCommit` 遭遇临时网络、服务端或响应错误，且跨轮预算尚未耗尽 |
+| `ResolveFailed` | `true` | `ResolveCommit` / `ResolveFullRef` 遭遇临时网络、服务端或响应错误，且跨轮预算尚未耗尽 |
 | `ValidationFailed` | `false` | 不可信输入校验失败、包名重复等确定性输入错误 |
 | `CommitConflict` | `false` | 同一 URL 与规范化 ref 得到不同 commitId |
 | `RetryExhausted` | `false` | 非确定性失败达到跨轮预算 |
@@ -628,12 +636,14 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 
 ### 11.1 单元测试
 
+- 完整引用覆盖优先于包 ref/defaultRef，先同步再解析；不存在时写 ResolveFailed，不回退；固化后远端 ref 更新与重启均沿用已保存 commit；
+
 - Active Snapshot 不处理；
 - Pending Snapshot 推进到 Processing；
 - Processing Snapshot 继续填充（异常重入）；
 - 已被删除的 Snapshot 静默返回；
 - PackageRepo 已有 commitId 或不可重试 error 时不重复解析，已有可重试 error 时继续解析；
-- `ref.type=Commit` 时跳过 git-server 解析并直接采用 `ref.value`；
+- 无完整引用覆盖时，`ref.type=Commit` 跳过 git-server 解析并直接采用 `ref.value`；
 - 包级确定性失败写入不可重试 error 并跳过；无 packageRepos 写整体 condition；
 - `buildType=single` 部分目标缺失时，缺失目标写整体 condition 且不创建包级状态，已找到目标仍完成解析后才推进 Active；全部目标缺失时不启动 worker 并直接推进 Active；其他 buildType 即使填写 `spec.packages` 也解析全部仓库；
 - 实际请求的非确定性失败（5xx/网络/单请求超时）跨轮重试，同一包每轮只计一次，超限后跳过；

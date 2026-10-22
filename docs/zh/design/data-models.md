@@ -241,6 +241,35 @@ type BuildSpec struct {
 
 Build 创建后，除 `incremental` 类型在 Pending 阶段由 Build Controller 幂等更新 `spec.packages` 外，其余 `spec` 字段不可修改。`packages` 允许为空数组表示没有构建种子；仅当 Build 进入 Prepared 后，才表示本轮种子已确认。普通用户不能修改 Controller 计算结果。运行状态通过 `/status` 子资源更新。
 
+### 单包构建的 Git ref 覆盖
+
+本节定义单包构建的引用覆盖与固化边界。Build Controller 将 annotation 传递到 Snapshot，由 Snapshot Controller 解析并固化提交。调谐见 [Build Controller 4.2](controller-manager~build-controller.md)，脚本执行见 [Script 源码获取契约](data-models~script.md)。
+
+`Build.metadata.annotations["ebs.io/git-ref"]` 可覆盖本次构建的完整 Git ref：
+
+```yaml
+metadata:
+  annotations:
+    ebs.io/git-ref: refs/merge-requests/501/head
+spec:
+  buildType: single
+  packages:
+    - gcc
+```
+
+- 仅在 `buildType=single` 且 `len(spec.packages)==1` 时允许设置；这里是数组长度，不是去重后的数量。未设置 annotation 时普通 single 仍允许指定多个包仓库。
+- Build 创建时包名必须存在于所属 Project。Build Controller 创建 Snapshot 时，从同一次 Project GET 复制目标仓库 URL/ref 与 defaultRef，并将 Build 的 `ebs.io/git-ref` 原样复制到 Snapshot annotation；不修改 Project、不指定 fork URL。该 annotation 仅作用于 Snapshot 中唯一的目标仓库，优先于包 ref 和 Snapshot.defaultRef；目标仓库缺失或数量不为一时报告输入错误，不回退默认分支。
+- annotation 必须非空、以 `refs/` 开头并符合完整 Git ref 名称规则；不接受 `HEAD`、`FETCH_HEAD`、refspec、通配符或 `^{commit}` 等 revision 表达式，不自动 trim 或补前缀。创建后该键的存在性和值不可变，`/status` 保留原 metadata。
+- Snapshot 创建后不重新复制 Project 或 Build 输入；Snapshot Controller 只消费 Snapshot 中固化的 annotation、packageRepos 和 defaultRef，成功写入的 commitId/cloneUrl 后续不重新解析。所有批次 Job 均使用该 Snapshot 的固定提交。
+- 不新增 GitRefType：Project/Snapshot.packageRepos.ref 保持 Branch/Tag/Commit；完整 `refs/...` 覆盖通过 Snapshot annotation 传递。Job 不传递动态 ref，统一携带 origin_url、clone_url 和 commit_id。
+- `refs/merge-requests/501/head` 表示 PR 源码，不自动合并目标分支、不改写为 merge ref。引用名称由托管平台决定。
+
+**源码一致性边界**：Snapshot 固定的是成功解析并持久化的提交，不是 Build 创建瞬间的 PR 提交；固化前远端 ref 仍可能变化。固化后，管理面解析和所有 Job 均使用该 commit，引用后续更新不影响本次构建。引用不存在时记录明确的包级解析失败，不回退其他引用。
+
+授权仍沿用 Project 内创建 Build 的权限。`rpmspec` 可执行 shell/Lua 宏，BI-02 隔离完成前仅接收受信任、经审核的源码，不自动接入任意外部 PR。
+
+输入契约验收：普通 single 多包、PR 单元素覆盖、annotation 准入及不可变、Snapshot 输入固化、完整引用不存在时不回退、成功解析后引用变化与重启均沿用固定 commit。
+
 ### BootstrapRepo
 
 ```go

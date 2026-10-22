@@ -191,6 +191,8 @@ status:
 
 ### 4.2 Snapshot
 
+**完整引用覆盖**：创建 single 的 Snapshot 时，将 Build 的 `ebs.io/git-ref` 原样复制到 Snapshot annotation，仅作用于唯一目标仓库；输入边界见[数据模型](data-models.md#单包构建的-git-ref-覆盖)。已有 Snapshot 不覆盖。Snapshot Controller 负责解析并固定 commit，BuildInfo 仅消费解析结果。
+
 仓库选择规则：`Build.spec.buildType=single` 时，以 `Build.spec.packages` 的去重名称集匹配 `Project.spec.packageRepos[].name`，只复制匹配条目，保持 Project 列表中的相对顺序；不补入其他仓库，也不为未找到的名称伪造 PackageRepo。所选条目完整 DeepCopy，包括 name、URL 和 ref。其他 buildType 复制完整仓库列表。Snapshot.spec.defaultRef 始终从同一次 Project GET 复制，包 ref 为空时仍保持为空。创建阶段使用上述选择规则；已存在对象不重新筛选或覆盖。
 
 正常 single 输入应满足第十三章前置校验；若创建 Build 后 Project 变化导致目标缺失，只复制实际命中的条目，缺失目标沿用 Snapshot Controller 的整体 condition 处理规则，不替换成全量仓库。

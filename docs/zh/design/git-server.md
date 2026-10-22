@@ -442,7 +442,7 @@ Worker 每次只终结一次队列项：成功、不可重试失败、重试耗�
 1. 校验目标是 bare repository；
 2. 读取仓库已有的 `remote.origin.url`；
 3. 根据该 origin 选择凭证；
-4. 执行 `git fetch --prune '+refs/*:refs/*'`；
+4. 执行 `git fetch --prune '+refs/*:refs/*'`，镜像上游对当前凭据公开的全部 refs（包括公开的 PR refs）；不假设未公开的引用可通过通配同步获得，调用方解析缺失引用时明确失败；
 5. 返回成功，由 Worker 更新内存中的 SyncTime。
 
 相同 key 的后续 sync 必须从本地裸仓库读取 `remote.origin.url` 并使用该地址 fetch，不得使用请求携带的 URL，也不得修改已有 origin。后续请求中的 URL 只用于计算 key。即使不同协议或用户名的 URL 映射到同一个 key，仍以首次 clone 保存的 origin 为准；需要切换 origin 时必须先完成 delete，再提交新的 sync。

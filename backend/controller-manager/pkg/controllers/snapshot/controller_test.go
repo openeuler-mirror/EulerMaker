@@ -61,6 +61,7 @@ type fakeGitClient struct {
 	mu          sync.Mutex
 	publishErr  error
 	resolvedRef ebsv1.GitRef
+	fullRef     string
 }
 
 func (f *fakeGitClient) PublishSyncTask(context.Context, string) error { return f.publishErr }
@@ -75,6 +76,53 @@ func (f *fakeGitClient) ResolveCommit(_ context.Context, _ string, ref ebsv1.Git
 }
 func (f *fakeGitClient) ExecCommand(context.Context, string, string) (string, error) {
 	panic("Snapshot Controller must not execute git commands")
+}
+
+func (f *fakeGitClient) ResolveFullRef(_ context.Context, _ string, ref string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fullRef = ref
+	return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
+}
+
+func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
+	for _, ref := range []ebsv1.GitRef{
+		{},
+		{Type: ebsv1.GitRefBranch, Value: "main"},
+		{Type: ebsv1.GitRefTag, Value: "v1"},
+		{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	} {
+		t.Run(string(ref.Type), func(t *testing.T) {
+			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ref}})
+			build.Spec.BuildType = "single"
+			snapshot.Spec.DefaultRef = ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "default"}
+			snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
+			api := &fakeClient{snapshot: snapshot, build: build}
+			git := &fakeGitClient{}
+			c := newTestController(t, api, git, Config{})
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatal(err)
+			}
+			status := api.snapshot.Status.PackageRepoStatuses["pkg"]
+			if api.snapshot.Status.Phase != ebsv1.SnapshotActive || status.CommitID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+				status.CloneURL != "git://mirror/repo" || git.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] {
+				t.Fatalf("phase=%s status=%+v resolved ref=%q", api.snapshot.Status.Phase, status, git.fullRef)
+			}
+			if git.resolvedRef != (ebsv1.GitRef{}) || api.snapshot.Spec.PackageRepos[0].Ref != ref {
+				t.Fatal("full ref override must leave original refs unchanged and use only full ref resolution")
+			}
+			// A new controller also reuses a committed package result while the Snapshot is Processing.
+			api.snapshot.Status.Phase = ebsv1.SnapshotProcessing
+			git.fullRef = ""
+			c = newTestController(t, api, git, Config{})
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatal(err)
+			}
+			if git.fullRef != "" || api.snapshot.Status.PackageRepoStatuses["pkg"] != status {
+				t.Fatal("persisted package commit must be reused after restart")
+			}
+		})
+	}
 }
 
 func TestResolveSnapshotDefaultRef(t *testing.T) {
