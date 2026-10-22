@@ -118,6 +118,25 @@ spec:
       [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
     }
 
+    checkout_source_commit() {
+      local attempt
+      # A normal clone may omit commits reachable only through PR refs.
+      if ! git -C "$source_dir" cat-file -e "$commit_id^{commit}" 2>/dev/null; then
+        for attempt in 1 2 3; do
+          if git -C "$source_dir" fetch --no-tags origin "$commit_id"; then
+            break
+          fi
+          if (( attempt == 3 )); then
+            echo "failed to fetch fixed commit: $commit_id" >&2
+            return 1
+          fi
+          sleep 2
+        done
+      fi
+      git -C "$source_dir" cat-file -e "$commit_id^{commit}"
+      git -C "$source_dir" checkout --detach "$commit_id"
+    }
+
     prepare_sources() {
       local lfs_url source
       mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS} /results/packages
@@ -126,11 +145,11 @@ spec:
         git lfs version >/dev/null || { echo "git-lfs is required for payload.use_git_lfs" >&2; exit 1; }
         lfs_url="https://atomgit.com/src-openeuler/${package_name}.git"
         GIT_LFS_SKIP_SMUDGE=1 git clone --no-checkout -- "$lfs_url" "$source_dir"
-        GIT_LFS_SKIP_SMUDGE=1 git -C "$source_dir" checkout --detach "$commit_id"
+        GIT_LFS_SKIP_SMUDGE=1 checkout_source_commit
         git -C "$source_dir" lfs pull
       else
         git clone --no-checkout -- "$clone_url" "$source_dir"
-        git -C "$source_dir" checkout --detach "$commit_id"
+        checkout_source_commit
       fi
       test -f "$source_dir/$spec_file" || { echo "spec not found: $spec_file" >&2; exit 1; }
 
