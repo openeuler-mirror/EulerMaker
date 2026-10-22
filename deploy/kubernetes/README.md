@@ -212,11 +212,11 @@ kubectl -n ebs rollout status deployment/scheduler --timeout=10m
 
 ## 6. 部署 Git Server
 
-`git-server.yaml` 创建普通 ClusterIP Service，Git Server 通过 `GIT_SERVER_SERVICE_HOST` 获取其地址，并返回 `http://<Service ClusterIP>:8080/git/...` 作为 clone URL。先创建 Service，再启动 Pod；应用同一文件时 Service 已排在 Deployment 之前。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
+`git-server.yaml` 创建普通 ClusterIP Service。Git Server 返回 `/git/...` 形式的 `clone_path`，无需预先配置或发现服务 IP；Controller Manager 客户端转换为 `git-server:///git/...` 逻辑地址。Runner 的 Git 逻辑地址解析尚未实现，补齐前不能使用该地址运行完整构建链路。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
 
 Job 容器由宿主机 Docker 启动并使用宿主机网络，不在 Kubernetes Pod 网络内。启用 Snapshot Controller 前，必须从实际构建节点验证 Git Service ClusterIP 的 8080 端口可达；集群外构建节点通常不能直接访问 ClusterIP，若验证失败，应改用构建节点可达的固定内网入口。
 
-克隆与管理 API 共用 HTTP 端口。为集群外 Runner 配置代理时，仅转发 `/git/` 并使用 HTTPS，不暴露 `/api/v1/repo/*` 和 `/command`；将 `--clone-base-url` 设置为该代理的克隆基础地址。
+克隆与管理 API 共用 HTTP 端口。配置集群外克隆入口时，仅转发 `/git/` 并使用 HTTPS，不暴露 `/api/v1/repo/*` 和 `/command`。手动克隆可将该入口与 `clone_path` 拼接，不能把逻辑地址直接交给 Git。
 
 ```sh
 kubectl apply -f deploy/kubernetes/git-server.yaml
@@ -294,7 +294,11 @@ artifactManagers:
     runnerExternalURL: ""
 gitServer:
   internalURL: http://git-server:8080
+  runnerInternalURL: http://git-server.ebs.svc.cluster.local:8080
+  runnerExternalURL: ""
 ```
+
+Git Server 的 Runner 地址使用服务入口，不附加 `/git`，代理路径前缀可保留。本阶段这两个地址仅保存配置，Gateway 尚未投影给 Runner，Runner 的 `git-server:///` 解析仍待实现。
 
 `default` 是未设置 `ebs.io/artifacts` 的 Project 使用的实例；若将 Project 指向 `art-01`，创建或修改该 annotation 时也须确认 Config 中存在此键。BuildInfo Controller 创建 Job 时会将选中的实例名固化到 Job 的同名 annotation，Runner 据此选择日志和产物上传地址。不要将 Docker Compose 使用的 `127.0.0.1:8081` 原样用于异机 Runner。
 

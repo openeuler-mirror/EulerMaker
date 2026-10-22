@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,16 +26,61 @@ func TestCheckSyncedUsesCacheAndBaseline(t *testing.T) {
 		if request.URL.Path != "/api/v1/repo/status" {
 			t.Fatalf("unexpected path %q", request.URL.Path)
 		}
-		return response(http.StatusOK, `{"clone_url":"git://git/repositories/https/example.com/repo.git","sync_time":"2026-09-14T00:00:00Z"}`), nil
+		return response(http.StatusOK, `{"clone_path":"/git/example.com/repo.git","sync_time":"2026-09-14T00:00:00Z"}`), nil
 	})
 
 	result, err := client.CheckSynced(context.Background(), "https://example.com/repo.git", syncTime.Add(-time.Second))
-	if err != nil || !result.Synced || result.CloneURL == "" {
+	if err != nil || !result.Synced || result.CloneURL != "git-server:///git/example.com/repo.git" {
 		t.Fatalf("unexpected first result %#v, err=%v", result, err)
 	}
 	result, err = client.CheckSynced(context.Background(), "git@EXAMPLE.com:repo", syncTime.Add(time.Second))
 	if err != nil || result.Synced || requests != 1 {
 		t.Fatalf("cache/baseline mismatch: result=%#v requests=%d err=%v", result, requests, err)
+	}
+}
+
+func TestCheckSyncedClonePath(t *testing.T) {
+	for _, key := range []string{"example.com/team/repo.git", "example.com/team/repo%2Bname.git", "example.com/team/仓库.git"} {
+		t.Run(key, func(t *testing.T) {
+			clonePath := (&url.URL{Path: "/git/" + key}).EscapedPath()
+			client := newTestClient(t, func(*http.Request) (*http.Response, error) {
+				return response(http.StatusOK, `{"clone_path":"`+clonePath+`","sync_time":"2026-09-14T00:00:00Z"}`), nil
+			})
+			got, err := client.CheckSynced(context.Background(), "https://example.com/repo.git", time.Time{})
+			if err != nil || !got.Synced || got.CloneURL != "git-server://"+clonePath {
+				t.Fatalf("result=%+v error=%v", got, err)
+			}
+			parsed, err := url.Parse(got.CloneURL)
+			if err != nil || parsed.Scheme != "git-server" || parsed.Host != "" || parsed.Path != "/git/"+key {
+				t.Fatalf("logical URL changed repository key: %s, %v", got.CloneURL, err)
+			}
+		})
+	}
+}
+
+func TestCheckSyncedReadinessAndPathContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantError bool
+	}{
+		{name: "awaiting first sync", body: `{}`},
+		{name: "missing path after sync", body: `{"sync_time":"2026-09-14T00:00:00Z"}`, wantError: true},
+		{name: "absolute address", body: `{"sync_time":"2026-09-14T00:00:00Z","clone_path":"https://git/git/repo.git"}`, wantError: true},
+		{name: "traversal", body: `{"sync_time":"2026-09-14T00:00:00Z","clone_path":"/git/%2e%2e/repo.git"}`, wantError: true},
+		{name: "query", body: `{"sync_time":"2026-09-14T00:00:00Z","clone_path":"/git/repo.git?token=x"}`, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newTestClient(t, func(*http.Request) (*http.Response, error) {
+				return response(http.StatusOK, tc.body), nil
+			})
+			got, err := client.CheckSynced(context.Background(), "https://example.com/repo.git", time.Time{})
+			if tc.wantError {
+				assertKind(t, err, ErrorTemporary)
+			} else if err != nil || got.Synced || got.CloneURL != "" {
+				t.Fatalf("result=%+v error=%v", got, err)
+			}
+		})
 	}
 }
 

@@ -67,7 +67,7 @@ type fakeGitClient struct {
 
 func (f *fakeGitClient) PublishSyncTask(context.Context, string) error { return f.publishErr }
 func (f *fakeGitClient) CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error) {
-	return gitserver.SyncCheckResult{Synced: true, CloneURL: "git://mirror/repo"}, nil
+	return gitserver.SyncCheckResult{Synced: true, CloneURL: "git-server:///git/example.com/repo.git"}, nil
 }
 func (f *fakeGitClient) ExecCommand(context.Context, string, string) (string, error) {
 	panic("Snapshot Controller must not execute git commands")
@@ -98,7 +98,7 @@ func TestResolvePinnedCommit(t *testing.T) {
 			t.Fatal(err)
 		}
 		status := api.snapshot.Status.PackageRepoStatuses["pkg"]
-		if status.CommitID != commitID || status.CloneURL != "git://mirror/repo" || git.commitID != commitID {
+		if status.CommitID != commitID || status.CloneURL != "git-server:///git/example.com/repo.git" || git.commitID != commitID {
 			t.Fatalf("status=%+v resolved commit=%q", status, git.commitID)
 		}
 	}
@@ -120,7 +120,7 @@ func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
 			}
 			status := api.snapshot.Status.PackageRepoStatuses["pkg"]
 			if api.snapshot.Status.Phase != ebsv1.SnapshotActive || status.CommitID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
-				status.CloneURL != "git://mirror/repo" || git.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] {
+				status.CloneURL != "git-server:///git/example.com/repo.git" || git.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] {
 				t.Fatalf("phase=%s status=%+v resolved ref=%q", api.snapshot.Status.Phase, status, git.fullRef)
 			}
 			if api.snapshot.Spec.PackageRepos[0].Ref != ref {
@@ -223,7 +223,7 @@ func TestServiceConfigFailurePreservesPackageBudget(t *testing.T) {
 
 func (f *fakeServices) Load(context.Context) (*ebsv1.ServiceConfigContent, error) {
 	f.loads++
-	return &ebsv1.ServiceConfigContent{GitServer: ebsv1.GitServerConfig{InternalURL: "http://git-server:8080"}}, f.err
+	return &ebsv1.ServiceConfigContent{GitServer: ebsv1.ServiceEndpoints{InternalURL: "http://git-server:8080"}}, f.err
 }
 
 func (f *fakeServices) GitClient(string) (gitserver.GitServerClient, error) { return f.git, nil }

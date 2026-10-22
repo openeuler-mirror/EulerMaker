@@ -415,7 +415,7 @@ containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默
 ```text
 1. 解析 Job.spec.runtimeSpec，得到镜像、网络、权限、工作目录、挂载等容器配置
 2. 为 Job 创建本地 workDir 和 resultDir
-3. 将 Job.spec.payload 写入 workDir/payload.json，作为任务执行所需的 JSON 参数文件。`origin_url`、`clone_url` 和 `commit_id` 原样保留，不参与 Runner 地址转换；源码获取见 [Script 契约](data-models~script.md)。
+3. 将 Job.spec.payload 写入 workDir/payload.json，作为任务执行所需的 JSON 参数文件。`origin_url`、`commit_id` 原样保留。Job `clone_url` 已使用 `git-server:///git/...` 逻辑地址，但本阶段 Runner 尚未实现其解析，仍原样写入；默认脚本不能直接克隆该地址，待后续补齐地址转换；源码获取见 [Script 契约](data-models~script.md)。
 4. `scriptRefs` 非空时按顺序解析全部脚本，写入 workDir/scripts/{name}；全部成功后才继续
 5. 拉取或确认业务镜像可用
 6. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label

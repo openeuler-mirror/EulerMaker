@@ -69,9 +69,9 @@ func (f *FakeClient) GetProject(_ context.Context, project string) (*ebsv1.Proje
 }
 
 func (f *FakeClient) Load(context.Context) (*ebsv1.ServiceConfigContent, error) {
-	content := &ebsv1.ServiceConfigContent{ArtifactManagers: make(map[string]ebsv1.ArtifactManagerInstance)}
+	content := &ebsv1.ServiceConfigContent{ArtifactManagers: make(map[string]ebsv1.ServiceEndpoints)}
 	for instance, address := range f.ArtifactEndpoints {
-		content.ArtifactManagers[instance] = ebsv1.ArtifactManagerInstance{InternalURL: address}
+		content.ArtifactManagers[instance] = ebsv1.ServiceEndpoints{InternalURL: address}
 	}
 	return content, nil
 }

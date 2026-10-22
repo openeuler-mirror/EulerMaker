@@ -545,8 +545,9 @@ export default {
   },
   serviceConfig: {
     title: "Service configuration",
-    hint: "Manage the Git Server control-plane URL and each Artifact Manager instance's control-plane and Runner URLs. Projects without a selected artifact instance use default.",
+    hint: "Manage control-plane and Runner URLs for Git Server and Artifact Manager instances. Projects without a selected artifact instance use default.",
     gitServer: "Git Server",
+    gitRunnerPending: "Git Server Runner URLs can be configured, but Runner address resolution is not implemented yet.",
     artifactManagers: "Artifact Manager",
     loading: "Loading service configuration",
     addInstance: "Add instance",

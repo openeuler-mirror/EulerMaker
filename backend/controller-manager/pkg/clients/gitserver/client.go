@@ -40,7 +40,8 @@ func (e *Error) Error() string {
 func (e *Error) Unwrap() error { return e.Err }
 
 type SyncCheckResult struct {
-	Synced   bool
+	Synced bool
+	// CloneURL is a git-server:/// logical URL, independent of deployment addresses.
 	CloneURL string
 }
 
@@ -81,9 +82,9 @@ type repositoryRequest struct {
 }
 
 type repositoryResponse struct {
-	CloneURL string           `json:"clone_url,omitempty"`
-	SyncTime *time.Time       `json:"sync_time,omitempty"`
-	Error    *repositoryError `json:"error,omitempty"`
+	ClonePath string           `json:"clone_path,omitempty"`
+	SyncTime  *time.Time       `json:"sync_time,omitempty"`
+	Error     *repositoryError `json:"error,omitempty"`
 }
 
 type repositoryError struct {
@@ -171,10 +172,26 @@ func (c *Client) CheckSynced(ctx context.Context, originURL string, baseline tim
 	if response.SyncTime == nil || response.SyncTime.Before(baseline) {
 		return SyncCheckResult{}, nil
 	}
-	if response.CloneURL == "" {
-		return SyncCheckResult{}, gitError("status", ErrorTemporary, fmt.Errorf("synced response lacks clone_url"))
+	cloneURL, err := logicalCloneURL(response.ClonePath)
+	if err != nil {
+		return SyncCheckResult{}, gitError("status", ErrorTemporary, err)
 	}
-	return SyncCheckResult{Synced: true, CloneURL: response.CloneURL}, nil
+	return SyncCheckResult{Synced: true, CloneURL: cloneURL}, nil
+}
+
+// logicalCloneURL preserves the escaped repository path without adding a deployment address.
+func logicalCloneURL(clonePath string) (string, error) {
+	u, err := url.Parse(clonePath)
+	if err != nil || !strings.HasPrefix(clonePath, "/git/") || strings.ContainsAny(clonePath, "?#\\ \t\r\n") ||
+		u.Scheme != "" || u.Host != "" || !strings.HasPrefix(u.Path, "/git/") {
+		return "", fmt.Errorf("synced response has invalid clone_path")
+	}
+	for _, segment := range strings.Split(strings.TrimPrefix(u.Path, "/git/"), "/") {
+		if segment == "" || segment == "." || segment == ".." || strings.ContainsAny(segment, "\\\x00\r\n") {
+			return "", fmt.Errorf("synced response has invalid clone_path")
+		}
+	}
+	return "git-server://" + clonePath, nil
 }
 
 // ResolveFullRef resolves an exact refs/ name in the synced mirror to a commit.

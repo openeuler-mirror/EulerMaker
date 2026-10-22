@@ -10,8 +10,12 @@ import (
 
 func TestServiceConfigContentRoundTripAndDeepCopy(t *testing.T) {
 	original := &ServiceConfigContent{
-		GitServer: GitServerConfig{InternalURL: "http://git-server:8080"},
-		ArtifactManagers: map[string]ArtifactManagerInstance{
+		GitServer: ServiceEndpoints{
+			InternalURL:       "http://git-server:8080",
+			RunnerInternalURL: "http://git.internal:8080",
+			RunnerExternalURL: "https://git.example.com/prefix",
+		},
+		ArtifactManagers: map[string]ServiceEndpoints{
 			"art-01": {
 				InternalURL:       "http://artifact-manager.art-01:8081",
 				RunnerInternalURL: "http://runner-endpoint:8081",
@@ -31,8 +35,10 @@ func TestServiceConfigContentRoundTripAndDeepCopy(t *testing.T) {
 		t.Fatalf("round trip changed content: %#v", decoded)
 	}
 	copy := original.DeepCopy()
-	copy.ArtifactManagers["art-01"] = ArtifactManagerInstance{InternalURL: "http://changed:8081"}
+	copy.ArtifactManagers["art-01"] = ServiceEndpoints{InternalURL: "http://changed:8081"}
 	copy.GitServer.InternalURL = "http://changed:8080"
+	copy.GitServer.RunnerInternalURL = "http://changed:8084"
+	copy.GitServer.RunnerExternalURL = "https://changed.example.com"
 	if !reflect.DeepEqual(original, &decoded) {
 		t.Fatal("copy changed original instance map")
 	}

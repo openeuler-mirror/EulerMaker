@@ -309,13 +309,14 @@ func TestJobPayloadOriginURL(t *testing.T) {
 				}
 				round := &reconcileRound{key: testNS + "/" + testBuild, current: bi, build: testBuildObj(buildType)}
 				const originURL = "https://atomgit.com/src-openeuler/example.git"
+				const cloneURL = "git-server:///git/atomgit.com/src-openeuler/example.git"
 				snapshot := testSnapshotObj(
 					repoEntry{name: "other", originURL: "https://example.com/other.git", declare: true},
-					repoEntry{name: "repo1", originURL: originURL, cloneURL: gitURL1, commitID: "c1", declare: true},
+					repoEntry{name: "repo1", originURL: originURL, cloneURL: cloneURL, commitID: "c1", declare: true},
 				)
 				depend := dependEntry("a")
 				payload := payloadFields(t, c.jobPayload(round, "a", &depend, snapshot, "", nil))
-				for key, want := range map[string]any{"origin_url": originURL, "clone_url": gitURL1, "commit_id": "c1"} {
+				for key, want := range map[string]any{"origin_url": originURL, "clone_url": cloneURL, "commit_id": "c1"} {
 					if got := payload[key]; got != want {
 						t.Errorf("payload[%s] = %v, want %v", key, got, want)
 					}

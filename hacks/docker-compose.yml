@@ -148,8 +148,6 @@ services:
   git-server:
     build:
       context: ../backend/git-server
-    command:
-      - --clone-base-url=http://${EXPORT_SERVER_ADDR:-127.0.0.1}:8084/git
     ports:
       - "8084:8080"
     volumes:

@@ -42,7 +42,6 @@ spec:
         app.kubernetes.io/name: git-server
     spec:
       automountServiceAccountToken: false
-      enableServiceLinks: true
       nodeSelector:
         node-role.kubernetes.io/ebs-control-plane: ""
       securityContext:
@@ -54,7 +53,6 @@ spec:
           imagePullPolicy: Always
           args:
             - --listen-address=:8080
-            - --clone-base-url=http://$(GIT_SERVER_SERVICE_HOST):8080/git
           ports:
             - name: http
               containerPort: 8080

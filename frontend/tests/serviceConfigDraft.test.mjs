@@ -12,12 +12,15 @@ const { parseServiceContent, buildServiceContent, validServiceURL } = await impo
   'data:text/javascript;base64,' + Buffer.from(outputText).toString('base64')
 );
 
+const gitEndpoints = (internalURL = 'http://git') => ({ internalURL, runnerInternalURL: '', runnerExternalURL: '' });
+
 test('default service configuration round-trips both services', () => {
   const config = parse(readFileSync(new URL('../../backend/ebs-apiserver/pkg/server/default-service-config.yaml', import.meta.url), 'utf8'));
   const content = parseServiceContent(config);
   const rows = Object.entries(content.artifactManagers).map(([name, instance]) => ({ name, ...instance }));
-  assert.deepEqual(parse(stringify(buildServiceContent(rows, content.gitServer.internalURL))), content);
+  assert.deepEqual(parse(stringify(buildServiceContent(rows, content.gitServer))), content);
   assert.equal(content.gitServer.internalURL, 'http://git-server:8080');
+  assert.equal(content.gitServer.runnerInternalURL, 'http://127.0.0.1:8084');
   assert.equal(content.artifactManagers.default.internalURL, 'http://artifact-manager:8081');
 });
 
@@ -27,24 +30,31 @@ test('editing Git Server and artifact instances preserves both sections', () => 
   const rows = Object.entries(content.artifactManagers).map(([name, instance]) => ({ name, ...instance }));
   rows[0].runnerExternalURL = 'http://artifacts.example:8081';
   rows.push({ name: 'art-02', internalURL: 'https://art-02/prefix', runnerInternalURL: '', runnerExternalURL: '' });
-  const saved = buildServiceContent(rows, 'https://git.example/new-prefix');
+  const git = { internalURL: 'https://git.example/new-prefix', runnerInternalURL: 'http://git.internal:8084',
+    runnerExternalURL: 'https://git.external/prefix' };
+  const saved = buildServiceContent(rows, git);
   assert.deepEqual(Object.keys(saved.artifactManagers), ['art-01', 'art-02']);
   assert.equal(saved.artifactManagers['art-01'].runnerExternalURL, rows[0].runnerExternalURL);
-  assert.equal(saved.gitServer.internalURL, 'https://git.example/new-prefix');
+  assert.deepEqual(saved.gitServer, git);
   assert.deepEqual(parseServiceContent(parse(stringify(saved))), saved);
 });
 
 test('form validation follows service-config instance and address rules', () => {
   const row = { name: 'art-01', internalURL: 'http://art:8081', runnerInternalURL: '', runnerExternalURL: '' };
-  assert.throws(() => buildServiceContent([], 'http://git'), /invalidContent/);
-  assert.throws(() => buildServiceContent([row, row], 'http://git'), /duplicateName/);
+  assert.throws(() => buildServiceContent([], gitEndpoints()), /invalidContent/);
+  assert.throws(() => buildServiceContent([row, row], gitEndpoints()), /duplicateName/);
   for (const name of ['art.example', 'art_01', 'a'.repeat(64)]) {
-    assert.throws(() => buildServiceContent([{ ...row, name }], 'http://git'), /invalidName/);
+    assert.throws(() => buildServiceContent([{ ...row, name }], gitEndpoints()), /invalidName/);
   }
   for (const url of ['', 'http://user:password@host', 'http://host/path?q=1', 'http://host/#frag',
     'http://host/white space', 'http://host:0', 'http://host:65536', 'http://host:']) {
     assert.equal(validServiceURL(url), false, url);
-    assert.throws(() => buildServiceContent([row], url), /invalidURL/);
+    assert.throws(() => buildServiceContent([row], gitEndpoints(url)), /invalidURL/);
+    if (url) {
+      for (const field of ['runnerInternalURL', 'runnerExternalURL']) {
+        assert.throws(() => buildServiceContent([row], { ...gitEndpoints(), [field]: url }), /invalidURL/);
+      }
+    }
   }
   assert.equal(validServiceURL('http://host:65535/prefix'), true);
   assert.equal(validServiceURL('', true), true);
@@ -61,7 +71,8 @@ function editor() {
   let conflict = false;
   const original = { metadata: { name: 'service-config', uid: 'config-uid', resourceVersion: '1' },
     spec: { visibility: 'OpsOnly', content: stringify({ artifactManagers: { 'art-01': { internalURL: 'http://art:8081' } },
-      gitServer: { internalURL: 'http://git:8080' } }) } };
+      gitServer: { internalURL: 'http://git:8080', runnerInternalURL: 'http://git.internal:8084',
+        runnerExternalURL: 'https://git.external' } }) } };
   class ApiError extends Error { constructor(status) { super(); this.status = status; } }
   const dependencies = { ref, onMounted: () => {}, useI18n: () => ({ t: key => key }), parse, stringify,
     parseServiceContent, buildServiceContent, ApiError, errorTranslationKey: (_error, fallback) => fallback,
@@ -77,7 +88,7 @@ function editor() {
       return structuredClone(original);
     } };
   const state = new Function(...Object.keys(dependencies), editorCode +
-    '\nreturn {load, save, startEdit, cancelEdit, addInstance, removeInstance, current, instances, gitServerURL, editing, error, success};'
+    '\nreturn {load, save, startEdit, cancelEdit, addInstance, removeInstance, current, instances, gitServer, editing, error, success};'
   )(...Object.values(dependencies));
   return { state, requests, original, setConflict: () => { conflict = true; } };
 }
@@ -86,7 +97,8 @@ test('editor loads and saves service-config with current metadata and both servi
   const { state, requests } = editor();
   await state.load();
   state.startEdit();
-  state.gitServerURL.value = 'https://git.example/prefix';
+  state.gitServer.value = { internalURL: 'https://git.example/prefix', runnerInternalURL: 'http://git.runner:8084',
+    runnerExternalURL: 'http://git.external:8084/prefix' };
   state.instances.value[0].runnerExternalURL = 'http://runner.example:8081';
   await state.save();
   assert.deepEqual(requests.map(r => r.path), ['/apis/ebs/v1/configs/service-config', '/apis/ebs/v1/configs/service-config']);
@@ -94,6 +106,7 @@ test('editor loads and saves service-config with current metadata and both servi
   assert.equal(body.metadata.resourceVersion, '1');
   assert.equal(body.spec.visibility, 'OpsOnly');
   assert.equal(parse(body.spec.content).gitServer.internalURL, 'https://git.example/prefix');
+  assert.deepEqual(parse(body.spec.content).gitServer, state.gitServer.value);
   assert.equal(parse(body.spec.content).artifactManagers['art-01'].runnerExternalURL, 'http://runner.example:8081');
   assert.equal(state.current.value.metadata.resourceVersion, '2');
   assert.equal(state.editing.value, false);
@@ -104,11 +117,12 @@ test('cancel restores both service drafts without an update request', async () =
   const { state, requests } = editor();
   await state.load();
   state.startEdit();
-  state.gitServerURL.value = 'http://changed';
+  state.gitServer.value = { internalURL: 'http://changed', runnerInternalURL: '', runnerExternalURL: '' };
   state.removeInstance(0);
   state.addInstance();
   state.cancelEdit();
-  assert.equal(state.gitServerURL.value, 'http://git:8080');
+  assert.deepEqual(state.gitServer.value, { internalURL: 'http://git:8080', runnerInternalURL: 'http://git.internal:8084',
+    runnerExternalURL: 'https://git.external' });
   assert.deepEqual(state.instances.value.map(i => i.name), ['art-01']);
   assert.equal(state.editing.value, false);
   assert.equal(requests.length, 1);
@@ -118,11 +132,11 @@ test('a conflicting update keeps the draft and asks the user to refresh', async 
   const { state, setConflict } = editor();
   await state.load();
   state.startEdit();
-  state.gitServerURL.value = 'http://changed';
+  state.gitServer.value.internalURL = 'http://changed';
   setConflict();
   await state.save();
   assert.equal(state.error.value, 'serviceConfig.conflict');
   assert.equal(state.editing.value, true);
-  assert.equal(state.gitServerURL.value, 'http://changed');
+  assert.equal(state.gitServer.value.internalURL, 'http://changed');
   assert.equal(state.current.value.metadata.resourceVersion, '1');
 });

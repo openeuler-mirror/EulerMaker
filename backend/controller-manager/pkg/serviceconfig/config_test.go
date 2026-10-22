@@ -38,8 +38,8 @@ func (g *configGetter) Get(_ context.Context, gvr schema.GroupVersionResource, n
 
 func serviceObject(gitURL, artifactURL string) *ebsv1.Config {
 	content, _ := json.Marshal(ebsv1.ServiceConfigContent{
-		GitServer: ebsv1.GitServerConfig{InternalURL: gitURL},
-		ArtifactManagers: map[string]ebsv1.ArtifactManagerInstance{
+		GitServer: ebsv1.ServiceEndpoints{InternalURL: gitURL},
+		ArtifactManagers: map[string]ebsv1.ServiceEndpoints{
 			"default": {InternalURL: artifactURL, RunnerExternalURL: "https://runner.example"},
 		},
 	})
@@ -101,18 +101,18 @@ func TestRoundSharesConfigurationAndPinsAddresses(t *testing.T) {
 
 func TestGitClientCacheIsolatedByAddress(t *testing.T) {
 	var firstCalls, secondCalls atomic.Int64
-	serve := func(calls *atomic.Int64, cloneURL string) *httptest.Server {
+	serve := func(calls *atomic.Int64, clonePath string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			calls.Add(1)
 			if r.URL.Path != "/prefix/api/v1/repo/status" {
 				t.Errorf("path=%s", r.URL.Path)
 			}
-			_ = json.NewEncoder(w).Encode(map[string]string{"sync_time": time.Now().UTC().Format(time.RFC3339), "clone_url": cloneURL})
+			_ = json.NewEncoder(w).Encode(map[string]string{"sync_time": time.Now().UTC().Format(time.RFC3339), "clone_path": clonePath})
 		}))
 	}
-	first := serve(&firstCalls, "http://git-one/git/repo")
+	first := serve(&firstCalls, "/git/one/repo.git")
 	defer first.Close()
-	second := serve(&secondCalls, "http://git-two/git/repo")
+	second := serve(&secondCalls, "/git/two/repo.git")
 	defer second.Close()
 	provider := New(&configGetter{}, gitOptions()).(*provider)
 	old, err := provider.GitClient(first.URL + "/prefix")
@@ -129,13 +129,13 @@ func TestGitClientCacheIsolatedByAddress(t *testing.T) {
 			t.Fatalf("result=%+v error=%v", result, err)
 		}
 	}
-	check(old, "http://git-one/git/repo")
+	check(old, "git-server:///git/one/repo.git")
 	current, err := provider.GitClient(second.URL + "/prefix")
 	if err != nil {
 		t.Fatal(err)
 	}
-	check(current, "http://git-two/git/repo")
-	check(old, "http://git-one/git/repo")
+	check(current, "git-server:///git/two/repo.git")
+	check(old, "git-server:///git/one/repo.git")
 	if firstCalls.Load() != 1 || secondCalls.Load() != 1 || provider.git != current {
 		t.Fatal("Git sync cache crossed service addresses")
 	}
