@@ -122,8 +122,8 @@ func (g *fakeGitServer) CheckSynced(context.Context, string, time.Time) (gitserv
 	panic("BuildInfo Controller must not check git sync status")
 }
 
-func (g *fakeGitServer) ResolveCommit(context.Context, string, ebsv1.GitRef) (string, error) {
-	panic("BuildInfo Controller must not resolve git commits")
+func (g *fakeGitServer) ResolveCommitID(_ context.Context, _, commitID string) (string, error) {
+	return commitID, nil
 }
 
 func (g *fakeGitServer) ResolveFullRef(context.Context, string, string) (string, error) {

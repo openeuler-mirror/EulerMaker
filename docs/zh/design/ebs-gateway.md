@@ -827,7 +827,7 @@ curl -X POST http://localhost:8080/apis/ebs/v1/projects \
     "spec": {
       "displayName": "openEuler 22.03 LTS",
       "description": "openEuler 22.03 LTS",
-      "defaultRef": { "type": "Branch", "value": "master" },
+      "defaultRef": "refs/heads/master",
       "buildTargets": [{
         "osVariant": "openEuler-22.03-LTS",
         "architecture": "aarch64"

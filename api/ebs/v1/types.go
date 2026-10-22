@@ -120,7 +120,7 @@ type Project struct {
 type ProjectSpec struct {
 	DisplayName   string          `json:"displayName,omitempty"`
 	Description   string          `json:"description,omitempty"`
-	DefaultRef    GitRef          `json:"defaultRef,omitempty"`
+	DefaultRef    string          `json:"defaultRef,omitempty"`
 	BuildPayload  string          `json:"buildPayload,omitempty"`
 	BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
 	PackageRepos  []PackageRepo   `json:"packageRepos,omitempty"`
@@ -147,7 +147,7 @@ type Snapshot struct {
 }
 
 type SnapshotSpec struct {
-	DefaultRef   GitRef        `json:"defaultRef,omitempty"`
+	DefaultRef   string        `json:"defaultRef,omitempty"`
 	PackageRepos []PackageRepo `json:"packageRepos,omitempty"`
 }
 
@@ -572,20 +572,9 @@ type BuildTarget struct {
 type PackageRepo struct {
 	Name string `json:"name,omitempty"`
 	URL  string `json:"url,omitempty"`
-	Ref  GitRef `json:"ref,omitempty"`
-}
-
-type GitRefType string
-
-const (
-	GitRefBranch GitRefType = "Branch"
-	GitRefTag    GitRefType = "Tag"
-	GitRefCommit GitRefType = "Commit"
-)
-
-type GitRef struct {
-	Type  GitRefType `json:"type,omitempty"`
-	Value string     `json:"value,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+	// CommitID optionally pins the repository to a full SHA-1 commit.
+	CommitID string `json:"commitID,omitempty"`
 }
 
 type PackageRepoStatus struct {

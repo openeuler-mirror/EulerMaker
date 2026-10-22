@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	ebsv1 "ebs-api/ebs/v1"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -49,12 +47,36 @@ func TestRepositoryFailureIsPackageValidationError(t *testing.T) {
 	assertKind(t, err, ErrorValidation)
 }
 
-func TestResolveCommitClassifiesMissingRef(t *testing.T) {
+func TestResolveCommitID(t *testing.T) {
+	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	client := newTestClient(t, func(request *http.Request) (*http.Response, error) {
+		var command commandRequest
+		if err := json.NewDecoder(request.Body).Decode(&command); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"git-rev-parse", "--verify", commitID + "^{commit}"}
+		if !reflect.DeepEqual(command.Command, want) {
+			t.Fatalf("command=%v", command.Command)
+		}
+		return response(http.StatusOK, `{"stdout":"`+commitID+`\n","exit_code":0}`), nil
+	})
+	got, err := client.ResolveCommitID(context.Background(), "https://example.com/repo.git", commitID)
+	if err != nil || got != commitID {
+		t.Fatalf("commit=%q err=%v", got, err)
+	}
+	missing := newTestClient(t, func(*http.Request) (*http.Response, error) {
+		return response(http.StatusUnprocessableEntity, `{"code":"CommandFailed"}`), nil
+	})
+	_, err = missing.ResolveCommitID(context.Background(), "https://example.com/repo.git", commitID)
+	assertKind(t, err, ErrorNotFound)
+}
+
+func TestResolveFullRefClassifiesMissingRef(t *testing.T) {
 	client := newTestClient(t, func(*http.Request) (*http.Response, error) {
 		return response(http.StatusUnprocessableEntity, `{"code":"CommandFailed","message":"unknown revision"}`), nil
 	})
 
-	_, err := client.ResolveCommit(context.Background(), "https://example.com/repo.git", ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"})
+	_, err := client.ResolveFullRef(context.Background(), "https://example.com/repo.git", "refs/heads/main")
 	assertKind(t, err, ErrorNotFound)
 }
 

@@ -1,8 +1,6 @@
 package validation
 
 import (
-	"strings"
-
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -64,25 +62,6 @@ func validateBuildGitRef(build *ebsv1.Build) field.ErrorList {
 		errs = append(errs, field.Invalid(path, ref, "must be a valid full Git ref starting with refs/"))
 	}
 	return errs
-}
-
-// validFullGitRef checks Git ref-name syntax without normalization or remote access.
-func validFullGitRef(ref string) bool {
-	if !strings.HasPrefix(ref, "refs/") || strings.HasSuffix(ref, ".") ||
-		strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.ContainsAny(ref, " ~^:?*[\\") {
-		return false
-	}
-	for _, ch := range ref {
-		if ch < 0x20 || ch == 0x7f {
-			return false
-		}
-	}
-	for _, part := range strings.Split(ref, "/") {
-		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
-			return false
-		}
-	}
-	return true
 }
 
 func ValidateBuildTarget(build *ebsv1.Build, content *ebsv1.BuildTargetContent) field.ErrorList {

@@ -21,6 +21,8 @@ var (
 )
 
 // ResourceRegistration associates an API resource path with its object and list types.
+// +k8s:deepcopy-gen=false
+// +k8s:openapi-gen=false
 type ResourceRegistration struct {
 	Resource string
 	Object   runtime.Object

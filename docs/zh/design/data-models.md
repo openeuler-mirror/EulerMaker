@@ -99,7 +99,7 @@ type Project struct {
 type ProjectSpec struct {
     DisplayName      string                     `json:"displayName,omitempty"`
     Description      string                     `json:"description,omitempty"`
-    DefaultRef       GitRef                     `json:"defaultRef,omitempty"`
+    DefaultRef       string                     `json:"defaultRef,omitempty"`
     BuildPayload     string                     `json:"buildPayload,omitempty"`
     BuildTargets     []BuildTarget              `json:"buildTargets,omitempty"`
     PackageRepos     []PackageRepo              `json:"packageRepos,omitempty"`
@@ -111,7 +111,7 @@ type ProjectSpec struct {
 |------|---------|------|------|
 | `displayName` | string | 否 | 页面展示名称，默认使用创建时的 Project 名称 |
 | `description` | string | 否 | 项目描述 |
-| `defaultRef` | GitRef | 否 | 默认 spec 引用，仅允许 `Branch` / `Tag`；整体为空时默认 `{type: Branch, value: master}` |
+| `defaultRef` | string | 否 | 默认完整 Git 引用，例如 `refs/heads/master`、`refs/tags/v1`；为空时默认 `refs/heads/master` |
 | `buildPayload` | string | 否 | 构建环境参数，YAML 格式；`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz` 和 `unuse_gcc_secure` 是包仓库名列表，命中时向 Job payload 写入相应布尔标记；`unparsable_spec` 是 spec 名列表，仅供 BuildInfo Controller 组装依赖时使用 |
 | `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；创建和更新时 `os + arch` 组合必须唯一，其余配置不同也不能重复 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
@@ -164,17 +164,17 @@ type Snapshot struct {
 
 ```go
 type SnapshotSpec struct {
-    DefaultRef   GitRef               `json:"defaultRef,omitempty"`
+    DefaultRef   string               `json:"defaultRef,omitempty"`
     PackageRepos []PackageRepo        `json:"packageRepos,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `defaultRef` | GitRef | 否 | Build Controller 创建时复制 `Project.spec.defaultRef`，与 packageRepos 来自同一次 Project GET；仅支持 Branch/Tag，不在 Snapshot 侧自动默认成 master |
-| `packageRepos` | []PackageRepo | 否 | 创建 Snapshot 时从同一 Project 复制：single 仅保留 Build.spec.packages 指定的仓库，其他类型复制全部；仓库 ref 允许整体为空，不自动补齐 |
+| `defaultRef` | string | 否 | Build Controller 创建时复制 `Project.spec.defaultRef`，与 packageRepos 来自同一次 Project GET；非空时必须为完整 `refs/...`，Snapshot 侧不填充默认值 |
+| `packageRepos` | []PackageRepo | 否 | 创建 Snapshot 时从同一 Project 复制：single 仅保留 Build.spec.packages 指定的仓库，其他类型复制全部；仓库 ref 允许为空，不自动补齐 |
 
-已存在的 Snapshot 不因 Project 变化而更新 defaultRef 或 packageRepos。Snapshot Controller 优先使用包 ref，整体为空时回退到 Snapshot.spec.defaultRef，不回查 Project、不回写 spec。两者均为空时记录包级 ValidationFailed 并跳过。
+已存在的 Snapshot 不因 Project 变化而更新 defaultRef 或 packageRepos。Snapshot Controller 按 [PackageRepo](#packagerepo) 的提交选择规则解析，不回查 Project、不回写 spec。
 
 ### SnapshotStatus
 
@@ -258,10 +258,10 @@ spec:
 ```
 
 - 仅在 `buildType=single` 且 `len(spec.packages)==1` 时允许设置；这里是数组长度，不是去重后的数量。未设置 annotation 时普通 single 仍允许指定多个包仓库。
-- Build 创建时包名必须存在于所属 Project。Build Controller 创建 Snapshot 时，从同一次 Project GET 复制目标仓库 URL/ref 与 defaultRef，并将 Build 的 `ebs.io/git-ref` 原样复制到 Snapshot annotation；不修改 Project、不指定 fork URL。该 annotation 仅作用于 Snapshot 中唯一的目标仓库，优先于包 ref 和 Snapshot.defaultRef；目标仓库缺失或数量不为一时报告输入错误，不回退默认分支。
+- Build 创建时包名必须存在于所属 Project。Build Controller 创建 Snapshot 时，从同一次 Project GET 复制目标仓库和 defaultRef，并将 Build 的 `ebs.io/git-ref` 原样复制到 Snapshot annotation，同时清空该包的 commitID；不修改 Project、不指定 fork URL。该 annotation 仅作用于 Snapshot 中唯一的目标仓库，优先于包 commitID、ref 和 Snapshot.defaultRef；目标仓库缺失或数量不为一时报告输入错误，不回退默认分支。
 - annotation 必须非空、以 `refs/` 开头并符合完整 Git ref 名称规则；不接受 `HEAD`、`FETCH_HEAD`、refspec、通配符或 `^{commit}` 等 revision 表达式，不自动 trim 或补前缀。创建后该键的存在性和值不可变，`/status` 保留原 metadata。
 - Snapshot 创建后不重新复制 Project 或 Build 输入；Snapshot Controller 只消费 Snapshot 中固化的 annotation、packageRepos 和 defaultRef，成功写入的 commitId/cloneUrl 后续不重新解析。所有批次 Job 均使用该 Snapshot 的固定提交。
-- 不新增 GitRefType：Project/Snapshot.packageRepos.ref 保持 Branch/Tag/Commit；完整 `refs/...` 覆盖通过 Snapshot annotation 传递。Job 不传递动态 ref，统一携带 origin_url、clone_url 和 commit_id。
+- Job 不传递动态 ref，统一携带 origin_url、clone_url 和 commit_id。
 - `refs/merge-requests/501/head` 表示 PR 源码，不自动合并目标分支、不改写为 merge ref。引用名称由托管平台决定。
 
 **源码一致性边界**：Snapshot 固定的是成功解析并持久化的提交，不是 Build 创建瞬间的 PR 提交；固化前远端 ref 仍可能变化。固化后，管理面解析和所有 Job 均使用该 commit，引用后续更新不影响本次构建。引用不存在时记录明确的包级解析失败，不回退其他引用。
@@ -1066,20 +1066,8 @@ type BuildTarget struct {
 type PackageRepo struct {
     Name          string          `json:"name,omitempty"`
     URL           string          `json:"url,omitempty"`
-    Ref           GitRef          `json:"ref,omitempty"`
-}
-
-type GitRefType string
-
-const (
-    GitRefBranch GitRefType = "Branch"
-    GitRefTag    GitRefType = "Tag"
-    GitRefCommit GitRefType = "Commit"
-)
-
-type GitRef struct {
-    Type  GitRefType `json:"type,omitempty"`
-    Value string     `json:"value,omitempty"`
+    Ref           string          `json:"ref,omitempty"`
+    CommitID      string          `json:"commitID,omitempty"`
 }
 ```
 
@@ -1087,9 +1075,13 @@ type GitRef struct {
 |----------------|---------------|--------------------------|
 | `name`         | string        | spec 包名称                 |
 | `url`          | string        | spec 仓库 Git URL          |
-| `ref`          | GitRef        | Git 引用；`type` 为 `Branch`、`Tag` 或 `Commit`，`value` 为对应分支名、标签名或完整 commit ID |
+| `ref`          | string        | 完整 Git 引用，例如 `refs/heads/main`、`refs/tags/v1`、`refs/merge-requests/501/head`；为空时使用 Snapshot 的 defaultRef |
+| `commitID`     | string        | 可选固定提交，完整 40 位小写十六进制 SHA-1；与 ref 可同时配置，优先选择该提交 |
 
-`ref.type=Branch` 解析 `refs/heads/<value>`，`ref.type=Tag` 解析 `refs/tags/<value>^{commit}`，`ref.type=Commit` 直接使用 `value`。Project 和 Snapshot 创建、普通更新时均允许省略仓库的 `ref`，或传入 `null` / `{}`（type、value 均为空）；apiserver 保留空 ref，不自动补齐。工程级 `defaultRef` 仅支持 Branch/Tag，整体为空时默认成 `{type: Branch, value: master}`；仅填写 type 或 value 均校验失败。仓库显式填写的 ref 保持不变，修改工程默认引用不会改写已有 ref；仓库仍可显式使用 Commit。Build Controller 复制 Project 的 defaultRef；single 仅复制 Build.spec.packages 指定的 packageRepos，其他类型复制全部，所选仓库字段保持原值；Snapshot Controller 实际使用时优先采用包 ref，整体为空时回退到 Snapshot 自身 defaultRef。显式 ref 必须完整且合法。
+`Project.spec.defaultRef`、`Snapshot.spec.defaultRef` 和 `PackageRepo.ref` 统一使用完整 `refs/...` 字符串。非空值按 Git ref-name 规则校验，不接受裸分支名、Commit ID 或 `{type, value}` 对象。固定提交使用独立的 `commitID`。Project 的 defaultRef 为空时默认为 `refs/heads/master`；Snapshot 不填默认值，仓库 ref 允许省略或为空字符串，创建和更新均不自动补齐。修改 Project 默认引用不会改写显式包 ref。Build Controller 从同一次 Project GET 复制 defaultRef 与所选 packageRepos（含 commitID），single 仅复制指定包，其他类型复制全部。
+
+提交选择优先级为 `ebs.io/git-ref` annotation > PackageRepo.commitID > PackageRepo.ref > Snapshot.defaultRef。Build Controller 复制 PR annotation 时同时清空 Snapshot 中该包的 commitID，不修改 Project。Git Server 同步满足 baseline 后，普通引用解析 `<ref>^{commit}`；固定提交验证 `<commitID>^{commit}` 的结果必须等于输入 SHA，成功后写入 status 的 commitId 和 cloneUrl。未配置任何提交或引用时记录 ValidationFailed；引用或提交不存在时记录 ResolveFailed，不回退其他来源。固定提交必须已存在于同步后的镜像中；不会通过任意 SHA 额外向上游抓取对象。
+
 ### PackageRepoStatus
 
 ```go

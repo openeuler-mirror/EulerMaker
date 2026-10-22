@@ -38,7 +38,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.ConfigList":              schema_ebs_api_ebs_v1_ConfigList(ref),
 		"ebs-api/ebs/v1.ConfigSpec":              schema_ebs_api_ebs_v1_ConfigSpec(ref),
 		"ebs-api/ebs/v1.DcgNodeState":            schema_ebs_api_ebs_v1_DcgNodeState(ref),
-		"ebs-api/ebs/v1.GitRef":                  schema_ebs_api_ebs_v1_GitRef(ref),
 		"ebs-api/ebs/v1.Job":                     schema_ebs_api_ebs_v1_Job(ref),
 		"ebs-api/ebs/v1.JobBuildResult":          schema_ebs_api_ebs_v1_JobBuildResult(ref),
 		"ebs-api/ebs/v1.JobInstallResult":        schema_ebs_api_ebs_v1_JobInstallResult(ref),
@@ -495,7 +494,7 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "BuildInfoStatus is the desired/current state of a BuildInfo. BuildInfoStatus records build results and unconfirmed Job creations.",
+				Description: "BuildInfoStatus records build results and unconfirmed Job creations.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"phase": {
@@ -1054,30 +1053,6 @@ func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.Ope
 	}
 }
 
-func schema_ebs_api_ebs_v1_GitRef(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"type": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"value": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
 func schema_ebs_api_ebs_v1_Job(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1433,15 +1408,20 @@ func schema_ebs_api_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Open
 					},
 					"ref": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.GitRef"),
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"commitID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CommitID optionally pins the repository to a full SHA-1 commit.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},
 			},
 		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.GitRef"},
 	}
 }
 
@@ -1649,8 +1629,8 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 					},
 					"defaultRef": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.GitRef"),
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"buildPayload": {
@@ -1702,7 +1682,7 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.GitRef", "ebs-api/ebs/v1.PackageRepo"},
+			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 
@@ -2693,8 +2673,8 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 				Properties: map[string]spec.Schema{
 					"defaultRef": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.GitRef"),
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"packageRepos": {
@@ -2714,7 +2694,7 @@ func schema_ebs_api_ebs_v1_SnapshotSpec(ref common.ReferenceCallback) common.Ope
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.GitRef", "ebs-api/ebs/v1.PackageRepo"},
+			"ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 

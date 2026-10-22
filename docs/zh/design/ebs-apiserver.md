@@ -548,7 +548,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 默认值还包括：
 
-- `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是 GitRef 对象，仅支持 Branch/Tag，整体为空时默认 `{type: Branch, value: master}`。Project 和 Snapshot 均允许仓库 ref 整体为空，创建/普通更新不补齐；显式 ref 必须完整且合法。解析时优先使用包 ref，整体为空则回退到 Snapshot.spec.defaultRef，不回查 Project。
+- `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是完整 `refs/...` 字符串，为空时默认 `refs/heads/master`。Project、Snapshot 的 defaultRef 与仓库 ref 使用相同的完整引用校验；不接受裸分支名、Commit ID 或旧对象格式。Snapshot 的 defaultRef 不自动默认，仓库 ref 允许为空且创建/普通更新不补齐。PackageRepo.commitID 可选，非空时必须为完整 40 位小写十六进制 SHA；Project 和 Snapshot 创建、更新均校验，允许与 ref 同时配置。解析规则见数据模型 PackageRepo。
 - `Build.spec.buildType` 必填，不设置默认值；缺失时返回 422。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
 - `Runner.spec.type` 默认为 `ct`。
@@ -848,7 +848,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
     "spec": {
       "displayName": "openEuler 22.03 LTS",
       "description": "openEuler 22.03 LTS",
-      "defaultRef": { "type": "Branch", "value": "master" },
+      "defaultRef": "refs/heads/master",
       "buildPayload": "debug_package: false",
       "buildTargets": [{
         "os": "openEuler-22.03-LTS",
@@ -859,7 +859,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "packageRepos": [{
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
-        "ref": {"type": "Branch", "value": "master"}
+        "ref": "refs/heads/master"
       }],
       "bootstrapRepo": [{
         "name": "base",
@@ -879,11 +879,11 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
     "kind": "Snapshot",
     "metadata": {"name": "snapshot-001"},
     "spec": {
-      "defaultRef": {"type": "Branch", "value": "master"},
+      "defaultRef": "refs/heads/master",
       "packageRepos": [{
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
-        "ref": {"type": "Branch", "value": "master"}
+        "ref": "refs/heads/master"
       }]
     }
   }'

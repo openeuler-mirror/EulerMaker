@@ -1,6 +1,7 @@
 import { parse } from "yaml";
 
 import type { BuildTarget, Project } from "@/types";
+import { isFullGitRef, toFullGitRef, type GitRefInput } from "./gitRef";
 
 const NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/;
 
@@ -10,13 +11,14 @@ export type ProjectValidationKey =
   | "projects.invalidKind"
   | "projects.invalidName"
   | "projects.reservedName"
-  | "projects.targetRequired";
+  | "projects.targetRequired"
+  | "project.invalidDefaultRef";
 
 export interface BasicProjectForm {
   name: string;
   displayName: string;
   description: string;
-  defaultRef: { type: "Branch" | "Tag"; value: string };
+  defaultRef: GitRefInput;
   os: string;
   arch: string;
   buildFlag: boolean;
@@ -33,6 +35,8 @@ export class ProjectManifestError extends Error {
 export function projectFromForm(form: BasicProjectForm): Project {
   const name = form.name.trim();
   validateName(name);
+  const defaultRef = toFullGitRef(form.defaultRef);
+  if (!isFullGitRef(defaultRef)) throw new ProjectManifestError("project.invalidDefaultRef");
   const target = normalizeTarget({
     os: form.os,
     arch: form.arch,
@@ -49,7 +53,7 @@ export function projectFromForm(form: BasicProjectForm): Project {
     spec: {
       displayName: form.displayName.trim() || name,
       description: form.description.trim(),
-      defaultRef: { type: form.defaultRef.type, value: form.defaultRef.value.trim() },
+      defaultRef,
       buildTargets: [target],
     },
   };

@@ -47,7 +47,7 @@ func TestSyncCheckOutcomes(t *testing.T) {
 				return gitserver.SyncCheckResult{}, nil
 			}}
 			c := newTestController(t, &fakeClient{}, g, Config{})
-			task := resolveTask{repo: ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}}}
+			task := resolveTask{repo: ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}}
 			got := c.resolveOne(context.Background(), task, time.Time{})
 			if got.state != tc.want || calls != tc.calls {
 				t.Fatalf("result=%+v calls=%d", got, calls)
@@ -60,7 +60,7 @@ func TestSyncCheckOutcomes(t *testing.T) {
 }
 
 func TestCommitConflictPreservesCloneURLAndCanonicalIdentity(t *testing.T) {
-	ref := ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}
+	ref := "refs/heads/main"
 	first := ebsv1.PackageRepo{Name: "first", URL: "https://EXAMPLE.com:443/team/pkg", Ref: ref}
 	second := ebsv1.PackageRepo{Name: "second", URL: "git@example.com:team/pkg.git", Ref: ref}
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{first, second})

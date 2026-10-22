@@ -427,7 +427,7 @@ func newProject(name string, repos ...ebsv1.PackageRepo) *ebsv1.Project {
 		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Project"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID("project-uid-" + name), ResourceVersion: "1"},
 		Spec: ebsv1.ProjectSpec{
-			DefaultRef:    ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "master"},
+			DefaultRef:    "refs/heads/master",
 			PackageRepos:  repos,
 			BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "everything", Repo: "https://example.com/repo/everything"}},
 		},
@@ -438,7 +438,7 @@ func newPackageRepo(name string) ebsv1.PackageRepo {
 	return ebsv1.PackageRepo{
 		Name: name,
 		URL:  "https://example.com/src-openeuler/" + name + ".git",
-		Ref:  ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "master"},
+		Ref:  "refs/heads/master",
 	}
 }
 

@@ -17,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	ebsv1 "ebs-api/ebs/v1"
 )
 
 type ErrorKind string
@@ -66,8 +64,8 @@ type Client struct {
 type GitServerClient interface {
 	PublishSyncTask(ctx context.Context, originURL string) error
 	CheckSynced(ctx context.Context, originURL string, since time.Time) (SyncCheckResult, error)
-	ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (string, error)
 	ResolveFullRef(ctx context.Context, originURL, ref string) (string, error)
+	ResolveCommitID(ctx context.Context, originURL, commitID string) (string, error)
 	ExecCommand(ctx context.Context, originURL, command string) (string, error)
 }
 
@@ -114,7 +112,6 @@ type errorResponse struct {
 
 var (
 	commitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	refPattern    = regexp.MustCompile(`^[A-Za-z0-9._/][A-Za-z0-9._/-]*$`)
 )
 
 func New(config Config) (*Client, error) {
@@ -180,21 +177,6 @@ func (c *Client) CheckSynced(ctx context.Context, originURL string, baseline tim
 	return SyncCheckResult{Synced: true, CloneURL: response.CloneURL}, nil
 }
 
-func (c *Client) ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (result string, resultErr error) {
-	defer recordRequest(resolveRequests, &resultErr)
-	if err := validateOrigin(originURL); err != nil {
-		return "", gitError("resolve", ErrorValidation, err)
-	}
-	if err := validateRef(ref); err != nil {
-		return "", gitError("resolve", ErrorValidation, err)
-	}
-	value := "refs/heads/" + ref.Value
-	if ref.Type == ebsv1.GitRefTag {
-		value = "refs/tags/" + ref.Value + "^{commit}"
-	}
-	return c.resolve(ctx, originURL, value)
-}
-
 // ResolveFullRef resolves an exact refs/ name in the synced mirror to a commit.
 func (c *Client) ResolveFullRef(ctx context.Context, originURL, ref string) (result string, resultErr error) {
 	defer recordRequest(resolveRequests, &resultErr)
@@ -205,6 +187,25 @@ func (c *Client) ResolveFullRef(ctx context.Context, originURL, ref string) (res
 		return "", gitError("resolve", ErrorValidation, err)
 	}
 	return c.resolve(ctx, originURL, ref+"^{commit}")
+}
+
+// ResolveCommitID verifies that a pinned commit is available in the synced mirror.
+func (c *Client) ResolveCommitID(ctx context.Context, originURL, commitID string) (result string, resultErr error) {
+	defer recordRequest(resolveRequests, &resultErr)
+	if err := validateOrigin(originURL); err != nil {
+		return "", gitError("resolve", ErrorValidation, err)
+	}
+	if !commitPattern.MatchString(commitID) {
+		return "", gitError("resolve", ErrorValidation, fmt.Errorf("invalid full commit ID"))
+	}
+	commit, err := c.resolve(ctx, originURL, commitID+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if commit != commitID {
+		return "", gitError("resolve", ErrorValidation, fmt.Errorf("object is not the requested commit"))
+	}
+	return commit, nil
 }
 
 func (c *Client) resolve(ctx context.Context, originURL, value string) (string, error) {
@@ -295,16 +296,6 @@ func gitError(operation string, kind ErrorKind, err error) *Error {
 func validateOrigin(value string) error {
 	if value == "" || strings.ContainsAny(value, "\x00\r\n") {
 		return fmt.Errorf("origin URL is invalid")
-	}
-	return nil
-}
-
-func validateRef(ref ebsv1.GitRef) error {
-	if ref.Type != ebsv1.GitRefBranch && ref.Type != ebsv1.GitRefTag {
-		return fmt.Errorf("ref type must be Branch or Tag")
-	}
-	if !refPattern.MatchString(ref.Value) || strings.HasPrefix(ref.Value, "-") || strings.Contains(ref.Value, "..") || strings.Contains(ref.Value, "/./") || strings.Contains(ref.Value, "/../") {
-		return fmt.Errorf("ref value is invalid")
 	}
 	return nil
 }

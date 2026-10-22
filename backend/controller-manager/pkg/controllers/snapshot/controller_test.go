@@ -58,21 +58,15 @@ func (c *fakeClient) UpdateSnapshotStatus(_ context.Context, request *ebsv1.Snap
 }
 
 type fakeGitClient struct {
-	mu          sync.Mutex
-	publishErr  error
-	resolvedRef ebsv1.GitRef
-	fullRef     string
+	mu         sync.Mutex
+	publishErr error
+	fullRef    string
+	commitID   string
 }
 
 func (f *fakeGitClient) PublishSyncTask(context.Context, string) error { return f.publishErr }
 func (f *fakeGitClient) CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error) {
 	return gitserver.SyncCheckResult{Synced: true, CloneURL: "git://mirror/repo"}, nil
-}
-func (f *fakeGitClient) ResolveCommit(_ context.Context, _ string, ref ebsv1.GitRef) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.resolvedRef = ref
-	return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
 }
 func (f *fakeGitClient) ExecCommand(context.Context, string, string) (string, error) {
 	panic("Snapshot Controller must not execute git commands")
@@ -85,17 +79,37 @@ func (f *fakeGitClient) ResolveFullRef(_ context.Context, _ string, ref string) 
 	return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
 }
 
+func (f *fakeGitClient) ResolveCommitID(_ context.Context, _ string, commitID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commitID = commitID
+	return commitID, nil
+}
+
+func TestResolvePinnedCommit(t *testing.T) {
+	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, ref := range []string{"", "refs/heads/main"} {
+		snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ref, CommitID: commitID}})
+		git := &fakeGitClient{}
+		api := &fakeClient{snapshot: snapshot, build: build}
+		c := newTestController(t, api, git, Config{})
+		if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+			t.Fatal(err)
+		}
+		status := api.snapshot.Status.PackageRepoStatuses["pkg"]
+		if status.CommitID != commitID || status.CloneURL != "git://mirror/repo" || git.commitID != commitID {
+			t.Fatalf("status=%+v resolved commit=%q", status, git.commitID)
+		}
+	}
+}
+
 func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
-	for _, ref := range []ebsv1.GitRef{
-		{},
-		{Type: ebsv1.GitRefBranch, Value: "main"},
-		{Type: ebsv1.GitRefTag, Value: "v1"},
-		{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-	} {
-		t.Run(string(ref.Type), func(t *testing.T) {
+	for _, ref := range []string{"", "refs/heads/main", "refs/tags/v1", "refs/merge-requests/500/head"} {
+		t.Run(ref, func(t *testing.T) {
 			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ref}})
 			build.Spec.BuildType = "single"
-			snapshot.Spec.DefaultRef = ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "default"}
+			snapshot.Spec.DefaultRef = "refs/heads/default"
+			snapshot.Spec.PackageRepos[0].CommitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
 			api := &fakeClient{snapshot: snapshot, build: build}
 			git := &fakeGitClient{}
@@ -108,7 +122,7 @@ func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
 				status.CloneURL != "git://mirror/repo" || git.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] {
 				t.Fatalf("phase=%s status=%+v resolved ref=%q", api.snapshot.Status.Phase, status, git.fullRef)
 			}
-			if git.resolvedRef != (ebsv1.GitRef{}) || api.snapshot.Spec.PackageRepos[0].Ref != ref {
+			if api.snapshot.Spec.PackageRepos[0].Ref != ref {
 				t.Fatal("full ref override must leave original refs unchanged and use only full ref resolution")
 			}
 			// A new controller also reuses a committed package result while the Snapshot is Processing.
@@ -128,15 +142,14 @@ func TestResolveFullRefOverridesSnapshotRefs(t *testing.T) {
 func TestResolveSnapshotDefaultRef(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		ref, fallback ebsv1.GitRef
+		ref, fallback string
 		skipped       bool
 	}{
-		{name: "branch fallback", fallback: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "release"}},
-		{name: "tag fallback", fallback: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
-		{name: "explicit wins", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}, fallback: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+		{name: "branch fallback", fallback: "refs/heads/release"},
+		{name: "tag fallback", fallback: "refs/tags/v1"},
+		{name: "explicit wins", ref: "refs/heads/main", fallback: "refs/tags/v1"},
 		{name: "both empty", skipped: true},
-		{name: "partial does not inherit", ref: ebsv1.GitRef{Type: ebsv1.GitRefTag}, fallback: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}, skipped: true},
-		{name: "explicit commit", ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, fallback: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+		{name: "explicit full ref", ref: "refs/merge-requests/501/head", fallback: "refs/tags/v1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: tc.ref}})
@@ -154,14 +167,14 @@ func TestResolveSnapshotDefaultRef(t *testing.T) {
 				}
 			} else {
 				want := tc.ref
-				if want == (ebsv1.GitRef{}) {
+				if want == "" {
 					want = tc.fallback
 				}
 				if result.state != stateResolved {
 					t.Fatalf("result=%+v", result)
 				}
-				if want.Type != ebsv1.GitRefCommit && git.resolvedRef != want {
-					t.Fatalf("ref=%+v want=%+v", git.resolvedRef, want)
+				if git.fullRef != want {
+					t.Fatalf("ref=%+v want=%+v", git.fullRef, want)
 				}
 			}
 			if snapshot.Spec.PackageRepos[0].Ref != tc.ref {
@@ -190,8 +203,8 @@ func baseObjects(repos []ebsv1.PackageRepo) (*ebsv1.Snapshot, *ebsv1.Build) {
 	return snapshot, build
 }
 
-func TestPendingCommitSnapshotBecomesActive(t *testing.T) {
-	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+func TestPendingSnapshotResolvesRefAndBecomesActive(t *testing.T) {
+	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
 	api := &fakeClient{snapshot: snapshot, build: build}
 	c := newTestController(t, api, &fakeGitClient{}, Config{})
@@ -199,13 +212,13 @@ func TestPendingCommitSnapshotBecomesActive(t *testing.T) {
 	if err != nil || result != (controller.ReconcileResult{}) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if api.updates != 2 || api.snapshot.Status.Phase != ebsv1.SnapshotActive || api.snapshot.Status.PackageRepoStatuses["pkg"].CommitID != repo.Ref.Value {
+	if api.updates != 2 || api.snapshot.Status.Phase != ebsv1.SnapshotActive || api.snapshot.Status.PackageRepoStatuses["pkg"].CommitID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("unexpected snapshot after reconcile: updates=%d status=%+v", api.updates, api.snapshot.Status)
 	}
 }
 
 func TestAdvancePhaseUnknownIsConfirmedAndContinues(t *testing.T) {
-	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
 	api := &fakeClient{snapshot: snapshot, build: build, unknownFirst: true}
 	c := newTestController(t, api, &fakeGitClient{}, Config{})
@@ -219,8 +232,8 @@ func TestAdvancePhaseUnknownIsConfirmedAndContinues(t *testing.T) {
 
 func TestOnlySingleBuildUsesPackages(t *testing.T) {
 	repos := []ebsv1.PackageRepo{
-		{Name: "one", Ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
-		{Name: "two", Ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},
+		{Name: "one", Ref: "refs/heads/main"},
+		{Name: "two", Ref: "refs/tags/v1"},
 	}
 	snapshot, build := baseObjects(repos)
 	build.Spec.BuildType, build.Spec.Packages = "single", []string{"one"}
@@ -246,7 +259,7 @@ func TestOnlySingleBuildUsesPackages(t *testing.T) {
 }
 
 func TestTemporaryFailureAtLimitIsSkipped(t *testing.T) {
-	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}}
+	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
 	api := &fakeClient{snapshot: snapshot, build: build}
 	gitErr := &gitserver.Error{Operation: "sync", Kind: gitserver.ErrorTemporary, Err: errors.New("unavailable")}
