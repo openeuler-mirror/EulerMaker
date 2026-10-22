@@ -51,8 +51,8 @@ func registerIAM(router *gin.Engine, api *handler.Handler, middleware handler.Mi
 func registerResources(router *gin.Engine, api *handler.Handler) {
 	group := router.Group("/apis/ebs/v1")
 	middleware := api.Middleware()
-	group.GET("/artifact-endpoints", middleware.Authenticate, middleware.ResolveUser,
-		middleware.LimitAuthenticated, api.ArtifactEndpoints)
+	group.GET("/service-endpoints", middleware.Authenticate, middleware.ResolveUser,
+		middleware.LimitAuthenticated, api.ServiceEndpoints)
 	registerCollection(group, api, "projects", "project")
 	registerCollection(group, api, "runners", "runner")
 	registerCollection(group, api, "configs", "name")

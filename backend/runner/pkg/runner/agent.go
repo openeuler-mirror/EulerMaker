@@ -22,6 +22,7 @@ import (
 	execution "ebs-runner/pkg/executor"
 	"ebs-runner/pkg/gateway"
 	"ebs-runner/pkg/options"
+	"ebs-runner/pkg/service"
 )
 
 const agentVersion = "v0.1.0"
@@ -41,7 +42,7 @@ type Agent struct {
 	cfg            options.Config
 	client         RunnerAPI
 	endpointClient *gateway.Client
-	artifactRoutes *artifact.Routes
+	serviceRoutes  *service.Routes
 	tokens         *gateway.TokenProvider
 	executor       execution.Executor
 	containers     containerruntime.ManagedRuntime
@@ -76,9 +77,9 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	artifactRoutes := artifact.NewRoutes(cfg.Artifact.AccessMode, tokens, artifactHTTPClient)
+	serviceRoutes := service.NewRoutes(cfg.Artifact.AccessMode, tokens, artifactHTTPClient)
 	logFactory := &artifact.LogFactory{
-		Remote:          artifactRoutes,
+		Remote:          serviceRoutes,
 		RootDir:         cfg.RootDir,
 		ChunkSize:       cfg.Artifact.Log.ChunkSize,
 		FlushInterval:   cfg.Artifact.Log.FlushInterval,
@@ -86,7 +87,7 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 		RetryMaxBackoff: cfg.Artifact.Log.RetryMaxBackoff,
 	}
 	artifactProcessor := &artifact.Processor{
-		Remote: artifactRoutes, RootDir: cfg.RootDir,
+		Remote: serviceRoutes, RootDir: cfg.RootDir,
 		MaxFileSize: cfg.Artifact.Upload.MaxFileSize, MaxJobSize: cfg.Artifact.Upload.MaxJobSize,
 		MaxFiles: cfg.Artifact.Upload.MaxFiles, Concurrency: cfg.Artifact.Upload.Concurrency,
 		RetryMaxBackoff: cfg.Artifact.Upload.RetryMaxBackoff,
@@ -108,7 +109,7 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 		cfg:            cfg,
 		client:         client,
 		endpointClient: client,
-		artifactRoutes: artifactRoutes,
+		serviceRoutes:  serviceRoutes,
 		tokens:         tokens,
 		containers:     containers,
 		executor: &execution.Manager{
@@ -121,7 +122,7 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 					RunnerName:      cfg.Name,
 					Scripts:         execution.NewScriptCache(client),
 					LogFactory:      logFactory,
-					ResolvePayload:  artifactRoutes.ResolvePayload,
+					ResolvePayload:  serviceRoutes.ResolvePayload,
 					LogDrainTimeout: cfg.Artifact.Log.DrainTimeout,
 				},
 			},
@@ -186,11 +187,11 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) refreshEndpoints(ctx context.Context) error {
 	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	endpoints, err := a.endpointClient.GetArtifactEndpoints(readCtx)
+	endpoints, err := a.endpointClient.GetServiceEndpoints(readCtx)
 	if err != nil {
 		return err
 	}
-	return a.artifactRoutes.Update(endpoints)
+	return a.serviceRoutes.Update(endpoints)
 }
 
 func (a *Agent) waitForInitialEndpoints(ctx context.Context) error {
@@ -199,7 +200,7 @@ func (a *Agent) waitForInitialEndpoints(ctx context.Context) error {
 		if err := a.refreshEndpoints(ctx); err == nil {
 			return nil
 		} else {
-			log.Printf("load artifact endpoints failed; retrying in %s: %v", backoff, err)
+			log.Printf("load service endpoints failed; retrying in %s: %v", backoff, err)
 		}
 		timer := time.NewTimer(backoff)
 		select {
@@ -230,7 +231,7 @@ func (a *Agent) refreshEndpointsLoop(ctx context.Context) {
 		case <-timer.C:
 		}
 		if err := a.refreshEndpoints(ctx); err != nil {
-			log.Printf("refresh artifact endpoints failed: %v", err)
+			log.Printf("refresh service endpoints failed: %v", err)
 			delay = backoff
 			if backoff < 5*time.Minute {
 				backoff *= 2
@@ -517,8 +518,8 @@ func (a *Agent) handleEvent(ctx context.Context, event gateway.WatchEvent) {
 			a.finishJob(key)
 			return
 		}
-		if a.artifactRoutes != nil {
-			if err := a.artifactRoutes.Pin(execCtx, *current); err != nil {
+		if a.serviceRoutes != nil {
+			if err := a.serviceRoutes.Pin(execCtx, *current); err != nil {
 				a.finishJob(key)
 				return
 			}
@@ -673,8 +674,8 @@ func (a *Agent) finishJob(key string) {
 	delete(a.executions, key)
 	a.mu.Unlock()
 	if execution != nil {
-		if a.artifactRoutes != nil {
-			a.artifactRoutes.Release(execution.job)
+		if a.serviceRoutes != nil {
+			a.serviceRoutes.Release(execution.job)
 		}
 		execution.cancel()
 	}

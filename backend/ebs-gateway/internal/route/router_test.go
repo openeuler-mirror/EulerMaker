@@ -321,7 +321,7 @@ func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
 	}
 }
 
-func TestRunnerArtifactEndpoints(t *testing.T) {
+func TestRunnerServiceEndpoints(t *testing.T) {
 	content := `artifactManagers:
   default:
     internalURL: http://artifact-manager:8081
@@ -333,6 +333,8 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
     runnerExternalURL: https://artifacts.example.com
 gitServer:
   internalURL: http://git-server:8080
+  runnerInternalURL: http://git.internal:8084
+  runnerExternalURL: https://git.example.com/prefix
 `
 	config, err := json.Marshal(map[string]any{
 		"metadata": map[string]string{"name": "service-config"},
@@ -359,35 +361,39 @@ gitServer:
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+		request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/service-endpoints", nil)
 		request.Header.Set("Authorization", "Bearer "+token)
 		response := httptest.NewRecorder()
 		api.Router().ServeHTTP(response, request)
 		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
 			t.Fatalf("runner=%s status=%d body=%s", runner, response.Code, response.Body.String())
 		}
+		type endpoint struct {
+			RunnerInternalURL string `json:"runnerInternalURL"`
+			RunnerExternalURL string `json:"runnerExternalURL"`
+		}
 		var endpoints struct {
-			Instances map[string]struct {
-				RunnerInternalURL string `json:"runnerInternalURL"`
-				RunnerExternalURL string `json:"runnerExternalURL"`
-			} `json:"instances"`
+			ArtifactManagers map[string]endpoint `json:"artifactManagers"`
+			GitServer        endpoint            `json:"gitServer"`
 		}
 		decoder := json.NewDecoder(response.Body)
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&endpoints); err != nil {
 			t.Fatal(err)
 		}
-		if len(endpoints.Instances) != 2 || endpoints.Instances["default"].RunnerExternalURL != "http://artifacts.example.com:8081" ||
-			endpoints.Instances["default"].RunnerInternalURL != "http://127.0.0.1:8081" ||
-			endpoints.Instances["art-01"].RunnerInternalURL != "http://artifact-manager.art-01:8081" ||
-			endpoints.Instances["art-01"].RunnerExternalURL != "https://artifacts.example.com" {
+		if len(endpoints.ArtifactManagers) != 2 || endpoints.ArtifactManagers["default"].RunnerExternalURL != "http://artifacts.example.com:8081" ||
+			endpoints.ArtifactManagers["default"].RunnerInternalURL != "http://127.0.0.1:8081" ||
+			endpoints.ArtifactManagers["art-01"].RunnerInternalURL != "http://artifact-manager.art-01:8081" ||
+			endpoints.ArtifactManagers["art-01"].RunnerExternalURL != "https://artifacts.example.com" ||
+			endpoints.GitServer.RunnerInternalURL != "http://git.internal:8084" ||
+			endpoints.GitServer.RunnerExternalURL != "https://git.example.com/prefix" {
 			t.Fatalf("unexpected Runner projection: %+v", endpoints)
 		}
 	}
 	if calls != 2 {
 		t.Fatalf("upstream reads=%d, want one per request", calls)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/service-endpoints", nil)
 	response := httptest.NewRecorder()
 	api.Router().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized || calls != 2 {
@@ -397,7 +403,7 @@ gitServer:
 	if err != nil {
 		t.Fatal(err)
 	}
-	request = httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+	request = httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/service-endpoints", nil)
 	request.Header.Set("Authorization", "Bearer "+userToken)
 	response = httptest.NewRecorder()
 	api.Router().ServeHTTP(response, request)
@@ -406,7 +412,7 @@ gitServer:
 	}
 }
 
-func TestRunnerArtifactEndpointsRejectsInvalidConfig(t *testing.T) {
+func TestRunnerServiceEndpointsRejectsInvalidConfig(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		body := `{"metadata":{"name":"service-config"},"spec":{"visibility":"OpsOnly","content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
@@ -415,7 +421,7 @@ func TestRunnerArtifactEndpointsRejectsInvalidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+	request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/service-endpoints", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	api.Router().ServeHTTP(response, request)
@@ -425,12 +431,13 @@ func TestRunnerArtifactEndpointsRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestRunnerArtifactEndpointsRefresh(t *testing.T) {
+func TestRunnerServiceEndpointsRefresh(t *testing.T) {
 	upstreamStatus := http.StatusOK
 	internalURL := "http://runner-internal:8081"
 	content := func() string {
 		return "artifactManagers:\n  default:\n    internalURL: http://management:8081\n" +
-			"    runnerInternalURL: " + internalURL + "\ngitServer:\n  internalURL: http://git-server:8080\n"
+			"    runnerInternalURL: " + internalURL + "\ngitServer:\n  internalURL: http://git-server:8080\n" +
+			"  runnerInternalURL: " + internalURL + "\n"
 	}
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		body, err := json.Marshal(map[string]any{
@@ -459,7 +466,7 @@ func TestRunnerArtifactEndpointsRefresh(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			internalURL, upstreamStatus = tc.address, tc.upstreamCode
-			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/service-endpoints", nil)
 			request.Header.Set("Authorization", "Bearer "+token)
 			response := httptest.NewRecorder()
 			api.Router().ServeHTTP(response, request)
@@ -467,14 +474,18 @@ func TestRunnerArtifactEndpointsRefresh(t *testing.T) {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 			if tc.wantCode == http.StatusOK {
-				var body map[string]map[string]map[string]string
+				var body struct {
+					ArtifactManagers map[string]map[string]string `json:"artifactManagers"`
+					GitServer        map[string]string            `json:"gitServer"`
+				}
 				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 					t.Fatal(err)
 				}
-				if body["instances"]["default"]["runnerInternalURL"] != tc.address {
+				if body.ArtifactManagers["default"]["runnerInternalURL"] != tc.address ||
+					body.GitServer["runnerInternalURL"] != tc.address {
 					t.Fatalf("unexpected refreshed endpoint: %s", response.Body.String())
 				}
-			} else if strings.Contains(response.Body.String(), "instances") {
+			} else if strings.Contains(response.Body.String(), "artifactManagers") || strings.Contains(response.Body.String(), "gitServer") {
 				t.Fatal("configuration failure returned cached endpoints")
 			}
 		})

@@ -66,7 +66,7 @@ func LoadConfig(args []string) (Config, error) {
 
 	fs := flag.NewFlagSet("ebs-runner", flag.ContinueOnError)
 	fs.StringVar(&cfg.Gateway.URL, "gateway", cfg.Gateway.URL, "ebs-gateway address")
-	fs.StringVar(&cfg.Artifact.AccessMode, "artifact-access-mode", cfg.Artifact.AccessMode, "artifact access mode: internal or external")
+	fs.StringVar(&cfg.Artifact.AccessMode, "artifact-access-mode", cfg.Artifact.AccessMode, "Runner service access mode for artifacts and Git: internal or external")
 	fs.StringVar(&cfg.Gateway.MachineCredentialFile, "machine-credential-file", cfg.Gateway.MachineCredentialFile, "MachineAccount credential JSON file")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")

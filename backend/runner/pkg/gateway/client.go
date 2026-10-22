@@ -114,9 +114,9 @@ func (c *Client) GetScript(ctx context.Context, name string) (*ScriptResource, e
 	return &script, nil
 }
 
-func (c *Client) GetArtifactEndpoints(ctx context.Context) (ArtifactEndpoints, error) {
-	var endpoints ArtifactEndpoints
-	err := c.doJSON(ctx, http.MethodGet, apiPrefix+"/artifact-endpoints", nil, &endpoints)
+func (c *Client) GetServiceEndpoints(ctx context.Context) (ServiceEndpoints, error) {
+	var endpoints ServiceEndpoints
+	err := c.doJSON(ctx, http.MethodGet, apiPrefix+"/service-endpoints", nil, &endpoints)
 	return endpoints, err
 }
 

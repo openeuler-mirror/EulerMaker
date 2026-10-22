@@ -48,9 +48,9 @@ git clone http://localhost:8080/git/gitee.com/src-openeuler/gcc.git
 
 Compose 使用 `8084:8080`，管理面通过容器端口 `8080` 访问；Kubernetes 模板使用 Service 的 `8080` 端口。Git Server 不配置克隆基础地址，返回路径与部署入口无关。
 
-Controller Manager 客户端将路径转换为 `git-server:///git/...`，存入 Snapshot 和 Job 的克隆地址字段。Runner 解析尚未实现，当前默认脚本无法直接克隆该逻辑地址；本阶段不能作为完整构建链路启用。
+Controller Manager 客户端将路径转换为 `git-server:///git/...`，存入 Snapshot 和 Job 的克隆地址字段。Runner 从 Gateway `service-endpoints` 获取地址，将逻辑地址解析为 HTTP(S) URL 后交给构建脚本。
 
-`Config/service-config.gitServer` 的 `runnerInternalURL`、`runnerExternalURL` 用于配置 Runner 的内外网克隆服务入口，均可留空；地址不附加 `/git`。默认内网入口为 `http://127.0.0.1:8084`，仅适用于同机宿主机网络的 Compose Runner。本阶段只保存这些配置，不改变 Runner 行为。
+`Config/service-config.gitServer` 的 `runnerInternalURL`、`runnerExternalURL` 用于配置 Runner 的内外网克隆服务入口，均可留空；地址不附加 `/git`。默认内网入口为 `http://127.0.0.1:8084`，仅适用于同机宿主机网络的 Compose Runner。Runner 按 `--artifact-access-mode` 选择对应入口；缺少所选地址时不回退到管理地址。
 
 ## 认证配置
 

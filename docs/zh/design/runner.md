@@ -151,9 +151,9 @@ GET /apis/ebs/v1/scripts/{name}
 
 Runner 不列举或修改 Script。数组为空时不访问 Script API，沿用镜像入口；数组第一项是主脚本，其余脚本供主脚本调用。具体拉取、缓存与容器入口规则见 8.1。
 
-### 3.4 Artifact Manager API
+### 3.4 服务地址与 Artifact Manager API
 
-Runner 启动时使用 Runner Token 请求 Gateway 的 `GET /apis/ebs/v1/artifact-endpoints` 获取实例地址列表，此后每 600 秒加少量随机抖动刷新。上传请求直接访问选中的 Artifact Manager，不经 Gateway：
+Runner 启动时使用 Runner Token 请求 Gateway 的 `GET /apis/ebs/v1/service-endpoints` 获取 `artifactManagers` 和 `gitServer` 的 Runner 地址，此后每 600 秒加 ±30 秒随机抖动刷新；刷新失败保留最后一次成功的地址表。上传请求直接访问选中的 Artifact Manager，不经 Gateway：
 
 ```text
 POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks
@@ -169,7 +169,9 @@ Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用
 
 地址列表不按 Job 查询，也不返回 Job 的上传实例。BuildInfo Controller 创建 Job 时，将 Project 的 `ebs.io/artifacts` annotation 固化到 Job 的同名 annotation；未设置时写入 `default`。Runner 据此选址：`internal` 模式使用 `runnerInternalURL`，`external` 模式使用 `runnerExternalURL`，不根据来源 IP 自动切换。运行中的 Job 固定已选地址，刷新只影响新启动的 Job。实例或对应地址不可用时等待配置恢复，不回退到其他实例或模式。内外网地址均允许 HTTP 或 HTTPS，由 apiserver 在 Config 创建、更新时校验地址格式，Runner 不逐项重复校验地址表；选址与客户端初始化错误仍正常处理。TLS 校验由独立的 Artifact Manager 客户端配置控制。
 
-构建执行前，Runner 仅转换 JSON payload 的 `repo[].url`：`artifact://{instance}/repositories/...` 使用该实例在当前模式下的 Runner 地址，`artifact:///repositories/...` 使用 `default`；HTTP(S) URL 原样保留。转换结果写入本地 `payload.json`，不回写 `Job.spec.payload`。同一 Job 上传实例的地址使用已固定值，其他仓库实例从本次地址快照取值；实例缺失、地址为空或逻辑路径无效时，不启动构建容器并记录明确错误。
+构建执行前，Runner 转换 JSON payload 的 `repo[].url`：`artifact://{instance}/repositories/...` 使用该实例在当前模式下的 Runner 地址，`artifact:///repositories/...` 使用 `default`；HTTP(S) URL 原样保留。转换结果写入本地 `payload.json`，不回写 `Job.spec.payload`。同一 Job 上传实例的地址使用已固定值，其他仓库实例从本次地址快照取值；实例缺失、地址为空或逻辑路径无效时，不启动构建容器并记录明确错误。
+
+`clone_url` 中的 `git-server:///git/...` 使用 `gitServer` 的 Runner 地址替换协议前缀，按同一 `--artifact-access-mode` 选择内网或外网入口。入口只填写服务基础地址，不附加 `/git`；拼接保留代理路径前缀与仓库路径编码。Git 地址在 Job 启动时固定，后续刷新不改变该次执行。所选 Git 地址缺失或逻辑路径无效时明确报错，不启动容器，不回退到另一模式或管理地址；HTTP(S) 克隆地址、`origin_url`、`commit_id` 原样保留。Git 克隆由构建容器中的脚本执行，其 HTTPS 信任配置由构建镜像负责，不使用 Runner 的 Artifact Manager CA 配置。
 
 ## 四、Runner 资源模型
 
@@ -415,7 +417,7 @@ containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默
 ```text
 1. 解析 Job.spec.runtimeSpec，得到镜像、网络、权限、工作目录、挂载等容器配置
 2. 为 Job 创建本地 workDir 和 resultDir
-3. 将 Job.spec.payload 写入 workDir/payload.json，作为任务执行所需的 JSON 参数文件。`origin_url`、`commit_id` 原样保留。Job `clone_url` 已使用 `git-server:///git/...` 逻辑地址，但本阶段 Runner 尚未实现其解析，仍原样写入；默认脚本不能直接克隆该地址，待后续补齐地址转换；源码获取见 [Script 契约](data-models~script.md)。
+3. 将 Job.spec.payload 写入 workDir/payload.json，作为任务执行所需的 JSON 参数文件。`origin_url`、`commit_id` 原样保留。Job `clone_url` 中的 `git-server:///git/...` 按 3.4 的服务地址规则转换为 HTTP(S) 克隆地址；源码获取见 [Script 契约](data-models~script.md)。
 4. `scriptRefs` 非空时按顺序解析全部脚本，写入 workDir/scripts/{name}；全部成功后才继续
 5. 拉取或确认业务镜像可用
 6. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label

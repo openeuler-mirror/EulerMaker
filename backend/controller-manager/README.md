@@ -46,7 +46,7 @@ BuildInfo Controller 固定使用 `rpmspec -P` 展开 spec；运行环境必须�
 
 Snapshot、BuildInfo 和 RpmRepo Controller 通过公共服务配置提供者读取 `Config/service-config`：`gitServer.internalURL` 提供 Git Server 管理地址，`artifactManagers` 提供各 Artifact Manager 实例的内部地址。每轮 reconcile 按需读取一次并固定本轮配置，下一轮读取最新值；启动时不依赖配置读取成功。配置读取失败交由框架重试或记录永久错误，不计入包级失败预算，也不写业务失败终态。Git Server 的请求超时、重试和缓存时长仍由命令行参数配置。
 
-RpmRepo 根据 Project 的 `ebs.io/artifacts` annotation（缺省 `default`）选择实例；BuildInfo 按 `artifact://{instance}/repositories/.../` 选择内部地址下载元数据。Job `repo` 保留逻辑地址，由 Runner 根据其网络模式解析。Git Server 客户端将服务返回的 `clone_path` 补成 `git-server:///git/...`，存入 Snapshot `cloneUrl` 并原样传入 Job `clone_url`。Runner 的 Git 逻辑地址解析尚未实现，当前默认脚本无法直接克隆该地址。
+RpmRepo 根据 Project 的 `ebs.io/artifacts` annotation（缺省 `default`）选择实例；BuildInfo 按 `artifact://{instance}/repositories/.../` 选择内部地址下载元数据。Job `repo` 保留逻辑地址，由 Runner 根据其网络模式解析。Git Server 客户端将服务返回的 `clone_path` 补成 `git-server:///git/...`，存入 Snapshot `cloneUrl` 并原样传入 Job `clone_url`。Runner 根据 Gateway `service-endpoints` 返回的 Git Server 地址和网络模式解析该逻辑地址，再交给构建脚本。
 
 Snapshot 解析并发数、单轮总预算、同步重入延迟及仓库失败上限分别由 `--snapshot-resolve-workers`、`--snapshot-resolve-budget`、`--snapshot-sync-requeue-delay` 和 `--snapshot-failure-retry-limit` 配置。Build Controller 复用全局 `--poll-period` 与 `--workers`；它的指标包括 `build_controller_status_update_conflicts_total`、`build_controller_status_update_unknown_total`、`build_controller_ensure_conflicts_total` 和 `build_controller_ensure_terminating_total`。
 

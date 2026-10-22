@@ -5,11 +5,12 @@ import (
 	"time"
 )
 
-type ArtifactEndpoints struct {
-	Instances map[string]ArtifactEndpoint `json:"instances"`
+type ServiceEndpoints struct {
+	ArtifactManagers map[string]ServiceEndpoint `json:"artifactManagers"`
+	GitServer        ServiceEndpoint            `json:"gitServer"`
 }
 
-type ArtifactEndpoint struct {
+type ServiceEndpoint struct {
 	RunnerInternalURL string `json:"runnerInternalURL"`
 	RunnerExternalURL string `json:"runnerExternalURL"`
 }
