@@ -220,7 +220,7 @@ func buildInfoMeta(value *ebsv1.BuildInfo) *metav1.ObjectMeta {
 }
 
 func newSnapshot(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.Snapshot {
-	return &ebsv1.Snapshot{
+	snapshot := &ebsv1.Snapshot{
 		TypeMeta:   metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "Snapshot"},
 		ObjectMeta: metav1.ObjectMeta{Name: build.Name, Namespace: build.Namespace},
 		Spec: ebsv1.SnapshotSpec{
@@ -228,6 +228,10 @@ func newSnapshot(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.Snapshot {
 			PackageRepos: selectPackageRepos(build, project),
 		},
 	}
+	if ref, exists := build.Annotations[ebsv1.BuildGitRefAnnotation]; exists {
+		snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref}
+	}
+	return snapshot
 }
 
 func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {

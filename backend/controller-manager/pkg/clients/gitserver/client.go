@@ -67,6 +67,7 @@ type GitServerClient interface {
 	PublishSyncTask(ctx context.Context, originURL string) error
 	CheckSynced(ctx context.Context, originURL string, since time.Time) (SyncCheckResult, error)
 	ResolveCommit(ctx context.Context, originURL string, ref ebsv1.GitRef) (string, error)
+	ResolveFullRef(ctx context.Context, originURL, ref string) (string, error)
 	ExecCommand(ctx context.Context, originURL, command string) (string, error)
 }
 
@@ -191,6 +192,22 @@ func (c *Client) ResolveCommit(ctx context.Context, originURL string, ref ebsv1.
 	if ref.Type == ebsv1.GitRefTag {
 		value = "refs/tags/" + ref.Value + "^{commit}"
 	}
+	return c.resolve(ctx, originURL, value)
+}
+
+// ResolveFullRef resolves an exact refs/ name in the synced mirror to a commit.
+func (c *Client) ResolveFullRef(ctx context.Context, originURL, ref string) (result string, resultErr error) {
+	defer recordRequest(resolveRequests, &resultErr)
+	if err := validateOrigin(originURL); err != nil {
+		return "", gitError("resolve", ErrorValidation, err)
+	}
+	if err := validateFullRef(ref); err != nil {
+		return "", gitError("resolve", ErrorValidation, err)
+	}
+	return c.resolve(ctx, originURL, ref+"^{commit}")
+}
+
+func (c *Client) resolve(ctx context.Context, originURL, value string) (string, error) {
 	body, err := c.do(ctx, "resolve", "/command", commandRequest{Repo: originURL, Command: []string{"git-rev-parse", "--verify", value}}, http.StatusOK)
 	if err != nil {
 		return "", err
@@ -288,6 +305,25 @@ func validateRef(ref ebsv1.GitRef) error {
 	}
 	if !refPattern.MatchString(ref.Value) || strings.HasPrefix(ref.Value, "-") || strings.Contains(ref.Value, "..") || strings.Contains(ref.Value, "/./") || strings.Contains(ref.Value, "/../") {
 		return fmt.Errorf("ref value is invalid")
+	}
+	return nil
+}
+
+func validateFullRef(ref string) error {
+	invalid := func() error { return fmt.Errorf("ref must be a valid full Git ref starting with refs/") }
+	if !strings.HasPrefix(ref, "refs/") || strings.HasSuffix(ref, ".") ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.ContainsAny(ref, " ~^:?*[\\") {
+		return invalid()
+	}
+	for _, ch := range ref {
+		if ch < 0x20 || ch == 0x7f {
+			return invalid()
+		}
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return invalid()
+		}
 	}
 	return nil
 }

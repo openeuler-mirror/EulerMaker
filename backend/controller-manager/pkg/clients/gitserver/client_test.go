@@ -2,8 +2,10 @@ package gitserver
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +56,70 @@ func TestResolveCommitClassifiesMissingRef(t *testing.T) {
 
 	_, err := client.ResolveCommit(context.Background(), "https://example.com/repo.git", ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"})
 	assertKind(t, err, ErrorNotFound)
+}
+
+func TestResolveFullRefCommand(t *testing.T) {
+	for _, ref := range []string{"refs/merge-requests/501/head", "refs/heads/main", "refs/tags/v1", "refs/heads/版本+1"} {
+		t.Run(ref, func(t *testing.T) {
+			origin := "https://example.com/repo.git"
+			requests := 0
+			client := newTestClient(t, func(request *http.Request) (*http.Response, error) {
+				requests++
+				var command commandRequest
+				if err := json.NewDecoder(request.Body).Decode(&command); err != nil {
+					t.Fatal(err)
+				}
+				want := []string{"git-rev-parse", "--verify", ref + "^{commit}"}
+				if request.Method != http.MethodPost || request.URL.Path != "/command" ||
+					command.Repo != origin || !reflect.DeepEqual(command.Command, want) {
+					t.Fatalf("request=%s %s command=%+v", request.Method, request.URL.Path, command)
+				}
+				return response(http.StatusOK, `{"stdout":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n","exit_code":0}`), nil
+			})
+			for i := 0; i < 2; i++ {
+				commit, err := client.ResolveFullRef(context.Background(), origin, ref)
+				if err != nil || commit != strings.Repeat("a", 40) {
+					t.Fatalf("commit=%q err=%v", commit, err)
+				}
+			}
+			if requests != 2 {
+				t.Fatalf("resolve requests=%d, want 2", requests)
+			}
+		})
+	}
+}
+
+func TestResolveFullRefErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		kind   ErrorKind
+	}{
+		{"missing", http.StatusUnprocessableEntity, `{"code":"CommandFailed"}`, ErrorNotFound},
+		{"unavailable", http.StatusServiceUnavailable, `{"code":"Unavailable"}`, ErrorTemporary},
+		{"forbidden", http.StatusForbidden, `{"code":"Forbidden"}`, ErrorPermanent},
+		{"invalid response", http.StatusOK, `{"stdout":"not-a-commit","exit_code":0}`, ErrorTemporary},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newTestClient(t, func(*http.Request) (*http.Response, error) {
+				return response(tc.status, tc.body), nil
+			})
+			_, err := client.ResolveFullRef(context.Background(), "https://example.com/repo.git", "refs/merge-requests/501/head")
+			assertKind(t, err, tc.kind)
+		})
+	}
+}
+
+func TestResolveFullRefValidatesLiteralRef(t *testing.T) {
+	client := newTestClient(t, func(*http.Request) (*http.Response, error) {
+		t.Fatal("invalid ref reached HTTP transport")
+		return nil, nil
+	})
+	for _, ref := range []string{"main", "refs/heads/main~1", "refs/heads/main^{commit}", "refs/heads/a..b", "refs/heads/a.lock"} {
+		_, err := client.ResolveFullRef(context.Background(), "https://example.com/repo.git", ref)
+		assertKind(t, err, ErrorValidation)
+	}
 }
 
 func newTestClient(t *testing.T, transport roundTripFunc) *Client {

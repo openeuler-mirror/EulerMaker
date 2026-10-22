@@ -20,6 +20,8 @@ type asyncGit struct {
 	checks, publishes, resolves int
 	synced                      bool
 	publishErr                  error
+	fullRef                     string
+	resolveErr                  error
 }
 
 func (g *asyncGit) CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error) {
@@ -42,6 +44,64 @@ func (g *asyncGit) ResolveCommit(context.Context, string, ebsv1.GitRef) (string,
 }
 func (g *asyncGit) ExecCommand(context.Context, string, string) (string, error) {
 	panic("Snapshot Controller must not call ExecCommand")
+}
+
+func (g *asyncGit) ResolveFullRef(_ context.Context, _ string, ref string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.resolves++
+	g.fullRef = ref
+	return strings.Repeat("a", 40), g.resolveErr
+}
+
+func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
+	for _, kind := range []gitserver.ErrorKind{"", gitserver.ErrorNotFound, gitserver.ErrorTemporary} {
+		t.Run(string(kind), func(t *testing.T) {
+			snapshot, build := baseObjects(branchRepos(1))
+			build.Spec.BuildType = "single"
+			build.Spec.Packages = []string{"pkg-0"}
+			snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
+			api := &fakeClient{snapshot: snapshot, build: build}
+			g := &asyncGit{}
+			c := newTestController(t, api, g, Config{})
+			result, err := c.sync(context.Background(), "project-a/build-a")
+			if err != nil || result.RequeueAfter != c.config.SyncRequeueDelay || g.publishes != 1 || g.resolves != 0 {
+				t.Fatalf("waiting result=%+v err=%v publishes=%d resolves=%d", result, err, g.publishes, g.resolves)
+			}
+			g.synced = true
+			if kind != "" {
+				g.resolveErr = &gitserver.Error{Kind: kind, Err: errors.New("resolve failed")}
+			}
+			_, err = c.sync(context.Background(), "project-a/build-a")
+			status := api.snapshot.Status.PackageRepoStatuses["pkg-0"]
+			if g.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] || g.resolves != 1 || g.publishes != 1 {
+				t.Fatalf("ref=%q resolves=%d publishes=%d", g.fullRef, g.resolves, g.publishes)
+			}
+			switch kind {
+			case "":
+				if err != nil || status.CommitID != strings.Repeat("a", 40) || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
+					t.Fatalf("resolved status=%+v err=%v", status, err)
+				}
+			case gitserver.ErrorNotFound:
+				if err != nil || status.Error == nil || status.Error.Code != ebsv1.SpecCommitResolveFailed ||
+					status.Error.Retryable || status.CommitID != "" || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
+					t.Fatalf("missing ref status=%+v err=%v", status, err)
+				}
+			case gitserver.ErrorTemporary:
+				if !errors.Is(err, errPackagesRetryable) || status.Error == nil || !status.Error.Retryable ||
+					c.failures.count(snapshot.UID, "pkg-0") != 1 || api.snapshot.Status.Phase != ebsv1.SnapshotProcessing {
+					t.Fatalf("retry status=%+v err=%v", status, err)
+				}
+				g.resolveErr = nil
+				if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+					t.Fatal(err)
+				}
+				if api.snapshot.Status.Phase != ebsv1.SnapshotActive || c.failures.count(snapshot.UID, "pkg-0") != 0 {
+					t.Fatal("successful retry must complete the Snapshot and clear the failure budget")
+				}
+			}
+		})
+	}
 }
 
 func branchRepos(n int) []ebsv1.PackageRepo {

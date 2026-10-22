@@ -126,6 +126,10 @@ func (g *fakeGitServer) ResolveCommit(context.Context, string, ebsv1.GitRef) (st
 	panic("BuildInfo Controller must not resolve git commits")
 }
 
+func (g *fakeGitServer) ResolveFullRef(context.Context, string, string) (string, error) {
+	panic("BuildInfo Controller must not resolve git refs")
+}
+
 var _ gitserver.GitServerClient = (*fakeGitServer)(nil)
 
 // repo scripts one repository mirror: the ls-tree listing plus one git-show per file.
