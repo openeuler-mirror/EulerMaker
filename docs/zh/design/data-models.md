@@ -243,7 +243,7 @@ Build 创建后，除 `incremental` 类型在 Pending 阶段由 Build Controller
 
 ### 单包构建的 Git ref 覆盖
 
-本节定义单包构建的引用覆盖与固化边界。Build Controller 将 annotation 传递到 Snapshot，由 Snapshot Controller 解析并固化提交。调谐见 [Build Controller 4.2](controller-manager~build-controller.md)，脚本执行见 [Script 源码获取契约](data-models~script.md)。
+本节定义单包构建的引用覆盖与固化边界。Build Controller 将引用覆盖值固化到 Snapshot 的包级 ref，由 Snapshot Controller 解析并固化提交。调谐见 [Build Controller 4.2](controller-manager~build-controller.md)，脚本执行见 [Script 源码获取契约](data-models~script.md)。
 
 `Build.metadata.annotations["ebs.io/git-ref"]` 可覆盖本次构建的完整 Git ref：
 
@@ -258,9 +258,9 @@ spec:
 ```
 
 - 仅在 `buildType=single` 且 `len(spec.packages)==1` 时允许设置；这里是数组长度，不是去重后的数量。未设置 annotation 时普通 single 仍允许指定多个包仓库。
-- Build 创建时包名必须存在于所属 Project。Build Controller 创建 Snapshot 时，从同一次 Project GET 复制目标仓库和 defaultRef，并将 Build 的 `ebs.io/git-ref` 原样复制到 Snapshot annotation，同时清空该包的 commitID；不修改 Project、不指定 fork URL。该 annotation 仅作用于 Snapshot 中唯一的目标仓库，优先于包 commitID、ref 和 Snapshot.defaultRef；目标仓库缺失或数量不为一时报告输入错误，不回退默认分支。
+- Build 创建时包名必须存在于所属 Project。Build Controller 创建 Snapshot 时，从同一次 Project GET 复制目标仓库和 defaultRef，再将 Build 的 `ebs.io/git-ref` 写入唯一目标仓库的 `packageRepos[].ref`，并清空该包的 commitID；Build annotation 保留，Snapshot 无需复制该 annotation。不修改 Project、不指定 fork URL。目标仓库缺失时报告输入错误，不回退默认分支。
 - annotation 必须非空、以 `refs/` 开头并符合完整 Git ref 名称规则；不接受 `HEAD`、`FETCH_HEAD`、refspec、通配符或 `^{commit}` 等 revision 表达式，不自动 trim 或补前缀。创建后该键的存在性和值不可变，`/status` 保留原 metadata。
-- Snapshot 创建后不重新复制 Project 或 Build 输入；Snapshot Controller 只消费 Snapshot 中固化的 annotation、packageRepos 和 defaultRef，成功写入的 commitId/cloneUrl 后续不重新解析。所有批次 Job 均使用该 Snapshot 的固定提交。
+- Snapshot 创建后不重新复制 Project 或 Build 输入；Snapshot Controller 只消费 Snapshot 中固化的 packageRepos 和 defaultRef，成功写入的 commitId/cloneUrl 后续不重新解析。所有批次 Job 均使用该 Snapshot 的固定提交。
 - Job 不传递动态 ref，统一携带 origin_url、clone_url 和 commit_id。
 - `refs/merge-requests/501/head` 表示 PR 源码，不自动合并目标分支、不改写为 merge ref。引用名称由托管平台决定。
 
@@ -729,7 +729,7 @@ type PackageResourceConfig struct {
 
 BuildInfo Controller 读取 `Config/build-target` 与 `Config/build-resource`，分别固化镜像及资源到 Job；Job 创建后配置变化不回写。Script 是独立资源，不复用 Config 内容。
 
-`service-config` 的内容由公共 `ServiceConfigContent` 解析，包含 Artifact Manager 实例表 `artifactManagers` 和 Git Server 管理地址 `gitServer.internalURL`。字段、默认对象和消费边界统一见 [服务配置内容](data-models~config.md#4-服务配置内容)。
+`service-config` 的内容由公共 `ServiceConfigContent` 解析，包含 Artifact Manager 实例表 `artifactManagers` 和单个 Git Server 配置 `gitServer`；两类服务共用 `ServiceEndpoints`，分别记录控制面 `internalURL`、内网 Runner 的 `runnerInternalURL` 和外网 Runner 的 `runnerExternalURL`。字段、默认对象和消费边界统一见 [服务配置内容](data-models~config.md#4-服务配置内容)。
 
 ## Script（全局脚本）
 
@@ -1082,7 +1082,7 @@ type PackageRepo struct {
 
 `Project.spec.defaultRef`、`Snapshot.spec.defaultRef` 和 `PackageRepo.ref` 统一使用完整 `refs/...` 字符串。非空值按 Git ref-name 规则校验，不接受裸分支名、Commit ID 或 `{type, value}` 对象。固定提交使用独立的 `commitID`。Project 的 defaultRef 为空时默认为 `refs/heads/master`；Snapshot 不填默认值，仓库 ref 允许省略或为空字符串，创建和更新均不自动补齐。修改 Project 默认引用不会改写显式包 ref。Build Controller 从同一次 Project GET 复制 defaultRef 与所选 packageRepos（含 commitID），single 仅复制指定包，其他类型复制全部。
 
-提交选择优先级为 `ebs.io/git-ref` annotation > PackageRepo.commitID > PackageRepo.ref > Snapshot.defaultRef。Build Controller 复制 PR annotation 时同时清空 Snapshot 中该包的 commitID，不修改 Project。Git Server 同步满足 baseline 后，普通引用解析 `<ref>^{commit}`；固定提交验证 `<commitID>^{commit}` 的结果必须等于输入 SHA，成功后写入 status 的 commitId 和 cloneUrl。未配置任何提交或引用时记录 ValidationFailed；引用或提交不存在时记录 ResolveFailed，不回退其他来源。固定提交必须已存在于同步后的镜像中；不会通过任意 SHA 额外向上游抓取对象。
+Snapshot 提交选择优先级为 PackageRepo.commitID > PackageRepo.ref > Snapshot.defaultRef。Build 的 Git ref 覆盖已在创建 Snapshot 时固化为包级 ref，解析阶段只消费 Snapshot.spec。Git Server 同步满足 baseline 后，普通引用解析 `<ref>^{commit}`；固定提交验证 `<commitID>^{commit}` 的结果必须等于输入 SHA，成功后写入 status 的 commitId 和 cloneUrl。未配置任何提交或引用时记录 ValidationFailed；引用或提交不存在时记录 ResolveFailed，不回退其他来源。固定提交必须已存在于同步后的镜像中；不会通过任意 SHA 额外向上游抓取对象。
 
 ### PackageRepoStatus
 

@@ -302,7 +302,7 @@ Git Server 的 Runner 地址使用服务入口，不附加 `/git`，代理路径
 
 `default` 是未设置 `ebs.io/artifacts` 的 Project 使用的实例；若将 Project 指向 `art-01`，创建或修改该 annotation 时也须确认 Config 中存在此键。BuildInfo Controller 创建 Job 时会将选中的实例名固化到 Job 的同名 annotation，Runner 据此选择日志和产物上传地址。不要将 Docker Compose 使用的 `127.0.0.1:8081` 原样用于异机 Runner。
 
-本目录尚无 Runner Manifest。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway、Artifact Manager 地址，并确认构建容器能访问 Git Server。集群外 Runner 需要另外提供可达入口；使用 `--artifact-access-mode=external` 时对 Artifact Manager 和 Git Server 均读取 `runnerExternalURL`，允许 HTTP(S)，公网入口建议使用 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
+本目录尚无 Runner Manifest。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway、Artifact Manager 地址，并确认构建容器能访问 Git Server。集群外 Runner 需要另外提供可达入口；使用 `--service-access-mode=external` 时对 Artifact Manager 和 Git Server 均读取 `runnerExternalURL`，允许 HTTP(S)，公网入口建议使用 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
 
 Runner 在写入 `payload.json` 前，按逻辑 URL 中的实例名将 `repo[].url` 的 `artifact://{instance}/repositories/...` 转换为选定网络模式下的 HTTP(S) URL；省略实例名时使用 `default`。普通 HTTP(S) 仓库地址保持不变。仓库所在实例缺失或对应 Runner 地址为空时，Job 会报出明确的仓库解析错误，因此上线前应从构建节点验证所需实例的地址及仓库路径可达。
 

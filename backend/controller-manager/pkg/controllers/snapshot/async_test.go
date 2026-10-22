@@ -77,7 +77,8 @@ func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
 			snapshot, build := baseObjects(branchRepos(1))
 			build.Spec.BuildType = "single"
 			build.Spec.Packages = []string{"pkg-0"}
-			snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
+			snapshot.Spec.PackageRepos[0].Ref = "refs/merge-requests/501/head"
+			snapshot.Spec.DefaultRef = "refs/heads/default"
 			api := &fakeClient{snapshot: snapshot, build: build}
 			g := &asyncGit{}
 			c := newTestController(t, api, g, Config{})
@@ -91,7 +92,7 @@ func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
 			}
 			_, err = c.sync(context.Background(), "project-a/build-a")
 			status := api.snapshot.Status.PackageRepoStatuses["pkg-0"]
-			if g.fullRef != snapshot.Annotations[ebsv1.BuildGitRefAnnotation] || g.resolves != 1 || g.publishes != 1 {
+			if g.fullRef != snapshot.Spec.PackageRepos[0].Ref || g.resolves != 1 || g.publishes != 1 {
 				t.Fatalf("ref=%q resolves=%d publishes=%d", g.fullRef, g.resolves, g.publishes)
 			}
 			switch kind {

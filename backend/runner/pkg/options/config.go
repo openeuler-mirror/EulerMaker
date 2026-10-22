@@ -17,6 +17,7 @@ type Config struct {
 	Type              string
 	Arch              string
 	RootDir           string
+	ServiceAccessMode string
 	HeartbeatInterval time.Duration
 
 	Gateway   gateway.Config
@@ -31,6 +32,7 @@ func LoadConfig(args []string) (Config, error) {
 		Type:              "ct",
 		Arch:              runtimeArch(),
 		RootDir:           "/var/lib/ebs-runner",
+		ServiceAccessMode: "internal",
 		HeartbeatInterval: 30 * time.Second,
 		Gateway: gateway.Config{
 			URL: "https://ebs-gateway:8443",
@@ -44,7 +46,6 @@ func LoadConfig(args []string) (Config, error) {
 			},
 		},
 		Artifact: artifact.Config{
-			AccessMode: "internal",
 			Log: artifact.LogConfig{
 				ChunkSize:       256 << 10,
 				FlushInterval:   500 * time.Millisecond,
@@ -66,7 +67,7 @@ func LoadConfig(args []string) (Config, error) {
 
 	fs := flag.NewFlagSet("ebs-runner", flag.ContinueOnError)
 	fs.StringVar(&cfg.Gateway.URL, "gateway", cfg.Gateway.URL, "ebs-gateway address")
-	fs.StringVar(&cfg.Artifact.AccessMode, "artifact-access-mode", cfg.Artifact.AccessMode, "Runner service access mode for artifacts and Git: internal or external")
+	fs.StringVar(&cfg.ServiceAccessMode, "service-access-mode", cfg.ServiceAccessMode, "Runner service access mode for artifacts and Git: internal or external")
 	fs.StringVar(&cfg.Gateway.MachineCredentialFile, "machine-credential-file", cfg.Gateway.MachineCredentialFile, "MachineAccount credential JSON file")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
@@ -99,8 +100,8 @@ func LoadConfig(args []string) (Config, error) {
 	if cfg.Gateway.URL == "" {
 		return Config{}, fmt.Errorf("gateway is required")
 	}
-	if cfg.Artifact.AccessMode != "internal" && cfg.Artifact.AccessMode != "external" {
-		return Config{}, fmt.Errorf("artifact access mode must be internal or external")
+	if cfg.ServiceAccessMode != "internal" && cfg.ServiceAccessMode != "external" {
+		return Config{}, fmt.Errorf("service access mode must be internal or external")
 	}
 	if cfg.Gateway.MachineCredentialFile == "" {
 		return Config{}, fmt.Errorf("machine credential file is required")

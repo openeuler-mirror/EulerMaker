@@ -77,7 +77,7 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	serviceRoutes := service.NewRoutes(cfg.Artifact.AccessMode, tokens, artifactHTTPClient)
+	serviceRoutes := service.NewRoutes(cfg.ServiceAccessMode, tokens, artifactHTTPClient)
 	logFactory := &artifact.LogFactory{
 		Remote:          serviceRoutes,
 		RootDir:         cfg.RootDir,

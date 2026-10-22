@@ -10,7 +10,6 @@ import (
 )
 
 type Config struct {
-	AccessMode         string
 	CA                 string
 	InsecureSkipVerify bool
 

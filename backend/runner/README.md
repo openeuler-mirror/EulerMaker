@@ -60,7 +60,7 @@ go run ./cmd/runner \
 
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
-Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--artifact-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`，`external` 使用 `runnerExternalURL`，不跨模式回退。配置来自 `Config/service-config`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
+Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`，`external` 使用 `runnerExternalURL`，不跨模式回退。配置来自 `Config/service-config`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
 
 Runner 会在写入 `payload.json` 前，将 `repo[].url` 中的 `artifact://{instance}/repositories/...` 和 `clone_url` 中的 `git-server:///git/...` 转换为对应服务的 Runner 可访问 HTTP(S) 地址；普通 URL、`origin_url` 和 `commit_id` 不变。Git Server 基础地址不附加 `/git`，可以包含代理前缀。上传与 Git 地址在 Job 启动时固定，刷新只影响新 Job；Git 所选地址缺失时明确报错，不启动构建容器。Job 对象中的原始 payload 不会被修改。Git 克隆由构建脚本执行，HTTPS CA 信任由构建镜像配置。
 
@@ -72,10 +72,10 @@ Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭�
 go run ./cmd/runner --help
 ```
 
-也可以在仓库根目录先启动控制面，再独立启动 Runner。示例中的 `EXPORT_SERVER_ADDR` 需替换为控制面容器及构建节点均可访问的实际内网地址。Runner 使用宿主机网络；异机部署时需设置从 Runner 节点可访问的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/service-config` 中配置 Runner 可访问的实例地址：
+也可以在仓库根目录先启动控制面，再独立启动 Runner。Compose Runner 使用宿主机网络，同机部署可使用初始化配置中的回环地址。异机部署时设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/service-config` 中填写 Runner 与 Job 容器可访问的 Artifact Manager、Git Server 地址。`RUNNER_SERVICE_ACCESS_MODE` 映射到 `--service-access-mode`，默认 `internal`；需要外网入口时设为 `external`，并配置两类服务的 `runnerExternalURL`。
 
 ```bash
-EXPORT_SERVER_ADDR=192.0.2.10 docker compose -f hacks/docker-compose.yml up -d --build
+docker compose -f hacks/docker-compose.yml up -d --build
 DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```

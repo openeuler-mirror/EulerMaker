@@ -229,8 +229,8 @@ func newSnapshot(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.Snapshot {
 		},
 	}
 	if ref, exists := build.Annotations[ebsv1.BuildGitRefAnnotation]; exists {
-		snapshot.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref}
 		for i := range snapshot.Spec.PackageRepos {
+			snapshot.Spec.PackageRepos[i].Ref = ref
 			snapshot.Spec.PackageRepos[i].CommitID = ""
 		}
 	}
