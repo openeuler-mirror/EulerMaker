@@ -150,11 +150,11 @@ HTTP 及协议结果必须在客户端内按以下规则归一化：400/422 且�
 - `PublishSyncTask` 只负责幂等发布同步任务，不等待同步完成。
 - `CheckSynced` 返回 `SyncCheckResult{Synced:false}, nil` 是正常的“尚未就绪”结果，不计为一次 git-server 请求失败；HTTP 404、响应无 `sync_time` 或 `sync_time < baseline` 均归一化为该结果，此时 `CloneURL` 必须为空。
 - `CheckSynced` 仅在 `sync_time >= baseline` 且响应包含非空 `clone_url` 时返回 `SyncCheckResult{Synced:true, CloneURL:...}, nil`；同步时间达标但缺少 `clone_url` 属于 git-server 响应异常，返回临时错误。
-- `ResolveCommit` 在内部将 Branch 转为 `refs/heads/<value>`，将 Tag 转为 `refs/tags/<value>^{commit}`，调用只读 `/command` 并校验输出。Controller 不自行拼接命令数组或完整 ref。
+- `ResolveCommit` 在内部将 Branch 转为 `refs/heads/<value>`，将 Tag 转为 `refs/tags/<value>^{commit}`。`ResolveFullRef` 校验完整 `refs/...` 后按该引用剥离到 commit，不补 heads/tags 前缀。两者通过参数数组调用只读 `/command` 并校验输出，不执行 shell；Controller 不自行拼接命令数组。
 - 相同仓库已经排队或正在执行同步时，git-server 合并重复发布；Controller 不依赖某次请求的操作 ID。
 - `PackageRepo.url`、`ref.value` 和组装后的 Git ref 均是不可信输入，客户端必须执行防御性校验；违反约束返回 `GitServerError{Kind: Validation}`。该复核不替代 apiserver 的权威准入校验。
-- 三个方法都必须遵守传入 context；context 取消或超时后及时返回。
-- L1 TTL 缓存属于客户端实现。同步状态缓存以规范化仓库 URL 为 key，同时缓存原始 `sync_time` 和 `clone_url`，每次调用仍使用本次 baseline 比较；不得仅缓存某次 `CheckSynced` 的布尔结果。`ResolveCommit` 不跨调用缓存 Branch/Tag 的解析结果，避免仓库完成新一轮同步后仍返回旧分支或标签结果。
+- 所有方法都必须遵守传入 context；context 取消或超时后及时返回。
+- L1 TTL 缓存属于客户端实现。同步状态缓存以规范化仓库 URL 为 key，同时缓存原始 `sync_time` 和 `clone_url`，每次调用仍使用本次 baseline 比较；不得仅缓存某次 `CheckSynced` 的布尔结果。`ResolveCommit` / `ResolveFullRef` 不跨调用缓存引用解析结果，避免仓库完成新一轮同步后仍返回旧引用结果。
 - 客户端实现可以提供 `PublishSyncTask`、`GetSyncStatus`、`ExecuteCommand` 等底层私有方法，但这些方法不属于 Controller 接口。
 
 `UpdateSnapshotStatus` 必须验证成功响应非 nil、UID 与请求对象一致、resourceVersion 非空。任一成功响应异常都包装为 `WriteUnknown`。
@@ -338,13 +338,13 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `Processing` | 填充进行中（异常重入保持，不回退） | `Pending → Processing` | 全部目标包 Resolved 或 Skipped（确定性失败/重试超限）→ `Active`；存在 Waiting、Deferred 或未超限可重试失败时保持（自循环） |
 | `Active` | 终态，目标包均已处理 | 单轮 reconcile 汇总全部包成功或跳过 | 无（终态；不再入队） |
 
-### 6.2 单包 commit 解析子状态机（reconcile 内瞬时状态，不持久化）
+### 6.2 每仓库 commit 解析子状态机（reconcile 内瞬时状态，不持久化）
+
+Branch/Tag 或完整引用覆盖的未完成包每轮从 `CheckSynced` 开始。已满足 baseline 时直接解析 ref，不再提交 Sync；未就绪时调用 `PublishSyncTask`，成功后立即返回 Waiting 并释放 worker，由下一轮重新检查。git-server 异步完成同步，Controller 不创建脱离 reconcile 的后台轮询 goroutine，也不在 worker 内等待仓库同步完成。
 
 完整引用覆盖：若 Snapshot 携带 `ebs.io/git-ref`，先确认 packageRepos 恰好一个条目，使用 annotation 作为该仓库的有效引用，不读取父 Build 的 annotation 或实时 Project。该覆盖优先于包 ref（包括 Commit）与 defaultRef，必须走 CheckSynced/PublishSyncTask；同步满足 baseline 后调用 ResolveFullRef，成功时保存 commitId 和 cloneUrl。引用不存在按不可重试 ResolveFailed 记录，不回退包 ref/defaultRef。覆盖为空或 packageRepos 数量不为一时返回 PermanentError；完整 ref 语法无效时记录包级 ValidationFailed。均不解析其他引用。
 
 成功持久化的 commitId/cloneUrl 在后续 reconcile 和重启后沿用。
-
-`ref.type=Branch/Tag` 每轮从 `CheckSynced` 开始。已满足 baseline 时直接解析 ref，不再提交 Sync；未就绪时调用 `PublishSyncTask`，成功后立即返回 Waiting 并释放 worker，由下一轮重新检查。git-server 异步完成同步，Controller 不创建脱离 reconcile 的后台轮询 goroutine，也不在 worker 内等待仓库同步完成。
 
 没有完整引用覆盖时，`ref.type=Commit` 校验 `ref.value` 后直接进入 Resolved，不访问 git-server。瞬时状态不持久化；进程重启后从 Snapshot 已持久化结果和 git-server 同步状态恢复，不需要持久化同步请求 ID。
 

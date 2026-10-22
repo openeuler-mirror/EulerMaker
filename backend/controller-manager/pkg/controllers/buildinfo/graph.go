@@ -38,9 +38,7 @@ func newBuildGraph(info *ebsv1.BuildInfo, nodes map[string]ebsv1.DcgNodeState) *
 }
 
 // loadGraph validates the persisted version before reusing a cached graph. A nil result without a stop permits creation.
-func (c *Controller) loadGraph(
-	ctx context.Context, round *reconcileRound,
-) (*DcgDict, bool, controller.ReconcileResult, error) {
+func (c *Controller) loadGraph(ctx context.Context, round *reconcileRound) (*DcgDict, bool, controller.ReconcileResult, error) {
 	cached, hit := c.dcgDict.Get(round.key)
 	meta, err := c.client.GetBuildGraph(ctx, round.current.Namespace, round.current.Name, true)
 	if errors.Is(err, ErrNotFound) {
@@ -150,9 +148,7 @@ func graphNodesValid(nodes map[string]ebsv1.DcgNodeState) bool {
 	return true
 }
 
-func (c *Controller) acceptGraph(
-	ctx context.Context, round *reconcileRound, graph *ebsv1.BuildGraph,
-) (*DcgDict, controller.ReconcileResult, error) {
+func (c *Controller) acceptGraph(ctx context.Context, round *reconcileRound, graph *ebsv1.BuildGraph) (*DcgDict, controller.ReconcileResult, error) {
 	reason := graphIdentityReason(graph, round.current)
 	if reason == "" && !graphNodesValid(graph.Status.Nodes) {
 		reason = "BuildGraphInvalid"
@@ -171,9 +167,7 @@ func (c *Controller) acceptGraph(
 	return dcg, result, err
 }
 
-func (c *Controller) graphUnavailable(
-	ctx context.Context, round *reconcileRound, reason string,
-) (controller.ReconcileResult, error) {
+func (c *Controller) graphUnavailable(ctx context.Context, round *reconcileRound, reason string) (controller.ReconcileResult, error) {
 	c.dcgDict.Invalidate(round.key)
 	next := round.current.DeepCopy()
 	upsertCondition(&next.Status.Conditions, conditionBuildGraphUnavailable, reason, "BuildGraph "+round.key+" is unavailable")
@@ -202,9 +196,7 @@ func graphWriteMatches(graph, intent *ebsv1.BuildGraph) bool {
 }
 
 // writeGraph never retries an old candidate with a new resourceVersion.
-func (c *Controller) writeGraph(
-	ctx context.Context, round *reconcileRound, candidate *DcgDict,
-) (*DcgDict, controller.ReconcileResult, error) {
+func (c *Controller) writeGraph(ctx context.Context, round *reconcileRound, candidate *DcgDict) (*DcgDict, controller.ReconcileResult, error) {
 	intent := newBuildGraph(round.current, candidate.ToState())
 	creating := round.graph == nil
 	if !creating {

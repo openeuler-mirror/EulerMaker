@@ -12,6 +12,8 @@ BuildInfo Controller 从空对象组装 Job payload，只下发已识别的配�
 
 所有构建类型统一传递 `origin_url`、`clone_url` 和 `commit_id`，来自 Snapshot 的固化输入及解析结果，不从用户 buildPayload 透传。Runner 原样写入 payload.json；默认脚本从 clone_url 获取源码并检出 commit_id。缺失、非法或无法获取固定提交时明确失败，不回退远端默认分支或动态引用。
 
+默认脚本先执行 `git clone --no-checkout`；本地不存在目标 commit 时，执行 `git fetch --no-tags origin <commit_id>`，最多尝试 3 次，失败后间隔 2 秒再试。确认 commit 存在后执行 `checkout --detach <commit_id>`；普通 Git 和 Git LFS 路径共用该逻辑。获取成功仍依赖远端允许按 SHA 读取且保留目标对象，本流程不提供远端 commit 保留能力。
+
 PR 引用在 Snapshot 阶段解析，Job 不感知 PR ref，也不额外携带 build_type 或动态引用字段。自定义 Script 应遵循相同的固定提交契约；实际检出的 commit 可记录到日志。
 
 ### 构建环境参数
