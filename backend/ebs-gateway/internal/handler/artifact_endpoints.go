@@ -13,7 +13,7 @@ import (
 	"ebs-gateway/internal/identity"
 )
 
-const maxArtifactConfigResponse = 5 << 20
+const maxServiceConfigResponse = 5 << 20
 
 type artifactEndpoint struct {
 	RunnerInternalURL string `json:"runnerInternalURL" yaml:"runnerInternalURL"`
@@ -32,19 +32,19 @@ func (a *Handler) ArtifactEndpoints(c *gin.Context) {
 		return
 	}
 	response, err := a.upstream.Do(c.Request.Context(), http.MethodGet,
-		apiPrefix+"/configs/"+ebsv1.ArtifactManagerConfigName, nil, nil)
+		apiPrefix+"/configs/"+ebsv1.ServiceConfigName, nil, nil)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact manager configuration unavailable"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service configuration unavailable"})
 		return
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact manager configuration unavailable"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service configuration unavailable"})
 		return
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxArtifactConfigResponse+1))
-	if err != nil || len(data) > maxArtifactConfigResponse {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "artifact manager configuration unavailable"})
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxServiceConfigResponse+1))
+	if err != nil || len(data) > maxServiceConfigResponse {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "service configuration unavailable"})
 		return
 	}
 	var config struct {
@@ -56,21 +56,21 @@ func (a *Handler) ArtifactEndpoints(c *gin.Context) {
 			Content    string `json:"content"`
 		} `json:"spec"`
 	}
-	if json.Unmarshal(data, &config) != nil || config.Metadata.Name != ebsv1.ArtifactManagerConfigName ||
+	if json.Unmarshal(data, &config) != nil || config.Metadata.Name != ebsv1.ServiceConfigName ||
 		config.Spec.Visibility != string(ebsv1.ConfigVisibilityOpsOnly) {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid artifact manager configuration"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid service configuration"})
 		return
 	}
-	var content ebsv1.ArtifactManagerContent
+	var content ebsv1.ServiceConfigContent
 	decoder := yaml.NewDecoder(strings.NewReader(config.Spec.Content))
 	decoder.KnownFields(true)
 	var trailing any
 	if decoder.Decode(&content) != nil || decoder.Decode(&trailing) != io.EOF {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid artifact manager configuration"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid service configuration"})
 		return
 	}
-	instances := make(map[string]artifactEndpoint, len(content.Instances))
-	for name, instance := range content.Instances {
+	instances := make(map[string]artifactEndpoint, len(content.ArtifactManagers))
+	for name, instance := range content.ArtifactManagers {
 		instances[name] = artifactEndpoint{
 			RunnerInternalURL: instance.RunnerInternalURL,
 			RunnerExternalURL: instance.RunnerExternalURL,

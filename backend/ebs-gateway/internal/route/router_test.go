@@ -322,7 +322,7 @@ func TestConfigVisibilityUsesOneUpstreamResponse(t *testing.T) {
 }
 
 func TestRunnerArtifactEndpoints(t *testing.T) {
-	content := `instances:
+	content := `artifactManagers:
   default:
     internalURL: http://artifact-manager:8081
     runnerInternalURL: http://127.0.0.1:8081
@@ -331,9 +331,11 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
     internalURL: http://artifact-manager.art-01:8081
     runnerInternalURL: http://artifact-manager.art-01:8081
     runnerExternalURL: https://artifacts.example.com
+gitServer:
+  internalURL: http://git-server:8080
 `
 	config, err := json.Marshal(map[string]any{
-		"metadata": map[string]string{"name": "artifact-manager-conf"},
+		"metadata": map[string]string{"name": "service-config"},
 		"spec":     map[string]string{"visibility": "OpsOnly", "content": content},
 	})
 	if err != nil {
@@ -346,7 +348,7 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
 				Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`))}, nil
 		}
 		calls++
-		if request.URL.Path != "/apis/ebs/v1/configs/artifact-manager-conf" || request.Method != http.MethodGet ||
+		if request.URL.Path != "/apis/ebs/v1/configs/service-config" || request.Method != http.MethodGet ||
 			request.Header.Get("Authorization") != "" {
 			t.Errorf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
 		}
@@ -370,13 +372,16 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
 				RunnerExternalURL string `json:"runnerExternalURL"`
 			} `json:"instances"`
 		}
-		if err := json.Unmarshal(response.Body.Bytes(), &endpoints); err != nil {
+		decoder := json.NewDecoder(response.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&endpoints); err != nil {
 			t.Fatal(err)
 		}
 		if len(endpoints.Instances) != 2 || endpoints.Instances["default"].RunnerExternalURL != "http://artifacts.example.com:8081" ||
-			endpoints.Instances["art-01"].RunnerExternalURL != "https://artifacts.example.com" ||
-			strings.Contains(response.Body.String(), `"internalURL"`) || strings.Contains(response.Body.String(), "http://artifact-manager:8081") {
-			t.Fatalf("unexpected Runner projection: %s", response.Body.String())
+			endpoints.Instances["default"].RunnerInternalURL != "http://127.0.0.1:8081" ||
+			endpoints.Instances["art-01"].RunnerInternalURL != "http://artifact-manager.art-01:8081" ||
+			endpoints.Instances["art-01"].RunnerExternalURL != "https://artifacts.example.com" {
+			t.Fatalf("unexpected Runner projection: %+v", endpoints)
 		}
 	}
 	if calls != 2 {
@@ -403,7 +408,7 @@ func TestRunnerArtifactEndpoints(t *testing.T) {
 
 func TestRunnerArtifactEndpointsRejectsInvalidConfig(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		body := `{"metadata":{"name":"artifact-manager-conf"},"spec":{"visibility":"OpsOnly","content":"instances:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
+		body := `{"metadata":{"name":"service-config"},"spec":{"visibility":"OpsOnly","content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
 	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
@@ -417,6 +422,62 @@ func TestRunnerArtifactEndpointsRejectsInvalidConfig(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "hidden") ||
 		response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRunnerArtifactEndpointsRefresh(t *testing.T) {
+	upstreamStatus := http.StatusOK
+	internalURL := "http://runner-internal:8081"
+	content := func() string {
+		return "artifactManagers:\n  default:\n    internalURL: http://management:8081\n" +
+			"    runnerInternalURL: " + internalURL + "\ngitServer:\n  internalURL: http://git-server:8080\n"
+	}
+	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body, err := json.Marshal(map[string]any{
+			"metadata": map[string]string{"name": "service-config"},
+			"spec":     map[string]string{"visibility": "OpsOnly", "content": content()},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: upstreamStatus, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+	}))
+	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, address string
+		upstreamCode  int
+		wantCode      int
+	}{
+		{"initial", "http://runner-internal:8081", http.StatusOK, http.StatusOK},
+		{"updated", "https://new-endpoint:8443/prefix", http.StatusOK, http.StatusOK},
+		{"unavailable", "", http.StatusNotFound, http.StatusServiceUnavailable},
+		{"recovered", "http://restored:8081", http.StatusOK, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			internalURL, upstreamStatus = tc.address, tc.upstreamCode
+			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/artifact-endpoints", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			if response.Code != tc.wantCode || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if tc.wantCode == http.StatusOK {
+				var body map[string]map[string]map[string]string
+				if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["instances"]["default"]["runnerInternalURL"] != tc.address {
+					t.Fatalf("unexpected refreshed endpoint: %s", response.Body.String())
+				}
+			} else if strings.Contains(response.Body.String(), "instances") {
+				t.Fatal("configuration failure returned cached endpoints")
+			}
+		})
 	}
 }
 
