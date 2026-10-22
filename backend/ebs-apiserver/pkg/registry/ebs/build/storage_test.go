@@ -184,14 +184,14 @@ func TestStatusPrepareForUpdatePreservesObjectMetadata(t *testing.T) {
 		Namespace:       "project-a",
 		ResourceVersion: "7",
 		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "openEuler", ebsv1.BuildTargetArchLabel: "x86_64", ebsv1.BuildTypeLabel: "full"},
-		Annotations:     map[string]string{"existing": "value"},
+		Annotations:     map[string]string{"existing": "value", ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"},
 	}, Spec: ebsv1.BuildSpec{BuildType: "full"}}
 	newBuild := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
 		Name:            "build-a",
 		Namespace:       "project-a",
 		ResourceVersion: "7",
 		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "tampered"},
-		Annotations:     map[string]string{"tampered": "value"},
+		Annotations:     map[string]string{"tampered": "value", ebsv1.BuildGitRefAnnotation: "refs/heads/main"},
 	}, Spec: ebsv1.BuildSpec{BuildType: "incremental"}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
 
 	NewStorage().Status.(*genericregistry.Store).UpdateStrategy.PrepareForUpdate(context.Background(), newBuild, oldBuild)
@@ -199,7 +199,8 @@ func TestStatusPrepareForUpdatePreservesObjectMetadata(t *testing.T) {
 	if newBuild.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || newBuild.Labels[ebsv1.BuildTypeLabel] != "full" {
 		t.Fatalf("labels = %#v", newBuild.Labels)
 	}
-	if len(newBuild.Annotations) != 1 || newBuild.Annotations["existing"] != "value" {
+	if len(newBuild.Annotations) != 2 || newBuild.Annotations["existing"] != "value" ||
+		newBuild.Annotations[ebsv1.BuildGitRefAnnotation] != "refs/merge-requests/501/head" {
 		t.Fatalf("annotations = %#v", newBuild.Annotations)
 	}
 	if newBuild.Spec.BuildType != "full" || newBuild.Status.Phase != ebsv1.BuildProcessing {

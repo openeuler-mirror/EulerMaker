@@ -1,6 +1,8 @@
 package validation
 
 import (
+	"strings"
+
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -8,7 +10,7 @@ import (
 )
 
 func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
-	var allErrs field.ErrorList
+	allErrs := validateBuildGitRef(obj)
 	namePath := field.NewPath("metadata", "name")
 	if obj.Name == "" {
 		allErrs = append(allErrs, field.Required(namePath, "Build name is required"))
@@ -46,6 +48,43 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	return allErrs
 }
 
+func validateBuildGitRef(build *ebsv1.Build) field.ErrorList {
+	ref, exists := build.Annotations[ebsv1.BuildGitRefAnnotation]
+	if !exists {
+		return nil
+	}
+	path := field.NewPath("metadata", "annotations").Key(ebsv1.BuildGitRefAnnotation)
+	var errs field.ErrorList
+	if build.Spec.BuildType != "single" || len(build.Spec.Packages) != 1 {
+		errs = append(errs, field.Invalid(path, ref, "requires buildType single and exactly one packages entry"))
+	}
+	if ref == "" {
+		errs = append(errs, field.Required(path, "a full Git ref is required"))
+	} else if !validFullGitRef(ref) {
+		errs = append(errs, field.Invalid(path, ref, "must be a valid full Git ref starting with refs/"))
+	}
+	return errs
+}
+
+// validFullGitRef checks Git ref-name syntax without normalization or remote access.
+func validFullGitRef(ref string) bool {
+	if !strings.HasPrefix(ref, "refs/") || strings.HasSuffix(ref, ".") ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.ContainsAny(ref, " ~^:?*[\\") {
+		return false
+	}
+	for _, ch := range ref {
+		if ch < 0x20 || ch == 0x7f {
+			return false
+		}
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if part == "" || strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
 func ValidateBuildTarget(build *ebsv1.Build, content *ebsv1.BuildTargetContent) field.ErrorList {
 	if _, exists := content.Targets[build.Spec.BuildTarget.Os].Arches[build.Spec.BuildTarget.Arch]; !exists {
 		return field.ErrorList{field.Invalid(field.NewPath("spec", "buildTarget"), build.Spec.BuildTarget,
@@ -71,6 +110,12 @@ func ValidateBuildPackages(build *ebsv1.Build, project *ebsv1.Project) field.Err
 
 func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	allErrs := ValidateBuild(newObj)
+	newRef, newExists := newObj.Annotations[ebsv1.BuildGitRefAnnotation]
+	oldRef, oldExists := oldObj.Annotations[ebsv1.BuildGitRefAnnotation]
+	if newExists != oldExists || newRef != oldRef {
+		path := field.NewPath("metadata", "annotations").Key(ebsv1.BuildGitRefAnnotation)
+		allErrs = append(allErrs, field.Invalid(path, newRef, "field is immutable"))
+	}
 	if !apiequality.Semantic.DeepEqual(newObj.Spec, oldObj.Spec) {
 		previous, next := oldObj.Spec, newObj.Spec
 		previous.Packages, next.Packages = nil, nil

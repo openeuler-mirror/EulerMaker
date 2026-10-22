@@ -172,6 +172,9 @@ type Build struct {
 	Status            BuildStatus `json:"status,omitempty"`
 }
 
+// BuildGitRefAnnotation overrides the source ref for a single-package Build.
+const BuildGitRefAnnotation = "ebs.io/git-ref"
+
 type BuildSpec struct {
 	BuildType   string      `json:"buildType,omitempty"`
 	Packages    []string    `json:"packages,omitempty"`
