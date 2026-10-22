@@ -268,7 +268,7 @@ GET    /apis/ebs/v1/runners/{name}/jobs?watch=true
 /apis/ebs/v1/namespaces/{project}/builds
 ```
 
-该内部路径只作为实现细节，外部文档和业务调用统一使用 Project API 和全局系统 API。Config 使用集群级路由。apiserver 在进入 Ready 前以 create-only 方式确保 `build-target` 和 `build-resource` 存在；已有对象不会被启动配置覆盖。
+该内部路径只作为实现细节，外部文档和业务调用统一使用 Project API 和全局系统 API。Config 使用集群级路由。apiserver 在进入 Ready 前以 create-only 方式确保 `build-target`、`build-resource` 和 `service-config` 存在；已有对象不会被启动配置覆盖。服务配置结构与消费规则见 [Config 设计](data-models~config.md#4-服务配置内容)。
 
 详细实现见 [ebs-apiserver.md](./ebs-apiserver.md)。
 

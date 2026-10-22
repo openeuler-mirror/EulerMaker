@@ -37,7 +37,6 @@ const (
 	ConfigVisibilityOpsOnly   ConfigVisibility = "OpsOnly"
 	BuildTargetConfigName                      = "build-target"
 	BuildResourceConfigName                    = "build-resource"
-	ArtifactManagerConfigName                  = "artifact-manager-conf"
 	ServiceConfigName                          = "service-config"
 )
 
@@ -64,12 +63,6 @@ type BuildResourceContent struct {
 type PackageResourceConfig struct {
 	Default ResourceRequirements            `json:"default,omitempty"`
 	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
-}
-
-// ArtifactManagerContent defines the content of Config/artifact-manager-conf.
-// +k8s:deepcopy-gen=true
-type ArtifactManagerContent struct {
-	Instances map[string]ArtifactManagerInstance `json:"instances" yaml:"instances"`
 }
 
 // ServiceConfigContent defines the service endpoints in Config/service-config.

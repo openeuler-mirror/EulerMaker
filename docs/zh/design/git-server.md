@@ -624,6 +624,8 @@ git-server \
 
 `clone-base-url` 必须来自启动参数，不能根据 HTTP 请求的 `Host` header 推断；只允许不带 userinfo、query、fragment 的 HTTP(S) URL。`workers`、`clone-workers`、超时、重试次数、退避参数和输出限制必须在启动时完成范围校验，非法值导致进程启动失败。
 
+Controller Manager 访问本服务的管理地址由 `Config/service-config` 的 `gitServer.internalURL` 提供，配置契约见 [服务配置](data-models~config.md#4-服务配置内容)。该地址不替代 `clone-base-url`；同步响应中的 `clone_url` 仍须从 Runner 与构建容器可达。
+
 只有远端 Git 认证信息保存在 TOML 文件中：
 
 ```toml
@@ -655,7 +657,7 @@ ca = """-----BEGIN CERTIFICATE-----
 
 ## 9. 部署
 
-`hacks/docker-compose.yml` 使用宿主机 `/srv/git` 持久化仓库，管理与克隆共用 `8084:8084`，通过 `EXPORT_SERVER_ADDR` 配置构建节点可达地址。Kubernetes 模板使用单副本 Deployment、独占 PVC 和 8080 端口。
+`hacks/docker-compose.yml` 使用宿主机 `/srv/git` 持久化仓库，管理与克隆共用容器端口 `8080`，宿主机映射为 `8084:8080`，通过 `EXPORT_SERVER_ADDR` 配置构建节点可达地址。Kubernetes 模板使用单副本 Deployment、独占 PVC 和 8080 端口。
 
 生产部署要求：
 

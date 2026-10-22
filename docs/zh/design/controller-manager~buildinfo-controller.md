@@ -177,14 +177,14 @@ if errors.As(err, &writeErr) {
 ### 4.2 git-server 客户端
 
 ```go
-// Controller 注入 pkg/clients/gitserver 中的共享接口。
+// 本轮从服务配置取得地址，使用固定地址的客户端。
 gitServer gitserver.GitServerClient
 ```
 
 - 共享接口包含同步任务发布、同步状态检查、Commit 解析和命令执行；本控制器仅调用 `ExecCommand`，在已就绪的本地镜像上执行只读命令并获取 stdout。镜像定位由 git-server 服务端按仓库 key 完成，客户端不持有 storePath。7.2.2 spec 下载使用 `git ls-tree --name-only <commitId>` 枚举仓库根目录 spec 文件、`git show <commitId>:<path>` 读取内容。请求中的 `repo` 必须是 `Snapshot.spec.packageRepos` 对应仓库的原始 `url`，`commitId` 取自 `status.packageRepoStatuses`；`cloneUrl` 只用于 Job payload 的 `clone_url`，不能传给 `/command`；
 - **不做就绪判定、不发布同步任务**：镜像同步任务发布与新鲜度等待由 Snapshot Controller 在 Snapshot 解析期完成，本控制器直接复用其同步完成的本地镜像；
 - 请求错误按性质二分：网络/超时/5xx 类瞬态失败使本轮组装不完整，保持 Pending；git 内容缺失或 spec 解析失败类确定性失败按仓库/spec 降级，记录 `failedPackages`，其余可用 spec 继续处理。`incremental` 与 `specified` 采用相同规则。
-- 配置：`--git-server-addr` / `--git-server-timeout` / `--git-server-retry`（见 12.1）。
+- 地址取自 `Config/service-config` 的 `gitServer.internalURL`；保留 `--git-server-timeout` / `--git-server-retry`（见 12.1）。同轮 Git 与 Artifact 请求共享一次配置读取，客户端固定地址和错误分类见 [服务配置消费规则](data-models~config.md#45-controller-manager-消费与更新边界)。
 
 ### 4.3 稳定发布入口客户端
 
@@ -600,7 +600,7 @@ buildSet = buildSet ∪ direct                                                # 
 **3. Job payload `repo` 注入（稳定正式仓 + bootstrapRepo）**：
 
 - single 不读取当前/历史 RpmRepo、历史 Build 或 baseBuildRef。首次需要派发新 Job 时，使用本轮 Project 的 `ebs.io/artifacts`（缺省 default），与父 Build 的 Project、OS、Arch 组成目标；实例选择与本批 Job 的上传 annotation 一致。
-- 构造逻辑入口 `artifact://{instance}/repositories/{project}/{os}/{arch}/`，路径段逐项安全编码，保留末尾斜线。从 Config/artifact-manager-conf 读取该实例 internalURL，拼接管理面 HTTP(S) 地址并 GET 稳定入口的 `repodata/repomd.xml`。不遍历发布历史、不解析目录页、不改用不可变版本 URL。
+- 构造逻辑入口 `artifact://{instance}/repositories/{project}/{os}/{arch}/`，路径段逐项安全编码，保留末尾斜线。从本轮 `Config/service-config` 快照读取 `artifactManagers[instance].internalURL`，拼接管理面 HTTP(S) 地址并 GET 稳定入口的 `repodata/repomd.xml`。不遍历发布历史、不解析目录页、不改用不可变版本 URL。
 - 确认接口、错误码与响应校验见 Artifact Manager 9.3「稳定入口的发布可用性确认」。200 且 repomd.xml 有效才注入稳定仓，priority=10；仅 `404 + code=ReleaseNotPublished` 表示当前没有已激活发布，此时省略稳定仓。普通 404、ReleaseNotFound、网络/超时、429/5xx 或已发布仓缺文件均不是“尚未发布”，本轮暂停新派发并重试，先回填已有 Job；认证/参数/配置错误返回 PermanentError，不能静默降级或标包失败。完整分类见 E-32。
 - 按声明顺序追加 `BuildInfo.spec.bootstrapRepo[].repo` 经目标架构展开的 URL，priority=99。稳定入口已含 OS/Arch，不再追加架构。尚未发布时只使用 bootstrapRepo；single 不回退到 buildPayload.repo。最终没有任何 URL 时返回明确的配置 PermanentError（BootstrapRepoRequired），不创建 Job。
 - 每轮首次需要创建 Job 时执行一次实例配置读取与发布确认，结果供本轮最多 20 次创建共用；不跨 reconcile 缓存“尚未发布”。仅确认既有 Job、结果回填或收敛时不发送发布确认请求。已创建 Job 保持原 payload，后续批次重新确认；未决创建沿用原身份协议。
@@ -974,7 +974,7 @@ condition 对应的 reason 及含义以 9.1 为准；停止派发日志只表示
 | `--rpmrepo-ready-retry-limit` | 3 | flag | 过程仓/bootstrap 仓 XML 连续解析失败的停止阈值（E-29）；暂时缺失、查询/下载失败不受该阈值限制，确定性配置或权限错误立即停止 |
 | `--snapshot-ready-retry-limit` | 3 | flag | 当前 Snapshot 查询连续失败计数升级阈值（E-30）：连续失败达阈值触发 condition `SnapshotUnavailable` + BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`；本轮 GET 成功自动清零 |
 | `--specfile-cache-size` | 10000 | flag | 全局 spec 文件内容 LRU 缓存容量上限（15.11）：两层 key（`commitId`→`specFileName`），超限按 LRU 淘汰 |
-| `--git-server-addr` | `http://localhost:8080` | flag | git-server 服务地址（共享客户端 `pkg/clients/gitserver`） |
+| `gitServer.internalURL` | `http://git-server:8080` | Config/service-config | Git Server 管理地址（共享客户端 `pkg/clients/gitserver`） |
 | `--git-server-timeout` | 30s | flag | 单次 git-server HTTP 请求超时 |
 | `--git-server-retry` | 3 | flag | git-server 请求尝试次数上限 |
 
@@ -1070,6 +1070,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | `Project` | `GetProject` | `/apis/ebs/v1/projects/{project}` | **只读** | 每轮 reconcile 由 parentAbortGuard 查询一次、全轮复用（不重复 GET，见 7.1），仅供 parentAbortGuard 判定 `Terminating`（E-20/E-21）——buildPayload 已固化于 BuildInfo.spec（15.2.2），本控制器不再消费 Project 数据字段；字段消费明细见 15.6 |
 | `Config/build-resource` | `GetConfig` | `/apis/ebs/v1/configs/build-resource`（集群级单例） | **只读** | 创建 Job 时解析 `Job.spec.resources`（逐层覆盖契约见 [Config 设计](data-models~config.md) 3.2 / 15.3.1 / E-27） |
 | `Config/build-target` | `GetConfig` | `GET /apis/ebs/v1/configs/build-target`（集群级单例，无 project 段） | **只读** | 每轮创建新 Job 的 reconcile 读取一次快照（同轮批量共享），经 `BuildImage` 按 os/arch 解析写入 `Job.spec.runtimeSpec.image`（契约见 [Config 设计](data-models~config.md) 2.5.2 / 15.3.1 / E-26） |
+| `Config/service-config` | 公共服务配置提供者 | `GET /apis/ebs/v1/configs/service-config` | **只读** | 同轮 Git Server 与 Artifact Manager 请求共用一次配置读取，见 4.2 |
 | `Script` | `GetScript` | `GET /apis/ebs/v1/scripts/{name}`（集群级） | **只读** | 本轮首次创建 Job 前读取所选脚本，将响应的 name/UID/resourceVersion 写入新 Job 的单元素 `spec.scriptRefs`；读取失败不创建 Job |
 
 ### 15.2 BuildInfo（读写，主资源）
@@ -1284,7 +1285,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | Go 类型 | 消费点 |
 |------|------|--------|
-| `status.repository.contentURL` | string | 本轮当前已发布物理版本的 `artifact://{instance}/repositories/.../` 逻辑地址；无实例标识时使用 `default`。Job payload 保留逻辑地址，BuildInfo 仅在下载 RpmMeta 层 XML 时查询 `Config/artifact-manager-conf` 并解析为管理面内网 HTTP(S) URL |
+| `status.repository.contentURL` | string | 本轮当前已发布物理版本的 `artifact://{instance}/repositories/.../` 逻辑地址；无实例标识时使用 `default`。Job payload 保留逻辑地址，BuildInfo 仅在下载 RpmMeta 层 XML 时查询 `Config/service-config` 并解析为管理面内网 HTTP(S) URL |
 | `status.repository.repositoryUID` | string | 当前物理版本标识（溯源；初始内容继承自上一轮已发布版本时为该版本 UID）；本控制器不做发布判定依据（发布判据为 `sourceJobNames`，见下行） |
 | `status.repository.sourceJobNames` | []string | **发布确认门禁凭据**（7.4.6 第 2 条）：本对象已成功消费的累计 Job 名称集合（rpm-repo-controller 成功物化批次后一次 CAS 累计写入，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」）——Succeeded 直接上游最新一代 Job 的 `metadata.name` ∈ 本集合 → 已发布；不在 → 未发布等待下一轮（15.3.2 `metadata.name`）；对象读取自本轮 reconcile 守卫已 GET 的同名 RpmRepo（各检查点复用不重复 GET），无额外查询 |
 | `status.release.phase` | string | reconcile 前置守卫（7.1）判定正式发布失败：值为 `Failed`（稳定终态，E-28）→ 按 6.5 停止派发，等待已有 Job 全部终态后写 `Completed`；其余取值（含 `release` 缺失——整个 `release` 结构为 nil，如尚未进入发布流程）不触发、正常推进；`single` 不查询（7.2.3）。`release` 其余字段（`contentURL` 稳定入口等）不消费（属 Build Controller 消费域） |

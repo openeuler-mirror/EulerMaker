@@ -518,7 +518,7 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 
 Ops token 仍只携带 `ebs:ops`，不与 `ebs:user` 组合；Gateway 在授权时将 Ops 视为具备普通用户的 Project owner/member 能力，并额外授予集群级 Config 写权限和 Runner 管理能力。Ops 不因此获得其他用户工程的 Project/Build/Job 写权限，也不获得其他 Admin 权限或 Runner 身份。
 
-Gateway 对所有身份拒绝删除内置 `Config/build-target`、`Config/build-resource`；其他 Config 按上表授权。具名 GET/HEAD 必须先从 apiserver 读取一次对象，再依据同一响应中的 `spec.visibility` 判断是否可返回；非运维身份禁止 list，不能先透传列表再做过滤。
+Gateway 对所有身份拒绝删除内置 `Config/build-target`、`Config/build-resource`、`Config/service-config`；其他 Config 按上表授权。具名 GET/HEAD 必须先从 apiserver 读取一次对象，再依据同一响应中的 `spec.visibility` 判断是否可返回；非运维身份禁止 list，不能先透传列表再做过滤。
 
 矩阵中的权限还受 4.9 节完整对象比较和字段约束。User 只能通过 `/auth/register` 创建；Admin 不能读取或操作 `spec.scopes=["ebs:admin"]` 的 User，也不能设置或重置其他用户的密码。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
 
@@ -674,7 +674,7 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 
 ### 4.11 Runner Artifact Manager 地址投影
 
-固定路径为 `GET /apis/ebs/v1/artifact-endpoints`。仅 `type=runner` 的有效 Token 可调用，所有 Runner 获取同一份地址列表，无需在路径或参数中指定 Runner 名。Gateway 每次读取 `Config/artifact-manager-conf`，返回所有实例的 Runner 地址；接口不接收 Job 或 Project 参数，也不查询 Job、Project 或选择上传实例。Runner 无需获得 `OpsOnly` Config 的直接读取权限。
+固定路径为 `GET /apis/ebs/v1/artifact-endpoints`。仅 `type=runner` 的有效 Token 可调用，所有 Runner 获取同一份地址列表，无需在路径或参数中指定 Runner 名。Gateway 每次读取 `Config/service-config`，将 `artifactManagers` 映射为响应的 `instances`，返回所有实例的 Runner 地址；接口不接收 Job 或 Project 参数，也不查询 Job、Project 或选择上传实例。Runner 无需获得 `OpsOnly` Config 的直接读取权限。
 
 响应示例：
 
@@ -687,7 +687,7 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 }
 ```
 
-Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回 `internalURL`、原始 `spec.content` 或其他 Config 字段；响应设置 `Cache-Control: no-store`。Config 的完整内容校验由 apiserver 在创建、更新时完成；Gateway 不重复校验实例名和 URL，仅处理读取、响应契约与反序列化错误，这些错误返回服务不可用，不使用旧缓存地址。地址不是凭据，但此接口仍须校验 Runner 身份。上传实例的选择不属于此接口；原 Config 继续为 `OpsOnly`，不得通过普通 Config GET 向 Runner 放行。Runner 启动时读取此接口，之后约每 600 秒刷新地址表，使用 Job annotation 选择实例。
+Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回 Artifact Manager 的 `internalURL`、`gitServer`、原始 `spec.content` 或其他 Config 字段；响应设置 `Cache-Control: no-store`。Config 的完整内容校验由 apiserver 在创建、更新时完成；Gateway 不重复校验实例名和 URL，仅处理读取、响应契约与反序列化错误，这些错误返回服务不可用，不使用旧缓存地址。地址不是凭据，但此接口仍须校验 Runner 身份。上传实例的选择不属于此接口；原 Config 继续为 `OpsOnly`，不得通过普通 Config GET 向 Runner 放行。Runner 启动时读取此接口，之后约每 600 秒刷新地址表，使用 Job annotation 选择实例。
 
 ## 五、路由设计
 
@@ -718,7 +718,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
 | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]` | 匿名及已认证用户仅可 GET；Runner 不开放 | 无；只注册 GET |
 | `/apis/ebs/v1/runners[/{name}][/status]`、`/apis/ebs/v1/runners/{name}/jobs` | Ops/Admin 可读；Runner 仅可读自身对象及自身范围 Job | Ops/Admin 可管理 Runner；Runner 仅可创建、受限修改自身对象和 `/status`，不得删除 |
-| `/apis/ebs/v1/configs[/{name}]` | `Public` 可匿名及各身份具名读取；`OpsOnly` 与列表仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource` 不可删除 |
+| `/apis/ebs/v1/configs[/{name}]` | `Public` 可匿名及各身份具名读取；`OpsOnly` 与列表仅 Ops/Admin 可读 | 仅 Ops/Admin 可写；内置 `build-target`、`build-resource`、`service-config` 不可删除 |
 | `/apis/ebs/v1/artifact-endpoints` | 仅 Runner Token 可读取各实例的 Runner 地址投影 | 无 |
 | `/apis/ebs/v1/scripts[/{name}]` | 登录用户和 Ops/Admin 可读取、列表；Runner 仅可具名读取 | 仅 Ops/Admin 可创建、修改、删除 |
 | `/apis/iam.ebs/v1/users[/{name}]`、`/machineaccounts[/{name}]` | 仅 Admin；User 不含管理员对象 | 仅 Admin 可修改/删除非管理员 User、删除 MachineAccount；创建分别使用 `/auth/register`、`/auth/machineaccounts` |

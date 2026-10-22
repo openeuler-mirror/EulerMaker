@@ -84,7 +84,7 @@ apiVersion: ebs/v1
 
 资源契约如下：
 
-集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target` 和 `build-resource`。Config 创建、更新时完整校验 `build-target`、`build-resource` 和 `artifact-manager-conf` 的内容；创建 Build 前读取 `build-target`，只检查所选 OS/Arch 是否存在。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
+集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `service-config`。Config 创建、更新时完整校验三个内置对象的内容；`service-config` 固定为 `OpsOnly`，服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。创建 Build 前读取 `build-target`，只检查所选 OS/Arch 是否存在。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|

@@ -14,7 +14,6 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"ebs-api/ebs/v1.ArtifactManagerContent":  schema_ebs_api_ebs_v1_ArtifactManagerContent(ref),
 		"ebs-api/ebs/v1.ArtifactManagerInstance": schema_ebs_api_ebs_v1_ArtifactManagerInstance(ref),
 		"ebs-api/ebs/v1.BaseBuildRef":            schema_ebs_api_ebs_v1_BaseBuildRef(ref),
 		"ebs-api/ebs/v1.BootstrapRepo":           schema_ebs_api_ebs_v1_BootstrapRepo(ref),
@@ -93,36 +92,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/iam/v1.User":                    schema_ebs_api_iam_v1_User(ref),
 		"ebs-api/iam/v1.UserList":                schema_ebs_api_iam_v1_UserList(ref),
 		"ebs-api/iam/v1.UserSpec":                schema_ebs_api_iam_v1_UserSpec(ref),
-	}
-}
-
-func schema_ebs_api_ebs_v1_ArtifactManagerContent(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ArtifactManagerContent defines the content of Config/artifact-manager-conf.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"instances": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.ArtifactManagerInstance"),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"instances"},
-			},
-		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.ArtifactManagerInstance"},
 	}
 }
 
