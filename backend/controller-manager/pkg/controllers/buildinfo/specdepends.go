@@ -35,6 +35,7 @@ type terminalVerdict struct {
 
 // specAssembly is the outcome of one step-0 assembly round.
 type specAssembly struct {
+	err error
 	// depends is the full view keyed by specName (nil when incomplete).
 	depends map[string]specparse.SpecDepend
 	// snapshot is the current Snapshot held for the round.
@@ -183,6 +184,15 @@ func (c *Controller) assembleSpecDepends(
 		readyRepos = append(readyRepos, repoParseInput{name: repo, originURL: originURL, status: entry})
 	}
 
+	var gitClient gitserver.GitServerClient
+	if len(readyRepos) > 0 {
+		var err error
+		gitClient, err = c.roundServices(round).GitClient(ctx)
+		if err != nil {
+			asm.err = err
+			return asm
+		}
+	}
 	results := make([]repoParseResult, len(readyRepos))
 	indices := make(chan int)
 	var group sync.WaitGroup
@@ -196,6 +206,7 @@ func (c *Controller) assembleSpecDepends(
 				var failures []string
 				specs, ok := c.fetchRepoSpecs(
 					ctx,
+					gitClient,
 					round,
 					input.name,
 					input.originURL,
@@ -355,6 +366,7 @@ type parsedRepoSpec struct {
 
 func (c *Controller) fetchRepoSpecs(
 	ctx context.Context,
+	gitClient gitserver.GitServerClient,
 	round *reconcileRound,
 	repo, originURL string,
 	entry ebsv1.PackageRepoStatus,
@@ -363,7 +375,7 @@ func (c *Controller) fetchRepoSpecs(
 	asm *specAssembly,
 	parseFailures *[]string,
 ) (map[string]specparse.SpecDepend, bool) {
-	listing, err := c.gitServer.ExecCommand(ctx, originURL, "git-ls-tree --name-only "+entry.CommitID)
+	listing, err := gitClient.ExecCommand(ctx, originURL, "git-ls-tree --name-only "+entry.CommitID)
 	if err != nil {
 		return nil, c.handleGitFailure(round, repo, "", asm, parseFailures, err)
 	}
@@ -384,7 +396,7 @@ func (c *Controller) fetchRepoSpecs(
 
 	specs := map[string]specparse.SpecDepend{}
 	for _, file := range files {
-		result := c.parseRepoSpec(ctx, file, originURL, entry.CommitID, repo, arch, macros, rootFiles)
+		result := c.parseRepoSpec(ctx, gitClient, file, originURL, entry.CommitID, repo, arch, macros, rootFiles)
 		if result.err != nil {
 			if result.gitFailure {
 				if !c.handleGitFailure(round, repo, file, asm, parseFailures, result.err) {
@@ -417,6 +429,7 @@ func (c *Controller) fetchRepoSpecs(
 
 func (c *Controller) parseRepoSpec(
 	ctx context.Context,
+	gitClient gitserver.GitServerClient,
 	file, originURL, commitID, repo, arch string,
 	macros []string,
 	rootFiles map[string]struct{},
@@ -426,7 +439,7 @@ func (c *Controller) parseRepoSpec(
 		specFileCacheHits.Inc()
 	} else {
 		var err error
-		content, err = c.gitServer.ExecCommand(ctx, originURL, "git-show "+commitID+":"+file)
+		content, err = gitClient.ExecCommand(ctx, originURL, "git-show "+commitID+":"+file)
 		if err != nil {
 			return parsedRepoSpec{err: err, gitFailure: true}
 		}
@@ -437,7 +450,7 @@ func (c *Controller) parseRepoSpec(
 		if _, exists := rootFiles[name]; !exists {
 			return "", os.ErrNotExist
 		}
-		return c.gitServer.ExecCommand(ctx, originURL, "git-show "+commitID+":"+name)
+		return gitClient.ExecCommand(ctx, originURL, "git-show "+commitID+":"+name)
 	})
 	if err != nil {
 		var fetchErr *specparse.SourceFetchError

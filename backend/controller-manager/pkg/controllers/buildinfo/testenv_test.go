@@ -165,7 +165,7 @@ func newTestController(t *testing.T) (*Controller, *fakeClient, *fakeGitServer, 
 	client := newFakeClient()
 	git := newFakeGitServer()
 	clk := clocktesting.NewFakeClock(testStart)
-	c, err := New(&fakeSource{}, client, git, clk, Config{
+	c, err := New(&fakeSource{}, client, &fakeServices{fakeClient: client, git: git}, clk, Config{
 		PollPeriod:              time.Minute,
 		MaxRetries:              5,
 		DcgPruneGrace:           3 * time.Minute,
@@ -181,6 +181,21 @@ func newTestController(t *testing.T) (*Controller, *fakeClient, *fakeGitServer, 
 	})
 	return c, client, git, clk
 }
+
+type fakeServices struct {
+	*fakeClient
+	git gitserver.GitServerClient
+	err error
+}
+
+func (f *fakeServices) Load(ctx context.Context) (*ebsv1.ServiceConfigContent, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.fakeClient.Load(ctx)
+}
+
+func (f *fakeServices) GitClient(string) (gitserver.GitServerClient, error) { return f.git, nil }
 
 func reconcileOnce(t *testing.T, c *Controller) {
 	t.Helper()

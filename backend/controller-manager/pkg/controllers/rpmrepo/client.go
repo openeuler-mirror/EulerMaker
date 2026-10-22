@@ -8,7 +8,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"controller-manager/pkg/artifacturl"
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -25,7 +24,6 @@ const maxListPages = 1000
 // controller-manager client so write errors keep the NotSent / Rejected / Unknown classification.
 type Client interface {
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
-	GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error)
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
 	GetBuildInfo(ctx context.Context, project, name string) (*ebsv1.BuildInfo, error)
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
@@ -59,22 +57,6 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 		return nil, contractErrorf("unexpected Project response for %s: %T", project, obj)
 	}
 	return value, nil
-}
-
-func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error) {
-	obj, err := c.client.Get(ctx, source.ConfigsGVR, "", ebsv1.ArtifactManagerConfigName)
-	if err != nil {
-		return nil, err
-	}
-	config, ok := obj.(*ebsv1.Config)
-	if !ok || config == nil || config.Name != ebsv1.ArtifactManagerConfigName || config.Namespace != "" || config.UID == "" {
-		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
-	}
-	endpoints, err := artifacturl.ParseArtifactManagerEndpoints(config.Spec.Content)
-	if err != nil {
-		return nil, contractErrorf("%v", err)
-	}
-	return endpoints, nil
 }
 
 func (c *apiClient) GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error) {

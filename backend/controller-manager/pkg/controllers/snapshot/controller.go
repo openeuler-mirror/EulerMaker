@@ -10,9 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
 
-	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/manager"
+	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -39,24 +39,24 @@ type Controller struct {
 	*controller.BaseController
 	snapshots source.Source
 	client    Client
-	gitClient gitserver.GitServerClient
+	services  serviceconfig.Provider
 	clock     clock.Clock
 	config    Config
 	failures  *failureTracker
 }
 
-func New(snapshots source.Source, client Client, gitClient gitserver.GitServerClient, clk clock.Clock, config Config) (*Controller, error) {
-	return newController(snapshots, client, gitClient, clk, config)
+func New(snapshots source.Source, client Client, services serviceconfig.Provider, clk clock.Clock, config Config) (*Controller, error) {
+	return newController(snapshots, client, services, clk, config)
 }
 
-func newController(snapshots source.Source, client Client, gitClient gitserver.GitServerClient, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
-	if snapshots == nil || client == nil || gitClient == nil || clk == nil {
+func newController(snapshots source.Source, client Client, services serviceconfig.Provider, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
+	if snapshots == nil || client == nil || services == nil || clk == nil {
 		return nil, fmt.Errorf("Snapshot source, API client, git-server client and clock are required")
 	}
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	c := &Controller{snapshots: snapshots, client: client, gitClient: gitClient, clock: clk, config: config, failures: newFailureTracker()}
+	c := &Controller{snapshots: snapshots, client: client, services: services, clock: clk, config: config, failures: newFailureTracker()}
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
@@ -68,13 +68,13 @@ func newController(snapshots source.Source, client Client, gitClient gitserver.G
 	return c, nil
 }
 
-func Initializer(config Config, gitClient gitserver.GitServerClient) manager.InitFunc {
+func Initializer(config Config, services serviceconfig.Provider) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		snapshots, err := init.Dependencies.PollingFactory.ForResource(source.SnapshotsGVR, config.PollPeriod, metav1.ListOptions{FieldSelector: "status.phase!=Active"})
 		if err != nil {
 			return nil, false, err
 		}
-		value, err := newController(snapshots, newAPIClient(init.Dependencies.Client), gitClient, clock.RealClock{}, config,
+		value, err := newController(snapshots, newAPIClient(init.Dependencies.Client), services, clock.RealClock{}, config,
 			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
 		return value, err == nil, err
 	}

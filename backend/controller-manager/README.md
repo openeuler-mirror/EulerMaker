@@ -31,7 +31,6 @@ docker build -f backend/controller-manager/Dockerfile -t eulermaker/controller-m
 ./controller-manager \
   --apiserver=https://localhost:8443 \
   --insecure-skip-verify=true \
-  --git-server-addr=http://localhost:8084 \
   --runner-heartbeat-timeout=2m \
   --runner-startup-grace-period=5m \
   --job-runner-lost-grace-period=5m \
@@ -43,6 +42,12 @@ docker build -f backend/controller-manager/Dockerfile -t eulermaker/controller-m
 
 BuildInfo Controller 固定使用 `rpmspec -P` 展开 spec；运行环境必须安装 `rpm-build`，解析失败不会回退到文本解析。RPM 宏可执行 shell/Lua 代码，当前解析未隔离，包仓库来源必须可信。仓库提供的 Dockerfile 已安装 `rpm-build`。
 
-默认 `--controllers=*` 会选择全部六个 Controller；可用 `--controllers=-<名称>` 单独关闭。RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation（未设置时为 `default`）选择实例，并从 `Config/artifact-manager-conf` 读取其内部地址；BuildInfo Controller 下载过程仓元数据时也读取该 Config，按 `artifact://{instance}/repositories/.../` 中的实例选择地址。旧的 `artifact:///repositories/.../` 和相对路径使用 `default`。Job `repo` 保留逻辑地址；Runner 需要按自身可访问的地址解析后再交给构建脚本（当前尚未适配，部署前需完成）。Snapshot 解析并发数、单轮总预算、同步重入延迟及仓库失败上限分别由 `--snapshot-resolve-workers`、`--snapshot-resolve-budget`、`--snapshot-sync-requeue-delay` 和 `--snapshot-failure-retry-limit` 配置。Build Controller 复用全局 `--poll-period` 与 `--workers`；它的指标包括 `build_controller_status_update_conflicts_total`、`build_controller_status_update_unknown_total`、`build_controller_ensure_conflicts_total` 和 `build_controller_ensure_terminating_total`。
+默认 `--controllers=*` 会选择全部六个 Controller；可用 `--controllers=-<名称>` 单独关闭。
+
+Snapshot、BuildInfo 和 RpmRepo Controller 通过公共服务配置提供者读取 `Config/service-config`：`gitServer.internalURL` 提供 Git Server 管理地址，`artifactManagers` 提供各 Artifact Manager 实例的内部地址。每轮 reconcile 按需读取一次并固定本轮配置，下一轮读取最新值；启动时不依赖配置读取成功。配置读取失败交由框架重试或记录永久错误，不计入包级失败预算，也不写业务失败终态。Git Server 的请求超时、重试和缓存时长仍由命令行参数配置。
+
+RpmRepo 根据 Project 的 `ebs.io/artifacts` annotation（缺省 `default`）选择实例；BuildInfo 按 `artifact://{instance}/repositories/.../` 选择内部地址下载元数据。Job `repo` 保留逻辑地址，由 Runner 根据其网络模式解析。Git 克隆地址仍采用 Git Server 返回的 `clone_url`。
+
+Snapshot 解析并发数、单轮总预算、同步重入延迟及仓库失败上限分别由 `--snapshot-resolve-workers`、`--snapshot-resolve-budget`、`--snapshot-sync-requeue-delay` 和 `--snapshot-failure-retry-limit` 配置。Build Controller 复用全局 `--poll-period` 与 `--workers`；它的指标包括 `build_controller_status_update_conflicts_total`、`build_controller_status_update_unknown_total`、`build_controller_ensure_conflicts_total` 和 `build_controller_ensure_terminating_total`。
 
 BuildInfo Controller 从 `Project.spec.buildPayload` 固化到 BuildInfo 的 `rpmbuild_script` 选择脚本；未配置时使用全局 `rpmbuild` 脚本。同一轮首次创建 Job 前读取 Script，并将观察到的 name、UID、resourceVersion 写入本轮新 Job 的单元素 `spec.scriptRefs`；Runner 拉取并执行该脚本。

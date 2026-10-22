@@ -48,7 +48,7 @@ func TestSyncCheckOutcomes(t *testing.T) {
 			}}
 			c := newTestController(t, &fakeClient{}, g, Config{})
 			task := resolveTask{repo: ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}}
-			got := c.resolveOne(context.Background(), task, time.Time{})
+			got := c.resolveOne(context.Background(), g, task, time.Time{})
 			if got.state != tc.want || calls != tc.calls {
 				t.Fatalf("result=%+v calls=%d", got, calls)
 			}

@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -67,12 +68,16 @@ func (f *FakeClient) GetProject(_ context.Context, project string) (*ebsv1.Proje
 	return value.DeepCopy(), nil
 }
 
-func (f *FakeClient) GetArtifactManagerEndpoints(context.Context) (map[string]string, error) {
-	endpoints := make(map[string]string, len(f.ArtifactEndpoints))
+func (f *FakeClient) Load(context.Context) (*ebsv1.ServiceConfigContent, error) {
+	content := &ebsv1.ServiceConfigContent{ArtifactManagers: make(map[string]ebsv1.ArtifactManagerInstance)}
 	for instance, address := range f.ArtifactEndpoints {
-		endpoints[instance] = address
+		content.ArtifactManagers[instance] = ebsv1.ArtifactManagerInstance{InternalURL: address}
 	}
-	return endpoints, nil
+	return content, nil
+}
+
+func (f *FakeClient) GitClient(string) (gitserver.GitServerClient, error) {
+	return nil, fmt.Errorf("RpmRepo does not use Git Server")
 }
 
 func key(project, name string) string { return project + "/" + name }

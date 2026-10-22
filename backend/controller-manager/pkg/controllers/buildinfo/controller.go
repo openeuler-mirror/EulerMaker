@@ -13,11 +13,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/clock"
 
-	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	"controller-manager/pkg/manager"
+	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -69,7 +69,7 @@ type Controller struct {
 	*controller.BaseController
 	buildInfos    source.Source
 	client        Client
-	gitServer     gitserver.GitServerClient
+	services      serviceconfig.Provider
 	clock         clock.Clock
 	config        Config
 	releaseClient *http.Client
@@ -89,12 +89,12 @@ type Controller struct {
 func New(
 	buildInfos source.Source,
 	client Client,
-	gitServer gitserver.GitServerClient,
+	services serviceconfig.Provider,
 	clk clock.Clock,
 	config Config,
 	options ...controller.Option,
 ) (*Controller, error) {
-	if buildInfos == nil || client == nil || gitServer == nil || clk == nil {
+	if buildInfos == nil || client == nil || services == nil || clk == nil {
 		return nil, fmt.Errorf("BuildInfo source, API client, git-server client and clock are required")
 	}
 	if err := config.validate(); err != nil {
@@ -107,7 +107,7 @@ func New(
 		releaseClient:    newReleaseClient(config.ArtifactManagerTimeout),
 		buildInfos:       buildInfos,
 		client:           client,
-		gitServer:        gitServer,
+		services:         services,
 		clock:            clk,
 		config:           config,
 		dcgDict:          newPerBuildInfoCache[*graphCacheEntry](clk, config.DcgPruneGrace),
@@ -138,7 +138,7 @@ func New(
 
 // Initializer wires the controller into the manager with a non-terminal BuildInfo polling source and the shared
 // slow-retry policy.
-func Initializer(config Config, gitClient gitserver.GitServerClient) manager.InitFunc {
+func Initializer(config Config, services serviceconfig.Provider) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		buildInfos, err := init.Dependencies.PollingFactory.ForResource(
 			source.BuildInfosGVR,
@@ -151,7 +151,7 @@ func Initializer(config Config, gitClient gitserver.GitServerClient) manager.Ini
 		value, err := New(
 			buildInfos,
 			newAPIClient(init.Dependencies.Client),
-			gitClient,
+			services,
 			clock.RealClock{},
 			config,
 			controller.WithSlowRetry(

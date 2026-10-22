@@ -12,6 +12,7 @@ import (
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
 	"controller-manager/pkg/controllers/specname"
+	"controller-manager/pkg/serviceconfig"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -89,6 +90,28 @@ func TestInitFullHappyPath(t *testing.T) {
 	}
 	if len(bi.Status.Conditions) != 0 {
 		t.Fatalf("conditions = %v, want none", bi.Status.Conditions)
+	}
+}
+
+func TestServiceConfigFailureDoesNotFailPackages(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "single", "repo1")
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
+	c.services.(*fakeServices).err = &serviceconfig.Error{Err: context.DeadlineExceeded}
+	for i := 0; i < 6; i++ {
+		if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); !serviceconfig.IsError(err) {
+			t.Fatalf("expected configuration error: %v", err)
+		}
+		bi := getBuildInfo(t, client)
+		if bi.Status.Phase != ebsv1.BuildInfoPending || len(bi.Status.FailedPackages) != 0 || len(listJobs(t, client)) != 0 {
+			t.Fatalf("configuration failure changed business outcome: %+v", bi.Status)
+		}
+	}
+	c.services.(*fakeServices).err = nil
+	reconcileOnce(t, c)
+	if len(listJobs(t, client)) != 1 {
+		t.Fatal("dispatch did not recover")
 	}
 }
 
@@ -829,6 +852,9 @@ func TestResolveContentURLUsesConfiguredInstance(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	client.artifactEndpoints["art-01"] = "http://artifact-manager.art-01:8081"
 	round := &reconcileRound{}
+	if _, err := c.roundServices(round).GitClient(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		reference string
 		want      string

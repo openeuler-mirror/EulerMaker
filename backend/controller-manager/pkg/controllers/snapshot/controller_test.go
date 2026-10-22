@@ -16,6 +16,7 @@ import (
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -184,12 +185,55 @@ func TestResolveSnapshotDefaultRef(t *testing.T) {
 	}
 }
 
+type fakeServices struct {
+	git   gitserver.GitServerClient
+	err   error
+	loads int
+}
+
+func TestServiceConfigFailurePreservesPackageBudget(t *testing.T) {
+	snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}})
+	api := &fakeClient{snapshot: snapshot, build: build}
+	c := newTestController(t, api, &fakeGitClient{}, Config{})
+	services := c.services.(*fakeServices)
+	services.err = &serviceconfig.Error{Err: context.DeadlineExceeded}
+	for i := 0; i < 6; i++ {
+		if _, err := c.sync(context.Background(), "project-a/build-a"); !serviceconfig.IsError(err) {
+			t.Fatalf("expected configuration error: %v", err)
+		}
+		if c.failures.count(snapshot.UID, "pkg") != 0 || len(api.snapshot.Status.PackageRepoStatuses) != 0 {
+			t.Fatal("configuration failure consumed package retry budget")
+		}
+	}
+	services.err = nil
+	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+		t.Fatal(err)
+	}
+	if api.snapshot.Status.Phase != ebsv1.SnapshotActive {
+		t.Fatalf("phase=%s", api.snapshot.Status.Phase)
+	}
+	loads := services.loads
+	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+		t.Fatal(err)
+	}
+	if services.loads != loads {
+		t.Fatal("terminal Snapshot read service configuration")
+	}
+}
+
+func (f *fakeServices) Load(context.Context) (*ebsv1.ServiceConfigContent, error) {
+	f.loads++
+	return &ebsv1.ServiceConfigContent{GitServer: ebsv1.GitServerConfig{InternalURL: "http://git-server:8080"}}, f.err
+}
+
+func (f *fakeServices) GitClient(string) (gitserver.GitServerClient, error) { return f.git, nil }
+
 func newTestController(t *testing.T, api *fakeClient, git gitserver.GitServerClient, config Config) *Controller {
 	t.Helper()
 	if config == (Config{}) {
 		config = Config{PollPeriod: time.Second, ResolveWorkers: 2, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 3, MaxRetries: 2}
 	}
-	c, err := New(&fakeSource{}, api, git, clock.RealClock{}, config)
+	c, err := New(&fakeSource{}, api, &fakeServices{git: git}, clock.RealClock{}, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +324,7 @@ func TestPollingUpdateWithSameResourceVersionEnqueues(t *testing.T) {
 	snapshot, build := baseObjects(nil)
 	api := &fakeClient{snapshot: snapshot, build: build}
 	s := &fakeSource{}
-	c, err := New(s, api, &fakeGitClient{}, clock.RealClock{}, Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2})
+	c, err := New(s, api, &fakeServices{git: &fakeGitClient{}}, clock.RealClock{}, Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +340,7 @@ func TestPollingDeletedSnapshotIsNotEnqueued(t *testing.T) {
 	snapshot, build := baseObjects(nil)
 	api := &fakeClient{snapshot: snapshot, build: build}
 	s := &fakeSource{}
-	c, err := New(s, api, &fakeGitClient{}, clock.RealClock{}, Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2})
+	c, err := New(s, api, &fakeServices{git: &fakeGitClient{}}, clock.RealClock{}, Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
