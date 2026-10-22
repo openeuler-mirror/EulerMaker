@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/distribution/reference"
@@ -38,6 +39,8 @@ func ValidateConfig(obj *ebsv1.Config) field.ErrorList {
 	visibility := field.NewPath("spec", "visibility")
 	if obj.Spec.Visibility != ebsv1.ConfigVisibilityPublic && obj.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
 		errs = append(errs, field.NotSupported(visibility, obj.Spec.Visibility, []string{string(ebsv1.ConfigVisibilityPublic), string(ebsv1.ConfigVisibilityOpsOnly)}))
+	} else if obj.Name == ebsv1.ServiceConfigName && obj.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
+		errs = append(errs, field.Forbidden(visibility, "service-config must be OpsOnly"))
 	}
 	content := field.NewPath("spec", "content")
 	if obj.Spec.Content == "" {
@@ -58,12 +61,12 @@ func ValidateConfig(obj *ebsv1.Config) field.ErrorList {
 		} else {
 			errs = append(errs, validateBuildTargetContent(&targets)...)
 		}
-	} else if obj.Name == ebsv1.ArtifactManagerConfigName {
-		var managers ebsv1.ArtifactManagerContent
-		if err := yaml.UnmarshalStrict([]byte(obj.Spec.Content), &managers); err != nil {
+	} else if obj.Name == ebsv1.ServiceConfigName {
+		var services ebsv1.ServiceConfigContent
+		if err := yaml.UnmarshalStrict([]byte(obj.Spec.Content), &services); err != nil {
 			errs = append(errs, field.Invalid(content, "<redacted>", err.Error()))
 		} else {
-			errs = append(errs, validateArtifactManagerContent(&managers)...)
+			errs = append(errs, validateServiceConfigContent(&services)...)
 		}
 	}
 	return errs
@@ -146,14 +149,21 @@ func validateEffectiveResourceLevels(path *field.Path, levels ...ebsv1.ResourceR
 	return errs
 }
 
-// validateArtifactManagerContent validates all instance names and service addresses.
-func validateArtifactManagerContent(obj *ebsv1.ArtifactManagerContent) field.ErrorList {
-	path := field.NewPath("spec", "content", "instances")
+// validateServiceConfigContent validates all instance names and service addresses.
+func validateServiceConfigContent(obj *ebsv1.ServiceConfigContent) field.ErrorList {
+	path := field.NewPath("spec", "content", "artifactManagers")
 	var errs field.ErrorList
-	if len(obj.Instances) == 0 {
+	gitPath := field.NewPath("spec", "content", "gitServer", "internalURL")
+	if obj.GitServer.InternalURL == "" {
+		errs = append(errs, field.Required(gitPath, "internalURL is required"))
+	} else if !validServiceURL(obj.GitServer.InternalURL) {
+		errs = append(errs, field.Invalid(gitPath, "<redacted>",
+			"must be an absolute HTTP(S) URL without credentials, query, fragment or whitespace"))
+	}
+	if len(obj.ArtifactManagers) == 0 {
 		errs = append(errs, field.Required(path, "at least one instance is required"))
 	}
-	for name, instance := range obj.Instances {
+	for name, instance := range obj.ArtifactManagers {
 		p := path.Key(name)
 		if reasons := validation.IsDNS1123Label(name); len(reasons) != 0 {
 			errs = append(errs, field.Invalid(p, name, strings.Join(reasons, "; ")))
@@ -171,7 +181,7 @@ func validateArtifactManagerContent(obj *ebsv1.ArtifactManagerContent) field.Err
 			if address.value == "" {
 				continue
 			}
-			if !validArtifactManagerURL(address.value) {
+			if !validServiceURL(address.value) {
 				detail := "must be an absolute HTTP(S) URL without credentials, query, fragment or whitespace"
 				errs = append(errs, field.Invalid(p.Child(address.field), "<redacted>", detail))
 			}
@@ -180,10 +190,11 @@ func validateArtifactManagerContent(obj *ebsv1.ArtifactManagerContent) field.Err
 	return errs
 }
 
-func validArtifactManagerURL(value string) bool {
+func validServiceURL(value string) bool {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" ||
-		parsed.RawQuery != "" || parsed.ForceQuery || strings.ContainsAny(value, "# \t\r\n") {
+		parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(value, "#") ||
+		strings.IndexFunc(value, unicode.IsSpace) >= 0 || strings.HasSuffix(parsed.Host, ":") {
 		return false
 	}
 	if parsed.Scheme != "https" && parsed.Scheme != "http" {

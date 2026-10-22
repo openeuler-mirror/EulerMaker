@@ -70,7 +70,11 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 	for _, tc := range []struct{ name, initial, updated string }{
 		{"build-target", "targets: {}", "targets: {other: {arches: {x86_64: {image: build:v1}}}}"},
 		{"build-resource", "default: {requests: {cpu: '4', memory: 8Gi}}", "default: {requests: {cpu: '8', memory: 16Gi}}"},
-		{"artifact-manager-conf", "instances: {default: {internalURL: 'http://artifact-manager:8081'}}", "instances: {art-01: {internalURL: 'http://artifact-manager.art-01:8081', runnerExternalURL: 'https://artifacts.example.com'}}"},
+		{
+			"service-config",
+			"artifactManagers: {default: {internalURL: 'http://artifact-manager:8081'}}\ngitServer: {internalURL: 'http://git-server:8080'}",
+			"artifactManagers: {art-01: {internalURL: 'http://artifact-manager.art-01:8081'}}\ngitServer: {internalURL: 'https://git-server:8443/git-prefix'}",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) { testConfigHTTPCreateUpdateAndRead(t, tc.name, tc.initial, tc.updated) })
 	}
@@ -136,6 +140,9 @@ func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updat
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec:       ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityPublic, Content: initialContent},
 	}
+	if name == ebsv1.ServiceConfigName {
+		candidate.Spec.Visibility = ebsv1.ConfigVisibilityOpsOnly
+	}
 	encode := func(obj ebsv1.Config) string {
 		data, err := json.Marshal(obj)
 		if err != nil {
@@ -144,6 +151,11 @@ func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updat
 		return string(data)
 	}
 	invalid := candidate
+	if name == ebsv1.ServiceConfigName {
+		invalid.Spec.Visibility = ebsv1.ConfigVisibilityPublic
+		call(http.MethodPost, encode(invalid), http.StatusUnprocessableEntity)
+		invalid = candidate
+	}
 	invalid.Spec.Content = "{}"
 	call(http.MethodPost, encode(invalid), http.StatusUnprocessableEntity)
 	obj := call(http.MethodPost, encode(candidate), http.StatusCreated)
@@ -153,12 +165,22 @@ func testConfigHTTPCreateUpdateAndRead(t *testing.T, name, initialContent, updat
 	call(http.MethodHead, "", http.StatusMethodNotAllowed)
 	call(http.MethodPut, encode(candidate), http.StatusConflict)
 	invalid = obj
+	if name == ebsv1.ServiceConfigName {
+		invalid.Spec.Visibility = ebsv1.ConfigVisibilityPublic
+		call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
+		invalid = obj
+		invalid.Spec.Content = "artifactManagers: {default: {internalURL: 'http://artifact-manager:8081'}}"
+		call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
+		invalid.Spec.Content += "\ngitServer: {internalURL: 'file:///tmp/git'}"
+		call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
+		invalid = obj
+	}
 	if name == ebsv1.BuildResourceConfigName {
 		invalid.Spec.Content = "default: {requests: {cpu: '4', memory: 8Gi}, limits: {cpu: '2'}}"
 	} else if name == ebsv1.BuildTargetConfigName {
 		invalid.Spec.Content = "targets: {os: {arches: {x86_64: {image: 'https://invalid/image'}}}}"
 	} else {
-		invalid.Spec.Content = "instances: {default: {internalURL: 'http://artifact-manager:8081', runnerExternalURL: 'ftp://external'}}"
+		invalid.Spec.Content = "artifactManagers: {default: {internalURL: 'http://artifact-manager:8081', runnerExternalURL: 'ftp://external'}}\ngitServer: {internalURL: 'http://git-server:8080'}"
 	}
 	call(http.MethodPut, encode(invalid), http.StatusUnprocessableEntity)
 	unchanged := call(http.MethodGet, "", http.StatusOK)
@@ -180,12 +202,14 @@ type configBootstrapStore struct {
 }
 
 func (s *configBootstrapStore) New() runtime.Object { return &ebsv1.Config{} }
+
 func (s *configBootstrapStore) Get(_ context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
 	if obj := s.objects[name]; obj != nil {
 		return obj.DeepCopy(), nil
 	}
 	return nil, apierrors.NewNotFound(ebsv1.Resource("configs"), name)
 }
+
 func (s *configBootstrapStore) Create(_ context.Context, obj runtime.Object, _ rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
 	config := obj.(*ebsv1.Config)
 	if s.objects[config.Name] != nil {
@@ -194,6 +218,40 @@ func (s *configBootstrapStore) Create(_ context.Context, obj runtime.Object, _ r
 	s.objects[config.Name] = config.DeepCopy()
 	s.creates++
 	return config, nil
+}
+
+type configBootstrapRaceStore struct {
+	configBootstrapStore
+	gets int
+}
+
+func (s *configBootstrapRaceStore) Get(ctx context.Context, name string, opts *metav1.GetOptions) (runtime.Object, error) {
+	s.gets++
+	if s.gets == 1 {
+		return nil, apierrors.NewNotFound(ebsv1.Resource("configs"), name)
+	}
+	return s.configBootstrapStore.Get(ctx, name, opts)
+}
+
+func TestEnsureDefaultConfigConcurrentCreate(t *testing.T) {
+	winner := &ebsv1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName},
+		Spec: ebsv1.ConfigSpec{
+			Visibility: ebsv1.ConfigVisibilityOpsOnly,
+			Content:    "artifactManagers: {default: {internalURL: 'http://art:8081'}}\ngitServer: {internalURL: 'http://git:8080'}",
+		},
+	}
+	store := &configBootstrapRaceStore{
+		configBootstrapStore: configBootstrapStore{objects: map[string]*ebsv1.Config{winner.Name: winner}},
+	}
+	candidate := winner.DeepCopy()
+	candidate.Spec.Content = string(defaultServiceConfigTemplate)
+	if err := ensureDefaultConfig(context.Background(), store, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if store.gets != 2 || store.creates != 0 || store.objects[winner.Name].Spec.Content != winner.Spec.Content {
+		t.Fatal("concurrent initialization did not preserve and read the winning object")
+	}
 }
 
 func TestEnsureDefaultConfigs(t *testing.T) {
@@ -212,12 +270,12 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if errs := validation.ValidateConfig(resource); len(errs) != 0 {
 		t.Fatalf("default build-resource Config: %v", errs)
 	}
-	artifactManager := store.objects[ebsv1.ArtifactManagerConfigName]
-	if errs := validation.ValidateConfig(artifactManager); len(errs) != 0 {
-		t.Fatalf("default artifact-manager-conf Config: %v", errs)
+	serviceConfig := store.objects[ebsv1.ServiceConfigName]
+	if errs := validation.ValidateConfig(serviceConfig); len(errs) != 0 {
+		t.Fatalf("default service-config Config: %v", errs)
 	}
 	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly ||
-		artifactManager.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
+		serviceConfig.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
 		t.Fatal("incorrect default visibility")
 	}
 	var targets ebsv1.BuildTargetContent
@@ -231,29 +289,32 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	if resources.Default.Requests["cpu"] != "4" || resources.Default.Requests["memory"] != "8Gi" {
 		t.Fatalf("default resources: %+v", resources.Default)
 	}
-	var artifactManagers ebsv1.ArtifactManagerContent
-	if err := yaml.UnmarshalStrict([]byte(artifactManager.Spec.Content), &artifactManagers); err != nil {
+	var services ebsv1.ServiceConfigContent
+	if err := yaml.UnmarshalStrict([]byte(serviceConfig.Spec.Content), &services); err != nil {
 		t.Fatal(err)
 	}
-	if got := artifactManagers.Instances["default"].InternalURL; got != "http://artifact-manager:8081" {
+	if got := services.GitServer.InternalURL; got != "http://git-server:8080" {
+		t.Fatalf("default Git Server URL: %q", got)
+	}
+	if got := services.ArtifactManagers["default"].InternalURL; got != "http://artifact-manager:8081" {
 		t.Fatalf("default Compose artifact manager URL: %q", got)
 	}
-	if got := artifactManagers.Instances["default"].RunnerInternalURL; got != "http://127.0.0.1:8081" {
+	if got := services.ArtifactManagers["default"].RunnerInternalURL; got != "http://127.0.0.1:8081" {
 		t.Fatalf("default Compose Runner artifact manager URL: %q", got)
 	}
-	if got := artifactManagers.Instances["art-01"].InternalURL; got != "http://artifact-manager.art-01:8081" {
+	if got := services.ArtifactManagers["art-01"].InternalURL; got != "http://artifact-manager.art-01:8081" {
 		t.Fatalf("default Kubernetes artifact manager URL: %q", got)
 	}
-	if artifactManagers.Instances["art-01"].RunnerInternalURL != "" || artifactManagers.Instances["art-01"].RunnerExternalURL != "" {
+	if services.ArtifactManagers["art-01"].RunnerInternalURL != "" || services.ArtifactManagers["art-01"].RunnerExternalURL != "" {
 		t.Fatal("Kubernetes Runner URLs must be configured for the deployment")
 	}
 	target.Spec.Content = "operator change"
-	artifactManager.Spec.Content = "operator artifact manager change"
+	serviceConfig.Spec.Content = "operator service change"
 	if err := ensureDefaultConfigs(context.Background(), store); err != nil {
 		t.Fatal(err)
 	}
 	if store.creates != 3 || store.objects[ebsv1.BuildTargetConfigName].Spec.Content != "operator change" ||
-		store.objects[ebsv1.ArtifactManagerConfigName].Spec.Content != "operator artifact manager change" {
+		store.objects[ebsv1.ServiceConfigName].Spec.Content != "operator service change" {
 		t.Fatal("existing Config was overwritten")
 	}
 }
