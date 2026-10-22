@@ -232,6 +232,8 @@ body.modal-open { overflow: hidden; }
 .target-fieldset { margin: 0; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
 .target-fieldset legend { padding: 0 7px; color: #536176; font-size: 13px; font-weight: 700; }
 .build-package-hint { margin: 0 0 12px; }
+.build-package-name { font-size: 18px; font-weight: 700; }
+.field > .build-git-ref-hint { margin: 8px 0 0; color: var(--muted); font-weight: 400; }
 .build-package-search { width: 100%; margin: 0 0 12px; }
 .build-package-options { max-height: 220px; padding: 4px; display: grid; gap: 4px; overflow-y: auto; }
 .build-package-option { min-height: 34px; padding: 6px 8px; display: flex; align-items: center; gap: 9px; color: #455269; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
@@ -472,7 +474,7 @@ body.modal-open { overflow: hidden; }
 .editor-empty { padding: 16px; background: #f8fafc; border: 1px dashed #d8e0eb; border-radius: 7px; }
 .config-table td:first-child { min-width: 170px; }
 .config-table code { overflow-wrap: anywhere; }
-.config-table .package-actions-column { width: 136px; min-width: 136px; white-space: nowrap; }
+.config-table .package-actions-column { width: 184px; min-width: 184px; white-space: nowrap; }
 .package-actions-column .text-button + .text-button { margin-left: 12px; }
 .compact-error { min-height: 64px; }
 .page-error { margin-top: 28px; }

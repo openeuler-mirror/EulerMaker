@@ -167,6 +167,10 @@ ebs.io/member-user.<username>: "true"
 
 工程页面依次使用四个一级 Tab：“工程详情”展示软件包仓库及其 Job 历史；“构建历史”展示 Build、运行中任务统计和构建详情；“依赖图谱”展示构建的 BuildGraph；“工程配置”维护基础配置、Build targets、Bootstrap repositories、成员及 buildPayload。默认 ref 和创建时间显示在顶部工程容器。页签状态写入 `tab` 查询参数，可刷新和分享。
 
+软件包列表操作列提供“构建”按钮，沿用工程的构建权限，不要求工程编辑权限。点击后复用构建目标选择弹窗，固定 `buildType=single`、`packages=[当前仓库名]`，不提供其他软件包选择；每个选中的目标分别创建 Build，成功后切换到构建历史。顶部单包构建入口仍支持选择多个仓库。
+
+仅从软件包列表打开的固定仓库构建弹窗提供默认留空的 Git ref 输入框，顶部支持多仓库选择的单包构建弹窗不提供该选项。留空时不发送 annotation；非空时将完整 `refs/...` 引用原样写入每个新 Build 的 `metadata.annotations["ebs.io/git-ref"]`，例如 `refs/merge-requests/501/head`。该输入只覆盖本次构建，不修改 Project；每次打开弹窗均重置为空，引用合法性由 apiserver 最终校验。
+
 依赖图谱按需加载，使用 `tab=graph`。构建选择仅展示非 single 构建，通过 `labelSelector=ebs.io/build-type!=single` 在服务端过滤后按 50 条分页，只读取名称、构建类型和目标摘要。构建历史选中非 single 构建时沿用该选择，否则默认选择列表第一项；图通过同 Project、同名 `buildgraphs/{buildName}` 获取。
 
 图谱展示区域内提供统一查找栏，忽略大小写并按子串匹配全部直接上游、中心节点和直接下游，包括滚动区域外的节点。查找不筛除节点或连线，不改变当前中心节点或重新请求 API；高亮全部匹配项，显示当前位置及匹配总数，支持上一项/下一项循环跳转并自动滚动定位。Enter/Shift+Enter 切换匹配项，Esc 清空；焦点在图谱区域内时 Ctrl+F/Command+F 聚焦查找栏。切换中心节点时清空查找。
