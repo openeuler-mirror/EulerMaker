@@ -39,7 +39,7 @@ docker build -f backend/ebs-gateway/Dockerfile -t ebs-gateway:dev .
 
 - `/auth/*` 负责注册、登录、Runner token 交换、token 校验和本人密码修改；只有 Admin 能创建 MachineAccount。
 - `/apis/iam.ebs/v1/*` 仅允许 Admin 管理非管理员 User 和 MachineAccount。
-- `/apis/ebs/v1/*` 只注册设计文档列出的资源、对象和子资源路径；匿名只读白名单业务对象，Config 按可见性读取。Runner 可通过 `/apis/ebs/v1/artifact-endpoints` 读取 Artifact Manager 地址投影，不直接读取 `OpsOnly` Config。
+- `/apis/ebs/v1/*` 只注册设计文档列出的资源、对象和子资源路径；匿名只读白名单业务对象，Config 按可见性读取。Runner 可通过 `/apis/ebs/v1/artifact-endpoints` 读取 `Config/service-config` 中 `artifactManagers` 的 Runner 地址投影；响应仍为 `instances`，不包含 Git Server 或 Artifact Manager 管理地址，不直接开放 `OpsOnly` Config。
 - Snapshot、BuildInfo、RpmRepo 的集合、对象及对象 `/status` 仅注册 GET。
 - Gateway 不向上游注入用户或 Runner 身份头；转发时仍移除外部 Bearer Token。PUT/PATCH 先读取服务端对象、生成完整候选对象并校验受保护字段，然后以 PUT 转发。
 - Build 的 PUT/PATCH 不开放；Job `/abort` 仅 Project owner/member 用户可调用；Runner 只可管理自身对象和已分配 Job。

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/upstream"
 )
@@ -103,7 +104,7 @@ func authorizeConfig(who identity.Principal, route Route) error {
 
 func isBuiltInConfig(name string) bool {
 	switch name {
-	case "build-target", "build-resource", "artifact-manager-conf":
+	case ebsv1.BuildTargetConfigName, ebsv1.BuildResourceConfigName, ebsv1.ServiceConfigName:
 		return true
 	default:
 		return false

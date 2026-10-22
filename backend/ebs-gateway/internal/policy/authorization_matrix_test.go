@@ -97,18 +97,27 @@ func TestConfigAuthorization(t *testing.T) {
 	a := projectAuthorizer(t)
 	ordinary := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
 	ops := identity.Principal{Type: identity.UserType, Subject: "ops", Scope: identity.OpsScope}
+	admin := identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
+	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-a", Runner: "runner-a"}
 	for _, test := range []struct {
 		who    identity.Principal
 		name   string
 		method string
 		allow  bool
 	}{
-		{ordinary, "artifact-manager-conf", http.MethodGet, false},
-		{ops, "artifact-manager-conf", http.MethodGet, true},
-		{ops, "artifact-manager-conf", http.MethodPut, true},
+		{ordinary, "service-config", http.MethodGet, false},
+		{ordinary, "service-config", http.MethodPut, false},
+		{runner, "service-config", http.MethodGet, false},
+		{ops, "service-config", http.MethodGet, true},
+		{ops, "service-config", http.MethodPost, true},
+		{ops, "service-config", http.MethodPut, true},
+		{ops, "service-config", http.MethodPatch, true},
+		{admin, "service-config", http.MethodGet, true},
+		{admin, "service-config", http.MethodPut, true},
+		{admin, "service-config", http.MethodDelete, false},
 		{ops, "build-target", http.MethodDelete, false},
 		{ops, "build-resource", http.MethodDelete, false},
-		{ops, "artifact-manager-conf", http.MethodDelete, false},
+		{ops, "service-config", http.MethodDelete, false},
 		{ops, "custom", http.MethodDelete, true},
 	} {
 		route := Route{Resource: "configs", Name: test.name, Method: test.method}
