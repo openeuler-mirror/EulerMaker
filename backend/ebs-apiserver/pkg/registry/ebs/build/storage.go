@@ -24,7 +24,9 @@ func NewStorage() *scopedresource.Storage {
 		NewList: func() runtime.Object { return &ebsv1.BuildList{} },
 		PrepareCreate: func(obj runtime.Object) {
 			b := obj.(*ebsv1.Build)
-			if b.Spec.BuildType == "full" || b.Spec.BuildType == "incremental" {
+			// Preserve annotated input for validation before normalizing packages.
+			_, hasGitRef := b.Annotations[ebsv1.BuildGitRefAnnotation]
+			if !hasGitRef && (b.Spec.BuildType == "full" || b.Spec.BuildType == "incremental") {
 				b.Spec.Packages = nil
 			}
 			ensureBuildTargetLabels(b)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -178,6 +179,65 @@ func TestClaimManagerAttachesCreateHook(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	cancel()
 	manager.Run(ctx)
+}
+
+func TestCreateBuildGitRef(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, typ, ref, packageName string
+			wantField                   string
+		}{
+			{name: "single", typ: "single", ref: "refs/merge-requests/501/head", packageName: "gcc"},
+			{name: "full", typ: "full", ref: "refs/heads/main", packageName: "gcc", wantField: "metadata.annotations[ebs.io/git-ref]"},
+			{name: "incremental", typ: "incremental", ref: "refs/heads/main", packageName: "gcc", wantField: "metadata.annotations[ebs.io/git-ref]"},
+			{name: "empty ref", typ: "single", packageName: "gcc", wantField: "metadata.annotations[ebs.io/git-ref]"},
+			{name: "missing package", typ: "single", ref: "refs/heads/main", packageName: "unknown", wantField: "spec.packages[0]"},
+		} {
+			t.Run(fmt.Sprintf("%s/dryRun=%t", tc.name, dryRun), func(t *testing.T) {
+				writes := 0
+				client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: admissionRoundTripper(
+					func(req *http.Request) (*http.Response, error) {
+						writes++
+						return &http.Response{StatusCode: http.StatusCreated, Header: make(http.Header),
+							Body: io.NopCloser(strings.NewReader(`{"_seq_no":0,"_primary_term":1}`))}, nil
+					})})
+				store := esstore.New(client, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
+				project := &projectGetter{t: t}
+				store.SetCreateHook(ValidateProjectPackages(project))
+				build := testBuild("01234567-89ab-4cde-8fab-0123456789ab", tc.typ)
+				build.Spec.Packages = []string{tc.packageName}
+				build.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: tc.ref}
+				opts := &metav1.CreateOptions{}
+				if dryRun {
+					opts.DryRun = []string{metav1.DryRunAll}
+				}
+				obj, err := store.Create(request.WithNamespace(context.Background(), "project-a"), build, nil, opts)
+				if tc.wantField != "" {
+					if !apierrors.IsInvalid(err) {
+						t.Fatalf("expected Invalid, got %v", err)
+					}
+					status := err.(apierrors.APIStatus).Status()
+					if status.Code != 422 || len(status.Details.Causes) != 1 || status.Details.Causes[0].Field != tc.wantField {
+						t.Fatalf("unexpected status: %+v", status)
+					}
+					if writes != 0 {
+						t.Fatalf("invalid request persisted: %d writes", writes)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantWrites := 1
+				if dryRun {
+					wantWrites = 0
+				}
+				if writes != wantWrites || project.calls != 1 || obj.(*ebsv1.Build).Annotations[ebsv1.BuildGitRefAnnotation] != tc.ref {
+					t.Fatalf("writes=%d project reads=%d object=%+v", writes, project.calls, obj)
+				}
+			})
+		}
+	}
 }
 
 func TestAdmissionQueriesUseMinimalSource(t *testing.T) {

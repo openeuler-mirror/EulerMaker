@@ -114,7 +114,6 @@ func ValidateBuildTargetConfig(configs rest.Getter, next rest.ValidateObjectFunc
 }
 
 // ValidateProjectPackages checks requested packages against the current Project.
-// Project changes after creation are still handled by the snapshot controller.
 func ValidateProjectPackages(projects rest.Getter) rest.ValidateObjectFunc {
 	return func(ctx context.Context, obj runtime.Object) error {
 		build, ok := obj.(*ebsv1.Build)

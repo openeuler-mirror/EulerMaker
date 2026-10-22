@@ -245,6 +245,95 @@ func TestTerminalBuildPhaseImmutable(t *testing.T) {
 	}
 }
 
+func TestValidateBuildGitRef(t *testing.T) {
+	for _, ref := range []string{
+		"refs/merge-requests/501/head", "refs/heads/release/v1", "refs/tags/v1.0", "refs/heads/中文",
+	} {
+		t.Run(ref, func(t *testing.T) {
+			b := validBuild()
+			b.Spec.BuildType = "single"
+			b.Labels[ebsv1.BuildTypeLabel] = "single"
+			b.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref}
+			assertErrorList(t, ValidateBuild(b), 0, nil)
+		})
+	}
+	for _, ref := range []string{
+		"", "HEAD", "FETCH_HEAD", "main", "--upload-pack=bad", " refs/heads/main", "refs/heads/main ",
+		"refs/", "refs//main", "refs/heads/main/", "refs/heads/.hidden", "refs/heads/foo.lock/bar",
+		"refs/heads/main.lock", "refs/heads/main.", "refs/heads/a..b", "refs/heads/main@{1}",
+		"refs/heads/main:refs/heads/other", "refs/heads/*", "refs/heads/a?", "refs/heads/a[0]",
+		"refs/heads/main^{commit}", "refs/heads/main~1", "refs/heads/a\\b", "refs/heads/a\nb", "refs/heads/a\x7fb",
+	} {
+		t.Run(ref, func(t *testing.T) {
+			b := validBuild()
+			b.Spec.BuildType = "single"
+			b.Labels[ebsv1.BuildTypeLabel] = "single"
+			b.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref}
+			errs := ValidateBuild(b)
+			path := field.NewPath("metadata", "annotations").Key(ebsv1.BuildGitRefAnnotation).String()
+			if len(errs) != 1 || errs[0].Field != path {
+				t.Fatalf("errors = %v, want one error at %s", errs, path)
+			}
+		})
+	}
+}
+
+func TestBuildGitRefScope(t *testing.T) {
+	for _, typ := range []string{"full", "incremental", "specified", "single"} {
+		for _, packages := range [][]string{nil, {"gcc"}, {"gcc", "gcc"}, {"gcc", "bash"}} {
+			b := validBuild()
+			b.Spec.BuildType, b.Spec.Packages = typ, packages
+			b.Labels[ebsv1.BuildTypeLabel] = typ
+			b.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
+			errs := ValidateBuild(b)
+			wantValid := typ == "single" && len(packages) == 1
+			if (len(errs) == 0) != wantValid {
+				t.Fatalf("type=%s packages=%v errors=%v", typ, packages, errs)
+			}
+			delete(b.Annotations, ebsv1.BuildGitRefAnnotation)
+			if typ == "single" && len(packages) > 0 {
+				assertErrorList(t, ValidateBuild(b), 0, nil)
+			}
+		}
+	}
+}
+
+func TestBuildGitRefImmutable(t *testing.T) {
+	for _, tc := range []struct {
+		name, oldRef, newRef string
+		valid                bool
+	}{
+		{name: "unchanged", oldRef: "refs/heads/main", newRef: "refs/heads/main", valid: true},
+		{name: "absent", valid: true},
+		{name: "add", newRef: "refs/heads/main"},
+		{name: "remove", oldRef: "refs/heads/main"},
+		{name: "change", oldRef: "refs/heads/main", newRef: "refs/heads/next"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := validBuild()
+			old.Spec.BuildType = "single"
+			old.Labels[ebsv1.BuildTypeLabel] = "single"
+			old.Annotations = map[string]string{}
+			if tc.oldRef != "" {
+				old.Annotations[ebsv1.BuildGitRefAnnotation] = tc.oldRef
+			}
+			next := old.DeepCopy()
+			delete(next.Annotations, ebsv1.BuildGitRefAnnotation)
+			if tc.newRef != "" {
+				next.Annotations[ebsv1.BuildGitRefAnnotation] = tc.newRef
+			}
+			next.Annotations["example.com/note"] = "editable"
+			errs := ValidateBuildUpdate(next, old)
+			if tc.valid {
+				assertErrorList(t, errs, 0, nil)
+			} else {
+				path := field.NewPath("metadata", "annotations").Key(ebsv1.BuildGitRefAnnotation).String()
+				assertErrorList(t, errs, 1, map[string]field.ErrorType{path: field.ErrorTypeInvalid})
+			}
+		})
+	}
+}
+
 func validBuild() *ebsv1.Build {
 	return &ebsv1.Build{
 		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000", Labels: map[string]string{
