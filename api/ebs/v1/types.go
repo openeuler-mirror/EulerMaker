@@ -17,16 +17,6 @@ type Config struct {
 	Spec              ConfigSpec `json:"spec"`
 }
 
-type ConfigVisibility string
-
-const (
-	ConfigVisibilityPublic    ConfigVisibility = "Public"
-	ConfigVisibilityOpsOnly   ConfigVisibility = "OpsOnly"
-	BuildTargetConfigName                      = "build-target"
-	BuildResourceConfigName                    = "build-resource"
-	ArtifactManagerConfigName                  = "artifact-manager-conf"
-)
-
 type ConfigSpec struct {
 	Visibility ConfigVisibility `json:"visibility"`
 	Content    string           `json:"content"`
@@ -39,6 +29,16 @@ type ConfigList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Config `json:"items"`
 }
+
+type ConfigVisibility string
+
+const (
+	ConfigVisibilityPublic    ConfigVisibility = "Public"
+	ConfigVisibilityOpsOnly   ConfigVisibility = "OpsOnly"
+	BuildTargetConfigName                      = "build-target"
+	BuildResourceConfigName                    = "build-resource"
+	ArtifactManagerConfigName                  = "artifact-manager-conf"
+)
 
 // +k8s:deepcopy-gen=true
 type BuildTargetContent struct {
@@ -99,14 +99,6 @@ type ScriptList struct {
 	Items           []Script `json:"items"`
 }
 
-// ScriptRef records the Script observed when a Job is created. It does not
-// pin the content version used by a later execution attempt.
-type ScriptRef struct {
-	Name            string `json:"name"`
-	UID             string `json:"uid"`
-	ResourceVersion string `json:"resourceVersion"`
-}
-
 const ProjectArtifactsAnnotation = "ebs.io/artifacts"
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -164,6 +156,21 @@ type SnapshotList struct {
 	Items           []Snapshot `json:"items"`
 }
 
+type PackageRepoStatus struct {
+	CloneURL string           `json:"cloneUrl,omitempty"`
+	CommitID string           `json:"commitId,omitempty"`
+	Error    *SpecCommitError `json:"error,omitempty"`
+}
+
+type SpecCommitError struct {
+	Code      SpecCommitErrorCode `json:"code,omitempty"`
+	Message   string              `json:"message,omitempty"`
+	Retryable bool                `json:"retryable,omitempty"`
+}
+
+// BuildGitRefAnnotation overrides the source ref for a single-package Build.
+const BuildGitRefAnnotation = "ebs.io/git-ref"
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type Build struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -172,18 +179,10 @@ type Build struct {
 	Status            BuildStatus `json:"status,omitempty"`
 }
 
-// BuildGitRefAnnotation overrides the source ref for a single-package Build.
-const BuildGitRefAnnotation = "ebs.io/git-ref"
-
 type BuildSpec struct {
 	BuildType   string      `json:"buildType,omitempty"`
 	Packages    []string    `json:"packages,omitempty"`
 	BuildTarget BuildTarget `json:"buildTarget,omitempty"`
-}
-
-type BootstrapRepo struct {
-	Name string `json:"name,omitempty"`
-	Repo string `json:"repo,omitempty"`
 }
 
 type BuildStatus struct {
@@ -195,15 +194,15 @@ type BuildStatus struct {
 	Conditions   []metav1.Condition `json:"conditions,omitempty"`
 }
 
-type BaseBuildRef struct {
-	Name string `json:"name,omitempty"`
-}
-
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type BuildList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Build `json:"items"`
+}
+
+type BaseBuildRef struct {
+	Name string `json:"name,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -230,22 +229,18 @@ type BuildInfoStatus struct {
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// BuildGraph persists the dependency graph owned by the same-name BuildInfo.
-type BuildGraph struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Status            BuildGraphStatus `json:"status"`
-}
-
-type BuildGraphStatus struct {
-	Nodes map[string]DcgNodeState `json:"nodes"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type BuildGraphList struct {
+type BuildInfoList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []BuildGraph `json:"items"`
+	Items           []BuildInfo `json:"items"`
+}
+
+// PendingJobCreate records a Job creation identity that has been registered
+// in status but whose creation result is not yet confirmed. Keyed by spec
+// name; a non-empty map blocks writing Completed.
+type PendingJobCreate struct {
+	JobName            string `json:"jobName,omitempty"`
+	DispatchGeneration int64  `json:"dispatchGeneration,omitempty"`
 }
 
 // SpecStatusGroup stores per-spec fields in separate maps so callers can
@@ -254,6 +249,24 @@ type SpecStatusGroup struct {
 	Build         map[string]SpecBuildStatus   `json:"build,omitempty"`
 	Install       map[string]SpecInstallStatus `json:"install,omitempty"`
 	DispatchCount map[string]int64             `json:"dispatchCount,omitempty"`
+}
+
+// SpecStatus is the in-memory per-spec view of the grouped status fields.
+type SpecStatus struct {
+	Build         SpecBuildStatus   `json:"build,omitempty"`
+	Install       SpecInstallStatus `json:"install,omitempty"`
+	DispatchCount int64             `json:"dispatchCount,omitempty"`
+}
+
+type SpecBuildStatus struct {
+	Status     string             `json:"status"`
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type SpecInstallStatus struct {
+	Status      string                `json:"status"`
+	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
+	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
 }
 
 // UnmarshalJSON accepts the former per-spec layout when reading stored
@@ -340,35 +353,23 @@ func (s SpecStatusGroup) Entries() map[string]SpecStatus {
 	return entries
 }
 
-// SpecStatus is the in-memory per-spec view of the grouped status fields.
-type SpecStatus struct {
-	Build         SpecBuildStatus   `json:"build,omitempty"`
-	Install       SpecInstallStatus `json:"install,omitempty"`
-	DispatchCount int64             `json:"dispatchCount,omitempty"`
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// BuildGraph persists the dependency graph owned by the same-name BuildInfo.
+type BuildGraph struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Status            BuildGraphStatus `json:"status"`
 }
 
-type SpecBuildStatus struct {
-	Status     string             `json:"status"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+type BuildGraphStatus struct {
+	Nodes map[string]DcgNodeState `json:"nodes"`
 }
 
-type SpecInstallStatus struct {
-	Status      string                `json:"status"`
-	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
-	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
-}
-
-type MissingDep struct {
-	NeededBy        string       `json:"neededBy,omitempty"`
-	VersionRequests VersionConst `json:"versionRequests,omitempty"`
-}
-
-// PendingJobCreate records a Job creation identity that has been registered
-// in status but whose creation result is not yet confirmed. Keyed by spec
-// name; a non-empty map blocks writing Completed.
-type PendingJobCreate struct {
-	JobName            string `json:"jobName,omitempty"`
-	DispatchGeneration int64  `json:"dispatchGeneration,omitempty"`
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type BuildGraphList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []BuildGraph `json:"items"`
 }
 
 // DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep
@@ -384,13 +385,6 @@ type DcgNodeState struct {
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type BuildInfoList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []BuildInfo `json:"items"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type RpmRepo struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -399,39 +393,6 @@ type RpmRepo struct {
 }
 
 type RpmRepoSpec struct{}
-
-type RepositoryInput struct {
-	JobName  string `json:"jobName"`
-	SpecName string `json:"specName"`
-}
-
-type RepositoryTransition struct {
-	Inputs            []RepositoryInput `json:"inputs"`
-	BaseRepositoryUID string            `json:"baseRepositoryUID,omitempty"`
-	RepositoryUID     string            `json:"repositoryUID"`
-}
-
-type ReleaseTransition struct {
-	SourceRepositoryUID string   `json:"sourceRepositoryUID"`
-	ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
-}
-
-type RpmRepoReleaseStatus struct {
-	Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
-	SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
-	ContentURL          string              `json:"contentURL,omitempty"`
-	Transition          *ReleaseTransition  `json:"transition,omitempty"`
-	UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
-}
-
-type RpmRepoRepositoryStatus struct {
-	RepositoryUID   string                `json:"repositoryUID,omitempty"`
-	ContentURL      string                `json:"contentURL,omitempty"`
-	SourceJobNames  []string              `json:"sourceJobNames,omitempty"`
-	SkippedJobNames []string              `json:"skippedJobNames,omitempty"`
-	Transition      *RepositoryTransition `json:"transition,omitempty"`
-	UpdatedAt       *metav1.Time          `json:"updatedAt,omitempty"`
-}
 
 type RpmRepoStatus struct {
 	Repository *RpmRepoRepositoryStatus `json:"repository,omitempty"`
@@ -444,6 +405,39 @@ type RpmRepoList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []RpmRepo `json:"items"`
+}
+
+type RpmRepoRepositoryStatus struct {
+	RepositoryUID   string                `json:"repositoryUID,omitempty"`
+	ContentURL      string                `json:"contentURL,omitempty"`
+	SourceJobNames  []string              `json:"sourceJobNames,omitempty"`
+	SkippedJobNames []string              `json:"skippedJobNames,omitempty"`
+	Transition      *RepositoryTransition `json:"transition,omitempty"`
+	UpdatedAt       *metav1.Time          `json:"updatedAt,omitempty"`
+}
+
+type RepositoryTransition struct {
+	Inputs            []RepositoryInput `json:"inputs"`
+	BaseRepositoryUID string            `json:"baseRepositoryUID,omitempty"`
+	RepositoryUID     string            `json:"repositoryUID"`
+}
+
+type RepositoryInput struct {
+	JobName  string `json:"jobName"`
+	SpecName string `json:"specName"`
+}
+
+type RpmRepoReleaseStatus struct {
+	Phase               RpmRepoReleasePhase `json:"phase,omitempty"`
+	SourceRepositoryUID string              `json:"sourceRepositoryUID,omitempty"`
+	ContentURL          string              `json:"contentURL,omitempty"`
+	Transition          *ReleaseTransition  `json:"transition,omitempty"`
+	UpdatedAt           *metav1.Time        `json:"updatedAt,omitempty"`
+}
+
+type ReleaseTransition struct {
+	SourceRepositoryUID string   `json:"sourceRepositoryUID"`
+	ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -466,18 +460,6 @@ type JobSpec struct {
 	Payload        string               `json:"payload,omitempty"`
 }
 
-type ResourceRequirements struct {
-	Requests map[string]string `json:"requests,omitempty"`
-	Limits   map[string]string `json:"limits,omitempty"`
-}
-
-type Toleration struct {
-	Key      string `json:"key,omitempty"`
-	Operator string `json:"operator,omitempty"`
-	Value    string `json:"value,omitempty"`
-	Effect   string `json:"effect,omitempty"`
-}
-
 type JobStatus struct {
 	Phase        JobPhase          `json:"phase,omitempty"`
 	Stage        JobStage          `json:"stage,omitempty"`
@@ -488,6 +470,28 @@ type JobStatus struct {
 	EndTime      metav1.Time       `json:"endTime,omitempty"`
 	Message      string            `json:"message,omitempty"`
 	RestartCount int64             `json:"restartCount,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type JobList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Job `json:"items"`
+}
+
+// ScriptRef records the Script observed when a Job is created. It does not
+// pin the content version used by a later execution attempt.
+type ScriptRef struct {
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type Toleration struct {
+	Key      string `json:"key,omitempty"`
+	Operator string `json:"operator,omitempty"`
+	Value    string `json:"value,omitempty"`
+	Effect   string `json:"effect,omitempty"`
 }
 
 // JobBuildResult records the outcome of the build script, independently of
@@ -501,13 +505,6 @@ type JobBuildResult struct {
 type JobInstallResult struct {
 	Status      JobResultStatus       `json:"status"`
 	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type JobList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Job `json:"items"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -526,12 +523,6 @@ type RunnerSpec struct {
 	Taints        []RunnerTaint `json:"taints,omitempty"`
 }
 
-type RunnerTaint struct {
-	Key    string `json:"key"`
-	Value  string `json:"value,omitempty"`
-	Effect string `json:"effect"`
-}
-
 type RunnerStatus struct {
 	Phase       RunnerPhase        `json:"phase,omitempty"`
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
@@ -540,6 +531,19 @@ type RunnerStatus struct {
 	Addresses   []RunnerAddress    `json:"addresses,omitempty"`
 	Info        RunnerInfo         `json:"info,omitempty"`
 	Heartbeat   metav1.Time        `json:"heartbeat,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type RunnerList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Runner `json:"items"`
+}
+
+type RunnerTaint struct {
+	Key    string `json:"key"`
+	Value  string `json:"value,omitempty"`
+	Effect string `json:"effect"`
 }
 
 type RunnerAddress struct {
@@ -553,13 +557,6 @@ type RunnerInfo struct {
 	Arch           string `json:"arch,omitempty"`
 	RuntimeVersion string `json:"runtimeVersion,omitempty"`
 	AgentVersion   string `json:"agentVersion,omitempty"`
-}
-
-// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type RunnerList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []Runner `json:"items"`
 }
 
 type BuildTarget struct {
@@ -577,16 +574,19 @@ type PackageRepo struct {
 	CommitID string `json:"commitID,omitempty"`
 }
 
-type PackageRepoStatus struct {
-	CloneURL string           `json:"cloneUrl,omitempty"`
-	CommitID string           `json:"commitId,omitempty"`
-	Error    *SpecCommitError `json:"error,omitempty"`
+type BootstrapRepo struct {
+	Name string `json:"name,omitempty"`
+	Repo string `json:"repo,omitempty"`
 }
 
-type SpecCommitError struct {
-	Code      SpecCommitErrorCode `json:"code,omitempty"`
-	Message   string              `json:"message,omitempty"`
-	Retryable bool                `json:"retryable,omitempty"`
+type ResourceRequirements struct {
+	Requests map[string]string `json:"requests,omitempty"`
+	Limits   map[string]string `json:"limits,omitempty"`
+}
+
+type MissingDep struct {
+	NeededBy        string       `json:"neededBy,omitempty"`
+	VersionRequests VersionConst `json:"versionRequests,omitempty"`
 }
 
 type VersionConst struct {
