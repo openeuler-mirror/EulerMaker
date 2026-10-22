@@ -41,7 +41,7 @@ func main() {
 	gitClient := gitops.New(authManager, config.OperationTimeout)
 	manager, err := repository.NewManager(ctx, store, gitClient, repository.ManagerConfig{
 		Workers: config.Workers, MaxRetries: config.MaxRetries, RetryBase: config.RetryBaseDelay,
-		RetryMax: config.RetryMaxDelay, CloneBaseURL: config.CloneBaseURL, CleanupPeriod: config.TempCleanupInterval,
+		RetryMax: config.RetryMaxDelay, CleanupPeriod: config.TempCleanupInterval,
 	})
 	if err != nil {
 		log.Fatal(err)

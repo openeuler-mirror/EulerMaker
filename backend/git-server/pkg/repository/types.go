@@ -49,7 +49,7 @@ type Metrics struct {
 
 type Response struct {
 	Key        string           `json:"key"`
-	CloneURL   string           `json:"clone_url,omitempty"`
+	ClonePath  string           `json:"clone_path,omitempty"`
 	SyncTime   *time.Time       `json:"sync_time,omitempty"`
 	RetryCount int              `json:"retry_count,omitempty"`
 	Error      *RepositoryError `json:"error,omitempty"`

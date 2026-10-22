@@ -17,14 +17,14 @@ type fakeGit struct {
 	origin string
 }
 
-func TestCloneURLPreservesRepositoryKey(t *testing.T) {
+func TestClonePathPreservesRepositoryKey(t *testing.T) {
 	now := time.Now()
-	m := &Manager{config: ManagerConfig{CloneBaseURL: "http://git-server:8080/git"}}
+	m := &Manager{}
 	key := "example.com/team/repo%2Bname.git"
 	response := m.responseLocked(&state{Key: key, Available: true, SyncTime: &now})
-	parsed, err := url.Parse(response.CloneURL)
-	if err != nil || parsed.Path != "/git/"+key {
-		t.Fatalf("clone URL does not preserve key: %q, %v", response.CloneURL, err)
+	parsed, err := url.Parse(response.ClonePath)
+	if err != nil || parsed.Path != "/git/"+key || response.ClonePath != "/git/example.com/team/repo%252Bname.git" {
+		t.Fatalf("clone path does not preserve key: %q, %v", response.ClonePath, err)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestManagerSyncAndDelete(t *testing.T) {
 	defer store.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	client := &fakeGit{}
-	manager, err := NewManager(ctx, store, client, ManagerConfig{Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond, CloneBaseURL: "http://git-server:8080/git", CleanupPeriod: time.Hour})
+	manager, err := NewManager(ctx, store, client, ManagerConfig{Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond, CleanupPeriod: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestManagerSyncCoalescesPendingRequest(t *testing.T) {
 	defer store.Close()
 	manager, err := NewManager(context.Background(), store, &fakeGit{}, ManagerConfig{
 		Workers: 1, MaxRetries: 1, RetryBase: time.Millisecond, RetryMax: time.Millisecond,
-		CloneBaseURL: "http://git-server:8080/git", CleanupPeriod: time.Hour,
+		CleanupPeriod: time.Hour,
 	})
 	if err != nil {
 		t.Fatal(err)

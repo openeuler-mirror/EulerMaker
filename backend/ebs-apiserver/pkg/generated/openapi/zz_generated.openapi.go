@@ -14,7 +14,6 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"ebs-api/ebs/v1.ArtifactManagerInstance": schema_ebs_api_ebs_v1_ArtifactManagerInstance(ref),
 		"ebs-api/ebs/v1.BaseBuildRef":            schema_ebs_api_ebs_v1_BaseBuildRef(ref),
 		"ebs-api/ebs/v1.BootstrapRepo":           schema_ebs_api_ebs_v1_BootstrapRepo(ref),
 		"ebs-api/ebs/v1.Build":                   schema_ebs_api_ebs_v1_Build(ref),
@@ -37,7 +36,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.ConfigList":              schema_ebs_api_ebs_v1_ConfigList(ref),
 		"ebs-api/ebs/v1.ConfigSpec":              schema_ebs_api_ebs_v1_ConfigSpec(ref),
 		"ebs-api/ebs/v1.DcgNodeState":            schema_ebs_api_ebs_v1_DcgNodeState(ref),
-		"ebs-api/ebs/v1.GitServerConfig":         schema_ebs_api_ebs_v1_GitServerConfig(ref),
 		"ebs-api/ebs/v1.Job":                     schema_ebs_api_ebs_v1_Job(ref),
 		"ebs-api/ebs/v1.JobBuildResult":          schema_ebs_api_ebs_v1_JobBuildResult(ref),
 		"ebs-api/ebs/v1.JobInstallResult":        schema_ebs_api_ebs_v1_JobInstallResult(ref),
@@ -75,6 +73,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.ScriptRef":               schema_ebs_api_ebs_v1_ScriptRef(ref),
 		"ebs-api/ebs/v1.ScriptSpec":              schema_ebs_api_ebs_v1_ScriptSpec(ref),
 		"ebs-api/ebs/v1.ServiceConfigContent":    schema_ebs_api_ebs_v1_ServiceConfigContent(ref),
+		"ebs-api/ebs/v1.ServiceEndpoints":        schema_ebs_api_ebs_v1_ServiceEndpoints(ref),
 		"ebs-api/ebs/v1.Snapshot":                schema_ebs_api_ebs_v1_Snapshot(ref),
 		"ebs-api/ebs/v1.SnapshotList":            schema_ebs_api_ebs_v1_SnapshotList(ref),
 		"ebs-api/ebs/v1.SnapshotSpec":            schema_ebs_api_ebs_v1_SnapshotSpec(ref),
@@ -92,38 +91,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/iam/v1.User":                    schema_ebs_api_iam_v1_User(ref),
 		"ebs-api/iam/v1.UserList":                schema_ebs_api_iam_v1_UserList(ref),
 		"ebs-api/iam/v1.UserSpec":                schema_ebs_api_iam_v1_UserSpec(ref),
-	}
-}
-
-func schema_ebs_api_ebs_v1_ArtifactManagerInstance(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"internalURL": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-					"runnerInternalURL": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"runnerExternalURL": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-				},
-				Required: []string{"internalURL"},
-			},
-		},
 	}
 }
 
@@ -1021,26 +988,6 @@ func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.Ope
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.VersionConst"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_GitServerConfig(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"internalURL": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
-						},
-					},
-				},
-				Required: []string{"internalURL"},
-			},
-		},
 	}
 }
 
@@ -2577,7 +2524,7 @@ func schema_ebs_api_ebs_v1_ServiceConfigContent(ref common.ReferenceCallback) co
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.ArtifactManagerInstance"),
+										Ref:     ref("ebs-api/ebs/v1.ServiceEndpoints"),
 									},
 								},
 							},
@@ -2586,7 +2533,7 @@ func schema_ebs_api_ebs_v1_ServiceConfigContent(ref common.ReferenceCallback) co
 					"gitServer": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.GitServerConfig"),
+							Ref:     ref("ebs-api/ebs/v1.ServiceEndpoints"),
 						},
 					},
 				},
@@ -2594,7 +2541,39 @@ func schema_ebs_api_ebs_v1_ServiceConfigContent(ref common.ReferenceCallback) co
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.ArtifactManagerInstance", "ebs-api/ebs/v1.GitServerConfig"},
+			"ebs-api/ebs/v1.ServiceEndpoints"},
+	}
+}
+
+func schema_ebs_api_ebs_v1_ServiceEndpoints(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"internalURL": {
+						SchemaProps: spec.SchemaProps{
+							Default: "",
+							Type:    []string{"string"},
+							Format:  "",
+						},
+					},
+					"runnerInternalURL": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"runnerExternalURL": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+				},
+				Required: []string{"internalURL"},
+			},
+		},
 	}
 }
 

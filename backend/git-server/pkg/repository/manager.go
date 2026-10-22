@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +22,6 @@ type ManagerConfig struct {
 	MaxRetries    int
 	RetryBase     time.Duration
 	RetryMax      time.Duration
-	CloneBaseURL  string
 	CleanupPeriod time.Duration
 }
 
@@ -231,7 +229,7 @@ func (m *Manager) responseLocked(s *state) Response {
 	if s.SyncTime != nil {
 		t := *s.SyncTime
 		response.SyncTime = &t
-		response.CloneURL = strings.TrimRight(m.config.CloneBaseURL, "/") + "/" + (&url.URL{Path: s.Key}).EscapedPath()
+		response.ClonePath = (&url.URL{Path: "/git/" + s.Key}).EscapedPath()
 	}
 	return response
 }

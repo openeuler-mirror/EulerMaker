@@ -28,7 +28,7 @@ func (g *asyncGit) CheckSynced(context.Context, string, time.Time) (gitserver.Sy
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.checks++
-	return gitserver.SyncCheckResult{Synced: g.synced, CloneURL: "git://mirror/pkg"}, nil
+	return gitserver.SyncCheckResult{Synced: g.synced, CloneURL: "git-server:///git/example.com/pkg.git"}, nil
 }
 func (g *asyncGit) PublishSyncTask(context.Context, string) error {
 	g.mu.Lock()

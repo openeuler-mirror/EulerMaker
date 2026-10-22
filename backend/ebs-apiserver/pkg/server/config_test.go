@@ -72,8 +72,10 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 		{"build-resource", "default: {requests: {cpu: '4', memory: 8Gi}}", "default: {requests: {cpu: '8', memory: 16Gi}}"},
 		{
 			"service-config",
-			"artifactManagers: {default: {internalURL: 'http://artifact-manager:8081'}}\ngitServer: {internalURL: 'http://git-server:8080'}",
-			"artifactManagers: {art-01: {internalURL: 'http://artifact-manager.art-01:8081'}}\ngitServer: {internalURL: 'https://git-server:8443/git-prefix'}",
+			"artifactManagers: {default: {internalURL: 'http://artifact-manager:8081'}}\n" +
+				"gitServer: {internalURL: 'http://git-server:8080', runnerInternalURL: 'http://127.0.0.1:8084'}",
+			"artifactManagers: {art-01: {internalURL: 'http://artifact-manager.art-01:8081'}}\n" +
+				"gitServer: {internalURL: 'https://git-server:8443/git-prefix', runnerInternalURL: 'http://git.internal:8084', runnerExternalURL: 'https://git.example.com'}",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) { testConfigHTTPCreateUpdateAndRead(t, tc.name, tc.initial, tc.updated) })
@@ -295,6 +297,9 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	}
 	if got := services.GitServer.InternalURL; got != "http://git-server:8080" {
 		t.Fatalf("default Git Server URL: %q", got)
+	}
+	if got := services.GitServer.RunnerInternalURL; got != "http://127.0.0.1:8084" {
+		t.Fatalf("default Git Server Runner URL: %q", got)
 	}
 	if got := services.ArtifactManagers["default"].InternalURL; got != "http://artifact-manager:8081" {
 		t.Fatalf("default Compose artifact manager URL: %q", got)

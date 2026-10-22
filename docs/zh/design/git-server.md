@@ -132,7 +132,7 @@ IPv4 地址按普通 host 处理。IPv6 地址去掉 URL 方括号后按上述�
 2. 重新按上述规则取得最终父目录 FD，不能复用未经校验的字符串路径；
 3. 使用 `renameat2(tmpDirFD, cloneName, finalParentFD, repositoryName, RENAME_NOREPLACE)` 原子移动，禁止覆盖任何已存在对象；
 4. rename 成功后，通过 `openat2(finalParentFD, repositoryName, ...)` 打开最终仓库，确认仍是合法 bare repository，且 device/inode 与移动前一致；
-5. 对最终仓库的必要数据和 `finalParentFD` 执行 `fsync`。全部成功后才更新 SyncTime 并提供 CloneURL。
+5. 对最终仓库的必要数据和 `finalParentFD` 执行 `fsync`。全部成功后才更新 SyncTime 并提供 ClonePath。
 
 `RENAME_NOREPLACE` 返回 `EEXIST` 时，必须重新安全打开并分类最终对象：合法 bare repository 表示已有可用仓库，当前 Worker 清理自己的临时目录，并在同一操作内按该仓库保存的 origin 执行 fetch，只有 fetch 成功才把本次 sync 记为成功；符号链接、普通文件或非法仓库返回 `RepositoryConflict`。不得覆盖、跟随或自动删除冲突对象。理论上源和目标都位于 dataDir 的同一文件系统；出现 `EXDEV` 视为内部存储配置错误。
 
@@ -196,12 +196,12 @@ Content-Type: application/json
 ```json
 {
   "key": "gitee.com/src-openeuler/gcc.git",
-  "clone_url": "http://git-server:8080/git/gitee.com/src-openeuler/gcc.git",
+  "clone_path": "/git/gitee.com/src-openeuler/gcc.git",
   "sync_time": "2026-09-09T02:30:00Z"
 }
 ```
 
-sync 只表示服务已经记录同步意图，不保证本次同步已经完成。仓库曾成功同步且尚未删除时返回 `clone_url` 和 `sync_time`；首次同步尚未成功时只返回 `key`。调用方不区分重复 sync 请求，也不等待某一次请求完成：存在 `sync_time` 和 `clone_url` 时可以尝试 clone，否则稍后重新查询 status。
+sync 只表示服务已经记录同步意图，不保证本次同步已经完成。仓库曾成功同步且尚未删除时返回 `clone_path` 和 `sync_time`；首次同步尚未成功时只返回 `key`。调用方不区分重复 sync 请求，也不等待某一次请求完成：存在 `sync_time` 和 `clone_path` 时可以尝试 clone，否则稍后重新查询 status。
 
 URL 非法返回 `400 Bad Request`，队列已经关闭返回 `503 Service Unavailable`。相同 key 已经排队、执行或等待自动重试的相同 sync 请求直接合并，返回当前状态且不创建新同步周期；同步周期终结后再次请求 sync 才创建新周期。sync 与 delete 相互切换时仍更新为最新意图。队列保证同一个仓库不会被并行同步。
 
@@ -221,14 +221,18 @@ Content-Type: application/json
 ```json
 {
   "key": "gitee.com/src-openeuler/gcc.git",
-  "clone_url": "http://git-server:8080/git/gitee.com/src-openeuler/gcc.git",
+  "clone_path": "/git/gitee.com/src-openeuler/gcc.git",
   "sync_time": "2026-09-09T02:30:00Z"
 }
 ```
 
-仓库存在于状态 map 时返回 `200 OK`。最近一次后台操作失败时额外包含 `error` 和 `retry_count`；已有仓库同步失败不会清除上一次成功的 `sync_time` 和 `clone_url`，因此旧内容仍可 clone。仓库从未出现，或已完成删除且当前没有待处理 sync 意图时返回 `404 Not Found`。
+仓库存在于状态 map 时返回 `200 OK`。最近一次后台操作失败时额外包含 `error` 和 `retry_count`；已有仓库同步失败不会清除上一次成功的 `sync_time` 和 `clone_path`，因此旧内容仍可 clone。仓库从未出现，或已完成删除且当前没有待处理 sync 意图时返回 `404 Not Found`。
 
-返回 `clone_url` 后，调用方可以直接执行 `git clone clone_url`，不读取本地存储路径，也不自行实现 URL 到仓库 key 的转换。后续 fetch 与 clone 可以并发，因此 clone 可能读取到同步前或同步后的 refs；调用方已明确不要求关联某一次 sync。`sync_time` 只表示最近一次成功同步时间。
+`clone_path` 是以 `/git/` 开头的 URL path，包含已转义的仓库 key，不包含服务地址、查询参数或片段，不是本地存储路径。例如 key 中的字面量 `%2B` 在路径中表示为 `%252B`；调用方必须保留转义，不能重复编码。手动克隆时，将可访问的 HTTP(S) 服务入口与该路径拼接后交给 Git。后续 fetch 与 clone 可以并发，因此 clone 可能读取到同步前或同步后的 refs；`sync_time` 只表示最近一次成功同步时间。
+
+Controller Manager 的 Git Server 客户端将 `clone_path` 前加 `git-server://`，生成 `git-server:///git/gitee.com/src-openeuler/gcc.git`。空 authority 表示当前唯一的 Git Server；Snapshot `status.packageRepoStatuses[repoName].cloneUrl` 和 Job payload `clone_url` 保存此逻辑地址，字段名不变。客户端不拼接 `gitServer.internalURL`，管理面地址不必对 Runner 可达。
+
+**阶段边界**：Runner 的逻辑地址解析尚未实现。本阶段 Runner 仍原样保存 `clone_url`，默认脚本直接执行 `git clone`，不能使用 `git-server:///` 完成镜像克隆；需要后续补齐 Runner 地址解析才能启用完整构建链路。
 
 ### 4.3 删除仓库
 
@@ -243,12 +247,12 @@ Content-Type: application/json
 
 合法请求加入队列后返回 `202 Accepted`，响应只包含 `key`。同步和删除使用相同仓库队列串行执行。删除不存在的仓库直接返回 `204 No Content`。
 
-sync 和 status 使用统一的状态响应字段；尚无成功同步结果时省略 `clone_url` 和 `sync_time`：
+sync 和 status 使用统一的状态响应字段；尚无成功同步结果时省略 `clone_path` 和 `sync_time`：
 
 ```go
 type RepositoryResponse struct {
     Key        string           `json:"key"`
-    CloneURL   string           `json:"clone_url,omitempty"`
+    ClonePath  string           `json:"clone_path,omitempty"`
     SyncTime   *time.Time       `json:"sync_time,omitempty"`
     RetryCount int              `json:"retry_count,omitempty"`
     Error      *RepositoryError `json:"error,omitempty"`
@@ -364,13 +368,13 @@ type RepositoryState struct {
 }
 ```
 
-`SyncTime != nil` 表示最终路径存在一份至少成功同步过一次、尚未完成删除的裸仓库；此时 API 可以返回 CloneURL。同步成功时更新 SyncTime；后续同步失败不清除它；删除成功时必须清除 SyncTime。`Error` 至少包含稳定的 `code`、脱敏后的 `message` 和 `retryable`，表示最近一次后台操作错误。`operationPending` 表示当前 revision 尚在队列、执行中或等待自动重试；同一状态下的重复 sync 请求据此合并。创建新的非合并显式意图时清除旧的 Error 和 RetryCount。
+`SyncTime != nil` 表示最终路径存在一份至少成功同步过一次、尚未完成删除的裸仓库；此时 API 可以返回 ClonePath。同步成功时更新 SyncTime；后续同步失败不清除它；删除成功时必须清除 SyncTime。`Error` 至少包含稳定的 `code`、脱敏后的 `message` 和 `retryable`，表示最近一次后台操作错误。`operationPending` 表示当前 revision 尚在队列、执行中或等待自动重试；同一状态下的重复 sync 请求据此合并。创建新的非合并显式意图时清除旧的 Error 和 RetryCount。
 
 状态 map 的值必须是 `*RepositoryState`。对象一经创建，在进程生命周期内不得替换或从 map 删除；这样同仓库的 operationLock 始终是同一个锁。读取任务参数时只复制 DesiredAction、OriginURL 和内部 revision，禁止复制包含互斥锁的 RepositoryState。
 
 队列意图、错误、重试次数和 SyncTime 都只保存在内存，不向裸仓库写入额外状态文件。同步成功时，Worker 使用本次操作完成时的 UTC 时间更新 SyncTime。
 
-服务启动时递归扫描 `${dataDir}`，跳过 `.tmp`，将结构合法的 bare repository 恢复到状态 map，并从 `remote.origin.url` 恢复 OriginURL；内部 revision 为 0，SyncTime 固定恢复为空。重启后即使本地仓库完整存在，status 也暂不返回 `sync_time` 和 `clone_url`；调用方重新提交 sync，下一次 fetch 成功后重新生成 SyncTime 并恢复 clone URL。裸仓库格式非法、origin 缺失或无法解析时记录错误且不加入可用状态，不自动删除。扫描完成前 readiness 失败。
+服务启动时递归扫描 `${dataDir}`，跳过 `.tmp`，将结构合法的 bare repository 恢复到状态 map，并从 `remote.origin.url` 恢复 OriginURL；内部 revision 为 0，SyncTime 固定恢复为空。重启后即使本地仓库完整存在，status 也暂不返回 `sync_time` 和 `clone_path`；调用方重新提交 sync，下一次 fetch 成功后重新生成 SyncTime 并恢复 clone path。裸仓库格式非法、origin 缺失或无法解析时记录错误且不加入可用状态，不自动删除。扫描完成前 readiness 失败。
 
 ### 5.2 队列和最新意图
 
@@ -577,7 +581,7 @@ http://git-server:8080/git/gitee.com/src-openeuler/gcc.git
 
 每次执行显式配置 `http.uploadpack=true`、`http.receivepack=false`、`http.getanyfile=false`，不受仓库中同名配置覆盖。透传 `Git-Protocol` 支持协议 v2，不提供 push、Dumb HTTP、LFS 或任意文件下载。
 
-Handler 只允许访问 Manager 登记的可用仓库，拒绝 `.tmp` 和非法路径；最终目录经过现有安全路径检查后才交给 backend。`GIT_PROJECT_ROOT` 固定为本次选中的仓库目录，使用 `GIT_HTTP_EXPORT_ALL=1`，不要求创建 `git-daemon-export-ok`。启动恢复确认可用的仓库允许克隆，不要求 SyncTime 非空。仓库 key 中的百分号等字符在生成 clone URL 时再次进行 URL path 编码，以保持 URL 解码后的 key 与磁盘目录一致。
+Handler 只允许访问 Manager 登记的可用仓库，拒绝 `.tmp` 和非法路径；最终目录经过现有安全路径检查后才交给 backend。`GIT_PROJECT_ROOT` 固定为本次选中的仓库目录，使用 `GIT_HTTP_EXPORT_ALL=1`，不要求创建 `git-daemon-export-ok`。启动恢复确认可用的仓库允许克隆，不要求 SyncTime 非空。仓库 key 中的百分号等字符在生成 clone path 时再次进行 URL path 编码，以保持 URL 解码后的 key 与磁盘目录一致。
 
 并发请求由 `--clone-workers` 限制，达到上限返回 `503 CloneBusy` 和 `Retry-After: 5`。单个请求复用 `--operation-timeout`，取消或超时终止整个 backend 进程组。协商请求正文上限为 10 MiB，pack 响应流式传输，不整体缓存；输出开始后的错误中断连接，不向 Git 数据流追加 JSON。
 
@@ -600,7 +604,6 @@ git-server \
   --max-request-body-bytes=65536 \
   --max-command-output-bytes=16777216 \
   --clone-workers=100 \
-  --clone-base-url=http://git-server:8080/git \
   --allow-insecure-http-auth=false \
   --auth-config=/etc/git-server/auth.toml
 ```
@@ -618,13 +621,12 @@ git-server \
 | `--max-request-body-bytes` | `65536` | HTTP JSON 请求正文的最大字节数 |
 | `--max-command-output-bytes` | `16777216` | `/command` 最大输出字节数 |
 | `--clone-workers` | `100` | Smart HTTP 同时处理的最大请求数，与同步 Worker 独立 |
-| `--clone-base-url` | `http://git-server:8080/git` | 生成 `clone_url` 的 HTTP(S) 基础地址，包含 `/git` 或代理映射的路径 |
 | `--allow-insecure-http-auth` | `false` | 是否允许通过明文 HTTP 使用用户名和密码；生产环境必须保持关闭 |
 | `--auth-config` | 无 | 远端 Git 认证 TOML 文件，未配置时只允许匿名访问远端仓库 |
 
-`clone-base-url` 必须来自启动参数，不能根据 HTTP 请求的 `Host` header 推断；只允许不带 userinfo、query、fragment 的 HTTP(S) URL。`workers`、`clone-workers`、超时、重试次数、退避参数和输出限制必须在启动时完成范围校验，非法值导致进程启动失败。
+Git Server 仅返回与部署地址无关的 `clone_path`，不根据请求 Host 推断克隆地址。`workers`、`clone-workers`、超时、重试次数、退避参数和输出限制必须在启动时完成范围校验，非法值导致进程启动失败。
 
-Controller Manager 访问本服务的管理地址由 `Config/service-config` 的 `gitServer.internalURL` 提供，配置契约见 [服务配置](data-models~config.md#4-服务配置内容)。该地址不替代 `clone-base-url`；同步响应中的 `clone_url` 仍须从 Runner 与构建容器可达。
+Controller Manager 访问本服务的管理地址由 `Config/service-config` 的 `gitServer.internalURL` 提供，配置契约见 [服务配置](data-models~config.md#4-服务配置内容)。克隆逻辑地址及当前 Runner 实现边界见同步与状态响应契约。
 
 只有远端 Git 认证信息保存在 TOML 文件中：
 
@@ -657,7 +659,7 @@ ca = """-----BEGIN CERTIFICATE-----
 
 ## 9. 部署
 
-`hacks/docker-compose.yml` 使用宿主机 `/srv/git` 持久化仓库，管理与克隆共用容器端口 `8080`，宿主机映射为 `8084:8080`，通过 `EXPORT_SERVER_ADDR` 配置构建节点可达地址。Kubernetes 模板使用单副本 Deployment、独占 PVC 和 8080 端口。
+`hacks/docker-compose.yml` 使用宿主机 `/srv/git` 持久化仓库，管理与克隆共用容器端口 `8080`，宿主机映射为 `8084:8080`。克隆路径不包含部署地址；手动访问时使用宿主机地址与映射端口。Kubernetes 模板使用单副本 Deployment、独占 PVC 和 8080 端口。
 
 生产部署要求：
 
@@ -690,7 +692,7 @@ readiness 检查数据目录可读写且 Worker 已启动；单个远端仓库�
 - 父目录并发创建、符号链接替换、`RENAME_NOREPLACE` 冲突和 rename 前后 device/inode 校验；
 - 启动扫描、发布、删除和临时目录清理均不能逃逸 dataDir 或跟随符号链接；
 - 首次 clone、重复同步和 fetch；
-- 服务重启后恢复已有 bare repository 和 origin，但 SyncTime 为空；再次 fetch 成功后恢复 sync_time 和 clone_url；
+- 服务重启后恢复已有 bare repository 和 origin，但 SyncTime 为空；再次 fetch 成功后恢复 sync_time 和 clone_path；
 - clone 失败、超时和进程重启后的临时目录清理；
 - 删除隔离目录清理失败不恢复 SyncTime，并能由后台清理器重试；
 - 后台清理器跳过 active 和未知条目，不跟随符号链接；

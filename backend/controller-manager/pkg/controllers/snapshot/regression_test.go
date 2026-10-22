@@ -66,9 +66,9 @@ func TestCommitConflictPreservesCloneURLAndCanonicalIdentity(t *testing.T) {
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{first, second})
 	snapshot.Status.PackageRepoStatuses = map[string]ebsv1.PackageRepoStatus{"first": {CommitID: strings.Repeat("a", 40)}}
 	c := newTestController(t, &fakeClient{snapshot: snapshot, build: build}, &fakeGitClient{}, Config{})
-	c.mergeResults(snapshot, []resolveResult{{repo: second, state: stateResolved, status: ebsv1.PackageRepoStatus{CommitID: strings.Repeat("b", 40), CloneURL: "git://mirror/pkg.git"}}})
+	c.mergeResults(snapshot, []resolveResult{{repo: second, state: stateResolved, status: ebsv1.PackageRepoStatus{CommitID: strings.Repeat("b", 40), CloneURL: "git-server:///git/example.com/pkg.git"}}})
 	got := snapshot.Status.PackageRepoStatuses["second"]
-	if got.Error == nil || got.Error.Code != ebsv1.SpecCommitCommitConflict || got.CommitID != "" || got.CloneURL != "git://mirror/pkg.git" {
+	if got.Error == nil || got.Error.Code != ebsv1.SpecCommitCommitConflict || got.CommitID != "" || got.CloneURL != "git-server:///git/example.com/pkg.git" {
 		t.Fatalf("status=%+v", got)
 	}
 }

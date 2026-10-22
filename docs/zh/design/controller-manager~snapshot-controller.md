@@ -91,7 +91,7 @@ type GitServerClient interface {
     // sync_time != nil && sync_time >= baseline。
     // 仓库尚无本地副本、尚未首次同步或同步时间早于 baseline 时返回
     // SyncCheckResult{Synced:false}, nil。
-    // 确认同步完成时同时返回 git-server 响应中的 CloneURL。
+    // 确认同步完成时将响应 clone_path 转为 git-server:/// 逻辑地址并返回 CloneURL。
     CheckSynced(ctx context.Context, originURL string, baseline time.Time) (SyncCheckResult, error)
 
     // ResolveFullRef 通过 POST /command 从已就绪的镜像解析完整 refs/... 引用。
@@ -148,13 +148,13 @@ HTTP 及协议结果必须在客户端内按以下规则归一化：400/422 且�
 - Snapshot Controller 只调用上述三个方法，不直接构造 `/status`、`/command` 请求，不解析 `RepositoryResponse` 或 `CommandResponse`。
 - `PublishSyncTask` 只负责幂等发布同步任务，不等待同步完成。
 - `CheckSynced` 返回 `SyncCheckResult{Synced:false}, nil` 是正常的“尚未就绪”结果，不计为一次 git-server 请求失败；HTTP 404、响应无 `sync_time` 或 `sync_time < baseline` 均归一化为该结果，此时 `CloneURL` 必须为空。
-- `CheckSynced` 仅在 `sync_time >= baseline` 且响应包含非空 `clone_url` 时返回 `SyncCheckResult{Synced:true, CloneURL:...}, nil`；同步时间达标但缺少 `clone_url` 属于 git-server 响应异常，返回临时错误。
+- `CheckSynced` 仅在 `sync_time >= baseline` 且响应包含合法 `clone_path` 时返回 `SyncCheckResult{Synced:true, CloneURL:...}, nil`；路径以 `/git/` 开头，无域名、查询参数、片段和路径穿越。客户端保留路径转义并加 `git-server://` 前缀；同步时间达标但路径缺失或非法时返回临时错误。
 - `ResolveFullRef` 校验完整 `refs/...` 后解析 `<ref>^{commit}`，不补 heads/tags 前缀。通过参数数组调用只读 `/command` 并校验输出，不执行 shell；Controller 不自行拼接命令数组。
 - `ResolveCommitID` 校验完整 40 位小写 SHA 后验证 `<commitID>^{commit}`，结果必须等于输入。错误分类与 ResolveFullRef 相同，不存在时记录 ResolveFailed，不回退 ref。固定提交同样先等待同步，沿用同步状态返回的 cloneUrl。
 - 相同仓库已经排队或正在执行同步时，git-server 合并重复发布；Controller 不依赖某次请求的操作 ID。
 - `PackageRepo.url` 和完整 Git ref 均是不可信输入，客户端必须执行防御性校验；违反约束返回 `GitServerError{Kind: Validation}`。该复核不替代 apiserver 的权威准入校验。
 - 所有方法都必须遵守传入 context；context 取消或超时后及时返回。
-- L1 TTL 缓存属于客户端实现。同步状态缓存以规范化仓库 URL 为 key，同时缓存原始 `sync_time` 和 `clone_url`，每次调用仍使用本次 baseline 比较；不得仅缓存某次 `CheckSynced` 的布尔结果。`ResolveFullRef` 不跨调用缓存引用解析结果，避免仓库完成新一轮同步后仍返回旧引用结果。
+- L1 TTL 缓存属于客户端实现。同步状态缓存以规范化仓库 URL 为 key，同时缓存原始 `sync_time` 和 `clone_path`，每次调用仍使用本次 baseline 比较；不得仅缓存某次 `CheckSynced` 的布尔结果。`ResolveFullRef` 不跨调用缓存引用解析结果，避免仓库完成新一轮同步后仍返回旧引用结果。
 - 客户端实现可以提供 `PublishSyncTask`、`GetSyncStatus`、`ExecuteCommand` 等底层私有方法，但这些方法不属于 Controller 接口。
 
 `UpdateSnapshotStatus` 必须验证成功响应非 nil、UID 与请求对象一致、resourceVersion 非空。任一成功响应异常都包装为 `WriteUnknown`。
@@ -430,7 +430,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 `PackageRepoStatus` 必须满足以下约束：
 
 - 原始仓库地址只保留在 `Snapshot.spec.packageRepos[].url`，`PackageRepoStatus` 不重复保存；规范化 URL 仅用于内部比较和缓存；
-- 所有引用在 git-server 确认同步完成后写入其返回的非空 `cloneUrl`；后续解析成功或失败均保留该值；
+- 所有引用在 Git Server 客户端确认同步完成后写入其返回的非空逻辑 `cloneUrl`；后续解析成功或失败均保留该值；
 - 同步确认前发生的失败允许 `cloneUrl` 为空；
 - 成功：`commitId` 非空且 `error=nil`；
 - 失败：`commitId` 为空且 `error!=nil`；
@@ -661,7 +661,7 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 - `go test -race` 无竞态；
 - 固定 worker 数不超过 `min(resolveWorkers, 待解析包数)`，且不会为每个包创建 goroutine；
 - budgetCtx 取消后 worker 停止领取任务并全部退出；未派发及因预算中断的任务各生成一次 Deferred，已有完成结果保持不变；
-- 所有引用成功同步后记录 git-server CloneURL；原始仓库地址仅从 `spec.packageRepos` 读取；
+- 所有引用成功同步后记录客户端生成的 `git-server:///git/...` 逻辑 CloneURL；原始仓库地址仅从 `spec.packageRepos` 读取；
 - 跨轮失败计数 map 并发安全；
 - condition 消毒（去除换行、截断至 200 runes）；
 - Snapshot 整体 condition type 只产生 `InvalidPackageRepos` 或 `TargetPackagesNotFound`，包名不会进入 condition type；

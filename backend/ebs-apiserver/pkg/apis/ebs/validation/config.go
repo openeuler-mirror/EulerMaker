@@ -153,13 +153,7 @@ func validateEffectiveResourceLevels(path *field.Path, levels ...ebsv1.ResourceR
 func validateServiceConfigContent(obj *ebsv1.ServiceConfigContent) field.ErrorList {
 	path := field.NewPath("spec", "content", "artifactManagers")
 	var errs field.ErrorList
-	gitPath := field.NewPath("spec", "content", "gitServer", "internalURL")
-	if obj.GitServer.InternalURL == "" {
-		errs = append(errs, field.Required(gitPath, "internalURL is required"))
-	} else if !validServiceURL(obj.GitServer.InternalURL) {
-		errs = append(errs, field.Invalid(gitPath, "<redacted>",
-			"must be an absolute HTTP(S) URL without credentials, query, fragment or whitespace"))
-	}
+	errs = append(errs, validateServiceEndpoints(field.NewPath("spec", "content", "gitServer"), obj.GitServer)...)
 	if len(obj.ArtifactManagers) == 0 {
 		errs = append(errs, field.Required(path, "at least one instance is required"))
 	}
@@ -168,23 +162,24 @@ func validateServiceConfigContent(obj *ebsv1.ServiceConfigContent) field.ErrorLi
 		if reasons := validation.IsDNS1123Label(name); len(reasons) != 0 {
 			errs = append(errs, field.Invalid(p, name, strings.Join(reasons, "; ")))
 		}
-		if instance.InternalURL == "" {
-			errs = append(errs, field.Required(p.Child("internalURL"), "internalURL is required"))
-		}
-		for _, address := range []struct {
-			field, value string
-		}{
-			{"internalURL", instance.InternalURL},
-			{"runnerInternalURL", instance.RunnerInternalURL},
-			{"runnerExternalURL", instance.RunnerExternalURL},
-		} {
-			if address.value == "" {
-				continue
-			}
-			if !validServiceURL(address.value) {
-				detail := "must be an absolute HTTP(S) URL without credentials, query, fragment or whitespace"
-				errs = append(errs, field.Invalid(p.Child(address.field), "<redacted>", detail))
-			}
+		errs = append(errs, validateServiceEndpoints(p, instance)...)
+	}
+	return errs
+}
+
+func validateServiceEndpoints(path *field.Path, endpoints ebsv1.ServiceEndpoints) field.ErrorList {
+	var errs field.ErrorList
+	if endpoints.InternalURL == "" {
+		errs = append(errs, field.Required(path.Child("internalURL"), "internalURL is required"))
+	}
+	for _, address := range []struct{ field, value string }{
+		{"internalURL", endpoints.InternalURL},
+		{"runnerInternalURL", endpoints.RunnerInternalURL},
+		{"runnerExternalURL", endpoints.RunnerExternalURL},
+	} {
+		if address.value != "" && !validServiceURL(address.value) {
+			detail := "must be an absolute HTTP(S) URL without credentials, query, fragment or whitespace"
+			errs = append(errs, field.Invalid(path.Child(address.field), "<redacted>", detail))
 		}
 	}
 	return errs

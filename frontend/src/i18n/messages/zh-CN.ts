@@ -541,8 +541,9 @@ export default {
   },
   serviceConfig: {
     title: "服务配置",
-    hint: "管理 Git Server 控制面地址，以及 Artifact Manager 各实例的控制面和 Runner 访问地址。未指定制品实例的工程使用 default。",
+    hint: "管理 Git Server 和 Artifact Manager 各实例的控制面及 Runner 访问地址。未指定制品实例的工程使用 default。",
     gitServer: "Git Server",
+    gitRunnerPending: "Git Server 的 Runner 地址可保存配置，Runner 地址解析尚未实现。",
     artifactManagers: "Artifact Manager",
     loading: "正在加载服务配置",
     addInstance: "添加实例",

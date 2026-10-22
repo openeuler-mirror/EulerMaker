@@ -1,12 +1,12 @@
-export type ArtifactInstance = {
+export type ServiceEndpoints = {
   internalURL: string;
   runnerInternalURL: string;
   runnerExternalURL: string;
 };
 
 export type ServiceConfigContent = {
-  artifactManagers: Record<string, ArtifactInstance>;
-  gitServer: { internalURL: string };
+  artifactManagers: Record<string, ServiceEndpoints>;
+  gitServer: ServiceEndpoints;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -15,17 +15,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function parseServiceContent(content: unknown): ServiceConfigContent {
   if (!isRecord(content) || Object.keys(content).some(key => !['artifactManagers', 'gitServer'].includes(key)) ||
-    !isRecord(content.artifactManagers) || !Object.keys(content.artifactManagers).length ||
-    !isRecord(content.gitServer) || typeof content.gitServer.internalURL !== 'string' ||
-    Object.keys(content.gitServer).some(key => key !== 'internalURL')) throw new Error('serviceConfig.invalidContent');
-  const entries = Object.entries(content.artifactManagers).map(([name, value]) => {
-    if (!isRecord(value) || Object.keys(value).some(key => !['internalURL', 'runnerInternalURL', 'runnerExternalURL'].includes(key)) ||
-      typeof value.internalURL !== 'string' || (value.runnerInternalURL !== undefined && typeof value.runnerInternalURL !== 'string') ||
-      (value.runnerExternalURL !== undefined && typeof value.runnerExternalURL !== 'string')) throw new Error('serviceConfig.invalidContent');
-    return [name, { internalURL: value.internalURL,
-      runnerInternalURL: value.runnerInternalURL || '', runnerExternalURL: value.runnerExternalURL || '' }] as const;
-  });
-  return { artifactManagers: Object.fromEntries(entries), gitServer: { internalURL: content.gitServer.internalURL } };
+    !isRecord(content.artifactManagers) || !Object.keys(content.artifactManagers).length) throw new Error('serviceConfig.invalidContent');
+  const entries = Object.entries(content.artifactManagers).map(([name, value]) => [name, parseEndpoints(value)]);
+  return { artifactManagers: Object.fromEntries(entries), gitServer: parseEndpoints(content.gitServer) };
+}
+
+function parseEndpoints(value: unknown): ServiceEndpoints {
+  if (!isRecord(value) || Object.keys(value).some(key => !['internalURL', 'runnerInternalURL', 'runnerExternalURL'].includes(key)) ||
+    typeof value.internalURL !== 'string' || (value.runnerInternalURL !== undefined && typeof value.runnerInternalURL !== 'string') ||
+    (value.runnerExternalURL !== undefined && typeof value.runnerExternalURL !== 'string')) throw new Error('serviceConfig.invalidContent');
+  return { internalURL: value.internalURL,
+    runnerInternalURL: value.runnerInternalURL || '', runnerExternalURL: value.runnerExternalURL || '' };
 }
 
 export function validServiceURL(value: string, optional = false): boolean {
@@ -41,10 +41,10 @@ export function validServiceURL(value: string, optional = false): boolean {
 }
 
 export function buildServiceContent(
-  instances: Array<ArtifactInstance & { name: string }>, gitServerURL: string,
+  instances: Array<ServiceEndpoints & { name: string }>, gitServer: ServiceEndpoints,
 ): ServiceConfigContent {
   if (!instances.length) throw new Error('serviceConfig.invalidContent');
-  if (!validServiceURL(gitServerURL)) throw new Error('serviceConfig.invalidURL');
+  validateEndpoints(gitServer);
   const names = new Set<string>();
   for (const instance of instances) {
     if (instance.name.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(instance.name)) {
@@ -52,12 +52,16 @@ export function buildServiceContent(
     }
     if (names.has(instance.name)) throw new Error('serviceConfig.duplicateName');
     names.add(instance.name);
-    if (!validServiceURL(instance.internalURL) || !validServiceURL(instance.runnerInternalURL, true) ||
-      !validServiceURL(instance.runnerExternalURL, true)) throw new Error('serviceConfig.invalidURL');
+    validateEndpoints(instance);
   }
   return {
     artifactManagers: Object.fromEntries(instances.map(({ name, internalURL, runnerInternalURL, runnerExternalURL }) =>
       [name, { internalURL, runnerInternalURL, runnerExternalURL }])),
-    gitServer: { internalURL: gitServerURL },
+    gitServer: { ...gitServer },
   };
+}
+
+function validateEndpoints(endpoints: ServiceEndpoints): void {
+  if (!validServiceURL(endpoints.internalURL) || !validServiceURL(endpoints.runnerInternalURL, true) ||
+    !validServiceURL(endpoints.runnerExternalURL, true)) throw new Error('serviceConfig.invalidURL');
 }

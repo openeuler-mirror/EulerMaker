@@ -3,7 +3,6 @@ package options
 import (
 	"flag"
 	"fmt"
-	"net/url"
 	"time"
 )
 
@@ -19,7 +18,6 @@ type Options struct {
 	MaxRequestBodyBytes   int64
 	MaxCommandOutputBytes int64
 	CloneWorkers          int
-	CloneBaseURL          string
 	AllowInsecureHTTPAuth bool
 	AuthConfig            string
 	ShutdownTimeout       time.Duration
@@ -39,7 +37,6 @@ func Parse(args []string) (Options, error) {
 	fs.Int64Var(&result.MaxRequestBodyBytes, "max-request-body-bytes", 65536, "maximum JSON request body")
 	fs.Int64Var(&result.MaxCommandOutputBytes, "max-command-output-bytes", 16777216, "maximum command output")
 	fs.IntVar(&result.CloneWorkers, "clone-workers", 100, "maximum concurrent Smart HTTP requests")
-	fs.StringVar(&result.CloneBaseURL, "clone-base-url", "http://git-server:8080/git", "HTTP(S) base URL returned to clone clients, including /git")
 	fs.BoolVar(&result.AllowInsecureHTTPAuth, "allow-insecure-http-auth", false, "allow credentials over plain HTTP")
 	fs.StringVar(&result.AuthConfig, "auth-config", "", "authentication TOML file")
 	fs.DurationVar(&result.ShutdownTimeout, "shutdown-timeout", 30*time.Second, "graceful HTTP shutdown timeout")
@@ -48,10 +45,6 @@ func Parse(args []string) (Options, error) {
 	}
 	if result.DataDir == "" || result.ListenAddress == "" || result.Workers <= 0 || result.OperationTimeout <= 0 || result.MaxRetries < 0 || result.RetryBaseDelay <= 0 || result.RetryMaxDelay < result.RetryBaseDelay || result.TempCleanupInterval <= 0 || result.MaxRequestBodyBytes <= 0 || result.MaxCommandOutputBytes <= 0 || result.ShutdownTimeout <= 0 {
 		return Options{}, fmt.Errorf("invalid git-server options")
-	}
-	parsed, err := url.Parse(result.CloneBaseURL)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return Options{}, fmt.Errorf("clone-base-url must be an absolute HTTP(S) URL without credentials, query or fragment")
 	}
 	if result.CloneWorkers <= 0 {
 		return Options{}, fmt.Errorf("clone-workers must be positive")

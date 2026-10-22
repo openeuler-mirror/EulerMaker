@@ -106,11 +106,11 @@ func (f *fakeClient) Load(_ context.Context) (*ebsv1.ServiceConfigContent, error
 		return nil, err
 	}
 	content := &ebsv1.ServiceConfigContent{
-		GitServer:        ebsv1.GitServerConfig{InternalURL: "http://git-server:8080"},
-		ArtifactManagers: make(map[string]ebsv1.ArtifactManagerInstance),
+		GitServer:        ebsv1.ServiceEndpoints{InternalURL: "http://git-server:8080"},
+		ArtifactManagers: make(map[string]ebsv1.ServiceEndpoints),
 	}
 	for instance, address := range f.artifactEndpoints {
-		content.ArtifactManagers[instance] = ebsv1.ArtifactManagerInstance{InternalURL: address}
+		content.ArtifactManagers[instance] = ebsv1.ServiceEndpoints{InternalURL: address}
 	}
 	return content, nil
 }

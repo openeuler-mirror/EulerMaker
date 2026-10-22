@@ -33,11 +33,11 @@ type ConfigList struct {
 type ConfigVisibility string
 
 const (
-	ConfigVisibilityPublic    ConfigVisibility = "Public"
-	ConfigVisibilityOpsOnly   ConfigVisibility = "OpsOnly"
-	BuildTargetConfigName                      = "build-target"
-	BuildResourceConfigName                    = "build-resource"
-	ServiceConfigName                          = "service-config"
+	ConfigVisibilityPublic  ConfigVisibility = "Public"
+	ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
+	BuildTargetConfigName                    = "build-target"
+	BuildResourceConfigName                  = "build-resource"
+	ServiceConfigName                        = "service-config"
 )
 
 // +k8s:deepcopy-gen=true
@@ -68,17 +68,12 @@ type PackageResourceConfig struct {
 // ServiceConfigContent defines the service endpoints in Config/service-config.
 // +k8s:deepcopy-gen=true
 type ServiceConfigContent struct {
-	ArtifactManagers map[string]ArtifactManagerInstance `json:"artifactManagers" yaml:"artifactManagers"`
-	GitServer        GitServerConfig                    `json:"gitServer" yaml:"gitServer"`
+	ArtifactManagers map[string]ServiceEndpoints `json:"artifactManagers" yaml:"artifactManagers"`
+	GitServer        ServiceEndpoints            `json:"gitServer" yaml:"gitServer"`
 }
 
 // +k8s:deepcopy-gen=true
-type GitServerConfig struct {
-	InternalURL string `json:"internalURL" yaml:"internalURL"`
-}
-
-// +k8s:deepcopy-gen=true
-type ArtifactManagerInstance struct {
+type ServiceEndpoints struct {
 	InternalURL       string `json:"internalURL" yaml:"internalURL"`
 	RunnerInternalURL string `json:"runnerInternalURL,omitempty" yaml:"runnerInternalURL,omitempty"`
 	RunnerExternalURL string `json:"runnerExternalURL,omitempty" yaml:"runnerExternalURL,omitempty"`

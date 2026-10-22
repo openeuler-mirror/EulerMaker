@@ -15,11 +15,24 @@
         </div>
         <section class="content-panel service-card">
           <div class="section-heading service-card-heading"><h3>{{ t('serviceConfig.gitServer') }}</h3></div>
-          <label class="field required-field">
-            <span>{{ t('serviceConfig.internalURL') }}</span>
-            <input v-if="editing" v-model.trim="gitServerURL" required type="url" autocomplete="off" placeholder="http://git-server:8080" />
-            <code v-else>{{ gitServerURL }}</code>
-          </label>
+          <div class="service-endpoint-fields">
+            <label class="field required-field">
+              <span>{{ t('serviceConfig.internalURL') }}</span>
+              <input v-if="editing" v-model.trim="gitServer.internalURL" required type="url" autocomplete="off" placeholder="http://git-server:8080" />
+              <code v-else>{{ gitServer.internalURL }}</code>
+            </label>
+            <label class="field">
+              <span>{{ t('serviceConfig.runnerInternalURL') }}</span>
+              <input v-if="editing" v-model.trim="gitServer.runnerInternalURL" type="url" autocomplete="off" :placeholder="t('serviceConfig.optional')" />
+              <code v-else>{{ gitServer.runnerInternalURL || t('common.emptyValue') }}</code>
+            </label>
+            <label class="field">
+              <span>{{ t('serviceConfig.runnerExternalURL') }}</span>
+              <input v-if="editing" v-model.trim="gitServer.runnerExternalURL" type="url" autocomplete="off" placeholder="https://git.example.com" />
+              <code v-else>{{ gitServer.runnerExternalURL || t('common.emptyValue') }}</code>
+            </label>
+          </div>
+          <p class="form-hint">{{ t('serviceConfig.gitRunnerPending') }}</p>
         </section>
         <section class="content-panel service-card">
           <div class="section-heading service-card-heading">
@@ -33,7 +46,7 @@
               <button v-if="editing" class="text-button danger-link" type="button" @click="removeInstance(index)">{{ t('common.remove') }}</button>
             </div>
             <label v-if="editing && instance.isNew" class="field required-field"><span>{{ t('serviceConfig.instanceName') }}</span><input v-model.trim="instance.name" required maxlength="63" autocomplete="off" :placeholder="t('serviceConfig.namePlaceholder')" /></label>
-            <div class="artifact-instance-fields">
+            <div class="service-endpoint-fields">
               <label class="field required-field"><span>{{ t('serviceConfig.internalURL') }}</span><input v-if="editing" v-model.trim="instance.internalURL" required type="url" autocomplete="off" placeholder="http://artifact-manager:8081" /><code v-else>{{ instance.internalURL }}</code></label>
               <label class="field"><span>{{ t('serviceConfig.runnerInternalURL') }}</span><input v-if="editing" v-model.trim="instance.runnerInternalURL" type="url" autocomplete="off" :placeholder="t('serviceConfig.optional')" /><code v-else>{{ instance.runnerInternalURL || t('common.emptyValue') }}</code></label>
               <label class="field"><span>{{ t('serviceConfig.runnerExternalURL') }}</span><input v-if="editing" v-model.trim="instance.runnerExternalURL" type="url" autocomplete="off" placeholder="https://artifacts.example.com" /><code v-else>{{ instance.runnerExternalURL || t('common.emptyValue') }}</code></label>
@@ -56,15 +69,15 @@ import { useI18n } from 'vue-i18n';
 import { parse, stringify } from 'yaml';
 import { ApiError, errorTranslationKey, request } from '@/api';
 import type { Config } from '@/types';
-import { buildServiceContent, parseServiceContent, type ArtifactInstance, type ServiceConfigContent } from './serviceConfigDraft';
+import { buildServiceContent, parseServiceContent, type ServiceEndpoints, type ServiceConfigContent } from './serviceConfigDraft';
 
-type DraftInstance = ArtifactInstance & { key: number; name: string; isNew: boolean };
+type DraftInstance = ServiceEndpoints & { key: number; name: string; isNew: boolean };
 
 const { t } = useI18n();
 const path = '/apis/ebs/v1/configs/service-config';
 const current = ref<Config | null>(null);
 const instances = ref<DraftInstance[]>([]);
-const gitServerURL = ref('');
+const gitServer = ref<ServiceEndpoints>({ internalURL: '', runnerInternalURL: '', runnerExternalURL: '' });
 const loading = ref(false);
 const saving = ref(false);
 const editing = ref(false);
@@ -78,7 +91,7 @@ function readContent(config: Config): void {
   const content = parseServiceContent(parse(config.spec.content, { uniqueKeys: true }));
   instances.value = Object.entries(content.artifactManagers).map(([name, value]) =>
     ({ ...value, key: ++nextKey, name, isNew: false }));
-  gitServerURL.value = content.gitServer.internalURL;
+  gitServer.value = { ...content.gitServer };
 }
 
 async function load(): Promise<void> {
@@ -117,7 +130,7 @@ function removeInstance(index: number): void {
 async function save(): Promise<void> {
   if (!current.value || !editing.value || saving.value) return;
   let content: ServiceConfigContent;
-  try { content = buildServiceContent(instances.value, gitServerURL.value); }
+  try { content = buildServiceContent(instances.value, gitServer.value); }
   catch (reason) {
     error.value = reason instanceof Error ? reason.message : 'serviceConfig.invalidContent';
     return;
@@ -154,7 +167,7 @@ async function save(): Promise<void> {
 .artifact-instance-heading { margin-bottom: 14px; align-items: center; }
 .artifact-instance-heading h4 { margin: 0; font-size: 14px; }
 .artifact-instance-heading > .text-button { margin-top: 0; }
-.artifact-instance-fields { display: grid; gap: 12px; }
-.artifact-instance-fields .field { min-width: 0; }
-.artifact-instance-fields code { display: block; min-width: 0; overflow-wrap: anywhere; }
+.service-endpoint-fields { display: grid; gap: 12px; }
+.service-endpoint-fields .field { min-width: 0; }
+.service-endpoint-fields code { display: block; min-width: 0; overflow-wrap: anywhere; }
 </style>

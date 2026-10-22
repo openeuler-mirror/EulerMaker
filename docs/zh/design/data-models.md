@@ -1102,7 +1102,7 @@ type SpecCommitError struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `cloneUrl` | string | git-server 返回的只读 clone URL；仅完成本轮同步确认后填写 |
+| `cloneUrl` | string | Git Server 客户端由 `clone_path` 生成的 `git-server:///git/...` 逻辑克隆地址；仅完成本轮同步确认后填写 |
 | `commitId` | string | 成功解析出的完整提交 ID；设置后 error 必须为空 |
 | `error` | *SpecCommitError | 包级解析错误；设置后 commitId 必须为空。`retryable=true` 表示后续继续解析 |
 
