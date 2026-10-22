@@ -242,7 +242,7 @@ func TestPendingReusesExistingSnapshotWithoutReadingProject(t *testing.T) {
 	assertCounterDelta(t, metricEnsureTerminating, beforeTerminating, 0)
 }
 
-func TestPendingCreatesAndReusesSnapshotWithGitRef(t *testing.T) {
+func TestPendingCreatesAndReusesSnapshotWithstring(t *testing.T) {
 	for _, outcome := range []clientpkg.WriteOutcome{"", clientpkg.WriteRejected, clientpkg.WriteUnknown} {
 		t.Run(string(outcome), func(t *testing.T) {
 			api := newFakeAPI()
@@ -671,9 +671,9 @@ func TestNewSnapshotCopiesProjectInputWithoutSharingState(t *testing.T) {
 		t.Fatalf("defaultRef = %+v", snapshot.Spec.DefaultRef)
 	}
 	snapshot.Spec.PackageRepos[0].Name = "mutated"
-	snapshot.Spec.PackageRepos[0].Ref.Value = "mutated"
-	snapshot.Spec.DefaultRef.Value = "mutated"
-	if project.Spec.PackageRepos[0].Name != "gcc" || project.Spec.PackageRepos[0].Ref.Value != "master" || project.Spec.DefaultRef.Value != "master" {
+	snapshot.Spec.PackageRepos[0].Ref = "mutated"
+	snapshot.Spec.DefaultRef = "mutated"
+	if project.Spec.PackageRepos[0].Name != "gcc" || project.Spec.PackageRepos[0].Ref != "refs/heads/master" || project.Spec.DefaultRef != "refs/heads/master" {
 		t.Fatal("Snapshot construction must not share state with the Project")
 	}
 }
@@ -689,10 +689,18 @@ func TestNewSnapshotKeepsFullRepositoryListForNonSingleBuilds(t *testing.T) {
 
 func TestNewSnapshotCopiesGitRefAnnotation(t *testing.T) {
 	project := newProject("project-a", newPackageRepo("gcc"))
+	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	project.Spec.PackageRepos[0].CommitID = commitID
 	build := newBuild("project-a", "build-a", "single", []string{"gcc"})
+	if got := newSnapshot(build, project).Spec.PackageRepos[0].CommitID; got != commitID {
+		t.Fatalf("copied commitID=%q", got)
+	}
 	ref := "refs/merge-requests/501/head"
 	build.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref, "example.com/note": "build only"}
 	snapshot := newSnapshot(build, project)
+	if snapshot.Spec.PackageRepos[0].CommitID != "" || project.Spec.PackageRepos[0].CommitID != commitID {
+		t.Fatal("PR override must clear only the Snapshot commitID")
+	}
 	if want := (map[string]string{ebsv1.BuildGitRefAnnotation: ref}); !reflect.DeepEqual(snapshot.Annotations, want) {
 		t.Fatalf("annotations = %v, want %v", snapshot.Annotations, want)
 	}

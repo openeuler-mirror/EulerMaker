@@ -59,7 +59,7 @@
               <tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }">
                 <td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td>
                 <td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td>
-                <td v-if="!selectedPackageName">{{ gitRefLabel(repo.ref) }}</td>
+                <td v-if="!selectedPackageName">{{ repo.commitID || gitRefLabel(repo.ref) }}</td>
                 <td v-if="(canEditProject || canStartBuild) && !selectedPackageName" class="package-actions-column">
                   <button v-if="canStartBuild" class="text-button" type="button"
                     :disabled="!repo.name || buildConfigurationMissing || creatingBuild"
@@ -328,9 +328,10 @@
         <label class="field required-field"><span>{{ t("project.repositoryName") }}</span><input v-model.trim="packageDraft.name" required :disabled="savingPackage || Boolean(editingPackageName)" autocomplete="off" placeholder="gcc" /></label>
         <label class="field required-field"><span>{{ t("project.repositoryAddress") }}</span><input v-model.trim="packageDraft.url" required :disabled="savingPackage" autocomplete="off" placeholder="https://atomgit.com/src-openeuler/gcc.git" /></label>
         <div class="form-grid package-ref-fields">
-          <div class="field"><span>{{ t("project.refType") }}</span><AppSelect :model-value="packageDraft.ref.type" :options="[{ value: 'Branch', label: t('project.refBranch') }, { value: 'Tag', label: t('project.refTag') }, { value: 'Commit', label: 'Commit' }]" :label="t('project.refType')" :disabled="savingPackage" @update:model-value="packageDraft.ref.type = $event as NonNullable<GitRef['type']>" /></div>
+          <div class="field"><span>{{ t("project.refType") }}</span><AppSelect :model-value="packageDraft.ref.type" :options="[{ value: 'Branch', label: t('project.refBranch') }, { value: 'Tag', label: t('project.refTag') }]" :label="t('project.refType')" :disabled="savingPackage" @update:model-value="packageDraft.ref.type = $event as GitRefInput['type']" /></div>
           <label class="field"><span>{{ t("project.refValue") }}</span><input v-model.trim="packageDraft.ref.value" :disabled="savingPackage" autocomplete="off" /></label>
         </div>
+        <label class="field"><span>{{ t("project.commitID") }}</span><input v-model.trim="packageDraft.commitID" :disabled="savingPackage" autocomplete="off" :placeholder="t('project.commitIDHint')" /></label>
         <div v-if="packageErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(packageErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="savingPackage" @click="closePackageEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="savingPackage">{{ savingPackage ? t("common.saving") : t("common.save") }}</button></div>
       </form>
@@ -424,7 +425,8 @@ import PackageJobArtifacts from "@/components/PackageJobArtifacts.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
 import { decodeSpecName } from "@/utils/specName";
 import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
-import type { BootstrapRepo, Build, BuildTarget, GitRef, Job, PackageRepo, Project } from "@/types";
+import { isFullGitRef, toFullGitRef, toGitRefInput, type GitRefInput } from "@/utils/gitRef";
+import type { BootstrapRepo, Build, BuildTarget, Job, PackageRepo, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "graph" | "config";
 type BuildType = "full" | "incremental" | "single" | "specified";
@@ -577,11 +579,11 @@ const deletedPackageName = ref("");
 const packagePageSizes = [20, 50, 100] as const;
 const packagePageSize = ref<number>(20);
 const packageCurrentPage = ref(1);
-const packageDraft = ref({ name: "", url: "", ref: { type: "Branch" as NonNullable<GitRef["type"]>, value: "" } });
+const packageDraft = ref({ name: "", url: "", ref: { type: "Branch" as GitRefInput["type"], value: "" }, commitID: "" });
 const filteredPackageRepos = computed(() => {
   const repos = project.value?.spec?.packageRepos || [];
   const query = packageSearch.value.trim().toLowerCase();
-  return query ? repos.filter((repo) => [repo.name, repo.url, repo.ref?.type, repo.ref?.value]
+  return query ? repos.filter((repo) => [repo.name, repo.url, repo.ref, repo.commitID]
     .some((value) => value?.toLowerCase().includes(query))) : repos;
 });
 const packageTotalPages = computed(() => Math.max(1, Math.ceil(filteredPackageRepos.value.length / packagePageSize.value)));
@@ -1082,7 +1084,7 @@ function openPackageEditor(): void {
   if (!project.value || !canEditProject.value) return;
   editingPackageName.value = "";
   packageEditorProject.value = JSON.parse(JSON.stringify(project.value)) as Project;
-  packageDraft.value = { name: "", url: "", ref: { type: project.value.spec?.defaultRef?.type || "Branch", value: project.value.spec?.defaultRef?.value || "master" } };
+  packageDraft.value = { name: "", url: "", ref: toGitRefInput(project.value.spec?.defaultRef || "refs/heads/master"), commitID: "" };
   packageErrorKey.value = "";
   packageSaveSuccess.value = false;
   deletedPackageName.value = "";
@@ -1093,7 +1095,7 @@ function openPackageEdit(repo: PackageRepo): void {
   if (!project.value || !canEditProject.value || !repo.name || savingPackage.value) return;
   packageEditorProject.value = JSON.parse(JSON.stringify(project.value)) as Project;
   editingPackageName.value = repo.name;
-  packageDraft.value = { name: repo.name, url: repo.url || "", ref: { type: repo.ref?.type || "Branch", value: repo.ref?.value || "" } };
+  packageDraft.value = { name: repo.name, url: repo.url || "", ref: toGitRefInput(repo.ref), commitID: repo.commitID || "" };
   packageErrorKey.value = "";
   packageSaveSuccess.value = false;
   deletedPackageName.value = "";
@@ -1109,7 +1111,12 @@ function closePackageEditor(): void {
 async function savePackage(): Promise<void> {
   if (!project.value || !canEditProject.value || savingPackage.value) return;
   const draft = packageDraft.value;
-  const repo: PackageRepo = { name: editingPackageName.value || draft.name.trim(), url: draft.url.trim(), ref: draft.ref.value.trim() ? { type: draft.ref.type, value: draft.ref.value.trim() } : undefined };
+  const repo: PackageRepo = {
+    name: editingPackageName.value || draft.name.trim(),
+    url: draft.url.trim(),
+    ref: toFullGitRef(draft.ref) || undefined,
+    commitID: draft.commitID || undefined,
+  };
   if (!repo.name || !repo.url) {
     packageErrorKey.value = "project.packageRequired";
     return;
@@ -1118,11 +1125,14 @@ async function savePackage(): Promise<void> {
     packageErrorKey.value = "project.packageAlreadyAdded";
     return;
   }
-  if (repo.ref?.type === "Commit" && !/^[a-fA-F0-9]{40}$/.test(repo.ref.value || "")) {
-    packageErrorKey.value = "project.invalidCommit";
+  if (repo.ref && !isFullGitRef(repo.ref)) {
+    packageErrorKey.value = "project.invalidDefaultRef";
     return;
   }
-  if (repo.ref?.type === "Commit") repo.ref.value = repo.ref.value?.toLowerCase();
+  if (repo.commitID && !/^[0-9a-f]{40}$/.test(repo.commitID)) {
+    packageErrorKey.value = "project.invalidCommitID";
+    return;
+  }
   savingPackage.value = true;
   packageErrorKey.value = "";
   try {
@@ -1134,7 +1144,7 @@ async function savePackage(): Promise<void> {
       return;
     }
     updated.spec = { ...updated.spec, packageRepos: editingPackageName.value
-      ? repos.map((item) => item.name === editingPackageName.value ? { ...item, url: repo.url, ref: repo.ref } : item)
+      ? repos.map((item) => item.name === editingPackageName.value ? { ...item, url: repo.url, ref: repo.ref, commitID: repo.commitID } : item)
       : [...repos, repo] };
     project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
       method: "PUT",
@@ -1396,10 +1406,7 @@ function openBasicEditor(): void {
   basicDraft.value = {
     displayName: project.value.spec?.displayName || "",
     description: project.value.spec?.description || "",
-    defaultRef: {
-      type: project.value.spec?.defaultRef?.type || "Branch",
-      value: project.value.spec?.defaultRef?.value || "master",
-    },
+    defaultRef: toGitRefInput(project.value.spec?.defaultRef || "refs/heads/master"),
   };
   basicErrorKey.value = "";
   basicSaveSuccess.value = false;
@@ -1414,12 +1421,12 @@ function closeBasicEditor(): void {
 
 async function saveBasicConfig(): Promise<void> {
   if (!project.value || !canEditProject.value || savingBasic.value) return;
-  const refValue = basicDraft.value.defaultRef.value.trim();
+  const refValue = toFullGitRef(basicDraft.value.defaultRef);
   if (!refValue) {
     basicErrorKey.value = "project.defaultRefRequired";
     return;
   }
-  if (!isSafeGitRef(refValue)) {
+  if (!isFullGitRef(refValue)) {
     basicErrorKey.value = "project.invalidDefaultRef";
     return;
   }
@@ -1431,7 +1438,7 @@ async function saveBasicConfig(): Promise<void> {
       ...updated.spec,
       displayName: basicDraft.value.displayName.trim(),
       description: basicDraft.value.description.trim(),
-      defaultRef: { type: basicDraft.value.defaultRef.type, value: refValue },
+      defaultRef: refValue,
     };
     project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
       method: "PUT",
@@ -1623,12 +1630,8 @@ function targetListLabel(targets?: BuildTarget[]): string {
   return targets.map((target) => [target.os, target.arch].filter(Boolean).join(" / ")).filter(Boolean).join("，") || t("common.emptyValue");
 }
 
-function gitRefLabel(ref?: GitRef): string {
-  return [ref?.type, ref?.value].filter(Boolean).join(" / ") || t("common.emptyValue");
-}
-
-function isSafeGitRef(value: string): boolean {
-  return /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/.test(value) && !/(^|\/)\.{1,2}($|\/)/.test(value) && !value.includes("..");
+function gitRefLabel(ref?: string): string {
+  return ref || t("common.emptyValue");
 }
 
 function booleanLabel(value?: boolean): string {

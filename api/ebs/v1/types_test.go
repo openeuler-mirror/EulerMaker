@@ -128,8 +128,33 @@ func TestSpecStatusGroupReadsLegacyStoredLayout(t *testing.T) {
 	}
 }
 
+func TestPackageRepoCommitIDRoundTrip(t *testing.T) {
+	const commitID = "0123456789abcdef0123456789abcdef01234567"
+	var repo PackageRepo
+	if err := json.Unmarshal([]byte(`{"name":"gcc","ref":"refs/heads/main","commitID":"`+commitID+`"}`), &repo); err != nil {
+		t.Fatal(err)
+	}
+	project := &Project{Spec: ProjectSpec{PackageRepos: []PackageRepo{repo}}}
+	copy := project.DeepCopy()
+	data, err := json.Marshal(copy.Spec.PackageRepos[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["commitID"] != commitID || repo.CommitID != commitID {
+		t.Fatalf("commitID round trip: %s", data)
+	}
+	copy.Spec.PackageRepos[0].CommitID = ""
+	if project.Spec.PackageRepos[0].CommitID != commitID {
+		t.Fatal("copy mutated Project")
+	}
+}
+
 func TestSnapshotDefaultRefRoundTripAndDeepCopy(t *testing.T) {
-	for _, ref := range []GitRef{{}, {Type: GitRefBranch, Value: "main"}, {Type: GitRefTag, Value: "v1"}} {
+	for _, ref := range []string{"", "refs/heads/main", "refs/tags/v1"} {
 		snapshot := &Snapshot{Spec: SnapshotSpec{DefaultRef: ref}}
 		data, err := json.Marshal(snapshot)
 		if err != nil {
@@ -146,7 +171,7 @@ func TestSnapshotDefaultRefRoundTripAndDeepCopy(t *testing.T) {
 		if copy.Spec.DefaultRef != ref {
 			t.Fatal("DeepCopy lost defaultRef")
 		}
-		copy.Spec.DefaultRef.Value = "changed"
+		copy.Spec.DefaultRef = "changed"
 		if snapshot.Spec.DefaultRef != ref {
 			t.Fatal("copy modified original")
 		}

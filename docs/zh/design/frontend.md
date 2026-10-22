@@ -193,7 +193,7 @@ Bootstrap repositories 同样仅向工程 owner 提供列表编辑能力。每�
 
 详情页提供“导出 YAML”操作，读取完整 Project 后下载为 `<metadata.name>.yaml`。导出包含 metadata、spec 和 status；再次导入创建时移除 status 和服务端维护的 metadata 字段。
 
-软件包列表维护 `spec.packageRepos` 的 name、URL 和 ref；包级历史按上述标签查询。构建详情读取 BuildInfo 的 `status.specStatus.build`，不展示安装状态。Snapshot、BuildInfo 和 RpmRepo 为控制器维护的只读资源，前端不提供创建入口。
+Project 默认引用与软件包 ref 的表单保留 Branch/Tag 类型选择及名称输入；提交时由前端补全为 `refs/heads/<name>` 或 `refs/tags/<name>` 字符串，编辑时反向拆分。已填写的完整 `refs/...` 原样提交，不重复添加前缀。包编辑表单另提供可选 commitID，填写完整 40 位小写 SHA 时固定提交；未填写时使用包 ref，ref 也为空时使用 Snapshot 中固化的 defaultRef。软件包列表维护 `spec.packageRepos` 的 name、URL、ref 和 commitID，引用列优先显示固定提交，搜索覆盖 commitID；包级历史按上述标签查询。构建详情读取 BuildInfo 的 `status.specStatus.build`，不展示安装状态。Snapshot、BuildInfo 和 RpmRepo 为控制器维护的只读资源，前端不提供创建入口。
 
 Project 普通配置使用结构化表单。复杂且可能丢失未知字段的对象不能通过“读取—局部表单—整体 PUT”更新，应发送 Merge Patch，并携带当前 `resourceVersion`。发生 409 时保留用户草稿，重新加载服务端对象并提示用户比较后重试。
 

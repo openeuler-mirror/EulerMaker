@@ -43,15 +43,11 @@ export interface Script {
   spec: { content: string };
 }
 
-export interface GitRef {
-  type?: "Branch" | "Tag" | "Commit";
-  value?: string;
-}
-
 export interface PackageRepo {
+  commitID?: string;
   name?: string;
   url?: string;
-  ref?: GitRef;
+  ref?: string;
 }
 
 export interface BootstrapRepo {
@@ -66,7 +62,7 @@ export interface Project {
   spec?: {
     displayName?: string;
     description?: string;
-    defaultRef?: { type?: "Branch" | "Tag"; value?: string };
+    defaultRef?: string;
     buildPayload?: string;
     buildTargets?: BuildTarget[];
     packageRepos?: PackageRepo[];

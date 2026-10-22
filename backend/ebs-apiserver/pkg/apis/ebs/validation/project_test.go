@@ -9,6 +9,34 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestPackageRepoCommitID(t *testing.T) {
+	for _, tc := range []struct {
+		commitID string
+		valid    bool
+	}{
+		{"", true},
+		{"0123456789abcdef0123456789abcdef01234567", true},
+		{"abc123", false},
+		{"refs/heads/main", false},
+	} {
+		project := validProject()
+		project.Spec.PackageRepos = []ebsv1.PackageRepo{{Name: "gcc", CommitID: tc.commitID}}
+		snapshot := &ebsv1.Snapshot{Spec: ebsv1.SnapshotSpec{PackageRepos: project.Spec.PackageRepos}}
+		for operation, errs := range map[string]field.ErrorList{
+			"project create":  ValidateProject(project),
+			"project update":  ValidateProjectUpdate(project, validProject()),
+			"snapshot create": ValidateSnapshot(snapshot),
+			"snapshot update": ValidateSnapshotUpdate(snapshot, &ebsv1.Snapshot{}),
+		} {
+			if tc.valid {
+				assertErrorList(t, errs, 0, nil)
+			} else if len(errs) != 1 || errs[0].Field != "spec.packageRepos[0].commitID" {
+				t.Fatalf("%s commitID=%q errors=%v", operation, tc.commitID, errs)
+			}
+		}
+	}
+}
+
 func TestProjectBuildTargetUniqueness(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -53,8 +81,8 @@ func TestProjectPackageRepoNameUniqueness(t *testing.T) {
 		{name: "different names with same URL", repos: []ebsv1.PackageRepo{{Name: "a", URL: "https://example.com/repo.git"}, {Name: "b", URL: "https://example.com/repo.git"}}},
 		{name: "duplicate with empty refs", repos: []ebsv1.PackageRepo{{Name: "a"}, {Name: "a"}}, wantFields: map[string]field.ErrorType{"spec.packageRepos[1].name": field.ErrorTypeDuplicate}},
 		{name: "duplicate with different URL and ref", repos: []ebsv1.PackageRepo{
-			{Name: "a", URL: "https://example.com/a.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}},
-			{Name: "a", URL: "https://example.com/b.git", Ref: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+			{Name: "a", URL: "https://example.com/a.git", Ref: "refs/heads/main"},
+			{Name: "a", URL: "https://example.com/b.git", Ref: "refs/tags/v1"},
 		}, wantFields: map[string]field.ErrorType{"spec.packageRepos[1].name": field.ErrorTypeDuplicate}},
 		{name: "nonadjacent duplicates", repos: []ebsv1.PackageRepo{{Name: "a"}, {Name: "b"}, {Name: "a"}, {Name: "a"}}, wantFields: map[string]field.ErrorType{"spec.packageRepos[2].name": field.ErrorTypeDuplicate, "spec.packageRepos[3].name": field.ErrorTypeDuplicate}},
 		{name: "empty names remain required", repos: []ebsv1.PackageRepo{{}, {}}, wantFields: map[string]field.ErrorType{"spec.packageRepos[0].name": field.ErrorTypeRequired, "spec.packageRepos[1].name": field.ErrorTypeRequired}},
@@ -153,12 +181,12 @@ func TestValidateProject(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 				Spec: ebsv1.ProjectSpec{
 					BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
-					PackageRepos: []ebsv1.PackageRepo{{Name: "pkg-a", Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch}}},
+					PackageRepos: []ebsv1.PackageRepo{{Name: "pkg-a", Ref: "refs/heads/"}},
 				},
 			},
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
-				"spec.packageRepos[0].ref.value": field.ErrorTypeRequired,
+				"spec.packageRepos[0].ref": field.ErrorTypeInvalid,
 			},
 		},
 		{
@@ -168,7 +196,7 @@ func TestValidateProject(t *testing.T) {
 				Spec: ebsv1.ProjectSpec{
 					BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
 					PackageRepos: []ebsv1.PackageRepo{{
-						Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"},
+						Ref: "refs/heads/main",
 					}},
 				},
 			},
@@ -190,17 +218,17 @@ func TestValidateProject(t *testing.T) {
 func TestValidateProjectDefaultRef(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		ref     ebsv1.GitRef
+		ref     string
 		invalid bool
 	}{
 		{name: "omitted"},
-		{name: "branch", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "release/main"}},
-		{name: "tag", ref: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1.0"}},
-		{name: "commit", ref: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "0123456789012345678901234567890123456789"}, invalid: true},
-		{name: "missing type", ref: ebsv1.GitRef{Value: "main"}, invalid: true},
-		{name: "missing value", ref: ebsv1.GitRef{Type: ebsv1.GitRefTag}, invalid: true},
-		{name: "unsafe ref", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "--bad"}, invalid: true},
-		{name: "unknown type", ref: ebsv1.GitRef{Type: "Other", Value: "main"}, invalid: true},
+		{name: "branch", ref: "refs/heads/release/main"},
+		{name: "tag", ref: "refs/tags/v1.0"},
+		{name: "PR", ref: "refs/merge-requests/501/head"},
+		{name: "commit", ref: "0123456789012345678901234567890123456789", invalid: true},
+		{name: "bare branch", ref: "main", invalid: true},
+		{name: "empty component", ref: "refs/tags/", invalid: true},
+		{name: "unsafe ref", ref: "refs/heads/bad..branch", invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := validProject()
@@ -211,7 +239,7 @@ func TestValidateProjectDefaultRef(t *testing.T) {
 					t.Fatalf("errors=%v, want invalid=%v", errs, tc.invalid)
 				}
 				for _, err := range errs {
-					if err.Field != "spec.defaultRef.type" && err.Field != "spec.defaultRef.value" {
+					if err.Field != "spec.defaultRef" {
 						t.Fatalf("unexpected error: %v", err)
 					}
 				}
@@ -231,7 +259,7 @@ func TestValidateProjectUpdate(t *testing.T) {
 func TestValidateProjectUpdateRequiresPackageRepoName(t *testing.T) {
 	newProject := validProject()
 	newProject.Spec.PackageRepos = []ebsv1.PackageRepo{{
-		Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"},
+		Ref: "refs/heads/main",
 	}}
 	err := ValidateProjectUpdate(newProject, validProject())
 	assertErrorList(t, err, 1, map[string]field.ErrorType{

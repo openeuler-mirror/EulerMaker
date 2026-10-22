@@ -17,17 +17,17 @@ func TestPackageRefPreservedBeforeValidation(t *testing.T) {
 	for _, operation := range []string{"create", "update"} {
 		for _, tc := range []struct {
 			name    string
-			ref     ebsv1.GitRef
-			branch  ebsv1.GitRef
+			ref     string
+			branch  string
 			invalid bool
 		}{
-			{name: "empty ref", branch: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "release"}},
-			{name: "tag default", branch: ebsv1.GitRef{Type: ebsv1.GitRefTag, Value: "v1"}},
+			{name: "empty ref", branch: "refs/heads/release"},
+			{name: "tag default", branch: "refs/tags/v1"},
 			{name: "default branch"},
-			{name: "partial type", ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch}, invalid: true},
-			{name: "partial value", ref: ebsv1.GitRef{Value: "main"}, invalid: true},
-			{name: "invalid default branch", branch: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "bad..branch"}, invalid: true},
-			{name: "unsupported default commit", branch: ebsv1.GitRef{Type: ebsv1.GitRefCommit, Value: "0123456789012345678901234567890123456789"}, invalid: true},
+			{name: "empty component", ref: "refs/heads/", invalid: true},
+			{name: "bare branch", ref: "main", invalid: true},
+			{name: "invalid default branch", branch: "refs/heads/bad..branch", invalid: true},
+			{name: "unsupported default commit", branch: "0123456789012345678901234567890123456789", invalid: true},
 		} {
 			t.Run(operation+"/"+tc.name, func(t *testing.T) {
 				obj := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{

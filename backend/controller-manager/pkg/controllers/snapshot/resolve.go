@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -41,7 +40,6 @@ type resolveResult struct {
 	unexpectedError bool
 }
 
-var fullCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var errResolveBudget = errors.New("snapshot resolve budget exhausted")
 
 func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot, targets []ebsv1.PackageRepo) ([]resolveResult, error) {
@@ -173,14 +171,8 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 		return c.requestFailure(ctx, task, "sync", err)
 	}
 	repo := task.repo
-	if task.fullRef == "" && (repo.Ref.Type == "" || repo.Ref.Value == "") {
-		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository ref and snapshot defaultRef do not provide a complete ref")
-	}
-	if task.fullRef == "" && repo.Ref.Type == ebsv1.GitRefCommit {
-		if !fullCommitPattern.MatchString(repo.Ref.Value) {
-			return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "commit must be a full lowercase SHA")
-		}
-		return resolveResult{index: task.index, repo: repo, state: stateResolved, status: ebsv1.PackageRepoStatus{CommitID: repo.Ref.Value}}
+	if task.fullRef == "" && repo.Ref == "" && repo.CommitID == "" {
+		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository commitID, ref and snapshot defaultRef are empty")
 	}
 	check, err := c.gitClient.CheckSynced(ctx, repo.URL, baseline)
 	if err != nil {
@@ -195,11 +187,15 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 		}
 		return resolveResult{index: task.index, repo: repo, state: stateWaiting}
 	}
+	ref := task.fullRef
+	if ref == "" {
+		ref = repo.Ref
+	}
 	var commit string
-	if task.fullRef != "" {
-		commit, err = c.gitClient.ResolveFullRef(ctx, repo.URL, task.fullRef)
+	if task.fullRef == "" && repo.CommitID != "" {
+		commit, err = c.gitClient.ResolveCommitID(ctx, repo.URL, repo.CommitID)
 	} else {
-		commit, err = c.gitClient.ResolveCommit(ctx, repo.URL, repo.Ref)
+		commit, err = c.gitClient.ResolveFullRef(ctx, repo.URL, ref)
 	}
 	if err != nil {
 		result := c.requestFailure(ctx, task, "resolve", err)
@@ -231,7 +227,7 @@ func (c *Controller) gitFailure(task resolveTask, operation string, err error) (
 	case gitserver.ErrorValidation:
 		return skippedResult(task.index, task.repo, ebsv1.SpecCommitValidationFailed, "git-server rejected repository input")
 	case gitserver.ErrorNotFound:
-		return skippedResult(task.index, task.repo, ebsv1.SpecCommitResolveFailed, "Git ref was not found")
+		return skippedResult(task.index, task.repo, ebsv1.SpecCommitResolveFailed, "Git ref or commit was not found")
 	case gitserver.ErrorPermanent:
 		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: controllerPermanent(err)}
 	default:
@@ -324,14 +320,14 @@ func repoIdentity(repo ebsv1.PackageRepo, fullRef string) string {
 		key = "invalid:" + repo.URL
 	}
 	if fullRef != "" {
-		return key + "\x00ref\x00" + fullRef
+		return key + "\x00" + fullRef
 	}
-	return key + "\x00" + string(repo.Ref.Type) + "\x00" + repo.Ref.Value
+	return key + "\x00" + repo.Ref + "\x00" + repo.CommitID
 }
 
 // effectiveRepo resolves the frozen Snapshot default without changing spec inputs.
-func effectiveRepo(repo ebsv1.PackageRepo, defaultRef ebsv1.GitRef) ebsv1.PackageRepo {
-	if repo.Ref == (ebsv1.GitRef{}) {
+func effectiveRepo(repo ebsv1.PackageRepo, defaultRef string) ebsv1.PackageRepo {
+	if repo.Ref == "" {
 		repo.Ref = defaultRef
 	}
 	return repo

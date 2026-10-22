@@ -193,11 +193,11 @@ status:
 
 **完整引用覆盖**：创建 single 的 Snapshot 时，将 Build 的 `ebs.io/git-ref` 原样复制到 Snapshot annotation，仅作用于唯一目标仓库；输入边界见[数据模型](data-models.md#单包构建的-git-ref-覆盖)。已有 Snapshot 不覆盖。Snapshot Controller 负责解析并固定 commit，BuildInfo 仅消费解析结果。
 
-仓库选择规则：`Build.spec.buildType=single` 时，以 `Build.spec.packages` 的去重名称集匹配 `Project.spec.packageRepos[].name`，只复制匹配条目，保持 Project 列表中的相对顺序；不补入其他仓库，也不为未找到的名称伪造 PackageRepo。所选条目完整 DeepCopy，包括 name、URL 和 ref。其他 buildType 复制完整仓库列表。Snapshot.spec.defaultRef 始终从同一次 Project GET 复制，包 ref 为空时仍保持为空。创建阶段使用上述选择规则；已存在对象不重新筛选或覆盖。
+仓库选择规则：`Build.spec.buildType=single` 时，以 `Build.spec.packages` 的去重名称集匹配 `Project.spec.packageRepos[].name`，只复制匹配条目，保持 Project 列表中的相对顺序；不补入其他仓库，也不为未找到的名称伪造 PackageRepo。所选条目完整 DeepCopy，包括 name、URL、ref 和 commitID；复制 `ebs.io/git-ref` annotation 时清空 Snapshot 中的 commitID，不改变 Project。其他 buildType 复制完整仓库列表。Snapshot.spec.defaultRef 始终从同一次 Project GET 复制，包 ref 为空时仍保持为空。创建阶段使用上述选择规则；已存在对象不重新筛选或覆盖。
 
 正常 single 输入应满足第十三章前置校验；若创建 Build 后 Project 变化导致目标缺失，只复制实际命中的条目，缺失目标沿用 Snapshot Controller 的整体 condition 处理规则，不替换成全量仓库。
 
-仓库 ref 为空时由 Snapshot Controller 回退到 Snapshot.spec.defaultRef；解析结果由其写入 status。Build Controller 只等待 Active。Project 读取与错误处理见第六章。
+Snapshot Controller 按 PackageRepo 的提交选择规则解析并写入 status。Build Controller 只等待 Active。Project 读取与错误处理见第六章。
 
 ```yaml
 apiVersion: ebs/v1
@@ -206,15 +206,11 @@ metadata:
   name: ${build.metadata.name}
   namespace: ${build.metadata.namespace}
 spec:
-  defaultRef:    # 复制同一 Project 的 spec.defaultRef
-    type: Branch
-    value: master
+  defaultRef: refs/heads/master    # 复制同一 Project 的 spec.defaultRef
   packageRepos:   # single 仅复制 Build.spec.packages 命中的仓库；其他类型复制全量
     - name: gcc
       url: https://example.com/src-openeuler/gcc.git
-      ref:
-        type: Branch
-        value: master
+      ref: refs/heads/master
 status:
   phase: Pending
 ```
@@ -707,7 +703,7 @@ buildinfos:     get, create
 - single 依赖边界：Pending 等待 Snapshot Active 后进入 Prepared，Prepared 创建 BuildInfo；所有阶段均不查询历史 Build、不填写 baseBuildRef、不 GET/Create RpmRepo。BuildInfo 使用稳定发布入口及 bootstrapRepo，仓库访问失败仅阻止新派发，不阻止已有 Job 回填与收敛。
 - `baseBuildRef` 写入即返回：`Build.status.baseBuildRef` 为 nil 时断言本轮只发生一次 `/status` 写入（写 `baseBuildRef`）、不调用 `CreateSnapshot` / `CreateRpmRepo`，且返回零值 + `nil`；下一轮以已写入的 `baseBuildRef` 继续 ensure 子资源；
 - 增量种子固化：最近发布成功 Build 即使 `BuildSucceed=False`，仍从其同名 BuildInfo 的 `failedPackages` 纳入失败仓库；与当前/基准 Snapshot 的新增、commit 变化仓库合并、去重排序，删除仓库不入集。覆盖无种子的空数组、历史子资源缺失/读取失败、主资源 PUT Conflict/Unknown、PUT 后崩溃与 Pending 重入。确认本轮种子前不 ensure RpmRepo、不进入 Prepared、不创建 BuildInfo；Prepared 后不再重算；
-- Snapshot 创建复制输入：覆盖 Project.defaultRef 为 Branch/Tag，断言只调用一次 `GetProject`，非 single 的 `CreateSnapshot` 收到的 `spec.defaultRef` 和 N 个 `packageRepos` 均与该返回对象一致；single 只包含 Build.spec.packages 命中的仓库，defaultRef 不变，修改构造出的 Snapshot 不影响 Project；已有 Snapshot（含缺少 defaultRef 的对象）存在时，不调用 `GetProject`、不调用 `CreateSnapshot`、不覆盖 spec；
+- Snapshot 创建复制输入：覆盖 Project.defaultRef 为完整分支、标签或其他 refs/... 引用，断言只调用一次 `GetProject`，非 single 的 `CreateSnapshot` 收到的 `spec.defaultRef` 和 N 个 `packageRepos` 均与该返回对象一致；single 只包含 Build.spec.packages 命中的仓库，defaultRef 不变，修改构造出的 Snapshot 不影响 Project；已有 Snapshot（含缺少 defaultRef 的对象）存在时，不调用 `GetProject`、不调用 `CreateSnapshot`、不覆盖 spec；
 - single 多包输入：覆盖多个包名及重复包名，断言 Snapshot 仅包含去重后命中的仓库并保持 Project 列表顺序；BuildInfo Completed 后汇总所有目标仓库的 spec，每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，任一 build 或 install 非 Succeeded 则进入 Failed/build；
 - Project 读取失败：`GetProject` 返回 NotFound 时断言不调用 `CreateSnapshot`、不写 `Build.status`，且返回零值 + `controller.NewPermanentError`；返回临时错误时断言零值 + 原始错误；
 - BuildInfo 创建输入：覆盖所有构建类型、空引导仓及 Prepared 创建阶段重入，断言创建前读取 Project 并深拷贝 bootstrapRepo、原样复制 buildPayload；覆盖空 buildPayload，确认 Project 后续变更不影响已创建对象；修改创建对象不影响 Project。已有 BuildInfo 不因 Project 配置变化覆盖输入、不为其读取 Project；AlreadyExists 沿用服务端对象。读取 Project 失败不调用 CreateBuildInfo、不写 Build.status；创建使用当前 Project 配置；

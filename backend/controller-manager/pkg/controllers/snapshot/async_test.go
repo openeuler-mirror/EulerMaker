@@ -36,12 +36,6 @@ func (g *asyncGit) PublishSyncTask(context.Context, string) error {
 	g.publishes++
 	return g.publishErr
 }
-func (g *asyncGit) ResolveCommit(context.Context, string, ebsv1.GitRef) (string, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.resolves++
-	return strings.Repeat("a", 40), nil
-}
 func (g *asyncGit) ExecCommand(context.Context, string, string) (string, error) {
 	panic("Snapshot Controller must not call ExecCommand")
 }
@@ -52,6 +46,29 @@ func (g *asyncGit) ResolveFullRef(_ context.Context, _ string, ref string) (stri
 	g.resolves++
 	g.fullRef = ref
 	return strings.Repeat("a", 40), g.resolveErr
+}
+
+func (g *asyncGit) ResolveCommitID(ctx context.Context, originURL, commitID string) (string, error) {
+	return g.ResolveFullRef(ctx, originURL, commitID)
+}
+
+func TestPinnedCommitWaitsForSyncAndReportsMissingCommit(t *testing.T) {
+	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main", CommitID: commitID}})
+	api := &fakeClient{snapshot: snapshot, build: build}
+	g := &asyncGit{}
+	c := newTestController(t, api, g, Config{})
+	task := resolveTask{repo: snapshot.Spec.PackageRepos[0]}
+	result := c.resolveOne(context.Background(), task, snapshot.CreationTimestamp.Time)
+	if result.state != stateWaiting || g.publishes != 1 || g.resolves != 0 {
+		t.Fatalf("waiting result=%+v publishes=%d resolves=%d", result, g.publishes, g.resolves)
+	}
+	g.synced = true
+	g.resolveErr = &gitserver.Error{Kind: gitserver.ErrorNotFound, Err: errors.New("missing commit")}
+	result = c.resolveOne(context.Background(), task, snapshot.CreationTimestamp.Time)
+	if result.state != stateSkipped || result.status.Error.Code != ebsv1.SpecCommitResolveFailed || g.fullRef != commitID || g.resolves != 1 {
+		t.Fatalf("missing commit result=%+v ref=%s resolves=%d", result, g.fullRef, g.resolves)
+	}
 }
 
 func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
@@ -107,7 +124,7 @@ func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
 func branchRepos(n int) []ebsv1.PackageRepo {
 	repos := make([]ebsv1.PackageRepo, n)
 	for i := range repos {
-		repos[i] = ebsv1.PackageRepo{Name: fmt.Sprintf("pkg-%d", i), URL: fmt.Sprintf("https://example.com/pkg-%d.git", i), Ref: ebsv1.GitRef{Type: ebsv1.GitRefBranch, Value: "main"}}
+		repos[i] = ebsv1.PackageRepo{Name: fmt.Sprintf("pkg-%d", i), URL: fmt.Sprintf("https://example.com/pkg-%d.git", i), Ref: "refs/heads/main"}
 	}
 	return repos
 }
