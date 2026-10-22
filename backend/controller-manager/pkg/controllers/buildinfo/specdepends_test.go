@@ -56,7 +56,7 @@ func TestAssembleSpecDependsBoundsParallelRepositories(t *testing.T) {
 		release:   make(chan struct{}),
 		specCount: 1,
 	}
-	c.gitServer = git
+	c.services.(*fakeServices).git = git
 	snapshot := &ebsv1.Snapshot{Status: ebsv1.SnapshotStatus{PackageRepoStatuses: map[string]ebsv1.PackageRepoStatus{}}}
 	for i := 0; i <= maxConcurrentRepoParses; i++ {
 		name := fmt.Sprintf("repo%02d", i)
@@ -94,10 +94,10 @@ func TestAssembleSpecDependsBoundsParallelRepositories(t *testing.T) {
 func TestFetchRepoSpecsParsesFilesSequentially(t *testing.T) {
 	c, _, _, _ := newTestController(t)
 	git := &blockingRepoGitServer{entered: make(chan struct{}, 5), release: make(chan struct{}), specCount: 5}
-	c.gitServer = git
+	c.services.(*fakeServices).git = git
 	done := make(chan bool, 1)
 	go func() {
-		_, ok := c.fetchRepoSpecs(context.Background(), &reconcileRound{}, "repo", "https://example.test/repo",
+		_, ok := c.fetchRepoSpecs(context.Background(), git, &reconcileRound{}, "repo", "https://example.test/repo",
 			ebsv1.PackageRepoStatus{CommitID: "commit"}, "x86_64", nil, &specAssembly{}, new([]string))
 		done <- ok
 	}()

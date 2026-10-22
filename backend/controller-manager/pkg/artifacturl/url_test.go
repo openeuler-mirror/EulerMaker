@@ -38,6 +38,16 @@ func TestReferenceAndResolve(t *testing.T) {
 	}
 }
 
+func TestResolvePreservesManagementPrefix(t *testing.T) {
+	got, err := Resolve(func(string) (string, error) {
+		return "https://internal.example/management/art%2001/", nil
+	}, "artifact://art-01/repositories/project/openEuler%3A24/x86_64/")
+	want := "https://internal.example/management/art%2001/repositories/project/openEuler%3A24/x86_64/"
+	if err != nil || got != want {
+		t.Fatalf("Resolve()=%q, %v; want %q", got, err, want)
+	}
+}
+
 func TestRejectInvalidReference(t *testing.T) {
 	for _, value := range []string{"repositories/v1/repo", "/other/repo", "/repositories/../secret", "/repositories/v1/repo?token=secret"} {
 		if _, err := Reference(value); err == nil {

@@ -20,6 +20,7 @@ import (
 	"controller-manager/pkg/health"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/options"
+	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 )
 
@@ -46,10 +47,7 @@ func main() {
 	}, o.Source.ResyncPeriod, o.Source.SourceStaleThreshold)
 	pollingFactory := source.NewPollingSourceFactory(apiClient.ListPage, int64(o.Source.PollPageSize), o.Source.SourceStaleThreshold)
 	healthServer := health.New(o.Health.Address)
-	gitClient, err := gitserver.New(gitserver.Config{Address: o.GitServer.Address, Timeout: o.GitServer.Timeout, Retries: o.GitServer.Retries, CacheTTL: o.GitServer.CacheTTL})
-	if err != nil {
-		log.Fatal(err)
-	}
+	services := serviceconfig.New(apiClient, gitserver.Config{Timeout: o.GitServer.Timeout, Retries: o.GitServer.Retries, CacheTTL: o.GitServer.CacheTTL})
 	initializers := map[string]manager.InitFunc{
 		buildcontroller.Name:  buildcontroller.Initializer(buildcontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries}),
 		jobcontroller.Name:    jobcontroller.Initializer(jobcontroller.Config{RunnerLostGracePeriod: o.Job.RunnerLostGracePeriod, HistoryGCEnabled: o.Job.HistoryGCEnabled, HistoryRetention: o.Job.HistoryRetention, HistoryAction: o.Job.HistoryAction, MaxRetries: o.Manager.ControllerMaxRetries}),
@@ -65,13 +63,13 @@ func main() {
 				Max:     o.Manager.SlowRetryMaxDelay,
 				Jitter:  o.Manager.SlowRetryJitter,
 			},
-		}),
-		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, gitClient),
+		}, services),
+		snapshotcontroller.Name: snapshotcontroller.Initializer(snapshotcontroller.Config{PollPeriod: o.Source.PollPeriod, ResolveWorkers: o.Snapshot.ResolveWorkers, ResolveBudget: o.Snapshot.ResolveBudget, SyncRequeueDelay: o.Snapshot.SyncRequeueDelay, FailureLimit: o.Snapshot.FailureRetryLimit, MaxRetries: o.Manager.ControllerMaxRetries}, services),
 		buildinfocontroller.Name: buildinfocontroller.Initializer(buildinfocontroller.Config{PollPeriod: o.Source.PollPeriod, MaxRetries: o.Manager.ControllerMaxRetries,
 			ArtifactManagerTimeout: o.ArtifactManager.Timeout,
 			DcgPruneGrace:          o.BuildInfo.DcgPruneGrace, RpmRepoReadyRetryLimit: o.BuildInfo.RpmRepoReadyRetryLimit,
 			SnapshotReadyRetryLimit: o.BuildInfo.SnapshotReadyRetryLimit, SpecFileCacheSize: o.BuildInfo.SpecFileCacheSize,
-		}, gitClient),
+		}, services),
 	}
 	m, err := manager.New(initializers, manager.Dependencies{Client: apiClient, WatchFactory: watchFactory, PollingFactory: pollingFactory}, manager.Config{Workers: o.Manager.Workers, Controllers: o.Manager.Controllers, CacheSyncTimeout: o.Manager.CacheSyncTimeout, ShutdownTimeout: o.Manager.ShutdownTimeout, SlowRetryInitial: o.Manager.SlowRetryInitialDelay, SlowRetryMax: o.Manager.SlowRetryMaxDelay, SlowRetryJitter: o.Manager.SlowRetryJitter}, healthServer)
 	if err != nil {

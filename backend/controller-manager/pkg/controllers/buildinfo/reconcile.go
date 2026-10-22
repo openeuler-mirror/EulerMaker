@@ -18,6 +18,7 @@ import (
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
+	"controller-manager/pkg/serviceconfig"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -41,7 +42,7 @@ type reconcileRound struct {
 	rpmRepoHeld         bool
 	scriptRef           *ebsv1.ScriptRef
 	resourceContent     *ebsv1.BuildResourceContent
-	artifactEndpoints   map[string]string
+	services            *serviceconfig.Round
 	singleRepoChecked   bool
 	singleRepoReference string
 	singleRepoURL       string
@@ -95,7 +96,7 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 		return controller.ReconcileResult{}, nil
 	}
 
-	round := &reconcileRound{key: key, current: buildInfo, failures: c.newRoundFailures(key)}
+	round := &reconcileRound{key: key, current: buildInfo, failures: c.newRoundFailures(key), services: serviceconfig.NewRound(c.services)}
 
 	if stop, result, err := c.parentAbortGuard(ctx, round); stop {
 		return result, err

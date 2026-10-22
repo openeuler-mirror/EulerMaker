@@ -16,6 +16,7 @@ import (
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
+	"controller-manager/pkg/serviceconfig"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -371,6 +372,9 @@ func (c *Controller) rpmMetaUnavailable(
 	reason string,
 	cause error,
 ) (*rpmver.RpmMetaSources, controller.ReconcileResult, error) {
+	if serviceconfig.IsError(cause) {
+		return nil, controller.ReconcileResult{}, cause
+	}
 	if deterministicRpmRepoError(cause) {
 		configReason := ReasonRpmRepoConfigInvalid
 		if reason == ReasonBootstrapRepoXMLUnavail || reason == ReasonBootstrapRepoXMLParseFailed {
@@ -403,20 +407,19 @@ func heldContentURL(round *reconcileRound) string {
 	return round.rpmRepo.Status.Repository.ContentURL
 }
 
+func (c *Controller) roundServices(round *reconcileRound) *serviceconfig.Round {
+	if round.services == nil {
+		round.services = serviceconfig.NewRound(c.services)
+	}
+	return round.services
+}
+
 func (c *Controller) resolveContentURL(ctx context.Context, round *reconcileRound, reference string) (string, error) {
 	var readErr error
 	resolved, err := artifacturl.Resolve(func(instance string) (string, error) {
-		if round.artifactEndpoints == nil {
-			round.artifactEndpoints, readErr = c.client.GetArtifactManagerEndpoints(ctx)
-			if readErr != nil {
-				return "", readErr
-			}
-		}
-		address, exists := round.artifactEndpoints[instance]
-		if !exists {
-			return "", contractErrorf("artifact manager instance %q is not configured", instance)
-		}
-		return address, nil
+		var address string
+		address, readErr = c.roundServices(round).ArtifactURL(ctx, instance)
+		return address, readErr
 	}, reference)
 	if readErr != nil {
 		return "", readErr
@@ -428,6 +431,9 @@ func (c *Controller) resolveContentURL(ctx context.Context, round *reconcileRoun
 }
 
 func (c *Controller) handleArtifactURLFailure(ctx context.Context, round *reconcileRound, err error) (controller.ReconcileResult, error) {
+	if serviceconfig.IsError(err) {
+		return controller.ReconcileResult{}, err
+	}
 	if errors.Is(err, ErrNotFound) || !deterministicRpmRepoError(err) {
 		return controller.ReconcileResult{}, err
 	}
@@ -467,6 +473,9 @@ func (c *Controller) persistAssemblyFailures(
 	round *reconcileRound,
 	asm *specAssembly,
 ) (controller.ReconcileResult, error) {
+	if asm.err != nil {
+		return controller.ReconcileResult{}, asm.err
+	}
 	next := round.current.DeepCopy()
 	var existing []string
 	if asm.incomplete {

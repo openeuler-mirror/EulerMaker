@@ -11,6 +11,7 @@ import (
 
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/serviceconfig"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -81,6 +82,10 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		sortResults(results)
 		return results, nil
 	}
+	gitClient, err := serviceconfig.NewRound(c.services).GitClient(parent)
+	if err != nil {
+		return nil, err
+	}
 	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].index < tasks[j].index })
 	budgetCtx, cancel := context.WithTimeoutCause(parent, c.config.ResolveBudget, errResolveBudget)
 	defer cancel()
@@ -119,7 +124,7 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 				}
 				nextCursor = (task.index + 1) % len(snapshot.Spec.PackageRepos)
 				dispatchMu.Unlock()
-				resultCh <- c.resolveOne(budgetCtx, task, snapshot.CreationTimestamp.Time)
+				resultCh <- c.resolveOne(budgetCtx, gitClient, task, snapshot.CreationTimestamp.Time)
 			}
 		}()
 	}
@@ -166,7 +171,7 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 	return results, nil
 }
 
-func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline time.Time) resolveResult {
+func (c *Controller) resolveOne(ctx context.Context, gitClient gitserver.GitServerClient, task resolveTask, baseline time.Time) resolveResult {
 	if err := ctx.Err(); err != nil {
 		return c.requestFailure(ctx, task, "sync", err)
 	}
@@ -174,7 +179,7 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 	if task.fullRef == "" && repo.Ref == "" && repo.CommitID == "" {
 		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository commitID, ref and snapshot defaultRef are empty")
 	}
-	check, err := c.gitClient.CheckSynced(ctx, repo.URL, baseline)
+	check, err := gitClient.CheckSynced(ctx, repo.URL, baseline)
 	if err != nil {
 		return c.requestFailure(ctx, task, "sync", err)
 	}
@@ -182,7 +187,7 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 		return c.requestFailure(ctx, task, "sync", err)
 	}
 	if !check.Synced {
-		if err := c.gitClient.PublishSyncTask(ctx, repo.URL); err != nil {
+		if err := gitClient.PublishSyncTask(ctx, repo.URL); err != nil {
 			return c.requestFailure(ctx, task, "sync", err)
 		}
 		return resolveResult{index: task.index, repo: repo, state: stateWaiting}
@@ -193,9 +198,9 @@ func (c *Controller) resolveOne(ctx context.Context, task resolveTask, baseline 
 	}
 	var commit string
 	if task.fullRef == "" && repo.CommitID != "" {
-		commit, err = c.gitClient.ResolveCommitID(ctx, repo.URL, repo.CommitID)
+		commit, err = gitClient.ResolveCommitID(ctx, repo.URL, repo.CommitID)
 	} else {
-		commit, err = c.gitClient.ResolveFullRef(ctx, repo.URL, ref)
+		commit, err = gitClient.ResolveFullRef(ctx, repo.URL, ref)
 	}
 	if err != nil {
 		result := c.requestFailure(ctx, task, "resolve", err)

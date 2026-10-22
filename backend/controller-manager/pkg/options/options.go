@@ -91,7 +91,6 @@ type BuildInfoControllerOptions struct {
 }
 
 type GitServerOptions struct {
-	Address  string
 	Timeout  time.Duration
 	Retries  int
 	CacheTTL time.Duration
@@ -109,7 +108,7 @@ func Parse(args []string) (Options, error) {
 		ArtifactManager: ArtifactManagerOptions{Timeout: 30 * time.Second},
 		Snapshot:        SnapshotControllerOptions{ResolveWorkers: 10, ResolveBudget: 120 * time.Second, SyncRequeueDelay: 30 * time.Second, FailureRetryLimit: 5},
 		BuildInfo:       BuildInfoControllerOptions{RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 10000},
-		GitServer:       GitServerOptions{Address: "http://localhost:8080", Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
+		GitServer:       GitServerOptions{Timeout: 30 * time.Second, Retries: 3, CacheTTL: 30 * time.Second},
 	}
 	f := flag.NewFlagSet("controller-manager", flag.ContinueOnError)
 	klog.InitFlags(f)
@@ -151,7 +150,6 @@ func Parse(args []string) (Options, error) {
 	f.IntVar(&o.BuildInfo.RpmRepoReadyRetryLimit, "rpmrepo-ready-retry-limit", o.BuildInfo.RpmRepoReadyRetryLimit, "consecutive repository XML parse failures before RpmRepoUnavailable stop-dispatch")
 	f.IntVar(&o.BuildInfo.SnapshotReadyRetryLimit, "snapshot-ready-retry-limit", o.BuildInfo.SnapshotReadyRetryLimit, "consecutive current-Snapshot query failures before SnapshotUnavailable stop-dispatch")
 	f.IntVar(&o.BuildInfo.SpecFileCacheSize, "specfile-cache-size", o.BuildInfo.SpecFileCacheSize, "global spec file content LRU cache capacity")
-	f.StringVar(&o.GitServer.Address, "git-server-addr", o.GitServer.Address, "git-server address")
 	f.DurationVar(&o.GitServer.Timeout, "git-server-timeout", o.GitServer.Timeout, "git-server request timeout")
 	f.IntVar(&o.GitServer.Retries, "git-server-retry", o.GitServer.Retries, "git-server request retry count")
 	f.DurationVar(&o.GitServer.CacheTTL, "git-server-cache-ttl", o.GitServer.CacheTTL, "git-server synchronization status cache TTL")
@@ -173,7 +171,7 @@ func Parse(args []string) (Options, error) {
 	if (o.API.ClientCert == "") != (o.API.ClientKey == "") {
 		return o, fmt.Errorf("apiserver-client-cert and apiserver-client-key must be provided together")
 	}
-	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.ArtifactManager.Timeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.BuildInfo.DcgPruneGrace <= 0 || o.BuildInfo.RpmRepoReadyRetryLimit <= 0 || o.BuildInfo.SnapshotReadyRetryLimit <= 0 || o.BuildInfo.SpecFileCacheSize <= 0 || o.GitServer.Address == "" || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
+	if o.Manager.Controllers == "" || o.Manager.Workers <= 0 || o.Manager.ControllerMaxRetries < 0 || o.Manager.SlowRetryInitialDelay <= 0 || o.Manager.SlowRetryMaxDelay < o.Manager.SlowRetryInitialDelay || o.Manager.SlowRetryJitter < 0 || o.Manager.SlowRetryJitter >= 1 || o.Source.PollPageSize <= 0 || o.API.ClientQPS <= 0 || o.API.ClientBurst <= 0 || o.Source.PollPeriod <= 0 || o.Manager.CacheSyncTimeout <= 0 || o.Manager.ShutdownTimeout <= 0 || o.Source.SourceStaleThreshold <= 0 || o.API.RequestTimeout <= 0 || o.Source.ResyncPeriod < 0 || o.Health.Address == "" || o.Job.RunnerLostGracePeriod <= 0 || (o.Job.HistoryGCEnabled && o.Job.HistoryRetention <= 0) || o.Runner.HeartbeatTimeout <= 0 || o.Runner.StartupGracePeriod <= 0 || o.RpmRepo.MaxJobsPerBatch <= 0 || o.RpmRepo.MaterializeRetryLimit <= 0 || o.ArtifactManager.Timeout <= 0 || o.Snapshot.ResolveWorkers <= 0 || o.Snapshot.ResolveBudget <= 0 || o.Snapshot.SyncRequeueDelay <= 0 || o.Snapshot.FailureRetryLimit <= 0 || o.BuildInfo.DcgPruneGrace <= 0 || o.BuildInfo.RpmRepoReadyRetryLimit <= 0 || o.BuildInfo.SnapshotReadyRetryLimit <= 0 || o.BuildInfo.SpecFileCacheSize <= 0 || o.GitServer.Timeout <= 0 || o.GitServer.Retries < 0 || o.GitServer.CacheTTL <= 0 {
 		return o, fmt.Errorf("workers, limits, periods, timeouts and addresses must be valid")
 	}
 	return o, nil

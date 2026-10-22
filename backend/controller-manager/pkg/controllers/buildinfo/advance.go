@@ -43,6 +43,9 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		return result, err
 	}
 	asm := c.assembleSpecDepends(ctx, round, snapshot)
+	if asm.err != nil {
+		return controller.ReconcileResult{}, asm.err
+	}
 	if asm.incomplete {
 		return controller.ReconcileResult{}, nil
 	}
@@ -411,6 +414,9 @@ func (c *Controller) checkCompletion(
 				return result, err
 			}
 			asm = c.assembleSpecDepends(ctx, round, snapshot)
+			if asm.err != nil {
+				return controller.ReconcileResult{}, asm.err
+			}
 			if asm.incomplete {
 				return controller.ReconcileResult{}, nil
 			}

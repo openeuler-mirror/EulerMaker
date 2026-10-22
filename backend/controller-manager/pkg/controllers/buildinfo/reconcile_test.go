@@ -49,7 +49,7 @@ func TestInitializerFiltersTerminalBuildInfos(t *testing.T) {
 		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
 		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute},
 	}
-	_, active, err := Initializer(config, newFakeGitServer())(context.Background(), init)
+	_, active, err := Initializer(config, &fakeServices{fakeClient: newFakeClient(), git: newFakeGitServer()})(context.Background(), init)
 	if err != nil || !active {
 		t.Fatalf("initializer active=%t err=%v", active, err)
 	}

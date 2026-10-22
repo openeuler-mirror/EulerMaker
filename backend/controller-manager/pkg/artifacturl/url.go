@@ -68,7 +68,9 @@ func Resolve(resolveAddress func(instance string) (string, error), reference str
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
 		return "", fmt.Errorf("artifact manager instance %q must have an absolute HTTP URL", instance)
 	}
-	return base.ResolveReference(&url.URL{Path: u.Path, RawPath: u.RawPath}).String(), nil
+	base.RawPath = strings.TrimRight(base.EscapedPath(), "/") + u.EscapedPath()
+	base.Path = strings.TrimRight(base.Path, "/") + u.Path
+	return base.String(), nil
 }
 
 func repositoryPathURL(value string) (*url.URL, error) {

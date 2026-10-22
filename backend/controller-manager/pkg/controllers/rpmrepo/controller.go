@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +13,7 @@ import (
 
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/manager"
+	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -72,8 +72,7 @@ type Controller struct {
 	client          Client
 	artifacts       ArtifactManagerClient
 	artifactFactory func(string) (ArtifactManagerClient, error)
-	artifactMu      sync.Mutex
-	artifactClients map[string]ArtifactManagerClient
+	services        serviceconfig.Provider
 	policy          PublishPolicy
 	clock           clock.Clock
 	config          Config
@@ -105,7 +104,7 @@ func newController(
 		return nil, err
 	}
 	c := &Controller{rpmrepos: rpmrepos, client: client, artifacts: artifacts, artifactFactory: factory,
-		artifactClients: make(map[string]ArtifactManagerClient), policy: policy, clock: clk, config: config}
+		policy: policy, clock: clk, config: config}
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
@@ -117,8 +116,11 @@ func newController(
 	return c, nil
 }
 
-func Initializer(config Config) manager.InitFunc {
+func Initializer(config Config, services serviceconfig.Provider) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
+		if services == nil {
+			return nil, false, fmt.Errorf("service configuration provider is required")
+		}
 		if err := config.validate(); err != nil {
 			return nil, false, err
 		}
@@ -135,6 +137,9 @@ func Initializer(config Config) manager.InitFunc {
 		}
 		value, err := newController(rpmrepos, newAPIClient(init.Dependencies.Client), nil, factory, DefaultPublishPolicy{}, clock.RealClock{}, config,
 			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
+		if err == nil {
+			value.services = services
+		}
 		return value, err == nil, err
 	}
 }

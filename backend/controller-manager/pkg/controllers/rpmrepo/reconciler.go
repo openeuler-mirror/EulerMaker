@@ -15,6 +15,7 @@ import (
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/serviceconfig"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -75,23 +76,11 @@ func (r *reconciler) selectArtifactManager(repo *ebsv1.RpmRepo) error {
 			}
 		}
 	}
-	endpoints, err := r.controller.client.GetArtifactManagerEndpoints(r.ctx)
+	address, err := serviceconfig.NewRound(r.controller.services).ArtifactURL(r.ctx, instance)
 	if err != nil {
-		return classifyReadError(err)
+		return err
 	}
-	address, ok := endpoints[instance]
-	if !ok {
-		return controller.NewPermanentError(fmt.Errorf("artifact manager instance %q is not configured", instance))
-	}
-	r.controller.artifactMu.Lock()
-	artifacts := r.controller.artifactClients[address]
-	if artifacts == nil {
-		artifacts, err = r.controller.artifactFactory(address)
-		if err == nil {
-			r.controller.artifactClients[address] = artifacts
-		}
-	}
-	r.controller.artifactMu.Unlock()
+	artifacts, err := r.controller.artifactFactory(address)
 	if err != nil {
 		return controller.NewPermanentError(err)
 	}

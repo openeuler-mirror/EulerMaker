@@ -41,6 +41,7 @@ func TestSelectArtifactManagerUsesProjectInstance(t *testing.T) {
 	client.ArtifactEndpoints["art-01"] = "http://artifact-manager.art-01:8081"
 	selected := ""
 	c := newTestController(t, client, NewFakeArtifactManager(), testConfig())
+	c.services = client
 	c.artifactFactory = func(address string) (ArtifactManagerClient, error) {
 		selected = address
 		return NewFakeArtifactManager(), nil

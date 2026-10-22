@@ -233,7 +233,7 @@ func TestReconcileReleaseSkipsSkippedObjectsFromAStaleSnapshot(t *testing.T) {
 func TestInitializerSelectorExcludesSkipped(t *testing.T) {
 	factory := &stubPollingFactory{}
 	config := initializedConfig()
-	if _, _, err := Initializer(config)(context.Background(), initContext(factory)); err != nil {
+	if _, _, err := Initializer(config, NewFakeClient())(context.Background(), initContext(factory)); err != nil {
 		t.Fatalf("Initializer: %v", err)
 	}
 	if factory.options.FieldSelector != skippedPhaseFieldSelector {

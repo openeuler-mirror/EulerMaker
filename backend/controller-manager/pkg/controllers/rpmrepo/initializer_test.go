@@ -65,7 +65,7 @@ func TestInitializerBuildsThePollingSource(t *testing.T) {
 	factory := &stubPollingFactory{}
 	config := initializedConfig()
 
-	instance, active, err := Initializer(config)(context.Background(), initContext(factory))
+	instance, active, err := Initializer(config, NewFakeClient())(context.Background(), initContext(factory))
 	if err != nil {
 		t.Fatalf("Initializer: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestInitializerRejectsBadConfiguration(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := Initializer(tc.config)(context.Background(), tc.init); err == nil {
+			if _, _, err := Initializer(tc.config, NewFakeClient())(context.Background(), tc.init); err == nil {
 				t.Fatalf("invalid configuration must fail initialization")
 			}
 		})
@@ -126,7 +126,7 @@ func TestInitializerRejectsBadConfiguration(t *testing.T) {
 
 func TestInitializerPropagatesPollingFactoryErrors(t *testing.T) {
 	factory := &stubPollingFactory{err: errors.New("source unavailable")}
-	if _, _, err := Initializer(initializedConfig())(context.Background(), initContext(factory)); err == nil {
+	if _, _, err := Initializer(initializedConfig(), NewFakeClient())(context.Background(), initContext(factory)); err == nil {
 		t.Fatalf("a failing polling factory must fail initialization")
 	}
 }

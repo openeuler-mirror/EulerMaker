@@ -15,7 +15,6 @@ import (
 	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
 
-	"controller-manager/pkg/artifacturl"
 	"controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -60,7 +59,6 @@ type Client interface {
 	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not refetch it per Job or use it
 	// to mutate a created Job.
 	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
-	GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error)
 }
 
 // newAPIClient wraps the shared controller-manager API client.
@@ -327,23 +325,6 @@ func (c *apiClient) GetScript(ctx context.Context, name string) (*ebsv1.Script, 
 		return nil, contractErrorf("unexpected Script response for %s: %T", name, obj)
 	}
 	return value, nil
-}
-
-func (c *apiClient) GetArtifactManagerEndpoints(ctx context.Context) (map[string]string, error) {
-	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.ArtifactManagerConfigName)
-	if err != nil {
-		return nil, err
-	}
-	config, ok := obj.(*ebsv1.Config)
-	if !ok || config == nil || config.Name != ebsv1.ArtifactManagerConfigName || config.Namespace != "" ||
-		config.UID == "" || config.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected artifact-manager-conf Config response: %T", obj)
-	}
-	endpoints, err := artifacturl.ParseArtifactManagerEndpoints(config.Spec.Content)
-	if err != nil {
-		return nil, contractErrorf("%v", err)
-	}
-	return endpoints, nil
 }
 
 func (c *apiClient) GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error) {

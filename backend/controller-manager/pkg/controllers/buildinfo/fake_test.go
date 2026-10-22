@@ -98,18 +98,21 @@ func newFakeClient() *fakeClient {
 	}
 }
 
-func (f *fakeClient) GetArtifactManagerEndpoints(_ context.Context) (map[string]string, error) {
+func (f *fakeClient) Load(_ context.Context) (*ebsv1.ServiceConfigContent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.artifactReads++
 	if err := f.consumeInjectedReadLocked("configs"); err != nil {
 		return nil, err
 	}
-	endpoints := make(map[string]string, len(f.artifactEndpoints))
-	for instance, address := range f.artifactEndpoints {
-		endpoints[instance] = address
+	content := &ebsv1.ServiceConfigContent{
+		GitServer:        ebsv1.GitServerConfig{InternalURL: "http://git-server:8080"},
+		ArtifactManagers: make(map[string]ebsv1.ArtifactManagerInstance),
 	}
-	return endpoints, nil
+	for instance, address := range f.artifactEndpoints {
+		content.ArtifactManagers[instance] = ebsv1.ArtifactManagerInstance{InternalURL: address}
+	}
+	return content, nil
 }
 
 // InjectWrite makes the next write with the given operation ("update-status" or "create") return a WriteError with the

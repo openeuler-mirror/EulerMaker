@@ -59,13 +59,13 @@ func TestPinnedCommitWaitsForSyncAndReportsMissingCommit(t *testing.T) {
 	g := &asyncGit{}
 	c := newTestController(t, api, g, Config{})
 	task := resolveTask{repo: snapshot.Spec.PackageRepos[0]}
-	result := c.resolveOne(context.Background(), task, snapshot.CreationTimestamp.Time)
+	result := c.resolveOne(context.Background(), c.services.(*fakeServices).git, task, snapshot.CreationTimestamp.Time)
 	if result.state != stateWaiting || g.publishes != 1 || g.resolves != 0 {
 		t.Fatalf("waiting result=%+v publishes=%d resolves=%d", result, g.publishes, g.resolves)
 	}
 	g.synced = true
 	g.resolveErr = &gitserver.Error{Kind: gitserver.ErrorNotFound, Err: errors.New("missing commit")}
-	result = c.resolveOne(context.Background(), task, snapshot.CreationTimestamp.Time)
+	result = c.resolveOne(context.Background(), c.services.(*fakeServices).git, task, snapshot.CreationTimestamp.Time)
 	if result.state != stateSkipped || result.status.Error.Code != ebsv1.SpecCommitResolveFailed || g.fullRef != commitID || g.resolves != 1 {
 		t.Fatalf("missing commit result=%+v ref=%s resolves=%d", result, g.fullRef, g.resolves)
 	}
@@ -203,7 +203,7 @@ func TestRequestFailureClassification(t *testing.T) {
 	}
 	parent, stop := context.WithCancel(context.Background())
 	stop()
-	if got := c.resolveOne(parent, task, time.Time{}); got.state != stateFatal || !errors.Is(got.fatal, context.Canceled) {
+	if got := c.resolveOne(parent, c.services.(*fakeServices).git, task, time.Time{}); got.state != stateFatal || !errors.Is(got.fatal, context.Canceled) {
 		t.Fatalf("manager canceled: %+v", got)
 	}
 }
