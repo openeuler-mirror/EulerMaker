@@ -69,38 +69,47 @@ func TestBuildResourceConfigStrictDecoding(t *testing.T) {
 	}
 }
 
-func TestValidateArtifactManagerContent(t *testing.T) {
-	valid := func() *ebsv1.ArtifactManagerContent {
-		return &ebsv1.ArtifactManagerContent{Instances: map[string]ebsv1.ArtifactManagerInstance{
-			"default": {InternalURL: "http://artifact-manager:8081", RunnerInternalURL: "http://127.0.0.1:8081"},
-			"art-01":  {InternalURL: "https://artifact-manager.art-01:8081", RunnerExternalURL: "https://artifacts.example.com"},
-		}}
+func TestValidateServiceConfigContent(t *testing.T) {
+	valid := func() *ebsv1.ServiceConfigContent {
+		return &ebsv1.ServiceConfigContent{
+			GitServer: ebsv1.GitServerConfig{InternalURL: "http://git-server:8080"},
+			ArtifactManagers: map[string]ebsv1.ArtifactManagerInstance{
+				"default": {InternalURL: "http://artifact-manager:8081", RunnerInternalURL: "http://127.0.0.1:8081"},
+				"art-01":  {InternalURL: "https://artifact-manager.art-01:8081", RunnerExternalURL: "https://artifacts.example.com"},
+			},
+		}
 	}
 	for _, tc := range []struct {
 		name      string
-		change    func(*ebsv1.ArtifactManagerContent)
+		change    func(*ebsv1.ServiceConfigContent)
 		wantField string
 	}{
-		{"valid", func(*ebsv1.ArtifactManagerContent) {}, ""},
-		{"external HTTP", func(o *ebsv1.ArtifactManagerContent) {
-			entry := o.Instances["art-01"]
+		{"valid", func(*ebsv1.ServiceConfigContent) {}, ""},
+		{"Git HTTPS with prefix", func(o *ebsv1.ServiceConfigContent) {
+			o.GitServer.InternalURL = "https://git-server:8443/prefix/"
+		}, ""},
+		{"missing Git URL", func(o *ebsv1.ServiceConfigContent) {
+			o.GitServer.InternalURL = ""
+		}, "spec.content.gitServer.internalURL"},
+		{"external HTTP", func(o *ebsv1.ServiceConfigContent) {
+			entry := o.ArtifactManagers["art-01"]
 			entry.RunnerExternalURL = "http://external:8081"
-			o.Instances["art-01"] = entry
+			o.ArtifactManagers["art-01"] = entry
 		}, ""},
-		{"no default instance", func(o *ebsv1.ArtifactManagerContent) { delete(o.Instances, "default") }, ""},
-		{"IPv6 and path prefix", func(o *ebsv1.ArtifactManagerContent) {
-			o.Instances["art-02"] = ebsv1.ArtifactManagerInstance{InternalURL: "http://[::1]:8081/prefix/"}
+		{"no default instance", func(o *ebsv1.ServiceConfigContent) { delete(o.ArtifactManagers, "default") }, ""},
+		{"IPv6 and path prefix", func(o *ebsv1.ServiceConfigContent) {
+			o.ArtifactManagers["art-02"] = ebsv1.ArtifactManagerInstance{InternalURL: "http://[::1]:8081/prefix/"}
 		}, ""},
-		{"empty instances", func(o *ebsv1.ArtifactManagerContent) { o.Instances = nil }, "spec.content.instances"},
-		{"invalid name", func(o *ebsv1.ArtifactManagerContent) {
-			o.Instances["Art/01"] = ebsv1.ArtifactManagerInstance{InternalURL: "http://host"}
-		}, "spec.content.instances[Art/01]"},
-		{"missing internal URL", func(o *ebsv1.ArtifactManagerContent) { o.Instances["unused"] = ebsv1.ArtifactManagerInstance{} }, "spec.content.instances[unused].internalURL"},
+		{"empty instances", func(o *ebsv1.ServiceConfigContent) { o.ArtifactManagers = nil }, "spec.content.artifactManagers"},
+		{"invalid name", func(o *ebsv1.ServiceConfigContent) {
+			o.ArtifactManagers["Art/01"] = ebsv1.ArtifactManagerInstance{InternalURL: "http://host"}
+		}, "spec.content.artifactManagers[Art/01]"},
+		{"missing internal URL", func(o *ebsv1.ServiceConfigContent) { o.ArtifactManagers["unused"] = ebsv1.ArtifactManagerInstance{} }, "spec.content.artifactManagers[unused].internalURL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := valid()
 			tc.change(obj)
-			errs := validateArtifactManagerContent(obj)
+			errs := validateServiceConfigContent(obj)
 			if tc.wantField == "" && len(errs) != 0 {
 				t.Fatalf("errors=%v", errs)
 			}
@@ -111,7 +120,7 @@ func TestValidateArtifactManagerContent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ArtifactManagerConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: string(content)}}
+			config := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: string(content)}}
 			if errs := ValidateConfig(config); (len(errs) != 0) != (tc.wantField != "") {
 				t.Fatalf("Config errors=%v", errs)
 			}
@@ -128,12 +137,15 @@ func TestValidateArtifactManagerContent(t *testing.T) {
 		{"whitespace", "internalURL", " http://host"},
 		{"missing hostname", "internalURL", "http://:8081"},
 		{"invalid port", "internalURL", "http://host:65536"},
+		{"empty port", "internalURL", "http://host:"},
+		{"zero port", "internalURL", "http://host:0"},
+		{"unicode whitespace", "internalURL", "http://host/path\u00a0"},
 		{"invalid runner URL", "runnerInternalURL", "relative"},
 		{"external unsupported scheme", "runnerExternalURL", "ftp://external"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := valid()
-			entry := obj.Instances["art-01"]
+			entry := obj.ArtifactManagers["art-01"]
 			switch tc.field {
 			case "internalURL":
 				entry.InternalURL = tc.value
@@ -142,23 +154,32 @@ func TestValidateArtifactManagerContent(t *testing.T) {
 			case "runnerExternalURL":
 				entry.RunnerExternalURL = tc.value
 			}
-			obj.Instances["art-01"] = entry
-			errs := validateArtifactManagerContent(obj)
-			if len(errs) != 1 || errs[0].Field != "spec.content.instances[art-01]."+tc.field {
+			obj.ArtifactManagers["art-01"] = entry
+			errs := validateServiceConfigContent(obj)
+			if len(errs) != 1 || errs[0].Field != "spec.content.artifactManagers[art-01]."+tc.field {
 				t.Fatalf("errors=%v", errs)
+			}
+			obj = valid()
+			obj.GitServer.InternalURL = tc.value
+			errs = validateServiceConfigContent(obj)
+			if len(errs) != 1 || errs[0].Field != "spec.content.gitServer.internalURL" {
+				t.Fatalf("Git Server errors=%v", errs)
 			}
 		})
 	}
 }
 
-func TestArtifactManagerConfigStrictDecoding(t *testing.T) {
+func TestServiceConfigStrictDecoding(t *testing.T) {
 	for _, content := range []string{
-		"instances: [",
-		"instances: {default: {internalURL: 'http://host', secret: hidden}}",
-		"instances: {default: {internalURL: 'http://host', internalURL: 'http://other'}}",
-		"instances: {default: {internalURL: 'http://host'}, default: {internalURL: 'http://other'}}",
+		"artifactManagers: [",
+		"artifactManagers: {default: {internalURL: 'http://host', secret: hidden}}",
+		"artifactManagers: {default: {internalURL: 'http://host', internalURL: 'http://other'}}",
+		"artifactManagers: {default: {internalURL: 'http://host'}, default: {internalURL: 'http://other'}}",
+		"gitServer: {internalURL: 'http://git', secret: hidden}",
+		"gitServer: {internalURL: 'http://git', internalURL: 'http://other'}",
+		"gitServer: {internalURL: 'http://git'}\ngitServer: {internalURL: 'http://other'}",
 	} {
-		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ArtifactManagerConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: content}}
+		obj := &ebsv1.Config{ObjectMeta: metav1.ObjectMeta{Name: ebsv1.ServiceConfigName}, Spec: ebsv1.ConfigSpec{Visibility: ebsv1.ConfigVisibilityOpsOnly, Content: content}}
 		if errs := ValidateConfig(obj); len(errs) != 1 || errs[0].Field != "spec.content" {
 			t.Fatalf("errors=%v", errs)
 		}

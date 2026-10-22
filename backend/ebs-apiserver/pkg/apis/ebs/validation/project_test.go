@@ -294,7 +294,7 @@ func validProject() *ebsv1.Project {
 }
 
 func TestValidateProjectArtifactInstance(t *testing.T) {
-	content := &ebsv1.ArtifactManagerContent{Instances: map[string]ebsv1.ArtifactManagerInstance{
+	content := &ebsv1.ServiceConfigContent{ArtifactManagers: map[string]ebsv1.ArtifactManagerInstance{
 		"default": {},
 		"art-01":  {},
 		"art-x":   {},

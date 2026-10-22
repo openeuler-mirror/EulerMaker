@@ -71,17 +71,17 @@ func ValidateArtifactsConfigUpdate(configs rest.Getter) rest.ValidateObjectUpdat
 }
 
 func validateArtifactsConfig(ctx context.Context, project *ebsv1.Project, configs rest.Getter) error {
-	obj, err := configs.Get(request.WithNamespace(ctx, ""), ebsv1.ArtifactManagerConfigName, &metav1.GetOptions{})
+	obj, err := configs.Get(request.WithNamespace(ctx, ""), ebsv1.ServiceConfigName, &metav1.GetOptions{})
 	if err != nil {
-		return apierrors.NewServiceUnavailable("artifact-manager-conf Config is unavailable")
+		return apierrors.NewServiceUnavailable("service-config Config is unavailable")
 	}
 	config, ok := obj.(*ebsv1.Config)
 	if !ok || config == nil {
-		return apierrors.NewServiceUnavailable("invalid artifact-manager-conf Config response")
+		return apierrors.NewServiceUnavailable("invalid service-config Config response")
 	}
-	var content ebsv1.ArtifactManagerContent
+	var content ebsv1.ServiceConfigContent
 	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
-		return apierrors.NewServiceUnavailable("invalid artifact-manager-conf Config content")
+		return apierrors.NewServiceUnavailable("invalid service-config Config content")
 	}
 	if errs := validation.ValidateProjectArtifactInstance(project, &content); len(errs) > 0 {
 		return apierrors.NewInvalid(ebsv1.Kind("Project"), project.Name, errs)

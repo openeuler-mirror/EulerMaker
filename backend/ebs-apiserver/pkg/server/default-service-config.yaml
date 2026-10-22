@@ -1,4 +1,4 @@
-instances:
+artifactManagers:
   default:
     internalURL: http://artifact-manager:8081
     runnerInternalURL: http://127.0.0.1:8081
@@ -7,3 +7,5 @@ instances:
     internalURL: http://artifact-manager.art-01:8081
     runnerInternalURL: ""
     runnerExternalURL: ""
+gitServer:
+  internalURL: http://git-server:8080

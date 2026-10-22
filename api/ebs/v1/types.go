@@ -38,6 +38,7 @@ const (
 	BuildTargetConfigName                      = "build-target"
 	BuildResourceConfigName                    = "build-resource"
 	ArtifactManagerConfigName                  = "artifact-manager-conf"
+	ServiceConfigName                          = "service-config"
 )
 
 // +k8s:deepcopy-gen=true
@@ -69,6 +70,18 @@ type PackageResourceConfig struct {
 // +k8s:deepcopy-gen=true
 type ArtifactManagerContent struct {
 	Instances map[string]ArtifactManagerInstance `json:"instances" yaml:"instances"`
+}
+
+// ServiceConfigContent defines the service endpoints in Config/service-config.
+// +k8s:deepcopy-gen=true
+type ServiceConfigContent struct {
+	ArtifactManagers map[string]ArtifactManagerInstance `json:"artifactManagers" yaml:"artifactManagers"`
+	GitServer        GitServerConfig                    `json:"gitServer" yaml:"gitServer"`
+}
+
+// +k8s:deepcopy-gen=true
+type GitServerConfig struct {
+	InternalURL string `json:"internalURL" yaml:"internalURL"`
 }
 
 // +k8s:deepcopy-gen=true

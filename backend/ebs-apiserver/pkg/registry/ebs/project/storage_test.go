@@ -90,14 +90,14 @@ type artifactConfigGetter struct {
 
 func (g *artifactConfigGetter) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
 	g.calls++
-	if namespace, _ := request.NamespaceFrom(ctx); namespace != "" || name != ebsv1.ArtifactManagerConfigName {
+	if namespace, _ := request.NamespaceFrom(ctx); namespace != "" || name != ebsv1.ServiceConfigName {
 		g.t.Fatalf("unexpected Config GET: namespace=%q name=%q", namespace, name)
 	}
 	return &ebsv1.Config{Spec: ebsv1.ConfigSpec{Content: g.content}}, g.err
 }
 
 func TestValidateArtifactsConfig(t *testing.T) {
-	const content = "instances:\n  default:\n    internalURL: http://default:8081\n  art-01:\n    internalURL: http://art-01:8081\n  art-x:\n    internalURL: http://art-x:8081\n"
+	const content = "artifactManagers:\n  default:\n    internalURL: http://default:8081\n  art-01:\n    internalURL: http://art-01:8081\n  art-x:\n    internalURL: http://art-x:8081\n"
 	for _, tc := range []struct {
 		name     string
 		value    string
@@ -137,7 +137,7 @@ func TestValidateArtifactsConfig(t *testing.T) {
 }
 
 func TestValidateArtifactsConfigUpdate(t *testing.T) {
-	getter := &artifactConfigGetter{t: t, content: "instances:\n  default:\n    internalURL: http://default:8081\n  art-01:\n    internalURL: http://art-01:8081\n"}
+	getter := &artifactConfigGetter{t: t, content: "artifactManagers:\n  default:\n    internalURL: http://default:8081\n  art-01:\n    internalURL: http://art-01:8081\n"}
 	old := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a", Annotations: map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}}}
 	updated := old.DeepCopy()
 	check := ValidateArtifactsConfigUpdate(getter)
