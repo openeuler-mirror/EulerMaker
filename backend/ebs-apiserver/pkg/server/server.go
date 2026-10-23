@@ -403,22 +403,22 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	v1Storage["rpmrepos"] = rpmRepoES
 	v1Storage["rpmrepos/status"] = esstore.NewStatus(rpmRepoES, rpmRepoStorage.Status.(*genericregistry.Store))
 
-	jobStorage := jobstore.NewStorage(Scheme)
+	jobStorage := jobstore.NewStorage()
 	if err := jobStorage.CompleteWithOptions(storeOptions); err != nil {
 		return nil, nil, err
 	}
-	v1Storage["jobs"] = jobStorage.Job
+	v1Storage["jobs"] = jobStorage.Resource
 	v1Storage["jobs/status"] = jobStorage.Status
-	v1Storage["jobs/abort"] = jobstore.NewAbortStorage(jobStorage.Job, jobStorage.Status.(rest.Updater))
-	oldJobs := esstore.NewOldJobs(esClient, jobStorage.Job)
+	v1Storage["jobs/abort"] = jobstore.NewAbortStorage(jobStorage.Resource, jobStorage.Status.(rest.Updater))
+	oldJobs := esstore.NewOldJobs(esClient, jobStorage.Resource.(*genericregistry.Store))
 	v1Storage["oldjobs"] = oldJobs
-	v1Storage["jobs/archive"] = jobstore.NewArchiveStorage(jobStorage.Job, oldJobs)
+	v1Storage["jobs/archive"] = jobstore.NewArchiveStorage(jobStorage.Resource, oldJobs)
 
-	runnerStorage := runnerstore.NewStorage(Scheme)
+	runnerStorage := runnerstore.NewStorage()
 	if err := runnerStorage.CompleteWithOptions(storeOptions); err != nil {
 		return nil, nil, err
 	}
-	v1Storage["runners"] = runnerStorage.Runner
+	v1Storage["runners"] = runnerStorage.Resource
 	v1Storage["runners/status"] = runnerStorage.Status
 
 	apiGroupInfo.VersionedResourcesStorageMap["v1"] = v1Storage

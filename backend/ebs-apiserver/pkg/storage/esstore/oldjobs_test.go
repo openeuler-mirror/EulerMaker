@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
+	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 
 	ebsv1 "ebs-api/ebs/v1"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
@@ -56,7 +57,7 @@ func TestOldJobsArchiveVersions(t *testing.T) {
 		writes++
 		return jsonResponse(200, map[string]any{"_seq_no": writes, "_primary_term": 1}), nil
 	})})
-	store := NewOldJobs(client, jobstore.NewStorage(nil).Job)
+	store := NewOldJobs(client, jobstore.NewStorage().Resource.(*genericregistry.Store))
 	ctx := apirequest.WithNamespace(context.Background(), "project")
 	job := &ebsv1.Job{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Job"},
@@ -146,7 +147,7 @@ func TestOldJobsProjectedPagination(t *testing.T) {
 			return nil, nil
 		}
 	})})
-	store := NewOldJobs(client, jobstore.NewStorage(nil).Job)
+	store := NewOldJobs(client, jobstore.NewStorage().Resource.(*genericregistry.Store))
 	out, err := store.List(ctx, opts)
 	if err != nil {
 		t.Fatal(err)

@@ -5,13 +5,21 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/validation/path"
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/storage"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -25,6 +33,8 @@ type Config struct {
 	NewList       func() runtime.Object
 	PrepareCreate func(runtime.Object)
 	CopyStatus    func(runtime.Object, runtime.Object)
+	// AttrFunc supplies the same attributes to List/Watch filtering and the native storage cache.
+	AttrFunc storage.AttrFunc
 
 	// CopySpec preserves fields owned by the main resource during status updates.
 	// A nil callback means the resource has no status subresource.
@@ -32,11 +42,16 @@ type Config struct {
 	Validate       func(runtime.Object) field.ErrorList
 	ValidateUpdate func(runtime.Object, runtime.Object) field.ErrorList
 	ValidateStatus func(runtime.Object, runtime.Object) field.ErrorList
+
+	// ValidateDelete is applied by native storage during deletion.
+	ValidateDelete func(runtime.Object) field.ErrorList
 }
 
 type Storage struct {
-	Resource rest.StandardStorage
-	Status   rest.StandardStorage
+	Resource       rest.StandardStorage
+	Status         rest.Storage
+	validateDelete func(runtime.Object) field.ErrorList
+	attrFunc       storage.AttrFunc
 }
 
 func NewStorage(c Config) *Storage {
@@ -57,13 +72,88 @@ func NewStorage(c Config) *Storage {
 		if update == strategy {
 			store.CreateStrategy = strategy
 		}
+		if c.AttrFunc != nil {
+			store.PredicateFunc = func(label labels.Selector, field fields.Selector) storage.SelectionPredicate {
+				return storage.SelectionPredicate{Label: label, Field: field, GetAttrs: c.AttrFunc}
+			}
+		}
 		return store
 	}
-	storage := &Storage{Resource: newStore(strategy)}
+	storage := &Storage{Resource: newStore(strategy), validateDelete: c.ValidateDelete, attrFunc: c.AttrFunc}
 	if c.CopySpec != nil {
 		storage.Status = newStore(statusStrategy)
 	}
 	return storage
+}
+
+// CompleteWithOptions initializes native storage and shares it with the status subresource.
+func (s *Storage) CompleteWithOptions(options *generic.StoreOptions) error {
+	store := s.Resource.(*genericregistry.Store)
+	// Native storage keys use the configured resource prefix, not the ES adapter's keys.
+	store.KeyRootFunc, store.KeyFunc = nil, nil
+	storeOptions := *options
+	if s.attrFunc != nil {
+		storeOptions.AttrFunc = s.attrFunc
+	}
+	if err := store.CompleteWithOptions(&storeOptions); err != nil {
+		return err
+	}
+	if s.Status != nil {
+		status := *store
+		status.UpdateStrategy = s.Status.(*genericregistry.Store).UpdateStrategy
+		status.CreateStrategy, status.DeleteStrategy = nil, nil
+		status.DestroyFunc = nil
+		s.Status = &statusREST{store: &status}
+	}
+	if s.validateDelete != nil {
+		s.Resource = &resourceREST{Store: store, validateDelete: s.validateDelete}
+	}
+	return nil
+}
+
+type resourceREST struct {
+	*genericregistry.Store
+	validateDelete func(runtime.Object) field.ErrorList
+}
+
+func (r *resourceREST) Delete(ctx context.Context, name string, validate rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	return r.Store.Delete(ctx, name, r.deletionValidation(validate), options)
+}
+
+func (r *resourceREST) DeleteCollection(ctx context.Context, validate rest.ValidateObjectFunc, options *metav1.DeleteOptions, listOptions *metainternalversion.ListOptions) (runtime.Object, error) {
+	return r.Store.DeleteCollection(ctx, r.deletionValidation(validate), options, listOptions)
+}
+
+func (r *resourceREST) deletionValidation(validate rest.ValidateObjectFunc) rest.ValidateObjectFunc {
+	return func(ctx context.Context, obj runtime.Object) error {
+		if errs := r.validateDelete(obj); len(errs) != 0 {
+			accessor, err := meta.Accessor(obj)
+			if err != nil {
+				return apierrors.NewInternalError(err)
+			}
+			return apierrors.NewConflict(r.DefaultQualifiedResource, accessor.GetName(), errs.ToAggregate())
+		}
+		if validate != nil {
+			return validate(ctx, obj)
+		}
+		return nil
+	}
+}
+
+type statusREST struct {
+	store *genericregistry.Store
+}
+
+func (r *statusREST) New() runtime.Object { return r.store.New() }
+func (r *statusREST) Destroy()            {}
+func (r *statusREST) NamespaceScoped() bool {
+	return r.store.UpdateStrategy.NamespaceScoped()
+}
+func (r *statusREST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	return r.store.Get(ctx, name, options)
+}
+func (r *statusREST) Update(ctx context.Context, name string, info rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	return r.store.Update(ctx, name, info, createValidation, updateValidation, forceAllowCreate, options)
 }
 
 func keyRootFunc(resource string, clusterScoped bool) func(context.Context) string {
