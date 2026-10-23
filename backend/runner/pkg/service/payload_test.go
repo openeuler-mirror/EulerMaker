@@ -115,6 +115,7 @@ func TestResolveGitClonePayload(t *testing.T) {
 				Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job"},
 				Spec:     gateway.JobSpec{Payload: `{"clone_url":"git-server:///git/host/team/repo%252B.git","origin_url":"https://origin/repo.git","commit_id":"abc"}`},
 			}
+			original := job.Spec.Payload
 			if err := routes.Pin(context.Background(), job); err != nil {
 				t.Fatal(err)
 			}
@@ -132,18 +133,27 @@ func TestResolveGitClonePayload(t *testing.T) {
 			if err := json.Unmarshal([]byte(resolved), &payload); err != nil {
 				t.Fatal(err)
 			}
-			base := "http://git:8080"
+			wantClone := "http://git:8080/proxy%20path/git/host/team/repo%252B.git"
 			if mode == "external" {
-				base = "https://git.example"
+				wantClone = "https://origin/repo.git"
 			}
-			if payload["clone_url"] != base+"/proxy%20path/git/host/team/repo%252B.git" ||
+			if payload["clone_url"] != wantClone ||
 				payload["origin_url"] != "https://origin/repo.git" || payload["commit_id"] != "abc" {
 				t.Fatalf("payload = %v", payload)
 			}
 			routes.Release(job)
 			resolved, err = routes.ResolvePayload(job)
-			if err != nil || !strings.Contains(resolved, "new-git") {
+			if err != nil {
 				t.Fatalf("refreshed payload = %q, %v", resolved, err)
+			}
+			if err := json.Unmarshal([]byte(resolved), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "internal" {
+				wantClone = "http://new-git:8080/git/host/team/repo%252B.git"
+			}
+			if payload["clone_url"] != wantClone || job.Spec.Payload != original {
+				t.Fatalf("refreshed payload = %v; original Job payload = %s", payload, job.Spec.Payload)
 			}
 		})
 	}
@@ -157,19 +167,59 @@ func TestResolveGitCloneErrors(t *testing.T) {
 			t.Fatalf("accepted invalid clone URL %q", reference)
 		}
 	}
-	routes := NewRoutes("external", nil, http.DefaultClient)
+	routes := NewRoutes("internal", nil, http.DefaultClient)
 	if err := routes.Update(gateway.ServiceEndpoints{
 		ArtifactManagers: map[string]gateway.ServiceEndpoint{"default": {RunnerInternalURL: "http://artifact:8081"}},
-		GitServer:        gateway.ServiceEndpoint{RunnerInternalURL: "http://git:8080"},
+		GitServer:        gateway.ServiceEndpoint{RunnerExternalURL: "https://git.example"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	job := gateway.JobResource{Spec: gateway.JobSpec{Payload: `{"clone_url":"git-server:///git/host/repo.git"}`}}
 	if _, err := routes.ResolvePayload(job); err == nil || !strings.Contains(err.Error(), "selected access mode") {
-		t.Fatalf("missing external address error = %v", err)
+		t.Fatalf("missing internal address error = %v", err)
 	}
 	job.Spec.Payload = `{"clone_url":"https://origin/repo.git","origin_url":"https://origin/repo.git"}`
 	if got, err := routes.ResolvePayload(job); err != nil || got != job.Spec.Payload {
 		t.Fatalf("direct clone payload = %q, %v", got, err)
+	}
+}
+
+func TestExternalCloneUsesOriginWithoutGitServer(t *testing.T) {
+	routes := NewRoutes("external", nil, http.DefaultClient)
+	for _, cloneURL := range []string{"git-server:///git/host/repo.git", "https://mirror.example/repo.git"} {
+		input := map[string]any{
+			"clone_url": cloneURL, "origin_url": "https://origin.example/repo.git",
+			"commit_id": "0123456789abcdef0123456789abcdef01234567", "custom": map[string]any{"enabled": true},
+		}
+		data, _ := json.Marshal(input)
+		job := gateway.JobResource{Spec: gateway.JobSpec{Payload: string(data)}}
+		resolved, err := routes.ResolvePayload(job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output map[string]any
+		if err := json.Unmarshal([]byte(resolved), &output); err != nil {
+			t.Fatal(err)
+		}
+		input["clone_url"] = input["origin_url"]
+		want, _ := json.Marshal(input)
+		got, _ := json.Marshal(output)
+		if string(got) != string(want) || job.Spec.Payload != string(data) {
+			t.Fatalf("local payload = %s, want %s; Job payload = %s", got, want, job.Spec.Payload)
+		}
+	}
+}
+
+func TestExternalCloneRequiresOrigin(t *testing.T) {
+	routes := NewRoutes("external", nil, http.DefaultClient)
+	for _, origin := range []string{"", `,"origin_url":""`, `,"origin_url":"  "`, `,"origin_url":null`, `,"origin_url":42`} {
+		job := gateway.JobResource{Spec: gateway.JobSpec{Payload: `{"clone_url":"git-server:///git/host/repo.git"` + origin + `}`}}
+		if _, err := routes.ResolvePayload(job); err == nil || !strings.Contains(err.Error(), "origin_url") {
+			t.Fatalf("payload %s: error = %v", job.Spec.Payload, err)
+		}
+	}
+	job := gateway.JobResource{Spec: gateway.JobSpec{Payload: `{"command":"custom"}`}}
+	if got, err := routes.ResolvePayload(job); err != nil || got != job.Spec.Payload {
+		t.Fatalf("payload without clone = %q, %v", got, err)
 	}
 }

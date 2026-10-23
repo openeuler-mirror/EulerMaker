@@ -232,7 +232,7 @@ Content-Type: application/json
 
 Controller Manager 的 Git Server 客户端将 `clone_path` 前加 `git-server://`，生成 `git-server:///git/gitee.com/src-openeuler/gcc.git`。空 authority 表示当前唯一的 Git Server；Snapshot `status.packageRepoStatuses[repoName].cloneURL` 和 Job payload `clone_url` 保存此逻辑地址，字段名不变。客户端不拼接 `gitServer.internalURL`，管理面地址不必对 Runner 可达。
 
-Runner 从 Gateway `service-endpoints` 获取 Git Server 的 Runner 地址，按网络模式将 `git-server:///git/...` 转换为 HTTP(S) URL，写入本地 payload.json 后交给脚本克隆。地址配置见 [服务配置](data-models~config.md)。
+Runner 在 internal 模式下从 Gateway `service-endpoints` 获取 Git Server 内网地址，将 `git-server:///git/...` 转换为 HTTP(S) URL；external 模式直接以 `origin_url` 替换本地 `clone_url`。两者均保留固定提交，处理规则见 [Runner 设计](runner.md)，地址配置见 [服务配置](data-models~config.md)。
 
 ### 4.3 删除仓库
 

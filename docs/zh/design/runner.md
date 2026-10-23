@@ -172,7 +172,12 @@ Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用
 
 构建执行前，Runner 转换 JSON payload 的 `repo[].url`：`artifact://{instance}/repositories/...` 使用该实例在当前模式下的 Runner 地址，`artifact:///repositories/...` 使用 `default`；HTTP(S) URL 原样保留。转换结果写入本地 `payload.json`，不回写 `Job.spec.payload`。同一 Job 上传实例的地址使用已固定值，其他仓库实例从本次地址快照取值；实例缺失、地址为空或逻辑路径无效时，不启动构建容器并记录明确错误。
 
-`clone_url` 中的 `git-server:///git/...` 使用 `gitServer` 的 Runner 地址替换协议前缀，按同一 `--service-access-mode` 选择内网或外网入口。入口只填写服务基础地址，不附加 `/git`；拼接保留代理路径前缀与仓库路径编码。Git 地址在 Job 启动时固定，后续刷新不改变该次执行。所选 Git 地址缺失或逻辑路径无效时明确报错，不启动容器，不回退到另一模式或管理地址；HTTP(S) 克隆地址、`origin_url`、`commit_id` 原样保留。Git 克隆由构建容器中的脚本执行，其 HTTPS 信任配置由构建镜像负责，不使用 Runner 的 Artifact Manager CA 配置。
+写入本地 `payload.json` 时，按 `--service-access-mode` 处理源码地址：
+
+- `internal`：将 `clone_url` 中的 `git-server:///git/...` 解析为 `gitServer.runnerInternalURL` 下的地址，普通克隆 URL 保持不变。入口不附加 `/git`，拼接保留代理前缀与仓库路径编码。地址在 Job 启动时固定；地址缺失或逻辑路径无效时明确失败，不回退其他模式或管理地址。
+- `external`：只要 payload 存在 `clone_url`，就将其替换为 `origin_url`，不依赖 `gitServer.runnerExternalURL`。`origin_url` 缺失、非字符串或为空白时明确失败，不启动容器；没有 `clone_url` 的自定义任务不受影响。
+
+两种模式均保留 `origin_url` 和 `commit_id`，不修改服务端 Job。脚本仍检出固定提交；上游不可达、认证失败或上游已无法提供该提交（例如 PR 引用变化）时构建失败，不回退 Git Server、默认分支或其他提交。`use_git_lfs` 仍按 Script 契约使用固定 AtomGit 地址。Git 克隆与 HTTPS 信任配置由构建镜像负责，不使用 Runner 的 Artifact Manager CA 配置。
 
 ## 四、Runner 资源模型
 
@@ -418,7 +423,7 @@ containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默
 ```text
 1. 解析 Job.spec.runtimeSpec，得到镜像、网络、权限、工作目录、挂载等容器配置
 2. 为 Job 创建本地 workDir 和 resultDir
-3. 将 Job.spec.payload 写入 workDir/payload.json，作为任务执行所需的 JSON 参数文件。`origin_url`、`commit_id` 原样保留。Job `clone_url` 中的 `git-server:///git/...` 按 3.4 的服务地址规则转换为 HTTP(S) 克隆地址；源码获取见 [Script 契约](data-models~script.md)。
+3. 按 3.4 的服务地址规则处理 `repo[].url` 和 `clone_url`，写入 workDir/payload.json；`origin_url`、`commit_id` 原样保留，不修改 Job.spec.payload。源码获取见 [Script 契约](data-models~script.md)。
 4. `scriptRefs` 非空时按顺序解析全部脚本，写入 workDir/scripts/{name}；全部成功后才继续
 5. 拉取或确认业务镜像可用
 6. 创建容器，挂载 workDir、resultDir，并写入 Job / Project / Runner 标识 label
@@ -686,7 +691,7 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--gateway` | `https://ebs-gateway:8443` | gateway 地址 |
-| `--service-access-mode` | `internal` | Git Server 和 Artifact Manager 统一使用各自的 `runnerInternalURL` 或 `runnerExternalURL`；外网模式设置为 `external` |
+| `--service-access-mode` | `internal` | internal 使用内网服务地址；external 使用制品外网地址，并以 `origin_url` 替换本地 `clone_url` |
 | `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
 | `--name` | hostname | Runner 资源名称 |
 | `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |

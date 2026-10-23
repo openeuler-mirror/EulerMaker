@@ -32,7 +32,7 @@ docker compose -f hacks/docker-compose.yml logs -f
 
 默认通过 `http://localhost` 访问前端；端口冲突时可用 `EULERMAKER_FRONTEND_PORT=5173 docker compose -f hacks/docker-compose.yml up -d`。修改后端代码后，使用 `docker compose -f hacks/docker-compose.yml up -d --build <服务名>` 重建对应服务。
 
-基础配置不包含 Runner，实际执行构建需另行启动 `docker-compose.runner.yml`，并在 `Config/service-config` 中配置 Runner 和 Job 容器可访问的 Git Server、Artifact Manager 地址。`RUNNER_SERVICE_ACCESS_MODE` 默认 `internal`，对应 `runnerInternalURL`；设为 `external` 时两类服务均使用 `runnerExternalURL`。同机宿主机网络可使用初始化的回环地址，异机部署须修改服务地址，并设置 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`。这套配置仅适用于隔离的开发环境：映射的 etcd、ES 和 apiserver 端口不应暴露给不可信网络。不要直接复用 TLS 部署的数据目录切换模式。
+基础配置不包含 Runner，实际执行构建需另行启动 `docker-compose.runner.yml`，并在 `Config/service-config` 中配置 Runner 和 Job 容器可访问的服务地址。`RUNNER_SERVICE_ACCESS_MODE` 默认 `internal`，使用两类服务的 `runnerInternalURL`；设为 `external` 时使用制品服务的 `runnerExternalURL`，源码直接访问 payload 的 `origin_url`，保留固定 `commit_id`，无需 Git Server 外网地址。同机宿主机网络可使用初始化的回环地址，异机部署须修改服务地址，并设置 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`。这套配置仅适用于隔离的开发环境：映射的 etcd、ES 和 apiserver 端口不应暴露给不可信网络。不要直接复用 TLS 部署的数据目录切换模式。
 
 ## TLS 联调
 

@@ -70,11 +70,23 @@ func (r *Routes) ResolvePayload(job gateway.JobResource) (string, error) {
 		if err := json.Unmarshal(rawClone, &reference); err != nil {
 			return "", fmt.Errorf("decode Job payload clone_url: %w", err)
 		}
-		if strings.HasPrefix(reference, "git-server:") {
-			resolved, err := resolveGitClone(reference, gitAddress)
+		resolved := reference
+		if r.mode == "external" {
+			resolved = ""
+			if err := json.Unmarshal(payload["origin_url"], &resolved); err != nil {
+				return "", fmt.Errorf("decode Job payload origin_url for external clone: %w", err)
+			}
+			if strings.TrimSpace(resolved) == "" {
+				return "", fmt.Errorf("Job payload origin_url is required for external clone")
+			}
+		} else if strings.HasPrefix(reference, "git-server:") {
+			var err error
+			resolved, err = resolveGitClone(reference, gitAddress)
 			if err != nil {
 				return "", fmt.Errorf("resolve Job payload clone_url: %w", err)
 			}
+		}
+		if resolved != reference {
 			payload["clone_url"], _ = json.Marshal(resolved)
 			changed = true
 		}

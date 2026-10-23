@@ -1234,7 +1234,7 @@ status:                                             # 创建时恒 Pending/Pendi
      - `package_name` = 当前条目的 `repoName`，始终写入，供脚本判断包仓库名相关规则；
      - `spec_file_name` = `本轮组装的 specDepends[spec].specFileName`；
      - `origin_url` = 当前 Snapshot `spec.packageRepos` 中按 `entry.repoName` 匹配的仓库 `url`。所有构建类型均传递，包含启用 Git LFS 的 Job；使用 Snapshot 固化值，不从实时 Project 或用户 buildPayload 取值；
-     - `clone_url` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].cloneURL`（Git Server 客户端生成的 `git-server:///git/...` 逻辑地址，原样下发；Runner 按网络模式解析为 HTTP(S) URL 后交给脚本；`use_git_lfs` 命中时默认脚本改用固定 AtomGit URL）；
+     - `clone_url` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].cloneURL`（Git Server 客户端生成的 `git-server:///git/...` 逻辑地址，原样下发；Runner internal 模式解析内网 Git Server 地址，external 模式用 `origin_url` 替换本地值，均保留 `commit_id`；`use_git_lfs` 命中时默认脚本改用固定 AtomGit URL）；
      - `commit_id` = 当前 Snapshot `status.packageRepoStatuses[entry.repoName].commitID`；
      - packageRepoStatuses 缺 `repoName` 条目或条目无 `commitID`（正常不出现：本轮组装的 specDepends 即按当前 Snapshot 的 url+commit 解析而来（15.11），且下发时必已就绪）→ 对应两键不注入 + warning 日志，**不阻断下发**。
    - `specDepends[specName].repoName` 在 `BuildInfo.spec.buildPayload.disable_check_path` 列表中时写入 `disable_check_path: true`，否则不写该键；同仓库的多个 spec 得到相同结果。该字段仅向构建脚本传递意图，构建脚本负责落实 RPATH 检查开关；Runner 不解析它。

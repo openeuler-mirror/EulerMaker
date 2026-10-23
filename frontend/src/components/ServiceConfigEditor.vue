@@ -26,11 +26,6 @@
               <input v-if="editing" v-model.trim="gitServer.runnerInternalURL" type="url" autocomplete="off" :placeholder="t('serviceConfig.optional')" />
               <code v-else>{{ gitServer.runnerInternalURL || t('common.emptyValue') }}</code>
             </label>
-            <label class="field">
-              <span>{{ t('serviceConfig.runnerExternalURL') }}</span>
-              <input v-if="editing" v-model.trim="gitServer.runnerExternalURL" type="url" autocomplete="off" placeholder="https://git.example.com" />
-              <code v-else>{{ gitServer.runnerExternalURL || t('common.emptyValue') }}</code>
-            </label>
           </div>
         </section>
         <section class="content-panel service-card">

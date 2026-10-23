@@ -686,7 +686,7 @@ gateway 使用反向代理将请求转发到 `ebs-apiserver`。
 }
 ```
 
-Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何服务的 `internalURL`、原始 `spec.content` 或其他 Config 字段；响应设置 `Cache-Control: no-store`。Config 的完整内容校验由 apiserver 在创建、更新时完成；Gateway 不重复校验实例名和 URL，仅处理读取、响应契约与反序列化错误，这些错误返回服务不可用，不使用旧缓存地址。地址不是凭据，但此接口仍须校验 Runner 身份。上传实例的选择不属于此接口；原 Config 继续为 `OpsOnly`，不得通过普通 Config GET 向 Runner 放行。Runner 启动时读取此接口，之后约每 600 秒刷新地址表，使用 Job annotation 选择 Artifact Manager 实例；Git Server 使用唯一的 `gitServer` 地址。两者均按 Runner 网络模式选址。
+Gateway 仅投影 `runnerInternalURL` 和 `runnerExternalURL`，不返回任何服务的 `internalURL`、原始 `spec.content` 或其他 Config 字段；响应设置 `Cache-Control: no-store`。Config 的完整内容校验由 apiserver 在创建、更新时完成；Gateway 不重复校验实例名和 URL，仅处理读取、响应契约与反序列化错误，这些错误返回服务不可用，不使用旧缓存地址。地址不是凭据，但此接口仍须校验 Runner 身份。上传实例的选择不属于此接口；原 Config 继续为 `OpsOnly`，不得通过普通 Config GET 向 Runner 放行。Runner 启动时读取此接口，之后约每 600 秒刷新地址表，使用 Job annotation 选择 Artifact Manager 实例；Artifact Manager 按 Runner 网络模式选址；源码在 internal 模式使用 `gitServer.runnerInternalURL`，external 模式直接使用 Job payload 的 `origin_url`，不依赖 Git Server 外网地址。
 
 ## 五、路由设计
 
