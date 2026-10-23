@@ -228,11 +228,12 @@ Runner 页面展示：
 - 地址、操作系统、内核、运行时和 Agent 版本。
 - labels、taints 和 conditions。
 
-Ops 和 Admin 均可进入运维页面查看 Runner，并执行驱逐和取消驱逐；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、删除、调度开关或 taint 编辑入口。
+Ops 和 Admin 均可进入运维页面查看 Runner，并执行驱逐、取消驱逐和移除；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、调度开关或 taint 编辑入口。
 
 - 非 `Evicted` Runner 显示“驱逐”，`Evicted` Runner 显示“取消驱逐”，操作均需二次确认。
 - 提交前 GET 最新 Runner，确认 UID 与选中对象一致，并携带最新 resourceVersion PATCH `/runners/{name}/status`；驱逐写 `Evicted`，取消驱逐写 `Offline`，等待新心跳恢复 `Online`，不修改 `spec.unschedulable`。
 - 最新对象已驱逐或已解除驱逐时，对应操作不重复写入；UID 不一致时提示冲突。404、403、409 等错误显示在确认弹窗中，不自动重放写请求。
+- 仅 `Evicted` 或 `Offline` Runner 可移除；确认前 GET 最新 Runner 并再次检查状态和 UID，DELETE 时携带最新 resourceVersion 和 UID 作为前置条件。在线或状态已变化的 Runner 不执行删除。
 - 不提供任意 status 编辑入口；按钮权限只用于交互，最终授权由 Gateway 执行。
 
 ### 5.8 用户与 MachineAccount 管理
