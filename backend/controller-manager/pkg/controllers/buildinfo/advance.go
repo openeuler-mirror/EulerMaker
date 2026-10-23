@@ -2,7 +2,6 @@ package buildinfo
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -371,8 +370,8 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 	return req
 }
 
-// checkCompletion requires every spec to be terminal, every successful spec to reach its required dispatch count, and
-// no pending Job creations. It writes Completed; spec statuses and failedPackages carry the result.
+// checkCompletion requires every spec to be terminal and every successful spec to reach its required dispatch count.
+// It writes Completed; spec statuses and failedPackages carry the result.
 func (c *Controller) checkCompletion(
 	ctx context.Context,
 	round *reconcileRound,
@@ -395,9 +394,6 @@ func (c *Controller) checkCompletion(
 		if failedSpecBuildStatus(ss.Build.Status) {
 			failed = append(failed, spec)
 		}
-	}
-	if blocked := c.pendingCreatesBlock(round, "completion"); blocked {
-		return controller.ReconcileResult{}, nil
 	}
 	needsRepoMap := len(failed) > 0
 	for _, ss := range round.current.Status.SpecStatus.Install {
@@ -544,8 +540,7 @@ func (c *Controller) stoppedFailedPackages(ctx context.Context, round *reconcile
 	return sortedFailedPackages(round.current.Status.FailedPackages, failed), nil
 }
 
-// convergeToCompleted waits for created Jobs to finish without further dispatch. Pending creations must be confirmed
-// before completion; a 404 keeps the entry because the create may still land. The stop marker remains.
+// convergeToCompleted waits for created Jobs to finish without further dispatch, retaining the stop marker.
 func (c *Controller) convergeToCompleted(
 	ctx context.Context,
 	round *reconcileRound,
@@ -560,48 +555,7 @@ func (c *Controller) convergeToCompleted(
 		return result, err
 	}
 
-	// Even when the List missed an entry, every registered pending create is GET-verified; re-creation is forbidden after
-	// the stop.
-	var confirmed []*ebsv1.Job
-	for _, spec := range sortedSpecNames(round.current.Status.PendingJobCreates) {
-		pend, ok := round.current.Status.PendingJobCreates[spec]
-		if !ok {
-			continue // confirmed and removed by an earlier write this round
-		}
-		job, err := c.client.GetJob(ctx, round.current.Namespace, pend.JobName)
-		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				// Keep the entry and wait: 404 is never a non-existence proof for an in-flight request.
-				c.logf(
-					round.key,
-					"JobCreateUnresolved",
-					"pending job create for spec %s (job %s generation %d) unresolved after stop-dispatch; "+
-						"entry kept, waiting (6.5.1 #5)",
-					spec,
-					pend.JobName,
-					pend.DispatchGeneration,
-				)
-				continue
-			}
-			return controller.ReconcileResult{}, err
-		}
-		if verr := verifyJobIdentity(job, round.current, spec, pend.DispatchGeneration); verr != nil {
-			c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch: %v", pend.JobName, verr)
-			return controller.ReconcileResult{}, controller.NewPermanentError(verr)
-		}
-		if result, err := c.confirmDispatchedJob(ctx, round, spec, pend.DispatchGeneration, job); err != nil ||
-			result != (controller.ReconcileResult{}) {
-			return result, err
-		}
-		confirmed = append(confirmed, job)
-	}
-
-	// Completed requires an empty pending map and every created Job (all generations, including out-of-scope ones)
-	// terminal.
-	if len(round.current.Status.PendingJobCreates) > 0 {
-		return controller.ReconcileResult{}, nil
-	}
-	if c.jobsAwaitingTerminal(round, jobs, confirmed) {
+	if c.jobsAwaitingTerminal(round, jobs) {
 		return controller.ReconcileResult{}, nil
 	}
 	marker := stopCondition(round.current.Status.Conditions)
@@ -637,7 +591,7 @@ func (c *Controller) convergeToCompleted(
 
 // jobsAwaitingTerminal waits for all Jobs of this BuildInfo incarnation to become terminal. Pending, Running, empty,
 // and unknown phases keep it waiting; Jobs of an older incarnation do not block convergence.
-func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Job, confirmed []*ebsv1.Job) bool {
+func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Job) bool {
 	waiting := false
 	scan := func(job *ebsv1.Job) {
 		switch job.Status.Phase {
@@ -659,9 +613,6 @@ func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Jo
 	own := filterJobsByIdentity(jobs, string(round.current.UID))
 	for i := range own {
 		scan(&own[i])
-	}
-	for _, job := range confirmed {
-		scan(job)
 	}
 	return waiting
 }

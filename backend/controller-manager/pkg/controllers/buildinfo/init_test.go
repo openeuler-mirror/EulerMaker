@@ -674,9 +674,6 @@ func TestInitMissingImageMappingPauses(t *testing.T) {
 	if ss := bi.Status.SpecStatus.Entry("a"); ss.Build.Status != "" || ss.DispatchCount != 0 {
 		t.Fatalf("specStatus[a] = %+v, want an undispatched entry", ss)
 	}
-	if len(bi.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want empty (image resolves before registration)", bi.Status.PendingJobCreates)
-	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
 	}
@@ -709,9 +706,6 @@ func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 		ConditionDefaultBuildResourceConfigNotFound,
 		ReasonDefaultBuildResourceConfigNotFound,
 	)
-	if len(bi.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want empty (this-round registration removed)", bi.Status.PendingJobCreates)
-	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
 	}

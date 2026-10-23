@@ -669,7 +669,6 @@ func TestStatusMatchesIntent(t *testing.T) {
 	withEmpty := copyStatus(base)
 	withEmpty.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{})
 	withEmpty.SpecRepoNames = map[string]string{}
-	withEmpty.PendingJobCreates = map[string]ebsv1.PendingJobCreate{}
 	if !statusMatchesIntent(base, withEmpty) {
 		t.Fatal("nil maps must match empty maps")
 	}
@@ -700,11 +699,6 @@ func TestStatusMatchesIntent(t *testing.T) {
 	repos.SpecRepoNames = map[string]string{"a": "repo-a"}
 	if statusMatchesIntent(base, repos) {
 		t.Fatal("specRepoNames mismatch must not match")
-	}
-	pendA := copyStatus(base)
-	pendA.PendingJobCreates = map[string]ebsv1.PendingJobCreate{"a": {JobName: "j", DispatchGeneration: 1}}
-	if statusMatchesIntent(base, pendA) {
-		t.Fatal("pendingJobCreates presence mismatch must not match")
 	}
 	failed := copyStatus(base)
 	failed.FailedPackages = []string{"repo1"}

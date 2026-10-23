@@ -607,8 +607,7 @@ func (c *Controller) afterConfirmedWrite(round *reconcileRound, confirmed *ebsv1
 }
 
 // statusMatchesIntent compares a persisted status with the write intent semantically: nil maps equal empty maps,
-// conditions match by type without order or lastTransitionTime, specStatus matches per spec field-by-field, the DCG
-// matches by node and edge set, pendingJobCreates matches per spec entry.
+// conditions match by type without order or lastTransitionTime, and specStatus matches each spec field.
 func statusMatchesIntent(persisted, intent *ebsv1.BuildInfoStatus) bool {
 	if persisted.Phase != intent.Phase {
 		return false
@@ -625,7 +624,7 @@ func statusMatchesIntent(persisted, intent *ebsv1.BuildInfoStatus) bool {
 	if !maps.Equal(persisted.SpecRepoNames, intent.SpecRepoNames) {
 		return false
 	}
-	return pendingCreatesMatch(persisted.PendingJobCreates, intent.PendingJobCreates)
+	return true
 }
 
 // conditionsMatch compares two condition lists by type: status, reason and message must match; order and
@@ -729,21 +728,6 @@ func versionConstMapEqual(a, b map[string]ebsv1.VersionConstraint) bool {
 	}
 	for key, left := range a {
 		right, ok := b[key]
-		if !ok || left != right {
-			return false
-		}
-	}
-	return true
-}
-
-// pendingCreatesMatch compares pendingJobCreates per spec entry: a registration intent requires the entry, a removal
-// intent requires it gone.
-func pendingCreatesMatch(a, b map[string]ebsv1.PendingJobCreate) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for spec, left := range a {
-		right, ok := b[spec]
 		if !ok || left != right {
 			return false
 		}

@@ -89,8 +89,8 @@ type createdJob struct {
 }
 
 // dispatchSpec creates one deterministically named Job and stages its confirmation for a batched status write.
-// Persisted pending entries from earlier rounds retain their GET-based recovery path. Build-resource Config is read
-// once per round. Architecture and dependency checks and image resolution happen at the caller.
+// Build-resource Config is read once per round. Architecture and dependency checks and image resolution happen
+// at the caller.
 func (c *Controller) dispatchSpec(
 	ctx context.Context,
 	round *reconcileRound,
@@ -107,35 +107,9 @@ func (c *Controller) dispatchSpec(
 		return controller.ReconcileResult{Requeue: true}, nil
 	}
 	namespace := round.current.Namespace
-	var generation int64
-	var name string
+	generation := round.current.Status.SpecStatus.Entry(specName).DispatchCount + 1
+	name := jobNameFor(string(round.current.UID), specName, generation)
 	var err error
-	entryExisted := false
-	if pend, ok := round.current.Status.PendingJobCreates[specName]; ok {
-		// Registered entries are GET-verified first; a hit confirms
-		// (no new generation), a 404 re-creates with the same identity.
-		entryExisted = true
-		generation, name = pend.DispatchGeneration, pend.JobName
-		if expected := jobNameFor(string(round.current.UID), specName, generation); name != expected {
-			return controller.ReconcileResult{}, controller.NewPermanentError(
-				fmt.Errorf("pending Job name %q does not match current deterministic name %q", name, expected),
-			)
-		}
-		existing, err := c.client.GetJob(ctx, namespace, name)
-		if err == nil {
-			if verr := verifyJobIdentity(existing, round.current, specName, generation); verr != nil {
-				c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch: %v", name, verr)
-				return controller.ReconcileResult{}, controller.NewPermanentError(verr)
-			}
-			return c.confirmDispatchedJob(ctx, round, specName, generation, existing)
-		}
-		if !errors.Is(err, ErrNotFound) {
-			return controller.ReconcileResult{}, err
-		}
-	} else {
-		generation = round.current.Status.SpecStatus.Entry(specName).DispatchCount + 1
-		name = jobNameFor(string(round.current.UID), specName, generation)
-	}
 
 	if round.isSingle() {
 		contentURL, err = c.singleContentURL(ctx, round)
@@ -158,7 +132,6 @@ func (c *Controller) dispatchSpec(
 					ConditionDefaultBuildResourceConfigNotFound,
 					ReasonDefaultBuildResourceConfigNotFound,
 					message,
-					!entryExisted,
 				)
 			}
 			return controller.ReconcileResult{}, err
@@ -193,8 +166,7 @@ func (c *Controller) dispatchSpec(
 				name,
 			)
 		}
-		// Existing pending Jobs were GET-confirmed above. Only a new create needs repository metadata to derive this spec's
-		// prefer payload.
+		// Resolve repository metadata to derive this spec's prefer payload.
 		var reason string
 		sources, reason, err = c.loadSinglePreferSources(ctx, round, contentURL)
 		if err != nil {
@@ -270,7 +242,7 @@ func (c *Controller) dispatchSpec(
 				err,
 			)
 			return c.markSpecFailed(ctx, round, specName, ConditionJobCreateRejected, ReasonJobCreateRejected,
-				fmt.Sprintf("Job creation rejected with HTTP %d", writeErr.StatusCode), true)
+				fmt.Sprintf("Job creation rejected with HTTP %d", writeErr.StatusCode))
 		default:
 			// Let the controller handle any other rejected create.
 			jobCreateFailures.Inc()
@@ -323,7 +295,6 @@ func applyCreatedJobs(next *ebsv1.BuildInfo, jobs map[string]createdJob) {
 		}
 		applyJobPhase(&ss, created.job, false)
 		next.Status.SpecStatus.Set(name, ss)
-		delete(next.Status.PendingJobCreates, name)
 	}
 }
 
@@ -339,39 +310,12 @@ func (c *Controller) confirmCreatedJobs(round *reconcileRound) {
 	}
 }
 
-// confirmDispatchedJob persists the confirmed generation and Job phase, then removes its pending entry in the same
-// write.
-func (c *Controller) confirmDispatchedJob(
-	ctx context.Context,
-	round *reconcileRound,
-	specName string,
-	generation int64,
-	job *ebsv1.Job,
-) (controller.ReconcileResult, error) {
-	next := round.current.DeepCopy()
-	ss := next.Status.SpecStatus.Entry(specName)
-	if ss.DispatchCount < generation {
-		ss.DispatchCount = generation
-	}
-	applyJobPhase(&ss, job, false)
-	delete(next.Status.PendingJobCreates, specName)
-	next.Status.SpecStatus.Set(specName, ss)
-	result, err := c.writeStatus(ctx, round, next)
-	if err == nil && result == (controller.ReconcileResult{}) {
-		dispatches.Inc()
-	}
-	return result, err
-}
-
-// markSpecFailed records a pre-dispatch failure without creating a Job. A reused pending registration is checked before
-// removal so an in-flight Job cannot be lost when the spec becomes terminal.
 func (c *Controller) markSpecFailed(
 	ctx context.Context,
 	round *reconcileRound,
 	specName, condType, reason, message string,
-	clearPending bool,
 ) (controller.ReconcileResult, error) {
-	return c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildFailed, condType, reason, message, clearPending)
+	return c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildFailed, condType, reason, message)
 }
 
 func (c *Controller) markSpecTerminal(
@@ -380,7 +324,6 @@ func (c *Controller) markSpecTerminal(
 	specName string,
 	status ebsv1.SpecBuildPhase,
 	condType, reason, message string,
-	clearPending bool,
 ) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	ss := next.Status.SpecStatus.Entry(specName)
@@ -389,22 +332,6 @@ func (c *Controller) markSpecTerminal(
 		specCondition(&ss, condType, reason, message)
 	}
 	next.Status.SpecStatus.Set(specName, ss)
-	if clearPending {
-		delete(next.Status.PendingJobCreates, specName)
-	} else if pend, ok := next.Status.PendingJobCreates[specName]; ok {
-		job, err := c.client.GetJob(ctx, round.current.Namespace, pend.JobName)
-		if err == nil {
-			if verr := verifyJobIdentity(job, round.current, specName, pend.DispatchGeneration); verr != nil {
-				c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch at spec-failed closeout: %v", pend.JobName, verr)
-				return controller.ReconcileResult{}, controller.NewPermanentError(verr)
-			}
-			// The Job exists: keep the entry; the backfill fold resolves it.
-		} else if errors.Is(err, ErrNotFound) {
-			delete(next.Status.PendingJobCreates, specName)
-		} else {
-			return controller.ReconcileResult{}, err
-		}
-	}
 	return c.writeStatus(ctx, round, next)
 }
 
@@ -828,17 +755,6 @@ func (c *Controller) backfillJobs(
 					round.key, "UnknownJobPhase", "job %s phase %q unknown, status mapping skipped",
 					latest.Name, latest.Status.Phase,
 				)
-			}
-		}
-		// An identity-matched Job in the list confirms the pending entry (removed in the same write, no double counting).
-		if pend, ok := next.Status.PendingJobCreates[spec]; ok {
-			for i := range own {
-				job := &own[i]
-				if job.Name == pend.JobName &&
-					job.Annotations[annDispatchGeneration] == strconv.FormatInt(pend.DispatchGeneration, 10) {
-					delete(next.Status.PendingJobCreates, spec)
-					break
-				}
 			}
 		}
 		next.Status.SpecStatus.Set(spec, ss)
