@@ -212,14 +212,13 @@ type BuildInfoSpec struct {
 	BootstrapRepos []BootstrapRepo `json:"bootstrapRepos,omitempty"`
 }
 
-// BuildInfoStatus records build results and unconfirmed Job creations.
+// BuildInfoStatus records per-spec results and failed package repositories.
 type BuildInfoStatus struct {
-	Phase             BuildInfoPhase              `json:"phase,omitempty"`
-	Conditions        []metav1.Condition          `json:"conditions,omitempty"`
-	SpecStatus        SpecStatusGroup             `json:"specStatus"`
-	SpecRepoNames     map[string]string           `json:"specRepoNames,omitempty"`
-	FailedPackages    []string                    `json:"failedPackages,omitempty"`
-	PendingJobCreates map[string]PendingJobCreate `json:"pendingJobCreates,omitempty"`
+	Phase          BuildInfoPhase     `json:"phase,omitempty"`
+	Conditions     []metav1.Condition `json:"conditions,omitempty"`
+	SpecStatus     SpecStatusGroup    `json:"specStatus"`
+	SpecRepoNames  map[string]string  `json:"specRepoNames,omitempty"`
+	FailedPackages []string           `json:"failedPackages,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -227,14 +226,6 @@ type BuildInfoList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []BuildInfo `json:"items"`
-}
-
-// PendingJobCreate records a Job creation identity that has been registered
-// in status but whose creation result is not yet confirmed. Keyed by spec
-// name; a non-empty map blocks writing Completed.
-type PendingJobCreate struct {
-	JobName            string `json:"jobName,omitempty"`
-	DispatchGeneration int64  `json:"dispatchGeneration,omitempty"`
 }
 
 // SpecStatusGroup stores per-spec fields in separate maps so callers can

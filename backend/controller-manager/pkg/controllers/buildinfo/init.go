@@ -244,7 +244,7 @@ func (c *Controller) checkArchSupported(
 		return controller.ReconcileResult{}, nil
 	}
 	message := fmt.Sprintf("target arch %q not in exclusiveArch %v", arch, depend.ExclusiveArch)
-	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildArchUnsupported, "", "", "", false)
+	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildArchUnsupported, "", "", "")
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "ArchUnsupported", "spec %s marked ArchUnsupported: %s", specName, message)
 	}
@@ -265,7 +265,7 @@ func (c *Controller) checkBuildRequires(
 		return controller.ReconcileResult{}, nil
 	}
 	message := "build requires unavailable: " + missingDepsMessage(missing)
-	result, err := c.markSpecFailed(ctx, round, specName, ConditionBuildFailed, ReasonRpmDependsMissing, message, false)
+	result, err := c.markSpecFailed(ctx, round, specName, ConditionBuildFailed, ReasonRpmDependsMissing, message)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "RpmDependsMissing", "spec %s marked Failed: %s", specName, message)
 	}
@@ -500,26 +500,18 @@ func applyDegradedConditions(conditions *[]metav1.Condition, degraded []degraded
 	}
 }
 
-// closeoutInit writes the failure condition and Completed together, after confirming any pending Job creation. It
-// leaves specStatus untouched.
+// closeoutInit writes the failure condition and Completed together, leaving specStatus untouched.
 func (c *Controller) closeoutInit(
 	ctx context.Context,
 	round *reconcileRound,
 	verdict *terminalVerdict,
 	degraded []degradedCondition,
 ) (controller.ReconcileResult, error) {
-	result, blocked, err := c.resolvePendingCreates(ctx, round, "init closeout")
-	if err != nil || result != (controller.ReconcileResult{}) {
-		return result, err
-	}
-	if blocked {
-		return controller.ReconcileResult{}, nil
-	}
 	next := round.current.DeepCopy()
 	applyDegradedConditions(&next.Status.Conditions, degraded)
 	upsertCondition(&next.Status.Conditions, ConditionSpecDependsFillFailed, verdict.reason, verdict.message)
 	next.Status.Phase = ebsv1.BuildInfoCompleted
-	result, err = c.writeStatus(ctx, round, next)
+	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "InitDeterministicFailure", "completed: %s (%s)", verdict.reason, verdict.message)
 		c.invalidateCaches(round.key)
@@ -533,91 +525,15 @@ func (c *Controller) completeInitEmpty(
 	round *reconcileRound,
 	degraded []degradedCondition,
 ) (controller.ReconcileResult, error) {
-	result, blocked, err := c.resolvePendingCreates(ctx, round, "empty build set")
-	if err != nil || result != (controller.ReconcileResult{}) {
-		return result, err
-	}
-	if blocked {
-		return controller.ReconcileResult{}, nil
-	}
 	next := round.current.DeepCopy()
 	applyDegradedConditions(&next.Status.Conditions, degraded)
 	next.Status.Phase = ebsv1.BuildInfoCompleted
-	result, err = c.writeStatus(ctx, round, next)
+	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "EmptyBuildSet", "completed: nothing to build")
 		c.invalidateCaches(round.key)
 	}
 	return result, err
-}
-
-// pendingCreatesBlock prevents completion while Job creations remain uncertain.
-func (c *Controller) pendingCreatesBlock(round *reconcileRound, where string) bool {
-	if len(round.current.Status.PendingJobCreates) == 0 {
-		return false
-	}
-	c.logf(
-		round.key,
-		"PendingCreatesBlock",
-		"%s completed write blocked by %d unresolved pending job creates",
-		where,
-		len(round.current.Status.PendingJobCreates),
-	)
-	return true
-}
-
-// resolvePendingCreates checks registrations before an init closeout, which bypasses normal Job backfill. A found Job
-// confirms its dispatch; a 404 leaves the entry because an in-flight create may still land. It reports whether any
-// unresolved entry blocks completion.
-func (c *Controller) resolvePendingCreates(
-	ctx context.Context,
-	round *reconcileRound,
-	where string,
-) (controller.ReconcileResult, bool, error) {
-	if len(round.current.Status.PendingJobCreates) == 0 {
-		return controller.ReconcileResult{}, false, nil
-	}
-	for _, spec := range sortedSpecNames(round.current.Status.PendingJobCreates) {
-		pend, ok := round.current.Status.PendingJobCreates[spec]
-		if !ok {
-			continue // resolved by an earlier confirm write this round
-		}
-		job, err := c.client.GetJob(ctx, round.current.Namespace, pend.JobName)
-		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				c.logf(
-					round.key,
-					"JobCreateUnresolved",
-					"pending job create for spec %s (job %s generation %d) unresolved at %s; entry kept, waiting (6.5.1 #5)",
-					spec,
-					pend.JobName,
-					pend.DispatchGeneration,
-					where,
-				)
-				continue
-			}
-			return controller.ReconcileResult{}, true, err
-		}
-		if verr := verifyJobIdentity(job, round.current, spec, pend.DispatchGeneration); verr != nil {
-			c.logf(round.key, "JobIdentityMismatch", "job %s identity mismatch: %v", pend.JobName, verr)
-			return controller.ReconcileResult{}, true, controller.NewPermanentError(verr)
-		}
-		result, err := c.confirmDispatchedJob(ctx, round, spec, pend.DispatchGeneration, job)
-		if err != nil || result != (controller.ReconcileResult{}) {
-			return result, true, err
-		}
-	}
-	if len(round.current.Status.PendingJobCreates) > 0 {
-		c.logf(
-			round.key,
-			"PendingCreatesBlock",
-			"%s completed write blocked by %d unresolved pending job creates",
-			where,
-			len(round.current.Status.PendingJobCreates),
-		)
-		return controller.ReconcileResult{}, true, nil
-	}
-	return controller.ReconcileResult{}, false, nil
 }
 
 // specNameSet flattens a build set to its spec-name scope (Job grouping).

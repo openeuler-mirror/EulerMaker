@@ -1089,9 +1089,7 @@ func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
 func TestDispatchSpecNotSentNotCountedAsSent(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-dispatch-notsent", "a")
-	// Local validation failure (WriteNotSent): no request left the controller, so jobCreates must not count it
-	// (metrics.go "Job create requests sent") and the this-round
-	// registration is removed.
+	// Local validation failed before sending the request, so jobCreates must not count it.
 	before := jobCreates.Value()
 	client.InjectWrite("create", clientpkg.WriteNotSent, 0, false)
 	depend := dependEntry("a")
@@ -1103,10 +1101,6 @@ func TestDispatchSpecNotSentNotCountedAsSent(t *testing.T) {
 	}
 	if delta := jobCreates.Value() - before; delta != 0 {
 		t.Fatalf("jobCreates delta = %d, want 0 (WriteNotSent never sent a request)", delta)
-	}
-	persisted := getBuildInfo(t, client)
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want the this-round registration removed", persisted.Status.PendingJobCreates)
 	}
 }
 
@@ -1199,43 +1193,6 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 	if a.DispatchCount != 1 || a.Build.Status != ebsv1.SpecBuildRunning {
 		t.Fatalf("specStatus[a] = %+v, want confirmed Running dispatch of the existing job", a)
 	}
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want the entry confirmed and removed", persisted.Status.PendingJobCreates)
-	}
-}
-
-func TestSinglePendingJobConfirmDoesNotLoadPreferMetadata(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.UID = "single-pending"
-	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {}})
-	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
-		"a": {JobName: jobNameFor(string(bi.UID), "a", 1), DispatchGeneration: 1},
-	}
-	seeded := client.SeedBuildInfo(bi)
-	client.SeedJob(testJobObj(seeded, "a", 1, ebsv1.JobRunning))
-	round := &reconcileRound{
-		key: testNS + "/" + testBuild, current: seeded,
-		build: testBuildObj("single", "repo1"), failures: c.newRoundFailures(testNS + "/" + testBuild),
-	}
-	depend := dependEntry("a")
-	result, err := c.dispatchSpec(
-		context.Background(),
-		round,
-		"a",
-		&depend,
-		testSnapshotObj(),
-		testImage,
-		testRepoURL,
-		nil,
-	)
-	if err != nil || result != (controller.ReconcileResult{}) {
-		t.Fatalf("pending Job confirmation = %v, %v", result, err)
-	}
-	if got := len(listJobs(t, client)); got != 1 {
-		t.Fatalf("Jobs = %d, want existing Job only", got)
-	}
 }
 
 func TestDispatchSpecAlreadyExistsIdentityMismatch(t *testing.T) {
@@ -1265,10 +1222,6 @@ func TestDispatchSpecAlreadyExistsConfirm404Retried(t *testing.T) {
 	if err == nil || controller.IsPermanent(err) {
 		t.Fatalf("dispatchSpec error = %v, want a retryable confirmation-read error", err)
 	}
-	persisted := getBuildInfo(t, client)
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want no new registration", persisted.Status.PendingJobCreates)
-	}
 }
 
 func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
@@ -1295,16 +1248,12 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1", got)
 	}
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want the entry confirmed and removed", persisted.Status.PendingJobCreates)
-	}
 }
 
 func TestDispatchSpecUnknownMissingRetriesDeterministicName(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-dispatch-unknown-404", "a")
-	// Unknown with nothing landed: no pending entry is written. The next attempt uses the same deterministic name and can
-	// safely create it.
+	// When an unknown write has not landed, retry with the same deterministic name.
 	client.InjectWrite("create", clientpkg.WriteUnknown, 0, false)
 	depend := dependEntry("a")
 	snapshot := testSnapshotObj()
@@ -1312,10 +1261,6 @@ func TestDispatchSpecUnknownMissingRetriesDeterministicName(t *testing.T) {
 	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, snapshot, testImage, testRepoURL, nil)
 	if err == nil {
 		t.Fatal("dispatchSpec error = nil, want the Unknown write error")
-	}
-	persisted := getBuildInfo(t, client)
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want no new registration", persisted.Status.PendingJobCreates)
 	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
@@ -1327,22 +1272,5 @@ func TestDispatchSpecUnknownMissingRetriesDeterministicName(t *testing.T) {
 	}
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs after retry = %d, want 1", got)
-	}
-}
-
-func TestDispatchSpecRejectsPendingJobWithDifferentName(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	round, _ := dispatchRound(t, c, client, "bi-pending-name", "a")
-	round.current.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
-		"a": {JobName: "a-1-old-name", DispatchGeneration: 1},
-	}
-	depend := dependEntry("a")
-
-	_, err := c.dispatchSpec(context.Background(), round, "a", &depend, testSnapshotObj(), testImage, testRepoURL, nil)
-	if err == nil || !controller.IsPermanent(err) {
-		t.Fatalf("dispatchSpec error = %v, want permanent name mismatch", err)
-	}
-	if got := len(listJobs(t, client)); got != 0 {
-		t.Fatalf("jobs = %d, want none", got)
 	}
 }

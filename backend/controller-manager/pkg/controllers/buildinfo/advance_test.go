@@ -426,32 +426,9 @@ func TestAdvanceCompletionRecordsInstallFailureRepository(t *testing.T) {
 	}
 }
 
-func TestAdvanceCompletionBlockedByPendingCreates(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.UID = "bi-pending-block"
-	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
-		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
-	})
-	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
-		"a": {JobName: jobNameFor("bi-pending-block", "a", 2), DispatchGeneration: 2},
-	}
-	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{"a": dependEntry("a")}, testSources())
-	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
-
-	reconcileOnce(t, c)
-
-	persisted := getBuildInfo(t, client)
-	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	if len(persisted.Status.PendingJobCreates) != 1 {
-		t.Fatalf("pendingJobCreates = %v, want the unresolved entry kept (6.5.1)", persisted.Status.PendingJobCreates)
-	}
-}
-
 // Stop-dispatch convergence.
 
-func TestConvergePendingCreateConfirmed(t *testing.T) {
+func TestConvergeBackfillsCompletedJob(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
@@ -461,9 +438,6 @@ func TestConvergePendingCreateConfirmed(t *testing.T) {
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})
-	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
-		"a": {JobName: jobNameFor("bi-converge-confirm", "a", 1), DispatchGeneration: 1},
-	}
 	seeded := client.SeedBuildInfo(bi)
 	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 
@@ -471,39 +445,10 @@ func TestConvergePendingCreateConfirmed(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want confirmed and removed (6.5.1 #2)", persisted.Status.PendingJobCreates)
-	}
 	if got := persisted.Status.SpecStatus.Entry("a").Build.Status; got != ebsv1.SpecBuildSucceeded {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Succeeded", got)
 	}
 	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound)
-}
-
-func TestConvergePendingCreate404Kept(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
-	client.SeedBuild(testBuildObj("full"))
-	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.UID = "bi-converge-404"
-	upsertCondition(&bi.Status.Conditions, ConditionSnapshotUnavailable, ReasonSnapshotNotFound, "snapshot gone")
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
-		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
-	})
-	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
-		"a": {JobName: jobNameFor("bi-converge-404", "a", 1), DispatchGeneration: 1},
-	}
-	client.SeedBuildInfo(bi)
-	// A 404 does not prove an in-flight create did not happen.
-
-	reconcileOnce(t, c)
-
-	persisted := getBuildInfo(t, client)
-	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
-	if len(persisted.Status.PendingJobCreates) != 1 {
-		t.Fatalf("pendingJobCreates = %v, want the 404 entry kept", persisted.Status.PendingJobCreates)
-	}
-	requireCondition(t, persisted.Status.Conditions, ConditionSnapshotUnavailable, ReasonSnapshotNotFound)
 }
 
 func TestConvergeUnknownPhaseJobWaits(t *testing.T) {
@@ -565,13 +510,10 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})
-	bi.Status.PendingJobCreates = map[string]ebsv1.PendingJobCreate{
-		"a": {JobName: jobNameFor("bi-e29", "a", 2), DispatchGeneration: 2},
-	}
 	seeded := client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	c.specDependsCache.Set(key, map[string]specparse.SpecDepend{"a": dependEntry("a")})
-	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
+	seedJobAt(client, seeded, "a", 1, ebsv1.JobRunning, testStart)
 	// The Build controller may create the RpmRepo later. Repeated 404s must leave the build resumable, even beyond the
 	// parse-failure threshold.
 
@@ -588,25 +530,18 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 			t.Fatalf("status writes after repeated 404 = %d, want %d", client.statusWrites, firstWriteCount)
 		}
 	}
-	persisted := getBuildInfo(t, client)
-	if len(persisted.Status.PendingJobCreates) != 1 {
-		t.Fatalf("pendingJobCreates = %v, want the 404 entry kept", persisted.Status.PendingJobCreates)
-	}
 	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
 		t.Fatalf("parse failure counter = %d, want 0 for missing repo", got)
 	}
 
-	// The repo arrives and the pending Job is confirmed. Reconciliation can continue normally without a permanent stop
-	// marker.
+	// Once the repo arrives, reconciliation resumes and backfills the latest Job without a permanent stop marker.
 	client.SeedRpmRepo(testRpmRepoObj(""))
-	seedJobAt(client, seeded, "a", 2, ebsv1.JobSucceeded, testStart.Add(time.Minute))
+	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
 	reconcileOnce(t, c)
-	persisted = getBuildInfo(t, client)
+	persisted := getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoRetrying)
 	requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
-	if len(persisted.Status.PendingJobCreates) != 0 {
-		t.Fatalf("pendingJobCreates = %v, want confirmed and removed", persisted.Status.PendingJobCreates)
-	}
 }
 
 func TestStopConvergenceRecordsFailedAndUnfinishedPackages(t *testing.T) {

@@ -84,7 +84,7 @@ func firstGraphState(info *ebsv1.BuildInfo) bool {
 		return false
 	}
 	if info.Status.Phase != ebsv1.BuildInfoPending || len(info.Status.SpecStatus.Build) != 0 ||
-		len(info.Status.SpecRepoNames) != 0 || len(info.Status.PendingJobCreates) != 0 {
+		len(info.Status.SpecRepoNames) != 0 {
 		return false
 	}
 	for _, count := range info.Status.SpecStatus.DispatchCount {

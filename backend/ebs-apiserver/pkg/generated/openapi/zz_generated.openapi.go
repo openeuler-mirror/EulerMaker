@@ -47,7 +47,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.PackageRepoError":        schema_ebs_api_ebs_v1_PackageRepoError(ref),
 		"ebs-api/ebs/v1.PackageRepoStatus":       schema_ebs_api_ebs_v1_PackageRepoStatus(ref),
 		"ebs-api/ebs/v1.PackageResourceConfig":   schema_ebs_api_ebs_v1_PackageResourceConfig(ref),
-		"ebs-api/ebs/v1.PendingJobCreate":        schema_ebs_api_ebs_v1_PendingJobCreate(ref),
 		"ebs-api/ebs/v1.Project":                 schema_ebs_api_ebs_v1_Project(ref),
 		"ebs-api/ebs/v1.ProjectList":             schema_ebs_api_ebs_v1_ProjectList(ref),
 		"ebs-api/ebs/v1.ProjectSpec":             schema_ebs_api_ebs_v1_ProjectSpec(ref),
@@ -500,7 +499,7 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "BuildInfoStatus records build results and unconfirmed Job creations.",
+				Description: "BuildInfoStatus records per-spec results and failed package repositories.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"phase": {
@@ -557,26 +556,12 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 							},
 						},
 					},
-					"pendingJobCreates": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.PendingJobCreate"),
-									},
-								},
-							},
-						},
-					},
 				},
 				Required: []string{"specStatus"},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.PendingJobCreate", "ebs-api/ebs/v1.SpecStatusGroup", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.SpecStatusGroup", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 
@@ -1448,31 +1433,6 @@ func schema_ebs_api_ebs_v1_PackageResourceConfig(ref common.ReferenceCallback) c
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.ResourceRequirements"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_PendingJobCreate(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "PendingJobCreate records a Job creation identity that has been registered in status but whose creation result is not yet confirmed. Keyed by spec name; a non-empty map blocks writing Completed.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"jobName": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"dispatchGeneration": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int64",
-						},
-					},
-				},
-			},
-		},
 	}
 }
 
