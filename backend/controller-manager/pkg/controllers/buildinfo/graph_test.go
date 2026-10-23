@@ -13,7 +13,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func (f *fakeClient) SeedBuildGraph(info *ebsv1.BuildInfo, nodes map[string]ebsv1.DcgNodeState) *ebsv1.BuildGraph {
+func (f *fakeClient) SeedBuildGraph(info *ebsv1.BuildInfo, nodes map[string]ebsv1.BuildGraphNode) *ebsv1.BuildGraph {
 	f.SeedBuildInfo(info)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -112,7 +112,7 @@ func TestBuildGraphCacheAndRecovery(t *testing.T) {
 	if err != nil || got != dcg || len(client.graphReads) != reads+1 || !client.graphReads[reads] {
 		t.Fatal("cache hit must only read metadata")
 	}
-	graph.Status.Nodes["a"] = ebsv1.DcgNodeState{Version: "changed", OutDep: []string{"b"}}
+	graph.Status.Nodes["a"] = ebsv1.BuildGraphNode{Version: "changed", OutDep: []string{"b"}}
 	if _, err := client.UpdateBuildGraphStatus(context.Background(), graph); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestBuildGraphUnknownCreate(t *testing.T) {
 func TestBuildGraphEmptyAndOwner(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
-	graph := client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{})
+	graph := client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{})
 	round := &reconcileRound{key: cacheKey(bi.Namespace, bi.Name), current: bi}
 	d, _, _, err := c.loadGraph(context.Background(), round)
 	if err != nil || d == nil || d.Len() != 0 {
@@ -223,7 +223,7 @@ func TestBuildGraphAlreadyExistsUsesPersistedGraph(t *testing.T) {
 	bi := client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	stored := client.SeedBuildGraph(bi, dcgStateAB())
 	round := &reconcileRound{key: cacheKey(bi.Namespace, bi.Name), current: bi}
-	got, result, err := c.writeGraph(context.Background(), round, DcgDictFromState(map[string]ebsv1.DcgNodeState{}))
+	got, result, err := c.writeGraph(context.Background(), round, DcgDictFromState(map[string]ebsv1.BuildGraphNode{}))
 	if err != nil || result.RequeueAfter != 0 || got == nil || !dcgStateMatches(got.ToState(), stored.Status.Nodes) {
 		t.Fatalf("must adopt existing graph, not the newly computed candidate: %v %v", result, err)
 	}

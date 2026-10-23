@@ -59,7 +59,7 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	}
 	if !published {
 		reference, contentURL = "", ""
-		if len(bootstrapRepoURLs(round.current.Spec.BootstrapRepo, target.Arch)) == 0 {
+		if len(bootstrapRepoURLs(round.current.Spec.BootstrapRepos, target.Arch)) == 0 {
 			return "", controller.NewPermanentError(fmt.Errorf("BootstrapRepoRequired: no published release or bootstrap repository"))
 		}
 	}

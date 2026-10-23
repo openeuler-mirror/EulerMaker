@@ -422,8 +422,8 @@ func listJobs(t *testing.T, client *fakeClient) []ebsv1.Job {
 }
 
 // dcgState renders a two-node b-depends-on-a graph for Processing rounds.
-func dcgStateAB() map[string]ebsv1.DcgNodeState {
-	return map[string]ebsv1.DcgNodeState{
+func dcgStateAB() map[string]ebsv1.BuildGraphNode {
+	return map[string]ebsv1.BuildGraphNode{
 		"a": {Version: "1.0-1", OutDep: []string{"b"}},
 		"b": {Version: "1.0-1", InDep: map[string]ebsv1.VersionConstraint{"a": {}}},
 	}

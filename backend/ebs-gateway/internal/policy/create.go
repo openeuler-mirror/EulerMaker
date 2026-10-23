@@ -82,7 +82,7 @@ func validateRunnerCreate(object mutation.Object, runner string) error {
 		}
 	}
 	for key := range objectMap(object["spec"]) {
-		if key != "instanceId" && key != "type" && key != "arch" {
+		if key != "instanceID" && key != "type" && key != "arch" {
 			return deny("protected Runner spec on create")
 		}
 	}

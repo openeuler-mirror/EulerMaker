@@ -569,14 +569,14 @@ func (c *Controller) jobPayload(
 		c.logf(
 			round.key,
 			"SpecRepoEntryMissing",
-			"packageRepoStatuses entry for repo %s missing or without commitId; clone_url/commit_id not injected",
+			"packageRepoStatuses entry for repo %s missing or without commitID; clone_url/commit_id not injected",
 			depend.RepoName,
 		)
 	} else {
 		payload["clone_url"] = entry.CloneURL
 		payload["commit_id"] = entry.CommitID
 	}
-	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepo, round.build.Spec.BuildTarget.Arch)
+	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepos, round.build.Spec.BuildTarget.Arch)
 	repoReference := jobRepositoryReference(round, contentURL)
 	repoURLs := repoPayloadURLs(repoReference, bootstrapRepos)
 	if len(repoURLs) == 0 && !round.isSingle() {

@@ -91,12 +91,12 @@ func validateTolerations(items []ebsv1.Toleration) error {
 	for _, t := range items {
 		op := t.Operator
 		if op == "" {
-			op = "Equal"
+			op = ebsv1.TolerationEqual
 		}
-		if op != "Equal" && op != "Exists" {
+		if !op.IsValid() {
 			return fmt.Errorf("invalid toleration operator %q", t.Operator)
 		}
-		if t.Effect != "" && t.Effect != "NoSchedule" && t.Effect != "NoExecute" && t.Effect != "PreferNoSchedule" {
+		if t.Effect != "" && !t.Effect.IsValid() {
 			return fmt.Errorf("invalid toleration effect %q", t.Effect)
 		}
 	}
@@ -107,15 +107,15 @@ func tolerated(t ebsv1.RunnerTaint, items []ebsv1.Toleration) bool {
 	for _, x := range items {
 		op := x.Operator
 		if op == "" {
-			op = "Equal"
+			op = ebsv1.TolerationEqual
 		}
 		if x.Effect != "" && x.Effect != t.Effect {
 			continue
 		}
-		if op == "Exists" && (x.Key == "" || x.Key == t.Key) {
+		if op == ebsv1.TolerationExists && (x.Key == "" || x.Key == t.Key) {
 			return true
 		}
-		if op == "Equal" && x.Key == t.Key && x.Value == t.Value {
+		if op == ebsv1.TolerationEqual && x.Key == t.Key && x.Value == t.Value {
 			return true
 		}
 	}
@@ -128,7 +128,7 @@ func Taint() framework.FilterPlugin {
 			return fail("TaintFilter", err)
 		}
 		for _, t := range r.Runner.Spec.Taints {
-			if (t.Effect == "NoSchedule" || t.Effect == "NoExecute") && !tolerated(t, s.Job.Spec.Tolerations) {
+			if (t.Effect == ebsv1.TaintEffectNoSchedule || t.Effect == ebsv1.TaintEffectNoExecute) && !tolerated(t, s.Job.Spec.Tolerations) {
 				return reject("TaintFilter", "runner taint is not tolerated")
 			}
 		}
@@ -247,7 +247,7 @@ func TaintPreference() framework.ScorePlugin {
 		}
 		score := int64(100)
 		for _, t := range r.Runner.Spec.Taints {
-			if t.Effect == "PreferNoSchedule" && !tolerated(t, s.Job.Spec.Tolerations) {
+			if t.Effect == ebsv1.TaintEffectPreferNoSchedule && !tolerated(t, s.Job.Spec.Tolerations) {
 				score -= 20
 			}
 		}

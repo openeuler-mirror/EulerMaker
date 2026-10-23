@@ -19,6 +19,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.Build":                   schema_ebs_api_ebs_v1_Build(ref),
 		"ebs-api/ebs/v1.BuildGraph":              schema_ebs_api_ebs_v1_BuildGraph(ref),
 		"ebs-api/ebs/v1.BuildGraphList":          schema_ebs_api_ebs_v1_BuildGraphList(ref),
+		"ebs-api/ebs/v1.BuildGraphNode":          schema_ebs_api_ebs_v1_BuildGraphNode(ref),
 		"ebs-api/ebs/v1.BuildGraphStatus":        schema_ebs_api_ebs_v1_BuildGraphStatus(ref),
 		"ebs-api/ebs/v1.BuildInfo":               schema_ebs_api_ebs_v1_BuildInfo(ref),
 		"ebs-api/ebs/v1.BuildInfoList":           schema_ebs_api_ebs_v1_BuildInfoList(ref),
@@ -35,7 +36,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.Config":                  schema_ebs_api_ebs_v1_Config(ref),
 		"ebs-api/ebs/v1.ConfigList":              schema_ebs_api_ebs_v1_ConfigList(ref),
 		"ebs-api/ebs/v1.ConfigSpec":              schema_ebs_api_ebs_v1_ConfigSpec(ref),
-		"ebs-api/ebs/v1.DcgNodeState":            schema_ebs_api_ebs_v1_DcgNodeState(ref),
 		"ebs-api/ebs/v1.Job":                     schema_ebs_api_ebs_v1_Job(ref),
 		"ebs-api/ebs/v1.JobBuildResult":          schema_ebs_api_ebs_v1_JobBuildResult(ref),
 		"ebs-api/ebs/v1.JobInstallResult":        schema_ebs_api_ebs_v1_JobInstallResult(ref),
@@ -271,6 +271,75 @@ func schema_ebs_api_ebs_v1_BuildGraphList(ref common.ReferenceCallback) common.O
 	}
 }
 
+func schema_ebs_api_ebs_v1_BuildGraphNode(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "BuildGraphNode records one spec's dependency edges. OutDep lists downstream specs that depend on this spec; InDep/InstallInDep map upstream specs to the matched version constraints. BootstrapBreak marks a cycle-break node; it is persisted and never re-selected on load.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"version": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"outDep": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"inDep": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
+									},
+								},
+							},
+						},
+					},
+					"installInDep": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
+									},
+								},
+							},
+						},
+					},
+					"bootstrapBreak": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"ebs-api/ebs/v1.VersionConstraint"},
+	}
+}
+
 func schema_ebs_api_ebs_v1_BuildGraphStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -285,7 +354,7 @@ func schema_ebs_api_ebs_v1_BuildGraphStatus(ref common.ReferenceCallback) common
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.DcgNodeState"),
+										Ref:     ref("ebs-api/ebs/v1.BuildGraphNode"),
 									},
 								},
 							},
@@ -296,7 +365,7 @@ func schema_ebs_api_ebs_v1_BuildGraphStatus(ref common.ReferenceCallback) common
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.DcgNodeState"},
+			"ebs-api/ebs/v1.BuildGraphNode"},
 	}
 }
 
@@ -406,7 +475,7 @@ func schema_ebs_api_ebs_v1_BuildInfoSpec(ref common.ReferenceCallback) common.Op
 							Format: "",
 						},
 					},
-					"bootstrapRepo": {
+					"bootstrapRepos": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
 							Items: &spec.SchemaOrArray{
@@ -808,7 +877,7 @@ func schema_ebs_api_ebs_v1_Config(ref common.ReferenceCallback) common.OpenAPIDe
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "Config is a cluster-scoped, versioned text configuration. Consumers interpret Content according to the object's name; the API does not parse it.",
+				Description: "Config is a cluster-scoped, versioned text configuration. Consumers interpret Content according to the object's name; the API parses and validates built-in configurations.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -918,75 +987,6 @@ func schema_ebs_api_ebs_v1_ConfigSpec(ref common.ReferenceCallback) common.OpenA
 				Required: []string{"visibility", "content"},
 			},
 		},
-	}
-}
-
-func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep lists downstream specs that depend on this spec; InDep/InstallInDep map upstream specs to the matched version constraints. BootstrapBreak marks a cycle-break node; it is persisted and never re-selected on load.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"version": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"outDep": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"inDep": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
-									},
-								},
-							},
-						},
-					},
-					"installInDep": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
-									},
-								},
-							},
-						},
-					},
-					"bootstrapBreak": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"boolean"},
-							Format: "",
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.VersionConstraint"},
 	}
 }
 
@@ -1398,13 +1398,13 @@ func schema_ebs_api_ebs_v1_PackageRepoStatus(ref common.ReferenceCallback) commo
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"cloneUrl": {
+					"cloneURL": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
 						},
 					},
-					"commitId": {
+					"commitID": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
@@ -1632,7 +1632,7 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 							},
 						},
 					},
-					"bootstrapRepo": {
+					"bootstrapRepos": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
 							Items: &spec.SchemaOrArray{
@@ -2212,7 +2212,7 @@ func schema_ebs_api_ebs_v1_RunnerSpec(ref common.ReferenceCallback) common.OpenA
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
-					"instanceId": {
+					"instanceID": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",

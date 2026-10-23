@@ -41,7 +41,7 @@ type RunnerResource struct {
 }
 
 type RunnerSpec struct {
-	InstanceID    string        `json:"instanceId,omitempty"`
+	InstanceID    string        `json:"instanceID,omitempty"`
 	Type          string        `json:"type,omitempty"`
 	Arch          string        `json:"arch,omitempty"`
 	Unschedulable bool          `json:"unschedulable,omitempty"`

@@ -289,7 +289,7 @@ Git Server 的 Runner 地址填写 HTTP(S) 服务基础入口，不附加 `/git`
 
 `ebs.io/artifacts` annotation 及 `artifact://{instance}/...` 保持原语义。Project 创建或修改该 annotation 时，apiserver 检查 `artifactManagers` 中是否存在目标键；未设置时检查 `default`。其他 Project 更新不重新检查，不在 Project 中存放物理地址。
 
-Git Server 返回与部署地址无关的 `clone_path`（`/git/...`）。Controller Manager 客户端加 `git-server://` 前缀，形成 `git-server:///git/...` 逻辑地址，固化到 Snapshot `cloneUrl`，再进入 Job payload 的 `clone_url`；不使用 `gitServer.internalURL` 重写该逻辑地址。空 authority 表示当前唯一的 Git Server。Runner 根据网络模式读取 Git Server 的 Runner 地址，在写入本地 payload.json 前解析逻辑地址；不修改 Snapshot 或 Job。
+Git Server 返回与部署地址无关的 `clone_path`（`/git/...`）。Controller Manager 客户端加 `git-server://` 前缀，形成 `git-server:///git/...` 逻辑地址，固化到 Snapshot `cloneURL`，再进入 Job payload 的 `clone_url`；不使用 `gitServer.internalURL` 重写该逻辑地址。空 authority 表示当前唯一的 Git Server。Runner 根据网络模式读取 Git Server 的 Runner 地址，在写入本地 payload.json 前解析逻辑地址；不修改 Snapshot 或 Job。
 
 本对象只保存服务地址，不保存认证凭据、CA、私钥或请求超时。服务的监听参数和调用方的 TLS、超时、重试参数仍由部署配置管理。
 

@@ -103,7 +103,7 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})
@@ -124,7 +124,7 @@ func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 func TestAdvanceBackfillJobAborted(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})
@@ -160,7 +160,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 	t.Run("structured install result marks succeeded", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-		client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+		client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 		})
@@ -185,7 +185,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 	t.Run("missing install result is not success", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-		client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+		client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 		bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 			"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 		})
@@ -216,7 +216,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 	t.Run("missing deps fail install and append runtime edges", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-		client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{
+		client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{
 			"a": {Version: "1.0-1"},
 			"b": {Version: "1.0-1"},
 		})
@@ -317,7 +317,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	// Cycle a<->b with a as the break point: both require 2 dispatches.
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{
 		"a": {
 			Version:        "1.0-1",
 			OutDep:         []string{"b"},
@@ -380,7 +380,7 @@ func TestAdvanceGateRebuildConsistencyCycle(t *testing.T) {
 func TestAdvanceCompletionRecordsFailedPackage(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{
 		"a": {Version: "1.0-1"},
 		"b": {Version: "1.0-1"},
 	})
@@ -407,7 +407,7 @@ func TestAdvanceCompletionRecordsFailedPackage(t *testing.T) {
 func TestAdvanceCompletionRecordsInstallFailureRepository(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {
 			Build:         ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildSucceeded},
@@ -430,7 +430,7 @@ func TestAdvanceCompletionBlockedByPendingCreates(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-pending-block"
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})
@@ -561,7 +561,7 @@ func TestMissingRpmRepoKeepsRetrying(t *testing.T) {
 	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "bi-e29"
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})
@@ -658,7 +658,7 @@ func TestStopConvergenceFallsBackToSnapshotScope(t *testing.T) {
 	client.SeedProject(project)
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"failed": {Version: "1.0"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"failed": {Version: "1.0"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"failed": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildFailed}},
 	})
@@ -697,7 +697,7 @@ func TestSnapshotUnavailableEscalates(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0-1"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
 	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
 		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
 	})

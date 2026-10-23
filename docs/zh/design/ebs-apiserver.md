@@ -545,7 +545,7 @@ Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `perso
 
 Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分配新 Job，但不触发已有 Job 中止；通过显式状态更新解除驱逐，Runner agent 的心跳与下线上报保留该状态。
 
-- 新建 Runner 的 `spec.instanceId` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。
+- 新建 Runner 的 `spec.instanceID` 必须是规范小写 UUID v4，创建后不可修改或清空。同名 POST 继续使用标准 create-only 语义并返回 409，apiserver 不把创建转换为更新。
 - `User.spec.enabled` 默认为 `true`，`User.spec.scopes` 默认为 `["ebs:user"]`，并按字典序规范化。
 
 默认值还包括：
@@ -562,14 +562,14 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
 - Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。创建后除 Build Controller 在 `incremental` 的 Pending 阶段固化 `spec.packages` 外，Build `spec` 不可修改；普通 Update 不能改变受保护的标签，`/status` 更新保留原对象 metadata。
 - Job 创建时若带有 `ebs.io/build-name`（由 BuildInfo Controller 创建的构建 Job），还必须带有 `ebs.io/spec-name` 和 `ebs.io/package-name` label；apiserver 校验标签存在且值符合 Kubernetes label 规则，缺失或非法返回 `422 Invalid`。包名标签由 BuildInfo Controller 按[标签约定](labels.md#7-job-构建归属标签)从 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 计算。普通更新不得修改已有归属标签，`/status` 更新保留原 metadata。没有 `ebs.io/build-name` 的通用 Job 不强制要求这些字段；存量构建 Job 即使缺少包名标签，普通更新和状态更新仍允许，且不会自动回填。
-- Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneUrl` 记录 Git Server 客户端在同步确认后由 `clone_path` 生成的 `git-server:///git/...` 逻辑地址；包解析成功时记录 commitId，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 记录整体级异常。
+- Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneURL` 记录 Git Server 客户端在同步确认后由 `clone_path` 生成的 `git-server:///git/...` 逻辑地址；包解析成功时记录 commitID，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 记录整体级异常。
 - Build 必须包含 `buildType`，以及带 `os`、`arch` 的 `buildTarget`；`packages` 的要求按下述构建类型区分。创建和普通更新时，`metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4）；缺失或格式非法返回 `422 Invalid`，错误字段为 `metadata.name`。UUID 格式校验不替代调用方对名称不复用的保证。
 - **单包 Git ref 覆盖**：`metadata.annotations["ebs.io/git-ref"]` 仅允许用于 `buildType=single` 且 `len(spec.packages)==1` 的 Build，按数组长度判断，不按去重后的数量判断；未设置该 annotation 的 single 仍允许多个包仓库。值必须非空、以 `refs/` 开头并符合完整 Git ref 名称规则，不接受 refspec、通配符、revision 表达式或前后空白，不自动规范化。违反类型、包数量或引用格式规则返回 `422 Invalid`，字段定位到该 annotation；包名是否存在复用下面的 Project 校验，不为同一请求重复读取 Project。准入只校验输入，不联网确认引用是否存在。
 - 普通 Build Update 比较旧、新 `ebs.io/git-ref` annotation 的键存在性和值，增加、删除或修改均返回 `422 Invalid`；PATCH 合并后的对象执行同一校验。`/status` 保留旧 metadata，不能绕过保护。其他 annotation 的更新规则不变。
 - 创建 full/incremental Build 时（含 dry-run），`spec.packages` 统一清空，不要求非空；前端请求不携带该字段。创建 `buildType=single` 或 `specified` 的 Build 时（含 dry-run），要求 packages 非空，额外读取一次所属 Project，校验每个包名均存在于 `Project.spec.packageRepos[].name`；允许多个包及重复包名。不存在的包返回 `422 Invalid`，错误字段定位到 `spec.packages[i]`；Project 不存在或读取失败时原样返回对应 API 错误，不创建 Build。`incremental` 创建后允许 Build Controller 在 Pending 阶段通过主资源 Update 幂等更新 `spec.packages`，由 Controller 保证名称来自本轮 Snapshot.spec.packageRepos，允许空数组；确认持久化且进入 Prepared 后禁止再次修改，其他 spec 字段仍不可变；普通用户不能修改该字段。
 - 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + OS + Arch 执行下节的 ES 目标占用协议。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
 - 创建 `incremental` 或 `specified` Build 时，同一 Project + OS + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
-- Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
+- Runner 的 `instanceID` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。Runner 由 Token 的 `type` 区分，不是 User scope。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - Runner 删除仅允许 `status.phase=Offline` 或 `Evicted`，Online、空值及其他状态返回 `409 Conflict`。校验接入存储删除回调，依据实际删除时的对象状态执行，并保留调用方删除校验及 UID/resourceVersion 前置条件。单对象删除、DeleteCollection 的逐项删除和 dry-run 均适用；批量删除不是原子操作，遇到拒绝时其他对象可能已删除。本规则只检查 Runner 状态，不检查关联 Job，也不停止 Runner 进程或清理其本地文件。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
@@ -864,7 +864,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
         "url": "https://example.com/src-openeuler/gcc.git",
         "ref": "refs/heads/master"
       }],
-      "bootstrapRepo": [{
+      "bootstrapRepos": [{
         "name": "base",
         "url": "https://repo.example.com/openEuler/24.03-LTS/OS/aarch64/"
       }]

@@ -41,7 +41,7 @@ Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Art
 
 ### Runner 的首版形态
 
-首版在专用 Docker 构建节点上以现有容器或宿主机服务运行 Runner，由 Kubernetes 管理控制面。每台节点使用独立 Runner 名称、MachineAccount 凭据和持久化的 `instanceId` 文件；重启后必须沿用同一身份。该方案保留当前 `docker create/start` 执行路径，不把 Kubernetes 集群的 containerd socket 当作 Docker API 使用。
+首版在专用 Docker 构建节点上以现有容器或宿主机服务运行 Runner，由 Kubernetes 管理控制面。每台节点使用独立 Runner 名称、MachineAccount 凭据和持久化的 `instanceID` 文件；重启后必须沿用同一身份。该方案保留当前 `docker create/start` 执行路径，不把 Kubernetes 集群的 containerd socket 当作 Docker API 使用。
 
 当前 Job 容器使用宿主机网络，且由宿主机 Docker daemon 创建，并不在 Kubernetes Pod 网络或 DNS 命名空间内。Git Server 默认使用 Service ClusterIP 生成 clone URL；Service 必须在依赖它的 Pod 创建之前存在。ClusterIP 对集群外构建节点通常不可达，启用构建前必须从实际 Job 容器验证 Git clone 地址。若不可达，应改用构建节点可访问的固定内网入口。Service 重建后 ClusterIP 可能变化，已固化到对象中的旧 URL 不会自动更新。
 
@@ -103,7 +103,7 @@ Gateway JWT、ES API Key、各组件 TLS 私钥、Runner MachineAccount 凭据�
 2. 部署 etcd 和 Elasticsearch，确认其数据持久化及恢复流程；先配置证书，待 ES 集群健康后创建 API Key Secret，再以 `--etcd-servers=https://etcd-0.etcd:2379,https://etcd-1.etcd:2379,https://etcd-2.etcd:2379` 和 `--etcd-cafile`、`--etcd-certfile`、`--etcd-keyfile` 启动 apiserver。等待 `/readyz` 成功，并核对默认 Config/Script、ES 索引和 IAM 初始化。不得用固定 `sleep` 代替就绪检查。
 3. 启动 Scheduler 和 Git Server；Gateway 就绪后再启动依赖其 `/auth/check` 的 Artifact Manager，最后启动单实例 Controller Manager。对 Git Server 使用其 `/readyz`；Artifact Manager 当前 `/readyz` 仅表示 HTTP 服务可响应，若要让其代表恢复完成，需先补齐实际就绪状态。
 4. 按需配置前端外部入口（Ingress 或 NodePort），再接入一台专用 Runner；从真实 Job 容器验证 Gateway、Artifact Manager、Git clone 和基础 RPM 源的连通性，并跑通单包构建、日志上传、过程仓物化与下载。
-5. 扩展 Runner 节点前，验证重启后 `instanceId` 延续、Job 恢复、中止与工作目录清理。对 Scheduler 和 Controller Manager 保持一个活动实例；部署滚动更新不得产生新旧实例重叠。
+5. 扩展 Runner 节点前，验证重启后 `instanceID` 延续、Job 恢复、中止与工作目录清理。对 Scheduler 和 Controller Manager 保持一个活动实例；部署滚动更新不得产生新旧实例重叠。
 
 Pod 的存活探针检查进程是否可恢复，未就绪应从 Service 摘除而不是频繁重启；对 Git Server 和 Artifact Manager 的较长恢复窗口配置启动探针。探针路径须与各组件实际实现一致，并分别通过故障注入验证。[Kubernetes 探针文档](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)区分了启动、存活和就绪的用途。
 

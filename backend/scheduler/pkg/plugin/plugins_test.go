@@ -10,6 +10,45 @@ import (
 	"scheduler/pkg/framework"
 )
 
+func TestTaintMatching(t *testing.T) {
+	taint := ebsv1.RunnerTaint{Key: "dedicated", Value: "build", Effect: ebsv1.TaintEffectNoSchedule}
+	for _, tc := range []struct {
+		name       string
+		toleration ebsv1.Toleration
+	}{
+		{"default operator and effect", ebsv1.Toleration{Key: "dedicated", Value: "build"}},
+		{"equal", ebsv1.Toleration{Key: "dedicated", Value: "build", Operator: ebsv1.TolerationEqual, Effect: ebsv1.TaintEffectNoSchedule}},
+		{"exists", ebsv1.Toleration{Key: "dedicated", Operator: ebsv1.TolerationExists}},
+		{"all keys", ebsv1.Toleration{Operator: ebsv1.TolerationExists}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			items := []ebsv1.Toleration{tc.toleration}
+			if err := validateTolerations(items); err != nil {
+				t.Fatal(err)
+			}
+			if !tolerated(taint, items) {
+				t.Fatal("matching toleration was ignored")
+			}
+		})
+	}
+	for _, effect := range []ebsv1.TaintEffect{ebsv1.TaintEffectNoSchedule, ebsv1.TaintEffectNoExecute, ebsv1.TaintEffectPreferNoSchedule} {
+		taint.Effect = effect
+		runner := &framework.RunnerSnapshot{Runner: &ebsv1.Runner{Spec: ebsv1.RunnerSpec{Taints: []ebsv1.RunnerTaint{taint}}}}
+		session := &framework.Session{Job: &ebsv1.Job{}}
+		want := framework.Unschedulable
+		if effect == ebsv1.TaintEffectPreferNoSchedule {
+			want = framework.Success
+		}
+		if got := Taint().Filter(context.Background(), session, runner); got.Code != want {
+			t.Fatalf("effect %q: %+v, want %v", effect, got, want)
+		}
+		session.Job.Spec.Tolerations = []ebsv1.Toleration{{Operator: ebsv1.TolerationExists, Effect: effect}}
+		if got := Taint().Filter(context.Background(), session, runner); got.Code != framework.Success {
+			t.Fatalf("tolerated effect %q: %+v", effect, got)
+		}
+	}
+}
+
 func TestFiltersAndLeastAllocated(t *testing.T) {
 	requests, _ := framework.ParseRequests(ebsv1.ResourceRequirements{
 		Requests: map[string]string{"cpu": "1", "memory": "1Gi"},

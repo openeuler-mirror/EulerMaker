@@ -195,7 +195,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	bi.Spec.BuildPayload = "custom: omit\nRepo: http://legacy-override\nrepo: http://base-override\n" +
 		"repo_priority: \"7\"\nspec_name: forged\ncommit_id: forged\npreinstall:\n" +
 		"- rpm-build\n- systemd-rpm-macros\n"
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
+	bi.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	seeded := client.SeedBuildInfo(bi)
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	round.project = &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
@@ -329,7 +329,7 @@ func TestJobPayloadOriginURL(t *testing.T) {
 func TestJobPayloadKeepsArtifactReference(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
+	bi.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	round := &reconcileRound{
 		key:         testNS + "/" + testBuild,
 		current:     client.SeedBuildInfo(bi),
@@ -1046,7 +1046,7 @@ func payloadFields(t *testing.T, payload string) map[string]any {
 func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{
+	bi.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{
 		{Name: "local", URL: "https://repo.example.com/openEuler-24.03-LTS-SP3/local"},
 		{Name: "everything", URL: "https://repo.example.com/openEuler-24.03-LTS-SP3/everything"},
 	}

@@ -37,7 +37,7 @@ func TestBuildGraphStorage(t *testing.T) {
 	graph := &ebsv1.BuildGraph{
 		ObjectMeta: metav1.ObjectMeta{Name: owner.Name, Namespace: owner.Namespace,
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(owner, ebsv1.SchemeGroupVersion.WithKind("BuildInfo"))}},
-		Status: ebsv1.BuildGraphStatus{Nodes: map[string]ebsv1.DcgNodeState{"a": {}, "b": {}}},
+		Status: ebsv1.BuildGraphStatus{Nodes: map[string]ebsv1.BuildGraphNode{"a": {}, "b": {}}},
 	}
 	ctx := request.WithNamespace(context.Background(), owner.Namespace)
 	obj, err := store.Create(ctx, graph, nil, nil)
@@ -50,8 +50,8 @@ func TestBuildGraphStorage(t *testing.T) {
 	}
 	updated := created.DeepCopy()
 	updated.Annotations = map[string]string{"ignored": "status-write"}
-	updated.Status.Nodes["b"] = ebsv1.DcgNodeState{InstallInDep: map[string]ebsv1.VersionConstraint{"a": {}}}
-	updated.Status.Nodes["a"] = ebsv1.DcgNodeState{OutDep: []string{"b"}}
+	updated.Status.Nodes["b"] = ebsv1.BuildGraphNode{InstallInDep: map[string]ebsv1.VersionConstraint{"a": {}}}
+	updated.Status.Nodes["a"] = ebsv1.BuildGraphNode{OutDep: []string{"b"}}
 	obj, _, err = status.Update(ctx, graph.Name, rest.DefaultUpdatedObjectInfo(updated), nil, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)

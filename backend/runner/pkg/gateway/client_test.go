@@ -93,7 +93,7 @@ func TestClientCreateRunnerOmitsStatus(t *testing.T) {
 			t.Fatalf("decode spec: %v", err)
 		}
 		if spec.InstanceID != testRunnerInstanceID {
-			t.Fatalf("instanceId = %q", spec.InstanceID)
+			t.Fatalf("instanceID = %q", spec.InstanceID)
 		}
 		return response(http.StatusCreated, `{}`), nil
 	})

@@ -177,7 +177,7 @@ func TestStateRoundTrip(t *testing.T) {
 func TestLoadDoesNotReselectBreaks(t *testing.T) {
 	// A persisted cycle without break marks stays without breaks on load; cycleNodes is still recomputed from the edge
 	// set.
-	state := map[string]ebsv1.DcgNodeState{
+	state := map[string]ebsv1.BuildGraphNode{
 		"a": {OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConstraint{"b": {}}},
 		"b": {OutDep: []string{"a"}, InDep: map[string]ebsv1.VersionConstraint{"a": {}}},
 	}

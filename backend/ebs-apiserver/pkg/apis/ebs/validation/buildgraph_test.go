@@ -13,7 +13,7 @@ func graphFixture() *ebsv1.BuildGraph {
 	return &ebsv1.BuildGraph{
 		ObjectMeta: metav1.ObjectMeta{Name: info.Name, Namespace: info.Namespace,
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(info, ebsv1.SchemeGroupVersion.WithKind("BuildInfo"))}},
-		Status: ebsv1.BuildGraphStatus{Nodes: map[string]ebsv1.DcgNodeState{
+		Status: ebsv1.BuildGraphStatus{Nodes: map[string]ebsv1.BuildGraphNode{
 			"a": {Version: "1", OutDep: []string{"b"}},
 			"b": {Version: "2", InDep: map[string]ebsv1.VersionConstraint{"a": {GE: "1"}}},
 		}},
@@ -33,7 +33,7 @@ func TestBuildGraphValidation(t *testing.T) {
 			a.OutDep = []string{"b", "b"}
 			g.Status.Nodes["a"], g.Status.Nodes["b"] = a, b
 		}, true},
-		{"empty graph", func(g *ebsv1.BuildGraph) { g.Status.Nodes = map[string]ebsv1.DcgNodeState{} }, true},
+		{"empty graph", func(g *ebsv1.BuildGraph) { g.Status.Nodes = map[string]ebsv1.BuildGraphNode{} }, true},
 		{"cycle", func(g *ebsv1.BuildGraph) {
 			a, b := g.Status.Nodes["a"], g.Status.Nodes["b"]
 			a.InstallInDep = map[string]ebsv1.VersionConstraint{"b": {}}
@@ -42,7 +42,7 @@ func TestBuildGraphValidation(t *testing.T) {
 		}, true},
 		{"missing nodes", func(g *ebsv1.BuildGraph) { g.Status.Nodes = nil }, false},
 		{"dangling edge", func(g *ebsv1.BuildGraph) { delete(g.Status.Nodes, "a") }, false},
-		{"incorrect reverse edge", func(g *ebsv1.BuildGraph) { g.Status.Nodes["a"] = ebsv1.DcgNodeState{} }, false},
+		{"incorrect reverse edge", func(g *ebsv1.BuildGraph) { g.Status.Nodes["a"] = ebsv1.BuildGraphNode{} }, false},
 		{"missing owner", func(g *ebsv1.BuildGraph) { g.OwnerReferences = nil }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,7 +71,7 @@ func TestBuildGraphStatusUpdate(t *testing.T) {
 	}
 	for _, change := range []func(*ebsv1.BuildGraph){
 		func(g *ebsv1.BuildGraph) { n := g.Status.Nodes["a"]; n.Version = "new"; g.Status.Nodes["a"] = n },
-		func(g *ebsv1.BuildGraph) { g.Status.Nodes["c"] = ebsv1.DcgNodeState{} },
+		func(g *ebsv1.BuildGraph) { g.Status.Nodes["c"] = ebsv1.BuildGraphNode{} },
 		func(g *ebsv1.BuildGraph) { g.OwnerReferences[0].UID = "replacement" },
 	} {
 		g := old.DeepCopy()

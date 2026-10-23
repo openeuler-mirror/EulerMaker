@@ -53,7 +53,7 @@ func (c *Client) CreateRunner(ctx context.Context, runner RunnerResource) error 
 			"labels": runner.Metadata.Labels,
 		},
 		"spec": map[string]any{
-			"instanceId": runner.Spec.InstanceID,
+			"instanceID": runner.Spec.InstanceID,
 			"type":       runner.Spec.Type,
 			"arch":       runner.Spec.Arch,
 		},
@@ -72,7 +72,7 @@ func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error 
 			},
 		},
 		"spec": map[string]any{
-			"instanceId": runner.Spec.InstanceID,
+			"instanceID": runner.Spec.InstanceID,
 			"type":       runner.Spec.Type,
 			"arch":       runner.Spec.Arch,
 		},
