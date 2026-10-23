@@ -2,6 +2,8 @@ services:
   ebs-runner:
     build:
       context: ../backend/runner
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     command:
       - --gateway=${RUNNER_GATEWAY_URL:-http://127.0.0.1:8080}
       - --service-access-mode=${RUNNER_SERVICE_ACCESS_MODE:-internal}

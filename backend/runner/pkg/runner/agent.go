@@ -25,7 +25,8 @@ import (
 	"ebs-runner/pkg/service"
 )
 
-const agentVersion = "v0.1.0"
+// agentVersion is the Git commit injected at build time with -ldflags -X.
+var agentVersion = "unknown"
 
 type RunnerAPI interface {
 	GetRunner(context.Context, string) (*gateway.RunnerResource, error)

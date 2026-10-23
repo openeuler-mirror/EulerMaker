@@ -524,6 +524,7 @@ export default {
     noRunnersHint: "当前没有可展示的 Runner。",
     loadRunnersFailed: "Runner 加载失败",
     runnerName: "Runner 名称",
+    agentVersion: "Agent 版本",
     phase: "阶段",
     type: "类型",
     arch: "架构",
