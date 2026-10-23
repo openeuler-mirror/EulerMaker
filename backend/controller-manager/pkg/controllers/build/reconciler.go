@@ -65,7 +65,7 @@ func (r *reconciler) run() (controller.ReconcileResult, error) {
 	case ebsv1.BuildPrepared:
 		return r.prepared()
 	case ebsv1.BuildProcessing:
-		if r.current.Status.Stage == stagePublish {
+		if r.current.Status.Stage == ebsv1.BuildStagePublish {
 			return r.processingPublish()
 		}
 		return r.processingBuild()
@@ -83,10 +83,10 @@ func validatePhaseStage(build *ebsv1.Build) error {
 			return nil
 		}
 	case ebsv1.BuildProcessing:
-		if stage == stageBuild {
+		if stage == ebsv1.BuildStageBuild {
 			return nil
 		}
-		if stage == stagePublish && build.Spec.BuildType != buildTypeSingle {
+		if stage == ebsv1.BuildStagePublish && build.Spec.BuildType != ebsv1.BuildTypeSingle {
 			return nil
 		}
 	}

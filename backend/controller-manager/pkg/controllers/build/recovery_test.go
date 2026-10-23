@@ -31,7 +31,7 @@ func TestCrashRecoveryReusesChildrenCreatedBeforeTheCrash(t *testing.T) {
 	if api.CallCount("CreateSnapshot") != 0 || api.CallCount("CreateBuildInfo") != 0 {
 		t.Fatal("children created before the crash must be reused, not recreated")
 	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != stageBuild {
+	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 }
@@ -56,7 +56,7 @@ func TestCrashRecoveryReplaysFromThePersistedPhase(t *testing.T) {
 		t.Fatalf("second round: %v", err)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != stageBuild {
+	if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 	if api.CallCount("CreateSnapshot") != 0 {
@@ -66,8 +66,8 @@ func TestCrashRecoveryReplaysFromThePersistedPhase(t *testing.T) {
 
 func TestCrashBeforeTerminalWriteConvergesWithoutExtraWrites(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
-	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted, map[string]ebsv1.SpecStatus{"gcc": specStatus("Failed", specStatusSucceeded)})
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
+	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted, map[string]ebsv1.SpecStatus{"gcc": specStatus("Failed", ebsv1.SpecInstallSucceeded)})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); !controller.IsPermanent(err) {
 		t.Fatalf("want permanent error, got %v", err)

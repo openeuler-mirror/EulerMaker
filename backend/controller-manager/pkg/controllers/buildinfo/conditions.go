@@ -13,18 +13,6 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// Spec build/install status values persisted in SpecStatus.
-const (
-	// SpecBuildRunning: a Job has been dispatched and has not terminated.
-	SpecBuildRunning = "Running"
-	// SpecBuildSucceeded: terminal, the latest-generation Job succeeded.
-	SpecBuildSucceeded = "Succeeded"
-	// SpecBuildFailed: terminal, the latest-generation Job failed, or a pre-dispatch verdict failed the spec.
-	SpecBuildFailed = "Failed"
-	// SpecBuildArchUnsupported: terminal, the spec cannot build on the target architecture.
-	SpecBuildArchUnsupported = "ArchUnsupported"
-)
-
 // BuildInfo-level condition types.
 const (
 	// ConditionSpecDependsFillFailed carries spec parsing degradation and single-build empty-set closeouts.
@@ -86,12 +74,12 @@ const (
 	ReasonInstallResultInvalid                  = "InstallResultInvalid"
 )
 
-func failedSpecBuildStatus(status string) bool {
-	return status == SpecBuildFailed || status == SpecBuildArchUnsupported
+func failedSpecBuildStatus(status ebsv1.SpecBuildPhase) bool {
+	return status == ebsv1.SpecBuildFailed || status == ebsv1.SpecBuildArchUnsupported
 }
 
-func terminalSpecBuildStatus(status string) bool {
-	return status == SpecBuildSucceeded || failedSpecBuildStatus(status)
+func terminalSpecBuildStatus(status ebsv1.SpecBuildPhase) bool {
+	return status == ebsv1.SpecBuildSucceeded || failedSpecBuildStatus(status)
 }
 
 // conditionMessageMax bounds a persisted condition message (apiserver limit).

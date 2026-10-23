@@ -79,19 +79,19 @@ func TestVersionSatisfies(t *testing.T) {
 	cases := []struct {
 		name       string
 		actual     string
-		constraint ebsv1.VersionConst
+		constraint ebsv1.VersionConstraint
 		want       bool
 	}{
-		{"empty constraint passes", "anything", ebsv1.VersionConst{}, true},
-		{"empty constraint empty actual passes", "", ebsv1.VersionConst{}, true},
-		{"non-empty constraint empty actual fails", "", ebsv1.VersionConst{GE: "1.0"}, false},
-		{"ge satisfied", "1.0", ebsv1.VersionConst{GE: "1.0"}, true},
-		{"ge violated", "0.9", ebsv1.VersionConst{GE: "1.0"}, false},
-		{"range satisfied", "1.5", ebsv1.VersionConst{GT: "1.0", LT: "2.0"}, true},
-		{"range violated", "2.5", ebsv1.VersionConst{GT: "1.0", LT: "2.0"}, false},
-		{"and semantics one clause empty", "1.5", ebsv1.VersionConst{GT: "1.0", EQ: ""}, true},
-		{"eq with release", "1.0-2", ebsv1.VersionConst{EQ: "1.0"}, true},
-		{"only eq clause", "1.1", ebsv1.VersionConst{EQ: "1.0"}, false},
+		{"empty constraint passes", "anything", ebsv1.VersionConstraint{}, true},
+		{"empty constraint empty actual passes", "", ebsv1.VersionConstraint{}, true},
+		{"non-empty constraint empty actual fails", "", ebsv1.VersionConstraint{GE: "1.0"}, false},
+		{"ge satisfied", "1.0", ebsv1.VersionConstraint{GE: "1.0"}, true},
+		{"ge violated", "0.9", ebsv1.VersionConstraint{GE: "1.0"}, false},
+		{"range satisfied", "1.5", ebsv1.VersionConstraint{GT: "1.0", LT: "2.0"}, true},
+		{"range violated", "2.5", ebsv1.VersionConstraint{GT: "1.0", LT: "2.0"}, false},
+		{"and semantics one clause empty", "1.5", ebsv1.VersionConstraint{GT: "1.0", EQ: ""}, true},
+		{"eq with release", "1.0-2", ebsv1.VersionConstraint{EQ: "1.0"}, true},
+		{"only eq clause", "1.1", ebsv1.VersionConstraint{EQ: "1.0"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

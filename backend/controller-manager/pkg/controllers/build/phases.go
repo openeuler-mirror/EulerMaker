@@ -13,18 +13,9 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-const (
-	stageBuild   = "build"
-	stagePublish = "publish"
-
-	buildTypeSingle = "single"
-
-	specStatusSucceeded = "Succeeded"
-)
-
 // pending ensures the Snapshot before advancing to Prepared. Non-single builds also resolve the base and ensure RpmRepo.
 func (r *reconciler) pending() (controller.ReconcileResult, error) {
-	if r.current.Spec.BuildType != buildTypeSingle && r.current.Status.BaseBuildRef == nil {
+	if r.current.Spec.BuildType != ebsv1.BuildTypeSingle && r.current.Status.BaseBuildRef == nil {
 		return r.recordBaseBuildRef()
 	}
 	snapshot, outcome := r.ensureSnapshot()
@@ -34,7 +25,7 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 	if snapshot.Status.Phase != ebsv1.SnapshotActive {
 		return controller.ReconcileResult{}, nil
 	}
-	if r.current.Spec.BuildType == "incremental" {
+	if r.current.Spec.BuildType == ebsv1.BuildTypeIncremental {
 		packages, err := r.incrementalPackageSeeds(snapshot)
 		if err != nil {
 			return controller.ReconcileResult{}, err
@@ -47,7 +38,7 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 			r.current = updated
 		}
 	}
-	if r.current.Spec.BuildType != buildTypeSingle {
+	if r.current.Spec.BuildType != ebsv1.BuildTypeSingle {
 		if _, outcome := r.ensureRpmRepo(); !outcome.ready {
 			return outcome.result(), outcome.err
 		}
@@ -62,7 +53,7 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 // empty object, which is distinct from nil (not resolved yet). The round returns right after the write.
 func (r *reconciler) recordBaseBuildRef() (controller.ReconcileResult, error) {
 	reference := &ebsv1.BaseBuildRef{}
-	previous, err := r.controller.client.GetLastPublishedBuild(r.ctx, r.project, r.current.Spec.BuildTarget.Os, r.current.Spec.BuildTarget.Arch)
+	previous, err := r.controller.client.GetLastPublishedBuild(r.ctx, r.project, r.current.Spec.BuildTarget.OS, r.current.Spec.BuildTarget.Arch)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
@@ -88,7 +79,7 @@ func (r *reconciler) prepared() (controller.ReconcileResult, error) {
 	}
 	target := r.current.DeepCopy()
 	target.Status.Phase = ebsv1.BuildProcessing
-	target.Status.Stage = stageBuild
+	target.Status.Stage = ebsv1.BuildStageBuild
 	target.Status.StartTime = r.now
 	intent := writeIntent{
 		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
@@ -102,7 +93,7 @@ func (r *reconciler) processingBuild() (controller.ReconcileResult, error) {
 	info, err := r.controller.client.GetBuildInfo(r.ctx, r.project, r.current.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.failChildResourceMissing(stageBuild, ConditionBuildSucceed, "BuildInfo")
+			return r.failChildResourceMissing(ebsv1.BuildStageBuild, ConditionBuildSucceed, "BuildInfo")
 		}
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
@@ -113,7 +104,7 @@ func (r *reconciler) processingBuild() (controller.ReconcileResult, error) {
 		return controller.ReconcileResult{}, nil
 	}
 	succeeded, failing := aggregateSpecStatus(info.Status.SpecStatus)
-	if r.current.Spec.BuildType == buildTypeSingle {
+	if r.current.Spec.BuildType == ebsv1.BuildTypeSingle {
 		return r.finishSingleBuild(succeeded, failing)
 	}
 	return r.advanceNonSingleBuild(succeeded, failing)
@@ -122,7 +113,7 @@ func (r *reconciler) processingBuild() (controller.ReconcileResult, error) {
 func (r *reconciler) failBuildPayload() (controller.ReconcileResult, error) {
 	target := r.current.DeepCopy()
 	target.Status.Phase = ebsv1.BuildFailed
-	target.Status.Stage = stageBuild
+	target.Status.Stage = ebsv1.BuildStageBuild
 	target.Status.EndTime = r.now
 	merged, intent := r.withCondition(target.Status.Conditions, ConditionBuildSucceed, metav1.ConditionFalse, ReasonBuildPayloadParseFailed)
 	target.Status.Conditions = merged
@@ -141,11 +132,11 @@ func (r *reconciler) finishSingleBuild(succeeded bool, failing string) (controll
 	target.Status.Conditions = merged
 	if succeeded {
 		// Skipping the release is the only stage advance a single build performs.
-		target.Status.Stage = stagePublish
+		target.Status.Stage = ebsv1.BuildStagePublish
 		target.Status.Phase = ebsv1.BuildSkipped
 	} else {
 		// A failed single build never reached the release stage, so its stage stays build.
-		target.Status.Stage = stageBuild
+		target.Status.Stage = ebsv1.BuildStageBuild
 		target.Status.Phase = ebsv1.BuildFailed
 	}
 	write := writeIntent{
@@ -167,7 +158,7 @@ func (r *reconciler) advanceNonSingleBuild(succeeded bool, failing string) (cont
 	target := r.current.DeepCopy()
 	merged, intent := r.withCondition(target.Status.Conditions, ConditionBuildSucceed, conditionStatus(succeeded), buildResultReason(succeeded))
 	target.Status.Conditions = merged
-	target.Status.Stage = stagePublish
+	target.Status.Stage = ebsv1.BuildStagePublish
 	write := writeIntent{
 		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
@@ -193,7 +184,7 @@ func (r *reconciler) processingPublish() (controller.ReconcileResult, error) {
 	repo, err := r.controller.client.GetRpmRepo(r.ctx, r.project, r.current.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.failChildResourceMissing(stagePublish, ConditionPublishSucceed, "RpmRepo")
+			return r.failChildResourceMissing(ebsv1.BuildStagePublish, ConditionPublishSucceed, "RpmRepo")
 		}
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
@@ -203,7 +194,7 @@ func (r *reconciler) processingPublish() (controller.ReconcileResult, error) {
 	}
 	succeeded := release.Phase == ebsv1.RpmRepoReleaseReady
 	target := r.current.DeepCopy()
-	target.Status.Stage = stagePublish
+	target.Status.Stage = ebsv1.BuildStagePublish
 	target.Status.EndTime = r.now
 	merged, intent := r.withCondition(target.Status.Conditions, ConditionPublishSucceed, conditionStatus(succeeded), publishResultReason(succeeded))
 	target.Status.Conditions = merged
@@ -224,7 +215,7 @@ func (r *reconciler) processingPublish() (controller.ReconcileResult, error) {
 }
 
 // failChildResourceMissing records a direct dependency that disappeared while the Build was processing.
-func (r *reconciler) failChildResourceMissing(stage, conditionType, kind string) (controller.ReconcileResult, error) {
+func (r *reconciler) failChildResourceMissing(stage ebsv1.BuildStage, conditionType, kind string) (controller.ReconcileResult, error) {
 	log.Printf("controller=%s key=%q uid=%q phase=%q stage=%q reason=ChildResourceMissing resource=%s name=%q", Name, r.key, r.current.UID, r.current.Status.Phase, r.current.Status.Stage, kind, r.current.Name)
 	target := r.current.DeepCopy()
 	target.Status.Phase = ebsv1.BuildFailed
@@ -266,7 +257,7 @@ func aggregateSpecStatus(specStatus ebsv1.SpecStatusGroup) (bool, string) {
 	sort.Strings(names)
 	for _, name := range names {
 		status := specStatus.Entry(name)
-		if status.Build.Status != specStatusSucceeded || status.Install.Status != specStatusSucceeded {
+		if status.Build.Status != ebsv1.SpecBuildSucceeded || status.Install.Status != ebsv1.SpecInstallSucceeded {
 			return false, name
 		}
 	}

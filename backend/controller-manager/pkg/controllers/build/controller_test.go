@@ -137,7 +137,7 @@ func TestStartupMarkerIsLoggedOnce(t *testing.T) {
 	if count := strings.Count(output.String(), "event=reconciled-after-start"); count != 1 {
 		t.Fatalf("startup markers = %d in %q", count, output.String())
 	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != stageBuild {
+	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 }

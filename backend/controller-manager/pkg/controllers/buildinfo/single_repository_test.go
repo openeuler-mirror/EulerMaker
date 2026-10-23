@@ -80,7 +80,7 @@ func TestSingleReleaseInputs(t *testing.T) {
 		t.Run(map[bool]string{false: "bootstrap only", true: "published and bootstrap"}[published], func(t *testing.T) {
 			c, client, git, _ := newTestController(t)
 			bi := seedHealthyBasics(client, "single", "repo1")
-			bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "https://bootstrap.example/base"}}
+			bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "https://bootstrap.example/base"}}
 			client.SeedBuildInfo(bi)
 			project := testProjectObj(ebsv1.ProjectActive)
 			project.Annotations = map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}
@@ -143,7 +143,7 @@ func TestSingleReleaseFailurePreservesJobBackfill(t *testing.T) {
 			t.Fatal("expected retryable probe error")
 		}
 		persisted := getBuildInfo(t, client)
-		if persisted.Status.SpecStatus.Entry("a").Build.Status != SpecBuildSucceeded ||
+		if persisted.Status.SpecStatus.Entry("a").Build.Status != ebsv1.SpecBuildSucceeded ||
 			persisted.Status.SpecStatus.Entry("b").Build.Status != "" {
 			t.Fatalf("backfilled statuses = %+v", persisted.Status.SpecStatus)
 		}

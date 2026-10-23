@@ -197,7 +197,7 @@ func TestBuildGraphUpdateConfirmation(t *testing.T) {
 				t.Fatal(err)
 			}
 			candidate := dcg.Clone()
-			candidate.AddInstallEdge("a", "b", ebsv1.VersionConst{})
+			candidate.AddInstallEdge("a", "b", ebsv1.VersionConstraint{})
 			candidate.RefreshCyclesAndBreaks()
 			client.injectedWrites["update-graph"] = &injectedWrite{
 				outcome: tc.outcome, statusCode: tc.code, persist: tc.persist,
@@ -263,7 +263,7 @@ func TestBuildGraphOverlappingEdges(t *testing.T) {
 	bi := client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	round := &reconcileRound{key: cacheKey(bi.Namespace, bi.Name), current: bi}
 	candidate := DcgDictFromState(dcgStateAB())
-	candidate.AddInstallEdge("b", "a", ebsv1.VersionConst{})
+	candidate.AddInstallEdge("b", "a", ebsv1.VersionConstraint{})
 	got, result, err := c.writeGraph(context.Background(), round, candidate)
 	if err != nil || result.RequeueAfter != 0 || got == nil || !dcgStateMatches(got.ToState(), candidate.ToState()) {
 		t.Fatalf("overlapping build/install edges must round-trip with multiplicity: %v %v", result, err)

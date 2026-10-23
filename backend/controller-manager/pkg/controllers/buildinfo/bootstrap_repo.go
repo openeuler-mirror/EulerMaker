@@ -11,7 +11,7 @@ import (
 func bootstrapRepoURLs(repos []ebsv1.BootstrapRepo, arch string) []string {
 	urls := make([]string, 0, len(repos))
 	for _, repo := range repos {
-		urls = append(urls, strings.TrimRight(strings.TrimSpace(repo.Repo), "/")+"/"+arch)
+		urls = append(urls, strings.TrimRight(strings.TrimSpace(repo.URL), "/")+"/"+arch)
 	}
 	return urls
 }

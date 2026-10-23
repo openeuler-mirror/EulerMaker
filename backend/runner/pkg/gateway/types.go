@@ -160,11 +160,11 @@ type JobInstallResult struct {
 }
 
 type MissingDep struct {
-	NeededBy        string       `json:"neededBy,omitempty"`
-	VersionRequests VersionConst `json:"versionRequests,omitempty"`
+	NeededBy        string            `json:"neededBy,omitempty"`
+	VersionRequests VersionConstraint `json:"versionRequests,omitempty"`
 }
 
-type VersionConst struct {
+type VersionConstraint struct {
 	GT string `json:"gt,omitempty"`
 	GE string `json:"ge,omitempty"`
 	EQ string `json:"eq,omitempty"`

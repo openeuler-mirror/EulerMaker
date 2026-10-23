@@ -9,7 +9,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// Comparison operators, matching the VersionConst word keys.
+// Comparison operators, matching the VersionConstraint word keys.
 const (
 	OpGT = "GT"
 	OpGE = "GE"
@@ -42,8 +42,8 @@ func VRCompare(x, op, y string) (bool, error) {
 //   - a non-empty constraint against an empty actual (missing artifact
 //     version, e.g. RpmRepo dirty data) fails as unavailable;
 //   - otherwise every operator must hold (AND).
-func VersionSatisfies(actual string, constraint ebsv1.VersionConst) (bool, error) {
-	if constraint == (ebsv1.VersionConst{}) {
+func VersionSatisfies(actual string, constraint ebsv1.VersionConstraint) (bool, error) {
+	if constraint == (ebsv1.VersionConstraint{}) {
 		return true, nil
 	}
 	if actual == "" {

@@ -47,7 +47,7 @@ func TestRecordStatusGroupsSuccessAndSeparatesErrors(t *testing.T) {
 	after := before.DeepCopy()
 	after.Status.PackageRepoStatuses["z"] = ebsv1.PackageRepoStatus{CommitID: "z-commit"}
 	after.Status.PackageRepoStatuses["a"] = ebsv1.PackageRepoStatus{CommitID: "a-commit"}
-	after.Status.PackageRepoStatuses["bad"] = ebsv1.PackageRepoStatus{Error: &ebsv1.SpecCommitError{Code: ebsv1.SpecCommitSyncFailed, Retryable: true, Message: "secret remote error"}}
+	after.Status.PackageRepoStatuses["bad"] = ebsv1.PackageRepoStatus{Error: &ebsv1.PackageRepoError{Code: ebsv1.PackageRepoSyncFailed, Retryable: true, Message: "secret remote error"}}
 	after.Status.PackageRepoStatuses["empty"] = ebsv1.PackageRepoStatus{}
 	c := newTestController(t, &fakeClient{}, &fakeGitClient{}, Config{})
 	var output bytes.Buffer
@@ -72,7 +72,7 @@ func TestRecordStatusGroupsSuccessAndSeparatesErrors(t *testing.T) {
 	}
 	output.Reset()
 	onlyError := after.DeepCopy()
-	onlyError.Status.PackageRepoStatuses["bad"].Error.Code = ebsv1.SpecCommitRetryExhausted
+	onlyError.Status.PackageRepoStatuses["bad"].Error.Code = ebsv1.PackageRepoRetryExhausted
 	c.recordStatus(after, onlyError)
 	if strings.Contains(output.String(), "PackagesResolved") || strings.Count(output.String(), "\n") != 1 {
 		t.Fatalf("error-only cycle emitted summary: %s", output.String())

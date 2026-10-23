@@ -21,9 +21,9 @@ func graphWith(edges ...edge) map[string]*DcgNode {
 	for _, e := range edges {
 		up, down := touch(e.up), touch(e.down)
 		if down.InDep == nil {
-			down.InDep = map[string]ebsv1.VersionConst{}
+			down.InDep = map[string]ebsv1.VersionConstraint{}
 		}
-		down.InDep[e.up] = ebsv1.VersionConst{}
+		down.InDep[e.up] = ebsv1.VersionConstraint{}
 		up.OutDep = append(up.OutDep, e.down)
 	}
 	return nodes
@@ -178,8 +178,8 @@ func TestLoadDoesNotReselectBreaks(t *testing.T) {
 	// A persisted cycle without break marks stays without breaks on load; cycleNodes is still recomputed from the edge
 	// set.
 	state := map[string]ebsv1.DcgNodeState{
-		"a": {OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConst{"b": {}}},
-		"b": {OutDep: []string{"a"}, InDep: map[string]ebsv1.VersionConst{"a": {}}},
+		"a": {OutDep: []string{"b"}, InDep: map[string]ebsv1.VersionConstraint{"b": {}}},
+		"b": {OutDep: []string{"a"}, InDep: map[string]ebsv1.VersionConstraint{"a": {}}},
 	}
 	loaded := DcgDictFromState(state)
 	requireBreaks(t, loaded, nil)
@@ -192,7 +192,7 @@ func TestLoadDoesNotReselectBreaks(t *testing.T) {
 
 func TestAddInstallEdge(t *testing.T) {
 	d := NewDcgDict(graphWith(edge{"a", "b"}, edge{"z", "y"}))
-	vc := ebsv1.VersionConst{GE: "1.0"}
+	vc := ebsv1.VersionConstraint{GE: "1.0"}
 
 	if d.AddInstallEdge("missing", "a", vc) || d.AddInstallEdge("a", "missing", vc) {
 		t.Fatal("AddInstallEdge with missing endpoint must return false")
@@ -220,7 +220,7 @@ func TestRefreshCyclesAndBreaksAppendsNewCycle(t *testing.T) {
 	requireBreaks(t, d, nil)
 
 	candidate := d.Clone()
-	if !candidate.AddInstallEdge("a", "b", ebsv1.VersionConst{}) {
+	if !candidate.AddInstallEdge("a", "b", ebsv1.VersionConstraint{}) {
 		t.Fatal("candidate edge append failed")
 	}
 	picks := candidate.RefreshCyclesAndBreaks()
@@ -253,8 +253,8 @@ func TestRefreshPreservesInitialBreaks(t *testing.T) {
 	requireBreaks(t, d, []string{"b"})
 
 	candidate := d.Clone()
-	candidate.AddInstallEdge("c", "a", ebsv1.VersionConst{})
-	candidate.AddInstallEdge("a", "c", ebsv1.VersionConst{})
+	candidate.AddInstallEdge("c", "a", ebsv1.VersionConstraint{})
+	candidate.AddInstallEdge("a", "c", ebsv1.VersionConstraint{})
 	picks := candidate.RefreshCyclesAndBreaks()
 	if !reflect.DeepEqual(picks, []string{"c"}) {
 		t.Fatalf("new cycle picks = %v, want [c]", picks)
@@ -276,7 +276,7 @@ func TestRefreshSkipsCycleAlreadyBroken(t *testing.T) {
 
 	candidate := d.Clone()
 	// c install-depends on a: edge a->c. Cycle b->c ... c has no path back, so no new cycle appears.
-	candidate.AddInstallEdge("c", "a", ebsv1.VersionConst{})
+	candidate.AddInstallEdge("c", "a", ebsv1.VersionConstraint{})
 	if picks := candidate.RefreshCyclesAndBreaks(); len(picks) != 0 {
 		t.Fatalf("no new cycle: picks = %v, want none", picks)
 	}

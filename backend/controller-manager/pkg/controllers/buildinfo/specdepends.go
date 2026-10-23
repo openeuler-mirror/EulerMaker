@@ -311,7 +311,7 @@ func (c *Controller) ignoreBuildRequires(round *reconcileRound, depends map[stri
 		if !found {
 			continue
 		}
-		depend.BuildRequires = map[string]ebsv1.VersionConst{}
+		depend.BuildRequires = map[string]ebsv1.VersionConstraint{}
 		depends[name] = depend
 	}
 }
@@ -540,10 +540,10 @@ func (c *Controller) determineBuildSet(
 	repoLayer *rpmver.RpmMetaSource,
 ) (map[string]specparse.SpecDepend, error) {
 	switch round.build.Spec.BuildType {
-	case "full":
+	case ebsv1.BuildTypeFull:
 		// Full builds use the complete assembly without expansion.
 		return asm.depends, nil
-	case "incremental", "specified":
+	case ebsv1.BuildTypeIncremental, ebsv1.BuildTypeSpecified:
 		seeds := map[string]specparse.SpecDepend{}
 		selected := make(map[string]struct{}, len(round.build.Spec.Packages))
 		for _, repo := range round.build.Spec.Packages {
@@ -608,7 +608,7 @@ func expandBuildSet(
 }
 
 // keysIntersect reports whether any constraint-map key is in the provide set.
-func keysIntersect(requires map[string]ebsv1.VersionConst, provides map[string]struct{}) bool {
+func keysIntersect(requires map[string]ebsv1.VersionConstraint, provides map[string]struct{}) bool {
 	for name := range requires {
 		if _, ok := provides[name]; ok {
 			return true

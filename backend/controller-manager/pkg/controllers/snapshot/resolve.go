@@ -64,7 +64,7 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		index := indices[repo.Name]
 		repo = effectiveRepo(repo, snapshot.Spec.DefaultRef)
 		if nameCount[repo.Name] > 1 {
-			results = append(results, skippedResult(index, repo, ebsv1.SpecCommitValidationFailed, "duplicate package repository name"))
+			results = append(results, skippedResult(index, repo, ebsv1.PackageRepoValidationFailed, "duplicate package repository name"))
 			continue
 		}
 		if status, ok := snapshot.Status.PackageRepoStatuses[repo.Name]; ok && (status.CommitID != "" || (status.Error != nil && !status.Error.Retryable)) {
@@ -172,7 +172,7 @@ func (c *Controller) resolveOne(ctx context.Context, gitClient gitserver.GitServ
 	}
 	repo := task.repo
 	if repo.Ref == "" && repo.CommitID == "" {
-		return skippedResult(task.index, repo, ebsv1.SpecCommitValidationFailed, "repository commitID, ref and snapshot defaultRef are empty")
+		return skippedResult(task.index, repo, ebsv1.PackageRepoValidationFailed, "repository commitID, ref and snapshot defaultRef are empty")
 	}
 	check, err := gitClient.CheckSynced(ctx, repo.URL, baseline)
 	if err != nil {
@@ -221,18 +221,18 @@ func (c *Controller) gitFailure(task resolveTask, operation string, err error) (
 	defer func() { out.unexpectedError = !classified && !isTimeout(err) }()
 	switch kind {
 	case gitserver.ErrorValidation:
-		return skippedResult(task.index, task.repo, ebsv1.SpecCommitValidationFailed, "git-server rejected repository input")
+		return skippedResult(task.index, task.repo, ebsv1.PackageRepoValidationFailed, "git-server rejected repository input")
 	case gitserver.ErrorNotFound:
-		return skippedResult(task.index, task.repo, ebsv1.SpecCommitResolveFailed, "Git ref or commit was not found")
+		return skippedResult(task.index, task.repo, ebsv1.PackageRepoResolveFailed, "Git ref or commit was not found")
 	case gitserver.ErrorPermanent:
 		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: controllerPermanent(err)}
 	default:
 		if isTimeout(err) {
-			return failedResult(task.index, task.repo, ebsv1.SpecCommitSyncTimeout, operation+" request timed out")
+			return failedResult(task.index, task.repo, ebsv1.PackageRepoSyncTimeout, operation+" request timed out")
 		}
-		code := ebsv1.SpecCommitSyncFailed
+		code := ebsv1.PackageRepoSyncFailed
 		if operation == "resolve" {
-			code = ebsv1.SpecCommitResolveFailed
+			code = ebsv1.PackageRepoResolveFailed
 		}
 		return failedResult(task.index, task.repo, code, operation+" request failed")
 	}
@@ -262,7 +262,7 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 			identity := repoIdentity(result.repo)
 			if commit, ok := accepted[identity]; ok && commit != result.status.CommitID {
 				cloneURL := result.status.CloneURL
-				result = skippedResult(result.index, result.repo, ebsv1.SpecCommitCommitConflict, "repository ref resolved to conflicting commits")
+				result = skippedResult(result.index, result.repo, ebsv1.PackageRepoCommitConflict, "repository ref resolved to conflicting commits")
 				result.status.CloneURL = cloneURL
 			} else {
 				accepted[identity] = result.status.CommitID
@@ -285,7 +285,7 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 		case stateFailed:
 			next := c.failures.count(snapshot.UID, name) + 1
 			if next >= c.config.FailureLimit {
-				result.status.Error = &ebsv1.SpecCommitError{Code: ebsv1.SpecCommitRetryExhausted, Message: "temporary git-server failures exhausted retry budget", Retryable: false}
+				result.status.Error = &ebsv1.PackageRepoError{Code: ebsv1.PackageRepoRetryExhausted, Message: "temporary git-server failures exhausted retry budget", Retryable: false}
 				changes = append(changes, trackerChange{repo: name})
 			} else {
 				failed = true
@@ -297,12 +297,12 @@ func (c *Controller) mergeResults(snapshot *ebsv1.Snapshot, results []resolveRes
 	return changes, waiting, failed
 }
 
-func skippedResult(index int, repo ebsv1.PackageRepo, code ebsv1.SpecCommitErrorCode, message string) resolveResult {
-	return resolveResult{index: index, repo: repo, state: stateSkipped, status: ebsv1.PackageRepoStatus{Error: &ebsv1.SpecCommitError{Code: code, Message: sanitize(message), Retryable: false}}}
+func skippedResult(index int, repo ebsv1.PackageRepo, code ebsv1.PackageRepoErrorCode, message string) resolveResult {
+	return resolveResult{index: index, repo: repo, state: stateSkipped, status: ebsv1.PackageRepoStatus{Error: &ebsv1.PackageRepoError{Code: code, Message: sanitize(message), Retryable: false}}}
 }
 
-func failedResult(index int, repo ebsv1.PackageRepo, code ebsv1.SpecCommitErrorCode, message string) resolveResult {
-	return resolveResult{index: index, repo: repo, state: stateFailed, status: ebsv1.PackageRepoStatus{Error: &ebsv1.SpecCommitError{Code: code, Message: sanitize(message), Retryable: true}}}
+func failedResult(index int, repo ebsv1.PackageRepo, code ebsv1.PackageRepoErrorCode, message string) resolveResult {
+	return resolveResult{index: index, repo: repo, state: stateFailed, status: ebsv1.PackageRepoStatus{Error: &ebsv1.PackageRepoError{Code: code, Message: sanitize(message), Retryable: true}}}
 }
 
 func sortResults(results []resolveResult) {

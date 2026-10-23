@@ -176,9 +176,9 @@ func buildImage(conf *ebsv1.BuildTargetContent, target ebsv1.BuildTarget) (strin
 	if conf == nil {
 		return "", fmt.Errorf("build-target Config is unavailable")
 	}
-	image := conf.Targets[target.Os].Arches[target.Arch].Image
+	image := conf.Targets[target.OS].Arches[target.Arch].Image
 	if image == "" {
-		return "", fmt.Errorf("build-target Config has no image for %s/%s", target.Os, target.Arch)
+		return "", fmt.Errorf("build-target Config has no image for %s/%s", target.OS, target.Arch)
 	}
 	return image, nil
 }
@@ -244,7 +244,7 @@ func (c *Controller) checkArchSupported(
 		return controller.ReconcileResult{}, nil
 	}
 	message := fmt.Sprintf("target arch %q not in exclusiveArch %v", arch, depend.ExclusiveArch)
-	result, err := c.markSpecTerminal(ctx, round, specName, SpecBuildArchUnsupported, "", "", "", false)
+	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildArchUnsupported, "", "", "", false)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "ArchUnsupported", "spec %s marked ArchUnsupported: %s", specName, message)
 	}

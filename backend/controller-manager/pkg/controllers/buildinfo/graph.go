@@ -123,7 +123,7 @@ func graphNodesValid(nodes map[string]ebsv1.DcgNodeState) bool {
 		out[name] = map[string]int{}
 	}
 	for name, node := range nodes {
-		for _, edges := range []map[string]ebsv1.VersionConst{node.InDep, node.InstallInDep} {
+		for _, edges := range []map[string]ebsv1.VersionConstraint{node.InDep, node.InstallInDep} {
 			for upstream := range edges {
 				if out[upstream] == nil {
 					return false

@@ -13,8 +13,8 @@ import (
 type DcgNode struct {
 	Version        string
 	OutDep         []string
-	InDep          map[string]ebsv1.VersionConst
-	InstallInDep   map[string]ebsv1.VersionConst
+	InDep          map[string]ebsv1.VersionConstraint
+	InstallInDep   map[string]ebsv1.VersionConstraint
 	BootstrapBreak bool
 }
 
@@ -48,8 +48,8 @@ func DcgDictFromState(state map[string]ebsv1.DcgNodeState) *DcgDict {
 		nodes[name] = &DcgNode{
 			Version:        st.Version,
 			OutDep:         append([]string(nil), st.OutDep...),
-			InDep:          cloneVersionConstMap(st.InDep),
-			InstallInDep:   cloneVersionConstMap(st.InstallInDep),
+			InDep:          cloneVersionConstraintMap(st.InDep),
+			InstallInDep:   cloneVersionConstraintMap(st.InstallInDep),
 			BootstrapBreak: st.BootstrapBreak,
 		}
 	}
@@ -67,8 +67,8 @@ func (d *DcgDict) ToState() map[string]ebsv1.DcgNodeState {
 		out[name] = ebsv1.DcgNodeState{
 			Version:        version,
 			OutDep:         append([]string(nil), n.OutDep...),
-			InDep:          cloneVersionConstMap(n.InDep),
-			InstallInDep:   cloneVersionConstMap(n.InstallInDep),
+			InDep:          cloneVersionConstraintMap(n.InDep),
+			InstallInDep:   cloneVersionConstraintMap(n.InstallInDep),
 			BootstrapBreak: n.BootstrapBreak,
 		}
 	}
@@ -82,8 +82,8 @@ func (d *DcgDict) Clone() *DcgDict {
 		nodes[name] = &DcgNode{
 			Version:        n.Version,
 			OutDep:         append([]string(nil), n.OutDep...),
-			InDep:          cloneVersionConstMap(n.InDep),
-			InstallInDep:   cloneVersionConstMap(n.InstallInDep),
+			InDep:          cloneVersionConstraintMap(n.InDep),
+			InstallInDep:   cloneVersionConstraintMap(n.InstallInDep),
 			BootstrapBreak: n.BootstrapBreak,
 		}
 	}
@@ -187,7 +187,7 @@ func (d *DcgDict) SortedNodes() []string {
 // (candidate) graph: installInDep[spec][provider] = vc and
 // outDep[provider] += spec, in- and out-degree updated together. Idempotent:
 // returns false when the edge already exists or either endpoint is missing.
-func (d *DcgDict) AddInstallEdge(spec, provider string, vc ebsv1.VersionConst) bool {
+func (d *DcgDict) AddInstallEdge(spec, provider string, vc ebsv1.VersionConstraint) bool {
 	s, p := d.nodes[spec], d.nodes[provider]
 	if s == nil || p == nil {
 		return false
@@ -196,7 +196,7 @@ func (d *DcgDict) AddInstallEdge(spec, provider string, vc ebsv1.VersionConst) b
 		return false
 	}
 	if s.InstallInDep == nil {
-		s.InstallInDep = map[string]ebsv1.VersionConst{}
+		s.InstallInDep = map[string]ebsv1.VersionConstraint{}
 	}
 	s.InstallInDep[provider] = vc
 	p.OutDep = append(p.OutDep, spec)
@@ -243,11 +243,11 @@ func BuildDcgNodes(
 	for _, name := range names {
 		nodes[name] = &DcgNode{
 			Version:      buildSet[name].Version,
-			InDep:        map[string]ebsv1.VersionConst{},
-			InstallInDep: map[string]ebsv1.VersionConst{},
+			InDep:        map[string]ebsv1.VersionConstraint{},
+			InstallInDep: map[string]ebsv1.VersionConstraint{},
 		}
 	}
-	addEdge := func(spec, provider string, vc ebsv1.VersionConst, install bool) {
+	addEdge := func(spec, provider string, vc ebsv1.VersionConstraint, install bool) {
 		node := nodes[spec]
 		if install {
 			if _, dup := node.InstallInDep[provider]; dup {
@@ -300,7 +300,7 @@ func BuildDcgNodes(
 
 // sortedConstKeys returns the constraint-map keys in dictionary order, excluding keys present in exclude (buildRemoves;
 // nil for no exclusions).
-func sortedConstKeys(constraints map[string]ebsv1.VersionConst, exclude map[string]ebsv1.VersionConst) []string {
+func sortedConstKeys(constraints map[string]ebsv1.VersionConstraint, exclude map[string]ebsv1.VersionConstraint) []string {
 	keys := make([]string, 0, len(constraints))
 	for key := range constraints {
 		if _, skipped := exclude[key]; skipped {
@@ -315,11 +315,11 @@ func sortedConstKeys(constraints map[string]ebsv1.VersionConst, exclude map[stri
 // mergedInstallDeps computes a spec's install dependency set:
 // the explicit SpecDepend.requires ∪ the spec's own RpmRepo-layer rpm requires. Same-name entries merge per field so
 // both constraints apply; a field conflict resolves to the RpmMeta.requires value.
-func mergedInstallDeps(explicit, rpm map[string]ebsv1.VersionConst) map[string]ebsv1.VersionConst {
+func mergedInstallDeps(explicit, rpm map[string]ebsv1.VersionConstraint) map[string]ebsv1.VersionConstraint {
 	if len(explicit) == 0 && len(rpm) == 0 {
 		return nil
 	}
-	out := make(map[string]ebsv1.VersionConst, len(explicit)+len(rpm))
+	out := make(map[string]ebsv1.VersionConstraint, len(explicit)+len(rpm))
 	for name, vc := range explicit {
 		out[name] = vc
 	}
@@ -335,7 +335,7 @@ func mergedInstallDeps(explicit, rpm map[string]ebsv1.VersionConst) map[string]e
 
 // intersectConst merges two constraints on the same dependency name field by field: a field present in only one side is
 // kept (both constraints apply, the intersection tightens); a conflicting field resolves to the RpmMeta.requires value.
-func intersectConst(explicit, rpm ebsv1.VersionConst) ebsv1.VersionConst {
+func intersectConst(explicit, rpm ebsv1.VersionConstraint) ebsv1.VersionConstraint {
 	merge := func(x, y string) string {
 		if x == "" {
 			return y
@@ -345,7 +345,7 @@ func intersectConst(explicit, rpm ebsv1.VersionConst) ebsv1.VersionConst {
 		}
 		return y
 	}
-	return ebsv1.VersionConst{
+	return ebsv1.VersionConstraint{
 		GT: merge(explicit.GT, rpm.GT),
 		GE: merge(explicit.GE, rpm.GE),
 		EQ: merge(explicit.EQ, rpm.EQ),
@@ -556,11 +556,11 @@ func (d *DcgDict) peelSCC(members []string, preRemoved map[string]bool) []string
 	return picks
 }
 
-func cloneVersionConstMap(in map[string]ebsv1.VersionConst) map[string]ebsv1.VersionConst {
+func cloneVersionConstraintMap(in map[string]ebsv1.VersionConstraint) map[string]ebsv1.VersionConstraint {
 	if in == nil {
 		return nil
 	}
-	out := make(map[string]ebsv1.VersionConst, len(in))
+	out := make(map[string]ebsv1.VersionConstraint, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

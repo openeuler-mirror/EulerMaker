@@ -161,7 +161,7 @@ func TestResolveSnapshotDefaultRef(t *testing.T) {
 			}
 			result := results[0]
 			if tc.skipped {
-				if result.state != stateSkipped || result.status.Error.Code != ebsv1.SpecCommitValidationFailed {
+				if result.state != stateSkipped || result.status.Error.Code != ebsv1.PackageRepoValidationFailed {
 					t.Fatalf("result=%+v", result)
 				}
 			} else {
@@ -313,7 +313,7 @@ func TestTemporaryFailureAtLimitIsSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := api.snapshot.Status.PackageRepoStatuses["pkg"]
-	if api.snapshot.Status.Phase != ebsv1.SnapshotActive || status.Error == nil || status.Error.Code != ebsv1.SpecCommitRetryExhausted || status.Error.Retryable {
+	if api.snapshot.Status.Phase != ebsv1.SnapshotActive || status.Error == nil || status.Error.Code != ebsv1.PackageRepoRetryExhausted || status.Error.Retryable {
 		t.Fatalf("unexpected exhausted status: phase=%s status=%+v", api.snapshot.Status.Phase, status)
 	}
 }

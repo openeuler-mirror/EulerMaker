@@ -185,7 +185,7 @@ func TestAPIClientGetBuildTargetContent(t *testing.T) {
 				t.Fatal(err)
 			}
 			for arch, want := range map[string]string{"x86_64": "build:x86", "aarch64": "build:arm"} {
-				image, err := buildImage(content, ebsv1.BuildTarget{Os: "os", Arch: arch})
+				image, err := buildImage(content, ebsv1.BuildTarget{OS: "os", Arch: arch})
 				if err != nil || image != want {
 					t.Fatalf("image for %s = %q, %v; want %q", arch, image, err, want)
 				}
