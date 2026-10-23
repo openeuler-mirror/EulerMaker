@@ -720,7 +720,7 @@ func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 func TestInitBackfillsExistingJob(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	bi := seedHealthyBasics(client, "full")
-	client.SeedBuildGraph(bi, map[string]ebsv1.DcgNodeState{"a": {Version: "1.0"}})
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0"}})
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	client.SeedRpmRepo(testRpmRepoObj(""))
@@ -802,7 +802,7 @@ func TestSingleRepoInjection(t *testing.T) {
 	client.SetBuildResourceContent(testBuildResourceContent())
 	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
+	bi.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))

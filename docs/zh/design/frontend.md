@@ -179,7 +179,7 @@ ebs.io/member-user.<username>: "true"
 
 构建历史采用主从布局：左侧分页展示构建名称、状态、类型、目标与开始时间，支持隐藏单包构建；右侧展示所选 Build 的状态与 BuildInfo 的 spec 构建状态，支持搜索、状态过滤和分页。点击 spec 展开对应 Job 列表，点击 Job 名展开日志和 RPM 下载列表。用户有权限且 Build 处于 `Pending`、`Prepared` 或 `Processing` 时，该条列表记录提供中止按钮；二次确认显示当前状态，操作后重新读取构建历史。窄屏设备按列表、详情的顺序改为上下布局。
 
-Spec 状态列表展示包的 Commit ID：根据 `BuildInfo.status.specRepoNames[specName]` 获取仓库名，再从同工程、同构建名称的 `Snapshot.status.packageRepoStatuses[repoName].commitId` 读取。列表显示前 12 位，悬停显示完整值。Snapshot 与 BuildInfo 并行读取，使用 `includeFields=status.packageRepoStatuses` 避免获取 Snapshot spec；刷新按钮仅显示图标，并重新加载两者。Snapshot 读取失败时单独提示，构建状态仍正常显示；切换构建时清空旧数据并取消旧请求。
+Spec 状态列表展示包的 Commit ID：根据 `BuildInfo.status.specRepoNames[specName]` 获取仓库名，再从同工程、同构建名称的 `Snapshot.status.packageRepoStatuses[repoName].commitID` 读取。列表显示前 12 位，悬停显示完整值。Snapshot 与 BuildInfo 并行读取，使用 `includeFields=status.packageRepoStatuses` 避免获取 Snapshot spec；刷新按钮仅显示图标，并重新加载两者。Snapshot 读取失败时单独提示，构建状态仍正常显示；切换构建时清空旧数据并取消旧请求。
 
 软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
 
@@ -223,7 +223,7 @@ spec:
 
 Runner 页面展示：
 
-- 名称、`spec.instanceId`、类型、架构和是否不可调度。
+- 名称、`spec.instanceID`、类型、架构和是否不可调度。
 - phase、heartbeat、capacity、allocatable。
 - 地址、操作系统、内核、运行时和 Agent 版本。
 - labels、taints 和 conditions。

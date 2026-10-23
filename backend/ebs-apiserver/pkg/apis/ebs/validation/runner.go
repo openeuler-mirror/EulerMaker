@@ -12,6 +12,12 @@ var uuidV4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[8
 
 func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
+	for i, taint := range obj.Spec.Taints {
+		if !taint.Effect.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "taints").Index(i).Child("effect"),
+				taint.Effect, ebsv1.TaintEffectValues()))
+		}
+	}
 	if len(obj.Name) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "name"), "name is required"))
 	}
@@ -23,9 +29,9 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 	if len(obj.Spec.Arch) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "arch"), "arch is required"))
 	}
-	instanceIDPath := field.NewPath("spec", "instanceId")
+	instanceIDPath := field.NewPath("spec", "instanceID")
 	if obj.Spec.InstanceID == "" {
-		allErrs = append(allErrs, field.Required(instanceIDPath, "instanceId is required"))
+		allErrs = append(allErrs, field.Required(instanceIDPath, "instanceID is required"))
 	} else if !uuidV4Pattern.MatchString(obj.Spec.InstanceID) {
 		allErrs = append(allErrs, field.Invalid(instanceIDPath, obj.Spec.InstanceID, "must be a canonical lowercase UUID v4"))
 	}
@@ -42,7 +48,7 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 func ValidateRunnerUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	allErrs := ValidateRunner(newObj)
 	if newObj.Spec.InstanceID != oldObj.Spec.InstanceID {
-		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "instanceId"), newObj.Spec.InstanceID, "field is immutable"))
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "instanceID"), newObj.Spec.InstanceID, "field is immutable"))
 	}
 	return allErrs
 }

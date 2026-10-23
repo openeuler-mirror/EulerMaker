@@ -723,11 +723,11 @@ func TestNewBuildInfoCopiesBootstrapRepos(t *testing.T) {
 	project := newProject("project-a", newPackageRepo("gcc"))
 	build := withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
 	info := newBuildInfo(build, project)
-	if !reflect.DeepEqual(info.Spec.BootstrapRepo, project.Spec.BootstrapRepo) {
-		t.Fatalf("bootstrapRepo = %+v", info.Spec.BootstrapRepo)
+	if !reflect.DeepEqual(info.Spec.BootstrapRepos, project.Spec.BootstrapRepos) {
+		t.Fatalf("bootstrapRepos = %+v", info.Spec.BootstrapRepos)
 	}
-	info.Spec.BootstrapRepo[0].URL = "mutated"
-	if project.Spec.BootstrapRepo[0].URL != "https://example.com/repo/everything" {
+	info.Spec.BootstrapRepos[0].URL = "mutated"
+	if project.Spec.BootstrapRepos[0].URL != "https://example.com/repo/everything" {
 		t.Fatal("BuildInfo construction must not share state with the Project")
 	}
 }
@@ -757,7 +757,7 @@ func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	info := api.buildInfo("project-a", "build-a")
-	if info == nil || !reflect.DeepEqual(info.Spec.BootstrapRepo, api.getProject("project-a").Spec.BootstrapRepo) {
+	if info == nil || !reflect.DeepEqual(info.Spec.BootstrapRepos, api.getProject("project-a").Spec.BootstrapRepos) {
 		t.Fatalf("BuildInfo = %+v", info)
 	}
 	stored := api.build("project-a", "build-a")
@@ -784,7 +784,7 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Spec:       ebsv1.BuildInfoSpec{BuildPayload: "frozen payload", BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}}},
+		Spec:       ebsv1.BuildInfoSpec{BuildPayload: "frozen payload", BootstrapRepos: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}}},
 	})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
@@ -793,7 +793,7 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	if api.CallCount("GetProject") != 0 || api.CallCount("CreateBuildInfo") != 0 {
 		t.Fatal("an existing BuildInfo must not be recreated or re-read from the Project")
 	}
-	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepo[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" {
+	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepos[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" {
 		t.Fatalf("BuildInfo spec was overwritten: %+v", info.Spec)
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing {
@@ -825,14 +825,14 @@ func TestPreparedUsesCurrentProjectConfigurationForCreate(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	project := newProject("project-a", newPackageRepo("gcc"))
-	project.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "current", URL: "https://example.com/current"}}
+	project.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "current", URL: "https://example.com/current"}}
 	api.projects["project-a"] = project
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if got := api.buildInfo("project-a", "build-a").Spec.BootstrapRepo[0].Name; got != "current" {
-		t.Fatalf("bootstrapRepo = %q", got)
+	if got := api.buildInfo("project-a", "build-a").Spec.BootstrapRepos[0].Name; got != "current" {
+		t.Fatalf("bootstrapRepos = %q", got)
 	}
 }
 

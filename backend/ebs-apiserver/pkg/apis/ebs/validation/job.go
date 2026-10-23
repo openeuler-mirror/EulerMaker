@@ -10,6 +10,16 @@ import (
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	for i, toleration := range obj.Spec.Tolerations {
+		path := field.NewPath("spec", "tolerations").Index(i)
+		if toleration.Operator != "" && !toleration.Operator.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(path.Child("operator"), toleration.Operator,
+				ebsv1.TolerationOperatorValues()))
+		}
+		if toleration.Effect != "" && !toleration.Effect.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(path.Child("effect"), toleration.Effect, ebsv1.TaintEffectValues()))
+		}
+	}
 	if instance := obj.Annotations[ebsv1.ProjectArtifactsAnnotation]; instance != "" {
 		for _, reason := range validation.IsDNS1123Label(instance) {
 			allErrs = append(allErrs, field.Invalid(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), instance, reason))

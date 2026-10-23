@@ -418,7 +418,7 @@ func (c *Client) doExec(ctx context.Context, originURL string, tokens []string) 
 		}
 		return success.Stdout, nil
 	case response.StatusCode == http.StatusUnprocessableEntity || response.StatusCode == http.StatusRequestEntityTooLarge || response.StatusCode == http.StatusBadRequest:
-		// 422: the git command itself failed (invalid commitId, missing
+		// 422: the git command itself failed (invalid commitID, missing
 		// path). 413: output limit exceeded for this input. 400: invalid
 		// request, i.e. a client contract bug. All deterministic.
 		var failure commandResponse

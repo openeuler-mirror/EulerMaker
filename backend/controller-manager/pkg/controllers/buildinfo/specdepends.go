@@ -172,7 +172,7 @@ func (c *Controller) assembleSpecDepends(
 			continue
 		}
 		if entry.CommitID == "" {
-			// No error and no commitId: still resolving (defensive transient).
+			// No error and no commitID: still resolving (defensive transient).
 			asm.incomplete = true
 			continue
 		}
@@ -355,7 +355,7 @@ func (c *Controller) enumerateRepos(round *reconcileRound, snapshot *ebsv1.Snaps
 
 // fetchRepoSpecs downloads and parses every root-level *.spec of one repository. A transient failure anywhere in the
 // repo drops the whole repo from this round (ok=false); deterministic failures skip per spec (or the whole repo on an
-// invalid commitId) and are recorded as degraded conditions. Specs within one repository are sequential; distinct
+// invalid commitID) and are recorded as degraded conditions. Specs within one repository are sequential; distinct
 // repositories are processed by the bounded pool above.
 
 type parsedRepoSpec struct {
@@ -463,7 +463,7 @@ func (c *Controller) parseRepoSpec(
 }
 
 // handleGitFailure routes a git-server failure: transient failures drop the repo from this round (false = incomplete);
-// deterministic failures skip the affected spec (or the repository for invalid commitId). It reports whether the repo
+// deterministic failures skip the affected spec (or the repository for invalid commitID). It reports whether the repo
 // can contribute already-parsed specs this round.
 func (c *Controller) handleGitFailure(
 	round *reconcileRound,

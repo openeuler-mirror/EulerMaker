@@ -8,6 +8,44 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestRepositoryAndRunnerJSONNames(t *testing.T) {
+	var status PackageRepoStatus
+	if err := json.Unmarshal([]byte(`{"cloneURL":"git-server:///git/repo.git","commitID":"abc"}`), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.CloneURL != "git-server:///git/repo.git" || status.CommitID != "abc" {
+		t.Fatalf("repository status = %+v", status)
+	}
+	var runner RunnerSpec
+	if err := json.Unmarshal([]byte(`{"instanceID":"runner-instance"}`), &runner); err != nil {
+		t.Fatal(err)
+	}
+	if runner.InstanceID != "runner-instance" {
+		t.Fatalf("runner spec = %+v", runner)
+	}
+	for _, tc := range []struct {
+		value  any
+		fields []string
+	}{
+		{status, []string{"cloneURL", "commitID"}},
+		{runner, []string{"instanceID"}},
+	} {
+		data, err := json.Marshal(tc.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range tc.fields {
+			if _, ok := fields[name]; !ok {
+				t.Fatalf("missing %s in %s", name, data)
+			}
+		}
+	}
+}
+
 func TestServiceConfigContentRoundTripAndDeepCopy(t *testing.T) {
 	original := &ServiceConfigContent{
 		GitServer: ServiceEndpoints{
@@ -46,11 +84,11 @@ func TestServiceConfigContentRoundTripAndDeepCopy(t *testing.T) {
 
 func TestBuildInfoBootstrapRepo(t *testing.T) {
 	info := &BuildInfo{}
-	if err := json.Unmarshal([]byte(`{"spec":{"buildPayload":"macros:\n  dist: .oe2403\n","bootstrapRepo":[{"name":"base","url":"https://example.com/repo"}]}}`), info); err != nil {
+	if err := json.Unmarshal([]byte(`{"spec":{"buildPayload":"macros:\n  dist: .oe2403\n","bootstrapRepos":[{"name":"base","url":"https://example.com/repo"}]}}`), info); err != nil {
 		t.Fatal(err)
 	}
-	if len(info.Spec.BootstrapRepo) != 1 || info.Spec.BootstrapRepo[0].URL != "https://example.com/repo" {
-		t.Fatalf("unexpected bootstrap repositories: %+v", info.Spec.BootstrapRepo)
+	if len(info.Spec.BootstrapRepos) != 1 || info.Spec.BootstrapRepos[0].URL != "https://example.com/repo" {
+		t.Fatalf("unexpected bootstrap repositories: %+v", info.Spec.BootstrapRepos)
 	}
 	data, err := json.Marshal(info)
 	if err != nil {
@@ -64,14 +102,14 @@ func TestBuildInfoBootstrapRepo(t *testing.T) {
 		t.Fatalf("round trip changed spec: %#v", decoded.Spec)
 	}
 	copy := info.DeepCopy()
-	copy.Spec.BootstrapRepo[0].URL = "changed"
-	if info.Spec.BootstrapRepo[0].URL != "https://example.com/repo" {
+	copy.Spec.BootstrapRepos[0].URL = "changed"
+	if info.Spec.BootstrapRepos[0].URL != "https://example.com/repo" {
 		t.Fatal("DeepCopy shares bootstrap repos")
 	}
 }
 
 func TestBuildGraphRoundTripAndDeepCopy(t *testing.T) {
-	graph := &BuildGraph{Status: BuildGraphStatus{Nodes: map[string]DcgNodeState{
+	graph := &BuildGraph{Status: BuildGraphStatus{Nodes: map[string]BuildGraphNode{
 		"a": {OutDep: []string{"b"}}, "b": {InDep: map[string]VersionConstraint{"a": {GE: "1"}}},
 	}}}
 	data, err := json.Marshal(graph)

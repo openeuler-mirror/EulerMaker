@@ -150,7 +150,7 @@ HTTP 及协议结果必须在客户端内按以下规则归一化：400/422 且�
 - `CheckSynced` 返回 `SyncCheckResult{Synced:false}, nil` 是正常的“尚未就绪”结果，不计为一次 git-server 请求失败；HTTP 404、响应无 `sync_time` 或 `sync_time < baseline` 均归一化为该结果，此时 `CloneURL` 必须为空。
 - `CheckSynced` 仅在 `sync_time >= baseline` 且响应包含合法 `clone_path` 时返回 `SyncCheckResult{Synced:true, CloneURL:...}, nil`；路径以 `/git/` 开头，无域名、查询参数、片段和路径穿越。客户端保留路径转义并加 `git-server://` 前缀；同步时间达标但路径缺失或非法时返回临时错误。
 - `ResolveFullRef` 校验完整 `refs/...` 后解析 `<ref>^{commit}`，不补 heads/tags 前缀。通过参数数组调用只读 `/command` 并校验输出，不执行 shell；Controller 不自行拼接命令数组。
-- `ResolveCommitID` 校验完整 40 位小写 SHA 后验证 `<commitID>^{commit}`，结果必须等于输入。错误分类与 ResolveFullRef 相同，不存在时记录 ResolveFailed，不回退 ref。固定提交同样先等待同步，沿用同步状态返回的 cloneUrl。
+- `ResolveCommitID` 校验完整 40 位小写 SHA 后验证 `<commitID>^{commit}`，结果必须等于输入。错误分类与 ResolveFullRef 相同，不存在时记录 ResolveFailed，不回退 ref。固定提交同样先等待同步，沿用同步状态返回的 cloneURL。
 - 相同仓库已经排队或正在执行同步时，git-server 合并重复发布；Controller 不依赖某次请求的操作 ID。
 - `PackageRepo.url` 和完整 Git ref 均是不可信输入，客户端必须执行防御性校验；违反约束返回 `GitServerError{Kind: Validation}`。该复核不替代 apiserver 的权威准入校验。
 - 所有方法都必须遵守传入 context；context 取消或超时后及时返回。
@@ -301,8 +301,8 @@ metadata.deletionTimestamp == nil
 
 | 场景 | 幂等保证 |
 |------|----------|
-| 重复处理同一 Snapshot | 已有 `commitId` 或不可重试 error 的包不重复解析；带可重试 error 的包继续解析 |
-| 部分 repo 解析失败 | 成功包写入 commitId；确定性失败或重试超限写入不可重试 error；未超限失败写入可重试 error，下轮只重试该项 |
+| 重复处理同一 Snapshot | 已有 `commitID` 或不可重试 error 的包不重复解析；带可重试 error 的包继续解析 |
+| 部分 repo 解析失败 | 成功包写入 commitID；确定性失败或重试超限写入不可重试 error；未超限失败写入可重试 error，下轮只重试该项 |
 | 控制器重启 | 从 `Pending` / `Processing` 状态恢复（HandlerFuncs 放行两者），继续未完成工作；`Processing` 为异常重入，保持不回退（DR-1） |
 
 ## 六、Reconcile 流程
@@ -342,9 +342,9 @@ build_controller 在 Prepared 阶段创建 Snapshot
 
 引用或 commitID 非空的未完成包每轮从 `CheckSynced` 开始。已满足 baseline 时解析 ref 或验证固定提交，不再提交 Sync；未就绪时调用 `PublishSyncTask`，成功后立即返回 Waiting 并释放 worker，由下一轮重新检查。git-server 异步完成同步，Controller 不创建脱离 reconcile 的后台轮询 goroutine，也不在 worker 内等待仓库同步完成。
 
-提交输入统一按 `PackageRepo.commitID → PackageRepo.ref → Snapshot.spec.defaultRef` 选择。Build 的引用覆盖由创建方固化到包级 ref，规则见 [Build Controller](controller-manager~build-controller.md)。同步满足 baseline 后，commitID 调用 ResolveCommitID，完整 ref 调用 ResolveFullRef；成功时保存 commitId 和 cloneUrl，不存在时记录不可重试 ResolveFailed，不回退其他输入。
+提交输入统一按 `PackageRepo.commitID → PackageRepo.ref → Snapshot.spec.defaultRef` 选择。Build 的引用覆盖由创建方固化到包级 ref，规则见 [Build Controller](controller-manager~build-controller.md)。同步满足 baseline 后，commitID 调用 ResolveCommitID，完整 ref 调用 ResolveFullRef；成功时保存 commitID 和 cloneURL，不存在时记录不可重试 ResolveFailed，不回退其他输入。
 
-成功持久化的 commitId/cloneUrl 在后续 reconcile 和重启后沿用。
+成功持久化的 commitID/cloneURL 在后续 reconcile 和重启后沿用。
 
 瞬时状态不持久化；进程重启后从 Snapshot 已持久化结果和 git-server 同步状态恢复，不需要持久化同步请求 ID。
 
@@ -353,7 +353,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `Checking` | 查询已有同步结果 | `CheckSynced` 达标 → `Resolving`；未就绪 → `PendingSync`；错误按第二章分类，不在检查失败后继续提交 Sync |
 | `PendingSync` | 注册异步同步任务 | `PublishSyncTask` 成功 → `Waiting`；错误按第二章分类；已排队或执行中的相同请求由 git-server 合并 |
 | `Resolving` | 本地镜像 ref 解析中 | `rev-parse` 成功且无冲突 → `Resolved`；校验失败/ref 不存在/commit 冲突（确定性）→ `Skipped`；解析 I/O 失败（非确定）→ `Failed` |
-| `Resolved` | commit 已解析 | 组装包含 `commitId` 且 `error=nil` 的只读解析结果，进入主 goroutine 的当轮汇总 |
+| `Resolved` | commit 已解析 | 组装包含 `commitID` 且 `error=nil` 的只读解析结果，进入主 goroutine 的当轮汇总 |
 | `Waiting` | git-server 正常同步中 | 不写包级 error、不增加 failure tracker；本轮结束后按 `syncRequeueDelay` 延迟重新入队 |
 | `Deferred` | 未派发或被单轮预算中断 | 保留已有状态及失败次数，不生成 error；按 Waiting 的队列动作延迟重入，但不执行 Waiting 的清理动作 |
 | `Failed` | 本轮失败（可重试） | 组装失败结果；由主 goroutine 根据跨轮失败计数决定继续重试或转为 `Skipped` |
@@ -372,8 +372,8 @@ build_controller 在 Prepared 阶段创建 Snapshot
 - 已经启动的 git-server 请求必须遵守 `budgetCtx` 并及时退出。一个专用收尾 goroutine 只负责 `WaitGroup.Wait()` 后关闭 `results`；主 goroutine range 读取结果直至通道关闭。所有 worker 退出前 reconcile 不得返回，不允许遗留 goroutine 在本周期结束后继续执行。
 - 每包每轮最多调用一次 `CheckSynced`，随后根据结果调用一次 `PublishSyncTask`、`ResolveFullRef` 或 `ResolveCommitID`，不进行轮内重复检查。调用间预算到期，或请求因 `budgetCtx` 到期而中断，返回 Deferred；单请求自身超时且非总预算中断才返回 Failed。请求返回时即判定并记录分类，不因之后总预算到期改写已取得的 Resolved、Waiting、Skipped 或真实 Failed 结果。主 goroutine 根据稳定索引与已收到结果的差集为未领取/未返回结果项补充 Deferred，每个目标项恰好汇总一次。Manager context 取消直接结束，不生成业务结果。
 - 主 goroutine 收齐结果后，按稳定索引升序合并，而不是按 goroutine 完成顺序合并。因此相同输入在不同调度时序下必须生成相同的 `packageRepoStatuses`、conditions 和日志结果。
-- 合并以 API GET 得到对象的 DeepCopy 为基础。原始仓库地址始终从不可变的 `Snapshot.spec.packageRepos` 读取，不在 status 中重复保存。已有成功结果或不可重试 error 保持不变；Resolved 结果写入 `commitId` 并清空旧 error；所有引用在 `CheckSynced` 成功后写入其返回的 `cloneUrl`；Waiting 结果不创建 `packageRepoStatuses` 条目，并清除该包已有的可重试 error；Skipped 结果写入不可重试 error；Failed 结果写入可重试 error，若此前已经取得 clone URL 则保留该值，达到跨轮预算时改写为不可重试的 `RetryExhausted`。任何 worker 结果都不能覆盖其他组件拥有的字段。
-- 并发结果身份为规范化 URL、有效 ref、commitID。同一身份已有持久化 commitId 时，以该值为基准；本轮解析结果不同则按 `CommitConflict` 跳过，不覆盖已有结果。同一身份在本轮产生多个结果且没有已有基准时，按稳定索引处理：第一个已接受的 commit 作为本轮基准；后续结果相同则正常接受，不同则按 `CommitConflict` 跳过。
+- 合并以 API GET 得到对象的 DeepCopy 为基础。原始仓库地址始终从不可变的 `Snapshot.spec.packageRepos` 读取，不在 status 中重复保存。已有成功结果或不可重试 error 保持不变；Resolved 结果写入 `commitID` 并清空旧 error；所有引用在 `CheckSynced` 成功后写入其返回的 `cloneURL`；Waiting 结果不创建 `packageRepoStatuses` 条目，并清除该包已有的可重试 error；Skipped 结果写入不可重试 error；Failed 结果写入可重试 error，若此前已经取得 clone URL 则保留该值，达到跨轮预算时改写为不可重试的 `RetryExhausted`。任何 worker 结果都不能覆盖其他组件拥有的字段。
+- 并发结果身份为规范化 URL、有效 ref、commitID。同一身份已有持久化 commitID 时，以该值为基准；本轮解析结果不同则按 `CommitConflict` 跳过，不覆盖已有结果。同一身份在本轮产生多个结果且没有已有基准时，按稳定索引处理：第一个已接受的 commit 作为本轮基准；后续结果相同则正常接受，不同则按 `CommitConflict` 跳过。
 - 主 goroutine 按 4.4 计算 failure tracker 的候选增量及清理项，用于生成目标 status；计数的提交和丢弃同样遵循 4.4。
 - Deferred 不修改该包的 `packageRepoStatuses` 或失败计数，也不能作为 Resolved/Skipped 参与完成判定；它与 Waiting 一起触发延迟重入。
 - 汇总完成后最多执行一次本轮最终 `/status` 写入；并发阶段不得执行状态写入。若在写入前发现 reconcile context 已取消，则丢弃尚未持久化的合并结果，由后续 List 重新触发。
@@ -424,18 +424,18 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `ResolveFailed` | `false` | 完整 ref 不存在或命令返回确定性失败 |
 | `ResolveFailed` | `true` | `ResolveFullRef` 遭遇临时网络、服务端或响应错误，且跨轮预算尚未耗尽 |
 | `ValidationFailed` | `false` | 不可信输入校验失败、包名重复等确定性输入错误 |
-| `CommitConflict` | `false` | 同一 URL 与规范化 ref 得到不同 commitId |
+| `CommitConflict` | `false` | 同一 URL 与规范化 ref 得到不同 commitID |
 | `RetryExhausted` | `false` | 非确定性失败达到跨轮预算 |
 
 `PackageRepoStatus` 必须满足以下约束：
 
 - 原始仓库地址只保留在 `Snapshot.spec.packageRepos[].url`，`PackageRepoStatus` 不重复保存；规范化 URL 仅用于内部比较和缓存；
-- 所有引用在 Git Server 客户端确认同步完成后写入其返回的非空逻辑 `cloneUrl`；后续解析成功或失败均保留该值；
-- 同步确认前发生的失败允许 `cloneUrl` 为空；
-- 成功：`commitId` 非空且 `error=nil`；
-- 失败：`commitId` 为空且 `error!=nil`；
+- 所有引用在 Git Server 客户端确认同步完成后写入其返回的非空逻辑 `cloneURL`；后续解析成功或失败均保留该值；
+- 同步确认前发生的失败允许 `cloneURL` 为空；
+- 成功：`commitID` 非空且 `error=nil`；
+- 失败：`commitID` 为空且 `error!=nil`；
 - 尚未处理：map 中不存在该包；
-- 禁止同时设置 `commitId` 和 `error`；
+- 禁止同时设置 `commitID` 和 `error`；
 - `PackageRepoStatus.error.message` 与 Snapshot condition message 均需去除换行和控制字符，并截断至 200 runes；
 - 包解析成功时清空旧 error 并重置跨轮失败计数；可重试 error 在下一轮被新结果替换；不可重试 error 在后续轮次保持不变。
 
@@ -643,7 +643,7 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 - Pending Snapshot 推进到 Processing；
 - Processing Snapshot 继续填充（异常重入）；
 - 已被删除的 Snapshot 静默返回；
-- PackageRepo 已有 commitId 或不可重试 error 时不重复解析，已有可重试 error 时继续解析；
+- PackageRepo 已有 commitID 或不可重试 error 时不重复解析，已有可重试 error 时继续解析；
 - 包 ref 与 defaultRef 均使用完整 refs/...，覆盖分支、标签及 PR 引用的同步与解析；
 - 包级确定性失败写入不可重试 error 并跳过；无 packageRepos 写整体 condition；
 - `buildType=single` 部分目标缺失时，缺失目标写整体 condition 且不创建包级状态，已找到目标仍完成解析后才推进 Active；全部目标缺失时不启动 worker 并直接推进 Active；其他 buildType 即使填写 `spec.packages` 也解析全部仓库；

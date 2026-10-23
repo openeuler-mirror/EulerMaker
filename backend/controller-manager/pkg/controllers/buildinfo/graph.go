@@ -24,7 +24,7 @@ type graphCacheEntry struct {
 	dcg      *DcgDict
 }
 
-func newBuildGraph(info *ebsv1.BuildInfo, nodes map[string]ebsv1.DcgNodeState) *ebsv1.BuildGraph {
+func newBuildGraph(info *ebsv1.BuildInfo, nodes map[string]ebsv1.BuildGraphNode) *ebsv1.BuildGraph {
 	return &ebsv1.BuildGraph{
 		TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "BuildGraph"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -111,7 +111,7 @@ func graphIdentityReason(graph *ebsv1.BuildGraph, info *ebsv1.BuildInfo) string 
 	return ""
 }
 
-func graphNodesValid(nodes map[string]ebsv1.DcgNodeState) bool {
+func graphNodesValid(nodes map[string]ebsv1.BuildGraphNode) bool {
 	if nodes == nil {
 		return false
 	}

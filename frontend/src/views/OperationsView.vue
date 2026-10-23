@@ -44,7 +44,7 @@
               <th v-if="canManageRunners">{{ t("admin.actions") }}</th>
             </tr></thead>
             <tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name">
-              <td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td>
+              <td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceID }}</small></td>
               <td><StatusBadge :value="runner.status?.phase" /></td>
               <td>{{ runner.spec?.type || t("common.emptyValue") }}</td>
               <td>{{ runner.spec?.arch || t("common.emptyValue") }}</td>

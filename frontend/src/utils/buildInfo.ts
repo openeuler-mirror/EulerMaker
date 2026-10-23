@@ -7,7 +7,7 @@ export function buildInfoSpecRows(buildInfo: BuildInfo | null, snapshot: Snapsho
       return {
         name,
         packageName,
-        commitId: packageName ? snapshot?.status?.packageRepoStatuses?.[packageName]?.commitId : undefined,
+        commitID: packageName ? snapshot?.status?.packageRepoStatuses?.[packageName]?.commitID : undefined,
         buildStatus: value.status,
         displayStatus: value.status === "Failed" &&
           value.conditions?.some(condition => condition.reason === "RpmDependsMissing")

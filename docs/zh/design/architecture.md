@@ -108,7 +108,7 @@ Gateway 允许匿名和已认证调用方通过 Project API get/list Project、S
 认证公开读取：JWT -> UserResolve -> gateway 公开资源白名单与认证限流 -> apiserver -> 完整对象响应
 机机账号创建：管理员 -> gateway -> apiserver IAM 原子创建 MachineAccount 与凭据
 Runner换取token：MachineAccount client凭据和Runner名称 -> gateway交换限流 -> apiserver IAM认证 -> gateway签发短期Runner JWT
-Runner实例识别：首次启动生成并持久化UUID -> 创建时写入Runner.spec.instanceId -> 同名恢复时必须匹配
+Runner实例识别：首次启动生成并持久化UUID -> 创建时写入Runner.spec.instanceID -> 同名恢复时必须匹配
 Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> apiserver
 系统请求（当前）：scheduler/controller -> apiserver（未按客户端身份授权）
 系统请求（目标）：scheduler/controller mTLS -> apiserver 按组件身份授权资源和 verb
@@ -130,7 +130,7 @@ Runner请求：短期Runner JWT -> gateway Runner身份与字段授权 -> apiser
 | `Elasticsearch` | Project、Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Config、Script 和 IAM 对象的主存储，提供 CRUD、分页和查询 |
 | `controller-manager` | 运行 Snapshot、BuildInfo、Job、Runner、RpmRepo 等控制器 |
 | `scheduler` | 监听全局 Job，选择 Runner 并更新 Job 状态 |
-| `runner` | 持久化安装实例 UUID，通过 ebs-gateway 注册或恢复同一 `instanceId` 的 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
+| `runner` | 持久化安装实例 UUID，通过 ebs-gateway 注册或恢复同一 `instanceID` 的 Runner、上报心跳，并通过自身范围 Job list-watch 接收已分配任务 |
 | `artifact-manager` | 接收 Runner 的构建产物和实时日志，负责流式落盘、完整性校验、幂等、Job 上传清单、RPM 仓库物化、可选 RPM 签名、查询下载及日志 SSE |
 | `ebsctl` | 面向用户和运维的命令行客户端，首版通过 Gateway 操作资源 |
 

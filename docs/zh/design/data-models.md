@@ -65,7 +65,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 辅助结构体: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecStatusGroup SpecBuildStatus SpecInstallStatus MissingDep
-                  BuildGraphStatus DcgNodeState
+                  BuildGraphStatus BuildGraphNode
                   RpmRepoStatus
                   ConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
@@ -103,7 +103,7 @@ type ProjectSpec struct {
     BuildPayload     string                     `json:"buildPayload,omitempty"`
     BuildTargets     []BuildTarget              `json:"buildTargets,omitempty"`
     PackageRepos     []PackageRepo              `json:"packageRepos,omitempty"`
-    BootstrapRepo    []BootstrapRepo            `json:"bootstrapRepo,omitempty"`
+    BootstrapRepos    []BootstrapRepo            `json:"bootstrapRepos,omitempty"`
 }
 ```
 
@@ -115,7 +115,7 @@ type ProjectSpec struct {
 | `buildPayload` | string | 否 | 构建环境参数，YAML 格式；`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz` 和 `unuse_gcc_secure` 是包仓库名列表，命中时向 Job payload 写入相应布尔标记；`unparsable_spec` 是 spec 名列表，仅供 BuildInfo Controller 组装依赖时使用 |
 | `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；创建和更新时 `os + arch` 组合必须唯一，其余配置不同也不能重复 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
-| `bootstrapRepo` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
+| `bootstrapRepos` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
 
 ### ProjectStatus
 
@@ -260,7 +260,7 @@ spec:
 - 仅在 `buildType=single` 且 `len(spec.packages)==1` 时允许设置；这里是数组长度，不是去重后的数量。未设置 annotation 时普通 single 仍允许指定多个包仓库。
 - Build 创建时包名必须存在于所属 Project。Build Controller 创建 Snapshot 时，从同一次 Project GET 复制目标仓库和 defaultRef，再将 Build 的 `ebs.io/git-ref` 写入唯一目标仓库的 `packageRepos[].ref`，并清空该包的 commitID；Build annotation 保留，Snapshot 无需复制该 annotation。不修改 Project、不指定 fork URL。目标仓库缺失时报告输入错误，不回退默认分支。
 - annotation 必须非空、以 `refs/` 开头并符合完整 Git ref 名称规则；不接受 `HEAD`、`FETCH_HEAD`、refspec、通配符或 `^{commit}` 等 revision 表达式，不自动 trim 或补前缀。创建后该键的存在性和值不可变，`/status` 保留原 metadata。
-- Snapshot 创建后不重新复制 Project 或 Build 输入；Snapshot Controller 只消费 Snapshot 中固化的 packageRepos 和 defaultRef，成功写入的 commitId/cloneUrl 后续不重新解析。所有批次 Job 均使用该 Snapshot 的固定提交。
+- Snapshot 创建后不重新复制 Project 或 Build 输入；Snapshot Controller 只消费 Snapshot 中固化的 packageRepos 和 defaultRef，成功写入的 commitID/cloneURL 后续不重新解析。所有批次 Job 均使用该 Snapshot 的固定提交。
 - Job 不传递动态 ref，统一携带 origin_url、clone_url 和 commit_id。
 - `refs/merge-requests/501/head` 表示 PR 源码，不自动合并目标分支、不改写为 merge ref。引用名称由托管平台决定。
 
@@ -344,14 +344,14 @@ type BuildInfo struct {
 ```go
 type BuildInfoSpec struct {
     BuildPayload string                `json:"buildPayload,omitempty"`
-    BootstrapRepo []BootstrapRepo      `json:"bootstrapRepo,omitempty"`
+    BootstrapRepos []BootstrapRepo      `json:"bootstrapRepos,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `buildPayload` | string | Build Controller 创建时从所属 Project.spec.buildPayload 原样复制的构建环境宏（YAML）；未配置时为空，已有 BuildInfo 不覆盖，不跟随 Project 后续变更 |
-| `bootstrapRepo` | []BootstrapRepo | Build Controller 创建时从所属 Project.spec.bootstrapRepo 深拷贝，已有 BuildInfo 不覆盖；供构建任务使用的引导 RPM 仓库 |
+| `bootstrapRepos` | []BootstrapRepo | Build Controller 创建时从所属 Project.spec.bootstrapRepos 深拷贝，已有 BuildInfo 不覆盖；供构建任务使用的引导 RPM 仓库 |
 
 ---
 
@@ -478,7 +478,7 @@ type BuildGraph struct {
 }
 
 type BuildGraphStatus struct {
-    Nodes map[string]DcgNodeState `json:"nodes"`
+    Nodes map[string]BuildGraphNode `json:"nodes"`
 }
 
 type BuildGraphList struct {
@@ -495,10 +495,10 @@ type BuildGraphList struct {
 - BuildInfo 终态后保留图供诊断；历史构建或 Project 清理时，将 BuildGraph 纳入显式清理清单，核对 owner UID 并使用对象 UID/resourceVersion 删除前置条件。ownerReferences 只记录归属，不假定已有通用垃圾回收器；仅删除 BuildInfo 不自动删除图，不清理仍在构建的图。
 - 获取、缓存版本核对、写入确认及丢失处理以 [BuildInfo Controller 15.9](controller-manager~buildinfo-controller.md#159-buildgraph-持久化与-dcg-缓存g-02) 为准。
 
-### DcgNodeState
+### BuildGraphNode
 
 ```go
-type DcgNodeState struct {
+type BuildGraphNode struct {
     Version        string                  `json:"version,omitempty"`
     OutDep         []string                `json:"outDep,omitempty"`
     InDep          map[string]VersionConstraint `json:"inDep,omitempty"`
@@ -820,19 +820,19 @@ type ResourceRequirements struct {
 
 ```go
 type Toleration struct {
-    Key      string `json:"key,omitempty"`
-    Operator string `json:"operator,omitempty"`
-    Value    string `json:"value,omitempty"`
-    Effect   string `json:"effect,omitempty"`
+    Key      string             `json:"key,omitempty"`
+    Operator TolerationOperator `json:"operator,omitempty"`
+    Value    string             `json:"value,omitempty"`
+    Effect   TaintEffect        `json:"effect,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `key` | string | 匹配 Runner taint 的键 |
-| `operator` | string | 匹配操作符：`Equal`（相等）、`Exists`（存在）、`Gt`（大于）、`Lt`（小于） |
+| `operator` | TolerationOperator | `Equal`（相等）、`Exists`（存在）；省略时按 `Equal` 匹配 |
 | `value` | string | 匹配值，与 `key` 配合使用 |
-| `effect` | string | 容忍效果：`NoSchedule`（不调度）、`PreferNoSchedule`（尽量不调度）、`NoExecute`（不执行并驱逐） |
+| `effect` | TaintEffect | `NoSchedule` / `PreferNoSchedule` / `NoExecute`；省略时匹配所有效果。当前 `NoExecute` 与 `NoSchedule` 一样阻止新调度，不驱逐已运行的 Job |
 
 ### JobStatus
 
@@ -920,7 +920,7 @@ type Runner struct {
 
 ```go
 type RunnerSpec struct {
-    InstanceID   string        `json:"instanceId,omitempty"`
+    InstanceID   string        `json:"instanceID,omitempty"`
     Type          string        `json:"type,omitempty"`
     Arch          string        `json:"arch,omitempty"`
     Unschedulable bool          `json:"unschedulable,omitempty"`
@@ -930,21 +930,21 @@ type RunnerSpec struct {
 
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
-| `instanceId` | string | 是 | Runner 安装实例持久化 UUID；规范小写 UUID v4，同名对象恢复时必须匹配 |
+| `instanceID` | string | 是 | Runner 安装实例持久化 UUID；规范小写 UUID v4，同名对象恢复时必须匹配 |
 | `type` | string | 否 | 执行机类型：`ct` / `vm` / `hw`，默认 `ct` |
 | `arch` | string | 是 | CPU 架构标识，不限制枚举值 |
 | `unschedulable` | bool | 否 | 是否禁止调度新 Job |
 | `taints` | []RunnerTaint | 否 | 反亲和污点 |
 
-> 调度标签统一使用 `metadata.labels`，不在 `spec` 中重复定义。`spec.instanceId`、`spec.type` 和 `spec.arch` 创建后不可变；`instanceId` 不能修改或清空。
+> 调度标签统一使用 `metadata.labels`，不在 `spec` 中重复定义。`spec.instanceID`、`spec.type` 和 `spec.arch` 创建后不可变；`instanceID` 不能修改或清空。
 
 ### RunnerTaint
 
 ```go
 type RunnerTaint struct {
-    Key    string `json:"key"`
-    Value  string `json:"value,omitempty"`
-    Effect string `json:"effect"`
+    Key    string      `json:"key"`
+    Value  string      `json:"value,omitempty"`
+    Effect TaintEffect `json:"effect"`
 }
 ```
 
@@ -952,7 +952,7 @@ type RunnerTaint struct {
 |------|---------|------|
 | `key` | string | 污点键 |
 | `value` | string | 污点值 |
-| `effect` | string | 效果：`NoSchedule`/`PreferNoSchedule`/`NoExecute` |
+| `effect` | TaintEffect | 必填；`NoSchedule` / `PreferNoSchedule` / `NoExecute`，调度语义见 Toleration |
 
 ### RunnerStatus
 
@@ -1074,14 +1074,14 @@ type PackageRepo struct {
 
 `Project.spec.defaultRef`、`Snapshot.spec.defaultRef` 和 `PackageRepo.ref` 统一使用完整 `refs/...` 字符串。非空值按 Git ref-name 规则校验，不接受裸分支名、Commit ID 或 `{type, value}` 对象。固定提交使用独立的 `commitID`。Project 的 defaultRef 为空时默认为 `refs/heads/master`；Snapshot 不填默认值，仓库 ref 允许省略或为空字符串，创建和更新均不自动补齐。修改 Project 默认引用不会改写显式包 ref。Build Controller 从同一次 Project GET 复制 defaultRef 与所选 packageRepos（含 commitID），single 仅复制指定包，其他类型复制全部。
 
-Snapshot 提交选择优先级为 PackageRepo.commitID > PackageRepo.ref > Snapshot.defaultRef。Build 的 Git ref 覆盖已在创建 Snapshot 时固化为包级 ref，解析阶段只消费 Snapshot.spec。Git Server 同步满足 baseline 后，普通引用解析 `<ref>^{commit}`；固定提交验证 `<commitID>^{commit}` 的结果必须等于输入 SHA，成功后写入 status 的 commitId 和 cloneUrl。未配置任何提交或引用时记录 ValidationFailed；引用或提交不存在时记录 ResolveFailed，不回退其他来源。固定提交必须已存在于同步后的镜像中；不会通过任意 SHA 额外向上游抓取对象。
+Snapshot 提交选择优先级为 PackageRepo.commitID > PackageRepo.ref > Snapshot.defaultRef。Build 的 Git ref 覆盖已在创建 Snapshot 时固化为包级 ref，解析阶段只消费 Snapshot.spec。Git Server 同步满足 baseline 后，普通引用解析 `<ref>^{commit}`；固定提交验证 `<commitID>^{commit}` 的结果必须等于输入 SHA，成功后写入 status 的 commitID 和 cloneURL。未配置任何提交或引用时记录 ValidationFailed；引用或提交不存在时记录 ResolveFailed，不回退其他来源。固定提交必须已存在于同步后的镜像中；不会通过任意 SHA 额外向上游抓取对象。
 
 ### PackageRepoStatus
 
 ```go
 type PackageRepoStatus struct {
-    CloneURL string           `json:"cloneUrl,omitempty"`
-    CommitID string           `json:"commitId,omitempty"`
+    CloneURL string           `json:"cloneURL,omitempty"`
+    CommitID string           `json:"commitID,omitempty"`
     Error    *PackageRepoError `json:"error,omitempty"`
 }
 
@@ -1094,11 +1094,11 @@ type PackageRepoError struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `cloneUrl` | string | Git Server 客户端由 `clone_path` 生成的 `git-server:///git/...` 逻辑克隆地址；仅完成本轮同步确认后填写 |
-| `commitId` | string | 成功解析出的完整提交 ID；设置后 error 必须为空 |
-| `error` | *PackageRepoError | 包级解析错误；设置后 commitId 必须为空。`retryable=true` 表示后续继续解析 |
+| `cloneURL` | string | Git Server 客户端由 `clone_path` 生成的 `git-server:///git/...` 逻辑克隆地址；仅完成本轮同步确认后填写 |
+| `commitID` | string | 成功解析出的完整提交 ID；设置后 error 必须为空 |
+| `error` | *PackageRepoError | 包级解析错误；设置后 commitID 必须为空。`retryable=true` 表示后续继续解析 |
 
-`PackageRepoErrorCode` 的稳定取值为 `ValidationFailed`、`SyncFailed`、`SyncTimeout`、`ResolveFailed`、`CommitConflict` 和 `RetryExhausted`。map 中不存在对应包表示尚未处理；存在 commitId 表示成功；存在不可重试 error 表示已跳过。
+`PackageRepoErrorCode` 的稳定取值为 `ValidationFailed`、`SyncFailed`、`SyncTimeout`、`ResolveFailed`、`CommitConflict` 和 `RetryExhausted`。map 中不存在对应包表示尚未处理；存在 commitID 表示成功；存在不可重试 error 表示已跳过。
 
 ---
 
@@ -1161,7 +1161,7 @@ BuildInfoStatus
         └── MissingDep ──▶ VersionConstraint
 
 BuildGraphStatus
-└── DcgNodeState ──▶ VersionConstraint
+└── BuildGraphNode ──▶ VersionConstraint
 
 RpmRepoStatus
 ├── RpmRepoRepositoryStatus

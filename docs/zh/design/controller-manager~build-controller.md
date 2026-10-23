@@ -98,7 +98,7 @@ package build
 
 type Client interface {
     // Project 级资源读取
-    // GetProject 读取 Project；用于构造 Snapshot 输入与 BuildInfo 的 bootstrapRepo、buildPayload。
+    // GetProject 读取 Project；用于构造 Snapshot 输入与 BuildInfo 的 bootstrapRepos、buildPayload。
     GetProject(ctx context.Context, project string) (*v1.Project, error)
     GetBuild(ctx context.Context, project, name string) (*v1.Build, error)
     // GetLastPublishedBuild 返回最后一个发布成功的 Build。
@@ -283,11 +283,11 @@ single 不创建 RpmRepo，Build 等待 BuildInfo Completed 后汇总构建结�
 
 ### 4.4 BuildInfo
 
-Build Controller 创建 BuildInfo 时，读取所属 Project 并深拷贝 `Project.spec.bootstrapRepo` 到 `BuildInfo.spec.bootstrapRepo`，同时复制 `Project.spec.buildPayload`；不写 `status.specStatus`，由独立 BuildInfo Controller 填充并推进。仅在 Prepared 阶段 BuildInfo NotFound、即将创建时读取 Project，已有 BuildInfo 不重新读取 Project，也不覆盖这些输入（包括已有空值）；Project 后续变更不影响已创建 BuildInfo。Project 未配置相应字段时保留为空。Project NotFound 返回 PermanentError，其他读取错误按 7.6 分类，不发送创建请求或写 Build.status。
+Build Controller 创建 BuildInfo 时，读取所属 Project 并深拷贝 `Project.spec.bootstrapRepos` 到 `BuildInfo.spec.bootstrapRepos`，同时复制 `Project.spec.buildPayload`；不写 `status.specStatus`，由独立 BuildInfo Controller 填充并推进。仅在 Prepared 阶段 BuildInfo NotFound、即将创建时读取 Project，已有 BuildInfo 不重新读取 Project，也不覆盖这些输入（包括已有空值）；Project 后续变更不影响已创建 BuildInfo。Project 未配置相应字段时保留为空。Project NotFound 返回 PermanentError，其他读取错误按 7.6 分类，不发送创建请求或写 Build.status。
 
 single 的 BuildInfo 只包含目标仓库解析出的 spec，不包含其他仓库或依赖仓库的 spec；`Build.spec.packages` 可以指定多个目标仓库，每个仓库也可以包含多个 spec，不能假设 specStatus 只有一个条目。BuildInfo Controller 保证进入 Completed 时所有目标仓库的 spec 结果齐全，不得只记录已成功的部分 spec 就宣布完成。Build Controller 在 Completed 后按 7.4 的统一规则汇总结果。
 
-**single 的执行契约**：Pending 按 4.2 完成源码准备并进入 Prepared，Prepared 创建 BuildInfo。BuildInfo 使用稳定 release 入口与已固化的 bootstrapRepo 下发 Job，尚未发布时只使用 bootstrapRepo；具体确认与错误处理见 BuildInfo Controller 7.2.3。single 不查询当前或历史 RpmRepo，不依赖过程仓物化或正式发布完成；产物仍通过 Runner / Artifact Manager 上传与保存。
+**single 的执行契约**：Pending 按 4.2 完成源码准备并进入 Prepared，Prepared 创建 BuildInfo。BuildInfo 使用稳定 release 入口与已固化的 bootstrapRepos 下发 Job，尚未发布时只使用 bootstrapRepos；具体确认与错误处理见 BuildInfo Controller 7.2.3。single 不查询当前或历史 RpmRepo，不依赖过程仓物化或正式发布完成；产物仍通过 Runner / Artifact Manager 上传与保存。
 
 历史过程仓基线仅用于非 single，由 Build Controller 按 4.3 在创建 RpmRepo 时一次固化。single 不依赖该基线。
 
@@ -301,7 +301,7 @@ metadata:
   namespace: ${build.metadata.namespace}
 spec:
   buildPayload: ${project.spec.buildPayload}
-  bootstrapRepo:
+  bootstrapRepos:
     - name: everything
       url: https://example.com/repo/everything
 status:
@@ -314,7 +314,7 @@ status:
 | ---------------------------------------------------------------------------------------- | -------------------- | ------------------------------------ |
 | `BuildInfo.metadata.name` / `namespace` | Build Controller | 与 `Build.metadata.name` 同名，namespace 来自 Build |
 | `BuildInfo.spec.buildPayload` | Build Controller | 创建时从 Project.spec.buildPayload 原样复制；已有对象不覆盖，不跟随 Project 变更 |
-| `BuildInfo.spec.bootstrapRepo` | Build Controller | 创建时从 Project.spec.bootstrapRepo 深拷贝，已有对象不覆盖 |
+| `BuildInfo.spec.bootstrapRepos` | Build Controller | 创建时从 Project.spec.bootstrapRepos 深拷贝，已有对象不覆盖 |
 | `BuildInfo.status.phase` / `BuildInfo.status.specStatus` / `BuildInfo.status.conditions` | BuildInfo Controller | Pending → Processing → Completed，并回写各包状态          |
 
 ## 五、状态机
@@ -369,7 +369,7 @@ ensure 不推进子资源状态、不等待子资源就绪、不覆盖已存在 
 | 阶段 | 操作 | NotFound 处理 |
 | --- | --- | --- |
 | Pending | 非 single：固化 baseBuildRef → ensure Snapshot → 等待 Active → incremental 固化 packages → ensure RpmRepo；single：ensure Snapshot 并等待 Active → 进入 Prepared | 在本阶段按顺序创建 |
-| Prepared | ensure BuildInfo，存在且未删除后进入 Processing/build；不重新查询 Snapshot/RpmRepo | 从 Project 复制 bootstrapRepo、buildPayload |
+| Prepared | ensure BuildInfo，存在且未删除后进入 Processing/build；不重新查询 Snapshot/RpmRepo | 从 Project 复制 bootstrapRepos、buildPayload |
 | Processing/build | GET BuildInfo，等待 Completed 或 Failed；Failed 时直接写 Failed/build，不查询 Snapshot/RpmRepo | 记录异常，不创建任何子资源，写入 Failed/build |
 | Processing/publish（仅非 single） | GET RpmRepo，判断 release.phase；不查询 Snapshot/BuildInfo | 记录异常，不创建任何子资源，写入 Failed/publish |
 
@@ -418,7 +418,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
   - 写入后立即返回零值 + `nil`，`ensure Snapshot` / `ensure RpmRepo` 与后续等待从下一轮继续；`{}` 与实际值同样视为已处理。
 - 按第六章 Pending 行先 ensure Snapshot 并等待 Active。`incremental` 在 ensure RpmRepo 前计算并固化包仓库种子；其他类型不执行此步骤。
 - `incremental` 只以已固化的 `Build.status.baseBuildRef.name` 为历史基准，即同 Project + OS + Arch 最近一次 `Success` 且 `stage=publish` 的 Build。**不查询最新 `Success/Failed` 非 single Build**；未成功发布的 Failed 轮次不作为比较基准。成功发布的轮次仍可能有失败 spec，须读取其同名 BuildInfo。基准名为空时按无历史输入处理；若基准名非空但同名 Snapshot/BuildInfo 缺失或不可读，不得当作空基准静默跳过，按读错误分类重试或报告契约错误。
-- 当前 Snapshot 为 Active 后读取其 `packageRepoStatuses`；与基准 Snapshot 按仓库名比较，当前新增或 `commitId` 变化的仓库入种子，已删除的仓库不入种子。再合并基准 BuildInfo 的 `status.failedPackages`（包含本轮最终构建/安装失败及解析失败的仓库，不从 `specStatus` 反推归属）；仅保留当前 Snapshot 中存在的仓库名，按字典序去重排序。
+- 当前 Snapshot 为 Active 后读取其 `packageRepoStatuses`；与基准 Snapshot 按仓库名比较，当前新增或 `commitID` 变化的仓库入种子，已删除的仓库不入种子。再合并基准 BuildInfo 的 `status.failedPackages`（包含本轮最终构建/安装失败及解析失败的仓库，不从 `specStatus` 反推归属）；仅保留当前 Snapshot 中存在的仓库名，按字典序去重排序。
 - 每次 Pending 调和均重新计算种子；若与当前 `spec.packages` 相同（包括空列表），无需写入。否则用主资源 `UpdateBuild` 仅写 `spec.packages`，成功后以返回的 Build 为准；Conflict 放弃本轮决策并重新 GET 计算，Unknown 先 GET 确认写入意图，不用新 resourceVersion 重放旧决定。只有本轮计算结果已确认持久化，才继续 ensure RpmRepo；重启后仍处于 Pending 时幂等重算，进入 Prepared 后不再查询历史或改写 packages。
 - 非 single 随后 ensure RpmRepo（按 4.3 固化基线），single 跳过。仅 incremental 的 BuildInfo 创建和进入 Prepared 以本轮种子确认持久化为门禁。`Build.spec.packages` 仅表示初始仓库种子；最终 spec 构建集及下游依赖扩散仍由 BuildInfo Controller 依据本轮完整 specDepends 计算。
 - 满足后写 `Build.status.phase=Prepared`。
@@ -698,13 +698,13 @@ buildinfos:     get, create
 - 永久错误与业务失败隔离：覆盖 API 400/401/403/422、非法输入和客户端错误，断言不调用 UpdateBuildStatus、不写失败条件，只记录并返回 PermanentError；对照覆盖 single 结果汇总失败（build 或 install 非 Succeeded）、release.phase=Failed 和 Processing 直接依赖 NotFound，仅确认对应失败原因后才写 Failed，且状态写入失败不得被业务 PermanentError 覆盖；静态配置非法在 initializer 阶段启动失败；
 - 删除中子资源：本轮读到 deletionTimestamp 时不调用 Create、不写 Build.status，返回零值 + nil；对象消失后，仅 Pending/Prepared 的创建职责允许 ensure 创建，Processing 记录缺失异常并写 Failed；
 - 子对象缺失：Processing/build 的 BuildInfo 或 Processing/publish 的 RpmRepo 返回 NotFound 时，断言输出 ChildResourceMissing 日志，不调用任何 Create/GetProject、不恢复前序依赖；同一次 `/status` 写入 Failed、保留当前 stage、填写 endTime，并写对应条件 False/ChildResourceMissing，保留其他条件。写入成功后返回业务 PermanentError；覆盖 Conflict、Unknown 确认及外部 Aborted 保护，写入失败不得被业务 PermanentError 覆盖。重启后仍按此规则处理，已 Failed 后不再调和；读取超时、权限错误不触发该失败分支；
-- single 依赖边界：Pending 等待 Snapshot Active 后进入 Prepared，Prepared 创建 BuildInfo；所有阶段均不查询历史 Build、不填写 baseBuildRef、不 GET/Create RpmRepo。BuildInfo 使用稳定发布入口及 bootstrapRepo，仓库访问失败仅阻止新派发，不阻止已有 Job 回填与收敛。
+- single 依赖边界：Pending 等待 Snapshot Active 后进入 Prepared，Prepared 创建 BuildInfo；所有阶段均不查询历史 Build、不填写 baseBuildRef、不 GET/Create RpmRepo。BuildInfo 使用稳定发布入口及 bootstrapRepos，仓库访问失败仅阻止新派发，不阻止已有 Job 回填与收敛。
 - `baseBuildRef` 写入即返回：`Build.status.baseBuildRef` 为 nil 时断言本轮只发生一次 `/status` 写入（写 `baseBuildRef`）、不调用 `CreateSnapshot` / `CreateRpmRepo`，且返回零值 + `nil`；下一轮以已写入的 `baseBuildRef` 继续 ensure 子资源；
 - 增量种子固化：最近发布成功 Build 即使 `BuildSucceed=False`，仍从其同名 BuildInfo 的 `failedPackages` 纳入失败仓库；与当前/基准 Snapshot 的新增、commit 变化仓库合并、去重排序，删除仓库不入集。覆盖无种子的空数组、历史子资源缺失/读取失败、主资源 PUT Conflict/Unknown、PUT 后崩溃与 Pending 重入。确认本轮种子前不 ensure RpmRepo、不进入 Prepared、不创建 BuildInfo；Prepared 后不再重算；
 - Snapshot 创建复制输入：覆盖 Project.defaultRef 为完整分支、标签或其他 refs/... 引用，断言只调用一次 `GetProject`，非 single 的 `CreateSnapshot` 收到的 `spec.defaultRef` 和 N 个 `packageRepos` 均与该返回对象一致；single 只包含 Build.spec.packages 命中的仓库，defaultRef 不变，修改构造出的 Snapshot 不影响 Project；已有 Snapshot（含缺少 defaultRef 的对象）存在时，不调用 `GetProject`、不调用 `CreateSnapshot`、不覆盖 spec；
 - single 多包输入：覆盖多个包名及重复包名，断言 Snapshot 仅包含去重后命中的仓库并保持 Project 列表顺序；BuildInfo Completed 后汇总所有目标仓库的 spec，每个 spec 的 build 与 install 都为 Succeeded 才进入 Skipped/publish，任一 build 或 install 非 Succeeded 则进入 Failed/build；
 - Project 读取失败：`GetProject` 返回 NotFound 时断言不调用 `CreateSnapshot`、不写 `Build.status`，且返回零值 + `controller.NewPermanentError`；返回临时错误时断言零值 + 原始错误；
-- BuildInfo 创建输入：覆盖所有构建类型、空引导仓及 Prepared 创建阶段重入，断言创建前读取 Project 并深拷贝 bootstrapRepo、原样复制 buildPayload；覆盖空 buildPayload，确认 Project 后续变更不影响已创建对象；修改创建对象不影响 Project。已有 BuildInfo 不因 Project 配置变化覆盖输入、不为其读取 Project；AlreadyExists 沿用服务端对象。读取 Project 失败不调用 CreateBuildInfo、不写 Build.status；创建使用当前 Project 配置；
+- BuildInfo 创建输入：覆盖所有构建类型、空引导仓及 Prepared 创建阶段重入，断言创建前读取 Project 并深拷贝 bootstrapRepos、原样复制 buildPayload；覆盖空 buildPayload，确认 Project 后续变更不影响已创建对象；修改创建对象不影响 Project。已有 BuildInfo 不因 Project 配置变化覆盖输入、不为其读取 Project；AlreadyExists 沿用服务端对象。读取 Project 失败不调用 CreateBuildInfo、不写 Build.status；创建使用当前 Project 配置；
 - 删除中守卫：`deletionTimestamp` 非空时断言不调用 `UpdateBuildStatus`、不调用 `Create`，且返回零值 + `nil`；
 - PollingSource：非终态 fieldSelector 生效、Add/Update/Delete 事件映射正确、List 失败时退避重试且不替换旧快照；
 - conditions 生命周期：只写 `BuildSucceed` 与 `PublishSucceed`，未确定时不出现，等待/重试阶段不写条件，`message` 取固定短语。

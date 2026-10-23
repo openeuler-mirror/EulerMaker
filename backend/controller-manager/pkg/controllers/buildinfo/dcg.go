@@ -9,7 +9,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// DcgNode mirrors ebsv1.DcgNodeState. Version defaults to "NA" when empty (normalized by ToState).
+// DcgNode mirrors ebsv1.BuildGraphNode. Version defaults to "NA" when empty (normalized by ToState).
 type DcgNode struct {
 	Version        string
 	OutDep         []string
@@ -42,7 +42,7 @@ func NewDcgDict(nodes map[string]*DcgNode) *DcgDict {
 
 // DcgDictFromState loads a persisted graph. cycleNodes is recomputed lazily; bootstrap break points are read from the
 // persisted marks and never re-selected.
-func DcgDictFromState(state map[string]ebsv1.DcgNodeState) *DcgDict {
+func DcgDictFromState(state map[string]ebsv1.BuildGraphNode) *DcgDict {
 	nodes := make(map[string]*DcgNode, len(state))
 	for name, st := range state {
 		nodes[name] = &DcgNode{
@@ -57,14 +57,14 @@ func DcgDictFromState(state map[string]ebsv1.DcgNodeState) *DcgDict {
 }
 
 // ToState exports the graph for persistence to BuildGraph.status.nodes.
-func (d *DcgDict) ToState() map[string]ebsv1.DcgNodeState {
-	out := make(map[string]ebsv1.DcgNodeState, len(d.nodes))
+func (d *DcgDict) ToState() map[string]ebsv1.BuildGraphNode {
+	out := make(map[string]ebsv1.BuildGraphNode, len(d.nodes))
 	for name, n := range d.nodes {
 		version := n.Version
 		if version == "" {
 			version = "NA"
 		}
-		out[name] = ebsv1.DcgNodeState{
+		out[name] = ebsv1.BuildGraphNode{
 			Version:        version,
 			OutDep:         append([]string(nil), n.OutDep...),
 			InDep:          cloneVersionConstraintMap(n.InDep),

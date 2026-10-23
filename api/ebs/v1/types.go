@@ -8,7 +8,7 @@ import (
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +k8s:deepcopy-gen=true
 // Config is a cluster-scoped, versioned text configuration. Consumers interpret
-// Content according to the object's name; the API does not parse it.
+// Content according to the object's name; the API parses and validates built-in configurations.
 type Config struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -107,13 +107,13 @@ type Project struct {
 }
 
 type ProjectSpec struct {
-	DisplayName   string          `json:"displayName,omitempty"`
-	Description   string          `json:"description,omitempty"`
-	DefaultRef    string          `json:"defaultRef,omitempty"`
-	BuildPayload  string          `json:"buildPayload,omitempty"`
-	BuildTargets  []BuildTarget   `json:"buildTargets,omitempty"`
-	PackageRepos  []PackageRepo   `json:"packageRepos,omitempty"`
-	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
+	DisplayName    string          `json:"displayName,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	DefaultRef     string          `json:"defaultRef,omitempty"`
+	BuildPayload   string          `json:"buildPayload,omitempty"`
+	BuildTargets   []BuildTarget   `json:"buildTargets,omitempty"`
+	PackageRepos   []PackageRepo   `json:"packageRepos,omitempty"`
+	BootstrapRepos []BootstrapRepo `json:"bootstrapRepos,omitempty"`
 }
 
 type ProjectStatus struct {
@@ -154,8 +154,8 @@ type SnapshotList struct {
 }
 
 type PackageRepoStatus struct {
-	CloneURL string            `json:"cloneUrl,omitempty"`
-	CommitID string            `json:"commitId,omitempty"`
+	CloneURL string            `json:"cloneURL,omitempty"`
+	CommitID string            `json:"commitID,omitempty"`
 	Error    *PackageRepoError `json:"error,omitempty"`
 }
 
@@ -208,8 +208,8 @@ type BuildInfo struct {
 }
 
 type BuildInfoSpec struct {
-	BuildPayload  string          `json:"buildPayload,omitempty"`
-	BootstrapRepo []BootstrapRepo `json:"bootstrapRepo,omitempty"`
+	BuildPayload   string          `json:"buildPayload,omitempty"`
+	BootstrapRepos []BootstrapRepo `json:"bootstrapRepos,omitempty"`
 }
 
 // BuildInfoStatus records build results and unconfirmed Job creations.
@@ -325,7 +325,7 @@ type BuildGraph struct {
 }
 
 type BuildGraphStatus struct {
-	Nodes map[string]DcgNodeState `json:"nodes"`
+	Nodes map[string]BuildGraphNode `json:"nodes"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -335,11 +335,11 @@ type BuildGraphList struct {
 	Items           []BuildGraph `json:"items"`
 }
 
-// DcgNodeState is the persisted mirror of the in-memory DcgNode. OutDep
-// lists downstream specs that depend on this spec; InDep/InstallInDep map
+// BuildGraphNode records one spec's dependency edges. OutDep lists downstream
+// specs that depend on this spec; InDep/InstallInDep map
 // upstream specs to the matched version constraints. BootstrapBreak marks
 // a cycle-break node; it is persisted and never re-selected on load.
-type DcgNodeState struct {
+type BuildGraphNode struct {
 	Version        string                       `json:"version,omitempty"`
 	OutDep         []string                     `json:"outDep,omitempty"`
 	InDep          map[string]VersionConstraint `json:"inDep,omitempty"`
@@ -448,10 +448,10 @@ type ScriptRef struct {
 }
 
 type Toleration struct {
-	Key      string `json:"key,omitempty"`
-	Operator string `json:"operator,omitempty"`
-	Value    string `json:"value,omitempty"`
-	Effect   string `json:"effect,omitempty"`
+	Key      string             `json:"key,omitempty"`
+	Operator TolerationOperator `json:"operator,omitempty"`
+	Value    string             `json:"value,omitempty"`
+	Effect   TaintEffect        `json:"effect,omitempty"`
 }
 
 // JobBuildResult records the outcome of the build script, independently of
@@ -476,7 +476,7 @@ type Runner struct {
 }
 
 type RunnerSpec struct {
-	InstanceID    string        `json:"instanceId,omitempty"`
+	InstanceID    string        `json:"instanceID,omitempty"`
 	Type          string        `json:"type,omitempty"`
 	Arch          string        `json:"arch,omitempty"`
 	Unschedulable bool          `json:"unschedulable,omitempty"`
@@ -501,9 +501,9 @@ type RunnerList struct {
 }
 
 type RunnerTaint struct {
-	Key    string `json:"key"`
-	Value  string `json:"value,omitempty"`
-	Effect string `json:"effect"`
+	Key    string      `json:"key"`
+	Value  string      `json:"value,omitempty"`
+	Effect TaintEffect `json:"effect"`
 }
 
 type RunnerAddress struct {

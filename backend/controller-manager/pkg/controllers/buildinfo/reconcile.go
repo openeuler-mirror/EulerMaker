@@ -683,7 +683,7 @@ func missingDepsMatch(a, b map[string]ebsv1.MissingDep) bool {
 
 // dcgStateMatches compares two persisted DCG states by node set and edge set: outDep order carries no semantics and
 // matches as a set.
-func dcgStateMatches(a, b map[string]ebsv1.DcgNodeState) bool {
+func dcgStateMatches(a, b map[string]ebsv1.BuildGraphNode) bool {
 	if len(a) != len(b) {
 		return false
 	}

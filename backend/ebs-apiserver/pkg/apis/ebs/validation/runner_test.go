@@ -9,6 +9,16 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestValidateRunnerTaintEffects(t *testing.T) {
+	for _, effect := range ebsv1.TaintEffectValues() {
+		runner := validRunner("ct", "x86_64")
+		runner.Spec.Taints = []ebsv1.RunnerTaint{{Key: "dedicated", Value: "build", Effect: ebsv1.TaintEffect(effect)}}
+		if errs := ValidateRunner(runner); len(errs) != 0 {
+			t.Fatalf("effect %q: %v", effect, errs)
+		}
+	}
+}
+
 func TestValidateRunner(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -36,7 +46,7 @@ func TestValidateRunner(t *testing.T) {
 				"metadata.name":   field.ErrorTypeRequired,
 				"spec.type":       field.ErrorTypeRequired,
 				"spec.arch":       field.ErrorTypeRequired,
-				"spec.instanceId": field.ErrorTypeRequired,
+				"spec.instanceID": field.ErrorTypeRequired,
 			},
 		},
 		{
@@ -73,7 +83,7 @@ func TestValidateRunner(t *testing.T) {
 			},
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
-				"spec.instanceId": field.ErrorTypeInvalid,
+				"spec.instanceID": field.ErrorTypeInvalid,
 			},
 		},
 		{
@@ -88,7 +98,7 @@ func TestValidateRunner(t *testing.T) {
 			},
 			wantErrs: 1,
 			wantFields: map[string]field.ErrorType{
-				"spec.instanceId": field.ErrorTypeInvalid,
+				"spec.instanceID": field.ErrorTypeInvalid,
 			},
 		},
 	}
@@ -132,7 +142,7 @@ func TestValidateRunnerUpdate(t *testing.T) {
 			oldRunner: validRunner("ct", "x86_64"),
 			wantErrs:  1,
 			wantFields: map[string]field.ErrorType{
-				"spec.instanceId": field.ErrorTypeInvalid,
+				"spec.instanceID": field.ErrorTypeInvalid,
 			},
 		},
 		{
@@ -143,7 +153,7 @@ func TestValidateRunnerUpdate(t *testing.T) {
 			wantFields: map[string]field.ErrorType{
 				"spec.type":       field.ErrorTypeRequired,
 				"spec.arch":       field.ErrorTypeRequired,
-				"spec.instanceId": field.ErrorTypeRequired,
+				"spec.instanceID": field.ErrorTypeRequired,
 				"metadata.name":   field.ErrorTypeRequired,
 			},
 		},

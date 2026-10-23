@@ -13,7 +13,7 @@ Runner Controller 是 `controller-manager` 中负责 Runner 健康状态收敛�
 - 正确处理 Runner 心跳与 Controller 写入之间的并发、冲突和结果未知；
 - 暴露必要的结构化日志和指标。
 
-Controller 的写入范围仅为 `Runner.status.phase`，健康判断以心跳为准。Runner agent 负责注册，以及完成本地初始化后通过状态上报恢复 `Online`；apiserver 校验 `spec.instanceId`，Controller 在响应身份比较时核对其一致性。已绑定 Job 的失败收敛由 Job Controller 处理。长期离线的 Runner 对象保留，删除由显式管理操作触发。
+Controller 的写入范围仅为 `Runner.status.phase`，健康判断以心跳为准。Runner agent 负责注册，以及完成本地初始化后通过状态上报恢复 `Online`；apiserver 校验 `spec.instanceID`，Controller 在响应身份比较时核对其一致性。已绑定 Job 的失败收敛由 Job Controller 处理。长期离线的 Runner 对象保留，删除由显式管理操作触发。
 
 Controller 之间的关系为：
 
@@ -196,7 +196,7 @@ request.Status.Phase = "Offline"
 - `status.addresses` 和 `status.info`；
 - 全部 spec、labels、annotations 和服务端 metadata。
 
-其中包括不可变的 `spec.instanceId`。Runner Controller 不使用 `instanceId` 代替 `metadata.uid` 进行乐观并发或对象重建判断。
+其中包括不可变的 `spec.instanceID`。Runner Controller 不使用 `instanceID` 代替 `metadata.uid` 进行乐观并发或对象重建判断。
 
 Controller 不把心跳改为当前时间，也不清空旧容量信息。`Offline` 表示旧信息不再可用于调度，不表示历史上报数据需要删除。
 
@@ -345,7 +345,7 @@ func validateOfflineStatusResponse(response, request *ebsv1.Runner) error {
 | `metadata.name`、`metadata.namespace`、`metadata.uid` | 必须与请求完全一致；Runner namespace 应为空 |
 | `metadata.resourceVersion` | 必须非空，允许由服务端更新，不要求与请求值相同 |
 | `metadata.managedFields` 和其他服务端维护 metadata | 不参与 Controller 的资源专属语义比较，不能对整个 metadata 使用 `reflect.DeepEqual` |
-| `spec`，包括 `instanceId`、type、arch、unschedulable、taints | 使用 `apiequality.Semantic.DeepEqual` 与请求完整比较，任何变化均为异常 |
+| `spec`，包括 `instanceID`、type、arch、unschedulable、taints | 使用 `apiequality.Semantic.DeepEqual` 与请求完整比较，任何变化均为异常 |
 | `status.phase` | 必须为 `Offline` |
 | `status.conditions` | 必须与请求语义相同 |
 | `status.capacity`、`status.allocatable` | 必须与请求语义相同 |

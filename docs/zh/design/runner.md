@@ -104,13 +104,13 @@ PUT    /apis/ebs/v1/runners/{name}/status
 
 Runner 是集群级资源，`metadata.name` 在集群内唯一。Runner token 的 `sub`、`runner` claim 以及请求对象或路径中的 Runner 名称必须完全相同；Runner 不能 list/watch Runner 集合或访问其他 Runner，并且禁止对所有资源执行 DELETE。
 
-Runner 采用受限自注册模型。Runner 在首次启动时生成 UUID v4 作为安装实例 ID，以小写规范形式持久化到 `--root-dir/runner-instance-id`；文件必须使用原子创建并限制为 Runner 运行用户读写。进程重启和镜像升级必须复用该值，不能按进程重新生成，也不能在多个 Runner 实例之间复制同一数据目录。`instanceId` 只是实例标识，不是认证凭据，不能替代 MachineAccount token，也不得用于授权判断。
+Runner 采用受限自注册模型。Runner 在首次启动时生成 UUID v4 作为安装实例 ID，以小写规范形式持久化到 `--root-dir/runner-instance-id`；文件必须使用原子创建并限制为 Runner 运行用户读写。进程重启和镜像升级必须复用该值，不能按进程重新生成，也不能在多个 Runner 实例之间复制同一数据目录。`instanceID` 只是实例标识，不是认证凭据，不能替代 MachineAccount token，也不得用于授权判断。
 
-对象不存在时通过 collection `POST` 创建；对象已存在时先 GET 最新对象并比较 `spec.instanceId`：相同才视为同一安装实例并允许受限更新，不同则本地终止注册并报告同名冲突，不能覆盖已有对象。创建冲突和并发更新冲突返回 409，Runner 必须重新读取：若最新对象的 `instanceId` 与本地相同，视为前一次创建已成功或同实例并发注册并继续；不同则终止。gateway 不自动重放写请求。
+对象不存在时通过 collection `POST` 创建；对象已存在时先 GET 最新对象并比较 `spec.instanceID`：相同才视为同一安装实例并允许受限更新，不同则本地终止注册并报告同名冲突，不能覆盖已有对象。创建冲突和并发更新冲突返回 409，Runner 必须重新读取：若最新对象的 `instanceID` 与本地相同，视为前一次创建已成功或同实例并发注册并继续；不同则终止。gateway 不自动重放写请求。
 
-`spec.instanceId` 创建后不可修改或清空。若本地 ID 文件丢失，Runner 必须停止并要求恢复原文件或由管理员删除旧 Runner 后重新注册，不能自动接管。删除旧对象前须使其处于 Offline 或 Evicted，其他状态由 apiserver 拒绝，详见 [apiserver 校验规则](ebs-apiserver.md)。删除对象不停止 Runner 进程；未停用的进程重启后仍可重新注册。
+`spec.instanceID` 创建后不可修改或清空。若本地 ID 文件丢失，Runner 必须停止并要求恢复原文件或由管理员删除旧 Runner 后重新注册，不能自动接管。删除旧对象前须使其处于 Offline 或 Evicted，其他状态由 apiserver 拒绝，详见 [apiserver 校验规则](ebs-apiserver.md)。删除对象不停止 Runner 进程；未停用的进程重启后仍可重新注册。
 
-Runner 创建时可以声明 `spec.instanceId`。创建后可以更新的普通对象字段为：
+Runner 创建时可以声明 `spec.instanceID`。创建后可以更新的普通对象字段为：
 
 ```text
 metadata.labels["ebs.io/runner-type"]
@@ -120,7 +120,7 @@ spec.type
 spec.arch
 ```
 
-`spec.instanceId` 必须是规范的小写 UUID，创建时必填，创建后不可修改或清空。`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 Ops/Admin 维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
+`spec.instanceID` 必须是规范的小写 UUID，创建时必填，创建后不可修改或清空。`ebs.io/runner-type`、`ebs.io/runner-arch` 必须分别与 `spec.type`、`spec.arch` 一致。Runner 创建对象时 `status` 必须为空，且不能提供 annotations、finalizers、ownerReferences 或其他服务端 metadata。`spec.unschedulable`、`spec.taints`、`ebs.io/zone`、信任级别和安全域等调度管理字段由 Ops/Admin 维护；Runner 更新完整对象时必须保留这些已有字段，不能通过 PUT 字段缺失、Merge Patch 的 `null` 或 JSON Patch 删除父级字段绕过保护。
 
 ### 3.3 Job API
 
@@ -191,7 +191,7 @@ type Runner struct {
 
 ```go
 type RunnerSpec struct {
-    InstanceID   string        `json:"instanceId,omitempty"`
+    InstanceID   string        `json:"instanceID,omitempty"`
     Type          string        `json:"type,omitempty"`
     Arch          string        `json:"arch,omitempty"`
     Unschedulable bool          `json:"unschedulable,omitempty"`
@@ -201,13 +201,13 @@ type RunnerSpec struct {
 
 | 字段 | 说明 |
 |------|------|
-| `instanceId` | Runner 安装实例持久化 UUID，用于识别同名对象是否属于同一安装实例 |
+| `instanceID` | Runner 安装实例持久化 UUID，用于识别同名对象是否属于同一安装实例 |
 | `type` | 执行机类型：`ct` / `vm` / `hw` |
 | `arch` | CPU 架构标识，必填但不限制枚举值 |
 | `unschedulable` | 是否禁止调度新 Job |
 | `taints` | 反亲和污点 |
 
-`instanceId`、`type` 和 `arch` 由 Runner 自身声明；`instanceId` 创建后不可变，`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 Ops/Admin 管理，Runner 自注册和更新时不得修改。
+`instanceID`、`type` 和 `arch` 由 Runner 自身声明；`instanceID` 创建后不可变，`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 Ops/Admin 管理，Runner 自注册和更新时不得修改。
 
 调度标签统一写入 `metadata.labels`，不在 `spec` 中重复定义。例如：
 
@@ -223,7 +223,7 @@ metadata:
     ebs.io/runner-arch: aarch64
     ebs.io/zone: local
 spec:
-  instanceId: 5d65d05e-37b6-4e7b-bfcb-264930f4436b
+  instanceID: 5d65d05e-37b6-4e7b-bfcb-264930f4436b
   type: ct
   arch: aarch64
 ```
@@ -663,7 +663,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | artifact-manager 暂时不可达 | 继续写入本地日志 spool，在上限内重试；不得阻塞心跳和 Job watch |
 | 心跳超时 | 控制器将 Runner 标记为 `Offline`，scheduler 不再选择该 Runner |
 | Runner 重启 | 重新注册 Runner，恢复心跳，根据 Job、容器 label、本地 spool/checkpoint 和服务端日志 status 恢复或明确失败 |
-| 同名 Runner 注册 | `instanceId` 相同才允许恢复；不同则终止注册并报告冲突 |
+| 同名 Runner 注册 | `instanceID` 相同才允许恢复；不同则终止注册并报告冲突 |
 | 本地 instance ID 丢失 | 不接管已有同名 Runner；恢复 ID 文件或由管理员删除旧对象后重新注册 |
 | Script 读取网络失败、超时、429 或 5xx | 在 Job 剩余期限内指数退避重试；初始 1 秒、上限 30 秒并加抖动，429 遵循较长的 Retry-After；取消时停止 |
 | Script 不存在、无读取权限、响应或内容非法 | 不启动业务容器，按 Job 执行失败流程记录原因；不回退到镜像入口或其他脚本 |

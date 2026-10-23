@@ -19,14 +19,14 @@ test("spec commit IDs come from their package repository in the build Snapshot",
     },
   };
   const snapshot = { status: { packageRepoStatuses: {
-    gcc: { commitId: "1234567890abcdef1234567890abcdef12345678" },
-    rpm: { commitId: "abcdef1234567890abcdef1234567890abcdef12" },
+    gcc: { commitID: "1234567890abcdef1234567890abcdef12345678" },
+    rpm: { commitID: "abcdef1234567890abcdef1234567890abcdef12" },
   } } };
   const rows = buildInfoSpecRows(buildInfo, snapshot);
   assert.deepEqual(rows.map(row => row.name), ["gcc", "gcc-c++", "rpm"]);
-  assert.equal(rows[0].commitId, snapshot.status.packageRepoStatuses.gcc.commitId);
-  assert.equal(rows[1].commitId, rows[0].commitId);
-  assert.equal(rows[2].commitId, snapshot.status.packageRepoStatuses.rpm.commitId);
+  assert.equal(rows[0].commitID, snapshot.status.packageRepoStatuses.gcc.commitID);
+  assert.equal(rows[1].commitID, rows[0].commitID);
+  assert.equal(rows[2].commitID, snapshot.status.packageRepoStatuses.rpm.commitID);
   assert.equal(rows[2].displayStatus, "RpmDependsMissing");
   assert.equal(rows[2].buildStatus, "Failed");
 });
@@ -36,7 +36,7 @@ test("build statuses remain visible while Snapshot data is unavailable or still 
   for (const snapshot of [null, { status: { packageRepoStatuses: { gcc: {} } } }]) {
     const [row] = buildInfoSpecRows(info, snapshot);
     assert.equal(row.name, "gcc");
-    assert.equal(row.commitId, undefined);
+    assert.equal(row.commitID, undefined);
     assert.equal(row.displayStatus, "Pending");
   }
   assert.deepEqual(buildInfoSpecRows(null, null), []);

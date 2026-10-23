@@ -1117,7 +1117,7 @@ GET /repositories/{project}/{os}/{arch}/repodata/repomd.xml
 | 场景 | 响应 | 调用方行为 |
 | --- | --- | --- |
 | current 指向匹配目标的 Ready 发布，repomd.xml 可读 | 200，XML 正文，沿用内容接口的 ETag/Range 等规则 | 校验有效 XML 后使用稳定 base URL |
-| 合法目标路径尚无 current 指针 | 404，APIError.code=ReleaseNotPublished，retryable=false | 仅使用 bootstrapRepo |
+| 合法目标路径尚无 current 指针 | 404，APIError.code=ReleaseNotPublished，retryable=false | 仅使用 bootstrapRepos |
 | current 已存在，但目标记录缺失、身份不匹配、未 Ready，或 repomd.xml 缺失/不可读 | 503，APIError.code=ReleaseContentUnavailable，retryable=true | 暂停新派发并重试，不作为尚未发布 |
 | 文件系统访问失败、恢复尚未完成 | 503，APIError.code=ReleaseStorageUnavailable，retryable=true | 重试 |
 | 参数非法 | 400，APIError.code=InvalidRequest | 修正请求，不能按未发布处理 |

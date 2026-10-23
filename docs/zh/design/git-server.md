@@ -230,7 +230,7 @@ Content-Type: application/json
 
 `clone_path` 是以 `/git/` 开头的 URL path，包含已转义的仓库 key，不包含服务地址、查询参数或片段，不是本地存储路径。例如 key 中的字面量 `%2B` 在路径中表示为 `%252B`；调用方必须保留转义，不能重复编码。手动克隆时，将可访问的 HTTP(S) 服务入口与该路径拼接后交给 Git。后续 fetch 与 clone 可以并发，因此 clone 可能读取到同步前或同步后的 refs；`sync_time` 只表示最近一次成功同步时间。
 
-Controller Manager 的 Git Server 客户端将 `clone_path` 前加 `git-server://`，生成 `git-server:///git/gitee.com/src-openeuler/gcc.git`。空 authority 表示当前唯一的 Git Server；Snapshot `status.packageRepoStatuses[repoName].cloneUrl` 和 Job payload `clone_url` 保存此逻辑地址，字段名不变。客户端不拼接 `gitServer.internalURL`，管理面地址不必对 Runner 可达。
+Controller Manager 的 Git Server 客户端将 `clone_path` 前加 `git-server://`，生成 `git-server:///git/gitee.com/src-openeuler/gcc.git`。空 authority 表示当前唯一的 Git Server；Snapshot `status.packageRepoStatuses[repoName].cloneURL` 和 Job payload `clone_url` 保存此逻辑地址，字段名不变。客户端不拼接 `gitServer.internalURL`，管理面地址不必对 Runner 可达。
 
 Runner 从 Gateway `service-endpoints` 获取 Git Server 的 Runner 地址，按网络模式将 `git-server:///git/...` 转换为 HTTP(S) URL，写入本地 payload.json 后交给脚本克隆。地址配置见 [服务配置](data-models~config.md)。
 

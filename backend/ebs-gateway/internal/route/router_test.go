@@ -555,7 +555,7 @@ func TestUserListOmitsAdminAccounts(t *testing.T) {
 }
 
 func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
-	old := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-1","resourceVersion":"7"},"spec":{"instanceId":"constant","type":"ct"},"status":{"phase":"Offline"}}`
+	old := `{"apiVersion":"ebs/v1","kind":"Runner","metadata":{"name":"runner-1","resourceVersion":"7"},"spec":{"instanceID":"constant","type":"ct"},"status":{"phase":"Offline"}}`
 	writes := 0
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/apis/ebs/v1/runners/runner-1/status" {
@@ -570,7 +570,7 @@ func TestRunnerStatusPatchBecomesValidatedPUT(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(body), `"phase":"Online"`) || !strings.Contains(string(body), `"instanceId":"constant"`) {
+			if !strings.Contains(string(body), `"phase":"Online"`) || !strings.Contains(string(body), `"instanceID":"constant"`) {
 				t.Errorf("invalid complete object forwarded: %s", body)
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil

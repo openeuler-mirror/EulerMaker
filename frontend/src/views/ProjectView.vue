@@ -222,7 +222,7 @@
           <article class="content-panel">
             <div class="section-heading"><div><h2>{{ t("project.bootstrapRepositories") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openBootstrapEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="bootstrapSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.bootstrapSaved") }}</div>
-            <div v-if="project.spec?.bootstrapRepo?.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>{{ t("project.repositoryAddress") }}</th></tr></thead><tbody><tr v-for="(repo, index) in project.spec.bootstrapRepo" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td></tr></tbody></table></div>
+            <div v-if="project.spec?.bootstrapRepos?.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>{{ t("project.repositoryAddress") }}</th></tr></thead><tbody><tr v-for="(repo, index) in project.spec.bootstrapRepos" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td></tr></tbody></table></div>
             <p v-else class="config-empty">{{ t("project.noBootstrapRepositories") }}</p>
           </article>
 
@@ -440,7 +440,7 @@ const { t, te } = useI18n();
 const name = computed(() => String(route.params.name || ""));
 const project = ref<Project | null>(null);
 const projectIsFull = ref(false);
-const projectSummaryFields = "metadata,spec.displayName,spec.description,spec.defaultRef,spec.buildTargets,spec.bootstrapRepo,spec.buildPayload";
+const projectSummaryFields = "metadata,spec.displayName,spec.description,spec.defaultRef,spec.buildTargets,spec.bootstrapRepos,spec.buildPayload";
 let projectLoadSequence = 0;
 let packageLoadPromise: Promise<boolean> | null = null;
 let packageLoadSequence = -1;
@@ -1316,7 +1316,7 @@ function openBootstrapEditor(): void {
   if (!project.value || !canEditProject.value) return;
   bootstrapSaveSuccess.value = false;
   bootstrapErrorKey.value = "";
-  editingBootstrapRepositories.value = (project.value.spec?.bootstrapRepo || []).map((repo) => ({
+  editingBootstrapRepositories.value = (project.value.spec?.bootstrapRepos || []).map((repo) => ({
     name: repo.name || "",
     url: repo.url || "",
   }));
@@ -1353,7 +1353,7 @@ async function saveBootstrapRepositories(): Promise<void> {
   bootstrapErrorKey.value = "";
   try {
     const updated = JSON.parse(JSON.stringify(project.value)) as Project;
-    updated.spec = { ...updated.spec, bootstrapRepo: repositories };
+    updated.spec = { ...updated.spec, bootstrapRepos: repositories };
     project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
       method: "PUT",
       body: JSON.stringify(updated),

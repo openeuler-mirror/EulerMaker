@@ -1,5 +1,42 @@
 package v1
 
+// TolerationOperator selects how a toleration matches a taint. An omitted operator means Equal.
+type TolerationOperator string
+
+const (
+	TolerationEqual  TolerationOperator = "Equal"
+	TolerationExists TolerationOperator = "Exists"
+)
+
+// IsValid reports whether the operator is supported.
+func (o TolerationOperator) IsValid() bool {
+	return o == TolerationEqual || o == TolerationExists
+}
+
+// TolerationOperatorValues returns the supported nonempty operators.
+func TolerationOperatorValues() []string {
+	return []string{string(TolerationEqual), string(TolerationExists)}
+}
+
+// TaintEffect describes the scheduling effect of a Runner taint.
+type TaintEffect string
+
+const (
+	TaintEffectNoSchedule       TaintEffect = "NoSchedule"
+	TaintEffectPreferNoSchedule TaintEffect = "PreferNoSchedule"
+	TaintEffectNoExecute        TaintEffect = "NoExecute"
+)
+
+// IsValid reports whether the effect is supported.
+func (e TaintEffect) IsValid() bool {
+	return e == TaintEffectNoSchedule || e == TaintEffectPreferNoSchedule || e == TaintEffectNoExecute
+}
+
+// TaintEffectValues returns the supported nonempty effects.
+func TaintEffectValues() []string {
+	return []string{string(TaintEffectNoSchedule), string(TaintEffectPreferNoSchedule), string(TaintEffectNoExecute)}
+}
+
 // BuildType selects the package selection strategy.
 type BuildType string
 

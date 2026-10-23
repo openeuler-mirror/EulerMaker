@@ -13,6 +13,20 @@ func TestValidateJob(t *testing.T) {
 	assertErrorList(t, errs, 0, nil)
 }
 
+func TestValidateJobTolerationEnums(t *testing.T) {
+	for _, operator := range append(ebsv1.TolerationOperatorValues(), "") {
+		for _, effect := range append(ebsv1.TaintEffectValues(), "") {
+			job := validJob()
+			job.Spec.Tolerations = []ebsv1.Toleration{{
+				Key: "dedicated", Operator: ebsv1.TolerationOperator(operator), Effect: ebsv1.TaintEffect(effect),
+			}}
+			if errs := ValidateJob(job); len(errs) != 0 {
+				t.Fatalf("operator=%q effect=%q: %v", operator, effect, errs)
+			}
+		}
+	}
+}
+
 func TestValidateJobScriptRef(t *testing.T) {
 	job := validJob()
 	if errs := ValidateJob(job); len(errs) != 0 {

@@ -66,7 +66,7 @@ export interface Project {
     buildPayload?: string;
     buildTargets?: BuildTarget[];
     packageRepos?: PackageRepo[];
-    bootstrapRepo?: BootstrapRepo[];
+    bootstrapRepos?: BootstrapRepo[];
   };
   status?: { phase?: string };
 }
@@ -75,7 +75,7 @@ export interface Snapshot {
   metadata?: ObjectMeta;
   status?: {
     phase?: string;
-    packageRepoStatuses?: Record<string, { commitId?: string; cloneUrl?: string }>;
+    packageRepoStatuses?: Record<string, { commitID?: string; cloneURL?: string }>;
   };
 }
 
@@ -96,7 +96,7 @@ export interface BuildInfo {
   metadata?: ObjectMeta;
   spec?: {
     buildPayload?: string;
-    bootstrapRepo?: BootstrapRepo[];
+    bootstrapRepos?: BootstrapRepo[];
   };
   status?: {
     phase?: string;
@@ -156,7 +156,7 @@ export interface MachineAccount {
 
 export interface Runner {
   metadata?: ObjectMeta;
-  spec?: { instanceId?: string; type?: string; arch?: string; unschedulable?: boolean };
+  spec?: { instanceID?: string; type?: string; arch?: string; unschedulable?: boolean };
   status?: { phase?: string; heartbeat?: string; capacity?: Record<string, string>; allocatable?: Record<string, string>; info?: { os?: string; kernelVersion?: string; runtimeVersion?: string; agentVersion?: string } };
 }
 
