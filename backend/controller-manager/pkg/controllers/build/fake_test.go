@@ -429,7 +429,7 @@ func newProject(name string, repos ...ebsv1.PackageRepo) *ebsv1.Project {
 		Spec: ebsv1.ProjectSpec{
 			DefaultRef:    "refs/heads/master",
 			PackageRepos:  repos,
-			BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "everything", Repo: "https://example.com/repo/everything"}},
+			BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "everything", URL: "https://example.com/repo/everything"}},
 		},
 	}
 }
@@ -442,7 +442,7 @@ func newPackageRepo(name string) ebsv1.PackageRepo {
 	}
 }
 
-func newBuild(project, name, buildType string, packages []string) *ebsv1.Build {
+func newBuild(project, name string, buildType ebsv1.BuildType, packages []string) *ebsv1.Build {
 	build := &ebsv1.Build{
 		TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Build"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -450,14 +450,14 @@ func newBuild(project, name, buildType string, packages []string) *ebsv1.Build {
 			Labels: map[string]string{
 				ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
 				ebsv1.BuildTargetArchLabel: "aarch64",
-				ebsv1.BuildTypeLabel:       buildType,
+				ebsv1.BuildTypeLabel:       string(buildType),
 			},
 		},
 		Spec: ebsv1.BuildSpec{
 			BuildType: buildType,
 			Packages:  packages,
 			BuildTarget: ebsv1.BuildTarget{
-				Os: "openEuler-22.03-LTS", Arch: "aarch64", BuildFlag: true, PublishFlag: true,
+				OS: "openEuler-22.03-LTS", Arch: "aarch64", BuildFlag: true, PublishFlag: true,
 			},
 		},
 	}
@@ -470,7 +470,7 @@ func withBaseBuildRef(build *ebsv1.Build) *ebsv1.Build {
 	return build
 }
 
-func withPhaseStage(build *ebsv1.Build, phase ebsv1.BuildPhase, stage string) *ebsv1.Build {
+func withPhaseStage(build *ebsv1.Build, phase ebsv1.BuildPhase, stage ebsv1.BuildStage) *ebsv1.Build {
 	build.Status.Phase = phase
 	build.Status.Stage = stage
 	return build

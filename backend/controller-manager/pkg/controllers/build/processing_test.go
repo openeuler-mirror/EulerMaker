@@ -13,7 +13,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func specStatus(build, install string) ebsv1.SpecStatus {
+func specStatus(build ebsv1.SpecBuildPhase, install ebsv1.SpecInstallPhase) ebsv1.SpecStatus {
 	return ebsv1.SpecStatus{
 		Build:   ebsv1.SpecBuildStatus{Status: build},
 		Install: ebsv1.SpecInstallStatus{Status: install},
@@ -31,8 +31,8 @@ func TestProcessingBuildWaitsForCompletedBuildInfo(t *testing.T) {
 	for _, phase := range []ebsv1.BuildInfoPhase{ebsv1.BuildInfoPending, ebsv1.BuildInfoProcessing, ebsv1.BuildInfoPhase("Unknown")} {
 		t.Run(string(phase), func(t *testing.T) {
 			api := newFakeAPI()
-			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
-			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", phase, map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)})
+			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
+			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", phase, map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)})
 			c := newTestController(t, api, newTestClock())
 			result, err := c.sync(context.Background(), "project-a/build-a")
 			if err != nil || result != (controller.ReconcileResult{}) {
@@ -47,17 +47,17 @@ func TestProcessingBuildWaitsForCompletedBuildInfo(t *testing.T) {
 
 func TestProcessingBuildFailsOnFailedBuildInfo(t *testing.T) {
 	for _, buildType := range []string{"single", "full"} {
-		t.Run(buildType, func(t *testing.T) {
+		t.Run(string(buildType), func(t *testing.T) {
 			api := newFakeAPI()
-			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", buildType, []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", ebsv1.BuildType(buildType), []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoFailed,
-				map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)})
+				map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)})
 			c := newTestController(t, api, newTestClock())
 			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 				t.Fatal(err)
 			}
 			stored := api.build("project-a", "build-a")
-			if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stageBuild || stored.Status.EndTime.IsZero() {
+			if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != ebsv1.BuildStageBuild || stored.Status.EndTime.IsZero() {
 				t.Fatalf("status = %+v", stored.Status)
 			}
 			condition := findCondition(t, stored.Status.Conditions, ConditionBuildSucceed)
@@ -73,14 +73,14 @@ func TestProcessingBuildFailsOnFailedBuildInfo(t *testing.T) {
 
 func TestProcessingBuildFailsWhenBuildInfoIsMissing(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 	c := newTestController(t, api, newTestClock())
 	_, err := c.sync(context.Background(), "project-a/build-a")
 	if !controller.IsPermanent(err) {
 		t.Fatalf("want permanent error, got %v", err)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stageBuild || stored.Status.EndTime.IsZero() {
+	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != ebsv1.BuildStageBuild || stored.Status.EndTime.IsZero() {
 		t.Fatalf("status = %+v", stored.Status)
 	}
 	condition := findCondition(t, stored.Status.Conditions, ConditionBuildSucceed)
@@ -97,20 +97,20 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 		name      string
 		statuses  map[string]ebsv1.SpecStatus
 		succeeded bool
-		wantStage string
+		wantStage ebsv1.BuildStage
 	}{
-		{name: "all succeeded", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)}, succeeded: true, wantStage: stagePublish},
-		{name: "multiple specs", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded), "glibc": specStatus(specStatusSucceeded, specStatusSucceeded)}, succeeded: true, wantStage: stagePublish},
-		{name: "build failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus("Failed", specStatusSucceeded)}, wantStage: stageBuild},
-		{name: "install failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, "Failed")}, wantStage: stageBuild},
-		{name: "install missing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, "")}, wantStage: stageBuild},
-		{name: "build running", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus("Running", specStatusSucceeded)}, wantStage: stageBuild},
-		{name: "one of many failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded), "glibc": specStatus("Aborted", specStatusSucceeded)}, wantStage: stageBuild},
-		{name: "empty result set", statuses: map[string]ebsv1.SpecStatus{}, wantStage: stageBuild},
+		{name: "all succeeded", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStagePublish},
+		{name: "multiple specs", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded), "glibc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStagePublish},
+		{name: "build failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "install failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallFailed)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "install missing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, "")}, wantStage: ebsv1.BuildStageBuild},
+		{name: "build running", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildRunning, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "one of many failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded), "glibc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "empty result set", statuses: map[string]ebsv1.SpecStatus{}, wantStage: ebsv1.BuildStageBuild},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeAPI()
-			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted, tc.statuses)
 			clk := newTestClock()
 			c := newTestController(t, api, clk)
@@ -153,9 +153,9 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 // build stage failure, so its stage must stay build instead of advancing to publish.
 func TestSingleBuildFailureKeepsBuildStage(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted,
-		map[string]ebsv1.SpecStatus{"gcc": specStatus("Failed", specStatusSucceeded)})
+		map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)})
 	clk := newTestClock()
 	c := newTestController(t, api, clk)
 
@@ -167,8 +167,8 @@ func TestSingleBuildFailureKeepsBuildStage(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stageBuild {
-		t.Fatalf("phase/stage = %q/%q, want %q/%q", stored.Status.Phase, stored.Status.Stage, ebsv1.BuildFailed, stageBuild)
+	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != ebsv1.BuildStageBuild {
+		t.Fatalf("phase/stage = %q/%q, want %q/%q", stored.Status.Phase, stored.Status.Stage, ebsv1.BuildFailed, ebsv1.BuildStageBuild)
 	}
 	if stored.Status.EndTime.IsZero() || !stored.Status.EndTime.Time.Equal(clk.Now().UTC()) {
 		t.Fatalf("endTime = %+v", stored.Status.EndTime)
@@ -187,11 +187,11 @@ func TestSingleBuildFailureKeepsBuildStage(t *testing.T) {
 
 func TestAggregateSpecStatusIsIndependentOfMapOrder(t *testing.T) {
 	first := map[string]ebsv1.SpecStatus{}
-	first["gcc"] = specStatus(specStatusSucceeded, specStatusSucceeded)
-	first["glibc"] = specStatus("Failed", specStatusSucceeded)
+	first["gcc"] = specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)
+	first["glibc"] = specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)
 	second := map[string]ebsv1.SpecStatus{}
-	second["glibc"] = specStatus("Failed", specStatusSucceeded)
-	second["gcc"] = specStatus(specStatusSucceeded, specStatusSucceeded)
+	second["glibc"] = specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)
+	second["gcc"] = specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)
 	firstResult, firstSpec := aggregateSpecStatus(ebsv1.NewSpecStatusGroup(first))
 	secondResult, secondSpec := aggregateSpecStatus(ebsv1.NewSpecStatusGroup(second))
 	if firstResult != secondResult || firstSpec != secondSpec || firstResult || firstSpec != "glibc" {
@@ -205,30 +205,30 @@ func TestProcessingBuildNonSingleResults(t *testing.T) {
 		statuses      map[string]ebsv1.SpecStatus
 		publishFlag   bool
 		wantPhase     ebsv1.BuildPhase
-		wantStage     string
+		wantStage     ebsv1.BuildStage
 		wantEndTime   bool
 		wantSucceeded bool
 		wantPermanent bool
 	}{
 		{
-			name: "success publishes", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)},
-			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: stagePublish, wantSucceeded: true,
+			name: "success publishes", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)},
+			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish, wantSucceeded: true,
 		},
 		{
-			name: "failure still publishes", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus("Failed", specStatusSucceeded)},
-			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: stagePublish,
+			name: "failure still publishes", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)},
+			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish,
 		},
 		{
-			name: "success skips publishing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)},
-			wantPhase: ebsv1.BuildSkipped, wantStage: stagePublish, wantEndTime: true, wantSucceeded: true,
+			name: "success skips publishing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)},
+			wantPhase: ebsv1.BuildSkipped, wantStage: ebsv1.BuildStagePublish, wantEndTime: true, wantSucceeded: true,
 		},
 		{
-			name: "failure skips publishing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, "Failed")},
-			wantPhase: ebsv1.BuildSkipped, wantStage: stagePublish, wantEndTime: true, wantPermanent: true,
+			name: "failure skips publishing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallFailed)},
+			wantPhase: ebsv1.BuildSkipped, wantStage: ebsv1.BuildStagePublish, wantEndTime: true, wantPermanent: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+			build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 			build.Spec.BuildTarget.PublishFlag = tc.publishFlag
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = build
@@ -273,7 +273,7 @@ func TestProcessingPublishWaitsForReleaseOutcome(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			api := newFakeAPI()
-			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
+			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 			api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 				ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
 				Status:     ebsv1.RpmRepoStatus{Release: release},
@@ -295,7 +295,7 @@ func TestProcessingPublishWaitsForReleaseOutcome(t *testing.T) {
 
 func TestProcessingPublishWaitsWithoutRelease(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 	api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
 		Status:     ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{}},
@@ -312,7 +312,7 @@ func TestProcessingPublishWaitsWithoutRelease(t *testing.T) {
 
 func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 	api := newFakeAPI()
-	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
+	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 	build.Status.Conditions = []metav1.Condition{{
 		Type: ConditionBuildSucceed, Status: metav1.ConditionTrue, Reason: ReasonBuildSucceeded,
 		Message: ReasonBuildSucceeded, ObservedGeneration: build.Generation, LastTransitionTime: testTime(9),
@@ -332,7 +332,7 @@ func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildSuccess || stored.Status.Stage != stagePublish {
+	if stored.Status.Phase != ebsv1.BuildSuccess || stored.Status.Stage != ebsv1.BuildStagePublish {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 	if !stored.Status.EndTime.Time.Equal(clk.Now().UTC()) {
@@ -354,7 +354,7 @@ func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 
 func TestProcessingPublishFailedKeepsRepositoryEmpty(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 	api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
 		Status: ebsv1.RpmRepoStatus{
@@ -368,7 +368,7 @@ func TestProcessingPublishFailedKeepsRepositoryEmpty(t *testing.T) {
 		t.Fatalf("want permanent error, got %v", err)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stagePublish {
+	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != ebsv1.BuildStagePublish {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 	condition := findCondition(t, stored.Status.Conditions, ConditionPublishSucceed)
@@ -380,14 +380,14 @@ func TestProcessingPublishFailedKeepsRepositoryEmpty(t *testing.T) {
 
 func TestProcessingPublishFailsWhenRpmRepoIsMissing(t *testing.T) {
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 	c := newTestController(t, api, newTestClock())
 	_, err := c.sync(context.Background(), "project-a/build-a")
 	if !controller.IsPermanent(err) {
 		t.Fatalf("want permanent error, got %v", err)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != stagePublish {
+	if stored.Status.Phase != ebsv1.BuildFailed || stored.Status.Stage != ebsv1.BuildStagePublish {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 	condition := findCondition(t, stored.Status.Conditions, ConditionPublishSucceed)
@@ -402,7 +402,7 @@ func TestProcessingPublishFailsWhenRpmRepoIsMissing(t *testing.T) {
 func TestProcessingReadFailuresStayTransient(t *testing.T) {
 	temporary := errors.New("connection reset")
 	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 	api.hooks.getRpmRepo = func(string, string) (*ebsv1.RpmRepo, error) { return nil, temporary }
 	c := newTestController(t, api, newTestClock())
 	result, err := c.sync(context.Background(), "project-a/build-a")

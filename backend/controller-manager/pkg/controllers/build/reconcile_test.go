@@ -33,9 +33,9 @@ func TestSyncIgnoresMissingAndFinishedBuilds(t *testing.T) {
 		build *ebsv1.Build
 	}{
 		{name: "missing build"},
-		{name: "success", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSuccess, stagePublish)},
-		{name: "failed", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildFailed, stageBuild)},
-		{name: "skipped", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildSkipped, stagePublish)},
+		{name: "success", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)},
+		{name: "failed", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildFailed, ebsv1.BuildStageBuild)},
+		{name: "skipped", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildSkipped, ebsv1.BuildStagePublish)},
 		{name: "aborted", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildAborted, "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,10 +76,10 @@ func TestSyncRejectsInvalidPhaseStageCombinations(t *testing.T) {
 		name  string
 		build *ebsv1.Build
 	}{
-		{name: "pending publish", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, stagePublish)},
-		{name: "prepared build", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, stageBuild)},
+		{name: "pending publish", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, ebsv1.BuildStagePublish)},
+		{name: "prepared build", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, ebsv1.BuildStageBuild)},
 		{name: "processing without stage", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, "")},
-		{name: "single publish", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish)},
+		{name: "single publish", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)},
 		{name: "unknown phase", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPhase("Bogus"), "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestSyncTreatsNonRetryableReadErrorsAsPermanent(t *testing.T) {
 		},
 		{
 			name:  "bad request while waiting for the release",
-			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish),
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish),
 			setup: func(api *fakeAPI) {
 				api.hooks.getRpmRepo = func(string, string) (*ebsv1.RpmRepo, error) {
 					return nil, apierrors.NewBadRequest("unsupported field selector")
@@ -150,7 +150,7 @@ func TestSyncTreatsNonRetryableReadErrorsAsPermanent(t *testing.T) {
 func TestPendingRecordsBaseBuildRefFromHistory(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "full", []string{"gcc"})
-	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, stagePublish)
+	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)
 	api.hooks.lastPublished = func(project, targetOS, targetArch string) (*ebsv1.Build, error) {
 		if project != "project-a" || targetOS != "openEuler-22.03-LTS" || targetArch != "aarch64" {
 			t.Errorf("unexpected history query %q %q %q", project, targetOS, targetArch)
@@ -529,7 +529,7 @@ func TestPendingCreateSnapshotRejections(t *testing.T) {
 func TestPendingAdvancesToPrepared(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
-		buildType   string
+		buildType   ebsv1.BuildType
 		wantRpmRepo bool
 	}{
 		{name: "single skips RpmRepo", buildType: "single", wantRpmRepo: false},
@@ -591,7 +591,6 @@ func TestPendingWaitsForTerminatingRpmRepo(t *testing.T) {
 	deletion := metav1.NewTime(time.Date(2026, 9, 16, 9, 0, 0, 0, time.UTC))
 	api.storeRpmRepo(&ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", DeletionTimestamp: &deletion},
-		Spec:       ebsv1.RpmRepoSpec{},
 	})
 	c := newTestController(t, api, newTestClock())
 	result, err := c.sync(context.Background(), "project-a/build-a")
@@ -616,7 +615,7 @@ const snapshotMissingTargetCondition = "TargetPackagesNotFound"
 func TestPendingAdvancesWhenSnapshotReportsMissingTargets(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
-		buildType       string
+		buildType       ebsv1.BuildType
 		wantRpmRepoCall int
 	}{
 		{name: "single skips RpmRepo", buildType: "single", wantRpmRepoCall: 0},
@@ -727,8 +726,8 @@ func TestNewBuildInfoCopiesBootstrapRepos(t *testing.T) {
 	if !reflect.DeepEqual(info.Spec.BootstrapRepo, project.Spec.BootstrapRepo) {
 		t.Fatalf("bootstrapRepo = %+v", info.Spec.BootstrapRepo)
 	}
-	info.Spec.BootstrapRepo[0].Repo = "mutated"
-	if project.Spec.BootstrapRepo[0].Repo != "https://example.com/repo/everything" {
+	info.Spec.BootstrapRepo[0].URL = "mutated"
+	if project.Spec.BootstrapRepo[0].URL != "https://example.com/repo/everything" {
 		t.Fatal("BuildInfo construction must not share state with the Project")
 	}
 }
@@ -762,7 +761,7 @@ func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
 		t.Fatalf("BuildInfo = %+v", info)
 	}
 	stored := api.build("project-a", "build-a")
-	if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != stageBuild {
+	if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 	if stored.Spec.BuildType != "full" || !reflect.DeepEqual(stored.Spec.Packages, []string{"gcc"}) {
@@ -785,7 +784,7 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Spec:       ebsv1.BuildInfoSpec{BuildPayload: "frozen payload", BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "existing", Repo: "https://example.com/existing"}}},
+		Spec:       ebsv1.BuildInfoSpec{BuildPayload: "frozen payload", BootstrapRepo: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}}},
 	})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
@@ -817,7 +816,7 @@ func TestPreparedCreateBuildInfoAlreadyExistsReusesObject(t *testing.T) {
 	if api.CallCount("CreateBuildInfo") != 1 {
 		t.Fatalf("create calls = %d", api.CallCount("CreateBuildInfo"))
 	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != stageBuild {
+	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 }
@@ -826,7 +825,7 @@ func TestPreparedUsesCurrentProjectConfigurationForCreate(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	project := newProject("project-a", newPackageRepo("gcc"))
-	project.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "current", Repo: "https://example.com/current"}}
+	project.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "current", URL: "https://example.com/current"}}
 	api.projects["project-a"] = project
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {

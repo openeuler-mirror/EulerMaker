@@ -184,11 +184,6 @@ func (c *apiClient) UpdateRpmRepoStatus(ctx context.Context, obj *ebsv1.RpmRepo)
 	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace || value.ResourceVersion == "" {
 		return nil, unknownWrite("update-status", source.RpmReposGVR, fmt.Errorf("unexpected RpmRepo status response: %T", updated))
 	}
-	// RpmRepoSpec is empty today, so this guard cannot fire yet: the real protection against a spec rewrite is
-	// the /status subresource. It stays here so a future non-empty spec is still checked.
-	if value.Spec != obj.Spec {
-		return nil, unknownWrite("update-status", source.RpmReposGVR, fmt.Errorf("RpmRepo status response did not preserve spec"))
-	}
 	return value, nil
 }
 

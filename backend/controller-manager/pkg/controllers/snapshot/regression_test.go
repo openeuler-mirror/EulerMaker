@@ -29,13 +29,13 @@ func TestSyncCheckOutcomes(t *testing.T) {
 		errorsFrom int
 		err        error
 		want       resolveState
-		code       ebsv1.SpecCommitErrorCode
+		code       ebsv1.PackageRepoErrorCode
 		calls      int
 	}{
 		{"waiting", 9, nil, stateWaiting, "", 1},
-		{"temporary error", 1, errors.New("unavailable"), stateFailed, ebsv1.SpecCommitSyncFailed, 1},
-		{"request timeout", 1, context.DeadlineExceeded, stateFailed, ebsv1.SpecCommitSyncTimeout, 1},
-		{"transport timeout", 1, &net.DNSError{Err: "timeout", IsTimeout: true}, stateFailed, ebsv1.SpecCommitSyncTimeout, 1},
+		{"temporary error", 1, errors.New("unavailable"), stateFailed, ebsv1.PackageRepoSyncFailed, 1},
+		{"request timeout", 1, context.DeadlineExceeded, stateFailed, ebsv1.PackageRepoSyncTimeout, 1},
+		{"transport timeout", 1, &net.DNSError{Err: "timeout", IsTimeout: true}, stateFailed, ebsv1.PackageRepoSyncTimeout, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -68,7 +68,7 @@ func TestCommitConflictPreservesCloneURLAndCanonicalIdentity(t *testing.T) {
 	c := newTestController(t, &fakeClient{snapshot: snapshot, build: build}, &fakeGitClient{}, Config{})
 	c.mergeResults(snapshot, []resolveResult{{repo: second, state: stateResolved, status: ebsv1.PackageRepoStatus{CommitID: strings.Repeat("b", 40), CloneURL: "git-server:///git/example.com/pkg.git"}}})
 	got := snapshot.Status.PackageRepoStatuses["second"]
-	if got.Error == nil || got.Error.Code != ebsv1.SpecCommitCommitConflict || got.CommitID != "" || got.CloneURL != "git-server:///git/example.com/pkg.git" {
+	if got.Error == nil || got.Error.Code != ebsv1.PackageRepoCommitConflict || got.CommitID != "" || got.CloneURL != "git-server:///git/example.com/pkg.git" {
 		t.Fatalf("status=%+v", got)
 	}
 }

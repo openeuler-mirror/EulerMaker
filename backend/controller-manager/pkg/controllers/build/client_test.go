@@ -104,7 +104,7 @@ func (s *stubSharedClient) lastGet(t *testing.T) getCall {
 }
 
 func TestGetLastPublishedBuildScopesTheQueryToTheProject(t *testing.T) {
-	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, stagePublish)
+	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)
 	shared := &stubSharedClient{listResult: source.ListPage{Items: []runtime.Object{previous}}}
 	client := newAPIClient(shared)
 	build, err := client.GetLastPublishedBuild(context.Background(), "project-a", "openEuler-22.03-LTS", "aarch64")

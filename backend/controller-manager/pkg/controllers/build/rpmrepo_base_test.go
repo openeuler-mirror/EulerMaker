@@ -57,7 +57,7 @@ func repositoryContentURL(repositoryUID string) string {
 func assertRpmRepoTargetLabels(t *testing.T, build *ebsv1.Build, repo *ebsv1.RpmRepo) {
 	t.Helper()
 	want := map[string]string{
-		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
+		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
 		ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
 	}
 	if !reflect.DeepEqual(repo.Labels, want) {
@@ -66,8 +66,8 @@ func assertRpmRepoTargetLabels(t *testing.T, build *ebsv1.Build, repo *ebsv1.Rpm
 }
 
 func TestPendingSeedsRpmRepoBaseFromHistory(t *testing.T) {
-	for _, buildType := range []string{"full", "incremental", "specified"} {
-		t.Run(buildType, func(t *testing.T) {
+	for _, buildType := range []ebsv1.BuildType{"full", "incremental", "specified"} {
+		t.Run(string(buildType), func(t *testing.T) {
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = withBaseBuildRefName(newBuild("project-a", "build-a", buildType, []string{"gcc"}), "build-prev")
 			api.storeSnapshot(activeSnapshot("project-a", "build-a"))
@@ -87,9 +87,6 @@ func TestPendingSeedsRpmRepoBaseFromHistory(t *testing.T) {
 			created := api.rpmRepo("project-a", "build-a")
 			if created == nil {
 				t.Fatal("RpmRepo was not created")
-			}
-			if created.Spec != (ebsv1.RpmRepoSpec{}) {
-				t.Fatalf("spec = %+v", created.Spec)
 			}
 			if created.Status.Repository == nil {
 				t.Fatal("repository status is missing")

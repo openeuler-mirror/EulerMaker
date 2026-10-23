@@ -29,7 +29,7 @@ type RpmMeta struct {
 	Version  string // epoch:version-release, version-constraint compare input
 	SpecName string // derived from sourcerpm; rpm name fallback
 	Provides map[string]string
-	Requires map[string]ebsv1.VersionConst
+	Requires map[string]ebsv1.VersionConstraint
 }
 
 // RpmMetaSource is the parse product of a single repository URL; sources are never merged so per-layer short-circuit
@@ -198,7 +198,7 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 			Version:  joinVersion(p.Version.Epoch, p.Version.Ver, p.Version.Rel),
 			SpecName: specNameFromSourceRpm(p.Format.SourceRpm, p.Name),
 			Provides: map[string]string{},
-			Requires: map[string]ebsv1.VersionConst{},
+			Requires: map[string]ebsv1.VersionConstraint{},
 		}
 		for _, e := range p.Format.Provides {
 			rpm.Provides[e.Name] = joinVersion(e.Epoch, e.Ver, e.Rel)
@@ -211,7 +211,7 @@ func ParseRepoSource(ctx context.Context, fetch Fetcher, baseURL, arch string) (
 			}
 		}
 		for _, e := range p.Format.Requires {
-			rpm.Requires[e.Name] = flagsToVersionConst(e.Flags, joinVersion(e.Epoch, e.Ver, e.Rel))
+			rpm.Requires[e.Name] = flagsToVersionConstraint(e.Flags, joinVersion(e.Epoch, e.Ver, e.Rel))
 		}
 		if existingArch, ok := archByName[rpm.Name]; ok {
 			// Same-name conflict: the target arch beats noarch; within one arch the highest version wins (compare failure keeps
@@ -326,25 +326,25 @@ func joinVersion(epoch, ver, rel string) string {
 	return epoch + ":" + ver + "-" + rel
 }
 
-// flagsToVersionConst maps XML requires entry flags to a VersionConst; an empty version or unknown flag means no
+// flagsToVersionConstraint maps XML requires entry flags to a VersionConstraint; an empty version or unknown flag means no
 // version constraint.
-func flagsToVersionConst(flags, version string) ebsv1.VersionConst {
+func flagsToVersionConstraint(flags, version string) ebsv1.VersionConstraint {
 	if version == "" {
-		return ebsv1.VersionConst{}
+		return ebsv1.VersionConstraint{}
 	}
 	switch flags {
 	case OpGT:
-		return ebsv1.VersionConst{GT: version}
+		return ebsv1.VersionConstraint{GT: version}
 	case OpGE:
-		return ebsv1.VersionConst{GE: version}
+		return ebsv1.VersionConstraint{GE: version}
 	case OpEQ:
-		return ebsv1.VersionConst{EQ: version}
+		return ebsv1.VersionConstraint{EQ: version}
 	case OpLE:
-		return ebsv1.VersionConst{LE: version}
+		return ebsv1.VersionConstraint{LE: version}
 	case OpLT:
-		return ebsv1.VersionConst{LT: version}
+		return ebsv1.VersionConstraint{LT: version}
 	default:
-		return ebsv1.VersionConst{}
+		return ebsv1.VersionConstraint{}
 	}
 }
 

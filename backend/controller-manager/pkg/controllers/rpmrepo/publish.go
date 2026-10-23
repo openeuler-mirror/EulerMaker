@@ -192,7 +192,7 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 		Build:               build,
 		BuildInfo:           info,
 		SourceRepositoryUID: repo.Status.Repository.RepositoryUID,
-		TargetOS:            build.Spec.BuildTarget.Os,
+		TargetOS:            build.Spec.BuildTarget.OS,
 		TargetArch:          build.Spec.BuildTarget.Arch,
 	})
 	if err != nil {
@@ -223,7 +223,7 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 	response, err := r.artifactClient().SubmitRelease(r.ctx, CreateReleaseRequest{
 		BuildName:           confirmed.Name,
 		Project:             confirmed.Namespace,
-		TargetOS:            build.Spec.BuildTarget.Os,
+		TargetOS:            build.Spec.BuildTarget.OS,
 		TargetArch:          build.Spec.BuildTarget.Arch,
 		SourceRepositoryUID: transition.SourceRepositoryUID,
 		ExcludeSpecs:        transition.ExcludeSpecs,
@@ -262,7 +262,7 @@ func (r *reconciler) reloadReleaseTarget(candidate ebsv1.RpmRepo) (*ebsv1.RpmRep
 }
 
 func mismatchBuildTarget(repo *ebsv1.RpmRepo, build *ebsv1.Build) bool {
-	if repo.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.Os {
+	if repo.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.OS {
 		return true
 	}
 	return repo.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch
@@ -368,7 +368,7 @@ func (r *reconciler) replayRelease(repo *ebsv1.RpmRepo, transition *ebsv1.Releas
 	response, err := r.artifactClient().SubmitRelease(r.ctx, CreateReleaseRequest{
 		BuildName:           repo.Name,
 		Project:             repo.Namespace,
-		TargetOS:            build.Spec.BuildTarget.Os,
+		TargetOS:            build.Spec.BuildTarget.OS,
 		TargetArch:          build.Spec.BuildTarget.Arch,
 		SourceRepositoryUID: transition.SourceRepositoryUID,
 		ExcludeSpecs:        transition.ExcludeSpecs,

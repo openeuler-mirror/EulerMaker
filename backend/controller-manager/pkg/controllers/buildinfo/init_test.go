@@ -259,9 +259,9 @@ func TestUnparsableSpecConfigValidation(t *testing.T) {
 			bi.Spec.BuildPayload = tt.payload
 			round := &reconcileRound{key: testNS + "/" + testBuild, current: bi}
 			a := dependEntry("a")
-			a.BuildRequires = map[string]ebsv1.VersionConst{"dependency": {}}
+			a.BuildRequires = map[string]ebsv1.VersionConstraint{"dependency": {}}
 			b := dependEntry("b")
-			b.BuildRequires = map[string]ebsv1.VersionConst{"dependency": {}}
+			b.BuildRequires = map[string]ebsv1.VersionConstraint{"dependency": {}}
 			depends := map[string]specparse.SpecDepend{"a": a, "b": b}
 
 			c.ignoreBuildRequires(round, depends)
@@ -408,8 +408,8 @@ func TestInitIncrementalIncludesOnlyDirectDependents(t *testing.T) {
 func TestExpandBuildSetUsesOnlyOriginalSeeds(t *testing.T) {
 	full := map[string]specparse.SpecDepend{
 		"a": {SpecName: "a", Provides: []string{"virtual-a"}},
-		"b": {SpecName: "b", BuildRequires: map[string]ebsv1.VersionConst{"virtual-a": {}}},
-		"c": {SpecName: "c", BuildRequires: map[string]ebsv1.VersionConst{"b": {}}},
+		"b": {SpecName: "b", BuildRequires: map[string]ebsv1.VersionConstraint{"virtual-a": {}}},
+		"c": {SpecName: "c", BuildRequires: map[string]ebsv1.VersionConstraint{"b": {}}},
 	}
 
 	got := expandBuildSet(map[string]specparse.SpecDepend{"a": full["a"]}, full, nil)
@@ -498,7 +498,7 @@ func TestInitNonRetryableSnapshotRepoErrorDegrades(t *testing.T) {
 		repoEntry{name: "repo2", cloneURL: gitURL2, commitID: "c2", declare: true})
 	snapshot.Spec.PackageRepos = append(snapshot.Spec.PackageRepos, ebsv1.PackageRepo{Name: "repo1", URL: gitURL1})
 	snapshot.Status.PackageRepoStatuses["repo1"] = ebsv1.PackageRepoStatus{
-		CloneURL: gitURL1, Error: &ebsv1.SpecCommitError{Message: "gone", Retryable: false}}
+		CloneURL: gitURL1, Error: &ebsv1.PackageRepoError{Message: "gone", Retryable: false}}
 	client.SeedSnapshot(snapshot)
 	client.SeedRpmRepo(testRpmRepoObj(""))
 	git.repo(gitURL2, "c2", map[string]string{"b.spec": specText("b")})
@@ -523,7 +523,7 @@ func TestInitRetryableSnapshotRepoErrorStaysPending(t *testing.T) {
 	snapshot := testSnapshotObj()
 	snapshot.Spec.PackageRepos = append(snapshot.Spec.PackageRepos, ebsv1.PackageRepo{Name: "repo1", URL: gitURL1})
 	snapshot.Status.PackageRepoStatuses["repo1"] = ebsv1.PackageRepoStatus{
-		CloneURL: gitURL1, Error: &ebsv1.SpecCommitError{Message: "resolving", Retryable: true}}
+		CloneURL: gitURL1, Error: &ebsv1.PackageRepoError{Message: "resolving", Retryable: true}}
 	client.SeedSnapshot(snapshot)
 	client.SeedRpmRepo(testRpmRepoObj(""))
 
@@ -642,7 +642,7 @@ func TestInitArchUnsupportedSkipsJob(t *testing.T) {
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.Build.Status != SpecBuildArchUnsupported {
+	if ss.Build.Status != ebsv1.SpecBuildArchUnsupported {
 		t.Fatalf("specStatus[a].Build.Status = %q, want ArchUnsupported", ss.Build.Status)
 	}
 	if len(ss.Build.Conditions) != 0 {
@@ -700,7 +700,7 @@ func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.Build.Status != SpecBuildFailed {
+	if ss.Build.Status != ebsv1.SpecBuildFailed {
 		t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
 	}
 	requireCondition(
@@ -733,7 +733,7 @@ func TestInitBackfillsExistingJob(t *testing.T) {
 	bi = getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.DispatchCount != 1 || ss.Build.Status != SpecBuildRunning {
+	if ss.DispatchCount != 1 || ss.Build.Status != ebsv1.SpecBuildRunning {
 		t.Fatalf("specStatus[a] = %+v, want backfilled gen-1 Running (%s)", ss, existing.Name)
 	}
 	if got := len(listJobs(t, client)); got != 1 {
@@ -802,7 +802,7 @@ func TestSingleRepoInjection(t *testing.T) {
 	client.SetBuildResourceContent(testBuildResourceContent())
 	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
+	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	client.SeedBuildInfo(bi)
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
@@ -925,7 +925,7 @@ func TestSingleDegradedPerPackage(t *testing.T) {
 		repoEntry{name: "repo2", cloneURL: gitURL2, commitID: "c2", declare: true})
 	snapshot.Spec.PackageRepos = append(snapshot.Spec.PackageRepos, ebsv1.PackageRepo{Name: "repo1", URL: gitURL1})
 	snapshot.Status.PackageRepoStatuses["repo1"] = ebsv1.PackageRepoStatus{
-		CloneURL: gitURL1, Error: &ebsv1.SpecCommitError{Message: "gone", Retryable: false}}
+		CloneURL: gitURL1, Error: &ebsv1.PackageRepoError{Message: "gone", Retryable: false}}
 	client.SeedSnapshot(snapshot)
 	git.repo(gitURL2, "c2", map[string]string{"b.spec": specText("b")})
 
@@ -950,7 +950,7 @@ func TestSingleAllSkippedCloseout(t *testing.T) {
 	snapshot := testSnapshotObj()
 	snapshot.Spec.PackageRepos = append(snapshot.Spec.PackageRepos, ebsv1.PackageRepo{Name: "repo1", URL: gitURL1})
 	snapshot.Status.PackageRepoStatuses["repo1"] = ebsv1.PackageRepoStatus{
-		CloneURL: gitURL1, Error: &ebsv1.SpecCommitError{Message: "gone", Retryable: false}}
+		CloneURL: gitURL1, Error: &ebsv1.PackageRepoError{Message: "gone", Retryable: false}}
 	client.SeedSnapshot(snapshot)
 
 	reconcileOnce(t, c)
@@ -980,7 +980,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		bi := getBuildInfo(t, client)
 		requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 		ss := bi.Status.SpecStatus.Entry("a")
-		if ss.Build.Status != SpecBuildArchUnsupported {
+		if ss.Build.Status != ebsv1.SpecBuildArchUnsupported {
 			t.Fatalf("specStatus[a].Build.Status = %q, want ArchUnsupported", ss.Build.Status)
 		}
 		if len(ss.Build.Conditions) != 0 {
@@ -1012,7 +1012,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		bi := getBuildInfo(t, client)
 		requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 		ss := bi.Status.SpecStatus.Entry("a")
-		if ss.Build.Status != SpecBuildFailed {
+		if ss.Build.Status != ebsv1.SpecBuildFailed {
 			t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
 		}
 		requireCondition(

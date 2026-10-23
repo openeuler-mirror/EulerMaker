@@ -41,7 +41,7 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	}
 	target := round.build.Spec.BuildTarget
 	path := fmt.Sprintf("/repositories/%s/%s/%s/", url.PathEscape(round.current.Namespace),
-		url.PathEscape(target.Os), url.PathEscape(target.Arch))
+		url.PathEscape(target.OS), url.PathEscape(target.Arch))
 	reference, err := artifacturl.ReferenceForInstance(instance, path)
 	if err != nil {
 		return "", controller.NewPermanentError(err)

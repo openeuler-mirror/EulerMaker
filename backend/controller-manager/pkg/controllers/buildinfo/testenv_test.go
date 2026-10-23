@@ -225,9 +225,9 @@ func testBuildObj(buildType string, packages ...string) *ebsv1.Build {
 			},
 		},
 		Spec: ebsv1.BuildSpec{
-			BuildType:   buildType,
+			BuildType:   ebsv1.BuildType(buildType),
 			Packages:    packages,
-			BuildTarget: ebsv1.BuildTarget{Os: testOS, Arch: testArch, BuildFlag: true},
+			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch, BuildFlag: true},
 		},
 		Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing},
 	}
@@ -367,10 +367,10 @@ func testRpm(name, specName, version string, requires ...string) rpmver.RpmMeta 
 		Version:  version,
 		SpecName: specName,
 		Provides: map[string]string{name: version},
-		Requires: map[string]ebsv1.VersionConst{},
+		Requires: map[string]ebsv1.VersionConstraint{},
 	}
 	for _, req := range requires {
-		meta.Requires[req] = ebsv1.VersionConst{}
+		meta.Requires[req] = ebsv1.VersionConstraint{}
 	}
 	return meta
 }
@@ -425,6 +425,6 @@ func listJobs(t *testing.T, client *fakeClient) []ebsv1.Job {
 func dcgStateAB() map[string]ebsv1.DcgNodeState {
 	return map[string]ebsv1.DcgNodeState{
 		"a": {Version: "1.0-1", OutDep: []string{"b"}},
-		"b": {Version: "1.0-1", InDep: map[string]ebsv1.VersionConst{"a": {}}},
+		"b": {Version: "1.0-1", InDep: map[string]ebsv1.VersionConstraint{"a": {}}},
 	}
 }

@@ -36,11 +36,11 @@ func pendingWriteRound(t *testing.T) (*fakeAPI, *Controller) {
 func buildStageWriteRound(t *testing.T) (*fakeAPI, *Controller) {
 	t.Helper()
 	api := newFakeAPI()
-	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stageBuild)
+	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 	build.Status.StartTime = testTime(9)
 	api.builds[key("project-a", "build-a")] = build
 	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted,
-		map[string]ebsv1.SpecStatus{"gcc": specStatus(specStatusSucceeded, specStatusSucceeded)})
+		map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)})
 	return api, newTestController(t, api, newTestClock())
 }
 
@@ -169,7 +169,7 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 			t.Fatal("a confirmed write must not be replayed")
 		}
 		stored := api.build("project-a", "build-a")
-		if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != stagePublish {
+		if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStagePublish {
 			t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 		}
 		if !stored.Status.StartTime.Time.Equal(testTime(8).Time) {

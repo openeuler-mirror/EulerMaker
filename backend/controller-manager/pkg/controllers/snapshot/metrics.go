@@ -57,7 +57,7 @@ func (c *Controller) recordStatus(before, after *ebsv1.Snapshot) {
 		if !status.Error.Retryable {
 			skippedPackages.Inc()
 		}
-		if status.Error.Code == ebsv1.SpecCommitRetryExhausted {
+		if status.Error.Code == ebsv1.PackageRepoRetryExhausted {
 			exhaustedPackages.Inc()
 		}
 		log.Printf("controller=snapshot key=%q snapshot_uid=%q package_name=%q phase=%q resourceVersion=%q reason=%q", after.Namespace+"/"+after.Name, after.UID, name, after.Status.Phase, before.ResourceVersion, reason)

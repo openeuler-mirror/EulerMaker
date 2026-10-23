@@ -372,13 +372,15 @@ func (c *Controller) markSpecFailed(
 	specName, condType, reason, message string,
 	clearPending bool,
 ) (controller.ReconcileResult, error) {
-	return c.markSpecTerminal(ctx, round, specName, SpecBuildFailed, condType, reason, message, clearPending)
+	return c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildFailed, condType, reason, message, clearPending)
 }
 
 func (c *Controller) markSpecTerminal(
 	ctx context.Context,
 	round *reconcileRound,
-	specName, status, condType, reason, message string,
+	specName string,
+	status ebsv1.SpecBuildPhase,
+	condType, reason, message string,
 	clearPending bool,
 ) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
@@ -492,7 +494,7 @@ func (c *Controller) jobForSpec(
 				ebsv1.JobBuildNameLabel:    buildInfo.Name,
 				ebsv1.JobSpecNameLabel:     specname.Encode(specName),
 				ebsv1.JobPackageNameLabel:  packageNameLabelValue(depend.RepoName),
-				ebsv1.BuildTargetOSLabel:   target.Os,
+				ebsv1.BuildTargetOSLabel:   target.OS,
 				ebsv1.BuildTargetArchLabel: target.Arch,
 			},
 			Annotations: map[string]string{
@@ -900,23 +902,23 @@ func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bool {
 	switch job.Status.Phase {
 	case ebsv1.JobPending, ebsv1.JobRunning:
-		ss.Build.Status = SpecBuildRunning
+		ss.Build.Status = ebsv1.SpecBuildRunning
 	case ebsv1.JobSucceeded:
 		if job.Status.Build != nil && job.Status.Build.Status == ebsv1.JobResultFailed {
-			ss.Build.Status = SpecBuildFailed
+			ss.Build.Status = ebsv1.SpecBuildFailed
 			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" reported build failure")
 		} else {
-			ss.Build.Status = SpecBuildSucceeded
+			ss.Build.Status = ebsv1.SpecBuildSucceeded
 		}
 	case ebsv1.JobFailed:
-		ss.Build.Status = SpecBuildFailed
+		ss.Build.Status = ebsv1.SpecBuildFailed
 		if succeededPrior {
 			specCondition(ss, ConditionRebuildFailed, ReasonRebuildJobFailed, "job "+job.Name+" rebuild failed")
 		} else {
 			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" failed")
 		}
 	case ebsv1.JobAborted:
-		ss.Build.Status = SpecBuildFailed
+		ss.Build.Status = ebsv1.SpecBuildFailed
 		specCondition(
 			ss,
 			ConditionBuildAborted,
@@ -934,7 +936,7 @@ func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bo
 func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus, job *ebsv1.Job) {
 	result := job.Status.Install
 	if result == nil {
-		ss.Install.Status = SpecBuildFailed
+		ss.Install.Status = ebsv1.SpecInstallFailed
 		upsertCondition(
 			&ss.Install.Conditions,
 			ConditionInstall,
@@ -944,13 +946,13 @@ func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus
 		return
 	}
 	if result.Status == ebsv1.JobResultSucceeded {
-		ss.Install.Status = SpecBuildSucceeded
+		ss.Install.Status = ebsv1.SpecInstallSucceeded
 		ss.Install.MissingDeps = nil
 		removeCondition(&ss.Install.Conditions, ConditionInstall)
 		return
 	}
 	if result.Status != ebsv1.JobResultFailed {
-		ss.Install.Status = SpecBuildFailed
+		ss.Install.Status = ebsv1.SpecInstallFailed
 		upsertCondition(
 			&ss.Install.Conditions,
 			ConditionInstall,
@@ -959,7 +961,7 @@ func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus
 		)
 		return
 	}
-	ss.Install.Status = SpecBuildFailed
+	ss.Install.Status = ebsv1.SpecInstallFailed
 	ss.Install.MissingDeps = nil
 	if len(result.MissingDeps) > 0 {
 		ss.Install.MissingDeps = make(map[string]ebsv1.MissingDep, len(result.MissingDeps))

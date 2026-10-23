@@ -229,7 +229,7 @@ func splitKey(key string) (string, string, bool) {
 }
 
 func selectTargets(repos []ebsv1.PackageRepo, build *ebsv1.Build) ([]ebsv1.PackageRepo, []string) {
-	if build.Spec.BuildType != "single" {
+	if build.Spec.BuildType != ebsv1.BuildTypeSingle {
 		return append([]ebsv1.PackageRepo(nil), repos...), nil
 	}
 	wanted := make(map[string]struct{}, len(build.Spec.Packages))

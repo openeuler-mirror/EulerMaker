@@ -21,17 +21,17 @@ import (
 // SpecDepend is the in-memory parse product of one *.spec file. It is not an API type because BuildInfo does not
 // persist parsed spec dependencies.
 type SpecDepend struct {
-	RepoName      string                        `json:"repoName"`
-	SpecName      string                        `json:"specName"`
-	SpecFileName  string                        `json:"specFileName,omitempty"`
-	Version       string                        `json:"version"`
-	Release       string                        `json:"release,omitempty"`
-	Epoch         string                        `json:"epoch,omitempty"`
-	ExclusiveArch []string                      `json:"exclusiveArch,omitempty"`
-	Provides      []string                      `json:"provides,omitempty"`
-	Requires      map[string]ebsv1.VersionConst `json:"requires,omitempty"`
-	BuildRequires map[string]ebsv1.VersionConst `json:"buildRequires,omitempty"`
-	BuildRemoves  map[string]ebsv1.VersionConst `json:"buildRemoves,omitempty"`
+	RepoName      string                             `json:"repoName"`
+	SpecName      string                             `json:"specName"`
+	SpecFileName  string                             `json:"specFileName,omitempty"`
+	Version       string                             `json:"version"`
+	Release       string                             `json:"release,omitempty"`
+	Epoch         string                             `json:"epoch,omitempty"`
+	ExclusiveArch []string                           `json:"exclusiveArch,omitempty"`
+	Provides      []string                           `json:"provides,omitempty"`
+	Requires      map[string]ebsv1.VersionConstraint `json:"requires,omitempty"`
+	BuildRequires map[string]ebsv1.VersionConstraint `json:"buildRequires,omitempty"`
+	BuildRemoves  map[string]ebsv1.VersionConstraint `json:"buildRemoves,omitempty"`
 }
 
 // defaultExclusiveArch is the platform default architecture set used when a spec declares no ExclusiveArch. Callers
@@ -771,7 +771,7 @@ func tokenizeRequirements(line string) ([]rawRequirement, error) {
 // line, tokenize, then merge into
 // {name: {op: version}} with the documented rules (with-skip, bare-operator
 // flag backfill, == inline whole-key replacement, paren stripping, same name+op last-wins).
-func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionConst, error) {
+func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionConstraint, error) {
 	res := map[string]map[string]string{}
 	var stack []string
 	pendingOp, pendingName := "", ""
@@ -848,17 +848,17 @@ func parseRequirements(lines []string, m *specModel) (map[string]ebsv1.VersionCo
 		// input — macro expansion can empty a trailing version, e.g. "Requires: glibc => %{?ver}".
 		pendingOp, pendingName = "", ""
 	}
-	out := make(map[string]ebsv1.VersionConst, len(res))
+	out := make(map[string]ebsv1.VersionConstraint, len(res))
 	for name, ops := range res {
-		out[name] = ebsv1.VersionConst{GT: ops["GT"], GE: ops["GE"], EQ: ops["EQ"], LE: ops["LE"], LT: ops["LT"]}
+		out[name] = ebsv1.VersionConstraint{GT: ops["GT"], GE: ops["GE"], EQ: ops["EQ"], LE: ops["LE"], LT: ops["LT"]}
 	}
 	return out, nil
 }
 
 // splitBuildRequires routes "-" prefixed keys to buildRemoves (prefix stripped) and the rest to buildRequires.
-func splitBuildRequires(parsed map[string]ebsv1.VersionConst) (requires, removes map[string]ebsv1.VersionConst) {
-	requires = map[string]ebsv1.VersionConst{}
-	removes = map[string]ebsv1.VersionConst{}
+func splitBuildRequires(parsed map[string]ebsv1.VersionConstraint) (requires, removes map[string]ebsv1.VersionConstraint) {
+	requires = map[string]ebsv1.VersionConstraint{}
+	removes = map[string]ebsv1.VersionConstraint{}
 	for name, constraint := range parsed {
 		if strings.HasPrefix(name, "-") {
 			removes[strings.TrimPrefix(name, "-")] = constraint

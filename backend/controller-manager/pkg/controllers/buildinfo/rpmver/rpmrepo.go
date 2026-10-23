@@ -27,7 +27,7 @@ const (
 // provider.
 func (s *RpmMetaSources) FindProvider(
 	name string,
-	constraint ebsv1.VersionConst,
+	constraint ebsv1.VersionConstraint,
 	prefer []string,
 ) (ProviderSelection, bool) {
 	for _, src := range s.layers() {
@@ -40,7 +40,7 @@ func (s *RpmMetaSources) FindProvider(
 
 // GetProvideInfo filters one source by version, then selects the sole candidate, the first preferred candidate, or the
 // highest version. A zero result means no provider was selected.
-func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint ebsv1.VersionConst) ProviderSelection {
+func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint ebsv1.VersionConstraint) ProviderSelection {
 	candidates := src.ProvidesInfo[name]
 	if len(candidates) == 0 {
 		return ProviderSelection{}
@@ -110,7 +110,7 @@ func GetProvideInfo(name string, src *RpmMetaSource, prefer []string, constraint
 
 // Available checks each layer for a matching provide, then for an RPM with the requested name and version. A miss
 // continues to the next layer.
-func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConst) bool {
+func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConstraint) bool {
 	for _, src := range s.layers() {
 		if GetProvideInfo(name, src, nil, constraint).Provider.SpecName != "" {
 			return true
@@ -126,7 +126,7 @@ func (s *RpmMetaSources) Available(name string, constraint ebsv1.VersionConst) b
 
 // RepoRequires merges requirements from the spec's RPMs in the RpmRepo layer. It returns nil when none are present and
 // processes RPMs in name order.
-func (s *RpmMetaSources) RepoRequires(spec string) map[string]ebsv1.VersionConst {
+func (s *RpmMetaSources) RepoRequires(spec string) map[string]ebsv1.VersionConstraint {
 	if s.RepoLayer == nil {
 		return nil
 	}
@@ -137,11 +137,11 @@ func (s *RpmMetaSources) RepoRequires(spec string) map[string]ebsv1.VersionConst
 		}
 	}
 	sort.Strings(names)
-	var out map[string]ebsv1.VersionConst
+	var out map[string]ebsv1.VersionConstraint
 	for _, name := range names {
 		for reqName, vc := range s.RepoLayer.RpmByName[name].Requires {
 			if out == nil {
-				out = map[string]ebsv1.VersionConst{}
+				out = map[string]ebsv1.VersionConstraint{}
 			}
 			out[reqName] = vc
 		}

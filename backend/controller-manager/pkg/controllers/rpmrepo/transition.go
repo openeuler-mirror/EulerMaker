@@ -81,7 +81,7 @@ func (r *reconciler) submitRepository(repo *ebsv1.RpmRepo, transition *ebsv1.Rep
 		RepositoryName:    repo.Name,
 		Project:           repo.Namespace,
 		BuildName:         repo.Name,
-		TargetOS:          build.Spec.BuildTarget.Os,
+		TargetOS:          build.Spec.BuildTarget.OS,
 		TargetArch:        build.Spec.BuildTarget.Arch,
 		BaseRepositoryUID: transition.BaseRepositoryUID,
 		Manifests:         repositoryRequests(transition.Inputs),
@@ -338,7 +338,7 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 	if repo.Status.Repository == nil || len(repo.Status.Repository.SourceJobNames) == 0 {
 		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonNoPublishableArtifacts, countReleaseFailure)
 	}
-	return r.reconcileRelease(build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch)
+	return r.reconcileRelease(build.Spec.BuildTarget.OS, build.Spec.BuildTarget.Arch)
 }
 
 // candidateScan is the result of reading every input of one repository round.
@@ -381,7 +381,7 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 			continue
 		}
 		specName, valid := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
-		if !valid || job.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.Os || job.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch {
+		if !valid || job.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.OS || job.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch {
 			log.Printf("controller=%s key=%q uid=%q job_name=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.UID)
 			continue
 		}

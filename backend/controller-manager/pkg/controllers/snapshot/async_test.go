@@ -66,7 +66,7 @@ func TestPinnedCommitWaitsForSyncAndReportsMissingCommit(t *testing.T) {
 	g.synced = true
 	g.resolveErr = &gitserver.Error{Kind: gitserver.ErrorNotFound, Err: errors.New("missing commit")}
 	result = c.resolveOne(context.Background(), c.services.(*fakeServices).git, task, snapshot.CreationTimestamp.Time)
-	if result.state != stateSkipped || result.status.Error.Code != ebsv1.SpecCommitResolveFailed || g.fullRef != commitID || g.resolves != 1 {
+	if result.state != stateSkipped || result.status.Error.Code != ebsv1.PackageRepoResolveFailed || g.fullRef != commitID || g.resolves != 1 {
 		t.Fatalf("missing commit result=%+v ref=%s resolves=%d", result, g.fullRef, g.resolves)
 	}
 }
@@ -101,7 +101,7 @@ func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
 					t.Fatalf("resolved status=%+v err=%v", status, err)
 				}
 			case gitserver.ErrorNotFound:
-				if err != nil || status.Error == nil || status.Error.Code != ebsv1.SpecCommitResolveFailed ||
+				if err != nil || status.Error == nil || status.Error.Code != ebsv1.PackageRepoResolveFailed ||
 					status.Error.Retryable || status.CommitID != "" || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
 					t.Fatalf("missing ref status=%+v err=%v", status, err)
 				}
@@ -157,7 +157,7 @@ func TestBudgetDefersAndRotatesWithoutConsumingRetries(t *testing.T) {
 	snapshot, build := baseObjects(branchRepos(5))
 	snapshot.Status.Phase = ebsv1.SnapshotProcessing
 	snapshot.Status.PackageRepoStatuses = map[string]ebsv1.PackageRepoStatus{
-		"pkg-4": {Error: &ebsv1.SpecCommitError{Code: ebsv1.SpecCommitSyncFailed, Message: "previous failure", Retryable: true}},
+		"pkg-4": {Error: &ebsv1.PackageRepoError{Code: ebsv1.PackageRepoSyncFailed, Message: "previous failure", Retryable: true}},
 	}
 	api := &fakeClient{snapshot: snapshot, build: build}
 	calls := 0
@@ -199,7 +199,7 @@ func TestRequestFailureClassification(t *testing.T) {
 	if got := c.requestFailure(budget, task, "sync", errors.New("HTTP 503")); got.state != stateFailed {
 		t.Fatalf("completed failure: %+v", got)
 	}
-	if got := c.requestFailure(context.Background(), task, "sync", context.DeadlineExceeded); got.state != stateFailed || got.status.Error.Code != ebsv1.SpecCommitSyncTimeout {
+	if got := c.requestFailure(context.Background(), task, "sync", context.DeadlineExceeded); got.state != stateFailed || got.status.Error.Code != ebsv1.PackageRepoSyncTimeout {
 		t.Fatalf("request timeout: %+v", got)
 	}
 	parent, stop := context.WithCancel(context.Background())

@@ -55,7 +55,7 @@ type reconcileRound struct {
 
 // isSingle reports whether the parent Build is a single build. The guard-held Build is the only source of the build
 // type.
-func (r *reconcileRound) isSingle() bool { return r.build.Spec.BuildType == "single" }
+func (r *reconcileRound) isSingle() bool { return r.build.Spec.BuildType == ebsv1.BuildTypeSingle }
 
 // sync is the BaseController SyncFunc. It guards against invalid results so a programming error is counted before the
 // framework forgets the item.
@@ -723,7 +723,7 @@ func stringSetEqual(a, b []string) bool {
 	return true
 }
 
-func versionConstMapEqual(a, b map[string]ebsv1.VersionConst) bool {
+func versionConstMapEqual(a, b map[string]ebsv1.VersionConstraint) bool {
 	if len(a) != len(b) {
 		return false
 	}

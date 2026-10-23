@@ -109,7 +109,7 @@ func (c *Controller) appendInstallEdges(
 	changed := 0
 	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
 		ss := round.current.Status.SpecStatus.Entry(spec)
-		if ss.Install.Status != SpecBuildFailed {
+		if ss.Install.Status != ebsv1.SpecInstallFailed {
 			continue
 		}
 		if dcg.IsCycleNode(spec) && ss.DispatchCount >= 2 {
@@ -190,7 +190,7 @@ func (c *Controller) advanceDownstream(
 		if ss.DispatchCount >= effectiveRequired(dcg, round, name, required) {
 			continue
 		}
-		if ss.Build.Status == SpecBuildRunning || failedSpecBuildStatus(ss.Build.Status) {
+		if ss.Build.Status == ebsv1.SpecBuildRunning || failedSpecBuildStatus(ss.Build.Status) {
 			continue // do not redispatch an in-flight or failed spec
 		}
 		depend, ok := asm.depends[name]
@@ -302,7 +302,7 @@ func rebuildConsistencySatisfied(
 	if ss.DispatchCount >= 1 && !node.BootstrapBreak {
 		for _, up := range upstreamNames(node) {
 			upSS := round.current.Status.SpecStatus.Entry(up)
-			if upSS.Build.Status != SpecBuildSucceeded ||
+			if upSS.Build.Status != ebsv1.SpecBuildSucceeded ||
 				upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
@@ -315,7 +315,7 @@ func rebuildConsistencySatisfied(
 				continue
 			}
 			upSS := round.current.Status.SpecStatus.Entry(up)
-			if upSS.Build.Status != SpecBuildSucceeded ||
+			if upSS.Build.Status != ebsv1.SpecBuildSucceeded ||
 				upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
@@ -336,7 +336,7 @@ func upstreamOutputsPublished(round *reconcileRound, dcg *DcgDict, spec string, 
 		}
 	}
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		if round.current.Status.SpecStatus.Entry(up).Build.Status != SpecBuildSucceeded {
+		if round.current.Status.SpecStatus.Entry(up).Build.Status != ebsv1.SpecBuildSucceeded {
 			continue
 		}
 		group := bySpec[up]
@@ -389,7 +389,7 @@ func (c *Controller) checkCompletion(
 		if !terminalSpecBuildStatus(ss.Build.Status) {
 			return controller.ReconcileResult{}, nil // not all terminal
 		}
-		if ss.Build.Status == SpecBuildSucceeded && ss.DispatchCount < effectiveRequired(dcg, round, spec, required) {
+		if ss.Build.Status == ebsv1.SpecBuildSucceeded && ss.DispatchCount < effectiveRequired(dcg, round, spec, required) {
 			return controller.ReconcileResult{}, nil // terminal but short of the effective required
 		}
 		if failedSpecBuildStatus(ss.Build.Status) {
@@ -401,7 +401,7 @@ func (c *Controller) checkCompletion(
 	}
 	needsRepoMap := len(failed) > 0
 	for _, ss := range round.current.Status.SpecStatus.Install {
-		needsRepoMap = needsRepoMap || ss.Status == SpecBuildFailed
+		needsRepoMap = needsRepoMap || ss.Status == ebsv1.SpecInstallFailed
 	}
 	if asm == nil && needsRepoMap {
 		// The single path deliberately skips Snapshot reads while Jobs are in flight; recover the spec-to-repository map only
@@ -430,7 +430,7 @@ func (c *Controller) checkCompletion(
 		}
 		for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
 			ss := round.current.Status.SpecStatus.Entry(spec)
-			if !failedSpecBuildStatus(ss.Build.Status) && ss.Install.Status != SpecBuildFailed {
+			if !failedSpecBuildStatus(ss.Build.Status) && ss.Install.Status != ebsv1.SpecInstallFailed {
 				continue
 			}
 			depend, ok := asm.depends[spec]
@@ -499,13 +499,13 @@ func (c *Controller) stoppedFailedPackages(ctx context.Context, round *reconcile
 		failed[repo] = struct{}{}
 	}
 	for spec, build := range round.current.Status.SpecStatus.Build {
-		if build.Status != SpecBuildSucceeded ||
-			round.current.Status.SpecStatus.Install[spec].Status != SpecBuildSucceeded {
+		if build.Status != ebsv1.SpecBuildSucceeded ||
+			round.current.Status.SpecStatus.Install[spec].Status != ebsv1.SpecInstallSucceeded {
 			addSpec(spec)
 		}
 	}
 	for spec, install := range round.current.Status.SpecStatus.Install {
-		if _, exists := round.current.Status.SpecStatus.Build[spec]; !exists && install.Status != SpecBuildSucceeded {
+		if _, exists := round.current.Status.SpecStatus.Build[spec]; !exists && install.Status != ebsv1.SpecInstallSucceeded {
 			addSpec(spec)
 		}
 	}

@@ -36,7 +36,7 @@ type conditionIntent struct {
 type writeIntent struct {
 	uid   types.UID
 	phase ebsv1.BuildPhase
-	stage string
+	stage ebsv1.BuildStage
 
 	setBaseBuildRef bool
 	baseBuildRef    *ebsv1.BaseBuildRef

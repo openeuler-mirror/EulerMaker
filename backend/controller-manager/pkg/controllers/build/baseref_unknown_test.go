@@ -14,7 +14,7 @@ import (
 
 // newHistoryBuild is the last successfully published Build the baseBuildRef cases resolve against.
 func newHistoryBuild(project, name string) *ebsv1.Build {
-	history := withPhaseStage(newBuild(project, name, "full", []string{"gcc"}), ebsv1.BuildSuccess, stagePublish)
+	history := withPhaseStage(newBuild(project, name, "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)
 	return history
 }
 
@@ -267,8 +267,8 @@ func TestIntentSatisfiedComparesOnlyTargetFields(t *testing.T) {
 		},
 		{
 			name:   "stage mismatch is not satisfied",
-			intent: writeIntent{uid: "uid", phase: ebsv1.BuildProcessing, stage: stageBuild},
-			build:  withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, stagePublish),
+			intent: writeIntent{uid: "uid", phase: ebsv1.BuildProcessing, stage: ebsv1.BuildStageBuild},
+			build:  withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish),
 			want:   false,
 		},
 		{

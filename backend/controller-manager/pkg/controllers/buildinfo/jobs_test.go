@@ -172,15 +172,15 @@ func TestConfiguredRepoURLs(t *testing.T) {
 
 func TestBootstrapRepoURLs(t *testing.T) {
 	repos := []ebsv1.BootstrapRepo{
-		{Name: "base", Repo: "https://example.com/base"},
-		{Name: "updates", Repo: "https://example.com/updates/"},
+		{Name: "base", URL: "https://example.com/base"},
+		{Name: "updates", URL: "https://example.com/updates/"},
 	}
 	got := bootstrapRepoURLs(repos, "aarch64")
 	want := []string{"https://example.com/base/aarch64", "https://example.com/updates/aarch64"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("bootstrapRepoURLs = %v, want %v", got, want)
 	}
-	if repos[0].Repo != "https://example.com/base" {
+	if repos[0].URL != "https://example.com/base" {
 		t.Fatalf("bootstrapRepoURLs modified input: %+v", repos)
 	}
 }
@@ -195,7 +195,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	bi.Spec.BuildPayload = "custom: omit\nRepo: http://legacy-override\nrepo: http://base-override\n" +
 		"repo_priority: \"7\"\nspec_name: forged\ncommit_id: forged\npreinstall:\n" +
 		"- rpm-build\n- systemd-rpm-macros\n"
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
+	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	seeded := client.SeedBuildInfo(bi)
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
 	round.project = &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
@@ -329,7 +329,7 @@ func TestJobPayloadOriginURL(t *testing.T) {
 func TestJobPayloadKeepsArtifactReference(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", Repo: "http://bootstrap.local/base"}}
+	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	round := &reconcileRound{
 		key:         testNS + "/" + testBuild,
 		current:     client.SeedBuildInfo(bi),
@@ -664,10 +664,10 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 		}}},
 	}
 	depend := dependEntry("a")
-	depend.BuildRequires = map[string]ebsv1.VersionConst{
+	depend.BuildRequires = map[string]ebsv1.VersionConstraint{
 		"cap-b": {}, "cap-a": {}, "single": {}, "removed": {},
 	}
-	depend.BuildRemoves = map[string]ebsv1.VersionConst{"removed": {}}
+	depend.BuildRemoves = map[string]ebsv1.VersionConstraint{"removed": {}}
 	job := c.jobForSpec(
 		round,
 		"a",
@@ -685,7 +685,7 @@ func TestJobPayloadPreferIsPerSpec(t *testing.T) {
 	if got := payload["prefer"]; got != "rpm-b" {
 		t.Fatalf("prefer = %v, want only selected rpm-b", got)
 	}
-	depend.BuildRequires = map[string]ebsv1.VersionConst{"single": {}}
+	depend.BuildRequires = map[string]ebsv1.VersionConstraint{"single": {}}
 	job = c.jobForSpec(
 		round,
 		"a",
@@ -1047,8 +1047,8 @@ func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.Spec.BootstrapRepo = []ebsv1.BootstrapRepo{
-		{Name: "local", Repo: "https://repo.example.com/openEuler-24.03-LTS-SP3/local"},
-		{Name: "everything", Repo: "https://repo.example.com/openEuler-24.03-LTS-SP3/everything"},
+		{Name: "local", URL: "https://repo.example.com/openEuler-24.03-LTS-SP3/local"},
+		{Name: "everything", URL: "https://repo.example.com/openEuler-24.03-LTS-SP3/everything"},
 	}
 	round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
 	contentURL := "http://artifact.example.com/repositories/v1/" +
@@ -1138,11 +1138,11 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 				t.Fatalf("flush created jobs: %v", err)
 			}
 			stored := getBuildInfo(t, client)
-			if got := stored.Status.SpecStatus.Entry("a"); got.Build.Status != SpecBuildFailed ||
+			if got := stored.Status.SpecStatus.Entry("a"); got.Build.Status != ebsv1.SpecBuildFailed ||
 				findCondition(got.Build.Conditions, ConditionJobCreateRejected) == nil {
 				t.Fatalf("rejected spec status = %+v", got)
 			}
-			if got := stored.Status.SpecStatus.Entry("b"); got.Build.Status == SpecBuildFailed ||
+			if got := stored.Status.SpecStatus.Entry("b"); got.Build.Status == ebsv1.SpecBuildFailed ||
 				got.DispatchCount != 1 {
 				t.Fatalf("independent spec status = %+v", got)
 			}
@@ -1164,7 +1164,7 @@ func TestDispatchSpecRateLimitRetainsPendingSpec(t *testing.T) {
 		t.Fatalf("rate-limited dispatch error = %v, want retryable error", err)
 	}
 	stored := getBuildInfo(t, client)
-	if got := stored.Status.SpecStatus.Entry("a").Build.Status; got == SpecBuildFailed {
+	if got := stored.Status.SpecStatus.Entry("a").Build.Status; got == ebsv1.SpecBuildFailed {
 		t.Fatalf("rate-limited dispatch marked spec failed")
 	}
 	if client.statusWrites != 0 {
@@ -1196,7 +1196,7 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 	}
 	persisted := getBuildInfo(t, client)
 	a := persisted.Status.SpecStatus.Entry("a")
-	if a.DispatchCount != 1 || a.Build.Status != SpecBuildRunning {
+	if a.DispatchCount != 1 || a.Build.Status != ebsv1.SpecBuildRunning {
 		t.Fatalf("specStatus[a] = %+v, want confirmed Running dispatch of the existing job", a)
 	}
 	if len(persisted.Status.PendingJobCreates) != 0 {
