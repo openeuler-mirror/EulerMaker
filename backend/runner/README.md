@@ -27,14 +27,16 @@ Go 配置按 `Gateway`、`Container.Containerd`、`Artifact.Log` 和 `Artifact.U
 
 ```bash
 go test ./...
-CGO_ENABLED=0 go build -o ebs-runner ./cmd/runner
+CGO_ENABLED=0 go build -ldflags="-X ebs-runner/pkg/runner.agentVersion=$(git rev-parse HEAD)" -o ebs-runner ./cmd/runner
 ```
 
 构建容器镜像：
 
 ```bash
-docker build -t eulermaker/ebs-runner:dev .
+docker build --build-arg GIT_COMMIT="$(git rev-parse HEAD)" -t eulermaker/ebs-runner:dev .
 ```
+
+`Runner.status.info.agentVersion` 上报构建时注入的完整 Git commit；未注入时为 `unknown`。
 
 ## 本地运行
 
@@ -77,6 +79,7 @@ go run ./cmd/runner --help
 ```bash
 docker compose -f hacks/docker-compose.yml up -d --build
 DOCKER_GID="$(stat -c %g /var/run/docker.sock)" \
+  GIT_COMMIT="$(git rev-parse HEAD)" \
   docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d --build
 ```
 

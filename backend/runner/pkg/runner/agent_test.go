@@ -12,6 +12,15 @@ import (
 	"ebs-runner/pkg/options"
 )
 
+func TestAgentVersionStatus(t *testing.T) {
+	a := &Agent{cfg: options.Config{RootDir: t.TempDir()}}
+	status := a.currentStatus()
+	if status.Info.AgentVersion != agentVersion {
+		t.Fatalf("agentVersion = %q, want %q", status.Info.AgentVersion, agentVersion)
+	}
+	t.Logf("reported agentVersion: %s", status.Info.AgentVersion)
+}
+
 func TestMemoryQuantityFromMeminfo(t *testing.T) {
 	meminfo := "MemTotal:       65857640 kB\nMemFree:         1024 kB\n"
 	got := memoryQuantityFromMeminfo(meminfo)

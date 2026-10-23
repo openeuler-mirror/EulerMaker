@@ -300,7 +300,7 @@ status:
     kernelVersion: 5.10.0
     arch: aarch64
     runtimeVersion: docker://26.1.0
-    agentVersion: v0.1.0
+    agentVersion: 434dd25a7d6ea4984b15d1fec870d19ab80fe0e5 # 构建时注入的 Git commit；未注入时为 unknown
   heartbeat: "2026-06-09T10:00:00Z"
 ```
 

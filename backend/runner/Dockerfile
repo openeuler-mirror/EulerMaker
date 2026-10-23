@@ -10,7 +10,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -ldflags="-s -w" -o ebs-runner ./cmd/runner/
+ARG GIT_COMMIT=unknown
+RUN go build -ldflags="-s -w -X ebs-runner/pkg/runner.agentVersion=${GIT_COMMIT}" -o ebs-runner ./cmd/runner/
 
 FROM openeuler/openeuler:24.03-lts
 

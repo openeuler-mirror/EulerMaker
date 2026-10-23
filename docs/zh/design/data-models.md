@@ -1016,7 +1016,7 @@ type RunnerInfo struct {
 | `kernelVersion` | string | 内核版本 |
 | `arch` | string | CPU 架构 |
 | `runtimeVersion` | string | 执行运行时版本，当前 runner agent 暂不主动填充 |
-| `agentVersion` | string | Runner agent 版本 |
+| `agentVersion` | string | Runner 构建时注入的完整 Git commit；未注入时为 `unknown` |
 
 ### RunnerList
 
