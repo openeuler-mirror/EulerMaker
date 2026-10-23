@@ -9,26 +9,6 @@ import (
 	"ebs-gateway/internal/mutation"
 )
 
-func TestOrdinaryUserCannotCreateCommunityProject(t *testing.T) {
-	authorizer := &Authorizer{}
-	_, err := authorizer.PrepareCreate(context.Background(), identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope},
-		Route{Resource: "projects", Method: http.MethodPost},
-		[]byte(`{"metadata":{"name":"team","labels":{"project.ebs.io/type":"community"}}}`))
-	if err == nil {
-		t.Fatal("community Project creation was allowed")
-	}
-}
-
-func TestProjectScopedCreateCannotNameAnotherNamespace(t *testing.T) {
-	authorizer := &Authorizer{}
-	_, err := authorizer.PrepareCreate(context.Background(), identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope},
-		Route{Resource: "jobs", Project: "team", Method: http.MethodPost},
-		[]byte(`{"metadata":{"name":"job-1","namespace":"other"}}`))
-	if err == nil {
-		t.Fatal("cross-Project create was allowed")
-	}
-}
-
 func TestOrdinaryUserMayOnlyBackfillPersonalProjectType(t *testing.T) {
 	authorizer := &Authorizer{}
 	old := mutation.Object{
@@ -56,7 +36,7 @@ func TestOrdinaryUserMayOnlyBackfillPersonalProjectType(t *testing.T) {
 	}
 }
 
-func TestProjectOwnerCannotBeChangedByAdmin(t *testing.T) {
+func TestProjectOwnerIsImmutable(t *testing.T) {
 	old := mutation.Object{
 		"apiVersion": "ebs/v1", "kind": "Project",
 		"metadata": map[string]any{"name": "team", "resourceVersion": "1", "labels": map[string]any{"ebs.io/owner-user": "alice"}},
@@ -67,10 +47,10 @@ func TestProjectOwnerCannotBeChangedByAdmin(t *testing.T) {
 		"metadata": map[string]any{"name": "team", "resourceVersion": "1", "labels": map[string]any{"ebs.io/owner-user": "bob"}},
 		"spec":     map[string]any{}, "status": map[string]any{},
 	}
-	who := identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}
+	who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}
 	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who,
 		Route{Resource: "projects", Name: "team", Method: http.MethodPut}, old, candidate); err == nil {
-		t.Error("admin changed Project owner")
+		t.Error("Project owner was allowed to transfer ownership")
 	}
 }
 

@@ -36,14 +36,7 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		if labels == nil {
 			labels = make(map[string]any)
 		}
-		if who.Scope == identity.UserScope || who.Scope == identity.OpsScope {
-			labels["ebs.io/owner-user"] = who.Subject
-		} else if who.Scope == identity.AdminScope {
-			owner, ok := labels["ebs.io/owner-user"].(string)
-			if !ok || a.validateMember(ctx, owner) != nil {
-				return nil, deny("Project owner must be an enabled User or Ops")
-			}
-		}
+		labels["ebs.io/owner-user"] = who.Subject
 		if who.Scope == identity.UserScope {
 			if value, exists := labels["project.ebs.io/type"]; exists && value != "personal" {
 				return nil, deny("ordinary users can only create personal Projects")

@@ -86,7 +86,7 @@ ebs.io/owner-user: <username>
 ebs.io/member-user.<username>: "true"
 ```
 
-页面可计算 `owner`、`member` 和 `none` 三种关系。创建 Project 时不允许普通用户指定 owner；Gateway 会使用 JWT `sub` 写入 `ebs.io/owner-user`。这些 labels 管理写权限，不表示 Project 的读取可见性；Gateway 白名单内的 Project 及其业务资源均允许匿名读取。
+页面可计算 `owner`、`member` 和 `none` 三种关系。普通用户、Ops 和 Admin 创建 Project 时均由 Gateway 使用 JWT `sub` 写入 `ebs.io/owner-user`。这些 labels 管理写权限，不表示 Project 的读取可见性；Gateway 白名单内的 Project 及其业务资源均允许匿名读取。
 
 ### 4.3 页面能力矩阵
 
@@ -158,7 +158,7 @@ ebs.io/member-user.<username>: "true"
 
 工程列表提供两种创建入口：
 
-- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户和 Ops 创建的工程由 Gateway 注入 owner，Admin 创建时需指定已启用的普通用户或 Ops 用户作为 owner。
+- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户、Ops 和 Admin 创建的工程均由 Gateway 注入当前用户作为 owner。
 - “导入 YAML”读取或粘贴单个 `ebs/v1 Project` 清单。客户端解析 YAML，校验 `apiVersion`、`kind`、工程名和至少一个包含 `os`、`arch` 的 Build target；提交前移除 `status` 和服务器维护的 metadata 字段。该入口只用于创建 Project，不构成通用资源 YAML 编辑器。
 
 两个入口共用 `POST /apis/ebs/v1/projects`。匿名用户点击后进入登录页并返回工程列表。409 冲突、校验错误和权限错误都在弹窗中保留输入并以当前界面语言展示。

@@ -133,7 +133,7 @@ label 语义：
 
 `<username>` 必须是已存在的 User `metadata.name`。User 名称满足 DNS1123 label 约束，因此可以同时用作 `owner-user` 的 label value 和 `member-user.<username>` 的 label key name 片段。
 
-普通用户和 Ops 创建 Project 时，gateway 必须写入或覆盖 `ebs.io/owner-user=<jwt.sub>`，客户端传入的 owner user 不可信。Admin 创建 Project 时必须显式提供 `ebs.io/owner-user`，gateway 校验该 User 存在、`spec.enabled=true` 且 scope 为 `ebs:user` 或 `ebs:ops`，否则返回 403。
+普通用户、Ops 和 Admin 创建 Project 时，gateway 统一写入或覆盖 `ebs.io/owner-user=<jwt.sub>`，不采用客户端指定的 owner，也不额外查询 owner User。
 
 仅 Project owner 可更新或删除已有 Project；更新时 `ebs.io/owner-user` 必须保持不变。成员用户 label 用于表达共享权限，owner 可增删；新增的 member user 必须对应已存在且启用、scope 为 `ebs:user` 或 `ebs:ops` 的 User。
 
@@ -634,13 +634,11 @@ metadata.ownerReferences
 
 #### 4.9.2 Project access labels
 
-普通用户创建 Project 时，gateway 对 `POST` JSON 请求注入或覆盖：
+普通用户、Ops 和 Admin 创建 Project 时，gateway 对 `POST` JSON 请求注入或覆盖：
 
 ```text
 metadata.labels["ebs.io/owner-user"] = jwt.sub
 ```
-
-Admin 创建 Project 时不覆盖客户端提供的 `owner-user`，但必须读取该 User 并确认存在且已启用。
 
 gateway 对 Project 的 `PUT`、`PATCH` 请求需要保护以下 labels：
 
@@ -870,7 +868,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
 | User API 不可用 | 仅使用仍有效的短期缓存；无有效缓存时返回 503，不默认放行 |
 | Admin 越权操作管理员 User | User list 过滤 `spec.scopes=["ebs:admin"]` 对象；单对象读取和写入先校验旧对象；PUT/PATCH 保护管理员角色 |
-| 客户端伪造 Project owner | 普通用户创建 Project 时强制覆盖 `metadata.labels["ebs.io/owner-user"]`；Admin 创建时校验指定 owner User |
+| 客户端伪造 Project owner | 普通用户、Ops 和 Admin 创建 Project 时统一将 `metadata.labels["ebs.io/owner-user"]` 设置为 JWT `sub` |
 | 客户端越权修改 Project members | 仅 owner user 可以修改 member user labels，新增成员必须是已启用 User |
 | 用户写入未授权 Project | gateway 查询 Project owner/member labels，不匹配则返回 403；公开 `GET/HEAD` 不受该写权限限制 |
 | Runner 范围 Job 过滤被绕过 | gateway绑定路径身份，apiserver按 `status.runner` 强制过滤，并拒绝客户端提供 `fieldSelector` |
@@ -901,7 +899,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | AdminUser | Admin 只能 get/list/update/patch/delete 非管理员 User，list 不返回管理员，禁止 create、把用户提升为 `ebs:admin`、操作管理员 User 和重置他人密码 |
 | Ops | 按 owner/member 关系执行普通用户的 Project 与子资源操作；额外允许集群级 Config 写操作及 Runner 管理（包含普通对象写入、`/status` 和 Runner 范围 Job list/watch，不开放 Runner 对象 Watch） |
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
-| AccessLabels | 普通用户和 Ops 创建 Project 时强制写入 owner user label；Admin 创建时校验 owner 为已启用的普通用户或 Ops；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
+| AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
 | RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、restartCount、spec 或 metadata |
 | RateLimit | 超过令牌桶容量后返回 429 |

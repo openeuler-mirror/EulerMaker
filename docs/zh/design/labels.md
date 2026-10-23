@@ -40,7 +40,7 @@ metadata:
     ebs.io/owner-user: alice
 ```
 
-普通用户创建 Project 时，Gateway 强制将 `ebs.io/owner-user` 设置为 JWT `sub`。客户端提交的值不可信。Admin 创建 Project 时必须显式指定一个已存在且启用的 User。
+普通用户、Ops 和 Admin 创建 Project 时，Gateway 统一将 `ebs.io/owner-user` 设置为 JWT `sub`，覆盖客户端提交的值。
 
 Project 创建后，Gateway 不允许任何身份修改、删除或清空 owner 标签；所有权转移不通过 Gateway 提供。
 
