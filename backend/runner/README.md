@@ -62,9 +62,14 @@ go run ./cmd/runner \
 
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
-Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`，`external` 使用 `runnerExternalURL`，不跨模式回退。配置来自 `Config/service-config`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
+Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`；`external` 使用 Artifact Manager 的 `runnerExternalURL`，源码直接访问 Job payload 的 `origin_url`，不依赖 Git Server 外网地址。配置来自 `Config/service-config`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
 
-Runner 会在写入 `payload.json` 前，将 `repo[].url` 中的 `artifact://{instance}/repositories/...` 和 `clone_url` 中的 `git-server:///git/...` 转换为对应服务的 Runner 可访问 HTTP(S) 地址；普通 URL、`origin_url` 和 `commit_id` 不变。Git Server 基础地址不附加 `/git`，可以包含代理前缀。上传与 Git 地址在 Job 启动时固定，刷新只影响新 Job；Git 所选地址缺失时明确报错，不启动构建容器。Job 对象中的原始 payload 不会被修改。Git 克隆由构建脚本执行，HTTPS CA 信任由构建镜像配置。
+Runner 写入本地 `payload.json` 前，按访问模式解析 `repo[].url` 中的 `artifact://{instance}/repositories/...`。源码处理规则如下：
+
+- `internal`：将 `clone_url` 中的 `git-server:///git/...` 转换为 Git Server 内网 HTTP(S) 地址；普通克隆 URL 保持不变。服务基础地址不附加 `/git`，可以包含代理前缀；地址缺失或逻辑路径非法时明确报错。
+- `external`：存在 `clone_url` 时，用 `origin_url` 替换它，包括原值为普通 URL 的情况；`origin_url` 必须为非空字符串，否则不启动构建容器。没有 `clone_url` 的自定义任务不受影响。
+
+两种模式均保留 `origin_url`、`commit_id`，只修改本地 payload，不修改 Job 对象。上传与 Git 服务地址在 Job 启动时固定，刷新只影响新 Job。脚本仍检出固定提交；上游不可达、私有仓库认证缺失或 PR 提交无法获取时明确失败，不回退到 Git Server、默认分支或其他提交。Git 克隆及 HTTPS 信任由构建镜像负责；`use_git_lfs` 的固定 AtomGit 地址规则不变。
 
 Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭据和签发的 Token 不应写入日志或 Runner 状态。
 
@@ -74,7 +79,7 @@ Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭�
 go run ./cmd/runner --help
 ```
 
-也可以在仓库根目录先启动控制面，再独立启动 Runner。Compose Runner 使用宿主机网络，同机部署可使用初始化配置中的回环地址。异机部署时设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/service-config` 中填写 Runner 与 Job 容器可访问的 Artifact Manager、Git Server 地址。`RUNNER_SERVICE_ACCESS_MODE` 映射到 `--service-access-mode`，默认 `internal`；需要外网入口时设为 `external`，并配置两类服务的 `runnerExternalURL`。
+也可以在仓库根目录先启动控制面，再独立启动 Runner。Compose Runner 使用宿主机网络，同机部署可使用初始化配置中的回环地址。异机部署时设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/service-config` 中填写 Runner 与 Job 容器可访问的服务地址。`RUNNER_SERVICE_ACCESS_MODE` 映射到 `--service-access-mode`，默认 `internal`；设为 `external` 时配置制品实例的 `runnerExternalURL`，并确保构建容器可以访问上游源码仓库。
 
 ```bash
 docker compose -f hacks/docker-compose.yml up -d --build

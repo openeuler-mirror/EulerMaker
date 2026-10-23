@@ -212,7 +212,7 @@ kubectl -n ebs rollout status deployment/scheduler --timeout=10m
 
 ## 6. 部署 Git Server
 
-`git-server.yaml` 创建普通 ClusterIP Service。Git Server 返回 `/git/...` 形式的 `clone_path`，无需预先配置或发现服务 IP；Controller Manager 客户端转换为 `git-server:///git/...` 逻辑地址。Runner 根据 `Config/service-config` 中的 Runner 地址解析该逻辑地址，构建容器须能访问所选 Git Server 入口。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
+`git-server.yaml` 创建普通 ClusterIP Service。Git Server 返回 `/git/...` 形式的 `clone_path`，无需预先配置或发现服务 IP；Controller Manager 客户端转换为 `git-server:///git/...` 逻辑地址。Runner internal 模式根据 `Config/service-config` 解析该逻辑地址，构建容器须能访问 Git Server 内网入口；external 模式使用 `origin_url` 直接获取固定提交。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
 
 Job 容器由宿主机 Docker 启动并使用宿主机网络，不在 Kubernetes Pod 网络内。启用 Snapshot Controller 前，必须从实际构建节点验证 Git Service ClusterIP 的 8080 端口可达；集群外构建节点通常不能直接访问 ClusterIP，若验证失败，应改用构建节点可达的固定内网入口。
 
@@ -298,15 +298,15 @@ gitServer:
   runnerExternalURL: ""
 ```
 
-Git Server 的 Runner 地址使用服务入口，不附加 `/git`，代理路径前缀可保留。Gateway 通过 `GET /apis/ebs/v1/service-endpoints` 将两个地址投影给 Runner；Runner 按网络模式解析 `git-server:///`，保留代理前缀和仓库路径编码。
+Git Server 的 Runner 地址使用服务入口，不附加 `/git`，代理路径前缀可保留。Gateway 通过 `GET /apis/ebs/v1/service-endpoints` 将两个地址投影给 Runner；Runner internal 模式解析 `git-server:///`，保留代理前缀和仓库路径编码；external 模式用 `origin_url` 替换本地 `clone_url`，不使用 Git Server 外网地址。
 
 `default` 是未设置 `ebs.io/artifacts` 的 Project 使用的实例；若将 Project 指向 `art-01`，创建或修改该 annotation 时也须确认 Config 中存在此键。BuildInfo Controller 创建 Job 时会将选中的实例名固化到 Job 的同名 annotation，Runner 据此选择日志和产物上传地址。不要将 Docker Compose 使用的 `127.0.0.1:8081` 原样用于异机 Runner。
 
-本目录尚无 Runner Manifest。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway、Artifact Manager 地址，并确认构建容器能访问 Git Server。集群外 Runner 需要另外提供可达入口；使用 `--service-access-mode=external` 时对 Artifact Manager 和 Git Server 均读取 `runnerExternalURL`，允许 HTTP(S)，公网入口建议使用 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
+本目录尚无 Runner Manifest。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway、Artifact Manager 地址，并确认构建容器在 internal 模式能访问 Git Server，在 external 模式能访问上游源码仓库。集群外 Runner 需要另外提供可达入口；使用 `--service-access-mode=external` 时对 Artifact Manager 读取 `runnerExternalURL`，源码直接使用 `origin_url` 并检出原 `commit_id`；制品地址允许 HTTP(S)，公网入口建议使用 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
 
 Runner 在写入 `payload.json` 前，按逻辑 URL 中的实例名将 `repo[].url` 的 `artifact://{instance}/repositories/...` 转换为选定网络模式下的 HTTP(S) URL；省略实例名时使用 `default`。普通 HTTP(S) 仓库地址保持不变。仓库所在实例缺失或对应 Runner 地址为空时，Job 会报出明确的仓库解析错误，因此上线前应从构建节点验证所需实例的地址及仓库路径可达。
 
-也可让 Runner 经前端 Nginx 接入：`--gateway=https://ebs.example`，并将所用制品实例（包括需要使用该服务的 `default`）的 `runnerExternalURL` 设为 `https://ebs.example/art-01`，配合 `--service-access-mode=external`。前端去掉实例前缀，流式转发日志、产物及 Manifest 请求；上传限制和超时见[前端 Runner 上传说明](../../frontend/README.md#runner-经前端上传)。Git Server 的 external 地址仍需单独提供，且 Job 容器应能访问制品与 Git 入口。
+也可让 Runner 经前端 Nginx 接入：`--gateway=https://ebs.example`，并将所用制品实例（包括需要使用该服务的 `default`）的 `runnerExternalURL` 设为 `https://ebs.example/art-01`，配合 `--service-access-mode=external`。前端去掉实例前缀，流式转发日志、产物及 Manifest 请求；上传限制和超时见[前端 Runner 上传说明](../../frontend/README.md#runner-经前端上传)。无需为此配置 Git Server 外网地址；Job 容器应能访问制品入口和上游源码仓库，且上游能够提供固化的提交。
 
 ## 9. 部署 Controller Manager
 

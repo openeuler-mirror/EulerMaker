@@ -61,6 +61,15 @@ test('form validation follows service-config instance and address rules', () => 
 });
 
 const component = readFileSync(new URL('../src/components/ServiceConfigEditor.vue', import.meta.url), 'utf8');
+
+test('service form exposes internal Git endpoints and both artifact Runner endpoints', () => {
+  const bindings = [...component.matchAll(/v-model\.trim="([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(bindings, [
+    'gitServer.internalURL', 'gitServer.runnerInternalURL', 'instance.name',
+    'instance.internalURL', 'instance.runnerInternalURL', 'instance.runnerExternalURL',
+  ]);
+});
+
 const script = ts.createSourceFile('ServiceConfigEditor.ts', parseSFC(component).descriptor.scriptSetup.content,
   ts.ScriptTarget.Latest, true);
 const editorCode = ts.transpileModule(script.statements.filter(s => !ts.isImportDeclaration(s))
