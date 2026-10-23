@@ -48,19 +48,19 @@
         <div v-if="packageReposLoading" class="skeleton-list" :aria-label="t('project.loadingPackages')"><span v-for="item in 3" :key="item"></span></div>
         <div v-else-if="packageReposErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(packageReposErrorKey) }}</span><button type="button" @click="loadPackageRepos">{{ t("common.reload") }}</button></div>
         <div v-else-if="filteredPackageRepos.length" class="project-table-wrap">
-          <table class="project-table config-table package-table">
+          <table class="project-table config-table package-table" :class="{ 'has-actions': canEditProject || canStartBuild }">
             <thead><tr>
               <th>{{ t("project.repositoryName") }}</th>
-              <th v-if="!selectedPackageName">URL</th>
-              <th v-if="!selectedPackageName">Git ref</th>
-              <th v-if="(canEditProject || canStartBuild) && !selectedPackageName" class="package-actions-column">{{ t("project.packageActions") }}</th>
+              <th>URL</th>
+              <th>Git ref</th>
+              <th v-if="canEditProject || canStartBuild" class="package-actions-column">{{ t("project.packageActions") }}</th>
             </tr></thead>
             <tbody>
               <tr v-for="(repo, index) in paginatedPackageRepos" :key="`${repo.name}-${index}`" :class="{ 'selected-package-row': selectedPackageName === repo.name }">
                 <td><button class="package-name-button" type="button" :aria-pressed="selectedPackageName === repo.name" :disabled="!repo.name" @click="selectPackage(repo.name || '')">{{ repo.name || t("common.emptyValue") }}</button></td>
-                <td v-if="!selectedPackageName"><code>{{ repo.url || t("common.emptyValue") }}</code></td>
-                <td v-if="!selectedPackageName">{{ repo.commitID || gitRefLabel(repo.ref) }}</td>
-                <td v-if="(canEditProject || canStartBuild) && !selectedPackageName" class="package-actions-column">
+                <td><code :title="repo.url || undefined">{{ repo.url || t("common.emptyValue") }}</code></td>
+                <td><span class="package-git-ref" :title="repo.commitID || gitRefLabel(repo.ref)">{{ repo.commitID || gitRefLabel(repo.ref) }}</span></td>
+                <td v-if="canEditProject || canStartBuild" class="package-actions-column">
                   <button v-if="canStartBuild" class="text-button" type="button"
                     :disabled="!repo.name || buildConfigurationMissing || creatingBuild"
                     :aria-label="t('project.buildPackage', { name: repo.name })"

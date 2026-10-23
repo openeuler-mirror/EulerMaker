@@ -22,10 +22,42 @@
         </section>
       </section>
 
-      <section v-else id="operations-panel-runners" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-runners"><div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div><div class="section-heading"><h2>{{ t("operations.runners") }}</h2><button class="icon-button runner-refresh-button" type="button" :aria-label="t('common.refresh')" :title="t('common.refresh')" :disabled="runnersLoading" @click="loadRunners"><Refresh /></button></div><form class="operations-project-form" @submit.prevent="runnerQuery = runnerSearch.trim()">
-        <label class="field operations-project-field"><span>{{ t('operations.searchRunners') }}</span><input v-model="runnerSearch" type="search" :placeholder="t('operations.runnerSearchPlaceholder')" /></label>
-        <button class="secondary-button" type="submit" :disabled="runnersLoading">{{ t('operations.search') }}</button>
-      </form><div v-if="runnersLoading" class="skeleton-list" :aria-label="t('operations.loadingRunners')"><span v-for="item in 4" :key="item"></span></div><div v-else-if="runnersError" class="inline-error" role="alert"><WarningFilled />{{ t(runnersError) }}<button type="button" @click="loadRunners">{{ t("common.reload") }}</button></div><EmptyState v-else-if="!runners.length" :title="t('operations.noRunners')" :description="t('operations.noRunnersHint')" /><EmptyState v-else-if="!filteredRunners.length" :title="t('operations.noMatchingRunners')" :description="t('operations.noMatchingRunnersHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th><th>{{ t("operations.arch") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th><th v-if="canManageRunners">{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name"><td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td><td><StatusBadge :value="runner.status?.phase" /></td><td>{{ runner.spec?.type || t("common.emptyValue") }}</td><td>{{ runner.spec?.arch || t("common.emptyValue") }}</td><td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td><td>{{ formatDate(runner.status?.heartbeat) }}</td><td v-if="canManageRunners" class="admin-row-actions"><button class="text-button danger-link" type="button" :disabled="evictionSaving || !runner.metadata?.name" @click="openEviction(runner)">{{ t(runner.status?.phase === "Evicted" ? "operations.cancelEviction" : "operations.evict") }}</button></td></tr></tbody></table></div></section>
+      <section v-else id="operations-panel-runners" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-runners">
+        <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
+        <div class="section-heading">
+          <h2>{{ t("operations.runners") }}</h2>
+          <button class="icon-button runner-refresh-button" type="button" :aria-label="t('common.refresh')" :title="t('common.refresh')" :disabled="runnersLoading" @click="loadRunners"><Refresh /></button>
+        </div>
+        <form class="operations-project-form" @submit.prevent="runnerQuery = runnerSearch.trim()">
+          <label class="field operations-project-field"><span>{{ t('operations.searchRunners') }}</span><input v-model="runnerSearch" type="search" :placeholder="t('operations.runnerSearchPlaceholder')" /></label>
+          <button class="secondary-button" type="submit" :disabled="runnersLoading">{{ t('operations.search') }}</button>
+        </form>
+        <div v-if="runnersLoading" class="skeleton-list" :aria-label="t('operations.loadingRunners')"><span v-for="item in 4" :key="item"></span></div>
+        <div v-else-if="runnersError" class="inline-error" role="alert"><WarningFilled />{{ t(runnersError) }}<button type="button" @click="loadRunners">{{ t("common.reload") }}</button></div>
+        <EmptyState v-else-if="!runners.length" :title="t('operations.noRunners')" :description="t('operations.noRunnersHint')" />
+        <EmptyState v-else-if="!filteredRunners.length" :title="t('operations.noMatchingRunners')" :description="t('operations.noMatchingRunnersHint')" />
+        <div v-else class="project-table-wrap">
+          <table class="project-table admin-table">
+            <thead><tr>
+              <th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th>
+              <th>{{ t("operations.arch") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th>
+              <th v-if="canManageRunners">{{ t("admin.actions") }}</th>
+            </tr></thead>
+            <tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name">
+              <td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceId }}</small></td>
+              <td><StatusBadge :value="runner.status?.phase" /></td>
+              <td>{{ runner.spec?.type || t("common.emptyValue") }}</td>
+              <td>{{ runner.spec?.arch || t("common.emptyValue") }}</td>
+              <td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td>
+              <td>{{ formatDate(runner.status?.heartbeat) }}</td>
+              <td v-if="canManageRunners" class="admin-row-actions">
+                <button class="text-button danger-link" type="button" :disabled="evictionSaving || removalSaving || !runner.metadata?.name" @click="openEviction(runner)">{{ t(runner.status?.phase === "Evicted" ? "operations.cancelEviction" : "operations.evict") }}</button>
+                <button class="text-button danger-link" type="button" :disabled="evictionSaving || removalSaving || !runner.metadata?.name || !runner.metadata?.uid || !removableRunner(runner)" :title="removableRunner(runner) ? '' : t('operations.removeRunnerUnavailable')" @click="openRemoval(runner)">{{ t("operations.removeRunner") }}</button>
+              </td>
+            </tr></tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -36,6 +68,16 @@
       <div class="modal-actions">
         <button class="secondary-button" type="button" :disabled="evictionSaving" @click="closeEviction">{{ t("common.cancel") }}</button>
         <button class="primary-button danger-button" type="submit" :disabled="evictionSaving">{{ t(evictionSaving ? "common.saving" : cancelEviction ? "operations.cancelEviction" : "operations.evict") }}</button>
+      </div>
+    </form>
+  </ModalDialog>
+  <ModalDialog v-if="removing" title-id="remove-runner-title" :title="t('operations.removeRunnerTitle', { name: removing.metadata?.name })" :close-label="t('common.close')" @close="closeRemoval">
+    <form class="project-form" @submit.prevent="confirmRemoval">
+      <p class="form-hint">{{ t('operations.removeRunnerHint') }}</p>
+      <div v-if="removalError" class="form-error" role="alert"><WarningFilled />{{ t(removalError) }}</div>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" :disabled="removalSaving" @click="closeRemoval">{{ t('common.cancel') }}</button>
+        <button class="primary-button danger-button" type="submit" :disabled="removalSaving || !removableRunner(removing)">{{ t('operations.removeRunner') }}</button>
       </div>
     </form>
   </ModalDialog>
@@ -75,6 +117,9 @@ const evicting = ref<Runner | null>(null);
 const evictionSaving = ref(false);
 const cancelEviction = ref(false);
 const evictionError = ref("");
+const removing = ref<Runner | null>(null);
+const removalSaving = ref(false);
+const removalError = ref("");
 const runners = ref<Runner[]>([]);
 const runnerSearch = ref("");
 const runnerQuery = ref("");
@@ -95,6 +140,9 @@ const contentEditor = ref<InstanceType<typeof BuildResourceContentEditor> | null
 const dialogError = ref("");
 const saving = ref(false);
 
+function removableRunner(runner: Runner | null): boolean {
+  return runner?.status?.phase === "Evicted" || runner?.status?.phase === "Offline";
+}
 function selectSection(section: OperationsSection): void {
   activeSection.value = section;
   success.value = "";
@@ -110,7 +158,7 @@ async function loadRunners(): Promise<void> {
   finally { runnersLoading.value = false; }
 }
 function openEviction(runner: Runner): void {
-  if (!canManageRunners.value || evictionSaving.value) return;
+  if (!canManageRunners.value || evictionSaving.value || removing.value) return;
   evicting.value = runner;
   cancelEviction.value = runner.status?.phase === "Evicted";
   evictionError.value = "";
@@ -143,6 +191,45 @@ async function evictRunner(): Promise<void> {
     await loadRunners();
   } catch (error) { evictionError.value = errorTranslationKey(error, cancelEviction.value ? "operations.cancelEvictionFailed" : "operations.evictFailed"); }
   finally { evictionSaving.value = false; }
+}
+function openRemoval(runner: Runner): void {
+  if (!canManageRunners.value || evictionSaving.value || removalSaving.value || evicting.value ||
+    !runner.metadata?.name || !runner.metadata.uid || !removableRunner(runner)) return;
+  removing.value = runner;
+  removalError.value = "";
+  success.value = "";
+}
+function closeRemoval(): void { if (!removalSaving.value) removing.value = null; }
+async function confirmRemoval(): Promise<void> {
+  const selected = removing.value;
+  const name = selected?.metadata?.name;
+  const uid = selected?.metadata?.uid;
+  if (!canManageRunners.value || removalSaving.value || !name || !uid || !selected || !removableRunner(selected)) return;
+  removalSaving.value = true;
+  removalError.value = "";
+  try {
+    const path = `/apis/ebs/v1/runners/${encodeURIComponent(name)}`;
+    const current = await request<Runner>(path);
+    if (current.metadata?.uid !== uid || !current.metadata.resourceVersion) {
+      removalError.value = "errors.conflict";
+      return;
+    }
+    if (!removableRunner(current)) {
+      removing.value = current;
+      removalError.value = "operations.removeRunnerStateChanged";
+      await loadRunners();
+      return;
+    }
+    await request<unknown>(path, {
+      method: "DELETE",
+      body: JSON.stringify({ preconditions: { uid, resourceVersion: current.metadata.resourceVersion } }),
+    });
+    removing.value = null;
+    success.value = t("operations.runnerRemoved", { name });
+    runners.value = runners.value.filter(runner => runner.metadata?.uid !== uid);
+    await loadRunners();
+  } catch (error) { removalError.value = errorTranslationKey(error, "operations.removeRunnerFailed"); }
+  finally { removalSaving.value = false; }
 }
 async function loadResources(): Promise<void> {
   resourcesLoading.value = true;
