@@ -34,8 +34,9 @@ func TestSyncIgnoresMissingAndFinishedBuilds(t *testing.T) {
 	}{
 		{name: "missing build"},
 		{name: "success", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)},
+		{name: "single success", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStageBuild)},
 		{name: "failed", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildFailed, ebsv1.BuildStageBuild)},
-		{name: "skipped", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildSkipped, ebsv1.BuildStagePublish)},
+		{name: "skipped", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSkipped, ebsv1.BuildStagePublish)},
 		{name: "aborted", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildAborted, "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,6 +51,11 @@ func TestSyncIgnoresMissingAndFinishedBuilds(t *testing.T) {
 			}
 			if api.CallCount("UpdateBuildStatus") != 0 {
 				t.Fatal("terminal or missing Build must not be written")
+			}
+			for _, method := range []string{"GetSnapshot", "GetBuildInfo", "GetRpmRepo"} {
+				if api.CallCount(method) != 0 {
+					t.Fatalf("terminal or missing Build must not call %s", method)
+				}
 			}
 		})
 	}
