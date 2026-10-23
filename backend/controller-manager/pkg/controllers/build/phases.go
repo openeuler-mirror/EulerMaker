@@ -130,13 +130,10 @@ func (r *reconciler) finishSingleBuild(succeeded bool, failing string) (controll
 	target.Status.EndTime = r.now
 	merged, intent := r.withCondition(target.Status.Conditions, ConditionBuildSucceed, conditionStatus(succeeded), buildResultReason(succeeded))
 	target.Status.Conditions = merged
+	target.Status.Stage = ebsv1.BuildStageBuild
 	if succeeded {
-		// Skipping the release is the only stage advance a single build performs.
-		target.Status.Stage = ebsv1.BuildStagePublish
-		target.Status.Phase = ebsv1.BuildSkipped
+		target.Status.Phase = ebsv1.BuildSuccess
 	} else {
-		// A failed single build never reached the release stage, so its stage stays build.
-		target.Status.Stage = ebsv1.BuildStageBuild
 		target.Status.Phase = ebsv1.BuildFailed
 	}
 	write := writeIntent{

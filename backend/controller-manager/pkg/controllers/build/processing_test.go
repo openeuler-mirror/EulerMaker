@@ -99,8 +99,8 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 		succeeded bool
 		wantStage ebsv1.BuildStage
 	}{
-		{name: "all succeeded", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStagePublish},
-		{name: "multiple specs", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded), "glibc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStagePublish},
+		{name: "all succeeded", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
+		{name: "multiple specs", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded), "glibc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
 		{name: "build failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
 		{name: "install failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallFailed)}, wantStage: ebsv1.BuildStageBuild},
 		{name: "install missing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, "")}, wantStage: ebsv1.BuildStageBuild},
@@ -126,7 +126,7 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 			wantPhase := ebsv1.BuildFailed
 			wantReason := ReasonBuildFailed
 			if tc.succeeded {
-				wantPhase, wantReason = ebsv1.BuildSkipped, ReasonBuildSucceeded
+				wantPhase, wantReason = ebsv1.BuildSuccess, ReasonBuildSucceeded
 			}
 			if stored.Status.Phase != wantPhase || stored.Status.Stage != tc.wantStage || stored.Status.EndTime.IsZero() {
 				t.Fatalf("status = %+v, want phase=%q stage=%q", stored.Status, wantPhase, tc.wantStage)
