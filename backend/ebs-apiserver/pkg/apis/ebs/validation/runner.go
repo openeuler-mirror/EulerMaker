@@ -47,6 +47,13 @@ func ValidateRunnerUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	return allErrs
 }
 
+func ValidateRunnerDelete(obj *ebsv1.Runner) field.ErrorList {
+	if obj.Status.Phase == ebsv1.RunnerOffline || obj.Status.Phase == ebsv1.RunnerEvicted {
+		return nil
+	}
+	return field.ErrorList{field.Forbidden(field.NewPath("status", "phase"), "only Offline or Evicted runners can be deleted")}
+}
+
 func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
 	phase := newObj.Status.Phase

@@ -59,7 +59,7 @@ backend/ebs-apiserver/
 │   │   ├── scoped_store.go            # 命名空间作用域 store 包装
 │   │   └── ebs/
 │   │       ├── */storage.go            # 各资源 REST storage
-│   │       └── scopedresource/         # 集群级及 Project 级 ES 资源通用 storage
+│   │       └── scopedresource/         # 集群级及 Project 级资源的公共策略与存储装配
 │   ├── server/
 │   │   ├── project_alias.go           # Project API 路由适配
 │   │   └── server.go                  # apiserver 配置与资源安装
@@ -301,6 +301,8 @@ REST storage 按资源静态路由：
 | MachineAccount store | MachineAccount | 单文档内部原子创建、Get、List、Delete和凭据认证 |
 
 Job、Runner 的 `/status` 子资源必须使用对应的 etcd store；ES-only 资源的 `/status` 和 Build 的 `/abort` 必须使用对应的 ESStore。子资源不能回退到另一种存储。
+
+Job、Runner 与 Project、Script 等资源通过 `scopedresource.Config` 声明默认值、字段保护和校验规则，统一返回 `Resource`、`Status`。Job、Runner 调用公共 `CompleteWithOptions` 装配原生 etcd store，沿用配置的资源 key 前缀、List/Watch 和版本控制；主资源与受限的 `/status` 共享底层存储，仅由主资源负责销毁。Job 通过公共 `AttrFunc` 配置向 List/Watch predicate 和底层缓存提供相同的字段集合，装配时不修改共享 StoreOptions；其 `/status` 保留 spec 和受保护 metadata，`/abort`、`/archive` 仍由 Job 资源包提供。Runner 删除状态校验通过公共 `ValidateDelete` 回调接入实际删除路径，Job 不设置该限制。Project、Script 等资源继续由 ESStore 装配，不改变存储后端。
 
 Job etcd store的 selection predicate至少暴露 `metadata.name`、`metadata.namespace`、`status.runner` 和 `status.phase`。Runner范围 Job路由使用该 predicate对 list和 watch执行相同过滤；Job从其他 Runner转入当前 Runner时产生 ADDED，从当前 Runner转出时产生 DELETED，仍匹配时的变化产生 MODIFIED。过滤在 apiserver/watch cache中完成，不能把全局事件流转发给 gateway或 Runner后再过滤。
 
@@ -569,6 +571,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - 创建 `incremental` 或 `specified` Build 时，同一 Project + OS + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
 - Runner 的 `instanceId` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。Runner 由 Token 的 `type` 区分，不是 User scope。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
+- Runner 删除仅允许 `status.phase=Offline` 或 `Evicted`，Online、空值及其他状态返回 `409 Conflict`。校验接入存储删除回调，依据实际删除时的对象状态执行，并保留调用方删除校验及 UID/resourceVersion 前置条件。单对象删除、DeleteCollection 的逐项删除和 dry-run 均适用；批量删除不是原子操作，遇到拒绝时其他对象可能已删除。本规则只检查 Runner 状态，不检查关联 Job，也不停止 Runner 进程或清理其本地文件。
 - MachineAccount 名称必须满足 DNS1123 label；`tokenTTLSeconds` 只能为 300～86400。
 
 从旧模型升级时必须在启用新 Gateway 前迁移已有 User：`spec.admin=true` 转为 `spec.scopes=["ebs:admin"]`，其他 User 转为 `spec.scopes=["ebs:user"]`，迁移完成后删除旧 `spec.admin` 字段。存量对象读取不依赖创建默认值，不能把数据迁移交给 storage strategy 隐式完成。

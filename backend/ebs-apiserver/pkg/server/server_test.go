@@ -16,6 +16,8 @@ import (
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/managedfields"
@@ -39,8 +41,10 @@ import (
 	buildgraphstore "ebs-apiserver/pkg/registry/ebs/buildgraph"
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	configstore "ebs-apiserver/pkg/registry/ebs/config"
+	jobstore "ebs-apiserver/pkg/registry/ebs/job"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
+	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
 	"ebs-apiserver/pkg/registry/ebs/scopedresource"
 	scriptstore "ebs-apiserver/pkg/registry/ebs/script"
 	snapshotstore "ebs-apiserver/pkg/registry/ebs/snapshot"
@@ -267,6 +271,8 @@ func TestResourceStorageConstruction(t *testing.T) {
 		{"buildinfos", "BuildInfo", buildinfostore.NewStorage, false, true},
 		{"buildgraphs", "BuildGraph", buildgraphstore.NewStorage, false, true},
 		{"rpmrepos", "RpmRepo", rpmrepostore.NewStorage, false, true},
+		{"jobs", "Job", jobstore.NewStorage, false, true},
+		{"runners", "Runner", runnerstore.NewStorage, true, true},
 	} {
 		t.Run(tt.resource, func(t *testing.T) {
 			stores := tt.newStorage()
@@ -514,6 +520,52 @@ func TestJobStorageUsesResourcePrefixForKeys(t *testing.T) {
 		t.Fatalf("job key: %v", err)
 	} else if want := "/test/example-project/example-job"; got != want {
 		t.Fatalf("job key = %q, want %q", got, want)
+	}
+}
+
+func TestJobStorageSharesAttributesWithWatchCache(t *testing.T) {
+	options := testRESTOptions()
+	var cacheAttrs storage.AttrFunc
+	options.Decorator = func(config *storagebackend.ConfigForResource, prefix string,
+		keyFunc func(runtime.Object) (string, error), newFunc, newListFunc func() runtime.Object,
+		attrs storage.AttrFunc, triggers storage.IndexerFuncs, indexers *cache.Indexers,
+	) (storage.Interface, factory.DestroyFunc, error) {
+		cacheAttrs = attrs
+		return fakeStorageDecorator(config, prefix, keyFunc, newFunc, newListFunc, attrs, triggers, indexers)
+	}
+	shared := &generic.StoreOptions{RESTOptions: options, AttrFunc: func(runtime.Object) (labels.Set, fields.Set, error) {
+		return nil, fields.Set{"source": "shared"}, nil
+	}}
+	s := jobstore.NewStorage()
+	if err := s.CompleteWithOptions(shared); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Resource.Destroy()
+	job := &ebsv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "job-a", Namespace: "project-a", Labels: map[string]string{"build": "build-a"}},
+		Status:     ebsv1.JobStatus{Runner: "runner-a", Phase: ebsv1.JobPending, Stage: ebsv1.JobStagePending},
+	}
+	want := fields.Set{
+		"metadata.name": "job-a", "metadata.namespace": "project-a",
+		"status.runner": "runner-a", "status.phase": "Pending", "status.stage": "Pending",
+	}
+	store := s.Resource.(*genericregistry.Store)
+	predicate := store.PredicateFunc(labels.SelectorFromSet(job.Labels), fields.SelectorFromSet(want))
+	for _, attrs := range []storage.AttrFunc{cacheAttrs, predicate.GetAttrs} {
+		if attrs == nil {
+			t.Fatal("missing Job attributes")
+		}
+		gotLabels, gotFields, err := attrs(job)
+		if err != nil || !reflect.DeepEqual(gotFields, want) || !reflect.DeepEqual(gotLabels, labels.Set(job.Labels)) {
+			t.Fatalf("labels=%v fields=%v error=%v", gotLabels, gotFields, err)
+		}
+	}
+	if matched, err := predicate.Matches(job); err != nil || !matched {
+		t.Fatalf("matched=%t error=%v", matched, err)
+	}
+	_, sharedFields, err := shared.AttrFunc(job)
+	if err != nil || sharedFields["source"] != "shared" {
+		t.Fatalf("shared AttrFunc changed: fields=%v error=%v", sharedFields, err)
 	}
 }
 
