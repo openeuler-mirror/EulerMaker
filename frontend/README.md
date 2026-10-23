@@ -44,9 +44,25 @@ EULERMAKER_FRONTEND_PORT=8088 docker compose -f hacks/docker-compose.yml up -d -
 
 Artifact 和仓库访问还支持 `/art-01/artifacts/...`、`/art-01/repositories/...` 形式：前端 Nginx 去掉实例前缀后转发到对应 Namespace 的 `artifact-manager` Service。未带实例前缀的 `/artifacts/...`、`/repositories/...` 保持转发到 `DEFAULT_ARTIFACT_MANAGER`，Docker Compose 默认是 `artifact-manager:8081`。动态路由的 DNS Resolver 默认读取容器 `/etc/resolv.conf`，也可通过 `NGINX_DNS_RESOLVER` 显式指定；实例命名匹配 `art-` 加数字编号。
 
+### Runner 经前端上传
+
+Runner 可将 `--gateway` 指向前端入口，通过 `/auth/`、`/apis/` 访问 Gateway；在 `Config/service-config` 中将所用制品实例的 `runnerInternalURL` 或 `runnerExternalURL` 设为同一入口（如 `https://ebs.example/art-01`），Runner 会在该前缀后拼接日志、产物和 Manifest 接口。地址末尾不要添加 `/artifacts`。使用 external 地址时设置 `--service-access-mode=external`，Git Server 也须配置对应模式的可达地址；前端当前不代理 Git Server。
+
+Artifact Manager 的默认及 `art-{数字}` 路由支持 HTTP/1.1 流式上传，关闭请求和响应缓冲，保留 Authorization、幂等键及日志分块头，不由 Nginx 自动重试上游请求。单次请求正文上限为 2 GiB，包含 multipart 元数据及边界开销，因此可上传文件须略小于 2 GiB；文件、Job 总大小和鉴权仍由 Artifact Manager 校验。经前端上传时同时受代理与后端限制，采用更严格的上限。
+
+连接上游超时为 10 秒，读取上传正文、向上游发送请求和向客户端发送响应的空闲超时均为 300 秒，等待上游响应的空闲超时为 7200 秒。这些不是整个上传的总时限；Runner 和 Artifact Manager 仍各自执行上传超时。设置含义参见 [Nginx 请求正文配置](https://nginx.org/en/docs/http/ngx_http_core_module.html#client_body_timeout)及[代理配置](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_request_buffering)。外层负载均衡或 Ingress 若存在，也需允许相应的正文大小、流式转发和超时。`/auth/`、`/apis/` 保持原有配置。
+
 ## 检查和构建
 
 ```bash
 npm run typecheck
 npm run build
 ```
+
+上传代理集成测试使用本机 Docker、已构建的前端镜像及 `node:22-alpine`，创建隔离的临时网络和容器并在结束时清理：
+
+```bash
+NGINX_TEST_IMAGE=eulermaker/frontend:dev node --test tests/artifactProxy.test.mjs
+```
+
+测试检查两类路径的超过 1 MiB 产物上传、未结束请求的实时转发、日志与 Manifest 路由、认证及幂等头透传。未设置 `NGINX_TEST_IMAGE` 时，常规测试仅验证代理配置。

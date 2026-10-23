@@ -306,6 +306,8 @@ Git Server 的 Runner 地址使用服务入口，不附加 `/git`，代理路径
 
 Runner 在写入 `payload.json` 前，按逻辑 URL 中的实例名将 `repo[].url` 的 `artifact://{instance}/repositories/...` 转换为选定网络模式下的 HTTP(S) URL；省略实例名时使用 `default`。普通 HTTP(S) 仓库地址保持不变。仓库所在实例缺失或对应 Runner 地址为空时，Job 会报出明确的仓库解析错误，因此上线前应从构建节点验证所需实例的地址及仓库路径可达。
 
+也可让 Runner 经前端 Nginx 接入：`--gateway=https://ebs.example`，并将所用制品实例（包括需要使用该服务的 `default`）的 `runnerExternalURL` 设为 `https://ebs.example/art-01`，配合 `--service-access-mode=external`。前端去掉实例前缀，流式转发日志、产物及 Manifest 请求；上传限制和超时见[前端 Runner 上传说明](../../frontend/README.md#runner-经前端上传)。Git Server 的 external 地址仍需单独提供，且 Job 容器应能访问制品与 Git 入口。
+
 ## 9. 部署 Controller Manager
 
 客户端证书的 URI SAN 须对应 Controller Manager 身份，不能复用 Gateway 证书。确认 Git Server 和 Artifact Manager 的 Service 已创建，且 Controller Manager Pod 可访问它们。
