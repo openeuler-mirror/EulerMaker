@@ -1,6 +1,56 @@
 package v1
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestBuildEnums(t *testing.T) {
+	for _, value := range BuildTypeValues() {
+		if !BuildType(value).IsValid() {
+			t.Errorf("invalid BuildType %q", value)
+		}
+	}
+	for _, value := range BuildStageValues() {
+		if !BuildStage(value).IsValid() {
+			t.Errorf("invalid BuildStage %q", value)
+		}
+	}
+	for _, value := range SpecBuildPhaseValues() {
+		if !SpecBuildPhase(value).IsValid() {
+			t.Errorf("invalid SpecBuildPhase %q", value)
+		}
+	}
+	for _, value := range SpecInstallPhaseValues() {
+		if !SpecInstallPhase(value).IsValid() {
+			t.Errorf("invalid SpecInstallPhase %q", value)
+		}
+	}
+}
+
+func TestBuildEnumsJSON(t *testing.T) {
+	value := struct {
+		Type    BuildType        `json:"type"`
+		Stage   BuildStage       `json:"stage"`
+		Build   SpecBuildPhase   `json:"build"`
+		Install SpecInstallPhase `json:"install"`
+	}{BuildTypeSingle, BuildStageBuild, SpecBuildArchUnsupported, SpecInstallFailed}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"type":"single","stage":"build","build":"ArchUnsupported","install":"Failed"}` {
+		t.Fatalf("unexpected enum encoding: %s", data)
+	}
+	want := value
+	value.Type, value.Stage, value.Build, value.Install = "", "", "", ""
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	if value != want {
+		t.Fatalf("enum round trip = %+v, want %+v", value, want)
+	}
+}
 
 func TestProjectPhase(t *testing.T) {
 	for _, phase := range []ProjectPhase{ProjectActive, ProjectTerminating} {

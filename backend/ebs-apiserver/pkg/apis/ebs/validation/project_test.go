@@ -43,11 +43,11 @@ func TestProjectBuildTargetUniqueness(t *testing.T) {
 		targets []ebsv1.BuildTarget
 		wantErr bool
 	}{
-		{"duplicate", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-a", Arch: "x86_64"}}, true},
-		{"different options still duplicate", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-a", Arch: "x86_64", PublishFlag: true}}, true},
-		{"different arch", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-a", Arch: "aarch64"}}, false},
-		{"different os", []ebsv1.BuildTarget{{Os: "os-a", Arch: "x86_64"}, {Os: "os-b", Arch: "x86_64"}}, false},
-		{"distinct pairs", []ebsv1.BuildTarget{{Os: "a-b", Arch: "c"}, {Os: "a", Arch: "b-c"}}, false},
+		{"duplicate", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "x86_64"}}, true},
+		{"different options still duplicate", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "x86_64", PublishFlag: true}}, true},
+		{"different arch", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "aarch64"}}, false},
+		{"different os", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-b", Arch: "x86_64"}}, false},
+		{"distinct pairs", []ebsv1.BuildTarget{{OS: "a-b", Arch: "c"}, {OS: "a", Arch: "b-c"}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

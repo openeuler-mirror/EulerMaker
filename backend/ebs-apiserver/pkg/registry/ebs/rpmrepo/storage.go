@@ -37,7 +37,6 @@ func NewStorage() *scopedresource.Storage {
 		},
 		CopySpec: func(obj, old runtime.Object) {
 			newRepo, oldRepo := obj.(*ebsv1.RpmRepo), old.(*ebsv1.RpmRepo)
-			newRepo.Spec = oldRepo.Spec
 			metav1.ResetObjectMetaForStatus(&newRepo.ObjectMeta, &oldRepo.ObjectMeta)
 		},
 		Validate: func(obj runtime.Object) field.ErrorList {

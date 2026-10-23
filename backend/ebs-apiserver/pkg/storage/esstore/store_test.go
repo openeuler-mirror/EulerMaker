@@ -102,7 +102,7 @@ func TestCreateHookBeforePersistence(t *testing.T) {
 			if dryRun {
 				opts.DryRun = []string{metav1.DryRunAll}
 			}
-			obj := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{BuildTargets: []ebsv1.BuildTarget{{Os: "openEuler", Arch: "x86_64"}}}}
+			obj := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{BuildTargets: []ebsv1.BuildTarget{{OS: "openEuler", Arch: "x86_64"}}}}
 			_, err := store.Create(genericapirequest.WithNamespace(context.Background(), ""), obj, nil, opts)
 			if err != wantErr || calls != 1 {
 				t.Fatalf("error=%v calls=%d", err, calls)
@@ -238,7 +238,7 @@ func TestCreateUpdateAndStatusPreserveKubernetesSemantics(t *testing.T) {
 	createdObj, err := store.Create(ctx, &ebsv1.Project{
 		ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 		Spec: ebsv1.ProjectSpec{
-			BuildTargets: []ebsv1.BuildTarget{{Os: "openEuler", Arch: "x86_64"}},
+			BuildTargets: []ebsv1.BuildTarget{{OS: "openEuler", Arch: "x86_64"}},
 		},
 	}, nil, &metav1.CreateOptions{})
 	if err != nil {

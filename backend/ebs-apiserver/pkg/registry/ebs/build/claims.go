@@ -157,7 +157,7 @@ func (m *ClaimManager) getBuild(ctx context.Context, c claim) (*ebsv1.Build, err
 	if !ok || b == nil {
 		return nil, fmt.Errorf("expected Build, got %T", obj)
 	}
-	if b.Namespace != c.Project || b.Name != c.BuildName || b.Spec.BuildTarget.Os != c.OS || b.Spec.BuildTarget.Arch != c.Arch || !limitedBuild(b) {
+	if b.Namespace != c.Project || b.Name != c.BuildName || b.Spec.BuildTarget.OS != c.OS || b.Spec.BuildTarget.Arch != c.Arch || !limitedBuild(b) {
 		return nil, fmt.Errorf("Build identity/target mismatch for claim %s", c.ClaimID)
 	}
 	return b, nil
@@ -178,7 +178,7 @@ func claimConflict(c claim) error {
 
 func (m *ClaimManager) acquire(ctx context.Context, b *ebsv1.Build) (*claimRecord, error) {
 	now := m.now().UTC()
-	c := claim{Project: b.Namespace, OS: b.Spec.BuildTarget.Os, Arch: b.Spec.BuildTarget.Arch, ClaimID: string(uuid.NewUUID()), BuildName: b.Name, State: reserved, CreatedAt: now, UpdatedAt: now}
+	c := claim{Project: b.Namespace, OS: b.Spec.BuildTarget.OS, Arch: b.Spec.BuildTarget.Arch, ClaimID: string(uuid.NewUUID()), BuildName: b.Name, State: reserved, CreatedAt: now, UpdatedAt: now}
 	version, err := m.backend.Create(ctx, claimResource, c.id(), c.document())
 	if err == nil {
 		return &claimRecord{claim: c, version: version}, nil
@@ -214,7 +214,7 @@ func (m *ClaimManager) create(ctx context.Context, obj runtime.Object, dryRun bo
 	var c *claimRecord
 	if limitedBuild(b) {
 		if dryRun {
-			existing, err := m.get(ctx, coordinationID(b.Namespace, b.Spec.BuildTarget.Os, b.Spec.BuildTarget.Arch))
+			existing, err := m.get(ctx, coordinationID(b.Namespace, b.Spec.BuildTarget.OS, b.Spec.BuildTarget.Arch))
 			if err == nil {
 				return nil, claimConflict(existing.claim)
 			}
@@ -310,7 +310,7 @@ func (m *ClaimManager) afterWrite(ctx context.Context, obj runtime.Object, delet
 	if !ok || !limitedBuild(b) || (!deleted && !b.Status.Phase.IsTerminal()) {
 		return
 	}
-	id := coordinationID(b.Namespace, b.Spec.BuildTarget.Os, b.Spec.BuildTarget.Arch)
+	id := coordinationID(b.Namespace, b.Spec.BuildTarget.OS, b.Spec.BuildTarget.Arch)
 	c, err := m.get(ctx, id)
 	if es.IsStatus(err, 404) {
 		return

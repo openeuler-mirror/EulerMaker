@@ -44,6 +44,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.JobStatus":               schema_ebs_api_ebs_v1_JobStatus(ref),
 		"ebs-api/ebs/v1.MissingDep":              schema_ebs_api_ebs_v1_MissingDep(ref),
 		"ebs-api/ebs/v1.PackageRepo":             schema_ebs_api_ebs_v1_PackageRepo(ref),
+		"ebs-api/ebs/v1.PackageRepoError":        schema_ebs_api_ebs_v1_PackageRepoError(ref),
 		"ebs-api/ebs/v1.PackageRepoStatus":       schema_ebs_api_ebs_v1_PackageRepoStatus(ref),
 		"ebs-api/ebs/v1.PackageResourceConfig":   schema_ebs_api_ebs_v1_PackageResourceConfig(ref),
 		"ebs-api/ebs/v1.PendingJobCreate":        schema_ebs_api_ebs_v1_PendingJobCreate(ref),
@@ -59,7 +60,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.RpmRepoList":             schema_ebs_api_ebs_v1_RpmRepoList(ref),
 		"ebs-api/ebs/v1.RpmRepoReleaseStatus":    schema_ebs_api_ebs_v1_RpmRepoReleaseStatus(ref),
 		"ebs-api/ebs/v1.RpmRepoRepositoryStatus": schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref),
-		"ebs-api/ebs/v1.RpmRepoSpec":             schema_ebs_api_ebs_v1_RpmRepoSpec(ref),
 		"ebs-api/ebs/v1.RpmRepoStatus":           schema_ebs_api_ebs_v1_RpmRepoStatus(ref),
 		"ebs-api/ebs/v1.Runner":                  schema_ebs_api_ebs_v1_Runner(ref),
 		"ebs-api/ebs/v1.RunnerAddress":           schema_ebs_api_ebs_v1_RunnerAddress(ref),
@@ -79,12 +79,11 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.SnapshotSpec":            schema_ebs_api_ebs_v1_SnapshotSpec(ref),
 		"ebs-api/ebs/v1.SnapshotStatus":          schema_ebs_api_ebs_v1_SnapshotStatus(ref),
 		"ebs-api/ebs/v1.SpecBuildStatus":         schema_ebs_api_ebs_v1_SpecBuildStatus(ref),
-		"ebs-api/ebs/v1.SpecCommitError":         schema_ebs_api_ebs_v1_SpecCommitError(ref),
 		"ebs-api/ebs/v1.SpecInstallStatus":       schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
 		"ebs-api/ebs/v1.SpecStatus":              schema_ebs_api_ebs_v1_SpecStatus(ref),
 		"ebs-api/ebs/v1.SpecStatusGroup":         schema_ebs_api_ebs_v1_SpecStatusGroup(ref),
 		"ebs-api/ebs/v1.Toleration":              schema_ebs_api_ebs_v1_Toleration(ref),
-		"ebs-api/ebs/v1.VersionConst":            schema_ebs_api_ebs_v1_VersionConst(ref),
+		"ebs-api/ebs/v1.VersionConstraint":       schema_ebs_api_ebs_v1_VersionConstraint(ref),
 		"ebs-api/iam/v1.MachineAccount":          schema_ebs_api_iam_v1_MachineAccount(ref),
 		"ebs-api/iam/v1.MachineAccountList":      schema_ebs_api_iam_v1_MachineAccountList(ref),
 		"ebs-api/iam/v1.MachineAccountSpec":      schema_ebs_api_iam_v1_MachineAccountSpec(ref),
@@ -124,7 +123,7 @@ func schema_ebs_api_ebs_v1_BootstrapRepo(ref common.ReferenceCallback) common.Op
 							Format: "",
 						},
 					},
-					"repo": {
+					"url": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
 							Format: "",
@@ -957,7 +956,7 @@ func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.Ope
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConst"),
+										Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
 									},
 								},
 							},
@@ -971,7 +970,7 @@ func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.Ope
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.VersionConst"),
+										Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
 									},
 								},
 							},
@@ -987,7 +986,7 @@ func schema_ebs_api_ebs_v1_DcgNodeState(ref common.ReferenceCallback) common.Ope
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.VersionConst"},
+			"ebs-api/ebs/v1.VersionConstraint"},
 	}
 }
 
@@ -1315,14 +1314,14 @@ func schema_ebs_api_ebs_v1_MissingDep(ref common.ReferenceCallback) common.OpenA
 					"versionRequests": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.VersionConst"),
+							Ref:     ref("ebs-api/ebs/v1.VersionConstraint"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.VersionConst"},
+			"ebs-api/ebs/v1.VersionConstraint"},
 	}
 }
 
@@ -1363,6 +1362,36 @@ func schema_ebs_api_ebs_v1_PackageRepo(ref common.ReferenceCallback) common.Open
 	}
 }
 
+func schema_ebs_api_ebs_v1_PackageRepoError(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"code": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"message": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"retryable": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"boolean"},
+							Format: "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func schema_ebs_api_ebs_v1_PackageRepoStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1383,14 +1412,14 @@ func schema_ebs_api_ebs_v1_PackageRepoStatus(ref common.ReferenceCallback) commo
 					},
 					"error": {
 						SchemaProps: spec.SchemaProps{
-							Ref: ref("ebs-api/ebs/v1.SpecCommitError"),
+							Ref: ref("ebs-api/ebs/v1.PackageRepoError"),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.SpecCommitError"},
+			"ebs-api/ebs/v1.PackageRepoError"},
 	}
 }
 
@@ -1812,12 +1841,6 @@ func schema_ebs_api_ebs_v1_RpmRepo(ref common.ReferenceCallback) common.OpenAPID
 							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
 						},
 					},
-					"spec": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.RpmRepoSpec"),
-						},
-					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
@@ -1828,7 +1851,7 @@ func schema_ebs_api_ebs_v1_RpmRepo(ref common.ReferenceCallback) common.OpenAPID
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.RpmRepoSpec", "ebs-api/ebs/v1.RpmRepoStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+			"ebs-api/ebs/v1.RpmRepoStatus", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
 	}
 }
 
@@ -1983,16 +2006,6 @@ func schema_ebs_api_ebs_v1_RpmRepoRepositoryStatus(ref common.ReferenceCallback)
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.RepositoryTransition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_RpmRepoSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-			},
-		},
 	}
 }
 
@@ -2786,36 +2799,6 @@ func schema_ebs_api_ebs_v1_SpecBuildStatus(ref common.ReferenceCallback) common.
 	}
 }
 
-func schema_ebs_api_ebs_v1_SpecCommitError(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"code": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"message": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"retryable": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"boolean"},
-							Format: "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
 func schema_ebs_api_ebs_v1_SpecInstallStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -2992,7 +2975,7 @@ func schema_ebs_api_ebs_v1_Toleration(ref common.ReferenceCallback) common.OpenA
 	}
 }
 
-func schema_ebs_api_ebs_v1_VersionConst(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_ebs_v1_VersionConstraint(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{

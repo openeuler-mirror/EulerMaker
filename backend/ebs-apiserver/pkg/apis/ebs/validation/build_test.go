@@ -9,6 +9,26 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestBuildTypeAndStageEnums(t *testing.T) {
+	for _, value := range ebsv1.BuildTypeValues() {
+		build := validBuild()
+		build.Spec.BuildType = ebsv1.BuildType(value)
+		build.Labels[ebsv1.BuildTypeLabel] = value
+		if errs := ValidateBuild(build); len(errs) != 0 {
+			t.Fatalf("buildType %q: %v", value, errs)
+		}
+	}
+	for _, value := range append(ebsv1.BuildStageValues(), "") {
+		old := validBuild()
+		build := old.DeepCopy()
+		build.Status.Phase = ebsv1.BuildProcessing
+		build.Status.Stage = ebsv1.BuildStage(value)
+		if errs := ValidateBuildStatusUpdate(build, old); len(errs) != 0 {
+			t.Fatalf("stage %q: %v", value, errs)
+		}
+	}
+}
+
 func TestValidateBuildTarget(t *testing.T) {
 	content := &ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
 		"os": {Arches: map[string]ebsv1.BuildTargetArch{"arch": {}}},
@@ -22,7 +42,7 @@ func TestValidateBuildTarget(t *testing.T) {
 		{"os", "other", 1},
 	} {
 		t.Run(tc.os+"/"+tc.arch, func(t *testing.T) {
-			build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: tc.os, Arch: tc.arch}}}
+			build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: tc.os, Arch: tc.arch}}}
 			errs := ValidateBuildTarget(build, content)
 			if len(errs) != tc.wantErrors {
 				t.Fatalf("errors = %v, want %d", errs, tc.wantErrors)
@@ -51,7 +71,7 @@ func TestValidateBuildEmptyPackagesByType(t *testing.T) {
 	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
 		t.Run(buildType, func(t *testing.T) {
 			b := validBuild()
-			b.Spec.BuildType = buildType
+			b.Spec.BuildType = ebsv1.BuildType(buildType)
 			b.Labels[ebsv1.BuildTypeLabel] = buildType
 			b.Spec.Packages = nil
 			errs := ValidateBuild(b)
@@ -236,7 +256,7 @@ func TestTerminalBuildPhaseImmutable(t *testing.T) {
 			old.Status.Phase = oldPhase
 			next := old.DeepCopy()
 			next.Status.Phase = ebsv1.BuildPhase(phase)
-			next.Status.Stage = "updated"
+			next.Status.Stage = ebsv1.BuildStagePublish
 			errs := ValidateBuildStatusUpdate(next, old)
 			if (len(errs) == 0) != (next.Status.Phase == oldPhase) {
 				t.Fatalf("%s -> %s: %v", oldPhase, phase, errs)
@@ -282,7 +302,7 @@ func TestBuildGitRefScope(t *testing.T) {
 	for _, typ := range []string{"full", "incremental", "specified", "single"} {
 		for _, packages := range [][]string{nil, {"gcc"}, {"gcc", "gcc"}, {"gcc", "bash"}} {
 			b := validBuild()
-			b.Spec.BuildType, b.Spec.Packages = typ, packages
+			b.Spec.BuildType, b.Spec.Packages = ebsv1.BuildType(typ), packages
 			b.Labels[ebsv1.BuildTypeLabel] = typ
 			b.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"}
 			errs := ValidateBuild(b)

@@ -240,7 +240,6 @@ metadata:
   labels:
     ebs.io/target-os: ${build.spec.buildTarget.os}
     ebs.io/target-arch: ${build.spec.buildTarget.arch}
-spec: {}
 status:
   repository:
     repositoryUID: DB3A8CE2-00CD-4C89-9C20-ADA417C83155
@@ -276,7 +275,6 @@ status:
 | ------------------------------------- | ------------------ | ---------------------------------------------- |
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 `Build.metadata.name` 同名，namespace 来自 Build |
 | `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-os` / `ebs.io/target-arch`，值取 `Build.spec.buildTarget.os` / `arch` ；仅创建时写入一次，已有对象不补写、不改写 |
-| `RpmRepo.spec`                        | Build Controller   | 空 `{}`                                         |
 | `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时种入） | 创建时复制历史过程仓的不可变版本 UID 作为本轮过程仓的当前版本；已有对象不覆盖；随后由 RpmRepo Controller 推进版本 |
 | `RpmRepo.status.repository.contentURL` | Build Controller（创建时种入） | 与 `repositoryUID` 同源同时种入，复制历史过程仓的不可变地址；已有对象不覆盖；随后由 RpmRepo Controller 推进版本 |
 | `RpmRepo.status.release.phase` | RpmRepo Controller | publishFlag=false 时在过程仓处理结束后写 Skipped，其余按 Ready / Failed 消费发布结果 |
@@ -305,7 +303,7 @@ spec:
   buildPayload: ${project.spec.buildPayload}
   bootstrapRepo:
     - name: everything
-      repo: https://example.com/repo/everything
+      url: https://example.com/repo/everything
 status:
   phase: Pending
 ```

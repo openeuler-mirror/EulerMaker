@@ -29,7 +29,7 @@ func ValidateBuildGraph(obj *ebsv1.BuildGraph) field.ErrorList {
 		if name == "" {
 			errs = append(errs, field.Invalid(path, name, "node name must not be empty"))
 		}
-		for edgeKind, edges := range map[string]map[string]ebsv1.VersionConst{"inDep": node.InDep, "installInDep": node.InstallInDep} {
+		for edgeKind, edges := range map[string]map[string]ebsv1.VersionConstraint{"inDep": node.InDep, "installInDep": node.InstallInDep} {
 			for upstream := range edges {
 				if _, exists := nodes[upstream]; !exists {
 					errs = append(errs, field.Invalid(path.Key(name).Child(edgeKind).Key(upstream), upstream, "unknown node"))
@@ -80,7 +80,7 @@ func ValidateBuildGraphStatusUpdate(obj, old *ebsv1.BuildGraph) field.ErrorList 
 	return errs
 }
 
-func sameBuildEdges(a, b map[string]ebsv1.VersionConst) bool {
+func sameBuildEdges(a, b map[string]ebsv1.VersionConstraint) bool {
 	if len(a) != len(b) {
 		return false
 	}

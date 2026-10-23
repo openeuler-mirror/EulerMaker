@@ -52,7 +52,7 @@ export interface PackageRepo {
 
 export interface BootstrapRepo {
   name?: string;
-  repo?: string;
+  url?: string;
 }
 
 export interface Project {

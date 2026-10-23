@@ -167,7 +167,7 @@ func testManager(f *coordinationFake) *ClaimManager {
 	return newClaimManager(f, s, s)
 }
 func testBuild(name, typ string) *ebsv1.Build {
-	return &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "project-a", UID: types.UID("uid-" + name), Labels: map[string]string{ebsv1.BuildTargetOSLabel: "os", ebsv1.BuildTargetArchLabel: "arch", ebsv1.BuildTypeLabel: typ}}, Spec: ebsv1.BuildSpec{BuildType: typ, BuildTarget: ebsv1.BuildTarget{Os: "os", Arch: "arch"}}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildPending}}
+	return &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "project-a", UID: types.UID("uid-" + name), Labels: map[string]string{ebsv1.BuildTargetOSLabel: "os", ebsv1.BuildTargetArchLabel: "arch", ebsv1.BuildTypeLabel: typ}}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: "arch"}}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildPending}}
 }
 func (f *coordinationFake) persist(b *ebsv1.Build) func() (runtime.Object, error) {
 	return func() (runtime.Object, error) {
