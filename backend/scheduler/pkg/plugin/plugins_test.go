@@ -49,6 +49,30 @@ func TestTaintMatching(t *testing.T) {
 	}
 }
 
+func TestExecutionTypeMatching(t *testing.T) {
+	values := []ebsv1.ExecutionType{"", ebsv1.ExecutionTypeContainer, ebsv1.ExecutionTypeVM, ebsv1.ExecutionTypeHardware}
+	for _, jobType := range values {
+		for _, runnerType := range values {
+			session := &framework.Session{Job: &ebsv1.Job{Spec: ebsv1.JobSpec{Runtime: jobType}}}
+			runner := &framework.RunnerSnapshot{Runner: &ebsv1.Runner{Spec: ebsv1.RunnerSpec{Type: runnerType}}}
+			effectiveJob, effectiveRunner := jobType, runnerType
+			if effectiveJob == "" {
+				effectiveJob = ebsv1.ExecutionTypeContainer
+			}
+			if effectiveRunner == "" {
+				effectiveRunner = ebsv1.ExecutionTypeContainer
+			}
+			want := framework.Unschedulable
+			if effectiveJob == effectiveRunner {
+				want = framework.Success
+			}
+			if got := Runtime().Filter(context.Background(), session, runner); got.Code != want {
+				t.Fatalf("job=%q runner=%q: %+v, want %v", jobType, runnerType, got, want)
+			}
+		}
+	}
+}
+
 func TestFiltersAndLeastAllocated(t *testing.T) {
 	requests, _ := framework.ParseRequests(ebsv1.ResourceRequirements{
 		Requests: map[string]string{"cpu": "1", "memory": "1Gi"},

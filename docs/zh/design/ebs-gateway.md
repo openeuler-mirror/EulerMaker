@@ -627,7 +627,7 @@ metadata.ownerReferences
 | Owner/Member 更新 Project 子资源 `/status` | `status` | 仅当对应资源暴露 `/status` 且 4.8 节允许该调用方更新时允许 |
 | Runner 更新自身普通对象 | `metadata.labels["ebs.io/runner-type"]`、`metadata.labels["ebs.io/runner-arch"]`、`metadata.labels["ebs.io/runner-capability.*"]`、`spec.type`、`spec.arch` | 路径名称必须等于 token 的 `runner` claim；`spec.unschedulable`、`spec.taints`、其他 labels、annotations、status 和服务端 metadata 保持不变 |
 | Runner 更新自身 `/status` | `status.phase`、`status.conditions`、`status.capacity`、`status.allocatable`、`status.addresses`、`status.info`、`status.heartbeat` | 路径名称必须等于 token 的 `runner` claim；`spec` 和全部 metadata 保持不变 |
-| Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.build`、`status.install`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner` 或 `status.restartCount`；构建和安装结果的结构与取值由 apiserver 校验 |
+| Runner 更新已分配 Job `/status` | `status.phase`、`status.stage`、`status.build`、`status.install`、`status.startTime`、`status.endTime`、`status.message` | 旧对象和候选对象的 `status.runner` 均必须等于 token 的 `runner` claim；Runner 不得修改 `status.runner`；构建和安装结果的结构与取值由 apiserver 校验 |
 | Admin 更新非管理员 User | `metadata.labels`、`metadata.annotations`、`spec.enabled`、`spec.scopes`、`spec.displayName`、`spec.email` | 旧对象和候选对象的 `spec.scopes` 均不得为 `["ebs:admin"]`；候选 scopes 仍由 apiserver 校验为单一合法 User scope |
 
 表中的允许字段是上限；状态值、不可变 spec 字段和资源自身校验规则仍由 apiserver 执行。Runner 的 `instanceID` 不可变、type/arch labels 一致性和 `resourceVersion` 冲突也只由 apiserver 判定，gateway 不重复实现。没有列入允许集合的任何差异都返回 403。gateway 应在审计日志中记录请求方法、原始 patch 类型、旧/新 `resourceVersion`、被拒绝的 JSON Pointer 路径和拒绝原因，但不得记录密码、完整对象或完整 patch。
@@ -901,7 +901,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | ObjectCompare | Merge Patch 和 JSON Patch 构造完整候选对象；拒绝不支持的 patch 类型、非法 JSON Pointer、重复 key、超大对象和跨 subresource 修改；Runner 的 `resourceVersion` 由 apiserver 校验，冲突返回 409且 gateway 不自动重放 |
 | AccessLabels | 普通用户、Ops 和 Admin 创建 Project 时统一写入当前 Token 的 owner user label；PUT/PATCH 不能通过 `null`、删除父 map、`move` 或 `copy` 绕过 owner/member user label 保护 |
 | RunnerObject | 创建时身份三元组一致、拒绝 status 和非白名单字段；PUT/PATCH 只允许修改自身声明字段，保护由运维管理的 unschedulable、taints、labels 和服务端 metadata；禁止 list/watch/delete 和其他 Runner |
-| RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、restartCount、spec 或 metadata |
+| RunnerStatus | Runner 只能修改自身 Runner status 白名单字段和已分配 Job status 白名单字段，不能修改 Job runner、spec 或 metadata |
 | RateLimit | 超过令牌桶容量后返回 429 |
 | Proxy | `/apis/ebs/v1/*` 原样透传 |
 | Watch | 已授权用户的 Project 范围 Job Watch 和已授权调用方的 Runner 范围 Job Watch 能够流式转发；校验强制过滤、fieldSelector 注入、BOOKMARK、410 重建、timeoutSeconds 和每 Runner 单连接限制；Runner 列表及其他非允许列表路由的 Watch 均拒绝 |

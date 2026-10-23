@@ -1,5 +1,24 @@
 package v1
 
+// ExecutionType identifies the Job execution environment, not the Docker/containerd implementation.
+type ExecutionType string
+
+const (
+	ExecutionTypeContainer ExecutionType = "ct"
+	ExecutionTypeVM        ExecutionType = "vm"
+	ExecutionTypeHardware  ExecutionType = "hw"
+)
+
+// IsValid reports whether the execution type is supported by the API.
+func (t ExecutionType) IsValid() bool {
+	return t == ExecutionTypeContainer || t == ExecutionTypeVM || t == ExecutionTypeHardware
+}
+
+// ExecutionTypeValues returns all supported execution types.
+func ExecutionTypeValues() []string {
+	return []string{string(ExecutionTypeContainer), string(ExecutionTypeVM), string(ExecutionTypeHardware)}
+}
+
 // TolerationOperator selects how a toleration matches a taint. An omitted operator means Equal.
 type TolerationOperator string
 

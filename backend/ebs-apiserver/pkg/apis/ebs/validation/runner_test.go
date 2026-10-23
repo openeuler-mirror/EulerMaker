@@ -220,7 +220,7 @@ func validRunner(runnerType, arch string) *ebsv1.Runner {
 		}},
 		Spec: ebsv1.RunnerSpec{
 			InstanceID: "5d65d05e-37b6-4e7b-bfcb-264930f4436b",
-			Type:       runnerType,
+			Type:       ebsv1.ExecutionType(runnerType),
 			Arch:       arch,
 		},
 	}

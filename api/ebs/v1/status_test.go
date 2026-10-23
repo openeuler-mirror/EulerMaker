@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestExecutionType(t *testing.T) {
+	for _, value := range ExecutionTypeValues() {
+		t.Run(value, func(t *testing.T) {
+			executionType := ExecutionType(value)
+			if !executionType.IsValid() {
+				t.Fatalf("invalid execution type %q", value)
+			}
+			data, err := json.Marshal(executionType)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != `"`+value+`"` {
+				t.Fatalf("unexpected encoding: %s", data)
+			}
+			var decoded ExecutionType
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded != executionType {
+				t.Fatalf("round trip = %q, want %q", decoded, executionType)
+			}
+		})
+	}
+}
+
 func TestBuildEnums(t *testing.T) {
 	for _, value := range BuildTypeValues() {
 		if !BuildType(value).IsValid() {

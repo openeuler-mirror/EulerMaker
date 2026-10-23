@@ -10,6 +10,9 @@ import (
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	if executionType := obj.Spec.Runtime; executionType != "" && !executionType.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "runtime"), executionType, ebsv1.ExecutionTypeValues()))
+	}
 	for i, toleration := range obj.Spec.Tolerations {
 		path := field.NewPath("spec", "tolerations").Index(i)
 		if toleration.Operator != "" && !toleration.Operator.IsValid() {

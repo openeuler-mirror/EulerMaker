@@ -779,7 +779,7 @@ type ScriptRef struct {
 
 type JobSpec struct {
     Priority     int64                `json:"priority,omitempty"`
-    Runtime      string               `json:"runtime,omitempty"`
+    Runtime      ExecutionType        `json:"runtime,omitempty"`
     RuntimeSpec  runtime.RawExtension `json:"runtimeSpec,omitempty"`
     ScriptRefs   []ScriptRef          `json:"scriptRefs,omitempty"`
     TimeoutSeconds int64              `json:"timeoutSeconds,omitempty"`
@@ -793,7 +793,7 @@ type JobSpec struct {
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
 | `priority` | int64 | 否 | Job 调度优先级，值越大越优先，默认：0 |
-| `runtime` | string | 否 | 执行运行时类型，如 `ct`/`vm`/`hw`，默认 `ct` |
+| `runtime` | ExecutionType | 否 | `ct`（容器）/`vm`（虚拟机）/`hw`（物理机）；省略时按 `ct` 调度。与 Docker/containerd 的容器运行时实现无关 |
 | `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置，由对应 runtime 解释 |
 | `scriptRefs` | []ScriptRef | 否 | 为空时使用镜像入口；非空时按顺序拉取，第一项为主脚本，名称不得重复；记录创建 Job 时观察到的 Script name、UID、resourceVersion，不锁定执行时的脚本内容，见 [Script 设计](data-models~script.md) |
 | `timeoutSeconds` | int64 | 否 | 最大运行秒数，默认 10800 |
@@ -847,7 +847,6 @@ type JobStatus struct {
     StartTime  metav1.Time `json:"startTime,omitempty"`
     EndTime    metav1.Time `json:"endTime,omitempty"`
     Message    string      `json:"message,omitempty"`
-    RestartCount int64     `json:"restartCount,omitempty"`
 }
 ```
 
@@ -861,7 +860,6 @@ type JobStatus struct {
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `message` | string | 执行或上传错误说明，不承载安装检查的结构化结果 |
-| `restartCount` | int64 | 重试次数，默认 0。调度器可使用该字段计算重试退避时间 |
 
 ### JobList
 
@@ -921,7 +919,7 @@ type Runner struct {
 ```go
 type RunnerSpec struct {
     InstanceID   string        `json:"instanceID,omitempty"`
-    Type          string        `json:"type,omitempty"`
+    Type          ExecutionType `json:"type,omitempty"`
     Arch          string        `json:"arch,omitempty"`
     Unschedulable bool          `json:"unschedulable,omitempty"`
     Taints        []RunnerTaint `json:"taints,omitempty"`
@@ -931,7 +929,7 @@ type RunnerSpec struct {
 | 字段 | Go 类型 | 必填 | 说明 |
 |------|---------|------|------|
 | `instanceID` | string | 是 | Runner 安装实例持久化 UUID；规范小写 UUID v4，同名对象恢复时必须匹配 |
-| `type` | string | 否 | 执行机类型：`ct` / `vm` / `hw`，默认 `ct` |
+| `type` | ExecutionType | 是 | `ct` / `vm` / `hw`，与 Job.spec.runtime 共用公共 API 枚举；Runner agent 默认配置为 `ct` |
 | `arch` | string | 是 | CPU 架构标识，不限制枚举值 |
 | `unschedulable` | bool | 否 | 是否禁止调度新 Job |
 | `taints` | []RunnerTaint | 否 | 反亲和污点 |
