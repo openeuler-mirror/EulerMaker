@@ -1285,12 +1285,6 @@ func schema_ebs_api_ebs_v1_JobStatus(ref common.ReferenceCallback) common.OpenAP
 							Format: "",
 						},
 					},
-					"restartCount": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int64",
-						},
-					},
 				},
 			},
 		},

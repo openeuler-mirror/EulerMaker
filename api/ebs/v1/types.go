@@ -410,7 +410,7 @@ type Job struct {
 
 type JobSpec struct {
 	Priority       int64                `json:"priority,omitempty"`
-	Runtime        string               `json:"runtime,omitempty"`
+	Runtime        ExecutionType        `json:"runtime,omitempty"`
 	RuntimeSpec    runtime.RawExtension `json:"runtimeSpec,omitempty"`
 	ScriptRefs     []ScriptRef          `json:"scriptRefs,omitempty"`
 	TimeoutSeconds int64                `json:"timeoutSeconds,omitempty"`
@@ -421,15 +421,14 @@ type JobSpec struct {
 }
 
 type JobStatus struct {
-	Phase        JobPhase          `json:"phase,omitempty"`
-	Stage        JobStage          `json:"stage,omitempty"`
-	Build        *JobBuildResult   `json:"build,omitempty"`
-	Install      *JobInstallResult `json:"install,omitempty"`
-	Runner       string            `json:"runner,omitempty"`
-	StartTime    metav1.Time       `json:"startTime,omitempty"`
-	EndTime      metav1.Time       `json:"endTime,omitempty"`
-	Message      string            `json:"message,omitempty"`
-	RestartCount int64             `json:"restartCount,omitempty"`
+	Phase     JobPhase          `json:"phase,omitempty"`
+	Stage     JobStage          `json:"stage,omitempty"`
+	Build     *JobBuildResult   `json:"build,omitempty"`
+	Install   *JobInstallResult `json:"install,omitempty"`
+	Runner    string            `json:"runner,omitempty"`
+	StartTime metav1.Time       `json:"startTime,omitempty"`
+	EndTime   metav1.Time       `json:"endTime,omitempty"`
+	Message   string            `json:"message,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -477,7 +476,7 @@ type Runner struct {
 
 type RunnerSpec struct {
 	InstanceID    string        `json:"instanceID,omitempty"`
-	Type          string        `json:"type,omitempty"`
+	Type          ExecutionType `json:"type,omitempty"`
 	Arch          string        `json:"arch,omitempty"`
 	Unschedulable bool          `json:"unschedulable,omitempty"`
 	Taints        []RunnerTaint `json:"taints,omitempty"`

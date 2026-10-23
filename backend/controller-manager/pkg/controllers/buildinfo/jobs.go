@@ -25,7 +25,6 @@ import (
 )
 
 const (
-	jobRuntime         = "ct"
 	jobTimeoutSeconds  = 10800
 	runnerArchSelector = "ebs.io/runner-arch"
 
@@ -504,7 +503,7 @@ func (c *Controller) jobForSpec(
 		},
 		Spec: ebsv1.JobSpec{
 			ScriptRefs:     []ebsv1.ScriptRef{scriptRef},
-			Runtime:        jobRuntime,
+			Runtime:        ebsv1.ExecutionTypeContainer,
 			RuntimeSpec:    runtime.RawExtension{Raw: runtimeSpec},
 			TimeoutSeconds: jobTimeoutSeconds,
 			Resources:      resolveResources(resource, specName, target.Arch),

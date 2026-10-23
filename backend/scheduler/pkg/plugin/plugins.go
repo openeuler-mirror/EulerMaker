@@ -58,11 +58,11 @@ func Runtime() framework.FilterPlugin {
 	return filter{"RuntimeFilter", func(s *framework.Session, r *framework.RunnerSnapshot) *framework.Status {
 		runtime := s.Job.Spec.Runtime
 		if runtime == "" {
-			runtime = "ct"
+			runtime = ebsv1.ExecutionTypeContainer
 		}
 		runnerRuntime := r.Runner.Spec.Type
 		if runnerRuntime == "" {
-			runnerRuntime = "ct"
+			runnerRuntime = ebsv1.ExecutionTypeContainer
 		}
 		if runtime != runnerRuntime {
 			return reject("RuntimeFilter", "runtime does not match")

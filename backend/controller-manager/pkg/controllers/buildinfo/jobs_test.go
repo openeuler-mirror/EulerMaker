@@ -249,12 +249,12 @@ func TestJobForSpecConstruction(t *testing.T) {
 			t.Errorf("annotation %s = %q, want %q", k, job.Annotations[k], want)
 		}
 	}
-	if job.Spec.Runtime != jobRuntime || job.Spec.TimeoutSeconds != jobTimeoutSeconds {
+	if job.Spec.Runtime != ebsv1.ExecutionTypeContainer || job.Spec.TimeoutSeconds != jobTimeoutSeconds {
 		t.Errorf(
 			"runtime/timeout = %q/%d, want %q/%d",
 			job.Spec.Runtime,
 			job.Spec.TimeoutSeconds,
-			jobRuntime,
+			ebsv1.ExecutionTypeContainer,
 			jobTimeoutSeconds,
 		)
 	}

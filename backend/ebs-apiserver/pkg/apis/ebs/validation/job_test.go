@@ -13,6 +13,16 @@ func TestValidateJob(t *testing.T) {
 	assertErrorList(t, errs, 0, nil)
 }
 
+func TestValidateJobExecutionType(t *testing.T) {
+	for _, value := range append(ebsv1.ExecutionTypeValues(), "") {
+		job := validJob()
+		job.Spec.Runtime = ebsv1.ExecutionType(value)
+		if errs := ValidateJob(job); len(errs) != 0 {
+			t.Fatalf("runtime %q: %v", value, errs)
+		}
+	}
+}
+
 func TestValidateJobTolerationEnums(t *testing.T) {
 	for _, operator := range append(ebsv1.TolerationOperatorValues(), "") {
 		for _, effect := range append(ebsv1.TaintEffectValues(), "") {

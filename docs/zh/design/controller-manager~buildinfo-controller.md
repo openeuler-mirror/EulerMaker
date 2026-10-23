@@ -1263,7 +1263,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 | 字段 | 写入方与时机 |
 |------|------|
-| `status.runner` / `startTime` / `endTime` / `message` / `restartCount` | runner 执行期/终态回写；`message` 仅记录执行或上传错误 |
+| `status.runner` / `startTime` / `endTime` / `message` | runner 执行期/终态回写；`message` 仅记录执行或上传错误 |
 | `status.phase` / `status.stage` | runner 推进 stage：`Pending → Running → PostRun`；phase 终态：`Succeeded` / `Failed` / `Aborted`（PostRun 为 `status.stage` 值、非 phase，见 data-models.md；phase 映射见 7.4.5） |
 | `status.build` / `status.install` | runner 从脚本结果读取并回写；buildinfo 依据结构化结果回填（见 7.4.7） |
 
@@ -1277,7 +1277,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `status.phase` | 经 7.4.5 映射回写 `build.status`；`Pending` 无映射 → 强制 `Running`（不得沿用上一代终态） |
 | `status.install` | `phase=Succeeded` 时回填 `specStatus.install[spec]`，缺失结果不得视为安装成功（见 7.4.7） |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
-| `status.stage` / `runner` / `endTime` / `restartCount` | 不消费 |
+| `status.stage` / `runner` / `endTime` | 不消费 |
 
 ### 15.4 RpmRepo（只读）
 

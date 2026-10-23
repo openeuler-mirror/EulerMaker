@@ -16,13 +16,13 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		"apiVersion": "ebs/v1", "kind": "Job",
 		"metadata": map[string]any{"name": "job-1", "namespace": "team", "resourceVersion": "1"},
 		"spec":     map[string]any{"command": "build"},
-		"status":   map[string]any{"runner": "runner-1", "phase": "Running", "restartCount": 0},
+		"status":   map[string]any{"runner": "runner-1", "phase": "Running"},
 	}
 	allowed := mutation.Object{
 		"apiVersion": "ebs/v1", "kind": "Job",
 		"metadata": map[string]any{"name": "job-1", "namespace": "team", "resourceVersion": "1"},
 		"spec":     map[string]any{"command": "build"},
-		"status":   map[string]any{"runner": "runner-1", "phase": "Succeeded", "restartCount": 0},
+		"status":   map[string]any{"runner": "runner-1", "phase": "Succeeded"},
 	}
 	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, old, allowed); err != nil {
 		t.Fatalf("allowed phase update was rejected: %v", err)
@@ -32,7 +32,7 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		"metadata": map[string]any{"name": "job-1", "namespace": "team", "resourceVersion": "1"},
 		"spec":     map[string]any{"command": "build"},
 		"status": map[string]any{
-			"runner": "runner-1", "phase": "Running", "stage": "PostRun", "restartCount": 0,
+			"runner": "runner-1", "phase": "Running", "stage": "PostRun",
 			"build":   map[string]any{"status": "Succeeded"},
 			"install": map[string]any{"status": "Failed", "missingDeps": map[string]any{"missing": map[string]any{}}},
 		},
@@ -45,7 +45,7 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		"metadata": map[string]any{"name": "job-1", "namespace": "team", "resourceVersion": "1"},
 		"spec":     map[string]any{"command": "build"},
 		"status": map[string]any{
-			"runner": "runner-1", "phase": "Succeeded", "stage": "PostRun", "restartCount": 0,
+			"runner": "runner-1", "phase": "Succeeded", "stage": "PostRun",
 			"build":   map[string]any{"status": "Succeeded"},
 			"install": map[string]any{"status": "Succeeded"},
 		},
@@ -57,9 +57,8 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		name   string
 		status map[string]any
 	}{
-		{"runner reassignment", map[string]any{"runner": "runner-2", "phase": "Succeeded", "restartCount": 0}},
-		{"restart count", map[string]any{"runner": "runner-1", "phase": "Succeeded", "restartCount": 1}},
-		{"new protected field", map[string]any{"runner": "runner-1", "phase": "Succeeded", "restartCount": 0, "secret": "x"}},
+		{"runner reassignment", map[string]any{"runner": "runner-2", "phase": "Succeeded"}},
+		{"new protected field", map[string]any{"runner": "runner-1", "phase": "Succeeded", "secret": "x"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := mutation.Object{

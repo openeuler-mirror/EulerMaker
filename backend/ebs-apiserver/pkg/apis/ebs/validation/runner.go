@@ -23,8 +23,8 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 	}
 	if len(obj.Spec.Type) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "type"), "type is required"))
-	} else if obj.Spec.Type != "ct" && obj.Spec.Type != "vm" && obj.Spec.Type != "hw" {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "type"), obj.Spec.Type, []string{"ct", "vm", "hw"}))
+	} else if !obj.Spec.Type.IsValid() {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "type"), obj.Spec.Type, ebsv1.ExecutionTypeValues()))
 	}
 	if len(obj.Spec.Arch) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "arch"), "arch is required"))
@@ -36,7 +36,7 @@ func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 		allErrs = append(allErrs, field.Invalid(instanceIDPath, obj.Spec.InstanceID, "must be a canonical lowercase UUID v4"))
 	}
 	labelsPath := field.NewPath("metadata", "labels")
-	if obj.Labels["ebs.io/runner-type"] != obj.Spec.Type {
+	if obj.Labels["ebs.io/runner-type"] != string(obj.Spec.Type) {
 		allErrs = append(allErrs, field.Invalid(labelsPath.Key("ebs.io/runner-type"), obj.Labels["ebs.io/runner-type"], "must match spec.type"))
 	}
 	if obj.Labels["ebs.io/runner-arch"] != obj.Spec.Arch {
