@@ -24,7 +24,7 @@ func NewStorage() *scopedresource.Storage {
 		NewList: func() runtime.Object { return &ebsv1.BuildList{} },
 		PrepareCreate: func(obj runtime.Object) {
 			b := obj.(*ebsv1.Build)
-			if b.Spec.BuildType == "full" || b.Spec.BuildType == "incremental" {
+			if b.Spec.BuildType == ebsv1.BuildTypeFull || b.Spec.BuildType == ebsv1.BuildTypeIncremental {
 				b.Spec.Packages = nil
 			}
 			ensureBuildTargetLabels(b)
@@ -105,13 +105,13 @@ func ensureBuildTargetLabels(build *ebsv1.Build) {
 	if build.Labels == nil {
 		build.Labels = make(map[string]string, 3)
 	}
-	if _, ok := build.Labels[ebsv1.BuildTargetOSLabel]; !ok && len(build.Spec.BuildTarget.Os) > 0 {
-		build.Labels[ebsv1.BuildTargetOSLabel] = build.Spec.BuildTarget.Os
+	if _, ok := build.Labels[ebsv1.BuildTargetOSLabel]; !ok && len(build.Spec.BuildTarget.OS) > 0 {
+		build.Labels[ebsv1.BuildTargetOSLabel] = build.Spec.BuildTarget.OS
 	}
 	if _, ok := build.Labels[ebsv1.BuildTargetArchLabel]; !ok && len(build.Spec.BuildTarget.Arch) > 0 {
 		build.Labels[ebsv1.BuildTargetArchLabel] = build.Spec.BuildTarget.Arch
 	}
 	if _, ok := build.Labels[ebsv1.BuildTypeLabel]; !ok && len(build.Spec.BuildType) > 0 {
-		build.Labels[ebsv1.BuildTypeLabel] = build.Spec.BuildType
+		build.Labels[ebsv1.BuildTypeLabel] = string(build.Spec.BuildType)
 	}
 }

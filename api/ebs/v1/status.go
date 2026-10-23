@@ -1,5 +1,101 @@
 package v1
 
+// BuildType selects the package selection strategy.
+type BuildType string
+
+const (
+	BuildTypeFull        BuildType = "full"
+	BuildTypeIncremental BuildType = "incremental"
+	BuildTypeSpecified   BuildType = "specified"
+	BuildTypeSingle      BuildType = "single"
+)
+
+// BuildTypeValues returns the supported nonempty values.
+func BuildTypeValues() []string {
+	return []string{string(BuildTypeFull), string(BuildTypeIncremental), string(BuildTypeSpecified), string(BuildTypeSingle)}
+}
+
+// IsValid reports whether the value is supported.
+func (v BuildType) IsValid() bool {
+	switch v {
+	case BuildTypeFull, BuildTypeIncremental, BuildTypeSpecified, BuildTypeSingle:
+		return true
+	default:
+		return false
+	}
+}
+
+// BuildStage describes the current build or publication stage.
+type BuildStage string
+
+const (
+	BuildStageBuild   BuildStage = "build"
+	BuildStagePublish BuildStage = "publish"
+)
+
+// BuildStageValues returns the supported nonempty values.
+func BuildStageValues() []string {
+	return []string{string(BuildStageBuild), string(BuildStagePublish)}
+}
+
+// IsValid reports whether the value is supported.
+func (v BuildStage) IsValid() bool {
+	switch v {
+	case BuildStageBuild, BuildStagePublish:
+		return true
+	default:
+		return false
+	}
+}
+
+// SpecBuildPhase describes a spec build verdict; an empty value means no verdict yet.
+type SpecBuildPhase string
+
+const (
+	SpecBuildRunning         SpecBuildPhase = "Running"
+	SpecBuildSucceeded       SpecBuildPhase = "Succeeded"
+	SpecBuildFailed          SpecBuildPhase = "Failed"
+	SpecBuildArchUnsupported SpecBuildPhase = "ArchUnsupported"
+)
+
+// SpecBuildPhaseValues returns the supported nonempty values.
+func SpecBuildPhaseValues() []string {
+	return []string{string(SpecBuildRunning), string(SpecBuildSucceeded), string(SpecBuildFailed), string(SpecBuildArchUnsupported)}
+}
+
+// IsValid reports whether the value is supported.
+func (v SpecBuildPhase) IsValid() bool {
+	switch v {
+	case SpecBuildRunning, SpecBuildSucceeded, SpecBuildFailed, SpecBuildArchUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// SpecInstallPhase describes an install-check verdict; an empty value means not assessed.
+type SpecInstallPhase string
+
+const (
+	SpecInstallSucceeded SpecInstallPhase = "Succeeded"
+	SpecInstallFailed    SpecInstallPhase = "Failed"
+)
+
+// SpecInstallPhaseValues returns the supported nonempty values.
+func SpecInstallPhaseValues() []string {
+	return []string{string(SpecInstallSucceeded), string(SpecInstallFailed)}
+}
+
+// IsValid reports whether the value is supported.
+func (v SpecInstallPhase) IsValid() bool {
+	switch v {
+	case SpecInstallSucceeded, SpecInstallFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // ProjectPhase describes the lifecycle state of a Project.
 type ProjectPhase string
 
@@ -167,16 +263,16 @@ func (p RunnerPhase) IsValid() bool {
 // SnapshotPhase describes the lifecycle state of a Snapshot.
 type SnapshotPhase string
 
-// SpecCommitErrorCode classifies a package repository resolution failure.
-type SpecCommitErrorCode string
+// PackageRepoErrorCode classifies a package repository resolution failure.
+type PackageRepoErrorCode string
 
 const (
-	SpecCommitValidationFailed SpecCommitErrorCode = "ValidationFailed"
-	SpecCommitSyncFailed       SpecCommitErrorCode = "SyncFailed"
-	SpecCommitSyncTimeout      SpecCommitErrorCode = "SyncTimeout"
-	SpecCommitResolveFailed    SpecCommitErrorCode = "ResolveFailed"
-	SpecCommitCommitConflict   SpecCommitErrorCode = "CommitConflict"
-	SpecCommitRetryExhausted   SpecCommitErrorCode = "RetryExhausted"
+	PackageRepoValidationFailed PackageRepoErrorCode = "ValidationFailed"
+	PackageRepoSyncFailed       PackageRepoErrorCode = "SyncFailed"
+	PackageRepoSyncTimeout      PackageRepoErrorCode = "SyncTimeout"
+	PackageRepoResolveFailed    PackageRepoErrorCode = "ResolveFailed"
+	PackageRepoCommitConflict   PackageRepoErrorCode = "CommitConflict"
+	PackageRepoRetryExhausted   PackageRepoErrorCode = "RetryExhausted"
 )
 
 const (

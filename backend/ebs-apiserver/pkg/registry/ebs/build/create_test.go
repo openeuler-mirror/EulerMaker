@@ -67,7 +67,7 @@ func (l *latestBuildLister) List(ctx context.Context, opts *internalversion.List
 
 func TestValidateLatestBuild(t *testing.T) {
 	ctx := request.WithNamespace(context.Background(), "project-a")
-	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "os", Arch: "arch"}}}
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: "arch"}}}
 	for _, phase := range []ebsv1.BuildPhase{ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing, ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped, "", "Unknown"} {
 		t.Run(string(phase), func(t *testing.T) {
 			err := validateLatestBuild(ctx, &latestBuildLister{t: t, phase: phase}, build)
@@ -91,7 +91,7 @@ func TestValidateLatestBuild(t *testing.T) {
 
 func TestLimitedBuild(t *testing.T) {
 	for _, typ := range []string{"", "full", "incremental", "specified", "single"} {
-		if got := limitedBuild(&ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: typ}}); got != (typ != "single") {
+		if got := limitedBuild(&ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ)}}); got != (typ != "single") {
 			t.Fatalf("unexpected gate for %s", typ)
 		}
 	}
@@ -129,7 +129,7 @@ func (l *fullBuildLister) Exists(ctx context.Context, opts *internalversion.List
 func TestValidateFullBuildBaseline(t *testing.T) {
 	ctx := request.WithNamespace(context.Background(), "project-a")
 	for _, typ := range []string{"incremental", "specified"} {
-		build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: typ, BuildTarget: ebsv1.BuildTarget{Os: "os", Arch: "arch"}}}
+		build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: "arch"}}}
 		if err := validateFullBuildBaseline(ctx, &fullBuildLister{t: t, exists: true}, build); err != nil {
 			t.Fatal(err)
 		}
@@ -337,7 +337,7 @@ func TestUnconfiguredBuildDoesNotAcquireClaim(t *testing.T) {
 				t.Fatal("invalid target acquired claim")
 				return nil, nil
 			})
-			obj := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "01234567-89ab-4cde-8fab-0123456789ab", Namespace: "project"}, Spec: ebsv1.BuildSpec{BuildType: buildType, Packages: []string{"gcc"}, BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+			obj := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "01234567-89ab-4cde-8fab-0123456789ab", Namespace: "project"}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(buildType), Packages: []string{"gcc"}, BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}}}
 			_, err := store.Create(request.WithNamespace(context.Background(), "project"), obj, nil, &metav1.CreateOptions{})
 			if !apierrors.IsInvalid(err) || calls != 1 {
 				t.Fatalf("calls=%d error=%v", calls, err)
@@ -378,7 +378,7 @@ func TestBuildTargetConfigCreateHook(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			hook := ValidateBuildTargetConfig(confGetter{tc.obj, tc.err, t}, func(context.Context, runtime.Object) error { calls++; return nil })
-			err := hook(request.WithNamespace(context.Background(), "project"), &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "os", Arch: tc.arch}}})
+			err := hook(request.WithNamespace(context.Background(), "project"), &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: tc.arch}}})
 			if tc.code == 0 {
 				if err != nil || calls != 1 {
 					t.Fatalf("calls=%d error=%v", calls, err)
@@ -421,7 +421,7 @@ func TestValidateProjectPackages(t *testing.T) {
 				if missing {
 					packages = append(packages, "unknown", "")
 				}
-				b := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a"}, Spec: ebsv1.BuildSpec{BuildType: typ, Packages: packages}}
+				b := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a"}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), Packages: packages}}
 				err := ValidateProjectPackages(g)(request.WithNamespace(context.Background(), "project-a"), b)
 				checked := typ == "single" || typ == "specified"
 				if checked && missing {

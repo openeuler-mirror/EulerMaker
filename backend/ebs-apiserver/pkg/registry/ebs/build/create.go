@@ -24,7 +24,7 @@ import (
 
 func limitedBuild(build *ebsv1.Build) bool {
 	switch build.Spec.BuildType {
-	case "", "full", "incremental", "specified":
+	case "", ebsv1.BuildTypeFull, ebsv1.BuildTypeIncremental, ebsv1.BuildTypeSpecified:
 		return true
 	default:
 		return false
@@ -35,10 +35,10 @@ var _ coordinationBackend = (*es.Client)(nil)
 
 func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.Build) error {
 	selector := labels.SelectorFromSet(labels.Set{
-		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
+		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
 		ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
 	})
-	nonSingle, err := labels.NewRequirement(ebsv1.BuildTypeLabel, selection.NotEquals, []string{"single"})
+	nonSingle, err := labels.NewRequirement(ebsv1.BuildTypeLabel, selection.NotEquals, []string{string(ebsv1.BuildTypeSingle)})
 	if err != nil {
 		return err
 	}
@@ -58,18 +58,18 @@ func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.B
 	}
 	previous := &list.Items[0]
 	return apierrors.NewConflict(ebsv1.Resource("builds"), build.Name,
-		fmt.Errorf("latest non-single build %q for target %s/%s is not terminal (phase %q)", previous.Name, build.Spec.BuildTarget.Os, build.Spec.BuildTarget.Arch, previous.Status.Phase))
+		fmt.Errorf("latest non-single build %q for target %s/%s is not terminal (phase %q)", previous.Name, build.Spec.BuildTarget.OS, build.Spec.BuildTarget.Arch, previous.Status.Phase))
 }
 
 func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *ebsv1.Build) error {
-	if build.Spec.BuildType != "incremental" && build.Spec.BuildType != "specified" {
+	if build.Spec.BuildType != ebsv1.BuildTypeIncremental && build.Spec.BuildType != ebsv1.BuildTypeSpecified {
 		return nil
 	}
 	exists, err := builds.Exists(ctx, &internalversion.ListOptions{
 		LabelSelector: labels.SelectorFromSet(labels.Set{
-			ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.Os,
+			ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
 			ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
-			ebsv1.BuildTypeLabel:       "full",
+			ebsv1.BuildTypeLabel:       string(ebsv1.BuildTypeFull),
 		}),
 		FieldSelector: fields.OneTermEqualSelector("status.phase", string(ebsv1.BuildSuccess)),
 	})
@@ -120,7 +120,7 @@ func ValidateProjectPackages(projects rest.Getter) rest.ValidateObjectFunc {
 		if !ok || build == nil {
 			return apierrors.NewInternalError(fmt.Errorf("expected Build, got %T", obj))
 		}
-		if build.Spec.BuildType != "single" && build.Spec.BuildType != "specified" {
+		if build.Spec.BuildType != ebsv1.BuildTypeSingle && build.Spec.BuildType != ebsv1.BuildTypeSpecified {
 			return nil
 		}
 		project, ok := request.NamespaceFrom(ctx)

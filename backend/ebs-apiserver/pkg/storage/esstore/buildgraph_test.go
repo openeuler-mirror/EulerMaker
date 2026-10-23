@@ -50,7 +50,7 @@ func TestBuildGraphStorage(t *testing.T) {
 	}
 	updated := created.DeepCopy()
 	updated.Annotations = map[string]string{"ignored": "status-write"}
-	updated.Status.Nodes["b"] = ebsv1.DcgNodeState{InstallInDep: map[string]ebsv1.VersionConst{"a": {}}}
+	updated.Status.Nodes["b"] = ebsv1.DcgNodeState{InstallInDep: map[string]ebsv1.VersionConstraint{"a": {}}}
 	updated.Status.Nodes["a"] = ebsv1.DcgNodeState{OutDep: []string{"b"}}
 	obj, _, err = status.Update(ctx, graph.Name, rest.DefaultUpdatedObjectInfo(updated), nil, nil, false, nil)
 	if err != nil {

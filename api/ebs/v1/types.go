@@ -1,8 +1,6 @@
 package v1
 
 import (
-	"encoding/json"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -100,8 +98,6 @@ type ScriptList struct {
 	Items           []Script `json:"items"`
 }
 
-const ProjectArtifactsAnnotation = "ebs.io/artifacts"
-
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type Project struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -158,19 +154,16 @@ type SnapshotList struct {
 }
 
 type PackageRepoStatus struct {
-	CloneURL string           `json:"cloneUrl,omitempty"`
-	CommitID string           `json:"commitId,omitempty"`
-	Error    *SpecCommitError `json:"error,omitempty"`
+	CloneURL string            `json:"cloneUrl,omitempty"`
+	CommitID string            `json:"commitId,omitempty"`
+	Error    *PackageRepoError `json:"error,omitempty"`
 }
 
-type SpecCommitError struct {
-	Code      SpecCommitErrorCode `json:"code,omitempty"`
-	Message   string              `json:"message,omitempty"`
-	Retryable bool                `json:"retryable,omitempty"`
+type PackageRepoError struct {
+	Code      PackageRepoErrorCode `json:"code,omitempty"`
+	Message   string               `json:"message,omitempty"`
+	Retryable bool                 `json:"retryable,omitempty"`
 }
-
-// BuildGitRefAnnotation overrides the source ref for a single-package Build.
-const BuildGitRefAnnotation = "ebs.io/git-ref"
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type Build struct {
@@ -181,14 +174,14 @@ type Build struct {
 }
 
 type BuildSpec struct {
-	BuildType   string      `json:"buildType,omitempty"`
+	BuildType   BuildType   `json:"buildType,omitempty"`
 	Packages    []string    `json:"packages,omitempty"`
 	BuildTarget BuildTarget `json:"buildTarget,omitempty"`
 }
 
 type BuildStatus struct {
 	Phase        BuildPhase         `json:"phase,omitempty"`
-	Stage        string             `json:"stage,omitempty"`
+	Stage        BuildStage         `json:"stage,omitempty"`
 	StartTime    metav1.Time        `json:"startTime,omitempty"`
 	EndTime      metav1.Time        `json:"endTime,omitempty"`
 	BaseBuildRef *BaseBuildRef      `json:"baseBuildRef,omitempty"`
@@ -260,45 +253,14 @@ type SpecStatus struct {
 }
 
 type SpecBuildStatus struct {
-	Status     string             `json:"status"`
+	Status     SpecBuildPhase     `json:"status"`
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 type SpecInstallStatus struct {
-	Status      string                `json:"status"`
+	Status      SpecInstallPhase      `json:"status"`
 	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
 	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
-}
-
-// UnmarshalJSON accepts the former per-spec layout when reading stored
-// BuildInfo objects. Subsequent writes use the grouped layout.
-func (s *SpecStatusGroup) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	legacy := false
-	for name := range fields {
-		if name != "build" && name != "install" && name != "dispatchCount" {
-			legacy = true
-			break
-		}
-	}
-	if legacy {
-		var entries map[string]SpecStatus
-		if err := json.Unmarshal(data, &entries); err != nil {
-			return err
-		}
-		*s = NewSpecStatusGroup(entries)
-		return nil
-	}
-	type grouped SpecStatusGroup
-	var value grouped
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	*s = SpecStatusGroup(value)
-	return nil
 }
 
 // NewSpecStatusGroup converts per-spec statuses to the grouped API shape.
@@ -378,22 +340,19 @@ type BuildGraphList struct {
 // upstream specs to the matched version constraints. BootstrapBreak marks
 // a cycle-break node; it is persisted and never re-selected on load.
 type DcgNodeState struct {
-	Version        string                  `json:"version,omitempty"`
-	OutDep         []string                `json:"outDep,omitempty"`
-	InDep          map[string]VersionConst `json:"inDep,omitempty"`
-	InstallInDep   map[string]VersionConst `json:"installInDep,omitempty"`
-	BootstrapBreak bool                    `json:"bootstrapBreak,omitempty"`
+	Version        string                       `json:"version,omitempty"`
+	OutDep         []string                     `json:"outDep,omitempty"`
+	InDep          map[string]VersionConstraint `json:"inDep,omitempty"`
+	InstallInDep   map[string]VersionConstraint `json:"installInDep,omitempty"`
+	BootstrapBreak bool                         `json:"bootstrapBreak,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type RpmRepo struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              RpmRepoSpec   `json:"spec,omitempty"`
 	Status            RpmRepoStatus `json:"status,omitempty"`
 }
-
-type RpmRepoSpec struct{}
 
 type RpmRepoStatus struct {
 	Repository *RpmRepoRepositoryStatus `json:"repository,omitempty"`
@@ -561,7 +520,7 @@ type RunnerInfo struct {
 }
 
 type BuildTarget struct {
-	Os          string `json:"os,omitempty"`
+	OS          string `json:"os,omitempty"`
 	Arch        string `json:"arch,omitempty"`
 	BuildFlag   bool   `json:"buildFlag,omitempty"`
 	PublishFlag bool   `json:"publishFlag,omitempty"`
@@ -577,7 +536,7 @@ type PackageRepo struct {
 
 type BootstrapRepo struct {
 	Name string `json:"name,omitempty"`
-	Repo string `json:"repo,omitempty"`
+	URL  string `json:"url,omitempty"`
 }
 
 type ResourceRequirements struct {
@@ -586,11 +545,11 @@ type ResourceRequirements struct {
 }
 
 type MissingDep struct {
-	NeededBy        string       `json:"neededBy,omitempty"`
-	VersionRequests VersionConst `json:"versionRequests,omitempty"`
+	NeededBy        string            `json:"neededBy,omitempty"`
+	VersionRequests VersionConstraint `json:"versionRequests,omitempty"`
 }
 
-type VersionConst struct {
+type VersionConstraint struct {
 	GT string `json:"gt,omitempty"`
 	GE string `json:"ge,omitempty"`
 	EQ string `json:"eq,omitempty"`

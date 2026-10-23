@@ -15,6 +15,19 @@ func ValidateBuildInfoUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
 
 func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
 	var allErrs field.ErrorList
+	statusPath := field.NewPath("status", "specStatus")
+	for name, build := range newObj.Status.SpecStatus.Build {
+		if build.Status != "" && !build.Status.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(statusPath.Child("build").Key(name).Child("status"),
+				build.Status, ebsv1.SpecBuildPhaseValues()))
+		}
+	}
+	for name, install := range newObj.Status.SpecStatus.Install {
+		if install.Status != "" && !install.Status.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(statusPath.Child("install").Key(name).Child("status"),
+				install.Status, ebsv1.SpecInstallPhaseValues()))
+		}
+	}
 	phase := newObj.Status.Phase
 	if !phase.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "phase"), phase, ebsv1.BuildInfoPhaseValues()))

@@ -33,7 +33,7 @@ func hasFieldError(errs field.ErrorList, wantField string, wantType field.ErrorT
 
 func validBuildTarget() ebsv1.BuildTarget {
 	return ebsv1.BuildTarget{
-		Os:   "openEuler-22.03-LTS",
+		OS:   "openEuler-22.03-LTS",
 		Arch: "x86_64",
 	}
 }

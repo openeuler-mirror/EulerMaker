@@ -108,7 +108,7 @@ type Client interface {
     ListRpmRepos(ctx context.Context, project string, options metav1.ListOptions) ([]v1.RpmRepo, error)
 
     // RpmRepo 写入（仅 status）
-    // UpdateRpmRepoStatus 走 /status：写 RpmRepo.status，apiserver 保留旧 spec 与 metadata
+    // UpdateRpmRepoStatus 走 /status：写 RpmRepo.status，apiserver 保留受保护 metadata
     UpdateRpmRepoStatus(ctx context.Context, obj *v1.RpmRepo) (*v1.RpmRepo, error)
 }
 ```
@@ -134,7 +134,7 @@ type Client interface {
 
 Artifact Manager 的路径与 `ArtifactManagerClient` 一一对应，统一列在 3.3。
 
-写请求必须携带对象的 UID 与 `metadata.resourceVersion`。成功响应必须校验非 nil、UID 一致、`resourceVersion` 非空，`/status` 响应还要求保留旧 `spec`；任一不满足都按 `WriteUnknown` 处理。
+写请求必须携带对象的 UID 与 `metadata.resourceVersion`。成功响应必须校验非 nil、UID、name、namespace 一致且 `resourceVersion` 非空；任一不满足都按 `WriteUnknown` 处理。
 
 ### 3.3 ArtifactManagerClient 接口
 
@@ -216,7 +216,7 @@ type DefaultPublishPolicy struct{}
 
 ## 四、对象样例与字段来源
 
-`RpmRepo` 与 `Build` 同名同 namespace，一对一。首版 `RpmRepo.spec` 为空 `{}`，由 Build Controller 在 Pending 阶段 ensure。
+`RpmRepo` 与 `Build` 同名同 namespace，一对一，仅包含 metadata 与 status，由 Build Controller 在 Pending 阶段 ensure。
 
 初始对象：
 
@@ -226,7 +226,6 @@ kind: RpmRepo
 metadata:
   name: ${build.metadata.name}
   namespace: ${build.metadata.namespace}
-spec: {}
 status:
   repository:
     contentURL: artifact:///repositories/v1/<base-repositoryUID>/  # Build Controller 创建时预置：上一个发布成功 Build 同名 RpmRepo 的 contentURL
@@ -306,7 +305,6 @@ status:
 | --- | --- | --- |
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 Build 同名同 namespace |
 | `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-os` / `ebs.io/target-arch`，值取 `Build.spec.buildTarget.os` / `arch` ；本控制器只读、不补写、不改写，用于发布候选的服务端 `(os, arch)` 过滤 |
-| `RpmRepo.spec` | Build Controller | 空 `{}`，本控制器不修改 |
 | `RpmRepo.status.repository.contentURL` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为上一个发布成功 Build 同名 RpmRepo 的 `contentURL`，即本对象的基础仓；提升后为本对象当前可读版本的地址；失败路径不清空。将 Artifact Manager 返回的相对路径记为逻辑地址 `artifact:///repositories/v1/{repositoryUID}/`；产出判据见 `sourceJobNames` |
 | `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为基础仓的 `repositoryUID`（`SubmitRepository` 的 `baseRepositoryUID` 来源）；提升后为本对象当前版本的物理标识。产出判据见 `sourceJobNames` |
 | `RpmRepo.status.repository.sourceJobNames` | RpmRepo Controller | 已成功纳入当前版本的 Job 名称；写入时去重并按字典序排序；不记录失败 Job。为空表示本对象尚未产出过版本（Build Controller 预置的继承基线不计入），其非空是「本对象已产出可发布版本」的唯一判据，不以 repositoryUID / contentURL 或 RepositoryReady 条件代替 |

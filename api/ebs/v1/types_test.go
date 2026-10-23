@@ -45,7 +45,13 @@ func TestServiceConfigContentRoundTripAndDeepCopy(t *testing.T) {
 }
 
 func TestBuildInfoBootstrapRepo(t *testing.T) {
-	info := &BuildInfo{Spec: BuildInfoSpec{BuildPayload: "macros:\n  dist: .oe2403\n", BootstrapRepo: []BootstrapRepo{{Name: "base", Repo: "https://example.com/repo"}}}}
+	info := &BuildInfo{}
+	if err := json.Unmarshal([]byte(`{"spec":{"buildPayload":"macros:\n  dist: .oe2403\n","bootstrapRepo":[{"name":"base","url":"https://example.com/repo"}]}}`), info); err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Spec.BootstrapRepo) != 1 || info.Spec.BootstrapRepo[0].URL != "https://example.com/repo" {
+		t.Fatalf("unexpected bootstrap repositories: %+v", info.Spec.BootstrapRepo)
+	}
 	data, err := json.Marshal(info)
 	if err != nil {
 		t.Fatal(err)
@@ -58,15 +64,15 @@ func TestBuildInfoBootstrapRepo(t *testing.T) {
 		t.Fatalf("round trip changed spec: %#v", decoded.Spec)
 	}
 	copy := info.DeepCopy()
-	copy.Spec.BootstrapRepo[0].Repo = "changed"
-	if info.Spec.BootstrapRepo[0].Repo != "https://example.com/repo" {
+	copy.Spec.BootstrapRepo[0].URL = "changed"
+	if info.Spec.BootstrapRepo[0].URL != "https://example.com/repo" {
 		t.Fatal("DeepCopy shares bootstrap repos")
 	}
 }
 
 func TestBuildGraphRoundTripAndDeepCopy(t *testing.T) {
 	graph := &BuildGraph{Status: BuildGraphStatus{Nodes: map[string]DcgNodeState{
-		"a": {OutDep: []string{"b"}}, "b": {InDep: map[string]VersionConst{"a": {GE: "1"}}},
+		"a": {OutDep: []string{"b"}}, "b": {InDep: map[string]VersionConstraint{"a": {GE: "1"}}},
 	}}}
 	data, err := json.Marshal(graph)
 	if err != nil {
@@ -81,7 +87,7 @@ func TestBuildGraphRoundTripAndDeepCopy(t *testing.T) {
 	}
 	copy := graph.DeepCopy()
 	copy.Status.Nodes["a"].OutDep[0] = "changed"
-	copy.Status.Nodes["b"].InDep["a"] = VersionConst{GE: "2"}
+	copy.Status.Nodes["b"].InDep["a"] = VersionConstraint{GE: "2"}
 	if !reflect.DeepEqual(graph, &decoded) {
 		t.Fatal("DeepCopy changed original graph")
 	}
@@ -122,19 +128,8 @@ func TestSpecStatusGroupJSON(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Len() != 2 || decoded.Entry("gcc").Install.Status != "Failed" {
-		t.Fatalf("unexpected decoded group: %+v", decoded)
-	}
-}
-
-func TestSpecStatusGroupReadsLegacyStoredLayout(t *testing.T) {
-	data := []byte(`{"gcc":{"build":{"status":"Succeeded"},"install":{"status":"Failed"},"dispatchCount":2},"bash":{"build":{"status":"Running"}}}`)
-	var group SpecStatusGroup
-	if err := json.Unmarshal(data, &group); err != nil {
-		t.Fatal(err)
-	}
-	if group.Len() != 2 || group.Entry("gcc").Install.Status != "Failed" || group.Entry("gcc").DispatchCount != 2 || group.Entry("bash").Build.Status != "Running" {
-		t.Fatalf("legacy status not converted: %+v", group)
+	if !reflect.DeepEqual(group, decoded) {
+		t.Fatalf("round trip changed grouped status: %+v", decoded)
 	}
 }
 

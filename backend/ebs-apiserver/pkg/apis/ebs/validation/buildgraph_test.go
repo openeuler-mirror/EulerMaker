@@ -15,7 +15,7 @@ func graphFixture() *ebsv1.BuildGraph {
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(info, ebsv1.SchemeGroupVersion.WithKind("BuildInfo"))}},
 		Status: ebsv1.BuildGraphStatus{Nodes: map[string]ebsv1.DcgNodeState{
 			"a": {Version: "1", OutDep: []string{"b"}},
-			"b": {Version: "2", InDep: map[string]ebsv1.VersionConst{"a": {GE: "1"}}},
+			"b": {Version: "2", InDep: map[string]ebsv1.VersionConstraint{"a": {GE: "1"}}},
 		}},
 	}
 }
@@ -29,14 +29,14 @@ func TestBuildGraphValidation(t *testing.T) {
 		{"build edges", func(*ebsv1.BuildGraph) {}, true},
 		{"shared build and install provider", func(g *ebsv1.BuildGraph) {
 			a, b := g.Status.Nodes["a"], g.Status.Nodes["b"]
-			b.InstallInDep = map[string]ebsv1.VersionConst{"a": {}}
+			b.InstallInDep = map[string]ebsv1.VersionConstraint{"a": {}}
 			a.OutDep = []string{"b", "b"}
 			g.Status.Nodes["a"], g.Status.Nodes["b"] = a, b
 		}, true},
 		{"empty graph", func(g *ebsv1.BuildGraph) { g.Status.Nodes = map[string]ebsv1.DcgNodeState{} }, true},
 		{"cycle", func(g *ebsv1.BuildGraph) {
 			a, b := g.Status.Nodes["a"], g.Status.Nodes["b"]
-			a.InstallInDep = map[string]ebsv1.VersionConst{"b": {}}
+			a.InstallInDep = map[string]ebsv1.VersionConstraint{"b": {}}
 			b.OutDep = []string{"a"}
 			g.Status.Nodes["a"], g.Status.Nodes["b"] = a, b
 		}, true},
@@ -59,7 +59,7 @@ func TestBuildGraphStatusUpdate(t *testing.T) {
 	old := graphFixture()
 	updated := old.DeepCopy()
 	a, b := updated.Status.Nodes["a"], updated.Status.Nodes["b"]
-	a.InstallInDep = map[string]ebsv1.VersionConst{"b": {}}
+	a.InstallInDep = map[string]ebsv1.VersionConstraint{"b": {}}
 	a.BootstrapBreak = true
 	b.OutDep = []string{"a"}
 	updated.Status.Nodes["a"], updated.Status.Nodes["b"] = a, b

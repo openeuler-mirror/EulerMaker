@@ -222,7 +222,7 @@
           <article class="content-panel">
             <div class="section-heading"><div><h2>{{ t("project.bootstrapRepositories") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openBootstrapEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="bootstrapSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.bootstrapSaved") }}</div>
-            <div v-if="project.spec?.bootstrapRepo?.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>{{ t("project.repositoryAddress") }}</th></tr></thead><tbody><tr v-for="(repo, index) in project.spec.bootstrapRepo" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.repo || t("common.emptyValue") }}</code></td></tr></tbody></table></div>
+            <div v-if="project.spec?.bootstrapRepo?.length" class="project-table-wrap"><table class="project-table config-table"><thead><tr><th>{{ t("project.repositoryName") }}</th><th>{{ t("project.repositoryAddress") }}</th></tr></thead><tbody><tr v-for="(repo, index) in project.spec.bootstrapRepo" :key="`${repo.name}-${index}`"><td><strong>{{ repo.name || t("common.emptyValue") }}</strong></td><td><code>{{ repo.url || t("common.emptyValue") }}</code></td></tr></tbody></table></div>
             <p v-else class="config-empty">{{ t("project.noBootstrapRepositories") }}</p>
           </article>
 
@@ -370,7 +370,7 @@
             <button class="remove-target-button" type="button" :aria-label="t('project.removeBootstrap', { number: index + 1 })" :disabled="savingBootstrap" @click="removeBootstrapRepository(index)"><Delete /></button>
             <div class="form-grid bootstrap-fields">
               <label class="field required-field repository-name-field"><span>{{ t("project.sourceName") }}</span><input v-model.trim="repo.name" required autocomplete="off" :placeholder="t('project.repositoryNamePlaceholder')" /></label>
-              <label class="field required-field"><span>{{ t("project.sourceAddress") }}</span><input v-model.trim="repo.repo" type="url" required autocomplete="off" :placeholder="t('project.repositoryAddressPlaceholder')" /></label>
+              <label class="field required-field"><span>{{ t("project.sourceAddress") }}</span><input v-model.trim="repo.url" type="url" required autocomplete="off" :placeholder="t('project.repositoryAddressPlaceholder')" /></label>
             </div>
           </fieldset>
         </div>
@@ -1318,7 +1318,7 @@ function openBootstrapEditor(): void {
   bootstrapErrorKey.value = "";
   editingBootstrapRepositories.value = (project.value.spec?.bootstrapRepo || []).map((repo) => ({
     name: repo.name || "",
-    repo: repo.repo || "",
+    url: repo.url || "",
   }));
   if (!editingBootstrapRepositories.value.length) addBootstrapRepository();
   bootstrapEditorOpen.value = true;
@@ -1331,7 +1331,7 @@ function closeBootstrapEditor(): void {
 }
 
 function addBootstrapRepository(): void {
-  editingBootstrapRepositories.value.push({ name: "", repo: "" });
+  editingBootstrapRepositories.value.push({ name: "", url: "" });
 }
 
 function removeBootstrapRepository(index: number): void {
@@ -1340,12 +1340,12 @@ function removeBootstrapRepository(index: number): void {
 
 async function saveBootstrapRepositories(): Promise<void> {
   if (!project.value) return;
-  const repositories = editingBootstrapRepositories.value.map((repo) => ({ name: repo.name?.trim(), repo: repo.repo?.trim() }));
-  if (repositories.some((repo) => !repo.name || !repo.repo)) {
+  const repositories = editingBootstrapRepositories.value.map((repo) => ({ name: repo.name?.trim(), url: repo.url?.trim() }));
+  if (repositories.some((repo) => !repo.name || !repo.url)) {
     bootstrapErrorKey.value = "project.bootstrapRequiredFields";
     return;
   }
-  if (repositories.some((repo) => !isValidBootstrapRepoUrl(repo.repo || ""))) {
+  if (repositories.some((repo) => !isValidBootstrapRepoUrl(repo.url || ""))) {
     bootstrapErrorKey.value = "project.bootstrapInvalidUrl";
     return;
   }

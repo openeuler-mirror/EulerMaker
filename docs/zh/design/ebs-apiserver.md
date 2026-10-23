@@ -866,7 +866,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       }],
       "bootstrapRepo": [{
         "name": "base",
-        "repo": "https://repo.example.com/openEuler/24.03-LTS/OS/aarch64/"
+        "url": "https://repo.example.com/openEuler/24.03-LTS/OS/aarch64/"
       }]
     }
   }'

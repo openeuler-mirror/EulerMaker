@@ -66,11 +66,11 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
                   BuildInfoSpec BuildInfoStatus SpecStatusGroup SpecBuildStatus SpecInstallStatus MissingDep
                   BuildGraphStatus DcgNodeState
-                  RpmRepoSpec RpmRepoStatus
+                  RpmRepoStatus
                   ConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
                   ResourceRequirements Toleration BuildTarget
-                  PackageRepo PackageRepoStatus VersionConst
+                  PackageRepo PackageRepoStatus VersionConstraint
 ```
 
 ---
@@ -227,7 +227,7 @@ type Build struct {
 
 ```go
 type BuildSpec struct {
-    BuildType          string                 `json:"buildType,omitempty"`
+    BuildType          BuildType              `json:"buildType,omitempty"`
     Packages           []string               `json:"packages,omitempty"`
     BuildTarget        BuildTarget            `json:"buildTarget,omitempty"`
 }
@@ -235,7 +235,7 @@ type BuildSpec struct {
 
 | 字段             | Go 类型 | 必填 | 说明 |
 |----------------|---------|------|------|
-| `buildType`    | string | 是 | 构建类型：`"full"` / `"incremental"` / `"specified"` / `"single"` |
+| `buildType`    | BuildType | 是 | 公共 API 枚举：`"full"` / `"incremental"` / `"specified"` / `"single"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
 | `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
 
@@ -275,21 +275,21 @@ spec:
 ```go
 type BootstrapRepo struct {
     Name      string           `json:"name,omitempty"`
-    Repo      string           `json:"repo,omitempty"`
+    URL       string           `json:"url,omitempty"`
 }
 ```
 
 | 字段     | Go 类型 | 说明                    |
 |--------|---------|-----------------------|
 | `name` | string | repo名称，如 `"everything"` |
-| `repo` | string | 外部软件源的基础地址，不包含架构目录；BuildInfo Controller 使用时追加 `/{buildTarget.arch}` |
+| `url` | string | 外部软件源的基础地址，不包含架构目录；BuildInfo Controller 使用时追加 `/{buildTarget.arch}` |
 
 ### BuildStatus
 
 ```go
 type BuildStatus struct {
     Phase        BuildPhase         `json:"phase,omitempty"`
-    Stage        string             `json:"stage,omitempty"`
+    Stage        BuildStage         `json:"stage,omitempty"`
     StartTime    metav1.Time        `json:"startTime,omitempty"`
     EndTime      metav1.Time        `json:"endTime,omitempty"`
     BaseBuildRef *BaseBuildRef      `json:"baseBuildRef,omitempty"`
@@ -304,7 +304,7 @@ type BaseBuildRef struct {
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `phase` | `BuildPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborted"` / `"Skipped"`；后四项为终态 |
-| `stage` | string | `"build"` / `"publish"`，标识构建阶段还是发布阶段 |
+| `stage` | BuildStage | `"build"` / `"publish"`，标识构建阶段还是发布阶段；尚未进入时允许为空 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `baseBuildRef` | BaseBuildRef | 仅非 single 使用的基础 Build 名称，single 保持为空；未设置表示尚未查询，`{}` 表示已查询但没有基础 Build；过程仓 UID 和地址从同名 RpmRepo 获取 |
@@ -396,7 +396,7 @@ type SpecStatusGroup struct {
 | `dispatchCount` | map[string]int64（缺失视为 0） | spec 名到下发计数；创建 Job 成功后 `+= 1`，回填时以同 spec 现存 Job 数兜底；达到有效 required 后不再下发 |
 
 例如 `status.specStatus.build.gcc.status` 为构建结果，`status.specStatus.install.gcc.status` 为安装结果；只需构建详情时，GET/LIST 可用 `includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build` 选择返回字段。
-读取旧的按 spec 名组织的 `specStatus` 时，API 类型会转换为分组结构；后续写入只使用新结构。
+`specStatus` 按 `build`、`install`、`dispatchCount` 分组存储和读取。
 
 ---
 
@@ -404,14 +404,14 @@ type SpecStatusGroup struct {
 
 ```go
 type SpecBuildStatus struct {
-    Status     string             `json:"status"`
+    Status     SpecBuildPhase     `json:"status"`
     Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 ```
 
 | 字段           | Go 类型 | 说明 |
 |--------------|------|------|
-| `status`     | string | `"Running"` / `"Succeeded"` / `"Failed"` / `"ArchUnsupported"` / `"Aborted"`（历史残留值）|
+| `status`     | SpecBuildPhase | `"Running"` / `"Succeeded"` / `"Failed"` / `"ArchUnsupported"`；预建条目允许为空 |
 | `conditions` | []metav1.Condition | 构建状态条件 |
 
 ---
@@ -420,7 +420,7 @@ type SpecBuildStatus struct {
 
 ```go
 type SpecInstallStatus struct {
-    Status      string                 `json:"status"`
+    Status      SpecInstallPhase       `json:"status"`
     MissingDeps map[string]MissingDep  `json:"missingDeps,omitempty"`
     Conditions  []metav1.Condition     `json:"conditions,omitempty"`
 }
@@ -428,7 +428,7 @@ type SpecInstallStatus struct {
 
 | 字段 | Go 类型 | 说明                  |
 |------|---------|---------------------|
-| `status` | string | `Succeeded` / `Failed` |
+| `status` | SpecInstallPhase | `Succeeded` / `Failed`；尚未评估时允许为空 |
 | `missingDeps` | map[string]MissingDep | install 失败时记录       |
 | `conditions` | []metav1.Condition | install 状态条件 |
 
@@ -439,14 +439,14 @@ type SpecInstallStatus struct {
 ```go
 type MissingDep struct {
     NeededBy        string          `json:"neededBy,omitempty"`
-    VersionRequests VersionConst    `json:"versionRequests,omitempty"`
+    VersionRequests VersionConstraint    `json:"versionRequests,omitempty"`
 }
 ```
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
 | `neededBy` | string | 依赖此 rpm 的上游 spec |
-| `versionRequests` | VersionConst | 版本约束 |
+| `versionRequests` | VersionConstraint | 版本约束 |
 
 ---
 
@@ -501,8 +501,8 @@ type BuildGraphList struct {
 type DcgNodeState struct {
     Version        string                  `json:"version,omitempty"`
     OutDep         []string                `json:"outDep,omitempty"`
-    InDep          map[string]VersionConst `json:"inDep,omitempty"`
-    InstallInDep   map[string]VersionConst `json:"installInDep,omitempty"`
+    InDep          map[string]VersionConstraint `json:"inDep,omitempty"`
+    InstallInDep   map[string]VersionConstraint `json:"installInDep,omitempty"`
     BootstrapBreak bool                    `json:"bootstrapBreak,omitempty"`
 }
 ```
@@ -511,8 +511,8 @@ type DcgNodeState struct {
 |------|---------|------|
 | `version` | string | spec 完整版本号，初始建图后冻结 |
 | `outDep` | []string | 依赖本 spec 的下游 spec 列表，与 build/install 入边的次数保持一致；同一下游同时具有两类入边时记录两次 |
-| `inDep` | map[string]VersionConst | 本 spec 依赖的上游 spec → 版本约束，初始建图后冻结 |
-| `installInDep` | map[string]VersionConst | 安装期依赖的上游 spec → 版本约束；运行期只追加缺失边 |
+| `inDep` | map[string]VersionConstraint | 本 spec 依赖的上游 spec → 版本约束，初始建图后冻结 |
+| `installInDep` | map[string]VersionConstraint | 安装期依赖的上游 spec → 版本约束；运行期只追加缺失边 |
 | `bootstrapBreak` | bool | 破环点标记；已有标记保留，新环可追加，重启不重选 |
 
 ## 五、RpmRepo（过程仓与正式发布状态）
@@ -527,15 +527,7 @@ type DcgNodeState struct {
 type RpmRepo struct {
     metav1.TypeMeta    `json:",inline"`
     metav1.ObjectMeta  `json:"metadata,omitempty"`
-    Spec   RpmRepoSpec   `json:"spec,omitempty"`
     Status RpmRepoStatus `json:"status,omitempty"`
-}
-```
-
-### RpmRepoSpec
-
-```go
-type RpmRepoSpec struct {
 }
 ```
 
@@ -622,7 +614,7 @@ RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact://
 
 `release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Skipped`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。因同名 `Build.status.phase=Aborted` 或 `BuildInfo.status.phase=Failed` 而终止发布时，`release.phase=Failed`、`release.transition=nil`，分别记录 `PublishSucceed=False/reason=BuildAborted` 或 `BuildInfoFailed`；`release.contentURL` 为空，`repository.*` 保留。已终态对象不改写。发布终态为 `Ready`、`Failed`、`Skipped`。
 
-RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`/status` 保留原 spec 与受保护 metadata。
+RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`/status` 保留受保护 metadata。
 
 | Type | Status | Reason | 场景 |
 | --- | --- | --- | --- |
@@ -1046,7 +1038,7 @@ type RunnerList struct {
 
 ```go
 type BuildTarget struct {
-    Os             string      `json:"os,omitempty"`
+    OS             string      `json:"os,omitempty"`
     Arch           string      `json:"arch,omitempty"`
     BuildFlag      bool        `json:"buildFlag,omitempty"`
     PublishFlag    bool        `json:"publishFlag,omitempty"`
@@ -1090,11 +1082,11 @@ Snapshot 提交选择优先级为 PackageRepo.commitID > PackageRepo.ref > Snaps
 type PackageRepoStatus struct {
     CloneURL string           `json:"cloneUrl,omitempty"`
     CommitID string           `json:"commitId,omitempty"`
-    Error    *SpecCommitError `json:"error,omitempty"`
+    Error    *PackageRepoError `json:"error,omitempty"`
 }
 
-type SpecCommitError struct {
-    Code      SpecCommitErrorCode `json:"code,omitempty"`
+type PackageRepoError struct {
+    Code      PackageRepoErrorCode `json:"code,omitempty"`
     Message   string              `json:"message,omitempty"`
     Retryable bool                `json:"retryable,omitempty"`
 }
@@ -1104,16 +1096,16 @@ type SpecCommitError struct {
 |------|---------|------|
 | `cloneUrl` | string | Git Server 客户端由 `clone_path` 生成的 `git-server:///git/...` 逻辑克隆地址；仅完成本轮同步确认后填写 |
 | `commitId` | string | 成功解析出的完整提交 ID；设置后 error 必须为空 |
-| `error` | *SpecCommitError | 包级解析错误；设置后 commitId 必须为空。`retryable=true` 表示后续继续解析 |
+| `error` | *PackageRepoError | 包级解析错误；设置后 commitId 必须为空。`retryable=true` 表示后续继续解析 |
 
-`SpecCommitErrorCode` 的稳定取值为 `ValidationFailed`、`SyncFailed`、`SyncTimeout`、`ResolveFailed`、`CommitConflict` 和 `RetryExhausted`。map 中不存在对应包表示尚未处理；存在 commitId 表示成功；存在不可重试 error 表示已跳过。
+`PackageRepoErrorCode` 的稳定取值为 `ValidationFailed`、`SyncFailed`、`SyncTimeout`、`ResolveFailed`、`CommitConflict` 和 `RetryExhausted`。map 中不存在对应包表示尚未处理；存在 commitId 表示成功；存在不可重试 error 表示已跳过。
 
 ---
 
-### VersionConst
+### VersionConstraint
 
 ```go
-type VersionConst struct {
+type VersionConstraint struct {
     GT string `json:"gt,omitempty"`
     GE string `json:"ge,omitempty"`
     EQ string `json:"eq,omitempty"`
@@ -1166,10 +1158,10 @@ BuildInfoStatus
 └── SpecStatusGroup
     ├── SpecBuildStatus
     └── SpecInstallStatus
-        └── MissingDep ──▶ VersionConst
+        └── MissingDep ──▶ VersionConstraint
 
 BuildGraphStatus
-└── DcgNodeState ──▶ VersionConst
+└── DcgNodeState ──▶ VersionConstraint
 
 RpmRepoStatus
 ├── RpmRepoRepositoryStatus

@@ -26,7 +26,7 @@ func TestPrepareForCreatePackagesByBuildType(t *testing.T) {
 	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
 		for _, ref := range []string{"", "refs/merge-requests/501/head"} {
 			t.Run(buildType+"/"+ref, func(t *testing.T) {
-				b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: buildType, Packages: []string{"gcc"}}}
+				b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(buildType), Packages: []string{"gcc"}}}
 				if ref != "" {
 					b.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: ref}
 				}
@@ -48,7 +48,7 @@ func TestPrepareForCreateRequiresBuildType(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000"},
 		Spec: ebsv1.BuildSpec{
 			Packages:    []string{"gcc"},
-			BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"},
+			BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"},
 		},
 	}
 	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
@@ -143,7 +143,7 @@ func TestAbortTransitionsBuild(t *testing.T) {
 }
 
 func TestPrepareForCreateAddsMissingBuildTargetLabels(t *testing.T) {
-	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "full", BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "full", BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}}}
 
 	NewStorage().Resource.(*genericregistry.Store).CreateStrategy.PrepareForCreate(context.Background(), build)
 
@@ -154,7 +154,7 @@ func TestPrepareForCreateAddsMissingBuildTargetLabels(t *testing.T) {
 
 func TestPrepareForUpdateAddsMissingBuildTargetLabels(t *testing.T) {
 	oldBuild := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
-	newBuild := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "incremental", BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}}}
+	newBuild := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "incremental", BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}}}
 
 	NewStorage().Resource.(*genericregistry.Store).UpdateStrategy.PrepareForUpdate(context.Background(), newBuild, oldBuild)
 
@@ -173,7 +173,7 @@ func TestPrepareForCreatePreservesConflictingBuildTargetLabels(t *testing.T) {
 			ebsv1.BuildTargetArchLabel: "aarch64",
 			ebsv1.BuildTypeLabel:       "incremental",
 		}},
-		Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{Os: "openEuler", Arch: "x86_64"}},
+		Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}},
 	}
 
 	NewStorage().Resource.(*genericregistry.Store).CreateStrategy.PrepareForCreate(context.Background(), build)

@@ -27,14 +27,14 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	}
 	seenTargets := make(map[[2]string]struct{}, len(obj.Spec.BuildTargets))
 	for i, bt := range obj.Spec.BuildTargets {
-		if len(bt.Os) == 0 {
+		if len(bt.OS) == 0 {
 			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("os"), "os is required"))
 		}
 		if len(bt.Arch) == 0 {
 			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("arch"), "arch is required"))
 		}
-		if bt.Os != "" && bt.Arch != "" {
-			key := [2]string{bt.Os, bt.Arch}
+		if bt.OS != "" && bt.Arch != "" {
+			key := [2]string{bt.OS, bt.Arch}
 			if _, exists := seenTargets[key]; exists {
 				allErrs = append(allErrs, field.Duplicate(field.NewPath("spec", "buildTargets").Index(i), key))
 			}

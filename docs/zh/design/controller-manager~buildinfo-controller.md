@@ -602,7 +602,7 @@ buildSet = buildSet ∪ direct                                                # 
 - single 不读取当前/历史 RpmRepo、历史 Build 或 baseBuildRef。首次需要派发新 Job 时，使用本轮 Project 的 `ebs.io/artifacts`（缺省 default），与父 Build 的 Project、OS、Arch 组成目标；实例选择与本批 Job 的上传 annotation 一致。
 - 构造逻辑入口 `artifact://{instance}/repositories/{project}/{os}/{arch}/`，路径段逐项安全编码，保留末尾斜线。从本轮 `Config/service-config` 快照读取 `artifactManagers[instance].internalURL`，拼接管理面 HTTP(S) 地址并 GET 稳定入口的 `repodata/repomd.xml`。不遍历发布历史、不解析目录页、不改用不可变版本 URL。
 - 确认接口、错误码与响应校验见 Artifact Manager 9.3「稳定入口的发布可用性确认」。200 且 repomd.xml 有效才注入稳定仓，priority=10；仅 `404 + code=ReleaseNotPublished` 表示当前没有已激活发布，此时省略稳定仓。普通 404、ReleaseNotFound、网络/超时、429/5xx 或已发布仓缺文件均不是“尚未发布”，本轮暂停新派发并重试，先回填已有 Job；认证/参数/配置错误返回 PermanentError，不能静默降级或标包失败。完整分类见 E-32。
-- 按声明顺序追加 `BuildInfo.spec.bootstrapRepo[].repo` 经目标架构展开的 URL，priority=99。稳定入口已含 OS/Arch，不再追加架构。尚未发布时只使用 bootstrapRepo；single 不回退到 buildPayload.repo。最终没有任何 URL 时返回明确的配置 PermanentError（BootstrapRepoRequired），不创建 Job。
+- 按声明顺序追加 `BuildInfo.spec.bootstrapRepo[].url` 经目标架构展开的 URL，priority=99。稳定入口已含 OS/Arch，不再追加架构。尚未发布时只使用 bootstrapRepo；single 不回退到 buildPayload.repo。最终没有任何 URL 时返回明确的配置 PermanentError（BootstrapRepoRequired），不创建 Job。
 - 每轮首次需要创建 Job 时执行一次实例配置读取与发布确认，结果供本轮最多 20 次创建共用；不跨 reconcile 缓存“尚未发布”。仅确认既有 Job、结果回填或收敛时不发送发布确认请求。已创建 Job 保持原 payload，后续批次重新确认；未决创建沿用原身份协议。
 - 只确认发布入口，不扫描全部 RPM。HTTP 使用公共 `--artifact-manager-timeout`（默认 30s）与本轮 context；repomd.xml 上限 1 MiB，错误正文上限 64 KiB。拒绝跨源重定向；缺少 repomd 根元素或有效元数据引用、内容超限等响应异常不得按成功使用。
 - 配置 prefer 时基于本轮选定的稳定仓与 bootstrapRepo 读取 RPM 元数据；single 的稳定仓元数据不按 URL 永久复用，至少每轮重新获取 repomd，并按其实际引用更新元数据。元数据失败沿用 15.10，不静默使用旧版本。未配置 prefer 时无需下载 primary/filelists。
@@ -643,7 +643,7 @@ buildSet = buildSet ∪ direct                                                # 
 一个 spec S 的依赖满足，当且仅当**两个条件同时满足**：
 
 1. **上游 spec 全部终态（Succeeded/Failed/ArchUnsupported）**：`Cache.dcgDict.nodes[S].InDep ∪ Cache.dcgDict.nodes[S].InstallInDep`（build/install 边合并后的上游全集）中的所有上游 spec 均达终态。全部 `Succeeded` → 正常路径；存在 `Failed` 上游 → **不做上游级产物可用性裁决**（已下发的下游重建取消见 7.4.2；未下发的下游 Failed 上游跳过——失败的 Job 产物凭据不存在），其影响统一经下方条件 2 的依赖存在性裁决表达（缺失 → **S 自身**标 `Failed`，`BuildFailed`/`RpmDependsMissing`，不创建 Job）——**自判非传播**（不沿 outDep 递归标记，其下游在各自判定时逐跳传导），见 E-17。
-2. **构建依赖统一可用性裁决**：S 的全部 `buildRequires`（取自本轮组装的 specDepends（15.11），剔除 `buildRemoves` 排除项）逐项在 RpmMetaSources 分层缓存中可查到（先 RpmRepo 层、后 BootstrapRepo 层按声明顺序兜底，两阶段匹配：provide 能力名反查 → rpm 名兜底，见 16.1；缓存机制见 15.10），且满足对应 `VersionConst` 版本约束。发布确认门禁通过（Succeeded 直接上游产物已发布，7.4.6）、Failed 上游不再产出 → 此时仍不可用即**真缺失**，标 `Failed`（`BuildFailed`/`RpmDependsMissing`，message 记缺失依赖名），不创建 Job——依赖存在（上轮/v1 产物、替代提供方或 bootstrap 基础包已可用）则照常下发（best-effort）。RpmRepo 暂时缺失、查询失败、XML 下载失败或 bootstrap 层暂不可用时，写 `RpmRepoRetrying`，依赖裁决保持待定并等待下一轮，不因重试次数停止；无效 URL 或确定性请求拒绝立即写 `RpmRepoUnavailable`，过程仓或 bootstrap 仓 XML 连续解析失败达 `--rpmrepo-ready-retry-limit`（默认 3）后才写入该停止标记，按 6.5 收敛；contentURL 为空（首轮/全量构建本轮首个物理版本物化前，15.4）为正常空态——RpmRepo 层无 XML 可解析、视为空数据源，分层查询自然短路至 BootstrapRepo 层照常裁决，不构成待定、不计入失败计数。install 依赖不参与本校验（不阻断下发，残余由 7.4.7 运行期 install 校验兜底）；install 边仅承担构建排序（把提供方纳入本批构建，见 16.1）。
+2. **构建依赖统一可用性裁决**：S 的全部 `buildRequires`（取自本轮组装的 specDepends（15.11），剔除 `buildRemoves` 排除项）逐项在 RpmMetaSources 分层缓存中可查到（先 RpmRepo 层、后 BootstrapRepo 层按声明顺序兜底，两阶段匹配：provide 能力名反查 → rpm 名兜底，见 16.1；缓存机制见 15.10），且满足对应 `VersionConstraint` 版本约束。发布确认门禁通过（Succeeded 直接上游产物已发布，7.4.6）、Failed 上游不再产出 → 此时仍不可用即**真缺失**，标 `Failed`（`BuildFailed`/`RpmDependsMissing`，message 记缺失依赖名），不创建 Job——依赖存在（上轮/v1 产物、替代提供方或 bootstrap 基础包已可用）则照常下发（best-effort）。RpmRepo 暂时缺失、查询失败、XML 下载失败或 bootstrap 层暂不可用时，写 `RpmRepoRetrying`，依赖裁决保持待定并等待下一轮，不因重试次数停止；无效 URL 或确定性请求拒绝立即写 `RpmRepoUnavailable`，过程仓或 bootstrap 仓 XML 连续解析失败达 `--rpmrepo-ready-retry-limit`（默认 3）后才写入该停止标记，按 6.5 收敛；contentURL 为空（首轮/全量构建本轮首个物理版本物化前，15.4）为正常空态——RpmRepo 层无 XML 可解析、视为空数据源，分层查询自然短路至 BootstrapRepo 层照常裁决，不构成待定、不计入失败计数。install 依赖不参与本校验（不阻断下发，残余由 7.4.7 运行期 install 校验兜底）；install 边仅承担构建排序（把提供方纳入本批构建，见 16.1）。
 
 > **spec 级依赖边推导**（dcgDict 构建依据）：spec S 依赖 spec U，当且仅当 S 的 `buildRequires`（build 边）或 install 依赖集（install 边，见 16.1）声明的 RPM 名命中了 U 的 `provides` 产出的 RPM 名（版本感知反查：providesInfo + prefer + 版本约束过滤；算法细则见 16.1）。由此得到 `outDep[S]`（S 的下游，两类边合并）、`inDep[S]`（S 的 build 边上游）与 `installInDep[S]`（S 的 install 边上游）。
 >
@@ -725,7 +725,7 @@ buildSet = buildSet ∪ direct                                                # 
 }
 ```
 
-`missingDeps` 直接使用公共 `MissingDep` 结构，版本操作符使用 `VersionConst` 的小写 JSON 字段。回填判定（目标 Job = 多代取最新，7.4.4）：
+`missingDeps` 直接使用公共 `MissingDep` 结构，版本操作符使用 `VersionConstraint` 的小写 JSON 字段。回填判定（目标 Job = 多代取最新，7.4.4）：
 
 | 目标 Job 状态与 install 结果 | 回填动作 |
 |------------------------------|----------|
@@ -1106,9 +1106,9 @@ specDepends 作为内存解析视图，不写 BuildInfo.spec；组装与缓存�
 | `epoch` | string | 不消费 |
 | `exclusiveArch` | []string | **架构白名单过滤**：目标架构（`Build.spec.buildTarget.arch`）不在列表内 → 该 spec 标 `ArchUnsupported`，不提交 Job，下游按 E-17 自判规则处理（见 E-19）。**未声明/空列表在步骤 0 解析期归一为默认架构全集 `defaultExclusiveArch`**（见 16.3，运行期不出现空列表，无"免查询快路径"——父 Build 由 parentAbortGuard 同轮查询持有、arch 直接复用） |
 | `provides` | []string | 不消费（建边/反查的数据源为 RpmMetaSources providesInfo——仓库 XML 解析产物，16.1/15.10；本字段为 16.3 spec 解析留存产物，无消费点） |
-| `requires` | map[string]VersionConst | **install 边建边输入**（安装期依赖）：与 RpmMetaSources RpmRepo 层中同 specName 的 `RpmMeta.requires`（rpm 真实运行时依赖，15.10 解析生成——RpmRepo 不再存储 RpmMeta）取**并集**构成 install 依赖集，同名依赖版本约束按交集收紧（权威定义见 16.1「install 边建边」；残余由 7.4.7 运行期补边兜底） |
-| `buildRequires` | map[string]VersionConst | **建边发起方**：版本感知反查 providesInfo，命中本批 spec 则建边；同时为构建依赖统一存在性裁决（7.4.1 条件 2）的校验对象（剔除 buildRemoves 后逐项两阶段匹配，缺失 → `RpmDependsMissing`） |
-| `buildRemoves` | map[string]VersionConst | 构建依赖统一校验的排除项（以 `-` 开头的 BuildRequires，非依赖，校验时剔除） |
+| `requires` | map[string]VersionConstraint | **install 边建边输入**（安装期依赖）：与 RpmMetaSources RpmRepo 层中同 specName 的 `RpmMeta.requires`（rpm 真实运行时依赖，15.10 解析生成——RpmRepo 不再存储 RpmMeta）取**并集**构成 install 依赖集，同名依赖版本约束按交集收紧（权威定义见 16.1「install 边建边」；残余由 7.4.7 运行期补边兜底） |
+| `buildRequires` | map[string]VersionConstraint | **建边发起方**：版本感知反查 providesInfo，命中本批 spec 则建边；同时为构建依赖统一存在性裁决（7.4.1 条件 2）的校验对象（剔除 buildRemoves 后逐项两阶段匹配，缺失 → `RpmDependsMissing`） |
+| `buildRemoves` | map[string]VersionConstraint | 构建依赖统一校验的排除项（以 `-` 开头的 BuildRequires，非依赖，校验时剔除） |
 
 #### 15.2.3 status（本 controller 唯一写入方）
 
@@ -1245,7 +1245,7 @@ status:                                             # 创建时恒 Pending/Pendi
    - `unuse_gcc_secure` 同样按 `specDepends[specName].repoName` 匹配：命中时写入 `unuse_gcc_secure: true`，否则不写。默认脚本在预装包和 `dnf builddep` 前安装 `gcc_secure`；标记为 true 或 `package_name` 为 `gcc-10` 时跳过。`gcc-10` 特例只由脚本判断，不由管理面写入标记。
    - `prefer` 按当前 spec 的 `buildRequires` 逐项计算，排除 `buildRemoves`；仅在当前优先级仓库层中满足版本约束的提供者至少有两个、并按 16.1 的候选名归一与配置顺序命中项目级 `prefer` 时，记录实际命中的 RPM 基名。按依赖名字典序遍历、首次出现保留以去重，多个名称以空格连接为 JSON 字符串写入当前 Job；无命中或配置为空则不写 `prefer` 键。计算复用 16.1 的分层候选选择与版本比较，不另建一套规则；选择结果须能区分 `prefer` 命中和单候选/最高版本兜底，后两者不写入。只考虑 buildRequires，不将 install 依赖写入 Job `prefer`。Runner 不负责计算。
    - 构建级仓库字段：
-     - 非 single：`repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时保留 `artifact://{instance}/repositories/...` 逻辑地址并置首；无实例标识的旧地址继续有效；若为 `/repositories/...` 路径，则规范化为 `artifact:///repositories/...`；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4）；后续批次 Job 注入当前已发布版本地址） + 本 BuildInfo `spec.bootstrapRepo[].repo` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），写成有序 `{url, priority}` 对象数组；结果为空时使用配置中的 `repo` 字符串或列表并归一，仍为空则不写该键；
+     - 非 single：`repo` = **本轮 RpmRepo 当前已发布物理版本的 `status.repository.contentURL`**（非空时保留 `artifact://{instance}/repositories/...` 逻辑地址并置首；无实例标识的旧地址继续有效；若为 `/repositories/...` 路径，则规范化为 `artifact:///repositories/...`；首批 Job 创建时：首轮/全量构建 `contentURL` 为空即省略该项；增量轮创建即指向继承版本（15.4）；后续批次 Job 注入当前已发布版本地址） + 本 BuildInfo `spec.bootstrapRepo[].url` 追加目标架构目录后的 URL（按声明顺序；Build Controller 创建时从 Project 深拷贝写入，本控制器只读），写成有序 `{url, priority}` 对象数组；结果为空时使用配置中的 `repo` 字符串或列表并归一，仍为空则不写该键；
      - single：稳定 release 的确认、bootstrapRepo 追加、优先级与错误处理统一见 7.2.3 第 3 条，不读取 RpmRepo、不回退 buildPayload.repo；
      - `repo` 每项的 `priority` 由来源固定：过程仓为 10，bootstrap 仓与配置回退仓为 99。Job payload 不包含顶层 `repo_priority`；默认脚本将每项 `priority` 配置到 DNF，供 builddep 和构建后安装检查共同使用。
 3. **序列化**：将组装后的白名单字段转为 JSON 字符串写入 Job `spec.payload`；Project/BuildInfo 的 `buildPayload` 输入仍为 YAML。Job 中的 `artifact://...` 不包含管理面内网地址；Runner 使用其可访问的 Artifact Manager 地址解析该引用，再写入 `/workspace/payload.json`，构建脚本按 JSON 解析。
@@ -1325,7 +1325,7 @@ status:                                             # 创建时恒 Pending/Pendi
 ### 15.8 公共子结构
 
 - `metav1.Condition`（`k8s.io/apimachinery/pkg/apis/meta/v1`）：字段结构见 data-models.md；本 controller 写入/清除约定（type PascalCase、status 恒 `True`、`meta.SetStatusCondition` upsert 幂等等）以 9.1 引言为唯一权威。
-- `VersionConst`（版本约束，RPM 比较操作符）：`GT` / `GE` / `EQ` / `LE` / `LT`（均 string，omitempty）；空约束表示无版本要求。用于 buildRequires/requires 约束表达与 `VersionSatisfies` 判定。
+- `VersionConstraint`（版本约束，RPM 比较操作符）：`GT` / `GE` / `EQ` / `LE` / `LT`（均 string，omitempty）；空约束表示无版本要求。用于 buildRequires/requires 约束表达与 `VersionSatisfies` 判定。
 
 ### 15.9 BuildGraph 持久化与 DCG 缓存（G-02）
 
@@ -1405,11 +1405,11 @@ type RpmMetaSources struct {
 - `version` = `epoch:version-release` 拼接（版本约束比较输入）；
 - `specName` 由 `sourcerpm` 派生：剥离 `-<version>-<release>.src.rpm` 后缀（与 artifact-manager 物化侧同一规则，见 [artifact-manager.md](artifact-manager.md) 8.3.3；sourcerpm 缺失/异常时以 rpm 名兜底）；
 - `provides` → map[string]string（能力名 → 版本）：合并 `rpm:provides/rpm:entry` 和 `format/file`，文件路径使用所属 RPM 的完整版本。普通文件以及带 `type="dir"`、`type="ghost"` 的条目均按路径建立提供能力；同名路径使用文件条目的 RPM 版本。完成架构和同名 RPM 版本筛选后，再生成 `ProvidesInfo`，供过程仓及 bootstrap 仓的路径依赖匹配共用。
-- `requires` → map[string]VersionConst（XML requires 条目的 flags/ver 映射为 VersionConst）。
+- `requires` → map[string]VersionConstraint（XML requires 条目的 flags/ver 映射为 VersionConstraint）。
 
 解析完成即生成该来源的 `RpmByName` 与 `ProvidesInfo` 两个索引。
 
-`RpmMeta` 定义于 `pkg/controllers/buildinfo/rpmver/rpmcache.go`，属于控制器内部类型而非公共 API；其字段各消费点：`version`（epoch:ver-rel，版本约束比较输入）、`specName`（产出方 spec 名；步骤 0 扩散中用于归属 rpm 至 spec——`specName ∈ 本轮全量 specDepends` 即本工程产出 rpm，定位其 provides/requires；**仅 RpmRepo 层参与该判定**，bootstrap 层为外部上游包、其 sourcerpm 派生 specName 可能与 specDepends 同名，不得据此误判为本工程产出）、`provides`（map[string]string，生成 providesInfo 反查索引；步骤 0 扩散的 provides 收集来源）、`requires`（map[string]VersionConst，rpm 元数据 Requires 声明，安装期依赖；步骤 0 扩散的 requires 交集扫描来源，数据源为 RpmMetaSources RpmRepo 层（含继承版本），见 7.2.2）。
+`RpmMeta` 定义于 `pkg/controllers/buildinfo/rpmver/rpmcache.go`，属于控制器内部类型而非公共 API；其字段各消费点：`version`（epoch:ver-rel，版本约束比较输入）、`specName`（产出方 spec 名；步骤 0 扩散中用于归属 rpm 至 spec——`specName ∈ 本轮全量 specDepends` 即本工程产出 rpm，定位其 provides/requires；**仅 RpmRepo 层参与该判定**，bootstrap 层为外部上游包、其 sourcerpm 派生 specName 可能与 specDepends 同名，不得据此误判为本工程产出）、`provides`（map[string]string，生成 providesInfo 反查索引；步骤 0 扩散的 provides 收集来源）、`requires`（map[string]VersionConstraint，rpm 元数据 Requires 声明，安装期依赖；步骤 0 扩散的 requires 交集扫描来源，数据源为 RpmMetaSources RpmRepo 层（含继承版本），见 7.2.2）。
 
 **填充 / 刷新 / 失效**：
 
@@ -1510,7 +1510,7 @@ for rpmName, meta := range source.RpmByName {
 
 **建边反查选择链**：对 spec S 的每条 buildRequire `(name, versionConst)`，在 RpmMetaSources 分层缓存中**逐层执行同一选择链**（先 RpmRepo 层、后 BootstrapRepo 层按声明顺序，任一层命中即以该层结果为准——层间短路，与构建环境 repo 优先级对齐，15.10）：在当前层的 providesInfo 中查 `name` 的候选集，按以下顺序裁决提供方：
 
-1. **版本约束过滤**：有版本的 `Provides` 按 `VersionConst` 中非空的 gt/ge/eq/le/lt 约束逐项比较；无版本的 `Provides` 仅按能力名匹配，不比较提供方 RPM 包版本；0 候选 → 未命中。
+1. **版本约束过滤**：有版本的 `Provides` 按 `VersionConstraint` 中非空的 gt/ge/eq/le/lt 约束逐项比较；无版本的 `Provides` 仅按能力名匹配，不比较提供方 RPM 包版本；0 候选 → 未命中。
 2. **单候选**：1 候选 → 直选。
 3. **prefer 命中**：多候选时按 BuildInfo `spec.buildPayload` 的 `prefer` 列表**顺序**匹配——候选 key 先按 `@` 前 base 名归一化（无 `@` 的 key base 名即自身），首个命中 prefer 项的候选即中选；无命中进入下一步。
 4. **最高版本**：迭代候选，`vrCompare(当前最高, "LT", 候选)` 为真则替换最高；有版本的 `Provides` 使用能力版本排序，无版本的 `Provides` 使用提供方 RPM 包版本排序。若排序所需版本仍为空串（S3 脏数据），该 provide 整体判未命中；此查询级判定不计入 E-29 就绪性失败计数。
@@ -1521,7 +1521,7 @@ for rpmName, meta := range source.RpmByName {
 
 **install 边建边**：除 buildRequires 外，spec 的**安装期依赖**同样参与建边（双层消解框架——建图期前置 + 运行期补边、残余来源与收敛闭环、G-02/G-09 例外声明见 7.4.7 引言）：
 
-1. **install 依赖集(S)** = `SpecDepend.requires`（本轮 specparse 显式声明）∪ RpmMetaSources RpmRepo 层（含继承版本产物，15.10）中 `specName == S` 的全部 rpm 的 `RpmMeta.requires`（rpm 真实运行时依赖，含 soname 等 spec 中不可见的自动生成项）。数据定位与 7.2.2「扩散数据源」同源（仅本轮 RpmRepo 层，15.10 消费点矩阵）；无继承数据（RpmRepo 层无 specName == S 的条目，即新包）→ 仅显式集。同名依赖取两集约束的**交集合并**（须同时满足两集约束，`VersionConst` 各比较字段并存时按交集收紧；两集约束矛盾时以`RpmMeta.requires`数据为准）。
+1. **install 依赖集(S)** = `SpecDepend.requires`（本轮 specparse 显式声明）∪ RpmMetaSources RpmRepo 层（含继承版本产物，15.10）中 `specName == S` 的全部 rpm 的 `RpmMeta.requires`（rpm 真实运行时依赖，含 soname 等 spec 中不可见的自动生成项）。数据定位与 7.2.2「扩散数据源」同源（仅本轮 RpmRepo 层，15.10 消费点矩阵）；无继承数据（RpmRepo 层无 specName == S 的条目，即新包）→ 仅显式集。同名依赖取两集约束的**交集合并**（须同时满足两集约束，`VersionConstraint` 各比较字段并存时按交集收紧；两集约束矛盾时以`RpmMeta.requires`数据为准）。
 2. **反查**：与 buildRequires 完全同一 providesInfo 选择链（上述四步裁决不变）。
 3. **命中处理**：
    - 提供方 ∈ 本批待构建 spec → **install 边**：`installInDep[S][提供方] = versionConst`，`outDep[提供方]` 追加 S（与 build 边共用 outDep，下游推进/入度合并计算）；
