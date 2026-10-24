@@ -164,6 +164,8 @@ POST /artifacts/v1/projects/{project}/jobs/{job}/artifacts
 POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete
 ```
 
+Manifest 封账包含 Artifact Manager 按部署配置自动执行的 RPM 签名及验签，具体契约见 [Artifact Manager 6.2](artifact-manager.md#62-提交并完成-job-上传清单)。Runner 不查询签名开关、不传密钥或后端参数，也不调用独立签名接口。
+
 这些写入和状态查询请求复用 3.1 节的并发安全 token provider，将当前 `type=runner` Token 作为 Bearer Token 直接交给 Artifact Manager。Artifact Manager 再通过 Gateway 校验 Token；Runner 不额外申请 Artifact Token。Artifact Manager 返回 401 时执行与普通业务请求相同的一次强制刷新和单次重放，但请求体必须可重建：日志 chunk 保留在本地待确认缓冲中，普通 Artifact 保留本地文件，JSON 请求从结构重新编码。403 不刷新 Token。
 
 Runner 为 Gateway 和 Artifact Manager 分别配置 TLS。`--gateway-ca` 只用于 Gateway，`--artifact-manager-ca` 只用于 Artifact Manager；测试环境可以分别显式跳过校验，不能因为其中一个地址使用 HTTP 或跳过 TLS 而放宽另一个客户端。
@@ -597,7 +599,9 @@ type LogUploadCheckpoint struct {
 - 扫描结果必须先完整排序并校验，再开始上传。排序键是规范化后的 `relativePath`，保证重试、回执和 Manifest 顺序确定。
 - 封账日志始终以 `relativePath=logs/container.log`、`category=log`、`required=true` 加入该 Job 的唯一 Manifest。普通产物不得使用 `logs/container.log`，发生路径冲突时 Job 失败。
 - 构建成功但结果目录没有普通文件时，仍提交只包含日志的 Manifest。
-- Manifest 完成请求结果未知时，Runner 查询相同 Project 和 Job 名的唯一清单；服务端已返回相同 Completed 清单时继续写回 Job，否则原样重试完成请求。Manifest 完成接口以 Project 和 Job 名保证幂等，不使用独立幂等键。
+- Manifest 完成请求由原始上传回执生成，包含签名前大小和 SHA-256。Artifact Manager 自动签名后返回最终清单，其 RPM 摘要可能与本地文件不同；Runner 不据此判定上传损坏，也不覆盖原始回执。
+- Manifest 完成请求结果未知时，Runner 查询相同 Project 和 Job 名的唯一清单；仅 `Completed` 且 `uploadDigest` 与本次规范化原始请求摘要一致才继续写回 Job。200 响应也必须做相同确认；404 不代表在途请求已取消，继续使用原请求重试。摘要算法由 Artifact Manager 5.2 定义，Runner 与服务端使用同一组契约测试向量。接口以 Project 和 Job 名保证幂等，不使用独立幂等键。
+- 签名期间 Job 保持 `Running/PostRun`。`ManifestInProgress`、`SigningBusy` 及其他 `retryable=true` 的签名错误按 `Retry-After` 或现有退避重试；签名等待和跨请求重试均计入 `--artifact-upload-timeout`。未能确认封账成功前不能把 Job 写为 Succeeded，不能因签名失败退化成只含日志的成功清单。
 - 任何必需普通产物上传或 Manifest 封账最终失败都会令 Job `phase=Failed`，并在 `message` 中记录原因；已经成功上传的 Artifact 和本地回执保留用于幂等恢复，不提交缺少文件的降级清单。
 
 ### 8.5 上传回执与本地文件清理
@@ -714,7 +718,7 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--artifact-max-job-size` | `100GiB` | 单 Job 普通产物总大小上限，不能超过 Artifact Manager 配置 |
 | `--artifact-max-files` | `10000` | 单 Job 普通产物文件数量上限 |
 | `--artifact-upload-concurrency` | `4` | 单 Job 普通产物并发上传数 |
-| `--artifact-upload-timeout` | `2h` | 单 Job 普通产物上传、Manifest 查询及封账的总期限，超时后进入失败终态 |
+| `--artifact-upload-timeout` | `2h` | 单 Job 普通产物上传、服务端可选签名等待、Manifest 查询及封账重试的总期限，超时后进入失败终态 |
 | `--artifact-retry-max-backoff` | `30s` | 普通产物和 Manifest 临时错误的最大退避间隔 |
 | `--artifact-failed-retention` | `24h` | 上传失败、超时、结果未知或封账失败并成功写回失败终态后，本地现场的默认保留时间；磁盘压力下可提前回收 |
 
@@ -770,9 +774,9 @@ secrets:
 | 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应 |
 | 普通产物扫描 | 空目录、嵌套目录、点文件、稳定排序、RPM MIME、普通 MIME、路径冲突、非法 UTF-8、不可读文件、符号链接和特殊文件拒绝、文件数及大小限制 |
 | 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
-| Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、完成结果未知查询和内容冲突处理 |
+| Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、uploadDigest 确认、签名前后摘要不同、签名等待与失败、完成结果未知查询和内容冲突处理 |
 | 本地清理 | PostRun 后清理工作目录、成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、Runner 重启恢复、24 小时到期统一删除、磁盘使用率超过 85% 时最旧失败标记优先回收、标记写入空间不足时清理旧候选并重试且必要时兜底回收当前终态 Job、结果未知未终态不计时 |
 | Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Succeeded；上传失败时 phase 为 Failed 且 message 记录原因 |
 | 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
 
-端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志在容器运行期间可通过 SSE 读取，容器退出后生成唯一的 `logs/container.log` Artifact 和普通 Artifact，Job 的唯一 Manifest 包含全部必需项，下载正文与本地源文件一致，最终 Job 的 Artifact 状态和数量直接使用 Manifest 完成响应。
+端到端测试应启动 Gateway、Artifact Manager、Runner 和一个持续输出 stdout/stderr 并向 `/results/packages/` 写入文件的测试容器，验证日志可通过 SSE 读取，容器退出后生成唯一日志 Artifact、普通 Artifact 和包含全部必需项的 Manifest。关闭签名时下载正文与本地源文件一致；开启签名时 RPM 下载通过目标公钥验签、摘要与最终 Manifest 一致，原始回执仍匹配本地文件。只有封账确认后才推进 Job 成功终态，Job Status 不新增产物状态或数量字段。

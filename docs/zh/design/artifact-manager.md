@@ -12,6 +12,8 @@ artifact-manager -> ebs-gateway Token authentication API
 
 Artifact Manager 管理文件正文及其元数据，文件正文存储在本地持久化目录中。
 
+可选 RPM 签名属于 Manifest 封账流程：上传完成后由服务端自动签名，成功后才提交最终清单；Runner 不调用独立签名接口。
+
 ## 二、设计目标
 
 | 目标 | 说明 |
@@ -50,7 +52,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | 调用方 → 接收方 | 方法与路径 | 用途 | 当前认证与访问约束 |
 |---|---|---|---|
 | Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/artifacts` | 上传产物 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
-| Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete` | 封账 Job 上传清单 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
+| Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/manifest/complete` | 校验上传集合、按部署配置签名并封账 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
 | Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/logs/chunks` | 追加实时日志 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
 | Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/logs/complete` | 封账实时日志 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
 | Runner → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status` | 查询日志流状态，恢复上传 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
@@ -85,7 +87,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 |---|---|
 | `cmd/app` | 解析参数、校验启动配置、管理进程生命周期 |
 | `pkg/server` | 装配业务模块，注册路由，处理 HTTP 协议与响应转换 |
-| `pkg/upload` | Artifact、Manifest、日志及其本地存储，不依赖仓库或发布模块 |
+| `pkg/upload` | Artifact、Manifest、日志及其本地存储；封账调用 server 注入的最小签名接口，不依赖仓库或发布模块 |
 | `pkg/repository` | 过程仓物化；通过最小产物读取接口访问上传数据，由 server 注入 `upload.Store` |
 | `pkg/release` | 正式发布与保留清理，依赖 repository 获取源仓，不直接管理上传记录 |
 | `pkg/auth` | Gateway Token 校验和自动过期的认证缓存 |
@@ -96,18 +98,19 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 
 ### 3.3 并发与锁模型
 
-以下是当前单可写实例的实现边界。“Job/日志流/仓库粒度”描述业务互斥范围，不代表实现了同名的独立互斥锁。
+以下为单可写实例的并发边界。“Job/日志流/仓库粒度”描述业务互斥范围，不代表实现了同名的独立互斥锁。
 
 | 保护对象 | 当前同步方式 | 锁内操作与边界 |
 |---|---|---|
 | 普通上传请求 | Store 全局读写锁下登记 Pending，相同幂等作用域的进行中请求返回冲突 | 配额与路径检查、最终提交在 Store 锁内；网络正文流式写入不持有 Store 锁，不存在贯穿上传全程的独立键锁 |
-| Artifact / Manifest 元数据 | `upload.Store` 全局读写锁 | 按需读取、检查后写入及 Manifest 封账串行；文件检查和元数据落盘可能持锁 |
+| Artifact / Manifest 元数据 | `upload.Store` 全局读写锁；同一 Job 的封账执行去重 | 锁内冻结输入及提交清单；签名、验签和正文摘要计算在锁外执行，完成后重新核验冻结输入 |
+| 封账签名 | 服务级有界 worker pool，默认 8 个 worker | 所有 Job 共用并发上限；队列有界，满载返回可重试错误，不持 Store 锁排队 |
 | 日志流 | 同一个 Store 全局写锁 | chunk 追加、索引/汇总更新、恢复、重放和封账可能持锁执行文件 I/O；不同 Job 并非完全独立并发 |
 | 过程仓任务 | Repository Manager 全局读写锁及 `queued/running` 集合 | 提交、去重、状态落盘和队列标记受锁保护；物化和外部命令在锁外运行，完成后重新检查状态 |
 | 发布任务与 current | Release Manager 全局读写锁及任务集合 | 正文生成在锁外；状态提交与 current 切换在锁内，不同目标的激活也串行 |
 | 鉴权、SSE | 认证缓存内部同步；订阅集合由 Store 锁保护 | 网络鉴权与 HTTP 流式发送不长期占用业务状态锁；慢订阅者断开，不反压上传 |
 
-跨模块调用先获取源数据快照，再进入本模块的状态临界区；不在持有 Release Manager 锁时调用 Repository Manager，也不在持有 Repository Manager 锁时执行产物读取或签名。Store 不回调上层 Manager。当前不存在跨进程锁，多个可写实例不能共享同一数据目录。
+跨模块调用先获取源数据快照，再进入本模块的状态临界区；不在持有 Release Manager 锁时调用 Repository Manager，也不在持有 Store 或 Repository Manager 锁时执行签名命令。Store 不回调上层 Manager。当前不存在跨进程锁，多个可写实例不能共享同一数据目录。
 
 正文生成与删除之间不通过持有全程锁来协调，具体竞态边界见 8.10。全局 Store 锁可能使慢磁盘、日志重放或封账影响其他 Job；细粒度锁优化属于后续工作，不能将配置的 worker 数直接等同于端到端并行度。
 
@@ -133,14 +136,17 @@ ${dataDir}/.metadata/jobs/{project}/{jobName}/
 │   └── {artifactID}.json
 ├── logs/
 │   └── combined.json
+├── seal.json                       # 冻结的封账输入、签名指纹和恢复进度
 └── manifest.json
 ```
+
+签名不覆盖原始上传正文。临时副本放在 `${dataDir}/.signing/{project}/{jobName}/`，验签并持久化后以不覆盖方式提交到 `${dataDir}/.signed/{project}/{jobName}/{artifactID}.rpm`。两者与仓库位于同一文件系统，均不是公开目录；最终清单决定下载和物化选择原始正文还是签名正文。封账发布边界及清理见 6.2.1。
 
 Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Store 锁串行保护。
 
 启动时逐条扫描 Artifact 和 LogStream 元数据并执行恢复，处理完即释放，不将历史产物或日志流状态常驻内存。`manifest.json` 不在启动时加载，按 Project、JobName 定位读取，用完释放。
 
-上传前及提交正文前，在 Store 锁内读取 Manifest 检查是否已封账；封账时在同一锁内读取已有清单、比较摘要并原子写入。只有文件不存在才视为未封账，JSON 损坏、归属不匹配和 I/O 错误均阻止写入。清单 GET 对不存在返回 404，对读取失败返回存储错误，不返回空清单。
+上传前及提交正文前，在 Store 锁内检查 Manifest 和封账记录；输入冻结后不再允许增加或完成新的上传，已完成 Artifact 的相同上传请求仍返回原始回执。只有文件不存在才视为无记录，JSON 损坏、归属不匹配和 I/O 错误均阻止写入。清单 GET 对尚未成功封账返回 404，对读取失败返回存储错误，不返回空清单。
 
 元数据先写入临时文件并 `fsync`，再原子重命名，最后 `fsync` 父目录。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
 
@@ -217,7 +223,7 @@ Failed -> Pending（相同上传元数据重试）
 
 ### 5.2 JobUploadManifest
 
-Artifact Manager 使用本地持久化的 Job 上传清单记录一次 Job 预期上传的完整文件集合，不在 ebs-apiserver 中新增资源。单个 Artifact 的 `Completed` 只表示该文件完整，`JobUploadManifest` 的 `Completed` 才表示该 Job 的全部必需文件已经完成上传。
+Artifact Manager 使用本地持久化的 Job 上传清单记录一次 Job 的完整文件集合，不在 ebs-apiserver 中新增资源。单个 Artifact 的 `Completed` 只表示原始文件上传完整；`JobUploadManifest.Completed` 表示全部文件可用，且已完成部署配置要求的 RPM 签名和验签。
 
 ```go
 type ManifestState string
@@ -233,33 +239,35 @@ type ManifestFile struct {
 }
 
 type JobUploadManifest struct {
-    SchemaVersion  int            `json:"schemaVersion"`
-    Project        string         `json:"project"`
-    JobName        string         `json:"jobName"`
-    RunnerName     string         `json:"runnerName"`
-    Files          []ManifestFile `json:"files"`
-    Digest         string         `json:"digest,omitempty"`
-    State          ManifestState  `json:"state"`
-    Failure        *FailureInfo   `json:"failure,omitempty"`
-    CreatedAt      Timestamp      `json:"createdAt"`
-    UpdatedAt      Timestamp      `json:"updatedAt"`
-    CompletedAt    *Timestamp     `json:"completedAt,omitempty"`
-    ExpiresAt      *Timestamp     `json:"expiresAt,omitempty"`
+    SchemaVersion      int            `json:"schemaVersion"`
+    Project            string         `json:"project"`
+    JobName            string         `json:"jobName"`
+    RunnerName         string         `json:"runnerName"`
+    Files              []ManifestFile `json:"files"`
+    Digest             string         `json:"digest,omitempty"`
+    UploadDigest       string         `json:"uploadDigest"`
+    SigningFingerprint string         `json:"signingFingerprint,omitempty"`
+    State              ManifestState  `json:"state"`
+    Failure            *FailureInfo   `json:"failure,omitempty"`
+    CreatedAt          Timestamp      `json:"createdAt"`
+    UpdatedAt          Timestamp      `json:"updatedAt"`
+    CompletedAt        *Timestamp     `json:"completedAt,omitempty"`
+    ExpiresAt          *Timestamp     `json:"expiresAt,omitempty"`
 }
 ```
 
-当前清单提交直接完成封账：
+清单封账流程：
 
 ```text
-无清单 -> 校验并原子持久化 -> Completed
-Completed -> Completed（相同规范化清单的幂等请求）
+无清单 -> 校验并冻结上传集合 -> 可选签名及验签 -> 原子提交 Completed
+Completed -> Completed（相同原始上传集合的幂等请求）
 ```
 
 每个 `(project, jobName)` 最多只能有一个 Manifest 成功进入 `Completed`；清单完成后不可增加、删除或替换文件。封账校验及重复请求行为见 6.2。
 
-`digest` 对按 `relativePath` 排序后的规范字段计算 SHA-256，不直接对未规范化的 JSON 文本计算，保证相同清单始终产生相同摘要。
+`uploadDigest` 对 Runner 提交的原始上传集合计算，用于完成请求重放和结果未知确认；`digest` 对最终 `files` 计算，用于验证封账内容。两者使用下述相同规范化算法；未启用签名时两者相等。`signingFingerprint` 是冻结输入时确定的部署公钥完整指纹，关闭签名时为空，调用方不能指定或覆盖。`Files` 中 RPM 的大小和摘要描述最终签名文件，其他条目保持原上传值；Artifact ID、路径、类别和 required 不变。原始 Artifact 元数据和上传回执保持不变，不用最终摘要覆盖上传幂等依据。
 
-`Files` 至少包含一个条目，并按 `relativePath` 排序持久化；`artifactID` 和 `relativePath` 在清单内都必须唯一。`manifest/complete` 同时提交并封账清单；校验失败返回错误，不创建失败清单，也不修改已有清单。Manifest 仅保留 `Completed` 状态，尚未成功封账时查询返回不存在。
+`Files` 至少包含一个条目，并按 `relativePath` 排序持久化；`artifactID` 和 `relativePath` 在清单内都必须唯一。输入校验失败不冻结集合，调用方可补传后重试；冻结后的签名失败保留封账恢复记录，不生成可供消费的 Manifest。Manifest 仅保留 `Completed` 状态，尚未成功封账时查询返回不存在，不代表此前完成请求已取消。
 
 摘要输入逐项使用 UTF-8 编码，数字使用不带前导零的十进制，布尔值使用 `true/false`：
 
@@ -269,7 +277,7 @@ relativePath\0artifactID\0category\0size\0sha256\0required\n
 ...
 ```
 
-最终 `Digest` 表示为 `sha256:<64位小写十六进制>`。
+`Digest` 和 `UploadDigest` 均表示为 `sha256:<64位小写十六进制>`。
 
 ### 5.3 LogStream
 
@@ -551,25 +559,58 @@ Content-Type: application/json
 }
 ```
 
-服务在 Store 锁内对 `(project, jobName)` 的清单执行封账校验，锁模型见 3.3：
+请求中的大小和 SHA-256 始终来自原始上传回执，Runner 不负责生成或预测签名后的摘要。服务先在 Store 锁内对 `(project, jobName)` 执行输入校验，锁模型见 3.3：
 
 1. Runner Token 仍然有效；使用 URL 的 Project 和 Job 定位元数据目录，已有 Manifest 的归属与该作用域一致。
 2. 清单内路径唯一，每个 Artifact ID 均在该 Job 的 `artifacts/` 目录中解析；Artifact 本身不包含 project、jobName 字段。
-3. 所有必需 Artifact 均为 `Completed`。
+3. 所有列入清单的 Artifact 均为 `Completed`，没有仍在提交的上传。
 4. Artifact 的路径、大小和 SHA-256 与清单一致。
 5. 该 Job 尚未由不同内容完成 Manifest。
 
-验证成功后按 5.2 计算清单摘要，原子写入 `Completed` 清单。相同 Job 名称和相同规范化文件集合的重复请求返回原结果；已经完成的 Job 收到不同清单内容时返回 `409 Conflict`。Manifest 完成接口不使用独立幂等键，Project 与 Job 名称即为幂等作用域。校验失败不会持久化一个可供选择的清单版本，Runner 修正或补传后仍使用同一个接口重试。
+验证成功后按 5.2 计算 `uploadDigest`，冻结输入与当前签名指纹，再按 6.2.1 完成签名和最终清单提交。请求同步等待，只有 `Completed` 落盘后返回 HTTP 200；不返回表示已封账的提前成功响应，也不增加独立签名接口或 Runner 签名开关。无 RPM 或关闭签名时直接完成普通封账。
+
+相同 Job、相同 `uploadDigest` 的已完成请求返回原结果，不再次签名；不同输入返回 `409 ManifestConflict`。正在执行的同输入请求返回 `409 ManifestInProgress / retryable=true`，附 `Retry-After: 5`。签名队列满时返回 `503 SigningBusy / retryable=true`，同样附带重试提示。完成接口以 Project 与 Job 名称为幂等作用域，不增加独立幂等键。调用方退避重试仍受自身后处理总期限限制。
 
 ```json
 {
   "state": "Completed",
   "artifactCount": 1,
-  "digest": "sha256:..."
+  "digest": "sha256:final-content-digest",
+  "uploadDigest": "sha256:original-upload-digest",
+  "signingFingerprint": "<configured-full-public-key-fingerprint>"
 }
 ```
 
 清单完成后禁止为该 Job 创建或完成新的 Artifact 上传。该接口是一次 Job 产物集合的唯一封账边界，不能通过扫描当前已有 Artifact 推断上传是否结束。
+
+#### 6.2.1 签名、提交与恢复
+
+1. 校验通过后先原子持久化 `seal.json`，记录规范化的原始文件集合、`uploadDigest`、签名指纹及已完成文件的最终大小和摘要。它是内部恢复记录，不是另一个可选 Manifest；同一 Job 仅一个冻结输入，同输入失败可重试，不允许替换输入或密钥。
+2. 释放 Store 锁，将 `category=artifact`、位于 `packages/` 下且扩展名为 `.rpm`（不区分大小写）的二进制 RPM 和 SRPM 纳入签名。其他产物和日志不签名；格式非法的 RPM 明确失败。只包含日志的清单无需调用签名后端。
+3. 每个任务流式复核原始大小和摘要，创建不共享 inode 的私有副本，签名、验签并确认完整密钥指纹。复核 NEVRA、架构、来源 spec、Provides 和 Requires 未改变，计算最终大小和 SHA-256。签名后副本也受单文件和 Job 配额限制，不一次性读入内存。
+4. 每个成功副本 fsync 后以不覆盖语义提交到 `.signed`，再原子保存该文件的恢复进度。已有副本只能经验签、身份及摘要核验后复用；已记录进度的副本丢失或损坏时明确失败，不重新签名替换。不能仅凭文件存在判断成功，也不能对已提交副本再次原地签名。
+5. 所有文件成功后重新获取 Store 锁，核对冻结输入、签名指纹与全部最终文件，从最终元数据生成 Manifest。原子写入 `manifest.json` 是唯一发布点；此前签名副本不可公开下载或用于物化，之后不可变。原始 Artifact 保留供上传幂等校验，完成响应及后续 GET 返回相同 `uploadDigest` 和最终 `digest`。
+6. 超时、断连、取消或崩溃不代表封账失败已确定。Runner 先 GET 唯一 Manifest：仅 `Completed` 且 `uploadDigest` 与本地原请求匹配才确认成功；404 时用原请求重试，不把签名后的文件摘要与本地未签名文件逐项比较。服务不因重复请求创建第二套签名任务。
+7. 重启不加载历史 Manifest 常驻内存。下一次相同完成请求按需读取 `seal.json` 恢复，已提交 Manifest 优先返回；已提交签名副本但恢复记录未更新时核验后补记，未提交临时副本可重建。当前配置指纹与冻结指纹不一致时返回 `503 SigningConfigurationChanged / retryable=true`，等待恢复配置，不改签名策略。
+
+签名命令不持 Store 全局锁。全服务共用默认 8 个 worker 和有界等待队列（内部默认 100 个文件任务），按容量逐项派发，不为每个 Job 新建完整 worker pool。排队不占单 RPM 签名超时，但计入本次封账请求总期限；`--upload-timeout` 同时限制服务端单次封账处理，Runner 的后处理总期限限制跨请求重试。服务停止时取消在途签名并保留恢复记录，不依赖退出前最后一次写入才能恢复。
+
+| 封账失败 | 处理 |
+|---|---|
+| 原始清单与上传记录不匹配 | `422 ArtifactMismatch`；不冻结新输入，可补传后重试 |
+| RPM 非法、签名验证失败或身份改变 | `422 PackageMetadataInvalid`、`SignedPackageVerificationFailed` 或 `SignedPackageMetadataMismatch`；不可自动重试，不提交 Manifest |
+| 后端不可达、命令超时、临时 I/O 或磁盘不足 | `503 SigningBackendUnavailable`、`StorageError` 或 `InsufficientStorage`；`retryable=true`，保留输入及已核验副本 |
+| 签名后超出文件或 Job 配额 | `413 ArtifactLimitExceeded`；不提交 Manifest，不退化为无签名 |
+
+签名失败不改变业务执行结果，但 Runner 在后处理期限内不能确认封账成功时按现有规则将 Job 标记为失败。成功封账后清理 `seal.json` 和临时目录，不能清理仍被最终 Manifest 使用的 `.signed` 文件；失败时保留原始正文、已核验副本及恢复记录供重试。未登记成功的临时副本在请求结束时清理，崩溃遗留在同 Job 下次恢复时清理。此流程不新增 Artifact/Manifest TTL，现有清理边界见第十三章；未来按 Job 删除时必须一起清理原始文件、签名副本和恢复记录，并与封账提交互斥，避免迟到任务重新发布清单。已建硬链接的仓库不受原始或签名产物目录后续删除影响。
+
+#### 6.2.2 签名后端
+
+签名策略仅由 Artifact Manager 部署配置决定，Job、Project、Runner 和封账请求不能指定后端、程序或密钥。模式为 `disabled`（默认）、`local-gpg` 或 `signatrust`；不签名 `repomd.xml`、updateinfo 或任意代码文件。
+
+本地模式调用固定的 `rpmsign --resign`。私钥和口令由 Artifact Manager 进程可访问，不构成独立隔离边界；密钥以受限权限挂载，口令从受保护文件或签名代理读取，不通过参数、普通环境变量或日志传播。Signatrust 模式调用客户端的 RPM/PGP 签名能力（`--file-type rpm --key-type pgp`），地址、TLS 凭据及 `key-name` 固定于部署配置，私钥由远端平台持有；客户端传送 RPM 正文产生的网络流量仍然存在。两种后端均使用参数数组、受限环境和超时，不拼接 shell 命令。
+
+`--release-public-key` 提供签名验证使用的公钥。启动配置无效时拒绝启动；签名结果必须使用该公钥验证并核对完整指纹。指纹在封账时冻结，后端名称不写入 Manifest；相同指纹允许切换实现后端。密钥轮换应等待在途 Build 结束，跨密钥继承需从空基础仓重新完整构建。物化及正式发布的指纹一致性规则见 8.7.1。
 
 ### 6.3 查询 Job 上传清单
 
@@ -577,7 +618,7 @@ Content-Type: application/json
 GET /artifacts/v1/projects/{project}/jobs/{job}/manifest
 ```
 
-接口返回该 Job 唯一清单的状态和文件列表。仓库物化只使用状态为 `Completed` 的清单；RpmRepo Controller 不预查该接口。Manifest digest 是 Artifact Manager 的内部完整性和幂等字段，不要求消费者记录或回传。消费者不得直接读取 Artifact Manager 的本地元数据文件。
+接口返回该 Job 唯一清单的状态、最终文件列表、`uploadDigest`、`digest` 和签名指纹。仓库物化只使用 `Completed` 清单；RpmRepo Controller 不预查该接口，也无需记录摘要。Runner 使用 `uploadDigest` 确认原始封账意图，其他消费者使用最终文件元数据。消费者不得直接读取本地元数据文件。
 
 ## 七、查询与下载 API
 
@@ -591,6 +632,8 @@ GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts
 
 返回该 Job 的全部 Completed Artifact，支持按 `category` 过滤；排序和列表结构见 5.5。
 
+已封账 Job 的列表按 Manifest 投影：签名 RPM 保持 Artifact ID 和逻辑路径，大小、SHA-256 使用最终值；非签名文件不变。未封账时仍可查询、下载已上传的原始文件，但这些文件尚不具备封账可用性。普通上传接口的重复请求始终返回原始上传回执，与封账后的下载投影区分。
+
 ### 7.2 下载文件
 
 ```http
@@ -598,6 +641,8 @@ GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content
 ```
 
 正文接口支持 `Range`、`ETag`、`If-None-Match` 和 `Content-Disposition`。Artifact Manager 流式读取文件并返回，下载过程中不得将完整文件载入内存。
+
+封账后，签名 RPM 的相同下载 URL 读取 `.signed` 中的最终文件，`Content-Length`、Range 和 ETag 均依据该文件；每个请求固定正文和元数据快照，禁止混用签名前后的大小和摘要。最终文件缺失或损坏时返回错误，不回退未签名正文。过程仓产物读取接口使用相同的最终内容选择规则。
 
 公开查询和下载是系统明确的数据访问策略。部署方必须通过网络边界决定 Artifact Manager 是否向公网开放，并为公开接口配置请求速率和下载带宽限制。
 
@@ -632,7 +677,7 @@ Repository content URL
 6. 进程崩溃后能够区分 Ready、可继续清理的临时状态和失败状态。
 7. 仓库生成不直接修改业务 API 对象，避免数据面与控制面形成双写事务。
 
-当前实现不提供 `repomd.xml` 签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。可选 RPM 签名由 Artifact Manager 内部实现，按 8.7.1 执行；未启用时，现有物化与发布流程保持不变。
+当前实现不提供 `repomd.xml` 签名、跨 Artifact Manager 实例复制、镜像同步、增量 delta RPM 或外部仓库导入。可选 RPM 签名在 Manifest 封账时按 6.2 执行；物化只消费最终产物，指纹约束见 8.7.1。
 
 ### 8.3 职责边界
 
@@ -695,7 +740,7 @@ ${dataDir}/
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
-`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由第九章的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 在过程仓物化阶段签名；正式发布仅复用已签名 RPM 并安装匹配的公钥，不重新签名 RPM 或 `repomd.xml`。
+`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由第九章的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 已在 Manifest 封账前签名；物化和正式发布均复用最终 RPM，不重新签名。正式发布安装匹配的公钥，不签名 `repomd.xml`。
 
 Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、OS、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
 
@@ -859,31 +904,27 @@ GET /repositories/v1/{repositoryUID}/{path...}
 1. 在 Repository Manager 锁内校验或创建并持久化 `Creating` 的 `RepositoryRecord`，通过队列和运行标记保证同一 UID 至多一个物化任务；正文生成在锁外执行，见 3.3。
 2. 校验基础仓存在且为 `Ready`，并且 Project、目标 OS 和架构与请求一致。
 3. 按 Job 名称逐个读取唯一的 Job 上传清单，要求状态为 `Completed`，并在 Artifact Manager 内部重新计算清单摘要以验证本地元数据完整性。
-4. 每个输入 Job 至少包含一个 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；流式计算 SHA-256 并与清单再次比对。缺少 RPM、清单损坏或输入产物过期时在失败记录中标明该 Job 名称。
+4. 每个输入 Job 至少包含一个 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；通过产物读取接口取得 Manifest 指定的最终文件，流式计算 SHA-256 并与最终清单比对，不与原始上传摘要混用。缺少 RPM、清单损坏或输入产物过期时在失败记录中标明该 Job 名称。
 5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 从 `SOURCERPM` 文件名末尾的版本、发行号分隔符推导源包名，不要求它与子包版本一致；source RPM 使用自身名称推导，并按 `src` 架构建立仓库身份，即使 RPM 头中报告了构建目标架构。无法确定归属时记录出错的 Job 名称并使本次请求失败。
 6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。源码包与同名同版本的二进制包不视为同一 NEVRA。
 7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
 8. 基础仓存在时，读取其不可变 `repository.json` 中的 RPM 元数据，只将非本批输入 spec 的旧 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用；校验目录项与元数据一致，但不重新解析或哈希旧 RPM。基础仓和工作目录必须位于同一文件系统；硬链接失败不静默退化为完整复制。
-9. 未启用签名时，将本批输入 Artifact 正文硬链接到工作目录；Artifact 正文和仓库工作目录必须位于同一文件系统。启用签名时，本批新 RPM 复制到仓库工作目录内的独立普通文件，由内置后端仅在该副本上签名并验签；不得修改 Artifact 正文或基础仓硬链接。详见 8.7.1。
-10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、固定 locale 和受限环境。失败时记录稳定错误码，不向调用方返回原始命令输出。签名模式下必须在本批 RPM 全部验签通过后执行。
+9. 按 8.7.1 检查输入和基础仓的签名指纹，将本批最终 RPM 硬链接到工作目录；最终产物与仓库工作目录必须位于同一文件系统。物化不调用签名后端，不修改原始上传、最终产物或基础仓硬链接。
+10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、固定 locale 和受限环境。失败时记录稳定错误码，不向调用方返回原始命令输出。
 11. 确认生成的 `repodata/repomd.xml` 存在且为普通文件。
-12. 计算本次最终内容的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批最终 RPM 摘要，其他文件现场计算摘要。签名模式下本批摘要取签名后的字节，不再复用上传 Artifact 的摘要；签名输出可能因重试而不同，UID 幂等性由原子发布保证，不要求摘要在发布前跨尝试相同。
+12. 计算本次最终内容的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批 Manifest 的最终 RPM 摘要，其他文件现场计算摘要。物化重试始终读取同一封账版本，不重新生成签名字节。
 13. 写入并 fsync `repository.json`，再将工作目录以不覆盖语义原子重命名为最终目录。
 14. 原子写入 `Ready` 元数据，并向等待该 UID 的请求广播完成。
 
 任何一步失败都不得暴露工作目录为可下载仓库，也不得修改基础仓或输入 Artifact。
 
-#### 8.7.1 可选 RPM 签名
+#### 8.7.1 已签名产物的一致性
 
-签名是 Artifact Manager 物化流程中的可选步骤。签名配置是服务端部署配置，Job、Project 和物化请求均不能指定后端或密钥。模式为 `disabled`（默认）、`local-gpg` 或 `signatrust`；开启后仅对本批新引入的二进制 RPM 和 SRPM 签名，继承自基础仓的 RPM 保持原样。签名失败不得退化为无签名模式。正式发布不再次签名 RPM，也不签名 `repomd.xml`、updateinfo 或任意代码文件。
+签名与验签在 6.2 的封账流程中完成。首次接受物化时仍将当前配置公钥的完整指纹冻结到 `RepositoryRecord.SigningFingerprint` 与 `repository.json`，关闭签名时为空；它不由请求提供，也不改变 `repositoryUID` 计算规则。
 
-本地模式调用固定的 `rpmsign --resign` 工具；私钥和口令由 Artifact Manager 进程可访问，因此不能声称私钥与 Artifact Manager 已隔离。密钥文件仅以受限权限挂载，口令从受保护文件或签名代理读取，不通过命令行参数、普通环境变量或日志传播。Signatrust 模式调用客户端对工作副本执行 RPM/PGP 签名，对应旧架构的 `--file-type rpm --key-type pgp`；其地址、TLS 客户端凭据和 `key-name` 由部署配置固定，私钥仍由远端平台持有。两种后端均使用参数数组和受限环境，不拼接 shell 命令，不运行请求方指定的程序。若 Signatrust 需上传 RPM 正文到远端平台，这部分网络传输仍然存在。本批新增 RPM 由有上限的 worker pool 并发签名、验签和元数据复核，默认 8 个 worker；所有任务成功后才运行 `createrepo_c`，任一失败都不发布工作目录。继承自基础仓的 RPM 不重复签名。
+本批每个 Manifest 的签名指纹以及基础仓指纹必须与记录一致，包括空指纹；不允许混入未签名产物、其他密钥签名产物，或在物化时临时补签。首次无基础仓可直接使用符合策略的最终清单。所有本批文件按 Manifest 最终摘要校验，之后与基础仓文件一样只读复用。
 
-Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来源 spec。签名工具只处理仓库工作目录内未与 Artifact 或基础仓共享 inode 的私有副本。签名完成后，使用服务端配置的公钥验证实际签名及完整指纹，复核 RPM 身份字段未改变，重新计算签名后 RPM 的大小和 SHA-256；只有全部本批文件通过校验才生成 `repodata`。签名输出可以因时间等因素在不同尝试间变化，仓库 UID 仍由固定物化请求确定，最终目录只允许一次性原子发布。
-
-首次接受物化时，将配置公钥的完整指纹写入 `RepositoryRecord.SigningFingerprint` 与 `repository.json`；签名关闭时该字段为空。它不由物化请求提供，也不改变当前 `repositoryUID` 计算规则。相同 UID 的重试和崩溃恢复只在当前部署配置得出的指纹与记录一致时继续；不一致时保持可重试失败，不用新密钥签名，也不把原定签名的仓库变成未签名。Ready 重放直接返回原结果。`local-gpg` 与 `signatrust` 仅是部署时选择的后端，不写入仓库记录；只要公钥指纹相同，后端切换不改变仓库身份。一次 Build 内不得切换签名指纹。启用签名时，基础仓必须是同一公钥指纹的已签名 Ready 仓；首次无基础仓的物化可直接签名。正式发布校验源仓指纹与 `--release-public-key` 一致，不匹配或缺少公钥时拒绝发布。密钥轮换应等待在途 Build 完成；跨密钥继承需要从空基础仓重新完整构建。
-
-签名错误按 8.9 分类：启动配置无效时拒绝启动，基础仓指纹不匹配时拒绝本次输入；在途记录与当前配置指纹不同使用 `SigningConfigurationChanged / retryable=true`，仅在恢复匹配配置后继续，不能改写记录中的原指纹。RPM 输入或验签错误不可重试；后端暂不可达、命令超时和临时 I/O 错误可退避重试。签名成功但后续物化失败时，仅清理本次私有工作目录，原始 Artifact 和 Ready 仓不变。结构化日志与指标的补全见第十八章，不记录私钥、口令或 RPM 正文。
+相同 UID 的未完成任务只在当前部署指纹与冻结记录一致时恢复，否则使用 `SigningConfigurationChanged / retryable=true` 等待配置恢复。Ready 重放返回原结果。正式发布核对源仓指纹与配置公钥一致，不重复签名。物化失败只处理仓库工作目录，不删除或改写封账产物。
 
 ### 8.8 并发和一致性
 
@@ -906,10 +947,8 @@ Artifact Manager 在签名前记录输入 RPM 的 SHA-256、NEVRA、架构和来
 | 硬链接返回跨文件系统 | 标记 `Failed / RepositoryFilesystemMismatch / retryable=false` |
 | `createrepo_c` 超时或取消 | 标记 `Failed / RepositoryCommandTimeout / retryable=true`，不发布目录 |
 | `createrepo_c` 执行失败 | 标记 `Failed / RepositoryCommandFailed / retryable=true`，不保存原始 stdout/stderr，不发布目录 |
-| 签名后 RPM 身份改变或验签失败 | 标记 `Failed / SignedPackageMetadataMismatch` 或 `SignedPackageVerificationFailed`，`retryable=false`，记录来源 `jobName`，不发布目录 |
-| 签名配置无效 | 服务启动失败；基础仓签名指纹不匹配时拒绝物化请求，不发布目录 |
+| 输入清单或基础仓签名指纹不匹配 | `ManifestSigningMismatch` 或 `BaseRepositorySigningMismatch`，`retryable=false`；清单错误记录来源 `jobName`，不发布目录 |
 | 未完成物化记录的指纹与当前配置不一致 | 标记 `Failed / SigningConfigurationChanged / retryable=true`，保留原指纹，不发布目录 |
-| Signatrust 暂不可达、签名命令超时 | 标记 `Failed / SigningBackendUnavailable / retryable=true`，不发布目录 |
 | 磁盘空间不足 | 标记 `Failed / InsufficientStorage / retryable=true`，不发布目录 |
 | 输入 Manifest、Artifact 或基础仓在物化期间到期删除 | 标记 `Failed / MaterializationInputExpired / retryable=false`，不发布目录 |
 | 停机或崩溃中断 | 不保证写入统一的中断状态；下次启动按持久化的 Creating 记录恢复 |
@@ -1139,7 +1178,7 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{os
 5. 将选中的 RPM 从过程仓 `Packages` 硬链接到工作目录；源仓保持不可变。跨文件系统失败返回稳定错误，不退化为无界复制。
 6. `excludeSpecs` 为空时，发布 RPM 集合与源过程仓一致，复制源仓 `repodata`，不再运行 `createrepo_c`；非空时完整执行 `createrepo_c`，避免旧 metadata 包含被排除的 RPM。
 7. 解析 `repomd.xml`，校验其引用文件的路径及 SHA-256；当前不进一步解析 primary 元数据核对 RPM 集合、架构和数量。
-8. 复制服务端配置的公钥并记录其实际摘要；当前实现不执行 RPM、repomd 或 updateinfo 签名。可选签名模式下，源过程仓 RPM 应已在物化时签名，此处核对公钥指纹，不重复签名。
+8. 复制服务端配置的公钥并记录其实际摘要；发布阶段不执行 RPM、repomd 或 updateinfo 签名。可选签名模式下，源仓 RPM 已在 Manifest 封账时签名，此处核对公钥指纹，不重复签名。
 9. 计算 `releaseDigest` 时复用源过程仓已验证的逐包 RPM SHA-256，并核对发布目录中的文件名、大小和数量；`repodata` 与公钥仍按实际文件计算摘要，保持原有 `releaseDigest` 格式。写入包含请求摘要、源仓 UID 和排除 spec 集合的 `release.json`，fsync 文件和目录。启动恢复仅对尚未完成的发布完整复核正文；已 Ready 的发布只核对记录与索引摘要，不重新读取全部 RPM。
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
 11. worker 保存 Prepared 后直接调用激活方法，取得 Release Manager 全局互斥锁并检查状态；激活入口不重新校验整个发布目录或摘要。
@@ -1438,7 +1477,7 @@ Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.s
 | 操作 | 检查要求 |
 |------|----------|
 | 上传 Artifact | 读取文件正文前校验 Token；提交 Artifact 前确认 Token 仍在有效期内 |
-| 完成 Job 上传清单 | 校验 Token，在 Store 锁内完成目标 Job 的完整性校验和封账 |
+| 完成 Job 上传清单 | 校验 Token，锁内冻结输入，锁外签名，锁内提交最终清单；不接受调用方指定签名策略 |
 | 追加日志、查询日志流状态 | 校验 Token；允许使用短期认证缓存 |
 | 完成日志流 | 重新校验 Token，在 Store 锁内完成目标日志流的摘要校验和封账 |
 
@@ -1487,13 +1526,13 @@ Project 配额、单 Job 文件数、服务端 Runner 上传并发、速率和 S
 
 Artifact、Manifest 和活动日志尚无自动 TTL 清理，也没有 Project/Job 删除事件联动或完整的孤儿文件扫描。当前不存在日志默认保留 30 天的实现。
 
-过程仓中的硬链接与原 Artifact 有独立目录项，删除原产物不会移除已物化的 RPM。删除与物化并发时，尚未打开或链接的输入可能消失；任务会失败，不能保证后续重试仍可读取原输入。未来清理 Manifest 与产物时应以 Job 为单位，避免留下引用缺失文件的 Completed 清单。
+过程仓中的硬链接与最终 Artifact 正文有独立目录项，删除原产物不会移除已物化的 RPM。删除与物化并发时，尚未打开或链接的输入可能消失；任务会失败，不能保证后续重试仍可读取原输入。未来清理 Manifest 与产物时应以 Job 为单位，包含 `.signed`、`.signing` 和 `seal.json`，避免留下引用缺失文件的 Completed 清单；封账与清理的互斥要求见 6.2.1。
 
 ## 十四、与 Job Status 的关系
 
 Job Status 只保留执行结果，不记录产物路径，也不增加 artifactState、artifactCount、repositoryState 或 repositoryUID。Runner 在必需产物与 manifest 封账后写 Succeeded；完整产物集合及封账状态由 Artifact Manager 的 JobUploadManifest 提供。
 
-RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Artifact Manager 在物化时校验输入。控制器在 RpmRepo.status.repository.sourceJobNames 中记录已消费 Job，在 skippedJobNames 中记录可定位的异常 Job，不回写 Job status。Manifest digest 仅供 Artifact Manager 内部校验，不进入公共 Job 或 RpmRepo 状态。
+RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Artifact Manager 在物化时校验最终输入。控制器在 RpmRepo.status.repository.sourceJobNames 中记录已消费 Job，在 skippedJobNames 中记录可定位的异常 Job，不回写 Job status。Manifest digest 用于最终内容校验，uploadDigest 用于 Runner 确认封账意图，均不进入公共 Job 或 RpmRepo 状态。
 
 ## 十五、错误处理
 
@@ -1513,9 +1552,10 @@ RpmRepo Controller 根据 Job phase 与 labels 选批，不预查 Manifest；Art
 | 上传写盘空间不足 | 按失败阶段返回正文校验或存储错误，当前不统一映射为 507 |
 | 上传请求结果未知 | Runner 使用相同幂等键重试；服务返回原 Artifact 或重新接收整文件 |
 | Job 的 Manifest 已 Completed 后创建或完成新 Artifact | 返回 409 `ManifestAlreadyCompleted`；仅已完成 Artifact 的同摘要幂等重放可返回原结果 |
+| 已冻结封账输入但尚未 Completed 时新增或完成上传 | 返回 409 `ManifestSealing`；已完成文件的相同上传请求仍返回原始回执 |
 | 清单包含未完成或不匹配的 Artifact | 返回 422，不创建或修改清单，Runner 修正后重试 |
-| 已完成 Job 收到不同清单 | 返回 409，不修改已有清单 |
-| 清单完成请求结果未知 | Runner 查询该 Job 唯一清单的状态后决定是否重试 |
+| 已冻结或已完成 Job 收到不同清单 | 返回 409 `ManifestConflict`，不修改冻结输入或已有清单 |
+| 清单完成请求结果未知 | Runner 查询该 Job 唯一清单，以 Completed 和 uploadDigest 确认；签名及重试规则见 6.2 |
 | 日志 sequence 存在缺口 | 返回 409 和期望的 `nextSequence`，Runner 从该位置重传 |
 | 日志 sequence 重复且摘要一致 | 幂等返回原确认，不重复追加 |
 | 日志 sequence 重复但摘要不同 | 返回 409，不修改已提交日志 |
@@ -1541,7 +1581,7 @@ header 总大小上限 32 KiB；日志去重和 SSE 重放窗口均为 1024，SS
 | `--insecure-skip-verify` | `false` | 跳过 Gateway TLS 证书校验，仅用于受控开发环境 |
 | `--auth-cache-ttl` | `1h` | Token 认证结果最大缓存时间 |
 | `--data-dir` | `/var/lib/ebs-artifacts` | 本地持久化目录 |
-| `--upload-timeout` | `2h` | 上传请求的 context 超时；阻塞正文读取的超时控制仍待完善 |
+| `--upload-timeout` | `2h` | 上传及单次 Manifest 封账请求的 context 超时，包含签名排队和执行；阻塞正文读取的超时控制仍待完善 |
 | `--temporary-upload-ttl` | `24h` | 启动清理时判断临时正文过期的时间阈值 |
 | `--max-metadata-size` | `64KiB` | multipart metadata part 的最大正文大小 |
 | `--max-file-size` | `25GiB` | 单文件上限 |
@@ -1568,8 +1608,8 @@ header 总大小上限 32 KiB；日志去重和 SSE 重放窗口均为 1024，SS
 | `--rpm-signing-gpg-home` | 空 | `local-gpg` 模式的受限 GPG 密钥目录 |
 | `--rpm-signing-signatrust-config` | 空 | 客户端配置文件，包含远端地址与 TLS 凭据路径 |
 | `--rpm-signing-signatrust-key-name` | `openeuler-default-key` | 固定密钥名，不接受请求覆盖 |
-| `--rpm-signing-timeout` | `2m` | 单个 RPM 签名超时，同时受整个物化超时约束 |
-| `--rpm-signing-workers` | `8` | 单次物化内并发签名、验签上限 |
+| `--rpm-signing-timeout` | `2m` | 单个 RPM 签名超时，同时受本次封账请求总期限约束 |
+| `--rpm-signing-workers` | `8` | 全服务封账签名、验签并发上限，所有 Job 共用 |
 
 ### 16.3 正式发布
 
@@ -1593,13 +1633,13 @@ header 总大小上限 32 KiB；日志去重和 SSE 重放窗口均为 1024，SS
 
 | 项目 | 估算方法与实现约束 |
 |---|---|
-| 长期正文 | 按唯一文件字节数计算；未签名仓库和发布的硬链接不复制 RPM 数据块，不能把各目录 `du` 结果简单相加 |
+| 长期正文 | 按唯一文件字节数计算；物化和发布均硬链接最终 RPM，不复制数据块，不能把各目录 `du` 结果简单相加 |
 | 过程仓版本 | 每版保存完整文件目录项、RPM 索引和 repodata；50 个接近完整的版本可有约 125 万个 RPM 目录项，但硬链接不产生同等数量的独立 RPM inode |
 | 元数据与 inode | 每个 Artifact、每个 Job 的 Manifest/日志元数据、各版本索引和 repodata 都需要独立文件；删除正文后 inode/数据块仅在最后一个硬链接及打开引用释放后回收 |
-| 签名额外空间 | 本批新增 RPM 需独立副本，旧版本仍可能持有旧文件；预留并行任务私有副本和失败残留的空间 |
+| 签名额外空间 | 原始上传与最终签名正文各保留一份，另预留并行临时副本及失败残留；实际磁盘占用不能仅按上传配额估算 |
 | 峰值磁盘 | 保留数据 + 在途上传临时正文 + 活动日志 + 并行物化/发布工作目录 + trash/隔离残留；工作目录不能跨文件系统 |
 | 常驻与峰值内存 | 常驻活动任务、队列、认证缓存和 SSE 订阅；历史记录按需加载。峰值还包括并行仓库的完整 RPM 索引、单 Job Artifact 列表、日志重放与外部命令输出 |
-| 子任务并发 | 默认 2 个物化任务，每个最多 8 个签名 worker，即最多 16 个并行签名流水线；发布 worker 和 `createrepo_c` 另占资源，不是全局进程数上限 |
+| 子任务并发 | 封账签名全服务默认最多 8 个 worker，物化不再创建签名 worker；发布 worker 和 `createrepo_c` 另占资源 |
 | 启动成本 | 历史元数据目录仍需扫描；日志恢复还读取索引。按需加载降低常驻内存，不代表启动耗时与历史规模无关 |
 
 若单份完整仓库索引 JSON 平均每 RPM 2 KiB，25000 个 RPM 的索引约 49 MiB；Go 解码后的对象、map 和临时副本会进一步放大内存，必须实测，不能据此直接设置 49 MiB 内存限额。
@@ -1637,12 +1677,13 @@ GET /readyz    # HTTP 监听后固定返回 200
 |---|---|
 | 上传成功、重试、并发重复 | 6.1：同一幂等作用域至多一个正文结果，相同输入返回原结果，不同输入冲突 |
 | 上传中断与提交崩溃 | 6.1.2：在临时文件同步、正文 rename、元数据写入前后注入故障，恢复后不重复或丢弃已提交正文 |
-| Manifest 封账与在途上传竞争 | 6.2：只接受已完成的必需文件，成功封账一次；后续提交重新检查清单 |
+| Manifest 封账与在途上传竞争 | 6.2：输入冻结、原始/最终摘要分离、同输入重试、不同输入冲突、签名失败不封账及只含日志的清单 |
+| 签名与封账恢复 | 6.2.1：签名副本落盘前后崩溃、响应丢失、重启恢复、指纹变化、全局并发上限、队列满载、下载使用最终正文及清理竞争 |
 | 日志追加与丢失响应 | 10.2：同 sequence 相同内容可重放，完整索引已落盘而汇总未更新时能恢复确认 |
 | 日志异常与封账崩溃 | 10.2.5、10.2.6：覆盖残缺索引、正文短缺、空日志及正文移动后的中断，按既定规则恢复或标记损坏 |
 | 鉴权与缓存过期 | 第十一章：有效 Runner Token 可上传，过期缓存不能延长 Token 有效期；Gateway 暂不可达不能伪造认证成功 |
 | 队列满、重启与删除竞争 | 8.6、8.9、8.10：返回规定错误，已持久化任务可恢复，Deleting 不被 worker 完成覆盖为 Ready |
-| 物化、签名、发布与回滚 | 8.11、9.7：验证固定输入、失败不暴露半成品和发布切换边界 |
+| 物化、发布与回滚 | 8.11、9.7：验证复用封账产物而不重复签名、指纹一致性、固定输入、失败不暴露半成品和发布切换边界 |
 | 容量与备份演练 | 17.1、17.3：记录峰值与恢复时间，验证整目录恢复后的内容及元数据一致性 |
 
 ## 十八、待完善事项

@@ -715,7 +715,7 @@ buildinfos:      get
 
 1. **Build Controller**：仅非 single 创建与 Build 同项目、同名的 RpmRepo，继承基线保存到 repository.repositoryUID/contentURL，并写入与 Build.spec.buildTarget 一致的 ebs.io/target-os、ebs.io/target-arch 标签。single 不创建对象。
 2. **BuildInfo Controller**：创建 Job 时写入 `ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/target-os`、`ebs.io/target-arch`；`BuildInfo.status.phase=Completed` 表示不再创建 Job 且所有 Job 均已终态；`Failed` 表示配置校验失败后立即停止派发，已有 Job 可能继续运行或创建结果迟到，不能用 Failed 推断 Job 已收敛。只有 Completed 允许发布复核与“无可发布产物”判定，Failed 触发发布失败终局；过程仓在 Pending/Processing 期间仍可推进。
-3. **Runner**：需要归档的 Job 在 Manifest 成功封账后才写 `Succeeded`；无需归档的 Job 可以没有 Manifest。每个 Job 只能成功封账一次，封账后内容不可变。
+3. **Runner**：需要归档的 Job 在 Manifest 成功封账后才写 `Succeeded`；无需归档的 Job 可以没有 Manifest。每个 Job 只能成功封账一次，封账后内容不可变。可选 RPM 签名纳入封账，控制器无需增加签名调用或轮询；物化使用最终产物，契约见 [Artifact Manager 6.2](artifact-manager.md#62-提交并完成-job-上传清单)。
 4. **Artifact Manager**：提供检查点恢复所需的幂等提交、显式激活及 attempt 计数保证，具体契约统一见第八章。
 
 ## 十四、测试计划

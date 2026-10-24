@@ -14,7 +14,7 @@ BuildGraph 独立保存依赖图检查点，由 BuildInfo Controller 持久化�
 - 事件与查询驱动协作：etcd 中的 Job、Runner 支持 watch；Elasticsearch 中的资源使用 list/get，不模拟 watch。
 - Project 业务作用域：Snapshot、Build、BuildInfo、BuildGraph、RpmRepo、Job 归属于 Project；Config 和 Script 为集群级资源。只有 Job 的全局 API 支持 watch。
 - 构建结果数据面：`artifact-manager` 独立承载构建产物与实时日志正文，避免大文件流量经过资源 API 和 Gateway 数据转发链路。
-- 可选 RPM 签名：Artifact Manager 在过程仓物化阶段使用内置的本地 GPG 或 Signatrust 后端；未启用时不执行签名。
+- 可选 RPM 签名：Artifact Manager 在 Manifest 封账时使用内置的本地 GPG 或 Signatrust 后端，过程仓和正式发布复用最终产物；未启用时不执行签名。详见 [Artifact Manager 设计](artifact-manager.md)。
 - 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch、`ebs-apiserver` 等组件。
 
 ---
