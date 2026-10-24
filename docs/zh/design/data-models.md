@@ -64,7 +64,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
 列表类型: ProjectList SnapshotList BuildList BuildInfoList BuildGraphList RpmRepoList ConfigList ScriptList JobList RunnerList
 辅助结构体: ProjectSpec ProjectStatus SnapshotSpec SnapshotStatus
                   BuildSpec BuildStatus BootstrapRepo JobSpec JobStatus
-                  BuildInfoSpec BuildInfoStatus SpecStatusGroup SpecBuildStatus SpecInstallStatus MissingDep
+                  BuildInfoSpec BuildInfoStatus SpecResults SpecResult MissingDep
                   BuildGraphStatus BuildGraphNode
                   RpmRepoStatus
                   ConfigSpec PackageResourceConfig
@@ -359,76 +359,72 @@ type BuildInfoSpec struct {
 
 ```go
 type BuildInfoStatus struct {
-    Phase          BuildInfoPhase     `json:"phase,omitempty"`
-    Conditions     []metav1.Condition `json:"conditions,omitempty"`
-    SpecStatus     SpecStatusGroup    `json:"specStatus"`
-    SpecRepoNames  map[string]string  `json:"specRepoNames,omitempty"`
-    FailedPackages []string           `json:"failedPackages,omitempty"`
+    Phase       BuildInfoPhase     `json:"phase,omitempty"`
+    Conditions  []metav1.Condition `json:"conditions,omitempty"`
+    SpecResults SpecResults       `json:"specResults"`
+}
+
+type SpecResults map[string]SpecResult
+
+type SpecResult struct {
+    SpecName      string                `json:"specName,omitempty"`
+    Status        SpecResultPhase       `json:"status"`
+    Conditions    []metav1.Condition    `json:"conditions,omitempty"`
+    MissingDeps   map[string]MissingDep `json:"missingDeps,omitempty"`
+    DispatchCount int64                 `json:"dispatchCount,omitempty"`
 }
 ```
 
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `phase` | string | `"Pending"` / `"Processing"` / `"Completed"` / `"Failed"` / `"Aborted"`；`Failed` 为 buildPayload 配置无效的终态，不代表已有 Job 均已终态 |
-| `conditions` | []metav1.Condition | 状态条件；`BuildPayloadInvalid=True/reason=BuildPayloadParseFailed` 表示 buildPayload 配置无效，错误详情见 message；`JobAbortFailed=True` 表示已有 Job 的中止尝试失败 |
-| `specStatus` | SpecStatusGroup | 按字段分组的各 spec 运行时状态；`build` 键集为构建集 |
-| `specRepoNames` | map[string]string | spec 名到所属包仓库名的持久化映射；与构建集状态一起写入，供异常收敛及重启恢复时汇总 `failedPackages` |
-| `failedPackages` | []string | Pending 组装时持久化确定性的 Snapshot 包解析、spec 下载/解析失败仓库；写入 Completed 时再合并最终构建/安装未成功的 spec 所属仓库，去重排序后供下一轮 Build Controller 重试；Failed 时保留当前值，不涵盖仍运行的 Job；已恢复成功的中途构建/安装失败不保留 |
+| 字段 | 说明 |
+|------|------|
+| `phase` | `Pending` / `Processing` / `Completed` / `Failed` / `Aborted`；对象级调谐生命周期 |
+| `conditions` | 对象级诊断和停止派发标记；`Failed` 必须包含 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed` |
+| `specResults` | 以 `仓库名/spec文件名` 为 key 的准备、构建及安装检查结果，当前只解析根目录 spec |
+| `specName` | 解析成功后必须填写 RPM `Name:` 的宏展开值；解析失败时允许为空，不从文件名推断 |
+| `status` | 单一结果状态，枚举见下表；不得用空串表示初始状态 |
+| `conditions`（条目内） | 准备、构建、安装检查的具体原因及诊断，不另设分阶段状态字段 |
+| `missingDeps` | 安装检查失败的缺失依赖，供 BuildInfo Controller 动态补边；新一代执行时清理旧结果 |
+| `dispatchCount` | 已确认的最大派发代次；回填按核验后的 Job 代次取最大值，不因历史 Job 清理而回退 |
 
-BuildInfo `/status` 校验：`Failed` 为不可回退终态，且必须包含 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed`。包级构建失败不映射为 BuildInfo Failed。具体调谐流程见 [BuildInfo Controller 设计](controller-manager~buildinfo-controller.md)。
+仓库归属始终取 key 中第一个 `/` 前的部分。key 不随解析状态改变；同仓库多个 spec 分别记录。
+仓库读取失败或根目录没有 spec 时使用 `仓库名/` 的 `PrepareFailed` 条目。已知文件的解析失败使用真实文件 key，
+不伪造 specName。解析成功、失败条目都必须持久化，防止部分成功掩盖同仓库的失败。
 
-### SpecStatusGroup
+| 状态 | 含义 |
+|------|------|
+| `Pending` | 尚未完成准备，非终态 |
+| `Prepared` | 解析成功，等待派发，非终态 |
+| `PrepareFailed` | 仓库或 spec 准备失败，终态 |
+| `Running` | 最新一代 Job 等待或执行中，非终态 |
+| `BuildFailed` | 构建失败或派发前确定性失败，终态 |
+| `InstallFailed` | 构建成功，但安装检查失败或缺少合法安装结果；构建产物仍可用，终态 |
+| `Succeeded` | 构建及安装检查成功，终态 |
+| `ArchUnsupported` | 不支持目标架构，不创建 Job，终态 |
 
-```go
-type SpecStatusGroup struct {
-    Build         map[string]SpecBuildStatus   `json:"build,omitempty"`
-    Install       map[string]SpecInstallStatus `json:"install,omitempty"`
-    DispatchCount map[string]int64             `json:"dispatchCount,omitempty"`
-}
+依赖推进中的“构建成功”包括 `Succeeded` 和 `InstallFailed`；它们均需经过过程仓发布确认及有效派发次数门禁。
+Build Controller 对 Completed 的整体成功判定要求结果非空且全部为 `Succeeded`。
+下一轮增量构建从其他终态结果的 key 归集仓库名、去重排序，不持久化重复的失败仓库列表或 spec→仓库映射。
+
+Job 回填从 `Job.spec.payload.package_name` 和 `spec_file_name` 拼接 key，核验 Job 创建身份及条目中的 specName 后更新；
+不从可能截断的 label 反推仓库，不从 RPM Name 推断文件名。准备失败条目不创建 Job。
+
+示例：
+
+```yaml
+specResults:
+  foo/foo.spec:
+    specName: foo-runtime
+    status: Succeeded
+    dispatchCount: 1
+  foo/broken.spec:
+    status: PrepareFailed
+  unreadable/:
+    status: PrepareFailed
 ```
 
-| 字段 | Go 类型 | 说明 |
-|------|---------|------|
-| `build` | map[string]SpecBuildStatus | spec 名到构建状态；预建空状态也占一个键 |
-| `install` | map[string]SpecInstallStatus | spec 名到安装状态；未评估时可无对应键 |
-| `dispatchCount` | map[string]int64（缺失视为 0） | spec 名到下发计数；创建 Job 成功后 `+= 1`，回填时以同 spec 现存 Job 数兜底；达到有效 required 后不再下发 |
-
-例如 `status.specStatus.build.gcc.status` 为构建结果，`status.specStatus.install.gcc.status` 为安装结果；只需构建详情时，GET/LIST 可用 `includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build` 选择返回字段。
-`specStatus` 按 `build`、`install`、`dispatchCount` 分组存储和读取。
-
----
-
-### SpecBuildStatus
-
-```go
-type SpecBuildStatus struct {
-    Status     SpecBuildPhase     `json:"status"`
-    Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-```
-
-| 字段           | Go 类型 | 说明 |
-|--------------|------|------|
-| `status`     | SpecBuildPhase | `"Running"` / `"Succeeded"` / `"Failed"` / `"ArchUnsupported"`；预建条目允许为空 |
-| `conditions` | []metav1.Condition | 构建状态条件 |
-
----
-
-### SpecInstallStatus
-
-```go
-type SpecInstallStatus struct {
-    Status      SpecInstallPhase       `json:"status"`
-    MissingDeps map[string]MissingDep  `json:"missingDeps,omitempty"`
-    Conditions  []metav1.Condition     `json:"conditions,omitempty"`
-}
-```
-
-| 字段 | Go 类型 | 说明                  |
-|------|---------|---------------------|
-| `status` | SpecInstallPhase | `Succeeded` / `Failed`；尚未评估时允许为空 |
-| `missingDeps` | map[string]MissingDep | install 失败时记录       |
-| `conditions` | []metav1.Condition | install 状态条件 |
+构建详情可用 `includeFields=status.phase,status.conditions,status.specResults` 读取结果。
+BuildInfo `/status` 校验 key 格式、状态枚举、解析后 specName 必填及唯一性、非负派发代次。
+`Failed` 为不可回退终态；包级失败不映射为 BuildInfo Failed。调谐规则见 [BuildInfo Controller](controller-manager~buildinfo-controller.md)。
 
 ---
 
@@ -1151,9 +1147,8 @@ BuildInfoSpec
 └── BootstrapRepo
 
 BuildInfoStatus
-└── SpecStatusGroup
-    ├── SpecBuildStatus
-    └── SpecInstallStatus
+└── SpecResults
+    └── SpecResult
         └── MissingDep ──▶ VersionConstraint
 
 BuildGraphStatus

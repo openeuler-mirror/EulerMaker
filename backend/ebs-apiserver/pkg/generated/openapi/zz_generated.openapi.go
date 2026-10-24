@@ -77,10 +77,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.SnapshotList":            schema_ebs_api_ebs_v1_SnapshotList(ref),
 		"ebs-api/ebs/v1.SnapshotSpec":            schema_ebs_api_ebs_v1_SnapshotSpec(ref),
 		"ebs-api/ebs/v1.SnapshotStatus":          schema_ebs_api_ebs_v1_SnapshotStatus(ref),
-		"ebs-api/ebs/v1.SpecBuildStatus":         schema_ebs_api_ebs_v1_SpecBuildStatus(ref),
-		"ebs-api/ebs/v1.SpecInstallStatus":       schema_ebs_api_ebs_v1_SpecInstallStatus(ref),
-		"ebs-api/ebs/v1.SpecStatus":              schema_ebs_api_ebs_v1_SpecStatus(ref),
-		"ebs-api/ebs/v1.SpecStatusGroup":         schema_ebs_api_ebs_v1_SpecStatusGroup(ref),
+		"ebs-api/ebs/v1.SpecResult":              schema_ebs_api_ebs_v1_SpecResult(ref),
 		"ebs-api/ebs/v1.Toleration":              schema_ebs_api_ebs_v1_Toleration(ref),
 		"ebs-api/ebs/v1.VersionConstraint":       schema_ebs_api_ebs_v1_VersionConstraint(ref),
 		"ebs-api/iam/v1.MachineAccount":          schema_ebs_api_iam_v1_MachineAccount(ref),
@@ -499,7 +496,7 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "BuildInfoStatus records per-spec results and failed package repositories.",
+				Description: "BuildInfoStatus records preparation, build and installation results by repository/file identity.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"phase": {
@@ -521,47 +518,26 @@ func schema_ebs_api_ebs_v1_BuildInfoStatus(ref common.ReferenceCallback) common.
 							},
 						},
 					},
-					"specStatus": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.SpecStatusGroup"),
-						},
-					},
-					"specRepoNames": {
+					"specResults": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"object"},
 							AdditionalProperties: &spec.SchemaOrBool{
 								Allows: true,
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"failedPackages": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
+										Default: map[string]interface{}{},
+										Ref:     ref("ebs-api/ebs/v1.SpecResult"),
 									},
 								},
 							},
 						},
 					},
 				},
-				Required: []string{"specStatus"},
+				Required: []string{"specResults"},
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.SpecStatusGroup", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.SpecResult", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
 	}
 }
 
@@ -660,6 +636,12 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 							Format: "",
 						},
 					},
+					"buildTarget": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
+						},
+					},
 					"packages": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
@@ -672,12 +654,6 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 									},
 								},
 							},
-						},
-					},
-					"buildTarget": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
 						},
 					},
 				},
@@ -2718,12 +2694,19 @@ func schema_ebs_api_ebs_v1_SnapshotStatus(ref common.ReferenceCallback) common.O
 	}
 }
 
-func schema_ebs_api_ebs_v1_SpecBuildStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ebs_api_ebs_v1_SpecResult(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
+				Description: "SpecResult uses one verdict for the complete preparation/build/install flow. SpecName is required after successful parsing and may be empty for preparation failures.",
+				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
+					"specName": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: "",
@@ -2742,28 +2725,6 @@ func schema_ebs_api_ebs_v1_SpecBuildStatus(ref common.ReferenceCallback) common.
 									},
 								},
 							},
-						},
-					},
-				},
-				Required: []string{"status"},
-			},
-		},
-		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_SpecInstallStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: "",
-							Type:    []string{"string"},
-							Format:  "",
 						},
 					},
 					"missingDeps": {
@@ -2780,17 +2741,10 @@ func schema_ebs_api_ebs_v1_SpecInstallStatus(ref common.ReferenceCallback) commo
 							},
 						},
 					},
-					"conditions": {
+					"dispatchCount": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Condition"),
-									},
-								},
-							},
+							Type:   []string{"integer"},
+							Format: "int64",
 						},
 					},
 				},
@@ -2799,97 +2753,6 @@ func schema_ebs_api_ebs_v1_SpecInstallStatus(ref common.ReferenceCallback) commo
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.MissingDep", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_SpecStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "SpecStatus is the in-memory per-spec view of the grouped status fields.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"build": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.SpecBuildStatus"),
-						},
-					},
-					"install": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.SpecInstallStatus"),
-						},
-					},
-					"dispatchCount": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int64",
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.SpecBuildStatus", "ebs-api/ebs/v1.SpecInstallStatus"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_SpecStatusGroup(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "SpecStatusGroup stores per-spec fields in separate maps so callers can project build and install results independently.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"build": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.SpecBuildStatus"),
-									},
-								},
-							},
-						},
-					},
-					"install": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.SpecInstallStatus"),
-									},
-								},
-							},
-						},
-					},
-					"dispatchCount": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: 0,
-										Type:    []string{"integer"},
-										Format:  "int64",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.SpecBuildStatus", "ebs-api/ebs/v1.SpecInstallStatus"},
 	}
 }
 

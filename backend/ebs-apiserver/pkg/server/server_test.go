@@ -192,7 +192,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.BootstrapRepo":           {"name", "url"},
 		"ebs-api/ebs/v1.BuildSpec":               {"buildTarget", "packages"},
 		"ebs-api/ebs/v1.BuildInfoSpec":           {"bootstrapRepos", "buildPayload"},
-		"ebs-api/ebs/v1.BuildInfoStatus":         {"failedPackages"},
+		"ebs-api/ebs/v1.BuildInfoStatus":         {"specResults"},
 		"ebs-api/ebs/v1.BaseBuildRef":            {"name"},
 		"ebs-api/ebs/v1.BuildStatus":             {"phase", "stage", "startTime", "endTime", "baseBuildRef", "conditions"},
 		"ebs-api/ebs/v1.ProjectSpec":             {"displayName", "buildTargets", "packageRepos", "bootstrapRepos"},
@@ -247,18 +247,15 @@ func TestCodecsUseStrictDecoding(t *testing.T) {
 	}
 }
 
-func TestBuildInfoFailedPackagesDecoding(t *testing.T) {
-	data := []byte(`{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a","namespace":"project-a"},"status":{"failedPackages":["gcc","glibc"]}}`)
+func TestBuildInfoSpecResultsDecoding(t *testing.T) {
+	data := []byte(`{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a","namespace":"project-a"},"status":{"specResults":{"gcc/gcc.spec":{"specName":"gcc","status":"InstallFailed"},"glibc/glibc.spec":{"status":"PrepareFailed"}}}}`)
 	obj, _, err := Codecs.UniversalDeserializer().Decode(data, nil, nil)
 	if err != nil {
-		t.Fatalf("decode BuildInfo with failedPackages: %v", err)
+		t.Fatal(err)
 	}
-	buildInfo, ok := obj.(*ebsv1.BuildInfo)
-	if !ok {
-		t.Fatalf("decoded object has type %T, want *BuildInfo", obj)
-	}
-	if len(buildInfo.Status.FailedPackages) != 2 || buildInfo.Status.FailedPackages[0] != "gcc" || buildInfo.Status.FailedPackages[1] != "glibc" {
-		t.Fatalf("failedPackages = %v, want [gcc glibc]", buildInfo.Status.FailedPackages)
+	info := obj.(*ebsv1.BuildInfo)
+	if got := info.Status.SpecResults.FailedPackages(); len(got) != 2 || got[0] != "gcc" || got[1] != "glibc" {
+		t.Fatalf("failed repositories = %v", got)
 	}
 }
 

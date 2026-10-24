@@ -100,13 +100,13 @@ export interface BuildInfo {
   };
   status?: {
     phase?: string;
-    failedPackages?: string[];
-    specRepoNames?: Record<string, string>;
-    specStatus?: {
-      build?: Record<string, { status?: string; conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }> }>;
-      install?: Record<string, { status?: string }>;
-      dispatchCount?: Record<string, number>;
-    };
+    specResults?: Record<string, {
+      specName?: string;
+      status: "Pending" | "Prepared" | "PrepareFailed" | "Running" | "BuildFailed" | "InstallFailed" | "Succeeded" | "ArchUnsupported";
+      conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
+      missingDeps?: Record<string, unknown>;
+      dispatchCount?: number;
+    }>;
     conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
   };
 }

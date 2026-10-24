@@ -179,7 +179,7 @@ ebs.io/member-user.<username>: "true"
 
 构建历史采用主从布局：左侧分页展示构建名称、状态、类型、目标与开始时间，支持隐藏单包构建；右侧展示所选 Build 的状态与 BuildInfo 的 spec 构建状态，支持搜索、状态过滤和分页。点击 spec 展开对应 Job 列表，点击 Job 名展开日志和 RPM 下载列表。用户有权限且 Build 处于 `Pending`、`Prepared` 或 `Processing` 时，该条列表记录提供中止按钮；二次确认显示当前状态，操作后重新读取构建历史。窄屏设备按列表、详情的顺序改为上下布局。
 
-Spec 状态列表展示包的 Commit ID：根据 `BuildInfo.status.specRepoNames[specName]` 获取仓库名，再从同工程、同构建名称的 `Snapshot.status.packageRepoStatuses[repoName].commitID` 读取。列表显示前 12 位，悬停显示完整值。Snapshot 与 BuildInfo 并行读取，使用 `includeFields=status.packageRepoStatuses` 避免获取 Snapshot spec；刷新按钮仅显示图标，并重新加载两者。Snapshot 读取失败时单独提示，构建状态仍正常显示；切换构建时清空旧数据并取消旧请求。
+Spec 状态列表展示包的 Commit ID：从 `BuildInfo.status.specResults` 条目 key 的第一段提取仓库名，再从同工程、同构建名称的 `Snapshot.status.packageRepoStatuses[repoName].commitID` 读取。列表显示前 12 位，悬停显示完整值。Snapshot 与 BuildInfo 并行读取，使用 `includeFields=status.packageRepoStatuses` 避免获取 Snapshot spec；刷新按钮仅显示图标，并重新加载两者。Snapshot 读取失败时单独提示，构建状态仍正常显示；切换构建时清空旧数据并取消旧请求。
 
 软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
 
@@ -193,7 +193,7 @@ Bootstrap repositories 同样仅向工程 owner 提供列表编辑能力。每�
 
 详情页提供“导出 YAML”操作，读取完整 Project 后下载为 `<metadata.name>.yaml`。导出包含 metadata、spec 和 status；再次导入创建时移除 status 和服务端维护的 metadata 字段。
 
-Project 默认引用保留 Branch/Tag 类型选择及名称输入；软件包引用类型增加 Commit ID，共用同一输入框。选择 Branch/Tag 时补全为 `refs/heads/<name>` 或 `refs/tags/<name>` 并清空 commitID；选择 Commit ID 时要求完整 40 位小写 SHA，写入 commitID 并清空 ref。编辑时优先显示已有 commitID，否则从完整 ref 拆分类型与名称。已填写的完整 `refs/...` 原样提交，不重复添加前缀。Branch/Tag 输入留空时使用 Snapshot 中固化的 defaultRef。软件包列表维护 `spec.packageRepos` 的 name、URL、ref 和 commitID，引用列优先显示固定提交，搜索覆盖 commitID；包级历史按上述标签查询。构建详情读取 BuildInfo 的 `status.specStatus.build`，不展示安装状态。Snapshot、BuildInfo 和 RpmRepo 为控制器维护的只读资源，前端不提供创建入口。
+Project 默认引用保留 Branch/Tag 类型选择及名称输入；软件包引用类型增加 Commit ID，共用同一输入框。选择 Branch/Tag 时补全为 `refs/heads/<name>` 或 `refs/tags/<name>` 并清空 commitID；选择 Commit ID 时要求完整 40 位小写 SHA，写入 commitID 并清空 ref。编辑时优先显示已有 commitID，否则从完整 ref 拆分类型与名称。已填写的完整 `refs/...` 原样提交，不重复添加前缀。Branch/Tag 输入留空时使用 Snapshot 中固化的 defaultRef。软件包列表维护 `spec.packageRepos` 的 name、URL、ref 和 commitID，引用列优先显示固定提交，搜索覆盖 commitID；包级历史按上述标签查询。构建详情读取 BuildInfo 的 `status.specResults`，统一展示准备、构建及安装检查状态；PrepareFailed、BuildFailed、InstallFailed 计入失败，ArchUnsupported 单独统计。解析失败时显示来源 key，只有存在 specName 的条目可以展开 Job 列表。失败仓库列表从失败终态条目的 key 去重推导。Snapshot、BuildInfo 和 RpmRepo 为控制器维护的只读资源，前端不提供创建入口。
 
 Project 普通配置使用结构化表单。复杂且可能丢失未知字段的对象不能通过“读取—局部表单—整体 PUT”更新，应发送 Merge Patch，并携带当前 `resourceVersion`。发生 409 时保留用户草稿，重新加载服务端对象并提示用户比较后重试。
 

@@ -8,17 +8,15 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func TestBuildInfoSpecStatusEnums(t *testing.T) {
+func TestBuildInfoSpecResultsEnums(t *testing.T) {
 	old := &ebsv1.BuildInfo{Status: ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoProcessing}}
 	info := old.DeepCopy()
-	info.Status.SpecStatus.Build = make(map[string]ebsv1.SpecBuildStatus)
-	info.Status.SpecStatus.Install = make(map[string]ebsv1.SpecInstallStatus)
-	for _, value := range append(ebsv1.SpecBuildPhaseValues(), "") {
-		info.Status.SpecStatus.Build[value] = ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildPhase(value)}
+	info.Status.SpecResults = ebsv1.SpecResults{}
+	for _, value := range ebsv1.SpecResultPhaseValues() {
+		info.Status.SpecResults["repo/"+value+".spec"] = ebsv1.SpecResult{SpecName: value, Status: ebsv1.SpecResultPhase(value)}
 	}
-	for _, value := range append(ebsv1.SpecInstallPhaseValues(), "") {
-		info.Status.SpecStatus.Install[value] = ebsv1.SpecInstallStatus{Status: ebsv1.SpecInstallPhase(value)}
-	}
+	info.Status.SpecResults["unreadable/"] = ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
+	info.Status.SpecResults["bad/bad.spec"] = ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
 	if errs := ValidateBuildInfoStatusUpdate(info, old); len(errs) != 0 {
 		t.Fatalf("valid spec statuses: %v", errs)
 	}

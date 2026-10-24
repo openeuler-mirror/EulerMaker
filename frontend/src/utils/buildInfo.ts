@@ -1,15 +1,19 @@
 import type { BuildInfo, Snapshot } from "../types";
 
 export function buildInfoSpecRows(buildInfo: BuildInfo | null, snapshot: Snapshot | null) {
-  return Object.entries(buildInfo?.status?.specStatus?.build || {})
-    .map(([name, value]) => {
-      const packageName = buildInfo?.status?.specRepoNames?.[name];
+  return Object.entries(buildInfo?.status?.specResults || {})
+    .map(([key, value]) => {
+      const packageName = key.split("/", 1)[0];
+      const name = value.specName || key;
       return {
+        key,
         name,
+        specName: value.specName,
+        message: value.conditions?.map(condition => condition.message).filter(Boolean).join("; "),
         packageName,
         commitID: packageName ? snapshot?.status?.packageRepoStatuses?.[packageName]?.commitID : undefined,
         buildStatus: value.status,
-        displayStatus: value.status === "Failed" &&
+        displayStatus: value.status === "BuildFailed" &&
           value.conditions?.some(condition => condition.reason === "RpmDependsMissing")
           ? "RpmDependsMissing" : value.status,
       };
