@@ -464,14 +464,14 @@ func (c *Controller) closeStoppedResults(ctx context.Context, round *reconcileRo
 				continue
 			}
 			result := ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
-			specCondition(&result, "PreparationStopped", reason, message)
+			setSpecDiagnostic(&result, reason, message)
 			next.Status.SpecResults[repo+"/"] = result
 		}
 	}
 	for key, result := range next.Status.SpecResults {
 		if !result.Status.IsTerminal() {
 			result.Status = ebsv1.SpecBuildFailed
-			specCondition(&result, "DispatchStopped", reason, message)
+			setSpecDiagnostic(&result, reason, message)
 			next.Status.SpecResults[key] = result
 		}
 	}

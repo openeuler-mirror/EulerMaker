@@ -23,6 +23,33 @@ import (
 
 // --- deterministic naming & label encoding ---
 
+func TestApplyJobPhaseReplacesDiagnostic(t *testing.T) {
+	for _, phase := range []ebsv1.JobPhase{ebsv1.JobPending, ebsv1.JobRunning, ebsv1.JobSucceeded, ebsv1.JobFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			result := ebsv1.SpecResult{
+				Status: ebsv1.SpecInstallFailed, Reason: ReasonInstallCheckFailed, Message: "old install failure",
+				MissingDeps: map[string]ebsv1.MissingDep{"old-dep": {}},
+			}
+			job := testJobObj(testBuildInfoObj(ebsv1.BuildInfoProcessing), "a", 2, phase)
+			job.Status.Result = &ebsv1.JobResult{Status: ebsv1.JobResultSucceeded}
+			if !applyJobPhase(&result, job, false) {
+				t.Fatal("Job phase was not applied")
+			}
+			if phase == ebsv1.JobFailed {
+				requireSpecReason(t, result, ReasonJobFailed)
+				if result.Message != "job "+job.Name+" failed" {
+					t.Fatalf("message = %q", result.Message)
+				}
+			} else {
+				requireSpecReason(t, result, "")
+			}
+			if len(result.MissingDeps) != 0 {
+				t.Fatalf("stale missing dependencies: %v", result.MissingDeps)
+			}
+		})
+	}
+}
+
 func TestJobNameForDeterministic(t *testing.T) {
 	first := jobNameFor("uid-1", "a", 2)
 	if first != jobNameFor("uid-1", "a", 2) {
@@ -1163,7 +1190,7 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 			}
 			stored := getBuildInfo(t, client)
 			if got := stored.Status.SpecResults.Entry("a"); got.Status != ebsv1.SpecBuildFailed ||
-				findCondition(got.Conditions, ConditionJobCreateRejected) == nil {
+				got.Reason != ReasonJobCreateRejected {
 				t.Fatalf("rejected spec status = %+v", got)
 			}
 			if got := stored.Status.SpecResults.Entry("b"); got.Status == ebsv1.SpecBuildFailed ||

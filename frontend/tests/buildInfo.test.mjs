@@ -13,7 +13,7 @@ test("spec commit IDs come from their package repository in the build Snapshot",
       specResults: {
         "gcc/cpp.spec": { specName: "gcc-c++", status: "Running" },
         "gcc/gcc.spec": { specName: "gcc", status: "Succeeded" },
-        "rpm/rpm.spec": { specName: "rpm", status: "BuildFailed", conditions: [{ reason: "RpmDependsMissing" }] },
+        "rpm/rpm.spec": { specName: "rpm", status: "BuildFailed", reason: "RpmDependsMissing", message: "build requires unavailable: libc" },
       },
     },
   };
@@ -28,6 +28,7 @@ test("spec commit IDs come from their package repository in the build Snapshot",
   assert.equal(rows[2].commitID, snapshot.status.packageRepoStatuses.rpm.commitID);
   assert.equal(rows[2].displayStatus, "RpmDependsMissing");
   assert.equal(rows[2].buildStatus, "BuildFailed");
+  assert.equal(rows[2].message, "build requires unavailable: libc");
 });
 
 test("build statuses remain visible while Snapshot data is unavailable or still resolving", () => {
@@ -43,11 +44,12 @@ test("build statuses remain visible while Snapshot data is unavailable or still 
 
 test("preparation failures keep source identity without a spec name", () => {
   const rows = buildInfoSpecRows({status: {specResults: {
-    "foo/broken.spec": {status: "PrepareFailed"},
+    "foo/broken.spec": {status: "PrepareFailed", reason: "SpecParseFailed", message: "rpmspec failed"},
     "unreadable/": {status: "PrepareFailed"},
   }}}, null);
   assert.equal(rows[0].key, "foo/broken.spec");
   assert.equal(rows[0].packageName, "foo");
   assert.equal(rows[0].specName, undefined);
+  assert.equal(rows[0].message, "rpmspec failed");
   assert.equal(rows[1].packageName, "unreadable");
 });

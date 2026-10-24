@@ -2687,17 +2687,16 @@ func schema_ebs_api_ebs_v1_SpecResult(ref common.ReferenceCallback) common.OpenA
 							Format:  "",
 						},
 					},
-					"conditions": {
+					"reason": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.Condition"),
-									},
-								},
-							},
+							Type:   []string{"string"},
+							Format: "",
+						},
+					},
+					"message": {
+						SchemaProps: spec.SchemaProps{
+							Type:   []string{"string"},
+							Format: "",
 						},
 					},
 					"missingDeps": {
@@ -2725,7 +2724,7 @@ func schema_ebs_api_ebs_v1_SpecResult(ref common.ReferenceCallback) common.OpenA
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.MissingDep", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition"},
+			"ebs-api/ebs/v1.MissingDep"},
 	}
 }
 

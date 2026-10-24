@@ -144,7 +144,7 @@ func TestScriptDeepCopy(t *testing.T) {
 func TestSpecResultsJSONAndDeepCopy(t *testing.T) {
 	results := SpecResults{
 		"gcc/gcc.spec":   {SpecName: "gcc", Status: SpecInstallFailed, DispatchCount: 2, MissingDeps: map[string]MissingDep{"libc": {}}},
-		"bash/bash.spec": {Status: SpecPrepareFailed},
+		"bash/bash.spec": {Status: SpecPrepareFailed, Reason: "SpecParseFailed", Message: "rpmspec failed"},
 		"unreadable/":    {Status: SpecPrepareFailed},
 	}
 	data, err := json.Marshal(results)

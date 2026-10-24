@@ -86,9 +86,9 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	if a.Status != ebsv1.SpecBuildFailed || a.DispatchCount != 2 {
 		t.Fatalf("specResults[a] = %+v, want Failed with floor count 2", a)
 	}
-	requireCondition(t, a.Conditions, ConditionRebuildFailed, ReasonRebuildJobFailed)
-	if want := jobNameFor(string(seeded.UID), "a", 2); !strings.Contains(a.Conditions[0].Message, want) {
-		t.Fatalf("specResults[a] condition = %+v, want generation-2 job %q", a.Conditions, want)
+	requireSpecReason(t, a, ReasonRebuildJobFailed)
+	if want := jobNameFor(string(seeded.UID), "a", 2); !strings.Contains(a.Message, want) {
+		t.Fatalf("specResults[a] condition = %+v, want generation-2 job %q", a, want)
 	}
 	if _, ok := persisted.Status.SpecResults.Lookup("ghost"); ok {
 		t.Fatalf("out-of-scope job leaked into specResults: %v", persisted.Status.SpecResults)
@@ -118,7 +118,7 @@ func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 	if a.Status != ebsv1.SpecRunning {
 		t.Fatalf("specResults[a].Status = %q, want Running (unknown phase unmapped)", a.Status)
 	}
-	requireNoCondition(t, a.Conditions, ConditionBuildFailed)
+	requireSpecReason(t, a, "")
 }
 
 func TestAdvanceBackfillJobAborted(t *testing.T) {
@@ -138,7 +138,7 @@ func TestAdvanceBackfillJobAborted(t *testing.T) {
 	if a.Status != ebsv1.SpecBuildFailed {
 		t.Fatalf("specResults[a].Status = %q, want Failed (Aborted treated as Failed)", a.Status)
 	}
-	requireCondition(t, a.Conditions, ConditionBuildAborted, ReasonBuildAborted)
+	requireSpecReason(t, a, ReasonBuildAborted)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 }
 
@@ -209,7 +209,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		if a.Status != ebsv1.SpecBuildFailed {
 			t.Fatalf("script result = %q, want BuildFailed", a.Status)
 		}
-		requireCondition(t, a.Conditions, ConditionBuildFailed, ReasonJobResultMissing)
+		requireSpecReason(t, a, ReasonJobResultMissing)
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	})
 
@@ -254,7 +254,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		if got := b.MissingDeps["a"]; got.NeededBy != "new" || got.VersionRequests.GE != "1.0" {
 			t.Fatalf("missingDeps[a] = %+v, want the latest Job result", got)
 		}
-		requireCondition(t, b.Conditions, ConditionInstall, ReasonInstallCheckFailed)
+		requireSpecReason(t, b, ReasonInstallCheckFailed)
 		// Provider a is non-terminal; persist the new edge before dispatch.
 		if _, ok := testGraph(t, client, persisted).Status.Nodes["b"].InstallInDep["a"]; !ok {
 			t.Fatalf("dcg[b].InstallInDep = %v, want runtime edge on a", testGraph(t, client, persisted).Status.Nodes["b"].InstallInDep)
@@ -291,9 +291,7 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	if got := persisted.Status.SpecResults.Entry("b").DispatchCount; got != 0 {
 		t.Fatalf("specResults[b].DispatchCount = %d, want 0 (publish gate)", got)
 	}
-	if len(persisted.Status.SpecResults.Entry("b").Conditions) != 0 {
-		t.Fatalf("specResults[b] conditions = %v, want none", persisted.Status.SpecResults.Entry("b").Conditions)
-	}
+	requireSpecReason(t, persisted.Status.SpecResults.Entry("b"), "")
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1", got)
 	}
@@ -396,7 +394,7 @@ func TestAdvanceCompletionRecordsFailedPackage(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireCondition(t, persisted.Status.SpecResults.Entry("b").Conditions, ConditionBuildFailed, ReasonJobFailed)
+	requireSpecReason(t, persisted.Status.SpecResults.Entry("b"), ReasonJobFailed)
 	if got := persisted.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
 	}
