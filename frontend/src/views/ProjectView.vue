@@ -364,6 +364,8 @@
     <ModalDialog v-if="bootstrapEditorOpen" title-id="edit-bootstrap-title" :title="t('project.editBootstrapRepositories')" :close-label="t('common.close')" @close="closeBootstrapEditor">
       <form class="project-form" @submit.prevent="saveBootstrapRepositories">
         <p class="form-hint">{{ t("project.editBootstrapHint") }}</p>
+        <button class="secondary-button" type="button" :aria-expanded="showProjectReleasePicker" :disabled="savingBootstrap" @click="showProjectReleasePicker = !showProjectReleasePicker">{{ t('project.addProjectRelease') }}</button>
+        <ProjectReleaseRepoPicker v-if="showProjectReleasePicker" :current-project="name" :existing-urls="editingBootstrapRepositories.map(repo => repo.url || '')" :disabled="savingBootstrap" @add="addProjectReleaseRepository" />
         <div v-if="editingBootstrapRepositories.length" class="editable-target-list">
           <fieldset v-for="(repo, index) in editingBootstrapRepositories" :key="index" class="target-fieldset editable-target">
             <legend>{{ t("project.bootstrapNumber", { number: index + 1 }) }}</legend>
@@ -415,6 +417,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
 import ColumnMultiFilter from "@/components/ColumnMultiFilter.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
+import ProjectReleaseRepoPicker from "@/components/ProjectReleaseRepoPicker.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 import StatusBadge from "@/components/StatusBadge.vue";
@@ -539,6 +542,7 @@ const targetErrorKey = ref("");
 const targetErrorParams = ref<Record<string, string>>({});
 const targetSaveSuccess = ref(false);
 const bootstrapEditorOpen = ref(false);
+const showProjectReleasePicker = ref(false);
 const editingBootstrapRepositories = ref<BootstrapRepo[]>([]);
 const savingBootstrap = ref(false);
 const bootstrapErrorKey = ref("");
@@ -1314,6 +1318,7 @@ async function saveTargets(): Promise<void> {
 
 function openBootstrapEditor(): void {
   if (!project.value || !canEditProject.value) return;
+  showProjectReleasePicker.value = false;
   bootstrapSaveSuccess.value = false;
   bootstrapErrorKey.value = "";
   editingBootstrapRepositories.value = (project.value.spec?.bootstrapRepos || []).map((repo) => ({
@@ -1332,6 +1337,12 @@ function closeBootstrapEditor(): void {
 
 function addBootstrapRepository(): void {
   editingBootstrapRepositories.value.push({ name: "", url: "" });
+}
+
+function addProjectReleaseRepository(repo: BootstrapRepo): void {
+  const empty = editingBootstrapRepositories.value.findIndex(item => !item.name?.trim() && !item.url?.trim());
+  if (empty >= 0) editingBootstrapRepositories.value.splice(empty, 1, repo);
+  else editingBootstrapRepositories.value.push(repo);
 }
 
 function removeBootstrapRepository(index: number): void {
