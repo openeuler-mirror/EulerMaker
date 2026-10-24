@@ -83,7 +83,7 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.StringVar(&c.Signing.SignatrustConfig, "rpm-signing-signatrust-config", c.Signing.SignatrustConfig, "Signatrust client configuration file")
 	flags.StringVar(&c.Signing.SignatrustKeyName, "rpm-signing-signatrust-key-name", c.Signing.SignatrustKeyName, "Signatrust RPM signing key name")
 	flags.DurationVar(&c.Signing.Timeout, "rpm-signing-timeout", c.Signing.Timeout, "timeout for signing one RPM")
-	flags.IntVar(&c.Signing.Workers, "rpm-signing-workers", c.Signing.Workers, "maximum concurrent RPM signing workers per repository")
+	flags.IntVar(&c.Signing.Workers, "rpm-signing-workers", c.Signing.Workers, "maximum concurrent RPM signing workers across all manifest requests")
 
 	return cmd
 }

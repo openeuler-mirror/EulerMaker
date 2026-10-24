@@ -308,13 +308,20 @@ func (p *Processor) uploadWithRetry(ctx context.Context, job gateway.JobResource
 
 func (p *Processor) completeManifestWithRetry(ctx context.Context, job gateway.JobResource, input CompleteManifestInput) (CompletedManifest, error) {
 	delay := time.Second
+	digest := input.UploadDigest()
 	for {
 		manifest, err := p.Remote.CompleteManifest(ctx, job.Metadata.Namespace, job.Metadata.Name, input)
 		if err == nil {
+			if manifest.State != "Completed" || manifest.UploadDigest != digest || manifest.ArtifactCount != len(input.Files) {
+				return CompletedManifest{}, fmt.Errorf("artifact manifest completion does not confirm original upload")
+			}
 			return manifest, nil
 		}
 		known, getErr := p.Remote.GetManifest(ctx, job.Metadata.Namespace, job.Metadata.Name)
-		if getErr == nil && known.State == "Completed" && known.ArtifactCount == len(input.Files) {
+		if getErr == nil && known.State == "Completed" {
+			if known.UploadDigest != digest || known.ArtifactCount != len(input.Files) {
+				return CompletedManifest{}, fmt.Errorf("completed artifact manifest belongs to a different upload")
+			}
 			return known, nil
 		}
 		if !retryableArtifactError(err) {
@@ -387,4 +394,17 @@ func ValidateJobIdentity(job gateway.JobResource) error {
 
 func ValidLocalPathSegment(value string) bool {
 	return value != "" && value != "." && value != ".." && !strings.ContainsAny(value, `/\\`)
+}
+
+// UploadDigest confirms original upload intent even when signing changes the final RPM bytes.
+func (input CompleteManifestInput) UploadDigest() string {
+	files := append([]ManifestFile(nil), input.Files...)
+	sort.Slice(files, func(i, j int) bool { return files[i].RelativePath < files[j].RelativePath })
+	h := sha256.New()
+	fmt.Fprint(h, "artifact-manifest-v1\n")
+	for _, f := range files {
+		fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d\x00%s\x00%t\n",
+			f.RelativePath, f.ArtifactID, f.Category, f.Size, f.SHA256, f.Required)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }

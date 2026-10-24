@@ -92,9 +92,12 @@ type CompleteManifestInput struct {
 }
 
 type CompletedManifest struct {
-	State         string         `json:"state"`
-	ArtifactCount int            `json:"artifactCount"`
-	Files         []ManifestFile `json:"files,omitempty"`
+	UploadDigest       string         `json:"uploadDigest"`
+	Digest             string         `json:"digest"`
+	SigningFingerprint string         `json:"signingFingerprint,omitempty"`
+	State              string         `json:"state"`
+	ArtifactCount      int            `json:"artifactCount"`
+	Files              []ManifestFile `json:"files,omitempty"`
 }
 
 type APIError struct {

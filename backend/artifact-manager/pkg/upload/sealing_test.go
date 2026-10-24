@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,4 +181,249 @@ func TestSealSignsPrivateCopiesAndPublishesFinalMetadata(t *testing.T) {
 	if !ok || projected.StorageKey != effective.StorageKey {
 		t.Fatal("fell back to raw content")
 	}
+}
+
+func TestSealDisabledAndLogOnly(t *testing.T) {
+	for _, key := range []string{"", "key"} {
+		t.Run(key, func(t *testing.T) {
+			signer := &sealTestSigner{key: key}
+			s, _ := newSealTestStore(t, t.TempDir(), signer, 1)
+			_, file := sealUpload(t, s, "job", "logs/container.log")
+			if key == "" {
+				_, file = sealUpload(t, s, "job", "packages/pkg.rpm")
+			}
+			m, err := s.CompleteManifest(context.Background(), "project", "job", "runner", CompleteManifestRequest{Files: []ManifestFile{file}})
+			if err != nil || m.Digest != m.UploadDigest || signer.calls.Load() != 0 {
+				t.Fatalf("manifest = %+v, %v", m, err)
+			}
+		})
+	}
+}
+
+func TestSealRestartReusesCommittedCopy(t *testing.T) {
+	for _, loseProgress := range []bool{false, true} {
+		t.Run(fmt.Sprint(loseProgress), func(t *testing.T) {
+			root := t.TempDir()
+			s, pool := newSealTestStore(t, root, &sealTestSigner{key: "key", failAt: 2}, 1)
+			_, first := sealUpload(t, s, "job", "packages/a.rpm")
+			_, second := sealUpload(t, s, "job", "packages/b.rpm")
+			in := CompleteManifestRequest{Files: []ManifestFile{first, second}}
+			_, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in)
+			assertSealCode(t, err, "SigningBackendUnavailable")
+			if _, err := s.GetManifest("project", "job"); !os.IsNotExist(err) {
+				t.Fatalf("failed sealing published: %v", err)
+			}
+			pool.Close()
+			if loseProgress {
+				record, err := s.readSeal("project", "job")
+				if err != nil {
+					t.Fatal(err)
+				}
+				record.Done = nil
+				if err := fileutil.AtomicJSON(s.sealPath("project", "job"), record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			signer := &sealTestSigner{key: "key"}
+			restarted, _ := newSealTestStore(t, root, signer, 1)
+			m, err := restarted.CompleteManifest(context.Background(), "project", "job", "runner", in)
+			if err != nil || signer.calls.Load() != 1 || len(m.Files) != 2 {
+				t.Fatalf("resume: %+v, %v, calls=%d", m, err, signer.calls.Load())
+			}
+		})
+	}
+}
+
+func TestSealFreezesPolicyAndValidatesOutput(t *testing.T) {
+	root := t.TempDir()
+	s, pool := newSealTestStore(t, root, &sealTestSigner{key: "key", invalid: true}, 1)
+	_, file := sealUpload(t, s, "job", "packages/a.rpm")
+	in := CompleteManifestRequest{Files: []ManifestFile{file}}
+	_, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in)
+	assertSealCode(t, err, "SignedPackageVerificationFailed")
+	if _, err := s.GetManifest("project", "job"); !os.IsNotExist(err) {
+		t.Fatal("invalid signature sealed")
+	}
+	pool.Close()
+	s, _ = newSealTestStore(t, root, &sealTestSigner{key: "other"}, 1)
+	_, err = s.CompleteManifest(context.Background(), "project", "job", "runner", in)
+	assertSealCode(t, err, "SigningConfigurationChanged")
+	in.Files[0].Required = false
+	_, err = s.CompleteManifest(context.Background(), "project", "job", "runner", in)
+	assertSealCode(t, err, "ManifestConflict")
+}
+
+func TestSealGlobalConcurrencyAndJobDeduplication(t *testing.T) {
+	release := make(chan struct{})
+	signer := &sealTestSigner{key: "key", started: make(chan struct{}, 8), release: release}
+	s, _ := newSealTestStore(t, t.TempDir(), signer, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 4)
+	inputs := make([]CompleteManifestRequest, 4)
+	for i := range inputs {
+		_, f := sealUpload(t, s, fmt.Sprint(i), "packages/pkg.rpm")
+		inputs[i] = CompleteManifestRequest{Files: []ManifestFile{f}}
+		go func() { _, err := s.CompleteManifest(ctx, "project", fmt.Sprint(i), "runner", inputs[i]); done <- err }()
+		if i == 0 {
+			select {
+			case <-signer.started:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+	}
+	select {
+	case <-signer.started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// The Store lock is not held by either signing worker.
+	if _, err := s.ListArtifacts("project", "0", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.CompleteManifest(ctx, "project", "0", "runner", inputs[0])
+	assertSealCode(t, err, "ManifestInProgress")
+	_, _, err = s.BeginUpload("project", "0", "new", UploadMetadata{RelativePath: "new", Size: 1}, 4096)
+	assertSealCode(t, err, "ManifestSealing")
+	close(release)
+	for range inputs {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if signer.maximum.Load() != 2 {
+		t.Fatalf("maximum = %d", signer.maximum.Load())
+	}
+}
+
+func TestSealCancellationCanRetry(t *testing.T) {
+	release := make(chan struct{})
+	signer := &sealTestSigner{key: "key", started: make(chan struct{}, 1), release: release}
+	s, _ := newSealTestStore(t, t.TempDir(), signer, 1)
+	_, f := sealUpload(t, s, "job", "packages/pkg.rpm")
+	in := CompleteManifestRequest{Files: []ManifestFile{f}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := s.CompleteManifest(ctx, "project", "job", "runner", in); done <- err }()
+	select {
+	case <-signer.started:
+	case <-time.After(time.Second * 5):
+		t.Fatal("signing not started")
+	}
+	cancel()
+	assertSealCode(t, <-done, "SigningBackendUnavailable")
+	close(release)
+	if _, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManifestDigestContractVector(t *testing.T) {
+	files := []ManifestFile{
+		{ArtifactID: "rpm-1", RelativePath: "packages/pkg.rpm", Category: CategoryArtifact, Size: 3, SHA256: "rpm-sha", Required: true},
+		{ArtifactID: "log-1", RelativePath: "logs/container.log", Category: CategoryLog, Size: 12, SHA256: "log-sha", Required: true},
+	}
+	const expected = "sha256:bef0ca66e6a994208d195fa6a279f83f4c0e944cb2b38fd4a818686dba8de8a7"
+	if actual := ManifestDigest(files); actual != expected {
+		t.Fatalf("digest=%s", actual)
+	}
+	if files[0].ArtifactID != "rpm-1" {
+		t.Fatal("input order mutated")
+	}
+}
+
+func TestSealPreservesCheckpointWhenSignedFileIsMissing(t *testing.T) {
+	signer := &sealTestSigner{key: "key", failAt: 2}
+	s, _ := newSealTestStore(t, t.TempDir(), signer, 1)
+	_, first := sealUpload(t, s, "job", "packages/a.rpm")
+	_, second := sealUpload(t, s, "job", "packages/b.rpm")
+	in := CompleteManifestRequest{Files: []ManifestFile{first, second}}
+	_, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in)
+	assertSealCode(t, err, "SigningBackendUnavailable")
+	if err := os.Remove(filepath.Join(s.root, signedStorageKey("project", "job", first.ArtifactID))); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.CompleteManifest(context.Background(), "project", "job", "runner", in)
+	assertSealCode(t, err, "SignedPackageVerificationFailed")
+	if signer.calls.Load() != 2 {
+		t.Fatal("replaced previously checkpointed bytes")
+	}
+}
+
+func TestSealChecksFinalSizeLimits(t *testing.T) {
+	for _, limit := range []string{"file", "job"} {
+		t.Run(limit, func(t *testing.T) {
+			s, pool := newSealTestStore(t, t.TempDir(), &sealTestSigner{key: "key"}, 1)
+			_, f := sealUpload(t, s, "job", "packages/a.rpm")
+			if limit == "file" {
+				pool.config.MaxFileSize = f.Size
+			} else {
+				pool.config.MaxJobSize = f.Size
+			}
+			_, err := s.CompleteManifest(context.Background(), "project", "job", "runner",
+				CompleteManifestRequest{Files: []ManifestFile{f}})
+			assertSealCode(t, err, "ArtifactLimitExceeded")
+			if _, err := s.GetManifest("project", "job"); !os.IsNotExist(err) {
+				t.Fatalf("oversized manifest published: %v", err)
+			}
+		})
+	}
+}
+
+func TestSealValidatesPackageIdentityAfterSigning(t *testing.T) {
+	s, pool := newSealTestStore(t, t.TempDir(), &sealTestSigner{key: "key"}, 1)
+	query := `#!/bin/sh
+case "$2" in
+--qf)
+  case "$4" in
+  */.signing/*) version=2;;
+  *) version=1;;
+  esac
+  printf 'pkg\t0\t%s\t1\tx86_64\tpkg-1-1.src.rpm\tpayload-digest' "$version";;
+--provides) printf 'pkg = 1-1\n';;
+--requires) printf 'libc.so.6\n';;
+esac
+`
+	if err := os.WriteFile(pool.query, []byte(query), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, f := sealUpload(t, s, "job", "packages/pkg.rpm")
+	_, err := s.CompleteManifest(context.Background(), "project", "job", "runner",
+		CompleteManifestRequest{Files: []ManifestFile{f}})
+	assertSealCode(t, err, "SignedPackageMetadataMismatch")
+}
+
+func TestSealerQueueBackpressure(t *testing.T) {
+	_, pool := newSealTestStore(t, t.TempDir(), &sealTestSigner{key: "key"}, 1)
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	done := make(chan error, cap(pool.tasks)+1)
+	pool.tasks <- signingTask{ctx: context.Background(), done: done, run: func(context.Context) error {
+		close(started)
+		<-release
+		return nil
+	}}
+	<-started
+	for i := 0; i < cap(pool.tasks); i++ {
+		pool.tasks <- signingTask{ctx: context.Background(), done: done, run: func(context.Context) error { return nil }}
+	}
+	err := pool.run(context.Background(), []func(context.Context) error{func(context.Context) error { return nil }})
+	assertSealCode(t, err, "SigningBusy")
+}
+
+func TestSealerShutdownDrainsActiveRequests(t *testing.T) {
+	_, pool := newSealTestStore(t, t.TempDir(), &sealTestSigner{key: "key"}, 1)
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- pool.run(context.Background(), []func(context.Context) error{func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}})
+	}()
+	<-started
+	pool.Close()
+	assertSealCode(t, <-done, "SigningBackendUnavailable")
 }

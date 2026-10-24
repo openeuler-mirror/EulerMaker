@@ -20,6 +20,7 @@ type Server struct {
 	releases     *release.Manager
 	router       *gin.Engine
 	signer       *signing.Signer
+	sealer       *upload.Sealer
 }
 
 func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
@@ -36,17 +37,28 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	materializer := repository.NewFilesystemMaterializer(c.DataDir, c.Repository, c.Signing.Workers, st, signer)
-	s, err := newServer(c, a, st, materializer, signer.Fingerprint())
+	sealer, err := upload.NewSealer(c.Upload, signer, c.Repository.RPMQueryCommand, c.Signing.Workers, c.Signing.Timeout)
 	if err != nil {
 		_ = signer.Close()
 		return nil, err
 	}
+	st.SetSealer(sealer)
+	materializer := repository.NewFilesystemMaterializer(c.DataDir, c.Repository, st, signer.Fingerprint())
+	s, err := newServer(c, a, st, materializer, signer.Fingerprint())
+	if err != nil {
+		sealer.Close()
+		_ = signer.Close()
+		return nil, err
+	}
 	s.signer = signer
+	s.sealer = sealer
 	return s, nil
 }
 
 func (s *Server) Close() {
+	if s.sealer != nil {
+		s.sealer.Close()
+	}
 	s.repositories.Stop()
 	s.releases.Stop()
 	if s.signer != nil {

@@ -22,7 +22,7 @@ type repositoryArtifact struct {
 	JobName  string
 }
 
-func repositoryArtifacts(s ArtifactReader, project string, refs []ManifestReference) ([]repositoryArtifact, error) {
+func repositoryArtifacts(s ArtifactReader, project string, refs []ManifestReference, fingerprint string) ([]repositoryArtifact, error) {
 	var result []repositoryArtifact
 	for _, ref := range refs {
 		manifest, err := s.GetManifest(project, ref.JobName)
@@ -40,6 +40,9 @@ func repositoryArtifacts(s ArtifactReader, project string, refs []ManifestRefere
 		}
 		if manifest.Digest != upload.ManifestDigest(append([]upload.ManifestFile(nil), manifest.Files...)) {
 			return nil, &Error{Code: "ManifestInvalid", Status: 422, JobName: ref.JobName}
+		}
+		if manifest.SigningFingerprint != fingerprint {
+			return nil, &Error{Code: "ManifestSigningMismatch", Status: 422, JobName: ref.JobName}
 		}
 		packages := 0
 		for _, file := range manifest.Files {
