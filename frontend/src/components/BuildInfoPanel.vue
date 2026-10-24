@@ -5,13 +5,25 @@
       <button class="secondary-button compact-button" type="button" :disabled="loading || snapshotLoading"
         :title="t('common.refresh')" :aria-label="t('common.refresh')" @click="load"><Refresh aria-hidden="true" /></button>
     </div>
+    <dl v-if="build?.spec?.buildType && build.spec.buildType !== 'full'" class="detail-list build-detail-list">
+      <div class="build-selected-packages-row"><dt>{{ t('project.buildInfoSelectedPackages') }}</dt><dd class="value-chip-list">
+        <template v-if="selectedPackages.length">
+          <code v-for="(item, index) in visibleSelectedPackages" :key="`${item}-${index}`">{{ item }}</code>
+          <button v-if="selectedPackages.length > 10" class="text-button" type="button" :aria-expanded="selectedPackagesExpanded" @click="selectedPackagesExpanded = !selectedPackagesExpanded">{{ t(selectedPackagesExpanded ? 'project.collapsePackageList' : 'project.expandPackageList', { count: selectedPackages.length }) }}</button>
+        </template>
+        <span v-else>{{ t('common.emptyValue') }}</span>
+      </dd></div>
+    </dl>
     <p v-if="loading && !buildInfo" class="config-empty">{{ t('project.buildInfoLoading') }}</p>
     <p v-else-if="missing" class="config-empty">{{ t('project.buildInfoMissing') }}</p>
     <p v-else-if="errorKey" class="inline-error" role="alert">{{ t(errorKey) }}</p>
     <template v-if="buildInfo">
       <dl class="detail-list build-detail-list">
         <div><dt>{{ t('project.status') }}</dt><dd class="build-info-status-row"><StatusBadge :value="buildInfo.status?.phase" /><span class="status-badge success"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoSucceededCount') }} {{ specBuildCounts.succeeded }}</span><span class="status-badge danger"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoFailedCount') }} {{ specBuildCounts.failed }}</span><span class="status-badge"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoArchUnsupportedCount') }} {{ specBuildCounts.archUnsupported }}</span></dd></div>
-        <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd class="build-info-failed-packages"><template v-if="failedPackages.length"><span v-for="(item, index) in failedPackages" :key="`${item}-${index}`" class="status-badge">{{ item }}</span></template><span v-else>{{ t('common.emptyValue') }}</span></dd></div>
+        <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd class="build-info-failed-packages"><template v-if="failedPackages.length">
+          <span v-for="(item, index) in visibleFailedPackages" :key="`${item}-${index}`" class="status-badge">{{ item }}</span>
+          <button v-if="failedPackages.length > 10" class="text-button" type="button" :aria-expanded="failedPackagesExpanded" @click="failedPackagesExpanded = !failedPackagesExpanded">{{ t(failedPackagesExpanded ? 'project.collapsePackageList' : 'project.expandPackageList', { count: failedPackages.length }) }}</button>
+        </template><span v-else>{{ t('common.emptyValue') }}</span></dd></div>
       </dl>
       <section class="build-detail-section">
         <h3>{{ t('project.buildInfoSpecStatus') }}</h3>
@@ -20,10 +32,18 @@
         <p v-if="!specRows.length" class="config-empty">{{ t('project.buildInfoNoSpecs') }}</p>
         <p v-else-if="!filteredSpecRows.length" class="config-empty">{{ t('project.noMatchingSpecs') }}</p>
         <div v-else class="project-table-wrap"><table class="project-table">
-          <thead><tr><th>Spec</th><th>{{ t('project.buildInfoPackageName') }}</th><th>Commit ID</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th></tr></thead>
+          <thead><tr><th>Spec</th><th>{{ t('project.buildInfoPackageName') }}</th><th>Commit ID</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th><th>{{ t('project.buildInfoDiagnostics') }}</th></tr></thead>
           <tbody><template v-for="row in paginatedSpecRows" :key="row.key">
-            <tr><td><button v-if="row.specName" class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.key" @click="selectedSpecName = selectedSpecName === row.key ? '' : row.key">{{ row.name }}</button><span v-else :title="row.message">{{ row.name }}</span></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><code v-if="row.commitID" :title="row.commitID">{{ row.commitID.slice(0, 12) }}</code><span v-else>{{ snapshotLoading ? '…' : t('common.emptyValue') }}</span></td><td><StatusBadge :value="row.displayStatus" /></td></tr>
-            <tr v-if="row.specName && selectedSpecName === row.key" class="spec-jobs-row"><td colspan="4"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.specName" :can-abort="canAbortJobs" /></td></tr>
+            <tr><td><button v-if="row.specName" class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.key" @click="selectedSpecName = selectedSpecName === row.key ? '' : row.key">{{ row.name }}</button><span v-else :title="row.message">{{ row.name }}</span></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><code v-if="row.commitID" :title="row.commitID">{{ row.commitID.slice(0, 12) }}</code><span v-else>{{ snapshotLoading ? '…' : t('common.emptyValue') }}</span></td><td><StatusBadge :value="row.displayStatus" /></td>
+              <td class="spec-diagnostics">
+                <template v-if="row.reason || row.message">
+                  <strong v-if="row.reason">{{ row.reason }}</strong>
+                  <p v-if="row.message">{{ row.message }}</p>
+                </template>
+                <span v-else>{{ t('common.emptyValue') }}</span>
+              </td>
+            </tr>
+            <tr v-if="row.specName && selectedSpecName === row.key" class="spec-jobs-row"><td colspan="5"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.specName" :can-abort="canAbortJobs" /></td></tr>
           </template></tbody>
         </table></div>
         <div v-if="filteredSpecRows.length" class="table-footer">
@@ -62,13 +82,13 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type
 import { useI18n } from 'vue-i18n';
 
 import { ApiError, errorTranslationKey, request } from '@/api';
-import type { BuildInfo, Snapshot } from '@/types';
+import type { Build, BuildInfo, Snapshot } from '@/types';
 import { buildInfoSpecRows } from '@/utils/buildInfo';
 import AppSelect from './AppSelect.vue';
 import ProjectJobs from './ProjectJobs.vue';
 import StatusBadge from './StatusBadge.vue';
 
-const props = defineProps<{ project: string; buildName: string; canAbortJobs: boolean }>();
+const props = defineProps<{ project: string; buildName: string; canAbortJobs: boolean; build?: Build }>();
 const { t, te } = useI18n();
 const buildInfo = ref<BuildInfo | null>(null);
 const snapshot = ref<Snapshot | null>(null);
@@ -92,6 +112,11 @@ const specRows = computed(() => buildInfoSpecRows(buildInfo.value, snapshot.valu
 const failedPackages = computed(() => [...new Set(specRows.value
   .filter((row) => ['PrepareFailed', 'BuildFailed', 'InstallFailed', 'ArchUnsupported'].includes(row.buildStatus))
   .map((row) => row.packageName))].sort());
+const selectedPackagesExpanded = ref(false);
+const failedPackagesExpanded = ref(false);
+const selectedPackages = computed(() => props.build?.spec?.packages || []);
+const visibleSelectedPackages = computed(() => selectedPackagesExpanded.value ? selectedPackages.value : selectedPackages.value.slice(0, 10));
+const visibleFailedPackages = computed(() => failedPackagesExpanded.value ? failedPackages.value : failedPackages.value.slice(0, 10));
 const specBuildCounts = computed(() => ({
   succeeded: specRows.value.filter((row) => row.buildStatus === 'Succeeded').length,
   failed: specRows.value.filter((row) => ['PrepareFailed', 'BuildFailed', 'InstallFailed'].includes(row.buildStatus)).length,
@@ -203,6 +228,8 @@ function changeSpecPage(page: number): void {
 }
 
 async function load(): Promise<void> {
+  selectedPackagesExpanded.value = false;
+  failedPackagesExpanded.value = false;
   controller?.abort();
   if (!props.project || !props.buildName) return;
   statusFilterOpen.value = false;
@@ -245,3 +272,9 @@ async function loadSnapshot(current: AbortController): Promise<void> {
   }
 }
 </script>
+
+<style scoped>
+.spec-diagnostics { min-width: 200px; max-width: 440px; white-space: normal; overflow-wrap: anywhere; }
+.spec-diagnostics p { margin: 0; white-space: pre-wrap; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.spec-diagnostics strong + p { margin-top: 4px; }
+</style>

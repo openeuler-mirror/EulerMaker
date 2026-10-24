@@ -9,6 +9,7 @@ export function buildInfoSpecRows(buildInfo: BuildInfo | null, snapshot: Snapsho
         key,
         name,
         specName: value.specName,
+        reason: value.reason,
         message: value.message,
         packageName,
         commitID: packageName ? snapshot?.status?.packageRepoStatuses?.[packageName]?.commitID : undefined,

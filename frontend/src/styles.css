@@ -416,6 +416,8 @@ body.modal-open { overflow: hidden; }
 .build-history-item-type { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 13px; font-weight: 700; line-height: 18px; }
 .build-history-item small, .build-history-item time { display: block; margin-top: 6px; color: #7e899a; font-size: 12px; }
 .build-history-item time { color: #9aa4b3; }
+.build-history-times { display: flex; gap: 12px; max-width: 100%; overflow-x: auto; }
+.build-history-times time { flex: none; white-space: nowrap; }
 .build-history-git-ref, .build-history-packages { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .build-history-git-ref code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: inherit; }
 .build-detail-panel .section-heading { flex-wrap: wrap; }
@@ -429,6 +431,7 @@ body.modal-open { overflow: hidden; }
 .build-detail-section h3 { margin: 0 0 13px; color: var(--ink); font-size: 15px; }
 .build-detail-section > p { margin: 0; color: var(--muted); font-size: 13px; }
 .value-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.build-detail-list .build-selected-packages-row { align-items: baseline; }
 .value-chip-list code { padding: 5px 9px; color: #40526c; background: #f1f5f9; border-radius: 5px; font-size: 12px; }
 .build-bootstrap-list { display: grid; gap: 10px; }
 .build-bootstrap-list > div { padding: 11px 12px; display: grid; grid-template-columns: minmax(100px, .35fr) minmax(0, 1fr); gap: 14px; background: #f8fafc; border-radius: 6px; }
