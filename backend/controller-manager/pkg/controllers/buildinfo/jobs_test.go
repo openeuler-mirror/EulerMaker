@@ -899,8 +899,8 @@ func TestBackfillUsesPayloadSourceKey(t *testing.T) {
 		"source/broken.spec":         {Status: ebsv1.SpecPrepareFailed},
 	}
 	job := testJobObj(bi, "rpm-name", 1, ebsv1.JobSucceeded)
-	job.Status.Install = &ebsv1.JobInstallResult{
-		Status:      ebsv1.JobResultFailed,
+	job.Status.Result = &ebsv1.JobResult{
+		Status:      ebsv1.JobResultInstallFailed,
 		MissingDeps: map[string]ebsv1.MissingDep{"libmissing": {NeededBy: "rpm-name"}},
 	}
 	round := &reconcileRound{current: bi}

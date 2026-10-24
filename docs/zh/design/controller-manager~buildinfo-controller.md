@@ -621,8 +621,8 @@ buildSet = buildSet ∪ direct                                                # 
 | 最新目标 Job | 统一结果 | 诊断 |
 |-------------|----------|------|
 | Pending / Running | Running | 清除上一代诊断及 missingDeps |
-| Succeeded 且未报告构建失败 | 按安装结果确定 Succeeded / InstallFailed | 见 7.4.7 |
-| Succeeded 但 build.status=Failed | BuildFailed | BuildFailed / JobFailed |
+| Succeeded 且 result.status 为 Succeeded / InstallFailed | 同名结果状态 | 见 7.4.7 |
+| Succeeded 但 result.status=BuildFailed | BuildFailed | BuildFailed / JobFailed |
 | Failed | BuildFailed | 首次 BuildFailed / JobFailed；重建 RebuildFailed / RebuildJobFailed |
 | Aborted | BuildFailed | BuildAborted，父 Build 中止由前置守卫处理 |
 | 空或未知 phase | 保持原结果 | 记录异常，不认为已完成 |
@@ -640,40 +640,41 @@ buildSet = buildSet ∪ direct                                                # 
 
 > **为什么需要发布确认门禁**：RpmRepo 层 XML 元数据仅覆盖 `contentURL` 指向的**当前已发布物理版本**，"Job `Succeeded` 但产物尚未物化为当前版本（contentURL 未提升，XML 中无该条目）"是异步发布竞态，若仅凭 Job 终态放行重建，重建 Job 会在依赖未兑现的环境中运行。
 
-#### 7.4.7 install 状态回填与运行期动态补边（Job status.install → SpecResult）
+#### 7.4.7 install 状态回填与运行期动态补边（Job status.result → SpecResult）
 
 > **前置消解与残余双层兜底**：spec 的安装期依赖参与建图（install 边，见 16.1），用于构建排序；运行期 install 失败后，先按本节规则动态补边。未修复的 InstallFailed 保留在 Completed 结果中，由下一轮 Build Controller 从 key 提取仓库纳入增量种子（见 build-controller 7.2）；本控制器不查询历史轮次。
 
-构建脚本将 RPM 构建与安装检查结果分别写入 `/workspace/job-result.json`，Runner 回写 `Job.status.build` 和 `Job.status.install`。Controller 在 `backfillJobs` 中通过 `backfillInstall` 消费 `status.install`。结果示例：
+构建脚本将统一结果写入 `/workspace/job-result.json`，Runner 回写 `Job.status.result`。
+仅安装依赖检查失败填写 missingDeps，例如：
 
 ```json
 {
-    "build": { "status": "Succeeded" },
-    "install": {
-        "status": "Failed",
-        "missingDeps": {
-            "acl": {
-                "neededBy": "glibc",
-                "versionRequests": { "ge": "2.3.5", "le": "2.3.6" }
-            }
+    "status": "InstallFailed",
+    "missingDeps": {
+        "acl": {
+            "neededBy": "glibc",
+            "versionRequests": { "ge": "2.3.5", "le": "2.3.6" }
         }
     }
 }
 ```
 
-`missingDeps` 直接使用公共 `MissingDep` 结构，版本操作符使用 `VersionConstraint` 的小写 JSON 字段。回填判定（目标 Job = 多代取最新，7.4.4）：
+`missingDeps` 使用公共 MissingDep 结构，版本操作符使用 VersionConstraint 的小写 JSON 字段。
+Controller 在 applyJobPhase 中回填最新一代 Job：
 
-| 目标 Job 状态与 install 结果 | 回填动作 |
-|------------------------------|----------|
-| `phase=Succeeded` 且 `install.status=Succeeded` | `specResults[key].status = Succeeded`，清除旧缺失依赖 |
-| `phase=Succeeded` 且 `install.status=Failed` | `specResults[key].status = InstallFailed`，用本次 `missingDeps` 替换旧结果，并写入 `InstallCheckFailed` condition |
-| `phase=Succeeded` 但缺少合法 install 结果 | `specResults[key].status = InstallFailed`，condition reason 为 `InstallResultMissing` 或 `InstallResultInvalid`，不得推断安装成功 |
-| `phase != Succeeded` | 按 7.4.5 更新统一结果，不保留旧代安装结论 |
+| 目标 Job 状态与脚本结果 | 回填动作 |
+|-----------------------|----------|
+| phase=Succeeded 且 result.status=Succeeded | Succeeded，清除旧 missingDeps |
+| phase=Succeeded 且 result.status=InstallFailed | InstallFailed，替换 missingDeps，记录 InstallCheckFailed |
+| phase=Succeeded 且 result.status=BuildFailed | BuildFailed，记录 JobFailed |
+| phase=Succeeded 但 result 缺失或非法 | BuildFailed，记录 JobResultMissing / JobResultInvalid，不推断安装成功 |
+| phase!=Succeeded | 按 7.4.5 映射整体结果，不保留上一代 missingDeps |
+
 
 规则：
 
 1. **回填时机**：目标 Job（多代取最新，7.4.4）`phase=Succeeded` 时按上表回填；运行中不改写。
-2. **代际覆盖**：最新一代进入 Running 清理旧诊断和 missingDeps；构建失败写 BuildFailed，构建成功才读取安装结果。
+2. **代际覆盖**：最新一代进入 Running 清理旧诊断和 missingDeps；Job 失败写 BuildFailed；Job 成功时按统一 result 映射。
 3. **安装失败不等于构建失败**：InstallFailed 是终态且构建产物可用，仍参与发布确认、有效 required 和动态补边；最终失败由结果 key 推导，不重复存储仓库列表。
 4. **幂等性**：每次按最新 Job 结果覆盖 `missingDeps`，`specResults[key].conditions` 用 upsert；reconcile 重复执行无副作用累积（10.3）。
 
@@ -682,7 +683,7 @@ buildSet = buildSet ∪ direct                                                # 
 `advanceBuildInfo` 步骤 3.1（7.3，位于取得 dcgDict 之后、推进下发之前；install 状态已在步骤 2 回填最新）对 **`specResults[key].status == InstallFailed`** 的每个 S（含环内/环外）执行：
 
 1. **终止条件**：环内 S 已达 2 次下发（`DispatchCount >= 2`）→ 跳过（终态不再处理，维持第二层兜底）；环外 S 无重发语义（见第 7 条），补边仅修正图。
-2. **反查提供方**：对 `install.missingDeps` 逐项，经 providesInfo 选择链反查提供方 P——选择链与 16.1 四步完全一致（版本过滤 → 单候选 → prefer → 最高版本），版本约束取该条目 `MissingDep.versionRequests`（data-models.md「MissingDep」）；**数据源为当轮 reconcile 时点的 RpmMetaSources 分层缓存**（RpmRepo 层随 contentURL 变化重新解析、天然含最新物化批次——提供方刚物化才可能被反查命中，这正是补边优于初始建图的原因；15.10）。RpmRepo 未存在/查询失败/XML 下载解析失败 → 写 `RpmRepoRetrying`，本轮不补边，返回 nil 等下一轮（见 9.1）。
+2. **反查提供方**：对 `specResults[key].missingDeps` 逐项，经 providesInfo 选择链反查提供方 P——选择链与 16.1 四步完全一致（版本过滤 → 单候选 → prefer → 最高版本），版本约束取该条目 `MissingDep.versionRequests`（data-models.md「MissingDep」）；**数据源为当轮 reconcile 时点的 RpmMetaSources 分层缓存**（RpmRepo 层随 contentURL 变化重新解析、天然含最新物化批次——提供方刚物化才可能被反查命中，这正是补边优于初始建图的原因；15.10）。RpmRepo 未存在/查询失败/XML 下载解析失败 → 写 `RpmRepoRetrying`，本轮不补边，返回 nil 等下一轮（见 9.1）。
 3. **补边条件（三者同时满足才补入）**：
    - P ∈ 本轮待构建 spec；
    - P 的统一结果 **非终态**（所有终态均跳过——已终态不补边不重发，提供方产物凭据已定，交由依赖存在性裁决/第二层兜底表达）；
@@ -800,11 +801,12 @@ Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入
 
 | type | reason | 触发时机 |
 |------|--------|---------|
-| `Install` | `InstallCheckFailed` / `InstallResultMissing` / `InstallResultInvalid` | 目标 Job（多代取最新）`phase=Succeeded`，但安装检查失败、结果缺失或无效；缺失依赖写入 `install.missingDeps`（见 7.4.7） |
+| `Install` | `InstallCheckFailed` | 目标 Job（多代取最新）`phase=Succeeded` 且 result.status=InstallFailed；缺失依赖写入 `specResults[key].missingDeps`（见 7.4.7） |
+| `BuildFailed` | `JobResultMissing` / `JobResultInvalid` | Job phase=Succeeded，但没有可靠脚本结果；统一结果写 BuildFailed |
 
 （运行期动态补边不写 condition：出度入度统一补入、不提升下发次数，重发由图语义（新环 required=2）承担，见 7.4.7 子节第 4/7 条。）
 
-install 校验通过（目标 Job `phase=Succeeded` 且 `status.install.status=Succeeded`）时更新 `specResults[key].status = Succeeded`，不写失败 condition。
+install 校验通过（目标 Job `phase=Succeeded` 且 `status.result.status=Succeeded`）时更新 `specResults[key].status = Succeeded`，不写失败 condition。
 
 ### 9.2 时间来源
 
@@ -1178,7 +1180,7 @@ status:                                             # 创建时恒 Pending/Pendi
 |------|------|
 | `status.runner` / `startTime` / `endTime` / `message` | runner 执行期/终态回写；`message` 仅记录执行或上传错误 |
 | `status.phase` / `status.stage` | runner 推进 stage：`Pending → Running → PostRun`；phase 终态：`Succeeded` / `Failed` / `Aborted`（PostRun 为 `status.stage` 值、非 phase，见 data-models.md；phase 映射见 7.4.5） |
-| `status.build` / `status.install` | runner 从脚本结果读取并回写；buildinfo 依据结构化结果回填（见 7.4.7） |
+| `status.result` | runner 从脚本结果读取并回写；buildinfo 依据结构化结果回填（见 7.4.7） |
 
 #### 15.3.2 回读消费的字段（`backfillJobs`）
 
@@ -1189,7 +1191,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.creationTimestamp` | 多代 Job 排序键主键：`metav1.Time` 直接比较（零值按最早），apiserver 创建时写入，恒非空且单调（见 7.4.4） |
 | `metadata.name` | 排序键次键（并列时字典序最大）；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
 | `status.phase` | 经 7.4.5 映射回写 `specResults[key].status`；`Pending` → 强制 `Running`（不得沿用上一代终态） |
-| `status.install` | `phase=Succeeded` 时回填 `specResults[key]`，缺失结果不得视为安装成功（见 7.4.7） |
+| `status.result` | `phase=Succeeded` 时回填 `specResults[key]`，缺失结果不得视为安装成功（见 7.4.7） |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
 | `status.stage` / `runner` / `endTime` | 不消费 |
 

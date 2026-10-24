@@ -558,33 +558,12 @@ func (a *Agent) runJob(parent context.Context, key string, job gateway.JobResour
 		return
 	}
 	resultFile := filepath.Join(workDir(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name, "job-result.json")
-	if info, err := os.Lstat(resultFile); err == nil {
-		if !info.Mode().IsRegular() || info.Size() > 1<<20 {
-			executionErr = errors.Join(executionErr, fmt.Errorf("job result is not a regular file of at most 1 MiB"))
-		} else if data, err := os.ReadFile(resultFile); err != nil {
-			executionErr = errors.Join(executionErr, fmt.Errorf("read job-result.json: %w", err))
-		} else {
-			var result struct {
-				Build   *gateway.JobBuildResult   `json:"build"`
-				Install *gateway.JobInstallResult `json:"install"`
-			}
-			if err := json.Unmarshal(data, &result); err != nil || result.Build == nil || !validJobResult(result.Build.Status) || result.Install != nil && !validJobResult(result.Install.Status) {
-				executionErr = errors.Join(executionErr, fmt.Errorf("invalid job-result.json: %v", err))
-			} else {
-				status.Build, status.Install = result.Build, result.Install
-			}
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		executionErr = errors.Join(executionErr, fmt.Errorf("read job-result.json: %w", err))
+	var resultErr error
+	status.Result, resultErr = readJobResult(resultFile)
+	if resultErr != nil {
+		executionErr = errors.Join(executionErr, resultErr)
 	}
-	if status.Build == nil {
-		buildStatus := "Succeeded"
-		if executionErr != nil {
-			buildStatus = "Failed"
-		}
-		status.Build = &gateway.JobBuildResult{Status: buildStatus}
-	}
-	if status.Build.Status == "Failed" && executionErr == nil {
+	if status.Result != nil && status.Result.Status == "BuildFailed" && executionErr == nil {
 		executionErr = errors.New("build script reported failure")
 	}
 	status.Phase = "Running"
@@ -603,8 +582,35 @@ func (a *Agent) runJob(parent context.Context, key string, job gateway.JobResour
 	a.sendHeartbeat(context.Background())
 }
 
-func validJobResult(status string) bool {
-	return status == "Succeeded" || status == "Failed"
+// readJobResult leaves an absent result unknown; an exit code does not prove an install-check verdict.
+func readJobResult(path string) (*gateway.JobResult, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read job-result.json: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, errors.New("job result is not a regular file of at most 1 MiB")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read job-result.json: %w", err)
+	}
+	var result gateway.JobResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode job-result.json: %w", err)
+	}
+	switch result.Status {
+	case "Succeeded", "BuildFailed", "InstallFailed":
+	default:
+		return nil, fmt.Errorf("invalid job result status %q", result.Status)
+	}
+	if result.Status != "InstallFailed" && len(result.MissingDeps) > 0 {
+		return nil, errors.New("job result missingDeps requires InstallFailed")
+	}
+	return &result, nil
 }
 
 func (a *Agent) resumePostRun(parent context.Context, key string, job gateway.JobResource) {

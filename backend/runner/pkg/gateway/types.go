@@ -140,21 +140,17 @@ type Toleration struct {
 }
 
 type JobStatus struct {
-	Phase     string            `json:"phase,omitempty"`
-	Stage     string            `json:"stage,omitempty"`
-	Build     *JobBuildResult   `json:"build,omitempty"`
-	Install   *JobInstallResult `json:"install,omitempty"`
-	Runner    string            `json:"runner,omitempty"`
-	StartTime *time.Time        `json:"startTime,omitempty"`
-	EndTime   *time.Time        `json:"endTime,omitempty"`
-	Message   string            `json:"message,omitempty"`
+	Phase     string     `json:"phase,omitempty"`
+	Stage     string     `json:"stage,omitempty"`
+	Result    *JobResult `json:"result,omitempty"`
+	Runner    string     `json:"runner,omitempty"`
+	StartTime *time.Time `json:"startTime,omitempty"`
+	EndTime   *time.Time `json:"endTime,omitempty"`
+	Message   string     `json:"message,omitempty"`
 }
 
-type JobBuildResult struct {
-	Status string `json:"status"`
-}
-
-type JobInstallResult struct {
+// JobResult is the script verdict; MissingDeps is only valid for InstallFailed.
+type JobResult struct {
 	Status      string                `json:"status"`
 	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
 }

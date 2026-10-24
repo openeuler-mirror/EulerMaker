@@ -90,59 +90,80 @@ func (f *fakeRunnerAPI) WatchAssignedJobs(context.Context, string, string) (<-ch
 }
 
 func TestRunJobCompletesManifestStatusAndCleansLocalState(t *testing.T) {
-	root := t.TempDir()
-	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}, Status: gateway.JobStatus{Phase: "Running", Runner: "runner-a"}}
-	resultDir := filepath.Join(root, "results", "project", "job")
-	if err := os.MkdirAll(resultDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(resultDir, "result.txt"), []byte("success"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	logDir := filepath.Join(root, "logs", "project", "job")
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	workDir := filepath.Join(root, "work", "project", "job")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	remote := &fakeArtifactRemote{}
-	api := &fakeRunnerAPI{}
-	agent := &Agent{
-		cfg: options.Config{
-			Name:     "runner-a",
-			RootDir:  root,
-			Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Second}},
-		},
-		client:    api,
-		executor:  &fakeExecutor{resultRoot: resultDir},
-		artifacts: &artifact.Processor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
-		cleanup:   &artifact.CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
-	}
+	for _, verdict := range []string{"Succeeded", "InstallFailed", "BuildFailed"} {
+		t.Run(verdict, func(t *testing.T) {
+			root := t.TempDir()
+			job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}, Status: gateway.JobStatus{Phase: "Running", Runner: "runner-a"}}
+			resultDir := filepath.Join(root, "results", "project", "job")
+			if err := os.MkdirAll(resultDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(resultDir, "result.txt"), []byte("success"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			logDir := filepath.Join(root, "logs", "project", "job")
+			if err := os.MkdirAll(logDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			workDir := filepath.Join(root, "work", "project", "job")
+			if err := os.MkdirAll(workDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			resultJSON := `{"status":"` + verdict + `"}`
+			if verdict == "InstallFailed" {
+				resultJSON = `{"status":"InstallFailed","missingDeps":{"libfoo":{"neededBy":"example"}}}`
+			}
+			if err := os.WriteFile(filepath.Join(workDir, "job-result.json"), []byte(resultJSON), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			remote := &fakeArtifactRemote{}
+			api := &fakeRunnerAPI{}
+			agent := &Agent{
+				cfg: options.Config{
+					Name:     "runner-a",
+					RootDir:  root,
+					Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Second}},
+				},
+				client:    api,
+				executor:  &fakeExecutor{resultRoot: resultDir},
+				artifacts: &artifact.Processor{Remote: remote, RootDir: root, MaxFileSize: 1024, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
+				cleanup:   &artifact.CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
+			}
 
-	agent.runJob(context.Background(), jobKey(job), job)
-	api.mu.Lock()
-	statuses := append([]gateway.JobStatus(nil), api.jobStatuses...)
-	api.mu.Unlock()
-	if len(statuses) != 3 {
-		t.Fatalf("job status updates = %d, want 3", len(statuses))
-	}
-	if statuses[1].Phase != "Running" || statuses[1].Stage != "PostRun" {
-		t.Fatalf("post-run status = %#v", statuses[1])
-	}
-	final := statuses[2]
-	if final.Phase != "Succeeded" {
-		t.Fatalf("final status = %#v", final)
-	}
-	if _, err := os.Stat(resultDir); !os.IsNotExist(err) {
-		t.Fatalf("successful result directory was not cleaned: %v", err)
-	}
-	if _, err := os.Stat(logDir); !os.IsNotExist(err) {
-		t.Fatalf("successful log directory was not cleaned: %v", err)
-	}
-	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
-		t.Fatalf("Job work directory was not cleaned after PostRun: %v", err)
+			agent.runJob(context.Background(), jobKey(job), job)
+			api.mu.Lock()
+			statuses := append([]gateway.JobStatus(nil), api.jobStatuses...)
+			api.mu.Unlock()
+			if len(statuses) != 3 {
+				t.Fatalf("job status updates = %d, want 3", len(statuses))
+			}
+			if statuses[1].Phase != "Running" || statuses[1].Stage != "PostRun" {
+				t.Fatalf("post-run status = %#v", statuses[1])
+			}
+			final := statuses[2]
+			wantPhase := "Succeeded"
+			if verdict == "BuildFailed" {
+				wantPhase = "Failed"
+			}
+			if final.Result == nil || final.Result.Status != verdict {
+				t.Fatalf("final script result = %+v, want %s", final.Result, verdict)
+			}
+			if verdict == "InstallFailed" && final.Result.MissingDeps["libfoo"].NeededBy != "example" {
+				t.Fatalf("install missingDeps not retained: %+v", final.Result)
+			}
+			if final.Phase != wantPhase {
+				t.Fatalf("final status = %#v", final)
+			}
+			if _, err := os.Stat(resultDir); !os.IsNotExist(err) {
+				t.Fatalf("successful result directory was not cleaned: %v", err)
+			}
+			if _, err := os.Stat(logDir); !os.IsNotExist(err) {
+				t.Fatalf("successful log directory was not cleaned: %v", err)
+			}
+			if _, err := os.Stat(workDir); !os.IsNotExist(err) {
+				t.Fatalf("Job work directory was not cleaned after PostRun: %v", err)
+			}
+		})
 	}
 }
 
@@ -373,5 +394,36 @@ func TestAbortCancelsPostRunWithoutFinalStatusWrite(t *testing.T) {
 	defer api.lock.Unlock()
 	if api.job.Status.Phase != "Aborted" {
 		t.Fatal("terminal result overwritten")
+	}
+}
+
+func TestUploadFailurePreservesScriptResult(t *testing.T) {
+	root := t.TempDir()
+	resultDir := filepath.Join(root, "results", "project", "job")
+	if err := os.MkdirAll(resultDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resultDir, "large.rpm"), []byte("too large"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"},
+		Status: gateway.JobStatus{Phase: "Running", Stage: "PostRun", Runner: "runner-a",
+			Result: &gateway.JobResult{Status: "Succeeded"}},
+	}
+	api := &fakeRunnerAPI{}
+	agent := &Agent{
+		cfg:       options.Config{RootDir: root, Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Second}}},
+		client:    api,
+		artifacts: &artifact.Processor{Remote: &fakeArtifactRemote{}, RootDir: root, MaxFileSize: 1, MaxJobSize: 2048, MaxFiles: 10, Concurrency: 1},
+		cleanup:   &artifact.CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour},
+	}
+	agent.finalizeArtifacts(context.Background(), job, job.Status, resultDir, nil)
+	if len(api.jobStatuses) != 1 {
+		t.Fatalf("status writes = %d", len(api.jobStatuses))
+	}
+	final := api.jobStatuses[0]
+	if final.Phase != "Failed" || final.Result == nil || final.Result.Status != "Succeeded" {
+		t.Fatalf("upload failure changed script result: %+v", final)
 	}
 }

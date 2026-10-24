@@ -92,7 +92,7 @@ func (c *Controller) advanceDcg(
 	return d, result, err
 }
 
-// appendInstallEdges checks every spec with install.status=Failed (cycle nodes already at 2 dispatches excluded)
+// appendInstallEdges checks every InstallFailed spec (cycle nodes already at 2 dispatches excluded)
 // reverse-looks-up a provider per missing dep against the current-round layered sources; an edge is appended on the
 // candidate graph only when the provider is a build-set spec, non-terminal and not already an install upstream. New
 // cycles get additional break points (initial picks never re-selected). The candidate state is persisted before the

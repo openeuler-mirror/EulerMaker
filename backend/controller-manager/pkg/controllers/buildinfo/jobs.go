@@ -781,11 +781,7 @@ func (c *Controller) backfillJobs(
 					ss.DispatchCount = gen
 				}
 			}
-			if applyJobPhase(&ss, latest, priorSucceeded(own, latest)) {
-				if latest.Status.Phase == ebsv1.JobSucceeded && ss.Status.BuildSucceeded() {
-					c.backfillInstall(round, &ss, latest)
-				}
-			} else {
+			if !applyJobPhase(&ss, latest, priorSucceeded(own, latest)) {
 				c.logf(
 					round.key, "UnknownJobPhase", "job %s phase %q unknown, status mapping skipped",
 					latest.Name, latest.Status.Phase,
@@ -859,16 +855,31 @@ func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bo
 	switch job.Status.Phase {
 	case ebsv1.JobPending, ebsv1.JobRunning:
 		ss.Status = ebsv1.SpecRunning
-		ss.Conditions = nil
-		ss.MissingDeps = nil
 	case ebsv1.JobSucceeded:
-		if job.Status.Build != nil && job.Status.Build.Status == ebsv1.JobResultFailed {
+		result := job.Status.Result
+		if result == nil {
+			ss.Status = ebsv1.SpecBuildFailed
+			specCondition(ss, ConditionBuildFailed, ReasonJobResultMissing, "job "+job.Name+" has no script result")
+			break
+		}
+		switch result.Status {
+		case ebsv1.JobResultSucceeded:
+			ss.Status = ebsv1.SpecSucceeded
+		case ebsv1.JobResultBuildFailed:
 			ss.Status = ebsv1.SpecBuildFailed
 			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" reported build failure")
-		} else {
-			ss.Status = ebsv1.SpecSucceeded
-			ss.Conditions = nil
-			ss.MissingDeps = nil
+		case ebsv1.JobResultInstallFailed:
+			ss.Status = ebsv1.SpecInstallFailed
+			if len(result.MissingDeps) > 0 {
+				ss.MissingDeps = make(map[string]ebsv1.MissingDep, len(result.MissingDeps))
+				for name, dep := range result.MissingDeps {
+					ss.MissingDeps[name] = dep
+				}
+			}
+			installCondition(ss, job.Name)
+		default:
+			ss.Status = ebsv1.SpecBuildFailed
+			specCondition(ss, ConditionBuildFailed, ReasonJobResultInvalid, "job "+job.Name+" has invalid script result")
 		}
 	case ebsv1.JobFailed:
 		ss.Status = ebsv1.SpecBuildFailed
@@ -889,46 +900,4 @@ func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bo
 		return false
 	}
 	return true
-}
-
-// backfillInstall copies the runner's structured install-check verdict. A missing result is not evidence of
-// installability.
-func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecResult, job *ebsv1.Job) {
-	result := job.Status.Install
-	ss.MissingDeps = nil
-	if result == nil {
-		ss.Status = ebsv1.SpecInstallFailed
-		upsertCondition(
-			&ss.Conditions,
-			ConditionInstall,
-			ReasonInstallResultMissing,
-			"job "+job.Name+" has no install-check result",
-		)
-		return
-	}
-	if result.Status == ebsv1.JobResultSucceeded {
-		ss.Status = ebsv1.SpecSucceeded
-		ss.MissingDeps = nil
-		removeCondition(&ss.Conditions, ConditionInstall)
-		return
-	}
-	if result.Status != ebsv1.JobResultFailed {
-		ss.Status = ebsv1.SpecInstallFailed
-		upsertCondition(
-			&ss.Conditions,
-			ConditionInstall,
-			ReasonInstallResultInvalid,
-			"job "+job.Name+" has invalid install-check result",
-		)
-		return
-	}
-	ss.Status = ebsv1.SpecInstallFailed
-	ss.MissingDeps = nil
-	if len(result.MissingDeps) > 0 {
-		ss.MissingDeps = make(map[string]ebsv1.MissingDep, len(result.MissingDeps))
-		for name, dep := range result.MissingDeps {
-			ss.MissingDeps[name] = dep
-		}
-	}
-	installCondition(ss, job.Name)
 }

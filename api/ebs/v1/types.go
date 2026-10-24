@@ -344,14 +344,13 @@ type JobSpec struct {
 }
 
 type JobStatus struct {
-	Phase     JobPhase          `json:"phase,omitempty"`
-	Stage     JobStage          `json:"stage,omitempty"`
-	Build     *JobBuildResult   `json:"build,omitempty"`
-	Install   *JobInstallResult `json:"install,omitempty"`
-	Runner    string            `json:"runner,omitempty"`
-	StartTime metav1.Time       `json:"startTime,omitempty"`
-	EndTime   metav1.Time       `json:"endTime,omitempty"`
-	Message   string            `json:"message,omitempty"`
+	Phase     JobPhase    `json:"phase,omitempty"`
+	Stage     JobStage    `json:"stage,omitempty"`
+	Result    *JobResult  `json:"result,omitempty"`
+	Runner    string      `json:"runner,omitempty"`
+	StartTime metav1.Time `json:"startTime,omitempty"`
+	EndTime   metav1.Time `json:"endTime,omitempty"`
+	Message   string      `json:"message,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -376,15 +375,9 @@ type Toleration struct {
 	Effect   TaintEffect        `json:"effect,omitempty"`
 }
 
-// JobBuildResult records the outcome of the build script, independently of
-// artifact upload and the Job's overall lifecycle.
-type JobBuildResult struct {
-	Status JobResultStatus `json:"status"`
-}
-
-// JobInstallResult records the post-build installability check. MissingDeps
-// is populated only for a deterministic dependency failure.
-type JobInstallResult struct {
+// JobResult records the script verdict independently of upload and the Job lifecycle.
+// MissingDeps describes install-check failures and is only valid for InstallFailed.
+type JobResult struct {
 	Status      JobResultStatus       `json:"status"`
 	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
 }

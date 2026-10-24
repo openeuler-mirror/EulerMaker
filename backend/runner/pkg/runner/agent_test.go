@@ -233,3 +233,36 @@ func TestLoadOrCreateRunnerInstanceIDRejectsBroadPermissions(t *testing.T) {
 		t.Fatal("expected broad instance ID file permissions to be rejected")
 	}
 }
+
+func TestReadJobResult(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, want string
+		wantErr             bool
+	}{
+		{name: "absent"},
+		{name: "success", content: `{"status":"Succeeded"}`, want: "Succeeded"},
+		{name: "build failure", content: `{"status":"BuildFailed"}`, want: "BuildFailed"},
+		{name: "install failure", content: `{"status":"InstallFailed","missingDeps":{"foo":{"neededBy":"bar"}}}`, want: "InstallFailed"},
+		{name: "dependency scope", content: `{"status":"BuildFailed","missingDeps":{"foo":{}}}`, wantErr: true},
+		{name: "incomplete result", content: `{}`, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "job-result.json")
+			if tc.content != "" {
+				if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := readJobResult(path)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("read result = %+v, %v", result, err)
+			}
+			if tc.want != "" && (result == nil || result.Status != tc.want) {
+				t.Fatalf("result = %+v, want %s", result, tc.want)
+			}
+			if tc.name == "absent" && result != nil {
+				t.Fatalf("absent result inferred as %+v", result)
+			}
+		})
+	}
+}

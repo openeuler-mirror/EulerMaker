@@ -80,18 +80,14 @@ func ValidateJobStatusUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 	if !newObj.Status.Stage.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "stage"), newObj.Status.Stage, ebsv1.JobStageValues()))
 	}
-	if result := newObj.Status.Build; result != nil && !result.Status.IsValid() {
-		allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "build", "status"), result.Status, []string{string(ebsv1.JobResultSucceeded), string(ebsv1.JobResultFailed)}))
-	}
-	if result := newObj.Status.Install; result != nil {
-		if newObj.Status.Build == nil || newObj.Status.Build.Status != ebsv1.JobResultSucceeded {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "install"), "install result requires a successful build result"))
-		}
+	if result := newObj.Status.Result; result != nil {
 		if !result.Status.IsValid() {
-			allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "install", "status"), result.Status, []string{string(ebsv1.JobResultSucceeded), string(ebsv1.JobResultFailed)}))
+			allErrs = append(allErrs, field.NotSupported(field.NewPath("status", "result", "status"), result.Status,
+				[]string{string(ebsv1.JobResultSucceeded), string(ebsv1.JobResultBuildFailed), string(ebsv1.JobResultInstallFailed)}))
 		}
-		if result.Status == ebsv1.JobResultSucceeded && len(result.MissingDeps) > 0 {
-			allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "install", "missingDeps"), "successful install check cannot have missing dependencies"))
+		if result.Status != ebsv1.JobResultInstallFailed && len(result.MissingDeps) > 0 {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("status", "result", "missingDeps"),
+				"missing dependencies are only valid for InstallFailed"))
 		}
 	}
 	return allErrs

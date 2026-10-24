@@ -328,8 +328,7 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 	payload, _ := json.Marshal(map[string]string{"package_name": repo, "spec_file_name": file})
 	status := ebsv1.JobStatus{Phase: phase}
 	if phase == ebsv1.JobSucceeded {
-		status.Build = &ebsv1.JobBuildResult{Status: ebsv1.JobResultSucceeded}
-		status.Install = &ebsv1.JobInstallResult{Status: ebsv1.JobResultSucceeded}
+		status.Result = &ebsv1.JobResult{Status: ebsv1.JobResultSucceeded}
 	}
 	return &ebsv1.Job{
 		ObjectMeta: metav1.ObjectMeta{

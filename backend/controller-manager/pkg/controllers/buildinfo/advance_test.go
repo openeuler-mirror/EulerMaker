@@ -182,7 +182,7 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	})
 
-	t.Run("missing install result is not success", func(t *testing.T) {
+	t.Run("missing script result is not success", func(t *testing.T) {
 		c, client, _, _ := newTestController(t)
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 		client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
@@ -199,17 +199,17 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		job := testJobObj(seeded, "a", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
 		job.Status.Message = "build ok"
-		job.Status.Install = nil
+		job.Status.Result = nil
 		client.SeedJob(job)
 
 		reconcileOnce(t, c)
 
 		persisted := getBuildInfo(t, client)
 		a := persisted.Status.SpecResults.Entry("a")
-		if a.Status != ebsv1.SpecInstallFailed {
-			t.Fatalf("install status = %q, want Failed", a.Status)
+		if a.Status != ebsv1.SpecBuildFailed {
+			t.Fatalf("script result = %q, want BuildFailed", a.Status)
 		}
-		requireCondition(t, a.Conditions, ConditionInstall, ReasonInstallResultMissing)
+		requireCondition(t, a.Conditions, ConditionBuildFailed, ReasonJobResultMissing)
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	})
 
@@ -235,8 +235,8 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		}, testSources(testRpm("a", "a", "1.0")))
 		job := testJobObj(seeded, "b", 1, ebsv1.JobSucceeded)
 		job.CreationTimestamp = metav1.NewTime(testStart)
-		job.Status.Install = &ebsv1.JobInstallResult{
-			Status: ebsv1.JobResultFailed,
+		job.Status.Result = &ebsv1.JobResult{
+			Status: ebsv1.JobResultInstallFailed,
 			MissingDeps: map[string]ebsv1.MissingDep{
 				"a": {NeededBy: "new", VersionRequests: ebsv1.VersionConstraint{GE: "1.0"}},
 			},

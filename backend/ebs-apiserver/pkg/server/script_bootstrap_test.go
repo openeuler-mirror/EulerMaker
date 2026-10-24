@@ -298,10 +298,10 @@ func TestDefaultRpmbuildScriptIgnoresOtherInstallErrors(t *testing.T) {
 	script = strings.Replace(script, "local install_log=/workspace/install-check.log", "local install_log=$TEST_INSTALL_LOG", 1)
 
 	for _, tc := range []struct {
-		name, dnfOutput, wantInstall string
+		name, dnfOutput, wantResult string
 	}{
 		{"other error", "Error: failed to download repository metadata", "Succeeded"},
-		{"missing dependency", "Problem: nothing provides libfoo >= 1 needed by bar-1.x86_64", "Failed"},
+		{"missing dependency", "Problem: nothing provides libfoo >= 1 needed by bar-1.x86_64", "InstallFailed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -332,20 +332,14 @@ func TestDefaultRpmbuildScriptIgnoresOtherInstallErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var result struct {
-				Build   struct{ Status string } `json:"build"`
-				Install struct {
-					Status      string                     `json:"status"`
-					MissingDeps map[string]json.RawMessage `json:"missingDeps"`
-				} `json:"install"`
-			}
+			var result ebsv1.JobResult
 			if err := json.Unmarshal(data, &result); err != nil {
 				t.Fatal(err)
 			}
-			if result.Build.Status != "Succeeded" || result.Install.Status != tc.wantInstall {
+			if string(result.Status) != tc.wantResult {
 				t.Fatalf("unexpected result: %s", data)
 			}
-			if (len(result.Install.MissingDeps) > 0) != (tc.wantInstall == "Failed") {
+			if (len(result.MissingDeps) > 0) != (tc.wantResult == "InstallFailed") {
 				t.Fatalf("unexpected missing dependencies: %s", data)
 			}
 		})
