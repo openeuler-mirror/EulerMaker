@@ -40,7 +40,7 @@ func ValidateConfig(obj *ebsv1.Config) field.ErrorList {
 	if obj.Spec.Visibility != ebsv1.ConfigVisibilityPublic && obj.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
 		errs = append(errs, field.NotSupported(visibility, obj.Spec.Visibility, []string{string(ebsv1.ConfigVisibilityPublic), string(ebsv1.ConfigVisibilityOpsOnly)}))
 	} else if obj.Name == ebsv1.ServiceConfigName && obj.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
-		errs = append(errs, field.Forbidden(visibility, "service-config must be OpsOnly"))
+		errs = append(errs, field.Forbidden(visibility, "services must be OpsOnly"))
 	}
 	content := field.NewPath("spec", "content")
 	if obj.Spec.Content == "" {

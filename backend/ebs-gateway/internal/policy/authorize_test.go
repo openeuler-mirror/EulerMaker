@@ -120,19 +120,19 @@ func TestConfigAuthorization(t *testing.T) {
 		method string
 		allow  bool
 	}{
-		{ordinary, "service-config", http.MethodGet, false},
-		{ordinary, "service-config", http.MethodPut, false},
-		{runner, "service-config", http.MethodGet, false},
-		{ops, "service-config", http.MethodGet, true},
-		{ops, "service-config", http.MethodPost, true},
-		{ops, "service-config", http.MethodPut, true},
-		{ops, "service-config", http.MethodPatch, true},
-		{admin, "service-config", http.MethodGet, true},
-		{admin, "service-config", http.MethodPut, true},
-		{admin, "service-config", http.MethodDelete, false},
+		{ordinary, "services", http.MethodGet, false},
+		{ordinary, "services", http.MethodPut, false},
+		{runner, "services", http.MethodGet, false},
+		{ops, "services", http.MethodGet, true},
+		{ops, "services", http.MethodPost, true},
+		{ops, "services", http.MethodPut, true},
+		{ops, "services", http.MethodPatch, true},
+		{admin, "services", http.MethodGet, true},
+		{admin, "services", http.MethodPut, true},
+		{admin, "services", http.MethodDelete, false},
 		{ops, "build-target", http.MethodDelete, false},
 		{ops, "build-resource", http.MethodDelete, false},
-		{ops, "service-config", http.MethodDelete, false},
+		{ops, "services", http.MethodDelete, false},
 		{ops, "custom", http.MethodDelete, true},
 	} {
 		route := Route{Resource: "configs", Name: test.name, Method: test.method}

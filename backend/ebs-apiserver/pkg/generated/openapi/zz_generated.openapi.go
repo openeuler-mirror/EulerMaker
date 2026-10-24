@@ -2429,7 +2429,7 @@ func schema_ebs_api_ebs_v1_ServiceConfigContent(ref common.ReferenceCallback) co
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "ServiceConfigContent defines the service endpoints in Config/service-config.",
+				Description: "ServiceConfigContent defines the service endpoints in Config/services.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"artifactManagers": {

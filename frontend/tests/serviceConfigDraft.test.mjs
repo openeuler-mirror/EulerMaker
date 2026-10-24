@@ -15,7 +15,7 @@ const { parseServiceContent, buildServiceContent, validServiceURL } = await impo
 const gitEndpoints = (internalURL = 'http://git') => ({ internalURL, runnerInternalURL: '', runnerExternalURL: '' });
 
 test('default service configuration round-trips both services', () => {
-  const config = parse(readFileSync(new URL('../../backend/ebs-apiserver/pkg/server/default-service-config.yaml', import.meta.url), 'utf8'));
+  const config = parse(readFileSync(new URL('../../backend/ebs-apiserver/pkg/server/defaults/config/services.yaml', import.meta.url), 'utf8'));
   const content = parseServiceContent(config);
   const rows = Object.entries(content.artifactManagers).map(([name, instance]) => ({ name, ...instance }));
   assert.deepEqual(parse(stringify(buildServiceContent(rows, content.gitServer))), content);
@@ -39,7 +39,7 @@ test('editing Git Server and artifact instances preserves both sections', () => 
   assert.deepEqual(parseServiceContent(parse(stringify(saved))), saved);
 });
 
-test('form validation follows service-config instance and address rules', () => {
+test('form validation follows services instance and address rules', () => {
   const row = { name: 'art-01', internalURL: 'http://art:8081', runnerInternalURL: '', runnerExternalURL: '' };
   assert.throws(() => buildServiceContent([], gitEndpoints()), /invalidContent/);
   assert.throws(() => buildServiceContent([row, row], gitEndpoints()), /duplicateName/);
@@ -78,7 +78,7 @@ const editorCode = ts.transpileModule(script.statements.filter(s => !ts.isImport
 function editor() {
   const requests = [];
   let conflict = false;
-  const original = { metadata: { name: 'service-config', uid: 'config-uid', resourceVersion: '1' },
+  const original = { metadata: { name: 'services', uid: 'config-uid', resourceVersion: '1' },
     spec: { visibility: 'OpsOnly', content: stringify({ artifactManagers: { 'art-01': { internalURL: 'http://art:8081' } },
       gitServer: { internalURL: 'http://git:8080', runnerInternalURL: 'http://git.internal:8084',
         runnerExternalURL: 'https://git.external' } }) } };
@@ -102,7 +102,7 @@ function editor() {
   return { state, requests, original, setConflict: () => { conflict = true; } };
 }
 
-test('editor loads and saves service-config with current metadata and both service sections', async () => {
+test('editor loads and saves services with current metadata and both service sections', async () => {
   const { state, requests } = editor();
   await state.load();
   state.startEdit();
@@ -110,7 +110,7 @@ test('editor loads and saves service-config with current metadata and both servi
     runnerExternalURL: 'http://git.external:8084/prefix' };
   state.instances.value[0].runnerExternalURL = 'http://runner.example:8081';
   await state.save();
-  assert.deepEqual(requests.map(r => r.path), ['/apis/ebs/v1/configs/service-config', '/apis/ebs/v1/configs/service-config']);
+  assert.deepEqual(requests.map(r => r.path), ['/apis/ebs/v1/configs/services', '/apis/ebs/v1/configs/services']);
   const body = JSON.parse(requests[1].options.body);
   assert.equal(body.metadata.resourceVersion, '1');
   assert.equal(body.spec.visibility, 'OpsOnly');

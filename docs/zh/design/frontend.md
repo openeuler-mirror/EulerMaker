@@ -253,7 +253,7 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 运维页面提供集群级 `Config/build-resource` 的资源配置页签，解析和编辑其 `spec.content` 中的软件包、架构规则；另有 `Config/build-target` 的构建目标编辑和全局 Script 列表、名称搜索、刷新、创建、正文编辑及删除。Ops 和 Admin 可管理脚本，但默认 `rpmbuild` 不显示删除入口；其他脚本删除前需要确认，并携带 UID/resourceVersion 前置条件。脚本正文按原文保存，不在浏览器中执行，不应包含凭据。
 
-“服务配置”页签管理 `Config/service-config`，将 Git Server 与 Artifact Manager 实例列表作为同级区域展示，分别编辑控制面地址、内网 Runner 访问地址和外网 Runner 访问地址；支持增删 Artifact Manager 实例。该 Config 固定为 `OpsOnly`，仅 Ops/Admin 可管理；服务地址不包含认证凭据。字段及消费契约见 [服务配置](data-models~config.md#4-服务配置内容)。
+“服务配置”页签管理 `Config/services`，将 Git Server 与 Artifact Manager 实例列表作为同级区域展示，分别编辑控制面地址、内网 Runner 访问地址和外网 Runner 访问地址；支持增删 Artifact Manager 实例。该 Config 固定为 `OpsOnly`，仅 Ops/Admin 可管理；服务地址不包含认证凭据。字段及消费契约见 [服务配置](data-models~config.md#4-服务配置内容)。
 
 编辑前读取最新对象并确认 UID，保存时携带读取到的 resourceVersion；冲突时保留草稿并提示重新打开，不自动重放更新。前端对三份内置 Config 的 YAML 内容做保存前预检；apiserver 在创建、更新时完整校验通用字段与对应业务内容，Gateway 负责访问权限。消费方读取并反序列化已校验的配置，不重复执行完整业务校验；仍处理接口读取失败、响应契约异常和实际使用项缺失。
 

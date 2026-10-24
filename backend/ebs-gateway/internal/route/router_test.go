@@ -337,7 +337,7 @@ gitServer:
   runnerExternalURL: https://git.example.com/prefix
 `
 	config, err := json.Marshal(map[string]any{
-		"metadata": map[string]string{"name": "service-config"},
+		"metadata": map[string]string{"name": "services"},
 		"spec":     map[string]string{"visibility": "OpsOnly", "content": content},
 	})
 	if err != nil {
@@ -350,7 +350,7 @@ gitServer:
 				Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`))}, nil
 		}
 		calls++
-		if request.URL.Path != "/apis/ebs/v1/configs/service-config" || request.Method != http.MethodGet ||
+		if request.URL.Path != "/apis/ebs/v1/configs/services" || request.Method != http.MethodGet ||
 			request.Header.Get("Authorization") != "" {
 			t.Errorf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
 		}
@@ -414,7 +414,7 @@ gitServer:
 
 func TestRunnerServiceEndpointsRejectsInvalidConfig(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
-		body := `{"metadata":{"name":"service-config"},"spec":{"visibility":"OpsOnly","content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
+		body := `{"metadata":{"name":"services"},"spec":{"visibility":"OpsOnly","content":"artifactManagers:\n  art-01:\n    internalURL: http://artifact-manager.art-01:8081\n    secret: hidden\n"}}`
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
 	token, err := api.tokens.Issue("runner-a", "runner-a", identity.RunnerType, "", time.Hour, api.now())
@@ -441,7 +441,7 @@ func TestRunnerServiceEndpointsRefresh(t *testing.T) {
 	}
 	api := newTestAPI(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		body, err := json.Marshal(map[string]any{
-			"metadata": map[string]string{"name": "service-config"},
+			"metadata": map[string]string{"name": "services"},
 			"spec":     map[string]string{"visibility": "OpsOnly", "content": content()},
 		})
 		if err != nil {

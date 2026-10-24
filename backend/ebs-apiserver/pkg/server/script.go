@@ -21,7 +21,7 @@ import (
 
 const maxBootstrapScriptSize = 2 * 1024 * 1024
 
-//go:embed default-rpmbuild-script.yaml
+//go:embed defaults/script/rpmbuild.yaml
 var defaultRpmbuildScript []byte
 
 func decodeScript(data []byte) (*ebsv1.Script, error) {

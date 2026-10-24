@@ -70,7 +70,7 @@ flowchart LR
 
 Manager 创建共享客户端及事件源工厂，通过显式 initializer 构造 Controller。每个 Controller 拥有独立的限速队列和 Worker。事件源把资源变化交给 Controller 注册的映射器，映射器只计算并加入调谐 key。
 
-Git Server 和 Artifact Manager 地址由公共 `pkg/serviceconfig` 从 `Config/service-config` 按轮提供；需要远端服务的控制器共享提供者，不在启动时强制读取配置，也不在并发调谐之间修改客户端地址。读取时机、更新和错误边界见 [服务配置消费规则](data-models~config.md#45-controller-manager-消费与更新边界)。
+Git Server 和 Artifact Manager 地址由公共 `pkg/serviceconfig` 从 `Config/services` 按轮提供；需要远端服务的控制器共享提供者，不在启动时强制读取配置，也不在并发调谐之间修改客户端地址。读取时机、更新和错误边界见 [服务配置消费规则](data-models~config.md#45-controller-manager-消费与更新边界)。
 
 ## 3. 包结构与公共接口
 

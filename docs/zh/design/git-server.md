@@ -626,7 +626,7 @@ git-server \
 
 Git Server 仅返回与部署地址无关的 `clone_path`，不根据请求 Host 推断克隆地址。`workers`、`clone-workers`、超时、重试次数、退避参数和输出限制必须在启动时完成范围校验，非法值导致进程启动失败。
 
-Controller Manager 访问本服务的管理地址由 `Config/service-config` 的 `gitServer.internalURL` 提供，配置契约见 [服务配置](data-models~config.md#4-服务配置内容)。克隆逻辑地址及当前 Runner 实现边界见同步与状态响应契约。
+Controller Manager 访问本服务的管理地址由 `Config/services` 的 `gitServer.internalURL` 提供，配置契约见 [服务配置](data-models~config.md#4-服务配置内容)。克隆逻辑地址及当前 Runner 实现边界见同步与状态响应契约。
 
 只有远端 Git 认证信息保存在 TOML 文件中：
 

@@ -212,7 +212,7 @@ kubectl -n ebs rollout status deployment/scheduler --timeout=10m
 
 ## 6. 部署 Git Server
 
-`git-server.yaml` 创建普通 ClusterIP Service。Git Server 返回 `/git/...` 形式的 `clone_path`，无需预先配置或发现服务 IP；Controller Manager 客户端转换为 `git-server:///git/...` 逻辑地址。Runner internal 模式根据 `Config/service-config` 解析该逻辑地址，构建容器须能访问 Git Server 内网入口；external 模式使用 `origin_url` 直接获取固定提交。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
+`git-server.yaml` 创建普通 ClusterIP Service。Git Server 返回 `/git/...` 形式的 `clone_path`，无需预先配置或发现服务 IP；Controller Manager 客户端转换为 `git-server:///git/...` 逻辑地址。Runner internal 模式根据 `Config/services` 解析该逻辑地址，构建容器须能访问 Git Server 内网入口；external 模式使用 `origin_url` 直接获取固定提交。当前不加载远端认证配置，只能匿名同步公开仓库；需要访问私有仓库时再通过 Secret 挂载 `auth.toml` 并配置 `--auth-config`。
 
 Job 容器由宿主机 Docker 启动并使用宿主机网络，不在 Kubernetes Pod 网络内。启用 Snapshot Controller 前，必须从实际构建节点验证 Git Service ClusterIP 的 8080 端口可达；集群外构建节点通常不能直接访问 ClusterIP，若验证失败，应改用构建节点可达的固定内网入口。
 
@@ -269,7 +269,7 @@ kubectl label node <artifact-node> node-role.kubernetes.io/art-01=
 kubectl get nodes -l node-role.kubernetes.io/art-01
 ```
 
-RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 从 `Config/service-config` 选择实例内部地址；BuildInfo Controller 也从该 Config 解析过程仓地址。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
+RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 从 `Config/services` 选择实例内部地址；BuildInfo Controller 也从该 Config 解析过程仓地址。前端 Nginx 将 `/art-01/artifacts/...` 和 `/art-01/repositories/...` 去掉实例前缀后转发到 `artifact-manager.art-01.svc.cluster.local:8081`；`NGINX_DNS_RESOLVER` 未配置时从 Pod 的 `/etc/resolv.conf` 读取 DNS 地址。原有 `/artifacts/...` 和 `/repositories/...` 仍转发到 `DEFAULT_ARTIFACT_MANAGER`，Kubernetes Deployment 将其设为 `artifact-manager.art-01:8081`，Docker Compose 使用默认短名。当前管理接口和仓库地址共用端口，不要将原始端口直接暴露到公网。
 
 如果已经在 `ebs` 部署旧版 Artifact Manager，迁移前须停止旧 Deployment，确认其 Pod 已退出，避免两个实例同时写入同一 `/srv/artifacts`；保留宿主机数据目录。删除旧 Deployment 和旧 Service 后再应用下方 Manifest，并确认 `art-01` Pod 仍调度到原数据节点，不能因切换命名空间而指向空目录。前端和 Controller Manager 需使用本次更新的镜像或 Manifest，才能访问新地址。
 
@@ -280,7 +280,7 @@ kubectl -n art-01 rollout status deployment/artifact-manager --timeout=20m
 
 ### 8.1 配置实例地址与 Runner 接入
 
-apiserver 初始化的 `Config/service-config` 包含开发环境默认地址，已有对象不会被初始化流程覆盖。Kubernetes 部署后，由 Ops/Admin 通过 Gateway 更新该 Config 的 `spec.content`：配置 `gitServer.internalURL`，将 `artifactManagers` 中 `default` 和 `art-01` 的 `internalURL` 指向已部署的 `art-01` Service，并为 Runner 网络模式填写可达的 `runnerInternalURL` 或 `runnerExternalURL`。例如，Runner 在集群内且能够解析 Service DNS 时可使用：
+apiserver 初始化的 `Config/services` 包含开发环境默认地址，已有对象不会被初始化流程覆盖。Kubernetes 部署后，由 Ops/Admin 通过 Gateway 更新该 Config 的 `spec.content`：配置 `gitServer.internalURL`，将 `artifactManagers` 中 `default` 和 `art-01` 的 `internalURL` 指向已部署的 `art-01` Service，并为 Runner 网络模式填写可达的 `runnerInternalURL` 或 `runnerExternalURL`。例如，Runner 在集群内且能够解析 Service DNS 时可使用：
 
 ```yaml
 artifactManagers:

@@ -71,7 +71,7 @@ func TestConfigHTTPCreateUpdateAndRead(t *testing.T) {
 		{"build-target", "targets: {}", "targets: {other: {arches: {x86_64: {image: build:v1}}}}"},
 		{"build-resource", "default: {requests: {cpu: '4', memory: 8Gi}}", "default: {requests: {cpu: '8', memory: 16Gi}}"},
 		{
-			"service-config",
+			"services",
 			"artifactManagers: {default: {internalURL: 'http://artifact-manager:8081'}}\n" +
 				"gitServer: {internalURL: 'http://git-server:8080', runnerInternalURL: 'http://127.0.0.1:8084'}",
 			"artifactManagers: {art-01: {internalURL: 'http://artifact-manager.art-01:8081'}}\n" +
@@ -274,7 +274,7 @@ func TestEnsureDefaultConfigs(t *testing.T) {
 	}
 	serviceConfig := store.objects[ebsv1.ServiceConfigName]
 	if errs := validation.ValidateConfig(serviceConfig); len(errs) != 0 {
-		t.Fatalf("default service-config Config: %v", errs)
+		t.Fatalf("default services Config: %v", errs)
 	}
 	if target.Spec.Visibility != ebsv1.ConfigVisibilityPublic || resource.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly ||
 		serviceConfig.Spec.Visibility != ebsv1.ConfigVisibilityOpsOnly {
