@@ -19,8 +19,8 @@ func seedRpmRepoMetadataRound(t *testing.T, c *Controller, client *fakeClient) s
 	t.Helper()
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
-		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildRunning}, DispatchCount: 1},
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{
+		"a": {Status: ebsv1.SpecRunning, DispatchCount: 1},
 	})
 	seeded := seedProcessingRound(
 		client,

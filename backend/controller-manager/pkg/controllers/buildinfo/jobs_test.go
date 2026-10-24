@@ -772,7 +772,7 @@ func TestEnsureImageRoundSnapshot(t *testing.T) {
 
 // --- dispatchSpec create outcomes ---
 
-// dispatchRound builds a minimal Processing round for direct dispatchSpec calls: the seeded BuildInfo (specStatus entry
+// dispatchRound builds a minimal Processing round for direct dispatchSpec calls: the seeded BuildInfo (specResults entry
 // for the spec), the parent Build and the project BuildResourceConfig table.
 func dispatchRound(
 	t *testing.T,
@@ -784,7 +784,7 @@ func dispatchRound(
 	key := testNS + "/" + testBuild
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = types.UID(uid)
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{spec: {}})
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{spec: {}})
 	seeded := client.SeedBuildInfo(bi)
 	client.SetBuildResourceContent(testBuildResourceContent())
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
@@ -799,7 +799,7 @@ func TestDispatchBatchWritesStatusOnce(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
 	bi.UID = "batch-dispatch"
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {}, "b": {}})
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"a": {}, "b": {}})
 	seeded := client.SeedBuildInfo(bi)
 	client.SetBuildResourceContent(testBuildResourceContent())
 	key := testNS + "/" + testBuild
@@ -826,7 +826,7 @@ func TestDispatchBatchWritesStatusOnce(t *testing.T) {
 		t.Fatalf("status writes=%d, want one batch confirmation", client.statusWrites)
 	}
 	for _, name := range []string{"a", "b"} {
-		if got := getBuildInfo(t, client).Status.SpecStatus.Entry(name).DispatchCount; got != 1 {
+		if got := getBuildInfo(t, client).Status.SpecResults.Entry(name).DispatchCount; got != 1 {
 			t.Fatalf("spec %s dispatch count=%d, want 1", name, got)
 		}
 	}
@@ -846,7 +846,7 @@ func TestDispatchBatchStatusConflictRecoversFromJobList(t *testing.T) {
 	if err != nil || result.RequeueAfter == 0 {
 		t.Fatalf("conflicted flush = %+v, %v, want delayed requeue", result, err)
 	}
-	if got := getBuildInfo(t, client).Status.SpecStatus.Entry("a").DispatchCount; got != 0 {
+	if got := getBuildInfo(t, client).Status.SpecResults.Entry("a").DispatchCount; got != 0 {
 		t.Fatalf("dispatch count after rejected flush = %d, want 0", got)
 	}
 
@@ -863,11 +863,11 @@ func TestDispatchBatchStatusConflictRecoversFromJobList(t *testing.T) {
 		t.Fatalf("list Jobs: %v", err)
 	}
 	next := fresh.current.DeepCopy()
-	c.backfillJobs(fresh, next, jobs, map[string]bool{"a": true}, false)
+	c.backfillJobs(fresh, next, jobs, map[string]bool{"a": true})
 	if _, err := c.writeStatusIfChanged(context.Background(), fresh, next); err != nil {
 		t.Fatalf("backfill status: %v", err)
 	}
-	if got := getBuildInfo(t, client).Status.SpecStatus.Entry("a").DispatchCount; got != 1 {
+	if got := getBuildInfo(t, client).Status.SpecResults.Entry("a").DispatchCount; got != 1 {
 		t.Fatalf("recovered dispatch count = %d, want 1", got)
 	}
 }
@@ -881,14 +881,44 @@ func TestBackfillDispatchCountUsesHighestGeneration(t *testing.T) {
 		{current: 4, want: 4},
 	} {
 		bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-		bi.Status.SpecStatus.Set("a", ebsv1.SpecStatus{DispatchCount: tc.current})
+		bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"a": {DispatchCount: tc.current}})
 		job := testJobObj(bi, "a", 3, ebsv1.JobRunning)
 		round := &reconcileRound{current: bi}
 		next := bi.DeepCopy()
-		(&Controller{}).backfillJobs(round, next, []ebsv1.Job{*job}, map[string]bool{"a": true}, false)
-		if got := next.Status.SpecStatus.Entry("a").DispatchCount; got != tc.want {
+		(&Controller{}).backfillJobs(round, next, []ebsv1.Job{*job}, map[string]bool{"a": true})
+		if got := next.Status.SpecResults.Entry("a").DispatchCount; got != tc.want {
 			t.Errorf("current=%d, DispatchCount=%d, want %d", tc.current, got, tc.want)
 		}
+	}
+}
+
+func TestBackfillUsesPayloadSourceKey(t *testing.T) {
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Status.SpecResults = ebsv1.SpecResults{
+		"source/different-file.spec": {SpecName: "rpm-name", Status: ebsv1.SpecRunning, DispatchCount: 1},
+		"source/broken.spec":         {Status: ebsv1.SpecPrepareFailed},
+	}
+	job := testJobObj(bi, "rpm-name", 1, ebsv1.JobSucceeded)
+	job.Status.Install = &ebsv1.JobInstallResult{
+		Status:      ebsv1.JobResultFailed,
+		MissingDeps: map[string]ebsv1.MissingDep{"libmissing": {NeededBy: "rpm-name"}},
+	}
+	round := &reconcileRound{current: bi}
+	next := bi.DeepCopy()
+	(&Controller{}).backfillJobs(round, next, []ebsv1.Job{*job}, map[string]bool{"rpm-name": true})
+	result := next.Status.SpecResults["source/different-file.spec"]
+	if result.Status != ebsv1.SpecInstallFailed || !result.Status.BuildSucceeded() ||
+		result.SpecName != "rpm-name" || len(result.MissingDeps) != 1 {
+		t.Fatalf("source result = %+v", result)
+	}
+	if next.Status.SpecResults["source/broken.spec"].Status != ebsv1.SpecPrepareFailed {
+		t.Fatal("backfill replaced an unrelated preparation failure")
+	}
+	// A source filename is not inferred from the RPM Name or a truncated package label.
+	job.Spec.Payload = `{"package_name":"source","spec_file_name":"broken.spec"}`
+	(&Controller{}).backfillJobs(round, next, []ebsv1.Job{*job}, map[string]bool{"rpm-name": true})
+	if next.Status.SpecResults["source/broken.spec"].Status != ebsv1.SpecPrepareFailed {
+		t.Fatal("mismatched Job identity changed preparation result")
 	}
 }
 
@@ -943,8 +973,8 @@ func TestDispatchSpecDefaultsScriptName(t *testing.T) {
 func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	round, _ := dispatchRound(t, c, client, "bi-script-shared", "a")
-	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
-	round.current.Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
+	client.buildinfos[testNS+"/"+testBuild].Status.SpecResults["repo1/b.spec"] = ebsv1.SpecResult{SpecName: "b", Status: ebsv1.SpecPrepared}
+	round.current.Status.SpecResults["repo1/b.spec"] = ebsv1.SpecResult{SpecName: "b", Status: ebsv1.SpecPrepared}
 	snapshot := testSnapshotObj()
 	for _, specName := range []string{"a", "b"} {
 		depend := dependEntry(specName)
@@ -966,7 +996,7 @@ func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
 		}
 	}
 
-	client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus.Set("c", ebsv1.SpecStatus{})
+	client.buildinfos[testNS+"/"+testBuild].Status.SpecResults["repo1/c.spec"] = ebsv1.SpecResult{SpecName: "c", Status: ebsv1.SpecPrepared}
 	newRound := &reconcileRound{
 		key: round.key, current: getBuildInfo(t, client), build: round.build,
 		failures: c.newRoundFailures(round.key),
@@ -1109,8 +1139,8 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 		t.Run(strconv.Itoa(status), func(t *testing.T) {
 			c, client, _, _ := newTestController(t)
 			round, _ := dispatchRound(t, c, client, "rejected-job", "a")
-			client.buildinfos[testNS+"/"+testBuild].Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
-			round.current.Status.SpecStatus.Set("b", ebsv1.SpecStatus{})
+			client.buildinfos[testNS+"/"+testBuild].Status.SpecResults["repo1/b.spec"] = ebsv1.SpecResult{SpecName: "b", Status: ebsv1.SpecPrepared}
+			round.current.Status.SpecResults["repo1/b.spec"] = ebsv1.SpecResult{SpecName: "b", Status: ebsv1.SpecPrepared}
 			client.InjectWrite("create", clientpkg.WriteRejected, status, false)
 			for _, spec := range []string{"a", "b"} {
 				depend := dependEntry(spec)
@@ -1132,11 +1162,11 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 				t.Fatalf("flush created jobs: %v", err)
 			}
 			stored := getBuildInfo(t, client)
-			if got := stored.Status.SpecStatus.Entry("a"); got.Build.Status != ebsv1.SpecBuildFailed ||
-				findCondition(got.Build.Conditions, ConditionJobCreateRejected) == nil {
+			if got := stored.Status.SpecResults.Entry("a"); got.Status != ebsv1.SpecBuildFailed ||
+				findCondition(got.Conditions, ConditionJobCreateRejected) == nil {
 				t.Fatalf("rejected spec status = %+v", got)
 			}
-			if got := stored.Status.SpecStatus.Entry("b"); got.Build.Status == ebsv1.SpecBuildFailed ||
+			if got := stored.Status.SpecResults.Entry("b"); got.Status == ebsv1.SpecBuildFailed ||
 				got.DispatchCount != 1 {
 				t.Fatalf("independent spec status = %+v", got)
 			}
@@ -1158,7 +1188,7 @@ func TestDispatchSpecRateLimitRetainsPendingSpec(t *testing.T) {
 		t.Fatalf("rate-limited dispatch error = %v, want retryable error", err)
 	}
 	stored := getBuildInfo(t, client)
-	if got := stored.Status.SpecStatus.Entry("a").Build.Status; got == ebsv1.SpecBuildFailed {
+	if got := stored.Status.SpecResults.Entry("a").Status; got == ebsv1.SpecBuildFailed {
 		t.Fatalf("rate-limited dispatch marked spec failed")
 	}
 	if client.statusWrites != 0 {
@@ -1189,9 +1219,9 @@ func TestDispatchSpecAlreadyExistsConfirms(t *testing.T) {
 		t.Fatalf("flush created jobs: %v", err)
 	}
 	persisted := getBuildInfo(t, client)
-	a := persisted.Status.SpecStatus.Entry("a")
-	if a.DispatchCount != 1 || a.Build.Status != ebsv1.SpecBuildRunning {
-		t.Fatalf("specStatus[a] = %+v, want confirmed Running dispatch of the existing job", a)
+	a := persisted.Status.SpecResults.Entry("a")
+	if a.DispatchCount != 1 || a.Status != ebsv1.SpecRunning {
+		t.Fatalf("specResults[a] = %+v, want confirmed Running dispatch of the existing job", a)
 	}
 }
 
@@ -1241,9 +1271,9 @@ func TestDispatchSpecUnknownLandedConfirms(t *testing.T) {
 		t.Fatalf("flush created jobs: %v", err)
 	}
 	persisted := getBuildInfo(t, client)
-	a := persisted.Status.SpecStatus.Entry("a")
+	a := persisted.Status.SpecResults.Entry("a")
 	if a.DispatchCount != 1 {
-		t.Fatalf("specStatus[a] = %+v, want the landed job confirmed", a)
+		t.Fatalf("specResults[a] = %+v, want the landed job confirmed", a)
 	}
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1", got)

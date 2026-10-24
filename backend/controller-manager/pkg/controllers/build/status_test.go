@@ -40,7 +40,7 @@ func buildStageWriteRound(t *testing.T) (*fakeAPI, *Controller) {
 	build.Status.StartTime = testTime(9)
 	api.builds[key("project-a", "build-a")] = build
 	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted,
-		map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)})
+		map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)})
 	return api, newTestController(t, api, newTestClock())
 }
 

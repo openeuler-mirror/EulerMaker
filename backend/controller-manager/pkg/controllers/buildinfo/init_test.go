@@ -39,12 +39,12 @@ func jobSpecNames(t *testing.T, client *fakeClient) map[string]bool {
 
 func requireSpecNames(t *testing.T, bi *ebsv1.BuildInfo, want ...string) {
 	t.Helper()
-	if bi.Status.SpecStatus.Len() != len(want) {
-		t.Fatalf("specStatus size = %d, want %d (%v)", bi.Status.SpecStatus.Len(), len(want), bi.Status.SpecStatus)
+	if len(bi.Status.SpecResults.Entries()) != len(want) {
+		t.Fatalf("specResults size = %d, want %d (%v)", len(bi.Status.SpecResults.Entries()), len(want), bi.Status.SpecResults)
 	}
 	for _, name := range want {
-		if _, ok := bi.Status.SpecStatus.Lookup(name); !ok {
-			t.Fatalf("specStatus[%s] missing, have %v", name, bi.Status.SpecStatus)
+		if _, ok := bi.Status.SpecResults.Lookup(name); !ok {
+			t.Fatalf("specResults[%s] missing, have %v", name, bi.Status.SpecResults)
 		}
 	}
 }
@@ -67,11 +67,11 @@ func TestInitFullHappyPath(t *testing.T) {
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	requireSpecNames(t, bi, "a", "b")
 	for _, name := range []string{"a", "b"} {
-		ss := bi.Status.SpecStatus.Entry(name)
+		ss := bi.Status.SpecResults.Entry(name)
 		// A freshly created Job carries no phase yet, so Build.Status stays empty until the first backfill maps
 		// Pending/Running.
 		if ss.DispatchCount != 1 {
-			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1)", name, ss)
+			t.Fatalf("specResults[%s] = %+v, want dispatched (gen 1)", name, ss)
 		}
 	}
 	if got := jobSpecNames(t, client); len(got) != 2 || !got["a"] || !got["b"] {
@@ -81,8 +81,8 @@ func TestInitFullHappyPath(t *testing.T) {
 		t.Fatalf("graph nodes size = %d, want 2", len(graph.Status.Nodes))
 	}
 	for spec, want := range map[string]string{"a": "repo1", "b": "repo2"} {
-		if got := bi.Status.SpecRepoNames[spec]; got != want {
-			t.Fatalf("specRepoNames[%q] = %q, want %q", spec, got, want)
+		if got := testSpecRepo(bi.Status.SpecResults, spec); got != want {
+			t.Fatalf("source repository[%q] = %q, want %q", spec, got, want)
 		}
 	}
 	if got := c.dcgDict.Len(); got != 1 {
@@ -104,7 +104,7 @@ func TestServiceConfigFailureDoesNotFailPackages(t *testing.T) {
 			t.Fatalf("expected configuration error: %v", err)
 		}
 		bi := getBuildInfo(t, client)
-		if bi.Status.Phase != ebsv1.BuildInfoPending || len(bi.Status.FailedPackages) != 0 || len(listJobs(t, client)) != 0 {
+		if bi.Status.Phase != ebsv1.BuildInfoPending || len(bi.Status.SpecResults.FailedPackages()) != 0 || len(listJobs(t, client)) != 0 {
 			t.Fatalf("configuration failure changed business outcome: %+v", bi.Status)
 		}
 	}
@@ -137,7 +137,7 @@ func TestInitDispatchesAtMostTwentyJobsPerReconcile(t *testing.T) {
 	if phase := getBuildInfo(t, client).Status.Phase; phase != ebsv1.BuildInfoPending {
 		t.Fatalf("phase after partial dispatch = %s, want Pending", phase)
 	}
-	if got := getBuildInfo(t, client).Status.SpecStatus.Len(); got != maxJobCreatesPerReconcile+1 {
+	if got := getBuildInfo(t, client).Status.SpecResults.Len(); got != maxJobCreatesPerReconcile+1 {
 		t.Fatalf("first reconcile persisted %d spec entries, want %d", got, maxJobCreatesPerReconcile+1)
 	}
 	if got := client.statusWrites; got > 5 {
@@ -149,11 +149,11 @@ func TestInitDispatchesAtMostTwentyJobsPerReconcile(t *testing.T) {
 	}
 	for i := 0; i < maxJobCreatesPerReconcile; i++ {
 		name := fmt.Sprintf("pkg%02d", i)
-		if got := getBuildInfo(t, client).Status.SpecStatus.Entry(name).DispatchCount; got != 1 {
+		if got := getBuildInfo(t, client).Status.SpecResults.Entry(name).DispatchCount; got != 1 {
 			t.Fatalf("spec %s dispatch count = %d, want 1 after batch flush", name, got)
 		}
 	}
-	if ss := getBuildInfo(t, client).Status.SpecStatus.Entry("pkg20"); ss.DispatchCount != 0 || ss.Build.Status != "" {
+	if ss := getBuildInfo(t, client).Status.SpecResults.Entry("pkg20"); ss.DispatchCount != 0 || ss.Status != ebsv1.SpecPrepared {
 		t.Fatalf("not-yet-dispatched spec status = %+v, want an empty entry", ss)
 	}
 
@@ -189,7 +189,7 @@ func TestSingleInitPersistsAllSpecsBeforeBatchedDispatch(t *testing.T) {
 		t.Fatalf("first reconcile created %d Jobs, want %d", got, maxJobCreatesPerReconcile)
 	}
 	if bi := getBuildInfo(t, client); bi.Status.Phase != ebsv1.BuildInfoPending ||
-		bi.Status.SpecStatus.Len() != maxJobCreatesPerReconcile+1 {
+		bi.Status.SpecResults.Len() != maxJobCreatesPerReconcile+1 {
 		t.Fatalf("partial single status = %+v, want Pending with all spec entries", bi.Status)
 	}
 
@@ -445,15 +445,15 @@ func TestInitSpecifiedEmptySetCompletes(t *testing.T) {
 	client.SeedSnapshot(testSnapshotObj(
 		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	client.SeedRpmRepo(testRpmRepoObj(""))
-	// Repository ready but no root-level *.spec: natural empty produce.
+	// A repository without root specs is recorded as a preparation failure.
 	git.repo(gitURL1, "c1", map[string]string{})
 
 	reconcileOnce(t, c)
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoCompleted)
-	if len(bi.Status.Conditions) != 0 {
-		t.Fatalf("conditions = %v, want none for empty build set", bi.Status.Conditions)
+	if result := bi.Status.SpecResults["repo1/"]; result.Status != ebsv1.SpecPrepareFailed || result.SpecName != "" {
+		t.Fatalf("repository result = %+v, want unnamed PrepareFailed", result)
 	}
 	requireSpecNames(t, bi)
 	if got := len(listJobs(t, client)); got != 0 {
@@ -481,7 +481,7 @@ func TestInitIncrementalAndSpecifiedRepoMissingDegrades(t *testing.T) {
 				t.Fatalf("condition message = %q, want the missing repo named", cond.Message)
 			}
 			requireSpecNames(t, bi, "a")
-			if got := bi.Status.FailedPackages; len(got) != 1 || got[0] != "ghost" {
+			if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "ghost" {
 				t.Fatalf("failedPackages = %v, want [ghost]", got)
 			}
 			if got := len(listJobs(t, client)); got != 1 {
@@ -557,7 +557,7 @@ func TestInitPermanentSpecReadFailureSkipsSpec(t *testing.T) {
 		t.Fatalf("condition message = %q, want repo1/bad.spec", cond.Message)
 	}
 	requireSpecNames(t, bi, "a")
-	if got := bi.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
+	if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
 	}
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
@@ -580,7 +580,7 @@ func TestInitSpecifiedPermanentSpecReadFailureDegrades(t *testing.T) {
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	requireCondition(t, bi.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed)
 	requireSpecNames(t, bi, "a")
-	if got := bi.Status.FailedPackages; len(got) != 1 || got[0] != "repo1" {
+	if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
 	}
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["a"] {
@@ -641,12 +641,12 @@ func TestInitArchUnsupportedSkipsJob(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.Build.Status != ebsv1.SpecBuildArchUnsupported {
-		t.Fatalf("specStatus[a].Build.Status = %q, want ArchUnsupported", ss.Build.Status)
+	ss := bi.Status.SpecResults.Entry("a")
+	if ss.Status != ebsv1.SpecArchUnsupported {
+		t.Fatalf("specResults[a].Status = %q, want ArchUnsupported", ss.Status)
 	}
-	if len(ss.Build.Conditions) != 0 {
-		t.Fatalf("specStatus[a].Build.Conditions = %v, want empty", ss.Build.Conditions)
+	if len(ss.Conditions) != 0 {
+		t.Fatalf("specResults[a].Conditions = %v, want empty", ss.Conditions)
 	}
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["b"] {
 		t.Fatalf("jobs = %v, want {b} only", got)
@@ -671,8 +671,8 @@ func TestInitMissingImageMappingPauses(t *testing.T) {
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoPending)
 	requireSpecNames(t, bi, "a")
-	if ss := bi.Status.SpecStatus.Entry("a"); ss.Build.Status != "" || ss.DispatchCount != 0 {
-		t.Fatalf("specStatus[a] = %+v, want an undispatched entry", ss)
+	if ss := bi.Status.SpecResults.Entry("a"); ss.Status != ebsv1.SpecPrepared || ss.DispatchCount != 0 {
+		t.Fatalf("specResults[a] = %+v, want an undispatched entry", ss)
 	}
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
@@ -696,13 +696,13 @@ func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.Build.Status != ebsv1.SpecBuildFailed {
-		t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
+	ss := bi.Status.SpecResults.Entry("a")
+	if ss.Status != ebsv1.SpecBuildFailed {
+		t.Fatalf("specResults[a].Status = %q, want Failed", ss.Status)
 	}
 	requireCondition(
 		t,
-		ss.Build.Conditions,
+		ss.Conditions,
 		ConditionDefaultBuildResourceConfigNotFound,
 		ReasonDefaultBuildResourceConfigNotFound,
 	)
@@ -726,9 +726,9 @@ func TestInitBackfillsExistingJob(t *testing.T) {
 
 	bi = getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	ss := bi.Status.SpecStatus.Entry("a")
-	if ss.DispatchCount != 1 || ss.Build.Status != ebsv1.SpecBuildRunning {
-		t.Fatalf("specStatus[a] = %+v, want backfilled gen-1 Running (%s)", ss, existing.Name)
+	ss := bi.Status.SpecResults.Entry("a")
+	if ss.DispatchCount != 1 || ss.Status != ebsv1.SpecRunning {
+		t.Fatalf("specResults[a] = %+v, want backfilled gen-1 Running (%s)", ss, existing.Name)
 	}
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1 (no re-creation)", got)
@@ -753,9 +753,9 @@ func TestSinglePassThrough(t *testing.T) {
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
 	requireSpecNames(t, bi, "a", "b")
 	for _, name := range []string{"a", "b"} {
-		ss := bi.Status.SpecStatus.Entry(name)
+		ss := bi.Status.SpecResults.Entry(name)
 		if ss.DispatchCount != 1 {
-			t.Fatalf("specStatus[%s] = %+v, want dispatched (gen 1)", name, ss)
+			t.Fatalf("specResults[%s] = %+v, want dispatched (gen 1)", name, ss)
 		}
 	}
 	if got := jobSpecNames(t, client); len(got) != 2 {
@@ -765,8 +765,8 @@ func TestSinglePassThrough(t *testing.T) {
 		t.Fatalf("single build created graphs: %v", client.graphs)
 	}
 	for spec, want := range map[string]string{"a": "repo1", "b": "repo2"} {
-		if got := bi.Status.SpecRepoNames[spec]; got != want {
-			t.Fatalf("specRepoNames[%q] = %q, want %q", spec, got, want)
+		if got := testSpecRepo(bi.Status.SpecResults, spec); got != want {
+			t.Fatalf("source repository[%q] = %q, want %q", spec, got, want)
 		}
 	}
 	if got := c.dcgDict.Len(); got != 0 {
@@ -973,12 +973,12 @@ func TestSingleDeterministicFailures(t *testing.T) {
 
 		bi := getBuildInfo(t, client)
 		requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-		ss := bi.Status.SpecStatus.Entry("a")
-		if ss.Build.Status != ebsv1.SpecBuildArchUnsupported {
-			t.Fatalf("specStatus[a].Build.Status = %q, want ArchUnsupported", ss.Build.Status)
+		ss := bi.Status.SpecResults.Entry("a")
+		if ss.Status != ebsv1.SpecArchUnsupported {
+			t.Fatalf("specResults[a].Status = %q, want ArchUnsupported", ss.Status)
 		}
-		if len(ss.Build.Conditions) != 0 {
-			t.Fatalf("specStatus[a].Build.Conditions = %v, want empty", ss.Build.Conditions)
+		if len(ss.Conditions) != 0 {
+			t.Fatalf("specResults[a].Conditions = %v, want empty", ss.Conditions)
 		}
 		if got := len(listJobs(t, client)); got != 0 {
 			t.Fatalf("jobs = %d, want 0", got)
@@ -986,8 +986,8 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		reconcileOnce(t, c)
 		bi = getBuildInfo(t, client)
 		requirePhase(t, bi, ebsv1.BuildInfoCompleted)
-		if len(bi.Status.FailedPackages) != 1 || bi.Status.FailedPackages[0] != "repo1" {
-			t.Fatalf("failedPackages = %v, want [repo1]", bi.Status.FailedPackages)
+		if len(bi.Status.SpecResults.FailedPackages()) != 1 || bi.Status.SpecResults.FailedPackages()[0] != "repo1" {
+			t.Fatalf("failedPackages = %v, want [repo1]", bi.Status.SpecResults.FailedPackages())
 		}
 	})
 
@@ -1005,13 +1005,13 @@ func TestSingleDeterministicFailures(t *testing.T) {
 
 		bi := getBuildInfo(t, client)
 		requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-		ss := bi.Status.SpecStatus.Entry("a")
-		if ss.Build.Status != ebsv1.SpecBuildFailed {
-			t.Fatalf("specStatus[a].Build.Status = %q, want Failed", ss.Build.Status)
+		ss := bi.Status.SpecResults.Entry("a")
+		if ss.Status != ebsv1.SpecBuildFailed {
+			t.Fatalf("specResults[a].Status = %q, want Failed", ss.Status)
 		}
 		requireCondition(
 			t,
-			ss.Build.Conditions,
+			ss.Conditions,
 			ConditionDefaultBuildResourceConfigNotFound,
 			ReasonDefaultBuildResourceConfigNotFound,
 		)

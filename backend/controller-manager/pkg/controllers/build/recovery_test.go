@@ -67,7 +67,7 @@ func TestCrashRecoveryReplaysFromThePersistedPhase(t *testing.T) {
 func TestCrashBeforeTerminalWriteConvergesWithoutExtraWrites(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
-	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted, map[string]ebsv1.SpecStatus{"gcc": specStatus("Failed", ebsv1.SpecInstallSucceeded)})
+	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted, map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); !controller.IsPermanent(err) {
 		t.Fatalf("want permanent error, got %v", err)

@@ -2,6 +2,7 @@ package buildinfo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -316,6 +317,15 @@ func specText(name string, buildRequires ...string) string {
 
 // testJobObj builds one identity-complete Job of the given generation.
 func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.JobPhase) *ebsv1.Job {
+	resultKey := "repo1/" + spec + ".spec"
+	for key, result := range bi.Status.SpecResults {
+		if result.SpecName == spec {
+			resultKey = key
+			break
+		}
+	}
+	repo, file, _ := strings.Cut(resultKey, "/")
+	payload, _ := json.Marshal(map[string]string{"package_name": repo, "spec_file_name": file})
 	status := ebsv1.JobStatus{Phase: phase}
 	if phase == ebsv1.JobSucceeded {
 		status.Build = &ebsv1.JobBuildResult{Status: ebsv1.JobResultSucceeded}
@@ -336,6 +346,7 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 				annDispatchGeneration: strconv.FormatInt(generation, 10),
 			},
 		},
+		Spec:   ebsv1.JobSpec{Payload: string(payload)},
 		Status: status,
 	}
 }
@@ -427,4 +438,32 @@ func dcgStateAB() map[string]ebsv1.BuildGraphNode {
 		"a": {Version: "1.0-1", OutDep: []string{"b"}},
 		"b": {Version: "1.0-1", InDep: map[string]ebsv1.VersionConstraint{"a": {}}},
 	}
+}
+
+func testSpecResults(entries map[string]ebsv1.SpecResult) ebsv1.SpecResults {
+	results := ebsv1.SpecResults{}
+	for name, result := range entries {
+		key := "repo1/" + name + ".spec"
+		if strings.Contains(name, "/") {
+			key = name
+			name = strings.TrimSuffix(strings.SplitN(name, "/", 2)[1], ".spec")
+		}
+		if result.SpecName == "" && result.Status != ebsv1.SpecPrepareFailed {
+			result.SpecName = name
+		}
+		if result.Status == "" {
+			result.Status = ebsv1.SpecPrepared
+		}
+		results[key] = result
+	}
+	return results
+}
+
+func testSpecRepo(results ebsv1.SpecResults, spec string) string {
+	for key, result := range results {
+		if result.SpecName == spec {
+			return ebsv1.SpecResultRepo(key)
+		}
+	}
+	return ""
 }

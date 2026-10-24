@@ -143,9 +143,9 @@ func TestSingleReleaseFailurePreservesJobBackfill(t *testing.T) {
 			t.Fatal("expected retryable probe error")
 		}
 		persisted := getBuildInfo(t, client)
-		if persisted.Status.SpecStatus.Entry("a").Build.Status != ebsv1.SpecBuildSucceeded ||
-			persisted.Status.SpecStatus.Entry("b").Build.Status != "" {
-			t.Fatalf("backfilled statuses = %+v", persisted.Status.SpecStatus)
+		if persisted.Status.SpecResults.Entry("a").Status != ebsv1.SpecSucceeded ||
+			persisted.Status.SpecResults.Entry("b").Status != ebsv1.SpecPrepared {
+			t.Fatalf("backfilled statuses = %+v", persisted.Status.SpecResults)
 		}
 		requirePhase(t, persisted, ebsv1.BuildInfoPending)
 	}

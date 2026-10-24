@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -32,6 +31,7 @@ const conflictRequeueDelay = time.Second
 type reconcileRound struct {
 	key        string
 	current    *ebsv1.BuildInfo
+	resultKeys map[string]string
 	graph      *ebsv1.BuildGraph
 	jobs       []ebsv1.Job
 	jobsLoaded bool
@@ -56,6 +56,23 @@ type reconcileRound struct {
 // isSingle reports whether the parent Build is a single build. The guard-held Build is the only source of the build
 // type.
 func (r *reconcileRound) isSingle() bool { return r.build.Spec.BuildType == ebsv1.BuildTypeSingle }
+
+// specKey builds a round-local index; repository ownership remains in the persisted source key.
+func (r *reconcileRound) specKey(name string) string {
+	if r.resultKeys == nil {
+		r.resultKeys = make(map[string]string, len(r.current.Status.SpecResults))
+		for key, result := range r.current.Status.SpecResults {
+			if result.SpecName != "" && result.Status != ebsv1.SpecPrepareFailed {
+				r.resultKeys[result.SpecName] = key
+			}
+		}
+	}
+	return r.resultKeys[name]
+}
+
+func (r *reconcileRound) specResult(name string) ebsv1.SpecResult {
+	return r.current.Status.SpecResults[r.specKey(name)]
+}
 
 // sync is the BaseController SyncFunc. It guards against invalid results so a programming error is counted before the
 // framework forgets the item.
@@ -604,24 +621,19 @@ func (c *Controller) afterConfirmedWrite(round *reconcileRound, confirmed *ebsv1
 		conditionsUpserts.Inc()
 	}
 	round.current = confirmed
+	round.resultKeys = nil
 }
 
 // statusMatchesIntent compares a persisted status with the write intent semantically: nil maps equal empty maps,
-// conditions match by type without order or lastTransitionTime, and specStatus matches each spec field.
+// conditions match by type without order or lastTransitionTime, and specResults matches each spec field.
 func statusMatchesIntent(persisted, intent *ebsv1.BuildInfoStatus) bool {
 	if persisted.Phase != intent.Phase {
-		return false
-	}
-	if !slices.Equal(persisted.FailedPackages, intent.FailedPackages) {
 		return false
 	}
 	if !conditionsMatch(persisted.Conditions, intent.Conditions) {
 		return false
 	}
-	if !specStatusMatches(persisted.SpecStatus, intent.SpecStatus) {
-		return false
-	}
-	if !maps.Equal(persisted.SpecRepoNames, intent.SpecRepoNames) {
+	if !specResultsMatches(persisted.SpecResults, intent.SpecResults) {
 		return false
 	}
 	return true
@@ -642,25 +654,24 @@ func conditionsMatch(a, b []metav1.Condition) bool {
 	return true
 }
 
-// specStatusMatches compares specStatus maps per spec entry.
-func specStatusMatches(a, b ebsv1.SpecStatusGroup) bool {
+// specResultsMatches compares specResults maps per spec entry.
+func specResultsMatches(a, b ebsv1.SpecResults) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
-	for spec, left := range a.Entries() {
-		right, ok := b.Lookup(spec)
+	for key, left := range a {
+		right, ok := b[key]
 		if !ok {
 			return false
 		}
-		if left.Build.Status != right.Build.Status ||
-			left.Install.Status != right.Install.Status || left.DispatchCount != right.DispatchCount {
+		if left.Status != right.Status ||
+			left.SpecName != right.SpecName || left.DispatchCount != right.DispatchCount {
 			return false
 		}
-		if !missingDepsMatch(left.Install.MissingDeps, right.Install.MissingDeps) {
+		if !missingDepsMatch(left.MissingDeps, right.MissingDeps) {
 			return false
 		}
-		if !conditionsMatch(left.Build.Conditions, right.Build.Conditions) ||
-			!conditionsMatch(left.Install.Conditions, right.Install.Conditions) {
+		if !conditionsMatch(left.Conditions, right.Conditions) {
 			return false
 		}
 	}

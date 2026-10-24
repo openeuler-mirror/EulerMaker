@@ -103,7 +103,7 @@ func (r *reconciler) processingBuild() (controller.ReconcileResult, error) {
 		}
 		return controller.ReconcileResult{}, nil
 	}
-	succeeded, failing := aggregateSpecStatus(info.Status.SpecStatus)
+	succeeded, failing := aggregateSpecResults(info.Status.SpecResults)
 	if r.current.Spec.BuildType == ebsv1.BuildTypeSingle {
 		return r.finishSingleBuild(succeeded, failing)
 	}
@@ -241,20 +241,23 @@ func (r *reconciler) withCondition(conditions []metav1.Condition, condType strin
 	}
 }
 
-// aggregateSpecStatus reports whether every spec of a completed BuildInfo succeeded. An empty result set is a
+// aggregateSpecResults reports whether every spec of a completed BuildInfo succeeded. An empty result set is a
 // failure: a completed BuildInfo must describe every target spec of the build.
-func aggregateSpecStatus(specStatus ebsv1.SpecStatusGroup) (bool, string) {
+func aggregateSpecResults(specStatus ebsv1.SpecResults) (bool, string) {
 	if specStatus.Len() == 0 {
 		return false, ""
 	}
 	names := make([]string, 0, specStatus.Len())
-	for name := range specStatus.Build {
+	for name := range specStatus {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		status := specStatus.Entry(name)
-		if status.Build.Status != ebsv1.SpecBuildSucceeded || status.Install.Status != ebsv1.SpecInstallSucceeded {
+		status := specStatus[name]
+		if status.Status != ebsv1.SpecSucceeded {
+			if status.SpecName != "" {
+				return false, status.SpecName
+			}
 			return false, name
 		}
 	}

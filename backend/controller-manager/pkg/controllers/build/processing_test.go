@@ -13,17 +13,29 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func specStatus(build ebsv1.SpecBuildPhase, install ebsv1.SpecInstallPhase) ebsv1.SpecStatus {
-	return ebsv1.SpecStatus{
-		Build:   ebsv1.SpecBuildStatus{Status: build},
-		Install: ebsv1.SpecInstallStatus{Status: install},
+func specStatus(build, install ebsv1.SpecResultPhase) ebsv1.SpecResult {
+	if build == ebsv1.SpecSucceeded && install != ebsv1.SpecSucceeded {
+		build = ebsv1.SpecInstallFailed
 	}
+	if build == "" {
+		build = ebsv1.SpecPrepared
+	}
+	return ebsv1.SpecResult{Status: build}
 }
 
-func newBuildInfoObject(project, name string, phase ebsv1.BuildInfoPhase, statuses map[string]ebsv1.SpecStatus) *ebsv1.BuildInfo {
+func testSpecResults(entries map[string]ebsv1.SpecResult) ebsv1.SpecResults {
+	results := ebsv1.SpecResults{}
+	for name, result := range entries {
+		result.SpecName = name
+		results[name+"/"+name+".spec"] = result
+	}
+	return results
+}
+
+func newBuildInfoObject(project, name string, phase ebsv1.BuildInfoPhase, statuses map[string]ebsv1.SpecResult) *ebsv1.BuildInfo {
 	return &ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
-		Status:     ebsv1.BuildInfoStatus{Phase: phase, SpecStatus: ebsv1.NewSpecStatusGroup(statuses)},
+		Status:     ebsv1.BuildInfoStatus{Phase: phase, SpecResults: testSpecResults(statuses)},
 	}
 }
 
@@ -32,7 +44,7 @@ func TestProcessingBuildWaitsForCompletedBuildInfo(t *testing.T) {
 		t.Run(string(phase), func(t *testing.T) {
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
-			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", phase, map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)})
+			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", phase, map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)})
 			c := newTestController(t, api, newTestClock())
 			result, err := c.sync(context.Background(), "project-a/build-a")
 			if err != nil || result != (controller.ReconcileResult{}) {
@@ -51,7 +63,7 @@ func TestProcessingBuildFailsOnFailedBuildInfo(t *testing.T) {
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", ebsv1.BuildType(buildType), []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoFailed,
-				map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)})
+				map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)})
 			c := newTestController(t, api, newTestClock())
 			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 				t.Fatal(err)
@@ -95,18 +107,18 @@ func TestProcessingBuildFailsWhenBuildInfoIsMissing(t *testing.T) {
 func TestProcessingBuildSingleAggregation(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		statuses  map[string]ebsv1.SpecStatus
+		statuses  map[string]ebsv1.SpecResult
 		succeeded bool
 		wantStage ebsv1.BuildStage
 	}{
-		{name: "all succeeded", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
-		{name: "multiple specs", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded), "glibc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
-		{name: "build failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
-		{name: "install failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallFailed)}, wantStage: ebsv1.BuildStageBuild},
-		{name: "install missing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, "")}, wantStage: ebsv1.BuildStageBuild},
-		{name: "build running", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildRunning, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
-		{name: "one of many failed", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded), "glibc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)}, wantStage: ebsv1.BuildStageBuild},
-		{name: "empty result set", statuses: map[string]ebsv1.SpecStatus{}, wantStage: ebsv1.BuildStageBuild},
+		{name: "all succeeded", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
+		{name: "multiple specs", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded), "glibc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
+		{name: "build failed", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "install failed", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecInstallFailed)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "install missing", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, "")}, wantStage: ebsv1.BuildStageBuild},
+		{name: "build running", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecRunning, ebsv1.SpecSucceeded)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "one of many failed", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded), "glibc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)}, wantStage: ebsv1.BuildStageBuild},
+		{name: "empty result set", statuses: map[string]ebsv1.SpecResult{}, wantStage: ebsv1.BuildStageBuild},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeAPI()
@@ -155,7 +167,7 @@ func TestSingleBuildFailureKeepsBuildStage(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
 	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted,
-		map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)})
+		map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)})
 	clk := newTestClock()
 	c := newTestController(t, api, clk)
 
@@ -185,15 +197,15 @@ func TestSingleBuildFailureKeepsBuildStage(t *testing.T) {
 	}
 }
 
-func TestAggregateSpecStatusIsIndependentOfMapOrder(t *testing.T) {
-	first := map[string]ebsv1.SpecStatus{}
-	first["gcc"] = specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)
-	first["glibc"] = specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)
-	second := map[string]ebsv1.SpecStatus{}
-	second["glibc"] = specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)
-	second["gcc"] = specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)
-	firstResult, firstSpec := aggregateSpecStatus(ebsv1.NewSpecStatusGroup(first))
-	secondResult, secondSpec := aggregateSpecStatus(ebsv1.NewSpecStatusGroup(second))
+func TestAggregateSpecResultsIsIndependentOfMapOrder(t *testing.T) {
+	first := map[string]ebsv1.SpecResult{}
+	first["gcc"] = specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)
+	first["glibc"] = specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)
+	second := map[string]ebsv1.SpecResult{}
+	second["glibc"] = specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)
+	second["gcc"] = specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)
+	firstResult, firstSpec := aggregateSpecResults(testSpecResults(first))
+	secondResult, secondSpec := aggregateSpecResults(testSpecResults(second))
 	if firstResult != secondResult || firstSpec != secondSpec || firstResult || firstSpec != "glibc" {
 		t.Fatalf("aggregation depends on map order: %v/%q vs %v/%q", firstResult, firstSpec, secondResult, secondSpec)
 	}
@@ -202,7 +214,7 @@ func TestAggregateSpecStatusIsIndependentOfMapOrder(t *testing.T) {
 func TestProcessingBuildNonSingleResults(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		statuses      map[string]ebsv1.SpecStatus
+		statuses      map[string]ebsv1.SpecResult
 		publishFlag   bool
 		wantPhase     ebsv1.BuildPhase
 		wantStage     ebsv1.BuildStage
@@ -211,19 +223,19 @@ func TestProcessingBuildNonSingleResults(t *testing.T) {
 		wantPermanent bool
 	}{
 		{
-			name: "success publishes", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)},
+			name: "success publishes", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)},
 			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish, wantSucceeded: true,
 		},
 		{
-			name: "failure still publishes", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecInstallSucceeded)},
+			name: "failure still publishes", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)},
 			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish,
 		},
 		{
-			name: "success skips publishing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallSucceeded)},
+			name: "success skips publishing", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)},
 			wantPhase: ebsv1.BuildSkipped, wantStage: ebsv1.BuildStagePublish, wantEndTime: true, wantSucceeded: true,
 		},
 		{
-			name: "failure skips publishing", statuses: map[string]ebsv1.SpecStatus{"gcc": specStatus(ebsv1.SpecBuildSucceeded, ebsv1.SpecInstallFailed)},
+			name: "failure skips publishing", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecInstallFailed)},
 			wantPhase: ebsv1.BuildSkipped, wantStage: ebsv1.BuildStagePublish, wantEndTime: true, wantPermanent: true,
 		},
 	} {

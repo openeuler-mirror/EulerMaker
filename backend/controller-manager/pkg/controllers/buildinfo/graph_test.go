@@ -248,7 +248,7 @@ func TestInitWaitsForConfirmedBuildGraph(t *testing.T) {
 		t.Fatalf("graph confirmation must requeue: %v %v", result, err)
 	}
 	info := getBuildInfo(t, client)
-	if len(listJobs(t, client)) != 0 || info.Status.SpecStatus.Len() != 0 {
+	if len(listJobs(t, client)) != 0 || info.Status.SpecResults.Len() != 0 {
 		t.Fatal("graph must be persisted before spec status or Jobs")
 	}
 	reconcileOnce(t, c)

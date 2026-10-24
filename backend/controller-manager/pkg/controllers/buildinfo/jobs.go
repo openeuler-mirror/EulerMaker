@@ -107,7 +107,7 @@ func (c *Controller) dispatchSpec(
 		return controller.ReconcileResult{Requeue: true}, nil
 	}
 	namespace := round.current.Namespace
-	generation := round.current.Status.SpecStatus.Entry(specName).DispatchCount + 1
+	generation := round.specResult(specName).DispatchCount + 1
 	name := jobNameFor(string(round.current.UID), specName, generation)
 	var err error
 
@@ -277,6 +277,12 @@ func (c *Controller) stageCreatedJob(
 	generation int64,
 	job *ebsv1.Job,
 ) (controller.ReconcileResult, error) {
+	key, err := jobResultKey(job)
+	result, exists := round.current.Status.SpecResults[key]
+	if err != nil || !exists || result.SpecName != specName || result.Status == ebsv1.SpecPrepareFailed {
+		return controller.ReconcileResult{}, controller.NewPermanentError(
+			fmt.Errorf("Job %s source identity does not match registered spec %s", job.Name, specName))
+	}
 	if round.createdJobs == nil {
 		round.createdJobs = make(map[string]createdJob)
 	}
@@ -289,12 +295,16 @@ func (c *Controller) stageCreatedJob(
 
 func applyCreatedJobs(next *ebsv1.BuildInfo, jobs map[string]createdJob) {
 	for name, created := range jobs {
-		ss := next.Status.SpecStatus.Entry(name)
+		key, err := jobResultKey(created.job)
+		ss, exists := next.Status.SpecResults[key]
+		if err != nil || !exists || ss.SpecName != name || ss.Status == ebsv1.SpecPrepareFailed {
+			continue
+		}
 		if ss.DispatchCount < created.generation {
 			ss.DispatchCount = created.generation
 		}
 		applyJobPhase(&ss, created.job, false)
-		next.Status.SpecStatus.Set(name, ss)
+		next.Status.SpecResults[key] = ss
 	}
 }
 
@@ -322,16 +332,20 @@ func (c *Controller) markSpecTerminal(
 	ctx context.Context,
 	round *reconcileRound,
 	specName string,
-	status ebsv1.SpecBuildPhase,
+	status ebsv1.SpecResultPhase,
 	condType, reason, message string,
 ) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
-	ss := next.Status.SpecStatus.Entry(specName)
-	ss.Build.Status = status
+	key := round.specKey(specName)
+	ss, exists := next.Status.SpecResults[key]
+	if !exists {
+		return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("spec %s has no registered result", specName))
+	}
+	ss.Status = status
 	if condType != "" {
 		specCondition(&ss, condType, reason, message)
 	}
-	next.Status.SpecStatus.Set(specName, ss)
+	next.Status.SpecResults[key] = ss
 	return c.writeStatus(ctx, round, next)
 }
 
@@ -684,6 +698,23 @@ func deepCopyResources(in ebsv1.ResourceRequirements) ebsv1.ResourceRequirements
 
 // --- Job backfill ---
 
+// jobResultKey reads the immutable source identity from the dispatched payload.
+func jobResultKey(job *ebsv1.Job) (string, error) {
+	var payload struct {
+		PackageName  string `json:"package_name"`
+		SpecFileName string `json:"spec_file_name"`
+	}
+	if err := json.Unmarshal([]byte(job.Spec.Payload), &payload); err != nil {
+		return "", fmt.Errorf("decode Job source identity: %w", err)
+	}
+	if payload.PackageName == "" || strings.ContainsAny(payload.PackageName, "/\\") ||
+		payload.SpecFileName == "" || strings.ContainsAny(payload.SpecFileName, "/\\") ||
+		!strings.HasSuffix(payload.SpecFileName, ".spec") {
+		return "", fmt.Errorf("Job payload lacks a valid repository/root-spec identity")
+	}
+	return payload.PackageName + "/" + payload.SpecFileName, nil
+}
+
 // groupJobsBySpec groups listed Jobs by their spec-name label; Jobs without a label or outside the scope set are
 // skipped.
 func (c *Controller) groupJobsBySpec(
@@ -706,25 +737,16 @@ func (c *Controller) groupJobsBySpec(
 }
 
 // backfillJobs folds listed Jobs into next.Status. Only Jobs named for this BuildInfo UID count, so a replacement with
-// the same name cannot inherit old phases or dispatch counts. createMissing also recovers Jobs created before their
-// initial spec status was persisted.
+// the same name cannot inherit old phases or dispatch counts. Source entries are persisted before Job creation.
 func (c *Controller) backfillJobs(
 	round *reconcileRound,
 	next *ebsv1.BuildInfo,
 	jobs []ebsv1.Job,
 	scope map[string]bool,
-	createMissing bool,
 ) map[string][]ebsv1.Job {
 	bySpec := c.groupJobsBySpec(round, jobs, scope)
 	uid := string(round.current.UID)
 	for spec, group := range bySpec {
-		ss, exists := next.Status.SpecStatus.Lookup(spec)
-		if !exists {
-			if !createMissing {
-				continue
-			}
-			ss = ebsv1.SpecStatus{}
-		}
 		own := filterJobsByIdentity(group, uid)
 		if len(own) < len(group) {
 			c.logf(
@@ -736,7 +758,21 @@ func (c *Controller) backfillJobs(
 				len(group),
 			)
 		}
+		verified := make([]ebsv1.Job, 0, len(own))
+		for i := range own {
+			key, err := jobResultKey(&own[i])
+			result, exists := next.Status.SpecResults[key]
+			if err != nil || !exists || result.SpecName != spec || result.Status == ebsv1.SpecPrepareFailed {
+				c.logf(round.key, "JobResultIdentityMismatch", "job %s has no matching source result", own[i].Name)
+				continue
+			}
+			verified = append(verified, own[i])
+		}
+		own = verified
 		if len(own) > 0 {
+			latest := latestJob(own)
+			key, _ := jobResultKey(latest)
+			ss := next.Status.SpecResults[key]
 			// Preserve the highest confirmed generation even if older Jobs were cleaned up.
 			for i := range own {
 				job := &own[i]
@@ -745,9 +781,8 @@ func (c *Controller) backfillJobs(
 					ss.DispatchCount = gen
 				}
 			}
-			latest := latestJob(own)
 			if applyJobPhase(&ss, latest, priorSucceeded(own, latest)) {
-				if latest.Status.Phase == ebsv1.JobSucceeded {
+				if latest.Status.Phase == ebsv1.JobSucceeded && ss.Status.BuildSucceeded() {
 					c.backfillInstall(round, &ss, latest)
 				}
 			} else {
@@ -756,8 +791,8 @@ func (c *Controller) backfillJobs(
 					latest.Name, latest.Status.Phase,
 				)
 			}
+			next.Status.SpecResults[key] = ss
 		}
-		next.Status.SpecStatus.Set(spec, ss)
 		bySpec[spec] = own
 	}
 	return bySpec
@@ -812,28 +847,38 @@ func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 	return false
 }
 
-// applyJobPhase maps the target Job phase onto build.status; the bool reports a known phase. Pending forces Running
-// (never inherit a previous generation's terminal state). An unknown phase leaves the build status unchanged.
-func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bool {
+// applyJobPhase maps the target Job phase onto the spec result. An unknown phase leaves the result unchanged.
+func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bool {
+	switch job.Status.Phase {
+	case ebsv1.JobPending, ebsv1.JobRunning, ebsv1.JobSucceeded, ebsv1.JobFailed, ebsv1.JobAborted:
+		ss.Conditions = nil
+		ss.MissingDeps = nil
+	default:
+		return false
+	}
 	switch job.Status.Phase {
 	case ebsv1.JobPending, ebsv1.JobRunning:
-		ss.Build.Status = ebsv1.SpecBuildRunning
+		ss.Status = ebsv1.SpecRunning
+		ss.Conditions = nil
+		ss.MissingDeps = nil
 	case ebsv1.JobSucceeded:
 		if job.Status.Build != nil && job.Status.Build.Status == ebsv1.JobResultFailed {
-			ss.Build.Status = ebsv1.SpecBuildFailed
+			ss.Status = ebsv1.SpecBuildFailed
 			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" reported build failure")
 		} else {
-			ss.Build.Status = ebsv1.SpecBuildSucceeded
+			ss.Status = ebsv1.SpecSucceeded
+			ss.Conditions = nil
+			ss.MissingDeps = nil
 		}
 	case ebsv1.JobFailed:
-		ss.Build.Status = ebsv1.SpecBuildFailed
+		ss.Status = ebsv1.SpecBuildFailed
 		if succeededPrior {
 			specCondition(ss, ConditionRebuildFailed, ReasonRebuildJobFailed, "job "+job.Name+" rebuild failed")
 		} else {
 			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" failed")
 		}
 	case ebsv1.JobAborted:
-		ss.Build.Status = ebsv1.SpecBuildFailed
+		ss.Status = ebsv1.SpecBuildFailed
 		specCondition(
 			ss,
 			ConditionBuildAborted,
@@ -848,12 +893,13 @@ func applyJobPhase(ss *ebsv1.SpecStatus, job *ebsv1.Job, succeededPrior bool) bo
 
 // backfillInstall copies the runner's structured install-check verdict. A missing result is not evidence of
 // installability.
-func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus, job *ebsv1.Job) {
+func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecResult, job *ebsv1.Job) {
 	result := job.Status.Install
+	ss.MissingDeps = nil
 	if result == nil {
-		ss.Install.Status = ebsv1.SpecInstallFailed
+		ss.Status = ebsv1.SpecInstallFailed
 		upsertCondition(
-			&ss.Install.Conditions,
+			&ss.Conditions,
 			ConditionInstall,
 			ReasonInstallResultMissing,
 			"job "+job.Name+" has no install-check result",
@@ -861,27 +907,27 @@ func (c *Controller) backfillInstall(round *reconcileRound, ss *ebsv1.SpecStatus
 		return
 	}
 	if result.Status == ebsv1.JobResultSucceeded {
-		ss.Install.Status = ebsv1.SpecInstallSucceeded
-		ss.Install.MissingDeps = nil
-		removeCondition(&ss.Install.Conditions, ConditionInstall)
+		ss.Status = ebsv1.SpecSucceeded
+		ss.MissingDeps = nil
+		removeCondition(&ss.Conditions, ConditionInstall)
 		return
 	}
 	if result.Status != ebsv1.JobResultFailed {
-		ss.Install.Status = ebsv1.SpecInstallFailed
+		ss.Status = ebsv1.SpecInstallFailed
 		upsertCondition(
-			&ss.Install.Conditions,
+			&ss.Conditions,
 			ConditionInstall,
 			ReasonInstallResultInvalid,
 			"job "+job.Name+" has invalid install-check result",
 		)
 		return
 	}
-	ss.Install.Status = ebsv1.SpecInstallFailed
-	ss.Install.MissingDeps = nil
+	ss.Status = ebsv1.SpecInstallFailed
+	ss.MissingDeps = nil
 	if len(result.MissingDeps) > 0 {
-		ss.Install.MissingDeps = make(map[string]ebsv1.MissingDep, len(result.MissingDeps))
+		ss.MissingDeps = make(map[string]ebsv1.MissingDep, len(result.MissingDeps))
 		for name, dep := range result.MissingDeps {
-			ss.Install.MissingDeps[name] = dep
+			ss.MissingDeps[name] = dep
 		}
 	}
 	installCondition(ss, job.Name)
