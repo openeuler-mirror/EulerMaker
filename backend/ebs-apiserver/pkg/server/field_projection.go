@@ -194,14 +194,11 @@ func (p fieldProjection) sourceFilter() (es.SourceFilter, bool) {
 					return es.SourceFilter{}, false
 				}
 				for child, nested := range node.children {
-					if nested.terminal && (child == "phase" || child == "stage" || child == "failedPackages" || child == "conditions") {
+					if nested.terminal && (child == "phase" || child == "stage" || child == "specResults" || child == "conditions") {
 						filter.Includes = append(filter.Includes, "data.status."+child)
 						continue
 					}
-					if child != "specStatus" || nested.terminal || len(nested.children) != 1 || nested.children["build"] == nil || !nested.children["build"].terminal {
-						return es.SourceFilter{}, false
-					}
-					filter.Includes = append(filter.Includes, "data.status.specStatus.build")
+					return es.SourceFilter{}, false
 				}
 			default:
 				return es.SourceFilter{}, false
@@ -213,10 +210,8 @@ func (p fieldProjection) sourceFilter() (es.SourceFilter, bool) {
 			if field == "spec" && node.terminal {
 				filter.Excludes = append(filter.Excludes, "data.spec")
 			} else if field == "status" {
-				if specStatus := node.children["specStatus"]; specStatus != nil {
-					if install := specStatus.children["install"]; install != nil && install.terminal {
-						filter.Excludes = append(filter.Excludes, "data.status.specStatus.install")
-					}
+				if results := node.children["specResults"]; results != nil && results.terminal {
+					filter.Excludes = append(filter.Excludes, "data.status.specResults")
 				}
 			}
 		}

@@ -1,6 +1,8 @@
 package validation
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -15,17 +17,33 @@ func ValidateBuildInfoUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
 
 func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
 	var allErrs field.ErrorList
-	statusPath := field.NewPath("status", "specStatus")
-	for name, build := range newObj.Status.SpecStatus.Build {
-		if build.Status != "" && !build.Status.IsValid() {
-			allErrs = append(allErrs, field.NotSupported(statusPath.Child("build").Key(name).Child("status"),
-				build.Status, ebsv1.SpecBuildPhaseValues()))
+	statusPath := field.NewPath("status", "specResults")
+	names := map[string]string{}
+	for key, result := range newObj.Status.SpecResults {
+		p := statusPath.Key(key)
+		repo, file, found := strings.Cut(key, "/")
+		if !found || repo == "" || repo == "." || repo == ".." || strings.ContainsAny(repo, "\\") ||
+			strings.ContainsAny(file, "/\\") ||
+			(file != "" && !strings.HasSuffix(file, ".spec")) {
+			allErrs = append(allErrs, field.Invalid(p, key, "expected repository/root-spec-filename"))
 		}
-	}
-	for name, install := range newObj.Status.SpecStatus.Install {
-		if install.Status != "" && !install.Status.IsValid() {
-			allErrs = append(allErrs, field.NotSupported(statusPath.Child("install").Key(name).Child("status"),
-				install.Status, ebsv1.SpecInstallPhaseValues()))
+		if file == "" && result.Status != ebsv1.SpecPrepareFailed {
+			allErrs = append(allErrs, field.Invalid(p, key, "repository-only entries must be PrepareFailed"))
+		}
+		if !result.Status.IsValid() {
+			allErrs = append(allErrs, field.NotSupported(p.Child("status"), result.Status, ebsv1.SpecResultPhaseValues()))
+		}
+		if result.Status != ebsv1.SpecPrepareFailed && result.Status != ebsv1.SpecPending && result.SpecName == "" {
+			allErrs = append(allErrs, field.Required(p.Child("specName"), "required after successful parsing"))
+		}
+		if result.SpecName != "" && result.Status != ebsv1.SpecPrepareFailed {
+			if previous, exists := names[result.SpecName]; exists {
+				allErrs = append(allErrs, field.Invalid(p.Child("specName"), result.SpecName, "already used by "+previous))
+			}
+			names[result.SpecName] = key
+		}
+		if result.DispatchCount < 0 {
+			allErrs = append(allErrs, field.Invalid(p.Child("dispatchCount"), result.DispatchCount, "must not be negative"))
 		}
 	}
 	phase := newObj.Status.Phase

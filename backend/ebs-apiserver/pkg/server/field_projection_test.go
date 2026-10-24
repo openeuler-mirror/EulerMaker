@@ -39,16 +39,19 @@ func TestFieldProjectionGETAndLIST(t *testing.T) {
 			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "Config", "metadata": map[string]interface{}{"name": "default"}, "spec": map[string]interface{}{"visibility": "Public"}},
 		},
 		{
-			name: "exclude BuildInfo install statuses",
-			path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?excludeFields=status.specStatus.install",
-			body: `{"apiVersion":"ebs/v1","kind":"BuildInfo","status":{"phase":"Processing","specStatus":{"build":{"gcc":{"status":"Succeeded"}},"install":{"gcc":{"status":"Failed"}},"dispatchCount":{"gcc":1}}}}`,
-			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "BuildInfo", "status": map[string]interface{}{"phase": "Processing", "specStatus": map[string]interface{}{"build": map[string]interface{}{"gcc": map[string]interface{}{"status": "Succeeded"}}, "dispatchCount": map[string]interface{}{"gcc": float64(1)}}}},
+			name: "exclude BuildInfo spec results",
+			path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?excludeFields=status.specResults",
+			body: `{"apiVersion":"ebs/v1","kind":"BuildInfo","status":{"phase":"Processing","specResults":{"gcc/gcc.spec":{"specName":"gcc","status":"Running"}}}}`,
+			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "BuildInfo", "status": map[string]interface{}{"phase": "Processing"}},
 		},
 		{
 			name: "include BuildInfo detail fields",
-			path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build",
-			body: `{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a"},"status":{"phase":"Completed","failedPackages":["gcc"],"conditions":[{"type":"SpecCommitMissing"}],"specStatus":{"build":{"gcc":{"status":"Failed"}},"install":{"gcc":{"status":"Succeeded"}},"dispatchCount":{"gcc":1}}}}`,
-			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "BuildInfo", "status": map[string]interface{}{"phase": "Completed", "failedPackages": []interface{}{"gcc"}, "conditions": []interface{}{map[string]interface{}{"type": "SpecCommitMissing"}}, "specStatus": map[string]interface{}{"build": map[string]interface{}{"gcc": map[string]interface{}{"status": "Failed"}}}}},
+			path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.conditions,status.specResults",
+			body: `{"apiVersion":"ebs/v1","kind":"BuildInfo","metadata":{"name":"build-a"},"status":{"phase":"Completed","conditions":[{"type":"SpecCommitMissing"}],"specResults":{"gcc/gcc.spec":{"specName":"gcc","status":"InstallFailed","dispatchCount":1}}}}`,
+			want: map[string]interface{}{"apiVersion": "ebs/v1", "kind": "BuildInfo", "status": map[string]interface{}{
+				"phase": "Completed", "conditions": []interface{}{map[string]interface{}{"type": "SpecCommitMissing"}},
+				"specResults": map[string]interface{}{"gcc/gcc.spec": map[string]interface{}{"specName": "gcc", "status": "InstallFailed", "dispatchCount": float64(1)}},
+			}},
 		},
 		{
 			name: "nested array fields",
@@ -86,7 +89,7 @@ func TestFieldProjectionGETAndLIST(t *testing.T) {
 }
 
 func TestFieldProjectionHandlesCompressedUpstream(t *testing.T) {
-	const payload = `{"apiVersion":"ebs/v1","kind":"BuildInfo","status":{"phase":"Completed","specStatus":{"build":{"gcc":{"status":"Succeeded"}},"install":{"gcc":{"status":"Failed"}}}}}`
+	const payload = `{"apiVersion":"ebs/v1","kind":"BuildInfo","status":{"phase":"Completed","specResults":{"gcc/gcc.spec":{"specName":"gcc","status":"InstallFailed"}}}}`
 	for _, forceGzip := range []bool{false, true} {
 		t.Run(map[bool]string{false: "disable intermediate compression", true: "decode unexpected gzip"}[forceGzip], func(t *testing.T) {
 			handler := withFieldProjection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +112,7 @@ func TestFieldProjectionHandlesCompressedUpstream(t *testing.T) {
 				}
 				_, _ = w.Write(compressed.Bytes())
 			}))
-			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.specStatus.build", nil)
+			request := httptest.NewRequest(http.MethodGet, "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.specResults", nil)
 			request.Header.Set("Accept-Encoding", "gzip")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
@@ -121,7 +124,7 @@ func TestFieldProjectionHandlesCompressedUpstream(t *testing.T) {
 				t.Fatal(err)
 			}
 			status := actual["status"].(map[string]interface{})
-			if status["phase"] != "Completed" || status["specStatus"].(map[string]interface{})["install"] != nil {
+			if status["phase"] != "Completed" || status["specResults"].(map[string]interface{})["gcc/gcc.spec"] == nil {
 				t.Fatalf("unexpected projected status: %#v", status)
 			}
 		})
@@ -135,9 +138,9 @@ func TestFieldProjectionSourceFilter(t *testing.T) {
 		push bool
 	}{
 		{path: "/apis/ebs/v1/builds?excludeFields=spec", want: es.SourceFilter{Excludes: []string{"data.spec"}}, push: true},
-		{path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?excludeFields=status.specStatus.install", want: es.SourceFilter{Excludes: []string{"data.status.specStatus.install"}}, push: true},
+		{path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?excludeFields=status.specResults", want: es.SourceFilter{Excludes: []string{"data.status.specResults"}}, push: true},
 		{path: "/apis/ebs/v1/builds?includeFields=metadata.name,status.phase,status.stage", want: es.SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.phase", "data.status.stage"}}, push: true},
-		{path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build", want: es.SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.conditions", "data.status.failedPackages", "data.status.phase", "data.status.specStatus.build"}}, push: true},
+		{path: "/apis/ebs/v1/projects/demo/buildinfos/build-a?includeFields=status.phase,status.conditions,status.specResults", want: es.SourceFilter{Includes: []string{"data.apiVersion", "data.kind", "data.metadata", "data.status.conditions", "data.status.phase", "data.status.specResults"}}, push: true},
 		{path: "/apis/ebs/v1/projects?includeFields=spec.packageRepos.name", push: false},
 		{path: "/apis/ebs/v1/projects?excludeFields=spec.packageRepos.name", push: false},
 	}

@@ -212,13 +212,11 @@ type BuildInfoSpec struct {
 	BootstrapRepos []BootstrapRepo `json:"bootstrapRepos,omitempty"`
 }
 
-// BuildInfoStatus records per-spec results and failed package repositories.
+// BuildInfoStatus records preparation, build and installation results by repository/file identity.
 type BuildInfoStatus struct {
-	Phase          BuildInfoPhase     `json:"phase,omitempty"`
-	Conditions     []metav1.Condition `json:"conditions,omitempty"`
-	SpecStatus     SpecStatusGroup    `json:"specStatus"`
-	SpecRepoNames  map[string]string  `json:"specRepoNames,omitempty"`
-	FailedPackages []string           `json:"failedPackages,omitempty"`
+	Phase       BuildInfoPhase     `json:"phase,omitempty"`
+	Conditions  []metav1.Condition `json:"conditions,omitempty"`
+	SpecResults SpecResults        `json:"specResults"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -228,83 +226,17 @@ type BuildInfoList struct {
 	Items           []BuildInfo `json:"items"`
 }
 
-// SpecStatusGroup stores per-spec fields in separate maps so callers can
-// project build and install results independently.
-type SpecStatusGroup struct {
-	Build         map[string]SpecBuildStatus   `json:"build,omitempty"`
-	Install       map[string]SpecInstallStatus `json:"install,omitempty"`
-	DispatchCount map[string]int64             `json:"dispatchCount,omitempty"`
-}
+// SpecResults keys are repository/root-spec-filename; repository/ identifies a repository preparation failure.
+type SpecResults map[string]SpecResult
 
-// SpecStatus is the in-memory per-spec view of the grouped status fields.
-type SpecStatus struct {
-	Build         SpecBuildStatus   `json:"build,omitempty"`
-	Install       SpecInstallStatus `json:"install,omitempty"`
-	DispatchCount int64             `json:"dispatchCount,omitempty"`
-}
-
-type SpecBuildStatus struct {
-	Status     SpecBuildPhase     `json:"status"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-type SpecInstallStatus struct {
-	Status      SpecInstallPhase      `json:"status"`
-	MissingDeps map[string]MissingDep `json:"missingDeps,omitempty"`
-	Conditions  []metav1.Condition    `json:"conditions,omitempty"`
-}
-
-// NewSpecStatusGroup converts per-spec statuses to the grouped API shape.
-func NewSpecStatusGroup(entries map[string]SpecStatus) SpecStatusGroup {
-	var group SpecStatusGroup
-	for name, entry := range entries {
-		group.Set(name, entry)
-	}
-	return group
-}
-
-func (s SpecStatusGroup) Entry(name string) SpecStatus {
-	return SpecStatus{Build: s.Build[name], Install: s.Install[name], DispatchCount: s.DispatchCount[name]}
-}
-
-func (s SpecStatusGroup) Lookup(name string) (SpecStatus, bool) {
-	_, build := s.Build[name]
-	_, install := s.Install[name]
-	_, count := s.DispatchCount[name]
-	return s.Entry(name), build || install || count
-}
-
-func (s *SpecStatusGroup) Set(name string, status SpecStatus) {
-	if s.Build == nil {
-		s.Build = make(map[string]SpecBuildStatus)
-	}
-	s.Build[name] = status.Build
-	if status.Install.Status != "" || len(status.Install.MissingDeps) > 0 || len(status.Install.Conditions) > 0 {
-		if s.Install == nil {
-			s.Install = make(map[string]SpecInstallStatus)
-		}
-		s.Install[name] = status.Install
-	} else {
-		delete(s.Install, name)
-	}
-	if status.DispatchCount != 0 {
-		if s.DispatchCount == nil {
-			s.DispatchCount = make(map[string]int64)
-		}
-		s.DispatchCount[name] = status.DispatchCount
-	} else {
-		delete(s.DispatchCount, name)
-	}
-}
-
-func (s SpecStatusGroup) Len() int { return len(s.Build) }
-
-func (s SpecStatusGroup) Entries() map[string]SpecStatus {
-	entries := make(map[string]SpecStatus, len(s.Build))
-	for name := range s.Build {
-		entries[name] = s.Entry(name)
-	}
-	return entries
+// SpecResult uses one verdict for the complete preparation/build/install flow.
+// SpecName is required after successful parsing and may be empty for preparation failures.
+type SpecResult struct {
+	SpecName      string                `json:"specName,omitempty"`
+	Status        SpecResultPhase       `json:"status"`
+	Conditions    []metav1.Condition    `json:"conditions,omitempty"`
+	MissingDeps   map[string]MissingDep `json:"missingDeps,omitempty"`
+	DispatchCount int64                 `json:"dispatchCount,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

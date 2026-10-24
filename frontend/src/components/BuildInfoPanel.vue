@@ -11,7 +11,7 @@
     <template v-if="buildInfo">
       <dl class="detail-list build-detail-list">
         <div><dt>{{ t('project.status') }}</dt><dd class="build-info-status-row"><StatusBadge :value="buildInfo.status?.phase" /><span class="status-badge success"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoSucceededCount') }} {{ specBuildCounts.succeeded }}</span><span class="status-badge danger"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoFailedCount') }} {{ specBuildCounts.failed }}</span><span class="status-badge"><span class="status-dot" aria-hidden="true"></span>{{ t('project.buildInfoArchUnsupportedCount') }} {{ specBuildCounts.archUnsupported }}</span></dd></div>
-        <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd class="build-info-failed-packages"><template v-if="buildInfo.status?.failedPackages?.length"><span v-for="(item, index) in buildInfo.status.failedPackages" :key="`${item}-${index}`" class="status-badge">{{ item }}</span></template><span v-else>{{ t('common.emptyValue') }}</span></dd></div>
+        <div><dt>{{ t('project.buildInfoFailedPackages') }}</dt><dd class="build-info-failed-packages"><template v-if="failedPackages.length"><span v-for="(item, index) in failedPackages" :key="`${item}-${index}`" class="status-badge">{{ item }}</span></template><span v-else>{{ t('common.emptyValue') }}</span></dd></div>
       </dl>
       <section class="build-detail-section">
         <h3>{{ t('project.buildInfoSpecStatus') }}</h3>
@@ -21,9 +21,9 @@
         <p v-else-if="!filteredSpecRows.length" class="config-empty">{{ t('project.noMatchingSpecs') }}</p>
         <div v-else class="project-table-wrap"><table class="project-table">
           <thead><tr><th>Spec</th><th>{{ t('project.buildInfoPackageName') }}</th><th>Commit ID</th><th><button ref="statusFilterTrigger" class="spec-status-filter-trigger" type="button" :aria-expanded="statusFilterOpen" :aria-controls="statusFilterOpen ? statusFilterId : undefined" @click="toggleStatusFilter">{{ t('project.buildInfoBuildStatus') }}<Filter aria-hidden="true" /><span v-if="selectedSpecStatuses.length" class="spec-status-filter-count">{{ selectedSpecStatuses.length }}</span></button></th></tr></thead>
-          <tbody><template v-for="row in paginatedSpecRows" :key="row.name">
-            <tr><td><button class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.name" @click="selectedSpecName = selectedSpecName === row.name ? '' : row.name">{{ row.name }}</button></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><code v-if="row.commitID" :title="row.commitID">{{ row.commitID.slice(0, 12) }}</code><span v-else>{{ snapshotLoading ? '…' : t('common.emptyValue') }}</span></td><td><StatusBadge :value="row.displayStatus" /></td></tr>
-            <tr v-if="selectedSpecName === row.name" class="spec-jobs-row"><td colspan="4"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.name" :can-abort="canAbortJobs" /></td></tr>
+          <tbody><template v-for="row in paginatedSpecRows" :key="row.key">
+            <tr><td><button v-if="row.specName" class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.key" @click="selectedSpecName = selectedSpecName === row.key ? '' : row.key">{{ row.name }}</button><span v-else :title="row.message">{{ row.name }}</span></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><code v-if="row.commitID" :title="row.commitID">{{ row.commitID.slice(0, 12) }}</code><span v-else>{{ snapshotLoading ? '…' : t('common.emptyValue') }}</span></td><td><StatusBadge :value="row.displayStatus" /></td></tr>
+            <tr v-if="row.specName && selectedSpecName === row.key" class="spec-jobs-row"><td colspan="4"><ProjectJobs :project="project" :build-name="buildName" :spec-name="row.specName" :can-abort="canAbortJobs" /></td></tr>
           </template></tbody>
         </table></div>
         <div v-if="filteredSpecRows.length" class="table-footer">
@@ -89,9 +89,12 @@ const specPageSizes = [10, 20, 50] as const;
 const specPageSize = ref<number>(20);
 const specCurrentPage = ref(1);
 const specRows = computed(() => buildInfoSpecRows(buildInfo.value, snapshot.value));
+const failedPackages = computed(() => [...new Set(specRows.value
+  .filter((row) => ['PrepareFailed', 'BuildFailed', 'InstallFailed', 'ArchUnsupported'].includes(row.buildStatus))
+  .map((row) => row.packageName))].sort());
 const specBuildCounts = computed(() => ({
   succeeded: specRows.value.filter((row) => row.buildStatus === 'Succeeded').length,
-  failed: specRows.value.filter((row) => row.buildStatus === 'Failed').length,
+  failed: specRows.value.filter((row) => ['PrepareFailed', 'BuildFailed', 'InstallFailed'].includes(row.buildStatus)).length,
   archUnsupported: specRows.value.filter((row) => row.buildStatus === 'ArchUnsupported').length,
 }));
 const specStatusOptions = computed(() => [
@@ -216,7 +219,7 @@ async function load(): Promise<void> {
   errorKey.value = '';
   void loadSnapshot(current);
   try {
-    const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}?includeFields=status.phase,status.failedPackages,status.conditions,status.specStatus.build,status.specRepoNames`;
+    const path = `/apis/ebs/v1/projects/${encodeURIComponent(props.project)}/buildinfos/${encodeURIComponent(props.buildName)}?includeFields=status.phase,status.conditions,status.specResults`;
     const result = await request<BuildInfo>(path, { signal: current.signal });
     if (!current.signal.aborted) buildInfo.value = result;
   } catch (error) {

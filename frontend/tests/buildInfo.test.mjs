@@ -10,12 +10,11 @@ const { buildInfoSpecRows } = await import("data:text/javascript;base64," + Buff
 test("spec commit IDs come from their package repository in the build Snapshot", () => {
   const buildInfo = {
     status: {
-      specRepoNames: { "gcc-c++": "gcc", gcc: "gcc", rpm: "rpm" },
-      specStatus: { build: {
-        "gcc-c++": { status: "Processing" },
-        gcc: { status: "Succeeded" },
-        rpm: { status: "Failed", conditions: [{ reason: "RpmDependsMissing" }] },
-      } },
+      specResults: {
+        "gcc/cpp.spec": { specName: "gcc-c++", status: "Running" },
+        "gcc/gcc.spec": { specName: "gcc", status: "Succeeded" },
+        "rpm/rpm.spec": { specName: "rpm", status: "BuildFailed", conditions: [{ reason: "RpmDependsMissing" }] },
+      },
     },
   };
   const snapshot = { status: { packageRepoStatuses: {
@@ -28,16 +27,27 @@ test("spec commit IDs come from their package repository in the build Snapshot",
   assert.equal(rows[1].commitID, rows[0].commitID);
   assert.equal(rows[2].commitID, snapshot.status.packageRepoStatuses.rpm.commitID);
   assert.equal(rows[2].displayStatus, "RpmDependsMissing");
-  assert.equal(rows[2].buildStatus, "Failed");
+  assert.equal(rows[2].buildStatus, "BuildFailed");
 });
 
 test("build statuses remain visible while Snapshot data is unavailable or still resolving", () => {
-  const info = { status: { specRepoNames: { gcc: "gcc" }, specStatus: { build: { gcc: { status: "Pending" } } } } };
+  const info = { status: { specResults: { "gcc/gcc.spec": { specName: "gcc", status: "Prepared" } } } };
   for (const snapshot of [null, { status: { packageRepoStatuses: { gcc: {} } } }]) {
     const [row] = buildInfoSpecRows(info, snapshot);
     assert.equal(row.name, "gcc");
     assert.equal(row.commitID, undefined);
-    assert.equal(row.displayStatus, "Pending");
+    assert.equal(row.displayStatus, "Prepared");
   }
   assert.deepEqual(buildInfoSpecRows(null, null), []);
+});
+
+test("preparation failures keep source identity without a spec name", () => {
+  const rows = buildInfoSpecRows({status: {specResults: {
+    "foo/broken.spec": {status: "PrepareFailed"},
+    "unreadable/": {status: "PrepareFailed"},
+  }}}, null);
+  assert.equal(rows[0].key, "foo/broken.spec");
+  assert.equal(rows[0].packageName, "foo");
+  assert.equal(rows[0].specName, undefined);
+  assert.equal(rows[1].packageName, "unreadable");
 });

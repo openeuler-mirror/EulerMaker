@@ -141,33 +141,36 @@ func TestScriptDeepCopy(t *testing.T) {
 	}
 }
 
-func TestSpecStatusGroupJSON(t *testing.T) {
-	group := NewSpecStatusGroup(map[string]SpecStatus{
-		"gcc":  {Build: SpecBuildStatus{Status: "Succeeded"}, Install: SpecInstallStatus{Status: "Failed"}, DispatchCount: 2},
-		"bash": {},
-	})
-	data, err := json.Marshal(group)
+func TestSpecResultsJSONAndDeepCopy(t *testing.T) {
+	results := SpecResults{
+		"gcc/gcc.spec":   {SpecName: "gcc", Status: SpecInstallFailed, DispatchCount: 2, MissingDeps: map[string]MissingDep{"libc": {}}},
+		"bash/bash.spec": {Status: SpecPrepareFailed},
+		"unreadable/":    {Status: SpecPrepareFailed},
+	}
+	data, err := json.Marshal(results)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	for _, field := range []string{"build", "install", "dispatchCount"} {
-		if _, ok := raw[field]; !ok {
-			t.Fatalf("missing grouped field %q in %s", field, data)
-		}
-	}
-	if group.Len() != 2 || group.Entry("gcc").DispatchCount != 2 || group.Entry("bash").Build.Status != "" {
-		t.Fatalf("unexpected group: %+v", group)
-	}
-	var decoded SpecStatusGroup
+	var decoded SpecResults
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(group, decoded) {
-		t.Fatalf("round trip changed grouped status: %+v", decoded)
+	if !reflect.DeepEqual(results, decoded) {
+		t.Fatalf("round trip changed results: %+v", decoded)
+	}
+	info := &BuildInfo{Status: BuildInfoStatus{SpecResults: results}}
+	copy := info.DeepCopy()
+	result := copy.Status.SpecResults["gcc/gcc.spec"]
+	delete(result.MissingDeps, "libc")
+	copy.Status.SpecResults["gcc/gcc.spec"] = result
+	if len(info.Status.SpecResults["gcc/gcc.spec"].MissingDeps) != 1 {
+		t.Fatal("DeepCopy shares missing dependencies")
+	}
+	if got := results.FailedPackages(); !reflect.DeepEqual(got, []string{"bash", "gcc", "unreadable"}) {
+		t.Fatalf("failed repositories = %v", got)
+	}
+	if SpecResultRepo("gcc/gcc.spec") != "gcc" {
+		t.Fatal("repository extraction failed")
 	}
 }
 

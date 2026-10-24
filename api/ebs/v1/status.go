@@ -104,52 +104,44 @@ func (v BuildStage) IsValid() bool {
 	}
 }
 
-// SpecBuildPhase describes a spec build verdict; an empty value means no verdict yet.
-type SpecBuildPhase string
+// SpecResultPhase describes a repository/spec result throughout preparation, build and install checking.
+type SpecResultPhase string
 
 const (
-	SpecBuildRunning         SpecBuildPhase = "Running"
-	SpecBuildSucceeded       SpecBuildPhase = "Succeeded"
-	SpecBuildFailed          SpecBuildPhase = "Failed"
-	SpecBuildArchUnsupported SpecBuildPhase = "ArchUnsupported"
+	SpecPending         SpecResultPhase = "Pending"
+	SpecPrepared        SpecResultPhase = "Prepared"
+	SpecPrepareFailed   SpecResultPhase = "PrepareFailed"
+	SpecRunning         SpecResultPhase = "Running"
+	SpecBuildFailed     SpecResultPhase = "BuildFailed"
+	SpecInstallFailed   SpecResultPhase = "InstallFailed"
+	SpecSucceeded       SpecResultPhase = "Succeeded"
+	SpecArchUnsupported SpecResultPhase = "ArchUnsupported"
 )
 
-// SpecBuildPhaseValues returns the supported nonempty values.
-func SpecBuildPhaseValues() []string {
-	return []string{string(SpecBuildRunning), string(SpecBuildSucceeded), string(SpecBuildFailed), string(SpecBuildArchUnsupported)}
+func SpecResultPhaseValues() []string {
+	return []string{
+		string(SpecPending), string(SpecPrepared), string(SpecPrepareFailed), string(SpecRunning),
+		string(SpecBuildFailed), string(SpecInstallFailed), string(SpecSucceeded), string(SpecArchUnsupported),
+	}
 }
 
-// IsValid reports whether the value is supported.
-func (v SpecBuildPhase) IsValid() bool {
-	switch v {
-	case SpecBuildRunning, SpecBuildSucceeded, SpecBuildFailed, SpecBuildArchUnsupported:
+func (s SpecResultPhase) IsValid() bool {
+	switch s {
+	case SpecPending, SpecPrepared, SpecPrepareFailed, SpecRunning, SpecBuildFailed,
+		SpecInstallFailed, SpecSucceeded, SpecArchUnsupported:
 		return true
 	default:
 		return false
 	}
 }
 
-// SpecInstallPhase describes an install-check verdict; an empty value means not assessed.
-type SpecInstallPhase string
-
-const (
-	SpecInstallSucceeded SpecInstallPhase = "Succeeded"
-	SpecInstallFailed    SpecInstallPhase = "Failed"
-)
-
-// SpecInstallPhaseValues returns the supported nonempty values.
-func SpecInstallPhaseValues() []string {
-	return []string{string(SpecInstallSucceeded), string(SpecInstallFailed)}
+// BuildSucceeded reports whether usable build output exists, regardless of installation dependencies.
+func (s SpecResultPhase) BuildSucceeded() bool {
+	return s == SpecSucceeded || s == SpecInstallFailed
 }
 
-// IsValid reports whether the value is supported.
-func (v SpecInstallPhase) IsValid() bool {
-	switch v {
-	case SpecInstallSucceeded, SpecInstallFailed:
-		return true
-	default:
-		return false
-	}
+func (s SpecResultPhase) IsTerminal() bool {
+	return s.BuildSucceeded() || s == SpecPrepareFailed || s == SpecBuildFailed || s == SpecArchUnsupported
 }
 
 // ProjectPhase describes the lifecycle state of a Project.
