@@ -47,7 +47,7 @@ func TestRepositoryManifestReadErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reader := &memoryArtifactReader{manifestError: test.err}
-			_, err := repositoryArtifacts(reader, "project", []ManifestReference{{JobName: "job"}})
+			_, err := repositoryArtifacts(reader, "project", []ManifestReference{{JobName: "job"}}, "")
 			var typed *Error
 			if !errors.As(err, &typed) || typed.Code != test.code || typed.Status != test.status || typed.Retryable != test.retryable || typed.JobName != "job" {
 				t.Fatalf("manifest read error: %+v", err)
@@ -87,7 +87,7 @@ func TestRepositoryArtifactsReadFromInterface(t *testing.T) {
 	}
 	manifest.Digest = upload.ManifestDigest(manifest.Files)
 	reader := &memoryArtifactReader{manifest: manifest, artifact: artifact, path: path}
-	result, err := repositoryArtifacts(reader, "project", []ManifestReference{{JobName: "job"}})
+	result, err := repositoryArtifacts(reader, "project", []ManifestReference{{JobName: "job"}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,11 +141,35 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = repositoryArtifacts(store, project, ref)
+			_, err = repositoryArtifacts(store, project, ref, "")
 			var typed *Error
 			if !errors.As(err, &typed) || typed.Code != tt.code || typed.JobName != job {
 				t.Fatalf("error = %v, want code %q and job name %q", err, tt.code, job)
 			}
 		})
+	}
+}
+
+func TestRepositoryManifestSigningPolicy(t *testing.T) {
+	for _, test := range []struct {
+		manifestKey, repositoryKey string
+	}{
+		{manifestKey: "", repositoryKey: "key"},
+		{manifestKey: "key", repositoryKey: ""},
+		{manifestKey: "other", repositoryKey: "key"},
+	} {
+		manifest := &upload.JobUploadManifest{
+			Project:            "project",
+			JobName:            "job",
+			State:              upload.ManifestCompleted,
+			Digest:             upload.ManifestDigest(nil),
+			SigningFingerprint: test.manifestKey,
+		}
+		reader := &memoryArtifactReader{manifest: manifest}
+		_, err := repositoryArtifacts(reader, "project", []ManifestReference{{JobName: "job"}}, test.repositoryKey)
+		var typed *Error
+		if !errors.As(err, &typed) || typed.Code != "ManifestSigningMismatch" || typed.JobName != "job" {
+			t.Fatalf("policy %+v: %v", test, err)
+		}
 	}
 }

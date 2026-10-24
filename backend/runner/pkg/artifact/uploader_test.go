@@ -24,6 +24,86 @@ type fakeArtifactRemote struct {
 	manifestErr error
 }
 
+type manifestConfirmationRemote struct {
+	*fakeArtifactRemote
+	response CompletedManifest
+	firstErr error
+	getErr   error
+	calls    int
+}
+
+func (f *manifestConfirmationRemote) CompleteManifest(context.Context, string, string, CompleteManifestInput) (CompletedManifest, error) {
+	f.calls++
+	if f.calls == 1 && f.firstErr != nil {
+		return CompletedManifest{}, f.firstErr
+	}
+	return f.response, nil
+}
+
+func (f *manifestConfirmationRemote) GetManifest(context.Context, string, string) (CompletedManifest, error) {
+	return f.response, f.getErr
+}
+
+func TestManifestConfirmationUsesUploadDigest(t *testing.T) {
+	input := CompleteManifestInput{Files: []ManifestFile{{
+		ArtifactID: "rpm-1", RelativePath: "packages/pkg.rpm", Category: "artifact", Size: 3, SHA256: "raw-sha", Required: true,
+	}}}
+	for _, test := range []struct {
+		name             string
+		firstErr, getErr error
+		wrongDigest      bool
+		wantCalls        int
+	}{
+		{name: "signed completion", wantCalls: 1},
+		{name: "lost response confirmed by GET", firstErr: errors.New("response lost"), wantCalls: 1},
+		{name: "same count different input", wrongDigest: true, wantCalls: 1},
+		{name: "GET must confirm original input", firstErr: errors.New("response lost"), wrongDigest: true, wantCalls: 1},
+		{name: "signing busy retries original intent", firstErr: APIError{StatusCode: 503, Code: "SigningBusy", Retryable: true},
+			getErr: os.ErrNotExist, wantCalls: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := CompletedManifest{
+				State: "Completed", ArtifactCount: 1, UploadDigest: input.UploadDigest(), Digest: "signed-digest",
+				SigningFingerprint: "key", Files: []ManifestFile{{ArtifactID: "rpm-1", Size: 10, SHA256: "signed-sha"}},
+			}
+			if test.wrongDigest {
+				response.UploadDigest = "another-input"
+			}
+			remote := &manifestConfirmationRemote{fakeArtifactRemote: &fakeArtifactRemote{}, response: response,
+				firstErr: test.firstErr, getErr: test.getErr}
+			p := &Processor{Remote: remote}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			result, err := p.completeManifestWithRetry(ctx, gateway.JobResource{
+				Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job"},
+			}, input)
+			if (err != nil) != test.wrongDigest {
+				t.Fatalf("confirmation: %+v, %v", result, err)
+			}
+			if remote.calls != test.wantCalls {
+				t.Fatalf("POST calls=%d", remote.calls)
+			}
+			if input.Files[0].Size != 3 || input.Files[0].SHA256 != "raw-sha" {
+				t.Fatal("original receipt was mutated")
+			}
+		})
+	}
+}
+
+func TestManifestUploadDigestContractVector(t *testing.T) {
+	input := CompleteManifestInput{Files: []ManifestFile{
+		{ArtifactID: "rpm-1", RelativePath: "packages/pkg.rpm", Category: "artifact", Size: 3, SHA256: "rpm-sha", Required: true},
+		{ArtifactID: "log-1", RelativePath: "logs/container.log", Category: "log", Size: 12, SHA256: "log-sha", Required: true},
+	}}
+	const expected = "sha256:bef0ca66e6a994208d195fa6a279f83f4c0e944cb2b38fd4a818686dba8de8a7"
+	if actual := input.UploadDigest(); actual != expected {
+		t.Fatalf("digest=%s", actual)
+	}
+	if input.Files[0].ArtifactID != "rpm-1" {
+		t.Fatal("input order mutated")
+	}
+}
+
 type flakyLogStatusRemote struct {
 	*fakeArtifactRemote
 	calls int
@@ -62,7 +142,7 @@ func (f *fakeArtifactRemote) CompleteManifest(_ context.Context, _, _ string, in
 	if f.manifestErr != nil {
 		return CompletedManifest{}, f.manifestErr
 	}
-	return CompletedManifest{State: "Completed", ArtifactCount: len(input.Files)}, nil
+	return CompletedManifest{State: "Completed", ArtifactCount: len(input.Files), UploadDigest: input.UploadDigest()}, nil
 }
 
 func (f *fakeArtifactRemote) GetManifest(context.Context, string, string) (CompletedManifest, error) {

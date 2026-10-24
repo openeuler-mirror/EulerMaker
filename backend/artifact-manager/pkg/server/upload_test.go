@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/upload"
 )
 
@@ -276,5 +277,152 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/log-job/artifacts/"+result.ArtifactID+"/content", nil))
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), all) {
 		t.Fatalf("log artifact: %d %q", w.Code, w.Body.Bytes())
+	}
+}
+
+type manifestSigner struct{ calls int }
+
+func (s *manifestSigner) Fingerprint() string { return "test-key" }
+
+func (s *manifestSigner) Sign(_ context.Context, path string) error {
+	s.calls++
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, err = file.WriteString("-signed")
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
+}
+
+func (*manifestSigner) Verify(_ context.Context, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if !bytes.HasSuffix(data, []byte("-signed")) {
+		return fmt.Errorf("signature missing")
+	}
+	return nil
+}
+
+func TestSignedManifestDownloadAndRepository(t *testing.T) {
+	handler, cfg := testHandler(t)
+	s := handler.(*Server)
+	s.sealer.Close()
+	query := filepath.Join(cfg.DataDir, "rpm-query")
+	script := `#!/bin/sh
+case "$2" in
+--qf)
+  case "$3" in
+  *PAYLOADDIGEST*) printf 'pkg\t0\t1\t1\tx86_64\tpkg-1-1.src.rpm\tpayload';;
+  *) printf 'pkg\t0\t1\t1\tx86_64\tpkg-1-1.src.rpm';;
+  esac;;
+--provides|--requires) ;;
+*) exit 1;;
+esac
+`
+	if err := os.WriteFile(query, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	signer := &manifestSigner{}
+	pool, err := upload.NewSealer(cfg.Upload, signer, query, 2, time.Second*5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sealer = pool
+	s.store.SetSealer(pool)
+	data := []byte("rpm")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, uploadRequest(t, data, "signed-upload"))
+	if w.Code != 201 {
+		t.Fatalf("upload: %d %s", w.Code, w.Body.String())
+	}
+	a := decodeBody[struct {
+		Artifact upload.Artifact `json:"artifact"`
+	}](t, w).Artifact
+	input := upload.CompleteManifestRequest{Files: []upload.ManifestFile{{
+		ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256, Required: true,
+	}}}
+	request, _ := json.Marshal(input)
+	complete := func() *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/manifest/complete", bytes.NewReader(request))
+		r.Header.Set("Authorization", "Bearer runner-token")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	w = complete()
+	if w.Code != 200 {
+		t.Fatalf("complete: %d %s", w.Code, w.Body.String())
+	}
+	response := decodeBody[upload.JobUploadManifest](t, w)
+	if response.UploadDigest != upload.ManifestDigest(input.Files) || response.Digest == response.UploadDigest {
+		t.Fatalf("response = %+v", response)
+	}
+	if w := complete(); w.Code != 200 || signer.calls != 1 {
+		t.Fatalf("replay: %d, calls=%d", w.Code, signer.calls)
+	}
+	contentURL := "/artifacts/v1/projects/project-1/jobs/build/artifacts/" + a.ID + "/content"
+	for _, test := range []struct {
+		byteRange, body string
+		status          int
+	}{
+		{"", "rpm-signed", 200}, {"bytes=4-9", "signed", 206},
+	} {
+		r := httptest.NewRequest(http.MethodGet, contentURL, nil)
+		if test.byteRange != "" {
+			r.Header.Set("Range", test.byteRange)
+		}
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		if w.Code != test.status || w.Body.String() != test.body || w.Header().Get("ETag") != `"`+sum([]byte("rpm-signed"))+`"` {
+			t.Fatalf("download: %d %s %+v", w.Code, w.Body.String(), w.Header())
+		}
+	}
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/artifacts", nil))
+	list := decodeBody[struct {
+		Items []upload.Artifact `json:"items"`
+	}](t, w)
+	if len(list.Items) != 1 || list.Items[0].SHA256 != sum([]byte("rpm-signed")) || list.Items[0].Size != 10 {
+		t.Fatalf("signed list = %+v", list)
+	}
+
+	createRepo := filepath.Join(cfg.DataDir, "createrepo")
+	if err := os.WriteFile(createRepo, []byte("#!/bin/sh\nfor work; do :; done\nmkdir -p \"$work/repodata\"\nprintf metadata > \"$work/repodata/repomd.xml\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Repository.CreateRepoCommand, cfg.Repository.RPMQueryCommand = createRepo, query
+	m := repository.NewFilesystemMaterializer(cfg.DataDir, cfg.Repository, s.store, "test-key")
+	record := repository.RepositoryRecord{
+		RepositoryUID: "test-repo", Project: "project-1", BuildName: "build", TargetOS: "os", TargetArch: "x86_64",
+		SigningFingerprint: "test-key", Manifests: []repository.ManifestReference{{JobName: "build"}},
+	}
+	if _, err := m.Materialize(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	path := repository.VersionPath(cfg.DataDir, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
+	repoFile := filepath.Join(path, "Packages", a.FileName)
+	prepared, _ := s.store.GetJobArtifact("project-1", "build", a.ID)
+	signedInfo, _ := os.Stat(s.store.ArtifactPath(prepared))
+	repoInfo, err := os.Stat(repoFile)
+	if err != nil || !os.SameFile(signedInfo, repoInfo) || signer.calls != 1 {
+		t.Fatalf("repository did not reuse sealed inode: %v, calls=%d", err, signer.calls)
+	}
+	if err := os.Remove(s.store.ArtifactPath(prepared)); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, contentURL, nil))
+	if w.Code != 503 {
+		t.Fatalf("missing signed file: %d %s", w.Code, w.Body.String())
+	}
+	if content, err := os.ReadFile(repoFile); err != nil || string(content) != "rpm-signed" {
+		t.Fatalf("repository changed: %s, %v", content, err)
 	}
 }

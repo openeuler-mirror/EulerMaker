@@ -30,7 +30,7 @@ func (f *fakeArtifactRemote) UploadArtifact(_ context.Context, project, job, key
 }
 
 func (f *fakeArtifactRemote) CompleteManifest(_ context.Context, _, _ string, input artifact.CompleteManifestInput) (artifact.CompletedManifest, error) {
-	return artifact.CompletedManifest{State: "Completed", ArtifactCount: len(input.Files)}, nil
+	return artifact.CompletedManifest{State: "Completed", ArtifactCount: len(input.Files), UploadDigest: input.UploadDigest()}, nil
 }
 
 func (f *fakeArtifactRemote) GetManifest(context.Context, string, string) (artifact.CompletedManifest, error) {
