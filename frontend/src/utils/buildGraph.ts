@@ -60,7 +60,8 @@ export interface GraphPosition {
 // Each side scrolls independently while the selected node stays centered.
 export function layoutNeighborhood(selected: string, upstream: string[], downstream: string[],
   scroll = { upstream: 0, downstream: 0 }) {
-  const height = 960;
+  // Show 12 rows (44px each, 20px gaps) with 20px padding above and below.
+  const height = 12 * 44 + 11 * 20 + 40;
   const padding = (count: number) => Math.max(0, (height - 40 - Math.max(0, count * 64 - 20)) / 2);
   const topPadding = { upstream: padding(upstream.length), downstream: padding(downstream.length) };
   const positions: GraphPosition[] = [{ name: selected, column: "center", x: 380, y: height / 2 - 22 }];

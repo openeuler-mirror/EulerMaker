@@ -24,12 +24,14 @@
       </div>
       <div class="resource-rule-list">
         <section v-for="pkg in visiblePackages" :key="rowKey(pkg)" class="resource-rule-card resource-package-card">
-          <div class="resource-rule-toolbar">
+          <div class="resource-package-row">
             <label class="field required-field"><span>{{ t('operations.packageName') }}</span><input v-model="pkg.name" required /></label>
-            <button class="text-button danger-link" type="button" @click="draft.packages.splice(draft.packages.indexOf(pkg), 1)">{{ t('common.remove') }}</button>
+            <ResourceRequirementsFields v-model="pkg.defaults" :aria-label="t('operations.packageDefaults')" />
+            <div class="resource-row-actions">
+              <button class="text-button" type="button" @click="pkg.arches.push({ name: '', resources: {} })">{{ t('operations.addArchRule') }}</button>
+              <button class="text-button danger-link" type="button" @click="draft.packages.splice(draft.packages.indexOf(pkg), 1)">{{ t('common.remove') }}</button>
+            </div>
           </div>
-          <h4>{{ t('operations.packageDefaults') }}</h4>
-          <ResourceRequirementsFields v-model="pkg.defaults" />
           <section v-for="arch in pkg.arches" :key="rowKey(arch)" class="resource-arch-rule">
             <div class="resource-rule-toolbar">
               <label class="field required-field"><span>{{ t('operations.arch') }}</span><input v-model="arch.name" required placeholder="x86_64 / aarch64" /></label>
@@ -37,7 +39,6 @@
             </div>
             <ResourceRequirementsFields v-model="arch.resources" />
           </section>
-          <button class="text-button" type="button" @click="pkg.arches.push({ name: '', resources: {} })">{{ t('operations.addArchRule') }}</button>
         </section>
       </div>
       <p v-if="!visiblePackages.length" class="form-hint">{{ t('operations.noMatchingRules') }}</p>
@@ -104,16 +105,24 @@ defineExpose({ getContent });
 .resource-editor-modes { margin-top: 0; }
 .resource-rule-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 12px; }
 .resource-default-card { background: #edf5ff; border-color: #c5daf5; }
-.resource-package-card { background: #f7f8fa; }
+.resource-package-card { min-width: 0; align-content: start; background: #f7f8fa; padding: 10px 12px; gap: 8px; }
+.resource-package-card .resource-rule-toolbar { align-items: end; gap: 8px; }
+.resource-package-card .resource-rule-toolbar .field > input { min-width: 0; }
+.resource-package-card :deep(.field) { gap: 4px; }
+.resource-package-card :deep(input) { padding: 6px 8px; }
 .resource-rule-card h3, .resource-rule-card h4 { margin: 0; font-size: 14px; }
 .resource-rule-toolbar { display: flex; gap: 12px; align-items: end; }
 .resource-rule-toolbar .field { flex: 1; min-width: 0; }
 .resource-rule-toolbar .resource-package-search { flex: 0 1 320px; max-width: 100%; }
-.resource-rule-list { display: grid; gap: 14px; max-height: 48vh; overflow: auto; }
-.resource-arch-rule { border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 12px; }
+.resource-rule-list { display: grid; grid-template-columns: minmax(860px, 1fr); align-items: start; gap: 8px; max-height: 48vh; overflow: auto; }
+.resource-package-row { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(440px, 3fr) auto; align-items: end; gap: 12px; }
+.resource-row-actions { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; white-space: nowrap; }
+.resource-arch-rule { border-top: 1px solid var(--line); padding-top: 8px; display: grid; grid-template-columns: minmax(200px, 1fr) minmax(440px, 3fr); align-items: end; gap: 12px; }
 :deep(.resource-quantity-grid) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.resource-package-card :deep(.resource-quantity-grid) { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 540px) {
   :deep(.resource-quantity-grid) { grid-template-columns: 1fr; }
+  .resource-package-card .resource-rule-toolbar { flex-wrap: nowrap; }
   .resource-rule-toolbar { flex-wrap: wrap; }
   .resource-rule-toolbar .resource-package-search { flex: 1 1 100%; }
 }

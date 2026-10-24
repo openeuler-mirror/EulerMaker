@@ -18,6 +18,7 @@ export default {
     downstream: '直接下游（{count}）',
     findNodes: '在图谱中查找包名',
     clearFind: '清除查找',
+    navigationHint: '点击软件包可跳转查看上下游依赖',
     neighborhood: '{name} 的直接依赖关系',
     selfDependency: '自依赖：',
     isolated: '此节点没有图内依赖关系。',
@@ -25,7 +26,7 @@ export default {
   jobLog: {
     title: '任务日志', open: '查看任务 {name} 的日志', expand: '展开日志', collapse: '收起日志', refresh: '刷新日志', fullscreen: '全屏', exitFullscreen: '退出全屏',
     loading: '正在加载日志…', empty: '暂无日志', loadFailed: '加载日志失败，请重试',
-    tailNotice: '日志较长，仅显示最后 1 MiB', state: '日志状态',
+    tailNotice: '日志较长，仅显示最后 1 MiB', viewAll: '查看全部', state: '日志状态',
   },
   jobControl: {
     name: '任务名称', phase: '状态', startedAt: '开始时间', duration: '构建时长', next: '下一页', load: '加载任务', loading: '正在加载任务…', empty: '此 Spec 暂无任务', refreshJob: '刷新任务 {name}',
@@ -492,7 +493,7 @@ export default {
     moreRules: "显示更多规则",
     editMode: "编辑方式",
     listEditor: "列表编辑",
-    jsonEditor: "直接编辑 spec",
+    jsonEditor: "JSON",
     tableDefaults: "全局默认资源",
     packageDefaults: "软件包默认资源",
     requests: "请求",

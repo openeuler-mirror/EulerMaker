@@ -83,6 +83,7 @@
               </div>
             </div>
             <div ref="canvas" class="graph-canvas">
+            <p class="graph-navigation-hint">{{ t('graph.navigationHint') }}</p>
             <svg :viewBox="`0 0 ${layout.width} ${layout.height}`"
               :style="{ width: `${layout.width}px`, height: `${layout.height}px` }"
               role="group" :aria-label="t('graph.neighborhood', { name: selectedNode })">
@@ -386,8 +387,9 @@ onBeforeUnmount(() => { buildRequest?.abort(); graphRequest?.abort(); });
 .graph-findbar { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .graph-findbar .search-box { width: min(260px, 100%); background: white; }
 .graph-find-count { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.graph-canvas { overflow: auto; max-height: 960px; }
+.graph-canvas { position: relative; overflow: auto; max-height: 960px; }
 .graph-canvas svg { display: block; margin-inline: auto; }
+.graph-navigation-hint { position: absolute; top: 0; right: 0; z-index: 1; margin: 0; padding: 10px 12px; color: var(--muted); font-size: 12px; line-height: 1.7; text-align: right; pointer-events: none; }
 .graph-neighbor-scroll { box-sizing: border-box; height: 100%; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 20px; overscroll-behavior-y: contain; }
 .graph-neighbor { box-sizing: border-box; width: 240px; height: 44px; flex: 0 0 44px; padding: 0 12px; border: 1px solid #cbd8ec; border-radius: 8px; background: white; color: var(--ink); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-neighbor:hover, .graph-neighbor:focus-visible { background: #edf5ff; border-color: var(--blue); }

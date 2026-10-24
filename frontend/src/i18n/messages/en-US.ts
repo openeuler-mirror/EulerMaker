@@ -22,6 +22,7 @@ export default {
     downstream: 'Direct downstream ({count})',
     findNodes: 'Find package in graph',
     clearFind: 'Clear search',
+    navigationHint: 'Click a package to view its upstream and downstream dependencies',
     neighborhood: 'Direct dependencies of {name}',
     selfDependency: 'Self-dependency: ',
     isolated: 'This node has no dependencies within the graph.',
@@ -29,7 +30,7 @@ export default {
   jobLog: {
     title: 'Job logs', open: 'View logs for job {name}', expand: 'Show logs', collapse: 'Hide logs', refresh: 'Refresh logs', fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen',
     loading: 'Loading logs…', empty: 'No logs yet', loadFailed: 'Could not load logs. Try again.',
-    tailNotice: 'Showing only the last 1 MiB of this log', state: 'Log state',
+    tailNotice: 'Showing only the last 1 MiB of this log', viewAll: 'View all', state: 'Log state',
   },
   jobControl: {
     name: 'Job name', phase: 'Phase', startedAt: 'Started at', duration: 'Build duration', next: 'Next page', load: 'Load jobs', loading: 'Loading jobs…', empty: 'No jobs for this spec', refreshJob: 'Refresh job {name}',
@@ -496,7 +497,7 @@ export default {
     moreRules: "Show more rules",
     editMode: "Editor mode",
     listEditor: "List editor",
-    jsonEditor: "Edit spec directly",
+    jsonEditor: "JSON",
     tableDefaults: "Global resource defaults",
     packageDefaults: "Package resource defaults",
     requests: "Request",
