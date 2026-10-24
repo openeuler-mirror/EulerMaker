@@ -175,8 +175,8 @@ type Build struct {
 
 type BuildSpec struct {
 	BuildType   BuildType   `json:"buildType,omitempty"`
-	Packages    []string    `json:"packages,omitempty"`
 	BuildTarget BuildTarget `json:"buildTarget,omitempty"`
+	Packages    []string    `json:"packages,omitempty"`
 }
 
 type BuildStatus struct {

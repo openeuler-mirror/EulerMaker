@@ -21,6 +21,8 @@ type Store struct {
 	mu          sync.RWMutex
 	logRecovery map[string]struct{}
 	subscribers map[string]map[chan LogEvent]struct{}
+	sealer      *Sealer
+	sealing     map[string]bool
 }
 
 type LogEvent struct {
@@ -34,8 +36,9 @@ func NewStore(root string) (*Store, error) {
 		root:        root,
 		logRecovery: make(map[string]struct{}),
 		subscribers: make(map[string]map[chan LogEvent]struct{}),
+		sealing:     make(map[string]bool),
 	}
-	for _, d := range []string{".uploads", ".metadata/jobs", ".logs", "projects", ".quarantine"} {
+	for _, d := range []string{".uploads", ".metadata/jobs", ".logs", "projects", ".quarantine", ".signing", ".signed"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0750); err != nil {
 			return nil, err
 		}
@@ -235,11 +238,18 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 	if err != nil && !os.IsNotExist(err) {
 		return nil, false, err
 	}
-	if manifest != nil {
+	seal, err := s.readSeal(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, false, err
+	}
+	if manifest != nil || seal != nil {
 		if old != nil && sameUploadMetadata(old, m) && old.State == Completed && fileutil.VerifyFile(s.ArtifactPath(old), old.Size, old.SHA256) == nil {
 			return old, true, nil
 		}
-		return nil, false, errors.New("ManifestAlreadyCompleted")
+		if manifest != nil {
+			return nil, false, errors.New("ManifestAlreadyCompleted")
+		}
+		return nil, false, &SealError{"ManifestSealing", 409, false}
 	}
 	if old != nil {
 		if !sameUploadMetadata(old, m) {
@@ -314,6 +324,13 @@ func (s *Store) CompleteUpload(project, job string, a *Artifact, tmp string) err
 	if manifest != nil {
 		return errors.New("ManifestAlreadyCompleted")
 	}
+	seal, err := s.readSeal(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if seal != nil {
+		return &SealError{"ManifestSealing", 409, false}
+	}
 	final := s.ArtifactPath(a)
 	if err := os.MkdirAll(filepath.Dir(final), 0750); err != nil {
 		return err
@@ -345,7 +362,17 @@ func (s *Store) GetJobArtifact(project, job, id string) (*Artifact, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	a, err := s.readArtifact(project, job, id)
-	return a, err == nil
+	if err != nil {
+		return nil, false
+	}
+	manifest, err := s.readManifest(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, false
+	}
+	if err := projectArtifact(a, project, job, manifest); err != nil {
+		return nil, false
+	}
+	return a, true
 }
 
 func (s *Store) ListArtifacts(project, job string, cat Category) ([]Artifact, error) {
@@ -356,7 +383,14 @@ func (s *Store) ListArtifacts(project, job string, cat Category) ([]Artifact, er
 	if err != nil {
 		return nil, err
 	}
+	manifest, err := s.readManifest(project, job)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
 	for _, a := range artifacts {
+		if err := projectArtifact(&a, project, job, manifest); err != nil {
+			return nil, err
+		}
 		if a.State == Completed && (cat == "" || a.Category == cat) {
 			out = append(out, a)
 		}
@@ -374,4 +408,28 @@ func (s *Store) ListArtifacts(project, job string, cat Category) ([]Artifact, er
 		return out[i].CompletedAt.Before(*out[j].CompletedAt)
 	})
 	return out, nil
+}
+
+// projectArtifact selects immutable sealed content without mutating original upload metadata.
+func projectArtifact(a *Artifact, project, job string, manifest *JobUploadManifest) error {
+	if manifest == nil {
+		return nil
+	}
+	if manifest.State != ManifestCompleted || manifest.Digest != ManifestDigest(manifest.Files) {
+		return ErrInvalidManifest
+	}
+	for _, f := range manifest.Files {
+		if f.ArtifactID != a.ID {
+			continue
+		}
+		if f.RelativePath != a.RelativePath || f.Category != a.Category {
+			return ErrInvalidManifest
+		}
+		a.Size, a.SHA256 = f.Size, f.SHA256
+		if manifest.SigningFingerprint != "" && isRPM(f) {
+			a.StorageKey = signedStorageKey(project, job, a.ID)
+		}
+		return nil
+	}
+	return nil
 }
