@@ -104,7 +104,7 @@ defineExpose({ getContent });
 .resource-spec-editor { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; }
 .resource-editor-modes { margin-top: 0; }
 .resource-rule-card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 12px; }
-.resource-default-card { background: #edf5ff; border-color: #c5daf5; }
+.resource-default-card { min-width: 0; overflow-x: auto; background: #edf5ff; border-color: #c5daf5; }
 .resource-package-card { min-width: 0; align-content: start; background: #f7f8fa; padding: 10px 12px; gap: 8px; }
 .resource-package-card .resource-rule-toolbar { align-items: end; gap: 8px; }
 .resource-package-card .resource-rule-toolbar .field > input { min-width: 0; }
@@ -119,6 +119,7 @@ defineExpose({ getContent });
 .resource-row-actions { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; white-space: nowrap; }
 .resource-arch-rule { border-top: 1px solid var(--line); padding-top: 8px; display: grid; grid-template-columns: minmax(200px, 1fr) minmax(440px, 3fr); align-items: end; gap: 12px; }
 :deep(.resource-quantity-grid) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.resource-default-card :deep(.resource-quantity-grid) { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
 .resource-package-card :deep(.resource-quantity-grid) { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 540px) {
   :deep(.resource-quantity-grid) { grid-template-columns: 1fr; }

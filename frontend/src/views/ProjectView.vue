@@ -151,7 +151,10 @@
                   <small>{{ buildTargetLabel(build) }}</small>
                   <small v-if="build.spec?.buildType !== 'full' && build.spec?.packages?.length" class="build-history-packages" :title="build.spec.packages.join(', ')">{{ t('project.packages') }}: {{ build.spec.packages.slice(0, 3).join(', ') }}{{ build.spec.packages.length > 3 ? ', …' : '' }}</small>
                   <small v-if="build.metadata?.annotations?.['ebs.io/git-ref']" class="build-history-git-ref" :title="build.metadata.annotations['ebs.io/git-ref']">Git ref: <code>{{ build.metadata.annotations['ebs.io/git-ref'] }}</code></small>
-                  <time>{{ formatDate(build.status?.startTime) }}</time>
+                  <span class="build-history-times">
+                    <time :datetime="build.status?.startTime">{{ t('project.startedAt') }}: {{ formatDate(build.status?.startTime) }}</time>
+                    <time :datetime="build.status?.endTime">{{ t('project.finishedAt') }}: {{ formatDate(build.status?.endTime) }}</time>
+                  </span>
                 </button>
                 <button class="build-history-copy" type="button" :disabled="!build.metadata?.name" :class="{ copied: copiedBuildName === build.metadata?.name }" :aria-label="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" :title="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" @click="copyBuildName(build.metadata?.name)"><Check v-if="copiedBuildName === build.metadata?.name" /><DocumentCopy v-else /></button>
                 <StatusBadge :value="buildDisplayStatus(build)" />
@@ -172,21 +175,9 @@
         </article>
 
         <div class="build-history-detail-column">
-          <BuildInfoPanel v-if="selectedBuild" :project="name" :build-name="selectedBuildName" :can-abort-jobs="canAbortJobs" />
-          <article class="content-panel build-detail-panel">
-            <template v-if="selectedBuild">
-              <div class="section-heading"><div><h2>{{ selectedBuild.metadata?.name }}</h2><p>{{ t("project.buildDetailHint") }}</p></div><StatusBadge :value="buildDisplayStatus(selectedBuild)" /></div>
-              <dl class="detail-list build-detail-list">
-                <div><dt>{{ t("project.buildType") }}</dt><dd>{{ selectedBuild.spec?.buildType || t("project.unspecifiedType") }}</dd></div>
-                <div><dt>{{ t("project.buildTarget") }}</dt><dd>{{ buildTargetLabel(selectedBuild) }}</dd></div>
-                <div><dt>{{ t("project.stage") }}</dt><dd>{{ selectedBuild.status?.stage || t("common.emptyValue") }}</dd></div>
-                <div><dt>{{ t("project.startedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.startTime) }}</dd></div>
-                <div><dt>{{ t("project.finishedAt") }}</dt><dd>{{ formatDate(selectedBuild.status?.endTime) }}</dd></div>
-                <div><dt>{{ t("project.baseBuild") }}</dt><dd>{{ baseBuildLabel(selectedBuild) }}</dd></div>
-              </dl>
-              <section class="build-detail-section"><h3>{{ t("project.packages") }}</h3><div v-if="selectedBuild.spec?.packages?.length" class="value-chip-list"><code v-for="item in selectedBuild.spec.packages" :key="item">{{ item }}</code></div><p v-else>{{ t("project.noPackages") }}</p></section>
-            </template>
-            <EmptyState v-else :title="t('project.selectBuild')" :description="t('project.selectBuildHint')" />
+          <BuildInfoPanel v-if="selectedBuild" :project="name" :build-name="selectedBuildName" :build="selectedBuild" :can-abort-jobs="canAbortJobs" />
+          <article v-else class="content-panel build-detail-panel">
+            <EmptyState :title="t('project.selectBuild')" :description="t('project.selectBuildHint')" />
           </article>
         </div>
       </div>
@@ -1629,11 +1620,6 @@ function fallbackCopy(value: string): void {
 function buildTargetLabel(build: Build): string {
   const target = build.spec?.buildTarget;
   return targetListLabel(target ? [target] : []);
-}
-
-function baseBuildLabel(build: Build): string {
-  const base = build.status?.baseBuildRef;
-  return base?.name || t("common.emptyValue");
 }
 
 function targetListLabel(targets?: BuildTarget[]): string {
