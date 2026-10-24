@@ -59,7 +59,7 @@ func uploadRequest(t *testing.T, data []byte, key string) *http.Request {
 	_ = json.NewEncoder(p).Encode(upload.UploadMetadata{
 		Category:     upload.CategoryArtifact,
 		FileName:     "kernel.rpm",
-		RelativePath: "RPMS/kernel.rpm",
+		RelativePath: "packages/kernel.rpm",
 		ContentType:  "application/x-rpm",
 		Size:         int64(len(data)),
 		SHA256:       sum(data),
@@ -97,7 +97,7 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 	created := decodeBody[struct {
 		Artifact upload.Artifact `json:"artifact"`
 	}](t, w)
-	wantKey := "projects/project-1/jobs/build/RPMS/kernel.rpm"
+	wantKey := "projects/project-1/jobs/build/packages/kernel.rpm"
 	if created.Artifact.StorageKey != wantKey {
 		t.Fatalf("storage key = %q, want %q", created.Artifact.StorageKey, wantKey)
 	}
@@ -224,7 +224,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 
 	chunks := [][]byte{[]byte("hello\n"), []byte("world\n")}
 	for sequence, chunk := range chunks {
-		r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/chunks", bytes.NewReader(chunk))
+		r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/log-job/logs/chunks", bytes.NewReader(chunk))
 		r.Header.Set("Authorization", "Bearer runner-token")
 		r.Header.Set("Content-Type", "application/octet-stream")
 		r.Header.Set("X-Log-Stream", "combined")
@@ -237,7 +237,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 		}
 	}
 	// An acknowledged chunk can be retried without appending it twice.
-	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/chunks", bytes.NewReader(chunks[1]))
+	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/log-job/logs/chunks", bytes.NewReader(chunks[1]))
 	r.Header.Set("Authorization", "Bearer runner-token")
 	r.Header.Set("Content-Type", "application/octet-stream")
 	r.Header.Set("X-Log-Stream", "combined")
@@ -250,7 +250,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	}
 
 	all := bytes.Join(chunks, nil)
-	activeDir := filepath.Join(cfg.DataDir, ".logs", "project-1", "build")
+	activeDir := filepath.Join(cfg.DataDir, ".logs", "project-1", "log-job")
 	if content, err := os.ReadFile(filepath.Join(activeDir, "combined.log")); err != nil || !bytes.Equal(content, all) {
 		t.Fatalf("active log at Job name path: %q, %v", content, err)
 	}
@@ -259,7 +259,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	}
 	complete := upload.CompleteLogRequest{Stream: "combined", LastSequence: 1, Size: int64(len(all)), SHA256: sum(all)}
 	b, _ = json.Marshal(complete)
-	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/build/logs/complete", bytes.NewReader(b))
+	r = httptest.NewRequest(http.MethodPost, "/artifacts/v1/projects/project-1/jobs/log-job/logs/complete", bytes.NewReader(b))
 	r.Header.Set("Authorization", "Bearer runner-token")
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -269,11 +269,11 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	result := decodeBody[struct {
 		ArtifactID string `json:"artifactID"`
 	}](t, w)
-	if content, err := os.ReadFile(filepath.Join(cfg.DataDir, "projects", "project-1", "jobs", "build", "logs", "container.log")); err != nil || !bytes.Equal(content, all) {
+	if content, err := os.ReadFile(filepath.Join(cfg.DataDir, "projects", "project-1", "jobs", "log-job", "logs", "container.log")); err != nil || !bytes.Equal(content, all) {
 		t.Fatalf("stored log: %q, %v", content, err)
 	}
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/build/artifacts/"+result.ArtifactID+"/content", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/artifacts/v1/projects/project-1/jobs/log-job/artifacts/"+result.ArtifactID+"/content", nil))
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), all) {
 		t.Fatalf("log artifact: %d %q", w.Code, w.Body.Bytes())
 	}

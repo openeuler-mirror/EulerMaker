@@ -56,18 +56,20 @@ type ManifestFile struct {
 }
 
 type JobUploadManifest struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	Project       string         `json:"project"`
-	JobName       string         `json:"jobName"`
-	RunnerName    string         `json:"runnerName"`
-	Files         []ManifestFile `json:"files"`
-	Digest        string         `json:"digest,omitempty"`
-	State         ManifestState  `json:"state"`
-	Failure       *FailureInfo   `json:"failure,omitempty"`
-	CreatedAt     time.Time      `json:"createdAt"`
-	UpdatedAt     time.Time      `json:"updatedAt"`
-	CompletedAt   *time.Time     `json:"completedAt,omitempty"`
-	ExpiresAt     *time.Time     `json:"expiresAt,omitempty"`
+	SchemaVersion      int            `json:"schemaVersion"`
+	Project            string         `json:"project"`
+	JobName            string         `json:"jobName"`
+	RunnerName         string         `json:"runnerName"`
+	Files              []ManifestFile `json:"files"`
+	Digest             string         `json:"digest,omitempty"`
+	UploadDigest       string         `json:"uploadDigest"`
+	SigningFingerprint string         `json:"signingFingerprint,omitempty"`
+	State              ManifestState  `json:"state"`
+	Failure            *FailureInfo   `json:"failure,omitempty"`
+	CreatedAt          time.Time      `json:"createdAt"`
+	UpdatedAt          time.Time      `json:"updatedAt"`
+	CompletedAt        *time.Time     `json:"completedAt,omitempty"`
+	ExpiresAt          *time.Time     `json:"expiresAt,omitempty"`
 }
 
 type LogState string

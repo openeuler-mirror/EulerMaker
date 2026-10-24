@@ -2,6 +2,7 @@ package upload_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -60,7 +61,7 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 			},
 		},
 	}
-	manifest, err := store.CompleteManifest("project", "job", "runner", request)
+	manifest, err := store.CompleteManifest(context.Background(), "project", "job", "runner", request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 	if err != nil || loaded.RunnerName != manifest.RunnerName {
 		t.Fatalf("disk manifest: %+v, %v", loaded, err)
 	}
-	replayed, err := store.CompleteManifest("project", "job", "runner", request)
+	replayed, err := store.CompleteManifest(context.Background(), "project", "job", "runner", request)
 	if err != nil || replayed.RunnerName != manifest.RunnerName || replayed.Digest != manifest.Digest {
 		t.Fatalf("seal replay from disk: %+v, %v", replayed, err)
 	}
@@ -98,7 +99,7 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 	if err := store.CompleteUpload("project", "job", a, tmp); !errors.Is(err, upload.ErrInvalidManifest) {
 		t.Fatalf("commit upload with corrupted manifest: %v", err)
 	}
-	if _, err := store.CompleteManifest("project", "job", "runner", request); !errors.Is(err, upload.ErrInvalidManifest) {
+	if _, err := store.CompleteManifest(context.Background(), "project", "job", "runner", request); !errors.Is(err, upload.ErrInvalidManifest) {
 		t.Fatalf("seal corrupted manifest: %v", err)
 	}
 	content, err := os.ReadFile(path)
@@ -310,7 +311,7 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 				Size: artifact.Size, SHA256: artifact.SHA256, Required: true,
 			})
 		}
-		if _, err := store.CompleteManifest(job.project, job.job, "runner", upload.CompleteManifestRequest{
+		if _, err := store.CompleteManifest(context.Background(), job.project, job.job, "runner", upload.CompleteManifestRequest{
 			Files: files,
 		}); err != nil {
 			t.Fatal(err)
@@ -391,11 +392,11 @@ func TestArtifactOwnershipSurvivesRestart(t *testing.T) {
 			if _, ok := store.GetJobArtifact(scope[0], scope[1], a.ID); ok {
 				t.Fatalf("artifact visible to %v after restart=%t", scope, restart)
 			}
-			if _, err := store.CompleteManifest(scope[0], scope[1], "runner", request); err == nil || err.Error() != "artifact mismatch" {
+			if _, err := store.CompleteManifest(context.Background(), scope[0], scope[1], "runner", request); err == nil || err.Error() != "ArtifactMismatch" {
 				t.Fatalf("manifest ownership check for %v after restart=%t: %v", scope, restart, err)
 			}
 		}
-		if _, err := store.CompleteManifest("project", "job", "runner", request); err != nil {
+		if _, err := store.CompleteManifest(context.Background(), "project", "job", "runner", request); err != nil {
 			t.Fatal(err)
 		}
 	}

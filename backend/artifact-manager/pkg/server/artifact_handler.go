@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/upload"
 )
 
@@ -201,6 +202,14 @@ func (s *Server) validPartHeaders(p *multipart.Part) bool {
 }
 
 func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
+	var seal *upload.SealError
+	if errors.As(e, &seal) {
+		if seal.Retryable {
+			w.Header().Set("Retry-After", "5")
+		}
+		writeErr(w, r, seal.Status, seal.Code, seal.Code, seal.Retryable, nil)
+		return
+	}
 	var pathErr *os.PathError
 	var syntaxErr *json.SyntaxError
 	var typeErr *json.UnmarshalTypeError
@@ -230,12 +239,17 @@ func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j s
 		writeErr(w, r, 400, "InvalidRequest", "invalid request", false, nil)
 		return
 	}
-	m, e := s.store.CompleteManifest(p, j, id.Name, in)
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Upload.Timeout)
+	defer cancel()
+	m, e := s.store.CompleteManifest(ctx, p, j, id.Name, in)
 	if e != nil {
 		s.mapErr(w, r, e)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"state": m.State, "artifactCount": len(m.Files), "digest": m.Digest})
+	writeJSON(w, 200, map[string]any{
+		"state": m.State, "artifactCount": len(m.Files), "digest": m.Digest,
+		"uploadDigest": m.UploadDigest, "signingFingerprint": m.SigningFingerprint,
+	})
 }
 
 func (s *Server) getManifest(w http.ResponseWriter, r *http.Request, p, j string) {
@@ -267,13 +281,23 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, project, job, 
 		writeErr(w, r, 404, "NotFound", "artifact not found", false, nil)
 		return
 	}
+	if strings.HasPrefix(a.StorageKey, ".signed/") {
+		if err := fileutil.VerifyFile(s.store.ArtifactPath(a), a.Size, a.SHA256); err != nil {
+			writeErr(w, r, 503, "StorageError", "sealed artifact content unavailable", true, nil)
+			return
+		}
+	}
 	f, e := os.Open(s.store.ArtifactPath(a))
 	if e != nil {
 		writeErr(w, r, 404, "NotFound", "artifact content not found", false, nil)
 		return
 	}
 	defer f.Close()
-	st, _ := f.Stat()
+	st, e := f.Stat()
+	if e != nil || !st.Mode().IsRegular() || st.Size() != a.Size {
+		writeErr(w, r, 503, "StorageError", "artifact content unavailable", true, nil)
+		return
+	}
 	w.Header().Set("ETag", `"`+a.SHA256+`"`)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", a.FileName))
 	w.Header().Set("Content-Type", a.ContentType)

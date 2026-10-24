@@ -372,6 +372,20 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	if l.State != LogOpen {
 		return nil, errors.New("LogAlreadyFinalized")
 	}
+	manifest, err := s.readManifest(p, j)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if manifest != nil {
+		return nil, errors.New("ManifestAlreadyCompleted")
+	}
+	seal, err := s.readSeal(p, j)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	if seal != nil {
+		return nil, &SealError{"ManifestSealing", 409, false}
+	}
 	if r.Stream != "combined" || l.NextSequence != r.LastSequence+1 || l.CommittedBytes != r.Size {
 		return nil, errors.New("log mismatch")
 	}
