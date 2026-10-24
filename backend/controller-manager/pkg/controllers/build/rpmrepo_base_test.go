@@ -34,7 +34,7 @@ func seedIncrementalHistory(api *fakeAPI) {
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"},
 		Status: ebsv1.BuildInfoStatus{
-			Phase: ebsv1.BuildInfoCompleted, FailedPackages: []string{"gcc"},
+			Phase: ebsv1.BuildInfoCompleted, SpecResults: ebsv1.SpecResults{"gcc/" + "gcc": {Status: ebsv1.SpecPrepareFailed}},
 		},
 	})
 }

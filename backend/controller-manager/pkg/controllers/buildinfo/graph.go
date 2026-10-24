@@ -83,12 +83,11 @@ func firstGraphState(info *ebsv1.BuildInfo) bool {
 	if findCondition(info.Status.Conditions, conditionBuildGraphUnavailable) != nil {
 		return false
 	}
-	if info.Status.Phase != ebsv1.BuildInfoPending || len(info.Status.SpecStatus.Build) != 0 ||
-		len(info.Status.SpecRepoNames) != 0 {
+	if info.Status.Phase != ebsv1.BuildInfoPending || len(info.Status.SpecResults.Entries()) != 0 {
 		return false
 	}
-	for _, count := range info.Status.SpecStatus.DispatchCount {
-		if count != 0 {
+	for _, result := range info.Status.SpecResults {
+		if result.DispatchCount != 0 {
 			return false
 		}
 	}

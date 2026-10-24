@@ -424,10 +424,9 @@ func TestStopConditionRoutesToConverge(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("full"))
 	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-	bi.Status.SpecRepoNames = map[string]string{"a": "repo-a"}
 	upsertCondition(&bi.Status.Conditions, ConditionRpmRepoUnavailable, ReasonRpmRepoNotFound, "rpmrepo gone")
-	bi.Status.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{
-		"a": {Build: ebsv1.SpecBuildStatus{Status: ebsv1.SpecBuildSucceeded}, DispatchCount: 1},
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{
+		"a": {Status: ebsv1.SpecSucceeded, DispatchCount: 1},
 	})
 	client.SeedBuildInfo(bi)
 	reconcileOnce(t, c)
@@ -667,8 +666,7 @@ func TestStatusMatchesIntent(t *testing.T) {
 	}
 	// nil maps equal empty maps.
 	withEmpty := copyStatus(base)
-	withEmpty.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{})
-	withEmpty.SpecRepoNames = map[string]string{}
+	withEmpty.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{})
 	if !statusMatchesIntent(base, withEmpty) {
 		t.Fatal("nil maps must match empty maps")
 	}
@@ -689,21 +687,21 @@ func TestStatusMatchesIntent(t *testing.T) {
 		t.Fatal("phase mismatch must not match")
 	}
 	specA := copyStatus(base)
-	specA.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {DispatchCount: 1}})
+	specA.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"a": {DispatchCount: 1}})
 	specB := copyStatus(base)
-	specB.SpecStatus = ebsv1.NewSpecStatusGroup(map[string]ebsv1.SpecStatus{"a": {DispatchCount: 2}})
+	specB.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"a": {DispatchCount: 2}})
 	if statusMatchesIntent(specA, specB) {
 		t.Fatal("dispatchCount mismatch must not match")
 	}
 	repos := copyStatus(base)
-	repos.SpecRepoNames = map[string]string{"a": "repo-a"}
+	repos.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"repo-a/a.spec": {Status: ebsv1.SpecPrepared}})
 	if statusMatchesIntent(base, repos) {
-		t.Fatal("specRepoNames mismatch must not match")
+		t.Fatal("source identity mismatch must not match")
 	}
 	failed := copyStatus(base)
-	failed.FailedPackages = []string{"repo1"}
+	failed.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"repo1/": {Status: ebsv1.SpecPrepareFailed}})
 	if statusMatchesIntent(base, failed) {
-		t.Fatal("failedPackages mismatch must not match")
+		t.Fatal("preparation failure mismatch must not match")
 	}
 }
 

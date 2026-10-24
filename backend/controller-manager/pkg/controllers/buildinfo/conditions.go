@@ -74,12 +74,12 @@ const (
 	ReasonInstallResultInvalid                  = "InstallResultInvalid"
 )
 
-func failedSpecBuildStatus(status ebsv1.SpecBuildPhase) bool {
-	return status == ebsv1.SpecBuildFailed || status == ebsv1.SpecBuildArchUnsupported
+func failedSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
+	return status == ebsv1.SpecBuildFailed || status == ebsv1.SpecArchUnsupported || status == ebsv1.SpecPrepareFailed
 }
 
-func terminalSpecBuildStatus(status ebsv1.SpecBuildPhase) bool {
-	return status == ebsv1.SpecBuildSucceeded || failedSpecBuildStatus(status)
+func terminalSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
+	return status.IsTerminal()
 }
 
 // conditionMessageMax bounds a persisted condition message (apiserver limit).
@@ -177,15 +177,15 @@ func sanitizeMessage(message string) string {
 	return message[:cut]
 }
 
-// specCondition writes a spec-level condition into the given SpecStatus.
-func specCondition(spec *ebsv1.SpecStatus, condType, reason, message string) {
-	upsertCondition(&spec.Build.Conditions, condType, reason, message)
+// specCondition writes a spec-level condition into the given SpecResults.
+func specCondition(spec *ebsv1.SpecResult, condType, reason, message string) {
+	upsertCondition(&spec.Conditions, condType, reason, message)
 }
 
 // installCondition writes the install-level condition.
-func installCondition(spec *ebsv1.SpecStatus, jobName string) {
+func installCondition(spec *ebsv1.SpecResult, jobName string) {
 	upsertCondition(
-		&spec.Install.Conditions,
+		&spec.Conditions,
 		ConditionInstall,
 		ReasonInstallCheckFailed,
 		"job "+jobName+" install check failed",

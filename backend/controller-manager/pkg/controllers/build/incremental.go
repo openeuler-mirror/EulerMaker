@@ -37,7 +37,7 @@ func (r *reconciler) incrementalPackageSeeds(snapshot *ebsv1.Snapshot) ([]string
 		if baseInfo.Status.Phase != ebsv1.BuildInfoCompleted {
 			return nil, controller.NewPermanentError(fmt.Errorf("historical BuildInfo %s/%s is not Completed", r.project, baseName))
 		}
-		for _, name := range baseInfo.Status.FailedPackages {
+		for _, name := range baseInfo.Status.SpecResults.FailedPackages() {
 			if name == "" {
 				return nil, controller.NewPermanentError(fmt.Errorf("historical BuildInfo %s/%s has an empty failed package", r.project, baseName))
 			}

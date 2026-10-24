@@ -84,14 +84,14 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	if len(buildSet) == 0 {
 		return c.completeInitEmpty(ctx, round, asm.degraded)
 	}
-	next := round.current.DeepCopy()
-	applyDegradedConditions(&next.Status.Conditions, asm.degraded)
-	c.backfillJobs(round, next, jobs, specNameSet(buildSet), true)
-	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
+	if result, err = c.persistBuildSetResults(ctx, round, buildSet); err != nil ||
+		result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if result, err = c.persistBuildSetSpecStatuses(ctx, round, buildSet); err != nil ||
-		result != (controller.ReconcileResult{}) {
+	next := round.current.DeepCopy()
+	applyDegradedConditions(&next.Status.Conditions, asm.degraded)
+	c.backfillJobs(round, next, jobs, specNameSet(buildSet))
+	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
 
@@ -124,23 +124,24 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	return c.writeStatusIfChanged(ctx, round, next)
 }
 
-// persistBuildSetSpecStatuses establishes the complete traversal base before the first Job is created. Re-entry only
+// persistBuildSetResults establishes the complete traversal base before the first Job is created. Re-entry only
 // adds missing keys; it never resets confirmed dispatches or terminal verdicts.
-func (c *Controller) persistBuildSetSpecStatuses(
+func (c *Controller) persistBuildSetResults(
 	ctx context.Context,
 	round *reconcileRound,
 	buildSet map[string]specparse.SpecDepend,
 ) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
-	if next.Status.SpecRepoNames == nil {
-		next.Status.SpecRepoNames = make(map[string]string, len(buildSet))
+	if next.Status.SpecResults == nil {
+		next.Status.SpecResults = ebsv1.SpecResults{}
 	}
 	for name, depend := range buildSet {
-		if _, exists := next.Status.SpecStatus.Lookup(name); !exists {
-			next.Status.SpecStatus.Set(name, ebsv1.SpecStatus{})
+		if depend.RepoName == "" || depend.SpecFileName == "" {
+			return controller.ReconcileResult{}, fmt.Errorf("spec %s has no repository/file identity", name)
 		}
-		if _, exists := next.Status.SpecRepoNames[name]; !exists {
-			next.Status.SpecRepoNames[name] = depend.RepoName
+		key := depend.RepoName + "/" + depend.SpecFileName
+		if existing, ok := next.Status.SpecResults[key]; !ok || existing.Status == ebsv1.SpecPrepareFailed {
+			next.Status.SpecResults[key] = ebsv1.SpecResult{SpecName: name, Status: ebsv1.SpecPrepared}
 		}
 	}
 	return c.writeStatusIfChanged(ctx, round, next)
@@ -194,8 +195,8 @@ func (c *Controller) dispatchInitSpec(
 	snapshot *ebsv1.Snapshot,
 	sources *rpmver.RpmMetaSources,
 ) (controller.ReconcileResult, error) {
-	ss := round.current.Status.SpecStatus.Entry(specName)
-	if ss.Build.Status != "" || ss.DispatchCount > 0 {
+	ss := round.specResult(specName)
+	if ss.Status != ebsv1.SpecPrepared || ss.DispatchCount > 0 {
 		// Already dispatched (Job created, Running, or a Failed verdict) — re-entering init never re-dispatches nor repeats
 		// bootstrap.
 		return controller.ReconcileResult{}, nil
@@ -204,14 +205,14 @@ func (c *Controller) dispatchInitSpec(
 		result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if ss = round.current.Status.SpecStatus.Entry(specName); failedSpecBuildStatus(ss.Build.Status) {
+	if ss = round.specResult(specName); failedSpecBuildStatus(ss.Status) {
 		return controller.ReconcileResult{}, nil
 	}
 	if result, err := c.checkBuildRequires(ctx, round, specName, &depend, sources); err != nil ||
 		result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if ss = round.current.Status.SpecStatus.Entry(specName); failedSpecBuildStatus(ss.Build.Status) {
+	if ss = round.specResult(specName); failedSpecBuildStatus(ss.Status) {
 		return controller.ReconcileResult{}, nil
 	}
 	image, err := c.ensureImage(ctx, round, dispatch)
@@ -244,7 +245,7 @@ func (c *Controller) checkArchSupported(
 		return controller.ReconcileResult{}, nil
 	}
 	message := fmt.Sprintf("target arch %q not in exclusiveArch %v", arch, depend.ExclusiveArch)
-	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildArchUnsupported, "", "", "")
+	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecArchUnsupported, "", "", "")
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "ArchUnsupported", "spec %s marked ArchUnsupported: %s", specName, message)
 	}
@@ -480,11 +481,21 @@ func (c *Controller) persistAssemblyFailures(
 		return controller.ReconcileResult{}, asm.err
 	}
 	next := round.current.DeepCopy()
-	var existing []string
-	if asm.incomplete {
-		existing = next.Status.FailedPackages
+	if next.Status.SpecResults == nil {
+		next.Status.SpecResults = ebsv1.SpecResults{}
 	}
-	next.Status.FailedPackages = sortedFailedPackages(existing, asm.failedRepos)
+	if !asm.incomplete && next.Status.Phase == ebsv1.BuildInfoPending {
+		for key, result := range next.Status.SpecResults {
+			if result.Status == ebsv1.SpecPrepareFailed {
+				delete(next.Status.SpecResults, key)
+			}
+		}
+	}
+	for key, failure := range asm.failures {
+		if existing, ok := next.Status.SpecResults[key]; !ok || existing.Status == ebsv1.SpecPrepareFailed {
+			next.Status.SpecResults[key] = failure
+		}
+	}
 	return c.writeStatusIfChanged(ctx, round, next)
 }
 
@@ -503,7 +514,7 @@ func applyDegradedConditions(conditions *[]metav1.Condition, degraded []degraded
 	}
 }
 
-// closeoutInit writes the failure condition and Completed together, leaving specStatus untouched.
+// closeoutInit writes the failure condition and Completed together, leaving specResults untouched.
 func (c *Controller) closeoutInit(
 	ctx context.Context,
 	round *reconcileRound,
@@ -548,7 +559,7 @@ func specNameSet(buildSet map[string]specparse.SpecDepend) map[string]bool {
 	return scope
 }
 
-// sortedSpecNames returns the specStatus keys in dictionary order.
+// sortedSpecNames returns the specResults keys in dictionary order.
 func sortedSpecNames[V any](m map[string]V) []string {
 	names := make([]string, 0, len(m))
 	for name := range m {
@@ -594,14 +605,14 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	next := round.current.DeepCopy()
-	applyDegradedConditions(&next.Status.Conditions, asm.degraded)
-	c.backfillJobs(round, next, jobs, specNameSet(buildSet), true)
-	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
+	if result, err = c.persistBuildSetResults(ctx, round, buildSet); err != nil ||
+		result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	if result, err = c.persistBuildSetSpecStatuses(ctx, round, buildSet); err != nil ||
-		result != (controller.ReconcileResult{}) {
+	next := round.current.DeepCopy()
+	applyDegradedConditions(&next.Status.Conditions, asm.degraded)
+	c.backfillJobs(round, next, jobs, specNameSet(buildSet))
+	if result, err = c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
 
@@ -609,15 +620,15 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch}
 	for _, name := range sortedSpecNames(buildSet) {
 		depend := buildSet[name]
-		ss := round.current.Status.SpecStatus.Entry(name)
-		if ss.Build.Status != "" || ss.DispatchCount > 0 {
+		ss := round.specResult(name)
+		if ss.Status != ebsv1.SpecPrepared || ss.DispatchCount > 0 {
 			continue
 		}
 		if result, err = c.checkArchSupported(ctx, round, name, &depend, dispatch.arch); err != nil ||
 			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
+		if ss = round.specResult(name); failedSpecBuildStatus(ss.Status) {
 			continue
 		}
 		image, err := c.ensureImage(ctx, round, dispatch)

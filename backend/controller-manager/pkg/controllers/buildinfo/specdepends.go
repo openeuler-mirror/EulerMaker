@@ -45,9 +45,8 @@ type specAssembly struct {
 	// incomplete marks transient gaps: stay Pending and re-assemble next round (no cache write-back, no build-set
 	// determination).
 	incomplete bool
-	// failedRepos records deterministic package-level failures independently of conditions, whose messages are not a
-	// reliable source of repo names.
-	failedRepos map[string]struct{}
+	// failures records source-keyed preparation failures even when no RPM Name can be parsed.
+	failures ebsv1.SpecResults
 }
 
 const maxConcurrentRepoParses = 20
@@ -61,39 +60,17 @@ type repoParseInput struct {
 type repoParseResult struct {
 	specs         map[string]specparse.SpecDepend
 	parseFailures []string
-	failedRepos   map[string]struct{}
+	failures      ebsv1.SpecResults
 	ok            bool
 }
 
-func (a *specAssembly) markFailedRepo(name string) {
-	if name == "" {
-		return
+func (a *specAssembly) prepareFailed(repo, file, message string) {
+	if a.failures == nil {
+		a.failures = ebsv1.SpecResults{}
 	}
-	if a.failedRepos == nil {
-		a.failedRepos = make(map[string]struct{})
-	}
-	a.failedRepos[name] = struct{}{}
-}
-
-func sortedFailedPackages(existing []string, additions map[string]struct{}) []string {
-	all := make(map[string]struct{}, len(existing)+len(additions))
-	for _, name := range existing {
-		if name != "" {
-			all[name] = struct{}{}
-		}
-	}
-	for name := range additions {
-		all[name] = struct{}{}
-	}
-	if len(all) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(all))
-	for name := range all {
-		result = append(result, name)
-	}
-	sort.Strings(result)
-	return result
+	result := ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
+	upsertCondition(&result.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed, message)
+	a.failures[repo+"/"+file] = result
 }
 
 // currentSnapshot fetches the same-name Snapshot. A successful GET clears the failure counter; missing objects and
@@ -153,7 +130,7 @@ func (c *Controller) assembleSpecDepends(
 		if !ok {
 			// An undeclared seed is invalid; a declared repo without status may still be resolving.
 			if !declared {
-				asm.markFailedRepo(repo)
+				asm.prepareFailed(repo, "", "repository not in packageRepos")
 				commitMissing = append(commitMissing, repo+" (not in packageRepos)")
 				continue
 			}
@@ -167,7 +144,7 @@ func (c *Controller) assembleSpecDepends(
 				continue
 			}
 			// Non-retryable resolution failure.
-			asm.markFailedRepo(repo)
+			asm.prepareFailed(repo, "", entry.Error.Message)
 			commitMissing = append(commitMissing, fmt.Sprintf("%s (%s)", repo, entry.Error.Message))
 			continue
 		}
@@ -177,7 +154,7 @@ func (c *Controller) assembleSpecDepends(
 			continue
 		}
 		if originURL == "" {
-			asm.markFailedRepo(repo)
+			asm.prepareFailed(repo, "", "origin URL missing from packageRepos")
 			commitMissing = append(commitMissing, repo+" (origin URL missing from packageRepos)")
 			continue
 		}
@@ -219,7 +196,7 @@ func (c *Controller) assembleSpecDepends(
 				results[index] = repoParseResult{
 					specs:         specs,
 					parseFailures: failures,
-					failedRepos:   local.failedRepos,
+					failures:      local.failures,
 					ok:            ok,
 				}
 			}
@@ -234,15 +211,19 @@ func (c *Controller) assembleSpecDepends(
 	for index, input := range readyRepos {
 		result := results[index]
 		parseFailures = append(parseFailures, result.parseFailures...)
-		for failed := range result.failedRepos {
-			asm.markFailedRepo(failed)
+		for key, failure := range result.failures {
+			if asm.failures == nil {
+				asm.failures = ebsv1.SpecResults{}
+			}
+			asm.failures[key] = failure
 		}
 		if !result.ok {
 			asm.incomplete = true
 			continue
 		}
 		for name, depend := range result.specs {
-			if _, clash := merged[name]; clash {
+			if previous, clash := merged[name]; clash {
+				asm.prepareFailed(previous.RepoName, previous.SpecFileName, "duplicate spec name: "+name)
 				c.logf(
 					round.key,
 					"SpecNameClash",
@@ -393,6 +374,10 @@ func (c *Controller) fetchRepoSpecs(
 		}
 	}
 	sort.Strings(files)
+	if len(files) == 0 {
+		asm.prepareFailed(repo, "", "repository contains no root spec files")
+		*parseFailures = append(*parseFailures, repo+" (no root spec files)")
+	}
 
 	specs := map[string]specparse.SpecDepend{}
 	for _, file := range files {
@@ -404,13 +389,14 @@ func (c *Controller) fetchRepoSpecs(
 				}
 				continue
 			}
-			asm.markFailedRepo(repo)
+			asm.prepareFailed(repo, file, result.err.Error())
 			item := fmt.Sprintf("%s/%s (%v)", repo, file, result.err)
 			*parseFailures = append(*parseFailures, item)
 			continue
 		}
 		depend := result.depend
-		if _, clash := specs[depend.SpecName]; clash {
+		if previous, clash := specs[depend.SpecName]; clash {
+			asm.prepareFailed(repo, previous.SpecFileName, "duplicate spec name: "+depend.SpecName)
 			// Same as the cross-repo clash below: files iterate in dictionary order, so the lexicographically later file wins —
 			// keep a trace.
 			c.logf(
@@ -483,7 +469,7 @@ func (c *Controller) handleGitFailure(
 		where = repo + "/" + file
 	}
 	item := fmt.Sprintf("%s (%v)", where, gitErr.Err)
-	asm.markFailedRepo(repo)
+	asm.prepareFailed(repo, file, gitErr.Err.Error())
 	*parseFailures = append(*parseFailures, item)
 	// Deterministic failures never make the round incomplete.
 	return true

@@ -18,11 +18,11 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 	}
 
 	// Do not advance an incomplete or inconsistent status snapshot.
-	if round.current.Status.SpecStatus.Len() == 0 {
+	if round.current.Status.SpecResults.Len() == 0 {
 		c.logf(
 			round.key,
-			"SpecStatusEmpty",
-			"processing buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept",
+			"SpecResultsEmpty",
+			"processing buildinfo with empty specResults (E-01); waiting for manual intervention, phase kept",
 		)
 		return controller.ReconcileResult{}, nil
 	}
@@ -32,7 +32,7 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		return controller.ReconcileResult{}, err
 	}
 	next := round.current.DeepCopy()
-	bySpec := c.backfillJobs(round, next, jobs, specStatusScope(round.current), false)
+	bySpec := c.backfillJobs(round, next, jobs, specResultsScope(round.current))
 	if result, err := c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
@@ -80,7 +80,7 @@ func (c *Controller) advanceBuildInfo(ctx context.Context, round *reconcileRound
 		}
 	}
 
-	return c.checkCompletion(ctx, round, dcg, asm)
+	return c.checkCompletion(ctx, round, dcg)
 }
 
 // advanceDcg loads the persisted graph. Processing never creates a new graph.
@@ -106,9 +106,9 @@ func (c *Controller) appendInstallEdges(
 	prefer := payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))
 	var candidate *DcgDict
 	changed := 0
-	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
-		ss := round.current.Status.SpecStatus.Entry(spec)
-		if ss.Install.Status != ebsv1.SpecInstallFailed {
+	for _, spec := range sortedSpecNames(round.current.Status.SpecResults.Entries()) {
+		ss := round.specResult(spec)
+		if ss.Status != ebsv1.SpecInstallFailed {
 			continue
 		}
 		if dcg.IsCycleNode(spec) && ss.DispatchCount >= 2 {
@@ -118,8 +118,8 @@ func (c *Controller) appendInstallEdges(
 		if node == nil {
 			continue
 		}
-		for _, depName := range sortedSpecNames(ss.Install.MissingDeps) {
-			vc := ss.Install.MissingDeps[depName].VersionRequests
+		for _, depName := range sortedSpecNames(ss.MissingDeps) {
+			vc := ss.MissingDeps[depName].VersionRequests
 			selection, ok := sources.FindProvider(depName, vc, prefer)
 			if !ok {
 				continue // unresolved provider: no edge
@@ -128,7 +128,7 @@ func (c *Controller) appendInstallEdges(
 			if dcg.Node(provider) == nil {
 				continue // provider not in this round's build set
 			}
-			if pSS := round.current.Status.SpecStatus.Entry(provider); terminalSpecBuildStatus(pSS.Build.Status) {
+			if pSS := round.specResult(provider); terminalSpecBuildStatus(pSS.Status) {
 				continue // provider already terminal: no edge, no re-dispatch
 			}
 			if _, dup := node.InstallInDep[provider]; dup {
@@ -184,12 +184,12 @@ func (c *Controller) advanceDownstream(
 	}
 	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
-		ss := round.current.Status.SpecStatus.Entry(name)
+		ss := round.specResult(name)
 		node := dcg.Node(name)
 		if ss.DispatchCount >= effectiveRequired(dcg, round, name, required) {
 			continue
 		}
-		if ss.Build.Status == ebsv1.SpecBuildRunning || failedSpecBuildStatus(ss.Build.Status) {
+		if ss.Status == ebsv1.SpecRunning || failedSpecBuildStatus(ss.Status) {
 			continue // do not redispatch an in-flight or failed spec
 		}
 		depend, ok := asm.depends[name]
@@ -225,7 +225,7 @@ func (c *Controller) advanceDownstream(
 			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
+		if ss = round.specResult(name); failedSpecBuildStatus(ss.Status) {
 			continue
 		}
 		// Build-requires availability is checked even for bootstrap dispatches.
@@ -233,7 +233,7 @@ func (c *Controller) advanceDownstream(
 			result != (controller.ReconcileResult{}) {
 			return result, err
 		}
-		if ss = round.current.Status.SpecStatus.Entry(name); failedSpecBuildStatus(ss.Build.Status) {
+		if ss = round.specResult(name); failedSpecBuildStatus(ss.Status) {
 			continue
 		}
 		// Resolve the build-target Config once per round when needed.
@@ -269,7 +269,7 @@ func upstreamNames(node *DcgNode) []string {
 // upstreamsTerminal reports whether every direct upstream has succeeded or failed.
 func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		st := round.current.Status.SpecStatus.Entry(up).Build.Status
+		st := round.specResult(up).Status
 		if !terminalSpecBuildStatus(st) {
 			return false
 		}
@@ -280,7 +280,7 @@ func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 // hasFailedUpstream reports whether any direct upstream failed.
 func hasFailedUpstream(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		if failedSpecBuildStatus(round.current.Status.SpecStatus.Entry(up).Build.Status) {
+		if failedSpecBuildStatus(round.specResult(up).Status) {
 			return true
 		}
 	}
@@ -294,14 +294,14 @@ func rebuildConsistencySatisfied(
 	dcg *DcgDict,
 	round *reconcileRound,
 	spec string,
-	ss ebsv1.SpecStatus,
+	ss ebsv1.SpecResult,
 	required map[string]int64,
 ) bool {
 	node := dcg.Node(spec)
 	if ss.DispatchCount >= 1 && !node.BootstrapBreak {
 		for _, up := range upstreamNames(node) {
-			upSS := round.current.Status.SpecStatus.Entry(up)
-			if upSS.Build.Status != ebsv1.SpecBuildSucceeded ||
+			upSS := round.specResult(up)
+			if !upSS.Status.BuildSucceeded() ||
 				upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
@@ -313,8 +313,8 @@ func rebuildConsistencySatisfied(
 			if !dcg.IsCycleNode(up) {
 				continue
 			}
-			upSS := round.current.Status.SpecStatus.Entry(up)
-			if upSS.Build.Status != ebsv1.SpecBuildSucceeded ||
+			upSS := round.specResult(up)
+			if !upSS.Status.BuildSucceeded() ||
 				upSS.DispatchCount < effectiveRequired(dcg, round, up, required) {
 				return false
 			}
@@ -335,7 +335,7 @@ func upstreamOutputsPublished(round *reconcileRound, dcg *DcgDict, spec string, 
 		}
 	}
 	for _, up := range upstreamNames(dcg.Node(spec)) {
-		if round.current.Status.SpecStatus.Entry(up).Build.Status != ebsv1.SpecBuildSucceeded {
+		if !round.specResult(up).Status.BuildSucceeded() {
 			continue
 		}
 		group := bySpec[up]
@@ -362,7 +362,7 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 	}
 	if node := dcg.Node(spec); node != nil {
 		for _, up := range upstreamNames(node) {
-			if failedSpecBuildStatus(round.current.Status.SpecStatus.Entry(up).Build.Status) {
+			if failedSpecBuildStatus(round.specResult(up).Status) {
 				return 1
 			}
 		}
@@ -371,74 +371,30 @@ func effectiveRequired(dcg *DcgDict, round *reconcileRound, spec string, require
 }
 
 // checkCompletion requires every spec to be terminal and every successful spec to reach its required dispatch count.
-// It writes Completed; spec statuses and failedPackages carry the result.
+// It writes Completed; source-keyed spec results carry the verdict.
 func (c *Controller) checkCompletion(
 	ctx context.Context,
 	round *reconcileRound,
 	dcg *DcgDict,
-	asm *specAssembly,
 ) (controller.ReconcileResult, error) {
 	var required map[string]int64
 	if dcg != nil {
 		required = dcg.DispatchRequirements()
 	}
 	var failed []string
-	for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
-		ss := round.current.Status.SpecStatus.Entry(spec)
-		if !terminalSpecBuildStatus(ss.Build.Status) {
-			return controller.ReconcileResult{}, nil // not all terminal
+	for key, result := range round.current.Status.SpecResults {
+		if !result.Status.IsTerminal() {
+			return controller.ReconcileResult{}, nil
 		}
-		if ss.Build.Status == ebsv1.SpecBuildSucceeded && ss.DispatchCount < effectiveRequired(dcg, round, spec, required) {
-			return controller.ReconcileResult{}, nil // terminal but short of the effective required
+		if result.Status.BuildSucceeded() &&
+			result.DispatchCount < effectiveRequired(dcg, round, result.SpecName, required) {
+			return controller.ReconcileResult{}, nil
 		}
-		if failedSpecBuildStatus(ss.Build.Status) {
-			failed = append(failed, spec)
-		}
-	}
-	needsRepoMap := len(failed) > 0
-	for _, ss := range round.current.Status.SpecStatus.Install {
-		needsRepoMap = needsRepoMap || ss.Status == ebsv1.SpecInstallFailed
-	}
-	if asm == nil && needsRepoMap {
-		// The single path deliberately skips Snapshot reads while Jobs are in flight; recover the spec-to-repository map only
-		// for final failures.
-		if cached, ok := c.specDependsCache.Get(round.key); ok {
-			asm = &specAssembly{depends: cached}
-		} else {
-			snapshot, stop, result, err := c.currentSnapshot(ctx, round)
-			if stop {
-				return result, err
-			}
-			asm = c.assembleSpecDepends(ctx, round, snapshot)
-			if asm.err != nil {
-				return controller.ReconcileResult{}, asm.err
-			}
-			if asm.incomplete {
-				return controller.ReconcileResult{}, nil
-			}
+		if result.Status != ebsv1.SpecSucceeded {
+			failed = append(failed, key)
 		}
 	}
 	next := round.current.DeepCopy()
-	failedRepos := map[string]struct{}{}
-	if asm != nil {
-		for repo := range asm.failedRepos {
-			failedRepos[repo] = struct{}{}
-		}
-		for _, spec := range sortedSpecNames(round.current.Status.SpecStatus.Build) {
-			ss := round.current.Status.SpecStatus.Entry(spec)
-			if !failedSpecBuildStatus(ss.Build.Status) && ss.Install.Status != ebsv1.SpecInstallFailed {
-				continue
-			}
-			depend, ok := asm.depends[spec]
-			if !ok || depend.RepoName == "" {
-				return controller.ReconcileResult{}, controller.NewPermanentError(
-					fmt.Errorf("cannot resolve repository for failed spec %q", spec),
-				)
-			}
-			failedRepos[depend.RepoName] = struct{}{}
-		}
-	}
-	next.Status.FailedPackages = sortedFailedPackages(next.Status.FailedPackages, failedRepos)
 	removeCondition(&next.Status.Conditions, ConditionRpmRepoRetrying)
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	result, err := c.writeStatus(ctx, round, next)
@@ -447,7 +403,7 @@ func (c *Controller) checkCompletion(
 			round.key,
 			"BuildInfoCompleted",
 			"completed: %d specs, %d failed",
-			round.current.Status.SpecStatus.Len(),
+			round.current.Status.SpecResults.Len(),
 			len(failed),
 		)
 		c.invalidateCaches(round.key)
@@ -458,11 +414,11 @@ func (c *Controller) checkCompletion(
 // advanceSingle runs the single-type Processing path: backfill plus the completion check — no Snapshot/RpmMeta reads,
 // no graph, no gates.
 func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (controller.ReconcileResult, error) {
-	if round.current.Status.SpecStatus.Len() == 0 {
+	if round.current.Status.SpecResults.Len() == 0 {
 		c.logf(
 			round.key,
-			"SpecStatusEmpty",
-			"processing single buildinfo with empty specStatus (E-01); waiting for manual intervention, phase kept",
+			"SpecResultsEmpty",
+			"processing single buildinfo with empty specResults (E-01); waiting for manual intervention, phase kept",
 		)
 		return controller.ReconcileResult{}, nil
 	}
@@ -471,73 +427,55 @@ func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (
 		return controller.ReconcileResult{}, err
 	}
 	next := round.current.DeepCopy()
-	c.backfillJobs(round, next, jobs, specStatusScope(round.current), false)
+	c.backfillJobs(round, next, jobs, specResultsScope(round.current))
 	if result, err := c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
-	return c.checkCompletion(ctx, round, nil, nil)
+	return c.checkCompletion(ctx, round, nil)
 }
 
-// stoppedFailedPackages retains failed or unfinished repositories, using the Build or Snapshot scope for unmapped specs.
-func (c *Controller) stoppedFailedPackages(ctx context.Context, round *reconcileRound) ([]string, error) {
-	failed := make(map[string]struct{})
-	depends, _ := c.specDependsCache.Get(round.key)
-	unmapped := len(round.current.Status.SpecStatus.Build) == 0
-	addSpec := func(spec string) {
-		repo := round.current.Status.SpecRepoNames[spec]
-		if repo == "" {
-			repo = depends[spec].RepoName
-		}
-		if repo == "" {
-			unmapped = true
-			return
-		}
-		failed[repo] = struct{}{}
+// closeStoppedResults records undispatched work as failed before the stop-dispatch closeout.
+func (c *Controller) closeStoppedResults(ctx context.Context, round *reconcileRound, next *ebsv1.BuildInfo) error {
+	marker := stopCondition(next.Status.Conditions)
+	reason, message := "DispatchStopped", "dispatch stopped before this spec completed"
+	if marker != nil {
+		reason, message = marker.Reason, marker.Message
 	}
-	for spec, build := range round.current.Status.SpecStatus.Build {
-		if build.Status != ebsv1.SpecBuildSucceeded ||
-			round.current.Status.SpecStatus.Install[spec].Status != ebsv1.SpecInstallSucceeded {
-			addSpec(spec)
-		}
-	}
-	for spec, install := range round.current.Status.SpecStatus.Install {
-		if _, exists := round.current.Status.SpecStatus.Build[spec]; !exists && install.Status != ebsv1.SpecInstallSucceeded {
-			addSpec(spec)
-		}
-	}
-	for spec := range round.current.Status.SpecRepoNames {
-		if _, exists := round.current.Status.SpecStatus.Build[spec]; !exists {
-			addSpec(spec)
-		}
-	}
-	if unmapped {
-		if round.isSingle() ||
-			(round.current.Status.Phase == ebsv1.BuildInfoPending && len(round.build.Spec.Packages) > 0) {
-			for _, name := range round.build.Spec.Packages {
-				if name != "" {
-					failed[name] = struct{}{}
-				}
-			}
-		} else {
-			snapshot, err := c.client.GetSnapshot(
-				ctx, round.current.Namespace, round.current.Name, "metadata,spec.packageRepos.name",
-			)
+	if next.Status.Phase == ebsv1.BuildInfoPending || len(next.Status.SpecResults.Entries()) == 0 {
+		repos := round.build.Spec.Packages
+		if !round.isSingle() && len(repos) == 0 {
+			snapshot, err := c.client.GetSnapshot(ctx, next.Namespace, next.Name, "metadata,spec.packageRepos.name")
 			if err != nil {
-				return nil, fmt.Errorf("read Snapshot repository scope for failed packages: %w", err)
+				return fmt.Errorf("read stopped build repository scope: %w", err)
 			}
 			for _, repo := range snapshot.Spec.PackageRepos {
-				if repo.Name != "" {
-					failed[repo.Name] = struct{}{}
-				}
+				repos = append(repos, repo.Name)
 			}
 		}
-		c.logf(
-			round.key,
-			"StopFailedPackagesFallback",
-			"missing persisted spec-to-repository mapping; using conservative package scope",
-		)
+		if next.Status.SpecResults == nil {
+			next.Status.SpecResults = ebsv1.SpecResults{}
+		}
+		represented := map[string]bool{}
+		for key := range next.Status.SpecResults {
+			represented[ebsv1.SpecResultRepo(key)] = true
+		}
+		for _, repo := range repos {
+			if represented[repo] {
+				continue
+			}
+			result := ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
+			specCondition(&result, "PreparationStopped", reason, message)
+			next.Status.SpecResults[repo+"/"] = result
+		}
 	}
-	return sortedFailedPackages(round.current.Status.FailedPackages, failed), nil
+	for key, result := range next.Status.SpecResults {
+		if !result.Status.IsTerminal() {
+			result.Status = ebsv1.SpecBuildFailed
+			specCondition(&result, "DispatchStopped", reason, message)
+			next.Status.SpecResults[key] = result
+		}
+	}
+	return nil
 }
 
 // convergeToCompleted waits for created Jobs to finish without further dispatch, retaining the stop marker.
@@ -550,7 +488,7 @@ func (c *Controller) convergeToCompleted(
 		return controller.ReconcileResult{}, err
 	}
 	next := round.current.DeepCopy()
-	c.backfillJobs(round, next, jobs, specStatusScope(round.current), false)
+	c.backfillJobs(round, next, jobs, specResultsScope(round.current))
 	if result, err := c.writeStatusIfChanged(ctx, round, next); err != nil || result != (controller.ReconcileResult{}) {
 		return result, err
 	}
@@ -559,12 +497,10 @@ func (c *Controller) convergeToCompleted(
 		return controller.ReconcileResult{}, nil
 	}
 	marker := stopCondition(round.current.Status.Conditions)
-	failedPackages, err := c.stoppedFailedPackages(ctx, round)
-	if err != nil {
+	next = round.current.DeepCopy()
+	if err := c.closeStoppedResults(ctx, round, next); err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	next = round.current.DeepCopy()
-	next.Status.FailedPackages = failedPackages
 	next.Status.Phase = ebsv1.BuildInfoCompleted
 	result, err := c.writeStatus(ctx, round, next)
 	if err == nil && result == (controller.ReconcileResult{}) {
@@ -617,10 +553,10 @@ func (c *Controller) jobsAwaitingTerminal(round *reconcileRound, jobs []ebsv1.Jo
 	return waiting
 }
 
-// specStatusScope returns the spec names eligible for Job result backfill.
-func specStatusScope(buildInfo *ebsv1.BuildInfo) map[string]bool {
-	scope := make(map[string]bool, buildInfo.Status.SpecStatus.Len())
-	for name := range buildInfo.Status.SpecStatus.Build {
+// specResultsScope returns the spec names eligible for Job result backfill.
+func specResultsScope(buildInfo *ebsv1.BuildInfo) map[string]bool {
+	scope := make(map[string]bool, buildInfo.Status.SpecResults.Len())
+	for name := range buildInfo.Status.SpecResults.Entries() {
 		scope[name] = true
 	}
 	return scope
