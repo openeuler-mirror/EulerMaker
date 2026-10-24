@@ -19,7 +19,7 @@ spec:
       for tool in git dnf rpmbuild rpmspec curl python3 tar; do
         command -v "$tool" >/dev/null || { echo "missing build tool: $tool" >&2; exit 1; }
       done
-      printf '{"build":{"status":"Failed"}}\n' > "$result_file"
+      printf '{"status":"BuildFailed"}\n' > "$result_file"
     }
 
     # Parse the controller's JSON payload; long URLs must not be read by line.
@@ -272,12 +272,12 @@ spec:
     check_installation() {
       local install_log=/workspace/install-check.log
       local -a binary_rpms
-      printf '{"build":{"status":"Succeeded"}}\n' > "$result_file"
+      rm -f "$result_file"
       mapfile -d '' binary_rpms < <(find "$topdir/RPMS" -type f -name '*.rpm' -print0)
       if LC_ALL=C dnf "${dnf_args[@]}" --installroot=/workspace/installroot --releasever=/ \
         --setopt=tsflags=test --setopt=install_weak_deps=False --nogpgcheck \
         -y install "${binary_rpms[@]}" > "$install_log" 2>&1; then
-        printf '{"build":{"status":"Succeeded"},"install":{"status":"Succeeded"}}\n' > "$result_file"
+        printf '{"status":"Succeeded"}\n' > "$result_file"
       else
         cat "$install_log"
         # Only "nothing provides ... needed by ..." affects the install result.
@@ -304,12 +304,11 @@ spec:
         else:
             name = requirement
         missing[name] = {'neededBy': needed_by or '', 'versionRequests': version}
-    result = {'build': {'status': 'Succeeded'}}
+    result = {'status': 'Succeeded'}
     if missing:
-        result['install'] = {'status': 'Failed', 'missingDeps': missing}
+        result = {'status': 'InstallFailed', 'missingDeps': missing}
     else:
         print('ignoring install check failure without missing dependencies', file=sys.stderr)
-        result['install'] = {'status': 'Succeeded'}
     temporary = result_path + '.tmp'
     with open(temporary, 'w', encoding='utf-8') as output:
         json.dump(result, output)

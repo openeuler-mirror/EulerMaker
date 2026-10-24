@@ -835,8 +835,7 @@ type Toleration struct {
 type JobStatus struct {
     Phase      JobPhase    `json:"phase,omitempty"`
     Stage      JobStage    `json:"stage,omitempty"`
-    Build      *JobBuildResult   `json:"build,omitempty"`
-    Install    *JobInstallResult `json:"install,omitempty"`
+    Result     *JobResult `json:"result,omitempty"`
     Runner     string      `json:"runner,omitempty"`
     StartTime  metav1.Time `json:"startTime,omitempty"`
     EndTime    metav1.Time `json:"endTime,omitempty"`
@@ -848,12 +847,28 @@ type JobStatus struct {
 |------|---------|------|
 | `phase` | `JobPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"Succeeded"` / `"Failed"` / `"Aborted"`；后三项为终态 |
 | `stage` | `JobStage` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Running"` / `"PostRun"`。失败时保留最后到达的执行阶段，不使用 `Failed` stage |
-| `build` | `*JobBuildResult` | 脚本构建结果，`status` 为 `Succeeded` 或 `Failed`；与产物上传后的 Job 终态分开记录 |
-| `install` | `*JobInstallResult` | 构建后安装检查结果，`status` 为 `Succeeded` 或 `Failed`，失败时可携带 `missingDeps`；缺失表示未得到可靠结果 |
+| `result` | `*JobResult` | 脚本结果：`Succeeded` / `BuildFailed` / `InstallFailed`；缺失表示尚无可靠结果。与执行、上传和封账后的 Job phase 独立 |
 | `runner` | string | 实际执行的 runner 名称 |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `message` | string | 执行或上传错误说明，不承载安装检查的结构化结果 |
+
+### JobResult
+
+```go
+type JobResult struct {
+    Status      JobResultStatus        `json:"status"`
+    MissingDeps map[string]MissingDep  `json:"missingDeps,omitempty"`
+}
+```
+
+- `Succeeded`：构建及安装检查通过；默认脚本对非依赖类安装错误采用记录日志后忽略的策略。
+- `BuildFailed`：脚本报告构建失败。
+- `InstallFailed`：构建成功，安装依赖检查失败。仅此状态允许填写 `missingDeps`。
+- 构建前的 BuildRequires 缺失不写入 `missingDeps`，由 BuildInfo 的诊断条件表达。
+- 脚本成功但上传失败时，`result.status=Succeeded`、`phase=Failed`。
+- 安装依赖失败但上传封账成功时，`result.status=InstallFailed`、`phase=Succeeded`，产物仍可物化。
+- `result=nil` 不表示成功，也不因进程退出码为 0 自动补齐结果。
 
 ### JobList
 

@@ -209,17 +209,17 @@ func (p BuildInfoPhase) IsTerminal() bool {
 // JobPhase describes the lifecycle state of a Job.
 type JobPhase string
 
-// JobResultStatus describes a completed build or install-check step. An
-// absent result means the step has not produced a reliable verdict.
+// JobResultStatus describes the script verdict. An absent result means no reliable verdict is available.
 type JobResultStatus string
 
 const (
-	JobResultSucceeded JobResultStatus = "Succeeded"
-	JobResultFailed    JobResultStatus = "Failed"
+	JobResultSucceeded     JobResultStatus = "Succeeded"
+	JobResultBuildFailed   JobResultStatus = "BuildFailed"
+	JobResultInstallFailed JobResultStatus = "InstallFailed"
 )
 
 func (s JobResultStatus) IsValid() bool {
-	return s == JobResultSucceeded || s == JobResultFailed
+	return s == JobResultSucceeded || s == JobResultBuildFailed || s == JobResultInstallFailed
 }
 
 const (

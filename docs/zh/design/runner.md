@@ -366,8 +366,7 @@ Job status 使用当前数据模型：
 type JobStatus struct {
     Phase              string      `json:"phase,omitempty"`
     Stage              string      `json:"stage,omitempty"`
-    Build              *JobBuildResult   `json:"build,omitempty"`
-    Install            *JobInstallResult `json:"install,omitempty"`
+    Result     *JobResult `json:"result,omitempty"`
     Runner             string      `json:"runner,omitempty"`
     StartTime          metav1.Time `json:"startTime,omitempty"`
     EndTime            metav1.Time `json:"endTime,omitempty"`
@@ -377,7 +376,7 @@ type JobStatus struct {
 
 Runner 执行和重启恢复时，按 `${rootDir}/results/{project}/{jobName}` 定位本地产物目录，不将本地路径写入 Job Status。Job 通过 `phase/stage` 表达执行进度，产物状态和文件数量由 Artifact Manager 的 Manifest 提供，不在 Job Status 中重复记录。Manifest 摘要只保存在 Artifact Manager 内部，不写入 Job Status。
 
-构建脚本可写入 `/workspace/job-result.json`，其中 `build.status` 和可选的 `install.status/missingDeps` 分别表示 RPM 构建与安装检查结果。默认脚本仅将可解析的 `nothing provides ... needed by ...` 记为安装失败；其他 DNF 安装检查错误只记录日志，按忽略策略写入 `install.status=Succeeded`，不阻止产物上传。Runner 在 `PostRun` 前读取并回写结构化状态；缺失安装结果不等于安装成功。`message` 只用于执行或上传错误。
+构建脚本可写入 `/workspace/job-result.json`，内容为 `{"status":"Succeeded"}`、`{"status":"BuildFailed"}` 或 `{"status":"InstallFailed","missingDeps":{...}}`。Runner 在 PostRun 前读取并原样写入 `Job.status.result`，只有 InstallFailed 允许 missingDeps。文件不存在时保持 result 为空，不从退出码推断安装成功；文件格式或状态非法时记为执行错误。BuildFailed 使 Job 失败；InstallFailed 不阻止产物上传，上传封账成功后 Job phase 仍为 Succeeded。上传失败不覆盖 result。默认脚本仅提取 `nothing provides ... needed by ...` 为安装依赖失败，其他 DNF 安装检查错误只记录日志并写 Succeeded。`message` 只用于执行或上传错误。
 
 Scheduler 负责选择 Runner，并更新 `Job.status.runner` 和 `Job.status.phase`。Runner 不主动抢占 Pending Job。
 

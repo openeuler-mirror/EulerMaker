@@ -70,8 +70,8 @@ const (
 	ReasonJobCreateRejected                     = "JobCreateRejected"
 	ConditionInstall                            = "Install"
 	ReasonInstallCheckFailed                    = "InstallCheckFailed"
-	ReasonInstallResultMissing                  = "InstallResultMissing"
-	ReasonInstallResultInvalid                  = "InstallResultInvalid"
+	ReasonJobResultMissing                      = "JobResultMissing"
+	ReasonJobResultInvalid                      = "JobResultInvalid"
 )
 
 func failedSpecBuildStatus(status ebsv1.SpecResultPhase) bool {

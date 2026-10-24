@@ -33,8 +33,7 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		"spec":     map[string]any{"command": "build"},
 		"status": map[string]any{
 			"runner": "runner-1", "phase": "Running", "stage": "PostRun",
-			"build":   map[string]any{"status": "Succeeded"},
-			"install": map[string]any{"status": "Failed", "missingDeps": map[string]any{"missing": map[string]any{}}},
+			"result": map[string]any{"status": "InstallFailed", "missingDeps": map[string]any{"missing": map[string]any{}}},
 		},
 	}
 	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, old, postRun); err != nil {
@@ -46,8 +45,7 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		"spec":     map[string]any{"command": "build"},
 		"status": map[string]any{
 			"runner": "runner-1", "phase": "Succeeded", "stage": "PostRun",
-			"build":   map[string]any{"status": "Succeeded"},
-			"install": map[string]any{"status": "Succeeded"},
+			"result": map[string]any{"status": "Succeeded"},
 		},
 	}
 	if err := (&Authorizer{}).ValidateUpdate(context.Background(), who, route, postRun, updatedResult); err != nil {
