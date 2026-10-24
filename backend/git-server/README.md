@@ -50,7 +50,7 @@ Compose 使用 `8084:8080`，管理面通过容器端口 `8080` 访问；Kuberne
 
 Controller Manager 客户端将路径转换为 `git-server:///git/...`，存入 Snapshot 和 Job 的克隆地址字段。Runner 从 Gateway `service-endpoints` 获取地址，将逻辑地址解析为 HTTP(S) URL 后交给构建脚本。
 
-`Config/service-config.gitServer` 的 `runnerInternalURL`、`runnerExternalURL` 用于配置 Runner 的内外网克隆服务入口，均可留空；地址不附加 `/git`。默认内网入口为 `http://127.0.0.1:8084`，仅适用于同机宿主机网络的 Compose Runner。Runner 按 `--service-access-mode` 选择对应入口；缺少所选地址时不回退到管理地址。
+`Config/services.gitServer` 的 `runnerInternalURL`、`runnerExternalURL` 用于配置 Runner 的内外网克隆服务入口，均可留空；地址不附加 `/git`。默认内网入口为 `http://127.0.0.1:8084`，仅适用于同机宿主机网络的 Compose Runner。Runner 按 `--service-access-mode` 选择对应入口；缺少所选地址时不回退到管理地址。
 
 ## 认证配置
 

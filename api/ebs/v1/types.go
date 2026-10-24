@@ -35,7 +35,7 @@ const (
 	ConfigVisibilityOpsOnly ConfigVisibility = "OpsOnly"
 	BuildTargetConfigName                    = "build-target"
 	BuildResourceConfigName                  = "build-resource"
-	ServiceConfigName                        = "service-config"
+	ServiceConfigName                        = "services"
 )
 
 // +k8s:deepcopy-gen=true
@@ -63,7 +63,7 @@ type PackageResourceConfig struct {
 	Arches  map[string]ResourceRequirements `json:"arches,omitempty"`
 }
 
-// ServiceConfigContent defines the service endpoints in Config/service-config.
+// ServiceConfigContent defines the service endpoints in Config/services.
 // +k8s:deepcopy-gen=true
 type ServiceConfigContent struct {
 	ArtifactManagers map[string]ServiceEndpoints `json:"artifactManagers" yaml:"artifactManagers"`

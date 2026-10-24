@@ -66,7 +66,7 @@ func ValidateProjectArtifactInstance(project *ebsv1.Project, content *ebsv1.Serv
 	if _, found := content.ArtifactManagers[instance]; !found {
 		return field.ErrorList{
 			field.Invalid(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), instance,
-				"instance is not configured in service-config"),
+				"instance is not configured in services"),
 		}
 	}
 	return nil

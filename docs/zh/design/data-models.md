@@ -91,7 +91,7 @@ type Project struct {
 }
 ```
 
-`metadata.annotations["ebs.io/artifacts"]` 指定 Project 使用的 Artifact Manager 实例，值须是 `Config/service-config` 的 `artifactManagers` 中已有的键；未设置时按 `default` 解释。创建 Project 或修改该 annotation 时，apiserver 实时读取 Config 确认实例存在；其他 Project 更新不重新校验。`/status` 更新不修改该 annotation。RpmRepo Controller 按该字段选择物化与发布请求的实例。
+`metadata.annotations["ebs.io/artifacts"]` 指定 Project 使用的 Artifact Manager 实例，值须是 `Config/services` 的 `artifactManagers` 中已有的键；未设置时按 `default` 解释。创建 Project 或修改该 annotation 时，apiserver 实时读取 Config 确认实例存在；其他 Project 更新不重新校验。`/status` 更新不修改该 annotation。RpmRepo Controller 按该字段选择物化与发布请求的实例。
 
 ### ProjectSpec
 
@@ -674,11 +674,11 @@ type ConfigList struct {
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `metadata.name` | 是 | 集群唯一；内置对象为 `build-target`、`build-resource` 和 `service-config` |
+| `metadata.name` | 是 | 集群唯一；内置对象为 `build-target`、`build-resource` 和 `services` |
 | `spec.visibility` | 是 | `Public` 允许所有身份及匿名具名读取；`OpsOnly` 仅 Ops/Admin 读取 |
 | `spec.content` | 是 | 非空 UTF-8 YAML 文本；apiserver 按内置对象名称校验业务结构，消费方解析使用 |
 
-`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin list；匿名、普通用户和 Runner 只能具名读取 `Public` 对象，`OpsOnly` 仅 Ops/Admin 可读。Ops/Admin 可创建更新，三个内置对象不可经 Gateway 删除。apiserver 校验公共字段、资源版本及内置对象的业务内容；`service-config` 固定为 `OpsOnly`。
+`Config` 不设置 namespace、status 或业务类型字段。Gateway 仅允许 Ops/Admin list；匿名、普通用户和 Runner 只能具名读取 `Public` 对象，`OpsOnly` 仅 Ops/Admin 可读。Ops/Admin 可创建更新，三个内置对象不可经 Gateway 删除。apiserver 校验公共字段、资源版本及内置对象的业务内容；`services` 固定为 `OpsOnly`。
 
 ### 内置内容格式
 
@@ -715,7 +715,7 @@ type PackageResourceConfig struct {
 
 BuildInfo Controller 读取 `Config/build-target` 与 `Config/build-resource`，分别固化镜像及资源到 Job；Job 创建后配置变化不回写。Script 是独立资源，不复用 Config 内容。
 
-`service-config` 的内容由公共 `ServiceConfigContent` 解析，包含 Artifact Manager 实例表 `artifactManagers` 和单个 Git Server 配置 `gitServer`；两类服务共用 `ServiceEndpoints`，分别记录控制面 `internalURL`、内网 Runner 的 `runnerInternalURL` 和外网 Runner 的 `runnerExternalURL`。字段、默认对象和消费边界统一见 [服务配置内容](data-models~config.md#4-服务配置内容)。
+`services` 的内容由公共 `ServiceConfigContent` 解析，包含 Artifact Manager 实例表 `artifactManagers` 和单个 Git Server 配置 `gitServer`；两类服务共用 `ServiceEndpoints`，分别记录控制面 `internalURL`、内网 Runner 的 `runnerInternalURL` 和外网 Runner 的 `runnerExternalURL`。字段、默认对象和消费边界统一见 [服务配置内容](data-models~config.md#4-服务配置内容)。
 
 ## Script（全局脚本）
 

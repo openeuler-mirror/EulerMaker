@@ -79,7 +79,7 @@ curl -fsS http://localhost:8080/healthz
 
 Compose 从当前工作区构建应用镜像。默认配置使用开发用 TLS 跳过校验、未启用 Elasticsearch 安全认证，并暴露多个内部服务端口，**不适合直接用于公网或生产部署**。生产环境需要独立规划证书、网络隔离、凭据管理、持久化与备份。Docker socket 访问也应限制在受信任的 Runner。
 
-构建服务地址由 `Config/service-config` 管理，可由 Ops/Admin 在运维页面的“服务配置”中修改。控制面的 `internalURL` 使用 Compose 服务名；Runner 通过 Gateway 获取 `runnerInternalURL` 或 `runnerExternalURL`。同机、宿主机网络的 Runner 可使用初始化默认值：Artifact Manager 为 `http://127.0.0.1:8081`，Git Server 为 `http://127.0.0.1:8084`；异机 Runner 必须改为构建节点及 Job 容器可达的地址。所选网络需能访问 Gateway `8080`、Artifact Manager `8081` 和 Git Smart HTTP `8084` 端口，不应将内部端口直接开放到公网。
+构建服务地址由 `Config/services` 管理，可由 Ops/Admin 在运维页面的“服务配置”中修改。控制面的 `internalURL` 使用 Compose 服务名；Runner 通过 Gateway 获取 `runnerInternalURL` 或 `runnerExternalURL`。同机、宿主机网络的 Runner 可使用初始化默认值：Artifact Manager 为 `http://127.0.0.1:8081`，Git Server 为 `http://127.0.0.1:8084`；异机 Runner 必须改为构建节点及 Job 容器可达的地址。所选网络需能访问 Gateway `8080`、Artifact Manager `8081` 和 Git Smart HTTP `8084` 端口，不应将内部端口直接开放到公网。
 
 ```bash
 docker compose -f hacks/docker-compose.yml up -d --build

@@ -551,7 +551,7 @@ status 更新结果未知后执行 Snapshot GET。仅当同一 UID 且 Snapshot 
 | `--snapshot-resolve-budget` | 120s | 单轮解析总预算（budgetCtx） |
 | `--snapshot-sync-requeue-delay` | 30s | 存在 Waiting 或 Deferred 包时延迟重入的时间；轮内不等待同步 |
 | `--snapshot-failure-retry-limit` | 5 | 非确定性失败跨轮重试预算，必须大于 0；`nextCount >= limit` 时写入不可重试的 `RetryExhausted` error 并跳过 |
-| `Config/service-config` 的 `gitServer.internalURL` | `http://git-server:8080` | Git Server 管理地址 |
+| `Config/services` 的 `gitServer.internalURL` | `http://git-server:8080` | Git Server 管理地址 |
 | `--git-server-timeout` | 30s | 单次请求超时 |
 | `--git-server-retry` | 3 | 客户端固定尝试次数 |
 | `--git-server-cache-ttl` | 30s | git-server 同步状态的 L1 缓存 TTL |
@@ -564,7 +564,7 @@ Snapshot Controller 所需最小权限：
 snapshots:        get, list, update
 snapshots/status: update
 builds:           get
-configs:          get (service-config)
+configs:          get (services)
 ```
 
 权限严格限制在上述操作：Controller 不能创建或删除 Snapshot。

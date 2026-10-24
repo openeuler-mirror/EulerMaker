@@ -13,13 +13,13 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-//go:embed default-build-target.yaml
+//go:embed defaults/config/build-target.yaml
 var defaultBuildTargetTemplate []byte
 
-//go:embed default-build-resource.yaml
+//go:embed defaults/config/build-resource.yaml
 var defaultBuildResourceTemplate []byte
 
-//go:embed default-service-config.yaml
+//go:embed defaults/config/services.yaml
 var defaultServiceConfigTemplate []byte
 
 type bootstrapStorage interface {

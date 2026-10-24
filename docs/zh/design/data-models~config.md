@@ -8,9 +8,9 @@
 |------|----------|--------|-------------|
 | `Config/build-target` | 支持的 OS、Arch 和构建镜像 | 集群级，`Public` | `spec.runtimeSpec.image` |
 | `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
-| `Config/service-config` | Artifact Manager 实例地址和 Git Server 管理地址 | 集群级，`OpsOnly` | 仅固化 Artifact 实例标识和 Git 逻辑克隆地址，不复制配置全文 |
+| `Config/services` | Artifact Manager 实例地址和 Git Server 管理地址 | 集群级，`OpsOnly` | 仅固化 Artifact 实例标识和 Git 逻辑克隆地址，不复制配置全文 |
 
-`Config` 对象验证通用元数据、可见性和内容格式；apiserver 还在创建、更新 `Config/build-target`、`Config/build-resource` 和 `Config/service-config` 时解析并校验业务内容。使用方必须处理读取和解析错误；具体业务校验职责及配置结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
+`Config` 对象验证通用元数据、可见性和内容格式；apiserver 还在创建、更新 `Config/build-target`、`Config/build-resource` 和 `Config/services` 时解析并校验业务内容。使用方必须处理读取和解析错误；具体业务校验职责及配置结构见第 2～4 章，公共资源字段见 [数据模型](data-models.md)。
 
 - [构建目标内容](#2-构建目标内容)
 - [构建资源内容](#3-构建资源内容)
@@ -18,7 +18,7 @@
 
 ### 1.1 Config 公共资源与可见性
 
-`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。内置对象为 `build-target`、`build-resource` 和 `service-config`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin 读取。
+`Config` 是集群级 `ebs/v1` 资源，复数为 `configs`。对象名称在集群内唯一，不设置 namespace、status 或 Project 覆盖。内置对象为 `build-target`、`build-resource` 和 `services`，各自的 `spec.content` 是非空 UTF-8 YAML 文本；内容可以使用 YAML 兼容的 JSON 语法。`spec.visibility` 只允许 `Public` 和 `OpsOnly`：前者允许匿名及所有身份具名读取，后者仅允许 Ops/Admin 读取。
 
 ```yaml
 apiVersion: ebs/v1
@@ -43,7 +43,7 @@ PATCH    /apis/ebs/v1/configs/{name}
 
 上述 HEAD 由 Gateway 内部读取 Config 后响应；apiserver 通用资源路由本身不注册 HEAD。非运维身份只允许具名 `GET/HEAD` 且对象为 `Public`；集合 `GET/HEAD` 仅允许 Ops/Admin。三个内置对象均不可经 Gateway 删除。无 Watch 或 `/status`。`PUT/PATCH` 必须进行 `resourceVersion` 冲突校验，内容或可见性改变时递增 generation。通过 apiserver 内部 API 直接读取的控制器仍须验证对象名称和业务内容格式，不依赖 Gateway 过滤。
 
-apiserver 校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限；对 `Config/build-target`、`Config/build-resource` 和 `Config/service-config` 分别执行第 2.2.1、3.2、4 章的内容校验。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设置相应可见性。其他 Config 的业务内容错误仍可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
+apiserver 校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及请求大小上限；对 `Config/build-target`、`Config/build-resource` 和 `Config/services` 分别执行第 2.2.1、3.2、4 章的内容校验。默认对象在 Ready 前以 create-only 语义初始化，已存在的不覆盖；首次模板分别设置相应可见性。其他 Config 的业务内容错误仍可能成功保存：使用方必须在消费时按对象名称解析和校验；解析失败不能使用空表或旧缓存静默继续。运维界面可在提交前本地预检，但其结果不能替代消费时校验。
 
 ## 2. 构建目标内容
 
@@ -106,7 +106,7 @@ spec:
 
 复用现有通用 mapping，`content` 原样保存在 data 中，不新增 OS、Arch、image 的索引字段；客户端按名称 GET 对象，无需对内部配置做 ES 查询。资源不开放 status.phase/status.stage 过滤。
 
-初始化模板 `default-build-target.yaml` 作为 `Config/build-target` 的内容随 apiserver 二进制嵌入。
+初始化模板 `defaults/config/build-target.yaml` 作为 `Config/build-target` 的内容随 apiserver 二进制嵌入。
 
 启动时在 Ready 前：
 
@@ -243,7 +243,7 @@ BuildInfo Controller 在需要创建 Job 的 reconcile 中，GET `/apis/ebs/v1/c
 
 ### 3.4 初始化、更新与容量
 
-apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存在，初始化模板 `default-build-resource.yaml` 包含 4 CPU、8Gi 的表级默认值及软件包覆盖规则。已存在对象不覆盖；多实例创建冲突后读取获胜对象。启动模板不是持续同步源。初始化必须通过 Config API 的默认化、通用校验与资源规则校验，不能直接写 Elasticsearch；运维更新业务内容后不会被新版本部署覆盖。
+apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存在，初始化模板 `defaults/config/build-resource.yaml` 包含 4 CPU、8Gi 的表级默认值及软件包覆盖规则。已存在对象不覆盖；多实例创建冲突后读取获胜对象。启动模板不是持续同步源。初始化必须通过 Config API 的默认化、通用校验与资源规则校验，不能直接写 Elasticsearch；运维更新业务内容后不会被新版本部署覆盖。
 
 更新整张表必须携带 `metadata.resourceVersion`；发生 409 时重新读取并按包名合并用户的修改，不得只替换版本重放旧对象。批量生成内容按包名稳定排序。规模达到数千至数万包时，应对最终序列化大小、请求上限及解析耗时做压测；BuildInfo Controller 可按 UID/resourceVersion 缓存解析结果，但每轮先读取当前对象，缓存失效或解析失败时必须停止新 Job 派发。首版不支持按软件包的独立 REST API 或存储分片。
 
@@ -253,12 +253,12 @@ apiserver 在 Ready 前以 create-only 方式确保 `Config/build-resource` 存�
 
 ### 4.1 对象与公共类型
 
-`Config/service-config` 统一保存服务访问地址，固定 `visibility: OpsOnly`。按业务分为 `artifactManagers` 和 `gitServer` 两部分：前者支持多个实例，后者只配置一个服务入口，不增加 Git Server 实例选择或 Project annotation。
+`Config/services` 统一保存服务访问地址，固定 `visibility: OpsOnly`。按业务分为 `artifactManagers` 和 `gitServer` 两部分：前者支持多个实例，后者只配置一个服务入口，不增加 Git Server 实例选择或 Project annotation。
 
 公共 `ebs/v1` 定义以下内容类型，apiserver、Controller Manager 和 Gateway 共用；这些结构只用于解析 `Config.spec.content`，不注册为独立 API 资源：
 
 ```go
-const ServiceConfigName = "service-config"
+const ServiceConfigName = "services"
 
 type ServiceConfigContent struct {
     ArtifactManagers map[string]ServiceEndpoints `json:"artifactManagers" yaml:"artifactManagers"`
@@ -303,7 +303,7 @@ apiserver 在创建和更新时通过 `ValidateConfig` 完整校验：
 - 所有非空地址必须是带主机名的绝对 HTTP(S) URL，显式端口为 1～65535，不包含凭据、query、fragment 或空白；允许路径前缀，拼接接口路径时必须保留前缀。Git Server 和各 Artifact Manager 的两个 Runner 地址均可省略或为空，内外网均允许 HTTP 或 HTTPS。
 - YAML/JSON 严格解析，未知字段、重复键和任一服务非法均返回 `422 Invalid`，不部分保存。
 
-Gateway 仅允许 Ops/Admin 读取、创建和修改原 Config，不允许删除；普通用户、匿名及 Runner 无直接读取权限。Gateway 的内置配置名称识别同步使用 `service-config`。完整业务校验归 apiserver，消费者只处理资源身份、类型、反序列化及实际使用项缺失等接口错误，不重复校验整张配置。
+Gateway 仅允许 Ops/Admin 读取、创建和修改原 Config，不允许删除；普通用户、匿名及 Runner 无直接读取权限。Gateway 的内置配置名称识别同步使用 `services`。完整业务校验归 apiserver，消费者只处理资源身份、类型、反序列化及实际使用项缺失等接口错误，不重复校验整张配置。
 
 更新 `content` 仍需携带 `resourceVersion`。遇到冲突重新读取并合并运维修改，不得仅替换版本后覆盖其他服务配置。
 
@@ -313,7 +313,7 @@ Gateway 仅允许 Ops/Admin 读取、创建和修改原 Config，不允许删除
 apiVersion: ebs/v1
 kind: Config
 metadata:
-  name: service-config
+  name: services
 spec:
   visibility: OpsOnly
   content: |
@@ -332,13 +332,13 @@ spec:
       runnerExternalURL: ""
 ```
 
-apiserver 在 Ready 前从内嵌 `default-service-config.yaml` 按 create-only 语义初始化，经同一 Config 校验后保存；已有对象不覆盖，多实例创建冲突后读取获胜对象。初始化不探测服务连通性，Git Server 或 Artifact Manager 尚未部署不阻止 apiserver Ready。
+apiserver 在 Ready 前从内嵌 `defaults/config/services.yaml` 按 create-only 语义初始化，经同一 Config 校验后保存；已有对象不覆盖，多实例创建冲突后读取获胜对象。初始化不探测服务连通性，Git Server 或 Artifact Manager 尚未部署不阻止 apiserver Ready。
 
 默认 `gitServer.internalURL` 适用于 Docker Compose 及与 Git Server 同命名空间的 Kubernetes 控制器；跨命名空间填写带命名空间的服务域名。默认 `127.0.0.1` 的 Runner 地址仅适用于与对应服务同机且采用宿主机网络的 Runner：Artifact Manager 使用宿主机端口 `8081`，Git Server 使用映射端口 `8084`。其他部署必须填写实际可达地址。修改服务地址通过 Ops API 或运维配置页面完成，不修改初始化模板来覆盖线上配置。
 
 ### 4.5 Controller Manager 消费与更新边界
 
-Controller Manager 由公共 `pkg/serviceconfig` 负责读取 `Config/service-config` 和反序列化；`pkg/artifacturl` 只处理 Artifact 逻辑 URL，不再独立读取或解析专用 Config。
+Controller Manager 由公共 `pkg/serviceconfig` 负责读取 `Config/services` 和反序列化；`pkg/artifacturl` 只处理 Artifact 逻辑 URL，不再独立读取或解析专用 Config。
 
 - 需要访问 Git Server 或 Artifact Manager 的 reconcile，按需读取一次最新 Config，本轮共享同一份不可变快照；不需要这些服务的状态回收、终态检查等路径不读配置。
 - Snapshot 和 BuildInfo 使用 `gitServer.internalURL` 构造本轮 Git Server 客户端；RpmRepo 和 BuildInfo 从 `artifactManagers` 按实例取管理地址。同一 BuildInfo reconcile 同时访问两类服务时不重复 GET Config。
@@ -364,6 +364,6 @@ Runner 启动时读取投影，之后每 600 秒加抖动刷新。按 Job 的 `e
 | Gateway | 内置配置名称识别；service-endpoints 投影两类服务的 Runner 地址 |
 | Runner | 定时刷新服务地址，按模式解析 artifact://；internal 解析 git-server:///，external 使用 origin_url，写入本地 payload.json |
 | Controller Manager | 公共配置提供者；两个 Git 消费者按轮取客户端；Artifact 地址解析读取新结构；删除 Git 地址参数 |
-| 部署及运维文档 | 初始化 service-config、填写各访问地址；移除 Controller Manager 的 Git 地址参数 |
+| 部署及运维文档 | 初始化 services、填写各访问地址；移除 Controller Manager 的 Git 地址参数 |
 
 验收覆盖默认对象初始化与并发创建、更新不覆盖、两类服务字段校验、OpsOnly 保护、Project 实例检查、Runner 投影不包含管理地址、一轮多服务访问只读一次 Config、地址更新生效、在途调用地址固定、不同 Git Server 同步缓存隔离及配置异常不触发业务失败。部署模板不作为动态配置的覆盖源。

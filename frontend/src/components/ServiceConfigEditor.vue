@@ -68,7 +68,7 @@ import { buildServiceContent, parseServiceContent, type ServiceEndpoints, type S
 type DraftInstance = ServiceEndpoints & { key: number; name: string; isNew: boolean };
 
 const { t } = useI18n();
-const path = '/apis/ebs/v1/configs/service-config';
+const path = '/apis/ebs/v1/configs/services';
 const current = ref<Config | null>(null);
 const instances = ref<DraftInstance[]>([]);
 const gitServer = ref<ServiceEndpoints>({ internalURL: '', runnerInternalURL: '', runnerExternalURL: '' });

@@ -46,7 +46,7 @@ Artifact 和仓库访问还支持 `/art-01/artifacts/...`、`/art-01/repositorie
 
 ### Runner 经前端上传
 
-Runner 可将 `--gateway` 指向前端入口，通过 `/auth/`、`/apis/` 访问 Gateway；在 `Config/service-config` 中将所用制品实例的 `runnerInternalURL` 或 `runnerExternalURL` 设为同一入口（如 `https://ebs.example/art-01`），Runner 会在该前缀后拼接日志、产物和 Manifest 接口。地址末尾不要添加 `/artifacts`。使用 external 地址时设置 `--service-access-mode=external`，源码使用 Job payload 的 `origin_url`，保留固定 `commit_id`。构建容器须能访问上游仓库并获取该提交，无需配置 Git Server 外网地址；服务配置页面仅展示 Git Server 管理面和内网 Runner 地址，前端当前不代理 Git Server。
+Runner 可将 `--gateway` 指向前端入口，通过 `/auth/`、`/apis/` 访问 Gateway；在 `Config/services` 中将所用制品实例的 `runnerInternalURL` 或 `runnerExternalURL` 设为同一入口（如 `https://ebs.example/art-01`），Runner 会在该前缀后拼接日志、产物和 Manifest 接口。地址末尾不要添加 `/artifacts`。使用 external 地址时设置 `--service-access-mode=external`，源码使用 Job payload 的 `origin_url`，保留固定 `commit_id`。构建容器须能访问上游仓库并获取该提交，无需配置 Git Server 外网地址；服务配置页面仅展示 Git Server 管理面和内网 Runner 地址，前端当前不代理 Git Server。
 
 Artifact Manager 的默认及 `art-{数字}` 路由支持 HTTP/1.1 流式上传，关闭请求和响应缓冲，保留 Authorization、幂等键及日志分块头，不由 Nginx 自动重试上游请求。单次请求正文上限为 2 GiB，包含 multipart 元数据及边界开销，因此可上传文件须略小于 2 GiB；文件、Job 总大小和鉴权仍由 Artifact Manager 校验。经前端上传时同时受代理与后端限制，采用更严格的上限。
 

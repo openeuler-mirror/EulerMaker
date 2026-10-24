@@ -62,7 +62,7 @@ go run ./cmd/runner \
 
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
-Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`；`external` 使用 Artifact Manager 的 `runnerExternalURL`，源码直接访问 Job payload 的 `origin_url`，不依赖 Git Server 外网地址。配置来自 `Config/service-config`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
+Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`；`external` 使用 Artifact Manager 的 `runnerExternalURL`，源码直接访问 Job payload 的 `origin_url`，不依赖 Git Server 外网地址。配置来自 `Config/services`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
 
 Runner 写入本地 `payload.json` 前，按访问模式解析 `repo[].url` 中的 `artifact://{instance}/repositories/...`。源码处理规则如下：
 
@@ -79,7 +79,7 @@ Runner 在启动时读取一次凭据文件；替换凭据后需要重启。凭�
 go run ./cmd/runner --help
 ```
 
-也可以在仓库根目录先启动控制面，再独立启动 Runner。Compose Runner 使用宿主机网络，同机部署可使用初始化配置中的回环地址。异机部署时设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/service-config` 中填写 Runner 与 Job 容器可访问的服务地址。`RUNNER_SERVICE_ACCESS_MODE` 映射到 `--service-access-mode`，默认 `internal`；设为 `external` 时配置制品实例的 `runnerExternalURL`，并确保构建容器可以访问上游源码仓库。
+也可以在仓库根目录先启动控制面，再独立启动 Runner。Compose Runner 使用宿主机网络，同机部署可使用初始化配置中的回环地址。异机部署时设置可达的 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`，并在 `Config/services` 中填写 Runner 与 Job 容器可访问的服务地址。`RUNNER_SERVICE_ACCESS_MODE` 映射到 `--service-access-mode`，默认 `internal`；设为 `external` 时配置制品实例的 `runnerExternalURL`，并确保构建容器可以访问上游源码仓库。
 
 ```bash
 docker compose -f hacks/docker-compose.yml up -d --build

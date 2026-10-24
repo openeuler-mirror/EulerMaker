@@ -44,7 +44,7 @@ BuildInfo Controller 固定使用 `rpmspec -P` 展开 spec；运行环境必须�
 
 默认 `--controllers=*` 会选择全部六个 Controller；可用 `--controllers=-<名称>` 单独关闭。
 
-Snapshot、BuildInfo 和 RpmRepo Controller 通过公共服务配置提供者读取 `Config/service-config`：`gitServer.internalURL` 提供 Git Server 管理地址，`artifactManagers` 提供各 Artifact Manager 实例的内部地址。每轮 reconcile 按需读取一次并固定本轮配置，下一轮读取最新值；启动时不依赖配置读取成功。配置读取失败交由框架重试或记录永久错误，不计入包级失败预算，也不写业务失败终态。Git Server 的请求超时、重试和缓存时长仍由命令行参数配置。
+Snapshot、BuildInfo 和 RpmRepo Controller 通过公共服务配置提供者读取 `Config/services`：`gitServer.internalURL` 提供 Git Server 管理地址，`artifactManagers` 提供各 Artifact Manager 实例的内部地址。每轮 reconcile 按需读取一次并固定本轮配置，下一轮读取最新值；启动时不依赖配置读取成功。配置读取失败交由框架重试或记录永久错误，不计入包级失败预算，也不写业务失败终态。Git Server 的请求超时、重试和缓存时长仍由命令行参数配置。
 
 RpmRepo 根据 Project 的 `ebs.io/artifacts` annotation（缺省 `default`）选择实例；BuildInfo 按 `artifact://{instance}/repositories/.../` 选择内部地址下载元数据。Job `repo` 保留逻辑地址，由 Runner 根据其网络模式解析。Git Server 客户端将服务返回的 `clone_path` 补成 `git-server:///git/...`，存入 Snapshot `cloneURL` 并原样传入 Job `clone_url`。Runner 根据 Gateway `service-endpoints` 返回的 Git Server 地址和网络模式解析该逻辑地址，再交给构建脚本。
 
