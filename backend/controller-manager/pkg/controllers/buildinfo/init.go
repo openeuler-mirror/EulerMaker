@@ -333,7 +333,10 @@ func (c *Controller) refreshRpmMetaSources(
 		rpmMetaRefreshes.Inc()
 	}
 	bootstrapBefore := sources.BootstrapLayer
-	urls := bootstrapRepoURLs(round.current.Spec.BootstrapRepos, arch)
+	urls, err := c.resolveBootstrapRepoURLs(ctx, round, arch)
+	if err != nil {
+		return c.rpmMetaUnavailable(ctx, round, metadataFailureReason(err, true), err)
+	}
 	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
 		c.logf(round.key, "BootstrapRepoXMLFailed", "bootstrap repo metadata unavailable: %v", err)
 		return c.rpmMetaUnavailable(ctx, round, metadataFailureReason(err, true), err)
@@ -649,7 +652,10 @@ func (c *Controller) loadSinglePreferSources(
 	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
 		return nil, metadataFailureReason(err, false), err
 	}
-	urls := bootstrapRepoURLs(round.current.Spec.BootstrapRepos, arch)
+	urls, err := c.resolveBootstrapRepoURLs(ctx, round, arch)
+	if err != nil {
+		return nil, metadataFailureReason(err, true), err
+	}
 	if err := sources.EnsureBootstrapLayers(ctx, rpmMetaFetch, urls, arch); err != nil {
 		return nil, metadataFailureReason(err, true), err
 	}

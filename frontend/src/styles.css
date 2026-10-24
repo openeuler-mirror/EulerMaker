@@ -156,6 +156,8 @@ body.modal-open { overflow: hidden; }
 .job-log-summary { display: inline-flex; align-items: center; gap: 12px; min-width: 0; white-space: nowrap; }
 .job-log-summary > span:first-child { flex: none; }
 .job-log-summary .job-log-notice { overflow: hidden; text-overflow: ellipsis; }
+.job-log-view-all { flex: none; white-space: nowrap; cursor: pointer; }
+.job-log-view-all:disabled { opacity: .5; cursor: not-allowed; }
 .job-log-box { position: relative; min-height: 64px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
 .job-log-output { box-sizing: border-box; width: 100%; max-height: min(70vh, 900px); margin: 0; padding: 18px 88px 18px 18px; overflow: auto; color: var(--ink); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .job-log-box > .config-empty, .job-log-box > .inline-error { margin: 0; padding: 18px 88px 18px 18px; }

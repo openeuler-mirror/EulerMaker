@@ -21,3 +21,12 @@ test("rejects invalid or non-base bootstrap repository URLs", () => {
     assert.equal(isValidBootstrapRepoUrl(value), false, value);
   }
 });
+
+test("accepts artifact bootstrap references and rejects invalid logical paths", () => {
+  for (const value of ["artifact://art-01/repositories/project/os", "artifact:///repositories/project/os/", "artifact://default/repositories/openEuler%3A24/"]) {
+    assert.equal(isValidBootstrapRepoUrl(value), true, value);
+  }
+  for (const value of ["artifact://art-01/other/repo", "artifact:///repositories/../secret", "artifact:///repositories/%2e%2e/secret", "artifact:///repositories/a//b", "artifact://user:pass@art/repositories/a", "artifact://art:80/repositories/a", "artifact:///repositories/a?x=1", "artifact:///repositories/a#x"]) {
+    assert.equal(isValidBootstrapRepoUrl(value), false, value);
+  }
+});

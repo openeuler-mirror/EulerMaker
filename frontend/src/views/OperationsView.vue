@@ -11,14 +11,20 @@
 
       <section v-else-if="activeSection === 'resources'" id="operations-panel-resources" class="content-panel" role="tabpanel" aria-labelledby="operations-tab-resources">
         <div v-if="success" class="success-banner" role="status"><CircleCheckFilled />{{ success }}</div>
-    <div class="section-heading"><h2>{{ t("operations.resources") }}</h2></div>
-    <p class="form-hint">{{ t("operations.resourcesHint") }}</p>
-    <div class="operations-project-form"><button class="secondary-button" type="button" :disabled="resourcesLoading" @click="loadResources">{{ t("common.refresh") }}</button></div>
-    <div v-if="resourcesError" class="inline-error" role="alert"><WarningFilled />{{ t(resourcesError) }}</div>
-    <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div><template v-else><EmptyState v-if="!resources.length" :title="t('operations.noResources')" :description="t('operations.noResourcesHint')" /><div v-else class="project-table-wrap"><table class="project-table admin-table"><thead><tr><th>{{ t("operations.resourceName") }}</th><th>{{ t("operations.defaultCPU") }}</th><th>{{ t("operations.defaultMemory") }}</th><th>{{ t("operations.packageCount") }}</th><th>{{ t("admin.actions") }}</th></tr></thead><tbody><tr v-for="resource in resources" :key="resource.config.metadata?.name"><td><strong>{{ resource.config.metadata?.name }}</strong></td><td>{{ resource.content.default?.requests?.cpu || t("common.emptyValue") }}</td><td>{{ resource.content.default?.requests?.memory || t("common.emptyValue") }}</td><td>{{ Object.keys(resource.content.packages || {}).length }}</td><td class="admin-row-actions"><button class="text-button" type="button" @click="openEdit(resource)">{{ t("common.edit") }}</button></td></tr></tbody></table></div></template>
-        <section v-if="editorOpen" class="operations-resource-editor" aria-labelledby="resource-editor-title">
-          <div class="section-heading"><h3 id="resource-editor-title">{{ t('operations.editResource') }}</h3></div>
-          <form class="project-form" @submit.prevent="saveResource"><BuildResourceContentEditor ref="contentEditor" :source="contentSource" :disabled="saving" /><div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div><div class="modal-actions"><button class="secondary-button" type="button" :disabled="saving" @click="closeEditor">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button></div></form>
+        <div class="section-heading"><h2>{{ t("operations.resources") }}</h2></div>
+        <p class="form-hint">{{ t("operations.resourcesHint") }}</p>
+        <div class="operations-project-form"><button class="secondary-button" type="button" :disabled="resourcesLoading || saving" @click="loadResources">{{ t("common.refresh") }}</button></div>
+        <div v-if="resourcesError" class="inline-error" role="alert"><WarningFilled />{{ t(resourcesError) }}</div>
+        <div v-if="resourcesLoading" class="skeleton-list" :aria-label="t('operations.loadingResources')"><span v-for="item in 3" :key="item"></span></div>
+        <section v-else-if="editing" class="operations-resource-editor" :aria-label="t('operations.resources')">
+          <form class="project-form" @submit.prevent="saveResource">
+            <BuildResourceContentEditor :key="editorRevision" ref="contentEditor" :source="contentSource" :disabled="saving" />
+            <div v-if="dialogError" class="form-error" role="alert"><WarningFilled />{{ t(dialogError) }}</div>
+            <div class="modal-actions">
+              <button class="secondary-button" type="button" :disabled="saving" @click="resetEditor">{{ t("common.cancel") }}</button>
+              <button class="primary-button" type="submit" :disabled="saving">{{ saving ? t("common.saving") : t("common.save") }}</button>
+            </div>
+          </form>
         </section>
       </section>
 
@@ -130,11 +136,10 @@ const filteredRunners = computed(() => {
 });
 const runnersLoading = ref(false);
 const runnersError = ref("");
-const resources = ref<ResourceConfigView[]>([]);
 const resourcesLoading = ref(false);
 const resourcesError = ref("");
 const success = ref("");
-const editorOpen = ref(false);
+const editorRevision = ref(0);
 const editing = ref<ResourceConfigView | null>(null);
 const contentSource = ref("");
 const contentEditor = ref<InstanceType<typeof BuildResourceContentEditor> | null>(null);
@@ -147,7 +152,7 @@ function removableRunner(runner: Runner | null): boolean {
 function selectSection(section: OperationsSection): void {
   activeSection.value = section;
   success.value = "";
-  if (section === "resources" && !resources.value.length && !resourcesLoading.value) void loadResources();
+  if (section === "resources" && !editing.value && !resourcesLoading.value) void loadResources();
   if (section === "runners" && !runners.value.length && !runnersLoading.value) void loadRunners();
 }
 async function loadRunners(): Promise<void> {
@@ -237,23 +242,18 @@ async function loadResources(): Promise<void> {
   resourcesError.value = "";
   try {
     const config = await request<Config>(resourcePath("build-resource"));
-    resources.value = [{ config, content: parse(config.spec.content, { uniqueKeys: true }) as BuildResourceContent }];
+    editing.value = { config, content: parse(config.spec.content, { uniqueKeys: true }) as BuildResourceContent };
+    resetEditor();
   } catch (error) { resourcesError.value = errorTranslationKey(error, "operations.loadResourcesFailed"); }
   finally { resourcesLoading.value = false; }
 }
-async function openEdit(resource: ResourceConfigView): Promise<void> {
-  if (!resource.config.metadata?.name) return;
+function resetEditor(): void {
+  if (!editing.value) return;
+  contentSource.value = JSON.stringify(editing.value.content, null, 2);
   dialogError.value = "";
-  try {
-    const config = await request<Config>(resourcePath(resource.config.metadata.name));
-    editing.value = { config, content: parse(config.spec.content, { uniqueKeys: true }) as BuildResourceContent };
-    contentSource.value = JSON.stringify(editing.value.content, null, 2);
-    editorOpen.value = true;
-  } catch (error) { resourcesError.value = errorTranslationKey(error, "operations.loadResourcesFailed"); }
+  editorRevision.value += 1;
 }
-function closeEditor(): void { if (!saving.value) { editorOpen.value = false; editing.value = null; } }
 function resourcePath(name: string): string { return `/apis/ebs/v1/configs/${encodeURIComponent(name)}`; }
-async function refreshResources(): Promise<void> { await loadResources(); }
 async function saveResource(): Promise<void> {
   if (saving.value) return;
   let content: BuildResourceContent;
@@ -270,9 +270,7 @@ async function saveResource(): Promise<void> {
   try {
     await request<Config>(resourcePath(name), { method: "PUT", body: JSON.stringify(body) });
     success.value = t("operations.resourceSaved", { name });
-    editorOpen.value = false;
-    editing.value = null;
-    await refreshResources();
+    await loadResources();
   } catch (error) { dialogError.value = errorTranslationKey(error, "operations.saveResourceFailed"); }
   finally { saving.value = false; }
 }

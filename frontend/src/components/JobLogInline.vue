@@ -5,10 +5,11 @@
         <span v-if="logState">{{ t('jobLog.state') }}: {{ logState }}</span>
         <span v-if="truncated && logText" class="job-log-notice">{{ t('jobLog.tailNotice') }}</span>
       </div>
+      <button v-if="truncated && logText" class="text-button job-log-view-all" type="button" :disabled="loading" @click="load(true)">{{ t(loading ? 'jobLog.loading' : 'jobLog.viewAll') }}</button>
     </div>
     <div class="job-log-box">
       <div class="job-log-controls">
-        <button class="job-log-control-button" type="button" :aria-label="t('jobLog.refresh')" :title="t('jobLog.refresh')" :disabled="loading" @click="load"><Refresh /></button>
+        <button class="job-log-control-button" type="button" :aria-label="t('jobLog.refresh')" :title="t('jobLog.refresh')" :disabled="loading" @click="load()"><Refresh /></button>
         <button class="job-log-control-button" type="button" :aria-label="t(isFullscreen ? 'jobLog.exitFullscreen' : 'jobLog.fullscreen')" :title="t(isFullscreen ? 'jobLog.exitFullscreen' : 'jobLog.fullscreen')" @click="toggleFullscreen"><ScaleToOriginal v-if="isFullscreen" /><FullScreen v-else /></button>
       </div>
       <p v-if="error" class="inline-error" role="alert">{{ t('jobLog.loadFailed') }}</p>
@@ -32,6 +33,7 @@ const { element: fullscreenElement, isFullscreen, toggleFullscreen } = useElemen
 const logText = ref('');
 const logState = ref('');
 const truncated = ref(false);
+const showAll = ref(false);
 const loading = ref(false);
 const error = ref(false);
 let controller: AbortController | null = null;
@@ -45,6 +47,7 @@ watch(() => [props.project, props.jobName], () => {
   logText.value = '';
   logState.value = '';
   truncated.value = false;
+  showAll.value = false;
   error.value = false;
   void load();
 }, { immediate: true });
@@ -60,7 +63,7 @@ onBeforeUnmount(() => {
   generation += 1;
 });
 
-async function load(): Promise<void> {
+async function load(full = showAll.value): Promise<void> {
   if (loading.value || !props.project || !props.jobName) return;
   const current = ++generation;
   const active = new AbortController();
@@ -70,7 +73,7 @@ async function load(): Promise<void> {
   const path = `/artifacts/v1/projects/${encodeURIComponent(props.project)}/jobs/${encodeURIComponent(props.jobName)}`;
   try {
     const response = await fetch(`${path}/logs/content?stream=combined`, {
-      headers: { Range: `bytes=-${LOG_TAIL_BYTES}` }, cache: 'no-store', signal: active.signal,
+      headers: full ? {} : { Range: `bytes=-${LOG_TAIL_BYTES}` }, cache: 'no-store', signal: active.signal,
     });
     if (response.status === 404 || response.status === 416) {
       if (current === generation) { logText.value = ''; logState.value = ''; truncated.value = false; }
@@ -79,8 +82,9 @@ async function load(): Promise<void> {
       const content = await response.text();
       if (current === generation) {
         logText.value = content;
+        showAll.value = full;
         logState.value = response.headers.get('X-Log-State') || '';
-        truncated.value = Number(response.headers.get('X-Committed-Bytes') || 0) > LOG_TAIL_BYTES;
+        truncated.value = !full && Number(response.headers.get('X-Committed-Bytes') || 0) > LOG_TAIL_BYTES;
       }
     }
   } catch {
