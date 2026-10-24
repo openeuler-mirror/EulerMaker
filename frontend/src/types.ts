@@ -103,7 +103,8 @@ export interface BuildInfo {
     specResults?: Record<string, {
       specName?: string;
       status: "Pending" | "Prepared" | "PrepareFailed" | "Running" | "BuildFailed" | "InstallFailed" | "Succeeded" | "ArchUnsupported";
-      conditions?: Array<{ type?: string; status?: string; reason?: string; message?: string }>;
+      reason?: string;
+      message?: string;
       missingDeps?: Record<string, unknown>;
       dispatchCount?: number;
     }>;

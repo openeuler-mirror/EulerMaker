@@ -234,7 +234,8 @@ type SpecResults map[string]SpecResult
 type SpecResult struct {
 	SpecName      string                `json:"specName,omitempty"`
 	Status        SpecResultPhase       `json:"status"`
-	Conditions    []metav1.Condition    `json:"conditions,omitempty"`
+	Reason        string                `json:"reason,omitempty"`
+	Message       string                `json:"message,omitempty"`
 	MissingDeps   map[string]MissingDep `json:"missingDeps,omitempty"`
 	DispatchCount int64                 `json:"dispatchCount,omitempty"`
 }

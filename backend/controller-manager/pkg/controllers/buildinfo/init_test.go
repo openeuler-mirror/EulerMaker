@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -539,6 +541,61 @@ func TestInitRetryableSnapshotRepoErrorStaysPending(t *testing.T) {
 	}
 }
 
+func TestInitSpecParseFailuresStayInSpecResults(t *testing.T) {
+	for _, buildType := range []string{"full", "single"} {
+		for _, diagnostic := range []string{
+			"No compatible architectures found for build",
+			"line 19: Unknown tag: %systemd_requires",
+			"lua script failed: attempt to index a nil value",
+		} {
+			t.Run(buildType+"/"+diagnostic, func(t *testing.T) {
+				c, client, git, _ := newTestController(t)
+				path, err := exec.LookPath("rpmspec")
+				if err != nil {
+					t.Fatal(err)
+				}
+				stub := fmt.Sprintf(`#!/bin/sh
+case "$(cat "$3")" in
+  *"Name: ubturbo"*)
+    echo 'error: %s' >&2
+    exit 1 ;;
+esac
+cat "$3"
+`, diagnostic)
+				if err := os.WriteFile(path, []byte(stub), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				info := seedHealthyBasics(client, buildType, "ubturbo")
+				upsertCondition(&info.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed, "old aggregate")
+				client.SeedBuildInfo(info)
+				client.SeedSnapshot(testSnapshotObj(
+					repoEntry{name: "ubturbo", cloneURL: gitURL1, commitID: "c1", declare: true}))
+				client.SeedRpmRepo(testRpmRepoObj(""))
+				git.repo(gitURL1, "c1", map[string]string{"ubturbo.spec": specText("ubturbo"), "a.spec": specText("a")})
+
+				reconcileOnce(t, c)
+
+				bi := getBuildInfo(t, client)
+				requirePhase(t, bi, ebsv1.BuildInfoProcessing)
+				result := bi.Status.SpecResults["ubturbo/ubturbo.spec"]
+				if result.Status != ebsv1.SpecPrepareFailed || result.SpecName != "" {
+					t.Fatalf("parse failure result = %+v", result)
+				}
+				cond := requireSpecReason(t, result, ReasonSpecParseFailed)
+				if !strings.Contains(cond.Message, "rpmspec ubturbo.spec: exit status 1: error: "+diagnostic) {
+					t.Fatalf("spec diagnostic = %q", cond.Message)
+				}
+				if findCondition(bi.Status.Conditions, ConditionSpecDependsFillFailed) != nil {
+					t.Fatalf("spec diagnostic was aggregated: %+v", bi.Status.Conditions)
+				}
+				if jobs := jobSpecNames(t, client); len(jobs) != 1 || !jobs["a"] {
+					t.Fatalf("jobs = %v, want only a", jobs)
+				}
+			})
+		}
+	}
+}
+
 func TestInitPermanentSpecReadFailureSkipsSpec(t *testing.T) {
 	c, client, git, _ := newTestController(t)
 	seedHealthyBasics(client, "full")
@@ -552,9 +609,12 @@ func TestInitPermanentSpecReadFailureSkipsSpec(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	cond := requireCondition(t, bi.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed)
-	if !strings.Contains(cond.Message, "repo1/bad.spec") {
-		t.Fatalf("condition message = %q, want repo1/bad.spec", cond.Message)
+	cond := requireSpecReason(t, bi.Status.SpecResults["repo1/bad.spec"], ReasonSpecParseFailed)
+	if !strings.Contains(cond.Message, "blob missing") {
+		t.Fatalf("condition message = %q, want blob missing", cond.Message)
+	}
+	if findCondition(bi.Status.Conditions, ConditionSpecDependsFillFailed) != nil {
+		t.Fatalf("spec diagnostic was aggregated: %+v", bi.Status.Conditions)
 	}
 	requireSpecNames(t, bi, "a")
 	if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
@@ -578,7 +638,7 @@ func TestInitSpecifiedPermanentSpecReadFailureDegrades(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	requireCondition(t, bi.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed)
+	requireSpecReason(t, bi.Status.SpecResults["repo1/bad.spec"], ReasonSpecParseFailed)
 	requireSpecNames(t, bi, "a")
 	if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
@@ -645,9 +705,7 @@ func TestInitArchUnsupportedSkipsJob(t *testing.T) {
 	if ss.Status != ebsv1.SpecArchUnsupported {
 		t.Fatalf("specResults[a].Status = %q, want ArchUnsupported", ss.Status)
 	}
-	if len(ss.Conditions) != 0 {
-		t.Fatalf("specResults[a].Conditions = %v, want empty", ss.Conditions)
-	}
+	requireSpecReason(t, ss, "")
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["b"] {
 		t.Fatalf("jobs = %v, want {b} only", got)
 	}
@@ -700,12 +758,7 @@ func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
 	if ss.Status != ebsv1.SpecBuildFailed {
 		t.Fatalf("specResults[a].Status = %q, want Failed", ss.Status)
 	}
-	requireCondition(
-		t,
-		ss.Conditions,
-		ConditionDefaultBuildResourceConfigNotFound,
-		ReasonDefaultBuildResourceConfigNotFound,
-	)
+	requireSpecReason(t, ss, ReasonDefaultBuildResourceConfigNotFound)
 	if got := len(listJobs(t, client)); got != 0 {
 		t.Fatalf("jobs = %d, want 0", got)
 	}
@@ -977,9 +1030,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		if ss.Status != ebsv1.SpecArchUnsupported {
 			t.Fatalf("specResults[a].Status = %q, want ArchUnsupported", ss.Status)
 		}
-		if len(ss.Conditions) != 0 {
-			t.Fatalf("specResults[a].Conditions = %v, want empty", ss.Conditions)
-		}
+		requireSpecReason(t, ss, "")
 		if got := len(listJobs(t, client)); got != 0 {
 			t.Fatalf("jobs = %d, want 0", got)
 		}
@@ -1009,12 +1060,7 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		if ss.Status != ebsv1.SpecBuildFailed {
 			t.Fatalf("specResults[a].Status = %q, want Failed", ss.Status)
 		}
-		requireCondition(
-			t,
-			ss.Conditions,
-			ConditionDefaultBuildResourceConfigNotFound,
-			ReasonDefaultBuildResourceConfigNotFound,
-		)
+		requireSpecReason(t, ss, ReasonDefaultBuildResourceConfigNotFound)
 	})
 }
 

@@ -369,7 +369,8 @@ type SpecResults map[string]SpecResult
 type SpecResult struct {
     SpecName      string                `json:"specName,omitempty"`
     Status        SpecResultPhase       `json:"status"`
-    Conditions    []metav1.Condition    `json:"conditions,omitempty"`
+    Reason        string                `json:"reason,omitempty"`
+    Message       string                `json:"message,omitempty"`
     MissingDeps   map[string]MissingDep `json:"missingDeps,omitempty"`
     DispatchCount int64                 `json:"dispatchCount,omitempty"`
 }
@@ -382,7 +383,8 @@ type SpecResult struct {
 | `specResults` | 以 `仓库名/spec文件名` 为 key 的准备、构建及安装检查结果，当前只解析根目录 spec |
 | `specName` | 解析成功后必须填写 RPM `Name:` 的宏展开值；解析失败时允许为空，不从文件名推断 |
 | `status` | 单一结果状态，枚举见下表；不得用空串表示初始状态 |
-| `conditions`（条目内） | 准备、构建、安装检查的具体原因及诊断，不另设分阶段状态字段 |
+| `reason` | 当前结果的机器可读原因；失败时覆盖，重新派发或成功时清空 |
+| `message` | 当前结果的诊断信息，与 reason 同步更新；经清洗并限制为 1024 字节。包级下载/解析失败仅记录在对应条目，不汇总到 BuildInfo conditions |
 | `missingDeps` | 安装检查失败的缺失依赖，供 BuildInfo Controller 动态补边；新一代执行时清理旧结果 |
 | `dispatchCount` | 已确认的最大派发代次；回填按核验后的 Job 代次取最大值，不因历史 Job 清理而回退 |
 

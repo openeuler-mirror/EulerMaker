@@ -693,6 +693,15 @@ func TestStatusMatchesIntent(t *testing.T) {
 	if statusMatchesIntent(specA, specB) {
 		t.Fatal("dispatchCount mismatch must not match")
 	}
+	for _, result := range []ebsv1.SpecResult{
+		{DispatchCount: 1, Reason: ReasonJobFailed},
+		{DispatchCount: 1, Message: "job failed"},
+	} {
+		specB.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"a": result})
+		if statusMatchesIntent(specA, specB) {
+			t.Fatalf("diagnostic mismatch must not confirm the write: %+v", result)
+		}
+	}
 	repos := copyStatus(base)
 	repos.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{"repo-a/a.spec": {Status: ebsv1.SpecPrepared}})
 	if statusMatchesIntent(base, repos) {

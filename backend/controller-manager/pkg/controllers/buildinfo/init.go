@@ -245,7 +245,7 @@ func (c *Controller) checkArchSupported(
 		return controller.ReconcileResult{}, nil
 	}
 	message := fmt.Sprintf("target arch %q not in exclusiveArch %v", arch, depend.ExclusiveArch)
-	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecArchUnsupported, "", "", "")
+	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecArchUnsupported, "", "")
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "ArchUnsupported", "spec %s marked ArchUnsupported: %s", specName, message)
 	}
@@ -266,7 +266,7 @@ func (c *Controller) checkBuildRequires(
 		return controller.ReconcileResult{}, nil
 	}
 	message := "build requires unavailable: " + missingDepsMessage(missing)
-	result, err := c.markSpecFailed(ctx, round, specName, ConditionBuildFailed, ReasonRpmDependsMissing, message)
+	result, err := c.markSpecFailed(ctx, round, specName, ReasonRpmDependsMissing, message)
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "RpmDependsMissing", "spec %s marked Failed: %s", specName, message)
 	}

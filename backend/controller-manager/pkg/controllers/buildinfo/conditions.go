@@ -1,4 +1,3 @@
-// BuildInfo, spec, and install conditions share these helpers. Kubernetes metadata helpers manage lastTransitionTime.
 package buildinfo
 
 import (
@@ -15,7 +14,7 @@ import (
 
 // BuildInfo-level condition types.
 const (
-	// ConditionSpecDependsFillFailed carries spec parsing degradation and single-build empty-set closeouts.
+	// ConditionSpecDependsFillFailed records a single-build empty-set closeout.
 	ConditionSpecDependsFillFailed = "SpecDependsFillFailed"
 	// ConditionSpecCommitMissing records package-repo entries skipped for a non-retryable resolution failure.
 	ConditionSpecCommitMissing = "SpecCommitMissing"
@@ -29,13 +28,14 @@ const (
 	ConditionRpmRepoUnavailable = "RpmRepoUnavailable"
 	// ConditionSnapshotUnavailable is a persisted stop-dispatch marker.
 	ConditionSnapshotUnavailable  = "SnapshotUnavailable"
+	ConditionJobAbortFailed       = "JobAbortFailed"
 	ConditionBuildPayloadInvalid  = "BuildPayloadInvalid"
 	ReasonBuildPayloadParseFailed = "BuildPayloadParseFailed"
 )
 
 // BuildInfo-level condition reasons.
 const (
-	ReasonSpecParseFailed             = "SpecParseFailed"
+	ReasonJobAbortFailed              = "JobAbortFailed"
 	ReasonSpecifiedBuildSetEmpty      = "SpecifiedBuildSetEmpty"
 	ReasonSpecCommitMissing           = "SpecCommitMissing"
 	ReasonDcgBuildFailed              = "DcgBuildFailed"
@@ -53,25 +53,18 @@ const (
 	ReasonSnapshotQueryFailed         = "SnapshotQueryFailed"
 )
 
-// Spec-level condition types and reasons.
+// Spec-level diagnostic reasons.
 const (
-	ConditionBuildFailed                        = "BuildFailed"
-	ReasonJobFailed                             = "JobFailed"
-	ConditionRebuildFailed                      = "RebuildFailed"
-	ReasonRebuildJobFailed                      = "RebuildJobFailed"
-	ReasonRpmDependsMissing                     = "RpmDependsMissing"
-	ConditionDefaultBuildResourceConfigNotFound = "DefaultBuildResourceConfigNotFound"
-	ReasonDefaultBuildResourceConfigNotFound    = "DefaultBuildResourceConfigNotFound"
-	ConditionBuildAborted                       = "BuildAborted"
-	ReasonBuildAborted                          = "BuildAborted"
-	ConditionJobAbortFailed                     = "JobAbortFailed"
-	ReasonJobAbortFailed                        = "JobAbortFailed"
-	ConditionJobCreateRejected                  = "JobCreateRejected"
-	ReasonJobCreateRejected                     = "JobCreateRejected"
-	ConditionInstall                            = "Install"
-	ReasonInstallCheckFailed                    = "InstallCheckFailed"
-	ReasonJobResultMissing                      = "JobResultMissing"
-	ReasonJobResultInvalid                      = "JobResultInvalid"
+	ReasonSpecParseFailed                    = "SpecParseFailed"
+	ReasonJobFailed                          = "JobFailed"
+	ReasonRebuildJobFailed                   = "RebuildJobFailed"
+	ReasonRpmDependsMissing                  = "RpmDependsMissing"
+	ReasonDefaultBuildResourceConfigNotFound = "DefaultBuildResourceConfigNotFound"
+	ReasonBuildAborted                       = "BuildAborted"
+	ReasonJobCreateRejected                  = "JobCreateRejected"
+	ReasonInstallCheckFailed                 = "InstallCheckFailed"
+	ReasonJobResultMissing                   = "JobResultMissing"
+	ReasonJobResultInvalid                   = "JobResultInvalid"
 )
 
 func failedSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
@@ -177,17 +170,8 @@ func sanitizeMessage(message string) string {
 	return message[:cut]
 }
 
-// specCondition writes a spec-level condition into the given SpecResults.
-func specCondition(spec *ebsv1.SpecResult, condType, reason, message string) {
-	upsertCondition(&spec.Conditions, condType, reason, message)
-}
-
-// installCondition writes the install-level condition.
-func installCondition(spec *ebsv1.SpecResult, jobName string) {
-	upsertCondition(
-		&spec.Conditions,
-		ConditionInstall,
-		ReasonInstallCheckFailed,
-		"job "+jobName+" install check failed",
-	)
+// setSpecDiagnostic replaces the diagnostic for the current spec result.
+func setSpecDiagnostic(spec *ebsv1.SpecResult, reason, message string) {
+	spec.Reason = reason
+	spec.Message = sanitizeMessage(message)
 }

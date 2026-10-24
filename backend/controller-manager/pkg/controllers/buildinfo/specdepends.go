@@ -58,10 +58,9 @@ type repoParseInput struct {
 }
 
 type repoParseResult struct {
-	specs         map[string]specparse.SpecDepend
-	parseFailures []string
-	failures      ebsv1.SpecResults
-	ok            bool
+	specs    map[string]specparse.SpecDepend
+	failures ebsv1.SpecResults
+	ok       bool
 }
 
 func (a *specAssembly) prepareFailed(repo, file, message string) {
@@ -69,7 +68,7 @@ func (a *specAssembly) prepareFailed(repo, file, message string) {
 		a.failures = ebsv1.SpecResults{}
 	}
 	result := ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
-	upsertCondition(&result.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed, message)
+	setSpecDiagnostic(&result, ReasonSpecParseFailed, message)
 	a.failures[repo+"/"+file] = result
 }
 
@@ -121,7 +120,7 @@ func (c *Controller) assembleSpecDepends(
 	arch := round.build.Spec.BuildTarget.Arch
 	macros := payloadMacros(round.current.Spec.BuildPayload)
 	merged := map[string]specparse.SpecDepend{}
-	var parseFailures, commitMissing []string
+	var commitMissing []string
 	var readyRepos []repoParseInput
 
 	for _, repo := range repos {
@@ -180,7 +179,6 @@ func (c *Controller) assembleSpecDepends(
 			for index := range indices {
 				input := readyRepos[index]
 				local := &specAssembly{}
-				var failures []string
 				specs, ok := c.fetchRepoSpecs(
 					ctx,
 					gitClient,
@@ -191,13 +189,11 @@ func (c *Controller) assembleSpecDepends(
 					arch,
 					macros,
 					local,
-					&failures,
 				)
 				results[index] = repoParseResult{
-					specs:         specs,
-					parseFailures: failures,
-					failures:      local.failures,
-					ok:            ok,
+					specs:    specs,
+					failures: local.failures,
+					ok:       ok,
 				}
 			}
 		}()
@@ -210,7 +206,6 @@ func (c *Controller) assembleSpecDepends(
 
 	for index, input := range readyRepos {
 		result := results[index]
-		parseFailures = append(parseFailures, result.parseFailures...)
 		for key, failure := range result.failures {
 			if asm.failures == nil {
 				asm.failures = ebsv1.SpecResults{}
@@ -238,16 +233,6 @@ func (c *Controller) assembleSpecDepends(
 		}
 	}
 
-	if len(parseFailures) > 0 {
-		asm.degraded = append(
-			asm.degraded,
-			degradedCondition{
-				condType: ConditionSpecDependsFillFailed,
-				reason:   ReasonSpecParseFailed,
-				items:    parseFailures,
-			},
-		)
-	}
 	if len(commitMissing) > 0 {
 		asm.degraded = append(
 			asm.degraded,
@@ -336,7 +321,7 @@ func (c *Controller) enumerateRepos(round *reconcileRound, snapshot *ebsv1.Snaps
 
 // fetchRepoSpecs downloads and parses every root-level *.spec of one repository. A transient failure anywhere in the
 // repo drops the whole repo from this round (ok=false); deterministic failures skip per spec (or the whole repo on an
-// invalid commitID) and are recorded as degraded conditions. Specs within one repository are sequential; distinct
+// invalid commitID) and are recorded in SpecResult diagnostics. Specs within one repository are sequential; distinct
 // repositories are processed by the bounded pool above.
 
 type parsedRepoSpec struct {
@@ -354,11 +339,10 @@ func (c *Controller) fetchRepoSpecs(
 	arch string,
 	macros []string,
 	asm *specAssembly,
-	parseFailures *[]string,
 ) (map[string]specparse.SpecDepend, bool) {
 	listing, err := gitClient.ExecCommand(ctx, originURL, "git-ls-tree --name-only "+entry.CommitID)
 	if err != nil {
-		return nil, c.handleGitFailure(round, repo, "", asm, parseFailures, err)
+		return nil, c.handleGitFailure(round, repo, "", asm, err)
 	}
 	var files []string
 	rootFiles := make(map[string]struct{})
@@ -376,7 +360,6 @@ func (c *Controller) fetchRepoSpecs(
 	sort.Strings(files)
 	if len(files) == 0 {
 		asm.prepareFailed(repo, "", "repository contains no root spec files")
-		*parseFailures = append(*parseFailures, repo+" (no root spec files)")
 	}
 
 	specs := map[string]specparse.SpecDepend{}
@@ -384,14 +367,12 @@ func (c *Controller) fetchRepoSpecs(
 		result := c.parseRepoSpec(ctx, gitClient, file, originURL, entry.CommitID, repo, arch, macros, rootFiles)
 		if result.err != nil {
 			if result.gitFailure {
-				if !c.handleGitFailure(round, repo, file, asm, parseFailures, result.err) {
+				if !c.handleGitFailure(round, repo, file, asm, result.err) {
 					return nil, false
 				}
 				continue
 			}
 			asm.prepareFailed(repo, file, result.err.Error())
-			item := fmt.Sprintf("%s/%s (%v)", repo, file, result.err)
-			*parseFailures = append(*parseFailures, item)
 			continue
 		}
 		depend := result.depend
@@ -455,7 +436,6 @@ func (c *Controller) handleGitFailure(
 	round *reconcileRound,
 	repo, file string,
 	asm *specAssembly,
-	parseFailures *[]string,
 	err error,
 ) bool {
 	gitServerFailures.Inc()
@@ -464,13 +444,7 @@ func (c *Controller) handleGitFailure(
 		c.logf(round.key, "GitServerTransient", "repo %s git fetch failed transiently: %v", repo, err)
 		return false
 	}
-	where := repo
-	if file != "" {
-		where = repo + "/" + file
-	}
-	item := fmt.Sprintf("%s (%v)", where, gitErr.Err)
 	asm.prepareFailed(repo, file, gitErr.Err.Error())
-	*parseFailures = append(*parseFailures, item)
 	// Deterministic failures never make the round incomplete.
 	return true
 }

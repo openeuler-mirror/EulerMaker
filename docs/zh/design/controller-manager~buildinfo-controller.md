@@ -84,7 +84,7 @@ BuildInfo 与父 Build 同项目、同名；创建输入字段见 15.2。
 **关键约定：**
 - Build Controller 对 BuildInfo 的读取分为三步（终态收口 condition 优先于 specResults 判定）：
   1. 读 `BuildInfo.status.phase`：`Completed` 表示构建阶段流程终结（**不代表成功**）。
-  2. 读 `BuildInfo.status.conditions`：`ReleaseUnavailable`、`RpmRepoUnavailable`、`SnapshotUnavailable` 为停止派发标记，按 6.5 收敛；`SpecDependsFillFailed` 的 `SpecifiedBuildSetEmpty` 仅用于 `single` 空集失败收口。`incremental` 与 `specified` 的包级解析失败只记录降级和 PrepareFailed 条目，不因种子失败或构建集为空直接失败收口。
+  2. 读 `BuildInfo.status.conditions`：`ReleaseUnavailable`、`RpmRepoUnavailable`、`SnapshotUnavailable` 为停止派发标记，按 6.5 收敛；`SpecDependsFillFailed` 的 `SpecifiedBuildSetEmpty` 仅用于 `single` 空集失败收口。`incremental` 与 `specified` 的包级解析失败只记录 PrepareFailed 条目及条目内诊断，不因种子失败或构建集为空直接失败收口。
   3. 读 `BuildInfo.status.specResults` 汇总包级 build/install 结果：非 single 即使有失败 spec 也进入发布阶段，`BuildSucceed=False` 记录构建不完全成功；若发布 Ready，Build 仍可为 `Success/publish`，其失败 spec 供下一轮增量构建重试。`single` 按构建结果直接收口。增量构建集为空时按当前 Build Controller 的汇总契约处理；BuildInfo 只会在父 Build 进入 Prepared 后创建，此时种子已确认。
   - `Failed` → Build 直接进入 `Failed/build`，不等待 RpmRepo；`Pending` / `Processing` → Build 重新入队等待。
 - `BuildPayloadInvalid=True` 先持久化并停止新 Job 派发；复用父 Build 中止时的 Job 扫描和尽力 `/abort` 机制，所有可见非终态 Job 均尝试发送中止请求后写 `BuildInfo.status.phase=Failed`，不等待 Job 实际进入终态，也不以中止成功作为前提。父 Build 读到 `Failed` 时写 `Failed/build`，不按 `specResults` 汇总、不进入发布；RpmRepo 读到 `Failed` 时停止后续过程仓与正式发布，按自身失败终局收口。具体配置错误只在 BuildInfo condition message 中暴露。
@@ -517,7 +517,7 @@ buildSet = buildSet ∪ direct                                                # 
 
 **1. specDepends 指定包仓库集直组装（步骤 0）**：
 
-- 仅定位 `Build.spec.packages` 各包（即包仓库名）对应的当前 Snapshot `packageRepoStatuses` 条目，以 `<namespace>/<buildinfo.name>` 查 per-BuildInfo specDepends 缓存：命中且 phase=Processing → 直接复用；Pending 重入 / miss 经 git-server 按各包在 `Snapshot.spec.packageRepos` 中的原始 `url` 和状态条目的 `commitID` 下载解析**全部指定包仓库**的 `*.spec`（spec 文件内容经全局 specFileCache 去重，下载完成后全量视图覆盖写回 per-BuildInfo 缓存，15.11；下载解析机制与条目就绪不变式同 7.2.2/E-23/E-24：任一条目不存在或仍解析中 → 条目就绪不变式下不出现（防御性观察到 → 视同瞬态失败：本轮跳过该仓库、保持 Pending 重试，7.2.2）；**指定包不在当前 Snapshot `spec.packageRepos`**（拼写错误/已删除，snapshot 层面确定性不存在——区别于在 packageRepos 但 statuses 无条目的瞬态等待）→ 按包**确定性**跳过该仓库（不进组装结果，记 condition `SpecCommitMissing`，message 注明"不在 packageRepos"）；**单个**包条目不可重试失败（E-24）→ 按包降级跳过该仓库（不进组装结果，记 condition `SpecCommitMissing`，语义同 `full`/`incremental` 降级分支）；**单个** spec 下载/解析确定性失败（E-23）→ 按 spec 粒度跳过（不影响同仓库其余 spec 与其他仓库，记 condition `SpecDependsFillFailed`，reason=`SpecParseFailed`，① 业务性降级）；仓库就绪但无 `*.spec` → 该仓库自然无条目产出，不记失败；跳过后构建集为空 → init 确定性失败收口（见第 5 条））；
+- 仅定位 `Build.spec.packages` 各包（即包仓库名）对应的当前 Snapshot `packageRepoStatuses` 条目，以 `<namespace>/<buildinfo.name>` 查 per-BuildInfo specDepends 缓存：命中且 phase=Processing → 直接复用；Pending 重入 / miss 经 git-server 按各包在 `Snapshot.spec.packageRepos` 中的原始 `url` 和状态条目的 `commitID` 下载解析**全部指定包仓库**的 `*.spec`（spec 文件内容经全局 specFileCache 去重，下载完成后全量视图覆盖写回 per-BuildInfo 缓存，15.11；下载解析机制与条目就绪不变式同 7.2.2/E-23/E-24：任一条目不存在或仍解析中 → 条目就绪不变式下不出现（防御性观察到 → 视同瞬态失败：本轮跳过该仓库、保持 Pending 重试，7.2.2）；**指定包不在当前 Snapshot `spec.packageRepos`**（拼写错误/已删除，snapshot 层面确定性不存在——区别于在 packageRepos 但 statuses 无条目的瞬态等待）→ 按包**确定性**跳过该仓库（不进组装结果，记 condition `SpecCommitMissing`，message 注明"不在 packageRepos"）；**单个**包条目不可重试失败（E-24）→ 按包降级跳过该仓库（不进组装结果，记 condition `SpecCommitMissing`，语义同 `full`/`incremental` 降级分支）；**单个** spec 下载/解析确定性失败（E-23）→ 按 spec 粒度跳过（不影响同仓库其余 spec 与其他仓库，仅在对应 SpecResult 写 `reason=SpecParseFailed` 和诊断 message）；仓库就绪但无 `*.spec` → 记录 `repo/` 的 PrepareFailed 条目和条目内诊断；跳过后构建集为空 → init 确定性失败收口（见第 5 条））；
 - 不遍历其余仓库、构建门禁为 build 级判断且恒通过（7.2.2），无 repo 级门禁概念，`single` 与其余类型一致；
 - `packages` 为空 → init 确定性失败收口（写 condition `SpecDependsFillFailed`，reason=`SpecifiedBuildSetEmpty` + 直接置 `Completed` 终态，数据异常，specResults 保持空——父 Build 由 Build Controller 汇总规则收口 Failed）；
 - 组装结果即构建集（无扩散），BuildInfo 级内存视图不落库（无 PUT spec）；同一 url+commit 解析结果确定，缓存视图内容稳定（等价原冻结语义，E-01 不变量对 `single` 同样适用）。
@@ -602,7 +602,7 @@ buildSet = buildSet ∪ direct                                                # 
 **失败场景的两条放宽规则（G-03 例外）**：
 
 1. **重建取消（有效 required）**：定义 `effectiveRequired(S) = 1` 当 S 的任一直接上游（`inDep ∪ installInDep`）为 `BuildFailed` 或 `ArchUnsupported`，否则 `DispatchRequirements(S)`（环内 2 / 普通 1）。任一上游构建失败或架构不支持 ⟹ S 的重建（第 2 次下发）取消、v1 即终——重建的目的是"基于上游最终产物重建"，Failed 上游不会再产出新产物，重建无意义；已 `Succeeded` 未达 required 的节点**不翻转 Failed**。allTerminal（6.4）、7.3 步骤 4 的"未达下发次数"判断、7.4.6 一致性门禁均按**有效 required** 判定。
-2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → 统一结果 **以最后一个 Job 为准标 `BuildFailed`**（spec 状态无"保持前代"例外），仅 condition 以 `RebuildFailed`（见 7.4.5/9.1）区别于首次失败的 `BuildFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。发布确认门禁（7.4.6）从本轮 Job 列表取得最新一代 Job 名称，不依赖 `specResults` 保存名称。
+2. **best-effort 末代**：重建 Job 自身失败（`DispatchCount >= required` 的末代）且存在前代 `Succeeded` 产物 → 统一结果 **以最后一个 Job 为准标 `BuildFailed`**（spec 状态无"保持前代"例外），以 `reason=RebuildJobFailed`（见 7.4.5/9.1）区别于首次失败的 `JobFailed`；下游按 E-17 自判——构建依赖统一存在性裁决（7.4.1 条件 2）见 v1 产物已发布可用则照常下发（best-effort 效果由依赖存在性裁决承担）。发布确认门禁（7.4.6）从本轮 Job 列表取得最新一代 Job 名称，不依赖 `specResults` 保存名称。
 
 `backfillJobs` 回填时将 `DispatchCount` 提升到当前值与同 spec 已核验 Job 最大派发代次的较大值，避免状态写入丢失后重复下发；Job 缺少派发代次 annotation 时不参与回填。
 
@@ -676,7 +676,7 @@ Controller 在 applyJobPhase 中回填最新一代 Job：
 1. **回填时机**：目标 Job（多代取最新，7.4.4）`phase=Succeeded` 时按上表回填；运行中不改写。
 2. **代际覆盖**：最新一代进入 Running 清理旧诊断和 missingDeps；Job 失败写 BuildFailed；Job 成功时按统一 result 映射。
 3. **安装失败不等于构建失败**：InstallFailed 是终态且构建产物可用，仍参与发布确认、有效 required 和动态补边；最终失败由结果 key 推导，不重复存储仓库列表。
-4. **幂等性**：每次按最新 Job 结果覆盖 `missingDeps`，`specResults[key].conditions` 用 upsert；reconcile 重复执行无副作用累积（10.3）。
+4. **幂等性**：每次按最新 Job 结果覆盖 `missingDeps`，同步覆盖 `reason` / `message`；reconcile 重复执行无副作用累积（10.3）。
 
 ##### 运行期动态补边（install 失败 → 补边 → 成环重建重发）
 
@@ -715,7 +715,7 @@ Controller 在 applyJobPhase 中回填最新一代 Job：
 | `Rejected` | 404（写入时对象已被外部删除） | 记录日志 + 失效 dcgDict 缓存，返回 nil（与 E-10 一致） |
 | `Rejected` | 408 / 429 / 5xx / 其他未单独处理的响应 | 返回 error；429/503 含 `Retry-After` 时由公共框架采用服务端延迟 |
 | `Rejected` | BuildInfo status 写入返回 400 / 401 / 403 / 422 | `controller.NewPermanentError` |
-| `Rejected` | CreateJob 返回 400 / 422（仅该 Job 的确定性拒绝） | 将对应 spec 的 `status` 写为 `BuildFailed`，记录 `JobCreateRejected` condition，继续派发其他可用 spec；拒绝响应已证明 Job 未创建，无须 GET 确认 |
+| `Rejected` | CreateJob 返回 400 / 422（仅该 Job 的确定性拒绝） | 将对应 spec 的 `status` 写为 `BuildFailed`，记录 `reason=JobCreateRejected`，继续派发其他可用 spec；拒绝响应已证明 Job 未创建，无须 GET 确认 |
 | `Unknown`（无法确认写入结果） | 请求发出后连接中断/响应超时/响应无法解析 | 先按 10.3 执行确认读取：意图已实现 → 按成功继续本轮后续动作；未实现 → `ReconcileResult{RequeueAfter: 1s}` 下轮重算；404/UID 不同 → 返回 nil 结束本轮；确认 GET 失败按读取错误分类 |
 
 读取与业务错误分类：
@@ -733,7 +733,7 @@ Controller 在 applyJobPhase 中回填最新一代 Job：
 | RpmMeta XML 下载/解析失败（15.10，含 bootstrap 层） | 未达停止条件时写 `RpmRepoRetrying` 并继续重试；连续 XML 解析失败达阈值才按 E-29 停止；无效 URL 或确定性 4xx 请求立即停止 | `ReconcileResult{}`（等待下轮）；single prefer 路径返回 requeue |
 | 当前 Snapshot 查询失败（Pending 步骤 0a / Processing 步骤 2.2，与本 Build 同名，含 404 异常瞬态） | 记录日志；计入当前 Snapshot 连续失败计数（`Cache.snapshotReadyFailures`，E-30），未达阈值（`--snapshot-ready-retry-limit`，默认 3）时返回可重试错误 | error（快速退避，达上限转慢速退避） |
 | 当前 Snapshot 查询连续失败达阈值（E-30） | 持久化 SnapshotUnavailable，停止派发并按 6.5 等待已有 Job 收敛后 Completed | 等待返回零值 + nil，List/写入失败按 7.5、10.2/10.3 分流 |
-| spec 下载/解析确定性失败（E-23） | 所有构建类型均跳过受影响 spec 或仓库，记录 `SpecDependsFillFailed` 和 PrepareFailed 条目；`single` 全部跳过导致空集时按 7.2.3 失败收口 | 其余可用 spec 继续推进；`incremental`/`specified` 空集正常完成 |
+| spec 下载/解析确定性失败（E-23） | 所有构建类型均跳过受影响 spec 或仓库，记录 PrepareFailed 条目，诊断仅写入该条目的 `SpecResult.reason` / `message`，不汇总到 BuildInfo conditions；`single` 全部跳过导致空集时按 7.2.3 失败收口 | 其余可用 spec 继续推进；`incremental`/`specified` 空集正常完成 |
 | specDepends 缓存补源/组装失败（git-server 瞬态失败，15.11） | 记录日志，该仓库条目本轮视同暂不可用（组装不完整保持 Pending，下轮重入重新组装；写回与否不影响正确性——下轮覆盖，7.2.2） | `ReconcileResult{}`（等下一轮） |
 | packageRepoStatuses 条目不可重试失败（E-24） | 所有构建类型均跳过受影响仓库，记录 `SpecCommitMissing` 和 PrepareFailed 条目；条目仍在解析时保持 Pending；`single` 空集按 7.2.3 收口 | 其余可用 spec 继续推进；`incremental`/`specified` 空集正常完成 |
 | `incremental` / `specified` 构建集为空 | 种子为空、均无可用 spec 或全部降级；保留已记录的包级错误 | 直接写 `Completed`，不生成 Job |
@@ -758,17 +758,17 @@ Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入
 
 ## 九、条件与时间
 
-### 9.1 Conditions 目录
+### 9.1 Conditions 与包级诊断
 
-`BuildInfo.status.conditions` 与 `SpecResult.conditions` 均采用 `metav1.Condition` 结构（`type` / `status` / `reason` / `message` / `lastTransitionTime`）。`type` 采用 PascalCase；本控制器写 condition 时 `status` 恒为 `True`（表示"该情形当前成立"）；`reason` 为机器可读子原因，`message` 记录上下文（如阻断的上游 spec 名）。写入统一经 `meta.SetStatusCondition`（`k8s.io/apimachinery/pkg/api/meta`：status 未变化时保留原 `lastTransitionTime`，幂等）；清除经 `meta.RemoveStatusCondition`。
+`BuildInfo.status.conditions` 采用 `metav1.Condition` 结构（`type` / `status` / `reason` / `message` / `lastTransitionTime`）。`type` 采用 PascalCase；本控制器写 condition 时 `status` 恒为 `True`（表示"该情形当前成立"）；`reason` 为机器可读子原因，`message` 记录上下文（如阻断的上游 spec 名）。写入统一经 `meta.SetStatusCondition`（`k8s.io/apimachinery/pkg/api/meta`：status 未变化时保留原 `lastTransitionTime`，幂等）；清除经 `meta.RemoveStatusCondition`。
 
-**写入原则**：业务性结果、不可重试错误和需人工介入事件写 condition；RpmRepo 的可重试异常另写 `RpmRepoRetrying`，恢复或构建终止时清除。同一 type 只保存当前状态，不作为逐次重试的事件历史；reason 不变时保留首次 message，避免每轮重写 status。其他瞬时事件仍只记录结构化日志并重试。
+**对象级写入原则**：影响整个 BuildInfo 的业务性结果、不可重试错误和需人工介入事件写 condition；RpmRepo 的可重试异常另写 `RpmRepoRetrying`，恢复或构建终止时清除。同一 type 只保存当前状态，不作为逐次重试的事件历史；reason 不变时保留首次 message，避免每轮重写 status。其他瞬时事件仍只记录结构化日志并重试。
 
 **BuildInfo.status.conditions（BuildInfo 级）**：
 
 | type | 触发时机 | 性质 |
 |------|---------|------|
-| `SpecDependsFillFailed` | spec 下载/解析确定性失败时记录 `SpecParseFailed`，按 spec/仓库降级；`single` 构建集为空时记录 `SpecifiedBuildSetEmpty` | 前者为业务降级，后者为 `single` 失败收口 |
+| `SpecDependsFillFailed` | `single` 构建集为空时记录 `SpecifiedBuildSetEmpty`，不包含逐包错误详情 | `single` 空集失败收口；包级诊断见各 SpecResult |
 | `SpecCommitMissing` | 步骤 0 组装阶段，当前 Snapshot 的包仓库条目不可重试失败（`packageRepoStatuses[R].error` 且 `retryable=false`，E-24，message 列出仓库名），按包降级跳过 | 业务性（降级结果，init 继续推进） |
 | `BuildPayloadInvalid` | E-31：`BuildInfo.spec.buildPayload` YAML 解析失败、顶层不是 map，或 `rpmbuild_script` 非字符串/名称非法；统一 `reason=BuildPayloadParseFailed`，message 写字段路径及具体错误，不回显完整 payload | status=True 先于 Job 中止尝试持久化，立即停止派发；尝试结束后写 Failed，同一 BuildInfo 不因配置变化恢复 |
 | `JobAbortFailed` | 父 Build 中止或 E-31 尽力中止 Job 时，列表读取失败或个别 `/abort` 失败/结果未知；`reason=JobAbortFailed`，message 记录失败数量与最多三个示例 | status=True 记录尽力中止未完全成功，不阻止最终写 Aborted 或 Failed；不代表 Job 已终态 |
@@ -779,34 +779,32 @@ Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入
 | `RpmRepoUnavailable` | E-29：无效 URL、确定性请求拒绝，或过程仓/bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮） | status=True 为持久化停止派发标记；按 6.5 等待已有 Job 收敛后 Completed，保留明确 reason/message |
 | `SnapshotUnavailable` | E-30：当前 Snapshot GET 404/5xx/超时连续失败达阈值（默认 3 轮，每轮至多计一次），reason/message 见对应错误条目 | status=True 为持久化停止派发标记，不因依赖恢复移除；按 6.5 等待已有 Job 收敛后 Completed，保留条件 |
 
-**SpecResult.conditions（spec 级）**：
+**SpecResult 包级诊断**：
 
-| type | reason | 触发时机 |
-|------|--------|---------|
-| `BuildFailed` | `JobFailed` | 对应 `Job.status.phase=Failed`（message 记录失败 jobName） |
-| `RebuildFailed` | `RebuildJobFailed` | 末代重建 Job 失败，且存在前代 Succeeded 产物 → 统一结果以最后一个 Job 为准标 `BuildFailed`（仅 condition 区别于首次失败的 `BuildFailed`；下游按 E-17 自判，v1 产物经构建依赖统一存在性裁决可用则照常下发，见 7.4.2/7.4.5；message 记录失败 jobName） |
-| `BuildFailed` | `RpmDependsMissing` | 构建期依赖缺失/版本不满足（message 记录缺失依赖名：排序去重后逗号拼接，超 1024 字符截断并尾部标注 `...(+N deps total)`，防 apiserver message 上限）。两条触发路径：① 正常下发路径——发布确认门禁（7.4.6）通过后构建依赖统一存在性裁决（7.4.1 条件 2，含 Failed 上游影响的表达）仍缺失；② 破环点 bootstrap 路径（7.4.6 第 3 条，无视入度）——不创建 Job 不重试。install 依赖不触发本 reason（缺失不阻断下发，见 7.4.7） |
-| `DefaultBuildResourceConfigNotFound` | `DefaultBuildResourceConfigNotFound` | `Config/build-resource` GET 404，当前 spec 标 `Failed`；其它读取或解析错误不写本 condition，按 E-27 重试 |
-| `JobCreateRejected` | `JobCreateRejected` | CreateJob 明确返回 400/422，当前 spec 标 `Failed`，不阻塞其他 spec；message 记录 HTTP 状态码 |
-| `BuildAborted` | `BuildAborted` | 对应 `Job.status.phase=Aborted`（message 记录中止 jobName，并注明"防御性视同 Failed：父 Build 非 Aborted"——回填到达时 parentAbortGuard 已确认父 Build 正常，Job 单独 Aborted 为异常事件，`specResults[key].status` 置 `BuildFailed` 终态，本 condition 作异常溯源，见 7.4.5/6.4 防御分支） |
+单一 `status` 表示结果，`reason` / `message` 仅保存当前诊断，不使用 Condition 数组或转移时间。
+每次回填先清空旧诊断和 missingDeps，再写入最新 Job 结果；重新派发、运行中或结果为 Succeeded 时保持为空。
+message 经清洗并限制为 1024 字节，不保存逐次重试历史，也不汇总到对象级 conditions。
+
+| reason | 触发时机 |
+|--------|---------|
+| `SpecParseFailed` | 仓库/spec 下载或解析确定性失败，或根目录无 spec；写 PrepareFailed，message 记录该条目诊断 |
+| `JobFailed` | Job phase=Failed 或脚本 result.status=BuildFailed；写 BuildFailed，message 记录失败 Job |
+| `RebuildJobFailed` | 末代 Job 构建失败且存在前代 Succeeded Job；仍以最新结果写 BuildFailed，下游按 7.4.1 的依赖存在性裁决推进 |
+| `RpmDependsMissing` | 构建依赖缺失或版本不满足；写 BuildFailed，不创建 Job。缺失依赖排序去重后写入 message，截断时附总数；安装依赖不触发此 reason |
+| `DefaultBuildResourceConfigNotFound` | Config/build-resource GET 404，当前 spec 写 BuildFailed；其他读取或解析错误按 E-27 重试 |
+| `JobCreateRejected` | CreateJob 明确返回 400/422，当前 spec 写 BuildFailed，继续派发其他 spec；message 记录 HTTP 状态码 |
+| `BuildAborted` | Job phase=Aborted 而父 Build 未中止，当前 spec 写 BuildFailed，message 记录 Job 名 |
+| `InstallCheckFailed` | 最新 Job phase=Succeeded 且 result.status=InstallFailed；写 InstallFailed，缺失依赖写 missingDeps |
+| `JobResultMissing` / `JobResultInvalid` | Job phase=Succeeded 但脚本结果缺失或无效；写 BuildFailed |
+| 停止派发标记的 reason | 按 6.5 收敛未派发条目，保留对象级停止原因及 message |
 
 **不写 condition 的瞬时/非阻断事件（仅结构化日志）**：
+
 - 可重试、由下一轮自愈：`JobListFailed`（正常构建路径 list Job 失败；中止路径按上表记录 `JobAbortFailed`）、`BuildQueryFailed`（父 Build 查询失败）、`EmptySpecResult`（specResults 为空）、`BuildTargetConfigQueryFailed`（Config/build-target 查询失败）及 `ImageNotFound`（镜像映射缺失）。RpmRepo 可重试异常写 `RpmRepoRetrying`，不在此清单中。
 - 正常操作信息：`CycleDetected`（`initBuildInfo` 破环，message 记录破环节点）。
 - 跳过即不影响主流程：`UnknownPhase`（phase 未知值，跳过该 BuildInfo）、`OrphanJob`（Job 的 spec-name 指向不存在 spec，跳过该 Job）。
 
 > 注：以上为日志事件名而非 condition type；其中 `BuildQueryFailed` 与 Snapshot Controller 写入 Snapshot 的同名 condition 语义不同，勿混淆。
-
-**SpecResult.conditions（install 级）**：
-
-| type | reason | 触发时机 |
-|------|--------|---------|
-| `Install` | `InstallCheckFailed` | 目标 Job（多代取最新）`phase=Succeeded` 且 result.status=InstallFailed；缺失依赖写入 `specResults[key].missingDeps`（见 7.4.7） |
-| `BuildFailed` | `JobResultMissing` / `JobResultInvalid` | Job phase=Succeeded，但没有可靠脚本结果；统一结果写 BuildFailed |
-
-（运行期动态补边不写 condition：出度入度统一补入、不提升下发次数，重发由图语义（新环 required=2）承担，见 7.4.7 子节第 4/7 条。）
-
-install 校验通过（目标 Job `phase=Succeeded` 且 `status.result.status=Succeeded`）时更新 `specResults[key].status = Succeeded`，不写失败 condition。
 
 ### 9.2 时间来源
 
@@ -841,7 +839,7 @@ install 校验通过（目标 Job `phase=Succeeded` 且 `status.result.status=Su
 - **确认读取**：用仍有效的 reconcile context GET 一次当前持久化对象，按语义比较（不比较 `resourceVersion`）：
   - map 字段 nil 与空 map 等价；
   - `conditions` 按 type 定位比较 `status`/`reason`/`message`，不依赖数组顺序，`lastTransitionTime` 不参与比较；
-  - specResults 按来源 key 比较 specName、status、missingDeps、dispatchCount 及 conditions；
+  - specResults 按来源 key 比较 specName、status、reason、message、missingDeps 及 dispatchCount；
   - BuildGraph 图写入确认独立按 15.9 执行。
 
 | 确认结果 | 后续动作 |
@@ -974,10 +972,10 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | E-16 | **RpmRepo 资源不存在** | 非 single 写 `RpmRepoRetrying=True`（reason=`RpmRepoNotFound`）并记录日志，本轮不持有 RpmRepo；首次建图与依赖裁决等待后续轮次，已有 Job 仍可回填。资源及所需元数据就绪后清除该条件，不因 404 次数停止。single 不调用 RpmRepo GET。contentURL 为空也是正常空态；XML 下载失败继续重试，连续解析失败与确定性错误按 E-29 处理 | 7.1 / 15.4 / 15.10 / E-29 |
 | E-17 | 直接上游 Failed | 不递归传播失败；按有效 required 和依赖存在性裁决 | 7.4.2 / 7.4.1 |
 | E-18 | 构建依赖缺失或版本不满足 | 依赖不可满足与数据暂不可用分别处理 | 7.4.1 / 15.10 / E-29 |
-| E-19 | **目标架构不在 spec 的 exclusiveArch 白名单内** | `specResults[key].status=ArchUnsupported`，不写 ArchUnsupported condition，不提交 Job；其下游按 E-17 自判（不传播标记）；已有进行中 Job 的 spec 不回溯标记。判定基准/空列表解析期归一（运行期不出现空列表）/父 Build 同轮持有与查询失败处理/挂载点（initBuildInfo 步骤 3、advanceDownstream 步骤 4 创建 Job 前，`single` 同样在创建前执行）见权威节；**arch 为空**（Build/标签/buildTarget 缺失或 arch 值为空，异常数据）→ 本轮跳过 exclusiveArch 校验（视为通过，数据缺失不误杀构建）+ 告警日志，后续轮次数据恢复后恢复校验 | 7.2 步骤 1.5 / 7.2 步骤 3 / 16.3 / 9.1 |
+| E-19 | **目标架构不在 spec 的 exclusiveArch 白名单内** | `specResults[key].status=ArchUnsupported`，reason/message 留空，不提交 Job；其下游按 E-17 自判（不传播标记）；已有进行中 Job 的 spec 不回溯标记。判定基准/空列表解析期归一（运行期不出现空列表）/父 Build 同轮持有与查询失败处理/挂载点（initBuildInfo 步骤 3、advanceDownstream 步骤 4 创建 Job 前，`single` 同样在创建前执行）见权威节；**arch 为空**（Build/标签/buildTarget 缺失或 arch 值为空，异常数据）→ 本轮跳过 exclusiveArch 校验（视为通过，数据缺失不误杀构建）+ 告警日志，后续轮次数据恢复后恢复校验 | 7.2 步骤 1.5 / 7.2 步骤 3 / 16.3 / 9.1 |
 | E-20 | **所属 Project 处于 `Terminating`** | parentAbortGuard 置 BuildInfo 为 `Aborted` 中止终态并保留对象（Project 级联回收）+ 失效 dcgDict 缓存；Project 名 = `BuildInfo.metadata.namespace`（无 project-name label，取值来源唯一） | 7.1 级联路径 |
 | E-21 | **Project 查询失败（5xx）/ 不存在（404）** | 5xx → 返回 error 退避重试；404 → 记录日志返回 nil，下一轮重评估；404 **不触发置终态**，与 E-03 的 Build 404 语义不同 | 7.1 parentAbortGuard |
-| E-23 | spec 下载/解析确定性失败 | `full`、`incremental`、`specified` 和 `single` 均按 spec 粒度跳过；仓库级读取失败跳过该仓库，记录 `SpecDependsFillFailed` 和 PrepareFailed 条目。`incremental`/`specified` 空集正常完成；`single` 空集按 7.2.3 失败收口。瞬态失败保持 Pending。 | 7.2.2 / 7.2.3 / 9.1 |
+| E-23 | spec 下载/解析确定性失败 | `full`、`incremental`、`specified` 和 `single` 均按 spec 粒度跳过；仓库级读取失败跳过该仓库，记录 PrepareFailed 条目，诊断仅写入该条目的 `SpecResult.reason` / `message`，不汇总到 BuildInfo conditions。`incremental`/`specified` 空集正常完成；`single` 空集按 7.2.3 失败收口。瞬态失败保持 Pending。 | 7.2.2 / 7.2.3 / 9.1 |
 | E-24 | Snapshot 的包仓库条目不可用 | 条目缺失但仓库仍在 `spec.packageRepos`，或 `retryable=true` 时保持 Pending；确定性失败或种子仓库已不在 `spec.packageRepos` 时，`incremental`/`specified` 同样降级并记录 `SpecCommitMissing`、PrepareFailed 条目。`single` 空集按 7.2.3 收口。 | 7.2.2 / 9.1 |
 | E-26 | **Config/build-target 不可用或映射缺失**（`GetConfig` 读取失败（404/超时/5xx/反序列化失败），或 `content.targets[os].arches[arch].image` 缺失，契约见 [Config 设计](data-models~config.md) 2.5.2） | 本轮不创建新 Job，输出结构化错误并返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 `Failed`、不下游传播——不把配置问题直接写成构建失败）；挂载点：每轮需要创建新 Job 的 reconcile 读取一次 Config/build-target 快照（init 步骤 3/4 / advance 步骤 4 / `single` 直通），同轮批量创建共享同一快照；已存在 Job 沿用固化镜像、不因配置更新重写，已有 Job 的回填/观察不受影响（生效边界见 [Config 设计](data-models~config.md) 2.5.3，无需注册 Config/build-target watch） | 9.1 / 15.3.1 / [Config 设计](data-models~config.md) 2.5.2 |
 | E-27 | **`Config/build-resource` 不可用** | GET 404 时沿用现有规则：当前 spec 标 `Failed`（`DefaultBuildResourceConfigNotFound`），不提交 Job；其他读取错误、响应契约错误或 `spec.content` 反序列化失败时不创建本轮新 Job，记录错误并按 7.5 退避重入，不写包级 Failed。内容有效时按表级、包级、架构规则解析资源 | 9.1 / 15.3.1 / [Config 设计](data-models~config.md) 第 3 章 |
@@ -1189,7 +1187,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `spec.payload.package_name` / `spec.payload.spec_file_name` | 拼接 `仓库名/spec文件名` 定位 `specResults`；条目必须存在且 specName 与已核验 Job 一致，不能从截断的标签值恢复仓库名 |
 | `metadata.labels["ebs.io/spec-name"]` | 归组 key；缺失或指向本轮构建集外 spec（init 轮 = 步骤 0 构建集外、Processing 轮 = 已解析 specResults 的 specName 集合外；specDepends 为超集不作基准）→ 跳过该 Job（E-05，仅日志） |
 | `metadata.creationTimestamp` | 多代 Job 排序键主键：`metav1.Time` 直接比较（零值按最早），apiserver 创建时写入，恒非空且单调（见 7.4.4） |
-| `metadata.name` | 排序键次键（并列时字典序最大）；失败 condition message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
+| `metadata.name` | 排序键次键（并列时字典序最大）；失败诊断 message 记录该名；Succeeded 上游 Job 的名称用于查询 RpmRepo `sourceJobNames` 发布凭据 |
 | `status.phase` | 经 7.4.5 映射回写 `specResults[key].status`；`Pending` → 强制 `Running`（不得沿用上一代终态） |
 | `status.result` | `phase=Succeeded` 时回填 `specResults[key]`，缺失结果不得视为安装成功（见 7.4.7） |
 | `status.startTime` | **不消费**（重建 Job 未调度时为空，用于代际排序会误判，见 7.4.4） |
@@ -1499,7 +1497,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 > **解析产物去向（15.11）**：spec 文件原始内容先写入全局 `Cache.specFileCache`（两层 key `commitID`→`specFileName`，LRU，写入与解析成败解耦），解析结果（`map[string]SpecDepend`）按 specName 合并为 BuildInfo 级全量视图后写入 per-BuildInfo 缓存 `Cache.specDependsCache`（key = `<namespace>/<buildinfo.name>`，7.2.2），不再落库至 `BuildInfo.spec`。
 
-**解析流程**：固定使用 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件> --define "_sourcedir <隔离SOURCES目录>"` 展开，再按下述行语法建模。执行前静态扫描原始 spec 的 `SourceN` 声明，仅对 `%{load:%{SOURCEN}}` 和 Lua `io.open(rpm.expand("%SOURCEN"))` / `io.lines(...)` 中明确引用的根目录文本文件预取；文件名只允许字面量或使用字面量 `Name` 展开 `%{name}`，不解释任意宏或 Lua。普通 `SourceN` 声明不触发预取。明确报错隔离 `SOURCES` 目录内缺文件时，仍可补取同一仓库、同一 commit 的根目录文件后重试。预取与重试合计最多 3 个文件、每个不超过 1 MiB；其他路径或解析错误不补取。命令不可用、超时、最终非零退出码或 stdout 为空均视为该 spec 解析失败，不回退到原始文本解析；跳过该 spec、记录 `SpecParseFailed` 并按来源 key 写 PrepareFailed 条目，不阻断同仓库其余 spec。controller-manager 镜像必须安装提供 `rpmspec` 的 `rpm-build`。
+**解析流程**：固定使用 `rpmspec --target=<arch> -P <spec路径> --load=<宏定义文件> --define "_sourcedir <隔离SOURCES目录>"` 展开，再按下述行语法建模。执行前静态扫描原始 spec 的 `SourceN` 声明，仅对 `%{load:%{SOURCEN}}` 和 Lua `io.open(rpm.expand("%SOURCEN"))` / `io.lines(...)` 中明确引用的根目录文本文件预取；文件名只允许字面量或使用字面量 `Name` 展开 `%{name}`，不解释任意宏或 Lua。普通 `SourceN` 声明不触发预取。明确报错隔离 `SOURCES` 目录内缺文件时，仍可补取同一仓库、同一 commit 的根目录文件后重试。预取与重试合计最多 3 个文件、每个不超过 1 MiB；其他路径或解析错误不补取。命令不可用、超时、最终非零退出码或 stdout 为空均视为该 spec 解析失败，不回退到原始文本解析；跳过该 spec，按来源 key 写 PrepareFailed 条目，错误仅保存在 `SpecResult.reason` / `message` 中（reason=`SpecParseFailed`），不汇总到 `BuildInfo.status.conditions`；`No compatible architectures found for build` 同样按解析失败处理，不特殊转换为 `ArchUnsupported`，不阻断同仓库其余 spec。controller-manager 镜像必须安装提供 `rpmspec` 的 `rpm-build`。
 
 `rpmspec` 是本地子进程，`exec.Command` 不包装 shell，但 RPM 宏解析本身会执行 `%(...)` 和 `%{lua:...}`。包仓库中的 spec 与 `--load` 宏文件因此能以 controller-manager 身份执行代码；当前实现要求全部包源可信，尚未提供解析隔离。
 

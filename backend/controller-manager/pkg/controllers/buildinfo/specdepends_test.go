@@ -98,7 +98,7 @@ func TestFetchRepoSpecsParsesFilesSequentially(t *testing.T) {
 	done := make(chan bool, 1)
 	go func() {
 		_, ok := c.fetchRepoSpecs(context.Background(), git, &reconcileRound{}, "repo", "https://example.test/repo",
-			ebsv1.PackageRepoStatus{CommitID: "commit"}, "x86_64", nil, &specAssembly{}, new([]string))
+			ebsv1.PackageRepoStatus{CommitID: "commit"}, "x86_64", nil, &specAssembly{})
 		done <- ok
 	}()
 	select {

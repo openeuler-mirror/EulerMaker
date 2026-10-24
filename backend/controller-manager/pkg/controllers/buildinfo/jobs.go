@@ -129,7 +129,6 @@ func (c *Controller) dispatchSpec(
 					ctx,
 					round,
 					specName,
-					ConditionDefaultBuildResourceConfigNotFound,
 					ReasonDefaultBuildResourceConfigNotFound,
 					message,
 				)
@@ -241,7 +240,7 @@ func (c *Controller) dispatchSpec(
 				writeErr.StatusCode,
 				err,
 			)
-			return c.markSpecFailed(ctx, round, specName, ConditionJobCreateRejected, ReasonJobCreateRejected,
+			return c.markSpecFailed(ctx, round, specName, ReasonJobCreateRejected,
 				fmt.Sprintf("Job creation rejected with HTTP %d", writeErr.StatusCode))
 		default:
 			// Let the controller handle any other rejected create.
@@ -323,9 +322,9 @@ func (c *Controller) confirmCreatedJobs(round *reconcileRound) {
 func (c *Controller) markSpecFailed(
 	ctx context.Context,
 	round *reconcileRound,
-	specName, condType, reason, message string,
+	specName, reason, message string,
 ) (controller.ReconcileResult, error) {
-	return c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildFailed, condType, reason, message)
+	return c.markSpecTerminal(ctx, round, specName, ebsv1.SpecBuildFailed, reason, message)
 }
 
 func (c *Controller) markSpecTerminal(
@@ -333,7 +332,7 @@ func (c *Controller) markSpecTerminal(
 	round *reconcileRound,
 	specName string,
 	status ebsv1.SpecResultPhase,
-	condType, reason, message string,
+	reason, message string,
 ) (controller.ReconcileResult, error) {
 	next := round.current.DeepCopy()
 	key := round.specKey(specName)
@@ -342,9 +341,8 @@ func (c *Controller) markSpecTerminal(
 		return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("spec %s has no registered result", specName))
 	}
 	ss.Status = status
-	if condType != "" {
-		specCondition(&ss, condType, reason, message)
-	}
+	setSpecDiagnostic(&ss, reason, message)
+	ss.MissingDeps = nil
 	next.Status.SpecResults[key] = ss
 	return c.writeStatus(ctx, round, next)
 }
@@ -847,7 +845,8 @@ func priorSucceeded(group []ebsv1.Job, latest *ebsv1.Job) bool {
 func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bool {
 	switch job.Status.Phase {
 	case ebsv1.JobPending, ebsv1.JobRunning, ebsv1.JobSucceeded, ebsv1.JobFailed, ebsv1.JobAborted:
-		ss.Conditions = nil
+		ss.Reason = ""
+		ss.Message = ""
 		ss.MissingDeps = nil
 	default:
 		return false
@@ -859,7 +858,7 @@ func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bo
 		result := job.Status.Result
 		if result == nil {
 			ss.Status = ebsv1.SpecBuildFailed
-			specCondition(ss, ConditionBuildFailed, ReasonJobResultMissing, "job "+job.Name+" has no script result")
+			setSpecDiagnostic(ss, ReasonJobResultMissing, "job "+job.Name+" has no script result")
 			break
 		}
 		switch result.Status {
@@ -867,7 +866,7 @@ func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bo
 			ss.Status = ebsv1.SpecSucceeded
 		case ebsv1.JobResultBuildFailed:
 			ss.Status = ebsv1.SpecBuildFailed
-			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" reported build failure")
+			setSpecDiagnostic(ss, ReasonJobFailed, "job "+job.Name+" reported build failure")
 		case ebsv1.JobResultInstallFailed:
 			ss.Status = ebsv1.SpecInstallFailed
 			if len(result.MissingDeps) > 0 {
@@ -876,23 +875,22 @@ func applyJobPhase(ss *ebsv1.SpecResult, job *ebsv1.Job, succeededPrior bool) bo
 					ss.MissingDeps[name] = dep
 				}
 			}
-			installCondition(ss, job.Name)
+			setSpecDiagnostic(ss, ReasonInstallCheckFailed, "job "+job.Name+" install check failed")
 		default:
 			ss.Status = ebsv1.SpecBuildFailed
-			specCondition(ss, ConditionBuildFailed, ReasonJobResultInvalid, "job "+job.Name+" has invalid script result")
+			setSpecDiagnostic(ss, ReasonJobResultInvalid, "job "+job.Name+" has invalid script result")
 		}
 	case ebsv1.JobFailed:
 		ss.Status = ebsv1.SpecBuildFailed
 		if succeededPrior {
-			specCondition(ss, ConditionRebuildFailed, ReasonRebuildJobFailed, "job "+job.Name+" rebuild failed")
+			setSpecDiagnostic(ss, ReasonRebuildJobFailed, "job "+job.Name+" rebuild failed")
 		} else {
-			specCondition(ss, ConditionBuildFailed, ReasonJobFailed, "job "+job.Name+" failed")
+			setSpecDiagnostic(ss, ReasonJobFailed, "job "+job.Name+" failed")
 		}
 	case ebsv1.JobAborted:
 		ss.Status = ebsv1.SpecBuildFailed
-		specCondition(
+		setSpecDiagnostic(
 			ss,
-			ConditionBuildAborted,
 			ReasonBuildAborted,
 			"job "+job.Name+" aborted (defensive: treated as Failed; parent Build is not Aborted)",
 		)
