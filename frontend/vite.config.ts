@@ -10,6 +10,14 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [vue()],
+    build: {
+      rollupOptions: {
+        input: {
+          app: fileURLToPath(new URL("./index.html", import.meta.url)),
+          apiDocs: fileURLToPath(new URL("./api-docs-viewer.html", import.meta.url)),
+        },
+      },
+    },
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -18,6 +26,7 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       proxy: {
+        "^/openapi\\.json(?:\\?|$)": { target: gateway, changeOrigin: true },
         "/apis": { target: gateway, changeOrigin: true },
         "/auth": { target: gateway, changeOrigin: true },
         "/artifacts": { target: artifactManager, changeOrigin: true },

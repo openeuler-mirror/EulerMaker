@@ -6,6 +6,7 @@ export const router = createRouter({
   routes: [
     { path: "/", redirect: { name: "projects" } },
     { path: "/projects", name: "projects", component: () => import("@/views/ProjectsView.vue") },
+    { path: "/api-docs", name: "api-docs", component: () => import("@/views/ApiDocsView.vue") },
     { path: "/projects/:name", name: "project", component: () => import("@/views/ProjectView.vue") },
     { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
     { path: "/register", name: "register", component: () => import("@/views/RegisterView.vue") },

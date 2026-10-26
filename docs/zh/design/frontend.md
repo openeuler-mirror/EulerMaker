@@ -8,6 +8,8 @@
 
 本文记录当前页面与接口行为，性能、测试目标和待完善能力单独说明。资源访问以当前 `ebs/v1`、`iam.ebs/v1`、Gateway 和 Artifact Manager 契约为准；资源字段的权威定义位于 [`api/ebs/v1`](../../../api/ebs/v1) 和 [`api/iam/v1`](../../../api/iam/v1)。
 
+API 文档页面见 5.10，文档发布契约由 Gateway 设计定义。
+
 ---
 
 ## 二、背景与目标
@@ -93,6 +95,7 @@ ebs.io/member-user.<username>: "true"
 | 能力 | 匿名 | User Owner | User Member | Ops | Admin |
 |------|------|------------|-------------|-----|-------|
 | 浏览公开业务资源 | 是 | 是 | 是 | 是 | 是 |
+| 查看 API 文档 | 是 | 是 | 是 | 是 | 是 |
 | 创建 Project | 否 | 是 | 是 | 是 | 是 |
 | 修改/删除 Project | 否 | 修改、删除 | 否 | 仅自己拥有的 Project | 否 |
 | 管理 Project 成员 | 否 | 是 | 否 | 仅自己拥有的 Project | 否 |
@@ -123,6 +126,7 @@ ebs.io/member-user.<username>: "true"
 /admin/users
 /admin/machineaccounts
 /settings
+/api-docs                      # 公开只读 API 文档
 ```
 
 工程详情通过页签组织软件包、构建历史、依赖图谱和工程配置。选中 Build 后在右侧展示构建详情，展开 spec 后展示 Job，再在 Job 条目内展示日志和产物；没有独立的 Build/Job 详情路由。全局 Config 和 Script 在运维页面管理。
@@ -132,6 +136,7 @@ ebs.io/member-user.<username>: "true"
 全局导航包括：
 
 - 工程
+- API 文档，匿名及登录用户均可查看
 - 运维管理（含机器管理），仅 Ops 和 Admin 显示
 - 账号管理，仅 Admin 显示
 - 账号菜单：个人信息、语言、主题、退出
@@ -259,6 +264,40 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 当前页面管理 Script 对象；BuildInfo Controller 会在新建 Job 时记录脚本引用，Runner 按引用拉取并执行。修改或删除脚本不会改写已创建 Job 中记录的引用，脚本正文也不固定为历史版本。
 
+### 5.10 API 文档
+
+独立的 `/api-docs` 页面位于公开导航中，不放在仅 Ops/Admin 可见的运维菜单内。页面展示 Gateway 对外接口，提供业务分组、搜索、路径与方法、认证和权限说明、参数、请求示例、响应及 Schema 浏览；所有身份展示相同内容。
+
+文档唯一来源为同源 `GET /openapi.json`，内容范围、生成及发布由 [Gateway OpenAPI 契约](ebs-gateway.md#53-对外-openapi-文档) 定义。前端不维护第二套接口清单，不直接访问 apiserver，也不查询业务资源来生成示例。
+
+页面通过 `swagger-ui-dist` 的本地打包资源嵌入 Swagger UI。`/api-docs-viewer.html` 是独立的 Vite 构建入口，由文档页面的同源 iframe 加载，使 Swagger 的 JS/CSS 按页面加载，并隔离样式和生命周期。iframe 与父页面同步操作深链接；离开页面即销毁展示环境。独立请求完成 JSON 校验后，将文档作为 `spec` 传入，主要配置如下：
+
+```javascript
+{
+  spec: document, // 固定同源 /openapi.json 的响应
+  filter: true,
+  deepLinking: true,
+  supportedSubmitMethods: [],
+  persistAuthorization: false,
+  validatorUrl: null,
+  queryConfigEnabled: false
+}
+```
+
+`supportedSubmitMethods: []` 禁用全部 Try it out；插件移除 Authorize 凭据输入入口，但保留文档中的权限说明。文档请求使用 `credentials: omit`，不复用带 Authorization 的业务请求拦截器。Swagger 自身的请求拦截器禁止执行额外请求；仅从固定同源路径加载文档，不接受 URL 查询参数指定外部文档，不调用外部在线校验服务或 CDN。
+
+Nginx 仅为 `/api-docs-viewer.html` 设置 CSP `frame-ancestors 'self'`，允许同源页面嵌入；其他页面仍保持 `frame-ancestors 'none'`。
+
+加载期间显示占位；网络、HTTP 或文档解析失败显示错误和重试入口，不跳转登录页，也不降级显示 apiserver 的内部文档。页面标题、导航和加载/错误提示提供中英文；参数名与资源字段名保持 API 原文。移动端允许代码块横向滚动，搜索和操作展开支持键盘访问。
+
+#### 首版验收
+
+- 匿名及已登录用户都可从导航和直接 URL 打开页面，刷新页面可恢复。
+- 文档加载、搜索、分组和深链接正常；加载失败可以重试。
+- 页面不出现在线执行或凭据输入入口，不发送业务写请求、会话 Token 或外部校验请求。
+- Nginx 与 Vite 均将 `/openapi.json` 转发到 Gateway；未知页面路径仍按原 SPA 规则处理。
+- Swagger UI 资源按需加载，既有页面样式与首屏加载不受影响，类型检查和生产构建通过。
+
 ---
 
 ## 六、技术方案
@@ -276,6 +315,7 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 | @element-plus/icons-vue | 图标 |
 | yaml | 工程清单导入导出与配置内容解析 |
 | vue-i18n | `zh-CN` 和 `en-US` 国际化 |
+| swagger-ui-dist | API 文档页面的只读接口展示，按页面加载 |
 
 首版代码放在仓库的 `frontend/` 目录，与 API 变更在同一 Pull Request 中完成契约更新和验证。
 
@@ -343,6 +383,7 @@ Pinia 只保存：
 | `/auth/*` | ebs-gateway | 注册、登录、Token 检查、密码和 MachineAccount 操作 |
 | `/apis/ebs/v1/*` | ebs-gateway | EBS 资源 |
 | `/apis/iam.ebs/v1/*` | ebs-gateway | IAM 资源 |
+| `/openapi.json`（精确匹配） | ebs-gateway | 匿名获取对外接口文档，不进入 SPA fallback |
 | `/artifacts/v1/*` | artifact-manager | 产物、Manifest 和日志读取 |
 | 其他路径 | frontend | 静态资源和 SPA history fallback |
 
@@ -588,6 +629,7 @@ GET /readyz
 6. Admin 管理普通 User 和 MachineAccount。
 7. Build 中止、409 冲突和 429 限流。
 8. Job 内联日志加载、周期刷新、全屏和 RPM 下载。
+9. API 文档页面按 5.10 验收，覆盖匿名/登录访问、只读展示及文档加载失败。
 
 ### 12.4 验证与目标门禁
 
