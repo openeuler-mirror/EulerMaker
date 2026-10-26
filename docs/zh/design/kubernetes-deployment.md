@@ -15,7 +15,7 @@
 
 controller-manager ── ebs-apiserver、git-server、artifact-manager
 scheduler ── ebs-apiserver
-Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Artifact Manager、Git Smart HTTP
+Runner 与其 Job 容器（Docker/containerd）── 可从构建节点访问的 Gateway、Artifact Manager、Git 源码入口
 ```
 
 - 首版将前端、Gateway、apiserver、Scheduler、Controller Manager 和 Git Server 放在 `ebs` Namespace，Artifact Manager 单独放在 `art-01` Namespace。前端和 Controller Manager 使用 `artifact-manager.art-01` 访问它。构建节点可在集群外；不要求 Runner 使用集群 ServiceAccount，也不让 Job 容器直接访问 Kubernetes API。
@@ -39,11 +39,11 @@ Runner 与其 Docker Job 容器 ── 可从构建节点访问的 Gateway、Art
 
 需要从集群外访问时，仅开放前端入口，以及供构建节点使用的 Gateway、Artifact Manager 和 Git Smart HTTP 地址。前端模板本身只提供 ClusterIP；部署方自行创建 Ingress 或将 Service 配置为 NodePort，并按环境配置访问地址与 TLS。Scheduler、Controller Manager 的健康端口及 apiserver、Git Server HTTP 管理口不作为公网 Service。Git Server 使用单副本 Deployment 和独立 PVC，采用 `Recreate` 更新以避免新旧 Pod 同时写入；持久卷不自动提供数据层高可用。
 
-### Runner 的首版形态
+### Runner 执行环境与服务访问
 
-首版在专用 Docker 构建节点上以现有容器或宿主机服务运行 Runner，由 Kubernetes 管理控制面。每台节点使用独立 Runner 名称、MachineAccount 凭据和持久化的 `instanceID` 文件；重启后必须沿用同一身份。该方案保留当前 `docker create/start` 执行路径，不把 Kubernetes 集群的 containerd socket 当作 Docker API 使用。
+Runner 在专用构建节点上以容器或宿主机服务运行，由 Kubernetes 管理控制面。每台节点使用独立 Runner 名称、MachineAccount 凭据和持久化的 `instanceID` 文件；重启后必须沿用同一身份。`--container-runtime` 支持 `docker` 和 `containerd`：前者通过 Docker Go Client 访问 daemon，后者通过原生 Go Client 访问 containerd。使用 containerd 时配置对应 socket、namespace 和 snapshotter；运行时配置与恢复规则见 [Runner 设计](runner.md)。
 
-当前 Job 容器使用宿主机网络，且由宿主机 Docker daemon 创建，并不在 Kubernetes Pod 网络或 DNS 命名空间内。Git Server 默认使用 Service ClusterIP 生成 clone URL；Service 必须在依赖它的 Pod 创建之前存在。ClusterIP 对集群外构建节点通常不可达，启用构建前必须从实际 Job 容器验证 Git clone 地址。若不可达，应改用构建节点可访问的固定内网入口。Service 重建后 ClusterIP 可能变化，已固化到对象中的旧 URL 不会自动更新。
+当前 Job 容器由 Runner 直接通过宿主机运行时创建，使用宿主机网络，不作为 Kubernetes Pod 运行。Git Server 返回与地址无关的 `clone_path`，管理面将其保存为 `git-server:///...` 逻辑地址。Runner 从 Gateway 的 `service-endpoints` 获取地址：internal 模式使用 `gitServer.runnerInternalURL` 解析克隆地址；external 模式使用 payload 的 `origin_url`，保留 `commit_id`。启用构建前，应从实际 Job 容器验证对应 Git 入口可达，不能假定其具有 Kubernetes Pod 的 DNS 和 Service 访问能力。
 
 Controller Manager 从 `Config/services` 取得管理请求使用的集群内地址：`gitServer.internalURL` 配置 Git Server（同命名空间可用 `http://git-server:8080`），`artifactManagers` 配置 Artifact Manager 实例表；不再通过 `--git-server-addr` 指定地址。初始化及更新规则见 [服务配置](data-models~config.md#4-服务配置内容)。RpmRepo Controller 根据 Project 的 `ebs.io/artifacts` annotation 选择实例。下发给 Job 的过程仓保持 `artifact://{instance}/...` 逻辑 URL，由 Runner 使用其可访问的 Artifact Manager 地址解析。启用构建前须从 Runner 和实际 Job 容器验证该地址，不应直接将 Artifact Manager 原始管理端口暴露到公网。
 
@@ -91,7 +91,7 @@ Gateway JWT、ES API Key、各组件 TLS 私钥、Runner MachineAccount 凭据�
 | 节点与调度 | etcd 使用空值标签 `node-role.kubernetes.io/etcd=`，ES 使用 `node-role.kubernetes.io/elasticsearch=`；apiserver、Gateway、前端、Scheduler、Controller Manager 和 Git Server 使用 `node-role.kubernetes.io/ebs-control-plane=`；Artifact Manager 使用 `node-role.kubernetes.io/art-01=` | 分别准备至少 3 个 etcd、3 个 ES 专属节点，并只给持有 `/srv/artifacts` 数据的节点打 `art-01` 标签；为业务控制面节点设置自定义标签并核对容量。通过 `kubectl get nodes` 的 ROLES 列核对。开发集群若减少 etcd 或 ES 副本，须同步调整初始成员、首次引导名单和 PDB 的 `minAvailable`，不能只改 `replicas`。 |
 | 节点内核与镜像 | ES 需要宿主机 `vm.max_map_count >= 262144`；镜像来自 `quay.io` 和 `docker.elastic.co` | 在 ES 目标节点持久配置内核参数；确认目标架构有对应镜像，节点能拉取，或改成私有镜像仓库地址。按实际容量重新评估资源请求和 PVC 大小。 |
 | 入口与构建网络 | 控制面使用集群 DNS；Runner 和 Job 容器需访问集群外也可达的 Gateway、Artifact Manager、Git Smart HTTP 地址 | 提供构建节点可达的入口、内部 DNS、证书和防火墙规则。`*.svc.cluster.local` 只用于集群内连接，不直接下发给集群外构建节点；限制 Artifact Manager 管理接口的网络可达范围。 |
-| Runner 执行环境 | 现有 Runner 调用 Docker CLI 创建 Job 容器 | 使用独立 Docker 构建节点；若要在只有 containerd 的 Kubernetes 节点上执行 Job，先改造执行器，不能将 containerd socket 当作 Docker API。 |
+| Runner 执行环境 | Runner 支持 Docker Go Client 和 containerd 原生 Go Client | 按节点运行时选择 `--container-runtime`，配置 socket 访问权限；containerd 还需匹配 namespace、snapshotter。验证镜像拉取、挂载、宿主机网络与重启恢复，详见 [Runner 设计](runner.md)。 |
 | 备份与凭据 | 文档以 OBS 保存 etcd、ES 备份；Manifest 已配置 etcd 和 ES 的 TLS/认证，但尚无备份任务或自动轮换 | 将备份目的地换成实际可用的对象存储或备份系统，验证 etcd 逻辑快照与 ES 快照仓库恢复；为生产落实 Secret 管理和轮换。不能用在线 PVC 文件复制代替一致性备份。 |
 | 应用组件 | 目录已有 frontend、Gateway、apiserver、Scheduler、Controller Manager、Git Server 和 Artifact Manager 模板；Runner 在 Kubernetes 外部署 | 提供实际镜像、Secret、内网入口与构建节点路由；仅应用模板不能替代私有入口隔离和端到端验收。 |
 
