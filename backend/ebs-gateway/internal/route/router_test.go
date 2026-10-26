@@ -15,6 +15,7 @@ import (
 	"ebs-gateway/internal/handler"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
+	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
@@ -29,6 +30,109 @@ type testAPI struct {
 }
 
 func (a *testAPI) Router() *gin.Engine { return New(a.Handler) }
+
+func TestPublicOpenAPIRoutes(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatalf("document requested upstream %s", r.URL)
+		return nil, nil
+	}))
+	router := api.Router()
+	var document struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name string `json:"name"`
+			} `json:"parameters"`
+		} `json:"paths"`
+	}
+	var body string
+	for _, authorization := range []string{"", "Bearer expired"} {
+		request := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+		request.Header.Set("Authorization", authorization)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != 200 || !strings.HasPrefix(response.Header().Get("Content-Type"), "application/json") || response.Header().Get("Cache-Control") != "no-cache" {
+			t.Fatalf("document response=%d %v", response.Code, response.Header())
+		}
+		if body != "" && response.Body.String() != body {
+			t.Fatal("document varies by identity")
+		}
+		body = response.Body.String()
+	}
+	if err := json.Unmarshal([]byte(body), &document); err != nil {
+		t.Fatal(err)
+	}
+	registered := map[string]bool{}
+	for _, route := range router.Routes() {
+		segments := strings.Split(route.Path, "/")
+		for i, segment := range segments {
+			if strings.HasPrefix(segment, ":") {
+				segments[i] = "{" + segment[1:] + "}"
+			}
+		}
+		path := strings.Join(segments, "/")
+		registered[route.Method+" "+path] = true
+		if path != "/healthz" && path != "/openapi.json" && document.Paths[path] == nil {
+			t.Fatalf("undocumented Gateway route: %s", path)
+		}
+	}
+	for path, methods := range document.Paths {
+		for method, operation := range methods {
+			if !registered[strings.ToUpper(method)+" "+path] {
+				t.Fatalf("undispatched operation: %s %s", method, path)
+			}
+			for _, parameter := range operation.Parameters {
+				if parameter.Name != "watch" {
+					continue
+				}
+				route := policy.Route{Method: strings.ToUpper(method)}
+				if path == "/apis/ebs/v1/projects/{project}/jobs" {
+					route.Resource, route.Project = "jobs", "example"
+				}
+				if path == "/apis/ebs/v1/runners/{runner}/jobs" {
+					route.Resource, route.Name, route.Subresource = "runners", "example", "jobs"
+				}
+				if !policy.SupportsWatch(route) {
+					t.Fatalf("unsupported documented watch: %s %s", method, path)
+				}
+			}
+		}
+	}
+	for path, methods := range map[string]string{
+		"/auth/login": "post", "/auth/register": "post", "/auth/runner-token": "post", "/auth/check": "post",
+		"/auth/users/{name}/password": "put", "/auth/machineaccounts": "post",
+		"/apis/ebs/v1/projects/{project}/builds":               "get head post",
+		"/apis/ebs/v1/projects/{project}/builds/{name}":        "get head delete",
+		"/apis/ebs/v1/projects/{project}/builds/{name}/status": "get head",
+		"/apis/ebs/v1/projects/{project}/builds/{name}/abort":  "post",
+		"/apis/ebs/v1/scripts":                                 "get post",
+		"/apis/ebs/v1/scripts/{name}":                          "get put patch delete",
+		"/apis/ebs/v1/runners/{runner}/jobs":                   "get",
+		"/apis/ebs/v1/service-endpoints":                       "get",
+		"/apis/iam.ebs/v1/users":                               "get head",
+		"/apis/iam.ebs/v1/machineaccounts":                     "get head",
+		"/apis/iam.ebs/v1/machineaccounts/{name}":              "get head delete",
+	} {
+		if len(document.Paths[path]) != len(strings.Fields(methods)) {
+			t.Fatalf("methods for %s: %v", path, document.Paths[path])
+		}
+		for _, method := range strings.Fields(methods) {
+			if _, ok := document.Paths[path][method]; !ok {
+				t.Fatalf("missing %s %s", method, path)
+			}
+		}
+	}
+	for _, resource := range []string{"snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs"} {
+		for _, suffix := range []string{"", "/{name}", "/{name}/status"} {
+			if resource == "oldjobs" && suffix == "/{name}/status" {
+				continue
+			}
+			path := "/apis/ebs/v1/projects/{project}/" + resource + suffix
+			if _, ok := document.Paths[path]["get"]; !ok || len(document.Paths[path]) != 1 {
+				t.Fatalf("read-only contract for %s: %v", path, document.Paths[path])
+			}
+		}
+	}
+}
 
 func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	t.Helper()

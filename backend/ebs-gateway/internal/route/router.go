@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"ebs-gateway/internal/handler"
+	"ebs-gateway/internal/openapi"
 )
 
 func New(api *handler.Handler) *gin.Engine {
@@ -18,6 +19,7 @@ func New(api *handler.Handler) *gin.Engine {
 	endpoints := api.Endpoints()
 	router.Use(middleware.Audit, gin.Recovery())
 	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok\n") })
+	router.GET("/openapi.json", openapi.Serve)
 	registerAuth(router, middleware, endpoints)
 	registerIAM(router, api, middleware)
 	registerResources(router, api)

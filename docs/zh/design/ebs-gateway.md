@@ -707,6 +707,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | 路由 | 读取权限 | 写入或专用操作权限 |
 |------|----------|--------------------|
 | `/healthz` | 匿名健康检查 | 无 |
+| `/openapi.json` | 匿名及所有身份可 GET 同一份静态接口文档，见 5.3 | 无 |
 | `/auth/register`、`/auth/login` | 无 | 匿名注册普通用户、密码登录 |
 | `/auth/runner-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner token；后者凭 Bearer Token 校验身份 |
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
@@ -745,6 +746,52 @@ gateway 需要支持流式响应：
 - 不为 watch 请求设置过短超时。
 - 客户端断开时及时关闭 upstream 请求。
 - 审计日志记录连接建立和最终关闭状态。
+
+### 5.3 对外 OpenAPI 文档
+
+Gateway 提供对外 API 的 OpenAPI 3.0 JSON 文档，前端展示方式见 [前端设计](frontend.md#510-api-文档)。本节定义文档发布契约，不改变现有业务接口的权限或开放范围。首版只展示文档，不提供在线执行。
+
+#### 文档范围与来源
+
+- 以 Gateway 实际开放的路径、HTTP 方法及授权策略为准，覆盖认证、IAM、EBS 资源、受支持的子资源和 Runner 服务地址投影；按业务域使用 tags 分组。Gin 的 `Any` 注册不表示所有方法都对外可用，生成及核对时须结合 Handler 和权限策略。
+- 复用 `api/ebs/v1`、`api/iam/v1` 公共资源的 Schema 生成机制；由 Gateway 补充路径、操作、请求/响应、权限说明和示例。接口使用经过 Gateway 转换的响应时，定义其实际响应 Schema，不能直接套用内部类型。
+- 不直接透传 apiserver 的完整 `/openapi/v3` 文档：排除 `/internal/*`、Project 子资源的内部全局列表以及 Gateway 未开放的方法。Artifact Manager 的上传、日志、仓库内容接口不属于 Gateway 路由，首版不纳入本文档。
+- 每个操作具有唯一且稳定的 `operationId`，明确路径参数、适用的分页/过滤/字段选择参数、请求体、响应类型及错误码。`watch`、`includeFields`、`excludeFields` 等参数仅出现在实际支持的操作中，流式响应须说明格式。
+- 请求与响应分别标明字段的必填、只读及更新约束；记录 UID/resourceVersion 前置条件、冲突和写入结果未知时的注意事项。错误响应按接口区分 Gateway JSON 错误与 apiserver Kubernetes Status，不统一伪装为同一种格式。
+
+#### 身份与权限表达
+
+OpenAPI 的 `securitySchemes` 定义 HTTP Bearer JWT 和 MachineAccount Basic 认证。各操作单独声明认证要求：匿名接口使用空 security，允许匿名或 JWT 的操作列出两种选择，Runner token 换取接口使用 Basic。
+
+Bearer scheme 只表达令牌格式，不能表达 owner/member、Ops/Admin 或 Runner 任务归属。各操作的 description 应明确允许的身份与对象关系，沿用 5.1 和第四章的规则。文档向所有查看者展示同一接口集合，接口可见不代表调用获授权；不读取当前用户或 Project 数据来动态裁剪文档。
+
+#### 生成与发布
+
+1. 在 Gateway 模块提供离线生成入口，将公共类型 Schema 与 Gateway 操作定义组装为单份 `openapi.json`。`$ref` 仅引用文档内的 `components`，`servers` 使用同源相对根地址 `/`，不包含 apiserver 地址、部署实例地址或真实凭据。
+2. 生成产物随代码提交，并由 `internal/openapi` 包使用 `go:embed` 嵌入 Gateway 二进制。构建和运行不依赖已启动的 apiserver；不在浏览器请求文档时读取业务对象或调用上游生成 Schema。
+3. 显式注册 `GET /openapi.json`，返回 `200`、`Content-Type: application/json`。这是独立的静态文档路由，经过全局审计与 panic 恢复，不执行用户解析或业务资源授权；请求不需要携带 Token，也不向上游转发。其他方法不开放。
+4. 响应采用 `Cache-Control: no-cache`，允许客户端保存但每次使用前重新验证，避免升级后长期展示旧接口。首版只提供 JSON，不单独维护另一份 Swagger YAML 或 Gateway 内置 Swagger UI。
+5. 前端 Nginx 和 Vite 对该精确路径代理到 Gateway，`/api-docs` 仍作为 SPA 页面。文档路径不得被 history fallback 返回为 HTML；代理要求见前端设计 7.1。
+
+生成命令（仓库根目录执行）：
+
+```bash
+# 公共 API 类型变化时，先更新公共资源 Schema。
+bash backend/ebs-apiserver/hacks/update-openapi.sh
+bash backend/ebs-gateway/hacks/update-openapi.sh
+
+# 检查生成产物是否与当前输入一致，不写文件。
+bash backend/ebs-gateway/hacks/update-openapi.sh --check
+```
+
+生成入口在 `backend/ebs-gateway/hacks/openapi/`，借用 apiserver 模块的生成类型定义，仅在生成时依赖该模块；Gateway 运行时不依赖 apiserver 的 Schema 服务。新增路由或变更方法、权限、专用响应时，同步更新操作定义、生成产物和路由契约测试。
+
+#### 一致性验收
+
+- 校验 OpenAPI 版本、Schema 引用、operationId 唯一性、参数与响应定义；离线重新生成应无未提交差异。
+- 对照实际路由、方法限制和授权测试验证操作集合，覆盖只读资源、Build PUT/PATCH 限制、支持的 Watch 路径以及专用认证接口；新增接口时同步更新操作定义。
+- 验证匿名获取、JSON 响应和无上游依赖；检查文档不包含内部路由、真实凭据或集群内部地址。
+- UI 的只读限制不是服务端安全控制；现有接口仍须独立通过权限测试。在线调试、自动带入会话 Token 和写操作确认另行设计，不属于首版。
 
 ## 六、配置
 
