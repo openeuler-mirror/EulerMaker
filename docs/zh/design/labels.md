@@ -11,7 +11,7 @@
 | 对象 | 标签 | 值 | 写入方 | 用途 |
 |------|------|----|--------|------|
 | Project | `project.ebs.io/type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
-| Project | `ebs.io/owner-user` | User `metadata.name` | Gateway、Admin | 标识 Project owner，参与 Gateway 写权限判定 |
+| Project | `ebs.io/owner-user` | User `metadata.name` | Gateway（创建时） | 标识 Project owner；写入及不可变规则见 3.1 |
 | Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner | 授予指定用户 Project 成员权限 |
 | Build | `ebs.io/target-os` | Build Target 的操作系统名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/target-arch` | Build Target 的架构名称 | Build 创建方 | 按构建目标查询 Build |

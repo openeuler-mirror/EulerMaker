@@ -415,6 +415,6 @@ docker compose -p eulermaker-runner -f hacks/docker-compose.runner.yml up -d
 当前架构后续主要完善方向：
 
 - 持续校验 OpenAPI schema 与实际资源模型的一致性。
-- 实现内部客户端证书认证，并按 Gateway、Scheduler 和各 Controller 的职责配置最小权限。
+- 在已有内部客户端证书认证基础上，按 Gateway、Scheduler 和 Controller Manager 的职责实现最小权限授权。
 - 补齐 controller，并完善 scheduler、runner 的生产级故障恢复与可观测性。
 - 接入正式的镜像构建和发布流程。

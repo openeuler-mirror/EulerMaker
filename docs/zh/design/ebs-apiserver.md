@@ -670,7 +670,7 @@ Content-Type: application/json
 {"uid":"<Job metadata.uid>","reason":"人工停止本次任务"}
 ```
 
-- 请求体只接受 `uid`（必填、非空）和 `reason`（可选，最多 1024 个 Unicode 字符）；不接受目标 phase、runner 或操作者字段。格式错误返回 400，字段校验错误返回 Kubernetes Status 422。操作者从 gateway 注入的可信身份取得，不能信任请求体。
+- 请求体只接受 `uid`（必填、非空）和 `reason`（可选，最多 1024 个 Unicode 字符）。格式错误返回 400，字段校验错误返回 Kubernetes Status 422。用户中止权限由 Gateway 校验；apiserver 校验 Job UID 和当前状态并执行状态更新，本接口不记录操作者身份。
 - 返回 200 和当前完整 Job。Pending/Running 原子改为 Aborted，`endTime` 使用服务端当前时间，`message` 使用 reason（空时为 `job aborted by user`）；保留 spec、metadata、runner、startTime、stage 及产物字段。不增加 Aborting phase。
 - 已为 Aborted/Succeeded/Failed 时幂等返回当前对象，不改终态、message 或 endTime。未知/空 phase 返回 409，不推导状态。对象不存在返回 404；UID 不同返回 409，防止同名重建后误中止新对象。
 - 使用 Job 所在 etcd 存储的原子更新/CAS，不使用无前提的 GET 后覆盖。每次冲突重读后重新核验 UID、phase，再决定返回终态或写 Aborted；有界重试仍冲突时返回 409。成功完成与中止并发时，先持久化的终态获胜；绑定先成功则中止保留绑定的 runner，反之绑定不得覆盖 Aborted。

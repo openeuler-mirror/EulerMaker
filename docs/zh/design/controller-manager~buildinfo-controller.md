@@ -140,24 +140,16 @@ type Client interface {
     // 只读依赖
     GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
     GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
-    GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
+    GetSnapshot(ctx context.Context, project, name string, includeFields ...string) (*ebsv1.Snapshot, error)
     GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
-    // 同一 Job 创建批次按名称读取两份 Config，解析结果在本轮共享。
-    GetConfig(ctx context.Context, name string) (*ebsv1.Config, error)
+    GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
+    // 读取并反序列化配置，同一 Job 创建批次共享解析结果。
+    GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error)
+    GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 ```
 
-路径约定：
-
-- BuildInfo：`GET /apis/ebs/v1/buildinfos`（全局 list，PollingSource 复用 `ListPage`）；单对象 `GET /apis/ebs/v1/projects/{project}/buildinfos/{name}`；status 写 `PUT /apis/ebs/v1/projects/{project}/buildinfos/{name}/status`；
-- BuildGraph：创建 `POST /apis/ebs/v1/projects/{project}/buildgraphs`；读取 `GET .../buildgraphs/{name}`；补边 `PUT .../buildgraphs/{name}/status`。不注册独立 PollingSource/Watch，随 BuildInfo 调谐按确定性名称访问；返回的 metadata 与完整读取时的 status.nodes 均须校验，见 15.9。
-- Job：创建 `POST /apis/ebs/v1/projects/{project}/jobs`；单对象 `GET /apis/ebs/v1/projects/{project}/jobs/{name}`（创建 Unknown 按确定性 Job 名确认，10.3/E-11）；list `GET /apis/ebs/v1/projects/{project}/jobs?labelSelector=ebs.io/build-name=<name>`；
-- Build：`GET /apis/ebs/v1/projects/{project}/builds/{name}`；只读取本轮父 Build，不 List 历史 Build；
-- RpmRepo / Snapshot：`GET /apis/ebs/v1/projects/{project}/{resource}/{name}`（均与 Build 同名）；
-- Project：`GET /apis/ebs/v1/projects/{project}`；
-- Config：`GET /apis/ebs/v1/configs/{name}`（集群级只读）；`GetConfig(ctx, name)` 读取 `build-target` 和 `build-resource`，两者的业务内容由 apiserver 在创建、更新时完整校验，Controller 只反序列化，按 OS/Arch 查找镜像并合并资源规则。本轮新 Job 共享同一份已解析快照。
-
-HTTP 实现复用共享 client 的 `Get` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus` 等能力；写请求使用对象 `metadata.resourceVersion` 触发乐观锁。
+资源访问路径与用途统一见 15.1。HTTP 实现复用共享 client 的 `Get` / `GetWithFields` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus` / `PostSubresource` 等能力；写请求使用对象 `metadata.resourceVersion` 触发乐观锁。Config 的业务内容由 apiserver 在创建、更新时完整校验，类型化适配方法负责读取、响应校验和反序列化，本轮新 Job 共享已解析配置。
 
 **写错误契约**：`UpdateBuildInfoStatus`、`CreateJob`、`CreateBuildGraph` 与 `UpdateBuildGraphStatus` 的失败必须返回可由 `errors.As` 识别的 `WriteError`，Controller 不解析错误文本或底层 HTTP 状态自行推断 Outcome。BuildGraph 的同名创建冲突和结果未知确认优先按 15.9 处理：
 
@@ -200,7 +192,7 @@ BuildInfo 的 `checkReleasePublished(ctx context.Context, baseURL string) (bool,
 - `/status` 保留旧 spec；
 - `WriteError` 三分类注入（NotSent / Rejected / Unknown），Unknown 后按确认读取返回当前持久化对象（`GetJob` 按名返回已持久化 Job 或 NotFound）；
 - `ListJobs` 按 `ebs.io/build-name` / `ebs.io/spec-name` label 过滤；
-- `GetConfig` 返回注入的 Config/build-target（支持映射缺失与查询失败两种注入，供 E-26 用例）。
+- `GetBuildTargetContent` / `GetBuildResourceContent` 返回注入的配置内容，支持读取失败及目标映射缺失等异常注入（E-26/E-27）；`GetScript` 提供 Job 创建批次使用的脚本快照。
 
 ---
 
@@ -635,7 +627,10 @@ buildSet = buildSet ∪ direct                                                # 
    - ① **非破环节点的第 2+ 次下发**：必须等待全部上游均已完成其**有效 required** 次下发且处于 `Succeeded`（`upstreamsFullyDispatched`，有效 required 定义见 7.4.2——上游因自身上游 Failed 而取消重建时其有效 required=1，按 1 判定，否则该门禁永不能满足），保证重建基于上游重建后的最终产物，而非上游 bootstrap 的临时产物。
    - ② **环内节点的环外直接下游的首次下发**：直接上游含环内节点（cycleNodes 判定，build/install 边合并上游全集）的环外下游，首次下发即须等待其全部**环内上游**完成有效 required 次下发且 `Succeeded`（环外上游仍按正常门禁：终态 + 发布确认），保证环外下游基于环内上游重建后的最终产物构建，而非其 bootstrap 的临时产物 v1——环外下游不在环上，等待关系无环，不构成活锁。
    - 破环点自身的重建豁免——按定义它只能基于上游 v1 产物破环重建，若同样等待上游完成重建，环内节点互相等待形成活锁。
-2. **发布确认门禁**（适用**所有下发**，破环点重建下发**不**豁免）：下发前，**Succeeded 直接上游**（build/install 边合并后的上游全集，Failed 上游跳过——失败的 Job 永不被消费，不应等待）**最新一代 `Succeeded` Job** 的产物须已发布（`upstreamOutputsPublished`）：以同名 RpmRepo 的 **`status.repository.sourceJobNames`** 为发布凭据——Succeeded 上游最新一代 Job 的 `metadata.name` ∈ 该集合即已发布（rpm-repo-controller 成功物化批次后一次 CAS 累计写入的已消费 Job 名称集合，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」；物化与消费语义见 [artifact-manager.md](artifact-manager.md) 8.3.3）——凭据直接读取本轮 reconcile 已 GET 的同名 RpmRepo 对象（守卫获取、各检查点复用不重复 GET，见 15.4），目标 Job 为本轮已 list 的对象（15.3，名称取 `metadata.name`），无额外查询；任一 Succeeded 上游最新一代 Job 的名称不在集合中（rpm-repo-controller 尚未物化该批次）即视为未发布，跳过等待。Succeeded 上游产物物化失败（不可重试失败/重试预算耗尽，artifact-manager.md 8.3.3 第 4 条）**不构成永久等待**——rpmrepo-controller 同次写 `release.phase=Failed`，经 E-28 前置守卫将 BuildInfo 停止派发，按 6.5 等待已有 Job 全部终态后写 `Completed`（`ReleaseUnavailable`）、父 Build 收口 Failed，等待由外部终态信号终止。破环点不豁免的原因：`sourceJobNames` 随批次只增不减、无计数互相等待，不构成活锁。install 边上游同样受门禁约束（install 依赖的兑现 = 上游 rpm 已合并入构建环境 RpmRepo）。凭据判定对象为 Succeeded 上游**最新一代 Job**（7.4.4 无"保持前代"例外回写；Succeeded spec 的最新一代 Job 即其 Succeeded Job；同批物化的 Job 同批入集——一批一 CAS 累计，artifact-manager.md 8.3.3 第 3 条）。best-effort 上游（末代重建 Job 失败，见 7.4.2/7.4.5）按 Failed 上游同样跳过——其 v1 产物的可用性由构建依赖统一存在性裁决（7.4.1 条件 2）承担（依赖已发布 → 照常下发），不经发布确认门禁，亦不构成等待。该门禁扩展至首次下发的意义：确保其后构建依赖统一存在性裁决（7.4.1 条件 2）不把"成功未合并"窗口内的依赖缺失误判为真缺失。
+2. **发布确认门禁**（除第 3 条 bootstrap 豁免外，适用于首次下发和重建，破环点重建不豁免）：
+   - 对 build/install 边合并后的直接上游，若其 SpecResult 为构建成功状态（`Succeeded` 或 `InstallFailed`），则最新一代 Job 的名称必须已在同名 RpmRepo 的 `status.repository.sourceJobNames` 中；否则本轮等待。复用本轮已读取的 RpmRepo 和 Job 列表，不增加查询。构建失败上游不等待其产物物化，依赖是否满足仍由 7.4.1 条件 2 裁决；best-effort 重建失败同样适用。
+   - 批次成功后，RpmRepo Controller 累计写入已消费 Job 名称；可定位到具体 Job 的输入错误则记入 `skippedJobNames` 并重新组批，不视为已发布。批次选择、跳过和失败收口统一见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 第六章与 7.2。
+   - 整批失败收口写入 `release.phase=Failed` 时，由 E-28 守卫触发 6.5 的停止派发流程。仅跳过异常 Job 时不会触发该守卫，依赖其产物的下游仍可能持续等待；当前收敛限制见 21.1 的 BI-01。
 3. **bootstrap 豁免门禁**（破环点首次下发专属，挂载于 `initBuildInfo` 步骤 4；**含运行期 install 补边追加的破环点，及因 RpmRepo 依赖待定未能在 init 步骤 4 下发、而 BuildInfo 已随步骤 5 预建进入 Processing 的初始破环点残留**——两者的 bootstrap 下发均发生在 `advanceBuildInfo` 步骤 4（7.3），豁免语义完全相同，判据统一为 `BootstrapBreak` 标记且 `DispatchCount=0`，否则该残留会因上游非终态被步骤 4 跳过成为死点）：破环点 bootstrap 下发时**无视全部上游入度依赖**（build/install 边合并上游全集，cycleNodes 环内上游与非环上游一律同规则）——上游终态检查与发布确认门禁**全部跳过**（不等任何上游构建/发布，此为破环语义本身；`upstreamsFullyDispatched`/`upstreamOutputsPublished` 均不判），**唯一保留门禁为构建依赖统一存在性校验（7.4.1 条件 2）**——对破环点全部 `buildRequires`（剔除 `buildRemoves`，**不再区分环内/环外依赖**）逐项经两阶段匹配判依赖满足性：依赖在 RpmMetaSources 分层缓存可查且版本约束满足（RpmRepo 层先行——含增量轮 contentURL 指向的继承版本上轮产物；未命中时 BootstrapRepo 层按声明顺序兜底，见 15.10）→ 照常创建 bootstrap Job（`DispatchCount` 0 → 1）；**RpmRepo 就绪但依赖缺失或版本不满足 → specResults[key].status 标 `RpmDependsMissing`（message 记缺失依赖名），不创建 Job、不等待不重试**——破环点 bootstrap 基于当前 RpmRepo 内容构建，依赖不在仓库则 Job 必然失败，落确定性终态优于下发必败 Job；其下游（环内/环外）经 E-17 自判逐跳传导（各自依赖存在性裁决）。RpmRepo 不存在/查询失败/XML 下载解析失败 → 视为待定，本轮跳过 bootstrap 等待下一轮重入（7.4.1 条件 2 语义，不误标 Failed；contentURL 为空为正常空态——RpmRepo 层空数据源、仅 BootstrapRepo 层裁决，不构成待定，见 7.4.1 条件 2）。运行期追加的破环点若已下发过（`DispatchCount=1`）→ required 升 2 后经正常推进门禁（第 1/2 条）再下发一次，不再适用 bootstrap 豁免。
 
 > **为什么需要发布确认门禁**：RpmRepo 层 XML 元数据仅覆盖 `contentURL` 指向的**当前已发布物理版本**，"Job `Succeeded` 但产物尚未物化为当前版本（contentURL 未提升，XML 中无该条目）"是异步发布竞态，若仅凭 Job 终态放行重建，重建 Job 会在依赖未兑现的环境中运行。
@@ -965,7 +960,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | E-21 | **Project 查询失败（5xx）/ 不存在（404）** | 5xx → 返回 error 退避重试；404 → 记录日志返回 nil，下一轮重评估；404 **不触发置终态**，与 E-03 的 Build 404 语义不同 | 7.1 parentAbortGuard |
 | E-23 | spec 下载/解析确定性失败 | `full`、`incremental`、`specified` 和 `single` 均按 spec 粒度跳过；仓库级读取失败跳过该仓库，记录 PrepareFailed 条目，诊断仅写入该条目的 `SpecResult.message`，不汇总到 BuildInfo conditions。`incremental`/`specified` 空集正常完成；`single` 空集按 7.2.3 失败收口。瞬态失败保持 Pending。 | 7.2.2 / 7.2.3 / 9.1 |
 | E-24 | Snapshot 的包仓库条目不可用 | 条目缺失但仓库仍在 `spec.packageRepos`，或 `retryable=true` 时保持 Pending；确定性失败或种子仓库已不在 `spec.packageRepos` 时，`incremental`/`specified` 同样降级并记录 `SpecCommitMissing`、PrepareFailed 条目。`single` 空集按 7.2.3 收口。 | 7.2.2 / 9.1 |
-| E-26 | **Config/build-target 不可用或映射缺失**（`GetConfig` 读取失败（404/超时/5xx/反序列化失败），或 `content.targets[os].arches[arch].image` 缺失，契约见 [Config 设计](data-models~config.md) 2.5.2） | 本轮不创建新 Job，输出结构化错误并返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 `Failed`、不下游传播——不把配置问题直接写成构建失败）；挂载点：每轮需要创建新 Job 的 reconcile 读取一次 Config/build-target 快照（init 步骤 3/4 / advance 步骤 4 / `single` 直通），同轮批量创建共享同一快照；已存在 Job 沿用固化镜像、不因配置更新重写，已有 Job 的回填/观察不受影响（生效边界见 [Config 设计](data-models~config.md) 2.5.3，无需注册 Config/build-target watch） | 9.1 / 15.3.1 / [Config 设计](data-models~config.md) 2.5.2 |
+| E-26 | **Config/build-target 不可用或映射缺失**（`GetBuildTargetContent` 读取、反序列化失败，或目标 OS/Arch 无镜像） | 本轮不创建新 Job，返回分类错误并按 7.5 退避；不写失败条件或包级失败。配置恢复后继续派发，已有 Job 的观察和回填不受影响。读取与生效边界见 [Config 设计](data-models~config.md) 2.5.2～2.5.3 | 9.1 / 15.3.1 |
 | E-27 | **`Config/build-resource` 不可用** | GET 404 时写对象级 `ResourceConfigUnavailable=True`（reason=`ResourceConfigMissing`），暂停新 Job 派发并于 5 秒后重新入队；不写包级失败、不提前结束 BuildInfo，已有 Job 继续回填。派发前成功读取配置后清除此条件并继续，相同条件不重复写入。其他读取错误、响应契约错误或 `spec.content` 反序列化失败时不创建本轮新 Job，记录错误并按 7.5 退避重入，不写包级 Failed。内容有效时按表级、包级、架构规则解析资源 | 9.1 / 15.3.1 / [Config 设计](data-models~config.md) 第 3 章 |
 | E-28 | 非 single 的 release.phase=Failed | 写 ReleaseUnavailable=True（reason=RpmRepoReleaseFailed，message 记录 RpmRepo 名），按 6.5 停止派发并等待已有 Job 收敛 | 6.5 / 2.5 |
 | E-29 | RpmRepo 确定性错误或 XML 连续解析失败 | 无效 URL、确定性 4xx 查询/元数据请求立即写 `RpmRepoUnavailable=True`（`RpmRepoConfigInvalid`、`BootstrapRepoConfigInvalid`、`RpmRepoQueryRejected`）；过程仓或 bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮）后写入同一条件（`RpmRepoXmlParseFailed`、`BootstrapRepoXmlParseFailed`）。升级时在同一次 status 写入中清除 `RpmRepoRetrying`；停止派发并按 6.5 等待已有 Job 全部终态后 Completed。404、网络错误及 XML 下载失败写 `RpmRepoRetrying` 并继续重试，不因次数停止；恢复后清除并继续构建 | 5.4 / 6.5 / 7.1 / 9.1 |
@@ -980,19 +975,19 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 
 ### 15.1 资源访问矩阵
 
-依赖的 API 统一经 `backend/controller-manager/pkg/controllers/buildinfo/client.go` 的 typed `Client` 方法访问 ebs-apiserver（接口定义见 4.1）；该适配层包装 `pkg/clients/apiserver` 的共享客户端，按 `pkg/source` 的 GVR 常量调用 `Get` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus`，并做响应校验与哨兵错误归一，不直接使用裸 `net/http`。下表“client 方法”即向 reconciler 暴露的方法。资源 × client 方法 × HTTP 路径 × 权限 × 用途的**唯一清单**（各资源字段级消费明细见 15.2~15.7）：
+依赖的 API 统一经 4.1 的类型化 `Client` 适配层访问 ebs-apiserver。下表集中定义各资源的 HTTP 路径、权限与用途；接口签名及共享客户端能力不在此重复。字段消费明细见后续小节。
 
 | 资源 | client 方法 | apiserver 路径 | 访问权限 | 用途 |
 |------|-----------|---------------|----------|------|
-| `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` | `/apis/ebs/v1/buildinfos`（全局 list 由 PollingSource 框架承担，不经本 Client 接口，见 2.4；reconcile 侧按 name 直接 get，无需 labelSelector）/ PUT /status | **读写**（get + /status 写） | reconcile 入口 re-get → status 写（乐观锁 409 延迟重入、Unknown 确认，见 10.2/10.3；specDepends 不落库——无 PUT spec 场景，15.11）；父 Build 中止/Project Terminating 时置 `Aborted` 终态并**保留对象**（G-06/E-03/E-20，不删除） |
+| `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` | `GET /apis/ebs/v1/projects/{project}/buildinfos/{name}`、`PUT .../{name}/status`；全局 `GET /apis/ebs/v1/buildinfos` 由 PollingSource 执行 | **读写**（get + /status 写） | reconcile 入口读取最新对象并更新状态；并发与 Unknown 确认见第十章，终态收敛见第六、七章 |
 | `BuildGraph` | `GetBuildGraph` / `CreateBuildGraph` / `UpdateBuildGraphStatus` | `/apis/ebs/v1/projects/{project}/buildgraphs`、`/{name}`、`/{name}/status` | **读写**（get + create + /status 写） | 独立持久化依赖图，无 PollingSource；恢复与确认规则见 15.9 |
-| `Job` | `CreateJob` / `GetJob` / `ListJobs` | `/apis/ebs/v1/projects/{project}/jobs`（单对象 `/{name}` 与 list 两种形态） | **读写**（创建 + 按名 get + 按 label list） | `dispatchSpec` 创建（字段契约见 15.3.1）；创建 Unknown 按确定性 Job 名 GET 确认（10.3/E-11）；按 `ebs.io/build-name` label list 回填（见 15.3.2） |
+| `Job` | `CreateJob` / `GetJob` / `ListJobs` / `AbortJob` | `/apis/ebs/v1/projects/{project}/jobs`、`/{name}`、`/{name}/abort` | **读写**（创建、读取、POST /abort） | 创建与 Unknown 确认见 15.3.1；按 build-name label 回填见 15.3.2；父 Build 中止或 Project Terminating 时按 7.1 分批中止已有 Job |
 | `Build` | `GetBuild` | `/apis/ebs/v1/projects/{project}/builds/{name}` | **只读** | parentAbortGuard 按名读取本轮父 Build；步骤 0 使用已固化的 `spec.packages`，不查询历史 Build；字段消费明细见 15.5 |
-| `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 与 Build 同名按 name 直接 get（一对一约定，见 15.4；每轮由 7.1 前置守卫单点 GET 一次、本轮复用，不重复查询）：发布失败守卫判定（`status.release.phase`，7.1/E-28）、建图前置存在性判定、构建依赖裁决、步骤 0 扩散反查、payload `contentURL` 注入；`single` 直通路径另经本接口按名 get 获取 repo 注入用 contentURL（守卫豁免，7.2.3 第 3 条）；字段消费明细见 15.4 |
+| `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 仅非 single 读取同名对象，供发布失败守卫、依赖裁决和 payload 仓库地址使用；本轮复用，字段消费见 15.4。single 的稳定发布入口见 7.2.3 |
 | `Snapshot` | `GetSnapshot` | `/apis/ebs/v1/projects/{project}/snapshots/{name}` | **只读** | 仅读取本轮同名 Snapshot，用 `spec.packageRepos[].url` 与 `status.packageRepoStatuses[].commitID` 定位 git-server 命令输入，`cloneURL` 用于 Job payload；其 GET 失败计入连续失败计数，达阈值按 E-30 收口；字段消费明细见 15.7 |
-| `Project` | `GetProject` | `/apis/ebs/v1/projects/{project}` | **只读** | 每轮 reconcile 由 parentAbortGuard 查询一次、全轮复用（不重复 GET，见 7.1），仅供 parentAbortGuard 判定 `Terminating`（E-20/E-21）——buildPayload 已固化于 BuildInfo.spec（15.2.2），本控制器不再消费 Project 数据字段；字段消费明细见 15.6 |
-| `Config/build-resource` | `GetConfig` | `/apis/ebs/v1/configs/build-resource`（集群级单例） | **只读** | 创建 Job 时解析 `Job.spec.resources`（逐层覆盖契约见 [Config 设计](data-models~config.md) 3.2 / 15.3.1 / E-27） |
-| `Config/build-target` | `GetConfig` | `GET /apis/ebs/v1/configs/build-target`（集群级单例，无 project 段） | **只读** | 每轮创建新 Job 的 reconcile 读取一次快照（同轮批量共享），经 `BuildImage` 按 os/arch 解析写入 `Job.spec.runtimeSpec.image`（契约见 [Config 设计](data-models~config.md) 2.5.2 / 15.3.1 / E-26） |
+| `Project` | `GetProject` | `/apis/ebs/v1/projects/{project}` | **只读** | 以 `includeFields=metadata,status.phase` 每轮读取一次，用于终止守卫及 Artifact Manager 实例选择；字段消费见 15.6 |
+| `Config/build-resource` | `GetBuildResourceContent` | `/apis/ebs/v1/configs/build-resource` | **只读** | 本轮 Job 批次共享资源规则；合并规则见 [Config 设计](data-models~config.md) 3.2，读取失败与恢复见 E-27 |
+| `Config/build-target` | `GetBuildTargetContent` | `/apis/ebs/v1/configs/build-target` | **只读** | 本轮 Job 批次共享镜像配置；目标解析及生效边界见 [Config 设计](data-models~config.md) 2.5，失败处理见 E-26 |
 | `Config/services` | 公共服务配置提供者 | `GET /apis/ebs/v1/configs/services` | **只读** | 同轮 Git Server 与 Artifact Manager 请求共用一次配置读取，见 4.2 |
 | `Script` | `GetScript` | `GET /apis/ebs/v1/scripts/{name}`（集群级） | **只读** | 本轮首次创建 Job 前读取所选脚本，将响应的 name/UID/resourceVersion 写入新 Job 的单元素 `spec.scriptRefs`；读取失败不创建 Job |
 
@@ -1111,13 +1106,13 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.labels["ebs.io/build-name"]` | 父 Build 名（= `BuildInfo.metadata.name`） | G-08 必写；list 过滤、状态归属的依据                                                                                                       |
 | `metadata.labels["ebs.io/spec-name"]` | `EncodeSpecName(specName)` | G-08 必写；回填时先解码，再按原始 specName 归组 |
 | `metadata.labels["ebs.io/package-name"]` | `specDepends[specName].repoName`（= `Snapshot.spec.packageRepos[].name`，spec 所属包仓库名）按 labels.md 第 7 节使用与 spec-name 相同的编码，超过 63 字符时截断并去掉末尾的 `-`/`_`/`.`；不写同名 annotation | G-08 必写；必填归属标签（新建 Job 缺失不可创建，值语法由 apiserver 校验，labels.md 第 7 节）；供工程详情按软件包查询 Job 构建历史（同一仓库多 spec 共享同值）；本控制器查询不消费（list 仅按 build-name/spec-name，8.1） |
-| `metadata.labels["ebs.io/target-os"]` | `Build.spec.buildTarget.os` | G-08 必写；RpmRepo 物化队列过滤条件（labels.md 第 7 节 / artifact-manager.md 8.3.3，缺失的 Job 不进物化队列） |
+| `metadata.labels["ebs.io/target-os"]` | `Build.spec.buildTarget.os` | G-08 必写；RpmRepo 候选 Job 的目标校验字段，见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 第六章 |
 | `metadata.labels["ebs.io/target-arch"]` | `Build.spec.buildTarget.arch` | G-08 必写；同上 |
 | `metadata.annotations["ebs.io/dispatch-generation"]` | 十进制派发代次 | 与基于 BuildInfo UID 计算的 Job 名共同核验创建身份；资源配置来源不写入 Job annotation，调度以 `spec.resources` 为准 |
 | `metadata.annotations["ebs.io/artifacts"]` | Project 选定的实例名；缺省为 `default` | 创建时固化，Runner 据此选择日志和产物上传地址，创建后不可修改 |
 | `spec.priority` | `0` | 类型零值即默认，不显式设置                                                                                                                 |
 | `spec.runtime` | `"ct"` | 常量；apiserver `SetDefaults_Job` 同值兜底（见下"apiserver 默认与覆写"）                                                                      |
-| `spec.runtimeSpec` | `{"image": Config/build-target 快照解析结果, "networkMode":"host"}` | RawExtension；ct 运行时的镜像来源：集群级 Config/build-target（name=build-target，`GET /apis/ebs/v1/configs/build-target`）——每轮创建新 Job 的 reconcile 经 `GetConfig` 读取一次快照、同轮批量创建共享，按 `Build.spec.buildTarget.os/arch` 解析 `content.targets[os].arches[arch].image`（复用共享 `BuildImage`）；读取失败或映射缺失 → 本轮不创建新 Job，返回 error（按 7.5 标准退避分流：快速退避达上限转框架慢速阶段）等待配置恢复（不写 condition、不标 Failed，E-26）；已存在 Job 沿用固化镜像、不因配置更新重写（生效边界见 [Config 设计](data-models~config.md) 2.5.3）。`networkMode=host` 由 Runner 转换为 Docker `--network host`，避免构建容器占用默认 bridge 地址。 |
+| `spec.runtimeSpec` | `{"image": Config/build-target 快照解析结果, "networkMode":"host"}` | RawExtension；镜像取自本轮配置中目标 OS/Arch 的 image，读取失败与更新边界见 E-26。Runner 按所选 Docker/containerd 后端配置宿主机网络，运行时契约见 [Runner 设计](runner.md) |
 | `spec.scriptRefs` | 创建时 Script 的 name、UID、resourceVersion，当前写入一个元素 | 从 `buildPayload.rpmbuild_script` 选名，未配置时使用 `rpmbuild`；GET Script 后写入观测值，不下发 `rpmbuild_script` 到 Job payload。读取失败不创建 Job；观测值不锁定 Runner 执行时的正文 |
 | `spec.timeoutSeconds` | `10800` | 常量（3 小时）；apiserver `SetDefaults_Job` 同值兜底                                                                                     |
 | `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET `Config/build-resource` 并解析 `spec.content`；配置不可用时按 E-27 暂停本轮新 Job 派发，恢复后继续。内容按 `default` → `packages[specName].default` → `packages[specName].arches[arch]` 逐字段覆盖（[构建配置设计](data-models~config.md#32-匹配与校验)） |
@@ -1189,7 +1184,7 @@ status:                                             # 创建时恒 Pending/Pendi
 |------|------|--------|
 | `status.repository.contentURL` | string | 本轮当前已发布物理版本的 `artifact://{instance}/repositories/.../` 逻辑地址；无实例标识时使用 `default`。Job payload 保留逻辑地址，BuildInfo 仅在下载 RpmMeta 层 XML 时查询 `Config/services` 并解析为管理面内网 HTTP(S) URL |
 | `status.repository.repositoryUID` | string | 当前物理版本标识（溯源；初始内容继承自上一轮已发布版本时为该版本 UID）；本控制器不做发布判定依据（发布判据为 `sourceJobNames`，见下行） |
-| `status.repository.sourceJobNames` | []string | **发布确认门禁凭据**（7.4.6 第 2 条）：本对象已成功消费的累计 Job 名称集合（rpm-repo-controller 成功物化批次后一次 CAS 累计写入，去重排序、只增不减、不记录失败 Job、继承基线不计入，data-models.md「RpmRepoRepositoryStatus.sourceJobNames」）——Succeeded 直接上游最新一代 Job 的 `metadata.name` ∈ 本集合 → 已发布；不在 → 未发布等待下一轮（15.3.2 `metadata.name`）；对象读取自本轮 reconcile 守卫已 GET 的同名 RpmRepo（各检查点复用不重复 GET），无额外查询 |
+| `status.repository.sourceJobNames` | []string | 当前 Build 已成功物化的累计 Job 名称，作为 7.4.6 发布确认门禁的凭据；不含跳过的输入或继承基线中的 Job |
 | `status.release.phase` | string | reconcile 前置守卫（7.1）判定正式发布失败：值为 `Failed`（稳定终态，E-28）→ 按 6.5 停止派发，等待已有 Job 全部终态后写 `Completed`；其余取值（含 `release` 缺失——整个 `release` 结构为 nil，如尚未进入发布流程）不触发、正常推进；`single` 不查询（7.2.3）。`release` 其余字段（`contentURL` 稳定入口等）不消费（属 Build Controller 消费域） |
 | `status.conditions` | []metav1.Condition | 不消费（发布凭据为 `status.repository.sourceJobNames`，见 7.4.6/上行） |
 
@@ -1305,7 +1300,7 @@ type RpmMetaSources struct {
 
 - `name` → rpm 名（`RpmByName` key；同源内同名不同 arch 并存时取目标 arch 条目）；
 - `version` = `epoch:version-release` 拼接（版本约束比较输入）；
-- `specName` 由 `sourcerpm` 派生：剥离 `-<version>-<release>.src.rpm` 后缀（与 artifact-manager 物化侧同一规则，见 [artifact-manager.md](artifact-manager.md) 8.3.3；sourcerpm 缺失/异常时以 rpm 名兜底）；
+- `specName` 由 `sourcerpm` 派生：剥离 `-<version>-<release>.src.rpm` 后缀；sourcerpm 缺失/异常时以 rpm 名兜底。Artifact Manager 物化侧的 RPM 归属提取规则见 [Artifact Manager 设计](artifact-manager.md) 8.7 第 5 步；
 - `provides` → map[string]string（能力名 → 版本）：合并 `rpm:provides/rpm:entry` 和 `format/file`，文件路径使用所属 RPM 的完整版本。普通文件以及带 `type="dir"`、`type="ghost"` 的条目均按路径建立提供能力；同名路径使用文件条目的 RPM 版本。完成架构和同名 RPM 版本筛选后，再生成 `ProvidesInfo`，供过程仓及 bootstrap 仓的路径依赖匹配共用。
 - `requires` → map[string]VersionConstraint（XML requires 条目的 flags/ver 映射为 VersionConstraint）。
 
@@ -1661,9 +1656,9 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 **BI-01：成功 Job 的产物不可用时，下游收敛策略待定。**
 
-- **触发场景**：上游 Job 为 Succeeded，但 Artifact Manager 的 Manifest 返回 404 或 Failed；RpmRepo Controller 跳过该输入，不将其名称 纳入 `sourceJobNames`，也未提供可供 BuildInfo Controller 消费的产物不可用结果。
+- **触发场景**：上游 Job 为 Succeeded，但 Artifact Manager 物化时返回可定位到该 Job 的清单或产物错误。RpmRepo Controller 将其记入 `skippedJobNames` 并重新组批，不纳入 `sourceJobNames`；BuildInfo Controller 当前不消费该跳过记录。
 - **当前行为与影响**：仍按 7.4.6 发布确认门禁等待，不自动放行或判定下游失败。依赖该产物的下游可能永久无法派发，进而阻塞 BuildInfo Completed 与后续发布；当前不保证该异常场景自动收敛，需人工排查、处置。
-- **后续待定**：由 RpmRepo Controller 暴露产物不可用结果，或由 BuildInfo Controller 查询 Manifest；再明确下游失败或降级策略，并补充跨组件契约及集成测试。
+- **后续待定**：明确 BuildInfo Controller 对 `skippedJobNames` 的消费契约，或引入 Manifest 查询；确定下游失败或降级策略，并补充跨组件集成测试。
 - **范围**：作为后续事项跟踪，不阻塞当前版本主体开发；本版不增加 Manifest 查询、等待超时或自动降级逻辑。
 
 **BI-02：隔离 `rpmspec` 对仓库 spec 的执行。**
