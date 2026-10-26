@@ -9,14 +9,11 @@ export function buildInfoSpecRows(buildInfo: BuildInfo | null, snapshot: Snapsho
         key,
         name,
         specName: value.specName,
-        reason: value.reason,
         message: value.message,
         packageName,
         commitID: packageName ? snapshot?.status?.packageRepoStatuses?.[packageName]?.commitID : undefined,
         buildStatus: value.status,
-        displayStatus: value.status === "BuildFailed" &&
-          value.reason === "RpmDependsMissing"
-          ? "RpmDependsMissing" : value.status,
+        displayStatus: value.status,
       };
     })
     .sort((left, right) => left.name.localeCompare(right.name));

@@ -143,9 +143,10 @@ func TestScriptDeepCopy(t *testing.T) {
 
 func TestSpecResultsJSONAndDeepCopy(t *testing.T) {
 	results := SpecResults{
-		"gcc/gcc.spec":   {SpecName: "gcc", Status: SpecInstallFailed, DispatchCount: 2, MissingDeps: map[string]MissingDep{"libc": {}}},
-		"bash/bash.spec": {Status: SpecPrepareFailed, Reason: "SpecParseFailed", Message: "rpmspec failed"},
-		"unreadable/":    {Status: SpecPrepareFailed},
+		"gcc/gcc.spec":         {SpecName: "gcc", Status: SpecInstallFailed, DispatchCount: 2, MissingDeps: map[string]MissingDep{"libc": {}}},
+		"bash/bash.spec":       {Status: SpecPrepareFailed, Message: "rpmspec failed"},
+		"missing/missing.spec": {SpecName: "missing", Status: SpecRpmDependsMissing},
+		"unreadable/":          {Status: SpecBuildFailed, Message: "dispatch stopped; see BuildInfo conditions"},
 	}
 	data, err := json.Marshal(results)
 	if err != nil {
@@ -166,7 +167,7 @@ func TestSpecResultsJSONAndDeepCopy(t *testing.T) {
 	if len(info.Status.SpecResults["gcc/gcc.spec"].MissingDeps) != 1 {
 		t.Fatal("DeepCopy shares missing dependencies")
 	}
-	if got := results.FailedPackages(); !reflect.DeepEqual(got, []string{"bash", "gcc", "unreadable"}) {
+	if got := results.FailedPackages(); !reflect.DeepEqual(got, []string{"bash", "gcc", "missing", "unreadable"}) {
 		t.Fatalf("failed repositories = %v", got)
 	}
 	if SpecResultRepo("gcc/gcc.spec") != "gcc" {

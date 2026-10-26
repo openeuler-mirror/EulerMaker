@@ -68,6 +68,9 @@ func TestBuildEnumsJSON(t *testing.T) {
 	if SpecBuildFailed.BuildSucceeded() {
 		t.Fatal("build failure has no usable output")
 	}
+	if !SpecRpmDependsMissing.IsValid() || !SpecRpmDependsMissing.IsTerminal() || SpecRpmDependsMissing.BuildSucceeded() {
+		t.Fatal("missing build dependencies must be a failed terminal result")
+	}
 }
 
 func TestProjectPhase(t *testing.T) {

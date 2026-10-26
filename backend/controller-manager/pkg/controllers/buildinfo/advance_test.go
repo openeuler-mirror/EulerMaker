@@ -86,7 +86,6 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	if a.Status != ebsv1.SpecBuildFailed || a.DispatchCount != 2 {
 		t.Fatalf("specResults[a] = %+v, want Failed with floor count 2", a)
 	}
-	requireSpecReason(t, a, ReasonRebuildJobFailed)
 	if want := jobNameFor(string(seeded.UID), "a", 2); !strings.Contains(a.Message, want) {
 		t.Fatalf("specResults[a] condition = %+v, want generation-2 job %q", a, want)
 	}
@@ -97,6 +96,53 @@ func TestAdvanceBackfillMultiGeneration(t *testing.T) {
 	b := persisted.Status.SpecResults.Entry("b")
 	if b.DispatchCount != 1 {
 		t.Fatalf("specResults[b] = %+v, want dispatched (gen 1)", b)
+	}
+}
+
+func TestResourceConfigPauseStillBackfillsJobs(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{
+		"a": {Version: "1.0"},
+		"b": {Version: "1.0"},
+	})
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{
+		"a": {Status: ebsv1.SpecRunning, DispatchCount: 1},
+		"b": {Status: ebsv1.SpecPrepared},
+	})
+	upsertCondition(&bi.Status.Conditions, ConditionResourceConfigUnavailable,
+		ReasonResourceConfigMissing, "build-resource Config not found; waiting for configuration recovery")
+	seeded := seedProcessingRound(client, c, bi, map[string]specparse.SpecDepend{
+		"a": dependEntry("a"), "b": dependEntry("b"),
+	}, testSources())
+	client.SetBuildResourceContent(nil)
+	seedJobAt(client, seeded, "a", 1, ebsv1.JobSucceeded, testStart)
+
+	result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+	if err != nil || result.RequeueAfter != 5*time.Second {
+		t.Fatalf("reconcile() = %+v, %v, want retry after 5s", result, err)
+	}
+	persisted := getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoProcessing)
+	requireCondition(t, persisted.Status.Conditions, ConditionResourceConfigUnavailable, ReasonResourceConfigMissing)
+	if ss := persisted.Status.SpecResults.Entry("a"); ss.Status != ebsv1.SpecSucceeded {
+		t.Fatalf("specResults[a] = %+v, want completed Job backfill", ss)
+	}
+	if ss := persisted.Status.SpecResults.Entry("b"); ss.Status != ebsv1.SpecPrepared || ss.DispatchCount != 0 {
+		t.Fatalf("specResults[b] = %+v, want undispatched Prepared entry", ss)
+	}
+
+	client.SetBuildResourceContent(testBuildResourceContent())
+	reconcileOnce(t, c)
+	persisted = getBuildInfo(t, client)
+	if findCondition(persisted.Status.Conditions, ConditionResourceConfigUnavailable) != nil {
+		t.Fatal("configuration recovery retained the pause condition")
+	}
+	if ss := persisted.Status.SpecResults.Entry("b"); ss.DispatchCount != 1 {
+		t.Fatalf("specResults[b] = %+v, want dispatch after recovery", ss)
+	}
+	if got := len(listJobs(t, client)); got != 2 {
+		t.Fatalf("jobs = %d, want existing a and newly dispatched b", got)
 	}
 }
 
@@ -118,7 +164,6 @@ func TestAdvanceBackfillUnknownPhaseSkipped(t *testing.T) {
 	if a.Status != ebsv1.SpecRunning {
 		t.Fatalf("specResults[a].Status = %q, want Running (unknown phase unmapped)", a.Status)
 	}
-	requireSpecReason(t, a, "")
 }
 
 func TestAdvanceBackfillJobAborted(t *testing.T) {
@@ -138,7 +183,9 @@ func TestAdvanceBackfillJobAborted(t *testing.T) {
 	if a.Status != ebsv1.SpecBuildFailed {
 		t.Fatalf("specResults[a].Status = %q, want Failed (Aborted treated as Failed)", a.Status)
 	}
-	requireSpecReason(t, a, ReasonBuildAborted)
+	if !strings.Contains(a.Message, "aborted") {
+		t.Fatalf("aborted Job diagnostic = %q", a.Message)
+	}
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 }
 
@@ -209,7 +256,6 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		if a.Status != ebsv1.SpecBuildFailed {
 			t.Fatalf("script result = %q, want BuildFailed", a.Status)
 		}
-		requireSpecReason(t, a, ReasonJobResultMissing)
 		requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 	})
 
@@ -254,7 +300,9 @@ func TestAdvanceInstallBackfillBranches(t *testing.T) {
 		if got := b.MissingDeps["a"]; got.NeededBy != "new" || got.VersionRequests.GE != "1.0" {
 			t.Fatalf("missingDeps[a] = %+v, want the latest Job result", got)
 		}
-		requireSpecReason(t, b, ReasonInstallCheckFailed)
+		if b.Message != "job "+job.Name+" install check failed" {
+			t.Fatalf("install diagnostic = %q", b.Message)
+		}
 		// Provider a is non-terminal; persist the new edge before dispatch.
 		if _, ok := testGraph(t, client, persisted).Status.Nodes["b"].InstallInDep["a"]; !ok {
 			t.Fatalf("dcg[b].InstallInDep = %v, want runtime edge on a", testGraph(t, client, persisted).Status.Nodes["b"].InstallInDep)
@@ -291,7 +339,6 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	if got := persisted.Status.SpecResults.Entry("b").DispatchCount; got != 0 {
 		t.Fatalf("specResults[b].DispatchCount = %d, want 0 (publish gate)", got)
 	}
-	requireSpecReason(t, persisted.Status.SpecResults.Entry("b"), "")
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs = %d, want 1", got)
 	}
@@ -306,6 +353,23 @@ func TestAdvanceGatePublishConfirmation(t *testing.T) {
 	b := persisted.Status.SpecResults.Entry("b")
 	if b.DispatchCount != 1 {
 		t.Fatalf("specResults[b] = %+v, want dispatched after publish", b)
+	}
+}
+
+func TestMissingDependenciesCancelDownstreamRebuild(t *testing.T) {
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{
+		"a": {Status: ebsv1.SpecRpmDependsMissing},
+		"b": {Status: ebsv1.SpecSucceeded, DispatchCount: 1},
+	})
+	round := &reconcileRound{current: bi}
+	dcg := NewDcgDict(graphWith(edge{"a", "b"}, edge{"b", "a"}))
+	required := dcg.DispatchRequirements()
+	if required["b"] != 2 || effectiveRequired(dcg, round, "b", required) != 1 {
+		t.Fatal("missing dependencies must cancel the downstream rebuild")
+	}
+	if !upstreamsTerminal(dcg, round, "b") || !hasFailedUpstream(dcg, round, "b") {
+		t.Fatal("missing dependencies must count as a failed terminal upstream")
 	}
 }
 
@@ -394,7 +458,6 @@ func TestAdvanceCompletionRecordsFailedPackage(t *testing.T) {
 
 	persisted := getBuildInfo(t, client)
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
-	requireSpecReason(t, persisted.Status.SpecResults.Entry("b"), ReasonJobFailed)
 	if got := persisted.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
 	}
@@ -423,6 +486,49 @@ func TestAdvanceCompletionRecordsInstallFailureRepository(t *testing.T) {
 }
 
 // Stop-dispatch convergence.
+
+func TestCloseStoppedResultsRetainsRootCauseInBuildInfo(t *testing.T) {
+	for _, phase := range []ebsv1.BuildInfoPhase{ebsv1.BuildInfoPending, ebsv1.BuildInfoProcessing} {
+		t.Run(string(phase), func(t *testing.T) {
+			c, _, _, _ := newTestController(t)
+			bi := testBuildInfoObj(phase)
+			bi.Status.SpecResults = ebsv1.SpecResults{
+				"repo/a.spec": {SpecName: "a", Status: ebsv1.SpecPrepared, Message: "old diagnostic"},
+				"repo/b.spec": {SpecName: "b", Status: ebsv1.SpecSucceeded},
+				"repo/c.spec": {Status: ebsv1.SpecPrepareFailed, Message: "parse failed"},
+				"repo/d.spec": {Status: ebsv1.SpecPending},
+			}
+			upsertCondition(&bi.Status.Conditions, ConditionSnapshotUnavailable, ReasonSnapshotNotFound, "snapshot gone")
+			build := testBuildObj("single", "repo", "unprepared")
+			round := &reconcileRound{current: bi, build: build}
+			if err := c.closeStoppedResults(context.Background(), round, bi); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"repo/a.spec", "repo/d.spec"} {
+				result := bi.Status.SpecResults[key]
+				if result.Status != ebsv1.SpecBuildFailed || result.Message != "dispatch stopped; see BuildInfo conditions" {
+					t.Fatalf("stopped spec %s = %+v", key, result)
+				}
+			}
+			if phase == ebsv1.BuildInfoPending {
+				result := bi.Status.SpecResults["unprepared/"]
+				if result.Status != ebsv1.SpecBuildFailed || result.Message != "dispatch stopped; see BuildInfo conditions" {
+					t.Fatalf("stopped repository = %+v", result)
+				}
+			}
+			if bi.Status.SpecResults["repo/b.spec"].Status != ebsv1.SpecSucceeded {
+				t.Fatal("completed result changed")
+			}
+			if result := bi.Status.SpecResults["repo/c.spec"]; result.Status != ebsv1.SpecPrepareFailed || result.Message != "parse failed" {
+				t.Fatalf("existing terminal diagnostic changed: %+v", result)
+			}
+			condition := requireCondition(t, bi.Status.Conditions, ConditionSnapshotUnavailable, ReasonSnapshotNotFound)
+			if condition.Message != "snapshot gone" {
+				t.Fatalf("stop cause changed: %+v", condition)
+			}
+		})
+	}
+}
 
 func TestConvergeBackfillsCompletedJob(t *testing.T) {
 	c, client, _, _ := newTestController(t)

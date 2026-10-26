@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
@@ -204,6 +205,35 @@ func TestSingleInitPersistsAllSpecsBeforeBatchedDispatch(t *testing.T) {
 	}
 	if phase := getBuildInfo(t, client).Status.Phase; phase != ebsv1.BuildInfoProcessing {
 		t.Fatalf("phase after complete single dispatch = %s, want Processing", phase)
+	}
+}
+
+func TestMissingBuildDependenciesConvergeWithoutJobs(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "full")
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	client.SeedRpmRepo(testRpmRepoObj(""))
+	git.repo(gitURL1, "c1", map[string]string{
+		"a.spec": specText("a", "missing-dependency"),
+		"b.spec": specText("b", "a"),
+	})
+	for range 3 {
+		reconcileOnce(t, c)
+	}
+	bi := getBuildInfo(t, client)
+	requirePhase(t, bi, ebsv1.BuildInfoCompleted)
+	for _, spec := range []string{"a", "b"} {
+		result := bi.Status.SpecResults.Entry(spec)
+		if result.Status != ebsv1.SpecRpmDependsMissing || result.DispatchCount != 0 ||
+			!strings.Contains(result.Message, "build requires unavailable:") {
+			t.Fatalf("spec %s result = %+v", spec, result)
+		}
+	}
+	if got := len(listJobs(t, client)); got != 0 {
+		t.Fatalf("Jobs = %d, want 0", got)
+	}
+	if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
+		t.Fatalf("failed packages = %v", got)
 	}
 }
 
@@ -565,9 +595,7 @@ cat "$3"
 				if err := os.WriteFile(path, []byte(stub), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				info := seedHealthyBasics(client, buildType, "ubturbo")
-				upsertCondition(&info.Status.Conditions, ConditionSpecDependsFillFailed, ReasonSpecParseFailed, "old aggregate")
-				client.SeedBuildInfo(info)
+				seedHealthyBasics(client, buildType, "ubturbo")
 				client.SeedSnapshot(testSnapshotObj(
 					repoEntry{name: "ubturbo", cloneURL: gitURL1, commitID: "c1", declare: true}))
 				client.SeedRpmRepo(testRpmRepoObj(""))
@@ -581,9 +609,8 @@ cat "$3"
 				if result.Status != ebsv1.SpecPrepareFailed || result.SpecName != "" {
 					t.Fatalf("parse failure result = %+v", result)
 				}
-				cond := requireSpecReason(t, result, ReasonSpecParseFailed)
-				if !strings.Contains(cond.Message, "rpmspec ubturbo.spec: exit status 1: error: "+diagnostic) {
-					t.Fatalf("spec diagnostic = %q", cond.Message)
+				if !strings.Contains(result.Message, "rpmspec ubturbo.spec: exit status 1: error: "+diagnostic) {
+					t.Fatalf("spec diagnostic = %q", result.Message)
 				}
 				if findCondition(bi.Status.Conditions, ConditionSpecDependsFillFailed) != nil {
 					t.Fatalf("spec diagnostic was aggregated: %+v", bi.Status.Conditions)
@@ -609,7 +636,7 @@ func TestInitPermanentSpecReadFailureSkipsSpec(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	cond := requireSpecReason(t, bi.Status.SpecResults["repo1/bad.spec"], ReasonSpecParseFailed)
+	cond := bi.Status.SpecResults["repo1/bad.spec"]
 	if !strings.Contains(cond.Message, "blob missing") {
 		t.Fatalf("condition message = %q, want blob missing", cond.Message)
 	}
@@ -638,7 +665,6 @@ func TestInitSpecifiedPermanentSpecReadFailureDegrades(t *testing.T) {
 
 	bi := getBuildInfo(t, client)
 	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	requireSpecReason(t, bi.Status.SpecResults["repo1/bad.spec"], ReasonSpecParseFailed)
 	requireSpecNames(t, bi, "a")
 	if got := bi.Status.SpecResults.FailedPackages(); len(got) != 1 || got[0] != "repo1" {
 		t.Fatalf("failedPackages = %v, want [repo1]", got)
@@ -705,7 +731,6 @@ func TestInitArchUnsupportedSkipsJob(t *testing.T) {
 	if ss.Status != ebsv1.SpecArchUnsupported {
 		t.Fatalf("specResults[a].Status = %q, want ArchUnsupported", ss.Status)
 	}
-	requireSpecReason(t, ss, "")
 	if got := jobSpecNames(t, client); len(got) != 1 || !got["b"] {
 		t.Fatalf("jobs = %v, want {b} only", got)
 	}
@@ -737,30 +762,61 @@ func TestInitMissingImageMappingPauses(t *testing.T) {
 	}
 }
 
-func TestInitMissingBuildResourceConfigFailsSpec(t *testing.T) {
-	c, client, git, _ := newTestController(t)
-	// Seed everything except any BuildResourceConfig (project table and the cluster-wide default resource table is
-	// absent).
-	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
-	client.SeedBuild(testBuildObj("full"))
-	client.SetBuildTargetContent(testBuildTargetContent())
-	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
-	client.SeedSnapshot(testSnapshotObj(
-		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	client.SeedRpmRepo(testRpmRepoObj(""))
-	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
+func TestMissingBuildResourceConfigPausesAndResumesDispatch(t *testing.T) {
+	for _, buildType := range []string{"full", "single"} {
+		t.Run(buildType, func(t *testing.T) {
+			c, client, git, _ := newTestController(t)
+			seedHealthyBasics(client, buildType, "repo1")
+			client.SetBuildResourceContent(nil)
+			client.SeedSnapshot(testSnapshotObj(
+				repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+			client.SeedRpmRepo(testRpmRepoObj(""))
+			git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a"), "b.spec": specText("b")})
 
-	reconcileOnce(t, c)
+			result, err := c.reconcile(context.Background(), testNS+"/"+testBuild)
+			if err != nil || result.RequeueAfter != 5*time.Second {
+				t.Fatalf("reconcile() = %+v, %v, want retry after 5s", result, err)
+			}
+			bi := getBuildInfo(t, client)
+			requirePhase(t, bi, ebsv1.BuildInfoPending)
+			requireCondition(t, bi.Status.Conditions, ConditionResourceConfigUnavailable, ReasonResourceConfigMissing)
+			requireSpecNames(t, bi, "a", "b")
+			for _, name := range []string{"a", "b"} {
+				ss := bi.Status.SpecResults.Entry(name)
+				if ss.Status != ebsv1.SpecPrepared || ss.DispatchCount != 0 || ss.Message != "" {
+					t.Fatalf("specResults[%s] = %+v, want untouched Prepared entry", name, ss)
+				}
+			}
+			if got := len(listJobs(t, client)); got != 0 {
+				t.Fatalf("jobs = %d, want 0", got)
+			}
 
-	bi := getBuildInfo(t, client)
-	requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-	ss := bi.Status.SpecResults.Entry("a")
-	if ss.Status != ebsv1.SpecBuildFailed {
-		t.Fatalf("specResults[a].Status = %q, want Failed", ss.Status)
-	}
-	requireSpecReason(t, ss, ReasonDefaultBuildResourceConfigNotFound)
-	if got := len(listJobs(t, client)); got != 0 {
-		t.Fatalf("jobs = %d, want 0", got)
+			writes := client.statusWrites
+			reconcileOnce(t, c)
+			if client.statusWrites != writes {
+				t.Fatalf("unchanged missing configuration wrote status again: %d -> %d", writes, client.statusWrites)
+			}
+
+			client.SetBuildResourceContent(testBuildResourceContent())
+			reads := client.resourceReads
+			reconcileOnce(t, c)
+			bi = getBuildInfo(t, client)
+			requirePhase(t, bi, ebsv1.BuildInfoProcessing)
+			if findCondition(bi.Status.Conditions, ConditionResourceConfigUnavailable) != nil {
+				t.Fatal("configuration recovery retained the pause condition")
+			}
+			if got := len(listJobs(t, client)); got != 2 {
+				t.Fatalf("jobs = %d, want 2 after recovery", got)
+			}
+			if client.resourceReads != reads+1 {
+				t.Fatalf("resource reads = %d, want %d for one dispatch round", client.resourceReads, reads+1)
+			}
+			for _, name := range []string{"a", "b"} {
+				if ss := bi.Status.SpecResults.Entry(name); ss.DispatchCount != 1 {
+					t.Fatalf("specResults[%s] = %+v, want first dispatch", name, ss)
+				}
+			}
+		})
 	}
 }
 
@@ -1030,7 +1086,6 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		if ss.Status != ebsv1.SpecArchUnsupported {
 			t.Fatalf("specResults[a].Status = %q, want ArchUnsupported", ss.Status)
 		}
-		requireSpecReason(t, ss, "")
 		if got := len(listJobs(t, client)); got != 0 {
 			t.Fatalf("jobs = %d, want 0", got)
 		}
@@ -1042,26 +1097,6 @@ func TestSingleDeterministicFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("missing BuildResourceConfig marks spec Failed", func(t *testing.T) {
-		c, client, git, _ := newTestController(t)
-		client.SeedProject(testProjectObj(ebsv1.ProjectActive))
-		client.SeedBuild(testBuildObj("single", "repo1"))
-		client.SetBuildTargetContent(testBuildTargetContent())
-		client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
-		client.SeedSnapshot(testSnapshotObj(
-			repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-		git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
-
-		reconcileOnce(t, c)
-
-		bi := getBuildInfo(t, client)
-		requirePhase(t, bi, ebsv1.BuildInfoProcessing)
-		ss := bi.Status.SpecResults.Entry("a")
-		if ss.Status != ebsv1.SpecBuildFailed {
-			t.Fatalf("specResults[a].Status = %q, want Failed", ss.Status)
-		}
-		requireSpecReason(t, ss, ReasonDefaultBuildResourceConfigNotFound)
-	})
 }
 
 func TestSingleMissingImageMappingPauses(t *testing.T) {

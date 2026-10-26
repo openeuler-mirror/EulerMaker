@@ -671,7 +671,7 @@ func specResultsMatches(a, b ebsv1.SpecResults) bool {
 		if !missingDepsMatch(left.MissingDeps, right.MissingDeps) {
 			return false
 		}
-		if left.Reason != right.Reason || left.Message != right.Message {
+		if left.Message != right.Message {
 			return false
 		}
 	}

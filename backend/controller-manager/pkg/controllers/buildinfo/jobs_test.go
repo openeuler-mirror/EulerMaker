@@ -27,24 +27,46 @@ func TestApplyJobPhaseReplacesDiagnostic(t *testing.T) {
 	for _, phase := range []ebsv1.JobPhase{ebsv1.JobPending, ebsv1.JobRunning, ebsv1.JobSucceeded, ebsv1.JobFailed} {
 		t.Run(string(phase), func(t *testing.T) {
 			result := ebsv1.SpecResult{
-				Status: ebsv1.SpecInstallFailed, Reason: ReasonInstallCheckFailed, Message: "old install failure",
+				Status: ebsv1.SpecBuildFailed, Message: "old build failure",
 				MissingDeps: map[string]ebsv1.MissingDep{"old-dep": {}},
 			}
 			job := testJobObj(testBuildInfoObj(ebsv1.BuildInfoProcessing), "a", 2, phase)
 			job.Status.Result = &ebsv1.JobResult{Status: ebsv1.JobResultSucceeded}
-			if !applyJobPhase(&result, job, false) {
+			if !applyJobPhase(&result, job) {
 				t.Fatal("Job phase was not applied")
 			}
 			if phase == ebsv1.JobFailed {
-				requireSpecReason(t, result, ReasonJobFailed)
 				if result.Message != "job "+job.Name+" failed" {
 					t.Fatalf("message = %q", result.Message)
 				}
 			} else {
-				requireSpecReason(t, result, "")
+				if result.Message != "" {
+					t.Fatalf("stale diagnostic message: %q", result.Message)
+				}
 			}
 			if len(result.MissingDeps) != 0 {
 				t.Fatalf("stale missing dependencies: %v", result.MissingDeps)
+			}
+		})
+	}
+}
+
+func TestJobResultInvalidDiagnostic(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		result  *ebsv1.JobResult
+		message string
+	}{
+		{name: "missing", message: "has no script result"},
+		{name: "invalid", result: &ebsv1.JobResult{}, message: "has invalid script result"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job := testJobObj(testBuildInfoObj(ebsv1.BuildInfoProcessing), "a", 1, ebsv1.JobSucceeded)
+			job.Status.Result = test.result
+			result := ebsv1.SpecResult{Status: ebsv1.SpecRunning}
+			applyJobPhase(&result, job)
+			if result.Status != ebsv1.SpecBuildFailed || result.Message != "job "+job.Name+" "+test.message {
+				t.Fatalf("invalid Job result diagnostic = %+v", result)
 			}
 		})
 	}
@@ -1190,7 +1212,7 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 			}
 			stored := getBuildInfo(t, client)
 			if got := stored.Status.SpecResults.Entry("a"); got.Status != ebsv1.SpecBuildFailed ||
-				got.Reason != ReasonJobCreateRejected {
+				got.Message != fmt.Sprintf("Job creation rejected with HTTP %d", status) {
 				t.Fatalf("rejected spec status = %+v", got)
 			}
 			if got := stored.Status.SpecResults.Entry("b"); got.Status == ebsv1.SpecBuildFailed ||

@@ -36,10 +36,7 @@
           <tbody><template v-for="row in paginatedSpecRows" :key="row.key">
             <tr><td><button v-if="row.specName" class="spec-expand-button" type="button" :aria-expanded="selectedSpecName === row.key" @click="selectedSpecName = selectedSpecName === row.key ? '' : row.key">{{ row.name }}</button><span v-else :title="row.message">{{ row.name }}</span></td><td>{{ row.packageName || t('common.emptyValue') }}</td><td><code v-if="row.commitID" :title="row.commitID">{{ row.commitID.slice(0, 12) }}</code><span v-else>{{ snapshotLoading ? '…' : t('common.emptyValue') }}</span></td><td><StatusBadge :value="row.displayStatus" /></td>
               <td class="spec-diagnostics">
-                <template v-if="row.reason || row.message">
-                  <strong v-if="row.reason">{{ row.reason }}</strong>
-                  <p v-if="row.message">{{ row.message }}</p>
-                </template>
+                <p v-if="row.message">{{ row.message }}</p>
                 <span v-else>{{ t('common.emptyValue') }}</span>
               </td>
             </tr>
@@ -110,7 +107,7 @@ const specPageSize = ref<number>(20);
 const specCurrentPage = ref(1);
 const specRows = computed(() => buildInfoSpecRows(buildInfo.value, snapshot.value));
 const failedPackages = computed(() => [...new Set(specRows.value
-  .filter((row) => ['PrepareFailed', 'BuildFailed', 'InstallFailed', 'ArchUnsupported'].includes(row.buildStatus))
+  .filter((row) => ['PrepareFailed', 'BuildFailed', 'RpmDependsMissing', 'InstallFailed', 'ArchUnsupported'].includes(row.buildStatus))
   .map((row) => row.packageName))].sort());
 const selectedPackagesExpanded = ref(false);
 const failedPackagesExpanded = ref(false);
@@ -119,11 +116,11 @@ const visibleSelectedPackages = computed(() => selectedPackagesExpanded.value ? 
 const visibleFailedPackages = computed(() => failedPackagesExpanded.value ? failedPackages.value : failedPackages.value.slice(0, 10));
 const specBuildCounts = computed(() => ({
   succeeded: specRows.value.filter((row) => row.buildStatus === 'Succeeded').length,
-  failed: specRows.value.filter((row) => ['PrepareFailed', 'BuildFailed', 'InstallFailed'].includes(row.buildStatus)).length,
+  failed: specRows.value.filter((row) => ['PrepareFailed', 'BuildFailed', 'RpmDependsMissing', 'InstallFailed'].includes(row.buildStatus)).length,
   archUnsupported: specRows.value.filter((row) => row.buildStatus === 'ArchUnsupported').length,
 }));
 const specStatusOptions = computed(() => [
-  ...[...new Set(specRows.value.map((row) => row.displayStatus || 'Unknown'))]
+  ...[...new Set<string>(specRows.value.map((row) => row.displayStatus || 'Unknown'))]
     .sort((left, right) => left.localeCompare(right))
     .map((status) => {
       const key = `status.${status.toLowerCase()}`;

@@ -245,7 +245,7 @@ func (c *Controller) checkArchSupported(
 		return controller.ReconcileResult{}, nil
 	}
 	message := fmt.Sprintf("target arch %q not in exclusiveArch %v", arch, depend.ExclusiveArch)
-	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecArchUnsupported, "", "")
+	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecArchUnsupported, "")
 	if err == nil && result == (controller.ReconcileResult{}) {
 		c.logOnce(round.key, "ArchUnsupported", "spec %s marked ArchUnsupported: %s", specName, message)
 	}
@@ -253,7 +253,7 @@ func (c *Controller) checkArchSupported(
 }
 
 // checkBuildRequires checks that every buildRequires entry (buildRemoves excluded) must be available in the layered
-// sources; a true miss marks the spec Failed (RpmDependsMissing) without a Job.
+// sources; a true miss marks the spec RpmDependsMissing without a Job.
 func (c *Controller) checkBuildRequires(
 	ctx context.Context,
 	round *reconcileRound,
@@ -266,9 +266,9 @@ func (c *Controller) checkBuildRequires(
 		return controller.ReconcileResult{}, nil
 	}
 	message := "build requires unavailable: " + missingDepsMessage(missing)
-	result, err := c.markSpecFailed(ctx, round, specName, ReasonRpmDependsMissing, message)
+	result, err := c.markSpecTerminal(ctx, round, specName, ebsv1.SpecRpmDependsMissing, message)
 	if err == nil && result == (controller.ReconcileResult{}) {
-		c.logOnce(round.key, "RpmDependsMissing", "spec %s marked Failed: %s", specName, message)
+		c.logOnce(round.key, "RpmDependsMissing", "spec %s marked RpmDependsMissing: %s", specName, message)
 	}
 	return result, err
 }

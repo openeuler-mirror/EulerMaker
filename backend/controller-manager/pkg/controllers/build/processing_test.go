@@ -113,6 +113,7 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 	}{
 		{name: "all succeeded", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
 		{name: "multiple specs", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded), "glibc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
+		{name: "dependencies missing", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecRpmDependsMissing, ebsv1.SpecSucceeded)}, wantStage: ebsv1.BuildStageBuild},
 		{name: "build failed", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)}, wantStage: ebsv1.BuildStageBuild},
 		{name: "install failed", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecInstallFailed)}, wantStage: ebsv1.BuildStageBuild},
 		{name: "install missing", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, "")}, wantStage: ebsv1.BuildStageBuild},

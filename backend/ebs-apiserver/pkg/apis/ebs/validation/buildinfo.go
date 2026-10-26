@@ -22,18 +22,21 @@ func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorL
 	for key, result := range newObj.Status.SpecResults {
 		p := statusPath.Key(key)
 		repo, file, found := strings.Cut(key, "/")
+		// Dispatch may stop before a spec is parsed or a Job is created.
+		unparsedFailure := result.Status == ebsv1.SpecBuildFailed && result.SpecName == "" && result.DispatchCount == 0
 		if !found || repo == "" || repo == "." || repo == ".." || strings.ContainsAny(repo, "\\") ||
 			strings.ContainsAny(file, "/\\") ||
 			(file != "" && !strings.HasSuffix(file, ".spec")) {
 			allErrs = append(allErrs, field.Invalid(p, key, "expected repository/root-spec-filename"))
 		}
-		if file == "" && result.Status != ebsv1.SpecPrepareFailed {
-			allErrs = append(allErrs, field.Invalid(p, key, "repository-only entries must be PrepareFailed"))
+		if file == "" && result.Status != ebsv1.SpecPrepareFailed && !unparsedFailure {
+			allErrs = append(allErrs, field.Invalid(p, key, "repository-only entries must be PrepareFailed or undispatched BuildFailed"))
 		}
 		if !result.Status.IsValid() {
 			allErrs = append(allErrs, field.NotSupported(p.Child("status"), result.Status, ebsv1.SpecResultPhaseValues()))
 		}
-		if result.Status != ebsv1.SpecPrepareFailed && result.Status != ebsv1.SpecPending && result.SpecName == "" {
+		if result.Status != ebsv1.SpecPrepareFailed && result.Status != ebsv1.SpecPending &&
+			result.SpecName == "" && !unparsedFailure {
 			allErrs = append(allErrs, field.Required(p.Child("specName"), "required after successful parsing"))
 		}
 		if result.SpecName != "" && result.Status != ebsv1.SpecPrepareFailed {
