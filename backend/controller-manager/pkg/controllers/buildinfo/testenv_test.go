@@ -466,11 +466,3 @@ func testSpecRepo(results ebsv1.SpecResults, spec string) string {
 	}
 	return ""
 }
-
-func requireSpecReason(t *testing.T, result ebsv1.SpecResult, reason string) ebsv1.SpecResult {
-	t.Helper()
-	if result.Reason != reason || (reason == "" && result.Message != "") {
-		t.Fatalf("spec diagnostic = %q / %q, want reason %q", result.Reason, result.Message, reason)
-	}
-	return result
-}

@@ -102,8 +102,7 @@ export interface BuildInfo {
     phase?: string;
     specResults?: Record<string, {
       specName?: string;
-      status: "Pending" | "Prepared" | "PrepareFailed" | "Running" | "BuildFailed" | "InstallFailed" | "Succeeded" | "ArchUnsupported";
-      reason?: string;
+      status: "Pending" | "Prepared" | "PrepareFailed" | "Running" | "BuildFailed" | "RpmDependsMissing" | "InstallFailed" | "Succeeded" | "ArchUnsupported";
       message?: string;
       missingDeps?: Record<string, unknown>;
       dispatchCount?: number;

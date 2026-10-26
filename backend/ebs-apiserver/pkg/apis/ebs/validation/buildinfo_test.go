@@ -39,3 +39,20 @@ func TestBuildInfoFailedStatusValidation(t *testing.T) {
 		t.Fatal("terminal Failed phase could be changed")
 	}
 }
+
+func TestBuildInfoStoppedBeforeParsing(t *testing.T) {
+	old := &ebsv1.BuildInfo{Status: ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoPending}}
+	info := old.DeepCopy()
+	info.Status.Phase = ebsv1.BuildInfoCompleted
+	info.Status.Conditions = []metav1.Condition{{
+		Type: "SnapshotUnavailable", Status: metav1.ConditionTrue,
+		Reason: "SnapshotNotFound", Message: "snapshot gone",
+	}}
+	info.Status.SpecResults = ebsv1.SpecResults{
+		"undiscovered/": {Status: ebsv1.SpecBuildFailed, Message: "dispatch stopped; see BuildInfo conditions"},
+		"repo/a.spec":   {Status: ebsv1.SpecBuildFailed, Message: "dispatch stopped; see BuildInfo conditions"},
+	}
+	if errs := ValidateBuildInfoStatusUpdate(info, old); len(errs) != 0 {
+		t.Fatalf("stopped build results rejected: %v", errs)
+	}
+}

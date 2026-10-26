@@ -42,7 +42,7 @@ func TestIncrementalPackagesUsePublishedBaselineAndFailedPackages(t *testing.T) 
 	api.storeSnapshot(snapshotWithCommits("build-prev", map[string]string{"gcc": "a", "glibc": "old", "removed": "r"}))
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"},
-		Status:     ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoCompleted, SpecResults: ebsv1.SpecResults{"gcc/" + "gcc": {Status: ebsv1.SpecPrepareFailed}, "removed/" + "removed": {Status: ebsv1.SpecPrepareFailed}}},
+		Status:     ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoCompleted, SpecResults: ebsv1.SpecResults{"gcc/" + "gcc": {SpecName: "gcc", Status: ebsv1.SpecRpmDependsMissing}, "removed/" + "removed": {Status: ebsv1.SpecPrepareFailed}}},
 	})
 	api.storeRpmRepo(&ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"}})
 	c := newTestController(t, api, newTestClock())

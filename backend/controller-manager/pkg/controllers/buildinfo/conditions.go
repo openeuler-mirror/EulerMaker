@@ -24,6 +24,8 @@ const (
 	ConditionReleaseUnavailable = "ReleaseUnavailable"
 	// ConditionRpmRepoRetrying records a recoverable repository error.
 	ConditionRpmRepoRetrying = "RpmRepoRetrying"
+	// ConditionResourceConfigUnavailable pauses dispatch until the shared resource configuration is restored.
+	ConditionResourceConfigUnavailable = "ResourceConfigUnavailable"
 	// ConditionRpmRepoUnavailable is a persisted stop-dispatch marker.
 	ConditionRpmRepoUnavailable = "RpmRepoUnavailable"
 	// ConditionSnapshotUnavailable is a persisted stop-dispatch marker.
@@ -35,6 +37,7 @@ const (
 
 // BuildInfo-level condition reasons.
 const (
+	ReasonResourceConfigMissing       = "ResourceConfigMissing"
 	ReasonJobAbortFailed              = "JobAbortFailed"
 	ReasonSpecifiedBuildSetEmpty      = "SpecifiedBuildSetEmpty"
 	ReasonSpecCommitMissing           = "SpecCommitMissing"
@@ -53,22 +56,9 @@ const (
 	ReasonSnapshotQueryFailed         = "SnapshotQueryFailed"
 )
 
-// Spec-level diagnostic reasons.
-const (
-	ReasonSpecParseFailed                    = "SpecParseFailed"
-	ReasonJobFailed                          = "JobFailed"
-	ReasonRebuildJobFailed                   = "RebuildJobFailed"
-	ReasonRpmDependsMissing                  = "RpmDependsMissing"
-	ReasonDefaultBuildResourceConfigNotFound = "DefaultBuildResourceConfigNotFound"
-	ReasonBuildAborted                       = "BuildAborted"
-	ReasonJobCreateRejected                  = "JobCreateRejected"
-	ReasonInstallCheckFailed                 = "InstallCheckFailed"
-	ReasonJobResultMissing                   = "JobResultMissing"
-	ReasonJobResultInvalid                   = "JobResultInvalid"
-)
-
 func failedSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
-	return status == ebsv1.SpecBuildFailed || status == ebsv1.SpecArchUnsupported || status == ebsv1.SpecPrepareFailed
+	return status == ebsv1.SpecBuildFailed || status == ebsv1.SpecRpmDependsMissing ||
+		status == ebsv1.SpecArchUnsupported || status == ebsv1.SpecPrepareFailed
 }
 
 func terminalSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
@@ -170,8 +160,7 @@ func sanitizeMessage(message string) string {
 	return message[:cut]
 }
 
-// setSpecDiagnostic replaces the diagnostic for the current spec result.
-func setSpecDiagnostic(spec *ebsv1.SpecResult, reason, message string) {
-	spec.Reason = reason
+// setSpecMessage sanitizes and bounds the current spec diagnostic.
+func setSpecMessage(spec *ebsv1.SpecResult, message string) {
 	spec.Message = sanitizeMessage(message)
 }

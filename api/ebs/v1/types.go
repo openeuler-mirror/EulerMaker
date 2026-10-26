@@ -226,15 +226,14 @@ type BuildInfoList struct {
 	Items           []BuildInfo `json:"items"`
 }
 
-// SpecResults keys are repository/root-spec-filename; repository/ identifies a repository preparation failure.
+// SpecResults keys are repository/root-spec-filename; repository/ records a failure before spec discovery.
 type SpecResults map[string]SpecResult
 
 // SpecResult uses one verdict for the complete preparation/build/install flow.
-// SpecName is required after successful parsing and may be empty for preparation failures.
+// SpecName is required after successful parsing and may be empty if parsing fails or dispatch stops before parsing.
 type SpecResult struct {
 	SpecName      string                `json:"specName,omitempty"`
 	Status        SpecResultPhase       `json:"status"`
-	Reason        string                `json:"reason,omitempty"`
 	Message       string                `json:"message,omitempty"`
 	MissingDeps   map[string]MissingDep `json:"missingDeps,omitempty"`
 	DispatchCount int64                 `json:"dispatchCount,omitempty"`

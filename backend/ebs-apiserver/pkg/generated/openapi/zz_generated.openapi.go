@@ -2671,7 +2671,7 @@ func schema_ebs_api_ebs_v1_SpecResult(ref common.ReferenceCallback) common.OpenA
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "SpecResult uses one verdict for the complete preparation/build/install flow. SpecName is required after successful parsing and may be empty for preparation failures.",
+				Description: "SpecResult uses one verdict for the complete preparation/build/install flow. SpecName is required after successful parsing and may be empty if parsing fails or dispatch stops before parsing.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"specName": {
@@ -2685,12 +2685,6 @@ func schema_ebs_api_ebs_v1_SpecResult(ref common.ReferenceCallback) common.OpenA
 							Default: "",
 							Type:    []string{"string"},
 							Format:  "",
-						},
-					},
-					"reason": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
 						},
 					},
 					"message": {

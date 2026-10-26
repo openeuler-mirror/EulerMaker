@@ -369,7 +369,6 @@ type SpecResults map[string]SpecResult
 type SpecResult struct {
     SpecName      string                `json:"specName,omitempty"`
     Status        SpecResultPhase       `json:"status"`
-    Reason        string                `json:"reason,omitempty"`
     Message       string                `json:"message,omitempty"`
     MissingDeps   map[string]MissingDep `json:"missingDeps,omitempty"`
     DispatchCount int64                 `json:"dispatchCount,omitempty"`
@@ -381,16 +380,15 @@ type SpecResult struct {
 | `phase` | `Pending` / `Processing` / `Completed` / `Failed` / `Aborted`；对象级调谐生命周期 |
 | `conditions` | 对象级诊断和停止派发标记；`Failed` 必须包含 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed` |
 | `specResults` | 以 `仓库名/spec文件名` 为 key 的准备、构建及安装检查结果，当前只解析根目录 spec |
-| `specName` | 解析成功后必须填写 RPM `Name:` 的宏展开值；解析失败时允许为空，不从文件名推断 |
+| `specName` | 解析成功后必须填写 RPM `Name:` 的宏展开值；解析失败或尚未解析就停止派发时允许为空，不从文件名推断 |
 | `status` | 单一结果状态，枚举见下表；不得用空串表示初始状态 |
-| `reason` | 当前结果的机器可读原因；失败时覆盖，重新派发或成功时清空 |
-| `message` | 当前结果的诊断信息，与 reason 同步更新；经清洗并限制为 1024 字节。包级下载/解析失败仅记录在对应条目，不汇总到 BuildInfo conditions |
+| `message` | 当前结果的诊断信息；经清洗并限制为 1024 字节。包级下载/解析失败仅记录在对应条目，不汇总到 BuildInfo conditions |
 | `missingDeps` | 安装检查失败的缺失依赖，供 BuildInfo Controller 动态补边；新一代执行时清理旧结果 |
 | `dispatchCount` | 已确认的最大派发代次；回填按核验后的 Job 代次取最大值，不因历史 Job 清理而回退 |
 
 仓库归属始终取 key 中第一个 `/` 前的部分。key 不随解析状态改变；同仓库多个 spec 分别记录。
 仓库读取失败或根目录没有 spec 时使用 `仓库名/` 的 `PrepareFailed` 条目。已知文件的解析失败使用真实文件 key，
-不伪造 specName。解析成功、失败条目都必须持久化，防止部分成功掩盖同仓库的失败。
+不伪造 specName。停止派发收敛时，未完成条目统一置 `BuildFailed`；尚未发现 spec 的仓库使用 `仓库名/`、specName 为空、dispatchCount=0。包级 message 仅指向 BuildInfo Conditions，停止根因见 [BuildInfo Controller 6.5](controller-manager~buildinfo-controller.md#65-停止派发后的异常收敛)。已有终态及其诊断保留。解析成功、失败条目都必须持久化，防止部分成功掩盖同仓库的失败。
 
 | 状态 | 含义 |
 |------|------|
@@ -398,6 +396,7 @@ type SpecResult struct {
 | `Prepared` | 解析成功，等待派发，非终态 |
 | `PrepareFailed` | 仓库或 spec 准备失败，终态 |
 | `Running` | 最新一代 Job 等待或执行中，非终态 |
+| `RpmDependsMissing` | 构建依赖缺失或版本不满足，失败终态，不创建 Job；message 记录依赖详情 |
 | `BuildFailed` | 构建失败或派发前确定性失败，终态 |
 | `InstallFailed` | 构建成功，但安装检查失败或缺少合法安装结果；构建产物仍可用，终态 |
 | `Succeeded` | 构建及安装检查成功，终态 |

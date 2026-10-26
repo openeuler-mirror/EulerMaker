@@ -237,7 +237,7 @@ apiserver 创建、更新 `Config/build-resource` 时完整校验：
 
 ### 3.3 读取与失败处理
 
-BuildInfo Controller 在需要创建 Job 的 reconcile 中，GET `/apis/ebs/v1/configs/build-resource`，解析一次当前对象内容，本轮新 Job 共用同一解析结果。返回 404 时沿用现有 E-27 契约，将当前 spec 标为 `Failed`（`DefaultBuildResourceConfigNotFound`），不创建 Job；读取失败、响应类型/对象身份不符合契约或反序列化失败时，不以空规则/旧缓存继续，也不创建本轮新 Job，记录配置错误并按控制器错误退避策略重新入队。配置恢复后继续派发。已存在 Job 的观察和结果回收不受影响。
+BuildInfo Controller 在需要创建 Job 的 reconcile 中，GET `/apis/ebs/v1/configs/build-resource`，解析一次当前对象内容，本轮新 Job 共用同一解析结果。返回 404 时按 E-27 写入 BuildInfo 的 `ResourceConfigUnavailable=True` Condition（reason=`ResourceConfigMissing`），暂停新 Job 派发并于 5 秒后重新入队，保留各 spec 原有状态，不提前结束 BuildInfo；读取失败、响应类型/对象身份不符合契约或反序列化失败时，不以空规则/旧缓存继续，也不创建本轮新 Job，记录配置错误并按控制器错误退避策略重新入队。派发前成功读取配置后清除该 Condition 并继续派发；重复等待相同缺失配置不重复写入状态。已存在 Job 的观察和结果回收不受影响。
 
 资源配置来源不写入 Job annotation；调度只依据 Job 中固化的 `spec.resources`。
 

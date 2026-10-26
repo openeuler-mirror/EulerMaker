@@ -108,26 +108,27 @@ func (v BuildStage) IsValid() bool {
 type SpecResultPhase string
 
 const (
-	SpecPending         SpecResultPhase = "Pending"
-	SpecPrepared        SpecResultPhase = "Prepared"
-	SpecPrepareFailed   SpecResultPhase = "PrepareFailed"
-	SpecRunning         SpecResultPhase = "Running"
-	SpecBuildFailed     SpecResultPhase = "BuildFailed"
-	SpecInstallFailed   SpecResultPhase = "InstallFailed"
-	SpecSucceeded       SpecResultPhase = "Succeeded"
-	SpecArchUnsupported SpecResultPhase = "ArchUnsupported"
+	SpecPending           SpecResultPhase = "Pending"
+	SpecPrepared          SpecResultPhase = "Prepared"
+	SpecPrepareFailed     SpecResultPhase = "PrepareFailed"
+	SpecRunning           SpecResultPhase = "Running"
+	SpecBuildFailed       SpecResultPhase = "BuildFailed"
+	SpecRpmDependsMissing SpecResultPhase = "RpmDependsMissing"
+	SpecInstallFailed     SpecResultPhase = "InstallFailed"
+	SpecSucceeded         SpecResultPhase = "Succeeded"
+	SpecArchUnsupported   SpecResultPhase = "ArchUnsupported"
 )
 
 func SpecResultPhaseValues() []string {
 	return []string{
 		string(SpecPending), string(SpecPrepared), string(SpecPrepareFailed), string(SpecRunning),
-		string(SpecBuildFailed), string(SpecInstallFailed), string(SpecSucceeded), string(SpecArchUnsupported),
+		string(SpecBuildFailed), string(SpecRpmDependsMissing), string(SpecInstallFailed), string(SpecSucceeded), string(SpecArchUnsupported),
 	}
 }
 
 func (s SpecResultPhase) IsValid() bool {
 	switch s {
-	case SpecPending, SpecPrepared, SpecPrepareFailed, SpecRunning, SpecBuildFailed,
+	case SpecPending, SpecPrepared, SpecPrepareFailed, SpecRunning, SpecBuildFailed, SpecRpmDependsMissing,
 		SpecInstallFailed, SpecSucceeded, SpecArchUnsupported:
 		return true
 	default:
@@ -141,7 +142,8 @@ func (s SpecResultPhase) BuildSucceeded() bool {
 }
 
 func (s SpecResultPhase) IsTerminal() bool {
-	return s.BuildSucceeded() || s == SpecPrepareFailed || s == SpecBuildFailed || s == SpecArchUnsupported
+	return s.BuildSucceeded() || s == SpecPrepareFailed || s == SpecBuildFailed ||
+		s == SpecRpmDependsMissing || s == SpecArchUnsupported
 }
 
 // ProjectPhase describes the lifecycle state of a Project.

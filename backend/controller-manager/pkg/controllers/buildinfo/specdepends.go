@@ -68,7 +68,7 @@ func (a *specAssembly) prepareFailed(repo, file, message string) {
 		a.failures = ebsv1.SpecResults{}
 	}
 	result := ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
-	setSpecDiagnostic(&result, ReasonSpecParseFailed, message)
+	setSpecMessage(&result, message)
 	a.failures[repo+"/"+file] = result
 }
 

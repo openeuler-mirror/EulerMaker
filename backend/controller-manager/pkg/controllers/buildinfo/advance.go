@@ -436,11 +436,7 @@ func (c *Controller) advanceSingle(ctx context.Context, round *reconcileRound) (
 
 // closeStoppedResults records undispatched work as failed before the stop-dispatch closeout.
 func (c *Controller) closeStoppedResults(ctx context.Context, round *reconcileRound, next *ebsv1.BuildInfo) error {
-	marker := stopCondition(next.Status.Conditions)
-	reason, message := "DispatchStopped", "dispatch stopped before this spec completed"
-	if marker != nil {
-		reason, message = marker.Reason, marker.Message
-	}
+	const message = "dispatch stopped; see BuildInfo conditions"
 	if next.Status.Phase == ebsv1.BuildInfoPending || len(next.Status.SpecResults.Entries()) == 0 {
 		repos := round.build.Spec.Packages
 		if !round.isSingle() && len(repos) == 0 {
@@ -463,15 +459,15 @@ func (c *Controller) closeStoppedResults(ctx context.Context, round *reconcileRo
 			if represented[repo] {
 				continue
 			}
-			result := ebsv1.SpecResult{Status: ebsv1.SpecPrepareFailed}
-			setSpecDiagnostic(&result, reason, message)
+			result := ebsv1.SpecResult{Status: ebsv1.SpecBuildFailed}
+			setSpecMessage(&result, message)
 			next.Status.SpecResults[repo+"/"] = result
 		}
 	}
 	for key, result := range next.Status.SpecResults {
 		if !result.Status.IsTerminal() {
 			result.Status = ebsv1.SpecBuildFailed
-			setSpecDiagnostic(&result, reason, message)
+			setSpecMessage(&result, message)
 			next.Status.SpecResults[key] = result
 		}
 	}
