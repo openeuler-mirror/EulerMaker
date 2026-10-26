@@ -1,8 +1,10 @@
 import zhCN from "@/i18n/messages/zh-CN";
+import { apiDocsMessages } from "@/utils/apiDocs";
 
 type MessageShape<T> = { [K in keyof T]: T[K] extends string ? string : MessageShape<T[K]> };
 
 export default {
+  apiDocs: apiDocsMessages["en-US"],
   graph: {
     hint: 'Select a build, then search and select a spec to explore its direct dependencies.',
     selectBuild: 'Select build',

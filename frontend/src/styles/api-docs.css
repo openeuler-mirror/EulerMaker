@@ -1,0 +1,18 @@
+/* This entry is loaded only inside the documentation iframe. */
+html, body { margin: 0; background: #fff; color: #253047; font-family: Inter, "Noto Sans SC", sans-serif; }
+body { padding: 20px; }
+#status:empty { display: none; }
+#status { padding: 24px 0; }
+#retry { padding: 8px 18px; border: 1px solid #d5dce7; border-radius: 8px; background: #fff; cursor: pointer; }
+.swagger-ui .wrapper { padding: 0; }
+.swagger-ui .info { margin: 20px 0; }
+.swagger-ui .info .title { font-size: 25px; }
+.swagger-ui .opblock-summary-path { overflow-wrap: anywhere; }
+.swagger-ui pre { overflow-x: auto; }
+.swagger-ui .scheme-container { box-shadow: none; padding: 12px 0; }
+@media (max-width: 640px) {
+  body { padding: 12px; }
+  .swagger-ui .opblock .opblock-summary { flex-wrap: wrap; gap: 4px; }
+  .swagger-ui .opblock .opblock-summary-path { max-width: calc(100% - 100px); font-size: 12px; }
+  .swagger-ui .opblock .opblock-summary-description { flex-basis: 100%; padding: 4px; }
+}

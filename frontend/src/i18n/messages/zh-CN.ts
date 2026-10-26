@@ -1,4 +1,7 @@
+import { apiDocsMessages } from "@/utils/apiDocs";
+
 export default {
+  apiDocs: apiDocsMessages["zh-CN"],
   graph: {
     hint: '按构建查看依赖图，搜索并点击 Spec 查看其直接依赖关系。',
     selectBuild: '选择构建',
