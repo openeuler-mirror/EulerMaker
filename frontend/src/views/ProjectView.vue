@@ -41,8 +41,14 @@
     <section v-if="activeTab === 'overview'" id="project-panel-overview" class="project-tab-panel" role="tabpanel" aria-labelledby="project-tab-overview">
       <div :class="['project-packages-layout', { 'has-selection': selectedPackageName }]">
       <article class="content-panel project-packages-panel">
-        <div class="section-heading"><div><h2>{{ t("project.packageRepositories") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openPackageEditor"><Plus />{{ t("project.addPackage") }}</button></div></div>
-        <div class="package-list-toolbar"><label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label></div>
+        <div class="section-heading">
+          <div><h2>{{ t("project.packageRepositories") }}</h2></div>
+        </div>
+        <div class="package-list-toolbar">
+          <button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openPackageEditor"><Plus />{{ t("project.addPackage") }}</button>
+          <button v-if="canEditProject" class="primary-button compact-button" type="button" @click="packageYamlOpen = true"><Edit aria-hidden="true" />{{ t('project.packageYamlTitle') }}</button>
+          <label class="search-box"><Search /><input v-model="packageSearch" type="search" :placeholder="t('project.searchPackages')" :aria-label="t('project.searchPackages')" /></label>
+        </div>
         <div v-if="packageSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageSaved") }}</div>
         <div v-if="deletedPackageName" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.packageDeleted", { name: deletedPackageName }) }}</div>
         <div v-if="packageReposLoading" class="skeleton-list" :aria-label="t('project.loadingPackages')"><span v-for="item in 3" :key="item"></span></div>
@@ -315,6 +321,7 @@
       </form>
     </ModalDialog>
 
+    <PackageReposYamlEditor v-if="packageYamlOpen && canEditProject" :key="name" :project-name="name" @close="packageYamlOpen = false" @saved="onPackageYamlSaved" />
     <ModalDialog v-if="packageEditorOpen" title-id="add-package-title" :title="t(editingPackageName ? 'project.editPackage' : 'project.addPackage', { name: editingPackageName })" :close-label="t('common.close')" @close="closePackageEditor">
       <form class="project-form" @submit.prevent="savePackage">
         <p class="form-hint">{{ t(editingPackageName ? "project.editPackageHint" : "project.addPackageHint") }}</p>
@@ -408,6 +415,7 @@ import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
 import ColumnMultiFilter from "@/components/ColumnMultiFilter.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
+import PackageReposYamlEditor from "@/components/PackageReposYamlEditor.vue";
 import ProjectReleaseRepoPicker from "@/components/ProjectReleaseRepoPicker.vue";
 import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
@@ -563,6 +571,7 @@ const packageHistoryLoading = ref(false);
 const packageHistoryErrorKey = ref("");
 let packageHistoryRequestId = 0;
 const packageEditorOpen = ref(false);
+const packageYamlOpen = ref(false);
 const editingPackageName = ref("");
 const packageEditorProject = ref<Project | null>(null);
 const savingPackage = ref(false);
@@ -1074,6 +1083,17 @@ function openTargetEditor(): void {
   }));
   if (!editingTargets.value.length) addTarget();
   targetEditorOpen.value = true;
+}
+
+function onPackageYamlSaved(updated: Project): void {
+  project.value = updated;
+  projectIsFull.value = true;
+  packageYamlOpen.value = false;
+  packageSaveSuccess.value = true;
+  deletedPackageName.value = "";
+  packageSearch.value = "";
+  packageCurrentPage.value = 1;
+  closePackageDetails();
 }
 
 function openPackageEditor(): void {
