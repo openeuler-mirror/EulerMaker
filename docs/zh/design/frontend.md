@@ -266,17 +266,20 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 ### 5.10 API 文档
 
-独立的 `/api-docs` 页面位于公开导航中，不放在仅 Ops/Admin 可见的运维菜单内。页面展示 Gateway 对外接口，提供业务分组、搜索、路径与方法、认证和权限说明、参数、请求示例、响应及 Schema 浏览；所有身份展示相同内容。
+独立的 `/api-docs` 页面入口位于页脚右侧、“参与贡献”左侧，向所有身份开放。页面展示 Gateway 对外接口，提供业务分组、搜索、路径与方法、认证和权限说明、参数、请求示例、响应及 Schema 浏览；所有身份展示相同内容。
 
-文档唯一来源为同源 `GET /openapi.json`，内容范围、生成及发布由 [Gateway OpenAPI 契约](ebs-gateway.md#53-对外-openapi-文档) 定义。前端不维护第二套接口清单，不直接访问 apiserver，也不查询业务资源来生成示例。
+采用左侧目录、右侧详情布局：目录按资源分组，显示 HTTP 方法、名称与路径，可搜索全部接口；目录列表最大高度随外层浏览器窗口调整，超出部分独立滚动。右侧仅展开当前接口，保留路径级参数及完整组件 Schema。选中接口同步到 URL hash，支持复制链接、刷新及浏览器前进后退恢复选择。搜索仅过滤目录，不改变已选接口。移动端通过“接口目录”按钮展开列表，选择后自动收起。
 
-页面通过 `swagger-ui-dist` 的本地打包资源嵌入 Swagger UI。`/api-docs-viewer.html` 是独立的 Vite 构建入口，由文档页面的同源 iframe 加载，使 Swagger 的 JS/CSS 按页面加载，并隔离样式和生命周期。iframe 与父页面同步操作深链接；离开页面即销毁展示环境。独立请求完成 JSON 校验后，将文档作为 `spec` 传入，主要配置如下：
+文档唯一来源为同源 `GET /openapi.json`，内容范围、生成及发布由 [Gateway OpenAPI 契约](ebs-gateway.md#53-对外-openapi-文档) 定义。页面直接展示左对齐的文档内容，不另设标题和说明栏；下载 OpenAPI JSON 的入口位于“接口目录”标题右侧，移动端目录收起时仍可下载。前端不维护第二套接口清单，不直接访问 apiserver，也不查询业务资源来生成示例。
+
+页面通过 `swagger-ui-dist` 的本地打包资源嵌入 Swagger UI。`/api-docs-viewer.html` 是独立的 Vite 构建入口，由文档页面的同源 iframe 加载，使 Swagger 的 JS/CSS 按页面加载，并隔离样式和生命周期。展示区域无外框，高度随内容自动调整，使用页面统一纵向滚动。iframe 与父页面同步操作深链接；离开页面即销毁展示环境及高度监听。独立请求完成 JSON 校验后，将文档作为 `spec` 传入，主要配置如下：
 
 ```javascript
 {
   spec: document, // 固定同源 /openapi.json 的响应
-  filter: true,
-  deepLinking: true,
+  filter: false, // 搜索由左侧目录负责
+  deepLinking: false, // 页面目录管理接口链接和历史记录
+  docExpansion: "full", // 仅传入当前选中接口，直接展示详情
   supportedSubmitMethods: [],
   persistAuthorization: false,
   validatorUrl: null,
@@ -288,7 +291,7 @@ MachineAccount 页面支持通过专用接口创建账号、列出和删除账�
 
 Nginx 仅为 `/api-docs-viewer.html` 设置 CSP `frame-ancestors 'self'`，允许同源页面嵌入；其他页面仍保持 `frame-ancestors 'none'`。
 
-加载期间显示占位；网络、HTTP 或文档解析失败显示错误和重试入口，不跳转登录页，也不降级显示 apiserver 的内部文档。页面标题、导航和加载/错误提示提供中英文；参数名与资源字段名保持 API 原文。移动端允许代码块横向滚动，搜索和操作展开支持键盘访问。
+加载期间显示占位；网络、HTTP 或文档解析失败显示错误和重试入口，不跳转登录页，也不降级显示 apiserver 的内部文档。导航、下载入口和加载/错误提示提供中英文；参数名与资源字段名保持 API 原文。移动端允许代码块横向滚动，搜索和操作展开支持键盘访问。
 
 #### 首版验收
 

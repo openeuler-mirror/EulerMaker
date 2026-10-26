@@ -8,7 +8,26 @@
   <body>
     <div id="status" role="status" aria-live="polite"></div>
     <button id="retry" type="button" hidden></button>
-    <div id="documentation"></div>
+    <div id="api-layout" hidden>
+      <aside id="sidebar" class="api-sidebar">
+        <div class="api-directory-header">
+          <label id="search-label" for="api-search"></label>
+          <button id="directory-toggle" type="button" aria-expanded="false" aria-controls="directory-content"></button>
+          <a id="api-docs-download" href="/openapi.json" download="openapi.json">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+              <path d="M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4" />
+            </svg>
+            <span>OpenAPI JSON</span>
+          </a>
+        </div>
+        <div id="directory-content">
+          <input id="api-search" type="search" autocomplete="off" />
+          <nav id="api-directory"></nav>
+          <p id="no-results" hidden role="status"></p>
+        </div>
+      </aside>
+      <main id="documentation"></main>
+    </div>
     <script type="module" src="/src/api-docs.ts"></script>
   </body>
 </html>

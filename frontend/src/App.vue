@@ -12,7 +12,6 @@
 
       <nav :class="['main-nav', { open: menuOpen }]" :aria-label="t('app.mainNavigation')" @click="menuOpen = false">
         <RouterLink to="/projects">{{ t("app.projects") }}</RouterLink>
-        <RouterLink to="/api-docs">{{ t("apiDocs.title") }}</RouterLink>
         <RouterLink v-if="session.role === 'ops' || session.role === 'admin'" to="/operations">{{ t("app.operations") }}</RouterLink>
         <RouterLink v-if="session.role === 'admin'" to="/admin">{{ t("app.userManagement") }}</RouterLink>
       </nav>
@@ -46,6 +45,7 @@
     <footer class="footer">
       <div class="footer-copy"><strong>EulerMaker</strong><span>{{ t("app.footer") }}</span></div>
       <nav class="footer-links" :aria-label="t('app.footerLinks')">
+        <RouterLink to="/api-docs">{{ t("apiDocs.title") }}</RouterLink>
         <a href="https://atomgit.com/openeuler/EulerMaker" target="_blank" rel="noopener noreferrer">{{ t("app.sourceRepository") }}</a>
         <a :href="openEulerLink('privacy')" target="_blank" rel="noopener noreferrer">{{ t("app.privacy") }}</a>
         <a :href="openEulerLink('legal')" target="_blank" rel="noopener noreferrer">{{ t("app.legal") }}</a>

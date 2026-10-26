@@ -1,17 +1,53 @@
 /* This entry is loaded only inside the documentation iframe. */
-html, body { margin: 0; background: #fff; color: #253047; font-family: Inter, "Noto Sans SC", sans-serif; }
-body { padding: 20px; }
+html, body { margin: 0; background: transparent; color: #253047; font-family: Inter, "Noto Sans SC", sans-serif; }
+body { display: flow-root; }
+#api-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 28px; align-items: start; }
+#api-layout[hidden] { display: none; }
+.api-sidebar { min-width: 0; padding-right: 20px; border-right: 1px solid #e2e7ef; }
+#directory-toggle { display: none; }
+.api-directory-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+#search-label { font-size: 15px; font-weight: 600; }
+#api-docs-download { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 4px 0; color: #3868d9; font-size: 12px; text-decoration: none; }
+#api-docs-download svg { width: 16px; height: 16px; }
+#api-docs-download:hover { text-decoration: underline; }
+#api-docs-download:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
+#api-search { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #dce3ed; border-radius: 8px; background: #fff; color: inherit; font: inherit; font-size: 13px; }
+#api-directory { max-height: max(320px, calc(var(--api-viewport-height, 100vh) - 220px)); overflow-y: auto; margin-top: 14px; scrollbar-width: thin; }
+#api-directory h2 { margin: 18px 8px 8px; color: #667085; font-size: 12px; font-weight: 600; }
+#api-directory a { display: flex; align-items: flex-start; gap: 8px; margin: 3px 0; padding: 10px 8px; border-radius: 8px; color: #344054; text-decoration: none; }
+#api-directory a:hover { background: #edf3fa; }
+#api-directory a[aria-current="page"] { background: #e8f1ff; color: #235db5; }
+#api-directory a:focus-visible, #api-search:focus-visible, #directory-toggle:focus-visible { outline: 2px solid #9bc5f5; outline-offset: -2px; }
+.api-method { flex: 0 0 44px; margin-top: 1px; padding: 3px 0; text-align: center; border-radius: 4px; background: #e8ecf2; color: #58667a; font-size: 10px; font-weight: 700; }
+.method-get { color: #2365ad; background: #e0efff; }
+.method-post { color: #187948; background: #def3e7; }
+.method-put, .method-patch { color: #92640b; background: #fff0d1; }
+.method-delete { color: #b63636; background: #fde5e5; }
+.api-operation-label { min-width: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.api-operation-label small { display: block; margin-top: 3px; color: #7b8798; font-size: 11px; }
+#no-results { color: #7b8798; font-size: 13px; }
+#documentation { min-width: 0; }
 #status:empty { display: none; }
 #status { padding: 24px 0; }
 #retry { padding: 8px 18px; border: 1px solid #d5dce7; border-radius: 8px; background: #fff; cursor: pointer; }
-.swagger-ui .wrapper { padding: 0; }
-.swagger-ui .info { margin: 20px 0; }
-.swagger-ui .info .title { font-size: 25px; }
+.swagger-ui { text-align: left; }
+.swagger-ui .wrapper { max-width: none; margin: 0; padding: 0; }
+.swagger-ui .information-container, .swagger-ui .scheme-container, .swagger-ui .opblock-tag { display: none; }
+.swagger-ui .opblock { margin-top: 0; }
 .swagger-ui .opblock-summary-path { overflow-wrap: anywhere; }
 .swagger-ui pre { overflow-x: auto; }
-.swagger-ui .scheme-container { box-shadow: none; padding: 12px 0; }
+@media (max-width: 900px) { #api-layout { grid-template-columns: 250px minmax(0, 1fr); gap: 18px; } }
 @media (max-width: 640px) {
-  body { padding: 12px; }
+  #api-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .api-sidebar { padding: 0 0 14px; border-right: 0; border-bottom: 1px solid #e2e7ef; }
+  .api-directory-header { margin-bottom: 0; }
+  #search-label { display: none; }
+  #directory-toggle { display: block; padding: 4px 0; text-align: left; border: 0; color: #344054; background: transparent; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+  #directory-toggle::after { content: "+"; margin-left: 10px; }
+  #directory-toggle[aria-expanded="true"]::after { content: "−"; }
+  #directory-content { display: none; margin-top: 14px; }
+  .api-sidebar.is-open #directory-content { display: block; }
+  #api-directory { max-height: clamp(180px, calc(var(--api-viewport-height, 100vh) - 220px), 360px); }
   .swagger-ui .opblock .opblock-summary { flex-wrap: wrap; gap: 4px; }
   .swagger-ui .opblock .opblock-summary-path { max-width: calc(100% - 100px); font-size: 12px; }
   .swagger-ui .opblock .opblock-summary-description { flex-basis: 100%; padding: 4px; }
