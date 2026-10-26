@@ -302,7 +302,9 @@ body.modal-open { overflow: hidden; }
 .project-packages-layout { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 20px; }
 .project-packages-layout.has-selection { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .project-packages-panel, .package-detail-panel { min-width: 0; }
-.package-list-toolbar { margin-bottom: 16px; }
+.package-list-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.package-list-toolbar .search-box { min-width: 0; margin-left: auto; }
+.package-list-toolbar > button { flex: none; }
 .package-name-button { padding: 0; color: var(--blue); background: transparent; border: 0; font-size: 14px; font-weight: 650; text-align: left; overflow-wrap: anywhere; }
 .package-name-button:hover, .package-name-button:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
 .package-name-button:focus-visible, .package-detail-close:focus-visible { outline: 2px solid #9bc5f5; outline-offset: 3px; border-radius: 3px; }
