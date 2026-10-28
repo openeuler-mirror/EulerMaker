@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	ebs-api v0.0.0
-	github.com/klauspost/compress v1.17.11
+	github.com/klauspost/compress v1.18.7
 	golang.org/x/sync v0.5.0
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/apimachinery v0.28.4
