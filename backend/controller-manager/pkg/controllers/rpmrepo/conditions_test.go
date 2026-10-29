@@ -92,20 +92,20 @@ func TestNormalizeExcludeSpecsDeduplicatesAndSorts(t *testing.T) {
 	}
 }
 
-func TestDefaultPublishPolicyFollowsPublishFlag(t *testing.T) {
+func TestDefaultPublishPolicyFollowsPublish(t *testing.T) {
 	policy := DefaultPublishPolicy{}
 	if _, err := policy.Decide(context.Background(), PublishPolicyInput{}); err == nil {
 		t.Fatalf("a missing Build must be rejected")
 	}
 	for _, publish := range []bool{true, false} {
 		build := newBuild(testBuild)
-		build.Spec.BuildTarget.PublishFlag = publish
+		build.Spec.Publish = &publish
 		decision, err := policy.Decide(context.Background(), PublishPolicyInput{Project: testProject, Build: build})
 		if err != nil {
 			t.Fatalf("Decide: %v", err)
 		}
 		if decision.Publish != publish || len(decision.ExcludeSpecs) != 0 {
-			t.Fatalf("unexpected decision %+v for publishFlag=%t", decision, publish)
+			t.Fatalf("unexpected decision %+v for publish=%t", decision, publish)
 		}
 	}
 }

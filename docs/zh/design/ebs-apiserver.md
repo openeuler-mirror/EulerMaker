@@ -552,6 +552,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 - `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是完整 `refs/...` 字符串，为空时默认 `refs/heads/master`。Project、Snapshot 的 defaultRef 与仓库 ref 使用相同的完整引用校验；不接受裸分支名、Commit ID 或旧对象格式。Snapshot 的 defaultRef 不自动默认，仓库 ref 允许为空且创建/普通更新不补齐。PackageRepo.commitID 可选，非空时必须为完整 40 位小写十六进制 SHA；Project 和 Snapshot 创建、更新均校验，允许与 ref 同时配置。解析规则见数据模型 PackageRepo。
 - `Build.spec.buildType` 必填，不设置默认值；缺失时返回 422。
+- `Build.spec.publish` 仅非 single 允许设置，创建时省略则补为 `true`，显式 `false` 保持不变。single 携带该字段时返回 422；创建后遵循 Build spec 不可变规则。Project 的构建目标只包含 OS/Arch，不保存发布策略。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
 - `Runner.spec.type` 默认为 `ct`。
 
@@ -855,8 +856,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "buildPayload": "debug_package: false",
       "buildTargets": [{
         "os": "openEuler-22.03-LTS",
-        "arch": "aarch64",
-        "publishFlag": true
+        "arch": "aarch64"
       }],
       "packageRepos": [{
         "name": "gcc",
@@ -902,11 +902,10 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
     "metadata": {"name": "123e4567-e89b-42d3-a456-426614174000"},
     "spec": {
       "buildType": "full",
-      "packages": ["gcc"],
+      "publish": true,
       "buildTarget": {
         "os": "openEuler-22.03-LTS",
-        "arch": "aarch64",
-        "publishFlag": true
+        "arch": "aarch64"
       }
     }
   }'

@@ -1694,6 +1694,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "publish": {
+            "description": "Publish controls release publication. Defaults to true for non-single builds; single builds must omit it.",
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -1734,9 +1738,6 @@
           },
           "os": {
             "type": "string"
-          },
-          "publishFlag": {
-            "type": "boolean"
           }
         },
         "type": "object"

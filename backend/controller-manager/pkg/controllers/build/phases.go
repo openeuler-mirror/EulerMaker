@@ -160,7 +160,7 @@ func (r *reconciler) advanceNonSingleBuild(succeeded bool, failing string) (cont
 		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
 	}
-	if r.current.Spec.BuildTarget.PublishFlag {
+	if r.current.Spec.Publish == nil || *r.current.Spec.Publish {
 		return r.apply(target, write, controller.ReconcileResult{}, nil)
 	}
 	target.Status.Phase = ebsv1.BuildSkipped

@@ -641,6 +641,13 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 							Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
 						},
 					},
+					"publish": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Publish controls release publication. Defaults to true for non-single builds; single builds must omit it.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
 					"packages": {
 						SchemaProps: spec.SchemaProps{
 							Type: []string{"array"},
@@ -734,12 +741,6 @@ func schema_ebs_api_ebs_v1_BuildTarget(ref common.ReferenceCallback) common.Open
 					"arch": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"publishFlag": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"boolean"},
 							Format: "",
 						},
 					},

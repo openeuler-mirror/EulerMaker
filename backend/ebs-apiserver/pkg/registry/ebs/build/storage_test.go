@@ -22,6 +22,45 @@ type fakeBuildStorage struct {
 	updates int
 }
 
+func TestBuildPublishCreateContract(t *testing.T) {
+	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
+	for _, buildType := range ebsv1.BuildTypeValues() {
+		for _, value := range []string{"omitted", "true", "false"} {
+			t.Run(buildType+"/"+value, func(t *testing.T) {
+				build := &ebsv1.Build{
+					ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000"},
+					Spec: ebsv1.BuildSpec{
+						BuildType: ebsv1.BuildType(buildType), Packages: []string{"gcc"},
+						BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "aarch64"},
+					},
+				}
+				if value != "omitted" {
+					publish := value == "true"
+					build.Spec.Publish = &publish
+				}
+				strategy.PrepareForCreate(context.Background(), build)
+				errs := strategy.Validate(context.Background(), build)
+				if build.Spec.BuildType == ebsv1.BuildTypeSingle && value != "omitted" {
+					if len(errs) != 1 || errs[0].Field != "spec.publish" || errs[0].Type != field.ErrorTypeForbidden {
+						t.Fatalf("single publish validation = %v", errs)
+					}
+					return
+				}
+				if len(errs) != 0 {
+					t.Fatalf("validation = %v", errs)
+				}
+				if build.Spec.BuildType == ebsv1.BuildTypeSingle {
+					if build.Spec.Publish != nil {
+						t.Fatal("single build received publish")
+					}
+				} else if build.Spec.Publish == nil || *build.Spec.Publish != (value != "false") {
+					t.Fatalf("publish = %v for %s", build.Spec.Publish, value)
+				}
+			})
+		}
+	}
+}
+
 func TestPrepareForCreatePackagesByBuildType(t *testing.T) {
 	for _, buildType := range []string{"full", "incremental", "single", "specified"} {
 		for _, ref := range []string{"", "refs/merge-requests/501/head"} {

@@ -8,6 +8,35 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestBuildSpecPublishJSON(t *testing.T) {
+	for _, publish := range []bool{false, true} {
+		original := BuildSpec{BuildType: BuildTypeFull, BuildTarget: BuildTarget{OS: "openEuler", Arch: "aarch64"}, Publish: &publish}
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"buildType":"full","buildTarget":{"os":"openEuler","arch":"aarch64"},"publish":false}`
+		if publish {
+			want = `{"buildType":"full","buildTarget":{"os":"openEuler","arch":"aarch64"},"publish":true}`
+		}
+		if string(data) != want {
+			t.Fatalf("serialized target = %s, want %s", data, want)
+		}
+		var decoded BuildSpec
+		if err := json.Unmarshal([]byte(want), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decoded, original) {
+			t.Fatalf("decoded target = %+v, want %+v", decoded, original)
+		}
+		copy := original.DeepCopy()
+		*copy.Publish = !publish
+		if *original.Publish != publish {
+			t.Fatal("DeepCopy shares the publish pointer")
+		}
+	}
+}
+
 func TestRepositoryAndRunnerJSONNames(t *testing.T) {
 	var status PackageRepoStatus
 	if err := json.Unmarshal([]byte(`{"cloneURL":"git-server:///git/repo.git","commitID":"abc"}`), &status); err != nil {

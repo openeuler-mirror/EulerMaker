@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -260,7 +261,9 @@ func (m *ClaimManager) create(ctx context.Context, obj runtime.Object, dryRun bo
 		// A timeout/5xx/response decode failure may have committed. Never replay.
 		observed, getErr := m.builds.Get(ctx, b.Name, &metav1.GetOptions{})
 		confirmed, valid := observed.(*ebsv1.Build)
-		if getErr != nil || !valid || confirmed.Namespace != b.Namespace || confirmed.Name != b.Name || confirmed.Spec.BuildTarget != b.Spec.BuildTarget || confirmed.Spec.BuildType != b.Spec.BuildType {
+		if getErr != nil || !valid || confirmed.Namespace != b.Namespace || confirmed.Name != b.Name ||
+			confirmed.Spec.BuildTarget != b.Spec.BuildTarget || confirmed.Spec.BuildType != b.Spec.BuildType ||
+			!apiequality.Semantic.DeepEqual(confirmed.Spec.Publish, b.Spec.Publish) {
 			return nil, err
 		}
 		result = observed

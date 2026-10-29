@@ -21,7 +21,6 @@ export interface ResourceList<T> {
 export interface BuildTarget {
   os?: string;
   arch?: string;
-  publishFlag?: boolean;
 }
 
 export interface BuildTargetContent {
@@ -80,7 +79,7 @@ export interface Snapshot {
 
 export interface Build {
   metadata?: ObjectMeta;
-  spec?: { buildType?: string; packages?: string[]; buildTarget?: BuildTarget };
+  spec?: { buildType?: string; packages?: string[]; buildTarget?: BuildTarget; publish?: boolean };
   status?: {
     phase?: string;
     stage?: string;

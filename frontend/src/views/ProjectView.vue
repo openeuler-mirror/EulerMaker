@@ -211,7 +211,7 @@
             <div class="section-heading"><div><h2>{{ t("project.buildTargets") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openTargetEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="targetSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.targetsSaved") }}</div>
             <div v-if="project.spec?.buildTargets?.length" class="project-table-wrap">
-              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetOS") }}</th><th>{{ t("projects.targetArch") }}</th><th>{{ t("project.publishEnabled") }}</th></tr></thead><tbody><tr v-for="(target, index) in project.spec.buildTargets" :key="`${target.os}-${target.arch}-${index}`"><td><strong>{{ target.os || t("common.emptyValue") }}</strong></td><td>{{ target.arch || t("common.emptyValue") }}</td><td><span :class="['boolean-status', { enabled: target.publishFlag }]">{{ booleanLabel(target.publishFlag) }}</span></td></tr></tbody></table>
+              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetOS") }}</th><th>{{ t("projects.targetArch") }}</th></tr></thead><tbody><tr v-for="(target, index) in project.spec.buildTargets" :key="`${target.os}-${target.arch}-${index}`"><td><strong>{{ target.os || t("common.emptyValue") }}</strong></td><td>{{ target.arch || t("common.emptyValue") }}</td></tr></tbody></table>
             </div>
             <p v-else class="config-empty">{{ t("project.noBuildTargets") }}</p>
           </article>
@@ -276,12 +276,12 @@
           <div class="build-target-options">
             <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
               <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildTargetConfig.unsupported') }}</small></span></label>
-              <div class="build-target-statuses">
-                <span>{{ t("project.publishEnabled") }} <span :class="['target-boolean-icon', { enabled: target.publishFlag }]" :aria-label="booleanLabel(target.publishFlag)" :title="booleanLabel(target.publishFlag)"><Check v-if="target.publishFlag" /><Close v-else /></span></span>
-              </div>
             </div>
           </div>
         </fieldset>
+        <div v-if="buildType !== 'single'" class="checkbox-row">
+          <label><input v-model="buildPublish" type="checkbox" :disabled="creatingBuild" />{{ t("project.publishEnabled") }}</label>
+        </div>
         <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection || (requiresBuildPackages && !selectedBuildPackages.length)">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
       </form>
@@ -349,7 +349,6 @@
             <legend>{{ t("project.targetNumber", { number: index + 1 }) }}</legend>
             <button class="remove-target-button" type="button" :aria-label="t('project.removeTarget', { number: index + 1 })" :disabled="editingTargets.length === 1 || savingTargets" @click="removeTarget(index)"><Delete /></button>
             <BuildTargetFields v-model:os="target.os" v-model:arch="target.arch" allow-legacy />
-            <div class="checkbox-row"><label><input v-model="target.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label></div>
           </fieldset>
         </div>
         <button class="secondary-button add-target-button" type="button" :disabled="savingTargets" @click="addTarget"><Plus />{{ t("project.addTarget") }}</button>
@@ -403,7 +402,7 @@
 </template>
 
 <script setup lang="ts">
-import { ArrowLeft, ArrowRight, Check, CircleCheckFilled, Close, Delete, DocumentCopy, Download, Edit, Operation, Plus, Search, Tickets, WarningFilled } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowRight, Check, CircleCheckFilled, Delete, DocumentCopy, Download, Edit, Operation, Plus, Search, Tickets, WarningFilled } from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -514,6 +513,7 @@ const copiedBuildName = ref("");
 let buildCopyResetTimer: number | undefined;
 const buildDialogOpen = ref(false);
 const buildType = ref<BuildType>("full");
+const buildPublish = ref(true);
 const fixedBuildPackage = ref("");
 const buildGitRef = ref("");
 const selectedBuildPackages = ref<string[]>([]);
@@ -978,6 +978,7 @@ async function openBuildDialog(type: BuildType, packageName = ""): Promise<void>
   }
   void reloadBuildTargetConfig();
   buildType.value = type;
+  buildPublish.value = true;
   fixedBuildPackage.value = type === "single" ? packageName : "";
   buildGitRef.value = "";
   selectedBuildPackages.value = fixedBuildPackage.value ? [fixedBuildPackage.value] : [];
@@ -985,7 +986,6 @@ async function openBuildDialog(type: BuildType, packageName = ""): Promise<void>
   buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os,
     arch: target.arch,
-    publishFlag: Boolean(target.publishFlag),
     selected: true,
   }));
   buildDialogErrorKey.value = "";
@@ -1034,7 +1034,11 @@ async function createBuild(): Promise<void> {
       body: JSON.stringify({
         apiVersion: "ebs/v1", kind: "Build",
         metadata: { name: buildNames[index], ...(annotations ? { annotations } : {}) },
-        spec: { buildType: selectedType, buildTarget: { ...target }, ...(packages ? { packages } : {}) },
+        spec: {
+          buildType: selectedType, buildTarget: { ...target },
+          ...(selectedType !== "single" ? { publish: buildPublish.value } : {}),
+          ...(packages ? { packages } : {}),
+        },
       }),
     }),
   ));
@@ -1076,7 +1080,6 @@ function openTargetEditor(): void {
   editingTargets.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os || "",
     arch: target.arch || "",
-    publishFlag: Boolean(target.publishFlag),
   }));
   if (!editingTargets.value.length) addTarget();
   targetEditorOpen.value = true;
@@ -1276,7 +1279,7 @@ function closeTargetEditor(): void {
 }
 
 function addTarget(): void {
-  editingTargets.value.push({ os: "", arch: "", publishFlag: false });
+  editingTargets.value.push({ os: "", arch: "" });
 }
 
 function removeTarget(index: number): void {
@@ -1289,7 +1292,6 @@ async function saveTargets(): Promise<void> {
   const targets = editingTargets.value.map((target) => ({
     os: target.os?.trim(),
     arch: target.arch?.trim(),
-    publishFlag: Boolean(target.publishFlag),
   }));
   if (!targets.length || targets.some((target) => !target.os || !target.arch)) {
     targetErrorKey.value = "projects.targetRequired";
@@ -1645,10 +1647,6 @@ function targetListLabel(targets?: BuildTarget[]): string {
 
 function gitRefLabel(ref?: string): string {
   return formatGitRef(ref) || t("common.emptyValue");
-}
-
-function booleanLabel(value?: boolean): string {
-  return value ? t("common.yes") : t("common.no");
 }
 
 function formatDate(value?: string): string {

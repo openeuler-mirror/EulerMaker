@@ -85,10 +85,10 @@ test("full refs enforce Git ref-name syntax", () => {
 test("Project form stores the default ref as a complete string", () => {
   const project = projectFromForm({
     name: "demo", displayName: "Demo", description: "", defaultRef: { type: "Tag", value: "v1" },
-    os: "openEuler", arch: "aarch64", publishFlag: false, ownerUser: "user",
+    os: "openEuler", arch: "aarch64", ownerUser: "user",
   });
   assert.equal(project.spec.defaultRef, "refs/tags/v1");
-  assert.deepEqual(project.spec.buildTargets, [{ os: "openEuler", arch: "aarch64", publishFlag: false }]);
+  assert.deepEqual(project.spec.buildTargets, [{ os: "openEuler", arch: "aarch64" }]);
   assert.equal(JSON.parse(JSON.stringify(project)).spec.defaultRef, "refs/tags/v1");
 });
 

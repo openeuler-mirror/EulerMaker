@@ -9,6 +9,19 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestBuildPublishIsImmutable(t *testing.T) {
+	for _, value := range []bool{true, false} {
+		old := validBuild()
+		old.Spec.Publish = &value
+		assertErrorList(t, ValidateBuildUpdate(old.DeepCopy(), old), 0, nil)
+		next := old.DeepCopy()
+		*next.Spec.Publish = !value
+		assertErrorList(t, ValidateBuildUpdate(next, old), 1, map[string]field.ErrorType{"spec": field.ErrorTypeInvalid})
+		next.Spec.Publish = nil
+		assertErrorList(t, ValidateBuildUpdate(next, old), 1, map[string]field.ErrorType{"spec": field.ErrorTypeInvalid})
+	}
+}
+
 func TestBuildTypeAndStageEnums(t *testing.T) {
 	for _, value := range ebsv1.BuildTypeValues() {
 		build := validBuild()

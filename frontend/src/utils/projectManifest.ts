@@ -21,7 +21,6 @@ export interface BasicProjectForm {
   defaultRef: GitRefInput;
   os: string;
   arch: string;
-  publishFlag: boolean;
   ownerUser: string;
 }
 
@@ -39,7 +38,6 @@ export function projectFromForm(form: BasicProjectForm): Project {
   const target = normalizeTarget({
     os: form.os,
     arch: form.arch,
-    publishFlag: form.publishFlag,
   });
   return {
     apiVersion: "ebs/v1",
@@ -103,7 +101,6 @@ function normalizeTarget(value: unknown): BuildTarget {
   return {
     os,
     arch,
-    ...(typeof value.publishFlag === "boolean" ? { publishFlag: value.publishFlag } : {}),
   };
 }
 

@@ -247,11 +247,6 @@ body.modal-open { overflow: hidden; }
 .build-target-option:hover { background: #f0f6fd; }
 .build-target-selection { min-width: 0; display: flex; align-items: center; gap: 9px; cursor: pointer; }
 .build-target-selection input { width: 16px; height: 16px; flex: none; accent-color: var(--blue); }
-.build-target-statuses { display: flex; align-items: center; gap: 14px; color: #667085; font-size: 12px; }
-.build-target-statuses > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.target-boolean-icon { width: 17px; height: 17px; display: inline-grid; place-items: center; color: #d14343; background: #fff0f0; border-radius: 50%; }
-.target-boolean-icon.enabled { color: #21895c; background: #eaf8f1; }
-.target-boolean-icon svg { width: 12px; height: 12px; stroke-width: 2.4; }
 .checkbox-row { margin-top: 14px; display: flex; gap: 22px; color: #536176; font-size: 13px; }
 .checkbox-row label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
 .checkbox-row input { width: 16px; height: 16px; accent-color: var(--blue); }
@@ -610,7 +605,6 @@ body.modal-open { overflow: hidden; }
   .editable-target .form-grid { padding-right: 0; }
   .editable-target { padding-top: 46px; }
   .build-target-option { align-items: flex-start; flex-direction: column; }
-  .build-target-statuses { padding-left: 25px; }
   .member-add-row { grid-template-columns: 1fr; }
   .auth-layout { padding: 16px 0 28px; }
   .auth-intro { display: none; }
