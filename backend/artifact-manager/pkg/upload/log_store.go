@@ -79,6 +79,9 @@ func (s *Store) loadOrCreateLog(p, j, runner string) (*LogStream, error) {
 
 func (s *Store) recoverLog(l *LogStream) error {
 	body, index, meta := s.LogPaths(l.Project, l.JobName)
+	if l.State == LogFailed {
+		return nil
+	}
 	if l.State == LogFinalizing && l.ArtifactID != "" {
 		if a, err := s.readArtifact(l.Project, l.JobName, l.ArtifactID); err == nil && fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil {
 			now := time.Now().UTC()
@@ -137,6 +140,16 @@ func (s *Store) recoverLog(l *LogStream) error {
 	st, err := os.Stat(body)
 	if os.IsNotExist(err) && offset == 0 {
 		return nil
+	}
+	if os.IsNotExist(err) {
+		l.State = LogFailed
+		l.Failure = &FailureInfo{
+			Code:      "Corrupted",
+			Message:   "log body is missing",
+			Retryable: false,
+			Time:      time.Now().UTC(),
+		}
+		return fileutil.AtomicJSON(meta, l)
 	}
 	if err != nil {
 		return err
