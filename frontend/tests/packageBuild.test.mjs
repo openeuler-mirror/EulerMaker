@@ -27,7 +27,7 @@ function setup() {
       ],
     } }),
     canStartBuild: ref(true), projectIsFull: ref(true), buildConfigurationMissing: ref(false),
-    buildType: ref("full"), buildPublish: ref(true), fixedBuildPackage: ref(""), buildGitRef: ref(""), selectedBuildPackages: ref([]),
+    buildType: ref("full"), fixedBuildPackage: ref(""), buildGitRef: ref(""), selectedBuildPackages: ref([]),
     buildPackageSearch: ref(""), buildTargetDrafts: ref([]), creatingBuild: ref(false),
     buildDialogErrorKey: ref(""), buildActionErrorKey: ref(""), createdBuildNames: ref([]),
     abortedBuildName: ref(""), buildDialogOpen: ref(false), unsupportedBuildSelection: ref(false),
@@ -105,22 +105,26 @@ test("package build respects target selection and resets when a general build di
   assert.equal(requests.at(-1).body.spec.packages, undefined);
 });
 
-test("non-single builds default to publishing and allow opting out per build", async () => {
+test("non-single builds default to publishing and allow opting out per target", async () => {
   for (const type of ["full", "incremental", "specified"]) {
     const { state, actions, requests } = setup();
     await actions.openBuildDialog(type);
-    assert.equal(state.buildPublish.value, true);
+    assert.deepEqual(state.buildTargetDrafts.value.map(target => target.publish), [true, true]);
     state.selectedBuildPackages.value = ["gcc"];
     await actions.createBuild();
     assert.deepEqual(requests.map(request => request.body.spec.publish), [true, true]);
     assert.deepEqual(requests[0].body.spec.buildTarget, { os: "openEuler", arch: "x86_64" });
     await actions.openBuildDialog(type);
     state.selectedBuildPackages.value = ["gcc"];
-    state.buildPublish.value = false;
+    state.buildTargetDrafts.value[0].publish = false;
     await actions.createBuild();
-    assert.deepEqual(requests.slice(2).map(request => request.body.spec.publish), [false, false]);
+    assert.deepEqual(requests.slice(2).map(request => request.body.spec.publish), [false, true]);
+    assert.deepEqual(requests.slice(2).map(request => request.body.spec.buildTarget), [
+      { os: "openEuler", arch: "x86_64" },
+      { os: "openEuler", arch: "aarch64" },
+    ]);
     await actions.openBuildDialog(type);
-    assert.equal(state.buildPublish.value, true);
+    assert.deepEqual(state.buildTargetDrafts.value.map(target => target.publish), [true, true]);
   }
 });
 

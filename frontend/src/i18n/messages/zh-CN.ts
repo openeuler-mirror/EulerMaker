@@ -317,7 +317,7 @@ export default {
     noBuildPayload: "暂无 Build Payload",
     payloadSaved: "Build Payload 已保存",
     targetsEyebrow: "目标环境",
-    publishEnabled: "发布到正式仓库",
+    publishEnabled: "发布",
     noBuildTargets: "暂无构建目标",
     editBuildTargets: "编辑构建目标",
     editTargetsHint: "工程至少需要一个构建目标，每个目标都必须填写操作系统和架构。",

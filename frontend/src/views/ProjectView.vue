@@ -276,12 +276,10 @@
           <div class="build-target-options">
             <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
               <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildTargetConfig.unsupported') }}</small></span></label>
+              <label v-if="buildType !== 'single'" class="build-target-selection"><span>{{ t("project.publishEnabled") }}</span><input v-model="target.publish" type="checkbox" :disabled="creatingBuild || !target.selected" /></label>
             </div>
           </div>
         </fieldset>
-        <div v-if="buildType !== 'single'" class="checkbox-row">
-          <label><input v-model="buildPublish" type="checkbox" :disabled="creatingBuild" />{{ t("project.publishEnabled") }}</label>
-        </div>
         <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection || (requiresBuildPackages && !selectedBuildPackages.length)">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
       </form>
@@ -431,7 +429,7 @@ import type { BootstrapRepo, Build, BuildTarget, Job, PackageRepo, Project } fro
 
 type ProjectTab = "overview" | "builds" | "graph" | "config";
 type BuildType = "full" | "incremental" | "single" | "specified";
-type BuildTargetDraft = BuildTarget & { selected: boolean };
+type BuildTargetDraft = BuildTarget & { selected: boolean; publish: boolean };
 
 const route = useRoute();
 const router = useRouter();
@@ -513,7 +511,6 @@ const copiedBuildName = ref("");
 let buildCopyResetTimer: number | undefined;
 const buildDialogOpen = ref(false);
 const buildType = ref<BuildType>("full");
-const buildPublish = ref(true);
 const fixedBuildPackage = ref("");
 const buildGitRef = ref("");
 const selectedBuildPackages = ref<string[]>([]);
@@ -978,7 +975,6 @@ async function openBuildDialog(type: BuildType, packageName = ""): Promise<void>
   }
   void reloadBuildTargetConfig();
   buildType.value = type;
-  buildPublish.value = true;
   fixedBuildPackage.value = type === "single" ? packageName : "";
   buildGitRef.value = "";
   selectedBuildPackages.value = fixedBuildPackage.value ? [fixedBuildPackage.value] : [];
@@ -987,6 +983,7 @@ async function openBuildDialog(type: BuildType, packageName = ""): Promise<void>
     os: target.os,
     arch: target.arch,
     selected: true,
+    publish: true,
   }));
   buildDialogErrorKey.value = "";
   buildActionErrorKey.value = "";
@@ -1035,8 +1032,8 @@ async function createBuild(): Promise<void> {
         apiVersion: "ebs/v1", kind: "Build",
         metadata: { name: buildNames[index], ...(annotations ? { annotations } : {}) },
         spec: {
-          buildType: selectedType, buildTarget: { ...target },
-          ...(selectedType !== "single" ? { publish: buildPublish.value } : {}),
+          buildType: selectedType, buildTarget: { os: target.os, arch: target.arch },
+          ...(selectedType !== "single" ? { publish: target.publish } : {}),
           ...(packages ? { packages } : {}),
         },
       }),
