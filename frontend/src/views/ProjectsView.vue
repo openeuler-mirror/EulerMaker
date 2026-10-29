@@ -78,9 +78,6 @@
       <fieldset class="target-fieldset">
         <legend>{{ t("projects.firstTarget") }}</legend>
         <BuildTargetFields v-model:os="form.os" v-model:arch="form.arch" />
-        <div class="checkbox-row">
-          <label><input v-model="form.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label>
-        </div>
       </fieldset>
       <div v-if="submitErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(submitErrorKey) }}</div>
       <div class="modal-actions"><button class="secondary-button" type="button" :disabled="submitting" @click="closeDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="submitting">{{ submitting ? t("projects.submitting") : t("projects.submitCreate") }}</button></div>
@@ -154,7 +151,6 @@ const form = reactive({
   defaultRef: { type: "Branch" as "Branch" | "Tag", value: "master" },
   os: "",
   arch: "",
-  publishFlag: false,
   ownerUser: "",
   projectType: "personal" as ProjectType,
 });

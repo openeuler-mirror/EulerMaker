@@ -191,7 +191,7 @@ func TestReconcileReleaseSkipsCandidateWhenPolicySaysNo(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
 	build := newBuild(testBuild)
-	build.Spec.BuildTarget.PublishFlag = false
+	build.Spec.Publish = new(bool)
 	client.Builds[key(testProject, testBuild)] = build
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
@@ -224,7 +224,7 @@ func TestReconcileReleaseReplacesResidualReleaseWithSkipped(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
 	build := newBuild(testBuild)
-	build.Spec.BuildTarget.PublishFlag = false
+	build.Spec.Publish = new(bool)
 	client.Builds[key(testProject, testBuild)] = build
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}

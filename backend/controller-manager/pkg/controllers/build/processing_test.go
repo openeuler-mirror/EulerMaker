@@ -216,7 +216,7 @@ func TestProcessingBuildNonSingleResults(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		statuses      map[string]ebsv1.SpecResult
-		publishFlag   bool
+		publish       bool
 		wantPhase     ebsv1.BuildPhase
 		wantStage     ebsv1.BuildStage
 		wantEndTime   bool
@@ -225,11 +225,11 @@ func TestProcessingBuildNonSingleResults(t *testing.T) {
 	}{
 		{
 			name: "success publishes", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)},
-			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish, wantSucceeded: true,
+			publish: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish, wantSucceeded: true,
 		},
 		{
 			name: "failure still publishes", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecBuildFailed, ebsv1.SpecSucceeded)},
-			publishFlag: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish,
+			publish: true, wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStagePublish,
 		},
 		{
 			name: "success skips publishing", statuses: map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)},
@@ -242,7 +242,7 @@ func TestProcessingBuildNonSingleResults(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStageBuild)
-			build.Spec.BuildTarget.PublishFlag = tc.publishFlag
+			build.Spec.Publish = &tc.publish
 			api := newFakeAPI()
 			api.builds[key("project-a", "build-a")] = build
 			api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted, tc.statuses)

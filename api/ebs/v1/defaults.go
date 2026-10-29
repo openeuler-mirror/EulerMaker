@@ -15,6 +15,13 @@ func SetDefaults_Project(obj *Project) {
 	}
 }
 
+func SetDefaults_Build(obj *Build) {
+	if obj.Spec.BuildType.IsValid() && obj.Spec.BuildType != BuildTypeSingle && obj.Spec.Publish == nil {
+		publish := true
+		obj.Spec.Publish = &publish
+	}
+}
+
 func SetDefaults_Job(obj *Job) {
 	if len(obj.Spec.Runtime) == 0 {
 		obj.Spec.Runtime = "ct"

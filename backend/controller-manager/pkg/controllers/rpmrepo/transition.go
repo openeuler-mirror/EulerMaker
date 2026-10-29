@@ -331,7 +331,7 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 		log.Printf("controller=%s key=%q uid=%q reason=BuildInfoNotReady", Name, r.key, repo.UID)
 		return controller.ReconcileResult{}, nil
 	}
-	if !build.Spec.BuildTarget.PublishFlag {
+	if build.Spec.Publish != nil && !*build.Spec.Publish {
 		_, err := r.writeReleaseSkipped(repo)
 		return controller.ReconcileResult{}, err
 	}

@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestBuildPublishDefault(t *testing.T) {
+	for _, buildType := range []BuildType{BuildTypeFull, BuildTypeIncremental, BuildTypeSpecified, BuildTypeSingle} {
+		for _, value := range []string{"omitted", "true", "false"} {
+			t.Run(string(buildType)+"/"+value, func(t *testing.T) {
+				build := &Build{Spec: BuildSpec{BuildType: buildType}}
+				if value != "omitted" {
+					publish := value == "true"
+					build.Spec.Publish = &publish
+				}
+				SetDefaults_Build(build)
+				SetDefaults_Build(build)
+				if value == "omitted" && buildType == BuildTypeSingle {
+					if build.Spec.Publish != nil {
+						t.Fatal("single build received a publish default")
+					}
+					return
+				}
+				if build.Spec.Publish == nil || *build.Spec.Publish != (value != "false") {
+					t.Fatalf("publish = %v for %s", build.Spec.Publish, value)
+				}
+			})
+		}
+	}
+}
+
 func TestProjectTypeDefault(t *testing.T) {
 	for _, value := range []string{"missing", "personal", "community", "", "invalid"} {
 		p := &Project{}

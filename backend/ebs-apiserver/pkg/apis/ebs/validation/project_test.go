@@ -44,7 +44,6 @@ func TestProjectBuildTargetUniqueness(t *testing.T) {
 		wantErr bool
 	}{
 		{"duplicate", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "x86_64"}}, true},
-		{"different options still duplicate", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "x86_64", PublishFlag: true}}, true},
 		{"different arch", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "aarch64"}}, false},
 		{"different os", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-b", Arch: "x86_64"}}, false},
 		{"distinct pairs", []ebsv1.BuildTarget{{OS: "a-b", Arch: "c"}, {OS: "a", Arch: "b-c"}}, false},

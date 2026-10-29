@@ -316,6 +316,24 @@ func TestClaimDryRunAndHistory(t *testing.T) {
 	}
 }
 
+func TestClaimWriteUnknownPublishIntent(t *testing.T) {
+	for _, match := range []bool{true, false} {
+		f := newCoordinationFake()
+		m := testManager(f)
+		build := testBuild("publish", "full")
+		ebsv1.SetDefaults_Build(build)
+		_, err := m.create(context.Background(), build, false, func() (runtime.Object, error) {
+			observed := build.DeepCopy()
+			*observed.Spec.Publish = match
+			_, _ = f.persist(observed)()
+			return nil, errUnknown
+		})
+		if match && err != nil || !match && err != errUnknown {
+			t.Fatalf("publish intent match=%t: %v", match, err)
+		}
+	}
+}
+
 func TestClaimWriteUnknown(t *testing.T) {
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "not-visible", true: "committed"}[committed], func(t *testing.T) {

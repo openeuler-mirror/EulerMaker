@@ -113,7 +113,7 @@ type ProjectSpec struct {
 | `description` | string | 否 | 项目描述 |
 | `defaultRef` | string | 否 | 默认完整 Git 引用，例如 `refs/heads/master`、`refs/tags/v1`；为空时默认 `refs/heads/master` |
 | `buildPayload` | string | 否 | 构建环境参数，YAML 格式；`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz` 和 `unuse_gcc_secure` 是包仓库名列表，命中时向 Job payload 写入相应布尔标记；`unparsable_spec` 是 spec 名列表，仅供 BuildInfo Controller 组装依赖时使用 |
-| `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；创建和更新时 `os + arch` 组合必须唯一，其余配置不同也不能重复 |
+| `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；每项仅包含 `os`、`arch`，创建和更新时组合必须唯一 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
 | `bootstrapRepos` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
 
@@ -230,6 +230,7 @@ type BuildSpec struct {
     BuildType          BuildType              `json:"buildType,omitempty"`
     Packages           []string               `json:"packages,omitempty"`
     BuildTarget        BuildTarget            `json:"buildTarget,omitempty"`
+    Publish            *bool                  `json:"publish,omitempty"`
 }
 ```
 
@@ -237,6 +238,7 @@ type BuildSpec struct {
 |----------------|---------|------|------|
 | `buildType`    | BuildType | 是 | 公共 API 枚举：`"full"` / `"incremental"` / `"specified"` / `"single"` |
 | `buildTarget`  | BuildTarget | 是 | 构建目标 |
+| `publish` | *bool | 否 | 仅非 single 允许设置；创建时省略由 apiserver 补为 `true`，显式 `false` 跳过正式发布但仍生成过程仓。single 必须省略，否则拒绝请求 |
 | `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
 
 Build 创建后，除 `incremental` 类型在 Pending 阶段由 Build Controller 幂等更新 `spec.packages` 外，其余 `spec` 字段不可修改。`packages` 允许为空数组表示没有构建种子；仅当 Build 进入 Prepared 后，才表示本轮种子已确认。普通用户不能修改 Controller 计算结果。运行状态通过 `/status` 子资源更新。
@@ -605,7 +607,7 @@ type RpmRepoStatus struct {
 
 RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact:///repositories/.../` 逻辑地址，不绑定 Artifact Manager 部署地址。
 
-仅非 single 构建创建同名 RpmRepo；single 直接使用稳定发布入口，不创建占位对象。publishFlag=false 的 RpmRepo 先完成过程仓处理，再写 release.phase=Skipped，保留已生成的过程仓。Skipped 不要求 release.contentURL，不允许 release.transition；RpmRepo Controller 将其视为发布终态，不执行正式发布、不因 Build 中止改写为 Failed。Skipped 不是 Artifact Manager 的物理仓库或发布记录状态，也不表示 Build 已完成。
+仅非 single 构建创建同名 RpmRepo；single 直接使用稳定发布入口，不创建占位对象。publish=false 的 RpmRepo 先完成过程仓处理，再写 release.phase=Skipped，保留已生成的过程仓。Skipped 不要求 release.contentURL，不允许 release.transition；RpmRepo Controller 将其视为发布终态，不执行正式发布、不因 Build 中止改写为 Failed。Skipped 不是 Artifact Manager 的物理仓库或发布记录状态，也不表示 Build 已完成。
 
 `release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Skipped`。`release.transition` 只在正式发布尚未完成时存在；发布准备和激活成功后，将固定输入提升到 `sourceRepositoryUID`，写入 `contentURL`，再清除 transition。失败原因写入 RpmRepo 顶层 `conditions`，condition type 必须区分过程仓和正式发布错误。因同名 `Build.status.phase=Aborted` 或 `BuildInfo.status.phase=Failed` 而终止发布时，`release.phase=Failed`、`release.transition=nil`，分别记录 `PublishSucceed=False/reason=BuildAborted` 或 `BuildInfoFailed`；`release.contentURL` 为空，`repository.*` 保留。已终态对象不改写。发布终态为 `Ready`、`Failed`、`Skipped`。
 
@@ -1046,9 +1048,8 @@ type RunnerList struct {
 
 ```go
 type BuildTarget struct {
-    OS             string      `json:"os,omitempty"`
-    Arch           string      `json:"arch,omitempty"`
-    PublishFlag    bool        `json:"publishFlag,omitempty"`
+    OS   string `json:"os,omitempty"`
+    Arch string `json:"arch,omitempty"`
 }
 ```
 
@@ -1056,7 +1057,6 @@ type BuildTarget struct {
 |------------|---------|----------------------------|
 | `os` | string | 构建os |
 | `arch`     | string | `"aarch64"` / `"x86_64"`   |
-| `publishFlag`    | bool | 发布标志                       |
 
 ---
 

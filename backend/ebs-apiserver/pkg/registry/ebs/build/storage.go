@@ -24,6 +24,7 @@ func NewStorage() *scopedresource.Storage {
 		NewList: func() runtime.Object { return &ebsv1.BuildList{} },
 		PrepareCreate: func(obj runtime.Object) {
 			b := obj.(*ebsv1.Build)
+			ebsv1.SetDefaults_Build(b)
 			if b.Spec.BuildType == ebsv1.BuildTypeFull || b.Spec.BuildType == ebsv1.BuildTypeIncremental {
 				b.Spec.Packages = nil
 			}

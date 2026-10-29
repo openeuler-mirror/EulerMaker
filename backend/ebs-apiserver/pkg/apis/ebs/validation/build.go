@@ -9,6 +9,9 @@ import (
 
 func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	allErrs := validateBuildGitRef(obj)
+	if obj.Spec.BuildType == ebsv1.BuildTypeSingle && obj.Spec.Publish != nil {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "publish"), "must be omitted for single builds"))
+	}
 	namePath := field.NewPath("metadata", "name")
 	if obj.Name == "" {
 		allErrs = append(allErrs, field.Required(namePath, "Build name is required"))

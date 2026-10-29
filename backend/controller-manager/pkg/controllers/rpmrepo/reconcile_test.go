@@ -126,7 +126,7 @@ func newBuild(name string) *ebsv1.Build {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testProject, UID: types.UID("uid-" + name), ResourceVersion: "1"},
 		Spec: ebsv1.BuildSpec{
 			BuildType:   "incremental",
-			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch, PublishFlag: true},
+			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch},
 		},
 		Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing},
 	}
@@ -374,7 +374,7 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 	client := NewFakeClient()
 	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
 	build := newBuild(testBuild)
-	build.Spec.BuildTarget.PublishFlag = false
+	build.Spec.Publish = new(bool)
 	client.Builds[key(testProject, testBuild)] = build
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
@@ -412,7 +412,7 @@ func TestReconcileBuildWithoutPublishingAndWithoutArtifactsSkipsRelease(t *testi
 	client := NewFakeClient()
 	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
 	build := newBuild(testBuild)
-	build.Spec.BuildTarget.PublishFlag = false
+	build.Spec.Publish = new(bool)
 	client.Builds[key(testProject, testBuild)] = build
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
 	artifacts := NewFakeArtifactManager()

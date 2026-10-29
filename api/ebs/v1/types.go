@@ -176,7 +176,9 @@ type Build struct {
 type BuildSpec struct {
 	BuildType   BuildType   `json:"buildType,omitempty"`
 	BuildTarget BuildTarget `json:"buildTarget,omitempty"`
-	Packages    []string    `json:"packages,omitempty"`
+	// Publish controls release publication. Defaults to true for non-single builds; single builds must omit it.
+	Publish  *bool    `json:"publish,omitempty"`
+	Packages []string `json:"packages,omitempty"`
 }
 
 type BuildStatus struct {
@@ -435,9 +437,8 @@ type RunnerInfo struct {
 }
 
 type BuildTarget struct {
-	OS          string `json:"os,omitempty"`
-	Arch        string `json:"arch,omitempty"`
-	PublishFlag bool   `json:"publishFlag,omitempty"`
+	OS   string `json:"os,omitempty"`
+	Arch string `json:"arch,omitempty"`
 }
 
 type PackageRepo struct {

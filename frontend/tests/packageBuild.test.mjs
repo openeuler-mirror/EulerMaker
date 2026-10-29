@@ -22,12 +22,12 @@ function setup() {
     project: ref({ spec: {
       packageRepos: [{ name: "gcc" }, { name: "rpm" }],
       buildTargets: [
-        { os: "openEuler", arch: "x86_64", publishFlag: false },
-        { os: "openEuler", arch: "aarch64", publishFlag: false },
+        { os: "openEuler", arch: "x86_64" },
+        { os: "openEuler", arch: "aarch64" },
       ],
     } }),
     canStartBuild: ref(true), projectIsFull: ref(true), buildConfigurationMissing: ref(false),
-    buildType: ref("full"), fixedBuildPackage: ref(""), buildGitRef: ref(""), selectedBuildPackages: ref([]),
+    buildType: ref("full"), buildPublish: ref(true), fixedBuildPackage: ref(""), buildGitRef: ref(""), selectedBuildPackages: ref([]),
     buildPackageSearch: ref(""), buildTargetDrafts: ref([]), creatingBuild: ref(false),
     buildDialogErrorKey: ref(""), buildActionErrorKey: ref(""), createdBuildNames: ref([]),
     abortedBuildName: ref(""), buildDialogOpen: ref(false), unsupportedBuildSelection: ref(false),
@@ -78,6 +78,7 @@ test("package action fixes one package and submits single builds for the selecte
     assert.equal(request.method, "POST");
     assert.equal(request.url, "/apis/ebs/v1/projects/example/builds");
     assert.equal(request.body.spec.buildType, "single");
+    assert.equal(request.body.spec.publish, undefined);
     assert.deepEqual(request.body.spec.packages, ["gcc"]);
     assert.equal(request.body.metadata.annotations, undefined);
   }
@@ -102,6 +103,25 @@ test("package build respects target selection and resets when a general build di
   await actions.createBuild();
   assert.equal(requests.at(-1).body.spec.buildType, "full");
   assert.equal(requests.at(-1).body.spec.packages, undefined);
+});
+
+test("non-single builds default to publishing and allow opting out per build", async () => {
+  for (const type of ["full", "incremental", "specified"]) {
+    const { state, actions, requests } = setup();
+    await actions.openBuildDialog(type);
+    assert.equal(state.buildPublish.value, true);
+    state.selectedBuildPackages.value = ["gcc"];
+    await actions.createBuild();
+    assert.deepEqual(requests.map(request => request.body.spec.publish), [true, true]);
+    assert.deepEqual(requests[0].body.spec.buildTarget, { os: "openEuler", arch: "x86_64" });
+    await actions.openBuildDialog(type);
+    state.selectedBuildPackages.value = ["gcc"];
+    state.buildPublish.value = false;
+    await actions.createBuild();
+    assert.deepEqual(requests.slice(2).map(request => request.body.spec.publish), [false, false]);
+    await actions.openBuildDialog(type);
+    assert.equal(state.buildPublish.value, true);
+  }
 });
 
 test("package action uses the same build permission and configuration checks as other build entry points", async () => {

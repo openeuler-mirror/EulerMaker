@@ -28,7 +28,7 @@ type PublishPolicy interface {
 	Decide(context.Context, PublishPolicyInput) (PublishDecision, error)
 }
 
-// DefaultPublishPolicy publishes everything unless the build target disables publishing. buildType never
+// DefaultPublishPolicy publishes everything unless the Build disables publishing. buildType never
 // participates: this controller only sees keys dispatched from RpmRepo polling.
 type DefaultPublishPolicy struct{}
 
@@ -36,7 +36,7 @@ func (DefaultPublishPolicy) Decide(_ context.Context, input PublishPolicyInput) 
 	if input.Build == nil {
 		return PublishDecision{}, fmt.Errorf("publish policy input requires a Build")
 	}
-	return PublishDecision{Publish: input.Build.Spec.BuildTarget.PublishFlag}, nil
+	return PublishDecision{Publish: input.Build.Spec.Publish == nil || *input.Build.Spec.Publish}, nil
 }
 
 // normalizeExcludeSpecs deduplicates and sorts the exclusion list so the frozen checkpoint and the submitted

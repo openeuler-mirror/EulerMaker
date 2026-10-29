@@ -361,6 +361,11 @@ func (in *BuildResourceContent) DeepCopy() *BuildResourceContent {
 func (in *BuildSpec) DeepCopyInto(out *BuildSpec) {
 	*out = *in
 	out.BuildTarget = in.BuildTarget
+	if in.Publish != nil {
+		in, out := &in.Publish, &out.Publish
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Packages != nil {
 		in, out := &in.Packages, &out.Packages
 		*out = make([]string, len(*in))

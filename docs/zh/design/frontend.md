@@ -188,7 +188,9 @@ Spec 状态列表展示包的 Commit ID：从 `BuildInfo.status.specResults` 条
 
 软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
 
-工程配置中的 Build targets 使用列表展示 `os`、`arch` 和 `publishFlag`。仅工程 owner 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
+工程配置中的 Build targets 仅展示和编辑 `os`、`arch`。仅工程 owner 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
+
+非 single 构建弹窗提供“发布到正式仓库”选项，每次打开默认勾选；所选目标各自创建 Build，发布选项写入 `Build.spec.publish`，不写入 `buildTarget` 或 Project。single 弹窗不显示该选项，请求不携带 `publish`。
 
 Bootstrap repositories 同样仅向工程 owner 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。
 
