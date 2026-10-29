@@ -53,6 +53,63 @@ func TestLogMetadataReadOnDemand(t *testing.T) {
 	}
 }
 
+func TestRestartWithMissingCompletedLogArtifact(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("completed log")
+	if _, err := store.AppendLog("project", "job", "runner", 0, data, hashText(string(data))); err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := store.CompleteLog("project", "job", "runner", CompleteLogRequest{
+		Stream: "combined", LastSequence: 0, Size: int64(len(data)), SHA256: hashText(string(data)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.ArtifactPath(artifact)); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		store, err = NewStore(root)
+		if err != nil {
+			t.Fatalf("restart %d: %v", attempt+1, err)
+		}
+		log, ok := store.GetLog("project", "job")
+		if !ok || log.State != LogFailed || log.Failure == nil || log.Failure.Code != "Corrupted" {
+			t.Fatalf("restart %d log: %+v", attempt+1, log)
+		}
+	}
+}
+
+func TestRestartWithMissingOpenLogBody(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("open log")
+	if _, err := store.AppendLog("project", "job", "runner", 0, data, hashText(string(data))); err != nil {
+		t.Fatal(err)
+	}
+	body, _, _ := store.LogPaths("project", "job")
+	if err := os.Remove(body); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		store, err = NewStore(root)
+		if err != nil {
+			t.Fatalf("restart %d: %v", attempt+1, err)
+		}
+		log, ok := store.GetLog("project", "job")
+		if !ok || log.State != LogFailed || log.Failure == nil || log.Failure.Code != "Corrupted" {
+			t.Fatalf("restart %d log: %+v", attempt+1, log)
+		}
+	}
+}
+
 func TestLogAppendRecoversInterruptedWrite(t *testing.T) {
 	for _, stage := range []string{"body", "partial-index", "index", "empty-index"} {
 		t.Run(stage, func(t *testing.T) {
