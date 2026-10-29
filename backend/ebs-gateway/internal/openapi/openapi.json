@@ -1732,9 +1732,6 @@
           "arch": {
             "type": "string"
           },
-          "buildFlag": {
-            "type": "boolean"
-          },
           "os": {
             "type": "string"
           },

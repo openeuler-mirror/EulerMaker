@@ -457,7 +457,7 @@ func newBuild(project, name string, buildType ebsv1.BuildType, packages []string
 			BuildType: buildType,
 			Packages:  packages,
 			BuildTarget: ebsv1.BuildTarget{
-				OS: "openEuler-22.03-LTS", Arch: "aarch64", BuildFlag: true, PublishFlag: true,
+				OS: "openEuler-22.03-LTS", Arch: "aarch64", PublishFlag: true,
 			},
 		},
 	}

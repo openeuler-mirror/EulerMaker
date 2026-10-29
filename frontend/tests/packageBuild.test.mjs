@@ -22,8 +22,8 @@ function setup() {
     project: ref({ spec: {
       packageRepos: [{ name: "gcc" }, { name: "rpm" }],
       buildTargets: [
-        { os: "openEuler", arch: "x86_64", buildFlag: true, publishFlag: false },
-        { os: "openEuler", arch: "aarch64", buildFlag: true, publishFlag: false },
+        { os: "openEuler", arch: "x86_64", publishFlag: false },
+        { os: "openEuler", arch: "aarch64", publishFlag: false },
       ],
     } }),
     canStartBuild: ref(true), projectIsFull: ref(true), buildConfigurationMissing: ref(false),

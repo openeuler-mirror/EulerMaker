@@ -188,7 +188,7 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.RunnerSpec":              {"instanceID", "taints"},
 		"ebs-api/ebs/v1.BuildGraphNode":          {"version", "inDep", "outDep", "installInDep", "bootstrapBreak"},
 		"ebs-api/ebs/v1.VersionConstraint":       {"gt", "ge", "eq", "le", "lt"},
-		"ebs-api/ebs/v1.BuildTarget":             {"os", "arch", "buildFlag", "publishFlag"},
+		"ebs-api/ebs/v1.BuildTarget":             {"os", "arch", "publishFlag"},
 		"ebs-api/ebs/v1.BootstrapRepo":           {"name", "url"},
 		"ebs-api/ebs/v1.BuildSpec":               {"buildTarget", "packages"},
 		"ebs-api/ebs/v1.BuildInfoSpec":           {"bootstrapRepos", "buildPayload"},
