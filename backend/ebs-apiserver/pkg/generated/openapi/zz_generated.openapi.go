@@ -737,12 +737,6 @@ func schema_ebs_api_ebs_v1_BuildTarget(ref common.ReferenceCallback) common.Open
 							Format: "",
 						},
 					},
-					"buildFlag": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"boolean"},
-							Format: "",
-						},
-					},
 					"publishFlag": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"boolean"},

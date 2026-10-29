@@ -211,7 +211,7 @@
             <div class="section-heading"><div><h2>{{ t("project.buildTargets") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openTargetEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="targetSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.targetsSaved") }}</div>
             <div v-if="project.spec?.buildTargets?.length" class="project-table-wrap">
-              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetOS") }}</th><th>{{ t("projects.targetArch") }}</th><th>{{ t("project.buildEnabled") }}</th><th>{{ t("project.publishEnabled") }}</th></tr></thead><tbody><tr v-for="(target, index) in project.spec.buildTargets" :key="`${target.os}-${target.arch}-${index}`"><td><strong>{{ target.os || t("common.emptyValue") }}</strong></td><td>{{ target.arch || t("common.emptyValue") }}</td><td><span :class="['boolean-status', { enabled: target.buildFlag }]">{{ booleanLabel(target.buildFlag) }}</span></td><td><span :class="['boolean-status', { enabled: target.publishFlag }]">{{ booleanLabel(target.publishFlag) }}</span></td></tr></tbody></table>
+              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetOS") }}</th><th>{{ t("projects.targetArch") }}</th><th>{{ t("project.publishEnabled") }}</th></tr></thead><tbody><tr v-for="(target, index) in project.spec.buildTargets" :key="`${target.os}-${target.arch}-${index}`"><td><strong>{{ target.os || t("common.emptyValue") }}</strong></td><td>{{ target.arch || t("common.emptyValue") }}</td><td><span :class="['boolean-status', { enabled: target.publishFlag }]">{{ booleanLabel(target.publishFlag) }}</span></td></tr></tbody></table>
             </div>
             <p v-else class="config-empty">{{ t("project.noBuildTargets") }}</p>
           </article>
@@ -277,7 +277,6 @@
             <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
               <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildTargetConfig.unsupported') }}</small></span></label>
               <div class="build-target-statuses">
-                <span>{{ t("project.buildEnabled") }} <span :class="['target-boolean-icon', { enabled: target.buildFlag }]" :aria-label="booleanLabel(target.buildFlag)" :title="booleanLabel(target.buildFlag)"><Check v-if="target.buildFlag" /><Close v-else /></span></span>
                 <span>{{ t("project.publishEnabled") }} <span :class="['target-boolean-icon', { enabled: target.publishFlag }]" :aria-label="booleanLabel(target.publishFlag)" :title="booleanLabel(target.publishFlag)"><Check v-if="target.publishFlag" /><Close v-else /></span></span>
               </div>
             </div>
@@ -350,7 +349,7 @@
             <legend>{{ t("project.targetNumber", { number: index + 1 }) }}</legend>
             <button class="remove-target-button" type="button" :aria-label="t('project.removeTarget', { number: index + 1 })" :disabled="editingTargets.length === 1 || savingTargets" @click="removeTarget(index)"><Delete /></button>
             <BuildTargetFields v-model:os="target.os" v-model:arch="target.arch" allow-legacy />
-            <div class="checkbox-row"><label><input v-model="target.buildFlag" type="checkbox" />{{ t("projects.buildFlag") }}</label><label><input v-model="target.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label></div>
+            <div class="checkbox-row"><label><input v-model="target.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label></div>
           </fieldset>
         </div>
         <button class="secondary-button add-target-button" type="button" :disabled="savingTargets" @click="addTarget"><Plus />{{ t("project.addTarget") }}</button>
@@ -986,7 +985,6 @@ async function openBuildDialog(type: BuildType, packageName = ""): Promise<void>
   buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os,
     arch: target.arch,
-    buildFlag: Boolean(target.buildFlag),
     publishFlag: Boolean(target.publishFlag),
     selected: true,
   }));
@@ -1078,7 +1076,6 @@ function openTargetEditor(): void {
   editingTargets.value = (project.value.spec?.buildTargets || []).map((target) => ({
     os: target.os || "",
     arch: target.arch || "",
-    buildFlag: Boolean(target.buildFlag),
     publishFlag: Boolean(target.publishFlag),
   }));
   if (!editingTargets.value.length) addTarget();
@@ -1279,7 +1276,7 @@ function closeTargetEditor(): void {
 }
 
 function addTarget(): void {
-  editingTargets.value.push({ os: "", arch: "", buildFlag: true, publishFlag: false });
+  editingTargets.value.push({ os: "", arch: "", publishFlag: false });
 }
 
 function removeTarget(index: number): void {
@@ -1292,7 +1289,6 @@ async function saveTargets(): Promise<void> {
   const targets = editingTargets.value.map((target) => ({
     os: target.os?.trim(),
     arch: target.arch?.trim(),
-    buildFlag: Boolean(target.buildFlag),
     publishFlag: Boolean(target.publishFlag),
   }));
   if (!targets.length || targets.some((target) => !target.os || !target.arch)) {

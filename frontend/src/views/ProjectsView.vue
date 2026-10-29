@@ -79,7 +79,6 @@
         <legend>{{ t("projects.firstTarget") }}</legend>
         <BuildTargetFields v-model:os="form.os" v-model:arch="form.arch" />
         <div class="checkbox-row">
-          <label><input v-model="form.buildFlag" type="checkbox" />{{ t("projects.buildFlag") }}</label>
           <label><input v-model="form.publishFlag" type="checkbox" />{{ t("projects.publishFlag") }}</label>
         </div>
       </fieldset>
@@ -155,7 +154,6 @@ const form = reactive({
   defaultRef: { type: "Branch" as "Branch" | "Tag", value: "master" },
   os: "",
   arch: "",
-  buildFlag: true,
   publishFlag: false,
   ownerUser: "",
   projectType: "personal" as ProjectType,

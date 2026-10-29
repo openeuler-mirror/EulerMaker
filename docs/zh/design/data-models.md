@@ -1048,7 +1048,6 @@ type RunnerList struct {
 type BuildTarget struct {
     OS             string      `json:"os,omitempty"`
     Arch           string      `json:"arch,omitempty"`
-    BuildFlag      bool        `json:"buildFlag,omitempty"`
     PublishFlag    bool        `json:"publishFlag,omitempty"`
 }
 ```
@@ -1057,7 +1056,6 @@ type BuildTarget struct {
 |------------|---------|----------------------------|
 | `os` | string | 构建os |
 | `arch`     | string | `"aarch64"` / `"x86_64"`   |
-| `buildFlag`    | bool | 构建标志                       |
 | `publishFlag`    | bool | 发布标志                       |
 
 ---

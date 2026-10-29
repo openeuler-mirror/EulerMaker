@@ -21,7 +21,6 @@ export interface ResourceList<T> {
 export interface BuildTarget {
   os?: string;
   arch?: string;
-  buildFlag?: boolean;
   publishFlag?: boolean;
 }
 

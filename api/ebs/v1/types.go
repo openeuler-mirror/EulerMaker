@@ -437,7 +437,6 @@ type RunnerInfo struct {
 type BuildTarget struct {
 	OS          string `json:"os,omitempty"`
 	Arch        string `json:"arch,omitempty"`
-	BuildFlag   bool   `json:"buildFlag,omitempty"`
 	PublishFlag bool   `json:"publishFlag,omitempty"`
 }
 

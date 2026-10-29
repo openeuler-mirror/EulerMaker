@@ -228,7 +228,7 @@ func testBuildObj(buildType string, packages ...string) *ebsv1.Build {
 		Spec: ebsv1.BuildSpec{
 			BuildType:   ebsv1.BuildType(buildType),
 			Packages:    packages,
-			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch, BuildFlag: true},
+			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch},
 		},
 		Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing},
 	}

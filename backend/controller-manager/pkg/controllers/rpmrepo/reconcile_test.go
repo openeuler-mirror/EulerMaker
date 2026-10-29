@@ -126,7 +126,7 @@ func newBuild(name string) *ebsv1.Build {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testProject, UID: types.UID("uid-" + name), ResourceVersion: "1"},
 		Spec: ebsv1.BuildSpec{
 			BuildType:   "incremental",
-			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch, BuildFlag: true, PublishFlag: true},
+			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch, PublishFlag: true},
 		},
 		Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing},
 	}

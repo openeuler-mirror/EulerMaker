@@ -856,7 +856,6 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "buildTargets": [{
         "os": "openEuler-22.03-LTS",
         "arch": "aarch64",
-        "buildFlag": true,
         "publishFlag": true
       }],
       "packageRepos": [{
@@ -907,7 +906,6 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
       "buildTarget": {
         "os": "openEuler-22.03-LTS",
         "arch": "aarch64",
-        "buildFlag": true,
         "publishFlag": true
       }
     }

@@ -461,8 +461,6 @@ specDepends 的组装与缓存见 15.11；构建集只在 Pending 阶段判定�
 
 `incremental` 与 `specified` 的构建集为空时，均直接写入 `Completed`；保留已有的包级降级条件和 PrepareFailed 条目。
 
-**输入约定**：Build.spec.buildTarget.buildFlag=true 由发起侧保证；本控制器不设置额外仓库级构建开关。
-
 **增量诱因边界**：commit 变化、新增仓库和上轮失败 spec 所属仓库均由 Build Controller 合并为 `Build.spec.packages`；本控制器只把这些仓库在本轮组装出的 spec 作为种子。已删除仓库不进入本轮组装。安装期依赖变化仍由下文的 RpmRepo `requires` 反查扩散覆盖；不额外比较外部 bootstrapRepos。
 
 **spec 下载解析**：以当前 Snapshot 的 `packageRepoStatuses` 定位仓库版本；条目未就绪或请求瞬态失败时保持 Pending。条目不可重试失败、git 内容缺失或 spec 解析失败时，`incremental` 与 `specified` 均按仓库/spec 降级，记录 PrepareFailed 条目；`single` 仍按 7.2.3 的空集规则收口。
@@ -1197,7 +1195,6 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.name` | 与 BuildInfo 同名，经 `BuildInfo.metadata.name` 反查 |
 | `spec.buildType` | 步骤 0 构建类型分派（`full` / `incremental` / `specified` / `single`，见 7.2.2；`single` 分派至直通路径，见 7.2.3） |
 | `spec.buildTarget.os` / `spec.buildTarget.arch` | Job 创建时按 os/arch 经本轮 Config/build-target 快照（集群级 name=build-target）解析 `spec.runtimeSpec.image`（读取失败/映射缺失 → 本轮不创建新 Job，E-26）；arch 另填充 `spec.nodeSelector["ebs.io/runner-arch"]`（见 15.3.1）；复用 exclusiveArch 校验/parentAbortGuard 的同一 Build 查询对象 |
-| `spec.buildTarget.buildFlag` | 不消费（构建门禁为 build 级判断，发起侧保证恒为 `true`，本控制器不校验、无失败分支，7.2.2 前置假设） |
 | `spec.packages` | `incremental` 的种子仓库名由 Build Controller 固化；`single`/`specified` 为用户指定仓库名。步骤 0 将对应仓库的已解析 spec 纳入构建集种子，`single` 不做扩散（7.2.2/7.2.3） |
 | `status.phase` | parentAbortGuard 判定：`Aborted` → 置 BuildInfo 为 `Aborted` 终态 + 失效 dcg 缓存（G-06）；不存在（404）→ 视同中止（E-03）；查询失败 → 返回 error 退避重试 |
 | `status.stage` 及其余 status 字段 | 不消费（stage 由 Build Controller 推进，本 controller 不写 Build，G-01） |

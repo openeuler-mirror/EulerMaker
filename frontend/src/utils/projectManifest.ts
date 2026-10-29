@@ -21,7 +21,6 @@ export interface BasicProjectForm {
   defaultRef: GitRefInput;
   os: string;
   arch: string;
-  buildFlag: boolean;
   publishFlag: boolean;
   ownerUser: string;
 }
@@ -40,7 +39,6 @@ export function projectFromForm(form: BasicProjectForm): Project {
   const target = normalizeTarget({
     os: form.os,
     arch: form.arch,
-    buildFlag: form.buildFlag,
     publishFlag: form.publishFlag,
   });
   return {
@@ -105,7 +103,6 @@ function normalizeTarget(value: unknown): BuildTarget {
   return {
     os,
     arch,
-    ...(typeof value.buildFlag === "boolean" ? { buildFlag: value.buildFlag } : {}),
     ...(typeof value.publishFlag === "boolean" ? { publishFlag: value.publishFlag } : {}),
   };
 }

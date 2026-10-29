@@ -168,7 +168,6 @@ spec:
   buildTarget:
     os: openEuler-22.03-LTS
     arch: aarch64
-    buildFlag: true
     publishFlag: true
 status:
   phase: Pending
