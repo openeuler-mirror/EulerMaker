@@ -320,7 +320,7 @@ export default {
     noBuildPayload: "No Build Payload",
     payloadSaved: "Build Payload saved",
     targetsEyebrow: "Target environments",
-    publishEnabled: "Publish release",
+    publishEnabled: "Publish",
     noBuildTargets: "No build targets",
     editBuildTargets: "Edit build targets",
     editTargetsHint: "A project needs at least one build target. Every target must include an operating system and architecture.",
