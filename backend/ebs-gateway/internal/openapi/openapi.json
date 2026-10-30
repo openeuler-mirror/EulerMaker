@@ -250,10 +250,7 @@
             "namespace": "example"
           },
           "spec": {
-            "buildTarget": {
-              "arch": "x86_64",
-              "os": "openEuler:24.03-LTS-SP3"
-            },
+            "arch": "x86_64",
             "buildType": "single",
             "packages": [
               "bash"
@@ -1681,9 +1678,9 @@
       },
       "ebs-api.ebs.v1.BuildSpec": {
         "properties": {
-          "buildTarget": {
-            "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildTarget",
-            "default": {}
+          "arch": {
+            "description": "Arch must belong to Project.spec.buildArches; the distribution comes from Project.spec.distro.",
+            "type": "string"
           },
           "buildType": {
             "type": "string"
@@ -1727,17 +1724,6 @@
           "startTime": {
             "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time",
             "default": {}
-          }
-        },
-        "type": "object"
-      },
-      "ebs-api.ebs.v1.BuildTarget": {
-        "properties": {
-          "arch": {
-            "type": "string"
-          },
-          "os": {
-            "type": "string"
           }
         },
         "type": "object"
@@ -2136,15 +2122,16 @@
             },
             "type": "array"
           },
-          "buildPayload": {
-            "type": "string"
-          },
-          "buildTargets": {
+          "buildArches": {
+            "description": "BuildArches lists the unique architectures available to builds in this project.",
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildTarget",
-              "default": {}
+              "default": "",
+              "type": "string"
             },
             "type": "array"
+          },
+          "buildPayload": {
+            "type": "string"
           },
           "defaultRef": {
             "type": "string"
@@ -2153,6 +2140,10 @@
             "type": "string"
           },
           "displayName": {
+            "type": "string"
+          },
+          "distro": {
+            "description": "Distro selects the distribution in Config/build-target and is immutable after creation.",
             "type": "string"
           },
           "packageRepos": {

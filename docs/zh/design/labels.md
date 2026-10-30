@@ -13,15 +13,12 @@
 | Project | `project.ebs.io/type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
 | Project | `ebs.io/owner-user` | User `metadata.name` | Gateway（创建时） | 标识 Project owner；写入及不可变规则见 3.1 |
 | Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner | 授予指定用户 Project 成员权限 |
-| Build | `ebs.io/target-os` | Build Target 的操作系统名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/target-arch` | Build Target 的架构名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/build-type` | Build `spec.buildType` | Build 创建方 | 按构建类型查询 Build |
-| RpmRepo | `ebs.io/target-os` | 同名 Build 的 `spec.buildTarget.os` | Build Controller | 按构建目标查询/归组 RpmRepo |
-| RpmRepo | `ebs.io/target-arch` | 同名 Build 的 `spec.buildTarget.arch` | Build Controller | 按构建目标查询/归组 RpmRepo |
+| RpmRepo | `ebs.io/target-arch` | 同名 Build 的 `spec.arch` | Build Controller | 按构建目标查询/归组 RpmRepo |
 | Job | `ebs.io/build-name` | 所属 Build 的 `metadata.name` | BuildInfo Controller | 按 Build 查询仓库输入 Job |
 | Job | `ebs.io/spec-name` | Job 构建的 SPEC 名的可逆编码 | BuildInfo Controller | BuildInfo 回填与 RpmRepo 批次按解码后的 SPEC 名分组 |
 | Job | `ebs.io/package-name` | 所属 `PackageRepo.name` 的可查询 label 值，编码规则见第 7 节 | BuildInfo Controller | 按软件包仓库筛选 Job 构建历史 |
-| Job | `ebs.io/target-os` | 所属 Build 的目标操作系统 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
 | Job | `ebs.io/target-arch` | 所属 Build 的目标架构 | BuildInfo Controller | 仓库元数据与 Job/Build 一致性校验 |
 | Runner | `ebs.io/runner-type` | 与 `spec.type` 相同 | Runner | 表达 Runner 类型 |
 | Runner | `ebs.io/runner-arch` | 与 `spec.arch` 相同 | Runner | 表达 Runner 架构，供 `nodeSelector` 精确匹配 |
@@ -82,17 +79,16 @@ Build 使用以下标签表达构建目标：
 ```yaml
 metadata:
   labels:
-    ebs.io/target-os: openEuler-24.03-LTS-SP4
     ebs.io/target-arch: x86_64
     ebs.io/build-type: full
 ```
 
-`ebs.io/target-os`、`ebs.io/target-arch` 和 `ebs.io/build-type` 必须分别与 Build `spec.buildTarget.os`、`spec.buildTarget.arch` 和 `spec.buildType` 完全一致，不进行大小写折叠或别名转换。创建或更新 Build 时，apiserver 根据 spec 补齐缺失标签；客户端显式提供的标签与 spec 不一致时返回 `422 Invalid`，不能静默覆盖。
+`ebs.io/target-arch` 和 `ebs.io/build-type` 必须分别与 Build `spec.arch` 和 `spec.buildType` 完全一致，不进行大小写折叠或别名转换。创建或更新 Build 时，apiserver 根据 spec 补齐缺失标签；客户端显式提供的标签与 spec 不一致时返回 `422 Invalid`，不能静默覆盖。
 
 调用方可以组合标签选择器、状态字段选择器和默认创建时间倒序查询某个目标的最新 Build，例如：
 
 ```text
-labelSelector=ebs.io/target-os=openEuler-24.03-LTS-SP4,ebs.io/target-arch=x86_64,ebs.io/build-type=full
+labelSelector=ebs.io/target-arch=x86_64,ebs.io/build-type=full
 fieldSelector=status.phase=Processing,status.stage=build
 limit=1
 ```

@@ -1,4 +1,4 @@
-import type { BuildTargetContent, BuildTarget } from "@/types";
+import type { BuildTargetContent, ConfiguredBuildTarget } from "@/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -27,7 +27,7 @@ export function configuredArches(conf: BuildTargetContent | null, os?: string): 
   return Object.keys(targets[os].arches).sort();
 }
 
-export function supportsTarget(conf: BuildTargetContent | null, target: BuildTarget): boolean {
+export function supportsTarget(conf: BuildTargetContent | null, target: ConfiguredBuildTarget): boolean {
   if (!target.os || !target.arch || !configuredArches(conf, target.os).includes(target.arch)) return false;
   return Boolean(conf!.targets[target.os].arches[target.arch].image);
 }

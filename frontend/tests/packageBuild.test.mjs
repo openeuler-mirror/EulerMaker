@@ -9,8 +9,8 @@ const component = readFileSync(new URL("../src/views/ProjectView.vue", import.me
 const { descriptor } = parse(component);
 const source = ts.createSourceFile("ProjectView.ts", descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
 const functions = source.statements.filter(statement => ts.isFunctionDeclaration(statement)
-  && ["completeBuildGitRef", "openBuildDialog", "closeBuildDialog", "createBuild"].includes(statement.name?.text));
-assert.equal(functions.length, 4);
+  && ["completeBuildGitRef", "openBuildDialog", "closeBuildDialog", "createBuild", "openTargetEditor", "addTarget", "saveTargets"].includes(statement.name?.text));
+assert.equal(functions.length, 7);
 const { outputText } = ts.transpileModule(functions.map(statement => statement.getText(source)).join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 });
@@ -21,11 +21,10 @@ function setup() {
   const state = {
     project: ref({ spec: {
       packageRepos: [{ name: "gcc" }, { name: "rpm" }],
-      buildTargets: [
-        { os: "openEuler", arch: "x86_64" },
-        { os: "openEuler", arch: "aarch64" },
-      ],
+      distro: "openEuler", buildArches: ["x86_64", "aarch64"],
     } }),
+    canEditProject: ref(true), editingTargets: ref([]), targetEditorOpen: ref(false), savingTargets: ref(false),
+    targetSaveSuccess: ref(false), targetErrorKey: ref(""), targetErrorParams: ref({}),
     canStartBuild: ref(true), projectIsFull: ref(true), buildConfigurationMissing: ref(false),
     buildType: ref("full"), fixedBuildPackage: ref(""), buildGitRef: ref(""), selectedBuildPackages: ref([]),
     buildPackageSearch: ref(""), buildTargetDrafts: ref([]), creatingBuild: ref(false),
@@ -44,9 +43,27 @@ function setup() {
   state.requiresBuildPackages = computed(() => ["single", "specified"].includes(state.buildType.value));
   state.availableBuildPackages = computed(() => state.project.value.spec.packageRepos.map(repo => repo.name));
   const actions = new Function(...Object.keys(state), outputText
-    + "\nreturn { completeBuildGitRef, openBuildDialog, closeBuildDialog, createBuild };")(...Object.values(state));
+    + "\nreturn { completeBuildGitRef, openBuildDialog, closeBuildDialog, createBuild, openTargetEditor, addTarget, saveTargets };")(...Object.values(state));
   return { state, actions, requests };
 }
+
+test("architecture editing preserves the project distribution", async () => {
+  const { state, actions, requests } = setup();
+  actions.openTargetEditor();
+  assert.equal(state.targetEditorOpen.value, true);
+  state.editingTargets.value = [{ os: "openEuler", arch: "aarch64" }];
+  actions.addTarget();
+  assert.equal(state.editingTargets.value[1].os, "openEuler");
+  state.editingTargets.value[1].arch = "riscv64";
+  await actions.saveTargets();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "PUT");
+  assert.deepEqual(requests[0].body.spec, {
+    distro: "openEuler", buildArches: ["aarch64", "riscv64"],
+    packageRepos: [{ name: "gcc" }, { name: "rpm" }],
+  });
+  assert.equal(state.targetSaveSuccess.value, true);
+});
 
 test("Tab completes an empty Git ref from its placeholder and then allows normal focus navigation", () => {
   const { state, actions } = setup();
@@ -73,7 +90,7 @@ test("package action fixes one package and submits single builds for the selecte
   assert.deepEqual(state.selectedBuildPackages.value, ["gcc"]);
   await actions.createBuild();
   assert.equal(requests.length, 2);
-  assert.deepEqual(requests.map(request => request.body.spec.buildTarget.arch), ["x86_64", "aarch64"]);
+  assert.deepEqual(requests.map(request => request.body.spec.arch), ["x86_64", "aarch64"]);
   for (const request of requests) {
     assert.equal(request.method, "POST");
     assert.equal(request.url, "/apis/ebs/v1/projects/example/builds");
@@ -113,16 +130,13 @@ test("non-single builds default to publishing and allow opting out per target", 
     state.selectedBuildPackages.value = ["gcc"];
     await actions.createBuild();
     assert.deepEqual(requests.map(request => request.body.spec.publish), [true, true]);
-    assert.deepEqual(requests[0].body.spec.buildTarget, { os: "openEuler", arch: "x86_64" });
+    assert.equal(requests[0].body.spec.arch, "x86_64");
     await actions.openBuildDialog(type);
     state.selectedBuildPackages.value = ["gcc"];
     state.buildTargetDrafts.value[0].publish = false;
     await actions.createBuild();
     assert.deepEqual(requests.slice(2).map(request => request.body.spec.publish), [false, true]);
-    assert.deepEqual(requests.slice(2).map(request => request.body.spec.buildTarget), [
-      { os: "openEuler", arch: "x86_64" },
-      { os: "openEuler", arch: "aarch64" },
-    ]);
+    assert.deepEqual(requests.slice(2).map(request => request.body.spec.arch), ["x86_64", "aarch64"]);
     await actions.openBuildDialog(type);
     assert.deepEqual(state.buildTargetDrafts.value.map(target => target.publish), [true, true]);
   }

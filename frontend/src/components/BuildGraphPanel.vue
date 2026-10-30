@@ -183,7 +183,7 @@ const buildOptions = computed(() => builds.value.map(build => {
   const typeLabel = typeKeys[type] ? t(typeKeys[type]) : type || t('project.unspecifiedType');
   return {
     value: build.metadata?.name || '',
-    label: `${typeLabel} · ${build.spec?.buildTarget?.os || '—'} / ${build.spec?.buildTarget?.arch || '—'} · ${build.metadata?.name}`,
+    label: `${typeLabel} · ${build.spec?.arch || '—'} · ${build.metadata?.name}`,
   };
 }));
 const sides = computed(() => [
@@ -281,7 +281,7 @@ async function loadBuildPage(page: number): Promise<void> {
   const query = new URLSearchParams({
     limit: '50',
     labelSelector: 'ebs.io/build-type!=single',
-    includeFields: 'metadata.name,spec.buildType,spec.buildTarget',
+    includeFields: 'metadata.name,spec.buildType,spec.arch',
   });
   if (tokens.value[page]) query.set('continue', tokens.value[page]);
   try {

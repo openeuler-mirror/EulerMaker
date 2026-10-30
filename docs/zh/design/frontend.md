@@ -2,7 +2,7 @@
 
 ## 一、文档状态
 
-构建配置支持运维编辑 OS/Arch/镜像映射，工程目标选项解析 `spec.content`，并保留旧工程已失效的目标值；规则见 [构建配置设计](data-models~config.md#26-前端与-ebsctl)。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](data-models~script.md)。
+构建配置支持运维编辑发行版/架构/镜像映射；工程统一选择发行版，构建目标仅选择架构，选项解析 `spec.content`，并保留旧工程已失效的目标值；规则见 [构建配置设计](data-models~config.md#26-前端与-ebsctl)。Project 的 `distro` 字段在前端统一显示为“发行版”。运维页面同时提供全局 Script 管理，脚本执行接入范围见 [Script 设计](data-models~script.md)。
 
 本文定义 EulerMaker Web 控制台的首版产品范围、技术架构、页面结构、权限行为、API 对接、实时日志、安全边界、部署方式和验收标准。
 
@@ -163,8 +163,8 @@ ebs.io/member-user.<username>: "true"
 
 工程列表提供两种创建入口：
 
-- “创建工程”使用结构化表单填写工程名、显示名称、说明、SPEC 分支和首个 Build target。工程名在客户端按 DNS label 规则预检；普通用户、Ops 和 Admin 创建的工程均由 Gateway 注入当前用户作为 owner。
-- “导入 YAML”读取或粘贴单个 `ebs/v1 Project` 清单。客户端解析 YAML，校验 `apiVersion`、`kind`、工程名和至少一个包含 `os`、`arch` 的 Build target；提交前移除 `status` 和服务器维护的 metadata 字段。该入口只用于创建 Project，不构成通用资源 YAML 编辑器。
+- “创建工程”使用结构化表单填写工程名、显示名称、说明、默认 Git 引用、发行版 和首个目标架构。工程名在客户端按 DNS label 规则预检；普通用户、Ops 和 Admin 创建的工程均由 Gateway 注入当前用户作为 owner。
+- “导入 YAML”读取或粘贴单个 `ebs/v1 Project` 清单。客户端解析 YAML，校验 `apiVersion`、`kind`、工程名、distro 和非空的 `buildArches` 字符串数组，架构值必须非空且不得重复；提交前移除 `status` 和服务器维护的 metadata 字段。该入口只用于创建 Project，不构成通用资源 YAML 编辑器。
 
 两个入口共用 `POST /apis/ebs/v1/projects`。匿名用户点击后进入登录页并返回工程列表。409 冲突、校验错误和权限错误都在弹窗中保留输入并以当前界面语言展示。
 
@@ -188,9 +188,9 @@ Spec 状态列表展示包的 Commit ID：从 `BuildInfo.status.specResults` 条
 
 软件包仓库列表中的名称可选中，选中后列表收窄到左侧，右侧显示 RPM 下载地址与对应 Job 历史。历史查询仅使用 `ebs.io/package-name` label selector：客户端使用[标签约定](labels.md#7-job-构建归属标签)中的规则从 `PackageRepo.name` 计算查询值，直接请求所属工程的 Job 列表并处理分页；界面显示 Project 中的完整名称，不显示截断或编码后的 label 值。没有该标签的存量 Job 不出现在包级历史中。
 
-工程配置中的 Build targets 仅展示和编辑 `os`、`arch`。仅工程 owner 可通过编辑弹窗新增、删除或修改目标，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT；至少保留一个同时包含 `os` 与 `arch` 的目标。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
+一个 Project 对应一套发行版构建环境。工程创建时选择 `spec.distro`，创建后的工程配置仅以“发行版”只读展示，构建架构列表读写 `spec.buildArches` 字符串数组；架构选项取所选 distro 的 Config 映射。仅工程 owner 可修改架构列表，至少保留一个非空且不重复的架构，并以包含当前 `resourceVersion` 的完整 Project 执行 PUT。发生 409 时保留弹窗内容并提示重新加载后处理冲突。
 
-非 single 构建弹窗提供“发布到正式仓库”选项，每次打开默认勾选；所选目标各自创建 Build，发布选项写入 `Build.spec.publish`，不写入 `buildTarget` 或 Project。single 弹窗不显示该选项，请求不携带 `publish`。
+非 single 构建弹窗在每个架构目标旁显示“发布”及勾选框，每次打开默认勾选；所选目标各自创建 Build，独立的发布选项写入对应 `Build.spec.publish`，不写入 Project。single 弹窗不显示该选项，请求不携带 `publish`。
 
 Bootstrap repositories 同样仅向工程 owner 提供列表编辑能力。每项包含名称与仓库地址，允许新增、删除、修改或保存空列表以清除配置，并复用 Project PUT、`resourceVersion` 和冲突处理流程。
 
@@ -219,10 +219,10 @@ spec:
   buildType: specified
   packages:
     - kernel
-  buildTarget:
-    os: openEuler-24.03-LTS
-    arch: x86_64
+  arch: x86_64
 ```
+
+Build 创建请求提交 `arch`，不包含发行版字段；构建历史与详情统一从所属 Project 的 `spec.distro` 展示发行版。工程发布源的选择仅需 Project，生成 `/repositories/{project}/` 基础地址，由构建流程按目标 arch 追加；不再按发行版筛选。
 
 引导仓在 Project 中配置，由 Build Controller 创建 BuildInfo 时复制到其 spec；基础构建关系从服务端 `status.baseBuildRef` 展示。
 

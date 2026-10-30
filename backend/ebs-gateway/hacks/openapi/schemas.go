@@ -110,7 +110,7 @@ func schemas() object {
 	result["BuildCreate"].(map[string]any)["example"] = object{
 		"apiVersion": "ebs/v1", "kind": "Build",
 		"metadata": object{"name": "00000000-0000-4000-8000-000000000001", "namespace": "example"},
-		"spec":     object{"buildType": "single", "buildTarget": object{"os": "openEuler:24.03-LTS-SP3", "arch": "x86_64"}, "packages": []string{"bash"}},
+		"spec":     object{"buildType": "single", "arch": "x86_64", "packages": []string{"bash"}},
 	}
 	result["ScriptCreate"].(map[string]any)["example"] = object{
 		"apiVersion": "ebs/v1", "kind": "Script", "metadata": object{"name": "example"},

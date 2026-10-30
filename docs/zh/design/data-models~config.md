@@ -6,7 +6,7 @@
 
 | 对象 | 配置内容 | 作用域 | Job 中的结果 |
 |------|----------|--------|-------------|
-| `Config/build-target` | 支持的 OS、Arch 和构建镜像 | 集群级，`Public` | `spec.runtimeSpec.image` |
+| `Config/build-target` | 发行版标识（distro）、Arch 和构建镜像映射 | 集群级，`Public` | `spec.runtimeSpec.image` |
 | `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
 | `Config/services` | Artifact Manager 实例地址和 Git Server 管理地址 | 集群级，`OpsOnly` | 仅固化 Artifact 实例标识和 Git 逻辑克隆地址，不复制配置全文 |
 
@@ -51,8 +51,9 @@ apiserver 校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及�
 
 `Config/build-target` 的 `spec.content` 提供 OS、架构和镜像映射，为前端和任务创建方提供同一份数据。
 
-- 前端从配置生成目标 OS、Arch 下拉选项。
-- BuildInfo Controller 根据 Build 的 OS、Arch 选择镜像，并写入 Job。
+- 前端从配置生成 Project 的 distro 选项，再根据所选发行版生成 buildArches 的架构选项。
+- Project 的 distro 创建后不可变，Build 不重复保存。
+- BuildInfo Controller 根据 Project.spec.distro、Build.spec.arch 选择镜像，并写入 Job。
 - Ops、Admin 可以通过 Gateway 修改配置，无需重启服务。
 
 ### 2.2 对象
@@ -89,9 +90,9 @@ spec:
 | 字段 | 规则 |
 |------|------|
 | `content.targets` | OS 到目标配置的映射；允许空表，表示暂不接受新的构建目标 |
-| OS key | 非空、无首尾空白，满足 Build 目标 OS 对应 label value 的语法，与 `BuildTarget.os` 精确匹配 |
+| 发行版 key | 非空、无首尾空白，满足发行版标识语法（沿用 Kubernetes label value 的字符与长度限制，但不生成目标 OS 标签），与 `Project.spec.distro` 精确匹配 |
 | `arches` | 每个 OS 至少包含一个架构；选项仅来自所选 OS，不对全部 OS 的架构取并集 |
-| Arch key | 使用现有 Build 目标架构校验，不写死 x86_64/aarch64，与 `BuildTarget.arch` 精确匹配 |
+| Arch key | 使用现有 Build 目标架构校验，不写死 x86_64/aarch64，与 `Build.spec.arch` 精确匹配 |
 | `image` | 必填，合法的容器镜像引用，允许 tag 或 digest；禁止 URL scheme、内嵌凭据和空白；使用镜像引用解析库校验，不联网检查存在性 |
 
 不自动转换 OS 大小写、冒号、连字符，也不从 OS 名称拼接镜像。运维显式维护映射。缺失条目没有默认镜像回退。
@@ -121,11 +122,11 @@ spec:
 
 #### 2.5.1 Project 与 Build
 
-Project.spec.buildTargets 仍记录工程自己的构建目标。Project 创建/更新只做现有字段校验，不强制所有目标当前都在 `Config/build-target` 中，避免全局配置变更后工程无法进行其他编辑。
+Project.spec.distro 保存工程统一的发行版标识，创建后不可修改；Project.spec.buildArches 只记录架构，且架构非空、不重复。Project 创建/更新校验字段格式，更新时还校验 distro 不变；不强制所有目标当前都在 `Config/build-target` 中，避免全局配置变更后工程无法进行其他编辑。
 
-创建任意类型 Build 时，apiserver 在申请非 single 目标占用、写入 Build 之前读取 `Config/build-target`，反序列化后只检查 `spec.buildTarget.os/arch` 是否有对应映射，不重复校验整张目标表：
+创建任意类型 Build 时，apiserver 先读取所属 Project，确认目标 arch 属于 Project.spec.buildArches，并从同一对象读取 Project.spec.distro。随后在申请非 single 目标占用、写入 Build 之前读取 `Config/build-target`，反序列化后只检查 Project 的 distro 与 Build 的 arch 是否有对应映射，不重复校验整张目标表：
 
-- 目标不存在：`422 Invalid`，错误定位到 `spec.buildTarget`，不创建 Build、不申请占用。
+- 发行版或架构映射不存在：`422 Invalid`，错误定位到 Build 的 `spec.arch`，message 明确包含 Project 的 distro 与请求的 arch，不引用 Build 中不存在的字段；不创建 Build、不申请占用。
 - 配置对象不存在、读取失败、响应类型错误或反序列化失败：`503 ServiceUnavailable`，不得当成用户输入错误或使用硬编码回退。
 - 成功：继续已有 Project 目标、packages、并发占用等校验流程。
 
@@ -133,7 +134,7 @@ Project.spec.buildTargets 仍记录工程自己的构建目标。Project 创建/
 
 #### 2.5.2 BuildInfo Controller 创建 Job
 
-每次需要创建新 Job 的 reconcile，读取一次最新 `Config/build-target`，反序列化其 `content`，不重复校验 OS、架构和镜像格式；该轮批量创建使用同一个内存快照，按所属 Build 的 OS、Arch 查询镜像。
+每次需要创建新 Job 的 reconcile，读取一次最新 `Config/build-target`，反序列化其 `content`，不重复校验发行版、架构和镜像格式；该轮批量创建使用同一个内存快照，按 `Project.spec.distro` 与 `Build.spec.arch` 查询镜像。Project 复用本轮前置守卫的读取，投影为 `includeFields=metadata,status.phase,spec.distro`，不逐 Job 重读；Project 不存在或读取失败时沿用前置守卫的错误处理，不使用默认发行版兜底。
 
 镜像写入 `Job.spec.runtimeSpec.image`。该字段由配置解析结果确定，Job 模板不得覆盖它；runtimeSpec 其他字段及 `Config/build-resource` 解析按原规则执行。首版面向现有容器 rpmbuild Job，不把容器镜像解释为 VM 镜像。
 
@@ -143,11 +144,13 @@ Job 创建沿用确定性名称及幂等流程：已存在的同一任务 Job �
 
 #### 2.5.3 生效边界
 
-首版采用**创建 Job 时取配置**，不在 Build 或 BuildInfo 中额外保存镜像快照：
+采用**Project 创建时确定发行版，创建 Job 时解析镜像配置**：
 
+- Project.spec.distro 创建后不可变；Build 和 BuildInfo 不重复保存发行版标识。
+- Build 和 BuildInfo 不额外保存镜像快照；Project.spec.distro 不是镜像地址或镜像内容锁定。
 - 已创建的 Pending/Running Job 均继续使用自身固化的镜像。
 - 修改或移除配置会影响之后创建的 Job，包括正在进行的 Build 中尚未创建的 Job。
-- 同一 Build 可以包含使用不同镜像的 Job；不承诺 Build 级环境快照一致性。
+- 同一 Build 可以包含使用同一 distro/arch 映射在不同时间解析出的不同镜像；不承诺 Build 级镜像内容快照一致性。
 - Runner 只执行 Job.spec.runtimeSpec，不读取 Config。
 - tag 可被镜像仓库重新指向，Job 固化 tag 不等于固化镜像内容；需要内容可复现时由运维填写 digest 引用。
 
@@ -159,8 +162,8 @@ Job 创建沿用确定性名称及幂等流程：已存在的同一任务 Job �
 
 工程创建及工程目标编辑页面：
 
-- 从 `Config/build-target.spec.content` 解析 OS 选项，选中 OS 后展示其 arches；选项按名称排序，不维护第二份前端列表。
-- 新行默认 OS 未选择；切换 OS 后，原 Arch 不受支持则清空，要求重新选择。
+- 从 `Config/build-target.spec.content` 解析工程级 distro 选项，前端标签显示为“发行版”，选择后展示其 arches；选项按名称排序，不维护第二份前端列表。
+- distro 仅在创建 Project 时选择，创建后只读展示为“发行版”；目标列表仍可增删架构，同一架构不得重复。全局配置变更导致已有架构不受支持时保留原值并提示，不静默改写。
 - 空配置显示“暂无可用构建目标”；配置请求失败显示错误并支持重试，不回退到硬编码选项。
 - 旧工程不受支持的目标仍显示原值并标注“不再支持”；不静默删除或替换。未修改的旧目标不阻止保存其他工程配置。
 - 发起 Build 时，对不支持的目标禁用提交并给出提示；最终仍以 apiserver 校验为准。
@@ -175,12 +178,12 @@ ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改
 | apiserver | Config storage、通用与内置构建配置内容校验、初始化、ES alias、OpenAPI、Build create 时检查目标映射 |
 | gateway | 按 visibility 授权具名读取、禁止匿名 list、Ops 及以上写权限 |
 | controller-manager | 读取 Config 并解析对应 content，创建 Job 时固化镜像 |
-| frontend | 运维配置编辑、OS/Arch 选项、不可用目标提示 |
+| frontend | 运维配置编辑、工程级 distro 与架构选项、不可用目标提示 |
 | ebsctl | 集群级资源与允许操作注册 |
 
 实现时使用现有可重复执行的代码生成脚本，不手工维护独立 OpenAPI 文件。
 
-验收至少覆盖：合法/非法镜像和目标、空配置、两架构不同镜像、无权限写入、更新冲突、多实例初始化不覆盖、未配置目标创建 Build 不留下占用、配置读取失败、批量 Job 使用同一配置快照、Job 创建未知结果确认、配置更新不修改已有 Job、删除目标后新任务停发及恢复、前端旧目标保留和请求失败提示。
+验收至少覆盖：合法/非法镜像和目标、空配置、工程级 distro、目标架构去重、Build 创建使用 Project 的 distro 校验镜像映射、BuildInfo 复用本轮 Project 投影读取 distro、Project 更新禁止修改或删除 distro、两架构不同镜像、无权限写入、更新冲突、多实例初始化不覆盖、未配置目标创建 Build 不留下占用、配置读取失败、批量 Job 使用同一配置快照、Job 创建未知结果确认、配置更新不修改已有 Job、删除目标后新任务停发及恢复、前端旧目标保留和请求失败提示。
 
 ## 3. 构建资源内容
 

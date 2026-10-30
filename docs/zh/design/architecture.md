@@ -230,6 +230,8 @@ PUT    /apis/ebs/v1/projects/{name}/status
 curl -k -N 'https://localhost:8443/apis/ebs/v1/jobs?watch=true'
 ```
 
+一个 Project 对应一套发行版构建环境：Project.spec.distro 统一指定发行版且创建后不可修改，buildArches 为架构字符串数组。Build 只保存目标架构；构建互斥、增量基准和稳定仓库以 Project + Arch 划分。BuildInfo Controller 按 Project.spec.distro 与目标 arch 选择镜像。
+
 BuildInfo Controller 通过集群级 API 读取 `/apis/ebs/v1/configs/build-target` 和 `/apis/ebs/v1/configs/build-resource`，按对象名称解析 `spec.content`。
 
 ### 5.4 Runner API
@@ -369,7 +371,7 @@ repo controller -> artifact-manager: poll materialization result
 repo controller -> ebs-apiserver: update RpmRepo/Build/Job status
 ```
 
-`artifact-manager` 的本地 Job 上传清单是一次 Job 完整文件集合的事实来源；Job status 只保存 Artifact 和仓库发布的可 watch 摘要。Controller Manager 中的 RpmRepo Controller 持续 List/Watch Job，将符合条件的完成事件转换为 Project 和 Build name 队列 key。每次 Reconcile 为同一个 Build 稳定选择一批 Job，并在 Artifact Manager 中生成一个新的不可变物理版本后原子更新同名 RpmRepo 指向；同一 Build 的批次串行，不同 Build 可以并行。Build name 由唯一 UUID 生成，目标 OS 和架构由 Build 确定而不参与队列分组。RpmRepo Controller 不能扫描 Artifact Manager 的内部目录，也不能根据当前 Artifact 列表推断上传是否结束。Artifact Manager 不直接更新业务 API 对象，也不自行选择“最新仓库”。
+`artifact-manager` 的本地 Job 上传清单是一次 Job 完整文件集合的事实来源；Job status 只保存 Artifact 和仓库发布的可 watch 摘要。Controller Manager 中的 RpmRepo Controller 持续 List/Watch Job，将符合条件的完成事件转换为 Project 和 Build name 队列 key。每次 Reconcile 为同一个 Build 稳定选择一批 Job，并在 Artifact Manager 中生成一个新的不可变物理版本后原子更新同名 RpmRepo 指向；同一 Build 的批次串行，不同 Build 可以并行。Build name 由唯一 UUID 生成，目标架构由 Build 确定而不参与队列分组，发行版标识统一从 Project.spec.distro 读取，仅用于选择构建环境。RpmRepo Controller 不能扫描 Artifact Manager 的内部目录，也不能根据当前 Artifact 列表推断上传是否结束。Artifact Manager 不直接更新业务 API 对象，也不自行选择“最新仓库”。
 
 Web UI 通过 Artifact API 查询和下载 Completed Artifact。实时日志先使用 Range 读取已提交历史内容，再通过 SSE 接收新增 chunk；日志封账后转为普通 `category=log` Artifact。Artifact Manager 的详细协议、数据结构和本地恢复规则见 [artifact-manager.md](./artifact-manager.md)。
 
