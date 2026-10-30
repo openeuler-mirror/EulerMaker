@@ -154,8 +154,7 @@
             <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
               <div class="build-history-item-heading">
                 <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
-                  <span class="build-history-item-title"><strong class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</strong><span class="build-history-item-name">{{ build.metadata?.name }}</span></span>
-                  <small>{{ buildTargetLabel(build) }}</small>
+                  <span class="build-history-item-title"><strong class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</strong><strong class="build-history-arch">{{ build.spec?.arch || t("common.emptyValue") }}</strong><span class="build-history-item-name">{{ build.metadata?.name }}</span></span>
                   <small v-if="build.spec?.buildType !== 'full' && build.spec?.packages?.length" class="build-history-packages" :title="build.spec.packages.join(', ')">{{ t('project.packages') }}: {{ build.spec.packages.slice(0, 3).join(', ') }}{{ build.spec.packages.length > 3 ? ', …' : '' }}</small>
                   <small v-if="build.metadata?.annotations?.['ebs.io/git-ref']" class="build-history-git-ref" :title="build.metadata.annotations['ebs.io/git-ref']">Git ref: <code>{{ build.metadata.annotations['ebs.io/git-ref'] }}</code></small>
                   <span class="build-history-times">
@@ -1631,16 +1630,6 @@ function fallbackCopy(value: string): void {
   const copied = document.execCommand("copy");
   input.remove();
   if (!copied) throw new Error("copy failed");
-}
-
-function buildTargetLabel(build: Build): string {
-  const target = { os: project.value?.spec?.distro, arch: build.spec?.arch };
-  return targetListLabel([target]);
-}
-
-function targetListLabel(targets?: ConfiguredBuildTarget[]): string {
-  if (!targets?.length) return t("common.emptyValue");
-  return targets.map((target) => [target.os, target.arch].filter(Boolean).join(" / ")).filter(Boolean).join("，") || t("common.emptyValue");
 }
 
 function gitRefLabel(ref?: string): string {

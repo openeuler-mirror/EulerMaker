@@ -156,7 +156,7 @@ export default {
     defaultRef: "Default SPEC branch or tag",
     ownerUser: "Owner user",
     ownerUserPlaceholder: "Enter an enabled username",
-    firstTarget: "First build target",
+    selectDistro: "Select a distribution",
     targetOS: "Distribution",
     targetArch: "Architecture",
     submitCreate: "Create project",
