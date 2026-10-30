@@ -10,14 +10,14 @@ import (
 
 func TestBuildSpecPublishJSON(t *testing.T) {
 	for _, publish := range []bool{false, true} {
-		original := BuildSpec{BuildType: BuildTypeFull, BuildTarget: BuildTarget{OS: "openEuler", Arch: "aarch64"}, Publish: &publish}
+		original := BuildSpec{BuildType: BuildTypeFull, Arch: "aarch64", Publish: &publish}
 		data, err := json.Marshal(original)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := `{"buildType":"full","buildTarget":{"os":"openEuler","arch":"aarch64"},"publish":false}`
+		want := `{"buildType":"full","arch":"aarch64","publish":false}`
 		if publish {
-			want = `{"buildType":"full","buildTarget":{"os":"openEuler","arch":"aarch64"},"publish":true}`
+			want = `{"buildType":"full","arch":"aarch64","publish":true}`
 		}
 		if string(data) != want {
 			t.Fatalf("serialized target = %s, want %s", data, want)

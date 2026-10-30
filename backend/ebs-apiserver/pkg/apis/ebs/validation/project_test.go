@@ -37,21 +37,20 @@ func TestPackageRepoCommitID(t *testing.T) {
 	}
 }
 
-func TestProjectBuildTargetUniqueness(t *testing.T) {
+func TestProjectBuildArchUniqueness(t *testing.T) {
 	tests := []struct {
 		name    string
-		targets []ebsv1.BuildTarget
+		targets []string
 		wantErr bool
 	}{
-		{"duplicate", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "x86_64"}}, true},
-		{"different arch", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-a", Arch: "aarch64"}}, false},
-		{"different os", []ebsv1.BuildTarget{{OS: "os-a", Arch: "x86_64"}, {OS: "os-b", Arch: "x86_64"}}, false},
-		{"distinct pairs", []ebsv1.BuildTarget{{OS: "a-b", Arch: "c"}, {OS: "a", Arch: "b-c"}}, false},
+		{"duplicate", []string{"x86_64", "x86_64"}, true},
+		{"different arch", []string{"x86_64", "aarch64"}, false},
+		{"distinct names", []string{"c", "b-c"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			project := validProject()
-			project.Spec.BuildTargets = tt.targets
+			project.Spec.BuildArches = tt.targets
 			for operation, errs := range map[string]field.ErrorList{
 				"create": ValidateProject(project),
 				"update": ValidateProjectUpdate(project, validProject()),
@@ -62,7 +61,7 @@ func TestProjectBuildTargetUniqueness(t *testing.T) {
 					}
 					continue
 				}
-				if len(errs) != 1 || errs[0].Type != field.ErrorTypeDuplicate || errs[0].Field != "spec.buildTargets[1]" {
+				if len(errs) != 1 || errs[0].Type != field.ErrorTypeDuplicate || errs[0].Field != "spec.buildArches[1]" {
 					t.Fatalf("%s: expected duplicate target error, got %v", operation, errs)
 				}
 			}
@@ -151,27 +150,28 @@ func TestValidateProject(t *testing.T) {
 			},
 		},
 		{
-			name: "requires build targets",
+			name: "requires distro and build arches",
 			project: &ebsv1.Project{
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 			},
-			wantErrs: 1,
+			wantErrs: 2,
 			wantFields: map[string]field.ErrorType{
-				"spec.buildTargets": field.ErrorTypeRequired,
+				"spec.distro":      field.ErrorTypeRequired,
+				"spec.buildArches": field.ErrorTypeRequired,
 			},
 		},
 		{
-			name: "requires build target os and arch",
+			name: "requires distro and nonempty arch",
 			project: &ebsv1.Project{
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 				Spec: ebsv1.ProjectSpec{
-					BuildTargets: []ebsv1.BuildTarget{{}},
+					BuildArches: []string{""},
 				},
 			},
 			wantErrs: 2,
 			wantFields: map[string]field.ErrorType{
-				"spec.buildTargets[0].os":   field.ErrorTypeRequired,
-				"spec.buildTargets[0].arch": field.ErrorTypeRequired,
+				"spec.distro":         field.ErrorTypeRequired,
+				"spec.buildArches[0]": field.ErrorTypeRequired,
 			},
 		},
 		{
@@ -179,7 +179,7 @@ func TestValidateProject(t *testing.T) {
 			project: &ebsv1.Project{
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 				Spec: ebsv1.ProjectSpec{
-					BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
+					Distro: "openEuler", BuildArches: []string{"x86_64"},
 					PackageRepos: []ebsv1.PackageRepo{{Name: "pkg-a", Ref: "refs/heads/"}},
 				},
 			},
@@ -193,7 +193,7 @@ func TestValidateProject(t *testing.T) {
 			project: &ebsv1.Project{
 				ObjectMeta: metav1.ObjectMeta{Name: "project-a"},
 				Spec: ebsv1.ProjectSpec{
-					BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
+					Distro: "openEuler", BuildArches: []string{"x86_64"},
 					PackageRepos: []ebsv1.PackageRepo{{
 						Ref: "refs/heads/main",
 					}},
@@ -249,9 +249,21 @@ func TestValidateProjectDefaultRef(t *testing.T) {
 
 func TestValidateProjectUpdate(t *testing.T) {
 	errs := ValidateProjectUpdate(&ebsv1.Project{}, validProject())
-	assertErrorList(t, errs, 2, map[string]field.ErrorType{
-		"metadata.name":     field.ErrorTypeRequired,
-		"spec.buildTargets": field.ErrorTypeRequired,
+	assertErrorList(t, errs, 4, map[string]field.ErrorType{
+		"spec.distro":      field.ErrorTypeRequired,
+		"metadata.name":    field.ErrorTypeRequired,
+		"spec.buildArches": field.ErrorTypeRequired,
+	})
+}
+
+func TestProjectDistroIsImmutable(t *testing.T) {
+	old := validProject()
+	updated := old.DeepCopy()
+	updated.Spec.BuildArches = []string{"x86_64", "aarch64"}
+	assertErrorList(t, ValidateProjectUpdate(updated, old), 0, nil)
+	updated.Spec.Distro = "another-distro"
+	assertErrorList(t, ValidateProjectUpdate(updated, old), 1, map[string]field.ErrorType{
+		"spec.distro": field.ErrorTypeInvalid,
 	})
 }
 
@@ -324,6 +336,6 @@ func TestValidateProjectArtifactInstance(t *testing.T) {
 
 func validProjectSpec() ebsv1.ProjectSpec {
 	return ebsv1.ProjectSpec{
-		BuildTargets: []ebsv1.BuildTarget{validBuildTarget()},
+		Distro: "openEuler", BuildArches: []string{"x86_64"},
 	}
 }

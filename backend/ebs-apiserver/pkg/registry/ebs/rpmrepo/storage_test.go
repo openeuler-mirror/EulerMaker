@@ -14,7 +14,6 @@ import (
 
 func targetLabels() map[string]string {
 	return map[string]string{
-		ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
 		ebsv1.BuildTargetArchLabel: "aarch64",
 	}
 }
@@ -102,10 +101,8 @@ func TestCreateRequiresTargetLabels(t *testing.T) {
 		labels map[string]string
 		field  string
 	}{
-		{"missing-both", nil, "metadata.labels[ebs.io/target-os]"},
-		{"os-only", map[string]string{ebsv1.BuildTargetOSLabel: "openEuler-22.03-LTS"}, "metadata.labels[ebs.io/target-arch]"},
-		{"arch-only", map[string]string{ebsv1.BuildTargetArchLabel: "aarch64"}, "metadata.labels[ebs.io/target-os]"},
-		{"empty-values", map[string]string{ebsv1.BuildTargetOSLabel: "", ebsv1.BuildTargetArchLabel: ""}, "metadata.labels[ebs.io/target-os]"},
+		{"missing", nil, "metadata.labels[ebs.io/target-arch]"},
+		{"empty", map[string]string{ebsv1.BuildTargetArchLabel: ""}, "metadata.labels[ebs.io/target-arch]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: tc.labels}}
@@ -118,7 +115,7 @@ func TestCreateRequiresTargetLabels(t *testing.T) {
 			}
 		})
 	}
-	t.Run("both-present", func(t *testing.T) {
+	t.Run("arch-present", func(t *testing.T) {
 		obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: targetLabels()}}
 		if errs := strategy.Validate(context.Background(), obj); len(errs) != 0 {
 			t.Fatalf("validation errors = %v", errs)

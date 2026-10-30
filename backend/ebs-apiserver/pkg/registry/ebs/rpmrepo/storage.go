@@ -45,9 +45,7 @@ func NewStorage() *scopedresource.Storage {
 			// The Build controller stamps the target labels at creation so RpmRepo objects can be
 			// filtered by build target without reading the same-name Build.
 			labelsPath := field.NewPath("metadata", "labels")
-			if repo.Labels[ebsv1.BuildTargetOSLabel] == "" {
-				allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetOSLabel), "target OS label is required"))
-			}
+
 			if repo.Labels[ebsv1.BuildTargetArchLabel] == "" {
 				allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetArchLabel), "target architecture label is required"))
 			}

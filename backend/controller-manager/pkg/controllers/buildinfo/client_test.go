@@ -185,7 +185,7 @@ func TestAPIClientGetBuildTargetContent(t *testing.T) {
 				t.Fatal(err)
 			}
 			for arch, want := range map[string]string{"x86_64": "build:x86", "aarch64": "build:arm"} {
-				image, err := buildImage(content, ebsv1.BuildTarget{OS: "os", Arch: arch})
+				image, err := buildImage(content, "os", arch)
 				if err != nil || image != want {
 					t.Fatalf("image for %s = %q, %v; want %q", arch, image, err, want)
 				}
@@ -198,13 +198,14 @@ func TestAPIClientGetProject(t *testing.T) {
 	project := &ebsv1.Project{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Project"},
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", UID: "project-uid", ResourceVersion: "1"},
+		Spec:       ebsv1.ProjectSpec{Distro: "openEuler"},
 		Status:     ebsv1.ProjectStatus{Phase: ebsv1.ProjectTerminating},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/projects/demo" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.URL.Query().Get("includeFields"); got != "metadata,status.phase" {
+		if got := r.URL.Query().Get("includeFields"); got != "metadata,status.phase,spec.distro" {
 			t.Errorf("includeFields = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -223,7 +224,7 @@ func TestAPIClientGetProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Name != project.Name || got.UID != project.UID || got.ResourceVersion != project.ResourceVersion ||
-		got.Status.Phase != ebsv1.ProjectTerminating {
+		got.Status.Phase != ebsv1.ProjectTerminating || got.Spec.Distro != project.Spec.Distro {
 		t.Fatalf("unexpected Project identity/status: %+v", got)
 	}
 }

@@ -30,7 +30,7 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/"), "/")
-	if len(parts) < 1 || len(parts) > 4 {
+	if len(parts) < 1 || len(parts) > 3 {
 		s.releaseNotFound(w, r)
 		return
 	}
@@ -40,7 +40,7 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(parts) == 4 && parts[3] != "Packages" && parts[3] != "repodata" {
+	if len(parts) == 3 && parts[2] != "Packages" && parts[2] != "repodata" {
 		s.releaseNotFound(w, r)
 		return
 	}
@@ -49,32 +49,18 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 	root := filepath.Join(s.cfg.DataDir, "repositories")
 	switch len(parts) {
 	case 1:
-		for _, targetOS := range browseDirectoryNames(filepath.Join(root, parts[0])) {
-			for _, targetArch := range browseDirectoryNames(filepath.Join(root, parts[0], targetOS)) {
-				record, err := s.currentRelease(parts[0], targetOS, targetArch)
-				if err != nil {
-					s.writeReleaseError(w, r, err)
-					return
-				}
-				if record != nil {
-					entries = append(entries, releaseBrowseEntry{Name: targetOS + "/", URL: url.PathEscape(targetOS) + "/"})
-					break
-				}
-			}
-		}
-	case 2:
-		for _, targetArch := range browseDirectoryNames(filepath.Join(root, parts[0], parts[1])) {
-			record, err := s.currentRelease(parts[0], parts[1], targetArch)
+		for _, arch := range browseDirectoryNames(filepath.Join(root, parts[0])) {
+			record, err := s.currentRelease(parts[0], arch)
 			if err != nil {
 				s.writeReleaseError(w, r, err)
 				return
 			}
 			if record != nil {
-				entries = append(entries, releaseBrowseEntry{Name: targetArch + "/", URL: url.PathEscape(targetArch) + "/"})
+				entries = append(entries, releaseBrowseEntry{Name: arch + "/", URL: url.PathEscape(arch) + "/"})
 			}
 		}
-	case 3, 4:
-		record, err := s.currentRelease(parts[0], parts[1], parts[2])
+	case 2, 3:
+		record, err := s.currentRelease(parts[0], parts[1])
 		if err != nil {
 			s.writeReleaseError(w, r, err)
 			return
@@ -83,20 +69,20 @@ func (s *Server) browseCurrentRelease(w http.ResponseWriter, r *http.Request) {
 			s.releaseNotFound(w, r)
 			return
 		}
-		if len(parts) == 3 {
+		if len(parts) == 2 {
 			entries = []releaseBrowseEntry{{Name: "Packages/", URL: "Packages/"}, {Name: "repodata/", URL: "repodata/"}}
 			key := filepath.Join(s.releases.Path(record), "RPM-GPG-KEY-openEuler")
 			if info, err := os.Lstat(key); err == nil && info.Mode().IsRegular() {
 				entries = append(entries, releaseBrowseEntry{Name: "RPM-GPG-KEY-openEuler", URL: "RPM-GPG-KEY-openEuler"})
 			}
 		} else {
-			contentDir := filepath.Join(s.releases.Path(record), parts[3])
+			contentDir := filepath.Join(s.releases.Path(record), parts[2])
 			for _, name := range browseFileNames(contentDir) {
 				entries = append(entries, releaseBrowseEntry{Name: name, URL: url.PathEscape(name)})
 			}
 		}
 	}
-	if len(entries) == 0 && len(parts) < 3 {
+	if len(entries) == 0 && len(parts) < 2 {
 		s.releaseNotFound(w, r)
 		return
 	}

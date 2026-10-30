@@ -82,7 +82,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		if record.baseBuildName == "" {
 			return result, &Error{Code: "BaseRepositoryNotReady", Status: 422}
 		}
-		baseRepository := VersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.baseBuildName, record.BaseRepositoryUID)
+		baseRepository := VersionPath(m.root, record.Project, record.TargetArch, record.baseBuildName, record.BaseRepositoryUID)
 		baseIndex, err := LoadIndex(baseRepository, record.BaseRepositoryUID)
 		if err != nil {
 			return result, err
@@ -161,7 +161,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if err := fileutil.AtomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
 		return result, retryableRepositoryError(err)
 	}
-	finalParent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "history", record.BuildName, "steps")
+	finalParent := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "history", record.BuildName, "steps")
 	if err := os.MkdirAll(finalParent, 0750); err != nil {
 		return result, retryableRepositoryError(err)
 	}

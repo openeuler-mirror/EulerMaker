@@ -278,7 +278,6 @@ func TestJobForSpecConstruction(t *testing.T) {
 		ebsv1.JobBuildNameLabel:    testBuild,
 		ebsv1.JobSpecNameLabel:     specname.Encode("a"),
 		ebsv1.JobPackageNameLabel:  packageNameLabelValue("repo1"),
-		ebsv1.BuildTargetOSLabel:   testOS,
 		ebsv1.BuildTargetArchLabel: testArch,
 	}
 	for k, want := range wantLabels {
@@ -787,10 +786,29 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 
 // --- Per-round build-target Config snapshot ---
 
+func TestEnsureImageUsesProjectDistro(t *testing.T) {
+	c, client, _, _ := newTestController(t)
+	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
+		Targets: map[string]ebsv1.BuildTargetConfigEntry{
+			"distro-a": {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: "image-a:v1"}}},
+			"distro-b": {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: "image-b:v1"}}},
+		},
+	})
+	for distro, want := range map[string]string{"distro-a": "image-a:v1", "distro-b": "image-b:v1"} {
+		project := testProjectObj(ebsv1.ProjectActive)
+		project.Spec.Distro = distro
+		round := &reconcileRound{build: testBuildObj("full"), project: project}
+		image, err := c.ensureImage(context.Background(), round, &roundDispatch{arch: testArch})
+		if err != nil || image != want {
+			t.Fatalf("distro %s: image=%q, err=%v; want %q", distro, image, err, want)
+		}
+	}
+}
+
 func TestEnsureImageRoundSnapshot(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	client.SetBuildTargetContent(testBuildTargetContent())
-	round := &reconcileRound{key: testNS + "/" + testBuild, build: testBuildObj("full")}
+	round := &reconcileRound{key: testNS + "/" + testBuild, build: testBuildObj("full"), project: testProjectObj(ebsv1.ProjectActive)}
 	dispatch := &roundDispatch{arch: testArch}
 
 	image, err := c.ensureImage(context.Background(), round, dispatch)
@@ -1152,11 +1170,11 @@ func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
 	want := []any{
 		map[string]any{"url": contentURL, "priority": float64(10)},
 		map[string]any{
-			"url":      "https://repo.example.com/openEuler-24.03-LTS-SP3/local/" + round.build.Spec.BuildTarget.Arch,
+			"url":      "https://repo.example.com/openEuler-24.03-LTS-SP3/local/" + round.build.Spec.Arch,
 			"priority": float64(99),
 		},
 		map[string]any{
-			"url":      "https://repo.example.com/openEuler-24.03-LTS-SP3/everything/" + round.build.Spec.BuildTarget.Arch,
+			"url":      "https://repo.example.com/openEuler-24.03-LTS-SP3/everything/" + round.build.Spec.Arch,
 			"priority": float64(99),
 		},
 	}

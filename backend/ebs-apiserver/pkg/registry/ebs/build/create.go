@@ -35,8 +35,7 @@ var _ coordinationBackend = (*es.Client)(nil)
 
 func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.Build) error {
 	selector := labels.SelectorFromSet(labels.Set{
-		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
-		ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+		ebsv1.BuildTargetArchLabel: build.Spec.Arch,
 	})
 	nonSingle, err := labels.NewRequirement(ebsv1.BuildTypeLabel, selection.NotEquals, []string{string(ebsv1.BuildTypeSingle)})
 	if err != nil {
@@ -58,7 +57,7 @@ func validateLatestBuild(ctx context.Context, builds rest.Lister, build *ebsv1.B
 	}
 	previous := &list.Items[0]
 	return apierrors.NewConflict(ebsv1.Resource("builds"), build.Name,
-		fmt.Errorf("latest non-single build %q for target %s/%s is not terminal (phase %q)", previous.Name, build.Spec.BuildTarget.OS, build.Spec.BuildTarget.Arch, previous.Status.Phase))
+		fmt.Errorf("latest non-single build %q for target %s is not terminal (phase %q)", previous.Name, build.Spec.Arch, previous.Status.Phase))
 }
 
 func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *ebsv1.Build) error {
@@ -67,8 +66,7 @@ func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *
 	}
 	exists, err := builds.Exists(ctx, &internalversion.ListOptions{
 		LabelSelector: labels.SelectorFromSet(labels.Set{
-			ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
-			ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+			ebsv1.BuildTargetArchLabel: build.Spec.Arch,
 			ebsv1.BuildTypeLabel:       string(ebsv1.BuildTypeFull),
 		}),
 		FieldSelector: fields.OneTermEqualSelector("status.phase", string(ebsv1.BuildSuccess)),
@@ -88,9 +86,25 @@ func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *
 	}}
 }
 
-func ValidateBuildTargetConfig(configs rest.Getter, next rest.ValidateObjectFunc) rest.ValidateObjectFunc {
+// ValidateBuildInputs checks the target and packages using one Project read.
+func ValidateBuildInputs(configs, projects rest.Getter) rest.ValidateObjectFunc {
 	return func(ctx context.Context, obj runtime.Object) error {
-		build := obj.(*ebsv1.Build)
+		build, ok := obj.(*ebsv1.Build)
+		if !ok || build == nil {
+			return apierrors.NewInternalError(fmt.Errorf("expected Build, got %T", obj))
+		}
+		name, ok := request.NamespaceFrom(ctx)
+		if !ok || name == "" {
+			return apierrors.NewBadRequest("project namespace is required")
+		}
+		parent, err := projects.Get(request.WithNamespace(ctx, ""), name, &metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		project, ok := parent.(*ebsv1.Project)
+		if !ok || project == nil {
+			return apierrors.NewInternalError(fmt.Errorf("expected Project, got %T", parent))
+		}
 		configuration, err := configs.Get(request.WithNamespace(ctx, ""), ebsv1.BuildTargetConfigName, &metav1.GetOptions{})
 		if err != nil {
 			return apierrors.NewServiceUnavailable("build-target Config is unavailable")
@@ -103,40 +117,11 @@ func ValidateBuildTargetConfig(configs rest.Getter, next rest.ValidateObjectFunc
 		if err := yaml.UnmarshalStrict([]byte(conf.Spec.Content), &content); err != nil {
 			return apierrors.NewServiceUnavailable("invalid build-target Config content")
 		}
-		if errs := validation.ValidateBuildTarget(build, &content); len(errs) > 0 {
-			return apierrors.NewInvalid(ebsv1.Kind("Build"), build.Name, errs)
+		errs := validation.ValidateBuildTarget(build, project, &content)
+		if build.Spec.BuildType == ebsv1.BuildTypeSingle || build.Spec.BuildType == ebsv1.BuildTypeSpecified {
+			errs = append(errs, validation.ValidateBuildPackages(build, project)...)
 		}
-		if next != nil {
-			return next(ctx, obj)
-		}
-		return nil
-	}
-}
-
-// ValidateProjectPackages checks requested packages against the current Project.
-func ValidateProjectPackages(projects rest.Getter) rest.ValidateObjectFunc {
-	return func(ctx context.Context, obj runtime.Object) error {
-		build, ok := obj.(*ebsv1.Build)
-		if !ok || build == nil {
-			return apierrors.NewInternalError(fmt.Errorf("expected Build, got %T", obj))
-		}
-		if build.Spec.BuildType != ebsv1.BuildTypeSingle && build.Spec.BuildType != ebsv1.BuildTypeSpecified {
-			return nil
-		}
-		project, ok := request.NamespaceFrom(ctx)
-		if !ok || project == "" {
-			return apierrors.NewBadRequest("project namespace is required")
-		}
-		// Projects are cluster-scoped; never carry the Build namespace into their GET.
-		parent, err := projects.Get(request.WithNamespace(ctx, ""), project, &metav1.GetOptions{})
-		if err != nil {
-			return err
-		}
-		p, ok := parent.(*ebsv1.Project)
-		if !ok || p == nil {
-			return apierrors.NewInternalError(fmt.Errorf("expected Project, got %T", parent))
-		}
-		if errs := validation.ValidateBuildPackages(build, p); len(errs) > 0 {
+		if len(errs) > 0 {
 			return apierrors.NewInvalid(ebsv1.Kind("Build"), build.Name, errs)
 		}
 		return nil

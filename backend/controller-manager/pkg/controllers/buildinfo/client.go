@@ -299,7 +299,7 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 	if project == "" {
 		return nil, contractErrorf("project is required")
 	}
-	obj, err := c.readGet(ctx, source.ProjectsGVR, "", project, "metadata,status.phase")
+	obj, err := c.readGet(ctx, source.ProjectsGVR, "", project, "metadata,status.phase,spec.distro")
 	if err != nil {
 		return nil, err
 	}

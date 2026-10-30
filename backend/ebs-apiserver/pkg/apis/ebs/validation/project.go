@@ -22,24 +22,31 @@ func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	} else if obj.Name == "default" {
 		allErrs = append(allErrs, field.Forbidden(namePath, "default is reserved for global resources"))
 	}
-	if len(obj.Spec.BuildTargets) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets"), "at least one build target is required"))
+	distroPath := field.NewPath("spec", "distro")
+	if obj.Spec.Distro == "" {
+		allErrs = append(allErrs, field.Required(distroPath, "distro is required"))
+	} else {
+		for _, message := range validation.IsValidLabelValue(obj.Spec.Distro) {
+			allErrs = append(allErrs, field.Invalid(distroPath, obj.Spec.Distro, message))
+		}
 	}
-	seenTargets := make(map[[2]string]struct{}, len(obj.Spec.BuildTargets))
-	for i, bt := range obj.Spec.BuildTargets {
-		if len(bt.OS) == 0 {
-			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("os"), "os is required"))
-		}
-		if len(bt.Arch) == 0 {
-			allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTargets").Index(i).Child("arch"), "arch is required"))
-		}
-		if bt.OS != "" && bt.Arch != "" {
-			key := [2]string{bt.OS, bt.Arch}
-			if _, exists := seenTargets[key]; exists {
-				allErrs = append(allErrs, field.Duplicate(field.NewPath("spec", "buildTargets").Index(i), key))
+	archesPath := field.NewPath("spec", "buildArches")
+	if len(obj.Spec.BuildArches) == 0 {
+		allErrs = append(allErrs, field.Required(archesPath, "at least one architecture is required"))
+	}
+	seenArches := make(map[string]bool, len(obj.Spec.BuildArches))
+	for i, arch := range obj.Spec.BuildArches {
+		if arch == "" {
+			allErrs = append(allErrs, field.Required(archesPath.Index(i), "arch is required"))
+		} else {
+			for _, message := range validation.IsValidLabelValue(arch) {
+				allErrs = append(allErrs, field.Invalid(archesPath.Index(i), arch, message))
 			}
-			seenTargets[key] = struct{}{}
 		}
+		if seenArches[arch] {
+			allErrs = append(allErrs, field.Duplicate(archesPath.Index(i), arch))
+		}
+		seenArches[arch] = true
 	}
 	packageReposPath := field.NewPath("spec", "packageRepos")
 	allErrs = append(allErrs, validateDefaultRef(obj.Spec.DefaultRef, field.NewPath("spec", "defaultRef"))...)
@@ -73,7 +80,11 @@ func ValidateProjectArtifactInstance(project *ebsv1.Project, content *ebsv1.Serv
 }
 
 func ValidateProjectUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList {
-	return ValidateProject(newObj)
+	errs := ValidateProject(newObj)
+	if newObj.Spec.Distro != oldObj.Spec.Distro {
+		errs = append(errs, field.Invalid(field.NewPath("spec", "distro"), newObj.Spec.Distro, "field is immutable"))
+	}
+	return errs
 }
 
 func ValidateProjectStatusUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList {

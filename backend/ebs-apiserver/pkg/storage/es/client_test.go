@@ -170,8 +170,8 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	if !strings.Contains(mappings["ebs-builds-v1"], `"dynamic":false`) {
 		t.Fatalf("build data does not disable dynamic mapping: %s", mappings["ebs-builds-v1"])
 	}
-	if strings.Contains(mappings["ebs-builds-v1"], `"buildTarget"`) {
-		t.Fatalf("build index unexpectedly maps buildTarget: %s", mappings["ebs-builds-v1"])
+	if strings.Contains(mappings["ebs-builds-v1"], `"arch"`) {
+		t.Fatalf("build index unexpectedly maps arch: %s", mappings["ebs-builds-v1"])
 	}
 	if !strings.Contains(mappings["ebs-projects-v1"], `"phase"`) || !strings.Contains(mappings["ebs-projects-v1"], `"stage"`) {
 		t.Fatalf("default mapping does not map status fields: %s", mappings["ebs-projects-v1"])

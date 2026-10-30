@@ -80,7 +80,6 @@ func NewManager(root string, c Config, repositories *repository.Manager, materia
 func normalizeReleaseRequest(in CreateReleaseRequest) (CreateReleaseRequest, string, error) {
 	if !validIdentifier(in.BuildName) ||
 		!validIdentifier(in.Project) ||
-		!validIdentifier(in.TargetOS) ||
 		!validIdentifier(in.TargetArch) ||
 		!validIdentifier(in.SourceRepositoryUID) {
 		return in, "", &Error{Code: "InvalidReleaseRequest", Status: http.StatusUnprocessableEntity}
@@ -114,7 +113,6 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 		source.State != repository.RepositoryReady ||
 		source.Project != in.Project ||
 		source.BuildName != in.BuildName ||
-		source.TargetOS != in.TargetOS ||
 		source.TargetArch != in.TargetArch {
 		return nil, 0, &Error{Code: "SourceRepositoryNotReady", Status: http.StatusUnprocessableEntity}
 	}
@@ -158,7 +156,6 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 		SchemaVersion:       1,
 		BuildName:           in.BuildName,
 		Project:             in.Project,
-		TargetOS:            in.TargetOS,
 		TargetArch:          in.TargetArch,
 		SourceRepositoryUID: in.SourceRepositoryUID,
 		ExcludeSpecs:        in.ExcludeSpecs,
@@ -370,7 +367,7 @@ func (m *Manager) remove(name string) {
 		return
 	}
 	source := m.Path(record)
-	trashDir := filepath.Join(m.root, ".release-trash", record.Project, record.TargetOS, record.TargetArch)
+	trashDir := filepath.Join(m.root, ".release-trash", record.Project, record.TargetArch)
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -467,7 +464,6 @@ func (m *Manager) readRecord(name string) (*ReleaseRecord, error) {
 	}
 	if record.BuildName != name ||
 		!validIdentifier(record.Project) ||
-		!validIdentifier(record.TargetOS) ||
 		!validIdentifier(record.TargetArch) {
 		return nil, errors.New("invalid release metadata")
 	}
@@ -483,11 +479,11 @@ func (m *Manager) Path(record *ReleaseRecord) string {
 }
 
 func (m *Manager) releaseTargetDir(record *ReleaseRecord) string {
-	return filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch)
+	return filepath.Join(m.root, "repositories", record.Project, record.TargetArch)
 }
 
 func releaseContentURL(record *ReleaseRecord) string {
-	return "/repositories/" + record.Project + "/" + record.TargetOS + "/" + record.TargetArch + "/"
+	return "/repositories/" + record.Project + "/" + record.TargetArch + "/"
 }
 
 func cloneRelease(in *ReleaseRecord) *ReleaseRecord {

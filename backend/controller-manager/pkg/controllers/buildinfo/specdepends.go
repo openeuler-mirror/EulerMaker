@@ -117,7 +117,7 @@ func (c *Controller) assembleSpecDepends(
 	for _, repo := range snapshot.Spec.PackageRepos {
 		originURLs[repo.Name] = repo.URL
 	}
-	arch := round.build.Spec.BuildTarget.Arch
+	arch := round.build.Spec.Arch
 	macros := payloadMacros(round.current.Spec.BuildPayload)
 	merged := map[string]specparse.SpecDepend{}
 	var commitMissing []string

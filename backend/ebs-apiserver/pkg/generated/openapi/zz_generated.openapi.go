@@ -29,7 +29,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"ebs-api/ebs/v1.BuildResourceContent":    schema_ebs_api_ebs_v1_BuildResourceContent(ref),
 		"ebs-api/ebs/v1.BuildSpec":               schema_ebs_api_ebs_v1_BuildSpec(ref),
 		"ebs-api/ebs/v1.BuildStatus":             schema_ebs_api_ebs_v1_BuildStatus(ref),
-		"ebs-api/ebs/v1.BuildTarget":             schema_ebs_api_ebs_v1_BuildTarget(ref),
 		"ebs-api/ebs/v1.BuildTargetArch":         schema_ebs_api_ebs_v1_BuildTargetArch(ref),
 		"ebs-api/ebs/v1.BuildTargetConfigEntry":  schema_ebs_api_ebs_v1_BuildTargetConfigEntry(ref),
 		"ebs-api/ebs/v1.BuildTargetContent":      schema_ebs_api_ebs_v1_BuildTargetContent(ref),
@@ -635,10 +634,11 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 							Format: "",
 						},
 					},
-					"buildTarget": {
+					"arch": {
 						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
+							Description: "Arch must belong to Project.spec.buildArches; the distribution comes from Project.spec.distro.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"publish": {
@@ -665,8 +665,6 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 				},
 			},
 		},
-		Dependencies: []string{
-			"ebs-api/ebs/v1.BuildTarget"},
 	}
 }
 
@@ -723,30 +721,6 @@ func schema_ebs_api_ebs_v1_BuildStatus(ref common.ReferenceCallback) common.Open
 		},
 		Dependencies: []string{
 			"ebs-api/ebs/v1.BaseBuildRef", "k8s.io/apimachinery/pkg/apis/meta/v1.Condition", "k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
-	}
-}
-
-func schema_ebs_api_ebs_v1_BuildTarget(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Type: []string{"object"},
-				Properties: map[string]spec.Schema{
-					"os": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-					"arch": {
-						SchemaProps: spec.SchemaProps{
-							Type:   []string{"string"},
-							Format: "",
-						},
-					},
-				},
-			},
-		},
 	}
 }
 
@@ -1504,14 +1478,23 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 							Format: "",
 						},
 					},
-					"buildTargets": {
+					"distro": {
 						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
+							Description: "Distro selects the distribution in Config/build-target and is immutable after creation.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"buildArches": {
+						SchemaProps: spec.SchemaProps{
+							Description: "BuildArches lists the unique architectures available to builds in this project.",
+							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref("ebs-api/ebs/v1.BuildTarget"),
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
 									},
 								},
 							},
@@ -1547,7 +1530,7 @@ func schema_ebs_api_ebs_v1_ProjectSpec(ref common.ReferenceCallback) common.Open
 			},
 		},
 		Dependencies: []string{
-			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.BuildTarget", "ebs-api/ebs/v1.PackageRepo"},
+			"ebs-api/ebs/v1.BootstrapRepo", "ebs-api/ebs/v1.PackageRepo"},
 	}
 }
 

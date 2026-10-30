@@ -15,12 +15,12 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// reconcileRelease drives the releases of one {project}/{os}/{arch} group. In-flight releases win over
+// reconcileRelease drives the releases of one {project}/{arch} group. In-flight releases win over
 // candidates that have not started yet, and at most one object advances per round.
-func (r *reconciler) reconcileRelease(os, arch string) (controller.ReconcileResult, error) {
+func (r *reconciler) reconcileRelease(arch string) (controller.ReconcileResult, error) {
 	items, err := r.controller.client.ListRpmRepos(r.ctx, r.project, metav1.ListOptions{
 		FieldSelector: nonTerminalRpmRepoFieldSelector,
-		LabelSelector: labels.Set{ebsv1.BuildTargetOSLabel: os, ebsv1.BuildTargetArchLabel: arch}.String(),
+		LabelSelector: labels.Set{ebsv1.BuildTargetArchLabel: arch}.String(),
 	})
 	if err != nil {
 		return controller.ReconcileResult{}, classifyReadError(err)
@@ -192,8 +192,7 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 		Build:               build,
 		BuildInfo:           info,
 		SourceRepositoryUID: repo.Status.Repository.RepositoryUID,
-		TargetOS:            build.Spec.BuildTarget.OS,
-		TargetArch:          build.Spec.BuildTarget.Arch,
+		TargetArch:          build.Spec.Arch,
 	})
 	if err != nil {
 		return true, controller.ReconcileResult{}, err
@@ -223,8 +222,7 @@ func (r *reconciler) startRelease(target *releaseTarget, info *ebsv1.BuildInfo) 
 	response, err := r.artifactClient().SubmitRelease(r.ctx, CreateReleaseRequest{
 		BuildName:           confirmed.Name,
 		Project:             confirmed.Namespace,
-		TargetOS:            build.Spec.BuildTarget.OS,
-		TargetArch:          build.Spec.BuildTarget.Arch,
+		TargetArch:          build.Spec.Arch,
 		SourceRepositoryUID: transition.SourceRepositoryUID,
 		ExcludeSpecs:        transition.ExcludeSpecs,
 	})
@@ -262,10 +260,7 @@ func (r *reconciler) reloadReleaseTarget(candidate ebsv1.RpmRepo) (*ebsv1.RpmRep
 }
 
 func mismatchBuildTarget(repo *ebsv1.RpmRepo, build *ebsv1.Build) bool {
-	if repo.Labels[ebsv1.BuildTargetOSLabel] != build.Spec.BuildTarget.OS {
-		return true
-	}
-	return repo.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.BuildTarget.Arch
+	return repo.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.Arch
 }
 
 func (r *reconciler) handleReleaseResponse(repo *ebsv1.RpmRepo, transition *ebsv1.ReleaseTransition, response ReleaseResponse) (controller.ReconcileResult, error) {
@@ -368,8 +363,7 @@ func (r *reconciler) replayRelease(repo *ebsv1.RpmRepo, transition *ebsv1.Releas
 	response, err := r.artifactClient().SubmitRelease(r.ctx, CreateReleaseRequest{
 		BuildName:           repo.Name,
 		Project:             repo.Namespace,
-		TargetOS:            build.Spec.BuildTarget.OS,
-		TargetArch:          build.Spec.BuildTarget.Arch,
+		TargetArch:          build.Spec.Arch,
 		SourceRepositoryUID: transition.SourceRepositoryUID,
 		ExcludeSpecs:        transition.ExcludeSpecs,
 	})

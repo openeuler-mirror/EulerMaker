@@ -246,8 +246,7 @@ func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 			// Carry the build target so RpmRepo objects stay queryable and groupable by (os, arch)
 			// without reading the same-name Build.
 			Labels: map[string]string{
-				ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
-				ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+				ebsv1.BuildTargetArchLabel: build.Spec.Arch,
 			},
 		},
 	}

@@ -107,7 +107,7 @@ func TestGetLastPublishedBuildScopesTheQueryToTheProject(t *testing.T) {
 	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)
 	shared := &stubSharedClient{listResult: source.ListPage{Items: []runtime.Object{previous}}}
 	client := newAPIClient(shared)
-	build, err := client.GetLastPublishedBuild(context.Background(), "project-a", "openEuler-22.03-LTS", "aarch64")
+	build, err := client.GetLastPublishedBuild(context.Background(), "project-a", "aarch64")
 	if err != nil || build == nil || build.Name != "build-prev" {
 		t.Fatalf("build=%+v err=%v", build, err)
 	}
@@ -124,7 +124,7 @@ func TestGetLastPublishedBuildScopesTheQueryToTheProject(t *testing.T) {
 	if call.options.FieldSelector != lastPublishedBuildFieldSelector {
 		t.Fatalf("field selector = %q", call.options.FieldSelector)
 	}
-	for _, label := range []string{ebsv1.BuildTargetOSLabel + "=openEuler-22.03-LTS", ebsv1.BuildTargetArchLabel + "=aarch64"} {
+	for _, label := range []string{ebsv1.BuildTargetArchLabel + "=aarch64"} {
 		if !strings.Contains(call.options.LabelSelector, label) {
 			t.Fatalf("label selector %q misses %q", call.options.LabelSelector, label)
 		}
@@ -134,7 +134,7 @@ func TestGetLastPublishedBuildScopesTheQueryToTheProject(t *testing.T) {
 func TestGetLastPublishedBuildWithoutHistory(t *testing.T) {
 	shared := &stubSharedClient{}
 	client := newAPIClient(shared)
-	build, err := client.GetLastPublishedBuild(context.Background(), "project-a", "os", "arch")
+	build, err := client.GetLastPublishedBuild(context.Background(), "project-a", "arch")
 	if err != nil || build != nil {
 		t.Fatalf("build=%v err=%v", build, err)
 	}
@@ -204,7 +204,7 @@ func TestTypedGettersValidateResponses(t *testing.T) {
 			&ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"}},
 		}}}
 		client := newAPIClient(shared)
-		_, err := client.GetLastPublishedBuild(context.Background(), "project-a", "openEuler-22.03-LTS", "aarch64")
+		_, err := client.GetLastPublishedBuild(context.Background(), "project-a", "aarch64")
 		assertContractError(t, err)
 	})
 

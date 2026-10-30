@@ -20,7 +20,6 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 			State:         state,
 			Project:       "project",
 			BuildName:     "build",
-			TargetOS:      "os",
 			TargetArch:    "arch",
 		}
 		if state == RepositoryReady {
@@ -64,7 +63,6 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 		RepositoryUID: string(RepositoryReady),
 		Project:       "project",
 		BuildName:     "build",
-		TargetOS:      "os",
 		TargetArch:    "arch",
 	}
 	if err := os.Remove(filepath.Join(m.RepositoryPath(ready), "repository.json")); err != nil {
@@ -92,7 +90,6 @@ func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 		RepositoryName:    "build",
 		Project:           "project",
 		BuildName:         "build",
-		TargetOS:          "os",
 		TargetArch:        "arch",
 		BaseRepositoryUID: "base",
 		Manifests:         []ManifestReference{{JobName: "job"}},
@@ -101,7 +98,6 @@ func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 	m.records["base"] = &RepositoryRecord{
 		RepositoryUID:      "base",
 		Project:            in.Project,
-		TargetOS:           in.TargetOS,
 		TargetArch:         in.TargetArch,
 		State:              RepositoryReady,
 		SigningFingerprint: "old-key",
@@ -123,17 +119,16 @@ func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 	}
 }
 
-func TestRepositoryRejectsUnsafeTargetOS(t *testing.T) {
+func TestRepositoryRejectsUnsafeTargetArch(t *testing.T) {
 	request := CreateRepositoryRequest{
 		RepositoryName: "build",
 		Project:        "project",
 		BuildName:      "build",
-		TargetOS:       "../other",
-		TargetArch:     "x86_64",
+		TargetArch:     "../other",
 		Manifests:      []ManifestReference{{JobName: "job"}},
 	}
 	request.RepositoryUID = UID(request.Project, request.BuildName, "", request.Manifests)
 	if _, _, err := normalizeRepositoryRequest(request); err == nil {
-		t.Fatal("unsafe target OS accepted")
+		t.Fatal("unsafe target architecture accepted")
 	}
 }

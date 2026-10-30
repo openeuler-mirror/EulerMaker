@@ -182,7 +182,7 @@ func (c *Controller) advanceDownstream(
 	if err != nil {
 		return c.handleArtifactURLFailure(ctx, round, err)
 	}
-	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch, contentURL: contentURL}
+	dispatch := &roundDispatch{arch: round.build.Spec.Arch, contentURL: contentURL}
 	for _, name := range dcg.SortedNodes() {
 		ss := round.specResult(name)
 		node := dcg.Node(name)

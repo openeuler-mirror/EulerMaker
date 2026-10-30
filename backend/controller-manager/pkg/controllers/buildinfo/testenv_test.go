@@ -32,7 +32,7 @@ const (
 	testArch             = "x86_64"
 	testRepoURL          = "http://repo.local/rpms"
 	testImage            = "img:latest"
-	testReleaseReference = "artifact://default/repositories/" + testNS + "/" + testOS + "/" + testArch + "/"
+	testReleaseReference = "artifact://default/repositories/" + testNS + "/" + testArch + "/"
 	testRepomd           = `<repomd><data type="primary"><location href="repodata/primary.xml"/></data></repomd>`
 )
 
@@ -209,6 +209,7 @@ func reconcileOnce(t *testing.T, c *Controller) {
 
 func testProjectObj(phase ebsv1.ProjectPhase) *ebsv1.Project {
 	return &ebsv1.Project{
+		Spec:       ebsv1.ProjectSpec{Distro: testOS, BuildArches: []string{testArch}},
 		ObjectMeta: metav1.ObjectMeta{Name: testNS},
 		Status:     ebsv1.ProjectStatus{Phase: phase},
 	}
@@ -220,15 +221,14 @@ func testBuildObj(buildType string, packages ...string) *ebsv1.Build {
 			Namespace: testNS,
 			Name:      testBuild,
 			Labels: map[string]string{
-				ebsv1.BuildTargetOSLabel:   testOS,
 				ebsv1.BuildTargetArchLabel: testArch,
 				ebsv1.BuildTypeLabel:       buildType,
 			},
 		},
 		Spec: ebsv1.BuildSpec{
-			BuildType:   ebsv1.BuildType(buildType),
-			Packages:    packages,
-			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch},
+			BuildType: ebsv1.BuildType(buildType),
+			Packages:  packages,
+			Arch:      testArch,
 		},
 		Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing},
 	}
@@ -338,7 +338,6 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 				ebsv1.JobBuildNameLabel:    bi.Name,
 				ebsv1.JobSpecNameLabel:     specname.Encode(spec),
 				ebsv1.JobPackageNameLabel:  packageNameLabelValue(spec),
-				ebsv1.BuildTargetOSLabel:   testOS,
 				ebsv1.BuildTargetArchLabel: testArch,
 			},
 			Annotations: map[string]string{

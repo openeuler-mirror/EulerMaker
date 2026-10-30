@@ -17,7 +17,6 @@ func TestReleaseRequestNormalization(t *testing.T) {
 	request := CreateReleaseRequest{
 		BuildName:           "build",
 		Project:             "project",
-		TargetOS:            "os",
 		TargetArch:          "arch",
 		SourceRepositoryUID: "repository",
 		ExcludeSpecs:        []string{"z", "a", "a"},
@@ -33,7 +32,6 @@ func TestReleaseRequestNormalization(t *testing.T) {
 		CreateReleaseRequest{
 			BuildName:           "build",
 			Project:             "project",
-			TargetOS:            "os",
 			TargetArch:          "arch",
 			SourceRepositoryUID: "repository",
 			ExcludeSpecs:        []string{"a", "z"},
@@ -42,9 +40,9 @@ func TestReleaseRequestNormalization(t *testing.T) {
 	if err != nil || first != second {
 		t.Fatalf("digest mismatch: %q %q, %v", first, second, err)
 	}
-	request.TargetOS = "../other"
+	request.TargetArch = "../other"
 	if _, _, err := normalizeReleaseRequest(request); err == nil {
-		t.Fatal("unsafe target OS accepted")
+		t.Fatal("unsafe target architecture accepted")
 	}
 }
 
@@ -75,7 +73,6 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		RepositoryUID: "source",
 		Project:       "project",
 		BuildName:     "build",
-		TargetOS:      "openEuler",
 		TargetArch:    "x86_64",
 		RPMs: map[string]repository.RepositoryRPMMeta{
 			"keep+1.rpm": {
@@ -96,7 +93,6 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		root,
 		"repositories",
 		source.Project,
-		source.TargetOS,
 		source.TargetArch,
 		"history",
 		source.BuildName,
@@ -115,7 +111,6 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	record := ReleaseRecord{
 		BuildName:           "build",
 		Project:             "project",
-		TargetOS:            "openEuler",
 		TargetArch:          "x86_64",
 		SourceRepositoryUID: "source",
 		RequestDigest:       "request",
@@ -128,7 +123,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	if result.Digest == "" {
 		t.Fatalf("result = %#v", result)
 	}
-	releasePath := filepath.Join(root, "repositories", "project", "openEuler", "x86_64", "releases", "build")
+	releasePath := filepath.Join(root, "repositories", "project", "x86_64", "releases", "build")
 	if _, err := os.Stat(filepath.Join(releasePath, "Packages", "keep+1.rpm")); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +150,7 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := repository.RepositoryRecord{
-		RepositoryUID: "source", Project: "project", BuildName: "build", TargetOS: "openEuler", TargetArch: "x86_64",
+		RepositoryUID: "source", Project: "project", BuildName: "build", TargetArch: "x86_64",
 		RPMs: map[string]repository.RepositoryRPMMeta{
 			"keep.rpm": {
 				FileName: "keep.rpm",
@@ -168,7 +163,6 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	sourcePath := repository.VersionPath(
 		root,
 		source.Project,
-		source.TargetOS,
 		source.TargetArch,
 		source.BuildName,
 		source.RepositoryUID,
@@ -197,7 +191,6 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	record := ReleaseRecord{
 		BuildName:           "build",
 		Project:             source.Project,
-		TargetOS:            source.TargetOS,
 		TargetArch:          source.TargetArch,
 		SourceRepositoryUID: source.RepositoryUID,
 		RequestDigest:       "request",
@@ -220,7 +213,6 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 		root,
 		"repositories",
 		source.Project,
-		source.TargetOS,
 		source.TargetArch,
 		"releases",
 		record.BuildName,
@@ -245,7 +237,7 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	root := t.TempDir()
 	record := &ReleaseRecord{
-		BuildName: "build", Project: "project", TargetOS: "openEuler", TargetArch: "x86_64",
+		BuildName: "build", Project: "project", TargetArch: "x86_64",
 		RequestDigest: "request", State: ReleaseReady,
 		ReleaseDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("release"))),
 	}
@@ -282,7 +274,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 		t.Fatalf("matching metadata changed Ready release to %s", record.State)
 	}
 	response := ResponseFor(record)
-	if response.ContentURL != "/repositories/project/openEuler/x86_64/" {
+	if response.ContentURL != "/repositories/project/x86_64/" {
 		t.Fatalf("recovered release content URL = %q", response.ContentURL)
 	}
 
@@ -304,7 +296,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 
 func TestReleaseCacheTracksActiveStates(t *testing.T) {
 	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}}
-	record := &ReleaseRecord{BuildName: "build", Project: "project", TargetOS: "os", TargetArch: "arch"}
+	record := &ReleaseRecord{BuildName: "build", Project: "project", TargetArch: "arch"}
 	for _, state := range []ReleaseState{ReleaseCreating, ReleasePrepared, ReleaseReady, ReleaseDeleting, ReleaseFailed} {
 		record.State = state
 		if err := m.persist(record); err != nil {
@@ -344,7 +336,6 @@ func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 		record := &ReleaseRecord{
 			BuildName:  string(state),
 			Project:    "project",
-			TargetOS:   "os",
 			TargetArch: "arch",
 			State:      state,
 		}
@@ -371,7 +362,7 @@ func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
 	now := time.Now().UTC()
 	for i, name := range []string{"latest", "old", "current"} {
 		record := &ReleaseRecord{
-			BuildName: name, Project: "project", TargetOS: "os", TargetArch: "arch", State: ReleaseReady,
+			BuildName: name, Project: "project", TargetArch: "arch", State: ReleaseReady,
 			UpdatedAt: now.Add(-time.Duration(i+2) * time.Hour),
 		}
 		if err := os.MkdirAll(m.Path(record), 0750); err != nil {

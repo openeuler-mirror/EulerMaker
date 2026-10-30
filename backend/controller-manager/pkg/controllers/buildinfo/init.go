@@ -64,7 +64,7 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	arch := round.build.Spec.BuildTarget.Arch
+	arch := round.build.Spec.Arch
 
 	// Persist the graph before caching it or creating graph-based Jobs.
 	prefer := payloadPrefer(c.parseBuildPayload(round.key, round.current.Spec.BuildPayload))
@@ -165,7 +165,7 @@ func (c *Controller) ensureImage(ctx context.Context, round *reconcileRound, dis
 	if err != nil {
 		return "", err
 	}
-	image, err := buildImage(conf, round.build.Spec.BuildTarget)
+	image, err := buildImage(conf, round.project.Spec.Distro, round.build.Spec.Arch)
 	if err != nil {
 		return "", err
 	}
@@ -173,13 +173,13 @@ func (c *Controller) ensureImage(ctx context.Context, round *reconcileRound, dis
 	return image, nil
 }
 
-func buildImage(conf *ebsv1.BuildTargetContent, target ebsv1.BuildTarget) (string, error) {
+func buildImage(conf *ebsv1.BuildTargetContent, distro, arch string) (string, error) {
 	if conf == nil {
 		return "", fmt.Errorf("build-target Config is unavailable")
 	}
-	image := conf.Targets[target.OS].Arches[target.Arch].Image
+	image := conf.Targets[distro].Arches[arch].Image
 	if image == "" {
-		return "", fmt.Errorf("build-target Config has no image for %s/%s", target.OS, target.Arch)
+		return "", fmt.Errorf("build-target Config has no image for %s/%s", distro, arch)
 	}
 	return image, nil
 }
@@ -315,7 +315,7 @@ func (c *Controller) refreshRpmMetaSources(
 	ctx context.Context,
 	round *reconcileRound,
 ) (*rpmver.RpmMetaSources, controller.ReconcileResult, error) {
-	arch := round.build.Spec.BuildTarget.Arch
+	arch := round.build.Spec.Arch
 	sources, ok := c.rpmMetaSources.Get(round.key)
 	if !ok {
 		sources = &rpmver.RpmMetaSources{}
@@ -617,7 +617,7 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 	}
 
 	// Single builds dispatch each spec directly, without dependency gates.
-	dispatch := &roundDispatch{arch: round.build.Spec.BuildTarget.Arch}
+	dispatch := &roundDispatch{arch: round.build.Spec.Arch}
 	for _, name := range sortedSpecNames(buildSet) {
 		depend := buildSet[name]
 		ss := round.specResult(name)
@@ -659,7 +659,7 @@ func (c *Controller) loadSinglePreferSources(
 		return round.singlePreferSources, "", nil
 	}
 	sources := &rpmver.RpmMetaSources{}
-	arch := round.build.Spec.BuildTarget.Arch
+	arch := round.build.Spec.Arch
 	if err := sources.EnsureRepoLayer(ctx, rpmMetaFetch, contentURL, arch); err != nil {
 		return nil, metadataFailureReason(err, false), err
 	}

@@ -92,7 +92,7 @@ func TestSingleReleaseInputs(t *testing.T) {
 			probes := 0
 			c.releaseClient.Transport = releaseTransportFunc(func(r *http.Request) (*http.Response, error) {
 				probes++
-				want := "http://internal.example/repositories/" + testNS + "/" + testOS + "/" + testArch + "/repodata/repomd.xml"
+				want := "http://internal.example/repositories/" + testNS + "/" + testArch + "/repodata/repomd.xml"
 				if r.URL.String() != want {
 					t.Errorf("probe = %s, want %s", r.URL, want)
 				}

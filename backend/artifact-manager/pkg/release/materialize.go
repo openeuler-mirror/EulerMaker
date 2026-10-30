@@ -68,7 +68,6 @@ func (m *filesystemReleaseMaterializer) Create(
 	sourcePath := repository.VersionPath(
 		m.root,
 		source.Project,
-		source.TargetOS,
 		source.TargetArch,
 		source.BuildName,
 		source.RepositoryUID,
@@ -144,7 +143,7 @@ func (m *filesystemReleaseMaterializer) Create(
 	if err := fileutil.AtomicJSON(filepath.Join(work, "release.json"), index); err != nil {
 		return result, retryableReleaseError(err)
 	}
-	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "releases")
+	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases")
 	if err := os.MkdirAll(parent, 0750); err != nil {
 		return result, retryableReleaseError(err)
 	}

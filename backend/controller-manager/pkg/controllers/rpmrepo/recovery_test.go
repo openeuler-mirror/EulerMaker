@@ -78,7 +78,7 @@ func TestReconcileReleaseKeepsOnlyOneInFlightRelease(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.GetReleaseBuildNames) != 1 || artifacts.GetReleaseBuildNames[0] != testBuild {
@@ -113,7 +113,7 @@ func TestReconcileReleaseSkipsCandidateThatIsNotReady(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(artifacts.SubmitReleaseRequests) != 1 || artifacts.SubmitReleaseRequests[0].BuildName != "build-b" {

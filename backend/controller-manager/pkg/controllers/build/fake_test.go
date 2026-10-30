@@ -50,7 +50,7 @@ type fakeHooks struct {
 	createRpmRepo   func(request *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
 	getBuildInfo    func(project, name string) (*ebsv1.BuildInfo, error)
 	createBuildInfo func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
-	lastPublished   func(project, targetOS, targetArch string) (*ebsv1.Build, error)
+	lastPublished   func(project, targetArch string) (*ebsv1.Build, error)
 }
 
 // fakeAPI is an in-memory implementation of Client that also records every call, so tests can assert the
@@ -258,10 +258,10 @@ func (f *fakeAPI) GetBuild(_ context.Context, project, name string) (*ebsv1.Buil
 	return value, nil
 }
 
-func (f *fakeAPI) GetLastPublishedBuild(_ context.Context, project, targetOS, targetArch string) (*ebsv1.Build, error) {
+func (f *fakeAPI) GetLastPublishedBuild(_ context.Context, project, targetArch string) (*ebsv1.Build, error) {
 	f.record("GetLastPublishedBuild " + project)
 	if f.hooks.lastPublished != nil {
-		return f.hooks.lastPublished(project, targetOS, targetArch)
+		return f.hooks.lastPublished(project, targetArch)
 	}
 	return nil, nil
 }
@@ -448,7 +448,6 @@ func newBuild(project, name string, buildType ebsv1.BuildType, packages []string
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: project, UID: types.UID("build-uid-" + name), ResourceVersion: "10", Generation: 3,
 			Labels: map[string]string{
-				ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
 				ebsv1.BuildTargetArchLabel: "aarch64",
 				ebsv1.BuildTypeLabel:       string(buildType),
 			},
@@ -456,9 +455,7 @@ func newBuild(project, name string, buildType ebsv1.BuildType, packages []string
 		Spec: ebsv1.BuildSpec{
 			BuildType: buildType,
 			Packages:  packages,
-			BuildTarget: ebsv1.BuildTarget{
-				OS: "openEuler-22.03-LTS", Arch: "aarch64",
-			},
+			Arch:      "aarch64",
 		},
 	}
 	build.Status.Phase = ebsv1.BuildPending

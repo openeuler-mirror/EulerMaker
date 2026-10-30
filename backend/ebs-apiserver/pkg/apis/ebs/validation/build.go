@@ -1,7 +1,11 @@
 package validation
 
 import (
+	"fmt"
+	"slices"
+
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -26,22 +30,18 @@ func ValidateBuild(obj *ebsv1.Build) field.ErrorList {
 	if len(obj.Spec.Packages) == 0 && obj.Spec.BuildType != ebsv1.BuildTypeFull && obj.Spec.BuildType != ebsv1.BuildTypeIncremental {
 		allErrs = append(allErrs, field.Required(field.NewPath("spec", "packages"), "at least one package is required"))
 	}
-	if len(obj.Spec.BuildTarget.OS) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTarget", "os"), "os is required"))
+
+	if len(obj.Spec.Arch) == 0 {
+		allErrs = append(allErrs, field.Required(field.NewPath("spec", "arch"), "arch is required"))
 	}
-	if len(obj.Spec.BuildTarget.Arch) == 0 {
-		allErrs = append(allErrs, field.Required(field.NewPath("spec", "buildTarget", "arch"), "arch is required"))
+	for _, message := range validation.IsValidLabelValue(obj.Spec.Arch) {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "arch"), obj.Spec.Arch, message))
 	}
 	labelsPath := field.NewPath("metadata", "labels")
-	if value, ok := obj.Labels[ebsv1.BuildTargetOSLabel]; !ok || len(value) == 0 {
-		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetOSLabel), "target OS label is required"))
-	} else if value != obj.Spec.BuildTarget.OS {
-		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTargetOSLabel), value, "must match spec.buildTarget.os"))
-	}
 	if value, ok := obj.Labels[ebsv1.BuildTargetArchLabel]; !ok || len(value) == 0 {
 		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTargetArchLabel), "target architecture label is required"))
-	} else if value != obj.Spec.BuildTarget.Arch {
-		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTargetArchLabel), value, "must match spec.buildTarget.arch"))
+	} else if value != obj.Spec.Arch {
+		allErrs = append(allErrs, field.Invalid(labelsPath.Key(ebsv1.BuildTargetArchLabel), value, "must match spec.arch"))
 	}
 	if value, ok := obj.Labels[ebsv1.BuildTypeLabel]; !ok || len(value) == 0 {
 		allErrs = append(allErrs, field.Required(labelsPath.Key(ebsv1.BuildTypeLabel), "build type label is required"))
@@ -69,10 +69,14 @@ func validateBuildGitRef(build *ebsv1.Build) field.ErrorList {
 	return errs
 }
 
-func ValidateBuildTarget(build *ebsv1.Build, content *ebsv1.BuildTargetContent) field.ErrorList {
-	if _, exists := content.Targets[build.Spec.BuildTarget.OS].Arches[build.Spec.BuildTarget.Arch]; !exists {
-		return field.ErrorList{field.Invalid(field.NewPath("spec", "buildTarget"), build.Spec.BuildTarget,
-			"target is not configured in build-target Config")}
+func ValidateBuildTarget(build *ebsv1.Build, project *ebsv1.Project, content *ebsv1.BuildTargetContent) field.ErrorList {
+	path := field.NewPath("spec", "arch")
+	if !slices.Contains(project.Spec.BuildArches, build.Spec.Arch) {
+		return field.ErrorList{field.Invalid(path, build.Spec.Arch, "architecture is not configured in Project.spec.buildArches")}
+	}
+	if _, exists := content.Targets[project.Spec.Distro].Arches[build.Spec.Arch]; !exists {
+		return field.ErrorList{field.Invalid(path, build.Spec.Arch,
+			fmt.Sprintf("distro %q and arch %q are not configured in build-target Config", project.Spec.Distro, build.Spec.Arch))}
 	}
 	return nil
 }

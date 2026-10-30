@@ -98,7 +98,7 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 	for _, phase := range ebsv1.RpmRepoReleasePhaseValues() {
 		for _, checkpoint := range []bool{false, true} {
 			obj := valid()
-			obj.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePhase(phase), ContentURL: "/repositories/project/os/arch/"}
+			obj.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePhase(phase), ContentURL: "/repositories/project/arch/"}
 			if checkpoint {
 				obj.Status.Release.Transition = &ebsv1.ReleaseTransition{SourceRepositoryUID: "base"}
 			}

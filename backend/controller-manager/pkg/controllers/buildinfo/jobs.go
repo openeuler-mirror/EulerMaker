@@ -426,7 +426,7 @@ func (c *Controller) jobForSpec(
 	sources *rpmver.RpmMetaSources,
 ) *ebsv1.Job {
 	buildInfo := round.current
-	target := round.build.Spec.BuildTarget
+	arch := round.build.Spec.Arch
 	artifactInstance := "default"
 	if round.project != nil && round.project.Annotations[ebsv1.ProjectArtifactsAnnotation] != "" {
 		artifactInstance = round.project.Annotations[ebsv1.ProjectArtifactsAnnotation]
@@ -441,8 +441,7 @@ func (c *Controller) jobForSpec(
 				ebsv1.JobBuildNameLabel:    buildInfo.Name,
 				ebsv1.JobSpecNameLabel:     specname.Encode(specName),
 				ebsv1.JobPackageNameLabel:  packageNameLabelValue(depend.RepoName),
-				ebsv1.BuildTargetOSLabel:   target.OS,
-				ebsv1.BuildTargetArchLabel: target.Arch,
+				ebsv1.BuildTargetArchLabel: arch,
 			},
 			Annotations: map[string]string{
 				annDispatchGeneration:            strconv.FormatInt(generation, 10),
@@ -454,8 +453,8 @@ func (c *Controller) jobForSpec(
 			Runtime:        ebsv1.ExecutionTypeContainer,
 			RuntimeSpec:    runtime.RawExtension{Raw: runtimeSpec},
 			TimeoutSeconds: jobTimeoutSeconds,
-			Resources:      resolveResources(resource, specName, target.Arch),
-			NodeSelector:   map[string]string{runnerArchSelector: target.Arch},
+			Resources:      resolveResources(resource, specName, arch),
+			NodeSelector:   map[string]string{runnerArchSelector: arch},
 			Payload:        c.jobPayload(round, specName, depend, snapshot, contentURL, sources),
 		},
 	}
@@ -523,7 +522,7 @@ func (c *Controller) jobPayload(
 		payload["clone_url"] = entry.CloneURL
 		payload["commit_id"] = entry.CommitID
 	}
-	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepos, round.build.Spec.BuildTarget.Arch)
+	bootstrapRepos := bootstrapRepoURLs(round.current.Spec.BootstrapRepos, round.build.Spec.Arch)
 	repoReference := jobRepositoryReference(round, contentURL)
 	repoURLs := repoPayloadURLs(repoReference, bootstrapRepos)
 	if len(repoURLs) == 0 && !round.isSingle() {
