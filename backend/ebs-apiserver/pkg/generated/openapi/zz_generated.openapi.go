@@ -463,6 +463,14 @@ func schema_ebs_api_ebs_v1_BuildInfoSpec(ref common.ReferenceCallback) common.Op
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image is the build image resolved once when the BuildInfo is created.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"buildPayload": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},
@@ -483,6 +491,7 @@ func schema_ebs_api_ebs_v1_BuildInfoSpec(ref common.ReferenceCallback) common.Op
 						},
 					},
 				},
+				Required: []string{"image"},
 			},
 		},
 		Dependencies: []string{

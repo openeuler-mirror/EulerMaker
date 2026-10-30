@@ -236,13 +236,8 @@ func (c *Controller) advanceDownstream(
 		if ss = round.specResult(name); failedSpecBuildStatus(ss.Status) {
 			continue
 		}
-		// Resolve the build-target Config once per round when needed.
-		image, err := c.ensureImage(ctx, round, dispatch)
-		if err != nil {
-			return controller.ReconcileResult{}, err
-		}
 		if result, err := c.dispatchSpec(
-			ctx, round, name, &depend, snapshot, image, dispatch.contentURL, sources,
+			ctx, round, name, &depend, snapshot, round.current.Spec.Image, dispatch.contentURL, sources,
 		); err != nil ||
 			result != (controller.ReconcileResult{}) {
 			return result, err

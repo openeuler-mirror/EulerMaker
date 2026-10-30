@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -194,7 +195,18 @@ func (r *reconciler) ensureBuildInfo() (*ebsv1.BuildInfo, ensureOutcome) {
 		if err != nil {
 			return nil, classifyProjectError(err)
 		}
-		return newBuildInfo(r.current, project), nil
+		content, err := r.controller.client.GetBuildTargetContent(ctx)
+		if err != nil {
+			return nil, classifyReadError(err)
+		}
+		if content == nil {
+			return nil, controller.NewPermanentError(fmt.Errorf("build-target Config is unavailable"))
+		}
+		image := content.Targets[project.Spec.Distro].Arches[r.current.Spec.Arch].Image
+		if image == "" {
+			return nil, controller.NewPermanentError(fmt.Errorf("build-target Config has no image for %s/%s", project.Spec.Distro, r.current.Spec.Arch))
+		}
+		return newBuildInfo(r.current, project, image), nil
 	})
 }
 
@@ -260,11 +272,15 @@ func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 	return repo
 }
 
-func newBuildInfo(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.BuildInfo {
+func newBuildInfo(build *ebsv1.Build, project *ebsv1.Project, image string) *ebsv1.BuildInfo {
 	return &ebsv1.BuildInfo{
 		TypeMeta:   metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "BuildInfo"},
 		ObjectMeta: metav1.ObjectMeta{Name: build.Name, Namespace: build.Namespace},
-		Spec:       ebsv1.BuildInfoSpec{BuildPayload: project.Spec.BuildPayload, BootstrapRepos: copyBootstrapRepos(project.Spec.BootstrapRepos)},
+		Spec: ebsv1.BuildInfoSpec{
+			Image:          image,
+			BuildPayload:   project.Spec.BuildPayload,
+			BootstrapRepos: copyBootstrapRepos(project.Spec.BootstrapRepos),
+		},
 	}
 }
 

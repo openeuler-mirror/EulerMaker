@@ -131,6 +131,52 @@ func TestGetLastPublishedBuildScopesTheQueryToTheProject(t *testing.T) {
 	}
 }
 
+func TestAPIClientGetBuildTargetContent(t *testing.T) {
+	for _, content := range []string{
+		"targets: {os: {arches: {aarch64: {image: 'build:arm'}}}}",
+		`{"targets":{"os":{"arches":{"aarch64":{"image":"build:arm"}}}}}`,
+	} {
+		shared := &stubSharedClient{getResult: &ebsv1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName, UID: "config-uid", ResourceVersion: "1"},
+			Spec:       ebsv1.ConfigSpec{Content: content},
+		}}
+		got, err := newAPIClient(shared).GetBuildTargetContent(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Targets["os"].Arches["aarch64"].Image != "build:arm" {
+			t.Fatalf("content = %+v", got)
+		}
+		call := shared.gets[0]
+		if call.gvr != source.ConfigsGVR || call.namespace != "" || call.name != ebsv1.BuildTargetConfigName {
+			t.Fatalf("request = %+v", call)
+		}
+	}
+}
+
+func TestAPIClientBuildTargetReadErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		result    runtime.Object
+		err       error
+		permanent bool
+	}{
+		{name: "read failure", err: errors.New("connection interrupted")},
+		{name: "wrong response type", result: &ebsv1.Project{}, permanent: true},
+		{name: "malformed content", result: &ebsv1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: ebsv1.BuildTargetConfigName, UID: "config-uid", ResourceVersion: "1"},
+			Spec:       ebsv1.ConfigSpec{Content: "targets: ["},
+		}, permanent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := newAPIClient(&stubSharedClient{getResult: tc.result, getErr: tc.err}).GetBuildTargetContent(context.Background())
+			if err == nil || controller.IsPermanent(classifyReadError(err)) != tc.permanent {
+				t.Fatalf("error = %v, want permanent=%v", err, tc.permanent)
+			}
+		})
+	}
+}
+
 func TestGetLastPublishedBuildWithoutHistory(t *testing.T) {
 	shared := &stubSharedClient{}
 	client := newAPIClient(shared)

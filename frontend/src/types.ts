@@ -94,6 +94,7 @@ export interface Build {
 export interface BuildInfo {
   metadata?: ObjectMeta;
   spec?: {
+    image: string;
     buildPayload?: string;
     bootstrapRepos?: BootstrapRepo[];
   };

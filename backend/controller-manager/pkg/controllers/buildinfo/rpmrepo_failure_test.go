@@ -255,7 +255,6 @@ func TestSinglePreferMetadataDownloadWaitsBeforeDispatch(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
 	client.SetBuildResourceContent(testBuildResourceContent())
-	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
 	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
 	client.SeedBuildInfo(bi)

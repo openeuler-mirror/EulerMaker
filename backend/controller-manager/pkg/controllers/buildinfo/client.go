@@ -56,9 +56,6 @@ type Client interface {
 	GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
 	// GetBuildResourceContent reads the cluster-wide default resource table.
 	GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error)
-	// GetBuildTargetContent returns a snapshot for one Job creation batch. Callers must not refetch it per Job or use it
-	// to mutate a created Job.
-	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 }
 
 // newAPIClient wraps the shared controller-manager API client.
@@ -299,7 +296,7 @@ func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Proj
 	if project == "" {
 		return nil, contractErrorf("project is required")
 	}
-	obj, err := c.readGet(ctx, source.ProjectsGVR, "", project, "metadata,status.phase,spec.distro")
+	obj, err := c.readGet(ctx, source.ProjectsGVR, "", project, "metadata,status.phase")
 	if err != nil {
 		return nil, err
 	}
@@ -341,26 +338,6 @@ func (c *apiClient) GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildRe
 	var content ebsv1.BuildResourceContent
 	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
 		return nil, fmt.Errorf("decode build-resource Config: %w", err)
-	}
-	return &content, nil
-}
-
-func (c *apiClient) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error) {
-	obj, err := c.readGet(ctx, source.ConfigsGVR, "", ebsv1.BuildTargetConfigName)
-	if err != nil {
-		return nil, err
-	}
-	config, ok := obj.(*ebsv1.Config)
-	if !ok || config == nil || config.Name != ebsv1.BuildTargetConfigName || config.Namespace != "" ||
-		config.UID == "" || config.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected build-target Config response: %T", obj)
-	}
-	var content ebsv1.BuildTargetContent
-	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
-		return nil, fmt.Errorf("decode build-target Config: %w", err)
-	}
-	if content.Targets == nil {
-		return nil, contractErrorf("unexpected build-target content: targets is missing")
 	}
 	return &content, nil
 }

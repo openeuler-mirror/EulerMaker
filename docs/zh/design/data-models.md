@@ -255,7 +255,7 @@ type BuildSpec struct {
 | `publish` | *bool | 否 | 仅非 single 允许设置；创建时省略由 apiserver 补为 `true`，显式 `false` 跳过正式发布但仍生成过程仓。single 必须省略，否则拒绝请求 |
 | `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
 
-Build 只记录目标架构，不重复保存发行版标识。apiserver 使用同一次 Project 读取完成架构归属校验，并以 `Project.spec.distro + Build.spec.arch` 检查 `Config/build-target` 的镜像映射。BuildInfo Controller 从所属 Project 读取不可变的 `spec.distro` 解析镜像；镜像配置的读取时机和 tag/digest 边界见 [Config 构建流程](data-models~config.md#25-构建流程)。
+Build 只记录目标架构，不重复保存发行版标识。apiserver 使用同一次 Project 读取完成架构归属校验，并以 `Project.spec.distro + Build.spec.arch` 检查 `Config/build-target` 的镜像映射。Build Controller 创建 BuildInfo 时从所属 Project 读取不可变的 `spec.distro`，解析并固化镜像至 `BuildInfo.spec.image`；镜像配置的读取时机和 tag/digest 边界见 [Config 构建流程](data-models~config.md#25-构建流程)。
 
 Build 创建后，除 `incremental` 类型在 Pending 阶段由 Build Controller 幂等更新 `spec.packages` 外，其余 `spec` 字段不可修改。`packages` 允许为空数组表示没有构建种子；仅当 Build 进入 Prepared 后，才表示本轮种子已确认。普通用户不能修改 Controller 计算结果。运行状态通过 `/status` 子资源更新。
 
@@ -361,6 +361,7 @@ type BuildInfo struct {
 
 ```go
 type BuildInfoSpec struct {
+    Image string                       `json:"image"`
     BuildPayload string                `json:"buildPayload,omitempty"`
     BootstrapRepos []BootstrapRepo      `json:"bootstrapRepos,omitempty"`
 }
@@ -368,6 +369,7 @@ type BuildInfoSpec struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
+| `image` | string | 必填；Build Controller 创建时按 Project.spec.distro + Build.spec.arch 解析 Config/build-target 后固化，创建后不可修改；所有 Job 复用该镜像引用，tag 不保证内容不变 |
 | `buildPayload` | string | Build Controller 创建时从所属 Project.spec.buildPayload 原样复制的构建环境宏（YAML）；未配置时为空，已有 BuildInfo 不覆盖，不跟随 Project 后续变更 |
 | `bootstrapRepos` | []BootstrapRepo | Build Controller 创建时从所属 Project.spec.bootstrapRepos 深拷贝，已有 BuildInfo 不覆盖；供构建任务使用的引导 RPM 仓库 |
 
@@ -732,7 +734,7 @@ type PackageResourceConfig struct {
 
 `default.requests` 必须同时包含 CPU 和 memory；`packages` 可为空。仅允许 CPU、memory 资源键；包名和架构名按 [构建资源内容](./data-models~config.md#3-构建资源内容) 的规则校验。按表级默认值、包级默认值、架构专属值逐字段合并，同一级 request 未给 limit 时取该级 request；最终 limits 均不得低于 requests。内容解析器需拒绝未知字段和重复 YAML key，不能静默丢失规则。
 
-BuildInfo Controller 读取 `Config/build-target` 与 `Config/build-resource`，分别固化镜像及资源到 Job；Job 创建后配置变化不回写。Script 是独立资源，不复用 Config 内容。
+Build Controller 读取 `Config/build-target` 固化镜像到 BuildInfo；BuildInfo Controller 复用该镜像，并读取 `Config/build-resource` 固化资源到 Job；已有对象不随配置变化回写。Script 是独立资源，不复用 Config 内容。
 
 `services` 的内容由公共 `ServiceConfigContent` 解析，包含 Artifact Manager 实例表 `artifactManagers` 和单个 Git Server 配置 `gitServer`；两类服务共用 `ServiceEndpoints`，分别记录控制面 `internalURL`、内网 Runner 的 `runnerInternalURL` 和外网 Runner 的 `runnerExternalURL`。字段、默认对象和消费边界统一见 [服务配置内容](data-models~config.md#4-服务配置内容)。
 

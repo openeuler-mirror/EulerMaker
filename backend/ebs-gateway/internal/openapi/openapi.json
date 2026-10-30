@@ -1600,8 +1600,16 @@
           },
           "buildPayload": {
             "type": "string"
+          },
+          "image": {
+            "default": "",
+            "description": "Image is the build image resolved once when the BuildInfo is created.",
+            "type": "string"
           }
         },
+        "required": [
+          "image"
+        ],
         "type": "object"
       },
       "ebs-api.ebs.v1.BuildInfoStatus": {

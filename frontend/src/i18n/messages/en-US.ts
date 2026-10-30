@@ -105,7 +105,7 @@ export default {
   buildTargetConfig: {
     conflict: "Configuration changed on the server. Reload and merge your edits; current changes are not saved.",
     title: "Build configuration",
-    hint: "Configure supported OS, architectures and images for new Jobs.",
+    hint: "Configure supported OS, architectures and images. Images are fixed when BuildInfo is created; existing builds are unaffected by updates.",
     loadFailed: "Unable to load build configuration",
     saved: "Build configuration saved",
     list: "List editor",

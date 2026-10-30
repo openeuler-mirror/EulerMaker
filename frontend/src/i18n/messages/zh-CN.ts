@@ -102,7 +102,7 @@ export default {
   buildTargetConfig: {
     conflict: "配置已被其他人修改，请重新加载后合并修改；当前编辑内容尚未保存。",
     title: "构建配置",
-    hint: "维护支持的 OS、Arch 和构建镜像，镜像配置供后续创建 Job 使用。",
+    hint: "维护支持的 OS、Arch 和构建镜像；镜像在创建 BuildInfo 时固化，已有构建不受配置更新影响。",
     loadFailed: "无法加载构建配置",
     saved: "构建配置已保存",
     list: "列表编辑",

@@ -42,8 +42,6 @@ type fakeClient struct {
 	snapshotReadFields   []string
 	rpmrepos             map[string]*ebsv1.RpmRepo
 	buildResourceContent *ebsv1.BuildResourceContent
-	buildTargetContent   *ebsv1.BuildTargetContent
-	buildTargetFailed    bool
 	artifactEndpoints    map[string]string
 	artifactReads        int
 
@@ -130,20 +128,6 @@ func (f *fakeClient) InjectRead(kind string, times int, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.injectedReads[kind] = &injectedRead{times: times, err: err}
-}
-
-// SetBuildTargetContent injects the build-target Config singleton (nil restores not-found).
-func (f *fakeClient) SetBuildTargetContent(conf *ebsv1.BuildTargetContent) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.buildTargetContent = conf
-}
-
-// FailBuildTargetContent makes GetBuildTargetContent return a query failure.
-func (f *fakeClient) FailBuildTargetContent() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.buildTargetFailed = true
 }
 
 // Seed helpers pre-populate storage with server-assigned metadata and return the stored copy.
@@ -499,18 +483,6 @@ func (f *fakeClient) GetBuildResourceContent(_ context.Context) (*ebsv1.BuildRes
 		return nil, ErrNotFound
 	}
 	return f.buildResourceContent.DeepCopy(), nil
-}
-
-func (f *fakeClient) GetBuildTargetContent(_ context.Context) (*ebsv1.BuildTargetContent, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.buildTargetFailed {
-		return nil, fmt.Errorf("injected build-target Config query failure")
-	}
-	if f.buildTargetContent == nil {
-		return nil, ErrNotFound
-	}
-	return f.buildTargetContent.DeepCopy(), nil
 }
 
 func notSentFake(operation, resource string, err error) error {

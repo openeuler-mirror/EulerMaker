@@ -9,10 +9,19 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func ValidateBuildInfo(obj *ebsv1.BuildInfo) field.ErrorList { return nil }
+func ValidateBuildInfo(obj *ebsv1.BuildInfo) field.ErrorList {
+	if strings.TrimSpace(obj.Spec.Image) == "" {
+		return field.ErrorList{field.Required(field.NewPath("spec", "image"), "build image is required")}
+	}
+	return nil
+}
 
 func ValidateBuildInfoUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {
-	return ValidateBuildInfo(newObj)
+	allErrs := ValidateBuildInfo(newObj)
+	if newObj.Spec.Image != oldObj.Spec.Image {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "image"), "build image is immutable"))
+	}
+	return allErrs
 }
 
 func ValidateBuildInfoStatusUpdate(newObj, oldObj *ebsv1.BuildInfo) field.ErrorList {

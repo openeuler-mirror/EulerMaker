@@ -214,6 +214,8 @@ type BuildInfo struct {
 }
 
 type BuildInfoSpec struct {
+	// Image is the build image resolved once when the BuildInfo is created.
+	Image          string          `json:"image"`
 	BuildPayload   string          `json:"buildPayload,omitempty"`
 	BootstrapRepos []BootstrapRepo `json:"bootstrapRepos,omitempty"`
 }
