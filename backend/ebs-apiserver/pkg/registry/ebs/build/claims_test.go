@@ -167,7 +167,7 @@ func testManager(f *coordinationFake) *ClaimManager {
 	return newClaimManager(f, s, s)
 }
 func testBuild(name, typ string) *ebsv1.Build {
-	return &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "project-a", UID: types.UID("uid-" + name), Labels: map[string]string{ebsv1.BuildTargetOSLabel: "os", ebsv1.BuildTargetArchLabel: "arch", ebsv1.BuildTypeLabel: typ}}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: "arch"}}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildPending}}
+	return &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "project-a", UID: types.UID("uid-" + name), Labels: map[string]string{ebsv1.BuildTargetArchLabel: "arch", ebsv1.BuildTypeLabel: typ}}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), Arch: "arch"}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildPending}}
 }
 func (f *coordinationFake) persist(b *ebsv1.Build) func() (runtime.Object, error) {
 	return func() (runtime.Object, error) {
@@ -219,7 +219,7 @@ func TestClaimTargetsAndSingle(t *testing.T) {
 	f := newCoordinationFake()
 	m := testManager(f)
 	archBaseline := testBuild("arch-baseline", "full")
-	archBaseline.Spec.BuildTarget.Arch = "other"
+	archBaseline.Spec.Arch = "other"
 	archBaseline.Labels[ebsv1.BuildTargetArchLabel] = "other"
 	archBaseline.Status.Phase = ebsv1.BuildSuccess
 	f.builds[archBaseline.Namespace+"/"+archBaseline.Name] = archBaseline
@@ -229,7 +229,7 @@ func TestClaimTargetsAndSingle(t *testing.T) {
 	f.builds[projectBaseline.Namespace+"/"+projectBaseline.Name] = projectBaseline
 	for i, b := range []*ebsv1.Build{testBuild("a", "full"), testBuild("b", "single"), testBuild("c", "incremental"), testBuild("d", "specified")} {
 		if i == 2 {
-			b.Spec.BuildTarget.Arch = "other"
+			b.Spec.Arch = "other"
 			b.Labels[ebsv1.BuildTargetArchLabel] = "other"
 		}
 		if i == 3 {
@@ -358,7 +358,7 @@ func TestClaimWriteUnknown(t *testing.T) {
 			} else if err != errUnknown {
 				t.Fatal(err)
 			}
-			c, getErr := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch"))
+			c, getErr := m.get(context.Background(), coordinationID(b.Namespace, "arch"))
 			if getErr != nil {
 				t.Fatal(getErr)
 			}
@@ -395,7 +395,7 @@ func TestClaimCASUnknownNeverSendsBuild(t *testing.T) {
 	if err := m.scan(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	c, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch"))
+	c, err := m.get(context.Background(), coordinationID(b.Namespace, "arch"))
 	if err != nil || c.State != creating {
 		t.Fatalf("lost unknown claim: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestClaimTerminalDeleteAndStaleCleanup(t *testing.T) {
 				b.Status.Phase = ebsv1.BuildAborted
 			}
 			m.afterWrite(context.Background(), b, deleted)
-			if _, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch")); !es.IsStatus(err, 404) {
+			if _, err := m.get(context.Background(), coordinationID(b.Namespace, "arch")); !es.IsStatus(err, 404) {
 				t.Fatalf("claim not released: %v", err)
 			}
 			next := testBuild("b", "full")
@@ -450,7 +450,7 @@ func TestClaimTerminalDeleteAndStaleCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			m.afterWrite(context.Background(), b, true)
-			c, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch"))
+			c, err := m.get(context.Background(), coordinationID(b.Namespace, "arch"))
 			if err != nil || c.BuildName != "b" {
 				t.Fatalf("old cleanup deleted new owner: %v", err)
 			}
@@ -473,7 +473,7 @@ func TestClaimCleanupAfterCrash(t *testing.T) {
 	if err := m.scan(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch")); !es.IsStatus(err, 404) {
+	if _, err := m.get(context.Background(), coordinationID(b.Namespace, "arch")); !es.IsStatus(err, 404) {
 		t.Fatal("leaked claim")
 	}
 }
@@ -486,7 +486,7 @@ func TestClaimConfirmedRejectionReleases(t *testing.T) {
 	if !apierrors.IsBadRequest(err) {
 		t.Fatal(err)
 	}
-	if _, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch")); !es.IsStatus(err, 404) {
+	if _, err := m.get(context.Background(), coordinationID(b.Namespace, "arch")); !es.IsStatus(err, 404) {
 		t.Fatal("rejected create retained claim")
 	}
 	next := testBuild("b", "full")
@@ -503,7 +503,7 @@ func TestClaimUsesBuildNameWithoutUID(t *testing.T) {
 	if _, err := m.create(context.Background(), b, false, f.persist(b)); err != nil {
 		t.Fatal(err)
 	}
-	c, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch"))
+	c, err := m.get(context.Background(), coordinationID(b.Namespace, "arch"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,11 +530,11 @@ func TestClaimIdentityMismatchRetained(t *testing.T) {
 	if _, err := m.create(context.Background(), b, false, f.persist(b)); err != nil {
 		t.Fatal(err)
 	}
-	f.builds[b.Namespace+"/"+b.Name].Spec.BuildTarget.Arch = "other"
-	if _, _, err := m.recoverOne(context.Background(), coordinationID(b.Namespace, "os", "arch")); err == nil {
+	f.builds[b.Namespace+"/"+b.Name].Spec.Arch = "other"
+	if _, _, err := m.recoverOne(context.Background(), coordinationID(b.Namespace, "arch")); err == nil {
 		t.Fatal("identity mismatch ignored")
 	}
-	if _, err := m.get(context.Background(), coordinationID(b.Namespace, "os", "arch")); err != nil {
+	if _, err := m.get(context.Background(), coordinationID(b.Namespace, "arch")); err != nil {
 		t.Fatal("identity mismatch released claim")
 	}
 }
@@ -544,7 +544,7 @@ func TestClaimScanPagination(t *testing.T) {
 	m := testManager(f)
 	for i := 0; i < 101; i++ {
 		b := testBuild(time.Unix(int64(i), 0).UTC().Format("150405"), "full")
-		b.Spec.BuildTarget.Arch = b.Name
+		b.Spec.Arch = b.Name
 		if _, err := m.acquire(context.Background(), b); err != nil {
 			t.Fatal(err)
 		}
@@ -564,7 +564,7 @@ func TestClaimLateBuildAndVersionedCleanup(t *testing.T) {
 	if _, err := m.create(context.Background(), b, false, func() (runtime.Object, error) { return nil, errUnknown }); err != errUnknown {
 		t.Fatal(err)
 	}
-	id := coordinationID(b.Namespace, "os", "arch")
+	id := coordinationID(b.Namespace, "arch")
 	unknown, _, err := m.recoverOne(context.Background(), id)
 	if err != nil || !unknown {
 		t.Fatalf("unknown=%v err=%v", unknown, err)

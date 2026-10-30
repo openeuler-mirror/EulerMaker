@@ -41,8 +41,8 @@ func TestReferenceAndResolve(t *testing.T) {
 func TestResolvePreservesManagementPrefix(t *testing.T) {
 	got, err := Resolve(func(string) (string, error) {
 		return "https://internal.example/management/art%2001/", nil
-	}, "artifact://art-01/repositories/project/openEuler%3A24/x86_64/")
-	want := "https://internal.example/management/art%2001/repositories/project/openEuler%3A24/x86_64/"
+	}, "artifact://art-01/repositories/project%20name/x86_64/")
+	want := "https://internal.example/management/art%2001/repositories/project%20name/x86_64/"
 	if err != nil || got != want {
 		t.Fatalf("Resolve()=%q, %v; want %q", got, err, want)
 	}

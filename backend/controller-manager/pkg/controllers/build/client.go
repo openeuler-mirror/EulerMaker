@@ -22,7 +22,7 @@ const lastPublishedBuildFieldSelector = "status.phase=Success,status.stage=publi
 type Client interface {
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
-	GetLastPublishedBuild(ctx context.Context, project, targetOS, targetArch string) (*ebsv1.Build, error)
+	GetLastPublishedBuild(ctx context.Context, project, targetArch string) (*ebsv1.Build, error)
 	GetSnapshot(ctx context.Context, project, name string) (*ebsv1.Snapshot, error)
 	GetRpmRepo(ctx context.Context, project, name string) (*ebsv1.RpmRepo, error)
 	GetBuildInfo(ctx context.Context, project, name string) (*ebsv1.BuildInfo, error)
@@ -82,9 +82,8 @@ func (c *apiClient) GetBuild(ctx context.Context, project, name string) (*ebsv1.
 // GetLastPublishedBuild returns the most recent Build of the project that published successfully for the
 // given target OS and architecture, or nil when the project has no such Build yet.
 // The lookup stays inside one Project: a cluster-wide limit=1 query would select another Project's Build.
-func (c *apiClient) GetLastPublishedBuild(ctx context.Context, project, targetOS, targetArch string) (*ebsv1.Build, error) {
+func (c *apiClient) GetLastPublishedBuild(ctx context.Context, project, targetArch string) (*ebsv1.Build, error) {
 	selector := labels.Set{
-		ebsv1.BuildTargetOSLabel:   targetOS,
 		ebsv1.BuildTargetArchLabel: targetArch,
 	}.String()
 	page, err := c.client.ListProjectPage(ctx, source.BuildsGVR, project, metav1.ListOptions{

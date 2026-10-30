@@ -132,33 +132,33 @@ func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
 		s.browseCurrentRelease(w, r)
 		return
 	}
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 4)
-	if len(parts) != 4 || !validIdentifier(parts[0]) || !validIdentifier(parts[1]) || !validIdentifier(parts[2]) {
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 3)
+	if len(parts) != 3 || !validIdentifier(parts[0]) || !validIdentifier(parts[1]) {
 		writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid release path", false, nil)
 		return
 	}
-	record, err := s.lookupCurrentRelease(parts[0], parts[1], parts[2], parts[3] == "repodata/repomd.xml")
+	record, err := s.lookupCurrentRelease(parts[0], parts[1], parts[2] == "repodata/repomd.xml")
 	if err != nil {
 		s.writeReleaseError(w, r, err)
 		return
 	}
 	if record == nil {
-		if parts[3] == "repodata/repomd.xml" {
+		if parts[2] == "repodata/repomd.xml" {
 			writeErr(w, r, http.StatusNotFound, "ReleaseNotPublished", "release not published", false, nil)
 		} else {
 			s.releaseNotFound(w, r)
 		}
 		return
 	}
-	s.serveReleaseContent(w, r, record, parts[3], parts[3] == "repodata/repomd.xml")
+	s.serveReleaseContent(w, r, record, parts[2], parts[2] == "repodata/repomd.xml")
 }
 
-func (s *Server) currentRelease(project, targetOS, targetArch string) (*release.ReleaseRecord, error) {
-	return s.lookupCurrentRelease(project, targetOS, targetArch, false)
+func (s *Server) currentRelease(project, targetArch string) (*release.ReleaseRecord, error) {
+	return s.lookupCurrentRelease(project, targetArch, false)
 }
 
-func (s *Server) lookupCurrentRelease(project, targetOS, targetArch string, probe bool) (*release.ReleaseRecord, error) {
-	current := filepath.Join(s.cfg.DataDir, "repositories", project, targetOS, targetArch, "current")
+func (s *Server) lookupCurrentRelease(project, targetArch string, probe bool) (*release.ReleaseRecord, error) {
+	current := filepath.Join(s.cfg.DataDir, "repositories", project, targetArch, "current")
 	if info, err := os.Lstat(current); err == nil && info.Mode()&os.ModeSymlink == 0 && probe {
 		return nil, releaseContentUnavailable()
 	}
@@ -180,7 +180,7 @@ func (s *Server) lookupCurrentRelease(project, targetOS, targetArch string, prob
 	if err != nil {
 		return nil, err
 	}
-	if !ok || record.State != release.ReleaseReady || record.Project != project || record.TargetOS != targetOS || record.TargetArch != targetArch {
+	if !ok || record.State != release.ReleaseReady || record.Project != project || record.TargetArch != targetArch {
 		if probe {
 			return nil, releaseContentUnavailable()
 		}

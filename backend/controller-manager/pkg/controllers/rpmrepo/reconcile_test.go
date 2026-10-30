@@ -19,17 +19,16 @@ import (
 const (
 	testProject = "project"
 	testBuild   = "build-a"
-	testOS      = "openEuler"
 	testArch    = "aarch64"
 )
 
 // syncReleaseForTest exercises the release decision independently of the
 // repository-entry path. Production reaches it through the same RpmRepo key.
-func syncReleaseForTest(c *Controller, ctx context.Context, project, os, arch string) (controller.ReconcileResult, error) {
+func syncReleaseForTest(c *Controller, ctx context.Context, project, arch string) (controller.ReconcileResult, error) {
 	now := c.clock.Now().UTC()
 	r := &reconciler{controller: c, ctx: ctx, key: rpmRepoKey(project, testBuild), project: project,
 		now: metav1.NewTime(now), nowTime: now, sameRoundAttempts: 1}
-	result, err := r.reconcileRelease(os, arch)
+	result, err := r.reconcileRelease(arch)
 	return c.plan(result, err)
 }
 
@@ -113,7 +112,6 @@ func newRpmRepo(name string) *ebsv1.RpmRepo {
 			ResourceVersion: "1",
 			Generation:      1,
 			Labels: map[string]string{
-				ebsv1.BuildTargetOSLabel:   testOS,
 				ebsv1.BuildTargetArchLabel: testArch,
 			},
 		},
@@ -125,8 +123,8 @@ func newBuild(name string) *ebsv1.Build {
 	return &ebsv1.Build{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testProject, UID: types.UID("uid-" + name), ResourceVersion: "1"},
 		Spec: ebsv1.BuildSpec{
-			BuildType:   "incremental",
-			BuildTarget: ebsv1.BuildTarget{OS: testOS, Arch: testArch},
+			BuildType: "incremental",
+			Arch:      testArch,
 		},
 		Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing},
 	}
@@ -189,7 +187,6 @@ func newSucceededJob(name, spec, uid string, created time.Time) ebsv1.Job {
 			Labels: map[string]string{
 				ebsv1.JobBuildNameLabel:    testBuild,
 				ebsv1.JobSpecNameLabel:     specname.Encode(spec),
-				ebsv1.BuildTargetOSLabel:   testOS,
 				ebsv1.BuildTargetArchLabel: testArch,
 			},
 		},
@@ -320,7 +317,7 @@ func TestReconcileBuildSubmitsBatchAndWaitsForMaterialization(t *testing.T) {
 		t.Fatalf("expected one SubmitRepository call, got %d", len(artifacts.SubmitRepositoryRequests))
 	}
 	request := artifacts.SubmitRepositoryRequests[0]
-	if request.RepositoryUID != transition.RepositoryUID || request.RepositoryName != testBuild || request.TargetOS != testOS || request.TargetArch != testArch {
+	if request.RepositoryUID != transition.RepositoryUID || request.RepositoryName != testBuild || request.TargetArch != testArch {
 		t.Fatalf("unexpected materialization request %+v", request)
 	}
 	if client.Jobs[testProject][0].Status.Phase != ebsv1.JobSucceeded {

@@ -29,7 +29,7 @@ func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestResumeReleaseSurfacesReadFailures(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err == nil {
 		t.Fatalf("a failed re-read must surface as an error")
 	}
 	if len(artifacts.GetReleaseBuildNames) != 0 {
@@ -168,7 +168,7 @@ func TestReleaseCandidateWithDeletedObjectIsSkipped(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestResumeReleaseToleratesAClearedCheckpoint(t *testing.T) {
 			artifacts := NewFakeArtifactManager()
 			c := newTestController(t, client, artifacts, testConfig())
 
-			result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 			if err != nil {
 				t.Fatalf("sync: %v", err)
 			}
@@ -247,7 +247,7 @@ func TestReleaseReplayStopsWhenTheBuildIsGone(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("a missing Build must stop the round instead of failing it: %v", err)
 	}
@@ -285,11 +285,11 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/project/openEuler/aarch64/", UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/project/aarch64/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}

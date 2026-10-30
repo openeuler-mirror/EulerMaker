@@ -41,7 +41,6 @@ type CreateRepositoryRequest struct {
 	RepositoryName    string              `json:"repositoryName"`
 	Project           string              `json:"project"`
 	BuildName         string              `json:"buildName"`
-	TargetOS          string              `json:"targetOS"`
 	TargetArch        string              `json:"targetArch"`
 	BaseRepositoryUID string              `json:"baseRepositoryUID,omitempty"`
 	Manifests         []ManifestReference `json:"manifests"`
@@ -53,7 +52,6 @@ type RepositoryRecord struct {
 	RepositoryName     string                       `json:"repositoryName"`
 	Project            string                       `json:"project"`
 	BuildName          string                       `json:"buildName"`
-	TargetOS           string                       `json:"targetOS"`
 	TargetArch         string                       `json:"targetArch"`
 	BaseRepositoryUID  string                       `json:"baseRepositoryUID,omitempty"`
 	Manifests          []ManifestReference          `json:"manifests"`

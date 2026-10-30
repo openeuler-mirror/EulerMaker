@@ -14,7 +14,6 @@ type PublishPolicyInput struct {
 	Build               *ebsv1.Build
 	BuildInfo           *ebsv1.BuildInfo
 	SourceRepositoryUID string
-	TargetOS            string
 	TargetArch          string
 }
 

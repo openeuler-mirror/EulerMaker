@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
-
-	ebsv1 "ebs-api/ebs/v1"
 )
 
 func assertErrorList(t *testing.T, errs field.ErrorList, wantErrs int, wantFields map[string]field.ErrorType) {
@@ -29,11 +27,4 @@ func hasFieldError(errs field.ErrorList, wantField string, wantType field.ErrorT
 		}
 	}
 	return false
-}
-
-func validBuildTarget() ebsv1.BuildTarget {
-	return ebsv1.BuildTarget{
-		OS:   "openEuler-22.03-LTS",
-		Arch: "x86_64",
-	}
 }

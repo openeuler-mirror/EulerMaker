@@ -43,14 +43,14 @@ func (l *latestBuildLister) List(ctx context.Context, opts *internalversion.List
 		l.t.Fatal("must query latest without phase filtering")
 	}
 	for _, test := range []struct {
-		os, arch, typ string
-		match         bool
+		arch, typ string
+		match     bool
 	}{
-		{"os", "arch", "full", true}, {"os", "arch", "incremental", true},
-		{"os", "arch", "specified", true}, {"os", "arch", "single", false},
-		{"other", "arch", "full", false}, {"os", "other", "full", false},
+		{"arch", "full", true}, {"arch", "incremental", true},
+		{"arch", "specified", true}, {"arch", "single", false},
+		{"other", "full", false},
 	} {
-		got := opts.LabelSelector.Matches(labels.Set{ebsv1.BuildTargetOSLabel: test.os, ebsv1.BuildTargetArchLabel: test.arch, ebsv1.BuildTypeLabel: test.typ})
+		got := opts.LabelSelector.Matches(labels.Set{ebsv1.BuildTargetArchLabel: test.arch, ebsv1.BuildTypeLabel: test.typ})
 		if got != test.match {
 			l.t.Fatalf("selector mismatch for %+v", test)
 		}
@@ -67,7 +67,7 @@ func (l *latestBuildLister) List(ctx context.Context, opts *internalversion.List
 
 func TestValidateLatestBuild(t *testing.T) {
 	ctx := request.WithNamespace(context.Background(), "project-a")
-	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: "arch"}}}
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{Arch: "arch"}}
 	for _, phase := range []ebsv1.BuildPhase{ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing, ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped, "", "Unknown"} {
 		t.Run(string(phase), func(t *testing.T) {
 			err := validateLatestBuild(ctx, &latestBuildLister{t: t, phase: phase}, build)
@@ -113,13 +113,13 @@ func (l *fullBuildLister) Exists(ctx context.Context, opts *internalversion.List
 		l.t.Fatal("must query one successful full Build")
 	}
 	for _, tc := range []struct {
-		os, arch, typ string
-		match         bool
+		arch, typ string
+		match     bool
 	}{
-		{"os", "arch", "full", true}, {"os", "arch", "incremental", false},
-		{"os", "other", "full", false}, {"other", "arch", "full", false},
+		{"arch", "full", true}, {"arch", "incremental", false},
+		{"other", "full", false},
 	} {
-		if got := opts.LabelSelector.Matches(labels.Set{ebsv1.BuildTargetOSLabel: tc.os, ebsv1.BuildTargetArchLabel: tc.arch, ebsv1.BuildTypeLabel: tc.typ}); got != tc.match {
+		if got := opts.LabelSelector.Matches(labels.Set{ebsv1.BuildTargetArchLabel: tc.arch, ebsv1.BuildTypeLabel: tc.typ}); got != tc.match {
 			l.t.Fatalf("selector mismatch for %+v", tc)
 		}
 	}
@@ -129,7 +129,7 @@ func (l *fullBuildLister) Exists(ctx context.Context, opts *internalversion.List
 func TestValidateFullBuildBaseline(t *testing.T) {
 	ctx := request.WithNamespace(context.Background(), "project-a")
 	for _, typ := range []string{"incremental", "specified"} {
-		build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: "arch"}}}
+		build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), Arch: "arch"}}
 		if err := validateFullBuildBaseline(ctx, &fullBuildLister{t: t, exists: true}, build); err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +203,7 @@ func TestCreateBuildGitRef(t *testing.T) {
 					})})
 				store := esstore.New(client, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
 				project := &projectGetter{t: t}
-				store.SetCreateHook(ValidateProjectPackages(project))
+				store.SetCreateHook(ValidateBuildInputs(defaultConfigGetter(t), project))
 				build := testBuild("01234567-89ab-4cde-8fab-0123456789ab", tc.typ)
 				build.Spec.Packages = []string{tc.packageName}
 				build.Annotations = map[string]string{ebsv1.BuildGitRefAnnotation: tc.ref}
@@ -331,16 +331,16 @@ func TestUnconfiguredBuildDoesNotAcquireClaim(t *testing.T) {
 		t.Run(buildType, func(t *testing.T) {
 			store := esstore.New(nil, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
 			calls := 0
-			hook := ValidateBuildTargetConfig(confGetter{obj: configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), t: t}, nil)
+			hook := ValidateBuildInputs(confGetter{obj: configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{}}), t: t}, &projectGetter{t: t})
 			store.SetCreateHook(func(ctx context.Context, obj runtime.Object) error { calls++; return hook(ctx, obj) })
 			store.SetCreateTransaction(func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error) {
 				t.Fatal("invalid target acquired claim")
 				return nil, nil
 			})
-			obj := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "01234567-89ab-4cde-8fab-0123456789ab", Namespace: "project"}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(buildType), Packages: []string{"gcc"}, BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}}}
-			_, err := store.Create(request.WithNamespace(context.Background(), "project"), obj, nil, &metav1.CreateOptions{})
+			obj := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "01234567-89ab-4cde-8fab-0123456789ab", Namespace: "project-a"}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(buildType), Packages: []string{"gcc"}, Arch: "x86_64"}}
+			_, err := store.Create(request.WithNamespace(context.Background(), "project-a"), obj, nil, &metav1.CreateOptions{})
 			if !apierrors.IsInvalid(err) || calls != 1 {
-				t.Fatalf("calls=%d error=%v", calls, err)
+				t.Fatalf("error=%v", err)
 			}
 		})
 	}
@@ -376,18 +376,18 @@ func TestBuildTargetConfigCreateHook(t *testing.T) {
 		{"missing", nil, apierrors.NewNotFound(ebsv1.Resource("configs"), ebsv1.BuildTargetConfigName), "arch", 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			hook := ValidateBuildTargetConfig(confGetter{tc.obj, tc.err, t}, func(context.Context, runtime.Object) error { calls++; return nil })
-			err := hook(request.WithNamespace(context.Background(), "project"), &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: "os", Arch: tc.arch}}})
+			parent := &projectGetter{t: t}
+			hook := ValidateBuildInputs(confGetter{tc.obj, tc.err, t}, parent)
+			err := hook(request.WithNamespace(context.Background(), "project-a"), &ebsv1.Build{Spec: ebsv1.BuildSpec{Arch: tc.arch}})
 			if tc.code == 0 {
-				if err != nil || calls != 1 {
-					t.Fatalf("calls=%d error=%v", calls, err)
+				if err != nil || parent.calls != 1 {
+					t.Fatalf("error=%v", err)
 				}
 				return
 			}
 			status, ok := err.(apierrors.APIStatus)
-			if !ok || int(status.Status().Code) != tc.code || calls != 0 {
-				t.Fatalf("calls=%d error=%v", calls, err)
+			if !ok || int(status.Status().Code) != tc.code || parent.calls != 1 {
+				t.Fatalf("error=%v", err)
 			}
 		})
 	}
@@ -409,7 +409,7 @@ func (g *projectGetter) Get(ctx context.Context, name string, _ *metav1.GetOptio
 	if ns, _ := request.NamespaceFrom(ctx); ns != "" || name != "project-a" {
 		g.t.Fatalf("unexpected project GET: namespace=%q name=%q", ns, name)
 	}
-	return &ebsv1.Project{Spec: ebsv1.ProjectSpec{PackageRepos: []ebsv1.PackageRepo{{Name: "gcc"}, {Name: "bash"}}}}, g.err
+	return &ebsv1.Project{Spec: ebsv1.ProjectSpec{Distro: "os", BuildArches: []string{"arch", "x86_64"}, PackageRepos: []ebsv1.PackageRepo{{Name: "gcc"}, {Name: "bash"}}}}, g.err
 }
 
 func TestValidateProjectPackages(t *testing.T) {
@@ -421,8 +421,8 @@ func TestValidateProjectPackages(t *testing.T) {
 				if missing {
 					packages = append(packages, "unknown", "")
 				}
-				b := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a"}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), Packages: packages}}
-				err := ValidateProjectPackages(g)(request.WithNamespace(context.Background(), "project-a"), b)
+				b := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a"}, Spec: ebsv1.BuildSpec{BuildType: ebsv1.BuildType(typ), Arch: "arch", Packages: packages}}
+				err := ValidateBuildInputs(defaultConfigGetter(t), g)(request.WithNamespace(context.Background(), "project-a"), b)
 				checked := typ == "single" || typ == "specified"
 				if checked && missing {
 					if !apierrors.IsInvalid(err) {
@@ -435,10 +435,7 @@ func TestValidateProjectPackages(t *testing.T) {
 				} else if err != nil {
 					t.Fatal(err)
 				}
-				wantCalls := 0
-				if checked {
-					wantCalls = 1
-				}
+				wantCalls := 1
 				if g.calls != wantCalls {
 					t.Fatalf("GET count = %d, want %d", g.calls, wantCalls)
 				}
@@ -451,8 +448,14 @@ func TestProjectReadErrorsPreserved(t *testing.T) {
 	for _, err := range []error{apierrors.NewNotFound(ebsv1.Resource("projects"), "project-a"), apierrors.NewServiceUnavailable("unavailable"), context.Canceled} {
 		g := &projectGetter{t: t, err: err}
 		b := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "single", Packages: []string{"gcc"}}}
-		if got := ValidateProjectPackages(g)(request.WithNamespace(context.Background(), "project-a"), b); got != err {
+		if got := ValidateBuildInputs(defaultConfigGetter(t), g)(request.WithNamespace(context.Background(), "project-a"), b); got != err {
 			t.Fatalf("got %v, want original %v", got, err)
 		}
 	}
+}
+
+func defaultConfigGetter(t *testing.T) confGetter {
+	return confGetter{t: t, obj: configForTest(ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
+		"os": {Arches: map[string]ebsv1.BuildTargetArch{"arch": {Image: "build:v1"}}},
+	}})}
 }

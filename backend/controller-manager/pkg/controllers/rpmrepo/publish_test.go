@@ -36,7 +36,7 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/" + testProject + "/" + testOS + "/" + testArch + "/", UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/" + testProject + "/" + testArch + "/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -57,7 +57,7 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 	if updated.Status.Release.SourceRepositoryUID != "repo-1" {
 		t.Fatalf("unexpected source repository UID %q", updated.Status.Release.SourceRepositoryUID)
 	}
-	if got, want := updated.Status.Release.ContentURL, "artifact:///repositories/"+testProject+"/"+testOS+"/"+testArch+"/"; got != want {
+	if got, want := updated.Status.Release.ContentURL, "artifact:///repositories/"+testProject+"/"+testArch+"/"; got != want {
 		t.Fatalf("release contentURL = %q, want %q", got, want)
 	}
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionTrue, ebsv1.RpmRepoReasonReleaseActivated) {
@@ -73,7 +73,7 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 	if options.FieldSelector != nonTerminalRpmRepoFieldSelector {
 		t.Fatalf("unexpected field selector %q", options.FieldSelector)
 	}
-	wantSelector := labels.Set{ebsv1.BuildTargetOSLabel: testOS, ebsv1.BuildTargetArchLabel: testArch}.String()
+	wantSelector := labels.Set{ebsv1.BuildTargetArchLabel: testArch}.String()
 	if options.LabelSelector != wantSelector {
 		t.Fatalf("unexpected label selector %q, want %q", options.LabelSelector, wantSelector)
 	}
@@ -199,7 +199,7 @@ func TestReconcileReleaseSkipsCandidateWhenPolicySaysNo(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestReconcileReleaseReplacesResidualReleaseWithSkipped(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if len(client.StatusWrites) != 1 {

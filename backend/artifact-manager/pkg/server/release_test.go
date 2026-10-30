@@ -36,7 +36,7 @@ func (m *testReleaseMaterializer) Create(ctx context.Context, record release.Rel
 		return release.Result{}, ctx.Err()
 	case <-m.release:
 	}
-	root := filepath.Join(m.root, "repositories", record.Project, record.TargetOS, record.TargetArch, "releases", record.BuildName)
+	root := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases", record.BuildName)
 	if err := os.MkdirAll(filepath.Join(root, "Packages"), 0750); err != nil {
 		return release.Result{}, err
 	}
@@ -82,7 +82,6 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 		RepositoryName: "build-1",
 		Project:        "project-1",
 		BuildName:      "build-1",
-		TargetOS:       "openEuler",
 		TargetArch:     "x86_64",
 		State:          repository.RepositoryReady,
 		CreatedAt:      now,
@@ -93,7 +92,6 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 	request := release.CreateReleaseRequest{
 		BuildName:           source.BuildName,
 		Project:             source.Project,
-		TargetOS:            source.TargetOS,
 		TargetArch:          source.TargetArch,
 		SourceRepositoryUID: source.RepositoryUID,
 		ExcludeSpecs:        []string{"skip", "skip"},
@@ -103,8 +101,8 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 
 func TestStableReleaseAvailability(t *testing.T) {
 	server, request, materializer := newReleaseTestServer(t)
-	base := "/repositories/" + request.Project + "/" + request.TargetOS + "/" + request.TargetArch + "/"
-	targetDir := filepath.Join(server.cfg.DataDir, "repositories", request.Project, request.TargetOS, request.TargetArch)
+	base := "/repositories/" + request.Project + "/" + request.TargetArch + "/"
+	targetDir := filepath.Join(server.cfg.DataDir, "repositories", request.Project, request.TargetArch)
 	assertResponse := func(status int, code string) {
 		t.Helper()
 		response := repositoryRequest(t, server, http.MethodGet, base+"repodata/repomd.xml", nil)
@@ -225,14 +223,13 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if state.ContentURL != "/repositories/project-1/openEuler/x86_64/" {
+	if state.ContentURL != "/repositories/project-1/x86_64/" {
 		t.Fatalf("content URL = %q", state.ContentURL)
 	}
 	for path, want := range map[string]string{
-		"/repositories/project-1/":           "openEuler/",
-		"/repositories/project-1/openEuler/": "x86_64/",
-		state.ContentURL:                     "Packages/",
-		state.ContentURL + "repodata/":       "repomd.xml",
+		"/repositories/project-1/":     "x86_64/",
+		state.ContentURL:               "Packages/",
+		state.ContentURL + "repodata/": "repomd.xml",
 	} {
 		response := repositoryRequest(t, server, http.MethodGet, path, nil)
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
@@ -240,9 +237,9 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 		}
 	}
 	for _, path := range []string{
-		"/repositories/project-1/openEuler/x86_64/history/",
-		"/repositories/project-1/openEuler/x86_64/releases/",
-		"/repositories/project-1/openEuler/no-release/",
+		"/repositories/project-1/x86_64/history/",
+		"/repositories/project-1/x86_64/releases/",
+		"/repositories/project-1/no-release/",
 	} {
 		if response := repositoryRequest(t, server, http.MethodGet, path, nil); response.Code != http.StatusNotFound {
 			t.Fatalf("hidden directory %s = %d", path, response.Code)
@@ -269,13 +266,12 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 	close(materializer.release)
 	second := first
 	second.BuildName = "build-2"
-	second.TargetOS = "openEuler-mainline"
+	second.TargetArch = "aarch64"
 	second.SourceRepositoryUID = "source-repository-2"
 	now := time.Now().UTC()
 	secondSource := &repository.RepositoryRecord{
 		RepositoryUID: second.SourceRepositoryUID, RepositoryName: second.BuildName,
-		Project: second.Project, BuildName: second.BuildName, TargetOS: second.TargetOS,
-		TargetArch: second.TargetArch, State: repository.RepositoryReady, CreatedAt: now, UpdatedAt: now,
+		Project: second.Project, BuildName: second.BuildName, TargetArch: second.TargetArch, State: repository.RepositoryReady, CreatedAt: now, UpdatedAt: now,
 	}
 	writeTestRepositoryRecord(t, server, secondSource)
 	writeTestRepositoryIndex(t, server.repositories, secondSource)
@@ -290,7 +286,7 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 			response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/releases/"+request.BuildName, nil)
 			var state release.ReleaseResponse
 			if err := json.Unmarshal(response.Body.Bytes(), &state); err == nil && state.State == release.ReleaseReady {
-				want := "/repositories/" + request.Project + "/" + request.TargetOS + "/" + request.TargetArch + "/"
+				want := "/repositories/" + request.Project + "/" + request.TargetArch + "/"
 				if state.ContentURL != want {
 					t.Fatalf("content URL = %q, want %q", state.ContentURL, want)
 				}
@@ -303,7 +299,7 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 		}
 	}
 	for _, request := range []release.CreateReleaseRequest{first, second} {
-		path := "/repositories/" + request.Project + "/" + request.TargetOS + "/" + request.TargetArch + "/repodata/repomd.xml"
+		path := "/repositories/" + request.Project + "/" + request.TargetArch + "/repodata/repomd.xml"
 		response := repositoryRequest(t, server, http.MethodGet, path, nil)
 		if response.Code != http.StatusOK || response.Body.String() != "release-metadata" {
 			t.Fatalf("content %s = %d %q", path, response.Code, response.Body.String())
@@ -317,13 +313,13 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 
 func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	server, request, materializer := newReleaseTestServer(t)
-	request.Project, request.TargetOS = "releases", "v1"
+	request.Project = "releases"
 	source, ok, err := server.repositories.Get(request.SourceRepositoryUID)
 	if err != nil || !ok {
 		t.Fatalf("load source: %v", err)
 	}
 	source.Project = request.Project
-	source.TargetOS = request.TargetOS
+	source.TargetArch = request.TargetArch
 	writeTestRepositoryRecord(t, server, source)
 	writeTestRepositoryIndex(t, server.repositories, source)
 	close(materializer.release)
@@ -332,7 +328,7 @@ func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for {
-		response := repositoryRequest(t, server, http.MethodGet, "/repositories/releases/v1/x86_64/repodata/repomd.xml", nil)
+		response := repositoryRequest(t, server, http.MethodGet, "/repositories/releases/x86_64/repodata/repomd.xml", nil)
 		if response.Code == http.StatusOK && response.Body.String() == "release-metadata" {
 			break
 		}

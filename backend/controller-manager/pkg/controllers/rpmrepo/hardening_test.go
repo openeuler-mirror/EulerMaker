@@ -101,7 +101,7 @@ func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	if result.RequeueAfter <= 0 {
 		t.Fatalf("a deferred replay must ask for a later round, got %+v", result)
 	}
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err != nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 	if len(artifacts.SubmitReleaseRequests) != 2 {
@@ -140,7 +140,7 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestReconcileReleaseDefersReadyWithoutContentURL(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	_, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch)
+	_, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err == nil {
 		t.Fatalf("a ready release without contentURL must not be collected")
 	}
@@ -331,7 +331,7 @@ func TestReconcileReleaseRejectsForeignReleaseResponse(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err == nil {
 		t.Fatalf("a foreign release response must not be collected")
 	}
 	if len(client.StatusWrites) != 0 {
@@ -359,7 +359,7 @@ func TestReconcileReleaseRejectsResponseWithoutUpdatedAt(t *testing.T) {
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
-	if _, err := syncReleaseForTest(c, context.Background(), testProject, testOS, testArch); err == nil {
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err == nil {
 		t.Fatalf("a release response without updatedAt must be rejected")
 	}
 	if len(client.StatusWrites) != 0 {

@@ -53,8 +53,8 @@ func TestScanRejectsJobsThatAreNotCandidates(t *testing.T) {
 			mutate: func(job *ebsv1.Job) { delete(job.Labels, ebsv1.JobSpecNameLabel) },
 		},
 		{
-			name:   "missing-target-os",
-			mutate: func(job *ebsv1.Job) { delete(job.Labels, ebsv1.BuildTargetOSLabel) },
+			name:   "missing-target-arch",
+			mutate: func(job *ebsv1.Job) { delete(job.Labels, ebsv1.BuildTargetArchLabel) },
 		},
 		{
 			name:   "foreign-target-arch",

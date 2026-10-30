@@ -53,14 +53,15 @@ func TestValidateBuildTarget(t *testing.T) {
 		{"os", "arch", 0},
 		{"other", "arch", 1},
 		{"os", "other", 1},
+		{"os", "aarch64", 1},
 	} {
 		t.Run(tc.os+"/"+tc.arch, func(t *testing.T) {
-			build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: tc.os, Arch: tc.arch}}}
-			errs := ValidateBuildTarget(build, content)
+			build := &ebsv1.Build{Spec: ebsv1.BuildSpec{Arch: tc.arch}}
+			errs := ValidateBuildTarget(build, &ebsv1.Project{Spec: ebsv1.ProjectSpec{Distro: tc.os, BuildArches: []string{"arch", "aarch64"}}}, content)
 			if len(errs) != tc.wantErrors {
 				t.Fatalf("errors = %v, want %d", errs, tc.wantErrors)
 			}
-			if len(errs) > 0 && errs[0].Field != "spec.buildTarget" {
+			if len(errs) > 0 && errs[0].Field != "spec.arch" {
 				t.Fatalf("field = %q", errs[0].Field)
 			}
 		})
@@ -113,14 +114,12 @@ func TestValidateBuild(t *testing.T) {
 		{
 			name:     "requires mandatory build fields",
 			build:    &ebsv1.Build{},
-			wantErrs: 8,
+			wantErrs: 6,
 			wantFields: map[string]field.ErrorType{
 				"metadata.name":                       field.ErrorTypeRequired,
 				"spec.buildType":                      field.ErrorTypeRequired,
 				"spec.packages":                       field.ErrorTypeRequired,
-				"spec.buildTarget.os":                 field.ErrorTypeRequired,
-				"spec.buildTarget.arch":               field.ErrorTypeRequired,
-				"metadata.labels[ebs.io/target-os]":   field.ErrorTypeRequired,
+				"spec.arch":                           field.ErrorTypeRequired,
 				"metadata.labels[ebs.io/target-arch]": field.ErrorTypeRequired,
 				"metadata.labels[ebs.io/build-type]":  field.ErrorTypeRequired,
 			},
@@ -129,14 +128,12 @@ func TestValidateBuild(t *testing.T) {
 			name: "rejects labels inconsistent with build target",
 			build: func() *ebsv1.Build {
 				build := validBuild()
-				build.Labels[ebsv1.BuildTargetOSLabel] = "another-os"
 				build.Labels[ebsv1.BuildTargetArchLabel] = "aarch64"
 				build.Labels[ebsv1.BuildTypeLabel] = "incremental"
 				return build
 			}(),
-			wantErrs: 3,
+			wantErrs: 2,
 			wantFields: map[string]field.ErrorType{
-				"metadata.labels[ebs.io/target-os]":   field.ErrorTypeInvalid,
 				"metadata.labels[ebs.io/target-arch]": field.ErrorTypeInvalid,
 				"metadata.labels[ebs.io/build-type]":  field.ErrorTypeInvalid,
 			},
@@ -189,14 +186,12 @@ func TestValidateBuildName(t *testing.T) {
 
 func TestValidateBuildUpdate(t *testing.T) {
 	errs := ValidateBuildUpdate(&ebsv1.Build{}, validBuild())
-	assertErrorList(t, errs, 9, map[string]field.ErrorType{
+	assertErrorList(t, errs, 7, map[string]field.ErrorType{
 		"metadata.name":                       field.ErrorTypeRequired,
 		"spec":                                field.ErrorTypeInvalid,
 		"spec.buildType":                      field.ErrorTypeRequired,
 		"spec.packages":                       field.ErrorTypeRequired,
-		"spec.buildTarget.os":                 field.ErrorTypeRequired,
-		"spec.buildTarget.arch":               field.ErrorTypeRequired,
-		"metadata.labels[ebs.io/target-os]":   field.ErrorTypeRequired,
+		"spec.arch":                           field.ErrorTypeRequired,
 		"metadata.labels[ebs.io/target-arch]": field.ErrorTypeRequired,
 		"metadata.labels[ebs.io/build-type]":  field.ErrorTypeRequired,
 	})
@@ -257,7 +252,7 @@ func TestIncrementalPackagesMayChangeOnlyWhilePending(t *testing.T) {
 	old.Spec.BuildType = "incremental"
 	old.Labels[ebsv1.BuildTypeLabel] = "incremental"
 	next := old.DeepCopy()
-	next.Spec.BuildTarget.Arch = "aarch64"
+	next.Spec.Arch = "aarch64"
 	next.Labels[ebsv1.BuildTargetArchLabel] = "aarch64"
 	assertErrorList(t, ValidateBuildUpdate(next, old), 1, map[string]field.ErrorType{"spec": field.ErrorTypeInvalid})
 }
@@ -370,14 +365,13 @@ func TestBuildGitRefImmutable(t *testing.T) {
 func validBuild() *ebsv1.Build {
 	return &ebsv1.Build{
 		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000", Labels: map[string]string{
-			ebsv1.BuildTargetOSLabel:   "openEuler-22.03-LTS",
 			ebsv1.BuildTargetArchLabel: "x86_64",
 			ebsv1.BuildTypeLabel:       "full",
 		}},
 		Spec: ebsv1.BuildSpec{
-			BuildType:   "full",
-			Packages:    []string{"pkg-a"},
-			BuildTarget: validBuildTarget(),
+			BuildType: "full",
+			Packages:  []string{"pkg-a"},
+			Arch:      "x86_64",
 		},
 	}
 }

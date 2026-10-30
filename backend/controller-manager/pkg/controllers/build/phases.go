@@ -53,7 +53,7 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 // empty object, which is distinct from nil (not resolved yet). The round returns right after the write.
 func (r *reconciler) recordBaseBuildRef() (controller.ReconcileResult, error) {
 	reference := &ebsv1.BaseBuildRef{}
-	previous, err := r.controller.client.GetLastPublishedBuild(r.ctx, r.project, r.current.Spec.BuildTarget.OS, r.current.Spec.BuildTarget.Arch)
+	previous, err := r.controller.client.GetLastPublishedBuild(r.ctx, r.project, r.current.Spec.Arch)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}

@@ -27,7 +27,6 @@ const (
 type CreateReleaseRequest struct {
 	BuildName           string   `json:"buildName"`
 	Project             string   `json:"project"`
-	TargetOS            string   `json:"targetOS"`
 	TargetArch          string   `json:"targetArch"`
 	SourceRepositoryUID string   `json:"sourceRepositoryUID"`
 	ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
@@ -37,7 +36,6 @@ type ReleaseRecord struct {
 	SchemaVersion       int          `json:"schemaVersion"`
 	BuildName           string       `json:"buildName"`
 	Project             string       `json:"project"`
-	TargetOS            string       `json:"targetOS"`
 	TargetArch          string       `json:"targetArch"`
 	SourceRepositoryUID string       `json:"sourceRepositoryUID"`
 	ExcludeSpecs        []string     `json:"excludeSpecs,omitempty"`

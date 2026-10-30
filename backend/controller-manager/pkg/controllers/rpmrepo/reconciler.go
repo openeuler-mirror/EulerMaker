@@ -145,7 +145,7 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 		return controller.ReconcileResult{}, err
 	}
 	if repo.Status.Release != nil {
-		return r.reconcileRelease(build.Spec.BuildTarget.OS, build.Spec.BuildTarget.Arch)
+		return r.reconcileRelease(build.Spec.Arch)
 	}
 	return r.advanceRepository(repo, build, info)
 }

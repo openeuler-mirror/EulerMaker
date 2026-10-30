@@ -31,8 +31,8 @@ func TestPackageRefPreservedBeforeValidation(t *testing.T) {
 		} {
 			t.Run(operation+"/"+tc.name, func(t *testing.T) {
 				obj := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{
-					DefaultRef:   tc.branch,
-					BuildTargets: []ebsv1.BuildTarget{{OS: "openEuler", Arch: "x86_64"}},
+					DefaultRef: tc.branch,
+					Distro:     "openEuler", BuildArches: []string{"x86_64"},
 					PackageRepos: []ebsv1.PackageRepo{{Name: "gcc", Ref: tc.ref}},
 				}}
 				ctx := context.Background()

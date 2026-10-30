@@ -107,11 +107,14 @@ type Project struct {
 }
 
 type ProjectSpec struct {
-	DisplayName    string          `json:"displayName,omitempty"`
-	Description    string          `json:"description,omitempty"`
-	DefaultRef     string          `json:"defaultRef,omitempty"`
-	BuildPayload   string          `json:"buildPayload,omitempty"`
-	BuildTargets   []BuildTarget   `json:"buildTargets,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+	Description  string `json:"description,omitempty"`
+	DefaultRef   string `json:"defaultRef,omitempty"`
+	BuildPayload string `json:"buildPayload,omitempty"`
+	// Distro selects the distribution in Config/build-target and is immutable after creation.
+	Distro string `json:"distro,omitempty"`
+	// BuildArches lists the unique architectures available to builds in this project.
+	BuildArches    []string        `json:"buildArches,omitempty"`
 	PackageRepos   []PackageRepo   `json:"packageRepos,omitempty"`
 	BootstrapRepos []BootstrapRepo `json:"bootstrapRepos,omitempty"`
 }
@@ -174,8 +177,9 @@ type Build struct {
 }
 
 type BuildSpec struct {
-	BuildType   BuildType   `json:"buildType,omitempty"`
-	BuildTarget BuildTarget `json:"buildTarget,omitempty"`
+	BuildType BuildType `json:"buildType,omitempty"`
+	// Arch must belong to Project.spec.buildArches; the distribution comes from Project.spec.distro.
+	Arch string `json:"arch,omitempty"`
 	// Publish controls release publication. Defaults to true for non-single builds; single builds must omit it.
 	Publish  *bool    `json:"publish,omitempty"`
 	Packages []string `json:"packages,omitempty"`
@@ -434,11 +438,6 @@ type RunnerInfo struct {
 	Arch           string `json:"arch,omitempty"`
 	RuntimeVersion string `json:"runtimeVersion,omitempty"`
 	AgentVersion   string `json:"agentVersion,omitempty"`
-}
-
-type BuildTarget struct {
-	OS   string `json:"os,omitempty"`
-	Arch string `json:"arch,omitempty"`
 }
 
 type PackageRepo struct {

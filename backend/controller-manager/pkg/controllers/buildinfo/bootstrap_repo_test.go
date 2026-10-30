@@ -22,7 +22,7 @@ func TestBootstrapMetadataResolvesLogicalReferences(t *testing.T) {
 				{URL: "https://mirror.example/base"},
 			}
 			round := &reconcileRound{key: key, current: bi, build: testBuildObj("single"), failures: c.newRoundFailures(key)}
-			arch := round.build.Spec.BuildTarget.Arch
+			arch := round.build.Spec.Arch
 			want := []string{"http://artifact-manager.art-01:8081/repositories/base/" + arch + "/repodata/repomd.xml", "http://artifact.example:8081/repositories/fallback/" + arch + "/repodata/repomd.xml", "https://mirror.example/base/" + arch + "/repodata/repomd.xml"}
 			var fetched []string
 			oldFetch := rpmMetaFetch

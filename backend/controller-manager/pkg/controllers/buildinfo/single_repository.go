@@ -39,9 +39,9 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	if round.project != nil && round.project.Annotations[ebsv1.ProjectArtifactsAnnotation] != "" {
 		instance = round.project.Annotations[ebsv1.ProjectArtifactsAnnotation]
 	}
-	target := round.build.Spec.BuildTarget
-	path := fmt.Sprintf("/repositories/%s/%s/%s/", url.PathEscape(round.current.Namespace),
-		url.PathEscape(target.OS), url.PathEscape(target.Arch))
+	arch := round.build.Spec.Arch
+	path := fmt.Sprintf("/repositories/%s/%s/", url.PathEscape(round.current.Namespace),
+		url.PathEscape(arch))
 	reference, err := artifacturl.ReferenceForInstance(instance, path)
 	if err != nil {
 		return "", controller.NewPermanentError(err)
@@ -59,7 +59,7 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	}
 	if !published {
 		reference, contentURL = "", ""
-		if len(bootstrapRepoURLs(round.current.Spec.BootstrapRepos, target.Arch)) == 0 {
+		if len(bootstrapRepoURLs(round.current.Spec.BootstrapRepos, arch)) == 0 {
 			return "", controller.NewPermanentError(fmt.Errorf("BootstrapRepoRequired: no published release or bootstrap repository"))
 		}
 	}

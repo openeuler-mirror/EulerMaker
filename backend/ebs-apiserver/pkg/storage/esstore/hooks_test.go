@@ -36,7 +36,7 @@ func hookStore() (*Store, *StatusStore, *int) {
 	return store, NewStatus(store, template.Status.(*genericregistry.Store)), writes
 }
 func hookProject() *ebsv1.Project {
-	return &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{BuildTargets: []ebsv1.BuildTarget{{OS: "os", Arch: "arch"}}}}
+	return &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "project-a"}, Spec: ebsv1.ProjectSpec{Distro: "os", BuildArches: []string{"arch"}}}
 }
 
 func TestUpdateHookOnlyRunsForOrdinaryUpdates(t *testing.T) {

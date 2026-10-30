@@ -205,7 +205,7 @@ func (m *Manager) recordLocked(uid string) (*RepositoryRecord, error) {
 }
 
 func normalizeRepositoryRequest(in CreateRepositoryRequest) (CreateRepositoryRequest, string, error) {
-	if !validIdentifier(in.RepositoryUID) || !validIdentifier(in.RepositoryName) || !validIdentifier(in.Project) || !validIdentifier(in.BuildName) || in.RepositoryName != in.BuildName || !validIdentifier(in.TargetOS) || !validIdentifier(in.TargetArch) || len(in.Manifests) == 0 || (in.BaseRepositoryUID != "" && (!validIdentifier(in.BaseRepositoryUID) || in.BaseRepositoryUID == in.RepositoryUID)) {
+	if !validIdentifier(in.RepositoryUID) || !validIdentifier(in.RepositoryName) || !validIdentifier(in.Project) || !validIdentifier(in.BuildName) || in.RepositoryName != in.BuildName || !validIdentifier(in.TargetArch) || len(in.Manifests) == 0 || (in.BaseRepositoryUID != "" && (!validIdentifier(in.BaseRepositoryUID) || in.BaseRepositoryUID == in.RepositoryUID)) {
 		return in, "", &Error{Code: "InvalidRepositoryRequest", Status: 422}
 	}
 	sort.Slice(in.Manifests, func(i, j int) bool { return in.Manifests[i].JobName < in.Manifests[j].JobName })
@@ -264,7 +264,7 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 		if err != nil {
 			return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 		}
-		if base == nil || base.State != RepositoryReady || base.Project != in.Project || base.TargetOS != in.TargetOS || base.TargetArch != in.TargetArch {
+		if base == nil || base.State != RepositoryReady || base.Project != in.Project || base.TargetArch != in.TargetArch {
 			return nil, 0, &Error{Code: "BaseRepositoryNotReady", Status: 422}
 		}
 		if base.SigningFingerprint != m.signingFingerprint {
@@ -309,7 +309,6 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 		RepositoryName:     in.RepositoryName,
 		Project:            in.Project,
 		BuildName:          in.BuildName,
-		TargetOS:           in.TargetOS,
 		TargetArch:         in.TargetArch,
 		BaseRepositoryUID:  in.BaseRepositoryUID,
 		Manifests:          in.Manifests,
@@ -487,7 +486,7 @@ func (m *Manager) remove(uid string) {
 		return
 	}
 	source := m.RepositoryPath(record)
-	trashDir := filepath.Join(m.root, ".repository-trash", record.Project, record.TargetOS, record.TargetArch)
+	trashDir := filepath.Join(m.root, ".repository-trash", record.Project, record.TargetArch)
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -513,11 +512,11 @@ func (m *Manager) persist(record *RepositoryRecord) error {
 }
 
 func (m *Manager) RepositoryPath(record *RepositoryRecord) string {
-	return VersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
+	return VersionPath(m.root, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)
 }
 
-func VersionPath(root, project, osName, arch, buildName, uid string) string {
-	return filepath.Join(root, "repositories", project, osName, arch, "history", buildName, "steps", uid)
+func VersionPath(root, project, arch, buildName, uid string) string {
+	return filepath.Join(root, "repositories", project, arch, "history", buildName, "steps", uid)
 }
 
 func (m *Manager) metaPath(uid string) string {

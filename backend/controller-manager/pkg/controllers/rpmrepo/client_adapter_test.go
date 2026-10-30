@@ -212,7 +212,7 @@ func TestAdapterAggregatesRpmRepoPagesAndKeepsSelectors(t *testing.T) {
 		{Items: nil, Continue: "cursor-2"},
 		{Items: []runtime.Object{second}},
 	}}
-	options := metav1.ListOptions{FieldSelector: nonTerminalRpmRepoFieldSelector, LabelSelector: "ebs.io/target-os=" + testOS}
+	options := metav1.ListOptions{FieldSelector: nonTerminalRpmRepoFieldSelector, LabelSelector: ebsv1.BuildTargetArchLabel + "=" + testArch}
 	repos, err := newAPIClient(shared).ListRpmRepos(context.Background(), testProject, options)
 	if err != nil {
 		t.Fatalf("ListRpmRepos: %v", err)

@@ -141,7 +141,6 @@ const buildCoordinationMapping = `{
     }},
     "data":{"dynamic":"strict","properties":{
       "project":{"type":"keyword"},
-      "os":{"type":"keyword"},
       "arch":{"type":"keyword"},
       "claimID":{"type":"keyword"},
       "buildName":{"type":"keyword"},

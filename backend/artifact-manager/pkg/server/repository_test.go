@@ -61,7 +61,7 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record rep
 	case <-m.release:
 	}
 	if m.root != "" {
-		path := repository.VersionPath(m.root, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
+		path := repository.VersionPath(m.root, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)
 		if err := os.MkdirAll(path, 0750); err != nil {
 			return repository.Result{}, err
 		}
@@ -95,7 +95,6 @@ func newRepositoryTestServer(t *testing.T, materializer repository.Materializer)
 		RepositoryName: "build-1",
 		Project:        "project-1",
 		BuildName:      "build-1",
-		TargetOS:       "openEuler",
 		TargetArch:     "x86_64",
 		Manifests:      []repository.ManifestReference{{JobName: "job-1"}},
 	}
@@ -155,7 +154,7 @@ func TestRepositoryMaterializationLifecycle(t *testing.T) {
 		t.Fatalf("ready replay status = %d", response.Code)
 	}
 	conflict := request
-	conflict.TargetOS = "different"
+	conflict.TargetArch = "different"
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/repositories", conflict); response.Code != http.StatusConflict {
 		t.Fatalf("conflict status = %d: %s", response.Code, response.Body.String())
 	}
@@ -179,7 +178,7 @@ func TestRepositoryContent(t *testing.T) {
 	materializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
 	close(materializer.release)
 	server, request := newRepositoryTestServer(t, materializer)
-	directory := filepath.Join(server.cfg.DataDir, "repositories", request.Project, request.TargetOS, request.TargetArch, "history", request.BuildName, "steps", request.RepositoryUID, "repodata")
+	directory := filepath.Join(server.cfg.DataDir, "repositories", request.Project, request.TargetArch, "history", request.BuildName, "steps", request.RepositoryUID, "repodata")
 	if err := os.MkdirAll(directory, 0750); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +190,6 @@ func TestRepositoryContent(t *testing.T) {
 		RepositoryUID: request.RepositoryUID,
 		Project:       request.Project,
 		BuildName:     request.BuildName,
-		TargetOS:      request.TargetOS,
 		TargetArch:    request.TargetArch,
 		State:         repository.RepositoryReady,
 		ContentURL:    "/repositories/v1/" + request.RepositoryUID + "/",

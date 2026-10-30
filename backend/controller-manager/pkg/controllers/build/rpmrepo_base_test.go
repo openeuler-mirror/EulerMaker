@@ -57,8 +57,7 @@ func repositoryContentURL(repositoryUID string) string {
 func assertRpmRepoTargetLabels(t *testing.T, build *ebsv1.Build, repo *ebsv1.RpmRepo) {
 	t.Helper()
 	want := map[string]string{
-		ebsv1.BuildTargetOSLabel:   build.Spec.BuildTarget.OS,
-		ebsv1.BuildTargetArchLabel: build.Spec.BuildTarget.Arch,
+		ebsv1.BuildTargetArchLabel: build.Spec.Arch,
 	}
 	if !reflect.DeepEqual(repo.Labels, want) {
 		t.Fatalf("labels = %+v, want %+v", repo.Labels, want)

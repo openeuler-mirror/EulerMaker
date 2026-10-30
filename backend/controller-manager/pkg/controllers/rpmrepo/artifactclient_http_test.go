@@ -95,8 +95,8 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		client := server.client(t)
 		response, err := client.SubmitRepository(ctx, CreateRepositoryRequest{
 			RepositoryUID: "repo-1", RepositoryName: testBuild, Project: testProject, BuildName: testBuild,
-			TargetOS: testOS, TargetArch: testArch,
-			Manifests: []ManifestReference{{JobName: "job-a"}},
+			TargetArch: testArch,
+			Manifests:  []ManifestReference{{JobName: "job-a"}},
 		})
 		if err != nil {
 			t.Fatalf("SubmitRepository: %v", err)
@@ -155,7 +155,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		server := newScriptedArtifactServer(t, http.StatusAccepted, body, nil)
 		client := server.client(t)
 		response, err := client.SubmitRelease(ctx, CreateReleaseRequest{
-			BuildName: testBuild, Project: testProject, TargetOS: testOS, TargetArch: testArch,
+			BuildName: testBuild, Project: testProject, TargetArch: testArch,
 			SourceRepositoryUID: "repo-1", ExcludeSpecs: []string{"gcc"},
 		})
 		if err != nil {
@@ -170,7 +170,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 	})
 
 	t.Run("get-and-activate-release", func(t *testing.T) {
-		body := `{"buildName":"build-a","state":"Ready","attempt":1,"contentURL":"/repositories/project/openEuler/aarch64/","updatedAt":"2026-09-21T10:00:00Z"}`
+		body := `{"buildName":"build-a","state":"Ready","attempt":1,"contentURL":"/repositories/project/aarch64/","updatedAt":"2026-09-21T10:00:00Z"}`
 		server := newScriptedArtifactServer(t, http.StatusOK, body, nil)
 		client := server.client(t)
 		if _, err := client.GetRelease(ctx, testBuild); err != nil {

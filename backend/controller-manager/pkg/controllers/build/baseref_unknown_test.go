@@ -26,7 +26,7 @@ func baseBuildRefWriteRound(t *testing.T, history *ebsv1.Build) (*fakeAPI, *Cont
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "full", []string{"gcc"})
 	if history != nil {
-		api.hooks.lastPublished = func(string, string, string) (*ebsv1.Build, error) {
+		api.hooks.lastPublished = func(string, string) (*ebsv1.Build, error) {
 			return history, nil
 		}
 	}

@@ -49,7 +49,6 @@ type CreateRepositoryRequest struct {
 	RepositoryName    string              `json:"repositoryName"`
 	Project           string              `json:"project"`
 	BuildName         string              `json:"buildName"`
-	TargetOS          string              `json:"targetOS"`
 	TargetArch        string              `json:"targetArch"`
 	BaseRepositoryUID string              `json:"baseRepositoryUID,omitempty"`
 	Manifests         []ManifestReference `json:"manifests"`
@@ -99,7 +98,6 @@ type JobUploadManifest struct {
 type CreateReleaseRequest struct {
 	BuildName           string   `json:"buildName"`
 	Project             string   `json:"project"`
-	TargetOS            string   `json:"targetOS"`
 	TargetArch          string   `json:"targetArch"`
 	SourceRepositoryUID string   `json:"sourceRepositoryUID"`
 	ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`

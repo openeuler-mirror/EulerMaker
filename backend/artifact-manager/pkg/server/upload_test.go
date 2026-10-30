@@ -400,13 +400,13 @@ esac
 	cfg.Repository.CreateRepoCommand, cfg.Repository.RPMQueryCommand = createRepo, query
 	m := repository.NewFilesystemMaterializer(cfg.DataDir, cfg.Repository, s.store, "test-key")
 	record := repository.RepositoryRecord{
-		RepositoryUID: "test-repo", Project: "project-1", BuildName: "build", TargetOS: "os", TargetArch: "x86_64",
+		RepositoryUID: "test-repo", Project: "project-1", BuildName: "build", TargetArch: "x86_64",
 		SigningFingerprint: "test-key", Manifests: []repository.ManifestReference{{JobName: "build"}},
 	}
 	if _, err := m.Materialize(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	path := repository.VersionPath(cfg.DataDir, record.Project, record.TargetOS, record.TargetArch, record.BuildName, record.RepositoryUID)
+	path := repository.VersionPath(cfg.DataDir, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)
 	repoFile := filepath.Join(path, "Packages", a.FileName)
 	prepared, _ := s.store.GetJobArtifact("project-1", "build", a.ID)
 	signedInfo, _ := os.Stat(s.store.ArtifactPath(prepared))

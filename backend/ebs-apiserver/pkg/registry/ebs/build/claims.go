@@ -46,7 +46,6 @@ type coordinationBackend interface {
 
 type claim struct {
 	Project       string    `json:"project"`
-	OS            string    `json:"os"`
 	Arch          string    `json:"arch"`
 	ClaimID       string    `json:"claimID"`
 	BuildName     string    `json:"buildName"`
@@ -93,7 +92,7 @@ func coordinationID(parts ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (c claim) id() string { return coordinationID(c.Project, c.OS, c.Arch) }
+func (c claim) id() string { return coordinationID(c.Project, c.Arch) }
 
 func coordinationDocument(id, project, kind string, created time.Time, value interface{}) es.Document {
 	data, _ := json.Marshal(value) // Only the concrete string/time records above are used.
@@ -158,7 +157,7 @@ func (m *ClaimManager) getBuild(ctx context.Context, c claim) (*ebsv1.Build, err
 	if !ok || b == nil {
 		return nil, fmt.Errorf("expected Build, got %T", obj)
 	}
-	if b.Namespace != c.Project || b.Name != c.BuildName || b.Spec.BuildTarget.OS != c.OS || b.Spec.BuildTarget.Arch != c.Arch || !limitedBuild(b) {
+	if b.Namespace != c.Project || b.Name != c.BuildName || b.Spec.Arch != c.Arch || !limitedBuild(b) {
 		return nil, fmt.Errorf("Build identity/target mismatch for claim %s", c.ClaimID)
 	}
 	return b, nil
@@ -174,12 +173,12 @@ func coordinationError(err error) error {
 func claimConflict(c claim) error {
 	claimConflicts.Inc()
 	return apierrors.NewConflict(ebsv1.Resource("builds"), c.BuildName,
-		fmt.Errorf("target %s/%s/%s is occupied by build %q (claim state %s)", c.Project, c.OS, c.Arch, c.BuildName, c.State))
+		fmt.Errorf("target %s/%s is occupied by build %q (claim state %s)", c.Project, c.Arch, c.BuildName, c.State))
 }
 
 func (m *ClaimManager) acquire(ctx context.Context, b *ebsv1.Build) (*claimRecord, error) {
 	now := m.now().UTC()
-	c := claim{Project: b.Namespace, OS: b.Spec.BuildTarget.OS, Arch: b.Spec.BuildTarget.Arch, ClaimID: string(uuid.NewUUID()), BuildName: b.Name, State: reserved, CreatedAt: now, UpdatedAt: now}
+	c := claim{Project: b.Namespace, Arch: b.Spec.Arch, ClaimID: string(uuid.NewUUID()), BuildName: b.Name, State: reserved, CreatedAt: now, UpdatedAt: now}
 	version, err := m.backend.Create(ctx, claimResource, c.id(), c.document())
 	if err == nil {
 		return &claimRecord{claim: c, version: version}, nil
@@ -188,7 +187,7 @@ func (m *ClaimManager) acquire(ctx context.Context, b *ebsv1.Build) (*claimRecor
 	if getErr != nil {
 		return nil, coordinationError(err)
 	}
-	if observed.Project != c.Project || observed.OS != c.OS || observed.Arch != c.Arch {
+	if observed.Project != c.Project || observed.Arch != c.Arch {
 		return nil, coordinationError(fmt.Errorf("claim target mismatch"))
 	}
 	if observed.ClaimID != c.ClaimID {
@@ -215,7 +214,7 @@ func (m *ClaimManager) create(ctx context.Context, obj runtime.Object, dryRun bo
 	var c *claimRecord
 	if limitedBuild(b) {
 		if dryRun {
-			existing, err := m.get(ctx, coordinationID(b.Namespace, b.Spec.BuildTarget.OS, b.Spec.BuildTarget.Arch))
+			existing, err := m.get(ctx, coordinationID(b.Namespace, b.Spec.Arch))
 			if err == nil {
 				return nil, claimConflict(existing.claim)
 			}
@@ -262,7 +261,7 @@ func (m *ClaimManager) create(ctx context.Context, obj runtime.Object, dryRun bo
 		observed, getErr := m.builds.Get(ctx, b.Name, &metav1.GetOptions{})
 		confirmed, valid := observed.(*ebsv1.Build)
 		if getErr != nil || !valid || confirmed.Namespace != b.Namespace || confirmed.Name != b.Name ||
-			confirmed.Spec.BuildTarget != b.Spec.BuildTarget || confirmed.Spec.BuildType != b.Spec.BuildType ||
+			confirmed.Spec.Arch != b.Spec.Arch || confirmed.Spec.BuildType != b.Spec.BuildType ||
 			!apiequality.Semantic.DeepEqual(confirmed.Spec.Publish, b.Spec.Publish) {
 			return nil, err
 		}
@@ -305,7 +304,7 @@ func registerClaimMetrics() {
 
 func (m *ClaimManager) logError(err error, operation string, c claim) {
 	claimRecoveryErrors.Inc()
-	klog.ErrorS(err, "Build target coordination failed", "operation", operation, "project", c.Project, "os", c.OS, "arch", c.Arch, "claimID", c.ClaimID, "build", c.BuildName, "state", c.State)
+	klog.ErrorS(err, "Build target coordination failed", "operation", operation, "project", c.Project, "arch", c.Arch, "claimID", c.ClaimID, "build", c.BuildName, "state", c.State)
 }
 
 func (m *ClaimManager) afterWrite(ctx context.Context, obj runtime.Object, deleted bool) {
@@ -313,7 +312,7 @@ func (m *ClaimManager) afterWrite(ctx context.Context, obj runtime.Object, delet
 	if !ok || !limitedBuild(b) || (!deleted && !b.Status.Phase.IsTerminal()) {
 		return
 	}
-	id := coordinationID(b.Namespace, b.Spec.BuildTarget.OS, b.Spec.BuildTarget.Arch)
+	id := coordinationID(b.Namespace, b.Spec.Arch)
 	c, err := m.get(ctx, id)
 	if es.IsStatus(err, 404) {
 		return

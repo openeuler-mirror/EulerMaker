@@ -31,7 +31,7 @@ func TestBuildPublishCreateContract(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000"},
 					Spec: ebsv1.BuildSpec{
 						BuildType: ebsv1.BuildType(buildType), Packages: []string{"gcc"},
-						BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "aarch64"},
+						Arch: "aarch64",
 					},
 				}
 				if value != "omitted" {
@@ -86,8 +86,8 @@ func TestPrepareForCreateRequiresBuildType(t *testing.T) {
 	b := &ebsv1.Build{
 		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000"},
 		Spec: ebsv1.BuildSpec{
-			Packages:    []string{"gcc"},
-			BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"},
+			Packages: []string{"gcc"},
+			Arch:     "x86_64",
 		},
 	}
 	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
@@ -182,22 +182,22 @@ func TestAbortTransitionsBuild(t *testing.T) {
 }
 
 func TestPrepareForCreateAddsMissingBuildTargetLabels(t *testing.T) {
-	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "full", BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}}}
+	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "full", Arch: "x86_64"}}
 
 	NewStorage().Resource.(*genericregistry.Store).CreateStrategy.PrepareForCreate(context.Background(), build)
 
-	if build.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || build.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || build.Labels[ebsv1.BuildTypeLabel] != "full" {
+	if build.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || build.Labels[ebsv1.BuildTypeLabel] != "full" {
 		t.Fatalf("labels = %#v", build.Labels)
 	}
 }
 
 func TestPrepareForUpdateAddsMissingBuildTargetLabels(t *testing.T) {
 	oldBuild := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
-	newBuild := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "incremental", BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}}}
+	newBuild := &ebsv1.Build{Spec: ebsv1.BuildSpec{BuildType: "incremental", Arch: "x86_64"}}
 
 	NewStorage().Resource.(*genericregistry.Store).UpdateStrategy.PrepareForUpdate(context.Background(), newBuild, oldBuild)
 
-	if newBuild.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || newBuild.Labels[ebsv1.BuildTypeLabel] != "incremental" {
+	if newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || newBuild.Labels[ebsv1.BuildTypeLabel] != "incremental" {
 		t.Fatalf("labels = %#v", newBuild.Labels)
 	}
 	if newBuild.Status.Phase != ebsv1.BuildProcessing {
@@ -208,16 +208,15 @@ func TestPrepareForUpdateAddsMissingBuildTargetLabels(t *testing.T) {
 func TestPrepareForCreatePreservesConflictingBuildTargetLabels(t *testing.T) {
 	build := &ebsv1.Build{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
-			ebsv1.BuildTargetOSLabel:   "another-os",
 			ebsv1.BuildTargetArchLabel: "aarch64",
 			ebsv1.BuildTypeLabel:       "incremental",
 		}},
-		Spec: ebsv1.BuildSpec{BuildTarget: ebsv1.BuildTarget{OS: "openEuler", Arch: "x86_64"}},
+		Spec: ebsv1.BuildSpec{Arch: "x86_64"},
 	}
 
 	NewStorage().Resource.(*genericregistry.Store).CreateStrategy.PrepareForCreate(context.Background(), build)
 
-	if build.Labels[ebsv1.BuildTargetOSLabel] != "another-os" || build.Labels[ebsv1.BuildTargetArchLabel] != "aarch64" || build.Labels[ebsv1.BuildTypeLabel] != "incremental" {
+	if build.Labels[ebsv1.BuildTargetArchLabel] != "aarch64" || build.Labels[ebsv1.BuildTypeLabel] != "incremental" {
 		t.Fatalf("labels = %#v", build.Labels)
 	}
 }
@@ -227,20 +226,20 @@ func TestStatusPrepareForUpdatePreservesObjectMetadata(t *testing.T) {
 		Name:            "build-a",
 		Namespace:       "project-a",
 		ResourceVersion: "7",
-		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "openEuler", ebsv1.BuildTargetArchLabel: "x86_64", ebsv1.BuildTypeLabel: "full"},
+		Labels:          map[string]string{ebsv1.BuildTargetArchLabel: "x86_64", ebsv1.BuildTypeLabel: "full"},
 		Annotations:     map[string]string{"existing": "value", ebsv1.BuildGitRefAnnotation: "refs/merge-requests/501/head"},
 	}, Spec: ebsv1.BuildSpec{BuildType: "full"}}
 	newBuild := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
 		Name:            "build-a",
 		Namespace:       "project-a",
 		ResourceVersion: "7",
-		Labels:          map[string]string{ebsv1.BuildTargetOSLabel: "tampered"},
+		Labels:          map[string]string{},
 		Annotations:     map[string]string{"tampered": "value", ebsv1.BuildGitRefAnnotation: "refs/heads/main"},
 	}, Spec: ebsv1.BuildSpec{BuildType: "incremental"}, Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
 
 	NewStorage().Status.(*genericregistry.Store).UpdateStrategy.PrepareForUpdate(context.Background(), newBuild, oldBuild)
 
-	if newBuild.Labels[ebsv1.BuildTargetOSLabel] != "openEuler" || newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || newBuild.Labels[ebsv1.BuildTypeLabel] != "full" {
+	if newBuild.Labels[ebsv1.BuildTargetArchLabel] != "x86_64" || newBuild.Labels[ebsv1.BuildTypeLabel] != "full" {
 		t.Fatalf("labels = %#v", newBuild.Labels)
 	}
 	if len(newBuild.Annotations) != 2 || newBuild.Annotations["existing"] != "value" ||
