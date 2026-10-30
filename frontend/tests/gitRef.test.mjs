@@ -88,7 +88,8 @@ test("Project form stores the default ref as a complete string", () => {
     os: "openEuler", arch: "aarch64", ownerUser: "user",
   });
   assert.equal(project.spec.defaultRef, "refs/tags/v1");
-  assert.deepEqual(project.spec.buildTargets, [{ os: "openEuler", arch: "aarch64" }]);
+  assert.equal(project.spec.distro, "openEuler");
+  assert.deepEqual(project.spec.buildArches, ["aarch64"]);
   assert.equal(JSON.parse(JSON.stringify(project)).spec.defaultRef, "refs/tags/v1");
 });
 
@@ -99,9 +100,9 @@ metadata:
   name: demo
 spec:
   defaultRef: refs/heads/main
-  buildTargets:
-    - os: openEuler
-      arch: aarch64
+  distro: openEuler
+  buildArches:
+    - aarch64
   packageRepos:
     - name: gcc
       ref: refs/merge-requests/501/head
@@ -110,7 +111,8 @@ spec:
       ref: ""
 `);
   assert.equal(project.spec.defaultRef, "refs/heads/main");
-  assert.deepEqual(project.spec.buildTargets, [{ os: "openEuler", arch: "aarch64" }]);
+  assert.equal(project.spec.distro, "openEuler");
+  assert.deepEqual(project.spec.buildArches, ["aarch64"]);
   assert.deepEqual(project.spec.packageRepos, [
     { name: "gcc", ref: "refs/merge-requests/501/head", commitID: "a".repeat(40) }, { name: "rpm", ref: "" },
   ]);

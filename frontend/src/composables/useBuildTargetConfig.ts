@@ -1,6 +1,6 @@
 import { computed, onMounted, ref } from "vue";
 import { errorTranslationKey, request } from "@/api";
-import type { BuildTargetContent, BuildTarget } from "@/types";
+import type { BuildTargetContent, ConfiguredBuildTarget } from "@/types";
 import type { Config } from "@/types";
 import { parse } from "yaml";
 import { parseBuildTargetContent, configuredOS, configuredArches, supportsTarget } from "@/components/buildTargetConfigDraft";
@@ -28,7 +28,7 @@ export function useBuildTargetConfig() {
   }
   const operatingSystems = computed(() => configuredOS(configuration.value));
   const arches = (os?: string) => configuredArches(configuration.value, os);
-  const supports = (target: BuildTarget) => !loading.value && !error.value && supportsTarget(configuration.value, target);
+  const supports = (target: ConfiguredBuildTarget) => !loading.value && !error.value && supportsTarget(configuration.value, target);
   onMounted(() => { void reload(); });
   return { configuration, loading, error, reload, operatingSystems, arches, supports };
 }

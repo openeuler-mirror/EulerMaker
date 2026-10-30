@@ -84,7 +84,7 @@ apiVersion: ebs/v1
 
 资源契约如下：
 
-集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `services`。Config 创建、更新时完整校验三个内置对象的内容；`services` 固定为 `OpsOnly`，服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。创建 Build 前读取 `build-target`，只检查所选 OS/Arch 是否存在。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
+集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `services`。Config 创建、更新时完整校验三个内置对象的内容；`services` 固定为 `OpsOnly`，服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。创建 Build 前读取 `build-target`，只检查从 Project 读取的 distro 与所选 arch 是否有映射。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|
@@ -451,10 +451,7 @@ ES 文档在 `data` 中保存完整 API 对象，并对需要过滤的字段建�
     "kind": "Build",
     "metadata": {"...": "完整对象元数据"},
     "spec": {
-      "buildTarget": {
-        "os": "openEuler-22.03-LTS",
-        "arch": "x86_64"
-      }
+      "arch": "x86_64"
     },
     "status": {
       "phase": "Processing",
@@ -469,7 +466,7 @@ mapping 约束：
 - `documentID`、`metadata.name`、`metadata.namespace`、`kind`、`apiVersion` 使用 `keyword`。
 - `metadata.creationTimestamp` 使用 `date`。
 - `metadata.labels` 使用包含 `key/value` 两个 `keyword` 字段的 `nested` 数组。这样既避免 label key 动态展开导致 mapping 膨胀，也能正确处理包含 `.`、`/` 的 Kubernetes label key。
-- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中。通用 mapping 将 `data.status.phase`、`data.status.stage` 建立为 `keyword`；RpmRepo 使用独立 mapping，仅将 `data.status.release.phase` 建立为 `keyword`。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤 OS、架构。
+- 所有 ES 文档的 `data` 使用 `object` 且 `dynamic: false`：完整对象保留在 `_source` 中。通用 mapping 将 `data.status.phase`、`data.status.stage` 建立为 `keyword`；RpmRepo 使用独立 mapping，仅将 `data.status.release.phase` 建立为 `keyword`。Build 的构建目标暂不建立字段 mapping，调用方通过 Build label 表达并过滤架构；Project.spec.distro 保存构建环境的发行版标识，不作为目标互斥或仓库分区条件。
 - GET/LIST 的字段选择可在查询时使用 ES `_source` filtering；它只控制本次响应中的字段，不修改 mapping 或已存文档，无需重建索引。`dynamic: false` 不影响保留在 `_source` 中的字段被选择。
 - 需要查询的业务字段必须显式定义 mapping，禁止将整个 `spec/status` 动态索引。
 
@@ -539,7 +536,7 @@ Project 创建和普通更新时将缺失的 `project.ebs.io/type` 补为 `perso
   - `/status` 使用图自身 resourceVersion，保留 metadata；普通更新不得修改 status。状态更新保持节点集合、Version、初始 InDep 和既有 BootstrapBreak，不删除已记录 install 边，仅允许运行期补边、对应 outDep 更新和新增破环点。
   - 复用通用请求大小限制。拆分降低 BuildInfo 高频写入的正文大小，但不取消完整图创建、更新的大小限制。
 - `RpmRepo` 创建时仅保留 `status.repository.repositoryUID` 与 `status.repository.contentURL` 作为过程仓基线，两者必须成对提供，否则返回 422；未提供 `status.repository` 时保持 `nil`。显式传入的 `status.release.phase=Skipped` 保留；`repository`、`release` 的其余字段及 `status.conditions` 清空。过程仓没有 phase 字段，创建后的 status 由 RpmRepo Controller 维护。
-- `RpmRepo` 创建时还要求 `metadata.labels[ebs.io/target-os]` 与 `metadata.labels[ebs.io/target-arch]` 存在且非空（由 Build Controller 写入，取值等于同名 Build 的 `spec.buildTarget.os` / `arch`），缺失或为空返回 422；该校验只在创建路径生效，不影响普通更新与 `/status` 更新。
+- `RpmRepo` 创建时还要求 `metadata.labels[ebs.io/target-arch]` 存在且非空（由 Build Controller 写入，取值等于同名 Build 的 `spec.arch`），缺失或为空返回 422；该校验只在创建路径生效，不影响普通更新与 `/status` 更新。
 - `Job` 创建默认 `status.phase = Pending`。
 - `Runner` 创建默认 `status.phase = Offline`。Runner agent 完成本地初始化并具备接收任务能力后，通过首次状态上报将其更新为 `Online`。
 
@@ -552,7 +549,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 - `Project.spec.displayName` 默认为创建请求中的 Project 名称；`spec.defaultRef` 是完整 `refs/...` 字符串，为空时默认 `refs/heads/master`。Project、Snapshot 的 defaultRef 与仓库 ref 使用相同的完整引用校验；不接受裸分支名、Commit ID 或旧对象格式。Snapshot 的 defaultRef 不自动默认，仓库 ref 允许为空且创建/普通更新不补齐。PackageRepo.commitID 可选，非空时必须为完整 40 位小写十六进制 SHA；Project 和 Snapshot 创建、更新均校验，允许与 ref 同时配置。解析规则见数据模型 PackageRepo。
 - `Build.spec.buildType` 必填，不设置默认值；缺失时返回 422。
-- `Build.spec.publish` 仅非 single 允许设置，创建时省略则补为 `true`，显式 `false` 保持不变。single 携带该字段时返回 422；创建后遵循 Build spec 不可变规则。Project 的构建目标只包含 OS/Arch，不保存发布策略。
+- `Build.spec.publish` 仅非 single 允许设置，创建时省略则补为 `true`，显式 `false` 保持不变。single 携带该字段时返回 422；创建后遵循 Build spec 不可变规则。Project 的构建目标只包含 arch，不保存发布策略。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
 - `Runner.spec.type` 默认为 `ct`。
 
@@ -560,16 +557,17 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 - API 请求使用严格解码：`apiVersion`、`kind`、对象结构或字段类型不合法时直接拒绝，未知字段不会被静默丢弃。
 
-- Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，并至少包含一个带 `os`、`arch` 的构建目标。
-- Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。创建后除 Build Controller 在 `incremental` 的 Pending 阶段固化 `spec.packages` 外，Build `spec` 不可修改；普通 Update 不能改变受保护的标签，`/status` 更新保留原对象 metadata。
+- Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，`spec.distro` 必填、符合发行版标识语法，创建后不可修改或删除（更新值与原值不一致返回 `422 Invalid`，错误字段为 `spec.distro`），`spec.buildArches` 为非空字符串数组，架构值非空且不得重复。
+- Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。创建后除 Build Controller 在 `incremental` 的 Pending 阶段固化 `spec.packages` 外，Build `spec` 不可修改；普通 Update 不能改变受保护的标签，`/status` 更新保留原对象 metadata。
 - Job 创建时若带有 `ebs.io/build-name`（由 BuildInfo Controller 创建的构建 Job），还必须带有 `ebs.io/spec-name` 和 `ebs.io/package-name` label；apiserver 校验标签存在且值符合 Kubernetes label 规则，缺失或非法返回 `422 Invalid`。包名标签由 BuildInfo Controller 按[标签约定](labels.md#7-job-构建归属标签)从 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 计算。普通更新不得修改已有归属标签，`/status` 更新保留原 metadata。没有 `ebs.io/build-name` 的通用 Job 不强制要求这些字段；存量构建 Job 即使缺少包名标签，普通更新和状态更新仍允许，且不会自动回填。
 - Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneURL` 记录 Git Server 客户端在同步确认后由 `clone_path` 生成的 `git-server:///git/...` 逻辑地址；包解析成功时记录 commitID，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 记录整体级异常。
-- Build 必须包含 `buildType`，以及带 `os`、`arch` 的 `buildTarget`；`packages` 的要求按下述构建类型区分。创建和普通更新时，`metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4）；缺失或格式非法返回 `422 Invalid`，错误字段为 `metadata.name`。UUID 格式校验不替代调用方对名称不复用的保证。
+- 创建 Build 时，apiserver 使用同一次读取的 Project 校验目标 arch 属于 `spec.buildArches`，并以 `Project.spec.distro + Build.spec.arch` 检查 Config 镜像映射。Build 不包含 distro 字段。上述输入和 Config 映射检查均在申请非 single 目标占用之前完成；Project 不存在或读取失败时返回对应 API 错误，不创建 Build、不申请占用。
+- Build 必须包含 `buildType` 和非空的 `arch`；`packages` 的要求按下述构建类型区分。创建和普通更新时，`metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4）；缺失或格式非法返回 `422 Invalid`，错误字段为 `metadata.name`。UUID 格式校验不替代调用方对名称不复用的保证。
 - **单包 Git ref 覆盖**：`metadata.annotations["ebs.io/git-ref"]` 仅允许用于 `buildType=single` 且 `len(spec.packages)==1` 的 Build，按数组长度判断，不按去重后的数量判断；未设置该 annotation 的 single 仍允许多个包仓库。值必须非空、以 `refs/` 开头并符合完整 Git ref 名称规则，不接受 refspec、通配符、revision 表达式或前后空白，不自动规范化。违反类型、包数量或引用格式规则返回 `422 Invalid`，字段定位到该 annotation；包名是否存在复用下面的 Project 校验，不为同一请求重复读取 Project。准入只校验输入，不联网确认引用是否存在。
 - 普通 Build Update 比较旧、新 `ebs.io/git-ref` annotation 的键存在性和值，增加、删除或修改均返回 `422 Invalid`；PATCH 合并后的对象执行同一校验。`/status` 保留旧 metadata，不能绕过保护。其他 annotation 的更新规则不变。
 - 创建 full/incremental Build 时（含 dry-run），`spec.packages` 统一清空，不要求非空；前端请求不携带该字段。创建 `buildType=single` 或 `specified` 的 Build 时（含 dry-run），要求 packages 非空，额外读取一次所属 Project，校验每个包名均存在于 `Project.spec.packageRepos[].name`；允许多个包及重复包名。不存在的包返回 `422 Invalid`，错误字段定位到 `spec.packages[i]`；Project 不存在或读取失败时原样返回对应 API 错误，不创建 Build。`incremental` 创建后允许 Build Controller 在 Pending 阶段通过主资源 Update 幂等更新 `spec.packages`，由 Controller 保证名称来自本轮 Snapshot.spec.packageRepos，允许空数组；确认持久化且进入 Prepared 后禁止再次修改，其他 spec 字段仍不可变；普通用户不能修改该字段。
-- 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + OS + Arch 执行下节的 ES 目标占用协议。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
-- 创建 `incremental` 或 `specified` Build 时，同一 Project + OS + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
+- 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + Arch 执行下节的 ES 目标占用协议。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
+- 创建 `incremental` 或 `specified` Build 时，同一 Project + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
 - Runner 的 `instanceID` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。Runner 由 Token 的 `type` 区分，不是 User scope。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - Runner 删除仅允许 `status.phase=Offline` 或 `Evicted`，Online、空值及其他状态返回 `409 Conflict`。校验接入存储删除回调，依据实际删除时的对象状态执行，并保留调用方删除校验及 UID/resourceVersion 前置条件。单对象删除、DeleteCollection 的逐项删除和 dry-run 均适用；批量删除不是原子操作，遇到拒绝时其他对象可能已删除。本规则只检查 Runner 状态，不检查关联 Job，也不停止 Runner 进程或清理其本地文件。
@@ -585,16 +583,16 @@ apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进
 
 ### 范围与存储
 
-- 目标键为 Project 名、`spec.buildTarget.os`、`spec.buildTarget.arch` 三元组；不同目标可并行，同一目标最多有一个通过本协议创建的非终态 full/incremental/specified Build。single 创建和完成均不影响占用。
+- 目标键为 Project 名、`spec.arch` 二元组；不同目标可并行，同一目标最多有一个通过本协议创建的非终态 full/incremental/specified Build。single 创建和完成均不影响占用。
 - 内部 alias 为 `ebs-build-target-claims`，初始物理索引为 `ebs-build-target-claims-v1`，只允许一个写索引，不暴露为公共 EBS 资源。所有实例必须访问同一索引及一致的 routing；禁止在在线创建期间无协调地切换占用索引，否则同 ID 可能在两个物理索引同时存在。
-- 文档 ID 为三元组 UTF-8 JSON 数组紧凑编码后的 SHA-256 小写十六进制串；不使用有歧义的字符串拼接。读取后核对原始三元组，不一致时拒绝并告警。
+- 文档 ID 为二元组 UTF-8 JSON 数组紧凑编码后的 SHA-256 小写十六进制串；不使用有歧义的字符串拼接。读取后核对原始二元组，不一致时拒绝并告警。
 - Mapping 使用 `dynamic: strict`；身份与 state 为 keyword，时间为 date。不保存 Project 凭据或完整 Build spec。
 
 内部记录字段：
 
 | 字段 | 含义 |
 | --- | --- |
-| `project` / `os` / `arch` | 目标原始三元组 |
+| `project` / `arch` | 目标原始二元组 |
 | `claimID` | 本次抢占的随机 UUID，用于区分同一目标的不同占用 |
 | `buildName` | UUID 形式且不复用的 Build 名称，作为占用归属标识 |
 | `state` | `Reserved`、`Creating`、`Bound`、`Releasing` |
@@ -607,7 +605,7 @@ apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进
 
 1. 执行认证授权、默认值、字段和 Project 包名校验及 admission；确定 Build name。相同 Build 名称已存在时维持标准 `409 AlreadyExists`，不得当作本次请求成功或转换为更新。后续持久化不得重新生成 UID 或改变目标。
 2. 按确定 ID 使用 `_create` 抢占 Reserved 文档。存在其他占用时返回 `409 Conflict`，附带占用 Build 名称；读取失败返回临时错误，禁止绕过。
-3. 抢占成功后执行历史门禁：按 Project + OS + Arch 查询创建时间降序最新一条非 single Build（`ebs.io/build-type!=single`，`limit=1`，不按 phase 过滤）。不存在或已为 Success/Failed/Aborted/Skipped 时继续；否则拒绝创建并释放本次 Reserved 占用。空/未知 phase 视为非终态，查询失败也不创建。仅查最新一条，不承诺排除更早的历史非终态对象。
+3. 抢占成功后执行历史门禁：按 Project + Arch 查询创建时间降序最新一条非 single Build（`ebs.io/build-type!=single`，`limit=1`，不按 phase 过滤）。不存在或已为 Success/Failed/Aborted/Skipped 时继续；否则拒绝创建并释放本次 Reserved 占用。空/未知 phase 视为非终态，查询失败也不创建。仅查最新一条，不承诺排除更早的历史非终态对象。
 4. 对 incremental/specified 另查同目标下至少一条 `ebs.io/build-type=full` 且 `status.phase=Success` 的 Build（`limit=1`）。查询为空返回 `412 FullBuildRequired` 并释放 Reserved；查询失败返回原错误，不得当作没有历史记录。full 不需要此门禁。
 5. CAS 将 Reserved 改为 Creating。只有成功完成这次状态迁移的请求能够发送一次 Build create-only 写入；其他实例和恢复任务不得替它重新发送创建。ES 客户端也不得自动重试这笔写请求。
 6. Build 创建确认成功后，CAS 将占用改为 Bound，再返回正常创建结果。若记录 Bound 失败但 Build 已确认成功，仍返回已创建 Build，记录错误并交由恢复任务补齐；Creating 仍阻塞其他创建。
@@ -854,10 +852,8 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects \
       "description": "openEuler 22.03 LTS",
       "defaultRef": "refs/heads/master",
       "buildPayload": "debug_package: false",
-      "buildTargets": [{
-        "os": "openEuler-22.03-LTS",
-        "arch": "aarch64"
-      }],
+      "distro": "openEuler-22.03-LTS",
+      "buildArches": ["aarch64"],
       "packageRepos": [{
         "name": "gcc",
         "url": "https://example.com/src-openeuler/gcc.git",
@@ -903,10 +899,7 @@ curl -k -X POST https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/
     "spec": {
       "buildType": "full",
       "publish": true,
-      "buildTarget": {
-        "os": "openEuler-22.03-LTS",
-        "arch": "aarch64"
-      }
+      "arch": "aarch64"
     }
   }'
 ```
@@ -996,7 +989,7 @@ curl -k --get \
 
 ```bash
 curl -k --get \
-  --data-urlencode 'labelSelector=ebs.io/target-os=openEuler-22.03-LTS,ebs.io/target-arch=x86_64' \
+  --data-urlencode 'labelSelector=ebs.io/target-arch=x86_64' \
   --data-urlencode 'fieldSelector=status.phase=Processing,status.stage=build' \
   --data-urlencode 'limit=100' \
   'https://localhost:8443/apis/ebs/v1/projects/openeuler-22-03-lts/builds'
@@ -1023,7 +1016,7 @@ curl -k --get \
 
 验证需比较下推和完整读取后的 GET/LIST JSON（含空值、数组、include/exclude 同时使用）、分页与选择器结果，并覆盖 Config 可见性和写入并发；另统计 ES 响应字节数。`_source` filtering 主要减少 ES 到 apiserver 的响应传输及解码量，不承诺减少 ES 对完整 `_source` 的加载和解析。
 
-所有 ES-backed 资源默认按创建时间倒序，因此通过 `ebs.io/target-os`、`ebs.io/target-arch` 完整指定构建目标后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
+所有 ES-backed 资源默认按创建时间倒序，因此通过 `ebs.io/target-arch` 完整指定构建目标后配合 `limit=1` 可以取得该 target 最新创建的 Build。Project status 不缓存最新 Build 或其状态，调用方应使用该查询读取最新 Build，并以返回对象的 `status` 为准。未完整限定 target 时，`limit=1` 只表示整个过滤结果中的最新一条，不表示每个 target 各返回一条。
 
 ## 待完善项
 

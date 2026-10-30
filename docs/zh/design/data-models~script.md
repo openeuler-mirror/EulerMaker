@@ -140,7 +140,7 @@ apiserver 内置 `rpmbuild` Script 模板，在服务就绪前初始化同名全
 
 接入 Script 后，BuildInfo Controller 创建新 Job 时：
 
-1. 依据 Build 的 OS、Arch 从 `Config/build-target` 当前内容解析镜像，见 [Config 构建流程](data-models~config.md#25-构建流程)。
+1. 依据 Project.spec.distro、Build.spec.arch 从 `Config/build-target` 当前内容解析镜像，见 [Config 构建流程](data-models~config.md#25-构建流程)。
 2. 读取 `Config/build-resource`，按表级默认值、spec 软件包、架构逐字段解析，见 [Config 构建资源内容](data-models~config.md#3-构建资源内容)。
 3. 解析 `buildPayload.rpmbuild_script`，未配置时选用 `rpmbuild`，读取 Script 并构造单元素 `scriptRefs`，见第 3 节。
 4. 配置解析成功后，将镜像、资源需求、脚本观测信息和 payload 写入同一个 Job 创建请求；解析或读取错误时不派发该新 Job。

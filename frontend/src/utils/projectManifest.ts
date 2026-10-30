@@ -1,6 +1,6 @@
 import { parse } from "yaml";
 
-import type { BuildTarget, Project } from "@/types";
+import type { ConfiguredBuildTarget, Project } from "@/types";
 import { isFullGitRef, toFullGitRef, type GitRefInput } from "./gitRef";
 
 const NAME_PATTERN = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/;
@@ -12,6 +12,7 @@ export type ProjectValidationKey =
   | "projects.invalidName"
   | "projects.reservedName"
   | "projects.targetRequired"
+  | "projects.targetDuplicate"
   | "project.invalidDefaultRef";
 
 export interface BasicProjectForm {
@@ -50,7 +51,8 @@ export function projectFromForm(form: BasicProjectForm): Project {
       displayName: form.displayName.trim() || name,
       description: form.description.trim(),
       defaultRef,
-      buildTargets: [target],
+      distro: target.os,
+      buildArches: [target.arch!],
     },
   };
 }
@@ -70,7 +72,10 @@ export function projectFromYaml(source: string): Project {
   const spec = isRecord(input.spec) ? input.spec : {};
   const name = typeof metadata.name === "string" ? metadata.name.trim() : "";
   validateName(name);
-  const targets = Array.isArray(spec.buildTargets) ? spec.buildTargets.map(normalizeTarget) : [];
+  const distro = typeof spec.distro === "string" ? spec.distro.trim() : "";
+  const arches = Array.isArray(spec.buildArches) ? spec.buildArches : [];
+  const targets = arches.map(arch => normalizeTarget({ os: distro, arch }));
+  if (new Set(targets.map(target => target.arch)).size !== arches.length) throw new ProjectManifestError("projects.targetDuplicate");
   if (!targets.length) throw new ProjectManifestError("projects.targetRequired");
 
   const project = structuredClone(input) as Project;
@@ -81,7 +86,7 @@ export function projectFromYaml(source: string): Project {
     ...(isStringMap(metadata.labels) ? { labels: metadata.labels } : {}),
     ...(isStringMap(metadata.annotations) ? { annotations: metadata.annotations } : {}),
   };
-  project.spec = { ...spec, buildTargets: targets } as Project["spec"];
+  project.spec = { ...spec, distro, buildArches: targets.map(target => target.arch!) } as Project["spec"];
   delete project.status;
   return project;
 }
@@ -93,7 +98,7 @@ function validateName(name: string): void {
   if (name === "default") throw new ProjectManifestError("projects.reservedName");
 }
 
-function normalizeTarget(value: unknown): BuildTarget {
+function normalizeTarget(value: unknown): ConfiguredBuildTarget {
   if (!isRecord(value)) throw new ProjectManifestError("projects.targetRequired");
   const os = typeof value.os === "string" ? value.os.trim() : "";
   const arch = typeof value.arch === "string" ? value.arch.trim() : "";

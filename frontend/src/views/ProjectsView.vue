@@ -367,7 +367,7 @@ function buildPaginationItems(total: number, current: number): Array<{ key: stri
 }
 
 function targetLabel(project: Project): string {
-  const targets = project.spec?.buildTargets || [];
+  const targets = (project.spec?.buildArches || []).map(arch => ({ os: project.spec?.distro, arch }));
   if (!targets.length) return t("common.emptyValue");
   return targets.slice(0, 2).map((item) => [item.os, item.arch].filter(Boolean).join(" / ")).join(" · ");
 }

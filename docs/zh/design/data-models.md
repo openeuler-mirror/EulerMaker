@@ -69,7 +69,7 @@ Project 下的子资源使用嵌套路由，路径中的 `{project}` 是 Snapsho
                   RpmRepoStatus
                   ConfigSpec PackageResourceConfig
                   RunnerSpec RunnerTaint RunnerStatus RunnerAddress RunnerInfo
-                  ResourceRequirements Toleration BuildTarget
+                  ResourceRequirements Toleration
                   PackageRepo PackageRepoStatus VersionConstraint
 ```
 
@@ -95,13 +95,16 @@ type Project struct {
 
 ### ProjectSpec
 
+一个 Project 对应一套发行版构建环境。`distro` 保存发行版标识，不保存镜像地址；所有构建目标共享该值，每个目标只指定架构。镜像映射继续由 `Config/build-target` 管理。构建互斥、增量基准和仓库发布范围统一为 Project + Arch，不从镜像名称推导发行版身份。
+
 ```go
 type ProjectSpec struct {
     DisplayName      string                     `json:"displayName,omitempty"`
     Description      string                     `json:"description,omitempty"`
     DefaultRef       string                     `json:"defaultRef,omitempty"`
     BuildPayload     string                     `json:"buildPayload,omitempty"`
-    BuildTargets     []BuildTarget              `json:"buildTargets,omitempty"`
+    Distro           string                     `json:"distro,omitempty"`
+    BuildArches      []string                   `json:"buildArches,omitempty"`
     PackageRepos     []PackageRepo              `json:"packageRepos,omitempty"`
     BootstrapRepos    []BootstrapRepo            `json:"bootstrapRepos,omitempty"`
 }
@@ -113,9 +116,20 @@ type ProjectSpec struct {
 | `description` | string | 否 | 项目描述 |
 | `defaultRef` | string | 否 | 默认完整 Git 引用，例如 `refs/heads/master`、`refs/tags/v1`；为空时默认 `refs/heads/master` |
 | `buildPayload` | string | 否 | 构建环境参数，YAML 格式；`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz` 和 `unuse_gcc_secure` 是包仓库名列表，命中时向 Job payload 写入相应布尔标记；`unparsable_spec` 是 spec 名列表，仅供 BuildInfo Controller 组装依赖时使用 |
-| `buildTargets` | []BuildTarget | 是 | 非空构建目标列表；每项仅包含 `os`、`arch`，创建和更新时组合必须唯一 |
+| `distro` | string | 是 | 工程统一的发行版标识，与 `Config/build-target.spec.content.targets` 的键精确匹配；不是镜像引用；创建后不可修改 |
+| `buildArches` | []string | 是 | 非空构建架构列表；创建和更新时每个架构必须非空且唯一 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
 | `bootstrapRepos` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
+
+`distro` 在 Project 创建后不可修改或删除；更新后的值与原值不一致时，apiserver 返回 `422 Invalid`，错误字段为 `spec.distro`。切换发行版环境必须创建新 Project，避免复用原工程的增量基准和稳定仓库。
+
+```yaml
+spec:
+  distro: openEuler-24.03-LTS-SP4
+  buildArches:
+    - x86_64
+    - aarch64
+```
 
 ### ProjectStatus
 
@@ -129,7 +143,7 @@ type ProjectStatus struct {
 |------|---------|------|
 | `phase` | `ProjectPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Active"` / `"Terminating"` |
 
-Project 不保存最新构建状态。调用方按 Project 路径查询 Build，通过 `ebs.io/target-os`、`ebs.io/target-arch` label 过滤，并使用默认的创建时间倒序和 `limit=1` 获取目标下最新 Build；构建状态以该 Build 的 `status` 为准。
+Project 不保存最新构建状态。调用方按 Project 路径查询 Build，通过 `ebs.io/target-arch` label 过滤，并使用默认的创建时间倒序和 `limit=1` 获取目标下最新 Build；构建状态以该 Build 的 `status` 为准。
 
 ### ProjectList
 
@@ -229,7 +243,7 @@ type Build struct {
 type BuildSpec struct {
     BuildType          BuildType              `json:"buildType,omitempty"`
     Packages           []string               `json:"packages,omitempty"`
-    BuildTarget        BuildTarget            `json:"buildTarget,omitempty"`
+    Arch               string                 `json:"arch,omitempty"`
     Publish            *bool                  `json:"publish,omitempty"`
 }
 ```
@@ -237,9 +251,11 @@ type BuildSpec struct {
 | 字段             | Go 类型 | 必填 | 说明 |
 |----------------|---------|------|------|
 | `buildType`    | BuildType | 是 | 公共 API 枚举：`"full"` / `"incremental"` / `"specified"` / `"single"` |
-| `buildTarget`  | BuildTarget | 是 | 构建目标 |
+| `arch` | string | 是 | 必须属于 Project.spec.buildArches；创建后不可修改 |
 | `publish` | *bool | 否 | 仅非 single 允许设置；创建时省略由 apiserver 补为 `true`，显式 `false` 跳过正式发布但仍生成过程仓。single 必须省略，否则拒绝请求 |
 | `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
+
+Build 只记录目标架构，不重复保存发行版标识。apiserver 使用同一次 Project 读取完成架构归属校验，并以 `Project.spec.distro + Build.spec.arch` 检查 `Config/build-target` 的镜像映射。BuildInfo Controller 从所属 Project 读取不可变的 `spec.distro` 解析镜像；镜像配置的读取时机和 tag/digest 边界见 [Config 构建流程](data-models~config.md#25-构建流程)。
 
 Build 创建后，除 `incremental` 类型在 Pending 阶段由 Build Controller 幂等更新 `spec.packages` 外，其余 `spec` 字段不可修改。`packages` 允许为空数组表示没有构建种子；仅当 Build 进入 Prepared 后，才表示本轮种子已确认。普通用户不能修改 Controller 计算结果。运行状态通过 `/status` 子资源更新。
 
@@ -284,7 +300,7 @@ type BootstrapRepo struct {
 | 字段     | Go 类型 | 说明                    |
 |--------|---------|-----------------------|
 | `name` | string | repo名称，如 `"everything"` |
-| `url` | string | 外部软件源的基础地址，不包含架构目录；BuildInfo Controller 使用时追加 `/{buildTarget.arch}` |
+| `url` | string | 外部软件源的基础地址，不包含架构目录；BuildInfo Controller 使用时追加 `/{arch}` |
 
 ### BuildStatus
 
@@ -629,7 +645,7 @@ RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；r
 |----------------|---------|------|
 | `phase` | RpmRepoReleasePhase | 正式发布状态（终态：`Ready` / `Failed` / `Skipped`） |
 | `sourceRepositoryUID` | string | 已发布版本使用的过程仓 UID |
-| `contentURL` | string | Project/OS/架构稳定仓库入口 |
+| `contentURL` | string | Project/架构稳定仓库入口 |
 | `transition` | *ReleaseTransition | 正在准备或激活的固定发布输入 |
 | `updatedAt` | *metav1.Time | 正式发布状态最近更新时间 |
 
@@ -699,7 +715,7 @@ type BuildTargetContentArch struct {
 }
 ```
 
-`targets` 可为空；每个 OS 下至少有一个架构，每个架构必须有合法镜像引用。完整校验见 [构建目标内容](./data-models~config.md#22-对象)。
+`targets` 可为空；每个 distro 下至少有一个架构，每个架构必须有合法镜像引用。完整校验见 [构建目标内容](./data-models~config.md#22-对象)。
 
 `build-resource` 的 `content` 解码为以下内部结构（不是公开 API 类型）：
 
@@ -1044,22 +1060,6 @@ type RunnerList struct {
 
 ## 九、公共子结构体
 
-### BuildTarget
-
-```go
-type BuildTarget struct {
-    OS   string `json:"os,omitempty"`
-    Arch string `json:"arch,omitempty"`
-}
-```
-
-| 字段         | Go 类型 | 说明                         |
-|------------|---------|----------------------------|
-| `os` | string | 构建os |
-| `arch`     | string | `"aarch64"` / `"x86_64"`   |
-
----
-
 ### PackageRepo
 
 ```go
@@ -1146,16 +1146,11 @@ type VersionConstraint struct {
 
 ```
 ProjectSpec
-├── BuildTarget
 ├── PackageRepo
-│   └── BuildTarget
 └── BootstrapRepo
 
 SnapshotSpec
 └── PackageRepoStatus
-
-BuildSpec
-└── BuildTarget
 
 BuildInfoSpec
 └── BootstrapRepo

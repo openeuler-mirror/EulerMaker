@@ -1,7 +1,7 @@
 import { list } from "@/api";
 import type { Project } from "@/types";
 
-export const PROJECT_LIST_INCLUDE_FIELDS = "metadata,spec.displayName,spec.description,spec.buildTargets";
+export const PROJECT_LIST_INCLUDE_FIELDS = "metadata,spec.displayName,spec.description,spec.distro,spec.buildArches";
 
 // Kubernetes label selectors do not support OR across different keys.
 // Fetch both filtered lists completely before merging and paginating locally.

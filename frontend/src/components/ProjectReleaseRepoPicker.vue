@@ -9,7 +9,6 @@
     <template v-else>
       <div class="release-repo-fields">
         <div class="field"><span>{{ t('project.releaseProject') }}</span><AppSelect v-model="selectedName" :options="projectOptions" :label="t('project.releaseProject')" :placeholder="t('project.selectReleaseProject')" searchable :search-placeholder="t('project.releaseProjectSearch')" :empty-text="t('project.noReleaseProjects')" :disabled="disabled || !projectOptions.length" /></div>
-        <div class="field"><span>{{ t('project.releaseOS') }}</span><AppSelect v-model="selectedOS" :options="selectedOSOptions" :label="t('project.releaseOS')" :placeholder="t('project.selectReleaseOS')" :disabled="disabled || !selectedProject" /></div>
       </div>
       <p v-if="!projectOptions.length" class="form-hint">{{ t('project.noReleaseProjects') }}</p>
       <label v-if="url" class="field"><span>{{ t('project.sourceAddress') }}</span><input :value="url" readonly /></label>
@@ -23,7 +22,7 @@ import { useI18n } from 'vue-i18n';
 import { errorTranslationKey, list } from '@/api';
 import type { BootstrapRepo, Project } from '@/types';
 import AppSelect from './AppSelect.vue';
-import { filterReleaseProjects, projectReleaseRepoUrl, releaseOperatingSystems } from '@/utils/projectReleaseRepo';
+import { filterReleaseProjects, projectReleaseRepoUrl } from '@/utils/projectReleaseRepo';
 
 const props = defineProps<{ currentProject: string; existingUrls: string[]; disabled?: boolean }>();
 const emit = defineEmits<{ add: [repo: BootstrapRepo] }>();
@@ -32,19 +31,16 @@ const projects = ref<Project[]>([]);
 const loading = ref(false);
 const error = ref('');
 const selectedName = ref('');
-const selectedOS = ref('');
 let generation = 0;
-const candidates = computed(() => filterReleaseProjects(projects.value, props.currentProject, '', ''));
+const candidates = computed(() => filterReleaseProjects(projects.value, props.currentProject, ''));
 const projectOptions = computed(() => candidates.value.map(project => ({ value: project.metadata!.name!, label: project.metadata!.name! })));
 const selectedProject = computed(() => candidates.value.find(project => project.metadata?.name === selectedName.value));
-const selectedOSOptions = computed(() => (selectedProject.value ? releaseOperatingSystems(selectedProject.value) : []).map(value => ({ value, label: value })));
 watch(candidates, () => { if (!selectedProject.value) selectedName.value = ''; });
-watch(selectedOSOptions, options => { if (!options.some(option => option.value === selectedOS.value)) selectedOS.value = options.length === 1 ? options[0]!.value : ''; });
-const url = computed(() => selectedProject.value ? projectReleaseRepoUrl(selectedProject.value, selectedOS.value) : '');
+const url = computed(() => selectedProject.value ? projectReleaseRepoUrl(selectedProject.value) : '');
 const duplicate = computed(() => props.existingUrls.some(value => value.trim().replace(/\/+$/, '') === url.value));
 function addRepository(): void {
   if (props.disabled || !url.value || duplicate.value) return;
-  emit('add', { name: `${selectedName.value}-${selectedOS.value}`, url: url.value });
+  emit('add', { name: selectedName.value, url: url.value });
 }
 async function loadProjects(): Promise<void> {
   const current = ++generation;
@@ -54,7 +50,7 @@ async function loadProjects(): Promise<void> {
   let next = '';
   try {
     do {
-      const params = new URLSearchParams({ limit: '100', includeFields: 'metadata,spec.displayName,spec.buildTargets' });
+      const params = new URLSearchParams({ limit: '100', includeFields: 'metadata,spec.displayName' });
       if (next) params.set('continue', next);
       const result = await list<Project>(`/apis/ebs/v1/projects?${params}`);
       if (current !== generation) return;

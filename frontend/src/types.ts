@@ -18,7 +18,7 @@ export interface ResourceList<T> {
   metadata?: ListMeta;
 }
 
-export interface BuildTarget {
+export interface ConfiguredBuildTarget {
   os?: string;
   arch?: string;
 }
@@ -62,7 +62,8 @@ export interface Project {
     description?: string;
     defaultRef?: string;
     buildPayload?: string;
-    buildTargets?: BuildTarget[];
+    distro?: string;
+    buildArches?: string[];
     packageRepos?: PackageRepo[];
     bootstrapRepos?: BootstrapRepo[];
   };
@@ -79,7 +80,7 @@ export interface Snapshot {
 
 export interface Build {
   metadata?: ObjectMeta;
-  spec?: { buildType?: string; packages?: string[]; buildTarget?: BuildTarget; publish?: boolean };
+  spec?: { buildType?: string; packages?: string[]; arch?: string; publish?: boolean };
   status?: {
     phase?: string;
     stage?: string;

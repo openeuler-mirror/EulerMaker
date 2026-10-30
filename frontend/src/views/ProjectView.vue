@@ -105,7 +105,7 @@
           <div v-else class="package-job-list">
             <div v-for="job in packageHistoryJobs" :key="job.metadata?.name" class="package-job-item">
               <div class="package-job-heading"><button v-if="job.metadata?.name" class="job-name-link job-name-button" type="button" :aria-expanded="expandedPackageJobName === job.metadata.name" @click="togglePackageJobDetails(job.metadata.name)">{{ job.metadata.name }}</button><StatusBadge :value="job.status?.phase" /></div>
-              <span>{{ job.metadata?.labels?.["ebs.io/target-os"] || t("common.emptyValue") }} · {{ job.metadata?.labels?.["ebs.io/target-arch"] || t("common.emptyValue") }}</span>
+              <span>{{ project.spec?.distro || t("common.emptyValue") }} · {{ job.metadata?.labels?.["ebs.io/target-arch"] || t("common.emptyValue") }}</span>
               <time>{{ formatDate(job.status?.startTime || job.metadata?.creationTimestamp) }}</time>
               <div v-if="expandedPackageJobName === job.metadata?.name && job.metadata?.name" class="package-job-details">
                 <PackageJobArtifacts v-if="job.status?.phase === 'Succeeded' || job.status?.phase === 'Failed'" :project="name" :job-name="job.metadata.name" :succeeded="job.status?.phase === 'Succeeded'" />
@@ -210,8 +210,9 @@
           <article class="content-panel">
             <div class="section-heading"><div><h2>{{ t("project.buildTargets") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openTargetEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="targetSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.targetsSaved") }}</div>
-            <div v-if="project.spec?.buildTargets?.length" class="project-table-wrap">
-              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetOS") }}</th><th>{{ t("projects.targetArch") }}</th></tr></thead><tbody><tr v-for="(target, index) in project.spec.buildTargets" :key="`${target.os}-${target.arch}-${index}`"><td><strong>{{ target.os || t("common.emptyValue") }}</strong></td><td>{{ target.arch || t("common.emptyValue") }}</td></tr></tbody></table>
+            <div v-if="project.spec?.buildArches?.length" class="project-table-wrap">
+              <p>{{ t("projects.targetOS") }}: <strong>{{ project.spec.distro }}</strong></p>
+              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetArch") }}</th></tr></thead><tbody><tr v-for="arch in project.spec.buildArches" :key="arch"><td>{{ arch }}</td></tr></tbody></table>
             </div>
             <p v-else class="config-empty">{{ t("project.noBuildTargets") }}</p>
           </article>
@@ -346,7 +347,7 @@
           <fieldset v-for="(target, index) in editingTargets" :key="index" class="target-fieldset editable-target">
             <legend>{{ t("project.targetNumber", { number: index + 1 }) }}</legend>
             <button class="remove-target-button" type="button" :aria-label="t('project.removeTarget', { number: index + 1 })" :disabled="editingTargets.length === 1 || savingTargets" @click="removeTarget(index)"><Delete /></button>
-            <BuildTargetFields v-model:os="target.os" v-model:arch="target.arch" allow-legacy />
+            <BuildTargetFields :os="project?.spec?.distro" v-model:arch="target.arch" allow-legacy fixed-os />
           </fieldset>
         </div>
         <button class="secondary-button add-target-button" type="button" :disabled="savingTargets" @click="addTarget"><Plus />{{ t("project.addTarget") }}</button>
@@ -425,11 +426,11 @@ import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel"
 import { decodeSpecName } from "@/utils/specName";
 import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
 import { formatGitRef, isFullGitRef, toFullGitRef, toGitRefInput, toPackageRefFields, toPackageRefInput, type PackageRefInput } from "@/utils/gitRef";
-import type { BootstrapRepo, Build, BuildTarget, Job, PackageRepo, Project } from "@/types";
+import type { BootstrapRepo, Build, ConfiguredBuildTarget, Job, PackageRepo, Project } from "@/types";
 
 type ProjectTab = "overview" | "builds" | "graph" | "config";
 type BuildType = "full" | "incremental" | "single" | "specified";
-type BuildTargetDraft = BuildTarget & { selected: boolean; publish: boolean };
+type BuildTargetDraft = ConfiguredBuildTarget & { selected: boolean; publish: boolean };
 
 const route = useRoute();
 const router = useRouter();
@@ -438,7 +439,7 @@ const { t, te } = useI18n();
 const name = computed(() => String(route.params.name || ""));
 const project = ref<Project | null>(null);
 const projectIsFull = ref(false);
-const projectSummaryFields = "metadata,spec.displayName,spec.description,spec.defaultRef,spec.buildTargets,spec.bootstrapRepos,spec.buildPayload";
+const projectSummaryFields = "metadata,spec.displayName,spec.description,spec.defaultRef,spec.distro,spec.buildArches,spec.bootstrapRepos,spec.buildPayload";
 let projectLoadSequence = 0;
 let packageLoadPromise: Promise<boolean> | null = null;
 let packageLoadSequence = -1;
@@ -531,7 +532,7 @@ const abortingBuild = ref(false);
 const abortErrorKey = ref("");
 const abortedBuildName = ref("");
 const targetEditorOpen = ref(false);
-const editingTargets = ref<BuildTarget[]>([]);
+const editingTargets = ref<ConfiguredBuildTarget[]>([]);
 const savingTargets = ref(false);
 const targetErrorKey = ref("");
 const targetErrorParams = ref<Record<string, string>>({});
@@ -667,7 +668,7 @@ async function confirmJobAbort(): Promise<void> {
   }
 }
 const buildConfigurationMissing = computed(() =>
-  !project.value?.spec?.buildTargets?.length || (projectIsFull.value && !project.value?.spec?.packageRepos?.some((repo) => repo.name)),
+  !project.value?.spec?.buildArches?.length || (projectIsFull.value && !project.value?.spec?.packageRepos?.some((repo) => repo.name)),
 );
 const ownerUsername = computed(() => project.value?.metadata?.labels?.["ebs.io/owner-user"] || "");
 const memberUsernames = computed(() =>
@@ -979,9 +980,9 @@ async function openBuildDialog(type: BuildType, packageName = ""): Promise<void>
   buildGitRef.value = "";
   selectedBuildPackages.value = fixedBuildPackage.value ? [fixedBuildPackage.value] : [];
   buildPackageSearch.value = "";
-  buildTargetDrafts.value = (project.value.spec?.buildTargets || []).map((target) => ({
-    os: target.os,
-    arch: target.arch,
+  buildTargetDrafts.value = (project.value.spec?.buildArches || []).map((arch) => ({
+    os: project.value!.spec?.distro,
+    arch,
     selected: true,
     publish: true,
   }));
@@ -1032,7 +1033,7 @@ async function createBuild(): Promise<void> {
         apiVersion: "ebs/v1", kind: "Build",
         metadata: { name: buildNames[index], ...(annotations ? { annotations } : {}) },
         spec: {
-          buildType: selectedType, buildTarget: { os: target.os, arch: target.arch },
+          buildType: selectedType, arch: target.arch,
           ...(selectedType !== "single" ? { publish: target.publish } : {}),
           ...(packages ? { packages } : {}),
         },
@@ -1074,9 +1075,9 @@ function openTargetEditor(): void {
   if (!project.value || !canEditProject.value) return;
   targetSaveSuccess.value = false;
   targetErrorKey.value = "";
-  editingTargets.value = (project.value.spec?.buildTargets || []).map((target) => ({
-    os: target.os || "",
-    arch: target.arch || "",
+  editingTargets.value = (project.value.spec?.buildArches || []).map((arch) => ({
+    os: project.value!.spec?.distro || "",
+    arch,
   }));
   if (!editingTargets.value.length) addTarget();
   targetEditorOpen.value = true;
@@ -1276,7 +1277,7 @@ function closeTargetEditor(): void {
 }
 
 function addTarget(): void {
-  editingTargets.value.push({ os: "", arch: "" });
+  editingTargets.value.push({ os: project.value?.spec?.distro || "", arch: "" });
 }
 
 function removeTarget(index: number): void {
@@ -1296,7 +1297,7 @@ async function saveTargets(): Promise<void> {
   }
   const seenTargets = new Set<string>();
   for (const target of targets) {
-    const key = JSON.stringify([target.os, target.arch]);
+    const key = target.arch!;
     if (seenTargets.has(key)) {
       targetErrorKey.value = "projects.targetDuplicate";
       targetErrorParams.value = { os: target.os!, arch: target.arch! };
@@ -1308,7 +1309,7 @@ async function saveTargets(): Promise<void> {
   targetErrorKey.value = "";
   try {
     const updated = JSON.parse(JSON.stringify(project.value)) as Project;
-    updated.spec = { ...updated.spec, buildTargets: targets };
+    updated.spec = { ...updated.spec, buildArches: targets.map(target => target.arch!) };
     project.value = await request<Project>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}`, {
       method: "PUT",
       body: JSON.stringify(updated),
@@ -1633,11 +1634,11 @@ function fallbackCopy(value: string): void {
 }
 
 function buildTargetLabel(build: Build): string {
-  const target = build.spec?.buildTarget;
-  return targetListLabel(target ? [target] : []);
+  const target = { os: project.value?.spec?.distro, arch: build.spec?.arch };
+  return targetListLabel([target]);
 }
 
-function targetListLabel(targets?: BuildTarget[]): string {
+function targetListLabel(targets?: ConfiguredBuildTarget[]): string {
   if (!targets?.length) return t("common.emptyValue");
   return targets.map((target) => [target.os, target.arch].filter(Boolean).join(" / ")).filter(Boolean).join("，") || t("common.emptyValue");
 }

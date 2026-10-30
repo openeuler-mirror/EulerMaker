@@ -103,7 +103,7 @@ type Client interface {
     GetBuild(ctx context.Context, project, name string) (*v1.Build, error)
     // GetLastPublishedBuild 返回最后一个发布成功的 Build。
     // 项目作用域与过滤契约见 3.2。
-    GetLastPublishedBuild(ctx context.Context, project, os, arch string) (*v1.Build, error)
+    GetLastPublishedBuild(ctx context.Context, project, arch string) (*v1.Build, error)
     // incremental 在 Snapshot Active 后读取 baseBuildRef 指向的子资源，计算种子仓库。
     UpdateBuild(ctx context.Context, obj *v1.Build) (*v1.Build, error)
     GetSnapshot(ctx context.Context, project, name string) (*v1.Snapshot, error)
@@ -124,8 +124,8 @@ type Client interface {
 ### 3.2 路径约定
 
 - Project：`GET /apis/ebs/v1/projects/{project}`（Project 为集群级资源，namespace 段为空；共享 client 的 `Get` 对 `projects` 要求空 namespace）；
-- 最后一个发布成功的 Build：`GET /apis/ebs/v1/projects/{project}/builds?labelSelector=ebs.io/target-os={os},ebs.io/target-arch={arch}&fieldSelector=status.phase=Success,status.stage=publish&limit=1`（apiserver 默认降序，路径即项目作用域）；
-  - `os` / `arch` 取 `Build.spec.buildTarget.os` / `Build.spec.buildTarget.arch`，`{project}` 取 `Build.metadata.namespace`；
+- 最后一个发布成功的 Build：`GET /apis/ebs/v1/projects/{project}/builds?labelSelector=ebs.io/target-arch={arch}&fieldSelector=status.phase=Success,status.stage=publish&limit=1`（apiserver 默认降序，路径即项目作用域）；
+  - `arch` 取 `Build.spec.arch`，`{project}` 取 `Build.metadata.namespace`；
   - 通过共享 client 的项目级 List 发起，由路径把查询限定在该 Project 内；否则 `limit=1` 会取到其他 Project 的最新 Build，导致 base 误判。
 - 子资源单对象：`GET /apis/ebs/v1/projects/{project}/{resource}/{name}`；
 - 子资源创建：`POST /apis/ebs/v1/projects/{project}/{resource}`；
@@ -160,20 +160,17 @@ metadata:
   name: uuid
   namespace: ${project.metadata.name}
   labels:
-    ebs.io/target-os: openEuler-22.03-LTS
     ebs.io/target-arch: aarch64
     ebs.io/build-type: full
 spec:
   buildType: full
   publish: true
-  buildTarget:
-    os: openEuler-22.03-LTS
-    arch: aarch64
+  arch: aarch64
 status:
   phase: Pending
 ```
 
-各阶段与终态的 status 写入清单以第七章为准。
+Build 的 `spec.arch` 指定本次构建架构，发行版统一从所属 Project 的不可变字段 `spec.distro` 读取，不在 Build 中保存。历史基准、RpmRepo 目标标签和发布范围使用 Project + Arch，不使用 distro 分区。各阶段与终态的 status 写入清单以第七章为准。
 
 字段来源：
 
@@ -183,7 +180,7 @@ status:
 | `Build.metadata.labels`                                                                                | 用户或调用方           | 创建 Build 时写入                               |
 | `Build.spec.buildType`                                                                                 | 用户提交             | Controller 只读；允许值 `full` / `incremental` / `specified` / `single`，控制器只对 `single` 特判，其余取值（含未枚举值）一律按非 single 处理 |
 | `Build.spec.packages` | 用户提交（single/specified）或 Build Controller（incremental） | full 为空；incremental 创建时为空，当前 Snapshot Active 后由本控制器写入变更及上轮失败 spec 所属的包仓库名，作为 BuildInfo 依赖扩散的种子；不是最终构建集 |
-| `Build.spec.buildTarget` | 用户提交 | 创建后不可修改 |
+| `Build.spec.arch` | 用户提交 | 创建后不可修改 |
 | `Build.spec.publish` | 用户提交，apiserver 默认填充 | 仅非 single，省略时默认 `true`，创建后不可修改；发布输入规则见数据模型 BuildSpec |
 | `Build.status.phase` / `Build.status.stage` | Build Controller | Pending → Prepared → Processing 由本控制器状态机推进；publish 终态由本控制器依据 `RpmRepo.status.release.phase` 判定，`stage` 由本控制器写 `publish` |
 | `Build.status.startTime` / `Build.status.endTime` / `Build.status.baseBuildRef` | Build Controller | 进入 Processing 时写 `startTime`，进入终态时写 `endTime`；`baseBuildRef` 仅非 single 在 Pending 阶段写入，`nil` 表示未解析，`{}` 表示无上一个发布成功的 Build |
@@ -238,8 +235,7 @@ metadata:
   name: ${build.metadata.name}
   namespace: ${build.metadata.namespace}
   labels:
-    ebs.io/target-os: ${build.spec.buildTarget.os}
-    ebs.io/target-arch: ${build.spec.buildTarget.arch}
+    ebs.io/target-arch: ${build.spec.arch}
 status:
   repository:
     repositoryUID: DB3A8CE2-00CD-4C89-9C20-ADA417C83155
@@ -257,7 +253,7 @@ status:
 - 只有在「确定没有可继承基线」时降级：历史对象 NotFound，或历史对象存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空。此时降级为不带基线的创建（两个字段都不写入，避免版本 UID 与地址不匹配），输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryUnavailable base_build=<name> error=<error>`，本轮继续正常推进，不写 Build 终态、不 requeue。
 - 历史对象读取失败（网络错误、超时、408/429/5xx）不降级：本轮不创建 RpmRepo、不写 `Build.status`，把 `classifyReadError` 的分类结果返回给框架——临时错误走退避重试（依赖 10s 轮询复查，下一次读取成功后正常创建与推进），并输出结构化日志 `controller=build key=<ns/name> kind=RpmRepo name=<name> reason=BaseRepositoryReadFailed base_build=<name> retryable=<bool> error=<error>`；`401/403/400/422` 与响应身份契约错误按 `controller.NewPermanentError` 返回（同一日志 `retryable=false`）；Manager context 取消返回 `ctx.Err()`，同样不创建、不写 status。
 - 创建请求携带成对的 `repositoryUID` / `contentURL`；不初始化 release、transition、sourceJobNames 或 conditions；无可继承基线时 repository 保持 nil。已有对象不补写或覆盖初始状态。
-- 创建时同时写入目标标签 `ebs.io/target-os` / `ebs.io/target-arch`（值取 `Build.spec.buildTarget.os` / `arch`），使 RpmRepo 可按构建目标查询与归组；标签只在创建请求中携带一次，已存在的同名 RpmRepo 不补写、不修改其 metadata。
+- 创建时同时写入目标标签 `ebs.io/target-arch`（值取 `Build.spec.arch`），使 RpmRepo 可按构建目标查询与归组；标签只在创建请求中携带一次，已存在的同名 RpmRepo 不补写、不修改其 metadata。
 
 
 发布后仅消费以下状态字段，完整结构见 data-models.md：
@@ -274,7 +270,7 @@ status:
 | 字段                                    | 来源/写入方             | 说明                                             |
 | ------------------------------------- | ------------------ | ---------------------------------------------- |
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 `Build.metadata.name` 同名，namespace 来自 Build |
-| `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-os` / `ebs.io/target-arch`，值取 `Build.spec.buildTarget.os` / `arch` ；仅创建时写入一次，已有对象不补写、不改写 |
+| `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-arch`，值取 `Build.spec.arch` ；仅创建时写入一次，已有对象不补写、不改写 |
 | `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时种入） | 创建时复制历史过程仓的不可变版本 UID 作为本轮过程仓的当前版本；已有对象不覆盖；随后由 RpmRepo Controller 推进版本 |
 | `RpmRepo.status.repository.contentURL` | Build Controller（创建时种入） | 与 `repositoryUID` 同源同时种入，复制历史过程仓的不可变地址；已有对象不覆盖；随后由 RpmRepo Controller 推进版本 |
 | `RpmRepo.status.release.phase` | RpmRepo Controller | publish=false 时在过程仓处理结束后写 Skipped，其余按 Ready / Failed 消费发布结果 |
@@ -412,13 +408,13 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 ### 7.2 Pending
 
 - 仅非 single 且 `Build.status.baseBuildRef` 为 nil：
-  - 调用 `GetLastPublishedBuild(project, os, arch)`：
+  - 调用 `GetLastPublishedBuild(project, arch)`：
     - 若结果为空，写 `Build.status.baseBuildRef={}`；
     - 否则写：
       - `Build.status.baseBuildRef.name`（上一个发布成功 Build 的 `Build.metadata.name`）
   - 写入后立即返回零值 + `nil`，`ensure Snapshot` / `ensure RpmRepo` 与后续等待从下一轮继续；`{}` 与实际值同样视为已处理。
 - 按第六章 Pending 行先 ensure Snapshot 并等待 Active。`incremental` 在 ensure RpmRepo 前计算并固化包仓库种子；其他类型不执行此步骤。
-- `incremental` 只以已固化的 `Build.status.baseBuildRef.name` 为历史基准，即同 Project + OS + Arch 最近一次 `Success` 且 `stage=publish` 的 Build。**不查询最新 `Success/Failed` 非 single Build**；未成功发布的 Failed 轮次不作为比较基准。成功发布的轮次仍可能有失败 spec，须读取其同名 BuildInfo。基准名为空时按无历史输入处理；若基准名非空但同名 Snapshot/BuildInfo 缺失或不可读，不得当作空基准静默跳过，按读错误分类重试或报告契约错误。
+- `incremental` 只以已固化的 `Build.status.baseBuildRef.name` 为历史基准，即同 Project + Arch 最近一次 `Success` 且 `stage=publish` 的 Build。**不查询最新 `Success/Failed` 非 single Build**；未成功发布的 Failed 轮次不作为比较基准。成功发布的轮次仍可能有失败 spec，须读取其同名 BuildInfo。基准名为空时按无历史输入处理；若基准名非空但同名 Snapshot/BuildInfo 缺失或不可读，不得当作空基准静默跳过，按读错误分类重试或报告契约错误。
 - 当前 Snapshot 为 Active 后读取其 `packageRepoStatuses`；与基准 Snapshot 按仓库名比较，当前新增或 `commitID` 变化的仓库入种子，已删除的仓库不入种子。再从基准 BuildInfo 的 `status.specResults` 选取非 Succeeded 的终态条目（PrepareFailed、BuildFailed、InstallFailed、ArchUnsupported），由 key 提取仓库名并合并；仅保留当前 Snapshot 中存在的仓库名，按字典序去重排序。
 - 每次 Pending 调和均重新计算种子；若与当前 `spec.packages` 相同（包括空列表），无需写入。否则用主资源 `UpdateBuild` 仅写 `spec.packages`，成功后以返回的 Build 为准；Conflict 放弃本轮决策并重新 GET 计算，Unknown 先 GET 确认写入意图，不用新 resourceVersion 重放旧决定。只有本轮计算结果已确认持久化，才继续 ensure RpmRepo；重启后仍处于 Pending 时幂等重算，进入 Prepared 后不再查询历史或改写 packages。
 - 非 single 随后 ensure RpmRepo（按 4.3 固化基线），single 跳过。仅 incremental 的 BuildInfo 创建和进入 Prepared 以本轮种子确认持久化为门禁。`Build.spec.packages` 仅表示初始仓库种子；最终 spec 构建集及下游依赖扩散仍由 BuildInfo Controller 依据本轮完整 specDepends 计算。
@@ -694,7 +690,7 @@ buildinfos:     get, create
 - 阶段读取范围：Prepared 与 Processing/build 的 BuildInfo 存在时，断言不 GET Snapshot/RpmRepo；Processing/publish 的 RpmRepo 存在时，断言不 GET Snapshot/BuildInfo，直接使用发布结果。前序对象单独被删除不触发全链路巡检或重建；
 - Snapshot 就绪门禁：非 single 的 Pending 中 Snapshot 未 Active 时不 GET/Create RpmRepo；Active 后才 ensure RpmRepo；single 等待 Snapshot Active 后直接进入 Prepared。Prepared 只 ensure BuildInfo，不再检查前序对象；RpmRepo 没有可用过程仓版本不阻止正常阶段推进；
 - RpmRepo 基线种入：非 single 构建在 `baseBuildRef.Name` 非空时断言只读取一次同名历史 RpmRepo、`CreateRpmRepo` 的 `spec` 为 `{}` 且 `status.repository.repositoryUID` 与 `status.repository.contentURL` 都等于历史值、release 为空，conditions 为空；非 single 的 `baseBuildRef={}` 断言零次历史读取、repository 为 nil；历史对象 NotFound 或存在但 `status.repository` 缺失 / `repositoryUID` 为空 / `contentURL` 为空时断言仍创建 RpmRepo、两个字段都为空，并输出 `reason=BaseRepositoryUnavailable` 日志，且不写 Build 终态、不延迟重入；历史对象读取失败（网络错误、超时、408/429/5xx）断言返回可重试错误、`CreateRpmRepo` 与 `UpdateBuildStatus` 均为 0、Build 保持 Pending 并输出 `reason=BaseRepositoryReadFailed retryable=true`；`401/403/400/422` 与响应身份契约错误断言返回 `PermanentError`、同样不创建且日志 `retryable=false`；已有 RpmRepo（含 `metadata.deletionTimestamp` 非空）断言不读取历史、不覆盖基线字段；创建后重入与进程重启断言不重复查询、不改写这些字段；
-- RpmRepo 目标标签：断言 `CreateRpmRepo` 请求的 `metadata.labels` **恰好**为 `{ebs.io/target-os: <Build.spec.buildTarget.os>, ebs.io/target-arch: <Build.spec.buildTarget.arch>}`（无多余标签），有/无继承基线两条创建路径都一致；非 single 覆盖标签断言，single 不创建该对象；已有 RpmRepo 命中时断言沿用对象且**不补写、不改写**其 labels；
+- RpmRepo 目标标签：断言 `CreateRpmRepo` 请求的 `metadata.labels` **恰好**为 `{ebs.io/target-arch: <Build.spec.arch>}`（无多余标签），有/无继承基线两条创建路径都一致；非 single 覆盖标签断言，single 不创建该对象；已有 RpmRepo 命中时断言沿用对象且**不补写、不改写**其 labels；
 - AlreadyExists 优先级：POST 返回 AlreadyExists 后 GET 命中正常对象，断言沿用并继续阶段，不覆盖 spec、不再次 POST、不直接返回通用 Conflict 重入；GET 命中删除中对象则等待，GET NotFound 则延迟 1s，其他读取错误按分类返回；
 - 永久错误与业务失败隔离：覆盖 API 400/401/403/422、非法输入和客户端错误，断言不调用 UpdateBuildStatus、不写失败条件，只记录并返回 PermanentError；对照覆盖 single 结果汇总失败（build 或 install 非 Succeeded）、release.phase=Failed 和 Processing 直接依赖 NotFound，仅确认对应失败原因后才写 Failed，且状态写入失败不得被业务 PermanentError 覆盖；静态配置非法在 initializer 阶段启动失败；
 - 删除中子资源：本轮读到 deletionTimestamp 时不调用 Create、不写 Build.status，返回零值 + nil；对象消失后，仅 Pending/Prepared 的创建职责允许 ensure 创建，Processing 记录缺失异常并写 Failed；
@@ -731,6 +727,6 @@ buildinfos:     get, create
 
 - `Build.metadata.name` 为 uuid，不存在同名重建。
 - 配套 API 契约：使用 `RpmRepoReleaseSkipped` 枚举；创建 RpmRepo 时保留成对的 repositoryUID / contentURL，以及显式传入的 `release.phase=Skipped`。Skipped 不要求 release.contentURL，不允许 release.transition；未提供 repository 时保持 nil。创建保留规则与状态校验见 [apiserver 设计](ebs-apiserver.md)。
-- `ebs.io/target-os`、`ebs.io/target-arch`、`ebs.io/build-type` 由创建方或 apiserver 补齐，且必须与 spec 一致；`GetLastPublishedBuild` 依赖 `ebs.io/target-os` / `ebs.io/target-arch` 两个 label 与 `status.phase` / `status.stage` 字段，`PollingSource` 只依赖 `status.phase` 字段，不依赖任何 label。
+- `ebs.io/target-arch`、`ebs.io/build-type` 由创建方或 apiserver 补齐，且必须与 spec 一致；`GetLastPublishedBuild` 依赖 `ebs.io/target-arch` 标签 与 `status.phase` / `status.stage` 字段，`PollingSource` 只依赖 `status.phase` 字段，不依赖任何 label。
 - 本轮不设未就绪超时。
 - 启动入队、单副本和重启恢复的取舍见第十二章；部署身份与授权的范围见第十一章。

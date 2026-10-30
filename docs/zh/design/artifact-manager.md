@@ -61,7 +61,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
-| BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{os}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
+| BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/releases/{buildName}` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/releases/{buildName}` | 删除正式发布记录 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases/{buildName}/activate` | 激活指定正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
@@ -72,8 +72,8 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/stream` | 订阅实时日志 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/v1/{repositoryUID}/{path...}` | 读取过程仓文件 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/v1/{repositoryUID}/{path...}` | 查询过程仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
-| Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/{project}/{os}/{arch}/{path...}` | 读取当前正式仓文件 | 公开只读，不经 Gateway 鉴权 |
-| Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/{project}/{os}/{arch}/{path...}` | 查询当前正式仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/{project}/{arch}/{path...}` | 读取当前正式仓文件 | 公开只读，不经 Gateway 鉴权 |
+| Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/{project}/{arch}/{path...}` | 查询当前正式仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/releases/v1/{buildName}/{path...}` | 读取指定发布版本的仓库文件 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/releases/v1/{buildName}/{path...}` | 查询指定发布版本的仓库文件元数据 | 公开只读，不经 Gateway 鉴权 |
 | 健康检查 → Artifact Manager | `GET /healthz` | 存活探测 | 无认证 |
@@ -705,24 +705,23 @@ Artifact Manager 校验每个输入的 Completed Manifest。可定位的输入�
 ${dataDir}/
 ├── repositories/
 │   └── {project}/
-│       └── {os}/
-│           └── {arch}/
-│               ├── current -> releases/{buildName}
-│               ├── Packages -> current/Packages
-│               ├── repodata -> current/repodata
-│               ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
-│               ├── releases/
-│               │   └── {buildName}/
-│               │       ├── Packages/
-│               │       ├── repodata/
-│               │       └── release.json
-│               └── history/
-│                   └── {buildName}/
-│                       └── steps/
-│                           └── {repositoryUID}/
-│                               ├── Packages/
-│                               ├── repodata/
-│                               └── repository.json
+│       └── {arch}/
+│           ├── current -> releases/{buildName}
+│           ├── Packages -> current/Packages
+│           ├── repodata -> current/repodata
+│           ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
+│           ├── releases/
+│           │   └── {buildName}/
+│           │       ├── Packages/
+│           │       ├── repodata/
+│           │       └── release.json
+│           └── history/
+│               └── {buildName}/
+│                   └── steps/
+│                       └── {repositoryUID}/
+│                           ├── Packages/
+│                           ├── repodata/
+│                           └── repository.json
 ├── .repository-work/
 │   └── {repositoryUID}-{random}/
 ├── .release-work/
@@ -736,13 +735,13 @@ ${dataDir}/
         └── {buildName}.json
 ```
 
-`project`、`os`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 只属于元数据，不直接参与本地路径拼接。文件系统访问的当前保护及边界见第四章。
+`project`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 只属于元数据，不直接参与本地路径拼接。文件系统访问的当前保护及边界见第四章。
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
-`releases/{buildName}` 保存正式发布产生的不可变版本；OS/架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由第九章的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 已在 Manifest 封账前签名；物化和正式发布均复用最终 RPM，不重新签名。正式发布安装匹配的公钥，不签名 `repomd.xml`。
+`releases/{buildName}` 保存正式发布产生的不可变版本；架构根目录的 `Packages` 和 `repodata` 是稳定发布入口，由第九章的正式发布流程以原子切换方式维护。RpmRepo 过程仓物化不得创建或修改 `releases`、根目录链接及 `RPM-GPG-KEY-openEuler`。启用内置签名时，新 RPM 已在 Manifest 封账前签名；物化和正式发布均复用最终 RPM，不重新签名。正式发布安装匹配的公钥，不签名 `repomd.xml`。
 
-Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、OS、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
+Ready 过程仓目录不可修改。创建新版本时必须使用新的 `repositoryUID`，并通过 `baseRepositoryUID` 显式引用基础仓；Artifact Manager 根据基础仓元数据中的 Project、架构和 Build name 定位其实际目录，调用方不得传递本地路径。
 
 ### 8.5 数据模型
 
@@ -767,7 +766,6 @@ type CreateRepositoryRequest struct {
     RepositoryName   string              `json:"repositoryName"`
     Project          string              `json:"project"`
     BuildName        string              `json:"buildName"`
-    TargetOS         string              `json:"targetOS"`
     TargetArch       string              `json:"targetArch"`
     BaseRepositoryUID string             `json:"baseRepositoryUID,omitempty"`
     Manifests        []ManifestReference `json:"manifests"`
@@ -779,7 +777,6 @@ type RepositoryRecord struct {
     RepositoryName     string              `json:"repositoryName"`
     Project            string              `json:"project"`
     BuildName          string              `json:"buildName"`
-    TargetOS           string              `json:"targetOS"`
     TargetArch         string              `json:"targetArch"`
     BaseRepositoryUID  string              `json:"baseRepositoryUID,omitempty"`
     Manifests          []ManifestReference `json:"manifests"`
@@ -902,7 +899,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 单次物化按以下顺序执行：
 
 1. 在 Repository Manager 锁内校验或创建并持久化 `Creating` 的 `RepositoryRecord`，通过队列和运行标记保证同一 UID 至多一个物化任务；正文生成在锁外执行，见 3.3。
-2. 校验基础仓存在且为 `Ready`，并且 Project、目标 OS 和架构与请求一致。
+2. 校验基础仓存在且为 `Ready`，并且 Project 和架构与请求一致。
 3. 按 Job 名称逐个读取唯一的 Job 上传清单，要求状态为 `Completed`，并在 Artifact Manager 内部重新计算清单摘要以验证本地元数据完整性。
 4. 每个输入 Job 至少包含一个 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；通过产物读取接口取得 Manifest 指定的最终文件，流式计算 SHA-256 并与最终清单比对，不与原始上传摘要混用。缺少 RPM、清单损坏或输入产物过期时在失败记录中标明该 Job 名称。
 5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 从 `SOURCERPM` 文件名末尾的版本、发行号分隔符推导源包名，不要求它与子包版本一致；source RPM 使用自身名称推导，并按 `src` 架构建立仓库身份，即使 RPM 头中报告了构建目标架构。无法确定归属时记录出错的 Job 名称并使本次请求失败。
@@ -996,24 +993,23 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 Artifact Manager 按 9.2 的请求契约校验源仓与排除集合，执行 9.4 的正文生成和原子切换，并负责状态查询、内容读取以及 9.6 的恢复与保留。Artifact Manager 不根据 Build type 推导删除集合：全量和增量 Build 均提交最终过程仓的 repositoryUID，由调用方根据 Project、BuildInfo 和发布策略完整计算 excludeSpecs。
 
-同一 `{project}/{os}/{arch}` 的业务推进由控制面串行组织；Artifact Manager 不跨请求推断业务发布顺序。过程仓 Ready 不等同于正式发布 Ready。
+同一 `{project}/{arch}` 的业务推进由控制面串行组织；Artifact Manager 不跨请求推断业务发布顺序。过程仓 Ready 不等同于正式发布 Ready。
 
 ### 9.2 标识与数据模型
 
-同一个 Project、OS 和架构只有一个稳定发布入口，但可以保存多个不可变发布版本。Build name 由唯一 UUID 生成且不复用，一个 Build 最多对应一个正式发布版本，因此直接使用 `buildName` 作为发布记录和 release 目录的唯一标识，不再生成独立的发布 ID。
+同一个 Project 和架构只有一个稳定发布入口，但可以保存多个不可变发布版本。Build name 由唯一 UUID 生成且不复用，一个 Build 最多对应一个正式发布版本，因此直接使用 `buildName` 作为发布记录和 release 目录的唯一标识，不再生成独立的发布 ID。
 
 发布身份和请求内容分离：`buildName` 标识不可变版本，`requestDigest` 根据以下规范化字段计算 SHA-256：
 
 ```text
 buildName
 project
-targetOS
 targetArch
 sourceRepositoryUID
 按字典序排列的 excludeSpecs
 ```
 
-各字符串使用长度前缀编码，不能直接拼接。同一 `buildName` 和相同 `requestDigest` 是幂等重试；同一 `buildName` 对应不同摘要必须返回 `409 ReleaseIdentityConflict`。发布成功后不得使用相同 Build name 更换源仓或排除集合重新发布，修正内容必须创建新 Build。Project、目标 OS 与架构共同确定稳定发布目标和正式版本的本地路径。
+各字符串使用长度前缀编码，不能直接拼接。同一 `buildName` 和相同 `requestDigest` 是幂等重试；同一 `buildName` 对应不同摘要必须返回 `409 ReleaseIdentityConflict`。发布成功后不得使用相同 Build name 更换源仓或排除集合重新发布，修正内容必须创建新 Build。Project 与架构共同确定稳定发布目标和正式版本的本地路径。
 
 ```go
 type ReleaseState string
@@ -1029,7 +1025,6 @@ const (
 type CreateReleaseRequest struct {
     BuildName               string   `json:"buildName"`
     Project                 string   `json:"project"`
-    TargetOS                string   `json:"targetOS"`
     TargetArch              string   `json:"targetArch"`
     SourceRepositoryUID     string   `json:"sourceRepositoryUID"`
     ExcludeSpecs            []string `json:"excludeSpecs,omitempty"`
@@ -1039,7 +1034,6 @@ type ReleaseRecord struct {
     SchemaVersion            int              `json:"schemaVersion"`
     BuildName                string           `json:"buildName"`
     Project                  string           `json:"project"`
-    TargetOS                 string           `json:"targetOS"`
     TargetArch               string           `json:"targetArch"`
     SourceRepositoryUID      string           `json:"sourceRepositoryUID"`
     ExcludeSpecs             []string         `json:"excludeSpecs,omitempty"`
@@ -1064,7 +1058,7 @@ type ReleaseResponse struct {
 }
 ```
 
-`excludeSpecs` 可以为空，非空时必须去重并按字典序规范化。Artifact Manager 必须校验源 RepositoryRecord 的 Project、目标 OS、架构和 `buildName` 均与请求一致，禁止使用其他 Build 的过程仓作为本次发布内容。Artifact Manager 从源仓 RPM 头中的 `specName` 判断是否删除，禁止由文件名推导；命中 `excludeSpecs` 的 RPM 全部排除，其余 RPM 全部保留。排除集合中的 spec 在源仓不存在视为幂等删除，不作为错误。调用方必须在提交前完整推导删除集合，Artifact Manager 不再查询 Project 或 BuildInfo 补充策略。
+`excludeSpecs` 可以为空，非空时必须去重并按字典序规范化。Artifact Manager 必须校验源 RepositoryRecord 的 Project、架构和 `buildName` 均与请求一致，禁止使用其他 Build 的过程仓作为本次发布内容。Artifact Manager 从源仓 RPM 头中的 `specName` 判断是否删除，禁止由文件名推导；命中 `excludeSpecs` 的 RPM 全部排除，其余 RPM 全部保留。排除集合中的 spec 在源仓不存在视为幂等删除，不作为错误。调用方必须在提交前完整推导删除集合，Artifact Manager 不再查询 Project 或 BuildInfo 补充策略。
 
 发布请求不携带公钥路径、公钥正文或公钥摘要。Artifact Manager 配置了只读公钥路径时，将该文件复制为 release 中的 `RPM-GPG-KEY-openEuler`，并把实际 SHA-256 记录到 `release.json` 供审计；未配置时不生成该文件。公钥完全属于服务端发布配置，不参与请求身份和幂等判断。
 
@@ -1092,7 +1086,7 @@ POST /internal/v1/releases
 Content-Type: application/json
 ```
 
-创建、查询、激活及返回正文的删除响应统一使用 `ReleaseResponse`，不返回内部 `ReleaseRecord` 或请求/内容摘要。`contentURL` 不持久化，仅在 Ready 响应中根据记录的 Project、OS、Arch 计算为 `/repositories/{project}/{os}/{arch}/`，其他状态省略。Creating、Prepared 返回 `pollAfterSeconds=5`，其他状态省略。正式发布不记录执行次数，可重试失败沿用同一请求、清空 Failure 并进入 Creating；不影响过程仓的 attempt 计数与重试预算。业务错误使用 5.5 的 `APIError`，通用 HTTP 错误边界沿用 8.6。
+创建、查询、激活及返回正文的删除响应统一使用 `ReleaseResponse`，不返回内部 `ReleaseRecord` 或请求/内容摘要。`contentURL` 不持久化，仅在 Ready 响应中根据记录的 Project、Arch 计算为 `/repositories/{project}/{arch}/`，其他状态省略。Creating、Prepared 返回 `pollAfterSeconds=5`，其他状态省略。正式发布不记录执行次数，可重试失败沿用同一请求、清空 Failure 并进入 Creating；不影响过程仓的 attempt 计数与重试预算。业务错误使用 5.5 的 `APIError`，通用 HTTP 错误边界沿用 8.6。
 
 POST 首次接受、Creating、Prepared 和可重试失败重放返回 `202`；Ready 或不可重试 Failed 的相同请求返回 `200` 和已有状态，不重新执行。相同 Build name 对应不同摘要返回 `409 ReleaseIdentityConflict`，Deleting 返回 `409 ReleaseDeleting`，非法集合或源仓不满足条件返回 `422`，队列满返回 `429` 和 `Retry-After: 5`。提交仍会校验源仓可用性，源仓缺失不能保证重放成功，确认已知结果优先使用 GET。接受成功时返回：
 
@@ -1115,25 +1109,25 @@ GET 返回 `200` 和已持久化状态，不触发执行；不存在返回 `404 
 POST /internal/v1/releases/{buildName}/activate
 ```
 
-目标 release 必须为 Prepared 或 Ready，且 Project、OS 和架构由其持久化记录确定。Prepared 用于首次激活，Ready 用于幂等确认或回滚。Artifact Manager 在 Release Manager 的全局互斥锁内切换当前指针；已是当前版本或成功切换均返回 `200` 和 `ReleaseResponse`。不存在返回 `404 ReleaseNotFound`，不满足激活状态返回 `409 ReleaseNotReady`。接口不接收请求体，发布顺序由 RpmRepo Controller 的同目标串行队列保证。
+目标 release 必须为 Prepared 或 Ready，且 Project 和架构由其持久化记录确定。Prepared 用于首次激活，Ready 用于幂等确认或回滚。Artifact Manager 在 Release Manager 的全局互斥锁内切换当前指针；已是当前版本或成功切换均返回 `200` 和 `ReleaseResponse`。不存在返回 `404 ReleaseNotFound`，不满足激活状态返回 `409 ReleaseNotReady`。接口不接收请求体，发布顺序由 RpmRepo Controller 的同目标串行队列保证。
 
 稳定仓库内容地址为：
 
 ```http
-GET /repositories/{project}/{os}/{arch}/{path...}
+GET /repositories/{project}/{arch}/{path...}
 ```
 
 典型 DNF base URL：
 
 ```text
-https://artifact.example/repositories/{project}/{os}/{arch}/
+https://artifact.example/repositories/{project}/{arch}/
 ```
 
-该地址是 Project、OS 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 OS/架构目录中的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，文件内容读取、Range、ETag 与路径规范化规则与 8.6.4 相同。服务端检查 current 的链接值，再按路径读取目标内容；当前没有基于目录 FD 的全链路保护，安全边界见第四章。
+该地址是 Project 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 架构目录中的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，文件内容读取、Range、ETag 与路径规范化规则与 8.6.4 相同。服务端检查 current 的链接值，再按路径读取目标内容；当前没有基于目录 FD 的全链路保护，安全边界见第四章。
 
-稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 展示有当前 Ready 发布版本的 OS，下一层展示对应架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 和不可变正式版本地址仍不提供目录浏览。
+稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 直接展示有当前 Ready 发布版本的架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 和不可变正式版本地址仍不提供目录浏览。
 
-路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{os}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
+路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
 
 ```http
 GET /repositories/releases/v1/{buildName}/{path...}
@@ -1148,7 +1142,7 @@ GET /repositories/releases/v1/{buildName}/{path...}
 single 构建不创建 RpmRepo。BuildInfo Controller 在派发前直接 GET 已有稳定内容接口：
 
 ```http
-GET /repositories/{project}/{os}/{arch}/repodata/repomd.xml
+GET /repositories/{project}/{arch}/repodata/repomd.xml
 ```
 
 此请求不触发发布、物化或状态推进，不扫描历史发布记录，也不遍历或校验全部 RPM。只按当前指针读取对应目标的发布状态与 repomd.xml，响应如下：
@@ -1163,7 +1157,7 @@ GET /repositories/{project}/{os}/{arch}/repodata/repomd.xml
 
 错误正文使用统一 APIError JSON。只有明确的 current 不存在才能返回 ReleaseNotPublished；权限错误、I/O 错误、损坏链接、缺失目标文件不能混为该结果。其他内容路径仍沿用原有文件不存在语义，客户端不能把普通 404 或 ReleaseNotFound 当作未发布。启动恢复未能判定目标可用性时返回 503。
 
-single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{os}/{arch}/`，不是某个 buildName 的发布版本或过程仓。它与当前发布指针同步更新；探测成功不保证后续所有请求属于同一版本，切换时的跨请求一致性边界沿用上文。
+single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{arch}/`，不是某个 buildName 的发布版本或过程仓。它与当前发布指针同步更新；探测成功不保证后续所有请求属于同一版本，切换时的跨请求一致性边界沿用上文。
 
 验收覆盖：未发布目标的专用错误码、Ready 响应、current/记录/repomd 损坏或权限错误、恢复中返回 503、普通 404 不被降级、确认请求不触发写入或全量仓库扫描。
 
@@ -1172,7 +1166,7 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{os
 一次发布按以下顺序执行：
 
 1. 规范化请求，校验 `buildName` 及 `requestDigest`，持久化 `Creating` 记录后入队。
-2. 查询本地源仓记录，要求为 Ready，且 Project、Build name、目标 OS 和架构与请求一致。
+2. 查询本地源仓记录，要求为 Ready，且 Project、Build name 和架构与请求一致。
 3. 在 `.release-work/{buildName}-{random}` 创建工作目录。
 4. 读取源仓 `repository.json` 和 RPM 元数据，删除 `specName` 位于 `excludeSpecs` 的 RPM，保留其余 RPM。
 5. 将选中的 RPM 从过程仓 `Packages` 硬链接到工作目录；源仓保持不可变。跨文件系统失败返回稳定错误，不退化为无界复制。
@@ -1183,7 +1177,7 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{os
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
 11. worker 保存 Prepared 后直接调用激活方法，取得 Release Manager 全局互斥锁并检查状态；激活入口不重新校验整个发布目录或摘要。
 12. 读取 `current`；已经指向本次 `buildName` 时按幂等成功处理，否则继续切换。
-13. 创建指向 `releases/{buildName}` 的临时符号链接，以 rename 原子替换 `current`，再尝试 fsync OS/架构目录；当前目录打开或同步错误未向调用方传播。`Packages`、`repodata` 和可选公钥是初始化目标目录时创建的稳定链接，统一经过 `current` 解析。
+13. 创建指向 `releases/{buildName}` 的临时符号链接，以 rename 原子替换 `current`，再尝试 fsync 架构目录；当前目录打开或同步错误未向调用方传播。`Packages`、`repodata` 和可选公钥是初始化目标目录时创建的稳定链接，统一经过 `current` 解析。
 14. 将 ReleaseRecord 标记为 Ready 并返回稳定 `contentURL`。如果控制面状态更新失败，RpmRepo Controller 使用相同 Build name 继续确认，不重新生成 release。
 
 第 13 步是唯一生效点。在它之前失败，旧版本继续服务；在它之后进程崩溃，启动恢复根据 `current` 和 release 元数据补写 Ready。不能用依次删除再创建 `Packages`、`repodata` 两个链接作为切换机制，否则客户端可能观察到混合版本。
