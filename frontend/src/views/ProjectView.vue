@@ -18,6 +18,7 @@
         <div class="title-with-status"><h1>{{ project.spec?.displayName || project.metadata?.name }}</h1><span class="project-id"><code>{{ project.metadata?.name }}</code><button type="button" :class="{ copied: copiedId }" :aria-label="copiedId ? t('project.copied') : t('project.copyProjectId')" :title="copiedId ? t('project.copied') : t('project.copyProjectId')" @click="copyProjectId"><Check v-if="copiedId" /><DocumentCopy v-else /></button></span></div>
         <p>{{ project.spec?.description || t("project.noDescription") }}</p>
         <dl class="project-hero-meta">
+          <div><dt>{{ t("projects.targetOS") }}</dt><dd>{{ project.spec?.distro || t("common.emptyValue") }}</dd></div>
           <div><dt>{{ t("project.defaultRef") }}</dt><dd>{{ gitRefLabel(project.spec?.defaultRef) }}</dd></div>
           <div><dt>{{ t("project.createdAt") }}</dt><dd>{{ formatDate(project.metadata?.creationTimestamp) }}</dd></div>
         </dl>
@@ -210,10 +211,9 @@
           <article class="content-panel">
             <div class="section-heading"><div><h2>{{ t("project.buildTargets") }}</h2></div><div class="section-actions"><button v-if="canEditProject" class="secondary-button compact-button" type="button" @click="openTargetEditor"><Edit />{{ t("common.edit") }}</button></div></div>
             <div v-if="targetSaveSuccess" class="success-banner compact-banner" role="status"><CircleCheckFilled />{{ t("project.targetsSaved") }}</div>
-            <div v-if="project.spec?.buildArches?.length" class="project-table-wrap">
-              <p>{{ t("projects.targetOS") }}: <strong>{{ project.spec.distro }}</strong></p>
-              <table class="project-table target-table"><thead><tr><th>{{ t("projects.targetArch") }}</th></tr></thead><tbody><tr v-for="arch in project.spec.buildArches" :key="arch"><td>{{ arch }}</td></tr></tbody></table>
-            </div>
+            <ul v-if="project.spec?.buildArches?.length" class="project-build-arches">
+              <li v-for="arch in project.spec.buildArches" :key="arch">{{ arch }}</li>
+            </ul>
             <p v-else class="config-empty">{{ t("project.noBuildTargets") }}</p>
           </article>
 
@@ -275,8 +275,8 @@
         <fieldset class="target-fieldset">
           <legend>{{ t("project.buildTarget") }}</legend>
           <div class="build-target-options">
-            <div v-for="(target, index) in buildTargetDrafts" :key="`${target.os}-${target.arch}-${index}`" class="build-target-option">
-              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ targetListLabel([target]) }} <small v-if="!supportsBuildTarget(target)">{{ t('buildTargetConfig.unsupported') }}</small></span></label>
+            <div v-for="target in buildTargetDrafts" :key="target.arch" class="build-target-option">
+              <label class="build-target-selection"><input v-model="target.selected" type="checkbox" :disabled="creatingBuild" /><span>{{ target.arch }} <small v-if="!supportsBuildTarget(target)">{{ t('buildTargetConfig.unsupported') }}</small></span></label>
               <label v-if="buildType !== 'single'" class="build-target-selection"><span>{{ t("project.publishEnabled") }}</span><input v-model="target.publish" type="checkbox" :disabled="creatingBuild || !target.selected" /></label>
             </div>
           </div>

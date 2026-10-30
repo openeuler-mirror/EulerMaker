@@ -444,7 +444,8 @@ body.modal-open { overflow: hidden; }
 .payload-error { margin-top: 14px; }
 .config-detail-list dd { white-space: pre-wrap; }
 .config-detail-list code, .config-table code { color: #45546a; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 12px; }
-.target-table td:first-child { min-width: 180px; }
+.project-build-arches { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.project-build-arches li { padding: 7px 12px; color: #45546a; background: #f7f9fc; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
 .boolean-status { color: #7a8799; }
 .boolean-status.enabled { color: #21895c; font-weight: 650; }
 .editable-target-list { display: grid; gap: 14px; }
@@ -453,7 +454,7 @@ body.modal-open { overflow: hidden; }
 .remove-target-button:hover:not(:disabled) { background: #fff0f1; }
 .remove-target-button:disabled { opacity: .35; }
 .remove-target-button svg { width: 16px; }
-.editable-target .form-grid { padding-right: 32px; }
+.editable-target .form-grid, .editable-target .architecture-fields { padding-right: 32px; }
 .editable-target .bootstrap-fields { grid-template-columns: 1fr; }
 .repository-name-field { width: min(320px, 100%); }
 .project-user-list { display: grid; gap: 8px; }
@@ -602,7 +603,7 @@ body.modal-open { overflow: hidden; }
   .config-layout { grid-template-columns: 1fr; }
   .config-wide-panel { grid-column: auto; }
   .section-actions { align-self: center; }
-  .editable-target .form-grid { padding-right: 0; }
+  .editable-target .form-grid, .editable-target .architecture-fields { padding-right: 0; }
   .editable-target { padding-top: 46px; }
   .build-target-option { align-items: flex-start; flex-direction: column; }
   .member-add-row { grid-template-columns: 1fr; }

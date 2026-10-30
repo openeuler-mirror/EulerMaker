@@ -34,12 +34,13 @@
     <EmptyState v-else-if="!filtered.length" :title="t('projects.noMatch')" :description="t('projects.noMatchHint')" />
     <div v-else class="project-table-wrap">
       <table class="project-table">
-        <thead><tr><th>{{ t("projects.project") }}</th><th>{{ t("projects.descriptionColumn") }}</th><th>{{ t("projects.targets") }}</th><th>{{ t("projects.createdAt") }}</th></tr></thead>
+        <thead><tr><th>{{ t("projects.project") }}</th><th>{{ t("projects.descriptionColumn") }}</th><th>{{ t("projects.targetOS") }}</th><th>{{ t("project.buildTargets") }}</th><th>{{ t("projects.createdAt") }}</th></tr></thead>
         <tbody>
           <tr v-for="project in filtered" :key="project.metadata?.name">
             <td><RouterLink class="project-name-link" :to="`/projects/${encodeURIComponent(project.metadata?.name || '')}`"><strong>{{ project.spec?.displayName || project.metadata?.name }}</strong><small>{{ project.metadata?.name }}</small></RouterLink></td>
             <td class="project-description" :title="project.spec?.description || ''">{{ project.spec?.description || t("common.emptyValue") }}</td>
-            <td>{{ targetLabel(project) }}</td>
+            <td>{{ project.spec?.distro || t("common.emptyValue") }}</td>
+            <td>{{ (project.spec?.buildArches || []).join(" · ") || t("common.emptyValue") }}</td>
             <td>{{ formatDate(project.metadata?.creationTimestamp) }}</td>
           </tr>
         </tbody>
@@ -364,12 +365,6 @@ function buildPaginationItems(total: number, current: number): Array<{ key: stri
     result.push({ key: `page-${page}`, page });
   });
   return result;
-}
-
-function targetLabel(project: Project): string {
-  const targets = (project.spec?.buildArches || []).map(arch => ({ os: project.spec?.distro, arch }));
-  if (!targets.length) return t("common.emptyValue");
-  return targets.slice(0, 2).map((item) => [item.os, item.arch].filter(Boolean).join(" / ")).join(" · ");
 }
 
 function formatDate(value?: string): string {
