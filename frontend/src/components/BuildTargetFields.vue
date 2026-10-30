@@ -1,5 +1,5 @@
 <template>
-  <div class="form-grid">
+  <div :class="fixedOs ? 'architecture-fields' : 'form-grid'">
     <div v-if="!fixedOs" class="field required-field"><span>{{ t('projects.targetOS') }}</span><AppSelect :model-value="os || ''" :options="[...(allowLegacy && os && !operatingSystems.includes(os) ? [{ value: os, label: `${os} — ${t('buildTargetConfig.unsupported')}` }] : []), ...operatingSystems.map(value => ({ value, label: value }))]" :label="t('projects.targetOS')" :placeholder="t('buildTargetConfig.selectOS')" :disabled="loading" required @update:model-value="changeOS" /></div>
     <div class="field required-field"><span>{{ t('projects.targetArch') }}</span><AppSelect :model-value="arch || ''" :options="[...(allowLegacy && arch && !arches(os).includes(arch) ? [{ value: arch, label: `${arch} — ${t('buildTargetConfig.unsupported')}` }] : []), ...arches(os).map(value => ({ value, label: value }))]" :label="t('projects.targetArch')" :placeholder="t('buildTargetConfig.selectArch')" :disabled="loading" required @update:model-value="emit('update:arch', $event)" /></div>
   </div>
