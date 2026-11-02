@@ -101,11 +101,20 @@ func TestIAMSchemeRegistration(t *testing.T) {
 }
 
 func TestOldJobsHTTPRoutes(t *testing.T) {
+	deletes := 0
 	client := esclient.NewClientForTesting("http://es", &http.Client{Transport: confTransport(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/ebs-oldjobs/_doc/project/job" {
 			t.Fatalf("ES path=%s", r.URL.Path)
 		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"_id":"project/job","_seq_no":99,"_primary_term":1,"_source":{"data":{"apiVersion":"ebs/v1","kind":"Job","metadata":{"name":"job","namespace":"project","uid":"uid","resourceVersion":"123"},"spec":{"priority":1},"status":{"phase":"Succeeded"}}}}`))}, nil
+		if r.Method == http.MethodDelete {
+			deletes++
+			q := r.URL.Query()
+			if q.Get("if_seq_no") != "99" || q.Get("if_primary_term") != "1" || q.Get("refresh") != "wait_for" {
+				t.Fatalf("delete query=%s", r.URL.RawQuery)
+			}
+			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"result":"deleted"}`))}, nil
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"_id":"project/job","_seq_no":99,"_primary_term":1,"_source":{"data":{"apiVersion":"ebs/v1","kind":"Job","metadata":{"name":"job","namespace":"project","uid":"uid","resourceVersion":"123","labels":{"ebs.io/build-name":"build"}},"spec":{"priority":1},"status":{"phase":"Succeeded"}}}}`))}, nil
 	})})
 	info, _, err := CreateAPIGroupInfo(testRESTOptions(), client)
 	if err != nil {
@@ -131,10 +140,15 @@ func TestOldJobsHTTPRoutes(t *testing.T) {
 			methods[route.Path] = append(methods[route.Path], route.Method)
 		}
 	}
-	for _, path := range []string{"/apis/ebs/v1/oldjobs", "/apis/ebs/v1/namespaces/{namespace}/oldjobs", "/apis/ebs/v1/namespaces/{namespace}/oldjobs/{name}"} {
+	for _, path := range []string{"/apis/ebs/v1/oldjobs", "/apis/ebs/v1/namespaces/{namespace}/oldjobs"} {
 		if strings.Join(methods[path], ",") != "GET" {
 			t.Fatalf("route %s methods=%v", path, methods[path])
 		}
+	}
+	namedMethods := methods["/apis/ebs/v1/namespaces/{namespace}/oldjobs/{name}"]
+	if len(namedMethods) != 2 || !strings.Contains(strings.Join(namedMethods, ","), "GET") ||
+		!strings.Contains(strings.Join(namedMethods, ","), "DELETE") {
+		t.Fatalf("named OldJob methods=%v", namedMethods)
 	}
 	if strings.Join(methods["/apis/ebs/v1/namespaces/{namespace}/jobs/{name}/archive"], ",") != "POST" {
 		t.Fatalf("archive route=%v", methods)
@@ -156,6 +170,28 @@ func TestOldJobsHTTPRoutes(t *testing.T) {
 		}
 		if tc.status == 200 && (!strings.Contains(w.Body.String(), `"resourceVersion":"123"`) || strings.Contains(w.Body.String(), `"spec"`)) {
 			t.Fatalf("projected Job=%s", w.Body)
+		}
+	}
+	for _, tc := range []struct {
+		body    string
+		status  int
+		deletes int
+	}{
+		{`{"preconditions":{"uid":"uid","resourceVersion":"123"},"dryRun":["All"]}`, 200, 0},
+		{`{}`, 200, 1},
+		{`{"preconditions":{"uid":"uid","resourceVersion":"123"}}`, 200, 2},
+	} {
+		r := httptest.NewRequest(http.MethodDelete, "/apis/ebs/v1/namespaces/project/oldjobs/job", strings.NewReader(tc.body))
+		r.Header.Set("Content-Type", "application/json")
+		ctx := genericapirequest.WithRequestInfo(r.Context(), &genericapirequest.RequestInfo{
+			IsResourceRequest: true, APIGroup: "ebs", APIVersion: "v1", Resource: "oldjobs",
+			Namespace: "project", Name: "job", Verb: "delete",
+		})
+		r = r.WithContext(genericapirequest.WithNamespace(ctx, "project"))
+		w := httptest.NewRecorder()
+		withOldJobReadOptions(withFieldProjection(container)).ServeHTTP(w, r)
+		if w.Code != tc.status || deletes != tc.deletes {
+			t.Fatalf("DELETE status=%d deletes=%d body=%s", w.Code, deletes, w.Body)
 		}
 	}
 }

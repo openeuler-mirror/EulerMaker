@@ -11,14 +11,19 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/util/dryrun"
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-apiserver/pkg/storage/es"
 )
 
-// OldJobs exposes only historical reads; Archive is used by the Job subresource.
-type OldJobs struct{ store *Store }
+// OldJobs provides historical reads and conditional cleanup; Archive is used by the Job subresource.
+type OldJobs struct {
+	store *Store
+}
 
 func NewOldJobs(client *es.Client, template *genericregistry.Store) *OldJobs {
 	s := New(client, "oldjob", "Job", template)
@@ -49,6 +54,45 @@ func (s *OldJobs) List(ctx context.Context, options *internalversion.ListOptions
 		return nil, apierrors.NewBadRequest("oldjobs does not support watch or resourceVersion reads")
 	}
 	return s.store.List(ctx, options)
+}
+
+// Delete removes one archived snapshot, honoring supplied preconditions and dry-run.
+func (s *OldJobs) Delete(ctx context.Context, name string, admission rest.ValidateObjectFunc,
+	options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	if options == nil {
+		options = &metav1.DeleteOptions{}
+	}
+	namespace := request.NamespaceValue(ctx)
+	if namespace == "" || name == "" {
+		return nil, false, apierrors.NewBadRequest("oldjobs deletion requires a project and name")
+	}
+	hit, err := s.store.client.Get(ctx, "oldjob", s.store.documentID(ctx, name))
+	if err != nil {
+		return nil, false, s.store.apiError(err, name)
+	}
+	obj, err := s.store.objectFromHit(hit)
+	if err != nil {
+		return nil, false, err
+	}
+	job := obj.(*ebsv1.Job)
+	if pre := options.Preconditions; pre != nil {
+		if pre.UID != nil && job.UID != *pre.UID ||
+			pre.ResourceVersion != nil && job.ResourceVersion != *pre.ResourceVersion {
+			return nil, false, apierrors.NewConflict(s.store.resource, name, fmt.Errorf("archived Job preconditions failed"))
+		}
+	}
+	if admission != nil {
+		if err := admission(ctx, job.DeepCopy()); err != nil {
+			return nil, false, err
+		}
+	}
+	if !dryrun.IsDryRun(options.DryRun) {
+		// resourceVersion belongs to the source Job; use the observed ES version for deletion.
+		if err := s.store.client.Delete(ctx, "oldjob", hit.ID, hit.SeqNo, hit.PrimaryTerm); err != nil {
+			return nil, false, s.store.apiError(err, name)
+		}
+	}
+	return job, true, nil
 }
 
 // Archive uses source revisions for ordering and ES CAS for concurrent writes.
