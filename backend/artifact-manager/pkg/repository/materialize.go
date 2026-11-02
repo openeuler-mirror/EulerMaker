@@ -49,7 +49,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if err != nil {
 		return result, err
 	}
-	workRoot := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, ".repository-work")
+	workRoot := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "history", record.BuildName, ".work")
 	if err := os.MkdirAll(workRoot, 0750); err != nil {
 		return result, retryableRepositoryError(err)
 	}
@@ -162,7 +162,7 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 		RepositoryDigest:   digest,
 		RPMs:               metadata,
 	}
-	if err := fileutil.AtomicJSON(filepath.Join(work, "repository.json"), repositoryJSON); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(work, ".repository.json"), repositoryJSON); err != nil {
 		return result, retryableRepositoryError(err)
 	}
 	finalParent := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "history", record.BuildName, "steps")
@@ -311,7 +311,7 @@ func loadRepositoryMetadata(directory, uid string) (map[string]RepositoryRPMMeta
 }
 
 func LoadIndex(directory, uid string) (Index, error) {
-	data, err := os.ReadFile(filepath.Join(directory, "repository.json"))
+	data, err := os.ReadFile(filepath.Join(directory, ".repository.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Index{}, &Error{Code: "RepositoryLayoutInvalid", Status: 422}
@@ -382,7 +382,7 @@ func digestDirectoryWithRPMMetadata(root string, rpms map[string]RepositoryRPMMe
 			}
 			relative, _ := filepath.Rel(root, path)
 			relative = filepath.ToSlash(relative)
-			if relative != "repository.json" {
+			if relative != ".repository.json" {
 				files = append(files, relative)
 			}
 		}

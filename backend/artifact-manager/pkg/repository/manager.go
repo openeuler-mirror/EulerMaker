@@ -82,7 +82,7 @@ func (m *Manager) recover(workTTL time.Duration) error {
 			continue
 		}
 		var index Index
-		data, err := os.ReadFile(filepath.Join(final, "repository.json"))
+		data, err := os.ReadFile(filepath.Join(final, ".repository.json"))
 		if err != nil || json.Unmarshal(data, &index) != nil || index.RepositoryUID != uid || index.RequestDigest != record.RequestDigest || index.SigningFingerprint != record.SigningFingerprint {
 			continue
 		}
@@ -97,11 +97,11 @@ func (m *Manager) recover(workTTL time.Duration) error {
 		}
 		delete(m.records, uid)
 	}
-	return fileutil.CleanupRepositoryWork(m.root, ".repository-work", now.Add(-workTTL))
+	return fileutil.CleanupRepositoryWork(m.root, "history", now.Add(-workTTL))
 }
 
 func (m *Manager) load() error {
-	paths, err := fileutil.RepositoryMetadataPaths(m.root, "repositories")
+	paths, err := fileutil.RepositoryMetadataPaths(m.root, "history")
 	if err != nil {
 		return err
 	}
@@ -139,14 +139,18 @@ func (m *Manager) scanRecord(uid string) (RepositoryState, error) {
 	var header struct {
 		RepositoryUID string          `json:"repositoryUID"`
 		Project       string          `json:"project"`
+		BuildName     string          `json:"buildName"`
 		TargetArch    string          `json:"targetArch"`
 		State         RepositoryState `json:"state"`
 	}
 	decodeErr := json.NewDecoder(file).Decode(&header)
 	closeErr := file.Close()
+	location := &RepositoryRecord{
+		RepositoryUID: uid, Project: header.Project, BuildName: header.BuildName, TargetArch: header.TargetArch,
+	}
 	if decodeErr != nil || closeErr != nil || header.RepositoryUID != uid || header.State == "" ||
-		!validIdentifier(header.Project) || !validIdentifier(header.TargetArch) ||
-		m.metaPath(uid) != m.recordMetaPath(&RepositoryRecord{RepositoryUID: uid, Project: header.Project, TargetArch: header.TargetArch}) {
+		!validIdentifier(header.Project) || !validIdentifier(header.TargetArch) || !validIdentifier(header.BuildName) ||
+		m.metaPath(uid) != m.recordMetaPath(location) {
 		return "", fmt.Errorf("invalid repository metadata for %s", uid)
 	}
 	return header.State, nil
@@ -167,11 +171,12 @@ func (m *Manager) readRecord(uid string) (*RepositoryRecord, error) {
 	decodeErr := json.NewDecoder(file).Decode(&record)
 	closeErr := file.Close()
 	if decodeErr != nil || closeErr != nil || record.RepositoryUID != uid ||
-		!validIdentifier(record.Project) || !validIdentifier(record.TargetArch) || m.metaPath(uid) != m.recordMetaPath(&record) {
+		!validIdentifier(record.Project) || !validIdentifier(record.TargetArch) || !validIdentifier(record.BuildName) ||
+		m.metaPath(uid) != m.recordMetaPath(&record) {
 		return nil, fmt.Errorf("invalid repository metadata for %s", uid)
 	}
 	if record.State == RepositoryReady {
-		if _, err := os.Stat(filepath.Join(m.RepositoryPath(&record), "repository.json")); err != nil {
+		if _, err := os.Stat(filepath.Join(m.RepositoryPath(&record), ".repository.json")); err != nil {
 			if !os.IsNotExist(err) {
 				return nil, err
 			}
@@ -479,7 +484,7 @@ func (m *Manager) remove(uid string) {
 		return
 	}
 	source := m.RepositoryPath(record)
-	trashDir := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, ".repository-trash")
+	trashDir := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "history", record.BuildName, ".trash")
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -500,7 +505,7 @@ func (m *Manager) remove(uid string) {
 }
 
 func (m *Manager) persist(record *RepositoryRecord) error {
-	// The immutable repository.json is the RPM index. Keep only control-plane
+	// The immutable .repository.json is the RPM index. Keep only control-plane
 	// state in metadata, otherwise every completed repository duplicates it.
 	light := *record
 	light.RPMs = nil
@@ -532,7 +537,7 @@ func (m *Manager) metaPath(uid string) string {
 
 func (m *Manager) recordMetaPath(record *RepositoryRecord) string {
 	return filepath.Join(m.root, "repositories", record.Project, record.TargetArch,
-		".metadata", "repositories", record.RepositoryUID+".json")
+		"history", record.BuildName, ".records", record.RepositoryUID+".json")
 }
 
 func cloneRepository(in *RepositoryRecord) *RepositoryRecord {

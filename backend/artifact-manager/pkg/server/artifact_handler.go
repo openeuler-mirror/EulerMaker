@@ -281,7 +281,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, project, job, 
 		writeErr(w, r, 404, "NotFound", "artifact not found", false, nil)
 		return
 	}
-	if strings.HasPrefix(a.StorageKey, filepath.ToSlash(filepath.Join("projects", project, "jobs", job, ".signed"))+"/") {
+	if strings.HasPrefix(a.StorageKey, filepath.ToSlash(filepath.Join("artifacts", project, "jobs", job, ".signed"))+"/") {
 		if err := fileutil.VerifyFile(s.store.ArtifactPath(a), a.Size, a.SHA256); err != nil {
 			writeErr(w, r, 503, "StorageError", "sealed artifact content unavailable", true, nil)
 			return

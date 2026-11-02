@@ -38,7 +38,7 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(base, "repository.json"), index, 0640); err != nil {
+	if err := os.WriteFile(filepath.Join(base, ".repository.json"), index, 0640); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := loadRepositoryMetadata(base, "base-uid")

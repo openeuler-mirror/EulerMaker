@@ -25,7 +25,7 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 		if err := m.persist(record); err != nil {
 			t.Fatal(err)
 		}
-		want := filepath.Join(root, "repositories/project/arch/.metadata/repositories", record.RepositoryUID+".json")
+		want := filepath.Join(root, "repositories/project/arch/history/build/.records", record.RepositoryUID+".json")
 		if m.metaPath(record.RepositoryUID) != want {
 			t.Fatalf("metadata path = %s, want %s", m.metaPath(record.RepositoryUID), want)
 		}
@@ -34,7 +34,7 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 			if err := os.MkdirAll(path, 0750); err != nil {
 				t.Fatal(err)
 			}
-			if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), Index{
+			if err := fileutil.AtomicJSON(filepath.Join(path, ".repository.json"), Index{
 				RepositoryUID: record.RepositoryUID,
 				RPMs:          map[string]RepositoryRPMMeta{},
 			}); err != nil {
@@ -67,7 +67,7 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 		BuildName:     "build",
 		TargetArch:    "arch",
 	}
-	if err := os.Remove(filepath.Join(m.RepositoryPath(ready), "repository.json")); err != nil {
+	if err := os.Remove(filepath.Join(m.RepositoryPath(ready), ".repository.json")); err != nil {
 		t.Fatal(err)
 	}
 	record, ok, err := m.Get(ready.RepositoryUID)
@@ -84,9 +84,19 @@ func TestRepositoryDeletionRemovesLocationIndex(t *testing.T) {
 	}
 	m.records[record.RepositoryUID] = record
 	path := m.metaPath(record.RepositoryUID)
+	source := m.RepositoryPath(record)
+	if err := os.MkdirAll(source, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".repository.json"), []byte("{}"), 0640); err != nil {
+		t.Fatal(err)
+	}
 	m.remove(record.RepositoryUID)
-	if entries, err := os.ReadDir(filepath.Join(m.root, "repositories/project/arch/.repository-trash")); err != nil || len(entries) != 0 {
+	if entries, err := os.ReadDir(filepath.Join(m.root, "repositories/project/arch/history/build/.trash")); err != nil || len(entries) != 0 {
 		t.Fatalf("scoped repository trash: %v, %v", entries, err)
+	}
+	if _, err := os.Stat(source); !os.IsNotExist(err) {
+		t.Fatalf("deleted repository content: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("deleted metadata: %v", err)

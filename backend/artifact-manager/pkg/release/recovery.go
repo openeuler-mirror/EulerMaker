@@ -41,7 +41,7 @@ func (m *Manager) recover(workTTL time.Duration) error {
 	}); err != nil {
 		return err
 	}
-	return fileutil.CleanupRepositoryWork(m.root, ".release-work", now.Add(-workTTL))
+	return fileutil.CleanupRepositoryWork(m.root, "releases", now.Add(-workTTL))
 }
 
 func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
@@ -97,7 +97,7 @@ func readReleaseIndex(path string) (releaseIndex, error) {
 	if !rootInfo.IsDir() {
 		return index, fmt.Errorf("invalid release directory %s", path)
 	}
-	indexPath := filepath.Join(path, "release.json")
+	indexPath := filepath.Join(path, ".release.json")
 	indexInfo, err := os.Lstat(indexPath)
 	if err != nil {
 		return index, err

@@ -366,7 +366,7 @@ func (m *Manager) remove(name string) {
 		return
 	}
 	source := m.Path(record)
-	trashDir := filepath.Join(m.releaseTargetDir(record), ".release-trash")
+	trashDir := filepath.Join(m.releaseTargetDir(record), "releases", ".trash")
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -486,7 +486,7 @@ func (m *Manager) metaPath(name string) string {
 }
 
 func (m *Manager) recordMetaPath(record *ReleaseRecord) string {
-	return filepath.Join(m.releaseTargetDir(record), ".metadata", "releases", record.BuildName+".json")
+	return filepath.Join(m.releaseTargetDir(record), "releases", ".records", record.BuildName+".json")
 }
 
 func (m *Manager) Path(record *ReleaseRecord) string {

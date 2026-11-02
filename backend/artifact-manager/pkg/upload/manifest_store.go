@@ -40,7 +40,7 @@ type sealRecord struct {
 }
 
 func (s *Store) sealPath(project, job string) string {
-	return filepath.Join(s.jobMetadataDir(project, job), "seal.json")
+	return filepath.Join(s.root, "artifacts", project, "jobs", job, ".seal.json")
 }
 
 func (s *Store) readSeal(project, job string) (*sealRecord, error) {
@@ -160,8 +160,7 @@ func (s *Store) CompleteManifest(ctx context.Context, project, job, runner strin
 		UpdatedAt:          now,
 		CompletedAt:        &now,
 	}
-	path := filepath.Join(s.jobMetadataDir(project, job), "manifest.json")
-	if err := fileutil.AtomicJSON(path, m); err != nil {
+	if err := fileutil.AtomicJSON(s.manifestPath(project, job), m); err != nil {
 		return nil, &SealError{"StorageError", 503, true}
 	}
 	_ = os.Remove(s.sealPath(project, job))
@@ -206,7 +205,7 @@ func (s *Store) validateSealInput(project, job string, files []ManifestFile) ([]
 
 func (s *Store) prepareFiles(ctx context.Context, project, job string, record *sealRecord, artifacts []Artifact) ([]ManifestFile, error) {
 	final := append([]ManifestFile(nil), record.Files...)
-	work := filepath.Join(s.root, "projects", project, "jobs", job, ".signing")
+	work := filepath.Join(s.root, "artifacts", project, "jobs", job, ".signing")
 	// No previous worker for this Job remains when ownership is acquired.
 	if err := os.RemoveAll(work); err != nil {
 		return nil, &SealError{"StorageError", 503, true}
@@ -273,6 +272,10 @@ func (s *Store) GetManifest(p, j string) (*JobUploadManifest, error) {
 	return s.readManifest(p, j)
 }
 
+func (s *Store) manifestPath(project, job string) string {
+	return filepath.Join(s.root, "artifacts", project, "jobs", job, ".manifest.json")
+}
+
 // readManifest is called with the store lock held; only a missing file means the Job is unsealed.
 func (s *Store) readManifest(project, job string) (*JobUploadManifest, error) {
 	for _, part := range []string{project, job} {
@@ -280,8 +283,7 @@ func (s *Store) readManifest(project, job string) (*JobUploadManifest, error) {
 			return nil, ErrInvalidManifest
 		}
 	}
-	path := filepath.Join(s.jobMetadataDir(project, job), "manifest.json")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(s.manifestPath(project, job))
 	if err != nil {
 		return nil, err
 	}

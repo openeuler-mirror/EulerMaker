@@ -66,7 +66,7 @@ func (m *testRepositoryMaterializer) Materialize(ctx context.Context, record rep
 			return repository.Result{}, err
 		}
 		index := repository.Index{RepositoryUID: record.RepositoryUID, RPMs: map[string]repository.RepositoryRPMMeta{}}
-		if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+		if err := fileutil.AtomicJSON(filepath.Join(path, ".repository.json"), &index); err != nil {
 			return repository.Result{}, err
 		}
 	}
@@ -198,6 +198,12 @@ func TestRepositoryContent(t *testing.T) {
 	}
 	writeTestRepositoryIndex(t, server.repositories, record)
 	writeTestRepositoryRecord(t, server, record)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		response := repositoryRequest(t, server, method, record.ContentURL+".repository.json", nil)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("internal repository index %s = %d", method, response.Code)
+		}
+	}
 	response := repositoryRequest(t, server, http.MethodGet, record.ContentURL+"repodata/repomd.xml", nil)
 	if response.Code != http.StatusOK || response.Body.String() != "metadata" || response.Header().Get("ETag") == "" {
 		t.Fatalf("content response = %d %q, etag=%q", response.Code, response.Body.String(), response.Header().Get("ETag"))

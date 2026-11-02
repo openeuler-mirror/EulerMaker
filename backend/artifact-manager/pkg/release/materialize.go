@@ -51,7 +51,7 @@ func (m *filesystemReleaseMaterializer) Create(
 			return result, &Error{Code: "ReleaseSigningKeyMismatch", Status: 422}
 		}
 	}
-	workRoot := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, ".release-work")
+	workRoot := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases", ".work")
 	if err := os.MkdirAll(workRoot, 0750); err != nil {
 		return result, retryableReleaseError(err)
 	}
@@ -144,7 +144,7 @@ func (m *filesystemReleaseMaterializer) Create(
 		ExcludeSpecs:        record.ExcludeSpecs,
 		PublicKeySHA256:     publicKeyDigest,
 	}
-	if err := fileutil.AtomicJSON(filepath.Join(work, "release.json"), index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(work, ".release.json"), index); err != nil {
 		return result, retryableReleaseError(err)
 	}
 	parent := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "releases")
@@ -260,7 +260,7 @@ func digestReleaseDirectoryWithRPMMetadata(root string, rpms map[string]reposito
 			return err
 		}
 		relative = filepath.ToSlash(relative)
-		if relative != "release.json" {
+		if relative != ".release.json" {
 			files = append(files, relative)
 		}
 		return nil

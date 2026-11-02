@@ -154,6 +154,17 @@ func TestStableReleaseAvailability(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	assertResponse(http.StatusOK, "")
+	if err := os.WriteFile(filepath.Join(server.releases.Path(ready), ".release.json"), []byte("{}"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{base + ".release.json", "/repositories/releases/v1/" + request.BuildName + "/.release.json"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			response := repositoryRequest(t, server, method, path, nil)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("internal release index %s %s = %d", method, path, response.Code)
+			}
+		}
+	}
 	if err := os.Remove(filepath.Join(server.releases.Path(ready), "repodata", "repomd.xml")); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +186,7 @@ func writeTestRepositoryIndex(t *testing.T, manager *repository.Manager, record 
 		RepositoryUID: record.RepositoryUID,
 		RPMs:          map[string]repository.RepositoryRPMMeta{"test.rpm": {FileName: "test.rpm"}},
 	}
-	if err := fileutil.AtomicJSON(filepath.Join(path, "repository.json"), &index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(path, ".repository.json"), &index); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -185,7 +196,7 @@ func writeTestRepositoryRecord(t *testing.T, server *Server, record *repository.
 	light := *record
 	light.RPMs = nil
 	path := filepath.Join(server.cfg.DataDir, "repositories", record.Project, record.TargetArch,
-		".metadata", "repositories", record.RepositoryUID+".json")
+		"history", record.BuildName, ".records", record.RepositoryUID+".json")
 	if err := fileutil.AtomicJSON(path, &light); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +262,7 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("browse %s = %d %q, want %q", path, response.Code, response.Body.String(), want)
 		}
-		if strings.Contains(response.Body.String(), ".metadata") {
+		if strings.Contains(response.Body.String(), ".records") {
 			t.Fatalf("browse exposed private metadata: %s", response.Body.String())
 		}
 	}
@@ -259,13 +270,14 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 		"/repositories/project-1/x86_64/history/",
 		"/repositories/project-1/x86_64/releases/",
 		"/repositories/project-1/no-release/",
-		"/repositories/project-1/x86_64/.metadata/",
-		"/repositories/project-1/x86_64/.metadata/repositories/source-repository.json",
-		"/repositories/project-1/x86_64/.metadata/releases/build-1.json",
-		"/repositories/project-1/x86_64/.repository-work/",
-		"/repositories/project-1/x86_64/.release-work/",
-		"/repositories/project-1/x86_64/.repository-trash/",
-		"/repositories/project-1/x86_64/.release-trash/",
+		"/repositories/project-1/x86_64/history/build-1/.records/",
+		"/repositories/project-1/x86_64/history/build-1/.records/source-repository.json",
+		"/repositories/project-1/x86_64/releases/.records/",
+		"/repositories/project-1/x86_64/releases/.records/build-1.json",
+		"/repositories/project-1/x86_64/history/build-1/.work/",
+		"/repositories/project-1/x86_64/releases/.work/",
+		"/repositories/project-1/x86_64/history/build-1/.trash/",
+		"/repositories/project-1/x86_64/releases/.trash/",
 	} {
 		if response := repositoryRequest(t, server, http.MethodGet, path, nil); response.Code != http.StatusNotFound {
 			t.Fatalf("hidden directory %s = %d", path, response.Code)

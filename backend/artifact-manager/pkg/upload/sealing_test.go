@@ -138,7 +138,7 @@ func assertSealCode(t *testing.T, err error, code string) {
 
 func TestSealSignsPrivateCopiesAndPublishesFinalMetadata(t *testing.T) {
 	root := t.TempDir()
-	signer := &sealTestSigner{key: "key", workDir: filepath.Join(root, "projects/project/jobs/job/.signing")}
+	signer := &sealTestSigner{key: "key", workDir: filepath.Join(root, "artifacts/project/jobs/job/.signing")}
 	s, _ := newSealTestStore(t, root, signer, 2)
 	a, rpm := sealUpload(t, s, "job", "packages/pkg.rpm")
 	_, log := sealUpload(t, s, "job", "logs/build.log")
@@ -160,11 +160,14 @@ func TestSealSignsPrivateCopiesAndPublishesFinalMetadata(t *testing.T) {
 	if !ok || effective.SHA256 == a.SHA256 || effective.Size != a.Size+7 {
 		t.Fatalf("final artifact = %+v", effective)
 	}
-	if effective.StorageKey != "projects/project/jobs/job/.signed/"+a.ID+".rpm" {
+	if effective.StorageKey != "artifacts/project/jobs/job/.signed/"+a.ID+".rpm" {
 		t.Fatalf("signed storage key: %s", effective.StorageKey)
 	}
 	if _, err := os.Stat(signer.workDir); !os.IsNotExist(err) {
 		t.Fatalf("signing work directory was not cleaned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "artifacts/project/jobs/job/.seal.json")); !os.IsNotExist(err) {
+		t.Fatalf("completed seal checkpoint was not cleaned: %v", err)
 	}
 	rawInfo, _ := os.Stat(s.ArtifactPath(&a))
 	signedInfo, _ := os.Stat(s.ArtifactPath(effective))
@@ -369,7 +372,7 @@ func TestSealPreservesCheckpointWhenSignedFileIsMissing(t *testing.T) {
 	in := CompleteManifestRequest{Files: []ManifestFile{first, second}}
 	_, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in)
 	assertSealCode(t, err, "SigningBackendUnavailable")
-	if _, err := os.Stat(filepath.Join(s.root, "projects/project/jobs/job/.metadata/seal.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(s.root, "artifacts/project/jobs/job/.seal.json")); err != nil {
 		t.Fatalf("persisted seal checkpoint: %v", err)
 	}
 	if err := os.Remove(filepath.Join(s.root, signedStorageKey("project", "job", first.ArtifactID))); err != nil {

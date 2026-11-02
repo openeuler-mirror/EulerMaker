@@ -121,7 +121,7 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	releasePath := filepath.Join(root, "repositories", "project", "x86_64", "releases", "build")
-	if entries, err := os.ReadDir(filepath.Join(root, "repositories/project/x86_64/.release-work")); err != nil || len(entries) != 0 {
+	if entries, err := os.ReadDir(filepath.Join(root, "repositories/project/x86_64/releases/.work")); err != nil || len(entries) != 0 {
 		t.Fatalf("scoped release work directory: %v, %v", entries, err)
 	}
 	if _, err := os.Stat(filepath.Join(releasePath, "Packages", "keep+1.rpm")); err != nil {
@@ -251,7 +251,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 		RequestDigest: record.RequestDigest,
 		ReleaseDigest: record.ReleaseDigest,
 	}
-	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), ".release.json"), index); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.persist(record); err != nil {
@@ -274,7 +274,7 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	}
 
 	index.ReleaseDigest = fmt.Sprintf("%x", sha256.Sum256([]byte("different")))
-	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), "release.json"), index); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(m.Path(record), ".release.json"), index); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.recover(time.Hour); err != nil {
@@ -298,7 +298,7 @@ func TestReleaseCacheTracksActiveStates(t *testing.T) {
 			t.Fatal(err)
 		}
 		active := state == ReleaseCreating || state == ReleasePrepared || state == ReleaseDeleting
-		want := filepath.Join(m.root, "repositories/project/arch/.metadata/releases/build.json")
+		want := filepath.Join(m.root, "repositories/project/arch/releases/.records/build.json")
 		if m.metaPath(record.BuildName) != want {
 			t.Fatalf("metadata path = %s, want %s", m.metaPath(record.BuildName), want)
 		}
@@ -408,7 +408,7 @@ func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
 	if retained {
 		t.Fatal("deleted release retained location index")
 	}
-	if entries, err := os.ReadDir(filepath.Join(m.root, "repositories/project/arch/.release-trash")); err != nil || len(entries) != 0 {
+	if entries, err := os.ReadDir(filepath.Join(m.root, "repositories/project/arch/releases/.trash")); err != nil || len(entries) != 0 {
 		t.Fatalf("scoped release trash: %v, %v", entries, err)
 	}
 }

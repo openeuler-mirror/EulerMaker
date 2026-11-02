@@ -118,7 +118,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	relative, err := fileutil.SafeRelative(parts[1])
-	if err != nil {
+	if err != nil || relative == ".repository.json" {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
 		return
 	}
