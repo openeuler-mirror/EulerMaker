@@ -40,17 +40,18 @@ func (s *fakeSource) HasSynced() bool           { return true }
 func (s *fakeSource) Ready() bool               { return true }
 
 type fakeHooks struct {
-	getProject      func(project string) (*ebsv1.Project, error)
-	getBuild        func(project, name string) (*ebsv1.Build, error)
-	updateBuild     func(request *ebsv1.Build) (*ebsv1.Build, error)
-	updateStatus    func(request *ebsv1.Build) (*ebsv1.Build, error)
-	getSnapshot     func(project, name string) (*ebsv1.Snapshot, error)
-	createSnapshot  func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error)
-	getRpmRepo      func(project, name string) (*ebsv1.RpmRepo, error)
-	createRpmRepo   func(request *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
-	getBuildInfo    func(project, name string) (*ebsv1.BuildInfo, error)
-	createBuildInfo func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
-	lastPublished   func(project, targetArch string) (*ebsv1.Build, error)
+	getBuildTargetContent func() (*ebsv1.BuildTargetContent, error)
+	getProject            func(project string) (*ebsv1.Project, error)
+	getBuild              func(project, name string) (*ebsv1.Build, error)
+	updateBuild           func(request *ebsv1.Build) (*ebsv1.Build, error)
+	updateStatus          func(request *ebsv1.Build) (*ebsv1.Build, error)
+	getSnapshot           func(project, name string) (*ebsv1.Snapshot, error)
+	createSnapshot        func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error)
+	getRpmRepo            func(project, name string) (*ebsv1.RpmRepo, error)
+	createRpmRepo         func(request *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
+	getBuildInfo          func(project, name string) (*ebsv1.BuildInfo, error)
+	createBuildInfo       func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
+	lastPublished         func(project, targetArch string) (*ebsv1.Build, error)
 }
 
 // fakeAPI is an in-memory implementation of Client that also records every call, so tests can assert the
@@ -76,6 +77,16 @@ func newFakeAPI() *fakeAPI {
 		buildInfos: map[string]*ebsv1.BuildInfo{},
 		revision:   100,
 	}
+}
+
+func (f *fakeAPI) GetBuildTargetContent(context.Context) (*ebsv1.BuildTargetContent, error) {
+	f.record("GetBuildTargetContent")
+	if f.hooks.getBuildTargetContent != nil {
+		return f.hooks.getBuildTargetContent()
+	}
+	return &ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
+		"test-distro": {Arches: map[string]ebsv1.BuildTargetArch{"aarch64": {Image: "build:test"}}},
+	}}, nil
 }
 
 func (f *fakeAPI) record(call string) {
@@ -427,6 +438,7 @@ func newProject(name string, repos ...ebsv1.PackageRepo) *ebsv1.Project {
 		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Project"},
 		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID("project-uid-" + name), ResourceVersion: "1"},
 		Spec: ebsv1.ProjectSpec{
+			Distro:         "test-distro",
 			DefaultRef:     "refs/heads/master",
 			PackageRepos:   repos,
 			BootstrapRepos: []ebsv1.BootstrapRepo{{Name: "everything", URL: "https://example.com/repo/everything"}},

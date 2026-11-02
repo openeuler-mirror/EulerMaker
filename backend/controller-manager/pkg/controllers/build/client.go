@@ -7,6 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/yaml"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
@@ -20,6 +21,8 @@ const lastPublishedBuildFieldSelector = "status.phase=Success,status.stage=publi
 // It is implemented by wrapping the shared controller-manager API client, so write errors keep the
 // shared NotSent / Rejected / Unknown classification and are never re-derived from status codes.
 type Client interface {
+	// GetBuildTargetContent reads the image mappings used when creating a BuildInfo.
+	GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error)
 	GetProject(ctx context.Context, project string) (*ebsv1.Project, error)
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
 	GetLastPublishedBuild(ctx context.Context, project, targetArch string) (*ebsv1.Build, error)
@@ -50,6 +53,26 @@ func (e contractError) Unwrap() error { return e.err }
 
 func contractErrorf(format string, args ...any) error {
 	return contractError{err: fmt.Errorf(format, args...)}
+}
+
+func (c *apiClient) GetBuildTargetContent(ctx context.Context) (*ebsv1.BuildTargetContent, error) {
+	obj, err := c.client.Get(ctx, source.ConfigsGVR, "", ebsv1.BuildTargetConfigName)
+	if err != nil {
+		return nil, err
+	}
+	config, ok := obj.(*ebsv1.Config)
+	if !ok || config == nil || config.Name != ebsv1.BuildTargetConfigName || config.Namespace != "" ||
+		config.UID == "" || config.ResourceVersion == "" {
+		return nil, contractErrorf("unexpected build-target Config response: %T", obj)
+	}
+	var content ebsv1.BuildTargetContent
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
+		return nil, contractErrorf("decode build-target Config: %v", err)
+	}
+	if content.Targets == nil {
+		return nil, contractErrorf("unexpected build-target content: targets is missing")
+	}
+	return &content, nil
 }
 
 func (c *apiClient) GetProject(ctx context.Context, project string) (*ebsv1.Project, error) {

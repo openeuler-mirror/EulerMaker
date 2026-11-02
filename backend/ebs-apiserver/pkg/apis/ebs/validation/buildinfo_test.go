@@ -22,6 +22,28 @@ func TestBuildInfoSpecResultsEnums(t *testing.T) {
 	}
 }
 
+func TestBuildInfoImageValidation(t *testing.T) {
+	info := &ebsv1.BuildInfo{Spec: ebsv1.BuildInfoSpec{Image: "registry.example/build:v1"}}
+	if errs := ValidateBuildInfo(info); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	updated := info.DeepCopy()
+	updated.Spec.BuildPayload = "preinstall: make"
+	if errs := ValidateBuildInfoUpdate(updated, info); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	updated.Spec.Image = "registry.example/build:v2"
+	if errs := ValidateBuildInfoUpdate(updated, info); len(errs) != 1 || errs[0].Field != "spec.image" {
+		t.Fatalf("errors = %v", errs)
+	}
+	for _, image := range []string{"", "  "} {
+		info.Spec.Image = image
+		if errs := ValidateBuildInfo(info); len(errs) != 1 || errs[0].Field != "spec.image" {
+			t.Fatalf("errors = %v", errs)
+		}
+	}
+}
+
 func TestBuildInfoFailedStatusValidation(t *testing.T) {
 	oldInfo := &ebsv1.BuildInfo{Status: ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoProcessing}}
 	newInfo := oldInfo.DeepCopy()

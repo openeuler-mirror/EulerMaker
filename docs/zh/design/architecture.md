@@ -230,9 +230,9 @@ PUT    /apis/ebs/v1/projects/{name}/status
 curl -k -N 'https://localhost:8443/apis/ebs/v1/jobs?watch=true'
 ```
 
-一个 Project 对应一套发行版构建环境：Project.spec.distro 统一指定发行版且创建后不可修改，buildArches 为架构字符串数组。Build 只保存目标架构；构建互斥、增量基准和稳定仓库以 Project + Arch 划分。BuildInfo Controller 按 Project.spec.distro 与目标 arch 选择镜像。
+一个 Project 对应一套发行版构建环境：Project.spec.distro 统一指定发行版且创建后不可修改，buildArches 为架构字符串数组。Build 只保存目标架构；构建互斥、增量基准和稳定仓库以 Project + Arch 划分。Build Controller 按 Project.spec.distro 与目标 arch 选择镜像并固化到 BuildInfo.spec.image，后续 Job 直接复用。
 
-BuildInfo Controller 通过集群级 API 读取 `/apis/ebs/v1/configs/build-target` 和 `/apis/ebs/v1/configs/build-resource`，按对象名称解析 `spec.content`。
+Build Controller 创建 BuildInfo 时读取 `/apis/ebs/v1/configs/build-target`；BuildInfo Controller 创建 Job 时读取 `/apis/ebs/v1/configs/build-resource`，按对象名称解析 `spec.content`。
 
 ### 5.4 Runner API
 

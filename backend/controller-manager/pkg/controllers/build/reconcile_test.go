@@ -61,6 +61,43 @@ func TestSyncIgnoresMissingAndFinishedBuilds(t *testing.T) {
 	}
 }
 
+func TestPreparedSelectsImageFromProjectDistroAndBuildArch(t *testing.T) {
+	content := &ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
+		"distro-a": {Arches: map[string]ebsv1.BuildTargetArch{
+			"aarch64": {Image: "build:a-arm"}, "x86_64": {Image: "build:a-x86"},
+		}},
+		"distro-b": {Arches: map[string]ebsv1.BuildTargetArch{
+			"aarch64": {Image: "build:b-arm"},
+		}},
+	}}
+	for _, tc := range []struct {
+		distro, arch, image string
+		buildType           ebsv1.BuildType
+	}{
+		{"distro-a", "aarch64", "build:a-arm", ebsv1.BuildTypeFull},
+		{"distro-a", "x86_64", "build:a-x86", ebsv1.BuildTypeSingle},
+		{"distro-b", "aarch64", "build:b-arm", ebsv1.BuildTypeFull},
+	} {
+		t.Run(tc.distro+"/"+tc.arch, func(t *testing.T) {
+			api := newFakeAPI()
+			build := withPhaseStage(newBuild("project-a", "build-a", tc.buildType, nil), ebsv1.BuildPrepared, "")
+			build.Spec.Arch = tc.arch
+			api.builds[key("project-a", "build-a")] = build
+			project := newProject("project-a")
+			project.Spec.Distro = tc.distro
+			api.projects[project.Name] = project
+			api.hooks.getBuildTargetContent = func() (*ebsv1.BuildTargetContent, error) { return content, nil }
+			c := newTestController(t, api, newTestClock())
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatal(err)
+			}
+			if got := api.buildInfo("project-a", "build-a").Spec.Image; got != tc.image {
+				t.Fatalf("image = %q, want %q", got, tc.image)
+			}
+		})
+	}
+}
+
 func TestSyncStopsWhenBuildIsDeleting(t *testing.T) {
 	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, "")
 	deletion := metav1.NewTime(time.Date(2026, 9, 16, 9, 0, 0, 0, time.UTC))
@@ -728,7 +765,7 @@ func TestNewSnapshotFreezesGitRefInPackageRepo(t *testing.T) {
 func TestNewBuildInfoCopiesBootstrapRepos(t *testing.T) {
 	project := newProject("project-a", newPackageRepo("gcc"))
 	build := withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
-	info := newBuildInfo(build, project)
+	info := newBuildInfo(build, project, "build:test")
 	if !reflect.DeepEqual(info.Spec.BootstrapRepos, project.Spec.BootstrapRepos) {
 		t.Fatalf("bootstrapRepos = %+v", info.Spec.BootstrapRepos)
 	}
@@ -743,7 +780,7 @@ func TestNewBuildInfoFreezesBuildPayload(t *testing.T) {
 		t.Run(payload, func(t *testing.T) {
 			project := newProject("project-a", newPackageRepo("gcc"))
 			project.Spec.BuildPayload = payload
-			info := newBuildInfo(newBuild("project-a", "build-a", "full", nil), project)
+			info := newBuildInfo(newBuild("project-a", "build-a", "full", nil), project, "build:test")
 			project.Spec.BuildPayload = "changed"
 			if info.Spec.BuildPayload != payload {
 				t.Fatalf("buildPayload = %q, want %q", info.Spec.BuildPayload, payload)
@@ -767,6 +804,9 @@ func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
 		t.Fatalf("BuildInfo = %+v", info)
 	}
 	stored := api.build("project-a", "build-a")
+	if info.Spec.Image != "build:test" || api.CallCount("GetBuildTargetContent") != 1 {
+		t.Fatalf("image = %q, config reads = %d", info.Spec.Image, api.CallCount("GetBuildTargetContent"))
+	}
 	if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
@@ -790,16 +830,16 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Spec:       ebsv1.BuildInfoSpec{BuildPayload: "frozen payload", BootstrapRepos: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}}},
+		Spec:       ebsv1.BuildInfoSpec{Image: "frozen:image", BuildPayload: "frozen payload", BootstrapRepos: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}}},
 	})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if api.CallCount("GetProject") != 0 || api.CallCount("CreateBuildInfo") != 0 {
+	if api.CallCount("GetProject") != 0 || api.CallCount("GetBuildTargetContent") != 0 || api.CallCount("CreateBuildInfo") != 0 {
 		t.Fatal("an existing BuildInfo must not be recreated or re-read from the Project")
 	}
-	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepos[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" {
+	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepos[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" || info.Spec.Image != "frozen:image" {
 		t.Fatalf("BuildInfo spec was overwritten: %+v", info.Spec)
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing {
@@ -860,4 +900,40 @@ func indexOf(values []string, target string) int {
 		}
 	}
 	return -1
+}
+
+func TestPreparedImageConfigurationFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		readErr   error
+		permanent bool
+	}{
+		{name: "temporary read failure", readErr: fmt.Errorf("connection interrupted")},
+		{name: "mapping removed", permanent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI()
+			api.builds[key("project-a", "build-a")] = withPhaseStage(
+				newBuild("project-a", "build-a", "full", nil), ebsv1.BuildPrepared, "")
+			api.projects["project-a"] = newProject("project-a")
+			api.hooks.getBuildTargetContent = func() (*ebsv1.BuildTargetContent, error) {
+				return &ebsv1.BuildTargetContent{}, tc.readErr
+			}
+			c := newTestController(t, api, newTestClock())
+			_, err := c.sync(context.Background(), "project-a/build-a")
+			if err == nil || controller.IsPermanent(err) != tc.permanent {
+				t.Fatalf("sync error = %v, want permanent=%v", err, tc.permanent)
+			}
+			if api.buildInfo("project-a", "build-a") != nil || api.build("project-a", "build-a").Status.Phase != ebsv1.BuildPrepared {
+				t.Fatal("configuration failure must leave Build Prepared without a BuildInfo")
+			}
+			api.hooks.getBuildTargetContent = nil
+			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+				t.Fatal(err)
+			}
+			if got := api.buildInfo("project-a", "build-a").Spec.Image; got != "build:test" {
+				t.Fatalf("recovered image = %q", got)
+			}
+		})
+	}
 }

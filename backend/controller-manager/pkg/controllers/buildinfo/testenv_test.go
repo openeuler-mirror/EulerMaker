@@ -237,6 +237,7 @@ func testBuildObj(buildType string, packages ...string) *ebsv1.Build {
 func testBuildInfoObj(phase ebsv1.BuildInfoPhase) *ebsv1.BuildInfo {
 	return &ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: testBuild},
+		Spec:       ebsv1.BuildInfoSpec{Image: testImage},
 		Status:     ebsv1.BuildInfoStatus{Phase: phase},
 	}
 }
@@ -279,14 +280,6 @@ func testRpmRepoObj(contentURL string) *ebsv1.RpmRepo {
 	}
 }
 
-func testBuildTargetContent() *ebsv1.BuildTargetContent {
-	return &ebsv1.BuildTargetContent{
-		Targets: map[string]ebsv1.BuildTargetConfigEntry{
-			testOS: {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: testImage}}},
-		},
-	}
-}
-
 func testBuildResourceContent() *ebsv1.BuildResourceContent {
 	return &ebsv1.BuildResourceContent{
 		Default:  ebsv1.ResourceRequirements{Requests: map[string]string{"cpu": "1", "memory": "2Gi"}},
@@ -300,7 +293,6 @@ func seedHealthyBasics(client *fakeClient, buildType string, packages ...string)
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj(buildType, packages...))
 	client.SetBuildResourceContent(testBuildResourceContent())
-	client.SetBuildTargetContent(testBuildTargetContent())
 	return client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 }
 

@@ -95,7 +95,7 @@ func (c *Controller) initBuildInfo(ctx context.Context, round *reconcileRound) (
 		return result, err
 	}
 
-	// Resolve the build-target Config only when the first Job needs it, then reuse that image for the rest of this round.
+	// Share dispatch inputs across all Jobs created in this round.
 	contentURL, err := c.resolveContentURL(ctx, round, heldContentURL(round))
 	if err != nil {
 		return c.handleArtifactURLFailure(ctx, round, err)
@@ -151,37 +151,6 @@ func (c *Controller) persistBuildSetResults(
 type roundDispatch struct {
 	arch       string
 	contentURL string
-	image      string
-	imageReady bool
-}
-
-// ensureImage resolves the build-target Config image snapshot lazily (a read failure or a missing mapping pauses the
-// round — plain error backoff, no condition, no Failed marking).
-func (c *Controller) ensureImage(ctx context.Context, round *reconcileRound, dispatch *roundDispatch) (string, error) {
-	if dispatch.imageReady {
-		return dispatch.image, nil
-	}
-	conf, err := c.client.GetBuildTargetContent(ctx)
-	if err != nil {
-		return "", err
-	}
-	image, err := buildImage(conf, round.project.Spec.Distro, round.build.Spec.Arch)
-	if err != nil {
-		return "", err
-	}
-	dispatch.image, dispatch.imageReady = image, true
-	return image, nil
-}
-
-func buildImage(conf *ebsv1.BuildTargetContent, distro, arch string) (string, error) {
-	if conf == nil {
-		return "", fmt.Errorf("build-target Config is unavailable")
-	}
-	image := conf.Targets[distro].Arches[arch].Image
-	if image == "" {
-		return "", fmt.Errorf("build-target Config has no image for %s/%s", distro, arch)
-	}
-	return image, nil
 }
 
 // dispatchInitSpec skips already-dispatched or terminal specs, checks the target architecture and build dependencies,
@@ -215,11 +184,7 @@ func (c *Controller) dispatchInitSpec(
 	if ss = round.specResult(specName); failedSpecBuildStatus(ss.Status) {
 		return controller.ReconcileResult{}, nil
 	}
-	image, err := c.ensureImage(ctx, round, dispatch)
-	if err != nil {
-		return controller.ReconcileResult{}, err
-	}
-	return c.dispatchSpec(ctx, round, specName, &depend, snapshot, image, dispatch.contentURL, sources)
+	return c.dispatchSpec(ctx, round, specName, &depend, snapshot, round.current.Spec.Image, dispatch.contentURL, sources)
 }
 
 // checkArchSupported applies the exclusiveArch whitelist: an arch miss marks the spec ArchUnsupported without a Job; an
@@ -631,11 +596,7 @@ func (c *Controller) initSingle(ctx context.Context, round *reconcileRound) (con
 		if ss = round.specResult(name); failedSpecBuildStatus(ss.Status) {
 			continue
 		}
-		image, err := c.ensureImage(ctx, round, dispatch)
-		if err != nil {
-			return controller.ReconcileResult{}, err
-		}
-		if result, err = c.dispatchSpec(ctx, round, name, &depend, snapshot, image, dispatch.contentURL, nil); err != nil ||
+		if result, err = c.dispatchSpec(ctx, round, name, &depend, snapshot, round.current.Spec.Image, dispatch.contentURL, nil); err != nil ||
 			result != (controller.ReconcileResult{}) {
 			return result, err
 		}

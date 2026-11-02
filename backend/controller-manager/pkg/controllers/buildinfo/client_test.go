@@ -135,65 +135,6 @@ func TestAPIClientGetBuildResourceContent(t *testing.T) {
 	}
 }
 
-func TestAPIClientGetBuildTargetContent(t *testing.T) {
-	for _, tc := range []struct {
-		name, content, wantError string
-		status                   int
-	}{
-		{name: "yaml", content: "targets: {os: {arches: {x86_64: {image: 'build:x86'}, aarch64: {image: 'build:arm'}}}}"},
-		{name: "json", content: `{"targets":{"os":{"arches":{"x86_64":{"image":"build:x86"},"aarch64":{"image":"build:arm"}}}}}`},
-		{name: "read failure", status: http.StatusNotFound, wantError: "not found"},
-		{name: "decode failure", content: "targets: [", wantError: "decode build-target Config"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/configs/build-target" {
-					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				if tc.status != 0 {
-					w.WriteHeader(tc.status)
-					return
-				}
-				config := &ebsv1.Config{
-					TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Config"},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: ebsv1.BuildTargetConfigName, UID: "config-uid", ResourceVersion: "1",
-					},
-					Spec: ebsv1.ConfigSpec{Content: tc.content},
-				}
-				if err := json.NewEncoder(w).Encode(config); err != nil {
-					t.Error(err)
-				}
-			}))
-			defer server.Close()
-			shared, err := apiserver.New(&rest.Config{Host: server.URL}, time.Second)
-			if err != nil {
-				t.Fatal(err)
-			}
-			content, err := newAPIClient(shared).GetBuildTargetContent(context.Background())
-			if tc.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
-					t.Fatalf("GetBuildTargetContent error = %v, want %q", err, tc.wantError)
-				}
-				if tc.status == http.StatusNotFound && !errors.Is(err, ErrNotFound) {
-					t.Fatalf("missing NotFound sentinel: %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			for arch, want := range map[string]string{"x86_64": "build:x86", "aarch64": "build:arm"} {
-				image, err := buildImage(content, "os", arch)
-				if err != nil || image != want {
-					t.Fatalf("image for %s = %q, %v; want %q", arch, image, err, want)
-				}
-			}
-		})
-	}
-}
-
 func TestAPIClientGetProject(t *testing.T) {
 	project := &ebsv1.Project{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Project"},
@@ -205,7 +146,7 @@ func TestAPIClientGetProject(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/apis/ebs/v1/projects/demo" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		if got := r.URL.Query().Get("includeFields"); got != "metadata,status.phase,spec.distro" {
+		if got := r.URL.Query().Get("includeFields"); got != "metadata,status.phase" {
 			t.Errorf("includeFields = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")

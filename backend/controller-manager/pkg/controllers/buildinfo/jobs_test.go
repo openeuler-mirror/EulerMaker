@@ -786,57 +786,6 @@ func TestJobForSpecRepoEntryMissing(t *testing.T) {
 
 // --- Per-round build-target Config snapshot ---
 
-func TestEnsureImageUsesProjectDistro(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
-		Targets: map[string]ebsv1.BuildTargetConfigEntry{
-			"distro-a": {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: "image-a:v1"}}},
-			"distro-b": {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: "image-b:v1"}}},
-		},
-	})
-	for distro, want := range map[string]string{"distro-a": "image-a:v1", "distro-b": "image-b:v1"} {
-		project := testProjectObj(ebsv1.ProjectActive)
-		project.Spec.Distro = distro
-		round := &reconcileRound{build: testBuildObj("full"), project: project}
-		image, err := c.ensureImage(context.Background(), round, &roundDispatch{arch: testArch})
-		if err != nil || image != want {
-			t.Fatalf("distro %s: image=%q, err=%v; want %q", distro, image, err, want)
-		}
-	}
-}
-
-func TestEnsureImageRoundSnapshot(t *testing.T) {
-	c, client, _, _ := newTestController(t)
-	client.SetBuildTargetContent(testBuildTargetContent())
-	round := &reconcileRound{key: testNS + "/" + testBuild, build: testBuildObj("full"), project: testProjectObj(ebsv1.ProjectActive)}
-	dispatch := &roundDispatch{arch: testArch}
-
-	image, err := c.ensureImage(context.Background(), round, dispatch)
-	if err != nil || image != testImage {
-		t.Fatalf("ensureImage = %q, %v, want %q", image, err, testImage)
-	}
-	// A build-target Config change inside the round is invisible: the image snapshot is resolved once and shared across
-	// the round.
-	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
-		Targets: map[string]ebsv1.BuildTargetConfigEntry{
-			testOS: {Arches: map[string]ebsv1.BuildTargetArch{testArch: {Image: "img:v2"}}},
-		},
-	})
-	again, err := c.ensureImage(context.Background(), round, dispatch)
-	if err != nil || again != testImage {
-		t.Fatalf("ensureImage second call = %q, %v, want the round snapshot %q", again, err, testImage)
-	}
-	// A fresh round observes the new mapping; a read failure pauses (error).
-	fresh := &roundDispatch{arch: testArch}
-	if image, err = c.ensureImage(context.Background(), round, fresh); err != nil || image != "img:v2" {
-		t.Fatalf("ensureImage fresh round = %q, %v, want img:v2", image, err)
-	}
-	client.FailBuildTargetContent()
-	if _, err = c.ensureImage(context.Background(), round, &roundDispatch{arch: testArch}); err == nil {
-		t.Fatal("ensureImage error = nil, want the build-target Config read failure")
-	}
-}
-
 // --- dispatchSpec create outcomes ---
 
 // dispatchRound builds a minimal Processing round for direct dispatchSpec calls: the seeded BuildInfo (specResults entry

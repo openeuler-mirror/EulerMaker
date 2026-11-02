@@ -2,6 +2,7 @@ package buildinfo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -736,32 +737,6 @@ func TestInitArchUnsupportedSkipsJob(t *testing.T) {
 	}
 }
 
-func TestInitMissingImageMappingPauses(t *testing.T) {
-	c, client, git, _ := newTestController(t)
-	seedHealthyBasics(client, "full")
-	// A missing image mapping pauses dispatch without marking the spec Failed.
-	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
-		Targets: map[string]ebsv1.BuildTargetConfigEntry{},
-	})
-	client.SeedSnapshot(testSnapshotObj(
-		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	client.SeedRpmRepo(testRpmRepoObj(""))
-	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
-
-	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); err == nil {
-		t.Fatal("reconcile() error = nil, want build-target Config mapping failure")
-	}
-	bi := getBuildInfo(t, client)
-	requirePhase(t, bi, ebsv1.BuildInfoPending)
-	requireSpecNames(t, bi, "a")
-	if ss := bi.Status.SpecResults.Entry("a"); ss.Status != ebsv1.SpecPrepared || ss.DispatchCount != 0 {
-		t.Fatalf("specResults[a] = %+v, want an undispatched entry", ss)
-	}
-	if got := len(listJobs(t, client)); got != 0 {
-		t.Fatalf("jobs = %d, want 0", got)
-	}
-}
-
 func TestMissingBuildResourceConfigPausesAndResumesDispatch(t *testing.T) {
 	for _, buildType := range []string{"full", "single"} {
 		t.Run(buildType, func(t *testing.T) {
@@ -903,7 +878,6 @@ func TestSingleRepoInjection(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
 	client.SetBuildResourceContent(testBuildResourceContent())
-	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
 	bi.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	client.SeedBuildInfo(bi)
@@ -931,7 +905,6 @@ func TestSingleArtifactRepoInjection(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
 	client.SetBuildResourceContent(testBuildResourceContent())
-	client.SetBuildTargetContent(testBuildTargetContent())
 	client.SeedBuildInfo(testBuildInfoObj(ebsv1.BuildInfoPending))
 	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
 	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
@@ -988,7 +961,6 @@ func TestSinglePreferWithoutDependencyGate(t *testing.T) {
 	client.SeedProject(testProjectObj(ebsv1.ProjectActive))
 	client.SeedBuild(testBuildObj("single", "repo1"))
 	client.SetBuildResourceContent(testBuildResourceContent())
-	client.SetBuildTargetContent(testBuildTargetContent())
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
 	bi.Spec.BuildPayload = "prefer:\n- rpm-a\n"
 	client.SeedBuildInfo(bi)
@@ -1099,22 +1071,42 @@ func TestSingleDeterministicFailures(t *testing.T) {
 
 }
 
-func TestSingleMissingImageMappingPauses(t *testing.T) {
-	c, client, git, _ := newTestController(t)
-	seedHealthyBasics(client, "single", "repo1")
-	client.SetBuildTargetContent(&ebsv1.BuildTargetContent{
-		Targets: map[string]ebsv1.BuildTargetConfigEntry{},
-	})
-	client.SeedSnapshot(testSnapshotObj(
-		repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
-	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
-
-	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); err == nil {
-		t.Fatal("reconcile() error = nil, want build-target Config mapping failure")
-	}
-	bi := getBuildInfo(t, client)
-	requirePhase(t, bi, ebsv1.BuildInfoPending)
-	if got := len(listJobs(t, client)); got != 0 {
-		t.Fatalf("jobs = %d, want 0", got)
+func TestDispatchUsesFrozenBuildInfoImage(t *testing.T) {
+	for _, buildType := range []string{"full", "single"} {
+		t.Run(buildType, func(t *testing.T) {
+			c, client, git, _ := newTestController(t)
+			bi := seedHealthyBasics(client, buildType, "repo1")
+			bi.Spec.Image = "build:frozen"
+			client.SeedBuildInfo(bi)
+			client.SeedSnapshot(testSnapshotObj(
+				repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+			client.SeedRpmRepo(testRpmRepoObj(""))
+			files := make(map[string]string)
+			for i := 0; i < 21; i++ {
+				name := fmt.Sprintf("pkg%02d", i)
+				files[name+".spec"] = specText(name)
+			}
+			git.repo(gitURL1, "c1", files)
+			reconcileOnce(t, c)
+			if got := len(listJobs(t, client)); got != 20 {
+				t.Fatalf("first batch = %d, want 20", got)
+			}
+			reconcileOnce(t, c)
+			jobs := listJobs(t, client)
+			if len(jobs) != 21 {
+				t.Fatalf("jobs = %d, want 21", len(jobs))
+			}
+			for _, job := range jobs {
+				var runtimeSpec struct {
+					Image string `json:"image"`
+				}
+				if err := json.Unmarshal(job.Spec.RuntimeSpec.Raw, &runtimeSpec); err != nil {
+					t.Fatal(err)
+				}
+				if runtimeSpec.Image != "build:frozen" {
+					t.Fatalf("image = %q", runtimeSpec.Image)
+				}
+			}
+		})
 	}
 }

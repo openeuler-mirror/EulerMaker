@@ -6,7 +6,7 @@
 
 | 对象 | 配置内容 | 作用域 | Job 中的结果 |
 |------|----------|--------|-------------|
-| `Config/build-target` | 发行版标识（distro）、Arch 和构建镜像映射 | 集群级，`Public` | `spec.runtimeSpec.image` |
+| `Config/build-target` | 发行版标识（distro）、Arch 和构建镜像映射 | 集群级，`Public` | `BuildInfo.spec.image` → `Job.spec.runtimeSpec.image` |
 | `Config/build-resource` | spec 软件包及架构的 CPU、内存规则 | 集群级，`OpsOnly` | `spec.resources` |
 | `Config/services` | Artifact Manager 实例地址和 Git Server 管理地址 | 集群级，`OpsOnly` | 仅固化 Artifact 实例标识和 Git 逻辑克隆地址，不复制配置全文 |
 
@@ -53,7 +53,7 @@ apiserver 校验名称、`visibility`、`content` 非空、UTF-8、无 NUL 及�
 
 - 前端从配置生成 Project 的 distro 选项，再根据所选发行版生成 buildArches 的架构选项。
 - Project 的 distro 创建后不可变，Build 不重复保存。
-- BuildInfo Controller 根据 Project.spec.distro、Build.spec.arch 选择镜像，并写入 Job。
+- Build Controller 根据 Project.spec.distro、Build.spec.arch 选择镜像并固化到 BuildInfo；BuildInfo Controller 直接复用该镜像创建 Job。
 - Ops、Admin 可以通过 Gateway 修改配置，无需重启服务。
 
 ### 2.2 对象
@@ -130,31 +130,23 @@ Project.spec.distro 保存工程统一的发行版标识，创建后不可修改
 - 配置对象不存在、读取失败、响应类型错误或反序列化失败：`503 ServiceUnavailable`，不得当成用户输入错误或使用硬编码回退。
 - 成功：继续已有 Project 目标、packages、并发占用等校验流程。
 
-该检查不是锁定配置：Build 创建成功后配置仍可能变化，因此 Job 创建方仍须确认所选 OS/Arch 的镜像映射存在。
+该检查不是锁定配置：Build Controller 创建 BuildInfo 时仍须解析当时的镜像映射。
 
-#### 2.5.2 BuildInfo Controller 创建 Job
+#### 2.5.2 Build Controller 创建 BuildInfo
 
-每次需要创建新 Job 的 reconcile，读取一次最新 `Config/build-target`，反序列化其 `content`，不重复校验发行版、架构和镜像格式；该轮批量创建使用同一个内存快照，按 `Project.spec.distro` 与 `Build.spec.arch` 查询镜像。Project 复用本轮前置守卫的读取，投影为 `includeFields=metadata,status.phase,spec.distro`，不逐 Job 重读；Project 不存在或读取失败时沿用前置守卫的错误处理，不使用默认发行版兜底。
+仅当 BuildInfo 不存在、需要创建时，读取 Project 与 `Config/build-target`，反序列化配置后按 `Project.spec.distro + Build.spec.arch` 取得镜像，写入 `BuildInfo.spec.image`。同次创建还固化 bootstrapRepos 与 buildPayload；已有 BuildInfo 直接沿用，不重新读取镜像配置或覆盖其 image。
 
-镜像写入 `Job.spec.runtimeSpec.image`。该字段由配置解析结果确定，Job 模板不得覆盖它；runtimeSpec 其他字段及 `Config/build-resource` 解析按原规则执行。首版面向现有容器 rpmbuild Job，不把容器镜像解释为 VM 镜像。
+配置不存在或临时读取失败时返回可重试错误；权限、响应契约、反序列化错误以及镜像映射缺失返回 PermanentError。均不创建 BuildInfo、不写 Build 业务终态；修复配置后由后续轮询重新调和。创建的 AlreadyExists、Conflict 与 Unknown 处理遵循 Build Controller 的子资源创建契约，沿用服务端已创建的 BuildInfo。
 
-读取失败、响应类型错误、反序列化失败或映射缺失时，不创建本轮的新 Job，输出结构化错误，按 controller 框架的错误分类及慢速重入策略等待配置恢复；不把配置问题直接写成构建失败。无需注册 Config watch。已有 Job 的观察、结果回收不依赖本轮配置可用性。
-
-Job 创建沿用确定性名称及幂等流程：已存在的同一任务 Job 直接沿用，不能因配置改变更新其镜像；Create 返回结果未知时先确认原请求的写入意图，不能读取新配置后用不同镜像盲目重试同一次创建。
+BuildInfo Controller 直接把 `BuildInfo.spec.image` 写入 `Job.spec.runtimeSpec.image`，不再查询 `Config/build-target`，Job 模板不得覆盖镜像。Project 仍以 `includeFields=metadata,status.phase` 每轮读取一次，用于终止守卫和制品服务实例选择。资源配置与脚本的读取时机不变。
 
 #### 2.5.3 生效边界
 
-采用**Project 创建时确定发行版，创建 Job 时解析镜像配置**：
-
 - Project.spec.distro 创建后不可变；Build 和 BuildInfo 不重复保存发行版标识。
-- Build 和 BuildInfo 不额外保存镜像快照；Project.spec.distro 不是镜像地址或镜像内容锁定。
-- 已创建的 Pending/Running Job 均继续使用自身固化的镜像。
-- 修改或移除配置会影响之后创建的 Job，包括正在进行的 Build 中尚未创建的 Job。
-- 同一 Build 可以包含使用同一 distro/arch 映射在不同时间解析出的不同镜像；不承诺 Build 级镜像内容快照一致性。
+- BuildInfo.spec.image 必填且创建后不可修改，同一 Build 的所有 Job 使用相同镜像引用。
+- 修改或移除映射影响新 Build 的准入，以及尚未创建 BuildInfo 的构建；已创建 BuildInfo 的构建继续使用固化镜像。
 - Runner 只执行 Job.spec.runtimeSpec，不读取 Config。
-- tag 可被镜像仓库重新指向，Job 固化 tag 不等于固化镜像内容；需要内容可复现时由运维填写 digest 引用。
-
-这也是删除某个 OS/Arch 的语义：禁止后续接收该目标 Build，并暂停该目标尚未创建 Job 的派发，不删除或中止已有任务。恢复映射后重新调和即可继续。
+- 固化 tag 只固定引用字符串，不固定镜像内容；需要内容可复现时由运维填写 digest 引用。
 
 ### 2.6 前端与 ebsctl
 
@@ -183,7 +175,7 @@ ebsctl 注册集群级 Config 的 get/list/create/replace/patch；`-p/-n` 不改
 
 实现时使用现有可重复执行的代码生成脚本，不手工维护独立 OpenAPI 文件。
 
-验收至少覆盖：合法/非法镜像和目标、空配置、工程级 distro、目标架构去重、Build 创建使用 Project 的 distro 校验镜像映射、BuildInfo 复用本轮 Project 投影读取 distro、Project 更新禁止修改或删除 distro、两架构不同镜像、无权限写入、更新冲突、多实例初始化不覆盖、未配置目标创建 Build 不留下占用、配置读取失败、批量 Job 使用同一配置快照、Job 创建未知结果确认、配置更新不修改已有 Job、删除目标后新任务停发及恢复、前端旧目标保留和请求失败提示。
+验收至少覆盖：合法/非法镜像和目标、空配置、工程级 distro、目标架构去重、Build 创建使用 Project 的 distro 校验镜像映射、Build Controller 创建 BuildInfo 时按 Project distro 固化镜像、Project 更新禁止修改或删除 distro、两架构不同镜像、无权限写入、更新冲突、多实例初始化不覆盖、未配置目标创建 Build 不留下占用、配置读取失败、跨轮 Job 使用同一 BuildInfo 镜像、Job 创建未知结果确认、配置更新不修改已有 BuildInfo/Job、删除目标后新 BuildInfo 停止创建及恢复、前端旧目标保留和请求失败提示。
 
 ## 3. 构建资源内容
 
