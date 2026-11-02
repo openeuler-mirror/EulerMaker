@@ -123,8 +123,11 @@ func TestOldJobsHTTPRoutes(t *testing.T) {
 	storage := info.VersionedResourcesStorageMap["v1"]
 	container := restful.NewContainer()
 	group := &endpoints.APIGroupVersion{
-		Storage: map[string]rest.Storage{"oldjobs": storage["oldjobs"], "jobs": storage["jobs"], "jobs/archive": storage["jobs/archive"]},
-		Root:    "/apis", GroupVersion: ebsv1.SchemeGroupVersion, OptionsExternalVersion: &schema.GroupVersion{Version: "v1"},
+		Storage: map[string]rest.Storage{
+			"oldjobs": storage["oldjobs"], "jobs": storage["jobs"], "jobs/archive": storage["jobs/archive"],
+			"jobs/finalizers": storage["jobs/finalizers"], "oldjobs/finalizers": storage["oldjobs/finalizers"],
+		},
+		Root: "/apis", GroupVersion: ebsv1.SchemeGroupVersion, OptionsExternalVersion: &schema.GroupVersion{Version: "v1"},
 		Creater: Scheme, Convertor: Scheme, UnsafeConvertor: runtime.UnsafeObjectConvertor(Scheme),
 		Defaulter: Scheme, Typer: Scheme, Namer: meta.NewAccessor(),
 		TypeConverter:              managedfields.NewDeducedTypeConverter(),
@@ -152,6 +155,12 @@ func TestOldJobsHTTPRoutes(t *testing.T) {
 	}
 	if strings.Join(methods["/apis/ebs/v1/namespaces/{namespace}/jobs/{name}/archive"], ",") != "GET,POST" {
 		t.Fatalf("archive route=%v", methods)
+	}
+	for _, resource := range []string{"jobs", "oldjobs"} {
+		path := "/apis/ebs/v1/namespaces/{namespace}/" + resource + "/{name}/finalizers"
+		if strings.Join(methods[path], ",") != "PUT" {
+			t.Fatalf("finalizer route %s: %v", path, methods[path])
+		}
 	}
 	for _, tc := range []struct {
 		query  string

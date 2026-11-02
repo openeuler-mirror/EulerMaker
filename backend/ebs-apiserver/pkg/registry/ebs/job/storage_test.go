@@ -31,10 +31,15 @@ func TestJobStorageStrategies(t *testing.T) {
 	store := s.Resource.(*genericregistry.Store)
 	statusStore := s.Status.(*genericregistry.Store)
 	ctx := context.Background()
-	created := &ebsv1.Job{Status: ebsv1.JobStatus{Phase: ebsv1.JobRunning}}
+	created := &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Finalizers: []string{"example.test/other"},
+		Annotations: map[string]string{ebsv1.JobArchiveActionAnnotation: "delete"}},
+		Status: ebsv1.JobStatus{Phase: ebsv1.JobRunning}}
 	store.CreateStrategy.PrepareForCreate(ctx, created)
 	if created.Status.Phase != ebsv1.JobPending || created.Status.Stage != ebsv1.JobStagePending {
 		t.Fatalf("initial status=%+v", created.Status)
+	}
+	if !reflect.DeepEqual(created.Finalizers, []string{"example.test/other", ebsv1.JobArchiveFinalizer}) || len(created.Annotations) != 0 {
+		t.Fatalf("initial lifecycle=%+v", created.ObjectMeta)
 	}
 	old := &ebsv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: "job-a", Namespace: "project-a", Labels: map[string]string{"owner": "build-a"}},
