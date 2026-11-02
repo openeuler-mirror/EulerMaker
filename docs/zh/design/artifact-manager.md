@@ -121,30 +121,53 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 存储键由服务端生成：
 
 ```text
-projects/{project}/jobs/{jobName}/{safeRelativePath}
+artifacts/{project}/jobs/{jobName}/{safeRelativePath}
 ```
 
 服务对 `relativePath` 进行词法规范化后生成 `safeRelativePath`，具体校验见 5.6。同一个 Job 中的 `safeRelativePath` 必须唯一，已存在时只有上传元数据相同的幂等重试可以返回原 Artifact。
 
-本地后端以 `--data-dir` 为根目录，将存储键映射为正文路径。上传中的文件写入 `${dataDir}/.uploads/{artifactID}.tmp`，校验完成后在同一文件系统内原子重命名到最终路径。当前使用路径拼接及普通文件系统调用，部分读取会检查末级文件类型，但未实现以目录 FD 为根的全链路解析；父目录符号链接和检查后替换的竞态仍需加固。数据目录必须由服务独占写入，不允许不可信进程修改目录结构。
+本地后端以 `--data-dir` 为根目录，将存储键映射为正文路径。上传中的文件写入 `${dataDir}/artifacts/{project}/jobs/{jobName}/.uploads/{artifactID}.tmp`，校验完成后在同一文件系统内原子重命名到最终路径。当前使用路径拼接及普通文件系统调用，部分读取会检查末级文件类型，但未实现以目录 FD 为根的全链路解析；父目录符号链接和检查后替换的竞态仍需加固。数据目录必须由服务独占写入，不允许不可信进程修改目录结构。
 
 Artifact、日志流元数据和上传清单按 Job 聚合存储，普通产物及日志封账生成的 Artifact 使用相同目录结构：
 
 ```text
-${dataDir}/.metadata/jobs/{project}/{jobName}/
-├── artifacts/
-│   └── {artifactID}.json
+${dataDir}/artifacts/{project}/jobs/{jobName}/
+├── .uploads/
+│   └── {artifactID}.tmp            # 上传临时正文
+├── packages/                       # 原始 RPM 正文，包含 src.rpm
 ├── logs/
-│   └── combined.json
-├── seal.json                       # 冻结的封账输入、签名指纹和恢复进度
-└── manifest.json
+│   ├── combined.log                # 实时正文，封账后重命名为 container.log
+│   ├── container.log               # 封账日志
+│   ├── .combined.index.jsonl        # 分块索引，支持恢复和重放
+│   └── .combined.json               # 日志流状态
+├── .signed/
+│   └── {artifactID}.rpm            # 已核验签名副本
+├── .signing/                       # 签名临时工作文件
+├── .quarantine/
+│   └── {artifactID}.corrupted       # 损坏正文隔离
+├── .manifest.json                  # Job 上传清单
+├── .seal.json                      # 封账输入及恢复进度，封账成功后移除
+└── .artifacts/
+    └── {artifactID}.json            # 产物元数据
 ```
 
-签名不覆盖原始上传正文。临时副本放在 `${dataDir}/.signing/{project}/{jobName}/`，验签并持久化后以不覆盖方式提交到 `${dataDir}/.signed/{project}/{jobName}/{artifactID}.rpm`。两者与仓库位于同一文件系统，均不是公开目录；最终清单决定下载和物化选择原始正文还是签名正文。封账发布边界及清理见 6.2.1。
+Job 内的 `.artifacts/` 为服务保留目录，上传的规范化 `relativePath` 不得指向该目录或其子路径。下载接口按 Artifact 记录读取正文，不直接开放整个 Job 目录。过程仓和发布仓的状态记录分别归入对应 `repositories/{project}/{arch}/history/{buildName}/.records/` 和 `releases/.records/`，布局见 8.4。
 
-Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Store 锁串行保护。
+Job 内的 `.uploads/` 同样为保留目录，普通上传不得占用该目录及其子路径。上传临时正文、失败重试清理和重启恢复均按 Project、JobName 和 artifactID 定位。
 
-启动时逐条扫描 Artifact 和 LogStream 元数据并执行恢复，处理完即释放，不将历史产物或日志流状态常驻内存。`manifest.json` 不在启动时加载，按 Project、JobName 定位读取，用完释放。
+Job 根目录的 `.manifest.json` 保存上传清单；该路径、其子路径及 `.manifest.json.tmp-*` 原子写入临时路径均为服务保留路径。清单按需读取，通过 Manifest API 查询，不作为普通产物列出或下载。
+
+Job 根目录的 `.seal.json` 保存封账检查点，封账成功后移除；该路径、其子路径及 `.seal.json.tmp-*` 原子写入临时路径同样禁止普通上传占用，不作为普通产物列出或下载。
+
+启动恢复发现 Pending Artifact 的最终正文损坏时，将其隔离到该 Job 的 `.quarantine/{artifactID}.corrupted`。`.quarantine/` 为服务保留目录，普通上传不得占用该目录及其子路径，隔离文件不对外提供下载。
+
+`logs/combined.log`、`logs/container.log`、`logs/.combined.json` 和 `logs/.combined.index.jsonl` 由日志流服务管理；普通上传不得占用这些路径、其子路径或原子写入临时路径，也不能将 `logs` 本身写成文件。其它日志文件仍可通过普通上传保存到 `logs/`。隐藏元数据不生成 Artifact 记录，不出现在产物列表中，也不通过下载接口开放。
+
+签名不覆盖原始上传正文。临时副本放在 `${dataDir}/artifacts/{project}/jobs/{jobName}/.signing/`，验签并持久化后以不覆盖方式提交到同一 Job 下的 `.signed/{artifactID}.rpm`。`.signing/` 和 `.signed/` 均为保留目录，普通上传不得占用这两个目录及其子路径；两者与仓库位于同一文件系统，均不是公开目录，最终清单决定下载和物化选择原始正文还是签名正文。封账发布边界及清理见 6.2.1。
+
+Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `.artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Store 锁串行保护。
+
+启动时仅遍历 Job 的 `.artifacts/` 和 `logs/`，读取 Artifact 元数据及 `logs/.combined.json` 并执行恢复，跳过其它正文和嵌套目录，处理完即释放，不将历史产物或日志流状态常驻内存。`.manifest.json` 不在启动时加载，按 Project、JobName 定位读取，用完释放。
 
 上传前及提交正文前，在 Store 锁内检查 Manifest 和封账记录；输入冻结后不再允许增加或完成新的上传，已完成 Artifact 的相同上传请求仍返回原始回执。只有文件不存在才视为无记录，JSON 损坏、归属不匹配和 I/O 错误均阻止写入。清单 GET 对尚未成功封账返回 404，对读取失败返回存储错误，不返回空清单。
 
@@ -516,7 +539,7 @@ Artifact 元数据持久化 `idempotencyKey` 和上传元数据，所在目录�
 整文件上传不是跨多个文件的原子事务。实现必须使用以下固定、可重放的提交顺序，以最终正文的原子 rename 作为正文提交点：
 
 1. 在 Store 锁内检查 `(project,jobName,idempotencyKey)` 并原子写入含上传元数据和最终 `StorageKey` 的 `Pending` Artifact；用 Pending 登记阻止重复上传，之后释放 Store 锁，锁范围见 3.3。
-2. 以独占方式创建 `.uploads/{artifactID}.tmp`，流式写入并计算大小和 SHA-256。
+2. 以独占方式创建 Job 目录下的 `.uploads/{artifactID}.tmp`，流式写入并计算大小和 SHA-256。
 3. 校验成功后对临时正文执行 `fdatasync`。
 4. 重新获取 Store 锁并检查 Manifest，允许提交时将临时正文原子 rename 到最终 `StorageKey`，随后 `fsync` 最终正文的父目录；该 rename 是正文提交点。
 5. 原子更新 Artifact 元数据为 `Completed`，设置 `CompletedAt` 并 `fsync` 元数据父目录。
@@ -585,13 +608,13 @@ Content-Type: application/json
 
 #### 6.2.1 签名、提交与恢复
 
-1. 校验通过后先原子持久化 `seal.json`，记录规范化的原始文件集合、`uploadDigest`、签名指纹及已完成文件的最终大小和摘要。它是内部恢复记录，不是另一个可选 Manifest；同一 Job 仅一个冻结输入，同输入失败可重试，不允许替换输入或密钥。
+1. 校验通过后先原子持久化 `.seal.json`，记录规范化的原始文件集合、`uploadDigest`、签名指纹及已完成文件的最终大小和摘要。它是内部恢复记录，不是另一个可选 Manifest；同一 Job 仅一个冻结输入，同输入失败可重试，不允许替换输入或密钥。
 2. 释放 Store 锁，将 `category=artifact`、位于 `packages/` 下且扩展名为 `.rpm`（不区分大小写）的二进制 RPM 和 SRPM 纳入签名。其他产物和日志不签名；格式非法的 RPM 明确失败。只包含日志的清单无需调用签名后端。
 3. 每个任务流式复核原始大小和摘要，创建不共享 inode 的私有副本，签名、验签并确认完整密钥指纹。复核 NEVRA、架构、来源 spec、Provides 和 Requires 未改变，计算最终大小和 SHA-256。签名后副本也受单文件和 Job 配额限制，不一次性读入内存。
 4. 每个成功副本 fsync 后以不覆盖语义提交到 `.signed`，再原子保存该文件的恢复进度。已有副本只能经验签、身份及摘要核验后复用；已记录进度的副本丢失或损坏时明确失败，不重新签名替换。不能仅凭文件存在判断成功，也不能对已提交副本再次原地签名。
-5. 所有文件成功后重新获取 Store 锁，核对冻结输入、签名指纹与全部最终文件，从最终元数据生成 Manifest。原子写入 `manifest.json` 是唯一发布点；此前签名副本不可公开下载或用于物化，之后不可变。原始 Artifact 保留供上传幂等校验，完成响应及后续 GET 返回相同 `uploadDigest` 和最终 `digest`。
+5. 所有文件成功后重新获取 Store 锁，核对冻结输入、签名指纹与全部最终文件，从最终元数据生成 Manifest。原子写入 `.manifest.json` 是唯一发布点；此前签名副本不可公开下载或用于物化，之后不可变。原始 Artifact 保留供上传幂等校验，完成响应及后续 GET 返回相同 `uploadDigest` 和最终 `digest`。
 6. 超时、断连、取消或崩溃不代表封账失败已确定。Runner 先 GET 唯一 Manifest：仅 `Completed` 且 `uploadDigest` 与本地原请求匹配才确认成功；404 时用原请求重试，不把签名后的文件摘要与本地未签名文件逐项比较。服务不因重复请求创建第二套签名任务。
-7. 重启不加载历史 Manifest 常驻内存。下一次相同完成请求按需读取 `seal.json` 恢复，已提交 Manifest 优先返回；已提交签名副本但恢复记录未更新时核验后补记，未提交临时副本可重建。当前配置指纹与冻结指纹不一致时返回 `503 SigningConfigurationChanged / retryable=true`，等待恢复配置，不改签名策略。
+7. 重启不加载历史 Manifest 常驻内存。下一次相同完成请求按需读取 `.seal.json` 恢复，已提交 Manifest 优先返回；已提交签名副本但恢复记录未更新时核验后补记，未提交临时副本可重建。当前配置指纹与冻结指纹不一致时返回 `503 SigningConfigurationChanged / retryable=true`，等待恢复配置，不改签名策略。
 
 签名命令不持 Store 全局锁。全服务共用默认 8 个 worker 和有界等待队列（内部默认 100 个文件任务），按容量逐项派发，不为每个 Job 新建完整 worker pool。排队不占单 RPM 签名超时，但计入本次封账请求总期限；`--upload-timeout` 同时限制服务端单次封账处理，Runner 的后处理总期限限制跨请求重试。服务停止时取消在途签名并保留恢复记录，不依赖退出前最后一次写入才能恢复。
 
@@ -602,7 +625,7 @@ Content-Type: application/json
 | 后端不可达、命令超时、临时 I/O 或磁盘不足 | `503 SigningBackendUnavailable`、`StorageError` 或 `InsufficientStorage`；`retryable=true`，保留输入及已核验副本 |
 | 签名后超出文件或 Job 配额 | `413 ArtifactLimitExceeded`；不提交 Manifest，不退化为无签名 |
 
-签名失败不改变业务执行结果，但 Runner 在后处理期限内不能确认封账成功时按现有规则将 Job 标记为失败。成功封账后清理 `seal.json` 和临时目录，不能清理仍被最终 Manifest 使用的 `.signed` 文件；失败时保留原始正文、已核验副本及恢复记录供重试。未登记成功的临时副本在请求结束时清理，崩溃遗留在同 Job 下次恢复时清理。此流程不新增 Artifact/Manifest TTL，现有清理边界见第十三章；未来按 Job 删除时必须一起清理原始文件、签名副本和恢复记录，并与封账提交互斥，避免迟到任务重新发布清单。已建硬链接的仓库不受原始或签名产物目录后续删除影响。
+签名失败不改变业务执行结果，但 Runner 在后处理期限内不能确认封账成功时按现有规则将 Job 标记为失败。成功封账后清理 `.seal.json` 和临时目录，不能清理仍被最终 Manifest 使用的 `.signed` 文件；失败时保留原始正文、已核验副本及恢复记录供重试。未登记成功的临时副本在请求结束时清理，崩溃遗留在同 Job 下次恢复时清理。此流程不新增 Artifact/Manifest TTL，现有清理边界见第十三章；未来按 Job 删除时必须一起清理原始文件、签名副本和恢复记录，并与封账提交互斥，避免迟到任务重新发布清单。已建硬链接的仓库不受原始或签名产物目录后续删除影响。
 
 #### 6.2.2 签名后端
 
@@ -702,40 +725,41 @@ Artifact Manager 校验每个输入的 Completed Manifest。可定位的输入�
 一个 RpmRepo 是可持续推进的逻辑仓库，其 `metadata.uid` 不能直接作为物理版本标识。每次推进根据 Project、Build name、`baseRepositoryUID` 和按字典序排列的全部输入 Job 名称计算 SHA-256，将其十六进制结果作为稳定 `repositoryUID`。Build name 本身由唯一 UUID 生成且不复用。相同批次重试自然复用同一幂等键；基础仓或批次成员变化一定生成不同的不可变版本。摘要编码必须使用带长度前缀的字段序列，避免字符串拼接歧义。
 
 ```text
-${dataDir}/
-├── repositories/
-│   └── {project}/
-│       └── {arch}/
-│           ├── current -> releases/{buildName}
-│           ├── Packages -> current/Packages
-│           ├── repodata -> current/repodata
-│           ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
-│           ├── releases/
-│           │   └── {buildName}/
-│           │       ├── Packages/
-│           │       ├── repodata/
-│           │       └── release.json
-│           └── history/
-│               └── {buildName}/
-│                   └── steps/
-│                       └── {repositoryUID}/
-│                           ├── Packages/
-│                           ├── repodata/
-│                           └── repository.json
-├── .repository-work/
-│   └── {repositoryUID}-{random}/
-├── .release-work/
-│   └── {buildName}-{random}/
-├── .repository-trash/
-├── .release-trash/
-└── .metadata/
-    ├── repositories/
-    │   └── {repositoryUID}.json
-    └── releases/
-        └── {buildName}.json
+${dataDir}/repositories/{project}/{arch}/
+├── current -> releases/{buildName}
+├── Packages -> current/Packages
+├── repodata -> current/repodata
+├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
+├── releases/
+│   ├── .records/
+│   │   └── {buildName}.json
+│   ├── .trash/
+│   │   └── {buildName}-{random}/
+│   ├── .work/
+│   │   └── {buildName}-{random}/
+│   └── {buildName}/
+│       ├── Packages/
+│       ├── repodata/
+│       └── .release.json
+└── history/
+    └── {buildName}/
+        ├── .records/
+        │   └── {repositoryUID}.json
+        ├── .trash/
+        │   └── {repositoryUID}-{random}/
+        ├── .work/
+        │   └── {repositoryUID}-{random}/
+        └── steps/{repositoryUID}/
+            ├── Packages/
+            ├── repodata/
+            └── .repository.json
 ```
 
 `project`、`arch` 和 Build name 作为仓库的存储分区参与路径拼接，必须先通过标识符校验；`repositoryName` 只属于元数据，不直接参与本地路径拼接。文件系统访问的当前保护及边界见第四章。
+
+启动时只遍历目标仓下的 `history/{buildName}/.records/` 和 `releases/.records/`，跳过 Build 正文、工作目录、trash 及嵌套目录，分别建立 `repositoryUID → 元数据路径` 和 `buildName → 元数据路径` 的轻量内存索引。现有按 UID 或 Build name 查询的接口保持不变，查询不再扫描目录。成功落盘后更新定位索引，删除元数据成功后移除索引；重复标识跨作用域出现或记录中的 Project/Arch/BuildName 与路径不符时拒绝加载。这两处 `.records/` 不属于公开目录浏览和下载白名单。
+
+仓库正文中的 `.repository.json` 和 `.release.json` 是内部结果清单，不参与各自的目录摘要计算，不通过公开目录浏览或 GET/HEAD 下载接口开放。
 
 `history/{buildName}/steps/{repositoryUID}` 保存构建过程中逐批推进的不可变仓库版本。`steps` 只是存储组织层级，最新版本仍以 `RpmRepo.status.repository.repositoryUID` 为唯一权威，禁止扫描目录、比较修改时间或按 UID 排序推断最新版本。
 
@@ -808,7 +832,7 @@ type RepositoryResponse struct {
 
 请求摘要由规范化后的全部请求字段计算。`Manifests` 先按 `JobName` 排序；重复引用、空输入、重复 `JobName` 或不合法 Job 名称均返回 `422`。Artifact Manager 还必须重新计算并校验 `repositoryUID` 与规范化请求一致。相同 `repositoryUID` 和相同请求摘要是幂等重试；相同 UID 对应不同摘要返回 `409 RepositoryIdentityConflict`。
 
-`RepositoryRPMMeta` 记录文件名、SHA-256、大小、RPM name、epoch/version/release、arch、source RPM、specName、provides 和 requires。键使用仓库内唯一文件名。RPM 明细持久化在不可变的 `repository.json` 中，`.metadata/repositories` 只保存轻量状态，不重复存储该字段。
+`RepositoryRPMMeta` 记录文件名、SHA-256、大小、RPM name、epoch/version/release、arch、source RPM、specName、provides 和 requires。键使用仓库内唯一文件名。RPM 明细持久化在不可变的 `.repository.json` 中，`history/{buildName}/.records` 只保存轻量状态，不重复存储该字段。
 
 ### 8.6 内部 API
 
@@ -853,7 +877,7 @@ GET /internal/v1/repositories/{repositoryUID}
 存在记录时统一返回 `200 OK` 和 `RepositoryResponse`：
 
 - `Creating` 包含 attempt 和 `pollAfterSeconds`；
-- `Ready` 必须包含不可变的 `contentURL` 和 `completedAt`；仓库响应不返回 RPM 元数据，完整元数据保留在内部 RepositoryRecord 和 repository.json 中；
+- `Ready` 必须包含不可变的 `contentURL` 和 `completedAt`；仓库响应不返回 RPM 元数据，完整元数据保留在内部 RepositoryRecord 和 .repository.json 中；
 - Controller 按预期的 `repositoryUID` 与 `Ready` 确认过程仓；正式发布按预期的 `buildName` 与 `Ready` 确认。内容摘要仅保留在 Artifact Manager 内部记录和索引文件中，用于完整性校验与重启恢复，不写入 RpmRepo 状态，也不在仓库或发布响应中返回。
 - `Failed` 必须包含 attempt 和 Failure，且 `Failure.retryable` 明确能否用完全相同的 POST 请求重试；
 - `Deleting` 只返回身份、状态和时间字段，不再返回可用内容地址。
@@ -904,20 +928,20 @@ GET /repositories/v1/{repositoryUID}/{path...}
 4. 每个输入 Job 至少包含一个 `relativePath` 位于 `packages/` 下且以 `.rpm` 结尾的 Artifact；通过产物读取接口取得 Manifest 指定的最终文件，流式计算 SHA-256 并与最终清单比对，不与原始上传摘要混用。缺少 RPM、清单损坏或输入产物过期时在失败记录中标明该 Job 名称。
 5. 使用 RPM 解析工具读取头信息，确定 `specName`。二进制 RPM 从 `SOURCERPM` 文件名末尾的版本、发行号分隔符推导源包名，不要求它与子包版本一致；source RPM 使用自身名称推导，并按 `src` 架构建立仓库身份，即使 RPM 头中报告了构建目标架构。无法确定归属时记录出错的 Job 名称并使本次请求失败。
 6. 同一请求内同一 spec 可以产生多个 RPM，但同一仓库文件名只能对应一个摘要；同名不同内容、同一 NEVRA 不同内容或目标架构不兼容均返回 `422 PackageConflict`。源码包与同名同版本的二进制包不视为同一 NEVRA。
-7. 在 `.repository-work/{repositoryUID}-{random}` 创建工作目录。
-8. 基础仓存在时，读取其不可变 `repository.json` 中的 RPM 元数据，只将非本批输入 spec 的旧 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用；校验目录项与元数据一致，但不重新解析或哈希旧 RPM。基础仓和工作目录必须位于同一文件系统；硬链接失败不静默退化为完整复制。
+7. 在对应 `repositories/{project}/{arch}/history/{buildName}/.work/{repositoryUID}-{random}` 创建工作目录，与最终 `steps/{repositoryUID}/` 位于同一文件系统。
+8. 基础仓存在时，读取其不可变 `.repository.json` 中的 RPM 元数据，只将非本批输入 spec 的旧 RPM 硬链接到工作目录，并复制 `repodata` 供 `--update` 复用；校验目录项与元数据一致，但不重新解析或哈希旧 RPM。基础仓和工作目录必须位于同一文件系统；硬链接失败不静默退化为完整复制。
 9. 按 8.7.1 检查输入和基础仓的签名指纹，将本批最终 RPM 硬链接到工作目录；最终产物与仓库工作目录必须位于同一文件系统。物化不调用签名后端，不修改原始上传、最终产物或基础仓硬链接。
 10. 执行 `createrepo_c --update`。命令使用参数数组而非 shell 拼接，设置超时、固定 locale 和受限环境。失败时记录稳定错误码，不向调用方返回原始命令输出。
 11. 确认生成的 `repodata/repomd.xml` 存在且为普通文件。
 12. 计算本次最终内容的 `repositoryDigest`：按仓库相对路径排序，对每个文件的路径、大小和 SHA-256 编码后计算整体 SHA-256；RPM 复用已校验的基础仓元数据或本批 Manifest 的最终 RPM 摘要，其他文件现场计算摘要。物化重试始终读取同一封账版本，不重新生成签名字节。
-13. 写入并 fsync `repository.json`，再将工作目录以不覆盖语义原子重命名为最终目录。
+13. 写入并 fsync `.repository.json`，再将工作目录以不覆盖语义原子重命名为最终目录。
 14. 原子写入 `Ready` 元数据，并向等待该 UID 的请求广播完成。
 
 任何一步失败都不得暴露工作目录为可下载仓库，也不得修改基础仓或输入 Artifact。
 
 #### 8.7.1 已签名产物的一致性
 
-签名与验签在 6.2 的封账流程中完成。首次接受物化时仍将当前配置公钥的完整指纹冻结到 `RepositoryRecord.SigningFingerprint` 与 `repository.json`，关闭签名时为空；它不由请求提供，也不改变 `repositoryUID` 计算规则。
+签名与验签在 6.2 的封账流程中完成。首次接受物化时仍将当前配置公钥的完整指纹冻结到 `RepositoryRecord.SigningFingerprint` 与 `.repository.json`，关闭签名时为空；它不由请求提供，也不改变 `repositoryUID` 计算规则。
 
 本批每个 Manifest 的签名指纹以及基础仓指纹必须与记录一致，包括空指纹；不允许混入未签名产物、其他密钥签名产物，或在物化时临时补签。首次无基础仓可直接使用符合策略的最终清单。所有本批文件按 Manifest 最终摘要校验，之后与基础仓文件一样只读复用。
 
@@ -953,9 +977,9 @@ GET /repositories/v1/{repositoryUID}/{path...}
 | 状态查询暂时失败 | RpmRepo Controller 指数退避，不重复提交不同请求 |
 | API 状态更新失败 | 仓库保持 Ready，RpmRepo Controller 继续重试 API 更新 |
 
-服务启动时扫描 `.metadata/repositories` 的 UID 和状态，只把 `Creating`、`Deleting` 记录载入内存以恢复任务。Ready 和 Failed 记录不常驻内存，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
+服务启动时扫描各目标仓 `history/{buildName}/.records/` 的 UID 和状态，只把 `Creating`、`Deleting` 完整记录载入内存以恢复任务。Ready 和 Failed 只保留 8.4 定义的路径索引，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `.repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
 
-对于 Creating 记录，若最终目录中的 `repository.json`、请求摘要及目录摘要均校验通过，则补写 Ready；否则保持 Creating 并重新入队。Deleting 记录继续删除。`.repository-work` 中超过恢复宽限期的目录按过期时间清理。Ready 仓不在启动时逐个重算目录摘要，发布任务需要 RPM 明细时才读取其 `repository.json`。
+对于 Creating 记录，若最终目录中的 `.repository.json`、请求摘要及目录摘要均校验通过，则补写 Ready；否则保持 Creating 并重新入队。Deleting 记录继续删除。各 `history/{buildName}/.work/` 中超过恢复宽限期的任务目录按过期时间清理。Ready 仓不在启动时逐个重算目录摘要，发布任务需要 RPM 明细时才读取其 `.repository.json`。
 
 恢复扫描完成前 HTTP 服务尚未监听，探针行为见第十七章。
 
@@ -966,10 +990,10 @@ GET /repositories/v1/{repositoryUID}/{path...}
 删除顺序：
 
 1. 将记录持久化为 `Deleting`，拒绝新的内容请求和基础仓引用；
-2. 把最终目录原子移动到内部 trash 目录；
+2. 把最终目录原子移动到同一目标仓下的 `history/{buildName}/.trash/`（过程仓）或 `releases/.trash/`（正式仓）；
 3. 删除 trash 中的目录，再移除元数据和内存记录。
 
-当前只持久化 `Deleting` 状态，未记录带随机后缀的 trash 路径，也未检查后续递归删除及元数据删除的错误。重启会重试 Deleting 记录，但不能保证清除上次已移动的 trash；崩溃或删除失败可能留下孤儿目录，可靠删除的补全见第十八章。
+当前只持久化 `Deleting` 状态，未记录带随机后缀的 trash 路径；过程仓仍忽略递归删除错误，元数据删除失败时保留记录及路径索引。重启会重试 Deleting 记录，但不能保证清除上次已移动的 trash；崩溃或删除失败可能留下孤儿目录，可靠删除的补全见第十八章。
 
 ### 8.11 验收场景
 
@@ -1060,7 +1084,7 @@ type ReleaseResponse struct {
 
 `excludeSpecs` 可以为空，非空时必须去重并按字典序规范化。Artifact Manager 必须校验源 RepositoryRecord 的 Project、架构和 `buildName` 均与请求一致，禁止使用其他 Build 的过程仓作为本次发布内容。Artifact Manager 从源仓 RPM 头中的 `specName` 判断是否删除，禁止由文件名推导；命中 `excludeSpecs` 的 RPM 全部排除，其余 RPM 全部保留。排除集合中的 spec 在源仓不存在视为幂等删除，不作为错误。调用方必须在提交前完整推导删除集合，Artifact Manager 不再查询 Project 或 BuildInfo 补充策略。
 
-发布请求不携带公钥路径、公钥正文或公钥摘要。Artifact Manager 配置了只读公钥路径时，将该文件复制为 release 中的 `RPM-GPG-KEY-openEuler`，并把实际 SHA-256 记录到 `release.json` 供审计；未配置时不生成该文件。公钥完全属于服务端发布配置，不参与请求身份和幂等判断。
+发布请求不携带公钥路径、公钥正文或公钥摘要。Artifact Manager 配置了只读公钥路径时，将该文件复制为 release 中的 `RPM-GPG-KEY-openEuler`，并把实际 SHA-256 记录到 `.release.json` 供审计；未配置时不生成该文件。公钥完全属于服务端发布配置，不参与请求身份和幂等判断。
 
 正式发布的实际状态迁移：
 
@@ -1167,13 +1191,13 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{ar
 
 1. 规范化请求，校验 `buildName` 及 `requestDigest`，持久化 `Creating` 记录后入队。
 2. 查询本地源仓记录，要求为 Ready，且 Project、Build name 和架构与请求一致。
-3. 在 `.release-work/{buildName}-{random}` 创建工作目录。
-4. 读取源仓 `repository.json` 和 RPM 元数据，删除 `specName` 位于 `excludeSpecs` 的 RPM，保留其余 RPM。
+3. 在对应 `repositories/{project}/{arch}/releases/.work/{buildName}-{random}` 创建工作目录；最终 `releases/{buildName}/` 由工作目录整体原子重命名生成，不提前在最终目录内创建临时文件。
+4. 读取源仓 `.repository.json` 和 RPM 元数据，删除 `specName` 位于 `excludeSpecs` 的 RPM，保留其余 RPM。
 5. 将选中的 RPM 从过程仓 `Packages` 硬链接到工作目录；源仓保持不可变。跨文件系统失败返回稳定错误，不退化为无界复制。
 6. `excludeSpecs` 为空时，发布 RPM 集合与源过程仓一致，复制源仓 `repodata`，不再运行 `createrepo_c`；非空时完整执行 `createrepo_c`，避免旧 metadata 包含被排除的 RPM。
 7. 解析 `repomd.xml`，校验其引用文件的路径及 SHA-256；当前不进一步解析 primary 元数据核对 RPM 集合、架构和数量。
 8. 复制服务端配置的公钥并记录其实际摘要；发布阶段不执行 RPM、repomd 或 updateinfo 签名。可选签名模式下，源仓 RPM 已在 Manifest 封账时签名，此处核对公钥指纹，不重复签名。
-9. 计算 `releaseDigest` 时复用源过程仓已验证的逐包 RPM SHA-256，并核对发布目录中的文件名、大小和数量；`repodata` 与公钥仍按实际文件计算摘要，保持原有 `releaseDigest` 格式。写入包含请求摘要、源仓 UID 和排除 spec 集合的 `release.json`，fsync 文件和目录。启动恢复仅对尚未完成的发布完整复核正文；已 Ready 的发布只核对记录与索引摘要，不重新读取全部 RPM。
+9. 计算 `releaseDigest` 时复用源过程仓已验证的逐包 RPM SHA-256，并核对发布目录中的文件名、大小和数量；`repodata` 与公钥仍按实际文件计算摘要，保持原有 `releaseDigest` 格式。写入包含请求摘要、源仓 UID 和排除 spec 集合的 `.release.json`，fsync 文件和目录。启动恢复仅对尚未完成的发布完整复核正文；已 Ready 的发布只核对记录与索引摘要，不重新读取全部 RPM。
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
 11. worker 保存 Prepared 后直接调用激活方法，取得 Release Manager 全局互斥锁并检查状态；激活入口不重新校验整个发布目录或摘要。
 12. 读取 `current`；已经指向本次 `buildName` 时按幂等成功处理，否则继续切换。
@@ -1195,8 +1219,8 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{ar
 
 启动时在 HTTP 监听前执行：
 
-1. 逐条扫描 `.metadata/releases` 中的记录并恢复，只将 Creating、Prepared、Deleting 活动记录保留在内存；
-2. 校验 `current` 指向的 release 身份与 `release.json`；已 Ready 的发布核对记录与索引摘要，Creating、Prepared 的发布完整复核目录摘要；
+1. 逐条扫描各目标仓 `releases/.records/` 中的记录并恢复，建立路径索引，只将 Creating、Prepared、Deleting 完整活动记录保留在内存；
+2. 校验 `current` 指向的 release 身份与 `.release.json`；已 Ready 的发布核对记录与索引摘要，Creating、Prepared 的发布完整复核目录摘要；
 3. `current` 已指向 Creating 或 Prepared 记录且正文有效时补写 Ready；
 4. Prepared 记录未激活时不由 Artifact Manager 自动切换 current，等待 RpmRepo Controller 查询状态、重新确认控制面意图后调用激活接口；
 5. 指针无效时不自动选择目录中“最新”的版本；相关内容读取可能失败，但不会使 `/readyz` 失败，需要管理员修复或显式回滚；
@@ -1219,7 +1243,7 @@ Ready、Failed 记录在查询、重复提交、激活或删除时按需从磁�
 4. 相同请求并发提交只生成一个 release；同一 Build name 对应不同请求时返回冲突。
 5. 新发布失败时旧稳定仓库及其 repodata 保持可用。
 6. 当前版本不会被删除，历史版本满足数量和时间条件后才进入 trash。
-7. 配置公钥时 release 包含该公钥且 `release.json` 记录实际摘要；未配置公钥时仓库仍可正常使用。
+7. 配置公钥时 release 包含该公钥且 `.release.json` 记录实际摘要；未配置公钥时仓库仍可正常使用。
 8. 显式回滚后稳定 URL 指向目标历史版本，原新版本仍保持不可变并可审计。
 
 ## 十、日志处理
@@ -1245,27 +1269,27 @@ Open -> Finalizing -> Completed
 本地持久化布局：
 
 ```text
-${dataDir}/.logs/{project}/{jobName}/combined.log
-${dataDir}/.logs/{project}/{jobName}/combined.index.jsonl
-${dataDir}/.metadata/jobs/{project}/{jobName}/logs/combined.json
+${dataDir}/artifacts/{project}/jobs/{jobName}/logs/combined.log
+${dataDir}/artifacts/{project}/jobs/{jobName}/logs/.combined.index.jsonl
+${dataDir}/artifacts/{project}/jobs/{jobName}/logs/.combined.json
 ```
 
 日志始终使用 Job 名目录；服务重启时从该目录恢复未封账的日志。
 
-`combined.index.jsonl` 是 sequence、字节范围和 chunk 摘要的持久化索引；`combined.json` 只保存 `LogStream` 的小型汇总状态，不重复保存最近 chunk 列表。日志正文只追加到一个活动文件，不把每个 chunk 保存成长期独立对象。
+`.combined.index.jsonl` 是 sequence、字节范围和 chunk 摘要的持久化索引；`.combined.json` 只保存 `LogStream` 的小型汇总状态，不重复保存最近 chunk 列表。日志正文只追加到一个活动文件，不把每个 chunk 保存成长期独立对象。
 
-查询、追加、重放和封账按需读取 `combined.json`，在 Store 锁内完成读取、校验及状态写入。首次追加前先持久化 Open 元数据，保证正文或索引写入中断后仍可恢复。内存只保留写入中断的轻量恢复标记；下一次访问先按索引校准正文和进度，恢复成功后删除标记。正常请求不重复扫描完整索引，Finalizing 状态按封账恢复规则处理。
+查询、追加、重放和封账按需读取 `.combined.json`，在 Store 锁内完成读取、校验及状态写入。首次追加前先持久化 Open 元数据，保证正文或索引写入中断后仍可恢复。内存只保留写入中断的轻量恢复标记；下一次访问先按索引校准正文和进度，恢复成功后删除标记。正常请求不重复扫描完整索引，Finalizing 状态按封账恢复规则处理。
 
 SSE 仅保留活跃连接的订阅通道，最后一个连接退出或被移除后删除对应订阅条目，不保留历史 Job 的空订阅表。
 
 接收新 chunk 时，提交顺序固定为：
 
 1. 将解压后的正文追加到 `combined.log`，执行 `fdatasync`。
-2. 将一条带换行符的完整 JSON 记录追加到 `combined.index.jsonl`，执行 `fdatasync`。
-3. 原子更新 `combined.json` 中的 `nextSequence`、`committedBytes` 和 `updatedAt`，并 `fsync` 父目录。
+2. 将一条带换行符的完整 JSON 记录追加到 `.combined.index.jsonl`，执行 `fdatasync`。
+3. 原子更新 `.combined.json` 中的 `nextSequence`、`committedBytes` 和 `updatedAt`，并 `fsync` 父目录。
 4. 只有以上步骤全部成功后才向 Runner 返回确认。
 
-`combined.index.jsonl` 是已提交 chunk 边界的事实来源，`combined.json` 是可重建的汇总和状态来源。只有正文已写入、对应完整索引未持久化的尾部才需要截断。完整索引落盘后，即使步骤 3 未完成或响应丢失，也保留该 chunk 并从索引重建汇总；Runner 重试时按 sequence、大小和摘要确认幂等结果。索引残缺和正文短缺的处理统一见 10.2.6。
+`.combined.index.jsonl` 是已提交 chunk 边界的事实来源，`.combined.json` 是可重建的汇总和状态来源。只有正文已写入、对应完整索引未持久化的尾部才需要截断。完整索引落盘后，即使步骤 3 未完成或响应丢失，也保留该 chunk 并从索引重建汇总；Runner 重试时按 sequence、大小和摘要确认幂等结果。索引残缺和正文短缺的处理统一见 10.2.6。
 
 #### 10.2.1 追加日志块
 
@@ -1347,7 +1371,7 @@ data: {"artifactID":"art-log-01","size":18743291,"sha256":"..."}
 
 事件 ID 是 chunk sequence。恢复位置的优先级为 `Last-Event-ID` 请求头、`afterSequence` 查询参数、当前最新 sequence。浏览器原生 `EventSource` 首次连接不能自行设置 `Last-Event-ID`，因此首次从历史日志衔接实时流时必须使用 `afterSequence`；浏览器自动重连时会携带最后收到的 `Last-Event-ID`。服务端总是从恢复位置的下一 sequence 推送。两者同时存在时必须优先使用 `Last-Event-ID`，避免代理或客户端重连时退回旧位置。
 
-未提供恢复位置时只推送连接建立后的新日志。重放扫描磁盘上的 `combined.index.jsonl`，再按 offset 读取正文，不使用内存环形缓冲区。提供的 sequence 已超出 1024 条重放窗口时返回 409 `ReplayWindowExceeded`，客户端改用活动日志读取接口补齐后重连。服务端在 SSE 流开始处发送 `retry: 2000`，建议浏览器断线 2 秒后重连。
+未提供恢复位置时只推送连接建立后的新日志。重放扫描磁盘上的 `.combined.index.jsonl`，再按 offset 读取正文，不使用内存环形缓冲区。提供的 sequence 已超出 1024 条重放窗口时返回 409 `ReplayWindowExceeded`，客户端改用活动日志读取接口补齐后重连。服务端在 SSE 流开始处发送 `retry: 2000`，建议浏览器断线 2 秒后重连。
 
 SSE 只是展示通道，不参与持久化确认。慢客户端使用有界发送队列；队列溢出时断开连接，让客户端通过 `Last-Event-ID` 恢复，不能阻塞 Runner 写入。服务端定期发送注释心跳，建议间隔 15 秒。SSE 响应必须禁用代理缓冲和中间缓存，例如返回 `Cache-Control: no-cache, no-transform` 和 `X-Accel-Buffering: no`。
 
@@ -1426,12 +1450,12 @@ Content-Type: application/json
 
 服务启动时逐条读取日志元数据、执行恢复后释放，不建立 LogStream 常驻缓存：
 
-- 逐行解析 `combined.index.jsonl`；最后一行不是完整 JSON 或缺少结尾换行时，删除该残缺尾行并 `fdatasync`，文件中部存在无效 JSON 时标记为 `Failed/Corrupted`。
+- 逐行解析 `.combined.index.jsonl`；最后一行不是完整 JSON 或缺少结尾换行时，删除该残缺尾行并 `fdatasync`，文件中部存在无效 JSON 时标记为 `Failed/Corrupted`。
 - 验证索引从 sequence 0 开始连续，首条 `startOffset=0`，且每条 `startOffset` 等于上一条的 `startOffset+size`；不满足时标记为 `Failed/Corrupted`。
 - 以最后一条有效索引的 `startOffset+size` 作为恢复后的 `committedBytes`，以最后 sequence 加 1 作为 `nextSequence`；空索引对应两个值均为 0。
 - 正文长度大于索引得出的 `committedBytes` 时，截断未提交尾部并 `fdatasync`。
 - 正文长度小于索引得出的 `committedBytes` 时，将日志流标记为 `Failed/Corrupted`，禁止继续追加和封账。
-- `combined.json` 与索引汇总不一致且日志仍为 Open 时，以索引为准原子重建汇总字段；终态和失败信息仍以 `combined.json` 为准。
+- `.combined.json` 与索引汇总不一致且日志仍为 Open 时，以索引为准原子重建汇总字段；终态和失败信息仍以 `.combined.json` 为准。
 - `Finalizing` 状态根据最终 Artifact 元数据和正文是否存在幂等完成或回退到可重试状态。
 - `Completed` 状态缺少 Artifact 元数据或正文时标记为 `Failed/Corrupted`，不得返回成功。
 
@@ -1513,14 +1537,14 @@ Project 配额、单 Job 文件数、服务端 Runner 上传并发、速率和 S
 
 当前清理入口如下：
 
-- 启动时调用 `CleanupTemporary`，清理超过 `--temporary-upload-ttl` 的上传临时文件；没有周期扫描，因此该值不是严格的最长存活时间。
-- 启动恢复时清理过期的 `.repository-work`、`.release-work` 工作目录。
+- 启动时调用 `CleanupTemporary`，仅扫描各 Job 的 `.uploads/`，按修改时间清理超过 `--temporary-upload-ttl` 的普通 `.tmp` 文件，跳过其它正文和元数据目录，不跟随符号链接；没有周期扫描，因此该值不是严格的最长存活时间。
+- worker 启动前，仅扫描各 `repositories/{project}/{arch}/` 下的 `history/{buildName}/.work/` 和 `releases/.work/`，按任务目录修改时间清理超过对应 WorkTTL 的目录，跳过 steps、发布正文、元数据及 trash 目录，不跟随符号链接；所有工作和删除暂存目录均不在公开浏览或下载白名单中。
 - 过程仓通过显式 DELETE 请求删除，没有自动仓库 TTL；删除及中断恢复的边界见 8.10。
 - 正式发布每小时执行历史保留清理，规则见 9.6。
 
 Artifact、Manifest 和活动日志尚无自动 TTL 清理，也没有 Project/Job 删除事件联动或完整的孤儿文件扫描。当前不存在日志默认保留 30 天的实现。
 
-过程仓中的硬链接与最终 Artifact 正文有独立目录项，删除原产物不会移除已物化的 RPM。删除与物化并发时，尚未打开或链接的输入可能消失；任务会失败，不能保证后续重试仍可读取原输入。未来清理 Manifest 与产物时应以 Job 为单位，包含 `.signed`、`.signing` 和 `seal.json`，避免留下引用缺失文件的 Completed 清单；封账与清理的互斥要求见 6.2.1。
+过程仓中的硬链接与最终 Artifact 正文有独立目录项，删除原产物不会移除已物化的 RPM。删除与物化并发时，尚未打开或链接的输入可能消失；任务会失败，不能保证后续重试仍可读取原输入。未来清理 Manifest 与产物时应以 Job 为单位，包含 `.signed`、`.signing` 和 `.seal.json`，避免留下引用缺失文件的 Completed 清单；封账与清理的互斥要求见 6.2.1。
 
 ## 十四、与 Job Status 的关系
 
@@ -1632,7 +1656,7 @@ header 总大小上限 32 KiB；日志去重和 SSE 重放窗口均为 1024，SS
 | 元数据与 inode | 每个 Artifact、每个 Job 的 Manifest/日志元数据、各版本索引和 repodata 都需要独立文件；删除正文后 inode/数据块仅在最后一个硬链接及打开引用释放后回收 |
 | 签名额外空间 | 原始上传与最终签名正文各保留一份，另预留并行临时副本及失败残留；实际磁盘占用不能仅按上传配额估算 |
 | 峰值磁盘 | 保留数据 + 在途上传临时正文 + 活动日志 + 并行物化/发布工作目录 + trash/隔离残留；工作目录不能跨文件系统 |
-| 常驻与峰值内存 | 常驻活动任务、队列、认证缓存和 SSE 订阅；历史记录按需加载。峰值还包括并行仓库的完整 RPM 索引、单 Job Artifact 列表、日志重放与外部命令输出 |
+| 常驻与峰值内存 | 常驻活动任务、仓库/发布元数据路径索引、队列、认证缓存和 SSE 订阅；历史完整记录按需加载。峰值还包括并行仓库的完整 RPM 索引、单 Job Artifact 列表、日志重放与外部命令输出 |
 | 子任务并发 | 封账签名全服务默认最多 8 个 worker，物化不再创建签名 worker；发布 worker 和 `createrepo_c` 另占资源 |
 | 启动成本 | 历史元数据目录仍需扫描；日志恢复还读取索引。按需加载降低常驻内存，不代表启动耗时与历史规模无关 |
 
@@ -1655,7 +1679,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 
 ### 17.3 备份、恢复与磁盘故障
 
-备份覆盖同一时间点的整个 `dataDir`：正文、`.metadata`、活动日志正文与索引、仓库/发布索引、current 链接及未完成任务相关目录。只备份 `.metadata` 或只备份 `repositories` 不能恢复完整上传与执行状态。配置、验证公钥及签名凭据按部署安全策略独立备份，不混入可公开下载目录。
+备份覆盖同一时间点的整个 `dataDir`：Job 内的 `.artifacts/`、`.manifest.json`、`.seal.json` 及目标仓内的 `history/{buildName}/.records/`、`releases/.records/`、正文、活动日志索引、仓库/发布索引、current 链接及未完成任务相关目录。只备份元数据或只备份 `repositories` 不能恢复完整上传与执行状态。配置、验证公钥及签名凭据按部署安全策略独立备份，不混入可公开下载目录。
 
 当前没有在线备份屏障和后台 worker 排空保障。可执行的冷备流程是停止接收请求、停止服务并确认进程已退出，再创建文件系统快照或保留硬链接、符号链接和权限的备份；不要把运行期逐目录复制视为一致性备份。恢复到单可写实例、相同文件系统布局和权限，使用匹配的签名配置；启动恢复后抽查下载、Manifest、过程仓和稳定入口，再恢复流量。备份周期决定 RPO，扫描恢复耗时决定 RTO，需在部署验收中实测。
 

@@ -98,7 +98,7 @@ func TestArtifactUploadReplayListAndDownload(t *testing.T) {
 	created := decodeBody[struct {
 		Artifact upload.Artifact `json:"artifact"`
 	}](t, w)
-	wantKey := "projects/project-1/jobs/build/packages/kernel.rpm"
+	wantKey := "artifacts/project-1/jobs/build/packages/kernel.rpm"
 	if created.Artifact.StorageKey != wantKey {
 		t.Fatalf("storage key = %q, want %q", created.Artifact.StorageKey, wantKey)
 	}
@@ -251,7 +251,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	}
 
 	all := bytes.Join(chunks, nil)
-	jobDir := filepath.Join(cfg.DataDir, "projects", "project-1", "jobs", "log-job")
+	jobDir := filepath.Join(cfg.DataDir, "artifacts", "project-1", "jobs", "log-job")
 	if content, err := os.ReadFile(filepath.Join(jobDir, "logs", "combined.log")); err != nil || !bytes.Equal(content, all) {
 		t.Fatalf("active log at Job name path: %q, %v", content, err)
 	}
@@ -270,7 +270,7 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	result := decodeBody[struct {
 		ArtifactID string `json:"artifactID"`
 	}](t, w)
-	if content, err := os.ReadFile(filepath.Join(cfg.DataDir, "projects", "project-1", "jobs", "log-job", "logs", "container.log")); err != nil || !bytes.Equal(content, all) {
+	if content, err := os.ReadFile(filepath.Join(cfg.DataDir, "artifacts", "project-1", "jobs", "log-job", "logs", "container.log")); err != nil || !bytes.Equal(content, all) {
 		t.Fatalf("stored log: %q, %v", content, err)
 	}
 	w = httptest.NewRecorder()
@@ -406,7 +406,7 @@ esac
 	if _, err := m.Materialize(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "repositories/project-1/x86_64/.repository-work")); err != nil || len(entries) != 0 {
+	if entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "repositories/project-1/x86_64/history/build/.work")); err != nil || len(entries) != 0 {
 		t.Fatalf("scoped repository work directory: %v, %v", entries, err)
 	}
 	path := repository.VersionPath(cfg.DataDir, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)

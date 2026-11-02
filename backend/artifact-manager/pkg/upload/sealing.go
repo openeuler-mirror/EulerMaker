@@ -168,7 +168,7 @@ func isRPM(f ManifestFile) bool {
 }
 
 func signedStorageKey(project, job, id string) string {
-	return filepath.ToSlash(filepath.Join("projects", project, "jobs", job, ".signed", id+".rpm"))
+	return filepath.ToSlash(filepath.Join("artifacts", project, "jobs", job, ".signed", id+".rpm"))
 }
 
 // rpmIdentity includes the payload digest as well as the package identity and dependency headers.
@@ -219,7 +219,7 @@ func (s *Sealer) prepareRPM(ctx context.Context, root, project, job string, sour
 	} else if !os.IsNotExist(err) {
 		return f, &SealError{"StorageError", 503, true}
 	}
-	work := filepath.Join(root, "projects", project, "jobs", job, ".signing")
+	work := filepath.Join(root, "artifacts", project, "jobs", job, ".signing")
 	if err := os.MkdirAll(work, 0750); err != nil {
 		return f, &SealError{"StorageError", 503, true}
 	}

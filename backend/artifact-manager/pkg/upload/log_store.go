@@ -17,7 +17,7 @@ import (
 )
 
 func (s *Store) LogPaths(p, j string) (string, string, string) {
-	dir := filepath.Join(s.root, "projects", p, "jobs", j, "logs")
+	dir := filepath.Join(s.root, "artifacts", p, "jobs", j, "logs")
 	return filepath.Join(dir, "combined.log"),
 		filepath.Join(dir, ".combined.index.jsonl"), filepath.Join(dir, ".combined.json")
 }
@@ -442,7 +442,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 		ContentType:   "text/plain",
 		Size:          r.Size,
 		SHA256:        r.SHA256,
-		StorageKey:    filepath.ToSlash(filepath.Join("projects", p, "jobs", j, "logs/container.log")),
+		StorageKey:    filepath.ToSlash(filepath.Join("artifacts", p, "jobs", j, "logs/container.log")),
 		State:         Pending,
 		CreatedAt:     now,
 		UpdatedAt:     now,

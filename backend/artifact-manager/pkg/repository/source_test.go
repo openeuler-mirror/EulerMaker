@@ -39,7 +39,7 @@ func TestRepositoryManifestReadErrors(t *testing.T) {
 		{name: "corrupted", err: upload.ErrInvalidManifest, code: "ManifestInvalid", status: 422},
 		{
 			name:      "storage unavailable",
-			err:       &os.PathError{Op: "read", Path: "manifest.json", Err: os.ErrPermission},
+			err:       &os.PathError{Op: "read", Path: ".manifest.json", Err: os.ErrPermission},
 			code:      "StorageError",
 			status:    503,
 			retryable: true,
@@ -133,7 +133,7 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 				if tt.name == "no RPM" {
 					tt.manifest.Digest = upload.ManifestDigest(tt.manifest.Files)
 				}
-				if err := fileutil.AtomicJSON(filepath.Join(root, "projects", project, "jobs", job, ".metadata", "manifest.json"), tt.manifest); err != nil {
+				if err := fileutil.AtomicJSON(filepath.Join(root, "artifacts", project, "jobs", job, ".manifest.json"), tt.manifest); err != nil {
 					t.Fatal(err)
 				}
 			}

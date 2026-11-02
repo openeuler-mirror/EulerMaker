@@ -20,7 +20,7 @@ func TestJobLogLayoutSurvivesRestartAndCompletion(t *testing.T) {
 	if _, err := s.AppendLog("project", "job", "runner", 0, data, hashText(string(data))); err != nil {
 		t.Fatal(err)
 	}
-	jobDir := filepath.Join(root, "projects/project/jobs/job")
+	jobDir := filepath.Join(root, "artifacts/project/jobs/job")
 	for _, relative := range []string{"logs/combined.log", "logs/.combined.index.jsonl", "logs/.combined.json"} {
 		if _, err := os.Stat(filepath.Join(jobDir, relative)); err != nil {
 			t.Fatal(err)

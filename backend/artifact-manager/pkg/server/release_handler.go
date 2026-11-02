@@ -207,7 +207,7 @@ func (s *Server) serveReleaseContent(w http.ResponseWriter, r *http.Request, rec
 		return
 	}
 	relative, err := fileutil.SafeRelative(value)
-	if err != nil {
+	if err != nil || relative == ".release.json" {
 		s.releaseNotFound(w, r)
 		return
 	}
