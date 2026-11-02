@@ -901,9 +901,15 @@ type JobList struct {
 }
 ```
 
+### Job 删除生命周期
+
+Job 创建默认带 `ebs.io/job-archive`，仅终态允许删除；非终态由上层先调用 `/abort` 并确认终态，再发起 DELETE。删除必先迁移为 OldJob，源 Job 不执行制品清理或自动中止。OldJob 默认带 `ebs.io/job-artifacts-cleanup`，其删除流程统一清理产物和日志。两类 finalizer 分属不同对象，不需要切换。
+
+OldJob 不继承源删除标记、archive 或其它 finalizer。源 Job 的服务端专有 annotation 持久化 retain/delete 意图：retain 迁移后保留 OldJob；delete 迁移后继续删除 OldJob。源 Job 删除中且已终态时冻结业务内容，通过 UID 和快照摘要确认归档。delete 意图先确认 OldJob 的删除标记，再释放源 archive finalizer；真正的数据清理等待源消失及归档确认。OldJob 删除正文后保留轻量 ES 凭据，防止迟到归档写入重新创建对象。普通 Job/OldJob status 不增加删除或归档 phase；完整并发、恢复及版本契约见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)。
+
 ### 历史 Job 快照（oldjobs）
 
-Job Controller 可选择将到期的终态 Job 归档至 Elasticsearch，再从 etcd 删除；默认仍直接删除。归档复用 `Job` / `JobList`，不新增 `OldJob` 类型。
+到期策略及普通 Job 删除均先归档至 Elasticsearch，再移除源 Job。默认 delete 策略继续删除 OldJob 和制品，archive 策略保留；ES 不可用时源 Job 由 finalizer 保留。归档复用 Job/JobList，不新增 OldJob 类型。
 
 | 项目 | 约定 |
 | --- | --- |
@@ -911,10 +917,11 @@ Job Controller 可选择将到期的终态 Job 归档至 Elasticsearch，再从 
 | 内部跨工程查询 | `GET /apis/ebs/v1/oldjobs` |
 | ES alias / 初始索引 | `ebs-oldjobs` / `ebs-oldjobs-v1` |
 | 文档 ID | `{project}/{jobName}` |
-| 快照内容 | 完整 metadata、spec、status，保留源 UID 和 resourceVersion |
+| 快照内容 | 冻结的业务 metadata、spec、status，保留源 UID；生命周期 metadata 独立维护 |
+| 版本 | OldJob resourceVersion 使用 ES 版本；源 resourceVersion 仅用于 CAS，归档快照通过 UID 和摘要确认 |
 | 归档时间 | ES 存储元数据 `archivedAt`，不新增 Job API 字段 |
 
-历史入口只读，不参与调度和 Watch；普通 `jobs` 查询不自动合并历史对象。归档仅保存对象，不延长日志和产物的保留期。接口、mapping、版本冲突及保留规则统一见 [历史 Job 归档](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
+历史入口对 Gateway 调用方只读，内部提供具名条件 DELETE 和受控 finalizers 子资源；不参与调度和 Watch，普通 `jobs` 查询不自动合并历史对象。归档保留原产物和日志，其清理责任移交给 OldJob，不重新复制文件。接口、mapping、版本冲突及保留规则统一见 [历史 Job 归档](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
 
 ---
 
