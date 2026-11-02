@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse as parseComponent } from "@vue/compiler-sfc";
 import ts from "typescript";
 
 function moduleURL(path, replacements = []) {
@@ -85,12 +86,70 @@ test("full refs enforce Git ref-name syntax", () => {
 test("Project form stores the default ref as a complete string", () => {
   const project = projectFromForm({
     name: "demo", displayName: "Demo", description: "", defaultRef: { type: "Tag", value: "v1" },
-    os: "openEuler", arch: "aarch64", ownerUser: "user",
+    distro: "openEuler", buildArches: ["aarch64", "x86_64"], ownerUser: "user",
   });
   assert.equal(project.spec.defaultRef, "refs/tags/v1");
   assert.equal(project.spec.distro, "openEuler");
-  assert.deepEqual(project.spec.buildArches, ["aarch64"]);
+  assert.deepEqual(project.spec.buildArches, ["aarch64", "x86_64"]);
   assert.equal(JSON.parse(JSON.stringify(project)).spec.defaultRef, "refs/tags/v1");
+});
+
+function projectCreationActions(form, targets) {
+  const component = readFileSync(new URL("../src/views/ProjectsView.vue", import.meta.url), "utf8");
+  const { descriptor } = parseComponent(component);
+  const source = ts.createSourceFile("ProjectsView.ts", descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
+  const functions = source.statements.filter(statement => ts.isFunctionDeclaration(statement)
+    && ["changeDistro", "submitForm"].includes(statement.name?.text));
+  assert.equal(functions.length, 2);
+  const { outputText } = ts.transpileModule(functions.map(statement => statement.getText(source)).join("\n"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  });
+  const submitted = [];
+  const state = {
+    form,
+    arches: distro => targets[distro] || [],
+    supportsBuildTarget: ({ os, arch }) => (targets[os] || []).includes(arch),
+    submitErrorKey: { value: "" },
+    projectFromForm,
+    canManageType: { value: false },
+    PROJECT_TYPE_LABEL: "project.ebs.io/type",
+    submitProject: async project => { submitted.push(project); },
+    setSubmitError: error => { state.submitErrorKey.value = error.translationKey; },
+  };
+  const actions = new Function(...Object.keys(state), outputText + "\nreturn { changeDistro, submitForm };")(...Object.values(state));
+  return { actions, state, submitted };
+}
+
+test("project creation retains supported architecture selections when changing distribution", async () => {
+  const form = {
+    name: "demo", displayName: "", description: "", defaultRef: { type: "Branch", value: "main" },
+    distro: "old", buildArches: ["aarch64", "x86_64"], ownerUser: "",
+  };
+  const { actions, submitted } = projectCreationActions(form, {
+    old: ["aarch64", "x86_64"], next: ["aarch64", "riscv64"], other: ["ppc64le"],
+  });
+  actions.changeDistro("next");
+  assert.deepEqual(form.buildArches, ["aarch64"]);
+  form.buildArches.push("riscv64");
+  await actions.submitForm();
+  assert.equal(submitted[0].spec.distro, "next");
+  assert.deepEqual(submitted[0].spec.buildArches, ["aarch64", "riscv64"]);
+  actions.changeDistro("other");
+  assert.deepEqual(form.buildArches, []);
+});
+
+test("project creation requires at least one configured architecture", async () => {
+  const form = {
+    name: "demo", displayName: "", description: "", defaultRef: { type: "Branch", value: "main" },
+    distro: "openEuler", buildArches: [], ownerUser: "",
+  };
+  const { actions, state, submitted } = projectCreationActions(form, { openEuler: ["aarch64"] });
+  await actions.submitForm();
+  assert.equal(state.submitErrorKey.value, "projects.targetRequired");
+  form.buildArches = ["x86_64"];
+  await actions.submitForm();
+  assert.equal(state.submitErrorKey.value, "buildTargetConfig.unsupported");
+  assert.equal(submitted.length, 0);
 });
 
 test("Project YAML preserves full refs and empty package refs", () => {

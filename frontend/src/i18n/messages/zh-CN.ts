@@ -153,7 +153,7 @@ export default {
     defaultRef: "默认分支或标签",
     ownerUser: "归属用户",
     ownerUserPlaceholder: "请输入已启用的用户名",
-    firstTarget: "首个构建目标",
+    selectDistro: "请选择发行版",
     targetOS: "发行版",
     targetArch: "架构",
     submitCreate: "创建工程",

@@ -6,6 +6,24 @@ import * as Vue from "vue";
 import { renderToString } from "@vue/server-renderer";
 
 const source = readFileSync(new URL("../src/views/ProjectView.vue", import.meta.url), "utf8");
+const archTemplate = source.match(/<span class="build-history-item-title">[^\n]+/)?.[0]?.trim();
+assert.ok(archTemplate);
+const archRender = new Function("Vue", compile(archTemplate, { mode: "function", prefixIdentifiers: true }).code)(Vue);
+
+test("build history displays type, architecture and name in the title row", async () => {
+  for (const arch of ["aarch64", "x86_64"]) {
+    const html = await renderToString(Vue.createSSRApp({
+      setup: () => ({
+        build: { spec: { buildType: "single", arch }, metadata: { name: "build-a" } },
+        buildTypeLabel: () => "单包",
+        t: () => "—",
+      }),
+      render: archRender,
+    }));
+    assert.equal(html, `<span class="build-history-item-title"><strong class="build-history-item-type">单包</strong><strong class="build-history-arch">${arch}</strong><span class="build-history-item-name">build-a</span></span>`);
+  }
+});
+
 const template = source.match(/<small\s[^>]*class="build-history-git-ref"[^>]*>[\s\S]*?<\/small>/)?.[0];
 assert.ok(template);
 const { code } = compile(template, { mode: "function", prefixIdentifiers: true });

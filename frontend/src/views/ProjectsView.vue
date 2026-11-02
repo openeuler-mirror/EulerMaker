@@ -76,10 +76,25 @@
         <label class="field"><span>{{ t("projects.defaultRef") }}</span><input v-model.trim="form.defaultRef.value" required autocomplete="off" /></label>
       </div>
       <label v-if="requiresOwner" class="field required-field"><span>{{ t("projects.ownerUser") }}</span><input v-model.trim="form.ownerUser" required autocomplete="off" :placeholder="t('projects.ownerUserPlaceholder')" /></label>
-      <fieldset class="target-fieldset">
-        <legend>{{ t("projects.firstTarget") }}</legend>
-        <BuildTargetFields v-model:os="form.os" v-model:arch="form.arch" />
+      <div class="field required-field">
+        <span>{{ t("projects.targetOS") }}</span>
+        <AppSelect :model-value="form.distro" :options="operatingSystems.map(value => ({ value, label: value }))"
+          :label="t('projects.targetOS')" :placeholder="t('projects.selectDistro')" :disabled="targetConfigLoading || submitting"
+          required @update:model-value="changeDistro" />
+      </div>
+      <fieldset class="target-fieldset" :disabled="targetConfigLoading || submitting">
+        <legend>{{ t("project.buildTargets") }}</legend>
+        <div v-if="availableArches.length" class="project-architecture-options">
+          <label v-for="arch in availableArches" :key="arch" class="spec-status-filter-option" :class="{ selected: form.buildArches.includes(arch) }">
+            <input v-model="form.buildArches" type="checkbox" :value="arch" />
+            <span class="spec-status-filter-check" aria-hidden="true"><Check /></span>
+            <span>{{ arch }}</span>
+          </label>
+        </div>
+        <p v-else class="form-hint">{{ t(form.distro ? 'buildTargetConfig.empty' : 'projects.selectDistro') }}</p>
       </fieldset>
+      <p v-if="targetConfigError" class="form-error" role="alert">{{ t(targetConfigError) }} <button type="button" @click="reloadTargetConfig">{{ t('common.reload') }}</button></p>
+      <p v-else-if="targetConfigLoading" class="form-hint">{{ t('common.loading') }}</p>
       <div v-if="submitErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(submitErrorKey) }}</div>
       <div class="modal-actions"><button class="secondary-button" type="button" :disabled="submitting" @click="closeDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="submitting">{{ submitting ? t("projects.submitting") : t("projects.submitCreate") }}</button></div>
     </form>
@@ -107,7 +122,6 @@ import { createProject, errorTranslationKey, list } from "@/api";
 import EmptyState from "@/components/EmptyState.vue";
 import AppSelect from "@/components/AppSelect.vue";
 import ModalDialog from "@/components/ModalDialog.vue";
-import BuildTargetFields from "@/components/BuildTargetFields.vue";
 import { useBuildTargetConfig } from "@/composables/useBuildTargetConfig";
 
 import { useSessionStore } from "@/stores/session";
@@ -116,7 +130,10 @@ import { ProjectManifestError, projectFromForm, projectFromYaml } from "@/utils/
 import { projectTypeSelector, PROJECT_TYPE_LABEL, type ProjectType } from "@/utils/projectType";
 import { listRelatedProjects, PROJECT_LIST_INCLUDE_FIELDS } from "@/utils/relatedProjects";
 
-const { supports: supportsBuildTarget } = useBuildTargetConfig();
+const {
+  supports: supportsBuildTarget, operatingSystems, arches,
+  loading: targetConfigLoading, error: targetConfigError, reload: reloadTargetConfig,
+} = useBuildTargetConfig();
 const projects = ref<Project[]>([]);
 const projectTypes: ProjectType[] = ["community", "personal"];
 const projectType = ref<ProjectType>("community");
@@ -150,11 +167,12 @@ const form = reactive({
   displayName: "",
   description: "",
   defaultRef: { type: "Branch" as "Branch" | "Tag", value: "master" },
-  os: "",
-  arch: "",
+  distro: "",
+  buildArches: [] as string[],
   ownerUser: "",
   projectType: "personal" as ProjectType,
 });
+const availableArches = computed(() => arches(form.distro));
 const canCreate = computed(() => {
   const identity = session.session?.identity;
 	return Boolean(identity?.scopes.some((scope) => ["ebs:user", "ebs:ops", "ebs:admin"].includes(scope)));
@@ -262,10 +280,19 @@ function closeDialog(): void {
   submitErrorKey.value = "";
 }
 
+function changeDistro(distro: string): void {
+  form.distro = distro;
+  form.buildArches = form.buildArches.filter(arch => arches(distro).includes(arch));
+  submitErrorKey.value = "";
+}
+
 async function submitForm(): Promise<void> {
-  if (!supportsBuildTarget(form)) { submitErrorKey.value = "buildTargetConfig.unsupported"; return; }
   try {
     const project = projectFromForm(form);
+    if (!form.buildArches.every(arch => supportsBuildTarget({ os: form.distro, arch }))) {
+      submitErrorKey.value = "buildTargetConfig.unsupported";
+      return;
+    }
     project.metadata!.labels = { ...project.metadata?.labels, [PROJECT_TYPE_LABEL]: canManageType.value ? form.projectType : "personal" };
     await submitProject(project, "projects.createSuccess");
   } catch (reason) {

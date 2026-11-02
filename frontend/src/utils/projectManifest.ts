@@ -20,8 +20,8 @@ export interface BasicProjectForm {
   displayName: string;
   description: string;
   defaultRef: GitRefInput;
-  os: string;
-  arch: string;
+  distro: string;
+  buildArches: string[];
   ownerUser: string;
 }
 
@@ -36,10 +36,10 @@ export function projectFromForm(form: BasicProjectForm): Project {
   validateName(name);
   const defaultRef = toFullGitRef(form.defaultRef);
   if (!isFullGitRef(defaultRef)) throw new ProjectManifestError("project.invalidDefaultRef");
-  const target = normalizeTarget({
-    os: form.os,
-    arch: form.arch,
-  });
+  const distro = form.distro.trim();
+  const targets = form.buildArches.map(arch => normalizeTarget({ os: distro, arch }));
+  if (!targets.length) throw new ProjectManifestError("projects.targetRequired");
+  const buildArches = [...new Set(targets.map(target => target.arch!))];
   return {
     apiVersion: "ebs/v1",
     kind: "Project",
@@ -51,8 +51,8 @@ export function projectFromForm(form: BasicProjectForm): Project {
       displayName: form.displayName.trim() || name,
       description: form.description.trim(),
       defaultRef,
-      distro: target.os,
-      buildArches: [target.arch!],
+      distro,
+      buildArches,
     },
   };
 }

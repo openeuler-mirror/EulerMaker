@@ -410,7 +410,7 @@ body.modal-open { overflow: hidden; }
 .build-history-item-heading > .status-badge { flex: none; margin: 14px 0 0 auto; }
 .build-history-item-name { min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .build-history-item-title { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.build-history-item-type { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 13px; font-weight: 700; line-height: 18px; }
+.build-history-item-type, .build-history-arch { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 13px; font-weight: 700; line-height: 18px; white-space: nowrap; }
 .build-history-item small, .build-history-item time { display: block; margin-top: 6px; color: #7e899a; font-size: 12px; }
 .build-history-item time { color: #9aa4b3; }
 .build-history-times { display: flex; gap: 12px; max-width: 100%; overflow-x: auto; }
@@ -445,6 +445,7 @@ body.modal-open { overflow: hidden; }
 .config-detail-list dd { white-space: pre-wrap; }
 .config-detail-list code, .config-table code { color: #45546a; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 12px; }
 .project-build-arches { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.project-architecture-options { display: flex; flex-wrap: wrap; gap: 8px; }
 .project-build-arches li { padding: 7px 12px; color: #45546a; background: #f7f9fc; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
 .boolean-status { color: #7a8799; }
 .boolean-status.enabled { color: #21895c; font-weight: 650; }
