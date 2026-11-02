@@ -86,6 +86,15 @@ func TestRepositoryBatchReusesBaseRPMMetadata(t *testing.T) {
 	if cachedDigest != fullDigest {
 		t.Fatalf("cached digest = %s, full digest = %s", cachedDigest, fullDigest)
 	}
+	if err := os.Remove(filepath.Join(basePackages, "old-b.rpm")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(workPackages, "old-b.rpm")); err != nil || string(got) != "old-b.rpm" {
+		t.Fatalf("linked RPM after source deletion = %q, %v", got, err)
+	}
+	if got, err := digestDirectory(work); err != nil || got != fullDigest {
+		t.Fatalf("repository changed after unlinking source: digest=%q error=%v", got, err)
+	}
 }
 
 func TestMaterializeRejectsChangedSigningKeyBeforeReadingInputs(t *testing.T) {

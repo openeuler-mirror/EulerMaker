@@ -60,6 +60,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/repositories` | 提交过程仓物化 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
+| 业务清理方 → Artifact Manager | `DELETE /internal/v1/projects/{project}/jobs/{job}` | 同步删除 Job 的产物、日志及上传元数据，见 13.1 | 内部管理接口，部署时仅向受信任的业务清理方开放；组件认证边界同其它内部接口 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
 | BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/releases/{buildName}` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
@@ -106,6 +107,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | Artifact / Manifest 元数据 | `upload.Store` 全局读写锁；同一 Job 的封账执行去重 | 锁内冻结输入及提交清单；签名、验签和正文摘要计算在锁外执行，完成后重新核验冻结输入 |
 | 封账签名 | 服务级有界 worker pool，默认 8 个 worker | 所有 Job 共用并发上限；队列有界，满载返回可重试错误，不持 Store 锁排队 |
 | 日志流 | 同一个 Store 全局写锁 | chunk 追加、索引/汇总更新、恢复、重放和封账可能持锁执行文件 I/O；不同 Job 并非完全独立并发 |
+| Job 数据删除 | 文件删除不持 Store 锁，释放订阅和恢复标记时加锁 | 调用方先停止该 Job 的写入和依赖任务；接口同步返回，不创建后台删除任务 |
 | 过程仓任务 | Repository Manager 全局读写锁及 `queued/running` 集合 | 提交、去重、状态落盘和队列标记受锁保护；物化和外部命令在锁外运行，完成后重新检查状态 |
 | 发布任务与 current | Release Manager 全局读写锁及任务集合 | 正文生成在锁外；状态提交与 current 切换在锁内，不同目标的激活也串行 |
 | 鉴权、SSE | 认证缓存内部同步；订阅集合由 Store 锁保护 | 网络鉴权与 HTTP 流式发送不长期占用业务状态锁；慢订阅者断开，不反压上传 |
@@ -625,7 +627,7 @@ Content-Type: application/json
 | 后端不可达、命令超时、临时 I/O 或磁盘不足 | `503 SigningBackendUnavailable`、`StorageError` 或 `InsufficientStorage`；`retryable=true`，保留输入及已核验副本 |
 | 签名后超出文件或 Job 配额 | `413 ArtifactLimitExceeded`；不提交 Manifest，不退化为无签名 |
 
-签名失败不改变业务执行结果，但 Runner 在后处理期限内不能确认封账成功时按现有规则将 Job 标记为失败。成功封账后清理 `.seal.json` 和临时目录，不能清理仍被最终 Manifest 使用的 `.signed` 文件；失败时保留原始正文、已核验副本及恢复记录供重试。未登记成功的临时副本在请求结束时清理，崩溃遗留在同 Job 下次恢复时清理。此流程不新增 Artifact/Manifest TTL，现有清理边界见第十三章；未来按 Job 删除时必须一起清理原始文件、签名副本和恢复记录，并与封账提交互斥，避免迟到任务重新发布清单。已建硬链接的仓库不受原始或签名产物目录后续删除影响。
+签名失败不改变业务执行结果，但 Runner 在后处理期限内不能确认封账成功时按现有规则将 Job 标记为失败。成功封账后清理 `.seal.json` 和临时目录，不能清理仍被最终 Manifest 使用的 `.signed` 文件；失败时保留原始正文、已核验副本及恢复记录供重试。未登记成功的临时副本在请求结束时清理，崩溃遗留在同 Job 下次恢复时清理。此流程不新增 Artifact/Manifest TTL；按 Job 删除的范围、调用前提和并发边界统一见 13.1。已建硬链接的仓库不受原始或签名产物目录后续删除影响。
 
 #### 6.2.2 签名后端
 
@@ -1542,9 +1544,32 @@ Project 配额、单 Job 文件数、服务端 Runner 上传并发、速率和 S
 - 过程仓通过显式 DELETE 请求删除，没有自动仓库 TTL；删除及中断恢复的边界见 8.10。
 - 正式发布每小时执行历史保留清理，规则见 9.6。
 
-Artifact、Manifest 和活动日志尚无自动 TTL 清理，也没有 Project/Job 删除事件联动或完整的孤儿文件扫描。当前不存在日志默认保留 30 天的实现。
+Artifact、Manifest 和活动日志尚无自动 TTL 清理，也没有完整的孤儿文件扫描。已提供 13.1 的按 Job 同步删除接口，上层 Job/OldJob 删除联动仍待接入；当前不存在日志默认保留 30 天的实现。
 
-过程仓中的硬链接与最终 Artifact 正文有独立目录项，删除原产物不会移除已物化的 RPM。删除与物化并发时，尚未打开或链接的输入可能消失；任务会失败，不能保证后续重试仍可读取原输入。未来清理 Manifest 与产物时应以 Job 为单位，包含 `.signed`、`.signing` 和 `.seal.json`，避免留下引用缺失文件的 Completed 清单；封账与清理的互斥要求见 6.2.1。
+过程仓中的硬链接与最终 Artifact 正文有独立目录项，删除原产物不会移除已物化的 RPM。删除与物化并发时，尚未打开或链接的输入可能消失；任务会失败，不能保证后续重试仍可读取原输入。删除只能移除目录项，不能通过截断或覆盖正文释放空间；最后一个硬链接及打开引用释放后才实际回收数据块。
+
+### 13.1 Job 数据同步删除
+
+Job 与 OldJob 共用同一份数据，以制品实例、Project 和 Job 名定位，不区分 API 对象存储于 etcd 还是 ES。业务清理方先读取对象保存的 `ebs.io/artifacts` annotation，从 `Config/services` 解析对应实例的 internalURL；沿用实例默认规则，但显式实例缺失或配置读取失败时停止，不改投其它实例。
+
+```http
+DELETE /internal/v1/projects/{project}/jobs/{job}
+```
+
+- 不接受业务请求体；标识非法、携带正文或正文长度未知时返回 `400 InvalidRequest`。首次删除、重复删除、目标数据原本不存在均返回 `204`，无响应体。只有全部目标数据已清理才确认成功，不以 `202` 表示已完成。
+- 清理范围：整个 `artifacts/{project}/jobs/{job}/`，包含原始产物、实时及封账日志、`.artifacts/`、`.manifest.json`、`.seal.json`、`.signed/`、`.signing/`、`.uploads/` 和 `.quarantine/`；同时释放该 Job 的订阅和内存恢复标记。
+- 仅删除精确 Job 作用域，不扫描或删除过程仓、发布仓、current、其它 Job 或整个 Project。使用 `os.Root` 逐层打开父目录，拒绝符号链接父目录并核对打开前后的目录身份；Job 自身及其子目录中的符号链接只删除链接，不跟随目标。删除后同步父目录。这些文件系统安全检查不属于重复业务判断。
+- 是否允许删除、上传/签名是否结束、是否仍有物化或重试依赖输入，均由上层业务保证。Artifact Manager 不查询 Job/OldJob/Build，不核验终态、归档状态或仓库引用数；上层也须阻止删除确认后的迟到上传重建数据。
+- 文件系统失败返回 `503 JobDataCleanupFailed`、`retryable=true` 和 `Retry-After: 5`。部分完成仍可重试：按固定 Job 目录继续清理，不依赖元数据枚举临时正文；重启后即使元数据已删除，也能清理该 Job 下的剩余文件。配置的数据根目录无法打开属于存储错误，不能当作 Job 不存在。
+- 未知响应可以重复同一 DELETE；资源缺失由接口以 `204` 表达。HTTP `404` 不能当作清理成功，它可能表示目标实例不支持该路由或地址配置错误。
+
+文件删除不持 Store 全局锁；成功后加锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
+
+上层接入契约（待实现）：业务删除采用“清理 Job 数据 → 条件删除 Job/OldJob API 对象”的顺序。清理失败或结果未知时保留 API 对象以便重试；清理成功后 API 删除失败，下轮允许重复清理。该顺序不是跨服务事务，可能暂时出现 API 对象仍在但日志/下载已不可用，不回滚重建文件。dry-run 不调用清理接口。
+
+唯一迁移例外：归档 Job 到 OldJob 后删除源 Job，属于存储迁移，跳过 Job 数据清理；之后删除 OldJob 才执行上述业务删除协议。仅看到 Job DELETE 或 Watch 删除事件不足以区分两者，不能以通用删除通知隐式触发清理。
+
+接口测试覆盖精确作用域及重复删除、正文/签名副本/临时文件/日志/元数据完整清理、仓库硬链接及 repodata 不变、文件系统失败后重试、重启后清理残留、符号链接边界和订阅状态释放。上层接入后补齐清理失败不删除 API 对象、Job/OldJob 共用协议及归档迁移保留数据的联动验收。
 
 ## 十四、与 Job Status 的关系
 
