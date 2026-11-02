@@ -3,6 +3,7 @@ package validation
 import (
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -69,6 +70,57 @@ func TestValidateJobUpdate(t *testing.T) {
 	old := validJob()
 	errs := ValidateJobUpdate(old.DeepCopy(), old)
 	assertErrorList(t, errs, 0, nil)
+}
+
+func TestFrozenJobPreservesSnapshotAndArchiveFinalizer(t *testing.T) {
+	job := validJob()
+	job.Annotations = map[string]string{ebsv1.JobArchiveActionAnnotation: "retain"}
+	now := metav1.Now()
+	job.DeletionTimestamp = &now
+	job.Status.Phase = ebsv1.JobSucceeded
+	job.Finalizers = []string{ebsv1.JobArchiveFinalizer, "example.test/other"}
+	for _, change := range []func(*ebsv1.Job){
+		func(j *ebsv1.Job) { j.Spec.Priority++ },
+		func(j *ebsv1.Job) { j.Labels = map[string]string{ebsv1.JobBuildNameLabel: "another"} },
+		func(j *ebsv1.Job) { j.Annotations[ebsv1.JobArchiveActionAnnotation] = "delete" },
+		func(j *ebsv1.Job) { j.Finalizers = []string{"example.test/other"} },
+	} {
+		next := job.DeepCopy()
+		change(next)
+		if errs := ValidateJobUpdate(next, job); len(errs) == 0 {
+			t.Fatalf("frozen Job mutation accepted: %+v", next)
+		}
+	}
+	next := job.DeepCopy()
+	next.Finalizers = []string{ebsv1.JobArchiveFinalizer}
+	if errs := ValidateJobUpdate(next, job); len(errs) != 0 {
+		t.Fatalf("other finalizer cannot finish: %v", errs)
+	}
+}
+
+func TestDeletingJobFreezesOnTerminalPhase(t *testing.T) {
+	job := validJob()
+	now := metav1.Now()
+	job.DeletionTimestamp = &now
+	job.Status.Phase = ebsv1.JobRunning
+	job.Finalizers = []string{ebsv1.JobArchiveFinalizer}
+	next := job.DeepCopy()
+	next.Spec.Priority++
+	if errs := ValidateJobUpdate(next, job); len(errs) != 0 {
+		t.Fatalf("nonterminal Job was frozen: %v", errs)
+	}
+	next = job.DeepCopy()
+	next.Status.Phase = ebsv1.JobAborted
+	next.Status.EndTime = now
+	if errs := ValidateJobStatusUpdate(next, job); len(errs) != 0 {
+		t.Fatalf("deleting Job could not become terminal: %v", errs)
+	}
+	job = next
+	next = job.DeepCopy()
+	next.Spec.Priority++
+	if errs := ValidateJobUpdate(next, job); len(errs) == 0 {
+		t.Fatal("terminal deleting Job must be frozen without a version annotation")
+	}
 }
 
 func TestValidateJobArtifactInstance(t *testing.T) {

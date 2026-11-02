@@ -3,6 +3,9 @@ package job
 import (
 	"context"
 	"fmt"
+	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -176,5 +180,161 @@ func TestJobArchiveLifecycle(t *testing.T) {
 	state, err := lifecycle.ArchiveState(ctx, "job")
 	if err != nil || state.Phase != "Transferred" || archived.job == nil || memory.job != nil {
 		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
+func TestArchiveConfirmationMatchesSnapshot(t *testing.T) {
+	ctx := context.Background()
+	lifecycle, memory, archived, _ := newLifecycleTest(t)
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+	digest := archived.state.Digest
+	archived.state.Digest = "different-snapshot"
+	if _, err := lifecycle.ArchiveState(ctx, "job"); !apierrors.IsConflict(err) {
+		t.Fatalf("mismatched snapshot confirmation: %v", err)
+	}
+	if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); !apierrors.IsConflict(err) {
+		t.Fatalf("mismatched snapshot finalization: %v", err)
+	}
+	if memory.job == nil || !slices.Contains(memory.job.Finalizers, ebsv1.JobArchiveFinalizer) {
+		t.Fatal("unconfirmed source lost its protection")
+	}
+	archived.state.Digest = digest
+	if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJobDeleteDryRunAndForeignFinalizer(t *testing.T) {
+	ctx := context.Background()
+	lifecycle, memory, archive, _ := newLifecycleTest(t)
+	if obj, deleted, err := lifecycle.Delete(ctx, "job", nil, &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}}); err != nil || deleted || obj.(*ebsv1.Job).DeletionTimestamp == nil {
+		t.Fatalf("dry-run: %v deleted=%v", err, deleted)
+	}
+	if memory.job.DeletionTimestamp != nil || memory.revision != 10 {
+		t.Fatal("dry-run persisted intent")
+	}
+	memory.job.Finalizers = append(memory.job.Finalizers, "example.test/other")
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+	if memory.job == nil || !slices.Equal(memory.job.Finalizers, []string{"example.test/other"}) {
+		t.Fatal("other finalizer was bypassed")
+	}
+	state, err := lifecycle.ArchiveState(ctx, "job")
+	if err != nil || state.Phase != "Stored" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	if _, err := lifecycle.FinalizeOldJob(ctx, "job", archivePre(archive.job)); !apierrors.IsConflict(err) {
+		t.Fatalf("source still exists: %v", err)
+	}
+}
+
+func TestDeleteUpgradesRetainBeforeHandoff(t *testing.T) {
+	ctx := context.Background()
+	lifecycle, memory, archived, _ := newLifecycleTest(t)
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+	stale := archivePre(memory.job)
+	if _, deleted, err := lifecycle.Delete(ctx, "job", nil, &metav1.DeleteOptions{Preconditions: stale}); err != nil || deleted {
+		t.Fatalf("delete: %v %v", deleted, err)
+	}
+	if _, err := lifecycle.Finalize(ctx, "job", stale); err == nil {
+		t.Fatal("stale retain decision completed")
+	}
+	if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); !apierrors.IsConflict(err) {
+		t.Fatalf("missing handoff accepted: %v", err)
+	}
+	now := metav1.Now()
+	archived.job.DeletionTimestamp = &now
+	if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+	if memory.job != nil {
+		t.Fatal("source was not removed")
+	}
+}
+
+func TestDeletingJobCanArchiveWhileParentDeleting(t *testing.T) {
+	ctx := context.Background()
+	lifecycle, memory, archived, builds := newLifecycleTest(t)
+	builds.deleting = true
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); !apierrors.IsConflict(err) {
+		t.Fatalf("new retain: %v", err)
+	}
+	memory.job.Status.Phase = ebsv1.JobRunning
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); !apierrors.IsConflict(err) {
+		t.Fatalf("running archive: %v", err)
+	}
+	// The caller aborts the Job before requesting deletion.
+	memory.job.Status.Phase = ebsv1.JobAborted
+	if _, _, err := lifecycle.Delete(ctx, "job", nil, &metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	archived.failure = fmt.Errorf("ES unavailable")
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err == nil {
+		t.Fatal("expected ES failure")
+	}
+	if !slices.Contains(memory.job.Finalizers, ebsv1.JobArchiveFinalizer) || memory.job.DeletionTimestamp == nil || !memory.job.Status.Phase.IsTerminal() {
+		t.Fatal("frozen source lost")
+	}
+	archived.failure = nil
+	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
+		t.Fatal(err)
+	}
+	if archived.state.Action != "delete" {
+		t.Fatal("delete downgraded to retain")
+	}
+}
+
+func TestJobDeletionRequiresTerminalPhase(t *testing.T) {
+	for _, phase := range []ebsv1.JobPhase{"", "Unknown", ebsv1.JobPending, ebsv1.JobRunning,
+		ebsv1.JobSucceeded, ebsv1.JobFailed, ebsv1.JobAborted} {
+		t.Run(string(phase), func(t *testing.T) {
+			for _, dryRun := range []bool{false, true} {
+				lifecycle, memory, _, _ := newLifecycleTest(t)
+				memory.job.Status.Phase = phase
+				opts := &metav1.DeleteOptions{Preconditions: archivePre(memory.job)}
+				if dryRun {
+					opts.DryRun = []string{metav1.DryRunAll}
+				}
+				_, deleted, err := lifecycle.Delete(context.Background(), "job", nil, opts)
+				if phase.IsTerminal() {
+					if err != nil || deleted {
+						t.Fatalf("terminal delete: deleted=%v err=%v", deleted, err)
+					}
+				} else if !apierrors.IsConflict(err) {
+					t.Fatalf("nonterminal delete: %v", err)
+				}
+				if memory.job.Status.Phase != phase {
+					t.Fatal("DELETE changed Job status")
+				}
+				if !phase.IsTerminal() || dryRun {
+					if memory.job.DeletionTimestamp != nil || memory.revision != 10 || len(memory.job.Annotations) != 0 {
+						t.Fatal("rejected or dry-run delete changed persisted Job")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestArchiveHTTPPreconditions(t *testing.T) {
+	lifecycle, _, _, _ := newLifecycleTest(t)
+	for _, body := range []string{`{}`, `{"preconditions":{"uid":"uid"}}`, `{} {}`} {
+		response := &abortResponse{}
+		h, err := NewArchiveStorage(lifecycle).(rest.Connecter).Connect(context.Background(), "job", nil, response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/", strings.NewReader(body)))
+		if !apierrors.IsBadRequest(response.err) {
+			t.Fatalf("body=%s err=%v", body, response.err)
+		}
 	}
 }

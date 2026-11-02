@@ -3,6 +3,7 @@ package esstore
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -149,6 +150,103 @@ func TestOldJobsDelete(t *testing.T) {
 }
 
 var _ rest.GracefulDeleter = (*OldJobs)(nil)
+
+func TestOldJobsArchiveLifecycle(t *testing.T) {
+	var stored *es.Document
+	var revision int
+	client := es.NewClientForTesting("http://es", &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/ebs-oldjobs/_doc/project/job" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		if r.Method == http.MethodGet {
+			if stored == nil {
+				return jsonResponse(404, map[string]any{"found": false}), nil
+			}
+			return jsonResponse(200, map[string]any{"_id": "project/job", "_seq_no": revision, "_primary_term": 1, "_source": stored}), nil
+		}
+		if r.Method != http.MethodPut {
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+		q := r.URL.Query()
+		if q.Get("op_type") == "create" {
+			if stored != nil {
+				return jsonResponse(409, map[string]string{"error": "exists"}), nil
+			}
+		} else if q.Get("if_seq_no") != fmt.Sprint(revision) || q.Get("if_primary_term") != "1" {
+			return jsonResponse(409, map[string]string{"error": "conflict"}), nil
+		}
+		if err := json.NewDecoder(r.Body).Decode(&stored); err != nil {
+			t.Fatal(err)
+		}
+		revision++
+		return jsonResponse(200, map[string]any{"_seq_no": revision, "_primary_term": 1}), nil
+	})})
+	store := newOldJobsTestStore(client)
+	ctx := apirequest.WithNamespace(context.Background(), "project")
+	now := metav1.NewTime(time.Unix(100, 0))
+	job := &ebsv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "10",
+			DeletionTimestamp: &now, Finalizers: []string{ebsv1.JobArchiveFinalizer, "example.test/other"},
+			Annotations: map[string]string{ebsv1.JobArchiveActionAnnotation: "retain"}},
+		Status: ebsv1.JobStatus{Phase: ebsv1.JobSucceeded, EndTime: now},
+	}
+	old, err := store.Archive(ctx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.ResourceVersion != "v1:1:1" || old.DeletionTimestamp != nil || !reflect.DeepEqual(old.Finalizers, []string{ebsv1.JobArtifactsCleanupFinalizer}) {
+		t.Fatalf("independent lifecycle: %+v", old.ObjectMeta)
+	}
+	if _, err := store.Archive(ctx, job); err != nil || revision != 1 {
+		t.Fatalf("repeat archive: %v revision=%d", err, revision)
+	}
+	lifecycleChanged := job.DeepCopy()
+	lifecycleChanged.ResourceVersion = "42"
+	lifecycleChanged.Finalizers = []string{ebsv1.JobArchiveFinalizer}
+	lifecycleChanged.Annotations[ebsv1.JobArchiveActionAnnotation] = "delete"
+	if _, err := store.Archive(ctx, lifecycleChanged); err != nil || revision != 1 {
+		t.Fatalf("lifecycle metadata changed snapshot: %v revision=%d", err, revision)
+	}
+	changed := job.DeepCopy()
+	changed.Status.Message = "changed"
+	if _, err := store.Archive(ctx, changed); !apierrors.IsConflict(err) {
+		t.Fatalf("frozen snapshot error=%v", err)
+	}
+	pre := &metav1.Preconditions{UID: &old.UID, ResourceVersion: &old.ResourceVersion}
+	obj, deleted, err := store.Delete(ctx, old.Name, nil, &metav1.DeleteOptions{Preconditions: pre})
+	if err != nil || deleted {
+		t.Fatalf("mark delete: %v deleted=%v", err, deleted)
+	}
+	old = obj.(*ebsv1.Job)
+	if old.DeletionTimestamp == nil {
+		t.Fatal("missing deletion intent")
+	}
+	if _, err := store.Finalize(ctx, old.Name, pre); !apierrors.IsConflict(err) {
+		t.Fatalf("stale CAS: %v", err)
+	}
+	pre.ResourceVersion = &old.ResourceVersion
+	if _, err := store.Finalize(ctx, old.Name, pre); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Archive.Deleted || string(stored.Data) != "null" {
+		t.Fatalf("fence should retain no payload: %+v", stored)
+	}
+	if _, err := store.Get(ctx, old.Name, &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("public GET: %v", err)
+	}
+	if _, err := store.Archive(ctx, job); !apierrors.IsConflict(err) {
+		t.Fatalf("late archive recreated deleted object: %v", err)
+	}
+	state, err := store.ArchiveState(ctx, job.Name)
+	if err != nil || state.UID != "uid" || state.Action != "delete" || state.Digest != stored.Archive.Digest {
+		t.Fatalf("confirmation=%+v err=%v", state, err)
+	}
+	query, err := selectorQuery("oldjob", "project", &internalversion.ListOptions{FieldSelector: fields.ParseSelectorOrDie("metadata.deletionTimestamp!=null")})
+	body, _ := json.Marshal(query)
+	if err != nil || !strings.Contains(string(body), "archive.deleted") || !strings.Contains(string(body), "data.metadata.deletionTimestamp") {
+		t.Fatalf("query=%s err=%v", body, err)
+	}
+}
 
 func TestOldJobsProjectedPagination(t *testing.T) {
 	filter := es.SourceFilter{Includes: []string{"data.metadata", "data.status.phase"}}
