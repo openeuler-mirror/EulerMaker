@@ -19,6 +19,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+// Client validates response identity and required fields; malformed write responses return WriteUnknown.
 type Client interface {
 	ListDeletingPage(context.Context, bool, string, int64) (source.ListPage, error)
 	GetArchiveState(context.Context, string, string) (*ebsv1.JobArchiveState, error)

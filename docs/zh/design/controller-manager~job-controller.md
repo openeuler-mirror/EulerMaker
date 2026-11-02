@@ -78,7 +78,7 @@ Job Controller 在包内声明类型化客户端，由适配器组合公共 API 
 - 调用 Job archive 子资源，按持久化意图恢复归档；GET archive 查询迁移身份和阶段；通过 finalizers 子资源完成生命周期更新。
 - `DeleteJobData`：按 Job 固化的实例 annotation 选择服务，只用于 cleanup 分支，不用于 archive 分支。
 
-`UpdateJobStatus` 必须验证成功响应非 nil、UID 与请求对象一致、resourceVersion 非空；Job Controller 写 Runner 丢失终态时，还必须验证响应的 phase 为 `Failed`、runner 未变化、stage 未变化。任一成功响应异常都包装为 `WriteUnknown`。
+类型化 Client 统一校验 GET 响应类型、路径身份及 UID/resourceVersion；Controller 不重复校验这些结构字段，只判断候选 UID、当前状态和业务前置条件。`UpdateJobStatus` 必须验证成功响应非 nil、UID 与请求对象一致、resourceVersion 非空；Job Controller 写 Runner 丢失终态时，还必须验证响应的 phase 为 `Failed`、runner 未变化、stage 未变化。任一成功响应异常都包装为 `WriteUnknown`。
 
 `ArchiveJob` 使用 UID/resourceVersion 前置条件，不发送 Job 正文；归档成功与未知结果确认按 6.3。源 Job 和 OldJob 的生命周期 metadata、resourceVersion 不相等，不能继续使用整对象相等判断。确认需要完整实时 GET，不使用字段投影；归档身份与冻结业务快照以 apiserver 的持久化迁移记录为准。
 
@@ -260,7 +260,7 @@ status:
 3. GET 最新对象，重新核对 namespace/name/UID、终态、endTime、删除状态和截止时间。
 4. delete 模式携带最新 UID/resourceVersion 发起 Job DELETE，登记 action=delete；后续先归档，再由 OldJob 清理数据。扫描循环不直接清理文件。
 5. archive 模式调用 archive 子资源登记 action=retain，按 6.3 完成源 Job 迁移；保留 OldJob 和制品，不调用普通 Job DELETE 进行迁移收尾。
-6. 明确 404 结束旧候选；Conflict 放弃旧决策。Unknown 读取最新对象确认原意图，不能换 resourceVersion 重放旧删除。失败的未登记候选等待下次每日扫描；已登记候选由生命周期轮询继续。
+6. 明确 404 结束旧候选；其它错误记录后继续下一候选。Unknown 保留日志和指标，本轮不额外 GET 确认、不重放旧请求。已登记意图由生命周期轮询读取最新状态恢复；未登记成功的候选等待下次每日扫描，重新 GET 核验后再构造请求。历史扫描仅返回 error，不生成队列重试结果。
 
 `--job-history-gc-enabled=false` 只停止每日到期筛选，不停止 Runner 丢失处理、已受理删除或归档。修改 history-action 只影响新候选，不改变已登记 action；后续显式 DELETE 可以按 apiserver 契约将 retain 升级为 delete。扫描使用 Manager context，退出时等待本地循环结束，不把取消请求等同于服务端未执行。
 
@@ -268,7 +268,7 @@ status:
 
 archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归档已经开始或允许清理数据的标记。归档 action、冻结快照和跨实例写屏障统一见 [apiserver](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
 
-1. 仅处理已删除中的源 Job。GET 最新对象及迁移记录，确认 UID/action；记录缺失视为契约异常，不从 deletionTimestamp 推导 retain/delete。
+1. 仅处理已删除中且仍带 archive finalizer 的源 Job；自身 finalizer 已移除时结束，不重复归档收尾。GET 最新对象及迁移记录，确认 UID/action；记录缺失视为契约异常，不从 deletionTimestamp 推导 retain/delete。
 2. 核验源 Job 为终态且 endTime 非零，再请求归档。非终态删除由 apiserver 拒绝，上层负责先调用 abort 并确认终态；若发现异常的非终态删除对象，记录错误并保留对象，不自动中止。停止写入由上层业务保证。删除所需归档不被父 Build 删除或缺失阻断。
 3. 调用 archive 子资源冻结或恢复同一快照；确认 ES 持久化及 create-only/删除凭据保护。源 Job 仍受 archive finalizer 保护，此分支永不调用 DeleteJobData。
 4. 读取最新 action：retain 保留 OldJob；delete 对同 UID OldJob 发起条件 DELETE，并确认其删除标记。若 OldJob 已删除中不重复请求；读取失败或身份不符保留源对象。
@@ -277,7 +277,7 @@ archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归
 
 | 操作结果 | 本轮处理 |
 | --- | --- |
-| 完整 200，归档身份及冻结内容确认通过 | 下一轮读取持久化迁移状态，按最新 action 保留或标记删除 OldJob，再推进源 finalizer 收尾 |
+| 完整 200，归档响应通过 Client 校验 | 立即重新入队，读取持久化迁移状态，按最新 action 保留或标记删除 OldJob，再推进源 finalizer 收尾 |
 | 源 Job 404 | 结束对源对象的修改；归档完成需由持久化迁移结果确认，不能仅凭 404 推断 |
 | Conflict | 放弃旧版本，重新读取并恢复同一意图 |
 | WriteRejected 的权限、参数或契约错误 | 告警并保留 archive finalizer，后续轮询允许修复后继续 |
@@ -304,7 +304,7 @@ archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归
 6. 清理成功后以本轮已读取的 UID/resourceVersion 调用 finalizers，服务端重新核验删除状态与迁移完成。Conflict 或 Unknown 下轮重新 GET 并判定，允许重复幂等清理；不得仅替换版本重放旧对象。
 7. 保留其它 finalizer、业务状态和实例归属。不删除过程仓、发布仓及 current；数据已清理但 API 更新失败时允许短暂出现 API 仍在而文件不存在，下轮重复清理即可。
 
-临时故障使用队列退避及合法 Retry-After；永久权限/契约错误记录告警并保留 finalizer，周期轮询使修复后仍可继续。一个 Job 失败不阻塞其它 Job。日志分别记录意图已受理、数据清理成功和 API 对象真正删除，不能将 DELETE 的 2xx 等同于最终清理完成。
+归档成功或 OldJob 删除意图确认成功后返回 `Requeue=true`，立即重新读取最新状态推进；等待源消失等外部条件、自身 finalizer 已移除或清理完成时返回空结果，由周期扫描发现后续变化，不统一设置 10 秒延迟重排。临时故障仍使用队列退避及合法 Retry-After；永久权限/契约错误记录告警并保留 finalizer，周期轮询使修复后仍可继续。一个 Job 失败不阻塞其它 Job。日志分别记录意图已受理、数据清理成功和 API 对象真正删除，不能将 DELETE 的 2xx 等同于最终清理完成。
 
 停止写入仍是上层业务前提；Artifact Manager 的幂等删除不提供上传写入隔离。ES 删除凭据只保护归档元数据，不阻止 Runner 重新上传文件。
 
@@ -369,21 +369,21 @@ Runner GET 只有 2xx 的非 Offline 对象、2xx 的 Offline 对象和 404 能�
 
 #### 7.4.2 明确收到写响应
 
-非 2xx 行对应 `WriteRejected`，其中 404 的业务语义按操作区分。历史扫描中尚未登记意图的候选失败按 6.2 延后处理；已经登记的删除/归档按 6.3、6.4 的生命周期队列重试。下表的 Job 删除列仅指每日扫描发起 DELETE：
+下表仅描述实时 Job status 更新；非 2xx 行对应 `WriteRejected`。历史扫描统一按 6.2 返回错误并继续下一候选，已登记删除/归档按 6.3、6.4 恢复。
 
-| HTTP 结果 | status 更新 | Job 删除 |
-|-----------|-------------|----------|
-| 完整 2xx 且成功响应校验通过 | 清理宽限期记录，记录成功日志和指标，成功结束 | 记录删除已受理；存在 finalizer 时交给生命周期调谐，不记录最终清理完成 |
-| 2xx 但响应为空、解码失败或成功对象校验失败 | WriteUnknown，进入 7.4.4 | DELETE 的完整空 2xx 响应合法并视为成功；响应截断或无法确认完整响应时为 WriteUnknown |
-| 400、405、410、422、其他未单列 4xx | PermanentError，记录请求或 API 契约错误 | PermanentError，记录请求或 API 契约错误 |
-| 401、403 | PermanentError，记录鉴权失败 | PermanentError，记录鉴权失败 |
-| 404 | Job 已删除，成功结束 | Job 已不存在，成功结束 |
-| 408 | 临时错误，`AddRateLimited` | 记录并等待下次每日扫描 |
-| 409、412 | `Requeue=true`，下一周期重新 GET 并重算 | 记录并等待下次每日扫描 |
-| 429、503，且 `WriteError.RetryAfter > 0` | 原样返回 WriteError，由 BaseController 执行 `Forget + AddAfter` | 记录并等待下次每日扫描 |
-| 429、503，但无合法 RetryAfter | 临时错误，`AddRateLimited` | 记录并等待下次每日扫描 |
-| 其他 5xx | 临时错误，`AddRateLimited` | 记录并等待下次每日扫描 |
-| 最终 3xx 或其他完整非 2xx 响应 | PermanentError，记录非预期协议错误 | 同左 |
+| HTTP 结果 | status 更新 |
+|-----------|-------------|
+| 完整 2xx 且成功响应校验通过 | 清理宽限期记录，记录成功日志和指标，成功结束 |
+| 2xx 但响应为空、解码失败或成功对象校验失败 | WriteUnknown，进入 7.4.4 |
+| 400、405、410、422、其他未单列 4xx | PermanentError，记录请求或 API 契约错误 |
+| 401、403 | PermanentError，记录鉴权失败 |
+| 404 | Job 已删除，成功结束 |
+| 408 | 临时错误，`AddRateLimited` |
+| 409、412 | `Requeue=true`，下一周期重新 GET 并重算 |
+| 429、503，且 `WriteError.RetryAfter > 0` | 原样返回 WriteError，由 BaseController 执行 `Forget + AddAfter` |
+| 429、503，但无合法 RetryAfter | 临时错误，`AddRateLimited` |
+| 其他 5xx | 临时错误，`AddRateLimited` |
+| 最终 3xx 或其他完整非 2xx 响应 | PermanentError，记录非预期协议错误 |
 
 写入 2xx 只有在 typed client 完成第二节定义的响应校验后才算成功。HTTP 1xx、截断响应以及无法确认完整 2xx 的情况不属于本表，必须归入 `WriteUnknown`。
 
@@ -415,21 +415,13 @@ status 更新结果未知后执行 Job GET：
 | 同一 UID，仍满足 Runner 丢失处理条件 | 返回 `Requeue=true`；下一周期重新执行 Job GET、强制 Runner GET，并基于新 resourceVersion 构造新请求 |
 | GET 失败 | 严格按 7.4.1 的 GET 矩阵处理 |
 
-删除结果未知后执行 Job GET：
-
-| 确认结果 | 处理 |
-|----------|------|
-| 404 | 删除已生效，成功结束 |
-| UID 不同 | 原对象已经消失，成功结束，绝不删除同名新对象 |
-| 同一 UID，但不再是终态、endTime/保留期变化或正在删除 | 按最新对象成功结束，不重放旧删除 |
-| 同一 UID，且仍满足历史清理条件 | 记录并等待下次每日扫描，重新 GET 后构造删除请求 |
-| GET 失败 | 记录并等待下次每日扫描 |
+历史删除的 Unknown 由 6.2 的扫描与生命周期轮询恢复，不复用 status 的即时确认流程。
 
 确认 GET 自身超时或失败时只返回该读取错误，保留原始 WriteUnknown 作为日志上下文，不得因为无法确认而推断写入失败。
 
 #### 7.4.5 Client 契约违例
 
-写方法返回非 nil error 时必须是可由 `errors.As` 取得的 `*apiserver.WriteError`。若不是，Controller 将其保守地当作 WriteUnknown，记录 `unexpected-write-error`，并进入 7.4.4 的确认读取流程；不能直接重试写操作。写方法返回 `(nil, nil)` 或异常成功对象时，由 typed client 包装成 WriteUnknown。
+apiserver 写方法应返回可由 `errors.As` 取得的 `*apiserver.WriteError`。普通 error 保守地视为结果未知：status 更新进入 7.4.4 的确认流程，历史扫描记录并交给后续扫描恢复，生命周期下轮重读原对象与迁移状态。写方法返回 `(nil, nil)` 或异常成功对象时，由 typed client 包装成 WriteUnknown，Controller 不再重复响应校验。
 
 ## 八、错误与重试
 
@@ -533,14 +525,14 @@ job_controller_history_archive_error_total
 - Job/Runner 删除 tombstone 能正确清理索引；
 - Runner 同名重建且 UID 变化时仍按名称视为恢复，不产生 UID 相关分支；
 - Job/Runner GET 的 2xx、404、401/403、408/429、全部 5xx、其他 4xx、网络错误和异常 2xx 分别进入 7.4.1 的分支；
-- status 更新和删除的 400/401/403/404/408/409/412/422/429/503、其他 4xx、其他 5xx 和最终 3xx 分别进入 7.4.2 的分支；
+- status 更新的 HTTP 错误按 7.4.2 分流；历史删除失败仅返回错误，继续其它候选，不产生无效队列结果；
 - WriteNotSent 的永久本地错误、可证明未发送的临时错误及错误分类违例分别进入 7.4.3 的分支；
 - status 更新成功响应字段异常时按结果未知处理；
 - status WriteUnknown 确认得到 404、预期 Failed、不同 UID、不可处理最新状态和仍可处理状态时分别正确收敛；
 - 非终态、终态但 `endTime` 为空、尚未到期以及已经到期的 GC 判断正确；
 - GC 使用 UID 和 resourceVersion 删除前置条件；
-- delete WriteUnknown 确认得到 404、不同 UID、不再满足 GC 条件和仍满足 GC 条件时分别正确收敛；
-- 写方法返回普通 error、`(nil, nil)` 或异常成功对象时按 Client 契约违例进入确认流程；
+- delete WriteUnknown 本轮不额外 GET 或重放请求；已登记意图可被生命周期轮询发现，未登记候选下次扫描重新核验；
+- Client 校验 GET 与写入响应，异常成功写响应分类为 WriteUnknown；Controller 保留业务 UID 对比与状态判断；
 - Manager context 取消后不启动 Unknown 确认请求，重启后的初始 List 可以继续收敛；
 - 关闭 GC 后不启动历史扫描；启动扫描、24 小时间隔、分页续读、失败后继续扫描和取消退出均可测试；
 - delete/archive 两种模式均调用归档；分别删除/保留 OldJob，任何未确认写入均保留源 Job；
@@ -561,7 +553,7 @@ job_controller_history_archive_error_total
 - Watch 仅缓存非终态 Job；历史到期筛选每天扫描，删除/已登记归档由独立轮询发现，只缓存候选键；
 - 超过 30 天的终态 Job 被删除，未到期或缺少 `endTime` 的对象被保留；
 - Job 同名删除重建以及删除前发生状态变化时，删除前置条件可以防止误删；
-- 删除请求结果未知时通过 GET 收敛，不产生紧密重复删除；
+- 历史删除结果未知时由后续轮询/扫描重读恢复，不在当前扫描追加确认或重复删除；
 - controller-manager 重启后能够从初始 List 重建索引并重新开始安全宽限期；
 - 认证失败不产生紧密重试，也不由单个对象错误改变 Controller 健康状态；临时网络错误能够恢复。
 
@@ -579,6 +571,7 @@ job_controller_history_archive_error_total
 | OldJob 提前删除、源有其它 finalizer | OldJob 等待源消失；源归档不等待 OldJob 清理，不形成死锁 | Controller 集成测试 |
 | 父 Build 删除中或缺失 | 阻止新 retain，允许删除必需的归档及已有意图恢复 | apiserver 集成测试 |
 | 同名源与归档对象 | 队列键区分资源；UID/实例不匹配时保留并告警 | 单元测试 |
+| 生命周期推进与等待 | 已确认推进立即重入；等待源消失及自身 finalizer 完成时不主动延迟重排；失败仍按错误分类处理 | 单元测试 |
 | 终态删除与 retain 迁移 | 两者均有删除标记；生命周期轮询可发现；普通 Job 的默认 finalizer 不造成入队；GC 关闭仍推进 | 轮询集成测试 |
 | OldJob 删除标记确认后、源消失后立即重启 | 从 OldJob 恢复清理；retain 则继续保留，不靠内存判断 | 进程重启测试 |
 | 冻结意图、ES 写入、数据清理、finalizer 更新各阶段重启 | 恢复原意图，通过 UID 和摘要确认冻结快照；持久化凭据阻断迟到归档；成功清理可重复 | 进程重启故障注入 |
