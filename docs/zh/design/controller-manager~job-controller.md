@@ -2,14 +2,14 @@
 
 ## 一、定位与范围
 
-Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史对象回收的控制器。Scheduler 完成 Job 与 Runner 的绑定，Runner 负责实际执行、超时、日志及产物封账；Job Controller 处理已经绑定但失去执行主体的悬挂 Job，并按策略删除或先归档后删除超过保留期的终态 Job，默认直接删除。
+Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史对象回收的控制器。Scheduler 完成 Job 与 Runner 的绑定，Runner 负责实际执行、超时、日志及产物封账；Job Controller 处理已经绑定但失去执行主体的悬挂 Job，并按策略删除或先归档后删除超过保留期的终态 Job，默认归档后继续删除 OldJob 和数据。
 
 首版职责：
 
 - 监听 Job 和 Runner 变化；
 - 识别绑定到已删除或明确 `Offline` Runner 的非终态 Job；
 - 经过离线宽限期并再次确认后，将悬挂 Job 标记为 `Failed`；
-- 处理 `Succeeded`、`Failed`、`Aborted` 状态下超过 30 天保留期的历史 Job，默认删除，可选先归档到 ES；
+- 处理 `Succeeded`、`Failed`、`Aborted` 状态下超过 30 天保留期的历史 Job，默认归档后删除，可选仅归档保留 OldJob；
 - 保证状态更新幂等，并在并发更新时以 apiserver 中的最新对象为准；
 - 暴露必要的结构化日志和指标。
 
@@ -17,7 +17,9 @@ Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史�
 
 - Job 的 Runner 绑定保持不变；失联 Job 直接收敛为失败，不自动重新调度，避免旧 Runner 尚在执行时产生并发构建。
 - Runner 健康状态由 Runner Controller 维护；Build、BuildInfo 状态由对应 Controller 聚合。
-- 历史回收只处理 Job 对象；归档通过 apiserver 完成，不直连 ES。日志和 Artifact 由各自组件的保留策略管理。
+- 归档通过 apiserver 完成，不直连 ES；Job/OldJob 的数据清理由本控制器调用 Artifact Manager，并通过 finalizer 保留失败恢复入口。
+
+Job/OldJob finalizer 与归档责任移交统一见 [apiserver 删除与归档协议](ebs-apiserver.md#job-删除与归档-finalizer)。停止上传及输入使用者排空由上层业务保证，本控制器不增加 Runner 停止确认协议。
 
 ## 二、依赖与组件边界
 
@@ -28,6 +30,7 @@ backend/controller-manager/pkg/controllers/job/
   controller.go       # 初始化、事件注册和入队
   reconciler.go       # Runner 丢失处理、安全删除及写结果确认
   history.go          # 启动及每日分页清理循环
+  lifecycle.go        # 删除对象轮询、归档移交和 OldJob 数据清理
   client.go           # 类型化 API 适配
   index.go            # runner -> Job Key 反向索引
   metrics.go
@@ -43,12 +46,13 @@ Runner Watch Source ------> runner -> jobs index
                                   v
                          Job status subresource
 
-Daily history scan -------> paginated Job List -------> GET + optional archive + guarded DELETE
+Daily history scan -------> paginated Job List -------> start deletion or archive
+Lifecycle polling --------> scoped work queue --------> archive / data cleanup / finalizer completion
 ```
 
 Job 和 Runner 均支持 watch，应使用 `WatchSourceFactory` 创建并共享 Source。事件处理器必须在 `Manager.Run` 之前注册；控制器启动后不得再注册 handler。Manager 完成全部 Source 的首次同步后才启动 worker，因此 `Sync` 可以依赖两个本地缓存已经完成初始 List。
 
-Job 的 List 和 Watch 均携带 `status.phase!=Succeeded,status.phase!=Failed,status.phase!=Aborted`，仅缓存非终态对象。历史 Job 使用独立的分页扫描，不进入 informer 缓存或工作队列。
+实时 Job 的 List/Watch 携带 `status.phase!=Succeeded,status.phase!=Failed,status.phase!=Aborted`，仅缓存非终态对象。历史到期筛选使用每日分页扫描；删除与已登记归档使用 6.4 的独立生命周期轮询，只入队候选身份，不把完整历史对象加入 informer 缓存。
 
 Initializer 保存 Factory 返回的两个 `source.CachedSource`：
 
@@ -67,33 +71,18 @@ Job 使用 `{namespace}/{name}` 调用 `jobs.GetByKey`；Runner 是集群级资�
 
 Manager 保证 worker 在 cache sync 后启动；若 `GetByKey` 仍返回 `source.ErrCacheNotSynced`，按临时错误限速重试，不能退化为直接 API List。写入前的权威 GET 与缓存读取用途不同，仍按第六节保留。
 
-Job Controller 在包内声明最小客户端接口，共享 API Client 通过适配器实现它：
+Job Controller 在包内声明类型化客户端，由适配器组合公共 API Client 和 Artifact Manager 客户端。接口按下列职责提供方法，不要求公共 Client 引入 Job 专用业务类型：
 
-```go
-type Client interface {
-    ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, token string, limit int64) (source.ListPage, error)
-    GetJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error)
-    GetOldJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error)
-    ArchiveJob(
-        ctx context.Context,
-        namespace, name string,
-        preconditions apiserver.DeletePreconditions,
-    ) (*ebsv1.Job, error)
-    GetRunner(ctx context.Context, name string) (*ebsv1.Runner, error)
-    UpdateJobStatus(ctx context.Context, job *ebsv1.Job) (*ebsv1.Job, error)
-    DeleteJob(
-        ctx context.Context,
-        namespace, name string,
-        preconditions apiserver.DeletePreconditions,
-    ) error
-}
-```
+- 分页查询到期候选及删除中的 Job/OldJob；List 使用字段投影。
+- GET Job、OldJob、Runner；更新 Job status；携带 UID/resourceVersion 发起终态 Job 或 OldJob DELETE。
+- 调用 Job archive 子资源，按持久化意图恢复归档；GET archive 查询迁移身份和阶段；通过 finalizers 子资源完成生命周期更新。
+- `DeleteJobData`：按 Job 固化的实例 annotation 选择服务，只用于 cleanup 分支，不用于 archive 分支。
 
 `UpdateJobStatus` 必须验证成功响应非 nil、UID 与请求对象一致、resourceVersion 非空；Job Controller 写 Runner 丢失终态时，还必须验证响应的 phase 为 `Failed`、runner 未变化、stage 未变化。任一成功响应异常都包装为 `WriteUnknown`。
 
-`ArchiveJob` 使用与 Delete 相同的 UID/resourceVersion 前置条件类型，请求体不包含 Job 正文；成功返回归档快照。适配器验证 namespace/name/UID/resourceVersion 与请求一致，Controller 再比较完整快照与归档前 GET 的 Job；异常成功响应按 `WriteUnknown` 处理。`GetOldJob` 使用完整实时 GET，不传字段选择，接口和存储规则见 [历史 Job 归档](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
+`ArchiveJob` 使用 UID/resourceVersion 前置条件，不发送 Job 正文；归档成功与未知结果确认按 6.3。源 Job 和 OldJob 的生命周期 metadata、resourceVersion 不相等，不能继续使用整对象相等判断。确认需要完整实时 GET，不使用字段投影；归档身份与冻结业务快照以 apiserver 的持久化迁移记录为准。
 
-`DeleteJob` 必须同时接收 UID 和 resourceVersion，不能暴露无条件删除。Get 返回 Kubernetes 标准读取错误；所有写方法返回的错误必须能通过下列方式读取 Outcome，并保留 `apierrors.IsConflict`、`IsNotFound`、`IsUnauthorized`、`IsForbidden` 和 `IsTooManyRequests` 判断能力：
+`DeleteJob` 必须同时接收 UID 和 resourceVersion，不能暴露无条件删除。Get 返回 Kubernetes 标准读取错误；apiserver 写方法返回的错误必须能通过下列方式读取 Outcome，并保留 `apierrors.IsConflict`、`IsNotFound`、`IsUnauthorized`、`IsForbidden` 和 `IsTooManyRequests` 判断能力。`DeleteJobData` 沿用 Artifact Manager 13.1 的 HTTP 成功与错误契约，不把其错误伪装为 apiserver 的 WriteError：
 
 ```go
 var writeErr *apiserver.WriteError
@@ -112,7 +101,7 @@ if errors.As(err, &writeErr) {
 | Runner | 写 `stage`、`startTime`、`endTime`、`message` 以及正常执行产生的终态 |
 | Job Controller | 仅在 Runner 丢失时写 `phase=Failed`、`endTime`、`message`，保留当前 `stage` |
 
-Job Controller 不修改 `runner` 和 `startTime`。若数据模型包含 Artifact 摘要字段，也必须原样保留。
+Job Controller 不修改 runner 和 startTime。生命周期流程只移除 Job 的 archive 或 OldJob 的 cleanup finalizer，不借此修改 spec/status 或其它 finalizer。上层调用方先中止非终态 Job，确认终态后再删除；Job Controller 不调用 abort。Job 创建时即带 archive finalizer。
 
 终态为：
 
@@ -126,7 +115,7 @@ Job Controller 把 `Succeeded`、`Failed`、`Aborted` 视为终态，不再更�
 
 ### 4.1 队列键
 
-工作队列键统一为：
+Runner 丢失处理使用工作队列键：
 
 ```text
 {namespace}/{name}
@@ -264,59 +253,60 @@ status:
 
 ### 6.2 历史 Job 清理
 
-历史清理仍由 Job Controller 承载，但使用独立串行扫描循环，不共用实时 Job 队列。Controller 启动时扫描一次，每轮结束后等待 24 小时再扫描；不是固定自然日零点执行，扫描周期不开放参数。正常情况下删除最多滞后一个扫描周期及扫描耗时。新增 `--job-history-action=delete|archive` 只选择处理策略，不改变扫描方式。
+历史到期筛选使用独立串行循环：启动时扫描一次，每轮结束后等待 24 小时；不使用非终态 Watch 缓存。依次分页 List Succeeded、Failed、Aborted，每页 500 个，仅取 metadata/status.phase/status.endTime，完整透传 continue，逐页释放。List 失败结束本轮，单个候选失败不阻塞其它候选。
 
-依次按 `status.phase=Succeeded`、`Failed`、`Aborted` 分页 List，每页 500 个，只取 `metadata,status.phase,status.endTime`，完整透传 `continue`。每页处理后释放，不积累全量对象或候选队列。List 失败（包括分页 token 过期）结束本轮，下次从首页重新扫描；单个对象处理失败不阻塞后续对象。每个候选按以下流程处理：
+1. 只处理非零 endTime 且已达到 `endTime + historyRetention` 的终态 Job；默认 720h。缺少 endTime 记录异常，不以创建时间代替。
+2. 已删除中的对象交给生命周期调谐，不重复发起新意图。所有 Job 默认带 archive finalizer，不能用它是否存在判断已开始归档。
+3. GET 最新对象，重新核对 namespace/name/UID、终态、endTime、删除状态和截止时间。
+4. delete 模式携带最新 UID/resourceVersion 发起 Job DELETE，登记 action=delete；后续先归档，再由 OldJob 清理数据。扫描循环不直接清理文件。
+5. archive 模式调用 archive 子资源登记 action=retain，按 6.3 完成源 Job 迁移；保留 OldJob 和制品，不调用普通 Job DELETE 进行迁移收尾。
+6. 明确 404 结束旧候选；Conflict 放弃旧决策。Unknown 读取最新对象确认原意图，不能换 resourceVersion 重放旧删除。失败的未登记候选等待下次每日扫描；已登记候选由生命周期轮询继续。
 
-1. 仅接受 `Succeeded`、`Failed`、`Aborted`；其他 phase 不参与 GC。
-2. `metadata.deletionTimestamp` 非空时不重复删除。
-3. 必须存在非零 `status.endTime`。`endTime` 缺失的终态 Job 记录告警和指标，但不得使用 `creationTimestamp` 或 `resourceVersion` 时间代替，以免误删异常对象。
-4. 计算固定时长截止时间：
+`--job-history-gc-enabled=false` 只停止每日到期筛选，不停止 Runner 丢失处理、已受理删除或归档。修改 history-action 只影响新候选，不改变已登记 action；后续显式 DELETE 可以按 apiserver 契约将 retain 升级为 delete。扫描使用 Manager context，退出时等待本地循环结束，不把取消请求等同于服务端未执行。
 
-```text
-deleteAfter = status.endTime + jobHistoryRetention
-```
+### 6.3 归档调谐与恢复
 
-默认 `jobHistoryRetention=720h`，即 30×24 小时，不表达自然月。
+archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归档已经开始或允许清理数据的标记。归档 action、冻结快照和跨实例写屏障统一见 [apiserver](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
 
-5. 截止时间未到时跳过，等待下次扫描，不登记延迟任务。
-6. 截止时间到达后，GET apiserver 中的最新 Job，重新校验 namespace、name、UID、phase、`endTime`、deletionTimestamp 和截止时间。
-7. `delete` 模式直接进入删除；`archive` 模式先执行 6.3 的归档确认，只有确认同一完整快照已持久化才进入删除。归档模式遇到含 finalizers 的对象记录并跳过，避免将删除后的 finalizer 更新遗漏在归档之外。
-8. 使用下列删除前置条件调用 Job DELETE；archive 模式的 UID/resourceVersion 必须对应已确认的归档快照，不能仅刷新 resourceVersion 后重放删除：
+1. 仅处理已删除中的源 Job。GET 最新对象及迁移记录，确认 UID/action；记录缺失视为契约异常，不从 deletionTimestamp 推导 retain/delete。
+2. 核验源 Job 为终态且 endTime 非零，再请求归档。非终态删除由 apiserver 拒绝，上层负责先调用 abort 并确认终态；若发现异常的非终态删除对象，记录错误并保留对象，不自动中止。停止写入由上层业务保证。删除所需归档不被父 Build 删除或缺失阻断。
+3. 调用 archive 子资源冻结或恢复同一快照；确认 ES 持久化及 create-only/删除凭据保护。源 Job 仍受 archive finalizer 保护，此分支永不调用 DeleteJobData。
+4. 读取最新 action：retain 保留 OldJob；delete 对同 UID OldJob 发起条件 DELETE，并确认其删除标记。若 OldJob 已删除中不重复请求；读取失败或身份不符保留源对象。
+5. 以最新源版本移除 archive finalizer，保留其它条目；源对象已经删除中，不再发送普通 Job DELETE。若并发 DELETE 将 retain 升级为 delete，旧版本收尾必须冲突并重新处理，不能漏掉 OldJob 删除。
+6. 等待源 Job 真正消失。OldJob 删除标记已持久化时，由 6.4 继续处理；源消失后重启也不丢失清理入口。
 
-```yaml
-preconditions:
-  uid: <latest-job-uid>
-  resourceVersion: <latest-job-resource-version>
-```
-
-9. 删除成功或返回 404 时结束。UID/resourceVersion 前置条件冲突时记录并留待下次每日扫描，不放宽条件重试。
-10. 删除请求超时或结果未知时先 GET 相同名称：对象不存在则视为删除成功；对象仍存在且符合清理条件时记录并留待下次扫描，不重复旧删除请求。其他读取、删除错误同样记录后继续处理下一对象。archive 模式下次扫描必须重新完成最新版本的归档确认。
-
-GC 只删除 Job API 对象。Artifact Manager 中的日志、产物和清单可能具有不同的合规及存储保留要求，Job Controller 不调用 Artifact Manager，也不把 Job 删除成功解释为 Artifact 可以同步删除。
-
-终态 Job 的 `endTime` 由产生终态的 Runner 或 Job Controller 写入。删除前必须 GET 最新对象并重新校验全部 GC 条件，使用最新 UID/resourceVersion 作为删除前置条件，不基于分页摘要直接删除。
-
-`--job-history-gc-enabled=false` 时不启动历史扫描循环；Runner 丢失处理不受影响。扫描使用 Manager context，退出时取消在途请求并等待扫描循环结束。
-
-### 6.3 归档确认与恢复
-
-对 6.2 中重新 GET 并确认到期的 Job，调用 `/jobs/{name}/archive`。只有归档成功响应或 `GetOldJob` 确认对象与本次源 Job 的 namespace/name/UID/resourceVersion、完整 metadata/spec/status 语义相同时，才允许执行该版本的条件删除。不得仅凭归档对象存在、名称相同或 phase 相同就删除。
-
-| 归档结果 | 本轮处理 |
+| 操作结果 | 本轮处理 |
 | --- | --- |
-| 完整 200，快照校验一致 | 执行条件 DELETE |
-| 明确 404 | 源 Job 已不存在，结束当前候选；不使用客户端旧快照补写 ES |
-| 明确 409/412 | 放弃旧版本；记录并等待下次扫描重新 GET、重新归档 |
-| 明确 400/401/403/422 或其他永久拒绝 | 记录请求、权限或对象异常，保留源 Job，继续下一个候选 |
-| WriteRejected 的 429/5xx，或 WriteNotSent | 保留源 Job，按错误分类记录，继续下一个候选；下一次扫描重试 |
-| WriteUnknown、普通未分类 error 或异常成功响应 | Manager context 有效时执行一次完整 `GetOldJob`；否则交给重启扫描 |
+| 完整 200，归档身份及冻结内容确认通过 | 下一轮读取持久化迁移状态，按最新 action 保留或标记删除 OldJob，再推进源 finalizer 收尾 |
+| 源 Job 404 | 结束对源对象的修改；归档完成需由持久化迁移结果确认，不能仅凭 404 推断 |
+| Conflict | 放弃旧版本，重新读取并恢复同一意图 |
+| WriteRejected 的权限、参数或契约错误 | 告警并保留 archive finalizer，后续轮询允许修复后继续 |
+| 临时错误、WriteNotSent 的临时错误 | 退避重试，不降级为直接删除 |
+| WriteUnknown 或异常成功响应 | 下轮读取原对象及持久化迁移阶段，必要时恢复相同快照；未确认前不移除 archive finalizer |
 
-写错误先按 `WriteError.Outcome` 分流，只有明确拒绝才按 HTTP 状态处理；不能仅凭 5xx 将已发送但结果未知的写入当成拒绝。Unknown 确认只有精确匹配本次快照才成功。404、UID/版本/内容不同、确认读取失败均不得删除；记录并等下次扫描，不立即重放归档请求。较新归档也不直接用于删除旧请求版本，下一次以源 Job 最新状态重算。记录永久错误不结束整个扫描；恢复配置或权限后，后续每日扫描仍可处理保留的对象。
+归档安全性由服务端冻结快照、create-only 写入及删除凭据保证，不通过客户端超时或内存队列判断在途请求已经结束。重启后继续原意图，不根据新的 GC 策略替换冻结快照。
 
-归档成功后进程退出、DELETE 未发送或删除失败：源 Job 保留，下次扫描重复归档同版本时由服务端返回已有快照，再执行条件删除。归档快照和源 Job 暂时同时存在是允许的；跨存储不承诺原子迁移。多个 Controller 实例可能同时扫描，依靠服务端幂等归档和条件删除保证正确性，不依赖进程内锁。
+父 Build 删除中或缺失时拒绝新 retain 意图，但允许 delete 意图所需的归档及已有迁移恢复；停止写入和输入使用者排空由上层业务保证。
 
-归档 backlog 不常驻内存；失败对象通过下次每日扫描重试，没有额外的 per-Job 队列。ES 持续不可用时 archive 模式绝不降级成直接删除，应通过归档失败指标及 etcd 容量告警处理。运维显式切换为 delete 模式会放弃尚未归档对象的历史保存保证，已有归档保留。
+### 6.4 OldJob 数据清理
+
+本节与 6.3 共用独立生命周期队列，键为 `{resource}/{project}/{name}`，resource 仅为 jobs/oldjobs；同名 Job 和 OldJob 不合并成一个队列项。原 Runner 丢失队列仍使用 `{project}/{name}`。
+
+启动时及每轮轮询完成后 10 秒扫描一次，周期为内部常量。分别分页查询 deletionTimestamp 非空的 Job/OldJob，仅取 metadata，每页 500 个；两种迁移入口都设置源删除标记，不需要按 archive finalizer 或终态 phase 扫描全部历史对象。不常驻完整历史对象，不注册 OldJob Watch；查询失败下次从首页重试，不影响已入队对象。
+
+调谐按以下顺序执行：
+
+1. GET 当前资源，核对 UID；不存在或 UID 变化结束旧周期。删除中的 Job 只进入 6.3，不执行文件清理。
+2. 仅 OldJob 的 deletionTimestamp 非空且带 cleanup finalizer 时执行本流程。没有自身 finalizer 时不接管其它清理；Job 带 cleanup 或 OldJob 带 archive 均属于契约异常，保留并告警。
+3. 上层业务须保证已停止上传/签名、排空物化等输入使用者。Job API 终态（尤其 Aborted、RunnerLost）本身不证明容器和在途上传已停止；本轮不提供独立停止确认字段，不以删除文件强制中止业务。
+4. 通过 GET archive 确认同 UID 的迁移阶段为 Transferred，即归档已确认且源 Job 不存在。迟到归档写入由服务端删除凭据阻断。缺失记录、读取失败或未完成迁移都保留对象，不能只凭源 Job GET 404 开始清理。
+5. 从对象固化的 `ebs.io/artifacts` 和 Config/services 解析实例，调用 [Artifact Manager 13.1](artifact-manager.md#131-job-数据同步删除)。只接受完整 204 作为完成；Unknown 可重复该幂等 DELETE，HTTP 404 不是数据不存在的成功回执。
+6. 清理成功后以本轮已读取的 UID/resourceVersion 调用 finalizers，服务端重新核验删除状态与迁移完成。Conflict 或 Unknown 下轮重新 GET 并判定，允许重复幂等清理；不得仅替换版本重放旧对象。
+7. 保留其它 finalizer、业务状态和实例归属。不删除过程仓、发布仓及 current；数据已清理但 API 更新失败时允许短暂出现 API 仍在而文件不存在，下轮重复清理即可。
+
+临时故障使用队列退避及合法 Retry-After；永久权限/契约错误记录告警并保留 finalizer，周期轮询使修复后仍可继续。一个 Job 失败不阻塞其它 Job。日志分别记录意图已受理、数据清理成功和 API 对象真正删除，不能将 DELETE 的 2xx 等同于最终清理完成。
+
+停止写入仍是上层业务前提；Artifact Manager 的幂等删除不提供上传写入隔离。ES 删除凭据只保护归档元数据，不阻止 Runner 重新上传文件。
 
 ## 七、并发与一致性
 
@@ -350,7 +340,7 @@ Job、Runner 和上层 Controller 都可能更新对象。Job Controller 必须�
 
 若未来必须消除此窗口，需要由 apiserver 提供能够原子校验 Runner 身份、phase 或版本的专用 Job 状态迁移接口；仅增加客户端 GET 次数无法形成事务保证。
 
-Job 主动中止能力实施时增加 apiserver 终态 status 保护，统一见 [Job 主动中止](ebs-apiserver.md#job-主动中止)，不扩展为完整非终态迁移矩阵。Job Controller 在 RunnerLost 写 Failed 前及 Conflict/Unknown 确认时重新核验 Job；发现 Aborted 或其它终态后结束本轮，不覆盖中止原因和 endTime。Job 中止由专用 API 执行，本控制器不新增中止写入或级联中止父 Build 的能力；终态 Job 继续按既有历史保留策略处理。
+apiserver 的终态 status 保护见 [Job 主动中止](ebs-apiserver.md#job-主动中止)。Job Controller 在 RunnerLost 写 Failed 前及 Conflict/Unknown 确认时重新核验 Job；发现终态后不覆盖原原因和 endTime。删除流程不执行中止操作，终态前置要求见 6.3。
 
 ### 7.4 完整错误矩阵
 
@@ -379,11 +369,11 @@ Runner GET 只有 2xx 的非 Offline 对象、2xx 的 Offline 对象和 404 能�
 
 #### 7.4.2 明确收到写响应
 
-非 2xx 行对应 `WriteRejected`，其中 404 的业务语义按操作区分。历史扫描不使用 BaseController 重试队列，删除失败统一按 6.2 延后处理：
+非 2xx 行对应 `WriteRejected`，其中 404 的业务语义按操作区分。历史扫描中尚未登记意图的候选失败按 6.2 延后处理；已经登记的删除/归档按 6.3、6.4 的生命周期队列重试。下表的 Job 删除列仅指每日扫描发起 DELETE：
 
 | HTTP 结果 | status 更新 | Job 删除 |
 |-----------|-------------|----------|
-| 完整 2xx 且成功响应校验通过 | 清理宽限期记录，记录成功日志和指标，成功结束 | 记录删除日志和指标，成功结束；存在 finalizer 时由后续扫描观察 |
+| 完整 2xx 且成功响应校验通过 | 清理宽限期记录，记录成功日志和指标，成功结束 | 记录删除已受理；存在 finalizer 时交给生命周期调谐，不记录最终清理完成 |
 | 2xx 但响应为空、解码失败或成功对象校验失败 | WriteUnknown，进入 7.4.4 | DELETE 的完整空 2xx 响应合法并视为成功；响应截断或无法确认完整响应时为 WriteUnknown |
 | 400、405、410、422、其他未单列 4xx | PermanentError，记录请求或 API 契约错误 | PermanentError，记录请求或 API 契约错误 |
 | 401、403 | PermanentError，记录鉴权失败 | PermanentError，记录鉴权失败 |
@@ -470,7 +460,7 @@ status 更新结果未知后执行 Job GET：
 | `--job-runner-lost-grace-period` | `5m` | Runner 已删除或明确 Offline 后，Job 失败收敛前的宽限期 |
 | `--job-history-gc-enabled` | `true` | 是否清理超过保留期的终态 Job |
 | `--job-history-retention` | `720h` | 从终态 Job 的 `status.endTime` 起计算的历史保留时长，必须大于 0 |
-| `--job-history-action` | `delete` | `delete` 直接删除；`archive` 确认 ES 归档后删除；其他值启动时报错 |
+| `--job-history-action` | `delete` | 两者都先归档并移除源 Job；delete 继续删除 OldJob 和数据，archive 保留；其他值启动时报错 |
 
 Go 配置增加 `JobControllerOptions.HistoryAction` 并传入 Job Controller `Config.HistoryAction`；GC 关闭时 action 不执行，但参数仍校验合法。保留期控制在 etcd 中的停留时长，不是 ES 归档的 TTL。
 
@@ -479,12 +469,15 @@ Job Controller 所需最小权限：
 ```text
 jobs:        get, list, watch, delete
 jobs/status: get, update
-jobs/archive: create       # archive 模式新增
-oldjobs:     get           # archive 结果确认
+jobs/archive: get, create  # 迁移确认和意图恢复
+oldjobs:     get, list, delete # 归档确认及删除意图接力
+jobs/finalizers: update
+oldjobs/finalizers: update
+builds:      get           # 归档前检查父 Build 删除标记
 runners:     get, list, watch
 ```
 
-权限严格限制在上述操作：Controller 不能创建 Job、更新 Runner 或 Runner status；归档写入通过专用子资源完成。Job 删除权限仅用于按第六节规则清理过期终态对象。
+Controller 不创建 Job、不更新 Runner；归档写入通过专用子资源完成。Job DELETE 仅用于登记删除意图，源迁移收尾使用 finalizers 子资源；OldJob DELETE 用于移交 delete 意图，数据清理仅在 OldJob 分支执行。
 
 ## 十、可观测性
 
@@ -500,7 +493,7 @@ job_controller_runner_lost_failures_total
 job_controller_status_update_conflicts_total
 job_controller_status_update_unknown_total
 job_controller_history_gc_scheduled
-job_controller_history_deleted_total
+job_controller_history_delete_requests_total
 job_controller_history_missing_end_time_total
 job_controller_history_delete_unknown_total
 job_controller_history_archive_confirmed_total
@@ -528,7 +521,7 @@ job_controller_history_archive_error_total
 
 ### 11.1 单元测试
 
-- Pending、终态、未绑定和正在删除的 Job 均不处理；
+- Runner 丢失分支跳过 Pending、终态、未绑定和删除中的 Job；生命周期分支仍处理终态删除和已登记归档；
 - Runner 可用时清除旧宽限期；
 - Runner Offline 和删除进入宽限期，到期前返回正确的 `RequeueAfter`；
 - FakeClock 推进能够确定性触发宽限期和历史 GC，不依赖真实 sleep；
@@ -550,9 +543,9 @@ job_controller_history_archive_error_total
 - 写方法返回普通 error、`(nil, nil)` 或异常成功对象时按 Client 契约违例进入确认流程；
 - Manager context 取消后不启动 Unknown 确认请求，重启后的初始 List 可以继续收敛；
 - 关闭 GC 后不启动历史扫描；启动扫描、24 小时间隔、分页续读、失败后继续扫描和取消退出均可测试；
-- delete 模式不调用归档；archive 模式严格遵守 6.3 的确认矩阵，任何未确认写入均保留源 Job；
-- 归档成功但删除失败后可重入；同版本重试、较新源版本重新归档、并发扫描和重启均保持条件删除；
-- archive 模式下 finalizers、永久拒绝和持续 ES 故障会保留源对象并产生可观测记录，不阻塞其他候选；
+- delete/archive 两种模式均调用归档；分别删除/保留 OldJob，任何未确认写入均保留源 Job；
+- 归档成功但源删除失败后可重入；生命周期版本变化不替换冻结快照，并发扫描和重启均保持条件删除；
+- Job 默认 archive、OldJob 默认 cleanup，不存在类型切换；两种策略遇到持续 ES 故障均保留源对象，不阻塞其它候选；
 - 多 worker 并发和 `go test -race` 下索引、观察 map 无竞态。
 
 ### 11.2 集成测试
@@ -565,9 +558,31 @@ job_controller_history_archive_error_total
 - Runner 丢失超过宽限期时 Job 进入 Failed，并保留已有结果和计数字段；
 - Runner 与 Job watch 重连、410 relist、resync 不会重复覆盖状态；
 - 在 Scheduler、Runner 和 Controller 均遵守终态不回退约定时，Runner 完成 Job 与 Controller 标记失败的并发更新最终保持终态；
-- Watch 仅缓存非终态 Job；历史终态 Job 在启动及每日分页扫描中处理，不进入长期缓存或延迟队列；
+- Watch 仅缓存非终态 Job；历史到期筛选每天扫描，删除/已登记归档由独立轮询发现，只缓存候选键；
 - 超过 30 天的终态 Job 被删除，未到期或缺少 `endTime` 的对象被保留；
 - Job 同名删除重建以及删除前发生状态变化时，删除前置条件可以防止误删；
 - 删除请求结果未知时通过 GET 收敛，不产生紧密重复删除；
 - controller-manager 重启后能够从初始 List 重建索引并重新开始安全宽限期；
 - 认证失败不产生紧密重试，也不由单个对象错误改变 Controller 健康状态；临时网络错误能够恢复。
+
+### 11.3 删除与归档协议验收
+
+| 场景 | 验收要求 | 验证层级 |
+| --- | --- | --- |
+| 两类对象默认值及意图登记 | Job archive、OldJob cleanup；默认条目不触发迁移；意图与源删除标记原子落库 | apiserver 事务集成测试 |
+| DELETE 先到、retain 先到、源收尾并发 | delete 不降级；retain 可升级；源分支从不调用 Artifact Manager | 并发测试 |
+| 普通 Job 与 OldJob 删除 | Job 必须先归档；仅 OldJob 清理数据；普通 DELETE 不更改业务状态 | Controller 单元测试 |
+| 非终态 Job、ES 不可用 | apiserver 拒绝非终态 DELETE；上层中止并确认终态后再删除；ES 不可用时保留源，恢复后继续 | 集成测试 |
+| AM 204、503、404、响应丢失 | 204 推进；其它结果保留恢复入口；重试同一 Job 作用域 | HTTP 故障注入 |
+| Job 已终态但仍有上传/输入使用者 | 上层必须先停止并排空，再允许删除；本轮没有 Runner 停止确认协议 | 跨组件集成测试 |
+| archive ES 成功、源 finalizer 收尾失败 | 重入恢复同一快照；源仍在时不清理产物和日志 | etcd/ES/AM 集成测试 |
+| OldJob 提前删除、源有其它 finalizer | OldJob 等待源消失；源归档不等待 OldJob 清理，不形成死锁 | Controller 集成测试 |
+| 父 Build 删除中或缺失 | 阻止新 retain，允许删除必需的归档及已有意图恢复 | apiserver 集成测试 |
+| 同名源与归档对象 | 队列键区分资源；UID/实例不匹配时保留并告警 | 单元测试 |
+| 终态删除与 retain 迁移 | 两者均有删除标记；生命周期轮询可发现；普通 Job 的默认 finalizer 不造成入队；GC 关闭仍推进 | 轮询集成测试 |
+| OldJob 删除标记确认后、源消失后立即重启 | 从 OldJob 恢复清理；retain 则继续保留，不靠内存判断 | 进程重启测试 |
+| 冻结意图、ES 写入、数据清理、finalizer 更新各阶段重启 | 恢复原意图，通过 UID 和摘要确认冻结快照；持久化凭据阻断迟到归档；成功清理可重复 | 进程重启故障注入 |
+| 多 apiserver 归档请求延迟落库 | 旧执行者被 fencing 阻断；OldJob 清理后没有迟到重建 | 实际服务故障注入 |
+| 数据文件与仓库硬链接 | 仅删 Job 目录；过程仓和发布仓仍可下载，repodata 不变 | AM 联动测试 |
+
+单元测试已覆盖状态机和失败恢复；实际多进程、etcd/ES 故障注入及停止上传的业务保证仍需部署环境验收。

@@ -1565,11 +1565,11 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 
 文件删除不持 Store 全局锁；成功后加锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
 
-上层接入契约（待实现）：业务删除采用“清理 Job 数据 → 条件删除 Job/OldJob API 对象”的顺序。清理失败或结果未知时保留 API 对象以便重试；清理成功后 API 删除失败，下轮允许重复清理。该顺序不是跨服务事务，可能暂时出现 API 对象仍在但日志/下载已不可用，不回滚重建文件。dry-run 不调用清理接口。
+上层接入契约：Job 删除先归档到 OldJob，源 Job 不调用本接口。只有删除中的 OldJob，确认源迁移完成、停止写入及输入使用者排空后，由 Job Controller 调用本接口；204 确认后移除 OldJob 的 `ebs.io/job-artifacts-cleanup`。失败或未知时保留 OldJob 和 finalizer，允许幂等重试。apiserver 不直接连接 Artifact Manager。数据清理后 API 对象可能暂时仍在，不回滚重建文件；dry-run 不调用本接口。
 
-唯一迁移例外：归档 Job 到 OldJob 后删除源 Job，属于存储迁移，跳过 Job 数据清理；之后删除 OldJob 才执行上述业务删除协议。仅看到 Job DELETE 或 Watch 删除事件不足以区分两者，不能以通用删除通知隐式触发清理。
+源 Job 默认带 `ebs.io/job-archive`，迁移意图另外持久化：retain 保留 OldJob 和数据，delete 继续删除 OldJob。两种情况都不在源 Job 分支调用本接口；OldJob 数据删除须等源 Job 消失且归档已确认，迟到归档请求由持久化删除凭据阻断。协议统一见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)，不能从普通 DELETE 或 Watch 删除事件推断归档已完成。
 
-接口测试覆盖精确作用域及重复删除、正文/签名副本/临时文件/日志/元数据完整清理、仓库硬链接及 repodata 不变、文件系统失败后重试、重启后清理残留、符号链接边界和订阅状态释放。上层接入后补齐清理失败不删除 API 对象、Job/OldJob 共用协议及归档迁移保留数据的联动验收。
+接口测试覆盖精确作用域及重复删除、正文/签名副本/临时文件/日志/元数据完整清理、仓库硬链接及 repodata 不变、文件系统失败后重试、重启后清理残留、符号链接边界和订阅状态释放。上层按 [Job Controller 验收矩阵](controller-manager~job-controller.md#113-删除与归档协议验收) 验证清理失败保留 finalizer、成功清理可重试、源 Job 迁移不调用本接口、仅 OldJob 删除触发清理，以及清理后没有迟到上传。
 
 ## 十四、与 Job Status 的关系
 
