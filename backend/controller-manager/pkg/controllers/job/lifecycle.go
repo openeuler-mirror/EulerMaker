@@ -84,16 +84,14 @@ func (c *Controller) syncLifecycle(ctx context.Context, key string) (controller.
 	if err != nil {
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
-	if err := validateJobResponse(job, project, name); err != nil {
-		return controller.ReconcileResult{}, err
-	}
 	if job.DeletionTimestamp == nil {
 		return controller.ReconcileResult{}, nil
 	}
+	var progressed bool
 	if kind == "oldjobs" {
 		err = c.cleanupOldJob(ctx, job)
 	} else {
-		err = c.migrateJob(ctx, job)
+		progressed, err = c.migrateJob(ctx, job)
 	}
 	if err != nil {
 		// All operations are idempotent; re-read authoritative state before any further decision.
@@ -119,47 +117,52 @@ func (c *Controller) syncLifecycle(ctx context.Context, key string) (controller.
 		}
 		return controller.ReconcileResult{}, err
 	}
-	return controller.ReconcileResult{RequeueAfter: lifecyclePollInterval}, nil
+	// Continue confirmed progress immediately; polling discovers external changes and unfinished transfers.
+	return controller.ReconcileResult{Requeue: progressed}, nil
 }
 
-func (c *Controller) migrateJob(ctx context.Context, job *ebsv1.Job) error {
+func (c *Controller) migrateJob(ctx context.Context, job *ebsv1.Job) (bool, error) {
+	if !slices.Contains(job.Finalizers, ebsv1.JobArchiveFinalizer) {
+		return false, nil
+	}
 	if !job.Status.Phase.IsTerminal() {
-		return controller.NewPermanentError(fmt.Errorf("deleting Job %s/%s is not terminal", job.Namespace, job.Name))
+		return false, controller.NewPermanentError(fmt.Errorf("deleting Job %s/%s is not terminal", job.Namespace, job.Name))
 	}
 	if job.Status.EndTime.IsZero() {
-		return fmt.Errorf("terminal deleting Job %s/%s has no endTime", job.Namespace, job.Name)
+		return false, fmt.Errorf("terminal deleting Job %s/%s has no endTime", job.Namespace, job.Name)
 	}
 	state, err := c.client.GetArchiveState(ctx, job.Namespace, job.Name)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if state.UID != string(job.UID) {
-		return fmt.Errorf("archive UID mismatch for %s/%s", job.Namespace, job.Name)
+		return false, fmt.Errorf("archive UID mismatch for %s/%s", job.Namespace, job.Name)
 	}
 	if state.Phase == "Pending" {
 		_, err := c.client.ArchiveJob(ctx, job.Namespace, job.Name, clientpkg.DeletePreconditions{UID: job.UID, ResourceVersion: job.ResourceVersion})
-		return err
+		return err == nil, err
 	}
 	if state.Phase != "Stored" {
-		return fmt.Errorf("source Job still exists in archive phase %s", state.Phase)
+		return false, fmt.Errorf("source Job still exists in archive phase %s", state.Phase)
 	}
 	if state.Action == "delete" {
 		old, err := c.client.GetOldJob(ctx, job.Namespace, job.Name)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if old.UID != job.UID {
-			return fmt.Errorf("OldJob UID mismatch")
+			return false, fmt.Errorf("OldJob UID mismatch")
 		}
 		if old.DeletionTimestamp == nil {
-			return c.client.DeleteOldJob(ctx, old)
+			err := c.client.DeleteOldJob(ctx, old)
+			return err == nil, err
 		}
 	}
 	if err := c.client.FinalizeJob(ctx, job, false); err != nil {
-		return err
+		return false, err
 	}
 	log.Printf("controller=%s key=%s/%s action=%s reason=JobArchiveFinalized", Name, job.Namespace, job.Name, state.Action)
-	return nil
+	return false, nil
 }
 
 func (c *Controller) cleanupOldJob(ctx context.Context, job *ebsv1.Job) error {

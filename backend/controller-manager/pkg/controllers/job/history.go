@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	ebsv1 "ebs-api/ebs/v1"
@@ -20,19 +20,16 @@ const (
 )
 
 // archiveHistory starts migration; the lifecycle loop finishes it without issuing a delete intent.
-func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) (bool, error) {
-	deferred := func(result string, err error) (bool, error) {
+func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) error {
+	deferred := func(result string, err error) error {
 		historyArchive[result].Inc()
 		log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchiveDeferred error=%v",
 			Name, job.Namespace, job.Name, job.UID, job.ResourceVersion, err)
-		return false, err
+		return err
 	}
-	archived, err := c.client.ArchiveJob(ctx, job.Namespace, job.Name, clientpkg.DeletePreconditions{
+	_, err := c.client.ArchiveJob(ctx, job.Namespace, job.Name, clientpkg.DeletePreconditions{
 		UID: job.UID, ResourceVersion: job.ResourceVersion,
 	})
-	if err == nil && !sameArchivedJob(job, archived) {
-		err = writeUnknown("archive", fmt.Errorf("archive response does not match source snapshot"))
-	}
 	if err != nil {
 		// An accepted request leaves a deleting Job for the lifecycle poller, including after a lost response.
 		result := "unknown"
@@ -48,14 +45,56 @@ func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) (bool, 
 	historyArchive["confirmed"].Inc()
 	log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchived",
 		Name, job.Namespace, job.Name, job.UID, job.ResourceVersion)
-	return true, nil
+	return nil
 }
 
-func sameArchivedJob(source, archived *ebsv1.Job) bool {
-	return source != nil && archived != nil &&
-		source.Namespace == archived.Namespace && source.Name == archived.Name && source.UID == archived.UID && archived.ResourceVersion != "" &&
-		equality.Semantic.DeepEqual(source.Spec, archived.Spec) &&
-		equality.Semantic.DeepEqual(source.Status, archived.Status)
+// reconcileHistory only registers intent; lifecycle polling resumes accepted requests, including unknown writes.
+func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *ebsv1.Job, now time.Time) error {
+	if !c.config.HistoryGCEnabled || !cached.Status.Phase.IsTerminal() || cached.DeletionTimestamp != nil {
+		return nil
+	}
+	if cached.Status.EndTime.IsZero() {
+		historyMissingEndTime.Inc()
+		log.Printf("controller=%s key=%s uid=%s reason=HistoryMissingEndTime", Name, key, cached.UID)
+		return nil
+	}
+	if !eligibleForDeletion(cached, now, c.config.HistoryRetention) {
+		return nil
+	}
+	latest, err := c.client.GetJob(ctx, cached.Namespace, cached.Name)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if latest.UID != cached.UID || !eligibleForDeletion(latest, now, c.config.HistoryRetention) {
+		return nil
+	}
+	if c.config.HistoryAction == "archive" {
+		return c.archiveHistory(ctx, latest)
+	}
+	err = c.client.DeleteJob(ctx, latest.Namespace, latest.Name, clientpkg.DeletePreconditions{
+		UID: latest.UID, ResourceVersion: latest.ResourceVersion,
+	})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		var write *clientpkg.WriteError
+		if !errors.As(err, &write) || write.Outcome == clientpkg.WriteUnknown {
+			historyDeleteUnknown.Inc()
+			log.Printf("controller=%s key=%s uid=%s reason=HistoryDeleteUnknown error=%v", Name, key, latest.UID, err)
+		}
+		return err
+	}
+	historyDeletionRequested.Inc()
+	log.Printf("controller=%s key=%s uid=%s resourceVersion=%s reason=HistoryJobDeletionRequested", Name, key, latest.UID, latest.ResourceVersion)
+	return nil
+}
+
+func eligibleForDeletion(job *ebsv1.Job, now time.Time, retention time.Duration) bool {
+	return job != nil && job.DeletionTimestamp == nil && job.Status.Phase.IsTerminal() && !job.Status.EndTime.IsZero() && !job.Status.EndTime.Time.Add(retention).After(now)
 }
 
 // Run keeps history scanning separate from the live Job queue and waits for both on shutdown.
@@ -118,8 +157,7 @@ func (c *Controller) scanHistory(ctx context.Context) error {
 					return fmt.Errorf("unexpected historical Job response: %T", obj)
 				}
 				key := job.Namespace + "/" + job.Name
-				result, err := c.reconcileHistory(ctx, key, job, now)
-				if err != nil || result.Requeue || result.RequeueAfter > 0 {
+				if err := c.reconcileHistory(ctx, key, job, now); err != nil {
 					// The next daily scan rechecks current state; never retain or replay a stale delete request.
 					log.Printf("controller=%s key=%s reason=HistoryDeleteDeferred error=%v", Name, key, err)
 				}
