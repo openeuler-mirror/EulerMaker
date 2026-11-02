@@ -24,6 +24,7 @@ type Manager struct {
 	materializer       Materializer
 	mu                 sync.RWMutex
 	records            map[string]*RepositoryRecord
+	metadataPaths      map[string]string
 	queued             map[string]bool
 	running            map[string]bool
 	queue              chan string
@@ -32,10 +33,8 @@ type Manager struct {
 }
 
 func NewManager(root string, c Config, materializer Materializer, signingFingerprint string) (*Manager, error) {
-	for _, dir := range []string{"repositories", ".repository-work", ".metadata/repositories", ".repository-trash"} {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0750); err != nil {
-			return nil, err
-		}
+	if err := os.MkdirAll(filepath.Join(root, "repositories"), 0750); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
@@ -98,40 +97,26 @@ func (m *Manager) recover(workTTL time.Duration) error {
 		}
 		delete(m.records, uid)
 	}
-	entries, err := os.ReadDir(filepath.Join(m.root, ".repository-work"))
-	if err != nil {
-		return err
-	}
-	cutoff := now.Add(-workTTL)
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err == nil && info.ModTime().Before(cutoff) {
-			_ = os.RemoveAll(filepath.Join(m.root, ".repository-work", entry.Name()))
-		}
-	}
-	return nil
+	return fileutil.CleanupRepositoryWork(m.root, ".repository-work", now.Add(-workTTL))
 }
 
 func (m *Manager) load() error {
-	entries, err := os.ReadDir(filepath.Join(m.root, ".metadata/repositories"))
+	paths, err := fileutil.RepositoryMetadataPaths(m.root, "repositories")
 	if err != nil {
 		return err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		uid := entry.Name()[:len(entry.Name())-len(".json")]
+	m.metadataPaths = paths
+	for uid, path := range paths {
 		state, err := m.scanRecord(uid)
 		if err != nil {
-			return fmt.Errorf("load repository metadata %s: %w", entry.Name(), err)
+			return fmt.Errorf("load repository metadata %s: %w", path, err)
 		}
 		if state != RepositoryCreating && state != RepositoryDeleting {
 			continue
 		}
 		record, err := m.readRecord(uid)
 		if err != nil {
-			return fmt.Errorf("load repository metadata %s: %w", entry.Name(), err)
+			return fmt.Errorf("load repository metadata %s: %w", path, err)
 		}
 		if record == nil {
 			continue
@@ -153,17 +138,24 @@ func (m *Manager) scanRecord(uid string) (RepositoryState, error) {
 	}
 	var header struct {
 		RepositoryUID string          `json:"repositoryUID"`
+		Project       string          `json:"project"`
+		TargetArch    string          `json:"targetArch"`
 		State         RepositoryState `json:"state"`
 	}
 	decodeErr := json.NewDecoder(file).Decode(&header)
 	closeErr := file.Close()
-	if decodeErr != nil || closeErr != nil || header.RepositoryUID != uid || header.State == "" {
+	if decodeErr != nil || closeErr != nil || header.RepositoryUID != uid || header.State == "" ||
+		!validIdentifier(header.Project) || !validIdentifier(header.TargetArch) ||
+		m.metaPath(uid) != m.recordMetaPath(&RepositoryRecord{RepositoryUID: uid, Project: header.Project, TargetArch: header.TargetArch}) {
 		return "", fmt.Errorf("invalid repository metadata for %s", uid)
 	}
 	return header.State, nil
 }
 
 func (m *Manager) readRecord(uid string) (*RepositoryRecord, error) {
+	if m.metaPath(uid) == "" {
+		return nil, nil
+	}
 	file, err := os.Open(m.metaPath(uid))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -174,7 +166,8 @@ func (m *Manager) readRecord(uid string) (*RepositoryRecord, error) {
 	var record RepositoryRecord
 	decodeErr := json.NewDecoder(file).Decode(&record)
 	closeErr := file.Close()
-	if decodeErr != nil || closeErr != nil || record.RepositoryUID != uid {
+	if decodeErr != nil || closeErr != nil || record.RepositoryUID != uid ||
+		!validIdentifier(record.Project) || !validIdentifier(record.TargetArch) || m.metaPath(uid) != m.recordMetaPath(&record) {
 		return nil, fmt.Errorf("invalid repository metadata for %s", uid)
 	}
 	if record.State == RepositoryReady {
@@ -486,7 +479,7 @@ func (m *Manager) remove(uid string) {
 		return
 	}
 	source := m.RepositoryPath(record)
-	trashDir := filepath.Join(m.root, ".repository-trash", record.Project, record.TargetArch)
+	trashDir := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, ".repository-trash")
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -498,8 +491,11 @@ func (m *Manager) remove(uid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if record := m.records[uid]; record != nil && record.State == RepositoryDeleting {
-		_ = os.Remove(m.metaPath(uid))
+		if err := os.Remove(m.metaPath(uid)); err != nil && !os.IsNotExist(err) {
+			return
+		}
 		delete(m.records, uid)
+		delete(m.metadataPaths, uid)
 	}
 }
 
@@ -508,7 +504,18 @@ func (m *Manager) persist(record *RepositoryRecord) error {
 	// state in metadata, otherwise every completed repository duplicates it.
 	light := *record
 	light.RPMs = nil
-	return fileutil.AtomicJSON(m.metaPath(record.RepositoryUID), &light)
+	path := m.recordMetaPath(record)
+	if previous := m.metaPath(record.RepositoryUID); previous != "" && previous != path {
+		return errors.New("repository metadata scope changed")
+	}
+	if err := fileutil.AtomicJSON(path, &light); err != nil {
+		return err
+	}
+	if m.metadataPaths == nil {
+		m.metadataPaths = make(map[string]string)
+	}
+	m.metadataPaths[record.RepositoryUID] = path
+	return nil
 }
 
 func (m *Manager) RepositoryPath(record *RepositoryRecord) string {
@@ -520,7 +527,12 @@ func VersionPath(root, project, arch, buildName, uid string) string {
 }
 
 func (m *Manager) metaPath(uid string) string {
-	return filepath.Join(m.root, ".metadata/repositories", uid+".json")
+	return m.metadataPaths[uid]
+}
+
+func (m *Manager) recordMetaPath(record *RepositoryRecord) string {
+	return filepath.Join(m.root, "repositories", record.Project, record.TargetArch,
+		".metadata", "repositories", record.RepositoryUID+".json")
 }
 
 func cloneRepository(in *RepositoryRecord) *RepositoryRecord {

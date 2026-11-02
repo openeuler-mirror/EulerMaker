@@ -49,7 +49,11 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	if err != nil {
 		return result, err
 	}
-	work, err := os.MkdirTemp(filepath.Join(m.root, ".repository-work"), record.RepositoryUID+"-")
+	workRoot := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, ".repository-work")
+	if err := os.MkdirAll(workRoot, 0750); err != nil {
+		return result, retryableRepositoryError(err)
+	}
+	work, err := os.MkdirTemp(workRoot, record.RepositoryUID+"-")
 	if err != nil {
 		return result, retryableRepositoryError(err)
 	}

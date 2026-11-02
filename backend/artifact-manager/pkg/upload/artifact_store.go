@@ -38,10 +38,8 @@ func NewStore(root string) (*Store, error) {
 		subscribers: make(map[string]map[chan LogEvent]struct{}),
 		sealing:     make(map[string]bool),
 	}
-	for _, d := range []string{".uploads", ".metadata/jobs", ".logs", "projects", ".quarantine", ".signing", ".signed"} {
-		if err := os.MkdirAll(filepath.Join(root, d), 0750); err != nil {
-			return nil, err
-		}
+	if err := os.MkdirAll(filepath.Join(root, "projects"), 0750); err != nil {
+		return nil, err
 	}
 	if err := s.load(); err != nil {
 		return nil, err
@@ -50,36 +48,57 @@ func NewStore(root string) (*Store, error) {
 }
 
 func (s *Store) CleanupTemporary(ttl time.Duration) error {
-	entries, err := os.ReadDir(filepath.Join(s.root, ".uploads"))
-	if err != nil {
-		return err
-	}
+	root := filepath.Join(s.root, "projects")
 	cutoff := time.Now().Add(-ttl)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(s.root, ".uploads", entry.Name())
-		info, err := entry.Info()
-		if err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(path)
-		}
-	}
-	return nil
-}
-
-func (s *Store) load() error {
-	return filepath.WalkDir(filepath.Join(s.root, ".metadata"), func(path string, d os.DirEntry, err error) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || filepath.Ext(path) != ".json" {
+		rel, _ := filepath.Rel(root, path)
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if entry.IsDir() {
+			if (len(parts) == 2 && parts[1] != "jobs") ||
+				(len(parts) == 4 && parts[3] != ".uploads") || len(parts) > 4 {
+				return filepath.SkipDir
+			}
 			return nil
 		}
-		rel, _ := filepath.Rel(filepath.Join(s.root, ".metadata"), path)
+		if len(parts) != 5 || !entry.Type().IsRegular() || filepath.Ext(path) != ".tmp" {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().Before(cutoff) {
+			return os.Remove(path)
+		}
+		return nil
+	})
+}
+
+func (s *Store) load() error {
+	root := filepath.Join(s.root, "projects")
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
 		parts := strings.Split(filepath.ToSlash(rel), "/")
-		isArtifact := len(parts) == 5 && parts[0] == "jobs" && parts[3] == "artifacts"
-		isLog := len(parts) == 5 && parts[0] == "jobs" && parts[3] == "logs" && parts[4] == "combined.json"
+		if d.IsDir() {
+			// Only traverse Job artifact metadata and the direct logs directory.
+			if (len(parts) == 2 && parts[1] != "jobs") ||
+				(len(parts) == 4 && parts[3] != ".metadata" && parts[3] != "logs") ||
+				(len(parts) == 5 && (parts[3] != ".metadata" || parts[4] != "artifacts")) || len(parts) > 5 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".json" {
+			return nil
+		}
+		isArtifact := len(parts) == 6 && parts[3] == ".metadata" && parts[4] == "artifacts"
+		isLog := len(parts) == 5 && parts[3] == "logs" && parts[4] == ".combined.json"
 		if !isArtifact && !isLog {
 			return nil
 		}
@@ -90,13 +109,13 @@ func (s *Store) load() error {
 		switch {
 		case isArtifact:
 			var v Artifact
-			if e := json.Unmarshal(b, &v); e != nil || v.ID == "" || v.ID+".json" != parts[4] {
+			if e := json.Unmarshal(b, &v); e != nil || v.ID == "" || v.ID+".json" != parts[5] {
 				return fmt.Errorf("load artifact metadata %s: invalid JSON", path)
 			}
-			return s.recoverArtifact(parts[1], parts[2], &v)
+			return s.recoverArtifact(parts[0], parts[2], &v)
 		case isLog:
 			var v LogStream
-			if e := json.Unmarshal(b, &v); e != nil || v.Project != parts[1] || v.JobName != parts[2] || v.Stream != "combined" {
+			if e := json.Unmarshal(b, &v); e != nil || v.Project != parts[0] || v.JobName != parts[2] || v.Stream != "combined" {
 				return fmt.Errorf("load log metadata %s: invalid JSON", path)
 			}
 			return s.recoverLog(&v)
@@ -109,7 +128,7 @@ func (s *Store) recoverArtifact(project, job string, a *Artifact) error {
 	if a.IdempotencyKey == "" || a.State != Pending {
 		return nil
 	}
-	tmp := filepath.Join(s.root, ".uploads", a.ID+".tmp")
+	tmp := s.TemporaryUploadPath(project, job, a.ID)
 	final := s.ArtifactPath(a)
 	finalOK := fileutil.VerifyFile(final, a.Size, a.SHA256) == nil
 	if finalOK {
@@ -120,8 +139,9 @@ func (s *Store) recoverArtifact(project, job string, a *Artifact) error {
 		return nil
 	}
 	if _, err := os.Stat(final); err == nil {
-		_ = os.MkdirAll(filepath.Join(s.root, ".quarantine"), 0750)
-		_ = os.Rename(final, filepath.Join(s.root, ".quarantine", a.ID+".corrupted"))
+		quarantine := filepath.Join(s.root, "projects", project, "jobs", job, ".quarantine")
+		_ = os.MkdirAll(quarantine, 0750)
+		_ = os.Rename(final, filepath.Join(quarantine, a.ID+".corrupted"))
 	}
 	_ = os.Remove(tmp)
 	if err := s.failArtifact(project, job, a, "Corrupted", "committed content is missing or invalid"); err != nil {
@@ -147,8 +167,17 @@ func (s *Store) ArtifactPath(a *Artifact) string {
 	return filepath.Join(s.root, filepath.FromSlash(a.StorageKey))
 }
 
+// TemporaryUploadPath locates an upload body within its Job directory.
+func (s *Store) TemporaryUploadPath(project, job, id string) string {
+	return filepath.Join(s.root, "projects", project, "jobs", job, ".uploads", id+".tmp")
+}
+
+func (s *Store) jobMetadataDir(project, job string) string {
+	return filepath.Join(s.root, "projects", project, "jobs", job, ".metadata")
+}
+
 func (s *Store) artifactMeta(project, job, id string) string {
-	return filepath.Join(s.root, ".metadata/jobs", project, job, "artifacts", id+".json")
+	return filepath.Join(s.jobMetadataDir(project, job), "artifacts", id+".json")
 }
 
 func (s *Store) persistArtifact(project, job string, a *Artifact) error {
@@ -220,6 +249,27 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 	if e != nil {
 		return nil, false, e
 	}
+	if rel == ".metadata" || strings.HasPrefix(rel, ".metadata/") {
+		return nil, false, errors.New("reserved metadata path")
+	}
+	if rel == ".uploads" || strings.HasPrefix(rel, ".uploads/") {
+		return nil, false, errors.New("reserved upload path")
+	}
+	if rel == ".quarantine" || strings.HasPrefix(rel, ".quarantine/") {
+		return nil, false, errors.New("reserved quarantine path")
+	}
+	if rel == ".signed" || strings.HasPrefix(rel, ".signed/") ||
+		rel == ".signing" || strings.HasPrefix(rel, ".signing/") {
+		return nil, false, errors.New("reserved signing path")
+	}
+	if rel == "logs" {
+		return nil, false, errors.New("reserved log path")
+	}
+	for _, path := range []string{"logs/combined.log", "logs/container.log", "logs/.combined.json", "logs/.combined.index.jsonl"} {
+		if rel == path || strings.HasPrefix(rel, path+"/") || strings.HasPrefix(rel, path+".tmp-") {
+			return nil, false, errors.New("reserved log path")
+		}
+	}
 	m.RelativePath = rel
 	artifacts, err := s.readJobArtifacts(project, job)
 	if err != nil {
@@ -251,6 +301,9 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 		}
 		return nil, false, &SealError{"ManifestSealing", 409, false}
 	}
+	if err := os.MkdirAll(filepath.Dir(s.TemporaryUploadPath(project, job, "")), 0750); err != nil {
+		return nil, false, err
+	}
 	if old != nil {
 		if !sameUploadMetadata(old, m) {
 			return nil, false, fmt.Errorf("IdempotencyConflict")
@@ -269,7 +322,7 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 				return nil, false, errors.New("ArtifactPathConflict")
 			}
 		}
-		_ = os.Remove(filepath.Join(s.root, ".uploads", old.ID+".tmp"))
+		_ = os.Remove(s.TemporaryUploadPath(project, job, old.ID))
 		old.State = Pending
 		old.Failure = nil
 		old.CompletedAt = nil

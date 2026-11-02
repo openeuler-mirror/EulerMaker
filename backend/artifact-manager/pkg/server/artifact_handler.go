@@ -141,7 +141,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		writeJSON(w, 200, map[string]any{"artifact": a})
 		return
 	}
-	tmp := filepath.Join(s.cfg.DataDir, ".uploads", a.ID+".tmp")
+	tmp := s.store.TemporaryUploadPath(p, j, a.ID)
 	f, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
 		s.store.FailUpload(p, j, a, "StorageError", e.Error())
@@ -281,7 +281,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, project, job, 
 		writeErr(w, r, 404, "NotFound", "artifact not found", false, nil)
 		return
 	}
-	if strings.HasPrefix(a.StorageKey, ".signed/") {
+	if strings.HasPrefix(a.StorageKey, filepath.ToSlash(filepath.Join("projects", project, "jobs", job, ".signed"))+"/") {
 		if err := fileutil.VerifyFile(s.store.ArtifactPath(a), a.Size, a.SHA256); err != nil {
 			writeErr(w, r, 503, "StorageError", "sealed artifact content unavailable", true, nil)
 			return

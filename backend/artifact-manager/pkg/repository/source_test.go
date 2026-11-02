@@ -133,7 +133,7 @@ func TestRepositoryArtifactsIdentifyBadManifest(t *testing.T) {
 				if tt.name == "no RPM" {
 					tt.manifest.Digest = upload.ManifestDigest(tt.manifest.Files)
 				}
-				if err := fileutil.AtomicJSON(filepath.Join(root, ".metadata/jobs", project, job, "manifest.json"), tt.manifest); err != nil {
+				if err := fileutil.AtomicJSON(filepath.Join(root, "projects", project, "jobs", job, ".metadata", "manifest.json"), tt.manifest); err != nil {
 					t.Fatal(err)
 				}
 			}

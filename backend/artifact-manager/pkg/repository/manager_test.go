@@ -11,9 +11,6 @@ import (
 func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	root := t.TempDir()
 	m := &Manager{root: root, records: map[string]*RepositoryRecord{}}
-	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
-		t.Fatal(err)
-	}
 	for _, state := range []RepositoryState{RepositoryCreating, RepositoryDeleting, RepositoryReady, RepositoryFailed} {
 		record := &RepositoryRecord{
 			RepositoryUID: string(state),
@@ -28,6 +25,10 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 		if err := m.persist(record); err != nil {
 			t.Fatal(err)
 		}
+		want := filepath.Join(root, "repositories/project/arch/.metadata/repositories", record.RepositoryUID+".json")
+		if m.metaPath(record.RepositoryUID) != want {
+			t.Fatalf("metadata path = %s, want %s", m.metaPath(record.RepositoryUID), want)
+		}
 		if state == RepositoryReady {
 			path := m.RepositoryPath(record)
 			if err := os.MkdirAll(path, 0750); err != nil {
@@ -41,6 +42,7 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 			}
 		}
 	}
+	m.metadataPaths = nil
 	if err := m.load(); err != nil {
 		t.Fatal(err)
 	}
@@ -74,11 +76,31 @@ func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	}
 }
 
-func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".metadata", "repositories"), 0750); err != nil {
+func TestRepositoryDeletionRemovesLocationIndex(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*RepositoryRecord{}}
+	record := &RepositoryRecord{RepositoryUID: "repo", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryDeleting}
+	if err := m.persist(record); err != nil {
 		t.Fatal(err)
 	}
+	m.records[record.RepositoryUID] = record
+	path := m.metaPath(record.RepositoryUID)
+	m.remove(record.RepositoryUID)
+	if entries, err := os.ReadDir(filepath.Join(m.root, "repositories/project/arch/.repository-trash")); err != nil || len(entries) != 0 {
+		t.Fatalf("scoped repository trash: %v, %v", entries, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("deleted metadata: %v", err)
+	}
+	if len(m.metadataPaths) != 0 || len(m.records) != 0 {
+		t.Fatalf("deletion retained index or record: %v, %v", m.metadataPaths, m.records)
+	}
+	if _, ok, err := m.Get(record.RepositoryUID); err != nil || ok {
+		t.Fatalf("deleted lookup: %t, %v", ok, err)
+	}
+}
+
+func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
+	root := t.TempDir()
 	m := &Manager{
 		root:               root,
 		signingFingerprint: "new-key",

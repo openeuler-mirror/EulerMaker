@@ -65,9 +65,6 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 	}
 	c := Config{PublicKey: publicKey}
 	repoConfig := repository.Config{CreateRepoCommand: command, CreateRepoWorkers: 1}
-	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
-		t.Fatal(err)
-	}
 	materializer := NewFilesystemMaterializer(root, c, repoConfig)
 	source := repository.RepositoryRecord{
 		RepositoryUID: "source",
@@ -124,6 +121,9 @@ func TestFilesystemReleaseMaterializerExcludesSpecs(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 	releasePath := filepath.Join(root, "repositories", "project", "x86_64", "releases", "build")
+	if entries, err := os.ReadDir(filepath.Join(root, "repositories/project/x86_64/.release-work")); err != nil || len(entries) != 0 {
+		t.Fatalf("scoped release work directory: %v, %v", entries, err)
+	}
 	if _, err := os.Stat(filepath.Join(releasePath, "Packages", "keep+1.rpm")); err != nil {
 		t.Fatal(err)
 	}
@@ -145,9 +145,6 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	repoConfig := repository.Config{
 		CreateRepoCommand: filepath.Join(root, "createrepo-must-not-run"),
 		CreateRepoWorkers: 1,
-	}
-	if err := os.Mkdir(filepath.Join(root, ".release-work"), 0750); err != nil {
-		t.Fatal(err)
 	}
 	source := repository.RepositoryRecord{
 		RepositoryUID: "source", Project: "project", BuildName: "build", TargetArch: "x86_64",
@@ -244,8 +241,6 @@ func TestReadyReleaseRecoveryUsesPersistedDigest(t *testing.T) {
 	m := &Manager{root: root, records: map[string]*ReleaseRecord{}}
 	for _, dir := range []string{
 		m.Path(record),
-		filepath.Join(root, ".release-work"),
-		filepath.Join(root, ".metadata/releases"),
 	} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
 			t.Fatal(err)
@@ -303,6 +298,10 @@ func TestReleaseCacheTracksActiveStates(t *testing.T) {
 			t.Fatal(err)
 		}
 		active := state == ReleaseCreating || state == ReleasePrepared || state == ReleaseDeleting
+		want := filepath.Join(m.root, "repositories/project/arch/.metadata/releases/build.json")
+		if m.metaPath(record.BuildName) != want {
+			t.Fatalf("metadata path = %s, want %s", m.metaPath(record.BuildName), want)
+		}
 		if _, cached := m.records[record.BuildName]; cached != active {
 			t.Fatalf("state %s: cached=%t, want %t", state, cached, active)
 		}
@@ -328,9 +327,6 @@ func TestReleaseCacheTracksActiveStates(t *testing.T) {
 
 func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}}
-	if err := os.MkdirAll(filepath.Join(m.root, ".release-work"), 0750); err != nil {
-		t.Fatal(err)
-	}
 	states := []ReleaseState{ReleaseCreating, ReleasePrepared, ReleaseDeleting, ReleaseFailed}
 	for _, state := range states {
 		record := &ReleaseRecord{
@@ -339,7 +335,7 @@ func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 			TargetArch: "arch",
 			State:      state,
 		}
-		if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
+		if err := fileutil.AtomicJSON(m.recordMetaPath(record), record); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -405,5 +401,14 @@ func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
 	defer m.mu.RUnlock()
 	if len(m.records) != 0 {
 		t.Fatalf("completed cleanup retained %d records", len(m.records))
+	}
+	m.mu.RLock()
+	_, retained := m.metadataPaths["old"]
+	m.mu.RUnlock()
+	if retained {
+		t.Fatal("deleted release retained location index")
+	}
+	if entries, err := os.ReadDir(filepath.Join(m.root, "repositories/project/arch/.release-trash")); err != nil || len(entries) != 0 {
+		t.Fatalf("scoped release trash: %v, %v", entries, err)
 	}
 }

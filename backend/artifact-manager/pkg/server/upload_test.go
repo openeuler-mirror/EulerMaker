@@ -251,11 +251,11 @@ func TestManifestAndRealtimeLog(t *testing.T) {
 	}
 
 	all := bytes.Join(chunks, nil)
-	activeDir := filepath.Join(cfg.DataDir, ".logs", "project-1", "log-job")
-	if content, err := os.ReadFile(filepath.Join(activeDir, "combined.log")); err != nil || !bytes.Equal(content, all) {
+	jobDir := filepath.Join(cfg.DataDir, "projects", "project-1", "jobs", "log-job")
+	if content, err := os.ReadFile(filepath.Join(jobDir, "logs", "combined.log")); err != nil || !bytes.Equal(content, all) {
 		t.Fatalf("active log at Job name path: %q, %v", content, err)
 	}
-	if _, err := os.Stat(filepath.Join(activeDir, "combined.index.jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(jobDir, "logs", ".combined.index.jsonl")); err != nil {
 		t.Fatalf("active log index at Job name path: %v", err)
 	}
 	complete := upload.CompleteLogRequest{Stream: "combined", LastSequence: 1, Size: int64(len(all)), SHA256: sum(all)}
@@ -405,6 +405,9 @@ esac
 	}
 	if _, err := m.Materialize(context.Background(), record); err != nil {
 		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "repositories/project-1/x86_64/.repository-work")); err != nil || len(entries) != 0 {
+		t.Fatalf("scoped repository work directory: %v, %v", entries, err)
 	}
 	path := repository.VersionPath(cfg.DataDir, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)
 	repoFile := filepath.Join(path, "Packages", a.FileName)

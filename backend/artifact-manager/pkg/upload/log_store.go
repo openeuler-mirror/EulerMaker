@@ -17,8 +17,9 @@ import (
 )
 
 func (s *Store) LogPaths(p, j string) (string, string, string) {
-	base := filepath.Join(s.root, ".logs", p, j)
-	return filepath.Join(base, "combined.log"), filepath.Join(base, "combined.index.jsonl"), filepath.Join(s.root, ".metadata/jobs", p, j, "logs", "combined.json")
+	dir := filepath.Join(s.root, "projects", p, "jobs", j, "logs")
+	return filepath.Join(dir, "combined.log"),
+		filepath.Join(dir, ".combined.index.jsonl"), filepath.Join(dir, ".combined.json")
 }
 
 // loadLog requires the write lock: interrupted writes may need recovery before use.
