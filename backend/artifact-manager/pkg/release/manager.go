@@ -27,6 +27,7 @@ type Manager struct {
 	materializer    Materializer
 	mu              sync.RWMutex
 	records         map[string]*ReleaseRecord
+	metadataPaths   map[string]string
 	queued, running map[string]bool
 	queue           chan string
 	ctx             context.Context
@@ -34,10 +35,8 @@ type Manager struct {
 }
 
 func NewManager(root string, c Config, repositories *repository.Manager, materializer Materializer) (*Manager, error) {
-	for _, dir := range []string{".release-work", ".metadata/releases", ".release-trash"} {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0750); err != nil {
-			return nil, err
-		}
+	if err := os.MkdirAll(filepath.Join(root, "repositories"), 0750); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
@@ -367,7 +366,7 @@ func (m *Manager) remove(name string) {
 		return
 	}
 	source := m.Path(record)
-	trashDir := filepath.Join(m.root, ".release-trash", record.Project, record.TargetArch)
+	trashDir := filepath.Join(m.releaseTargetDir(record), ".release-trash")
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
@@ -385,6 +384,7 @@ func (m *Manager) remove(name string) {
 			return
 		}
 		delete(m.records, name)
+		delete(m.metadataPaths, name)
 	}
 }
 
@@ -423,9 +423,17 @@ func (m *Manager) Stop() {
 }
 
 func (m *Manager) persist(record *ReleaseRecord) error {
-	if err := fileutil.AtomicJSON(m.metaPath(record.BuildName), record); err != nil {
+	path := m.recordMetaPath(record)
+	if previous := m.metaPath(record.BuildName); previous != "" && previous != path {
+		return errors.New("release metadata scope changed")
+	}
+	if err := fileutil.AtomicJSON(path, record); err != nil {
 		return err
 	}
+	if m.metadataPaths == nil {
+		m.metadataPaths = make(map[string]string)
+	}
+	m.metadataPaths[record.BuildName] = path
 	m.cacheActive(record)
 	return nil
 }
@@ -451,6 +459,9 @@ func (m *Manager) readRecord(name string) (*ReleaseRecord, error) {
 	if !validIdentifier(name) {
 		return nil, errors.New("invalid release name")
 	}
+	if m.metaPath(name) == "" {
+		return nil, nil
+	}
 	data, err := os.ReadFile(m.metaPath(name))
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -464,14 +475,18 @@ func (m *Manager) readRecord(name string) (*ReleaseRecord, error) {
 	}
 	if record.BuildName != name ||
 		!validIdentifier(record.Project) ||
-		!validIdentifier(record.TargetArch) {
+		!validIdentifier(record.TargetArch) || m.metaPath(name) != m.recordMetaPath(&record) {
 		return nil, errors.New("invalid release metadata")
 	}
 	return &record, nil
 }
 
 func (m *Manager) metaPath(name string) string {
-	return filepath.Join(m.root, ".metadata/releases", name+".json")
+	return m.metadataPaths[name]
+}
+
+func (m *Manager) recordMetaPath(record *ReleaseRecord) string {
+	return filepath.Join(m.releaseTargetDir(record), ".metadata", "releases", record.BuildName+".json")
 }
 
 func (m *Manager) Path(record *ReleaseRecord) string {

@@ -27,11 +27,15 @@ type sealTestSigner struct {
 	started chan struct{}
 	release <-chan struct{}
 	invalid bool
+	workDir string
 }
 
 func (s *sealTestSigner) Fingerprint() string { return s.key }
 
 func (s *sealTestSigner) Sign(ctx context.Context, path string) error {
+	if s.workDir != "" && filepath.Dir(path) != s.workDir {
+		return fmt.Errorf("signing work directory: got %s, want %s", filepath.Dir(path), s.workDir)
+	}
 	call := s.calls.Add(1)
 	active := s.active.Add(1)
 	defer s.active.Add(-1)
@@ -113,7 +117,7 @@ func sealUpload(t *testing.T, s *Store, job, path string) (Artifact, ManifestFil
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmp := filepath.Join(s.root, ".uploads", a.ID+".tmp")
+	tmp := s.TemporaryUploadPath("project", job, a.ID)
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -133,10 +137,11 @@ func assertSealCode(t *testing.T, err error, code string) {
 }
 
 func TestSealSignsPrivateCopiesAndPublishesFinalMetadata(t *testing.T) {
-	signer := &sealTestSigner{key: "key"}
-	s, _ := newSealTestStore(t, t.TempDir(), signer, 2)
+	root := t.TempDir()
+	signer := &sealTestSigner{key: "key", workDir: filepath.Join(root, "projects/project/jobs/job/.signing")}
+	s, _ := newSealTestStore(t, root, signer, 2)
 	a, rpm := sealUpload(t, s, "job", "packages/pkg.rpm")
-	_, log := sealUpload(t, s, "job", "logs/container.log")
+	_, log := sealUpload(t, s, "job", "logs/build.log")
 	in := CompleteManifestRequest{Files: []ManifestFile{rpm, log}}
 	m, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in)
 	if err != nil {
@@ -154,6 +159,12 @@ func TestSealSignsPrivateCopiesAndPublishesFinalMetadata(t *testing.T) {
 	effective, ok := s.GetJobArtifact("project", "job", a.ID)
 	if !ok || effective.SHA256 == a.SHA256 || effective.Size != a.Size+7 {
 		t.Fatalf("final artifact = %+v", effective)
+	}
+	if effective.StorageKey != "projects/project/jobs/job/.signed/"+a.ID+".rpm" {
+		t.Fatalf("signed storage key: %s", effective.StorageKey)
+	}
+	if _, err := os.Stat(signer.workDir); !os.IsNotExist(err) {
+		t.Fatalf("signing work directory was not cleaned: %v", err)
 	}
 	rawInfo, _ := os.Stat(s.ArtifactPath(&a))
 	signedInfo, _ := os.Stat(s.ArtifactPath(effective))
@@ -183,12 +194,29 @@ func TestSealSignsPrivateCopiesAndPublishesFinalMetadata(t *testing.T) {
 	}
 }
 
+func TestUploadReservesSigningDirectories(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".signed", ".signed/package.rpm", ".signing", ".signing/work.rpm", "packages/../.signed/package.rpm"} {
+		t.Run(path, func(t *testing.T) {
+			_, _, err := s.BeginUpload("project", "job", "key", UploadMetadata{
+				Category: CategoryArtifact, FileName: filepath.Base(path), RelativePath: path,
+			}, 1024)
+			if err == nil || err.Error() != "reserved signing path" {
+				t.Fatalf("upload into reserved signing directory: %v", err)
+			}
+		})
+	}
+}
+
 func TestSealDisabledAndLogOnly(t *testing.T) {
 	for _, key := range []string{"", "key"} {
 		t.Run(key, func(t *testing.T) {
 			signer := &sealTestSigner{key: key}
 			s, _ := newSealTestStore(t, t.TempDir(), signer, 1)
-			_, file := sealUpload(t, s, "job", "logs/container.log")
+			_, file := sealUpload(t, s, "job", "logs/build.log")
 			if key == "" {
 				_, file = sealUpload(t, s, "job", "packages/pkg.rpm")
 			}
@@ -341,6 +369,9 @@ func TestSealPreservesCheckpointWhenSignedFileIsMissing(t *testing.T) {
 	in := CompleteManifestRequest{Files: []ManifestFile{first, second}}
 	_, err := s.CompleteManifest(context.Background(), "project", "job", "runner", in)
 	assertSealCode(t, err, "SigningBackendUnavailable")
+	if _, err := os.Stat(filepath.Join(s.root, "projects/project/jobs/job/.metadata/seal.json")); err != nil {
+		t.Fatalf("persisted seal checkpoint: %v", err)
+	}
 	if err := os.Remove(filepath.Join(s.root, signedStorageKey("project", "job", first.ArtifactID))); err != nil {
 		t.Fatal(err)
 	}

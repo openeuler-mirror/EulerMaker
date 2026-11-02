@@ -51,7 +51,11 @@ func (m *filesystemReleaseMaterializer) Create(
 			return result, &Error{Code: "ReleaseSigningKeyMismatch", Status: 422}
 		}
 	}
-	work, err := os.MkdirTemp(filepath.Join(m.root, ".release-work"), record.BuildName+"-")
+	workRoot := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, ".release-work")
+	if err := os.MkdirAll(workRoot, 0750); err != nil {
+		return result, retryableReleaseError(err)
+	}
+	work, err := os.MkdirTemp(workRoot, record.BuildName+"-")
 	if err != nil {
 		return result, retryableReleaseError(err)
 	}

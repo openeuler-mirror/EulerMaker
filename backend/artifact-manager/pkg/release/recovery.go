@@ -6,21 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"artifact-manager/pkg/fileutil"
 )
 
 func (m *Manager) scanRecords(visit func(*ReleaseRecord) error) error {
-	entries, err := os.ReadDir(filepath.Join(m.root, ".metadata/releases"))
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		name := entry.Name()[:len(entry.Name())-len(".json")]
+	for name, path := range m.metadataPaths {
 		record, err := m.readRecord(name)
 		if err != nil {
-			return fmt.Errorf("load release metadata %s: %w", entry.Name(), err)
+			return fmt.Errorf("load release metadata %s: %w", path, err)
 		}
 		if record != nil {
 			if err := visit(record); err != nil {
@@ -32,6 +26,11 @@ func (m *Manager) scanRecords(visit func(*ReleaseRecord) error) error {
 }
 
 func (m *Manager) recover(workTTL time.Duration) error {
+	paths, err := fileutil.RepositoryMetadataPaths(m.root, "releases")
+	if err != nil {
+		return err
+	}
+	m.metadataPaths = paths
 	now := time.Now().UTC()
 	if err := m.scanRecords(func(record *ReleaseRecord) error {
 		if err := m.recoverRecord(record, now); err != nil {
@@ -42,17 +41,7 @@ func (m *Manager) recover(workTTL time.Duration) error {
 	}); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(filepath.Join(m.root, ".release-work"))
-	if err != nil {
-		return err
-	}
-	cutoff := now.Add(-workTTL)
-	for _, entry := range entries {
-		if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.RemoveAll(filepath.Join(m.root, ".release-work", entry.Name()))
-		}
-	}
-	return nil
+	return fileutil.CleanupRepositoryWork(m.root, ".release-work", now.Add(-workTTL))
 }
 
 func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {

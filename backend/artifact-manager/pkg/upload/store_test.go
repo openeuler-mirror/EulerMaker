@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/upload"
@@ -20,6 +21,162 @@ import (
 func sum(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
+}
+
+func TestCleanupTemporaryJobDirectories(t *testing.T) {
+	root := t.TempDir()
+	store, err := upload.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []struct {
+		path    string
+		stale   bool
+		removed bool
+	}{
+		{"projects/a/jobs/job/.uploads/old.tmp", true, true},
+		{"projects/b/jobs/job/.uploads/old.tmp", true, true},
+		{"projects/a/jobs/job/.uploads/recent.tmp", false, false},
+		{"projects/a/jobs/job/.uploads/keep.json", true, false},
+		{"projects/a/jobs/job/.uploads/nested/keep.tmp", true, false},
+		{"projects/a/jobs/job/packages/keep.tmp", true, false},
+		{"projects/a/jobs/job/.metadata/keep.tmp", true, false},
+	} {
+		path := filepath.Join(root, file.path)
+		if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("data"), 0640); err != nil {
+			t.Fatal(err)
+		}
+		if file.stale {
+			old := time.Now().Add(-48 * time.Hour)
+			if err := os.Chtimes(path, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() {
+			_, err := os.Stat(path)
+			if file.removed && !os.IsNotExist(err) || !file.removed && err != nil {
+				t.Errorf("cleanup %s: removed=%t, error=%v", file.path, file.removed, err)
+			}
+		})
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := store.CleanupTemporary(24 * time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestInterruptedUploadRecoversJobTemporaryFile(t *testing.T) {
+	root := t.TempDir()
+	store, err := upload.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := upload.UploadMetadata{
+		Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm",
+		Size: 3, SHA256: sum([]byte("rpm")),
+	}
+	a, _, err := store.BeginUpload("project", "job", "key", metadata, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := store.TemporaryUploadPath("project", "job", a.ID)
+	if tmp != filepath.Join(root, "projects/project/jobs/job/.uploads", a.ID+".tmp") {
+		t.Fatalf("temporary upload path: %s", tmp)
+	}
+	if err := os.WriteFile(tmp, []byte("partial"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	store, err = upload.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("interrupted temporary file was not removed: %v", err)
+	}
+	retried, replay, err := store.BeginUpload("project", "job", "key", metadata, 1024)
+	if err != nil || replay || retried.ID != a.ID || retried.State != upload.Pending {
+		t.Fatalf("retry recovered upload: %+v, %t, %v", retried, replay, err)
+	}
+}
+
+func TestUploadReservesTemporaryDirectory(t *testing.T) {
+	store, err := upload.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".uploads", ".uploads/file.tmp", "packages/../.uploads/file.tmp"} {
+		_, _, err := store.BeginUpload("project", "job", "key", upload.UploadMetadata{
+			Category: upload.CategoryArtifact, FileName: filepath.Base(path), RelativePath: path,
+		}, 1024)
+		if err == nil || err.Error() != "reserved upload path" {
+			t.Fatalf("upload into %s: %v", path, err)
+		}
+	}
+}
+
+func TestCorruptedUploadIsQuarantinedWithinJob(t *testing.T) {
+	root := t.TempDir()
+	store, err := upload.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := make(map[string]*upload.Artifact)
+	for _, project := range []string{"project-a", "project-b"} {
+		a, _, err := store.BeginUpload(project, "job", "key", upload.UploadMetadata{
+			Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm",
+			Size: 3, SHA256: sum([]byte("rpm")),
+		}, 1024)
+		if err != nil {
+			t.Fatal(err)
+		}
+		final := store.ArtifactPath(a)
+		if err := os.MkdirAll(filepath.Dir(final), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(final, []byte("corrupted-"+project), 0640); err != nil {
+			t.Fatal(err)
+		}
+		artifacts[project] = a
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		store, err = upload.NewStore(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for project, a := range artifacts {
+			path := filepath.Join(root, "projects", project, "jobs", "job", ".quarantine", a.ID+".corrupted")
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != "corrupted-"+project {
+				t.Fatalf("quarantined %s content: %q, %v", project, data, err)
+			}
+			if _, err := os.Stat(store.ArtifactPath(a)); !os.IsNotExist(err) {
+				t.Fatalf("corrupted final path remains: %v", err)
+			}
+			got, ok := store.GetJobArtifact(project, "job", a.ID)
+			if !ok || got.State != upload.Failed || got.Failure == nil || got.Failure.Code != "Corrupted" {
+				t.Fatalf("recovered artifact: %+v", got)
+			}
+		}
+	}
+}
+
+func TestUploadReservesQuarantineDirectory(t *testing.T) {
+	store, err := upload.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".quarantine", ".quarantine/file.corrupted", "packages/../.quarantine/file.corrupted"} {
+		_, _, err := store.BeginUpload("project", "job", "key", upload.UploadMetadata{
+			Category: upload.CategoryArtifact, FileName: filepath.Base(path), RelativePath: path,
+		}, 1024)
+		if err == nil || err.Error() != "reserved quarantine path" {
+			t.Fatalf("upload into %s: %v", path, err)
+		}
+	}
 }
 
 func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
@@ -43,7 +200,7 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmp := filepath.Join(root, ".uploads", a.ID+".tmp")
+	tmp := store.TemporaryUploadPath("project", "job", a.ID)
 	if err := os.WriteFile(tmp, data, 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +223,7 @@ func TestManifestReadOnDemandAndSealingProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest.RunnerName = "updated-runner"
-	path := filepath.Join(root, ".metadata/jobs/project/job/manifest.json")
+	path := filepath.Join(root, "projects/project/jobs/job/.metadata/manifest.json")
 	if err := fileutil.AtomicJSON(path, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +282,7 @@ func TestArtifactMetadataReadOnDemand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmp := filepath.Join(root, ".uploads", a.ID+".tmp")
+	tmp := store.TemporaryUploadPath("project", "job", a.ID)
 	if err := os.WriteFile(tmp, []byte("rpm"), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +291,7 @@ func TestArtifactMetadataReadOnDemand(t *testing.T) {
 	}
 	// Disk metadata is authoritative without restarting the Store.
 	a.ContentType = "application/x-rpm"
-	path := filepath.Join(root, ".metadata/jobs/project/job/artifacts", a.ID+".json")
+	path := filepath.Join(root, "projects/project/jobs/job/.metadata/artifacts", a.ID+".json")
 	if err := fileutil.AtomicJSON(path, a); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +371,7 @@ func TestFinalizingLogLoadsArtifactFromDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.State, a.CompletedAt = upload.Pending, nil
-	if err := fileutil.AtomicJSON(filepath.Join(root, ".metadata/jobs/project/job/artifacts", a.ID+".json"), a); err != nil {
+	if err := fileutil.AtomicJSON(filepath.Join(root, "projects/project/jobs/job/.metadata/artifacts", a.ID+".json"), a); err != nil {
 		t.Fatal(err)
 	}
 	l, _ := store.GetLog("project", "job")
@@ -259,7 +416,7 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		temporary := filepath.Join(root, ".uploads", job.artifact.ID+".tmp")
+		temporary := store.TemporaryUploadPath(job.project, job.job, job.artifact.ID)
 		if err := os.WriteFile(temporary, data, 0640); err != nil {
 			t.Fatal(err)
 		}
@@ -270,9 +427,9 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 		body, index, meta := store.LogPaths(job.project, job.job)
-		wantMeta := filepath.Join(root, ".metadata/jobs", job.project, job.job, "logs", "combined.json")
-		if meta != wantMeta || body != filepath.Join(root, ".logs", job.project, job.job, "combined.log") ||
-			index != filepath.Join(root, ".logs", job.project, job.job, "combined.index.jsonl") {
+		wantMeta := filepath.Join(root, "projects", job.project, "jobs", job.job, "logs", ".combined.json")
+		if meta != wantMeta || body != filepath.Join(root, "projects", job.project, "jobs", job.job, "logs", "combined.log") ||
+			index != filepath.Join(filepath.Dir(wantMeta), ".combined.index.jsonl") {
 			t.Fatalf("log paths: body=%s index=%s meta=%s", body, index, meta)
 		}
 		checkLogMetadata := func(state upload.LogState) {
@@ -297,7 +454,7 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 		var files []upload.ManifestFile
 		checkLogMetadata(upload.LogCompleted)
 		for _, artifact := range []*upload.Artifact{job.artifact, job.log} {
-			path := filepath.Join(root, ".metadata/jobs", job.project, job.job, "artifacts", artifact.ID+".json")
+			path := filepath.Join(root, "projects", job.project, "jobs", job.job, ".metadata", "artifacts", artifact.ID+".json")
 			encoded, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -316,7 +473,7 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(root, ".metadata/jobs", job.project, job.job, "manifest.json")); err != nil {
+		if _, err := os.Stat(filepath.Join(root, "projects", job.project, "jobs", job.job, ".metadata", "manifest.json")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -348,6 +505,44 @@ func TestJobMetadataLayoutSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestJobMetadataRecoverySkipsUploadedDirectories(t *testing.T) {
+	root := t.TempDir()
+	for _, relative := range []string{
+		"projects/project/jobs/job/packages/artifacts/package.json",
+		"projects/project/jobs/job/logs/logs/.combined.json",
+		"projects/project/jobs/job/logs/custom.json",
+		"projects/project/jobs/job/packages/nested/.metadata/artifacts/package.json",
+	} {
+		path := filepath.Join(root, relative)
+		if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("uploaded content, not metadata"), 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := upload.NewStore(root); err != nil {
+		t.Fatalf("recover store with uploaded JSON files: %v", err)
+	}
+}
+
+func TestUploadReservesJobMetadataDirectory(t *testing.T) {
+	store, err := upload.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{".metadata", ".metadata/manifest.json", "packages/../.metadata/seal.json"} {
+		t.Run(path, func(t *testing.T) {
+			_, _, err := store.BeginUpload("project", "job", "key", upload.UploadMetadata{
+				Category: upload.CategoryArtifact, FileName: filepath.Base(path), RelativePath: path,
+			}, 1024)
+			if err == nil || err.Error() != "reserved metadata path" {
+				t.Fatalf("upload into reserved directory: %v", err)
+			}
+		})
+	}
+}
+
 func TestArtifactOwnershipSurvivesRestart(t *testing.T) {
 	root := t.TempDir()
 	store, err := upload.NewStore(root)
@@ -363,7 +558,7 @@ func TestArtifactOwnershipSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	temporary := filepath.Join(root, ".uploads", a.ID+".tmp")
+	temporary := store.TemporaryUploadPath("project", "job", a.ID)
 	if err := os.WriteFile(temporary, data, 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +672,7 @@ func TestStoreRestartOnlyVerifiesProcessingUploads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	temporary := filepath.Join(root, ".uploads", artifact.ID+".tmp")
+	temporary := store.TemporaryUploadPath("project", "job", artifact.ID)
 	if err := os.WriteFile(temporary, []byte("abc"), 0640); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +714,7 @@ func TestStoreUploadIdempotencySurvivesRestart(t *testing.T) {
 	if err != nil || replay {
 		t.Fatalf("begin upload: replay=%t, error=%v", replay, err)
 	}
-	temporary := filepath.Join(root, ".uploads", artifact.ID+".tmp")
+	temporary := store.TemporaryUploadPath("project", "job", artifact.ID)
 	if err := os.WriteFile(temporary, []byte("abc"), 0640); err != nil {
 		t.Fatal(err)
 	}

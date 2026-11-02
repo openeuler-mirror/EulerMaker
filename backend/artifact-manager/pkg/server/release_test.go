@@ -87,8 +87,8 @@ func newReleaseTestServer(t *testing.T) (*Server, release.CreateReleaseRequest, 
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	writeTestRepositoryRecord(t, server, source)
 	writeTestRepositoryIndex(t, server.repositories, source)
+	writeTestRepositoryRecord(t, server, source, releaseMaterializer)
 	request := release.CreateReleaseRequest{
 		BuildName:           source.BuildName,
 		Project:             source.Project,
@@ -180,13 +180,29 @@ func writeTestRepositoryIndex(t *testing.T, manager *repository.Manager, record 
 	}
 }
 
-func writeTestRepositoryRecord(t *testing.T, server *Server, record *repository.RepositoryRecord) {
+func writeTestRepositoryRecord(t *testing.T, server *Server, record *repository.RepositoryRecord, releaseMaterializers ...release.Materializer) {
 	t.Helper()
 	light := *record
 	light.RPMs = nil
-	path := filepath.Join(server.cfg.DataDir, ".metadata", "repositories", record.RepositoryUID+".json")
+	path := filepath.Join(server.cfg.DataDir, "repositories", record.Project, record.TargetArch,
+		".metadata", "repositories", record.RepositoryUID+".json")
 	if err := fileutil.AtomicJSON(path, &light); err != nil {
 		t.Fatal(err)
+	}
+	// Reopen managers after seeding disk data so startup rebuilds the location index.
+	server.repositories.Stop()
+	manager, err := repository.NewManager(server.cfg.DataDir, server.cfg.Repository, badManifestMaterializer{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.repositories = manager
+	if len(releaseMaterializers) > 0 {
+		server.releases.Stop()
+		releases, err := release.NewManager(server.cfg.DataDir, server.cfg.Release, manager, releaseMaterializers[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.releases = releases
 	}
 }
 
@@ -235,11 +251,21 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), want) {
 			t.Fatalf("browse %s = %d %q, want %q", path, response.Code, response.Body.String(), want)
 		}
+		if strings.Contains(response.Body.String(), ".metadata") {
+			t.Fatalf("browse exposed private metadata: %s", response.Body.String())
+		}
 	}
 	for _, path := range []string{
 		"/repositories/project-1/x86_64/history/",
 		"/repositories/project-1/x86_64/releases/",
 		"/repositories/project-1/no-release/",
+		"/repositories/project-1/x86_64/.metadata/",
+		"/repositories/project-1/x86_64/.metadata/repositories/source-repository.json",
+		"/repositories/project-1/x86_64/.metadata/releases/build-1.json",
+		"/repositories/project-1/x86_64/.repository-work/",
+		"/repositories/project-1/x86_64/.release-work/",
+		"/repositories/project-1/x86_64/.repository-trash/",
+		"/repositories/project-1/x86_64/.release-trash/",
 	} {
 		if response := repositoryRequest(t, server, http.MethodGet, path, nil); response.Code != http.StatusNotFound {
 			t.Fatalf("hidden directory %s = %d", path, response.Code)
@@ -273,8 +299,8 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 		RepositoryUID: second.SourceRepositoryUID, RepositoryName: second.BuildName,
 		Project: second.Project, BuildName: second.BuildName, TargetArch: second.TargetArch, State: repository.RepositoryReady, CreatedAt: now, UpdatedAt: now,
 	}
-	writeTestRepositoryRecord(t, server, secondSource)
 	writeTestRepositoryIndex(t, server.repositories, secondSource)
+	writeTestRepositoryRecord(t, server, secondSource, materializer)
 
 	for _, request := range []release.CreateReleaseRequest{first, second} {
 		response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
@@ -320,8 +346,10 @@ func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	}
 	source.Project = request.Project
 	source.TargetArch = request.TargetArch
-	writeTestRepositoryRecord(t, server, source)
+	source.RepositoryUID = "reserved-project-source"
+	request.SourceRepositoryUID = source.RepositoryUID
 	writeTestRepositoryIndex(t, server.repositories, source)
+	writeTestRepositoryRecord(t, server, source, materializer)
 	close(materializer.release)
 	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
 		t.Fatalf("submit = %d", response.Code)

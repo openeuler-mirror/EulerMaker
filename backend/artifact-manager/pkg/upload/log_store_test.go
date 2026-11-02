@@ -4,10 +4,95 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"artifact-manager/pkg/fileutil"
 )
+
+func TestJobLogLayoutSurvivesRestartAndCompletion(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("hello")
+	if _, err := s.AppendLog("project", "job", "runner", 0, data, hashText(string(data))); err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(root, "projects/project/jobs/job")
+	for _, relative := range []string{"logs/combined.log", "logs/.combined.index.jsonl", "logs/.combined.json"} {
+		if _, err := os.Stat(filepath.Join(jobDir, relative)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Startup recovery must discard a body tail that has no committed index entry.
+	body := filepath.Join(jobDir, "logs/combined.log")
+	if err := os.WriteFile(body, []byte("hellouncommitted"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	s, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content, err := os.ReadFile(body); err != nil || !bytes.Equal(content, data) {
+		t.Fatalf("recovered log body: %q, %v", content, err)
+	}
+	if _, err := s.AppendLog("project", "job", "runner", 1, data, hashText(string(data))); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.CompleteLog("project", "job", "runner", CompleteLogRequest{
+		Stream: "combined", LastSequence: 1, Size: 10, SHA256: hashText("hellohello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ArtifactPath(a) != filepath.Join(jobDir, "logs/container.log") {
+		t.Fatalf("completed log path: %s", s.ArtifactPath(a))
+	}
+	if _, err := os.Stat(filepath.Join(jobDir, "logs/combined.log")); !os.IsNotExist(err) {
+		t.Fatalf("active log was not moved: %v", err)
+	}
+	s, err = NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _, err := s.ReplayLog("project", "job", -1, 10)
+	if err != nil || len(events) != 2 || !bytes.Equal(events[0].Data, data) || !bytes.Equal(events[1].Data, data) {
+		t.Fatalf("replay completed log after restart: %+v, %v", events, err)
+	}
+	artifacts, err := s.ListArtifacts("project", "job", "")
+	if err != nil || len(artifacts) != 1 || artifacts[0].RelativePath != "logs/container.log" {
+		t.Fatalf("downloadable log artifacts: %+v, %v", artifacts, err)
+	}
+}
+
+func TestUploadReservesManagedLogPaths(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"logs", "logs/combined.log", "logs/container.log", "logs/combined.log/child",
+		"logs/container.log/child", "packages/../logs/combined.log",
+		"logs/.combined.json", "logs/.combined.index.jsonl", "logs/.combined.json/child",
+		"logs/.combined.index.jsonl/child", "packages/../logs/.combined.json", "logs/.combined.json.tmp-test",
+	} {
+		t.Run(path, func(t *testing.T) {
+			_, _, err := s.BeginUpload("project", "job", "key", UploadMetadata{
+				Category: CategoryLog, FileName: filepath.Base(path), RelativePath: path,
+			}, 1024)
+			if err == nil || err.Error() != "reserved log path" {
+				t.Fatalf("upload into managed log path: %v", err)
+			}
+		})
+	}
+	if _, _, err := s.BeginUpload("project", "job", "custom", UploadMetadata{
+		Category: CategoryLog, FileName: "custom.log", RelativePath: "logs/custom.log",
+	}, 1024); err != nil {
+		t.Fatalf("upload custom log: %v", err)
+	}
+}
 
 func TestLogMetadataReadOnDemand(t *testing.T) {
 	s, err := NewStore(t.TempDir())
