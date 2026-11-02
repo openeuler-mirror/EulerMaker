@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -18,16 +19,13 @@ const (
 	historyPageSize     = 500
 )
 
-// archiveHistory confirms the exact snapshot that the caller will conditionally delete.
+// archiveHistory starts migration; the lifecycle loop finishes it without issuing a delete intent.
 func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) (bool, error) {
 	deferred := func(result string, err error) (bool, error) {
 		historyArchive[result].Inc()
 		log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchiveDeferred error=%v",
 			Name, job.Namespace, job.Name, job.UID, job.ResourceVersion, err)
 		return false, err
-	}
-	if len(job.Finalizers) > 0 {
-		return deferred("error", fmt.Errorf("Job has finalizers"))
 	}
 	archived, err := c.client.ArchiveJob(ctx, job.Namespace, job.Name, clientpkg.DeletePreconditions{
 		UID: job.UID, ResourceVersion: job.ResourceVersion,
@@ -36,24 +34,16 @@ func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) (bool, 
 		err = writeUnknown("archive", fmt.Errorf("archive response does not match source snapshot"))
 	}
 	if err != nil {
-		var writeErr *clientpkg.WriteError
-		if errors.As(err, &writeErr) && writeErr.Outcome != clientpkg.WriteUnknown {
-			if writeErr.Outcome == clientpkg.WriteRejected && writeErr.StatusCode == 404 {
-				return false, nil
-			}
-			result := "error"
-			if writeErr.Outcome == clientpkg.WriteRejected && (writeErr.StatusCode == 409 || writeErr.StatusCode == 412) {
+		// An accepted request leaves a deleting Job for the lifecycle poller, including after a lost response.
+		result := "unknown"
+		var write *clientpkg.WriteError
+		if errors.As(err, &write) && write.Outcome != clientpkg.WriteUnknown {
+			result = "error"
+			if write.Outcome == clientpkg.WriteRejected && (write.StatusCode == 409 || write.StatusCode == 412) {
 				result = "conflict"
 			}
-			return deferred(result, err)
 		}
-		if ctx.Err() != nil {
-			return deferred("unknown", err)
-		}
-		confirmed, getErr := c.client.GetOldJob(ctx, job.Namespace, job.Name)
-		if getErr != nil || !sameArchivedJob(job, confirmed) {
-			return deferred("unknown", fmt.Errorf("archive unconfirmed: write=%v, confirmation=%v", err, getErr))
-		}
+		return deferred(result, err)
 	}
 	historyArchive["confirmed"].Inc()
 	log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchived",
@@ -63,7 +53,7 @@ func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) (bool, 
 
 func sameArchivedJob(source, archived *ebsv1.Job) bool {
 	return source != nil && archived != nil &&
-		equality.Semantic.DeepEqual(source.ObjectMeta, archived.ObjectMeta) &&
+		source.Namespace == archived.Namespace && source.Name == archived.Name && source.UID == archived.UID && archived.ResourceVersion != "" &&
 		equality.Semantic.DeepEqual(source.Spec, archived.Spec) &&
 		equality.Semantic.DeepEqual(source.Status, archived.Status)
 }
@@ -72,16 +62,18 @@ func sameArchivedJob(source, archived *ebsv1.Job) bool {
 func (c *Controller) Run(ctx context.Context, workers int) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	done := make(chan struct{})
+	var loops sync.WaitGroup
+	loops.Add(2)
 	go func() {
-		defer close(done)
+		defer loops.Done()
 		if c.config.HistoryGCEnabled {
 			c.historyLoop(ctx)
 		}
 	}()
+	go func() { defer loops.Done(); c.lifecycleLoop(ctx) }()
 	err := c.BaseController.Run(ctx, workers)
 	cancel()
-	<-done
+	loops.Wait()
 	return err
 }
 

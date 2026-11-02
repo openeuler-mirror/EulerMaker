@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,6 +20,9 @@ import (
 )
 
 func (c *Controller) sync(ctx context.Context, key string) (controller.ReconcileResult, error) {
+	if strings.HasPrefix(key, "jobs/") || strings.HasPrefix(key, "oldjobs/") {
+		return c.syncLifecycle(ctx, key)
+	}
 	now := c.clock.Now()
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil || namespace == "" || name == "" {
@@ -210,15 +214,13 @@ func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *e
 	}
 	preconditions := clientpkg.DeletePreconditions{UID: latest.UID, ResourceVersion: latest.ResourceVersion}
 	if c.config.HistoryAction == "archive" {
-		confirmed, archiveErr := c.archiveHistory(ctx, latest)
-		if archiveErr != nil || !confirmed {
-			return controller.ReconcileResult{}, archiveErr
-		}
+		_, archiveErr := c.archiveHistory(ctx, latest)
+		return controller.ReconcileResult{}, archiveErr
 	}
 	err = c.client.DeleteJob(ctx, latest.Namespace, latest.Name, preconditions)
 	if err == nil {
-		historyDeleted.Inc()
-		log.Printf("controller=%s key=%s uid=%s resourceVersion=%s reason=HistoryJobDeleted", Name, key, latest.UID, latest.ResourceVersion)
+		historyDeletionRequested.Inc()
+		log.Printf("controller=%s key=%s uid=%s resourceVersion=%s reason=HistoryJobDeletionRequested", Name, key, latest.UID, latest.ResourceVersion)
 		return controller.ReconcileResult{}, nil
 	}
 	return c.handleDeleteError(ctx, latest, err, now)
