@@ -22,9 +22,18 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	ebsv1 "ebs-api/ebs/v1"
-	jobstore "ebs-apiserver/pkg/registry/ebs/job"
+	"ebs-apiserver/pkg/registry/ebs/scopedresource"
 	"ebs-apiserver/pkg/storage/es"
 )
+
+func newOldJobsTestStore(client *es.Client) *OldJobs {
+	template := scopedresource.NewStorage(scopedresource.Config{
+		Resource: "jobs", Singular: "job", Kind: "Job",
+		New:     func() runtime.Object { return &ebsv1.Job{} },
+		NewList: func() runtime.Object { return &ebsv1.JobList{} },
+	})
+	return NewOldJobs(client, template.Resource.(*genericregistry.Store))
+}
 
 func TestOldJobsDelete(t *testing.T) {
 	for _, tc := range []struct {
@@ -39,6 +48,11 @@ func TestOldJobsDelete(t *testing.T) {
 	}{
 		{name: "conditional delete", wantDeletes: 1},
 		{name: "without preconditions", changeOpts: func(o *metav1.DeleteOptions) { o.Preconditions = nil }, wantDeletes: 1},
+		{name: "business eligibility belongs to caller", changeJob: func(j *ebsv1.Job) {
+			j.Status.Phase = ebsv1.JobRunning
+			j.Status.EndTime = metav1.Time{}
+			j.Annotations = map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}
+		}, wantDeletes: 1},
 		{name: "UID precondition", changeOpts: func(o *metav1.DeleteOptions) { o.Preconditions.ResourceVersion = nil }, wantDeletes: 1},
 		{name: "version precondition", changeOpts: func(o *metav1.DeleteOptions) { o.Preconditions.UID = nil }, wantDeletes: 1},
 		{name: "dry run", changeOpts: func(o *metav1.DeleteOptions) { o.DryRun = []string{metav1.DryRunAll} }},
@@ -48,15 +62,15 @@ func TestOldJobsDelete(t *testing.T) {
 		{name: "delete unavailable", deleteStatus: 503, wantDeletes: 1, wantReason: metav1.StatusReasonServiceUnavailable},
 		{name: "archive read unavailable", getStatus: 503, wantReason: metav1.StatusReasonServiceUnavailable},
 		{name: "UID changed", changeJob: func(j *ebsv1.Job) { j.UID = "another" }, wantReason: metav1.StatusReasonConflict},
-		{name: "source version changed", changeJob: func(j *ebsv1.Job) { j.ResourceVersion = "124" }, wantReason: metav1.StatusReasonConflict},
+		{name: "ES version changed", changeOpts: func(o *metav1.DeleteOptions) { v := "v1:98:7"; o.Preconditions.ResourceVersion = &v }, wantReason: metav1.StatusReasonConflict},
 		{name: "admission failure", admissionErr: apierrors.NewForbidden(ebsv1.Resource("oldjobs"), "job", nil), wantReason: metav1.StatusReasonForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
 			job := &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{
-				Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "123",
+				Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "v1:99:7",
 			}, Status: ebsv1.JobStatus{Phase: ebsv1.JobSucceeded, EndTime: now}}
-			uid, version := types.UID("uid"), "123"
+			uid, version := types.UID("uid"), "v1:99:7"
 			opts := &metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &version}}
 			if tc.changeJob != nil {
 				tc.changeJob(job)
@@ -79,9 +93,9 @@ func TestOldJobsDelete(t *testing.T) {
 					}
 					return jsonResponse(200, map[string]any{
 						"_id": "project/job", "_seq_no": 99, "_primary_term": 7,
-						"_source": map[string]any{"data": job},
+						"_source": map[string]any{"data": job, "archive": es.JobArchiveRecord{UID: "uid", Digest: "snapshot-digest", Action: "retain"}},
 					}), nil
-				case http.MethodDelete:
+				case http.MethodPut:
 					deletes++
 					q := r.URL.Query()
 					if q.Get("if_seq_no") != "99" || q.Get("if_primary_term") != "7" || q.Get("refresh") != "wait_for" {
@@ -90,13 +104,24 @@ func TestOldJobsDelete(t *testing.T) {
 					if tc.deleteStatus != 0 {
 						return jsonResponse(tc.deleteStatus, map[string]string{"error": "delete failed"}), nil
 					}
-					return jsonResponse(200, map[string]string{"result": "deleted"}), nil
+					var doc es.Document
+					if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
+						t.Fatal(err)
+					}
+					var updated ebsv1.Job
+					if err := json.Unmarshal(doc.Data, &updated); err != nil {
+						t.Fatal(err)
+					}
+					if updated.DeletionTimestamp == nil || len(updated.Finalizers) == 0 || doc.Archive.Action != "delete" {
+						t.Fatalf("invalid deletion intent: %+v", doc)
+					}
+					return jsonResponse(200, map[string]any{"_seq_no": 100, "_primary_term": 7}), nil
 				default:
 					t.Fatalf("unexpected ES request: %s", r.Method)
 					return nil, nil
 				}
 			})})
-			store := NewOldJobs(client, jobstore.NewStorage().Resource.(*genericregistry.Store))
+			store := newOldJobsTestStore(client)
 			ctx := WithSourceFilter(apirequest.WithNamespace(context.Background(), "project"), es.SourceFilter{Includes: []string{"data.status"}})
 			admitted := false
 			admission := func(_ context.Context, obj runtime.Object) error {
@@ -116,7 +141,7 @@ func TestOldJobsDelete(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || !deleted || !admitted || !equality.Semantic.DeepEqual(out, job) {
+			if err != nil || deleted || !admitted || out.(*ebsv1.Job).DeletionTimestamp == nil || !equality.Semantic.DeepEqual(out.(*ebsv1.Job).Status, job.Status) {
 				t.Fatalf("delete=%+v deleted=%v admitted=%v err=%v", out, deleted, admitted, err)
 			}
 		})
@@ -124,87 +149,6 @@ func TestOldJobsDelete(t *testing.T) {
 }
 
 var _ rest.GracefulDeleter = (*OldJobs)(nil)
-
-func TestOldJobsArchiveVersions(t *testing.T) {
-	var stored es.Document
-	var writes int
-	conflict := false
-	client := es.NewClientForTesting("http://es", &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/ebs-oldjobs/_doc/project/job" {
-			t.Fatalf("path=%s", r.URL.Path)
-		}
-		if r.Method == http.MethodGet {
-			if writes == 0 {
-				return jsonResponse(404, map[string]any{"found": false}), nil
-			}
-			return jsonResponse(200, map[string]any{"_id": "project/job", "_seq_no": writes, "_primary_term": 1, "_source": stored}), nil
-		}
-		q := r.URL.Query()
-		if r.Method != http.MethodPut || q.Get("refresh") != "wait_for" {
-			t.Fatalf("request=%s", r.URL)
-		}
-		if writes == 0 {
-			if q.Get("op_type") != "create" {
-				t.Fatal("first archive must create only")
-			}
-		} else if q.Get("if_seq_no") == "" || q.Get("if_primary_term") != "1" {
-			t.Fatal("replacement must use CAS")
-		}
-		if conflict {
-			return jsonResponse(409, map[string]any{"error": "conflict"}), nil
-		}
-		if err := json.NewDecoder(r.Body).Decode(&stored); err != nil {
-			t.Fatal(err)
-		}
-		writes++
-		return jsonResponse(200, map[string]any{"_seq_no": writes, "_primary_term": 1}), nil
-	})})
-	store := NewOldJobs(client, jobstore.NewStorage().Resource.(*genericregistry.Store))
-	ctx := apirequest.WithNamespace(context.Background(), "project")
-	job := &ebsv1.Job{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Job"},
-		ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project", UID: "uid", ResourceVersion: "9"},
-		Status:     ebsv1.JobStatus{Phase: ebsv1.JobSucceeded, EndTime: metav1.NewTime(time.Unix(100, 0))},
-	}
-	for range 2 {
-		out, err := store.Archive(ctx, job)
-		if err != nil || !equality.Semantic.DeepEqual(out, job) {
-			t.Fatalf("archive=%+v err=%v", out, err)
-		}
-	}
-	if writes != 1 || stored.ArchivedAt == "" || stored.DocumentID != "project/job" {
-		t.Fatalf("stored=%+v writes=%d", stored, writes)
-	}
-	newer := job.DeepCopy()
-	newer.ResourceVersion = "10"
-	newer.Annotations = map[string]string{"note": "updated"}
-	if _, err := store.Archive(ctx, newer); err != nil {
-		t.Fatal(err)
-	}
-	if writes != 2 {
-		t.Fatalf("writes=%d", writes)
-	}
-	for _, change := range []func(*ebsv1.Job){
-		func(j *ebsv1.Job) { j.ResourceVersion = "9" },
-		func(j *ebsv1.Job) { j.UID = "other" },
-		func(j *ebsv1.Job) { j.Status.Message = "different snapshot" },
-	} {
-		candidate := newer.DeepCopy()
-		change(candidate)
-		if _, err := store.Archive(ctx, candidate); !apierrors.IsConflict(err) {
-			t.Fatalf("expected conflict: %v", err)
-		}
-	}
-	conflict = true
-	newer.ResourceVersion = "11"
-	if _, err := store.Archive(ctx, newer); !apierrors.IsConflict(err) {
-		t.Fatalf("CAS error=%v", err)
-	}
-	obj, err := store.Get(ctx, "job", &metav1.GetOptions{})
-	if err != nil || obj.(*ebsv1.Job).ResourceVersion != "10" {
-		t.Fatalf("GET=%+v err=%v", obj, err)
-	}
-}
 
 func TestOldJobsProjectedPagination(t *testing.T) {
 	filter := es.SourceFilter{Includes: []string{"data.metadata", "data.status.phase"}}
@@ -249,13 +193,13 @@ func TestOldJobsProjectedPagination(t *testing.T) {
 			return nil, nil
 		}
 	})})
-	store := NewOldJobs(client, jobstore.NewStorage().Resource.(*genericregistry.Store))
+	store := newOldJobsTestStore(client)
 	out, err := store.List(ctx, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first := out.(*ebsv1.JobList)
-	if first.Continue == "" || first.Items[0].ResourceVersion != "123" || first.ResourceVersion != "" {
+	if first.Continue == "" || first.Items[0].ResourceVersion != "v1:5:1" || first.ResourceVersion != "" {
 		t.Fatalf("list=%+v", first)
 	}
 	opts.Continue = first.Continue

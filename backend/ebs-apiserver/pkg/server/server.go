@@ -407,12 +407,15 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	if err := jobStorage.CompleteWithOptions(storeOptions); err != nil {
 		return nil, nil, err
 	}
-	v1Storage["jobs"] = jobStorage.Resource
+	oldJobs := esstore.NewOldJobs(esClient, jobStorage.Resource.(*genericregistry.Store))
+	jobLifecycle := jobstore.NewLifecycle(jobStorage.Resource.(*genericregistry.Store), oldJobs, buildES)
+	v1Storage["jobs"] = jobLifecycle
 	v1Storage["jobs/status"] = jobStorage.Status
 	v1Storage["jobs/abort"] = jobstore.NewAbortStorage(jobStorage.Resource, jobStorage.Status.(rest.Updater))
-	oldJobs := esstore.NewOldJobs(esClient, jobStorage.Resource.(*genericregistry.Store))
 	v1Storage["oldjobs"] = oldJobs
-	v1Storage["jobs/archive"] = jobstore.NewArchiveStorage(jobStorage.Resource, oldJobs)
+	v1Storage["jobs/archive"] = jobstore.NewArchiveStorage(jobLifecycle)
+	v1Storage["jobs/finalizers"] = jobstore.NewFinalizerStorage(jobLifecycle, false)
+	v1Storage["oldjobs/finalizers"] = jobstore.NewFinalizerStorage(jobLifecycle, true)
 
 	runnerStorage := runnerstore.NewStorage()
 	if err := runnerStorage.CompleteWithOptions(storeOptions); err != nil {
