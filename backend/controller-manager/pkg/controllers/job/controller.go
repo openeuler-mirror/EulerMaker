@@ -14,6 +14,7 @@ import (
 
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/manager"
+	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -21,11 +22,12 @@ import (
 const Name = "job"
 
 type Config struct {
-	RunnerLostGracePeriod time.Duration
-	HistoryGCEnabled      bool
-	HistoryAction         string
-	HistoryRetention      time.Duration
-	MaxRetries            int
+	ArtifactManagerTimeout time.Duration
+	RunnerLostGracePeriod  time.Duration
+	HistoryGCEnabled       bool
+	HistoryAction          string
+	HistoryRetention       time.Duration
+	MaxRetries             int
 }
 
 func (c Config) validate() error {
@@ -61,6 +63,9 @@ func New(jobs, runners source.CachedSource, client Client, clk clock.Clock, conf
 }
 
 func newController(jobs, runners source.CachedSource, client Client, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
+	if config.ArtifactManagerTimeout <= 0 {
+		config.ArtifactManagerTimeout = 30 * time.Second
+	}
 	if config.HistoryAction == "" {
 		config.HistoryAction = "delete"
 	}
@@ -85,7 +90,7 @@ func newController(jobs, runners source.CachedSource, client Client, clk clock.C
 	return c, nil
 }
 
-func Initializer(config Config) manager.InitFunc {
+func Initializer(config Config, services serviceconfig.Provider) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		jobs, err := init.Dependencies.WatchFactory.ForResource(source.JobsGVR)
 		if err != nil {
@@ -95,7 +100,11 @@ func Initializer(config Config) manager.InitFunc {
 		if err != nil {
 			return nil, false, err
 		}
-		value, err := newController(jobs, runners, newAPIClient(init.Dependencies.Client), clock.RealClock{}, config,
+		timeout := config.ArtifactManagerTimeout
+		if timeout <= 0 {
+			timeout = 30 * time.Second
+		}
+		value, err := newController(jobs, runners, newAPIClient(init.Dependencies.Client, services, timeout), clock.RealClock{}, config,
 			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
 		return value, err == nil, err
 	}
@@ -138,6 +147,10 @@ func (c *Controller) onJobUpdate(oldObj, newObj runtime.Object) {
 }
 
 func (c *Controller) enqueueJob(key string, job *ebsv1.Job) {
+	if job.DeletionTimestamp != nil {
+		c.Enqueue("jobs/" + key)
+		return
+	}
 	if !job.Status.Phase.IsTerminal() {
 		c.Enqueue(key)
 	}

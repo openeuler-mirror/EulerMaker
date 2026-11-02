@@ -151,6 +151,9 @@ func New(config *rest.Config, timeout time.Duration) (*Client, error) {
 
 // ListPage reads one cluster-wide page with resource-specific polling or history-cleanup field projections.
 func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, opts metav1.ListOptions) (source.ListPage, error) {
+	if (gvr == source.JobsGVR || gvr.Resource == "oldjobs") && opts.FieldSelector == "metadata.deletionTimestamp!=null" {
+		return c.listPage(ctx, gvr, "", opts, "metadata")
+	}
 	if gvr == source.JobsGVR {
 		return c.listPage(ctx, gvr, "", opts, "metadata,status.phase,status.endTime")
 	}
@@ -183,7 +186,7 @@ func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, 
 	return listPage(list)
 }
 
-// ArchiveJob persists a snapshot without deleting its source.
+// ArchiveJob starts or resumes migration and returns the independently versioned OldJob.
 func (c *Client) ArchiveJob(ctx context.Context, project, name string, pre DeletePreconditions) (*ebsv1.Job, error) {
 	gvr := source.JobsGVR
 	if err := c.validateTarget(gvr, project, name); err != nil {
@@ -206,7 +209,7 @@ func (c *Client) ArchiveJob(ctx context.Context, project, name string, pre Delet
 	if err := c.rest.Post().AbsPath(resourcePath(gvr, project, name, "archive")).Body(body).Do(requestCtx).Into(out); err != nil {
 		return nil, classifyWrite("archive", gvr, err)
 	}
-	if out.Namespace != project || out.Name != name || out.UID != pre.UID || out.ResourceVersion != pre.ResourceVersion {
+	if out.Namespace != project || out.Name != name || out.UID != pre.UID || out.ResourceVersion == "" {
 		return nil, unknown("archive", gvr, fmt.Errorf("unexpected Job archive response identity or version"))
 	}
 	return out, nil
@@ -214,7 +217,36 @@ func (c *Client) ArchiveJob(ctx context.Context, project, name string, pre Delet
 
 // PostSubresource posts a JSON request and decodes a response of the parent resource type.
 func (c *Client) PostSubresource(ctx context.Context, gvr schema.GroupVersionResource, namespace, name, subresource string, body any) (runtime.Object, error) {
-	const operation = "post-subresource"
+	return c.writeSubresource(ctx, "POST", gvr, namespace, name, subresource, body)
+}
+
+// PutSubresource performs a conditional lifecycle update and returns the resource object.
+func (c *Client) PutSubresource(ctx context.Context, gvr schema.GroupVersionResource, namespace, name, subresource string, body any) (runtime.Object, error) {
+	return c.writeSubresource(ctx, "PUT", gvr, namespace, name, subresource, body)
+}
+
+// GetSubresource decodes a JSON response that is not necessarily a resource object.
+func (c *Client) GetSubresource(ctx context.Context, gvr schema.GroupVersionResource, namespace, name, subresource string, out any) error {
+	if err := c.validateTarget(gvr, namespace, name); err != nil {
+		return err
+	}
+	if reasons := kvalidation.IsDNS1123Label(subresource); len(reasons) != 0 {
+		return fmt.Errorf("invalid subresource %q", subresource)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	data, err := c.rest.Get().AbsPath(resourcePath(gvr, namespace, name, subresource)).Do(requestCtx).Raw()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+func (c *Client) writeSubresource(ctx context.Context, method string, gvr schema.GroupVersionResource, namespace, name, subresource string, body any) (runtime.Object, error) {
+	operation := "post-subresource"
+	if method == "PUT" {
+		operation = "put-subresource"
+	}
 	if err := c.validateTarget(gvr, namespace, name); err != nil {
 		return nil, notSent(operation, gvr, err)
 	}
@@ -231,7 +263,7 @@ func (c *Client) PostSubresource(ctx context.Context, gvr schema.GroupVersionRes
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
-	if err := c.rest.Post().AbsPath(resourcePath(gvr, namespace, name, subresource)).Body(data).
+	if err := c.rest.Verb(method).AbsPath(resourcePath(gvr, namespace, name, subresource)).Body(data).
 		Do(requestCtx).Into(out); err != nil {
 		return nil, classifyWrite(operation, gvr, err)
 	}
