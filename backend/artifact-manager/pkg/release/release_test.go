@@ -171,7 +171,11 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	rpmPath := filepath.Join(sourcePath, "Packages", "keep.rpm")
-	if err := os.WriteFile(rpmPath, []byte("rpm"), 0640); err != nil {
+	uploadPath := filepath.Join(root, "job-upload.rpm")
+	if err := os.WriteFile(uploadPath, []byte("rpm"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(uploadPath, rpmPath); err != nil {
 		t.Fatal(err)
 	}
 	primary := []byte("source primary metadata")
@@ -228,6 +232,17 @@ func TestFilesystemReleaseMaterializerReusesSourceMetadata(t *testing.T) {
 	releaseRPM, err := os.Stat(filepath.Join(releasePath, "Packages", "keep.rpm"))
 	if err != nil || !os.SameFile(sourceRPM, releaseRPM) {
 		t.Fatalf("release RPM does not link source: %v", err)
+	}
+	if err := os.Remove(uploadPath); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{rpmPath, filepath.Join(releasePath, "Packages", "keep.rpm")} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != "rpm" {
+			t.Fatalf("RPM after upload deletion = %q, %v", data, err)
+		}
+	}
+	if got, err := digestReleaseDirectory(releasePath); err != nil || got != result.Digest {
+		t.Fatalf("release changed after upload deletion: digest=%q error=%v", got, err)
 	}
 }
 
