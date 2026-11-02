@@ -368,6 +368,14 @@ type JobList struct {
 	Items           []Job `json:"items"`
 }
 
+// JobArchiveState confirms a persisted archive independently of the source Job's lifetime.
+type JobArchiveState struct {
+	UID    string `json:"uid"`
+	Action string `json:"action"`
+	Digest string `json:"digest,omitempty"`
+	Phase  string `json:"phase"`
+}
+
 // ScriptRef records the Script observed when a Job is created. It does not
 // pin the content version used by a later execution attempt.
 type ScriptRef struct {

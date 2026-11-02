@@ -2,6 +2,7 @@ package job
 
 import (
 	"fmt"
+	"slices"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -24,6 +25,10 @@ func NewStorage() *scopedresource.Storage {
 			j := obj.(*ebsv1.Job)
 			ebsv1.SetDefaults_Job(j)
 			j.Status = ebsv1.JobStatus{Phase: ebsv1.JobPending, Stage: ebsv1.JobStagePending}
+			if !slices.Contains(j.Finalizers, ebsv1.JobArchiveFinalizer) {
+				j.Finalizers = append(j.Finalizers, ebsv1.JobArchiveFinalizer)
+			}
+			delete(j.Annotations, ebsv1.JobArchiveActionAnnotation)
 		},
 		CopyStatus: func(obj, old runtime.Object) {
 			obj.(*ebsv1.Job).Status = old.(*ebsv1.Job).Status
@@ -51,10 +56,18 @@ func jobAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
 		return nil, nil, fmt.Errorf("expected Job, got %T", obj)
 	}
 	return labels.Set(job.Labels), fields.Set{
-		"metadata.name":      job.Name,
-		"metadata.namespace": job.Namespace,
-		"status.runner":      job.Status.Runner,
-		"status.phase":       string(job.Status.Phase),
-		"status.stage":       string(job.Status.Stage),
+		"metadata.name":              job.Name,
+		"metadata.namespace":         job.Namespace,
+		"metadata.deletionTimestamp": deletionTimestamp(job),
+		"status.runner":              job.Status.Runner,
+		"status.phase":               string(job.Status.Phase),
+		"status.stage":               string(job.Status.Stage),
 	}, nil
+}
+
+func deletionTimestamp(job *ebsv1.Job) string {
+	if job.DeletionTimestamp == nil {
+		return "null"
+	}
+	return job.DeletionTimestamp.UTC().Format("2006-01-02T15:04:05Z")
 }

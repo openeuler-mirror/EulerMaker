@@ -19,4 +19,11 @@ const (
 	ProjectArtifactsAnnotation = "ebs.io/artifacts"
 	// BuildGitRefAnnotation overrides the source ref for a single-package Build.
 	BuildGitRefAnnotation = "ebs.io/git-ref"
+	// JobArchiveActionAnnotation is owned by the archive lifecycle API.
+	JobArchiveActionAnnotation = "ebs.io/job-archive-action"
+)
+
+const (
+	JobArchiveFinalizer          = "ebs.io/job-archive"
+	JobArtifactsCleanupFinalizer = "ebs.io/job-artifacts-cleanup"
 )

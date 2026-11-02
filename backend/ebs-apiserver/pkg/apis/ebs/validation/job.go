@@ -4,12 +4,16 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"slices"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
+	if slices.Contains(obj.Finalizers, ebsv1.JobArtifactsCleanupFinalizer) {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "finalizers"), "artifact cleanup belongs to OldJob"))
+	}
 	if executionType := obj.Spec.Runtime; executionType != "" && !executionType.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "runtime"), executionType, ebsv1.ExecutionTypeValues()))
 	}
@@ -57,6 +61,21 @@ func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 
 func ValidateJobUpdate(newObj, oldObj *ebsv1.Job) field.ErrorList {
 	allErrs := ValidateJob(newObj)
+	if newObj.Annotations[ebsv1.JobArchiveActionAnnotation] != oldObj.Annotations[ebsv1.JobArchiveActionAnnotation] {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "annotations").Key(ebsv1.JobArchiveActionAnnotation), "owned by archive lifecycle"))
+	}
+	if slices.Contains(oldObj.Finalizers, ebsv1.JobArchiveFinalizer) && !slices.Contains(newObj.Finalizers, ebsv1.JobArchiveFinalizer) {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "finalizers"), "use the finalizers subresource to finish archival"))
+	}
+	if oldObj.DeletionTimestamp != nil && oldObj.Status.Phase.IsTerminal() {
+		a, b := newObj.DeepCopy(), oldObj.DeepCopy()
+		a.ResourceVersion, b.ResourceVersion = "", ""
+		a.Finalizers, b.Finalizers = nil, nil
+		a.ManagedFields, b.ManagedFields = nil, nil
+		if !apiequality.Semantic.DeepEqual(a, b) {
+			allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata"), "archived Job snapshot is frozen"))
+		}
+	}
 	if newObj.Annotations[ebsv1.ProjectArtifactsAnnotation] != oldObj.Annotations[ebsv1.ProjectArtifactsAnnotation] {
 		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "annotations").Key(ebsv1.ProjectArtifactsAnnotation), "artifact instance is immutable"))
 	}

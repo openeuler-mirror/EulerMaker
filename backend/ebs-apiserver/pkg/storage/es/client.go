@@ -62,6 +62,7 @@ const oldJobIndexMapping = `{
     "kind":{"type":"keyword"},
     "documentID":{"type":"keyword"},
     "archivedAt":{"type":"date"},
+    "archive":{"type":"object","dynamic":false,"properties":{"deleted":{"type":"boolean"}}},
     "metadata":{"properties":{
       "name":{"type":"keyword"},
       "namespace":{"type":"keyword"},
@@ -72,6 +73,7 @@ const oldJobIndexMapping = `{
       }}
     }},
     "data":{"type":"object","dynamic":false,"properties":{
+      "metadata":{"type":"object","dynamic":false,"properties":{"deletionTimestamp":{"type":"date"}}},
       "status":{"type":"object","dynamic":false,"properties":{
         "phase":{"type":"keyword"},
         "stage":{"type":"keyword"},
@@ -173,13 +175,22 @@ type Metadata struct {
 }
 
 type Document struct {
-	ArchivedAt string          `json:"archivedAt,omitempty"`
-	APIVersion string          `json:"apiVersion"`
-	Kind       string          `json:"kind"`
-	DocumentID string          `json:"documentID"`
-	Metadata   Metadata        `json:"metadata"`
-	Data       json.RawMessage `json:"data"`
-	Credential json.RawMessage `json:"credential,omitempty"`
+	Archive    *JobArchiveRecord `json:"archive,omitempty"`
+	ArchivedAt string            `json:"archivedAt,omitempty"`
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	DocumentID string            `json:"documentID"`
+	Metadata   Metadata          `json:"metadata"`
+	Data       json.RawMessage   `json:"data"`
+	Credential json.RawMessage   `json:"credential,omitempty"`
+}
+
+// JobArchiveRecord fences create-only archive requests even after the public OldJob is removed.
+type JobArchiveRecord struct {
+	UID     string `json:"uid"`
+	Digest  string `json:"digest"`
+	Action  string `json:"action"`
+	Deleted bool   `json:"deleted"`
 }
 
 type Hit struct {

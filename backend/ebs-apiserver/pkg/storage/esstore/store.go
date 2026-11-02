@@ -70,8 +70,6 @@ type Store struct {
 	updateHook        rest.ValidateObjectUpdateFunc
 	createTransaction func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error)
 	afterWrite        func(context.Context, runtime.Object, bool)
-
-	preserveSourceVersion bool
 }
 
 type StatusStore struct {
@@ -139,6 +137,9 @@ func (s *Store) Get(ctx context.Context, name string, _ *metav1.GetOptions) (run
 	var hit *es.Hit
 	var err error
 	if filter, ok := sourceFilter(ctx); ok {
+		if s.resourceName == "oldjob" && len(filter.Includes) > 0 {
+			filter.Includes = append(append([]string(nil), filter.Includes...), "archive.deleted", "metadata.name")
+		}
 		hit, err = s.client.GetWithSourceFilter(ctx, s.resourceName, s.documentID(ctx, name), filter)
 	} else {
 		hit, err = s.client.Get(ctx, s.resourceName, s.documentID(ctx, name))
@@ -417,7 +418,7 @@ func (s *Store) List(ctx context.Context, options *internalversion.ListOptions) 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 	fingerprint := queryFingerprint(s.resourceName, namespace, options)
-	if s.preserveSourceVersion {
+	if s.resourceName == "oldjob" {
 		// Bind archive cursors to projection as well as resource and selectors.
 		filter, _ := sourceFilter(ctx)
 		encoded, _ := json.Marshal(filter)
@@ -573,6 +574,9 @@ func (s *Store) documentFor(ctx context.Context, obj runtime.Object) (es.Documen
 }
 
 func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
+	if s.resourceName == "oldjob" && hit.Document.Archive != nil && hit.Document.Archive.Deleted {
+		return nil, apierrors.NewNotFound(s.resource, hit.Document.Metadata.Name)
+	}
 	obj := s.newFunc()
 	if err := json.Unmarshal(hit.Document.Data, obj); err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("decode %s from Elasticsearch: %w", s.kind, err))
@@ -581,9 +585,7 @@ func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
-	if !s.preserveSourceVersion {
-		accessor.SetResourceVersion(encodeVersion(hit.SeqNo, hit.PrimaryTerm))
-	}
+	accessor.SetResourceVersion(encodeVersion(hit.SeqNo, hit.PrimaryTerm))
 	return obj, nil
 }
 
@@ -681,12 +683,27 @@ func queryFingerprint(resource, namespace string, options *internalversion.ListO
 func selectorQuery(resource, namespace string, options *internalversion.ListOptions) (map[string]interface{}, error) {
 	must := make([]interface{}, 0)
 	mustNot := make([]interface{}, 0)
+	if resource == "oldjob" {
+		mustNot = append(mustNot, map[string]interface{}{"term": map[string]interface{}{"archive.deleted": true}})
+	}
 	if namespace != "" {
 		must = append(must, term("metadata.namespace", namespace))
 	}
 	if options.FieldSelector != nil {
 		for _, req := range options.FieldSelector.Requirements() {
 			field := req.Field
+			if resource == "oldjob" && field == "metadata.deletionTimestamp" && req.Value == "null" {
+				exists := map[string]interface{}{"exists": map[string]interface{}{"field": "data.metadata.deletionTimestamp"}}
+				switch req.Operator {
+				case selection.Equals, selection.DoubleEquals:
+					mustNot = append(mustNot, exists)
+				case selection.NotEquals:
+					must = append(must, exists)
+				default:
+					return nil, fmt.Errorf("unsupported deletionTimestamp selector")
+				}
+				continue
+			}
 			queryField, requireExists, supported := fieldSelectorMapping(resource, field)
 			if !supported {
 				return nil, fmt.Errorf("field selector %q is not supported", field)
