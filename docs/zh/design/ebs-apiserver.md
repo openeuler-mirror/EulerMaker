@@ -769,6 +769,8 @@ ES 归档仅使用 create-only 写入。冲突后实时 GET，只有 UID 和快�
 
 delete 意图先条件 DELETE OldJob 并确认删除标记，再通过源 finalizers 接口收尾。服务端在源 CAS 内检查当前 action 和归档确认；删除源时再次核对 UID/resourceVersion，避免标记升级与最后删除竞争。其它 finalizer 未完成时源对象继续保留。
 
+源 finalizer 移除与物理删除是两次写入。若前者成功、后者失败，源 Job 会以空 finalizers 保留；Job Controller 重新读取最新 UID/resourceVersion 后调用同一 finalizers 接口，服务端仍校验归档及删除意图，再完成物理删除。此时归档阶段仍为 Stored，不能提前清理 OldJob 数据。
+
 OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，并保留轻量 `archive.deleted=true` 凭据；公开 GET 返回 404、List 排除该记录。凭据占据原文档 ID，任何迟到的 create-only 请求都会冲突，不能在清理后重建 OldJob。这是持久化写屏障，不依赖进程内锁或“请求超时就视为结束”。凭据不自动过期；在没有可证明的迟到写入截止边界之前，不能清除它。源 Job 消失后，etcd 不保留完整归档副本。
 
 内部 GET archive 返回 `{uid, action, digest, phase}`，不返回正文：
