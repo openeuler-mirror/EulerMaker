@@ -63,9 +63,6 @@ func New(jobs, runners source.CachedSource, client Client, clk clock.Clock, conf
 }
 
 func newController(jobs, runners source.CachedSource, client Client, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
-	if config.ArtifactManagerTimeout <= 0 {
-		config.ArtifactManagerTimeout = 30 * time.Second
-	}
 	if config.HistoryAction == "" {
 		config.HistoryAction = "delete"
 	}
@@ -100,11 +97,8 @@ func Initializer(config Config, services serviceconfig.Provider) manager.InitFun
 		if err != nil {
 			return nil, false, err
 		}
-		timeout := config.ArtifactManagerTimeout
-		if timeout <= 0 {
-			timeout = 30 * time.Second
-		}
-		value, err := newController(jobs, runners, newAPIClient(init.Dependencies.Client, services, timeout), clock.RealClock{}, config,
+		client := newAPIClient(init.Dependencies.Client, services, config.ArtifactManagerTimeout)
+		value, err := newController(jobs, runners, client, clock.RealClock{}, config,
 			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
 		return value, err == nil, err
 	}
@@ -151,7 +145,7 @@ func (c *Controller) enqueueJob(key string, job *ebsv1.Job) {
 		c.Enqueue("jobs/" + key)
 		return
 	}
-	if !job.Status.Phase.IsTerminal() {
+	if processable(job) {
 		c.Enqueue(key)
 	}
 }
@@ -195,11 +189,12 @@ func (c *Controller) onRunnerDelete(obj runtime.Object) {
 }
 
 func (c *Controller) updateIndex(key string, job *ebsv1.Job) {
-	if !job.Status.Phase.IsTerminal() && job.Status.Runner != "" {
+	if processable(job) {
 		c.index.set(key, job.Status.Runner)
 		return
 	}
 	c.index.remove(key)
+	c.clearObservation(key)
 }
 
 func (c *Controller) enqueueRunnerJobs(runner string) {

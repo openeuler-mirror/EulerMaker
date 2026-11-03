@@ -122,7 +122,8 @@ func (c *Controller) syncLifecycle(ctx context.Context, key string) (controller.
 }
 
 func (c *Controller) migrateJob(ctx context.Context, job *ebsv1.Job) (bool, error) {
-	if !slices.Contains(job.Finalizers, ebsv1.JobArchiveFinalizer) {
+	// Finalizer removal and physical deletion are separate writes. An empty list still needs deletion recovery.
+	if len(job.Finalizers) > 0 && !slices.Contains(job.Finalizers, ebsv1.JobArchiveFinalizer) {
 		return false, nil
 	}
 	if !job.Status.Phase.IsTerminal() {
@@ -154,8 +155,9 @@ func (c *Controller) migrateJob(ctx context.Context, job *ebsv1.Job) (bool, erro
 			return false, fmt.Errorf("OldJob UID mismatch")
 		}
 		if old.DeletionTimestamp == nil {
-			err := c.client.DeleteOldJob(ctx, old)
-			return err == nil, err
+			if err := c.client.DeleteOldJob(ctx, old); err != nil {
+				return false, err
+			}
 		}
 	}
 	if err := c.client.FinalizeJob(ctx, job, false); err != nil {

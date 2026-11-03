@@ -41,10 +41,6 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	if !ok || job == nil {
 		return controller.ReconcileResult{}, fmt.Errorf("unexpected Job cache object %T for %s", obj, key)
 	}
-	if job.Status.Phase.IsTerminal() {
-		c.clearObservation(key)
-		return controller.ReconcileResult{}, nil
-	}
 	if !processable(job) {
 		c.clearObservation(key)
 		return controller.ReconcileResult{}, nil
@@ -165,7 +161,7 @@ func (c *Controller) confirmUnknownStatus(ctx context.Context, key string, reque
 		log.Printf("controller=%s key=%s reason=StatusWriteUnknown writeError=%v confirmError=%v", Name, key, original, err)
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
-	if latest.UID != request.UID || latest.Status.Phase == ebsv1.JobFailed || !processable(latest) || latest.Status.Runner != request.Status.Runner {
+	if latest.UID != request.UID || !processable(latest) || latest.Status.Runner != request.Status.Runner {
 		c.clearObservation(key)
 		return controller.ReconcileResult{}, nil
 	}

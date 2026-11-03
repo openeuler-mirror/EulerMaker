@@ -24,9 +24,10 @@ import (
 
 type lifecycleMemory struct {
 	storage.Interface
-	mu       sync.Mutex
-	job      *ebsv1.Job
-	revision int
+	mu            sync.Mutex
+	job           *ebsv1.Job
+	revision      int
+	deleteFailure error
 }
 
 func (*lifecycleMemory) Versioner() storage.Versioner { return storage.APIObjectVersioner{} }
@@ -74,6 +75,9 @@ func (s *lifecycleMemory) Delete(_ context.Context, key string, out runtime.Obje
 	}
 	if err := validate(context.Background(), s.job); err != nil {
 		return err
+	}
+	if s.deleteFailure != nil {
+		return s.deleteFailure
 	}
 	s.job.DeepCopyInto(out.(*ebsv1.Job))
 	s.job = nil
@@ -180,6 +184,50 @@ func TestJobArchiveLifecycle(t *testing.T) {
 	state, err := lifecycle.ArchiveState(ctx, "job")
 	if err != nil || state.Phase != "Transferred" || archived.job == nil || memory.job != nil {
 		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
+
+func TestFinalizeResumesAfterPhysicalDeleteFailure(t *testing.T) {
+	for _, action := range []string{"retain", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			lifecycle, memory, archived, _ := newLifecycleTest(t)
+			if action == "delete" {
+				if _, _, err := lifecycle.Delete(ctx, "job", nil, &metav1.DeleteOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
+				t.Fatal(err)
+			}
+			if action == "delete" {
+				now := metav1.Now()
+				archived.job.DeletionTimestamp = &now
+			}
+			stale := archivePre(memory.job)
+			memory.deleteFailure = fmt.Errorf("etcd delete unavailable")
+			if _, err := lifecycle.Finalize(ctx, "job", stale); err == nil {
+				t.Fatal("expected physical delete failure")
+			}
+			if memory.job == nil || len(memory.job.Finalizers) != 0 || memory.job.ResourceVersion == *stale.ResourceVersion {
+				t.Fatalf("finalizer removal was not persisted: %+v", memory.job)
+			}
+			state, err := lifecycle.ArchiveState(ctx, "job")
+			if err != nil || state.Phase != "Stored" {
+				t.Fatalf("unfinished transfer: state=%+v err=%v", state, err)
+			}
+			memory.deleteFailure = nil
+			if _, err := lifecycle.Finalize(ctx, "job", stale); err == nil {
+				t.Fatal("stale preconditions accepted")
+			}
+			if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); err != nil {
+				t.Fatal(err)
+			}
+			state, err = lifecycle.ArchiveState(ctx, "job")
+			if err != nil || state.Phase != "Transferred" || memory.job != nil || archived.job == nil {
+				t.Fatalf("resumed transfer: state=%+v err=%v", state, err)
+			}
+		})
 	}
 }
 

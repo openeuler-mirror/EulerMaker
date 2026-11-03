@@ -12,6 +12,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/serviceconfig"
@@ -52,6 +53,9 @@ func (e *cleanupError) Error() string {
 }
 
 func newAPIClient(value *clientpkg.Client, services serviceconfig.Provider, timeout time.Duration) Client {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	return &apiClient{client: value, services: services, http: &http.Client{
 		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -144,13 +148,21 @@ func (c *apiClient) ListHistoryPage(ctx context.Context, phase ebsv1.JobPhase, t
 }
 
 func (c *apiClient) GetJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
-	obj, err := c.client.Get(ctx, source.JobsGVR, namespace, name)
+	return c.getJob(ctx, source.JobsGVR, namespace, name)
+}
+
+func (c *apiClient) GetOldJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
+	return c.getJob(ctx, ebsv1.SchemeGroupVersion.WithResource("oldjobs"), namespace, name)
+}
+
+func (c *apiClient) getJob(ctx context.Context, resource schema.GroupVersionResource, namespace, name string) (*ebsv1.Job, error) {
+	obj, err := c.client.Get(ctx, resource, namespace, name)
 	if err != nil {
 		return nil, err
 	}
 	job, ok := obj.(*ebsv1.Job)
 	if !ok || job == nil || job.Namespace != namespace || job.Name != name || job.UID == "" || job.ResourceVersion == "" {
-		return nil, fmt.Errorf("unexpected Job response for %s/%s: %T", namespace, name, obj)
+		return nil, fmt.Errorf("unexpected %s response for %s/%s: %T", resource.Resource, namespace, name, obj)
 	}
 	return job, nil
 }
@@ -185,19 +197,6 @@ func (c *apiClient) UpdateJobStatus(ctx context.Context, request *ebsv1.Job) (*e
 
 func (c *apiClient) DeleteJob(ctx context.Context, namespace, name string, preconditions clientpkg.DeletePreconditions) error {
 	return c.client.Delete(ctx, source.JobsGVR, namespace, name, preconditions)
-}
-
-func (c *apiClient) GetOldJob(ctx context.Context, namespace, name string) (*ebsv1.Job, error) {
-	gvr := ebsv1.SchemeGroupVersion.WithResource("oldjobs")
-	obj, err := c.client.Get(ctx, gvr, namespace, name)
-	if err != nil {
-		return nil, err
-	}
-	job, ok := obj.(*ebsv1.Job)
-	if !ok || job == nil || job.Namespace != namespace || job.Name != name || job.UID == "" || job.ResourceVersion == "" {
-		return nil, fmt.Errorf("unexpected archived Job response for %s/%s: %T", namespace, name, obj)
-	}
-	return job, nil
 }
 
 func (c *apiClient) ArchiveJob(ctx context.Context, namespace, name string, pre clientpkg.DeletePreconditions) (*ebsv1.Job, error) {

@@ -125,8 +125,10 @@ UID 不编码在字符串键中。`Sync` 每次从缓存取得最新对象，并
 
 ### 4.2 Job 事件
 
-- `Add`：非终态 Job 立即入队，`status.runner` 非空时还要更新反向索引。
-- `Update`：先按旧对象删除索引，再按新对象增加索引。UID、phase、runner、`endTime` 或删除状态变化时入队；仅有无关字段变化不重复入队。Informer resync 重新入队非终态 Job。
+- 实时处理范围统一为未删除、`phase=Running` 且 `status.runner` 非空的 Job；调谐入口、实时入队和反向索引使用同一判断。
+- `Add`：范围内的 Job 加入反向索引并立即入队。
+- `Update`：按新对象维护索引，离开范围时清理索引和本地宽限期记录。UID、phase、runner、`endTime` 或删除状态变化及 Informer resync 时，重新判断是否入队；仅有无关字段变化不重复入队。
+- 删除中的 Job 改入 6.4 的生命周期队列，不参与 Runner 丢失处理。
 - `Delete`：删除反向索引和本地宽限期记录，不需要写 API。Job 进入终态后离开 selector 也产生删除事件，不代表 API 对象已删除。
 
 事件处理器只做类型检查、索引维护和入队，不调用外部 API，不执行状态机。
@@ -268,11 +270,11 @@ status:
 
 archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归档已经开始或允许清理数据的标记。归档 action、冻结快照和跨实例写屏障统一见 [apiserver](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
 
-1. 仅处理已删除中且仍带 archive finalizer 的源 Job；自身 finalizer 已移除时结束，不重复归档收尾。GET 最新对象及迁移记录，确认 UID/action；记录缺失视为契约异常，不从 deletionTimestamp 推导 retain/delete。
+1. 处理已删除中且仍带 archive finalizer 的源 Job。自身 finalizer 已移除但还剩其它 finalizer 时等待其拥有者；finalizers 已空但源对象仍存在时，继续核验归档并调用受控 finalizers 接口完成物理删除。移除 finalizer 与删除正文是两次写入，不能把前者成功等同于源已消失。GET 最新对象及迁移记录，确认 UID/action；记录缺失视为契约异常，不从 deletionTimestamp 推导 retain/delete。
 2. 核验源 Job 为终态且 endTime 非零，再请求归档。非终态删除由 apiserver 拒绝，上层负责先调用 abort 并确认终态；若发现异常的非终态删除对象，记录错误并保留对象，不自动中止。停止写入由上层业务保证。删除所需归档不被父 Build 删除或缺失阻断。
 3. 调用 archive 子资源冻结或恢复同一快照；确认 ES 持久化及 create-only/删除凭据保护。源 Job 仍受 archive finalizer 保护，此分支永不调用 DeleteJobData。
-4. 读取最新 action：retain 保留 OldJob；delete 对同 UID OldJob 发起条件 DELETE，并确认其删除标记。若 OldJob 已删除中不重复请求；读取失败或身份不符保留源对象。
-5. 以最新源版本移除 archive finalizer，保留其它条目；源对象已经删除中，不再发送普通 Job DELETE。若并发 DELETE 将 retain 升级为 delete，旧版本收尾必须冲突并重新处理，不能漏掉 OldJob 删除。
+4. 读取最新 action：retain 保留 OldJob；delete 对同 UID OldJob 发起条件 DELETE。请求成功后同轮进入源收尾；若 OldJob 已删除中不重复请求。读取失败、身份不符或删除结果未确认时停止推进并保留源对象。
+5. 使用本轮读取的源 UID/resourceVersion 调用受控 finalizers 接口，移除 archive finalizer，保留其它条目；不使用 OldJob 版本替换源版本，不再发送普通 Job DELETE。若并发 DELETE 将 retain 升级为 delete，旧版本收尾必须冲突并重新处理，不能漏掉 OldJob 删除。
 6. 等待源 Job 真正消失。OldJob 删除标记已持久化时，由 6.4 继续处理；源消失后重启也不丢失清理入口。
 
 | 操作结果 | 本轮处理 |
@@ -304,7 +306,7 @@ archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归
 6. 清理成功后以本轮已读取的 UID/resourceVersion 调用 finalizers，服务端重新核验删除状态与迁移完成。Conflict 或 Unknown 下轮重新 GET 并判定，允许重复幂等清理；不得仅替换版本重放旧对象。
 7. 保留其它 finalizer、业务状态和实例归属。不删除过程仓、发布仓及 current；数据已清理但 API 更新失败时允许短暂出现 API 仍在而文件不存在，下轮重复清理即可。
 
-归档成功或 OldJob 删除意图确认成功后返回 `Requeue=true`，立即重新读取最新状态推进；等待源消失等外部条件、自身 finalizer 已移除或清理完成时返回空结果，由周期扫描发现后续变化，不统一设置 10 秒延迟重排。临时故障仍使用队列退避及合法 Retry-After；永久权限/契约错误记录告警并保留 finalizer，周期轮询使修复后仍可继续。一个 Job 失败不阻塞其它 Job。日志分别记录意图已受理、数据清理成功和 API 对象真正删除，不能将 DELETE 的 2xx 等同于最终清理完成。
+归档成功后返回 `Requeue=true`，立即重新读取最新状态推进；OldJob 删除意图确认成功后按 6.3 同轮完成源收尾。等待源消失等外部条件、源仅剩其它 finalizer 或清理完成时返回空结果，由周期扫描发现后续变化，不统一设置 10 秒延迟重排。临时故障仍使用队列退避及合法 Retry-After；永久权限/契约错误记录告警并保留 finalizer，周期轮询使修复后仍可继续。一个 Job 失败不阻塞其它 Job。日志分别记录意图已受理、数据清理成功和 API 对象真正删除，不能将 DELETE 的 2xx 等同于最终清理完成。
 
 停止写入仍是上层业务前提；Artifact Manager 的幂等删除不提供上传写入隔离。ES 删除凭据只保护归档元数据，不阻止 Runner 重新上传文件。
 
@@ -501,11 +503,11 @@ job_controller_history_archive_error_total
 | 首次进入 Runner 丢失宽限期 | `RunnerUnavailable` |
 | Runner 在宽限期内恢复 | `RunnerRecovered` |
 | 宽限期到期并把 Job 收敛为 Failed | `RunnerLost` |
-| 删除过期历史 Job | `HistoryJobDeleted` |
+| 已受理过期历史 Job 删除意图 | `HistoryJobDeletionRequested` |
 | 已确认归档，可继续条件删除 | `HistoryJobArchived` |
-| 归档失败、冲突或未知结果未确认 | `HistoryJobArchiveDeferred` |
+| 历史候选处理失败、冲突或未知结果未确认 | `HistoryJobDeferred` |
 
-归档日志包含 action、源 UID/resourceVersion、HTTP 状态或 WriteError.Outcome，不打印完整 Job。`HistoryJobArchived` 只表示本轮已确认归档，不代表新增文档；删除成功仍单独记录。
+历史候选的失败日志统一由扫描层记录一次，包含 action、key、UID 和错误，内部处理仅更新分类指标。成功日志记录本次使用的源 resourceVersion，不打印完整 Job。`HistoryJobArchived` 只表示本轮已确认归档，不代表新增文档；删除成功仍单独记录。
 
 相同 reason 的日志必须限速或聚合，避免 Runner 离线时产生日志风暴。Event 作为后续独立能力设计；未来增加时需要同时定义 Recorder 接口、事件存储、RBAC、聚合策略和写入失败语义，不能改变当前调谐结果。
 
@@ -571,7 +573,10 @@ job_controller_history_archive_error_total
 | OldJob 提前删除、源有其它 finalizer | OldJob 等待源消失；源归档不等待 OldJob 清理，不形成死锁 | Controller 集成测试 |
 | 父 Build 删除中或缺失 | 阻止新 retain，允许删除必需的归档及已有意图恢复 | apiserver 集成测试 |
 | 同名源与归档对象 | 队列键区分资源；UID/实例不匹配时保留并告警 | 单元测试 |
-| 生命周期推进与等待 | 已确认推进立即重入；等待源消失及自身 finalizer 完成时不主动延迟重排；失败仍按错误分类处理 | 单元测试 |
+| 生命周期推进与等待 | 归档确认后立即重入；OldJob 删除成功同轮收尾源对象，Conflict/Unknown 停止推进；等待外部条件或清理完成时不主动延迟重排 | 单元测试 |
+| 实时处理范围 | 入队、反向索引与调谐共用 Running 且已绑定 Runner 的范围；退出范围清理宽限期；删除事件走生命周期队列 | 单元测试 |
+| 历史候选失败日志 | archive/delete 单个候选失败均只打印一次 HistoryJobDeferred，并保留分类指标 | 单元测试 |
+| 源 finalizer 已移除但物理删除失败 | 轮询重新发现空 finalizers 的源 Job；使用最新 UID/resourceVersion 调用受控收尾接口，重启后也可恢复；源消失前 OldJob 不清理数据 | Controller 与 apiserver 单元测试 |
 | 终态删除与 retain 迁移 | 两者均有删除标记；生命周期轮询可发现；普通 Job 的默认 finalizer 不造成入队；GC 关闭仍推进 | 轮询集成测试 |
 | OldJob 删除标记确认后、源消失后立即重启 | 从 OldJob 恢复清理；retain 则继续保留，不靠内存判断 | 进程重启测试 |
 | 冻结意图、ES 写入、数据清理、finalizer 更新各阶段重启 | 恢复原意图，通过 UID 和摘要确认冻结快照；持久化凭据阻断迟到归档；成功清理可重复 | 进程重启故障注入 |

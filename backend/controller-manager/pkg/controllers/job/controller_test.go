@@ -1,13 +1,16 @@
 package job
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -140,12 +143,11 @@ func (c *fakeClient) DeleteJobData(ctx context.Context, job *ebsv1.Job) error {
 	return c.deleteJobDataFn(ctx, job)
 }
 
-func TestHistoryDeletionCoordinatesJobData(t *testing.T) {
+func TestHistoryRecordsLifecycleIntent(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		action     string
-		cleanupErr error
-		want       []string
+		name   string
+		action string
+		want   []string
 	}{
 		{name: "business deletion records intent", action: "delete", want: []string{"delete"}},
 		{name: "archive migration retains data", action: "archive", want: []string{"archive"}},
@@ -155,18 +157,10 @@ func TestHistoryDeletionCoordinatesJobData(t *testing.T) {
 			job := runningJob()
 			job.Status.Phase = ebsv1.JobSucceeded
 			job.Status.EndTime = metav1.NewTime(now.Add(-31 * 24 * time.Hour))
-			job.Annotations = map[string]string{ebsv1.ProjectArtifactsAnnotation: "art-01"}
 			var actions []string
 			client := &fakeClient{
-				getJobFn: func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil },
-				deleteJobDataFn: func(_ context.Context, current *ebsv1.Job) error {
-					if current.Namespace != job.Namespace || current.Name != job.Name ||
-						current.Annotations[ebsv1.ProjectArtifactsAnnotation] != "art-01" {
-						t.Fatalf("unexpected cleanup identity: %+v", current.ObjectMeta)
-					}
-					actions = append(actions, "data")
-					return tc.cleanupErr
-				},
+				getJobFn:        func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil },
+				deleteJobDataFn: func(context.Context, *ebsv1.Job) error { actions = append(actions, "data"); return nil },
 				archiveFn: func(context.Context, string, string, clientpkg.DeletePreconditions) (*ebsv1.Job, error) {
 					actions = append(actions, "archive")
 					return job.DeepCopy(), nil
@@ -245,65 +239,79 @@ func newTestController(t *testing.T, now time.Time, job *ebsv1.Job, cachedRunner
 	return c, clk, jobs, runners
 }
 
-func TestJobEventsQueueOnlyLiveJobs(t *testing.T) {
-	now := time.Unix(10_000_000, 0)
-	job := runningJob()
-	job.Finalizers = []string{ebsv1.JobArchiveFinalizer}
-	job.Status.Phase = ebsv1.JobSucceeded
-	job.Status.EndTime = metav1.NewTime(now.Add(-time.Hour))
-	jobs := &fakeCachedSource{objects: make(map[string]runtime.Object)}
-	runners := &fakeCachedSource{objects: make(map[string]runtime.Object)}
-	clk := clocktesting.NewFakeClock(now)
-	c, err := newController(jobs, runners, &fakeClient{}, clk, Config{
-		RunnerLostGracePeriod: time.Minute,
-		HistoryGCEnabled:      true,
-		HistoryRetention:      2 * time.Hour,
-		MaxRetries:            1,
-	}, controller.WithClock(clk))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer c.Queue().ShutDown()
-
-	c.onJobAdd(job)
-	if c.Queue().Len() != 0 {
-		t.Fatal("terminal Job was immediately enqueued before its retention deadline")
-	}
-	c.onJobUpdate(job.DeepCopy(), job.DeepCopy()) // Informer resync must not enqueue it immediately.
-	if c.Queue().Len() != 0 {
-		t.Fatal("resync immediately enqueued a terminal Job before its retention deadline")
-	}
-	clk.Step(time.Hour)
-	job.Status.Phase = ebsv1.JobRunning
-	c.onJobAdd(job)
-	if c.Queue().Len() != 1 {
-		t.Fatal("live Job was not enqueued")
-	}
-}
-
-func TestTerminalJobEventsLeaveGCToScanner(t *testing.T) {
+func TestJobEventsUseReconcileScope(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
 	for _, tc := range []struct {
-		name    string
-		endTime metav1.Time
-		gc      bool
-		want    int
+		name     string
+		phase    ebsv1.JobPhase
+		runner   string
+		endTime  metav1.Time
+		gc       bool
+		deleting bool
+		queueKey string
+		indexed  bool
 	}{
-		{name: "expired", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour)), gc: true},
-		{name: "missing endTime", gc: true},
-		{name: "GC disabled", endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour))},
+		{name: "pending", phase: ebsv1.JobPending, runner: "runner"},
+		{name: "unassigned", phase: ebsv1.JobRunning},
+		{name: "running", phase: ebsv1.JobRunning, runner: "runner", queueKey: "project/job", indexed: true},
+		{name: "terminal recent", phase: ebsv1.JobSucceeded, runner: "runner",
+			endTime: metav1.NewTime(now.Add(-time.Hour)), gc: true},
+		{name: "terminal expired", phase: ebsv1.JobFailed, runner: "runner",
+			endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour)), gc: true},
+		{name: "terminal missing endTime", phase: ebsv1.JobAborted, runner: "runner", gc: true},
+		{name: "terminal GC disabled", phase: ebsv1.JobFailed, runner: "runner",
+			endTime: metav1.NewTime(now.Add(-31 * 24 * time.Hour))},
+		{name: "deleting", phase: ebsv1.JobRunning, runner: "runner", deleting: true, queueKey: "jobs/project/job"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			job := runningJob()
-			job.Status.Phase = ebsv1.JobFailed
-			job.Status.EndTime = tc.endTime
-			c, _, _, _ := newTestController(t, now, job, nil, &fakeClient{}, tc.gc)
-			defer c.Queue().ShutDown()
-			c.onJobAdd(job)
-			if got := c.Queue().Len(); got != tc.want {
-				t.Fatalf("queue length = %d, want %d", got, tc.want)
-			}
-		})
+		for _, event := range []string{"add", "update", "resync"} {
+			t.Run(tc.name+"/"+event, func(t *testing.T) {
+				previous := runningJob()
+				job := previous.DeepCopy()
+				job.Status.Phase, job.Status.Runner, job.Status.EndTime = tc.phase, tc.runner, tc.endTime
+				if tc.deleting {
+					ts := metav1.NewTime(now)
+					job.DeletionTimestamp = &ts
+				}
+				c, _, _, _ := newTestController(t, now, previous, nil, &fakeClient{}, tc.gc)
+				defer c.Queue().ShutDown()
+				c.updateIndex("project/job", previous)
+				c.observation("project/job", previous, now)
+				switch event {
+				case "add":
+					c.onJobAdd(job)
+				case "update":
+					job.ResourceVersion = "11"
+					c.onJobUpdate(previous, job)
+				case "resync":
+					c.onJobUpdate(job.DeepCopy(), job)
+				}
+				if got := len(c.index.jobs("runner")) > 0; got != tc.indexed {
+					t.Fatalf("indexed=%v, want %v", got, tc.indexed)
+				}
+				if got := len(c.observations) > 0; got != tc.indexed {
+					t.Fatalf("observation retained=%v, want %v", got, tc.indexed)
+				}
+				wantKey := tc.queueKey
+				// An update with only resourceVersion changed is not a resync or a meaningful state change.
+				if event == "update" && tc.indexed {
+					wantKey = ""
+				}
+				if wantKey == "" {
+					if c.Queue().Len() != 0 {
+						t.Fatal("Job event unexpectedly enqueued")
+					}
+					return
+				}
+				if c.Queue().Len() != 1 {
+					t.Fatalf("queue length=%d", c.Queue().Len())
+				}
+				key, _ := c.Queue().Get()
+				c.Queue().Done(key)
+				if key != wantKey {
+					t.Fatalf("key=%v, want %s", key, wantKey)
+				}
+			})
+		}
 	}
 }
 
@@ -528,7 +536,7 @@ func TestDeletionLifecycleResumesAndHandsOff(t *testing.T) {
 			actions = append(actions, "handoff")
 			old.DeletionTimestamp = &timestamp
 			old.ResourceVersion = "v1:2:1"
-			return nil
+			return &clientpkg.WriteError{Outcome: clientpkg.WriteUnknown, Err: errors.New("response lost")}
 		},
 		finalizeFn: func(_ context.Context, current *ebsv1.Job, isOld bool) error {
 			if isOld {
@@ -555,7 +563,7 @@ func TestDeletionLifecycleResumesAndHandsOff(t *testing.T) {
 		// Each round gets a new controller: no in-memory migration state is required.
 		c, _, _, _ := newTestController(t, now, runningJob(), nil, client, false)
 		result, err := c.sync(ctx, "jobs/project/job")
-		if (round == 0) != (err != nil) || result.Requeue != (round == 1) || result.RequeueAfter != 0 {
+		if (round < 2) != (err != nil) || result != (controller.ReconcileResult{}) {
 			t.Fatalf("round=%d result=%+v err=%v", round, result, err)
 		}
 		if round == 1 {
@@ -581,6 +589,103 @@ func TestDeletionLifecycleResumesAndHandsOff(t *testing.T) {
 	}
 }
 
+func TestOldJobHandoffFinalizesSourceInSameReconcile(t *testing.T) {
+	for _, outcome := range []string{"success", "conflict", "unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			now := time.Unix(1000, 0)
+			job := runningJob()
+			ts := metav1.NewTime(now)
+			job.Status.Phase, job.Status.EndTime = ebsv1.JobSucceeded, ts
+			job.DeletionTimestamp = &ts
+			job.Finalizers = []string{ebsv1.JobArchiveFinalizer}
+			old := job.DeepCopy()
+			old.DeletionTimestamp = nil
+			old.ResourceVersion = "old-version"
+			var actions []string
+			client := &fakeClient{
+				getJobFn: func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil },
+				archiveStateFn: func(context.Context, string, string) (*ebsv1.JobArchiveState, error) {
+					return &ebsv1.JobArchiveState{UID: string(job.UID), Action: "delete", Phase: "Stored"}, nil
+				},
+				getOldJobFn: func(context.Context, string, string) (*ebsv1.Job, error) { return old.DeepCopy(), nil },
+				deleteOldFn: func(_ context.Context, current *ebsv1.Job) error {
+					if current.ResourceVersion != old.ResourceVersion {
+						t.Fatal("handoff used source version")
+					}
+					actions = append(actions, "handoff")
+					switch outcome {
+					case "conflict":
+						return &clientpkg.WriteError{Outcome: clientpkg.WriteRejected, StatusCode: 409}
+					case "unknown":
+						return &clientpkg.WriteError{Outcome: clientpkg.WriteUnknown, Err: errors.New("response lost")}
+					}
+					return nil
+				},
+				finalizeFn: func(_ context.Context, current *ebsv1.Job, isOld bool) error {
+					if isOld || current.UID != job.UID || current.ResourceVersion != job.ResourceVersion {
+						t.Fatal("finalize must retain source UID and resourceVersion")
+					}
+					actions = append(actions, "finalize")
+					return nil
+				},
+			}
+			c, _, _, _ := newTestController(t, now, job, nil, client, false)
+			defer c.Queue().ShutDown()
+			result, err := c.sync(context.Background(), "jobs/project/job")
+			if (err == nil) != (outcome == "success") || result != (controller.ReconcileResult{}) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			want := []string{"handoff"}
+			if outcome == "success" {
+				want = append(want, "finalize")
+			}
+			if !reflect.DeepEqual(actions, want) || client.getJobCalls != 1 {
+				t.Fatalf("actions=%v source reads=%d", actions, client.getJobCalls)
+			}
+		})
+	}
+}
+
+func TestHistoryFailureLoggedOnce(t *testing.T) {
+	for _, action := range []string{"archive", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			now := time.Unix(10_000_000, 0)
+			job := runningJob()
+			job.Status.Phase = ebsv1.JobSucceeded
+			job.Status.EndTime = metav1.NewTime(now.Add(-31 * 24 * time.Hour))
+			failure := &clientpkg.WriteError{Outcome: clientpkg.WriteUnknown, Err: errors.New("response lost")}
+			client := &fakeClient{
+				listHistoryFn: func(_ context.Context, phase ebsv1.JobPhase, _ string, _ int64) (source.ListPage, error) {
+					if phase == job.Status.Phase {
+						return source.ListPage{Items: []runtime.Object{job.DeepCopy()}}, nil
+					}
+					return source.ListPage{}, nil
+				},
+				getJobFn: func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil },
+				archiveFn: func(context.Context, string, string, clientpkg.DeletePreconditions) (*ebsv1.Job, error) {
+					return nil, failure
+				},
+				deleteFn: func(context.Context, string, string, clientpkg.DeletePreconditions) error { return failure },
+			}
+			c, _, _, _ := newTestController(t, now, job, nil, client, true)
+			defer c.Queue().ShutDown()
+			c.config.HistoryAction = action
+			var output bytes.Buffer
+			previous := log.Writer()
+			log.SetOutput(&output)
+			defer log.SetOutput(previous)
+			if err := c.scanHistory(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(output.String(), "\n") != 1 ||
+				!strings.Contains(output.String(), "reason=HistoryJobDeferred") ||
+				!strings.Contains(output.String(), "action="+action) {
+				t.Fatalf("unexpected failure logs: %s", output.String())
+			}
+		})
+	}
+}
+
 func TestLifecyclePollingWorksWithoutHistoryGC(t *testing.T) {
 	now := time.Unix(1000, 0)
 	deleting := runningJob()
@@ -600,31 +705,6 @@ func TestLifecyclePollingWorksWithoutHistoryGC(t *testing.T) {
 	}
 	if !reflect.DeepEqual(scopes, []bool{false, true}) {
 		t.Fatalf("scopes=%v", scopes)
-	}
-}
-
-func TestHistoryGCUsesLatestPreconditions(t *testing.T) {
-	now := time.Unix(10_000_000, 0)
-	job := runningJob()
-	job.Status.Phase = ebsv1.JobSucceeded
-	job.Status.EndTime = metav1.NewTime(now.Add(-30 * 24 * time.Hour))
-	latest := job.DeepCopy()
-	latest.ResourceVersion = "22"
-	var got clientpkg.DeletePreconditions
-	client := &fakeClient{}
-	client.getJobFn = func(context.Context, string, string) (*ebsv1.Job, error) { return latest.DeepCopy(), nil }
-	client.getRunnerFn = func(context.Context, string) (*ebsv1.Runner, error) { return nil, errors.New("unused") }
-	client.updateFn = func(context.Context, *ebsv1.Job) (*ebsv1.Job, error) { return nil, errors.New("unused") }
-	client.deleteFn = func(_ context.Context, _, _ string, value clientpkg.DeletePreconditions) error {
-		got = value
-		return nil
-	}
-	c, _, _, _ := newTestController(t, now, job, nil, client, true)
-	if err := c.reconcileHistory(context.Background(), "project/job", job, now); err != nil {
-		t.Fatal(err)
-	}
-	if got.UID != latest.UID || got.ResourceVersion != "22" {
-		t.Fatalf("preconditions=%+v", got)
 	}
 }
 
@@ -687,6 +767,79 @@ func TestLifecycleContinuesConfirmedArchiveImmediately(t *testing.T) {
 	}
 }
 
+func TestSourceDeletionRetriesAfterFinalizerRemoval(t *testing.T) {
+	for _, action := range []string{"retain", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			ctx := context.Background()
+			ts := metav1.NewTime(time.Unix(1000, 0))
+			job := runningJob()
+			job.Status.Phase, job.Status.EndTime = ebsv1.JobSucceeded, ts
+			job.DeletionTimestamp = &ts
+			job.Finalizers = []string{ebsv1.JobArchiveFinalizer}
+			old := job.DeepCopy()
+			old.ResourceVersion = "v1:2:1"
+			old.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+			if action == "retain" {
+				old.DeletionTimestamp = nil
+			}
+			finalizeCalls, cleanupCalls := 0, 0
+			client := &fakeClient{
+				getJobFn: func(context.Context, string, string) (*ebsv1.Job, error) {
+					if job == nil {
+						return nil, apierrors.NewNotFound(ebsv1.Resource("jobs"), "job")
+					}
+					return job.DeepCopy(), nil
+				},
+				getOldJobFn: func(context.Context, string, string) (*ebsv1.Job, error) { return old.DeepCopy(), nil },
+				archiveStateFn: func(context.Context, string, string) (*ebsv1.JobArchiveState, error) {
+					phase := "Stored"
+					if job == nil {
+						phase = "Transferred"
+					}
+					return &ebsv1.JobArchiveState{UID: string(old.UID), Action: action, Phase: phase, Digest: "digest"}, nil
+				},
+				finalizeFn: func(_ context.Context, current *ebsv1.Job, isOld bool) error {
+					if isOld {
+						old.Finalizers = nil
+						return nil
+					}
+					finalizeCalls++
+					if current.UID != job.UID || current.ResourceVersion != job.ResourceVersion {
+						t.Fatal("finalization must use the latest source identity and version")
+					}
+					if finalizeCalls == 1 {
+						job.Finalizers, job.ResourceVersion = nil, "11"
+						return &clientpkg.WriteError{Outcome: clientpkg.WriteUnknown, Err: errors.New("physical delete interrupted")}
+					}
+					job = nil
+					return nil
+				},
+				deleteJobDataFn: func(context.Context, *ebsv1.Job) error { cleanupCalls++; return nil },
+			}
+			c, _, _, _ := newTestController(t, ts.Time, runningJob(), nil, client, false)
+			defer c.Queue().ShutDown()
+			if _, err := c.sync(ctx, "jobs/project/job"); err == nil || job == nil || len(job.Finalizers) != 0 {
+				t.Fatalf("interrupted finalization: job=%+v err=%v", job, err)
+			}
+			if _, err := c.sync(ctx, "oldjobs/project/job"); err != nil || cleanupCalls != 0 {
+				t.Fatalf("cleanup before source deletion: calls=%d err=%v", cleanupCalls, err)
+			}
+			// Recover with a fresh controller to ensure the retry does not depend on in-memory state.
+			restarted, _, _, _ := newTestController(t, ts.Time, runningJob(), nil, client, false)
+			defer restarted.Queue().ShutDown()
+			if result, err := restarted.sync(ctx, "jobs/project/job"); err != nil || result != (controller.ReconcileResult{}) || job != nil || finalizeCalls != 2 {
+				t.Fatalf("recovery: result=%+v err=%v source=%+v calls=%d", result, err, job, finalizeCalls)
+			}
+			if _, err := restarted.sync(ctx, "oldjobs/project/job"); err != nil {
+				t.Fatal(err)
+			}
+			if (cleanupCalls == 1) != (action == "delete") {
+				t.Fatalf("action=%s cleanup calls=%d", action, cleanupCalls)
+			}
+		})
+	}
+}
+
 func TestOldJobCleanupScheduling(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -732,6 +885,25 @@ func TestOldJobCleanupScheduling(t *testing.T) {
 	}
 }
 
+func TestAPIClientCleanupTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{name: "default", want: 30 * time.Second},
+		{name: "nonpositive", timeout: -time.Second, want: 30 * time.Second},
+		{name: "configured", timeout: time.Minute, want: time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newAPIClient(nil, nil, tc.timeout).(*apiClient)
+			if client.http.Timeout != tc.want {
+				t.Fatalf("timeout=%s, want %s", client.http.Timeout, tc.want)
+			}
+		})
+	}
+}
+
 func TestAPIClientValidatesResponses(t *testing.T) {
 	job := runningJob()
 	job.TypeMeta = metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Job"}
@@ -740,15 +912,16 @@ func TestAPIClientValidatesResponses(t *testing.T) {
 	runnerObject.TypeMeta = metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
 	for _, tc := range []struct {
 		name  string
+		path  string
 		value runtime.Object
 		write bool
 		call  func(*apiClient) error
 	}{
-		{name: "Job", value: job, call: func(c *apiClient) error {
+		{name: "Job", path: "/apis/ebs/v1/projects/project/jobs/job", value: job, call: func(c *apiClient) error {
 			_, err := c.GetJob(context.Background(), "project", "job")
 			return err
 		}},
-		{name: "OldJob", value: job, call: func(c *apiClient) error {
+		{name: "OldJob", path: "/apis/ebs/v1/projects/project/oldjobs/job", value: job, call: func(c *apiClient) error {
 			_, err := c.GetOldJob(context.Background(), "project", "job")
 			return err
 		}},
@@ -770,6 +943,9 @@ func TestAPIClientValidatesResponses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			value := tc.value.DeepCopyObject()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.path != "" && (r.Method != http.MethodGet || r.URL.Path != tc.path) {
+					t.Errorf("request=%s %s, want GET %s", r.Method, r.URL.Path, tc.path)
+				}
 				w.Header().Set("Content-Type", "application/json")
 				if err := json.NewEncoder(w).Encode(value); err != nil {
 					t.Error(err)
@@ -897,28 +1073,41 @@ func TestHistoryLoopScansAtStartupAndDaily(t *testing.T) {
 	}
 }
 
-func TestHistoryGCWaitsAndCanBeDisabled(t *testing.T) {
+func TestHistoryGCRetentionAndEnablement(t *testing.T) {
 	now := time.Unix(10_000_000, 0)
-	job := runningJob()
-	job.Status.Phase = ebsv1.JobFailed
-	job.Status.EndTime = metav1.NewTime(now.Add(-time.Hour))
-	client := &fakeClient{
-		getJobFn:    func(context.Context, string, string) (*ebsv1.Job, error) { t.Fatal("unexpected GET"); return nil, nil },
-		getRunnerFn: func(context.Context, string) (*ebsv1.Runner, error) { return nil, nil },
-		updateFn:    func(context.Context, *ebsv1.Job) (*ebsv1.Job, error) { return nil, nil },
-		deleteFn:    func(context.Context, string, string, clientpkg.DeletePreconditions) error { return nil },
-	}
-	c, _, _, _ := newTestController(t, now, job, nil, client, true)
-	if err := c.reconcileHistory(context.Background(), "project/job", job, now); err != nil {
-		t.Fatal(err)
-	}
-	c.config.HistoryGCEnabled = false
-	if err := c.reconcileHistory(context.Background(), "project/job", job, now); err != nil {
-		t.Fatalf("disabled GC: %v", err)
+	retention := 30 * 24 * time.Hour
+	for _, tc := range []struct {
+		name string
+		age  time.Duration
+		gc   bool
+		want int
+	}{
+		{name: "before deadline", age: retention - time.Second, gc: true},
+		{name: "at deadline", age: retention, gc: true, want: 1},
+		{name: "after deadline", age: retention + time.Second, gc: true, want: 1},
+		{name: "disabled with expired Job", age: retention + time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := runningJob()
+			job.Status.Phase = ebsv1.JobFailed
+			job.Status.EndTime = metav1.NewTime(now.Add(-tc.age))
+			client := &fakeClient{
+				getJobFn: func(context.Context, string, string) (*ebsv1.Job, error) { return job.DeepCopy(), nil },
+				deleteFn: func(context.Context, string, string, clientpkg.DeletePreconditions) error { return nil },
+			}
+			c, _, _, _ := newTestController(t, now, job, nil, client, tc.gc)
+			defer c.Queue().ShutDown()
+			if err := c.reconcileHistory(context.Background(), "project/job", job, now); err != nil {
+				t.Fatal(err)
+			}
+			if client.getJobCalls != tc.want || client.deleteCalls != tc.want {
+				t.Fatalf("gets=%d deletes=%d, want %d each", client.getJobCalls, client.deleteCalls, tc.want)
+			}
+		})
 	}
 }
 
-func TestReadAndWriteErrorClassification(t *testing.T) {
+func TestReadErrorClassification(t *testing.T) {
 	for _, code := range []int{401, 403, 409, 410, 412, 422} {
 		err := apierrors.NewGenericServerResponse(code, "get", schema.GroupResource{Group: "ebs", Resource: "jobs"}, "job", "failure", 0, false)
 		if !controller.IsPermanent(classifyReadError(err)) {

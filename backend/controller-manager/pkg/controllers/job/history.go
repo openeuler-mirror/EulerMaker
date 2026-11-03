@@ -21,12 +21,6 @@ const (
 
 // archiveHistory starts migration; the lifecycle loop finishes it without issuing a delete intent.
 func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) error {
-	deferred := func(result string, err error) error {
-		historyArchive[result].Inc()
-		log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchiveDeferred error=%v",
-			Name, job.Namespace, job.Name, job.UID, job.ResourceVersion, err)
-		return err
-	}
 	_, err := c.client.ArchiveJob(ctx, job.Namespace, job.Name, clientpkg.DeletePreconditions{
 		UID: job.UID, ResourceVersion: job.ResourceVersion,
 	})
@@ -40,7 +34,8 @@ func (c *Controller) archiveHistory(ctx context.Context, job *ebsv1.Job) error {
 				result = "conflict"
 			}
 		}
-		return deferred(result, err)
+		historyArchive[result].Inc()
+		return err
 	}
 	historyArchive["confirmed"].Inc()
 	log.Printf("controller=%s key=%s/%s action=archive uid=%s resourceVersion=%s reason=HistoryJobArchived",
@@ -84,7 +79,6 @@ func (c *Controller) reconcileHistory(ctx context.Context, key string, cached *e
 		var write *clientpkg.WriteError
 		if !errors.As(err, &write) || write.Outcome == clientpkg.WriteUnknown {
 			historyDeleteUnknown.Inc()
-			log.Printf("controller=%s key=%s uid=%s reason=HistoryDeleteUnknown error=%v", Name, key, latest.UID, err)
 		}
 		return err
 	}
@@ -159,7 +153,8 @@ func (c *Controller) scanHistory(ctx context.Context) error {
 				key := job.Namespace + "/" + job.Name
 				if err := c.reconcileHistory(ctx, key, job, now); err != nil {
 					// The next daily scan rechecks current state; never retain or replay a stale delete request.
-					log.Printf("controller=%s key=%s reason=HistoryDeleteDeferred error=%v", Name, key, err)
+					log.Printf("controller=%s key=%s action=%s uid=%s reason=HistoryJobDeferred error=%v",
+						Name, key, c.config.HistoryAction, job.UID, err)
 				}
 			}
 			if page.Continue == "" {
