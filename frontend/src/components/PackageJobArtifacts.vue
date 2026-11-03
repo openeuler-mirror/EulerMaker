@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { errorTranslationKey, request } from '@/api';
@@ -31,8 +31,19 @@ const loading = ref(false);
 const errorKey = ref('');
 let controller: AbortController | null = null;
 
-onMounted(() => { if (props.succeeded) void load(); });
-onBeforeUnmount(() => controller?.abort());
+function cancelRequest(): void {
+  controller?.abort();
+  controller = null;
+}
+
+watch(() => [props.project, props.jobName, props.succeeded], () => {
+  cancelRequest();
+  rpms.value = [];
+  loading.value = false;
+  errorKey.value = '';
+  if (props.succeeded) void load();
+}, { immediate: true });
+onBeforeUnmount(cancelRequest);
 
 async function load(): Promise<void> {
   controller?.abort();
