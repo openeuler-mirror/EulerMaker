@@ -102,10 +102,8 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 		return controller.ReconcileResult{}, err
 	}
 	if buildInfo.DeletionTimestamp != nil {
-		// A deleting object is never advanced; its caches, counters and dedup entries are dropped immediately so a recreated
-		// same-name BuildInfo starts from zero.
 		c.invalidateCaches(key)
-		return controller.ReconcileResult{}, nil
+		return c.cleanupBuildInfo(ctx, buildInfo)
 	}
 	if buildInfo.Status.Phase.IsTerminal() {
 		// Terminal objects never advance; release their caches and counters.
@@ -241,6 +239,10 @@ func (c *Controller) parentAbortGuard(
 		return true, controller.ReconcileResult{}, err
 	}
 	round.build = build
+	if build.DeletionTimestamp != nil {
+		c.invalidateCaches(round.key)
+		return true, controller.ReconcileResult{}, nil
+	}
 	if build.Status.Phase == ebsv1.BuildAborted {
 		// Follow the parent Build abort.
 		result, err := c.writeAborted(ctx, round, "BuildAborted")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,8 +32,8 @@ const apiServerReadRetries = 3
 // Client is the typed API surface the BuildInfo controller depends on.
 //
 // BuildInfo status writes go through /status; the apiserver keeps the old spec. specDepends is an in-memory view and is
-// never persisted, so there is no PUT on the main resource. Write failures are returned as *WriteError identifiable via
-// errors.As; the controller never re-derives the outcome from status codes or error text.
+// never persisted. Cleanup uses a main-resource PUT only to remove its finalizer. Write failures are returned as
+// *WriteError identifiable via errors.As; the controller never re-derives the outcome from status codes or error text.
 type Client interface {
 	// GetBuildInfo re-gets the latest BuildInfo at reconcile entry.
 	GetBuildInfo(ctx context.Context, namespace, name string) (*ebsv1.BuildInfo, error)
@@ -45,8 +46,13 @@ type Client interface {
 	// CreateJob creates a Job. Unknown outcomes are confirmed by GET on its deterministic name.
 	CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
 	GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
+	// GetOldJob reads an archived Job with the same response validation as GetJob.
+	GetOldJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
 	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
-	ListJobs(ctx context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error)
+	// ListJobs reads all matching Jobs; an optional field projection must retain metadata.
+	ListJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
+	// ListOldJobs reads all matching archived Jobs with the same pagination and projection contract.
+	ListOldJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
 
 	// GetBuild reads the parent Build without modifying it.
 	GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
@@ -56,12 +62,38 @@ type Client interface {
 	GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
 	// GetBuildResourceContent reads the cluster-wide default resource table.
 	GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error)
+
+	// FinalizeBuildInfo removes the cleanup finalizer through the main resource endpoint.
+	FinalizeBuildInfo(context.Context, *ebsv1.BuildInfo) error
+	// DeleteCleanupChild deletes a child with UID and resourceVersion preconditions.
+	DeleteCleanupChild(context.Context, string, CleanupTarget, metav1.Object) error
 }
 
 // newAPIClient wraps the shared controller-manager API client.
 func newAPIClient(client apiserver.Interface) Client { return &apiClient{client: client} }
 
 type apiClient struct{ client apiserver.Interface }
+
+// CleanupTarget identifies a BuildInfo-owned child within its Project.
+type CleanupTarget struct{ Resource, Name string }
+
+func (c *apiClient) DeleteCleanupChild(ctx context.Context, project string, target CleanupTarget, obj metav1.Object) error {
+	return c.client.Delete(ctx, ebsv1.SchemeGroupVersion.WithResource(target.Resource), project, target.Name,
+		apiserver.DeletePreconditions{UID: obj.GetUID(), ResourceVersion: obj.GetResourceVersion()})
+}
+
+func (c *apiClient) FinalizeBuildInfo(ctx context.Context, info *ebsv1.BuildInfo) error {
+	obj, err := c.client.Update(ctx, ebsv1.SchemeGroupVersion.WithResource("buildinfos"), info.Namespace, info)
+	if err != nil {
+		return err
+	}
+	updated, ok := obj.(*ebsv1.BuildInfo)
+	if !ok || updated.UID != info.UID || updated.Name != info.Name || updated.Namespace != info.Namespace ||
+		slices.Contains(updated.Finalizers, ebsv1.BuildInfoCleanupFinalizer) {
+		return fmt.Errorf("BuildInfo cleanup update was not confirmed")
+	}
+	return nil
+}
 
 func (c *apiClient) AbortJob(
 	ctx context.Context,
@@ -199,22 +231,39 @@ func buildGraphWriteResponse(operation string, intent *ebsv1.BuildGraph, result 
 }
 
 func (c *apiClient) GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error) {
+	return c.getJob(ctx, source.JobsGVR, project, name)
+}
+
+func (c *apiClient) GetOldJob(ctx context.Context, project, name string) (*ebsv1.Job, error) {
+	return c.getJob(ctx, ebsv1.SchemeGroupVersion.WithResource("oldjobs"), project, name)
+}
+
+func (c *apiClient) getJob(ctx context.Context, gvr schema.GroupVersionResource, project, name string) (*ebsv1.Job, error) {
 	if project == "" || name == "" {
 		return nil, contractErrorf("project and name are required")
 	}
-	obj, err := c.readGet(ctx, source.JobsGVR, project, name)
+	obj, err := c.readGet(ctx, gvr, project, name)
 	if err != nil {
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Job)
 	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" ||
 		value.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected Job response for %s/%s: %T", project, name, obj)
+		return nil, contractErrorf("unexpected %s response for %s/%s: %T", gvr.Resource, project, name, obj)
 	}
 	return value, nil
 }
 
-func (c *apiClient) ListJobs(ctx context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error) {
+func (c *apiClient) ListJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error) {
+	return c.listJobs(ctx, source.JobsGVR, project, selector, includeFields...)
+}
+
+func (c *apiClient) ListOldJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error) {
+	return c.listJobs(ctx, ebsv1.SchemeGroupVersion.WithResource("oldjobs"), project, selector, includeFields...)
+}
+
+func (c *apiClient) listJobs(ctx context.Context, gvr schema.GroupVersionResource, project string,
+	selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error) {
 	if project == "" {
 		return nil, contractErrorf("project is required")
 	}
@@ -222,21 +271,25 @@ func (c *apiClient) ListJobs(ctx context.Context, project string, selector label
 		selector = labels.Everything()
 	}
 	var out []ebsv1.Job
-	opts := metav1.ListOptions{LabelSelector: selector.String()}
+	opts := metav1.ListOptions{Limit: 500, LabelSelector: selector.String()}
 	for {
-		page, err := c.readListProjectPage(ctx, source.JobsGVR, project, opts)
+		page, err := c.readListProjectPage(ctx, gvr, project, opts, strings.Join(includeFields, ","))
 		if err != nil {
 			return nil, err
 		}
 		for _, item := range page.Items {
 			job, ok := item.(*ebsv1.Job)
-			if !ok || job == nil || job.UID == "" || job.ResourceVersion == "" {
-				return nil, contractErrorf("unexpected Job list response for %s: %T", project, item)
+			if !ok || job == nil || job.UID == "" || job.ResourceVersion == "" ||
+				job.Namespace != project || job.Name == "" || !selector.Matches(labels.Set(job.Labels)) {
+				return nil, contractErrorf("unexpected %s list response for %s: %T", gvr.Resource, project, item)
 			}
 			out = append(out, *job)
 		}
 		if page.Continue == "" {
 			return out, nil
+		}
+		if page.Continue == opts.Continue {
+			return nil, contractErrorf("%s pagination did not advance", gvr.Resource)
 		}
 		opts.Continue = page.Continue
 	}
@@ -377,11 +430,12 @@ func (c *apiClient) readListProjectPage(
 	gvr schema.GroupVersionResource,
 	project string,
 	opts metav1.ListOptions,
+	includeFields string,
 ) (source.ListPage, error) {
 	var page source.ListPage
 	var err error
 	for attempt := 0; ; attempt++ {
-		page, err = c.client.ListProjectPage(ctx, gvr, project, opts)
+		page, err = c.client.ListProjectPageWithFields(ctx, gvr, project, opts, includeFields)
 		if err == nil {
 			return page, nil
 		}

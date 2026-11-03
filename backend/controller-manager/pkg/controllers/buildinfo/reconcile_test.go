@@ -24,8 +24,9 @@ import (
 // --- Event handlers ---
 
 type recordingPollingFactory struct {
-	gvr     schema.GroupVersionResource
-	options metav1.ListOptions
+	selectors []string
+	gvr       schema.GroupVersionResource
+	options   metav1.ListOptions
 }
 
 func (f *recordingPollingFactory) ForResource(
@@ -34,6 +35,7 @@ func (f *recordingPollingFactory) ForResource(
 	options metav1.ListOptions,
 ) (source.Source, error) {
 	f.gvr, f.options = gvr, options
+	f.selectors = append(f.selectors, options.FieldSelector)
 	return &fakeSource{}, nil
 }
 
@@ -53,7 +55,7 @@ func TestInitializerFiltersTerminalBuildInfos(t *testing.T) {
 	if err != nil || !active {
 		t.Fatalf("initializer active=%t err=%v", active, err)
 	}
-	if polling.gvr != source.BuildInfosGVR || polling.options.FieldSelector != nonTerminalBuildInfoFieldSelector {
+	if polling.gvr != source.BuildInfosGVR || len(polling.selectors) != 2 || polling.selectors[0] != nonTerminalBuildInfoFieldSelector || polling.selectors[1] != "metadata.deletionTimestamp!=null" {
 		t.Fatalf("polling source=%s options=%#v", polling.gvr, polling.options)
 	}
 }

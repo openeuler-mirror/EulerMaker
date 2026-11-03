@@ -47,6 +47,10 @@ func (s *stubSharedClient) ListPage(context.Context, schema.GroupVersionResource
 	return source.ListPage{}, nil
 }
 
+func (s *stubSharedClient) ListProjectPageWithFields(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions, _ string) (source.ListPage, error) {
+	return s.ListProjectPage(ctx, gvr, project, opts)
+}
+
 func (s *stubSharedClient) ListProjectPage(_ context.Context, gvr schema.GroupVersionResource, project string, options metav1.ListOptions) (source.ListPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

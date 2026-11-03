@@ -19,6 +19,7 @@ import (
 
 // pagingSharedClient returns one scripted page per call and records the options it received.
 type pagingSharedClient struct {
+	clientpkg.Interface
 	pages    []source.ListPage
 	errs     []error
 	requests []metav1.ListOptions
