@@ -91,6 +91,8 @@ type Interface interface {
 	ListPage(context.Context, schema.GroupVersionResource, metav1.ListOptions) (source.ListPage, error)
 	// ListProjectPage reads one page of complete objects within the specified Project.
 	ListProjectPage(context.Context, schema.GroupVersionResource, string, metav1.ListOptions) (source.ListPage, error)
+	// ListProjectPageWithFields reads a scoped page with an explicit read-only field projection.
+	ListProjectPageWithFields(context.Context, schema.GroupVersionResource, string, metav1.ListOptions, string) (source.ListPage, error)
 	// ResolveWatch provides a list/watch source for nonterminal Jobs or all Runners.
 	ResolveWatch(context.Context, schema.GroupVersionResource) (source.WatchResource, error)
 	// Get reads a complete object by name and optional Project namespace.
@@ -163,10 +165,15 @@ func (c *Client) ListPage(ctx context.Context, gvr schema.GroupVersionResource, 
 
 // ListProjectPage reads one page of complete objects within the specified Project.
 func (c *Client) ListProjectPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions) (source.ListPage, error) {
+	return c.ListProjectPageWithFields(ctx, gvr, project, opts, "")
+}
+
+// ListProjectPageWithFields keeps selectors and pagination identical to the complete-object list.
+func (c *Client) ListProjectPageWithFields(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions, includeFields string) (source.ListPage, error) {
 	if err := c.validateProjectScopedResource(gvr, project); err != nil {
 		return source.ListPage{}, err
 	}
-	return c.listPage(ctx, gvr, project, opts, "")
+	return c.listPage(ctx, gvr, project, opts, includeFields)
 }
 
 func (c *Client) listPage(ctx context.Context, gvr schema.GroupVersionResource, project string, opts metav1.ListOptions, includeFields string) (source.ListPage, error) {

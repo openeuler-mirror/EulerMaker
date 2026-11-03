@@ -416,6 +416,7 @@ func TestCreateUsesResourceCollectionPath(t *testing.T) {
 }
 
 func TestListProjectPageUsesScopedPathAndOptions(t *testing.T) {
+	includeFields := ""
 	response := &ebsv1.JobList{
 		TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "JobList"},
 		ListMeta: metav1.ListMeta{ResourceVersion: "1"},
@@ -432,6 +433,9 @@ func TestListProjectPageUsesScopedPathAndOptions(t *testing.T) {
 		if query.Get("labelSelector") != "team=a" || query.Get("fieldSelector") != "status.phase=Pending" || query.Get("continue") != "next" || query.Get("limit") != "25" {
 			return nil, fmt.Errorf("unexpected query: %s", r.URL.RawQuery)
 		}
+		if query.Get("includeFields") != includeFields {
+			return nil, fmt.Errorf("unexpected field projection: %s", r.URL.RawQuery)
+		}
 		return jsonResponse(r, body), nil
 	})
 	client, err := New(testRESTConfig(transport), time.Second)
@@ -441,6 +445,13 @@ func TestListProjectPageUsesScopedPathAndOptions(t *testing.T) {
 	_, err = client.ListProjectPage(context.Background(), schema.GroupVersionResource{Group: "ebs", Version: "v1", Resource: "jobs"}, "project", metav1.ListOptions{
 		LabelSelector: "team=a", FieldSelector: "status.phase=Pending", Continue: "next", Limit: 25,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	includeFields = "metadata"
+	_, err = client.ListProjectPageWithFields(context.Background(), source.JobsGVR, "project", metav1.ListOptions{
+		LabelSelector: "team=a", FieldSelector: "status.phase=Pending", Continue: "next", Limit: 25,
+	}, includeFields)
 	if err != nil {
 		t.Fatal(err)
 	}

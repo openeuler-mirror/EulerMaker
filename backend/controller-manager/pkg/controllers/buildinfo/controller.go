@@ -25,8 +25,7 @@ import (
 // Name is the controller identifier used in logs, metrics and --controllers.
 const Name = "buildinfo"
 
-// Terminal BuildInfos do not need periodic reconcile; a match leaving the polling snapshot is only a filter transition,
-// not proof of deletion.
+// The business source excludes terminal objects; a separate source covers deleting BuildInfos in every phase.
 const nonTerminalBuildInfoFieldSelector = "status.phase!=Completed,status.phase!=Failed,status.phase!=Aborted"
 
 // Config carries the BuildInfo controller settings.
@@ -136,8 +135,7 @@ func New(
 	return c, nil
 }
 
-// Initializer wires the controller into the manager with a non-terminal BuildInfo polling source and the shared
-// slow-retry policy.
+// Initializer wires business and deletion polling sources into the same queue and slow-retry policy.
 func Initializer(config Config, services serviceconfig.Provider) manager.InitFunc {
 	return func(_ context.Context, init manager.InitContext) (controller.Controller, bool, error) {
 		buildInfos, err := init.Dependencies.PollingFactory.ForResource(
@@ -160,6 +158,15 @@ func Initializer(config Config, services serviceconfig.Provider) manager.InitFun
 				init.Config.SlowRetryJitter,
 			),
 		)
+		if err != nil {
+			return nil, false, err
+		}
+		deleting, err := init.Dependencies.PollingFactory.ForResource(source.BuildInfosGVR, config.PollPeriod,
+			metav1.ListOptions{FieldSelector: "metadata.deletionTimestamp!=null"})
+		if err != nil {
+			return nil, false, err
+		}
+		err = deleting.AddEventHandler(source.ResourceEventHandlerFuncs{AddFunc: value.onAdd, UpdateFunc: value.onUpdate})
 		return value, err == nil, err
 	}
 }

@@ -18,6 +18,7 @@ import (
 
 // stubSharedClient implements the shared apiserver client surface so the typed adapter can be tested directly.
 type stubSharedClient struct {
+	clientpkg.Interface
 	getResults  []runtime.Object
 	getErr      error
 	getCalls    int

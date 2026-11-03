@@ -52,6 +52,7 @@ backend/controller-manager/
       graph.go                     # BuildGraph 获取、创建、补边持久化、写入确认与缓存版本核对
       cache.go                     # dcgDict 缓存（RWMutex + tombstone + sweeper）
       jobs.go                      # dispatchSpec、backfillJobs、多代 Job 排序
+      cleanup.go                   # BuildInfo 所属子资源的删除编排
       conditions.go                # condition upsert/清除
       metrics.go                   # build_info_controller_* 指标注册
 ```
@@ -75,7 +76,7 @@ initializer 在 Source 启动前注册 buildinfos handler；manager 完成 Sourc
 
 ### 2.4 PollingSource API 交互
 
-使用全局 GET /apis/ebs/v1/buildinfos，仅设置分页，不设置 fieldSelector。分页与失败恢复复用公共 PollingSource；资源路径统一见 15.1。
+使用全局 GET /apis/ebs/v1/buildinfos，注册两路分页轮询：业务源使用 `status.phase!=Completed,status.phase!=Failed,status.phase!=Aborted`，删除源使用 `metadata.deletionTimestamp!=null`。均仅请求 metadata，并将结果送入同一队列；终态对象有删除标记时仍调谐。分页与失败恢复复用公共 PollingSource。
 
 ### 2.5 与 Build Controller 的协作与跨组件契约
 
@@ -88,11 +89,29 @@ BuildInfo 与父 Build 同项目、同名；创建输入字段见 15.2。
   3. 读 `BuildInfo.status.specResults` 汇总包级 build/install 结果：非 single 即使有失败 spec 也进入发布阶段，`BuildSucceed=False` 记录构建不完全成功；若发布 Ready，Build 仍可为 `Success/publish`，其失败 spec 供下一轮增量构建重试。`single` 按构建结果直接收口。增量构建集为空时按当前 Build Controller 的汇总契约处理；BuildInfo 只会在父 Build 进入 Prepared 后创建，此时种子已确认。
   - `Failed` → Build 直接进入 `Failed/build`，不等待 RpmRepo；`Pending` / `Processing` → Build 重新入队等待。
 - `BuildPayloadInvalid=True` 先持久化并停止新 Job 派发；复用父 Build 中止时的 Job 扫描和尽力 `/abort` 机制，所有可见非终态 Job 均尝试发送中止请求后写 `BuildInfo.status.phase=Failed`，不等待 Job 实际进入终态，也不以中止成功作为前提。父 Build 读到 `Failed` 时写 `Failed/build`，不按 `specResults` 汇总、不进入发布；RpmRepo 读到 `Failed` 时停止后续过程仓与正式发布，按自身失败终局收口。具体配置错误只在 BuildInfo condition message 中暴露。
-- 中止契约：Build `/abort` 同步写入 `Build.status.phase=Aborted`。BuildInfo Controller 在每轮前置守卫中发现该状态后停止新 Job 派发，按 Project 和 `ebs.io/build-name` 分页查询 Job，对非终态 Job 每轮最多发起 100 次中止请求（固定代码常量），逐个调用 `/abort`（携带所观察的 UID）；已终态 Job 保持原状，404 视为已删除。采用尽力中止：单个请求失败或结果未知时记录结构化日志并继续其余 Job，批次之间保持 BuildInfo 非终态并延迟 1 秒重新入队，每轮重新列出 Job；已尝试的 Job（名称和 UID）及失败摘要按 BuildInfo UID 保存在进程内，避免失败 Job 占满后续批次。重启后重新扫描，可能再次尝试失败 Job，依靠 `/abort` 的幂等语义恢复；对象删除、终态或缓存过期时清理进度。全部批次尝试结束后，把累计失败数量及最多三个示例写入 `JobAbortFailed=True/reason=JobAbortFailed` condition；列表读取失败也记录同一 condition。批次处理中不写 BuildInfo 状态；最终写 BuildInfo 为 `Aborted`，不等待失败 Job 或 Runner 实际停止，也不因这些失败继续调谐。BuildInfo 终态写入失败按通用写错误规则重试；进程 context 取消时结束当前尝试，留待恢复。该策略可能留下继续运行的 Job，由运维通过 Job `/abort` 单独处理；终态后的 BuildInfo 不承担后台补偿。父 Build 删除及 Project Terminating 沿用直接终态规则；已经 Completed/Failed/Aborted 的 BuildInfo 也保持不变。
+- 中止契约：Build `/abort` 同步写入 `Build.status.phase=Aborted`。BuildInfo Controller 在每轮前置守卫中发现该状态后停止新 Job 派发，按 Project 和 `ebs.io/build-name` 分页查询 Job，对非终态 Job 每轮最多发起 100 次中止请求（固定代码常量），逐个调用 `/abort`（携带所观察的 UID）；已终态 Job 保持原状，404 视为已删除。采用尽力中止：单个请求失败或结果未知时记录结构化日志并继续其余 Job，批次之间保持 BuildInfo 非终态并延迟 1 秒重新入队，每轮重新列出 Job；已尝试的 Job（名称和 UID）及失败摘要按 BuildInfo UID 保存在进程内，避免失败 Job 占满后续批次。重启后重新扫描，可能再次尝试失败 Job，依靠 `/abort` 的幂等语义恢复；对象删除、终态或缓存过期时清理进度。全部批次尝试结束后，把累计失败数量及最多三个示例写入 `JobAbortFailed=True/reason=JobAbortFailed` condition；列表读取失败也记录同一 condition。批次处理中不写 BuildInfo 状态；最终写 BuildInfo 为 `Aborted`，不等待失败 Job 或 Runner 实际停止，也不因这些失败继续调谐。BuildInfo 终态写入失败按通用写错误规则重试；进程 context 取消时结束当前尝试，留待恢复。该策略可能留下继续运行的 Job，由运维通过 Job `/abort` 单独处理；终态后的 BuildInfo 不承担后台补偿。父 Build 已物理删除及 Project Terminating 沿用直接终态规则；父 Build 正在删除时按下述删除协作契约停止生产，由 Build Controller 完成可靠清理，不能套用尽力中止后退出的规则。已经 Completed/Failed/Aborted 的 BuildInfo 不改业务终态，但其资源仍由 Build 删除流程回收。
 
 ---
 
 ## 三、强约束
+
+### BuildInfo 删除与 Build 删除协作
+
+apiserver 创建 BuildInfo 时加入 `ebs.io/buildinfo-cleanup` finalizer。删除分支先于 Completed/Failed/Aborted 守卫，保留业务 status，只移除自身 finalizer。父 Build 删除中而 BuildInfo 尚未标记删除时，仅停止解析、Job 派发、重派及 BuildGraph 创建，等待 Build Controller 发起 BuildInfo DELETE。
+
+BuildInfo 删除顺序：
+
+1. 业务与删除调谐使用同一 BuildInfo 队列 key；读取最新 BuildInfo，确认同 UID、删除中且具有自身 finalizer。删除分支不再解析、创建 Job 或 BuildGraph。单独删除 BuildInfo 不要求父 Build 已删除，也不依赖父 Build 存在。
+2. 独立推进两条分支：BuildGraph 核对同名 BuildInfo owner UID 后条件 DELETE，不等待 RpmRepo 或 Job/OldJob；Job 分支先 GET RpmRepo，确认 `status.conditions` 中的 `CleanupReady=True` 且 repository/release transition 均为空；RpmRepo NotFound 时直接继续，其余读取错误阻止 Job 清理。随后完整分页 List 同 Project、`ebs.io/build-name={BuildInfo.name}` 的 Job 和 OldJob，不带 phase 或保留期过滤。List 仅取 metadata，GET 核验最新身份、归属和状态后，使用 UID/resourceVersion 条件删除。图分支失败或仍删除中，不阻止 Job 分支；Job 分支等待或失败，也不阻止图分支。两者在同一轮分别尝试，不需要并发 goroutine。
+3. 非终态 Job 先调用携带 UID 的 `/abort`，下一轮重新 GET 确认终态后 DELETE。删除中的 Job/OldJob 只等待；Job Controller 负责归档、数据清理和物理删除，BuildInfo Controller 不移除它们的 finalizer。这里的终态只证明 Job API 状态，上层仍负责保证 Runner 已停止写入。
+4. 每轮完整查询 Job/OldJob，按类别/名称稳定排序后从头扫描，最多发起 100 次中止或删除请求；单项失败仍继续处理本轮预算内的后续项。清理直接由 Controller 方法执行，不维护独立 cleaner 或跨轮游标。失败返回错误并由框架重试；无错误但尚未完成时延迟 1 秒重新入队。接受前序任务持续失败并占满预算时，后续任务等待其恢复的行为；每轮通过重新查询确认清理进度。
+5. 重新扫描确认 Job/OldJob 均不存在，并 GET 确认 BuildGraph 消失后，重新 GET 同 UID、删除中的 BuildInfo，仅移除自身 finalizer，保留其他 finalizer、spec 和 status。任一分支未完成均不能释放 finalizer。
+
+本包的 `cleanup.go` 只编排清理所属 Job/OldJob 和 BuildGraph，资源访问统一通过 `client.go`；Build Controller 负责删除并等待其直接子资源 BuildInfo，不跨级接管。单独删除 BuildInfo 不修改父 Build；其后续行为仍按当前 phase/stage 的 ensure 或依赖缺失规则执行。`CleanupReady=True/reason=OperationsDrained` 由 RpmRepo Controller 确认停止生产且在途操作已结束后写入，确认不可撤销；BuildInfo Controller 只读取，不代写。
+
+删除协议要求单 active Controller Manager。子资源创建不做持久化预登记；超时、取消或进程退出不能证明服务端已停止处理。删除仅按当前可见对象收敛，接受极端故障下迟到创建导致子资源残留，由运维核对归属后清理；finalizer 不是跨存储创建屏障。
+
+删除验收覆盖：Completed 对象仍入队；单独删除 BuildInfo、父 Build 未删除；父 Build 已缺失时仍可清理所属子对象；RpmRepo 未排空时图可删除但 Job 保留；图失败/删除中不阻塞 Job 分支；中止后重新读取终态；等待 Job 归档与 OldJob 清理；失败分页不作为空列表；BuildGraph owner UID 核验；两条分支都完成才移除 finalizer，并保留业务状态及其它 finalizer；重启后的完整扫描及检查点等待。
 
 本章仅列不变量，完整规则在对应章节维护。
 
@@ -103,7 +122,7 @@ BuildInfo 与父 Build 同项目、同名；创建输入字段见 15.2。
 | G-03 | 派发计数与失败放宽按 7.4.2，不重复创建 Job。 |
 | G-04 | Job 不跨 BuildInfo 共享，关联规则见 8.1。 |
 | G-05 | 终态不再推进，事件与入口检查见 5.2/7.1。 |
-| G-06 | 父 Build 中止或删除时按 7.1 写 Aborted。 |
+| G-06 | 父 Build 中止或已物理删除时按 7.1 写 Aborted；删除中停止生产并由 Build Controller 清理，见本章删除协作。 |
 | G-07 | 不阻塞等待 Job，等待返回值见 7.5。 |
 | G-08 | Job 创建须满足 15.3.1 标签契约。 |
 | G-09 | 已选破环点不重选；初始选点及新环追加见 7.2.1/7.4.7。 |
@@ -112,7 +131,7 @@ BuildInfo 与父 Build 同项目、同名；创建输入字段见 15.2。
 
 ## 四、类型化客户端与 Fake（在 buildinfo controller 内实现）
 
-框架不新增完整类型化 CRUD；由 buildinfo controller 包自行实现，资源 × 方法 × 路径 × 权限 × 用途的唯一清单见 15.1。
+框架不新增完整类型化 CRUD；由 buildinfo controller 包自行实现，资源 × 方法 × 路径 × 权限 × 用途的唯一清单见 15.1。业务与删除能力统一在 `client.go` 中声明于 `Client` 并由 `apiClient` 实现，对应测试集中在 `client_test.go`。
 
 ### 4.1 apiserver Client 接口与路径约定
 
@@ -123,7 +142,7 @@ type Client interface {
     // BuildInfo（主资源）
     GetBuildInfo(ctx context.Context, namespace, name string) (*ebsv1.BuildInfo, error)
     // UpdateBuildInfoStatus 走 /status：写 BuildInfo.status，不携带依赖图，
-    // apiserver 保留旧 spec；specDepends 不落库，无 PUT spec 场景，不设 PUT 主资源方法
+    // apiserver 保留旧 spec；specDepends 不落库，不修改 spec；删除时仅通过主资源 PUT 移除自身 finalizer
     UpdateBuildInfoStatus(ctx context.Context, obj *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
 
     // metadataOnly=true 时使用 includeFields=metadata，完整读图时不设置投影。
@@ -134,8 +153,10 @@ type Client interface {
     // Job（创建 + 按 label list 回读 + 创建 Unknown 按确定性名称 GET 确认）
     CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
     GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
+    GetOldJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
     AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error)
-    ListJobs(ctx context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error)
+    ListJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
+    ListOldJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
 
     // 只读依赖
     GetBuild(ctx context.Context, project, name string) (*ebsv1.Build, error)
@@ -145,10 +166,20 @@ type Client interface {
     GetScript(ctx context.Context, name string) (*ebsv1.Script, error)
     // 读取并反序列化配置，同一 Job 创建批次共享解析结果。
     GetBuildResourceContent(ctx context.Context) (*ebsv1.BuildResourceContent, error)
+
+    // 删除清理；CleanupTarget 保存 Resource 和 Name，Project 由调用方传入。
+    FinalizeBuildInfo(context.Context, *ebsv1.BuildInfo) error
+    DeleteCleanupChild(context.Context, string, CleanupTarget, metav1.Object) error
 }
 ```
 
 资源访问路径与用途统一见 15.1。HTTP 实现复用共享 client 的 `Get` / `GetWithFields` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus` / `PostSubresource` 等能力；写请求使用对象 `metadata.resourceVersion` 触发乐观锁。Config 的业务内容由 apiserver 在创建、更新时完整校验，类型化适配方法负责读取、响应校验和反序列化，本轮新 Job 共享已解析配置。
+
+`ListJobs` 与 `ListOldJobs` 共用分页读取和响应校验；不传字段选择时返回完整对象。`cleanup.go` 分别以相同 Project、build-name 标签及 `includeFields=metadata` 查询两者，再组合为清理目标。任一列表读取失败均丢弃本轮候选，不执行 Job/OldJob 中止或删除，也不判定清理完成。
+
+删除清理复用 `AbortJob`，传入当前 Job 的 Project、名称、UID 和 `reason=BuildDeleted`，沿用响应身份与终态校验；中止后下一轮重新读取 Job，确认终态再删除。中止失败或结果未知时保留清理 finalizer，并基于下一轮读取的最新状态继续处理。
+
+清理读取复用 `GetBuildGraph(..., true)`、`GetJob`、`GetOldJob` 和 `GetRpmRepo`，沿用类型化客户端的响应校验及 `ErrNotFound` 契约。`GetJob` 与 `GetOldJob` 共用内部读取实现；`CleanupReady` 与检查点判断归属 `cleanup.go`，客户端只负责读取 RpmRepo。
 
 **写错误契约**：`UpdateBuildInfoStatus`、`CreateJob`、`CreateBuildGraph` 与 `UpdateBuildGraphStatus` 的失败必须返回可由 `errors.As` 识别的 `WriteError`，Controller 不解析错误文本或底层 HTTP 状态自行推断 Outcome。BuildGraph 的同名创建冲突和结果未知确认优先按 15.9 处理：
 
@@ -310,13 +341,13 @@ E-31 不进入上述等待路径：前置校验失败后停止本轮新 Job 创�
 3. 按 ebs.io/build-name 完整分页 List 全部关联 Job，回填已有 spec 的最新 Job 状态。完成检查覆盖所有代际及构建集外的关联 Job，不只检查最新 Job；任一页失败不得使用部分结果或写 Completed，按 7.5 重试。
 4. 任一 Job 为 Pending/Running 或未知、空 phase 时继续等待。已创建 Job 全部终态后，将所有未完成条目置 `BuildFailed`，message 简述“dispatch stopped; see BuildInfo conditions”，具体停止原因仅保留在 BuildInfo Conditions 中；再写 Completed，已有终态及其诊断保留。尚在 Pending 或没有已解析条目时，为尚未记录的仓库补 `BuildFailed`（key=`仓库名/`、specName 为空、dispatchCount=0，使用相同的简短 message）：single/指定范围取 Build.spec.packages，其余读取 Snapshot 的 `metadata,spec.packageRepos.name`，不使用实时 Project；读取失败保留停止标记并重试。未决创建的迟到窗口见 6.5.1。
 5. 不中止或删除已有 Job，不等待物化/sourceJobNames，不要求环内重建次数；未派发 spec 写 BuildFailed 并记录停止原因，不伪造失败 Job。Completed 保留停止原因；父 Build 和 RpmRepo 按原契约处理。
-6. 等待期间仅有状态变化才 PUT，返回零值 + nil 等下一轮；不设等待超时，不将运行中的 Job 当作已完成。Completed 写入成功（含 Unknown 确认成功）后才清理缓存；写失败保留停止标记，下轮重新 List 判断。父 Build 中止/删除及 Project Terminating 仍优先按原规则写 Aborted。
+6. 等待期间仅有状态变化才 PUT，返回零值 + nil 等下一轮；不设等待超时，不将运行中的 Job 当作已完成。Completed 写入成功（含 Unknown 确认成功）后才清理缓存；写失败保留停止标记，下轮重新 List 判断。父 Build 中止或已物理删除、Project Terminating 仍按原规则写 Aborted；父 Build 删除中优先执行第三章删除协作。
 
 ### 6.5.1 批量创建确认与重启恢复
 
-派发使用确定性 Job 名称。每轮最多发起 20 次 CreateJob；已确认创建的 Job 在本轮内存态中立即更新 `dispatchCount` 与 build 状态，供后续门禁判断。正常情况下整批创建后只写一次 BuildInfo `/status`；本轮中途如需写入其他状态，该次写入合并已创建 Job 的确认。写入失败或进程崩溃时，下轮完整 List Job，按身份与代次回填；同名创建返回 409 时 GET 核验，Unknown 时 GET 命中则确认、404 则返回可重试错误。重试始终沿用相同名称，不因未收到响应另起新代次。E-28/E-29/E-30 停止派发后仍通过完整 Job List 等待已有 Job 终态；E-31 仅扫描并尽力中止，不等待终态。
+派发使用确定性 Job 名称。每轮最多发起 20 次 CreateJob；已确认创建的 Job 在本轮内存态中立即更新 `dispatchCount` 与 build 状态，供后续门禁判断。不在每次 CREATE 前写父对象；整批结束后统一写入一次确认。本轮中途如需写入其他状态，该次写入合并已创建 Job 的确认。写入失败或进程崩溃时，下轮完整 List Job，按身份与代次回填；同名创建返回 409 时 GET 核验，Unknown 时 GET 命中则确认、404 则返回可重试错误，下轮按原确定性名称和代次重试。E-28/E-29/E-30 停止派发后仍通过完整 Job List 等待已有 Job 终态；E-31 仅扫描并尽力中止，不等待终态。
 
-不预登记的取舍是：若 CreateJob 返回 Unknown、确认 GET 为 404，随后又触发停止派发，迟到的创建请求可能在停止路径的 Job List 之后落库。停止收敛不能对这一窗口提供严格的“无迟到 Job”保证；BuildInfo 进入终态后不再调谐，迟到 Job 需由 Job 管理流程或运维处理。
+创建请求结果未知时，404 不能证明原请求最终失败。停止派发后只处理当前可见 Job，不补发创建请求；迟到创建的残留风险见第三章删除协作。
 
 ## 七、Reconcile 流程
 
@@ -337,7 +368,8 @@ BuildInfoController:
           ├─ client.GetBuildInfo 重新 get 最新 BuildInfo（回写前取最新版本, 乐观锁基础）:
           │     └─ 404（已被外部删除）→ 记录日志 + 失效 dcgDict 缓存，返回 nil 静默退出 (E-10)
           │
-          ├─ BuildInfo 删除中或已 Completed/Failed/Aborted → 返回 nil，不执行后续守卫
+          ├─ BuildInfo 删除中 → 执行第三章 finalizer 清理
+          ├─ 已 Completed/Failed/Aborted → 返回 nil
           │
           ├─ parentAbortGuard 前置守卫:
           │     ├─ client.GetProject（BuildInfo.metadata.namespace）:
@@ -346,6 +378,7 @@ BuildInfoController:
           │     ├─ client.GetBuild（BuildInfo.metadata.name，与父 Build 同名）:
           │     │     ├─ 父 Build 查询失败（apiserver 错误）→ 返回 error 退避重试
           │     │     ├─ 父 Build 不存在（404，已删除）      → 视同中止，置 Aborted 终态 + 失效 dcgDict 缓存 (E-03)
+          │     │     ├─ 父 Build 删除中                    → 停止生产，等待 BuildInfo 删除标记（第三章）
           │     │     ├─ 父 Build = Aborted        → 尽力中止已下发 Job，记录失败后置 Aborted 终态 + 失效 dcgDict 缓存 (G-06)
           │     │     └─ 父 Build 正常                      → 继续
           │
@@ -744,7 +777,7 @@ BuildInfo 与 Build 同项目、同名；关联 Job 通过 ebs.io/build-name 过
 
 ### 8.4 回收说明
 
-Job 与 BuildInfo 仅通过 label 关联，无 ownerReference；BuildInfo 进入 Aborted 不会级联删除 Job。独立清理机制按 build-name 回收，本控制器不删除 Job。
+Job 与 BuildInfo 通过 label 关联，无 ownerReference；仅进入 Aborted 不触发级联删除。BuildInfo 删除标记触发第三章的 finalizer 清理。
 
 ---
 
@@ -830,7 +863,7 @@ message 经清洗并限制为 1024 字节，不保存逐次重试历史，也不
 | 确认 GET 本身失败 | 按 7.5 读取错误分类返回（快速退避） |
 
 - reconcile context 已取消时不启动后台确认 goroutine，直接结束本轮。
-- **Job 创建的 Unknown**：以创建时确定性 Job 名 GET 确认存在性——存在则按 15.3.1 核验身份后沿用该 Job 回填 dispatchCount，不存在则返回可重试错误；下轮重新调和仍需该代 Job 时，按 15.3.1 使用同一名称创建，不增加代次。404 不证明原请求最终失败，迟到写入由同名创建互斥；停止派发路径不得借此补发新请求，创建结果未知的迟到窗口按 6.5.1 处理。
+- **Job 创建的 Unknown**：以创建时确定性 Job 名 GET 确认存在性——存在则按 15.3.1 核验身份后沿用该 Job 回填 dispatchCount，不存在则返回可重试错误；下轮重新读取对象并按原确定性名称和代次重试，409 时核验已有对象。404 不证明原请求最终失败；停止派发路径不得借此补发新请求，创建结果未知的迟到窗口按 6.5.1 处理。
 
 ---
 
@@ -921,7 +954,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 
 可用性约定：
 
-- 单副本部署，无 leader election（多副本同时运行不会破坏状态——单键串行以 apiserver 乐观锁兜底，但会产生 409 噪声与重复日志，不推荐使用）。
+- 单 active Controller Manager 部署，无 leader election；乐观锁不等价于跨实例的生产者排他，删除协议不支持多个 active 实例。
 - Manager 完成 PollingSource 首次同步（`waitForSync`）后才启动 worker。
 - 不实现自定义 HealthChecker；可用性由「崩溃重启后 2 个 list 周期内恢复处理」（NFR-05）与启动打点日志（11.1）表达。
 
@@ -975,9 +1008,10 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 
 | 资源 | client 方法 | apiserver 路径 | 访问权限 | 用途 |
 |------|-----------|---------------|----------|------|
-| `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` | `GET /apis/ebs/v1/projects/{project}/buildinfos/{name}`、`PUT .../{name}/status`；全局 `GET /apis/ebs/v1/buildinfos` 由 PollingSource 执行 | **读写**（get + /status 写） | reconcile 入口读取最新对象并更新状态；并发与 Unknown 确认见第十章，终态收敛见第六、七章 |
-| `BuildGraph` | `GetBuildGraph` / `CreateBuildGraph` / `UpdateBuildGraphStatus` | `/apis/ebs/v1/projects/{project}/buildgraphs`、`/{name}`、`/{name}/status` | **读写**（get + create + /status 写） | 独立持久化依赖图，无 PollingSource；恢复与确认规则见 15.9 |
-| `Job` | `CreateJob` / `GetJob` / `ListJobs` / `AbortJob` | `/apis/ebs/v1/projects/{project}/jobs`、`/{name}`、`/{name}/abort` | **读写**（创建、读取、POST /abort） | 创建与 Unknown 确认见 15.3.1；按 build-name label 回填见 15.3.2；父 Build 中止或 Project Terminating 时按 7.1 分批中止已有 Job |
+| `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` / 清理适配器 | `GET /apis/ebs/v1/projects/{project}/buildinfos/{name}`、`PUT .../{name}/status`、`PUT .../{name}`；全局 GET 由 PollingSource 执行 | **读写** | 业务状态更新；删除时清理子资源并通过主资源 PUT 移除自身 finalizer |
+| `BuildGraph` | `GetBuildGraph` / `CreateBuildGraph` / `UpdateBuildGraphStatus` / 公共清理适配器 | `/apis/ebs/v1/projects/{project}/buildgraphs`、`/{name}`、`/{name}/status` | **读写**（get + create + /status 写 + delete） | 持久化依赖图；BuildInfo 删除时核验 owner 后条件删除 |
+| `Job` | `CreateJob` / `GetJob` / `ListJobs` / `AbortJob` / 公共清理适配器 | `/apis/ebs/v1/projects/{project}/jobs`、`/{name}`、`/{name}/abort` | **读写**（创建、读取、POST /abort、条件删除） | 派发和回填；中止及 BuildInfo finalizer 清理 |
+| `OldJob` | `ListOldJobs` / `GetOldJob` / `DeleteCleanupChild` | `/apis/ebs/v1/projects/{project}/oldjobs`、`/{name}` | **读写**（list/get/delete） | 完整分页扫描本轮归档，条件删除并等待数据清理完成 |
 | `Build` | `GetBuild` | `/apis/ebs/v1/projects/{project}/builds/{name}` | **只读** | parentAbortGuard 按名读取本轮父 Build；步骤 0 使用已固化的 `spec.packages`，不查询历史 Build；字段消费明细见 15.5 |
 | `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 仅非 single 读取同名对象，供发布失败守卫、依赖裁决和 payload 仓库地址使用；本轮复用，字段消费见 15.4。single 的稳定发布入口见 7.2.3 |
 | `Snapshot` | `GetSnapshot` | `/apis/ebs/v1/projects/{project}/snapshots/{name}` | **只读** | 仅读取本轮同名 Snapshot，用 `spec.packageRepos[].url` 与 `status.packageRepoStatuses[].commitID` 定位 git-server 命令输入，`cloneURL` 用于 Job payload；其 GET 失败计入连续失败计数，达阈值按 E-30 收口；字段消费明细见 15.7 |
@@ -1249,7 +1283,7 @@ BuildGraph 与 BuildInfo 同 Project、同名，由本控制器单独持久化�
 | 408/429/5xx 或读取网络/超时错误 | 可重试错误，使用框架退避；429/503 遵循 Retry-After |
 | Unknown | 使用仍有效的 reconcile context 完整 GET 同名 BuildGraph 一次，按下述原意图确认；失败不重放旧请求 |
 
-Unknown 写入前保存身份和目标 nodes：创建用 Project/name + owner BuildInfo UID 确认身份，更新另外要求原 BuildGraph UID。只有身份匹配且**全部目标图字段**按节点、边集、版本约束和 bootstrapBreak 语义等价时才成功；map nil/空等价，outDep 按多重集合比较（保留重复次数），不要求数组顺序。相同身份但目标不匹配时失效缓存、延迟 1s，基于最新对象重算；创建确认 NotFound 也延迟重入，下轮仍使用同名创建，防止迟到请求生成重复图。owner 不匹配按图不可用记录异常。确认 GET 失败按读取错误分类，context 取消后不启动后台确认。
+Unknown 写入前保存身份和目标 nodes：创建用 Project/name + owner BuildInfo UID 确认身份，更新另外要求原 BuildGraph UID。只有身份匹配且**全部目标图字段**按节点、边集、版本约束和 bootstrapBreak 语义等价时才成功；map nil/空等价，outDep 按多重集合比较（保留重复次数），不要求数组顺序。相同身份但目标不匹配时失效缓存、延迟 1s，基于最新对象重算；创建确认 NotFound 也延迟重入，下轮重新 GET 后允许按同名重试创建。owner 不匹配按图不可用记录异常。确认 GET 失败按读取错误分类，context 取消后不启动后台确认。
 
 #### 派生状态
 

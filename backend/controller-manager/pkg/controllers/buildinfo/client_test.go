@@ -4,19 +4,154 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 
 	"controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
+
+type cleanupPages struct {
+	apiserver.Interface
+	get  func(schema.GroupVersionResource, string, string, string) (runtime.Object, error)
+	list func(schema.GroupVersionResource, string, metav1.ListOptions, string) (source.ListPage, error)
+}
+
+func (c cleanupPages) GetWithFields(_ context.Context, gvr schema.GroupVersionResource,
+	project, name, fields string) (runtime.Object, error) {
+	return c.get(gvr, project, name, fields)
+}
+
+func TestCleanupTypedReads(t *testing.T) {
+	for _, resource := range []string{"jobs", "oldjobs", "buildgraphs", "rpmrepos"} {
+		t.Run(resource, func(t *testing.T) {
+			missing := false
+			client := &apiClient{client: cleanupPages{get: func(gvr schema.GroupVersionResource,
+				project, name, fields string) (runtime.Object, error) {
+				wantFields := ""
+				if resource == "buildgraphs" {
+					wantFields = "metadata"
+				}
+				if gvr.Resource != resource || project != "project" || name != "child" || fields != wantFields {
+					t.Fatalf("unexpected read: %v %s/%s fields=%q", gvr, project, name, fields)
+				}
+				if missing {
+					return nil, apierrors.NewNotFound(gvr.GroupResource(), name)
+				}
+				metadata := metav1.ObjectMeta{Name: name, Namespace: project, UID: "child-uid", ResourceVersion: "1"}
+				switch resource {
+				case "buildgraphs":
+					return &ebsv1.BuildGraph{ObjectMeta: metadata}, nil
+				case "rpmrepos":
+					return &ebsv1.RpmRepo{ObjectMeta: metadata}, nil
+				default:
+					return &ebsv1.Job{ObjectMeta: metadata}, nil
+				}
+			}}}
+			read := func() error {
+				ctx := context.Background()
+				var err error
+				switch resource {
+				case "jobs":
+					_, err = client.GetJob(ctx, "project", "child")
+				case "oldjobs":
+					_, err = client.GetOldJob(ctx, "project", "child")
+				case "buildgraphs":
+					_, err = client.GetBuildGraph(ctx, "project", "child", true)
+				case "rpmrepos":
+					_, err = client.GetRpmRepo(ctx, "project", "child")
+				}
+				return err
+			}
+			if err := read(); err != nil {
+				t.Fatal(err)
+			}
+			missing = true
+			if err := read(); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("missing resource error=%v", err)
+			}
+		})
+	}
+}
+
+func (c cleanupPages) ListProjectPageWithFields(_ context.Context, gvr schema.GroupVersionResource,
+	project string, options metav1.ListOptions, fields string) (source.ListPage, error) {
+	return c.list(gvr, project, options, fields)
+}
+
+func TestCleanupJobPaginationIsComplete(t *testing.T) {
+	build := &ebsv1.BuildInfo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"}}
+	failPage := false
+	calls := 0
+	shared := cleanupPages{list: func(gvr schema.GroupVersionResource, project string, options metav1.ListOptions,
+		fields string) (source.ListPage, error) {
+		calls++
+		if project != build.Namespace || options.LabelSelector != "ebs.io/build-name=build-a" ||
+			options.FieldSelector != "" || fields != "metadata" {
+			t.Fatalf("unexpected scope or projection: %s %+v %s", project, options, fields)
+		}
+		if options.Continue == "" {
+			return source.ListPage{Continue: "page-2"}, nil
+		}
+		if options.Continue != "page-2" {
+			t.Fatalf("unexpected page: %s", options.Continue)
+		}
+		if failPage {
+			return source.ListPage{}, fmt.Errorf("second page unavailable")
+		}
+		job := &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{
+			Name: gvr.Resource + "-job", Namespace: project,
+			UID: "job-uid", ResourceVersion: "1",
+			Labels: map[string]string{ebsv1.JobBuildNameLabel: build.Name},
+		}}
+		return source.ListPage{Items: []runtime.Object{job}}, nil
+	}}
+	client := &apiClient{client: shared}
+	items, err := listCleanupTargets(context.Background(), client, build)
+	if err != nil || len(items) != 2 || calls != 4 {
+		t.Fatalf("items=%v calls=%d error=%v", items, calls, err)
+	}
+	if items[0].Resource != "jobs" || items[1].Resource != "oldjobs" {
+		t.Fatalf("resource identity lost: %v", items)
+	}
+	failPage = true
+	items, err = listCleanupTargets(context.Background(), client, build)
+	if err == nil || items != nil {
+		t.Fatalf("incomplete scan returned candidates: %v, %v", items, err)
+	}
+}
+
+func TestJobListsDefaultToCompleteObjects(t *testing.T) {
+	client := &apiClient{client: cleanupPages{list: func(gvr schema.GroupVersionResource, project string,
+		options metav1.ListOptions, fields string) (source.ListPage, error) {
+		if fields != "" || options.FieldSelector != "" || options.LabelSelector != "" {
+			t.Fatalf("unexpected default projection or selector: %q %+v", fields, options)
+		}
+		return source.ListPage{Items: []runtime.Object{&ebsv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: gvr.Resource, Namespace: project, UID: "job", ResourceVersion: "1"},
+			Status:     ebsv1.JobStatus{Phase: ebsv1.JobSucceeded},
+		}}}, nil
+	}}}
+	for _, list := range []func(context.Context, string, labels.Selector, ...string) ([]ebsv1.Job, error){client.ListJobs, client.ListOldJobs} {
+		jobs, err := list(context.Background(), "project", nil)
+		if err != nil || len(jobs) != 1 || jobs[0].Status.Phase != ebsv1.JobSucceeded {
+			t.Fatalf("complete list: %+v, %v", jobs, err)
+		}
+	}
+}
 
 func TestAPIClientAbortJob(t *testing.T) {
 	for _, tc := range []struct {

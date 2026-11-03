@@ -405,9 +405,10 @@ func (p BuildPhase) IsTerminal() bool {
 const (
 	RpmRepoConditionRepositoryReady = "RepositoryReady"
 	RpmRepoConditionPublishSucceed  = "PublishSucceed"
+	RpmRepoConditionCleanupReady    = "CleanupReady"
 )
 
-// RpmRepo condition reasons describe the outcome of repository or release work.
+// RpmRepo condition reasons describe repository, release and cleanup outcomes.
 const (
 	RpmRepoReasonRepositoryCreated        = "RepositoryCreated"
 	RpmRepoReasonRepositoryCreationFailed = "RepositoryCreationFailed"
@@ -416,6 +417,7 @@ const (
 	RpmRepoReasonNoPublishableArtifacts   = "NoPublishableArtifacts"
 	RpmRepoReasonBuildAborted             = "BuildAborted"
 	RpmRepoReasonBuildInfoFailed          = "BuildInfoFailed"
+	RpmRepoReasonOperationsDrained        = "OperationsDrained"
 )
 
 // RpmRepoReleasePhase describes formal release preparation and activation.

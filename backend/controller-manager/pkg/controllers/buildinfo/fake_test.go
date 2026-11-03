@@ -371,7 +371,7 @@ func (f *fakeClient) GetJob(_ context.Context, project, name string) (*ebsv1.Job
 	return value.DeepCopy(), nil
 }
 
-func (f *fakeClient) ListJobs(_ context.Context, project string, selector labels.Selector) ([]ebsv1.Job, error) {
+func (f *fakeClient) ListJobs(_ context.Context, project string, selector labels.Selector, _ ...string) ([]ebsv1.Job, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.consumeInjectedReadLocked("jobs"); err != nil {
