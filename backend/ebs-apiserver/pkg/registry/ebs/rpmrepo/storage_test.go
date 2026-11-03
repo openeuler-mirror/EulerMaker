@@ -3,6 +3,7 @@ package rpmrepo
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,16 @@ import (
 func targetLabels() map[string]string {
 	return map[string]string{
 		ebsv1.BuildTargetArchLabel: "aarch64",
+	}
+}
+
+func TestCreateAddsCleanupFinalizer(t *testing.T) {
+	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
+	obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Finalizers: []string{"other/controller"}}}
+	strategy.PrepareForCreate(context.Background(), obj)
+	strategy.PrepareForCreate(context.Background(), obj)
+	if !slices.Equal(obj.Finalizers, []string{"other/controller", ebsv1.RpmRepoCleanupFinalizer}) {
+		t.Fatalf("finalizers=%v", obj.Finalizers)
 	}
 }
 
@@ -38,8 +49,8 @@ func TestStatusPreservesMetadataAndValidatesRelease(t *testing.T) {
 		t.Fatalf("Failed with abort reason rejected: %v", errs)
 	}
 	obj.Status.Release.Transition = &ebsv1.ReleaseTransition{SourceRepositoryUID: "base"}
-	if errs := strategy.ValidateUpdate(context.Background(), obj, old); len(errs) == 0 {
-		t.Fatal("terminal release checkpoint accepted")
+	if errs := strategy.ValidateUpdate(context.Background(), obj, old); len(errs) != 0 {
+		t.Fatalf("Failed release must retain outstanding checkpoint: %v", errs)
 	}
 }
 

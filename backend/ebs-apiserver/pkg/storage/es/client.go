@@ -102,6 +102,7 @@ const rpmRepoIndexMapping = `{
       }}
     }},
     "data":{"type":"object","dynamic":false,"properties":{
+      "metadata":{"type":"object","dynamic":false,"properties":{"deletionTimestamp":{"type":"date"}}},
       "status":{"type":"object","dynamic":false,"properties":{
         "release":{"type":"object","dynamic":false,"properties":{
           "phase":{"type":"keyword"}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,7 @@ import (
 
 	ebsv1 "ebs-api/ebs/v1"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
+	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	"ebs-apiserver/pkg/storage/es"
 )
 
@@ -155,6 +157,55 @@ func TestPostWriteHooks(t *testing.T) {
 	}
 	if !reflect.DeepEqual(deleted, []bool{false, true}) {
 		t.Fatal(deleted)
+	}
+}
+
+func TestRpmRepoDeletionRequiresDrainedFinalizer(t *testing.T) {
+	fake := &fakeES{}
+	deletes := 0
+	client := es.NewClientForTesting("http://es", &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodDelete {
+			deletes++
+			return jsonResponse(200, map[string]string{"result": "deleted"}), nil
+		}
+		return fake.roundTrip(r)
+	})})
+	template := rpmrepostore.NewStorage()
+	store := New(client, "rpmrepo", "RpmRepo", template.Resource.(*genericregistry.Store))
+	status := NewStatus(store, template.Status.(*genericregistry.Store))
+	ctx := request.WithNamespace(context.Background(), "project-a")
+	repo := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{
+		Name: "build-a", Namespace: "project-a", Labels: map[string]string{ebsv1.BuildTargetArchLabel: "aarch64"},
+	}}
+	if _, err := store.Create(ctx, repo, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	obj, deleted, err := store.Delete(ctx, repo.Name, nil, nil)
+	if err != nil || deleted || deletes != 0 {
+		t.Fatalf("initial delete=%t error=%v", deleted, err)
+	}
+	next := obj.(*ebsv1.RpmRepo).DeepCopy()
+	if next.DeletionTimestamp == nil || !slices.Contains(next.Finalizers, ebsv1.RpmRepoCleanupFinalizer) {
+		t.Fatal("deletion did not retain cleanup finalizer")
+	}
+	next.Finalizers = nil
+	if _, _, err := store.Update(ctx, repo.Name, rest.DefaultUpdatedObjectInfo(next), nil, nil, false, nil); err == nil {
+		t.Fatal("unacknowledged cleanup allowed finalizer removal")
+	}
+	next = obj.(*ebsv1.RpmRepo).DeepCopy()
+	next.Status.Conditions = []metav1.Condition{{Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue,
+		Reason: ebsv1.RpmRepoReasonOperationsDrained, LastTransitionTime: metav1.Now()}}
+	obj, _, err = status.Update(ctx, repo.Name, rest.DefaultUpdatedObjectInfo(next), nil, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next = obj.(*ebsv1.RpmRepo).DeepCopy()
+	next.Finalizers = nil
+	if _, _, err := store.Update(ctx, repo.Name, rest.DefaultUpdatedObjectInfo(next), nil, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if deletes != 1 {
+		t.Fatalf("physical deletes=%d", deletes)
 	}
 }
 

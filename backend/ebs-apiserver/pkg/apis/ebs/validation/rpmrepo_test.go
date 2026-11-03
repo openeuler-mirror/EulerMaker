@@ -8,6 +8,42 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestRpmRepoCleanupFinalizerRemoval(t *testing.T) {
+	now := metav1.Now()
+	for _, test := range []struct {
+		name                                               string
+		deleting, ready, repositoryPending, releasePending bool
+		allowed                                            bool
+	}{
+		{name: "active", ready: true},
+		{name: "awaiting acknowledgment", deleting: true},
+		{name: "repository pending", deleting: true, ready: true, repositoryPending: true},
+		{name: "release pending", deleting: true, ready: true, releasePending: true},
+		{name: "drained", deleting: true, ready: true, allowed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			old := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Finalizers: []string{ebsv1.RpmRepoCleanupFinalizer, "other/controller"}}}
+			if test.deleting {
+				old.DeletionTimestamp = &now
+			}
+			if test.ready {
+				old.Status.Conditions = []metav1.Condition{{Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue}}
+			}
+			if test.repositoryPending {
+				old.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Transition: &ebsv1.RepositoryTransition{}}
+			}
+			if test.releasePending {
+				old.Status.Release = &ebsv1.RpmRepoReleaseStatus{Transition: &ebsv1.ReleaseTransition{}}
+			}
+			next := old.DeepCopy()
+			next.Finalizers = []string{"other/controller"}
+			if errs := ValidateRpmRepoUpdate(next, old); (len(errs) == 0) != test.allowed {
+				t.Fatalf("allowed=%t, errors=%v", test.allowed, errs)
+			}
+		})
+	}
+}
+
 func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 	valid := func() *ebsv1.RpmRepo {
 		return &ebsv1.RpmRepo{Status: ebsv1.RpmRepoStatus{
@@ -102,7 +138,7 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 			if checkpoint {
 				obj.Status.Release.Transition = &ebsv1.ReleaseTransition{SourceRepositoryUID: "base"}
 			}
-			terminal := phase == "Ready" || phase == "Failed" || phase == "Skipped"
+			terminal := phase == "Ready" || phase == "Skipped"
 			errs := ValidateRpmRepoStatusUpdate(obj, valid())
 			if (len(errs) != 0) != (terminal && checkpoint) {
 				t.Fatalf("phase=%s checkpoint=%v: %v", phase, checkpoint, errs)
@@ -111,8 +147,52 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 	}
 }
 
+func TestRpmRepoCleanupAcknowledgment(t *testing.T) {
+	old := &ebsv1.RpmRepo{}
+	ready := old.DeepCopy()
+	ready.Status.Conditions = []metav1.Condition{{
+		Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue,
+		Reason: ebsv1.RpmRepoReasonOperationsDrained, LastTransitionTime: metav1.Now(),
+	}}
+	if errs := ValidateRpmRepoStatusUpdate(ready, old); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if errs := ValidateRpmRepoStatusUpdate(ready.DeepCopy(), ready); len(errs) != 0 {
+		t.Fatalf("unchanged acknowledgment rejected: %v", errs)
+	}
+	if errs := ValidateRpmRepoStatusUpdate(old, ready); len(errs) == 0 {
+		t.Fatal("cleanup acknowledgment must not be revoked")
+	}
+	changed := ready.DeepCopy()
+	changed.Status.Conditions[0].Status = metav1.ConditionFalse
+	if errs := ValidateRpmRepoStatusUpdate(changed, ready); len(errs) == 0 {
+		t.Fatal("cleanup acknowledgment must remain True")
+	}
+	duplicate := ready.DeepCopy()
+	duplicate.Status.Conditions = append(duplicate.Status.Conditions, duplicate.Status.Conditions[0])
+	if errs := ValidateRpmRepoStatusUpdate(duplicate, ready); len(errs) == 0 {
+		t.Fatal("duplicate acknowledgment accepted")
+	}
+	next := ready.DeepCopy()
+	next.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Transition: &ebsv1.RepositoryTransition{
+		RepositoryUID: "next", Inputs: []ebsv1.RepositoryInput{{JobName: "job", SpecName: "spec"}},
+	}}
+	if errs := ValidateRpmRepoStatusUpdate(next, ready); len(errs) == 0 {
+		t.Fatal("acknowledged repository must not register new work")
+	}
+	next = ready.DeepCopy()
+	next.Status.Release = &ebsv1.RpmRepoReleaseStatus{
+		Phase:      ebsv1.RpmRepoReleaseFailed,
+		Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "base"},
+	}
+	if errs := ValidateRpmRepoStatusUpdate(next, old); len(errs) == 0 {
+		t.Fatal("outstanding release must block acknowledgment")
+	}
+}
+
 func TestRpmRepoConditionCombinations(t *testing.T) {
 	allowed := map[string]bool{
+		"CleanupReady/True/OperationsDrained":            true,
 		"RepositoryReady/True/RepositoryCreated":         true,
 		"RepositoryReady/False/RepositoryCreationFailed": true,
 		"PublishSucceed/True/ReleaseActivated":           true,
@@ -121,9 +201,9 @@ func TestRpmRepoConditionCombinations(t *testing.T) {
 		"PublishSucceed/False/NoPublishableArtifacts":    true,
 		"PublishSucceed/False/BuildAborted":              true,
 	}
-	for _, typ := range []string{ebsv1.RpmRepoConditionRepositoryReady, ebsv1.RpmRepoConditionPublishSucceed, "Other", ""} {
+	for _, typ := range []string{ebsv1.RpmRepoConditionRepositoryReady, ebsv1.RpmRepoConditionPublishSucceed, ebsv1.RpmRepoConditionCleanupReady, "Other", ""} {
 		for _, status := range []metav1.ConditionStatus{metav1.ConditionTrue, metav1.ConditionFalse, "Unknown", ""} {
-			for _, reason := range []string{ebsv1.RpmRepoReasonRepositoryCreated, ebsv1.RpmRepoReasonRepositoryCreationFailed, ebsv1.RpmRepoReasonReleaseActivated, ebsv1.RpmRepoReasonReleaseFailed, ebsv1.RpmRepoReasonNoPublishableArtifacts, ebsv1.RpmRepoReasonBuildAborted, "RepositoryPublished", "RepositoryPublishFailed", "RepositoryPublishAborted", "RepositoryFailed", "Other", ""} {
+			for _, reason := range []string{ebsv1.RpmRepoReasonRepositoryCreated, ebsv1.RpmRepoReasonRepositoryCreationFailed, ebsv1.RpmRepoReasonReleaseActivated, ebsv1.RpmRepoReasonReleaseFailed, ebsv1.RpmRepoReasonNoPublishableArtifacts, ebsv1.RpmRepoReasonBuildAborted, ebsv1.RpmRepoReasonOperationsDrained, "RepositoryPublished", "RepositoryPublishFailed", "RepositoryPublishAborted", "RepositoryFailed", "Other", ""} {
 				key := typ + "/" + string(status) + "/" + reason
 				t.Run(key, func(t *testing.T) {
 					obj := &ebsv1.RpmRepo{Status: ebsv1.RpmRepoStatus{Conditions: []metav1.Condition{{Type: typ, Status: status, Reason: reason}}}}
