@@ -325,6 +325,13 @@ func TestStatusFieldSelectors(t *testing.T) {
 		wantErr  bool
 	}{
 		{
+			name:     "deleting buildinfos",
+			resource: "buildinfo",
+			selector: "metadata.deletionTimestamp!=null",
+			want:     []string{`"exists"`, `"data.metadata.deletionTimestamp"`},
+			wantNot:  []string{`"null"`},
+		},
+		{
 			name:     "phase equals",
 			resource: "build",
 			selector: "status.phase=Processing",

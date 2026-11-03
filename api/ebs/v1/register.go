@@ -77,7 +77,7 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	})
 	scheme.AddFieldLabelConversionFunc(SchemeGroupVersion.WithKind("BuildInfo"), func(label, value string) (string, string, error) {
 		switch label {
-		case "metadata.name", "metadata.namespace", "status.phase":
+		case "metadata.name", "metadata.namespace", "metadata.deletionTimestamp", "status.phase":
 			return label, value, nil
 		default:
 			return "", "", fmt.Errorf("field label not supported for BuildInfo: %s", label)

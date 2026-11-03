@@ -1,6 +1,8 @@
 package buildinfo
 
 import (
+	"slices"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -15,6 +17,10 @@ func NewStorage() *scopedresource.Storage {
 		New:     func() runtime.Object { return &ebsv1.BuildInfo{} },
 		NewList: func() runtime.Object { return &ebsv1.BuildInfoList{} },
 		PrepareCreate: func(obj runtime.Object) {
+			info := obj.(*ebsv1.BuildInfo)
+			if !slices.Contains(info.Finalizers, ebsv1.BuildInfoCleanupFinalizer) {
+				info.Finalizers = append(info.Finalizers, ebsv1.BuildInfoCleanupFinalizer)
+			}
 			obj.(*ebsv1.BuildInfo).Status = ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoPending}
 		},
 		CopyStatus: func(obj, old runtime.Object) {

@@ -47,6 +47,7 @@ const defaultIndexMapping = `{
       }}
     }},
     "data":{"type":"object","dynamic":false,"properties":{
+      "metadata":{"type":"object","dynamic":false,"properties":{"deletionTimestamp":{"type":"date"}}},
       "status":{"type":"object","dynamic":false,"properties":{
         "phase":{"type":"keyword"},
         "stage":{"type":"keyword"}
