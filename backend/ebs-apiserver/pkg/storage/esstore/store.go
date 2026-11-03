@@ -692,7 +692,7 @@ func selectorQuery(resource, namespace string, options *internalversion.ListOpti
 	if options.FieldSelector != nil {
 		for _, req := range options.FieldSelector.Requirements() {
 			field := req.Field
-			if resource == "oldjob" && field == "metadata.deletionTimestamp" && req.Value == "null" {
+			if (resource == "oldjob" || resource == "buildinfo") && field == "metadata.deletionTimestamp" && req.Value == "null" {
 				exists := map[string]interface{}{"exists": map[string]interface{}{"field": "data.metadata.deletionTimestamp"}}
 				switch req.Operator {
 				case selection.Equals, selection.DoubleEquals:
