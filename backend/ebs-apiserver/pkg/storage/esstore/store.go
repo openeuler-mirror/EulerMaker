@@ -680,6 +680,15 @@ func queryFingerprint(resource, namespace string, options *internalversion.ListO
 	return hex.EncodeToString(sum[:])
 }
 
+func supportsDeletionTimestampSelector(resource string) bool {
+	switch resource {
+	case "oldjob", "buildinfo", "rpmrepo":
+		return true
+	default:
+		return false
+	}
+}
+
 func selectorQuery(resource, namespace string, options *internalversion.ListOptions) (map[string]interface{}, error) {
 	must := make([]interface{}, 0)
 	mustNot := make([]interface{}, 0)
@@ -692,7 +701,7 @@ func selectorQuery(resource, namespace string, options *internalversion.ListOpti
 	if options.FieldSelector != nil {
 		for _, req := range options.FieldSelector.Requirements() {
 			field := req.Field
-			if (resource == "oldjob" || resource == "buildinfo") && field == "metadata.deletionTimestamp" && req.Value == "null" {
+			if supportsDeletionTimestampSelector(resource) && field == "metadata.deletionTimestamp" && req.Value == "null" {
 				exists := map[string]interface{}{"exists": map[string]interface{}{"field": "data.metadata.deletionTimestamp"}}
 				switch req.Operator {
 				case selection.Equals, selection.DoubleEquals:

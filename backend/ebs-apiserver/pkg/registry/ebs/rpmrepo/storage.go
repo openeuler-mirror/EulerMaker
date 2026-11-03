@@ -1,6 +1,8 @@
 package rpmrepo
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -19,6 +21,9 @@ func NewStorage() *scopedresource.Storage {
 			// The Build controller seeds the inherited process repository version when it creates the
 			// RpmRepo of a round. Preserve the baseline pair and explicit skip marker only.
 			repo := obj.(*ebsv1.RpmRepo)
+			if !slices.Contains(repo.Finalizers, ebsv1.RpmRepoCleanupFinalizer) {
+				repo.Finalizers = append(repo.Finalizers, ebsv1.RpmRepoCleanupFinalizer)
+			}
 			seeded := repo.Status.Repository
 			release := repo.Status.Release
 			repo.Status = ebsv1.RpmRepoStatus{}

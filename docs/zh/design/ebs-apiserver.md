@@ -688,6 +688,10 @@ Content-Type: application/json
 - 中止与绑定、Runner 完成、Job Controller 写 Failed 并发；终态第一写入获胜，PUT/PATCH 均不能覆盖终态。
 - 中止响应丢失后的 GET 确认和同 UID 重试；返回对象保留 runner，使已分配 Job 的 Watch 能感知 Aborted。
 
+## RpmRepo 删除 finalizer
+
+RpmRepo 创建时加入 `ebs.io/rpmrepo-cleanup`；DELETE 只设置删除标记。主资源更新仅在旧对象已删除中、`CleanupReady=True` 且两个 transition 均为空时允许移除此 finalizer，`/status` 保留 finalizer。确认条件不可撤销，不允许重复类型或登记新 transition。初始 mapping 为 `data.metadata.deletionTimestamp` 建立 date 索引，支持删除轮询。Controller 负责排空和移除，不删除仓库文件。
+
 ## Job 删除与归档 finalizer
 
 apiserver 负责 API 生命周期与归档存储，不调用 Artifact Manager；Job Controller 负责清理数据和推进 finalizer。业务层保证删除时机、停止写入和输入使用者排空，存储层不重复判断物化依赖。本轮不新增 Runner 停止确认协议，不将 Job 终态当成停止上传的证明。
