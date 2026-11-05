@@ -8,7 +8,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
@@ -21,17 +20,12 @@ func (c *Controller) cleanupBuild(ctx context.Context, build *ebsv1.Build) (cont
 	}
 	wait := controller.ReconcileResult{RequeueAfter: time.Second}
 	// Delegate to BuildInfo whenever it exists; its finalizer owns Jobs and BuildGraph.
-	info, err := c.client.GetBuildInfo(ctx, build.Namespace, build.Name)
-	if err == nil && info.DeletionTimestamp == nil && !slices.Contains(info.Finalizers, ebsv1.BuildInfoCleanupFinalizer) {
-		return controller.ReconcileResult{}, fmt.Errorf("BuildInfo cleanup finalizer is missing")
-	}
-	infoDone, err := c.cleanupChild(ctx, "buildinfos", info, err)
+	infoDone, err := c.cleanupBuildInfo(ctx, build)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
 	// Snapshot deletion is independent of BuildInfo descendant cleanup.
-	snapshot, err := c.client.GetSnapshot(ctx, build.Namespace, build.Name)
-	snapshotDone, err := c.cleanupChild(ctx, "snapshots", snapshot, err)
+	snapshotDone, err := c.cleanupSnapshot(ctx, build)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
@@ -39,8 +33,7 @@ func (c *Controller) cleanupBuild(ctx context.Context, build *ebsv1.Build) (cont
 	if !infoDone {
 		return wait, nil
 	}
-	repo, err := c.client.GetRpmRepo(ctx, build.Namespace, build.Name)
-	repoDone, err := c.cleanupChild(ctx, "rpmrepos", repo, err)
+	repoDone, err := c.cleanupRpmRepo(ctx, build)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
@@ -67,25 +60,71 @@ func (c *Controller) cleanupBuild(ctx context.Context, build *ebsv1.Build) (cont
 	return controller.ReconcileResult{}, nil
 }
 
-// cleanupChild returns done only when GET or DELETE confirms the child is absent.
-func (c *Controller) cleanupChild(ctx context.Context, resource string, obj metav1.Object, readErr error) (bool, error) {
-	if apierrors.IsNotFound(readErr) {
-		return true, nil
-	}
-	if readErr != nil {
-		return false, readErr
-	}
-	if obj.GetDeletionTimestamp() != nil {
-		return false, nil
-	}
-	err := c.client.DeleteCleanupChild(ctx, obj.GetNamespace(), resource, obj.GetName(), obj)
+// cleanupBuildInfo delegates descendant cleanup and waits until BuildInfo is absent.
+func (c *Controller) cleanupBuildInfo(ctx context.Context, build *ebsv1.Build) (bool, error) {
+	info, err := c.client.GetBuildInfo(ctx, build.Namespace, build.Name)
 	if apierrors.IsNotFound(err) {
 		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	log.Printf("controller=build key=%q resource=%q uid=%q reason=ChildDeletionRequested",
-		obj.GetNamespace()+"/"+obj.GetName(), resource, obj.GetUID())
+	if info.DeletionTimestamp != nil {
+		return false, nil
+	}
+	if !slices.Contains(info.Finalizers, ebsv1.BuildInfoCleanupFinalizer) {
+		return false, fmt.Errorf("BuildInfo cleanup finalizer is missing")
+	}
+	if err := c.client.DeleteBuildInfo(ctx, info); apierrors.IsNotFound(err) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	log.Printf("controller=build key=%q resource=buildinfos uid=%q reason=ChildDeletionRequested",
+		info.Namespace+"/"+info.Name, info.UID)
+	return false, nil
+}
+
+// cleanupSnapshot requests deletion and confirms absence on a subsequent reconcile.
+func (c *Controller) cleanupSnapshot(ctx context.Context, build *ebsv1.Build) (bool, error) {
+	snapshot, err := c.client.GetSnapshot(ctx, build.Namespace, build.Name)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if snapshot.DeletionTimestamp != nil {
+		return false, nil
+	}
+	if err := c.client.DeleteSnapshot(ctx, snapshot); apierrors.IsNotFound(err) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	log.Printf("controller=build key=%q resource=snapshots uid=%q reason=ChildDeletionRequested",
+		snapshot.Namespace+"/"+snapshot.Name, snapshot.UID)
+	return false, nil
+}
+
+// cleanupRpmRepo delegates repository cleanup and waits until RpmRepo is absent.
+func (c *Controller) cleanupRpmRepo(ctx context.Context, build *ebsv1.Build) (bool, error) {
+	repo, err := c.client.GetRpmRepo(ctx, build.Namespace, build.Name)
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if repo.DeletionTimestamp != nil {
+		return false, nil
+	}
+	if err := c.client.DeleteRpmRepo(ctx, repo); apierrors.IsNotFound(err) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	log.Printf("controller=build key=%q resource=rpmrepos uid=%q reason=ChildDeletionRequested",
+		repo.Namespace+"/"+repo.Name, repo.UID)
 	return false, nil
 }

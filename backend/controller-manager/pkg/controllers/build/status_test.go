@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func buildStageWriteRound(t *testing.T) (*fakeAPI, *Controller) {
 	build.Status.StartTime = testTime(9)
 	api.builds[key("project-a", "build-a")] = build
 	api.buildInfos[key("project-a", "build-a")] = newBuildInfoObject("project-a", "build-a", ebsv1.BuildInfoCompleted,
-		map[string]ebsv1.SpecResult{"gcc": specStatus(ebsv1.SpecSucceeded, ebsv1.SpecSucceeded)})
+		map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}})
 	return api, newTestController(t, api, newTestClock())
 }
 
@@ -786,8 +787,7 @@ func TestStatusWriteKeepsFieldsOutsideTheIntent(t *testing.T) {
 	}
 }
 
-// TestClassifyReadError pins the read side of the design's queue result contract: API permanent rejections,
-// bad input and response contract violations are permanent; everything else keeps the retry backoff.
+// API rejections and contract violations are permanent; transient failures remain retryable.
 func TestClassifyReadError(t *testing.T) {
 	resource := schema.GroupResource{Group: "ebs", Resource: "builds"}
 	kind := schema.GroupKind{Group: "ebs", Kind: "Build"}
@@ -816,6 +816,59 @@ func TestClassifyReadError(t *testing.T) {
 			}
 			if !tc.wantPermanent && !errors.Is(classified, tc.err) {
 				t.Fatalf("a retryable error must be returned unchanged, got %v", classified)
+			}
+		})
+	}
+}
+
+// TestRetryableCreateRejection pins the create rejection matrix: 404 is retryable because it means the target
+// route or its parent object is not available yet, while 400/401/403/422 stay permanent API rejections.
+func TestRetryableCreateRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		want       bool
+	}{
+		{name: "not found", statusCode: http.StatusNotFound, want: true},
+		{name: "request timeout", statusCode: http.StatusRequestTimeout, want: true},
+		{name: "conflict", statusCode: http.StatusConflict, want: true},
+		{name: "precondition failed", statusCode: http.StatusPreconditionFailed, want: true},
+		{name: "too many requests", statusCode: http.StatusTooManyRequests, want: true},
+		{name: "server error", statusCode: http.StatusInternalServerError, want: true},
+		{name: "unavailable", statusCode: http.StatusServiceUnavailable, want: true},
+		{name: "bad request", statusCode: http.StatusBadRequest},
+		{name: "unauthorized", statusCode: http.StatusUnauthorized},
+		{name: "forbidden", statusCode: http.StatusForbidden},
+		{name: "invalid", statusCode: http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := retryableCreateRejection(tc.statusCode); got != tc.want {
+				t.Fatalf("retryableCreateRejection(%d) = %v, want %v", tc.statusCode, got, tc.want)
+			}
+
+			writeErr := &clientpkg.WriteError{
+				Operation: "create", Outcome: clientpkg.WriteRejected,
+				StatusCode: tc.statusCode, Err: errors.New("create rejected"),
+			}
+			if tc.statusCode == http.StatusTooManyRequests || tc.statusCode == http.StatusServiceUnavailable {
+				writeErr.RetryAfter = 7 * time.Second
+			}
+
+			classified := classifyRejectedWrite(writeErr, writeErr)
+			if !tc.want {
+				if !controller.IsPermanent(classified) {
+					t.Fatalf("a permanent rejection must stay permanent: %v", classified)
+				}
+				return
+			}
+			if !errors.Is(classified, writeErr) {
+				t.Fatalf("a retryable rejection must be returned unchanged, got %v", classified)
+			}
+			if controller.IsPermanent(classified) {
+				t.Fatalf("a retryable rejection must not be permanent: %v", classified)
+			}
+			if writeErr.RetryAfter > 0 && clientpkg.RetryAfter(classified) != writeErr.RetryAfter {
+				t.Fatalf("RetryAfter = %s, want %s", clientpkg.RetryAfter(classified), writeErr.RetryAfter)
 			}
 		})
 	}

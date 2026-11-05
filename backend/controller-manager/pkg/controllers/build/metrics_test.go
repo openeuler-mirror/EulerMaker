@@ -10,8 +10,7 @@ import (
 	"controller-manager/pkg/metrics"
 )
 
-// The counters the design's observability section requires. Assertions read them from the exposition handler,
-// which also proves they are registered and rendered.
+// Counter names exposed by the Build Controller.
 const (
 	metricStatusUpdateConflicts = "build_controller_status_update_conflicts_total"
 	metricStatusUpdateUnknown   = "build_controller_status_update_unknown_total"

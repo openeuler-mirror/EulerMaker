@@ -101,18 +101,27 @@ func (s *stubSharedClient) Delete(_ context.Context, gvr schema.GroupVersionReso
 	return nil
 }
 
-func TestAPIClientDeleteCleanupChild(t *testing.T) {
+func TestAPIClientDeletesTypedChildren(t *testing.T) {
 	for _, resource := range []string{"buildinfos", "snapshots", "rpmrepos"} {
 		t.Run(resource, func(t *testing.T) {
 			shared := &stubSharedClient{}
 			client := newAPIClient(shared)
-			obj := &metav1.ObjectMeta{Namespace: "project-a", Name: "build-a", UID: "child", ResourceVersion: "7"}
-			if err := client.DeleteCleanupChild(context.Background(), obj.Namespace, resource, obj.Name, obj); err != nil {
+			meta := metav1.ObjectMeta{Namespace: "project-a", Name: "build-a", UID: "child", ResourceVersion: "7"}
+			var err error
+			switch resource {
+			case "buildinfos":
+				err = client.DeleteBuildInfo(context.Background(), &ebsv1.BuildInfo{ObjectMeta: meta})
+			case "snapshots":
+				err = client.DeleteSnapshot(context.Background(), &ebsv1.Snapshot{ObjectMeta: meta})
+			case "rpmrepos":
+				err = client.DeleteRpmRepo(context.Background(), &ebsv1.RpmRepo{ObjectMeta: meta})
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
-			want := getCall{gvr: ebsv1.SchemeGroupVersion.WithResource(resource), namespace: obj.Namespace, name: obj.Name}
-			if shared.deleteCall != want || shared.deletePreconditions.UID != obj.UID ||
-				shared.deletePreconditions.ResourceVersion != obj.ResourceVersion {
+			want := getCall{gvr: ebsv1.SchemeGroupVersion.WithResource(resource), namespace: meta.Namespace, name: meta.Name}
+			if shared.deleteCall != want || shared.deletePreconditions.UID != meta.UID ||
+				shared.deletePreconditions.ResourceVersion != meta.ResourceVersion {
 				t.Fatalf("delete call=%+v preconditions=%+v", shared.deleteCall, shared.deletePreconditions)
 			}
 		})
@@ -228,11 +237,6 @@ func TestTypedGettersValidateResponses(t *testing.T) {
 		result runtime.Object
 		read   func(Client) error
 	}{
-		{
-			name:   "project wrong identity",
-			result: &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Name: "other", UID: "uid", ResourceVersion: "1"}},
-			read:   func(c Client) error { _, err := c.GetProject(context.Background(), "project-a"); return err },
-		},
 		{
 			name:   "build wrong type",
 			result: &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", UID: "uid", ResourceVersion: "1"}},

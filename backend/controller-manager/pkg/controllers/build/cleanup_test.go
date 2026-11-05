@@ -7,7 +7,9 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -153,23 +155,55 @@ func TestBuildCleanupRetriesSnapshotWhileBuildInfoIsDeleting(t *testing.T) {
 }
 
 func TestBuildCleanupRetriesChildRead(t *testing.T) {
+	for _, resource := range []string{"buildinfos", "snapshots", "rpmrepos"} {
+		t.Run(resource, func(t *testing.T) {
+			f, c, b := cleanupFixture(t)
+			k := key(b.Namespace, b.Name)
+			readErr := apierrors.NewServiceUnavailable("read failed")
+			switch resource {
+			case "buildinfos":
+				f.hooks.getBuildInfo = func(_, _ string) (*ebsv1.BuildInfo, error) { return nil, readErr }
+			case "snapshots":
+				f.hooks.getSnapshot = func(_, _ string) (*ebsv1.Snapshot, error) { return nil, readErr }
+			case "rpmrepos":
+				f.hooks.getRpmRepo = func(_, _ string) (*ebsv1.RpmRepo, error) { return nil, readErr }
+			}
+			if _, err := c.sync(context.Background(), k); err == nil {
+				t.Fatal("expected child read error")
+			}
+			if !slices.Contains(f.builds[k].Finalizers, ebsv1.BuildCleanupFinalizer) {
+				t.Fatal("child read error was treated as absence")
+			}
+			f.hooks.getBuildInfo, f.hooks.getSnapshot, f.hooks.getRpmRepo = nil, nil, nil
+			if _, err := c.sync(context.Background(), k); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(f.builds[k].Finalizers, []string{"another/controller"}) {
+				t.Fatal("cleanup did not recover")
+			}
+		})
+	}
+}
+
+func TestBuildCleanupWaitsForDeletingSnapshot(t *testing.T) {
 	f, c, b := cleanupFixture(t)
 	k := key(b.Namespace, b.Name)
-	f.hooks.getBuildInfo = func(project, name string) (*ebsv1.BuildInfo, error) {
-		return nil, apierrors.NewServiceUnavailable("read failed")
+	f.snapshots[k] = &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{
+		Name: b.Name, Namespace: b.Namespace, UID: "snapshot", ResourceVersion: "1",
+		DeletionTimestamp: b.DeletionTimestamp,
+	}}
+	if result, err := c.sync(context.Background(), k); err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if _, err := c.sync(context.Background(), k); err == nil {
-		t.Fatal("expected child read error")
+	if len(f.cleanupWrites) != 0 || !slices.Contains(f.builds[k].Finalizers, ebsv1.BuildCleanupFinalizer) {
+		t.Fatal("must wait for Snapshot disappearance without repeating DELETE")
 	}
-	if !slices.Contains(f.builds[k].Finalizers, ebsv1.BuildCleanupFinalizer) {
-		t.Fatal("child read error was treated as absence")
-	}
-	f.hooks.getBuildInfo = nil
+	delete(f.snapshots, k)
 	if _, err := c.sync(context.Background(), k); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(f.builds[k].Finalizers, []string{"another/controller"}) {
-		t.Fatal("cleanup did not recover")
+		t.Fatal("Build did not finalize after Snapshot disappeared")
 	}
 }
 
@@ -190,7 +224,8 @@ func TestBuildCleanupHandlesChildDisappearingDuringDelete(t *testing.T) {
 			case "rpmrepos":
 				f.rpmRepos[k] = &ebsv1.RpmRepo{ObjectMeta: metadata}
 			}
-			f.hooks.deleteCleanupChild = func(project, target, name string, _ metav1.Object) error {
+			f.hooks.deleteResource = func(gvr schema.GroupVersionResource, project, name string, _ clientpkg.DeletePreconditions) error {
+				target := gvr.Resource
 				if project != b.Namespace || target != resource || name != b.Name {
 					t.Fatalf("unexpected delete: %s/%s/%s", project, target, name)
 				}
