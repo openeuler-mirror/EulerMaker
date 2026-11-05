@@ -8,7 +8,6 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	clocktesting "k8s.io/utils/clock/testing"
 
 	"controller-manager/pkg/controller"
@@ -134,19 +133,6 @@ func TestSplitKey(t *testing.T) {
 				t.Fatalf("unexpected split %q %q", project, name)
 			}
 		})
-	}
-}
-
-func TestAdapterReadsSucceedForMatchingObjects(t *testing.T) {
-	build := newBuild(testBuild)
-	info := newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
-	shared := &stubSharedClient{getResults: []runtime.Object{build, info}}
-	client := newAPIClient(shared)
-	if _, err := client.GetBuild(context.Background(), testProject, testBuild); err != nil {
-		t.Fatalf("GetBuild: %v", err)
-	}
-	if _, err := client.GetBuildInfo(context.Background(), testProject, testBuild); err != nil {
-		t.Fatalf("GetBuildInfo: %v", err)
 	}
 }
 

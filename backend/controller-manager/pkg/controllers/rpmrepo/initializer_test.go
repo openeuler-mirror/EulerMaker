@@ -3,6 +3,7 @@ package rpmrepo
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 // stubPollingFactory captures the resource, period and selectors the initializer asks for.
 type stubPollingFactory struct {
+	resources []schema.GroupVersionResource
 	selectors []string
 	source    source.Source
 	err       error
@@ -28,6 +30,7 @@ type stubPollingFactory struct {
 }
 
 func (f *stubPollingFactory) ForResource(gvr schema.GroupVersionResource, period time.Duration, options metav1.ListOptions) (source.Source, error) {
+	f.resources = append(f.resources, gvr)
 	f.selectors = append(f.selectors, options.FieldSelector)
 	f.calls++
 	f.gvr, f.period, f.options = gvr, period, options
@@ -74,16 +77,15 @@ func TestInitializerBuildsThePollingSource(t *testing.T) {
 	if !active || instance == nil || instance.Name() != Name {
 		t.Fatalf("the initializer must return an active %q controller, got %v active=%t", Name, instance, active)
 	}
-	if factory.calls != 3 {
-		t.Fatalf("expected business and deleting BuildInfo/RpmRepo polling requests, got %d", factory.calls)
-	}
-	if factory.gvr != source.RpmReposGVR {
-		t.Fatalf("unexpected GVR %v", factory.gvr)
+	resources := []schema.GroupVersionResource{source.RpmReposGVR, source.BuildInfosGVR, source.RpmReposGVR}
+	if factory.calls != len(resources) || !slices.Equal(factory.resources, resources) {
+		t.Fatalf("unexpected polling resources %v", factory.resources)
 	}
 	if factory.period != config.PollPeriod {
 		t.Fatalf("unexpected poll period %s", factory.period)
 	}
-	if factory.selectors[0] != nonTerminalRpmRepoFieldSelector || factory.selectors[1] != "metadata.deletionTimestamp!=null" || factory.selectors[2] != "metadata.deletionTimestamp!=null" {
+	selectors := []string{nonTerminalRpmRepoFieldSelector, "metadata.deletionTimestamp!=null", "metadata.deletionTimestamp!=null"}
+	if !slices.Equal(factory.selectors, selectors) {
 		t.Fatalf("unexpected field selectors %v", factory.selectors)
 	}
 	if factory.options.LabelSelector != "" {
