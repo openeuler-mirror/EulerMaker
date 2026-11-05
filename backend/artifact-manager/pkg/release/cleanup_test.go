@@ -1,6 +1,7 @@
 package release
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -11,6 +12,98 @@ import (
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 )
+
+func TestReleaseDeletionRetriesAtRuntime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{
+		root: t.TempDir(), records: map[string]*ReleaseRecord{}, ctx: ctx,
+		queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
+	}
+	record := &ReleaseRecord{Project: "project", TargetArch: "arch", BuildName: "build", State: ReleasePrepared}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	if _, status, err := m.Delete(record.BuildName); err != nil || status != http.StatusAccepted {
+		t.Fatalf("delete: status=%d, error=%v", status, err)
+	}
+	// Fail metadata removal after the content has already been moved and removed.
+	metaPath := m.metaPath(record.BuildName)
+	if err := os.Rename(metaPath, metaPath+"-saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(metaPath, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metaPath, "blocker"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(m.Path(record), 0750); err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); m.worker() }()
+	t.Cleanup(func() { cancel(); <-stopped })
+	wait := func(removed bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			m.mu.RLock()
+			idle := !m.queued[record.BuildName] && !m.running[record.BuildName]
+			absent := m.records[record.BuildName] == nil
+			m.mu.RUnlock()
+			if idle && absent == removed {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("cleanup did not settle: removed=%t", removed)
+	}
+	wait(false)
+	got, ok, err := m.Get(record.BuildName)
+	if err != nil || !ok || got.State != ReleaseDeleting {
+		t.Fatalf("failed removal lost deletion intent: %+v, %v", got, err)
+	}
+	if err := os.RemoveAll(metaPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(metaPath+"-saved", metaPath); err != nil {
+		t.Fatal(err)
+	}
+	// A retry also finds the stable trash path after an interrupted recursive removal.
+	trash := filepath.Join(m.releaseTargetDir(record), "releases/.trash", record.BuildName+"-deleting")
+	if err := os.MkdirAll(trash, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(trash, "rpm"), []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.retryPending()
+	wait(true)
+	if _, err := os.Stat(trash); !os.IsNotExist(err) {
+		t.Fatalf("retry left trash: %v", err)
+	}
+	if _, ok, err := m.Get(record.BuildName); err != nil || ok {
+		t.Fatalf("deleted metadata remains: %t, %v", ok, err)
+	}
+}
+
+func TestReleaseCleanupQueueDeduplicatesActiveWork(t *testing.T) {
+	m := &Manager{
+		records: map[string]*ReleaseRecord{"build": {BuildName: "build", State: ReleaseDeleting}},
+		queued:  map[string]bool{}, running: map[string]bool{"build": true}, queue: make(chan string, 1),
+	}
+	m.retryPending()
+	if len(m.queue) != 0 {
+		t.Fatal("cleanup must wait for the active worker")
+	}
+	delete(m.running, "build")
+	for range 3 {
+		m.retryPending()
+	}
+	if len(m.queue) != 1 || !m.queued["build"] {
+		t.Fatalf("cleanup queue was not deduplicated: queued=%v length=%d", m.queued, len(m.queue))
+	}
+}
 
 func TestStopBuildFencesReleaseSubmissionAndActivation(t *testing.T) {
 	root := t.TempDir()

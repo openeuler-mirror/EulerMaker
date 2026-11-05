@@ -369,7 +369,14 @@ func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 }
 
 func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
-	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}, historyCount: 1, historyTTL: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{
+		root: t.TempDir(), records: map[string]*ReleaseRecord{}, historyCount: 1, historyTTL: time.Hour,
+		ctx: ctx, queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
+	}
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); m.worker() }()
+	t.Cleanup(func() { cancel(); <-stopped })
 	now := time.Now().UTC()
 	for i, name := range []string{"latest", "old", "current"} {
 		record := &ReleaseRecord{

@@ -1,12 +1,189 @@
 package repository
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"artifact-manager/pkg/fileutil"
 )
+
+func TestRepositoryCompletionWaitsForDurableResult(t *testing.T) {
+	for _, state := range []RepositoryState{RepositoryReady, RepositoryFailed} {
+		t.Run(string(state), func(t *testing.T) {
+			m := &Manager{
+				root: t.TempDir(), records: map[string]*RepositoryRecord{},
+				queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
+			}
+			record := &RepositoryRecord{
+				RepositoryUID: "repo", Project: "project", TargetArch: "arch", BuildName: "build",
+				State: RepositoryCreating,
+			}
+			if err := m.persist(record); err != nil {
+				t.Fatal(err)
+			}
+			m.records[record.RepositoryUID] = cloneRepository(record)
+			m.running[record.RepositoryUID] = true
+			if err := fileutil.AtomicJSON(filepath.Join(m.RepositoryPath(record), ".repository.json"), Index{}); err != nil {
+				t.Fatal(err)
+			}
+			// An obstructing metadata parent makes result persistence fail even when tests run as root.
+			dir := filepath.Dir(m.metaPath(record.RepositoryUID))
+			if err := os.Rename(dir, dir+"-saved"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(dir, nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			var materializeErr error
+			if state == RepositoryFailed {
+				materializeErr = errors.New("materialization failed")
+			}
+			m.finish(record, Result{Digest: "digest"}, materializeErr)
+			got, ok, err := m.Get(record.RepositoryUID)
+			if err != nil || !ok || got.State != RepositoryCreating || got.Failure != nil || got.ContentURL != "" {
+				t.Fatalf("unpersisted completion exposed: %+v, %v", got, err)
+			}
+			if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || done {
+				t.Fatalf("unpersisted completion drained: %t, %v", done, err)
+			}
+			m.retryPending()
+			m.retryPending()
+			if len(m.queue) != 0 || m.running[record.RepositoryUID] || m.completions[record.RepositoryUID] == nil {
+				t.Fatalf("completion must retry persistence only: queued=%d pending=%v", len(m.queue), m.completions)
+			}
+			if err := os.Remove(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(dir+"-saved", dir); err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := m.readRecord(record.RepositoryUID)
+			if err != nil || persisted.State != RepositoryCreating {
+				t.Fatalf("last durable state: %+v, %v", persisted, err)
+			}
+			restarted := &Manager{root: m.root, records: map[string]*RepositoryRecord{}}
+			if err := restarted.load(); err != nil {
+				t.Fatal(err)
+			}
+			if done, err := restarted.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || done {
+				t.Fatalf("restart acknowledged an unfinished record: %t, %v", done, err)
+			}
+			m.retryPending()
+			got, ok, err = m.Get(record.RepositoryUID)
+			if err != nil || !ok || got.State != state {
+				t.Fatalf("persisted completion: %+v, %v", got, err)
+			}
+			if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || !done {
+				t.Fatalf("durable completion still pending: %t, %v", done, err)
+			}
+			if len(m.completions) != 0 || len(m.queue) != 0 {
+				t.Fatal("completed result retained or materialization requeued")
+			}
+		})
+	}
+}
+
+func TestRepositoryDeletionRetriesAtRuntime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{
+		root: t.TempDir(), records: map[string]*RepositoryRecord{}, ctx: ctx,
+		queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
+	}
+	record := &RepositoryRecord{
+		RepositoryUID: "repo", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryCreating,
+	}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	m.records[record.RepositoryUID] = record
+	trashDir := filepath.Join(m.root, "repositories/project/arch/history/build/.trash")
+	if err := os.WriteFile(trashDir, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, status, err := m.Delete(record.RepositoryUID); err != nil || status != 202 {
+		t.Fatalf("delete: status=%d, error=%v", status, err)
+	}
+	stopped := make(chan struct{})
+	go func() { defer close(stopped); m.worker() }()
+	t.Cleanup(func() { cancel(); <-stopped })
+	wait := func(removed bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			m.mu.RLock()
+			idle := !m.queued[record.RepositoryUID] && !m.running[record.RepositoryUID]
+			absent := m.records[record.RepositoryUID] == nil
+			m.mu.RUnlock()
+			if idle && absent == removed {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("cleanup did not settle: removed=%t", removed)
+	}
+	wait(false)
+	if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || done {
+		t.Fatalf("failed deletion drained: %t, %v", done, err)
+	}
+	if err := os.Remove(trashDir); err != nil {
+		t.Fatal(err)
+	}
+	// Resume a directory already moved to trash before an interrupted attempt.
+	trash := filepath.Join(trashDir, record.RepositoryUID+"-deleting")
+	if err := os.MkdirAll(trash, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(trash, "rpm"), []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.retryPending()
+	wait(true)
+	if _, err := os.Stat(trash); !os.IsNotExist(err) {
+		t.Fatalf("retry left trash: %v", err)
+	}
+	if _, ok, err := m.Get(record.RepositoryUID); err != nil || ok {
+		t.Fatalf("deleted metadata remains: %t, %v", ok, err)
+	}
+	if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || !done {
+		t.Fatalf("successful deletion not drained: %t, %v", done, err)
+	}
+}
+
+func TestRepositoryCleanupWaitsForMaterialization(t *testing.T) {
+	m := &Manager{
+		root: t.TempDir(), records: map[string]*RepositoryRecord{},
+		queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
+	}
+	record := &RepositoryRecord{
+		RepositoryUID: "repo", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryCreating,
+	}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	m.records[record.RepositoryUID] = record
+	m.running[record.RepositoryUID] = true
+	if _, _, err := m.Delete(record.RepositoryUID); err != nil {
+		t.Fatal(err)
+	}
+	m.retryPending()
+	if len(m.queue) != 0 {
+		t.Fatal("cleanup must wait for materialization to exit")
+	}
+	m.finish(record, Result{Digest: "late-result"}, nil)
+	if got, _, err := m.Get(record.RepositoryUID); err != nil || got.State != RepositoryDeleting {
+		t.Fatalf("late completion replaced deletion intent: %+v, %v", got, err)
+	}
+	for range 3 {
+		m.retryPending()
+	}
+	if len(m.queue) != 1 || !m.queued[record.RepositoryUID] {
+		t.Fatalf("cleanup queue was not deduplicated: queued=%v length=%d", m.queued, len(m.queue))
+	}
+}
 
 func TestRepositoryManagerCachesOnlyRecoverableStates(t *testing.T) {
 	root := t.TempDir()

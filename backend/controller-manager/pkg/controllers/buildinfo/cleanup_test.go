@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,10 +26,6 @@ func (f *fakeClient) ListOldJobs(context.Context, string, labels.Selector, ...st
 	return nil, fmt.Errorf("unexpected ListOldJobs")
 }
 
-func (f *fakeClient) GetOldJob(context.Context, string, string) (*ebsv1.Job, error) {
-	return nil, fmt.Errorf("unexpected GetOldJob")
-}
-
 func (f *fakeClient) DeleteCleanupChild(context.Context, string, CleanupTarget, metav1.Object) error {
 	return fmt.Errorf("unexpected DeleteCleanupChild")
 }
@@ -40,6 +38,8 @@ type cleanupFake struct {
 	repoErr    error
 	listErr    error
 	oldListErr error
+	jobGets    int
+	afterList  func(string)
 }
 
 func (f *cleanupFake) GetRpmRepo(context.Context, string, string) (*ebsv1.RpmRepo, error) {
@@ -55,25 +55,40 @@ func (f *cleanupFake) GetRpmRepo(context.Context, string, string) (*ebsv1.RpmRep
 func TestCleanupWaitsForRepositoryAcknowledgment(t *testing.T) {
 	repo := &ebsv1.RpmRepo{}
 	f := &cleanupFake{repo: repo}
+	c := &Controller{client: f}
+	info := &ebsv1.BuildInfo{ObjectMeta: metav1.ObjectMeta{
+		Name: "build", Namespace: "project", Finalizers: []string{ebsv1.BuildInfoCleanupFinalizer},
+	}}
 	check := func(wantReady bool) {
 		t.Helper()
-		if err := checkCleanupRepository(context.Background(), f, "project", "build"); (err == nil) != wantReady {
-			t.Fatalf("cleanup ready=%t, error=%v", wantReady, err)
+		if ready, err := checkCleanupRepository(context.Background(), f, "project", "build"); err != nil || ready != wantReady {
+			t.Fatalf("cleanup ready=%t, want=%t, error=%v", ready, wantReady, err)
+		}
+		if !wantReady {
+			result, err := c.cleanupBuildInfo(context.Background(), info)
+			if err != nil || result.RequeueAfter != time.Second || len(f.writes) != 0 {
+				t.Fatalf("waiting: result=%+v writes=%v error=%v", result, f.writes, err)
+			}
 		}
 	}
 	check(false)
-	repo.Status.Conditions = []metav1.Condition{{
-		Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue,
-		Reason: ebsv1.RpmRepoReasonOperationsDrained, LastTransitionTime: metav1.Now(),
-	}}
-	check(true)
 	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Transition: &ebsv1.RepositoryTransition{}}
 	check(false)
 	repo.Status.Repository = nil
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Transition: &ebsv1.ReleaseTransition{}}
 	check(false)
+	repo.Status.Release = nil
+	repo.Status.Conditions = []metav1.Condition{{
+		Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue,
+		Reason: ebsv1.RpmRepoReasonOperationsDrained, LastTransitionTime: metav1.Now(),
+	}}
+	check(true)
 	f.repo = nil
 	check(true)
+	f.repoErr = errors.New("repository read failed")
+	if _, err := c.cleanupBuildInfo(context.Background(), info); !errors.Is(err, f.repoErr) {
+		t.Fatalf("repository read error lost: %v", err)
+	}
 }
 
 func (f *cleanupFake) FinalizeBuildInfo(_ context.Context, info *ebsv1.BuildInfo) error {
@@ -85,14 +100,20 @@ func (f *cleanupFake) FinalizeBuildInfo(_ context.Context, info *ebsv1.BuildInfo
 	return nil
 }
 
-func (f *cleanupFake) ListJobs(_ context.Context, project string, selector labels.Selector, _ ...string) ([]ebsv1.Job, error) {
+func (f *cleanupFake) ListJobs(_ context.Context, project string, selector labels.Selector, fields ...string) ([]ebsv1.Job, error) {
+	if !slices.Equal(fields, []string{"metadata", "status.phase"}) {
+		return nil, fmt.Errorf("unexpected Job cleanup projection: %v", fields)
+	}
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return f.listChildren("jobs", project, selector), nil
 }
 
-func (f *cleanupFake) ListOldJobs(_ context.Context, project string, selector labels.Selector, _ ...string) ([]ebsv1.Job, error) {
+func (f *cleanupFake) ListOldJobs(_ context.Context, project string, selector labels.Selector, fields ...string) ([]ebsv1.Job, error) {
+	if !slices.Equal(fields, []string{"metadata"}) {
+		return nil, fmt.Errorf("unexpected OldJob cleanup projection: %v", fields)
+	}
 	if f.oldListErr != nil {
 		return nil, f.oldListErr
 	}
@@ -105,9 +126,16 @@ func (f *cleanupFake) listChildren(resource, project string, selector labels.Sel
 		if target.Resource == resource {
 			job := f.children[target].(*ebsv1.Job)
 			if job.Namespace == project && selector.Matches(labels.Set(job.Labels)) {
-				jobs = append(jobs, *job.DeepCopy())
+				projected := ebsv1.Job{ObjectMeta: *job.ObjectMeta.DeepCopy()}
+				if resource == "jobs" {
+					projected.Status.Phase = job.Status.Phase
+				}
+				jobs = append(jobs, projected)
 			}
 		}
+	}
+	if f.afterList != nil {
+		f.afterList(resource)
 	}
 	return jobs
 }
@@ -123,15 +151,8 @@ func (f *cleanupFake) GetBuildGraph(_ context.Context, _ string, name string, me
 }
 
 func (f *cleanupFake) GetJob(_ context.Context, _ string, name string) (*ebsv1.Job, error) {
-	return f.getJob("jobs", name)
-}
-
-func (f *cleanupFake) GetOldJob(_ context.Context, _ string, name string) (*ebsv1.Job, error) {
-	return f.getJob("oldjobs", name)
-}
-
-func (f *cleanupFake) getJob(resource, name string) (*ebsv1.Job, error) {
-	if obj := f.children[CleanupTarget{resource, name}]; obj != nil {
+	f.jobGets++
+	if obj := f.children[CleanupTarget{"jobs", name}]; obj != nil {
 		return obj.(*ebsv1.Job).DeepCopy(), nil
 	}
 	return nil, ErrNotFound
@@ -149,8 +170,15 @@ func (f *cleanupFake) AbortJob(_ context.Context, project, name string, uid type
 	return job.DeepCopy(), nil
 }
 
-func (f *cleanupFake) DeleteCleanupChild(_ context.Context, _ string, target CleanupTarget, obj metav1.Object) error {
+func (f *cleanupFake) DeleteCleanupChild(_ context.Context, project string, target CleanupTarget, obj metav1.Object) error {
 	f.writes = append(f.writes, target)
+	current, ok := f.children[target].(metav1.Object)
+	if !ok {
+		return apierrors.NewNotFound(ebsv1.Resource(target.Resource), target.Name)
+	}
+	if current.GetNamespace() != project || current.GetUID() != obj.GetUID() || current.GetResourceVersion() != obj.GetResourceVersion() {
+		return apierrors.NewConflict(ebsv1.Resource(target.Resource), target.Name, fmt.Errorf("stale delete preconditions"))
+	}
 	if target.Resource == "jobs" {
 		now := metav1.Now()
 		f.children[target].(*ebsv1.Job).DeletionTimestamp = &now
@@ -203,7 +231,7 @@ func TestDeletingTerminalBuildInfoCleansChildrenBeforeFinalization(t *testing.T)
 	f.oldListErr = nil
 	run() // Abort only.
 	if job.Status.Phase != ebsv1.JobAborted || job.Status.Message != "BuildDeleted" || job.DeletionTimestamp != nil {
-		t.Fatal("abort must precede a fresh terminal GET")
+		t.Fatal("abort must precede a fresh terminal List")
 	}
 	run() // Delete the source.
 	run() // Wait for archive migration.
@@ -230,6 +258,45 @@ func TestDeletingTerminalBuildInfoCleansChildrenBeforeFinalization(t *testing.T)
 	}
 	if base.builds[key].DeletionTimestamp != nil {
 		t.Fatal("standalone cleanup deleted parent")
+	}
+	if f.jobGets != 0 {
+		t.Fatalf("cleanup made %d redundant Job GET requests", f.jobGets)
+	}
+}
+
+func TestCleanupRetriesListedVersionsAfterConflict(t *testing.T) {
+	c, base, _, _ := newTestController(t)
+	info := testBuildInfoObj(ebsv1.BuildInfoCompleted)
+	f := &cleanupFake{fakeClient: base, children: map[CleanupTarget]runtime.Object{}}
+	c.client = f
+	for _, resource := range []string{"jobs", "oldjobs"} {
+		f.children[CleanupTarget{resource, "job"}] = &ebsv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "job", Namespace: info.Namespace, UID: "job", ResourceVersion: "1",
+				Labels: map[string]string{ebsv1.JobBuildNameLabel: info.Name},
+			},
+			Status: ebsv1.JobStatus{Phase: ebsv1.JobSucceeded},
+		}
+	}
+	// Simulate a concurrent write after each List response has been captured.
+	f.afterList = func(resource string) {
+		f.children[CleanupTarget{resource, "job"}].(*ebsv1.Job).ResourceVersion = "2"
+	}
+	done, err := c.cleanupJobs(context.Background(), info)
+	if done || !apierrors.IsConflict(err) || len(f.writes) != 2 {
+		t.Fatalf("stale lists: done=%t writes=%v error=%v", done, f.writes, err)
+	}
+	f.afterList = nil
+	done, err = c.cleanupJobs(context.Background(), info)
+	if done || err != nil || len(f.writes) != 4 || f.jobGets != 0 {
+		t.Fatalf("fresh lists: done=%t writes=%v gets=%d error=%v", done, f.writes, f.jobGets, err)
+	}
+	// Objects still present with deletion markers must keep cleanup pending without reads or writes.
+	now := metav1.Now()
+	f.children[CleanupTarget{"oldjobs", "job"}].(*ebsv1.Job).DeletionTimestamp = &now
+	done, err = c.cleanupJobs(context.Background(), info)
+	if done || err != nil || len(f.writes) != 4 || f.jobGets != 0 {
+		t.Fatalf("deletion pending: done=%t writes=%v gets=%d error=%v", done, f.writes, f.jobGets, err)
 	}
 }
 
@@ -334,6 +401,7 @@ type branchesCleanupFake struct {
 	Client
 	graph        *ebsv1.BuildGraph
 	graphErr     error
+	repo         *ebsv1.RpmRepo
 	repoErr      error
 	jobsErr      error
 	graphDeletes int
@@ -343,6 +411,9 @@ type branchesCleanupFake struct {
 func (f *branchesCleanupFake) GetRpmRepo(context.Context, string, string) (*ebsv1.RpmRepo, error) {
 	if f.repoErr != nil {
 		return nil, f.repoErr
+	}
+	if f.repo != nil {
+		return f.repo.DeepCopy(), nil
 	}
 	return nil, ErrNotFound
 }
@@ -374,11 +445,12 @@ func (f *branchesCleanupFake) DeleteCleanupChild(context.Context, string, Cleanu
 
 func TestIndependentCleanupBranches(t *testing.T) {
 	readErr := errors.New("graph read failed")
-	repoErr := errors.New("repository still processing")
+	repoErr := errors.New("repository read failed")
 	listErr := errors.New("job list failed")
 	for _, test := range []struct {
 		name         string
 		graphErr     error
+		repo         *ebsv1.RpmRepo
 		repoErr      error
 		jobsErr      error
 		deleting     bool
@@ -388,7 +460,9 @@ func TestIndependentCleanupBranches(t *testing.T) {
 		{name: "graph read failure", graphErr: readErr, jobLists: 1},
 		{name: "graph still deleting", deleting: true, jobLists: 1},
 		{name: "job list failure", jobsErr: listErr, graphDeletes: 1, jobLists: 1},
-		{name: "repository pending", repoErr: repoErr, graphDeletes: 1},
+		{name: "repository pending", repo: &ebsv1.RpmRepo{}, graphDeletes: 1},
+		{name: "repository read failure", repoErr: repoErr, graphDeletes: 1},
+		{name: "graph failure while repository pending", graphErr: readErr, repo: &ebsv1.RpmRepo{}},
 		{name: "both fail", graphErr: readErr, jobsErr: listErr, jobLists: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -403,7 +477,7 @@ func TestIndependentCleanupBranches(t *testing.T) {
 				now := metav1.Now()
 				graph.DeletionTimestamp = &now
 			}
-			f := &branchesCleanupFake{graph: graph, graphErr: test.graphErr, repoErr: test.repoErr, jobsErr: test.jobsErr}
+			f := &branchesCleanupFake{graph: graph, graphErr: test.graphErr, repo: test.repo, repoErr: test.repoErr, jobsErr: test.jobsErr}
 			c := &Controller{client: f}
 			done, err := c.cleanupChildren(context.Background(), info)
 			if done || f.graphDeletes != test.graphDeletes || f.jobLists != test.jobLists {
@@ -414,7 +488,11 @@ func TestIndependentCleanupBranches(t *testing.T) {
 					t.Fatalf("missing error %v in %v", want, err)
 				}
 			}
+			if test.graphErr == nil && test.repoErr == nil && test.jobsErr == nil && err != nil {
+				t.Fatalf("normal waiting returned an error: %v", err)
+			}
 			// A fresh controller confirms both branches disappeared without relying on cached progress.
+			f.repo = nil
 			f.graph, f.graphErr, f.repoErr, f.jobsErr = nil, nil, nil, nil
 			done, err = (&Controller{client: f}).cleanupChildren(context.Background(), info)
 			if !done || err != nil {

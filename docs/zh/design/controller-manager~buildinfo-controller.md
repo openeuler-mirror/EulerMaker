@@ -102,9 +102,9 @@ apiserver 创建 BuildInfo 时加入 `ebs.io/buildinfo-cleanup` finalizer。删�
 BuildInfo 删除顺序：
 
 1. 业务与删除调谐使用同一 BuildInfo 队列 key；读取最新 BuildInfo，确认同 UID、删除中且具有自身 finalizer。删除分支不再解析、创建 Job 或 BuildGraph。单独删除 BuildInfo 不要求父 Build 已删除，也不依赖父 Build 存在。
-2. 独立推进两条分支：BuildGraph 核对同名 BuildInfo owner UID 后条件 DELETE，不等待 RpmRepo 或 Job/OldJob；Job 分支先 GET RpmRepo，确认 `status.conditions` 中的 `CleanupReady=True` 且 repository/release transition 均为空；RpmRepo NotFound 时直接继续，其余读取错误阻止 Job 清理。随后完整分页 List 同 Project、`ebs.io/build-name={BuildInfo.name}` 的 Job 和 OldJob，不带 phase 或保留期过滤。List 仅取 metadata，GET 核验最新身份、归属和状态后，使用 UID/resourceVersion 条件删除。图分支失败或仍删除中，不阻止 Job 分支；Job 分支等待或失败，也不阻止图分支。两者在同一轮分别尝试，不需要并发 goroutine。
-3. 非终态 Job 先调用携带 UID 的 `/abort`，下一轮重新 GET 确认终态后 DELETE。删除中的 Job/OldJob 只等待；Job Controller 负责归档、数据清理和物理删除，BuildInfo Controller 不移除它们的 finalizer。这里的终态只证明 Job API 状态，上层仍负责保证 Runner 已停止写入。
-4. 每轮完整查询 Job/OldJob，按类别/名称稳定排序后从头扫描，最多发起 100 次中止或删除请求；单项失败仍继续处理本轮预算内的后续项。清理直接由 Controller 方法执行，不维护独立 cleaner 或跨轮游标。失败返回错误并由框架重试；无错误但尚未完成时延迟 1 秒重新入队。接受前序任务持续失败并占满预算时，后续任务等待其恢复的行为；每轮通过重新查询确认清理进度。
+2. 独立推进两条分支：BuildGraph 核对同名 BuildInfo owner UID 后条件 DELETE，不等待 RpmRepo 或 Job/OldJob；Job 分支先 GET RpmRepo，只检查 `status.conditions` 中的 `CleanupReady=True`，检查点为空由 apiserver 校验保证；RpmRepo NotFound 时直接继续，其余读取错误阻止 Job 清理。随后完整分页 List 同 Project、`ebs.io/build-name={BuildInfo.name}` 的 Job 和 OldJob，不带 phase 或保留期过滤。Job 投影 `metadata,status.phase`，OldJob 仅投影 `metadata`；直接复用列表中的身份、归属与状态，不逐项 GET，使用列表中的 UID/resourceVersion 条件删除。任一列表分页失败均不执行 Job 写操作；删除冲突后下一轮重新 List，不重放旧对象。图分支失败或仍删除中，不阻止 Job 分支；Job 分支等待或失败，也不阻止图分支。两者在同一轮分别尝试，不需要并发 goroutine。
+3. 非终态 Job 先调用携带 UID 的 `/abort`，下一轮重新 List 确认终态后 DELETE。删除中的 Job/OldJob 直接跳过读写但仍计为未完成；Job Controller 负责归档、数据清理和物理删除，BuildInfo Controller 不移除它们的 finalizer。这里的终态只证明 Job API 状态，上层仍负责保证 Runner 已停止写入。
+4. 每轮完整查询 Job/OldJob，按类别/名称稳定排序后从头扫描，最多发起 100 次中止或删除请求；单项失败仍继续处理本轮预算内的后续项。清理直接由 Controller 方法执行，不维护独立 cleaner 或跨轮游标。读取或写入失败返回错误并由框架重试；等待 `CleanupReady` 或子资源删除属于正常等待，无其他错误时返回 `RequeueAfter=1s` 和 nil，不触发错误退避。接受前序任务持续失败并占满预算时，后续任务等待其恢复的行为；每轮通过重新查询确认清理进度。
 5. 重新扫描确认 Job/OldJob 均不存在，并 GET 确认 BuildGraph 消失后，重新 GET 同 UID、删除中的 BuildInfo，仅移除自身 finalizer，保留其他 finalizer、spec 和 status。任一分支未完成均不能释放 finalizer。
 
 本包的 `cleanup.go` 只编排清理所属 Job/OldJob 和 BuildGraph，资源访问统一通过 `client.go`；Build Controller 负责删除并等待其直接子资源 BuildInfo，不跨级接管。单独删除 BuildInfo 不修改父 Build；其后续行为仍按当前 phase/stage 的 ensure 或依赖缺失规则执行。`CleanupReady=True/reason=OperationsDrained` 由 RpmRepo Controller 确认停止生产且在途操作已结束后写入，确认不可撤销；BuildInfo Controller 只读取，不代写。
@@ -153,7 +153,6 @@ type Client interface {
     // Job（创建 + 按 label list 回读 + 创建 Unknown 按确定性名称 GET 确认）
     CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
     GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
-    GetOldJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
     AbortJob(ctx context.Context, project, name string, uid types.UID, reason string) (*ebsv1.Job, error)
     ListJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
     ListOldJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
@@ -175,11 +174,11 @@ type Client interface {
 
 资源访问路径与用途统一见 15.1。HTTP 实现复用共享 client 的 `Get` / `GetWithFields` / `ListPage` / `ListProjectPage` / `Create` / `UpdateStatus` / `PostSubresource` 等能力；写请求使用对象 `metadata.resourceVersion` 触发乐观锁。Config 的业务内容由 apiserver 在创建、更新时完整校验，类型化适配方法负责读取、响应校验和反序列化，本轮新 Job 共享已解析配置。
 
-`ListJobs` 与 `ListOldJobs` 共用分页读取和响应校验；不传字段选择时返回完整对象。`cleanup.go` 分别以相同 Project、build-name 标签及 `includeFields=metadata` 查询两者，再组合为清理目标。任一列表读取失败均丢弃本轮候选，不执行 Job/OldJob 中止或删除，也不判定清理完成。
+`ListJobs` 与 `ListOldJobs` 共用分页读取和响应校验；不传字段选择时返回完整对象。`cleanup.go` 按第三章的字段投影和完整分页规则组合清理目标，保留列表对象供条件写入使用。
 
-删除清理复用 `AbortJob`，传入当前 Job 的 Project、名称、UID 和 `reason=BuildDeleted`，沿用响应身份与终态校验；中止后下一轮重新读取 Job，确认终态再删除。中止失败或结果未知时保留清理 finalizer，并基于下一轮读取的最新状态继续处理。
+删除清理复用 `AbortJob`，传入列表中 Job 的 Project、名称、UID 和 `reason=BuildDeleted`，沿用响应身份与终态校验；中止后下一轮重新 List，确认终态再删除。中止失败或结果未知时保留清理 finalizer，并基于下一轮列表的最新状态继续处理。
 
-清理读取复用 `GetBuildGraph(..., true)`、`GetJob`、`GetOldJob` 和 `GetRpmRepo`，沿用类型化客户端的响应校验及 `ErrNotFound` 契约。`GetJob` 与 `GetOldJob` 共用内部读取实现；`CleanupReady` 与检查点判断归属 `cleanup.go`，客户端只负责读取 RpmRepo。
+清理读取复用 `GetBuildGraph(..., true)`、`ListJobs`、`ListOldJobs` 和 `GetRpmRepo`，沿用类型化客户端的响应校验、完整分页及 `ErrNotFound` 契约；不单独 GET Job/OldJob。`CleanupReady` 判断归属 `cleanup.go`，客户端只负责读取 RpmRepo。
 
 **写错误契约**：`UpdateBuildInfoStatus`、`CreateJob`、`CreateBuildGraph` 与 `UpdateBuildGraphStatus` 的失败必须返回可由 `errors.As` 识别的 `WriteError`，Controller 不解析错误文本或底层 HTTP 状态自行推断 Outcome。BuildGraph 的同名创建冲突和结果未知确认优先按 15.9 处理：
 
@@ -1011,7 +1010,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | `BuildInfo` | `GetBuildInfo` / `UpdateBuildInfoStatus` / 清理适配器 | `GET /apis/ebs/v1/projects/{project}/buildinfos/{name}`、`PUT .../{name}/status`、`PUT .../{name}`；全局 GET 由 PollingSource 执行 | **读写** | 业务状态更新；删除时清理子资源并通过主资源 PUT 移除自身 finalizer |
 | `BuildGraph` | `GetBuildGraph` / `CreateBuildGraph` / `UpdateBuildGraphStatus` / 公共清理适配器 | `/apis/ebs/v1/projects/{project}/buildgraphs`、`/{name}`、`/{name}/status` | **读写**（get + create + /status 写 + delete） | 持久化依赖图；BuildInfo 删除时核验 owner 后条件删除 |
 | `Job` | `CreateJob` / `GetJob` / `ListJobs` / `AbortJob` / 公共清理适配器 | `/apis/ebs/v1/projects/{project}/jobs`、`/{name}`、`/{name}/abort` | **读写**（创建、读取、POST /abort、条件删除） | 派发和回填；中止及 BuildInfo finalizer 清理 |
-| `OldJob` | `ListOldJobs` / `GetOldJob` / `DeleteCleanupChild` | `/apis/ebs/v1/projects/{project}/oldjobs`、`/{name}` | **读写**（list/get/delete） | 完整分页扫描本轮归档，条件删除并等待数据清理完成 |
+| `OldJob` | `ListOldJobs` / `DeleteCleanupChild` | `/apis/ebs/v1/projects/{project}/oldjobs`、`/{name}` | **读写**（list/delete） | 完整分页扫描本轮归档，条件删除并等待数据清理完成 |
 | `Build` | `GetBuild` | `/apis/ebs/v1/projects/{project}/builds/{name}` | **只读** | parentAbortGuard 按名读取本轮父 Build；步骤 0 使用已固化的 `spec.packages`，不查询历史 Build；字段消费明细见 15.5 |
 | `RpmRepo` | `GetRpmRepo` | `/apis/ebs/v1/projects/{project}/rpmrepos/{name}` | **只读** | 仅非 single 读取同名对象，供发布失败守卫、依赖裁决和 payload 仓库地址使用；本轮复用，字段消费见 15.4。single 的稳定发布入口见 7.2.3 |
 | `Snapshot` | `GetSnapshot` | `/apis/ebs/v1/projects/{project}/snapshots/{name}` | **只读** | 仅读取本轮同名 Snapshot，用 `spec.packageRepos[].url` 与 `status.packageRepoStatuses[].commitID` 定位 git-server 命令输入，`cloneURL` 用于 Job payload；其 GET 失败计入连续失败计数，达阈值按 E-30 收口；字段消费明细见 15.7 |

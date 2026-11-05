@@ -36,7 +36,7 @@ func (c cleanupPages) GetWithFields(_ context.Context, gvr schema.GroupVersionRe
 }
 
 func TestCleanupTypedReads(t *testing.T) {
-	for _, resource := range []string{"jobs", "oldjobs", "buildgraphs", "rpmrepos"} {
+	for _, resource := range []string{"jobs", "buildgraphs", "rpmrepos"} {
 		t.Run(resource, func(t *testing.T) {
 			missing := false
 			client := &apiClient{client: cleanupPages{get: func(gvr schema.GroupVersionResource,
@@ -67,8 +67,6 @@ func TestCleanupTypedReads(t *testing.T) {
 				switch resource {
 				case "jobs":
 					_, err = client.GetJob(ctx, "project", "child")
-				case "oldjobs":
-					_, err = client.GetOldJob(ctx, "project", "child")
 				case "buildgraphs":
 					_, err = client.GetBuildGraph(ctx, "project", "child", true)
 				case "rpmrepos":
@@ -99,8 +97,12 @@ func TestCleanupJobPaginationIsComplete(t *testing.T) {
 	shared := cleanupPages{list: func(gvr schema.GroupVersionResource, project string, options metav1.ListOptions,
 		fields string) (source.ListPage, error) {
 		calls++
+		wantFields := "metadata"
+		if gvr.Resource == "jobs" {
+			wantFields += ",status.phase"
+		}
 		if project != build.Namespace || options.LabelSelector != "ebs.io/build-name=build-a" ||
-			options.FieldSelector != "" || fields != "metadata" {
+			options.FieldSelector != "" || fields != wantFields {
 			t.Fatalf("unexpected scope or projection: %s %+v %s", project, options, fields)
 		}
 		if options.Continue == "" {
@@ -120,15 +122,15 @@ func TestCleanupJobPaginationIsComplete(t *testing.T) {
 		return source.ListPage{Items: []runtime.Object{job}}, nil
 	}}
 	client := &apiClient{client: shared}
-	items, err := listCleanupTargets(context.Background(), client, build)
+	items, err := listCleanupJobs(context.Background(), client, build)
 	if err != nil || len(items) != 2 || calls != 4 {
 		t.Fatalf("items=%v calls=%d error=%v", items, calls, err)
 	}
-	if items[0].Resource != "jobs" || items[1].Resource != "oldjobs" {
+	if items[0].resource != "jobs" || items[1].resource != "oldjobs" {
 		t.Fatalf("resource identity lost: %v", items)
 	}
 	failPage = true
-	items, err = listCleanupTargets(context.Background(), client, build)
+	items, err = listCleanupJobs(context.Background(), client, build)
 	if err == nil || items != nil {
 		t.Fatalf("incomplete scan returned candidates: %v, %v", items, err)
 	}

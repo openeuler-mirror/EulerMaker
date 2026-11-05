@@ -25,7 +25,9 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Transition: &ebsv1.RepositoryTransition{RepositoryUID: "pending"}}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
+	stopCalls := 0
 	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+		stopCalls++
 		return drained, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -59,6 +61,9 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	}
 	run()
 	current := client.RpmRepos[key(testProject, testBuild)]
+	if stopCalls != 2 {
+		t.Fatalf("persisted acknowledgment must skip repeated stop requests: calls=%d", stopCalls)
+	}
 	if !slices.Equal(current.Finalizers, []string{"other/controller"}) || !reflect.DeepEqual(current.Status, ack.Status) {
 		t.Fatalf("cleanup changed business status or another finalizer: %+v", current)
 	}

@@ -58,15 +58,7 @@ func NewManager(root string, c Config, repositories *repository.Manager, materia
 		cancel()
 		return nil, err
 	}
-	m.mu.Lock()
-	for name, record := range m.records {
-		if record.State == ReleaseCreating {
-			m.enqueueLocked(name)
-		} else if record.State == ReleaseDeleting {
-			go m.remove(name)
-		}
-	}
-	m.mu.Unlock()
+	m.retryPending()
 	for i := 0; i < c.Workers; i++ {
 		go m.worker()
 	}
@@ -186,11 +178,18 @@ func (m *Manager) worker() {
 			m.mu.Lock()
 			delete(m.queued, name)
 			record := cloneRelease(m.records[name])
-			if record != nil && record.State == ReleaseCreating {
-				m.running[name] = true
+			if record == nil || m.running[name] ||
+				(record.State != ReleaseCreating && record.State != ReleaseDeleting) {
+				m.mu.Unlock()
+				continue
 			}
+			m.running[name] = true
 			m.mu.Unlock()
-			if record == nil || record.State != ReleaseCreating {
+			if record.State == ReleaseDeleting {
+				m.remove(name)
+				m.mu.Lock()
+				delete(m.running, name)
+				m.mu.Unlock()
 				continue
 			}
 			source, ok, sourceErr := m.repositories.Get(record.SourceRepositoryUID)
@@ -359,8 +358,8 @@ func (m *Manager) Delete(name string) (*ReleaseRecord, int, error) {
 		if err := m.persist(record); err != nil {
 			return nil, 0, releaseStorageError()
 		}
-		go m.remove(name)
 	}
+	m.enqueueLocked(name)
 	return cloneRelease(record), http.StatusAccepted, nil
 }
 
@@ -368,7 +367,7 @@ func (m *Manager) remove(name string) {
 	m.mu.RLock()
 	record := cloneRelease(m.records[name])
 	m.mu.RUnlock()
-	if record == nil {
+	if record == nil || record.State != ReleaseDeleting {
 		return
 	}
 	source := m.Path(record)
@@ -376,7 +375,8 @@ func (m *Manager) remove(name string) {
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
-	trash := filepath.Join(trashDir, name+"-"+fileutil.NewID("d"))
+	// Reuse the same destination after a failed removal or restart.
+	trash := filepath.Join(trashDir, name+"-deleting")
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
@@ -395,7 +395,7 @@ func (m *Manager) remove(name string) {
 }
 
 func (m *Manager) enqueueLocked(name string) {
-	if m.queued[name] {
+	if m.queued[name] || m.running[name] {
 		return
 	}
 	select {
@@ -413,13 +413,18 @@ func (m *Manager) recoverQueue() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			m.mu.Lock()
-			for name, record := range m.records {
-				if record.State == ReleaseCreating && !m.queued[name] && !m.running[name] {
-					m.enqueueLocked(name)
-				}
-			}
-			m.mu.Unlock()
+			m.retryPending()
+		}
+	}
+}
+
+// retryPending requeues unfinished work without duplicating queued or running tasks.
+func (m *Manager) retryPending() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, record := range m.records {
+		if record.State == ReleaseCreating || record.State == ReleaseDeleting {
+			m.enqueueLocked(name)
 		}
 	}
 }

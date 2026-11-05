@@ -742,7 +742,7 @@ ${dataDir}/repositories/{project}/{arch}/
 │   ├── .records/
 │   │   └── {buildName}.json
 │   ├── .trash/
-│   │   └── {buildName}-{random}/
+│   │   └── {buildName}-deleting/
 │   ├── .work/
 │   │   └── {buildName}-{random}/
 │   └── {buildName}/
@@ -754,7 +754,7 @@ ${dataDir}/repositories/{project}/{arch}/
         ├── .records/
         │   └── {repositoryUID}.json
         ├── .trash/
-        │   └── {repositoryUID}-{random}/
+        │   └── {repositoryUID}-deleting/
         ├── .work/
         │   └── {repositoryUID}-{random}/
         └── steps/{repositoryUID}/
@@ -874,7 +874,7 @@ Content-Type: application/json
 | 内存待执行队列已满 | `429 Too Many Requests` | `RepositoryQueueFull`、`retryable=true` 和 `Retry-After: 5`；不得先创建 Creating 记录 |
 | 服务正在关闭、元数据存储暂不可用 | `503 Service Unavailable` | 稳定错误、`retryable=true` 和 `Retry-After` |
 
-只有成功持久化 Creating 记录后才能返回接受成功并入队。入队与记录写入不是单一事务；启动恢复载入活动记录后，Manager 每 5 秒检查内存中的 Creating 记录，重新入队既未排队也未运行的任务，避免重复执行；该检查不是全量磁盘扫描。响应不等待 `createrepo_c` 完成。
+只有成功持久化 Creating 记录后才能返回接受成功并入队。入队与记录写入不是单一事务；启动恢复载入活动记录后，Manager 每 5 秒检查内存中的 Creating 和 Deleting 记录，重新入队既未排队也未运行的任务；两类任务复用有界 worker 队列，同一标识不并发执行；该检查不是全量磁盘扫描。响应不等待 `createrepo_c` 完成。
 
 #### 8.6.2 查询状态
 
@@ -902,8 +902,8 @@ DELETE /internal/v1/repositories/{repositoryUID}
 
 | 条件 | HTTP 状态 | 响应与行为 |
 |------|-----------|------------|
-| Creating、Ready 或 Failed | `202 Accepted` | 原子写为 Deleting，取消同 UID 的排队任务；运行任务不要求立即中断，最终发布前必须因状态不再是 Creating 而放弃发布 |
-| 已经 Deleting | `202 Accepted` | 返回原 Deleting，不重复创建清理任务 |
+| Creating、Ready 或 Failed | `202 Accepted` | 原子写为 Deleting，排队任务改走删除分支；运行中的物化完成后不覆盖删除状态，待 worker 退出再执行清理 |
+| 已经 Deleting | `202 Accepted` | 返回原 Deleting，未排队且未运行时重新入队，同一标识去重 |
 | 记录不存在或删除已完成 | `204 No Content` | 视为删除成功 |
 
 DELETE 不使用请求体。进入 Deleting 后，相同 UID 的 POST 返回 `409 Conflict / RepositoryDeleting`，不能通过重提物化请求撤销删除。Artifact Manager 不因 Project、Build 或 RpmRepo API 对象删除而自行推断清理；保留期限到达或显式删除请求均可直接推进删除。
@@ -987,6 +987,8 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 服务启动时扫描各目标仓 `history/{buildName}/.records/` 的 UID 和状态，只把 `Creating`、`Deleting` 完整记录载入内存以恢复任务。Ready 和 Failed 只保留 8.4 定义的路径索引，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `.repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
 
+物化完成时先基于记录副本构造 Ready/Failed 结果，成功落盘后才移除内存中的 Creating 记录；落盘失败保持 Creating，并临时保留轻量结果，由每 5 秒的补偿循环仅重试结果写入，不重新物化。成功落盘或转入 Deleting 后释放待写结果，停止接口不能提前确认已排空。进程重启丢失内存中的待写结果时，按下述持久记录与最终目录恢复。
+
 对于 Creating 记录，若最终目录中的 `.repository.json`、请求摘要及目录摘要均校验通过，则补写 Ready；否则保持 Creating 并重新入队。Deleting 记录继续删除。各 `history/{buildName}/.work/` 中超过恢复宽限期的任务目录按过期时间清理。Ready 仓不在启动时逐个重算目录摘要，发布任务需要 RPM 明细时才读取其 `.repository.json`。
 
 恢复扫描完成前 HTTP 服务尚未监听，探针行为见第十七章。
@@ -1001,7 +1003,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 2. 把最终目录原子移动到同一目标仓下的 `history/{buildName}/.trash/`（过程仓）或 `releases/.trash/`（正式仓）；
 3. 删除 trash 中的目录，再移除元数据和内存记录。
 
-当前只持久化 `Deleting` 状态，未记录带随机后缀的 trash 路径；过程仓仍忽略递归删除错误，元数据删除失败时保留记录及路径索引。重启会重试 Deleting 记录，但不能保证清除上次已移动的 trash；崩溃或删除失败可能留下孤儿目录，可靠删除的补全见第十八章。
+删除暂存路径固定为过程仓 `.trash/{repositoryUID}-deleting` 或正式仓 `.trash/{buildName}-deleting`，无需另存随机路径。创建暂存目录、移动正文、递归删除或删除元数据任一步失败，均保留 Deleting 记录及定位索引；只有正文和暂存目录清理成功才移除元数据。每 5 秒队列补偿会重试未排队且未运行的 Deleting 任务，重复 DELETE 也可触发入队；重启恢复沿用同一暂存路径。删除与创建共用有界 worker，同一任务仍在物化或发布时先等待其退出，不并发清理工作结果。
 
 ### 8.11 验收场景
 
@@ -1133,7 +1135,7 @@ GET    /internal/v1/releases/{buildName}
 DELETE /internal/v1/releases/{buildName}
 ```
 
-GET 返回 `200` 和已持久化状态，不触发执行；不存在返回 `404 ReleaseNotFound`。DELETE 不接受业务请求体，只能删除非当前发布版本；当前版本返回 `409 ReleaseInUse`。首次进入或仍处于 Deleting 时返回 `202` 和 `ReleaseResponse`，不存在或已删除返回 `204`，无响应体。删除采用 `Deleting -> trash -> 删除正文 -> 删除元数据`，崩溃恢复及可靠删除限制沿用 8.10。
+GET 返回 `200` 和已持久化状态，不触发执行；不存在返回 `404 ReleaseNotFound`。DELETE 不接受业务请求体，只能删除非当前发布版本；当前版本返回 `409 ReleaseInUse`。首次进入或仍处于 Deleting 时返回 `202` 和 `ReleaseResponse`，不存在或已删除返回 `204`，无响应体。删除采用 `Deleting -> trash -> 删除正文 -> 删除元数据`，运行期重试及崩溃恢复沿用 8.10。
 
 受控激活或回滚使用：
 
@@ -1233,7 +1235,7 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{ar
 4. Prepared 记录未激活时不由 Artifact Manager 自动切换 current，等待 RpmRepo Controller 查询状态、重新确认控制面意图后调用激活接口；
 5. 指针无效时不自动选择目录中“最新”的版本；相关内容读取可能失败，但不会使 `/readyz` 失败，需要管理员修复或显式回滚；
 6. 清理超过 `--release-work-ttl` 且不属于活动 worker 的工作目录；
-7. 对 Deleting 记录继续执行删除；trash 残留风险与过程仓相同，见 8.10。
+7. 对 Deleting 记录继续执行删除；运行期失败重试和固定 trash 路径恢复与过程仓相同，见 8.10。
 
 Ready、Failed 记录在查询、重复提交、激活或删除时按需从磁盘读取，不加入常驻缓存。状态成功持久化后同步更新缓存：进入活动状态时加入，进入 Ready、Failed 时移除。存储读取错误与记录不存在分开处理，前者返回可重试错误，不作为新请求创建记录。
 
@@ -1600,7 +1602,7 @@ DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/r
 此接口按 Project、Arch、BuildName 定位，不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。调用方须先完成上述停止确认；跨构建的源仓使用约束由上层业务保证。
 
 - 精确清理 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
-- 清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按随机后缀之前的完整名称匹配，不能只做字符串前缀匹配。
+- 清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按最后一个后缀之前的完整名称匹配（工作目录使用随机后缀，删除暂存使用 `-deleting`），不能只做字符串前缀匹配。
 - 删除后移除对应的内存定位索引和非活动记录。不清理 Job 产物/日志、其它 Build/架构/Project 的仓库，也不删除继承基线。硬链接仅解除本目录项，不修改共享正文。
 - 先检查并清理发布仓，再清理过程仓。当前 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和仓库不变；不回退到历史版本。上层负责判断是否允许删除该 Build。
 - 每个 Manager 在自身锁内检查活动任务；仍有 Creating、Deleting 或实际运行中的任务时返回 `202`、`Retry-After: 5`，调用方稍后重复 DELETE。Prepared 已完成正文生成且尚未激活，可以清理，不为删除执行激活。
@@ -1608,7 +1610,7 @@ DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/r
 - 逐层核验父目录，拒绝符号链接父目录；使用 `os.Root` 删除，子项符号链接仅解除链接，成功后同步父目录。数据根目录无法打开属于存储故障，不能当作仓库不存在。
 - 中途失败、请求超时或服务重启后，按同一作用域再次 DELETE 继续清理；不要求元数据完整存在，也不依赖内存中的完成标记。DELETE 本身不建立停止标记，但保留前序 stop 的持久标记，防止迟到请求重建仓库。
 
-RpmRepo Controller 只在 RpmRepo 删除中且已写 `CleanupReady=True`、两个 transition 均为空时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
+RpmRepo Controller 只在 RpmRepo 删除中且已写 `CleanupReady=True` 时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
 
 测试覆盖多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界；Controller 测试覆盖确认完成前保留 finalizer，以及完成后的 Conflict/Unknown 重入。
 
@@ -1768,7 +1770,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 | 日志追加与丢失响应 | 10.2：同 sequence 相同内容可重放，完整索引已落盘而汇总未更新时能恢复确认 |
 | 日志异常与封账崩溃 | 10.2.5、10.2.6：覆盖残缺索引、正文短缺、空日志及正文移动后的中断，按既定规则恢复或标记损坏 |
 | 鉴权与缓存过期 | 第十一章：有效 Runner Token 可上传，过期缓存不能延长 Token 有效期；Gateway 暂不可达不能伪造认证成功 |
-| 队列满、重启与删除竞争 | 8.6、8.9、8.10：返回规定错误，已持久化任务可恢复，Deleting 不被 worker 完成覆盖为 Ready |
+| 队列满、重启与删除竞争 | 8.6、8.9、8.10：结果落盘失败保留 Creating 且不能提前确认排空；Deleting 失败运行期重试、队列去重、等待同标识运行任务退出，以及固定 trash 路径恢复 |
 | 物化、发布与回滚 | 8.11、9.7：验证复用封账产物而不重复签名、指纹一致性、固定输入、失败不暴露半成品和发布切换边界 |
 | 容量与备份演练 | 17.1、17.3：记录峰值与恢复时间，验证整目录恢复后的内容及元数据一致性 |
 
@@ -1779,7 +1781,6 @@ GET /readyz    # HTTP 监听后固定返回 200
 - 文件系统边界：以目录 FD 为根解析路径，防止父目录符号链接和检查后替换竞态；当前依赖数据目录独占写入。
 - 上传连接治理：为阻塞正文读取提供可执行的超时控制，并补充最低速率限制。
 - 停机与健康检查：先停止接收任务，等待或取消 worker 并确认状态落盘；readyz 反映停机和运行期关键依赖故障。
-- 可靠删除：持久化 trash 路径或删除进度，检查并重试删除错误，清理崩溃残留目录。
 - 发布校验：按需要补充 primary 元数据与 RPM 集合的一致性验证、激活前内容复核及审计记录，并处理指针切换后目录同步失败。
 - 配额与生命周期：Project 容量、单 Job 文件数、上传并发、日志速率和 SSE 总连接数限制；Artifact/Manifest/日志保留、周期临时文件清理、孤儿扫描及 Job/Project 删除联动。
 - 可观测性：上传、日志封账、物化、发布和清理的计数与耗时指标，队列、存储容量及失败指标；结构化日志关联 Project、Job、Artifact、repositoryUID 或 Build name，不记录 Token、正文或签名凭据。

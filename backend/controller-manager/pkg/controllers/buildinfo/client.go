@@ -46,8 +46,6 @@ type Client interface {
 	// CreateJob creates a Job. Unknown outcomes are confirmed by GET on its deterministic name.
 	CreateJob(ctx context.Context, project string, obj *ebsv1.Job) (*ebsv1.Job, error)
 	GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
-	// GetOldJob reads an archived Job with the same response validation as GetJob.
-	GetOldJob(ctx context.Context, project, name string) (*ebsv1.Job, error)
 	AbortJob(context.Context, string, string, types.UID, string) (*ebsv1.Job, error)
 	// ListJobs reads all matching Jobs; an optional field projection must retain metadata.
 	ListJobs(ctx context.Context, project string, selector labels.Selector, includeFields ...string) ([]ebsv1.Job, error)
@@ -231,25 +229,17 @@ func buildGraphWriteResponse(operation string, intent *ebsv1.BuildGraph, result 
 }
 
 func (c *apiClient) GetJob(ctx context.Context, project, name string) (*ebsv1.Job, error) {
-	return c.getJob(ctx, source.JobsGVR, project, name)
-}
-
-func (c *apiClient) GetOldJob(ctx context.Context, project, name string) (*ebsv1.Job, error) {
-	return c.getJob(ctx, ebsv1.SchemeGroupVersion.WithResource("oldjobs"), project, name)
-}
-
-func (c *apiClient) getJob(ctx context.Context, gvr schema.GroupVersionResource, project, name string) (*ebsv1.Job, error) {
 	if project == "" || name == "" {
 		return nil, contractErrorf("project and name are required")
 	}
-	obj, err := c.readGet(ctx, gvr, project, name)
+	obj, err := c.readGet(ctx, source.JobsGVR, project, name)
 	if err != nil {
 		return nil, err
 	}
 	value, ok := obj.(*ebsv1.Job)
 	if !ok || value == nil || value.Name != name || value.Namespace != project || value.UID == "" ||
 		value.ResourceVersion == "" {
-		return nil, contractErrorf("unexpected %s response for %s/%s: %T", gvr.Resource, project, name, obj)
+		return nil, contractErrorf("unexpected jobs response for %s/%s: %T", project, name, obj)
 	}
 	return value, nil
 }
