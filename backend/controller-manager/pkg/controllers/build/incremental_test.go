@@ -30,7 +30,8 @@ func snapshotWithCommits(name string, commits map[string]string) *ebsv1.Snapshot
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "project-a"},
 		Spec:       ebsv1.SnapshotSpec{PackageRepos: repos},
 		Status: ebsv1.SnapshotStatus{
-			Phase: ebsv1.SnapshotActive, PackageRepoStatuses: statuses,
+			Phase:               ebsv1.SnapshotActive,
+			PackageRepoStatuses: statuses,
 		},
 	}
 }
@@ -42,7 +43,13 @@ func TestIncrementalPackagesUsePublishedBaselineAndFailedPackages(t *testing.T) 
 	api.storeSnapshot(snapshotWithCommits("build-prev", map[string]string{"gcc": "a", "glibc": "old", "removed": "r"}))
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"},
-		Status:     ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoCompleted, SpecResults: ebsv1.SpecResults{"gcc/" + "gcc": {SpecName: "gcc", Status: ebsv1.SpecRpmDependsMissing}, "removed/" + "removed": {Status: ebsv1.SpecPrepareFailed}}},
+		Status: ebsv1.BuildInfoStatus{
+			Phase: ebsv1.BuildInfoCompleted,
+			SpecResults: ebsv1.SpecResults{
+				"gcc/" + "gcc":         {SpecName: "gcc", Status: ebsv1.SpecRpmDependsMissing},
+				"removed/" + "removed": {Status: ebsv1.SpecPrepareFailed},
+			},
+		},
 	})
 	api.storeRpmRepo(&ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"}})
 	c := newTestController(t, api, newTestClock())
@@ -67,7 +74,10 @@ func TestIncrementalEmptySeedIsResolved(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = unresolvedIncremental("build-prev")
 	api.storeSnapshot(snapshotWithCommits("build-a", map[string]string{"gcc": "a"}))
 	api.storeSnapshot(snapshotWithCommits("build-prev", map[string]string{"gcc": "a"}))
-	api.storeBuildInfo(&ebsv1.BuildInfo{ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"}, Status: ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoCompleted}})
+	api.storeBuildInfo(&ebsv1.BuildInfo{
+		ObjectMeta: metav1.ObjectMeta{Name: "build-prev", Namespace: "project-a"},
+		Status:     ebsv1.BuildInfoStatus{Phase: ebsv1.BuildInfoCompleted},
+	})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 		t.Fatalf("sync: %v", err)
@@ -118,7 +128,11 @@ func TestIncrementalUpdateUnknownConfirmsOriginalPackages(t *testing.T) {
 						t.Fatalf("commit: %v", err)
 					}
 				}
-				return nil, &clientpkg.WriteError{Operation: "update", Outcome: clientpkg.WriteUnknown, Err: errors.New("response lost")}
+				return nil, &clientpkg.WriteError{
+					Operation: "update",
+					Outcome:   clientpkg.WriteUnknown,
+					Err:       errors.New("response lost"),
+				}
 			}
 			c := newTestController(t, api, newTestClock())
 			result, err := c.sync(context.Background(), "project-a/build-a")
@@ -147,7 +161,11 @@ func TestIncrementalSpecWriteDoesNotOverrideAbortedBuild(t *testing.T) {
 		aborted := api.build("project-a", "build-a")
 		aborted.Status.Phase = ebsv1.BuildAborted
 		api.storeBuild(aborted)
-		return nil, &clientpkg.WriteError{Operation: "update", Outcome: clientpkg.WriteUnknown, Err: errors.New("response lost")}
+		return nil, &clientpkg.WriteError{
+			Operation: "update",
+			Outcome:   clientpkg.WriteUnknown,
+			Err:       errors.New("response lost"),
+		}
 	}
 	c := newTestController(t, api, newTestClock())
 	result, err := c.sync(context.Background(), "project-a/build-a")
@@ -182,7 +200,12 @@ func TestIncrementalSpecWriteIsIdempotentAcrossReconcile(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = unresolvedIncremental("")
 	api.storeSnapshot(snapshotWithCommits("build-a", map[string]string{"gcc": "a"}))
 	api.hooks.updateStatus = func(*ebsv1.Build) (*ebsv1.Build, error) {
-		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: errors.New("conflict")}
+		return nil, &clientpkg.WriteError{
+			Operation:  "update-status",
+			Outcome:    clientpkg.WriteRejected,
+			StatusCode: 409,
+			Err:        errors.New("conflict"),
+		}
 	}
 	c := newTestController(t, api, newTestClock())
 	if result, err := c.sync(context.Background(), "project-a/build-a"); err != nil || result.RequeueAfter == 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -213,7 +214,7 @@ func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
 		t.Fatal("Prepared must only ensure its own BuildInfo")
 	}
 	calls := api.Calls()
-	if indexOf(calls, "CreateBuildInfo project-a/build-a") > indexOf(calls, "UpdateBuildStatus project-a/build-a") {
+	if slices.Index(calls, "CreateBuildInfo project-a/build-a") > slices.Index(calls, "UpdateBuildStatus project-a/build-a") {
 		t.Fatalf("BuildInfo must be created before the status write: %v", calls)
 	}
 }
@@ -290,14 +291,51 @@ func TestProcessingBuildSingleAggregation(t *testing.T) {
 		succeeded bool
 		wantStage ebsv1.BuildStage
 	}{
-		{name: "all succeeded", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
-		{name: "multiple specs", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}, "glibc": {Status: ebsv1.SpecSucceeded}}, succeeded: true, wantStage: ebsv1.BuildStageBuild},
-		{name: "dependencies missing", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecRpmDependsMissing}}, wantStage: ebsv1.BuildStageBuild},
-		{name: "build failed", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecBuildFailed}}, wantStage: ebsv1.BuildStageBuild},
-		{name: "install failed", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecInstallFailed}}, wantStage: ebsv1.BuildStageBuild},
-		{name: "build running", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecRunning}}, wantStage: ebsv1.BuildStageBuild},
-		{name: "one of many failed", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}, "glibc": {Status: ebsv1.SpecBuildFailed}}, wantStage: ebsv1.BuildStageBuild},
-		{name: "empty result set", statuses: map[string]ebsv1.SpecResult{}, wantStage: ebsv1.BuildStageBuild},
+		{
+			name:      "all succeeded",
+			statuses:  map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}},
+			succeeded: true,
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name:      "multiple specs",
+			statuses:  map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}, "glibc": {Status: ebsv1.SpecSucceeded}},
+			succeeded: true,
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name:      "dependencies missing",
+			statuses:  map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecRpmDependsMissing}},
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name:      "build failed",
+			statuses:  map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecBuildFailed}},
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name:      "install failed",
+			statuses:  map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecInstallFailed}},
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name:      "build running",
+			statuses:  map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecRunning}},
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name: "one of many failed",
+			statuses: map[string]ebsv1.SpecResult{
+				"gcc":   {Status: ebsv1.SpecSucceeded},
+				"glibc": {Status: ebsv1.SpecBuildFailed},
+			},
+			wantStage: ebsv1.BuildStageBuild,
+		},
+		{
+			name:      "empty result set",
+			statuses:  map[string]ebsv1.SpecResult{},
+			wantStage: ebsv1.BuildStageBuild,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeAPI()
@@ -434,7 +472,10 @@ func TestProcessingPublishWaitsForReleaseOutcome(t *testing.T) {
 			api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
 			api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 				ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-				Status:     ebsv1.RpmRepoStatus{Release: release},
+				Status: ebsv1.RpmRepoStatus{
+					Repository: &ebsv1.RpmRepoRepositoryStatus{},
+					Release:    release,
+				},
 			}
 			c := newTestController(t, api, newTestClock())
 			result, err := c.sync(context.Background(), "project-a/build-a")
@@ -451,23 +492,6 @@ func TestProcessingPublishWaitsForReleaseOutcome(t *testing.T) {
 	}
 }
 
-func TestProcessingPublishWaitsWithoutRelease(t *testing.T) {
-	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
-	api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
-		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Status:     ebsv1.RpmRepoStatus{Repository: &ebsv1.RpmRepoRepositoryStatus{}},
-	}
-	c := newTestController(t, api, newTestClock())
-	result, err := c.sync(context.Background(), "project-a/build-a")
-	if err != nil || result != (controller.ReconcileResult{}) {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	if api.CallCount("UpdateBuildStatus") != 0 {
-		t.Fatal("missing release status must not complete the build")
-	}
-}
-
 func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 	api := newFakeAPI()
 	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)
@@ -480,7 +504,10 @@ func TestProcessingPublishReadyWritesSuccess(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
 		Status: ebsv1.RpmRepoStatus{
 			Repository: &ebsv1.RpmRepoRepositoryStatus{ContentURL: "https://internal.example.com/repo"},
-			Release:    &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady, ContentURL: "https://release.example.com/project-a/aarch64"},
+			Release: &ebsv1.RpmRepoReleaseStatus{
+				Phase:      ebsv1.RpmRepoReleaseReady,
+				ContentURL: "https://release.example.com/project-a/aarch64",
+			},
 		},
 	}
 	clk := newTestClock()
@@ -516,7 +543,10 @@ func TestProcessingPublishFailureConverges(t *testing.T) {
 	api.rpmRepos[key("project-a", "build-a")] = &ebsv1.RpmRepo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
 		Status: ebsv1.RpmRepoStatus{
-			Release: &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed, ContentURL: "https://release.example.com/stale"},
+			Release: &ebsv1.RpmRepoReleaseStatus{
+				Phase:      ebsv1.RpmRepoReleaseFailed,
+				ContentURL: "https://release.example.com/stale",
+			},
 		},
 	}
 	clk := newTestClock()
