@@ -36,17 +36,31 @@ type Client interface {
 
 	UpdateBuild(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error)
 	UpdateBuildStatus(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error)
-	// DeleteCleanupChild deletes a direct child using the observed UID and resourceVersion.
-	DeleteCleanupChild(context.Context, string, string, string, metav1.Object) error
+	// DeleteSnapshot deletes the observed Snapshot with UID/resourceVersion preconditions.
+	DeleteSnapshot(context.Context, *ebsv1.Snapshot) error
+	// DeleteBuildInfo requests deletion through the BuildInfo cleanup finalizer.
+	DeleteBuildInfo(context.Context, *ebsv1.BuildInfo) error
+	// DeleteRpmRepo requests deletion through the RpmRepo cleanup finalizer.
+	DeleteRpmRepo(context.Context, *ebsv1.RpmRepo) error
 }
 
 type apiClient struct{ client clientpkg.Interface }
 
 func newAPIClient(value clientpkg.Interface) Client { return &apiClient{client: value} }
 
-func (c *apiClient) DeleteCleanupChild(ctx context.Context, project, resource, name string, obj metav1.Object) error {
-	return c.client.Delete(ctx, ebsv1.SchemeGroupVersion.WithResource(resource), project, name,
-		clientpkg.DeletePreconditions{UID: obj.GetUID(), ResourceVersion: obj.GetResourceVersion()})
+func (c *apiClient) DeleteSnapshot(ctx context.Context, obj *ebsv1.Snapshot) error {
+	return c.client.Delete(ctx, source.SnapshotsGVR, obj.Namespace, obj.Name,
+		clientpkg.DeletePreconditions{UID: obj.UID, ResourceVersion: obj.ResourceVersion})
+}
+
+func (c *apiClient) DeleteBuildInfo(ctx context.Context, obj *ebsv1.BuildInfo) error {
+	return c.client.Delete(ctx, source.BuildInfosGVR, obj.Namespace, obj.Name,
+		clientpkg.DeletePreconditions{UID: obj.UID, ResourceVersion: obj.ResourceVersion})
+}
+
+func (c *apiClient) DeleteRpmRepo(ctx context.Context, obj *ebsv1.RpmRepo) error {
+	return c.client.Delete(ctx, source.RpmReposGVR, obj.Namespace, obj.Name,
+		clientpkg.DeletePreconditions{UID: obj.UID, ResourceVersion: obj.ResourceVersion})
 }
 
 // contractError reports a request or response contract violation: invalid client input, or a server response

@@ -18,6 +18,7 @@ import (
 	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -53,7 +54,7 @@ type fakeHooks struct {
 	getBuildInfo          func(project, name string) (*ebsv1.BuildInfo, error)
 	createBuildInfo       func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
 	lastPublished         func(project, targetArch string) (*ebsv1.Build, error)
-	deleteCleanupChild    func(project, resource, name string, obj metav1.Object) error
+	deleteResource        func(gvr schema.GroupVersionResource, project, name string, preconditions clientpkg.DeletePreconditions) error
 }
 
 // fakeAPI is an in-memory implementation of Client that also records every call, so tests can assert the
@@ -72,10 +73,26 @@ type fakeAPI struct {
 	cleanupFail   string
 }
 
-func (f *fakeAPI) DeleteCleanupChild(_ context.Context, project, resource, name string, obj metav1.Object) error {
+func (f *fakeAPI) DeleteSnapshot(_ context.Context, obj *ebsv1.Snapshot) error {
+	return f.deleteResource(source.SnapshotsGVR, obj.Namespace, obj.Name,
+		clientpkg.DeletePreconditions{UID: obj.UID, ResourceVersion: obj.ResourceVersion})
+}
+
+func (f *fakeAPI) DeleteBuildInfo(_ context.Context, obj *ebsv1.BuildInfo) error {
+	return f.deleteResource(source.BuildInfosGVR, obj.Namespace, obj.Name,
+		clientpkg.DeletePreconditions{UID: obj.UID, ResourceVersion: obj.ResourceVersion})
+}
+
+func (f *fakeAPI) DeleteRpmRepo(_ context.Context, obj *ebsv1.RpmRepo) error {
+	return f.deleteResource(source.RpmReposGVR, obj.Namespace, obj.Name,
+		clientpkg.DeletePreconditions{UID: obj.UID, ResourceVersion: obj.ResourceVersion})
+}
+
+func (f *fakeAPI) deleteResource(gvr schema.GroupVersionResource, project, name string, preconditions clientpkg.DeletePreconditions) error {
+	resource := gvr.Resource
 	f.cleanupWrites = append(f.cleanupWrites, resource)
-	if f.hooks.deleteCleanupChild != nil {
-		return f.hooks.deleteCleanupChild(project, resource, name, obj)
+	if f.hooks.deleteResource != nil {
+		return f.hooks.deleteResource(gvr, project, name, preconditions)
 	}
 	k := key(project, name)
 	var current metav1.Object
@@ -89,7 +106,7 @@ func (f *fakeAPI) DeleteCleanupChild(_ context.Context, project, resource, name 
 	default:
 		return fmt.Errorf("unexpected direct child: %s", resource)
 	}
-	if current.GetUID() != obj.GetUID() || current.GetResourceVersion() != obj.GetResourceVersion() {
+	if current.GetUID() != preconditions.UID || current.GetResourceVersion() != preconditions.ResourceVersion {
 		return fmt.Errorf("stale deletion")
 	}
 	if resource == f.cleanupFail {
@@ -455,13 +472,12 @@ type fakePollingFactory struct {
 	selectors []string
 	gvr       schema.GroupVersionResource
 	period    time.Duration
-	options   metav1.ListOptions
 	calls     int
 }
 
 func (f *fakePollingFactory) ForResource(gvr schema.GroupVersionResource, period time.Duration, options metav1.ListOptions) (source.Source, error) {
 	f.selectors = append(f.selectors, options.FieldSelector)
-	f.gvr, f.period, f.options = gvr, period, options
+	f.gvr, f.period = gvr, period
 	f.calls++
 	return &fakeSource{}, nil
 }

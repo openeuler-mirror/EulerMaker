@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -793,7 +794,9 @@ func TestNewBuildInfoFreezesBuildPayload(t *testing.T) {
 func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
-	api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
+	project := newProject("project-a", newPackageRepo("gcc"))
+	project.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "current", URL: "https://example.com/current"}}
+	api.projects["project-a"] = project
 	clk := newTestClock()
 	c := newTestController(t, api, clk)
 	result, err := c.sync(context.Background(), "project-a/build-a")
@@ -837,14 +840,14 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if api.CallCount("GetProject") != 0 || api.CallCount("GetBuildTargetContent") != 0 || api.CallCount("CreateBuildInfo") != 0 {
+	if api.CallCount("CreateSnapshot") != 0 || api.CallCount("GetProject") != 0 || api.CallCount("GetBuildTargetContent") != 0 || api.CallCount("CreateBuildInfo") != 0 {
 		t.Fatal("an existing BuildInfo must not be recreated or re-read from the Project")
 	}
 	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepos[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" || info.Spec.Image != "frozen:image" {
 		t.Fatalf("BuildInfo spec was overwritten: %+v", info.Spec)
 	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing {
-		t.Fatalf("phase = %q", stored.Status.Phase)
+	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
+		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
 	}
 }
 
@@ -865,21 +868,6 @@ func TestPreparedCreateBuildInfoAlreadyExistsReusesObject(t *testing.T) {
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
-	}
-}
-
-func TestPreparedUsesCurrentProjectConfigurationForCreate(t *testing.T) {
-	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
-	project := newProject("project-a", newPackageRepo("gcc"))
-	project.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "current", URL: "https://example.com/current"}}
-	api.projects["project-a"] = project
-	c := newTestController(t, api, newTestClock())
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if got := api.buildInfo("project-a", "build-a").Spec.BootstrapRepos[0].Name; got != "current" {
-		t.Fatalf("bootstrapRepos = %q", got)
 	}
 }
 
@@ -937,4 +925,78 @@ func TestPreparedImageConfigurationFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateRejectionLogsTheChildKind checks the structured log every non conflict create rejection emits, for
+// each child resource the controller creates on its own paths.
+func TestCreateRejectionLogsTheChildKind(t *testing.T) {
+	t.Run("rpm repo with a missing route", func(t *testing.T) {
+		api := newFakeAPI()
+		api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
+		api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+		api.hooks.createRpmRepo = func(*ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
+			return nil, &clientpkg.WriteError{
+				Operation: "create", Outcome: clientpkg.WriteRejected,
+				StatusCode: http.StatusNotFound, Err: errors.New("the server could not find the requested resource"),
+			}
+		}
+		c := newTestController(t, api, newTestClock())
+
+		var output bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&output)
+		defer log.SetOutput(previous)
+
+		result, err := c.sync(context.Background(), "project-a/build-a")
+		if result != (controller.ReconcileResult{}) {
+			t.Fatalf("result=%+v", result)
+		}
+		if err == nil || controller.IsPermanent(err) {
+			t.Fatalf("a create 404 must be retryable, got %v", err)
+		}
+		logged := output.String()
+		for _, want := range []string{"reason=CreateRejected", "kind=RpmRepo", "operation=create", "status=404", "retryable=true"} {
+			if !strings.Contains(logged, want) {
+				t.Fatalf("rejection log misses %q: %q", want, logged)
+			}
+		}
+		if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPending {
+			t.Fatalf("phase = %q, want %q", stored.Status.Phase, ebsv1.BuildPending)
+		}
+	})
+
+	t.Run("build info with a permanent rejection", func(t *testing.T) {
+		api := newFakeAPI()
+		api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
+		api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
+		api.hooks.createBuildInfo = func(*ebsv1.BuildInfo) (*ebsv1.BuildInfo, error) {
+			return nil, &clientpkg.WriteError{
+				Operation: "create", Outcome: clientpkg.WriteRejected,
+				StatusCode: http.StatusForbidden, Err: errors.New("denied"),
+			}
+		}
+		c := newTestController(t, api, newTestClock())
+
+		var output bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&output)
+		defer log.SetOutput(previous)
+
+		result, err := c.sync(context.Background(), "project-a/build-a")
+		if result != (controller.ReconcileResult{}) {
+			t.Fatalf("result=%+v", result)
+		}
+		if !controller.IsPermanent(err) {
+			t.Fatalf("a 403 create rejection must be permanent, got %v", err)
+		}
+		logged := output.String()
+		for _, want := range []string{"reason=CreateRejected", "kind=BuildInfo", "status=403", "retryable=false"} {
+			if !strings.Contains(logged, want) {
+				t.Fatalf("rejection log misses %q: %q", want, logged)
+			}
+		}
+		if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared {
+			t.Fatalf("phase = %q, want %q", stored.Status.Phase, ebsv1.BuildPrepared)
+		}
+	})
 }
