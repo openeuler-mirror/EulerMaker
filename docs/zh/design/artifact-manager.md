@@ -60,6 +60,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/repositories` | 提交过程仓物化 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories` | 删除指定构建的全部过程仓和发布仓，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
 | 业务清理方 → Artifact Manager | `DELETE /internal/v1/projects/{project}/jobs/{job}` | 同步删除 Job 的产物、日志及上传元数据，见 13.1 | 内部管理接口，部署时仅向受信任的业务清理方开放；组件认证边界同其它内部接口 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
 | BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
@@ -110,6 +111,7 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | Job 数据删除 | 文件删除不持 Store 锁，释放订阅和恢复标记时加锁 | 调用方先停止该 Job 的写入和依赖任务；接口同步返回，不创建后台删除任务 |
 | 过程仓任务 | Repository Manager 全局读写锁及 `queued/running` 集合 | 提交、去重、状态落盘和队列标记受锁保护；物化和外部命令在锁外运行，完成后重新检查状态 |
 | 发布任务与 current | Release Manager 全局读写锁及任务集合 | 正文生成在锁外；状态提交与 current 切换在锁内，不同目标的激活也串行 |
+| 按 Build 删除仓库 | 先 Release Manager、后 Repository Manager，各自持写锁检查活动任务并执行文件删除 | 不同时持有两个 Manager 的锁；调用方须停止新提交；大目录清理可能阻塞同模块的请求和 worker 状态提交 |
 | 鉴权、SSE | 认证缓存内部同步；订阅集合由 Store 锁保护 | 网络鉴权与 HTTP 流式发送不长期占用业务状态锁；慢订阅者断开，不反压上传 |
 
 跨模块调用先获取源数据快照，再进入本模块的状态临界区；不在持有 Release Manager 锁时调用 Repository Manager，也不在持有 Store 或 Repository Manager 锁时执行签名命令。Store 不回调上层 Manager。当前不存在跨进程锁，多个可写实例不能共享同一数据目录。
@@ -1543,6 +1545,7 @@ Project 配额、单 Job 文件数、服务端 Runner 上传并发、速率和 S
 - worker 启动前，仅扫描各 `repositories/{project}/{arch}/` 下的 `history/{buildName}/.work/` 和 `releases/.work/`，按任务目录修改时间清理超过对应 WorkTTL 的目录，跳过 steps、发布正文、元数据及 trash 目录，不跟随符号链接；所有工作和删除暂存目录均不在公开浏览或下载白名单中。
 - 过程仓通过显式 DELETE 请求删除，没有自动仓库 TTL；删除及中断恢复的边界见 8.10。
 - 正式发布每小时执行历史保留清理，规则见 9.6。
+- RpmRepo 删除通过 13.2 的构建级接口清理该 Build 的所有过程仓版本及发布仓。
 
 Artifact、Manifest 和活动日志尚无自动 TTL 清理，也没有完整的孤儿文件扫描。已提供 13.1 的按 Job 同步删除接口，上层 Job/OldJob 删除联动仍待接入；当前不存在日志默认保留 30 天的实现。
 
@@ -1570,6 +1573,27 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 源 Job 默认带 `ebs.io/job-archive`，迁移意图另外持久化：retain 保留 OldJob 和数据，delete 继续删除 OldJob。两种情况都不在源 Job 分支调用本接口；OldJob 数据删除须等源 Job 消失且归档已确认，迟到归档请求由持久化删除凭据阻断。协议统一见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)，不能从普通 DELETE 或 Watch 删除事件推断归档已完成。
 
 接口测试覆盖精确作用域及重复删除、正文/签名副本/临时文件/日志/元数据完整清理、仓库硬链接及 repodata 不变、文件系统失败后重试、重启后清理残留、符号链接边界和订阅状态释放。上层按 [Job Controller 验收矩阵](controller-manager~job-controller.md#113-删除与归档协议验收) 验证清理失败保留 finalizer、成功清理可重试、源 Job 迁移不调用本接口、仅 OldJob 删除触发清理，以及清理后没有迟到上传。
+
+### 13.2 按 Build 删除过程仓和发布仓
+
+```http
+DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories
+```
+
+此接口按 Project、Arch、BuildName 定位，不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。调用方必须已停止该 Build 的新物化、发布及激活请求，并排空已登记操作；跨构建的源仓使用约束由上层业务保证。
+
+- 精确清理 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
+- 清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按随机后缀之前的完整名称匹配，不能只做字符串前缀匹配。
+- 删除后移除对应的内存定位索引和非活动记录。不清理 Job 产物/日志、其它 Build/架构/Project 的仓库，也不删除继承基线。硬链接仅解除本目录项，不修改共享正文。
+- 先检查并清理发布仓，再清理过程仓。当前 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和仓库不变；不回退到历史版本。上层负责判断是否允许删除该 Build。
+- 每个 Manager 在自身锁内检查活动任务；仍有 Creating、Deleting 或实际运行中的任务时返回 `202`、`Retry-After: 5`，调用方稍后重复 DELETE。Prepared 已完成正文生成且尚未激活，可以清理，不为删除执行激活。
+- 无活动任务时同步执行文件删除，不创建新的后台删除任务或持久化删除凭据。只有完整清理后返回 `204`，首次不存在和重复删除同样返回 `204`；不返回正文。非法标识或携带请求体返回 `400`，存储失败返回可重试 `503`。
+- 逐层核验父目录，拒绝符号链接父目录；使用 `os.Root` 删除，子项符号链接仅解除链接，成功后同步父目录。数据根目录无法打开属于存储故障，不能当作仓库不存在。
+- 中途失败、请求超时或服务重启后，按同一作用域再次 DELETE 继续清理；不要求元数据完整存在，也不依赖内存中的完成标记。接口不阻止确认后的新建，停止提交由上层协议保证。
+
+调用方接入契约：RpmRepo Controller 应只在 RpmRepo 删除中且已写 `CleanupReady=True`、两个 transition 均为空时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
+
+接口测试覆盖多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界。
 
 ## 十四、与 Job Status 的关系
 
