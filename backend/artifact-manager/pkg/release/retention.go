@@ -36,7 +36,6 @@ func (m *Manager) cleanupHistory(now time.Time) {
 		log.Printf("scan release history: %v", err)
 		return
 	}
-	var remove []string
 	for key, records := range groups {
 		sort.Slice(records, func(i, j int) bool { return records[i].UpdatedAt.After(records[j].UpdatedAt) })
 		currentTarget, _ := os.Readlink(filepath.Join(m.root, "repositories", key.project, key.arch, "current"))
@@ -48,12 +47,9 @@ func (m *Manager) cleanupHistory(now time.Time) {
 			}
 			record.State, record.UpdatedAt = ReleaseDeleting, now
 			if m.persist(record) == nil {
-				remove = append(remove, record.BuildName)
+				m.enqueueLocked(record.BuildName)
 			}
 		}
 	}
 	m.mu.Unlock()
-	for _, name := range remove {
-		go m.remove(name)
-	}
 }

@@ -124,7 +124,7 @@ func removeBuildTemporary(dir *os.Root, buildName string) error {
 		return err
 	}
 	for _, entry := range entries {
-		// Both MkdirTemp and NewID append a suffix without hyphens; avoid matching other build prefixes.
+		// Random suffixes and the fixed "deleting" suffix contain no hyphens; match the full build name.
 		name := entry.Name()
 		separator := strings.LastIndexByte(name, '-')
 		if separator < 0 || name[:separator] != buildName {

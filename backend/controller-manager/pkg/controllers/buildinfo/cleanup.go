@@ -20,37 +20,38 @@ import (
 // cleanupWriteLimit bounds abort and delete requests in a cleanup round.
 const cleanupWriteLimit = 100
 
+type cleanupJob struct {
+	resource string
+	ebsv1.Job
+}
+
 // cleanupChildren independently advances graph and Job cleanup after local production has stopped.
 // Only Job cleanup depends on RpmRepo checkpoints; either branch may progress while the other waits or fails.
 func (c *Controller) cleanupChildren(ctx context.Context, info *ebsv1.BuildInfo) (bool, error) {
 	graphDone, graphErr := cleanupGraph(ctx, c.client, info)
-	if err := checkCleanupRepository(ctx, c.client, info.Namespace, info.Name); err != nil {
+	repoReady, err := checkCleanupRepository(ctx, c.client, info.Namespace, info.Name)
+	if err != nil || !repoReady {
 		return false, errors.Join(graphErr, err)
 	}
 	jobsDone, jobsErr := c.cleanupJobs(ctx, info)
 	return graphDone && jobsDone, errors.Join(graphErr, jobsErr)
 }
 
-// checkCleanupRepository waits for the producer acknowledgment and drained checkpoints.
-func checkCleanupRepository(ctx context.Context, client Client, project, name string) error {
+// checkCleanupRepository waits for the producer's CleanupReady acknowledgment.
+func checkCleanupRepository(ctx context.Context, client Client, project, name string) (bool, error) {
 	repo, err := client.GetRpmRepo(ctx, project, name)
 	if errors.Is(err, ErrNotFound) {
-		return nil
+		return true, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
-	if (repo.Status.Repository != nil && repo.Status.Repository.Transition != nil) ||
-		(repo.Status.Release != nil && repo.Status.Release.Transition != nil) ||
-		!meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) {
-		return apierrors.NewServiceUnavailable("BuildInfo cleanup is waiting for RpmRepo CleanupReady=True")
-	}
-	return nil
+	return meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady), nil
 }
 
 // cleanupJobs scans from the start each round and waits for physical removal of Jobs and OldJobs.
 func (c *Controller) cleanupJobs(ctx context.Context, info *ebsv1.BuildInfo) (bool, error) {
-	jobs, err := listCleanupTargets(ctx, c.client, info)
+	jobs, err := listCleanupJobs(ctx, c.client, info)
 	if err != nil {
 		return false, err
 	}
@@ -58,8 +59,8 @@ func (c *Controller) cleanupJobs(ctx context.Context, info *ebsv1.BuildInfo) (bo
 		return true, nil
 	}
 	sort.Slice(jobs, func(i, j int) bool {
-		if jobs[i].Resource != jobs[j].Resource {
-			return jobs[i].Resource < jobs[j].Resource
+		if jobs[i].resource != jobs[j].resource {
+			return jobs[i].resource < jobs[j].resource
 		}
 		return jobs[i].Name < jobs[j].Name
 	})
@@ -69,30 +70,19 @@ func (c *Controller) cleanupJobs(ctx context.Context, info *ebsv1.BuildInfo) (bo
 		if writes >= cleanupWriteLimit {
 			break
 		}
-		getJob := c.client.GetJob
-		if target.Resource == "oldjobs" {
-			getJob = c.client.GetOldJob
-		}
-		job, err := getJob(ctx, info.Namespace, target.Name)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			failures = append(failures, err)
-			continue
-		}
+		job := &target.Job
 		if job.Labels[ebsv1.JobBuildNameLabel] != info.Name {
-			failures = append(failures, fmt.Errorf("unexpected %s/%s ownership", target.Resource, target.Name))
+			failures = append(failures, fmt.Errorf("unexpected %s/%s ownership", target.resource, target.Name))
 			continue
 		}
 		if job.DeletionTimestamp != nil {
 			continue
 		}
 		writes++
-		if target.Resource == "jobs" && !job.Status.Phase.IsTerminal() {
+		if target.resource == "jobs" && !job.Status.Phase.IsTerminal() {
 			_, err = c.client.AbortJob(ctx, job.Namespace, job.Name, job.UID, "BuildDeleted")
 		} else {
-			err = c.client.DeleteCleanupChild(ctx, info.Namespace, target, job)
+			err = c.client.DeleteCleanupChild(ctx, info.Namespace, CleanupTarget{target.resource, job.Name}, job)
 		}
 		if err != nil && !apierrors.IsNotFound(err) {
 			failures = append(failures, err)
@@ -101,10 +91,10 @@ func (c *Controller) cleanupJobs(ctx context.Context, info *ebsv1.BuildInfo) (bo
 	return false, errors.Join(failures...)
 }
 
-// listCleanupTargets combines complete resource lists before any Job mutation is attempted.
-func listCleanupTargets(ctx context.Context, client Client, info *ebsv1.BuildInfo) ([]CleanupTarget, error) {
+// listCleanupJobs retains projected objects for conditional writes after both lists have completed.
+func listCleanupJobs(ctx context.Context, client Client, info *ebsv1.BuildInfo) ([]cleanupJob, error) {
 	selector := labels.SelectorFromSet(labels.Set{ebsv1.JobBuildNameLabel: info.Name})
-	var targets []CleanupTarget
+	var targets []cleanupJob
 	for _, resource := range []struct {
 		name string
 		list func(context.Context, string, labels.Selector, ...string) ([]ebsv1.Job, error)
@@ -112,12 +102,16 @@ func listCleanupTargets(ctx context.Context, client Client, info *ebsv1.BuildInf
 		{"jobs", client.ListJobs},
 		{"oldjobs", client.ListOldJobs},
 	} {
-		jobs, err := resource.list(ctx, info.Namespace, selector, "metadata")
+		fields := []string{"metadata"}
+		if resource.name == "jobs" {
+			fields = append(fields, "status.phase")
+		}
+		jobs, err := resource.list(ctx, info.Namespace, selector, fields...)
 		if err != nil {
 			return nil, err
 		}
 		for _, job := range jobs {
-			targets = append(targets, CleanupTarget{resource.name, job.Name})
+			targets = append(targets, cleanupJob{resource.name, job})
 		}
 	}
 	return targets, nil

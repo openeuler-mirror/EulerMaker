@@ -21,9 +21,7 @@ func (r *reconciler) cleanupRpmRepo(repo *ebsv1.RpmRepo) (controller.ReconcileRe
 	if !slices.Contains(repo.Finalizers, ebsv1.RpmRepoCleanupFinalizer) {
 		return controller.ReconcileResult{}, nil
 	}
-	if !meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) ||
-		(repo.Status.Repository != nil && repo.Status.Repository.Transition != nil) ||
-		(repo.Status.Release != nil && repo.Status.Release.Transition != nil) {
+	if !meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) {
 		result, err := r.drainCheckpoints(repo)
 		if err == nil && result.RequeueAfter == 0 {
 			result.RequeueAfter = time.Second

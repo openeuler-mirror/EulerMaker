@@ -24,6 +24,7 @@ type Manager struct {
 	materializer       Materializer
 	mu                 sync.RWMutex
 	records            map[string]*RepositoryRecord
+	completions        map[string]*RepositoryRecord
 	metadataPaths      map[string]string
 	queued             map[string]bool
 	running            map[string]bool
@@ -57,15 +58,9 @@ func NewManager(root string, c Config, materializer Materializer, signingFingerp
 		cancel()
 		return nil, err
 	}
+	m.retryPending()
 	for i := 0; i < c.Workers; i++ {
 		go m.worker()
-	}
-	for uid, record := range m.records {
-		if record.State == RepositoryCreating {
-			m.enqueue(uid)
-		} else if record.State == RepositoryDeleting {
-			go m.remove(uid)
-		}
 	}
 	go m.recoverQueue()
 	return m, nil
@@ -328,14 +323,8 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 	return cloneRepository(record), 202, nil
 }
 
-func (m *Manager) enqueue(uid string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.enqueueLocked(uid)
-}
-
 func (m *Manager) enqueueLocked(uid string) {
-	if m.queued[uid] {
+	if m.queued[uid] || m.running[uid] {
 		return
 	}
 	select {
@@ -354,9 +343,14 @@ func (m *Manager) worker() {
 			m.mu.Lock()
 			delete(m.queued, uid)
 			record := cloneRepository(m.records[uid])
+			if record == nil || m.running[uid] ||
+				(record.State != RepositoryCreating && record.State != RepositoryDeleting) {
+				m.mu.Unlock()
+				continue
+			}
+			m.running[uid] = true
 			var baseErr error
-			if record != nil && record.State == RepositoryCreating {
-				m.running[uid] = true
+			if record.State == RepositoryCreating {
 				if record.BaseRepositoryUID != "" {
 					base, err := m.recordLocked(record.BaseRepositoryUID)
 					if err != nil {
@@ -369,7 +363,11 @@ func (m *Manager) worker() {
 				}
 			}
 			m.mu.Unlock()
-			if record == nil || record.State != RepositoryCreating {
+			if record.State == RepositoryDeleting {
+				m.remove(uid)
+				m.mu.Lock()
+				delete(m.running, uid)
+				m.mu.Unlock()
 				continue
 			}
 			if baseErr != nil {
@@ -388,12 +386,10 @@ func (m *Manager) finish(completed *RepositoryRecord, result Result, materialize
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	uid := completed.RepositoryUID
-	record := m.records[uid]
+	record := cloneRepository(m.records[uid])
 	if record == nil || record.State != RepositoryCreating {
 		delete(m.running, uid)
-		if materializeErr == nil {
-			go os.RemoveAll(m.RepositoryPath(completed))
-		}
+		// A concurrent DELETE owns cleanup; retryPending schedules it after this worker exits.
 		return
 	}
 	delete(m.running, uid)
@@ -417,9 +413,20 @@ func (m *Manager) finish(completed *RepositoryRecord, result Result, materialize
 		record.ContentURL = "/repositories/v1/" + uid + "/"
 		record.CompletedAt = &now
 	}
-	if err := m.persist(record); err == nil && record.State != RepositoryCreating && record.State != RepositoryDeleting {
-		delete(m.records, uid)
+	// Keep Creating visible until the result is durable. Retry only the write, not materialization.
+	if m.completions == nil {
+		m.completions = make(map[string]*RepositoryRecord)
 	}
+	m.completions[uid] = record
+	m.persistCompletionLocked(uid)
+}
+
+func (m *Manager) persistCompletionLocked(uid string) {
+	if err := m.persist(m.completions[uid]); err != nil {
+		return
+	}
+	delete(m.completions, uid)
+	delete(m.records, uid)
 }
 
 func (m *Manager) recoverQueue() {
@@ -430,13 +437,22 @@ func (m *Manager) recoverQueue() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			m.mu.Lock()
-			for uid, record := range m.records {
-				if record.State == RepositoryCreating && !m.queued[uid] && !m.running[uid] {
-					m.enqueueLocked(uid)
-				}
-			}
-			m.mu.Unlock()
+			m.retryPending()
+		}
+	}
+}
+
+// retryPending requeues unfinished work without duplicating queued or running tasks.
+func (m *Manager) retryPending() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for uid, record := range m.records {
+		if m.completions[uid] != nil {
+			m.persistCompletionLocked(uid)
+			continue
+		}
+		if record.State == RepositoryCreating || record.State == RepositoryDeleting {
+			m.enqueueLocked(uid)
 		}
 	}
 }
@@ -468,14 +484,16 @@ func (m *Manager) Delete(uid string) (*RepositoryRecord, int, error) {
 	if record == nil {
 		return nil, 204, nil
 	}
+	record = cloneRepository(record)
 	if record.State != RepositoryDeleting {
 		record.State, record.UpdatedAt = RepositoryDeleting, time.Now().UTC()
 		if err := m.persist(record); err != nil {
 			return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}
 		}
 		m.records[uid] = record
-		go m.remove(uid)
+		delete(m.completions, uid)
 	}
+	m.enqueueLocked(uid)
 	return cloneRepository(record), 202, nil
 }
 
@@ -483,7 +501,7 @@ func (m *Manager) remove(uid string) {
 	m.mu.RLock()
 	record := cloneRepository(m.records[uid])
 	m.mu.RUnlock()
-	if record == nil {
+	if record == nil || record.State != RepositoryDeleting {
 		return
 	}
 	source := m.RepositoryPath(record)
@@ -491,11 +509,14 @@ func (m *Manager) remove(uid string) {
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
 		return
 	}
-	trash := filepath.Join(trashDir, uid+"-"+fileutil.NewID("d"))
+	// Reuse the same destination after a failed removal or restart.
+	trash := filepath.Join(trashDir, uid+"-deleting")
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
 		return
 	}
-	_ = os.RemoveAll(trash)
+	if err := os.RemoveAll(trash); err != nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if record := m.records[uid]; record != nil && record.State == RepositoryDeleting {
