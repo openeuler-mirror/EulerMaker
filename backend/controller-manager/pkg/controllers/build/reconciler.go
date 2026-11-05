@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,8 +37,14 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 		}
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
-	if build.Status.Phase.IsTerminal() || build.DeletionTimestamp != nil {
+	if build.DeletionTimestamp != nil {
+		return c.cleanupBuild(ctx, build)
+	}
+	if build.Status.Phase.IsTerminal() {
 		return controller.ReconcileResult{}, nil
+	}
+	if !slices.Contains(build.Finalizers, ebsv1.BuildCleanupFinalizer) {
+		return controller.ReconcileResult{}, controller.NewPermanentError(fmt.Errorf("Build lacks cleanup finalizer"))
 	}
 	if err := validatePhaseStage(build); err != nil {
 		log.Printf("controller=%s key=%q uid=%q resourceVersion=%q phase=%q stage=%q reason=InvalidPhaseStage error=%v", Name, key, build.UID, build.ResourceVersion, build.Status.Phase, build.Status.Stage, err)

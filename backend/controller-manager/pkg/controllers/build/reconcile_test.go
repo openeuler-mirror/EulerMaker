@@ -98,10 +98,11 @@ func TestPreparedSelectsImageFromProjectDistroAndBuildArch(t *testing.T) {
 	}
 }
 
-func TestSyncStopsWhenBuildIsDeleting(t *testing.T) {
+func TestSyncLeavesOtherFinalizersAlone(t *testing.T) {
 	build := withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, "")
 	deletion := metav1.NewTime(time.Date(2026, 9, 16, 9, 0, 0, 0, time.UTC))
 	build.DeletionTimestamp = &deletion
+	build.Finalizers = []string{"another/controller"}
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = build
 	c := newTestController(t, api, newTestClock())

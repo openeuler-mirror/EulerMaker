@@ -30,17 +30,19 @@ type listCall struct {
 }
 
 type stubSharedClient struct {
-	mu           sync.Mutex
-	gets         []getCall
-	lists        []listCall
-	getResult    runtime.Object
-	getErr       error
-	listResult   source.ListPage
-	listErr      error
-	createResult runtime.Object
-	createErr    error
-	updateResult runtime.Object
-	updateErr    error
+	mu                  sync.Mutex
+	gets                []getCall
+	lists               []listCall
+	getResult           runtime.Object
+	getErr              error
+	listResult          source.ListPage
+	listErr             error
+	createResult        runtime.Object
+	createErr           error
+	updateResult        runtime.Object
+	updateErr           error
+	deleteCall          getCall
+	deletePreconditions clientpkg.DeletePreconditions
 }
 
 func (s *stubSharedClient) ListPage(context.Context, schema.GroupVersionResource, metav1.ListOptions) (source.ListPage, error) {
@@ -93,8 +95,28 @@ func (s *stubSharedClient) UpdateStatus(context.Context, schema.GroupVersionReso
 	return s.updateResult, s.updateErr
 }
 
-func (s *stubSharedClient) Delete(context.Context, schema.GroupVersionResource, string, string, clientpkg.DeletePreconditions) error {
+func (s *stubSharedClient) Delete(_ context.Context, gvr schema.GroupVersionResource, project, name string, preconditions clientpkg.DeletePreconditions) error {
+	s.deleteCall = getCall{gvr: gvr, namespace: project, name: name}
+	s.deletePreconditions = preconditions
 	return nil
+}
+
+func TestAPIClientDeleteCleanupChild(t *testing.T) {
+	for _, resource := range []string{"buildinfos", "snapshots", "rpmrepos"} {
+		t.Run(resource, func(t *testing.T) {
+			shared := &stubSharedClient{}
+			client := newAPIClient(shared)
+			obj := &metav1.ObjectMeta{Namespace: "project-a", Name: "build-a", UID: "child", ResourceVersion: "7"}
+			if err := client.DeleteCleanupChild(context.Background(), obj.Namespace, resource, obj.Name, obj); err != nil {
+				t.Fatal(err)
+			}
+			want := getCall{gvr: ebsv1.SchemeGroupVersion.WithResource(resource), namespace: obj.Namespace, name: obj.Name}
+			if shared.deleteCall != want || shared.deletePreconditions.UID != obj.UID ||
+				shared.deletePreconditions.ResourceVersion != obj.ResourceVersion {
+				t.Fatalf("delete call=%+v preconditions=%+v", shared.deleteCall, shared.deletePreconditions)
+			}
+		})
+	}
 }
 
 func (s *stubSharedClient) lastGet(t *testing.T) getCall {

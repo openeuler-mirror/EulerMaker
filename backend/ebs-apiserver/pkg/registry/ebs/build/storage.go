@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,6 +25,9 @@ func NewStorage() *scopedresource.Storage {
 		NewList: func() runtime.Object { return &ebsv1.BuildList{} },
 		PrepareCreate: func(obj runtime.Object) {
 			b := obj.(*ebsv1.Build)
+			if !slices.Contains(b.Finalizers, ebsv1.BuildCleanupFinalizer) {
+				b.Finalizers = append(b.Finalizers, ebsv1.BuildCleanupFinalizer)
+			}
 			ebsv1.SetDefaults_Build(b)
 			if b.Spec.BuildType == ebsv1.BuildTypeFull || b.Spec.BuildType == ebsv1.BuildTypeIncremental {
 				b.Spec.Packages = nil

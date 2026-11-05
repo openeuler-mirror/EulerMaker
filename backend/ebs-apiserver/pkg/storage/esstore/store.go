@@ -682,7 +682,7 @@ func queryFingerprint(resource, namespace string, options *internalversion.ListO
 
 func supportsDeletionTimestampSelector(resource string) bool {
 	switch resource {
-	case "oldjob", "buildinfo", "rpmrepo":
+	case "oldjob", "build", "buildinfo", "rpmrepo":
 		return true
 	default:
 		return false

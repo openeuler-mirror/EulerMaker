@@ -26,6 +26,7 @@ const (
 const (
 	BuildInfoCleanupFinalizer    = "ebs.io/buildinfo-cleanup"
 	RpmRepoCleanupFinalizer      = "ebs.io/rpmrepo-cleanup"
+	BuildCleanupFinalizer        = "ebs.io/build-cleanup"
 	JobArchiveFinalizer          = "ebs.io/job-archive"
 	JobArtifactsCleanupFinalizer = "ebs.io/job-artifacts-cleanup"
 )
