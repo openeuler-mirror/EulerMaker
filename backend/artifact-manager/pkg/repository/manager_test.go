@@ -109,6 +109,66 @@ func TestRepositoryDeletionRemovesLocationIndex(t *testing.T) {
 	}
 }
 
+func TestDeleteBuildRepositoriesScopesAndRecovery(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*RepositoryRecord{}}
+	for _, scope := range []struct{ uid, project, arch, build string }{
+		{"first", "project", "arch", "build"},
+		{"second", "project", "arch", "build"},
+		{"base", "project", "arch", "previous"},
+		{"other-arch", "project", "other", "build"},
+		{"other-project", "other", "arch", "build"},
+	} {
+		record := &RepositoryRecord{
+			RepositoryUID: scope.uid, Project: scope.project, TargetArch: scope.arch,
+			BuildName: scope.build, State: RepositoryReady,
+		}
+		if err := m.persist(record); err != nil {
+			t.Fatal(err)
+		}
+		if err := fileutil.AtomicJSON(filepath.Join(m.RepositoryPath(record), ".repository.json"), Index{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	buildDir := filepath.Join(m.root, "repositories/project/arch/history/build")
+	for _, path := range []string{".work/interrupted", ".trash/interrupted"} {
+		if err := os.MkdirAll(filepath.Join(buildDir, path), 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.records["second"] = &RepositoryRecord{
+		RepositoryUID: "second", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryCreating,
+	}
+	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || done {
+		t.Fatalf("active cleanup = %t, %v", done, err)
+	}
+	delete(m.records, "second")
+	// Simulate a restart after some metadata was removed but content still remains.
+	if err := os.Remove(m.metaPath("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.load(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+			t.Fatalf("cleanup = %t, %v", done, err)
+		}
+	}
+	if _, err := os.Stat(buildDir); !os.IsNotExist(err) {
+		t.Fatalf("build directory still exists: %v", err)
+	}
+	for _, uid := range []string{"first", "second"} {
+		if _, ok, err := m.Get(uid); err != nil || ok {
+			t.Fatalf("removed repository %s: exists=%t, %v", uid, ok, err)
+		}
+	}
+	for _, uid := range []string{"base", "other-arch", "other-project"} {
+		if record, ok, err := m.Get(uid); err != nil || !ok || record.State != RepositoryReady {
+			t.Fatalf("unrelated repository %s: %+v, %v", uid, record, err)
+		}
+	}
+}
+
 func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 	root := t.TempDir()
 	m := &Manager{
