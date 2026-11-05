@@ -36,11 +36,18 @@ type Client interface {
 
 	UpdateBuild(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error)
 	UpdateBuildStatus(ctx context.Context, obj *ebsv1.Build) (*ebsv1.Build, error)
+	// DeleteCleanupChild deletes a direct child using the observed UID and resourceVersion.
+	DeleteCleanupChild(context.Context, string, string, string, metav1.Object) error
 }
 
 type apiClient struct{ client clientpkg.Interface }
 
 func newAPIClient(value clientpkg.Interface) Client { return &apiClient{client: value} }
+
+func (c *apiClient) DeleteCleanupChild(ctx context.Context, project, resource, name string, obj metav1.Object) error {
+	return c.client.Delete(ctx, ebsv1.SchemeGroupVersion.WithResource(resource), project, name,
+		clientpkg.DeletePreconditions{UID: obj.GetUID(), ResourceVersion: obj.GetResourceVersion()})
+}
 
 // contractError reports a request or response contract violation: invalid client input, or a server response
 // that does not match the requested resource identity. Retrying cannot fix it, so read paths classify it as a

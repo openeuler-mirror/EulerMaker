@@ -50,22 +50,14 @@ func TestInitializerRegistersNonTerminalPollingSource(t *testing.T) {
 	if value.Name() != Name {
 		t.Fatalf("controller name = %q", value.Name())
 	}
-	if polling.calls != 1 || polling.gvr != source.BuildsGVR {
+	if polling.calls != 2 || polling.gvr != source.BuildsGVR {
 		t.Fatalf("polling request = %+v", polling)
 	}
 	if polling.period != 25*time.Second {
 		t.Fatalf("poll period = %s", polling.period)
 	}
-	if polling.options.FieldSelector != nonTerminalBuildFieldSelector {
-		t.Fatalf("field selector = %q", polling.options.FieldSelector)
-	}
-	for _, phase := range []string{"Success", "Failed", "Aborted", "Skipped"} {
-		if !strings.Contains(polling.options.FieldSelector, "status.phase!="+phase) {
-			t.Fatalf("field selector %q does not exclude %s", polling.options.FieldSelector, phase)
-		}
-	}
-	if strings.Contains(polling.options.FieldSelector, "metadata.") {
-		t.Fatal("the polling filter must not depend on unsupported fields")
+	if len(polling.selectors) != 2 || polling.selectors[0] != nonTerminalBuildFieldSelector || polling.selectors[1] != "metadata.deletionTimestamp!=null" {
+		t.Fatalf("field selectors = %v", polling.selectors)
 	}
 }
 

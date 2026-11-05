@@ -6,9 +6,10 @@ Build Controller 根据 Snapshot、BuildInfo 和 RpmRepo 的状态推进 Build �
 
 职责：
 
-- 周期轮询非终态 Build，根据当前 phase/stage 和子资源状态推进构建与发布流程，记录结果与条件；观察到终态后停止调谐；
+- 周期轮询 Build，根据当前 phase/stage 和子资源状态推进构建与发布流程；终态对象停止业务推进，删除中的对象继续执行 7.7 的清理流程；
 - 按阶段幂等创建所需的 Snapshot、RpmRepo、BuildInfo，后续阶段确认直接依赖缺失时记录异常并推进到 Failed；
 - 支持重复调谐与重启恢复，提供结构化日志和指标。
+- 维护 `ebs.io/build-cleanup` finalizer，发起派生 API 资源删除并等待完成；Job 必先归档，其数据由 Job Controller 清理，本构建的仓库由 RpmRepo Controller 清理。
 
 职责边界：
 
@@ -26,8 +27,9 @@ backend/controller-manager/pkg/controllers/build/
   reconciler.go         # Sync 入口守卫、单轮时间获取与 phase/stage 分派
   phases.go             # Pending、Prepared、Processing/build、Processing/publish 的业务决策
   ensure.go             # 子资源 GET/POST、AlreadyExists 沿用、创建 Unknown 确认（仅用于创建阶段）
+  cleanup.go            # 删除分支、派生资源清理与 finalizer 移除
   status.go             # Build 状态写入前并发检查、原写入意图保存、写入与 Unknown 确认
-  client.go             # 类型化 Client、共享客户端适配、写错误分类及 GetLastPublishedBuild 查询、Build 主资源更新
+  client.go             # 类型化 Client、共享客户端适配、写错误分类、Build 查询/更新及子资源条件删除
   conditions.go         # condition 常量与 MergeCondition 纯函数
   metrics.go            # build_controller_* 指标注册
 ```
@@ -54,7 +56,7 @@ backend/controller-manager/pkg/controllers/build/
 ① 事件 / 上游状态                       ② Build Controller                    ③ 数据面
 ────────────────────────────          ────────────────────────────────        ────────────────────────────────
 Build PollingSource ──key 事件──▶   key 队列 {namespace}/{name}
- （周期分页 List 非终态 Build）           Add/Update 入队；Delete 仅日志
+ （周期分页 List Build 摘要）             非终态或删除中的对象入队；Delete 仅日志
                                              │
                                              ▼
 Snapshot/BuildInfo/RpmRepo            reconcile（仅经包内 Client）────────▶ ebs-apiserver
@@ -71,21 +73,22 @@ Snapshot/BuildInfo/RpmRepo            reconcile（仅经包内 Client）──�
 
 ### 2.3 PollingSource 装配语义
 
-- 仅注册 builds PollingSource，在 Source 启动前完成 handler 注册；通过 ListOptions 注入 2.4 的非终态过滤条件。
+- 仅注册 builds PollingSource，在 Source 启动前完成 handler 注册；按 2.4 查询摘要，放行非终态或删除中的对象。
 - Add/Update 均以 `{namespace}/{name}` 入队，包括 resourceVersion 未变化的周期 Update，以驱动等待中的 Build。
 - Delete 仅记录日志、不入队；过滤结果中消失不等于对象被物理删除。
-- reconcile 不读取 Source 内部快照，始终 GET 最新 Build；删除中的对象由 7.1 守卫短路。
+- reconcile 不读取 Source 内部快照，始终 GET 最新 Build；7.1 优先将删除中的对象转入清理分支。
 - 分页扫描、失败退避及快照管理复用公共框架，不在本控制器重复实现。
 
 ### 2.4 PollingSource API 交互样例
 
-每轮 scan 只对 `builds` 发起分页 List（`status.phase` 只支持 `=`/`==`/`!=`，故用四个 `!=` AND）：
+使用两个服务端过滤的 Build PollingSource，共享同一工作队列：业务源选择非终态对象，删除源选择所有删除中对象。两者仅取 metadata，Add/Update 全量入队，重叠 key 由队列合并：
 
 ```text
 GET /apis/ebs/v1/builds?fieldSelector=status.phase!=Success,status.phase!=Failed,status.phase!=Aborted,status.phase!=Skipped&includeFields=metadata&limit=100
+GET /apis/ebs/v1/builds?fieldSelector=metadata.deletionTimestamp!=null&includeFields=metadata&limit=100
 ```
 
-首轮不发送 continue，后续携带响应中的 `metadata.continue`，直到为空。List 响应结构为 BuildList，items 仅投影 metadata，用于入队；worker 再通过项目级 GET 获取完整对象。对象样例见 4.1，GET 路径见 3.2。
+两条查询分别完整分页，直到 `metadata.continue` 为空；worker 再 GET 最新完整对象。正常终态对象不扫描，删除中的终态对象仍入队。删除源也供 RpmRepo Controller 收敛遗留检查点。
 
 ## 三、类型化客户端与 Fake（在 build controller 内实现）
 
@@ -117,6 +120,7 @@ type Client interface {
     CreateRpmRepo(ctx context.Context, project string, obj *v1.RpmRepo) (*v1.RpmRepo, error)
     CreateBuildInfo(ctx context.Context, project string, obj *v1.BuildInfo) (*v1.BuildInfo, error)
 
+    // UpdateBuild 同时承担 metadata.finalizers 的乐观锁更新，保留 spec/status；不使用 DeleteCollection。
     // Build 写操作
     // UpdateBuildStatus 走 /status：写 Build.status，apiserver 保留旧 Build.spec
     UpdateBuildStatus(ctx context.Context, obj *v1.Build) (*v1.Build, error)
@@ -124,6 +128,8 @@ type Client interface {
 ```
 
 ### 3.2 路径约定
+
+删除分支复用已有的 `GetBuildInfo`、`GetSnapshot`、`GetRpmRepo`，仅增加条件删除直接子资源的方法；DELETE 携带所观察的 UID/resourceVersion。Build Controller 不提供 Job、OldJob、BuildGraph 的清理接口。
 
 - Project：`GET /apis/ebs/v1/projects/{project}`（Project 为集群级资源，namespace 段为空；共享 client 的 `Get` 对 `projects` 要求空 namespace）；
 - 最后一个发布成功的 Build：`GET /apis/ebs/v1/projects/{project}/builds?labelSelector=ebs.io/target-arch={arch}&fieldSelector=status.phase=Success,status.stage=publish&limit=1`（apiserver 默认降序，路径即项目作用域）；
@@ -350,9 +356,9 @@ status:
 1. **按确定性名称 GET**
    - 成功且 `metadata.deletionTimestamp` 为空：沿用现有对象，不修改 spec。
    - 成功但 `metadata.deletionTimestamp` 非空：视为该子资源不可用；本轮不推进（调用方按 7.6 「队列结果映射」的等待类返回零值 + `nil`），不重建、不覆盖、不删除，并记录日志与 `build_controller_ensure_terminating_total` 指标。
-   - NotFound：进入创建流程。
+   - NotFound：在当前阶段允许 ensure 时进入创建流程。
 2. **创建对象**
-   - 按约定 spec 执行 POST。
+   - 按约定 spec 执行 POST；结果未知时按本节的确定性名称确认与重入规则处理。
    - POST 返回 `WriteError.Outcome=Rejected` 且为 409（AlreadyExists）：优先按创建冲突处理，GET 后沿用现有对象，不修改 spec；不直接返回通用 Conflict 的 `RequeueAfter: 1s`。GET 成功后仍检查 deletionTimestamp：未删除则沿用并继续本阶段，删除中则按第 1 步等待；GET NotFound 表示并发删除，返回 `RequeueAfter: 1s`，下轮重新 ensure，本轮不再次 POST；其他 GET 错误按读取错误分类返回。
    - POST 返回 404 表示目标路由或父对象暂不可用（apiserver 版本落后、Project 尚未创建等），按临时错误退避重试：既不按 AlreadyExists 沿用，也不按永久错误收口；每次创建拒绝输出 `controller` / `key` / `kind` / `name` / `operation` / `status` / `retryable` 日志。
 3. **结果未知处理**
@@ -372,9 +378,9 @@ ensure 不推进子资源状态、不等待子资源就绪、不覆盖已存在 
 | Processing/build | GET BuildInfo，等待 Completed 或 Failed；Failed 时直接写 Failed/build，不查询 Snapshot/RpmRepo | 记录异常，不创建任何子资源，写入 Failed/build |
 | Processing/publish（仅非 single） | GET RpmRepo，判断 release.phase；不查询 Snapshot/BuildInfo | 记录异常，不创建任何子资源，写入 Failed/publish |
 
-Processing 阶段 GET 直接依赖返回 NotFound 时，输出结构化日志 `reason=ChildResourceMissing`，包含 controller、Build key/UID、phase/stage、子资源 kind/name；不重建，按第九章写入前校验与并发协议，通过一次 `/status` 写入 `phase=Failed`、保留当前 `stage`、填写 `endTime`。build 阶段写 `BuildSucceed=False/ChildResourceMissing`，publish 阶段写 `PublishSucceed=False/ChildResourceMissing`；保留其他状态字段与条件。终态写入成功（含 Unknown 确认成功）后返回业务 PermanentError，写入失败按 7.6 / 9.3 分类处理，不覆盖外部 Aborted。仅明确的 NotFound 触发此规则，读取超时、权限错误等不视为缺失。对象正在删除但仍存在时继续等待，不创建、不推进；终态或删除中的 Build 由入口守卫直接结束。
+Processing 阶段 GET 直接依赖返回 NotFound 时，输出结构化日志 `reason=ChildResourceMissing`，包含 controller、Build key/UID、phase/stage、子资源 kind/name；不重建，按第九章写入前校验与并发协议，通过一次 `/status` 写入 `phase=Failed`、保留当前 `stage`、填写 `endTime`。build 阶段写 `BuildSucceed=False/ChildResourceMissing`，publish 阶段写 `PublishSucceed=False/ChildResourceMissing`；保留其他状态字段与条件。终态写入成功（含 Unknown 确认成功）后返回业务 PermanentError，写入失败按 7.6 / 9.3 分类处理，不覆盖外部 Aborted。仅明确的 NotFound 触发此规则，读取超时、权限错误等不视为缺失。对象正在删除但仍存在时继续等待，不创建、不推进；正常终态 Build 结束业务推进；删除中的 Build 优先进入 7.7 清理分支。
 
-创建阶段的幂等边界：没有额外的创建记录时，仅凭 Pending/Prepared 无法区分“从未创建”与“创建成功但在阶段推进前被删除”。因此这些阶段的 ensure 仍允许 NotFound 后创建，不承诺识别所有删除场景；新对象使用创建时的 Project 配置。禁止的是已推进到后续阶段后的自动重建。AlreadyExists/Unknown 的确认 GET 若为 NotFound，按前述创建协议结束本轮，不在一个周期内循环 POST。
+创建阶段的幂等边界：仅凭 Pending/Prepared 无法区分“从未创建”与“创建成功但在阶段推进前被删除”，此时 ensure 允许 NotFound 后创建；新对象使用创建时的 Project 配置。已推进到后续阶段后不自动重建。AlreadyExists/Unknown 的确认 GET 若为 NotFound，结束本轮，下轮重新读取父对象及子对象，允许按相同确定性名称重试；观察到删除标记后不得再创建。
 
 本版本不巡检前序子资源，不增加 annotation 或低频全链路检查；phase/stage 仅说明此前已完成相关步骤，不保证子资源现在仍存在。子 Controller 仍需检查自身运行时依赖。
 
@@ -387,8 +393,8 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 统一 reconcile 主循环按以下顺序执行：
 
 1. 读取最新 Build。
-2. 若 Build 已处于 Success、Failed、Aborted 或 Skipped 终态，本轮直接成功返回、不再处理（`Aborted` 由外部中止流程写入，reconcile 不负责推进）。
-3. 若 `Build.metadata.deletionTimestamp` 非空（对象正在删除），本轮直接返回零值 + `nil`：不写 `Build.status`、不 ensure 子资源、不读取 RpmRepo 发布收口结果；已创建的子资源不做级联删除。服务端没有 `metadata.deletionTimestamp` 的 fieldSelector 映射，删除中的非终态 Build 仍会出现在 List，因此该守卫必须在 reconcile 入口判断。
+2. 若 `Build.metadata.deletionTimestamp` 非空，转入 7.7；该判断先于 phase/stage 校验和终态守卫，不继续正常构建流程。
+3. 若 Build 已处于 Success、Failed、Aborted 或 Skipped 终态，本轮直接成功返回（`Aborted` 由外部中止流程写入，reconcile 不负责推进）。
 4. 校验 `(phase, stage)` 组合，合法集合为 `{(Pending,""), (Prepared,""), (Processing,"build"), (Processing,"publish")}`：
    - `buildType=single` 不允许 `(Processing,"publish")`：记录并返回永久错误，不写 status、不创建 RpmRepo。
    - 非终态 phase 但不在 Pending / Prepared / Processing 内：记录未知 phase 错误，返回永久错误。
@@ -509,6 +515,48 @@ single 与非 single 的 `publish=false` 分支均不写 `PublishSucceed`，不�
 - 只有需要比轮询周期更快复查时才使用 `RequeueAfter`。
 
 
+### 7.7 Build 删除与派生 API 资源清理
+
+删除不依赖 Kubernetes 通用垃圾回收器，也不将 ownerReferences 当作自动级联删除能力。
+
+删除是现有 Build Controller 的独立 reconcile 分支，使用 2.4 的删除轮询源，不新增 Controller 或队列。删除标记优先于业务状态校验。
+
+**生命周期与范围**
+
+- apiserver 在 Build 创建时写入 `metadata.finalizers: [ebs.io/build-cleanup]`；dry-run 只返回默认值，不落库。Controller 开始正常编排前必须确认该 finalizer 存在。
+- DELETE 只标记 `metadata.deletionTimestamp`；不把 Build 改为 Aborted/Failed，不改原 phase/stage，不清空 finalizers。重复 DELETE 幂等。清理优先于业务终态守卫。
+- Build Controller 只清理自己创建的 BuildInfo、Snapshot、RpmRepo：先删除并等待 BuildInfo 消失，再删除 Snapshot、RpmRepo。BuildInfo 缺失按该直接子资源已完成处理，不跨级扫描或清理 Job、OldJob、BuildGraph。single 未创建的 RpmRepo 按 NotFound 处理。Project、Config、Script、Runner、基准 Build 及其子资源不在清理范围。
+- Build/BuildInfo Controller 不直接调用 Artifact Manager 或移除子对象 finalizer。Job Controller 负责 archive 和 OldJob 数据清理，见 [Job Controller 6.4](controller-manager~job-controller.md#64-oldjob-数据清理)。RpmRepo Controller 按构建作用域清理过程仓和发布仓；Artifact Manager 保护 current，不自动回滚发布。
+
+**直接子资源归属**
+
+- Snapshot、BuildInfo、RpmRepo 使用同 Project、同 Build 名的确定性名称；Build 名全局不复用是前提。类型化 Client 的 GET 统一校验响应类型、名称、命名空间、UID 和 resourceVersion，清理分支不重复校验；DELETE 使用读取到的 UID/resourceVersion 前置条件。
+- Job/OldJob 和 BuildGraph 的归属、分页扫描及清理预算由 BuildInfo Controller 第三章定义，Build Controller 不重复检查。
+
+**执行顺序**
+
+1. 同一 Build 的业务与删除调谐使用同一个队列 key。GET 最新 Build，确认 UID、deletionTimestamp 和 cleanup finalizer。NotFound 或 UID 改变结束旧周期；没有自身 finalizer 时不接管其他 finalizer。
+2. 停止派生资源生产，按最新对象状态清理直接子资源；读取错误保留 finalizer，NotFound 视为该子资源已不存在，删除分支不补发 CREATE。RpmRepo Controller 同时收敛已登记的 Artifact Manager 操作；其检查点只阻塞 Job/OldJob 清理，不阻塞 BuildInfo 删除标记和 BuildGraph 清理。
+3. GET 同名 BuildInfo，已经删除中则等待；否则确认 `ebs.io/buildinfo-cleanup` 后条件 DELETE，不同时编排其子资源删除。BuildInfo finalizer 独立推进 BuildGraph 与 Job/OldJob 两条清理分支，并等待两者全部消失，详见 BuildInfo Controller 第三章。DELETE 受理不等于清理完成。
+4. BuildInfo GET 或 DELETE 返回 NotFound 后，对 Snapshot、RpmRepo 发出条件 DELETE；RpmRepo 的 `ebs.io/rpmrepo-cleanup` finalizer 由其 Controller 排空在途操作、确认 CleanupReady 并完成本构建的仓库清理后移除。三个子资源共用删除处理：GET/DELETE 返回 NotFound 表示已消失，删除中或 DELETE 受理后等待后续读取确认。Build Controller 不移除子资源 finalizer。
+5. 每轮 GET 最新的直接子资源，确认 BuildInfo、Snapshot、RpmRepo 均不存在后，再 GET Build，以最新 resourceVersion 移除自身 finalizer，保留其他 finalizers 和所有 spec/status 字段。最后一个 finalizer 移除后由 apiserver 物理删除 Build。
+
+**停止派发与并发边界**
+
+- 不使用跨 Controller 的进程内锁。各 Controller 由 workqueue 串行处理自身同一 key 的业务与删除调谐；不同 Controller 通过 deletionTimestamp、RpmRepo 排空确认和 finalizer 协作。发布扫描只将其他候选入队，不能在当前 key 内推进另一个 RpmRepo。
+- Controller 根据父对象状态控制生产。Build Controller 每轮读取直接子资源；BuildInfo Controller 重新完整扫描 Job/OldJob，不复用上轮分页快照。apiserver 保留 BuildGraph 的 owner UID 校验，不在通用创建路径重复读取父对象。
+- Artifact Manager 操作必须先确认 RpmRepo 检查点写入，再提交请求。删除时观察已登记的操作，不激活 Prepared 发布，不新建或重放物化/发布请求；排空规则及仓库删除接口统一见 [RpmRepo 删除协议](controller-manager~rpmrepo-controller.md#删除收敛与父资源协作)。失败/中止业务终态保留检查点，删除源负责继续调谐。
+- 子资源创建不持久化请求登记，正常调谐依靠确定性名称、AlreadyExists 身份核验及完整扫描恢复。删除时以当前可见对象为准；请求超时、取消或进程重启不证明服务端已停止处理。接受极端故障下 CREATE 在最终扫描之后落库、导致父对象删除后残留子资源的风险，由运维核对归属后清理。重复扫描可降低风险，但不是跨存储创建屏障，也不承诺零残留。
+- 首版要求单 active Controller Manager；apiserver 可多实例，但不负责分布式生产者互斥。外部业务不得绕过 Controller 创建派生资源或直接提交 Artifact Manager 任务。
+- Job 归档使用已有的源 archive finalizer、冻结快照和 OldJob 删除凭据接力。新 retain 检查父 Build；已登记迁移继续，删除将 retain 升级为 delete。源 Job 消失前归档必须已持久化并对 Search 可见，因此按 Jobs 后 OldJobs 扫描，不形成两边同时不可见的窗口。
+
+**错误与恢复**
+
+- DELETE 返回 404 为成功；409 结束该对象的旧决策，下轮 GET 后重算。Unknown 后 GET：404 或 UID 已变化说明旧对象已消失；同 UID 仍存在时重新核验后重试，不只替换 resourceVersion 重放旧请求。
+- 直接子资源读取或删除失败、对象仍删除中或含其它 finalizer、身份冲突，都不移除 Build finalizer。临时错误按 7.6 退避；确定性权限/契约错误记录结构化告警并保留删除对象，后续轮询允许配置修复后继续。下级中止、归档、数据清理由各自 finalizer 阻塞，不由 Build 越级处理。不得到期强制释放 finalizer。
+- 移除 finalizer 的 Unknown 按原意图确认：同 UID 且自身 finalizer 已不存在，或 Build 已不存在，视为完成；UID 不同则结束旧对象周期，不修改新对象；其他情况基于最新对象重新调谐。不清空其他 finalizer，不恢复旧业务状态。
+- 不新增删除 phase/stage 或业务结果 Condition。删除状态由 deletionTimestamp/finalizers 表达；成功发起子资源删除记录 `ChildDeletionRequested`，完成记录 `BuildCleanupCompleted`，异常由框架记录；正常等待不逐轮打印日志。进度从当前对象重建，不保存内存完成标记。
+
 ## 八、条件与时间
 
 ### 8.1 Conditions 生命周期
@@ -571,6 +619,8 @@ func MergeCondition(
 BaseController 保证同一队列键 `{namespace}/{name}` 在任一时刻只由一个 worker 调和；不同 Build 可以并发。本控制器不维护跨 key 的共享业务状态，队列键之外没有需要加锁的内存结构。
 
 ### 9.2 乐观并发
+
+本节的终态/删除中守卫适用于正常业务状态写入；删除 finalizer 的 metadata 更新使用 7.7 的专用确认条件，不能被该守卫提前跳过。
 
 Build、子控制器与外部中止流程都可能更新同一对象。本控制器必须：
 
@@ -637,21 +687,25 @@ Build Controller 所需最小权限：
 builds:         get, list, update
 builds/status:  update
 projects:       get
-snapshots:      get, create
-rpmrepos:       get, create
-buildinfos:     get, create
+snapshots:      get, create, delete
+rpmrepos:       get, create, delete
+buildinfos:     get, create, delete
+buildgraphs:    get, delete
+jobs:           get, list, delete
+jobs/abort:     create
+oldjobs:        get, list, delete
 ```
 
-控制器调用范围限于上述操作：只读 Project（`projects: get`）；允许更新 Build.status，并仅在 incremental 的 Pending 阶段更新 Build.spec.packages；不创建或删除 Build，不写子资源的 status，不访问 Job / Runner。
+控制器只读 Project；正常流程允许更新 Build.status，并仅在 incremental 的 Pending 阶段更新 Build.spec.packages。删除流程允许移除自身 Build finalizer、按 7.7 中止 Job 和删除派生资源；不直接写子资源 status，不访问 Runner，不发送 Build DELETE。
 
 身份侧：复用 Controller Manager 的 mTLS 客户端身份，组件级接口授权尚未实现，认证及部署边界见 [apiserver 设计](ebs-apiserver.md#内部-mtls-认证与授权)；Build Controller 不调用发布后端、不持有发布凭据，发布后端的调用身份由 RpmRepo Controller 负责。
 
 ## 十二、重启与可用性
 
-本控制器不保存进程内的业务状态，全部进度都持久化在 `Build.status`、增量构建的 `Build.spec.packages` 与子资源对象中，因此：
+业务进度由 `Build.status`、增量构建的 `Build.spec.packages`、deletionTimestamp/finalizers 与子资源对象恢复。工作队列单键串行与公平批处理游标仅作进程内调度，不作为清理完成证据，因此：
 
 - 启动时 manager 先运行 PollingSource 并通过 `waitForSync` 后才启动 worker，未完成首次同步前不产生 reconcile；
-- 重启首轮扫描将非终态 Build 入队，由 worker 数控制并发，不额外分批或限速。后续入队遵循 2.3；收敛时间取决于队列积压、API 可用性及子资源进度，不保证在一个 poll 周期内完成。
+- 重启首轮扫描将非终态及删除中的 Build 入队，由 worker 数控制并发；删除顺序见 7.7。后续入队遵循 2.3；收敛时间取决于队列积压、API 可用性及子资源进度，不保证在一个 poll 周期内完成。
 - 重启会清空框架的快速重试计数与慢速指数退避状态（BaseController 的内存态）；业务状态与终态判定不受影响，但同一 key 的退避会从初始值重新开始，因此重启后可能出现短暂的更密集重试。
 
 崩溃点与重启后的结论：
@@ -664,7 +718,7 @@ buildinfos:     get, create
 | 崩在读 RpmRepo 发布收口结果前后 | 重启后按 7.5 直接读取 RpmRepo，缺失时按第六章写 Failed/publish；`release.phase` 未到 `Ready` / `Failed` 则继续等待，已收口则按 7.5 写入 Build 终态；观察到 Build 终态后不再更新 |
 | 崩在终态写入之前 | 按当前 phase/stage 重算，写入与未崩溃时相同的终态；观察到终态后不再更新 |
 
-可用性：本轮仅运行单个 active controller-manager 实例，未实现 leader election。多副本不会破坏 Build 状态（依赖 `resourceVersion` 乐观并发），但会产生重复 GET、Conflict 与指标噪声，不等价于完整高可用方案。
+可用性：本轮仅运行单个 active controller-manager 实例，未实现 leader election。普通状态写入使用 resourceVersion 防止覆盖，但删除协调不支持多个活跃控制器；启用删除清理后不得把多副本视为受支持部署，需完成 7.7 的跨实例协调后再扩展。
 
 本控制器不实现自定义 `HealthChecker`：对象是否就绪属于业务状态，不应令进程 `/healthz` 失败；Source 同步与陈旧状态由 manager 的 `/readyz` 负责。
 
@@ -678,6 +732,11 @@ buildinfos:     get, create
 ## 十四、测试计划
 
 ### 14.1 单元测试
+
+- 删除生命周期：创建即有 finalizer；终态 Build 删除仍入队；正常终态不入队；删除分支先于状态校验，无业务状态覆盖。
+- 直接子资源清理：覆盖 single/full、BuildInfo 缺失、Snapshot/RpmRepo 缺失、归属冲突、UID/resourceVersion 变化、其他 finalizer 阻塞及删除失败恢复；BuildInfo 缺失时不调用下级资源接口。
+- 恢复与竞态：重启后重新 GET 直接子资源；DELETE Unknown 分别模拟已落库/未落库，下轮重新 GET；移除 finalizer 的 Unknown 确认原意图；最终 GET 的 resourceVersion 改变时放弃旧决策。在途服务端写入和重启恢复另按 14.3 验收。
+- 边界：Build 只清理直接创建的 BuildInfo、Snapshot、RpmRepo；Job/OldJob 数据清理由下级 Controller 负责，通过 BuildInfo finalizer 体现进度；仓库清理通过 RpmRepo finalizer 体现进度。Build 不直接操作文件，不删除基准构建资源。
 
 - 状态机：Pending → Prepared → Processing/build → Processing/publish → 终态，覆盖各终态分支与等待态；
 - 状态机守卫：非法 `(phase, stage)` 组合（如 `Processing` + 空 stage、`Pending` + `publish`）断言不调用 `UpdateBuildStatus`、对象保持原 phase/stage，并返回零值 + `controller.NewPermanentError`；
@@ -706,7 +765,7 @@ buildinfos:     get, create
 - single 多包输入：覆盖多个包名及重复包名，断言 Snapshot 仅包含去重后命中的仓库并保持 Project 列表顺序；BuildInfo Completed 后按 7.4 汇总所有目标仓库的 spec 结果；
 - Project 读取失败：`GetProject` 返回 NotFound 时断言不调用 `CreateSnapshot`、不写 `Build.status`，且返回零值 + `controller.NewPermanentError`；返回临时错误时断言零值 + 原始错误；
 - BuildInfo 创建输入：覆盖所有构建类型、空引导仓及 Prepared 创建阶段重入，断言创建前读取 Project 与 Config/build-target，按 distro/arch 固化 image，并深拷贝 bootstrapRepos、原样复制 buildPayload；覆盖空 buildPayload，确认 Project 后续变更不影响已创建对象；修改创建对象不影响 Project。已有 BuildInfo 不因 Project 配置变化覆盖输入、不为其读取 Project；AlreadyExists 沿用服务端对象及其镜像；已有 BuildInfo 不重新读取 Config/build-target。配置缺失、读取失败、无对应镜像时不创建 BuildInfo，保持 Prepared、不写失败终态；修复后重新调和可继续。读取 Project 失败不调用 CreateBuildInfo、不写 Build.status；创建使用当前 Project 配置；
-- 删除中守卫：`deletionTimestamp` 非空时断言不调用 `UpdateBuildStatus`、不调用 `Create`，且返回零值 + `nil`；
+- 删除中守卫：`deletionTimestamp` 非空时断言转入 7.7，不调用 `UpdateBuildStatus` 或子资源 Create；清理完成前保留 finalizer，完成后仅移除自身 finalizer；
 - PollingSource：非终态 fieldSelector 生效、Add/Update/Delete 事件映射正确、List 失败时退避重试且不替换旧快照；
 - conditions 生命周期：只写 `BuildSucceed` 与 `PublishSucceed`，未确定时不出现，等待/重试阶段不写条件，`message` 取固定短语。
 - BuildInfo 配置失败：`phase=Failed` 时，不论 specResults、buildType、publish，均写 `Build.phase=Failed/stage=build` 与 `BuildSucceed=False/BuildPayloadParseFailed`，不进入 publish、不写 `PublishSucceed`；覆盖状态写入 Conflict/Unknown 与外部 Aborted 竞态。
@@ -722,6 +781,32 @@ buildinfos:     get, create
 - 崩溃恢复：分别模拟崩在 ensure 之间、崩在 `/status` 之前、崩在 `/status` 结果未知之后、崩在读 RpmRepo 发布收口结果前后、崩在终态写入前，断言重启后收敛到同一终态，且不产生重复子资源；
 - 启动打点：断言进程内首次 reconcile 成功时只输出一次 `reconciled-after-start` 日志；
 - 可观测性：断言第十章列出的指标已注册，且 Conflict、Unknown 等场景对应计数递增。
+
+### 14.3 删除协议验收
+
+单元测试使用带 UID/resourceVersion 校验的 Fake，主资源更新保留 status，分页查询保留全部候选；不能用始终返回空列表或无条件成功的删除替身证明完整清理。
+
+| 场景 | 验收要求 | 验证层级 |
+|------|----------|----------|
+| 终态 Build 删除、single 缺少 RpmRepo | 同一队列进入删除分支；保留业务状态及其它 finalizer | Controller 单元测试 |
+| BuildInfo 存在且持有 cleanup finalizer | 仅发起 BuildInfo DELETE 并等待，不与 BuildInfo Controller 并行编排 Job 删除 | Controller 单元测试 |
+| BuildInfo 缺失 | 继续处理 Snapshot/RpmRepo，不跨级访问 Job、OldJob、BuildGraph | Controller 单元测试 |
+| 子资源在 GET 后、DELETE 前消失 | BuildInfo、Snapshot、RpmRepo 的 DELETE 404 均按已消失处理，当轮继续后续清理 | Controller 单元测试 |
+| 子资源条件删除 | 统一 Client 传递正确资源路径及观察到的 UID/resourceVersion | Client 单元测试 |
+| BuildInfo 已不存在但图仍在 | Build 不跨级清理图；该异常残留由运维核对 owner 后处理 | 运维异常场景验收 |
+| 子对象仍删除中、其它 finalizer 阻塞 | 保留父 finalizer，等待对象真正消失；不调用 AM 或移除子对象 finalizer | Controller 单元测试 |
+| Job 数据清理失败、OldJob 等待源迁移 | Job Controller 重试；Build 保持删除中，恢复后继续收敛 | 跨控制器集成测试 |
+| Build 删除时已有 retain 迁移 | 升级为 delete，完成归档后由 OldJob 清理；不重复归档或形成等待环 | etcd/ES 集成测试 |
+| Job 尚未归档、ES 故障 | 为删除建立归档意图，ES 恢复前保留源 Job 和父 finalizer | etcd/ES 集成测试 |
+| 最终 Build 版本改变、DELETE/移除 finalizer 结果未知 | 放弃旧决策，重新读取；确认条件按 7.7 | Controller 单元测试 |
+| Snapshot/BuildInfo/RpmRepo/归档生产者观察到删除 | 停止新操作；本地排空仅在所有生产者退出后完成 | 跨控制器单元测试及 race 检测 |
+| 普通 CREATE 在客户端取消后延后落库 | 最终扫描前可见则按归属清理；扫描后才落库可能残留，不承诺阻塞父 finalizer | 可暂停服务端落库的故障注入 |
+| 清理期间重启 Controller Manager | 根据删除标记重新扫描，等待持久化 RpmRepo 检查点，不使用旧分页或内存完成标记 | 进程重启集成测试 |
+| ES 写入已确认但旧 PIT 尚不可见 | 新建扫描会话并验证 Search 可见性，不能提前释放 | 实际 ES 集成测试 |
+| 发布扫描从 A 的 key 选择 B，B 同时进入删除 | 将 B 入队，在 B 自身 key 中重新读取删除状态，不以 A 的状态代替 | 并发故障注入 |
+| 重复 DELETE、最后一个 finalizer 移除 | 仅实际删除触发占用释放；dry-run 不落库、不释放占用 | apiserver 集成测试 |
+
+单元测试覆盖本地协调、检查点排空和批次公平性。真实 etcd/ES、网络延迟及进程崩溃场景仍需上述集成验收，不以 Fake 测试通过代替；未知写入的保证边界见 7.7。
 
 ## 十五、运行装配
 

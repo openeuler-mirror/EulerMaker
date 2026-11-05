@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,20 +53,64 @@ type fakeHooks struct {
 	getBuildInfo          func(project, name string) (*ebsv1.BuildInfo, error)
 	createBuildInfo       func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error)
 	lastPublished         func(project, targetArch string) (*ebsv1.Build, error)
+	deleteCleanupChild    func(project, resource, name string, obj metav1.Object) error
 }
 
 // fakeAPI is an in-memory implementation of Client that also records every call, so tests can assert the
 // exact API interaction of one reconcile round.
 type fakeAPI struct {
-	mu         sync.Mutex
-	hooks      fakeHooks
-	projects   map[string]*ebsv1.Project
-	builds     map[string]*ebsv1.Build
-	snapshots  map[string]*ebsv1.Snapshot
-	rpmRepos   map[string]*ebsv1.RpmRepo
-	buildInfos map[string]*ebsv1.BuildInfo
-	revision   int
-	calls      []string
+	mu            sync.Mutex
+	hooks         fakeHooks
+	projects      map[string]*ebsv1.Project
+	builds        map[string]*ebsv1.Build
+	snapshots     map[string]*ebsv1.Snapshot
+	rpmRepos      map[string]*ebsv1.RpmRepo
+	buildInfos    map[string]*ebsv1.BuildInfo
+	revision      int
+	calls         []string
+	cleanupWrites []string
+	cleanupFail   string
+}
+
+func (f *fakeAPI) DeleteCleanupChild(_ context.Context, project, resource, name string, obj metav1.Object) error {
+	f.cleanupWrites = append(f.cleanupWrites, resource)
+	if f.hooks.deleteCleanupChild != nil {
+		return f.hooks.deleteCleanupChild(project, resource, name, obj)
+	}
+	k := key(project, name)
+	var current metav1.Object
+	switch resource {
+	case "buildinfos":
+		current = f.buildInfos[k]
+	case "snapshots":
+		current = f.snapshots[k]
+	case "rpmrepos":
+		current = f.rpmRepos[k]
+	default:
+		return fmt.Errorf("unexpected direct child: %s", resource)
+	}
+	if current.GetUID() != obj.GetUID() || current.GetResourceVersion() != obj.GetResourceVersion() {
+		return fmt.Errorf("stale deletion")
+	}
+	if resource == f.cleanupFail {
+		return fmt.Errorf("injected deletion error")
+	}
+	if resource == "buildinfos" {
+		now := metav1.Now()
+		current.SetDeletionTimestamp(&now)
+		return nil // The BuildInfo Controller owns descendant cleanup and finalization.
+	}
+	if resource == "rpmrepos" && slices.Contains(current.GetFinalizers(), ebsv1.RpmRepoCleanupFinalizer) {
+		now := metav1.Now()
+		current.SetDeletionTimestamp(&now)
+		return nil
+	}
+	if resource == "snapshots" {
+		delete(f.snapshots, k)
+	} else {
+		delete(f.rpmRepos, k)
+	}
+	return nil
 }
 
 func newFakeAPI() *fakeAPI {
@@ -240,6 +285,7 @@ func (f *fakeAPI) commitBuild(request *ebsv1.Build) (*ebsv1.Build, error) {
 	}
 	next := stored.DeepCopy()
 	next.Spec = request.DeepCopy().Spec
+	next.Finalizers = append([]string(nil), request.Finalizers...)
 	next.ResourceVersion = f.nextRevision()
 	f.builds[key(next.Namespace, next.Name)] = next
 	return next.DeepCopy(), nil
@@ -406,13 +452,15 @@ func (f *fakeAPI) UpdateBuild(_ context.Context, request *ebsv1.Build) (*ebsv1.B
 
 // fakePollingFactory records the polling source request of an initializer.
 type fakePollingFactory struct {
-	gvr     schema.GroupVersionResource
-	period  time.Duration
-	options metav1.ListOptions
-	calls   int
+	selectors []string
+	gvr       schema.GroupVersionResource
+	period    time.Duration
+	options   metav1.ListOptions
+	calls     int
 }
 
 func (f *fakePollingFactory) ForResource(gvr schema.GroupVersionResource, period time.Duration, options metav1.ListOptions) (source.Source, error) {
+	f.selectors = append(f.selectors, options.FieldSelector)
 	f.gvr, f.period, f.options = gvr, period, options
 	f.calls++
 	return &fakeSource{}, nil
@@ -459,6 +507,7 @@ func newBuild(project, name string, buildType ebsv1.BuildType, packages []string
 		TypeMeta: metav1.TypeMeta{APIVersion: "ebs/v1", Kind: "Build"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: project, UID: types.UID("build-uid-" + name), ResourceVersion: "10", Generation: 3,
+			Finalizers: []string{ebsv1.BuildCleanupFinalizer},
 			Labels: map[string]string{
 				ebsv1.BuildTargetArchLabel: "aarch64",
 				ebsv1.BuildTypeLabel:       string(buildType),

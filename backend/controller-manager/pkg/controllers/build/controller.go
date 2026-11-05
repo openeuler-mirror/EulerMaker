@@ -77,6 +77,15 @@ func Initializer(config Config) manager.InitFunc {
 		}
 		value, err := New(builds, newAPIClient(init.Dependencies.Client), clock.RealClock{}, config,
 			controller.WithSlowRetry(init.Config.SlowRetryInitial, init.Config.SlowRetryMax, init.Config.SlowRetryJitter))
+		if err != nil {
+			return nil, false, err
+		}
+		deleting, err := init.Dependencies.PollingFactory.ForResource(source.BuildsGVR, config.PollPeriod,
+			metav1.ListOptions{FieldSelector: "metadata.deletionTimestamp!=null"})
+		if err != nil {
+			return nil, false, err
+		}
+		err = deleting.AddEventHandler(source.ResourceEventHandlerFuncs{AddFunc: value.onAdd, UpdateFunc: value.onUpdate})
 		return value, err == nil, err
 	}
 }

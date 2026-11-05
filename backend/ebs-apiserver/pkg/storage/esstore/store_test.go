@@ -325,6 +325,13 @@ func TestStatusFieldSelectors(t *testing.T) {
 		wantErr  bool
 	}{
 		{
+			name:     "deleting builds",
+			resource: "build",
+			selector: "metadata.deletionTimestamp!=null",
+			want:     []string{`"exists"`, `"data.metadata.deletionTimestamp"`},
+			wantNot:  []string{`"null"`},
+		},
+		{
 			name: "deleting rpmrepos", resource: "rpmrepo", selector: "metadata.deletionTimestamp!=null",
 			want: []string{`"exists"`, `"data.metadata.deletionTimestamp"`}, wantNot: []string{`"null"`},
 		},

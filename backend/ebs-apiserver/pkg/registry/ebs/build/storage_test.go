@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -20,6 +21,16 @@ import (
 type fakeBuildStorage struct {
 	build   *ebsv1.Build
 	updates int
+}
+
+func TestBuildCleanupFinalizerDefault(t *testing.T) {
+	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
+	build := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Finalizers: []string{"another/controller"}}}
+	strategy.PrepareForCreate(context.Background(), build)
+	strategy.PrepareForCreate(context.Background(), build)
+	if !slices.Equal(build.Finalizers, []string{"another/controller", ebsv1.BuildCleanupFinalizer}) {
+		t.Fatalf("finalizers = %v", build.Finalizers)
+	}
 }
 
 func TestBuildPublishCreateContract(t *testing.T) {
