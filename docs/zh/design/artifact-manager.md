@@ -1568,7 +1568,7 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 
 文件删除不持 Store 全局锁；成功后加锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
 
-上层接入契约：Job 删除先归档到 OldJob，源 Job 不调用本接口。只有删除中的 OldJob，确认源迁移完成、停止写入及输入使用者排空后，由 Job Controller 调用本接口；204 确认后移除 OldJob 的 `ebs.io/job-artifacts-cleanup`。失败或未知时保留 OldJob 和 finalizer，允许幂等重试。apiserver 不直接连接 Artifact Manager。数据清理后 API 对象可能暂时仍在，不回滚重建文件；dry-run 不调用本接口。
+上层接入契约：Job 删除先归档到 OldJob，源 Job 不调用本接口。只有删除中的 OldJob，确认源迁移完成、停止写入及输入使用者排空后，由 Job Controller 调用本接口；204 确认后移除 OldJob 的 `ebs.io/job-artifacts-cleanup`。失败或未知时保留 OldJob 和 finalizer，允许幂等重试。apiserver 不直接连接 Artifact Manager，BuildInfo Controller 编排 Job/OldJob 删除，Build Controller 等待 BuildInfo 清理完成；二者不直接调用数据清理接口。数据清理后 API 对象可能暂时仍在，不回滚重建文件；dry-run 不调用本接口。
 
 源 Job 默认带 `ebs.io/job-archive`，迁移意图另外持久化：retain 保留 OldJob 和数据，delete 继续删除 OldJob。两种情况都不在源 Job 分支调用本接口；OldJob 数据删除须等源 Job 消失且归档已确认，迟到归档请求由持久化删除凭据阻断。协议统一见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)，不能从普通 DELETE 或 Watch 删除事件推断归档已完成。
 
@@ -1591,9 +1591,9 @@ DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/r
 - 逐层核验父目录，拒绝符号链接父目录；使用 `os.Root` 删除，子项符号链接仅解除链接，成功后同步父目录。数据根目录无法打开属于存储故障，不能当作仓库不存在。
 - 中途失败、请求超时或服务重启后，按同一作用域再次 DELETE 继续清理；不要求元数据完整存在，也不依赖内存中的完成标记。接口不阻止确认后的新建，停止提交由上层协议保证。
 
-调用方接入契约：RpmRepo Controller 应只在 RpmRepo 删除中且已写 `CleanupReady=True`、两个 transition 均为空时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
+RpmRepo Controller 只在 RpmRepo 删除中且已写 `CleanupReady=True`、两个 transition 均为空时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
 
-接口测试覆盖多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界。
+测试覆盖多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界；Controller 测试覆盖确认完成前保留 finalizer，以及完成后的 Conflict/Unknown 重入。
 
 ## 十四、与 Job Status 的关系
 

@@ -688,9 +688,33 @@ Content-Type: application/json
 - 中止与绑定、Runner 完成、Job Controller 写 Failed 并发；终态第一写入获胜，PUT/PATCH 均不能覆盖终态。
 - 中止响应丢失后的 GET 确认和同 UID 重试；返回对象保留 runner，使已分配 Job 的 Watch 能感知 Aborted。
 
+## Build 删除 finalizer
+
+Build 创建时由服务端加入 `ebs.io/build-cleanup` finalizer，保留调用方其它合法 finalizer；DELETE 和 DeleteCollection 的逐对象删除只设置 deletionTimestamp，含该 finalizer 时不物理删除。重复删除不改变原构建结果；带删除标记的成功响应表示受理，不表示派生资源已清理。
+
+Controller Manager 通过带 resourceVersion 的 Build 主资源更新移除自身 finalizer，保留 spec/status 与其它 metadata；普通更新仍禁止修改 status。删除中禁止更改 spec、清除 deletionTimestamp 或新增 finalizer。最后一个 finalizer 被移除时走实际删除及占用释放回调；仅标记删除不能释放非终态 Build 的目标占用。已终态 Build 的占用此前按终态规则释放，不重新获取。Gateway 不开放 Build PUT/PATCH，所以用户不能借该入口绕过清理。
+
+完整清理流程由 [Build Controller 7.7](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理) 定义：服务端不在 DELETE 请求中同步遍历子对象，也不调用 Artifact Manager。没有通用 ownerReferences 垃圾回收能力，不把 propagationPolicy 解释为已实现的级联承诺。
+
+BuildInfo 创建时同样加入 `ebs.io/buildinfo-cleanup`。BuildInfo Controller 持有该 finalizer，清理所属 Job、OldJob、BuildGraph 后通过主资源 Update 移除；DELETE 不改变业务终态。单独删除 BuildInfo 不删除父 Build；删除期间由 Controller 停止该对象的派发与图生产。
+
+派生资源生产与清理由 Controller 协调：
+
+- Controller 读取父对象状态，观察到删除标记后停止创建子资源和启动新的仓库操作；apiserver 不在通用子资源创建路径重复读取父 Build/BuildInfo。
+- BuildGraph 保留原有 BuildInfo owner UID 和删除状态校验，用于确认资源归属。
+- RpmRepo `/status` 的 `CleanupReady=True` Condition 确认不可撤销，仅允许 `True/reason=OperationsDrained`，写入时 repository/release transition 必须均为空；之后不得删除、改为非 True 或登记新 transition，condition type 不允许重复。
+- 停止生产、等待已有仓库操作以及重复扫描由 Controller 完成，边界见 [Build Controller 7.7](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。
+- Job 新 retain 意图检查父 Build，已有迁移及 delete 归档不受阻断；归档仍使用下文的源 finalizer 和 OldJob 删除凭据恢复。
+
+RpmRepo 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer，DELETE 仅设置删除标记；主资源更新仅在旧对象已删除中、CleanupReady=True 且两个 transition 均为空时允许移除此 finalizer，`/status` 保留 finalizer。RpmRepo Controller 负责向 Artifact Manager 确认本构建仓库清理完成后移除；apiserver 不直接连接 Artifact Manager。
+
+Build/BuildInfo/RpmRepo 的初始 mapping 包含 `data.metadata.deletionTimestamp`，支持删除轮询的 `metadata.deletionTimestamp!=null`。BuildGraph 清理不等待 Job；Job/OldJob 清理前须观察到 RpmRepo 的 `CleanupReady=True` Condition 确认，不能仅根据检查点暂时为空推断生产已经停止。
+
+验证覆盖：创建默认值与 dry-run；重复 DELETE；终态删除；删除中 spec 不变；metadata-only 移除 finalizer 不影响 status；最后一个 finalizer 移除时删除及占用释放。并发与恢复需执行 [Build Controller 删除协议验收](controller-manager~build-controller.md#143-删除协议验收)，接受极端故障下迟到创建导致子资源残留，不承诺跨存储的原子删除。内部授权仍沿用组件 mTLS 边界，不将尚未实现的细粒度授权描述为现有保证。
+
 ## RpmRepo 删除 finalizer
 
-RpmRepo 创建时加入 `ebs.io/rpmrepo-cleanup`；DELETE 只设置删除标记。主资源更新仅在旧对象已删除中、`CleanupReady=True` 且两个 transition 均为空时允许移除此 finalizer，`/status` 保留 finalizer。确认条件不可撤销，不允许重复类型或登记新 transition。初始 mapping 为 `data.metadata.deletionTimestamp` 建立 date 索引，支持删除轮询。Controller 负责排空和移除，不删除仓库文件。
+RpmRepo 创建时加入 `ebs.io/rpmrepo-cleanup`；DELETE 只设置删除标记。主资源更新仅在旧对象已删除中、`CleanupReady=True` 且两个 transition 均为空时允许移除此 finalizer，`/status` 保留 finalizer。确认条件不可撤销，不允许重复类型或登记新 transition。初始 mapping 为 `data.metadata.deletionTimestamp` 建立 date 索引，支持删除轮询。Controller 负责排空、确认仓库文件清理并移除 finalizer，详见 [RpmRepo Controller 删除协议](controller-manager~rpmrepo-controller.md#删除收敛与父资源协作)。
 
 ## Job 删除与归档 finalizer
 
@@ -759,7 +783,7 @@ oldjobs 复用 Job/JobList，不新增 Go 类型或 GVK。discovery 声明 get/l
 | action | 登记入口 | OldJob 处理 |
 | --- | --- | --- |
 | retain | 历史 archive 策略首次调用 POST archive | 迁移后保留，直到显式 DELETE OldJob |
-| delete | 普通 Job DELETE 或历史 delete | 迁移后继续删除 OldJob |
+| delete | 普通 Job DELETE、历史 delete 或 Build 删除 | 迁移后继续删除 OldJob |
 
 首次 retain 要求源 Job 终态、endTime 非零、未删除，并检查 build-name 对应的父 Build 存在且未删除。已有 delete 意图的归档不检查父 Build 是否仍存在。已有意图恢复不受父对象删除阻断。
 
@@ -835,7 +859,7 @@ OldJob 不设置 TTL。DELETE 不判断父 Build 或保留期，只执行生命�
 | ES 成功、失败、响应丢失 | 冻结快照幂等；未知时保留源对象；不凭同名或 phase 确认 |
 | 生命周期版本变化 | OldJob 使用 ES 版本；快照摘要不受生命周期 metadata 变化影响；删除标记不被旧归档请求覆盖 |
 | 其它 finalizer 阻塞源删除 | 不清空其它条目；OldJob 提前删除仍等待迁移完成 |
-| 父 Build 删除中或缺失 | 拒绝新 retain 意图，允许已登记意图恢复及删除所需归档 |
+| Build 删除及父 Build 缺失 | 允许删除所需的归档，已有 retain 升级 delete；最终扫描 OldJob，不形成等待环 |
 | 非终态 Job 删除、ES 持续故障 | DELETE 返回 409 且不写入删除意图，上层先中止并确认终态；ES 故障保留源对象，不跳过归档 |
 | OldJob DELETE 已受理、源收尾前后重启 | 删除标记作为持久化接力；源消失后 OldJob 继续清理，不遗留未删除归档 |
 | retain 迁移完成与 OldJob 最终删除 | 源删除后 etcd 不保留完整快照；OldJob 删除正文，保留轻量删除凭据 |
