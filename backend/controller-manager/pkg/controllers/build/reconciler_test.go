@@ -17,12 +17,29 @@ func TestSyncIgnoresMissingAndFinishedBuilds(t *testing.T) {
 		name  string
 		build *ebsv1.Build
 	}{
-		{name: "missing build"},
-		{name: "success", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)},
-		{name: "single success", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStageBuild)},
-		{name: "failed", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildFailed, ebsv1.BuildStageBuild)},
-		{name: "skipped", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSkipped, ebsv1.BuildStagePublish)},
-		{name: "aborted", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildAborted, "")},
+		{
+			name: "missing build",
+		},
+		{
+			name:  "success",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish),
+		},
+		{
+			name:  "single success",
+			build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStageBuild),
+		},
+		{
+			name:  "failed",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildFailed, ebsv1.BuildStageBuild),
+		},
+		{
+			name:  "skipped",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSkipped, ebsv1.BuildStagePublish),
+		},
+		{
+			name:  "aborted",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildAborted, ""),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeAPI()
@@ -68,11 +85,26 @@ func TestSyncRejectsInvalidPhaseStageCombinations(t *testing.T) {
 		name  string
 		build *ebsv1.Build
 	}{
-		{name: "pending publish", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, ebsv1.BuildStagePublish)},
-		{name: "prepared build", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, ebsv1.BuildStageBuild)},
-		{name: "processing without stage", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, "")},
-		{name: "single publish", build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish)},
-		{name: "unknown phase", build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPhase("Bogus"), "")},
+		{
+			name:  "pending publish",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPending, ebsv1.BuildStagePublish),
+		},
+		{
+			name:  "prepared build",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, ebsv1.BuildStageBuild),
+		},
+		{
+			name:  "processing without stage",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildProcessing, ""),
+		},
+		{
+			name:  "single publish",
+			build: withPhaseStage(newBuild("project-a", "build-a", "single", []string{"gcc"}), ebsv1.BuildProcessing, ebsv1.BuildStagePublish),
+		},
+		{
+			name:  "unknown phase",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPhase("Bogus"), ""),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeAPI()
@@ -187,5 +219,17 @@ func TestTerminalBuildReconcileIsIdempotent(t *testing.T) {
 	}
 	if second := api.build("project-a", "build-a"); second.ResourceVersion != first.ResourceVersion {
 		t.Fatal("terminal Build was updated again")
+	}
+}
+
+func TestSplitKeyRejectsIncompleteKeys(t *testing.T) {
+	for _, key := range []string{"", "build-a", "project-a/", "/build-a", "project-a/build-a/extra"} {
+		if _, _, ok := splitKey(key); ok {
+			t.Fatalf("key %q must be rejected", key)
+		}
+	}
+	project, name, ok := splitKey("project-a/build-a")
+	if !ok || project != "project-a" || name != "build-a" {
+		t.Fatalf("project=%q name=%q ok=%v", project, name, ok)
 	}
 }

@@ -33,13 +33,17 @@ var (
 type fakeSource struct{ handler source.ResourceEventHandler }
 
 func (s *fakeSource) Name() string { return "builds" }
+
 func (s *fakeSource) AddEventHandler(handler source.ResourceEventHandler) error {
 	s.handler = handler
 	return nil
 }
+
 func (s *fakeSource) Run(context.Context) error { return nil }
-func (s *fakeSource) HasSynced() bool           { return true }
-func (s *fakeSource) Ready() bool               { return true }
+
+func (s *fakeSource) HasSynced() bool { return true }
+
+func (s *fakeSource) Ready() bool { return true }
 
 type fakeHooks struct {
 	getBuildTargetContent func() (*ebsv1.BuildTargetContent, error)
@@ -560,22 +564,11 @@ func repoNames(repos []ebsv1.PackageRepo) []string {
 
 func findCondition(t *testing.T, conditions []metav1.Condition, condType string) metav1.Condition {
 	t.Helper()
-	for _, condition := range conditions {
-		if condition.Type == condType {
-			return condition
-		}
+	if condition, ok := testCondition(conditions, condType); ok {
+		return condition
 	}
 	t.Fatalf("condition %s not found in %+v", condType, conditions)
 	return metav1.Condition{}
-}
-
-func indexOf(values []string, target string) int {
-	for index, value := range values {
-		if value == target {
-			return index
-		}
-	}
-	return -1
 }
 
 func testSpecResults(entries map[string]ebsv1.SpecResult) ebsv1.SpecResults {

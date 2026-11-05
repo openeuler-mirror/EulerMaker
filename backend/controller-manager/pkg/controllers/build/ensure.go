@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,14 +16,6 @@ import (
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 )
-
-// childResource describes one create-only sub resource of a Build.
-type childResource[T any] struct {
-	kind   string
-	get    func(context.Context, string, string) (T, error)
-	create func(context.Context, string, T) (T, error)
-	meta   func(T) *metav1.ObjectMeta
-}
 
 type ensureOutcome struct {
 	ready        bool
@@ -37,106 +30,109 @@ func (o ensureOutcome) result() controller.ReconcileResult {
 	return controller.ReconcileResult{}
 }
 
-// ensureChild implements the idempotent create protocol: read by deterministic name, create when absent,
-// reuse what exists, and confirm the outcome of a create whose result is unknown.
-func ensureChild[T any](ctx context.Context, key string, resource childResource[T], project, name string, build func(context.Context) (T, error)) (T, ensureOutcome) {
-	var zero T
-	if err := ctx.Err(); err != nil {
-		return zero, ensureOutcome{err: err}
-	}
-	current, err := resource.get(ctx, project, name)
-	switch {
-	case err == nil:
-		return current, reuseExisting(key, resource, current, name)
-	case apierrors.IsNotFound(err):
-	default:
-		return zero, ensureOutcome{err: classifyReadError(err)}
-	}
-	request, err := build(ctx)
-	if err != nil {
-		return zero, ensureOutcome{err: err}
-	}
-	created, err := resource.create(ctx, project, request)
+// childCreateOutcome reports whether the caller must confirm creation with a GET.
+// The outcome is also the fallback when that confirmation returns NotFound.
+func (r *reconciler) childCreateOutcome(kind string, err error) (bool, ensureOutcome) {
 	if err == nil {
-		log.Printf("controller=%s key=%q kind=%s name=%q result=ChildCreated", Name, key, resource.kind, name)
-		return created, ensureOutcome{ready: true}
+		log.Printf("controller=%s key=%q kind=%s name=%q result=ChildCreated", Name, r.key, kind, r.current.Name)
+		return false, ensureOutcome{ready: true}
 	}
 	var writeErr *clientpkg.WriteError
 	if !errors.As(err, &writeErr) {
-		return zero, ensureOutcome{err: err}
+		return false, ensureOutcome{err: err}
 	}
 	switch writeErr.Outcome {
 	case clientpkg.WriteRejected:
 		if writeErr.StatusCode != http.StatusConflict {
 			log.Printf("controller=%s key=%q kind=%s name=%q operation=%s outcome=%s status=%d reason=CreateRejected retryable=%t",
-				Name, key, resource.kind, name, writeErr.Operation, writeErr.Outcome, writeErr.StatusCode, retryableCreateRejection(writeErr.StatusCode))
-			return zero, ensureOutcome{err: classifyRejectedWrite(writeErr, err)}
+				Name, r.key, kind, r.current.Name, writeErr.Operation, writeErr.Outcome, writeErr.StatusCode, retryableCreateRejection(writeErr.StatusCode))
+			return false, ensureOutcome{err: classifyRejectedWrite(writeErr, err)}
 		}
 		ensureConflicts.Inc()
-		log.Printf("controller=%s key=%q kind=%s name=%q reason=EnsureConflict", Name, key, resource.kind, name)
-		existing, getErr := resource.get(ctx, project, name)
-		if getErr == nil {
-			return existing, reuseExisting(key, resource, existing, name)
-		}
-		if apierrors.IsNotFound(getErr) {
-			return zero, ensureOutcome{requeueAfter: conflictRequeueDelay}
-		}
-		return zero, ensureOutcome{err: classifyReadError(getErr)}
+		log.Printf("controller=%s key=%q kind=%s name=%q reason=EnsureConflict", Name, r.key, kind, r.current.Name)
+		return true, ensureOutcome{requeueAfter: conflictRequeueDelay}
 	case clientpkg.WriteUnknown:
-		log.Printf("controller=%s key=%q kind=%s name=%q reason=EnsureUnknown", Name, key, resource.kind, name)
-		existing, getErr := resource.get(ctx, project, name)
-		if getErr == nil {
-			return existing, reuseExisting(key, resource, existing, name)
-		}
-		if apierrors.IsNotFound(getErr) {
-			return zero, ensureOutcome{err: err}
-		}
-		return zero, ensureOutcome{err: classifyReadError(getErr)}
+		log.Printf("controller=%s key=%q kind=%s name=%q reason=EnsureUnknown", Name, r.key, kind, r.current.Name)
+		return true, ensureOutcome{err: err}
 	default:
-		return zero, ensureOutcome{err: classifyNotSentWrite(err)}
+		return false, ensureOutcome{err: classifyNotSentWrite(err)}
 	}
 }
 
-func reuseExisting[T any](key string, resource childResource[T], value T, name string) ensureOutcome {
-	meta := resource.meta(value)
-	if meta != nil && meta.DeletionTimestamp != nil {
+func confirmationReadError(err error, fallback ensureOutcome) ensureOutcome {
+	if apierrors.IsNotFound(err) {
+		return fallback
+	}
+	return ensureOutcome{err: classifyReadError(err)}
+}
+
+func (r *reconciler) reuseExisting(kind string, value metav1.Object) ensureOutcome {
+	if value.GetDeletionTimestamp() != nil {
 		ensureTerminating.Inc()
-		log.Printf("controller=%s key=%q kind=%s name=%q reason=ChildResourceTerminating", Name, key, resource.kind, name)
+		log.Printf("controller=%s key=%q kind=%s name=%q reason=ChildResourceTerminating", Name, r.key, kind, r.current.Name)
 		return ensureOutcome{}
 	}
 	return ensureOutcome{ready: true}
 }
 
 func (r *reconciler) ensureSnapshot() (*ebsv1.Snapshot, ensureOutcome) {
-	resource := childResource[*ebsv1.Snapshot]{
-		kind:   "Snapshot",
-		get:    r.controller.client.GetSnapshot,
-		create: r.controller.client.CreateSnapshot,
-		meta:   snapshotMeta,
+	if err := r.ctx.Err(); err != nil {
+		return nil, ensureOutcome{err: err}
 	}
-	return ensureChild(r.ctx, r.key, resource, r.project, r.current.Name, func(ctx context.Context) (*ebsv1.Snapshot, error) {
-		project, err := r.controller.client.GetProject(ctx, r.project)
-		if err != nil {
-			return nil, classifyProjectError(err)
-		}
-		return newSnapshot(r.current, project), nil
-	})
+	current, err := r.controller.client.GetSnapshot(r.ctx, r.project, r.current.Name)
+	if err == nil {
+		return current, r.reuseExisting("Snapshot", current)
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, ensureOutcome{err: classifyReadError(err)}
+	}
+	project, err := r.controller.client.GetProject(r.ctx, r.project)
+	if err != nil {
+		return nil, ensureOutcome{err: classifyProjectError(err)}
+	}
+	created, err := r.controller.client.CreateSnapshot(r.ctx, r.project, newSnapshot(r.current, project))
+	confirm, outcome := r.childCreateOutcome("Snapshot", err)
+	if outcome.ready {
+		return created, outcome
+	}
+	if !confirm {
+		return nil, outcome
+	}
+	existing, err := r.controller.client.GetSnapshot(r.ctx, r.project, r.current.Name)
+	if err != nil {
+		return nil, confirmationReadError(err, outcome)
+	}
+	return existing, r.reuseExisting("Snapshot", existing)
 }
 
 func (r *reconciler) ensureRpmRepo() (*ebsv1.RpmRepo, ensureOutcome) {
-	resource := childResource[*ebsv1.RpmRepo]{
-		kind:   "RpmRepo",
-		get:    r.controller.client.GetRpmRepo,
-		create: r.controller.client.CreateRpmRepo,
-		meta:   rpmRepoMeta,
+	if err := r.ctx.Err(); err != nil {
+		return nil, ensureOutcome{err: err}
 	}
-	return ensureChild(r.ctx, r.key, resource, r.project, r.current.Name, func(ctx context.Context) (*ebsv1.RpmRepo, error) {
-		base, err := r.baseRepository(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return newRpmRepo(r.current, base), nil
-	})
+	current, err := r.controller.client.GetRpmRepo(r.ctx, r.project, r.current.Name)
+	if err == nil {
+		return current, r.reuseExisting("RpmRepo", current)
+	}
+	if !apierrors.IsNotFound(err) {
+		return nil, ensureOutcome{err: classifyReadError(err)}
+	}
+	base, err := r.baseRepository(r.ctx)
+	if err != nil {
+		return nil, ensureOutcome{err: err}
+	}
+	created, err := r.controller.client.CreateRpmRepo(r.ctx, r.project, newRpmRepo(r.current, base))
+	confirm, outcome := r.childCreateOutcome("RpmRepo", err)
+	if outcome.ready {
+		return created, outcome
+	}
+	if !confirm {
+		return nil, outcome
+	}
+	existing, err := r.controller.client.GetRpmRepo(r.ctx, r.project, r.current.Name)
+	if err != nil {
+		return nil, confirmationReadError(err, outcome)
+	}
+	return existing, r.reuseExisting("RpmRepo", existing)
 }
 
 // repositoryBase is the process repository version a new RpmRepo inherits from the last successfully
@@ -184,51 +180,46 @@ func (r *reconciler) logBaseRepositoryUnavailable(baseBuild, detail string) {
 }
 
 func (r *reconciler) ensureBuildInfo() (*ebsv1.BuildInfo, ensureOutcome) {
-	resource := childResource[*ebsv1.BuildInfo]{
-		kind:   "BuildInfo",
-		get:    r.controller.client.GetBuildInfo,
-		create: r.controller.client.CreateBuildInfo,
-		meta:   buildInfoMeta,
+	if err := r.ctx.Err(); err != nil {
+		return nil, ensureOutcome{err: err}
 	}
-	return ensureChild(r.ctx, r.key, resource, r.project, r.current.Name, func(ctx context.Context) (*ebsv1.BuildInfo, error) {
-		project, err := r.controller.client.GetProject(ctx, r.project)
-		if err != nil {
-			return nil, classifyProjectError(err)
-		}
-		content, err := r.controller.client.GetBuildTargetContent(ctx)
-		if err != nil {
-			return nil, classifyReadError(err)
-		}
-		if content == nil {
-			return nil, controller.NewPermanentError(fmt.Errorf("build-target Config is unavailable"))
-		}
-		image := content.Targets[project.Spec.Distro].Arches[r.current.Spec.Arch].Image
-		if image == "" {
-			return nil, controller.NewPermanentError(fmt.Errorf("build-target Config has no image for %s/%s", project.Spec.Distro, r.current.Spec.Arch))
-		}
-		return newBuildInfo(r.current, project, image), nil
-	})
-}
-
-func snapshotMeta(value *ebsv1.Snapshot) *metav1.ObjectMeta {
-	if value == nil {
-		return nil
+	current, err := r.controller.client.GetBuildInfo(r.ctx, r.project, r.current.Name)
+	if err == nil {
+		return current, r.reuseExisting("BuildInfo", current)
 	}
-	return &value.ObjectMeta
-}
-
-func rpmRepoMeta(value *ebsv1.RpmRepo) *metav1.ObjectMeta {
-	if value == nil {
-		return nil
+	if !apierrors.IsNotFound(err) {
+		return nil, ensureOutcome{err: classifyReadError(err)}
 	}
-	return &value.ObjectMeta
-}
-
-func buildInfoMeta(value *ebsv1.BuildInfo) *metav1.ObjectMeta {
-	if value == nil {
-		return nil
+	project, err := r.controller.client.GetProject(r.ctx, r.project)
+	if err != nil {
+		return nil, ensureOutcome{err: classifyProjectError(err)}
 	}
-	return &value.ObjectMeta
+	content, err := r.controller.client.GetBuildTargetContent(r.ctx)
+	if err != nil {
+		return nil, ensureOutcome{err: classifyReadError(err)}
+	}
+	if content == nil {
+		return nil, ensureOutcome{err: controller.NewPermanentError(fmt.Errorf("build-target Config is unavailable"))}
+	}
+	image := content.Targets[project.Spec.Distro].Arches[r.current.Spec.Arch].Image
+	if image == "" {
+		return nil, ensureOutcome{
+			err: controller.NewPermanentError(fmt.Errorf("build-target Config has no image for %s/%s", project.Spec.Distro, r.current.Spec.Arch)),
+		}
+	}
+	created, err := r.controller.client.CreateBuildInfo(r.ctx, r.project, newBuildInfo(r.current, project, image))
+	confirm, outcome := r.childCreateOutcome("BuildInfo", err)
+	if outcome.ready {
+		return created, outcome
+	}
+	if !confirm {
+		return nil, outcome
+	}
+	existing, err := r.controller.client.GetBuildInfo(r.ctx, r.project, r.current.Name)
+	if err != nil {
+		return nil, confirmationReadError(err, outcome)
+	}
+	return existing, r.reuseExisting("BuildInfo", existing)
 }
 
 func newSnapshot(build *ebsv1.Build, project *ebsv1.Project) *ebsv1.Snapshot {
@@ -255,8 +246,7 @@ func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      build.Name,
 			Namespace: build.Namespace,
-			// Carry the build target so RpmRepo objects stay queryable and groupable by (os, arch)
-			// without reading the same-name Build.
+			// Label the architecture for queries within the Project.
 			Labels: map[string]string{
 				ebsv1.BuildTargetArchLabel: build.Spec.Arch,
 			},
@@ -273,13 +263,17 @@ func newRpmRepo(build *ebsv1.Build, base repositoryBase) *ebsv1.RpmRepo {
 }
 
 func newBuildInfo(build *ebsv1.Build, project *ebsv1.Project, image string) *ebsv1.BuildInfo {
+	var bootstrapRepos []ebsv1.BootstrapRepo
+	if len(project.Spec.BootstrapRepos) > 0 {
+		bootstrapRepos = slices.Clone(project.Spec.BootstrapRepos)
+	}
 	return &ebsv1.BuildInfo{
 		TypeMeta:   metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "BuildInfo"},
 		ObjectMeta: metav1.ObjectMeta{Name: build.Name, Namespace: build.Namespace},
 		Spec: ebsv1.BuildInfoSpec{
 			Image:          image,
 			BuildPayload:   project.Spec.BuildPayload,
-			BootstrapRepos: copyBootstrapRepos(project.Spec.BootstrapRepos),
+			BootstrapRepos: bootstrapRepos,
 		},
 	}
 }
@@ -288,11 +282,10 @@ func newBuildInfo(build *ebsv1.Build, project *ebsv1.Project, image string) *ebs
 // deduplicated names listed in Build.spec.packages are copied, keeping the Project order.
 func selectPackageRepos(build *ebsv1.Build, project *ebsv1.Project) []ebsv1.PackageRepo {
 	if build.Spec.BuildType != ebsv1.BuildTypeSingle {
-		result := make([]ebsv1.PackageRepo, 0, len(project.Spec.PackageRepos))
-		for _, repo := range project.Spec.PackageRepos {
-			result = append(result, repo)
+		if project.Spec.PackageRepos == nil {
+			return []ebsv1.PackageRepo{}
 		}
-		return result
+		return slices.Clone(project.Spec.PackageRepos)
 	}
 	wanted := make(map[string]struct{}, len(build.Spec.Packages))
 	for _, name := range build.Spec.Packages {
@@ -305,13 +298,6 @@ func selectPackageRepos(build *ebsv1.Build, project *ebsv1.Project) []ebsv1.Pack
 		}
 	}
 	return result
-}
-
-func copyBootstrapRepos(repos []ebsv1.BootstrapRepo) []ebsv1.BootstrapRepo {
-	if repos == nil {
-		return nil
-	}
-	return append([]ebsv1.BootstrapRepo(nil), repos...)
 }
 
 func classifyProjectError(err error) error {

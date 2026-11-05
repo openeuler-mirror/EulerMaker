@@ -25,6 +25,124 @@ import (
 
 const seededRepositoryUID = "DB3A8CE2-00CD-4C89-9C20-ADA417C83155"
 
+func TestChildCreationConfirmation(t *testing.T) {
+	for _, kind := range []string{"Snapshot", "RpmRepo", "BuildInfo"} {
+		for _, writeOutcome := range []clientpkg.WriteOutcome{clientpkg.WriteRejected, clientpkg.WriteUnknown} {
+			for _, confirmation := range []string{"found", "missing", "deleting", "temporary error", "forbidden"} {
+				t.Run(kind+"/"+string(writeOutcome)+"/"+confirmation, func(t *testing.T) {
+					api := newFakeAPI()
+					build := newBuild("project-a", "build-a", "full", nil)
+					api.projects[build.Namespace] = newProject(build.Namespace)
+					writeErr := &clientpkg.WriteError{
+						Operation:  "create",
+						Outcome:    writeOutcome,
+						StatusCode: http.StatusConflict,
+						Err:        errors.New("create response unavailable"),
+					}
+					if writeOutcome == clientpkg.WriteUnknown {
+						writeErr.StatusCode = 0
+					}
+					meta := metav1.ObjectMeta{
+						Name:            build.Name,
+						Namespace:       build.Namespace,
+						UID:             "confirmed-child",
+						ResourceVersion: "confirmed-version",
+					}
+					var readErr error
+					resource := schema.GroupResource{Group: "ebs", Resource: strings.ToLower(kind) + "s"}
+					switch confirmation {
+					case "missing":
+						readErr = apierrors.NewNotFound(resource, build.Name)
+					case "deleting":
+						now := metav1.Now()
+						meta.DeletionTimestamp = &now
+					case "temporary error":
+						readErr = errors.New("confirmation connection interrupted")
+					case "forbidden":
+						readErr = apierrors.NewForbidden(resource, build.Name, errors.New("denied"))
+					}
+					r := &reconciler{
+						controller: newTestController(t, api, newTestClock()),
+						ctx:        context.Background(),
+						key:        key(build.Namespace, build.Name),
+						project:    build.Namespace,
+						current:    build,
+					}
+					var actual metav1.Object
+					var outcome ensureOutcome
+					switch kind {
+					case "Snapshot":
+						api.hooks.createSnapshot = func(*ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
+							api.hooks.getSnapshot = func(string, string) (*ebsv1.Snapshot, error) {
+								return &ebsv1.Snapshot{ObjectMeta: meta}, readErr
+							}
+							return nil, writeErr
+						}
+						obj, result := r.ensureSnapshot()
+						outcome = result
+						if obj != nil {
+							actual = obj
+						}
+					case "RpmRepo":
+						api.hooks.createRpmRepo = func(*ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
+							api.hooks.getRpmRepo = func(string, string) (*ebsv1.RpmRepo, error) {
+								return &ebsv1.RpmRepo{ObjectMeta: meta}, readErr
+							}
+							return nil, writeErr
+						}
+						obj, result := r.ensureRpmRepo()
+						outcome = result
+						if obj != nil {
+							actual = obj
+						}
+					case "BuildInfo":
+						api.hooks.createBuildInfo = func(*ebsv1.BuildInfo) (*ebsv1.BuildInfo, error) {
+							api.hooks.getBuildInfo = func(string, string) (*ebsv1.BuildInfo, error) {
+								return &ebsv1.BuildInfo{ObjectMeta: meta}, readErr
+							}
+							return nil, writeErr
+						}
+						obj, result := r.ensureBuildInfo()
+						outcome = result
+						if obj != nil {
+							actual = obj
+						}
+					}
+					want := ensureOutcome{ready: confirmation == "found"}
+					switch confirmation {
+					case "missing":
+						if writeOutcome == clientpkg.WriteRejected {
+							want.requeueAfter = conflictRequeueDelay
+						} else {
+							want.err = writeErr
+						}
+					case "temporary error":
+						want.err = readErr
+					case "forbidden":
+						want.err = controller.NewPermanentError(readErr)
+					}
+					if outcome.ready != want.ready || outcome.requeueAfter != want.requeueAfter || !errors.Is(outcome.err, want.err) {
+						t.Fatalf("outcome = %+v, want %+v", outcome, want)
+					}
+					if controller.IsPermanent(outcome.err) != (confirmation == "forbidden") {
+						t.Fatalf("unexpected error classification: %v", outcome.err)
+					}
+					if readErr == nil {
+						if actual == nil || actual.GetResourceVersion() != meta.ResourceVersion || actual.GetUID() != meta.UID {
+							t.Fatalf("confirmed object = %+v, want metadata %+v", actual, meta)
+						}
+					} else if actual != nil {
+						t.Fatalf("failed confirmation returned an object: %+v", actual)
+					}
+					if api.CallCount("Get"+kind+" "+r.key) != 2 || api.CallCount("Create"+kind+" "+r.key) != 1 {
+						t.Fatalf("unexpected confirmation calls: %v", api.Calls())
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestPreparedSelectsImageFromProjectDistroAndBuildArch(t *testing.T) {
 	content := &ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
 		"distro-a": {Arches: map[string]ebsv1.BuildTargetArch{
@@ -194,7 +312,12 @@ func TestPendingCreateSnapshotAlreadyExistsReusesObject(t *testing.T) {
 	beforeConflicts := counterValue(t, metricEnsureConflicts)
 	api.hooks.createSnapshot = func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
 		api.storeSnapshot(request)
-		return nil, &clientpkg.WriteError{Operation: "create", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: apierrors.NewAlreadyExists(snapshotsResource, request.Name)}
+		return nil, &clientpkg.WriteError{
+			Operation:  "create",
+			Outcome:    clientpkg.WriteRejected,
+			StatusCode: 409,
+			Err:        apierrors.NewAlreadyExists(snapshotsResource, request.Name),
+		}
 	}
 	c := newTestController(t, api, newTestClock())
 	result, err := c.sync(context.Background(), "project-a/build-a")
@@ -231,7 +354,11 @@ func TestPendingCreateSnapshotUnknownConfirmsExistence(t *testing.T) {
 		api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
 		api.hooks.createSnapshot = func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
 			api.storeSnapshot(request)
-			return nil, &clientpkg.WriteError{Operation: "create", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "create",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		c := newTestController(t, api, newTestClock())
 		result, err := c.sync(context.Background(), "project-a/build-a")
@@ -261,7 +388,11 @@ func TestPendingCreateSnapshotUnknownConfirmsExistence(t *testing.T) {
 		var requested *ebsv1.Snapshot
 		api.hooks.createSnapshot = func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
 			requested = request
-			return nil, &clientpkg.WriteError{Operation: "create", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "create",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		c := newTestController(t, api, newTestClock())
 		result, err := c.sync(context.Background(), "project-a/build-a")
@@ -374,7 +505,12 @@ func TestPendingCreateRpmRepoAlreadyExistsReusesObject(t *testing.T) {
 	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
 	api.hooks.createRpmRepo = func(request *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
 		api.storeRpmRepo(request)
-		return nil, &clientpkg.WriteError{Operation: "create", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: apierrors.NewAlreadyExists(rpmReposResource, request.Name)}
+		return nil, &clientpkg.WriteError{
+			Operation:  "create",
+			Outcome:    clientpkg.WriteRejected,
+			StatusCode: 409,
+			Err:        apierrors.NewAlreadyExists(rpmReposResource, request.Name),
+		}
 	}
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
@@ -434,6 +570,16 @@ func TestNewSnapshotKeepsFullRepositoryListForNonSingleBuilds(t *testing.T) {
 	if !reflect.DeepEqual(repoNames(snapshot.Spec.PackageRepos), []string{"gcc", "glibc"}) {
 		t.Fatalf("packageRepos = %v", repoNames(snapshot.Spec.PackageRepos))
 	}
+	snapshot.Spec.PackageRepos[0].Ref = "refs/heads/other"
+	if project.Spec.PackageRepos[0].Ref != "refs/heads/master" {
+		t.Fatal("Snapshot repositories must be independent of Project repositories")
+	}
+	for _, repos := range [][]ebsv1.PackageRepo{nil, {}} {
+		project.Spec.PackageRepos = repos
+		if got := newSnapshot(build, project).Spec.PackageRepos; !reflect.DeepEqual(got, []ebsv1.PackageRepo{}) {
+			t.Fatalf("empty packageRepos = %#v", got)
+		}
+	}
 }
 
 func TestNewSnapshotFreezesGitRefInPackageRepo(t *testing.T) {
@@ -477,6 +623,12 @@ func TestNewBuildInfoCopiesBootstrapRepos(t *testing.T) {
 	if project.Spec.BootstrapRepos[0].URL != "https://example.com/repo/everything" {
 		t.Fatal("BuildInfo construction must not share state with the Project")
 	}
+	for _, repos := range [][]ebsv1.BootstrapRepo{nil, {}} {
+		project.Spec.BootstrapRepos = repos
+		if got := newBuildInfo(build, project, "build:test").Spec.BootstrapRepos; got != nil {
+			t.Fatalf("empty bootstrapRepos = %#v", got)
+		}
+	}
 }
 
 func TestNewBuildInfoFreezesBuildPayload(t *testing.T) {
@@ -498,7 +650,11 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
 	api.storeBuildInfo(&ebsv1.BuildInfo{
 		ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
-		Spec:       ebsv1.BuildInfoSpec{Image: "frozen:image", BuildPayload: "frozen payload", BootstrapRepos: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}}},
+		Spec: ebsv1.BuildInfoSpec{
+			Image:          "frozen:image",
+			BuildPayload:   "frozen payload",
+			BootstrapRepos: []ebsv1.BootstrapRepo{{Name: "existing", URL: "https://example.com/existing"}},
+		},
 	})
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
@@ -521,7 +677,12 @@ func TestPreparedCreateBuildInfoAlreadyExistsReusesObject(t *testing.T) {
 	api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
 	api.hooks.createBuildInfo = func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error) {
 		api.storeBuildInfo(request)
-		return nil, &clientpkg.WriteError{Operation: "create", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: apierrors.NewAlreadyExists(buildInfosResource, request.Name)}
+		return nil, &clientpkg.WriteError{
+			Operation:  "create",
+			Outcome:    clientpkg.WriteRejected,
+			StatusCode: 409,
+			Err:        apierrors.NewAlreadyExists(buildInfosResource, request.Name),
+		}
 	}
 	c := newTestController(t, api, newTestClock())
 	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
@@ -760,7 +921,10 @@ func TestPendingDoesNotBackfillLabelsOnExistingRpmRepo(t *testing.T) {
 }
 
 func TestRpmRepoKeepsBaseline(t *testing.T) {
-	for _, base := range []repositoryBase{{}, {repositoryUID: "version", contentURL: "https://artifact/repositories/v1/version/"}} {
+	for _, base := range []repositoryBase{{}, {
+		repositoryUID: "version",
+		contentURL:    "https://artifact/repositories/v1/version/",
+	}} {
 		build := newBuild("project-a", "build-a", "full", []string{"gcc"})
 		repo := newRpmRepo(build, base)
 		if base.repositoryUID == "" {
@@ -878,7 +1042,12 @@ func TestPendingDoesNotReReadBaseAfterRestart(t *testing.T) {
 	seedIncrementalHistory(api)
 	api.storeRpmRepo(historicalRpmRepo("project-a", "build-prev", seededRepositoryUID, repositoryContentURL(seededRepositoryUID)))
 	api.hooks.updateStatus = func(*ebsv1.Build) (*ebsv1.Build, error) {
-		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: errors.New("conflict")}
+		return nil, &clientpkg.WriteError{
+			Operation:  "update-status",
+			Outcome:    clientpkg.WriteRejected,
+			StatusCode: 409,
+			Err:        errors.New("conflict"),
+		}
 	}
 
 	first := newTestController(t, api, newTestClock())

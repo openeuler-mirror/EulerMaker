@@ -36,10 +36,8 @@ func (c Config) validate() error {
 
 type Controller struct {
 	*controller.BaseController
-	builds      source.Source
 	client      Client
 	clock       clock.Clock
-	config      Config
 	startupOnce sync.Once
 }
 
@@ -50,13 +48,17 @@ func New(builds source.Source, client Client, clk clock.Clock, config Config, op
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	c := &Controller{builds: builds, client: client, clock: clk, config: config}
+	c := &Controller{client: client, clock: clk}
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
 	}
 	c.BaseController = base
-	if err := builds.AddEventHandler(source.ResourceEventHandlerFuncs{AddFunc: c.onAdd, UpdateFunc: c.onUpdate, DeleteFunc: c.onDelete}); err != nil {
+	if err := builds.AddEventHandler(source.ResourceEventHandlerFuncs{
+		AddFunc:    c.onAdd,
+		UpdateFunc: c.onUpdate,
+		DeleteFunc: c.onDelete,
+	}); err != nil {
 		return nil, fmt.Errorf("register Build handler: %w", err)
 	}
 	return c, nil

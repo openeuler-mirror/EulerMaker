@@ -41,7 +41,11 @@ func TestInitializerRegistersNonTerminalPollingSource(t *testing.T) {
 	polling := &fakePollingFactory{}
 	init := manager.InitContext{
 		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
-		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute, SlowRetryJitter: 0.2},
+		Config: manager.ControllerConfig{
+			SlowRetryInitial: time.Second,
+			SlowRetryMax:     time.Minute,
+			SlowRetryJitter:  0.2,
+		},
 	}
 	value, ok, err := Initializer(Config{PollPeriod: 25 * time.Second, MaxRetries: 3})(context.Background(), init)
 	if err != nil || !ok || value == nil {
@@ -65,7 +69,11 @@ func TestInitializerFailsFastOnInvalidConfig(t *testing.T) {
 	polling := &fakePollingFactory{}
 	init := manager.InitContext{
 		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
-		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute, SlowRetryJitter: 0.2},
+		Config: manager.ControllerConfig{
+			SlowRetryInitial: time.Second,
+			SlowRetryMax:     time.Minute,
+			SlowRetryJitter:  0.2,
+		},
 	}
 	value, ok, err := Initializer(Config{PollPeriod: 0, MaxRetries: 1})(context.Background(), init)
 	if err == nil || ok || value != nil {
@@ -131,17 +139,5 @@ func TestStartupMarkerIsLoggedOnce(t *testing.T) {
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
-	}
-}
-
-func TestSplitKeyRejectsIncompleteKeys(t *testing.T) {
-	for _, key := range []string{"", "build-a", "project-a/", "/build-a", "project-a/build-a/extra"} {
-		if _, _, ok := splitKey(key); ok {
-			t.Fatalf("key %q must be rejected", key)
-		}
-	}
-	project, name, ok := splitKey("project-a/build-a")
-	if !ok || project != "project-a" || name != "build-a" {
-		t.Fatalf("project=%q name=%q ok=%v", project, name, ok)
 	}
 }

@@ -238,9 +238,14 @@ func TestTypedGettersValidateResponses(t *testing.T) {
 		read   func(Client) error
 	}{
 		{
-			name:   "build wrong type",
-			result: &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", UID: "uid", ResourceVersion: "1"}},
-			read:   func(c Client) error { _, err := c.GetBuild(context.Background(), "project-a", "build-a"); return err },
+			name: "build wrong type",
+			result: &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{
+				Name:            "build-a",
+				Namespace:       "project-a",
+				UID:             "uid",
+				ResourceVersion: "1",
+			}},
+			read: func(c Client) error { _, err := c.GetBuild(context.Background(), "project-a", "build-a"); return err },
 		},
 		{
 			name:   "build missing server metadata",
@@ -248,17 +253,27 @@ func TestTypedGettersValidateResponses(t *testing.T) {
 			read:   func(c Client) error { _, err := c.GetBuild(context.Background(), "project-a", "build-a"); return err },
 		},
 		{
-			name:   "snapshot wrong type",
-			result: &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", UID: "uid", ResourceVersion: "1"}},
+			name: "snapshot wrong type",
+			result: &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
+				Name:            "build-a",
+				Namespace:       "project-a",
+				UID:             "uid",
+				ResourceVersion: "1",
+			}},
 			read: func(c Client) error {
 				_, err := c.GetSnapshot(context.Background(), "project-a", "build-a")
 				return err
 			},
 		},
 		{
-			name:   "rpm repo wrong identity",
-			result: &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "project-a", UID: "uid", ResourceVersion: "1"}},
-			read:   func(c Client) error { _, err := c.GetRpmRepo(context.Background(), "project-a", "build-a"); return err },
+			name: "rpm repo wrong identity",
+			result: &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{
+				Name:            "other",
+				Namespace:       "project-a",
+				UID:             "uid",
+				ResourceVersion: "1",
+			}},
+			read: func(c Client) error { _, err := c.GetRpmRepo(context.Background(), "project-a", "build-a"); return err },
 		},
 		{
 			name:   "build info missing server metadata",
@@ -308,7 +323,12 @@ func assertContractError(t *testing.T, err error) {
 }
 
 func TestClientKeepsWriteErrorClassification(t *testing.T) {
-	rejected := &clientpkg.WriteError{Operation: "create", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: apierrors.NewAlreadyExists(snapshotsResource, "build-a")}
+	rejected := &clientpkg.WriteError{
+		Operation:  "create",
+		Outcome:    clientpkg.WriteRejected,
+		StatusCode: 409,
+		Err:        apierrors.NewAlreadyExists(snapshotsResource, "build-a"),
+	}
 	shared := &stubSharedClient{createErr: rejected}
 	client := newAPIClient(shared)
 	_, err := client.CreateSnapshot(context.Background(), "project-a", &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"}})
@@ -320,7 +340,12 @@ func TestClientKeepsWriteErrorClassification(t *testing.T) {
 
 func TestUpdateBuildStatusUnknownResponse(t *testing.T) {
 	request := withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
-	shared := &stubSharedClient{updateResult: &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", UID: "other-uid", ResourceVersion: "1"}}}
+	shared := &stubSharedClient{updateResult: &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
+		Name:            "build-a",
+		Namespace:       "project-a",
+		UID:             "other-uid",
+		ResourceVersion: "1",
+	}}}
 	client := newAPIClient(shared)
 	_, err := client.UpdateBuildStatus(context.Background(), request)
 	var writeErr *clientpkg.WriteError
@@ -336,7 +361,12 @@ func TestUpdateBuildChecksResponseIdentity(t *testing.T) {
 	if err != nil || updated.Name != request.Name {
 		t.Fatalf("updated=%+v err=%v", updated, err)
 	}
-	shared.updateResult = &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: request.Namespace, UID: "other", ResourceVersion: "2"}}
+	shared.updateResult = &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{
+		Name:            request.Name,
+		Namespace:       request.Namespace,
+		UID:             "other",
+		ResourceVersion: "2",
+	}}
 	_, err = newAPIClient(shared).UpdateBuild(context.Background(), request)
 	var writeErr *clientpkg.WriteError
 	if !errors.As(err, &writeErr) || writeErr.Outcome != clientpkg.WriteUnknown {

@@ -82,7 +82,11 @@ func baseBuildRefWriteRound(t *testing.T, history *ebsv1.Build) (*fakeAPI, *Cont
 }
 
 func unknownStatusWrite() error {
-	return &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+	return &clientpkg.WriteError{
+		Operation: "update-status",
+		Outcome:   clientpkg.WriteUnknown,
+		Err:       errors.New("lost response"),
+	}
 }
 
 // assertBaseBuildRefRound verifies one write and confirmation, with no child creation in the same round.
@@ -113,10 +117,24 @@ func TestPreWriteConcurrencyGuards(t *testing.T) {
 		wantRequeue   time.Duration
 		wantConflicts uint64
 	}{
-		{name: "resourceVersion changed", mutate: func(build *ebsv1.Build) { build.ResourceVersion = "999" }, wantRequeue: time.Second, wantConflicts: 1},
-		{name: "uid changed", mutate: func(build *ebsv1.Build) { build.UID = "other-uid" }},
-		{name: "object aborted", mutate: func(build *ebsv1.Build) { build.Status.Phase = ebsv1.BuildAborted }},
-		{name: "object deleting", mutate: func(build *ebsv1.Build) { build.DeletionTimestamp = &deletion }},
+		{
+			name:          "resourceVersion changed",
+			mutate:        func(build *ebsv1.Build) { build.ResourceVersion = "999" },
+			wantRequeue:   time.Second,
+			wantConflicts: 1,
+		},
+		{
+			name:   "uid changed",
+			mutate: func(build *ebsv1.Build) { build.UID = "other-uid" },
+		},
+		{
+			name:   "object aborted",
+			mutate: func(build *ebsv1.Build) { build.Status.Phase = ebsv1.BuildAborted },
+		},
+		{
+			name:   "object deleting",
+			mutate: func(build *ebsv1.Build) { build.DeletionTimestamp = &deletion },
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api, c := pendingWriteRound(t)
@@ -165,7 +183,11 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 			if _, err := api.commitStatus(request); err != nil {
 				t.Fatalf("commit: %v", err)
 			}
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if err != nil || result != (controller.ReconcileResult{}) {
@@ -202,7 +224,11 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 			}
 			mutated.Status.StartTime = testTime(8)
 			api.storeBuild(mutated)
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if err != nil || result != (controller.ReconcileResult{}) {
@@ -249,7 +275,11 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 				mutated.Status.Conditions[i].Message = ReasonBuildFailed
 			}
 			api.storeBuild(mutated)
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if err != nil {
@@ -268,7 +298,11 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 		api, c := pendingWriteRound(t)
 		before := counterValue(t, metricStatusUpdateUnknown)
 		api.hooks.updateStatus = func(*ebsv1.Build) (*ebsv1.Build, error) {
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if err != nil {
@@ -288,7 +322,11 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 		before := counterValue(t, metricStatusUpdateUnknown)
 		api.hooks.updateStatus = func(request *ebsv1.Build) (*ebsv1.Build, error) {
 			api.deleteBuild(request.Namespace, request.Name)
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if err != nil || result != (controller.ReconcileResult{}) {
@@ -304,7 +342,11 @@ func TestStatusWriteUnknownConfirmation(t *testing.T) {
 			aborted := api.build(request.Namespace, request.Name)
 			aborted.Status.Phase = ebsv1.BuildAborted
 			api.storeBuild(aborted)
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteUnknown,
+				Err:       errors.New("lost response"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if err != nil || result != (controller.ReconcileResult{}) {
@@ -569,16 +611,34 @@ func TestIntentSatisfiedComparesOnlyTargetFields(t *testing.T) {
 				setConditions: true,
 				conditionIntents: []conditionIntent{
 					buildSucceedIntent(metav1.ConditionTrue, ReasonBuildSucceeded, 3),
-					{condType: ConditionPublishSucceed, status: metav1.ConditionTrue, reason: ReasonPublishSucceeded, message: ReasonPublishSucceeded, observedGeneration: 3},
+					{
+						condType:           ConditionPublishSucceed,
+						status:             metav1.ConditionTrue,
+						reason:             ReasonPublishSucceeded,
+						message:            ReasonPublishSucceeded,
+						observedGeneration: 3,
+					},
 				},
 			},
 			build: func() *ebsv1.Build {
 				build := withRef(pendingBuild(), emptyRef)
 				build.Generation = 3
 				build.Status.Conditions = []metav1.Condition{
-					{Type: ConditionPublishSucceed, Status: metav1.ConditionTrue, Reason: ReasonPublishSucceeded, Message: ReasonPublishSucceeded, ObservedGeneration: 3},
+					{
+						Type:               ConditionPublishSucceed,
+						Status:             metav1.ConditionTrue,
+						Reason:             ReasonPublishSucceeded,
+						Message:            ReasonPublishSucceeded,
+						ObservedGeneration: 3,
+					},
 					{Type: "Unrelated", Status: metav1.ConditionFalse, Reason: "Kept", Message: "Kept"},
-					{Type: ConditionBuildSucceed, Status: metav1.ConditionTrue, Reason: ReasonBuildSucceeded, Message: ReasonBuildSucceeded, ObservedGeneration: 3},
+					{
+						Type:               ConditionBuildSucceed,
+						Status:             metav1.ConditionTrue,
+						Reason:             ReasonBuildSucceeded,
+						Message:            ReasonBuildSucceeded,
+						ObservedGeneration: 3,
+					},
 				}
 				return build
 			}(),
@@ -657,7 +717,12 @@ func TestStatusWriteRejections(t *testing.T) {
 			beforeConflicts := counterValue(t, metricStatusUpdateConflicts)
 			beforeUnknown := counterValue(t, metricStatusUpdateUnknown)
 			api.hooks.updateStatus = func(*ebsv1.Build) (*ebsv1.Build, error) {
-				return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: tc.statusCode, Err: errors.New("rejected")}
+				return nil, &clientpkg.WriteError{
+					Operation:  "update-status",
+					Outcome:    clientpkg.WriteRejected,
+					StatusCode: tc.statusCode,
+					Err:        errors.New("rejected"),
+				}
 			}
 			result, err := c.sync(context.Background(), "project-a/build-a")
 			switch {
@@ -693,7 +758,11 @@ func TestStatusWriteNotSentClassification(t *testing.T) {
 	t.Run("client validation error", func(t *testing.T) {
 		api, c := pendingWriteRound(t)
 		api.hooks.updateStatus = func(*ebsv1.Build) (*ebsv1.Build, error) {
-			return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteNotSent, Err: errors.New("object metadata does not match target")}
+			return nil, &clientpkg.WriteError{
+				Operation: "update-status",
+				Outcome:   clientpkg.WriteNotSent,
+				Err:       errors.New("object metadata does not match target"),
+			}
 		}
 		result, err := c.sync(context.Background(), "project-a/build-a")
 		if !controller.IsPermanent(err) {
@@ -796,18 +865,60 @@ func TestClassifyReadError(t *testing.T) {
 		err           error
 		wantPermanent bool
 	}{
-		{name: "unauthorized", err: apierrors.NewUnauthorized("no token"), wantPermanent: true},
-		{name: "forbidden", err: apierrors.NewForbidden(resource, "build-a", errors.New("denied")), wantPermanent: true},
-		{name: "bad request", err: apierrors.NewBadRequest("unsupported field selector"), wantPermanent: true},
-		{name: "invalid", err: apierrors.NewInvalid(kind, "build-a", field.ErrorList{}), wantPermanent: true},
-		{name: "response contract violation", err: contractErrorf("unexpected Snapshot response for %s/%s", "project-a", "build-a"), wantPermanent: true},
-		{name: "wrapped contract violation", err: fmt.Errorf("read Snapshot: %w", contractErrorf("unexpected Snapshot response")), wantPermanent: true},
-		{name: "not found", err: apierrors.NewNotFound(resource, "build-a")},
-		{name: "server error", err: apierrors.NewInternalError(errors.New("boom"))},
-		{name: "unavailable", err: apierrors.NewServiceUnavailable("down")},
-		{name: "too many requests", err: apierrors.NewTooManyRequests("slow down", 1)},
-		{name: "network error", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}},
-		{name: "plain error", err: errors.New("connection reset")},
+		{
+			name:          "unauthorized",
+			err:           apierrors.NewUnauthorized("no token"),
+			wantPermanent: true,
+		},
+		{
+			name:          "forbidden",
+			err:           apierrors.NewForbidden(resource, "build-a", errors.New("denied")),
+			wantPermanent: true,
+		},
+		{
+			name:          "bad request",
+			err:           apierrors.NewBadRequest("unsupported field selector"),
+			wantPermanent: true,
+		},
+		{
+			name:          "invalid",
+			err:           apierrors.NewInvalid(kind, "build-a", field.ErrorList{}),
+			wantPermanent: true,
+		},
+		{
+			name:          "response contract violation",
+			err:           contractErrorf("unexpected Snapshot response for %s/%s", "project-a", "build-a"),
+			wantPermanent: true,
+		},
+		{
+			name:          "wrapped contract violation",
+			err:           fmt.Errorf("read Snapshot: %w", contractErrorf("unexpected Snapshot response")),
+			wantPermanent: true,
+		},
+		{
+			name: "not found",
+			err:  apierrors.NewNotFound(resource, "build-a"),
+		},
+		{
+			name: "server error",
+			err:  apierrors.NewInternalError(errors.New("boom")),
+		},
+		{
+			name: "unavailable",
+			err:  apierrors.NewServiceUnavailable("down"),
+		},
+		{
+			name: "too many requests",
+			err:  apierrors.NewTooManyRequests("slow down", 1),
+		},
+		{
+			name: "network error",
+			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
+		},
+		{
+			name: "plain error",
+			err:  errors.New("connection reset"),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			classified := classifyReadError(tc.err)

@@ -149,7 +149,7 @@ func (r *reconciler) commit(intent writeIntent) (bool, controller.ReconcileResul
 	return r.handleWriteError(intent, err)
 }
 
-// handleWriteError maps one failed write to the queue result contract of the design.
+// handleWriteError maps a failed status write to confirmation, retry, or permanent failure.
 func (r *reconciler) handleWriteError(intent writeIntent, err error) (bool, controller.ReconcileResult, error) {
 	if ctxErr := r.ctx.Err(); ctxErr != nil {
 		return false, controller.ReconcileResult{}, ctxErr

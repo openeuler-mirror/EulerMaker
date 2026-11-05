@@ -124,7 +124,7 @@ func (c *apiClient) GetBuild(ctx context.Context, project, name string) (*ebsv1.
 }
 
 // GetLastPublishedBuild returns the most recent Build of the project that published successfully for the
-// given target OS and architecture, or nil when the project has no such Build yet.
+// given architecture, or nil when the project has no such Build yet.
 // The lookup stays inside one Project: a cluster-wide limit=1 query would select another Project's Build.
 func (c *apiClient) GetLastPublishedBuild(ctx context.Context, project, targetArch string) (*ebsv1.Build, error) {
 	selector := labels.Set{
@@ -260,9 +260,19 @@ func (c *apiClient) UpdateBuild(ctx context.Context, obj *ebsv1.Build) (*ebsv1.B
 }
 
 func notSentWrite(operation string, gvr schema.GroupVersionResource, err error) error {
-	return &clientpkg.WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: clientpkg.WriteNotSent, Err: err}
+	return &clientpkg.WriteError{
+		Operation: operation,
+		Resource:  gvr.GroupResource(),
+		Outcome:   clientpkg.WriteNotSent,
+		Err:       err,
+	}
 }
 
 func unknownWrite(operation string, gvr schema.GroupVersionResource, err error) error {
-	return &clientpkg.WriteError{Operation: operation, Resource: gvr.GroupResource(), Outcome: clientpkg.WriteUnknown, Err: err}
+	return &clientpkg.WriteError{
+		Operation: operation,
+		Resource:  gvr.GroupResource(),
+		Outcome:   clientpkg.WriteUnknown,
+		Err:       err,
+	}
 }
