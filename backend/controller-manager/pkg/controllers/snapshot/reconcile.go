@@ -72,6 +72,9 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	if err != nil {
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
+	if build.DeletionTimestamp != nil {
+		return controller.ReconcileResult{}, nil
+	}
 	original := snapshot.DeepCopy()
 	targets, missing := selectTargets(snapshot.Spec.PackageRepos, build)
 	if len(snapshot.Spec.PackageRepos) == 0 {

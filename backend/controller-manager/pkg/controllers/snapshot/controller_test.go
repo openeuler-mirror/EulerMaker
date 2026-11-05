@@ -259,6 +259,33 @@ func TestPendingSnapshotResolvesRefAndBecomesActive(t *testing.T) {
 	}
 }
 
+func TestDeletingBuildStopsSnapshotResolution(t *testing.T) {
+	for _, phase := range []ebsv1.SnapshotPhase{ebsv1.SnapshotPending, ebsv1.SnapshotProcessing} {
+		t.Run(string(phase), func(t *testing.T) {
+			repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
+			snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
+			snapshot.Status.Phase = phase
+			now := metav1.Now()
+			build.DeletionTimestamp = &now
+			api := &fakeClient{snapshot: snapshot, build: build}
+			c := newTestController(t, api, &fakeGitClient{}, Config{})
+			for range 2 {
+				if result, err := c.sync(context.Background(), "project-a/build-a"); err != nil || result != (controller.ReconcileResult{}) {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+			}
+			wantUpdates := 0
+			if phase == ebsv1.SnapshotPending {
+				wantUpdates = 1
+			}
+			if api.updates != wantUpdates || api.snapshot.Status.Phase != ebsv1.SnapshotProcessing ||
+				len(api.snapshot.Status.PackageRepoStatuses) != 0 || c.services.(*fakeServices).loads != 0 {
+				t.Fatalf("updates=%d status=%+v service loads=%d", api.updates, api.snapshot.Status, c.services.(*fakeServices).loads)
+			}
+		})
+	}
+}
+
 func TestAdvancePhaseUnknownIsConfirmedAndContinues(t *testing.T) {
 	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
