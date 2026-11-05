@@ -523,6 +523,7 @@ single 与非 single 的 `publish=false` 分支均不写 `PublishSucceed`，不�
 
 **生命周期与范围**
 
+- 删除资格在 [apiserver 删除入口](ebs-apiserver.md#build-删除-finalizer) 校验：非终态先中止，发布成功构建禁止删除。Controller 只处理已受理的删除标记，不在清理过程中重新判定删除资格。
 - apiserver 在 Build 创建时写入 `metadata.finalizers: [ebs.io/build-cleanup]`；dry-run 只返回默认值，不落库。Controller 开始正常编排前必须确认该 finalizer 存在。
 - DELETE 只标记 `metadata.deletionTimestamp`；不把 Build 改为 Aborted/Failed，不改原 phase/stage，不清空 finalizers。重复 DELETE 幂等。清理优先于业务终态守卫。
 - Build Controller 只清理自己创建的 BuildInfo、Snapshot、RpmRepo：先删除并等待 BuildInfo 消失，再删除 Snapshot、RpmRepo。BuildInfo 缺失按该直接子资源已完成处理，不跨级扫描或清理 Job、OldJob、BuildGraph。single 未创建的 RpmRepo 按 NotFound 处理。Project、Config、Script、Runner、基准 Build 及其子资源不在清理范围。
@@ -545,7 +546,7 @@ single 与非 single 的 `publish=false` 分支均不写 `PublishSucceed`，不�
 
 - 不使用跨 Controller 的进程内锁。各 Controller 由 workqueue 串行处理自身同一 key 的业务与删除调谐；不同 Controller 通过 deletionTimestamp、RpmRepo 排空确认和 finalizer 协作。发布扫描只将其他候选入队，不能在当前 key 内推进另一个 RpmRepo。
 - Controller 根据父对象状态控制生产。Build Controller 每轮读取直接子资源；BuildInfo Controller 重新完整扫描 Job/OldJob，不复用上轮分页快照。apiserver 保留 BuildGraph 的 owner UID 校验，不在通用创建路径重复读取父对象。
-- Artifact Manager 操作必须先确认 RpmRepo 检查点写入，再提交请求。删除时观察已登记的操作，不激活 Prepared 发布，不新建或重放物化/发布请求；排空规则及仓库删除接口统一见 [RpmRepo 删除协议](controller-manager~rpmrepo-controller.md#删除收敛与父资源协作)。失败/中止业务终态保留检查点，删除源负责继续调谐。
+- Artifact Manager 操作必须先确认 RpmRepo 检查点写入，再提交请求。删除时通过按 Build 的停止接口持久阻止新提交和激活，确认已受理任务排空后清空检查点，不为删除重放业务请求；完整协议见 [RpmRepo 删除协议](controller-manager~rpmrepo-controller.md#删除收敛与父资源协作)。失败/中止业务终态保留检查点，删除源负责继续调谐。
 - 子资源创建不持久化请求登记，正常调谐依靠确定性名称、AlreadyExists 身份核验及完整扫描恢复。删除时以当前可见对象为准；请求超时、取消或进程重启不证明服务端已停止处理。接受极端故障下 CREATE 在最终扫描之后落库、导致父对象删除后残留子资源的风险，由运维核对归属后清理。重复扫描可降低风险，但不是跨存储创建屏障，也不承诺零残留。
 - 首版要求单 active Controller Manager；apiserver 可多实例，但不负责分布式生产者互斥。外部业务不得绕过 Controller 创建派生资源或直接提交 Artifact Manager 任务。
 - Job 归档使用已有的源 archive finalizer、冻结快照和 OldJob 删除凭据接力。新 retain 检查父 Build；已登记迁移继续，删除将 retain 升级为 delete。源 Job 消失前归档必须已持久化并对 Search 可见，因此按 Jobs 后 OldJobs 扫描，不形成两边同时不可见的窗口。
@@ -788,7 +789,8 @@ oldjobs:        get, list, delete
 
 | 场景 | 验收要求 | 验证层级 |
 |------|----------|----------|
-| 终态 Build 删除、single 缺少 RpmRepo | 同一队列进入删除分支；保留业务状态及其它 finalizer | Controller 单元测试 |
+| 删除入口状态校验 | 单个/批量 DELETE 及 dry-run 拒绝非终态、Success/publish；Success/build、Failed、Aborted、Skipped 允许删除 | apiserver 单元测试 |
+| 允许删除的终态 Build、single 缺少 RpmRepo | 同一队列进入删除分支；保留业务状态及其它 finalizer | Controller 单元测试 |
 | BuildInfo 存在且持有 cleanup finalizer | 仅发起 BuildInfo DELETE 并等待，不与 BuildInfo Controller 并行编排 Job 删除 | Controller 单元测试 |
 | BuildInfo 缺失 | 继续处理 Snapshot/RpmRepo，不跨级访问 Job、OldJob、BuildGraph | Controller 单元测试 |
 | 子资源在 GET 后、DELETE 前消失 | BuildInfo、Snapshot、RpmRepo 的 DELETE 404 均按已消失处理，当轮继续后续清理 | Controller 单元测试 |

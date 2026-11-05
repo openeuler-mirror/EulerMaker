@@ -224,6 +224,8 @@ type SnapshotList struct {
 
 删除契约：apiserver 创建时加入 `metadata.finalizers` 中的 `ebs.io/build-cleanup`；DELETE 设置 `deletionTimestamp`，不改变构建 phase/stage。Build Controller 只清理直接创建的资源：删除并等待 BuildInfo，再清理 Snapshot/RpmRepo。BuildInfo 创建时加入 `ebs.io/buildinfo-cleanup`，由 BuildInfo Controller 清理 Job/OldJob 和 BuildGraph 后移除；BuildInfo 缺失时 Build Controller 继续处理其余直接子资源，不跨级清理。Job/OldJob 各自 finalizer 保留至归档或数据清理完成；RpmRepo finalizer 等待本 Build 的过程仓和发布仓清理，上层只等待，不直接清理文件。不新增删除状态枚举。完整协议见 [Build Controller 7.7](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。
 
+删除资格由 [apiserver 删除入口](ebs-apiserver.md#build-删除-finalizer) 定义；仅允许非发布成功的终态 Build，受理后再进入 finalizer 清理流程。
+
 **API**: `/apis/ebs/v1/projects/{project}/builds`  
 **全局 API**: `/apis/ebs/v1/builds`  
 **Elasticsearch**: 索引 `ebs-builds`，文档 ID `{project}/{name}`

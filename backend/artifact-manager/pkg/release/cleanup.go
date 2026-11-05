@@ -1,13 +1,43 @@
 package release
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"artifact-manager/pkg/fileutil"
+	"artifact-manager/pkg/repository"
 )
+
+func releaseStopError(err error) error {
+	var typed *repository.Error
+	if errors.As(err, &typed) {
+		return &Error{Code: typed.Code, Status: typed.Status, Retryable: typed.Retryable}
+	}
+	return releaseStorageError()
+}
+
+// StopBuild blocks submissions and activation before confirming both managers have drained.
+// Lock order is release then repository, as in other release operations.
+func (m *Manager) StopBuild(project, arch, buildName string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	done, err := m.repositories.StopBuild(project, arch, buildName)
+	if err != nil {
+		return false, err
+	}
+	if record := m.records[buildName]; record != nil {
+		if record.Project != project || record.TargetArch != arch {
+			return false, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
+		}
+		if record.State == ReleaseCreating || record.State == ReleaseDeleting || m.running[buildName] {
+			return false, nil
+		}
+	}
+	return done, nil
+}
 
 // DeleteBuild removes a build's release, record and abandoned work, but never the current release.
 // New submissions must already be stopped by the caller. Active work is reported as incomplete.

@@ -690,6 +690,10 @@ Content-Type: application/json
 
 ## Build 删除 finalizer
 
+删除入口由 apiserver 校验当前存储的 Build 状态：仅允许终态，拒绝 `Pending`、`Prepared`、`Processing`；同时拒绝 `phase=Success && stage=publish` 的发布成功构建，不区分是否仍为 current。单包成功的 `Success/build`、`Failed`、`Aborted`、`Skipped` 可删除。非终态须先调用 `/abort` 并确认 Build 已终态，再发起删除；Build 终态不代表 Job 已停止，子任务仍由清理流程收敛。
+
+单个 DELETE、DeleteCollection 的逐对象删除及 dry-run 共用该校验；拒绝返回 `409 Conflict`，不写 deletionTimestamp、不触发派生资源清理。批量删除不是原子操作，遇到拒绝时停止，之前已受理的对象不回滚。校验与删除标记使用同一次 GET 的对象及 ES 版本 CAS，状态并发变化时返回冲突，调用方重新读取后决策。删除资格与权限分离，Gateway 不重复实现状态门卫。
+
 Build 创建时由服务端加入 `ebs.io/build-cleanup` finalizer，保留调用方其它合法 finalizer；DELETE 和 DeleteCollection 的逐对象删除只设置 deletionTimestamp，含该 finalizer 时不物理删除。重复删除不改变原构建结果；带删除标记的成功响应表示受理，不表示派生资源已清理。
 
 Controller Manager 通过带 resourceVersion 的 Build 主资源更新移除自身 finalizer，保留 spec/status 与其它 metadata；普通更新仍禁止修改 status。删除中禁止更改 spec、清除 deletionTimestamp 或新增 finalizer。最后一个 finalizer 被移除时走实际删除及占用释放回调；仅标记删除不能释放非终态 Build 的目标占用。已终态 Build 的占用此前按终态规则释放，不重新获取。Gateway 不开放 Build PUT/PATCH，所以用户不能借该入口绕过清理。
@@ -710,7 +714,7 @@ RpmRepo 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer，DELETE 仅设置删
 
 Build/BuildInfo/RpmRepo 的初始 mapping 包含 `data.metadata.deletionTimestamp`，支持删除轮询的 `metadata.deletionTimestamp!=null`。BuildGraph 清理不等待 Job；Job/OldJob 清理前须观察到 RpmRepo 的 `CleanupReady=True` Condition 确认，不能仅根据检查点暂时为空推断生产已经停止。
 
-验证覆盖：创建默认值与 dry-run；重复 DELETE；终态删除；删除中 spec 不变；metadata-only 移除 finalizer 不影响 status；最后一个 finalizer 移除时删除及占用释放。并发与恢复需执行 [Build Controller 删除协议验收](controller-manager~build-controller.md#143-删除协议验收)，接受极端故障下迟到创建导致子资源残留，不承诺跨存储的原子删除。内部授权仍沿用组件 mTLS 边界，不将尚未实现的细粒度授权描述为现有保证。
+验证覆盖：删除资格的 phase/stage 组合；单个/批量删除及 dry-run 对禁止状态返回 409 且不落库；允许状态保留业务结果和 finalizer、使用 ES 版本 CAS 标记删除；重复 DELETE；创建默认值；删除中 spec 不变；metadata-only 移除 finalizer 不影响 status；最后一个 finalizer 移除时删除及占用释放。并发与恢复需执行 [Build Controller 删除协议验收](controller-manager~build-controller.md#143-删除协议验收)，接受极端故障下迟到创建导致子资源残留，不承诺跨存储的原子删除。内部授权仍沿用组件 mTLS 边界，不将尚未实现的细粒度授权描述为现有保证。
 
 ## RpmRepo 删除 finalizer
 

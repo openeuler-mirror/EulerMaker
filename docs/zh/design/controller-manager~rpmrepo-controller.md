@@ -17,7 +17,9 @@ apiserver 创建 RpmRepo 时加入 `ebs.io/rpmrepo-cleanup` finalizer。上层 D
 
 对象自身未删除且未确认 CleanupReady 时，读取父 Build；NotFound、Build 或同名 BuildInfo 删除中均转入检查点排空，先于业务终态、BuildInfo 失败及普通恢复分支，不创建替代 RpmRepo。
 
-Controller 在自身队列 key 内检查 Build/BuildInfo 删除状态，停止新增仓库操作，已有检查点作为 Artifact Manager 在途操作依据。排空阶段仅 GET 已登记任务；Creating/Deleting 等待，Ready、Prepared 或明确不可重试 Failed 清空检查点；Prepared 不再激活。404、可重试 Failed 或读取错误均保留检查点，不发起 SubmitRepository/SubmitRelease。两个检查点均为空后，由 Controller 以 CAS 写入 `status.conditions` 中的 `CleanupReady=True`；即使原本没有检查点也必须显式确认。确认不可撤销，该 RpmRepo 后续不再提交新操作。BuildInfo Controller 观察到确认后才可清理 Job/OldJob 输入；BuildGraph 不是物化输入，本地生产停止后即可独立清理。父资源删除只触发排空，不触发仓库文件删除。
+Controller 在自身队列 key 内检查 Build/BuildInfo 删除状态，停止新增仓库操作，调用 `POST /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories/stop`。Artifact Manager 持久化停止标记，拒绝该作用域的迟到物化、发布提交及发布激活；已受理任务尚未结束时返回 `202`，Controller 保留检查点并延迟 5 秒重入。仅 `204` 确认停止且任务排空后，才在一次 CAS 中清空两个 transition 并写入 `CleanupReady=True`。即使原本没有检查点也必须请求停止确认；404、网络错误或存储失败均不能作为成功依据。检查点已写但任务从未提交、或任务停在可重试 Failed 时，也能通过停止确认退出，无需重放业务请求。停止接口的持久化、重启与错误契约见 [Artifact Manager 13.2](artifact-manager.md#132-按-build-删除过程仓和发布仓)。
+
+CleanupReady 确认不可撤销，该 RpmRepo 后续不再提交新操作。BuildInfo Controller 观察到确认后才可清理 Job/OldJob 输入；BuildGraph 不是物化输入，本地生产停止后即可独立清理。父资源删除只触发停止和排空，不触发仓库文件删除。
 
 业务失败/中止保留尚未排空的检查点，即使 release.phase=Failed。initializer 额外挂接 `metadata.deletionTimestamp!=null` 的 BuildInfo 和 RpmRepo PollingSource 到同一队列，确保终态或已写 CleanupReady 的删除对象仍能完成收敛。删除分支先于 CleanupReady 和业务终态退出判断：未确认时排空并写 status，下一轮读取最新对象。
 
@@ -171,6 +173,8 @@ type ArtifactManagerClient interface {
     GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
     // ActivateRelease 切换稳定入口；首次由 Prepared 激活，已 Ready 时幂等确认。
     ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
+    // StopBuildRepositories 仅 204 确认停止并排空；202 返回 false，其余异常返回 error。
+    StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
     // DeleteBuildRepositories 仅 204 返回 true；202 返回 false，其余异常返回 error。
     DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
 }
@@ -182,6 +186,7 @@ type ArtifactManagerClient interface {
 - `SubmitRelease` 对应 `POST /internal/v1/releases`；
 - `GetRelease` 对应 `GET /internal/v1/releases/{buildName}`；
 - `ActivateRelease` 对应 `POST /internal/v1/releases/{buildName}/activate`；
+- `StopBuildRepositories` 对应 `POST /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories/stop`，不带请求体；
 - `DeleteBuildRepositories` 对应 `DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories`，不带请求体；
 - 客户端必须保留 Artifact Manager 的稳定错误码与 `retryable` 语义，并把 HTTP 状态、`Retry-After` 与稳定错误码映射为可分类错误（见第八章）；分类错误必须携带 HTTP 状态与 `Retry-After`（>0 表示服务端要求的最短等待），控制器据此换算为 `RequeueAfter`；不得解析 `message` 做判定。
 - 发布接口的响应语义：`202` 表示首次接受、`Creating`、`Prepared` 或可重试重放；`200` 表示已 `Ready` 的相同请求；`409 ReleaseIdentityConflict`（同 `buildName`、请求摘要不同；摘要由 Artifact Manager 服务端计算）与 `422`（非法集合或源仓不满足条件）为不可重试；`429` 为可重试并带 `Retry-After`。
@@ -823,6 +828,7 @@ buildinfos:      get
 - 首次发布完整复核：发布候选即使满足粗筛条件，只要还有未消费且未跳过的成功 Job（含后续分页中的 Job），就不得写发布检查点或提交发布；任意页读取失败不得按空候选处理。有未消费候选时断言重新入队同一对象 key；扫描期间过程仓版本变化时断言发布 CAS 冲突并重新调谐，不刷新 resourceVersion 重放。已有发布检查点时断言恢复原检查点、不重新选版本或调用发布策略；
 - finalizer 收敛：覆盖创建时注入且不重复、清理未确认时拒绝移除、在途操作等待、重启恢复、其他 finalizer 保留、主资源写入 Conflict/Unknown 确认；确认失败保留 finalizer，下一轮使用最新对象重算。
 - 仓库清理：父 Build/BuildInfo 删除仅排空；RpmRepo 删除时调用按 Project/Arch/BuildName 删除接口，202/404/409/失败或未知结果保留 finalizer，仅 204 后移除；Prepared 不激活，不按继承 repositoryUID 删除其它 Build 的仓库，重复请求可恢复。
+- 停止确认：未提交成功和可重试 Failed 的检查点可在停止接口 204 后清空；202 延迟重入，404、传输/存储错误保留检查点。覆盖确认响应丢失、Controller 重启后重试，以及原本没有检查点时仍建立停止标记。
 - 候选跳过不阻塞：按时间排序构造多个无检查点候选，首个分别为 Build 缺失、标签不匹配、BuildInfo 未就绪或有未消费 Job，后一个已就绪；断言同轮跳过前者并推进后者。全部跳过时返回零值 + nil；临时读取错误或 PermanentError 不继续扫描；首个为异常在途对象时保留检查点并阻塞新发布。
 - 幂等：相同 UID 相同请求并发提交只产生一个版本；相同 UID 不同摘要按 `409` 收口；
 - 失败与保留：失败收口后旧版本仍可读（`repository.contentURL` 与 `repository.repositoryUID` 不变，`repository.transition` 原样保留为失败批次）；

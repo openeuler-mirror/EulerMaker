@@ -9,6 +9,34 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+func TestValidateBuildDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		phase   ebsv1.BuildPhase
+		stage   ebsv1.BuildStage
+		allowed bool
+	}{
+		{name: "pending", phase: ebsv1.BuildPending},
+		{name: "prepared", phase: ebsv1.BuildPrepared},
+		{name: "building", phase: ebsv1.BuildProcessing, stage: ebsv1.BuildStageBuild},
+		{name: "publishing", phase: ebsv1.BuildProcessing, stage: ebsv1.BuildStagePublish},
+		{name: "published", phase: ebsv1.BuildSuccess, stage: ebsv1.BuildStagePublish},
+		{name: "single succeeded", phase: ebsv1.BuildSuccess, stage: ebsv1.BuildStageBuild, allowed: true},
+		{name: "build failed", phase: ebsv1.BuildFailed, stage: ebsv1.BuildStageBuild, allowed: true},
+		{name: "publish failed", phase: ebsv1.BuildFailed, stage: ebsv1.BuildStagePublish, allowed: true},
+		{name: "aborted", phase: ebsv1.BuildAborted, allowed: true},
+		{name: "skipped publication", phase: ebsv1.BuildSkipped, stage: ebsv1.BuildStagePublish, allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			build := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: tc.phase, Stage: tc.stage}}
+			errs := ValidateBuildDelete(build)
+			if (len(errs) == 0) != tc.allowed {
+				t.Fatalf("allowed=%t, errors=%v", tc.allowed, errs)
+			}
+		})
+	}
+}
+
 func TestBuildPublishIsImmutable(t *testing.T) {
 	for _, value := range []bool{true, false} {
 		old := validBuild()

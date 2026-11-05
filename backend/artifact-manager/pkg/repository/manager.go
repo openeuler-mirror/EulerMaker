@@ -247,6 +247,9 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := CheckBuildActive(m.root, in.Project, in.TargetArch, in.BuildName); err != nil {
+		return nil, 0, err
+	}
 	old, err := m.recordLocked(in.RepositoryUID)
 	if err != nil {
 		return nil, 0, &Error{Code: "RepositoryStorageUnavailable", Status: 503, Retryable: true}

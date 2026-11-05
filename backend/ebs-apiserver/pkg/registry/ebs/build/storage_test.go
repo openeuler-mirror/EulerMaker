@@ -33,6 +33,20 @@ func TestBuildCleanupFinalizerDefault(t *testing.T) {
 	}
 }
 
+func TestBuildStorageDeleteValidation(t *testing.T) {
+	strategy := NewStorage().Resource.(*genericregistry.Store).DeleteStrategy.(interface {
+		ValidateDelete(context.Context, runtime.Object) error
+	})
+	build := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: ebsv1.BuildProcessing}}
+	if err := strategy.ValidateDelete(context.Background(), build); !apierrors.IsConflict(err) {
+		t.Fatalf("processing Build deletion: %v", err)
+	}
+	build.Status.Phase = ebsv1.BuildAborted
+	if err := strategy.ValidateDelete(context.Background(), build); err != nil {
+		t.Fatalf("aborted Build deletion: %v", err)
+	}
+}
+
 func TestBuildPublishCreateContract(t *testing.T) {
 	strategy := NewStorage().Resource.(*genericregistry.Store).CreateStrategy
 	for _, buildType := range ebsv1.BuildTypeValues() {
