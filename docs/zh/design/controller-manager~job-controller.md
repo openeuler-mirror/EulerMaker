@@ -17,7 +17,7 @@ Job Controller 是 `controller-manager` 中负责 Job 控制面收敛和历史�
 
 - Job 的 Runner 绑定保持不变；失联 Job 直接收敛为失败，不自动重新调度，避免旧 Runner 尚在执行时产生并发构建。
 - Runner 健康状态由 Runner Controller 维护；Build、BuildInfo 状态由对应 Controller 聚合。
-- 归档通过 apiserver 完成，不直连 ES；Job/OldJob 的数据清理由本控制器调用 Artifact Manager，并通过 finalizer 保留失败恢复入口。
+- 归档通过 apiserver 完成，不直连 ES；Job/OldJob 的数据清理由本控制器调用 Artifact Manager，并通过 finalizer 保留失败恢复入口。Build Controller 只发起子对象删除并等待完成。
 
 Job/OldJob finalizer 与归档责任移交统一见 [apiserver 删除与归档协议](ebs-apiserver.md#job-删除与归档-finalizer)。停止上传及输入使用者排空由上层业务保证，本控制器不增加 Runner 停止确认协议。
 
@@ -288,7 +288,7 @@ archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归
 
 归档安全性由服务端冻结快照、create-only 写入及删除凭据保证，不通过客户端超时或内存队列判断在途请求已经结束。重启后继续原意图，不根据新的 GC 策略替换冻结快照。
 
-父 Build 删除中或缺失时拒绝新 retain 意图，但允许 delete 意图所需的归档及已有迁移恢复；停止写入和输入使用者排空由上层业务保证。
+父 Build 删除状态检查关闭新 retain 入口，但允许 delete 意图所需的归档及已有迁移恢复；清理待删 Job 不能因父 Build 删除而被拒绝。BuildInfo Controller 等待 Job 和 OldJob 消失，不绕过本流程清理数据；Build Controller 只等待 BuildInfo 删除完成，不跨级处理 Job/OldJob。生产者停止与排空规则引用 Build Controller 7.7。
 
 ### 6.4 OldJob 数据清理
 
@@ -571,7 +571,7 @@ job_controller_history_archive_error_total
 | Job 已终态但仍有上传/输入使用者 | 上层必须先停止并排空，再允许删除；本轮没有 Runner 停止确认协议 | 跨组件集成测试 |
 | archive ES 成功、源 finalizer 收尾失败 | 重入恢复同一快照；源仍在时不清理产物和日志 | etcd/ES/AM 集成测试 |
 | OldJob 提前删除、源有其它 finalizer | OldJob 等待源消失；源归档不等待 OldJob 清理，不形成死锁 | Controller 集成测试 |
-| 父 Build 删除中或缺失 | 阻止新 retain，允许删除必需的归档及已有意图恢复 | apiserver 集成测试 |
+| Build 删除与归档重叠 | 阻止新 retain、允许删除必需的归档；已有 retain 升级 delete，父 finalizer 最后释放 | 跨控制器集成测试 |
 | 同名源与归档对象 | 队列键区分资源；UID/实例不匹配时保留并告警 | 单元测试 |
 | 生命周期推进与等待 | 归档确认后立即重入；OldJob 删除成功同轮收尾源对象，Conflict/Unknown 停止推进；等待外部条件或清理完成时不主动延迟重排 | 单元测试 |
 | 实时处理范围 | 入队、反向索引与调谐共用 Running 且已绑定 Runner 的范围；退出范围清理宽限期；删除事件走生命周期队列 | 单元测试 |

@@ -388,6 +388,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
    - 写入错误按 7.4 处理；成功或确认成功后继续，其他结果结束本周期，不启动包级任务。
 3. 通过 `client.GetBuild(namespace, snapshot.name)` 读取同名父 Build，用于确定构建类型和目标包范围。
    - 父 Build 按 DR-16 必然存在；404、5xx、网络错误等读取失败均返回临时错误并限速重试，本周期不得继续解析。
+   - 父 Build 的 deletionTimestamp 非空时，本轮直接结束，等待 Build Controller 回收 Snapshot，避免启动新的包级解析；复用本次 Build GET，不增加请求。入口 Pending→Processing 可能先于父对象检查，但不启动 git-server 请求；已开始的解析轮次可以结束。该守卫用于减少无效工作，不作为删除完成的确认条件。
    - 不根据父 Build phase 中止 Snapshot 解析；Build 已进入终态也不改变已经固化的 Snapshot 输入。
    - 父 Build 查询不使用包级 `failureRetryLimit`，不允许失败超限后 fail-open。
 4. 获取 PackageRepo 列表：从 `Snapshot.spec.packageRepos` 。
@@ -643,6 +644,7 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 - Pending Snapshot 推进到 Processing；
 - Processing Snapshot 继续填充（异常重入）；
 - 已被删除的 Snapshot 静默返回；
+- 父 Build 删除中：覆盖 Pending/Processing，重入时保持 Processing，不启动仓库解析或读取服务配置；仅 Pending 首轮允许入口阶段写入。
 - PackageRepo 已有 commitID 或不可重试 error 时不重复解析，已有可重试 error 时继续解析；
 - 包 ref 与 defaultRef 均使用完整 refs/...，覆盖分支、标签及 PR 引用的同步与解析；
 - 包级确定性失败写入不可重试 error 并跳过；无 packageRepos 写整体 condition；

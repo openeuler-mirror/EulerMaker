@@ -222,6 +222,8 @@ type SnapshotList struct {
 
 `metadata.name` 必须为标准小写、带连字符的 UUID（`8-4-4-4-12`，不限定 v4），由 apiserver 在创建和普通更新时校验；调用方保证名称不复用。
 
+删除契约：apiserver 创建时加入 `metadata.finalizers` 中的 `ebs.io/build-cleanup`；DELETE 设置 `deletionTimestamp`，不改变构建 phase/stage。Build Controller 只清理直接创建的资源：删除并等待 BuildInfo，再清理 Snapshot/RpmRepo。BuildInfo 创建时加入 `ebs.io/buildinfo-cleanup`，由 BuildInfo Controller 清理 Job/OldJob 和 BuildGraph 后移除；BuildInfo 缺失时 Build Controller 继续处理其余直接子资源，不跨级清理。Job/OldJob 各自 finalizer 保留至归档或数据清理完成；RpmRepo finalizer 等待本 Build 的过程仓和发布仓清理，上层只等待，不直接清理文件。不新增删除状态枚举。完整协议见 [Build Controller 7.7](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。
+
 **API**: `/apis/ebs/v1/projects/{project}/builds`  
 **全局 API**: `/apis/ebs/v1/builds`  
 **Elasticsearch**: 索引 `ebs-builds`，文档 ID `{project}/{name}`
@@ -507,7 +509,7 @@ type BuildGraphList struct {
 - 与所属 BuildInfo 同 Project、同名；`metadata.ownerReferences` 指向该 BuildInfo 的 `ebs/v1`、kind、name、UID，标记 `controller=true`。所属关系创建后不可修改，不单独在 BuildInfo 中保存引用字段。
 - 非 single 构建首次建图后一次 POST 创建完整对象；后续只有运行期 install 补边和追加破环点通过 `PUT /status` 更新。初始构建集为空时允许 `nodes: {}`，以对象存在性而非节点数量判断是否已持久化。single 不创建 BuildGraph。
 - BuildInfo 的常规结果回填不携带图；BuildGraph 使用独立 UID 和 resourceVersion。构建依赖存在性校验仍消费本轮解析的 `buildRequires`，图负责派发顺序和恢复。
-- BuildInfo 终态后保留图供诊断；历史构建或 Project 清理时，将 BuildGraph 纳入显式清理清单，核对 owner UID 并使用对象 UID/resourceVersion 删除前置条件。ownerReferences 只记录归属，不假定已有通用垃圾回收器；仅删除 BuildInfo 不自动删除图，不清理仍在构建的图。
+- BuildInfo 终态后保留图供诊断；历史构建或 Project 清理时，将 BuildGraph 纳入显式清理清单，核对 owner UID 并使用对象 UID/resourceVersion 删除前置条件。ownerReferences 只记录归属，不假定已有通用垃圾回收器；删除 BuildInfo 时，停止本地生产后即可删除图，与 Job/OldJob 清理独立推进；全部消失后才移除 BuildInfo finalizer。仅进入业务终态不触发删除。
 - 获取、缓存版本核对、写入确认及丢失处理以 [BuildInfo Controller 15.9](controller-manager~buildinfo-controller.md#159-buildgraph-持久化与-dcg-缓存g-02) 为准。
 
 ### BuildGraphNode
@@ -600,9 +602,9 @@ type RpmRepoReleaseStatus struct {
 }
 
 type RpmRepoStatus struct {
-    Repository       *RpmRepoRepositoryStatus `json:"repository,omitempty"`
-    Release          *RpmRepoReleaseStatus    `json:"release,omitempty"`
-    Conditions        []metav1.Condition    `json:"conditions,omitempty"`
+    Repository *RpmRepoRepositoryStatus `json:"repository,omitempty"`
+    Release    *RpmRepoReleaseStatus    `json:"release,omitempty"`
+    Conditions []metav1.Condition       `json:"conditions,omitempty"`
 }
 ```
 
@@ -631,7 +633,9 @@ RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact://
 
 RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared / Failed，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`CleanupReady` 仅在确认时写入 `True/reason=OperationsDrained`，此前不写占位条件；确认时 repository/release transition 必须均为空，之后不得删除该条件、改为非 True 或登记新 transition。Condition type 不允许重复。`/status` 保留受保护 metadata。
 
-删除契约：apiserver 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer；DELETE 设置 `deletionTimestamp`，不改变业务状态。RpmRepo Controller 停止新操作、排空已登记任务并写 CleanupReady 后，通过主资源 PUT 移除自身 finalizer，保留其他 finalizer。主资源校验禁止在删除前、未确认或检查点尚未排空时移除此 finalizer。该流程只删除 API 对象，过程仓与正式发布文件保留。
+删除契约：apiserver 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer；DELETE 设置 `deletionTimestamp`，不改变业务状态。RpmRepo Controller 停止新操作、排空已登记任务并写 CleanupReady，再按 Project、Arch、BuildName 调用 Artifact Manager 清理本构建的过程仓及发布仓；仅 204 确认后通过主资源 PUT 移除自身 finalizer，保留其他 finalizer。CleanupReady 仅表示生产排空，不代表文件清理完成。主资源校验禁止在删除前、未确认或检查点尚未排空时移除此 finalizer。实例选择、current 保护与恢复协议详见 RpmRepo Controller 第一章。
+
+Build/BuildInfo 不持久化子资源创建请求登记。删除按当前可见对象收敛，接受极端故障下迟到创建导致子资源残留，由运维核对归属后清理；finalizer 不构成跨存储创建屏障。
 
 | Type | Status | Reason | 场景 |
 | --- | --- | --- | --- |

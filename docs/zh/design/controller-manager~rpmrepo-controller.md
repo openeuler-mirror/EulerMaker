@@ -99,7 +99,7 @@ PollingSources ─key────────▶   reconcile（经包内 Client�
   - 过滤语义：本源**只带** `fieldSelector`（由单个对象 key 重算），不带 `labelSelector`；只排除「发布终态（`release.phase ∈ {Ready, Failed, Skipped}`）」的 RpmRepo。过程仓不再有相位，apiserver 对 RpmRepo 的**字段**选择器只有 `metadata.name` / `metadata.namespace` / `metadata.deletionTimestamp` / `status.release.phase`（labelSelector 另行支持，发布候选查询见 §7.3），因此不能按过程仓状态过滤。字段缺失（`release` 为 null）视为「不等于任何具体相位」，不会被排除。RpmRepo 的 `ebs.io/target-arch` 标签由 Build Controller 在创建时写入、apiserver 创建校验强制存在；
   - 成本控制：物化在途与失败收口的对象都会每轮入队，但**重试路径完全不写 status**（计数在 Artifact Manager 侧，`attempt` 只通过响应读取），等待路径在状态未变化时也不写 status（见 7.2）；对象收敛到 `release.phase ∈ {Ready, Failed, Skipped}` 后即被本过滤排除；
   - RpmRepo 的 `status` 变化只用于触发重算，reconcile 内仍以最新 GET 的对象为准。
-- 删除源：按第一章的删除选择器分别轮询 BuildInfo、RpmRepo，只读取 metadata，以同名 key 入队，不受业务终态过滤影响。
+- 删除源：按第一章的删除选择器分别轮询 BuildInfo、RpmRepo，只读取 metadata，以同名 key 入队，不受业务终态过滤影响。Build 删除先标记 BuildInfo，若 BuildInfo 已不存在则直接标记 RpmRepo，因此由这两个删除源触发收敛；reconcile 仍读取父 Build 状态。
 - 本控制器不注册 Job Watch 源，不按 buildType 分支；single 不创建 RpmRepo，其 RPM 源由 BuildInfo Controller 直接选择稳定发布入口。非 single 的 `publish=false` 对象继续处理过程仓，完成后才写入 `Skipped`。
 - 满足发布条件时在当前对象的调谐中继续推进发布；后续轮询仍用相同 key 恢复在途工作，不需要独立的发布事件源。
 - 首次同步：manager 等待全部 Source `HasSynced` 后才启动 Worker；重启后由业务与删除源的首轮 List 为所有待处理对象重建 `{namespace}/{name}` 键（Job 侧不做全量 List：候选按对象名逐一 `ListJobs` 过滤）。

@@ -520,6 +520,8 @@ Ops token 仍只携带 `ebs:ops`，不与 `ebs:user` 组合；Gateway 在授权�
 
 Gateway 对所有身份拒绝删除内置 `Config/build-target`、`Config/build-resource`、`Config/services`；其他 Config 按上表授权。具名 GET/HEAD 必须先从 apiserver 读取一次对象，再依据同一响应中的 `spec.visibility` 判断是否可返回；非运维身份禁止 list，不能先透传列表再做过滤。
 
+Build DELETE 沿用上表的 owner/Admin 权限并转发删除前置条件。存在 `ebs.io/build-cleanup` finalizer 时，成功响应仅表示删除已受理，客户端可通过 GET 的 deletionTimestamp/finalizers 观察进度，404 表示 Build 已不存在；不把受理描述为清理完成。Gateway 不自行枚举删除派生资源，不开放 Build PUT/PATCH 或 OldJob DELETE；内部 Build Controller 的清理协议见 [Build 删除设计](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。目标清理范围包含 Job/OldJob 的日志、产物及上传元数据，以及本 Build 的过程仓和发布仓；文件清理由各子资源 Controller 的 finalizer 流程完成。
+
 矩阵中的权限还受 4.9 节完整对象比较和字段约束。User 只能通过 `/auth/register` 创建；Admin 不能读取或操作 `spec.scopes=["ebs:admin"]` 的 User，也不能设置或重置其他用户的密码。Runner 对 Job `/status` 的更新不得改变 `status.runner`。
 
 Ops 和 Admin 可通过现有 `PATCH /apis/ebs/v1/runners/{name}/status` 将 Runner 标记为 `Evicted`，无需独立驱逐接口。普通用户不允许该操作（403），匿名请求返回 401。Gateway 原样转发 apiserver 的响应，包括 404 和 resourceVersion 冲突的 409。
