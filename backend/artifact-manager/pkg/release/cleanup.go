@@ -42,11 +42,42 @@ func (m *Manager) StopBuild(project, arch, buildName string) (bool, error) {
 // DeleteBuild removes a build's release, record and abandoned work, but never the current release.
 // New submissions must already be stopped by the caller. Active work is reported as incomplete.
 func (m *Manager) DeleteBuild(project, arch, buildName string) (bool, error) {
+	return m.withBuildCleanup(project, arch, buildName, func() error {
+		return m.removeBuildFiles(project, arch, buildName)
+	})
+}
+
+// withBuildCleanup keeps the build reserved while filesystem work runs outside the global mutex.
+func (m *Manager) withBuildCleanup(project, arch, buildName string, cleanup func() error) (done bool, err error) {
+	ready, err := m.beginBuildCleanup(project, arch, buildName)
+	if err != nil || !ready {
+		return false, err
+	}
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(m.cleaningBuilds, buildName)
+		if done {
+			delete(m.records, buildName)
+			delete(m.metadataPaths, buildName)
+			delete(m.queued, buildName)
+		}
+	}()
+	if err := cleanup(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *Manager) beginBuildCleanup(project, arch, buildName string) (bool, error) {
 	if !validIdentifier(project) || !validIdentifier(arch) || !validIdentifier(buildName) {
 		return false, &Error{Code: "InvalidRequest", Status: http.StatusBadRequest}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.cleaningBuilds[buildName] {
+		return false, nil
+	}
 	targetDir := filepath.Join(m.root, "repositories", project, arch)
 	target, err := fileutil.OpenDirectory(m.root, "repositories", project, arch)
 	if err != nil {
@@ -70,10 +101,19 @@ func (m *Manager) DeleteBuild(project, arch, buildName string) (bool, error) {
 		(record.State == ReleaseCreating || record.State == ReleaseDeleting || m.running[buildName]) {
 		return false, nil
 	}
+	if m.cleaningBuilds == nil {
+		m.cleaningBuilds = make(map[string]bool)
+	}
+	// Build names are globally unique in release metadata; also block activation and retention for this name.
+	m.cleaningBuilds[buildName] = true
+	return true, nil
+}
+
+func (m *Manager) removeBuildFiles(project, arch, buildName string) error {
 	for _, dir := range []string{".work", ".trash", ".records"} {
 		parent, err := fileutil.OpenDirectory(m.root, "repositories", project, arch, "releases", dir)
 		if err != nil {
-			return false, releaseStorageError()
+			return releaseStorageError()
 		}
 		if parent != nil {
 			prefix := buildName
@@ -83,7 +123,7 @@ func (m *Manager) DeleteBuild(project, arch, buildName string) (bool, error) {
 			err := removeBuildTemporary(parent, prefix)
 			parent.Close()
 			if err != nil {
-				return false, releaseStorageError()
+				return releaseStorageError()
 			}
 		}
 	}
@@ -97,20 +137,17 @@ func (m *Manager) DeleteBuild(project, arch, buildName string) (bool, error) {
 	} {
 		parent, err := fileutil.OpenDirectory(m.root, entry.parents...)
 		if err != nil {
-			return false, releaseStorageError()
+			return releaseStorageError()
 		}
 		if parent != nil {
 			err := fileutil.RemoveEntry(parent, entry.name, entry.recursive)
 			parent.Close()
 			if err != nil {
-				return false, releaseStorageError()
+				return releaseStorageError()
 			}
 		}
 	}
-	delete(m.records, buildName)
-	delete(m.metadataPaths, buildName)
-	delete(m.queued, buildName)
-	return true, nil
+	return nil
 }
 
 func removeBuildTemporary(dir *os.Root, buildName string) error {
