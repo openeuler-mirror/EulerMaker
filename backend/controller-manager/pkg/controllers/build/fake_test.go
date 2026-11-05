@@ -550,6 +550,34 @@ func withPhaseStage(build *ebsv1.Build, phase ebsv1.BuildPhase, stage ebsv1.Buil
 	return build
 }
 
+func repoNames(repos []ebsv1.PackageRepo) []string {
+	names := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		names = append(names, repo.Name)
+	}
+	return names
+}
+
+func findCondition(t *testing.T, conditions []metav1.Condition, condType string) metav1.Condition {
+	t.Helper()
+	for _, condition := range conditions {
+		if condition.Type == condType {
+			return condition
+		}
+	}
+	t.Fatalf("condition %s not found in %+v", condType, conditions)
+	return metav1.Condition{}
+}
+
+func indexOf(values []string, target string) int {
+	for index, value := range values {
+		if value == target {
+			return index
+		}
+	}
+	return -1
+}
+
 func testSpecResults(entries map[string]ebsv1.SpecResult) ebsv1.SpecResults {
 	results := ebsv1.SpecResults{}
 	for name, result := range entries {
@@ -598,4 +626,9 @@ func activeSnapshot(project, name string) *ebsv1.Snapshot {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
 		Status:     ebsv1.SnapshotStatus{Phase: ebsv1.SnapshotActive},
 	}
+}
+
+func withBaseBuildRefName(build *ebsv1.Build, name string) *ebsv1.Build {
+	build.Status.BaseBuildRef = &ebsv1.BaseBuildRef{Name: name}
+	return build
 }
