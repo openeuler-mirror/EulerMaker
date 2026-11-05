@@ -96,6 +96,16 @@ func ValidateBuildPackages(build *ebsv1.Build, project *ebsv1.Project) field.Err
 	return errs
 }
 
+func ValidateBuildDelete(obj *ebsv1.Build) field.ErrorList {
+	if !obj.Status.Phase.IsTerminal() {
+		return field.ErrorList{field.Forbidden(field.NewPath("status", "phase"), "only terminal builds can be deleted; abort the build first")}
+	}
+	if obj.Status.Phase == ebsv1.BuildSuccess && obj.Status.Stage == ebsv1.BuildStagePublish {
+		return field.ErrorList{field.Forbidden(field.NewPath("status"), "successfully published builds cannot be deleted")}
+	}
+	return nil
+}
+
 func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	allErrs := ValidateBuild(newObj)
 	newRef, newExists := newObj.Annotations[ebsv1.BuildGitRefAnnotation]
@@ -107,7 +117,7 @@ func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	if !apiequality.Semantic.DeepEqual(newObj.Spec, oldObj.Spec) {
 		previous, next := oldObj.Spec, newObj.Spec
 		previous.Packages, next.Packages = nil, nil
-		if oldObj.Spec.BuildType != ebsv1.BuildTypeIncremental || oldObj.Status.Phase != ebsv1.BuildPending || !apiequality.Semantic.DeepEqual(previous, next) {
+		if oldObj.DeletionTimestamp != nil || oldObj.Spec.BuildType != ebsv1.BuildTypeIncremental || oldObj.Status.Phase != ebsv1.BuildPending || !apiequality.Semantic.DeepEqual(previous, next) {
 			allErrs = append(allErrs, field.Invalid(field.NewPath("spec"), newObj.Spec, "field is immutable except incremental packages while Pending"))
 		}
 	}

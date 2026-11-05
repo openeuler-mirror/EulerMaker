@@ -15,6 +15,7 @@ type FakeArtifactManager struct {
 	GetReleaseFunc              func(context.Context, string) (ReleaseResponse, error)
 	ActivateReleaseFunc         func(context.Context, string) (ReleaseResponse, error)
 	DeleteBuildRepositoriesFunc func(context.Context, string, string, string) (bool, error)
+	StopBuildRepositoriesFunc   func(context.Context, string, string, string) (bool, error)
 
 	SubmitRepositoryRequests []CreateRepositoryRequest
 	GetRepositoryUIDs        []string
@@ -23,6 +24,7 @@ type FakeArtifactManager struct {
 	GetReleaseBuildNames     []string
 	ActivateReleaseNames     []string
 	DeleteBuildRequests      [][3]string
+	StopBuildRequests        [][3]string
 }
 
 func NewFakeArtifactManager() *FakeArtifactManager { return &FakeArtifactManager{} }
@@ -84,6 +86,14 @@ func (f *FakeArtifactManager) DeleteBuildRepositories(ctx context.Context, proje
 	return true, nil
 }
 
+func (f *FakeArtifactManager) StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
+	f.StopBuildRequests = append(f.StopBuildRequests, [3]string{project, arch, buildName})
+	if f.StopBuildRepositoriesFunc != nil {
+		return f.StopBuildRepositoriesFunc(ctx, project, arch, buildName)
+	}
+	return true, nil
+}
+
 // Reset clears the recorded calls while keeping the scripted responses.
 func (f *FakeArtifactManager) Reset() {
 	f.SubmitRepositoryRequests = nil
@@ -93,4 +103,5 @@ func (f *FakeArtifactManager) Reset() {
 	f.GetReleaseBuildNames = nil
 	f.ActivateReleaseNames = nil
 	f.DeleteBuildRequests = nil
+	f.StopBuildRequests = nil
 }

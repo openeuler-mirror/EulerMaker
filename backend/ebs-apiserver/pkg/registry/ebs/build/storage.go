@@ -56,6 +56,9 @@ func NewStorage() *scopedresource.Storage {
 		ValidateStatus: func(obj, old runtime.Object) field.ErrorList {
 			return validation.ValidateBuildStatusUpdate(obj.(*ebsv1.Build), old.(*ebsv1.Build))
 		},
+		ValidateDelete: func(obj runtime.Object) field.ErrorList {
+			return validation.ValidateBuildDelete(obj.(*ebsv1.Build))
+		},
 	})
 }
 

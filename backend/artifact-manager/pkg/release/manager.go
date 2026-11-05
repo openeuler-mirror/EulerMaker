@@ -104,6 +104,11 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := repository.CheckBuildActive(m.root, in.Project, in.TargetArch, in.BuildName); err != nil {
+		return nil, 0, releaseStopError(err)
+	}
 	source, ok, sourceErr := m.repositories.Get(in.SourceRepositoryUID)
 	if sourceErr != nil {
 		return nil, 0, releaseStorageError()
@@ -115,8 +120,6 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 		source.TargetArch != in.TargetArch {
 		return nil, 0, &Error{Code: "SourceRepositoryNotReady", Status: http.StatusUnprocessableEntity}
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	old, err := m.recordLocked(in.BuildName)
 	if err != nil {
 		return nil, 0, releaseStorageError()
@@ -262,6 +265,9 @@ func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	}
 	if record == nil {
 		return nil, 0, &Error{Code: "ReleaseNotFound", Status: http.StatusNotFound}
+	}
+	if err := repository.CheckBuildActive(m.root, record.Project, record.TargetArch, record.BuildName); err != nil {
+		return nil, 0, releaseStopError(err)
 	}
 	if record.State != ReleasePrepared && record.State != ReleaseReady {
 		return nil, 0, &Error{Code: "ReleaseNotReady", Status: http.StatusConflict}

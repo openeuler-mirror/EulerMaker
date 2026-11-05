@@ -43,7 +43,7 @@ type Config struct {
 	ValidateUpdate func(runtime.Object, runtime.Object) field.ErrorList
 	ValidateStatus func(runtime.Object, runtime.Object) field.ErrorList
 
-	// ValidateDelete is applied by native storage during deletion.
+	// ValidateDelete is applied before native or ES storage accepts deletion.
 	ValidateDelete func(runtime.Object) field.ErrorList
 }
 
@@ -106,14 +106,13 @@ func (s *Storage) CompleteWithOptions(options *generic.StoreOptions) error {
 		s.Status = &statusREST{store: &status}
 	}
 	if s.validateDelete != nil {
-		s.Resource = &resourceREST{Store: store, validateDelete: s.validateDelete}
+		s.Resource = &resourceREST{Store: store}
 	}
 	return nil
 }
 
 type resourceREST struct {
 	*genericregistry.Store
-	validateDelete func(runtime.Object) field.ErrorList
 }
 
 func (r *resourceREST) Delete(ctx context.Context, name string, validate rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
@@ -126,12 +125,8 @@ func (r *resourceREST) DeleteCollection(ctx context.Context, validate rest.Valid
 
 func (r *resourceREST) deletionValidation(validate rest.ValidateObjectFunc) rest.ValidateObjectFunc {
 	return func(ctx context.Context, obj runtime.Object) error {
-		if errs := r.validateDelete(obj); len(errs) != 0 {
-			accessor, err := meta.Accessor(obj)
-			if err != nil {
-				return apierrors.NewInternalError(err)
-			}
-			return apierrors.NewConflict(r.DefaultQualifiedResource, accessor.GetName(), errs.ToAggregate())
+		if err := r.DeleteStrategy.(*strategy).ValidateDelete(ctx, obj); err != nil {
+			return err
 		}
 		if validate != nil {
 			return validate(ctx, obj)
@@ -180,6 +175,21 @@ func keyFunc(resource string, clusterScoped bool) func(context.Context, string) 
 }
 
 type strategy struct{ config Config }
+
+// ValidateDelete checks the stored object before deletion is marked or persisted.
+func (s *strategy) ValidateDelete(_ context.Context, obj runtime.Object) error {
+	if s.config.ValidateDelete == nil {
+		return nil
+	}
+	if errs := s.config.ValidateDelete(obj); len(errs) != 0 {
+		accessor, err := meta.Accessor(obj)
+		if err != nil {
+			return apierrors.NewInternalError(err)
+		}
+		return apierrors.NewConflict(ebsv1.Resource(s.config.Resource), accessor.GetName(), errs.ToAggregate())
+	}
+	return nil
+}
 
 func (s *strategy) NamespaceScoped() bool          { return !s.config.ClusterScoped }
 func (s *strategy) AllowCreateOnUpdate() bool      { return false }

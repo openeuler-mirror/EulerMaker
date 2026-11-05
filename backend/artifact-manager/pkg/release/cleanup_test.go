@@ -6,9 +6,94 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"artifact-manager/pkg/fileutil"
+	"artifact-manager/pkg/repository"
 )
+
+func TestStopBuildFencesReleaseSubmissionAndActivation(t *testing.T) {
+	root := t.TempDir()
+	source := &repository.RepositoryRecord{
+		RepositoryUID: "source", Project: "project", TargetArch: "arch", BuildName: "build",
+		State: repository.RepositoryReady,
+	}
+	if err := fileutil.AtomicJSON(filepath.Join(root, "repositories/project/arch/history/build/.records/source.json"), source); err != nil {
+		t.Fatal(err)
+	}
+	if err := fileutil.AtomicJSON(filepath.Join(root, "repositories/project/arch/history/build/steps/source/.repository.json"), repository.Index{RepositoryUID: "source"}); err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := repository.NewManager(root, repository.Config{WorkTTL: time.Hour}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repositories.Stop()
+	request, digest, err := normalizeReleaseRequest(CreateReleaseRequest{
+		Project: "project", TargetArch: "arch", BuildName: "build", SourceRepositoryUID: "source",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{
+		root: root, repositories: repositories, records: map[string]*ReleaseRecord{}, running: map[string]bool{},
+	}
+	record := &ReleaseRecord{
+		Project: "project", TargetArch: "arch", BuildName: "build", SourceRepositoryUID: "source",
+		State: ReleaseCreating, RequestDigest: digest,
+	}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	m.running[record.BuildName] = true
+	if done, err := m.StopBuild("project", "arch", "build"); done || err != nil {
+		t.Fatalf("active release stop: %t, %v", done, err)
+	}
+	// Completion after the fence may prepare files, but must not change current.
+	m.finish(record, Result{Digest: "digest"}, nil)
+	got, _, err := m.Get(record.BuildName)
+	if err != nil || got.State != ReleasePrepared {
+		t.Fatalf("release completion after stop: %+v, %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "repositories/project/arch/current")); !os.IsNotExist(err) {
+		t.Fatalf("stopped release changed current: %v", err)
+	}
+	if done, err := m.StopBuild("project", "arch", "build"); !done || err != nil {
+		t.Fatalf("drained release stop: %t, %v", done, err)
+	}
+	for _, state := range []ReleaseState{ReleasePrepared, ReleaseFailed} {
+		record.State, record.Failure = state, &FailureInfo{Retryable: true}
+		if err := m.persist(record); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := m.Submit(request)
+		var failure *Error
+		if !errors.As(err, &failure) || failure.Code != "BuildStopped" {
+			t.Fatalf("late %s replay: %v", state, err)
+		}
+	}
+	record.State = ReleasePrepared
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	// Reload the persisted Prepared record and fence, without a process-local stop flag.
+	m = &Manager{root: root, repositories: repositories, records: map[string]*ReleaseRecord{}}
+	if err := m.recover(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = m.Activate(record.BuildName)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != "BuildStopped" {
+		t.Fatalf("activation after restart: %v", err)
+	}
+	if done, err := repositories.DeleteBuild("project", "arch", "build"); err != nil || !done {
+		t.Fatalf("source cleanup: %t, %v", done, err)
+	}
+	_, _, err = m.Submit(request)
+	if !errors.As(err, &failure) || failure.Code != "BuildStopped" {
+		t.Fatalf("submission after source cleanup: %v", err)
+	}
+}
 
 func TestDeleteBuildRelease(t *testing.T) {
 	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}, running: map[string]bool{}}

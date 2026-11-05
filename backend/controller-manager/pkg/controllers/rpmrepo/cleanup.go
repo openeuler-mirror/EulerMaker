@@ -69,66 +69,28 @@ func (r *reconciler) cleanupRpmRepo(repo *ebsv1.RpmRepo) (controller.ReconcileRe
 	return controller.ReconcileResult{}, err
 }
 
-// drainCheckpoints only observes registered work; 404 or transport failures never discard an unknown submission.
+// drainCheckpoints confirms a durable submission fence before discarding frozen requests.
 func (r *reconciler) drainCheckpoints(repo *ebsv1.RpmRepo) (controller.ReconcileResult, error) {
-	hasRepository := repo.Status.Repository != nil && repo.Status.Repository.Transition != nil
-	hasRelease := repo.Status.Release != nil && repo.Status.Release.Transition != nil
-	if hasRepository || hasRelease {
-		if err := r.selectArtifactManager(repo); err != nil {
-			return controller.ReconcileResult{}, err
-		}
+	if err := r.selectArtifactManager(repo); err != nil {
+		return controller.ReconcileResult{}, err
+	}
+	done, err := r.artifactClient().StopBuildRepositories(r.ctx, r.project, repo.Labels[ebsv1.BuildTargetArchLabel], repo.Name)
+	if err != nil {
+		return controller.ReconcileResult{}, classifyArtifactReadError(err)
+	}
+	if !done {
+		return controller.ReconcileResult{RequeueAfter: 5 * time.Second}, nil
 	}
 	target := repo.DeepCopy()
-	if hasRepository {
-		transition := repo.Status.Repository.Transition
-		response, err := r.artifactClient().GetRepository(r.ctx, transition.RepositoryUID)
-		if err != nil {
-			return controller.ReconcileResult{}, err
-		}
-		if violation := repositoryContractViolation(transition, response); violation != "" {
-			return controller.ReconcileResult{}, fmt.Errorf("repository cleanup response: %s", violation)
-		}
-		switch response.State {
-		case RepositoryFailed:
-			if response.Failure == nil || response.Failure.Retryable {
-				return controller.ReconcileResult{}, fmt.Errorf("repository cleanup cannot confirm retryable failure has no late replay")
-			}
-			fallthrough
-		case RepositoryReady:
-			target.Status.Repository.Transition = nil
-		case RepositoryCreating, RepositoryDeleting:
-			return controller.ReconcileResult{RequeueAfter: pollAfter(response.PollAfterSeconds)}, nil
-		default:
-			return controller.ReconcileResult{}, fmt.Errorf("unknown repository cleanup state %q", response.State)
-		}
+	if target.Status.Repository != nil {
+		target.Status.Repository.Transition = nil
 	}
-	if hasRelease {
-		response, err := r.artifactClient().GetRelease(r.ctx, repo.Name)
-		if err != nil {
-			return controller.ReconcileResult{}, err
-		}
-		if violation := releaseContractViolation(repo, response); violation != "" {
-			return controller.ReconcileResult{}, fmt.Errorf("release cleanup response: %s", violation)
-		}
-		switch response.State {
-		case ReleaseFailed:
-			if response.Failure == nil || response.Failure.Retryable {
-				return controller.ReconcileResult{}, fmt.Errorf("release cleanup cannot confirm retryable failure has no late replay")
-			}
-			fallthrough
-		case ReleaseReady, ReleasePrepared:
-			// Prepared work is already idle. Cleanup must not activate a release and make it current.
-			target.Status.Release.Transition = nil
-		case ReleaseCreating, ReleaseDeleting:
-			return controller.ReconcileResult{RequeueAfter: pollAfter(response.PollAfterSeconds)}, nil
-		default:
-			return controller.ReconcileResult{}, fmt.Errorf("unknown release cleanup state %q", response.State)
-		}
+	if target.Status.Release != nil {
+		target.Status.Release.Transition = nil
 	}
-	// This acknowledgment is written by the sole producer, never inferred by the cleanup consumer.
 	target.Status.Conditions, _ = MergeCondition(target.Status.Conditions,
 		ebsv1.RpmRepoConditionCleanupReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonOperationsDrained,
-		"New submissions stopped and all registered operations drained", target.Generation, r.now)
-	_, err := r.commitStatus(target, func(current *ebsv1.RpmRepo) bool { return reflect.DeepEqual(current.Status, target.Status) }, "BuildCleanupCheckpointDrained")
+		"Submissions fenced and all accepted operations drained", target.Generation, r.now)
+	_, err = r.commitStatus(target, func(current *ebsv1.RpmRepo) bool { return reflect.DeepEqual(current.Status, target.Status) }, "BuildCleanupCheckpointDrained")
 	return controller.ReconcileResult{}, err
 }

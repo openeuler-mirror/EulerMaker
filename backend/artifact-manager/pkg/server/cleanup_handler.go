@@ -1,10 +1,37 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"artifact-manager/pkg/repository"
 )
+
+func (s *Server) stopBuildRepositories(c *gin.Context) {
+	project, arch, build := c.Param("project"), c.Param("arch"), c.Param("build")
+	if !validIdentifier(project) || !validIdentifier(arch) || !validIdentifier(build) || c.Request.ContentLength != 0 {
+		writeErr(c.Writer, c.Request, http.StatusBadRequest, "InvalidRequest", "invalid stop scope or nonempty body", false, nil)
+		return
+	}
+	done, err := s.releases.StopBuild(project, arch, build)
+	if err != nil {
+		var repoErr *repository.Error
+		if errors.As(err, &repoErr) {
+			s.writeRepositoryError(c.Writer, c.Request, err)
+		} else {
+			s.writeReleaseError(c.Writer, c.Request, err)
+		}
+		return
+	}
+	if !done {
+		c.Header("Retry-After", "5")
+		c.Status(http.StatusAccepted)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
 
 func (s *Server) deleteBuildRepositories(c *gin.Context) {
 	w, r := c.Writer, c.Request

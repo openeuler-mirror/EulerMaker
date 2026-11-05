@@ -124,6 +124,7 @@ type ArtifactManagerClient interface {
 	GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
 	ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
 	DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
+	StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
 }
 
 type artifactErrorKind string
@@ -306,6 +307,26 @@ func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, projec
 	}
 }
 
+func (c *httpArtifactClient) StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
+	if project == "" || arch == "" || buildName == "" {
+		return false, fmt.Errorf("repository stop requires project, architecture and build name")
+	}
+	path := "/internal/v1/projects/" + url.PathEscape(project) + "/architectures/" + url.PathEscape(arch) +
+		"/builds/" + url.PathEscape(buildName) + "/repositories/stop"
+	status, err := c.callStatus(ctx, http.MethodPost, path, nil, nil)
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case http.StatusNoContent:
+		return true, nil
+	case http.StatusAccepted:
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected repository stop status %d", status)
+	}
+}
+
 func (c *httpArtifactClient) call(ctx context.Context, method, path string, body any, out any) error {
 	_, err := c.callStatus(ctx, method, path, body, out)
 	return err
@@ -413,6 +434,8 @@ func parseRetryAfter(value string) time.Duration {
 
 func operationFor(path, method string) string {
 	switch {
+	case method == http.MethodPost && strings.HasSuffix(path, "/repositories/stop"):
+		return "stop-build-repositories"
 	case method == http.MethodDelete && strings.HasSuffix(path, "/repositories"):
 		return "delete-build-repositories"
 	case strings.HasSuffix(path, "/activate"):

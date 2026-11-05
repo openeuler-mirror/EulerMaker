@@ -334,6 +334,13 @@ func (s *Store) Delete(ctx context.Context, name string, admission rest.Validate
 			return nil, false, apierrors.NewConflict(s.resource, name, fmt.Errorf("resourceVersion precondition failed"))
 		}
 	}
+	if validator, ok := s.deleteStrategy.(interface {
+		ValidateDelete(context.Context, runtime.Object) error
+	}); ok {
+		if err := validator.ValidateDelete(ctx, obj); err != nil {
+			return nil, false, err
+		}
+	}
 	if admission != nil {
 		if err := admission(ctx, obj.DeepCopyObject()); err != nil {
 			return nil, false, err

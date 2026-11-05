@@ -24,9 +24,9 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
 	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Transition: &ebsv1.RepositoryTransition{RepositoryUID: "pending"}}
 	client.RpmRepos[key(testProject, testBuild)] = repo
-	state := RepositoryCreating
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: "pending", State: state, UpdatedAt: time.Now(), Attempt: 1}, nil
+	drained := false
+	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+		return drained, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 	run := func() {
@@ -39,7 +39,7 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	if len(client.Updates) != 0 || client.RpmRepos[key(testProject, testBuild)].Status.Repository.Transition == nil {
 		t.Fatal("pending work must retain the checkpoint and finalizer")
 	}
-	state = RepositoryReady
+	drained = true
 	run()
 	ack := client.RpmRepos[key(testProject, testBuild)].DeepCopy()
 	if !meta.IsStatusConditionTrue(ack.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) || len(client.Updates) != 0 {
@@ -103,9 +103,6 @@ func TestCleanupDrainsPreparedReleaseWithoutActivation(t *testing.T) {
 		Phase: ebsv1.RpmRepoReleasePrepared, Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "source"},
 	}
 	client.RpmRepos[key(testProject, testBuild)] = repo
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: testBuild, State: ReleasePrepared, UpdatedAt: time.Now()}, nil
-	}
 	c := newTestController(t, client, artifacts, testConfig())
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil {
 		t.Fatal(err)
@@ -167,7 +164,7 @@ func TestRpmRepoFinalizerWriteRecovery(t *testing.T) {
 	}
 }
 
-func TestDeletingBuildDrainsRegisteredRepositoryOnly(t *testing.T) {
+func TestDeletingBuildWaitsForSubmissionFence(t *testing.T) {
 	client, artifacts := NewFakeClient(), NewFakeArtifactManager()
 	build := newBuild(testBuild)
 	now := metav1.Now()
@@ -180,9 +177,9 @@ func TestDeletingBuildDrainsRegisteredRepositoryOnly(t *testing.T) {
 	// Failed releases may still carry an abandoned materialization checkpoint.
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
 	client.RpmRepos[key(testProject, testBuild)] = repo
-	state := RepositoryCreating
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: "inflight", State: state, Attempt: 1, UpdatedAt: time.Now(), Failure: &FailureInfo{Code: "PackageMetadataInvalid"}}, nil
+	drained := false
+	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+		return drained, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil {
@@ -191,7 +188,7 @@ func TestDeletingBuildDrainsRegisteredRepositoryOnly(t *testing.T) {
 	if client.RpmRepos[key(testProject, testBuild)].Status.Repository.Transition == nil {
 		t.Fatal("running work lost its checkpoint")
 	}
-	state = RepositoryFailed
+	drained = true
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +200,7 @@ func TestDeletingBuildDrainsRegisteredRepositoryOnly(t *testing.T) {
 	}
 }
 
-func TestDeletingBuildRetainsUnknownReleaseUntilReady(t *testing.T) {
+func TestDeletingBuildRetainsCheckpointUntilStopConfirmed(t *testing.T) {
 	client, artifacts := NewFakeClient(), NewFakeArtifactManager()
 	build := newBuild(testBuild)
 	now := metav1.Now()
@@ -212,32 +209,33 @@ func TestDeletingBuildRetainsUnknownReleaseUntilReady(t *testing.T) {
 	repo := inFlightReleaseRepo(testBuild)
 	repo.Status.Release.Phase = ebsv1.RpmRepoReleaseFailed
 	client.RpmRepos[key(testProject, testBuild)] = repo
-	state := ReleaseCreating
-	readErr := fmt.Errorf("request outcome unknown")
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: testBuild, State: state, UpdatedAt: time.Now(),
-			Failure: &FailureInfo{Retryable: true}}, readErr
+	drained := false
+	stopErr := fmt.Errorf("request outcome unknown")
+	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+		return drained, stopErr
 	}
 	c := newTestController(t, client, artifacts, testConfig())
-	for _, failure := range []error{readErr, &artifactError{kind: artifactNotFound}} {
-		readErr = failure
+	for _, failure := range []error{stopErr, &artifactError{kind: artifactNotFound}} {
+		stopErr = failure
 		if _, err := c.sync(context.Background(), key(testProject, testBuild)); err == nil {
 			t.Fatal("unknown release must block cleanup")
 		}
 	}
-	readErr, state = nil, ReleaseFailed
-	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err == nil {
-		t.Fatal("retryable failure can still be restarted by a late submission")
+	stopErr = nil
+	if result, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil || result.RequeueAfter != 5*time.Second {
+		t.Fatalf("pending stop: %+v, %v", result, err)
 	}
 	if client.RpmRepos[key(testProject, testBuild)].Status.Release.Transition == nil {
 		t.Fatal("unresolved release checkpoint disappeared")
 	}
-	state = ReleaseReady
+	// A restarted controller can discard even a never-submitted request after the fence is confirmed.
+	c = newTestController(t, client, artifacts, testConfig())
+	drained = true
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil {
 		t.Fatal(err)
 	}
 	if client.RpmRepos[key(testProject, testBuild)].Status.Release.Transition != nil {
-		t.Fatal("ready release checkpoint not drained")
+		t.Fatal("stopped release checkpoint not drained")
 	}
 	if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.SubmitRepositoryRequests) != 0 {
 		t.Fatal("deletion must not submit work")
@@ -252,9 +250,6 @@ func TestDeletingBuildInfoDrainsFailedRelease(t *testing.T) {
 	repo := inFlightReleaseRepo(testBuild)
 	repo.Status.Release.Phase = ebsv1.RpmRepoReleaseFailed
 	client.RpmRepos[key(testProject, testBuild)] = repo
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: testBuild, State: ReleaseReady, UpdatedAt: time.Now()}, nil
-	}
 	c := newTestController(t, client, artifacts, testConfig())
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil {
 		t.Fatal(err)
@@ -304,5 +299,8 @@ func TestCleanupAcknowledgmentStopsFutureProduction(t *testing.T) {
 	}
 	if len(client.StatusWrites) != writes || len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
 		t.Fatal("acknowledged repository resumed production")
+	}
+	if !reflect.DeepEqual(artifacts.StopBuildRequests, [][3]string{{testProject, testArch, testBuild}}) {
+		t.Fatalf("unexpected stop scope or repeated stop: %v", artifacts.StopBuildRequests)
 	}
 }

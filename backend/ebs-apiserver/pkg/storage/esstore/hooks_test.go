@@ -2,22 +2,28 @@ package esstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"reflect"
 	"slices"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	request "k8s.io/apiserver/pkg/endpoints/request"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	ebsv1 "ebs-api/ebs/v1"
+	"ebs-apiserver/pkg/apis/ebs/validation"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
+	"ebs-apiserver/pkg/registry/ebs/scopedresource"
 	"ebs-apiserver/pkg/storage/es"
 )
 
@@ -206,6 +212,106 @@ func TestRpmRepoDeletionRequiresDrainedFinalizer(t *testing.T) {
 	}
 	if deletes != 1 {
 		t.Fatalf("physical deletes=%d", deletes)
+	}
+}
+
+func TestBuildDeletionValidationBeforePersistence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		phase   ebsv1.BuildPhase
+		stage   ebsv1.BuildStage
+		allowed bool
+	}{
+		{"processing", ebsv1.BuildProcessing, ebsv1.BuildStageBuild, false},
+		{"published", ebsv1.BuildSuccess, ebsv1.BuildStagePublish, false},
+		{"single succeeded", ebsv1.BuildSuccess, ebsv1.BuildStageBuild, true},
+		{"aborted", ebsv1.BuildAborted, ebsv1.BuildStageBuild, true},
+	} {
+		for _, mode := range []string{"delete", "dry-run", "collection", "collection dry-run"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				build := &ebsv1.Build{
+					ObjectMeta: metav1.ObjectMeta{Name: "build", Namespace: "project", UID: "uid",
+						Finalizers: []string{ebsv1.BuildCleanupFinalizer}},
+					Status: ebsv1.BuildStatus{Phase: tc.phase, Stage: tc.stage},
+				}
+				document, err := json.Marshal(map[string]interface{}{"data": build})
+				if err != nil {
+					t.Fatal(err)
+				}
+				fake := &fakeES{document: document, seqNo: 7}
+				writes := 0
+				client := es.NewClientForTesting("http://es", &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+					switch r.URL.Path {
+					case "/ebs-builds/_pit":
+						return jsonResponse(200, map[string]string{"id": "pit"}), nil
+					case "/_pit":
+						return jsonResponse(200, map[string]bool{"succeeded": true}), nil
+					case "/_search":
+						return jsonResponse(200, map[string]interface{}{
+							"pit_id": "pit", "hits": map[string]interface{}{
+								"total": map[string]int{"value": 1},
+								"hits": []interface{}{map[string]interface{}{
+									"_id": "project/build", "_seq_no": fake.seqNo, "_primary_term": 1,
+									"_source": json.RawMessage(fake.document),
+								}},
+							},
+						}), nil
+					}
+					if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+						writes++
+						if r.Method != http.MethodPut || r.URL.Query().Get("if_seq_no") != "7" ||
+							r.URL.Query().Get("if_primary_term") != "1" {
+							t.Fatalf("unexpected deletion write: %s %s", r.Method, r.URL)
+						}
+					}
+					return fake.roundTrip(r)
+				})})
+				template := scopedresource.NewStorage(scopedresource.Config{
+					Resource: "builds", Singular: "build", Kind: "Build",
+					New:     func() runtime.Object { return &ebsv1.Build{} },
+					NewList: func() runtime.Object { return &ebsv1.BuildList{} },
+					ValidateDelete: func(obj runtime.Object) field.ErrorList {
+						return validation.ValidateBuildDelete(obj.(*ebsv1.Build))
+					},
+				})
+				store := New(client, "build", "Build", template.Resource.(*genericregistry.Store))
+				ctx := request.WithNamespace(context.Background(), "project")
+				opts := &metav1.DeleteOptions{}
+				dryRun := mode == "dry-run" || mode == "collection dry-run"
+				if dryRun {
+					opts.DryRun = []string{metav1.DryRunAll}
+				}
+				if mode == "collection" || mode == "collection dry-run" {
+					_, err = store.DeleteCollection(ctx, nil, opts, &internalversion.ListOptions{})
+				} else {
+					_, _, err = store.Delete(ctx, build.Name, nil, opts)
+				}
+				if tc.allowed && err != nil || !tc.allowed && !apierrors.IsConflict(err) {
+					t.Fatalf("allowed=%t, error=%v", tc.allowed, err)
+				}
+				wantWrites := 0
+				if tc.allowed && !dryRun {
+					wantWrites = 1
+				}
+				if writes != wantWrites {
+					t.Fatalf("writes=%d, want %d", writes, wantWrites)
+				}
+				current, err := store.Get(ctx, build.Name, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				persisted := current.(*ebsv1.Build)
+				if (persisted.DeletionTimestamp != nil) != (wantWrites == 1) ||
+					!slices.Equal(persisted.Finalizers, build.Finalizers) || !reflect.DeepEqual(persisted.Status, build.Status) {
+					t.Fatalf("unexpected persisted build: %+v", persisted)
+				}
+				if wantWrites == 1 {
+					if _, _, err := store.Delete(ctx, build.Name, nil, nil); err != nil || writes != 1 {
+						t.Fatalf("repeated delete: writes=%d, error=%v", writes, err)
+					}
+				}
+			})
+		}
 	}
 }
 
