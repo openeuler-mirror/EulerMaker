@@ -142,23 +142,6 @@ func TestPendingDoesNotBackfillLabelsOnExistingRpmRepo(t *testing.T) {
 	}
 }
 
-func TestPendingSingleBuildPreparesWithoutRepository(t *testing.T) {
-	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "single", []string{"gcc"})
-	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
-	c := newTestController(t, api, newTestClock())
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if api.CallCount("GetRpmRepo") != 0 || api.CallCount("CreateRpmRepo") != 0 ||
-		api.CallCount("GetLastPublishedBuild") != 0 {
-		t.Fatalf("single build queried repository history: %v", api.calls)
-	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared {
-		t.Fatalf("phase = %q", stored.Status.Phase)
-	}
-}
-
 func TestRpmRepoKeepsBaseline(t *testing.T) {
 	for _, base := range []repositoryBase{{}, {repositoryUID: "version", contentURL: "https://artifact/repositories/v1/version/"}} {
 		build := newBuild("project-a", "build-a", "full", []string{"gcc"})

@@ -3,9 +3,8 @@ package build
 import (
 	"context"
 	"errors"
-	"strings"
+	"reflect"
 	"testing"
-	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -13,19 +12,209 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func testSpecResults(entries map[string]ebsv1.SpecResult) ebsv1.SpecResults {
-	results := ebsv1.SpecResults{}
-	for name, result := range entries {
-		result.SpecName = name
-		results[name+"/"+name+".spec"] = result
+// snapshotMissingTargetCondition is the Snapshot controller's condition type for a single build target that
+// cannot be resolved from the snapshot package repositories. The Build Controller deliberately does not
+// consume it, so the literal is pinned here to keep that boundary under test.
+const snapshotMissingTargetCondition = "TargetPackagesNotFound"
+
+func TestPendingRecordsBaseBuildRefFromHistory(t *testing.T) {
+	api := newFakeAPI()
+	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "full", []string{"gcc"})
+	previous := withPhaseStage(newBuild("project-a", "build-prev", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStagePublish)
+	api.hooks.lastPublished = func(project, targetArch string) (*ebsv1.Build, error) {
+		if project != "project-a" || targetArch != "aarch64" {
+			t.Errorf("unexpected history query %q %q", project, targetArch)
+		}
+		return previous, nil
 	}
-	return results
+	c := newTestController(t, api, newTestClock())
+	result, err := c.sync(context.Background(), "project-a/build-a")
+	if err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	stored := api.build("project-a", "build-a")
+	if stored.Status.BaseBuildRef == nil || stored.Status.BaseBuildRef.Name != "build-prev" {
+		t.Fatalf("baseBuildRef = %+v", stored.Status.BaseBuildRef)
+	}
+	if stored.Status.Phase != ebsv1.BuildPending || api.CallCount("UpdateBuildStatus") != 1 {
+		t.Fatalf("phase=%q writes=%d", stored.Status.Phase, api.CallCount("UpdateBuildStatus"))
+	}
+	if api.CallCount("CreateSnapshot") != 0 || api.CallCount("CreateRpmRepo") != 0 {
+		t.Fatal("the base reference write must end the round before any ensure")
+	}
 }
 
-func newBuildInfoObject(project, name string, phase ebsv1.BuildInfoPhase, statuses map[string]ebsv1.SpecResult) *ebsv1.BuildInfo {
-	return &ebsv1.BuildInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
-		Status:     ebsv1.BuildInfoStatus{Phase: phase, SpecResults: testSpecResults(statuses)},
+func TestPendingRecordsEmptyBaseBuildRefWhenNoHistoryExists(t *testing.T) {
+	api := newFakeAPI()
+	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "full", []string{"gcc"})
+	c := newTestController(t, api, newTestClock())
+	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	stored := api.build("project-a", "build-a")
+	if stored.Status.BaseBuildRef == nil {
+		t.Fatal("an empty resolution must be recorded as an empty object, not nil")
+	}
+	if stored.Status.BaseBuildRef.Name != "" {
+		t.Fatalf("baseBuildRef = %+v", stored.Status.BaseBuildRef)
+	}
+}
+
+func TestPendingCreatesSnapshotAndWaitsForActive(t *testing.T) {
+	api := newFakeAPI()
+	api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
+	api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"), newPackageRepo("glibc"))
+	c := newTestController(t, api, newTestClock())
+	result, err := c.sync(context.Background(), "project-a/build-a")
+	if err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	snapshot := api.snapshot("project-a", "build-a")
+	if snapshot == nil {
+		t.Fatal("Snapshot was not created")
+	}
+	if snapshot.Spec.DefaultRef != api.getProject("project-a").Spec.DefaultRef {
+		t.Fatalf("defaultRef = %+v", snapshot.Spec.DefaultRef)
+	}
+	if !reflect.DeepEqual(repoNames(snapshot.Spec.PackageRepos), []string{"gcc", "glibc"}) {
+		t.Fatalf("packageRepos = %v", repoNames(snapshot.Spec.PackageRepos))
+	}
+	if got := api.CallCount("GetProject project-a"); got != 1 {
+		t.Fatalf("project reads = %d, want 1", got)
+	}
+	if api.CallCount("UpdateBuildStatus") != 0 {
+		t.Fatal("a Pending Snapshot must not advance the Build")
+	}
+	if api.CallCount("CreateRpmRepo") != 0 || api.CallCount("GetRpmRepo") != 0 {
+		t.Fatal("RpmRepo must wait for an active Snapshot")
+	}
+}
+
+func TestPendingAdvancesToPrepared(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		buildType   ebsv1.BuildType
+		wantRpmRepo bool
+	}{
+		{name: "single skips RpmRepo", buildType: "single", wantRpmRepo: false},
+		{name: "full creates RpmRepo", buildType: "full", wantRpmRepo: true},
+		{name: "incremental creates RpmRepo", buildType: "incremental", wantRpmRepo: true},
+		{name: "specified creates RpmRepo", buildType: "specified", wantRpmRepo: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI()
+			api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", tc.buildType, []string{"gcc"}))
+			api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
+			api.storeSnapshot(&ebsv1.Snapshot{
+				ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
+				Status:     ebsv1.SnapshotStatus{Phase: ebsv1.SnapshotActive},
+			})
+			c := newTestController(t, api, newTestClock())
+			result, err := c.sync(context.Background(), "project-a/build-a")
+			if err != nil || result != (controller.ReconcileResult{}) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			stored := api.build("project-a", "build-a")
+			if stored.Status.Phase != ebsv1.BuildPrepared || stored.Status.Stage != "" {
+				t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
+			}
+			if got := api.CallCount("CreateRpmRepo") > 0; got != tc.wantRpmRepo {
+				t.Fatalf("RpmRepo created = %v, want %v", got, tc.wantRpmRepo)
+			}
+			if api.rpmRepo("project-a", "build-a") != nil != tc.wantRpmRepo {
+				t.Fatal("unexpected RpmRepo state")
+			}
+		})
+	}
+}
+
+// TestPendingAdvancesWhenSnapshotReportsMissingTargets pins the boundary that missing target packages are a
+// Snapshot quality record only: the Build still waits for Active only and advances to Prepared.
+func TestPendingAdvancesWhenSnapshotReportsMissingTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		buildType       ebsv1.BuildType
+		wantRpmRepoCall int
+	}{
+		{name: "single skips RpmRepo", buildType: "single", wantRpmRepoCall: 0},
+		{name: "full creates RpmRepo", buildType: "full", wantRpmRepoCall: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI()
+			api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", tc.buildType, []string{"gcc"}))
+			api.storeSnapshot(&ebsv1.Snapshot{
+				ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a"},
+				Status: ebsv1.SnapshotStatus{
+					Phase: ebsv1.SnapshotActive,
+					Conditions: []metav1.Condition{{
+						Type: snapshotMissingTargetCondition, Status: metav1.ConditionTrue,
+						Reason: snapshotMissingTargetCondition,
+					}},
+				},
+			})
+			c := newTestController(t, api, newTestClock())
+			result, err := c.sync(context.Background(), "project-a/build-a")
+			if err != nil || result != (controller.ReconcileResult{}) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			stored := api.build("project-a", "build-a")
+			if stored.Status.Phase != ebsv1.BuildPrepared || stored.Status.Stage != "" {
+				t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
+			}
+			if !stored.Status.EndTime.IsZero() {
+				t.Fatalf("a missing target package must not finish the Build: %+v", stored.Status)
+			}
+			if len(stored.Status.Conditions) != 0 {
+				t.Fatalf("conditions = %+v", stored.Status.Conditions)
+			}
+			if got := api.CallCount("CreateRpmRepo"); got != tc.wantRpmRepoCall {
+				t.Fatalf("CreateRpmRepo calls = %d, want %d", got, tc.wantRpmRepoCall)
+			}
+			if api.CallCount("CreateBuildInfo") != 0 || api.CallCount("GetProject") != 0 {
+				t.Fatal("Pending must not create BuildInfo or read Project")
+			}
+			if api.CallCount("UpdateBuildStatus") != 1 {
+				t.Fatalf("status writes = %d", api.CallCount("UpdateBuildStatus"))
+			}
+		})
+	}
+}
+
+func TestPreparedEnsuresBuildInfoAndEntersBuildStage(t *testing.T) {
+	api := newFakeAPI()
+	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
+	project := newProject("project-a", newPackageRepo("gcc"))
+	project.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "current", URL: "https://example.com/current"}}
+	api.projects["project-a"] = project
+	clk := newTestClock()
+	c := newTestController(t, api, clk)
+	result, err := c.sync(context.Background(), "project-a/build-a")
+	if err != nil || result != (controller.ReconcileResult{}) {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	info := api.buildInfo("project-a", "build-a")
+	if info == nil || !reflect.DeepEqual(info.Spec.BootstrapRepos, api.getProject("project-a").Spec.BootstrapRepos) {
+		t.Fatalf("BuildInfo = %+v", info)
+	}
+	stored := api.build("project-a", "build-a")
+	if info.Spec.Image != "build:test" || api.CallCount("GetBuildTargetContent") != 1 {
+		t.Fatalf("image = %q, config reads = %d", info.Spec.Image, api.CallCount("GetBuildTargetContent"))
+	}
+	if stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
+		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
+	}
+	if stored.Spec.BuildType != "full" || !reflect.DeepEqual(stored.Spec.Packages, []string{"gcc"}) {
+		t.Fatalf("the status write must preserve the Build spec: %+v", stored.Spec)
+	}
+	if !stored.Status.StartTime.Time.Equal(clk.Now().UTC()) {
+		t.Fatalf("startTime = %+v, want %+v", stored.Status.StartTime, clk.Now().UTC())
+	}
+	if api.CallCount("GetSnapshot") != 0 || api.CallCount("GetRpmRepo") != 0 {
+		t.Fatal("Prepared must only ensure its own BuildInfo")
+	}
+	calls := api.Calls()
+	if indexOf(calls, "CreateBuildInfo project-a/build-a") > indexOf(calls, "UpdateBuildStatus project-a/build-a") {
+		t.Fatalf("BuildInfo must be created before the status write: %v", calls)
 	}
 }
 
@@ -383,29 +572,19 @@ func TestProcessingReadFailuresStayTransient(t *testing.T) {
 	}
 }
 
-func testCondition(conditions []metav1.Condition, condType string) (metav1.Condition, bool) {
-	for _, condition := range conditions {
-		if condition.Type == condType {
-			return condition, true
-		}
+func TestPendingSingleBuildPreparesWithoutRepository(t *testing.T) {
+	api := newFakeAPI()
+	api.builds[key("project-a", "build-a")] = newBuild("project-a", "build-a", "single", []string{"gcc"})
+	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
+	c := newTestController(t, api, newTestClock())
+	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
+		t.Fatalf("sync: %v", err)
 	}
-	return metav1.Condition{}, false
-}
-
-// assertConditionTime checks that a freshly written condition carries the round's injected clock value, that
-// the round reused a single now for every new timestamp, and that the condition persists as UTC. metav1.Time
-// restores local time when it is read back (its UnmarshalJSON calls Local), so UTC is asserted on the
-// serialized form instead of the in-memory location.
-func assertConditionTime(t *testing.T, condition metav1.Condition, now time.Time, endTime metav1.Time) {
-	t.Helper()
-	if !condition.LastTransitionTime.Time.Equal(now) {
-		t.Fatalf("lastTransitionTime = %+v, want %v", condition.LastTransitionTime, now)
+	if api.CallCount("GetRpmRepo") != 0 || api.CallCount("CreateRpmRepo") != 0 ||
+		api.CallCount("GetLastPublishedBuild") != 0 {
+		t.Fatalf("single build queried repository history: %v", api.calls)
 	}
-	if !condition.LastTransitionTime.Time.Equal(endTime.Time) {
-		t.Fatalf("one round must reuse a single now: condition=%+v endTime=%+v", condition.LastTransitionTime, endTime)
-	}
-	encoded, err := condition.LastTransitionTime.MarshalJSON()
-	if err != nil || !strings.HasSuffix(string(encoded), `Z"`) {
-		t.Fatalf("persisted lastTransitionTime must be UTC: %s (err=%v)", encoded, err)
+	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared {
+		t.Fatalf("phase = %q", stored.Status.Phase)
 	}
 }

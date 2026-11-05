@@ -549,3 +549,53 @@ func withPhaseStage(build *ebsv1.Build, phase ebsv1.BuildPhase, stage ebsv1.Buil
 	build.Status.Stage = stage
 	return build
 }
+
+func testSpecResults(entries map[string]ebsv1.SpecResult) ebsv1.SpecResults {
+	results := ebsv1.SpecResults{}
+	for name, result := range entries {
+		result.SpecName = name
+		results[name+"/"+name+".spec"] = result
+	}
+	return results
+}
+
+func newBuildInfoObject(project, name string, phase ebsv1.BuildInfoPhase, statuses map[string]ebsv1.SpecResult) *ebsv1.BuildInfo {
+	return &ebsv1.BuildInfo{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
+		Status:     ebsv1.BuildInfoStatus{Phase: phase, SpecResults: testSpecResults(statuses)},
+	}
+}
+
+func testCondition(conditions []metav1.Condition, condType string) (metav1.Condition, bool) {
+	for _, condition := range conditions {
+		if condition.Type == condType {
+			return condition, true
+		}
+	}
+	return metav1.Condition{}, false
+}
+
+// assertConditionTime checks that a freshly written condition carries the round's injected clock value, that
+// the round reused a single now for every new timestamp, and that the condition persists as UTC. metav1.Time
+// restores local time when it is read back (its UnmarshalJSON calls Local), so UTC is asserted on the
+// serialized form instead of the in-memory location.
+func assertConditionTime(t *testing.T, condition metav1.Condition, now time.Time, endTime metav1.Time) {
+	t.Helper()
+	if !condition.LastTransitionTime.Time.Equal(now) {
+		t.Fatalf("lastTransitionTime = %+v, want %v", condition.LastTransitionTime, now)
+	}
+	if !condition.LastTransitionTime.Time.Equal(endTime.Time) {
+		t.Fatalf("one round must reuse a single now: condition=%+v endTime=%+v", condition.LastTransitionTime, endTime)
+	}
+	encoded, err := condition.LastTransitionTime.MarshalJSON()
+	if err != nil || !strings.HasSuffix(string(encoded), `Z"`) {
+		t.Fatalf("persisted lastTransitionTime must be UTC: %s (err=%v)", encoded, err)
+	}
+}
+
+func activeSnapshot(project, name string) *ebsv1.Snapshot {
+	return &ebsv1.Snapshot{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: project},
+		Status:     ebsv1.SnapshotStatus{Phase: ebsv1.SnapshotActive},
+	}
+}
