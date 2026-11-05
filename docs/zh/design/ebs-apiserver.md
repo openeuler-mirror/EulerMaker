@@ -726,7 +726,7 @@ apiserver 负责 API 生命周期与归档存储，不调用 Artifact Manager；
 
 | Finalizer | 所属对象 | 移除前提 |
 | --- | --- | --- |
-| `ebs.io/job-artifacts-cleanup` | OldJob | 源 Job 已消失、迁移完成且对应数据清理成功 |
+| `ebs.io/job-cleanup` | OldJob | 源 Job 已消失、迁移完成且对应数据清理成功 |
 | `ebs.io/job-archive` | 源 Job | 完整归档已确认，持久化写屏障阻止迟到请求重建，源对象可以结束迁移 |
 
 Job 创建时默认加入 archive finalizer，OldJob 创建时默认加入 cleanup finalizer，各自保留其它合法 finalizer。Job 不承担制品清理，也不存在两种内置 finalizer 的切换；仅有 archive finalizer 不表示已发起归档。普通创建、更新和 Runner status 更新不得绕过这些生命周期约束。

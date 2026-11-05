@@ -22,26 +22,22 @@ func (c *Controller) cleanupBuild(ctx context.Context, build *ebsv1.Build) (cont
 	wait := controller.ReconcileResult{RequeueAfter: time.Second}
 	// Delegate to BuildInfo whenever it exists; its finalizer owns Jobs and BuildGraph.
 	info, err := c.client.GetBuildInfo(ctx, build.Namespace, build.Name)
-	if err == nil {
-		if info.DeletionTimestamp != nil {
-			return wait, nil
-		}
-		if !slices.Contains(info.Finalizers, ebsv1.BuildInfoCleanupFinalizer) {
-			return controller.ReconcileResult{}, fmt.Errorf("BuildInfo cleanup finalizer is missing")
-		}
+	if err == nil && info.DeletionTimestamp == nil && !slices.Contains(info.Finalizers, ebsv1.BuildInfoCleanupFinalizer) {
+		return controller.ReconcileResult{}, fmt.Errorf("BuildInfo cleanup finalizer is missing")
 	}
 	infoDone, err := c.cleanupChild(ctx, "buildinfos", info, err)
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	if !infoDone {
-		return wait, nil
-	}
-	// BuildInfo owns descendant cleanup; NotFound completes this direct-child dependency.
+	// Snapshot deletion is independent of BuildInfo descendant cleanup.
 	snapshot, err := c.client.GetSnapshot(ctx, build.Namespace, build.Name)
 	snapshotDone, err := c.cleanupChild(ctx, "snapshots", snapshot, err)
 	if err != nil {
 		return controller.ReconcileResult{}, err
+	}
+	// Keep repositories available until BuildInfo and its descendants have disappeared.
+	if !infoDone {
+		return wait, nil
 	}
 	repo, err := c.client.GetRpmRepo(ctx, build.Namespace, build.Name)
 	repoDone, err := c.cleanupChild(ctx, "rpmrepos", repo, err)

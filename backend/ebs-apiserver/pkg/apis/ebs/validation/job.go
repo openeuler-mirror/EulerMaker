@@ -11,7 +11,7 @@ import (
 
 func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	var allErrs field.ErrorList
-	if slices.Contains(obj.Finalizers, ebsv1.JobArtifactsCleanupFinalizer) {
+	if slices.Contains(obj.Finalizers, ebsv1.JobCleanupFinalizer) {
 		allErrs = append(allErrs, field.Forbidden(field.NewPath("metadata", "finalizers"), "artifact cleanup belongs to OldJob"))
 	}
 	if executionType := obj.Spec.Runtime; executionType != "" && !executionType.IsValid() {

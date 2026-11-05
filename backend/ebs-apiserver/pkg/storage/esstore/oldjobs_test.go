@@ -194,7 +194,7 @@ func TestOldJobsArchiveLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if old.ResourceVersion != "v1:1:1" || old.DeletionTimestamp != nil || !reflect.DeepEqual(old.Finalizers, []string{ebsv1.JobArtifactsCleanupFinalizer}) {
+	if old.ResourceVersion != "v1:1:1" || old.DeletionTimestamp != nil || !reflect.DeepEqual(old.Finalizers, []string{ebsv1.JobCleanupFinalizer}) {
 		t.Fatalf("independent lifecycle: %+v", old.ObjectMeta)
 	}
 	if _, err := store.Archive(ctx, job); err != nil || revision != 1 {

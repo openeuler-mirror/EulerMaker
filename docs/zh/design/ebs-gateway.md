@@ -507,7 +507,7 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 | Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | `get/list/create`，禁止更新和删除 |
 | Project 子资源：Snapshot、BuildInfo、BuildGraph、RpmRepo | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
-| Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建、删除和中止；禁止 PUT/PATCH |
+| Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建和中止；仅为 Project owner 时可删除；禁止 PUT/PATCH |
 | 集群级 Config | 仅具名读取 `Public`，禁止 list/写入 | 同 Owner | `get/list/create/update/patch/delete`，内置对象禁止删除 | 仅具名读取 `Public` | 同 Ops |
 | Project 子资源：Job（不含 `/abort`） | 主资源全部支持的 verb，禁止 `/status` 写入 | 主资源 `get/list/create/update/patch`，禁止 `delete` 和 `/status` 写入 | 按 owner/member 关系同普通用户 | 仅已分配 Job 的 `get` 和 `/status` 的 `update/patch` | 主资源全部支持的 verb，禁止 `/status` 写入 |
 | Job `/abort` | 本工程 POST | 本工程 POST | 仅 owner/member 工程 POST | 禁止 | 仅 owner/member 工程 POST |
@@ -520,7 +520,7 @@ Ops token 仍只携带 `ebs:ops`，不与 `ebs:user` 组合；Gateway 在授权�
 
 Gateway 对所有身份拒绝删除内置 `Config/build-target`、`Config/build-resource`、`Config/services`；其他 Config 按上表授权。具名 GET/HEAD 必须先从 apiserver 读取一次对象，再依据同一响应中的 `spec.visibility` 判断是否可返回；非运维身份禁止 list，不能先透传列表再做过滤。
 
-Build DELETE 沿用上表的 owner/Admin 权限并转发删除前置条件。存在 `ebs.io/build-cleanup` finalizer 时，成功响应仅表示删除已受理，客户端可通过 GET 的 deletionTimestamp/finalizers 观察进度，404 表示 Build 已不存在；不把受理描述为清理完成。Gateway 不自行枚举删除派生资源，不开放 Build PUT/PATCH 或 OldJob DELETE；内部 Build Controller 的清理协议见 [Build 删除设计](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。目标清理范围包含 Job/OldJob 的日志、产物及上传元数据，以及本 Build 的过程仓和发布仓；文件清理由各子资源 Controller 的 finalizer 流程完成。
+Build DELETE 仅允许所属 Project 的 owner 调用，按 Token subject 与 Project 的 `ebs.io/owner-user` label 比较，Ops/Admin 同样按 owner 关系判断，并转发删除前置条件。存在 `ebs.io/build-cleanup` finalizer 时，成功响应仅表示删除已受理，客户端可通过 GET 的 deletionTimestamp/finalizers 观察进度，404 表示 Build 已不存在；不把受理描述为清理完成。Gateway 不自行枚举删除派生资源，不开放 Build PUT/PATCH 或 OldJob DELETE；内部 Build Controller 的清理协议见 [Build 删除设计](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。目标清理范围包含 Job/OldJob 的日志、产物及上传元数据，以及本 Build 的过程仓和发布仓；文件清理由各子资源 Controller 的 finalizer 流程完成。
 
 Build 删除的状态资格统一由 [apiserver 删除入口](ebs-apiserver.md#build-删除-finalizer) 校验，Gateway 原样转发 `409 Conflict`；具备删除权限不代表当前状态允许删除。
 
@@ -717,7 +717,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
 | `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改或删除 Project，包含 `/status`；member 不可写 Project |
 | `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`buildgraphs`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
-| `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按 Project 关系创建、删除或中止；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
+| `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按上表权限创建或中止；仅 Project owner 可删除；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | owner/member 可按 Project 权限写主资源，但不能写 `/status`；Admin 可写主资源；Runner 仅可更新已分配 Job 的 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs/{name}/abort` | 无 | 仅本 Project 的 owner/member 用户可 POST |
 | `/apis/ebs/v1/projects/{project}/oldjobs[/{name}]` | 匿名及已认证用户仅可 GET；Runner 不开放 | 无；只注册 GET |

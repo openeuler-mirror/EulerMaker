@@ -96,7 +96,7 @@ func (s *lifecycleArchive) Archive(_ context.Context, job *ebsv1.Job) (*ebsv1.Jo
 	}
 	s.job = job.DeepCopy()
 	s.job.DeletionTimestamp = nil
-	s.job.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+	s.job.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 	s.job.ResourceVersion = "v1:1:1"
 	digest, err := esstore.JobArchiveDigest(job)
 	if err != nil {

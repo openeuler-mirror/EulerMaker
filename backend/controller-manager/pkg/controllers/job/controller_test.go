@@ -456,7 +456,7 @@ func TestHistoryArchiveDefersFinalizationToLifecycle(t *testing.T) {
 					}
 					out := job.DeepCopy()
 					out.ResourceVersion = "v1:1:1"
-					out.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+					out.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 					return out, nil
 				},
 			}
@@ -526,7 +526,7 @@ func TestDeletionLifecycleResumesAndHandsOff(t *testing.T) {
 			actions = append(actions, "archive")
 			old = job.DeepCopy()
 			old.DeletionTimestamp = nil
-			old.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+			old.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 			old.ResourceVersion = "v1:1:1"
 			state.Phase = "Stored"
 			state.Digest = "snapshot-digest"
@@ -778,7 +778,7 @@ func TestSourceDeletionRetriesAfterFinalizerRemoval(t *testing.T) {
 			job.Finalizers = []string{ebsv1.JobArchiveFinalizer}
 			old := job.DeepCopy()
 			old.ResourceVersion = "v1:2:1"
-			old.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+			old.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 			if action == "retain" {
 				old.DeletionTimestamp = nil
 			}
@@ -860,7 +860,7 @@ func TestOldJobCleanupScheduling(t *testing.T) {
 			ts := metav1.NewTime(time.Unix(1000, 0))
 			job.DeletionTimestamp = &ts
 			if tc.finalizer {
-				job.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+				job.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 			}
 			finalized := false
 			client := &fakeClient{

@@ -72,6 +72,28 @@ func TestProjectAuthorizationMatrix(t *testing.T) {
 	}
 }
 
+func TestBuildDeletionRequiresProjectOwner(t *testing.T) {
+	a := projectAuthorizer(t)
+	route := Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodDelete}
+	for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
+		for _, subject := range []string{"alice", "bob", "charlie"} {
+			t.Run(string(scope)+"/"+subject, func(t *testing.T) {
+				who := identity.Principal{Type: identity.UserType, Subject: subject, Scope: scope}
+				err := a.Authorize(context.Background(), who, route)
+				if subject == "alice" {
+					if err != nil {
+						t.Fatalf("owner deletion denied: %v", err)
+					}
+					return
+				}
+				if denied, ok := err.(*Error); !ok || denied.Status != http.StatusForbidden {
+					t.Fatalf("non-owner deletion error = %v, want Forbidden", err)
+				}
+			})
+		}
+	}
+}
+
 func TestPublicRead(t *testing.T) {
 	if !IsPublicRead(Route{Resource: "jobs", Project: "team", Method: http.MethodGet}) {
 		t.Fatal("Project-scoped Job list should be public")

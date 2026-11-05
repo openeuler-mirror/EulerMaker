@@ -912,7 +912,7 @@ type JobList struct {
 
 ### Job 删除生命周期
 
-Job 创建默认带 `ebs.io/job-archive`，仅终态允许删除；非终态由上层先调用 `/abort` 并确认终态，再发起 DELETE。删除必先迁移为 OldJob，源 Job 不执行制品清理或自动中止。OldJob 默认带 `ebs.io/job-artifacts-cleanup`，其删除流程统一清理产物和日志。两类 finalizer 分属不同对象，不需要切换。
+Job 创建默认带 `ebs.io/job-archive`，仅终态允许删除；非终态由上层先调用 `/abort` 并确认终态，再发起 DELETE。删除必先迁移为 OldJob，源 Job 不执行制品清理或自动中止。OldJob 默认带 `ebs.io/job-cleanup`，其删除流程统一清理产物和日志。两类 finalizer 分属不同对象，不需要切换。
 
 OldJob 不继承源删除标记、archive 或其它 finalizer。源 Job 的服务端专有 annotation 持久化 retain/delete 意图：retain 迁移后保留 OldJob；delete 迁移后继续删除 OldJob。源 Job 删除中且已终态时冻结业务内容，通过 UID 和快照摘要确认归档。delete 意图先确认 OldJob 的删除标记，再释放源 archive finalizer；真正的数据清理等待源消失及归档确认。OldJob 删除正文后保留轻量 ES 凭据，防止迟到归档写入重新创建对象。普通 Job/OldJob status 不增加删除或归档 phase；完整并发、恢复及版本契约见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)。
 

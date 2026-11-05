@@ -98,7 +98,7 @@ func (c *apiClient) FinalizeJob(ctx context.Context, job *ebsv1.Job, oldJob bool
 	out, ok := obj.(*ebsv1.Job)
 	finalizer := ebsv1.JobArchiveFinalizer
 	if oldJob {
-		finalizer = ebsv1.JobArtifactsCleanupFinalizer
+		finalizer = ebsv1.JobCleanupFinalizer
 	}
 	if !ok || out.UID != job.UID || out.DeletionTimestamp == nil || slices.Contains(out.Finalizers, finalizer) {
 		return writeUnknown("finalize", fmt.Errorf("unexpected finalizer response"))
