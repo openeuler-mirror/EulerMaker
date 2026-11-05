@@ -256,3 +256,81 @@ func TestDeleteBuildRelease(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
+	m := &Manager{
+		root: t.TempDir(), records: map[string]*ReleaseRecord{},
+		queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
+	}
+	record := &ReleaseRecord{Project: "project", TargetArch: "arch", BuildName: "build", State: ReleaseReady}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	started, resume, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	storageErr := errors.New("cleanup interrupted")
+	var done bool
+	var cleanupErr error
+	go func() {
+		defer close(finished)
+		done, cleanupErr = m.withBuildCleanup("project", "arch", "build", func() error {
+			close(started)
+			<-resume
+			return storageErr
+		})
+	}()
+	t.Cleanup(func() { close(resume); <-finished })
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cleanup did not reach filesystem work")
+	}
+	if !m.mu.TryLock() {
+		t.Fatal("filesystem cleanup still holds the global mutex")
+	}
+	m.mu.Unlock()
+	if done, err := m.DeleteBuild("project", "arch", "build"); done || err != nil {
+		t.Fatalf("concurrent same-build deletion: %t, %v", done, err)
+	}
+	var conflict *Error
+	if _, _, err := m.Delete(record.BuildName); !errors.As(err, &conflict) || conflict.Status != http.StatusConflict || len(m.queue) != 0 {
+		t.Fatalf("single release deletion raced with build cleanup: %v", err)
+	}
+	if _, _, err := m.Activate(record.BuildName); err == nil {
+		t.Fatal("release was activated during cleanup")
+	}
+	if _, _, err := m.Submit(CreateReleaseRequest{
+		Project: "project", TargetArch: "arch", BuildName: "build", SourceRepositoryUID: "source",
+	}); err == nil {
+		t.Fatal("release submission was accepted during cleanup")
+	}
+	m.cleanupHistory(time.Now().UTC())
+	if len(m.queue) != 0 {
+		t.Fatal("retention queued a release already being cleaned")
+	}
+	// Another build can persist and activate a result while this build's removal is paused.
+	other := &ReleaseRecord{Project: "project", TargetArch: "arch", BuildName: "other", State: ReleaseCreating}
+	m.mu.Lock()
+	err := m.persist(other)
+	m.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.finish(other, Result{Digest: "digest"}, nil)
+	if got, ok, err := m.Get(other.BuildName); err != nil || !ok || got.State != ReleaseReady {
+		t.Fatalf("unrelated result: %+v, %v", got, err)
+	}
+	if done, err := m.DeleteBuild("project", "arch", "another"); err != nil || !done {
+		t.Fatalf("unrelated cleanup: %t, %v", done, err)
+	}
+	resume <- struct{}{}
+	<-finished
+	if done || !errors.Is(cleanupErr, storageErr) || len(m.cleaningBuilds) != 0 || m.metaPath(record.BuildName) == "" {
+		t.Fatalf("failed cleanup lost recovery state: done=%t error=%v", done, cleanupErr)
+	}
+	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+		t.Fatalf("retry: %t, %v", done, err)
+	}
+	if m.metaPath(record.BuildName) != "" || len(m.cleaningBuilds) != 0 {
+		t.Fatal("completed cleanup retained index or reservation")
+	}
+}

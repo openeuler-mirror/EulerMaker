@@ -40,7 +40,7 @@ func (m *Manager) cleanupHistory(now time.Time) {
 		sort.Slice(records, func(i, j int) bool { return records[i].UpdatedAt.After(records[j].UpdatedAt) })
 		currentTarget, _ := os.Readlink(filepath.Join(m.root, "repositories", key.project, key.arch, "current"))
 		for i, record := range records {
-			if i < m.historyCount ||
+			if m.cleaningBuilds[record.BuildName] || i < m.historyCount ||
 				currentTarget == filepath.ToSlash(filepath.Join("releases", record.BuildName)) ||
 				now.Sub(record.UpdatedAt) < m.historyTTL {
 				continue

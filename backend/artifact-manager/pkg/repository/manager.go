@@ -25,6 +25,7 @@ type Manager struct {
 	mu                 sync.RWMutex
 	records            map[string]*RepositoryRecord
 	completions        map[string]*RepositoryRecord
+	cleaningBuilds     map[string]bool
 	metadataPaths      map[string]string
 	queued             map[string]bool
 	running            map[string]bool
@@ -242,6 +243,9 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.cleaningBuilds[buildCleanupKey(in.Project, in.TargetArch, in.BuildName)] {
+		return nil, 0, &Error{Code: "RepositoryDeleting", Status: 409}
+	}
 	if err := CheckBuildActive(m.root, in.Project, in.TargetArch, in.BuildName); err != nil {
 		return nil, 0, err
 	}
@@ -483,6 +487,9 @@ func (m *Manager) Delete(uid string) (*RepositoryRecord, int, error) {
 	}
 	if record == nil {
 		return nil, 204, nil
+	}
+	if m.cleaningBuilds[buildCleanupKey(record.Project, record.TargetArch, record.BuildName)] {
+		return nil, 0, &Error{Code: "RepositoryDeleting", Status: 409}
 	}
 	record = cloneRepository(record)
 	if record.State != RepositoryDeleting {

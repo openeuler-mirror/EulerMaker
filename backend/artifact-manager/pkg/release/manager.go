@@ -27,6 +27,7 @@ type Manager struct {
 	materializer    Materializer
 	mu              sync.RWMutex
 	records         map[string]*ReleaseRecord
+	cleaningBuilds  map[string]bool
 	metadataPaths   map[string]string
 	queued, running map[string]bool
 	queue           chan string
@@ -98,6 +99,9 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.cleaningBuilds[in.BuildName] {
+		return nil, 0, &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
+	}
 	if err := repository.CheckBuildActive(m.root, in.Project, in.TargetArch, in.BuildName); err != nil {
 		return nil, 0, releaseStopError(err)
 	}
@@ -258,6 +262,9 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.cleaningBuilds[name] {
+		return nil, 0, &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
+	}
 	record, err := m.recordLocked(name)
 	if err != nil {
 		return nil, 0, releaseStorageError()
@@ -348,6 +355,9 @@ func (m *Manager) Delete(name string) (*ReleaseRecord, int, error) {
 	}
 	if record == nil {
 		return nil, http.StatusNoContent, nil
+	}
+	if m.cleaningBuilds[name] {
+		return nil, 0, &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
 	}
 	current := filepath.Join(m.releaseTargetDir(record), "current")
 	if target, err := os.Readlink(current); err == nil && target == filepath.ToSlash(filepath.Join("releases", name)) {

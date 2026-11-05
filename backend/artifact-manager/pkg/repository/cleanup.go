@@ -69,35 +69,67 @@ func (m *Manager) StopBuild(project, arch, buildName string) (bool, error) {
 // DeleteBuild removes all process repository versions and records belonging to one build.
 // The caller must stop new submissions before cleanup. False means existing work is still active.
 func (m *Manager) DeleteBuild(project, arch, buildName string) (bool, error) {
+	return m.withBuildCleanup(project, arch, buildName, func() error {
+		parent, err := fileutil.OpenDirectory(m.root, "repositories", project, arch, "history")
+		if err != nil {
+			return &Error{Code: "RepositoryCleanupFailed", Status: http.StatusServiceUnavailable, Retryable: true}
+		}
+		if parent != nil {
+			defer parent.Close()
+			if err := fileutil.RemoveEntry(parent, buildName, true); err != nil {
+				return &Error{Code: "RepositoryCleanupFailed", Status: http.StatusServiceUnavailable, Retryable: true}
+			}
+		}
+		return nil
+	})
+}
+
+func buildCleanupKey(project, arch, buildName string) string {
+	return project + "/" + arch + "/" + buildName
+}
+
+// withBuildCleanup reserves one build under the mutex, then performs filesystem work without it.
+func (m *Manager) withBuildCleanup(project, arch, buildName string, cleanup func() error) (done bool, err error) {
 	if !validIdentifier(project) || !validIdentifier(arch) || !validIdentifier(buildName) {
 		return false, &Error{Code: "InvalidRequest", Status: http.StatusBadRequest}
 	}
+	scope := buildCleanupKey(project, arch, buildName)
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.cleaningBuilds[scope] {
+		m.mu.Unlock()
+		return false, nil
+	}
 	for uid, record := range m.records {
 		if record.Project == project && record.TargetArch == arch && record.BuildName == buildName &&
 			(record.State == RepositoryCreating || record.State == RepositoryDeleting || m.running[uid]) {
+			m.mu.Unlock()
 			return false, nil
 		}
 	}
-	buildDir := filepath.Join(m.root, "repositories", project, arch, "history", buildName)
-	parent, err := fileutil.OpenDirectory(m.root, "repositories", project, arch, "history")
-	if err != nil {
-		return false, &Error{Code: "RepositoryCleanupFailed", Status: http.StatusServiceUnavailable, Retryable: true}
+	if m.cleaningBuilds == nil {
+		m.cleaningBuilds = make(map[string]bool)
 	}
-	if parent != nil {
-		defer parent.Close()
-		if err := fileutil.RemoveEntry(parent, buildName, true); err != nil {
-			return false, &Error{Code: "RepositoryCleanupFailed", Status: http.StatusServiceUnavailable, Retryable: true}
+	m.cleaningBuilds[scope] = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(m.cleaningBuilds, scope)
+		if !done {
+			return
 		}
-	}
-	// Evict only this build's index entries, including records already removed by an interrupted cleanup.
-	for uid, path := range m.metadataPaths {
-		if filepath.Dir(path) == filepath.Join(buildDir, ".records") {
-			delete(m.metadataPaths, uid)
-			delete(m.records, uid)
-			delete(m.queued, uid)
+		// Evict only this build's entries after all filesystem operations succeed.
+		recordDir := filepath.Join(m.root, "repositories", project, arch, "history", buildName, ".records")
+		for uid, path := range m.metadataPaths {
+			if filepath.Dir(path) == recordDir {
+				delete(m.metadataPaths, uid)
+				delete(m.records, uid)
+				delete(m.queued, uid)
+			}
 		}
+	}()
+	if err := cleanup(); err != nil {
+		return false, err
 	}
 	return true, nil
 }

@@ -346,6 +346,82 @@ func TestDeleteBuildRepositoriesScopesAndRecovery(t *testing.T) {
 	}
 }
 
+func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
+	m := &Manager{
+		root: t.TempDir(), records: map[string]*RepositoryRecord{},
+		queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 2),
+	}
+	record := &RepositoryRecord{
+		RepositoryUID: "repo", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryFailed,
+	}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	started, resume, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	storageErr := errors.New("cleanup interrupted")
+	var done bool
+	var cleanupErr error
+	go func() {
+		defer close(finished)
+		done, cleanupErr = m.withBuildCleanup("project", "arch", "build", func() error {
+			close(started)
+			<-resume
+			return storageErr
+		})
+	}()
+	t.Cleanup(func() { close(resume); <-finished })
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cleanup did not reach filesystem work")
+	}
+	if !m.mu.TryLock() {
+		t.Fatal("filesystem cleanup still holds the global mutex")
+	}
+	m.mu.Unlock()
+	if done, err := m.DeleteBuild("project", "arch", "build"); done || err != nil {
+		t.Fatalf("concurrent same-build deletion: %t, %v", done, err)
+	}
+	var conflict *Error
+	if _, _, err := m.Delete(record.RepositoryUID); !errors.As(err, &conflict) || conflict.Status != 409 || len(m.queue) != 0 {
+		t.Fatalf("single repository deletion raced with build cleanup: %v", err)
+	}
+	in := CreateRepositoryRequest{
+		Project: "project", TargetArch: "arch", BuildName: "build", RepositoryName: "build",
+		Manifests: []ManifestReference{{JobName: "job"}},
+	}
+	in.RepositoryUID = UID(in.Project, in.BuildName, "", in.Manifests)
+	if _, _, err := m.Submit(in); err == nil {
+		t.Fatal("submission was accepted during cleanup")
+	}
+	// Another build can submit, query, persist completion and delete while the first is blocked on disk.
+	in.BuildName, in.RepositoryName = "other", "other"
+	in.RepositoryUID = UID(in.Project, in.BuildName, "", in.Manifests)
+	other, _, err := m.Submit(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.finish(other, Result{}, errors.New("materialization failed"))
+	if got, ok, err := m.Get(other.RepositoryUID); err != nil || !ok || got.State != RepositoryFailed {
+		t.Fatalf("unrelated result: %+v, %v", got, err)
+	}
+	if done, err := m.DeleteBuild("project", "arch", "other"); err != nil || !done {
+		t.Fatalf("unrelated cleanup: %t, %v", done, err)
+	}
+	// Let the injected I/O failure return, then retry using the real filesystem path.
+	resume <- struct{}{}
+	<-finished
+	if done || !errors.Is(cleanupErr, storageErr) || len(m.cleaningBuilds) != 0 || m.metaPath(record.RepositoryUID) == "" {
+		t.Fatalf("failed cleanup lost recovery state: done=%t error=%v", done, cleanupErr)
+	}
+	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+		t.Fatalf("retry: %t, %v", done, err)
+	}
+	if m.metaPath(record.RepositoryUID) != "" || len(m.cleaningBuilds) != 0 {
+		t.Fatal("completed cleanup retained index or reservation")
+	}
+}
+
 func TestRepositorySigningFingerprintIsFixedForRequest(t *testing.T) {
 	root := t.TempDir()
 	m := &Manager{
