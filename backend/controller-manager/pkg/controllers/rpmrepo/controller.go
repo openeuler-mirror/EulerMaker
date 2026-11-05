@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/clock"
 
 	"controller-manager/pkg/controller"
@@ -78,8 +80,7 @@ type Controller struct {
 	config          Config
 }
 
-// New wires one RpmRepo controller. The source is expected to deliver the non-terminal RpmRepo polling stream;
-// every key is derived from it, so no Job or Build event source is registered.
+// New wires the non-terminal RpmRepo stream; Initializer adds deletion polling for repositories and BuildInfos.
 func New(
 	rpmrepos source.Source,
 	client Client,
@@ -140,6 +141,26 @@ func Initializer(config Config, services serviceconfig.Provider) manager.InitFun
 		if err == nil {
 			value.services = services
 		}
+		if err != nil {
+			return nil, false, err
+		}
+
+		for _, gvr := range []schema.GroupVersionResource{source.BuildInfosGVR, source.RpmReposGVR} {
+			deleting, err := init.Dependencies.PollingFactory.ForResource(gvr, config.PollPeriod,
+				metav1.ListOptions{FieldSelector: "metadata.deletionTimestamp!=null"})
+			if err != nil {
+				return nil, false, err
+			}
+			enqueue := func(obj runtime.Object) {
+				metadata, err := meta.Accessor(obj)
+				if err == nil && metadata.GetNamespace() != "" && metadata.GetName() != "" {
+					value.Enqueue(rpmRepoKey(metadata.GetNamespace(), metadata.GetName()))
+				}
+			}
+			if err := deleting.AddEventHandler(source.ResourceEventHandlerFuncs{AddFunc: enqueue, UpdateFunc: func(_, obj runtime.Object) { enqueue(obj) }}); err != nil {
+				return nil, false, err
+			}
+		}
 		return value, err == nil, err
 	}
 }
@@ -164,7 +185,7 @@ func (c *Controller) enqueueRpmRepo(obj runtime.Object) {
 		log.Printf("controller=%s reason=UnexpectedRpmRepoEvent type=%T", Name, obj)
 		return
 	}
-	if repo.DeletionTimestamp != nil || releaseTerminal(repo) {
+	if repo.DeletionTimestamp == nil && releaseTerminal(repo) {
 		return
 	}
 	c.Enqueue(rpmRepoKey(repo.Namespace, repo.Name))
@@ -174,9 +195,7 @@ func rpmRepoKey(project, name string) string {
 	return project + "/" + name
 }
 
-// releaseTerminal reports whether the formal release already reached a terminal phase. Skipped is written
-// when a single build is created or after a nonpublishing build's repository inputs settle; it must never be
-// advanced, rewritten on abort, or counted.
+// releaseTerminal reports a business terminal state; deletion cleanup still runs for these repositories.
 func releaseTerminal(repo *ebsv1.RpmRepo) bool {
 	if repo == nil || repo.Status.Release == nil {
 		return false

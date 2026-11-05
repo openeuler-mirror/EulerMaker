@@ -244,7 +244,7 @@ func (r *reconciler) collectRepositoryFailure(repo *ebsv1.RpmRepo, transition *e
 	conditions, _ := MergeCondition(target.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed, "", target.Generation, r.now)
 	conditions, _ = MergeCondition(conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed, "", target.Generation, r.now)
 	target.Status.Conditions = conditions
-	target.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed, UpdatedAt: r.nowPtr()}
+	r.markReleaseFailed(target)
 	confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
 		current := value.Status.Repository
 		if current == nil || !reflect.DeepEqual(current.Transition, target.Status.Repository.Transition) {

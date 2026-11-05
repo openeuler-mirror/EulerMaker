@@ -30,6 +30,8 @@ type Client interface {
 	ListJobs(ctx context.Context, project string, options metav1.ListOptions) ([]ebsv1.Job, error)
 	ListRpmRepos(ctx context.Context, project string, options metav1.ListOptions) ([]ebsv1.RpmRepo, error)
 	UpdateRpmRepoStatus(ctx context.Context, obj *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
+	// UpdateRpmRepo writes metadata through the main resource endpoint when removing the cleanup finalizer.
+	UpdateRpmRepo(ctx context.Context, obj *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
 }
 
 type apiClient struct{ client clientpkg.Interface }
@@ -183,6 +185,21 @@ func (c *apiClient) UpdateRpmRepoStatus(ctx context.Context, obj *ebsv1.RpmRepo)
 	value, ok := updated.(*ebsv1.RpmRepo)
 	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace || value.ResourceVersion == "" {
 		return nil, unknownWrite("update-status", source.RpmReposGVR, fmt.Errorf("unexpected RpmRepo status response: %T", updated))
+	}
+	return value, nil
+}
+
+func (c *apiClient) UpdateRpmRepo(ctx context.Context, obj *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
+	if obj == nil {
+		return nil, notSentWrite("update", source.RpmReposGVR, fmt.Errorf("RpmRepo request is required"))
+	}
+	updated, err := c.client.Update(ctx, source.RpmReposGVR, obj.Namespace, obj)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := updated.(*ebsv1.RpmRepo)
+	if !ok || value == nil || value.UID != obj.UID || value.Name != obj.Name || value.Namespace != obj.Namespace || value.ResourceVersion == "" {
+		return nil, unknownWrite("update", source.RpmReposGVR, fmt.Errorf("unexpected RpmRepo update response: %T", updated))
 	}
 	return value, nil
 }

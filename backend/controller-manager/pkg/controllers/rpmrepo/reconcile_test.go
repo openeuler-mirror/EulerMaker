@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
@@ -163,7 +164,8 @@ func TestFailedBuildInfoStopsRpmRepo(t *testing.T) {
 				}
 				return
 			}
-			if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition != nil {
+			if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed ||
+				(scenario == "release") != (stored.Status.Release.Transition != nil) {
 				t.Fatalf("release = %+v", stored.Status.Release)
 			}
 			if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildInfoFailed) {
@@ -603,7 +605,7 @@ func TestReconcileBuildCollectsAbortedTerminal(t *testing.T) {
 	}
 }
 
-func TestReconcileBuildCountsOrphanRpmRepo(t *testing.T) {
+func TestReconcileBuildAcknowledgesOrphanRpmRepoCleanup(t *testing.T) {
 	client := NewFakeClient()
 	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
 
@@ -617,8 +619,8 @@ func TestReconcileBuildCountsOrphanRpmRepo(t *testing.T) {
 	if result != (controller.ReconcileResult{}) {
 		t.Fatalf("unexpected result %+v", result)
 	}
-	if len(client.StatusWrites) != 0 {
-		t.Fatalf("an orphan RpmRepo must not be written, got %d writes", len(client.StatusWrites))
+	if len(client.StatusWrites) != 1 || !meta.IsStatusConditionTrue(client.RpmRepos[key(testProject, testBuild)].Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) {
+		t.Fatal("missing parent must not block standalone BuildInfo cleanup")
 	}
 }
 

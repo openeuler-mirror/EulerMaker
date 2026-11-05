@@ -107,8 +107,8 @@ func TestReconcileReleaseFailureCollectsTerminal(t *testing.T) {
 	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed {
 		t.Fatalf("release terminal missing: %+v", updated.Status.Release)
 	}
-	if updated.Status.Release.Transition != nil {
-		t.Fatalf("the failing release must clear its checkpoint")
+	if updated.Status.Release.Transition == nil || updated.Status.Release.Transition.SourceRepositoryUID != "repo-1" {
+		t.Fatalf("the failing release must retain its checkpoint for deletion recovery")
 	}
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonReleaseFailed) {
 		t.Fatalf("PublishSucceed=False/ReleaseFailed missing: %+v", updated.Status.Conditions)
@@ -174,7 +174,7 @@ func TestReconcileReleaseCollectsAbortedInFlight(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || updated.Status.Release.Transition != nil {
+	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || updated.Status.Release.Transition == nil {
 		t.Fatalf("an aborted in-flight release must be collected: %+v", updated.Status.Release)
 	}
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted) {
