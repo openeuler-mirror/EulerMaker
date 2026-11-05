@@ -1574,7 +1574,7 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 
 文件删除不持 Store 全局锁；成功后加锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
 
-上层接入契约：Job 删除先归档到 OldJob，源 Job 不调用本接口。只有删除中的 OldJob，确认源迁移完成、停止写入及输入使用者排空后，由 Job Controller 调用本接口；204 确认后移除 OldJob 的 `ebs.io/job-artifacts-cleanup`。失败或未知时保留 OldJob 和 finalizer，允许幂等重试。apiserver 不直接连接 Artifact Manager，BuildInfo Controller 编排 Job/OldJob 删除，Build Controller 等待 BuildInfo 清理完成；二者不直接调用数据清理接口。数据清理后 API 对象可能暂时仍在，不回滚重建文件；dry-run 不调用本接口。
+上层接入契约：Job 删除先归档到 OldJob，源 Job 不调用本接口。只有删除中的 OldJob，确认源迁移完成、停止写入及输入使用者排空后，由 Job Controller 调用本接口；204 确认后移除 OldJob 的 `ebs.io/job-cleanup`。失败或未知时保留 OldJob 和 finalizer，允许幂等重试。apiserver 不直接连接 Artifact Manager，BuildInfo Controller 编排 Job/OldJob 删除，Build Controller 等待 BuildInfo 清理完成；二者不直接调用数据清理接口。数据清理后 API 对象可能暂时仍在，不回滚重建文件；dry-run 不调用本接口。
 
 源 Job 默认带 `ebs.io/job-archive`，迁移意图另外持久化：retain 保留 OldJob 和数据，delete 继续删除 OldJob。两种情况都不在源 Job 分支调用本接口；OldJob 数据删除须等源 Job 消失且归档已确认，迟到归档请求由持久化删除凭据阻断。协议统一见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)，不能从普通 DELETE 或 Watch 删除事件推断归档已完成。
 

@@ -79,7 +79,7 @@ func TestBuildCleanupDeletesDirectChildren(t *testing.T) {
 	}
 }
 
-func TestBuildCleanupWaitsForBuildInfo(t *testing.T) {
+func TestBuildCleanupDeletesSnapshotWhileWaitingForBuildInfo(t *testing.T) {
 	f, c, b := cleanupFixture(t)
 	k := key(b.Namespace, b.Name)
 	info := &ebsv1.BuildInfo{ObjectMeta: metav1.ObjectMeta{
@@ -90,19 +90,25 @@ func TestBuildCleanupWaitsForBuildInfo(t *testing.T) {
 	f.snapshots[k] = &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{
 		Name: b.Name, Namespace: b.Namespace, UID: "snapshot", ResourceVersion: "1",
 	}}
+	f.rpmRepos[k] = &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{
+		Name: b.Name, Namespace: b.Namespace, UID: "repo", ResourceVersion: "1",
+	}}
 	run := func() {
 		t.Helper()
 		if result, err := c.sync(context.Background(), k); err != nil || result.RequeueAfter == 0 {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 	}
-	run() // Mark BuildInfo for deletion.
+	run() // Mark BuildInfo and delete Snapshot in the same reconcile.
+	if f.snapshots[k] != nil || info.DeletionTimestamp == nil {
+		t.Fatal("Snapshot deletion waited for BuildInfo cleanup")
+	}
 	run() // Wait for its controller.
 	info.Finalizers = []string{"other/controller"}
 	run() // Other finalizer owners also need to finish.
-	if !slices.Equal(f.cleanupWrites, []string{"buildinfos"}) ||
+	if !slices.Equal(f.cleanupWrites, []string{"buildinfos", "snapshots"}) || f.rpmRepos[k] == nil ||
 		!slices.Contains(f.builds[k].Finalizers, ebsv1.BuildCleanupFinalizer) {
-		t.Fatalf("Build must wait for BuildInfo: writes=%v", f.cleanupWrites)
+		t.Fatalf("repository cleanup must wait for BuildInfo: writes=%v", f.cleanupWrites)
 	}
 	delete(f.buildInfos, k)
 	for range 2 {
@@ -110,9 +116,39 @@ func TestBuildCleanupWaitsForBuildInfo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if !slices.Equal(f.cleanupWrites, []string{"buildinfos", "snapshots"}) ||
+	if !slices.Equal(f.cleanupWrites, []string{"buildinfos", "snapshots", "rpmrepos"}) ||
 		!slices.Equal(f.builds[k].Finalizers, []string{"another/controller"}) {
 		t.Fatal("Build was not finalized after ordered direct child removal")
+	}
+}
+
+func TestBuildCleanupRetriesSnapshotWhileBuildInfoIsDeleting(t *testing.T) {
+	f, c, b := cleanupFixture(t)
+	k := key(b.Namespace, b.Name)
+	f.buildInfos[k] = &ebsv1.BuildInfo{ObjectMeta: metav1.ObjectMeta{
+		Name: b.Name, Namespace: b.Namespace, UID: "info", ResourceVersion: "1",
+		DeletionTimestamp: b.DeletionTimestamp, Finalizers: []string{ebsv1.BuildInfoCleanupFinalizer},
+	}}
+	f.snapshots[k] = &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{
+		Name: b.Name, Namespace: b.Namespace, UID: "snapshot", ResourceVersion: "1",
+	}}
+	f.hooks.getRpmRepo = func(_, _ string) (*ebsv1.RpmRepo, error) {
+		t.Fatal("RpmRepo must not be queried before BuildInfo disappears")
+		return nil, nil
+	}
+	f.cleanupFail = "snapshots"
+	if _, err := c.sync(context.Background(), k); err == nil {
+		t.Fatal("expected Snapshot deletion error")
+	}
+	f.cleanupFail = ""
+	if result, err := c.sync(context.Background(), k); err != nil || result.RequeueAfter == 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if f.snapshots[k] != nil || !slices.Equal(f.cleanupWrites, []string{"snapshots", "snapshots"}) {
+		t.Fatalf("Snapshot deletion did not recover independently: writes=%v", f.cleanupWrites)
+	}
+	if !slices.Contains(f.builds[k].Finalizers, ebsv1.BuildCleanupFinalizer) {
+		t.Fatal("Build finalized while BuildInfo was still deleting")
 	}
 }
 

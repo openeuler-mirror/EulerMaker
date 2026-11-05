@@ -274,6 +274,9 @@ func permissions(resource, part, method string) ([]object, string) {
 		return bearer, "Only the Runner assigned to this Job may update status. Gateway verifies assignment and protected fields."
 	}
 	if method == "delete" {
+		if resource == "builds" {
+			return bearer, "Project owner only, including Ops/Admin acting as owner; no cross-project override."
+		}
 		return bearer, "Project owner or Admin; members cannot delete child resources."
 	}
 	return bearer, "Project owner/member or Admin. Ops has ordinary project-member access, not a cross-project override."

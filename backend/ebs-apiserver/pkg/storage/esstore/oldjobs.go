@@ -92,8 +92,8 @@ func (s *OldJobs) Delete(ctx context.Context, name string, admission rest.Valida
 	}
 	now := metav1.Now()
 	job.DeletionTimestamp = &now
-	if !slices.Contains(job.Finalizers, ebsv1.JobArtifactsCleanupFinalizer) {
-		job.Finalizers = append(job.Finalizers, ebsv1.JobArtifactsCleanupFinalizer)
+	if !slices.Contains(job.Finalizers, ebsv1.JobCleanupFinalizer) {
+		job.Finalizers = append(job.Finalizers, ebsv1.JobCleanupFinalizer)
 	}
 	if dryrun.IsDryRun(opts.DryRun) {
 		return job, false, nil
@@ -115,7 +115,7 @@ func (s *OldJobs) Finalize(ctx context.Context, name string, pre *metav1.Precond
 	if job.DeletionTimestamp == nil {
 		return nil, apierrors.NewConflict(s.store.resource, name, fmt.Errorf("OldJob is not deleting"))
 	}
-	job.Finalizers = slices.DeleteFunc(job.Finalizers, func(value string) bool { return value == ebsv1.JobArtifactsCleanupFinalizer })
+	job.Finalizers = slices.DeleteFunc(job.Finalizers, func(value string) bool { return value == ebsv1.JobCleanupFinalizer })
 	return s.save(ctx, hit, job, len(job.Finalizers) == 0)
 }
 
@@ -170,7 +170,7 @@ func (s *OldJobs) Archive(ctx context.Context, job *ebsv1.Job) (*ebsv1.Job, erro
 		return nil, apierrors.NewInternalError(err)
 	}
 	next := jobArchiveSnapshot(job)
-	next.Finalizers = []string{ebsv1.JobArtifactsCleanupFinalizer}
+	next.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 	doc, id, err := s.store.documentFor(ctx, next)
 	if err != nil {
 		return nil, err

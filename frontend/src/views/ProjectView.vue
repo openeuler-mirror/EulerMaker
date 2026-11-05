@@ -7,6 +7,7 @@
   <div v-if="buildActionErrorKey" class="inline-error action-error" role="alert"><WarningFilled />{{ t(buildActionErrorKey) }}</div>
   <div v-if="createdBuildNames.length" class="success-banner" role="status"><CircleCheckFilled />{{ createdBuildNames.length === 1 ? t("project.buildCreated", { name: createdBuildNames[0] }) : t("project.buildsCreated", { count: createdBuildNames.length }) }}</div>
   <div v-if="abortedBuildName" class="success-banner" role="status"><CircleCheckFilled />{{ t("project.buildAborted", { name: abortedBuildName }) }}</div>
+  <div v-if="deletingBuildName" class="success-banner" role="status"><CircleCheckFilled />{{ t("project.buildDeletionAccepted", { name: deletingBuildName }) }}</div>
 
   <div v-if="loadingProject" class="skeleton-list page-skeleton" :aria-label="t('project.loading')"><span v-for="item in 5" :key="item"></span></div>
   <div v-else-if="projectError" class="inline-error page-error">
@@ -151,7 +152,7 @@
           <div v-if="buildPageErrorKey" class="inline-error compact-error" role="alert"><WarningFilled /><span>{{ t(buildPageErrorKey) }}</span><button type="button" :disabled="buildPageLoading" @click="loadBuildPage(buildPageTokens[buildCurrentPage - 1] || '', buildCurrentPage)">{{ t('common.reload') }}</button></div>
           <p v-if="!builds.length" class="config-empty">{{ t("project.noMatchingBuilds") }}</p>
           <div v-else class="build-history-list">
-            <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-abort': canAbortBuild(build) }]">
+            <div v-for="build in builds" :key="build.metadata?.name" :class="['build-history-item', { active: selectedBuildName === build.metadata?.name, 'has-actions': canAbortBuild(build) || canDeleteBuild(build) }]">
               <div class="build-history-item-heading">
                 <button class="build-history-select" type="button" :aria-pressed="selectedBuildName === build.metadata?.name" @click="selectedBuildName = build.metadata?.name || ''">
                   <span class="build-history-item-title"><strong class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</strong><strong class="build-history-arch">{{ build.spec?.arch || t("common.emptyValue") }}</strong><span class="build-history-item-name">{{ build.metadata?.name }}</span></span>
@@ -165,7 +166,10 @@
                 <button class="build-history-copy" type="button" :disabled="!build.metadata?.name" :class="{ copied: copiedBuildName === build.metadata?.name }" :aria-label="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" :title="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" @click="copyBuildName(build.metadata?.name)"><Check v-if="copiedBuildName === build.metadata?.name" /><DocumentCopy v-else /></button>
                 <StatusBadge :value="buildDisplayStatus(build)" />
               </div>
-              <button v-if="canAbortBuild(build)" class="build-history-abort" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
+              <div v-if="canAbortBuild(build) || canDeleteBuild(build)" class="build-history-actions">
+                <button v-if="canAbortBuild(build)" class="build-history-action" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
+                <button v-if="canDeleteBuild(build)" class="build-history-action" type="button" :disabled="deletingBuild" @click="openBuildDelete(build)">{{ t('project.deleteBuild') }}</button>
+              </div>
             </div>
           </div>
           <div class="table-footer">
@@ -282,6 +286,15 @@
         </fieldset>
         <div v-if="buildDialogErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDialogErrorKey) }}</div>
         <div class="modal-actions"><button class="secondary-button" type="button" :disabled="creatingBuild" @click="closeBuildDialog">{{ t("common.cancel") }}</button><button class="primary-button" type="submit" :disabled="creatingBuild || unsupportedBuildSelection || (requiresBuildPackages && !selectedBuildPackages.length)">{{ creatingBuild ? t("project.creatingBuild") : t("project.startBuild") }}</button></div>
+      </form>
+    </ModalDialog>
+
+    <ModalDialog v-if="buildDeleteTarget" title-id="delete-build-title" :title="t('project.deleteBuild')" :close-label="t('common.close')" @close="closeBuildDelete">
+      <form class="project-form" @submit.prevent="confirmBuildDelete">
+        <p class="form-hint">{{ t('project.deleteBuildConfirm', { name: buildDeleteTarget.metadata?.name }) }}</p>
+        <p class="form-hint">{{ t('project.deleteBuildWarning') }}</p>
+        <div v-if="buildDeleteErrorKey" class="form-error" role="alert"><WarningFilled />{{ t(buildDeleteErrorKey) }}</div>
+        <div class="modal-actions"><button class="secondary-button" type="button" :disabled="deletingBuild" @click="closeBuildDelete">{{ t('common.cancel') }}</button><button class="primary-button danger-button" type="submit" :disabled="deletingBuild">{{ t(deletingBuild ? 'project.buildDeleting' : 'project.deleteBuild') }}</button></div>
       </form>
     </ModalDialog>
 
@@ -530,6 +543,10 @@ const abortTarget = ref<Build | null>(null);
 const abortingBuild = ref(false);
 const abortErrorKey = ref("");
 const abortedBuildName = ref("");
+const buildDeleteTarget = ref<Build | null>(null);
+const deletingBuild = ref(false);
+const deletingBuildName = ref("");
+const buildDeleteErrorKey = ref("");
 const targetEditorOpen = ref(false);
 const editingTargets = ref<ConfiguredBuildTarget[]>([]);
 const savingTargets = ref(false);
@@ -609,6 +626,10 @@ const canEditProject = computed(() => {
   const identity = session.session?.identity;
   if (!identity || (!identity.scopes.includes("ebs:user") && !identity.scopes.includes("ebs:ops"))) return false;
   return project.value?.metadata?.labels?.["ebs.io/owner-user"] === identity.name;
+});
+const isProjectOwner = computed(() => {
+  const identity = session.session?.identity;
+  return Boolean(identity?.name && project.value?.metadata?.labels?.['ebs.io/owner-user'] === identity.name);
 });
 const canStartBuild = computed(() => {
   const identity = session.session?.identity;
@@ -690,6 +711,7 @@ function buildTypeLabel(type?: string): string {
 }
 
 function buildDisplayStatus(build: Build): string | undefined {
+  if (build.metadata?.deletionTimestamp) return "Deleting";
   const phase = build.status?.phase;
   if (build.spec?.buildType !== "single" || !["Skipped", "Success", "Failed"].includes(phase || "")) return phase;
   const result = build.status?.conditions?.find((condition) => condition.type === "BuildSucceed")?.status;
@@ -700,6 +722,58 @@ function buildDisplayStatus(build: Build): string | undefined {
 
 function canAbortBuild(build: Build): boolean {
   return canStartBuild.value && Boolean(build.metadata?.name) && ["Pending", "Prepared", "Processing"].includes(build.status?.phase || "");
+}
+
+function canDeleteBuild(build: Build): boolean {
+  if (!isProjectOwner.value || build.metadata?.deletionTimestamp) return false;
+  if (!['Success', 'Failed', 'Aborted', 'Skipped'].includes(build.status?.phase || '')) return false;
+  if (build.status?.phase === 'Success' && build.status?.stage === 'publish') return false;
+  return Boolean(build.metadata?.name && build.metadata.uid && build.metadata.resourceVersion);
+}
+
+function openBuildDelete(build: Build): void {
+  if (!canDeleteBuild(build)) return;
+  buildDeleteTarget.value = build;
+  buildDeleteErrorKey.value = '';
+  deletingBuildName.value = '';
+  buildActionErrorKey.value = '';
+}
+
+function closeBuildDelete(): void {
+  if (!deletingBuild.value) buildDeleteTarget.value = null;
+}
+
+async function confirmBuildDelete(): Promise<void> {
+  const build = buildDeleteTarget.value;
+  const metadata = build?.metadata;
+  if (!build || !metadata?.name || !canDeleteBuild(build) || deletingBuild.value) return;
+  deletingBuild.value = true;
+  buildDeleteErrorKey.value = '';
+  try {
+    await request<unknown>(`/apis/ebs/v1/projects/${encodeURIComponent(name.value)}/builds/${encodeURIComponent(metadata.name)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ preconditions: { uid: metadata.uid, resourceVersion: metadata.resourceVersion } }),
+    });
+    buildDeleteTarget.value = null;
+    deletingBuildName.value = metadata.name;
+    const refreshed = await loadBuildPage(buildPageTokens.value[buildCurrentPage.value - 1] || '', buildCurrentPage.value);
+    if (refreshed && !builds.value.length && buildCurrentPage.value > 1) {
+      resetBuildPagination();
+      await loadBuildPage('', 1);
+    }
+    const remaining = builds.value.find(item => item.metadata?.uid === metadata.uid);
+    if (remaining?.metadata) remaining.metadata.deletionTimestamp ||= new Date().toISOString();
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
+      buildDeleteTarget.value = null;
+      buildActionErrorKey.value = 'project.deleteBuildStale';
+      await loadBuildPage(buildPageTokens.value[buildCurrentPage.value - 1] || '', buildCurrentPage.value);
+    } else {
+      buildDeleteErrorKey.value = errorTranslationKey(error, 'project.deleteBuildFailed');
+    }
+  } finally {
+    deletingBuild.value = false;
+  }
 }
 
 function openAbortDialog(build: Build): void {

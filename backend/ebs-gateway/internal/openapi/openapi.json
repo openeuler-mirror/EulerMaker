@@ -5809,7 +5809,7 @@
     },
     "/apis/ebs/v1/projects/{project}/builds/{name}": {
       "delete": {
-        "description": "Project owner or Admin; members cannot delete child resources. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
+        "description": "Project owner only, including Ops/Admin acting as owner; no cross-project override. Use DeleteOptions.preconditions.uid and resourceVersion from the current object. Only single-object deletion is exposed.",
         "operationId": "deleteBuildsObject",
         "parameters": [
           {

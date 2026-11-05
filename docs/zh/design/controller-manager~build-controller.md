@@ -526,7 +526,7 @@ single 与非 single 的 `publish=false` 分支均不写 `PublishSucceed`，不�
 - 删除资格在 [apiserver 删除入口](ebs-apiserver.md#build-删除-finalizer) 校验：非终态先中止，发布成功构建禁止删除。Controller 只处理已受理的删除标记，不在清理过程中重新判定删除资格。
 - apiserver 在 Build 创建时写入 `metadata.finalizers: [ebs.io/build-cleanup]`；dry-run 只返回默认值，不落库。Controller 开始正常编排前必须确认该 finalizer 存在。
 - DELETE 只标记 `metadata.deletionTimestamp`；不把 Build 改为 Aborted/Failed，不改原 phase/stage，不清空 finalizers。重复 DELETE 幂等。清理优先于业务终态守卫。
-- Build Controller 只清理自己创建的 BuildInfo、Snapshot、RpmRepo：先删除并等待 BuildInfo 消失，再删除 Snapshot、RpmRepo。BuildInfo 缺失按该直接子资源已完成处理，不跨级扫描或清理 Job、OldJob、BuildGraph。single 未创建的 RpmRepo 按 NotFound 处理。Project、Config、Script、Runner、基准 Build 及其子资源不在清理范围。
+- Build Controller 只清理自己创建的 BuildInfo、Snapshot、RpmRepo，顺序见下文。BuildInfo 缺失按该直接子资源已完成处理，不跨级扫描或清理 Job、OldJob、BuildGraph。single 未创建的 RpmRepo 按 NotFound 处理。Project、Config、Script、Runner、基准 Build 及其子资源不在清理范围。
 - Build/BuildInfo Controller 不直接调用 Artifact Manager 或移除子对象 finalizer。Job Controller 负责 archive 和 OldJob 数据清理，见 [Job Controller 6.4](controller-manager~job-controller.md#64-oldjob-数据清理)。RpmRepo Controller 按构建作用域清理过程仓和发布仓；Artifact Manager 保护 current，不自动回滚发布。
 
 **直接子资源归属**
@@ -538,8 +538,8 @@ single 与非 single 的 `publish=false` 分支均不写 `PublishSucceed`，不�
 
 1. 同一 Build 的业务与删除调谐使用同一个队列 key。GET 最新 Build，确认 UID、deletionTimestamp 和 cleanup finalizer。NotFound 或 UID 改变结束旧周期；没有自身 finalizer 时不接管其他 finalizer。
 2. 停止派生资源生产，按最新对象状态清理直接子资源；读取错误保留 finalizer，NotFound 视为该子资源已不存在，删除分支不补发 CREATE。RpmRepo Controller 同时收敛已登记的 Artifact Manager 操作；其检查点只阻塞 Job/OldJob 清理，不阻塞 BuildInfo 删除标记和 BuildGraph 清理。
-3. GET 同名 BuildInfo，已经删除中则等待；否则确认 `ebs.io/buildinfo-cleanup` 后条件 DELETE，不同时编排其子资源删除。BuildInfo finalizer 独立推进 BuildGraph 与 Job/OldJob 两条清理分支，并等待两者全部消失，详见 BuildInfo Controller 第三章。DELETE 受理不等于清理完成。
-4. BuildInfo GET 或 DELETE 返回 NotFound 后，对 Snapshot、RpmRepo 发出条件 DELETE；RpmRepo 的 `ebs.io/rpmrepo-cleanup` finalizer 由其 Controller 排空在途操作、确认 CleanupReady 并完成本构建的仓库清理后移除。三个子资源共用删除处理：GET/DELETE 返回 NotFound 表示已消失，删除中或 DELETE 受理后等待后续读取确认。Build Controller 不移除子资源 finalizer。
+3. GET 同名 BuildInfo，尚未删除时确认 `ebs.io/buildinfo-cleanup` 后条件 DELETE，不跨级编排其子资源删除。随后读取并条件 DELETE Snapshot，无需等待 BuildInfo 消失；BuildInfo 已删除中时仍继续处理 Snapshot。BuildInfo finalizer 独立推进 BuildGraph 与 Job/OldJob 两条清理分支，清理不依赖 Snapshot，详见 BuildInfo Controller 第三章。DELETE 受理不等于清理完成。
+4. BuildInfo GET 或 DELETE 返回 NotFound 后，才读取并条件 DELETE RpmRepo，确保其仓库不再被下级任务使用；RpmRepo 的 `ebs.io/rpmrepo-cleanup` finalizer 由其 Controller 排空在途操作、确认 CleanupReady 并完成本构建的仓库清理后移除。三个子资源共用删除处理：GET/DELETE 返回 NotFound 表示已消失，删除中或 DELETE 受理后等待后续读取确认。Build Controller 不移除子资源 finalizer。
 5. 每轮 GET 最新的直接子资源，确认 BuildInfo、Snapshot、RpmRepo 均不存在后，再 GET Build，以最新 resourceVersion 移除自身 finalizer，保留其他 finalizers 和所有 spec/status 字段。最后一个 finalizer 移除后由 apiserver 物理删除 Build。
 
 **停止派发与并发边界**
@@ -736,6 +736,7 @@ oldjobs:        get, list, delete
 
 - 删除生命周期：创建即有 finalizer；终态 Build 删除仍入队；正常终态不入队；删除分支先于状态校验，无业务状态覆盖。
 - 直接子资源清理：覆盖 single/full、BuildInfo 缺失、Snapshot/RpmRepo 缺失、归属冲突、UID/resourceVersion 变化、其他 finalizer 阻塞及删除失败恢复；BuildInfo 缺失时不调用下级资源接口。
+- 删除顺序：按 7.7 验证首次请求删除 BuildInfo 的同轮即可删除 Snapshot；BuildInfo 已删除中或被其他 finalizer 阻塞时，Snapshot 删除失败可独立重试。BuildInfo 消失前不读取或删除 RpmRepo，直接子资源全部消失前保留 Build finalizer。
 - 恢复与竞态：重启后重新 GET 直接子资源；DELETE Unknown 分别模拟已落库/未落库，下轮重新 GET；移除 finalizer 的 Unknown 确认原意图；最终 GET 的 resourceVersion 改变时放弃旧决策。在途服务端写入和重启恢复另按 14.3 验收。
 - 边界：Build 只清理直接创建的 BuildInfo、Snapshot、RpmRepo；Job/OldJob 数据清理由下级 Controller 负责，通过 BuildInfo finalizer 体现进度；仓库清理通过 RpmRepo finalizer 体现进度。Build 不直接操作文件，不删除基准构建资源。
 

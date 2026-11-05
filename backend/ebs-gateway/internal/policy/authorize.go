@@ -182,6 +182,16 @@ func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal
 		}
 		return nil
 	}
+	if route.Resource == "builds" && route.Method == http.MethodDelete {
+		if who.Type != identity.UserType || who.Subject == "" || route.Project == "" {
+			return deny("only the Project owner can delete Build")
+		}
+		access, err := a.projectAccess(ctx, route.Project, who.Subject)
+		if err != nil || !access.owner {
+			return deny("only the Project owner can delete Build")
+		}
+		return nil
+	}
 	if who.Type == identity.UserType && who.Scope == identity.AdminScope {
 		if route.Resource == "jobs" && route.Subresource == "status" && who.Scope == identity.AdminScope {
 			return deny("Admin cannot update Job status")

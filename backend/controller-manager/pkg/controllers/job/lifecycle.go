@@ -168,7 +168,7 @@ func (c *Controller) migrateJob(ctx context.Context, job *ebsv1.Job) (bool, erro
 }
 
 func (c *Controller) cleanupOldJob(ctx context.Context, job *ebsv1.Job) error {
-	if !slices.Contains(job.Finalizers, ebsv1.JobArtifactsCleanupFinalizer) {
+	if !slices.Contains(job.Finalizers, ebsv1.JobCleanupFinalizer) {
 		return nil
 	}
 	state, err := c.client.GetArchiveState(ctx, job.Namespace, job.Name)
