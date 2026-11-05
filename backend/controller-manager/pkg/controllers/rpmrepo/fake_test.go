@@ -32,6 +32,8 @@ type FakeClient struct {
 	ListJobsErr     error
 	ListRpmReposErr error
 	UpdateStatusErr error
+	UpdateHook      func(request, current *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
+	Updates         []*ebsv1.RpmRepo
 
 	// UpdateStatusHook, when set, may reject or rewrite a status write to model conflicts and unknown outcomes.
 	UpdateStatusHook func(request, current *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error)
@@ -147,6 +149,30 @@ func (f *FakeClient) ListRpmRepos(_ context.Context, project string, options met
 		result = append(result, *item.DeepCopy())
 	}
 	return result, nil
+}
+
+func (f *FakeClient) UpdateRpmRepo(_ context.Context, obj *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
+	current := f.RpmRepos[key(obj.Namespace, obj.Name)]
+	if current == nil {
+		return nil, apierrors.NewNotFound(source.RpmReposGVR.GroupResource(), obj.Name)
+	}
+	f.Updates = append(f.Updates, obj.DeepCopy())
+	if f.UpdateHook != nil {
+		return f.UpdateHook(obj, current.DeepCopy())
+	}
+	if obj.UID != current.UID || obj.ResourceVersion != current.ResourceVersion {
+		return nil, apierrors.NewConflict(source.RpmReposGVR.GroupResource(), obj.Name, fmt.Errorf("stale RpmRepo"))
+	}
+	updated := obj.DeepCopy()
+	updated.Status = current.DeepCopy().Status
+	next, _ := strconv.Atoi(current.ResourceVersion)
+	updated.ResourceVersion = strconv.Itoa(next + 1)
+	if updated.DeletionTimestamp != nil && len(updated.Finalizers) == 0 {
+		delete(f.RpmRepos, key(obj.Namespace, obj.Name))
+	} else {
+		f.RpmRepos[key(obj.Namespace, obj.Name)] = updated
+	}
+	return updated.DeepCopy(), nil
 }
 
 func (f *FakeClient) UpdateRpmRepoStatus(_ context.Context, obj *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {

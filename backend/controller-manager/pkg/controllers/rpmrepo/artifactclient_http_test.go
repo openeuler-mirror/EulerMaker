@@ -22,6 +22,22 @@ type scriptedArtifactServer struct {
 	server      *httptest.Server
 }
 
+func TestDeleteBuildRepositoriesHTTP(t *testing.T) {
+	for _, status := range []int{204, 202, 404, 409, 503, 200} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			s := newScriptedArtifactServer(t, status, "", nil)
+			done, err := s.client(t).DeleteBuildRepositories(context.Background(), "project", "aarch64", "build")
+			if done != (status == 204) || (err != nil) != (status != 204 && status != 202) {
+				t.Fatalf("status=%d done=%t error=%v", status, done, err)
+			}
+			request := s.requests[0]
+			if request.Method != http.MethodDelete || request.URL.Path != "/internal/v1/projects/project/architectures/aarch64/builds/build/repositories" {
+				t.Fatalf("cleanup request: %s %s", request.Method, request.URL.Path)
+			}
+		})
+	}
+}
+
 func newScriptedArtifactServer(t *testing.T, status int, body string, headers map[string]string) *scriptedArtifactServer {
 	t.Helper()
 	scripted := &scriptedArtifactServer{status: status, body: body, headers: headers}

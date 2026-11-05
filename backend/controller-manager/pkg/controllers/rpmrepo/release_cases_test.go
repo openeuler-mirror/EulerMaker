@@ -189,7 +189,7 @@ func TestReleaseIdentityConflictCollectsFailure(t *testing.T) {
 		t.Fatalf("a collected failure must not requeue, got %+v", result)
 	}
 	stored := client.RpmRepos[key(testProject, testBuild)]
-	if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition != nil {
+	if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition == nil {
 		t.Fatalf("a non-retryable release failure must be collected: %+v", stored.Status.Release)
 	}
 	if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonReleaseFailed) {

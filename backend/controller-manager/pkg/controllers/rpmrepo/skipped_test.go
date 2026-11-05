@@ -160,8 +160,8 @@ func TestReconcileBuildConvergesOnSkipped(t *testing.T) {
 				t.Fatalf("a skipped object must not be written, got %d writes (last phase %+v)",
 					len(client.StatusWrites), last.Status.Release)
 			}
-			if client.GetBuildCalls != 0 || client.GetBuildInfoCalls != 0 || len(client.JobListOptions) != 0 {
-				t.Fatalf("a skipped object must not read Build/BuildInfo/Job: build=%d buildinfo=%d jobs=%d",
+			if client.GetBuildCalls != 2 || client.GetBuildInfoCalls != 2 || len(client.JobListOptions) != 0 {
+				t.Fatalf("a skipped object checks parent deletion but does not scan Jobs: build=%d buildinfo=%d jobs=%d",
 					client.GetBuildCalls, client.GetBuildInfoCalls, len(client.JobListOptions))
 			}
 			if client.GetRpmRepoCalls < 2 {
@@ -236,8 +236,8 @@ func TestInitializerSelectorExcludesSkipped(t *testing.T) {
 	if _, _, err := Initializer(config, NewFakeClient())(context.Background(), initContext(factory)); err != nil {
 		t.Fatalf("Initializer: %v", err)
 	}
-	if factory.options.FieldSelector != skippedPhaseFieldSelector {
-		t.Fatalf("polling field selector = %q, want %q", factory.options.FieldSelector, skippedPhaseFieldSelector)
+	if factory.selectors[0] != skippedPhaseFieldSelector {
+		t.Fatalf("polling field selector = %q, want %q", factory.selectors[0], skippedPhaseFieldSelector)
 	}
 }
 

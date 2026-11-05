@@ -81,7 +81,8 @@ func (s *stubSharedClient) Create(context.Context, schema.GroupVersionResource, 
 }
 
 func (s *stubSharedClient) Update(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error) {
-	return nil, nil
+	s.updateCalls++
+	return s.updateObj, s.updateErr
 }
 
 func (s *stubSharedClient) UpdateStatus(context.Context, schema.GroupVersionResource, string, runtime.Object) (runtime.Object, error) {
@@ -159,6 +160,16 @@ func TestAdapterAcceptsMatchingGetResponses(t *testing.T) {
 	}
 	if repo.Name != testBuild || repo.Namespace != testProject {
 		t.Fatalf("unexpected object %+v", repo.ObjectMeta)
+	}
+}
+
+func TestAdapterUpdatesRpmRepoMetadata(t *testing.T) {
+	response := testRpmRepo()
+	response.Finalizers = []string{"other/controller"}
+	shared := &stubSharedClient{updateObj: response}
+	updated, err := newAPIClient(shared).UpdateRpmRepo(context.Background(), response.DeepCopy())
+	if err != nil || updated.UID != response.UID || shared.updateCalls != 1 {
+		t.Fatalf("metadata update: %+v %v", updated, err)
 	}
 }
 

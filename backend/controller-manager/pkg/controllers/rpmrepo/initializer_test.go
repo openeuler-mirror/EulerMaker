@@ -18,15 +18,17 @@ import (
 
 // stubPollingFactory captures the resource, period and selectors the initializer asks for.
 type stubPollingFactory struct {
-	source  source.Source
-	err     error
-	gvr     schema.GroupVersionResource
-	period  time.Duration
-	options metav1.ListOptions
-	calls   int
+	selectors []string
+	source    source.Source
+	err       error
+	gvr       schema.GroupVersionResource
+	period    time.Duration
+	options   metav1.ListOptions
+	calls     int
 }
 
 func (f *stubPollingFactory) ForResource(gvr schema.GroupVersionResource, period time.Duration, options metav1.ListOptions) (source.Source, error) {
+	f.selectors = append(f.selectors, options.FieldSelector)
 	f.calls++
 	f.gvr, f.period, f.options = gvr, period, options
 	if f.err != nil {
@@ -72,8 +74,8 @@ func TestInitializerBuildsThePollingSource(t *testing.T) {
 	if !active || instance == nil || instance.Name() != Name {
 		t.Fatalf("the initializer must return an active %q controller, got %v active=%t", Name, instance, active)
 	}
-	if factory.calls != 1 {
-		t.Fatalf("expected one polling source request, got %d", factory.calls)
+	if factory.calls != 3 {
+		t.Fatalf("expected business and deleting BuildInfo/RpmRepo polling requests, got %d", factory.calls)
 	}
 	if factory.gvr != source.RpmReposGVR {
 		t.Fatalf("unexpected GVR %v", factory.gvr)
@@ -81,8 +83,8 @@ func TestInitializerBuildsThePollingSource(t *testing.T) {
 	if factory.period != config.PollPeriod {
 		t.Fatalf("unexpected poll period %s", factory.period)
 	}
-	if factory.options.FieldSelector != nonTerminalRpmRepoFieldSelector {
-		t.Fatalf("unexpected field selector %q", factory.options.FieldSelector)
+	if factory.selectors[0] != nonTerminalRpmRepoFieldSelector || factory.selectors[1] != "metadata.deletionTimestamp!=null" || factory.selectors[2] != "metadata.deletionTimestamp!=null" {
+		t.Fatalf("unexpected field selectors %v", factory.selectors)
 	}
 	if factory.options.LabelSelector != "" {
 		t.Fatalf("the polling source must not carry a label selector, got %q", factory.options.LabelSelector)
@@ -159,19 +161,28 @@ func TestEventHandlerSkipsObjectsThatNeedNoWork(t *testing.T) {
 	c := handlerController(t)
 	terminal := newRpmRepo(testBuild)
 	terminal.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady}
-	deleting := newRpmRepo(testBuild)
-	now := metav1.Now()
-	deleting.DeletionTimestamp = &now
-
 	c.onAdd(terminal)
-	c.onAdd(deleting)
 	c.onAdd(&ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: testBuild, Namespace: testProject}})
 	if c.Queue().Len() != 0 {
-		t.Fatalf("terminal, deleting and foreign objects must not enqueue work")
+		t.Fatalf("terminal and foreign objects must not enqueue work")
 	}
 	c.onDelete(newRpmRepo(testBuild))
 	if c.Queue().Len() != 0 {
 		t.Fatalf("delete events must only be logged")
+	}
+}
+
+func TestEventHandlerEnqueuesDeletingTerminalRepository(t *testing.T) {
+	c := handlerController(t)
+	repo := newRpmRepo(testBuild)
+	now := metav1.Now()
+	repo.DeletionTimestamp = &now
+	repo.Finalizers = []string{ebsv1.RpmRepoCleanupFinalizer}
+	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady}
+	repo.Status.Conditions = []metav1.Condition{{Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue}}
+	c.onAdd(repo)
+	if c.Queue().Len() != 1 {
+		t.Fatal("deletion must take precedence over terminal phase and cleanup acknowledgment")
 	}
 }
 

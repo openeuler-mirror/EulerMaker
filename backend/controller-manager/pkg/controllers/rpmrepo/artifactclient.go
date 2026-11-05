@@ -123,6 +123,7 @@ type ArtifactManagerClient interface {
 	SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
 	GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
 	ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
+	DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
 }
 
 type artifactErrorKind string
@@ -284,7 +285,33 @@ func (c *httpArtifactClient) ActivateRelease(ctx context.Context, buildName stri
 	return response, err
 }
 
+// DeleteBuildRepositories confirms completion only on 204; a missing route is not a deleted repository.
+func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
+	if project == "" || arch == "" || buildName == "" {
+		return false, fmt.Errorf("repository cleanup requires project, architecture and build name")
+	}
+	path := "/internal/v1/projects/" + url.PathEscape(project) + "/architectures/" + url.PathEscape(arch) +
+		"/builds/" + url.PathEscape(buildName) + "/repositories"
+	status, err := c.callStatus(ctx, http.MethodDelete, path, nil, nil)
+	if err != nil {
+		return false, err
+	}
+	switch status {
+	case http.StatusNoContent:
+		return true, nil
+	case http.StatusAccepted:
+		return false, nil
+	default:
+		return false, fmt.Errorf("unexpected repository cleanup status %d", status)
+	}
+}
+
 func (c *httpArtifactClient) call(ctx context.Context, method, path string, body any, out any) error {
+	_, err := c.callStatus(ctx, method, path, body, out)
+	return err
+}
+
+func (c *httpArtifactClient) callStatus(ctx context.Context, method, path string, body any, out any) (int, error) {
 	operation := operationFor(path, method)
 	target := *c.base
 	target.Path = strings.TrimSuffix(target.Path, "/") + strings.SplitN(path, "?", 2)[0]
@@ -296,13 +323,13 @@ func (c *httpArtifactClient) call(ctx context.Context, method, path string, body
 	if body != nil {
 		encoded, err := json.Marshal(body)
 		if err != nil {
-			return &artifactError{operation: operation, kind: artifactPermanent, code: "InvalidRequest", err: err}
+			return 0, &artifactError{operation: operation, kind: artifactPermanent, code: "InvalidRequest", err: err}
 		}
 		payload = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, target.String(), payload)
 	if err != nil {
-		return &artifactError{operation: operation, kind: artifactPermanent, code: "InvalidRequest", err: err}
+		return 0, &artifactError{operation: operation, kind: artifactPermanent, code: "InvalidRequest", err: err}
 	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
@@ -310,29 +337,29 @@ func (c *httpArtifactClient) call(ctx context.Context, method, path string, body
 	response, err := c.client.Do(request)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return &artifactError{operation: operation, kind: artifactRetryable, code: "RequestCanceled", err: ctxErr}
+			return 0, &artifactError{operation: operation, kind: artifactRetryable, code: "RequestCanceled", err: ctxErr}
 		}
-		return &artifactError{operation: operation, kind: artifactRetryable, code: "TransportError", err: err}
+		return 0, &artifactError{operation: operation, kind: artifactRetryable, code: "TransportError", err: err}
 	}
 	defer func() { _ = response.Body.Close() }()
 	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if readErr != nil {
-		return &artifactError{operation: operation, kind: artifactRetryable, code: "UnreadableResponse", statusCode: response.StatusCode, err: readErr}
+		return response.StatusCode, &artifactError{operation: operation, kind: artifactRetryable, code: "UnreadableResponse", statusCode: response.StatusCode, err: readErr}
 	}
 	if len(raw) > maxResponseBytes {
-		return &artifactError{operation: operation, kind: artifactRetryable, code: "ResponseTooLarge", statusCode: response.StatusCode,
+		return response.StatusCode, &artifactError{operation: operation, kind: artifactRetryable, code: "ResponseTooLarge", statusCode: response.StatusCode,
 			err: fmt.Errorf("response exceeded %d bytes", maxResponseBytes)}
 	}
 	if response.StatusCode/100 == 2 {
 		if out == nil {
-			return nil
+			return response.StatusCode, nil
 		}
 		if err := json.Unmarshal(raw, out); err != nil {
-			return &artifactError{operation: operation, kind: artifactRetryable, code: "UnparsableResponse", statusCode: response.StatusCode, err: err}
+			return response.StatusCode, &artifactError{operation: operation, kind: artifactRetryable, code: "UnparsableResponse", statusCode: response.StatusCode, err: err}
 		}
-		return nil
+		return response.StatusCode, nil
 	}
-	return classifyArtifactFailure(operation, response, raw)
+	return response.StatusCode, classifyArtifactFailure(operation, response, raw)
 }
 
 func classifyArtifactFailure(operation string, response *http.Response, raw []byte) error {
@@ -386,6 +413,8 @@ func parseRetryAfter(value string) time.Duration {
 
 func operationFor(path, method string) string {
 	switch {
+	case method == http.MethodDelete && strings.HasSuffix(path, "/repositories"):
+		return "delete-build-repositories"
 	case strings.HasSuffix(path, "/activate"):
 		return "activate-release"
 	case strings.Contains(path, "/internal/v1/repositories"):

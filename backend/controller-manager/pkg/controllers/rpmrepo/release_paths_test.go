@@ -111,7 +111,7 @@ func TestResumeReleaseStopsOnAbortOrMismatch(t *testing.T) {
 			t.Fatalf("sync: %v", err)
 		}
 		stored := client.RpmRepos[key(testProject, testBuild)]
-		if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition != nil {
+		if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition == nil {
 			t.Fatalf("an aborted in-flight release must be collected: %+v", stored.Status.Release)
 		}
 		if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted) {

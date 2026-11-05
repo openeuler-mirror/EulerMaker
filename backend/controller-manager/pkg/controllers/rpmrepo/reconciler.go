@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
@@ -107,15 +108,22 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 			return controller.ReconcileResult{}, classifyReadError(err)
 		}
 		// The RpmRepo is missing: only the Build decides whether this key converges or keeps retrying.
-		if _, buildErr := r.controller.client.GetBuild(r.ctx, r.project, name); buildErr != nil {
+		build, buildErr := r.controller.client.GetBuild(r.ctx, r.project, name)
+		if buildErr != nil {
 			if apierrors.IsNotFound(buildErr) {
 				return controller.ReconcileResult{}, nil
 			}
 			return controller.ReconcileResult{}, classifyReadError(buildErr)
 		}
+		if build.DeletionTimestamp != nil {
+			return controller.ReconcileResult{}, nil
+		}
 		return controller.ReconcileResult{}, fmt.Errorf("RpmRepo %s/%s does not exist yet", r.project, name)
 	}
-	if repo.DeletionTimestamp != nil || releaseTerminal(repo) {
+	if repo.DeletionTimestamp != nil {
+		return r.cleanupRpmRepo(repo)
+	}
+	if meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) {
 		return controller.ReconcileResult{}, nil
 	}
 	build, err := r.controller.client.GetBuild(r.ctx, r.project, name)
@@ -123,12 +131,12 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 		if apierrors.IsNotFound(err) {
 			buildMissing.Inc()
 			log.Printf("controller=%s key=%q uid=%q reason=BuildMissing", Name, r.key, repo.UID)
-			return controller.ReconcileResult{}, nil
+			return r.drainCheckpoints(repo)
 		}
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
-	if build.Status.Phase == ebsv1.BuildAborted {
-		return r.collectBuildAborted(repo)
+	if build.DeletionTimestamp != nil {
+		return r.drainCheckpoints(repo)
 	}
 	info, err := r.controller.client.GetBuildInfo(r.ctx, r.project, name)
 	if err != nil {
@@ -137,6 +145,15 @@ func (r *reconciler) reconcileBuild(name string) (controller.ReconcileResult, er
 		}
 		log.Printf("controller=%s key=%q uid=%q reason=BuildInfoNotReady", Name, r.key, repo.UID)
 		info = nil
+	}
+	if info != nil && info.DeletionTimestamp != nil {
+		return r.drainCheckpoints(repo)
+	}
+	if releaseTerminal(repo) {
+		return controller.ReconcileResult{}, nil
+	}
+	if build.Status.Phase == ebsv1.BuildAborted {
+		return r.collectBuildAborted(repo)
 	}
 	if info != nil && info.Status.Phase == ebsv1.BuildInfoFailed {
 		return r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonBuildInfoFailed, countNoFailure)

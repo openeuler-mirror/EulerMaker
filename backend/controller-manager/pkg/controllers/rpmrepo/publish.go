@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -36,6 +37,9 @@ func (r *reconciler) reconcileRelease(arch string) (controller.ReconcileResult, 
 		if len(inflight) > 1 {
 			log.Printf("controller=%s key=%q reason=MultipleReleaseInFlight count=%d", Name, r.key, len(inflight))
 		}
+		if r.enqueueOtherRelease(inflight[0]) {
+			return controller.ReconcileResult{}, nil
+		}
 		return r.resumeRelease(inflight[0])
 	}
 	for i := range items {
@@ -46,12 +50,70 @@ func (r *reconciler) reconcileRelease(arch string) (controller.ReconcileResult, 
 		if repo.Status.Repository == nil || repo.Status.Repository.Transition != nil || len(repo.Status.Repository.SourceJobNames) == 0 {
 			continue
 		}
+		if rpmRepoKey(repo.Namespace, repo.Name) != r.key {
+			ready, err := r.queueReleaseCandidate(repo)
+			if err != nil || ready {
+				return controller.ReconcileResult{}, err
+			}
+			continue
+		}
 		handled, result, err := r.tryStartRelease(repo)
 		if err != nil || handled {
 			return result, err
 		}
 	}
 	return controller.ReconcileResult{}, nil
+}
+
+// Every writer of a repository, including release scans, runs under that repository's queue key.
+func (r *reconciler) enqueueOtherRelease(repo ebsv1.RpmRepo) bool {
+	key := rpmRepoKey(repo.Namespace, repo.Name)
+	if key == r.key {
+		return false
+	}
+	r.controller.Enqueue(key)
+	return true
+}
+
+// Inspect foreign candidates without writing them; their own queue key performs the final recheck and submission.
+func (r *reconciler) queueReleaseCandidate(repo ebsv1.RpmRepo) (bool, error) {
+	if meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) {
+		return false, nil
+	}
+	build, err := r.controller.client.GetBuild(r.ctx, repo.Namespace, repo.Name)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if build.DeletionTimestamp != nil || build.Status.Phase == ebsv1.BuildAborted {
+		r.enqueueOtherRelease(repo)
+		return false, nil
+	}
+	if mismatchBuildTarget(&repo, build) {
+		return false, nil
+	}
+	info, err := r.controller.client.GetBuildInfo(r.ctx, repo.Namespace, repo.Name)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.DeletionTimestamp != nil || info.Status.Phase == ebsv1.BuildInfoFailed {
+		r.enqueueOtherRelease(repo)
+		return false, nil
+	}
+	if info.Status.Phase != ebsv1.BuildInfoCompleted {
+		return false, nil
+	}
+	scan, err := r.scanCandidates(&repo, build)
+	if err != nil {
+		return false, err
+	}
+	r.enqueueOtherRelease(repo)
+	return len(scan.candidates) == 0, nil
 }
 
 // releaseTarget is the validated object pair both release paths work on.
@@ -125,20 +187,31 @@ func (r *reconciler) loadReleaseTarget(candidate ebsv1.RpmRepo) (*releaseTarget,
 		}
 		return nil, releaseFinished, controller.ReconcileResult{}, classifyReadError(err)
 	}
+	if build.DeletionTimestamp != nil {
+		result, err := r.drainCheckpoints(repo)
+		return nil, releaseFinished, result, err
+	}
+	if err := r.selectArtifactManager(repo); err != nil {
+		return nil, releaseFinished, controller.ReconcileResult{}, err
+	}
 	if mismatchBuildTarget(repo, build) {
 		log.Printf("controller=%s key=%q uid=%q reason=RpmRepoLabelMismatch", Name, r.key, repo.UID)
 		return nil, releaseSkipped, controller.ReconcileResult{}, nil
-	}
-	if build.Status.Phase == ebsv1.BuildAborted {
-		result, err := r.collectBuildAborted(repo)
-		return nil, releaseFinished, result, err
 	}
 	info, err := r.controller.client.GetBuildInfo(r.ctx, r.project, repo.Name)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return nil, releaseFinished, controller.ReconcileResult{}, classifyReadError(err)
 		}
-	} else if info.Status.Phase == ebsv1.BuildInfoFailed {
+	} else if info.DeletionTimestamp != nil {
+		result, err := r.drainCheckpoints(repo)
+		return nil, releaseFinished, result, err
+	}
+	if build.Status.Phase == ebsv1.BuildAborted {
+		result, err := r.collectBuildAborted(repo)
+		return nil, releaseFinished, result, err
+	}
+	if info != nil && info.Status.Phase == ebsv1.BuildInfoFailed {
 		result, err := r.writeReleaseFailure(repo, ebsv1.RpmRepoReasonBuildInfoFailed, countNoFailure)
 		return nil, releaseFinished, result, err
 	}
@@ -253,7 +326,7 @@ func (r *reconciler) reloadReleaseTarget(candidate ebsv1.RpmRepo) (*ebsv1.RpmRep
 		}
 		return nil, true, classifyReadError(err)
 	}
-	if repo.UID != candidate.UID || repo.DeletionTimestamp != nil || releaseTerminal(repo) {
+	if repo.UID != candidate.UID || repo.DeletionTimestamp != nil || meta.IsStatusConditionTrue(repo.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) || releaseTerminal(repo) {
 		return nil, true, nil
 	}
 	return repo, false, nil
@@ -434,10 +507,11 @@ func (r *reconciler) collectReleaseFailure(repo *ebsv1.RpmRepo, transition *ebsv
 	target := repo.DeepCopy()
 	conditions, _ := MergeCondition(target.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonReleaseFailed, "", target.Generation, r.now)
 	target.Status.Conditions = conditions
-	target.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed, UpdatedAt: r.nowPtr()}
+	r.markReleaseFailed(target)
+	target.Status.Release.Transition = transition
 	confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
 		release := value.Status.Release
-		if release == nil || release.Phase != ebsv1.RpmRepoReleaseFailed || release.Transition != nil {
+		if release == nil || release.Phase != ebsv1.RpmRepoReleaseFailed || !reflect.DeepEqual(release.Transition, transition) {
 			return false
 		}
 		return conditionMatches(value.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonReleaseFailed)
@@ -468,9 +542,9 @@ func (r *reconciler) collectBuildAborted(repo *ebsv1.RpmRepo) (controller.Reconc
 	target := repo.DeepCopy()
 	conditions, _ := MergeCondition(target.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted, "", target.Generation, r.now)
 	target.Status.Conditions = conditions
-	target.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed, UpdatedAt: r.nowPtr()}
+	r.markReleaseFailed(target)
 	confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
-		if value.Status.Release == nil || value.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || value.Status.Release.Transition != nil {
+		if !reflect.DeepEqual(value.Status.Release, target.Status.Release) {
 			return false
 		}
 		return conditionMatches(value.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted)
@@ -496,9 +570,9 @@ func (r *reconciler) writeReleaseFailure(repo *ebsv1.RpmRepo, reason string, cou
 	target := repo.DeepCopy()
 	conditions, _ := MergeCondition(target.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, reason, "", target.Generation, r.now)
 	target.Status.Conditions = conditions
-	target.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed, UpdatedAt: r.nowPtr()}
+	r.markReleaseFailed(target)
 	confirmed, err := r.commitStatus(target, func(value *ebsv1.RpmRepo) bool {
-		if value.Status.Release == nil || value.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || value.Status.Release.Transition != nil {
+		if !reflect.DeepEqual(value.Status.Release, target.Status.Release) {
 			return false
 		}
 		return conditionMatches(value.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, reason)
@@ -512,4 +586,15 @@ func (r *reconciler) writeReleaseFailure(repo *ebsv1.RpmRepo, reason string, cou
 	}
 	log.Printf("controller=%s key=%q uid=%q reason=%s", Name, r.key, confirmed.UID, reason)
 	return controller.ReconcileResult{}, nil
+}
+
+// Failure ends business reconciliation, but does not prove an external request has stopped.
+func (r *reconciler) markReleaseFailed(target *ebsv1.RpmRepo) {
+	var transition *ebsv1.ReleaseTransition
+	if target.Status.Release != nil {
+		transition = target.Status.Release.Transition
+	}
+	target.Status.Release = &ebsv1.RpmRepoReleaseStatus{
+		Phase: ebsv1.RpmRepoReleaseFailed, UpdatedAt: r.nowPtr(), Transition: transition,
+	}
 }

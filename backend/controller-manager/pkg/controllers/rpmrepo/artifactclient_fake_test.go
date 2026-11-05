@@ -8,12 +8,13 @@ import (
 // FakeArtifactManager is an in-memory ArtifactManagerClient. Every method can be scripted, and the recorded
 // requests let a test assert that a replay used exactly the frozen checkpoint.
 type FakeArtifactManager struct {
-	SubmitRepositoryFunc func(context.Context, CreateRepositoryRequest) (RepositoryResponse, error)
-	GetRepositoryFunc    func(context.Context, string) (RepositoryResponse, error)
-	GetJobManifestFunc   func(context.Context, string, string) (JobUploadManifest, error)
-	SubmitReleaseFunc    func(context.Context, CreateReleaseRequest) (ReleaseResponse, error)
-	GetReleaseFunc       func(context.Context, string) (ReleaseResponse, error)
-	ActivateReleaseFunc  func(context.Context, string) (ReleaseResponse, error)
+	SubmitRepositoryFunc        func(context.Context, CreateRepositoryRequest) (RepositoryResponse, error)
+	GetRepositoryFunc           func(context.Context, string) (RepositoryResponse, error)
+	GetJobManifestFunc          func(context.Context, string, string) (JobUploadManifest, error)
+	SubmitReleaseFunc           func(context.Context, CreateReleaseRequest) (ReleaseResponse, error)
+	GetReleaseFunc              func(context.Context, string) (ReleaseResponse, error)
+	ActivateReleaseFunc         func(context.Context, string) (ReleaseResponse, error)
+	DeleteBuildRepositoriesFunc func(context.Context, string, string, string) (bool, error)
 
 	SubmitRepositoryRequests []CreateRepositoryRequest
 	GetRepositoryUIDs        []string
@@ -21,6 +22,7 @@ type FakeArtifactManager struct {
 	SubmitReleaseRequests    []CreateReleaseRequest
 	GetReleaseBuildNames     []string
 	ActivateReleaseNames     []string
+	DeleteBuildRequests      [][3]string
 }
 
 func NewFakeArtifactManager() *FakeArtifactManager { return &FakeArtifactManager{} }
@@ -74,6 +76,14 @@ func (f *FakeArtifactManager) ActivateRelease(ctx context.Context, buildName str
 	return f.ActivateReleaseFunc(ctx, buildName)
 }
 
+func (f *FakeArtifactManager) DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
+	f.DeleteBuildRequests = append(f.DeleteBuildRequests, [3]string{project, arch, buildName})
+	if f.DeleteBuildRepositoriesFunc != nil {
+		return f.DeleteBuildRepositoriesFunc(ctx, project, arch, buildName)
+	}
+	return true, nil
+}
+
 // Reset clears the recorded calls while keeping the scripted responses.
 func (f *FakeArtifactManager) Reset() {
 	f.SubmitRepositoryRequests = nil
@@ -82,4 +92,5 @@ func (f *FakeArtifactManager) Reset() {
 	f.SubmitReleaseRequests = nil
 	f.GetReleaseBuildNames = nil
 	f.ActivateReleaseNames = nil
+	f.DeleteBuildRequests = nil
 }

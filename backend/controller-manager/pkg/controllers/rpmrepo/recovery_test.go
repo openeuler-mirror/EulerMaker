@@ -116,8 +116,15 @@ func TestReconcileReleaseSkipsCandidateThatIsNotReady(t *testing.T) {
 	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
+	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() == 0 {
+		t.Fatalf("the other candidate must be queued, not executed under this key: %+v", artifacts.SubmitReleaseRequests)
+	}
+	r := &reconciler{controller: c, ctx: context.Background(), key: key(testProject, "build-b"), project: testProject, now: metav1.Now()}
+	if _, err := r.reconcileRelease(testArch); err != nil {
+		t.Fatal(err)
+	}
 	if len(artifacts.SubmitReleaseRequests) != 1 || artifacts.SubmitReleaseRequests[0].BuildName != "build-b" {
-		t.Fatalf("a candidate that is not ready must be skipped for a ready one, got %+v", artifacts.SubmitReleaseRequests)
+		t.Fatalf("ready candidate was not submitted on its own key: %+v", artifacts.SubmitReleaseRequests)
 	}
 	if storedFirst := client.RpmRepos[key(testProject, testBuild)]; storedFirst.Status.Release != nil {
 		t.Fatalf("the skipped candidate must not persist release state: %+v", storedFirst.Status.Release)
