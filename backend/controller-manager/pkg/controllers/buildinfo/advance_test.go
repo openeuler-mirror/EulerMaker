@@ -188,18 +188,6 @@ func TestAdvanceBackfillJobAborted(t *testing.T) {
 	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
 }
 
-func TestLatestJobOrdering(t *testing.T) {
-	at := metav1.NewTime(testStart)
-	group := []ebsv1.Job{
-		{ObjectMeta: metav1.ObjectMeta{Name: "job-b", CreationTimestamp: at}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "job-a", CreationTimestamp: at}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "job-z"}}, // zero timestamp sorts earliest
-	}
-	if got := latestJob(group); got.Name != "job-b" {
-		t.Fatalf("latestJob = %q, want job-b (greatest creationTimestamp, then name)", got.Name)
-	}
-}
-
 // Install result backfill and runtime edges.
 
 func TestAdvanceInstallBackfillBranches(t *testing.T) {

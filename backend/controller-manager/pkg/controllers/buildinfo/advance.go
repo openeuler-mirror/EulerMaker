@@ -128,7 +128,7 @@ func (c *Controller) appendInstallEdges(
 			if dcg.Node(provider) == nil {
 				continue // provider not in this round's build set
 			}
-			if pSS := round.specResult(provider); terminalSpecBuildStatus(pSS.Status) {
+			if pSS := round.specResult(provider); pSS.Status.IsTerminal() {
 				continue // provider already terminal: no edge, no re-dispatch
 			}
 			if _, dup := node.InstallInDep[provider]; dup {
@@ -265,7 +265,7 @@ func upstreamNames(node *DcgNode) []string {
 func upstreamsTerminal(dcg *DcgDict, round *reconcileRound, spec string) bool {
 	for _, up := range upstreamNames(dcg.Node(spec)) {
 		st := round.specResult(up).Status
-		if !terminalSpecBuildStatus(st) {
+		if !st.IsTerminal() {
 			return false
 		}
 	}

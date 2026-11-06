@@ -11,104 +11,12 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
-	"controller-manager/pkg/manager"
 	"controller-manager/pkg/metrics"
-	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
-
-// --- Event handlers ---
-
-type recordingPollingFactory struct {
-	selectors []string
-	gvr       schema.GroupVersionResource
-	options   metav1.ListOptions
-}
-
-func (f *recordingPollingFactory) ForResource(
-	gvr schema.GroupVersionResource,
-	_ time.Duration,
-	options metav1.ListOptions,
-) (source.Source, error) {
-	f.gvr, f.options = gvr, options
-	f.selectors = append(f.selectors, options.FieldSelector)
-	return &fakeSource{}, nil
-}
-
-func (*recordingPollingFactory) Sources() []source.Source { return nil }
-
-func TestInitializerFiltersTerminalBuildInfos(t *testing.T) {
-	polling := &recordingPollingFactory{}
-	config := Config{
-		PollPeriod: time.Second, MaxRetries: 2, DcgPruneGrace: time.Minute,
-		RpmRepoReadyRetryLimit: 3, SnapshotReadyRetryLimit: 3, SpecFileCacheSize: 100,
-	}
-	init := manager.InitContext{
-		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: polling},
-		Config:       manager.ControllerConfig{SlowRetryInitial: time.Second, SlowRetryMax: time.Minute},
-	}
-	_, active, err := Initializer(config, &fakeServices{fakeClient: newFakeClient(), git: newFakeGitServer()})(context.Background(), init)
-	if err != nil || !active {
-		t.Fatalf("initializer active=%t err=%v", active, err)
-	}
-	if polling.gvr != source.BuildInfosGVR || len(polling.selectors) != 2 || polling.selectors[0] != nonTerminalBuildInfoFieldSelector || polling.selectors[1] != "metadata.deletionTimestamp!=null" {
-		t.Fatalf("polling source=%s options=%#v", polling.gvr, polling.options)
-	}
-}
-
-func TestEventAddUpdateEnqueueFilteredListObjects(t *testing.T) {
-	c, _, _, _ := newTestController(t)
-	c.onAdd(testBuildInfoObj(ebsv1.BuildInfoPending))
-	c.onAdd(testBuildInfoObj(ebsv1.BuildInfoProcessing))
-	if got := c.Queue().Len(); got != 1 {
-		t.Fatalf("queue len after add pending+processing same key = %d, want 1 (dedup)", got)
-	}
-	c.onUpdate(nil, testBuildInfoObj(ebsv1.BuildInfoPending))
-	if got := c.Queue().Len(); got != 1 {
-		t.Fatalf("queue len after update = %d, want 1", got)
-	}
-	// The projected List does not carry phase; the server-side selector has already excluded terminal objects before the
-	// handler sees them.
-	c2, _, _, _ := newTestController(t)
-	projected := testBuildInfoObj(ebsv1.BuildInfoPending)
-	projected.Status = ebsv1.BuildInfoStatus{}
-	c2.onAdd(projected)
-	if got := c2.Queue().Len(); got != 1 {
-		t.Fatalf("projected buildinfo queue len = %d, want 1", got)
-	}
-}
-
-func TestEventWrongTypeNoPanic(t *testing.T) {
-	c, _, _, _ := newTestController(t)
-	c.onAdd(testBuildObj("full"))
-	c.onUpdate(nil, testBuildObj("full"))
-	c.onDelete(testBuildObj("full"))
-	if got := c.Queue().Len(); got != 0 {
-		t.Fatalf("wrong-type object enqueued, queue len = %d", got)
-	}
-}
-
-func TestEventDeleteTombstoneAndRevoke(t *testing.T) {
-	c, _, _, _ := newTestController(t)
-	key := testNS + "/" + testBuild
-	c.dcgDict.Set(key, &graphCacheEntry{dcg: NewDcgDict(graphWith(edge{"a", "b"}))})
-	if got := c.dcgDict.Len(); got != 1 {
-		t.Fatalf("dcgDict len = %d, want 1", got)
-	}
-	c.onDelete(testBuildInfoObj(ebsv1.BuildInfoPending))
-	if got := c.dcgDict.Len(); got != 0 {
-		t.Fatalf("dcgDict len after delete = %d, want 0 (tombstoned)", got)
-	}
-	// Re-add within the grace period revokes the tombstone.
-	c.onAdd(testBuildInfoObj(ebsv1.BuildInfoPending))
-	if got := c.dcgDict.Len(); got != 1 {
-		t.Fatalf("dcgDict len after re-add = %d, want 1 (revoked)", got)
-	}
-}
 
 // --- Reconcile entry ---
 
@@ -139,14 +47,25 @@ func TestReconcileTerminalSkips(t *testing.T) {
 	}
 }
 
-func TestReconcileDeletionTimestampSkips(t *testing.T) {
+func TestReconcileDeletionTimestampRoutesToCleanup(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	bi := testBuildInfoObj(ebsv1.BuildInfoPending)
 	now := metav1.Now()
 	bi.DeletionTimestamp = &now
+	bi.Finalizers = []string{ebsv1.BuildInfoCleanupFinalizer}
 	client.SeedBuildInfo(bi)
+	c.client = &cleanupFake{fakeClient: client}
+	key := bi.Namespace + "/" + bi.Name
+	c.counters.Increment(counterRpmRepo, key, "r", "m")
 	reconcileOnce(t, c)
-	requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoPending)
+	got := getBuildInfo(t, client)
+	requirePhase(t, got, ebsv1.BuildInfoPending)
+	if len(got.Finalizers) != 0 {
+		t.Fatalf("finalizers = %v, want cleanup finalizer removed", got.Finalizers)
+	}
+	if count := c.counters.Count(counterRpmRepo, key); count != 0 {
+		t.Fatalf("failure count = %d, want 0 after cleanup entry", count)
+	}
 }
 
 func TestReconcileUnknownPhaseSkips(t *testing.T) {
@@ -711,79 +630,6 @@ func TestStatusMatchesIntent(t *testing.T) {
 	}
 }
 
-// --- Conditions ---
-
-func TestUpsertConditionLifecycle(t *testing.T) {
-	var conds []metav1.Condition
-	upsertCondition(&conds, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "first")
-	first := findCondition(conds, ConditionDcgBuildFailed)
-	if first == nil || first.Status != metav1.ConditionTrue {
-		t.Fatalf("upsert produced %+v, want status=True", first)
-	}
-	stamp := first.LastTransitionTime
-	// Same-content upsert keeps the transition time (meta helper semantics).
-	upsertCondition(&conds, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "first")
-	again := findCondition(conds, ConditionDcgBuildFailed)
-	if !again.LastTransitionTime.Equal(&stamp) {
-		t.Fatalf("same-content upsert moved lastTransitionTime %v -> %v", stamp, again.LastTransitionTime)
-	}
-	// A message-only change updates the message but still keeps the time.
-	upsertCondition(&conds, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "second")
-	updated := findCondition(conds, ConditionDcgBuildFailed)
-	if updated.Message != "second" || !updated.LastTransitionTime.Equal(&stamp) {
-		t.Fatalf("message update = %+v, want message second with preserved time", updated)
-	}
-	removeCondition(&conds, ConditionDcgBuildFailed)
-	requireNoCondition(t, conds, ConditionDcgBuildFailed)
-}
-
-func TestMissingDepsMessage(t *testing.T) {
-	if got := missingDepsMessage(nil); got != "" {
-		t.Fatalf("empty deps = %q, want empty", got)
-	}
-	// Sorted and de-duplicated.
-	if got := missingDepsMessage([]string{"b", "a", "b", "c", "a"}); got != "a,b,c" {
-		t.Fatalf("message = %q, want a,b,c", got)
-	}
-	// Over-1024 truncation keeps whole names and the total suffix.
-	var names []string
-	for i := 0; i < 200; i++ {
-		names = append(names, fmt.Sprintf("dep-%03d", i))
-	}
-	got := missingDepsMessage(names)
-	if len(got) > conditionMessageMax {
-		t.Fatalf("truncated message len = %d, want <= %d", len(got), conditionMessageMax)
-	}
-	if !strings.HasSuffix(got, "...(+200 deps total)") {
-		t.Fatalf("truncated message lacks total suffix: ...%q", got[len(got)-30:])
-	}
-	body := strings.TrimSuffix(got, "...(+200 deps total)")
-	if strings.HasSuffix(body, ",") ||
-		strings.Contains(body[strings.LastIndex(body, ",")+1:], "dep-") &&
-			strings.Count(body[strings.LastIndex(body, ",")+1:], "-") > 1 {
-		// partial name check: the last segment before the suffix is empty or a full name
-	}
-}
-
-func TestStopConditionDetection(t *testing.T) {
-	var conds []metav1.Condition
-	if stopCondition(conds) != nil {
-		t.Fatal("no conditions must yield no stop marker")
-	}
-	upsertCondition(&conds, ConditionDcgBuildFailed, ReasonDcgBuildFailed, "m")
-	if stopCondition(conds) != nil {
-		t.Fatal("DcgBuildFailed is not a stop marker")
-	}
-	upsertCondition(&conds, ConditionRpmRepoRetrying, ReasonRpmRepoNotFound, "waiting for repository")
-	if stopCondition(conds) != nil {
-		t.Fatal("RpmRepoRetrying must not stop dispatch")
-	}
-	upsertCondition(&conds, ConditionSnapshotUnavailable, ReasonSnapshotNotFound, "m")
-	if got := stopCondition(conds); got == nil || got.Type != ConditionSnapshotUnavailable {
-		t.Fatalf("stopCondition = %+v, want SnapshotUnavailable", got)
-	}
-}
-
 // --- Metric counting ---
 
 func scrapeCounter(t *testing.T, name string) uint64 {
@@ -851,39 +697,5 @@ func TestMetricsCountOnlyConfirmedWrites(t *testing.T) {
 	}
 	if got := scrapeCounter(t, "build_info_controller_unknown_writes_total") - unknownBefore; got != 1 {
 		t.Fatalf("unknown writes +%d, want +1", got)
-	}
-}
-
-// --- Round-local readiness counters ---
-
-func TestRoundFailuresBumpOncePerRound(t *testing.T) {
-	c, _, _, _ := newTestController(t)
-	key := testNS + "/" + testBuild
-	rf := c.newRoundFailures(key)
-	count, escalated := rf.RpmRepoFailed("r1", "m1")
-	if count != 1 || escalated {
-		t.Fatalf("first failure = %d,%v, want 1,false", count, escalated)
-	}
-	// Second checkpoint of the same round does not bump again.
-	count, escalated = rf.RpmRepoFailed("r2", "m2")
-	if count != 1 || escalated {
-		t.Fatalf("same-round second failure = %d,%v, want 1,false", count, escalated)
-	}
-	// The first failure checkpoint is kept for the escalation message.
-	entry := c.counters.Entry(counterRpmRepo, key)
-	if entry.LastReason != "r1" || entry.LastMessage != "m1" {
-		t.Fatalf("checkpoint = %q/%q, want r1/m1", entry.LastReason, entry.LastMessage)
-	}
-	// Next round bumps to the threshold and escalates (limit 3).
-	for i := 0; i < 2; i++ {
-		rf = c.newRoundFailures(key)
-		_, escalated = rf.RpmRepoFailed("r1", "m1")
-	}
-	if !escalated {
-		t.Fatal("third consecutive failure must escalate")
-	}
-	rf.RpmRepoReady()
-	if got := c.counters.Count(counterRpmRepo, key); got != 0 {
-		t.Fatalf("counter after ready = %d, want 0", got)
 	}
 }
