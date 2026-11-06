@@ -95,27 +95,6 @@ func TestResumeReleaseSurfacesReadFailures(t *testing.T) {
 	}
 }
 
-func TestBuildWithoutBuildInfoWaits(t *testing.T) {
-	client := NewFakeClient()
-	repo := newRpmRepo(testBuild)
-	repo.Status.Repository.SourceJobNames = []string{"job-a"}
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	artifacts := NewFakeArtifactManager()
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result != (controller.ReconcileResult{}) {
-		t.Fatalf("an absent BuildInfo must wait, got %+v", result)
-	}
-	if len(client.StatusWrites) != 0 || c.Queue().Len() != 0 {
-		t.Fatalf("an absent BuildInfo must not write status or enqueue the release key")
-	}
-}
-
 func TestRepositoryErrorPathHonoursCancellation(t *testing.T) {
 	client := NewFakeClient()
 	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()

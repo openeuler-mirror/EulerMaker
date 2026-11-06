@@ -340,3 +340,14 @@ func TestListRpmReposRejectsNegativeLimit(t *testing.T) {
 		t.Fatalf("a negative limit must be rejected locally")
 	}
 }
+
+func TestListAllStopsAtPageBudget(t *testing.T) {
+	shared := &endlessCursorClient{}
+	client := newAPIClient(shared)
+	if _, err := client.ListJobs(context.Background(), testProject, metav1.ListOptions{}); err == nil {
+		t.Fatalf("an endless cursor stream must be rejected")
+	}
+	if shared.pages != maxListPages {
+		t.Fatalf("expected the read to stop after %d pages, got %d", maxListPages, shared.pages)
+	}
+}

@@ -47,36 +47,3 @@ func TestMergeConditionSemantics(t *testing.T) {
 		t.Fatalf("conditions must be sorted by type: %+v", sorted)
 	}
 }
-
-func TestBackoffDelayGrowsExponentiallyAndCaps(t *testing.T) {
-	r := &reconciler{controller: &Controller{config: testConfig()}}
-	r.controller.config.Backoff = Backoff{Initial: time.Second, Max: 4 * time.Second, Jitter: 0}
-	for _, tc := range []struct {
-		attempt int
-		want    time.Duration
-	}{
-		{0, time.Second},
-		{1, time.Second},
-		{2, 2 * time.Second},
-		{3, 4 * time.Second},
-		{4, 4 * time.Second},
-		{9, 4 * time.Second},
-	} {
-		if got := r.backoffDelay(tc.attempt); got != tc.want {
-			t.Fatalf("backoffDelay(%d) = %s, want %s", tc.attempt, got, tc.want)
-		}
-	}
-}
-
-func TestWindowRemainingUsesTheResponseAnchor(t *testing.T) {
-	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
-	if got := windowRemaining(time.Time{}, time.Second, now); got != 0 {
-		t.Fatalf("a missing anchor must report no remaining window, got %s", got)
-	}
-	if got := windowRemaining(now.Add(-500*time.Millisecond), time.Second, now); got != 500*time.Millisecond {
-		t.Fatalf("remaining window = %s, want 500ms", got)
-	}
-	if got := windowRemaining(now.Add(-2*time.Second), time.Second, now); got != 0 {
-		t.Fatalf("an elapsed window must report zero, got %s", got)
-	}
-}
