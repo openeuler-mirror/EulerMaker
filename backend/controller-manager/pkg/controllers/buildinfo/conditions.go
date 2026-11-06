@@ -61,10 +61,6 @@ func failedSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
 		status == ebsv1.SpecArchUnsupported || status == ebsv1.SpecPrepareFailed
 }
 
-func terminalSpecBuildStatus(status ebsv1.SpecResultPhase) bool {
-	return status.IsTerminal()
-}
-
 // conditionMessageMax bounds a persisted condition message (apiserver limit).
 const conditionMessageMax = 1024
 

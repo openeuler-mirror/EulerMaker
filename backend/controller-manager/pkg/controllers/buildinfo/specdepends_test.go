@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"controller-manager/pkg/clients/gitserver"
+	"controller-manager/pkg/controllers/buildinfo/specparse"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -124,5 +125,61 @@ func TestFetchRepoSpecsParsesFilesSequentially(t *testing.T) {
 	}
 	if peak := git.peak.Load(); peak != 1 {
 		t.Fatalf("peak per-repo concurrency = %d, want 1", peak)
+	}
+}
+
+func TestUnparsableSpecConfigValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		clearA  bool
+	}{
+		{name: "missing key"},
+		{name: "empty list", payload: "unparsable_spec: []\n"},
+		{name: "non-list", payload: "unparsable_spec: a\n"},
+		{name: "mixed list", payload: "unparsable_spec: [42, a]\n", clearA: true},
+		{name: "unknown spec", payload: "unparsable_spec: [other]\n"},
+		{name: "case sensitive", payload: "unparsable_spec: [A]\n"},
+		{name: "repository name is not spec name", payload: "unparsable_spec: [repo1]\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _, _, _ := newTestController(t)
+			bi := testBuildInfoObj(ebsv1.BuildInfoPending)
+			bi.Spec.BuildPayload = tt.payload
+			round := &reconcileRound{key: testNS + "/" + testBuild, current: bi}
+			a := dependEntry("a")
+			a.BuildRequires = map[string]ebsv1.VersionConstraint{"dependency": {}}
+			b := dependEntry("b")
+			b.BuildRequires = map[string]ebsv1.VersionConstraint{"dependency": {}}
+			depends := map[string]specparse.SpecDepend{"a": a, "b": b}
+
+			c.ignoreBuildRequires(round, depends)
+
+			if cleared := len(depends["a"].BuildRequires) == 0; cleared != tt.clearA {
+				t.Fatalf("a BuildRequires cleared=%t, want %t", cleared, tt.clearA)
+			}
+			if len(depends["b"].BuildRequires) != 1 {
+				t.Fatalf("b BuildRequires = %v, want unchanged", depends["b"].BuildRequires)
+			}
+		})
+	}
+}
+
+func TestExpandBuildSetUsesOnlyOriginalSeeds(t *testing.T) {
+	full := map[string]specparse.SpecDepend{
+		"a": {SpecName: "a", Provides: []string{"virtual-a"}},
+		"b": {SpecName: "b", BuildRequires: map[string]ebsv1.VersionConstraint{"virtual-a": {}}},
+		"c": {SpecName: "c", BuildRequires: map[string]ebsv1.VersionConstraint{"b": {}}},
+	}
+
+	got := expandBuildSet(map[string]specparse.SpecDepend{"a": full["a"]}, full, nil)
+	if len(got) != 2 || got["a"].SpecName != "a" || got["b"].SpecName != "b" {
+		t.Fatalf("build set = %v, want only a and b", got)
+	}
+
+	got = expandBuildSet(map[string]specparse.SpecDepend{"a": full["a"], "b": full["b"]}, full, nil)
+	if len(got) != 3 || got["c"].SpecName != "c" {
+		t.Fatalf("build set with two seeds = %v, want a, b and c", got)
 	}
 }

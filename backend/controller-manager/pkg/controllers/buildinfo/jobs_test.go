@@ -414,273 +414,55 @@ func TestJobRepositoryReferenceNormalizesArtifactPath(t *testing.T) {
 	}
 }
 
-func TestJobPayloadDisableCheckPathMatchesPackageRepo(t *testing.T) {
-	tests := []struct {
-		name        string
-		payload     string
-		wantPresent bool
-	}{
-		{name: "matching repository", payload: "disable_check_path:\n- repo1\n", wantPresent: true},
-		{name: "spec name is not repository name", payload: "disable_check_path:\n- a\n"},
-		{name: "other repository", payload: "disable_check_path:\n- repo2\n"},
-		{name: "unset"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c, client, _, _ := newTestController(t)
-			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-			bi.Spec.BuildPayload = tt.payload
-			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-			depend := dependEntry("a")
-			job := c.jobForSpec(
-				round,
-				"a",
-				&depend,
-				testSnapshotObj(),
-				testImage,
-				"",
-				testBuildResourceContent(),
-				testScriptRef(),
-				"job-a",
-				1,
-				nil,
-			)
-			payload := payloadFields(t, job.Spec.Payload)
-			value, present := payload["disable_check_path"]
-			if present != tt.wantPresent || present && value != true {
-				t.Fatalf(
-					"disable_check_path = %v (present=%t), want present=%t and true when present",
-					value,
-					present,
-					tt.wantPresent,
-				)
-			}
-		})
-	}
-}
-
-func TestJobPayloadUseKmodLibsMatchesPackageRepo(t *testing.T) {
-	tests := []struct {
-		name        string
-		payload     string
-		wantPresent bool
-	}{
-		{name: "matching repository", payload: "use_kmod_libs:\n- repo1\n", wantPresent: true},
-		{name: "spec name is not repository name", payload: "use_kmod_libs:\n- a\n"},
-		{name: "other repository", payload: "use_kmod_libs:\n- repo2\n"},
-		{name: "unset"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c, client, _, _ := newTestController(t)
-			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-			bi.Spec.BuildPayload = tt.payload
-			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-			depend := dependEntry("a")
-			job := c.jobForSpec(
-				round,
-				"a",
-				&depend,
-				testSnapshotObj(),
-				testImage,
-				"",
-				testBuildResourceContent(),
-				testScriptRef(),
-				"job-a",
-				1,
-				nil,
-			)
-			payload := payloadFields(t, job.Spec.Payload)
-			value, present := payload["use_kmod_libs"]
-			if present != tt.wantPresent || present && value != true {
-				t.Fatalf(
-					"use_kmod_libs = %v (present=%t), want present=%t and true when present",
-					value,
-					present,
-					tt.wantPresent,
-				)
-			}
-		})
-	}
-}
-
-func TestJobPayloadUseGitLFSMatchesPackageRepo(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		config      string
-		wantPresent bool
-	}{
-		{name: "matching repository", config: "use_git_lfs:\n- repo1\n", wantPresent: true},
-		{name: "spec name is not repository name", config: "use_git_lfs:\n- a\n"},
-		{name: "other repository", config: "use_git_lfs:\n- repo2\n"},
-		{name: "unset"},
+func TestJobPayloadPackageFlagsMatchRepository(t *testing.T) {
+	for _, flag := range []string{
+		"disable_check_path",
+		"use_kmod_libs",
+		"use_git_lfs",
+		"use_root",
+		"use_xz",
+		"unuse_gcc_secure",
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c, client, _, _ := newTestController(t)
-			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-			bi.Spec.BuildPayload = tt.config
-			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-			depend := dependEntry("a")
-			job := c.jobForSpec(
-				round,
-				"a",
-				&depend,
-				testSnapshotObj(),
-				testImage,
-				"",
-				testBuildResourceContent(),
-				testScriptRef(),
-				"job-a",
-				1,
-				nil,
-			)
-			payload := payloadFields(t, job.Spec.Payload)
-			flag, present := payload["use_git_lfs"]
-			if present != tt.wantPresent || present && flag != true {
-				t.Fatalf(
-					"use_git_lfs = %v (present=%t), want present=%t and true when present",
-					flag,
-					present,
-					tt.wantPresent,
-				)
+		t.Run(flag, func(t *testing.T) {
+			type testCase struct {
+				name        string
+				config      string
+				repoName    string
+				wantPresent bool
 			}
-			if name := payload["package_name"]; name != "repo1" {
-				t.Fatalf("package_name = %v, want repo1", name)
+			tests := []testCase{
+				{name: "matching repository", config: "- repo1", repoName: "repo1", wantPresent: true},
+				{name: "spec name is not repository name", config: "- a", repoName: "repo1"},
+				{name: "other repository", config: "- repo2", repoName: "repo1"},
+				{name: "unset", repoName: "repo1"},
 			}
-		})
-	}
-}
-
-func TestJobPayloadUseRootMatchesPackageRepo(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		config      string
-		wantPresent bool
-	}{
-		{name: "matching repository", config: "use_root:\n- repo1\n", wantPresent: true},
-		{name: "spec name is not repository name", config: "use_root:\n- a\n"},
-		{name: "other repository", config: "use_root:\n- repo2\n"},
-		{name: "unset"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c, client, _, _ := newTestController(t)
-			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-			bi.Spec.BuildPayload = tt.config
-			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-			depend := dependEntry("a")
-			job := c.jobForSpec(
-				round,
-				"a",
-				&depend,
-				testSnapshotObj(),
-				testImage,
-				"",
-				testBuildResourceContent(),
-				testScriptRef(),
-				"job-a",
-				1,
-				nil,
-			)
-			payload := payloadFields(t, job.Spec.Payload)
-			flag, present := payload["use_root"]
-			if present != tt.wantPresent || present && flag != true {
-				t.Fatalf(
-					"use_root = %v (present=%t), want present=%t and true when present",
-					flag,
-					present,
-					tt.wantPresent,
-				)
+			if flag == "unuse_gcc_secure" {
+				tests = append(tests, testCase{name: "gcc-10 is handled by script", repoName: "gcc-10"})
 			}
-		})
-	}
-}
-
-func TestJobPayloadUseXZMatchesPackageRepo(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		config      string
-		wantPresent bool
-	}{
-		{name: "matching repository", config: "use_xz:\n- repo1\n", wantPresent: true},
-		{name: "spec name is not repository name", config: "use_xz:\n- a\n"},
-		{name: "other repository", config: "use_xz:\n- repo2\n"},
-		{name: "unset"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c, client, _, _ := newTestController(t)
-			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-			bi.Spec.BuildPayload = tt.config
-			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-			depend := dependEntry("a")
-			job := c.jobForSpec(
-				round,
-				"a",
-				&depend,
-				testSnapshotObj(),
-				testImage,
-				"",
-				testBuildResourceContent(),
-				testScriptRef(),
-				"job-a",
-				1,
-				nil,
-			)
-			payload := payloadFields(t, job.Spec.Payload)
-			flag, present := payload["use_xz"]
-			if present != tt.wantPresent || present && flag != true {
-				t.Fatalf(
-					"use_xz = %v (present=%t), want present=%t and true when present",
-					flag,
-					present,
-					tt.wantPresent,
-				)
-			}
-		})
-	}
-}
-
-func TestJobPayloadUnuseGCCSecureMatchesPackageRepo(t *testing.T) {
-	for _, tt := range []struct {
-		name        string
-		config      string
-		repoName    string
-		wantPresent bool
-	}{
-		{name: "matching repository", config: "unuse_gcc_secure:\n- repo1\n", repoName: "repo1", wantPresent: true},
-		{name: "spec name is not repository name", config: "unuse_gcc_secure:\n- a\n", repoName: "repo1"},
-		{name: "other repository", config: "unuse_gcc_secure:\n- repo2\n", repoName: "repo1"},
-		{name: "gcc-10 is handled by script", repoName: "gcc-10"},
-		{name: "unset", repoName: "repo1"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			c, client, _, _ := newTestController(t)
-			bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
-			bi.Spec.BuildPayload = tt.config
-			round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-			depend := dependEntry("a")
-			depend.RepoName = tt.repoName
-			job := c.jobForSpec(
-				round,
-				"a",
-				&depend,
-				testSnapshotObj(),
-				testImage,
-				"",
-				testBuildResourceContent(),
-				testScriptRef(),
-				"job-a",
-				1,
-				nil,
-			)
-			payload := payloadFields(t, job.Spec.Payload)
-			flag, present := payload["unuse_gcc_secure"]
-			if present != tt.wantPresent || present && flag != true {
-				t.Fatalf(
-					"unuse_gcc_secure = %v (present=%t), want present=%t and true when present",
-					flag,
-					present,
-					tt.wantPresent,
-				)
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					c, client, _, _ := newTestController(t)
+					bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+					if tt.config != "" {
+						bi.Spec.BuildPayload = flag + ":\n" + tt.config + "\n"
+					}
+					round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
+					depend := dependEntry("a")
+					depend.RepoName = tt.repoName
+					job := c.jobForSpec(
+						round, "a", &depend, testSnapshotObj(), testImage, "",
+						testBuildResourceContent(), testScriptRef(), "job-a", 1, nil,
+					)
+					payload := payloadFields(t, job.Spec.Payload)
+					value, present := payload[flag]
+					if present != tt.wantPresent || present && value != true {
+						t.Fatalf("%s = %v (present=%t), want present=%t and true when present",
+							flag, value, present, tt.wantPresent)
+					}
+					if flag == "use_git_lfs" && payload["package_name"] != tt.repoName {
+						t.Fatalf("package_name = %v, want %s", payload["package_name"], tt.repoName)
+					}
+				})
 			}
 		})
 	}
@@ -1318,5 +1100,17 @@ func TestDispatchSpecUnknownMissingRetriesDeterministicName(t *testing.T) {
 	}
 	if got := len(listJobs(t, client)); got != 1 {
 		t.Fatalf("jobs after retry = %d, want 1", got)
+	}
+}
+
+func TestLatestJobOrdering(t *testing.T) {
+	at := metav1.NewTime(testStart)
+	group := []ebsv1.Job{
+		{ObjectMeta: metav1.ObjectMeta{Name: "job-b", CreationTimestamp: at}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "job-a", CreationTimestamp: at}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "job-z"}}, // zero timestamp sorts earliest
+	}
+	if got := latestJob(group); got.Name != "job-b" {
+		t.Fatalf("latestJob = %q, want job-b (greatest creationTimestamp, then name)", got.Name)
 	}
 }

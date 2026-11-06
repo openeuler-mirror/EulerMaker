@@ -66,7 +66,6 @@ func (c Config) validate() error {
 // Controller assembles, dispatches and aggregates one BuildInfo.
 type Controller struct {
 	*controller.BaseController
-	buildInfos    source.Source
 	client        Client
 	services      serviceconfig.Provider
 	clock         clock.Clock
@@ -104,7 +103,6 @@ func New(
 	}
 	c := &Controller{
 		releaseClient:    newReleaseClient(config.ArtifactManagerTimeout),
-		buildInfos:       buildInfos,
 		client:           client,
 		services:         services,
 		clock:            clk,
