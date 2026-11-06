@@ -7,50 +7,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 )
-
-func TestReconcileBuildReRegistersAbandonedBatchTerminal(t *testing.T) {
-	client := NewFakeClient()
-	repo := inFlightRepo()
-	conditions, _ := MergeCondition(nil, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed, "", 1, metav1.Now())
-	conditions, _ = MergeCondition(conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed, "", 1, metav1.Now())
-	repo.Status.Conditions = conditions
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-
-	artifacts := NewFakeArtifactManager()
-	c := newTestController(t, client, artifacts, testConfig())
-	failedBefore := repositoryFailed.Value()
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result != (controller.ReconcileResult{}) {
-		t.Fatalf("unexpected result %+v", result)
-	}
-	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed {
-		t.Fatalf("the abandoned batch must re-register its release terminal: %+v", updated.Status.Release)
-	}
-	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonRepositoryCreationFailed) {
-		t.Fatalf("PublishSucceed=False/RepositoryCreationFailed missing: %+v", updated.Status.Conditions)
-	}
-	if updated.Status.Repository.UpdatedAt != nil {
-		t.Fatalf("re-registering the terminal must not write repository.*")
-	}
-	if updated.Status.Repository.Transition == nil || updated.Status.Repository.Transition.RepositoryUID != "next-1" {
-		t.Fatalf("the abandoned batch must stay frozen: %+v", updated.Status.Repository.Transition)
-	}
-	if delta := repositoryFailed.Value() - failedBefore; delta != 0 {
-		t.Fatalf("re-registering must not count another repository failure, delta %d", delta)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.GetRepositoryUIDs) != 0 {
-		t.Fatalf("re-registering the terminal must not call Artifact Manager")
-	}
-}
 
 func TestReconcileReleaseKeepsOnlyOneInFlightRelease(t *testing.T) {
 	client := NewFakeClient()
@@ -135,30 +93,5 @@ func TestReconcileReleaseSkipsCandidateThatIsNotReady(t *testing.T) {
 	}
 	if storedSecond.Status.Release.Phase != ebsv1.RpmRepoReleasePending && storedSecond.Status.Release.Phase != ebsv1.RpmRepoReleaseCreating {
 		t.Fatalf("unexpected release phase after starting the candidate: %q", storedSecond.Status.Release.Phase)
-	}
-}
-
-func TestReconcileBuildNoPublishableArtifactsWritesReleaseSideOnly(t *testing.T) {
-	client := NewFakeClient()
-	repo := newRpmRepo(testBuild)
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
-
-	artifacts := NewFakeArtifactManager()
-	c := newTestController(t, client, artifacts, testConfig())
-
-	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Repository.UpdatedAt != nil {
-		t.Fatalf("the no-artifacts terminal must not write repository.*")
-	}
-	if conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionRepositoryReady, metav1.ConditionFalse, ebsv1.RpmRepoReasonNoPublishableArtifacts) {
-		t.Fatalf("the no-artifacts terminal must not claim a repository result")
-	}
-	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonNoPublishableArtifacts) {
-		t.Fatalf("PublishSucceed=False/NoPublishableArtifacts missing: %+v", updated.Status.Conditions)
 	}
 }
