@@ -21,7 +21,7 @@ func TestResolveArtifactRepositories(t *testing.T) {
 	}
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job", Annotations: map[string]string{
 		"ebs.io/artifacts": "art-01",
-	}}, Spec: gateway.JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/v1/one/","priority":10},{"url":"artifact://art-02/repositories/v1/two/","priority":20},{"url":"artifact:///repositories/v1/three/","priority":30},{"url":"https://bootstrap.example/repo/","priority":99}],"commit_id":"abc"}`}}
+	}}, Spec: gateway.JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/project/builds/build/one/","priority":10},{"url":"artifact://art-02/repositories/project/builds/build/two/","priority":20},{"url":"artifact:///repositories/project/builds/build/three/","priority":30},{"url":"https://bootstrap.example/repo/","priority":99}],"commit_id":"abc"}`}}
 	if err := routes.Pin(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -47,9 +47,9 @@ func TestResolveArtifactRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"http://art-01-old:8081/repositories/v1/one/",
-		"http://art-02:8081/repositories/v1/two/",
-		"http://default:8081/repositories/v1/three/",
+		"http://art-01-old:8081/repositories/project/builds/build/one/",
+		"http://art-02:8081/repositories/project/builds/build/two/",
+		"http://default:8081/repositories/project/builds/build/three/",
 		"https://bootstrap.example/repo/",
 	}
 	for i, repo := range payload.Repo {
@@ -69,9 +69,9 @@ func TestResolveArtifactRepositoryExternal(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	job := gateway.JobResource{Spec: gateway.JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/v1/repo/","priority":10}]}`}}
+	job := gateway.JobResource{Spec: gateway.JobSpec{Payload: `{"repo":[{"url":"artifact://art-01/repositories/project/builds/build/repo/","priority":10}]}`}}
 	resolved, err := routes.ResolvePayload(job)
-	if err != nil || !strings.Contains(resolved, "https://external.example/art-01/repositories/v1/repo/") {
+	if err != nil || !strings.Contains(resolved, "https://external.example/art-01/repositories/project/builds/build/repo/") {
 		t.Fatalf("resolvePayload = %q, %v", resolved, err)
 	}
 }
@@ -83,9 +83,9 @@ func TestResolveArtifactRepositoryErrors(t *testing.T) {
 		reference string
 		want      string
 	}{
-		{name: "missing instance", reference: "artifact://art-01/repositories/v1/repo/", want: "has no Runner address"},
+		{name: "missing instance", reference: "artifact://art-01/repositories/project/builds/build/repo/", want: "has no Runner address"},
 		{name: "invalid path", reference: "artifact:///repositories/../secret/", want: "invalid artifact repository URL"},
-		{name: "query", reference: "artifact:///repositories/v1/repo/?token=x", want: "invalid artifact repository URL"},
+		{name: "query", reference: "artifact:///repositories/project/builds/build/repo/?token=x", want: "invalid artifact repository URL"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := resolveArtifactRepository(tc.reference, addresses)

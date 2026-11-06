@@ -382,19 +382,19 @@ func TestJobPayloadKeepsArtifactReference(t *testing.T) {
 		key:         testNS + "/" + testBuild,
 		current:     client.SeedBuildInfo(bi),
 		build:       testBuildObj("full"),
-		rpmRepo:     testRpmRepoObj("artifact:///repositories/v1/repo-1/"),
+		rpmRepo:     testRpmRepoObj("artifact:///repositories/project/builds/build/repo-1/"),
 		rpmRepoHeld: true,
 		failures:    c.newRoundFailures(testNS + "/" + testBuild),
 	}
 	snapshot := testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true})
 	depend := dependEntry("a")
 	job := c.jobForSpec(round, "a", &depend, snapshot, testImage,
-		"http://artifact.internal:8081/repositories/v1/repo-1/", testBuildResourceContent(), testScriptRef(),
+		"http://artifact.internal:8081/repositories/project/builds/build/repo-1/", testBuildResourceContent(), testScriptRef(),
 		"job-x", 1, nil)
 
 	got := payloadFields(t, job.Spec.Payload)["repo"]
 	want := []any{
-		map[string]any{"url": "artifact:///repositories/v1/repo-1/", "priority": float64(10)},
+		map[string]any{"url": "artifact:///repositories/project/builds/build/repo-1/", "priority": float64(10)},
 		map[string]any{"url": "http://bootstrap.local/base/" + testArch, "priority": float64(99)},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -405,11 +405,11 @@ func TestJobPayloadKeepsArtifactReference(t *testing.T) {
 func TestJobRepositoryReferenceNormalizesArtifactPath(t *testing.T) {
 	round := &reconcileRound{
 		build:       testBuildObj("full"),
-		rpmRepo:     testRpmRepoObj("/repositories/v1/repo-1/"),
+		rpmRepo:     testRpmRepoObj("/repositories/project/builds/build/repo-1/"),
 		rpmRepoHeld: true,
 	}
-	got := jobRepositoryReference(round, "http://artifact.internal:8081/repositories/v1/repo-1/")
-	if want := "artifact:///repositories/v1/repo-1/"; got != want {
+	got := jobRepositoryReference(round, "http://artifact.internal:8081/repositories/project/builds/build/repo-1/")
+	if want := "artifact:///repositories/project/builds/build/repo-1/"; got != want {
 		t.Fatalf("repository reference = %q, want %q", got, want)
 	}
 }
@@ -879,7 +879,7 @@ func TestJobPayloadJSONPreservesLongRepo(t *testing.T) {
 		{Name: "everything", URL: "https://repo.example.com/openEuler-24.03-LTS-SP3/everything"},
 	}
 	round := &reconcileRound{current: client.SeedBuildInfo(bi), build: testBuildObj("full")}
-	contentURL := "http://artifact.example.com/repositories/v1/" +
+	contentURL := "http://artifact.example.com/repositories/project/builds/build/" +
 		"ceff5ee3568f76de0efdc98e2783f8c1adbf61944b305f736f5152322b5f19da/"
 	depend := dependEntry("a")
 	job := c.jobForSpec(

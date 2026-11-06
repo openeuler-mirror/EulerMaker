@@ -90,12 +90,12 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusRequestedRangeNotSatisfiable, "MultipleRangesNotSupported", "multiple ranges are not supported", false, nil)
 		return
 	}
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/v1/"), "/", 2)
-	if len(parts) != 2 || !validIdentifier(parts[0]) {
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repositories/"), "/", 5)
+	if len(parts) != 5 || !validIdentifier(parts[0]) || parts[1] != "builds" || !validIdentifier(parts[2]) || !validHash(parts[3]) {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
 	}
-	record, ok, err := s.repositories.Get(parts[0])
+	record, ok, err := s.repositories.Get(parts[3])
 	if err != nil {
 		s.writeRepositoryError(w, r, &repository.Error{
 			Code:      "RepositoryStorageUnavailable",
@@ -104,7 +104,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !ok {
+	if !ok || record.Project != parts[0] || record.BuildName != parts[2] {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
 	}
@@ -116,7 +116,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, r, http.StatusGone, "RepositoryUnavailable", "repository is unavailable", false, nil)
 		return
 	}
-	relative, err := fileutil.SafeRelative(parts[1])
+	relative, err := fileutil.SafeRelative(parts[4])
 	if err != nil || relative == ".repository.json" {
 		writeErr(w, r, http.StatusNotFound, "RepositoryContentNotFound", "repository content not found", false, nil)
 		return

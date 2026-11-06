@@ -880,8 +880,8 @@ func TestResolveContentURLUsesConfiguredInstance(t *testing.T) {
 		reference string
 		want      string
 	}{
-		{"artifact://art-01/repositories/v1/repo-1/", "http://artifact-manager.art-01:8081/repositories/v1/repo-1/"},
-		{"artifact:///repositories/v1/repo-2/", "http://artifact.example:8081/repositories/v1/repo-2/"},
+		{"artifact://art-01/repositories/project/builds/build/repo-1/", "http://artifact-manager.art-01:8081/repositories/project/builds/build/repo-1/"},
+		{"artifact:///repositories/project/builds/build/repo-2/", "http://artifact.example:8081/repositories/project/builds/build/repo-2/"},
 	} {
 		got, err := c.resolveContentURL(context.Background(), round, tc.reference)
 		if err != nil || got != tc.want {
@@ -891,7 +891,7 @@ func TestResolveContentURLUsesConfiguredInstance(t *testing.T) {
 	if client.artifactReads != 1 {
 		t.Fatalf("Config reads = %d, want 1 for this reconcile", client.artifactReads)
 	}
-	for _, reference := range []string{"", "https://repo.example/repositories/v1/repo-3/"} {
+	for _, reference := range []string{"", "https://repo.example/repositories/project/builds/build/repo-3/"} {
 		if _, err := c.resolveContentURL(context.Background(), &reconcileRound{}, reference); err != nil {
 			t.Fatal(err)
 		}

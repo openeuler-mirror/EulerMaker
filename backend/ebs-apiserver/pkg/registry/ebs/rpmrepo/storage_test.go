@@ -63,9 +63,9 @@ func TestCreatePreservesRepositoryBaseline(t *testing.T) {
 		invalid bool
 	}{
 		{"empty", "", "", false},
-		{"baseline", "version-1", "https://artifact/repositories/v1/version-1", false},
+		{"baseline", "version-1", "https://artifact/repositories/project/builds/build/version-1", false},
 		{"uid-only", "version-1", "", true},
-		{"url-only", "", "https://artifact/repositories/v1/version-1", true},
+		{"url-only", "", "https://artifact/repositories/project/builds/build/version-1", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := &ebsv1.RpmRepo{
@@ -141,7 +141,7 @@ func TestCreatePreservesSkippedMarkerOnly(t *testing.T) {
 			obj := &ebsv1.RpmRepo{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Labels: targetLabels()}}
 			obj.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePhase(phase), ContentURL: "ignored", Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "ignored"}}
 			if baseline {
-				obj.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{RepositoryUID: "base", ContentURL: "/repositories/v1/base/"}
+				obj.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{RepositoryUID: "base", ContentURL: "/repositories/project/builds/build/base/"}
 			}
 			strategy.PrepareForCreate(context.Background(), obj)
 			if phase == string(ebsv1.RpmRepoReleaseSkipped) {
@@ -154,7 +154,7 @@ func TestCreatePreservesSkippedMarkerOnly(t *testing.T) {
 			if (obj.Status.Repository != nil) != baseline {
 				t.Fatal("baseline presence changed")
 			}
-			if baseline && (obj.Status.Repository.RepositoryUID != "base" || obj.Status.Repository.ContentURL != "/repositories/v1/base/") {
+			if baseline && (obj.Status.Repository.RepositoryUID != "base" || obj.Status.Repository.ContentURL != "/repositories/project/builds/build/base/") {
 				t.Fatal("baseline changed")
 			}
 			if errs := strategy.Validate(context.Background(), obj); len(errs) != 0 {

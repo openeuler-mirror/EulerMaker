@@ -1120,7 +1120,7 @@ spec:
   nodeSelector:
     ebs.io/runner-arch: ${build.spec.arch}                     # controller：Build.spec.arch
   payload: |                                        # controller：构造 JSON 字符串（见下方"payload 构造契约"）
-    {"spec_name":"example","spec_file_name":"example.spec","repo":[{"url":"http://.../repositories/v1/<uid>/","priority":10},{"url":"http://.../everything/aarch64","priority":99}],"origin_url":"https://atomgit.com/src-openeuler/example.git","clone_url":"git-server:///git/atomgit.com/src-openeuler/example.git","commit_id":"<commit>"}
+    {"spec_name":"example","spec_file_name":"example.spec","repo":[{"url":"http://.../repositories/{project}/builds/{buildName}/<uid>/","priority":10},{"url":"http://.../everything/aarch64","priority":99}],"origin_url":"https://atomgit.com/src-openeuler/example.git","clone_url":"git-server:///git/atomgit.com/src-openeuler/example.git","commit_id":"<commit>"}
 status:                                             # 创建时恒 Pending/Pending（apiserver 强制覆写）；以下值为执行侧回写示例
   phase: Pending
 ```

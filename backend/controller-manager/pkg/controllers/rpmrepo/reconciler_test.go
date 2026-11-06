@@ -276,7 +276,7 @@ func skippedWithBaseline(withBaseline bool) *ebsv1.RpmRepo {
 	if withBaseline {
 		repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{
 			RepositoryUID: "base-1",
-			ContentURL:    "/repositories/v1/base-1/",
+			ContentURL:    "/repositories/project/builds/build/base-1/",
 		}
 	} else {
 		repo.Status.Repository = nil
@@ -352,7 +352,7 @@ func TestReconcileBuildConvergesOnSkipped(t *testing.T) {
 				t.Fatalf("a skipped object must not gain conditions: %+v", stored.Status.Conditions)
 			}
 			if tc.withBaseline {
-				if stored.Status.Repository.RepositoryUID != "base-1" || stored.Status.Repository.ContentURL != "/repositories/v1/base-1/" {
+				if stored.Status.Repository.RepositoryUID != "base-1" || stored.Status.Repository.ContentURL != "/repositories/project/builds/build/base-1/" {
 					t.Fatalf("the inherited baseline must stay untouched: %+v", stored.Status.Repository)
 				}
 			} else if stored.Status.Repository != nil {
@@ -418,7 +418,7 @@ func TestSelectArtifactManagerUsesProjectInstance(t *testing.T) {
 	client.ArtifactEndpoints["art-02"] = "http://artifact-manager.art-02:8081"
 	client.Projects[testProject].Annotations[ebsv1.ProjectArtifactsAnnotation] = "art-02"
 	repo := newRpmRepo(testBuild)
-	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{ContentURL: "artifact://art-01/repositories/v1/previous/"}
+	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{ContentURL: "artifact://art-01/repositories/project/builds/build/previous/"}
 	r = &reconciler{controller: c, ctx: context.Background(), project: testProject}
 	if err := r.selectArtifactManager(repo); err != nil || r.instance != "art-01" {
 		t.Fatalf("existing repository must remain on its instance: %q, %v", r.instance, err)

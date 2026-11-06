@@ -164,6 +164,10 @@ func TestRepositoryMaterializationLifecycle(t *testing.T) {
 		response = repositoryRequest(t, server, http.MethodGet, buildManagementPath(request.Project, request.BuildName)+"/repositories/"+request.RepositoryUID, nil)
 		var state repository.RepositoryResponse
 		if err := json.Unmarshal(response.Body.Bytes(), &state); err == nil && state.State == repository.RepositoryReady {
+			want := "/repositories/" + request.Project + "/builds/" + request.BuildName + "/" + request.RepositoryUID + "/"
+			if state.ContentURL != want {
+				t.Fatalf("content URL = %q, want %q", state.ContentURL, want)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -219,12 +223,26 @@ func TestRepositoryContent(t *testing.T) {
 		BuildName:     request.BuildName,
 		TargetArch:    request.TargetArch,
 		State:         repository.RepositoryReady,
-		ContentURL:    "/repositories/v1/" + request.RepositoryUID + "/",
+		ContentURL:    "/repositories/" + request.Project + "/builds/" + request.BuildName + "/" + request.RepositoryUID + "/",
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
 	writeTestRepositoryIndex(t, server.repositories, record)
 	writeTestRepositoryRecord(t, server, record)
+	for _, scope := range []struct{ project, build string }{
+		{"other-project", request.BuildName},
+		{request.Project, "other-build"},
+	} {
+		url := "/repositories/" + scope.project + "/builds/" + scope.build + "/" + request.RepositoryUID + "/repodata/repomd.xml"
+		response := repositoryRequest(t, server, http.MethodGet, url, nil)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("mismatched scope %s = %d", url, response.Code)
+		}
+	}
+	head := repositoryRequest(t, server, http.MethodHead, record.ContentURL+"repodata/repomd.xml", nil)
+	if head.Code != http.StatusOK || head.Body.Len() != 0 || head.Header().Get("Content-Length") != "8" {
+		t.Fatalf("HEAD response = %d %q, headers=%v", head.Code, head.Body.String(), head.Header())
+	}
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		response := repositoryRequest(t, server, method, record.ContentURL+".repository.json", nil)
 		if response.Code != http.StatusNotFound {

@@ -33,7 +33,7 @@ func TestCTExecutorWritesResolvedServiceURLs(t *testing.T) {
 			}
 			job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project"}, Spec: gateway.JobSpec{
 				RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "openeuler:22.03"}),
-				Payload:     `{"origin_url":"https://atomgit.com/src-openeuler/example.git","clone_url":"git-server:///git/atomgit.com/src-openeuler/example.git","commit_id":"abc","repo":[{"url":"artifact:///repositories/v1/repo/","priority":10}]}`,
+				Payload:     `{"origin_url":"https://atomgit.com/src-openeuler/example.git","clone_url":"git-server:///git/atomgit.com/src-openeuler/example.git","commit_id":"abc","repo":[{"url":"artifact:///repositories/project/builds/build/repo/","priority":10}]}`,
 			}}
 			original := job.Spec.Payload
 			executor := &CTExecutor{WorkDir: filepath.Join(dir, "work"), ResultRoot: filepath.Join(dir, "results"),
@@ -45,10 +45,10 @@ func TestCTExecutorWritesResolvedServiceURLs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantRepo := "http://artifact-manager:8081/repositories/v1/repo/"
+			wantRepo := "http://artifact-manager:8081/repositories/project/builds/build/repo/"
 			wantClone := "http://git-server:8080/proxy/git/atomgit.com/src-openeuler/example.git"
 			if mode == "external" {
-				wantRepo = "https://artifacts.example/art-01/repositories/v1/repo/"
+				wantRepo = "https://artifacts.example/art-01/repositories/project/builds/build/repo/"
 				wantClone = "https://atomgit.com/src-openeuler/example.git"
 			}
 			if !strings.Contains(string(data), wantRepo) {

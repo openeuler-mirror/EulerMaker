@@ -87,6 +87,40 @@ func TestRepositoryCompletionWaitsForDurableResult(t *testing.T) {
 	}
 }
 
+func TestRepositoryRecoveryContentURL(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*RepositoryRecord{}}
+	record := &RepositoryRecord{
+		RepositoryUID: "repo", Project: "project", TargetArch: "arch", BuildName: "build",
+		State: RepositoryCreating, RequestDigest: "request-digest",
+	}
+	if err := m.persist(record); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(m.RepositoryPath(record), ".repository.json")
+	index := Index{RepositoryUID: record.RepositoryUID, RequestDigest: record.RequestDigest}
+	if err := fileutil.AtomicJSON(indexPath, index); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	index.RepositoryDigest, err = digestDirectory(m.RepositoryPath(record))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fileutil.AtomicJSON(indexPath, index); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.recover(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := m.Get(record.RepositoryUID)
+	if err != nil || !ok || got.State != RepositoryReady || got.ContentURL != "/repositories/project/builds/build/repo/" {
+		t.Fatalf("recovered repository = %+v, error = %v", got, err)
+	}
+}
+
 func TestRepositoryDeletionRetriesAtRuntime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
