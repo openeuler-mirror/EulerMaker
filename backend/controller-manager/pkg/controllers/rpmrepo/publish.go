@@ -348,23 +348,6 @@ func (r *reconciler) handleReleaseResponse(repo *ebsv1.RpmRepo, transition *ebsv
 			return controller.ReconcileResult{}, err
 		}
 		return controller.ReconcileResult{RequeueAfter: pollAfter(response.PollAfterSeconds)}, nil
-	case ReleasePrepared:
-		updated, err := r.setReleasePhase(repo, ebsv1.RpmRepoReleasePrepared, transition)
-		if err != nil {
-			return controller.ReconcileResult{}, err
-		}
-		if updated == nil {
-			return controller.ReconcileResult{}, nil
-		}
-		if !r.takeSameRoundAttempt() {
-			log.Printf("controller=%s key=%q uid=%q result=ActivationDeferred reason=%s", Name, r.key, updated.UID, ebsv1.RpmRepoReasonReleaseFailed)
-			return controller.ReconcileResult{RequeueAfter: pollAfter(response.PollAfterSeconds)}, nil
-		}
-		activated, err := r.artifactClient().ActivateRelease(r.ctx, updated.Name)
-		if err != nil {
-			return r.handleReleaseError(updated, transition, err)
-		}
-		return r.handleReleaseResponse(updated, transition, activated)
 	case ReleaseReady:
 		if response.ContentURL == "" {
 			log.Printf("controller=%s key=%q uid=%q code=MissingContentURL reason=%s", Name, r.key, repo.UID, ebsv1.RpmRepoReasonReleaseFailed)

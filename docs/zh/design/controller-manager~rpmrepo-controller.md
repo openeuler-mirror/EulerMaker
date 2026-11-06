@@ -39,7 +39,7 @@ backend/controller-manager/pkg/controllers/rpmrepo/
   reconciler.go            # Sync(ctx, key) 主流程：键分派、确保对象、选批、恢复、发布驱动、收口
   batch.go                 # 候选 Job 过滤、稳定排序、批次上限、repositoryUID 计算
   transition.go            # transition 状态机：写入、恢复、提升、失败收口
-  publish.go               # 发布驱动与发布状态机：提交、激活、结果收口
+  publish.go               # 发布驱动与发布状态机：提交、轮询、结果收口
   publishpolicy.go         # PublishPolicy 接口、PublishPolicyInput、PublishDecision 与默认 DefaultPublishPolicy
   artifactclient.go        # ArtifactManagerClient 接口与 HTTP 实现
   artifactclient_fake.go   # ArtifactManagerClient 的内存 Fake
@@ -169,8 +169,6 @@ type ArtifactManagerClient interface {
     // SubmitRelease 幂等：相同 buildName 与相同请求摘要是重试，不重复发布。
     SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
     GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
-    // ActivateRelease 切换稳定入口；首次由 Prepared 激活，已 Ready 时幂等确认。
-    ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
     // StopBuildRepositories 仅 204 确认停止并排空；202 返回 false，其余异常返回 error。
     StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
     // DeleteBuildRepositories 仅 204 返回 true；202 返回 false，其余异常返回 error。
@@ -182,11 +180,10 @@ type ArtifactManagerClient interface {
 - `GetRepository` 对应 `GET /internal/v1/repositories/{repositoryUID}`；
 - `SubmitRelease` 对应 `POST /internal/v1/releases`；
 - `GetRelease` 对应 `GET /internal/v1/releases/{buildName}`；
-- `ActivateRelease` 对应 `POST /internal/v1/releases/{buildName}/activate`；
 - `StopBuildRepositories` 对应 `POST /internal/v1/projects/{project}/builds/{buildName}/repositories/stop`，不带请求体；
 - `DeleteBuildRepositories` 对应 `DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories`，不带请求体；
 - 客户端必须保留 Artifact Manager 的稳定错误码与 `retryable` 语义，并把 HTTP 状态、`Retry-After` 与稳定错误码映射为可分类错误（见第八章）；分类错误必须携带 HTTP 状态与 `Retry-After`（>0 表示服务端要求的最短等待），控制器据此换算为 `RequeueAfter`；不得解析 `message` 做判定。
-- 发布接口的响应语义：`202` 表示首次接受、`Creating`、`Prepared` 或可重试重放；`200` 表示已 `Ready` 的相同请求；`409 ReleaseIdentityConflict`（同 `buildName`、请求摘要不同；摘要由 Artifact Manager 服务端计算）与 `422`（非法集合或源仓不满足条件）为不可重试；`429` 为可重试并带 `Retry-After`。
+- 发布接口的响应语义：`202` 表示首次接受、`Creating` 或可重试重放；`200` 表示已 `Ready` 的相同请求；`409 ReleaseIdentityConflict`（同 `buildName`、请求摘要不同；摘要由 Artifact Manager 服务端计算）与 `422`（非法集合或源仓不满足条件）为不可重试；`429` 为可重试并带 `Retry-After`。
 
 `ArtifactManagerClient` 使用的类型与字段说明：
 
@@ -196,7 +193,7 @@ type ArtifactManagerClient interface {
 | `CreateRepositoryRequest` / `ManifestReference` | 物化请求：`repositoryUID`、`repositoryName`、`project`、`buildName`、`targetArch`、可选的 `baseRepositoryUID`，以及按 `jobName` 排序的 `manifests` |
 | `RepositoryResponse` | 物化响应：`repositoryUID`、`state`、`attempt`（重试预算的权威计数）、可选的 `pollAfterSeconds`、`contentURL`、`failure` 与 `createdAt` / `updatedAt`（退避窗口锚点，见 §8）/ `completedAt`；RPM 元数据和内容摘要只保留在 Artifact Manager 内部，不在响应中返回 |
 | `FailureInfo` | 失败详情：稳定错误码 `code`、诊断信息 `message`、是否可重试 `retryable` 与发生时间 |
-| `ReleaseState` | 发布状态：`Creating` / `Prepared` / `Ready` / `Failed` / `Deleting` |
+| `ReleaseState` | 发布状态：`Creating` / `Ready` / `Failed` / `Deleting` |
 | `CreateReleaseRequest` | 发布请求：`buildName`、`project`、`targetArch`、`sourceRepositoryUID`、`excludeSpecs` |
 | `ReleaseResponse` | 发布响应：`buildName`、`state`、可选的 `pollAfterSeconds`、`contentURL`、`failure` 与 `createdAt` / `updatedAt` / `completedAt`（请求摘要与发布摘要由 Artifact Manager 服务端持有，不在响应中返回） |
 | `Timestamp` | 统一的时间字段类型 |
@@ -334,7 +331,7 @@ status:
 | `RpmRepo.status.repository.sourceJobNames` | RpmRepo Controller | 已成功纳入当前版本的 Job 名称；写入时去重并按字典序排序；不记录失败 Job。为空表示本对象尚未产出过版本（Build Controller 预置的继承基线不计入），其非空是「本对象已产出可发布版本」的唯一判据，不以 repositoryUID / contentURL 或 RepositoryReady 条件代替 |
 | `RpmRepo.status.repository.transition` | RpmRepo Controller | 在途批次或已放弃批次的固定输入（`inputs`）、`baseRepositoryUID` 与 `repositoryUID`；不承载重试计数（计数以 Artifact Manager 的 `attempt` 为准，见 §8）。成功提升时随 `transition=nil` 一起清除，失败收口时原样保留 |
 | `RpmRepo.status.repository.updatedAt` | RpmRepo Controller | 过程仓 status 最近一次有效写入时间（提交批次、失败收口、提升版本时更新）；**不用作退避锚点**（退避以 Artifact Manager 响应的 `updatedAt` 为准，见 §8） |
-| `RpmRepo.status.release` | RpmRepo Controller | 发布状态：`phase`（`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Skipped`）/ `sourceRepositoryUID` / `contentURL`（Project / 架构的稳定仓库入口，将 Artifact Manager 返回的相对路径记为 `artifact://{instance}/repositories/{project}/{arch}/`）/ `transition`（`sourceRepositoryUID` + 规范化 `excludeSpecs`）/ `updatedAt`；提交前先写 `release.transition`，它即请求的全部可变输入，重启后据此重放同一请求（请求摘要由 Artifact Manager 服务端计算，不落本状态） |
+| `RpmRepo.status.release` | RpmRepo Controller | 发布状态：`phase`（`Pending` / `Creating` / `Ready` / `Failed` / `Skipped`）/ `sourceRepositoryUID` / `contentURL`（Project / 架构的稳定仓库入口，将 Artifact Manager 返回的相对路径记为 `artifact://{instance}/repositories/{project}/{arch}/`）/ `transition`（`sourceRepositoryUID` + 规范化 `excludeSpecs`）/ `updatedAt`；提交前先写 `release.transition`，它即请求的全部可变输入，重启后据此重放同一请求（请求摘要由 Artifact Manager 服务端计算，不落本状态） |
 | `RpmRepo.status.conditions` | RpmRepo Controller | 过程仓、正式发布条件及 CleanupReady 清理确认（见第九章） |
 
 ## 五、状态机
@@ -348,9 +345,8 @@ status:
 
 | phase | 含义 | 允许的下一步 |
 | --- | --- | --- |
-| `Pending` | 检查点已写，尚未提交或提交结果未确认 | `Creating` / `Prepared` / `Ready` / `Failed` |
-| `Creating` | 已提交 `SubmitRelease`，Artifact Manager 处理中 | `Prepared` / `Ready` / `Failed` |
-| `Prepared` | 正文就绪，待激活切换稳定入口 | `Ready` / `Failed` |
+| `Pending` | 检查点已写，尚未提交或提交结果未确认 | `Creating` / `Ready` / `Failed` |
+| `Creating` | 已提交 `SubmitRelease`，Artifact Manager 处理中 | `Ready` / `Failed` |
 | `Ready` | 已激活，稳定入口可读（`release.contentURL` 非空） | 终局；不再重复提交 |
 | `Skipped` | publish=false 时由本控制器在过程仓处理结束后设置 | 终态；本控制器不再修改 |
 | `Failed` | 发布不可重试失败、过程仓失败、Build 主动中止或 BuildInfo 配置失败时的终局登记（后两者分别使用 reason `BuildAborted`、`BuildInfoFailed`） | 终局；修正内容需新建 Build |
@@ -394,7 +390,7 @@ Job 主动中止以 apiserver 持久化的终态为准：Aborted 即使已有 Co
 
 ## 七、Reconcile 流程
 
-**状态写入原子性**：每次 status 迁移先构造完整目标 `RpmRepo.status`，再调用一次 `UpdateRpmRepoStatus`——`repository.*`、`release.*` 与 `conditions` 的变更合并到同一次写入；写入冲突（Rejected / 409）立即结束本周期，返回 `ReconcileResult{RequeueAfter: 1s}` + `nil`；下一周期重新 GET 对象与依赖后计算。不得在本周期重做该步骤、继续提交或激活，也不得仅替换 resourceVersion 重放旧目标。
+**状态写入原子性**：每次 status 迁移先构造完整目标 `RpmRepo.status`，再调用一次 `UpdateRpmRepoStatus`——`repository.*`、`release.*` 与 `conditions` 的变更合并到同一次写入；写入冲突（Rejected / 409）立即结束本周期，返回 `ReconcileResult{RequeueAfter: 1s}` + `nil`；下一周期重新 GET 对象与依赖后计算。不得在本周期重做该步骤、继续提交，也不得仅替换 resourceVersion 重放旧目标。
 
 **状态写错误分类**：仅适用于 `UpdateRpmRepoStatus`。先按共享 apiserver 客户端返回的 `WriteError.Outcome` 分流，不根据错误文本或“是否超时”覆盖 Outcome；Artifact Manager 错误按第八章处理，其 409 不是 apiserver CAS Conflict。成功响应违反 3.2 的契约时由适配层归为 Unknown。
 
@@ -408,7 +404,7 @@ Job 主动中止以 apiserver 持久化的终态为准：Aborted 即使已有 Co
 | `Rejected` 的其它拒绝响应（含 `400、401、403、422`） | 零值 + `controller.NewPermanentError(err)` |
 | `Unknown` | 执行下述完整写入意图确认，不重放旧 PUT |
 
-Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，不启动后台确认。NotSent 与 Rejected 都不执行 Unknown 确认，不因写入错误额外写业务失败条件或终态。任何未确认成功的写入均停止当前推进链；尤其检查点未确认时不得提交外部操作，相位推进未确认时不得继续激活。
+Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，不启动后台确认。NotSent 与 Rejected 都不执行 Unknown 确认，不因写入错误额外写业务失败条件或终态。任何未确认成功的写入均停止当前推进链；尤其检查点未确认时不得提交外部操作，相位推进未确认时停止本轮处理。
 
 写入结果未知（`WriteError.Outcome=Unknown`，如已发送请求后超时、连接中断、响应无法解析）时不重放原 PUT，先 GET 当前对象。仅在 UID 与原对象一致、且本次写入意图中的全部目标字段均已达成时确认成功；比较范围包括本次变更的版本字段、完整检查点、相位、条件与时间字段，不要求未修改的字段保持旧值。下表列出各类写入必须覆盖的业务字段，不能只比较相位或单个标识：
 
@@ -429,7 +425,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 
 **依赖读取的统一语义**
 
-本节只适用于本章各阶段对依赖对象的读取：同名 `Build`（`spec.arch`）与同名 `BuildInfo`（`status.phase` 门禁与策略输入）。以下三者**不适用**本节：本键驱动对象 `RpmRepo` 的缺失（按 7.2 的分支处理）；Artifact Manager 的 `GetRepository` / `GetRelease` 返回（含 `404` 与 `Creating` / `Prepared` / `Failed`，按 7.2 / 7.3 / 第八章处理）；`Project`（只作为字符串在 `PublishPolicyInput` 中透传、不读取对象，见 3.3）。除 `NotFound`（不进入通用分类，单独按下方角色表处理）外，读取错误按下列分类：
+本节只适用于本章各阶段对依赖对象的读取：同名 `Build`（`spec.arch`）与同名 `BuildInfo`（`status.phase` 门禁与策略输入）。以下三者**不适用**本节：本键驱动对象 `RpmRepo` 的缺失（按 7.2 的分支处理）；Artifact Manager 的 `GetRepository` / `GetRelease` 返回（含 `404` 与 `Creating` / `Failed`，按 7.2 / 7.3 / 第八章处理）；`Project`（只作为字符串在 `PublishPolicyInput` 中透传、不读取对象，见 3.3）。除 `NotFound`（不进入通用分类，单独按下方角色表处理）外，读取错误按下列分类：
 
 - 其它读取错误（网络、超时、`408` / `429` / `5xx`）→ 返回零值 + 原始错误（框架退避重试）；例外：若 `apierrors.SuggestsClientDelay(err) > 0`（仅 `429` / `503`，防御性分支——ebs-apiserver 当前不返回该提示），返回 `ReconcileResult{RequeueAfter: <提示值>}` + `nil`，不写 status、不叠加框架退避；
 - 永久错误（`401` / `403` / `400` / `422` 或响应身份契约错误）→ 返回零值 + `controller.NewPermanentError`；Manager / round context 取消 → 返回 `ctx.Err()`；以上分支一律不写 `RpmRepo.status`、不写条件、不调用 Artifact Manager、不使用 `RequeueAfter`（返回形态见 7.4）。该分支**仅通过日志暴露**（框架 `result=permanent-error` 日志行已含 `key` 与错误内容；控制器不新增固定 reason、不新增计数、不写 status），RpmRepo 保留在轮询集合中，控制器权限 / apiserver 配置修复后下一轮自动继续；持续出现时按运维手册排查控制器权限与 apiserver 配置。
@@ -487,7 +483,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 4. **收口**（写入字段清单见第四章字段来源表，本节只列特有判定）：
    - **成功收口**：把本批 Job 名称并入 `repository.sourceJobNames`（去重排序），一次 CAS 提交目标 status——`repository.contentURL` 将 Artifact Manager 的 Ready 响应相对路径转为 `artifact://{instance}/` 逻辑地址、`repository.repositoryUID` 取本批 `repository.transition.repositoryUID`、`repository.transition=nil`、`repository.updatedAt` 与 `RepositoryReady=True/reason=RepositoryCreated` 条件；随后若仍有可入选 Job 则重新入队本键组下一批，否则进入第 5 步；
    - **重试**（`200 Failed{retryable=true}` 且响应 `attempt < --rpmrepo-materialize-retry-limit + 1` 且已过退避窗口，或 `429` / `503` / 网络 / 超时 / 未解析）：**不写 status**（`transition` 与版本字段原样保留），计一次 `rpmrepo_controller_materialize_retries_total`，按退避 `RequeueAfter` 用同一请求重放 `SubmitRepository`（`429`/`503` 优先按其 `Retry-After`；未落到记录的错误不影响预算）。退避窗口未过（锚点为响应 `updatedAt`）时本轮只返回剩余等待（`RequeueAfter`）+ `nil`：不调用 `SubmitRepository`、不写 status、不计 `rpmrepo_controller_materialize_retries_total`；
-   - **失败收口**（可重试失败且响应 `attempt >= --rpmrepo-materialize-retry-limit + 1`，或遭遇不可重试失败）：一次 CAS 提交目标 status——`repository.transition` **原样保留**（`inputs` / `baseRepositoryUID` / `repositoryUID` 均为失败时刻取值）、`repository.updatedAt`、`RepositoryReady=False` 条件（reason `RepositoryCreationFailed`），并同次写发布失败终局 `release.phase=Failed`、`release.transition=nil`、`release.updatedAt` 与 `PublishSucceed=False` 条件（reason `RepositoryCreationFailed`）；计一次 `rpmrepo_controller_repository_failed_total`；不清空 `repository.repositoryUID` / `contentURL` 等版本字段；不调用 `SubmitRelease` / `ActivateRelease`、不再推进发布；本轮返回零值 + `nil`。
+   - **失败收口**（可重试失败且响应 `attempt >= --rpmrepo-materialize-retry-limit + 1`，或遭遇不可重试失败）：一次 CAS 提交目标 status——`repository.transition` **原样保留**（`inputs` / `baseRepositoryUID` / `repositoryUID` 均为失败时刻取值）、`repository.updatedAt`、`RepositoryReady=False` 条件（reason `RepositoryCreationFailed`），并同次写发布失败终局 `release.phase=Failed`、`release.transition=nil`、`release.updatedAt` 与 `PublishSucceed=False` 条件（reason `RepositoryCreationFailed`）；计一次 `rpmrepo_controller_repository_failed_total`；不清空 `repository.repositoryUID` / `contentURL` 等版本字段；不调用 `SubmitRelease`、不再推进发布；本轮返回零值 + `nil`。
 5. **发布触发**：`BuildInfo.status.phase=Completed`、本轮候选扫描为空且 `repository.transition=nil` 后，若 `Build.spec.publish=false`，一次 CAS 写 `release.phase=Skipped` 与 `release.updatedAt`，保留 `repository.*`，不写发布条件、不计发布成功或失败指标；`sourceJobNames` 为空也按此处理。若允许发布，则 `repository.sourceJobNames` 非空时在同一轮进入 7.3 发布流程；否则一次 CAS 写 `release.phase=Failed`、`release.transition=nil`（此前未登记发布）、`release.updatedAt` 与 `PublishSucceed=False` 条件（reason `NoPublishableArtifacts`），计一次 `rpmrepo_controller_release_failed_total`，不写 `repository.*`、不调用 Artifact Manager。前置条件未满足时等待，不写 status。
 
 第 5 步观察到 `BuildInfo.status.phase` 为 `Pending` / `Processing` 时，仅跳过发布触发与“无可用版本”判定，不回退或撤销本轮已经完成的过程仓推进；`Failed` 必须优先按 7.2 入口失败收口；无下一批可处理时返回零值 + `nil`，等待后续轮询。
@@ -509,7 +505,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 
 本节的“跳过”对无检查点候选表示继续当前循环，不能直接返回 Sync；只有扫描完全部候选才按等待返回零值 + `nil`。在途对象优先且不适用该跳过规则：其依赖缺失或目标不匹配时告警并停止本轮，保留检查点，等待恢复或人工处理，不启动同目标的新发布。7.4 的等待类返回值以此区分为准。
 
-- **优先处理在途**：在途判据为 `release.transition` 非空（相位可能是 `Pending` / `Creating` / `Prepared`），该判据不受候选谓词约束（避免版本指针或 `sourceJobNames` 异常影响在途恢复）；存在在途对象时取之为本次对象；`metadata.deletionTimestamp` 非空（含在途对象）→ 转交该对象的队列 key 执行第一章的删除收敛，不启动新发布；存在多个在途 → 记录 `reason=MultipleReleaseInFlight` 告警日志，其余在途对象等待本次对象收口；
+- **优先处理在途**：在途判据为 `release.transition` 非空（相位可能是 `Pending` / `Creating`），该判据不受候选谓词约束（避免版本指针或 `sourceJobNames` 异常影响在途恢复）；存在在途对象时取之为本次对象；`metadata.deletionTimestamp` 非空（含在途对象）→ 转交该对象的队列 key 执行第一章的删除收敛，不启动新发布；存在多个在途 → 记录 `reason=MultipleReleaseInFlight` 告警日志，其余在途对象等待本次对象收口；
 - **发布候选**：无在途对象时，在候选集内按序逐个检查对象，跳过删除中的对象；对当前对象执行下面的前置判定与完整复核，满足可跳过条件时继续检查下一个，通过全部检查后才作为本次推进对象（非发布终态、过程仓不在途、本对象已产出可发布版本已由上面的候选谓词保证）。BuildInfo 的读取与就绪检查严格区分：
   - NotFound，或成功读取但 `phase=Pending/Processing`：记录 `reason=BuildInfoNotReady`，跳过当前候选并继续扫描；后续轮询会重新检查该候选，全部候选均跳过时才返回零值 + `nil`；`phase=Failed` 按 7.3 失败收口，不当作未就绪；
   - 网络、超时、`5xx` 等临时读取错误：按统一读取错误分类返回可重试错误，不能当作未就绪吞掉；带有效 `Retry-After` 的 `429` / `503` 沿用统一延迟重入规则；
@@ -521,7 +517,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 
 - **先检查最新 RpmRepo**：GET 选中对象，NotFound、UID 改变、删除中或 `release.phase ∈ {Ready, Failed, Skipped}` 时结束当前对象处理，不写 status、不调用 Artifact Manager；无检查点候选继续扫描下一个，在途对象则结束本轮、不启动其他发布；其它读取错误按读取错误分类返回。通过后才读取 Build 并判断中止，所有后续写入以该最新对象为基础。
 - **读取并校验同名 `Build`（按当前扫描对象读取）**：对本次对象 GET 一次同名 `Build`，它同时是 `PublishPolicyInput.Build` 与 `TargetArch` 的来源——`Build` NotFound → 跳过该候选；删除中 → 按第一章排空已有检查点并结束本轮，不启动新发布；`Build.spec.arch` 与对象 `metadata.labels[ebs.io/target-arch]` 不一致 → 跳过该对象、记录 `reason=RpmRepoLabelMismatch` 告警、不计数、不调用该对象的 Artifact Manager 接口；无检查点候选继续扫描，在途对象结束本轮并阻塞新发布；其它读取错误按章首「依赖读取的统一语义」处理（本轮不推进）；`Build.status.phase=Aborted` → 走下一行的「Build 中止收口」。目标 arch 与管理标签创建后不可变；增量构建在 Pending 阶段可由 Build Controller 固化 `spec.packages`，不影响此处目标一致性校验；
-- **Build 中止收口（先于「有检查点」与「无检查点」两个分支；在途对象不因存在 `release.transition` 检查点而例外）**：本次对象（在途或发布候选）的同名 `Build.status.phase=Aborted` 时——一次 CAS 写 `release.phase=Failed`、保留原 `release.transition`、`release.updatedAt` 与 `PublishSucceed=False`（reason `BuildAborted`）；**不调用** Artifact Manager（不 `GetRelease`、不重放 `SubmitRelease`、不 `ActivateRelease`）、不做策略判定；`repository.*` 不写（在途 `repository.transition` 原样保留为已放弃批次）；输出 `reason=BuildAborted` 告警日志，返回零值 + `nil`；该对象随即被轮询过滤与发布候选排除，同目标其它候选不受阻塞；早中止（`BuildInfo` 未完成、`repository.sourceJobNames` 为空）的对象由对象键的同一分支收口；
+- **Build 中止收口（先于「有检查点」与「无检查点」两个分支；在途对象不因存在 `release.transition` 检查点而例外）**：本次对象（在途或发布候选）的同名 `Build.status.phase=Aborted` 时——一次 CAS 写 `release.phase=Failed`、保留原 `release.transition`、`release.updatedAt` 与 `PublishSucceed=False`（reason `BuildAborted`）；**不调用** Artifact Manager（不 `GetRelease`、不重放 `SubmitRelease`）、不做策略判定；`repository.*` 不写（在途 `repository.transition` 原样保留为已放弃批次）；输出 `reason=BuildAborted` 告警日志，返回零值 + `nil`；该对象随即被轮询过滤与发布候选排除，同目标其它候选不受阻塞；早中止（`BuildInfo` 未完成、`repository.sourceJobNames` 为空）的对象由对象键的同一分支收口；
 - **BuildInfo 失败收口**：选中对象的最新 RpmRepo 与 Build 通过上述身份、删除及中止检查后，读取同名 BuildInfo；`phase=Failed` 时按 7.2 入口的一次 CAS 写 `release.phase=Failed`、保留 release 检查点并写 `PublishSucceed=False/BuildInfoFailed`，不进入有/无检查点分支，不调用 Artifact Manager。无检查点候选继续扫描同组其他对象，在途对象收口后结束本轮；`BuildInfo` 未完成时仅无检查点候选继续等待，在途对象仍遵守已有检查点恢复规则。
 
 **首次发布的完整复核**（仅无 `release.transition` 时执行，在策略判定与检查点写入之前）：
@@ -542,7 +538,6 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | 提交响应 | 处理 |
 | --- | --- |
 | `202` + `state=Creating` | 写 `release.phase=Creating` 与 `release.updatedAt`，按 `ReconcileResult{RequeueAfter: pollAfterSeconds}` + `nil` 延迟重入（不叠加框架退避） |
-| `202` + `state=Prepared` | 写 `release.phase=Prepared` 与 `release.updatedAt`，同样延迟重入 |
 | `200` + `Ready` | 执行「成功收口」 |
 | `200` + `Failed{retryable=false}` / `409 ReleaseIdentityConflict` / `422` | 执行「失败收口」 |
 | `429` / `503` 且 Artifact Manager 返回 `Retry-After` | 保留检查点（相位保持 `Pending`），返回 `ReconcileResult{RequeueAfter: <Retry-After>}` + `nil`；不提交与检查点不同的请求（不重新决策 `excludeSpecs`） |
@@ -553,7 +548,6 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | 查询响应 | 处理 |
 | --- | --- |
 | `Creating` | 相位不一致时一次 CAS 补齐 `release.phase=Creating` 与 `release.updatedAt`；按 `ReconcileResult{RequeueAfter: pollAfterSeconds}` + `nil` 延迟重入（不叠加框架退避） |
-| `Prepared` | 相位不一致时一次 CAS 补齐 `release.phase=Prepared` 与 `release.updatedAt`；执行「激活」 |
 | `Ready` | 执行「成功收口」 |
 | `Failed{retryable=true}` | 用完全相同的请求重放 `SubmitRelease`，按提交响应分流 |
 | `Failed{retryable=false}` | 执行「失败收口」 |
@@ -562,9 +556,8 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | `429` / `503` 且 Artifact Manager 返回 `Retry-After` | 保留检查点，返回 `ReconcileResult{RequeueAfter: <Retry-After>}` + `nil` |
 | 网络错误 / `5xx` / 响应无法解析 / 响应契约错误（`attempt < 1`、`updatedAt` 缺失、响应身份不一致）/ 无 `Retry-After` 的 `429`、`503` | 保留检查点，返回原始可重试错误（框架退避） |
 
-- 激活（条件：Artifact Manager 返回 `Prepared`）：调 `ActivateRelease(buildName)`——`200`（切换成功或已是当前版本）→ 执行「成功收口」；可重试错误 → 保持 `release.phase=Prepared` 与检查点：带 `Retry-After` 的 `429` / `503` 返回 `ReconcileResult{RequeueAfter: <Retry-After>}` + `nil`，其余（网络 / 超时 / 响应无法解析 / 响应契约错误）返回原始可重试错误（框架退避），下一轮重新激活；不可重试错误 → 执行「失败收口」。
 - 收尾动作（本节定义完整写入字段；字段含义见第四章）：
-  - 成功收口（条件：`SubmitRelease` 返回 `200`+`Ready`、`GetRelease` 返回 `Ready` 或 `ActivateRelease` 返回 `200`）：一次 CAS 提交目标 status——`release.phase=Ready`、`release.sourceRepositoryUID`（取 `release.transition.sourceRepositoryUID`）、`release.contentURL`（将响应相对路径转为 `artifact://{instance}/` 逻辑地址）、`release.updatedAt`、`release.transition=nil` 与 `PublishSucceed=True` 条件（reason `ReleaseActivated`）；返回 `ReconcileResult{Requeue: true}` + `nil`，立即处理同目标下一个候选；
+  - 成功收口（条件：`SubmitRelease` 返回 `200`+`Ready`、`GetRelease` 返回 `Ready`）：一次 CAS 提交目标 status——`release.phase=Ready`、`release.sourceRepositoryUID`（取 `release.transition.sourceRepositoryUID`）、`release.contentURL`（将响应相对路径转为 `artifact://{instance}/` 逻辑地址）、`release.updatedAt`、`release.transition=nil` 与 `PublishSucceed=True` 条件（reason `ReleaseActivated`）；返回 `ReconcileResult{Requeue: true}` + `nil`，立即处理同目标下一个候选；
   - 失败收口（条件：不可重试失败）：一次 CAS 提交目标 status——`release.phase=Failed`、`release.updatedAt`、保留原 `release.transition`（业务终态停止普通轮询，检查点用于删除排空）与 `PublishSucceed=False` 条件（reason `ReleaseFailed`）；失败详情只进日志（`reason=ReleaseFailed`）；终态写入成功后返回零值 + `nil`，不因原始业务失败触发框架重试——发布终局已持久化，该对象随即被发布候选与轮询过滤排除，失败不会阻塞同 Project/Arch 的其他 Build（后续候选由对象键 resync 重新入队）。
 
 重启恢复（任意阶段）：
@@ -573,7 +566,7 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 | --- | --- |
 | 无检查点且非终态 | 基于最新输入重新判定策略，`excludeSpecs` 去重排序；尚未持久化检查点，不保证决策与崩溃前一致 |
 | 检查点已写、`SubmitRelease` 未被接受 | `GetRelease` 返回 `404`，用同一请求重放 |
-| `SubmitRelease` 已接受、相位未补齐 | `GetRelease` 返回 `Creating` / `Prepared`，补齐相位后继续等待或激活 |
+| `SubmitRelease` 已接受、相位未补齐 | `GetRelease` 返回 `Creating`，补齐相位后继续等待 |
 | 激活已成功、收口写入前 | `GetRelease` 返回 `Ready`，直接成功收口 |
 | 失败收口写入前 | `GetRelease` 仍返回 `Failed{retryable=false}`（或不可重试错误码），重新收口 |
 | 收口写入结果未知 | 按第七章统一 WriteUnknown 规则确认完整写入意图；未达成则结束本周期、延迟重新调谐，不仅凭相位确认成功或重放旧收口 |
@@ -630,14 +623,14 @@ Manager context 已取消时返回零值 + `ctx.Err()`，停止后续请求，�
 约定：
 
 - `repositoryUID` 就是幂等键，不额外使用 `Idempotency-Key`；
-- 发布依赖 Artifact Manager 保证：同一 buildName 与相同请求摘要幂等，不同摘要返回 409；Prepared 不会自行激活，只由控制器调用激活接口。
+- 发布依赖 Artifact Manager 保证：同一 buildName 与相同请求摘要幂等，不同摘要返回 409；发布目录生成与稳定入口切换由 Artifact Manager 自动完成，激活失败由其后台重试并在重启后恢复；Controller 只提交、查询及收口。
 - 可重试执行失败的退避间隔为 `d = min(initial × 2^(attempt-1), max)`，施加配置的 jitter；返回 `ReconcileResult{RequeueAfter}`，不叠加框架退避。可重试执行失败受重试预算限制，不可重试错误直接收口；`Creating` 不设超时，长期停留需人工处理。
 - 重试预算以 Artifact Manager 响应的 `attempt` 为**权威计数**（`attempt` 是"服务端已接受的执行尝试次数"，首次提交为 `1`，相同请求处于可重试 `Failed` 被重放时 `+1`，查询与 Ready 重放不递增）；控制器不写任何计数，判定式为 `attempt >= --rpmrepo-materialize-retry-limit + 1` 即预算耗尽；
 - 预算边界：`429` / `503` / 网络超时（服务端未接受新尝试）不递增 `attempt`，因此不消耗预算；`404 RepositoryNotFound`（记录不存在）走"用同一请求重放 `SubmitRepository`"的恢复路径，重放会新建记录并把 `attempt` 重置为 `1`，即计数器从零开始；
 - 退避锚点：退避窗口以 `RepositoryResponse.updatedAt`（服务端记录最近一次状态变更时间）为锚点；窗口未过时，任何重复入队（`rpmrepos` 轮询 resync、框架重入）都只返回剩余等待时间（`RequeueAfter`）+ `nil`，**不重放** `SubmitRepository`、不写 status、不消耗预算。未落到记录的错误若响应带 `Retry-After` 则按其等待；无 `Retry-After`（例如连接中断、响应无法解析）时以上一次成功 `GetRepository` 响应的 `updatedAt` 为锚点，仍无可用锚点则按初始退避（`--controller-slow-retry-initial-delay`，默认 30s）等待。该比较跨进程，允许由 jitter 覆盖的时钟偏差；偏差只会让重放略微提前或推迟，不影响预算与终局判定；
 - 响应契约：`RepositoryResponse.attempt < 1`（首次提交必为 `1` 起）与 `updatedAt` 缺失均视为 Artifact Manager 响应契约错误，**按可重试处理**（与"响应无法解析"同类，服务端恢复后自动继续），不据此推进预算或收口、不写 status、不消耗重试预算，也不得用本地时间臆造退避锚点：
   - 过程仓路径（`SubmitRepository` / `GetRepository`）：按 `RequeueAfter` 表达（无可用锚点时用初始退避 `--controller-slow-retry-initial-delay`，默认 30s），保留 `repository.transition`，不进入 error 路径；
-  - 发布路径（`SubmitRelease` / `GetRelease` / `ActivateRelease`）：返回零值 + 原始错误（框架退避），保留 `release.transition` 与相位；
+  - 发布路径（`SubmitRelease` / `GetRelease`）：返回零值 + 原始错误（框架退避），保留 `release.transition` 与相位；
 - 只依赖稳定错误码与 `retryable`，不解析 `message`；
 - 提交响应里不会出现 `200 + Failed{retryable=true}`：可重试失败被重放时服务端返回 `202` 且 `attempt` +1；`Failed{retryable=true}` 只通过 `GetRepository` 观察（查询不改变 `state` 与 `attempt`）；
 - 结果未知一律按"先 GET 确认、不重放不同请求"处理；
@@ -743,7 +736,7 @@ buildinfos:      get
 1. **Build Controller**：仅非 single 创建与 Build 同项目、同名的 RpmRepo，继承基线保存到 repository.repositoryUID/contentURL，并写入与 Build.spec.arch 一致的 ebs.io/target-arch 标签。single 不创建对象。
 2. **BuildInfo Controller**：创建 Job 时写入 `ebs.io/build-name`、`ebs.io/spec-name`、`ebs.io/target-arch`；`BuildInfo.status.phase=Completed` 表示不再创建 Job 且所有 Job 均已终态；`Failed` 表示配置校验失败后立即停止派发，已有 Job 可能继续运行或创建结果迟到，不能用 Failed 推断 Job 已收敛。只有 Completed 允许发布复核与“无可发布产物”判定，Failed 触发发布失败终局；过程仓在 Pending/Processing 期间仍可推进。
 3. **Runner**：需要归档的 Job 在 Manifest 成功封账后才写 `Succeeded`；无需归档的 Job 可以没有 Manifest。每个 Job 只能成功封账一次，封账后内容不可变。可选 RPM 签名纳入封账，控制器无需增加签名调用或轮询；物化使用最终产物，契约见 [Artifact Manager 6.2](artifact-manager.md#62-提交并完成-job-上传清单)。
-4. **Artifact Manager**：提供检查点恢复所需的幂等提交、显式激活及 attempt 计数保证，具体契约统一见第八章。
+4. **Artifact Manager**：提供检查点恢复所需的幂等提交、自动发布和过程仓 attempt 计数保证，具体契约统一见第八章。
 
 ## 十四、测试计划
 
@@ -751,7 +744,7 @@ buildinfos:      get
 
 - Job 中止与成功并发：仅已持久化为 Succeeded 的 Job 可入选；Aborted + Completed Manifest 不查询产物、不入选、不加入 `sourceJobNames`，不阻止扫描其它成功 Job，也不写 `BuildAborted`。
 
-- Skipped：轮询与发布列表选择器均包含 `status.release.phase!=Skipped`；残留队列键直接调谐时只读取 RpmRepo 即结束，不读取 Build/BuildInfo/Job、不调用 Artifact Manager、不写 status、不另行入队。发布列表的旧快照在最新 GET 返回 Skipped 时跳过，不进行激活。覆盖有基线、无基线、Build 已 Aborted、重启与重复入队，断言版本指针不变、条件与指标不变。
+- Skipped：轮询与发布列表选择器均包含 `status.release.phase!=Skipped`；残留队列键直接调谐时只读取 RpmRepo 即结束，不读取 Build/BuildInfo/Job、不调用 Artifact Manager、不写 status、不另行入队。发布列表的旧快照在最新 GET 返回 Skipped 时跳过，不推进发布。覆盖有基线、无基线、Build 已 Aborted、重启与重复入队，断言版本指针不变、条件与指标不变。
 
 - 非 single 且 `publish=false`：先完成所有过程仓批次，待 BuildInfo Completed 且候选扫描收敛后写 `release.phase=Skipped`；覆盖有产物和无产物两种情况，断言过程仓版本保留、不另行入队、不写 `PublishSucceed`，重入不重复写入。
 
@@ -779,7 +772,7 @@ buildinfos:      get
 - 重试预算与退避：可重试失败断言**重试期间零 status 写入**、计一次 `rpmrepo_controller_materialize_retries_total`，返回 `ReconcileResult{RequeueAfter: <退避>}` + `nil`，且不与框架退避叠加；`200 Failed{retryable=true}` 按响应 `attempt` 判定——`attempt < --rpmrepo-materialize-retry-limit + 1` 时重放、`attempt >= limit + 1` 时直接失败收口；`429` / `503` / 网络 / 超时 / 未解析断言**不消耗预算**（`attempt` 不变）且按 `Retry-After`（有则优先）/ 退避重放；**退避窗口**以响应 `updatedAt` 为锚点——同一窗口内连续多轮轮询 resync 断言 `attempt` 不变、零 status 写入、不调用 `SubmitRepository`、只返回剩余等待；无 `Retry-After` 且无可用锚点时按初始退避（`--controller-slow-retry-initial-delay`，30s）等待；过程仓响应 `attempt < 1`，或过程仓/发布响应 `updatedAt` 缺失，断言按响应契约错误（**可重试**）处理：过程仓路径返回 `ReconcileResult{RequeueAfter: <初始退避或剩余等待>}` + `nil`、不写 status、不推进预算也不收口、不进入 error 路径，发布路径返回零值 + 原始错误（框架退避）并保留检查点与相位；不可重试失败断言不重试、不消耗预算、直接失败收口；重启后预算按 Artifact Manager 记录的 `attempt` 继续且仍需遵守剩余退避窗口。
 - 字段级 `422` 收敛：`SubmitRepository` 返回 `422 InvalidRepositoryRequest` / `RepositoryUIDMismatch` / `InvalidManifestReference` 时断言按不可重试失败收口（`repository.transition` 原样保留、`RepositoryReady=False`、`release.phase=Failed`、`PublishSucceed=False`、计一次 `repository_failed_total`），不再返回 `controller.NewPermanentError`。
 - 已放弃批次恢复：预置 `repository.transition` 非空 + `RepositoryReady=False/reason=RepositoryCreationFailed` + `release` 为空，断言一次 CAS 重写发布终局（`release.phase=Failed` + `release.transition=nil` + `release.updatedAt` + `PublishSucceed=False/reason=RepositoryCreationFailed`）、不写 `repository.*`、不调用 Artifact Manager、`repository_failed_total` 不增、输出 `reason=RepositoryCreationFailed` 告警、返回零值 + `nil`，且对象此后被轮询与发布候选排除。
-- 收口写入与保留：成功收口同一次 `/status` 写入包含 `repository.contentURL` 与 `repository.repositoryUID`（分别取 Ready 响应与本批 `transition.repositoryUID`）、`repository.sourceJobNames`、`repository.transition=nil`、`repository.updatedAt` 与 `RepositoryReady=True/reason=RepositoryCreated`；失败收口同一次写入包含 `repository.transition` **原样保留**（`inputs` / `baseRepositoryUID` / `repositoryUID` 与失败时刻一致）、`repository.updatedAt`、`RepositoryReady=False/reason=RepositoryCreationFailed`，以及发布终局 `release.phase=Failed`、保留原 `release.transition`、`release.updatedAt` 与 `PublishSucceed=False/reason=RepositoryCreationFailed`（断言全程不调用 `SubmitRelease` / `ActivateRelease`、不再推进发布），并计一次 `rpmrepo_controller_repository_failed_total`；两条路径都不得清空 `repository.contentURL` / `repositoryUID` 等版本字段。
+- 收口写入与保留：成功收口同一次 `/status` 写入包含 `repository.contentURL` 与 `repository.repositoryUID`（分别取 Ready 响应与本批 `transition.repositoryUID`）、`repository.sourceJobNames`、`repository.transition=nil`、`repository.updatedAt` 与 `RepositoryReady=True/reason=RepositoryCreated`；失败收口同一次写入包含 `repository.transition` **原样保留**（`inputs` / `baseRepositoryUID` / `repositoryUID` 与失败时刻一致）、`repository.updatedAt`、`RepositoryReady=False/reason=RepositoryCreationFailed`，以及发布终局 `release.phase=Failed`、保留原 `release.transition`、`release.updatedAt` 与 `PublishSucceed=False/reason=RepositoryCreationFailed`（断言全程不调用 `SubmitRelease`、不再推进发布），并计一次 `rpmrepo_controller_repository_failed_total`；两条路径都不得清空 `repository.contentURL` / `repositoryUID` 等版本字段。
 - `repository.updatedAt` 更新时机：断言只在提交批次、失败收口与提升版本时更新，重试期间不更新（与"重试零 status 写入"一致）。
 
 **入口与依赖读取**
@@ -788,7 +781,7 @@ buildinfos:      get
 
 **写错误分类（apiserver 侧）**
 
-- status 写入 Rejected / 409 断言立即返回 `ReconcileResult{RequeueAfter: 1s}` + `nil`，本周期不再次 GET 重算或 PUT、不继续提交或激活，下一周期重新读取并计算，不用旧对象重放；status 写入返回字段非法（Rejected / 422）断言返回 `controller.NewPermanentError` 且不再写 status；status 写入返回 `429` / `503` 断言返回可重试错误并保留 `Retry-After`（由框架的 `WriteError` 路径识别；**与带 `Retry-After` 的依赖读取、Artifact Manager `429` / `503` 不同**：后者由控制器换算为 `RequeueAfter` 且不消耗重试预算，见「重试预算与退避」条）。
+- status 写入 Rejected / 409 断言立即返回 `ReconcileResult{RequeueAfter: 1s}` + `nil`，本周期不再次 GET 重算或 PUT、不继续提交，下一周期重新读取并计算，不用旧对象重放；status 写入返回字段非法（Rejected / 422）断言返回 `controller.NewPermanentError` 且不再写 status；status 写入返回 `429` / `503` 断言返回可重试错误并保留 `Retry-After`（由框架的 `WriteError` 路径识别；**与带 `Retry-After` 的依赖读取、Artifact Manager `429` / `503` 不同**：后者由控制器换算为 `RequeueAfter` 且不消耗重试预算，见「重试预算与退避」条）。
 
 **发布**
 
@@ -797,15 +790,15 @@ buildinfos:      get
 - 发布候选查询与 Build 校验：断言 `ListRpmRepos` 透传的 `FieldSelector` 恰为 `status.release.phase!=Ready,status.release.phase!=Failed,status.release.phase!=Skipped`、`LabelSelector` 恰为 `ebs.io/target-arch=<arch>`（取自发布流程，不同 Project 或不同 arch 的对象互不阻塞、也不会出现在本键候选集中）；断言按扫描顺序读取当前候选的 Build，允许同轮检查多个对象，但最多推进一个对象的发布；选中对象的同名 Build `NotFound` 时断言跳过该对象、输出 `reason=ReleaseGroupBuildMissing` 告警且不重复计数（同名 Build 缺失由对象键的 `rpmrepo_controller_build_missing_total` 暴露）、其它对象照常推进；选中对象的标签与 `Build.spec.arch` 不一致时断言跳过该对象、输出 `reason=RpmRepoLabelMismatch` 告警、不计数、不调用 Artifact Manager；Build 读取返回 `5xx` / 超时断言返回可重试错误且本轮不推进；构造一个不带目标标签的 RpmRepo（存量形态）断言它不进候选、不产生发布动作；
 - 发布策略：注入 stub 策略断言 `Publish=false` 的候选不调发布接口、不写 condition、输出 `reason=ReleasePolicySkipped` 告警，一次 CAS 写 `release.phase=Skipped`，并继续评估下一候选（全部不发布 → 零值 + `nil`）；`DefaultPublishPolicy` 在 `Build.spec.publish=false` 时返回 `Publish=false`，其余返回 `Publish=true`（不特判 `buildType`）；`ExcludeSpecs` 去重并按字典序排序；策略返回 error 时返回可重试错误且不提交发布；
 - 发布候选过滤：`repository.transition` 非空、`repository.sourceJobNames` 为空（无论 `repositoryUID` / `contentURL` 是否被继承基线预置）、`release.phase ∈ {Ready, Failed, Skipped}`、`metadata.deletionTimestamp` 非空（非在途对象）的对象不进入候选、不调用 `SubmitRelease`；
-- 发布状态机（无检查点）：`SubmitRelease` 的 `202 Creating` / `202 Prepared` / `200 Ready` / `409` / `422` / `429` / `503` 分支；断言一次 CAS 写检查点（`release.phase=Pending`、`release.transition.sourceRepositoryUID` / `excludeSpecs`、`release.updatedAt`）后才调用 `SubmitRelease`；`202` 后按响应体写 `release.phase=Creating` / `Prepared`；可重试错误保留检查点并把相位留在 `Pending`；
-- 发布状态机（有检查点）：`GetRelease` 的 `Creating`（补齐相位并延迟重入）/ `Prepared`（补齐相位后 `ActivateRelease`）/ `Ready`（直接收口）/ `Failed{retryable=true}`（重放同一请求）/ `Failed{retryable=false}`（失败收口）/ `Deleting`（失败收口并输出 `reason=ReleaseFailed` 告警）/ `404`（重放同一请求）七条分支；断言有检查点时不再重新调用策略、不重算 `sourceRepositoryUID` / `excludeSpecs`；
-- Retry-After 换算：Artifact Manager 发布提交 / 有检查点查询 / 激活返回带 `Retry-After` 的 `429` / `503` 时，断言保留检查点与相位、返回 `ReconcileResult{RequeueAfter: <Retry-After>}` + `nil`、不消耗重试预算；无 `Retry-After` 时断言返回原始可重试错误；
+- 发布状态机（无检查点）：`SubmitRelease` 的 `202 Creating` / `200 Ready` / `409` / `422` / `429` / `503` 分支；断言一次 CAS 写检查点（`release.phase=Pending`、`release.transition.sourceRepositoryUID` / `excludeSpecs`、`release.updatedAt`）后才调用 `SubmitRelease`；`202` 后按响应体写 `release.phase=Creating`；可重试错误保留检查点并把相位留在 `Pending`；
+- 发布状态机（有检查点）：`GetRelease` 的 `Creating`（补齐相位并延迟重入）/ `Ready`（直接收口）/ `Failed{retryable=true}`（重放同一请求）/ `Failed{retryable=false}`（失败收口）/ `Deleting`（失败收口并输出 `reason=ReleaseFailed` 告警）/ `404`（重放同一请求）六条分支；断言有检查点时不再重新调用策略、不重算 `sourceRepositoryUID` / `excludeSpecs`；
+- Retry-After 换算：Artifact Manager 发布提交 / 有检查点查询返回带 `Retry-After` 的 `429` / `503` 时，断言保留检查点与相位、返回 `ReconcileResult{RequeueAfter: <Retry-After>}` + `nil`、不消耗重试预算；无 `Retry-After` 时断言返回原始可重试错误；
 - 发布收口写入：成功收口同一次 `/status` 写入包含 `release.phase=Ready`、`sourceRepositoryUID` / `contentURL` / `updatedAt`、`release.transition=nil` 与 `PublishSucceed=True/reason=ReleaseActivated`，并返回 `ReconcileResult{Requeue: true}` + `nil`；失败收口同一次写入包含 `release.phase=Failed`、`release.updatedAt`、保留原 `release.transition` 与 `PublishSucceed=False/reason=ReleaseFailed`（失败详情不落 status），断言写入成功后返回**零值 + `nil`**、不返回 `Requeue`，且 BaseController 不因该业务失败调用限速重试或慢速重入；注入收口写入 Conflict、Unknown 和其它写错误时，断言按 status 写错误分类处理，不返回原始发布错误；
 - 构建中生成过程仓：`BuildInfo.status.phase=Processing` 且存在成功 Job 时，断言正常选批、提交并在 Ready 后提升版本；有在途批次时正常恢复。没有候选 Job 时只等待，不启动正式发布、不因 `sourceJobNames` 为空写“无可用版本”失败；批次重试耗尽或无法定位的不可重试失败仍正常失败收口，不等待 BuildInfo Completed；
 - 等待与跳过返回形态：同名 BuildInfo NotFound 时对象键等待；无检查点发布候选的 BuildInfo NotFound、Pending/Processing 或候选删除中时，断言不写该对象 status、不调用该对象发布接口，并继续扫描后续候选，全部跳过才返回零值 + `nil`；Failed 不属于等待，须先写失败终局；在途对象删除中时结束本轮，不越过它启动新发布；
 - 发布候选与首次发布完整复核分别覆盖 BuildInfo 错误分类：网络、超时、5xx 返回可重试错误（有效 Retry-After 按统一规则处理），权限、参数及响应契约错误返回 `PermanentError`，context 取消返回 `ctx.Err()`；均不写 status、不调用 Artifact Manager、不执行发布策略，且不能误记为正常的 `BuildInfoNotReady`；
 - 基础仓不匹配：Artifact Manager 返回 `422 BaseRepositoryNotReady`（基础仓不存在、非 `Ready`，或 Project / 架构与请求不一致）时断言按不可重试失败收口（`RepositoryReady=False` + `release.phase=Failed` + `PublishSucceed=False`、`repository.transition` 原样保留）、输出 `reason=RepositoryCreationFailed` 告警，且本控制器不自行做该一致性校验；
-- Build 被中止：RpmRepo 存在、未删除且非终态，同名 `Build.status.phase=Aborted` 时，分两组断言——① 对象键：断言不写 `repository.transition`、不调用 Artifact Manager、不另行入队，只发生一次 CAS 写 `release.phase=Failed` + 保留原 `release.transition` + `release.updatedAt` + `PublishSucceed=False/reason=BuildAborted`，输出 `reason=BuildAborted` 日志，返回零值 + `nil`；② 发布流程：在途对象（`release.transition` 非空）与发布候选对象都断言同一次 CAS 收口、不调用 `GetRelease` / `SubmitRelease` / `ActivateRelease`、不做策略判定（即中止判定先于在途恢复：在途对象不得进入「有检查点」流程）；两组都断言 `repository.*` 不被改动（在途 `repository.transition` 原样保留）、`rpmrepo_controller_release_failed_total` 不增、返回零值 + `nil`；早中止（`BuildInfo` 未完成、`repository.sourceJobNames` 为空）的对象由对象键的同一分支收口，不依赖发布流程的候选扫描；
+- Build 被中止：RpmRepo 存在、未删除且非终态，同名 `Build.status.phase=Aborted` 时，分两组断言——① 对象键：断言不写 `repository.transition`、不调用 Artifact Manager、不另行入队，只发生一次 CAS 写 `release.phase=Failed` + 保留原 `release.transition` + `release.updatedAt` + `PublishSucceed=False/reason=BuildAborted`，输出 `reason=BuildAborted` 日志，返回零值 + `nil`；② 发布流程：在途对象（`release.transition` 非空）与发布候选对象都断言同一次 CAS 收口、不调用 `GetRelease` / `SubmitRelease`、不做策略判定（即中止判定先于在途恢复：在途对象不得进入「有检查点」流程）；两组都断言 `repository.*` 不被改动（在途 `repository.transition` 原样保留）、`rpmrepo_controller_release_failed_total` 不增、返回零值 + `nil`；早中止（`BuildInfo` 未完成、`repository.sourceJobNames` 为空）的对象由对象键的同一分支收口，不依赖发布流程的候选扫描；
 - 发布幂等：按冻结的 `release.transition` 重放同一请求不产生第二个 release 提交（断言 Fake 的调用次数与最后请求体一致）；`release.transition` 被改动导致重放不同请求时断言按 AM 的 `409` 失败收口（`release.phase=Failed` + `PublishSucceed=False`）。
 
 **条件、时间与观测**
@@ -813,7 +806,7 @@ buildinfos:      get
 - 条件与时间：`RepositoryReady` / `PublishSucceed` 的 reason 固定短语；`repository.updatedAt` 与 `release.updatedAt` 仅在对应字段有效写入时更新，且重试期间不更新 `repository.updatedAt`（`observedGeneration`、FakeClock / UTC 与 `MergeCondition` 的断言见「时间、退避与条件纯函数」条）。
 - 指标：断言 §11 列出的指标均已注册；过程仓失败收口、每次重放、发布失败终局（发布不可重试失败与"无可用版本"终局）分别使 `rpmrepo_controller_repository_failed_total` / `rpmrepo_controller_materialize_retries_total` / `rpmrepo_controller_release_failed_total` 各递增一次。
 
-- status 写错误 Outcome：覆盖 NotSent 的本地校验错误与临时网络错误，分别断言 PermanentError 与框架重试；覆盖 Rejected 的 404（结束）、408/429/5xx（重试）、400/401/403/422（PermanentError），均不执行 Unknown 确认 GET、不额外写业务终态。检查点或相位写入未确认时，断言不继续 SubmitRepository、SubmitRelease 或 ActivateRelease；Manager context 取消时不发起后续请求。
+- status 写错误 Outcome：覆盖 NotSent 的本地校验错误与临时网络错误，分别断言 PermanentError 与框架重试；覆盖 Rejected 的 404（结束）、408/429/5xx（重试）、400/401/403/422（PermanentError），均不执行 Unknown 确认 GET、不额外写业务终态。检查点或相位写入未确认时，断言不继续 SubmitRepository 或 SubmitRelease；Manager context 取消时不发起后续请求。
 
 ### 14.2 集成测试
 
@@ -823,7 +816,7 @@ buildinfos:      get
 - 列表完整分页：分别覆盖 `ListJobs` / `ListRpmRepos` 的多页聚合、空页带 Continue、短页带 Continue、首页即空、Limit 默认值与自定义值、调用方 Continue 被清空且原参数未变；断言每页选择器与项目作用域不变。第二页失败、410、解码失败或 context 取消时返回 nil 集合与错误，下一次调用从首页开始；重复游标终止扫描。后续页含未消费 Job 或在途发布时不得遗漏，第一页成功但后续页失败不得触发任何物化、发布或 status 写入；
 - 首次发布完整复核：发布候选即使满足粗筛条件，只要还有未消费且未跳过的成功 Job（含后续分页中的 Job），就不得写发布检查点或提交发布；任意页读取失败不得按空候选处理。有未消费候选时断言重新入队同一对象 key；扫描期间过程仓版本变化时断言发布 CAS 冲突并重新调谐，不刷新 resourceVersion 重放。已有发布检查点时断言恢复原检查点、不重新选版本或调用发布策略；
 - finalizer 收敛：覆盖创建时注入且不重复、清理未确认时拒绝移除、在途操作等待、重启恢复、其他 finalizer 保留、主资源写入 Conflict/Unknown 确认；确认失败保留 finalizer，下一轮使用最新对象重算。
-- 仓库清理：父 Build/BuildInfo 删除仅排空；RpmRepo 删除时调用按 Project/Arch/BuildName 删除接口，202/404/409/失败或未知结果保留 finalizer，仅 204 后移除；Prepared 不激活，不按继承 repositoryUID 删除其它 Build 的仓库，重复请求可恢复。
+- 仓库清理：父 Build/BuildInfo 删除仅排空；RpmRepo 删除时调用按 Project/BuildName 删除接口，202/404/409/失败或未知结果保留 finalizer，仅 204 后移除；已停止的发布不再自动激活，不按继承 repositoryUID 删除其它 Build 的仓库，重复请求可恢复。
 - 停止确认：未提交成功和可重试 Failed 的检查点可在停止接口 204 后清空；202 延迟重入，404、传输/存储错误保留检查点。覆盖确认响应丢失、Controller 重启后重试，以及原本没有检查点时仍建立停止标记。
 - 候选跳过不阻塞：按时间排序构造多个无检查点候选，首个分别为 Build 缺失、标签不匹配、BuildInfo 未就绪或有未消费 Job，后一个已就绪；断言同轮跳过前者并推进后者。全部跳过时返回零值 + nil；临时读取错误或 PermanentError 不继续扫描；首个为异常在途对象时保留检查点并阻塞新发布。
 - 幂等：相同 UID 相同请求并发提交只产生一个版本；相同 UID 不同摘要按 `409` 收口；
@@ -841,6 +834,6 @@ buildinfos:      get
 - Artifact Manager 侧记录被删除：在途 `GetRepository` 返回 `200 Deleting` 时断言一次 CAS 失败收口（`RepositoryReady=False` + `release.phase=Failed` + `PublishSucceed=False`）并输出 `reason=RepositoryCreationFailed` 告警；`GetRelease` 返回 `Deleting` 时断言发布失败收口并输出 `reason=ReleaseFailed` 告警；
 - 运行兜底：外部清空 `release`（`repository.transition` 保留 + `RepositoryReady=False`）后，断言对象在下一轮轮询重新收敛为发布失败终局、不再零进展；`RepositoryUIDMismatch` 端到端断言对象按不可重试失败收口、Build 收敛 `Failed/publish`，而非持续空转。
 - 永久错误仅日志暴露：撤销控制器读取权限（或注入 `401` / `403`）后断言对象不丢、`RpmRepo.status` 不变、每轮仅产生 `result=permanent-error` 日志且不新增计数；恢复权限后断言下一轮自动继续推进（自愈）。
-- 发布重启（逐崩溃窗口）：① 策略判定后未写检查点 → 重启后重新判定得到相同 `excludeSpecs`，不产生第二个 release；② 检查点已写、`SubmitRelease` 未被接受 → `GetRelease` 返回 `404` 时用同一请求重放；③ 提交已受理、相位未补齐 → `GetRelease` 返回 `Creating` / `Prepared` 时补齐相位后继续等待或激活；④ 激活成功后收口写入前 → `GetRelease` 返回 `Ready` 时直接成功收口；⑤ 失败收口写入前 → `GetRelease` 仍不可重试失败时重新收口；⑥ 收口写入结果未知后重启 → 基于最新对象恢复，删除中则恢复第一章的清理流程；否则完成父资源清理检查后，业务终态停止推进，非终态重新读取依赖与发布结果计算决策；不沿用旧收口目标；⑦ `Requeue: true` 丢失 → 由 RpmRepo 轮询按同一对象 key 重新入队；全部窗口均不产生第二个 release 版本。
+- 发布重启（逐崩溃窗口）：① 策略判定后未写检查点 → 重启后重新判定得到相同 `excludeSpecs`，不产生第二个 release；② 检查点已写、`SubmitRelease` 未被接受 → `GetRelease` 返回 `404` 时用同一请求重放；③ 提交已受理、相位未补齐 → `GetRelease` 返回 `Creating` 时补齐相位后继续等待；④ 激活成功后收口写入前 → `GetRelease` 返回 `Ready` 时直接成功收口；⑤ 失败收口写入前 → `GetRelease` 仍不可重试失败时重新收口；⑥ 收口写入结果未知后重启 → 基于最新对象恢复，删除中则恢复第一章的清理流程；否则完成父资源清理检查后，业务终态停止推进，非终态重新读取依赖与发布结果计算决策；不沿用旧收口目标；⑦ `Requeue: true` 丢失 → 由 RpmRepo 轮询按同一对象 key 重新入队；全部窗口均不产生第二个 release 版本。
 
 验收场景沿用 `docs/zh/design/artifact-manager.md` §8.12 的 11 条并改写为可断言用例。

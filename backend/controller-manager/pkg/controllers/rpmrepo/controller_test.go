@@ -266,7 +266,7 @@ func TestReleaseTerminalIncludesSkipped(t *testing.T) {
 			name: "prepared",
 			repo: func() *ebsv1.RpmRepo {
 				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePrepared}
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseCreating}
 				return repo
 			}(),
 			want: false,

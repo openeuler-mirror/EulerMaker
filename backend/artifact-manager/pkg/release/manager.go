@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -183,12 +184,16 @@ func (m *Manager) worker() {
 			delete(m.queued, name)
 			record := cloneRelease(m.records[name])
 			if record == nil || m.running[name] ||
-				(record.State != ReleaseCreating && record.State != ReleaseDeleting) {
+				(record.State != ReleaseCreating && record.State != ReleasePrepared && record.State != ReleaseDeleting) {
 				m.mu.Unlock()
 				continue
 			}
 			m.running[name] = true
 			m.mu.Unlock()
+			if record.State == ReleasePrepared {
+				m.finishActivation(name)
+				continue
+			}
 			if record.State == ReleaseDeleting {
 				m.remove(name)
 				m.mu.Lock()
@@ -255,32 +260,46 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 		m.mu.Unlock()
 		return
 	}
+	m.running[completed.BuildName] = true
 	m.mu.Unlock()
-	_, _, _ = m.Activate(completed.BuildName)
+	m.finishActivation(completed.BuildName)
 }
 
-func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
+func (m *Manager) finishActivation(name string) {
+	if err := m.activate(name); err != nil {
+		log.Printf("release=%q activation deferred: %v", name, err)
+	}
+	m.mu.Lock()
+	delete(m.running, name)
+	m.mu.Unlock()
+}
+
+// activate commits the prepared directory to the stable entry point. Failures leave the checkpoint retryable.
+func (m *Manager) activate(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cleaningBuilds[name] {
-		return nil, 0, &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
+		return &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
 	}
 	record, err := m.recordLocked(name)
 	if err != nil {
-		return nil, 0, releaseStorageError()
+		return releaseStorageError()
 	}
 	if record == nil {
-		return nil, 0, &Error{Code: "ReleaseNotFound", Status: http.StatusNotFound}
+		return &Error{Code: "ReleaseNotFound", Status: http.StatusNotFound}
+	}
+	if record.State == ReleaseReady {
+		return nil
 	}
 	if err := repository.CheckBuildActive(m.root, record.Project, record.BuildName); err != nil {
-		return nil, 0, releaseStopError(err)
+		return releaseStopError(err)
 	}
-	if record.State != ReleasePrepared && record.State != ReleaseReady {
-		return nil, 0, &Error{Code: "ReleaseNotReady", Status: http.StatusConflict}
+	if record.State != ReleasePrepared {
+		return &Error{Code: "ReleaseNotReady", Status: http.StatusConflict}
 	}
 	targetDir := m.releaseTargetDir(record)
 	if err := ensureStableLinks(targetDir, m.publicKey != ""); err != nil {
-		return nil, 0, releaseStorageError()
+		return releaseStorageError()
 	}
 	target := filepath.ToSlash(filepath.Join("releases", record.BuildName))
 	current := filepath.Join(targetDir, "current")
@@ -289,16 +308,21 @@ func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	} else {
 		temporary := filepath.Join(targetDir, ".current-"+fileutil.NewID("r"))
 		if err := os.Symlink(target, temporary); err != nil {
-			return nil, 0, releaseStorageError()
+			return releaseStorageError()
 		}
 		if err := os.Rename(temporary, current); err != nil {
 			_ = os.Remove(temporary)
-			return nil, 0, releaseStorageError()
+			return releaseStorageError()
 		}
-		if dir, err := os.Open(targetDir); err == nil {
-			_ = dir.Sync()
-			_ = dir.Close()
-		}
+	}
+	dir, err := os.Open(targetDir)
+	if err != nil {
+		return releaseStorageError()
+	}
+	err = dir.Sync()
+	dir.Close()
+	if err != nil {
+		return releaseStorageError()
 	}
 	now := time.Now().UTC()
 	record.State, record.UpdatedAt = ReleaseReady, now
@@ -306,9 +330,9 @@ func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 		record.CompletedAt = &now
 	}
 	if err := m.persist(record); err != nil {
-		return nil, 0, releaseStorageError()
+		return releaseStorageError()
 	}
-	return cloneRelease(record), http.StatusOK, nil
+	return nil
 }
 
 func ensureStableLinks(targetDir string, publicKey bool) error {
@@ -433,6 +457,13 @@ func (m *Manager) retryPending() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for name, record := range m.records {
+		if record.State == ReleasePrepared {
+			// A persisted stop marker also fences recovered and queued activation attempts.
+			if err := repository.CheckBuildActive(m.root, record.Project, name); err != nil {
+				continue
+			}
+			m.enqueueLocked(name)
+		}
 		if record.State == ReleaseCreating || record.State == ReleaseDeleting {
 			m.enqueueLocked(name)
 		}
@@ -545,6 +576,7 @@ func ResponseFor(record *ReleaseRecord) ReleaseResponse {
 		response.ContentURL = releaseContentURL(record)
 	}
 	if record.State == ReleaseCreating || record.State == ReleasePrepared {
+		response.State = ReleaseCreating
 		response.PollAfterSeconds = 5
 	}
 	return response

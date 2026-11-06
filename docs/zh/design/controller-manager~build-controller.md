@@ -776,7 +776,7 @@ oldjobs:        get, list, delete
 
 - 发布收口映射（成功）：`RpmRepo.status.release.phase=Ready` 时，断言同一次 `/status` 写入 `Build.status.phase=Success`、`stage=publish`、`endTime` 非空与 `PublishSucceed=True/PublishSucceeded`；
 - 发布收口映射（失败）：`release.phase=Failed` 时，断言同一次 `/status` 写入 `phase=Failed`、`stage=publish`、`endTime` 非空与 `PublishSucceed=False/PublishFailed`，不覆盖已写入的 `BuildSucceed`；
-- 等待语义：`RpmRepo.status.release` 缺失或 `release.phase` 为 `Pending` / `Creating` / `Prepared` 时断言不写 `Build.status`、返回零值 + `nil`；收口完成后下一轮收敛到同一终态；
+- 等待语义：`RpmRepo.status.release` 缺失或 `release.phase` 为 `Pending` / `Creating` 时断言不写 `Build.status`、返回零值 + `nil`；收口完成后下一轮收敛到同一终态；
 - 跳过发布：非 single 的 `spec.publish=false` 断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo；
 - `Build.spec.buildType=single` 分支：验证所有阶段不创建或读取 RpmRepo；覆盖目标仓库含多个 spec、统一结果全部 Succeeded、部分 BuildFailed/InstallFailed、空 map、缺失结果，按 7.4 断言 Success/build 或 Failed/build，并写入 endTime 和 BuildSucceed，不写 PublishSucceed。Success/build 重入不再写状态或读取子资源。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
 - API 交互：`/status` 保留 spec、AlreadyExists 与 Conflict 的处理、`GetLastPublishedBuild` 通过项目级 List 路径限定 Project；

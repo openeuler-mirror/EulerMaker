@@ -350,6 +350,9 @@ func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 			TargetArch: "arch",
 			State:      state,
 		}
+		if state == ReleasePrepared {
+			writePreparedRelease(t, m, record)
+		}
 		if err := fileutil.AtomicJSON(m.recordMetaPath(record), record); err != nil {
 			t.Fatal(err)
 		}

@@ -97,7 +97,7 @@ func TestRepositoryCleanupFailureRetainsFinalizer(t *testing.T) {
 	}
 }
 
-func TestCleanupDrainsPreparedReleaseWithoutActivation(t *testing.T) {
+func TestCleanupDrainsCreatingRelease(t *testing.T) {
 	client, artifacts := NewFakeClient(), NewFakeArtifactManager()
 	build := newBuild(testBuild)
 	now := metav1.Now()
@@ -105,7 +105,7 @@ func TestCleanupDrainsPreparedReleaseWithoutActivation(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = build
 	repo := newRpmRepo(testBuild)
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{
-		Phase: ebsv1.RpmRepoReleasePrepared, Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "source"},
+		Phase: ebsv1.RpmRepoReleaseCreating, Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "source"},
 	}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	c := newTestController(t, client, artifacts, testConfig())
@@ -116,8 +116,8 @@ func TestCleanupDrainsPreparedReleaseWithoutActivation(t *testing.T) {
 	if current.Status.Release.Transition != nil || !meta.IsStatusConditionTrue(current.Status.Conditions, ebsv1.RpmRepoConditionCleanupReady) {
 		t.Fatalf("prepared release not drained: %+v", current.Status)
 	}
-	if len(artifacts.ActivateReleaseNames) != 0 || len(artifacts.DeleteBuildRequests) != 0 {
-		t.Fatal("parent deletion must only drain work, not activate or physically remove repositories")
+	if len(artifacts.DeleteBuildRequests) != 0 {
+		t.Fatal("parent deletion must only drain work, not physically remove repositories")
 	}
 }
 

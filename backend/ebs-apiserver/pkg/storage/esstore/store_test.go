@@ -373,8 +373,8 @@ func TestStatusFieldSelectors(t *testing.T) {
 		{
 			name:     "rpm release phase",
 			resource: "rpmrepo",
-			selector: "status.release.phase=Prepared",
-			want:     []string{`"data.status.release.phase"`, `"Prepared"`},
+			selector: "status.release.phase=Creating",
+			want:     []string{`"data.status.release.phase"`, `"Creating"`},
 		},
 		{
 			name:     "stage requires existence",

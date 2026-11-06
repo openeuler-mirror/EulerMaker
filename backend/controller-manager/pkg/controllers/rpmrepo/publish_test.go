@@ -28,7 +28,7 @@ func releasableRpmRepo(name string) *ebsv1.RpmRepo {
 	return repo
 }
 
-func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
+func TestReconcileReleaseSubmitsPollsAndCollects(t *testing.T) {
 	client := NewFakeClient()
 	repo := releasableRpmRepo(testBuild)
 	client.RpmRepos[key(testProject, testBuild)] = repo
@@ -39,9 +39,9 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
-	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/" + testProject + "/" + testArch + "/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -49,6 +49,14 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
 	if err != nil {
 		t.Fatalf("sync: %v", err)
+	}
+	if result.RequeueAfter != 5*time.Second {
+		t.Fatalf("creating release must wait for the poll delay: %+v", result)
+	}
+	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*client.RpmRepos[key(testProject, testBuild)].DeepCopy()}
+	result, err = c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
+	if err != nil {
+		t.Fatalf("poll: %v", err)
 	}
 	if !result.Requeue {
 		t.Fatalf("a successful release must ask for the next candidate, got %+v", result)
@@ -69,11 +77,11 @@ func TestReconcileReleaseSubmitsActivatesAndCollects(t *testing.T) {
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionTrue, ebsv1.RpmRepoReasonReleaseActivated) {
 		t.Fatalf("PublishSucceed=True/ReleaseActivated missing: %+v", updated.Status.Conditions)
 	}
-	if len(artifacts.SubmitReleaseRequests) != 1 || len(artifacts.ActivateReleaseNames) != 1 {
-		t.Fatalf("expected one submit and one activation, got %d/%d", len(artifacts.SubmitReleaseRequests), len(artifacts.ActivateReleaseNames))
+	if len(artifacts.SubmitReleaseRequests) != 1 || len(artifacts.GetReleaseBuildNames) != 1 {
+		t.Fatalf("expected one submit and one poll, got %d/%d", len(artifacts.SubmitReleaseRequests), len(artifacts.GetReleaseBuildNames))
 	}
-	if len(client.RpmRepoListOptions) != 1 {
-		t.Fatalf("expected one RpmRepo list call, got %d", len(client.RpmRepoListOptions))
+	if len(client.RpmRepoListOptions) != 2 {
+		t.Fatalf("expected one RpmRepo list call per round, got %d", len(client.RpmRepoListOptions))
 	}
 	options := client.RpmRepoListOptions[0]
 	if options.FieldSelector != nonTerminalRpmRepoFieldSelector {
@@ -164,7 +172,7 @@ func TestReconcileReleaseCollectsAbortedInFlight(t *testing.T) {
 	client := NewFakeClient()
 	repo := releasableRpmRepo(testBuild)
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{
-		Phase:      ebsv1.RpmRepoReleasePrepared,
+		Phase:      ebsv1.RpmRepoReleaseCreating,
 		Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "repo-1"},
 	}
 	client.RpmRepos[key(testProject, testBuild)] = repo
@@ -186,7 +194,7 @@ func TestReconcileReleaseCollectsAbortedInFlight(t *testing.T) {
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted) {
 		t.Fatalf("PublishSucceed=False/BuildAborted missing: %+v", updated.Status.Conditions)
 	}
-	if len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+	if len(artifacts.GetReleaseBuildNames) != 0 {
 		t.Fatalf("the abort terminal must not call Artifact Manager")
 	}
 }
@@ -215,7 +223,7 @@ func TestReconcileReleaseSkipsCandidateWhenPolicySaysNo(t *testing.T) {
 	if len(client.StatusWrites) != 1 {
 		t.Fatalf("a policy skip must persist one terminal status, got %d writes", len(client.StatusWrites))
 	}
-	if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+	if len(artifacts.SubmitReleaseRequests) != 0 {
 		t.Fatalf("a skipped candidate must not reach Artifact Manager")
 	}
 	if repo := client.RpmRepos[key(testProject, testBuild)]; repo.Status.Release == nil || repo.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {
@@ -361,7 +369,7 @@ func TestReleaseRecheckDependencyErrorsKeepTheirClass(t *testing.T) {
 			if policy.calls != 0 {
 				t.Fatalf("the publish policy must not be consulted, got %d calls", policy.calls)
 			}
-			if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+			if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 {
 				t.Fatalf("a failed read must not reach Artifact Manager")
 			}
 		})
@@ -471,7 +479,7 @@ func TestResumeReleaseStopsOnAbortOrMismatch(t *testing.T) {
 		if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted) {
 			t.Fatalf("PublishSucceed=False/BuildAborted missing: %+v", stored.Status.Conditions)
 		}
-		if len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+		if len(artifacts.GetReleaseBuildNames) != 0 {
 			t.Fatalf("the abort terminal must not call Artifact Manager")
 		}
 	})
@@ -733,7 +741,7 @@ func TestReleaseReplaysRetryableFailureWithFrozenCheckpoint(t *testing.T) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -882,7 +890,7 @@ func TestResumeReleaseToleratesAClearedCheckpoint(t *testing.T) {
 			if result != (controller.ReconcileResult{}) {
 				t.Fatalf("a cleared checkpoint must converge this round, got %+v", result)
 			}
-			if len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+			if len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
 				t.Fatalf("a cleared checkpoint must not reach Artifact Manager")
 			}
 			if len(client.StatusWrites) != 0 {
@@ -938,8 +946,7 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	// The phase advance lands without its checkpoint: the unknown write must not be confirmed, and nothing may
-	// follow it (no activation with a checkpoint that no longer exists).
+	// The phase advance lands without its checkpoint: the unknown write must not be confirmed.
 	client.UpdateStatusHook = func(request, current *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
 		updated := current.DeepCopy()
 		updated.Status = request.DeepCopy().Status
@@ -950,10 +957,7 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 	}
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
-	}
-	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/project/aarch64/", UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -964,8 +968,8 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 	if result.RequeueAfter != conflictRequeueDelay {
 		t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, conflictRequeueDelay)
 	}
-	if len(artifacts.ActivateReleaseNames) != 0 {
-		t.Fatalf("an unconfirmed phase advance must not be followed by an activation")
+	if len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("an unconfirmed phase advance must not replay the release")
 	}
 }
 
@@ -1007,11 +1011,11 @@ func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	}
 }
 
-func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
+func TestReconcileReleasePollsCreatingOncePerRound(t *testing.T) {
 	client := NewFakeClient()
 	repo := releasableRpmRepo(testBuild)
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{
-		Phase:      ebsv1.RpmRepoReleasePrepared,
+		Phase:      ebsv1.RpmRepoReleaseCreating,
 		Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "repo-1"},
 	}
 	client.RpmRepos[key(testProject, testBuild)] = repo
@@ -1020,11 +1024,7 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
-	}
-	artifacts.ActivateReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
-		// Activation never converges: the round must still stop after one activation.
-		return ReleaseResponse{BuildName: buildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -1032,8 +1032,8 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if len(artifacts.ActivateReleaseNames) != 1 {
-		t.Fatalf("expected exactly one activation per round, got %d", len(artifacts.ActivateReleaseNames))
+	if len(artifacts.GetReleaseBuildNames) != 1 || len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("creating release must only be polled once: %+v", artifacts)
 	}
 	if result.RequeueAfter != 5*time.Second {
 		t.Fatalf("RequeueAfter = %s, want the poll delay", result.RequeueAfter)
@@ -1230,7 +1230,7 @@ func TestReconcileReleaseSkipsSkippedObjectsFromAStaleSnapshot(t *testing.T) {
 	if client.GetBuildCalls != 0 {
 		t.Fatalf("the terminal check must run before reading the Build, got %d reads", client.GetBuildCalls)
 	}
-	if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+	if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 {
 		t.Fatalf("a skipped object must not reach Artifact Manager")
 	}
 	if stored := client.RpmRepos[key(testProject, testBuild)]; stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {

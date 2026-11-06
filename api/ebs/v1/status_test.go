@@ -214,7 +214,7 @@ func TestBuildPhase(t *testing.T) {
 
 func TestRpmRepoReleasePhase(t *testing.T) {
 	for _, phase := range []RpmRepoReleasePhase{
-		RpmRepoReleasePending, RpmRepoReleaseCreating, RpmRepoReleasePrepared,
+		RpmRepoReleasePending, RpmRepoReleaseCreating,
 		RpmRepoReleaseReady, RpmRepoReleaseFailed, RpmRepoReleaseSkipped,
 	} {
 		if !phase.IsValid() {
