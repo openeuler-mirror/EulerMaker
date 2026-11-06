@@ -51,10 +51,6 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 		}
 	}()
 	results := make([]resolveResult, 0, len(targets))
-	nameCount := make(map[string]int)
-	for _, repo := range targets {
-		nameCount[repo.Name]++
-	}
 	tasks := make([]resolveTask, 0, len(targets))
 	indices := make(map[string]int, len(snapshot.Spec.PackageRepos))
 	for index, repo := range snapshot.Spec.PackageRepos {
@@ -63,10 +59,6 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 	for _, repo := range targets {
 		index := indices[repo.Name]
 		repo = effectiveRepo(repo, snapshot.Spec.DefaultRef)
-		if nameCount[repo.Name] > 1 {
-			results = append(results, skippedResult(index, repo, ebsv1.PackageRepoValidationFailed, "duplicate package repository name"))
-			continue
-		}
 		if status, ok := snapshot.Status.PackageRepoStatuses[repo.Name]; ok && (status.CommitID != "" || (status.Error != nil && !status.Error.Retryable)) {
 			c.failures.set(snapshot.UID, repo.Name, 0)
 			continue
@@ -123,18 +115,15 @@ func (c *Controller) resolveAll(parent context.Context, snapshot *ebsv1.Snapshot
 			}
 		}()
 	}
-	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(resultCh)
-		close(done)
 	}()
 	received := make(map[int]struct{}, len(tasks))
 	for result := range resultCh {
 		results = append(results, result)
 		received[result.index] = struct{}{}
 	}
-	<-done
 	c.failures.setCursor(snapshot.UID, nextCursor)
 	if parent.Err() != nil {
 		return nil, parent.Err()
@@ -214,7 +203,7 @@ func (c *Controller) requestFailure(ctx context.Context, task resolveTask, opera
 }
 
 func (c *Controller) gitFailure(task resolveTask, operation string, err error) (out resolveResult) {
-	if errors.Is(err, context.Canceled) && err != context.DeadlineExceeded {
+	if errors.Is(err, context.Canceled) {
 		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: err}
 	}
 	kind, classified := gitErrorKind(err)
@@ -225,7 +214,10 @@ func (c *Controller) gitFailure(task resolveTask, operation string, err error) (
 	case gitserver.ErrorNotFound:
 		return skippedResult(task.index, task.repo, ebsv1.PackageRepoResolveFailed, "Git ref or commit was not found")
 	case gitserver.ErrorPermanent:
-		return resolveResult{index: task.index, repo: task.repo, state: stateFatal, fatal: controllerPermanent(err)}
+		return resolveResult{
+			index: task.index, repo: task.repo, state: stateFatal,
+			fatal: controller.NewPermanentError(fmt.Errorf("git-server permanent error: %w", err)),
+		}
 	default:
 		if isTimeout(err) {
 			return failedResult(task.index, task.repo, ebsv1.PackageRepoSyncTimeout, operation+" request timed out")
@@ -325,6 +317,10 @@ func effectiveRepo(repo ebsv1.PackageRepo, defaultRef string) ebsv1.PackageRepo 
 	return repo
 }
 
-func controllerPermanent(err error) error {
-	return controller.NewPermanentError(fmt.Errorf("git-server permanent error: %w", err))
+func gitErrorKind(err error) (gitserver.ErrorKind, bool) {
+	var target *gitserver.Error
+	if errors.As(err, &target) {
+		return target.Kind, true
+	}
+	return gitserver.ErrorTemporary, false
 }

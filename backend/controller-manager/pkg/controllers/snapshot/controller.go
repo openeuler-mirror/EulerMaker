@@ -37,12 +37,11 @@ func (c Config) validate() error {
 
 type Controller struct {
 	*controller.BaseController
-	snapshots source.Source
-	client    Client
-	services  serviceconfig.Provider
-	clock     clock.Clock
-	config    Config
-	failures  *failureTracker
+	client   Client
+	services serviceconfig.Provider
+	clock    clock.Clock
+	config   Config
+	failures *failureTracker
 }
 
 func New(snapshots source.Source, client Client, services serviceconfig.Provider, clk clock.Clock, config Config) (*Controller, error) {
@@ -51,18 +50,22 @@ func New(snapshots source.Source, client Client, services serviceconfig.Provider
 
 func newController(snapshots source.Source, client Client, services serviceconfig.Provider, clk clock.Clock, config Config, options ...controller.Option) (*Controller, error) {
 	if snapshots == nil || client == nil || services == nil || clk == nil {
-		return nil, fmt.Errorf("Snapshot source, API client, git-server client and clock are required")
+		return nil, fmt.Errorf("Snapshot source, API client, service configuration provider and clock are required")
 	}
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	c := &Controller{snapshots: snapshots, client: client, services: services, clock: clk, config: config, failures: newFailureTracker()}
+	c := &Controller{client: client, services: services, clock: clk, config: config, failures: newFailureTracker()}
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {
 		return nil, err
 	}
 	c.BaseController = base
-	if err := snapshots.AddEventHandler(source.ResourceEventHandlerFuncs{AddFunc: c.onAdd, UpdateFunc: c.onUpdate}); err != nil {
+	if err := snapshots.AddEventHandler(source.ResourceEventHandlerFuncs{
+		AddFunc:    c.enqueueSnapshot,
+		UpdateFunc: c.onUpdate,
+		DeleteFunc: c.onDelete,
+	}); err != nil {
 		return nil, fmt.Errorf("register Snapshot handler: %w", err)
 	}
 	return c, nil
@@ -80,9 +83,13 @@ func Initializer(config Config, services serviceconfig.Provider) manager.InitFun
 	}
 }
 
-func (c *Controller) onAdd(obj runtime.Object) { c.enqueueSnapshot(obj) }
-
 func (c *Controller) onUpdate(_, newObj runtime.Object) { c.enqueueSnapshot(newObj) }
+
+func (c *Controller) onDelete(obj runtime.Object) {
+	if snapshot, ok := obj.(*ebsv1.Snapshot); ok && snapshot != nil {
+		c.failures.clearUID(snapshot.UID)
+	}
+}
 
 func (c *Controller) enqueueSnapshot(obj runtime.Object) {
 	snapshot, ok := obj.(*ebsv1.Snapshot)
@@ -90,7 +97,9 @@ func (c *Controller) enqueueSnapshot(obj runtime.Object) {
 		log.Printf("controller=%s reason=UnexpectedSnapshotEvent type=%T", Name, obj)
 		return
 	}
-	if snapshot.DeletionTimestamp == nil {
-		c.Enqueue(snapshot.Namespace + "/" + snapshot.Name)
+	if snapshot.DeletionTimestamp != nil {
+		c.failures.clearUID(snapshot.UID)
+		return
 	}
+	c.Enqueue(snapshot.Namespace + "/" + snapshot.Name)
 }

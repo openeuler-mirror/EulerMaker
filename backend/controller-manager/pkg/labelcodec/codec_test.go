@@ -1,4 +1,4 @@
-package specname
+package labelcodec
 
 import (
 	"testing"

@@ -17,7 +17,7 @@ import (
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
-	"controller-manager/pkg/controllers/specname"
+	"controller-manager/pkg/labelcodec"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -140,7 +140,7 @@ func TestPackageNameLabelValue(t *testing.T) {
 		{"my-pkg_1.0", "my-pkg_5F1.0"},
 		{"dvd+rw-tools", "dvd_2Brw-tools"},
 		{"pkg.", "pkg_2E"},
-		{"中文+包", specname.Encode("中文+包")},
+		{"中文+包", labelcodec.Encode("中文+包")},
 		{strings.Repeat("x", 70), strings.Repeat("x", 63)},
 		{strings.Repeat("a", 62) + "-" + strings.Repeat("b", 10), strings.Repeat("a", 62)},
 		{strings.Repeat("a", 62) + "+", strings.Repeat("a", 62)},
@@ -276,7 +276,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	}
 	wantLabels := map[string]string{
 		ebsv1.JobBuildNameLabel:    testBuild,
-		ebsv1.JobSpecNameLabel:     specname.Encode("a"),
+		ebsv1.JobSpecNameLabel:     labelcodec.Encode("a"),
 		ebsv1.JobPackageNameLabel:  packageNameLabelValue("repo1"),
 		ebsv1.BuildTargetArchLabel: testArch,
 	}
@@ -809,7 +809,7 @@ func TestDispatchSpecSharesScriptObservationWithinRound(t *testing.T) {
 		t.Fatalf("Script reads across rounds = %d, want 2", client.scriptReads)
 	}
 	for _, job := range listJobs(t, client) {
-		if job.Labels[ebsv1.JobSpecNameLabel] == specname.Encode("c") &&
+		if job.Labels[ebsv1.JobSpecNameLabel] == labelcodec.Encode("c") &&
 			(len(job.Spec.ScriptRefs) != 1 || job.Spec.ScriptRefs[0].ResourceVersion != "2") {
 			t.Fatalf("new round Job ScriptRefs = %+v, want current observation", job.Spec.ScriptRefs)
 		}
@@ -969,7 +969,7 @@ func TestDispatchSpecRejectedJobDoesNotBlockIndependentSpec(t *testing.T) {
 				t.Fatalf("independent spec status = %+v", got)
 			}
 			if jobs := listJobs(t, client); len(jobs) != 1 ||
-				jobs[0].Labels[ebsv1.JobSpecNameLabel] != specname.Encode("b") {
+				jobs[0].Labels[ebsv1.JobSpecNameLabel] != labelcodec.Encode("b") {
 				t.Fatalf("created Jobs = %+v, want only b", jobs)
 			}
 		})

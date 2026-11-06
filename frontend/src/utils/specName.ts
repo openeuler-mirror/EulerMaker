@@ -1,4 +1,4 @@
-// Keep this byte-level encoding in sync with controller-manager/pkg/controllers/specname.
+// Keep this byte-level encoding in sync with controller-manager/pkg/labelcodec.
 export function encodeSpecName(name: string): string {
   const bytes = new TextEncoder().encode(name);
   const alphaNumeric = (byte: number) => byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57;
