@@ -2,6 +2,7 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -26,9 +27,23 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 		switch request.URL.Path {
 		case "/apis/iam.ebs/v1/users/alice":
 			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`
-		case "/internal/iam/v1/authenticate":
+		case "/internal/iam/v1/users/authenticate":
+			var input struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.Username != "alice" || input.Password != "password" {
+				t.Fatalf("unexpected user authentication request: %+v, %v", input, err)
+			}
 			body = `{"authenticated":true,"username":"alice"}`
-		case "/internal/iam/v1/machineaccounts/worker/authenticate":
+		case "/internal/iam/v1/machineaccounts/authenticate":
+			var input struct {
+				Name         string `json:"name"`
+				ClientSecret string `json:"clientSecret"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.Name != "worker" || input.ClientSecret != "secret" {
+				t.Fatalf("unexpected machine authentication request: %+v, %v", input, err)
+			}
 			body = `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600}`
 		default:
 			t.Errorf("unexpected path %s", request.URL.Path)
@@ -51,7 +66,7 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 	if err != nil || status != http.StatusOK || !valid || ttl != 3600 {
 		t.Fatalf("AuthenticateMachine() = %d, %v, %d, %v", ttl, valid, status, err)
 	}
-	if got := strings.Join(paths, ", "); got != "GET /apis/iam.ebs/v1/users/alice, POST /internal/iam/v1/authenticate, POST /internal/iam/v1/machineaccounts/worker/authenticate" {
+	if got := strings.Join(paths, ", "); got != "GET /apis/iam.ebs/v1/users/alice, POST /internal/iam/v1/users/authenticate, POST /internal/iam/v1/machineaccounts/authenticate" {
 		t.Fatalf("unexpected IAM request sequence %q", got)
 	}
 }

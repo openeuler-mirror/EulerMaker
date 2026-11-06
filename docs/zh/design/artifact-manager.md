@@ -107,11 +107,11 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | Job 数据删除 | 文件删除不持 Store 锁，释放订阅和恢复标记时加锁 | 调用方先停止该 Job 的写入和依赖任务；接口同步返回，不创建后台删除任务 |
 | 过程仓任务 | Repository Manager 全局读写锁及 `queued/running` 集合 | 提交、去重、状态落盘和队列标记受锁保护；物化和外部命令在锁外运行，完成后重新检查状态 |
 | 发布任务与 current | Release Manager 全局读写锁及任务集合 | 正文生成在锁外；状态提交与 current 切换在锁内，不同目标的激活也串行 |
-| 按 Build 删除仓库 | 先 Release Manager、后 Repository Manager，各自持写锁检查活动任务并执行文件删除 | 不同时持有两个 Manager 的锁；调用方须停止新提交；大目录清理可能阻塞同模块的请求和 worker 状态提交 |
+| 按 Build 删除仓库 | Manager 锁内检查活动任务并登记 Build 清理占用，递归文件删除在锁外执行 | 清理完成后锁内移除索引，其他 Build 可继续处理；完整协议见 13.2 |
 | 按 Build 停止仓库操作 | 依次持 Release Manager、Repository Manager 写锁持久化停止标记 | 与提交及激活串行；不持锁等待后台任务结束，尚有活动任务时返回 202 |
 | 鉴权、SSE | 认证缓存内部同步；订阅集合由 Store 锁保护 | 网络鉴权与 HTTP 流式发送不长期占用业务状态锁；慢订阅者断开，不反压上传 |
 
-跨模块调用先获取源数据快照，再进入本模块的状态临界区；不在持有 Release Manager 锁时调用 Repository Manager，也不在持有 Store 或 Repository Manager 锁时执行签名命令。Store 不回调上层 Manager。当前不存在跨进程锁，多个可写实例不能共享同一数据目录。
+跨模块调用先获取源数据快照，再进入本模块的状态临界区；13.2 的停止标记操作按 Release Manager → Repository Manager 固定顺序加锁，其余跨模块操作不嵌套持有两个 Manager 的锁。不在持有 Store 或 Repository Manager 锁时执行签名命令；Store 不回调上层 Manager。当前不存在跨进程锁，多个可写实例不能共享同一数据目录。
 
 正文生成与删除之间不通过持有全程锁来协调，具体竞态边界见 8.10。全局 Store 锁可能使慢磁盘、日志重放或封账影响其他 Job；细粒度锁优化属于后续工作，不能将配置的 worker 数直接等同于端到端并行度。
 
@@ -1552,9 +1552,9 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 
 文件删除不持 Store 全局锁；成功后加锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
 
-上层接入契约：Job 删除先归档到 OldJob，源 Job 不调用本接口。只有删除中的 OldJob，确认源迁移完成、停止写入及输入使用者排空后，由 Job Controller 调用本接口；204 确认后移除 OldJob 的 `ebs.io/job-cleanup`。失败或未知时保留 OldJob 和 finalizer，允许幂等重试。apiserver 不直接连接 Artifact Manager，BuildInfo Controller 编排 Job/OldJob 删除，Build Controller 等待 BuildInfo 清理完成；二者不直接调用数据清理接口。数据清理后 API 对象可能暂时仍在，不回滚重建文件；dry-run 不调用本接口。
+上层接入契约：仅由 Job Controller 为删除中的 OldJob 调用本接口，前提是源 Job 已消失且归档已确认、写入已停止、输入使用者已排空；源 Job 分支及 dry-run 不调用。只有 204 才允许移除 OldJob 的 `ebs.io/job-cleanup`，失败或未知时保留对象与 finalizer 重试。数据清理后 API 对象可能暂时仍在，不回滚重建文件。归档意图、迁移确认和迟到归档防护统一见 [apiserver 归档协议](ebs-apiserver.md#job-删除与归档-finalizer)，不能仅凭 DELETE 或 Watch 删除事件推断完成。
 
-源 Job 默认带 `ebs.io/job-archive`，迁移意图另外持久化：retain 保留 OldJob 和数据，delete 继续删除 OldJob。两种情况都不在源 Job 分支调用本接口；OldJob 数据删除须等源 Job 消失且归档已确认，迟到归档请求由持久化删除凭据阻断。协议统一见 [apiserver](ebs-apiserver.md#job-删除与归档-finalizer)，不能从普通 DELETE 或 Watch 删除事件推断归档已完成。
+apiserver 不直接连接 Artifact Manager；BuildInfo Controller 编排 Job/OldJob 删除，Build Controller 等待 BuildInfo 清理完成，二者不直接调用本接口。
 
 接口测试覆盖精确作用域及重复删除、正文/签名副本/临时文件/日志/元数据完整清理、仓库硬链接及 repodata 不变、文件系统失败后重试、重启后清理残留、符号链接边界和订阅状态释放。上层按 [Job Controller 验收矩阵](controller-manager~job-controller.md#113-删除与归档协议验收) 验证清理失败保留 finalizer、成功清理可重试、源 Job 迁移不调用本接口、仅 OldJob 删除触发清理，以及清理后没有迟到上传。
 
@@ -1569,26 +1569,33 @@ DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories
 
 - 无请求体。每次 DELETE 先按 Project、BuildName 在 `repositories/{project}/.stopped/{buildName}/` 建立空目录作为停止标记，逐层核验目录并同步父目录。即使待删仓库从未存在也必须先落盘标记；标记不常驻内存、不开放下载、不随仓库清理而删除，不设置过期时间；Build name 不复用。
 - 按 Release Manager → Repository Manager 顺序持锁，使标记写入与两类 Submit、自动激活串行。标记存在后拒绝该构建的新提交、幂等重放和激活，包括可重试 Failed 的重新提交以及后台完成后的自动激活，返回 `409 BuildStopped`。已受理任务允许结束，但 Prepared 不再激活；不回退已经生效的 current。
-- 标记持久化后，若任一 Manager 仍有 Creating、Deleting 或实际运行中的任务，返回 `202`、`Retry-After: 5`，尚不删除文件。全部排空后继续执行对应类型的文件清理，只有清理完成才返回 `204`。重复 DELETE 幂等；响应丢失、进程重启或部分清理后仍须重新核对停止标记及在途任务。
-- 非法标识或携带请求体返回 `400`；存储失败返回可重试 `503`，不能确认完成。Controller 只有收到发布仓 DELETE 的 `204` 才能清除 RpmRepo 检查点并写 CleanupReady；不能用任务 GET 的 404 推断迟到提交已被阻止。
+- 标记持久化后等待两个 Manager 的在途任务排空，再取得对应 Build 的清理占用并同步删除文件；不创建后台删除任务或持久化删除凭据。响应规则统一如下：
+
+| 情况 | 响应与调用方处理 |
+|---|---|
+| 任一 Manager 仍有 Creating、Deleting、实际运行任务，或同一 Build 已被清理占用 | `202`，`Retry-After: 5`；稍后重复 DELETE |
+| 对应类型文件已完整清理 | `204`，无正文；首次不存在和重复删除同样须确认停止标记及排空完成 |
+| 发布版本仍被任一架构的 current 引用 | `409 ReleaseInUse`；保留发布仓，不继续过程仓清理 |
+| 非法标识或携带请求体 | `400` |
+| 存储失败 | 可重试 `503`，不能确认完成 |
+
+响应丢失、部分清理或重启后，按同一作用域重新执行协议，不依赖内存中的完成标记。HTTP 404 可能表示路由或地址错误，不能当作清理成功；任务 GET 的 404 也不能证明迟到提交已被阻止。
 
 两个接口均按 Project、BuildName 定位，在 Project 下扫描架构目录并清理同名 Build，跳过 Project 级的 `.stopped`；不要求元数据存在，不查询 apiserver。不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。跨构建的源仓使用约束及 Job 停止使用过程仓的保证由上层业务负责。
 
 - 过程仓 DELETE 仅清理各架构下的 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
 - 发布仓 DELETE 仅清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按最后一个后缀之前的完整名称匹配（工作目录使用随机后缀，删除暂存使用 `-deleting`），不能只做字符串前缀匹配。
 - 删除后移除对应的内存定位索引和非活动记录。不清理 Job 产物/日志、其它 Build/Project 的仓库，也不删除继承基线。硬链接仅解除本目录项，不修改共享正文。
-- 发布仓 DELETE 先检查所有架构的 current。任一架构的 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和发布仓不变；不回退到历史版本。Controller 此时不调用过程仓 DELETE。上层负责判断是否允许删除该 Build。
-- 每个 Manager 在自身锁内检查活动任务并登记本次 Build 的临时清理占用；仍有 Creating、Deleting、实际运行中的任务或同一 Build 的清理请求时返回 `202`、`Retry-After: 5`，调用方稍后重复 DELETE。Prepared 已完成正文生成且尚未激活，可以清理，不为删除执行激活。
+- 发布仓 DELETE 先检查所有架构的 current；被引用时按上表拒绝删除，保持 current 和发布仓不变，不回退到历史版本。是否允许删除 Build 由上层判断。
+- 每个 Manager 在自身锁内复核活动任务并登记 Build 清理占用；条件不满足时按上表返回等待响应，避免排空检查与文件删除之间出现竞争。
 - 递归文件删除在全局锁外执行，其他 Build 可继续查询、提交和持久化结果。清理占用期间，同一 Build 的提交、发布激活及已有单仓的删除返回 `409 RepositoryDeleting/ReleaseDeleting`，历史回收跳过该 Build，避免与本次文件操作竞争；成功后回到锁内移除对应索引。成功或失败均释放临时占用，失败保留索引供下一次请求重试。占用不持久化，重启后的安全边界仍由DELETE 的持久停止标记和活动任务恢复保证。
-- 无活动任务时同步执行文件删除，不创建新的后台删除任务或持久化删除凭据。只有完整清理后返回 `204`，首次不存在和重复删除同样返回 `204`；不返回正文。非法标识或携带请求体返回 `400`，存储失败返回可重试 `503`。
 - 逐层核验父目录，拒绝符号链接父目录；使用 `os.Root` 删除，子项符号链接仅解除链接，成功后同步父目录。数据根目录无法打开属于存储故障，不能当作仓库不存在。
-- 中途失败、请求超时或服务重启后，按同一作用域再次 DELETE 继续清理；不要求元数据完整存在，也不依赖内存中的完成标记。DELETE 建立并保留持久停止标记，防止迟到请求重建仓库。
 
-RpmRepo Controller 观察到父 Build/BuildInfo 删除时即调用发布仓 DELETE，无需等待 RpmRepo 自身的 deletionTimestamp；收到 204 后清空检查点并写 `CleanupReady=True`。此时发布版本已清理，过程仓仍保留，BuildInfo 可以中止并清理 Job/OldJob。BuildInfo 删除完成后，Build Controller 再删除 RpmRepo，由后者确认两个 DELETE 均返回 204 后移除 `ebs.io/rpmrepo-cleanup`。直接删除 RpmRepo 也先取得同样的 CleanupReady 确认，再清理过程仓。`202`、`404`、冲突、存储失败或未知结果均保留检查点或 finalizer；重试从幂等的发布仓 DELETE 开始，不增加进度字段。404 可能是路由或地址错误，不能当作清理成功。
+调用方先确认发布仓 DELETE 返回 204，再按上层删除顺序清理 Job/OldJob，最后调用过程仓 DELETE；直接删除 RpmRepo 也先删除发布仓。仅 204 表示对应阶段完成，其他响应或未知结果均保留删除进度并重试。检查点、`CleanupReady` 和 finalizer 的更新统一见 [RpmRepo Controller 删除协作](controller-manager~rpmrepo-controller.md#删除收敛与父资源协作)，父子资源顺序见 [Build Controller 7.7](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。
 
 测试覆盖跨架构清理、多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界，以及慢删除期间同一 Build 互斥、其他 Build 继续处理、失败后释放占用并重试；Controller 测试覆盖确认完成前保留 finalizer，以及完成后的 Conflict/Unknown 重入。
 
-停止测试覆盖从未提交任务、跨架构迟到提交、可重试失败、活动任务等待、迟到提交、后台完成后禁止激活、重启和文件清理后停止标记仍有效，以及标记存储失败不返回成功。
+停止测试另覆盖从未提交任务、跨架构迟到提交、可重试 Failed 的重新提交、后台完成后禁止激活、重启和清理后停止标记仍有效，以及标记存储失败不返回成功。
 
 ## 十四、与 Job Status 的关系
 

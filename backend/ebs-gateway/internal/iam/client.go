@@ -48,7 +48,7 @@ func (c *Client) GetUser(ctx context.Context, name string) (User, int, error) {
 }
 
 func (c *Client) AuthenticateUser(ctx context.Context, name, password string) (bool, int, error) {
-	response, err := c.jsonRequest(ctx, http.MethodPost, "/internal/iam/v1/authenticate", map[string]string{"username": name, "password": password})
+	response, err := c.jsonRequest(ctx, http.MethodPost, "/internal/iam/v1/users/authenticate", map[string]string{"username": name, "password": password})
 	if err != nil {
 		return false, 0, err
 	}
@@ -85,7 +85,7 @@ func (c *Client) SetPassword(ctx context.Context, name, password string) (int, e
 }
 
 func (c *Client) AuthenticateMachine(ctx context.Context, name, secret string) (int, bool, int, error) {
-	response, err := c.jsonRequest(ctx, http.MethodPost, "/internal/iam/v1/machineaccounts/"+url.PathEscape(name)+"/authenticate", map[string]string{"clientSecret": secret})
+	response, err := c.jsonRequest(ctx, http.MethodPost, "/internal/iam/v1/machineaccounts/authenticate", map[string]string{"name": name, "clientSecret": secret})
 	if err != nil {
 		return 0, false, 0, err
 	}

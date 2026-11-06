@@ -306,7 +306,7 @@ Content-Type: application/json
 {"runner":"runner-001"}
 ```
 
-Gateway 限制请求体大小并拒绝未知字段。`runner` 必须原样满足 DNS1123 label；Gateway 调用 `/internal/iam/v1/machineaccounts/{client-id}/authenticate` 验证凭据。认证成功后签发 `sub` 和 `runner` 均等于请求名称、`type=runner`、`scopes=[]` 的 JWT。MachineAccount 名称不写入 `sub`，只作为审计字段 `actor` 记录，不能据此访问业务资源。
+Gateway 限制请求体大小并拒绝未知字段。`runner` 必须原样满足 DNS1123 label；Gateway 调用 `/internal/iam/v1/machineaccounts/authenticate`，在正文中传递 `name=client-id` 和 `clientSecret` 验证凭据。认证成功后签发 `sub` 和 `runner` 均等于请求名称、`type=runner`、`scopes=[]` 的 JWT。MachineAccount 名称不写入 `sub`，只作为审计字段 `actor` 记录，不能据此访问业务资源。
 
 成功响应为：
 
@@ -402,7 +402,7 @@ POST /auth/login
 gateway 使用内部凭据调用 apiserver：
 
 ```text
-POST /internal/iam/v1/authenticate
+POST /internal/iam/v1/users/authenticate
 ```
 
 认证成功后，gateway 读取 User，确认 `spec.enabled=true` 且 `spec.scopes` 恰好包含一项允许的 User scope，然后按 4.3 节规则签发具有同一单一 scope 的完整 JWT。登录请求不能指定 scope、有效期或其他权限 claim。登录失败统一返回 401，不区分用户不存在、密码错误、角色配置非法或账号锁定。登录请求体和密码不得写入访问日志、审计日志或错误响应。

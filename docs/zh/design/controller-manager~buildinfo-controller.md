@@ -288,7 +288,7 @@ PollingSource 默认每 10s（`--poll-period`）轮询一次，作为丢事件�
                             │
                             │  按 labels["ebs.io/build-name"] list Job → 回写 BuildInfo.status.specResults
                             │  推进下游 → 创建 Job
-                            │  全部终态（Succeeded/Failed/ArchUnsupported）
+                            │  所有 spec 条目达到终态（见 6.4）
                             ▼
                        ┌───────────┐
                        │ Completed │  ← 终态
@@ -599,17 +599,17 @@ buildSet = buildSet ∪ direct                                                # 
 一个 spec S 的依赖满足，当且仅当**两个条件同时满足**：
 
 1. **上游 spec 全部终态（Succeeded/InstallFailed/PrepareFailed/BuildFailed/RpmDependsMissing/ArchUnsupported）**：`Cache.dcgDict.nodes[S].InDep ∪ Cache.dcgDict.nodes[S].InstallInDep`（build/install 边合并后的上游全集）中的所有上游 spec 均达终态。全部 `Succeeded` → 正常路径；存在 `Failed` 上游 → **不做上游级产物可用性裁决**（已下发的下游重建取消见 7.4.2；未下发的下游 Failed 上游跳过——失败的 Job 产物凭据不存在），其影响统一经下方条件 2 的依赖存在性裁决表达（缺失 → **S 自身**标 `RpmDependsMissing`，不创建 Job）——**自判非传播**（不沿 outDep 递归标记，其下游在各自判定时逐跳传导），见 E-17。
-2. **构建依赖统一可用性裁决**：S 的全部 `buildRequires`（取自本轮组装的 specDepends（15.11），剔除 `buildRemoves` 排除项）逐项在 RpmMetaSources 分层缓存中可查到（先 RpmRepo 层、后 BootstrapRepo 层按声明顺序兜底，两阶段匹配：provide 能力名反查 → rpm 名兜底，见 16.1；缓存机制见 15.10），且满足对应 `VersionConstraint` 版本约束。发布确认门禁通过（Succeeded 直接上游产物已发布，7.4.6）、Failed 上游不再产出 → 此时仍不可用即**真缺失**，标 `RpmDependsMissing`（message 记缺失依赖名），不创建 Job——依赖存在（上轮/v1 产物、替代提供方或 bootstrap 基础包已可用）则照常下发（best-effort）。RpmRepo 暂时缺失、查询失败、XML 下载失败或 bootstrap 层暂不可用时，写 `RpmRepoRetrying`，依赖裁决保持待定并等待下一轮，不因重试次数停止；无效 URL 或确定性请求拒绝立即写 `RpmRepoUnavailable`，过程仓或 bootstrap 仓 XML 连续解析失败达 `--rpmrepo-ready-retry-limit`（默认 3）后才写入该停止标记，按 6.5 收敛；contentURL 为空（首轮/全量构建本轮首个物理版本物化前，15.4）为正常空态——RpmRepo 层无 XML 可解析、视为空数据源，分层查询自然短路至 BootstrapRepo 层照常裁决，不构成待定、不计入失败计数。install 依赖不参与本校验（不阻断下发，残余由 7.4.7 运行期 install 校验兜底）；install 边仅承担构建排序（把提供方纳入本批构建，见 16.1）。
+2. **构建依赖统一可用性裁决**：S 的全部 `buildRequires`（取自本轮组装的 specDepends（15.11），剔除 `buildRemoves` 排除项）逐项在 RpmMetaSources 分层缓存中可查到（先 RpmRepo 层、后 BootstrapRepo 层按声明顺序兜底，两阶段匹配：provide 能力名反查 → rpm 名兜底，见 16.1；缓存机制见 15.10），且满足对应 `VersionConstraint` 版本约束。发布确认门禁通过（Succeeded 直接上游产物已发布，7.4.6）、Failed 上游不再产出 → 此时仍不可用即**真缺失**，标 `RpmDependsMissing`（message 记缺失依赖名），不创建 Job——依赖存在（上轮/v1 产物、替代提供方或 bootstrap 基础包已可用）则照常下发（best-effort）。仓库查询及元数据读取错误统一按 15.10 分类处理，未完成读取时依赖裁决保持待定；contentURL 为空（首轮/全量构建本轮首个物理版本物化前，15.4）为正常空态——RpmRepo 层无 XML 可解析、视为空数据源，分层查询自然短路至 BootstrapRepo 层照常裁决，不构成待定、不计入失败计数。install 依赖不参与本校验（不阻断下发，残余由 7.4.7 运行期 install 校验兜底）；install 边仅承担构建排序（把提供方纳入本批构建，见 16.1）。
 
 > **spec 级依赖边推导**（dcgDict 构建依据）：spec S 依赖 spec U，当且仅当 S 的 `buildRequires`（build 边）或 install 依赖集（install 边，见 16.1）声明的 RPM 名命中了 U 的 `provides` 产出的 RPM 名（版本感知反查：providesInfo + prefer + 版本约束过滤；算法细则见 16.1）。由此得到 `outDep[S]`（S 的下游，两类边合并）、`inDep[S]`（S 的 build 边上游）与 `installInDep[S]`（S 的 install 边上游）。
 >
 > **RPM 可用性的两阶段匹配**：buildRequire 声明的是 provide 能力名，与 rpm 名不总是相等（虚拟 provide / 库 soname 等）：第一阶段经 providesInfo 反查能力名（版本约束过滤已内置）；未命中时第二阶段按 rpm 名兜底（经各来源 `RpmByName` 直接索引，15.10，覆盖最常见的自提供场景，版本约束仍需满足）；两阶段均在层内执行，层间按 RpmRepo → BootstrapRepo 声明顺序短路（15.10 分层查询）。
 >
-> **RpmRepo 脏数据防御**：可用性检查/`providesInfo` 生成中遇数据异常（如 `version` 为空导致版本比较失败）一律判为"不可用"而非上抛——统一校验 repo 存在后统一落入 `RpmDependsMissing` 确定性终态，避免 reconcile 每轮出错永久挂起；XML 下载失败写 `RpmRepoRetrying` 并继续等待下一轮，不累计停止次数；过程仓或 bootstrap 仓 XML 连续解析失败达 `--rpmrepo-ready-retry-limit`（默认 3）后写 `RpmRepoUnavailable` 并按 6.5 收敛。无效 URL 或确定性请求拒绝立即写停止标记；暂时缺失、查询或下载失败会重置解析失败计数；仓库及所需元数据恢复时清除 `RpmRepoRetrying`。
+> **RpmRepo 脏数据防御**：可用性检查/`providesInfo` 生成中遇到版本为空等无法完成比较的数据，该候选按不可用处理；仓库及元数据成功读取后，才可依据缺失依赖判定 `RpmDependsMissing`。查询、下载和 XML 解析错误的重试及停止规则统一见 15.10，不按包级依赖缺失处理。
 >
 > **版本比较**：`VersionSatisfies` 为 RPM 版本比较的 Go 实现，（epoch:version-release 分段比较）。
 >
-> **推论**：对入度 0（`inDep` 为空）的 spec，条件 1 天然满足；条件 2（构建依赖）仍需校验——`initBuildInfo` 阶段仅在 `RpmRepo` 存在且构建依赖全部可用时才创建 Job，否则标 `Failed` 或等待下一轮。`single` 类型直通路径不执行条件 2（不校验任何门禁依赖，见 7.2.3）。
+> **推论**：对入度 0（`inDep` 为空）的 spec，条件 1 天然满足；条件 2（构建依赖）仍需校验——`initBuildInfo` 阶段仅在 `RpmRepo` 存在且构建依赖全部可用时才创建 Job，否则按缺失依赖标 `RpmDependsMissing`，或在元数据尚不可用时等待下一轮。`single` 类型直通路径不执行条件 2（不校验任何门禁依赖，见 7.2.3）。
 
 #### 7.4.2 "破环"的精确语义
 
@@ -660,7 +660,11 @@ buildSet = buildSet ∪ direct                                                # 
    - 对 build/install 边合并后的直接上游，若其 SpecResult 为构建成功状态（`Succeeded` 或 `InstallFailed`），则最新一代 Job 的名称必须已在同名 RpmRepo 的 `status.repository.sourceJobNames` 中；否则本轮等待。复用本轮已读取的 RpmRepo 和 Job 列表，不增加查询。构建失败上游不等待其产物物化，依赖是否满足仍由 7.4.1 条件 2 裁决；best-effort 重建失败同样适用。
    - 批次成功后，RpmRepo Controller 累计写入已消费 Job 名称；可定位到具体 Job 的输入错误则记入 `skippedJobNames` 并重新组批，不视为已发布。批次选择、跳过和失败收口统一见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 第六章与 7.2。
    - 整批失败收口写入 `release.phase=Failed` 时，由 E-28 守卫触发 6.5 的停止派发流程。仅跳过异常 Job 时不会触发该守卫，依赖其产物的下游仍可能持续等待；当前收敛限制见 21.1 的 BI-01。
-3. **bootstrap 豁免门禁**（破环点首次下发专属，挂载于 `initBuildInfo` 步骤 4；**含运行期 install 补边追加的破环点，及因 RpmRepo 依赖待定未能在 init 步骤 4 下发、而 BuildInfo 已随步骤 5 预建进入 Processing 的初始破环点残留**——两者的 bootstrap 下发均发生在 `advanceBuildInfo` 步骤 4（7.3），豁免语义完全相同，判据统一为 `BootstrapBreak` 标记且 `DispatchCount=0`，否则该残留会因上游非终态被步骤 4 跳过成为死点）：破环点 bootstrap 下发时**无视全部上游入度依赖**（build/install 边合并上游全集，cycleNodes 环内上游与非环上游一律同规则）——上游终态检查与发布确认门禁**全部跳过**（不等任何上游构建/发布，此为破环语义本身；`upstreamsFullyDispatched`/`upstreamOutputsPublished` 均不判），**唯一保留门禁为构建依赖统一存在性校验（7.4.1 条件 2）**——对破环点全部 `buildRequires`（剔除 `buildRemoves`，**不再区分环内/环外依赖**）逐项经两阶段匹配判依赖满足性：依赖在 RpmMetaSources 分层缓存可查且版本约束满足（RpmRepo 层先行——含增量轮 contentURL 指向的继承版本上轮产物；未命中时 BootstrapRepo 层按声明顺序兜底，见 15.10）→ 照常创建 bootstrap Job（`DispatchCount` 0 → 1）；**RpmRepo 就绪但依赖缺失或版本不满足 → specResults[key].status 标 `RpmDependsMissing`（message 记缺失依赖名），不创建 Job、不等待不重试**——破环点 bootstrap 基于当前 RpmRepo 内容构建，依赖不在仓库则 Job 必然失败，落确定性终态优于下发必败 Job；其下游（环内/环外）经 E-17 自判逐跳传导（各自依赖存在性裁决）。RpmRepo 不存在/查询失败/XML 下载解析失败 → 视为待定，本轮跳过 bootstrap 等待下一轮重入（7.4.1 条件 2 语义，不误标 Failed；contentURL 为空为正常空态——RpmRepo 层空数据源、仅 BootstrapRepo 层裁决，不构成待定，见 7.4.1 条件 2）。运行期追加的破环点若已下发过（`DispatchCount=1`）→ required 升 2 后经正常推进门禁（第 1/2 条）再下发一次，不再适用 bootstrap 豁免。
+3. **bootstrap 豁免门禁**：仅适用于 `BootstrapBreak=true` 且 `DispatchCount=0` 的破环点，包括初始破环点、进入 Processing 后仍未派发的初始破环点，以及运行期 install 补边追加的破环点。
+   - Pending 的 `initBuildInfo` 步骤 4 与 Processing 的推进步骤使用同一判据。
+   - 跳过全部 build/install 上游的终态检查、重建一致性及发布确认门禁，不区分环内和环外上游；仅保留 7.4.1 条件 2 的构建依赖存在性校验。
+   - 依赖满足后创建首次 Job；依赖缺失、元数据待定及空仓的处理分别遵循 7.4.1 和 15.10，不另设 bootstrap 重试规则。
+   - 运行期追加的破环点若已派发过，不再适用此豁免；required 升为 2 后按本节第 1、2 条及 7.4.1 推进重建。
 
 > **为什么需要发布确认门禁**：RpmRepo 层 XML 元数据仅覆盖 `contentURL` 指向的**当前已发布物理版本**，"Job `Succeeded` 但产物尚未物化为当前版本（contentURL 未提升，XML 中无该条目）"是异步发布竞态，若仅凭 Job 终态放行重建，重建 Job 会在依赖未兑现的环境中运行。
 
@@ -799,7 +803,7 @@ Job 与 BuildInfo 通过 label 关联，无 ownerReference；仅进入 Aborted �
 | `BuildGraphUnavailable` | 已过首次建图阶段图丢失、归属不匹配、删除中或图结构无效；reason 分别为 `BuildGraphMissing`、`BuildGraphOwnerMismatch`、`BuildGraphDeleting`、`BuildGraphInvalid` | 暂停新 Job 派发和依赖图驱动的 Completed 判定，保留已有结果；父级中止守卫仍执行。相同原因不重复写，恢复到有效图后清除；读取网络失败不写此条件 |
 | `DcgBuildFailed` | 从构建集筛选后的 specDepends 条目首次建图失败（数据异常）；破环算法异常兜底亦复用此 type | 恢复即清除：按 15.9 取得有效图后移除该 condition；已有图不可用使用 `BuildGraphUnavailable`，不重建 |
 | `ReleaseUnavailable` | E-28：非 single 的 release.phase=Failed，reason/message 见对应错误条目 | status=True 为持久化停止派发标记，不因依赖恢复移除；按 6.5 等待已有 Job 收敛后 Completed，保留条件 |
-| `ResourceConfigUnavailable` | E-27：Config/build-resource GET 404，reason 为 `ResourceConfigMissing` | 可恢复的派发暂停条件，不是永久停止标记；保留 spec 状态并继续回填已有 Job，5 秒后重新入队。派发前成功读取配置后清除此条件并继续 |
+| `ResourceConfigUnavailable` | E-27：Config/build-resource GET 404，reason 为 `ResourceConfigMissing` | 可恢复的派发暂停条件，不是永久停止标记；不写包级失败、不提前结束 BuildInfo，继续回填已有 Job，5 秒后重新入队。派发前成功读取配置后清除此条件并继续，相同条件不重复写入 |
 | `RpmRepoRetrying` | 非 single 的 RpmRepo 查询或仓库元数据错误 | status=True 仅描述可重试异常，不是停止派发标记；具体计数与恢复见 15.10。single 的稳定入口确认及 prefer 元数据错误返回分类错误，不写此条件 |
 | `RpmRepoUnavailable` | E-29：无效 URL、确定性请求拒绝，或过程仓/bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮） | status=True 为持久化停止派发标记；按 6.5 等待已有 Job 收敛后 Completed，保留明确 reason/message |
 | `SnapshotUnavailable` | E-30：当前 Snapshot GET 404/5xx/超时连续失败达阈值（默认 3 轮，每轮至多计一次），reason/message 见对应错误条目 | status=True 为持久化停止派发标记，不因依赖恢复移除；按 6.5 等待已有 Job 收敛后 Completed，保留条件 |
@@ -989,9 +993,9 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | E-21 | **Project 查询失败（5xx）/ 不存在（404）** | 5xx → 返回 error 退避重试；404 → 记录日志返回 nil，下一轮重评估；404 **不触发置终态**，与 E-03 的 Build 404 语义不同 | 7.1 parentAbortGuard |
 | E-23 | spec 下载/解析确定性失败 | `full`、`incremental`、`specified` 和 `single` 均按 spec 粒度跳过；仓库级读取失败跳过该仓库，记录 PrepareFailed 条目，诊断仅写入该条目的 `SpecResult.message`，不汇总到 BuildInfo conditions。`incremental`/`specified` 空集正常完成；`single` 空集按 7.2.3 失败收口。瞬态失败保持 Pending。 | 7.2.2 / 7.2.3 / 9.1 |
 | E-24 | Snapshot 的包仓库条目不可用 | 条目缺失但仓库仍在 `spec.packageRepos`，或 `retryable=true` 时保持 Pending；确定性失败或种子仓库已不在 `spec.packageRepos` 时，`incremental`/`specified` 同样降级并记录 `SpecCommitMissing`、PrepareFailed 条目。`single` 空集按 7.2.3 收口。 | 7.2.2 / 9.1 |
-| E-27 | **`Config/build-resource` 不可用** | GET 404 时写对象级 `ResourceConfigUnavailable=True`（reason=`ResourceConfigMissing`），暂停新 Job 派发并于 5 秒后重新入队；不写包级失败、不提前结束 BuildInfo，已有 Job 继续回填。派发前成功读取配置后清除此条件并继续，相同条件不重复写入。其他读取错误、响应契约错误或 `spec.content` 反序列化失败时不创建本轮新 Job，记录错误并按 7.5 退避重入，不写包级 Failed。内容有效时按表级、包级、架构规则解析资源 | 9.1 / 15.3.1 / [Config 设计](data-models~config.md) 第 3 章 |
+| E-27 | **`Config/build-resource` 不可用** | GET 404 按 9.1 的 `ResourceConfigUnavailable` 生命周期处理。其他读取错误、响应契约错误或内容反序列化失败时不创建本轮新 Job，记录错误并按 7.5 重试，不写包级失败；内容有效时按 15.3.1 合并资源规则 | 9.1 / 15.3.1 / [Config 设计](data-models~config.md) 第 3 章 |
 | E-28 | 非 single 的 release.phase=Failed | 写 ReleaseUnavailable=True（reason=RpmRepoReleaseFailed，message 记录 RpmRepo 名），按 6.5 停止派发并等待已有 Job 收敛 | 6.5 / 2.5 |
-| E-29 | RpmRepo 确定性错误或 XML 连续解析失败 | 无效 URL、确定性 4xx 查询/元数据请求立即写 `RpmRepoUnavailable=True`（`RpmRepoConfigInvalid`、`BootstrapRepoConfigInvalid`、`RpmRepoQueryRejected`）；过程仓或 bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮）后写入同一条件（`RpmRepoXmlParseFailed`、`BootstrapRepoXmlParseFailed`）。升级时在同一次 status 写入中清除 `RpmRepoRetrying`；停止派发并按 6.5 等待已有 Job 全部终态后 Completed。404、网络错误及 XML 下载失败写 `RpmRepoRetrying` 并继续重试，不因次数停止；恢复后清除并继续构建 | 5.4 / 6.5 / 7.1 / 9.1 |
+| E-29 | RpmRepo 确定性错误或 XML 连续解析失败 | 按 15.10 的错误分类验证暂时错误重试、连续解析失败计数及恢复清零；升级时以一次 status 写入清除 `RpmRepoRetrying` 并写入 `RpmRepoUnavailable`，按 6.5 停止派发并收敛 | 15.10 / 6.5 |
 | E-30 | 当前 Snapshot GET 404/5xx/超时连续失败达阈值（默认 3 轮，每轮至多计一次） | 持久化 SnapshotUnavailable=True（reason=SnapshotNotFound / SnapshotQueryFailed，message 记录对象名、最后错误及连续失败次数），停止派发并按 6.5 等待已有 Job 全部终态后写 Completed。未触发停止时检查整体成功清零；停止标记写成功后清除计数，重启按标记恢复、不重新计数。Completed 后父 Build 按 2.5 对应 condition 收口 | 5.4 / 6.5 / 7.1 / 9.1 |
 | E-31 | `BuildInfo.spec.buildPayload` 配置校验失败 | YAML 语法或顶层结构错误，以及 `rpmbuild_script` 类型/名称错误均在新 Job 创建前写 `BuildPayloadInvalid=True/reason=BuildPayloadParseFailed`；message 写具体错误，不回显完整 payload。复用父 Build 中止的分页扫描与每轮最多 100 次 `/abort` 尽力尝试，失败记 `JobAbortFailed`；尝试结束即写 `phase=Failed`，无需等待 Job 终态，保留现有状态快照。父 Build 和 RpmRepo 按该 phase 收口；修正 Project 配置仅影响新 Build | 2.5 / 6.5 / 7.1 / 9.1 / 15.2.2 |
 
@@ -1351,7 +1355,14 @@ type RpmMetaSources struct {
 
 **错误语义**：
 
-- XML 下载失败（含暂时 404、网络错误、5xx/429）写 `RpmRepoRetrying` 并持续等待下一轮，不计停止次数；无效 URL 或确定性 4xx 请求拒绝立即写 `RpmRepoUnavailable` 并按 6.5 收敛。XML 解析失败未达阈值时写 `RpmRepoRetrying`，连续达到 `--rpmrepo-ready-retry-limit`（默认 3）才清除它并写入停止标记；中间遇到非解析错误或成功读取时计数清零。contentURL 为空是正常空态，不计失败。上述停止计数仅用于非 single；single 的发布可用性确认按 E-32。
+- 非 single 的仓库查询及元数据读取统一按下表处理；停止派发后的收敛见 6.5。升级停止时，在同一次 status 写入中清除 `RpmRepoRetrying` 并写入 `RpmRepoUnavailable`；仓库及所需元数据恢复后清除重试条件。暂时缺失、查询或下载失败以及成功读取均重置连续解析失败计数。`contentURL` 为空是正常空态，不计失败。
+
+| 输入或错误 | 处理 |
+|---|---|
+| 仓库暂时缺失、查询或 XML 下载暂时失败（404、网络/超时、429/5xx） | 写 `RpmRepoRetrying`，保持依赖裁决待定并继续重试，不因次数停止 |
+| 无效 URL、确定性请求拒绝 | 立即停止；reason 使用 `RpmRepoConfigInvalid`、`BootstrapRepoConfigInvalid` 或 `RpmRepoQueryRejected` |
+| XML 解析失败 | 未达阈值时写 `RpmRepoRetrying`；连续达到 `--rpmrepo-ready-retry-limit`（默认 3）后停止，reason 为 `RpmRepoXmlParseFailed` 或 `BootstrapRepoXmlParseFailed` |
+
 - single 的发布确认与 RPM 元数据读取是两步：每轮新派发前按 7.2.3 确认稳定入口，仅配置非空 prefer 时继续读取选定仓库的 RPM 元数据；不建图、不执行构建依赖门禁，元数据下载或解析失败返回可重试错误，配置或确定性请求错误返回 PermanentError，不计停止次数、不写业务终态。
 - 性能注：bootstrap 仓（如 everything）primary 元数据文件较大，per-BuildInfo 一次解析终身复用；跨 BuildInfo 不共享（后续可按 URL 全局共享优化，非本期范围）。repomd.xml 体积很小，两步寻址的额外开销可忽略。
 
@@ -1648,8 +1659,8 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 | 依赖图 | 7.2.1 自环、多环、交叉环、确定性选点；7.4.2 计数及失败放宽；7.4.6 三类门禁 |
 | BuildGraph | 15.9 同名归属与版本校验、metadata 投影/完整加载、空图和 single、先图后状态再派发、AlreadyExists/Conflict/Unknown 分流、补边持久化、图缺失后的暂停与恢复 |
 | Job 回填 | 7.4.4 多代排序、7.4.5 phase 映射、7.4.7 install 三分支和动态补边 |
-| Job 构造 | 15.3.1 确定性名称、AlreadyExists 身份核验及 GET 404 后可重试且同名同代次、超时迟到写入与重启恢复；payload、标签编码、BuildInfo 固化镜像的跨轮复用；Config/build-resource 缺失时暂停、重复等待不写状态、已有 Job 继续回填、恢复后清除条件并派发（覆盖 single/full）；E-19/E-27 |
-| 停止派发 | E-28/E-29/E-30 覆盖 6.5/6.5.1 的多页 Job、旧代与构建集外 Job、重启后按 Job 身份与代次回填，全部已创建 Job 终态后写 Completed；E-31 覆盖 Pending/Processing、YAML 语法、非 map 顶层、`rpmbuild_script` 列表/非法名称、空 payload 默认值、message 不含完整 payload、标记与 Failed 写入 Conflict/Unknown、分页/批次中止、单个失败或结果未知、重启重复尝试、仍有运行中 Job 时写 Failed、零新 Job，以及 Project 修改后不恢复旧 BuildInfo 派发；Failed 从 PollingSource 过滤且不再调谐 |
+| Job 构造 | 15.3.1 / 10.3：确定性名称、AlreadyExists 身份核验、确认 GET 404、迟到写入、重启恢复、payload 与标签编码、镜像跨轮复用；E-19/E-27：架构门禁及配置缺失/恢复，覆盖 single/full、重复等待的写入次数和已有 Job 回填 |
+| 停止派发 | 6.5/6.5.1、E-28～E-31：覆盖多页、旧代与构建集外 Job，Pending/Processing、零 Job/仍有运行中 Job，Conflict/Unknown、单项中止失败、分页及批次边界、重启恢复。E-31 另覆盖 YAML/顶层类型错误、脚本列表或非法名称、空 payload 默认值、诊断脱敏、Project 配置变更后的停止标记，以及 Failed 对象的轮询过滤；按对应规则断言新 Job 数量、最终状态及终态等待差异 |
 | 缓存 | 5.4 生命周期与计数边界；15.9 持久化顺序；15.10 刷新与分层；15.11 命中、LRU 淘汰、补源失败 |
 | 解析 | 16.1～16.3 版本选择、约束比较、宏、架构归一、buildRemoves 与 rpmspec 失败不回退 |
 | 写入与队列 | 7.5 所有错误分类；10.2 Conflict 及同轮连续写入的对象/resourceVersion 衔接（普通成功与 Unknown 确认成功）；10.3 Unknown 意图比较、UID 变化、确认失败及 context 取消 |
@@ -1661,7 +1672,7 @@ func rpmAvailable(sources []rpmMetaSource, name, constraint) bool {
 
 - 四种构建类型从首轮 List 到 Job 派发、回填、Completed 的完整链路（第七章）。
 - 产物异步物化后的下游放行（7.4.6）。
-- E-28/E-29/E-30 停止派发后等待已有 Job；E-31 先停止派发、尽力中止，再在运行中 Job 仍存在时写 Failed。配置错误需验证 BuildInfo 的 `BuildPayloadInvalid=True`、中止失败时的 `JobAbortFailed` 和 `Failed`，父 Build 为 `Failed/build`，RpmRepo 为发布失败终局且不再提交过程仓或正式发布。
+- E-28～E-31 的跨 Controller 收敛：按 6.5 及异常场景表断言 BuildInfo 的条件、等待边界和终态，并验证父 Build 与 RpmRepo 的结果传播；E-31 中止部分失败时仍验证整个链路。
 - 十三章各崩溃点恢复；同名删除重建隔离（10.3）。
 - 图已写入但 BuildInfo 写失败时恢复同一 BuildGraph；常规结果回填不传输 nodes、不更新图版本；显式历史清理按 owner 和删除前置条件处理图。
 - 修改 Config/build-target 不影响已有 BuildInfo 的后续 Job 镜像（15.3.1）。

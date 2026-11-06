@@ -360,20 +360,21 @@ Runner 作为集群级资源存在，调度标签使用 `metadata.labels`，资�
 
 ```text
 runner -> artifact-manager: upload Completed Artifact
-runner -> artifact-manager: finalize logs/container.log Artifact
+runner -> artifact-manager: finalize combined log
 runner -> artifact-manager: complete immutable JobUploadManifest
-runner -> ebs-gateway -> ebs-apiserver: update Job artifact summary/status
-repo controller -> list/watch Job status and continuously enqueue completed jobs
-repo controller -> artifact-manager: query the Job's unique immutable manifest
+runner -> ebs-gateway -> ebs-apiserver: update Job.status
+repo controller -> poll RpmRepo and enqueue reconciliation
+repo controller -> ebs-apiserver: list Jobs and select a batch
 repo controller -> artifact-manager: asynchronously request repository materialization
-artifact-manager -> materialize and expose immutable RPM repository
+artifact-manager -> validate manifests, materialize and expose immutable RPM repository
 repo controller -> artifact-manager: poll materialization result
-repo controller -> ebs-apiserver: update RpmRepo/Build/Job status
+repo controller -> ebs-apiserver: update RpmRepo.status
+build controller -> ebs-apiserver: update Build.status from reconciliation results
 ```
 
-`artifact-manager` 的本地 Job 上传清单是一次 Job 完整文件集合的事实来源；Job status 只保存 Artifact 和仓库发布的可 watch 摘要。Controller Manager 中的 RpmRepo Controller 持续 List/Watch Job，将符合条件的完成事件转换为 Project 和 Build name 队列 key。每次 Reconcile 为同一个 Build 稳定选择一批 Job，并在 Artifact Manager 中生成一个新的不可变物理版本后原子更新同名 RpmRepo 指向；同一 Build 的批次串行，不同 Build 可以并行。Build name 由唯一 UUID 生成，目标架构由 Build 确定而不参与队列分组，发行版标识统一从 Project.spec.distro 读取，仅用于选择构建环境。RpmRepo Controller 不能扫描 Artifact Manager 的内部目录，也不能根据当前 Artifact 列表推断上传是否结束。Artifact Manager 不直接更新业务 API 对象，也不自行选择“最新仓库”。
+`artifact-manager` 的 JobUploadManifest 是一次 Job 完整文件集合及封账状态的事实来源；Job status 只保存执行结果。RpmRepo Controller 通过 RpmRepo 轮询及删除中的 BuildInfo/RpmRepo 事件入队，不注册 Job Watch；调谐时查询该 Build 的 Job，稳定选批，不预查 Manifest。Artifact Manager 在物化时校验输入，生成不可变过程仓版本，Controller 再更新同名 RpmRepo 的指向。同一 Build 的批次串行，不同 Build 可以并行，队列 key 为 Project + Build name。Controller 不扫描 Artifact Manager 的内部目录；Artifact Manager 不写业务 API 对象，也不自行选择“最新仓库”。
 
-Web UI 通过 Artifact API 查询和下载 Completed Artifact。实时日志先使用 Range 读取已提交历史内容，再通过 SSE 接收新增 chunk；日志封账后转为普通 `category=log` Artifact。Artifact Manager 的详细协议、数据结构和本地恢复规则见 [artifact-manager.md](./artifact-manager.md)。
+Web UI 通过 Artifact API 查询和下载 Completed Artifact；日志使用 Range 读取最近内容并定时刷新。Artifact Manager 另提供 SSE 接口，但当前前端不使用。日志封账及上传协议见 [artifact-manager.md](./artifact-manager.md)，前端展示规则见 [frontend.md](./frontend.md)。
 
 ---
 
