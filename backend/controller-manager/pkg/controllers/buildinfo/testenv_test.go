@@ -20,7 +20,7 @@ import (
 
 	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
-	"controller-manager/pkg/controllers/specname"
+	"controller-manager/pkg/labelcodec"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -328,7 +328,7 @@ func testJobObj(bi *ebsv1.BuildInfo, spec string, generation int64, phase ebsv1.
 			Name:      jobNameFor(string(bi.UID), spec, generation),
 			Labels: map[string]string{
 				ebsv1.JobBuildNameLabel:    bi.Name,
-				ebsv1.JobSpecNameLabel:     specname.Encode(spec),
+				ebsv1.JobSpecNameLabel:     labelcodec.Encode(spec),
 				ebsv1.JobPackageNameLabel:  packageNameLabelValue(spec),
 				ebsv1.BuildTargetArchLabel: testArch,
 			},

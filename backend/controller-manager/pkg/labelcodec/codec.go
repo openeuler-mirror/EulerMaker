@@ -1,10 +1,10 @@
-package specname
+package labelcodec
 
 import "strings"
 
 const hexDigits = "0123456789ABCDEF"
 
-// Encode converts a SPEC name to a reversible Kubernetes label value.
+// Encode converts a name to a reversible label-safe encoding without truncating it to the label length limit.
 // An unsafe first byte (or literal X) uses X_HH so the label starts with
 // an alphanumeric byte. All other escaped UTF-8 bytes use _HH.
 func Encode(name string) string {
@@ -30,8 +30,7 @@ func Encode(name string) string {
 	return out.String()
 }
 
-// Decode reverses Encode. Malformed values are rejected rather than treated
-// as SPEC names, so a damaged label cannot be matched to a build status.
+// Decode reverses Encode and reports whether the value is a valid encoding.
 func Decode(value string) (string, bool) {
 	if value == "" {
 		return "", false

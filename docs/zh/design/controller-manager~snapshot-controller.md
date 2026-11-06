@@ -47,7 +47,7 @@ Build Controller 创建 single Snapshot 时，只复制 Build.spec.packages 指�
 - `Snapshot.status.phase`：由 snapshot_controller **写入**
 - `Snapshot.status.conditions`：由 snapshot_controller **写入**
 
-Project apiserver 在创建和更新 Project 时保证 `spec.packageRepos[].name` 非空；build_controller 只从该字段固化 Snapshot 输入。因此，Snapshot Controller 将 PackageRepo 名称非空视为输入不变量，不重复处理空名称分支。
+apiserver 在创建和更新 Project、Snapshot 时保证 `spec.packageRepos[].name` 非空且唯一。因此，Snapshot Controller 将名称非空和唯一视为输入不变量，不重复执行这两项校验。
 
 Snapshot 不支持 watch，应使用 `PollingSourceFactory` 创建 Source。事件处理器必须在 `Manager.Run` 之前注册；控制器启动后不得再注册 handler。Manager 完成全部 Source 的首次同步后才启动 worker。PollingSource 仅负责通过 List 差异发现事件并将键加入队列，不向 Snapshot Controller 提供对象缓存读取接口；`Sync` 必须通过 API GET 获取最新 Snapshot，不能把事件携带的对象或 PollingSource 内部快照作为调和依据。
 
@@ -219,7 +219,7 @@ UID 不编码在字符串键中。`Sync` 通过 API Get 获取最新对象，并
 
 - `Add`：对服务端过滤后、未设置 `metadata.deletionTimestamp` 的 Snapshot 入队；`Active` 不在 List 结果中。
 - `Update`：不比较新旧 `resourceVersion`；对服务端过滤后、未删除的对象入队。PollingSource 每轮扫描都会产生 Update，同一 resourceVersion 的 Update 也必须入队，作为丢事件、慢速重试和外部依赖恢复后的 resync 兜底；工作队列负责合并同一 key。Worker GET 最新对象后仍检查 phase 和删除时间。
-- `Delete`：无需处理（Snapshot Controller 不删除 Snapshot）。
+- `Delete`：按事件对象 UID 清理 Tracker，不入队、不删除 API 对象。Add/Update 收到带 deletionTimestamp 的对象时同样清理；旧 UID 的迟到事件不得影响同名新对象。
 
 事件处理器只做类型检查和入队，不调用外部 API，不执行状态机。
 
@@ -250,17 +250,19 @@ type failureTracker struct {
     mu             sync.Mutex
     counts         map[failureKey]int       // failureKey = Snapshot UID + 包名
     uidByObjectKey map[string]types.UID      // objectKey = namespace/name
+    cursors        map[types.UID]int         // 已观察 UID 的下一派发索引
 }
 ```
 
 - 计数仅存在于进程内，控制器重启清零、重新给予预算；
 - Snapshot GET 成功后调用 `Observe(objectKey, uid)`；首次观察记录映射，UID 与已有映射不同时清除旧 UID 的全部计数并替换映射；
 - Snapshot GET 404 时调用 `ClearObjectKey(objectKey)`，清除该键记录的 UID、该 UID 的全部计数；
-- GET 得到 `Active` Snapshot 时清除该 UID 的全部计数和 objectKey 映射；
+- Snapshot 删除事件、GET 得到删除中或 `Active` Snapshot、父 Build 删除中时，清除该 Snapshot UID 的计数、游标和 objectKey 映射；不再处理的 Snapshot 也执行相同清理；
+- 计数和游标只允许更新已观察的 UID。清理后迟到的解析或写入确认结果不得恢复旧状态；同名新对象使用新 UID 独立记录；
 - GET 得到已有成功状态或不可重试 error 时，该状态已经由 apiserver 确认，可立即清除对应包的遗留计数；
 - 本轮新产生 Resolved、Waiting 或终态 Skipped（包括确定性失败和 `RetryExhausted`）时，将清理动作作为候选变更；只有 status 写入成功或 WriteUnknown 确认写入意图已实现后才提交；如果 status 无变化，则在返回预先计算的 `postWriteResult/postWriteErr` 前直接提交；
 - 未达到上限的非确定性 Failed 仅在 status 写入成功或 WriteUnknown 确认后增加计数；达到上限并成功持久化 `RetryExhausted` 后清除该包计数。Conflict、写入失败或确认未实现时丢弃候选增量和清理动作；
-- Snapshot 成功推进 Active 后清除该 UID 的全部计数和 objectKey 映射；
+- Snapshot 成功推进 Active 后清除该 UID 的全部计数、游标和 objectKey 映射；写入返回 404 或 WriteUnknown 确认发现对象不存在、UID 已替换时，清理旧周期的 Tracker；
 - 对本轮非确定性失败计算 `nextCount = currentCount + 1`。当 `nextCount >= failureRetryLimit` 时，本轮直接写入不可重试的 `PackageRepoStatus.error`（code=`RetryExhausted`）并跳过；否则写入可重试 error。默认 `failureRetryLimit=5` 表示第 1～4 次已确认失败仍可重试，第 5 次已确认失败转为 `RetryExhausted`；
 - 只有实际调用返回的可重试错误才产生 Failed，同一包每轮至多增加一次计数（包括客户端内部重试）。Deferred 表示本轮未完成检查，不增加也不清零计数，并保留已有包级状态；不能把尚未派发、同步进行中或单轮预算耗尽计作包级失败。
 - 锁内不得执行 API 请求或队列阻塞操作。
@@ -363,7 +365,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 
 并发阶段采用“worker 只计算、主 goroutine 唯一合并”的模型。通过 `context.WithTimeout` 创建 `budgetCtx`，总预算为 `resolveBudget`，默认值见 9.1：
 
-- 进入并发阶段前，主 goroutine 对目标 `PackageRepo` 做一次预检查并为每项分配其在 `Snapshot.spec.packageRepos` 中的稳定索引。同一名称重复时，所有同名项均不启动解析，并在 `packageRepoStatuses[repo.name]` 写入一条不可重试的 `ValidationFailed` error 表示名称冲突；控制器不得任意选择其中一项。
+- 进入并发阶段前，主 goroutine 为目标 `PackageRepo` 分配其在 `Snapshot.spec.packageRepos` 中的稳定索引，并跳过已有成功结果或不可重试 error 的项。仓库名称非空且唯一由 apiserver 保证。
 - 主 goroutine 创建容量等于待解析项数量的 `jobs` 和 `results` 通道，按下述轮转顺序写入任务后关闭 `jobs`。worker 数为 `min(resolveWorkers, 待解析项数量)`；没有任务时不启动 worker。
 - 按 Snapshot UID 保存进程内派发游标，初始为索引 0；每轮从游标开始按稳定索引环形排列尚未完成项。所有 worker 退出后，由主 goroutine 将游标推进到本轮最后领取项的下一原始索引；未领取任何任务则保持不变。游标按领取顺序而非结果完成顺序计算，即使本轮因预算中断或 status 写入冲突也推进，避免队首慢请求长期阻塞队尾。它只影响调度顺序，不代表业务完成；重启丢失游标允许重新扫描，成功/跳过项仍由持久化 status 排除。游标与 failureTracker 使用同样的 UID 隔离、并发锁和对象删除/终态清理规则。
 - 每个 worker 是一个固定 goroutine，循环从 `jobs` 领取任务。领取前以及领取后、发起外部请求前都检查 `budgetCtx.Err()`；context 已取消时立即退出，不再领取或处理后续任务。禁止为单个 PackageRepo 再创建子 goroutine。
@@ -416,7 +418,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `InvalidPackageRepos` | `NoPackageRepos` | `spec.packageRepos` 为空 |
 | `TargetPackagesNotFound` | `TargetPackagesNotFound` | `buildType=single` 的 Build 指定的一个或多个包无法在 `spec.packageRepos` 中找到；缺失目标不创建 `PackageRepoStatus`，仅通过该整体 condition 记录 |
 
-同一 type 同一时刻只保留当前 reason，对应问题消失时删除 condition。包名重复可以通过该名称写入包级 `ValidationFailed` error，不写整体 condition。
+同一 type 同一时刻只保留当前 reason，对应问题消失时删除 condition。
 
 | error.code | retryable | 触发时机 |
 |------------|-----------|----------|
@@ -424,7 +426,7 @@ build_controller 在 Prepared 阶段创建 Snapshot
 | `SyncTimeout` | `true` | 实际 git-server 请求自身超时，且跨轮失败预算尚未耗尽；单轮预算中断为 Deferred，正常同步等待为 Waiting，二者均不产生该错误 |
 | `ResolveFailed` | `false` | 完整 ref 不存在或命令返回确定性失败 |
 | `ResolveFailed` | `true` | `ResolveFullRef` 遭遇临时网络、服务端或响应错误，且跨轮预算尚未耗尽 |
-| `ValidationFailed` | `false` | 不可信输入校验失败、包名重复等确定性输入错误 |
+| `ValidationFailed` | `false` | Git Server 拒绝输入，或仓库未提供可用的 commitID、ref 和默认引用 |
 | `CommitConflict` | `false` | 同一 URL 与规范化 ref 得到不同 commitID |
 | `RetryExhausted` | `false` | 非确定性失败达到跨轮预算 |
 
@@ -671,8 +673,8 @@ Resolved、Waiting、Deferred、Failed 分别统计本轮解析结果；Deferred
 - L1 缓存命中减少 git-server 请求；
 - 连续多轮预算耗尽不使 Deferred 包产生 RetryExhausted，也不清除其已有可重试 error/计数；仅有 Deferred 包时仍保持 Processing 并延迟重入；
 - 5,000 个仓库场景，轮转游标保证队尾也能被派发；队首慢请求、乱序完成及 status Conflict 不阻止游标前进，稳定索引合并规则不变；
-- 派发游标在 UID 变化、404/Active 时清理，重启后可以重新扫描；延迟任务和 Sync 请求标记不持久化，重启后通过状态检查继续收敛；
-- failureTracker 在 UID 变化、Snapshot 404/Active、包成功、Waiting、确定性失败及重试超限场景下按 4.4 的规则清理，且写入冲突不会错误提交计数变更；
+- 按 4.4 验证 Tracker 的 UID 替换、删除事件、删除中对象、父 Build 删除和终态清理；迟到结果不得恢复已清理计数或游标，旧 UID 删除事件不得清除新 UID 状态；
+- 包成功、Waiting、确定性失败及重试超限时按 4.4 清理计数，写入冲突不提交候选计数变更；重启后游标可以从头开始，解析结果仍以持久化 status 为准；
 
 ### 11.2 集成测试
 

@@ -14,12 +14,11 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
-	"controller-manager/pkg/clients/gitserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -45,16 +44,14 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 	}
 	c.failures.observe(key, snapshot.UID)
 	if snapshot.DeletionTimestamp != nil || (snapshot.Status.Phase != ebsv1.SnapshotPending && snapshot.Status.Phase != ebsv1.SnapshotProcessing) {
-		if snapshot.Status.Phase == ebsv1.SnapshotActive {
-			c.failures.clearUID(snapshot.UID)
-		}
+		c.failures.clearUID(snapshot.UID)
 		return controller.ReconcileResult{}, nil
 	}
 	if snapshot.Status.Phase == ebsv1.SnapshotPending {
-		snapshot, err = c.advancePhase(ctx, snapshot)
+		updated, err := c.advancePhase(ctx, snapshot)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				c.failures.clearObject(key)
+				c.failures.clearUID(snapshot.UID)
 				return controller.ReconcileResult{}, nil
 			}
 			if apierrors.IsConflict(err) {
@@ -67,12 +64,14 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 			}
 			return c.handleWriteError(ctx, err, nil, nil)
 		}
+		snapshot = updated
 	}
 	build, err := c.client.GetBuild(ctx, namespace, name)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyReadError(err)
 	}
 	if build.DeletionTimestamp != nil {
+		c.failures.clearUID(snapshot.UID)
 		return controller.ReconcileResult{}, nil
 	}
 	original := snapshot.DeepCopy()
@@ -104,31 +103,26 @@ func (c *Controller) sync(ctx context.Context, key string) (controller.Reconcile
 			postErr = errPackagesRetryable
 		}
 	}
-	if reflect.DeepEqual(original.Status, snapshot.Status) {
+	finish := func() (controller.ReconcileResult, error) {
 		c.applyTrackerChanges(snapshot.UID, changes)
 		if snapshot.Status.Phase == ebsv1.SnapshotActive {
 			c.failures.clearUID(snapshot.UID)
 		}
 		return postResult, postErr
 	}
+	if reflect.DeepEqual(original.Status, snapshot.Status) {
+		return finish()
+	}
+	confirmed := func() (controller.ReconcileResult, error) {
+		c.recordStatus(original, snapshot)
+		return finish()
+	}
 	intent := snapshot.DeepCopy()
 	_, err = c.client.UpdateSnapshotStatus(ctx, intent)
 	if err != nil {
-		return c.handleWriteError(ctx, err, intent, func() (controller.ReconcileResult, error) {
-			c.recordStatus(original, snapshot)
-			c.applyTrackerChanges(snapshot.UID, changes)
-			if snapshot.Status.Phase == ebsv1.SnapshotActive {
-				c.failures.clearUID(snapshot.UID)
-			}
-			return postResult, postErr
-		})
+		return c.handleWriteError(ctx, err, intent, confirmed)
 	}
-	c.recordStatus(original, snapshot)
-	c.applyTrackerChanges(snapshot.UID, changes)
-	if snapshot.Status.Phase == ebsv1.SnapshotActive {
-		c.failures.clearUID(snapshot.UID)
-	}
-	return postResult, postErr
+	return confirmed()
 }
 
 func (c *Controller) advancePhase(ctx context.Context, snapshot *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
@@ -140,7 +134,13 @@ func (c *Controller) advancePhase(ctx context.Context, snapshot *ebsv1.Snapshot)
 		return updated, nil
 	}
 	var writeErr *clientpkg.WriteError
-	if !errors.As(err, &writeErr) || writeErr.Outcome != clientpkg.WriteUnknown {
+	if !errors.As(err, &writeErr) {
+		return nil, err
+	}
+	if writeErr.Outcome == clientpkg.WriteRejected && writeErr.StatusCode == 404 {
+		c.failures.clearUID(request.UID)
+	}
+	if writeErr.Outcome != clientpkg.WriteUnknown {
 		return nil, err
 	}
 	unknownWrites.Inc()
@@ -149,13 +149,13 @@ func (c *Controller) advancePhase(ctx context.Context, snapshot *ebsv1.Snapshot)
 		return nil, classifyReadError(getErr)
 	}
 	if latest.UID != request.UID {
-		return nil, apierrors.NewNotFound(sourceResource(), request.Name)
+		return nil, apierrors.NewNotFound(source.SnapshotsGVR.GroupResource(), request.Name)
 	}
 	if statusEquivalent(latest.Status, request.Status) {
 		c.recordStatus(snapshot, latest)
 		return latest, nil
 	}
-	return nil, apierrors.NewConflict(sourceResource(), request.Name, err)
+	return nil, apierrors.NewConflict(source.SnapshotsGVR.GroupResource(), request.Name, err)
 }
 
 func (c *Controller) handleWriteError(ctx context.Context, err error, intent *ebsv1.Snapshot, confirmed func() (controller.ReconcileResult, error)) (controller.ReconcileResult, error) {
@@ -170,12 +170,14 @@ func (c *Controller) handleWriteError(ctx context.Context, err error, intent *eb
 		unknownWrites.Inc()
 		latest, getErr := c.client.GetSnapshot(ctx, intent.Namespace, intent.Name)
 		if apierrors.IsNotFound(getErr) {
+			c.failures.clearUID(intent.UID)
 			return controller.ReconcileResult{}, nil
 		}
 		if getErr != nil {
 			return controller.ReconcileResult{}, classifyReadError(getErr)
 		}
 		if latest.UID != intent.UID {
+			c.failures.clearUID(intent.UID)
 			return controller.ReconcileResult{}, nil
 		}
 		if statusEquivalent(latest.Status, intent.Status) {
@@ -186,6 +188,9 @@ func (c *Controller) handleWriteError(ctx context.Context, err error, intent *eb
 	if writeErr.Outcome == clientpkg.WriteRejected {
 		switch writeErr.StatusCode {
 		case 404:
+			if intent != nil {
+				c.failures.clearUID(intent.UID)
+			}
 			return controller.ReconcileResult{}, nil
 		case 409, 412:
 			conflictRequeues.Inc()
@@ -218,14 +223,9 @@ func classifyReadError(err error) error {
 	return err
 }
 
-func sourceResource() schema.GroupResource {
-	return schema.GroupResource{Group: "ebs", Resource: "snapshots"}
-}
-
 func splitKey(key string) (string, string, bool) {
 	parts := strings.Split(key, "/")
-	returnValue := len(parts) == 2 && parts[0] != "" && parts[1] != ""
-	if !returnValue {
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
@@ -336,12 +336,4 @@ func normalizeConditions(value []metav1.Condition) []comparableCondition {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Type < result[j].Type })
 	return result
-}
-
-func gitErrorKind(err error) (gitserver.ErrorKind, bool) {
-	var target *gitserver.Error
-	if errors.As(err, &target) {
-		return target.Kind, true
-	}
-	return gitserver.ErrorTemporary, false
 }

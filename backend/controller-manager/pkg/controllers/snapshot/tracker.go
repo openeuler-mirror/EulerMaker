@@ -15,11 +15,15 @@ type failureTracker struct {
 	mu             sync.Mutex
 	counts         map[failureKey]int
 	uidByObjectKey map[string]types.UID
-	cursors        map[types.UID]int
+	cursors        map[types.UID]int // Presence marks an observed UID; late results cannot restore cleared state.
 }
 
 func newFailureTracker() *failureTracker {
-	return &failureTracker{counts: make(map[failureKey]int), uidByObjectKey: make(map[string]types.UID), cursors: make(map[types.UID]int)}
+	return &failureTracker{
+		counts:         make(map[failureKey]int),
+		uidByObjectKey: make(map[string]types.UID),
+		cursors:        make(map[types.UID]int),
+	}
 }
 
 func (t *failureTracker) cursor(uid types.UID) int {
@@ -31,12 +35,8 @@ func (t *failureTracker) cursor(uid types.UID) int {
 func (t *failureTracker) setCursor(uid types.UID, cursor int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// An event handler may have removed this UID while requests were running.
-	for _, current := range t.uidByObjectKey {
-		if current == uid {
-			t.cursors[uid] = cursor
-			return
-		}
+	if _, observed := t.cursors[uid]; observed {
+		t.cursors[uid] = cursor
 	}
 }
 
@@ -47,6 +47,9 @@ func (t *failureTracker) observe(objectKey string, uid types.UID) {
 		t.clearUIDLocked(old)
 	}
 	t.uidByObjectKey[objectKey] = uid
+	if _, observed := t.cursors[uid]; !observed {
+		t.cursors[uid] = 0
+	}
 }
 
 func (t *failureTracker) count(uid types.UID, repo string) int {
@@ -61,7 +64,7 @@ func (t *failureTracker) set(uid types.UID, repo string, count int) {
 	key := failureKey{uid: uid, repo: repo}
 	if count <= 0 {
 		delete(t.counts, key)
-	} else {
+	} else if _, observed := t.cursors[uid]; observed {
 		t.counts[key] = count
 	}
 }

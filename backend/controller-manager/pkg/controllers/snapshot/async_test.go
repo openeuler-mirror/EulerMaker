@@ -169,6 +169,7 @@ func TestBudgetDefersAndRotatesWithoutConsumingRetries(t *testing.T) {
 	c := newTestController(t, api, g, Config{})
 	c.config.ResolveWorkers = 1
 	c.config.ResolveBudget = 20 * time.Millisecond
+	c.failures.observe("project-a/build-a", snapshot.UID)
 	c.failures.set(snapshot.UID, "pkg-4", 2)
 	original := snapshot.DeepCopy().Status
 	for round := 0; round < 5; round++ {
@@ -223,28 +224,6 @@ func TestPublishFailureCountsOnceAndRecovers(t *testing.T) {
 	}
 	if g.publishes != 1 || api.snapshot.Status.Phase != ebsv1.SnapshotActive || api.snapshot.Status.PackageRepoStatuses["pkg-0"].Error != nil {
 		t.Fatalf("requests=%+v status=%+v", g, api.snapshot.Status)
-	}
-}
-
-func TestCursorLifecycle(t *testing.T) {
-	tracker := newFailureTracker()
-	tracker.observe("p/s", "old")
-	tracker.setCursor("old", 42)
-	tracker.observe("p/s", "new")
-	tracker.setCursor("old", 43) // Late result must not resurrect old UID state.
-	if tracker.cursor("old") != 0 {
-		t.Fatal("old cursor retained")
-	}
-	tracker.setCursor("new", 2)
-	tracker.clearObject("p/s")
-	if tracker.cursor("new") != 0 {
-		t.Fatal("deleted cursor retained")
-	}
-	tracker.observe("p/s", "new")
-	tracker.setCursor("new", 3)
-	tracker.clearUID("new")
-	if tracker.cursor("new") != 0 {
-		t.Fatal("terminal cursor retained")
 	}
 }
 

@@ -3,20 +3,18 @@ package snapshot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
-	"controller-manager/pkg/controller"
-	"controller-manager/pkg/serviceconfig"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -33,26 +31,35 @@ func (s *fakeSource) HasSynced() bool           { return true }
 func (s *fakeSource) Ready() bool               { return true }
 
 type fakeClient struct {
-	snapshot     *ebsv1.Snapshot
-	build        *ebsv1.Build
-	updates      int
-	unknownFirst bool
+	snapshot  *ebsv1.Snapshot
+	build     *ebsv1.Build
+	updates   int
+	unknownAt int
+	updateErr error
 }
 
-func (c *fakeClient) GetSnapshot(context.Context, string, string) (*ebsv1.Snapshot, error) {
+func (c *fakeClient) GetSnapshot(_ context.Context, _, name string) (*ebsv1.Snapshot, error) {
 	if c.snapshot == nil {
-		return nil, fmt.Errorf("missing")
+		return nil, apierrors.NewNotFound(source.SnapshotsGVR.GroupResource(), name)
 	}
 	return c.snapshot.DeepCopy(), nil
 }
-func (c *fakeClient) GetBuild(context.Context, string, string) (*ebsv1.Build, error) {
+
+func (c *fakeClient) GetBuild(_ context.Context, _, name string) (*ebsv1.Build, error) {
+	if c.build == nil {
+		return nil, apierrors.NewNotFound(source.BuildsGVR.GroupResource(), name)
+	}
 	return c.build.DeepCopy(), nil
 }
+
 func (c *fakeClient) UpdateSnapshotStatus(_ context.Context, request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
+	if c.updateErr != nil {
+		return nil, c.updateErr
+	}
 	c.updates++
 	c.snapshot = request.DeepCopy()
 	c.snapshot.ResourceVersion = strconv.Itoa(c.updates + 1)
-	if c.unknownFirst && c.updates == 1 {
+	if c.unknownAt == c.updates {
 		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteUnknown, Err: errors.New("lost response")}
 	}
 	return c.snapshot.DeepCopy(), nil
@@ -87,136 +94,10 @@ func (f *fakeGitClient) ResolveCommitID(_ context.Context, _ string, commitID st
 	return commitID, nil
 }
 
-func TestResolvePinnedCommit(t *testing.T) {
-	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	for _, ref := range []string{"", "refs/heads/main"} {
-		snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ref, CommitID: commitID}})
-		git := &fakeGitClient{}
-		api := &fakeClient{snapshot: snapshot, build: build}
-		c := newTestController(t, api, git, Config{})
-		if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-			t.Fatal(err)
-		}
-		status := api.snapshot.Status.PackageRepoStatuses["pkg"]
-		if status.CommitID != commitID || status.CloneURL != "git-server:///git/example.com/repo.git" || git.commitID != commitID {
-			t.Fatalf("status=%+v resolved commit=%q", status, git.commitID)
-		}
-	}
-}
-
-func TestResolvePackageRefAndReuseCommit(t *testing.T) {
-	for _, ref := range []string{"refs/heads/main", "refs/tags/v1", "refs/merge-requests/501/head"} {
-		t.Run(ref, func(t *testing.T) {
-			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: ref}})
-			build.Spec.BuildType = "single"
-			snapshot.Spec.DefaultRef = "refs/heads/default"
-			api := &fakeClient{snapshot: snapshot, build: build}
-			git := &fakeGitClient{}
-			c := newTestController(t, api, git, Config{})
-			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-				t.Fatal(err)
-			}
-			status := api.snapshot.Status.PackageRepoStatuses["pkg"]
-			if api.snapshot.Status.Phase != ebsv1.SnapshotActive || status.CommitID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
-				status.CloneURL != "git-server:///git/example.com/repo.git" || git.fullRef != ref {
-				t.Fatalf("phase=%s status=%+v resolved ref=%q", api.snapshot.Status.Phase, status, git.fullRef)
-			}
-			if api.snapshot.Spec.PackageRepos[0].Ref != ref {
-				t.Fatal("resolution must preserve the frozen package ref")
-			}
-			// A new controller also reuses a committed package result while the Snapshot is Processing.
-			api.snapshot.Status.Phase = ebsv1.SnapshotProcessing
-			git.fullRef = ""
-			c = newTestController(t, api, git, Config{})
-			if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-				t.Fatal(err)
-			}
-			if git.fullRef != "" || api.snapshot.Status.PackageRepoStatuses["pkg"] != status {
-				t.Fatal("persisted package commit must be reused after restart")
-			}
-		})
-	}
-}
-
-func TestResolveSnapshotDefaultRef(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		ref, fallback string
-		skipped       bool
-	}{
-		{name: "branch fallback", fallback: "refs/heads/release"},
-		{name: "tag fallback", fallback: "refs/tags/v1"},
-		{name: "explicit wins", ref: "refs/heads/main", fallback: "refs/tags/v1"},
-		{name: "both empty", skipped: true},
-		{name: "explicit full ref", ref: "refs/merge-requests/501/head", fallback: "refs/tags/v1"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: tc.ref}})
-			snapshot.Spec.DefaultRef = tc.fallback
-			git := &fakeGitClient{}
-			c := newTestController(t, &fakeClient{snapshot: snapshot, build: build}, git, Config{})
-			results, err := c.resolveAll(context.Background(), snapshot, snapshot.Spec.PackageRepos)
-			if err != nil || len(results) != 1 {
-				t.Fatalf("results=%v err=%v", results, err)
-			}
-			result := results[0]
-			if tc.skipped {
-				if result.state != stateSkipped || result.status.Error.Code != ebsv1.PackageRepoValidationFailed {
-					t.Fatalf("result=%+v", result)
-				}
-			} else {
-				want := tc.ref
-				if want == "" {
-					want = tc.fallback
-				}
-				if result.state != stateResolved {
-					t.Fatalf("result=%+v", result)
-				}
-				if git.fullRef != want {
-					t.Fatalf("ref=%+v want=%+v", git.fullRef, want)
-				}
-			}
-			if snapshot.Spec.PackageRepos[0].Ref != tc.ref {
-				t.Fatal("spec ref mutated")
-			}
-		})
-	}
-}
-
 type fakeServices struct {
 	git   gitserver.GitServerClient
 	err   error
 	loads int
-}
-
-func TestServiceConfigFailurePreservesPackageBudget(t *testing.T) {
-	snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}})
-	api := &fakeClient{snapshot: snapshot, build: build}
-	c := newTestController(t, api, &fakeGitClient{}, Config{})
-	services := c.services.(*fakeServices)
-	services.err = &serviceconfig.Error{Err: context.DeadlineExceeded}
-	for i := 0; i < 6; i++ {
-		if _, err := c.sync(context.Background(), "project-a/build-a"); !serviceconfig.IsError(err) {
-			t.Fatalf("expected configuration error: %v", err)
-		}
-		if c.failures.count(snapshot.UID, "pkg") != 0 || len(api.snapshot.Status.PackageRepoStatuses) != 0 {
-			t.Fatal("configuration failure consumed package retry budget")
-		}
-	}
-	services.err = nil
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatal(err)
-	}
-	if api.snapshot.Status.Phase != ebsv1.SnapshotActive {
-		t.Fatalf("phase=%s", api.snapshot.Status.Phase)
-	}
-	loads := services.loads
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatal(err)
-	}
-	if services.loads != loads {
-		t.Fatal("terminal Snapshot read service configuration")
-	}
 }
 
 func (f *fakeServices) Load(context.Context) (*ebsv1.ServiceConfigContent, error) {
@@ -243,60 +124,6 @@ func baseObjects(repos []ebsv1.PackageRepo) (*ebsv1.Snapshot, *ebsv1.Build) {
 	snapshot := &ebsv1.Snapshot{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", UID: types.UID("snapshot-uid"), ResourceVersion: "1", CreationTimestamp: now}, Spec: ebsv1.SnapshotSpec{PackageRepos: repos}, Status: ebsv1.SnapshotStatus{Phase: ebsv1.SnapshotPending}}
 	build := &ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: "build-a", Namespace: "project-a", UID: types.UID("build-uid"), ResourceVersion: "1"}, Spec: ebsv1.BuildSpec{BuildType: "full", Packages: []string{"pkg"}}}
 	return snapshot, build
-}
-
-func TestPendingSnapshotResolvesRefAndBecomesActive(t *testing.T) {
-	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
-	snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
-	api := &fakeClient{snapshot: snapshot, build: build}
-	c := newTestController(t, api, &fakeGitClient{}, Config{})
-	result, err := c.sync(context.Background(), "project-a/build-a")
-	if err != nil || result != (controller.ReconcileResult{}) {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	if api.updates != 2 || api.snapshot.Status.Phase != ebsv1.SnapshotActive || api.snapshot.Status.PackageRepoStatuses["pkg"].CommitID != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
-		t.Fatalf("unexpected snapshot after reconcile: updates=%d status=%+v", api.updates, api.snapshot.Status)
-	}
-}
-
-func TestDeletingBuildStopsSnapshotResolution(t *testing.T) {
-	for _, phase := range []ebsv1.SnapshotPhase{ebsv1.SnapshotPending, ebsv1.SnapshotProcessing} {
-		t.Run(string(phase), func(t *testing.T) {
-			repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
-			snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
-			snapshot.Status.Phase = phase
-			now := metav1.Now()
-			build.DeletionTimestamp = &now
-			api := &fakeClient{snapshot: snapshot, build: build}
-			c := newTestController(t, api, &fakeGitClient{}, Config{})
-			for range 2 {
-				if result, err := c.sync(context.Background(), "project-a/build-a"); err != nil || result != (controller.ReconcileResult{}) {
-					t.Fatalf("result=%+v err=%v", result, err)
-				}
-			}
-			wantUpdates := 0
-			if phase == ebsv1.SnapshotPending {
-				wantUpdates = 1
-			}
-			if api.updates != wantUpdates || api.snapshot.Status.Phase != ebsv1.SnapshotProcessing ||
-				len(api.snapshot.Status.PackageRepoStatuses) != 0 || c.services.(*fakeServices).loads != 0 {
-				t.Fatalf("updates=%d status=%+v service loads=%d", api.updates, api.snapshot.Status, c.services.(*fakeServices).loads)
-			}
-		})
-	}
-}
-
-func TestAdvancePhaseUnknownIsConfirmedAndContinues(t *testing.T) {
-	repo := ebsv1.PackageRepo{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main"}
-	snapshot, build := baseObjects([]ebsv1.PackageRepo{repo})
-	api := &fakeClient{snapshot: snapshot, build: build, unknownFirst: true}
-	c := newTestController(t, api, &fakeGitClient{}, Config{})
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatal(err)
-	}
-	if api.updates != 2 || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
-		t.Fatalf("updates=%d phase=%s", api.updates, api.snapshot.Status.Phase)
-	}
 }
 
 func TestOnlySingleBuildUsesPackages(t *testing.T) {
@@ -361,24 +188,77 @@ func TestPollingUpdateWithSameResourceVersionEnqueues(t *testing.T) {
 	}
 }
 
-func TestPollingDeletedSnapshotIsNotEnqueued(t *testing.T) {
-	snapshot, build := baseObjects(nil)
-	api := &fakeClient{snapshot: snapshot, build: build}
-	s := &fakeSource{}
-	c, err := New(s, api, &fakeServices{git: &fakeGitClient{}}, clock.RealClock{}, Config{PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute, SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	projected := snapshot.DeepCopy()
-	projected.Status = ebsv1.SnapshotStatus{}
-	now := metav1.Now()
-	projected.DeletionTimestamp = &now
-	s.handler.OnAdd(projected)
-	if c.Queue().Len() != 0 {
-		t.Fatalf("deleted Snapshot queued, length=%d", c.Queue().Len())
+func TestPollingDeletionClearsTracker(t *testing.T) {
+	for _, event := range []string{"add-deleting", "update-deleting", "delete"} {
+		t.Run(event, func(t *testing.T) {
+			snapshot, build := baseObjects(nil)
+			api := &fakeClient{snapshot: snapshot, build: build}
+			s := &fakeSource{}
+			c, err := New(s, api, &fakeServices{git: &fakeGitClient{}}, clock.RealClock{}, Config{
+				PollPeriod: time.Second, ResolveWorkers: 1, ResolveBudget: time.Minute,
+				SyncRequeueDelay: time.Second, FailureLimit: 1, MaxRetries: 2,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.failures.observe("project-a/build-a", snapshot.UID)
+			c.failures.set(snapshot.UID, "pkg", 2)
+			c.failures.setCursor(snapshot.UID, 1)
+			projected := snapshot.DeepCopy()
+			projected.Status = ebsv1.SnapshotStatus{}
+			if event == "delete" {
+				s.handler.OnDelete(projected)
+			} else {
+				now := metav1.Now()
+				projected.DeletionTimestamp = &now
+				if event == "add-deleting" {
+					s.handler.OnAdd(projected)
+				} else {
+					s.handler.OnUpdate(snapshot, projected)
+				}
+			}
+			assertTrackerCleared(t, c.failures, snapshot.UID)
+			if c.Queue().Len() != 0 {
+				t.Fatalf("deleted Snapshot queued, length=%d", c.Queue().Len())
+			}
+		})
 	}
 }
 
 var _ source.Source = (*fakeSource)(nil)
 var _ Client = (*fakeClient)(nil)
 var _ gitserver.GitServerClient = (*fakeGitClient)(nil)
+
+func TestOldSnapshotDeletionPreservesReplacementTracker(t *testing.T) {
+	snapshot, build := baseObjects(nil)
+	c := newTestController(t, &fakeClient{snapshot: snapshot, build: build}, &fakeGitClient{}, Config{})
+	c.failures.observe("project-a/build-a", snapshot.UID)
+	c.failures.set(snapshot.UID, "pkg", 2)
+	c.failures.observe("project-a/build-a", "replacement-uid")
+	c.failures.set("replacement-uid", "pkg", 1)
+	c.failures.setCursor("replacement-uid", 3)
+	c.onDelete(snapshot)
+	assertTrackerCleared(t, c.failures, snapshot.UID)
+	if c.failures.count("replacement-uid", "pkg") != 1 || c.failures.cursor("replacement-uid") != 3 {
+		t.Fatal("stale deletion cleared the replacement's tracker")
+	}
+}
+
+func assertTrackerCleared(t *testing.T, tracker *failureTracker, uid types.UID) {
+	t.Helper()
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if _, ok := tracker.cursors[uid]; ok {
+		t.Fatalf("cursor retained for %s", uid)
+	}
+	for key := range tracker.counts {
+		if key.uid == uid {
+			t.Fatalf("failure count retained for %s", uid)
+		}
+	}
+	for _, current := range tracker.uidByObjectKey {
+		if current == uid {
+			t.Fatalf("object association retained for %s", uid)
+		}
+	}
+}

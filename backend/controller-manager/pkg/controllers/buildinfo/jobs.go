@@ -21,7 +21,7 @@ import (
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/controllers/buildinfo/rpmver"
 	"controller-manager/pkg/controllers/buildinfo/specparse"
-	"controller-manager/pkg/controllers/specname"
+	"controller-manager/pkg/labelcodec"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -36,7 +36,7 @@ const (
 // specName, generation]). The generation remains in the hash input, but is not shown in the name.
 func jobNameFor(buildInfoUID, specName string, generation int64) string {
 	sum := jobNameHash(buildInfoUID, specName, generation)
-	return fmt.Sprintf("%s-%x", specname.Encode(specName), sum[:8])
+	return fmt.Sprintf("%s-%x", labelcodec.Encode(specName), sum[:8])
 }
 
 func jobNameHash(buildInfoUID, specName string, generation int64) [sha256.Size]byte {
@@ -44,10 +44,10 @@ func jobNameHash(buildInfoUID, specName string, generation int64) [sha256.Size]b
 	return sha256.Sum256(identity)
 }
 
-// packageNameLabelValue uses the spec-name encoding for repository names. Values over 63 bytes are truncated, so only
+// packageNameLabelValue uses the shared label encoding for repository names. Values over 63 bytes are truncated, so only
 // untruncated values are reversible.
 func packageNameLabelValue(name string) string {
-	value := specname.Encode(name)
+	value := labelcodec.Encode(name)
 	if len(value) > 63 {
 		value = value[:63]
 	}
@@ -373,8 +373,8 @@ func verifyJobIdentity(job *ebsv1.Job, buildInfo *ebsv1.BuildInfo, specName stri
 	if job.Labels[ebsv1.JobBuildNameLabel] != buildInfo.Name {
 		return fmt.Errorf("build-name label %q != %q", job.Labels[ebsv1.JobBuildNameLabel], buildInfo.Name)
 	}
-	if job.Labels[ebsv1.JobSpecNameLabel] != specname.Encode(specName) {
-		return fmt.Errorf("spec-name label %q != %q", job.Labels[ebsv1.JobSpecNameLabel], specname.Encode(specName))
+	if job.Labels[ebsv1.JobSpecNameLabel] != labelcodec.Encode(specName) {
+		return fmt.Errorf("spec-name label %q != %q", job.Labels[ebsv1.JobSpecNameLabel], labelcodec.Encode(specName))
 	}
 	if job.Annotations[annDispatchGeneration] != strconv.FormatInt(generation, 10) {
 		return fmt.Errorf("dispatch-generation annotation %q != %d", job.Annotations[annDispatchGeneration], generation)
@@ -439,7 +439,7 @@ func (c *Controller) jobForSpec(
 			Namespace: buildInfo.Namespace,
 			Labels: map[string]string{
 				ebsv1.JobBuildNameLabel:    buildInfo.Name,
-				ebsv1.JobSpecNameLabel:     specname.Encode(specName),
+				ebsv1.JobSpecNameLabel:     labelcodec.Encode(specName),
 				ebsv1.JobPackageNameLabel:  packageNameLabelValue(depend.RepoName),
 				ebsv1.BuildTargetArchLabel: arch,
 			},
@@ -732,7 +732,7 @@ func (c *Controller) groupJobsBySpec(
 	for i := range jobs {
 		job := jobs[i]
 		encoded := job.Labels[ebsv1.JobSpecNameLabel]
-		spec, valid := specname.Decode(encoded)
+		spec, valid := labelcodec.Decode(encoded)
 		if !valid || !scope[spec] {
 			c.logf(round.key, "OrphanJob", "job %s spec-name %q out of scope, skipped", job.Name, encoded)
 			continue
@@ -807,7 +807,7 @@ func filterJobsByIdentity(jobs []ebsv1.Job, uid string) []ebsv1.Job {
 	for i := range jobs {
 		job := &jobs[i]
 		generation, err := strconv.ParseInt(job.Annotations[annDispatchGeneration], 10, 64)
-		spec, valid := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
+		spec, valid := labelcodec.Decode(job.Labels[ebsv1.JobSpecNameLabel])
 		if err == nil && generation > 0 && valid && job.Name == jobNameFor(uid, spec, generation) {
 			out = append(out, jobs[i])
 		}
