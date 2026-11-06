@@ -13,16 +13,16 @@ type FakeArtifactManager struct {
 	SubmitReleaseFunc           func(context.Context, CreateReleaseRequest) (ReleaseResponse, error)
 	GetReleaseFunc              func(context.Context, string) (ReleaseResponse, error)
 	ActivateReleaseFunc         func(context.Context, string) (ReleaseResponse, error)
-	DeleteBuildRepositoriesFunc func(context.Context, string, string, string) (bool, error)
-	StopBuildRepositoriesFunc   func(context.Context, string, string, string) (bool, error)
+	DeleteBuildRepositoriesFunc func(context.Context, string, string) (bool, error)
+	StopBuildRepositoriesFunc   func(context.Context, string, string) (bool, error)
 
 	SubmitRepositoryRequests []CreateRepositoryRequest
 	GetRepositoryUIDs        []string
 	SubmitReleaseRequests    []CreateReleaseRequest
 	GetReleaseBuildNames     []string
 	ActivateReleaseNames     []string
-	DeleteBuildRequests      [][3]string
-	StopBuildRequests        [][3]string
+	DeleteBuildRequests      [][2]string
+	StopBuildRequests        [][2]string
 }
 
 func NewFakeArtifactManager() *FakeArtifactManager { return &FakeArtifactManager{} }
@@ -67,18 +67,18 @@ func (f *FakeArtifactManager) ActivateRelease(ctx context.Context, buildName str
 	return f.ActivateReleaseFunc(ctx, buildName)
 }
 
-func (f *FakeArtifactManager) DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
-	f.DeleteBuildRequests = append(f.DeleteBuildRequests, [3]string{project, arch, buildName})
+func (f *FakeArtifactManager) DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {
+	f.DeleteBuildRequests = append(f.DeleteBuildRequests, [2]string{project, buildName})
 	if f.DeleteBuildRepositoriesFunc != nil {
-		return f.DeleteBuildRepositoriesFunc(ctx, project, arch, buildName)
+		return f.DeleteBuildRepositoriesFunc(ctx, project, buildName)
 	}
 	return true, nil
 }
 
-func (f *FakeArtifactManager) StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
-	f.StopBuildRequests = append(f.StopBuildRequests, [3]string{project, arch, buildName})
+func (f *FakeArtifactManager) StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {
+	f.StopBuildRequests = append(f.StopBuildRequests, [2]string{project, buildName})
 	if f.StopBuildRepositoriesFunc != nil {
-		return f.StopBuildRepositoriesFunc(ctx, project, arch, buildName)
+		return f.StopBuildRepositoriesFunc(ctx, project, buildName)
 	}
 	return true, nil
 }

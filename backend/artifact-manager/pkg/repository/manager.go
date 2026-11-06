@@ -243,10 +243,10 @@ func (m *Manager) Submit(in CreateRepositoryRequest) (*RepositoryRecord, int, er
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.cleaningBuilds[buildCleanupKey(in.Project, in.TargetArch, in.BuildName)] {
+	if m.cleaningBuilds[buildCleanupKey(in.Project, in.BuildName)] {
 		return nil, 0, &Error{Code: "RepositoryDeleting", Status: 409}
 	}
-	if err := CheckBuildActive(m.root, in.Project, in.TargetArch, in.BuildName); err != nil {
+	if err := CheckBuildActive(m.root, in.Project, in.BuildName); err != nil {
 		return nil, 0, err
 	}
 	old, err := m.recordLocked(in.RepositoryUID)
@@ -488,7 +488,7 @@ func (m *Manager) Delete(uid string) (*RepositoryRecord, int, error) {
 	if record == nil {
 		return nil, 204, nil
 	}
-	if m.cleaningBuilds[buildCleanupKey(record.Project, record.TargetArch, record.BuildName)] {
+	if m.cleaningBuilds[buildCleanupKey(record.Project, record.BuildName)] {
 		return nil, 0, &Error{Code: "RepositoryDeleting", Status: 409}
 	}
 	record = cloneRepository(record)

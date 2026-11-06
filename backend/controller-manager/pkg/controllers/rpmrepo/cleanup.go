@@ -31,7 +31,7 @@ func (r *reconciler) cleanupRpmRepo(repo *ebsv1.RpmRepo) (controller.ReconcileRe
 	if err := r.selectArtifactManager(repo); err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	done, err := r.artifactClient().DeleteBuildRepositories(r.ctx, r.project, repo.Labels[ebsv1.BuildTargetArchLabel], repo.Name)
+	done, err := r.artifactClient().DeleteBuildRepositories(r.ctx, r.project, repo.Name)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyArtifactReadError(err)
 	}
@@ -72,7 +72,7 @@ func (r *reconciler) drainCheckpoints(repo *ebsv1.RpmRepo) (controller.Reconcile
 	if err := r.selectArtifactManager(repo); err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	done, err := r.artifactClient().StopBuildRepositories(r.ctx, r.project, repo.Labels[ebsv1.BuildTargetArchLabel], repo.Name)
+	done, err := r.artifactClient().StopBuildRepositories(r.ctx, r.project, repo.Name)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyArtifactReadError(err)
 	}

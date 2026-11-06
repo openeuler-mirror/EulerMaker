@@ -139,7 +139,7 @@ func TestStopBuildFencesReleaseSubmissionAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.running[record.BuildName] = true
-	if done, err := m.StopBuild("project", "arch", "build"); done || err != nil {
+	if done, err := m.StopBuild("project", "build"); done || err != nil {
 		t.Fatalf("active release stop: %t, %v", done, err)
 	}
 	// Completion after the fence may prepare files, but must not change current.
@@ -151,7 +151,7 @@ func TestStopBuildFencesReleaseSubmissionAndActivation(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(root, "repositories/project/arch/current")); !os.IsNotExist(err) {
 		t.Fatalf("stopped release changed current: %v", err)
 	}
-	if done, err := m.StopBuild("project", "arch", "build"); !done || err != nil {
+	if done, err := m.StopBuild("project", "build"); !done || err != nil {
 		t.Fatalf("drained release stop: %t, %v", done, err)
 	}
 	for _, state := range []ReleaseState{ReleasePrepared, ReleaseFailed} {
@@ -179,7 +179,7 @@ func TestStopBuildFencesReleaseSubmissionAndActivation(t *testing.T) {
 	if !errors.As(err, &failure) || failure.Code != "BuildStopped" {
 		t.Fatalf("activation after restart: %v", err)
 	}
-	if done, err := repositories.DeleteBuild("project", "arch", "build"); err != nil || !done {
+	if done, err := repositories.DeleteBuild("project", "build"); err != nil || !done {
 		t.Fatalf("source cleanup: %t, %v", done, err)
 	}
 	_, _, err = m.Submit(request)
@@ -208,7 +208,7 @@ func TestDeleteBuildRelease(t *testing.T) {
 	if err := os.Symlink("releases/build", current); err != nil {
 		t.Fatal(err)
 	}
-	done, err := m.DeleteBuild("project", "arch", "build")
+	done, err := m.DeleteBuild("project", "build")
 	var failure *Error
 	if done || !errors.As(err, &failure) || failure.Status != http.StatusConflict || failure.Code != "ReleaseInUse" {
 		t.Fatalf("current protection: %t, %v", done, err)
@@ -218,7 +218,7 @@ func TestDeleteBuildRelease(t *testing.T) {
 	}
 	m.records[record.BuildName] = record
 	m.running[record.BuildName] = true
-	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || done {
+	if done, err := m.DeleteBuild("project", "build"); err != nil || done {
 		t.Fatalf("running release: %t, %v", done, err)
 	}
 	delete(m.running, record.BuildName)
@@ -229,7 +229,7 @@ func TestDeleteBuildRelease(t *testing.T) {
 	if err := fileutil.AtomicJSON(filepath.Join(m.metaPath(record.BuildName), "obstruction"), "x"); err != nil {
 		t.Fatal(err)
 	}
-	if done, err := m.DeleteBuild("project", "arch", "build"); err == nil || done {
+	if done, err := m.DeleteBuild("project", "build"); err == nil || done {
 		t.Fatalf("partial cleanup: %t, %v", done, err)
 	}
 	if err := os.RemoveAll(m.metaPath(record.BuildName)); err != nil {
@@ -238,7 +238,7 @@ func TestDeleteBuildRelease(t *testing.T) {
 	// No cached record or existing directory is required to finish after restart.
 	m = &Manager{root: m.root, records: map[string]*ReleaseRecord{}}
 	for range 2 {
-		if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+		if done, err := m.DeleteBuild("project", "build"); err != nil || !done {
 			t.Fatalf("cleanup retry: %t, %v", done, err)
 		}
 	}
@@ -272,7 +272,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	var cleanupErr error
 	go func() {
 		defer close(finished)
-		done, cleanupErr = m.withBuildCleanup("project", "arch", "build", func() error {
+		done, cleanupErr = m.withBuildCleanup("project", "build", func() error {
 			close(started)
 			<-resume
 			return storageErr
@@ -288,7 +288,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 		t.Fatal("filesystem cleanup still holds the global mutex")
 	}
 	m.mu.Unlock()
-	if done, err := m.DeleteBuild("project", "arch", "build"); done || err != nil {
+	if done, err := m.DeleteBuild("project", "build"); done || err != nil {
 		t.Fatalf("concurrent same-build deletion: %t, %v", done, err)
 	}
 	var conflict *Error
@@ -319,7 +319,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	if got, ok, err := m.Get(other.BuildName); err != nil || !ok || got.State != ReleaseReady {
 		t.Fatalf("unrelated result: %+v, %v", got, err)
 	}
-	if done, err := m.DeleteBuild("project", "arch", "another"); err != nil || !done {
+	if done, err := m.DeleteBuild("project", "another"); err != nil || !done {
 		t.Fatalf("unrelated cleanup: %t, %v", done, err)
 	}
 	resume <- struct{}{}
@@ -327,10 +327,67 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	if done || !errors.Is(cleanupErr, storageErr) || len(m.cleaningBuilds) != 0 || m.metaPath(record.BuildName) == "" {
 		t.Fatalf("failed cleanup lost recovery state: done=%t error=%v", done, cleanupErr)
 	}
-	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+	if done, err := m.DeleteBuild("project", "build"); err != nil || !done {
 		t.Fatalf("retry: %t, %v", done, err)
 	}
 	if m.metaPath(record.BuildName) != "" || len(m.cleaningBuilds) != 0 {
 		t.Fatal("completed cleanup retained index or reservation")
+	}
+}
+
+func TestDeleteBuildAcrossArchitectures(t *testing.T) {
+	m := &Manager{root: t.TempDir(), records: map[string]*ReleaseRecord{}}
+	var removed, kept []string
+	for _, arch := range []string{"aarch64", "x86_64"} {
+		target := filepath.Join(m.root, "repositories", "project", arch)
+		for _, path := range []string{
+			"releases/build/Packages/rpm", "releases/.work/build-123/rpm",
+			"releases/.trash/build-deleting/rpm", "releases/.records/build.json",
+		} {
+			path = filepath.Join(target, path)
+			if err := fileutil.AtomicJSON(path, "content"); err != nil {
+				t.Fatal(err)
+			}
+			removed = append(removed, path)
+		}
+		kept = append(kept, filepath.Join(target, "releases/other/Packages/rpm"))
+	}
+	kept = append(kept, filepath.Join(m.root, "repositories/other/x86_64/releases/build/Packages/rpm"))
+	for _, path := range kept {
+		if err := fileutil.AtomicJSON(path, "unrelated"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := filepath.Join(m.root, "repositories/project/x86_64/current")
+	if err := os.Symlink("releases/build", current); err != nil {
+		t.Fatal(err)
+	}
+	done, err := m.DeleteBuild("project", "build")
+	var failure *Error
+	if done || !errors.As(err, &failure) || failure.Code != "ReleaseInUse" {
+		t.Fatalf("current protection: %t, %v", done, err)
+	}
+	for _, path := range removed {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("preflight removed another architecture's content: %s: %v", path, err)
+		}
+	}
+	if err := os.Remove(current); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if done, err := m.DeleteBuild("project", "build"); err != nil || !done {
+			t.Fatalf("cleanup: %t, %v", done, err)
+		}
+	}
+	for _, path := range removed {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("remaining build data %s: %v", path, err)
+		}
+	}
+	for _, path := range kept {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("unrelated data %s: %v", path, err)
+		}
 	}
 }

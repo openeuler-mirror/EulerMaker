@@ -27,7 +27,8 @@ func CleanupRepositoryWork(root, kind string, cutoff time.Time) error {
 		}
 		rel, _ := filepath.Rel(base, path)
 		parts := strings.Split(filepath.ToSlash(rel), "/")
-		if (len(parts) == 3 && parts[2] != kind) || (len(parts) == workDepth && parts[workDepth-1] != ".work") {
+		if (len(parts) == 2 && parts[1] == ".stopped") || (len(parts) == 3 && parts[2] != kind) ||
+			(len(parts) == workDepth && parts[workDepth-1] != ".work") {
 			return filepath.SkipDir
 		}
 		if len(parts) == workDepth+1 {

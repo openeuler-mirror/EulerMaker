@@ -102,7 +102,7 @@ func (m *Manager) Submit(in CreateReleaseRequest) (*ReleaseRecord, int, error) {
 	if m.cleaningBuilds[in.BuildName] {
 		return nil, 0, &Error{Code: "ReleaseDeleting", Status: http.StatusConflict}
 	}
-	if err := repository.CheckBuildActive(m.root, in.Project, in.TargetArch, in.BuildName); err != nil {
+	if err := repository.CheckBuildActive(m.root, in.Project, in.BuildName); err != nil {
 		return nil, 0, releaseStopError(err)
 	}
 	source, ok, sourceErr := m.repositories.Get(in.SourceRepositoryUID)
@@ -272,7 +272,7 @@ func (m *Manager) Activate(name string) (*ReleaseRecord, int, error) {
 	if record == nil {
 		return nil, 0, &Error{Code: "ReleaseNotFound", Status: http.StatusNotFound}
 	}
-	if err := repository.CheckBuildActive(m.root, record.Project, record.TargetArch, record.BuildName); err != nil {
+	if err := repository.CheckBuildActive(m.root, record.Project, record.BuildName); err != nil {
 		return nil, 0, releaseStopError(err)
 	}
 	if record.State != ReleasePrepared && record.State != ReleaseReady {

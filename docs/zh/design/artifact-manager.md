@@ -60,8 +60,8 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/repositories` | 提交过程仓物化 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `POST /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories/stop` | 持久停止该构建的新仓库操作并确认排空，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories` | 删除指定构建的全部过程仓和发布仓，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `POST /internal/v1/projects/{project}/builds/{buildName}/repositories/stop` | 持久停止该构建的新仓库操作并确认排空，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories` | 删除指定构建的全部过程仓和发布仓，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
 | 业务清理方 → Artifact Manager | `DELETE /internal/v1/projects/{project}/jobs/{job}` | 同步删除 Job 的产物、日志及上传元数据，见 13.1 | 内部管理接口，部署时仅向受信任的业务清理方开放；组件认证边界同其它内部接口 |
 | RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
 | BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
@@ -730,14 +730,14 @@ Artifact Manager 校验每个输入的 Completed Manifest。可定位的输入�
 
 一个 RpmRepo 是可持续推进的逻辑仓库，其 `metadata.uid` 不能直接作为物理版本标识。每次推进根据 Project、Build name、`baseRepositoryUID` 和按字典序排列的全部输入 Job 名称计算 SHA-256，将其十六进制结果作为稳定 `repositoryUID`。Build name 本身由唯一 UUID 生成且不复用。相同批次重试自然复用同一幂等键；基础仓或批次成员变化一定生成不同的不可变版本。摘要编码必须使用带长度前缀的字段序列，避免字符串拼接歧义。
 
+Project 级停止标记独立于架构目录：`repositories/{project}/.stopped/{buildName}/`，仓库清理后仍保留。各架构的仓库布局如下：
+
 ```text
 ${dataDir}/repositories/{project}/{arch}/
 ├── current -> releases/{buildName}
 ├── Packages -> current/Packages
 ├── repodata -> current/repodata
 ├── RPM-GPG-KEY-openEuler -> current/RPM-GPG-KEY-openEuler
-├── .stopped/
-│   └── {buildName}/                     # 持久停止标记，仓库清理后仍保留
 ├── releases/
 │   ├── .records/
 │   │   └── {buildName}.json
@@ -1585,10 +1585,10 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 先停止仓库生产：
 
 ```http
-POST /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories/stop
+POST /internal/v1/projects/{project}/builds/{buildName}/repositories/stop
 ```
 
-- 无请求体。按 Project、Arch、BuildName 在 `repositories/{project}/{arch}/.stopped/{buildName}/` 建立空目录作为停止标记，逐层核验目录并同步父目录。标记不常驻内存、不开放下载、不随历史仓库清理而删除，不设置过期时间；Build name 不复用。
+- 无请求体。按 Project、BuildName 在 `repositories/{project}/.stopped/{buildName}/` 建立空目录作为停止标记，逐层核验目录并同步父目录。标记不常驻内存、不开放下载、不随历史仓库清理而删除，不设置过期时间；Build name 不复用。
 - 按 Release Manager → Repository Manager 顺序持锁，使标记写入与两类 Submit、发布 Activate 串行。标记存在后拒绝该构建的新提交、幂等重放和激活，包括可重试 Failed 的重新提交以及后台完成后的自动激活，返回 `409 BuildStopped`。已受理任务允许结束，但 Prepared 不再激活；此接口不删除仓库文件、不回退已经生效的 current。
 - 标记持久化后，若任一 Manager 仍有 Creating、Deleting 或实际运行中的任务，返回 `202`、`Retry-After: 5`。全部排空返回 `204`，任务从未存在或已停在 Failed 同样可以确认；重复调用幂等。响应丢失后重复请求，服务重启后继续读取停止标记并恢复已受理任务，不能绕过排空检查。
 - 非法标识或携带请求体返回 `400`；存储失败返回可重试 `503`，不得确认停止。Controller 只有收到 `204` 才能清除 RpmRepo 检查点并写 CleanupReady；不能用任务 GET 的 404 推断迟到提交已被阻止。
@@ -1596,15 +1596,15 @@ POST /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/rep
 停止确认后删除仓库：
 
 ```http
-DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/repositories
+DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories
 ```
 
-此接口按 Project、Arch、BuildName 定位，不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。调用方须先完成上述停止确认；跨构建的源仓使用约束由上层业务保证。
+此接口按 Project、BuildName 定位，在 Project 下扫描架构目录并清理同名 Build，跳过 Project 级的 `.stopped`；不要求发布记录或过程仓元数据存在，不查询 apiserver。不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。调用方须先完成上述停止确认；跨构建的源仓使用约束由上层业务保证。
 
-- 精确清理 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
+- 在各架构下精确清理 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
 - 清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按最后一个后缀之前的完整名称匹配（工作目录使用随机后缀，删除暂存使用 `-deleting`），不能只做字符串前缀匹配。
-- 删除后移除对应的内存定位索引和非活动记录。不清理 Job 产物/日志、其它 Build/架构/Project 的仓库，也不删除继承基线。硬链接仅解除本目录项，不修改共享正文。
-- 先检查并清理发布仓，再清理过程仓。当前 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和仓库不变；不回退到历史版本。上层负责判断是否允许删除该 Build。
+- 删除后移除对应的内存定位索引和非活动记录。不清理 Job 产物/日志、其它 Build/Project 的仓库，也不删除继承基线。硬链接仅解除本目录项，不修改共享正文。
+- 先检查所有架构的 current，再清理发布仓，最后清理过程仓。任一架构的 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和仓库不变；不回退到历史版本。上层负责判断是否允许删除该 Build。
 - 每个 Manager 在自身锁内检查活动任务并登记本次 Build 的临时清理占用；仍有 Creating、Deleting、实际运行中的任务或同一 Build 的清理请求时返回 `202`、`Retry-After: 5`，调用方稍后重复 DELETE。Prepared 已完成正文生成且尚未激活，可以清理，不为删除执行激活。
 - 递归文件删除在全局锁外执行，其他 Build 可继续查询、提交和持久化结果。清理占用期间，同一 Build 的提交、发布激活及已有单仓的删除返回 `409 RepositoryDeleting/ReleaseDeleting`，历史回收跳过该 Build，避免与本次文件操作竞争；成功后回到锁内移除对应索引。成功或失败均释放临时占用，失败保留索引供下一次请求重试。占用不持久化，重启后的安全边界仍由前序 stop 的持久标记和活动任务恢复保证。
 - 无活动任务时同步执行文件删除，不创建新的后台删除任务或持久化删除凭据。只有完整清理后返回 `204`，首次不存在和重复删除同样返回 `204`；不返回正文。非法标识或携带请求体返回 `400`，存储失败返回可重试 `503`。
@@ -1613,9 +1613,9 @@ DELETE /internal/v1/projects/{project}/architectures/{arch}/builds/{buildName}/r
 
 RpmRepo Controller 只在 RpmRepo 删除中且已写 `CleanupReady=True` 时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
 
-测试覆盖多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界，以及慢删除期间同一 Build 互斥、其他 Build 继续处理、失败后释放占用并重试；Controller 测试覆盖确认完成前保留 finalizer，以及完成后的 Conflict/Unknown 重入。
+测试覆盖跨架构清理、多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界，以及慢删除期间同一 Build 互斥、其他 Build 继续处理、失败后释放占用并重试；Controller 测试覆盖确认完成前保留 finalizer，以及完成后的 Conflict/Unknown 重入。
 
-停止测试覆盖从未提交任务、可重试失败、活动任务等待、迟到提交、后台完成后禁止激活、重启和文件清理后停止标记仍有效，以及标记存储失败不返回成功。
+停止测试覆盖从未提交任务、跨架构迟到提交、可重试失败、活动任务等待、迟到提交、后台完成后禁止激活、重启和文件清理后停止标记仍有效，以及标记存储失败不返回成功。
 
 ## 十四、与 Job Status 的关系
 
@@ -1750,7 +1750,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 
 ### 17.3 备份、恢复与磁盘故障
 
-备份覆盖同一时间点的整个 `dataDir`：Job 内的 `.artifacts/`、`.manifest.json`、`.seal.json` 及目标仓内的 `history/{buildName}/.records/`、`releases/.records/`、`.stopped/`、正文、活动日志索引、仓库/发布索引、current 链接及未完成任务相关目录。只备份元数据或只备份 `repositories` 不能恢复完整上传与执行状态。配置、验证公钥及签名凭据按部署安全策略独立备份，不混入可公开下载目录。
+备份覆盖同一时间点的整个 `dataDir`：Job 内的 `.artifacts/`、`.manifest.json`、`.seal.json` 及目标仓内的 `history/{buildName}/.records/`、`releases/.records/`、Project 级的 `.stopped/`、正文、活动日志索引、仓库/发布索引、current 链接及未完成任务相关目录。只备份元数据或只备份 `repositories` 不能恢复完整上传与执行状态。配置、验证公钥及签名凭据按部署安全策略独立备份，不混入可公开下载目录。
 
 当前没有在线备份屏障和后台 worker 排空保障。可执行的冷备流程是停止接收请求、停止服务并确认进程已退出，再创建文件系统快照或保留硬链接、符号链接和权限的备份；不要把运行期逐目录复制视为一致性备份。恢复到单可写实例、相同文件系统布局和权限，使用匹配的签名配置；启动恢复后抽查下载、Manifest、过程仓和稳定入口，再恢复流量。备份周期决定 RPO，扫描恢复耗时决定 RTO，需在部署验收中实测。
 

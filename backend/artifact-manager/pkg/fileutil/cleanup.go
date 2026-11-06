@@ -3,6 +3,7 @@ package fileutil
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -40,6 +41,36 @@ func OpenDirectory(dataDir string, parts ...string) (*os.Root, error) {
 		root = next
 	}
 	return root, nil
+}
+
+// DirectoryNames lists child directories and rejects symlink entries.
+// A missing parent returns an empty list; storage failures are returned to the caller.
+func DirectoryNames(dataDir string, parts ...string) ([]string, error) {
+	root, err := OpenDirectory(dataDir, parts...)
+	if err != nil || root == nil {
+		return nil, err
+	}
+	defer root.Close()
+	dir, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("symlink directory entry %q", entry.Name())
+		}
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // RemoveEntry removes one entry beneath a verified directory and syncs its parent.

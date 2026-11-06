@@ -96,8 +96,8 @@ type ArtifactManagerClient interface {
 	SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
 	GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
 	ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
-	DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
-	StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error)
+	DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
+	StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
 }
 
 type artifactErrorKind string
@@ -248,11 +248,11 @@ func (c *httpArtifactClient) ActivateRelease(ctx context.Context, buildName stri
 }
 
 // DeleteBuildRepositories confirms completion only on 204; a missing route is not a deleted repository.
-func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
-	if project == "" || arch == "" || buildName == "" {
-		return false, fmt.Errorf("repository cleanup requires project, architecture and build name")
+func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {
+	if project == "" || buildName == "" {
+		return false, fmt.Errorf("repository cleanup requires project and build name")
 	}
-	path := "/internal/v1/projects/" + url.PathEscape(project) + "/architectures/" + url.PathEscape(arch) +
+	path := "/internal/v1/projects/" + url.PathEscape(project) +
 		"/builds/" + url.PathEscape(buildName) + "/repositories"
 	status, err := c.callStatus(ctx, http.MethodDelete, path, nil, nil)
 	if err != nil {
@@ -268,11 +268,11 @@ func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, projec
 	}
 }
 
-func (c *httpArtifactClient) StopBuildRepositories(ctx context.Context, project, arch, buildName string) (bool, error) {
-	if project == "" || arch == "" || buildName == "" {
-		return false, fmt.Errorf("repository stop requires project, architecture and build name")
+func (c *httpArtifactClient) StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {
+	if project == "" || buildName == "" {
+		return false, fmt.Errorf("repository stop requires project and build name")
 	}
-	path := "/internal/v1/projects/" + url.PathEscape(project) + "/architectures/" + url.PathEscape(arch) +
+	path := "/internal/v1/projects/" + url.PathEscape(project) +
 		"/builds/" + url.PathEscape(buildName) + "/repositories/stop"
 	status, err := c.callStatus(ctx, http.MethodPost, path, nil, nil)
 	if err != nil {
