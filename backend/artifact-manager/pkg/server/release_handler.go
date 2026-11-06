@@ -33,27 +33,6 @@ func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) 
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/internal/v1/releases/")
 	parts := strings.Split(path, "/")
-	if len(parts) == 2 && parts[1] == "activate" {
-		if !validIdentifier(parts[0]) {
-			s.releaseNotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodPost {
-			method(w, http.MethodPost)
-			return
-		}
-		if r.ContentLength > 0 {
-			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "request body is not allowed", false, nil)
-			return
-		}
-		record, status, err := s.releases.Activate(parts[0])
-		if err != nil {
-			s.writeReleaseError(w, r, err)
-			return
-		}
-		writeJSON(w, status, release.ResponseFor(record))
-		return
-	}
 	if len(parts) != 1 || !validIdentifier(parts[0]) {
 		s.releaseNotFound(w, r)
 		return

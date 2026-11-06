@@ -334,7 +334,7 @@ func TestReconcileBuildConvergesOnSkipped(t *testing.T) {
 				t.Fatalf("the round must start by reading the RpmRepo, got %d reads", client.GetRpmRepoCalls)
 			}
 			if len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.GetRepositoryUIDs) != 0 ||
-				len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+				len(artifacts.SubmitReleaseRequests) != 0 {
 				t.Fatalf("a skipped object must not reach Artifact Manager")
 			}
 			if c.Queue().Len() != 0 {

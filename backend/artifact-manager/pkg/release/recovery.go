@@ -2,12 +2,14 @@ package release
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"artifact-manager/pkg/fileutil"
+	"artifact-manager/pkg/repository"
 )
 
 func (m *Manager) scanRecords(visit func(*ReleaseRecord) error) error {
@@ -48,12 +50,24 @@ func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
 	if record.State != ReleaseCreating && record.State != ReleasePrepared && record.State != ReleaseReady {
 		return nil
 	}
+	if record.State == ReleasePrepared {
+		if err := repository.CheckBuildActive(m.root, record.Project, record.BuildName); err != nil {
+			var stopped *repository.Error
+			if errors.As(err, &stopped) && stopped.Code == "BuildStopped" {
+				return nil
+			}
+			return err
+		}
+	}
 	index, err := readReleaseIndex(m.Path(record))
 	if err != nil || index.BuildName != record.BuildName || index.RequestDigest != record.RequestDigest {
 		if record.State == ReleaseReady {
 			record.State, record.UpdatedAt = ReleaseFailed, now
 			record.Failure = &FailureInfo{Code: "ReleaseContentMissing", Message: "ReleaseContentMissing", Time: now}
 			return m.persist(record)
+		}
+		if record.State == ReleasePrepared {
+			return m.failPreparedRecovery(record, now)
 		}
 		return nil
 	}
@@ -67,7 +81,11 @@ func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
 		}
 	} else {
 		digest, err = digestReleaseDirectory(m.Path(record))
-		if err != nil || digest != index.ReleaseDigest {
+		if err != nil || digest != index.ReleaseDigest ||
+			(record.State == ReleasePrepared && digest != record.ReleaseDigest) {
+			if record.State == ReleasePrepared {
+				return m.failPreparedRecovery(record, now)
+			}
 			return nil
 		}
 	}
@@ -86,6 +104,12 @@ func (m *Manager) recoverRecord(record *ReleaseRecord, now time.Time) error {
 		return m.persist(record)
 	}
 	return nil
+}
+
+func (m *Manager) failPreparedRecovery(record *ReleaseRecord, now time.Time) error {
+	record.State, record.UpdatedAt = ReleaseFailed, now
+	record.Failure = &FailureInfo{Code: "ReleaseContentInvalid", Message: "ReleaseContentInvalid", Time: now}
+	return m.persist(record)
 }
 
 func readReleaseIndex(path string) (releaseIndex, error) {

@@ -12,7 +12,6 @@ type FakeArtifactManager struct {
 	GetRepositoryFunc           func(context.Context, string) (RepositoryResponse, error)
 	SubmitReleaseFunc           func(context.Context, CreateReleaseRequest) (ReleaseResponse, error)
 	GetReleaseFunc              func(context.Context, string) (ReleaseResponse, error)
-	ActivateReleaseFunc         func(context.Context, string) (ReleaseResponse, error)
 	DeleteBuildRepositoriesFunc func(context.Context, string, string) (bool, error)
 	StopBuildRepositoriesFunc   func(context.Context, string, string) (bool, error)
 
@@ -20,7 +19,6 @@ type FakeArtifactManager struct {
 	GetRepositoryUIDs        []string
 	SubmitReleaseRequests    []CreateReleaseRequest
 	GetReleaseBuildNames     []string
-	ActivateReleaseNames     []string
 	DeleteBuildRequests      [][2]string
 	StopBuildRequests        [][2]string
 }
@@ -57,14 +55,6 @@ func (f *FakeArtifactManager) GetRelease(ctx context.Context, buildName string) 
 		return ReleaseResponse{}, fmt.Errorf("FakeArtifactManager.GetReleaseFunc is not configured")
 	}
 	return f.GetReleaseFunc(ctx, buildName)
-}
-
-func (f *FakeArtifactManager) ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error) {
-	f.ActivateReleaseNames = append(f.ActivateReleaseNames, buildName)
-	if f.ActivateReleaseFunc == nil {
-		return ReleaseResponse{}, fmt.Errorf("FakeArtifactManager.ActivateReleaseFunc is not configured")
-	}
-	return f.ActivateReleaseFunc(ctx, buildName)
 }
 
 func (f *FakeArtifactManager) DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {

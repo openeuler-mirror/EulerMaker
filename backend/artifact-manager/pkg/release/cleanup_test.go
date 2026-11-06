@@ -174,7 +174,7 @@ func TestStopBuildFencesReleaseSubmissionAndActivation(t *testing.T) {
 	if err := m.recover(time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = m.Activate(record.BuildName)
+	err = m.activate(record.BuildName)
 	var failure *Error
 	if !errors.As(err, &failure) || failure.Code != "BuildStopped" {
 		t.Fatalf("activation after restart: %v", err)
@@ -295,7 +295,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	if _, _, err := m.Delete(record.BuildName); !errors.As(err, &conflict) || conflict.Status != http.StatusConflict || len(m.queue) != 0 {
 		t.Fatalf("single release deletion raced with build cleanup: %v", err)
 	}
-	if _, _, err := m.Activate(record.BuildName); err == nil {
+	if err := m.activate(record.BuildName); err == nil {
 		t.Fatal("release was activated during cleanup")
 	}
 	if _, _, err := m.Submit(CreateReleaseRequest{

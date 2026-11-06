@@ -461,7 +461,6 @@ func TestProcessingPublishWaitsForReleaseOutcome(t *testing.T) {
 		nil,
 		{Phase: ebsv1.RpmRepoReleasePending},
 		{Phase: ebsv1.RpmRepoReleaseCreating},
-		{Phase: ebsv1.RpmRepoReleasePrepared},
 	} {
 		name := "missing"
 		if release != nil {

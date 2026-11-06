@@ -163,7 +163,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 	})
 
 	t.Run("submit-release", func(t *testing.T) {
-		body := `{"buildName":"build-a","state":"Prepared","attempt":1,"updatedAt":"2026-09-21T10:00:00Z"}`
+		body := `{"buildName":"build-a","state":"Creating","updatedAt":"2026-09-21T10:00:00Z"}`
 		server := newScriptedArtifactServer(t, http.StatusAccepted, body, nil)
 		client := server.client(t)
 		response, err := client.SubmitRelease(ctx, CreateReleaseRequest{
@@ -173,7 +173,7 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SubmitRelease: %v", err)
 		}
-		if response.State != ReleasePrepared || response.BuildName != testBuild {
+		if response.State != ReleaseCreating || response.BuildName != testBuild {
 			t.Fatalf("unexpected response %+v", response)
 		}
 		if server.requests[0].URL.Path != "/internal/v1/releases" {
@@ -181,25 +181,19 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("get-and-activate-release", func(t *testing.T) {
-		body := `{"buildName":"build-a","state":"Ready","attempt":1,"contentURL":"/repositories/project/aarch64/","updatedAt":"2026-09-21T10:00:00Z"}`
+	t.Run("get-release", func(t *testing.T) {
+		body := `{"buildName":"build-a","state":"Ready","contentURL":"/repositories/project/aarch64/","updatedAt":"2026-09-21T10:00:00Z"}`
 		server := newScriptedArtifactServer(t, http.StatusOK, body, nil)
 		client := server.client(t)
-		if _, err := client.GetRelease(ctx, testBuild); err != nil {
+		response, err := client.GetRelease(ctx, testBuild)
+		if err != nil {
 			t.Fatalf("GetRelease: %v", err)
 		}
-		activated, err := client.ActivateRelease(ctx, testBuild)
-		if err != nil {
-			t.Fatalf("ActivateRelease: %v", err)
-		}
-		if activated.ContentURL == "" {
-			t.Fatalf("activation must return the stable entry point")
+		if response.State != ReleaseReady || response.ContentURL == "" {
+			t.Fatalf("ready release must return the stable entry point: %+v", response)
 		}
 		if server.requests[0].URL.Path != "/internal/v1/releases/"+testBuild {
 			t.Fatalf("unexpected get path %q", server.requests[0].URL.Path)
-		}
-		if server.requests[1].Method != http.MethodPost || server.requests[1].URL.Path != "/internal/v1/releases/"+testBuild+"/activate" {
-			t.Fatalf("unexpected activate request %s %s", server.requests[1].Method, server.requests[1].URL.Path)
 		}
 	})
 }
@@ -235,10 +229,6 @@ func TestArtifactClientValidatesRequestsLocally(t *testing.T) {
 		{
 			name: "release-without-name",
 			call: func() error { _, err := client.GetRelease(ctx, ""); return err },
-		},
-		{
-			name: "activate-without-name",
-			call: func() error { _, err := client.ActivateRelease(ctx, ""); return err },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

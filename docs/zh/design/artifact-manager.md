@@ -67,7 +67,6 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
 | RpmRepo Controller → Artifact Manager | `GET /internal/v1/releases/{buildName}` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
 | RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/releases/{buildName}` | 删除正式发布记录 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases/{buildName}/activate` | 激活指定正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest` | 查询 Job 上传清单 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts` | 列出 Job 产物 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content` | 下载产物正文 | 公开只读，不经 Gateway 鉴权 |
@@ -1104,10 +1103,11 @@ Creating -> Prepared -> Ready
     +----> Failed
 Failed -> Creating（相同请求且 failure.retryable=true）
 Ready -> Failed（启动恢复发现发布记录与索引缺失或不一致）
+Prepared -> Failed（启动恢复发现正文或摘要无效）
 Creating/Prepared/Ready/Failed -> Deleting
 ```
 
-`Prepared` 表示不可变正文已经完整落盘但尚未切换稳定入口；它不能通过稳定或不可变内容 API 对外读取。当前发布 worker 写入 Prepared 后立即尝试激活，因此正常执行时调用方可能直接观察到 Ready。激活失败返回错误，不自动将 Prepared 改为 Failed；调用方可重新确认状态并重试激活。启动恢复对已有 Prepared 的处理见 9.6。
+`Prepared` 是内部持久化检查点，表示不可变正文已经完整落盘但尚未确认稳定入口切换；创建和查询响应将其投影为 `Creating`，不允许读取其内容。worker 保存检查点后自动激活，激活失败保留 Prepared 并记录日志，每 5 秒补投一次；重试只执行入口切换与 Ready 落盘，不重复生成发布目录。停止标记和清理占用始终优先于自动激活。
 
 `Ready` 表示该版本至少成功激活过，即使后续被新版本替代也保持 Ready；启动恢复发现索引缺失、身份或摘要不一致时可标记为 Failed。正文创建失败不会切换此前的 current。Deleting 是显式删除或历史清理的中间状态，当前稳定入口指向的版本禁止删除。
 
@@ -1120,7 +1120,7 @@ POST /internal/v1/releases
 Content-Type: application/json
 ```
 
-创建、查询、激活及返回正文的删除响应统一使用 `ReleaseResponse`，不返回内部 `ReleaseRecord` 或请求/内容摘要。`contentURL` 不持久化，仅在 Ready 响应中根据记录的 Project、Arch 计算为 `/repositories/{project}/{arch}/`，其他状态省略。Creating、Prepared 返回 `pollAfterSeconds=5`，其他状态省略。正式发布不记录执行次数，可重试失败沿用同一请求、清空 Failure 并进入 Creating；不影响过程仓的 attempt 计数与重试预算。业务错误使用 5.5 的 `APIError`，通用 HTTP 错误边界沿用 8.6。
+创建、查询及返回正文的删除响应统一使用 `ReleaseResponse`，不返回内部 `ReleaseRecord` 或请求/内容摘要。公开状态为 Creating、Ready、Failed、Deleting；内部 Prepared 对外返回 Creating。`contentURL` 不持久化，仅在 Ready 响应中根据 Project、Arch 计算为 `/repositories/{project}/{arch}/`；Creating 返回 `pollAfterSeconds=5`。正式发布不记录执行次数，正文创建的可重试失败可沿用同一请求重放；激活重试由 Artifact Manager 自行完成，不消耗过程仓 attempt 预算。业务错误使用 5.5 的 `APIError`，通用 HTTP 错误边界沿用 8.6。
 
 POST 首次接受、Creating、Prepared 和可重试失败重放返回 `202`；Ready 或不可重试 Failed 的相同请求返回 `200` 和已有状态，不重新执行。相同 Build name 对应不同摘要返回 `409 ReleaseIdentityConflict`，Deleting 返回 `409 ReleaseDeleting`，非法集合或源仓不满足条件返回 `422`，队列满返回 `429` 和 `Retry-After: 5`。提交仍会校验源仓可用性，源仓缺失不能保证重放成功，确认已知结果优先使用 GET。接受成功时返回：
 
@@ -1137,13 +1137,7 @@ DELETE /internal/v1/releases/{buildName}
 
 GET 返回 `200` 和已持久化状态，不触发执行；不存在返回 `404 ReleaseNotFound`。DELETE 不接受业务请求体，只能删除非当前发布版本；当前版本返回 `409 ReleaseInUse`。首次进入或仍处于 Deleting 时返回 `202` 和 `ReleaseResponse`，不存在或已删除返回 `204`，无响应体。删除采用 `Deleting -> trash -> 删除正文 -> 删除元数据`，运行期重试及崩溃恢复沿用 8.10。
 
-受控激活或回滚使用：
-
-```http
-POST /internal/v1/releases/{buildName}/activate
-```
-
-目标 release 必须为 Prepared 或 Ready，且 Project 和架构由其持久化记录确定。Prepared 用于首次激活，Ready 用于幂等确认或回滚。Artifact Manager 在 Release Manager 的全局互斥锁内切换当前指针；已是当前版本或成功切换均返回 `200` 和 `ReleaseResponse`。不存在返回 `404 ReleaseNotFound`，不满足激活状态返回 `409 ReleaseNotReady`。接口不接收请求体，发布顺序由 RpmRepo Controller 的同目标串行队列保证。
+POST 接受后，Artifact Manager 自动完成正文生成、稳定入口切换和 Ready 状态持久化。调用方仅通过 GET 轮询；GET 不推进任务。Prepared 的自动重试和重启恢复见 9.5、9.6，发布顺序仍由 RpmRepo Controller 的同目标串行队列保证。
 
 稳定仓库内容地址为：
 
@@ -1161,7 +1155,7 @@ https://artifact.example/repositories/{project}/{arch}/
 
 稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 直接展示有当前 Ready 发布版本的架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 和不可变正式版本地址仍不提供目录浏览。
 
-路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和回滚的地址：
+路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和历史版本下载的地址：
 
 ```http
 GET /repositories/releases/v1/{buildName}/{path...}
@@ -1211,18 +1205,18 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{ar
 10. 将工作目录以不覆盖语义原子重命名为 `releases/{buildName}`，再将记录持久化为 `Prepared`。
 11. worker 保存 Prepared 后直接调用激活方法，取得 Release Manager 全局互斥锁并检查状态；激活入口不重新校验整个发布目录或摘要。
 12. 读取 `current`；已经指向本次 `buildName` 时按幂等成功处理，否则继续切换。
-13. 创建指向 `releases/{buildName}` 的临时符号链接，以 rename 原子替换 `current`，再尝试 fsync 架构目录；当前目录打开或同步错误未向调用方传播。`Packages`、`repodata` 和可选公钥是初始化目标目录时创建的稳定链接，统一经过 `current` 解析。
+13. 创建指向 `releases/{buildName}` 的临时符号链接，以 rename 原子替换 `current`，并 fsync 架构目录；目录打开、同步或 Ready 状态持久化失败时保留 Prepared，后台重试时确认已有 current 并补齐同步、落盘。`Packages`、`repodata` 和可选公钥是稳定链接，统一经过 `current` 解析。
 14. 将 ReleaseRecord 标记为 Ready 并返回稳定 `contentURL`。如果控制面状态更新失败，RpmRepo Controller 使用相同 Build name 继续确认，不重新生成 release。
 
 第 13 步是唯一生效点。在它之前失败，旧版本继续服务；在它之后进程崩溃，启动恢复根据 `current` 和 release 元数据补写 Ready。不能用依次删除再创建 `Packages`、`repodata` 两个链接作为切换机制，否则客户端可能观察到混合版本。
 
-### 9.5 并发、失败和回滚
+### 9.5 并发与失败恢复
 
 - 提交去重和激活由 Release Manager 的全局互斥锁保护，不同目标的激活也串行执行。相同 `buildName` 使用请求摘要判断是否为同一请求；正文生成可以按 worker 数量并行执行。
-- RpmRepo Controller 保证同一目标串行；Artifact Manager 不判断控制面的发布先后关系。新任务准备完成后 worker 直接尝试激活，启动时已存在的 Prepared 记录则等待调用方重新确认并激活。
+- RpmRepo Controller 保证同一目标串行；Artifact Manager 不判断控制面的发布先后关系。POST 表示授权完整发布，正文生成后自动切换入口；Controller 在 GET 确认 Ready 前保持检查点，不推进下一候选。
 - `createrepo_c`、磁盘或读取配置公钥失败时不得切换指针；错误按是否可重试写入 Failed。
 - 提交响应超时属于结果未知，调用方必须先 GET 相同 Build name，不能改用其他 Build name 盲目重试。
-- 回滚通过激活接口将当前指针切回历史 Ready 记录，沿用相同的锁和切换逻辑；当前没有独立审计记录或激活前完整摘要复核，操作前应确认历史内容仍可用。
+- Ready 重复提交或重启恢复只确认已有结果，不重新切换 current，避免旧版本覆盖后续发布；不提供独立回滚接口。
 - 当前版本保护及旧版本保留规则见 9.6。
 
 ### 9.6 恢复与保留
@@ -1232,14 +1226,14 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{ar
 1. 逐条扫描各目标仓 `releases/.records/` 中的记录并恢复，建立路径索引，只将 Creating、Prepared、Deleting 完整活动记录保留在内存；
 2. 校验 `current` 指向的 release 身份与 `.release.json`；已 Ready 的发布核对记录与索引摘要，Creating、Prepared 的发布完整复核目录摘要；
 3. `current` 已指向 Creating 或 Prepared 记录且正文有效时补写 Ready；
-4. Prepared 记录未激活时不由 Artifact Manager 自动切换 current，等待 RpmRepo Controller 查询状态、重新确认控制面意图后调用激活接口；
-5. 指针无效时不自动选择目录中“最新”的版本；相关内容读取可能失败，但不会使 `/readyz` 失败，需要管理员修复或显式回滚；
+4. 正文有效且尚未切换的 Prepared 自动入队，仅恢复激活；Creating 若已完成目录提交则先恢复为 Prepared。Prepared 正文缺失、身份或摘要不一致时记录 `Failed/ReleaseContentInvalid`，不切换 current；已持久化停止标记的 Prepared 不入队，保留给清理流程。
+5. 指针无效时不自动选择目录中“最新”的版本；相关内容读取可能失败，但不会使 `/readyz` 失败，需要管理员修复；
 6. 清理超过 `--release-work-ttl` 且不属于活动 worker 的工作目录；
 7. 对 Deleting 记录继续执行删除；运行期失败重试和固定 trash 路径恢复与过程仓相同，见 8.10。
 
-Ready、Failed 记录在查询、重复提交、激活或删除时按需从磁盘读取，不加入常驻缓存。状态成功持久化后同步更新缓存：进入活动状态时加入，进入 Ready、Failed 时移除。存储读取错误与记录不存在分开处理，前者返回可重试错误，不作为新请求创建记录。
+Ready、Failed 记录在查询、重复提交或删除时按需从磁盘读取，不加入常驻缓存。状态成功持久化后同步更新缓存：进入活动状态时加入，进入 Ready、Failed 时移除。存储读取错误与记录不存在分开处理，前者返回可重试错误，不作为新请求创建记录。
 
-历史清理在启动时及之后每小时执行一次，扫描磁盘上的 Ready 记录并临时分组，处理后释放扫描结果。按 `UpdatedAt` 倒序保留指定数量，并额外保护当前版本；非当前且超出数量的记录，只有 `UpdatedAt` 距今超过 TTL 才可删除。当前没有独立激活历史，也不以被替换时刻计时；重复激活或恢复可能刷新 `UpdatedAt`。配置统一见第十六章。清理只处理 `releases`，不连带删除源过程仓或 Artifact。
+历史清理在启动时及之后每小时执行一次，扫描磁盘上的 Ready 记录并临时分组，处理后释放扫描结果。按 `UpdatedAt` 倒序保留指定数量，并额外保护当前版本；非当前且超出数量的记录，只有 `UpdatedAt` 距今超过 TTL 才可删除。当前没有独立激活历史，也不以被替换时刻计时；恢复可能刷新 `UpdatedAt`。配置统一见第十六章。清理只处理 `releases`，不连带删除源过程仓或 Artifact。
 
 ### 9.7 可观测性与验收
 
@@ -1254,7 +1248,7 @@ Ready、Failed 记录在查询、重复提交、激活或删除时按需从磁�
 5. 新发布失败时旧稳定仓库及其 repodata 保持可用。
 6. 当前版本不会被删除，历史版本满足数量和时间条件后才进入 trash。
 7. 配置公钥时 release 包含该公钥且 `.release.json` 记录实际摘要；未配置公钥时仓库仍可正常使用。
-8. 显式回滚后稳定 URL 指向目标历史版本，原新版本仍保持不可变并可审计。
+8. 激活失败、current 已切换但 Ready 落盘失败均能后台重试；重启后从 Prepared 或已提交目录恢复，无需再次 POST；重复提交和 Ready 恢复不会覆盖较新的 current。
 
 ## 十、日志处理
 
@@ -1589,7 +1583,7 @@ POST /internal/v1/projects/{project}/builds/{buildName}/repositories/stop
 ```
 
 - 无请求体。按 Project、BuildName 在 `repositories/{project}/.stopped/{buildName}/` 建立空目录作为停止标记，逐层核验目录并同步父目录。标记不常驻内存、不开放下载、不随历史仓库清理而删除，不设置过期时间；Build name 不复用。
-- 按 Release Manager → Repository Manager 顺序持锁，使标记写入与两类 Submit、发布 Activate 串行。标记存在后拒绝该构建的新提交、幂等重放和激活，包括可重试 Failed 的重新提交以及后台完成后的自动激活，返回 `409 BuildStopped`。已受理任务允许结束，但 Prepared 不再激活；此接口不删除仓库文件、不回退已经生效的 current。
+- 按 Release Manager → Repository Manager 顺序持锁，使标记写入与两类 Submit、自动激活串行。标记存在后拒绝该构建的新提交、幂等重放和激活，包括可重试 Failed 的重新提交以及后台完成后的自动激活，返回 `409 BuildStopped`。已受理任务允许结束，但 Prepared 不再激活；此接口不删除仓库文件、不回退已经生效的 current。
 - 标记持久化后，若任一 Manager 仍有 Creating、Deleting 或实际运行中的任务，返回 `202`、`Retry-After: 5`。全部排空返回 `204`，任务从未存在或已停在 Failed 同样可以确认；重复调用幂等。响应丢失后重复请求，服务重启后继续读取停止标记并恢复已受理任务，不能绕过排空检查。
 - 非法标识或携带请求体返回 `400`；存储失败返回可重试 `503`，不得确认停止。Controller 只有收到 `204` 才能清除 RpmRepo 检查点并写 CleanupReady；不能用任务 GET 的 404 推断迟到提交已被阻止。
 
@@ -1772,7 +1766,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 | 日志异常与封账崩溃 | 10.2.5、10.2.6：覆盖残缺索引、正文短缺、空日志及正文移动后的中断，按既定规则恢复或标记损坏 |
 | 鉴权与缓存过期 | 第十一章：有效 Runner Token 可上传，过期缓存不能延长 Token 有效期；Gateway 暂不可达不能伪造认证成功 |
 | 队列满、重启与删除竞争 | 8.6、8.9、8.10：结果落盘失败保留 Creating 且不能提前确认排空；Deleting 失败运行期重试、队列去重、等待同标识运行任务退出，以及固定 trash 路径恢复 |
-| 物化、发布与回滚 | 8.11、9.7：验证复用封账产物而不重复签名、指纹一致性、固定输入、失败不暴露半成品和发布切换边界 |
+| 物化与发布 | 8.11、9.7：验证复用封账产物而不重复签名、指纹一致性、固定输入、失败不暴露半成品和发布切换边界 |
 | 容量与备份演练 | 17.1、17.3：记录峰值与恢复时间，验证整目录恢复后的内容及元数据一致性 |
 
 ## 十八、待完善事项
@@ -1782,7 +1776,7 @@ GET /readyz    # HTTP 监听后固定返回 200
 - 文件系统边界：以目录 FD 为根解析路径，防止父目录符号链接和检查后替换竞态；当前依赖数据目录独占写入。
 - 上传连接治理：为阻塞正文读取提供可执行的超时控制，并补充最低速率限制。
 - 停机与健康检查：先停止接收任务，等待或取消 worker 并确认状态落盘；readyz 反映停机和运行期关键依赖故障。
-- 发布校验：按需要补充 primary 元数据与 RPM 集合的一致性验证、激活前内容复核及审计记录，并处理指针切换后目录同步失败。
+- 发布校验：按需要补充 primary 元数据与 RPM 集合的一致性验证、激活前内容复核及审计记录。
 - 配额与生命周期：Project 容量、单 Job 文件数、上传并发、日志速率和 SSE 总连接数限制；Artifact/Manifest/日志保留、周期临时文件清理、孤儿扫描及 Job/Project 删除联动。
 - 可观测性：上传、日志封账、物化、发布和清理的计数与耗时指标，队列、存储容量及失败指标；结构化日志关联 Project、Job、Artifact、repositoryUID 或 Build name，不记录 Token、正文或签名凭据。
 - 持久化版本校验：读取记录时识别不支持的 schemaVersion，明确拒绝或隔离策略。

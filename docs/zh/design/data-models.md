@@ -631,9 +631,9 @@ RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact://
 
 仅非 single 构建创建同名 RpmRepo；single 直接使用稳定发布入口，不创建占位对象。publish=false 的 RpmRepo 先完成过程仓处理，再写 release.phase=Skipped，保留已生成的过程仓。Skipped 不要求 release.contentURL，不允许 release.transition；RpmRepo Controller 将其视为发布终态，不执行正式发布、不因 Build 中止改写为 Failed。Skipped 不是 Artifact Manager 的物理仓库或发布记录状态，也不表示 Build 已完成。
 
-`release.phase` 的稳定取值为 `Pending`、`Creating`、`Prepared`、`Ready`、`Failed`、`Skipped`。`release.transition` 记录固定发布输入；激活成功后将输入提升到 `sourceRepositoryUID`，写入 `contentURL` 并清除 transition。发布失败、Build 中止或 BuildInfo 失败写 `phase=Failed`，但保留已有 transition，不能以业务终态推断 Artifact Manager 已停止。失败原因写入 RpmRepo 顶层 conditions，分别为 `ReleaseFailed`、`BuildAborted`、`BuildInfoFailed` 等；`repository.*` 保留。Ready/Failed/Skipped 结束正常业务推进，Failed 可保留在途检查点，待确认外部操作结束后清除。
+`release.phase` 的稳定取值为 `Pending`、`Creating`、`Ready`、`Failed`、`Skipped`。`release.transition` 记录固定发布输入；激活成功后将输入提升到 `sourceRepositoryUID`，写入 `contentURL` 并清除 transition。发布失败、Build 中止或 BuildInfo 失败写 `phase=Failed`，但保留已有 transition，不能以业务终态推断 Artifact Manager 已停止。失败原因写入 RpmRepo 顶层 conditions，分别为 `ReleaseFailed`、`BuildAborted`、`BuildInfoFailed` 等；`repository.*` 保留。Ready/Failed/Skipped 结束正常业务推进，Failed 可保留在途检查点，待确认外部操作结束后清除。
 
-RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Prepared / Failed，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`CleanupReady` 仅在确认时写入 `True/reason=OperationsDrained`，此前不写占位条件；确认时 repository/release transition 必须均为空，之后不得删除该条件、改为非 True 或登记新 transition。Condition type 不允许重复。`/status` 保留受保护 metadata。
+RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Failed，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`CleanupReady` 仅在确认时写入 `True/reason=OperationsDrained`，此前不写占位条件；确认时 repository/release transition 必须均为空，之后不得删除该条件、改为非 True 或登记新 transition。Condition type 不允许重复。`/status` 保留受保护 metadata。
 
 删除契约：apiserver 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer；DELETE 设置 `deletionTimestamp`，不改变业务状态。RpmRepo Controller 停止新操作、排空已登记任务并写 CleanupReady，再按 Project、BuildName 调用 Artifact Manager 清理本构建的过程仓及发布仓；仅 204 确认后通过主资源 PUT 移除自身 finalizer，保留其他 finalizer。CleanupReady 仅表示生产排空，不代表文件清理完成。主资源校验禁止在删除前、未确认或检查点尚未排空时移除此 finalizer。实例选择、current 保护与恢复协议详见 RpmRepo Controller 第一章。
 
@@ -1156,7 +1156,7 @@ type VersionConstraint struct {
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
 | Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
 | BuildInfo | `Pending` / `Processing` / `Completed` / `Failed` / `Aborted`                         |
-| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Prepared` / `Ready` / `Failed` / `Skipped` |
+| RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Ready` / `Failed` / `Skipped` |
 | Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
 | Runner | `Offline` ↔ `Online`                                                               |
 

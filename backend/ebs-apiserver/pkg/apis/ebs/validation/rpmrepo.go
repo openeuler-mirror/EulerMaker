@@ -73,9 +73,9 @@ func ValidateRpmRepoStatusUpdate(newObj, oldObj *ebsv1.RpmRepo) field.ErrorList 
 			allErrs = append(allErrs, field.NotSupported(path.Child("phase"), release.Phase, ebsv1.RpmRepoReleasePhaseValues()))
 		}
 		if release.Transition != nil && release.Phase != ebsv1.RpmRepoReleasePending &&
-			release.Phase != ebsv1.RpmRepoReleaseCreating && release.Phase != ebsv1.RpmRepoReleasePrepared &&
+			release.Phase != ebsv1.RpmRepoReleaseCreating &&
 			release.Phase != ebsv1.RpmRepoReleaseFailed {
-			allErrs = append(allErrs, field.Forbidden(path.Child("transition"), "only allowed for Pending, Creating, Prepared or Failed releases"))
+			allErrs = append(allErrs, field.Forbidden(path.Child("transition"), "only allowed for Pending, Creating or Failed releases"))
 		}
 		if release.Phase == ebsv1.RpmRepoReleaseReady && release.ContentURL == "" {
 			allErrs = append(allErrs, field.Required(path.Child("contentURL"), "content URL is required for Ready releases"))

@@ -29,7 +29,6 @@ type ReleaseState string
 
 const (
 	ReleaseCreating ReleaseState = "Creating"
-	ReleasePrepared ReleaseState = "Prepared"
 	ReleaseReady    ReleaseState = "Ready"
 	ReleaseFailed   ReleaseState = "Failed"
 	ReleaseDeleting ReleaseState = "Deleting"
@@ -95,7 +94,6 @@ type ArtifactManagerClient interface {
 	GetRepository(ctx context.Context, repositoryUID string) (RepositoryResponse, error)
 	SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
 	GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
-	ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
 	DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
 	StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
 }
@@ -234,16 +232,6 @@ func (c *httpArtifactClient) GetRelease(ctx context.Context, buildName string) (
 			err: fmt.Errorf("build name is required")}
 	}
 	err := c.call(ctx, http.MethodGet, "/internal/v1/releases/"+url.PathEscape(buildName), nil, &response)
-	return response, err
-}
-
-func (c *httpArtifactClient) ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error) {
-	var response ReleaseResponse
-	if buildName == "" {
-		return response, &artifactError{operation: "activate-release", kind: artifactPermanent, code: "InvalidRequest", statusCode: http.StatusBadRequest,
-			err: fmt.Errorf("build name is required")}
-	}
-	err := c.call(ctx, http.MethodPost, "/internal/v1/releases/"+url.PathEscape(buildName)+"/activate", nil, &response)
 	return response, err
 }
 
@@ -399,8 +387,6 @@ func operationFor(path, method string) string {
 		return "stop-build-repositories"
 	case method == http.MethodDelete && strings.HasSuffix(path, "/repositories"):
 		return "delete-build-repositories"
-	case strings.HasSuffix(path, "/activate"):
-		return "activate-release"
 	case strings.Contains(path, "/internal/v1/repositories"):
 		if method == http.MethodPost {
 			return "submit-repository"
