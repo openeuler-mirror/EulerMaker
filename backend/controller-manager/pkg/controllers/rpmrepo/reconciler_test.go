@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
@@ -268,6 +270,97 @@ func TestBuildWithoutBuildInfoWaits(t *testing.T) {
 }
 
 // skippedWithBaseline creates a terminal repository with or without an available repository version.
+func skippedWithBaseline(withBaseline bool) *ebsv1.RpmRepo {
+	repo := newRpmRepo(testBuild)
+	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
+	if withBaseline {
+		repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{
+			RepositoryUID: "base-1",
+			ContentURL:    "/repositories/v1/base-1/",
+		}
+	} else {
+		repo.Status.Repository = nil
+	}
+	return repo
+}
+
+func TestReconcileBuildConvergesOnSkipped(t *testing.T) {
+	cases := []struct {
+		name         string
+		withBaseline bool
+		buildPhase   ebsv1.BuildPhase
+	}{
+		{name: "with-baseline", withBaseline: true, buildPhase: ebsv1.BuildProcessing},
+		{name: "without-baseline", withBaseline: false, buildPhase: ebsv1.BuildProcessing},
+		{name: "aborted-build", withBaseline: true, buildPhase: ebsv1.BuildAborted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewFakeClient()
+			repo := skippedWithBaseline(tc.withBaseline)
+			client.RpmRepos[key(testProject, testBuild)] = repo
+			build := newBuild(testBuild)
+			build.Status.Phase = tc.buildPhase
+			client.Builds[key(testProject, testBuild)] = build
+			client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+			client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
+			artifacts := NewFakeArtifactManager()
+			c := newTestController(t, client, artifacts, testConfig())
+
+			readyBefore := repositoryReady.Value()
+			repositoryFailedBefore := repositoryFailed.Value()
+			releaseFailedBefore := releaseFailed.Value()
+			buildMissingBefore := buildMissing.Value()
+
+			for round := 0; round < 2; round++ {
+				result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
+				if err != nil {
+					t.Fatalf("round %d: %v", round, err)
+				}
+				if result != (controller.ReconcileResult{}) {
+					t.Fatalf("round %d: a skipped object must converge, got %+v", round, result)
+				}
+			}
+			if len(client.StatusWrites) != 0 {
+				last := client.StatusWrites[len(client.StatusWrites)-1]
+				t.Fatalf("a skipped object must not be written, got %d writes (last phase %+v)",
+					len(client.StatusWrites), last.Status.Release)
+			}
+			if client.GetBuildCalls != 2 || client.GetBuildInfoCalls != 2 || len(client.JobListOptions) != 0 {
+				t.Fatalf("a skipped object checks parent deletion but does not scan Jobs: build=%d buildinfo=%d jobs=%d",
+					client.GetBuildCalls, client.GetBuildInfoCalls, len(client.JobListOptions))
+			}
+			if client.GetRpmRepoCalls < 2 {
+				t.Fatalf("the round must start by reading the RpmRepo, got %d reads", client.GetRpmRepoCalls)
+			}
+			if len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.GetRepositoryUIDs) != 0 ||
+				len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+				t.Fatalf("a skipped object must not reach Artifact Manager")
+			}
+			if c.Queue().Len() != 0 {
+				t.Fatalf("a skipped object must not enqueue the release key")
+			}
+			if repositoryReady.Value() != readyBefore || repositoryFailed.Value() != repositoryFailedBefore ||
+				releaseFailed.Value() != releaseFailedBefore || buildMissing.Value() != buildMissingBefore {
+				t.Fatalf("a skipped object must not move metrics")
+			}
+			stored := client.RpmRepos[key(testProject, testBuild)]
+			if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {
+				t.Fatalf("the skipped terminal must survive: %+v", stored.Status.Release)
+			}
+			if len(stored.Status.Conditions) != 0 {
+				t.Fatalf("a skipped object must not gain conditions: %+v", stored.Status.Conditions)
+			}
+			if tc.withBaseline {
+				if stored.Status.Repository.RepositoryUID != "base-1" || stored.Status.Repository.ContentURL != "/repositories/v1/base-1/" {
+					t.Fatalf("the inherited baseline must stay untouched: %+v", stored.Status.Repository)
+				}
+			} else if stored.Status.Repository != nil {
+				t.Fatalf("an object without baseline must keep repository nil: %+v", stored.Status.Repository)
+			}
+		})
+	}
+}
 
 func TestBackoffDelayGrowsExponentiallyAndCaps(t *testing.T) {
 	r := &reconciler{controller: &Controller{config: testConfig()}}
@@ -445,5 +538,61 @@ func TestReconcileRejectsMalformedKey(t *testing.T) {
 	c := newTestController(t, client, NewFakeArtifactManager(), testConfig())
 	if _, err := c.sync(context.Background(), "release/project/openEuler/aarch64"); err == nil || !controller.IsPermanent(err) {
 		t.Fatalf("a malformed key must be permanent, got %v", err)
+	}
+}
+
+func TestDependencyReadFailuresKeepTheirClass(t *testing.T) {
+	cases := []struct {
+		name          string
+		buildErr      error
+		buildInfoErr  error
+		wantPermanent bool
+		wantErr       bool
+	}{
+		{
+			name:     "build-5xx",
+			buildErr: errors.New("internal error"),
+			wantErr:  true,
+		},
+		{
+			name:          "build-forbidden",
+			buildErr:      apierrors.NewForbidden(schema.GroupResource{Group: "ebs", Resource: "builds"}, testBuild, errors.New("denied")),
+			wantPermanent: true,
+			wantErr:       true,
+		},
+		{
+			name:          "buildinfo-forbidden",
+			buildInfoErr:  apierrors.NewForbidden(schema.GroupResource{Group: "ebs", Resource: "buildinfos"}, testBuild, errors.New("denied")),
+			wantPermanent: true,
+			wantErr:       true,
+		},
+		{
+			name:         "buildinfo-5xx",
+			buildInfoErr: errors.New("boom"),
+			wantErr:      true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewFakeClient()
+			client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
+			client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+			client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+			client.GetBuildErr = tc.buildErr
+			client.GetBuildInfoErr = tc.buildInfoErr
+			artifacts := NewFakeArtifactManager()
+			c := newTestController(t, client, artifacts, testConfig())
+
+			_, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected an error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error %v", err)
+			}
+			if got := controller.IsPermanent(err); got != tc.wantPermanent {
+				t.Fatalf("permanent = %t, want %t (err %v)", got, tc.wantPermanent, err)
+			}
+		})
 	}
 }
