@@ -413,13 +413,9 @@ func (f *fakeAPI) CreateRpmRepo(_ context.Context, project string, request *ebsv
 		return nil, apierrors.NewAlreadyExists(rpmReposResource, request.Name)
 	}
 	created := request.DeepCopy()
-	// Match the apiserver: preserve the baseline pair and explicit skip marker.
+	// Preserve the baseline repository supplied by the Build Controller.
 	seeded := created.Status.Repository
-	release := created.Status.Release
 	created.Status = ebsv1.RpmRepoStatus{}
-	if release != nil && release.Phase == ebsv1.RpmRepoReleaseSkipped {
-		created.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
-	}
 	if seeded != nil {
 		created.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{
 			RepositoryUID: seeded.RepositoryUID,

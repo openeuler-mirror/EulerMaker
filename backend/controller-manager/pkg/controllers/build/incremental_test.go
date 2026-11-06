@@ -153,6 +153,52 @@ func TestIncrementalUpdateUnknownConfirmsOriginalPackages(t *testing.T) {
 	}
 }
 
+func TestIncrementalUpdateRejectionHandling(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		requeue    bool
+		wantError  bool
+		permanent  bool
+	}{
+		{name: "deleted", statusCode: 404},
+		{name: "conflict", statusCode: 409, requeue: true},
+		{name: "unavailable", statusCode: 503, wantError: true},
+		{name: "forbidden", statusCode: 403, wantError: true, permanent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeAPI()
+			api.builds[key("project-a", "build-a")] = unresolvedIncremental("")
+			api.storeSnapshot(snapshotWithCommits("build-a", map[string]string{"gcc": "a"}))
+			writeErr := &clientpkg.WriteError{
+				Operation:  "update",
+				Outcome:    clientpkg.WriteRejected,
+				StatusCode: tc.statusCode,
+				Err:        errors.New("update rejected"),
+			}
+			api.hooks.updateBuild = func(*ebsv1.Build) (*ebsv1.Build, error) { return nil, writeErr }
+			beforeConflicts := counterValue(t, metricStatusUpdateConflicts)
+			c := newTestController(t, api, newTestClock())
+			result, err := c.sync(context.Background(), "project-a/build-a")
+			wantResult := controller.ReconcileResult{}
+			if tc.requeue {
+				wantResult.RequeueAfter = conflictRequeueDelay
+			}
+			if result != wantResult || (err != nil) != tc.wantError || controller.IsPermanent(err) != tc.permanent {
+				t.Fatalf("result=%+v err=%v, want result=%+v error=%t permanent=%t",
+					result, err, wantResult, tc.wantError, tc.permanent)
+			}
+			if tc.wantError && !tc.permanent && !errors.Is(err, writeErr) {
+				t.Fatalf("transient rejection was not preserved: %v", err)
+			}
+			if api.CallCount("GetBuild ") != 2 || api.CallCount("UpdateBuild ") != 1 || api.CallCount("UpdateBuildStatus ") != 0 {
+				t.Fatalf("rejected spec update must not confirm or advance status: %v", api.Calls())
+			}
+			assertCounterDelta(t, metricStatusUpdateConflicts, beforeConflicts, 0)
+		})
+	}
+}
+
 func TestIncrementalSpecWriteDoesNotOverrideAbortedBuild(t *testing.T) {
 	api := newFakeAPI()
 	api.builds[key("project-a", "build-a")] = unresolvedIncremental("")

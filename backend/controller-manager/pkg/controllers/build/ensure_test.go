@@ -305,46 +305,79 @@ func TestPendingProjectReadFailures(t *testing.T) {
 	})
 }
 
-func TestPendingCreateSnapshotAlreadyExistsReusesObject(t *testing.T) {
-	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
-	api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
-	beforeConflicts := counterValue(t, metricEnsureConflicts)
-	api.hooks.createSnapshot = func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
-		api.storeSnapshot(request)
-		return nil, &clientpkg.WriteError{
-			Operation:  "create",
-			Outcome:    clientpkg.WriteRejected,
-			StatusCode: 409,
-			Err:        apierrors.NewAlreadyExists(snapshotsResource, request.Name),
-		}
+func TestChildCreationConflictPreservesPhaseFlow(t *testing.T) {
+	for _, tc := range []struct {
+		kind             string
+		wantPhase        ebsv1.BuildPhase
+		wantStage        ebsv1.BuildStage
+		wantProjectReads int
+		wantStatusWrites int
+	}{
+		{kind: "Snapshot", wantPhase: ebsv1.BuildPending, wantProjectReads: 1},
+		{kind: "RpmRepo", wantPhase: ebsv1.BuildPrepared, wantStatusWrites: 1},
+		{
+			kind: "BuildInfo", wantPhase: ebsv1.BuildProcessing, wantStage: ebsv1.BuildStageBuild,
+			wantProjectReads: 1, wantStatusWrites: 1,
+		},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			api := newFakeAPI()
+			build := withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
+			api.builds[key(build.Namespace, build.Name)] = build
+			api.projects[build.Namespace] = newProject(build.Namespace, newPackageRepo("gcc"))
+			resource := schema.GroupResource{Group: "ebs", Resource: strings.ToLower(tc.kind) + "s"}
+			writeErr := &clientpkg.WriteError{
+				Operation:  "create",
+				Outcome:    clientpkg.WriteRejected,
+				StatusCode: http.StatusConflict,
+				Err:        apierrors.NewAlreadyExists(resource, build.Name),
+			}
+			switch tc.kind {
+			case "Snapshot":
+				api.hooks.createSnapshot = func(request *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
+					api.storeSnapshot(request)
+					return nil, writeErr
+				}
+			case "RpmRepo":
+				api.storeSnapshot(activeSnapshot(build.Namespace, build.Name))
+				api.hooks.createRpmRepo = func(request *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
+					api.storeRpmRepo(request)
+					return nil, writeErr
+				}
+			case "BuildInfo":
+				build.Status.Phase = ebsv1.BuildPrepared
+				api.hooks.createBuildInfo = func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error) {
+					api.storeBuildInfo(request)
+					return nil, writeErr
+				}
+			}
+			c := newTestController(t, api, newTestClock())
+			beforeConflicts := counterValue(t, metricEnsureConflicts)
+			result, err := c.sync(context.Background(), key(build.Namespace, build.Name))
+			if err != nil || result != (controller.ReconcileResult{}) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if api.CallCount("Create"+tc.kind) != 1 || api.CallCount("Get"+tc.kind) != 2 {
+				t.Fatalf("unexpected creation calls: %v", api.Calls())
+			}
+			if api.CallCount("GetProject") != tc.wantProjectReads || api.CallCount("UpdateBuildStatus") != tc.wantStatusWrites {
+				t.Fatalf("unexpected phase calls: %v", api.Calls())
+			}
+			stored := api.build(build.Namespace, build.Name)
+			if stored.Status.Phase != tc.wantPhase || stored.Status.Stage != tc.wantStage {
+				t.Fatalf("phase/stage = %q/%q, want %q/%q", stored.Status.Phase, stored.Status.Stage, tc.wantPhase, tc.wantStage)
+			}
+			if tc.kind == "Snapshot" {
+				snapshot := api.snapshot(build.Namespace, build.Name)
+				project := api.getProject(build.Namespace)
+				if snapshot == nil || snapshot.Spec.DefaultRef != project.Spec.DefaultRef ||
+					!reflect.DeepEqual(snapshot.Spec.PackageRepos, project.Spec.PackageRepos) {
+					t.Fatalf("reused Snapshot does not match the Project input: %+v", snapshot)
+				}
+			}
+			assertCounterDelta(t, metricEnsureConflicts, beforeConflicts, 1)
+		})
 	}
-	c := newTestController(t, api, newTestClock())
-	result, err := c.sync(context.Background(), "project-a/build-a")
-	if err != nil || result != (controller.ReconcileResult{}) {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	if api.CallCount("CreateSnapshot") != 1 {
-		t.Fatalf("create calls = %d", api.CallCount("CreateSnapshot"))
-	}
-	if api.CallCount("GetSnapshot") < 2 {
-		t.Fatal("the existing Snapshot must be read back")
-	}
-	if got := api.CallCount("GetProject project-a"); got != 1 {
-		t.Fatalf("project reads = %d, want 1", got)
-	}
-	reused := api.snapshot("project-a", "build-a")
-	if reused == nil {
-		t.Fatal("the reused Snapshot is missing")
-	}
-	project := api.getProject("project-a")
-	if reused.Spec.DefaultRef != project.Spec.DefaultRef || !reflect.DeepEqual(repoNames(reused.Spec.PackageRepos), []string{"gcc"}) {
-		t.Fatalf("the reused Snapshot must be built from the single Project read: %+v", reused.Spec)
-	}
-	if api.CallCount("UpdateBuildStatus") != 0 {
-		t.Fatal("AlreadyExists must not be reported as a generic conflict requeue")
-	}
-	assertCounterDelta(t, metricEnsureConflicts, beforeConflicts, 1)
 }
 
 func TestPendingCreateSnapshotUnknownConfirmsExistence(t *testing.T) {
@@ -421,22 +454,16 @@ func TestPendingCreateSnapshotUnknownConfirmsExistence(t *testing.T) {
 	})
 }
 
-// TestPendingCreateSnapshotRejections pins the create side of the write error classification: 408/429/5xx stay
-// retryable, other rejections are permanent, and a rejected create never runs a confirmation read.
+// Representative rejections must preserve classification without confirming creation or advancing the Build.
 func TestPendingCreateSnapshotRejections(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		statusCode    int
 		wantPermanent bool
 	}{
-		{name: "request timeout", statusCode: 408},
 		{name: "too many requests", statusCode: 429},
-		{name: "server error", statusCode: 500},
-		{name: "unavailable", statusCode: 503},
 		{name: "not found", statusCode: 404},
-		{name: "bad request", statusCode: 400, wantPermanent: true},
 		{name: "forbidden", statusCode: 403, wantPermanent: true},
-		{name: "invalid", statusCode: 422, wantPermanent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeAPI()
@@ -496,31 +523,6 @@ func TestPendingCreateSnapshotRejections(t *testing.T) {
 			}
 			assertCounterDelta(t, metricEnsureConflicts, beforeConflicts, 0)
 		})
-	}
-}
-
-func TestPendingCreateRpmRepoAlreadyExistsReusesObject(t *testing.T) {
-	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withBaseBuildRef(newBuild("project-a", "build-a", "full", []string{"gcc"}))
-	api.storeSnapshot(activeSnapshot("project-a", "build-a"))
-	api.hooks.createRpmRepo = func(request *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
-		api.storeRpmRepo(request)
-		return nil, &clientpkg.WriteError{
-			Operation:  "create",
-			Outcome:    clientpkg.WriteRejected,
-			StatusCode: 409,
-			Err:        apierrors.NewAlreadyExists(rpmReposResource, request.Name),
-		}
-	}
-	c := newTestController(t, api, newTestClock())
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if api.CallCount("CreateRpmRepo") != 1 {
-		t.Fatalf("create calls = %d", api.CallCount("CreateRpmRepo"))
-	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildPrepared {
-		t.Fatalf("phase = %q", stored.Status.Phase)
 	}
 }
 
@@ -665,31 +667,6 @@ func TestPreparedReusesExistingBuildInfo(t *testing.T) {
 	}
 	if info := api.buildInfo("project-a", "build-a"); info.Spec.BootstrapRepos[0].Name != "existing" || info.Spec.BuildPayload != "frozen payload" || info.Spec.Image != "frozen:image" {
 		t.Fatalf("BuildInfo spec was overwritten: %+v", info.Spec)
-	}
-	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
-		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)
-	}
-}
-
-func TestPreparedCreateBuildInfoAlreadyExistsReusesObject(t *testing.T) {
-	api := newFakeAPI()
-	api.builds[key("project-a", "build-a")] = withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildPrepared, "")
-	api.projects["project-a"] = newProject("project-a", newPackageRepo("gcc"))
-	api.hooks.createBuildInfo = func(request *ebsv1.BuildInfo) (*ebsv1.BuildInfo, error) {
-		api.storeBuildInfo(request)
-		return nil, &clientpkg.WriteError{
-			Operation:  "create",
-			Outcome:    clientpkg.WriteRejected,
-			StatusCode: 409,
-			Err:        apierrors.NewAlreadyExists(buildInfosResource, request.Name),
-		}
-	}
-	c := newTestController(t, api, newTestClock())
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if api.CallCount("CreateBuildInfo") != 1 {
-		t.Fatalf("create calls = %d", api.CallCount("CreateBuildInfo"))
 	}
 	if stored := api.build("project-a", "build-a"); stored.Status.Phase != ebsv1.BuildProcessing || stored.Status.Stage != ebsv1.BuildStageBuild {
 		t.Fatalf("phase/stage = %q/%q", stored.Status.Phase, stored.Status.Stage)

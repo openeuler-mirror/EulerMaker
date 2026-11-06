@@ -132,18 +132,8 @@ func (r *reconciler) writeIncrementalPackages(packages []string) (*ebsv1.Build, 
 		}
 		return nil, controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
 	case clientpkg.WriteRejected:
-		switch writeErr.StatusCode {
-		case 404:
-			return nil, controller.ReconcileResult{}, nil
-		case 409, 412:
-			return nil, controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
-		case 408, 429:
-			return nil, controller.ReconcileResult{}, err
-		}
-		if writeErr.StatusCode >= 500 && writeErr.StatusCode < 600 {
-			return nil, controller.ReconcileResult{}, err
-		}
-		return nil, controller.ReconcileResult{}, controller.NewPermanentError(err)
+		result, classified := classifyUpdateRejection(writeErr, err)
+		return nil, result, classified
 	case clientpkg.WriteNotSent:
 		return nil, controller.ReconcileResult{}, classifyNotSentWrite(err)
 	default:

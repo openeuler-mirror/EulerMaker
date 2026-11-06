@@ -103,17 +103,16 @@ func intentSatisfied(build *ebsv1.Build, intent writeIntent) bool {
 	return true
 }
 
-// apply commits target when it differs from the object fetched at the start of the round and returns outcome
-// afterwards. When the target status is already persisted the write is skipped and outcome is returned as is.
-func (r *reconciler) apply(target *ebsv1.Build, intent writeIntent, outcome controller.ReconcileResult, outcomeErr error) (controller.ReconcileResult, error) {
+// apply commits a changed status before returning outcomeErr, skipping writes when the status is unchanged.
+func (r *reconciler) apply(target *ebsv1.Build, intent writeIntent, outcomeErr error) (controller.ReconcileResult, error) {
 	if statusEquivalent(r.current.Status, target.Status) {
-		return outcome, outcomeErr
+		return controller.ReconcileResult{}, outcomeErr
 	}
 	confirmed, result, err := r.commit(intent)
 	if !confirmed {
 		return result, err
 	}
-	return outcome, outcomeErr
+	return controller.ReconcileResult{}, outcomeErr
 }
 
 // commit performs the pre-write concurrency check and one /status write.
@@ -180,24 +179,32 @@ func (r *reconciler) handleWriteError(intent writeIntent, err error) (bool, cont
 		}
 		return false, controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
 	case clientpkg.WriteRejected:
-		switch writeErr.StatusCode {
-		case 404:
-			return false, controller.ReconcileResult{}, nil
-		case 409, 412:
+		result, classified := classifyUpdateRejection(writeErr, err)
+		if result.RequeueAfter > 0 {
 			statusUpdateConflicts.Inc()
-			return false, controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
-		case 408, 429:
-			return false, controller.ReconcileResult{}, err
 		}
-		if writeErr.StatusCode >= 500 && writeErr.StatusCode < 600 {
-			return false, controller.ReconcileResult{}, err
-		}
-		return false, controller.ReconcileResult{}, controller.NewPermanentError(err)
+		return false, result, classified
 	case clientpkg.WriteNotSent:
 		return false, controller.ReconcileResult{}, classifyNotSentWrite(err)
 	default:
 		return false, controller.ReconcileResult{}, err
 	}
+}
+
+// classifyUpdateRejection treats a missing update target as complete and conflicts as a fresh-round retry.
+func classifyUpdateRejection(writeErr *clientpkg.WriteError, err error) (controller.ReconcileResult, error) {
+	switch writeErr.StatusCode {
+	case http.StatusNotFound:
+		return controller.ReconcileResult{}, nil
+	case http.StatusConflict, http.StatusPreconditionFailed:
+		return controller.ReconcileResult{RequeueAfter: conflictRequeueDelay}, nil
+	case http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return controller.ReconcileResult{}, err
+	}
+	if writeErr.StatusCode >= 500 && writeErr.StatusCode < 600 {
+		return controller.ReconcileResult{}, err
+	}
+	return controller.ReconcileResult{}, controller.NewPermanentError(err)
 }
 
 // classifyNotSentWrite keeps client-side validation errors permanent while letting transient network failures
