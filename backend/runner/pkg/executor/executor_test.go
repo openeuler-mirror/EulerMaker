@@ -9,6 +9,48 @@ import (
 	"ebs-runner/pkg/gateway"
 )
 
+func TestRuntimeManagerDispatchesCT(t *testing.T) {
+	executor := &fakeExecutor{resultRoot: "/results/project/job"}
+	manager := &Manager{
+		RunnerType: "ct",
+		Executors:  map[string]Executor{"ct": executor},
+	}
+
+	resultRoot, err := manager.Execute(context.Background(), gateway.JobResource{})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if resultRoot != "/results/project/job" {
+		t.Fatalf("result root = %s", resultRoot)
+	}
+	if !executor.called {
+		t.Fatalf("expected executor call")
+	}
+}
+
+func TestRuntimeManagerRejectsMismatchedRuntime(t *testing.T) {
+	manager := &Manager{
+		RunnerType: "ct",
+		Executors:  map[string]Executor{"ct": &fakeExecutor{}},
+	}
+
+	_, err := manager.Execute(context.Background(), gateway.JobResource{Spec: gateway.JobSpec{Runtime: "vm"}})
+	if err == nil {
+		t.Fatalf("expected runtime mismatch error")
+	}
+}
+
+type fakeExecutor struct {
+	called     bool
+	resultRoot string
+	err        error
+}
+
+func (f *fakeExecutor) Execute(context.Context, gateway.JobResource) (string, error) {
+	f.called = true
+	return f.resultRoot, f.err
+}
+
 func TestShellExecutorRunsPayload(t *testing.T) {
 	dir := t.TempDir()
 	executor := &ShellExecutor{
