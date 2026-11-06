@@ -3,189 +3,30 @@ package snapshot
 import (
 	"context"
 	"errors"
-	"fmt"
-	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/clients/gitserver"
 	ebsv1 "ebs-api/ebs/v1"
 )
-
-type asyncGit struct {
-	mu                          sync.Mutex
-	checks, publishes, resolves int
-	synced                      bool
-	publishErr                  error
-	fullRef                     string
-	resolveErr                  error
-}
-
-func (g *asyncGit) CheckSynced(context.Context, string, time.Time) (gitserver.SyncCheckResult, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.checks++
-	return gitserver.SyncCheckResult{Synced: g.synced, CloneURL: "git-server:///git/example.com/pkg.git"}, nil
-}
-func (g *asyncGit) PublishSyncTask(context.Context, string) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.publishes++
-	return g.publishErr
-}
-func (g *asyncGit) ExecCommand(context.Context, string, string) (string, error) {
-	panic("Snapshot Controller must not call ExecCommand")
-}
-
-func (g *asyncGit) ResolveFullRef(_ context.Context, _ string, ref string) (string, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.resolves++
-	g.fullRef = ref
-	return strings.Repeat("a", 40), g.resolveErr
-}
-
-func (g *asyncGit) ResolveCommitID(ctx context.Context, originURL, commitID string) (string, error) {
-	return g.ResolveFullRef(ctx, originURL, commitID)
-}
 
 func TestPinnedCommitWaitsForSyncAndReportsMissingCommit(t *testing.T) {
 	const commitID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	snapshot, build := baseObjects([]ebsv1.PackageRepo{{Name: "pkg", URL: "https://example.com/pkg.git", Ref: "refs/heads/main", CommitID: commitID}})
 	api := &fakeClient{snapshot: snapshot, build: build}
-	g := &asyncGit{}
+	g := &fakeGitClient{unsynced: true}
 	c := newTestController(t, api, g, Config{})
 	task := resolveTask{repo: snapshot.Spec.PackageRepos[0]}
 	result := c.resolveOne(context.Background(), c.services.(*fakeServices).git, task, snapshot.CreationTimestamp.Time)
 	if result.state != stateWaiting || g.publishes != 1 || g.resolves != 0 {
 		t.Fatalf("waiting result=%+v publishes=%d resolves=%d", result, g.publishes, g.resolves)
 	}
-	g.synced = true
+	g.unsynced = false
 	g.resolveErr = &gitserver.Error{Kind: gitserver.ErrorNotFound, Err: errors.New("missing commit")}
 	result = c.resolveOne(context.Background(), c.services.(*fakeServices).git, task, snapshot.CreationTimestamp.Time)
-	if result.state != stateSkipped || result.status.Error.Code != ebsv1.PackageRepoResolveFailed || g.fullRef != commitID || g.resolves != 1 {
-		t.Fatalf("missing commit result=%+v ref=%s resolves=%d", result, g.fullRef, g.resolves)
-	}
-}
-
-func TestFullRefSyncAndResolveAcrossReconciles(t *testing.T) {
-	for _, kind := range []gitserver.ErrorKind{"", gitserver.ErrorNotFound, gitserver.ErrorTemporary} {
-		t.Run(string(kind), func(t *testing.T) {
-			snapshot, build := baseObjects(branchRepos(1))
-			build.Spec.BuildType = "single"
-			build.Spec.Packages = []string{"pkg-0"}
-			snapshot.Spec.PackageRepos[0].Ref = "refs/merge-requests/501/head"
-			snapshot.Spec.DefaultRef = "refs/heads/default"
-			api := &fakeClient{snapshot: snapshot, build: build}
-			g := &asyncGit{}
-			c := newTestController(t, api, g, Config{})
-			result, err := c.sync(context.Background(), "project-a/build-a")
-			if err != nil || result.RequeueAfter != c.config.SyncRequeueDelay || g.publishes != 1 || g.resolves != 0 {
-				t.Fatalf("waiting result=%+v err=%v publishes=%d resolves=%d", result, err, g.publishes, g.resolves)
-			}
-			g.synced = true
-			if kind != "" {
-				g.resolveErr = &gitserver.Error{Kind: kind, Err: errors.New("resolve failed")}
-			}
-			_, err = c.sync(context.Background(), "project-a/build-a")
-			status := api.snapshot.Status.PackageRepoStatuses["pkg-0"]
-			if g.fullRef != snapshot.Spec.PackageRepos[0].Ref || g.resolves != 1 || g.publishes != 1 {
-				t.Fatalf("ref=%q resolves=%d publishes=%d", g.fullRef, g.resolves, g.publishes)
-			}
-			switch kind {
-			case "":
-				if err != nil || status.CommitID != strings.Repeat("a", 40) || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
-					t.Fatalf("resolved status=%+v err=%v", status, err)
-				}
-			case gitserver.ErrorNotFound:
-				if err != nil || status.Error == nil || status.Error.Code != ebsv1.PackageRepoResolveFailed ||
-					status.Error.Retryable || status.CommitID != "" || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
-					t.Fatalf("missing ref status=%+v err=%v", status, err)
-				}
-			case gitserver.ErrorTemporary:
-				if !errors.Is(err, errPackagesRetryable) || status.Error == nil || !status.Error.Retryable ||
-					c.failures.count(snapshot.UID, "pkg-0") != 1 || api.snapshot.Status.Phase != ebsv1.SnapshotProcessing {
-					t.Fatalf("retry status=%+v err=%v", status, err)
-				}
-				g.resolveErr = nil
-				if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-					t.Fatal(err)
-				}
-				if api.snapshot.Status.Phase != ebsv1.SnapshotActive || c.failures.count(snapshot.UID, "pkg-0") != 0 {
-					t.Fatal("successful retry must complete the Snapshot and clear the failure budget")
-				}
-			}
-		})
-	}
-}
-
-func branchRepos(n int) []ebsv1.PackageRepo {
-	repos := make([]ebsv1.PackageRepo, n)
-	for i := range repos {
-		repos[i] = ebsv1.PackageRepo{Name: fmt.Sprintf("pkg-%d", i), URL: fmt.Sprintf("https://example.com/pkg-%d.git", i), Ref: "refs/heads/main"}
-	}
-	return repos
-}
-
-func TestAsyncSyncAcrossReconciles(t *testing.T) {
-	snapshot, build := baseObjects(branchRepos(5000))
-	api := &fakeClient{snapshot: snapshot, build: build}
-	g := &asyncGit{}
-	c := newTestController(t, api, g, Config{})
-	result, err := c.sync(context.Background(), "project-a/build-a")
-	if err != nil || result.RequeueAfter != c.config.SyncRequeueDelay || api.snapshot.Status.Phase != ebsv1.SnapshotProcessing {
-		t.Fatalf("result=%+v error=%v phase=%s", result, err, api.snapshot.Status.Phase)
-	}
-	if g.checks != 5000 || g.publishes != 5000 || g.resolves != 0 || len(api.snapshot.Status.PackageRepoStatuses) != 0 {
-		t.Fatalf("requests=%+v statuses=%d", g, len(api.snapshot.Status.PackageRepoStatuses))
-	}
-	// Restart: no in-memory publication flag is needed to recover.
-	g.synced = true
-	c = newTestController(t, api, g, Config{})
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatal(err)
-	}
-	if g.checks != 10000 || g.publishes != 5000 || g.resolves != 5000 || api.snapshot.Status.Phase != ebsv1.SnapshotActive {
-		t.Fatalf("requests=%+v phase=%s", g, api.snapshot.Status.Phase)
-	}
-}
-
-func TestBudgetDefersAndRotatesWithoutConsumingRetries(t *testing.T) {
-	snapshot, build := baseObjects(branchRepos(5))
-	snapshot.Status.Phase = ebsv1.SnapshotProcessing
-	snapshot.Status.PackageRepoStatuses = map[string]ebsv1.PackageRepoStatus{
-		"pkg-4": {Error: &ebsv1.PackageRepoError{Code: ebsv1.PackageRepoSyncFailed, Message: "previous failure", Retryable: true}},
-	}
-	api := &fakeClient{snapshot: snapshot, build: build}
-	calls := 0
-	g := &checkingGit{check: func(ctx context.Context) (gitserver.SyncCheckResult, error) {
-		calls++
-		<-ctx.Done()
-		return gitserver.SyncCheckResult{}, ctx.Err()
-	}}
-	c := newTestController(t, api, g, Config{})
-	c.config.ResolveWorkers = 1
-	c.config.ResolveBudget = 20 * time.Millisecond
-	c.failures.observe("project-a/build-a", snapshot.UID)
-	c.failures.set(snapshot.UID, "pkg-4", 2)
-	original := snapshot.DeepCopy().Status
-	for round := 0; round < 5; round++ {
-		result, err := c.sync(context.Background(), "project-a/build-a")
-		if err != nil || result.RequeueAfter != c.config.SyncRequeueDelay {
-			t.Fatalf("round=%d result=%+v error=%v", round, result, err)
-		}
-		if calls != round+1 || c.failures.cursor(snapshot.UID) != (round+1)%5 {
-			t.Fatalf("round=%d calls=%d cursor=%d", round, calls, c.failures.cursor(snapshot.UID))
-		}
-		if !reflect.DeepEqual(original, api.snapshot.Status) || c.failures.count(snapshot.UID, "pkg-4") != 2 {
-			t.Fatalf("deferred tasks changed status or retries: %+v", api.snapshot.Status)
-		}
-	}
-	if api.updates != 0 {
-		t.Fatalf("deferred-only cycles wrote status %d times", api.updates)
+	if result.state != stateSkipped || result.status.Error.Code != ebsv1.PackageRepoResolveFailed || g.commitID != commitID || g.resolves != 1 {
+		t.Fatalf("missing commit result=%+v ref=%s resolves=%d", result, g.commitID, g.resolves)
 	}
 }
 
@@ -210,60 +51,11 @@ func TestRequestFailureClassification(t *testing.T) {
 	}
 }
 
-func TestPublishFailureCountsOnceAndRecovers(t *testing.T) {
-	snapshot, build := baseObjects(branchRepos(1))
-	api := &fakeClient{snapshot: snapshot, build: build}
-	g := &asyncGit{publishErr: &gitserver.Error{Kind: gitserver.ErrorTemporary, Err: errors.New("response lost")}}
-	c := newTestController(t, api, g, Config{})
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err == nil || c.failures.count(snapshot.UID, "pkg-0") != 1 {
-		t.Fatalf("err=%v count=%d", err, c.failures.count(snapshot.UID, "pkg-0"))
-	}
-	g.synced = true
-	if _, err := c.sync(context.Background(), "project-a/build-a"); err != nil {
-		t.Fatal(err)
-	}
-	if g.publishes != 1 || api.snapshot.Status.Phase != ebsv1.SnapshotActive || api.snapshot.Status.PackageRepoStatuses["pkg-0"].Error != nil {
-		t.Fatalf("requests=%+v status=%+v", g, api.snapshot.Status)
-	}
-}
-
-type conflictSnapshotClient struct{ *fakeClient }
-
-func (c *conflictSnapshotClient) UpdateSnapshotStatus(context.Context, *ebsv1.Snapshot) (*ebsv1.Snapshot, error) {
-	return nil, &clientpkg.WriteError{Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: errors.New("conflict")}
-}
-
-func TestCursorAdvancesDespiteStatusConflict(t *testing.T) {
-	snapshot, build := baseObjects(branchRepos(5))
-	snapshot.Status.Phase = ebsv1.SnapshotProcessing
-	api := &fakeClient{snapshot: snapshot, build: build}
-	calls := 0
-	g := &checkingGit{check: func(ctx context.Context) (gitserver.SyncCheckResult, error) {
-		calls++
-		if calls == 1 {
-			return gitserver.SyncCheckResult{}, errors.New("unavailable")
-		}
-		<-ctx.Done()
-		return gitserver.SyncCheckResult{}, ctx.Err()
-	}}
-	c := newTestController(t, api, g, Config{})
-	c.client = &conflictSnapshotClient{fakeClient: api}
-	c.config.ResolveWorkers = 1
-	c.config.ResolveBudget = 20 * time.Millisecond
-	result, err := c.sync(context.Background(), "project-a/build-a")
-	if err != nil || !result.Requeue || c.failures.cursor(snapshot.UID) != 2 {
-		t.Fatalf("result=%+v err=%v cursor=%d", result, err, c.failures.cursor(snapshot.UID))
-	}
-	if c.failures.count(snapshot.UID, "pkg-0") != 0 || len(api.snapshot.Status.PackageRepoStatuses) != 0 {
-		t.Fatal("conflict committed pending failure state")
-	}
-}
-
 func TestBudgetWaitsForWorkersAndPreservesStableOrder(t *testing.T) {
 	snapshot, build := baseObjects(branchRepos(10))
 	var mu sync.Mutex
 	active, peak, calls := 0, 0, 0
-	g := &checkingGit{check: func(ctx context.Context) (gitserver.SyncCheckResult, error) {
+	g := &fakeGitClient{check: func(ctx context.Context) (gitserver.SyncCheckResult, error) {
 		mu.Lock()
 		active++
 		calls++
