@@ -168,8 +168,7 @@ func TestReconcileBuildConvergesOnSkipped(t *testing.T) {
 				t.Fatalf("the round must start by reading the RpmRepo, got %d reads", client.GetRpmRepoCalls)
 			}
 			if len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.GetRepositoryUIDs) != 0 ||
-				len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 ||
-				len(artifacts.ManifestRequests) != 0 {
+				len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
 				t.Fatalf("a skipped object must not reach Artifact Manager")
 			}
 			if c.Queue().Len() != 0 {
@@ -232,7 +231,7 @@ func TestReconcileReleaseSkipsSkippedObjectsFromAStaleSnapshot(t *testing.T) {
 
 func TestInitializerSelectorExcludesSkipped(t *testing.T) {
 	factory := &stubPollingFactory{}
-	config := initializedConfig()
+	config := testConfig()
 	if _, _, err := Initializer(config, NewFakeClient())(context.Background(), initContext(factory)); err != nil {
 		t.Fatalf("Initializer: %v", err)
 	}

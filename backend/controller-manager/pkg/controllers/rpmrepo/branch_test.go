@@ -10,7 +10,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -41,7 +40,7 @@ func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {
 	}
 }
 
-func TestFinishRepositoryConvergesWhenTheObjectDissapears(t *testing.T) {
+func TestFinishRepositoryConvergesWhenTheObjectDisappears(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
 	client.RpmRepos[key(testProject, testBuild)] = repo
@@ -64,9 +63,6 @@ func TestFinishRepositoryConvergesWhenTheObjectDissapears(t *testing.T) {
 		return updated, nil
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
 	}
@@ -96,25 +92,6 @@ func TestResumeReleaseSurfacesReadFailures(t *testing.T) {
 	}
 	if len(artifacts.GetReleaseBuildNames) != 0 {
 		t.Fatalf("a failed re-read must not query Artifact Manager")
-	}
-}
-
-func TestCommitStatusTreatsPreconditionFailureAsConflict(t *testing.T) {
-	client, artifacts := statusWriteFailureClient(t, &clientpkg.WriteError{
-		Operation: "update-status", Resource: source.RpmReposGVR.GroupResource(),
-		Outcome: clientpkg.WriteRejected, StatusCode: 412, Err: errors.New("precondition failed"),
-	})
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result.RequeueAfter != conflictRequeueDelay {
-		t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, conflictRequeueDelay)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("a rejected checkpoint must not submit")
 	}
 }
 

@@ -201,16 +201,3 @@ func (f *FakeClient) UpdateRpmRepoStatus(_ context.Context, obj *ebsv1.RpmRepo) 
 	f.StatusWrites = append(f.StatusWrites, updated.DeepCopy())
 	return updated.DeepCopy(), nil
 }
-
-// Reset clears the recorded calls while keeping the preset objects and hooks, so a test can compare two
-// rounds of the same reconcile.
-func (f *FakeClient) Reset() {
-	f.JobListOptions = nil
-	f.RpmRepoListOptions = nil
-	f.JobsQueries = nil
-	f.RpmReposQueries = nil
-	f.StatusWrites = nil
-	f.GetRpmRepoCalls = 0
-	f.GetBuildCalls = 0
-	f.GetBuildInfoCalls = 0
-}

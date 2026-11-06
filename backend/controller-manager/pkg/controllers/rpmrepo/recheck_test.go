@@ -32,9 +32,6 @@ func TestReleaseRecheckSkipsCandidateWithoutBuildInfo(t *testing.T) {
 func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-b", "kernel", "uid-job-b", time.Unix(2, 0))}
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 
 	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
 	if err != nil {
@@ -52,25 +49,6 @@ func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
 	item, _ := c.Queue().Get()
 	if item != rpmRepoKey(testProject, testBuild) {
 		t.Fatalf("unexpected queued key %v", item)
-	}
-}
-
-func TestReleaseRecheckReturnsToRepositoryWithoutManifestProbe(t *testing.T) {
-	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-b", "kernel", "uid-job-b", time.Unix(2, 0))}
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return JobUploadManifest{}, &artifactError{operation: "get-manifest", kind: artifactNotFound, code: "NotFound"}
-	}
-
-	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result != (controller.ReconcileResult{}) {
-		t.Fatalf("a candidate with not-ready inputs must wait, got %+v", result)
-	}
-	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 1 || len(artifacts.ManifestRequests) != 0 {
-		t.Fatalf("an unconsumed Job must re-enqueue the repository without checking its manifest")
 	}
 }
 

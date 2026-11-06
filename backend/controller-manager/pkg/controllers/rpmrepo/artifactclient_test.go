@@ -162,26 +162,6 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		}
 	})
 
-	t.Run("get-manifest-by-name", func(t *testing.T) {
-		body := `{"project":"project","jobName":"job-a","state":"Completed"}`
-		server := newScriptedArtifactServer(t, http.StatusOK, body, nil)
-		client := server.client(t)
-		manifest, err := client.GetJobManifest(ctx, testProject, "job-a")
-		if err != nil {
-			t.Fatalf("GetJobManifest: %v", err)
-		}
-		if manifest.State != ManifestCompleted {
-			t.Fatalf("unexpected manifest %+v", manifest)
-		}
-		request := server.requests[0]
-		if request.URL.Path != "/artifacts/v1/projects/"+testProject+"/jobs/job-a/manifest" {
-			t.Fatalf("unexpected path %q", request.URL.Path)
-		}
-		if request.URL.RawQuery != "" {
-			t.Fatalf("unexpected manifest query %q", request.URL.RawQuery)
-		}
-	})
-
 	t.Run("submit-release", func(t *testing.T) {
 		body := `{"buildName":"build-a","state":"Prepared","attempt":1,"updatedAt":"2026-09-21T10:00:00Z"}`
 		server := newScriptedArtifactServer(t, http.StatusAccepted, body, nil)
@@ -244,10 +224,6 @@ func TestArtifactClientValidatesRequestsLocally(t *testing.T) {
 		{
 			name: "repository-without-uid",
 			call: func() error { _, err := client.GetRepository(ctx, ""); return err },
-		},
-		{
-			name: "manifest-without-job",
-			call: func() error { _, err := client.GetJobManifest(ctx, testProject, ""); return err },
 		},
 		{
 			name: "release-without-source",
@@ -435,4 +411,17 @@ func TestArtifactClientRejectsUnusableResponses(t *testing.T) {
 			t.Fatalf("a canceled call must be retryable, got %v", err)
 		}
 	})
+}
+
+func TestArtifactErrorFormattingIsStable(t *testing.T) {
+	cause := errors.New("boom")
+	failure := &artifactError{operation: "get-repository", kind: artifactRetryable, code: "RepositoryInternalError", statusCode: 500, err: cause}
+	if !errors.Is(failure, cause) {
+		t.Fatalf("artifactError must unwrap to its cause")
+	}
+	for _, want := range []string{"get-repository", "Retryable", "RepositoryInternalError", "500", "boom"} {
+		if !strings.Contains(failure.Error(), want) {
+			t.Fatalf("error %q must mention %q", failure.Error(), want)
+		}
+	}
 }

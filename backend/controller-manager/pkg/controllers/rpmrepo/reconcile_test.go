@@ -196,13 +196,6 @@ func newSucceededJob(name, spec, uid string, created time.Time) ebsv1.Job {
 	}
 }
 
-func completedManifest(size int64) JobUploadManifest {
-	return JobUploadManifest{
-		State: ManifestCompleted,
-		Files: []ManifestFile{{RelativePath: "packages/gcc.rpm", Size: size}},
-	}
-}
-
 func TestSkippableInputFailure(t *testing.T) {
 	for _, code := range []string{
 		"ManifestNotReady", "ManifestInvalid", "ManifestContainsNoPackages", "MaterializationInputExpired",
@@ -259,9 +252,6 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 		[]ManifestReference{{JobName: "job-b"}}) {
 		t.Fatalf("rebatch must contain only the healthy Job: %+v", artifacts.SubmitRepositoryRequests)
 	}
-	if len(artifacts.ManifestRequests) != 0 {
-		t.Fatalf("rebatch must not pre-read manifests: %+v", artifacts.ManifestRequests)
-	}
 }
 
 func TestReconcileDoesNotSkipUnidentifiedManifestFailure(t *testing.T) {
@@ -293,9 +283,6 @@ func TestReconcileBuildSubmitsBatchAndWaitsForMaterialization(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
@@ -336,9 +323,6 @@ func TestReconcileBuildPromotesBatchWithoutSeparateReleaseKey(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
 	}
@@ -379,9 +363,6 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
 	}

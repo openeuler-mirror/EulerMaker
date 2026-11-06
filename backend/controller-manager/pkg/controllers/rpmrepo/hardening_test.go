@@ -152,34 +152,6 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 	}
 }
 
-func TestReconcileBuildDoesNotReadManifestBeforeSubmission(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
-
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return JobUploadManifest{}, &artifactError{operation: "get-manifest", kind: artifactPermanent, code: "InvalidRequest"}
-	}
-	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, UpdatedAt: time.Now()}, nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	_, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if len(artifacts.ManifestRequests) != 0 {
-		t.Fatalf("manifest must not be read: %v", artifacts.ManifestRequests)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 1 {
-		t.Fatalf("succeeded Job must be submitted: %v", artifacts.SubmitRepositoryRequests)
-	}
-}
-
 func TestReconcileBuildDefersReadyWithoutContentURL(t *testing.T) {
 	client := NewFakeClient()
 	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
@@ -188,9 +160,6 @@ func TestReconcileBuildDefersReadyWithoutContentURL(t *testing.T) {
 	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, UpdatedAt: time.Now()}, nil
 	}

@@ -113,7 +113,7 @@ func (r *reconciler) queueReleaseCandidate(repo ebsv1.RpmRepo) (bool, error) {
 		return false, err
 	}
 	r.enqueueOtherRelease(repo)
-	return len(scan.candidates) == 0, nil
+	return len(scan) == 0, nil
 }
 
 // releaseTarget is the validated object pair both release paths work on.
@@ -240,7 +240,7 @@ func (r *reconciler) recheckReleaseInputs(repo *ebsv1.RpmRepo, build *ebsv1.Buil
 	if err != nil {
 		return nil, false, err
 	}
-	if len(scan.candidates) > 0 {
+	if len(scan) > 0 {
 		r.controller.Enqueue(rpmRepoKey(r.project, repo.Name))
 		return nil, true, nil
 	}

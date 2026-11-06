@@ -18,7 +18,7 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// advanceRepository implements the repository state machine of the design.
+// advanceRepository checkpoints and advances one materialization batch.
 func (r *reconciler) advanceRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, info *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
 	repository := repo.Status.Repository
 	if repository == nil {
@@ -37,10 +37,10 @@ func (r *reconciler) advanceRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, 
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	if len(scan.candidates) == 0 {
+	if len(scan) == 0 {
 		return r.maybeTriggerRelease(repo, build, info)
 	}
-	inputs := repositoryInputs(selectBatch(scan.candidates, r.controller.config.MaxJobsPerBatch))
+	inputs := repositoryInputs(selectBatch(scan, r.controller.config.MaxJobsPerBatch))
 	base := repository.RepositoryUID
 	uid, err := repositoryUID(r.project, repo.Name, base, inputs)
 	if err != nil {
@@ -271,19 +271,19 @@ func skippableInputFailure(code string) bool {
 	return false
 }
 
-func transitionHasJob(transition *ebsv1.RepositoryTransition, uid string) bool {
-	if uid == "" {
+func transitionHasJob(transition *ebsv1.RepositoryTransition, jobName string) bool {
+	if jobName == "" {
 		return false
 	}
 	for _, input := range transition.Inputs {
-		if input.JobName == uid {
+		if input.JobName == jobName {
 			return true
 		}
 	}
 	return false
 }
 
-// skipFailedJob persists the offending UID before discarding this failed batch. A new cycle selects the
+// skipFailedJob persists the offending Job name before discarding this failed batch. A new cycle selects the
 // remaining Jobs and derives a new repository UID; the previous ready version remains untouched.
 func (r *reconciler) skipFailedJob(repo *ebsv1.RpmRepo, transition *ebsv1.RepositoryTransition, failure *FailureInfo) (controller.ReconcileResult, error) {
 	target := repo.DeepCopy()
@@ -317,7 +317,7 @@ func (r *reconciler) finishRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, i
 	if err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	if len(scan.candidates) > 0 {
+	if len(scan) > 0 {
 		return controller.ReconcileResult{Requeue: true}, nil
 	}
 	return r.maybeTriggerRelease(fresh, build, info)
@@ -340,18 +340,13 @@ func (r *reconciler) maybeTriggerRelease(repo *ebsv1.RpmRepo, build *ebsv1.Build
 	return r.reconcileRelease(build.Spec.Arch)
 }
 
-// candidateScan is the result of reading every input of one repository round.
-type candidateScan struct {
-	candidates []candidate
-}
-
 // scanCandidates lists Succeeded Jobs without reading manifests; Artifact Manager validates batch inputs.
-func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (candidateScan, error) {
+func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) ([]candidate, error) {
 	jobs, err := r.controller.client.ListJobs(r.ctx, r.project, metav1.ListOptions{
 		LabelSelector: labels.Set{ebsv1.JobBuildNameLabel: repo.Name}.String(),
 	})
 	if err != nil {
-		return candidateScan{}, classifyReadError(err)
+		return nil, classifyReadError(err)
 	}
 	consumed := make(map[string]struct{})
 	if repo.Status.Repository != nil {
@@ -367,7 +362,7 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 			}
 		}
 	}
-	scan := candidateScan{}
+	var scan []candidate
 	ordered := append([]ebsv1.Job(nil), jobs...)
 	sortJobs(ordered)
 	selectedSpecs := make(map[string]struct{})
@@ -381,10 +376,10 @@ func (r *reconciler) scanCandidates(repo *ebsv1.RpmRepo, build *ebsv1.Build) (ca
 		}
 		specName, valid := specname.Decode(job.Labels[ebsv1.JobSpecNameLabel])
 		if !valid || job.Labels[ebsv1.BuildTargetArchLabel] != build.Spec.Arch {
-			log.Printf("controller=%s key=%q uid=%q job_name=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.UID)
+			log.Printf("controller=%s key=%q uid=%q job_name=%q reason=InputLabelMismatch", Name, r.key, repo.UID, job.Name)
 			continue
 		}
-		scan.candidates = append(scan.candidates, candidate{
+		scan = append(scan, candidate{
 			name:      job.Name,
 			specName:  specName,
 			createdAt: job.CreationTimestamp.UnixNano(),

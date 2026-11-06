@@ -39,9 +39,6 @@ func unknownWriteClient(t *testing.T, land bool) *FakeClient {
 func TestCommitStatusConfirmsUnknownWriteByReadingBackTheIntent(t *testing.T) {
 	client := unknownWriteClient(t, true)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
@@ -62,9 +59,6 @@ func TestCommitStatusConfirmsUnknownWriteByReadingBackTheIntent(t *testing.T) {
 func TestCommitStatusAbandonsUnconfirmedUnknownWrite(t *testing.T) {
 	client := unknownWriteClient(t, false)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	c := newTestController(t, client, artifacts, testConfig())
 
 	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
@@ -83,30 +77,26 @@ func TestCommitStatusAbandonsUnconfirmedUnknownWrite(t *testing.T) {
 }
 
 func TestCommitStatusDelaysOnConflict(t *testing.T) {
-	client := NewFakeClient()
-	repo := newRpmRepo(testBuild)
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
-	client.UpdateStatusHook = func(*ebsv1.RpmRepo, *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
-		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 409, Err: fmt.Errorf("conflict")}
-	}
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result.RequeueAfter != conflictRequeueDelay {
-		t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, conflictRequeueDelay)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("a conflicting checkpoint must not be followed by an external request")
+	for _, status := range []int{409, 412} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			client, artifacts := statusWriteFailureClient(t, &clientpkg.WriteError{
+				Operation:  "update-status",
+				Outcome:    clientpkg.WriteRejected,
+				StatusCode: status,
+				Err:        fmt.Errorf("write conflict"),
+			})
+			c := newTestController(t, client, artifacts, testConfig())
+			result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
+			if err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if result.RequeueAfter != conflictRequeueDelay {
+				t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, conflictRequeueDelay)
+			}
+			if len(artifacts.SubmitRepositoryRequests) != 0 {
+				t.Fatal("a conflicting checkpoint must not be followed by an external request")
+			}
+		})
 	}
 }
 
@@ -121,9 +111,6 @@ func TestCommitStatusRejectsMissingObjectAsConvergence(t *testing.T) {
 		return nil, &clientpkg.WriteError{Operation: "update-status", Outcome: clientpkg.WriteRejected, StatusCode: 404, Err: fmt.Errorf("not found")}
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	c := newTestController(t, client, artifacts, testConfig())
 
 	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
@@ -155,9 +142,6 @@ func TestCommitStatusRejectsPartiallyMatchingUnknownWrite(t *testing.T) {
 		return nil, unknownWrite("update-status", source.RpmReposGVR, fmt.Errorf("connection reset while writing status"))
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	c := newTestController(t, client, artifacts, testConfig())
 
 	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
@@ -183,9 +167,6 @@ func statusWriteFailureClient(t *testing.T, failure error) (*FakeClient, *FakeAr
 		return nil, failure
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	return client, artifacts
 }
 
