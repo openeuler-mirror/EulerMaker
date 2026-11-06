@@ -82,7 +82,7 @@ func TestInitializerBuildsThePollingSource(t *testing.T) {
 	if factory.period != config.PollPeriod {
 		t.Fatalf("unexpected poll period %s", factory.period)
 	}
-	selectors := []string{nonTerminalRpmRepoFieldSelector, "metadata.deletionTimestamp!=null", "metadata.deletionTimestamp!=null"}
+	selectors := []string{expectedNonTerminalSelector, "metadata.deletionTimestamp!=null", "metadata.deletionTimestamp!=null"}
 	if !slices.Equal(factory.selectors, selectors) {
 		t.Fatalf("unexpected field selectors %v", factory.selectors)
 	}
@@ -159,9 +159,21 @@ func TestEventHandlerEnqueuesTheBuildKey(t *testing.T) {
 
 func TestEventHandlerSkipsObjectsThatNeedNoWork(t *testing.T) {
 	c := handlerController(t)
-	terminal := newRpmRepo(testBuild)
-	terminal.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady}
-	c.onAdd(terminal)
+	for _, phase := range []ebsv1.RpmRepoReleasePhase{
+		ebsv1.RpmRepoReleaseReady,
+		ebsv1.RpmRepoReleaseFailed,
+		ebsv1.RpmRepoReleaseSkipped,
+	} {
+		t.Run(string(phase), func(t *testing.T) {
+			terminal := newRpmRepo(testBuild)
+			terminal.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: phase}
+			c.onAdd(terminal)
+			c.onUpdate(terminal, terminal)
+			if c.Queue().Len() != 0 {
+				t.Fatalf("%s repository enqueued work", phase)
+			}
+		})
+	}
 	c.onAdd(&ebsv1.Build{ObjectMeta: metav1.ObjectMeta{Name: testBuild, Namespace: testProject}})
 	if c.Queue().Len() != 0 {
 		t.Fatalf("terminal and foreign objects must not enqueue work")
@@ -195,6 +207,82 @@ func TestEventHandlerIgnoresMalformedObjects(t *testing.T) {
 	}
 }
 
+// expectedNonTerminalSelector excludes all release terminal phases.
+const expectedNonTerminalSelector = "status.release.phase!=Ready,status.release.phase!=Failed,status.release.phase!=Skipped"
+
+func TestReleaseTerminalIncludesSkipped(t *testing.T) {
+	cases := []struct {
+		name string
+		repo *ebsv1.RpmRepo
+		want bool
+	}{
+		{name: "no-release", repo: newRpmRepo(testBuild), want: false},
+		{
+			name: "ready",
+			repo: func() *ebsv1.RpmRepo {
+				repo := newRpmRepo(testBuild)
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady}
+				return repo
+			}(),
+			want: true,
+		},
+		{
+			name: "failed",
+			repo: func() *ebsv1.RpmRepo {
+				repo := newRpmRepo(testBuild)
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
+				return repo
+			}(),
+			want: true,
+		},
+		{
+			name: "skipped",
+			repo: func() *ebsv1.RpmRepo {
+				repo := newRpmRepo(testBuild)
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
+				return repo
+			}(),
+			want: true,
+		},
+		{
+			name: "pending",
+			repo: func() *ebsv1.RpmRepo {
+				repo := newRpmRepo(testBuild)
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePending}
+				return repo
+			}(),
+			want: false,
+		},
+		{
+			name: "creating",
+			repo: func() *ebsv1.RpmRepo {
+				repo := newRpmRepo(testBuild)
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseCreating}
+				return repo
+			}(),
+			want: false,
+		},
+		{
+			name: "prepared",
+			repo: func() *ebsv1.RpmRepo {
+				repo := newRpmRepo(testBuild)
+				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePrepared}
+				return repo
+			}(),
+			want: false,
+		},
+		{name: "nil-object", repo: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := releaseTerminal(tc.repo); got != tc.want {
+				t.Fatalf("releaseTerminal = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// failingSource refuses handler registration so the constructor error path can be exercised.
 type failingSource struct{}
 
 func (failingSource) Name() string { return "rpmrepos" }
@@ -327,3 +415,23 @@ func TestControllerStartupHelpers(t *testing.T) {
 	var _ source.Source = &stubSource{}
 	var _ controller.Controller = c
 }
+
+type stubSource struct {
+	handler source.ResourceEventHandler
+}
+
+func (s *stubSource) Name() string { return "rpmrepos" }
+
+func (s *stubSource) AddEventHandler(handler source.ResourceEventHandler) error {
+	s.handler = handler
+	return nil
+}
+
+func (s *stubSource) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (s *stubSource) HasSynced() bool { return true }
+
+func (s *stubSource) Ready() bool { return true }

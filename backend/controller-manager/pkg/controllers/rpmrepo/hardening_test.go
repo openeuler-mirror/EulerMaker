@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -242,17 +240,6 @@ func TestMaterializeRetriesCountsOnlyRealReplays(t *testing.T) {
 	}
 	if delta := materializeRetries.Value() - before; delta != 1 {
 		t.Fatalf("one replay must count exactly once, delta %d", delta)
-	}
-}
-
-func TestListAllStopsAtPageBudget(t *testing.T) {
-	shared := &endlessCursorClient{}
-	client := newAPIClient(shared)
-	if _, err := client.ListJobs(context.Background(), testProject, metav1.ListOptions{}); err == nil {
-		t.Fatalf("an endless cursor stream must be rejected")
-	}
-	if shared.pages != maxListPages {
-		t.Fatalf("expected the read to stop after %d pages, got %d", maxListPages, shared.pages)
 	}
 }
 

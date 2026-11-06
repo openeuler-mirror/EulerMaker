@@ -13,95 +13,6 @@ import (
 // candidate list both exclude Ready, Failed and Skipped.
 const skippedPhaseFieldSelector = "status.release.phase!=Ready,status.release.phase!=Failed,status.release.phase!=Skipped"
 
-func TestFieldSelectorExcludesSkipped(t *testing.T) {
-	if nonTerminalRpmRepoFieldSelector != skippedPhaseFieldSelector {
-		t.Fatalf("field selector = %q, want %q", nonTerminalRpmRepoFieldSelector, skippedPhaseFieldSelector)
-	}
-}
-
-func TestReleaseTerminalIncludesSkipped(t *testing.T) {
-	cases := []struct {
-		name string
-		repo *ebsv1.RpmRepo
-		want bool
-	}{
-		{name: "no-release", repo: newRpmRepo(testBuild), want: false},
-		{
-			name: "ready",
-			repo: func() *ebsv1.RpmRepo {
-				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseReady}
-				return repo
-			}(),
-			want: true,
-		},
-		{
-			name: "failed",
-			repo: func() *ebsv1.RpmRepo {
-				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
-				return repo
-			}(),
-			want: true,
-		},
-		{
-			name: "skipped",
-			repo: func() *ebsv1.RpmRepo {
-				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
-				return repo
-			}(),
-			want: true,
-		},
-		{
-			name: "pending",
-			repo: func() *ebsv1.RpmRepo {
-				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePending}
-				return repo
-			}(),
-			want: false,
-		},
-		{
-			name: "creating",
-			repo: func() *ebsv1.RpmRepo {
-				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseCreating}
-				return repo
-			}(),
-			want: false,
-		},
-		{
-			name: "prepared",
-			repo: func() *ebsv1.RpmRepo {
-				repo := newRpmRepo(testBuild)
-				repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleasePrepared}
-				return repo
-			}(),
-			want: false,
-		},
-		{name: "nil-object", repo: nil, want: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := releaseTerminal(tc.repo); got != tc.want {
-				t.Fatalf("releaseTerminal = %t, want %t", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestSkippedObjectsAreNotEnqueued(t *testing.T) {
-	c := handlerController(t)
-	skipped := newRpmRepo(testBuild)
-	skipped.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
-	c.onAdd(skipped)
-	c.onUpdate(skipped, skipped)
-	if c.Queue().Len() != 0 {
-		t.Fatalf("a skipped RpmRepo must not be enqueued")
-	}
-}
-
 // skippedWithBaseline builds the shape the Build Controller creates for a single build: release.phase=Skipped
 // plus the inherited repository pointers (or no repository at all when there is no baseline).
 func skippedWithBaseline(withBaseline bool) *ebsv1.RpmRepo {
@@ -226,17 +137,6 @@ func TestReconcileReleaseSkipsSkippedObjectsFromAStaleSnapshot(t *testing.T) {
 	}
 	if stored := client.RpmRepos[key(testProject, testBuild)]; stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {
 		t.Fatalf("the skipped terminal must survive: %+v", stored.Status.Release)
-	}
-}
-
-func TestInitializerSelectorExcludesSkipped(t *testing.T) {
-	factory := &stubPollingFactory{}
-	config := testConfig()
-	if _, _, err := Initializer(config, NewFakeClient())(context.Background(), initContext(factory)); err != nil {
-		t.Fatalf("Initializer: %v", err)
-	}
-	if factory.selectors[0] != skippedPhaseFieldSelector {
-		t.Fatalf("polling field selector = %q, want %q", factory.selectors[0], skippedPhaseFieldSelector)
 	}
 }
 
