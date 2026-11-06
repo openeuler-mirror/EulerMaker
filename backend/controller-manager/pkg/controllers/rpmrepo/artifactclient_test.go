@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,35 +23,26 @@ type scriptedArtifactServer struct {
 	server      *httptest.Server
 }
 
-func TestDeleteBuildRepositoriesHTTP(t *testing.T) {
-	for _, status := range []int{204, 202, 404, 409, 503, 200} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			s := newScriptedArtifactServer(t, status, "", nil)
-			done, err := s.client(t).DeleteBuildRepositories(context.Background(), "project", "build")
-			if done != (status == 204) || (err != nil) != (status != 204 && status != 202) {
-				t.Fatalf("status=%d done=%t error=%v", status, done, err)
-			}
-			request := s.requests[0]
-			if request.Method != http.MethodDelete || request.URL.Path != "/internal/v1/projects/project/builds/build/repositories" {
-				t.Fatalf("cleanup request: %s %s", request.Method, request.URL.Path)
-			}
-		})
-	}
-}
-
-func TestStopBuildRepositoriesHTTP(t *testing.T) {
-	for _, status := range []int{204, 202, 404, 409, 503, 200} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			s := newScriptedArtifactServer(t, status, "", nil)
-			done, err := s.client(t).StopBuildRepositories(context.Background(), "project", "build")
-			if done != (status == 204) || (err != nil) != (status != 204 && status != 202) {
-				t.Fatalf("status=%d done=%t error=%v", status, done, err)
-			}
-			request := s.requests[0]
-			if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/projects/project/builds/build/repositories/stop" {
-				t.Fatalf("stop request: %s %s", request.Method, request.URL.Path)
-			}
-		})
+func TestDeleteBuildResourcesHTTP(t *testing.T) {
+	for _, resource := range []string{"repositories", "releases"} {
+		for _, status := range []int{204, 202, 404, 409, 503, 200} {
+			t.Run(resource+"/"+http.StatusText(status), func(t *testing.T) {
+				s := newScriptedArtifactServer(t, status, "", nil)
+				client := s.client(t)
+				remove := client.DeleteBuildRepositories
+				if resource == "releases" {
+					remove = client.DeleteBuildReleases
+				}
+				done, err := remove(context.Background(), "project", "build")
+				if done != (status == 204) || (err != nil) != (status != 204 && status != 202) {
+					t.Fatalf("status=%d done=%t error=%v", status, done, err)
+				}
+				request := s.requests[0]
+				if request.Method != http.MethodDelete || request.URL.Path != "/internal/v1/projects/project/builds/build/"+resource {
+					t.Fatalf("cleanup request: %s %s", request.Method, request.URL.Path)
+				}
+			})
+		}
 	}
 }
 
@@ -136,17 +128,21 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		if response.RepositoryUID != "repo-1" || response.State != RepositoryCreating {
 			t.Fatalf("unexpected response %+v", response)
 		}
-		if server.requests[0].Method != http.MethodPost || server.requests[0].URL.Path != "/internal/v1/repositories" {
+		if server.requests[0].Method != http.MethodPost || server.requests[0].URL.Path != buildPath(testProject, testBuild)+"/repositories" {
 			t.Fatalf("unexpected request %s %s", server.requests[0].Method, server.requests[0].URL.Path)
 		}
 		if server.requests[0].Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("the request must carry a JSON content type")
 		}
-		var sent CreateRepositoryRequest
+		var sent map[string]any
 		if err := json.Unmarshal([]byte(server.requestBody[0]), &sent); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if sent.RepositoryName != testBuild || len(sent.Manifests) != 1 || sent.Manifests[0].JobName != "job-a" {
+		want := map[string]any{
+			"repositoryUID": "repo-1", "repositoryName": testBuild, "targetArch": testArch,
+			"manifests": []any{map[string]any{"jobName": "job-a"}},
+		}
+		if !reflect.DeepEqual(sent, want) {
 			t.Fatalf("unexpected request body %+v", sent)
 		}
 	})
@@ -154,10 +150,10 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 	t.Run("get-repository", func(t *testing.T) {
 		server := newScriptedArtifactServer(t, http.StatusOK, repositoryResponseBody(t, "repo-1"), nil)
 		client := server.client(t)
-		if _, err := client.GetRepository(ctx, "repo-1"); err != nil {
+		if _, err := client.GetRepository(ctx, testProject, testBuild, "repo-1"); err != nil {
 			t.Fatalf("GetRepository: %v", err)
 		}
-		if server.requests[0].Method != http.MethodGet || server.requests[0].URL.Path != "/internal/v1/repositories/repo-1" {
+		if server.requests[0].Method != http.MethodGet || server.requests[0].URL.Path != buildPath(testProject, testBuild)+"/repositories/repo-1" {
 			t.Fatalf("unexpected request %s %s", server.requests[0].Method, server.requests[0].URL.Path)
 		}
 	})
@@ -176,8 +172,18 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		if response.State != ReleaseCreating || response.BuildName != testBuild {
 			t.Fatalf("unexpected response %+v", response)
 		}
-		if server.requests[0].URL.Path != "/internal/v1/releases" {
+		if server.requests[0].URL.Path != buildPath(testProject, testBuild)+"/releases" {
 			t.Fatalf("unexpected path %q", server.requests[0].URL.Path)
+		}
+		var sent map[string]any
+		if err := json.Unmarshal([]byte(server.requestBody[0]), &sent); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{
+			"targetArch": testArch, "sourceRepositoryUID": "repo-1", "excludeSpecs": []any{"gcc"},
+		}
+		if !reflect.DeepEqual(sent, want) {
+			t.Fatalf("unexpected release request body: %v", sent)
 		}
 	})
 
@@ -185,14 +191,14 @@ func TestArtifactClientBuildsRequestsAndParsesResponses(t *testing.T) {
 		body := `{"buildName":"build-a","state":"Ready","contentURL":"/repositories/project/aarch64/","updatedAt":"2026-09-21T10:00:00Z"}`
 		server := newScriptedArtifactServer(t, http.StatusOK, body, nil)
 		client := server.client(t)
-		response, err := client.GetRelease(ctx, testBuild)
+		response, err := client.GetRelease(ctx, testProject, testBuild)
 		if err != nil {
 			t.Fatalf("GetRelease: %v", err)
 		}
 		if response.State != ReleaseReady || response.ContentURL == "" {
 			t.Fatalf("ready release must return the stable entry point: %+v", response)
 		}
-		if server.requests[0].URL.Path != "/internal/v1/releases/"+testBuild {
+		if server.requests[0].URL.Path != buildPath(testProject, testBuild)+"/releases" {
 			t.Fatalf("unexpected get path %q", server.requests[0].URL.Path)
 		}
 	})
@@ -217,7 +223,7 @@ func TestArtifactClientValidatesRequestsLocally(t *testing.T) {
 		},
 		{
 			name: "repository-without-uid",
-			call: func() error { _, err := client.GetRepository(ctx, ""); return err },
+			call: func() error { _, err := client.GetRepository(ctx, testProject, testBuild, ""); return err },
 		},
 		{
 			name: "release-without-source",
@@ -228,7 +234,7 @@ func TestArtifactClientValidatesRequestsLocally(t *testing.T) {
 		},
 		{
 			name: "release-without-name",
-			call: func() error { _, err := client.GetRelease(ctx, ""); return err },
+			call: func() error { _, err := client.GetRelease(ctx, testProject, ""); return err },
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -328,7 +334,7 @@ func TestArtifactClientClassifiesResponses(t *testing.T) {
 			body := `{"code":"` + tc.code + `","message":"scripted"}`
 			server := newScriptedArtifactServer(t, tc.status, body, tc.headers)
 			client := server.client(t)
-			_, err := client.GetRepository(ctx, "repo-1")
+			_, err := client.GetRepository(ctx, testProject, testBuild, "repo-1")
 			if err == nil {
 				t.Fatalf("status %d must fail", tc.status)
 			}
@@ -356,7 +362,7 @@ func TestArtifactClientRejectsUnusableResponses(t *testing.T) {
 	t.Run("unparsable", func(t *testing.T) {
 		server := newScriptedArtifactServer(t, http.StatusOK, "{not json", nil)
 		client := server.client(t)
-		_, err := client.GetRepository(ctx, "repo-1")
+		_, err := client.GetRepository(ctx, testProject, testBuild, "repo-1")
 		if err == nil || !isArtifactRetryable(err) {
 			t.Fatalf("an unparsable body must be retryable, got %v", err)
 		}
@@ -368,7 +374,7 @@ func TestArtifactClientRejectsUnusableResponses(t *testing.T) {
 	t.Run("too-large", func(t *testing.T) {
 		server := newScriptedArtifactServer(t, http.StatusOK, strings.Repeat("a", maxResponseBytes+1), nil)
 		client := server.client(t)
-		_, err := client.GetRepository(ctx, "repo-1")
+		_, err := client.GetRepository(ctx, testProject, testBuild, "repo-1")
 		if err == nil || !isArtifactRetryable(err) {
 			t.Fatalf("an oversized body must be retryable, got %v", err)
 		}
@@ -385,7 +391,7 @@ func TestArtifactClientRejectsUnusableResponses(t *testing.T) {
 			t.Fatalf("newArtifactManagerClient: %v", err)
 		}
 		server.server.Close()
-		_, err = client.GetRepository(ctx, "repo-1")
+		_, err = client.GetRepository(ctx, testProject, testBuild, "repo-1")
 		if err == nil || !isArtifactRetryable(err) {
 			t.Fatalf("a transport failure must be retryable, got %v", err)
 		}
@@ -396,7 +402,7 @@ func TestArtifactClientRejectsUnusableResponses(t *testing.T) {
 		client := server.client(t)
 		canceled, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := client.GetRepository(canceled, "repo-1")
+		_, err := client.GetRepository(canceled, testProject, testBuild, "repo-1")
 		if err == nil || !isArtifactRetryable(err) {
 			t.Fatalf("a canceled call must be retryable, got %v", err)
 		}

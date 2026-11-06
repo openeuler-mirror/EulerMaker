@@ -67,7 +67,7 @@ func (r *reconciler) advanceRepository(repo *ebsv1.RpmRepo, build *ebsv1.Build, 
 
 // observeRepository recovers an in-flight or abandoned batch from its frozen checkpoint.
 func (r *reconciler) observeRepository(repo *ebsv1.RpmRepo, transition *ebsv1.RepositoryTransition, build *ebsv1.Build, info *ebsv1.BuildInfo) (controller.ReconcileResult, error) {
-	response, err := r.artifactClient().GetRepository(r.ctx, transition.RepositoryUID)
+	response, err := r.artifactClient().GetRepository(r.ctx, r.project, repo.Name, transition.RepositoryUID)
 	if err != nil {
 		return r.handleRepositoryError(repo, transition, build, info, err)
 	}

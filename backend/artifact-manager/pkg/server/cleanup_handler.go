@@ -9,11 +9,12 @@ import (
 	"artifact-manager/pkg/repository"
 )
 
-func (s *Server) stopBuildRepositories(c *gin.Context) {
+// prepareBuildCleanup durably fences both producers and waits for accepted work before deleting any files.
+func (s *Server) prepareBuildCleanup(c *gin.Context) bool {
 	project, build := c.Param("project"), c.Param("build")
 	if !validIdentifier(project) || !validIdentifier(build) || c.Request.ContentLength != 0 {
-		writeErr(c.Writer, c.Request, http.StatusBadRequest, "InvalidRequest", "invalid stop scope or nonempty body", false, nil)
-		return
+		writeErr(c.Writer, c.Request, http.StatusBadRequest, "InvalidRequest", "invalid cleanup scope or nonempty body", false, nil)
+		return false
 	}
 	done, err := s.releases.StopBuild(project, build)
 	if err != nil {
@@ -23,44 +24,45 @@ func (s *Server) stopBuildRepositories(c *gin.Context) {
 		} else {
 			s.writeReleaseError(c.Writer, c.Request, err)
 		}
+		return false
+	}
+	if !done {
+		c.Header("Retry-After", "5")
+		c.Status(http.StatusAccepted)
+		return false
+	}
+	return true
+}
+
+func (s *Server) deleteBuildRepositories(c *gin.Context) {
+	if !s.prepareBuildCleanup(c) {
 		return
 	}
+	done, err := s.repositories.DeleteBuild(c.Param("project"), c.Param("build"))
+	if err != nil {
+		s.writeRepositoryError(c.Writer, c.Request, err)
+		return
+	}
+	writeCleanupResult(c, done)
+}
+
+func (s *Server) deleteBuildReleases(c *gin.Context) {
+	if !s.prepareBuildCleanup(c) {
+		return
+	}
+	done, err := s.releases.DeleteBuild(c.Param("project"), c.Param("build"))
+	if err != nil {
+		s.writeReleaseError(c.Writer, c.Request, err)
+		return
+	}
+	writeCleanupResult(c, done)
+}
+
+func writeCleanupResult(c *gin.Context, done bool) {
 	if !done {
 		c.Header("Retry-After", "5")
 		c.Status(http.StatusAccepted)
 		return
 	}
 	c.Status(http.StatusNoContent)
-}
-
-func (s *Server) deleteBuildRepositories(c *gin.Context) {
-	w, r := c.Writer, c.Request
-	if r.Method != http.MethodDelete {
-		method(w, http.MethodDelete)
-		return
-	}
-	project, build := c.Param("project"), c.Param("build")
-	if !validIdentifier(project) || !validIdentifier(build) || r.ContentLength != 0 {
-		writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid cleanup scope or nonempty body", false, nil)
-		return
-	}
-	// Check current and drain release readers before deleting their process repository source.
-	done, err := s.releases.DeleteBuild(project, build)
-	if err != nil {
-		s.writeReleaseError(w, r, err)
-		return
-	}
-	if done {
-		done, err = s.repositories.DeleteBuild(project, build)
-		if err != nil {
-			s.writeRepositoryError(w, r, err)
-			return
-		}
-	}
-	if !done {
-		w.Header().Set("Retry-After", "5")
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

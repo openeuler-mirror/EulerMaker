@@ -144,7 +144,7 @@ func (r *reconciler) resumeRelease(candidate ebsv1.RpmRepo) (controller.Reconcil
 		return controller.ReconcileResult{}, nil
 	}
 	transition := target.repo.Status.Release.Transition
-	response, err := r.artifactClient().GetRelease(r.ctx, target.repo.Name)
+	response, err := r.artifactClient().GetRelease(r.ctx, r.project, target.repo.Name)
 	if err != nil {
 		return r.handleReleaseError(target.repo, transition, err)
 	}

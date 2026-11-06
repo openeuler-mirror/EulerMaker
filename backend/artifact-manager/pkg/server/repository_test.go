@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,18 @@ func repositoryRequest(t *testing.T, server http.Handler, method, path string, b
 		if err != nil {
 			t.Fatal(err)
 		}
+		if method == http.MethodPost && strings.Contains(path, "/builds/") {
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			delete(payload, "project")
+			delete(payload, "buildName")
+			data, err = json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	request := httptest.NewRequest(method, path, bytes.NewReader(data))
 	if body != nil {
@@ -121,26 +134,34 @@ func repositoryRequest(t *testing.T, server http.Handler, method, path string, b
 	return response
 }
 
+func buildManagementPath(project, build string) string {
+	return "/internal/v1/projects/" + project + "/builds/" + build
+}
+
 func TestRepositoryMaterializationLifecycle(t *testing.T) {
 	materializer := &testRepositoryMaterializer{started: make(chan struct{}, 1), release: make(chan struct{})}
 	server, request := newRepositoryTestServer(t, materializer)
 
-	response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/repositories", request)
+	response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/repositories", request)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("submit status = %d: %s", response.Code, response.Body.String())
+	}
+	location := buildManagementPath(request.Project, request.BuildName) + "/repositories/" + request.RepositoryUID
+	if response.Header().Get("Location") != location {
+		t.Fatalf("repository location = %q", response.Header().Get("Location"))
 	}
 	select {
 	case <-materializer.started:
 	case <-time.After(time.Second):
 		t.Fatal("materializer was not started")
 	}
-	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/repositories", request); response.Code != http.StatusAccepted {
+	if response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/repositories", request); response.Code != http.StatusAccepted {
 		t.Fatalf("duplicate submit status = %d", response.Code)
 	}
 	close(materializer.release)
 	deadline := time.Now().Add(time.Second)
 	for {
-		response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/repositories/"+request.RepositoryUID, nil)
+		response = repositoryRequest(t, server, http.MethodGet, buildManagementPath(request.Project, request.BuildName)+"/repositories/"+request.RepositoryUID, nil)
 		var state repository.RepositoryResponse
 		if err := json.Unmarshal(response.Body.Bytes(), &state); err == nil && state.State == repository.RepositoryReady {
 			break
@@ -150,20 +171,26 @@ func TestRepositoryMaterializationLifecycle(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/repositories", request); response.Code != http.StatusOK {
+	if response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/repositories", request); response.Code != http.StatusOK {
 		t.Fatalf("ready replay status = %d", response.Code)
+	}
+	for _, scope := range [][2]string{{"other-project", request.BuildName}, {request.Project, "other-build"}} {
+		path := buildManagementPath(scope[0], scope[1]) + "/repositories/" + request.RepositoryUID
+		if response := repositoryRequest(t, server, http.MethodGet, path, nil); response.Code != http.StatusNotFound {
+			t.Fatalf("repository scope %v: %d %s", scope, response.Code, response.Body.String())
+		}
 	}
 	conflict := request
 	conflict.TargetArch = "different"
-	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/repositories", conflict); response.Code != http.StatusConflict {
+	if response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/repositories", conflict); response.Code != http.StatusConflict {
 		t.Fatalf("conflict status = %d: %s", response.Code, response.Body.String())
 	}
-	if response := repositoryRequest(t, server, http.MethodDelete, "/internal/v1/repositories/"+request.RepositoryUID, nil); response.Code != http.StatusAccepted {
+	if response := repositoryRequest(t, server, http.MethodDelete, buildManagementPath(request.Project, request.BuildName)+"/repositories", nil); response.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d", response.Code)
 	}
 	deadline = time.Now().Add(time.Second)
 	for {
-		response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/repositories/"+request.RepositoryUID, nil)
+		response = repositoryRequest(t, server, http.MethodGet, buildManagementPath(request.Project, request.BuildName)+"/repositories/"+request.RepositoryUID, nil)
 		if response.Code == http.StatusNotFound {
 			break
 		}

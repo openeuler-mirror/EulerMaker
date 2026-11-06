@@ -25,21 +25,20 @@ func (s *Server) newRouter() *gin.Engine {
 	router.Any("/readyz", health)
 
 	internal := router.Group("/internal/v1")
-	internal.POST("/projects/:project/builds/:build/repositories/stop", s.stopBuildRepositories)
-	internal.Any("/projects/:project/builds/:build/repositories", s.deleteBuildRepositories)
+	builds := internal.Group("/projects/:project/builds/:build")
+	builds.Use(func(c *gin.Context) {
+		if !validIdentifier(c.Param("project")) || !validIdentifier(c.Param("build")) {
+			writeErr(c.Writer, c.Request, http.StatusBadRequest, "InvalidRequest", "invalid project or build name", false, nil)
+			c.Abort()
+		}
+	})
+	builds.POST("/repositories", s.createRepository)
+	builds.GET("/repositories/:uid", s.getRepository)
+	builds.DELETE("/repositories", s.deleteBuildRepositories)
+	builds.POST("/releases", s.createRelease)
+	builds.GET("/releases", s.getRelease)
+	builds.DELETE("/releases", s.deleteBuildReleases)
 	internal.Any("/projects/:project/jobs/:job", s.jobMethod(http.MethodDelete, s.deleteJobData))
-	internal.Any("/repositories", func(c *gin.Context) {
-		s.routeRepositoryManagement(c.Writer, c.Request)
-	})
-	internal.Any("/repositories/*path", func(c *gin.Context) {
-		s.routeRepositoryManagement(c.Writer, c.Request)
-	})
-	internal.Any("/releases", func(c *gin.Context) {
-		s.routeReleaseManagement(c.Writer, c.Request)
-	})
-	internal.Any("/releases/*path", func(c *gin.Context) {
-		s.routeReleaseManagement(c.Writer, c.Request)
-	})
 
 	router.Any("/repositories/*path", s.routeRepositoryContent)
 
@@ -85,18 +84,6 @@ func (s *Server) jobMethod(method string, handler func(http.ResponseWriter, *htt
 
 func (s *Server) routeRepositoryContent(c *gin.Context) {
 	path := c.Request.URL.Path
-	if strings.HasPrefix(path, "/repositories/releases/v1/") {
-		name := strings.SplitN(strings.TrimPrefix(path, "/repositories/releases/v1/"), "/", 2)[0]
-		_, ok, err := s.releases.Get(name)
-		if err != nil {
-			s.writeReleaseError(c.Writer, c.Request, err)
-			return
-		}
-		if ok {
-			s.releaseVersionContent(c.Writer, c.Request)
-			return
-		}
-	}
 	if strings.HasPrefix(path, "/repositories/v1/") && validHash(strings.SplitN(strings.TrimPrefix(path, "/repositories/v1/"), "/", 2)[0]) {
 		s.repositoryContent(c.Writer, c.Request)
 		return

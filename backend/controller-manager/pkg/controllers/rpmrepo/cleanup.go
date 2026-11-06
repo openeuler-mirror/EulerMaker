@@ -31,7 +31,15 @@ func (r *reconciler) cleanupRpmRepo(repo *ebsv1.RpmRepo) (controller.ReconcileRe
 	if err := r.selectArtifactManager(repo); err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	done, err := r.artifactClient().DeleteBuildRepositories(r.ctx, r.project, repo.Name)
+	// Drain release readers and preserve current-release protection before removing the source repositories.
+	done, err := r.artifactClient().DeleteBuildReleases(r.ctx, r.project, repo.Name)
+	if err != nil {
+		return controller.ReconcileResult{}, classifyArtifactReadError(err)
+	}
+	if !done {
+		return controller.ReconcileResult{RequeueAfter: 5 * time.Second}, nil
+	}
+	done, err = r.artifactClient().DeleteBuildRepositories(r.ctx, r.project, repo.Name)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyArtifactReadError(err)
 	}
@@ -67,12 +75,12 @@ func (r *reconciler) cleanupRpmRepo(repo *ebsv1.RpmRepo) (controller.ReconcileRe
 	return controller.ReconcileResult{}, err
 }
 
-// drainCheckpoints confirms a durable submission fence before discarding frozen requests.
+// drainCheckpoints fences both producers and deletes the release, preserving process repositories for Job cleanup.
 func (r *reconciler) drainCheckpoints(repo *ebsv1.RpmRepo) (controller.ReconcileResult, error) {
 	if err := r.selectArtifactManager(repo); err != nil {
 		return controller.ReconcileResult{}, err
 	}
-	done, err := r.artifactClient().StopBuildRepositories(r.ctx, r.project, repo.Name)
+	done, err := r.artifactClient().DeleteBuildReleases(r.ctx, r.project, repo.Name)
 	if err != nil {
 		return controller.ReconcileResult{}, classifyArtifactReadError(err)
 	}
@@ -88,7 +96,7 @@ func (r *reconciler) drainCheckpoints(repo *ebsv1.RpmRepo) (controller.Reconcile
 	}
 	target.Status.Conditions, _ = MergeCondition(target.Status.Conditions,
 		ebsv1.RpmRepoConditionCleanupReady, metav1.ConditionTrue, ebsv1.RpmRepoReasonOperationsDrained,
-		"Submissions fenced and all accepted operations drained", target.Generation, r.now)
+		"Submissions fenced, accepted operations drained and release removed", target.Generation, r.now)
 	_, err = r.commitStatus(target, func(current *ebsv1.RpmRepo) bool { return reflect.DeepEqual(current.Status, target.Status) }, "BuildCleanupCheckpointDrained")
 	return controller.ReconcileResult{}, err
 }

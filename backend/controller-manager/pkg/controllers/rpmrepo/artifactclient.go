@@ -41,8 +41,8 @@ type ManifestReference struct {
 type CreateRepositoryRequest struct {
 	RepositoryUID     string              `json:"repositoryUID"`
 	RepositoryName    string              `json:"repositoryName"`
-	Project           string              `json:"project"`
-	BuildName         string              `json:"buildName"`
+	Project           string              `json:"-"`
+	BuildName         string              `json:"-"`
 	TargetArch        string              `json:"targetArch"`
 	BaseRepositoryUID string              `json:"baseRepositoryUID,omitempty"`
 	Manifests         []ManifestReference `json:"manifests"`
@@ -69,8 +69,8 @@ type RepositoryResponse struct {
 }
 
 type CreateReleaseRequest struct {
-	BuildName           string   `json:"buildName"`
-	Project             string   `json:"project"`
+	BuildName           string   `json:"-"`
+	Project             string   `json:"-"`
 	TargetArch          string   `json:"targetArch"`
 	SourceRepositoryUID string   `json:"sourceRepositoryUID"`
 	ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
@@ -91,11 +91,11 @@ type ReleaseResponse struct {
 // retryable flag and Retry-After so callers can classify a response without parsing messages.
 type ArtifactManagerClient interface {
 	SubmitRepository(ctx context.Context, req CreateRepositoryRequest) (RepositoryResponse, error)
-	GetRepository(ctx context.Context, repositoryUID string) (RepositoryResponse, error)
+	GetRepository(ctx context.Context, project, buildName, repositoryUID string) (RepositoryResponse, error)
 	SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
-	GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
+	GetRelease(ctx context.Context, project, buildName string) (ReleaseResponse, error)
+	DeleteBuildReleases(ctx context.Context, project, buildName string) (bool, error)
 	DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
-	StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error)
 }
 
 type artifactErrorKind string
@@ -197,51 +197,62 @@ func newArtifactManagerClient(address string, timeout time.Duration) (ArtifactMa
 
 func (c *httpArtifactClient) SubmitRepository(ctx context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 	var response RepositoryResponse
-	if len(req.Manifests) == 0 {
+	if req.Project == "" || req.BuildName == "" || len(req.Manifests) == 0 {
 		return response, &artifactError{operation: "submit-repository", kind: artifactPermanent, code: "InvalidRepositoryRequest", statusCode: http.StatusUnprocessableEntity,
-			err: fmt.Errorf("repository request must reference at least one manifest")}
+			err: fmt.Errorf("repository request requires project, build name and at least one manifest")}
 	}
-	err := c.call(ctx, http.MethodPost, "/internal/v1/repositories", req, &response)
+	err := c.call(ctx, http.MethodPost, buildPath(req.Project, req.BuildName)+"/repositories", req, &response)
 	return response, err
 }
 
-func (c *httpArtifactClient) GetRepository(ctx context.Context, repositoryUID string) (RepositoryResponse, error) {
+func (c *httpArtifactClient) GetRepository(ctx context.Context, project, buildName, repositoryUID string) (RepositoryResponse, error) {
 	var response RepositoryResponse
-	if repositoryUID == "" {
+	if project == "" || buildName == "" || repositoryUID == "" {
 		return response, &artifactError{operation: "get-repository", kind: artifactPermanent, code: "InvalidRepositoryRequest", statusCode: http.StatusUnprocessableEntity,
-			err: fmt.Errorf("repository UID is required")}
+			err: fmt.Errorf("project, build name and repository UID are required")}
 	}
-	err := c.call(ctx, http.MethodGet, "/internal/v1/repositories/"+url.PathEscape(repositoryUID), nil, &response)
+	err := c.call(ctx, http.MethodGet, buildPath(project, buildName)+"/repositories/"+url.PathEscape(repositoryUID), nil, &response)
 	return response, err
 }
 
 func (c *httpArtifactClient) SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
 	var response ReleaseResponse
-	if req.BuildName == "" || req.SourceRepositoryUID == "" {
+	if req.Project == "" || req.BuildName == "" || req.SourceRepositoryUID == "" {
 		return response, &artifactError{operation: "submit-release", kind: artifactPermanent, code: "InvalidRequest", statusCode: http.StatusUnprocessableEntity,
-			err: fmt.Errorf("release request requires build name and source repository UID")}
+			err: fmt.Errorf("release request requires project, build name and source repository UID")}
 	}
-	err := c.call(ctx, http.MethodPost, "/internal/v1/releases", req, &response)
+	err := c.call(ctx, http.MethodPost, buildPath(req.Project, req.BuildName)+"/releases", req, &response)
 	return response, err
 }
 
-func (c *httpArtifactClient) GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error) {
+func (c *httpArtifactClient) GetRelease(ctx context.Context, project, buildName string) (ReleaseResponse, error) {
 	var response ReleaseResponse
-	if buildName == "" {
+	if project == "" || buildName == "" {
 		return response, &artifactError{operation: "get-release", kind: artifactPermanent, code: "InvalidRequest", statusCode: http.StatusBadRequest,
-			err: fmt.Errorf("build name is required")}
+			err: fmt.Errorf("project and build name are required")}
 	}
-	err := c.call(ctx, http.MethodGet, "/internal/v1/releases/"+url.PathEscape(buildName), nil, &response)
+	err := c.call(ctx, http.MethodGet, buildPath(project, buildName)+"/releases", nil, &response)
 	return response, err
 }
 
 // DeleteBuildRepositories confirms completion only on 204; a missing route is not a deleted repository.
 func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {
+	return c.deleteBuildResource(ctx, project, buildName, "repositories")
+}
+
+func (c *httpArtifactClient) DeleteBuildReleases(ctx context.Context, project, buildName string) (bool, error) {
+	return c.deleteBuildResource(ctx, project, buildName, "releases")
+}
+
+func buildPath(project, buildName string) string {
+	return "/internal/v1/projects/" + url.PathEscape(project) + "/builds/" + url.PathEscape(buildName)
+}
+
+func (c *httpArtifactClient) deleteBuildResource(ctx context.Context, project, buildName, resource string) (bool, error) {
 	if project == "" || buildName == "" {
-		return false, fmt.Errorf("repository cleanup requires project and build name")
+		return false, fmt.Errorf("%s cleanup requires project and build name", resource)
 	}
-	path := "/internal/v1/projects/" + url.PathEscape(project) +
-		"/builds/" + url.PathEscape(buildName) + "/repositories"
+	path := buildPath(project, buildName) + "/" + resource
 	status, err := c.callStatus(ctx, http.MethodDelete, path, nil, nil)
 	if err != nil {
 		return false, err
@@ -252,27 +263,7 @@ func (c *httpArtifactClient) DeleteBuildRepositories(ctx context.Context, projec
 	case http.StatusAccepted:
 		return false, nil
 	default:
-		return false, fmt.Errorf("unexpected repository cleanup status %d", status)
-	}
-}
-
-func (c *httpArtifactClient) StopBuildRepositories(ctx context.Context, project, buildName string) (bool, error) {
-	if project == "" || buildName == "" {
-		return false, fmt.Errorf("repository stop requires project and build name")
-	}
-	path := "/internal/v1/projects/" + url.PathEscape(project) +
-		"/builds/" + url.PathEscape(buildName) + "/repositories/stop"
-	status, err := c.callStatus(ctx, http.MethodPost, path, nil, nil)
-	if err != nil {
-		return false, err
-	}
-	switch status {
-	case http.StatusNoContent:
-		return true, nil
-	case http.StatusAccepted:
-		return false, nil
-	default:
-		return false, fmt.Errorf("unexpected repository stop status %d", status)
+		return false, fmt.Errorf("unexpected %s cleanup status %d", resource, status)
 	}
 }
 
@@ -383,20 +374,20 @@ func parseRetryAfter(value string) time.Duration {
 
 func operationFor(path, method string) string {
 	switch {
-	case method == http.MethodPost && strings.HasSuffix(path, "/repositories/stop"):
-		return "stop-build-repositories"
 	case method == http.MethodDelete && strings.HasSuffix(path, "/repositories"):
 		return "delete-build-repositories"
-	case strings.Contains(path, "/internal/v1/repositories"):
-		if method == http.MethodPost {
-			return "submit-repository"
-		}
-		return "get-repository"
-	case strings.Contains(path, "/internal/v1/releases"):
+	case method == http.MethodDelete && strings.HasSuffix(path, "/releases"):
+		return "delete-build-releases"
+	case strings.HasSuffix(path, "/releases"):
 		if method == http.MethodPost {
 			return "submit-release"
 		}
 		return "get-release"
+	case strings.Contains(path, "/repositories"):
+		if method == http.MethodPost {
+			return "submit-repository"
+		}
+		return "get-repository"
 	}
 	return strings.ToLower(method)
 }
