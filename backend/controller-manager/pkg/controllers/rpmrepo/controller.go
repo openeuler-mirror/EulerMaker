@@ -70,7 +70,6 @@ func (c Config) validate() error {
 
 type Controller struct {
 	*controller.BaseController
-	rpmrepos        source.Source
 	client          Client
 	artifacts       ArtifactManagerClient
 	artifactFactory func(string) (ArtifactManagerClient, error)
@@ -104,7 +103,7 @@ func newController(
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	c := &Controller{rpmrepos: rpmrepos, client: client, artifacts: artifacts, artifactFactory: factory,
+	c := &Controller{client: client, artifacts: artifacts, artifactFactory: factory,
 		policy: policy, clock: clk, config: config}
 	base, err := controller.New(Name, c.sync, config.MaxRetries, options...)
 	if err != nil {

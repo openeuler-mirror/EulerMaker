@@ -10,8 +10,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
+	"controller-manager/pkg/controller"
 	"controller-manager/pkg/manager"
 	"controller-manager/pkg/source"
 	ebsv1 "ebs-api/ebs/v1"
@@ -50,10 +52,6 @@ func (f *stubPollingFactory) Sources() []source.Source {
 	return []source.Source{f.source}
 }
 
-func initializedConfig() Config {
-	return testConfig()
-}
-
 func initContext(factory source.PollingSourceFactory) manager.InitContext {
 	return manager.InitContext{
 		Dependencies: manager.Dependencies{Client: &clientpkg.Client{}, PollingFactory: factory},
@@ -68,7 +66,7 @@ func initContext(factory source.PollingSourceFactory) manager.InitContext {
 
 func TestInitializerBuildsThePollingSource(t *testing.T) {
 	factory := &stubPollingFactory{}
-	config := initializedConfig()
+	config := testConfig()
 
 	instance, active, err := Initializer(config, NewFakeClient())(context.Background(), initContext(factory))
 	if err != nil {
@@ -101,17 +99,17 @@ func TestInitializerRejectsBadConfiguration(t *testing.T) {
 	}{
 		{
 			name:   "zero-retry-limit",
-			config: func() Config { c := initializedConfig(); c.MaterializeRetryLimit = 0; return c }(),
+			config: func() Config { c := testConfig(); c.MaterializeRetryLimit = 0; return c }(),
 			init:   initContext(&stubPollingFactory{}),
 		},
 		{
 			name:   "invalid-backoff",
-			config: func() Config { c := initializedConfig(); c.Backoff = Backoff{}; return c }(),
+			config: func() Config { c := testConfig(); c.Backoff = Backoff{}; return c }(),
 			init:   initContext(&stubPollingFactory{}),
 		},
 		{
 			name:   "zero-slow-retry",
-			config: initializedConfig(),
+			config: testConfig(),
 			init: func() manager.InitContext {
 				ctx := initContext(&stubPollingFactory{})
 				ctx.Config.SlowRetryInitial = 0
@@ -130,7 +128,7 @@ func TestInitializerRejectsBadConfiguration(t *testing.T) {
 
 func TestInitializerPropagatesPollingFactoryErrors(t *testing.T) {
 	factory := &stubPollingFactory{err: errors.New("source unavailable")}
-	if _, _, err := Initializer(initializedConfig(), NewFakeClient())(context.Background(), initContext(factory)); err == nil {
+	if _, _, err := Initializer(testConfig(), NewFakeClient())(context.Background(), initContext(factory)); err == nil {
 		t.Fatalf("a failing polling factory must fail initialization")
 	}
 }
@@ -195,4 +193,137 @@ func TestEventHandlerIgnoresMalformedObjects(t *testing.T) {
 	if c.Queue().Len() != 0 {
 		t.Fatalf("malformed events must not enqueue work")
 	}
+}
+
+type failingSource struct{}
+
+func (failingSource) Name() string { return "rpmrepos" }
+
+func (failingSource) AddEventHandler(source.ResourceEventHandler) error {
+	return source.ErrSourceStarted
+}
+
+func (failingSource) Run(ctx context.Context) error { <-ctx.Done(); return nil }
+
+func (failingSource) HasSynced() bool { return true }
+
+func (failingSource) Ready() bool { return true }
+
+func TestNewValidatesDependenciesAndConfig(t *testing.T) {
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	valid := testConfig()
+	src := &stubSource{}
+	client := NewFakeClient()
+	artifacts := NewFakeArtifactManager()
+	policy := DefaultPublishPolicy{}
+	clk := clocktesting.NewFakeClock(now)
+
+	for _, tc := range []struct {
+		name string
+		call func() (*Controller, error)
+	}{
+		{name: "nil-source", call: func() (*Controller, error) { return New(nil, client, artifacts, policy, clk, valid) }},
+		{name: "nil-client", call: func() (*Controller, error) { return New(src, nil, artifacts, policy, clk, valid) }},
+		{name: "nil-artifacts", call: func() (*Controller, error) { return New(src, client, nil, policy, clk, valid) }},
+		{name: "nil-policy", call: func() (*Controller, error) { return New(src, client, artifacts, nil, clk, valid) }},
+		{name: "nil-clock", call: func() (*Controller, error) { return New(src, client, artifacts, policy, nil, valid) }},
+		{
+			name: "negative-retries",
+			call: func() (*Controller, error) {
+				config := valid
+				config.MaxRetries = -1
+				return New(src, client, artifacts, policy, clk, config)
+			},
+		},
+		{
+			name: "handler-registration",
+			call: func() (*Controller, error) { return New(failingSource{}, client, artifacts, policy, clk, valid) },
+		},
+		{
+			name: "invalid-option",
+			call: func() (*Controller, error) {
+				return New(src, client, artifacts, policy, clk, valid, nil)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := tc.call(); err == nil {
+				t.Fatalf("invalid construction must fail")
+			}
+		})
+	}
+	if _, err := New(src, client, artifacts, policy, clk, valid); err != nil {
+		t.Fatalf("a valid construction was rejected: %v", err)
+	}
+}
+
+func TestConfigValidationBranches(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "timeout", mutate: func(c *Config) { c.ArtifactManagerTimeout = 0 }},
+		{name: "jobs", mutate: func(c *Config) { c.MaxJobsPerBatch = 0 }},
+		{name: "retry-limit", mutate: func(c *Config) { c.MaterializeRetryLimit = 0 }},
+		{name: "poll-period", mutate: func(c *Config) { c.PollPeriod = 0 }},
+		{name: "backoff-initial", mutate: func(c *Config) { c.Backoff.Initial = 0 }},
+		{name: "backoff-order", mutate: func(c *Config) { c.Backoff.Max = c.Backoff.Initial / 2 }},
+		{name: "backoff-jitter", mutate: func(c *Config) { c.Backoff.Jitter = 1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := testConfig()
+			tc.mutate(&config)
+			if err := config.validate(); err == nil {
+				t.Fatalf("invalid configuration must be rejected")
+			}
+		})
+	}
+}
+
+func TestSplitKey(t *testing.T) {
+	cases := []struct {
+		key     string
+		wantOK  bool
+		project string
+		name    string
+	}{
+		{key: rpmRepoKey(testProject, testBuild), wantOK: true, project: testProject, name: testBuild},
+		{key: "build/project", wantOK: true, project: "build", name: "project"},
+		{key: "other/project/build-a"},
+		{key: "build//build-a"},
+		{key: "build/project/"},
+		{key: "build/project/build-a/extra"},
+		{key: "project/"},
+		{key: "/build-a"},
+		{key: "release/project/openEuler"},
+		{key: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			project, name, ok := splitKey(tc.key)
+			if ok != tc.wantOK {
+				t.Fatalf("splitKey(%q) ok = %t, want %t", tc.key, ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if project != tc.project || name != tc.name {
+				t.Fatalf("unexpected split %q %q", project, name)
+			}
+		})
+	}
+}
+
+func TestControllerStartupHelpers(t *testing.T) {
+	c := handlerController(t)
+	if c.Name() != Name {
+		t.Fatalf("unexpected controller name %q", c.Name())
+	}
+	c.onDelete(&ebsv1.Build{})
+	if c.Queue().Len() != 0 {
+		t.Fatalf("a foreign delete event must not enqueue work")
+	}
+	var _ source.Source = &stubSource{}
+	var _ controller.Controller = c
 }

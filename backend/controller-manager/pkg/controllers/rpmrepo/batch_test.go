@@ -81,3 +81,33 @@ func TestRepositoryRequestsAreOrderedByJobName(t *testing.T) {
 		t.Fatalf("repositoryRequests must order manifests by Job name, got %+v", manifests)
 	}
 }
+
+func TestBatchHelpersHandleTiesAndInvalidInput(t *testing.T) {
+	// Equal creation timestamps fall back to name and then UID.
+	candidates := []candidate{
+		{name: "job-b", specName: "kernel", createdAt: 5},
+		{name: "job-a", specName: "gcc", createdAt: 5},
+		{name: "job-a", specName: "glibc", createdAt: 5},
+		{name: "job-a", specName: "extra", createdAt: 1},
+	}
+	sortCandidates(candidates)
+	for i := 1; i < len(candidates); i++ {
+		previous, current := candidates[i-1], candidates[i]
+		if previous.createdAt > current.createdAt {
+			t.Fatalf("candidates are not ordered by creation time: %+v", candidates)
+		}
+		if previous.createdAt == current.createdAt && previous.name > current.name {
+			t.Fatalf("candidates are not ordered by name: %+v", candidates)
+		}
+	}
+
+	if _, err := repositoryUID("", testBuild, "", []ebsv1.RepositoryInput{{JobName: "job-a"}}); err == nil {
+		t.Fatalf("an empty project must be rejected")
+	}
+	if _, err := repositoryUID(testProject, "", "", []ebsv1.RepositoryInput{{JobName: "job-a"}}); err == nil {
+		t.Fatalf("an empty build name must be rejected")
+	}
+	if got := unionSortedNames([]string{"", "job-a"}, []ebsv1.RepositoryInput{{JobName: ""}, {JobName: "job-b"}}); len(got) != 2 {
+		t.Fatalf("empty names must be skipped, got %v", got)
+	}
+}

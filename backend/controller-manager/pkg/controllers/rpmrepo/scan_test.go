@@ -31,10 +31,10 @@ func TestScanDecodesSpecNameForRepositoryInput(t *testing.T) {
 	controller := scanFixture(t, job, NewFakeArtifactManager(), client)
 	reconciler := &reconciler{controller: controller, ctx: context.Background(), project: testProject, key: rpmRepoKey(testProject, testBuild)}
 	scan, err := reconciler.scanCandidates(client.RpmRepos[key(testProject, testBuild)], client.Builds[key(testProject, testBuild)])
-	if err != nil || len(scan.candidates) != 1 || scan.candidates[0].specName != raw {
+	if err != nil || len(scan) != 1 || scan[0].specName != raw {
 		t.Fatalf("scanCandidates = %+v, %v; want original SPEC name", scan, err)
 	}
-	if inputs := repositoryInputs(scan.candidates); len(inputs) != 1 || inputs[0].SpecName != raw {
+	if inputs := repositoryInputs(scan); len(inputs) != 1 || inputs[0].SpecName != raw {
 		t.Fatalf("repository inputs lost original SPEC name: %+v", inputs)
 	}
 }
@@ -76,9 +76,6 @@ func TestScanRejectsJobsThatAreNotCandidates(t *testing.T) {
 			if result != (controller.ReconcileResult{}) {
 				t.Fatalf("a job that is not a candidate must not start a batch: %+v", result)
 			}
-			if len(artifacts.ManifestRequests) != 0 {
-				t.Fatalf("a rejected candidate must not be queried for a manifest: %+v", artifacts.ManifestRequests)
-			}
 			if len(artifacts.SubmitRepositoryRequests) != 0 {
 				t.Fatalf("a rejected candidate must not be submitted")
 			}
@@ -103,8 +100,8 @@ func TestScanSkipsConsumedJobs(t *testing.T) {
 	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if len(artifacts.ManifestRequests) != 0 || len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("a consumed Job must not be read or submitted again")
+	if len(artifacts.SubmitRepositoryRequests) != 0 {
+		t.Fatalf("a consumed Job must not be submitted again")
 	}
 	if len(client.StatusWrites) != 0 {
 		t.Fatalf("a consumed Job must not produce a write")
@@ -153,10 +150,7 @@ func TestScanStopsSelectingWhenBatchIsFull(t *testing.T) {
 			if err != nil {
 				t.Fatalf("scanCandidates: %v", err)
 			}
-			if len(artifacts.ManifestRequests) != 0 {
-				t.Fatalf("selection must not query manifests: %v", artifacts.ManifestRequests)
-			}
-			selection := selectBatch(scan.candidates, config.MaxJobsPerBatch)
+			selection := selectBatch(scan, config.MaxJobsPerBatch)
 			var gotSelected []string
 			for _, item := range selection {
 				gotSelected = append(gotSelected, item.name)
@@ -168,54 +162,10 @@ func TestScanStopsSelectingWhenBatchIsFull(t *testing.T) {
 	}
 }
 
-func TestScanDoesNotReadManifestBeforeSubmission(t *testing.T) {
-	cases := []struct {
-		name        string
-		manifest    JobUploadManifest
-		manifestErr error
-	}{
-		{
-			name:        "missing",
-			manifestErr: &artifactError{operation: "get-manifest", kind: artifactNotFound, code: "NotFound"},
-		},
-		{
-			name:     "completed",
-			manifest: completedManifest(100),
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			client := NewFakeClient()
-			job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
-			artifacts := NewFakeArtifactManager()
-			artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-				return tc.manifest, tc.manifestErr
-			}
-			artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-				return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
-			}
-			c := scanFixture(t, job, artifacts, client)
-
-			if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
-				t.Fatalf("sync: %v", err)
-			}
-			if len(artifacts.ManifestRequests) != 0 {
-				t.Fatalf("manifest must not be read before submission: %v", artifacts.ManifestRequests)
-			}
-			if len(artifacts.SubmitRepositoryRequests) != 1 || len(client.StatusWrites) == 0 {
-				t.Fatalf("succeeded Job must be submitted regardless of manifest: submits=%d writes=%d", len(artifacts.SubmitRepositoryRequests), len(client.StatusWrites))
-			}
-		})
-	}
-}
-
 func TestCandidateScanUsesTheBuildNameSelector(t *testing.T) {
 	client := NewFakeClient()
 	job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryCreating, Attempt: 1, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
@@ -239,9 +189,6 @@ func TestRepositoryAdvancesWhileBuildInfoIsStillProcessing(t *testing.T) {
 	client := NewFakeClient()
 	job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetJobManifestFunc = func(context.Context, string, string) (JobUploadManifest, error) {
-		return completedManifest(100), nil
-	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
 	}

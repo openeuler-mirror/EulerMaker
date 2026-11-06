@@ -166,8 +166,6 @@ type ArtifactManagerClient interface {
     // SubmitRepository 幂等：相同 repositoryUID 与相同请求摘要是重试，不重复物化。
     SubmitRepository(ctx context.Context, req CreateRepositoryRequest) (RepositoryResponse, error)
     GetRepository(ctx context.Context, repositoryUID string) (RepositoryResponse, error)
-    // GetJobManifest 仅保留为客户端能力；选批与发布复核不调用。
-    GetJobManifest(ctx context.Context, project, jobName string) (JobUploadManifest, error)
     // SubmitRelease 幂等：相同 buildName 与相同请求摘要是重试，不重复发布。
     SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
     GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
@@ -182,7 +180,6 @@ type ArtifactManagerClient interface {
 
 - `SubmitRepository` 对应 `POST /internal/v1/repositories`；
 - `GetRepository` 对应 `GET /internal/v1/repositories/{repositoryUID}`；
-- `GetJobManifest` 对应 `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest`，按 Project 和 Job 名读取。
 - `SubmitRelease` 对应 `POST /internal/v1/releases`；
 - `GetRelease` 对应 `GET /internal/v1/releases/{buildName}`；
 - `ActivateRelease` 对应 `POST /internal/v1/releases/{buildName}/activate`；
@@ -198,7 +195,6 @@ type ArtifactManagerClient interface {
 | `RepositoryState` | 过程仓状态：`Creating` / `Ready` / `Failed` / `Deleting` |
 | `CreateRepositoryRequest` / `ManifestReference` | 物化请求：`repositoryUID`、`repositoryName`、`project`、`buildName`、`targetArch`、可选的 `baseRepositoryUID`，以及按 `jobName` 排序的 `manifests` |
 | `RepositoryResponse` | 物化响应：`repositoryUID`、`state`、`attempt`（重试预算的权威计数）、可选的 `pollAfterSeconds`、`contentURL`、`failure` 与 `createdAt` / `updatedAt`（退避窗口锚点，见 §8）/ `completedAt`；RPM 元数据和内容摘要只保留在 Artifact Manager 内部，不在响应中返回 |
-| `JobUploadManifest` / `ManifestFile` | Job 上传清单及其文件项：`state=Completed`、`digest`、`files[]`（相对路径、大小、SHA-256、是否必需等）；尚未成功封账时清单不存在 |
 | `FailureInfo` | 失败详情：稳定错误码 `code`、诊断信息 `message`、是否可重试 `retryable` 与发生时间 |
 | `ReleaseState` | 发布状态：`Creating` / `Prepared` / `Ready` / `Failed` / `Deleting` |
 | `CreateReleaseRequest` | 发布请求：`buildName`、`project`、`targetArch`、`sourceRepositoryUID`、`excludeSpecs` |
@@ -770,7 +766,7 @@ buildinfos:      get
 **过程仓：批次选择与提交**
 
 - 候选扫描查询：断言 `ListJobs` 的 labelSelector 恰为 `ebs.io/build-name=<RpmRepo 名>` 且 FieldSelector 为空，且选择器取自 RpmRepo/Build 名而非 RpmRepo labels 或其它字段。
-- 批次选择：`ebs.io/spec-name` 缺失或编码无效、`ebs.io/target-arch` 缺失或取值与 `Build.spec.arch` 不一致、Job 名称已在 `repository.sourceJobNames` 或 `skippedJobNames` 中的过滤；稳定排序；同 `specName` 去重；按 Job 数量限制批次。所有 Job 均不调用 `GetJobManifest`；Fake 预置 phase 为 `Pending` / `Running` / `Failed` 的 Job 时断言它们被列出但不进入候选；label 校验失败断言输出 `InputLabelMismatch` 且不阻塞发布触发。
+- 批次选择：`ebs.io/spec-name` 缺失或编码无效、`ebs.io/target-arch` 缺失或取值与 `Build.spec.arch` 不一致、Job 名称已在 `repository.sourceJobNames` 或 `skippedJobNames` 中的过滤；稳定排序；同 `specName` 去重；按 Job 数量限制批次。选批阶段不读取上传清单，由 Artifact Manager 校验本批输入；Fake 预置 phase 为 `Pending` / `Running` / `Failed` 的 Job 时断言它们被列出但不进入候选；label 校验失败断言输出 `InputLabelMismatch` 且不阻塞发布触发。
 - 提交批次：`repository.transition` 为空且存在可入选 Job 时，断言一次 CAS 写 `repository.transition`（`inputs` / `baseRepositoryUID` / `repositoryUID`）与 `repository.updatedAt` 之后才调用 `SubmitRepository`；无候选 Job 时断言不写 status；两者都不产生只写中间状态的额外写入。
 - 批次数量：候选超过 `--rpmrepo-max-jobs-per-batch` 时，断言仅选择稳定排序后的前 N 个不同 `specName`，余下候选留待下一批。
 - 异常输入定位：Artifact Manager 逐个校验清单、产物和 RPM；`ManifestNotReady` / `ManifestInvalid` / `ManifestContainsNoPackages` / `MaterializationInputExpired` / `PackageMetadataInvalid` / `PackageArchitectureMismatch` / `PackageConflict` 的失败记录携带本批 `jobName` 时断言只将该 Job 名称加入 `skippedJobNames`，清空检查点并重新组批，不写失败条件或发布终态。无 Job 名称或名称不属本批时保守地走原失败收口。

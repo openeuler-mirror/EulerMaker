@@ -24,11 +24,6 @@ const (
 	RepositoryDeleting RepositoryState = "Deleting"
 )
 
-// ManifestState is the sealing state of a Job upload manifest.
-type ManifestState string
-
-const ManifestCompleted ManifestState = "Completed"
-
 // Formal release states reported by Artifact Manager.
 type ReleaseState string
 
@@ -74,27 +69,6 @@ type RepositoryResponse struct {
 	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
 }
 
-type ManifestFile struct {
-	ArtifactID   string `json:"artifactID"`
-	RelativePath string `json:"relativePath"`
-	Category     string `json:"category"`
-	Size         int64  `json:"size"`
-	SHA256       string `json:"sha256"`
-	Required     bool   `json:"required"`
-}
-
-type JobUploadManifest struct {
-	Project     string         `json:"project"`
-	JobName     string         `json:"jobName"`
-	Files       []ManifestFile `json:"files"`
-	Digest      string         `json:"digest,omitempty"`
-	State       ManifestState  `json:"state"`
-	Failure     *FailureInfo   `json:"failure,omitempty"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	UpdatedAt   time.Time      `json:"updatedAt"`
-	CompletedAt *time.Time     `json:"completedAt,omitempty"`
-}
-
 type CreateReleaseRequest struct {
 	BuildName           string   `json:"buildName"`
 	Project             string   `json:"project"`
@@ -119,7 +93,6 @@ type ReleaseResponse struct {
 type ArtifactManagerClient interface {
 	SubmitRepository(ctx context.Context, req CreateRepositoryRequest) (RepositoryResponse, error)
 	GetRepository(ctx context.Context, repositoryUID string) (RepositoryResponse, error)
-	GetJobManifest(ctx context.Context, project, jobName string) (JobUploadManifest, error)
 	SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error)
 	GetRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
 	ActivateRelease(ctx context.Context, buildName string) (ReleaseResponse, error)
@@ -199,8 +172,7 @@ type httpArtifactClient struct {
 	client *http.Client
 }
 
-// maxResponseBytes bounds one API response, including Job manifests. Repository status responses do not
-// include the repository's RPM metadata.
+// maxResponseBytes bounds one control API response; repository responses exclude RPM metadata.
 const maxResponseBytes = 8 << 20
 
 // newArtifactManagerClient validates the configured address and builds the HTTP client used for every control
@@ -243,17 +215,6 @@ func (c *httpArtifactClient) GetRepository(ctx context.Context, repositoryUID st
 	}
 	err := c.call(ctx, http.MethodGet, "/internal/v1/repositories/"+url.PathEscape(repositoryUID), nil, &response)
 	return response, err
-}
-
-func (c *httpArtifactClient) GetJobManifest(ctx context.Context, project, jobName string) (JobUploadManifest, error) {
-	var manifest JobUploadManifest
-	if project == "" || jobName == "" {
-		return manifest, &artifactError{operation: "get-manifest", kind: artifactPermanent, code: "InvalidRequest", statusCode: http.StatusBadRequest,
-			err: fmt.Errorf("project and job name are required")}
-	}
-	path := "/artifacts/v1/projects/" + url.PathEscape(project) + "/jobs/" + url.PathEscape(jobName) + "/manifest"
-	err := c.call(ctx, http.MethodGet, path, nil, &manifest)
-	return manifest, err
 }
 
 func (c *httpArtifactClient) SubmitRelease(ctx context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
@@ -450,8 +411,6 @@ func operationFor(path, method string) string {
 			return "submit-release"
 		}
 		return "get-release"
-	case strings.Contains(path, "/manifest"):
-		return "get-manifest"
 	}
 	return strings.ToLower(method)
 }

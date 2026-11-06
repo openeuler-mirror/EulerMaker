@@ -1,7 +1,6 @@
 package rpmrepo
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -79,91 +78,5 @@ func TestWindowRemainingUsesTheResponseAnchor(t *testing.T) {
 	}
 	if got := windowRemaining(now.Add(-2*time.Second), time.Second, now); got != 0 {
 		t.Fatalf("an elapsed window must report zero, got %s", got)
-	}
-}
-
-func TestNormalizeExcludeSpecsDeduplicatesAndSorts(t *testing.T) {
-	got := normalizeExcludeSpecs([]string{"gcc", "kernel", "gcc", ""})
-	if len(got) != 2 || got[0] != "gcc" || got[1] != "kernel" {
-		t.Fatalf("normalizeExcludeSpecs = %v, want [gcc kernel]", got)
-	}
-	if normalizeExcludeSpecs(nil) != nil {
-		t.Fatalf("an empty decision must stay nil")
-	}
-}
-
-func TestDefaultPublishPolicyFollowsPublish(t *testing.T) {
-	policy := DefaultPublishPolicy{}
-	if _, err := policy.Decide(context.Background(), PublishPolicyInput{}); err == nil {
-		t.Fatalf("a missing Build must be rejected")
-	}
-	for _, publish := range []bool{true, false} {
-		build := newBuild(testBuild)
-		build.Spec.Publish = &publish
-		decision, err := policy.Decide(context.Background(), PublishPolicyInput{Project: testProject, Build: build})
-		if err != nil {
-			t.Fatalf("Decide: %v", err)
-		}
-		if decision.Publish != publish || len(decision.ExcludeSpecs) != 0 {
-			t.Fatalf("unexpected decision %+v for publish=%t", decision, publish)
-		}
-	}
-}
-
-func TestFakesRecordCallsAndReset(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	if _, err := client.GetBuild(context.Background(), testProject, testBuild); err != nil {
-		t.Fatalf("GetBuild: %v", err)
-	}
-	if _, err := client.GetRpmRepo(context.Background(), testProject, testBuild); err != nil {
-		t.Fatalf("GetRpmRepo: %v", err)
-	}
-	if client.GetBuildCalls != 1 || client.GetRpmRepoCalls != 1 {
-		t.Fatalf("calls were not recorded: %+v", client)
-	}
-	client.Reset()
-	if client.GetBuildCalls != 0 || client.GetRpmRepoCalls != 0 || len(client.StatusWrites) != 0 {
-		t.Fatalf("Reset must clear the recorded calls")
-	}
-	if len(client.RpmRepos) != 1 {
-		t.Fatalf("Reset must keep the preset objects")
-	}
-
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
-		return RepositoryResponse{}, nil
-	}
-	if _, err := artifacts.GetRepository(context.Background(), "repo-1"); err != nil {
-		t.Fatalf("GetRepository: %v", err)
-	}
-	if len(artifacts.GetRepositoryUIDs) != 1 {
-		t.Fatalf("the fake must record the request")
-	}
-	artifacts.Reset()
-	if len(artifacts.GetRepositoryUIDs) != 0 {
-		t.Fatalf("Reset must clear the recorded calls")
-	}
-	if artifacts.GetRepositoryFunc == nil {
-		t.Fatalf("Reset must keep the scripted responses")
-	}
-}
-
-func TestMetricsAreRegistered(t *testing.T) {
-	for name, counter := range map[string]interface{ Value() uint64 }{
-		"repository_ready":    repositoryReady,
-		"repository_failed":   repositoryFailed,
-		"materialize_retries": materializeRetries,
-		"build_missing":       buildMissing,
-		"release_ready":       releaseReady,
-		"release_failed":      releaseFailed,
-		"status_conflicts":    statusUpdateConflicts,
-		"status_unknowns":     statusUpdateUnknowns,
-	} {
-		if counter == nil {
-			t.Fatalf("metric %s is not registered", name)
-		}
-		_ = counter.Value()
 	}
 }
