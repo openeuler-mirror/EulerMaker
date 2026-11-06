@@ -2,12 +2,16 @@ package rpmrepo
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 )
 
@@ -240,5 +244,173 @@ func TestReconcileReleaseReplacesResidualReleaseWithSkipped(t *testing.T) {
 	}
 	if release := client.StatusWrites[0].Status.Release; release == nil || release.Phase != ebsv1.RpmRepoReleaseSkipped || release.Transition != nil {
 		t.Fatalf("the residual release must become Skipped: %+v", release)
+	}
+}
+
+func TestReleaseRecheckSkipsCandidateWithoutBuildInfo(t *testing.T) {
+	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
+	delete(client.BuildInfos, key(testProject, testBuild))
+
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result != (controller.ReconcileResult{}) {
+		t.Fatalf("a candidate without BuildInfo must be skipped, got %+v", result)
+	}
+	if len(client.StatusWrites) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("a candidate without BuildInfo must not write status or submit")
+	}
+}
+
+func TestReleaseRecheckReturnsToTheRepositoryWhenInputsRemain(t *testing.T) {
+	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
+	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-b", "kernel", "uid-job-b", time.Unix(2, 0))}
+
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result != (controller.ReconcileResult{}) {
+		t.Fatalf("a candidate with unconsumed inputs must be skipped, got %+v", result)
+	}
+	if len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("a candidate with unconsumed inputs must not start a release")
+	}
+	if c.Queue().Len() != 1 {
+		t.Fatalf("the repository key must be re-enqueued for the remaining inputs")
+	}
+	item, _ := c.Queue().Get()
+	if item != rpmRepoKey(testProject, testBuild) {
+		t.Fatalf("unexpected queued key %v", item)
+	}
+}
+
+func TestReleaseRecheckSkipsCandidateWithoutOwnVersion(t *testing.T) {
+	client, artifacts, c := releaseCandidateFixture(t, func(repo *ebsv1.RpmRepo) {
+		repo.Status.Repository.SourceJobNames = nil
+	}, DefaultPublishPolicy{})
+	// The candidate predicate already filters this object; keep the test honest by asserting nothing happens.
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result != (controller.ReconcileResult{}) || len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("an object without its own version must not release, got %+v", result)
+	}
+	if len(client.StatusWrites) != 0 {
+		t.Fatalf("an object without its own version must not write status")
+	}
+}
+
+func TestReleaseRecheckDependencyErrorsKeepTheirClass(t *testing.T) {
+	cases := []struct {
+		name          string
+		buildErr      error
+		buildInfoErr  error
+		wantPermanent bool
+		wantCanceled  bool
+	}{
+		{
+			name:     "build-network",
+			buildErr: errors.New("apiserver unavailable"),
+		},
+		{
+			name:          "build-forbidden",
+			buildErr:      apierrors.NewForbidden(schema.GroupResource{Group: "ebs", Resource: "builds"}, testBuild, errors.New("denied")),
+			wantPermanent: true,
+		},
+		{
+			name:         "buildinfo-network",
+			buildInfoErr: errors.New("apiserver unavailable"),
+		},
+		{
+			name:          "buildinfo-invalid",
+			buildInfoErr:  apierrors.NewInvalid(schema.GroupKind{Group: "ebs", Kind: "BuildInfo"}, testBuild, nil),
+			wantPermanent: true,
+		},
+		{
+			name:         "buildinfo-canceled",
+			buildInfoErr: context.Canceled,
+			wantCanceled: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := &stubPolicy{decision: PublishDecision{Publish: true}}
+			client, artifacts, c := releaseCandidateFixture(t, nil, policy)
+			client.GetBuildErr = tc.buildErr
+			client.GetBuildInfoErr = tc.buildInfoErr
+
+			_, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+			if err == nil {
+				t.Fatalf("a dependency read failure must surface as an error")
+			}
+			if got := controller.IsPermanent(err); got != tc.wantPermanent {
+				t.Fatalf("permanent = %t, want %t (%v)", got, tc.wantPermanent, err)
+			}
+			if tc.wantCanceled && !errors.Is(err, context.Canceled) {
+				t.Fatalf("a canceled read must keep the context error, got %v", err)
+			}
+			if len(client.StatusWrites) != 0 {
+				t.Fatalf("a failed read must not write status, got %d writes", len(client.StatusWrites))
+			}
+			if policy.calls != 0 {
+				t.Fatalf("the publish policy must not be consulted, got %d calls", policy.calls)
+			}
+			if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+				t.Fatalf("a failed read must not reach Artifact Manager")
+			}
+		})
+	}
+}
+
+func TestReconcileReleaseSkipsSkippedObjectsFromAStaleSnapshot(t *testing.T) {
+	client := NewFakeClient()
+	// A synthesised shape: the list snapshot still carries a skipped object that looks releasable.
+	repo := releasableRpmRepo(testBuild)
+	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseSkipped}
+	client.RpmRepos[key(testProject, testBuild)] = repo
+	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+	artifacts := NewFakeArtifactManager()
+	c := newTestController(t, client, artifacts, testConfig())
+
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result != (controller.ReconcileResult{}) {
+		t.Fatalf("a skipped object must be skipped, got %+v", result)
+	}
+	if len(client.StatusWrites) != 0 {
+		t.Fatalf("a skipped object must not be written, got %d writes", len(client.StatusWrites))
+	}
+	if client.GetBuildCalls != 0 {
+		t.Fatalf("the terminal check must run before reading the Build, got %d reads", client.GetBuildCalls)
+	}
+	if len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+		t.Fatalf("a skipped object must not reach Artifact Manager")
+	}
+	if stored := client.RpmRepos[key(testProject, testBuild)]; stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped {
+		t.Fatalf("the skipped terminal must survive: %+v", stored.Status.Release)
+	}
+}
+
+func TestReleaseCandidateQueryExcludesSkipped(t *testing.T) {
+	client, _, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(client.RpmRepoListOptions) == 0 {
+		t.Fatalf("expected a release candidate list call")
+	}
+	options := client.RpmRepoListOptions[0]
+	if options.FieldSelector != expectedNonTerminalSelector {
+		t.Fatalf("release candidate field selector = %q, want %q", options.FieldSelector, expectedNonTerminalSelector)
+	}
+	if options.LabelSelector == "" {
+		t.Fatalf("the release candidate query must keep its target label selector")
 	}
 }

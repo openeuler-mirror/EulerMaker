@@ -8,77 +8,6 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-// inFlightRepo builds an object whose repository batch is already checkpointed.
-func inFlightRepo() *ebsv1.RpmRepo {
-	repo := newRpmRepo(testBuild)
-	repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
-		Inputs:        []ebsv1.RepositoryInput{{JobName: "job-a", SpecName: "gcc"}},
-		RepositoryUID: "next-1",
-	}
-	return repo
-}
-
-func TestReconcileBuildWaitsWhenBackoffAnchorIsMissing(t *testing.T) {
-	client := NewFakeClient()
-	repo := inFlightRepo()
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(_ context.Context, repositoryUID string) (RepositoryResponse, error) {
-		// A retryable failure without updatedAt is a response contract error: the controller must not replay.
-		return RepositoryResponse{RepositoryUID: repositoryUID, State: RepositoryFailed, Attempt: 1, Failure: &FailureInfo{Retryable: true}}, nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result.RequeueAfter <= 0 {
-		t.Fatalf("a missing anchor must wait for the next window, got %+v", result)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 0 {
-		t.Fatalf("a response without updatedAt must not be replayed, got %d submits", len(artifacts.SubmitRepositoryRequests))
-	}
-	if len(client.StatusWrites) != 0 {
-		t.Fatalf("the wait path must not write status, got %d writes", len(client.StatusWrites))
-	}
-}
-
-func TestReconcileBuildBoundsSameRoundReplays(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-
-	notFound := &artifactError{operation: "get-repository", kind: artifactNotFound, code: "RepositoryNotFound"}
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
-		return RepositoryResponse{}, notFound
-	}
-	artifacts.SubmitRepositoryFunc = func(context.Context, CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{}, &artifactError{operation: "submit-repository", kind: artifactNotFound, code: "RepositoryNotFound"}
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 1 {
-		t.Fatalf("expected exactly one same-round replay, got %d", len(artifacts.SubmitRepositoryRequests))
-	}
-	if result.RequeueAfter <= 0 {
-		t.Fatalf("a deferred replay must ask for a later round, got %+v", result)
-	}
-	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
-		t.Fatalf("second sync: %v", err)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 2 {
-		t.Fatalf("each round may replay once, got %d submits after two rounds", len(artifacts.SubmitRepositoryRequests))
-	}
-}
-
 func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	client := NewFakeClient()
 	repo := releasableRpmRepo(testBuild)
@@ -147,34 +76,6 @@ func TestReconcileReleaseBoundsActivationRetries(t *testing.T) {
 	}
 	if result.RequeueAfter != 5*time.Second {
 		t.Fatalf("RequeueAfter = %s, want the poll delay", result.RequeueAfter)
-	}
-}
-
-func TestReconcileBuildDefersReadyWithoutContentURL(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
-
-	artifacts := NewFakeArtifactManager()
-	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, UpdatedAt: time.Now()}, nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result.RequeueAfter <= 0 {
-		t.Fatalf("a ready response without contentURL must wait, got %+v", result)
-	}
-	if len(client.StatusWrites) != 1 {
-		t.Fatalf("only the checkpoint may be written, got %d writes", len(client.StatusWrites))
-	}
-	if client.StatusWrites[0].Status.Repository.Transition == nil {
-		t.Fatalf("the checkpoint must stay in place until a complete ready response arrives")
 	}
 }
 

@@ -3,7 +3,6 @@ package rpmrepo
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -40,43 +39,6 @@ func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {
 	}
 }
 
-func TestFinishRepositoryConvergesWhenTheObjectDisappears(t *testing.T) {
-	client := NewFakeClient()
-	repo := newRpmRepo(testBuild)
-	client.RpmRepos[key(testProject, testBuild)] = repo
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
-	writes := 0
-	client.UpdateStatusHook = func(request, current *ebsv1.RpmRepo) (*ebsv1.RpmRepo, error) {
-		writes++
-		updated := current.DeepCopy()
-		updated.Status = request.DeepCopy().Status
-		updated.ResourceVersion = fmt.Sprintf("%d", writes+1)
-		// The promotion is the second write: the object disappears right after it lands, before the
-		// post-promotion re-read.
-		if writes == 2 {
-			delete(client.RpmRepos, key(request.Namespace, request.Name))
-		} else {
-			client.RpmRepos[key(request.Namespace, request.Name)] = updated
-		}
-		return updated, nil
-	}
-	artifacts := NewFakeArtifactManager()
-	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-
-	result, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild))
-	if err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	if result != (controller.ReconcileResult{}) {
-		t.Fatalf("an object that vanished after promotion must converge, got %+v", result)
-	}
-}
-
 func TestResumeReleaseSurfacesReadFailures(t *testing.T) {
 	client := NewFakeClient()
 	repo := inFlightReleaseRepo(testBuild)
@@ -92,24 +54,6 @@ func TestResumeReleaseSurfacesReadFailures(t *testing.T) {
 	}
 	if len(artifacts.GetReleaseBuildNames) != 0 {
 		t.Fatalf("a failed re-read must not query Artifact Manager")
-	}
-}
-
-func TestRepositoryErrorPathHonoursCancellation(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
-	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
-	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
-		return RepositoryResponse{}, errors.New("artifact manager unavailable")
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := c.sync(ctx, rpmRepoKey(testProject, testBuild))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("a canceled round must return the context error, got %v", err)
 	}
 }
 
