@@ -214,6 +214,7 @@ func (c *Client) uploadArtifactOnce(ctx context.Context, token, project, job, ke
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), reader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
+		<-writeDone
 		return ArtifactRecord{}, false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)

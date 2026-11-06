@@ -28,6 +28,9 @@ func (a *Agent) registerExecution(parent context.Context, job gateway.JobResourc
 	if key == "" {
 		return nil, "", false
 	}
+	if a.cleaning[localJobKey{job.Metadata.Namespace, job.Metadata.Name}] {
+		return nil, key, false
+	}
 	if _, exists := a.executions[key]; exists {
 		return nil, key, false
 	}

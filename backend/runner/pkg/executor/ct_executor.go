@@ -205,6 +205,8 @@ func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (stri
 		if err != nil {
 			return resultRoot, fmt.Errorf("open artifact log: %w", err)
 		}
+		// Join the upload worker and close spool files on every exit, including failed startup.
+		defer logSink.Abort()
 		logOutput = logSink
 	} else {
 		logFile, createErr := os.Create(filepath.Join(resultRoot, "container.log"))
@@ -243,6 +245,8 @@ func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (stri
 	case logErr = <-logsDone:
 	case <-time.After(drainTimeout):
 		cancelLogs()
+		// Cancellation alone does not prove the log reader has stopped writing.
+		<-logsDone
 		logErr = fmt.Errorf("drain container logs: timeout after %s", drainTimeout)
 	}
 	cancelLogs()

@@ -54,6 +54,7 @@ type Agent struct {
 
 	mu         sync.Mutex
 	executions map[string]*jobExecution
+	cleaning   map[localJobKey]bool
 	lastRV     string
 }
 
@@ -170,7 +171,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.watchLoop(ctx)
 	go a.refreshEndpointsLoop(ctx)
 	go a.cleanup.Run(ctx)
-	go a.sweepJobWorkLoop(ctx)
+	go a.sweepJobDataLoop(ctx)
 	if err := a.patchRunnerPhase(ctx, "Online"); err != nil {
 		log.Printf("update online status failed: %v", err)
 	}
@@ -681,10 +682,15 @@ func (a *Agent) finishJob(key string) {
 	delete(a.executions, key)
 	a.mu.Unlock()
 	if execution != nil {
+		cancelled := execution.ctx.Err() != nil
 		if a.serviceRoutes != nil {
 			a.serviceRoutes.Release(execution.job)
 		}
 		execution.cancel()
+		if cancelled {
+			// Execute/Finalize and their upload workers have returned before this deferred cleanup.
+			a.cleanupInactiveJob(context.Background(), execution.job.Metadata.Namespace, execution.job.Metadata.Name)
+		}
 	}
 }
 

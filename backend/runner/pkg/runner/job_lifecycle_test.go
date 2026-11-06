@@ -268,8 +268,10 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	executor := &cancellingExecutor{started: make(chan struct{}), stopped: make(chan struct{}), allowReturn: make(chan struct{})}
 	root := t.TempDir()
 	workPath := filepath.Join(root, "work", "p", "j")
-	if err := os.MkdirAll(workPath, 0o755); err != nil {
-		t.Fatal(err)
+	for _, category := range []string{"work", "results", "logs", "uploads"} {
+		if err := os.MkdirAll(filepath.Join(root, category, "p", "j"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	a := &Agent{cfg: options.Config{Name: "r", RootDir: root}, client: api, executor: executor}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -290,13 +292,16 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("execution did not stop")
 	}
-	if _, err := os.Stat(workPath); err != nil {
-		t.Fatalf("work directory removed before executor returned: %v", err)
+	a.sweepJobData(context.Background())
+	for _, category := range []string{"work", "results", "logs", "uploads"} {
+		if _, err := os.Stat(filepath.Join(root, category, "p", "j")); err != nil {
+			t.Fatalf("%s directory removed before executor returned: %v", category, err)
+		}
 	}
 	close(executor.allowReturn)
 	deadline := time.After(time.Second)
 	for {
-		if _, err := os.Stat(workPath); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(root, "uploads", "p", "j")); os.IsNotExist(err) {
 			break
 		}
 		select {
@@ -304,6 +309,9 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 			t.Fatal("aborted Job work directory was not cleaned")
 		case <-time.After(time.Millisecond):
 		}
+	}
+	if _, err := os.Stat(workPath); !os.IsNotExist(err) {
+		t.Fatalf("work directory retained: %v", err)
 	}
 	current, _ := api.GetJob(ctx, "p", "j")
 	if current.Status.Phase != "Aborted" {
@@ -313,7 +321,7 @@ func TestAbortWatchCancelsActiveExecution(t *testing.T) {
 
 func TestTerminalEventDuringStartupAndStaleRunning(t *testing.T) {
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: gateway.JobStatus{Phase: "Running", Runner: "r"}}
-	a := &Agent{}
+	a := &Agent{cfg: options.Config{RootDir: t.TempDir()}, client: &lifecycleAPI{job: job}}
 	ctx, key, ok := a.registerExecution(context.Background(), job)
 	if !ok {
 		t.Fatal("not registered")
@@ -351,26 +359,38 @@ func TestStatusWriteUnknownConfirmsIntent(t *testing.T) {
 
 type waitingArtifactRemote struct {
 	fakeArtifactRemote
-	started chan struct{}
+	started, cancelled, allowReturn chan struct{}
 }
 
-func (r *waitingArtifactRemote) LogStatus(ctx context.Context, _, _ string) (artifact.LogStatus, error) {
+func (r *waitingArtifactRemote) UploadArtifact(ctx context.Context, _, _, _, _ string, _ artifact.UploadArtifactInput) (artifact.ArtifactRecord, error) {
 	close(r.started)
 	<-ctx.Done()
-	return artifact.LogStatus{}, ctx.Err()
+	close(r.cancelled)
+	<-r.allowReturn
+	return artifact.ArtifactRecord{}, ctx.Err()
 }
 
 func TestAbortCancelsPostRunWithoutFinalStatusWrite(t *testing.T) {
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "j", Namespace: "p", UID: "u"}, Status: gateway.JobStatus{Phase: "Running", Runner: "r", Stage: "PostRun"}}
 	api := &lifecycleAPI{job: job}
-	remote := &waitingArtifactRemote{started: make(chan struct{})}
+	remote := &waitingArtifactRemote{started: make(chan struct{}), cancelled: make(chan struct{}), allowReturn: make(chan struct{})}
+	root := t.TempDir()
+	for _, category := range []string{"results", "logs", "uploads"} {
+		if err := os.MkdirAll(filepath.Join(root, category, "p", "j"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "results", "p", "j", "package.rpm"), []byte("rpm"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	a := &Agent{
 		cfg: options.Config{
 			Name:     "r",
+			RootDir:  root,
 			Artifact: artifact.Config{Upload: artifact.UploadConfig{Timeout: time.Minute}},
 		},
 		client:    api,
-		artifacts: &artifact.Processor{Remote: remote},
+		artifacts: &artifact.Processor{Remote: remote, RootDir: root},
 	}
 	ctx, key, _ := a.registerExecution(context.Background(), job)
 	done := make(chan struct{})
@@ -386,9 +406,26 @@ func TestAbortCancelsPostRunWithoutFinalStatusWrite(t *testing.T) {
 	api.lock.Unlock()
 	a.handleEvent(context.Background(), gateway.WatchEvent{Type: "MODIFIED", Object: job})
 	select {
+	case <-remote.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("upload not cancelled")
+	}
+	a.sweepJobData(context.Background())
+	for _, category := range []string{"results", "logs", "uploads"} {
+		if _, err := os.Stat(filepath.Join(root, category, "p", "j")); err != nil {
+			t.Fatalf("%s removed before upload returned: %v", category, err)
+		}
+	}
+	close(remote.allowReturn)
+	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("upload not cancelled")
+	}
+	for _, category := range []string{"results", "logs", "uploads"} {
+		if _, err := os.Stat(filepath.Join(root, category, "p", "j")); !os.IsNotExist(err) {
+			t.Fatalf("%s retained after upload returned: %v", category, err)
+		}
 	}
 	api.lock.Lock()
 	defer api.lock.Unlock()
