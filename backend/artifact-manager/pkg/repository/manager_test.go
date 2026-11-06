@@ -47,7 +47,7 @@ func TestRepositoryCompletionWaitsForDurableResult(t *testing.T) {
 			if err != nil || !ok || got.State != RepositoryCreating || got.Failure != nil || got.ContentURL != "" {
 				t.Fatalf("unpersisted completion exposed: %+v, %v", got, err)
 			}
-			if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || done {
+			if done, err := m.StopBuild(record.Project, record.BuildName); err != nil || done {
 				t.Fatalf("unpersisted completion drained: %t, %v", done, err)
 			}
 			m.retryPending()
@@ -69,7 +69,7 @@ func TestRepositoryCompletionWaitsForDurableResult(t *testing.T) {
 			if err := restarted.load(); err != nil {
 				t.Fatal(err)
 			}
-			if done, err := restarted.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || done {
+			if done, err := restarted.StopBuild(record.Project, record.BuildName); err != nil || done {
 				t.Fatalf("restart acknowledged an unfinished record: %t, %v", done, err)
 			}
 			m.retryPending()
@@ -77,7 +77,7 @@ func TestRepositoryCompletionWaitsForDurableResult(t *testing.T) {
 			if err != nil || !ok || got.State != state {
 				t.Fatalf("persisted completion: %+v, %v", got, err)
 			}
-			if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || !done {
+			if done, err := m.StopBuild(record.Project, record.BuildName); err != nil || !done {
 				t.Fatalf("durable completion still pending: %t, %v", done, err)
 			}
 			if len(m.completions) != 0 || len(m.queue) != 0 {
@@ -126,7 +126,7 @@ func TestRepositoryDeletionRetriesAtRuntime(t *testing.T) {
 		t.Fatalf("cleanup did not settle: removed=%t", removed)
 	}
 	wait(false)
-	if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || done {
+	if done, err := m.StopBuild(record.Project, record.BuildName); err != nil || done {
 		t.Fatalf("failed deletion drained: %t, %v", done, err)
 	}
 	if err := os.Remove(trashDir); err != nil {
@@ -148,7 +148,7 @@ func TestRepositoryDeletionRetriesAtRuntime(t *testing.T) {
 	if _, ok, err := m.Get(record.RepositoryUID); err != nil || ok {
 		t.Fatalf("deleted metadata remains: %t, %v", ok, err)
 	}
-	if done, err := m.StopBuild(record.Project, record.TargetArch, record.BuildName); err != nil || !done {
+	if done, err := m.StopBuild(record.Project, record.BuildName); err != nil || !done {
 		t.Fatalf("successful deletion not drained: %t, %v", done, err)
 	}
 }
@@ -315,10 +315,20 @@ func TestDeleteBuildRepositoriesScopesAndRecovery(t *testing.T) {
 	m.records["second"] = &RepositoryRecord{
 		RepositoryUID: "second", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryCreating,
 	}
-	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || done {
+	if done, err := m.DeleteBuild("project", "build"); err != nil || done {
 		t.Fatalf("active cleanup = %t, %v", done, err)
 	}
 	delete(m.records, "second")
+	m.records["other-arch"] = &RepositoryRecord{
+		RepositoryUID: "other-arch", Project: "project", TargetArch: "other", BuildName: "build", State: RepositoryCreating,
+	}
+	if done, err := m.StopBuild("project", "build"); err != nil || done {
+		t.Fatalf("active task on another architecture was not drained: %t, %v", done, err)
+	}
+	if done, err := m.DeleteBuild("project", "build"); err != nil || done {
+		t.Fatalf("active task on another architecture was deleted: %t, %v", done, err)
+	}
+	delete(m.records, "other-arch")
 	// Simulate a restart after some metadata was removed but content still remains.
 	if err := os.Remove(m.metaPath("first")); err != nil {
 		t.Fatal(err)
@@ -327,19 +337,25 @@ func TestDeleteBuildRepositoriesScopesAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+		if done, err := m.DeleteBuild("project", "build"); err != nil || !done {
 			t.Fatalf("cleanup = %t, %v", done, err)
 		}
 	}
 	if _, err := os.Stat(buildDir); !os.IsNotExist(err) {
 		t.Fatalf("build directory still exists: %v", err)
 	}
-	for _, uid := range []string{"first", "second"} {
+	if _, err := os.Stat(filepath.Join(m.root, "repositories/project/other/history/build")); !os.IsNotExist(err) {
+		t.Fatalf("build directory on another architecture still exists: %v", err)
+	}
+	if err := CheckBuildActive(m.root, "project", "build"); err == nil {
+		t.Fatal("cleanup removed the project-level stop marker")
+	}
+	for _, uid := range []string{"first", "second", "other-arch"} {
 		if _, ok, err := m.Get(uid); err != nil || ok {
 			t.Fatalf("removed repository %s: exists=%t, %v", uid, ok, err)
 		}
 	}
-	for _, uid := range []string{"base", "other-arch", "other-project"} {
+	for _, uid := range []string{"base", "other-project"} {
 		if record, ok, err := m.Get(uid); err != nil || !ok || record.State != RepositoryReady {
 			t.Fatalf("unrelated repository %s: %+v, %v", uid, record, err)
 		}
@@ -363,7 +379,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	var cleanupErr error
 	go func() {
 		defer close(finished)
-		done, cleanupErr = m.withBuildCleanup("project", "arch", "build", func() error {
+		done, cleanupErr = m.withBuildCleanup("project", "build", func() error {
 			close(started)
 			<-resume
 			return storageErr
@@ -379,7 +395,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 		t.Fatal("filesystem cleanup still holds the global mutex")
 	}
 	m.mu.Unlock()
-	if done, err := m.DeleteBuild("project", "arch", "build"); done || err != nil {
+	if done, err := m.DeleteBuild("project", "build"); done || err != nil {
 		t.Fatalf("concurrent same-build deletion: %t, %v", done, err)
 	}
 	var conflict *Error
@@ -405,7 +421,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	if got, ok, err := m.Get(other.RepositoryUID); err != nil || !ok || got.State != RepositoryFailed {
 		t.Fatalf("unrelated result: %+v, %v", got, err)
 	}
-	if done, err := m.DeleteBuild("project", "arch", "other"); err != nil || !done {
+	if done, err := m.DeleteBuild("project", "other"); err != nil || !done {
 		t.Fatalf("unrelated cleanup: %t, %v", done, err)
 	}
 	// Let the injected I/O failure return, then retry using the real filesystem path.
@@ -414,7 +430,7 @@ func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	if done || !errors.Is(cleanupErr, storageErr) || len(m.cleaningBuilds) != 0 || m.metaPath(record.RepositoryUID) == "" {
 		t.Fatalf("failed cleanup lost recovery state: done=%t error=%v", done, cleanupErr)
 	}
-	if done, err := m.DeleteBuild("project", "arch", "build"); err != nil || !done {
+	if done, err := m.DeleteBuild("project", "build"); err != nil || !done {
 		t.Fatalf("retry: %t, %v", done, err)
 	}
 	if m.metaPath(record.RepositoryUID) != "" || len(m.cleaningBuilds) != 0 {

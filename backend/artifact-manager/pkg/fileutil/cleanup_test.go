@@ -3,6 +3,7 @@ package fileutil
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -48,5 +49,30 @@ func TestScopedDirectoryCleanup(t *testing.T) {
 	}
 	if data, err := os.ReadFile(keep); err != nil || string(data) != "keep" {
 		t.Fatalf("linked content modified: %q, %v", data, err)
+	}
+}
+
+func TestDirectoryNames(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"x86_64", "aarch64", ".stopped"} {
+		if err := os.MkdirAll(filepath.Join(root, "repositories/project", name), 0750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "repositories/project/note"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	names, err := DirectoryNames(root, "repositories", "project")
+	if err != nil || !slices.Equal(names, []string{".stopped", "aarch64", "x86_64"}) {
+		t.Fatalf("directories=%v err=%v", names, err)
+	}
+	if names, err := DirectoryNames(root, "repositories", "missing"); err != nil || len(names) != 0 {
+		t.Fatalf("missing project: %v, %v", names, err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "repositories/project/linked")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DirectoryNames(root, "repositories", "project"); err == nil {
+		t.Fatal("symlink architecture accepted")
 	}
 }

@@ -10,12 +10,12 @@ import (
 )
 
 func (s *Server) stopBuildRepositories(c *gin.Context) {
-	project, arch, build := c.Param("project"), c.Param("arch"), c.Param("build")
-	if !validIdentifier(project) || !validIdentifier(arch) || !validIdentifier(build) || c.Request.ContentLength != 0 {
+	project, build := c.Param("project"), c.Param("build")
+	if !validIdentifier(project) || !validIdentifier(build) || c.Request.ContentLength != 0 {
 		writeErr(c.Writer, c.Request, http.StatusBadRequest, "InvalidRequest", "invalid stop scope or nonempty body", false, nil)
 		return
 	}
-	done, err := s.releases.StopBuild(project, arch, build)
+	done, err := s.releases.StopBuild(project, build)
 	if err != nil {
 		var repoErr *repository.Error
 		if errors.As(err, &repoErr) {
@@ -39,19 +39,19 @@ func (s *Server) deleteBuildRepositories(c *gin.Context) {
 		method(w, http.MethodDelete)
 		return
 	}
-	project, arch, build := c.Param("project"), c.Param("arch"), c.Param("build")
-	if !validIdentifier(project) || !validIdentifier(arch) || !validIdentifier(build) || r.ContentLength != 0 {
+	project, build := c.Param("project"), c.Param("build")
+	if !validIdentifier(project) || !validIdentifier(build) || r.ContentLength != 0 {
 		writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid cleanup scope or nonempty body", false, nil)
 		return
 	}
 	// Check current and drain release readers before deleting their process repository source.
-	done, err := s.releases.DeleteBuild(project, arch, build)
+	done, err := s.releases.DeleteBuild(project, build)
 	if err != nil {
 		s.writeReleaseError(w, r, err)
 		return
 	}
 	if done {
-		done, err = s.repositories.DeleteBuild(project, arch, build)
+		done, err = s.repositories.DeleteBuild(project, build)
 		if err != nil {
 			s.writeRepositoryError(w, r, err)
 			return

@@ -21,15 +21,15 @@ func releaseStopError(err error) error {
 
 // StopBuild blocks submissions and activation before confirming both managers have drained.
 // Lock order is release then repository, as in other release operations.
-func (m *Manager) StopBuild(project, arch, buildName string) (bool, error) {
+func (m *Manager) StopBuild(project, buildName string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	done, err := m.repositories.StopBuild(project, arch, buildName)
+	done, err := m.repositories.StopBuild(project, buildName)
 	if err != nil {
 		return false, err
 	}
 	if record := m.records[buildName]; record != nil {
-		if record.Project != project || record.TargetArch != arch {
+		if record.Project != project {
 			return false, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
 		}
 		if record.State == ReleaseCreating || record.State == ReleaseDeleting || m.running[buildName] {
@@ -41,15 +41,36 @@ func (m *Manager) StopBuild(project, arch, buildName string) (bool, error) {
 
 // DeleteBuild removes a build's release, record and abandoned work, but never the current release.
 // New submissions must already be stopped by the caller. Active work is reported as incomplete.
-func (m *Manager) DeleteBuild(project, arch, buildName string) (bool, error) {
-	return m.withBuildCleanup(project, arch, buildName, func() error {
-		return m.removeBuildFiles(project, arch, buildName)
+func (m *Manager) DeleteBuild(project, buildName string) (bool, error) {
+	return m.withBuildCleanup(project, buildName, func() error {
+		arches, err := fileutil.DirectoryNames(m.root, "repositories", project)
+		if err != nil {
+			return releaseStorageError()
+		}
+		// Validate every current pointer before removing any release in this project.
+		for _, arch := range arches {
+			if arch == ".stopped" {
+				continue
+			}
+			if err := m.checkBuildCurrent(project, arch, buildName); err != nil {
+				return err
+			}
+		}
+		for _, arch := range arches {
+			if arch == ".stopped" {
+				continue
+			}
+			if err := m.removeBuildFiles(project, arch, buildName); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
 // withBuildCleanup keeps the build reserved while filesystem work runs outside the global mutex.
-func (m *Manager) withBuildCleanup(project, arch, buildName string, cleanup func() error) (done bool, err error) {
-	ready, err := m.beginBuildCleanup(project, arch, buildName)
+func (m *Manager) withBuildCleanup(project, buildName string, cleanup func() error) (done bool, err error) {
+	ready, err := m.beginBuildCleanup(project, buildName)
 	if err != nil || !ready {
 		return false, err
 	}
@@ -69,8 +90,8 @@ func (m *Manager) withBuildCleanup(project, arch, buildName string, cleanup func
 	return true, nil
 }
 
-func (m *Manager) beginBuildCleanup(project, arch, buildName string) (bool, error) {
-	if !validIdentifier(project) || !validIdentifier(arch) || !validIdentifier(buildName) {
+func (m *Manager) beginBuildCleanup(project, buildName string) (bool, error) {
+	if !validIdentifier(project) || !validIdentifier(buildName) {
 		return false, &Error{Code: "InvalidRequest", Status: http.StatusBadRequest}
 	}
 	m.mu.Lock()
@@ -78,28 +99,21 @@ func (m *Manager) beginBuildCleanup(project, arch, buildName string) (bool, erro
 	if m.cleaningBuilds[buildName] {
 		return false, nil
 	}
-	targetDir := filepath.Join(m.root, "repositories", project, arch)
-	target, err := fileutil.OpenDirectory(m.root, "repositories", project, arch)
-	if err != nil {
-		return false, releaseStorageError()
-	}
-	if target != nil {
-		defer target.Close()
-		current, err := target.Readlink("current")
-		if err != nil && !os.IsNotExist(err) {
-			return false, releaseStorageError()
-		}
-		if current == filepath.ToSlash(filepath.Join("releases", buildName)) {
-			return false, &Error{Code: "ReleaseInUse", Status: http.StatusConflict}
+	if path := m.metaPath(buildName); path != "" {
+		relative, err := filepath.Rel(filepath.Join(m.root, "repositories", project), path)
+		parts := strings.Split(filepath.ToSlash(relative), "/")
+		if err != nil || len(parts) != 4 || parts[0] == ".." || parts[1] != "releases" ||
+			parts[2] != ".records" || parts[3] != buildName+".json" {
+			return false, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
 		}
 	}
-	recordPath := filepath.Join(targetDir, "releases", ".records", buildName+".json")
-	if path := m.metaPath(buildName); path != "" && path != recordPath {
-		return false, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
-	}
-	if record := m.records[buildName]; record != nil &&
-		(record.State == ReleaseCreating || record.State == ReleaseDeleting || m.running[buildName]) {
-		return false, nil
+	if record := m.records[buildName]; record != nil {
+		if record.Project != project {
+			return false, &Error{Code: "ReleaseIdentityConflict", Status: http.StatusConflict}
+		}
+		if record.State == ReleaseCreating || record.State == ReleaseDeleting || m.running[buildName] {
+			return false, nil
+		}
 	}
 	if m.cleaningBuilds == nil {
 		m.cleaningBuilds = make(map[string]bool)
@@ -107,6 +121,24 @@ func (m *Manager) beginBuildCleanup(project, arch, buildName string) (bool, erro
 	// Build names are globally unique in release metadata; also block activation and retention for this name.
 	m.cleaningBuilds[buildName] = true
 	return true, nil
+}
+
+func (m *Manager) checkBuildCurrent(project, arch, buildName string) error {
+	target, err := fileutil.OpenDirectory(m.root, "repositories", project, arch)
+	if err != nil {
+		return releaseStorageError()
+	}
+	if target != nil {
+		defer target.Close()
+		current, err := target.Readlink("current")
+		if err != nil && !os.IsNotExist(err) {
+			return releaseStorageError()
+		}
+		if current == filepath.ToSlash(filepath.Join("releases", buildName)) {
+			return &Error{Code: "ReleaseInUse", Status: http.StatusConflict}
+		}
+	}
+	return nil
 }
 
 func (m *Manager) removeBuildFiles(project, arch, buildName string) error {

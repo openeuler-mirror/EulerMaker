@@ -26,7 +26,7 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
 	stopCalls := 0
-	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		stopCalls++
 		return drained, nil
 	}
@@ -49,14 +49,14 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	}
 	// A restarted controller finishes deletion from the persisted acknowledgment.
 	c = newTestController(t, client, artifacts, testConfig())
-	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		return false, nil
 	}
 	run()
 	if len(client.Updates) != 0 {
 		t.Fatal("removed finalizer before repository cleanup completed")
 	}
-	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		return true, nil
 	}
 	run()
@@ -70,8 +70,8 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	if len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
 		t.Fatal("deletion submitted new work")
 	}
-	if !reflect.DeepEqual(artifacts.DeleteBuildRequests, [][3]string{
-		{testProject, testArch, testBuild}, {testProject, testArch, testBuild},
+	if !reflect.DeepEqual(artifacts.DeleteBuildRequests, [][2]string{
+		{testProject, testBuild}, {testProject, testBuild},
 	}) {
 		t.Fatalf("unexpected cleanup scope: %v", artifacts.DeleteBuildRequests)
 	}
@@ -84,14 +84,14 @@ func TestRepositoryCleanupFailureRetainsFinalizer(t *testing.T) {
 	repo.DeletionTimestamp, repo.Finalizers = &now, []string{ebsv1.RpmRepoCleanupFinalizer}
 	repo.Status.Conditions = []metav1.Condition{{Type: ebsv1.RpmRepoConditionCleanupReady, Status: metav1.ConditionTrue}}
 	client.RpmRepos[key(testProject, testBuild)] = repo
-	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		return false, fmt.Errorf("cleanup response lost")
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err == nil || len(client.Updates) != 0 {
 		t.Fatalf("unconfirmed cleanup removed finalizer: %v", err)
 	}
-	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) { return true, nil }
+	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) { return true, nil }
 	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil || len(client.Updates) != 1 {
 		t.Fatalf("cleanup retry: %v, updates=%d", err, len(client.Updates))
 	}
@@ -183,7 +183,7 @@ func TestDeletingBuildWaitsForSubmissionFence(t *testing.T) {
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
-	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		return drained, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -216,7 +216,7 @@ func TestDeletingBuildRetainsCheckpointUntilStopConfirmed(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
 	stopErr := fmt.Errorf("request outcome unknown")
-	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string, string) (bool, error) {
+	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		return drained, stopErr
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -305,7 +305,7 @@ func TestCleanupAcknowledgmentStopsFutureProduction(t *testing.T) {
 	if len(client.StatusWrites) != writes || len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
 		t.Fatal("acknowledged repository resumed production")
 	}
-	if !reflect.DeepEqual(artifacts.StopBuildRequests, [][3]string{{testProject, testArch, testBuild}}) {
+	if !reflect.DeepEqual(artifacts.StopBuildRequests, [][2]string{{testProject, testBuild}}) {
 		t.Fatalf("unexpected stop scope or repeated stop: %v", artifacts.StopBuildRequests)
 	}
 }

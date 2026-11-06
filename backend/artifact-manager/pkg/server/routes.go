@@ -25,8 +25,8 @@ func (s *Server) newRouter() *gin.Engine {
 	router.Any("/readyz", health)
 
 	internal := router.Group("/internal/v1")
-	internal.POST("/projects/:project/architectures/:arch/builds/:build/repositories/stop", s.stopBuildRepositories)
-	internal.Any("/projects/:project/architectures/:arch/builds/:build/repositories", s.deleteBuildRepositories)
+	internal.POST("/projects/:project/builds/:build/repositories/stop", s.stopBuildRepositories)
+	internal.Any("/projects/:project/builds/:build/repositories", s.deleteBuildRepositories)
 	internal.Any("/projects/:project/jobs/:job", s.jobMethod(http.MethodDelete, s.deleteJobData))
 	internal.Any("/repositories", func(c *gin.Context) {
 		s.routeRepositoryManagement(c.Writer, c.Request)

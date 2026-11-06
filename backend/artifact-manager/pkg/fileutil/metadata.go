@@ -25,7 +25,7 @@ func RepositoryMetadataPaths(root, kind string) (map[string]string, error) {
 		rel, _ := filepath.Rel(base, path)
 		parts := strings.Split(filepath.ToSlash(rel), "/")
 		if entry.IsDir() {
-			if (len(parts) == 3 && parts[2] != kind) ||
+			if (len(parts) == 2 && parts[1] == ".stopped") || (len(parts) == 3 && parts[2] != kind) ||
 				(len(parts) == recordDepth && parts[recordDepth-1] != ".records") || len(parts) > recordDepth {
 				return filepath.SkipDir
 			}

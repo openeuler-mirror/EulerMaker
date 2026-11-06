@@ -30,7 +30,7 @@ func TestStopBuildRepositoriesAPI(t *testing.T) {
 				materializer = transientRepositoryMaterializer{}
 			}
 			s, request := newRepositoryTestServer(t, materializer)
-			endpoint := "/internal/v1/projects/project-1/architectures/x86_64/builds/build-1/repositories"
+			endpoint := "/internal/v1/projects/project-1/builds/build-1/repositories"
 			if scenario != "unsubmitted" {
 				if _, _, err := s.repositories.Submit(request); err != nil {
 					t.Fatal(err)
@@ -65,6 +65,13 @@ func TestStopBuildRepositoriesAPI(t *testing.T) {
 			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "BuildStopped") {
 				t.Fatalf("late submission: %d %s", response.Code, response.Body.String())
 			}
+			// The fence also covers architectures that have never created a repository.
+			otherArch := request
+			otherArch.TargetArch = "aarch64"
+			response = repositoryRequest(t, s, http.MethodPost, "/internal/v1/repositories", otherArch)
+			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "BuildStopped") {
+				t.Fatalf("late submission on another architecture: %d %s", response.Code, response.Body.String())
+			}
 			s.Close()
 			restarted, err := newServer(s.cfg, testAuthorizer{}, s.store, materializer, "")
 			if err != nil {
@@ -80,7 +87,7 @@ func TestStopBuildRepositoriesAPI(t *testing.T) {
 				if response.Code != http.StatusNoContent {
 					t.Fatalf("cleanup: %d %s", response.Code, response.Body.String())
 				}
-				response = repositoryRequest(t, restarted, http.MethodPost, "/internal/v1/repositories", request)
+				response = repositoryRequest(t, restarted, http.MethodPost, "/internal/v1/repositories", otherArch)
 				if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "BuildStopped") {
 					t.Fatalf("submission after cleanup: %d %s", response.Code, response.Body.String())
 				}
@@ -107,11 +114,11 @@ func waitRepositoryState(t *testing.T, s *Server, uid string, expected repositor
 
 func TestStopBuildStorageFailure(t *testing.T) {
 	s, _ := newRepositoryTestServer(t, transientRepositoryMaterializer{})
-	marker := filepath.Join(s.cfg.DataDir, "repositories/project-1/x86_64/.stopped/build-1")
+	marker := filepath.Join(s.cfg.DataDir, "repositories/project-1/.stopped/build-1")
 	if err := fileutil.AtomicJSON(marker, "not a stop directory"); err != nil {
 		t.Fatal(err)
 	}
-	endpoint := "/internal/v1/projects/project-1/architectures/x86_64/builds/build-1/repositories/stop"
+	endpoint := "/internal/v1/projects/project-1/builds/build-1/repositories/stop"
 	response := repositoryRequest(t, s, http.MethodPost, endpoint, nil)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("invalid fence: %d %s", response.Code, response.Body.String())
@@ -123,7 +130,7 @@ func TestStopBuildStorageFailure(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("repaired stop: %d %s", response.Code, response.Body.String())
 	}
-	if err := repository.CheckBuildActive(s.cfg.DataDir, "project-1", "x86_64", "other-build"); err != nil {
+	if err := repository.CheckBuildActive(s.cfg.DataDir, "project-1", "other-build"); err != nil {
 		t.Fatalf("stop affected another build: %v", err)
 	}
 }
@@ -139,7 +146,7 @@ func TestBuildRepositoryCleanupAPI(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("materialization did not start")
 	}
-	endpoint := "/internal/v1/projects/project-1/architectures/x86_64/builds/build-1/repositories"
+	endpoint := "/internal/v1/projects/project-1/builds/build-1/repositories"
 	response := repositoryRequest(t, s, http.MethodDelete, endpoint, nil)
 	if response.Code != http.StatusAccepted || response.Header().Get("Retry-After") != "5" {
 		t.Fatalf("active work: %d %s", response.Code, response.Body.String())
