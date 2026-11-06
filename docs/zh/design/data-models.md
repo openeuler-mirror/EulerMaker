@@ -635,7 +635,7 @@ RpmRepo 的 `repository.contentURL` 和 `release.contentURL` 保存 `artifact://
 
 RpmRepo 的 `/status` 校验：release 非空时 phase 必须为上述枚举；release.transition 仅允许处于 Pending / Creating / Failed，Ready 必须有 contentURL。repository 的 UID 与 URL 必须成对，sourceJobNames 非空要求版本指针非空；skippedJobNames 不允许空值、重复值或与 sourceJobNames 重叠；repository.transition 非空要求 repositoryUID 和 inputs 非空。允许空 status、继承基线以及失败时保留的批次。conditions 按下表校验 Type + Status + Reason 的合法组合，不能任意交叉搭配；空 reason 和旧 reason 不接受。`CleanupReady` 仅在确认时写入 `True/reason=OperationsDrained`，此前不写占位条件；确认时 repository/release transition 必须均为空，之后不得删除该条件、改为非 True 或登记新 transition。Condition type 不允许重复。`/status` 保留受保护 metadata。
 
-删除契约：apiserver 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer；DELETE 设置 `deletionTimestamp`，不改变业务状态。RpmRepo Controller 停止新操作、排空已登记任务并写 CleanupReady，再按 Project、BuildName 调用 Artifact Manager 清理本构建的过程仓及发布仓；仅 204 确认后通过主资源 PUT 移除自身 finalizer，保留其他 finalizer。CleanupReady 仅表示生产排空，不代表文件清理完成。主资源校验禁止在删除前、未确认或检查点尚未排空时移除此 finalizer。实例选择、current 保护与恢复协议详见 RpmRepo Controller 第一章。
+删除契约：apiserver 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer；DELETE 设置 `deletionTimestamp`，不改变业务状态。RpmRepo Controller 观察到父 Build/BuildInfo 删除时调用 Artifact Manager 的发布仓 DELETE，持久停止两类仓库生产，等待排空并清理发布版本；204 后清空检查点并写 CleanupReady。过程仓仍保留，待 BuildInfo 清理 Job 完成、RpmRepo 自身删除后再清理；两类仓库均确认删除才通过主资源 PUT 移除 finalizer。CleanupReady 不表示过程仓已删除。主资源校验禁止在删除前、未确认或检查点尚未排空时移除此 finalizer。实例选择、current 保护与恢复协议详见 RpmRepo Controller 第一章。
 
 Build/BuildInfo 不持久化子资源创建请求登记。删除按当前可见对象收敛，接受极端故障下迟到创建导致子资源残留，由运维核对归属后清理；finalizer 不构成跨存储创建屏障。
 

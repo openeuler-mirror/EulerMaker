@@ -57,16 +57,14 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | Runner → Artifact Manager | `POST /artifacts/v1/projects/{project}/jobs/{job}/logs/complete` | 封账实时日志 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
 | Runner → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/logs/status` | 查询日志流状态，恢复上传 | Runner Bearer Token；Artifact Manager 向 Gateway 校验 |
 | Artifact Manager → Gateway | `POST /auth/check` | 验证 Runner Token 并获取 Runner 身份和过期时间 | 转发 Runner Bearer Token；调用方无独立服务凭据 |
-| RpmRepo Controller → Artifact Manager | `POST /internal/v1/repositories` | 提交过程仓物化 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `GET /internal/v1/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/repositories/{repositoryUID}` | 删除过程仓 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `POST /internal/v1/projects/{project}/builds/{buildName}/repositories/stop` | 持久停止该构建的新仓库操作并确认排空，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories` | 删除指定构建的全部过程仓和发布仓，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `POST /internal/v1/projects/{project}/builds/{buildName}/repositories` | 提交过程仓物化 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `GET /internal/v1/projects/{project}/builds/{buildName}/repositories/{repositoryUID}` | 查询过程仓状态 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories` | 删除指定构建的全部过程仓，见 13.2 | 暂无 Token 校验；仅限受信任的组件网络 |
 | 业务清理方 → Artifact Manager | `DELETE /internal/v1/projects/{project}/jobs/{job}` | 同步删除 Job 的产物、日志及上传元数据，见 13.1 | 内部管理接口，部署时仅向受信任的业务清理方开放；组件认证边界同其它内部接口 |
-| RpmRepo Controller → Artifact Manager | `POST /internal/v1/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `POST /internal/v1/projects/{project}/builds/{buildName}/releases` | 提交正式发布 | 暂无 Token 校验；仅限受信任的组件网络 |
 | BuildInfo Controller → Artifact Manager | `GET /repositories/{project}/{arch}/repodata/repomd.xml` | single 派发前确认稳定发布入口；尚未发布的精确语义见 9.3 | 公开只读，不经 Gateway 鉴权 |
-| RpmRepo Controller → Artifact Manager | `GET /internal/v1/releases/{buildName}` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
-| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/releases/{buildName}` | 删除正式发布记录 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `GET /internal/v1/projects/{project}/builds/{buildName}/releases` | 查询正式发布状态 | 暂无 Token 校验；仅限受信任的组件网络 |
+| RpmRepo Controller → Artifact Manager | `DELETE /internal/v1/projects/{project}/builds/{buildName}/releases` | 删除正式发布记录 | 暂无 Token 校验；仅限受信任的组件网络 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/manifest` | 查询 Job 上传清单 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts` | 列出 Job 产物 | 公开只读，不经 Gateway 鉴权 |
 | Runner、前端及其他读取方 → Artifact Manager | `GET /artifacts/v1/projects/{project}/jobs/{job}/artifacts/{artifactID}/content` | 下载产物正文 | 公开只读，不经 Gateway 鉴权 |
@@ -76,8 +74,6 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 | Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/v1/{repositoryUID}/{path...}` | 查询过程仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/{project}/{arch}/{path...}` | 读取当前正式仓文件 | 公开只读，不经 Gateway 鉴权 |
 | Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/{project}/{arch}/{path...}` | 查询当前正式仓文件元数据 | 公开只读，不经 Gateway 鉴权 |
-| Runner、构建工具及其他读取方 → Artifact Manager | `GET /repositories/releases/v1/{buildName}/{path...}` | 读取指定发布版本的仓库文件 | 公开只读，不经 Gateway 鉴权 |
-| Runner、构建工具及其他读取方 → Artifact Manager | `HEAD /repositories/releases/v1/{buildName}/{path...}` | 查询指定发布版本的仓库文件元数据 | 公开只读，不经 Gateway 鉴权 |
 | 健康检查 → Artifact Manager | `GET /healthz` | 存活探测 | 无认证 |
 | 健康检查 → Artifact Manager | `GET /readyz` | 就绪探测 | 无认证 |
 
@@ -837,7 +833,7 @@ type RepositoryResponse struct {
 }
 ```
 
-请求摘要由规范化后的全部请求字段计算。`Manifests` 先按 `JobName` 排序；重复引用、空输入、重复 `JobName` 或不合法 Job 名称均返回 `422`。Artifact Manager 还必须重新计算并校验 `repositoryUID` 与规范化请求一致。相同 `repositoryUID` 和相同请求摘要是幂等重试；相同 UID 对应不同摘要返回 `409 RepositoryIdentityConflict`。
+上述 CreateRepositoryRequest 是内部业务请求，Project、BuildName 由路由注入；HTTP 正文只包含 repositoryUID、repositoryName、targetArch、baseRepositoryUID 和 manifests，不重复传递作用域。请求摘要由规范化后的全部业务请求字段（含路径作用域）计算。`Manifests` 先按 `JobName` 排序；重复引用、空输入、重复 `JobName` 或不合法 Job 名称均返回 `422`。Artifact Manager 还必须重新计算并校验 `repositoryUID` 与规范化请求一致。相同 `repositoryUID` 和相同请求摘要是幂等重试；相同 UID 对应不同摘要返回 `409 RepositoryIdentityConflict`。
 
 `RepositoryRPMMeta` 记录文件名、SHA-256、大小、RPM name、epoch/version/release、arch、source RPM、specName、provides 和 requires。键使用仓库内唯一文件名。RPM 明细持久化在不可变的 `.repository.json` 中，`history/{buildName}/.records` 只保存轻量状态，不重复存储该字段。
 
@@ -852,7 +848,7 @@ RpmRepo Controller 通过以下内部物化接口请求仓库生成，不访问 
 #### 8.6.1 提交物化
 
 ```http
-POST /internal/v1/repositories
+POST /internal/v1/projects/{project}/builds/{buildName}/repositories
 Content-Type: application/json
 ```
 
@@ -862,7 +858,7 @@ Content-Type: application/json
 
 | 条件 | HTTP 状态 | 响应与行为 |
 |------|-----------|------------|
-| 首次接受 | `202 Accepted` | 原子持久化 `Creating, attempt=1` 后入队，返回 `RepositoryResponse` 和 `Location: /internal/v1/repositories/{repositoryUID}` |
+| 首次接受 | `202 Accepted` | 原子持久化 `Creating, attempt=1` 后入队，返回 `RepositoryResponse` 和 `Location: /internal/v1/projects/{project}/builds/{buildName}/repositories/{repositoryUID}` |
 | 相同请求正在执行或排队 | `202 Accepted` | 返回原 `Creating`，不重复入队、不增加 attempt |
 | 相同请求已经 Ready | `200 OK` | 返回原 Ready 结果 |
 | 相同请求处于可重试 Failed | `202 Accepted` | 原子增加 attempt、清空旧 Failure、写为 Creating 后重新入队 |
@@ -878,7 +874,7 @@ Content-Type: application/json
 #### 8.6.2 查询状态
 
 ```http
-GET /internal/v1/repositories/{repositoryUID}
+GET /internal/v1/projects/{project}/builds/{buildName}/repositories/{repositoryUID}
 ```
 
 存在记录时统一返回 `200 OK` 和 `RepositoryResponse`：
@@ -889,23 +885,15 @@ GET /internal/v1/repositories/{repositoryUID}
 - `Failed` 必须包含 attempt 和 Failure，且 `Failure.retryable` 明确能否用完全相同的 POST 请求重试；
 - `Deleting` 只返回身份、状态和时间字段，不再返回可用内容地址。
 
-记录不存在时返回 `404 Not Found / RepositoryNotFound`。GET 从不改变状态或 attempt。
+记录不存在或不属于路径指定的 Project、Build 时返回 `404 Not Found / RepositoryNotFound`。GET 从不改变状态或 attempt；始终查询明确 UID，不隐式选择最近提交或最近 Ready 的过程仓。
 
 #### 8.6.3 删除仓库
 
 ```http
-DELETE /internal/v1/repositories/{repositoryUID}
+DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories
 ```
 
-删除是异步、幂等操作，不检查仓库是否正被物化任务读取：
-
-| 条件 | HTTP 状态 | 响应与行为 |
-|------|-----------|------------|
-| Creating、Ready 或 Failed | `202 Accepted` | 原子写为 Deleting，排队任务改走删除分支；运行中的物化完成后不覆盖删除状态，待 worker 退出再执行清理 |
-| 已经 Deleting | `202 Accepted` | 返回原 Deleting，未排队且未运行时重新入队，同一标识去重 |
-| 记录不存在或删除已完成 | `204 No Content` | 视为删除成功 |
-
-DELETE 不使用请求体。进入 Deleting 后，相同 UID 的 POST 返回 `409 Conflict / RepositoryDeleting`，不能通过重提物化请求撤销删除。Artifact Manager 不因 Project、Build 或 RpmRepo API 对象删除而自行推断清理；保留期限到达或显式删除请求均可直接推进删除。
+不使用请求体，服务端先持久停止该 Build 的两类仓库生产并等待在途任务排空，再清理其全部过程仓，不删除发布仓或继承自其它 Build 的过程仓。调用方先确认发布仓删除完成；具体范围、`202/204` 与重试契约统一见 13.2。
 
 #### 8.6.4 仓库内容
 
@@ -986,7 +974,7 @@ GET /repositories/v1/{repositoryUID}/{path...}
 
 服务启动时扫描各目标仓 `history/{buildName}/.records/` 的 UID 和状态，只把 `Creating`、`Deleting` 完整记录载入内存以恢复任务。Ready 和 Failed 只保留 8.4 定义的路径索引，按 UID 查询时从轻量元数据文件读取，用完即可回收。读取 Ready 记录时检查 `.repository.json` 是否存在；缺失时本次请求视为 `RepositoryContentMissing`，不提供内容或基础仓引用。
 
-物化完成时先基于记录副本构造 Ready/Failed 结果，成功落盘后才移除内存中的 Creating 记录；落盘失败保持 Creating，并临时保留轻量结果，由每 5 秒的补偿循环仅重试结果写入，不重新物化。成功落盘或转入 Deleting 后释放待写结果，停止接口不能提前确认已排空。进程重启丢失内存中的待写结果时，按下述持久记录与最终目录恢复。
+物化完成时先基于记录副本构造 Ready/Failed 结果，成功落盘后才移除内存中的 Creating 记录；落盘失败保持 Creating，并临时保留轻量结果，由每 5 秒的补偿循环仅重试结果写入，不重新物化。成功落盘或转入 Deleting 后释放待写结果，DELETE 不能提前确认已排空。进程重启丢失内存中的待写结果时，按下述持久记录与最终目录恢复。
 
 对于 Creating 记录，若最终目录中的 `.repository.json`、请求摘要及目录摘要均校验通过，则补写 Ready；否则保持 Creating 并重新入队。Deleting 记录继续删除。各 `history/{buildName}/.work/` 中超过恢复宽限期的任务目录按过期时间清理。Ready 仓不在启动时逐个重算目录摘要，发布任务需要 RPM 明细时才读取其 `.repository.json`。
 
@@ -1109,33 +1097,33 @@ Creating/Prepared/Ready/Failed -> Deleting
 
 `Prepared` 是内部持久化检查点，表示不可变正文已经完整落盘但尚未确认稳定入口切换；创建和查询响应将其投影为 `Creating`，不允许读取其内容。worker 保存检查点后自动激活，激活失败保留 Prepared 并记录日志，每 5 秒补投一次；重试只执行入口切换与 Ready 落盘，不重复生成发布目录。停止标记和清理占用始终优先于自动激活。
 
-`Ready` 表示该版本至少成功激活过，即使后续被新版本替代也保持 Ready；启动恢复发现索引缺失、身份或摘要不一致时可标记为 Failed。正文创建失败不会切换此前的 current。Deleting 是显式删除或历史清理的中间状态，当前稳定入口指向的版本禁止删除。
+`Ready` 表示该版本至少成功激活过，即使后续被新版本替代也保持 Ready；启动恢复发现索引缺失、身份或摘要不一致时可标记为 Failed。正文创建失败不会切换此前的 current。Deleting 是历史清理的中间状态，当前稳定入口指向的版本禁止删除。
 
 ### 9.3 内部 API
 
-提交发布：
+提交发布。Project、BuildName 由路径获取并注入业务请求；HTTP 正文仅包含 targetArch、sourceRepositoryUID、excludeSpecs：
 
 ```http
-POST /internal/v1/releases
+POST /internal/v1/projects/{project}/builds/{buildName}/releases
 Content-Type: application/json
 ```
 
-创建、查询及返回正文的删除响应统一使用 `ReleaseResponse`，不返回内部 `ReleaseRecord` 或请求/内容摘要。公开状态为 Creating、Ready、Failed、Deleting；内部 Prepared 对外返回 Creating。`contentURL` 不持久化，仅在 Ready 响应中根据 Project、Arch 计算为 `/repositories/{project}/{arch}/`；Creating 返回 `pollAfterSeconds=5`。正式发布不记录执行次数，正文创建的可重试失败可沿用同一请求重放；激活重试由 Artifact Manager 自行完成，不消耗过程仓 attempt 预算。业务错误使用 5.5 的 `APIError`，通用 HTTP 错误边界沿用 8.6。
+创建、查询响应统一使用 `ReleaseResponse`，不返回内部 `ReleaseRecord` 或请求/内容摘要。公开状态为 Creating、Ready、Failed、Deleting；内部 Prepared 对外返回 Creating。`contentURL` 不持久化，仅在 Ready 响应中根据 Project、Arch 计算为 `/repositories/{project}/{arch}/`；Creating 返回 `pollAfterSeconds=5`。正式发布不记录执行次数，正文创建的可重试失败可沿用同一请求重放；激活重试由 Artifact Manager 自行完成，不消耗过程仓 attempt 预算。业务错误使用 5.5 的 `APIError`，通用 HTTP 错误边界沿用 8.6。
 
 POST 首次接受、Creating、Prepared 和可重试失败重放返回 `202`；Ready 或不可重试 Failed 的相同请求返回 `200` 和已有状态，不重新执行。相同 Build name 对应不同摘要返回 `409 ReleaseIdentityConflict`，Deleting 返回 `409 ReleaseDeleting`，非法集合或源仓不满足条件返回 `422`，队列满返回 `429` 和 `Retry-After: 5`。提交仍会校验源仓可用性，源仓缺失不能保证重放成功，确认已知结果优先使用 GET。接受成功时返回：
 
 ```http
-Location: /internal/v1/releases/{buildName}
+Location: /internal/v1/projects/{project}/builds/{buildName}/releases
 ```
 
 查询和删除：
 
 ```http
-GET    /internal/v1/releases/{buildName}
-DELETE /internal/v1/releases/{buildName}
+GET    /internal/v1/projects/{project}/builds/{buildName}/releases
+DELETE /internal/v1/projects/{project}/builds/{buildName}/releases
 ```
 
-GET 返回 `200` 和已持久化状态，不触发执行；不存在返回 `404 ReleaseNotFound`。DELETE 不接受业务请求体，只能删除非当前发布版本；当前版本返回 `409 ReleaseInUse`。首次进入或仍处于 Deleting 时返回 `202` 和 `ReleaseResponse`，不存在或已删除返回 `204`，无响应体。删除采用 `Deleting -> trash -> 删除正文 -> 删除元数据`，运行期重试及崩溃恢复沿用 8.10。
+GET 返回 `200` 和已持久化状态，不触发执行；不存在或记录不属于路径指定的 Project 时返回 `404 ReleaseNotFound`。DELETE 不接受请求体，只清理该 Build 的发布版本、记录和临时目录，不删除过程仓；当前版本返回 `409 ReleaseInUse`，其余删除规则统一见 13.2。
 
 POST 接受后，Artifact Manager 自动完成正文生成、稳定入口切换和 Ready 状态持久化。调用方仅通过 GET 轮询；GET 不推进任务。Prepared 的自动重试和重启恢复见 9.5、9.6，发布顺序仍由 RpmRepo Controller 的同目标串行队列保证。
 
@@ -1153,17 +1141,13 @@ https://artifact.example/repositories/{project}/{arch}/
 
 该地址是 Project 和架构对应的固定发布入口，不暴露 Build name，新版本激活后调用方无需修改 DNF 配置。接口通过 架构目录中的 `current` 链接解析到 `releases/{buildName}`，只允许 `GET` 和 `HEAD`，文件内容读取、Range、ETag 与路径规范化规则与 8.6.4 相同。服务端检查 current 的链接值，再按路径读取目标内容；当前没有基于目录 FD 的全链路保护，安全边界见第四章。
 
-稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 直接展示有当前 Ready 发布版本的架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 和不可变正式版本地址仍不提供目录浏览。
+稳定发布入口允许公开匿名浏览目录：`/repositories/{project}/` 直接展示有当前 Ready 发布版本的架构，目标目录展示 `Packages/`、`repodata/` 和存在时的公钥；后两者只列出当前 Ready 版本中的普通文件。目录页只读，使用 `?page=N` 分页，每页最多 200 项；不列出 `history`、`releases`、内部记录或未发布目标。过程仓 `/repositories/v1/{repositoryUID}/` 不提供目录浏览。
 
-路由与已经实现的不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。不可变正式发布版本另提供用于审计和历史版本下载的地址：
-
-```http
-GET /repositories/releases/v1/{buildName}/{path...}
-```
+路由与不可变过程仓地址 `/repositories/v1/{repositoryUID}/` 共用前缀。只有 `v1` 后一段严格匹配 64 位小写十六进制 `repositoryUID` 时才按该路由解析；其他请求按 `/repositories/{project}/{arch}/` 稳定入口解析。因此 Project 创建校验不得仅为规避路由冲突而保留 `v1` 等名称。
 
 稳定 URL 不返回重定向，避免客户端缓存历史 Build name；服务端在单次请求开始时取得 `current` 的目标快照，该请求的全部文件读取只能落到同一个 release。根目录的 `Packages`、`repodata` 和公钥链接固定指向 `current` 下的对应名称，因此切换时只需要替换一条 `current` 链接。
 
-原子切换只保证单次请求的版本一致性，不提供跨 HTTP 请求的快照。DNF 在切换前取得旧 repomd、切换后按旧文件名读取元数据时可能遇到 404；当前不在稳定入口合并保留旧版本文件。需要固定版本的调用方使用不可变版本 URL，并与保留策略协调；稳定入口的调用方在切换期间可能需要刷新元数据后重试。
+原子切换只保证单次请求的版本一致性，不提供跨 HTTP 请求的快照。DNF 在切换前取得旧 repomd、切换后按旧文件名读取元数据时可能遇到 404；当前不在稳定入口合并保留旧版本文件。稳定入口的调用方在切换期间可能需要刷新元数据后重试。
 
 #### 稳定入口的发布可用性确认
 
@@ -1576,36 +1560,31 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 
 ### 13.2 按 Build 删除过程仓和发布仓
 
-先停止仓库生产：
+两个 DELETE 均内置“停止接收 → 等待排空 → 删除”，无需单独的停止请求。Controller 先调用发布仓 DELETE，成功后才能继续过程仓清理：
 
 ```http
-POST /internal/v1/projects/{project}/builds/{buildName}/repositories/stop
-```
-
-- 无请求体。按 Project、BuildName 在 `repositories/{project}/.stopped/{buildName}/` 建立空目录作为停止标记，逐层核验目录并同步父目录。标记不常驻内存、不开放下载、不随历史仓库清理而删除，不设置过期时间；Build name 不复用。
-- 按 Release Manager → Repository Manager 顺序持锁，使标记写入与两类 Submit、自动激活串行。标记存在后拒绝该构建的新提交、幂等重放和激活，包括可重试 Failed 的重新提交以及后台完成后的自动激活，返回 `409 BuildStopped`。已受理任务允许结束，但 Prepared 不再激活；此接口不删除仓库文件、不回退已经生效的 current。
-- 标记持久化后，若任一 Manager 仍有 Creating、Deleting 或实际运行中的任务，返回 `202`、`Retry-After: 5`。全部排空返回 `204`，任务从未存在或已停在 Failed 同样可以确认；重复调用幂等。响应丢失后重复请求，服务重启后继续读取停止标记并恢复已受理任务，不能绕过排空检查。
-- 非法标识或携带请求体返回 `400`；存储失败返回可重试 `503`，不得确认停止。Controller 只有收到 `204` 才能清除 RpmRepo 检查点并写 CleanupReady；不能用任务 GET 的 404 推断迟到提交已被阻止。
-
-停止确认后删除仓库：
-
-```http
+DELETE /internal/v1/projects/{project}/builds/{buildName}/releases
 DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories
 ```
 
-此接口按 Project、BuildName 定位，在 Project 下扫描架构目录并清理同名 Build，跳过 Project 级的 `.stopped`；不要求发布记录或过程仓元数据存在，不查询 apiserver。不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。调用方须先完成上述停止确认；跨构建的源仓使用约束由上层业务保证。
+- 无请求体。每次 DELETE 先按 Project、BuildName 在 `repositories/{project}/.stopped/{buildName}/` 建立空目录作为停止标记，逐层核验目录并同步父目录。即使待删仓库从未存在也必须先落盘标记；标记不常驻内存、不开放下载、不随仓库清理而删除，不设置过期时间；Build name 不复用。
+- 按 Release Manager → Repository Manager 顺序持锁，使标记写入与两类 Submit、自动激活串行。标记存在后拒绝该构建的新提交、幂等重放和激活，包括可重试 Failed 的重新提交以及后台完成后的自动激活，返回 `409 BuildStopped`。已受理任务允许结束，但 Prepared 不再激活；不回退已经生效的 current。
+- 标记持久化后，若任一 Manager 仍有 Creating、Deleting 或实际运行中的任务，返回 `202`、`Retry-After: 5`，尚不删除文件。全部排空后继续执行对应类型的文件清理，只有清理完成才返回 `204`。重复 DELETE 幂等；响应丢失、进程重启或部分清理后仍须重新核对停止标记及在途任务。
+- 非法标识或携带请求体返回 `400`；存储失败返回可重试 `503`，不能确认完成。Controller 只有收到发布仓 DELETE 的 `204` 才能清除 RpmRepo 检查点并写 CleanupReady；不能用任务 GET 的 404 推断迟到提交已被阻止。
 
-- 在各架构下精确清理 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
-- 清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按最后一个后缀之前的完整名称匹配（工作目录使用随机后缀，删除暂存使用 `-deleting`），不能只做字符串前缀匹配。
+两个接口均按 Project、BuildName 定位，在 Project 下扫描架构目录并清理同名 Build，跳过 Project 级的 `.stopped`；不要求元数据存在，不查询 apiserver。不根据 RpmRepo 当前的 repositoryUID 推导删除范围；该 UID 可能仍指向其它 Build 的继承基线。跨构建的源仓使用约束及 Job 停止使用过程仓的保证由上层业务负责。
+
+- 过程仓 DELETE 仅清理各架构下的 `repositories/{project}/{arch}/history/{buildName}/`，包含所有 steps、`.records`、`.work`、`.trash`。
+- 发布仓 DELETE 仅清理同目标下 `releases/{buildName}/`、`releases/.records/{buildName}.json` 及其原子写入临时文件，以及 `releases/.work`、`releases/.trash` 中属于该 Build 的临时目录；按最后一个后缀之前的完整名称匹配（工作目录使用随机后缀，删除暂存使用 `-deleting`），不能只做字符串前缀匹配。
 - 删除后移除对应的内存定位索引和非活动记录。不清理 Job 产物/日志、其它 Build/Project 的仓库，也不删除继承基线。硬链接仅解除本目录项，不修改共享正文。
-- 先检查所有架构的 current，再清理发布仓，最后清理过程仓。任一架构的 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和仓库不变；不回退到历史版本。上层负责判断是否允许删除该 Build。
+- 发布仓 DELETE 先检查所有架构的 current。任一架构的 `current` 指向此发布版本时返回 `409 ReleaseInUse`，保持 current 和发布仓不变；不回退到历史版本。Controller 此时不调用过程仓 DELETE。上层负责判断是否允许删除该 Build。
 - 每个 Manager 在自身锁内检查活动任务并登记本次 Build 的临时清理占用；仍有 Creating、Deleting、实际运行中的任务或同一 Build 的清理请求时返回 `202`、`Retry-After: 5`，调用方稍后重复 DELETE。Prepared 已完成正文生成且尚未激活，可以清理，不为删除执行激活。
-- 递归文件删除在全局锁外执行，其他 Build 可继续查询、提交和持久化结果。清理占用期间，同一 Build 的提交、发布激活及已有单仓的删除返回 `409 RepositoryDeleting/ReleaseDeleting`，历史回收跳过该 Build，避免与本次文件操作竞争；成功后回到锁内移除对应索引。成功或失败均释放临时占用，失败保留索引供下一次请求重试。占用不持久化，重启后的安全边界仍由前序 stop 的持久标记和活动任务恢复保证。
+- 递归文件删除在全局锁外执行，其他 Build 可继续查询、提交和持久化结果。清理占用期间，同一 Build 的提交、发布激活及已有单仓的删除返回 `409 RepositoryDeleting/ReleaseDeleting`，历史回收跳过该 Build，避免与本次文件操作竞争；成功后回到锁内移除对应索引。成功或失败均释放临时占用，失败保留索引供下一次请求重试。占用不持久化，重启后的安全边界仍由DELETE 的持久停止标记和活动任务恢复保证。
 - 无活动任务时同步执行文件删除，不创建新的后台删除任务或持久化删除凭据。只有完整清理后返回 `204`，首次不存在和重复删除同样返回 `204`；不返回正文。非法标识或携带请求体返回 `400`，存储失败返回可重试 `503`。
 - 逐层核验父目录，拒绝符号链接父目录；使用 `os.Root` 删除，子项符号链接仅解除链接，成功后同步父目录。数据根目录无法打开属于存储故障，不能当作仓库不存在。
-- 中途失败、请求超时或服务重启后，按同一作用域再次 DELETE 继续清理；不要求元数据完整存在，也不依赖内存中的完成标记。DELETE 本身不建立停止标记，但保留前序 stop 的持久标记，防止迟到请求重建仓库。
+- 中途失败、请求超时或服务重启后，按同一作用域再次 DELETE 继续清理；不要求元数据完整存在，也不依赖内存中的完成标记。DELETE 建立并保留持久停止标记，防止迟到请求重建仓库。
 
-RpmRepo Controller 只在 RpmRepo 删除中且已写 `CleanupReady=True` 时调用此接口。CleanupReady 仅表示生产停止和在途任务排空，供 Job 输入清理使用，不表示仓库文件已删除。仅 `204` 允许移除 `ebs.io/rpmrepo-cleanup`；`202`、`404`、冲突、存储失败或未知结果均保留 finalizer。404 可能是路由或地址错误，不能当作清理成功。
+RpmRepo Controller 观察到父 Build/BuildInfo 删除时即调用发布仓 DELETE，无需等待 RpmRepo 自身的 deletionTimestamp；收到 204 后清空检查点并写 `CleanupReady=True`。此时发布版本已清理，过程仓仍保留，BuildInfo 可以中止并清理 Job/OldJob。BuildInfo 删除完成后，Build Controller 再删除 RpmRepo，由后者确认两个 DELETE 均返回 204 后移除 `ebs.io/rpmrepo-cleanup`。直接删除 RpmRepo 也先取得同样的 CleanupReady 确认，再清理过程仓。`202`、`404`、冲突、存储失败或未知结果均保留检查点或 finalizer；重试从幂等的发布仓 DELETE 开始，不增加进度字段。404 可能是路由或地址错误，不能当作清理成功。
 
 测试覆盖跨架构清理、多过程仓版本、继承基线与其它作用域保留、Prepared 发布清理、current 保护、活动任务等待、临时目录精确匹配、索引释放、部分清理后的重启和重复请求、文件系统故障与符号链接边界，以及慢删除期间同一 Build 互斥、其他 Build 继续处理、失败后释放占用并重试；Controller 测试覆盖确认完成前保留 finalizer，以及完成后的 Conflict/Unknown 重入。
 

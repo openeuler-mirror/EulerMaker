@@ -34,9 +34,11 @@ go run ./cmd \
 
 RPM 签名默认关闭。启用本地 GPG 签名时，配置 `--rpm-signing-mode=local-gpg`、`--release-public-key` 和 `--rpm-signing-gpg-home`，并以受限权限挂载私钥目录。启用 Signatrust 时，配置 `--rpm-signing-mode=signatrust`、`--release-public-key` 和 `--rpm-signing-signatrust-config`；密钥名默认使用 `openeuler-default-key`，可通过 `--rpm-signing-signatrust-key-name` 覆盖。镜像按 `x86_64` 或 `aarch64` 架构安装 Signatrust `v1.0.1.rc0` 客户端；部署时仍需挂载客户端配置及其 TLS 凭据。签名在 Manifest 封账时对私有 RPM 副本执行，全服务默认最多并发处理 8 个 RPM，可通过 `--rpm-signing-workers` 调整；原始上传回执保持不变，封账后的下载和物化使用签名产物。密钥配置不匹配或验签失败时不会完成封账，物化与正式发布不重复签名。
 
-过程仓接口包括创建物理版本 `POST /internal/v1/repositories`、查询状态或删除 `GET/DELETE /internal/v1/repositories/{repositoryUID}`。Ready 过程仓通过只读地址 `GET /repositories/v1/{repositoryUID}/{path}` 提供内容。
+过程仓接口包括创建物理版本 `POST /internal/v1/projects/{project}/builds/{buildName}/repositories`、查询指定批次 `GET /internal/v1/projects/{project}/builds/{buildName}/repositories/{repositoryUID}`，以及清理该 Build 全部过程仓 `DELETE /internal/v1/projects/{project}/builds/{buildName}/repositories`。Ready 过程仓通过只读地址 `GET /repositories/v1/{repositoryUID}/{path}` 提供内容。
 
-正式发布接口包括提交 `POST /internal/v1/releases`、查询或删除 `GET/DELETE /internal/v1/releases/{buildName}`。创建后由后台自动完成发布及稳定入口切换，激活失败每 5 秒重试，重启后恢复未完成任务；调用方只需轮询状态。稳定 DNF 地址为 `/repositories/{project}/{arch}/`，不可变历史版本地址为 `/repositories/releases/v1/{buildName}/`。
+正式发布接口包括提交 `POST /internal/v1/projects/{project}/builds/{buildName}/releases`、查询或删除 `GET/DELETE /internal/v1/projects/{project}/builds/{buildName}/releases`。创建后由后台自动完成发布及稳定入口切换，激活失败每 5 秒重试，重启后恢复未完成任务；调用方只需轮询状态。稳定 DNF 地址为 `/repositories/{project}/{arch}/`。
+
+创建请求从路径取得 Project、BuildName，JSON 正文不重复传递。两个 DELETE 都内置停止两类仓库生产、等待在途任务排空和文件清理；202 表示等待后重试，204 表示对应类型已清理完成。Controller 先删除发布仓，写 CleanupReady 后允许 BuildInfo 清理 Job，再删除过程仓。发布仓删除保留 current 保护，两类删除互不清理对方的目录。
 
 构建过程仓保存在 `${dataDir}/repositories/{project}/{arch}/history/{buildName}/steps/{repositoryUID}`，正式版本保存在 `${dataDir}/repositories/{project}/{arch}/releases/{buildName}`。Artifact Manager 通过原子替换 架构目录中的 `current` 链接切换稳定入口。`--release-public-key` 可以指定复制到每个正式版本的只读公钥；历史版本由 `--release-history-count` 和 `--release-history-ttl` 控制。
 

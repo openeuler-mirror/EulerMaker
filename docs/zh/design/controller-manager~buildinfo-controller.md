@@ -107,7 +107,7 @@ BuildInfo 删除顺序：
 4. 每轮完整查询 Job/OldJob，按类别/名称稳定排序后从头扫描，最多发起 100 次中止或删除请求；单项失败仍继续处理本轮预算内的后续项。清理直接由 Controller 方法执行，不维护独立 cleaner 或跨轮游标。读取或写入失败返回错误并由框架重试；等待 `CleanupReady` 或子资源删除属于正常等待，无其他错误时返回 `RequeueAfter=1s` 和 nil，不触发错误退避。接受前序任务持续失败并占满预算时，后续任务等待其恢复的行为；每轮通过重新查询确认清理进度。
 5. 重新扫描确认 Job/OldJob 均不存在，并 GET 确认 BuildGraph 消失后，重新 GET 同 UID、删除中的 BuildInfo，仅移除自身 finalizer，保留其他 finalizer、spec 和 status。任一分支未完成均不能释放 finalizer。
 
-本包的 `cleanup.go` 只编排清理所属 Job/OldJob 和 BuildGraph，资源访问统一通过 `client.go`；Build Controller 负责删除并等待其直接子资源 BuildInfo，不跨级接管。单独删除 BuildInfo 不修改父 Build；其后续行为仍按当前 phase/stage 的 ensure 或依赖缺失规则执行。`CleanupReady=True/reason=OperationsDrained` 由 RpmRepo Controller 确认停止生产且在途操作已结束后写入，确认不可撤销；BuildInfo Controller 只读取，不代写。
+本包的 `cleanup.go` 只编排清理所属 Job/OldJob 和 BuildGraph，资源访问统一通过 `client.go`；Build Controller 负责删除并等待其直接子资源 BuildInfo，不跨级接管。单独删除 BuildInfo 不修改父 Build；其后续行为仍按当前 phase/stage 的 ensure 或依赖缺失规则执行。RpmRepo Controller 观察到 Build/BuildInfo 删除后，先调用发布仓 DELETE，完成持久停止两类仓库生产、排空在途任务和发布版本清理；204 后写入不可撤销的 `CleanupReady=True/reason=OperationsDrained`，无需等待 RpmRepo 自身删除。过程仓保留到 BuildInfo 的 Job/OldJob 清理完成后再删除，避免循环等待或提前删除仍被 Job 使用的过程仓。BuildInfo Controller 只读取此确认，不代写；发布仓的 current 保护仍生效，清理失败时 Job 分支继续等待。
 
 删除协议要求单 active Controller Manager。子资源创建不做持久化预登记；超时、取消或进程退出不能证明服务端已停止处理。删除仅按当前可见对象收敛，接受极端故障下迟到创建导致子资源残留，由运维核对归属后清理；finalizer 不是跨存储创建屏障。
 
@@ -556,7 +556,7 @@ buildSet = buildSet ∪ direct                                                # 
 **3. Job payload `repo` 注入（稳定正式仓 + bootstrapRepos）**：
 
 - single 不读取当前/历史 RpmRepo、历史 Build 或 baseBuildRef。首次需要派发新 Job 时，使用本轮 Project 的 `ebs.io/artifacts`（缺省 default），与父 Build 的 Project、Arch 组成目标；实例选择与本批 Job 的上传 annotation 一致。
-- 构造逻辑入口 `artifact://{instance}/repositories/{project}/{arch}/`，路径段逐项安全编码，保留末尾斜线。从本轮 `Config/services` 快照读取 `artifactManagers[instance].internalURL`，拼接管理面 HTTP(S) 地址并 GET 稳定入口的 `repodata/repomd.xml`。不遍历发布历史、不解析目录页、不改用不可变版本 URL。
+- 构造逻辑入口 `artifact://{instance}/repositories/{project}/{arch}/`，路径段逐项安全编码，保留末尾斜线。从本轮 `Config/services` 快照读取 `artifactManagers[instance].internalURL`，拼接管理面 HTTP(S) 地址并 GET 稳定入口的 `repodata/repomd.xml`。不遍历发布历史、不解析目录页。
 - 确认接口、错误码与响应校验见 Artifact Manager 9.3「稳定入口的发布可用性确认」。200 且 repomd.xml 有效才注入稳定仓，priority=10；仅 `404 + code=ReleaseNotPublished` 表示当前没有已激活发布，此时省略稳定仓。普通 404、ReleaseNotFound、网络/超时、429/5xx 或已发布仓缺文件均不是“尚未发布”，本轮暂停新派发并重试，先回填已有 Job；认证/参数/配置错误返回 PermanentError，不能静默降级或标包失败。完整分类见 E-32。
 - 按声明顺序追加 `BuildInfo.spec.bootstrapRepos[].url` 经目标架构展开的 URL，priority=99。稳定入口已含目标架构，不再追加架构。尚未发布时只使用 bootstrapRepos；single 不回退到 buildPayload.repo。最终没有任何 URL 时返回明确的配置 PermanentError（BootstrapRepoRequired），不创建 Job。
 - 每轮首次需要创建 Job 时执行一次实例配置读取与发布确认，结果供本轮最多 20 次创建共用；不跨 reconcile 缓存“尚未发布”。仅确认既有 Job、结果回填或收敛时不发送发布确认请求。已创建 Job 保持原 payload，后续批次重新确认；创建重试沿用确定性名称。
