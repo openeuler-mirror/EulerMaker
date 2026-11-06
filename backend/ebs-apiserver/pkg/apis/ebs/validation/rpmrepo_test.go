@@ -48,7 +48,7 @@ func TestValidateRpmRepoStatusUpdate(t *testing.T) {
 	valid := func() *ebsv1.RpmRepo {
 		return &ebsv1.RpmRepo{Status: ebsv1.RpmRepoStatus{
 			Repository: &ebsv1.RpmRepoRepositoryStatus{
-				RepositoryUID: "base", ContentURL: "/repositories/v1/base/",
+				RepositoryUID: "base", ContentURL: "/repositories/project/builds/build/base/",
 				Transition: &ebsv1.RepositoryTransition{
 					RepositoryUID: "next", BaseRepositoryUID: "base",
 					Inputs: []ebsv1.RepositoryInput{{JobName: "job", SpecName: "spec"}},

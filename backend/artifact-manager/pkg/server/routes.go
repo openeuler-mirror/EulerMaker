@@ -83,8 +83,8 @@ func (s *Server) jobMethod(method string, handler func(http.ResponseWriter, *htt
 }
 
 func (s *Server) routeRepositoryContent(c *gin.Context) {
-	path := c.Request.URL.Path
-	if strings.HasPrefix(path, "/repositories/v1/") && validHash(strings.SplitN(strings.TrimPrefix(path, "/repositories/v1/"), "/", 2)[0]) {
+	parts := strings.SplitN(strings.TrimPrefix(c.Request.URL.Path, "/repositories/"), "/", 5)
+	if len(parts) == 5 && parts[1] == "builds" && validHash(parts[3]) {
 		s.repositoryContent(c.Writer, c.Request)
 		return
 	}

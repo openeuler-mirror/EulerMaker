@@ -804,7 +804,7 @@ func historicalRpmRepo(project, name, repositoryUID, contentURL string) *ebsv1.R
 }
 
 func repositoryContentURL(repositoryUID string) string {
-	return "https://artifact-manager/repositories/v1/" + repositoryUID
+	return "https://artifact-manager/repositories/project/builds/build/" + repositoryUID
 }
 
 // assertRpmRepoTargetLabels pins the target labels stamped at creation: they come from the Build target and
@@ -900,7 +900,7 @@ func TestPendingDoesNotBackfillLabelsOnExistingRpmRepo(t *testing.T) {
 func TestRpmRepoKeepsBaseline(t *testing.T) {
 	for _, base := range []repositoryBase{{}, {
 		repositoryUID: "version",
-		contentURL:    "https://artifact/repositories/v1/version/",
+		contentURL:    "https://artifact/repositories/project/builds/build/version/",
 	}} {
 		build := newBuild("project-a", "build-a", "full", []string{"gcc"})
 		repo := newRpmRepo(build, base)

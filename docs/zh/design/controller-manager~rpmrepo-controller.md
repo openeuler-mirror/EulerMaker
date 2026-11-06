@@ -249,7 +249,7 @@ metadata:
   namespace: ${build.metadata.namespace}
 status:
   repository:
-    contentURL: artifact://{instance}/repositories/v1/<base-repositoryUID>/  # Build Controller 创建时预置：上一个发布成功 Build 同名 RpmRepo 的 contentURL
+    contentURL: artifact://{instance}/repositories/{project}/builds/{baseBuildName}/<base-repositoryUID>/  # Build Controller 创建时预置：上一个发布成功 Build 同名 RpmRepo 的 contentURL
     repositoryUID: <base-repositoryUID>                                       # Build Controller 创建时预置：同上
     sourceJobNames: []       # 为空表示本对象尚未产出过版本；仅有继承基线时不可发布
     transition: null
@@ -263,7 +263,7 @@ status:
 # 物化进行中（存在 repository.transition，尚无新版本）
 status:
   repository:
-    contentURL: artifact://{instance}/repositories/v1/<previous-repositoryUID>/
+    contentURL: artifact://{instance}/repositories/{project}/builds/{buildName}/<previous-repositoryUID>/
     repositoryUID: <previous-repositoryUID>
     sourceJobNames: ["job-0"]
     transition:
@@ -277,7 +277,7 @@ status:
 # 重试耗尽（或不可重试失败）：transition 原样保留，发布终局同次写入
 status:
   repository:
-    contentURL: artifact://{instance}/repositories/v1/<previous-repositoryUID>/
+    contentURL: artifact://{instance}/repositories/{project}/builds/{buildName}/<previous-repositoryUID>/
     repositoryUID: <previous-repositoryUID>
     sourceJobNames: ["job-0"]
     transition:
@@ -303,7 +303,7 @@ status:
 # 发布后
 status:
   repository:
-    contentURL: artifact://{instance}/repositories/v1/<repositoryUID>/
+    contentURL: artifact://{instance}/repositories/{project}/builds/{buildName}/<repositoryUID>/
     repositoryUID: <repositoryUID>
     sourceJobNames: ["job-1"]
     transition: null
@@ -326,7 +326,7 @@ status:
 | --- | --- | --- |
 | `RpmRepo.metadata.name` / `namespace` | Build Controller | 与 Build 同名同 namespace |
 | `RpmRepo.metadata.labels` | Build Controller（创建时写入） | 写入 `ebs.io/target-arch`，值取 `Build.spec.arch` ；本控制器只读、不补写、不改写，用于发布候选的服务端 `arch` 过滤 |
-| `RpmRepo.status.repository.contentURL` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为上一个发布成功 Build 同名 RpmRepo 的 `contentURL`，即本对象的基础仓；提升后为本对象当前可读版本的地址；失败路径不清空。将 Artifact Manager 返回的相对路径记为逻辑地址 `artifact://{instance}/repositories/v1/{repositoryUID}/`；产出判据见 `sourceJobNames` |
+| `RpmRepo.status.repository.contentURL` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为上一个发布成功 Build 同名 RpmRepo 的 `contentURL`，即本对象的基础仓；提升后为本对象当前可读版本的地址；失败路径不清空。将 Artifact Manager 返回的相对路径记为逻辑地址 `artifact://{instance}/repositories/{project}/builds/{buildName}/{repositoryUID}/`；产出判据见 `sourceJobNames` |
 | `RpmRepo.status.repository.repositoryUID` | Build Controller（创建时预置基础仓）/ RpmRepo Controller（物化提升时覆盖） | 创建时预置为基础仓的 `repositoryUID`（`SubmitRepository` 的 `baseRepositoryUID` 来源）；提升后为本对象当前版本的物理标识。产出判据见 `sourceJobNames` |
 | `RpmRepo.status.repository.sourceJobNames` | RpmRepo Controller | 已成功纳入当前版本的 Job 名称；写入时去重并按字典序排序；不记录失败 Job。为空表示本对象尚未产出过版本（Build Controller 预置的继承基线不计入），其非空是「本对象已产出可发布版本」的唯一判据，不以 repositoryUID / contentURL 或 RepositoryReady 条件代替 |
 | `RpmRepo.status.repository.transition` | RpmRepo Controller | 在途批次或已放弃批次的固定输入（`inputs`）、`baseRepositoryUID` 与 `repositoryUID`；不承载重试计数（计数以 Artifact Manager 的 `attempt` 为准，见 §8）。成功提升时随 `transition=nil` 一起清除，失败收口时原样保留 |

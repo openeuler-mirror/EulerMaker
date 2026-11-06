@@ -87,7 +87,7 @@ func (m *Manager) recover(workTTL time.Duration) error {
 			continue
 		}
 		record.State, record.RepositoryDigest = RepositoryReady, digest
-		record.ContentURL, record.UpdatedAt, record.CompletedAt = "/repositories/v1/"+uid+"/", now, &now
+		record.ContentURL, record.UpdatedAt, record.CompletedAt = repositoryContentURL(record), now, &now
 		if err := m.persist(record); err != nil {
 			return err
 		}
@@ -414,7 +414,7 @@ func (m *Manager) finish(completed *RepositoryRecord, result Result, materialize
 		}
 	} else {
 		record.State, record.RepositoryDigest = RepositoryReady, result.Digest
-		record.ContentURL = "/repositories/v1/" + uid + "/"
+		record.ContentURL = repositoryContentURL(record)
 		record.CompletedAt = &now
 	}
 	// Keep Creating visible until the result is durable. Retry only the write, not materialization.
@@ -556,6 +556,10 @@ func (m *Manager) persist(record *RepositoryRecord) error {
 
 func (m *Manager) RepositoryPath(record *RepositoryRecord) string {
 	return VersionPath(m.root, record.Project, record.TargetArch, record.BuildName, record.RepositoryUID)
+}
+
+func repositoryContentURL(record *RepositoryRecord) string {
+	return "/repositories/" + record.Project + "/builds/" + record.BuildName + "/" + record.RepositoryUID + "/"
 }
 
 func VersionPath(root, project, arch, buildName, uid string) string {

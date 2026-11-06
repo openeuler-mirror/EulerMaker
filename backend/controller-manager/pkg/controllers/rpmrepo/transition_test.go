@@ -190,7 +190,7 @@ func TestRepositoryAdvancesWhileBuildInfoIsStillProcessing(t *testing.T) {
 	job := newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/next/", UpdatedAt: time.Now()}, nil
 	}
 	c := scanFixture(t, job, artifacts, client)
 
@@ -313,7 +313,7 @@ func TestFinishRepositoryConvergesWhenTheObjectDisappears(t *testing.T) {
 	}
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/next/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -490,7 +490,7 @@ func TestReconcileBuildRejectsForeignRepositoryResponse(t *testing.T) {
 	artifacts := NewFakeArtifactManager()
 	artifacts.GetRepositoryFunc = func(context.Context, string, string, string) (RepositoryResponse, error) {
 		// The response belongs to another repository: it must never be used to promote this object.
-		return RepositoryResponse{RepositoryUID: "other-repository", State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/other/", UpdatedAt: time.Now()}, nil
+		return RepositoryResponse{RepositoryUID: "other-repository", State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/other/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -703,7 +703,7 @@ func TestReconcileBuildPromotesBatchWithoutSeparateReleaseKey(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/next/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 
@@ -715,7 +715,7 @@ func TestReconcileBuildPromotesBatchWithoutSeparateReleaseKey(t *testing.T) {
 		t.Fatalf("unexpected result %+v", result)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if updated.Status.Repository.RepositoryUID == "" || updated.Status.Repository.ContentURL != "artifact:///repositories/v1/next/" {
+	if updated.Status.Repository.RepositoryUID == "" || updated.Status.Repository.ContentURL != "artifact:///repositories/project/builds/build/next/" {
 		t.Fatalf("batch was not promoted: %+v", updated.Status.Repository)
 	}
 	if updated.Status.Repository.Transition != nil {
@@ -743,14 +743,14 @@ func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T)
 
 	artifacts := NewFakeArtifactManager()
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/next/", UpdatedAt: time.Now()}, nil
+		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/next/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
 	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	updated := client.RpmRepos[key(testProject, testBuild)]
-	if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "artifact:///repositories/v1/next/" {
+	if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "artifact:///repositories/project/builds/build/next/" {
 		t.Fatalf("process repository was not materialized: %+v", updated.Status.Repository)
 	}
 	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || updated.Status.Release.UpdatedAt == nil || updated.Status.Release.ContentURL != "" {
@@ -875,7 +875,7 @@ func TestReconcileBuildRegistersNoPublishableArtifacts(t *testing.T) {
 	client := NewFakeClient()
 	repo := newRpmRepo(testBuild)
 	repo.Status.Repository.RepositoryUID = "base-1"
-	repo.Status.Repository.ContentURL = "/repositories/v1/base-1/"
+	repo.Status.Repository.ContentURL = "/repositories/project/builds/build/base-1/"
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
@@ -897,7 +897,7 @@ func TestReconcileBuildRegistersNoPublishableArtifacts(t *testing.T) {
 	if !conditionMatches(updated.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonNoPublishableArtifacts) {
 		t.Fatalf("PublishSucceed=False/NoPublishableArtifacts missing: %+v", updated.Status.Conditions)
 	}
-	if updated.Status.Repository.RepositoryUID != "base-1" || updated.Status.Repository.ContentURL != "/repositories/v1/base-1/" {
+	if updated.Status.Repository.RepositoryUID != "base-1" || updated.Status.Repository.ContentURL != "/repositories/project/builds/build/base-1/" {
 		t.Fatalf("the inherited baseline must stay readable: %+v", updated.Status.Repository)
 	}
 }
