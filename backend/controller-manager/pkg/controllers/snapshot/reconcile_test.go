@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"errors"
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -300,6 +301,42 @@ func TestCursorAdvancesDespiteStatusConflict(t *testing.T) {
 	}
 	if c.failures.count(snapshot.UID, "pkg-0") != 0 || len(api.snapshot.Status.PackageRepoStatuses) != 0 {
 		t.Fatal("conflict committed pending failure state")
+	}
+}
+
+func TestWriteErrorMatrix(t *testing.T) {
+	c := newTestController(t, &fakeClient{}, &fakeGitClient{}, Config{})
+	for _, code := range []int{301, 400, 401, 403, 404, 405, 408, 409, 412, 413, 418, 422, 429, 500, 503} {
+		input := &clientpkg.WriteError{Outcome: clientpkg.WriteRejected, StatusCode: code, Err: errors.New("rejected"), RetryAfter: time.Second}
+		result, err := c.handleWriteError(context.Background(), input, nil, nil)
+		switch code {
+		case 404:
+			if err != nil || result != (controller.ReconcileResult{}) {
+				t.Fatalf("%d: %v %v", code, result, err)
+			}
+		case 409, 412:
+			if err != nil || !result.Requeue {
+				t.Fatalf("%d: %v %v", code, result, err)
+			}
+		case 408, 429, 500, 503:
+			if err != input || result != (controller.ReconcileResult{}) {
+				t.Fatalf("%d: %v %v", code, result, err)
+			}
+		default:
+			var permanent controller.PermanentError
+			if !errors.As(err, &permanent) {
+				t.Fatalf("%d: expected permanent, got %v", code, err)
+			}
+		}
+	}
+	for _, cause := range []error{&net.DNSError{Err: "temporary", IsTemporary: true}, context.DeadlineExceeded, errors.New("invalid object")} {
+		input := &clientpkg.WriteError{Outcome: clientpkg.WriteNotSent, Err: cause}
+		_, err := c.handleWriteError(context.Background(), input, nil, nil)
+		var permanent controller.PermanentError
+		wantPermanent := cause.Error() == "invalid object"
+		if errors.As(err, &permanent) != wantPermanent {
+			t.Fatalf("cause=%v err=%v", cause, err)
+		}
 	}
 }
 
