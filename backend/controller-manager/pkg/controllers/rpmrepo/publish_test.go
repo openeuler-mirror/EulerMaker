@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
@@ -303,6 +304,7 @@ func TestReleaseRecheckSkipsCandidateWithoutOwnVersion(t *testing.T) {
 	}
 }
 
+// Release candidate reads preserve the same error classification as repository reconciliation.
 func TestReleaseRecheckDependencyErrorsKeepTheirClass(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -362,6 +364,420 @@ func TestReleaseRecheckDependencyErrorsKeepTheirClass(t *testing.T) {
 				t.Fatalf("a failed read must not reach Artifact Manager")
 			}
 		})
+	}
+}
+
+func inFlightReleaseRepo(name string) *ebsv1.RpmRepo {
+	repo := releasableRpmRepo(name)
+	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{
+		Phase:      ebsv1.RpmRepoReleaseCreating,
+		Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "repo-1"},
+	}
+	return repo
+}
+
+func TestReconcileReleaseListFailureKeepsItsClass(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		err           error
+		wantPermanent bool
+	}{
+		{name: "transient", err: errors.New("list unavailable")},
+		{name: "forbidden", err: apierrors.NewForbidden(schema.GroupResource{Group: "ebs", Resource: "rpmrepos"}, testBuild, errors.New("denied")), wantPermanent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewFakeClient()
+			client.ListRpmReposErr = tc.err
+			artifacts := NewFakeArtifactManager()
+			c := newTestController(t, client, artifacts, testConfig())
+
+			_, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+			if err == nil {
+				t.Fatalf("a list failure must surface as an error")
+			}
+			if got := controller.IsPermanent(err); got != tc.wantPermanent {
+				t.Fatalf("permanent = %t, want %t (%v)", got, tc.wantPermanent, err)
+			}
+			if len(client.StatusWrites) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+				t.Fatalf("a failed list must not produce writes or release requests")
+			}
+		})
+	}
+}
+
+func TestReconcileReleaseCandidatePredicateSkipsObjects(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*ebsv1.RpmRepo)
+	}{
+		{
+			name: "repository-batch-in-flight",
+			mutate: func(repo *ebsv1.RpmRepo) {
+				repo.Status.Repository.Transition = &ebsv1.RepositoryTransition{
+					Inputs:        []ebsv1.RepositoryInput{{JobName: "job-b", SpecName: "gcc"}},
+					RepositoryUID: "next-1",
+				}
+			},
+		},
+		{
+			name:   "no-own-version",
+			mutate: func(repo *ebsv1.RpmRepo) { repo.Status.Repository.SourceJobNames = nil },
+		},
+		{
+			name: "deleting",
+			mutate: func(repo *ebsv1.RpmRepo) {
+				now := metav1.Now()
+				repo.DeletionTimestamp = &now
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, artifacts, c := releaseCandidateFixture(t, tc.mutate, DefaultPublishPolicy{})
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+			if err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if result != (controller.ReconcileResult{}) {
+				t.Fatalf("a skipped candidate must not requeue, got %+v", result)
+			}
+			if len(client.StatusWrites) != 0 || len(artifacts.SubmitReleaseRequests) != 0 || len(artifacts.GetReleaseBuildNames) != 0 {
+				t.Fatalf("a skipped candidate must not touch status or Artifact Manager")
+			}
+		})
+	}
+}
+
+func TestResumeReleaseStopsOnAbortOrMismatch(t *testing.T) {
+	t.Run("aborted", func(t *testing.T) {
+		client := NewFakeClient()
+		repo := inFlightReleaseRepo(testBuild)
+		client.RpmRepos[key(testProject, testBuild)] = repo
+		client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+		build := newBuild(testBuild)
+		build.Status.Phase = ebsv1.BuildAborted
+		client.Builds[key(testProject, testBuild)] = build
+		artifacts := NewFakeArtifactManager()
+		c := newTestController(t, client, artifacts, testConfig())
+
+		if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		stored := client.RpmRepos[key(testProject, testBuild)]
+		if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition == nil {
+			t.Fatalf("an aborted in-flight release must be collected: %+v", stored.Status.Release)
+		}
+		if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonBuildAborted) {
+			t.Fatalf("PublishSucceed=False/BuildAborted missing: %+v", stored.Status.Conditions)
+		}
+		if len(artifacts.GetReleaseBuildNames) != 0 || len(artifacts.ActivateReleaseNames) != 0 {
+			t.Fatalf("the abort terminal must not call Artifact Manager")
+		}
+	})
+
+	t.Run("label-mismatch", func(t *testing.T) {
+		client := NewFakeClient()
+		repo := inFlightReleaseRepo(testBuild)
+		repo.Labels = map[string]string{ebsv1.BuildTargetArchLabel: "x86_64"}
+		client.RpmRepos[key(testProject, testBuild)] = repo
+		client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+		client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+		artifacts := NewFakeArtifactManager()
+		c := newTestController(t, client, artifacts, testConfig())
+
+		if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+		if len(client.StatusWrites) != 0 {
+			t.Fatalf("a mismatched in-flight release must keep its checkpoint untouched")
+		}
+		if len(artifacts.GetReleaseBuildNames) != 0 {
+			t.Fatalf("a mismatched in-flight release must not query Artifact Manager")
+		}
+	})
+}
+
+func TestHandleReleaseErrorPaths(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantDelay  time.Duration
+		wantErr    bool
+		wantFailed bool
+	}{
+		{
+			name:       "deleting",
+			err:        &artifactError{operation: "get-release", kind: artifactDeleting, code: "ReleaseDeleting", statusCode: 409},
+			wantFailed: true,
+		},
+		{
+			name:      "retry-with-header",
+			err:       &artifactError{operation: "get-release", kind: artifactRetryable, code: "ReleaseStorageUnavailable", statusCode: 503, retryAfter: 4 * time.Second},
+			wantDelay: 4 * time.Second,
+		},
+		{
+			name:    "retry-without-header",
+			err:     &artifactError{operation: "get-release", kind: artifactRetryable, code: "ReleaseInternalError", statusCode: 500},
+			wantErr: true,
+		},
+		{
+			name:       "invalid-request",
+			err:        &artifactError{operation: "get-release", kind: artifactPermanent, code: "InvalidRequest", statusCode: 422},
+			wantFailed: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewFakeClient()
+			repo := inFlightReleaseRepo(testBuild)
+			client.RpmRepos[key(testProject, testBuild)] = repo
+			client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+			client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+			artifacts := NewFakeArtifactManager()
+			artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
+				return ReleaseResponse{}, tc.err
+			}
+			c := newTestController(t, client, artifacts, testConfig())
+
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected an error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error %v", err)
+			}
+			if result.RequeueAfter != tc.wantDelay {
+				t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, tc.wantDelay)
+			}
+			stored := client.RpmRepos[key(testProject, testBuild)]
+			failed := stored.Status.Release != nil && stored.Status.Release.Phase == ebsv1.RpmRepoReleaseFailed
+			if failed != tc.wantFailed {
+				t.Fatalf("release failed = %t, want %t", failed, tc.wantFailed)
+			}
+			if len(artifacts.SubmitReleaseRequests) != 0 {
+				t.Fatalf("a query error must not trigger a replay")
+			}
+		})
+	}
+}
+
+func TestReleaseReplayIsDeferredAfterOneAttempt(t *testing.T) {
+	client := NewFakeClient()
+	repo := inFlightReleaseRepo(testBuild)
+	client.RpmRepos[key(testProject, testBuild)] = repo
+	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	artifacts := NewFakeArtifactManager()
+	response := func(buildName string) ReleaseResponse {
+		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}
+	}
+	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+		return response(buildName), nil
+	}
+	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
+		return response(req.BuildName), nil
+	}
+	c := newTestController(t, client, artifacts, testConfig())
+
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(artifacts.SubmitReleaseRequests) != 1 {
+		t.Fatalf("expected exactly one same-round replay, got %d", len(artifacts.SubmitReleaseRequests))
+	}
+	if result.RequeueAfter <= 0 {
+		t.Fatalf("the second replay must be deferred to a later round, got %+v", result)
+	}
+	if len(client.StatusWrites) != 0 {
+		t.Fatalf("a retryable failure must not write status")
+	}
+}
+
+// stubPolicy returns a scripted decision so the release flow can be driven without the default policy.
+type stubPolicy struct {
+	decision PublishDecision
+	err      error
+	calls    int
+}
+
+func (p *stubPolicy) Decide(context.Context, PublishPolicyInput) (PublishDecision, error) {
+	p.calls++
+	return p.decision, p.err
+}
+
+func releaseCandidateFixture(t *testing.T, mutate func(*ebsv1.RpmRepo), policy PublishPolicy) (*FakeClient, *FakeArtifactManager, *Controller) {
+	t.Helper()
+	client := NewFakeClient()
+	repo := releasableRpmRepo(testBuild)
+	if mutate != nil {
+		mutate(repo)
+	}
+	client.RpmRepos[key(testProject, testBuild)] = repo
+	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
+	artifacts := NewFakeArtifactManager()
+	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+	}
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	c, err := New(&stubSource{}, client, artifacts, policy, clocktesting.NewFakeClock(now), testConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return client, artifacts, c
+}
+
+func TestReleaseSkipsCandidateWithoutBuild(t *testing.T) {
+	client, artifacts, c := releaseCandidateFixture(t, nil, DefaultPublishPolicy{})
+	delete(client.Builds, key(testProject, testBuild))
+
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result != (controller.ReconcileResult{}) {
+		t.Fatalf("a candidate without a Build must be skipped, got %+v", result)
+	}
+	if len(client.StatusWrites) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("a missing Build must not produce a write or a release request")
+	}
+}
+
+func TestReleaseSkipsCandidateWithMismatchedLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ebsv1.RpmRepo)
+	}{
+		{
+			name:   "foreign-target",
+			mutate: func(repo *ebsv1.RpmRepo) { repo.Labels[ebsv1.BuildTargetArchLabel] = "x86_64" },
+		},
+		{
+			name:   "no-labels",
+			mutate: func(repo *ebsv1.RpmRepo) { repo.Labels = nil },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, artifacts, c := releaseCandidateFixture(t, tc.mutate, DefaultPublishPolicy{})
+			result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+			if err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if result != (controller.ReconcileResult{}) {
+				t.Fatalf("a mismatched candidate must be skipped, got %+v", result)
+			}
+			if len(client.StatusWrites) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+				t.Fatalf("a mismatched candidate must not reach Artifact Manager or write status")
+			}
+		})
+	}
+}
+
+func TestReleasePolicyErrorIsRetryable(t *testing.T) {
+	policy := &stubPolicy{err: errors.New("policy unavailable")}
+	client, artifacts, c := releaseCandidateFixture(t, nil, policy)
+
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err == nil {
+		t.Fatalf("a policy error must surface as an error")
+	}
+	if policy.calls != 1 {
+		t.Fatalf("the policy must be consulted once, got %d", policy.calls)
+	}
+	if len(client.StatusWrites) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
+		t.Fatalf("a policy error must not write status or submit a release")
+	}
+}
+
+func TestReleaseCheckpointNormalizesExcludeSpecs(t *testing.T) {
+	policy := &stubPolicy{decision: PublishDecision{Publish: true, ExcludeSpecs: []string{"kernel", "gcc", "gcc", ""}}}
+	client, artifacts, c := releaseCandidateFixture(t, nil, policy)
+
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(artifacts.SubmitReleaseRequests) != 1 {
+		t.Fatalf("expected one release submission, got %d", len(artifacts.SubmitReleaseRequests))
+	}
+	submitted := artifacts.SubmitReleaseRequests[0]
+	if len(submitted.ExcludeSpecs) != 2 || submitted.ExcludeSpecs[0] != "gcc" || submitted.ExcludeSpecs[1] != "kernel" {
+		t.Fatalf("the checkpoint must carry normalized excludeSpecs, got %v", submitted.ExcludeSpecs)
+	}
+	if submitted.SourceRepositoryUID != "repo-1" {
+		t.Fatalf("the checkpoint must freeze the current repository UID, got %q", submitted.SourceRepositoryUID)
+	}
+	stored := client.RpmRepos[key(testProject, testBuild)]
+	if stored.Status.Release == nil || stored.Status.Release.Transition == nil {
+		t.Fatalf("the checkpoint must be persisted: %+v", stored.Status.Release)
+	}
+	if len(stored.Status.Release.Transition.ExcludeSpecs) != 2 {
+		t.Fatalf("the persisted checkpoint must carry normalized excludeSpecs")
+	}
+}
+
+func TestReleaseReplaysRetryableFailureWithFrozenCheckpoint(t *testing.T) {
+	client := NewFakeClient()
+	repo := releasableRpmRepo(testBuild)
+	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{
+		Phase:      ebsv1.RpmRepoReleaseCreating,
+		Transition: &ebsv1.ReleaseTransition{SourceRepositoryUID: "repo-1", ExcludeSpecs: []string{"gcc"}},
+	}
+	client.RpmRepos[key(testProject, testBuild)] = repo
+	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	artifacts := NewFakeArtifactManager()
+	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}, nil
+	}
+	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
+		return ReleaseResponse{BuildName: req.BuildName, State: ReleasePrepared, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
+	}
+	c := newTestController(t, client, artifacts, testConfig())
+
+	if _, err := syncReleaseForTest(c, context.Background(), testProject, testArch); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if len(artifacts.SubmitReleaseRequests) != 1 {
+		t.Fatalf("expected one replay, got %d", len(artifacts.SubmitReleaseRequests))
+	}
+	replayed := artifacts.SubmitReleaseRequests[0]
+	if replayed.SourceRepositoryUID != "repo-1" || len(replayed.ExcludeSpecs) != 1 || replayed.ExcludeSpecs[0] != "gcc" {
+		t.Fatalf("the replay must reuse the frozen checkpoint: %+v", replayed)
+	}
+}
+
+func TestReleaseIdentityConflictCollectsFailure(t *testing.T) {
+	client := NewFakeClient()
+	repo := releasableRpmRepo(testBuild)
+	client.RpmRepos[key(testProject, testBuild)] = repo
+	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
+	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
+	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
+	artifacts := NewFakeArtifactManager()
+	artifacts.SubmitReleaseFunc = func(context.Context, CreateReleaseRequest) (ReleaseResponse, error) {
+		return ReleaseResponse{}, &artifactError{operation: "submit-release", kind: artifactPermanent, code: "ReleaseIdentityConflict", statusCode: 409}
+	}
+	c := newTestController(t, client, artifacts, testConfig())
+
+	result, err := syncReleaseForTest(c, context.Background(), testProject, testArch)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result != (controller.ReconcileResult{}) {
+		t.Fatalf("a collected failure must not requeue, got %+v", result)
+	}
+	stored := client.RpmRepos[key(testProject, testBuild)]
+	if stored.Status.Release == nil || stored.Status.Release.Phase != ebsv1.RpmRepoReleaseFailed || stored.Status.Release.Transition == nil {
+		t.Fatalf("a non-retryable release failure must be collected: %+v", stored.Status.Release)
+	}
+	if !conditionMatches(stored.Status.Conditions, ebsv1.RpmRepoConditionPublishSucceed, metav1.ConditionFalse, ebsv1.RpmRepoReasonReleaseFailed) {
+		t.Fatalf("PublishSucceed=False/ReleaseFailed missing: %+v", stored.Status.Conditions)
+	}
+	if stored.Status.Repository.RepositoryUID != "repo-1" {
+		t.Fatalf("the repository fields must not change on a release failure")
 	}
 }
 
