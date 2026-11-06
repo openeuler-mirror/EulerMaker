@@ -10,10 +10,14 @@ import (
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
+	"controller-manager/pkg/controllers/buildinfo/rpmver"
+	"controller-manager/pkg/controllers/buildinfo/specparse"
 	"controller-manager/pkg/metrics"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -698,4 +702,67 @@ func TestMetricsCountOnlyConfirmedWrites(t *testing.T) {
 	if got := scrapeCounter(t, "build_info_controller_unknown_writes_total") - unknownBefore; got != 1 {
 		t.Fatalf("unknown writes +%d, want +1", got)
 	}
+}
+
+func seedRpmRepoMetadataRound(t *testing.T, c *Controller, client *fakeClient) string {
+	t.Helper()
+	bi := testBuildInfoObj(ebsv1.BuildInfoProcessing)
+	client.SeedBuildGraph(bi, map[string]ebsv1.BuildGraphNode{"a": {Version: "1.0-1"}})
+	bi.Status.SpecResults = testSpecResults(map[string]ebsv1.SpecResult{
+		"a": {Status: ebsv1.SpecRunning, DispatchCount: 1},
+	})
+	seeded := seedProcessingRound(
+		client,
+		c,
+		bi,
+		map[string]specparse.SpecDepend{"a": dependEntry("a")},
+		&rpmver.RpmMetaSources{},
+	)
+	seedJobAt(client, seeded, "a", 1, ebsv1.JobRunning, testStart)
+	return testNS + "/" + testBuild
+}
+
+func TestRpmRepoQueryFailureClassification(t *testing.T) {
+	t.Run("temporary network failure", func(t *testing.T) {
+		c, client, _, _ := newTestController(t)
+		key := seedRpmRepoMetadataRound(t, c, client)
+		for i := 0; i < c.config.RpmRepoReadyRetryLimit+2; i++ {
+			client.InjectRead("rpmrepos", 1, errors.New("network unavailable"))
+			if _, err := c.reconcile(context.Background(), key); err == nil {
+				t.Fatal("temporary query failure must retry")
+			}
+			requireNoCondition(t, getBuildInfo(t, client).Status.Conditions, ConditionRpmRepoUnavailable)
+			requireCondition(
+				t,
+				getBuildInfo(t, client).Status.Conditions,
+				ConditionRpmRepoRetrying,
+				ReasonRpmRepoQueryFailed,
+			)
+		}
+		if got := c.counters.Count(counterRpmRepo, key); got != 0 {
+			t.Fatalf("parse failure count = %d, want 0 after query failures", got)
+		}
+	})
+	t.Run("forbidden query", func(t *testing.T) {
+		c, client, _, _ := newTestController(t)
+		key := seedRpmRepoMetadataRound(t, c, client)
+		client.InjectRead(
+			"rpmrepos",
+			1,
+			apierrors.NewForbidden(
+				schema.GroupResource{Resource: "rpmrepos"},
+				testBuild,
+				errors.New("permission denied"),
+			),
+		)
+		if _, err := c.reconcile(context.Background(), key); err != nil {
+			t.Fatal(err)
+		}
+		requireCondition(
+			t,
+			getBuildInfo(t, client).Status.Conditions,
+			ConditionRpmRepoUnavailable,
+			ReasonRpmRepoQueryRejected,
+		)
+	})
 }
