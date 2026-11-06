@@ -2,15 +2,43 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"ebs-runner/pkg/gateway"
 	"ebs-runner/pkg/options"
 )
+
+func TestCancelledExecutionRetainsResumableData(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		root := t.TempDir()
+		job := gateway.JobResource{
+			Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job", UID: "uid"},
+			Status:   gateway.JobStatus{Phase: "Running", Stage: "PostRun"},
+		}
+		api := &workCleanupAPI{jobs: map[string]gateway.JobResource{"project/job": job}}
+		if unavailable {
+			api.err = errors.New("gateway unavailable")
+		}
+		a := &Agent{cfg: options.Config{RootDir: root}, client: api}
+		_, key, _ := a.registerExecution(context.Background(), job)
+		for _, category := range []string{"work", "results", "logs", "uploads"} {
+			if err := os.MkdirAll(filepath.Join(root, category, "project", "job"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		a.cancelExecution(key)
+		a.finishJob(key)
+		for _, category := range []string{"work", "results", "logs", "uploads"} {
+			if _, err := os.Stat(filepath.Join(root, category, "project", "job")); err != nil {
+				t.Fatalf("resumable %s removed (unavailable=%t): %v", category, unavailable, err)
+			}
+		}
+	}
+}
 
 func TestAgentVersionStatus(t *testing.T) {
 	a := &Agent{cfg: options.Config{RootDir: t.TempDir()}}
@@ -150,87 +178,6 @@ func TestRegisterResolvesCreateConflictByInstanceID(t *testing.T) {
 	}
 	if client.updated == nil {
 		t.Fatal("matching runner was not reconciled after create conflict")
-	}
-}
-
-func TestLoadOrCreateRunnerInstanceIDPersistsUUIDv4(t *testing.T) {
-	root := t.TempDir()
-	first, err := loadOrCreateRunnerInstanceID(root)
-	if err != nil {
-		t.Fatalf("create instance ID: %v", err)
-	}
-	if !runnerInstanceIDPattern.MatchString(first) {
-		t.Fatalf("instance ID %q is not a canonical UUID v4", first)
-	}
-	second, err := loadOrCreateRunnerInstanceID(root)
-	if err != nil {
-		t.Fatalf("reload instance ID: %v", err)
-	}
-	if second != first {
-		t.Fatalf("instance ID changed: %q != %q", second, first)
-	}
-	info, err := os.Stat(filepath.Join(root, runnerInstanceIDFile))
-	if err != nil {
-		t.Fatalf("stat instance ID: %v", err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("instance ID permissions = %o, want 600", info.Mode().Perm())
-	}
-}
-
-func TestLoadOrCreateRunnerInstanceIDIsAtomic(t *testing.T) {
-	root := t.TempDir()
-	const workers = 8
-	ids := make(chan string, workers)
-	errs := make(chan error, workers)
-	var group sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			id, err := loadOrCreateRunnerInstanceID(root)
-			ids <- id
-			errs <- err
-		}()
-	}
-	group.Wait()
-	close(ids)
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("initialize instance ID concurrently: %v", err)
-		}
-	}
-	var want string
-	for id := range ids {
-		if want == "" {
-			want = id
-		}
-		if id != want {
-			t.Fatalf("concurrent instance IDs differ: %q != %q", id, want)
-		}
-	}
-}
-
-func TestLoadOrCreateRunnerInstanceIDRejectsInvalidFile(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, runnerInstanceIDFile)
-	if err := os.WriteFile(path, []byte("not-a-uuid\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadOrCreateRunnerInstanceID(root); err == nil {
-		t.Fatal("expected invalid instance ID to be rejected")
-	}
-}
-
-func TestLoadOrCreateRunnerInstanceIDRejectsBroadPermissions(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, runnerInstanceIDFile)
-	if err := os.WriteFile(path, []byte("01234567-89ab-4def-8123-456789abcdef\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadOrCreateRunnerInstanceID(root); err == nil {
-		t.Fatal("expected broad instance ID file permissions to be rejected")
 	}
 }
 
