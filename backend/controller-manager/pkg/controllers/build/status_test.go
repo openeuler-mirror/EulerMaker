@@ -819,9 +819,11 @@ func TestApplySkipsWriteWhenStatusAlreadyPersisted(t *testing.T) {
 	}
 	target := r.current.DeepCopy()
 	intent := writeIntent{uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage}
-	result, err := r.apply(target, intent, controller.ReconcileResult{}, nil)
-	if err != nil || result != (controller.ReconcileResult{}) {
-		t.Fatalf("result=%+v err=%v", result, err)
+	for _, outcomeErr := range []error{nil, controller.NewPermanentError(errors.New("build failed"))} {
+		result, err := r.apply(target, intent, outcomeErr)
+		if !errors.Is(err, outcomeErr) || result != (controller.ReconcileResult{}) {
+			t.Fatalf("result=%+v err=%v, want outcome error %v", result, err, outcomeErr)
+		}
 	}
 	if api.CallCount("GetBuild") != 0 || api.CallCount("UpdateBuildStatus") != 0 {
 		t.Fatal("an unchanged status must not trigger a read or a write")

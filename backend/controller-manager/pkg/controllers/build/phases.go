@@ -46,7 +46,7 @@ func (r *reconciler) pending() (controller.ReconcileResult, error) {
 	target := r.current.DeepCopy()
 	target.Status.Phase = ebsv1.BuildPrepared
 	intent := writeIntent{uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage}
-	return r.apply(target, intent, controller.ReconcileResult{}, nil)
+	return r.apply(target, intent, nil)
 }
 
 // recordBaseBuildRef resolves the last published Build of the same target. A missing history is recorded as an
@@ -69,7 +69,7 @@ func (r *reconciler) recordBaseBuildRef() (controller.ReconcileResult, error) {
 		setBaseBuildRef: true,
 		baseBuildRef:    reference,
 	}
-	return r.apply(target, intent, controller.ReconcileResult{}, nil)
+	return r.apply(target, intent, nil)
 }
 
 // prepared ensures the BuildInfo and enters the build stage.
@@ -85,7 +85,7 @@ func (r *reconciler) prepared() (controller.ReconcileResult, error) {
 		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
 		setStartTime: true, startTime: r.now,
 	}
-	return r.apply(target, intent, controller.ReconcileResult{}, nil)
+	return r.apply(target, intent, nil)
 }
 
 // processingBuild waits for the BuildInfo of this round and aggregates its spec results.
@@ -121,7 +121,7 @@ func (r *reconciler) failBuildPayload() (controller.ReconcileResult, error) {
 		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
 		setEndTime: true, endTime: r.now,
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
-	}, controller.ReconcileResult{}, nil)
+	}, nil)
 }
 
 // finishSingleBuild ends a single build directly: it never creates, reads or publishes a repository.
@@ -142,10 +142,10 @@ func (r *reconciler) finishSingleBuild(succeeded bool, failing string) (controll
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
 	}
 	if succeeded {
-		return r.apply(target, write, controller.ReconcileResult{}, nil)
+		return r.apply(target, write, nil)
 	}
 	log.Printf("controller=%s key=%q uid=%q phase=%q stage=%q reason=%s spec=%q", Name, r.key, target.UID, target.Status.Phase, target.Status.Stage, ReasonBuildFailed, failing)
-	return r.apply(target, write, controller.ReconcileResult{}, controller.NewPermanentError(
+	return r.apply(target, write, controller.NewPermanentError(
 		fmt.Errorf("Build %s/%s failed for spec %q", target.Namespace, target.Name, failing)))
 }
 
@@ -161,7 +161,7 @@ func (r *reconciler) advanceNonSingleBuild(succeeded bool, failing string) (cont
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
 	}
 	if r.current.Spec.Publish == nil || *r.current.Spec.Publish {
-		return r.apply(target, write, controller.ReconcileResult{}, nil)
+		return r.apply(target, write, nil)
 	}
 	target.Status.Phase = ebsv1.BuildSkipped
 	target.Status.EndTime = r.now
@@ -169,10 +169,10 @@ func (r *reconciler) advanceNonSingleBuild(succeeded bool, failing string) (cont
 	write.setEndTime = true
 	write.endTime = r.now
 	if succeeded {
-		return r.apply(target, write, controller.ReconcileResult{}, nil)
+		return r.apply(target, write, nil)
 	}
 	log.Printf("controller=%s key=%q uid=%q phase=%q stage=%q reason=%s spec=%q", Name, r.key, target.UID, target.Status.Phase, target.Status.Stage, ReasonBuildFailed, failing)
-	return r.apply(target, write, controller.ReconcileResult{}, controller.NewPermanentError(
+	return r.apply(target, write, controller.NewPermanentError(
 		fmt.Errorf("Build %s/%s failed for spec %q", target.Namespace, target.Name, failing)))
 }
 
@@ -203,12 +203,12 @@ func (r *reconciler) processingPublish() (controller.ReconcileResult, error) {
 	if !succeeded {
 		target.Status.Phase = ebsv1.BuildFailed
 		write.phase = target.Status.Phase
-		return r.apply(target, write, controller.ReconcileResult{}, controller.NewPermanentError(
+		return r.apply(target, write, controller.NewPermanentError(
 			fmt.Errorf("release of Build %s/%s failed", target.Namespace, target.Name)))
 	}
 	target.Status.Phase = ebsv1.BuildSuccess
 	write.phase = target.Status.Phase
-	return r.apply(target, write, controller.ReconcileResult{}, nil)
+	return r.apply(target, write, nil)
 }
 
 // failChildResourceMissing records a direct dependency that disappeared while the Build was processing.
@@ -225,7 +225,7 @@ func (r *reconciler) failChildResourceMissing(stage ebsv1.BuildStage, conditionT
 		setEndTime: true, endTime: r.now,
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
 	}
-	return r.apply(target, write, controller.ReconcileResult{}, controller.NewPermanentError(
+	return r.apply(target, write, controller.NewPermanentError(
 		fmt.Errorf("%s %s/%s is missing while Build is in %s/%s", kind, r.project, r.current.Name, r.current.Status.Phase, stage)))
 }
 
