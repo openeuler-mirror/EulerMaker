@@ -236,6 +236,95 @@ func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
 	}
 }
 
+type delayedLogRuntime struct {
+	fakeContainerRuntime
+	cancelled, release chan struct{}
+}
+
+type failedStartRuntime struct{ fakeContainerRuntime }
+
+func (*failedStartRuntime) Start(context.Context, string) error { return errors.New("start failed") }
+
+func TestCTExecutorStopsLogUploadOnStartFailure(t *testing.T) {
+	root := t.TempDir()
+	sink := &recordingLogSink{}
+	e := &CTExecutor{
+		WorkDir: filepath.Join(root, "work"), ResultRoot: filepath.Join(root, "results"),
+		Runtime: &failedStartRuntime{}, LogFactory: staticLogFactory{sink: sink},
+	}
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job"},
+		Spec:     gateway.JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "image"})},
+	}
+	if _, err := e.Execute(context.Background(), job); err == nil || !sink.aborted {
+		t.Fatalf("error=%v, log upload stopped=%t", err, sink.aborted)
+	}
+}
+
+func (r *delayedLogRuntime) Logs(ctx context.Context, _ string, output io.Writer) error {
+	<-ctx.Done()
+	close(r.cancelled)
+	<-r.release
+	_, err := io.WriteString(output, "last log\n")
+	return err
+}
+
+type delayedAbortLogSink struct {
+	recordingLogSink
+	stopping, release chan struct{}
+}
+
+func (s *delayedAbortLogSink) Abort() {
+	close(s.stopping)
+	<-s.release
+}
+
+func TestCTExecutorWaitsForLogWorkers(t *testing.T) {
+	root := t.TempDir()
+	runtime := &delayedLogRuntime{cancelled: make(chan struct{}), release: make(chan struct{})}
+	sink := &delayedAbortLogSink{stopping: make(chan struct{}), release: make(chan struct{})}
+	e := &CTExecutor{
+		WorkDir: filepath.Join(root, "work"), ResultRoot: filepath.Join(root, "results"),
+		Runtime: runtime, LogFactory: staticLogFactory{sink: sink}, LogDrainTimeout: time.Millisecond,
+	}
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job"},
+		Spec:     gateway.JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "image"})},
+	}
+	done := make(chan error, 1)
+	go func() { _, err := e.Execute(context.Background(), job); done <- err }()
+	select {
+	case <-runtime.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("log drain did not time out")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned while log reader was still writing: %v", err)
+	default:
+	}
+	close(runtime.release)
+	select {
+	case <-sink.stopping:
+	case <-time.After(time.Second):
+		t.Fatal("log upload worker was not stopped")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned before log upload worker exited: %v", err)
+	default:
+	}
+	close(sink.release)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "drain container logs") {
+			t.Fatalf("expected drain timeout, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("executor did not return after log workers exited")
+	}
+}
+
 func TestCTExecutorDoesNotCreateContainerAfterContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	container := &fakeContainerRuntime{waitBlock: make(chan struct{})}
@@ -320,6 +409,7 @@ func (f staticLogFactory) Open(gateway.JobResource) (artifact.JobLogSink, error)
 type recordingLogSink struct {
 	data      []byte
 	completed bool
+	aborted   bool
 }
 
 func (s *recordingLogSink) Write(p []byte) (int, error) {
@@ -332,7 +422,7 @@ func (s *recordingLogSink) Complete(context.Context) (artifact.CompletedLog, err
 	return artifact.CompletedLog{State: "Completed"}, nil
 }
 
-func (s *recordingLogSink) Abort() {}
+func (s *recordingLogSink) Abort() { s.aborted = true }
 
 func (f *fakeContainerRuntime) ImageExists(context.Context, string) (bool, error) {
 	return !f.pulled, nil

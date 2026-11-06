@@ -611,9 +611,11 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 2. 只在收到 200/201 且响应 Artifact 为 `state=Completed`、project、jobName、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。
 3. 将完整 Artifact 响应作为上传回执原子写入 `${rootDir}/uploads/{project}/{jobName}/artifacts/{relativePath}.json`；实际文件名使用安全编码或路径摘要，不能直接信任 relativePath 拼接。
 4. JobUploadManifest 从持久化回执生成。Manifest 完成且最终 Job Status 成功写回后即视为上传成功，原子写入 `notBefore=now` 的成功清理标记并立即执行清理；清理失败时保留标记供后台重试，不设置成功保留期。
-5. 后台清理器按 `notBefore` 处理有效清理标记；清理标记保存 Project 和 Job 名，并按该目录清理本地内容。Runner 本地目录所在文件系统使用率超过 85% 时，可提前清理尚未到期的失败标记，从最早写入的标记开始，直至使用率不超过 85% 或候选耗尽；不清理无标记的运行中 Job。
+5. 后台清理器按 `notBefore` 处理有效清理标记；清理标记保存 Project 和 Job 名，并按该目录清理本地内容。Runner 本地目录所在文件系统使用率超过 85% 时，可提前清理尚未到期的失败标记，按标记的 `createdAt` 从早到晚处理，直至使用率不超过 85% 或候选耗尽；不清理无标记的运行中 Job。
 
 写入清理标记时若遇到 `ENOSPC` 或 `EDQUOT`（包括创建标记目录失败），从已有失败标记中按创建时间由早到晚逐个清理，并在每次清理后重试写入；成功即停止。旧候选耗尽仍无法写入时，当前 Job 已确认终态，可作为最后兜底删除其本地结果、日志、上传回执和工作目录，不再写清理标记。其他写入错误不触发提前清理，也不删除没有有效失败标记的其他 Job 目录。
+
+标记扫描、到期清理、磁盘压力清理和空间不足回收均隔离单项错误：损坏或无法读取的标记跳过，某个 Job 删除失败保留其标记并继续处理其他候选，最后汇总告警。文件系统使用率读取失败时停止本轮压力回收；剩余数据由后续扫描重试。
 
 普通产物的幂等键固定为 `artifact-{sha256(normalizedRelativePath)}`；服务端以 Project 和 Job 名限定键的作用域。同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执保存 Artifact Manager 返回的 Artifact ID、文件类别、relativePath、size、SHA-256、状态、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。归属由上传请求和本地回执的 Project/Job 目录确定，Artifact 响应不携带 Project、JobName 或 RunnerName。
 
@@ -631,7 +633,16 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 实时日志的 `combined.log`、`chunks.jsonl` 和 `upload.json` 同时承担追加恢复和最终摘要校验，不能在单个 chunk 确认后删除。日志完成接口返回匹配的 Completed Artifact 后先持久化日志完成回执；随后等待 Manifest Completed 和最终 Job Status 成功写回，成功后与普通产物一起立即清理。日志封账或上传最终失败时使用失败保留期，不在错误路径立即删除。
 
-`${rootDir}/work/{project}/{jobName}` 中的 payload 和临时执行文件在容器退出、`job-result.json` 已读取且 PostRun 状态写入成功后立即清理；重启恢复 PostRun 时也清理，不受 Artifact 保留期影响。Job 被中止后，Runner 等执行器确认容器停止并返回，再清理工作目录。完成容器恢复后的启动扫描和运行期间定期扫描，仅在无本地执行、且 apiserver 确认 Job 已终态或不存在时清理遗留工作目录；查询失败或 Job 非终态时保留。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobName}`、`${rootDir}/logs/{project}/{jobName}` 和 `${rootDir}/uploads/{project}/{jobName}`。上传失败并成功写回终态后默认保留 24 小时；到期或磁盘压力清理时统一删除上述目录及失败清理标记，不按单文件提前删除。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
+`${rootDir}/work/{project}/{jobName}` 中的 payload 和临时执行文件在容器退出、`job-result.json` 已读取且 PostRun 状态写入成功后立即清理；重启恢复 PostRun 时也清理，不受 Artifact 保留期影响。上传成功后立即统一删除 `${rootDir}/results/{project}/{jobName}`、`${rootDir}/logs/{project}/{jobName}` 和 `${rootDir}/uploads/{project}/{jobName}`。上传失败并成功写回终态后默认保留 24 小时；到期或磁盘压力清理时统一删除上述目录及失败清理标记，不按单文件提前删除。
+
+中止与遗留目录清理遵循以下规则：
+
+- 取消执行后，等待容器或进程停止、日志采集与上传 worker 退出、PostRun 产物上传返回，才移除本地活动执行记录。日志排空超时后取消采集并等待退出；执行器所有退出路径都停止日志上传 worker、关闭 spool 文件。
+- 取消路径退出后使用独立超时 GET 确认 Job：`Aborted` 或 404 时立即删除当前 Job 的 `work`、`results`、`logs`、`uploads` 和清理标记；不需要先写新标记，磁盘满也可执行。仅 Runner 停机或 context 取消不能证明 Job 已中止，非终态或查询失败时保留可恢复数据。
+- 完成容器恢复后启动一次扫描，随后每 10 分钟扫描上述四类目录；按 Project + Job name 去重，即使 work 已不存在，也能发现其他残留。
+- 查询状态前在互斥锁内确认无本地活动执行，并登记该 Project + Job name 正在清理；同名执行注册和重复清理暂不进入。GET、标记恢复和目录删除均在锁外进行，所有退出路径释放清理占用，不阻塞其他 Job 的注册或取消。
+- `Aborted` 或 404 按上述规则清理；`Succeeded` 立即清理全部本地目录，即使没有清理标记。`Failed` 先清理 work，已有标记沿用原期限；无标记时按 `endTime` 恢复 `createdAt`，按 `endTime + artifact-failed-retention` 恢复 `notBefore`，到期后清理。重复扫描或重启不延长已有期限。缺少有效 `endTime` 或标记损坏时保留其余数据并告警，不猜测保留期。
+- 清理失败只记录告警，保留剩余目录供下一轮扫描重试，不改变 Job 终态，也不删除 Artifact Manager 中已接收的数据。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
 
 ### 8.6 Job 主动中止
 
@@ -661,7 +672,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 #### 测试
 
-覆盖 Pending 未执行即中止、Running/启动中/PostRun 中止、取消早于启动确认、重复事件、旧 Running 事件、Watch 重连、Runner 重启遗留容器、进程组清理、Stop/Kill 超时、日志排空超时、上传已完成，以及中止与最终状态写入并发。
+覆盖 Pending 未执行即中止、Running/启动中/PostRun 中止、取消早于启动确认、重复事件、旧 Running 事件、Watch 重连、Runner 重启遗留容器、进程组清理、Stop/Kill 超时、日志排空超时、上传已完成，以及中止与最终状态写入并发。验证中止后四类本地目录均清理、执行或上传未退出时扫描不删除、仅剩上传目录仍可发现、查询失败或停机取消保留数据，以及普通上传失败仍遵守保留期。验证清理期间同名 Job 无法注册、其他 Job 可正常注册和取消，清理成功或失败均释放占用。
 
 ## 九、故障处理
 
@@ -683,6 +694,8 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 | 上传成功但立即清理失败 | 记录告警并异步重试，不改变 Job/Artifact 成功状态 |
 | 失败清理标记尚未到期 | 默认保留 results、日志和上传回执；磁盘使用率超过 85% 时按标记创建时间从早到晚提前回收 |
 | 清理标记已到期但本地删除失败 | 保留清理标记并异步重试删除，不重复上传或改变 Job/Artifact 状态 |
+| 终态已写回但清理标记缺失 | 按 8.5 的终态恢复规则清理或补建标记，不以扫描时间延长失败保留期 |
+| 单个标记异常或目录删除失败 | 汇总告警，继续扫描和处理其他 Job |
 | 状态更新冲突 | 使用 apiserver 返回的 resourceVersion 重新读取并重试 |
 
 状态更新应保持幂等：重复上报同一阶段、重复清理、重复标记失败不应破坏对象状态。
@@ -751,7 +764,7 @@ secrets:
 - `runner-instance-id` 必须与 `--root-dir` 一起持久化且只允许 Runner 运行用户读写；UUID 可出现在对象和诊断日志中，但它不是秘密或认证因子，任何授权判断仍以 token 为准。
 - CT 类型 Runner 如需挂载 socket，应将运行环境视为高权限执行环境，并通过隔离网络、只读挂载、临时工作目录清理等方式降低风险。
 - 日志 spool 和上传 checkpoint 可能包含敏感构建输出，只允许 Runner 运行用户访问；不得把日志正文、Bearer Token 或 MachineAccount secret 写入结构化运行日志。
-- 普通产物回执不得包含 Token 或文件内容。Manifest 和最终 Job Status 成功后立即删除 results、日志 spool 和上传回执；失败、超时、结果未知或封账失败现场按 24 小时失败保留期保存，不能在错误路径立即删除。
+- 普通产物回执不得包含 Token 或文件内容。Manifest 和最终 Job Status 成功后立即删除 results、日志 spool 和上传回执；上传失败且终态写入成功的现场按 24 小时失败保留期保存，结果未知且可恢复时保留。已确认中止或删除的 Job 按 8.5 的停止确认规则清理，不因取消异常单独启动保留期。
 - 生产环境中 Runner 到 Artifact Manager 必须使用 TLS；使用 HTTP 的 Compose 地址只适用于受控测试网络。
 
 ## 十二、测试设计
@@ -774,7 +787,7 @@ secrets:
 | 普通产物扫描 | 空目录、嵌套目录、点文件、稳定排序、RPM MIME、普通 MIME、路径冲突、非法 UTF-8、不可读文件、符号链接和特殊文件拒绝、文件数及大小限制 |
 | 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
 | Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、uploadDigest 确认、签名前后摘要不同、签名等待与失败、完成结果未知查询和内容冲突处理 |
-| 本地清理 | PostRun 后清理工作目录、成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、Runner 重启恢复、24 小时到期统一删除、磁盘使用率超过 85% 时最旧失败标记优先回收、标记写入空间不足时清理旧候选并重试且必要时兜底回收当前终态 Job、结果未知未终态不计时 |
+| 本地清理 | PostRun 后清理工作目录、成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、无标记终态恢复及期限不延长、缺少 endTime 保留告警、24 小时到期统一删除、磁盘使用率超过 85% 时最旧失败标记优先回收、空间不足时清理旧候选并重试且必要时兜底回收当前终态 Job、各回收路径隔离损坏标记和单项删除错误、结果未知未终态不计时 |
 | Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Succeeded；上传失败时 phase 为 Failed 且 message 记录原因 |
 | 并发安全 | Token 刷新、心跳、watch、多个 Job 日志上传并发运行时通过 race detector |
 

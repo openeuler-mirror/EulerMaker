@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -272,6 +273,128 @@ func TestArtifactCleanupSuccessIsImmediateAndFailureIsRetained(t *testing.T) {
 		t.Fatalf("due sweep: %v", err)
 	}
 	assertLocalArtifactState(t, root, job, false)
+}
+
+func TestArtifactCleanupStoppedJobNeedsNoMarkerWrite(t *testing.T) {
+	root := t.TempDir()
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job", UID: "uid"}}
+	createLocalArtifactState(t, root, job)
+	manager := &CleanupManager{
+		RootDir:     root,
+		writeMarker: func(string, []byte) error { t.Fatal("stopped cleanup must not write a marker"); return nil },
+	}
+	for i := 0; i < 2; i++ {
+		if err := manager.Remove("project", "job"); err != nil {
+			t.Fatal(err)
+		}
+		assertLocalArtifactState(t, root, job, false)
+	}
+}
+
+func TestTerminalCleanupRecoveryKeepsOriginalDeadline(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	end := now.Add(-time.Hour)
+	m := &CleanupManager{RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now }}
+	job := gateway.JobResource{
+		Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job"},
+		Status:   gateway.JobStatus{Phase: "Failed", EndTime: &end},
+	}
+	createLocalArtifactState(t, root, job)
+	if err := m.RecoverTerminal(job); err != nil {
+		t.Fatal(err)
+	}
+	first, err := m.readMarker(m.markerPath("project", "job"))
+	if err != nil || !first.CreatedAt.Equal(end) || !first.NotBefore.Equal(end.Add(24*time.Hour)) {
+		t.Fatalf("recovered marker=%+v, err=%v", first, err)
+	}
+	now = now.Add(time.Hour)
+	// A fresh manager simulates restart; even a new retention setting must not rewrite an existing marker.
+	m = &CleanupManager{RootDir: root, FailedRetention: 48 * time.Hour, Now: func() time.Time { return now }}
+	if err := m.RecoverTerminal(job); err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.readMarker(m.markerPath("project", "job"))
+	if err != nil || !reflect.DeepEqual(first, second) {
+		t.Fatalf("existing cleanup deadline changed: %+v, %v", second, err)
+	}
+	assertLocalArtifactState(t, root, job, true)
+	now = first.NotBefore
+	if err := m.RecoverTerminal(job); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalArtifactState(t, root, job, false)
+
+	createLocalArtifactState(t, root, job)
+	job.Status.EndTime = nil
+	if err := m.RecoverTerminal(job); err == nil {
+		t.Fatal("missing endTime must be reported without inventing a cleanup deadline")
+	}
+	assertLocalArtifactState(t, root, job, true)
+	job.Status.Phase = "Succeeded"
+	if err := m.RecoverTerminal(job); err != nil {
+		t.Fatal(err)
+	}
+	assertLocalArtifactState(t, root, job, false)
+}
+
+func TestCleanupContinuesAfterIndividualErrors(t *testing.T) {
+	for _, mode := range []string{"expired", "pressure", "marker-reclaim"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			now := time.Now().UTC()
+			m := &CleanupManager{
+				RootDir: root, FailedRetention: 24 * time.Hour, Now: func() time.Time { return now },
+				DiskUsage: func(string) (float64, error) { return 0.9, nil },
+			}
+			blocked := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "blocked", Name: "job"}}
+			good := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "good", Name: "job"}}
+			if err := m.MarkFailure(blocked); err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Minute)
+			createLocalArtifactState(t, root, good)
+			if err := m.MarkFailure(good); err != nil {
+				t.Fatal(err)
+			}
+			// This metadata sorts before the valid records, and the first valid candidate cannot be removed.
+			if err := os.WriteFile(filepath.Join(root, "cleanup", "aaa.json"), []byte("broken"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "results", "blocked"), []byte("not a directory"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var cleanupErr error
+			switch mode {
+			case "expired":
+				now = now.Add(24 * time.Hour)
+				cleanupErr = m.Sweep()
+			case "pressure":
+				cleanupErr = m.Sweep()
+			case "marker-reclaim":
+				current := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "current", Name: "job"}}
+				createLocalArtifactState(t, root, current)
+				m.writeMarker = func(path string, data []byte) error {
+					if _, err := os.Stat(filepath.Join(root, "results", "good", "job")); err == nil {
+						return syscall.ENOSPC
+					}
+					return writeAtomicFile(path, data)
+				}
+				cleanupErr = m.MarkFailure(current)
+				if _, err := m.readMarker(m.markerPath("current", "job")); err != nil {
+					t.Fatalf("current marker was not persisted after reclaim: %v", err)
+				}
+				assertLocalArtifactState(t, root, current, true)
+			}
+			if cleanupErr == nil || !strings.Contains(cleanupErr.Error(), "aaa.json") || !strings.Contains(cleanupErr.Error(), "blocked") {
+				t.Fatalf("individual errors were not aggregated: %v", cleanupErr)
+			}
+			assertLocalArtifactState(t, root, good, false)
+			if _, err := os.Stat(m.markerPath("blocked", "job")); err != nil {
+				t.Fatalf("failed cleanup lost its retry marker: %v", err)
+			}
+		})
+	}
 }
 
 func TestArtifactCleanupDiskPressureRemovesOldestFailedJobsFirst(t *testing.T) {
