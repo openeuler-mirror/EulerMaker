@@ -25,9 +25,9 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	repo.Status.Repository = &ebsv1.RpmRepoRepositoryStatus{Transition: &ebsv1.RepositoryTransition{RepositoryUID: "pending"}}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
-	stopCalls := 0
-	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
-		stopCalls++
+	drainCalls := 0
+	artifacts.DeleteBuildReleasesFunc = func(context.Context, string, string) (bool, error) {
+		drainCalls++
 		return drained, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -49,6 +49,21 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	}
 	// A restarted controller finishes deletion from the persisted acknowledgment.
 	c = newTestController(t, client, artifacts, testConfig())
+	artifacts.DeleteBuildReleasesFunc = func(context.Context, string, string) (bool, error) { return false, nil }
+	run()
+	if len(client.Updates) != 0 || len(artifacts.DeleteBuildRequests) != 0 {
+		t.Fatal("release cleanup must finish before process repository cleanup")
+	}
+	artifacts.DeleteBuildReleasesFunc = func(context.Context, string, string) (bool, error) {
+		return false, fmt.Errorf("release cleanup unavailable")
+	}
+	if _, err := c.sync(context.Background(), key(testProject, testBuild)); err == nil {
+		t.Fatal("release cleanup error was lost")
+	}
+	if len(client.Updates) != 0 || len(artifacts.DeleteBuildRequests) != 0 {
+		t.Fatal("release cleanup error must retain finalizer and process repositories")
+	}
+	artifacts.DeleteBuildReleasesFunc = func(context.Context, string, string) (bool, error) { return true, nil }
 	artifacts.DeleteBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
 		return false, nil
 	}
@@ -61,8 +76,8 @@ func TestDirectRpmRepoDeletionDrainsBeforeFinalizing(t *testing.T) {
 	}
 	run()
 	current := client.RpmRepos[key(testProject, testBuild)]
-	if stopCalls != 2 {
-		t.Fatalf("persisted acknowledgment must skip repeated stop requests: calls=%d", stopCalls)
+	if drainCalls != 2 {
+		t.Fatalf("initial release cleanup calls: calls=%d", drainCalls)
 	}
 	if !slices.Equal(current.Finalizers, []string{"other/controller"}) || !reflect.DeepEqual(current.Status, ack.Status) {
 		t.Fatalf("cleanup changed business status or another finalizer: %+v", current)
@@ -117,7 +132,10 @@ func TestCleanupDrainsCreatingRelease(t *testing.T) {
 		t.Fatalf("prepared release not drained: %+v", current.Status)
 	}
 	if len(artifacts.DeleteBuildRequests) != 0 {
-		t.Fatal("parent deletion must only drain work, not physically remove repositories")
+		t.Fatal("parent deletion must preserve process repositories for Job cleanup")
+	}
+	if !reflect.DeepEqual(artifacts.DeleteReleaseRequests, [][2]string{{testProject, testBuild}}) {
+		t.Fatalf("CleanupReady must follow release deletion: %v", artifacts.DeleteReleaseRequests)
 	}
 }
 
@@ -183,7 +201,7 @@ func TestDeletingBuildWaitsForSubmissionFence(t *testing.T) {
 	repo.Status.Release = &ebsv1.RpmRepoReleaseStatus{Phase: ebsv1.RpmRepoReleaseFailed}
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
-	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
+	artifacts.DeleteBuildReleasesFunc = func(context.Context, string, string) (bool, error) {
 		return drained, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -205,7 +223,7 @@ func TestDeletingBuildWaitsForSubmissionFence(t *testing.T) {
 	}
 }
 
-func TestDeletingBuildRetainsCheckpointUntilStopConfirmed(t *testing.T) {
+func TestDeletingBuildRetainsCheckpointUntilReleaseDeletionConfirmed(t *testing.T) {
 	client, artifacts := NewFakeClient(), NewFakeArtifactManager()
 	build := newBuild(testBuild)
 	now := metav1.Now()
@@ -215,18 +233,18 @@ func TestDeletingBuildRetainsCheckpointUntilStopConfirmed(t *testing.T) {
 	repo.Status.Release.Phase = ebsv1.RpmRepoReleaseFailed
 	client.RpmRepos[key(testProject, testBuild)] = repo
 	drained := false
-	stopErr := fmt.Errorf("request outcome unknown")
-	artifacts.StopBuildRepositoriesFunc = func(context.Context, string, string) (bool, error) {
-		return drained, stopErr
+	cleanupErr := fmt.Errorf("request outcome unknown")
+	artifacts.DeleteBuildReleasesFunc = func(context.Context, string, string) (bool, error) {
+		return drained, cleanupErr
 	}
 	c := newTestController(t, client, artifacts, testConfig())
-	for _, failure := range []error{stopErr, &artifactError{kind: artifactNotFound}} {
-		stopErr = failure
+	for _, failure := range []error{cleanupErr, &artifactError{kind: artifactNotFound}} {
+		cleanupErr = failure
 		if _, err := c.sync(context.Background(), key(testProject, testBuild)); err == nil {
 			t.Fatal("unknown release must block cleanup")
 		}
 	}
-	stopErr = nil
+	cleanupErr = nil
 	if result, err := c.sync(context.Background(), key(testProject, testBuild)); err != nil || result.RequeueAfter != 5*time.Second {
 		t.Fatalf("pending stop: %+v, %v", result, err)
 	}
@@ -305,7 +323,7 @@ func TestCleanupAcknowledgmentStopsFutureProduction(t *testing.T) {
 	if len(client.StatusWrites) != writes || len(artifacts.SubmitRepositoryRequests) != 0 || len(artifacts.SubmitReleaseRequests) != 0 {
 		t.Fatal("acknowledged repository resumed production")
 	}
-	if !reflect.DeepEqual(artifacts.StopBuildRequests, [][2]string{{testProject, testBuild}}) {
-		t.Fatalf("unexpected stop scope or repeated stop: %v", artifacts.StopBuildRequests)
+	if !reflect.DeepEqual(artifacts.DeleteReleaseRequests, [][2]string{{testProject, testBuild}}) {
+		t.Fatalf("unexpected release cleanup scope or repeated request: %v", artifacts.DeleteReleaseRequests)
 	}
 }

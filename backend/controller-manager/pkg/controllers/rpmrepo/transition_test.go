@@ -262,7 +262,7 @@ func TestGetRepositoryResponseDispatch(t *testing.T) {
 			client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
 			client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 			artifacts := NewFakeArtifactManager()
-			artifacts.GetRepositoryFunc = func(_ context.Context, repositoryUID string) (RepositoryResponse, error) {
+			artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, repositoryUID string) (RepositoryResponse, error) {
 				if tc.err != nil {
 					return RepositoryResponse{}, tc.err
 				}
@@ -331,7 +331,7 @@ func TestRepositoryErrorPathHonoursCancellation(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(context.Context, string, string, string) (RepositoryResponse, error) {
 		return RepositoryResponse{}, errors.New("artifact manager unavailable")
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -361,7 +361,7 @@ func TestReconcileBuildWaitsWhenBackoffAnchorIsMissing(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(_ context.Context, repositoryUID string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, repositoryUID string) (RepositoryResponse, error) {
 		// A retryable failure without updatedAt is a response contract error: the controller must not replay.
 		return RepositoryResponse{RepositoryUID: repositoryUID, State: RepositoryFailed, Attempt: 1, Failure: &FailureInfo{Retryable: true}}, nil
 	}
@@ -389,7 +389,7 @@ func TestReconcileBuildBoundsSameRoundReplays(t *testing.T) {
 
 	notFound := &artifactError{operation: "get-repository", kind: artifactNotFound, code: "RepositoryNotFound"}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(context.Context, string, string, string) (RepositoryResponse, error) {
 		return RepositoryResponse{}, notFound
 	}
 	artifacts.SubmitRepositoryFunc = func(context.Context, CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -451,7 +451,7 @@ func TestMaterializeRetriesCountsOnlyRealReplays(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(context.Context, string, string, string) (RepositoryResponse, error) {
 		return RepositoryResponse{}, &artifactError{operation: "get-repository", kind: artifactRetryable, code: "RepositoryQueueFull", retryAfter: 5 * time.Second}
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -467,7 +467,7 @@ func TestMaterializeRetriesCountsOnlyRealReplays(t *testing.T) {
 	client.RpmRepos[key(testProject, testBuild)] = inFlightRepo()
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts = NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(_ context.Context, repositoryUID string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, repositoryUID string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: repositoryUID, State: RepositoryFailed, Attempt: 1, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)}, nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
@@ -488,7 +488,7 @@ func TestReconcileBuildRejectsForeignRepositoryResponse(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(context.Context, string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(context.Context, string, string, string) (RepositoryResponse, error) {
 		// The response belongs to another repository: it must never be used to promote this object.
 		return RepositoryResponse{RepositoryUID: "other-repository", State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/v1/other/", UpdatedAt: time.Now()}, nil
 	}
@@ -604,7 +604,7 @@ func TestReconcileSkipsOffendingInputAndRebatchesAfterRestart(t *testing.T) {
 		newSucceededJob("job-b", "glibc", "uid-job-b", time.Unix(2, 0)),
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(_ context.Context, uid string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, uid string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: uid, State: RepositoryFailed, Attempt: 1, UpdatedAt: time.Now(),
 			Failure: &FailureInfo{Code: "ManifestInvalid", JobName: "job-a"}}, nil
 	}
@@ -639,7 +639,7 @@ func TestReconcileDoesNotSkipUnidentifiedManifestFailure(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(_ context.Context, uid string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, uid string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: uid, State: RepositoryFailed, Attempt: 1, UpdatedAt: time.Now(),
 			Failure: &FailureInfo{Code: "ManifestInvalid", JobName: "foreign-job"}}, nil
 	}
@@ -801,7 +801,7 @@ func TestReconcileBuildCollectsFailureAfterRetryBudget(t *testing.T) {
 	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoProcessing)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetRepositoryFunc = func(_ context.Context, repositoryUID string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, repositoryUID string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: repositoryUID, State: RepositoryFailed, Attempt: 4, Failure: &FailureInfo{Code: "MaterializationFailed", Retryable: true}, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -844,7 +844,7 @@ func TestReconcileBuildReplaysRetryableFailureWithinBudget(t *testing.T) {
 
 	artifacts := NewFakeArtifactManager()
 	updatedAt := time.Date(2026, 9, 21, 9, 59, 0, 0, time.UTC)
-	artifacts.GetRepositoryFunc = func(_ context.Context, repositoryUID string) (RepositoryResponse, error) {
+	artifacts.GetRepositoryFunc = func(_ context.Context, _, _ string, repositoryUID string) (RepositoryResponse, error) {
 		return RepositoryResponse{RepositoryUID: repositoryUID, State: RepositoryFailed, Attempt: 1, Failure: &FailureInfo{Retryable: true}, UpdatedAt: updatedAt}, nil
 	}
 	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {

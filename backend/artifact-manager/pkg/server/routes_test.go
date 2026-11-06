@@ -17,7 +17,7 @@ func TestRouterResponses(t *testing.T) {
 		{http.MethodGet, "/healthz", http.StatusOK, ""},
 		{http.MethodGet, "/readyz", http.StatusOK, ""},
 		{http.MethodGet, "/healthz/", http.StatusNotFound, ""},
-		{http.MethodGet, "/internal/v1/repositories", http.StatusMethodNotAllowed, http.MethodPost},
+		{http.MethodGet, "/internal/v1/projects/bad%20name/builds/build/releases", http.StatusBadRequest, ""},
 		{http.MethodPut, "/artifacts/v1/projects/project/jobs/build/artifacts", http.StatusMethodNotAllowed, "GET, POST"},
 		{http.MethodGet, "/artifacts/v1/projects/bad%20name/jobs/build/artifacts", http.StatusBadRequest, ""},
 		{http.MethodGet, "/artifacts/v1/projects/project/jobs/job/logs/status/extra", http.StatusNotFound, ""},

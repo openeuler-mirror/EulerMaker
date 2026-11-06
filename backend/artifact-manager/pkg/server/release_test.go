@@ -133,9 +133,18 @@ func TestStableReleaseAvailability(t *testing.T) {
 		}
 	}
 	close(materializer.release)
-	response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
+	response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/releases", request)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("submit = %d: %s", response.Code, response.Body.String())
+	}
+	if location := buildManagementPath(request.Project, request.BuildName) + "/releases"; response.Header().Get("Location") != location {
+		t.Fatalf("release location = %q", response.Header().Get("Location"))
+	}
+	for _, scope := range [][2]string{{"other-project", request.BuildName}, {request.Project, "other-build"}} {
+		path := buildManagementPath(scope[0], scope[1]) + "/releases"
+		if response := repositoryRequest(t, server, http.MethodGet, path, nil); response.Code != http.StatusNotFound {
+			t.Fatalf("release scope %v: %d %s", scope, response.Code, response.Body.String())
+		}
 	}
 	deadline := time.Now().Add(time.Second)
 	var ready *release.ReleaseRecord
@@ -157,12 +166,10 @@ func TestStableReleaseAvailability(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(server.releases.Path(ready), ".release.json"), []byte("{}"), 0640); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{base + ".release.json", "/repositories/releases/v1/" + request.BuildName + "/.release.json"} {
-		for _, method := range []string{http.MethodGet, http.MethodHead} {
-			response := repositoryRequest(t, server, method, path, nil)
-			if response.Code != http.StatusNotFound {
-				t.Fatalf("internal release index %s %s = %d", method, path, response.Code)
-			}
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		response := repositoryRequest(t, server, method, base+".release.json", nil)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("internal release index %s = %d", method, response.Code)
 		}
 	}
 	if err := os.Remove(filepath.Join(server.releases.Path(ready), "repodata", "repomd.xml")); err != nil {
@@ -219,7 +226,7 @@ func writeTestRepositoryRecord(t *testing.T, server *Server, record *repository.
 
 func TestReleaseLifecycleAndContent(t *testing.T) {
 	server, request, materializer := newReleaseTestServer(t)
-	response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
+	response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/releases", request)
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("submit status = %d: %s", response.Code, response.Body.String())
 	}
@@ -231,7 +238,7 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 	if count := <-materializer.rpmCount; count != 1 {
 		t.Fatalf("source RPM count = %d, want 1", count)
 	}
-	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
+	if response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/releases", request); response.Code != http.StatusAccepted {
 		t.Fatalf("replay status = %d", response.Code)
 	}
 	if response := repositoryRequest(t, server, http.MethodGet, "/repositories/project-1/", nil); response.Code != http.StatusNotFound {
@@ -241,7 +248,7 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 	var state release.ReleaseResponse
 	deadline := time.Now().Add(time.Second)
 	for {
-		response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/releases/"+request.BuildName, nil)
+		response = repositoryRequest(t, server, http.MethodGet, buildManagementPath(request.Project, request.BuildName)+"/releases", nil)
 		if err := json.Unmarshal(response.Body.Bytes(), &state); err == nil && state.State == release.ReleaseReady {
 			break
 		}
@@ -283,18 +290,16 @@ func TestReleaseLifecycleAndContent(t *testing.T) {
 			t.Fatalf("hidden directory %s = %d", path, response.Code)
 		}
 	}
-	for _, path := range []string{state.ContentURL + "repodata/repomd.xml", "/repositories/releases/v1/build-1/repodata/repomd.xml"} {
-		response = repositoryRequest(t, server, http.MethodGet, path, nil)
-		if response.Code != http.StatusOK || response.Body.String() != "release-metadata" || response.Header().Get("ETag") == "" {
-			t.Fatalf("content %s = %d %q", path, response.Code, response.Body.String())
-		}
+	response = repositoryRequest(t, server, http.MethodGet, state.ContentURL+"repodata/repomd.xml", nil)
+	if response.Code != http.StatusOK || response.Body.String() != "release-metadata" || response.Header().Get("ETag") == "" {
+		t.Fatalf("content = %d %q", response.Code, response.Body.String())
 	}
-	if response := repositoryRequest(t, server, http.MethodDelete, "/internal/v1/releases/build-1", nil); response.Code != http.StatusConflict {
+	if response := repositoryRequest(t, server, http.MethodDelete, buildManagementPath("project-1", "build-1")+"/releases", nil); response.Code != http.StatusConflict {
 		t.Fatalf("delete current = %d", response.Code)
 	}
 	conflict := request
 	conflict.ExcludeSpecs = []string{"other"}
-	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", conflict); response.Code != http.StatusConflict {
+	if response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/releases", conflict); response.Code != http.StatusConflict {
 		t.Fatalf("identity conflict = %d", response.Code)
 	}
 }
@@ -315,13 +320,13 @@ func TestReleaseSeparatesOSWithSameArchitecture(t *testing.T) {
 	writeTestRepositoryRecord(t, server, secondSource, materializer)
 
 	for _, request := range []release.CreateReleaseRequest{first, second} {
-		response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request)
+		response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/releases", request)
 		if response.Code != http.StatusAccepted {
 			t.Fatalf("submit %s = %d: %s", request.BuildName, response.Code, response.Body.String())
 		}
 		deadline := time.Now().Add(time.Second)
 		for {
-			response = repositoryRequest(t, server, http.MethodGet, "/internal/v1/releases/"+request.BuildName, nil)
+			response = repositoryRequest(t, server, http.MethodGet, buildManagementPath(request.Project, request.BuildName)+"/releases", nil)
 			var state release.ReleaseResponse
 			if err := json.Unmarshal(response.Body.Bytes(), &state); err == nil && state.State == release.ReleaseReady {
 				want := "/repositories/" + request.Project + "/" + request.TargetArch + "/"
@@ -363,7 +368,7 @@ func TestStableReleasePathWithReservedLookingNames(t *testing.T) {
 	writeTestRepositoryIndex(t, server.repositories, source)
 	writeTestRepositoryRecord(t, server, source, materializer)
 	close(materializer.release)
-	if response := repositoryRequest(t, server, http.MethodPost, "/internal/v1/releases", request); response.Code != http.StatusAccepted {
+	if response := repositoryRequest(t, server, http.MethodPost, buildManagementPath(request.Project, request.BuildName)+"/releases", request); response.Code != http.StatusAccepted {
 		t.Fatalf("submit = %d", response.Code)
 	}
 	deadline := time.Now().Add(time.Second)

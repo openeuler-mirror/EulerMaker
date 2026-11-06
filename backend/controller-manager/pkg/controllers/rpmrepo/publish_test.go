@@ -41,7 +41,7 @@ func TestReconcileReleaseSubmitsPollsAndCollects(t *testing.T) {
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: req.BuildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, ContentURL: "/repositories/" + testProject + "/" + testArch + "/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -105,7 +105,7 @@ func TestReconcileReleaseFailureCollectsTerminal(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Code: "ReleaseMaterializationFailed", Retryable: false}, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -144,7 +144,7 @@ func TestReconcileReleaseReplaysMissingRecord(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(context.Context, string, string) (ReleaseResponse, error) {
 		return ReleaseResponse{}, &artifactError{operation: "get-release", kind: artifactNotFound, code: "ReleaseNotFound"}
 	}
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
@@ -543,7 +543,7 @@ func TestHandleReleaseErrorPaths(t *testing.T) {
 			client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
 			client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 			artifacts := NewFakeArtifactManager()
-			artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
+			artifacts.GetReleaseFunc = func(context.Context, string, string) (ReleaseResponse, error) {
 				return ReleaseResponse{}, tc.err
 			}
 			c := newTestController(t, client, artifacts, testConfig())
@@ -580,7 +580,7 @@ func TestReleaseReplayIsDeferredAfterOneAttempt(t *testing.T) {
 	response := func(buildName string) ReleaseResponse {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}
 	}
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return response(buildName), nil
 	}
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
@@ -737,7 +737,7 @@ func TestReleaseReplaysRetryableFailureWithFrozenCheckpoint(t *testing.T) {
 	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseFailed, Failure: &FailureInfo{Retryable: true}, UpdatedAt: time.Now()}, nil
 	}
 	artifacts.SubmitReleaseFunc = func(_ context.Context, req CreateReleaseRequest) (ReleaseResponse, error) {
@@ -798,7 +798,7 @@ func TestReleasePhaseIsNotRewrittenWhenItAlreadyMatches(t *testing.T) {
 	client.RpmRepoSet[testProject] = []ebsv1.RpmRepo{*repo.DeepCopy()}
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 9, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -918,7 +918,7 @@ func TestReleaseReplayStopsWhenTheBuildIsGone(t *testing.T) {
 	}
 	artifacts := NewFakeArtifactManager()
 	// A missing Artifact Manager record forces the replay path, which then needs the owning Build.
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(context.Context, string, string) (ReleaseResponse, error) {
 		return ReleaseResponse{}, &artifactError{operation: "get-release", kind: artifactNotFound, code: "ReleaseNotFound"}
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -956,7 +956,7 @@ func TestReleasePhaseAdvanceIsNotConfirmedWithoutTheCheckpoint(t *testing.T) {
 		return nil, unknownWrite("update-status", source.RpmReposGVR, errors.New("connection reset while writing status"))
 	}
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -985,7 +985,7 @@ func TestReconcileReleaseBoundsSameRoundReplays(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(context.Context, string, string) (ReleaseResponse, error) {
 		return ReleaseResponse{}, &artifactError{operation: "get-release", kind: artifactNotFound, code: "ReleaseNotFound"}
 	}
 	artifacts.SubmitReleaseFunc = func(context.Context, CreateReleaseRequest) (ReleaseResponse, error) {
@@ -1023,7 +1023,7 @@ func TestReconcileReleasePollsCreatingOncePerRound(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -1052,7 +1052,7 @@ func TestReconcileReleaseDefersReadyWithoutContentURL(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseReady, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -1078,7 +1078,7 @@ func TestReconcileReleaseRejectsForeignReleaseResponse(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(context.Context, string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(context.Context, string, string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: "other-build", State: ReleaseReady, ContentURL: "/repositories/other/", UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -1106,7 +1106,7 @@ func TestReconcileReleaseRejectsResponseWithoutUpdatedAt(t *testing.T) {
 	client.Builds[key(testProject, testBuild)] = newBuild(testBuild)
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())
@@ -1140,7 +1140,7 @@ func TestReconcileReleaseKeepsOnlyOneInFlightRelease(t *testing.T) {
 	client.Builds[key(testProject, "build-b")] = newBuild("build-b")
 
 	artifacts := NewFakeArtifactManager()
-	artifacts.GetReleaseFunc = func(_ context.Context, buildName string) (ReleaseResponse, error) {
+	artifacts.GetReleaseFunc = func(_ context.Context, _ string, buildName string) (ReleaseResponse, error) {
 		return ReleaseResponse{BuildName: buildName, State: ReleaseCreating, PollAfterSeconds: 5, UpdatedAt: time.Now()}, nil
 	}
 	c := newTestController(t, client, artifacts, testConfig())

@@ -7,62 +7,51 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/release"
 )
 
-func (s *Server) routeReleaseManagement(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/internal/v1/releases" {
-		if r.Method != http.MethodPost {
-			method(w, http.MethodPost)
-			return
-		}
-		var request release.CreateReleaseRequest
-		if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &request); err != nil {
-			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
-			return
-		}
-		record, status, err := s.releases.Submit(request)
-		if err != nil {
-			s.writeReleaseError(w, r, err)
-			return
-		}
-		w.Header().Set("Location", "/internal/v1/releases/"+record.BuildName)
-		writeJSON(w, status, release.ResponseFor(record))
+func (s *Server) createRelease(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	var body struct {
+		TargetArch          string   `json:"targetArch"`
+		SourceRepositoryUID string   `json:"sourceRepositoryUID"`
+		ExcludeSpecs        []string `json:"excludeSpecs,omitempty"`
+	}
+	if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &body); err != nil {
+		writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/internal/v1/releases/")
-	parts := strings.Split(path, "/")
-	if len(parts) != 1 || !validIdentifier(parts[0]) {
+	request := release.CreateReleaseRequest{
+		Project:             c.Param("project"),
+		BuildName:           c.Param("build"),
+		TargetArch:          body.TargetArch,
+		SourceRepositoryUID: body.SourceRepositoryUID,
+		ExcludeSpecs:        body.ExcludeSpecs,
+	}
+	record, status, err := s.releases.Submit(request)
+	if err != nil {
+		s.writeReleaseError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", r.URL.Path)
+	writeJSON(w, status, release.ResponseFor(record))
+}
+
+func (s *Server) getRelease(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	record, ok, err := s.releases.Get(c.Param("build"))
+	if err != nil {
+		s.writeReleaseError(w, r, err)
+		return
+	}
+	if !ok || record.Project != c.Param("project") {
 		s.releaseNotFound(w, r)
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		record, ok, err := s.releases.Get(parts[0])
-		if err != nil {
-			s.writeReleaseError(w, r, err)
-			return
-		}
-		if !ok {
-			s.releaseNotFound(w, r)
-			return
-		}
-		writeJSON(w, http.StatusOK, release.ResponseFor(record))
-	case http.MethodDelete:
-		record, status, err := s.releases.Delete(parts[0])
-		if err != nil {
-			s.writeReleaseError(w, r, err)
-			return
-		}
-		if status == http.StatusNoContent {
-			w.WriteHeader(status)
-			return
-		}
-		writeJSON(w, status, release.ResponseFor(record))
-	default:
-		method(w, "GET, DELETE")
-	}
+	writeJSON(w, http.StatusOK, release.ResponseFor(record))
 }
 
 func (s *Server) writeReleaseError(w http.ResponseWriter, r *http.Request, err error) {
@@ -81,29 +70,6 @@ func (s *Server) writeReleaseError(w http.ResponseWriter, r *http.Request, err e
 
 func (s *Server) releaseNotFound(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, r, http.StatusNotFound, "ReleaseNotFound", "release not found", false, nil)
-}
-
-func (s *Server) releaseVersionContent(w http.ResponseWriter, r *http.Request) {
-	prefix := "/repositories/releases/v1/"
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, prefix), "/", 2)
-	if len(parts) != 2 || !validIdentifier(parts[0]) {
-		s.releaseNotFound(w, r)
-		return
-	}
-	record, ok, err := s.releases.Get(parts[0])
-	if err != nil {
-		s.writeReleaseError(w, r, err)
-		return
-	}
-	if !ok {
-		s.releaseNotFound(w, r)
-		return
-	}
-	if record.State != release.ReleaseReady {
-		writeErr(w, r, http.StatusConflict, "ReleaseNotReady", "release is not ready", true, nil)
-		return
-	}
-	s.serveReleaseFile(w, r, record, parts[1])
 }
 
 func (s *Server) releaseCurrentContent(w http.ResponseWriter, r *http.Request) {
@@ -166,10 +132,6 @@ func (s *Server) lookupCurrentRelease(project, targetArch string, probe bool) (*
 		return nil, nil
 	}
 	return record, nil
-}
-
-func (s *Server) serveReleaseFile(w http.ResponseWriter, r *http.Request, record *release.ReleaseRecord, value string) {
-	s.serveReleaseContent(w, r, record, value, false)
 }
 
 func releaseContentUnavailable() error {

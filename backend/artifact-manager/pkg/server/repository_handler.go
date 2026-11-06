@@ -7,65 +7,64 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 )
 
-func (s *Server) routeRepositoryManagement(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/internal/v1/repositories" {
-		if r.Method != http.MethodPost {
-			method(w, http.MethodPost)
-			return
-		}
-		var request repository.CreateRepositoryRequest
-		if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &request); err != nil {
-			writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
-			return
-		}
-		record, status, err := s.repositories.Submit(request)
-		if err != nil {
-			s.writeRepositoryError(w, r, err)
-			return
-		}
-		w.Header().Set("Location", "/internal/v1/repositories/"+record.RepositoryUID)
-		writeJSON(w, status, repository.ResponseFor(record))
+func (s *Server) createRepository(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	var body struct {
+		RepositoryUID     string                         `json:"repositoryUID"`
+		RepositoryName    string                         `json:"repositoryName"`
+		TargetArch        string                         `json:"targetArch"`
+		BaseRepositoryUID string                         `json:"baseRepositoryUID,omitempty"`
+		Manifests         []repository.ManifestReference `json:"manifests"`
+	}
+	if err := decodeJSON(r.Body, s.cfg.Upload.MaxMetadataSize, &body); err != nil {
+		writeErr(w, r, http.StatusBadRequest, "InvalidRequest", "invalid request body", false, nil)
 		return
 	}
-	uid := strings.TrimPrefix(r.URL.Path, "/internal/v1/repositories/")
-	if !validIdentifier(uid) || strings.Contains(uid, "/") {
+	request := repository.CreateRepositoryRequest{
+		Project:           c.Param("project"),
+		BuildName:         c.Param("build"),
+		RepositoryUID:     body.RepositoryUID,
+		RepositoryName:    body.RepositoryName,
+		TargetArch:        body.TargetArch,
+		BaseRepositoryUID: body.BaseRepositoryUID,
+		Manifests:         body.Manifests,
+	}
+	record, status, err := s.repositories.Submit(request)
+	if err != nil {
+		s.writeRepositoryError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", r.URL.Path+"/"+record.RepositoryUID)
+	writeJSON(w, status, repository.ResponseFor(record))
+}
+
+func (s *Server) getRepository(c *gin.Context) {
+	w, r := c.Writer, c.Request
+	uid := c.Param("uid")
+	if !validIdentifier(uid) {
 		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		record, ok, err := s.repositories.Get(uid)
-		if err != nil {
-			s.writeRepositoryError(w, r, &repository.Error{
-				Code:      "RepositoryStorageUnavailable",
-				Status:    http.StatusServiceUnavailable,
-				Retryable: true,
-			})
-			return
-		}
-		if !ok {
-			writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
-			return
-		}
-		writeJSON(w, http.StatusOK, repository.ResponseFor(record))
-	case http.MethodDelete:
-		record, status, err := s.repositories.Delete(uid)
-		if err != nil {
-			s.writeRepositoryError(w, r, err)
-			return
-		}
-		if status == http.StatusNoContent {
-			w.WriteHeader(status)
-			return
-		}
-		writeJSON(w, status, repository.ResponseFor(record))
-	default:
-		method(w, "GET, DELETE")
+	record, ok, err := s.repositories.Get(uid)
+	if err != nil {
+		s.writeRepositoryError(w, r, &repository.Error{
+			Code:      "RepositoryStorageUnavailable",
+			Status:    http.StatusServiceUnavailable,
+			Retryable: true,
+		})
+		return
 	}
+	if !ok || record.Project != c.Param("project") || record.BuildName != c.Param("build") {
+		writeErr(w, r, http.StatusNotFound, "RepositoryNotFound", "repository not found", false, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, repository.ResponseFor(record))
 }
 
 func (s *Server) writeRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
