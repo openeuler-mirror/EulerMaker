@@ -42,6 +42,10 @@ func (f *fakeUserStorage) CreateWithCredential(ctx context.Context, obj runtime.
 	return f.Create(ctx, obj, validate, opts)
 }
 
+func (f *fakeUserStorage) CreateWithExternalIdentity(ctx context.Context, obj runtime.Object, _ *es.ExternalIdentity) (runtime.Object, error) {
+	return f.Create(ctx, obj, nil, nil)
+}
+
 func (f *fakeUserStorage) Create(_ context.Context, obj runtime.Object, _ rest.ValidateObjectFunc, _ *metav1.CreateOptions) (runtime.Object, error) {
 	f.user = obj.(*iamv1.User).DeepCopy()
 	return f.user.DeepCopy(), nil
@@ -166,7 +170,7 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 			body:   `{"username":"alice","password":"` + password + `"}`,
 			esPath: "/ebs-users/_doc/alice",
 			document: es.Document{
-				Data: json.RawMessage(`{"spec":{"enabled":true}}`), Credential: userCredential,
+				Data: json.RawMessage(`{"spec":{"enabled":true,"scopes":["ebs:user"]}}`), Credential: userCredential,
 			},
 			response: `{"authenticated":true,"username":"alice"}`,
 		},
@@ -198,7 +202,7 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 				Handler: &genericapiserver.APIServerHandler{GoRestfulContainer: container},
 			}
 			credentials := credential.NewStore(es.NewClientForTesting(backend.URL, backend.Client()))
-			InstallInternalRoutes(server, credentials, &fakeUserStorage{}, &fakeMachineStorage{})
+			InstallInternalRoutes(server, credentials, &fakeUserStorage{}, &fakeMachineStorage{}, es.NewClientForTesting(backend.URL, backend.Client()))
 			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()

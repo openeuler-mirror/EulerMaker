@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-apiserver/pkg/storage/es"
 )
 
@@ -42,6 +43,19 @@ type Credential struct {
 type Store struct{ client *es.Client }
 
 func NewStore(client *es.Client) *Store { return &Store{client: client} }
+
+// CanAuthenticate checks account availability independently of the credential method.
+func CanAuthenticate(user *iamv1.User) bool {
+	if user.Spec.Enabled == nil || !*user.Spec.Enabled || user.DeletionTimestamp != nil || len(user.Spec.Scopes) != 1 {
+		return false
+	}
+	switch user.Spec.Scopes[0] {
+	case "ebs:user", "ebs:ops", "ebs:admin":
+		return true
+	default:
+		return false
+	}
+}
 
 func ValidatePassword(password string) error {
 	if n := utf8.RuneCountInString(password); n < 12 || n > 128 {
@@ -93,15 +107,11 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (bo
 		}
 		return false, err
 	}
-	var user struct {
-		Spec struct {
-			Enabled *bool `json:"enabled"`
-		} `json:"spec"`
-	}
+	var user iamv1.User
 	if err := json.Unmarshal(hit.Document.Data, &user); err != nil {
 		return false, err
 	}
-	if user.Spec.Enabled == nil || !*user.Spec.Enabled {
+	if !CanAuthenticate(&user) {
 		return false, nil
 	}
 	now := time.Now().UTC()
