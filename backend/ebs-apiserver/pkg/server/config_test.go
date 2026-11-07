@@ -50,7 +50,7 @@ func configScriptTestHandler(storage map[string]rest.Storage) (http.Handler, err
 		Typer:                      Scheme,
 		Namer:                      runtime.Namer(meta.NewAccessor()),
 		EquivalentResourceRegistry: runtime.NewEquivalentResourceRegistry(),
-		MaxRequestBodyBytes:        3 << 20,
+		MaxRequestBodyBytes:        maxRequestBodyBytes,
 	}
 	if _, _, err := group.InstallREST(container); err != nil {
 		return nil, err
