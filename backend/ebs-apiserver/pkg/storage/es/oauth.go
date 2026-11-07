@@ -8,17 +8,6 @@ import (
 	"net/http"
 )
 
-const oauthIdentityMapping = `{
-  "settings":{"number_of_shards":1,"number_of_replicas":1},
-  "mappings":{"dynamic":"strict","properties":{
-    "issuer":{"type":"keyword"},
-    "subject":{"type":"keyword"},
-    "userName":{"type":"keyword"},
-    "userUID":{"type":"keyword"},
-    "operationID":{"type":"keyword"}
-  }}
-}`
-
 // ExternalIdentity is private User data, never part of the public resource.
 type ExternalIdentity struct {
 	Issuer   string `json:"issuer"`
@@ -85,49 +74,4 @@ func (c *Client) CreateOAuthIdentity(ctx context.Context, id string, claim OAuth
 // DeleteOAuthIdentity releases only the exact version owned by a definitively rejected registration.
 func (c *Client) DeleteOAuthIdentity(ctx context.Context, id string, version Version) error {
 	return c.Delete(ctx, "oauthidentityclaim", id, version.SeqNo, version.PrimaryTerm)
-}
-
-// validateOAuthMappings checks existing deployments without mutating their mappings.
-func (c *Client) validateOAuthMappings() error {
-	for _, resource := range []string{"user", "oauthidentityclaim"} {
-		req, err := http.NewRequest(http.MethodGet, c.addr()+"/"+resourceIndex(resource)+"/_mapping", nil)
-		if err != nil {
-			return err
-		}
-		resp, err := c.do(req)
-		if err != nil {
-			return fmt.Errorf("read %s OAuth mapping: %w", resource, err)
-		}
-		var indices map[string]struct {
-			Mappings struct {
-				Properties map[string]struct {
-					Type    string `json:"type"`
-					Enabled *bool  `json:"enabled"`
-				} `json:"properties"`
-			} `json:"mappings"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&indices)
-		resp.Body.Close()
-		if err != nil {
-			return err
-		}
-		if len(indices) != 1 {
-			return fmt.Errorf("%s OAuth mapping must resolve to one index", resource)
-		}
-		for _, index := range indices {
-			if resource == "user" {
-				field := index.Mappings.Properties["externalIdentity"]
-				if field.Type != "object" || field.Enabled == nil || *field.Enabled {
-					return fmt.Errorf("user mapping requires externalIdentity object with enabled=false; update the deployed mapping before starting")
-				}
-			} else {
-				for _, name := range []string{"issuer", "subject", "userName", "userUID", "operationID"} {
-					if index.Mappings.Properties[name].Type != "keyword" {
-						return fmt.Errorf("OAuth identity mapping requires keyword field %s", name)
-					}
-				}
-			}
-		}
-	}
-	return nil
 }
