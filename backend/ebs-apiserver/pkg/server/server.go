@@ -35,6 +35,7 @@ import (
 	buildinfostore "ebs-apiserver/pkg/registry/ebs/buildinfo"
 	configstore "ebs-apiserver/pkg/registry/ebs/config"
 	jobstore "ebs-apiserver/pkg/registry/ebs/job"
+	oldjobstore "ebs-apiserver/pkg/registry/ebs/oldjob"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	runnerstore "ebs-apiserver/pkg/registry/ebs/runner"
@@ -407,7 +408,9 @@ func CreateAPIGroupInfo(restOptionsGetter generic.RESTOptionsGetter, esClient *e
 	if err := jobStorage.CompleteWithOptions(storeOptions); err != nil {
 		return nil, nil, err
 	}
-	oldJobs := esstore.NewOldJobs(esClient, jobStorage.Resource.(*genericregistry.Store))
+	oldJobStorage := oldjobstore.NewStorage()
+	oldJobES := esstore.New(esClient, "oldjob", "Job", oldJobStorage.Resource.(*genericregistry.Store))
+	oldJobs := oldjobstore.NewLifecycle(oldJobES)
 	jobLifecycle := jobstore.NewLifecycle(jobStorage.Resource.(*genericregistry.Store), oldJobs, buildES)
 	v1Storage["jobs"] = jobLifecycle
 	v1Storage["jobs/status"] = jobStorage.Status

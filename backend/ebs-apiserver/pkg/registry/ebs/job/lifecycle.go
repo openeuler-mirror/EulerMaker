@@ -16,7 +16,7 @@ import (
 	"k8s.io/apiserver/pkg/util/dryrun"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/storage/esstore"
+	"ebs-apiserver/pkg/registry/ebs/oldjob"
 )
 
 type ArchiveStore interface {
@@ -27,7 +27,7 @@ type ArchiveStore interface {
 }
 
 // Lifecycle atomically records intent and freezes the source in the same etcd object.
-// The immutable ES snapshot and its deletion fence survive removal of this source.
+// The immutable ES snapshot survives removal of this source until OldJob cleanup.
 type Lifecycle struct {
 	*genericregistry.Store
 	oldJobs ArchiveStore
@@ -221,7 +221,7 @@ func (s *Lifecycle) Finalize(ctx context.Context, name string, pre *metav1.Preco
 }
 
 func confirmArchive(job *ebsv1.Job, state *ebsv1.JobArchiveState) error {
-	digest, err := esstore.JobArchiveDigest(job)
+	digest, err := oldjob.SnapshotDigest(job)
 	if err != nil {
 		return apierrors.NewInternalError(err)
 	}

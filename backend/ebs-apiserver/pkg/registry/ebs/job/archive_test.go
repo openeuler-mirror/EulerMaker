@@ -19,7 +19,7 @@ import (
 	"k8s.io/apiserver/pkg/storage"
 
 	ebsv1 "ebs-api/ebs/v1"
-	"ebs-apiserver/pkg/storage/esstore"
+	"ebs-apiserver/pkg/registry/ebs/oldjob"
 )
 
 type lifecycleMemory struct {
@@ -86,7 +86,6 @@ func (s *lifecycleMemory) Delete(_ context.Context, key string, out runtime.Obje
 
 type lifecycleArchive struct {
 	job     *ebsv1.Job
-	state   *ebsv1.JobArchiveState
 	failure error
 }
 
@@ -98,21 +97,22 @@ func (s *lifecycleArchive) Archive(_ context.Context, job *ebsv1.Job) (*ebsv1.Jo
 	s.job.DeletionTimestamp = nil
 	s.job.Finalizers = []string{ebsv1.JobCleanupFinalizer}
 	s.job.ResourceVersion = "v1:1:1"
-	digest, err := esstore.JobArchiveDigest(job)
-	if err != nil {
-		return nil, err
-	}
-	s.state = &ebsv1.JobArchiveState{UID: string(job.UID), Action: job.Annotations[ebsv1.JobArchiveActionAnnotation],
-		Digest: digest, Phase: "Stored"}
 	return s.job.DeepCopy(), nil
 }
 
 func (s *lifecycleArchive) ArchiveState(context.Context, string) (*ebsv1.JobArchiveState, error) {
-	if s.state == nil {
+	if s.job == nil {
 		return nil, apierrors.NewNotFound(ebsv1.Resource("oldjobs"), "job")
 	}
-	state := *s.state
-	return &state, nil
+	digest, err := oldjob.SnapshotDigest(s.job)
+	if err != nil {
+		return nil, err
+	}
+	action := "retain"
+	if s.job.DeletionTimestamp != nil {
+		action = "delete"
+	}
+	return &ebsv1.JobArchiveState{UID: string(s.job.UID), Digest: digest, Action: action, Phase: "Stored"}, nil
 }
 
 func (s *lifecycleArchive) Get(context.Context, string, *metav1.GetOptions) (runtime.Object, error) {
@@ -185,6 +185,14 @@ func TestJobArchiveLifecycle(t *testing.T) {
 	if err != nil || state.Phase != "Transferred" || archived.job == nil || memory.job != nil {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}
+	now := metav1.Now()
+	archived.job.DeletionTimestamp = &now
+	if _, err := lifecycle.FinalizeOldJob(ctx, "job", archivePre(archived.job)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.ArchiveState(ctx, "job"); !apierrors.IsNotFound(err) {
+		t.Fatalf("deleted migration confirmation: %v", err)
+	}
 }
 
 func TestFinalizeResumesAfterPhysicalDeleteFailure(t *testing.T) {
@@ -237,8 +245,8 @@ func TestArchiveConfirmationMatchesSnapshot(t *testing.T) {
 	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
 		t.Fatal(err)
 	}
-	digest := archived.state.Digest
-	archived.state.Digest = "different-snapshot"
+	message := archived.job.Status.Message
+	archived.job.Status.Message = "different-snapshot"
 	if _, err := lifecycle.ArchiveState(ctx, "job"); !apierrors.IsConflict(err) {
 		t.Fatalf("mismatched snapshot confirmation: %v", err)
 	}
@@ -248,7 +256,7 @@ func TestArchiveConfirmationMatchesSnapshot(t *testing.T) {
 	if memory.job == nil || !slices.Contains(memory.job.Finalizers, ebsv1.JobArchiveFinalizer) {
 		t.Fatal("unconfirmed source lost its protection")
 	}
-	archived.state.Digest = digest
+	archived.job.Status.Message = message
 	if _, err := lifecycle.Finalize(ctx, "job", archivePre(memory.job)); err != nil {
 		t.Fatal(err)
 	}
@@ -335,8 +343,9 @@ func TestDeletingJobCanArchiveWhileParentDeleting(t *testing.T) {
 	if _, err := lifecycle.Archive(ctx, "job", archivePre(memory.job)); err != nil {
 		t.Fatal(err)
 	}
-	if archived.state.Action != "delete" {
-		t.Fatal("delete downgraded to retain")
+	state, err := lifecycle.ArchiveState(ctx, "job")
+	if err != nil || state.Action != "delete" {
+		t.Fatalf("delete intent confirmation=%+v err=%v", state, err)
 	}
 }
 

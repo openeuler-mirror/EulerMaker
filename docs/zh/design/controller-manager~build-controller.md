@@ -549,7 +549,7 @@ single 与非 single 的 `publish=false` 分支均不写 `PublishSucceed`，不�
 - Artifact Manager 操作必须先确认 RpmRepo 检查点写入，再提交请求。删除时，发布仓 DELETE 内置持久停止新提交和激活、等待已受理任务排空及发布版本清理；204 后清空检查点并写 CleanupReady，允许 BuildInfo 清理 Job。过程仓保持到 BuildInfo 清理完成、RpmRepo 自身删除后再清理。完整协议见 [RpmRepo 删除协议](controller-manager~rpmrepo-controller.md#删除收敛与父资源协作)。失败/中止业务终态保留检查点，删除源负责继续调谐。
 - 子资源创建不持久化请求登记，正常调谐依靠确定性名称、AlreadyExists 身份核验及完整扫描恢复。删除时以当前可见对象为准；请求超时、取消或进程重启不证明服务端已停止处理。接受极端故障下 CREATE 在最终扫描之后落库、导致父对象删除后残留子资源的风险，由运维核对归属后清理。重复扫描可降低风险，但不是跨存储创建屏障，也不承诺零残留。
 - 首版要求单 active Controller Manager；apiserver 可多实例，但不负责分布式生产者互斥。外部业务不得绕过 Controller 创建派生资源或直接提交 Artifact Manager 任务。
-- Job 归档使用已有的源 archive finalizer、冻结快照和 OldJob 删除凭据接力。新 retain 检查父 Build；已登记迁移继续，删除将 retain 升级为 delete。源 Job 消失前归档必须已持久化并对 Search 可见，因此按 Jobs 后 OldJobs 扫描，不形成两边同时不可见的窗口。
+- Job 归档使用已有的源 archive finalizer、冻结快照和 OldJob 删除标记接力。新 retain 检查父 Build；已登记迁移继续，删除将 retain 升级为 delete。源 Job 消失前归档必须已持久化并对 Search 可见，因此按 Jobs 后 OldJobs 扫描，不形成两边同时不可见的窗口。
 
 **错误与恢复**
 
