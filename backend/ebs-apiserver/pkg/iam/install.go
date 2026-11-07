@@ -20,6 +20,7 @@ import (
 
 	iamv1 "ebs-api/iam/v1"
 	"ebs-apiserver/pkg/iam/credential"
+	"ebs-apiserver/pkg/storage/es"
 )
 
 const maxRequestBody = 1 << 20
@@ -32,10 +33,14 @@ type Handler struct {
 	credentials *credential.Store
 	users       userStorage
 	machines    userStorage
+	oauth       *oauthService
 }
 
-func InstallInternalRoutes(server *genericapiserver.GenericAPIServer, credentials *credential.Store, users, machines userStorage) {
-	h := &Handler{credentials: credentials, users: users, machines: machines}
+func InstallInternalRoutes(server *genericapiserver.GenericAPIServer, credentials *credential.Store, users interface {
+	userStorage
+	oauthUserStorage
+}, machines userStorage, client *es.Client) {
+	h := &Handler{credentials: credentials, users: users, machines: machines, oauth: &oauthService{client: client, users: users}}
 	ws := new(restful.WebService).Path("/internal/iam/v1").Consumes(restful.MIME_JSON).Produces(restful.MIME_JSON)
 	ws.Route(ws.POST("/users/register").To(h.register))
 	ws.Route(ws.POST("/users/authenticate").To(h.authenticate))
@@ -99,13 +104,16 @@ func (h *Handler) authenticateMachine(req *restful.Request, resp *restful.Respon
 }
 
 func (h *Handler) register(req *restful.Request, resp *restful.Response) {
-	var body struct {
-		Username    string `json:"username"`
-		Password    string `json:"password"`
-		DisplayName string `json:"displayName"`
-		Email       string `json:"email"`
+	body, err := decodeUserRequest(req.Request, true)
+	if err != nil {
+		writeOAuthError(resp, invalidRequest())
+		return
 	}
-	if err := decode(req.Request, &body); err != nil || !validRegistration(body.Username, body.Password, body.Email) {
+	if body.Method == "oauth" {
+		h.registerOAuth(req, resp, body)
+		return
+	}
+	if !validRegistration(body.Username, body.Password, body.Email) {
 		writeError(resp, http.StatusBadRequest, "invalid registration request")
 		return
 	}
@@ -156,11 +164,16 @@ func validRegistration(username, password, email string) bool {
 }
 
 func (h *Handler) authenticate(req *restful.Request, resp *restful.Response) {
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+	body, err := decodeUserRequest(req.Request, false)
+	if err != nil {
+		writeOAuthError(resp, invalidRequest())
+		return
 	}
-	if err := decode(req.Request, &body); err != nil || body.Username == "" || body.Password == "" {
+	if body.Method == "oauth" {
+		h.authenticateOAuth(req, resp, body)
+		return
+	}
+	if body.Username == "" || body.Password == "" {
 		writeError(resp, http.StatusBadRequest, "invalid request")
 		return
 	}

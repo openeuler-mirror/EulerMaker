@@ -84,7 +84,7 @@ func TestAuthenticateRejectsDisabledUser(t *testing.T) {
 
 func TestCredentialLifecycleAndLockout(t *testing.T) {
 	credentialData, _ := NewPasswordCredential("initial password value")
-	userDoc := es.Document{APIVersion: "iam.ebs/v1", Kind: "User", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":true}}`), Credential: credentialData}
+	userDoc := es.Document{APIVersion: "iam.ebs/v1", Kind: "User", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`), Credential: credentialData}
 	seq := int64(0)
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch {

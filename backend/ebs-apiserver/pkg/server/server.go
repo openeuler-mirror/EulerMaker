@@ -334,7 +334,7 @@ func CreateServerChain(config *genericapiserver.RecommendedConfig, esClient *es.
 		if err := srv.InstallAPIGroup(iamGroupInfo); err != nil {
 			return nil, err
 		}
-		iammodule.InstallInternalRoutes(srv, credentials, users, machines)
+		iammodule.InstallInternalRoutes(srv, credentials, users, machines, esClient)
 	}
 	installProjectAliasRoutes(srv)
 	installRunnerJobAliasRoutes(srv)
