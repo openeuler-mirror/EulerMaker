@@ -155,6 +155,18 @@ func (s *Store) Create(ctx context.Context, obj runtime.Object, admission rest.V
 }
 
 func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, credential json.RawMessage, admission rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	return s.create(ctx, obj, credential, nil, admission, options)
+}
+
+// CreateWithExternalIdentity creates a User with the UID reserved by its OAuth identity claim.
+func (s *Store) CreateWithExternalIdentity(ctx context.Context, obj runtime.Object, identity *es.ExternalIdentity) (runtime.Object, error) {
+	if s.resourceName != "user" || identity == nil {
+		return nil, apierrors.NewBadRequest("external identity requires a User")
+	}
+	return s.create(ctx, obj, nil, identity, nil, &metav1.CreateOptions{})
+}
+
+func (s *Store) create(ctx context.Context, obj runtime.Object, credential json.RawMessage, identity *es.ExternalIdentity, admission rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	if options == nil {
 		options = &metav1.CreateOptions{}
 	}
@@ -162,7 +174,14 @@ func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, cr
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
+	reservedUID := accessor.GetUID()
+	if identity != nil && reservedUID == "" {
+		return nil, apierrors.NewBadRequest("OAuth User requires a reserved UID")
+	}
 	rest.FillObjectMetaSystemFields(accessor)
+	if identity != nil {
+		accessor.SetUID(reservedUID)
+	}
 	if accessor.GetUID() == "" {
 		accessor.SetUID(types.UID(uuid.NewUUID()))
 	}
@@ -190,6 +209,7 @@ func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, cr
 		return nil, err
 	}
 	doc.Credential = credential
+	doc.ExternalIdentity = identity
 	persist := func() (runtime.Object, error) {
 		if dryrun.IsDryRun(options.DryRun) {
 			accessor.SetResourceVersion("v1:0:0")
@@ -301,6 +321,7 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 		return nil, false, err
 	}
 	doc.Credential = hit.Document.Credential
+	doc.ExternalIdentity = hit.Document.ExternalIdentity
 	version, err := s.client.Update(ctx, s.resourceName, id, doc, hit.SeqNo, hit.PrimaryTerm)
 	if err != nil {
 		return nil, false, s.apiError(err, name)
@@ -358,6 +379,7 @@ func (s *Store) Delete(ctx context.Context, name string, admission rest.Validate
 					return nil, false, docErr
 				}
 				doc.Credential = hit.Document.Credential
+				doc.ExternalIdentity = hit.Document.ExternalIdentity
 				version, updateErr := s.client.Update(ctx, s.resourceName, id, doc, hit.SeqNo, hit.PrimaryTerm)
 				if updateErr != nil {
 					return nil, false, s.apiError(updateErr, name)

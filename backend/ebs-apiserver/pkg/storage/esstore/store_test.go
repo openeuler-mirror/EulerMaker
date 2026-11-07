@@ -24,11 +24,67 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 
 	ebsv1 "ebs-api/ebs/v1"
+	iamv1 "ebs-api/iam/v1"
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
+	userstore "ebs-apiserver/pkg/registry/iam/user"
 	"ebs-apiserver/pkg/storage/es"
 )
 
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
+
+func TestUserExternalIdentityPersistence(t *testing.T) {
+	var stored es.Document
+	seq := int64(0)
+	client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(
+		func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/ebs-users/_doc/alice" {
+				t.Fatalf("unexpected request: %s", req.URL)
+			}
+			if req.Method == http.MethodPut {
+				if seq == 0 && req.URL.Query().Get("op_type") != "create" {
+					t.Fatal("User creation must be create-only")
+				}
+				if err := json.NewDecoder(req.Body).Decode(&stored); err != nil {
+					t.Fatal(err)
+				}
+				seq++
+			} else if req.Method != http.MethodGet {
+				t.Fatalf("unexpected method: %s", req.Method)
+			}
+			return jsonResponse(http.StatusOK, map[string]interface{}{
+				"_source": stored, "_seq_no": seq, "_primary_term": 1,
+			}), nil
+		})})
+	store := New(client, "user", "User", userstore.NewStorage().User.(*genericregistry.Store))
+	ctx := genericapirequest.WithNamespace(context.Background(), "")
+	identity := &es.ExternalIdentity{Issuer: "issuer", Subject: "subject", LinkedAt: "2026-11-07T00:00:00Z"}
+	account := &iamv1.User{ObjectMeta: metav1.ObjectMeta{Name: "alice", UID: "reserved-user-uid"}}
+	created, err := store.CreateWithExternalIdentity(ctx, account, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.(*iamv1.User).UID != "reserved-user-uid" || !reflect.DeepEqual(stored.ExternalIdentity, identity) {
+		t.Fatalf("reserved identity was not persisted: %+v", stored)
+	}
+	created.(*iamv1.User).Spec.DisplayName = "Alice"
+	if _, _, err := store.Update(ctx, "alice", rest.DefaultUpdatedObjectInfo(created), nil, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.ExternalIdentity, identity) {
+		t.Fatal("ordinary User update lost its private identity")
+	}
+	public, err := store.Get(ctx, "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "externalIdentity") {
+		t.Fatal("private identity exposed through User GET")
+	}
+}
 
 func TestExistsUsesScopedSelectors(t *testing.T) {
 	opts := &internalversion.ListOptions{

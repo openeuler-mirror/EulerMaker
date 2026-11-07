@@ -14,22 +14,28 @@ import (
 )
 
 var indices = map[string]string{
+	// Global-scoped resources.
 	"project":        "ebs-projects",
-	"snapshot":       "ebs-snapshots",
-	"build":          "ebs-builds",
-	"buildinfo":      "ebs-buildinfos",
-	"buildgraph":     "ebs-buildgraphs",
-	"rpmrepo":        "ebs-rpmrepos",
 	"config":         "ebs-configs",
 	"script":         "ebs-scripts",
 	"user":           "ebs-users",
 	"machineaccount": "ebs-machineaccounts",
-	"buildclaim":     "ebs-build-target-claims",
-	"oldjob":         "ebs-oldjobs",
+
+	// Project-scoped resources.
+	"snapshot":   "ebs-snapshots",
+	"build":      "ebs-builds",
+	"buildinfo":  "ebs-buildinfos",
+	"buildgraph": "ebs-buildgraphs",
+	"rpmrepo":    "ebs-rpmrepos",
+	"oldjob":     "ebs-oldjobs",
+
+	// Auxiliary indices.
+	"buildclaim":         "ebs-build-target-claims",
+	"oauthidentityclaim": "ebs-oauth-identity-claims",
 }
 
 var coreResources = []string{"project", "snapshot", "build", "buildinfo", "buildgraph", "rpmrepo", "config", "script", "buildclaim", "oldjob"}
-var iamResources = []string{"user", "machineaccount"}
+var iamResources = []string{"user", "machineaccount", "oauthidentityclaim"}
 
 const defaultIndexMapping = `{
   "settings":{"number_of_shards":1,"number_of_replicas":1},
@@ -128,7 +134,8 @@ const iamIndexMapping = `{
       }}
     }},
     "data":{"type":"object","dynamic":false},
-    "credential":{"type":"object","enabled":false}
+    "credential":{"type":"object","enabled":false},
+    "externalIdentity":{"type":"object","enabled":false}
   }}
 }`
 
@@ -177,14 +184,15 @@ type Metadata struct {
 }
 
 type Document struct {
-	Archive    *JobArchiveRecord `json:"archive,omitempty"`
-	ArchivedAt string            `json:"archivedAt,omitempty"`
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	DocumentID string            `json:"documentID"`
-	Metadata   Metadata          `json:"metadata"`
-	Data       json.RawMessage   `json:"data"`
-	Credential json.RawMessage   `json:"credential,omitempty"`
+	Archive          *JobArchiveRecord `json:"archive,omitempty"`
+	ArchivedAt       string            `json:"archivedAt,omitempty"`
+	APIVersion       string            `json:"apiVersion"`
+	Kind             string            `json:"kind"`
+	DocumentID       string            `json:"documentID"`
+	Metadata         Metadata          `json:"metadata"`
+	Data             json.RawMessage   `json:"data"`
+	Credential       json.RawMessage   `json:"credential,omitempty"`
+	ExternalIdentity *ExternalIdentity `json:"externalIdentity,omitempty"`
 }
 
 // JobArchiveRecord fences create-only archive requests even after the public OldJob is removed.
@@ -249,7 +257,10 @@ func (c *Client) ensureIndices() error {
 
 // EnsureIAMIndices initializes indices owned by the optional IAM module.
 func (c *Client) EnsureIAMIndices() error {
-	return c.ensureResourceIndices(iamResources)
+	if err := c.ensureResourceIndices(iamResources); err != nil {
+		return err
+	}
+	return c.validateOAuthMappings()
 }
 
 func (c *Client) ensureResourceIndices(resources []string) error {
@@ -269,7 +280,7 @@ func (c *Client) ensureResourceIndices(resources []string) error {
 			if resp.StatusCode >= 400 {
 				return &HTTPError{StatusCode: resp.StatusCode, Body: "check index alias " + alias}
 			}
-			if resource == "buildclaim" {
+			if resource == "buildclaim" || resource == "oauthidentityclaim" {
 				if err := c.validateCoordinationAlias(alias); err != nil {
 					return err
 				}
@@ -351,6 +362,8 @@ func mappingForResource(resource string) string {
 		return oldJobIndexMapping
 	case "rpmrepo":
 		return rpmRepoIndexMapping
+	case "oauthidentityclaim":
+		return oauthIdentityMapping
 	case "user", "machineaccount":
 		return iamIndexMapping
 	default:
@@ -402,7 +415,7 @@ func (c *Client) Update(ctx context.Context, resource, id string, doc Document, 
 	return c.write(ctx, http.MethodPut, resource, id, doc, seqNo, primaryTerm, false)
 }
 
-func (c *Client) write(ctx context.Context, method, resource, id string, doc Document, seqNo, primaryTerm int64, create bool) (Version, error) {
+func (c *Client) write(ctx context.Context, method, resource, id string, doc interface{}, seqNo, primaryTerm int64, create bool) (Version, error) {
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return Version{}, err
