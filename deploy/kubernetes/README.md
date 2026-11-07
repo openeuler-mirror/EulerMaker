@@ -197,6 +197,36 @@ kubectl -n ebs get pods,pvc
 
 apiserver 使用三个 etcd 成员地址，通过服务端 CA 校验成员身份；etcd 校验其客户端证书。确认 `/readyz` 正常、默认 Config/Script 和 ES 索引初始化成功，再由实际内部客户端验证 Job、Runner 读写及 List/Watch。
 
+### 4.4 升级时检查和更新 Mapping
+
+`upgrade/mapping-check.yaml` 和 `upgrade/mapping-apply.yaml` 是独立的一次性 Job，分别用于预览和应用新增 Mapping 字段，不属于首次部署步骤。不要批量执行 `upgrade/` 目录；先检查、人工确认差异，再单独执行 apply，最后升级 apiserver。
+
+执行前将两个 Job 和 `ebs-apiserver.yaml` 的镜像改成**同一个待升级版本的不可变 digest**，该镜像必须包含 `mapping` 子命令。使用旧镜像只能检查旧版本定义；可变的 `dev` tag 也不能保证三次执行使用同一份定义。提前完成 ES 备份，并避免同时执行其他 Mapping 更新、别名切换或 reindex 操作。
+
+两个 Job 复用 `ebs-apiserver-es-auth` 的 API Key 和 CA，仅访问 ES，不需要 etcd、apiserver 入站证书或 Kubernetes API Token。第 4.2 节的 API Key 权限已覆盖 Mapping 查询和更新。
+
+先创建检查 Job，等待完成并查看全部差异：
+
+```sh
+mapping_check_job=$(kubectl create -f deploy/kubernetes/upgrade/mapping-check.yaml -o name)
+kubectl -n ebs wait --for=condition=complete "$mapping_check_job" --timeout=11m
+kubectl -n ebs logs "$mapping_check_job"
+```
+
+check 不写入 ES。命令退出码 `0` 表示无需新增，`2` 表示存在可新增字段，Job 将这两者视为检查成功，并在日志中保留原退出码；冲突及其他错误仍使 Job 失败。`Complete` 仅表示检查通过，不代表已更新或全部索引都存在。默认检查全部已部署资源，未部署索引显示 `Missing` 并跳过；如需只检查指定资源，在两个 Job 的参数列表中都追加相同的 `--resources=user,oldjob`（显式指定的资源缺失会报错）。
+
+确认日志中的新增字段符合预期后，**单独执行**：
+
+```sh
+mapping_apply_job=$(kubectl create -f deploy/kubernetes/upgrade/mapping-apply.yaml -o name)
+kubectl -n ebs wait --for=condition=complete "$mapping_apply_job" --timeout=11m
+kubectl -n ebs logs "$mapping_apply_job"
+```
+
+apply 会重新预检，再逐个更新和确认，不直接使用 check 的旧结果。确认 apply Job 为 `Complete` 且日志无未确认结果后，才执行第 4.3 节的 Deployment 更新和就绪检查。字段类型变更、历史文档回填、索引迁移及数据回滚不由这两个 Job 完成；新增 Mapping 不会自动为历史文档建立新字段索引，回滚镜像也不会撤销 Mapping。
+
+Job 使用 `generateName`，每次通过 `kubectl create` 生成独立记录；不使用 `kubectl apply`。设置 10 分钟执行上限、失败不重试，完成或失败后保留 24 小时再自动清理，请及时保存日志。`kubectl wait` 等待 Complete 时可能直到超时才报告失败；失败或超时时用 `kubectl -n ebs describe "$mapping_check_job"`（apply 使用 `$mapping_apply_job`）检查 Job/Pod 状态并读取日志，不要继续升级。部分索引可能已经更新，修复问题后重新执行 check，再按需创建新的 apply Job；不要同时运行多个 apply Job。
+
 ## 5. 部署 Scheduler
 
 Scheduler 只依赖已就绪的 ebs-apiserver，通过独立的内部客户端证书访问 Job 和 Runner；此时尚无 Job 也可以启动。

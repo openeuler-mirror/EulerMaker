@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -181,17 +179,7 @@ func (o *EulerMakerServerOptions) Validate(args []string) error {
 
 func (o *EulerMakerServerOptions) Complete() error {
 	o.esConfig.Addresses = []string{o.EsServers}
-	if o.EsAPIKeyFile != "" {
-		data, err := os.ReadFile(o.EsAPIKeyFile)
-		if err != nil {
-			return fmt.Errorf("read Elasticsearch API key file: %w", err)
-		}
-		o.esConfig.APIKey = strings.TrimSpace(string(data))
-		if o.esConfig.APIKey == "" {
-			return fmt.Errorf("Elasticsearch API key file is empty")
-		}
-	}
-	return nil
+	return o.esConfig.LoadAPIKeyFile(o.EsAPIKeyFile)
 }
 
 func (o *EulerMakerServerOptions) Config() (*genericapiserver.RecommendedConfig, error) {
@@ -260,15 +248,7 @@ func (o *EulerMakerServerOptions) validateInternalClientAuthentication() error {
 	return nil
 }
 
-func Run(stopCh <-chan struct{}) error {
-	fs := pflag.NewFlagSet("ebs-apiserver", pflag.ContinueOnError)
-
-	opts := NewEulerMakerServerOptions()
-	opts.AddFlags(fs)
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		return err
-	}
-
+func (opts *EulerMakerServerOptions) Run(stopCh <-chan struct{}) error {
 	if err := opts.Complete(); err != nil {
 		return err
 	}

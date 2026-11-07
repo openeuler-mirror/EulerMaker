@@ -44,7 +44,10 @@ EBS 业务校验集中在 `pkg/apis/ebs/validation`，仅依赖传入对象；�
 
 ```
 backend/ebs-apiserver/
-├── cmd/server/main.go                 # 进程入口
+├── cmd/
+│   ├── main.go                       # 进程入口、信号与退出码
+│   ├── app/server.go                 # 根命令、服务启动与子命令注册
+│   └── mapping/command.go            # mapping 参数解析与结果输出
 ├── pkg/
 │   ├── apis/
 │   │   ├── ebs/
@@ -516,7 +519,93 @@ BuildGraph 复用通用资源 mapping，别名 `ebs-buildgraphs` 指向初始索
 
 #### Mapping 升级
 
-apiserver 只负责在 alias 不存在时初始化 `v1` 物理索引，不自动迁移已有索引。兼容性新增字段可以更新当前物理索引的 mapping；不兼容变更应创建下一版本物理索引，将数据 reindex 后，通过单次 `_aliases` 请求移除旧索引并绑定新索引。切换时必须将新索引设置为 `is_write_index: true`，旧索引保留至确认无需回滚后再删除。
+apiserver 提供 `mapping` 子命令对比和补充已部署索引的字段。普通服务启动仍只在 alias 不存在时初始化 `v1` 物理索引，不自动修改已有 mapping；命令与启动共用当前二进制内置的索引定义，不维护第二份升级模板。
+
+##### 范围与命令
+
+第一版仅对比并新增 mapping 字段，不负责文档内容迁移、删除或重命名字段、修改已有字段参数、索引重建、alias 切换及自动回滚。命令独立运行，只连接 ES，不启动 API 服务、不连接 etcd、不执行默认资源初始化或索引创建。
+
+```bash
+# 仅查看差异，不写入 ES
+ebs-apiserver mapping \
+  --es-servers=https://elasticsearch:9200 \
+  --es-api-key-file=/etc/ebs/es-api-key \
+  --resources=user,oldjob
+
+# 重新计算差异并应用新增字段
+ebs-apiserver mapping \
+  --es-servers=https://elasticsearch:9200 \
+  --es-api-key-file=/etc/ebs/es-api-key \
+  --resources=user,oldjob \
+  --apply
+```
+
+| 参数 | 默认值 | 契约 |
+| --- | --- | --- |
+| `--es-servers` | `http://elasticsearch:9200` | 复用服务的 ES 连接配置 |
+| `--es-api-key-file` | 空 | 复用服务的 API Key 文件读取和认证规则；HTTPS 使用受信任 CA 验证服务端 |
+| `--resources` | 未指定 | 逗号分隔的内部资源键，例如 `user,oldjob,oauthidentityclaim`；显式空值或未知键报错，重复键去重 |
+| `--apply` | `false` | 默认只对比；设为 true 才允许提交新增字段补丁 |
+
+资源键取自现有 ES 资源映射表，包括业务资源、IAM 资源和辅助索引，不接受任意索引名或通配符。省略 `--resources` 时检查全部已知资源：alias 不存在的资源报告 `Missing` 并跳过，支持未启用 IAM 的部署；显式指定的资源缺失时按错误处理。两种模式均不创建缺失索引或修复 alias，鉴权失败或连接错误不能解释成资源未部署。
+
+通过稳定 alias 解析实际物理索引，要求只指向一个索引且 `is_write_index=true`；多个目标、只读 alias 或 alias 异常都拒绝执行。物理索引版本可以不是 v1，命令不拼接固定版本名，也不修改 alias 的过滤或路由配置。
+
+##### 差异分类
+
+从内置索引定义中只取 `mappings`，不比较或更新 `settings` 和 `aliases`。按字段路径递归比较 `properties`，同时检查根级和字段级定义参数；JSON 键顺序不影响结果。有 `properties` 且省略 type 的对象按 object 处理；`enabled`、`dynamic`、`index`、`doc_values` 等已支持参数按明确的 ES 默认值及父级继承规则规范化。不得将缺省值一律视为相等，也不得忽略不认识的参数差异。
+
+| 差异 | 分类 | `--apply` 行为 |
+| --- | --- | --- |
+| 目标字段不存在，父级结构兼容 | `Add` | 添加完整字段定义；包含新 object 下的子字段 |
+| 已有 object 或 nested 下缺少子字段 | `Add` | 仅补充缺少字段，保留父级原有类型和参数 |
+| 字段定义规范化后相同 | `Unchanged` | 不写入 |
+| type 不同、object/nested 冲突，或已有字段参数不同 | `Conflict` | 拒绝执行；首版不自动更新 ES 允许修改的参数 |
+| 根级 mapping 参数不一致，或无法确认参数等价 | `Conflict` | 拒绝执行，不改变索引的整体解析规则 |
+| ES 中存在但内置定义不再声明的字段 | `Legacy` | 报告并保留，不发送字段删除请求 |
+| 已有字段需要新增 multi-field，或其他非 properties 结构调整 | `Conflict` | 首版不处理，单独制定迁移方案 |
+
+`Legacy` 本身不阻止新增字段，但保留字段仍可能约束以后写入的同名数据，不能据此断言任意旧版本与新版本兼容。例如已部署的 OldJob `archive` 字段报告为 Legacy，新代码可以停止写入；本命令不会移除它，也不会删除现有文档中的 archive 正文。
+
+输出按资源键和字段路径稳定排序，包含资源键、alias、实际物理索引、差异分类，以及变更前后的字段定义。参数校验失败输出明确错误；不输出 API Key、认证请求头或文档内容。执行结束输出各资源的结果及总计，全部匹配时明确显示无须更新。
+
+##### 更新与失败处理
+
+1. 先校验全部参数，建立不带索引初始化副作用的 ES 客户端。
+2. 读取所有选定资源的 alias 和 mapping，生成完整差异计划。仅预览时至此结束，整个流程不能发送写请求。
+3. `--apply` 在所有资源预检完成后才允许写入。任一资源存在 Conflict、显式选择的资源缺失或读取失败，本轮不更新任何索引。Legacy 和默认扫描时跳过的 Missing 单独列出。
+4. 按稳定顺序逐个处理需新增字段的索引。提交前重新读取 alias 与 mapping；alias 目标变化时停止，mapping 变化时重新比较，已由其他执行者添加的相同字段不重复写入，出现新冲突时停止。
+5. 使用 `PUT /{实际物理索引}/_mapping` 提交最小新增补丁，保留需要的父级 properties 层级，不携带 settings、aliases 或 Legacy 字段。没有新增字段的资源不发送 PUT。
+6. 写入后重新读取 alias 与 mapping，确认目标未变且计划新增字段已生效，才报告 `Updated`。超时、连接中断或未获确认时仍尝试读回；能够确认则视为成功，不能确认则报告 `Unconfirmed` 并以非零状态退出，不盲目重放 PUT。
+
+mapping 更新没有本方案可用的版本 CAS，alias 的前后核验也不是原子保护。运维须保证本命令执行期间不并行进行索引重建、alias 切换或不兼容的 mapping 修改；复查只是检测变化，不提供跨进程互斥保证。HTTP 请求须绑定命令取消上下文并设置有限超时。
+
+跨索引更新不具备整体事务性。预检通过后仍可能在后续写入遇到 ES 错误或并发变化；此时停止后续更新，保留已完成的结果，列出 `Updated`、`Unconfirmed`、`Failed` 和 `NotAttempted`，不宣称全部失败或自动回滚。重新执行从 ES 当前状态计算剩余差异，不依赖本地执行记录；相同目标重复执行应无写入。
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 预览无 Add/Conflict，或 apply 后全部新增字段已确认；允许存在已报告的 Legacy、默认扫描跳过的 Missing |
+| `2` | 预览发现可新增字段，且没有错误或 Conflict；未写入 |
+| `1` | 输入错误、Conflict、显式资源缺失、连接或权限错误、部分更新失败或结果无法确认 |
+
+仅预览需要 alias/mapping 读取权限，apply 还需要目标索引的 mapping 更新权限；权限不足明确失败，不自动放宽业务 API Key。命令不依赖运行中 apiserver 已经 Ready，可用于修复启动时报告缺失字段的部署。
+
+##### 历史数据与回滚边界
+
+新增 mapping 不会自动为历史文档补建索引项。之前仅保存在 `_source`、未建立索引的字段，即使新增 mapping，历史数据也不能立即按该字段完整查询；是否执行受控文档重写或 reindex，需要另行评估，本命令不执行 `_update_by_query` 或 reindex。
+
+已有字段类型改变、字段删除或其他不兼容调整，需要单独创建新版本物理索引、迁移并验证数据，再通过一次 `_aliases` 请求切换读写目标，新目标保持 `is_write_index=true`。旧索引保留并不等于能直接安全回滚：切换后产生的写入必须另行处理，切换和回滚方案须定义停写或增量同步边界。
+
+新增字段也不承诺可反向删除。旧版本服务能否继续使用新增字段后的索引，需结合其文档读写格式及校验逻辑验证；本命令不是 apiserver 程序或业务数据的回滚工具。ES 能力边界参见 [Update mapping API](https://www.elastic.co/docs/manage-data/data-store/mapping/update-mappings-examples) 与 [Explicit mapping](https://www.elastic.co/docs/manage-data/data-store/mapping/explicit-mapping)。
+
+##### 实现划分与验证
+
+- 命令层使用 Cobra 注册 `mapping` 子命令，无子命令时保留现有服务启动行为；只为 mapping 注册所需 ES 和比较参数，不要求 etcd、服务监听或内部 mTLS 参数。
+- `pkg/storage/es` 复用现有资源映射表和 `mappingForResource`，提供 alias/mapping 读取、纯差异计算及补丁应用；启动初始化与维护命令共用定义，不维护字段迁移清单。
+- 分离 ES 客户端连接创建与索引初始化。普通服务启动继续执行原有初始化及 IAM mapping 校验，mapping 命令只建立连接，不调用 `ensureIndices` 或 `EnsureIAMIndices`，避免预览时创建索引或先被缺失字段校验阻断。
+- 单元测试覆盖新增根字段/嵌套字段、object/nested 区分、缺省参数规范化、Legacy、Conflict、资源选择、只读预览和退出码；确认预检冲突发生时全部索引零写入。
+- 故障测试覆盖 alias 目标变化、并发新增相同字段、PUT 成功但响应丢失、结果无法确认、部分成功后失败以及重复执行；确认补丁不包含索引设置或文档内容。
+- 使用实际部署版本 ES 验证 IAM `externalIdentity` 新增、父级 dynamic=false 下新增查询字段及历史文档行为；确认命令可在 apiserver 因 mapping 不满足而尚未 Ready 时独立运行。
 
 ## 默认值与校验
 
@@ -880,10 +969,12 @@ OldJob 不设置 TTL。DELETE 不判断父 Build 或保留期，只执行生命�
 入口为：
 
 ```text
-backend/ebs-apiserver/cmd/server/main.go
+backend/ebs-apiserver/cmd/main.go
 ```
 
 关键默认参数：
+
+本节为服务启动参数；独立维护命令的参数及退出码见 [Mapping 升级](#mapping-升级)。
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -898,7 +989,7 @@ IAM 模块只增加 `--enable-iam` 这一项启动配置。User、MachineAccount
 
 ```bash
 cd backend/ebs-apiserver
-go run ./cmd/server \
+go run ./cmd \
   --etcd-servers=http://localhost:2379 \
   --es-servers=http://localhost:9200 \
   --enable-iam \
