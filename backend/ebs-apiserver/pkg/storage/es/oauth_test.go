@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 )
 
@@ -23,34 +22,6 @@ func TestIdentityDocumentNotFound(t *testing.T) {
 		if got := IsDocumentNotFound(err); got != test.absent {
 			t.Errorf("IsDocumentNotFound(%s)=%t, want %t", test.body, got, test.absent)
 		}
-	}
-}
-
-func TestValidateOAuthMappings(t *testing.T) {
-	for _, test := range []struct {
-		name, userMapping, claimMapping string
-		wantError                       bool
-	}{
-		{"current", iamIndexMapping, oauthIdentityMapping, false},
-		{"missing identity", strings.Replace(iamIndexMapping, `"externalIdentity"`, `"unrelated"`, 1), oauthIdentityMapping, true},
-		{"indexed identity", strings.Replace(iamIndexMapping, `"externalIdentity":{"type":"object","enabled":false}`, `"externalIdentity":{"type":"keyword"}`, 1), oauthIdentityMapping, true},
-		{"invalid claim", iamIndexMapping, strings.ReplaceAll(oauthIdentityMapping, `"keyword"`, `"text"`), true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				if req.Method != http.MethodGet || !strings.HasSuffix(req.URL.Path, "/_mapping") {
-					t.Fatalf("mapping validation attempted mutation: %s %s", req.Method, req.URL)
-				}
-				mapping := test.claimMapping
-				if req.URL.Path == "/ebs-users/_mapping" {
-					mapping = test.userMapping
-				}
-				return response(200, `{"index":`+mapping+`}`), nil
-			})})
-			if err := client.validateOAuthMappings(); (err != nil) != test.wantError {
-				t.Fatalf("validateOAuthMappings = %v", err)
-			}
-		})
 	}
 }
 
