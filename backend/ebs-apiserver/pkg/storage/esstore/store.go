@@ -137,9 +137,6 @@ func (s *Store) Get(ctx context.Context, name string, _ *metav1.GetOptions) (run
 	var hit *es.Hit
 	var err error
 	if filter, ok := sourceFilter(ctx); ok {
-		if s.resourceName == "oldjob" && len(filter.Includes) > 0 {
-			filter.Includes = append(append([]string(nil), filter.Includes...), "archive.deleted", "metadata.name")
-		}
 		hit, err = s.client.GetWithSourceFilter(ctx, s.resourceName, s.documentID(ctx, name), filter)
 	} else {
 		hit, err = s.client.Get(ctx, s.resourceName, s.documentID(ctx, name))
@@ -152,6 +149,51 @@ func (s *Store) Get(ctx context.Context, name string, _ *metav1.GetOptions) (run
 
 func (s *Store) Create(ctx context.Context, obj runtime.Object, admission rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
 	return s.CreateWithCredential(ctx, obj, nil, admission, options)
+}
+
+// CreateSnapshot persists a caller-validated snapshot without resetting its identity or business fields.
+// It is create-only and is not a public REST creation entry point.
+func (s *Store) CreateSnapshot(ctx context.Context, obj runtime.Object) error {
+	doc, id, err := s.documentFor(ctx, obj)
+	if err != nil {
+		return err
+	}
+	_, err = s.client.Create(ctx, s.resourceName, id, doc)
+	if err == nil {
+		return nil
+	}
+	if es.IsStatus(err, 409) {
+		return apierrors.NewAlreadyExists(s.resource, doc.Metadata.Name)
+	}
+	return s.apiError(err, doc.Metadata.Name)
+}
+
+// UpdateLifecycle applies a trusted lifecycle transition to a full object using ES CAS.
+// The callback validates the transition and reports whether persistence is needed.
+func (s *Store) UpdateLifecycle(ctx context.Context, name string, pre *metav1.Preconditions, dryRun bool, change func(runtime.Object) (bool, error)) (runtime.Object, error) {
+	hit, err := s.client.Get(ctx, s.resourceName, s.documentID(ctx, name))
+	if err != nil {
+		return nil, s.apiError(err, name)
+	}
+	obj, err := s.objectFromHit(hit)
+	if err != nil {
+		return nil, err
+	}
+	accessor, _ := meta.Accessor(obj)
+	if pre != nil && (pre.UID != nil && *pre.UID != accessor.GetUID() ||
+		pre.ResourceVersion != nil && *pre.ResourceVersion != accessor.GetResourceVersion()) {
+		return nil, apierrors.NewConflict(s.resource, name, fmt.Errorf("object preconditions failed"))
+	}
+	wasDeleting := accessor.GetDeletionTimestamp() != nil
+	changed, err := change(obj)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return obj, nil
+	}
+	result, _, err := s.persistUpdate(ctx, name, hit, obj, wasDeleting, dryRun)
+	return result, err
 }
 
 func (s *Store) CreateWithCredential(ctx context.Context, obj runtime.Object, credential json.RawMessage, admission rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
@@ -300,8 +342,13 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 	} else {
 		newMeta.SetGeneration(oldMeta.GetGeneration())
 	}
-	if oldMeta.GetDeletionTimestamp() != nil && len(newMeta.GetFinalizers()) == 0 {
-		if dryrun.IsDryRun(options.DryRun) {
+	return s.persistUpdate(ctx, name, hit, newObj, oldMeta.GetDeletionTimestamp() != nil, dryrun.IsDryRun(options.DryRun))
+}
+
+func (s *Store) persistUpdate(ctx context.Context, name string, hit *es.Hit, newObj runtime.Object, wasDeleting, dryRun bool) (runtime.Object, bool, error) {
+	newMeta, _ := meta.Accessor(newObj)
+	if wasDeleting && len(newMeta.GetFinalizers()) == 0 {
+		if dryRun {
 			return newObj, false, nil
 		}
 		if s.deleteHook != nil {
@@ -315,7 +362,7 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 		s.notifyWrite(ctx, newObj, true)
 		return newObj, false, nil
 	}
-	if dryrun.IsDryRun(options.DryRun) {
+	if dryRun {
 		return newObj, false, nil
 	}
 	doc, id, err := s.documentFor(ctx, newObj)
@@ -610,16 +657,7 @@ func (s *Store) documentFor(ctx context.Context, obj runtime.Object) (es.Documen
 
 func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
 	var doc es.Document
-	if s.resourceName == "oldjob" {
-		var archived es.OldJobDocument
-		if err := hit.Decode(&archived); err != nil {
-			return nil, apierrors.NewInternalError(err)
-		}
-		if archived.Archive != nil && archived.Archive.Deleted {
-			return nil, apierrors.NewNotFound(s.resource, archived.Metadata.Name)
-		}
-		doc = archived.Document
-	} else if err := hit.Decode(&doc); err != nil {
+	if err := hit.Decode(&doc); err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
 	obj := s.newFunc()
@@ -750,9 +788,6 @@ func supportsDeletionTimestampSelector(resource string) bool {
 func selectorQuery(resource, namespace string, options *internalversion.ListOptions) (map[string]interface{}, error) {
 	must := make([]interface{}, 0)
 	mustNot := make([]interface{}, 0)
-	if resource == "oldjob" {
-		mustNot = append(mustNot, map[string]interface{}{"term": map[string]interface{}{"archive.deleted": true}})
-	}
 	if namespace != "" {
 		must = append(must, term("metadata.namespace", namespace))
 	}

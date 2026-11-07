@@ -708,7 +708,7 @@ BuildInfo 创建时同样加入 `ebs.io/buildinfo-cleanup`。BuildInfo Controlle
 - BuildGraph 保留原有 BuildInfo owner UID 和删除状态校验，用于确认资源归属。
 - RpmRepo `/status` 的 `CleanupReady=True` Condition 确认不可撤销，仅允许 `True/reason=OperationsDrained`，写入时 repository/release transition 必须均为空；之后不得删除、改为非 True 或登记新 transition，condition type 不允许重复。
 - 停止生产、等待已有仓库操作以及重复扫描由 Controller 完成，边界见 [Build Controller 7.7](controller-manager~build-controller.md#77-build-删除与派生-api-资源清理)。
-- Job 新 retain 意图检查父 Build，已有迁移及 delete 归档不受阻断；归档仍使用下文的源 finalizer 和 OldJob 删除凭据恢复。
+- Job 新 retain 意图检查父 Build，已有迁移及 delete 归档不受阻断；归档仍使用下文的源 finalizer 和 OldJob 删除标记恢复。
 
 RpmRepo 创建时加入 `ebs.io/rpmrepo-cleanup` finalizer，DELETE 仅设置删除标记；主资源更新仅在旧对象已删除中、CleanupReady=True 且两个 transition 均为空时允许移除此 finalizer，`/status` 保留 finalizer。RpmRepo Controller 负责向 Artifact Manager 确认本构建仓库清理完成后移除；apiserver 不直接连接 Artifact Manager。
 
@@ -727,7 +727,7 @@ apiserver 负责 API 生命周期与归档存储，不调用 Artifact Manager；
 | Finalizer | 所属对象 | 移除前提 |
 | --- | --- | --- |
 | `ebs.io/job-cleanup` | OldJob | 源 Job 已消失、迁移完成且对应数据清理成功 |
-| `ebs.io/job-archive` | 源 Job | 完整归档已确认，持久化写屏障阻止迟到请求重建，源对象可以结束迁移 |
+| `ebs.io/job-archive` | 源 Job | 完整归档已确认；delete 意图已交给 OldJob，源对象可以结束迁移 |
 
 Job 创建时默认加入 archive finalizer，OldJob 创建时默认加入 cleanup finalizer，各自保留其它合法 finalizer。Job 不承担制品清理，也不存在两种内置 finalizer 的切换；仅有 archive finalizer 不表示已发起归档。普通创建、更新和 Runner status 更新不得绕过这些生命周期约束。
 
@@ -738,7 +738,7 @@ Job 创建时默认加入 archive finalizer，OldJob 创建时默认加入 clean
 1. Job DELETE 接收标准 DeleteOptions，校验提供的 UID/resourceVersion，并在同一 etcd CAS 事务中核验 phase 为 Succeeded、Failed 或 Aborted。非终态（包括空值、未知状态）返回 409，保持对象不变；终态才记录 `action=delete` 并设置 deletionTimestamp，保留 archive finalizer、spec/status。DeleteCollection 逐项遵循同一限制，dry-run 也执行校验。重复删除幂等；成功受理不表示源对象或数据已经删除。
 2. 上层调用方对非终态 Job 先调用 `/abort`，确认终态后再 DELETE。Job Controller 仅核验终态及非零 endTime 并推进归档，不在删除流程中调用 `/abort`；异常的非终态删除对象保留并报错。停止写入仍由上层业务保证。
 3. OldJob 已持久化后，delete 意图需要将其标记为删除中。为避免源对象删除后重启导致意图丢失，必须先确认 OldJob DELETE 已受理，再移除源 Job 的 archive finalizer；这只是提前移交删除意图，OldJob 数据清理仍等待源 Job 真正消失。
-4. OldJob DELETE 仅设置其自身 deletionTimestamp 并保留 cleanup finalizer，重复请求幂等。Job Controller 按 [数据清理流程](controller-manager~job-controller.md#64-oldjob-数据清理) 清理成功后移除 cleanup，最后一个 finalizer 移除时删除 Job 正文，仅保留私有迁移凭据。
+4. OldJob DELETE 仅设置其自身 deletionTimestamp 并保留 cleanup finalizer，重复请求幂等。Job Controller 按 [数据清理流程](controller-manager~job-controller.md#64-oldjob-数据清理) 清理成功后移除 cleanup，最后一个 finalizer 移除时通过 ES CAS 物理删除整个文档。
 5. 任一阶段失败或结果未知均保留对应对象和恢复记录，不通过超时强制移除 finalizer。dry-run 仅校验，不写意图、归档或数据面。
 
 内部提供 Project-scoped PUT jobs/{name}/finalizers 与 PUT oldjobs/{name}/finalizers，请求体与 archive 相同，携带 preconditions.uid/resourceVersion，仅在删除中移除自身条目，保留业务字段、删除标记和其它 finalizer。源 Job 移除 archive 前，服务端检查持久化归档的 UID 和摘要与冻结快照一致；若当前 action=delete，还须确认同 UID OldJob 已删除中，不能用旧 retain 决策完成收尾。OldJob finalizer 移除还要求源迁移为 Transferred。普通归档收尾不再发送 Job DELETE，以免升级保留意图。
@@ -759,9 +759,11 @@ Gateway 不开放这些内部入口。组件细粒度授权仍待实现，当前
 | `GET /apis/ebs/v1/projects/{project}/oldjobs` | 工程内分页查询 | `200 JobList` |
 | `GET /apis/ebs/v1/oldjobs` | 内部跨工程分页查询 | `200 JobList` |
 | `DELETE /apis/ebs/v1/projects/{project}/oldjobs/{name}` | 发起普通删除 | `200 Job` 含删除标记；不存在返回 404，前置条件冲突返回 409 |
-| `PUT /apis/ebs/v1/projects/{project}/oldjobs/{name}/finalizers` | 内部完成清理 | 返回最新 Job；最后一个 finalizer 移除时删除正文、保留私有凭据 |
+| `PUT /apis/ebs/v1/projects/{project}/oldjobs/{name}/finalizers` | 内部完成清理 | 返回最新 Job；最后一个 finalizer 移除时通过 ES CAS 物理删除文档 |
 
 oldjobs 复用 Job/JobList，不新增 Go 类型或 GVK。discovery 声明 get/list/delete 及独立 finalizers 子资源，不开放普通创建更新、Watch、DeleteCollection、status 或 abort。Gateway 仍只开放 Project-scoped GET/LIST，不新增任何写入口；归档、finalizers 和全局 List 供内部组件使用。jobs 查询不自动合并 oldjobs。
+
+实现职责：`pkg/registry/ebs/job` 编排源 Job 的冻结与迁移；`pkg/registry/ebs/oldjob` 管理归档快照、内容确认、OldJob 删除意图及 finalizer 规则，并提供受限的 REST 包装；`pkg/storage/esstore` 仅提供通用读取、分页、保留对象身份的 create-only 快照写入及 CAS 生命周期持久化。生命周期写入与普通更新共用 finalizer 完成后的物理删除逻辑，不将通用 Store 的全部写接口暴露给 OldJob。
 
 归档只迁移 API 对象，不复制或删除日志、RPM、Manifest。所有源 Job 删除都先归档；数据清理只能由 OldJob 的 cleanup 分支触发。
 
@@ -782,7 +784,7 @@ oldjobs 复用 Job/JobList，不新增 Go 类型或 GVK。discovery 声明 get/l
 
 - 源 Job 的服务端专有 annotation `ebs.io/job-archive-action` 保存 retain/delete。普通创建会清除该输入，普通更新不允许修改；/status 保留原 metadata。
 - 意图与 deletionTimestamp 在同一次 etcd CAS 中更新；Job 处于删除中且达到终态时，业务内容冻结。源 Job 自身就是不可变业务快照，仅允许受控生命周期更新和其它 finalizer 的移除。删除入口要求终态，归档前在 CAS 内核验终态及非零 endTime。
-- ES 文档的私有 `archive` 保存 UID、快照 digest、action、deleted。OldJob 对外 resourceVersion 使用 ES 并发版本；源 resourceVersion 只用于 CAS，不作为快照标识。
+- OldJob 使用公共 `Document`，完整 Job 存在 `data`，不额外保存归档记录。UID 从 Job metadata 读取，digest 按规范化后的业务内容动态计算；源消失后，action 由 OldJob 的 deletionTimestamp 推导（存在为 delete，否则为 retain）。OldJob 对外 resourceVersion 使用 ES 并发版本；源 resourceVersion 只用于 CAS，不作为快照标识。
 
 | action | 登记入口 | OldJob 处理 |
 | --- | --- | --- |
@@ -803,7 +805,7 @@ delete 意图先条件 DELETE OldJob 并确认删除标记，再通过源 finali
 
 源 finalizer 移除与物理删除是两次写入。若前者成功、后者失败，源 Job 会以空 finalizers 保留；Job Controller 重新读取最新 UID/resourceVersion 后调用同一 finalizers 接口，服务端仍校验归档及删除意图，再完成物理删除。此时归档阶段仍为 Stored，不能提前清理 OldJob 数据。
 
-OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，并保留轻量 `archive.deleted=true` 凭据；公开 GET 返回 404、List 排除该记录。凭据占据原文档 ID，任何迟到的 create-only 请求都会冲突，不能在清理后重建 OldJob。这是持久化写屏障，不依赖进程内锁或“请求超时就视为结束”。凭据不自动过期；在没有可证明的迟到写入截止边界之前，不能清除它。源 Job 消失后，etcd 不保留完整归档副本。
+OldJob 最后一个 finalizer 移除时，ES 按当前 seq_no/primary_term 通过 CAS 物理删除整个文档，不保留删除凭据。上层业务须保证清理前所有归档写入及重试（包括已发出但尚未完成的请求）已结束，删除后不再发起归档；源 Job 不存在本身不能证明在途请求已排空。apiserver 不额外实现跨实例写入排空或阻止迟到重建的协议。源 Job 消失后，etcd 不保留完整归档副本。
 
 内部 GET archive 返回 `{uid, action, digest, phase}`，不返回正文：
 
@@ -813,7 +815,7 @@ OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，�
 | Stored | 同 UID、同快照摘要的 ES 归档已确认；源 Job 尚存在 |
 | Transferred | 归档已确认，实时读取源 Job 返回 NotFound |
 
-源存在时 action 以源对象为准，并重新计算冻结快照摘要核对已存归档；源消失后使用 ES 的 action。GET 不触发归档写入，读取失败不报告迁移完成，身份或摘要不一致返回冲突。最终删除凭据仍可用于迁移确认，但不能作为公开 OldJob 返回。
+源存在时 action 以源对象为准，并重新计算源 Job 与 OldJob 的规范化摘要进行核对；源消失后 action 从 OldJob 的 deletionTimestamp 推导。GET 不触发归档写入，读取失败不报告迁移完成，身份或摘要不一致返回冲突。OldJob 与源 Job 都删除后，GET archive 返回 404，不再提供迁移确认。
 
 | 场景 | 处理 |
 | --- | --- |
@@ -822,10 +824,10 @@ OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，�
 | OldJob 提前收到 DELETE | 可以标记删除，但清理与 finalizer 收尾都等待 Transferred |
 | retain 被升级为 delete | 先将删除意图交给 OldJob，再释放源 finalizer |
 | OldJob 已删除中 | 同一归档只确认，不覆盖删除状态 |
-| OldJob 已最终删除 | 轻量凭据拒绝迟到归档创建；源按约定不会再出现 |
+| OldJob 已最终删除 | GET OldJob 与 GET archive 返回 404；上层保证不会再有归档写入 |
 | 权限、参数或接口契约错误 | 报错并保留恢复入口，修复后继续 |
 
-写入遵循 UID/resourceVersion CAS。Unknown 后重新读取原对象和迁移状态，不用新 resourceVersion 重放旧决定。POST archive 的 200 表示不可变快照已确认并受到持久化写屏障保护，不表示源对象已经删除。
+写入遵循 UID/resourceVersion CAS。Unknown 后重新读取原对象和迁移状态，不用新 resourceVersion 重放旧决定。POST archive 的 200 表示不可变快照已持久化且内容核对通过，不表示源对象已经删除。
 
 ### 文档、mapping 与查询
 
@@ -836,7 +838,6 @@ OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，�
 | apiVersion、kind、documentID、metadata.name、metadata.namespace | keyword |
 | metadata.creationTimestamp、data.metadata.deletionTimestamp | date |
 | metadata.labels | nested，key/value 为 keyword |
-| archive | object, dynamic: false；保存 UID、digest、action、deleted，只有 deleted 建立 boolean 索引 |
 | data | object, dynamic: false；保存完整归档 Job |
 | data.status.phase、data.status.stage、data.status.runner | keyword |
 | data.status.startTime、data.status.endTime | date |
@@ -845,13 +846,13 @@ OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，�
 
 GET 使用实时 ES 文档接口。GET/LIST 支持 includeFields/excludeFields，labelSelector 沿用公共规则；fieldSelector 保留 metadata.name、metadata.namespace、status.phase、status.stage、status.runner，并增加 `metadata.deletionTimestamp!=null` 筛选删除中的对象，其语义为字段存在且非空。Job 的 etcd List 同样提供该删除筛选；两种 Job 意图登记时均设置删除标记，生命周期轮询只需查询删除中的 Job/OldJob，不需要按默认 finalizer 扫描全部历史 Job。
 
-List 按 creationTimestamp desc、documentID desc 排序，使用 PIT、limit/continue；token 绑定资源、Project、过滤与投影。拒绝 watch=true、resourceVersion 和 resourceVersionMatch，不将单对象 ES 版本解释为 Watch 游标。普通查询排除 archive.deleted=true 的内部凭据。
+List 按 creationTimestamp desc、documentID desc 排序，使用 PIT、limit/continue；token 绑定资源、Project、过滤与投影。拒绝 watch=true、resourceVersion 和 resourceVersionMatch，不将单对象 ES 版本解释为 Watch 游标。物理删除后的文档不再参与查询。
 
 OldJob 不设置 TTL。DELETE 不判断父 Build 或保留期，只执行生命周期与并发控制；内部调用方使用最新 OldJob UID/resourceVersion。dry-run 不修改协调记录、ES 或数据面。改变 history-action 不清理现有 OldJob，也不撤销已登记的归档。
 
 ### 验证要求
 
-单元测试覆盖生命周期状态迁移、CAS 冲突、冻结快照、删除凭据和接口装配；下表仍包含需在实际服务上执行的跨进程故障注入要求。
+单元测试覆盖生命周期状态迁移、CAS 冲突、冻结快照、物理删除及结果未知恢复和接口装配；下表仍包含需在实际服务上执行的跨进程故障注入要求。
 
 | 场景 | 断言 |
 | --- | --- |
@@ -866,8 +867,8 @@ OldJob 不设置 TTL。DELETE 不判断父 Build 或保留期，只执行生命�
 | Build 删除及父 Build 缺失 | 允许删除所需的归档，已有 retain 升级 delete；最终扫描 OldJob，不形成等待环 |
 | 非终态 Job 删除、ES 持续故障 | DELETE 返回 409 且不写入删除意图，上层先中止并确认终态；ES 故障保留源对象，不跳过归档 |
 | OldJob DELETE 已受理、源收尾前后重启 | 删除标记作为持久化接力；源消失后 OldJob 继续清理，不遗留未删除归档 |
-| retain 迁移完成与 OldJob 最终删除 | 源删除后 etcd 不保留完整快照；OldJob 删除正文，保留轻量删除凭据 |
-| 两个 apiserver、迟到 ES 写入、迁移接管 | create-only 和持久化凭据阻止清理后重建；不依赖进程内锁 |
+| retain 迁移完成与 OldJob 最终删除 | 源删除后 etcd 不保留完整快照；OldJob 以 ES CAS 物理删除整个文档 |
+| 多实例归档、迁移接管与清理 | 归档存在时 create-only 与内容核对保证幂等；清理前上层保证归档写入及重试已排空 |
 | 事务后、ES 写入前后、源 DELETE 前后、移除 finalizer 前后重启 | 从持久化阶段恢复；业务快照和制品保留策略不变 |
 | 分页、投影及删除筛选 | 完整分页；终态 Job/OldJob 删除可发现；无 Watch 或历史全量常驻缓存 |
 | Gateway 路由 | 仍只公开 oldjobs GET/LIST，不公开 archive/finalizers |

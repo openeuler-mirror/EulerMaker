@@ -215,16 +215,7 @@ func TestDocumentTypesRoundTrip(t *testing.T) {
 		fields   map[string]any
 	}{
 		{"build", base, nil},
-		{
-			"oldjob",
-			OldJobDocument{
-				Document: base,
-				Archive:  &JobArchiveRecord{UID: "uid", Digest: "digest", Action: "retain"},
-			},
-			map[string]any{
-				"archive": map[string]any{"uid": "uid", "digest": "digest", "action": "retain", "deleted": false},
-			},
-		},
+		{"oldjob", base, nil},
 		{
 			"user",
 			IAMDocument{

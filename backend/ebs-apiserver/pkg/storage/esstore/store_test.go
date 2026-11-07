@@ -889,3 +889,76 @@ func TestFinalizerCompletionNotifiesDeletion(t *testing.T) {
 		t.Fatalf("deletion notifications=%d", calls)
 	}
 }
+
+func TestOldJobsProjectedPagination(t *testing.T) {
+	filter := es.SourceFilter{Includes: []string{"data.metadata", "data.status.phase"}}
+	ctx := WithSourceFilter(genericapirequest.WithNamespace(context.Background(), "project"), filter)
+	searches := 0
+	opts := &internalversion.ListOptions{Limit: 1, LabelSelector: labels.SelectorFromSet(labels.Set{"ebs.io/build-name": "build"}), FieldSelector: fields.ParseSelectorOrDie("status.runner=runner,status.stage!=Pending,status.phase=Succeeded")}
+	wantQuery, err := selectorQuery("oldjob", "project", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := es.NewClientForTesting("http://es", &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/ebs-oldjobs/_pit":
+			return jsonResponse(200, map[string]string{"id": "pit"}), nil
+		case "/_pit":
+			return jsonResponse(200, map[string]bool{"succeeded": true}), nil
+		case "/_search":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			queryJSON, _ := json.Marshal(body["query"])
+			wantJSON, _ := json.Marshal(wantQuery)
+			if string(queryJSON) != string(wantJSON) {
+				t.Fatalf("query=%s want=%s", queryJSON, wantJSON)
+			}
+			if !reflect.DeepEqual(body["_source"].(map[string]any)["includes"], []any{"data.metadata", "data.status.phase"}) {
+				t.Fatalf("projection=%v", body["_source"])
+			}
+			if searches > 0 && body["search_after"] == nil {
+				t.Fatal("missing search_after")
+			}
+			searches++
+			return jsonResponse(200, map[string]any{"pit_id": "pit", "hits": map[string]any{
+				"total": map[string]any{"value": 2}, "hits": []any{map[string]any{
+					"_id": "project/job", "_seq_no": 5, "_primary_term": 1, "sort": []any{100, "project/job", searches},
+					"_source": map[string]any{"data": map[string]any{"metadata": map[string]any{"name": "job", "namespace": "project", "uid": "uid", "resourceVersion": "123"}, "status": map[string]any{"phase": "Succeeded"}}},
+				}},
+			}}), nil
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+			return nil, nil
+		}
+	})})
+	template := scopedresource.NewStorage(scopedresource.Config{
+		Resource: "oldjobs", Singular: "oldjob", Kind: "Job",
+		New:     func() runtime.Object { return &ebsv1.Job{} },
+		NewList: func() runtime.Object { return &ebsv1.JobList{} },
+	})
+	store := New(client, "oldjob", "Job", template.Resource.(*genericregistry.Store))
+	out, err := store.List(ctx, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := out.(*ebsv1.JobList)
+	if first.Continue == "" || first.Items[0].ResourceVersion != "v1:5:1" || first.ResourceVersion != "" {
+		t.Fatalf("list=%+v", first)
+	}
+	opts.Continue = first.Continue
+	if _, err := store.List(WithSourceFilter(ctx, es.SourceFilter{}), opts); !apierrors.IsBadRequest(err) {
+		t.Fatalf("projection cursor mismatch=%v", err)
+	}
+	out, err = store.List(ctx, opts)
+	if err != nil || out.(*ebsv1.JobList).Continue != "" || searches != 2 {
+		t.Fatalf("next=%+v err=%v", out, err)
+	}
+	for _, field := range []string{"status.stage", "status.runner", "status.phase"} {
+		mapped, _, ok := fieldSelectorMapping("oldjob", field)
+		if !ok || !strings.HasPrefix(mapped, "data.status.") {
+			t.Fatalf("field %s mapping=%s", field, mapped)
+		}
+	}
+}

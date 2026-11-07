@@ -268,11 +268,11 @@ status:
 
 ### 6.3 归档调谐与恢复
 
-archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归档已经开始或允许清理数据的标记。归档 action、冻结快照和跨实例写屏障统一见 [apiserver](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
+archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归档已经开始或允许清理数据的标记。归档 action、冻结快照和上层停止写入前提统一见 [apiserver](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
 
 1. 处理已删除中且仍带 archive finalizer 的源 Job。自身 finalizer 已移除但还剩其它 finalizer 时等待其拥有者；finalizers 已空但源对象仍存在时，继续核验归档并调用受控 finalizers 接口完成物理删除。移除 finalizer 与删除正文是两次写入，不能把前者成功等同于源已消失。GET 最新对象及迁移记录，确认 UID/action；记录缺失视为契约异常，不从 deletionTimestamp 推导 retain/delete。
 2. 核验源 Job 为终态且 endTime 非零，再请求归档。非终态删除由 apiserver 拒绝，上层负责先调用 abort 并确认终态；若发现异常的非终态删除对象，记录错误并保留对象，不自动中止。停止写入由上层业务保证。删除所需归档不被父 Build 删除或缺失阻断。
-3. 调用 archive 子资源冻结或恢复同一快照；确认 ES 持久化及 create-only/删除凭据保护。源 Job 仍受 archive finalizer 保护，此分支永不调用 DeleteJobData。
+3. 调用 archive 子资源冻结或恢复同一快照；确认 ES create-only 写入和归档内容一致。源 Job 仍受 archive finalizer 保护，此分支永不调用 DeleteJobData。
 4. 读取最新 action：retain 保留 OldJob；delete 对同 UID OldJob 发起条件 DELETE。请求成功后同轮进入源收尾；若 OldJob 已删除中不重复请求。读取失败、身份不符或删除结果未确认时停止推进并保留源对象。
 5. 使用本轮读取的源 UID/resourceVersion 调用受控 finalizers 接口，移除 archive finalizer，保留其它条目；不使用 OldJob 版本替换源版本，不再发送普通 Job DELETE。若并发 DELETE 将 retain 升级为 delete，旧版本收尾必须冲突并重新处理，不能漏掉 OldJob 删除。
 6. 等待源 Job 真正消失。OldJob 删除标记已持久化时，由 6.4 继续处理；源消失后重启也不丢失清理入口。
@@ -286,7 +286,7 @@ archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归
 | 临时错误、WriteNotSent 的临时错误 | 退避重试，不降级为直接删除 |
 | WriteUnknown 或异常成功响应 | 下轮读取原对象及持久化迁移阶段，必要时恢复相同快照；未确认前不移除 archive finalizer |
 
-归档安全性由服务端冻结快照、create-only 写入及删除凭据保证，不通过客户端超时或内存队列判断在途请求已经结束。重启后继续原意图，不根据新的 GC 策略替换冻结快照。
+归档通过服务端冻结快照、create-only 写入和 UID/内容核对保证幂等。上层业务须在清理前保证所有归档写入及重试已经结束，不能仅以客户端超时或源 Job 不存在判断在途请求已排空；不再保留 ES 删除凭据。重启后继续原意图，不根据新的 GC 策略替换冻结快照。
 
 父 Build 删除状态检查关闭新 retain 入口，但允许 delete 意图所需的归档及已有迁移恢复；清理待删 Job 不能因父 Build 删除而被拒绝。BuildInfo Controller 等待 Job 和 OldJob 消失，不绕过本流程清理数据；Build Controller 只等待 BuildInfo 删除完成，不跨级处理 Job/OldJob。生产者停止与排空规则引用 Build Controller 7.7。
 
@@ -301,14 +301,14 @@ archive finalizer 是源 Job 在删除前必须完成迁移的保护，不是归
 1. GET 当前资源，核对 UID；不存在或 UID 变化结束旧周期。删除中的 Job 只进入 6.3，不执行文件清理。
 2. 仅 OldJob 的 deletionTimestamp 非空且带 cleanup finalizer 时执行本流程。没有自身 finalizer 时不接管其它清理；Job 带 cleanup 或 OldJob 带 archive 均属于契约异常，保留并告警。
 3. 上层业务须保证已停止上传/签名、排空物化等输入使用者。Job API 终态（尤其 Aborted、RunnerLost）本身不证明容器和在途上传已停止；本轮不提供独立停止确认字段，不以删除文件强制中止业务。
-4. 通过 GET archive 确认同 UID 的迁移阶段为 Transferred，即归档已确认且源 Job 不存在。迟到归档写入由服务端删除凭据阻断。缺失记录、读取失败或未完成迁移都保留对象，不能只凭源 Job GET 404 开始清理。
+4. 通过 GET archive 确认同 UID 的迁移阶段为 Transferred，即归档已确认且源 Job 不存在。清理前由上层保证归档写入及重试已结束。缺失记录、读取失败或未完成迁移都保留对象，不能只凭源 Job GET 404 开始清理。
 5. 从对象固化的 `ebs.io/artifacts` 和 Config/services 解析实例，调用 [Artifact Manager 13.1](artifact-manager.md#131-job-数据同步删除)。只接受完整 204 作为完成；Unknown 可重复该幂等 DELETE，HTTP 404 不是数据不存在的成功回执。
 6. 清理成功后以本轮已读取的 UID/resourceVersion 调用 finalizers，服务端重新核验删除状态与迁移完成。Conflict 或 Unknown 下轮重新 GET 并判定，允许重复幂等清理；不得仅替换版本重放旧对象。
 7. 保留其它 finalizer、业务状态和实例归属。不删除过程仓、发布仓及 current；数据已清理但 API 更新失败时允许短暂出现 API 仍在而文件不存在，下轮重复清理即可。
 
 归档成功后返回 `Requeue=true`，立即重新读取最新状态推进；OldJob 删除意图确认成功后按 6.3 同轮完成源收尾。等待源消失等外部条件、源仅剩其它 finalizer 或清理完成时返回空结果，由周期扫描发现后续变化，不统一设置 10 秒延迟重排。临时故障仍使用队列退避及合法 Retry-After；永久权限/契约错误记录告警并保留 finalizer，周期轮询使修复后仍可继续。一个 Job 失败不阻塞其它 Job。日志分别记录意图已受理、数据清理成功和 API 对象真正删除，不能将 DELETE 的 2xx 等同于最终清理完成。
 
-停止写入仍是上层业务前提；Artifact Manager 的幂等删除不提供上传写入隔离。ES 删除凭据只保护归档元数据，不阻止 Runner 重新上传文件。
+停止写入仍是上层业务前提；Artifact Manager 的幂等删除不提供上传写入隔离。OldJob 文档最终物理删除，不提供迟到归档或迟到上传的隔离保证。
 
 ## 七、并发与一致性
 
@@ -579,8 +579,8 @@ job_controller_history_archive_error_total
 | 源 finalizer 已移除但物理删除失败 | 轮询重新发现空 finalizers 的源 Job；使用最新 UID/resourceVersion 调用受控收尾接口，重启后也可恢复；源消失前 OldJob 不清理数据 | Controller 与 apiserver 单元测试 |
 | 终态删除与 retain 迁移 | 两者均有删除标记；生命周期轮询可发现；普通 Job 的默认 finalizer 不造成入队；GC 关闭仍推进 | 轮询集成测试 |
 | OldJob 删除标记确认后、源消失后立即重启 | 从 OldJob 恢复清理；retain 则继续保留，不靠内存判断 | 进程重启测试 |
-| 冻结意图、ES 写入、数据清理、finalizer 更新各阶段重启 | 恢复原意图，通过 UID 和摘要确认冻结快照；持久化凭据阻断迟到归档；成功清理可重复 | 进程重启故障注入 |
-| 多 apiserver 归档请求延迟落库 | 旧执行者被 fencing 阻断；OldJob 清理后没有迟到重建 | 实际服务故障注入 |
+| 冻结意图、ES 写入、数据清理、finalizer 更新各阶段重启 | 恢复原意图，通过 UID 和摘要确认冻结快照；成功清理可重复；物理删除结果未知后重新读取，404 表示对象已不存在 | 进程重启故障注入 |
+| 多 apiserver 归档请求延迟落库 | 上层在所有在途归档写入和重试结束后才允许 OldJob 清理 | 上层业务集成验收 |
 | 数据文件与仓库硬链接 | 仅删 Job 目录；过程仓和发布仓仍可下载，repodata 不变 | AM 联动测试 |
 
 单元测试已覆盖状态机和失败恢复；实际多进程、etcd/ES 故障注入及停止上传的业务保证仍需部署环境验收。

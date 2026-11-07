@@ -36,7 +36,7 @@ func TestOldJobsHTTPRoutes(t *testing.T) {
 			}
 			return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"_seq_no":100,"_primary_term":1}`))}, nil
 		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"_id":"project/job","_seq_no":99,"_primary_term":1,"_source":{"archive":{"uid":"uid","digest":"snapshot-digest","action":"retain"},"data":{"apiVersion":"ebs/v1","kind":"Job","metadata":{"name":"job","namespace":"project","uid":"uid","resourceVersion":"123","labels":{"ebs.io/build-name":"build"}},"spec":{"priority":1},"status":{"phase":"Succeeded"}}}}`))}, nil
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"_id":"project/job","_seq_no":99,"_primary_term":1,"_source":{"data":{"apiVersion":"ebs/v1","kind":"Job","metadata":{"name":"job","namespace":"project","uid":"uid","resourceVersion":"123","labels":{"ebs.io/build-name":"build"}},"spec":{"priority":1},"status":{"phase":"Succeeded"}}}}`))}, nil
 	})})
 	info, _, err := CreateAPIGroupInfo(testRESTOptions(), client)
 	if err != nil {
