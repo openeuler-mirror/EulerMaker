@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/emicklei/go-restful/v3"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	genericapiserver "k8s.io/apiserver/pkg/server"
@@ -97,4 +99,80 @@ func cloneURL(in *url.URL) *url.URL {
 	}
 	out := *in
 	return &out
+}
+
+var runnerJobQueryParameters = map[string]struct{}{
+	"watch":               {},
+	"resourceVersion":     {},
+	"timeoutSeconds":      {},
+	"allowWatchBookmarks": {},
+	"includeFields":       {},
+	"excludeFields":       {},
+}
+
+func runnerJobLongRunningCheck(base genericapirequest.LongRunningRequestCheck) genericapirequest.LongRunningRequestCheck {
+	return func(req *http.Request, info *genericapirequest.RequestInfo) bool {
+		if base != nil && base(req, info) {
+			return true
+		}
+		if req.Method != http.MethodGet {
+			return false
+		}
+		parts := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+		if len(parts) != 6 || parts[0] != "apis" || parts[1] != "ebs" || parts[2] != "v1" || parts[3] != "runners" || parts[5] != "jobs" {
+			return false
+		}
+		watch := strings.ToLower(req.URL.Query().Get("watch"))
+		return watch != "" && watch != "false" && watch != "0"
+	}
+}
+
+func installRunnerJobAliasRoutes(srv *genericapiserver.GenericAPIServer) {
+	var ws *restful.WebService
+	for _, existing := range srv.Handler.GoRestfulContainer.RegisteredWebServices() {
+		if existing.RootPath() == "/apis/ebs/v1" {
+			ws = existing
+			break
+		}
+	}
+	if ws == nil {
+		return
+	}
+
+	ws.Route(ws.GET("/runners/{runner}/jobs").To(func(req *restful.Request, resp *restful.Response) {
+		runner := req.PathParameter("runner")
+		if len(utilvalidation.IsDNS1123Label(runner)) != 0 {
+			http.Error(resp.ResponseWriter, "invalid runner name", http.StatusBadRequest)
+			return
+		}
+		query := req.Request.URL.Query()
+		for key := range query {
+			if _, ok := runnerJobQueryParameters[key]; !ok {
+				http.Error(resp.ResponseWriter, "unsupported query parameter", http.StatusBadRequest)
+				return
+			}
+		}
+		query.Set("fieldSelector", "status.runner="+runner)
+		rewritten := req.Request.Clone(req.Request.Context())
+		rewritten.URL = cloneURL(req.Request.URL)
+		rewritten.URL.Path = "/apis/ebs/v1/jobs"
+		rewritten.URL.RawPath = ""
+		rewritten.URL.RawQuery = query.Encode()
+		rewritten.RequestURI = ""
+		rewritten = rewritten.WithContext(globalJobRequestContext(rewritten.Context(), rewritten.URL.Path))
+		srv.Handler.ServeHTTP(resp.ResponseWriter, rewritten)
+	}))
+}
+
+func globalJobRequestContext(ctx context.Context, path string) context.Context {
+	info, ok := genericapirequest.RequestInfoFrom(ctx)
+	if !ok || info == nil {
+		return ctx
+	}
+	global := *info
+	global.Path = path
+	global.Resource = "jobs"
+	global.Name = ""
+	global.Subresource = ""
+	return genericapirequest.WithRequestInfo(ctx, &global)
 }
