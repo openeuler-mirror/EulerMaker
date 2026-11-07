@@ -19,7 +19,7 @@ apiserver 创建 RpmRepo 时加入 `ebs.io/rpmrepo-cleanup` finalizer。上层 D
 
 Controller 在自身队列 key 内检查 Build/BuildInfo 删除状态，停止新增仓库操作，调用 `DELETE /internal/v1/projects/{project}/builds/{buildName}/releases`。Artifact Manager 在 DELETE 内持久化停止标记、拒绝两类仓库的迟到提交及自动激活，并等待已受理任务结束，再删除发布版本。202 保留检查点并延迟 5 秒重入；只有 204 才在一次 CAS 中清空两个 transition 并写入 `CleanupReady=True`。此时过程仓仍保留供 Job 使用，BuildInfo 可以继续清理 Job/OldJob，不需要等待 RpmRepo 自身删除。无检查点或发布记录从未存在也必须执行 DELETE，以阻止迟到提交；404、冲突、网络或存储失败均不能确认完成。持久化、重启与错误契约见 [Artifact Manager 13.2](artifact-manager.md#132-按-build-删除过程仓和发布仓)。
 
-CleanupReady 确认不可撤销，该 RpmRepo 后续不再提交新操作。apiserver 保证该条件为 True 时两个 transition 均为空，消费方只检查 Condition，不重复校验检查点。BuildInfo Controller 观察到确认后才可清理 Job/OldJob 输入；BuildGraph 不是物化输入，本地生产停止后即可独立清理。父资源删除只触发停止和排空，不触发仓库文件删除。
+CleanupReady 确认不可撤销，该 RpmRepo 后续不再提交新操作。apiserver 保证该条件为 True 时两个 transition 均为空，消费方只检查 Condition，不重复校验检查点。BuildInfo Controller 观察到确认后才可清理 Job/OldJob 输入；BuildGraph 不是物化输入，本地生产停止后即可独立清理。父资源删除阶段清理发布仓、保留过程仓；RpmRepo 删除阶段再清理过程仓。
 
 业务失败/中止保留尚未排空的检查点，即使 release.phase=Failed。initializer 额外挂接 `metadata.deletionTimestamp!=null` 的 BuildInfo 和 RpmRepo PollingSource 到同一队列，确保终态或已写 CleanupReady 的删除对象仍能完成收敛。删除分支先于 CleanupReady 和业务终态退出判断：未确认时排空并写 status，下一轮读取最新对象。
 

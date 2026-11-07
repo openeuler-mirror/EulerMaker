@@ -17,7 +17,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestInternalRequestDoesNotForwardCallerCredentials(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if r.URL.Path != "/internal/iam/v1/authenticate" || r.URL.Query().Get("a") != "b" {
+		if r.URL.Path != "/internal/iam/v1/users/authenticate" || r.URL.Query().Get("a") != "b" {
 			t.Errorf("unexpected upstream URL %s", r.URL.String())
 		}
 		if r.Header.Get("Authorization") != "" {
@@ -29,7 +29,7 @@ func TestInternalRequestDoesNotForwardCallerCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := client.Do(context.Background(), http.MethodPost, "/internal/iam/v1/authenticate?a=b", nil, http.Header{
+	response, err := client.Do(context.Background(), http.MethodPost, "/internal/iam/v1/users/authenticate?a=b", nil, http.Header{
 		"Authorization": []string{"Bearer forged"},
 	})
 	if err != nil {

@@ -38,10 +38,10 @@ func InstallInternalRoutes(server *genericapiserver.GenericAPIServer, credential
 	h := &Handler{credentials: credentials, users: users, machines: machines}
 	ws := new(restful.WebService).Path("/internal/iam/v1").Consumes(restful.MIME_JSON).Produces(restful.MIME_JSON)
 	ws.Route(ws.POST("/users/register").To(h.register))
-	ws.Route(ws.POST("/authenticate").To(h.authenticate))
+	ws.Route(ws.POST("/users/authenticate").To(h.authenticate))
 	ws.Route(ws.PUT("/users/{name}/password").To(h.setPassword))
 	ws.Route(ws.POST("/machineaccounts/register").To(h.registerMachine))
-	ws.Route(ws.POST("/machineaccounts/{name}/authenticate").To(h.authenticateMachine))
+	ws.Route(ws.POST("/machineaccounts/authenticate").To(h.authenticateMachine))
 	server.Handler.GoRestfulContainer.Add(ws)
 }
 
@@ -78,15 +78,15 @@ func (h *Handler) registerMachine(req *restful.Request, resp *restful.Response) 
 }
 
 func (h *Handler) authenticateMachine(req *restful.Request, resp *restful.Response) {
-	name := req.PathParameter("name")
 	var body struct {
+		Name         string `json:"name"`
 		ClientSecret string `json:"clientSecret"`
 	}
-	if err := decode(req.Request, &body); err != nil || name == "" || body.ClientSecret == "" {
+	if err := decode(req.Request, &body); err != nil || body.Name == "" || body.ClientSecret == "" {
 		writeError(resp, http.StatusBadRequest, "invalid request")
 		return
 	}
-	ttl, ok, err := h.credentials.AuthenticateMachine(req.Request.Context(), name, body.ClientSecret)
+	ttl, ok, err := h.credentials.AuthenticateMachine(req.Request.Context(), body.Name, body.ClientSecret)
 	if err != nil {
 		writeError(resp, http.StatusInternalServerError, "authentication unavailable")
 		return
@@ -95,7 +95,7 @@ func (h *Handler) authenticateMachine(req *restful.Request, resp *restful.Respon
 		writeError(resp, http.StatusUnauthorized, "authentication failed")
 		return
 	}
-	_ = resp.WriteHeaderAndEntity(http.StatusOK, map[string]interface{}{"authenticated": true, "name": name, "tokenTTLSeconds": ttl})
+	_ = resp.WriteHeaderAndEntity(http.StatusOK, map[string]interface{}{"authenticated": true, "name": body.Name, "tokenTTLSeconds": ttl})
 }
 
 func (h *Handler) register(req *restful.Request, resp *restful.Response) {

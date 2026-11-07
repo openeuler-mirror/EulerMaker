@@ -264,7 +264,7 @@ func TestLoginAndCheck(t *testing.T) {
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		var body string
 		switch r.URL.Path {
-		case "/internal/iam/v1/authenticate":
+		case "/internal/iam/v1/users/authenticate":
 			body = `{"authenticated":true,"username":"alice"}`
 		case "/apis/iam.ebs/v1/users/alice":
 			body = `{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`

@@ -167,9 +167,9 @@ IAM 模块还注册仅供 gateway 使用的内部接口：
 ```text
 POST /internal/iam/v1/users/register
 PUT  /internal/iam/v1/users/{name}/password
-POST /internal/iam/v1/authenticate
+POST /internal/iam/v1/users/authenticate
 POST /internal/iam/v1/machineaccounts/register
-POST /internal/iam/v1/machineaccounts/{name}/authenticate
+POST /internal/iam/v1/machineaccounts/authenticate
 ```
 
 注册请求和成功响应：
@@ -206,7 +206,7 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 机机认证请求为：
 
 ```json
-{"clientSecret":"base64url-encoded-random-secret"}
+{"name":"runner-site-a","clientSecret":"base64url-encoded-random-secret"}
 ```
 
 认证成功返回账号当前的权威授权信息：

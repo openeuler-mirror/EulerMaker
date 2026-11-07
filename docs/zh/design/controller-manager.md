@@ -863,7 +863,7 @@ go vet ./...
 13. Source 通过阻塞的 `Run(ctx) error` 报告不可恢复错误，Manager 使用共享 errgroup 将该错误传播到进程出口；
 14. Source Factory 按完整 GVR 共享事件源；Watch Factory 必须拒绝 Job、Runner 之外的资源；
 15. Manager 启动 Worker 前统一等待全部已创建 Source 完成首次同步，不维护 Controller 到 Source 的依赖图；
-16. 普通 List/Watch/Polling 错误持续退避恢复，通过 stale 状态影响 readiness，不直接终止进程；
+16. 普通 List/Watch 错误由 Reflector 退避恢复，WatchSource 首次同步后保持 Ready；Polling 错误持续重试，超过 stale 阈值影响 readiness，普通请求错误不直接终止进程；
 17. PollingSource 使用通用分页 `ListFunc`，任何一页失败都不得替换旧快照；
 18. 永久错误只终结本次调谐，后续资源事件仍可重新激活 key；
 19. 运行 context 和 shutdown timeout 均由 Manager 统一管理；

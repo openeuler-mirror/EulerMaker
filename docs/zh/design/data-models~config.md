@@ -284,7 +284,7 @@ Git Server 的 Runner 地址填写 HTTP(S) 服务基础入口，不附加 `/git`
 
 `ebs.io/artifacts` annotation 及 `artifact://{instance}/...` 保持原语义。Project 创建或修改该 annotation 时，apiserver 检查 `artifactManagers` 中是否存在目标键；未设置时检查 `default`。其他 Project 更新不重新检查，不在 Project 中存放物理地址。
 
-Git Server 返回与部署地址无关的 `clone_path`（`/git/...`）。Controller Manager 客户端加 `git-server://` 前缀，形成 `git-server:///git/...` 逻辑地址，固化到 Snapshot `cloneURL`，再进入 Job payload 的 `clone_url`；不使用 `gitServer.internalURL` 重写该逻辑地址。空 authority 表示当前唯一的 Git Server。Runner internal 模式使用 Git Server 内网地址解析逻辑地址；external 模式直接以 `origin_url` 替换本地 `clone_url`。两者均保留 `commit_id`，不修改 Snapshot 或 Job。
+Git Server 返回与部署地址无关的 `clone_path`（`/git/...`）。Controller Manager 客户端加 `git-server://` 前缀，形成 `git-server:///git/...` 逻辑地址，固化到 Snapshot `cloneURL`，再进入 Job payload 的 `clone_url`；不使用 `gitServer.internalURL` 重写该逻辑地址。空 authority 表示当前唯一的 Git Server。Runner 的模式选择及本地 payload 转换见 [Runner 设计](runner.md)。
 
 本对象只保存服务地址，不保存认证凭据、CA、私钥或请求超时。服务的监听参数和调用方的 TLS、超时、重试参数仍由部署配置管理。
 
@@ -348,7 +348,7 @@ Controller Manager 由公共 `pkg/serviceconfig` 负责读取 `Config/services` 
 
 Gateway 的 `GET /apis/ebs/v1/service-endpoints` 每次读取同一服务 Config，返回 `artifactManagers` 和 `gitServer`，各项仅包含 `runnerInternalURL`、`runnerExternalURL`，不返回任何管理地址。读取失败返回服务不可用，不返回旧缓存。该接口仍仅允许 Runner Token，不接受 Job、Project 或 Runner 名参数。
 
-Runner 启动时读取投影，之后每 600 秒加抖动刷新。按 Job 的 `ebs.io/artifacts` annotation 和显式 `internal`/`external` 模式选择地址，运行中的 Job 保持已选地址。Artifact Manager 所选实例或地址缺失时等待配置恢复；internal 模式解析 `git-server:///` 时 Git 内网地址为空则明确失败；external 模式改用 payload 的 `origin_url`，该值缺失或无效时明确失败，不启动构建容器。均不回退到其他模式或 internalURL，详细源码处理规则见 [Runner 设计](runner.md)。
+Runner 从 Gateway 读取地址投影。刷新周期、Job 地址快照、缺失地址处理及源码地址转换统一见 [Runner 设计](runner.md)。本对象不定义额外的地址回退规则。
 
 ### 4.7 实现范围与验收
 
