@@ -16,7 +16,7 @@
 
 ```bash
 go test ./...
-CGO_ENABLED=0 go build -o ebs-apiserver ./cmd/server
+CGO_ENABLED=0 go build -o ebs-apiserver ./cmd
 ```
 
 在仓库根目录构建容器镜像：

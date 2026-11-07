@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: ebs-mapping-apply-
+  namespace: ebs
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ebs-mapping-apply
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      nodeSelector:
+        node-role.kubernetes.io/ebs-control-plane: ""
+      containers:
+        - name: mapping-apply
+          # Use the same target image digest for check, apply and the Deployment.
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:dev
+          imagePullPolicy: Always
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/ebs/es/ca.crt
+          command: ["/app/ebs-apiserver"]
+          args:
+            - mapping
+            - --apply
+            - --es-servers=https://elasticsearch:9200
+            - --es-api-key-file=/etc/ebs/es/api-key
+          volumeMounts:
+            - name: es-auth
+              mountPath: /etc/ebs/es
+              readOnly: true
+      volumes:
+        - name: es-auth
+          secret:
+            secretName: ebs-apiserver-es-auth

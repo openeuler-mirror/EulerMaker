@@ -12,7 +12,7 @@ RUN go mod download
 
 COPY api /build/api
 COPY backend/ebs-apiserver .
-RUN go mod tidy && go build -ldflags="-s -w" -o ebs-apiserver ./cmd/server/
+RUN go mod tidy && go build -ldflags="-s -w" -o ebs-apiserver ./cmd/
 
 FROM openeuler/openeuler:24.03-lts
 
