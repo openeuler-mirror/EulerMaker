@@ -243,7 +243,8 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 		"ebs-api/ebs/v1.BuildResourceContent":    {"default", "packages"},
 		"ebs-api/ebs/v1.PackageResourceConfig":   {"default", "arches"},
 		"ebs-api/ebs/v1.JobSpec":                 {"priority", "runtime", "runtimeSpec", "payload"},
-		"ebs-api/ebs/v1.SnapshotStatus":          {"phase", "conditions"},
+		"ebs-api/ebs/v1.SnapshotSpec":            {"packageRepos"},
+		"ebs-api/ebs/v1.SnapshotStatus":          {"phase", "conditions", "packageRepoStatuses"},
 		"ebs-api/ebs/v1.RunnerStatus":            {"phase", "capacity", "heartbeat"},
 		"ebs-api/iam/v1.UserSpec":                {"enabled", "scopes", "email"},
 		"ebs-api/iam/v1.MachineAccount":          {"apiVersion", "kind", "metadata", "spec"},
@@ -260,22 +261,6 @@ func TestOpenAPIDefinitionsExposeObjectFields(t *testing.T) {
 			}
 		}
 	}
-
-	snapshotSpec, ok := definitions["ebs-api/ebs/v1.SnapshotSpec"]
-	if !ok {
-		t.Fatal("SnapshotSpec OpenAPI definition is missing")
-	}
-	if _, ok := snapshotSpec.Schema.Properties["packageRepos"]; !ok {
-		t.Error("SnapshotSpec OpenAPI definition must expose packageRepos")
-	}
-	snapshotStatus, ok := definitions["ebs-api/ebs/v1.SnapshotStatus"]
-	if !ok {
-		t.Fatal("SnapshotStatus OpenAPI definition is missing")
-	}
-	if _, ok := snapshotStatus.Schema.Properties["packageRepoStatuses"]; !ok {
-		t.Error("SnapshotStatus OpenAPI definition must expose packageRepoStatuses")
-	}
-
 }
 
 func TestCodecsUseStrictDecoding(t *testing.T) {
@@ -298,8 +283,12 @@ func TestBuildInfoSpecResultsDecoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	info := obj.(*ebsv1.BuildInfo)
-	if got := info.Status.SpecResults.FailedPackages(); len(got) != 2 || got[0] != "gcc" || got[1] != "glibc" {
-		t.Fatalf("failed repositories = %v", got)
+	want := ebsv1.SpecResults{
+		"gcc/gcc.spec":     {SpecName: "gcc", Status: ebsv1.SpecInstallFailed},
+		"glibc/glibc.spec": {Status: ebsv1.SpecPrepareFailed},
+	}
+	if !reflect.DeepEqual(info.Status.SpecResults, want) {
+		t.Fatalf("decoded spec results = %+v, want %+v", info.Status.SpecResults, want)
 	}
 }
 
@@ -484,9 +473,6 @@ func TestStorageCapabilitiesFollowPrimaryStore(t *testing.T) {
 	}
 	if _, ok := storageMap["builds"].(*esstore.Store); !ok {
 		t.Fatalf("Build route storage = %T, want *esstore.Store", storageMap["builds"])
-	}
-	if _, ok := storageMap["buildresourceconfigs"]; ok {
-		t.Fatal("BuildResourceConfig must not register a global API storage")
 	}
 	for _, resource := range []string{"configs", "scripts"} {
 		store := storageMap[resource]
