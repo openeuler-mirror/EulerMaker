@@ -270,6 +270,10 @@ func TestEnsureIAMIndices(t *testing.T) {
 			mappings[index] = string(body)
 			return response(http.StatusOK, `{"acknowledged":true}`), nil
 		}
+		if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/_mapping") {
+			index := strings.TrimSuffix(strings.TrimPrefix(req.URL.Path, "/"), "/_mapping") + "-v1"
+			return response(http.StatusOK, `{"`+index+`":`+mappings[index]+`}`), nil
+		}
 		t.Fatalf("unexpected method %s", req.Method)
 		return nil, nil
 	})}
@@ -277,7 +281,7 @@ func TestEnsureIAMIndices(t *testing.T) {
 	if err := client.EnsureIAMIndices(); err != nil {
 		t.Fatalf("ensure IAM indices: %v", err)
 	}
-	for _, index := range []string{"ebs-users-v1", "ebs-machineaccounts-v1"} {
+	for _, index := range []string{"ebs-users-v1", "ebs-machineaccounts-v1", "ebs-oauth-identity-claims-v1"} {
 		if !created[index] {
 			t.Errorf("index %s was not created", index)
 		}
@@ -286,6 +290,9 @@ func TestEnsureIAMIndices(t *testing.T) {
 		t.Fatalf("core index unexpectedly created: %#v", created)
 	}
 	for index, mapping := range mappings {
+		if index == "ebs-oauth-identity-claims-v1" {
+			continue
+		}
 		if !strings.Contains(mapping, `"credential"`) {
 			t.Errorf("IAM index %s does not contain credential mapping: %s", index, mapping)
 		}
