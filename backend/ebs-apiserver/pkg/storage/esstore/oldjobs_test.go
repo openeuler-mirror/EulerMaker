@@ -105,7 +105,7 @@ func TestOldJobsDelete(t *testing.T) {
 					if tc.deleteStatus != 0 {
 						return jsonResponse(tc.deleteStatus, map[string]string{"error": "delete failed"}), nil
 					}
-					var doc es.Document
+					var doc es.OldJobDocument
 					if err := json.NewDecoder(r.Body).Decode(&doc); err != nil {
 						t.Fatal(err)
 					}
@@ -152,7 +152,7 @@ func TestOldJobsDelete(t *testing.T) {
 var _ rest.GracefulDeleter = (*OldJobs)(nil)
 
 func TestOldJobsArchiveLifecycle(t *testing.T) {
-	var stored *es.Document
+	var stored *es.OldJobDocument
 	var revision int
 	client := es.NewClientForTesting("http://es", &http.Client{Transport: fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/ebs-oldjobs/_doc/project/job" {
@@ -197,6 +197,7 @@ func TestOldJobsArchiveLifecycle(t *testing.T) {
 	if old.ResourceVersion != "v1:1:1" || old.DeletionTimestamp != nil || !reflect.DeepEqual(old.Finalizers, []string{ebsv1.JobCleanupFinalizer}) {
 		t.Fatalf("independent lifecycle: %+v", old.ObjectMeta)
 	}
+	archive := *stored.Archive
 	if _, err := store.Archive(ctx, job); err != nil || revision != 1 {
 		t.Fatalf("repeat archive: %v revision=%d", err, revision)
 	}
@@ -230,6 +231,9 @@ func TestOldJobsArchiveLifecycle(t *testing.T) {
 	}
 	if !stored.Archive.Deleted || string(stored.Data) != "null" {
 		t.Fatalf("fence should retain no payload: %+v", stored)
+	}
+	if stored.Archive.UID != archive.UID || stored.Archive.Digest != archive.Digest {
+		t.Fatalf("cleanup changed archive identity: %+v", stored)
 	}
 	if _, err := store.Get(ctx, old.Name, &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("public GET: %v", err)

@@ -928,7 +928,6 @@ OldJob 不继承源删除标记、archive 或其它 finalizer。源 Job 的服�
 | 文档 ID | `{project}/{jobName}` |
 | 快照内容 | 冻结的业务 metadata、spec、status，保留源 UID；生命周期 metadata 独立维护 |
 | 版本 | OldJob resourceVersion 使用 ES 版本；源 resourceVersion 仅用于 CAS，归档快照通过 UID 和摘要确认 |
-| 归档时间 | ES 存储元数据 `archivedAt`，不新增 Job API 字段 |
 
 历史入口对 Gateway 调用方只读，内部提供具名条件 DELETE 和受控 finalizers 子资源；不参与调度和 Watch，普通 `jobs` 查询不自动合并历史对象。归档保留原产物和日志，其清理责任移交给 OldJob，不重新复制文件。接口、mapping、版本冲突及保留规则统一见 [历史 Job 归档](ebs-apiserver.md#历史-job-归档ebs-oldjobs)。
 

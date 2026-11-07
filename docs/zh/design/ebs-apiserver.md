@@ -834,14 +834,14 @@ OldJob 最后一个 finalizer 移除后，ES 通过 CAS 删除其 Job 正文，�
 | ES 字段 | mapping / 语义 |
 | --- | --- |
 | apiVersion、kind、documentID、metadata.name、metadata.namespace | keyword |
-| metadata.creationTimestamp、data.metadata.deletionTimestamp、archivedAt | date |
+| metadata.creationTimestamp、data.metadata.deletionTimestamp | date |
 | metadata.labels | nested，key/value 为 keyword |
 | archive | object, dynamic: false；保存 UID、digest、action、deleted，只有 deleted 建立 boolean 索引 |
 | data | object, dynamic: false；保存完整归档 Job |
 | data.status.phase、data.status.stage、data.status.runner | keyword |
 | data.status.startTime、data.status.endTime | date |
 
-根 mapping 使用 dynamic: strict，业务正文保存在 data，不动态索引 payload、message 等字段。archivedAt 是首次持久化时间，幂等重试不改变。所有生命周期写入同步 metadata 投影和 data，使用 ES seq_no/primary_term CAS 及 refresh=wait_for。OldJob 的公开 resourceVersion 采用通用 ES 编码，不再保留源 etcd 版本作为公开版本。
+根 mapping 使用 dynamic: strict，业务正文保存在 data，不动态索引 payload、message 等字段。所有生命周期写入同步 metadata 投影和 data，使用 ES seq_no/primary_term CAS 及 refresh=wait_for。OldJob 的公开 resourceVersion 采用通用 ES 编码，不再保留源 etcd 版本作为公开版本。
 
 GET 使用实时 ES 文档接口。GET/LIST 支持 includeFields/excludeFields，labelSelector 沿用公共规则；fieldSelector 保留 metadata.name、metadata.namespace、status.phase、status.stage、status.runner，并增加 `metadata.deletionTimestamp!=null` 筛选删除中的对象，其语义为字段存在且非空。Job 的 etcd List 同样提供该删除筛选；两种 Job 意图登记时均设置删除标记，生命周期轮询只需查询删除中的 Job/OldJob，不需要按默认 finalizer 扫描全部历史 Job。
 

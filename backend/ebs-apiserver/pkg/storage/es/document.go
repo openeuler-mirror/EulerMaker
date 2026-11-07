@@ -24,31 +24,24 @@ type Metadata struct {
 }
 
 type Document struct {
-	Archive          *JobArchiveRecord `json:"archive,omitempty"`
-	ArchivedAt       string            `json:"archivedAt,omitempty"`
-	APIVersion       string            `json:"apiVersion"`
-	Kind             string            `json:"kind"`
-	DocumentID       string            `json:"documentID"`
-	Metadata         Metadata          `json:"metadata"`
-	Data             json.RawMessage   `json:"data"`
-	Credential       json.RawMessage   `json:"credential,omitempty"`
-	ExternalIdentity *ExternalIdentity `json:"externalIdentity,omitempty"`
-}
-
-// JobArchiveRecord fences create-only archive requests even after the public OldJob is removed.
-type JobArchiveRecord struct {
-	UID     string `json:"uid"`
-	Digest  string `json:"digest"`
-	Action  string `json:"action"`
-	Deleted bool   `json:"deleted"`
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	DocumentID string          `json:"documentID"`
+	Metadata   Metadata        `json:"metadata"`
+	Data       json.RawMessage `json:"data"`
 }
 
 type Hit struct {
 	ID          string
-	Document    Document
+	Source      json.RawMessage
 	SeqNo       int64
 	PrimaryTerm int64
 	Sort        []json.RawMessage
+}
+
+// Decode reads the source into the document type owned by the caller.
+func (h *Hit) Decode(document any) error {
+	return json.Unmarshal(h.Source, document)
 }
 
 type SearchResult struct {
@@ -64,15 +57,15 @@ type Version struct {
 
 func docPathID(name string) string { return url.PathEscape(name) }
 
-func (c *Client) Create(ctx context.Context, resource, id string, doc Document) (Version, error) {
-	return c.write(ctx, http.MethodPut, resource, id, doc, -1, -1, true)
+func (c *Client) Create(ctx context.Context, resource, id string, doc any) (Version, error) {
+	return c.write(ctx, resource, id, doc, -1, -1, true)
 }
 
-func (c *Client) Update(ctx context.Context, resource, id string, doc Document, seqNo, primaryTerm int64) (Version, error) {
-	return c.write(ctx, http.MethodPut, resource, id, doc, seqNo, primaryTerm, false)
+func (c *Client) Update(ctx context.Context, resource, id string, doc any, seqNo, primaryTerm int64) (Version, error) {
+	return c.write(ctx, resource, id, doc, seqNo, primaryTerm, false)
 }
 
-func (c *Client) write(ctx context.Context, method, resource, id string, doc interface{}, seqNo, primaryTerm int64, create bool) (Version, error) {
+func (c *Client) write(ctx context.Context, resource, id string, doc interface{}, seqNo, primaryTerm int64, create bool) (Version, error) {
 	body, err := json.Marshal(doc)
 	if err != nil {
 		return Version{}, err
@@ -90,7 +83,7 @@ func (c *Client) write(ctx context.Context, method, resource, id string, doc int
 		q.Set("if_primary_term", strconv.FormatInt(primaryTerm, 10))
 	}
 	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return Version{}, err
 	}
@@ -150,15 +143,15 @@ func (c *Client) GetWithSourceFilter(ctx context.Context, resource, id string, f
 	}
 	defer resp.Body.Close()
 	var result struct {
-		ID          string   `json:"_id"`
-		SeqNo       int64    `json:"_seq_no"`
-		PrimaryTerm int64    `json:"_primary_term"`
-		Source      Document `json:"_source"`
+		ID          string          `json:"_id"`
+		SeqNo       int64           `json:"_seq_no"`
+		PrimaryTerm int64           `json:"_primary_term"`
+		Source      json.RawMessage `json:"_source"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
-	return &Hit{ID: result.ID, Document: result.Source, SeqNo: result.SeqNo, PrimaryTerm: result.PrimaryTerm}, nil
+	return &Hit{ID: result.ID, Source: result.Source, SeqNo: result.SeqNo, PrimaryTerm: result.PrimaryTerm}, nil
 }
 
 func (c *Client) Delete(ctx context.Context, resource, id string, seqNo, primaryTerm int64) error {
@@ -308,7 +301,7 @@ func (c *Client) SearchPITWithSourceFilter(ctx context.Context, pitID, keepAlive
 				ID          string            `json:"_id"`
 				SeqNo       int64             `json:"_seq_no"`
 				PrimaryTerm int64             `json:"_primary_term"`
-				Source      Document          `json:"_source"`
+				Source      json.RawMessage   `json:"_source"`
 				Sort        []json.RawMessage `json:"sort"`
 			} `json:"hits"`
 		} `json:"hits"`
@@ -319,7 +312,7 @@ func (c *Client) SearchPITWithSourceFilter(ctx context.Context, pitID, keepAlive
 	out := &SearchResult{Total: result.Hits.Total.Value, PITID: result.PITID}
 	for _, h := range result.Hits.Hits {
 		out.Hits = append(out.Hits, Hit{
-			ID: h.ID, Document: h.Source, SeqNo: h.SeqNo, PrimaryTerm: h.PrimaryTerm, Sort: h.Sort,
+			ID: h.ID, Source: h.Source, SeqNo: h.SeqNo, PrimaryTerm: h.PrimaryTerm, Sort: h.Sort,
 		})
 	}
 	return out, nil

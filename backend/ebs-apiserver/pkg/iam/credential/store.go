@@ -108,7 +108,11 @@ func (s *Store) Authenticate(ctx context.Context, username, password string) (bo
 		return false, err
 	}
 	var user iamv1.User
-	if err := json.Unmarshal(hit.Document.Data, &user); err != nil {
+	var doc es.IAMDocument
+	if err := hit.Decode(&doc); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(doc.Data, &user); err != nil {
 		return false, err
 	}
 	if !CanAuthenticate(&user) {
@@ -149,10 +153,14 @@ func (s *Store) get(ctx context.Context, username string) (*es.Hit, Credential, 
 		return nil, Credential{}, err
 	}
 	var cred Credential
-	if len(hit.Document.Credential) == 0 {
+	var doc es.IAMDocument
+	if err := hit.Decode(&doc); err != nil {
+		return nil, Credential{}, err
+	}
+	if len(doc.Credential) == 0 {
 		return nil, Credential{}, &es.HTTPError{StatusCode: 404, Body: "credential not found"}
 	}
-	if err := json.Unmarshal(hit.Document.Credential, &cred); err != nil {
+	if err := json.Unmarshal(doc.Credential, &cred); err != nil {
 		return nil, Credential{}, err
 	}
 	return hit, cred, nil
@@ -163,7 +171,10 @@ func (s *Store) update(ctx context.Context, username string, hit *es.Hit, cred C
 	if err != nil {
 		return err
 	}
-	doc := hit.Document
+	var doc es.IAMDocument
+	if err := hit.Decode(&doc); err != nil {
+		return err
+	}
 	doc.Credential = data
 	_, err = s.client.Update(ctx, resourceName, username, doc, hit.SeqNo, hit.PrimaryTerm)
 	return err

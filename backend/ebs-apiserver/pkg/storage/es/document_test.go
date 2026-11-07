@@ -4,9 +4,62 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestExists(t *testing.T) {
+	query := map[string]interface{}{"term": map[string]interface{}{"data.status.phase": "Success"}}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		exists bool
+		err    bool
+	}{
+		{"match", 200, `{"hits":{"hits":[{"_id":"project/build"}]}}`, true, false},
+		{"empty", 200, `{"hits":{"hits":[]}}`, false, false},
+		{"unavailable", 503, `{"error":"unavailable"}`, false, true},
+		{"timeout", 200, `{"timed_out":true,"hits":{"hits":[]}}`, false, true},
+		{"partial", 200, `{"_shards":{"failed":1},"hits":{"hits":[]}}`, false, true},
+		{"malformed", 200, `{`, false, true},
+		{"missing hits", 200, `{}`, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(
+				func(req *http.Request) (*http.Response, error) {
+					requests++
+					if req.Method != http.MethodPost || req.URL.Path != "/ebs-builds/_search" ||
+						req.URL.Query().Get("allow_partial_search_results") != "false" {
+						t.Fatalf("unexpected request %s %s", req.Method, req.URL)
+					}
+					var body map[string]interface{}
+					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+						t.Fatal(err)
+					}
+					want := map[string]interface{}{
+						"query": query, "size": float64(1), "_source": false, "track_total_hits": false,
+					}
+					if !reflect.DeepEqual(body, want) {
+						t.Fatalf("request body = %#v, want %#v", body, want)
+					}
+					return response(tc.status, tc.body), nil
+				})})
+			exists, err := client.Exists(context.Background(), "build", query)
+			if exists != tc.exists || (err != nil) != tc.err {
+				t.Fatalf("Exists = %t, %v; want %t, error=%t", exists, err, tc.exists, tc.err)
+			}
+			if tc.status == 503 && !IsStatus(err, 503) {
+				t.Fatalf("HTTP status not preserved: %v", err)
+			}
+			if requests != 1 {
+				t.Fatalf("requests = %d, want 1", requests)
+			}
+		})
+	}
+}
 
 func TestCreateUsesCreateOnlyAndRefresh(t *testing.T) {
 	var requestPath string
@@ -145,5 +198,108 @@ func TestWriteMissingVersionIsUnknown(t *testing.T) {
 	c := NewClientForTesting("http://es", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(201, `{}`), nil })})
 	if _, err := c.Create(context.Background(), "buildclaim", "id", Document{}); err == nil {
 		t.Fatal("malformed write response accepted")
+	}
+}
+
+func TestDocumentTypesRoundTrip(t *testing.T) {
+	base := Document{
+		APIVersion: "ebs/v1",
+		Kind:       "Job",
+		DocumentID: "project/job",
+		Metadata:   Metadata{Name: "job", Namespace: "project"},
+		Data:       json.RawMessage(`{"metadata":{"name":"job"}}`),
+	}
+	for _, test := range []struct {
+		resource string
+		document any
+		fields   map[string]any
+	}{
+		{"build", base, nil},
+		{
+			"oldjob",
+			OldJobDocument{
+				Document: base,
+				Archive:  &JobArchiveRecord{UID: "uid", Digest: "digest", Action: "retain"},
+			},
+			map[string]any{
+				"archive": map[string]any{"uid": "uid", "digest": "digest", "action": "retain", "deleted": false},
+			},
+		},
+		{
+			"user",
+			IAMDocument{
+				Document:         base,
+				Credential:       json.RawMessage(`{"passwordHash":"hash"}`),
+				ExternalIdentity: &ExternalIdentity{Issuer: "issuer", Subject: "subject", LinkedAt: "2026-11-07T00:00:00Z"},
+			},
+			map[string]any{
+				"credential":       map[string]any{"passwordHash": "hash"},
+				"externalIdentity": map[string]any{"issuer": "issuer", "subject": "subject", "linkedAt": "2026-11-07T00:00:00Z"},
+			},
+		},
+	} {
+		t.Run(test.resource, func(t *testing.T) {
+			want := map[string]any{
+				"apiVersion": base.APIVersion,
+				"kind":       base.Kind,
+				"documentID": base.DocumentID,
+				"metadata":   map[string]any{"name": "job", "namespace": "project"},
+				"data":       map[string]any{"metadata": map[string]any{"name": "job"}},
+			}
+			for name, value := range test.fields {
+				want[name] = value
+			}
+			var stored json.RawMessage
+			client := NewClientForTesting("http://es", &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodPut {
+					if err := json.NewDecoder(req.Body).Decode(&stored); err != nil {
+						t.Fatal(err)
+					}
+					var got map[string]any
+					if err := json.Unmarshal(stored, &got); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("stored document = %v, want %v", got, want)
+					}
+					return response(201, `{"_seq_no":1,"_primary_term":1}`), nil
+				}
+				if req.Method == http.MethodGet {
+					return response(200, `{"_seq_no":1,"_primary_term":1,"_source":`+string(stored)+`}`), nil
+				}
+				return response(200, `{"hits":{"total":{"value":1},"hits":[{"_source":`+string(stored)+`}]}}`), nil
+			})})
+			ctx := context.Background()
+			if _, err := client.Create(ctx, test.resource, base.DocumentID, test.document); err != nil {
+				t.Fatal(err)
+			}
+			hit, err := client.Get(ctx, test.resource, base.DocumentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := reflect.New(reflect.TypeOf(test.document))
+			if err := hit.Decode(target.Interface()); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(target.Elem().Interface(), test.document) {
+				t.Fatalf("decoded document = %+v, want %+v", target.Elem().Interface(), test.document)
+			}
+			if _, err := client.Update(ctx, test.resource, base.DocumentID, target.Interface(), hit.SeqNo, hit.PrimaryTerm); err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.SearchPIT(ctx, "pit", "1m", map[string]any{"match_all": map[string]any{}}, 10, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Hits) != 1 {
+				t.Fatalf("search hits = %d, want 1", len(result.Hits))
+			}
+			if err := result.Hits[0].Decode(target.Interface()); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(target.Elem().Interface(), test.document) {
+				t.Fatalf("search document = %+v, want %+v", target.Elem().Interface(), test.document)
+			}
+		})
 	}
 }

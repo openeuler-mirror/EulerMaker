@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -98,11 +97,15 @@ func (s *OldJobs) Delete(ctx context.Context, name string, admission rest.Valida
 	if dryrun.IsDryRun(opts.DryRun) {
 		return job, false, nil
 	}
-	if hit.Document.Archive == nil {
+	var doc es.OldJobDocument
+	if err := hit.Decode(&doc); err != nil {
+		return nil, false, apierrors.NewInternalError(err)
+	}
+	if doc.Archive == nil {
 		return nil, false, apierrors.NewInternalError(fmt.Errorf("archive confirmation is missing"))
 	}
-	hit.Document.Archive.Action = "delete"
-	result, err := s.save(ctx, hit, job, false)
+	doc.Archive.Action = "delete"
+	result, err := s.save(ctx, hit, doc, job, false)
 	return result, false, err
 }
 
@@ -116,15 +119,19 @@ func (s *OldJobs) Finalize(ctx context.Context, name string, pre *metav1.Precond
 		return nil, apierrors.NewConflict(s.store.resource, name, fmt.Errorf("OldJob is not deleting"))
 	}
 	job.Finalizers = slices.DeleteFunc(job.Finalizers, func(value string) bool { return value == ebsv1.JobCleanupFinalizer })
-	return s.save(ctx, hit, job, len(job.Finalizers) == 0)
+	var doc es.OldJobDocument
+	if err := hit.Decode(&doc); err != nil {
+		return nil, apierrors.NewInternalError(err)
+	}
+	return s.save(ctx, hit, doc, job, len(job.Finalizers) == 0)
 }
 
-func (s *OldJobs) save(ctx context.Context, hit *es.Hit, job *ebsv1.Job, deleted bool) (*ebsv1.Job, error) {
-	doc, id, err := s.store.documentFor(ctx, job)
+func (s *OldJobs) save(ctx context.Context, hit *es.Hit, doc es.OldJobDocument, job *ebsv1.Job, deleted bool) (*ebsv1.Job, error) {
+	base, id, err := s.store.documentFor(ctx, job)
 	if err != nil {
 		return nil, err
 	}
-	doc.ArchivedAt, doc.Archive = hit.Document.ArchivedAt, hit.Document.Archive
+	doc.Document = base
 	if doc.Archive == nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("archive confirmation is missing"))
 	}
@@ -171,12 +178,14 @@ func (s *OldJobs) Archive(ctx context.Context, job *ebsv1.Job) (*ebsv1.Job, erro
 	}
 	next := jobArchiveSnapshot(job)
 	next.Finalizers = []string{ebsv1.JobCleanupFinalizer}
-	doc, id, err := s.store.documentFor(ctx, next)
+	base, id, err := s.store.documentFor(ctx, next)
 	if err != nil {
 		return nil, err
 	}
-	doc.ArchivedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	doc.Archive = &es.JobArchiveRecord{UID: string(job.UID), Digest: digest, Action: action}
+	doc := es.OldJobDocument{
+		Document: base,
+		Archive:  &es.JobArchiveRecord{UID: string(job.UID), Digest: digest, Action: action},
+	}
 	_, err = s.store.client.Create(ctx, "oldjob", id, doc)
 	if err != nil && !es.IsStatus(err, 409) {
 		return nil, s.store.apiError(err, job.Name)
@@ -186,7 +195,11 @@ func (s *OldJobs) Archive(ctx context.Context, job *ebsv1.Job) (*ebsv1.Job, erro
 	if err != nil {
 		return nil, s.store.apiError(err, job.Name)
 	}
-	record := hit.Document.Archive
+	var stored es.OldJobDocument
+	if err := hit.Decode(&stored); err != nil {
+		return nil, apierrors.NewInternalError(err)
+	}
+	record := stored.Archive
 	if record == nil || record.UID != string(job.UID) || record.Digest != digest || record.Deleted {
 		return nil, apierrors.NewConflict(s.store.resource, job.Name, fmt.Errorf("archive identity or frozen snapshot conflicts"))
 	}
@@ -203,7 +216,11 @@ func (s *OldJobs) ArchiveState(ctx context.Context, name string) (*ebsv1.JobArch
 	if err != nil {
 		return nil, s.store.apiError(err, name)
 	}
-	record := hit.Document.Archive
+	var stored es.OldJobDocument
+	if err := hit.Decode(&stored); err != nil {
+		return nil, apierrors.NewInternalError(err)
+	}
+	record := stored.Archive
 	if record == nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("archive confirmation is missing"))
 	}

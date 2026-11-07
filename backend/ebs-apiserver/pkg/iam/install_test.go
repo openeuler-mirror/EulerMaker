@@ -162,15 +162,16 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 		path     string
 		body     string
 		esPath   string
-		document es.Document
+		document es.IAMDocument
 		response string
 	}{
 		{
 			name: "user", path: "/internal/iam/v1/users/authenticate",
 			body:   `{"username":"alice","password":"` + password + `"}`,
 			esPath: "/ebs-users/_doc/alice",
-			document: es.Document{
-				Data: json.RawMessage(`{"spec":{"enabled":true,"scopes":["ebs:user"]}}`), Credential: userCredential,
+			document: es.IAMDocument{
+				Document:   es.Document{Data: json.RawMessage(`{"spec":{"enabled":true,"scopes":["ebs:user"]}}`)},
+				Credential: userCredential,
 			},
 			response: `{"authenticated":true,"username":"alice"}`,
 		},
@@ -178,8 +179,9 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 			name: "machine", path: "/internal/iam/v1/machineaccounts/authenticate",
 			body:   `{"name":"worker","clientSecret":"` + secret + `"}`,
 			esPath: "/ebs-machineaccounts/_doc/worker",
-			document: es.Document{
-				Data: json.RawMessage(`{"spec":{"tokenTTLSeconds":3600}}`), Credential: machineCredential,
+			document: es.IAMDocument{
+				Document:   es.Document{Data: json.RawMessage(`{"spec":{"tokenTTLSeconds":3600}}`)},
+				Credential: machineCredential,
 			},
 			response: `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600}`,
 		},

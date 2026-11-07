@@ -64,7 +64,6 @@ const oldJobIndexMapping = `{
     "apiVersion":{"type":"keyword"},
     "kind":{"type":"keyword"},
     "documentID":{"type":"keyword"},
-    "archivedAt":{"type":"date"},
     "archive":{"type":"object","dynamic":false,"properties":{"deleted":{"type":"boolean"}}},
     "metadata":{"properties":{
       "name":{"type":"keyword"},
