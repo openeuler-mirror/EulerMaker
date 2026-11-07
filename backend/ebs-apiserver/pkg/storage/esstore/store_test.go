@@ -40,7 +40,7 @@ import (
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
 
 func TestUserExternalIdentityPersistence(t *testing.T) {
-	var stored es.Document
+	var stored es.IAMDocument
 	seq := int64(0)
 	client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(
 		func(req *http.Request) (*http.Response, error) {

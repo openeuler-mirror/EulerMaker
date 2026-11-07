@@ -1,6 +1,7 @@
 package es
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,19 @@ func (e *HTTPError) Error() string {
 func IsStatus(err error, status int) bool {
 	var httpErr *HTTPError
 	return errors.As(err, &httpErr) && httpErr.StatusCode == status
+}
+
+// IsDocumentNotFound distinguishes an absent document from an absent index or an ambiguous 404.
+func IsDocumentNotFound(err error) bool {
+	var status *HTTPError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusNotFound {
+		return false
+	}
+	var body struct {
+		Found *bool           `json:"found"`
+		Error json.RawMessage `json:"error"`
+	}
+	return json.Unmarshal([]byte(status.Body), &body) == nil && body.Found != nil && !*body.Found && len(body.Error) == 0
 }
 
 func (c *Client) addr() string { return strings.TrimRight(c.addresses[0], "/") }

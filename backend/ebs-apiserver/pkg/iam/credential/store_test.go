@@ -64,7 +64,16 @@ func TestAuthenticateRejectsDisabledUser(t *testing.T) {
 	credentialData, _ := json.Marshal(Credential{PasswordHash: hash, PasswordUpdatedAt: time.Now().UTC()})
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.Contains(req.URL.Path, "/ebs-users/") {
-			doc := es.Document{APIVersion: "iam.ebs/v1", Kind: "User", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":false}}`), Credential: credentialData}
+			doc := es.IAMDocument{
+				Document: es.Document{
+					APIVersion: "iam.ebs/v1",
+					Kind:       "User",
+					DocumentID: "alice",
+					Metadata:   es.Metadata{Name: "alice"},
+					Data:       json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":false}}`),
+				},
+				Credential: credentialData,
+			}
 			body, _ := json.Marshal(map[string]interface{}{"_id": "alice", "_seq_no": 0, "_primary_term": 1, "_source": doc})
 			return httpResponse(http.StatusOK, string(body)), nil
 		} else {
@@ -84,7 +93,16 @@ func TestAuthenticateRejectsDisabledUser(t *testing.T) {
 
 func TestCredentialLifecycleAndLockout(t *testing.T) {
 	credentialData, _ := NewPasswordCredential("initial password value")
-	userDoc := es.Document{APIVersion: "iam.ebs/v1", Kind: "User", DocumentID: "alice", Metadata: es.Metadata{Name: "alice"}, Data: json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`), Credential: credentialData}
+	userDoc := es.IAMDocument{
+		Document: es.Document{
+			APIVersion: "iam.ebs/v1",
+			Kind:       "User",
+			DocumentID: "alice",
+			Metadata:   es.Metadata{Name: "alice"},
+			Data:       json.RawMessage(`{"metadata":{"name":"alice"},"spec":{"enabled":true,"scopes":["ebs:user"]}}`),
+		},
+		Credential: credentialData,
+	}
 	seq := int64(0)
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch {
@@ -92,7 +110,7 @@ func TestCredentialLifecycleAndLockout(t *testing.T) {
 			body, _ := json.Marshal(map[string]interface{}{"_id": "alice", "_seq_no": seq, "_primary_term": int64(1), "_source": userDoc})
 			return httpResponse(http.StatusOK, string(body)), nil
 		case req.Method == http.MethodPut && strings.Contains(req.URL.Path, "/ebs-users/"):
-			var doc es.Document
+			var doc es.IAMDocument
 			if err := json.NewDecoder(req.Body).Decode(&doc); err != nil {
 				t.Fatalf("decode credential document: %v", err)
 			}
@@ -135,7 +153,16 @@ func TestAuthenticateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new machine credential: %v", err)
 	}
-	doc := es.Document{APIVersion: "iam.ebs/v1", Kind: "MachineAccount", DocumentID: "runner-site-a", Metadata: es.Metadata{Name: "runner-site-a"}, Data: json.RawMessage(`{"metadata":{"name":"runner-site-a"},"spec":{"tokenTTLSeconds":86400}}`), Credential: credentialData}
+	doc := es.IAMDocument{
+		Document: es.Document{
+			APIVersion: "iam.ebs/v1",
+			Kind:       "MachineAccount",
+			DocumentID: "runner-site-a",
+			Metadata:   es.Metadata{Name: "runner-site-a"},
+			Data:       json.RawMessage(`{"metadata":{"name":"runner-site-a"},"spec":{"tokenTTLSeconds":86400}}`),
+		},
+		Credential: credentialData,
+	}
 	seq := int64(0)
 	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.Method {

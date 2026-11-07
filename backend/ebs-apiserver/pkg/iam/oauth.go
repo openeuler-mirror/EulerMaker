@@ -37,6 +37,21 @@ type oauthIdentity struct {
 	Subject string `json:"subject"`
 }
 
+const oauthClaimResource = "oauthidentityclaim"
+
+type oauthIdentityClaim struct {
+	Issuer      string `json:"issuer"`
+	Subject     string `json:"subject"`
+	UserName    string `json:"userName"`
+	UserUID     string `json:"userUID"`
+	OperationID string `json:"operationID"`
+}
+
+type oauthIdentityClaimHit struct {
+	Claim   oauthIdentityClaim
+	Version es.Version
+}
+
 type userRequest struct {
 	Method, Username, Password, DisplayName, Email string
 	Identity                                       oauthIdentity
@@ -254,8 +269,24 @@ type oauthService struct {
 	users  oauthUserStorage
 }
 
-func (s *oauthService) lookup(ctx context.Context, identity oauthIdentity) (*es.OAuthIdentityHit, error) {
-	hit, err := s.client.GetOAuthIdentity(ctx, identityKey(identity))
+// getClaim uses a realtime read and requires a valid CAS version before the claim can be released.
+func (s *oauthService) getClaim(ctx context.Context, key string) (*oauthIdentityClaimHit, error) {
+	hit, err := s.client.Get(ctx, oauthClaimResource, key)
+	if err != nil {
+		return nil, err
+	}
+	var claim oauthIdentityClaim
+	if err := hit.Decode(&claim); err != nil {
+		return nil, err
+	}
+	if hit.PrimaryTerm <= 0 || hit.SeqNo < 0 {
+		return nil, errors.New("identity claim response missing concurrency version")
+	}
+	return &oauthIdentityClaimHit{Claim: claim, Version: es.Version{SeqNo: hit.SeqNo, PrimaryTerm: hit.PrimaryTerm}}, nil
+}
+
+func (s *oauthService) lookup(ctx context.Context, identity oauthIdentity) (*oauthIdentityClaimHit, error) {
+	hit, err := s.getClaim(ctx, identityKey(identity))
 	if es.IsDocumentNotFound(err) {
 		return nil, nil
 	}
@@ -271,7 +302,7 @@ func (s *oauthService) lookup(ctx context.Context, identity oauthIdentity) (*es.
 	return hit, nil
 }
 
-func (s *oauthService) resolve(ctx context.Context, claim *es.OAuthIdentityHit) (*iamv1.User, error) {
+func (s *oauthService) resolve(ctx context.Context, claim *oauthIdentityClaimHit) (*iamv1.User, error) {
 	hit, err := s.client.Get(ctx, "user", claim.Claim.UserName)
 	if es.IsDocumentNotFound(err) {
 		return nil, inProgress()
@@ -280,8 +311,12 @@ func (s *oauthService) resolve(ctx context.Context, claim *es.OAuthIdentityHit) 
 		return nil, unavailable()
 	}
 	var user iamv1.User
-	identity := hit.Document.ExternalIdentity
-	if json.Unmarshal(hit.Document.Data, &user) != nil || user.Name != claim.Claim.UserName || string(user.UID) != claim.Claim.UserUID || identity == nil || identity.Issuer != claim.Claim.Issuer || identity.Subject != claim.Claim.Subject {
+	var doc es.IAMDocument
+	if hit.Decode(&doc) != nil {
+		return nil, unavailable()
+	}
+	identity := doc.ExternalIdentity
+	if json.Unmarshal(doc.Data, &user) != nil || user.Name != claim.Claim.UserName || string(user.UID) != claim.Claim.UserUID || identity == nil || identity.Issuer != claim.Claim.Issuer || identity.Subject != claim.Claim.Subject {
 		return nil, invalidState()
 	}
 	return &user, nil
@@ -298,7 +333,7 @@ func (s *oauthService) confirm(ctx context.Context, body userRequest) (*iamv1.Us
 	return s.existing(ctx, claim, body.Username)
 }
 
-func (s *oauthService) existing(ctx context.Context, claim *es.OAuthIdentityHit, username string) (*iamv1.User, bool, error) {
+func (s *oauthService) existing(ctx context.Context, claim *oauthIdentityClaimHit, username string) (*iamv1.User, bool, error) {
 	user, err := s.resolve(ctx, claim)
 	if err != nil {
 		return nil, false, err
@@ -321,11 +356,11 @@ func (s *oauthService) register(ctx context.Context, body userRequest) (*iamv1.U
 		return s.existing(ctx, claim, body.Username)
 	}
 	key := identityKey(body.Identity)
-	reserved := es.OAuthIdentityClaim{
+	reserved := oauthIdentityClaim{
 		Issuer: body.Identity.Issuer, Subject: body.Identity.Subject,
 		UserName: body.Username, UserUID: uuid.NewString(), OperationID: uuid.NewString(),
 	}
-	version, err := s.client.CreateOAuthIdentity(ctx, key, reserved)
+	version, err := s.client.Create(ctx, oauthClaimResource, key, reserved)
 	if err != nil {
 		return s.confirm(ctx, body)
 	}
@@ -347,23 +382,27 @@ func (s *oauthService) register(ctx context.Context, body userRequest) (*iamv1.U
 }
 
 // releaseRejected is only called by the writer after a definitive create-only username conflict.
-func (s *oauthService) releaseRejected(ctx context.Context, key string, reserved es.OAuthIdentityClaim, version es.Version) error {
+func (s *oauthService) releaseRejected(ctx context.Context, key string, reserved oauthIdentityClaim, version es.Version) error {
 	user, err := s.client.Get(ctx, "user", reserved.UserName)
 	if err != nil {
 		return unavailable()
 	}
 	var obj iamv1.User
-	if json.Unmarshal(user.Document.Data, &obj) != nil || obj.UID == "" || obj.Name != reserved.UserName || string(obj.UID) == reserved.UserUID {
+	var doc es.IAMDocument
+	if user.Decode(&doc) != nil {
+		return unavailable()
+	}
+	if json.Unmarshal(doc.Data, &obj) != nil || obj.UID == "" || obj.Name != reserved.UserName || string(obj.UID) == reserved.UserUID {
 		return invalidState()
 	}
-	if identity := user.Document.ExternalIdentity; identity != nil && identity.Issuer == reserved.Issuer && identity.Subject == reserved.Subject {
+	if identity := doc.ExternalIdentity; identity != nil && identity.Issuer == reserved.Issuer && identity.Subject == reserved.Subject {
 		return invalidState()
 	}
-	current, err := s.client.GetOAuthIdentity(ctx, key)
+	current, err := s.getClaim(ctx, key)
 	if err != nil || current.Claim != reserved || current.Version != version {
 		return unavailable()
 	}
-	if err := s.client.DeleteOAuthIdentity(ctx, key, version); err != nil {
+	if err := s.client.Delete(ctx, oauthClaimResource, key, version.SeqNo, version.PrimaryTerm); err != nil {
 		return unavailable()
 	}
 	return &oauthError{409, "UsernameAlreadyExists", "username already exists"}

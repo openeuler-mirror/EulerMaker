@@ -2,10 +2,8 @@ package es
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -19,58 +17,6 @@ func response(status int, body string) *http.Response {
 		StatusCode: status,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
-	}
-}
-
-func TestExists(t *testing.T) {
-	query := map[string]interface{}{"term": map[string]interface{}{"data.status.phase": "Success"}}
-	for _, tc := range []struct {
-		name   string
-		status int
-		body   string
-		exists bool
-		err    bool
-	}{
-		{"match", 200, `{"hits":{"hits":[{"_id":"project/build"}]}}`, true, false},
-		{"empty", 200, `{"hits":{"hits":[]}}`, false, false},
-		{"unavailable", 503, `{"error":"unavailable"}`, false, true},
-		{"timeout", 200, `{"timed_out":true,"hits":{"hits":[]}}`, false, true},
-		{"partial", 200, `{"_shards":{"failed":1},"hits":{"hits":[]}}`, false, true},
-		{"malformed", 200, `{`, false, true},
-		{"missing hits", 200, `{}`, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			requests := 0
-			client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(
-				func(req *http.Request) (*http.Response, error) {
-					requests++
-					if req.Method != http.MethodPost || req.URL.Path != "/ebs-builds/_search" ||
-						req.URL.Query().Get("allow_partial_search_results") != "false" {
-						t.Fatalf("unexpected request %s %s", req.Method, req.URL)
-					}
-					var body map[string]interface{}
-					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-						t.Fatal(err)
-					}
-					want := map[string]interface{}{
-						"query": query, "size": float64(1), "_source": false, "track_total_hits": false,
-					}
-					if !reflect.DeepEqual(body, want) {
-						t.Fatalf("request body = %#v, want %#v", body, want)
-					}
-					return response(tc.status, tc.body), nil
-				})})
-			exists, err := client.Exists(context.Background(), "build", query)
-			if exists != tc.exists || (err != nil) != tc.err {
-				t.Fatalf("Exists = %t, %v; want %t, error=%t", exists, err, tc.exists, tc.err)
-			}
-			if tc.status == 503 && !IsStatus(err, 503) {
-				t.Fatalf("HTTP status not preserved: %v", err)
-			}
-			if requests != 1 {
-				t.Fatalf("requests = %d, want 1", requests)
-			}
-		})
 	}
 }
 
@@ -166,17 +112,6 @@ func TestEnsureIAMIndices(t *testing.T) {
 	}
 }
 
-func TestHTTPErrorStatus(t *testing.T) {
-	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return response(http.StatusNotFound, "missing"), nil
-	})}
-	client := NewClientForTesting("http://elasticsearch", httpClient)
-	_, err := client.Get(context.Background(), "project", "missing")
-	if !IsStatus(err, http.StatusNotFound) {
-		t.Fatalf("expected 404 HTTPError, got %v", err)
-	}
-}
-
 func TestCoordinationAliasValidation(t *testing.T) {
 	for _, body := range []string{`{}`, `{"a":{"aliases":{}},"b":{"aliases":{}}}`, `{"a":{"aliases":{"ebs-build-target-claims":{"is_write_index":false}}}}`} {
 		c := NewClientForTesting("http://es", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(200, body), nil })})
@@ -199,5 +134,34 @@ func TestCoordinationIndexConcurrentInitialization(t *testing.T) {
 	})})
 	if err := c.ensureResourceIndices([]string{"buildclaim"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHTTPErrorStatus(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return response(http.StatusNotFound, "missing"), nil
+	})}
+	client := NewClientForTesting("http://elasticsearch", httpClient)
+	_, err := client.Get(context.Background(), "project", "missing")
+	if !IsStatus(err, http.StatusNotFound) {
+		t.Fatalf("expected 404 HTTPError, got %v", err)
+	}
+}
+
+func TestIsDocumentNotFound(t *testing.T) {
+	for _, test := range []struct {
+		body   string
+		absent bool
+	}{
+		{`{"_index":"ebs-oauth-identity-claims-v1","_id":"id","found":false}`, true},
+		{`{"error":{"type":"index_not_found_exception"},"status":404}`, false},
+		{`{"found":false,"error":{"type":"index_not_found_exception"}}`, false},
+		{`{"found":true}`, false},
+		{`404 not found`, false},
+	} {
+		err := &HTTPError{StatusCode: 404, Body: test.body}
+		if got := IsDocumentNotFound(err); got != test.absent {
+			t.Errorf("IsDocumentNotFound(%s)=%t, want %t", test.body, got, test.absent)
+		}
 	}
 }

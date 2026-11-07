@@ -208,14 +208,16 @@ func (s *Store) create(ctx context.Context, obj runtime.Object, credential json.
 	if err != nil {
 		return nil, err
 	}
-	doc.Credential = credential
-	doc.ExternalIdentity = identity
+	var stored any = doc
+	if s.resourceName == "user" || s.resourceName == "machineaccount" {
+		stored = es.IAMDocument{Document: doc, Credential: credential, ExternalIdentity: identity}
+	}
 	persist := func() (runtime.Object, error) {
 		if dryrun.IsDryRun(options.DryRun) {
 			accessor.SetResourceVersion("v1:0:0")
 			return obj, nil
 		}
-		version, err := s.client.Create(ctx, s.resourceName, id, doc)
+		version, err := s.client.Create(ctx, s.resourceName, id, stored)
 		if err != nil {
 			if es.IsStatus(err, 409) {
 				return nil, apierrors.NewAlreadyExists(s.resource, accessor.GetName())
@@ -320,9 +322,11 @@ func (s *Store) update(ctx context.Context, name string, objInfo rest.UpdatedObj
 	if err != nil {
 		return nil, false, err
 	}
-	doc.Credential = hit.Document.Credential
-	doc.ExternalIdentity = hit.Document.ExternalIdentity
-	version, err := s.client.Update(ctx, s.resourceName, id, doc, hit.SeqNo, hit.PrimaryTerm)
+	stored, err := s.documentForUpdate(hit, doc)
+	if err != nil {
+		return nil, false, err
+	}
+	version, err := s.client.Update(ctx, s.resourceName, id, stored, hit.SeqNo, hit.PrimaryTerm)
 	if err != nil {
 		return nil, false, s.apiError(err, name)
 	}
@@ -378,9 +382,11 @@ func (s *Store) Delete(ctx context.Context, name string, admission rest.Validate
 				if docErr != nil {
 					return nil, false, docErr
 				}
-				doc.Credential = hit.Document.Credential
-				doc.ExternalIdentity = hit.Document.ExternalIdentity
-				version, updateErr := s.client.Update(ctx, s.resourceName, id, doc, hit.SeqNo, hit.PrimaryTerm)
+				stored, docErr := s.documentForUpdate(hit, doc)
+				if docErr != nil {
+					return nil, false, docErr
+				}
+				version, updateErr := s.client.Update(ctx, s.resourceName, id, stored, hit.SeqNo, hit.PrimaryTerm)
 				if updateErr != nil {
 					return nil, false, s.apiError(updateErr, name)
 				}
@@ -603,11 +609,21 @@ func (s *Store) documentFor(ctx context.Context, obj runtime.Object) (es.Documen
 }
 
 func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
-	if s.resourceName == "oldjob" && hit.Document.Archive != nil && hit.Document.Archive.Deleted {
-		return nil, apierrors.NewNotFound(s.resource, hit.Document.Metadata.Name)
+	var doc es.Document
+	if s.resourceName == "oldjob" {
+		var archived es.OldJobDocument
+		if err := hit.Decode(&archived); err != nil {
+			return nil, apierrors.NewInternalError(err)
+		}
+		if archived.Archive != nil && archived.Archive.Deleted {
+			return nil, apierrors.NewNotFound(s.resource, archived.Metadata.Name)
+		}
+		doc = archived.Document
+	} else if err := hit.Decode(&doc); err != nil {
+		return nil, apierrors.NewInternalError(err)
 	}
 	obj := s.newFunc()
-	if err := json.Unmarshal(hit.Document.Data, obj); err != nil {
+	if err := json.Unmarshal(doc.Data, obj); err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("decode %s from Elasticsearch: %w", s.kind, err))
 	}
 	accessor, err := meta.Accessor(obj)
@@ -616,6 +632,19 @@ func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
 	}
 	accessor.SetResourceVersion(encodeVersion(hit.SeqNo, hit.PrimaryTerm))
 	return obj, nil
+}
+
+// documentForUpdate preserves private IAM fields when public resource data changes.
+func (s *Store) documentForUpdate(hit *es.Hit, doc es.Document) (any, error) {
+	if s.resourceName != "user" && s.resourceName != "machineaccount" {
+		return doc, nil
+	}
+	var stored es.IAMDocument
+	if err := hit.Decode(&stored); err != nil {
+		return nil, apierrors.NewInternalError(err)
+	}
+	stored.Document = doc
+	return stored, nil
 }
 
 func (s *Store) apiError(err error, name string) error {

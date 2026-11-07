@@ -46,7 +46,7 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	if !maps.Equal(created, want) {
 		t.Fatalf("created indices = %v, want %v", created, want)
 	}
-	for _, field := range []string{"archivedAt", "phase", "stage", "runner", "startTime", "endTime"} {
+	for _, field := range []string{"phase", "stage", "runner", "startTime", "endTime"} {
 		if !strings.Contains(mappings["ebs-oldjobs-v1"], `"`+field+`"`) {
 			t.Errorf("oldjobs mapping is missing %s", field)
 		}

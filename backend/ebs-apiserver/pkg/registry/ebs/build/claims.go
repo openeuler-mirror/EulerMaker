@@ -35,9 +35,9 @@ const (
 )
 
 type coordinationBackend interface {
-	Create(context.Context, string, string, es.Document) (es.Version, error)
+	Create(context.Context, string, string, any) (es.Version, error)
 	Get(context.Context, string, string) (*es.Hit, error)
-	Update(context.Context, string, string, es.Document, int64, int64) (es.Version, error)
+	Update(context.Context, string, string, any, int64, int64) (es.Version, error)
 	Delete(context.Context, string, string, int64, int64) error
 	OpenPIT(context.Context, string, string) (string, error)
 	SearchPIT(context.Context, string, string, map[string]interface{}, int64, []json.RawMessage) (*es.SearchResult, error)
@@ -110,7 +110,11 @@ func (m *ClaimManager) get(ctx context.Context, id string) (*claimRecord, error)
 		return nil, err
 	}
 	var c claim
-	if err := json.Unmarshal(hit.Document.Data, &c); err != nil {
+	var doc es.Document
+	if err := hit.Decode(&doc); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(doc.Data, &c); err != nil {
 		return nil, err
 	}
 	if c.id() != id || c.ClaimID == "" || c.Project == "" || c.BuildName == "" {

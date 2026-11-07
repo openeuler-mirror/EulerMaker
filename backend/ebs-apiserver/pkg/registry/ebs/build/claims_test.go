@@ -39,14 +39,18 @@ type coordinationFake struct {
 func newCoordinationFake() *coordinationFake {
 	return &coordinationFake{docs: map[string]es.Hit{}, builds: map[string]*ebsv1.Build{}}
 }
-func (f *coordinationFake) Create(ctx context.Context, r, id string, d es.Document) (es.Version, error) {
+func (f *coordinationFake) Create(ctx context.Context, r, id string, d any) (es.Version, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.docs[r+"/"+id]; ok {
 		return es.Version{}, &es.HTTPError{StatusCode: 409}
 	}
 	f.seq++
-	f.docs[r+"/"+id] = es.Hit{ID: id, Document: d, SeqNo: f.seq, PrimaryTerm: 1}
+	source, err := json.Marshal(d)
+	if err != nil {
+		return es.Version{}, err
+	}
+	f.docs[r+"/"+id] = es.Hit{ID: id, Source: source, SeqNo: f.seq, PrimaryTerm: 1}
 	if f.createUnknown == r {
 		return es.Version{}, errUnknown
 	}
@@ -61,7 +65,7 @@ func (f *coordinationFake) Get(ctx context.Context, r, id string) (*es.Hit, erro
 	}
 	return &h, nil
 }
-func (f *coordinationFake) Update(ctx context.Context, r, id string, d es.Document, seq, term int64) (es.Version, error) {
+func (f *coordinationFake) Update(ctx context.Context, r, id string, d any, seq, term int64) (es.Version, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	h, ok := f.docs[r+"/"+id]
@@ -69,11 +73,17 @@ func (f *coordinationFake) Update(ctx context.Context, r, id string, d es.Docume
 		return es.Version{}, &es.HTTPError{StatusCode: 409}
 	}
 	f.seq++
-	h.Document = d
+	source, err := json.Marshal(d)
+	if err != nil {
+		return es.Version{}, err
+	}
+	h.Source = source
 	h.SeqNo = f.seq
 	f.docs[r+"/"+id] = h
 	var c claim
-	_ = json.Unmarshal(d.Data, &c)
+	var doc es.Document
+	_ = h.Decode(&doc)
+	_ = json.Unmarshal(doc.Data, &c)
 	if f.transitionUnknown == c.State {
 		return es.Version{}, errUnknown
 	}

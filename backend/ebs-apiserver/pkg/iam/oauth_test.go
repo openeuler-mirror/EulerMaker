@@ -163,13 +163,17 @@ func assertOAuthResponse(t *testing.T, rec *httptest.ResponseRecorder, status in
 	}
 }
 
-func (f *oauthFixture) userDocument(t *testing.T, name string) es.Document {
+func (f *oauthFixture) userDocument(t *testing.T, name string) es.IAMDocument {
 	t.Helper()
 	hit, err := f.client.Get(context.Background(), "user", name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return hit.Document
+	var doc es.IAMDocument
+	if err := hit.Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc
 }
 
 func TestOAuthRegistrationAndAuthentication(t *testing.T) {
@@ -184,7 +188,8 @@ func TestOAuthRegistrationAndAuthentication(t *testing.T) {
 	doc := f.userDocument(t, "admin")
 	var account iamv1.User
 	_ = json.Unmarshal(doc.Data, &account)
-	claim, err := f.client.GetOAuthIdentity(context.Background(), identityKey(oauthIdentity{"https://provider.example.com", "123"}))
+	service := oauthService{client: f.client}
+	claim, err := service.getClaim(context.Background(), identityKey(oauthIdentity{"https://provider.example.com", "123"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,6 +388,31 @@ func TestOAuthPrivateIdentitySurvivesUpdates(t *testing.T) {
 	if ok, err := f.creds.Authenticate(context.Background(), "alice", "long password"); ok || err != nil {
 		t.Fatalf("password lock = %t, %v", ok, err)
 	}
+	obj, err = f.users.Get(ctx, "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := obj.(*iamv1.User)
+	account.Spec.DisplayName = "Updated Alice"
+	account.Finalizers = []string{"example.com/cleanup"}
+	if _, _, err := f.users.Update(ctx, "alice", rest.DefaultUpdatedObjectInfo(account), nil, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	updated := f.userDocument(t, "alice")
+	if *updated.ExternalIdentity != identity || string(updated.Credential) != string(before.Credential) {
+		t.Fatal("ordinary update changed private IAM fields")
+	}
+	deleting, deleted, err := f.users.Delete(ctx, "alice", nil, nil)
+	if err != nil || deleted {
+		t.Fatalf("mark deletion: deleted=%t err=%v", deleted, err)
+	}
+	if deleting.(*iamv1.User).DeletionTimestamp == nil {
+		t.Fatal("missing deletion timestamp")
+	}
+	marked := f.userDocument(t, "alice")
+	if *marked.ExternalIdentity != identity || string(marked.Credential) != string(before.Credential) {
+		t.Fatal("deletion intent changed private IAM fields")
+	}
 }
 
 func TestOAuthAccountState(t *testing.T) {
@@ -476,5 +506,45 @@ func TestOAuthClaimReleaseDoesNotDeleteChangedVersion(t *testing.T) {
 	assertOAuthResponse(t, f.call("register", gatewayPrincipal, oauthBody("alice")), 503, "IAMUnavailable")
 	if len(f.backend.docs) != 2 {
 		t.Fatal("CAS conflict removed the identity claim")
+	}
+}
+
+func TestOAuthClaimRead(t *testing.T) {
+	claim := oauthIdentityClaim{
+		Issuer: "issuer", Subject: "subject", UserName: "alice", UserUID: "uid", OperationID: "operation",
+	}
+	for _, test := range []struct {
+		name      string
+		seqNo     int64
+		term      int64
+		source    any
+		wantError bool
+	}{
+		{"current", 2, 3, claim, false},
+		{"initial version", 0, 1, claim, false},
+		{"missing term", 2, 0, claim, true},
+		{"invalid sequence", -1, 3, claim, true},
+		{"invalid source", 2, 3, "invalid", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/ebs-oauth-identity-claims/_doc/key" ||
+					r.URL.Query().Get("realtime") == "false" {
+					t.Errorf("unexpected claim read: %s %s", r.Method, r.URL)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"_source": test.source, "_seq_no": test.seqNo, "_primary_term": test.term,
+				})
+			}))
+			defer srv.Close()
+			service := oauthService{client: es.NewClientForTesting(srv.URL, srv.Client())}
+			got, err := service.getClaim(context.Background(), "key")
+			if (err != nil) != test.wantError {
+				t.Fatalf("getClaim error = %v, want error = %t", err, test.wantError)
+			}
+			if err == nil && (got.Claim != claim || got.Version != (es.Version{SeqNo: test.seqNo, PrimaryTerm: test.term})) {
+				t.Fatalf("claim = %+v", got)
+			}
+		})
 	}
 }

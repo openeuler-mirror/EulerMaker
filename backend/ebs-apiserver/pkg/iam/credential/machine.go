@@ -58,11 +58,15 @@ func (s *Store) AuthenticateMachine(ctx context.Context, name, secret string) (i
 			TokenTTLSeconds int64 `json:"tokenTTLSeconds"`
 		} `json:"spec"`
 	}
-	if err := json.Unmarshal(hit.Document.Data, &account); err != nil {
+	var doc es.IAMDocument
+	if err := hit.Decode(&doc); err != nil {
+		return 0, false, err
+	}
+	if err := json.Unmarshal(doc.Data, &account); err != nil {
 		return 0, false, err
 	}
 	var cred MachineCredential
-	if len(hit.Document.Credential) == 0 || json.Unmarshal(hit.Document.Credential, &cred) != nil {
+	if len(doc.Credential) == 0 || json.Unmarshal(doc.Credential, &cred) != nil {
 		return 0, false, nil
 	}
 	now := time.Now().UTC()
@@ -90,7 +94,6 @@ func (s *Store) AuthenticateMachine(ctx context.Context, name, secret string) (i
 	if err != nil {
 		return 0, false, err
 	}
-	doc := hit.Document
 	doc.Credential = data
 	if _, err := s.client.Update(ctx, "machineaccount", name, doc, hit.SeqNo, hit.PrimaryTerm); err != nil {
 		return 0, false, err
