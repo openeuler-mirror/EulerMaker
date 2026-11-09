@@ -15,6 +15,7 @@ import (
 	"ebs-gateway/internal/handler"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
+	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
@@ -27,6 +28,67 @@ type testAPI struct {
 	*handler.Handler
 	tokens *identity.Tokens
 	now    func() time.Time
+}
+
+func TestAuthenticationMode(t *testing.T) {
+	up, _ := upstream.New("https://api.example", roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("disabled authentication called IAM")
+		return nil, nil
+	}))
+	tokens, _ := identity.NewTokens(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	api, err := handler.New(handler.Dependencies{Upstream: up, Tokens: tokens, Limits: limit.New(100, 100, time.Now), BodyLimit: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := New(api)
+	for _, tc := range []struct {
+		method, path string
+		status       int
+	}{
+		{"GET", "/auth/providers", 200},
+		{"GET", "/auth/oauth/community/login", 404},
+		{"POST", "/auth/oauth/community/callback", 404},
+		{"POST", "/auth/oauth/register", 404},
+		{"POST", "/auth/login", 400},
+		{"POST", "/auth/register", 400},
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(tc.method, tc.path, nil))
+		if response.Code != tc.status {
+			t.Fatalf("%s: %d %s", tc.path, response.Code, response.Body.String())
+		}
+	}
+	for _, enabled := range []bool{false, true} {
+		var cfg oauth.Config
+		if enabled {
+			cfg.PublicBaseURL = "https://ebs.example.com"
+		}
+		api.OAuth = oauth.New(cfg, nil, tokens, time.Now)
+		router = New(api)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/auth/providers", nil))
+		var providers struct {
+			PasswordLoginEnabled bool `json:"passwordLoginEnabled"`
+			RegistrationEnabled  bool `json:"registrationEnabled"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &providers); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != 200 || providers.PasswordLoginEnabled != !enabled || providers.RegistrationEnabled != !enabled {
+			t.Fatalf("OAuth enabled=%v: %s", enabled, response.Body.String())
+		}
+		for _, path := range []string{"/auth/login", "/auth/register"} {
+			response = httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
+			want := http.StatusBadRequest
+			if enabled {
+				want = http.StatusForbidden
+			}
+			if response.Code != want {
+				t.Fatalf("OAuth enabled=%v %s: %d %s", enabled, path, response.Code, response.Body.String())
+			}
+		}
+	}
 }
 
 func (a *testAPI) Router() *gin.Engine { return New(a.Handler) }

@@ -58,6 +58,10 @@ func validUsername(name string) bool     { return len(name) <= 63 && dnsLabel.Ma
 func validPassword(password string) bool { return len(password) >= 12 && len(password) <= 128 }
 
 func (a *Handler) registerUser(c *gin.Context) {
+	if !a.OAuth.LocalAuthenticationEnabled() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "password registration disabled"})
+		return
+	}
 	var input struct {
 		Username    string `json:"username"`
 		Password    string `json:"password"`
@@ -94,6 +98,10 @@ func (a *Handler) registerUser(c *gin.Context) {
 }
 
 func (a *Handler) login(c *gin.Context) {
+	if !a.OAuth.LocalAuthenticationEnabled() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "password login disabled"})
+		return
+	}
 	var input struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

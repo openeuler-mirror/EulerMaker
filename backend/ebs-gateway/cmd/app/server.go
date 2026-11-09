@@ -25,18 +25,19 @@ import (
 )
 
 type options struct {
-	port           int
-	apiServer      string
-	secretFile     string
-	caFile         string
-	clientCertFile string
-	clientKeyFile  string
-	insecureTLS    bool
-	maxBody        int64
-	rate           float64
-	burst          int
-	userCacheTTL   time.Duration
-	logLevel       string
+	port            int
+	apiServer       string
+	secretFile      string
+	oauthConfigFile string
+	caFile          string
+	clientCertFile  string
+	clientKeyFile   string
+	insecureTLS     bool
+	maxBody         int64
+	rate            float64
+	burst           int
+	userCacheTTL    time.Duration
+	logLevel        string
 }
 
 func newCommand(start func(options) error) *cobra.Command {
@@ -55,6 +56,7 @@ func newCommand(start func(options) error) *cobra.Command {
 	flags.IntVar(&opts.port, "port", 8080, "Gateway listen port")
 	flags.StringVar(&opts.apiServer, "apiserver-addr", "https://ebs-apiserver:8443", "API server URL")
 	flags.StringVar(&opts.secretFile, "jwt-secret-file", "", "base64 HMAC secret file")
+	flags.StringVar(&opts.oauthConfigFile, "oauth-config-file", "", "OAuth configuration YAML; setting this enables OAuth and disables local login and registration")
 	flags.StringVar(&opts.caFile, "apiserver-ca", "", "API server CA certificate")
 	flags.StringVar(&opts.clientCertFile, "apiserver-client-cert", "", "API server client certificate")
 	flags.StringVar(&opts.clientKeyFile, "apiserver-client-key", "", "API server client private key")
@@ -121,6 +123,7 @@ func run(opts options) error {
 	handlers, err := handler.New(handler.Dependencies{
 		Upstream: client, Tokens: tokens, Now: time.Now,
 		Limits: limit.New(opts.rate, opts.burst, time.Now), BodyLimit: opts.maxBody,
+		OAuthConfigFile: opts.oauthConfigFile,
 	})
 	if err != nil {
 		return err
@@ -131,6 +134,7 @@ func run(opts options) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	go handlers.OAuth.Run(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
