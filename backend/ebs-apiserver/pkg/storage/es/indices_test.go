@@ -80,6 +80,32 @@ func TestEnsureIndicesOnlyCreatesESPrimaryResources(t *testing.T) {
 	}
 }
 
+func TestIAMIndexFields(t *testing.T) {
+	for _, resource := range []string{"user", "machineaccount"} {
+		t.Run(resource, func(t *testing.T) {
+			var definition struct {
+				Mappings struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+				} `json:"mappings"`
+			}
+			if err := json.Unmarshal([]byte(mappingForResource(resource)), &definition); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]bool{"apiVersion": true, "kind": true, "documentID": true, "metadata": true, "data": true, "credential": true}
+			if resource == "user" {
+				want["externalIdentity"] = true
+			}
+			got := map[string]bool{}
+			for name := range definition.Mappings.Properties {
+				got[name] = true
+			}
+			if !maps.Equal(got, want) {
+				t.Fatalf("mapping fields = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestIndexDefinitionsUseOneReplica(t *testing.T) {
 	for _, resource := range []string{"project", "rpmrepo", "user", "buildclaim"} {
 		definition, err := indexDefinitionForResource(resource)
@@ -200,10 +226,10 @@ func TestValidateOAuthMappings(t *testing.T) {
 		name, userMapping, claimMapping string
 		wantError                       bool
 	}{
-		{"current", iamIndexMapping, oauthIdentityClaimMapping, false},
-		{"missing identity", strings.Replace(iamIndexMapping, `"externalIdentity"`, `"unrelated"`, 1), oauthIdentityClaimMapping, true},
-		{"indexed identity", strings.Replace(iamIndexMapping, `"externalIdentity":{"type":"object","enabled":false}`, `"externalIdentity":{"type":"keyword"}`, 1), oauthIdentityClaimMapping, true},
-		{"invalid claim", iamIndexMapping, strings.ReplaceAll(oauthIdentityClaimMapping, `"keyword"`, `"text"`), true},
+		{"current", userIndexMapping, oauthIdentityClaimMapping, false},
+		{"missing identity", strings.Replace(userIndexMapping, `"externalIdentity"`, `"unrelated"`, 1), oauthIdentityClaimMapping, true},
+		{"indexed identity", strings.Replace(userIndexMapping, `"externalIdentity":{"type":"object","enabled":false}`, `"externalIdentity":{"type":"keyword"}`, 1), oauthIdentityClaimMapping, true},
+		{"invalid claim", userIndexMapping, strings.ReplaceAll(oauthIdentityClaimMapping, `"keyword"`, `"text"`), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := NewClientForTesting("http://elasticsearch", &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

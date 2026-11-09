@@ -112,7 +112,7 @@ const rpmRepoIndexMapping = `{
   }}
 }`
 
-const iamIndexMapping = `{
+const userIndexMapping = `{
   "settings":{"number_of_shards":1,"number_of_replicas":1},
   "mappings":{"dynamic":"strict","properties":{
     "apiVersion":{"type":"keyword"},
@@ -130,6 +130,26 @@ const iamIndexMapping = `{
     "data":{"type":"object","dynamic":false},
     "credential":{"type":"object","enabled":false},
     "externalIdentity":{"type":"object","enabled":false}
+  }}
+}`
+
+const machineAccountIndexMapping = `{
+  "settings":{"number_of_shards":1,"number_of_replicas":1},
+  "mappings":{"dynamic":"strict","properties":{
+    "apiVersion":{"type":"keyword"},
+    "kind":{"type":"keyword"},
+    "documentID":{"type":"keyword"},
+    "metadata":{"properties":{
+      "name":{"type":"keyword"},
+      "namespace":{"type":"keyword"},
+      "creationTimestamp":{"type":"date"},
+      "labels":{"type":"nested","properties":{
+        "key":{"type":"keyword"},
+        "value":{"type":"keyword"}
+      }}
+    }},
+    "data":{"type":"object","dynamic":false},
+    "credential":{"type":"object","enabled":false}
   }}
 }`
 
@@ -326,8 +346,10 @@ func mappingForResource(resource string) string {
 		return rpmRepoIndexMapping
 	case "oauthidentityclaim":
 		return oauthIdentityClaimMapping
-	case "user", "machineaccount":
-		return iamIndexMapping
+	case "user":
+		return userIndexMapping
+	case "machineaccount":
+		return machineAccountIndexMapping
 	default:
 		return defaultIndexMapping
 	}
