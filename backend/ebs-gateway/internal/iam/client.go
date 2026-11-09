@@ -21,6 +21,7 @@ func New(upstreamClient *upstream.Client) *Client { return &Client{upstream: ups
 
 type User struct {
 	Name    string
+	UID     string
 	Enabled bool
 	Scopes  []identity.Scope
 }
@@ -43,7 +44,7 @@ func (c *Client) GetUser(ctx context.Context, name string) (User, int, error) {
 		scopes[i] = identity.Scope(scope)
 	}
 	return User{
-		Name: object.Name, Enabled: object.Spec.Enabled != nil && *object.Spec.Enabled, Scopes: scopes,
+		Name: object.Name, UID: string(object.UID), Enabled: object.Spec.Enabled != nil && *object.Spec.Enabled, Scopes: scopes,
 	}, response.StatusCode, nil
 }
 
