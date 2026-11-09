@@ -6,6 +6,8 @@
 
 apiserver 可以通过 `--enable-iam` 启用内置 IAM 模块，提供 User、MachineAccount 资源及相关认证接口。
 
+IAM 已支持用户认证、注册接口的 OAuth 分支，管理本地账号、外部身份和跨副本唯一性，不管理登录事务或提供已有账号关联。Gateway 后端已实现 OAuth 协议、Cookie 上下文及 JWT 签发，前端已接入，社区基本注册和登录已验证，安全及异常场景仍需验收。接口与存储边界见下文“OAuth IAM 扩展”。
+
 资源存储分配如下：
 
 - Job、Runner 使用 etcd。Runner 表示执行节点；两类资源需要可靠的 resourceVersion 和 list/watch，用于调度、心跳和执行状态协作。
@@ -240,9 +242,149 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 {"authenticated":true,"username":"alice"}
 ```
 
-内部接口不加入 API discovery。目标设计只接受 URI SAN 被识别为 `ebs-gateway` 的 mTLS 客户端身份；该校验当前尚未实现，部署时必须阻止外部直连 apiserver。请求体、密码、client secret及其哈希不得写入日志、审计事件或错误响应。
+内部接口不加入 API discovery。OAuth 分支已校验经过认证的 Gateway 组件身份；密码和 MachineAccount 内部接口的细粒度组件授权仍待实现，部署时必须阻止外部直连 apiserver。请求体、密码、client secret及其哈希不得写入日志、审计事件或错误响应。
 
 用户密码和 MachineAccount client secret 均使用 Argon2id 自描述哈希保存，随机 salt、算法版本和参数编码在哈希字符串中。固定参数为 `memory=19456 KiB`、`iterations=2`、`parallelism=1`。密码长度为 12 到 128 个字符；两类凭据分别维护失败次数，同一主体连续失败 5 次后锁定 15 分钟，成功认证后清零失败次数。认证失败返回统一结果，不区分主体不存在、凭据错误、未设置凭据或账号被锁定。
+
+### OAuth IAM 扩展
+
+#### 职责与接口
+
+Gateway 负责授权跳转、state/浏览器绑定校验、PKCE、授权码交换和外部身份验证，管理短期登录及注册上下文，并签发 EulerMaker JWT。前端注册时只提交用户名等资料，外部身份必须从 Gateway 已验证的上下文取得，不能透传浏览器自报的 issuer/subject。
+
+apiserver 只处理本地账号及外部身份归属，不连接社区认证服务、不接收授权码或第三方 Token，不提供登录事务接口或索引。前端接收回调，Gateway 使用加密 HttpOnly Cookie 保存短期登录和注册上下文，不直连 ES；用途、期限和重放边界见 [OAuth 上下文设计](ebs-gateway.md#1041-cookie-上下文与跨副本)。Gateway 不保证注册凭据一次性消费，并发及重复开户仍须由本节的 IAM 唯一性和重试契约约束。
+
+| 方法与路径 | 调整 | 职责 |
+| --- | --- | --- |
+| `POST /internal/iam/v1/users/authenticate` | 扩展现有接口 | 密码认证，或按已验证外部身份查找并核验本地 User |
+| `POST /internal/iam/v1/users/register` | 扩展现有接口 | 密码注册，或一次创建带外部身份的无密码普通 User |
+
+认证和注册请求通过 `method=password|oauth` 分流，省略时按 password 处理；未知 method、混用两种方式的字段及未知字段均拒绝。两种方式分别校验，复用底层账号存储。密码模式沿用前述协议；MachineAccount 接口不变。
+
+两个接口的 OAuth 分支仅允许已认证的 `spiffe://eulermaker/internal/ebs-gateway` 身份调用，从 apiserver 认证上下文取得身份，不信任请求头自报值；未配置内部证书认证时也不放宽此限制。对外 Gateway 路由不能允许调用方通过提交 method 或 externalIdentity 绕过外部认证或注册上下文校验。
+
+#### 外部身份校验与身份键
+
+两个 OAuth 分支使用相同校验：externalIdentity 必须是非 null 对象，且只接受 issuer、subject；两者均为必填、非空的有效 UTF-8 字符串。issuer 最长 2048 字节，subject 最长 1024 字节，按解码后的 UTF-8 字节数计算；拒绝 Unicode 控制字符（Go `unicode.IsControl`）。不做 trim、大小写转换、URL 解码或 Unicode 规范化，精确比较原值。issuer 是 Gateway 已验证的认证源标识；IAM 不根据该值访问网络，也不以 URL 格式推断其可信性。
+
+身份键固定为以下字节序列的 SHA-256，使用完整的 64 位小写十六进制结果作为占位文档 `_id`：
+
+```text
+uint64BE(len(UTF8(issuer))) || UTF8(issuer) || uint64BE(len(UTF8(subject))) || UTF8(subject)
+```
+
+`uint64BE` 为 8 字节无符号大端整数，`||` 表示直接拼接，不添加分隔符。认证、注册及恢复共用此编码；长度前缀避免拼接歧义，读取占位后仍须核对原始 issuer/subject。
+
+#### OAuth 认证
+
+```json
+{
+  "method": "oauth",
+  "externalIdentity": {"issuer": "https://provider.example.com", "subject": "123456"}
+}
+```
+
+认证只查询，不写入或补全 externalIdentity，也不按第三方用户名、邮箱自动匹配已有账号。按精确 issuer/subject 查询身份归属，并核对 User 的 UID、完整外部身份、启用状态及合法权限。成功返回 200：
+
+```json
+{"authenticated":true,"username":"alice","uid":"user-uid"}
+```
+
+仅确认身份索引可用且该身份没有唯一性占位时，返回 200 和 `{"authenticated":false,"registrationRequired":true}`，不自动开户。占位存在但目标 User 缺失、UID 或身份不符时按下文错误表返回，不当作首次注册；索引缺失、ES 读取失败不得当作身份不存在。账号不可登录返回受控的 401 响应。
+
+密码凭据的 FailedAttempts、LockedUntil 仅影响密码认证，OAuth 认证不读取或修改这些计数，不清除密码锁定。User 被禁用或权限配置非法时，两种登录方式都不能获得登录权限；无密码凭据不阻止 OAuth 登录。
+
+#### OAuth 注册
+
+```json
+{
+  "method": "oauth",
+  "username": "alice",
+  "displayName": "Alice",
+  "email": "alice@example.com",
+  "externalIdentity": {"issuer": "https://provider.example.com", "subject": "123456"}
+}
+```
+
+Gateway 必须先核验待注册上下文的浏览器绑定、有效期和注册策略，再调用本接口。apiserver 不接收 registrationID 或管理其生命周期。用户名、显示名称和邮箱沿用账号资料规则；不接受 password、scopes、enabled 或客户端指定 UID。新用户固定启用、权限固定为 `ebs:user`，即使用户名为 admin 也不进入密码注册的管理员初始化分支。
+
+注册按以下顺序执行：
+
+1. 先完成整个请求的解码和输入校验：JSON 结构、字段类型、method、未知及禁止字段、username、displayName、email，以及“外部身份校验与身份键”规定的 externalIdentity。用户名和资料使用与最终 User 创建一致的校验规则；不能等取得占位后才发现输入非法。校验失败返回 `400 InvalidRequest`，不查询或写入身份占位、不创建 User。合法请求再生成身份键，实时 GET 占位；已有占位时读取目标 User，按下文重试规则返回。不能使用 ES Search 的空结果判定不存在。
+2. 仅当身份索引可用、占位文档明确不存在时，服务端生成目标 User UID 和 operationID，以该身份键执行 ES `op_type=create`。查询只用于提前判断，create-only 才是跨副本唯一性门禁。
+3. 只有明确收到占位创建成功响应的请求，才能以占位固定的用户名和 UID 发起一次 User create-only 写入。User 与私有 externalIdentity 同次保存，不创建密码凭据；通用创建逻辑不能重新生成该 UID。用户名被其他 User 占用时不能补写身份或覆盖对象。
+4. 占位创建返回 409 时读取胜出占位并按重试规则判断，不重新生成 UID 或对另一用户名写入。冲突后 GET 占位暂时返回 404 时返回可重试错误，本次请求不把它当成重新占位授权。
+5. 写入结果未知或执行中断时，按“私有存储与一致性”的确认规则处理，返回值见错误表。
+
+新建确认成功返回 201 和 `{"username":"alice","uid":"user-uid"}`；成功重试返回相同结构的 200。返回成功不等于登录完成，Gateway 仍按其注册上下文协议完成登录。
+
+#### 注册重试与错误返回
+
+请求不携带客户端 operationID。重试以精确外部身份和 username 定位原目标，服务端 operationID 只用于占位写入确认及安全释放，不是 Gateway 的登录凭据。处理已有占位时，先核对占位原始身份及目标 User 的完整身份、UID，再判断请求用户名；不能仅凭用户名相同返回成功。
+
+**判定优先级：** 原执行者明确收到本次 User create-only 的用户名冲突响应，且读取确认用户名属于其他 UID 时，走安全释放后的 UsernameAlreadyExists 分支；这不表示本次身份绑定已完成。认证、并发请求和普通重试读取已有占位时，没有这一确定拒绝依据，发现 UID 或身份不一致则返回 IdentityStateInvalid，不能代替原执行者释放占位。ES 读取失败优先返回 IAMUnavailable，不根据不完整读取推断身份冲突。
+
+| 查询或写入结果 | 注册处理 |
+| --- | --- |
+| 请求的身份、username 与占位匹配，User 的身份、用户名及 UID 与占位一致，账号可用 | 200，返回原 username/uid；忽略本次 displayName/email 差异，不覆盖资料、不创建新凭据 |
+| 占位及 User 一致且已归属另一个 username | `409 IdentityAlreadyLinked`；不允许以新用户名再次注册，提示重新登录 |
+| 占位存在但目标 User 尚不存在，不能确认原写入已结束 | `409 RegistrationInProgress`；只允许原目标的确认，不重放创建、不改名、不自动释放占位 |
+| 占位原始身份不符，或已存在的目标 User UID/外部身份不符 | `500 IdentityStateInvalid`；拒绝认证或注册并记录内部告警，不替换占位或补写身份 |
+| 首次 User create-only 被确定拒绝，用户名由另一 User 占用 | 按下文释放规则确认占位已安全释放后返回 `409 UsernameAlreadyExists`；Gateway 才可允许改名重试 |
+| 占位删除结果未知、冲突后暂时读不到占位，或 ES 读写结果仍无法确认 | `503 IAMUnavailable`；不得解释为未注册或允许改名 |
+
+成功重试仍须核验账号状态，账号不可用时返回 `403 AccountUnavailable`。目标 User 缺失无法区分进行中、故障或已删除时，使用表中的 RegistrationInProgress。
+
+由 IAM Handler 处理的 OAuth 分支错误统一为 `{"code":"<stable-code>","error":"<safe-message>"}`，不回显第三方凭据、ES 原始响应或其他用户资料。非法请求返回 `400 InvalidRequest`。认证复用上表的未决、一致性和存储错误分类，账号不可用返回 `401 AuthenticationFailed`。错误响应不包含 registrationRequired；只有认证明确查无占位时才能返回该标记。
+
+进入 IAM Handler 前，被通用认证、授权、请求大小限制或其他中间件拒绝的请求沿用该层的标准状态码与响应格式，不保证包含上述字符串 code/error。无有效内部身份的 HTTP 请求返回 401，已认证但非 Gateway 返回 403；TLS 握手失败不产生 IAM HTTP 响应。Gateway 须先判断传输结果和 HTTP 状态，再识别 IAM 错误结构及已知业务 code；标准 apiserver Status、非 JSON 响应、缺少或未知业务 code 均按受控上游错误处理，不推断为身份未注册、占位已释放或允许改名。
+
+Gateway 的表单保留、重新登录及错误提示见 [OAuth 设计的 IAM 调用契约](ebs-gateway.md#1062-两个-iam-内部接口)。
+
+#### 私有存储与一致性
+
+- User 的私有 externalIdentity 保存 issuer、subject、linkedAt，与 credential 同层存储，不进入公开 User.spec、普通 GET/LIST、字段选择或资源 OpenAPI。普通用户更新和改密保留该字段，不能通过通用资源接口写入。
+- 用户名由 User create-only 保证唯一；外部身份由 ES 私有索引 `ebs-oauth-identity-claims-v1` 保证唯一。占位键遵循前述编码，正文保存原始身份、目标用户名/UID、服务端 operationID，不依赖 ES Search 可见性或进程内锁。
+- 认证通过实时 GET 读取占位及 User，以 User 中的完整身份为事实依据。身份占位不是登录事务，不自动过期；User 删除后保留占位，防止同名重建接管外部身份。
+- 占位与 User 是不同 ES 文档，不保证跨文档原子性。只有持有原操作且收到确定 User 写入拒绝、没有未决写入并确认未产生目标身份的执行者，才可核对 operationID 及原占位版本，通过 CAS 删除占位。删除冲突或结果未知均返回 IAMUnavailable，不能用新版本重放旧删除决策，也不能把一次 GET 404 当作释放成功；后续请求仍按实时读取结果确认原目标，不重放旧删除。只有明确收到本次删除成功响应才返回 UsernameAlreadyExists。成功写入的占位不释放，其他并发请求不能撤销占位。
+- 未知写入仅实时读取原占位及 User 确认，不重发 User 创建、不换用户名或 UID。占位写入结果未知时，即使读到匹配 operationID 的占位，也不据此继续发起 User 写入。ES 客户端不得对占位/User 创建及占位删除自动重试，避免隐藏未决写入；确认到完整匹配的 User 时按成功重试处理。
+- 进程退出、占位成功但尚未发送 User 写入就退出，均可能留下无法自动恢复的占位。无法确认时保留并告警，由维护流程确认旧执行者及未决写入已结束后修复，不因超时或一次 GET 404 释放。首版接受该情况下注册暂时不可用。ES CAS、冲突及确认封装在 apiserver，不向 Gateway 暴露 ES 版本或占位 CRUD。
+
+#### ES mapping 与初始化
+
+User 的 ES 文档在 data、credential 同层增加以下私有字段；公开资源编解码仍只读取 data，不把外层私有字段混入对象或字段选择结果：
+
+```json
+"externalIdentity": {"type": "object", "enabled": false}
+```
+
+该字段正文为 issuer、subject、linkedAt，linkedAt 由服务端生成 UTC RFC3339 时间。字段不参与检索，认证按占位定位 User 后读取完整正文。User 更新、Patch、密码重置及密码失败计数更新均必须保留它。User 与 MachineAccount 使用各自的 Mapping；MachineAccount 不定义或保存 externalIdentity。两者均使用 dynamic=strict，User Mapping 需显式增加属性，不能仅修改 Go 存储结构。
+
+身份占位是独立的私有 ES 文档，不使用公共资源封装。初始 mapping 为：
+
+```json
+{
+  "settings": {"number_of_shards": 1, "number_of_replicas": 1},
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "issuer": {"type": "keyword"},
+      "subject": {"type": "keyword"},
+      "userName": {"type": "keyword"},
+      "userUID": {"type": "keyword"},
+      "operationID": {"type": "keyword"}
+    }
+  }
+}
+```
+
+User UID 和 operationID 均为服务端生成的 UUID，先固定到占位，再按该 UID 创建 User；不向客户端暴露 operationID。占位无 TTL 或后台自动清理，不参与普通资源 GET/LIST 和 API discovery。
+
+启用 IAM 时，启动初始化负责创建 User 索引及身份占位索引，并确认所需字段 mapping 可用后再进入 Ready。新建索引直接使用已调整的默认 mapping；已有索引缺少所需属性或类型不匹配时启动失败并明确提示 mapping 问题，不静默忽略或在请求中临时建索引。已有索引的新增字段由运维显式执行 [Mapping 升级子命令](#mapping-升级)，不纳入启动自动修复。ES API Key 必须具备相关索引的初始化、mapping 读取及业务读写权限。运行期区分文档不存在与 index_not_found_exception，后者返回 IAMUnavailable。
+
+#### 验证要求
+
+按外部身份校验、身份键编码、注册流程和错误表逐项覆盖测试，并验证新建及已存在索引的初始化行为。非法 method、字段类型、用户名、资料或外部身份均须在占位前拒绝，并断言未执行占位读写及 User 创建。重点包括并发查询不存在后的唯一胜出、两类 UID 冲突的判定优先级、占位固定 UID 不被创建逻辑覆盖、未知结果确认、成功响应丢失、资料不被重试覆盖，以及普通资源和凭据更新保留私有字段。分别验证 Handler 的业务错误格式和前置中间件拒绝时的标准响应。密码临时锁定不影响 OAuth，账号禁用则两者均不可登录；OAuth 注册 admin 不提权，非 Gateway 身份不能调用 OAuth 分支。认证只读和不自动关联的测试引用“OAuth 认证”规则，不另设兼容路径。
 
 ## 内部 mTLS 认证与授权
 
@@ -378,9 +520,9 @@ ebs-machineaccounts
 ebs-oldjobs
 ```
 
-此外，内部索引 `ebs-build-target-claims` 用于构建目标互斥，不作为 API 资源暴露。
+此外，内部索引 `ebs-build-target-claims` 用于构建目标互斥，`ebs-oauth-identity-claims` 用于外部身份唯一性占位，均不作为 API 资源暴露。物理索引使用 `-v1` 后缀，业务请求通过同名无版本别名访问。
 
-`ebs-users` 使用User名称作为文档ID，每个文档同时保存公开对象和内部credential字段：
+`ebs-users` 使用 User 名称作为文档 ID，公开对象存放在 data 中，credential 与 externalIdentity 为同层私有字段。密码注册仅创建 credential，OAuth 注册仅创建 externalIdentity，后续设置密码可使两者并存。以下为同时具备两种凭据的文档示意：
 
 ```json
 {
@@ -389,22 +531,32 @@ ebs-oldjobs
   "metadata": {
     "name": "alice"
   },
-  "spec": {
-    "enabled": true,
-    "scopes": ["ebs:ops"],
-    "displayName": "Alice",
-    "email": "alice@example.com"
+  "data": {
+    "apiVersion": "iam.ebs/v1",
+    "kind": "User",
+    "metadata": {"name": "alice", "uid": "<user-uuid>"},
+    "spec": {
+      "enabled": true,
+      "scopes": ["ebs:ops"],
+      "displayName": "Alice",
+      "email": "alice@example.com"
+    }
   },
   "credential": {
     "passwordHash": "$argon2id$...",
     "passwordUpdatedAt": "2026-08-08T00:00:00Z",
     "failedAttempts": 0,
     "lockedUntil": null
+  },
+  "externalIdentity": {
+    "issuer": "https://provider.example.com",
+    "subject": "123",
+    "linkedAt": "2026-11-07T00:00:00Z"
   }
 }
 ```
 
-User的REST Storage是专用实现。注册接口写入包含credential的完整文档；GET/List只返回公开对象；PUT/PATCH保留已有credential；密码设置和认证接口读取或更新credential字段；DELETE删除整个文档。认证失败计数、锁定时间和密码修改使用ES的`seq_no`、`primary_term`执行乐观并发更新。
+User 复用 ES REST Storage；GET/LIST 只返回 data 中的公开对象，PUT/PATCH 保留私有字段。密码设置、失败计数及锁定更新保留 externalIdentity，并使用 ES 的 `seq_no`、`primary_term` 执行乐观并发更新。DELETE 删除 User 文档，但保留外部身份占位，具体约束见“私有存储与一致性”。
 
 `ebs-machineaccounts` 使用MachineAccount名称作为文档ID，每个文档同时保存公开对象和内部credential字段：
 

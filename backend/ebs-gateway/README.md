@@ -12,6 +12,7 @@ EulerMaker 的对外 API 入口。Gateway 使用 Gin 注册显式路由，处理
 | `internal/handler` | 处理 Auth、IAM 与资源请求，执行鉴权和转发 |
 | `internal/identity` | JWT 签发、验证和身份类型 |
 | `internal/iam` | 调用 apiserver 的 IAM 接口 |
+| `internal/oauth` | OAuth/OIDC 提供方认证、加密 Cookie、首次注册及结果确认 |
 | `internal/policy` | Project、Runner、Config、Script 等授权及写入保护 |
 | `internal/mutation` | 严格解析 PUT/PATCH 并生成完整候选对象 |
 | `internal/upstream` | 可信内部读取和流式反向代理 |
@@ -36,6 +37,26 @@ docker build -f backend/ebs-gateway/Dockerfile -t ebs-gateway:dev .
 ```
 
 ## 路由与安全约束
+
+OAuth 默认关闭，使用 `--oauth-config-file=/path/to/oauth.yaml` 启用，配置示例和注册恢复规则见 [OAuth 设计](../../docs/zh/design/ebs-gateway.md#108-配置与部署)。支持 OIDC discovery 或固定端点；普通 OAuth 的 `userinfo-sub` adapter 要求固定用户接口返回稳定且不复用的 `sub`，不能直接套用仅返回用户名的平台。
+
+指定 `--oauth-config-file` 即启用 OAuth，自动关闭本地密码登录和注册（`/auth/login`、`/auth/register` 返回 403），不提供独立开关；不指定配置文件时使用本地登录和注册。无效配置导致启动失败，提供方暂不可用不会自动回退密码登录。首次 OAuth 登录未关联账号时统一进入补全注册流程，既有 JWT 和 Runner 认证不受影响。
+
+OAuth 配置中的密钥直接内嵌，不再引用其他密钥文件（以下为配置片段）：
+
+```yaml
+contextKeys:
+  activeKeyID: key-1
+  keys:
+    key-1: <独立生成的32字节密钥的Base64值>
+provider:
+  clientSecret: <第三方应用密钥>
+  # 其他 provider 配置见设计文档
+```
+
+Cookie 密钥可用 `openssl rand -base64 32` 生成。将完整 `oauth.yaml` 保存到一个 Kubernetes Secret，再只读挂载给 `--oauth-config-file`；所有 Gateway 副本共享配置及密钥环，更新后重启加载。配置含密钥，不放入 ConfigMap、不提交真实配置、不写入日志；JWT 密钥仍保持独立。不新增 Gateway→ES 连接。OAuth IAM 接口要求 Gateway 的内部 mTLS 身份，不能使用匿名 apiserver 连接。
+
+Gateway 端已提供 `/auth/providers` 和 `/auth/oauth/*`，前端已接入回调、首次注册及结果确认。提供方回调登记为 `https://<页面域名>/auth/callback`，前端收到 code/state 后同源 POST 到 `/auth/oauth/{provider}/callback`；不能将提供方配置成直接 GET 该 API。社区基本注册和登录已验证，安全及异常场景仍需验收。Kubernetes 操作步骤见 [OAuth 部署](../../deploy/kubernetes/README.md#71-启用社区-oauth-登录)。
 
 - `/auth/*` 负责注册、登录、Runner token 交换、token 校验和本人密码修改；只有 Admin 能创建 MachineAccount。
 - `/apis/iam.ebs/v1/*` 仅允许 Admin 管理非管理员 User 和 MachineAccount。

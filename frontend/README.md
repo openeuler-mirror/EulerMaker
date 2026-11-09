@@ -52,11 +52,24 @@ Artifact Manager 的默认及 `art-{数字}` 路由支持 HTTP/1.1 流式上传�
 
 连接上游超时为 10 秒，读取上传正文、向上游发送请求和向客户端发送响应的空闲超时均为 300 秒，等待上游响应的空闲超时为 7200 秒。这些不是整个上传的总时限；Runner 和 Artifact Manager 仍各自执行上传超时。设置含义参见 [Nginx 请求正文配置](https://nginx.org/en/docs/http/ngx_http_core_module.html#client_body_timeout)及[代理配置](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_request_buffering)。外层负载均衡或 Ingress 若存在，也需允许相应的正文大小、流式转发和超时。`/auth/`、`/apis/` 保持原有配置。
 
+## OAuth 社区登录
+
+前端通过 `/auth/providers` 获取登录模式；Gateway 配置 OAuth 时仅显示社区登录，隐藏本地注册及密码修改入口。首次社区登录在 `/auth/register` 补全用户名和资料，不要求密码；不提供已有账号绑定。
+
+`GET /auth/callback`、`GET /auth/register` 由前端 SPA 处理，`POST /auth/register` 仍转发本地密码注册 API。Vite 和 Nginx 已区分这两类请求，其余 `/auth/` API 正常转发。OAuth POST 使用同源 Cookie，不携带原有业务 Bearer；新 JWT 通过 `/auth/check` 验证后才替换当前会话。
+
+回调参数在初始化路由前读取并清除，仅保留在内存；注册信息和草稿保存在 sessionStorage，刷新恢复，缺失或过期重新登录。create 请求发出前持久化“已提交”标记，结果不明时锁定资料，每 3 秒执行一次 confirm、最多自动确认 3 次，之后可手动确认或重新登录；不自动重复创建账号。
+
+Gateway 的 `publicBaseURL` 必须与实际浏览器入口一致，第三方登记 `${publicBaseURL}/auth/callback`。生产和开发联调均须通过 HTTPS 入口；Vite 默认 HTTP 本身不能完成 Secure Cookie 流程，可在 Vite 前使用受信任证书的 HTTPS 反向代理，保留原始 Origin。代理不得记录 callback query、Cookie 或认证正文；Nginx 已关闭认证路径访问日志并设置 no-referrer，外层入口需采取相同保护。
+
+社区基本注册和登录已验证，安全及异常场景仍需验收，具体配置见 [OAuth 设计](../docs/zh/design/ebs-gateway.md#oauth-login)。
+
 ## 检查和构建
 
 ```bash
 npm run typecheck
 npm run build
+node --test tests/*.test.mjs
 ```
 
 上传代理集成测试使用本机 Docker、已构建的前端镜像及 `node:22-alpine`，创建隔离的临时网络和容器并在结束时清理：

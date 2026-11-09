@@ -277,6 +277,60 @@ kubectl apply -f deploy/kubernetes/ebs-gateway.yaml
 kubectl -n ebs rollout status deployment/ebs-gateway --timeout=10m
 ```
 
+### 7.1 启用社区 OAuth 登录
+
+Gateway 和前端镜像均须包含 OAuth 功能。按 [Gateway OAuth 配置](../../docs/zh/design/ebs-gateway.md#108-配置与部署)在受控主机准备 `oauth.yaml`，权限设为 `0600`。`publicBaseURL` 填前端实际 HTTPS 地址，不是集群 Service 地址；在认证平台登记 `${publicBaseURL}/auth/callback`，保留旧平台仍使用的回调地址。
+
+Cookie 密钥独立生成，不复用 JWT 密钥：
+
+```sh
+openssl rand -base64 32
+```
+
+将输出填入 `contextKeys.keys`，完整配置只保存在 Secret，不提交真实凭据到仓库：
+
+```sh
+chmod 600 oauth.yaml
+kubectl -n ebs create secret generic gateway-oauth \
+  --from-file=oauth.yaml=./oauth.yaml \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+在 `ebs-gateway.yaml` 的 Gateway 容器中追加参数和挂载，Pod 中追加卷，保留原有 mTLS、JWT 参数及卷：
+
+```yaml
+# spec.template.spec.containers 中的 Gateway 容器
+args:
+  - --oauth-config-file=/etc/ebs/oauth/oauth.yaml
+volumeMounts:
+  - name: oauth-config
+    mountPath: /etc/ebs/oauth
+    readOnly: true
+# spec.template.spec.volumes
+volumes:
+  - name: oauth-config
+    secret:
+      secretName: gateway-oauth
+```
+
+所有副本共享同一份 OAuth 配置、Cookie 密钥环及 JWT 密钥。Secret 文件须允许容器运行用户读取；Gateway 不直接访问 Kubernetes Secret API。首次配置后执行：
+
+```sh
+kubectl apply -f deploy/kubernetes/ebs-gateway.yaml
+kubectl -n ebs rollout status deployment/ebs-gateway --timeout=10m
+```
+
+后续仅修改 Secret 时，Gateway 不会自动重载，需要滚动重启：
+
+```sh
+kubectl -n ebs rollout restart deployment/ebs-gateway
+kubectl -n ebs rollout status deployment/ebs-gateway --timeout=10m
+```
+
+启用后 `/auth/providers` 应返回提供方及两个值为 false 的本地认证开关。启用前准备管理员权限和恢复途径：OAuth 注册的 `admin` 仍是普通用户，不自动关联旧管理员。先确认 IAM Mapping 已更新及 Gateway→apiserver mTLS 正常，再验证登录、首次注册和跨副本流程。
+
+前端入口必须支持 HTTPS。`GET /auth/callback`、`GET /auth/register` 返回 SPA，认证 API 请求转发 Gateway；外层代理不得缓存认证响应或记录回调查询参数、Cookie、Token 和认证正文。安全及异常场景按 [OAuth 验收清单](../../docs/zh/design/ebs-gateway.md#109-错误审计与验收)检查，基本登录成功不能代替 PKCE 等安全验证。
+
 ## 8. 部署 Artifact Manager
 
 `artifact-manager.yaml` 先创建 `art-01` 命名空间，再在其中创建 Service 和 Deployment。Artifact Manager 通过 `ebs` 命名空间 Gateway 的 `/auth/check` 验证 Runner Token，部署前先确认 Gateway 已就绪。只给存放 Artifact 数据的节点设置空值标签 `node-role.kubernetes.io/art-01=`，并在该节点预先挂载 `/srv`、创建 `/srv/artifacts`。模板使用 `hostPath` 的 `Directory` 类型；目录不存在时 Pod 会启动失败，不会自动写入节点根文件系统。不要给多个持有不同数据的节点打同一标签；节点故障时须先恢复数据，再调整标签或启动 Pod。本地目录不提供自动故障转移，应单独安排备份。

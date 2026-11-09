@@ -1,5 +1,7 @@
 # ebs-gateway 设计
 
+OAuth/OIDC 社区登录和首次注册的 Gateway 后端及前端已实现，社区基本注册和登录已验证，安全及异常场景仍需验收，契约见 [OAuth 登录设计](#oauth-login)。启用 OAuth 后关闭本地密码登录和注册，Runner Token 和授权规则保持不变；首版不提供已有账号关联。
+
 ## 一、定位
 
 BuildGraph 的字段及生命周期见 [数据模型](data-models.md#buildgraph构建依赖图)。
@@ -27,7 +29,7 @@ ebs-apiserver
 etcd / Elasticsearch
 ```
 
-`ebs-gateway` 保持无状态，User 和 MachineAccount 由 `ebs-apiserver` 的 IAM 模块提供。匿名调用方可以读取公开业务资源的完整对象，但不能 watch、写入或访问 Runner/IAM；认证用户仍按身份获得对应写权限。gateway 通过 User API 获取用户状态，并基于认证身份限制用户写入自己有权限的 Project；通过 MachineAccount 凭据认证为请求指定的 Runner 签发短期 token。
+`ebs-gateway` 不保存业务资源，User 和 MachineAccount 由 `ebs-apiserver` 的 IAM 模块提供。OAuth 使用加密 HttpOnly Cookie 携带短期登录上下文，不增加 Gateway 到 ES/etcd 的连接；多副本共享密钥环，不依赖实例会话或粘性路由。用途、期限和重放边界见 [OAuth 上下文设计](#1041-cookie-上下文与跨副本)。匿名调用方可以读取公开业务资源的完整对象，但不能 watch、写入或访问 Runner/IAM；认证用户仍按身份获得对应写权限。gateway 通过 User API 获取用户状态，并基于认证身份限制用户写入自己有权限的 Project；通过 MachineAccount 凭据认证为请求指定的 Runner 签发短期 token。
 
 ## 二、设计目标
 
@@ -43,7 +45,7 @@ etcd / Elasticsearch
 | 审计记录 | 记录请求路径、方法、状态码、耗时和调用方信息 |
 | 限流保护 | 对调用方进行基础限流，保护 apiserver |
 | 写入隔离 | 基于用户身份和 Project labels 限制写入范围，支持 Project 在用户间共享 |
-| 无业务状态 | 不保存资源对象，不直接访问主存储 |
+| 无业务状态 | 不保存业务资源或直接读写其存储；OAuth 短期上下文使用加密 Cookie |
 
 ## 三、资源归属边界
 
@@ -79,7 +81,7 @@ spec:
 
 - `metadata.name` 是稳定用户标识，与用户 JWT 的 `sub` 一致。
 - `spec.enabled` 控制用户是否可以访问业务 API。
-- `spec.scopes` 必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项；注册用户名为 `admin` 时由 apiserver 赋予 `["ebs:admin"]`，其他用户名赋予 `["ebs:user"]`。
+- `spec.scopes` 必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项；密码注册用户名为 `admin` 时由 apiserver 赋予 `["ebs:admin"]`，其他用户名赋予 `["ebs:user"]`。OAuth 注册固定为普通用户，不按用户名提权。
 - 管理员标记由受信任内部流程通过 apiserver User API 设置，gateway 不提供对外提升管理员的接口。
 - apiserver IAM 模块验证用户密码或 MachineAccount client secret，gateway 签发 JWT；IAM资源保存gateway鉴权需要的主体状态和token TTL。
 - 普通用户通过公开注册接口创建自己的 User 和初始密码。
@@ -209,7 +211,7 @@ gateway 记录结构化审计日志，建议包含：
 Authorization: Bearer <token>
 ```
 
-gateway 提供用户密码登录和 MachineAccount 换取 Runner token 两类认证入口。用户登录时，Gateway 将账号密码提交给 apiserver IAM 模块验证，认证成功后再读取 User，确认用户存在且 `spec.enabled=true`。Runner 换取 token 时，Gateway 将 MachineAccount client ID 和 client secret 提交给 apiserver IAM 模块验证，并独立校验请求中的 Runner 名称。以上检查通过后，由 gateway 使用同一 HMAC 密钥签发对应的短期 JWT。Apiserver IAM 模块只负责凭据验证，不签发、解析或刷新 JWT。后续业务请求由 gateway 验证 JWT，并根据 token 类型决定是否执行 UserResolve。
+Gateway 的用户认证按部署配置使用密码或 OAuth；OAuth 流程见第十章。MachineAccount 换取 Runner Token 不受此切换影响。密码登录时，Gateway 将账号密码提交给 apiserver IAM 模块验证，认证成功后再读取 User，确认用户存在且 `spec.enabled=true`。Runner 换取 token 时，Gateway 将 MachineAccount client ID 和 client secret 提交给 apiserver IAM 模块验证，并独立校验请求中的 Runner 名称。以上检查通过后，由 gateway 使用同一 HMAC 密钥签发对应的短期 JWT。Apiserver IAM 模块只负责凭据验证，不签发、解析或刷新 JWT。后续业务请求由 gateway 验证 JWT，并根据 token 类型决定是否执行 UserResolve。
 
 普通用户 JWT claims：
 
@@ -350,6 +352,8 @@ Authorization: Bearer <token>
 响应中的 `identity.type` 表示已验证的主体类别：用户返回 `user`，Runner 返回 `runner`。用户权限由 `identity.scopes` 表示；Runner 的 scopes 为空数组。
 
 ### 4.4 RegistrationAndPasswordLogin
+
+本节本地密码登录和注册仅在 OAuth 未启用时可用；启用 OAuth 后，`POST /auth/login` 和 `POST /auth/register` 直接返回 403，不调用 IAM。OAuth 提供方故障不会自动恢复本地入口。
 
 gateway 提供无需 JWT 的用户自助注册入口：
 
@@ -806,6 +810,7 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 | `--port` | `8080` | 否 | gateway 监听端口 |
 | `--apiserver-addr` | `https://ebs-apiserver:8443` | 是 | 上游 apiserver 地址 |
 | `--jwt-secret-file` | 空 | 是 | 保存单个 base64 HMAC 密钥的文件路径，解码后至少 32 字节 |
+| `--oauth-config-file` | 空 | 否 | OAuth 配置文件；指定后关闭本地密码登录和注册，详见 10.8 |
 | `--user-cache-ttl` | `30s` | 否 | User 状态缓存时间，实际缓存不能超过 JWT 剩余有效期 |
 | `--max-request-body-bytes` | `1048576` | 否 | 登录和代理写请求的最大请求体，以及 PATCH 后候选对象的最大字节数 |
 | `--insecure-skip-verify` | `false` | 否 | 是否跳过 apiserver TLS 校验，仅测试环境使用 |
@@ -815,7 +820,7 @@ bash backend/ebs-gateway/hacks/update-openapi.sh --check
 | `--rate-limit-burst` | `200` | 否 | 令牌桶容量 |
 | `--log-level` | `info` | 否 | 日志级别 |
 
-配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。当前尚未按组件限制 IAM 等具体接口的操作权限；部署时须限制 apiserver 的网络访问。
+配置 `--apiserver-client-cert` 和 `--apiserver-client-key` 后，Gateway 使用独立的 mTLS 客户端证书访问 apiserver；启用 `--internal-client-ca-file` 的 apiserver 根据证书 URI SAN 识别 Gateway，不依赖转发的用户身份头。IAM 的 OAuth 分支仅允许 Gateway 身份调用，其余接口尚未实施完整的按组件授权规则；部署时仍须限制 apiserver 的网络访问。
 
 密钥文件由 Secret 以只读方式挂载，文件权限应限制为 `0600`，内容为单个 base64 字符串，例如：
 
@@ -955,3 +960,265 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | Proxy | `/apis/ebs/v1/*` 原样透传 |
 | Watch | 已授权用户的 Project 范围 Job Watch 和已授权调用方的 Runner 范围 Job Watch 能够流式转发；校验强制过滤、fieldSelector 注入、BOOKMARK、410 重建、timeoutSeconds 和每 Runner 单连接限制；Runner 列表及其他非允许列表路由的 Watch 均拒绝 |
 | Audit | 请求结束后记录 method/path/status/latency/user |
+
+<a id="oauth-login"></a>
+
+## 十、补充：OAuth/OIDC 社区登录
+
+### 10.1 范围
+
+支持单个认证源的 Authorization Code + PKCE S256 登录，以及首次登录补全注册。现有 JWT、密码登录和业务授权规则沿用本文前述章节；IAM 身份一致性以 [apiserver OAuth 契约](ebs-apiserver.md#oauth-iam-扩展)为准。
+
+不提供已有账号关联、自动合并、外部角色同步、解绑、统一退出、第三方 Token 长期托管或 CLI Device Flow。社区基本注册和登录已验证，安全及异常场景按 10.9 验收。
+
+### 10.2 组件职责与流程
+
+```text
+前端 → Gateway login：开始登录
+Gateway → 浏览器：设置加密登录 Cookie，302 跳转授权页
+第三方 → 前端 /auth/callback：浏览器携带 code/state 返回
+前端 → Gateway callback：同源 POST code/state，自动携带 Cookie
+Gateway → 第三方：核验上下文后交换授权码、验证身份
+Gateway → apiserver IAM：users/authenticate（method=oauth）
+  已关联：核验当前 User，直接返回 JWT
+  未关联：设置加密注册 Cookie，返回 registrationRequired
+前端 → /auth/register：用户补全本地用户名等资料
+前端 → Gateway register：提交资料，自动携带注册 Cookie
+Gateway → apiserver IAM：users/register，再 authenticate 并核验 User
+Gateway → 前端：直接返回 JWT
+```
+
+第三方登记的 redirectURI 是前端页面，不是 Gateway POST callback API。授权码交换和身份认证仍在 Gateway 执行，浏览器自报的 issuer/subject 不作为身份来源。
+
+### 10.3 对外 API
+
+下列接口已在 Gateway 注册，不继承业务代理的匿名读取或 Runner 权限规则。
+
+| 方法与路径 | 输入与行为 |
+| --- | --- |
+| `GET /auth/providers` | 返回本地认证可用性、provider ID 和 loginURL，不暴露凭据 |
+| `GET /auth/oauth/{provider}/login` | 可选站内 returnTo，默认 /；设置登录 Cookie，302 跳转 |
+| `POST /auth/oauth/{provider}/callback` | JSON code/state 或 error/state，校验登录 Cookie、Origin，返回 JWT 或待注册结果 |
+| `POST /auth/oauth/register` | JSON registrationID、action、username，以及 create 时可选 displayName/email；确认账号后直接返回 JWT |
+
+providers 响应：
+
+```json
+{
+  "passwordLoginEnabled": false,
+  "registrationEnabled": false,
+  "providers": [
+    {"id": "community", "loginURL": "/auth/oauth/community/login"}
+  ]
+}
+```
+
+OAuth 关闭时 providers 数组为空，OAuth 路由返回 404，本地密码登录和注册可用。启用 OAuth 后，本地 `/auth/login` 和 `/auth/register` 均返回 403；providers 的两个可用性字段统一为 false，只作为响应信息，不提供独立配置。首次 OAuth 登录未关联账号时统一进入补全注册流程。
+
+#### 10.3.1 请求和响应细则
+
+- callback 要求唯一且非空的 state，以及 code 或 error 二选一；前端保留并提交提供方返回的 iss（若有），Gateway 按提供方契约精确校验，不能用它选择请求端点。拒绝重复参数、重复或未知 JSON 字段及类型不符；不接受客户端指定 redirectURI、身份或 Token。
+- 未关联账号返回 `{"registrationRequired":true,"registrationID":"<随机ID>","expiresAt":"<RFC3339>","profile":{"displayName":"","email":""}}` 并设置注册 Cookie，不返回 JWT。前端将 registrationID、expiresAt 和 profile 保存至 sessionStorage，用于进入注册页及刷新恢复；registrationID 仅用于匹配 Cookie，不是独立身份凭据。
+- register 的 action 必须显式为 create 或 confirm。create 是用户主动提交资料；confirm 只认证查询，不调用 IAM register，也不接受 displayName/email。未知结果处理见 10.6.3。
+- JSON 请求要求 application/json，正文上限 16 KiB。错误格式为 `{"code":"<stable-code>","error":"<safe-message>"}`，失败不携带 token 或 registrationRequired。
+- 通用错误：400 InvalidRequest、401 OAuthAuthenticationFailed、403 BrowserBindingInvalid、404 ProviderUnavailable、409 OAuthConfigChanged、410 ContextExpired、429 RateLimited、503 OAuthUnavailable。取消授权校验上下文后返回 400 OAuthCancelled，不回显第三方原始错误。IAM 错误见 10.6.2。
+
+#### 10.3.2 Token 交付
+
+callback 和 register 的登录成功响应相同：
+
+```json
+{
+  "token": "<EulerMaker JWT>",
+  "tokenType": "Bearer",
+  "expiresIn": 86400,
+  "returnTo": "/operations"
+}
+```
+
+签发前通过 IAM authenticate 取得 username/UID，再读取相同 UID 的 User，核验 enabled 和唯一合法 scope。register 已返回 UID 时须与认证结果一致；不通过公开 User API 读取私有 externalIdentity。
+
+returnTo 只来自加密上下文。前端成功后才写 sessionStorage，沿用 auth/check、用户资料及路由恢复；失败不覆盖原登录 Token。JWT 只出现在同源 POST 成功 JSON，不进 URL、不缓存供重取。响应丢失不回滚已创建 User，恢复规则见 10.6.3。
+
+认证响应统一 Cache-Control: no-store；前端回调页使用 Referrer-Policy: no-referrer，不加载第三方脚本。code/state 只在第三方回调 URL 中短暂出现，读取到内存后立即 replaceState 清除，不写持久存储或错误监控。
+
+### 10.4 身份验证与安全边界
+
+#### 10.4.1 Cookie 上下文与跨副本
+
+每轮 login 独立生成至少 32 字节安全随机数据的 state、PKCE verifier 和 OIDC nonce。state 格式为 `<providerID>.<random>`，provider ID 仅帮助前端选择固定 callback 路由；可信配置由 Gateway 决定。登录 Cookie 保存 state 摘要、provider、configFingerprint、verifier、nonce 摘要、returnTo、issuedAt、expiresAt。
+
+两种 Cookie 为 `__Host-ebs-oauth-login` 和 `__Host-ebs-oauth-register`，均设置 Secure、HttpOnly、SameSite=Lax、Path=/，不设置 Domain；用途分别为 login、register，不能互换或用于业务鉴权。
+
+首版每个浏览器仅保留一轮流程，新 login 覆盖登录 Cookie 并清除注册 Cookie。多标签并行登录可能使旧流程失效，不承诺并行隔离。两种 Cookie 均使用登录开始后 10 分钟的固定 expiresAt，注册不重新起算，回调、填表、查询及重试不续期。
+
+callback、register 为同源 JSON POST，必须携带精确匹配 publicBaseURL origin 的 Origin；前端显式使用 credentials: same-origin，不沿用普通 API 的 credentials: omit。不开放跨域 Cookie API。缺少 Cookie、解密失败、purpose/provider/configFingerprint/期限不符或 state/registrationID 不符时拒绝，不调用上游；state/registrationID 摘要采用恒定时间比较。
+
+通过绑定校验后的 callback 无论成功失败都在响应中清除登录 Cookie；账号注册或登录成功时清除注册 Cookie。未经绑定校验的请求不清理其他流程。删除 Cookie 仅是浏览器清理，不等于撤销已复制的凭据或阻止在途请求。
+
+短期上下文仅保存在加密 Cookie。使用 AES-256-GCM，封装 keyID、随机 nonce 和密文；每次加密生成新 nonce，AAD 绑定协议版本、Cookie 名称、purpose 和 publicBaseURL。密钥与 JWT 签名密钥、client secret 分离；副本共享密钥环及 provider 配置，不依赖实例会话 Map、粘性会话或共享存储。
+
+每个完整 Set-Cookie 字段最多 3800 字节，实际序列化、加密及 Base64 后检查；优先省略可选 profile，不截断 issuer/subject。必要字段仍超限时返回 400 OAuthContextTooLarge，不静默降级或增加存储。IAM 最大身份字段长度不代表所有组合都能放入 Cookie，提供方联调须验证真实身份长度；代理须容纳两份 Cookie 和其他既有请求头。
+
+多副本同步 UTC 时钟，每个入口、耗时调用结束及签发 JWT 前检查 expiresAt。浏览器未删除 Cookie 也不能过期使用，不需要服务端记录清理任务。
+
+#### 10.4.2 授权码与 OIDC
+
+授权请求固定 response_type=code、PKCE S256、精确登记的 redirect_uri 和最小 scopes；OIDC 至少包含 openid。首版只支持顶层 GET 导航的 query 回调，不接受 form_post。Gateway 核对 Cookie/state 后，使用原 verifier 及配置的客户端认证方式交换 code，不自动重试兑换。
+
+OIDC 验证签名、算法白名单、精确 issuer、audience、必要的 azp、期限及 nonce；60 秒时钟容差仅适用于身份 Token，不延长 Cookie。JWKS 来自可信配置或验证后的 discovery，未知 kid 刷新须合并和限频，不按 Token 自带 URL 访问网络；UserInfo sub 须与 ID Token 相同。[OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html)
+
+普通 OAuth 首版提供 `userinfo-sub` adapter，通过 Bearer access token 调固定用户接口，要求 JSON 的 sub 是不可变且不复用的用户 ID，可选 name、email 和布尔 email_verified；仅已验证邮箱用于预填。该配置必须由运维核对提供方契约，不表示仅返回 username 的社区服务已兼容。缺少稳定身份、授权码/客户端绑定或 PKCE 时不启用，不回退到用户名/邮箱匹配。授权服务器须拒绝重复兑换授权码，Gateway 不另存跨副本消费记录。OIDC discovery 必须声明支持 S256；固定端点模式的 PKCE 能力须在提供方联调中确认。
+
+交换结果未知、身份校验失败或实例退出时重新登录，不自动重发 callback。第三方 Token 只在请求内使用，不进入 Cookie、日志、IAM 或持久化存储。
+
+回调必须 HTTPS 精确路径。returnTo 只接受已知站内相对业务路由，拒绝 scheme、host、双斜线、反斜线、控制字符及编码绕过；不依据不可信 Host/X-Forwarded-* 拼接地址。上述绑定及校验用于防止回调注入和登录 CSRF。[OAuth 安全最佳实践](https://www.rfc-editor.org/rfc/rfc9700.html)
+
+### 10.5 外部身份与本地账号
+
+身份使用精确的 issuer/subject；OIDC subject 为 sub，普通 OAuth adapter 使用固定认证源命名空间及稳定用户 ID。provider ID 不替代 issuer，不按用户名或邮箱自动匹配已有账号。字段约束见 [apiserver 外部身份契约](ebs-apiserver.md#外部身份校验与身份键)。
+
+User 私有身份存储、跨副本唯一性及占位恢复由 [apiserver IAM](ebs-apiserver.md#oauth-iam-扩展)负责。Gateway 只提交已验证身份，不操作 ES 或释放占位；Cookie 过期、取消或查询未确认均不代表可以撤销已发出的开户请求。
+
+#### 10.5.1 首次登录补全注册
+
+只有 IAM 明确返回 registrationRequired 才创建注册凭据并展示表单。加密注册 Cookie 包含 purpose、provider、configFingerprint、随机 registrationID、已验证 issuer/subject、原 returnTo、固定期限及有限预填资料；不含 code、verifier、第三方 Token 或业务 scopes。
+
+用户填写必填 username，以及可选 displayName/email，遵循 IAM 资料规则。可用昵称及已验证邮箱预填，编辑后的邮箱只是未验证联系资料，不作为身份。表单不要求密码、不允许选择权限。
+
+提交前不创建账号或占位。Gateway 核验 Cookie、registrationID、Origin 和期限后构造 method=oauth 请求，外部身份只取自 Cookie；IAM 成功后再次认证、读取 User 并签发 JWT。
+
+取消或过期不撤销已发出的开户请求。账号成功但响应丢失时不回滚，下次登录复用账号；重试和后续登录不覆盖用户资料。不构造虚假邮箱，无密码账号不接受空密码登录；新增密码、恢复密码不在首版范围。
+
+#### 10.5.2 权限与管理员边界
+
+User 决定 enabled 和唯一 scope，外部角色不映射管理权限。OAuth 注册即使用户名为 admin 也只创建普通用户，不进入密码注册管理员初始化分支；已有密码管理员不自动关联。
+
+JWT sub 为本地用户名、type=user、scopes 为当前权限，有效期沿用 24 小时。OAuth 不读取或清除密码失败计数/锁定，但账号禁用或权限非法仍拒绝。工程归属及机器认证不变。
+
+### 10.6 IAM 调用与失败恢复
+
+#### 10.6.1 重放及失败边界
+
+本方案不提供全局一次性消费、注册请求独占或单个凭据即时撤销：
+
+- code 单次兑换由授权服务器保证，PKCE 将其绑定到本轮登录；并发 callback 可能均调用 token endpoint，但重复兑换错误不能当成功。
+- 注册 Cookie 到期前可以重复使用，清除不撤销复制件。其只能用于注册相关操作，不能访问业务 API，仍须核验 Origin、registrationID 和 IAM 状态。
+- 并发 create 可能多次调用 IAM，甚至提出不同用户名，最终由 IAM 唯一性及占位判定；前端禁用按钮或草稿锁定不是一致性保证。
+- IAM 已确认相同账号时，重复 confirm 可以再次签发 JWT，不承诺凭据只签发一次；每次重新读取 UID、enabled、scopes。
+- 结果未知后的正常前端只读确认，但 Gateway 不保存“是否已发出注册”的历史；草稿丢失时不能恢复该事实，不自动重放开户。
+
+若后续要求跨副本独占、严格一次性注册凭据或即时撤销单次登录，需要共享消费记录，不能仅用加密 Cookie 声称实现。
+
+#### 10.6.2 两个 IAM 内部接口
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /internal/iam/v1/users/authenticate` | method=oauth，提交已验证 externalIdentity，只读核验本地账号 |
+| `POST /internal/iam/v1/users/register` | method=oauth，提交资料及注册 Cookie 内身份，创建无密码普通 User |
+
+OAuth 分支只接受 mTLS 验证的 Gateway 身份；普通代理不开放内部 IAM，密码入口不透传浏览器 method/externalIdentity。IAM 不接收 Cookie、code、registrationID 或 Gateway 密钥；公开账号状态通过现有 User API 读取。
+
+| IAM 结果 | Gateway 行为 |
+| --- | --- |
+| authenticated=true、username/UID | 读取同 UID User，核验后允许登录 |
+| registrationRequired=true | callback 可建立注册凭据；confirm 只表示未确认，不自动写入 |
+| InvalidRequest / UsernameAlreadyExists | 确定输入错误或用户名冲突，可修正，不认领已有账号 |
+| RegistrationInProgress | 保留原输入，只读确认或重新登录 |
+| IdentityAlreadyLinked | 提示已有账号，重新登录，不转移身份 |
+| IAMUnavailable | 受控暂时不可用，不自动重放注册 |
+| IdentityStateInvalid | 受控错误并告警，不当成未注册 |
+| AuthenticationFailed / AccountUnavailable | 拒绝 JWT，不另建账号替代 |
+
+仅识别 IAM Handler 已知 code/error；传输错误、非 JSON、未知格式或中间件 Status 不解释成未注册或允许改名。已识别业务错误保留契约状态码；不可识别错误为 503 OAuthUnavailable，不暴露内部 URL、证书及 ES 原始信息。
+
+#### 10.6.3 注册结果未知与前端恢复
+
+首次 create 发出前，前端将 registrationID、固定 username、资料及“已提交”标记保存至 sessionStorage，再禁用重复提交；本地标记写入失败时不发请求。不同 registrationID 的草稿不得混用。
+
+create 先完整校验 Cookie 及输入，再调用 IAM register。200/201 后 authenticate，比较 username/UID、读取 User 后直接返回 JWT；确定的 InvalidRequest/UsernameAlreadyExists 可解锁修正，其他未知写入结果保持原输入。
+
+confirm 只调用 authenticate，不调用 register。username 必须等于固定提交值，以认证返回 UID 读取 User 并核验后签发 JWT；返回其他用户名时要求重新登录。registrationRequired 或 RegistrationInProgress 返回 409 RegistrationInProgress，不证明旧写入未在执行，不自动解锁或 create。
+
+每个 confirm 请求最多调用一次 authenticate；前端每 3 秒一次、最多 3 次自动确认，之后手动确认或重新登录，不延长期限。sessionStorage 草稿丢失时重新 OAuth 登录，不猜测旧请求，也不释放未决占位。
+
+注册页面从 sessionStorage 恢复回调信息及本地草稿，不提供服务端表单恢复接口或共享 editable/confirming 状态。前端存储仅用于交互，外部身份和有效期仍由 Gateway 校验加密 Cookie；恶意调用仍可重放 create，账号唯一性依靠 IAM。
+
+注册 JWT 响应丢失时，有有效 Cookie 和匹配的已提交草稿可 confirm，否则重新登录；授权码处理响应丢失则重新登录，不重发 code。恢复不回滚或覆盖已创建 User。
+
+### 10.7 前端交互
+
+- 登录页读取 providers；本地模式显示密码表单，社区模式显示“社区账号登录”并导航到 Gateway login，隐藏本地注册和密码修改入口。查询失败不回退本地认证。
+- 回调页按 10.3 处理授权响应：清除 URL 参数，同源 POST 到固定 API，登录成功后验证并保存 JWT。注册信息及草稿按 10.6.3 保存、恢复和确认。
+- 成功、取消或过期时清理本地注册上下文；OAuth 失败不覆盖既有登录 Token。OAuth 请求携带 Cookie，业务 API 使用 Bearer Token。
+- 已登录用户发起社区登录是账号切换，不是绑定当前账号；退出只清除本地 Token，不保证社区 SSO 退出，第三方退出也不即时撤销本地 JWT。用户禁用沿用 UserResolve。
+
+### 10.8 配置与部署
+
+通过 `--oauth-config-file` 加载配置，认证入口切换规则见 10.3。启动时拒绝未知字段、空文件、缺少必填字段、无效密钥及不支持的 adapter。配置更新通过重启加载；发现/JWKS 暂不可用时后续请求按重试间隔重试，不影响业务代理，不回退密码认证。
+
+以下为配置示例，并非可用社区地址：
+
+```yaml
+publicBaseURL: https://ebs.example.com
+contextKeys:
+  activeKeyID: key-1
+  keys:
+    key-1: <独立生成的32字节随机密钥的Base64值>
+provider:
+  id: community
+  protocol: oidc
+  issuer: https://id.example.com
+  clientID: eulermaker
+  clientSecret: <第三方应用密钥>
+  tokenEndpointAuthMethod: client_secret_basic
+  scopes: [openid, profile, email]
+  allowedEndpointOrigins: [https://id.example.com]
+  signingAlgorithms: [RS256]
+```
+
+| 配置 | 约束 |
+| --- | --- |
+| provider.id | 首版一个 provider，ID 为 DNS1123 label |
+| publicBaseURL | HTTPS origin，不带路径/query/fragment，redirectURI 固定为 `${publicBaseURL}/auth/callback` |
+| protocol / issuer | 显式 oidc 或 oauth2，不自动降级，issuer 精确匹配 |
+| discovery / 固定端点 | OIDC 用 issuer discovery，或成套 authorizationURL/tokenURL/jwksURL 及可选 userInfoURL，不混用 |
+| oauth2 adapter | 固定授权/Token/用户端点及 userinfo-sub，不允许任意 JSON 表达式代替身份认证 |
+| tokenEndpointAuthMethod | client_secret_basic 或 client_secret_post，与登记一致 |
+| provider.clientSecret | 第三方应用密钥，直接保存在 Secret 内的配置正文，不引用额外文件 |
+| contextKeys | 配置内嵌的共享 Cookie 密钥环，不复用 JWT 密钥，不需要 ES 凭据 |
+| 上下文期限 | 内部常量 10 分钟，从 login 计时，不续期 |
+
+端点为绝对 HTTPS URL，无 userinfo/fragment，origin 位于 allowedEndpointOrigins；后端客户端不跟随重定向。上游调用单次超时 10 秒、响应上限 1 MiB，callback/register 总上限 30 秒且不超过上下文期限。授权码交换和 IAM register 禁用透明自动重试。
+
+returnTo 限制见 10.4.2，非法值返回 400。
+
+contextKeys 包含 activeKeyID 和 keys 映射，每个 key 为 Base64 编码的独立 32 字节密钥，可用 `openssl rand -base64 32` 生成。各副本先加载新旧密钥，再切 activeKeyID，旧 Cookie 全部过期后移除旧 key；每一步更新配置后重启副本加载。未知 keyID/解密失败重新登录。紧急移除密钥会使对应在途流程失效。
+
+完整 OAuth YAML 作为敏感配置保存在 Secret 中，所有副本使用相同配置、Cookie 密钥环及独立的 JWT 密钥。Gateway 只读挂载文件，不访问 Kubernetes API；配置更新后重启加载，解析错误及日志不回显密钥。具体操作见 [Kubernetes OAuth 部署](../../../deploy/kubernetes/README.md#71-启用社区-oauth-登录)。
+
+Gateway 将 publicBaseURL 和完整 provider 配置确定性序列化后计算 SHA-256 指纹，保存在加密 Cookie 的 configFingerprint 中；不包含 Cookie 密钥环，允许独立轮换密钥。各副本使用相同认证配置；配置指纹不匹配返回 OAuthConfigChanged，不保留旧配置池，接受滚动更新期间部分登录失败。指纹不对外返回或记录日志。前端登录按钮统一显示“社区账号登录”，不配置提供方展示名称。
+
+启用前确认管理员权限和恢复预案，不假定旧密码管理员自动关联。部署须保证 HTTPS、精确回调登记及 Gateway→apiserver mTLS，并按 [ES 初始化契约](ebs-apiserver.md#es-mapping-与初始化)准备 IAM Mapping。前端代理区分回调/注册页面和认证 API，禁止缓存认证响应及记录敏感请求数据。
+
+### 10.9 错误、审计与验收
+
+错误响应及恢复行为分别见 10.3、10.6。
+
+有界进程内限流：login 每 IP 每分钟 10 次，callback/register 每 IP 每分钟 30 次，已验证注册凭据每 registrationID 每分钟 10 次；429 返回 Retry-After。仅为每副本限制，外层代理补充异常流量防护。
+
+日志只记录 requestID、provider、结果及必要 username/UID，不记录 code、state 原值、Cookie、verifier、第三方 Token 或 secret。监控请求错误数、提供方/IAM 延迟、未决注册、配置及验签失败，不使用用户或 registrationID 等高基数标签。
+
+测试至少覆盖：
+
+1. OIDC PKCE/nonce、issuer/audience/azp/签名/期限、JWKS 轮换、UserInfo sub；OAuth adapter 需真实测试应用验证。
+2. 前端 query 清除后 POST、固定 redirectURI、Origin、Cookie 缺失/篡改/用途混用、state 不符、开放重定向及错误回调。
+3. A 副本开始、B 回调、C 注册；密钥轮换、认证配置指纹变化、过期、Cookie 大小边界、多标签覆盖旧流程。
+4. 不依赖 Gateway ES 连接或上下文索引；关闭 OAuth 不影响密码登录、业务代理或 Runner。
+5. 首次注册提交前不开帐；admin 名称不提权，同名同邮箱不合并，资料不被重试覆盖。
+6. 并发/重放可多次调用 IAM，但身份只关联一个账号；签发前核验当前 UID、enabled、scopes。
+7. code 未知不重发；注册未知只读 confirm；confirm 查无结果不触发 create，不静默接受其他 username。
+8. 账号成功但响应丢失、清 Cookie 响应丢失、进程退出、禁用及同名重建，不接管原身份。
+9. 注册页刷新、已提交草稿锁定、草稿缺失、过期及重新登录；不把前端锁定作为安全保证。
+10. IAM OAuth Gateway-only 授权、密码入口不透传 method/身份；现有 IAM 并发唯一性及未知写入测试继续有效。
+11. Cookie 与 Bearer 请求分离、JWT 仅成功 JSON 交付、代理日志脱敏、OpenAPI 成功分支互斥。
