@@ -21,12 +21,21 @@ func New(api *handler.Handler) *gin.Engine {
 	router.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok\n") })
 	router.GET("/openapi.json", openapi.Serve)
 	registerAuth(router, middleware, endpoints)
+	registerOAuth(router, api)
 	registerIAM(router, api, middleware)
 	registerResources(router, api)
 	router.NoRoute(middleware.Authenticate, middleware.ResolveUser, func(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 	})
 	return router
+}
+
+func registerOAuth(router *gin.Engine, api *handler.Handler) {
+	router.GET("/auth/providers", api.OAuth.Providers)
+	group := router.Group("/auth/oauth")
+	group.GET("/:provider/login", api.OAuth.Login)
+	group.POST("/:provider/callback", api.OAuth.Callback)
+	group.POST("/register", api.OAuth.Register)
 }
 
 func registerAuth(router *gin.Engine, middleware handler.Middleware, endpoints handler.Endpoints) {
