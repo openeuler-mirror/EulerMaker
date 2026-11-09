@@ -7,7 +7,15 @@
       <div class="auth-feature"><Lock /><span><strong>{{ t("auth.unifiedAccess") }}</strong><small>{{ t("auth.unifiedAccessHint") }}</small></span></div>
     </div>
 
-    <div v-if="registered" class="auth-card" role="status">
+    <div v-if="!loginMethods.methods" class="auth-card" aria-live="polite">
+      <p>{{ t(loginMethods.failed ? "oauth.unavailable" : "oauth.loading") }}</p>
+      <button v-if="loginMethods.failed" class="submit-button" type="button" @click="loginMethods.load()">{{ t("oauth.retry") }}</button>
+    </div>
+    <div v-else-if="!loginMethods.methods.registrationEnabled" class="auth-card">
+      <p>{{ t("oauth.registrationViaLogin") }}</p>
+      <RouterLink class="submit-button auth-action-link" :to="loginDestination">{{ t("app.login") }}</RouterLink>
+    </div>
+    <div v-else-if="registered" class="auth-card" role="status">
       <div class="auth-card-heading"><img src="@/assets/eulermaker-logo.svg" alt="" /><div><h2>{{ t("auth.registerSuccess") }}</h2><p>{{ t("auth.registerSuccessHint") }}</p></div></div>
       <RouterLink class="submit-button auth-action-link" :to="loginDestination">{{ t("app.login") }}</RouterLink>
     </div>
@@ -30,11 +38,15 @@
 
 <script setup lang="ts">
 import { Lock, WarningFilled } from "@element-plus/icons-vue";
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import { ApiError, errorTranslationKey, registerUser } from "@/api";
+import { useLoginMethodsStore } from "@/stores/loginMethods";
+
+const loginMethods = useLoginMethodsStore();
+onMounted(() => { void loginMethods.load(); });
 
 const route = useRoute();
 const { t } = useI18n();
@@ -56,6 +68,7 @@ const loginDestination = computed(() => ({
 }));
 
 async function submit(): Promise<void> {
+  if (!loginMethods.methods?.registrationEnabled || submitting.value) return;
   errorKey.value = "";
   if (!/^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/.test(username.value)) {
     errorKey.value = "auth.invalidUsername";

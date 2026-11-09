@@ -521,6 +521,9 @@ body.modal-open { overflow: hidden; }
 .auth-feature strong { font-size: 14px; }
 .auth-feature small { margin-top: 3px; color: #7f8b9c; font-size: 12px; }
 .auth-card { padding: 34px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 50px rgb(25 54 96 / 10%); }
+.oauth-layout { min-height: calc(100vh - 184px); display: grid; align-items: center; padding: 36px 0; }
+.oauth-layout .auth-card { width: min(100%, 480px); margin: auto; }
+.auth-card input:disabled { color: var(--muted); background: #f1f4f8; cursor: not-allowed; }
 .auth-card-heading { margin-bottom: 28px; display: flex; align-items: center; gap: 13px; }
 .auth-card-heading img { width: 36px; height: 36px; }
 .auth-card-heading h2 { margin: 0; font-size: 23px; }

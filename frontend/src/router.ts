@@ -10,6 +10,8 @@ export const router = createRouter({
     { path: "/projects/:name", name: "project", component: () => import("@/views/ProjectView.vue") },
     { path: "/login", name: "login", component: () => import("@/views/LoginView.vue") },
     { path: "/register", name: "register", component: () => import("@/views/RegisterView.vue") },
+    { path: "/auth/callback", name: "oauth-callback", component: () => import("@/views/OAuthCallbackView.vue") },
+    { path: "/auth/register", name: "oauth-register", component: () => import("@/views/OAuthRegisterView.vue") },
     {
       path: "/admin", component: () => import("@/views/AdminView.vue"), meta: { roles: ["admin"] },
       children: [

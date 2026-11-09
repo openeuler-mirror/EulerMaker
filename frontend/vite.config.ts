@@ -28,7 +28,13 @@ export default defineConfig(({ mode }) => {
       proxy: {
         "^/openapi\\.json(?:\\?|$)": { target: gateway, changeOrigin: true },
         "/apis": { target: gateway, changeOrigin: true },
-        "/auth": { target: gateway, changeOrigin: true },
+        "/auth": {
+          target: gateway, changeOrigin: true,
+          bypass(req) {
+            const path = (req.url || "").split("?")[0];
+            if (["GET", "HEAD"].includes(req.method || "") && ["/auth/callback", "/auth/register"].includes(path)) return "/index.html";
+          },
+        },
         "/artifacts": { target: artifactManager, changeOrigin: true },
         "/repositories": { target: artifactManager, changeOrigin: true },
       },

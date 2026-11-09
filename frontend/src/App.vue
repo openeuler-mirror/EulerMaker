@@ -32,7 +32,7 @@
           </div>
         </template>
         <template v-else>
-          <RouterLink class="register-link" to="/register">{{ t("app.register") }}</RouterLink>
+          <RouterLink v-if="loginMethods.methods?.registrationEnabled" class="register-link" to="/register">{{ t("app.register") }}</RouterLink>
           <RouterLink class="login-button" to="/login">{{ t("app.login") }}</RouterLink>
         </template>
       </div>
@@ -63,12 +63,14 @@ import { useI18n } from "vue-i18n";
 
 import { LOCALE_KEY, type Locale } from "@/i18n";
 import { useSessionStore } from "@/stores/session";
+import { useLoginMethodsStore } from "@/stores/loginMethods";
 
 const menuOpen = ref(false);
 const accountMenuOpen = ref(false);
 const accountMenuRoot = ref<HTMLElement | null>(null);
 const accountTrigger = ref<HTMLButtonElement | null>(null);
 const session = useSessionStore();
+const loginMethods = useLoginMethodsStore();
 const router = useRouter();
 const { t, locale } = useI18n();
 
@@ -96,6 +98,7 @@ function onEscape(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
+  void loginMethods.load();
   document.addEventListener("pointerdown", closeAccountMenu);
   document.addEventListener("keydown", onEscape);
 });
