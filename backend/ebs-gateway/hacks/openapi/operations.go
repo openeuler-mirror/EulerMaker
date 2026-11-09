@@ -15,6 +15,7 @@ var optionalBearer = []object{{}, {"BearerAuth": []string{}}}
 
 func operations() object {
 	paths := object{}
+	oauthOperations(paths)
 	auth := func(method, path, id, summary, description, input, output, code string, security []object) {
 		op := operation(id, "Authentication", summary, description, security, ref(output), code)
 		if input != "" {
@@ -25,8 +26,8 @@ func operations() object {
 		}
 		add(paths, path, method, op)
 	}
-	auth("post", "/auth/register", "registerUser", "Register a user", "Anonymous registration; returns the username, not a token.", "RegisterRequest", "RegisteredUser", "201", []object{})
-	auth("post", "/auth/login", "login", "Obtain a user token", "Anonymous login. Response must not be cached.", "LoginRequest", "LoginResponse", "200", []object{})
+	auth("post", "/auth/register", "registerUser", "Register a user", "Anonymous password registration; returns the username, not a token. Returns 403 when OAuth is enabled.", "RegisterRequest", "RegisteredUser", "201", []object{})
+	auth("post", "/auth/login", "login", "Obtain a user token", "Anonymous password login. Response must not be cached. Returns 403 when OAuth is enabled, including during provider outages.", "LoginRequest", "LoginResponse", "200", []object{})
 	auth("post", "/auth/runner-token", "obtainRunnerToken", "Obtain a Runner token", "MachineAccount Basic credentials and the Runner name are required.", "RunnerTokenRequest", "RunnerTokenResponse", "200", []object{{"MachineBasic": []string{}}})
 	auth("post", "/auth/check", "checkToken", "Check a token", "Accepts user and Runner Bearer tokens. No request body.", "", "CheckResponse", "200", bearer)
 	auth("put", "/auth/users/{name}/password", "changePassword", "Change your password", "Only the user named in the path may change their password; current password is required.", "PasswordRequest", "", "204", bearer)
@@ -165,6 +166,44 @@ func operations() object {
 	add(paths, "/apis/ebs/v1/service-endpoints", "get", operation("getServiceEndpoints", "Runner", "Get Runner service addresses",
 		"Runner token only. Returns all configured Runner endpoints, not management internalURL. No query parameters.", bearer, ref("ServiceEndpoints"), "200"))
 	return paths
+}
+
+func oauthOperations(paths object) {
+	for _, route := range []struct{ method, path, id, summary, input, output, cookie string }{
+		{"get", "/auth/providers", "oauthProviders", "List configured login methods", "", "OAuthProviders", ""},
+		{"get", "/auth/oauth/{provider}/login", "oauthLogin", "Start OAuth authorization", "", "", ""},
+		{"post", "/auth/oauth/{provider}/callback", "oauthCallback", "Verify a frontend OAuth callback", "OAuthCallbackRequest", "OAuthCallbackResponse", "login"},
+		{"post", "/auth/oauth/register", "oauthRegister", "Create or confirm an OAuth account", "OAuthRegisterRequest", "OAuthLoginResponse", "register"},
+	} {
+		description := "OAuth is optional. Responses are no-store. Disabled OAuth endpoints return 404; providers returns an empty provider list."
+		if route.cookie != "" {
+			description += " Requires a same-origin JSON POST and encrypted HttpOnly Cookie. No Bearer token is needed. Body limit: 16 KiB. JWTs are returned directly, never via a redirect. Registration confirm only reads IAM; do not automatically replay create or authorization codes after unknown results."
+		}
+		if route.id == "oauthCallback" {
+			description += " For registrationRequired, save registrationID, expiresAt and profile in sessionStorage before opening the registration page. Restore the form from sessionStorage; missing or expired context requires login again."
+		}
+		op := operation(route.id, "Authentication", route.summary, description, []object{}, ref(route.output), "200")
+		responses := op["responses"].(object)
+		for status := range errorResponses() {
+			responses[status] = object{"description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again.",
+				"content": object{"application/json": object{"schema": ref("OAuthError")}}}
+		}
+		if route.input != "" {
+			op["requestBody"] = body(ref(route.input), true)
+		}
+		if route.cookie != "" {
+			op["parameters"] = []object{
+				{"name": "Origin", "in": "header", "required": true, "schema": textSchema(), "description": "Must exactly match the configured public origin."},
+				{"name": "__Host-ebs-oauth-" + route.cookie, "in": "cookie", "required": true, "schema": textSchema(), "description": "Opaque encrypted short-lived browser context. Not a business API credential."},
+			}
+		}
+		if route.id == "oauthLogin" {
+			delete(responses, "200")
+			responses["302"] = object{"description": "Redirect to the configured provider and set a Secure HttpOnly SameSite=Lax login Cookie.", "headers": object{"Location": object{"schema": textSchema()}}}
+			op["parameters"] = []object{{"name": "returnTo", "in": "query", "schema": textSchema(), "description": "Known frontend business route; defaults to /. External and authentication URLs are rejected."}}
+		}
+		add(paths, route.path, route.method, op)
+	}
 }
 
 func operation(id, tag, summary, description string, security []object, schema object, code string) object {

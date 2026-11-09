@@ -31,6 +31,7 @@ func record(properties object, required ...string) object {
 
 func schemas() object {
 	result := object{}
+	oauthSchemas(result)
 	definitions := generated.GetOpenAPIDefinitions(func(name string) spec.Ref {
 		return spec.MustCreateRef("#/components/schemas/" + schemaName(name))
 	})
@@ -117,6 +118,40 @@ func schemas() object {
 		"spec": object{"content": "#!/bin/sh\nset -eu\necho build\n"},
 	}
 	return result
+}
+
+func oauthSchemas(result object) {
+	strict := func(fields object, required ...string) object {
+		schema := record(fields, required...)
+		schema["additionalProperties"] = false
+		return schema
+	}
+	profile := record(object{"displayName": textSchema(), "email": textSchema()})
+	result["OAuthError"] = record(object{"code": textSchema(), "error": textSchema()}, "code", "error")
+	result["OAuthProviders"] = record(object{
+		"passwordLoginEnabled": object{"type": "boolean", "description": "True only when no OAuth configuration file is specified; not independently configurable."},
+		"registrationEnabled":  object{"type": "boolean", "description": "Local password registration is enabled only when OAuth is disabled. Unlinked OAuth identities always enter registration completion."},
+		"providers":            object{"type": "array", "items": record(object{"id": textSchema(), "loginURL": textSchema()}, "id", "loginURL")},
+	}, "passwordLoginEnabled", "registrationEnabled", "providers")
+	result["OAuthLoginResponse"] = strict(object{
+		"token": textSchema(), "tokenType": object{"type": "string", "enum": []string{"Bearer"}},
+		"expiresIn": object{"type": "integer", "enum": []int{86400}}, "returnTo": textSchema(),
+	}, "token", "tokenType", "expiresIn", "returnTo")
+	result["OAuthRegistrationRequired"] = strict(object{
+		"registrationRequired": object{"type": "boolean", "enum": []bool{true}}, "registrationID": textSchema(),
+		"expiresAt": object{"type": "string", "format": "date-time"}, "profile": profile,
+	}, "registrationRequired", "registrationID", "expiresAt", "profile")
+	result["OAuthCallbackRequest"] = object{"oneOf": []object{
+		strict(object{"code": textSchema(), "state": textSchema(), "iss": textSchema()}, "code", "state"),
+		strict(object{"error": textSchema(), "state": textSchema(), "iss": textSchema()}, "error", "state"),
+	}}
+	result["OAuthCallbackResponse"] = object{"oneOf": []object{ref("OAuthLoginResponse"), ref("OAuthRegistrationRequired")}}
+	result["OAuthRegisterRequest"] = object{"oneOf": []object{
+		strict(object{"registrationID": textSchema(), "action": object{"type": "string", "enum": []string{"create"}},
+			"username": textSchema(), "displayName": textSchema(), "email": textSchema()}, "registrationID", "action", "username"),
+		strict(object{"registrationID": textSchema(), "action": object{"type": "string", "enum": []string{"confirm"}},
+			"username": textSchema()}, "registrationID", "action", "username"),
+	}}
 }
 
 func requestSchemas(definitions object) {
