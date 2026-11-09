@@ -754,6 +754,231 @@
         ],
         "type": "object"
       },
+      "OAuthCallbackRequest": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "iss": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "state"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "iss": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "error",
+              "state"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "OAuthCallbackResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OAuthLoginResponse"
+          },
+          {
+            "$ref": "#/components/schemas/OAuthRegistrationRequired"
+          }
+        ]
+      },
+      "OAuthError": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "error"
+        ],
+        "type": "object"
+      },
+      "OAuthLoginResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresIn": {
+            "enum": [
+              86400
+            ],
+            "type": "integer"
+          },
+          "returnTo": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "tokenType": {
+            "enum": [
+              "Bearer"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "tokenType",
+          "expiresIn",
+          "returnTo"
+        ],
+        "type": "object"
+      },
+      "OAuthProviders": {
+        "properties": {
+          "passwordLoginEnabled": {
+            "description": "True only when no OAuth configuration file is specified; not independently configurable.",
+            "type": "boolean"
+          },
+          "providers": {
+            "items": {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "loginURL": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "loginURL"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "registrationEnabled": {
+            "description": "Local password registration is enabled only when OAuth is disabled. Unlinked OAuth identities always enter registration completion.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "passwordLoginEnabled",
+          "registrationEnabled",
+          "providers"
+        ],
+        "type": "object"
+      },
+      "OAuthRegisterRequest": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "create"
+                ],
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "registrationID": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "registrationID",
+              "action",
+              "username"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "confirm"
+                ],
+                "type": "string"
+              },
+              "registrationID": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "registrationID",
+              "action",
+              "username"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "OAuthRegistrationRequired": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "profile": {
+            "properties": {
+              "displayName": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "registrationID": {
+            "type": "string"
+          },
+          "registrationRequired": {
+            "enum": [
+              true
+            ],
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registrationRequired",
+          "registrationID",
+          "expiresAt",
+          "profile"
+        ],
+        "type": "object"
+      },
       "PasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12323,7 +12548,7 @@
     },
     "/auth/login": {
       "post": {
-        "description": "Anonymous login. Response must not be cached.",
+        "description": "Anonymous password login. Response must not be cached. Returns 403 when OAuth is enabled, including during provider outages.",
         "operationId": "login",
         "requestBody": {
           "content": {
@@ -12475,9 +12700,747 @@
         ]
       }
     },
+    "/auth/oauth/register": {
+      "post": {
+        "description": "OAuth is optional. Responses are no-store. Disabled OAuth endpoints return 404; providers returns an empty provider list. Requires a same-origin JSON POST and encrypted HttpOnly Cookie. No Bearer token is needed. Body limit: 16 KiB. JWTs are returned directly, never via a redirect. Registration confirm only reads IAM; do not automatically replay create or authorization codes after unknown results.",
+        "operationId": "oauthRegister",
+        "parameters": [
+          {
+            "description": "Must exactly match the configured public origin.",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque encrypted short-lived browser context. Not a business API credential.",
+            "in": "cookie",
+            "name": "__Host-ebs-oauth-register",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthLoginResponse"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          }
+        },
+        "security": [],
+        "summary": "Create or confirm an OAuth account",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/auth/oauth/{provider}/callback": {
+      "post": {
+        "description": "OAuth is optional. Responses are no-store. Disabled OAuth endpoints return 404; providers returns an empty provider list. Requires a same-origin JSON POST and encrypted HttpOnly Cookie. No Bearer token is needed. Body limit: 16 KiB. JWTs are returned directly, never via a redirect. Registration confirm only reads IAM; do not automatically replay create or authorization codes after unknown results. For registrationRequired, save registrationID, expiresAt and profile in sessionStorage before opening the registration page. Restore the form from sessionStorage; missing or expired context requires login again.",
+        "operationId": "oauthCallback",
+        "parameters": [
+          {
+            "description": "Must exactly match the configured public origin.",
+            "in": "header",
+            "name": "Origin",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque encrypted short-lived browser context. Not a business API credential.",
+            "in": "cookie",
+            "name": "__Host-ebs-oauth-login",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthCallbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthCallbackResponse"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          }
+        },
+        "security": [],
+        "summary": "Verify a frontend OAuth callback",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/auth/oauth/{provider}/login": {
+      "get": {
+        "description": "OAuth is optional. Responses are no-store. Disabled OAuth endpoints return 404; providers returns an empty provider list.",
+        "operationId": "oauthLogin",
+        "parameters": [
+          {
+            "description": "Known frontend business route; defaults to /. External and authentication URLs are rejected.",
+            "in": "query",
+            "name": "returnTo",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the configured provider and set a Secure HttpOnly SameSite=Lax login Cookie.",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          }
+        },
+        "security": [],
+        "summary": "Start OAuth authorization",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
+    "/auth/providers": {
+      "get": {
+        "description": "OAuth is optional. Responses are no-store. Disabled OAuth endpoints return 404; providers returns an empty provider list.",
+        "operationId": "oauthProviders",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthProviders"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "410": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "OAuth error. Inspect code; context expiry requires login again. Unknown registration outcomes must be confirmed without creating again."
+          }
+        },
+        "security": [],
+        "summary": "List configured login methods",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
     "/auth/register": {
       "post": {
-        "description": "Anonymous registration; returns the username, not a token.",
+        "description": "Anonymous password registration; returns the username, not a token. Returns 403 when OAuth is enabled.",
         "operationId": "registerUser",
         "requestBody": {
           "content": {

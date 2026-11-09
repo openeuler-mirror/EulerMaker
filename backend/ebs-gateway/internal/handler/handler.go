@@ -12,20 +12,23 @@ import (
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
+	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
 )
 
 type Dependencies struct {
-	Upstream  *upstream.Client
-	Tokens    *identity.Tokens
-	Now       func() time.Time
-	Limits    *limit.Buckets
-	BodyLimit int64
+	Upstream        *upstream.Client
+	Tokens          *identity.Tokens
+	Now             func() time.Time
+	Limits          *limit.Buckets
+	BodyLimit       int64
+	OAuthConfigFile string
 }
 
 // Handler holds the shared dependencies for Gateway request handlers.
 type Handler struct {
+	OAuth                 *oauth.Handler
 	upstream              *upstream.Client
 	tokens                *identity.Tokens
 	now                   func() time.Time
@@ -52,7 +55,12 @@ func New(deps Dependencies) (*Handler, error) {
 	if deps.BodyLimit <= 0 {
 		return nil, fmt.Errorf("request body limit must be positive")
 	}
+	config, err := oauth.Load(deps.OAuthConfigFile)
+	if err != nil {
+		return nil, err
+	}
 	return &Handler{
+		OAuth:    oauth.New(config, iam.New(deps.Upstream), deps.Tokens, deps.Now),
 		upstream: deps.Upstream, tokens: deps.Tokens, limits: deps.Limits, now: deps.Now,
 		iam: iam.New(deps.Upstream), bodyLimit: deps.BodyLimit,
 		registerIP:            limit.New(5.0/60.0, 5, deps.Now),
