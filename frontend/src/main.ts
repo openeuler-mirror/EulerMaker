@@ -5,8 +5,11 @@ import { createApp } from "vue";
 
 import App from "@/App.vue";
 import { i18n } from "@/i18n";
-import { router } from "@/router";
 import { useSessionStore } from "@/stores/session";
+import { captureOAuthCallback } from "@/oauth";
+
+captureOAuthCallback();
+const { router } = await import("@/router");
 
 const app = createApp(App);
 const pinia = createPinia();

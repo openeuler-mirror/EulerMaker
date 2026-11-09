@@ -84,6 +84,20 @@ export async function checkSession(): Promise<Session> {
   return { token: readToken(), identity: response.identity, expiresAt: response.expiresAt };
 }
 
+// Validate the new token before replacing a previously authenticated session.
+export async function acceptOAuthToken(token: string): Promise<Session> {
+  if (!token) throw new ApiError(401, "errors.unauthorized");
+  const response = await fetch("/auth/check", {
+    method: "POST", credentials: "omit", cache: "no-store",
+    headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new ApiError(response.status, errorKeyForStatus(response.status));
+  const body = await response.json() as { identity: SessionIdentity; expiresAt?: number };
+  saveToken(token);
+  return { token, identity: body.identity, expiresAt: body.expiresAt };
+}
+
 export function errorTranslationKey(error: unknown, fallback = "errors.requestFailed"): string {
   return error instanceof ApiError ? error.translationKey : fallback;
 }

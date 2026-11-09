@@ -8,11 +8,21 @@
       <div class="auth-feature"><Timer /><span><strong>{{ t("auth.sessionOnly") }}</strong><small>{{ t("auth.sessionOnlyHint") }}</small></span></div>
     </div>
 
-    <form class="auth-card" @submit.prevent="submit">
+    <div v-if="!loginMethods.methods" class="auth-card" aria-live="polite">
+      <p>{{ t(loginMethods.failed ? "oauth.unavailable" : "oauth.loading") }}</p>
+      <button v-if="loginMethods.failed" class="submit-button" type="button" @click="loginMethods.load()">{{ t("oauth.retry") }}</button>
+    </div>
+    <div v-else-if="!loginMethods.methods.passwordLoginEnabled" class="auth-card">
+      <div class="auth-card-heading"><img src="@/assets/eulermaker-logo.svg" alt="" /><div><h2>{{ t("app.login") }}</h2><p>{{ t("oauth.loginHint") }}</p></div></div>
+      <button v-for="provider in loginMethods.methods.providers" :key="provider.id" class="submit-button" type="button" @click="startOAuth(provider)">{{ t("oauth.communityLogin") }}</button>
+      <div v-if="error" class="form-error" role="alert">{{ error }}</div>
+      <RouterLink class="guest-link" to="/projects">{{ t("auth.browseAsGuest") }}</RouterLink>
+    </div>
+    <form v-else class="auth-card" @submit.prevent="submit">
       <div class="auth-card-heading"><img src="@/assets/eulermaker-logo.svg" alt="" /><div><h2>{{ t("auth.loginTitle") }}</h2><p>{{ t("auth.loginHint") }}</p></div></div>
       <label><span>{{ t("auth.username") }}</span><input v-model.trim="username" autocomplete="username" required maxlength="63" :placeholder="t('auth.usernamePlaceholder')" /></label>
       <label><span>{{ t("auth.password") }}</span><input v-model="password" type="password" autocomplete="current-password" required maxlength="128" :placeholder="t('auth.passwordPlaceholder')" /></label>
-      <RouterLink class="auth-switch-link" :to="registerDestination">{{ t("auth.noAccount") }} {{ t("app.register") }}</RouterLink>
+      <RouterLink v-if="loginMethods.methods.registrationEnabled" class="auth-switch-link" :to="registerDestination">{{ t("auth.noAccount") }} {{ t("app.register") }}</RouterLink>
       <div v-if="error" class="form-error" role="alert"><WarningFilled />{{ error }}</div>
       <button class="submit-button" type="submit" :disabled="submitting">{{ submitting ? t("auth.submitting") : t("app.login") }}</button>
       <RouterLink class="guest-link" to="/projects">{{ t("auth.browseAsGuest") }}</RouterLink>
@@ -22,12 +32,14 @@
 
 <script setup lang="ts">
 import { Lock, Timer, WarningFilled } from "@element-plus/icons-vue";
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import { errorTranslationKey } from "@/api";
 import { useSessionStore } from "@/stores/session";
+import { useLoginMethodsStore } from "@/stores/loginMethods";
+import { clearRegistration, oauthErrorKey, providerLoginURL, type LoginProvider } from "@/oauth";
 
 const route = useRoute();
 const username = ref(typeof route.query.username === "string" ? route.query.username : "");
@@ -35,12 +47,15 @@ const password = ref("");
 const errorKey = ref("");
 const submitting = ref(false);
 const session = useSessionStore();
+const loginMethods = useLoginMethodsStore();
+onMounted(() => { void loginMethods.load(); });
 const { t } = useI18n();
 const error = computed(() => (errorKey.value ? t(errorKey.value) : ""));
 const router = useRouter();
 const registerDestination = computed(() => ({ name: "register", query: typeof route.query.redirect === "string" ? { redirect: route.query.redirect } : {} }));
 
 async function submit(): Promise<void> {
+  if (!loginMethods.methods?.passwordLoginEnabled || submitting.value) return;
   submitting.value = true;
   errorKey.value = "";
   try {
@@ -55,5 +70,13 @@ async function submit(): Promise<void> {
   } finally {
     submitting.value = false;
   }
+}
+
+function startOAuth(provider: LoginProvider): void {
+  try {
+    const destination = providerLoginURL(provider, route.query.redirect);
+    clearRegistration();
+    window.location.assign(destination);
+  } catch (error) { errorKey.value = oauthErrorKey(error); }
 }
 </script>

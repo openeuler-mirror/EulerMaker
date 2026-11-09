@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 
-import { checkSession, login, readToken, saveToken } from "@/api";
+import { acceptOAuthToken, checkSession, login, readToken, saveToken } from "@/api";
 import type { Session } from "@/types";
 
 export const useSessionStore = defineStore("session", {
@@ -18,20 +18,19 @@ export const useSessionStore = defineStore("session", {
   },
   actions: {
     async restore(): Promise<void> {
-      if (!readToken()) {
-        this.ready = true;
-        return;
-      }
       try {
-        this.session = await checkSession();
+        if (readToken()) this.session = await checkSession();
       } catch {
-        saveToken("");
+        try { saveToken(""); } catch { /* Authentication pages report unavailable browser storage. */ }
       } finally {
         this.ready = true;
       }
     },
     async signIn(username: string, password: string): Promise<void> {
       this.session = await login(username, password);
+    },
+    async completeOAuth(token: string): Promise<void> {
+      this.session = await acceptOAuthToken(token);
     },
     signOut(): void {
       saveToken("");
