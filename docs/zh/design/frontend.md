@@ -10,6 +10,10 @@
 
 API 文档页面见 5.10，文档发布契约由 Gateway 设计定义。
 
+社区 OAuth/OIDC 登录、首次登录注册补全及回调已实现，社区基本注册和登录已验证，安全及异常场景仍需验收；不提供已有账号关联。交互和认证契约见 [OAuth 登录设计](ebs-gateway.md#oauth-login)。登录页通过 `/auth/providers` 选择本地密码模式或社区模式，查询失败不回退开放密码表单；社区模式隐藏本地注册入口和密码修改表单。业务 API 保持 Bearer Token，JWT 保存在 sessionStorage。
+
+OAuth 回调 `/auth/callback` 和注册补全 `/auth/register` 是前端页面，代理需精确匹配后返回 SPA，其余 `/auth/` 继续转发 Gateway。回调页读取 code/state 后立即清除 URL，再通过同源 POST 交给 Gateway 验证；回调及注册提交携带加密 HttpOnly Cookie，不能沿用普通 API 的 `credentials: omit`。JWT 直接从成功 callback/register 响应写入 sessionStorage，不另设换票流程。需要补全注册时，先将回调返回的 registrationID、expiresAt、profile 保存到 sessionStorage；注册页刷新从该存储恢复信息和草稿，不提供服务端恢复接口，信息缺失或过期时重新登录。未知结果的只读确认按 [OAuth 前端交互](ebs-gateway.md#107-前端交互)实现，表单锁定只约束交互，不代替 IAM 并发唯一性校验。
+
 ---
 
 ## 二、背景与目标
