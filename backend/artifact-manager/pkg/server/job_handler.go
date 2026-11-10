@@ -12,6 +12,7 @@ func (s *Server) deleteJobData(w http.ResponseWriter, r *http.Request, project, 
 		return
 	}
 	if err := s.store.DeleteJob(project, job); err != nil {
+		recordFailure(r, "", err)
 		w.Header().Set("Retry-After", "5")
 		writeErr(w, r, http.StatusServiceUnavailable, "JobDataCleanupFailed", "failed to delete job data", true, nil)
 		return

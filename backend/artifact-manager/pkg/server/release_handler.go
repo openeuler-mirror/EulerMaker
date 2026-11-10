@@ -55,6 +55,7 @@ func (s *Server) getRelease(c *gin.Context) {
 }
 
 func (s *Server) writeReleaseError(w http.ResponseWriter, r *http.Request, err error) {
+	recordFailure(r, "", err)
 	var typed *release.Error
 	if !errors.As(err, &typed) {
 		typed = &release.Error{Code: "ReleaseInternalError", Status: 500, Retryable: true}
@@ -175,6 +176,7 @@ func (s *Server) serveReleaseContent(w http.ResponseWriter, r *http.Request, rec
 	defer file.Close()
 	sum, err := fileutil.FileSHA256(path)
 	if err != nil {
+		recordFailure(r, "", err)
 		writeErr(w, r, http.StatusServiceUnavailable, "ReleaseStorageUnavailable", "release storage unavailable", true, nil)
 		return
 	}

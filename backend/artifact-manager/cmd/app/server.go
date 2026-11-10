@@ -3,16 +3,18 @@ package app
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/klog/v2"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/server"
 )
 
@@ -36,6 +38,9 @@ func newCommand(start func(options) error) *cobra.Command {
 	}
 	c := &opts.config
 	flags := cmd.Flags()
+	loggingFlags := flag.NewFlagSet("logging", flag.ContinueOnError)
+	klog.InitFlags(loggingFlags)
+	flags.AddGoFlagSet(loggingFlags)
 
 	// Server.
 	flags.StringVar(&opts.listen, "listen", opts.listen, "listen address")
@@ -156,7 +161,7 @@ func run(opts options) error {
 	defer stop()
 	serverError := make(chan error, 1)
 	go func() { serverError <- server.ListenAndServe() }()
-	log.Printf("artifact-manager listening on %s", opts.listen)
+	klog.InfoS("Artifact Manager listening", "address", opts.listen)
 	select {
 	case err := <-serverError:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -164,10 +169,11 @@ func run(opts options) error {
 		}
 		return err
 	case <-ctx.Done():
+		klog.InfoS("Artifact Manager shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), opts.shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("artifact-manager shutdown failed: %v", err)
+			klog.ErrorS(nil, "Artifact Manager shutdown failed", "cause", diagnostics.Cause(err))
 			_ = server.Close()
 		}
 		if err := <-serverError; err != nil && !errors.Is(err, http.ErrServerClosed) {

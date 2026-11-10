@@ -601,7 +601,7 @@ export default {
   },
   serviceConfig: {
     title: "Service configuration",
-    hint: "Manage control-plane and Runner URLs for Git Server and Artifact Manager instances. Projects without a selected artifact instance use default.",
+    hint: "Manage control-plane and Runner URLs for Git Server and Artifact Manager instances. Projects without a selected artifact instance use default. Runners refresh configuration approximately every 10 minutes (±30 seconds). After a successful refresh, changes apply only to newly started jobs; existing jobs keep their original URLs.",
     gitServer: "Git Server",
     artifactManagers: "Artifact Manager",
     loading: "Loading service configuration",

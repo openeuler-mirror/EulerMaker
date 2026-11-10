@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/klog/v2"
+
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/fileutil"
 )
 
@@ -404,6 +407,10 @@ func (m *Manager) finish(completed *RepositoryRecord, result Result, materialize
 		if !errors.As(materializeErr, &typed) {
 			typed = &Error{Code: "RepositoryMaterializationFailed", Retryable: true}
 		}
+		klog.ErrorS(nil, "repository materialize failed",
+			"component", "repository", "operation", "materialize", "project", record.Project,
+			"build", record.BuildName, "repository", uid, "job", typed.JobName, "code", diagnostics.Code(typed.Code),
+			"cause", diagnostics.Cause(materializeErr))
 		record.State = RepositoryFailed
 		record.Failure = &FailureInfo{
 			Code:      typed.Code,
@@ -514,20 +521,32 @@ func (m *Manager) remove(uid string) {
 	source := m.RepositoryPath(record)
 	trashDir := filepath.Join(m.root, "repositories", record.Project, record.TargetArch, "history", record.BuildName, ".trash")
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
+		klog.ErrorS(nil, "repository delete failed",
+			"component", "repository", "operation", "delete", "project", record.Project, "build", record.BuildName,
+			"record", record.RepositoryUID, "cause", diagnostics.Cause(err))
 		return
 	}
 	// Reuse the same destination after a failed removal or restart.
 	trash := filepath.Join(trashDir, uid+"-deleting")
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
+		klog.ErrorS(nil, "repository delete failed",
+			"component", "repository", "operation", "delete", "project", record.Project, "build", record.BuildName,
+			"record", record.RepositoryUID, "cause", diagnostics.Cause(err))
 		return
 	}
 	if err := os.RemoveAll(trash); err != nil {
+		klog.ErrorS(nil, "repository delete failed",
+			"component", "repository", "operation", "delete", "project", record.Project, "build", record.BuildName,
+			"record", record.RepositoryUID, "cause", diagnostics.Cause(err))
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if record := m.records[uid]; record != nil && record.State == RepositoryDeleting {
 		if err := os.Remove(m.metaPath(uid)); err != nil && !os.IsNotExist(err) {
+			klog.ErrorS(nil, "repository delete failed",
+				"component", "repository", "operation", "delete", "project", record.Project, "build", record.BuildName,
+				"record", record.RepositoryUID, "cause", diagnostics.Cause(err))
 			return
 		}
 		delete(m.records, uid)
@@ -535,7 +554,14 @@ func (m *Manager) remove(uid string) {
 	}
 }
 
-func (m *Manager) persist(record *RepositoryRecord) error {
+func (m *Manager) persist(record *RepositoryRecord) (err error) {
+	defer func() {
+		if err != nil {
+			klog.ErrorS(nil, "repository persist failed",
+				"component", "repository", "operation", "persist", "project", record.Project, "build", record.BuildName,
+				"record", record.RepositoryUID, "cause", diagnostics.Cause(err))
+		}
+	}()
 	// The immutable .repository.json is the RPM index. Keep only control-plane
 	// state in metadata, otherwise every completed repository duplicates it.
 	light := *record

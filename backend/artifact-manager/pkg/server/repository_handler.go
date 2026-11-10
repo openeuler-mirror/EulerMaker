@@ -53,6 +53,7 @@ func (s *Server) getRepository(c *gin.Context) {
 	}
 	record, ok, err := s.repositories.Get(uid)
 	if err != nil {
+		recordFailure(r, "", err)
 		s.writeRepositoryError(w, r, &repository.Error{
 			Code:      "RepositoryStorageUnavailable",
 			Status:    http.StatusServiceUnavailable,
@@ -68,6 +69,7 @@ func (s *Server) getRepository(c *gin.Context) {
 }
 
 func (s *Server) writeRepositoryError(w http.ResponseWriter, r *http.Request, err error) {
+	recordFailure(r, "", err)
 	var typed *repository.Error
 	if !errors.As(err, &typed) {
 		typed = &repository.Error{Code: "RepositoryInternalError", Status: http.StatusInternalServerError, Retryable: true}
@@ -97,6 +99,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 	}
 	record, ok, err := s.repositories.Get(parts[3])
 	if err != nil {
+		recordFailure(r, "", err)
 		s.writeRepositoryError(w, r, &repository.Error{
 			Code:      "RepositoryStorageUnavailable",
 			Status:    http.StatusServiceUnavailable,
@@ -135,6 +138,7 @@ func (s *Server) repositoryContent(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	sum, err := fileutil.FileSHA256(path)
 	if err != nil {
+		recordFailure(r, "", err)
 		writeErr(w, r, http.StatusServiceUnavailable, "RepositoryStorageUnavailable", "repository storage unavailable", true, nil)
 		return
 	}

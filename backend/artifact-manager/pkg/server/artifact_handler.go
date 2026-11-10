@@ -55,6 +55,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, r *http.Request, status int, code, msg string, retry bool, d map[string]any) {
+	recordFailure(r, code, nil)
 	writeJSON(w, status, APIError{
 		Code:      code,
 		Message:   msg,
@@ -102,6 +103,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	r = r.WithContext(ctx)
 	id, e := s.identity(r)
 	if e != nil {
+		recordFailure(r, "", e)
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
@@ -144,6 +146,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	tmp := s.store.TemporaryUploadPath(p, j, a.ID)
 	f, e := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
+		recordFailure(r, "", e)
 		s.store.FailUpload(p, j, a, "StorageError", e.Error())
 		writeErr(w, r, 503, "StorageError", "storage unavailable", true, nil)
 		return
@@ -156,6 +159,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	f.Close()
 	extra, xe := mr.NextPart()
 	if e != nil || xe != io.EOF || extra != nil || n != m.Size || hex.EncodeToString(h.Sum(nil)) != m.SHA256 {
+		recordFailure(r, "", e)
 		os.Remove(tmp)
 		s.store.FailUpload(p, j, a, "ArtifactChecksumMismatch", "file size or digest mismatch")
 		writeErr(w, r, 422, "ArtifactChecksumMismatch", "file size or digest mismatch", true, nil)
@@ -168,6 +172,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 		return
 	}
 	if e = s.store.CompleteUpload(p, j, a, tmp); e != nil {
+		recordFailure(r, "", e)
 		if !s.store.UploadCommitted(a) {
 			s.store.FailUpload(p, j, a, "StorageError", e.Error())
 		}
@@ -202,6 +207,7 @@ func (s *Server) validPartHeaders(p *multipart.Part) bool {
 }
 
 func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
+	recordFailure(r, "", e)
 	var seal *upload.SealError
 	if errors.As(e, &seal) {
 		if seal.Retryable {
@@ -231,6 +237,7 @@ func (s *Server) mapErr(w http.ResponseWriter, r *http.Request, e error) {
 func (s *Server) completeManifest(w http.ResponseWriter, r *http.Request, p, j string) {
 	id, e := s.identity(r)
 	if e != nil {
+		recordFailure(r, "", e)
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
@@ -269,6 +276,7 @@ func (s *Server) list(w http.ResponseWriter, r *http.Request, p, j string) {
 	cat := upload.Category(r.URL.Query().Get("category"))
 	items, err := s.store.ListArtifacts(p, j, cat)
 	if err != nil {
+		recordFailure(r, "", err)
 		writeErr(w, r, http.StatusInternalServerError, "StorageError", "read artifact metadata failed", true, nil)
 		return
 	}
@@ -283,6 +291,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, project, job, 
 	}
 	if strings.HasPrefix(a.StorageKey, filepath.ToSlash(filepath.Join("artifacts", project, "jobs", job, ".signed"))+"/") {
 		if err := fileutil.VerifyFile(s.store.ArtifactPath(a), a.Size, a.SHA256); err != nil {
+			recordFailure(r, "", err)
 			writeErr(w, r, 503, "StorageError", "sealed artifact content unavailable", true, nil)
 			return
 		}
@@ -295,6 +304,7 @@ func (s *Server) download(w http.ResponseWriter, r *http.Request, project, job, 
 	defer f.Close()
 	st, e := f.Stat()
 	if e != nil || !st.Mode().IsRegular() || st.Size() != a.Size {
+		recordFailure(r, "", e)
 		writeErr(w, r, 503, "StorageError", "artifact content unavailable", true, nil)
 		return
 	}

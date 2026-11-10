@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/klog/v2"
+
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 )
@@ -249,6 +251,9 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 		if !errors.As(createErr, &typed) {
 			typed = &Error{Code: "ReleaseCreationFailed", Retryable: true}
 		}
+		klog.ErrorS(nil, "release create failed",
+			"component", "release", "operation", "create", "project", record.Project, "build", record.BuildName,
+			"code", diagnostics.Code(typed.Code), "cause", diagnostics.Cause(createErr))
 		record.State = ReleaseFailed
 		record.Failure = &FailureInfo{Code: typed.Code, Message: typed.Code, Retryable: typed.Retryable, Time: now}
 		_ = m.persist(record)
@@ -267,7 +272,8 @@ func (m *Manager) finish(completed *ReleaseRecord, result Result, createErr erro
 
 func (m *Manager) finishActivation(name string) {
 	if err := m.activate(name); err != nil {
-		log.Printf("release=%q activation deferred: %v", name, err)
+		klog.ErrorS(nil, "release activate failed",
+			"component", "release", "operation", "activate", "build", name, "cause", diagnostics.Cause(err))
 	}
 	m.mu.Lock()
 	delete(m.running, name)
@@ -407,20 +413,32 @@ func (m *Manager) remove(name string) {
 	source := m.Path(record)
 	trashDir := filepath.Join(m.releaseTargetDir(record), "releases", ".trash")
 	if err := os.MkdirAll(trashDir, 0750); err != nil {
+		klog.ErrorS(nil, "release delete failed",
+			"component", "release", "operation", "delete", "project", record.Project, "build", record.BuildName,
+			"record", record.BuildName, "cause", diagnostics.Cause(err))
 		return
 	}
 	// Reuse the same destination after a failed removal or restart.
 	trash := filepath.Join(trashDir, name+"-deleting")
 	if err := os.Rename(source, trash); err != nil && !os.IsNotExist(err) {
+		klog.ErrorS(nil, "release delete failed",
+			"component", "release", "operation", "delete", "project", record.Project, "build", record.BuildName,
+			"record", record.BuildName, "cause", diagnostics.Cause(err))
 		return
 	}
 	if err := os.RemoveAll(trash); err != nil {
+		klog.ErrorS(nil, "release delete failed",
+			"component", "release", "operation", "delete", "project", record.Project, "build", record.BuildName,
+			"record", record.BuildName, "cause", diagnostics.Cause(err))
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if current := m.records[name]; current != nil && current.State == ReleaseDeleting {
 		if err := os.Remove(m.metaPath(name)); err != nil && !os.IsNotExist(err) {
+			klog.ErrorS(nil, "release delete failed",
+				"component", "release", "operation", "delete", "project", record.Project, "build", record.BuildName,
+				"record", record.BuildName, "cause", diagnostics.Cause(err))
 			return
 		}
 		delete(m.records, name)
@@ -474,7 +492,14 @@ func (m *Manager) Stop() {
 	m.cancel()
 }
 
-func (m *Manager) persist(record *ReleaseRecord) error {
+func (m *Manager) persist(record *ReleaseRecord) (err error) {
+	defer func() {
+		if err != nil {
+			klog.ErrorS(nil, "release persist failed",
+				"component", "release", "operation", "persist", "project", record.Project, "build", record.BuildName,
+				"record", record.BuildName, "cause", diagnostics.Cause(err))
+		}
+	}()
 	path := m.recordMetaPath(record)
 	if previous := m.metaPath(record.BuildName); previous != "" && previous != path {
 		return errors.New("release metadata scope changed")

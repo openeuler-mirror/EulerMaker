@@ -1,12 +1,18 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"k8s.io/klog/v2"
 
 	"artifact-manager/pkg/fileutil"
 )
@@ -525,5 +531,59 @@ func TestRepositoryRejectsUnsafeTargetArch(t *testing.T) {
 	request.RepositoryUID = UID(request.Project, request.BuildName, "", request.Manifests)
 	if _, _, err := normalizeRepositoryRequest(request); err == nil {
 		t.Fatal("unsafe target architecture accepted")
+	}
+}
+
+func TestManagerFailureLogs(t *testing.T) {
+	var output bytes.Buffer
+	state := klog.CaptureState()
+	t.Cleanup(func() { klog.Flush(); state.Restore() })
+	flags := flag.NewFlagSet("logging-test", flag.ContinueOnError)
+	klog.InitFlags(flags)
+	for name, value := range map[string]string{"logtostderr": "false", "alsologtostderr": "false", "stderrthreshold": "FATAL", "one_output": "true"} {
+		if err := flags.Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	klog.SetOutput(&output)
+	record := &RepositoryRecord{RepositoryUID: "record", Project: "project", TargetArch: "arch", BuildName: "build", State: RepositoryCreating}
+	m := &Manager{root: t.TempDir(), records: map[string]*RepositoryRecord{"record": record}, running: map[string]bool{}}
+	m.finish(record, Result{}, &os.PathError{Op: "write", Path: "private-body", Err: syscall.ENOSPC})
+	if !strings.Contains(output.String(), `operation="materialize"`) || !strings.Contains(output.String(), "no space left on device") {
+		t.Fatalf("missing task failure: %s", output.String())
+	}
+	persisted, err := m.readRecord("record")
+	if err != nil || persisted.State != RepositoryFailed {
+		t.Fatalf("failure state = %+v, %v", persisted, err)
+	}
+	output.Reset()
+	record.State = RepositoryDeleting
+	m.records["record"] = record
+	dir := filepath.Join(m.root, "repositories", "project", "arch", "history", "build")
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".trash"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.remove("record")
+	if !strings.Contains(output.String(), `operation="delete"`) || !strings.Contains(output.String(), "filesystem") {
+		t.Fatalf("missing delete failure: %s", output.String())
+	}
+	output.Reset()
+	if err := os.Remove(m.metaPath("record")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(m.metaPath("record"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.persist(record); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if !strings.Contains(output.String(), `operation="persist"`) || !strings.Contains(output.String(), "project=\"project\"") {
+		t.Fatalf("missing persistence failure: %s", output.String())
+	}
+	if strings.Contains(output.String(), m.root) || strings.Contains(output.String(), "private-body") {
+		t.Fatalf("sensitive data in log: %s", output.String())
 	}
 }

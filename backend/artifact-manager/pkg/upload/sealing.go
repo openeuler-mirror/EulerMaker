@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/klog/v2"
+
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/signing"
 )
 
@@ -180,6 +183,8 @@ func (s *Sealer) rpmIdentity(ctx context.Context, path string) (string, error) {
 		cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C"}
 		out, err := cmd.Output()
 		if err != nil {
+			klog.ErrorS(nil, "upload query-rpm failed",
+				"component", "upload", "operation", "query-rpm", "cause", diagnostics.Cause(err))
 			if ctx.Err() != nil {
 				return "", &SealError{"SigningBackendUnavailable", 503, true}
 			}
@@ -202,6 +207,12 @@ func (s *Sealer) rpmIdentity(ctx context.Context, path string) (string, error) {
 }
 
 func (s *Sealer) prepareRPM(ctx context.Context, root, project, job string, source Artifact, f ManifestFile) (ManifestFile, error) {
+	storageFailure := func(err error) error {
+		klog.ErrorS(nil, "upload seal-storage failed",
+			"component", "upload", "operation", "seal-storage", "project", project, "job", job,
+			"artifact", f.ArtifactID, "cause", diagnostics.Cause(err))
+		return &SealError{"StorageError", 503, true}
+	}
 	raw := filepath.Join(root, source.StorageKey)
 	if err := verifySealFile(ctx, raw, f, "ArtifactMismatch"); err != nil {
 		return f, err
@@ -217,29 +228,32 @@ func (s *Sealer) prepareRPM(ctx context.Context, root, project, job string, sour
 		}
 		return s.inspectSigned(ctx, final, identity, f)
 	} else if !os.IsNotExist(err) {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	work := filepath.Join(root, "artifacts", project, "jobs", job, ".signing")
 	if err := os.MkdirAll(work, 0750); err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	tmp, err := os.CreateTemp(work, f.ArtifactID+"-*.rpm")
 	if err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	defer os.Remove(tmp.Name())
 	in, err := os.Open(raw)
 	if err != nil {
 		tmp.Close()
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	_, copyErr := io.Copy(tmp, &contextReader{ctx: ctx, Reader: in})
 	in.Close()
 	closeErr := tmp.Close()
 	if copyErr != nil || closeErr != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(errors.Join(copyErr, closeErr))
 	}
 	if err := s.signer.Sign(ctx, tmp.Name()); err != nil {
+		klog.ErrorS(nil, "upload sign failed",
+			"component", "upload", "operation", "sign", "project", project, "job", job, "artifact", f.ArtifactID,
+			"cause", diagnostics.Cause(err))
 		if errors.Is(err, signing.ErrVerification) {
 			return f, &SealError{"SignedPackageVerificationFailed", 422, false}
 		}
@@ -251,34 +265,36 @@ func (s *Sealer) prepareRPM(ctx context.Context, root, project, job string, sour
 	}
 	file, err := os.OpenFile(tmp.Name(), os.O_RDWR, 0)
 	if err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	err = file.Sync()
 	closeErr = file.Close()
 	if err != nil || closeErr != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(errors.Join(err, closeErr))
 	}
 	if err := os.MkdirAll(filepath.Dir(final), 0750); err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	// Link is no-replace and the private temporary inode never belongs to an uploaded artifact.
 	if err := os.Link(tmp.Name(), final); err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	dir, err := os.Open(filepath.Dir(final))
 	if err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	err = dir.Sync()
 	dir.Close()
 	if err != nil {
-		return f, &SealError{"StorageError", 503, true}
+		return f, storageFailure(err)
 	}
 	return result, nil
 }
 
 func (s *Sealer) inspectSigned(ctx context.Context, path, identity string, f ManifestFile) (ManifestFile, error) {
 	if err := s.signer.Verify(ctx, path); err != nil {
+		klog.ErrorS(nil, "upload verify failed",
+			"component", "upload", "operation", "verify", "artifact", f.ArtifactID, "cause", diagnostics.Cause(err))
 		if ctx.Err() != nil {
 			return f, &SealError{"SigningBackendUnavailable", 503, true}
 		}
