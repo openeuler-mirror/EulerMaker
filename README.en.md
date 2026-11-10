@@ -125,6 +125,8 @@ The detailed design documents are currently in Chinese:
 
 ## Contributing
 
+When opening an issue, choose the [bug report](.atomgit/ISSUE_TEMPLATE/bug_report.md), [feature request](.atomgit/ISSUE_TEMPLATE/feature_request.md), or [documentation](.atomgit/ISSUE_TEMPLATE/documentation.md) template. Include the version, reproduction steps, and relevant logs for bugs. Remove passwords, tokens, cookies, API keys, and other sensitive information before sharing.
+
 1. Fork the repository and create a feature branch.
 2. Keep changes focused and update related tests and documentation.
 3. Run tests for affected modules; run type checks and builds for frontend changes.
