@@ -1,10 +1,13 @@
 package artifact
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -23,13 +26,21 @@ type fakeLogRemote struct {
 	appended       chan struct{}
 	appendFailures int
 	completed      CompleteLogInput
+	status         *LogStatus
+	beforeAppend   func(int64)
 }
 
 func (f *fakeLogRemote) LogStatus(context.Context, string, string) (LogStatus, error) {
+	if f.status != nil {
+		return *f.status, nil
+	}
 	return LogStatus{State: "Open"}, nil
 }
 
 func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64, _ string, data []byte) (AppendLogResult, error) {
+	if f.beforeAppend != nil {
+		f.beforeAppend(sequence)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.appendFailures > 0 {
@@ -173,4 +184,196 @@ func TestArtifactLogFactoryUsesJobNameAcrossUIDChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	next.Abort()
+}
+
+type observedLogSpool struct {
+	*os.File
+	syncs  int
+	onSync func() error
+}
+
+func (f *observedLogSpool) Sync() error {
+	f.syncs++
+	if f.onSync != nil {
+		if err := f.onSync(); err != nil {
+			return err
+		}
+	}
+	return f.File.Sync()
+}
+
+func newTestLogSink(t *testing.T, remote LogRemote) (*artifactLogSink, *observedLogSpool) {
+	t.Helper()
+	dir := t.TempDir()
+	file, err := os.Create(filepath.Join(dir, "combined.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	index, err := os.Create(filepath.Join(dir, "chunks.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	spool := &observedLogSpool{File: file}
+	return &artifactLogSink{
+		remote: remote, project: "project", job: "build", dir: dir, file: spool, index: index,
+		chunkSize: 4, spoolLimit: 1024, flushInterval: time.Hour,
+		wake: make(chan struct{}, 1), done: make(chan struct{}),
+	}, spool
+}
+
+func readLogCheckpoint(t *testing.T, dir string) logUploadCheckpoint {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "upload.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint logUploadCheckpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	return checkpoint
+}
+
+func TestArtifactLogSinkSyncsBeforeIndexAndUpload(t *testing.T) {
+	remote := &fakeLogRemote{}
+	sink, spool := newTestLogSink(t, remote)
+	var events []string
+	spool.onSync = func() error {
+		events = append(events, "sync")
+		info, err := sink.index.Stat()
+		if err != nil || info.Size() != 0 {
+			t.Errorf("index was written before spool sync: info=%v err=%v", info, err)
+		}
+		return nil
+	}
+	remote.beforeAppend = func(sequence int64) {
+		events = append(events, "upload")
+		if sink.durable != 8 {
+			t.Errorf("durable boundary before upload = %d, want 8", sink.durable)
+		}
+		data, err := os.ReadFile(filepath.Join(sink.dir, "chunks.jsonl"))
+		if err != nil {
+			t.Error(err)
+		}
+		var record logChunkRecord
+		lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+		if err := json.Unmarshal(lines[len(lines)-1], &record); err != nil || record.Sequence != sequence {
+			t.Errorf("index not ready before upload: record=%+v err=%v", record, err)
+		}
+	}
+	for _, b := range []byte("abcdefgh") {
+		if _, err := sink.Write([]byte{b}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if spool.syncs != 0 {
+		t.Fatalf("Write synchronized the spool %d times", spool.syncs)
+	}
+	if _, err := os.Stat(filepath.Join(sink.dir, "upload.json")); !os.IsNotExist(err) {
+		t.Fatalf("Write created a checkpoint: %v", err)
+	}
+	sink.closing = true
+	sink.run(context.Background())
+	if sink.workerErr != nil {
+		t.Fatal(sink.workerErr)
+	}
+	if !reflect.DeepEqual(events, []string{"sync", "upload", "upload"}) {
+		t.Fatalf("events = %v", events)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := sink.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := readLogCheckpoint(t, sink.dir)
+	if checkpoint.ProducedBytes != 8 || checkpoint.ConfirmedOffset != 8 || checkpoint.State != "Completed" {
+		t.Fatalf("checkpoint = %+v", checkpoint)
+	}
+}
+
+func TestArtifactLogSinkSyncFailureStopsBeforeIndexAndUpload(t *testing.T) {
+	remote := &fakeLogRemote{}
+	sink, spool := newTestLogSink(t, remote)
+	syncErr := errors.New("spool sync failed")
+	spool.onSync = func() error { return syncErr }
+	if _, err := sink.Write([]byte("abcd")); err != nil {
+		t.Fatal(err)
+	}
+	sink.closing = true
+	sink.run(context.Background())
+	if !errors.Is(sink.workerErr, syncErr) {
+		t.Fatalf("worker error = %v", sink.workerErr)
+	}
+	info, err := sink.index.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 || len(remote.chunks) != 0 || sink.durable != 0 {
+		t.Fatalf("advanced after sync failure: index=%d chunks=%d durable=%d", info.Size(), len(remote.chunks), sink.durable)
+	}
+	checkpoint := readLogCheckpoint(t, sink.dir)
+	if checkpoint.ProducedBytes != 0 || checkpoint.ConfirmedOffset != 0 {
+		t.Fatalf("checkpoint = %+v", checkpoint)
+	}
+}
+
+func TestArtifactLogSinkCheckpointExcludesWritesDuringUpload(t *testing.T) {
+	remote := &fakeLogRemote{}
+	sink, spool := newTestLogSink(t, remote)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	remote.beforeAppend = func(int64) {
+		written := make(chan error, 1)
+		go func() {
+			_, err := sink.Write([]byte("e"))
+			written <- err
+		}()
+		if err := <-written; err != nil {
+			t.Error(err)
+		}
+		cancel()
+	}
+	if _, err := sink.Write([]byte("abcd")); err != nil {
+		t.Fatal(err)
+	}
+	sink.run(ctx)
+	checkpoint := readLogCheckpoint(t, sink.dir)
+	if checkpoint.ProducedBytes != 4 || checkpoint.ConfirmedOffset != 4 || checkpoint.NextSequence != 1 {
+		t.Fatalf("checkpoint included unsynced data: %+v", checkpoint)
+	}
+	if sink.produced != 5 || spool.syncs != 1 {
+		t.Fatalf("produced=%d syncs=%d", sink.produced, spool.syncs)
+	}
+}
+
+func TestArtifactLogSinkResumesExistingSpool(t *testing.T) {
+	remote := &fakeLogRemote{status: &LogStatus{State: "Open", CommittedBytes: 4, NextSequence: 1}}
+	root := t.TempDir()
+	dir := filepath.Join(root, "logs", "project", "build")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "combined.log"), []byte("abcdefgh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	factory := &LogFactory{Remote: remote, RootDir: root, ChunkSize: 4}
+	sink, err := factory.Open(gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "build", Namespace: "project"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sink.Abort()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := sink.Complete(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.chunks) != 1 || remote.chunks[0].sequence != 1 || string(remote.chunks[0].data) != "efgh" {
+		t.Fatalf("resumed chunks = %+v", remote.chunks)
+	}
+	checkpoint := readLogCheckpoint(t, dir)
+	if checkpoint.ProducedBytes != 8 || checkpoint.ConfirmedOffset != 8 || checkpoint.NextSequence != 2 {
+		t.Fatalf("checkpoint = %+v", checkpoint)
+	}
 }
