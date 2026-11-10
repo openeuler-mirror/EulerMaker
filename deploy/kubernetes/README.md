@@ -386,7 +386,7 @@ Git Server 的 Runner 地址使用服务入口，不附加 `/git`，代理路径
 
 `default` 是未设置 `ebs.io/artifacts` 的 Project 使用的实例；若将 Project 指向 `art-01`，创建或修改该 annotation 时也须确认 Config 中存在此键。BuildInfo Controller 创建 Job 时会将选中的实例名固化到 Job 的同名 annotation，Runner 据此选择日志和产物上传地址。不要将 Docker Compose 使用的 `127.0.0.1:8081` 原样用于异机 Runner。
 
-本目录尚无 Runner Manifest。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway、Artifact Manager 地址，并确认构建容器在 internal 模式能访问 Git Server，在 external 模式能访问上游源码仓库。集群外 Runner 需要另外提供可达入口；使用 `--service-access-mode=external` 时对 Artifact Manager 读取 `runnerExternalURL`，源码直接使用 `origin_url` 并检出原 `commit_id`；制品地址允许 HTTP(S)，公网入口建议使用 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
+Runner 的 containerd DaemonSet 模板见第 11 节。宿主机网络或集群外 Runner 不一定能解析 Service DNS，也不一定能访问 ClusterIP；应先从实际 Runner 节点验证 Gateway、Artifact Manager 地址，并确认构建容器在 internal 模式能访问 Git Server，在 external 模式能访问上游源码仓库。集群外 Runner 需要另外提供可达入口；使用 `--service-access-mode=external` 时对 Artifact Manager 读取 `runnerExternalURL`，源码直接使用 `origin_url` 并检出原 `commit_id`；制品地址允许 HTTP(S)，公网入口建议使用 HTTPS。Runner 启动时读取一次地址列表，之后约每 600 秒刷新；修改 Config 后可重启 Runner 使新地址立即生效。
 
 Runner 在写入 `payload.json` 前，按逻辑 URL 中的实例名将 `repo[].url` 的 `artifact://{instance}/repositories/...` 转换为选定网络模式下的 HTTP(S) URL；省略实例名时使用 `default`。普通 HTTP(S) 仓库地址保持不变。仓库所在实例缺失或对应 Runner 地址为空时，Job 会报出明确的仓库解析错误，因此上线前应从构建节点验证所需实例的地址及仓库路径可达。
 
@@ -415,6 +415,51 @@ kubectl -n ebs rollout status deployment/frontend --timeout=10m
 ```
 
 模板只创建前端的 ClusterIP Service。如需从集群外访问，请自行创建指向 `frontend:8080` 的 Ingress，或将前端 Service 配置为 NodePort；访问地址与 TLS 按实际环境配置。不要直接对外暴露 apiserver、Git Server HTTP 管理口或 Artifact Manager 内部接口。
+
+## 11. 部署 Runner（containerd DaemonSet）
+
+`runner.yaml` 包含 `ebs-node` 命名空间和其中的 DaemonSet，在带 `node-role.kubernetes.io/ebs-runner=` 标签的 Linux 节点各运行一个 Runner，直接使用宿主机 containerd Go API，不依赖 Docker 或 CRI。节点须已安装 containerd、`io.containerd.runc.v2` runtime 和 `overlayfs` snapshotter；若实际 socket 或 snapshotter 不同，修改参数及对应 hostPath。镜像须包含节点架构，Runner 自动识别 `x86_64` / `aarch64`，无需分别填写架构参数。
+
+### 11.1 准备节点与凭据
+
+先通过运维页面创建启用的 MachineAccount，将取得的凭据保存在受控文件中，不要将真实密钥写入 Manifest 或提交仓库：
+
+```json
+{
+  "clientID": "<machine-account-client-id>",
+  "clientSecret": "<machine-account-client-secret>"
+}
+```
+
+```sh
+kubectl create namespace ebs-node --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n ebs-node create secret generic ebs-runner-machine-credential \
+  --from-file=credential.json=/secure/path/to/runner-machine-credential.json
+kubectl label node <runner-node> node-role.kubernetes.io/ebs-runner=
+```
+
+模板通过 Downward API 的 `metadata.name` 获取 Pod 名作为 Runner 名，不将宿主机名用于 Runner 命名。持久化目录为宿主机 `/var/lib/ebs-runner`，与 Pod 内路径保持一致，供构建目录挂载和 containerd shim 写日志。部署前确认磁盘容量；可预先在该路径挂载数据盘。不能在同一节点同时运行另一个使用相同 Runner 名或数据目录的实例；节点替换时不要把旧节点的数据目录直接当成空目录复用。
+
+Runner 以 UID/GID 0 访问宿主机 socket 和构建输出，不开启 privileged、hostPID 或挂载整个宿主机根目录，也不需要 Kubernetes API Token。**containerd socket 本身具有节点级控制能力**，仅部署到可信的专用构建节点；`eulermaker` namespace 用于资源隔离和管理，不是安全隔离边界，不要改成 kubelet 使用的 `k8s.io`。节点准入策略须允许 hostPath/hostNetwork；本模板不自动修改集群安全策略或增加污点容忍。
+
+### 11.2 检查网络并部署
+
+Runner Pod 使用 `hostNetwork` 和 `ClusterFirstWithHostNet`，从集群 DNS 访问 Gateway；该组合见 [Kubernetes DNS 文档](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/)。模板对接现有 Gateway 的 HTTP Service，不使用 apiserver 内部组件的 mTLS 证书。若改用 HTTPS 入口，挂载可信 CA 并设置 `--gateway-ca`；制品 HTTPS 地址使用私有 CA 时另设 `--artifact-manager-ca`，不要通过关闭证书验证绕过。
+
+**构建容器由宿主机 containerd 直接创建，不是 Pod，使用宿主机 `/etc/resolv.conf`。** Pod 的 DNS 策略不会自动应用到构建容器。使用第 8.1 节的 Service DNS 地址前，必须确认宿主机及实际构建容器能解析这些域名并访问对应 ClusterIP；否则在 `Config/services` 的 `runnerInternalURL` 中配置节点可达的 IP/域名入口，管理面 `internalURL` 可保持 Service 地址。不要仅凭 Runner Pod 能访问服务判断构建网络正常。
+
+```sh
+kubectl apply -f deploy/kubernetes/runner.yaml
+kubectl -n ebs-node rollout status daemonset/ebs-runner --timeout=10m
+kubectl -n ebs-node get pods -l app.kubernetes.io/name=ebs-runner -o wide
+kubectl -n ebs-node logs -l app.kubernetes.io/name=ebs-runner --tail=100 --prefix
+```
+
+Pod Ready 只代表进程已启动，Runner 没有 HTTP 健康接口；还须在运维页面确认 Runner Online，并运行一个单包构建验证源码获取、日志及产物上传。Job 的 CPU/内存由 EulerMaker 调度和运行时配置管理，不受 DaemonSet Pod 的资源请求约束；Kubernetes 调度器不会将这些原生 containerd 容器计为 Pod，专用节点应避免混跑其他业务。
+
+模板使用 `OnDelete` 更新策略，避免应用 YAML 时批量重启 Runner。升级前先将对应 Runner 设为不可调度，等待已有 Job 执行和上传结束，再逐节点删除对应 Runner Pod 让 DaemonSet 重建，确认恢复 Online 后重新开放调度。删除 DaemonSet 不等于中止或删除其在宿主机上创建的 Job 容器；不要直接清空数据目录或 containerd namespace。
+
+同一 Pod 内容器重启保留 Runner 名；Pod 删除重建后名称变化，会注册为新的 Runner，旧 Runner 记录不会自动改名。新实例不能按新名称接管旧名称下的构建容器，异常重建后须核对旧 Job 和宿主机残留容器；旧 Runner 达到 Offline/Evicted 后可删除其 API 记录。
 
 ## 运维边界
 
