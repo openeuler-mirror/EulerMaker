@@ -518,7 +518,7 @@ type LocalLogChunk struct {
 }
 ```
 
-索引从 sequence 0 连续，offset 也必须连续。正文和索引采用与服务端相同的提交原则：先同步正文，再追加并同步完整索引行，最后更新 checkpoint。启动时截断不完整索引尾行；正文长于最后一条索引结束位置的部分是尚未组块的已生产日志，可以继续聚合；正文短于索引边界表示本地损坏，不能继续上传。
+索引从 sequence 0 连续，offset 也必须连续。正文和索引采用与服务端相同的提交原则：先同步正文，再追加并同步完整索引行，随后上传，服务端确认后更新 checkpoint。日志采集的每次 Write 只追加正文，不逐次同步文件或写 checkpoint；上传 worker 按 chunk 批量同步，已落盘范围无需重复同步。正文同步失败时，不写入本块索引，也不发送本块。启动时截断不完整索引尾行；正文长于最后一条索引结束位置的部分是尚未组块的已生产日志，可以继续聚合；正文短于索引边界表示本地损坏，不能继续上传。
 
 同目录原子保存 `upload.json`，至少包含：
 
@@ -536,7 +536,7 @@ type LogUploadCheckpoint struct {
 }
 ```
 
-`NextSequence` 是下一个待发送 sequence，`ConfirmedOffset` 是服务端已确认的连续字节边界，`ProducedBytes` 是本地日志文件已完成写入的字节数。checkpoint 使用临时文件、文件同步和原子 rename 更新；正文先落盘，再更新 `ProducedBytes`。只有服务端确认 chunk 后才能同时推进 `NextSequence` 和 `ConfirmedOffset`。最终日志的完整 SHA-256 可以在采集时增量计算，但重启后必须能够从本地正文重新计算，不能把不可恢复的哈希内存状态作为唯一来源。
+`NextSequence` 是下一个待发送 sequence，`ConfirmedOffset` 是服务端已确认的连续字节边界，`ProducedBytes` 是本地日志文件已同步落盘的字节数，不包含同步后新追加的正文。同步和已落盘边界更新与 Write 使用同一把锁；checkpoint 只读取该边界，满足 `ConfirmedOffset <= ProducedBytes <= 当前正文长度`。恢复时先同步已有正文，再建立初始 checkpoint。checkpoint 使用临时文件、文件同步和原子 rename 更新。只有服务端确认 chunk 后才能同时推进 `NextSequence` 和 `ConfirmedOffset`。未同步、未上传的尾部日志在节点掉电时可能丢失；网络阻塞时不能将 500 ms 聚合间隔视为落盘时限。最终日志的完整 SHA-256 可以在采集时增量计算，但重启后必须能够从本地正文重新计算，不能把不可恢复的哈希内存状态作为唯一来源。
 
 #### 8.3.2 聚合和发送
 

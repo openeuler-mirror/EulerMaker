@@ -60,6 +60,13 @@ type logUploadCheckpoint struct {
 	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
+type logSpoolFile interface {
+	io.Writer
+	io.ReaderAt
+	io.Closer
+	Sync() error
+}
+
 type artifactLogSink struct {
 	remote                         LogRemote
 	project, job                   string
@@ -69,9 +76,10 @@ type artifactLogSink struct {
 
 	mu           sync.Mutex
 	checkpointMu sync.Mutex
-	file         *os.File
+	file         logSpoolFile
 	index        *os.File
 	produced     int64
+	durable      int64
 	uploaded     int64
 	nextSequence int64
 	closing      bool
@@ -106,6 +114,10 @@ func (f *LogFactory) Open(job gateway.JobResource) (JobLogSink, error) {
 		file.Close()
 		return nil, err
 	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("sync log spool: %w", err)
+	}
 	index, err := os.OpenFile(filepath.Join(dir, "chunks.jsonl"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		file.Close()
@@ -114,7 +126,7 @@ func (f *LogFactory) Open(job gateway.JobResource) (JobLogSink, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &artifactLogSink{remote: f.Remote, project: project, job: job.Metadata.Name,
 		chunkSize: f.ChunkSize, spoolLimit: f.SpoolLimit, flushInterval: f.FlushInterval,
-		retryMaxBackoff: f.RetryMaxBackoff, dir: dir, file: file, index: index, produced: info.Size(),
+		retryMaxBackoff: f.RetryMaxBackoff, dir: dir, file: file, index: index, produced: info.Size(), durable: info.Size(),
 		wake: make(chan struct{}, 1), done: make(chan struct{}), cancel: cancel}
 	if s.chunkSize <= 0 {
 		s.chunkSize = 256 << 10
@@ -144,17 +156,25 @@ func (s *artifactLogSink) Write(p []byte) (int, error) {
 	}
 	n, err := s.file.Write(p)
 	s.produced += int64(n)
-	if err == nil {
-		err = s.file.Sync()
-	}
 	s.mu.Unlock()
-	if err == nil {
-		err = s.writeCheckpoint()
-	}
 	if err == nil {
 		s.signal()
 	}
 	return n, err
+}
+
+// syncSpool captures the durable boundary under the same lock as Write.
+func (s *artifactLogSink) syncSpool() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.durable == s.produced {
+		return nil
+	}
+	if err := s.file.Sync(); err != nil {
+		return fmt.Errorf("sync log spool: %w", err)
+	}
+	s.durable = s.produced
+	return nil
 }
 
 func (s *artifactLogSink) Complete(ctx context.Context) (CompletedLog, error) {
@@ -285,6 +305,10 @@ func (s *artifactLogSink) run(ctx context.Context) {
 			}
 			h := sha256.Sum256(data)
 			sum := hex.EncodeToString(h[:])
+			if err := s.syncSpool(); err != nil {
+				s.setWorkerErr(err)
+				return
+			}
 			record := logChunkRecord{Sequence: seq, Offset: offset, Size: size, SHA256: sum}
 			encoded, _ := json.Marshal(record)
 			if _, err := s.index.Write(append(encoded, '\n')); err != nil {
@@ -448,7 +472,7 @@ func (s *artifactLogSink) writeCheckpointState(forcedState string) error {
 	if forcedState != "" {
 		state = forcedState
 	}
-	checkpoint := logUploadCheckpoint{SchemaVersion: 1, Project: s.project, JobName: s.job, Stream: "combined", NextSequence: s.nextSequence, ConfirmedOffset: s.uploaded, ProducedBytes: s.produced, State: state, UpdatedAt: time.Now().UTC()}
+	checkpoint := logUploadCheckpoint{SchemaVersion: 1, Project: s.project, JobName: s.job, Stream: "combined", NextSequence: s.nextSequence, ConfirmedOffset: s.uploaded, ProducedBytes: s.durable, State: state, UpdatedAt: time.Now().UTC()}
 	s.mu.Unlock()
 	data, err := json.Marshal(checkpoint)
 	if err != nil {
