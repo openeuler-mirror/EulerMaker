@@ -418,7 +418,7 @@ kubectl -n ebs rollout status deployment/frontend --timeout=10m
 
 ## 11. 部署 Runner（containerd DaemonSet）
 
-`runner.yaml` 包含 `ebs-node` 命名空间和其中的 DaemonSet，在带 `node-role.kubernetes.io/ebs-runner=` 标签的 Linux 节点各运行一个 Runner，直接使用宿主机 containerd Go API，不依赖 Docker 或 CRI。节点须已安装 containerd、`io.containerd.runc.v2` runtime 和 `overlayfs` snapshotter；若实际 socket 或 snapshotter 不同，修改参数及对应 hostPath。镜像须包含节点架构，Runner 自动识别 `x86_64` / `aarch64`，无需分别填写架构参数。
+`runner-containerd.yaml` 包含 `ebs-node` 命名空间和其中的 DaemonSet，在带 `node-role.kubernetes.io/ebs-runner=` 标签的 Linux 节点各运行一个 Runner，直接使用宿主机 containerd Go API，不依赖 Docker 或 CRI。节点须已安装 containerd、`io.containerd.runc.v2` runtime 和 `overlayfs` snapshotter；若实际 socket 或 snapshotter 不同，修改参数及对应 hostPath。镜像须包含节点架构，Runner 自动识别 `x86_64` / `aarch64`，无需分别填写架构参数。
 
 ### 11.1 准备节点与凭据
 
@@ -449,7 +449,7 @@ Runner Pod 使用 `hostNetwork` 和 `ClusterFirstWithHostNet`，从集群 DNS �
 **构建容器由宿主机 containerd 直接创建，不是 Pod，使用宿主机 `/etc/resolv.conf`。** Pod 的 DNS 策略不会自动应用到构建容器。使用第 8.1 节的 Service DNS 地址前，必须确认宿主机及实际构建容器能解析这些域名并访问对应 ClusterIP；否则在 `Config/services` 的 `runnerInternalURL` 中配置节点可达的 IP/域名入口，管理面 `internalURL` 可保持 Service 地址。不要仅凭 Runner Pod 能访问服务判断构建网络正常。
 
 ```sh
-kubectl apply -f deploy/kubernetes/runner.yaml
+kubectl apply -f deploy/kubernetes/runner-containerd.yaml
 kubectl -n ebs-node rollout status daemonset/ebs-runner --timeout=10m
 kubectl -n ebs-node get pods -l app.kubernetes.io/name=ebs-runner -o wide
 kubectl -n ebs-node logs -l app.kubernetes.io/name=ebs-runner --tail=100 --prefix

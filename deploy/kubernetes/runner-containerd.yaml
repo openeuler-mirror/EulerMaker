@@ -61,6 +61,10 @@ spec:
           volumeMounts:
             - name: containerd-socket
               mountPath: /run/containerd/containerd.sock
+            # The Go client reads image users/groups from host snapshots when creating the OCI spec.
+            - name: containerd-snapshots
+              mountPath: /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
+              readOnly: true
             # containerd resolves bind mounts and log paths on the host.
             - name: runner-data
               mountPath: /var/lib/ebs-runner
@@ -72,6 +76,10 @@ spec:
           hostPath:
             path: /run/containerd/containerd.sock
             type: Socket
+        - name: containerd-snapshots
+          hostPath:
+            path: /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs
+            type: Directory
         - name: runner-data
           hostPath:
             path: /var/lib/ebs-runner

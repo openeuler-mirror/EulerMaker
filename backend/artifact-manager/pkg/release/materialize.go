@@ -15,6 +15,9 @@ import (
 	"strconv"
 	"strings"
 
+	"k8s.io/klog/v2"
+
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/signing"
@@ -114,6 +117,9 @@ func (m *filesystemReleaseMaterializer) Create(
 		command := exec.CommandContext(ctx, m.createRepoCommand, "--workers", strconv.Itoa(m.createRepoWorkers), work)
 		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C"}
 		if output, err := command.CombinedOutput(); err != nil {
+			klog.ErrorS(nil, "release createrepo failed",
+				"component", "release", "operation", "createrepo", "project", record.Project, "build", record.BuildName,
+				"cause", diagnostics.Cause(err))
 			_ = output
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
 				return result, &Error{Code: "ReleaseCommandTimeout", Retryable: true}
@@ -311,6 +317,8 @@ func retryableReleaseError(err error) error {
 	if err == nil {
 		return nil
 	}
+	klog.ErrorS(nil, "release storage failed",
+		"component", "release", "operation", "storage", "cause", diagnostics.Cause(err))
 	return &Error{Code: "ReleaseStorageUnavailable", Retryable: true, Status: 503}
 }
 

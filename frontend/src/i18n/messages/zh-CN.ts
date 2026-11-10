@@ -598,7 +598,7 @@ export default {
   },
   serviceConfig: {
     title: "服务配置",
-    hint: "管理 Git Server 和 Artifact Manager 各实例的控制面及 Runner 访问地址。未指定制品实例的工程使用 default。",
+    hint: "管理 Git Server 和 Artifact Manager 各实例的控制面及 Runner 访问地址。未指定制品实例的工程使用 default。Runner 约每 10 分钟同步一次配置（±30 秒），同步成功后仅对新启动的任务生效，已启动的任务继续使用原地址。",
     gitServer: "Git Server",
     artifactManagers: "Artifact Manager",
     loading: "正在加载服务配置",

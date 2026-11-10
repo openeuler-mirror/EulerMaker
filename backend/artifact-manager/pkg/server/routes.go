@@ -9,6 +9,7 @@ import (
 
 func (s *Server) newRouter() *gin.Engine {
 	router := gin.New()
+	router.Use(failureLogger())
 	router.RedirectTrailingSlash = false
 	router.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")

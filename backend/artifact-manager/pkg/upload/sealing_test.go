@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"k8s.io/klog/v2"
 
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/signing"
@@ -133,6 +136,29 @@ func assertSealCode(t *testing.T, err error, code string) {
 	var typed *SealError
 	if !errors.As(err, &typed) || typed.Code != code {
 		t.Fatalf("error = %v, want %s", err, code)
+	}
+}
+
+func TestSealFailureLog(t *testing.T) {
+	var output bytes.Buffer
+	state := klog.CaptureState()
+	t.Cleanup(func() { klog.Flush(); state.Restore() })
+	flags := flag.NewFlagSet("logging-test", flag.ContinueOnError)
+	klog.InitFlags(flags)
+	for name, value := range map[string]string{"logtostderr": "false", "alsologtostderr": "false", "stderrthreshold": "FATAL", "one_output": "true"} {
+		if err := flags.Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	klog.SetOutput(&output)
+	s, _ := newSealTestStore(t, t.TempDir(), &sealTestSigner{key: "key", failAt: 1}, 1)
+	_, file := sealUpload(t, s, "job", "packages/pkg.rpm")
+	_, err := s.CompleteManifest(context.Background(), "project", "job", "runner", CompleteManifestRequest{Files: []ManifestFile{file}})
+	assertSealCode(t, err, "SigningBackendUnavailable")
+	for _, want := range []string{`operation="sign"`, `project="project"`, `job="job"`, `artifact="` + file.ArtifactID + `"`} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("missing signing context %s: %s", want, output.String())
+		}
 	}
 }
 

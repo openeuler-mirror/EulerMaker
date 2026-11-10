@@ -1,11 +1,14 @@
 package release
 
 import (
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
+
+	"k8s.io/klog/v2"
+
+	"artifact-manager/pkg/diagnostics"
 )
 
 func (m *Manager) retentionLoop() {
@@ -33,7 +36,8 @@ func (m *Manager) cleanupHistory(now time.Time) {
 		return nil
 	}); err != nil {
 		m.mu.Unlock()
-		log.Printf("scan release history: %v", err)
+		klog.ErrorS(nil, "release scan-history failed",
+			"component", "release", "operation", "scan-history", "cause", diagnostics.Cause(err))
 		return
 	}
 	for key, records := range groups {

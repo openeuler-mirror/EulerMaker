@@ -25,6 +25,7 @@ const (
 func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) {
 	id, e := s.identity(r)
 	if e != nil {
+		recordFailure(r, "", e)
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
@@ -67,6 +68,7 @@ func (s *Server) appendLog(w http.ResponseWriter, r *http.Request, p, j string) 
 	}
 	l, e := s.store.AppendLog(p, j, id.Name, seq, data, sum)
 	if e != nil {
+		recordFailure(r, "", e)
 		details := map[string]any{}
 		if l != nil {
 			details["nextSequence"] = l.NextSequence
@@ -88,6 +90,7 @@ func sha256sum(b []byte) []byte {
 
 func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) {
 	if _, e := s.identity(r); e != nil {
+		recordFailure(r, "", e)
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}
@@ -216,6 +219,7 @@ func writeSSELog(w io.Writer, e upload.LogEvent) {
 func (s *Server) completeLog(w http.ResponseWriter, r *http.Request, p, j string) {
 	id, e := s.identity(r)
 	if e != nil {
+		recordFailure(r, "", e)
 		writeErr(w, r, 401, "Unauthorized", "invalid runner token", false, nil)
 		return
 	}

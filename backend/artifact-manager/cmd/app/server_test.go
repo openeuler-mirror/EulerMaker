@@ -4,10 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/klog/v2"
+
 	"artifact-manager/pkg/server"
 )
 
 func TestServerCommandBindsOptions(t *testing.T) {
+	state := klog.CaptureState()
+	t.Cleanup(state.Restore)
 	var got options
 	cmd := newCommand(func(opts options) error {
 		got = opts
@@ -16,10 +20,13 @@ func TestServerCommandBindsOptions(t *testing.T) {
 	cmd.SetArgs([]string{
 		"--listen=:9000", "--gateway-url=https://gateway.example", "--auth-cache-ttl=2h",
 		"--max-job-size=1048576", "--log-chunk-size=131072", "--repository-workers=4",
-		"--release-history-ttl=48h", "--rpm-signing-workers=3",
+		"--release-history-ttl=48h", "--rpm-signing-workers=3", "--v=4", "--logtostderr=true",
 	})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
+	}
+	if !klog.V(4).Enabled() || klog.V(5).Enabled() {
+		t.Fatal("logging verbosity was not applied")
 	}
 	if got.listen != ":9000" || got.config.Gateway.URL != "https://gateway.example" || got.config.Gateway.AuthCacheTTL != 2*time.Hour ||
 		got.config.Upload.MaxJobSize != 1048576 || got.config.Upload.LogChunkSize != 131072 ||

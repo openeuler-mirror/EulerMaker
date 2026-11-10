@@ -17,6 +17,9 @@ import (
 	"strings"
 	"syscall"
 
+	"k8s.io/klog/v2"
+
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/fileutil"
 	"artifact-manager/pkg/upload"
 )
@@ -141,6 +144,9 @@ func (m *filesystemMaterializer) Materialize(ctx context.Context, record Reposit
 	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C"}
 	output, err := command.CombinedOutput()
 	if err != nil {
+		klog.ErrorS(nil, "repository createrepo failed",
+			"component", "repository", "operation", "createrepo", "project", record.Project,
+			"build", record.BuildName, "repository", record.RepositoryUID, "cause", diagnostics.Cause(err))
 		_ = output // Command output must not leak paths through the public failure response.
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) {
 			return result, &Error{Code: "RepositoryCommandTimeout", Retryable: true}
@@ -435,6 +441,8 @@ func classifyLinkError(err error) error {
 }
 
 func retryableRepositoryError(err error) error {
+	klog.ErrorS(nil, "repository storage failed",
+		"component", "repository", "operation", "storage", "cause", diagnostics.Cause(err))
 	if errors.Is(err, syscall.ENOSPC) {
 		return &Error{Code: "InsufficientStorage", Retryable: true}
 	}
