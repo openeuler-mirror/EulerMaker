@@ -123,6 +123,8 @@ npm run dev
 
 ## 参与贡献
 
+反馈问题或提出建议时，可在创建 Issue 时选择[问题反馈](.atomgit/ISSUE_TEMPLATE/bug_report.md)、[功能建议](.atomgit/ISSUE_TEMPLATE/feature_request.md)或[文档改进](.atomgit/ISSUE_TEMPLATE/documentation.md)模板。报告问题时请提供版本、复现步骤和相关日志，并移除密码、Token、Cookie、API Key 等敏感信息。
+
 1. Fork 仓库并创建功能分支。
 2. 保持改动聚焦，同步更新相关测试与文档。
 3. 运行受影响模块的测试；前端修改执行类型检查和构建。
