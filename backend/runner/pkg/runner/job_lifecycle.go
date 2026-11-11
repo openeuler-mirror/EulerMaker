@@ -111,5 +111,5 @@ func (a *Agent) writeJobStatus(ctx context.Context, job *gateway.JobResource, st
 	if getErr == nil && (current.Metadata.UID != job.Metadata.UID || terminalJob(current.Status.Phase)) {
 		a.cancelExecution(job.Metadata.UID)
 	}
-	return fmt.Errorf("Job status intent unconfirmed: write=%v, confirmation=%v", err, getErr)
+	return fmt.Errorf("Job status intent unconfirmed: %w", errors.Join(err, getErr, errors.New("status differs from intent")))
 }

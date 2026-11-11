@@ -33,7 +33,7 @@ func (a *Agent) sweepJobDataLoop(ctx context.Context) {
 
 func (a *Agent) sweepJobData(ctx context.Context) {
 	seen := make(map[localJobKey]bool)
-	for _, category := range []string{"work", "results", "logs", "uploads"} {
+	for _, category := range []string{"work", "results", "logs", "uploads", "executions"} {
 		root := filepath.Join(a.cfg.RootDir, category)
 		projects, err := os.ReadDir(root)
 		if err != nil {
@@ -91,6 +91,10 @@ func (a *Agent) cleanupInactiveJob(ctx context.Context, project, name string) {
 		return
 	}
 	if !missing && (job == nil || !terminalJob(job.Status.Phase)) {
+		return
+	}
+	if err := os.RemoveAll(filepath.Join(a.cfg.RootDir, "executions", project, name)); err != nil {
+		log.Printf("clean inactive Job completion %s/%s: %v", project, name, err)
 		return
 	}
 	cleaner := a.cleanup

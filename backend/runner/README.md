@@ -40,6 +40,8 @@ docker build --build-arg GIT_COMMIT="$(git rev-parse HEAD)" -t eulermaker/ebs-ru
 
 ## 本地运行
 
+Runner 在日志封账前将执行完成记录保存到 `rootDir/executions/{project}/{jobName}/{jobUID}.json`。PostRun 或终态回写失败时保留该记录，重连、重启及每 30 秒的恢复检查会继续收尾，不重新执行已经记录完成的脚本。恢复校验 Job 身份、归属和终态；已中止的任务不会被旧状态覆盖。请保留 Runner 的 rootDir 持久卷；旧版本未记录的执行结果不能仅凭已封账日志自动恢复。详细流程见 [Runner 设计](../../docs/zh/design/runner.md)。
+
 Runner 启动前需要可访问的 Gateway，以及包含 MachineAccount 凭据的 JSON 文件。Artifact Manager 和 Git Server 地址通过 Gateway 的 `GET /apis/ebs/v1/service-endpoints` 获取：
 
 ```json

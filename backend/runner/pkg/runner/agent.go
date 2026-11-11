@@ -126,6 +126,9 @@ func NewAgent(cfg options.Config) (*Agent, error) {
 					LogFactory:      logFactory,
 					ResolvePayload:  serviceRoutes.ResolvePayload,
 					LogDrainTimeout: cfg.Artifact.Log.DrainTimeout,
+					RecordCompletion: func(job gateway.JobResource, executionErr error) error {
+						return recordExecution(cfg.RootDir, job, executionErr, true)
+					},
 				},
 			},
 		},
@@ -172,6 +175,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.refreshEndpointsLoop(ctx)
 	go a.cleanup.Run(ctx)
 	go a.sweepJobDataLoop(ctx)
+	go a.recoverCompletionsLoop(ctx)
 	if err := a.patchRunnerPhase(ctx, "Online"); err != nil {
 		log.Printf("update online status failed: %v", err)
 	}
@@ -513,7 +517,7 @@ func (a *Agent) handleEvent(ctx context.Context, event gateway.WatchEvent) {
 	}
 	go func() {
 		current, err := a.client.GetJob(execCtx, job.Metadata.Namespace, job.Metadata.Name)
-		if err != nil || current.Metadata.UID != job.Metadata.UID || current.Status.Phase != "Running" || current.Status.Runner != a.cfg.Name || execCtx.Err() != nil {
+		if err != nil || current == nil || current.Metadata.UID != job.Metadata.UID || current.Metadata.DeletionTimestamp != nil || current.Status.Phase != "Running" || current.Status.Runner != a.cfg.Name || execCtx.Err() != nil {
 			if err != nil {
 				log.Printf("verify assigned job %s: %v", key, err)
 			}
@@ -526,7 +530,15 @@ func (a *Agent) handleEvent(ctx context.Context, event gateway.WatchEvent) {
 				return
 			}
 		}
-		if current.Status.Stage == "PostRun" {
+		record, err := loadCompletion(a.cfg.RootDir, *current)
+		if err != nil {
+			log.Printf("load Job completion %s: %v", key, err)
+			a.finishJob(key)
+			return
+		}
+		if record != nil {
+			a.resumeCompletion(execCtx, key, *current, record)
+		} else if current.Status.Stage == "PostRun" {
 			a.resumePostRun(execCtx, key, *current)
 		} else {
 			a.runJob(execCtx, key, *current)
@@ -558,23 +570,21 @@ func (a *Agent) runJob(parent context.Context, key string, job gateway.JobResour
 		a.cleanupJobWork(job)
 		return
 	}
-	resultFile := filepath.Join(workDir(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name, "job-result.json")
-	var resultErr error
-	status.Result, resultErr = readJobResult(resultFile)
-	if resultErr != nil {
-		executionErr = errors.Join(executionErr, resultErr)
+	if err := recordExecution(a.cfg.RootDir, job, executionErr, false); err != nil {
+		log.Printf("persist Job completion failed: %v", err)
+		return
 	}
-	if status.Result != nil && status.Result.Status == "BuildFailed" && executionErr == nil {
-		executionErr = errors.New("build script reported failure")
+	record, err := loadCompletion(a.cfg.RootDir, job)
+	if err != nil {
+		log.Printf("read Job completion failed: %v", err)
+		return
 	}
-	status.Phase = "Running"
-	status.Stage = "PostRun"
-	if executionErr != nil {
-		status.Message = executionErr.Error()
-	} else {
-		status.Message = ""
+	status = record.Status
+	executionErr = nil
+	if status.Message != "" {
+		executionErr = errors.New(status.Message)
 	}
-	if err := a.writeJobStatus(parent, &job, status); err != nil {
+	if err := a.writeCompletionStatus(parent, &job, status); err != nil {
 		log.Printf("update job post-run status failed: %v", err)
 		return
 	}
@@ -663,16 +673,21 @@ func (a *Agent) finalizeArtifacts(parent context.Context, job gateway.JobResourc
 			status.Message = ""
 		}
 	}
-	if updateErr := a.writeJobStatus(parent, &job, status); updateErr != nil {
+	record := completionRecord{Version: 1, UID: job.Metadata.UID, Runner: job.Status.Runner, Status: status, FinishedAt: end, UploadFailed: artifactErr != nil}
+	if previous, err := loadCompletion(a.cfg.RootDir, job); err != nil {
+		log.Printf("read Job completion before final status: %v", err)
+		return
+	} else if previous != nil {
+		record.FinishedAt = previous.FinishedAt
+	}
+	if err := saveCompletion(a.cfg.RootDir, job, record); err != nil {
+		log.Printf("persist final Job status failed: %v", err)
+		return
+	}
+	if updateErr := a.writeCompletionStatus(parent, &job, status); updateErr != nil {
 		log.Printf("update job final status failed: %v", updateErr)
-	} else if artifactErr != nil {
-		if cleanupErr := a.cleanup.MarkFailure(job); cleanupErr != nil {
-			log.Printf("schedule failed artifact cleanup: %v", cleanupErr)
-		}
 	} else {
-		if cleanupErr := a.cleanup.MarkSuccess(job); cleanupErr != nil {
-			log.Printf("clean completed artifact state: %v", cleanupErr)
-		}
+		a.cleanCompletion(job, artifactErr != nil)
 	}
 }
 
