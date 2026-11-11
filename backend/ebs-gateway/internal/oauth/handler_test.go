@@ -121,7 +121,7 @@ func newFixture(t *testing.T) *oauthFixture {
 				w.WriteHeader(401)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"sub": f.userSub, "name": "Alice", "email": "alice@example.com", "email_verified": true})
+			json.NewEncoder(w).Encode(map[string]any{"sub": f.userSub, "preferred_username": "community-alice", "name": "Alice", "email": "alice@example.com", "email_verified": true})
 		default:
 			w.WriteHeader(404)
 		}
@@ -223,6 +223,7 @@ func TestRegistrationAcrossReplicasAndConfirmation(t *testing.T) {
 		RegistrationRequired bool
 		ExpiresAt            time.Time
 		Profile              struct {
+			Username    string
 			DisplayName string
 			Email       string
 		}
@@ -234,7 +235,7 @@ func TestRegistrationAcrossReplicasAndConfirmation(t *testing.T) {
 		t.Fatalf("%d %s", result.Code, result.Body.String())
 	}
 	if form.RegistrationID == "" || !form.ExpiresAt.Equal(f.now.Add(contextTTL).Truncate(time.Second)) ||
-		form.Profile.DisplayName != "Alice" || form.Profile.Email != "alice@example.com" {
+		form.Profile.Username != "community-alice" || form.Profile.DisplayName != "Alice" || form.Profile.Email != "alice@example.com" {
 		t.Fatalf("callback must provide the registration form context: %s", result.Body.String())
 	}
 	cookie := cookieFrom(t, result, "register")

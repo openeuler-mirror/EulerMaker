@@ -126,7 +126,7 @@ func oauthSchemas(result object) {
 		schema["additionalProperties"] = false
 		return schema
 	}
-	profile := record(object{"displayName": textSchema(), "email": textSchema()})
+	profile := record(object{"username": textSchema(), "displayName": textSchema(), "email": textSchema()})
 	result["OAuthError"] = record(object{"code": textSchema(), "error": textSchema()}, "code", "error")
 	result["OAuthProviders"] = record(object{
 		"passwordLoginEnabled": object{"type": "boolean", "description": "True only when no OAuth configuration file is specified; not independently configurable."},

@@ -957,6 +957,9 @@
               },
               "email": {
                 "type": "string"
+              },
+              "username": {
+                "type": "string"
               }
             },
             "type": "object"

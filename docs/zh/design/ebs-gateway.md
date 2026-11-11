@@ -1018,7 +1018,7 @@ OAuth 关闭时 providers 数组为空，OAuth 路由返回 404，本地密码�
 #### 10.3.1 请求和响应细则
 
 - callback 要求唯一且非空的 state，以及 code 或 error 二选一；前端保留并提交提供方返回的 iss（若有），Gateway 按提供方契约精确校验，不能用它选择请求端点。拒绝重复参数、重复或未知 JSON 字段及类型不符；不接受客户端指定 redirectURI、身份或 Token。
-- 未关联账号返回 `{"registrationRequired":true,"registrationID":"<随机ID>","expiresAt":"<RFC3339>","profile":{"displayName":"","email":""}}` 并设置注册 Cookie，不返回 JWT。前端将 registrationID、expiresAt 和 profile 保存至 sessionStorage，用于进入注册页及刷新恢复；registrationID 仅用于匹配 Cookie，不是独立身份凭据。
+- 未关联账号返回 `{"registrationRequired":true,"registrationID":"<随机ID>","expiresAt":"<RFC3339>","profile":{"username":"","displayName":"","email":""}}` 并设置注册 Cookie，不返回 JWT。前端将 registrationID、expiresAt 和 profile 保存至 sessionStorage，用于进入注册页及刷新恢复；registrationID 仅用于匹配 Cookie，不是独立身份凭据。
 - register 的 action 必须显式为 create 或 confirm。create 是用户主动提交资料；confirm 只认证查询，不调用 IAM register，也不接受 displayName/email。未知结果处理见 10.6.3。
 - JSON 请求要求 application/json，正文上限 16 KiB。错误格式为 `{"code":"<stable-code>","error":"<safe-message>"}`，失败不携带 token 或 registrationRequired。
 - 通用错误：400 InvalidRequest、401 OAuthAuthenticationFailed、403 BrowserBindingInvalid、404 ProviderUnavailable、409 OAuthConfigChanged、410 ContextExpired、429 RateLimited、503 OAuthUnavailable。取消授权校验上下文后返回 400 OAuthCancelled，不回显第三方原始错误。IAM 错误见 10.6.2。
@@ -1084,7 +1084,10 @@ User 私有身份存储、跨副本唯一性及占位恢复由 [apiserver IAM](e
 
 只有 IAM 明确返回 registrationRequired 才创建注册凭据并展示表单。加密注册 Cookie 包含 purpose、provider、configFingerprint、随机 registrationID、已验证 issuer/subject、原 returnTo、固定期限及有限预填资料；不含 code、verifier、第三方 Token 或业务 scopes。
 
-用户填写必填 username，以及可选 displayName/email，遵循 IAM 资料规则。可用昵称及已验证邮箱预填，编辑后的邮箱只是未验证联系资料，不作为身份。表单不要求密码、不允许选择权限。
+用户填写必填 username，以及可选 displayName/email，遵循 IAM 资料规则。username 默认使用第三方返回的
+preferred_username，为空时使用社区字段 openeuler_username；均未返回时留空。该值只用于预填，允许用户修改，
+不做大小写转换或截断；不符合本地格式或名称已占用时由用户修正，不能据此关联已有账号。
+可用昵称及已验证邮箱预填，编辑后的邮箱只是未验证联系资料，不作为身份。表单不要求密码、不允许选择权限。
 
 提交前不创建账号或占位。Gateway 核验 Cookie、registrationID、Origin 和期限后构造 method=oauth 请求，外部身份只取自 Cookie；IAM 成功后再次认证、读取 User 并签发 JWT。
 
