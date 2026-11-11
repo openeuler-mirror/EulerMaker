@@ -125,12 +125,12 @@ func TestOAuthUserInfoSubAdapter(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer access" {
 				t.Fatal("missing userinfo authentication")
 			}
-			body = `{"sub":"immutable-id","name":"Example","email":"unverified@example.com","email_verified":false}`
+			body = `{"sub":"immutable-id","openeuler_username":"community-example","name":"Example","email":"unverified@example.com","email_verified":false}`
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 	}))
 	external, profile, err := p.exchange(context.Background(), "code", browserContext{Verifier: "verifier"}, "")
-	if err != nil || external.Subject != "immutable-id" || profile.Email != "" || calls != 2 {
+	if err != nil || external.Subject != "immutable-id" || profile.Username != "community-example" || profile.Email != "" || calls != 2 {
 		t.Fatalf("identity=%+v profile=%+v err=%v", external, profile, err)
 	}
 }

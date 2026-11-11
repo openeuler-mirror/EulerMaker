@@ -19,6 +19,7 @@ import (
 const contextTTL = 10 * time.Minute
 
 type profile struct {
+	Username    string `json:"username,omitempty"`
 	DisplayName string `json:"displayName,omitempty"`
 	Email       string `json:"email,omitempty"`
 }

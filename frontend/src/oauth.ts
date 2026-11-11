@@ -9,7 +9,7 @@ export interface RegistrationContext {
   registrationRequired: true;
   registrationID: string;
   expiresAt: string;
-  profile: { displayName?: string; email?: string };
+  profile: { username?: string; displayName?: string; email?: string };
 }
 export interface RegistrationDraft extends RegistrationContext {
   username: string;
@@ -98,7 +98,7 @@ export function saveRegistration(draft: RegistrationDraft): void {
 
 export function beginRegistration(context: RegistrationContext): void {
   const draft: RegistrationDraft = {
-    ...context, username: "", displayName: context.profile?.displayName || "", email: context.profile?.email || "", submitted: false,
+    ...context, username: context.profile?.username || "", displayName: context.profile?.displayName || "", email: context.profile?.email || "", submitted: false,
   };
   if (!validDraft(draft)) throw new OAuthError("ContextExpired");
   saveRegistration(draft);

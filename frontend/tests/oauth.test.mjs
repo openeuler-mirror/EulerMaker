@@ -19,7 +19,7 @@ function storage() {
   return data;
 }
 const context = () => ({ registrationRequired: true, registrationID: "registration-1",
-  expiresAt: new Date(Date.now() + 600000).toISOString(), profile: { displayName: "Alice", email: "alice@example.com" } });
+  expiresAt: new Date(Date.now() + 600000).toISOString(), profile: { username: "community-alice", displayName: "Alice", email: "alice@example.com" } });
 
 test("login modes gate local forms and callback capture precedes router initialization", () => {
   const read = path => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -73,9 +73,12 @@ test("registration context and submitted draft survive refresh without storing c
   const saved = storage();
   oauth.beginRegistration(context());
   const draft = oauth.readRegistration();
+  assert.equal(draft.username, "community-alice");
   assert.equal(draft.displayName, "Alice");
   assert.equal(draft.email, "alice@example.com");
   assert.equal(draft.submitted, false);
+  oauth.saveRegistration({ ...draft, username: "local-alice" });
+  assert.equal(oauth.readRegistration().username, "local-alice");
   oauth.saveRegistration({ ...draft, username: "alice", submitted: true });
   assert.equal(oauth.readRegistration().submitted, true);
   assert.equal(oauth.readRegistration().username, "alice");
@@ -83,6 +86,12 @@ test("registration context and submitted draft survive refresh without storing c
   oauth.saveRegistration({ ...draft, expiresAt: "2000-01-01T00:00:00Z" });
   assert.equal(oauth.readRegistration(), null);
   assert.equal(saved.size, 0);
+});
+
+test("registration without a community username allows manual input", () => {
+  storage();
+  oauth.beginRegistration({ ...context(), profile: { displayName: "Alice" } });
+  assert.equal(oauth.readRegistration().username, "");
 });
 
 test("OAuth requests send cookies but no existing bearer, and preserve safe error codes", async t => {
