@@ -46,7 +46,7 @@
           <table class="project-table admin-table">
             <thead><tr>
               <th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th>
-              <th>{{ t("operations.arch") }}</th><th>{{ t("operations.agentVersion") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.heartbeat") }}</th>
+              <th>{{ t("operations.arch") }}</th><th>{{ t("operations.agentVersion") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.activeJobs") }}</th><th>{{ t("operations.heartbeat") }}</th>
               <th v-if="canManageRunners">{{ t("admin.actions") }}</th>
             </tr></thead>
             <tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name">
@@ -56,6 +56,7 @@
               <td>{{ runner.spec?.arch || t("common.emptyValue") }}</td>
               <td><code class="runner-agent-version" :title="runner.status?.info?.agentVersion">{{ runner.status?.info?.agentVersion || t("common.emptyValue") }}</code></td>
               <td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td>
+              <td>{{ runner.status?.activeJobs ?? 0 }}</td>
               <td>{{ formatDate(runner.status?.heartbeat) }}</td>
               <td v-if="canManageRunners" class="admin-row-actions">
                 <button class="text-button danger-link" type="button" :disabled="evictionSaving || removalSaving || !runner.metadata?.name" @click="openEviction(runner)">{{ t(runner.status?.phase === "Evicted" ? "operations.cancelEviction" : "operations.evict") }}</button>

@@ -581,6 +581,7 @@ export default {
     type: "Type",
     arch: "Architecture",
     schedulable: "Schedulable",
+    activeJobs: "Active jobs",
     heartbeat: "Last heartbeat",
     resources: "Resource rules",
     resourcesHint: "Manage cluster-wide CPU, memory, and package rules. Builds use the default configuration.",

@@ -71,3 +71,15 @@ func TestRunnerJobStatusUpdateWhitelist(t *testing.T) {
 		})
 	}
 }
+
+func TestRunnerActiveJobsStatusUpdate(t *testing.T) {
+	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}
+	route := Route{Resource: "runners", Name: "runner-1", Subresource: "status", Method: http.MethodPatch}
+	for _, count := range []int{2, 0} {
+		old := mutation.Object{"status": map[string]any{"phase": "Online", "activeJobs": 1}}
+		candidate := mutation.Object{"status": map[string]any{"phase": "Online", "activeJobs": count}}
+		if err := validateStatusUpdate(who, route, old, candidate); err != nil {
+			t.Fatalf("activeJobs=%d rejected: %v", count, err)
+		}
+	}
+}

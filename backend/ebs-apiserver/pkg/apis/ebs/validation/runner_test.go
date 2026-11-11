@@ -225,3 +225,19 @@ func validRunner(runnerType, arch string) *ebsv1.Runner {
 		},
 	}
 }
+
+func TestValidateRunnerActiveJobs(t *testing.T) {
+	for _, count := range []int32{-1, 0, 2} {
+		runner := validRunner("ct", "x86_64")
+		runner.Status.Phase = ebsv1.RunnerOnline
+		runner.Status.ActiveJobs = count
+		errs := ValidateRunnerStatusUpdate(runner, runner)
+		if count < 0 {
+			if len(errs) != 1 || errs[0].Field != "status.activeJobs" {
+				t.Fatalf("negative count errors: %v", errs)
+			}
+		} else if len(errs) != 0 {
+			t.Fatalf("count %d rejected: %v", count, errs)
+		}
+	}
+}

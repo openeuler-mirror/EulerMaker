@@ -578,6 +578,7 @@ export default {
     type: "类型",
     arch: "架构",
     schedulable: "可调度",
+    activeJobs: "活跃 Job 数",
     heartbeat: "最后心跳",
     resources: "资源规则",
     resourcesHint: "管理集群级 CPU、内存及软件包资源规则；构建使用 default 配置。",

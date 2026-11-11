@@ -2704,6 +2704,11 @@
       },
       "ebs-api.ebs.v1.RunnerStatus": {
         "properties": {
+          "activeJobs": {
+            "description": "ActiveJobs counts local executions, including verification, PostRun, and cancelled jobs still stopping.",
+            "format": "int32",
+            "type": "integer"
+          },
           "addresses": {
             "items": {
               "$ref": "#/components/schemas/ebs-api.ebs.v1.RunnerAddress",

@@ -158,7 +158,7 @@ export interface MachineAccount {
 export interface Runner {
   metadata?: ObjectMeta;
   spec?: { instanceID?: string; type?: string; arch?: string; unschedulable?: boolean };
-  status?: { phase?: string; heartbeat?: string; capacity?: Record<string, string>; allocatable?: Record<string, string>; info?: { os?: string; kernelVersion?: string; runtimeVersion?: string; agentVersion?: string } };
+  status?: { phase?: string; heartbeat?: string; activeJobs?: number; capacity?: Record<string, string>; allocatable?: Record<string, string>; info?: { os?: string; kernelVersion?: string; runtimeVersion?: string; agentVersion?: string } };
 }
 
 export interface BuildResourceContent {

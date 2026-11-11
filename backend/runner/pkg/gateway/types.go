@@ -56,6 +56,8 @@ type RunnerTaint struct {
 }
 
 type RunnerStatus struct {
+	// Always send zero so merge patches clear the previous count.
+	ActiveJobs  int32             `json:"activeJobs"`
 	Phase       string            `json:"phase,omitempty"`
 	Conditions  []Condition       `json:"conditions,omitempty"`
 	Capacity    map[string]string `json:"capacity,omitempty"`
