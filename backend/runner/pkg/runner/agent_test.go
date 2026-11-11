@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -594,4 +595,41 @@ func TestUploadFailurePreservesScriptResult(t *testing.T) {
 	if final.Phase != "Failed" || final.Result == nil || final.Result.Status != "Succeeded" {
 		t.Fatalf("upload failure changed script result: %+v", final)
 	}
+}
+
+func TestActiveJobsHeartbeat(t *testing.T) {
+	a := &Agent{cfg: options.Config{RootDir: t.TempDir()}, client: &workCleanupAPI{}}
+	check := func(want int32) {
+		t.Helper()
+		status := a.currentStatus()
+		if status.ActiveJobs != want {
+			t.Fatalf("activeJobs = %d, want %d", status.ActiveJobs, want)
+		}
+		data, err := json.Marshal(status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := payload["activeJobs"]; !ok || got != float64(want) {
+			t.Fatalf("heartbeat activeJobs = %v, present=%v, want %d", got, ok, want)
+		}
+	}
+	check(0)
+	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job", UID: "uid"}, Status: gateway.JobStatus{Phase: "Running", Stage: "PostRun"}}
+	_, key, ok := a.registerExecution(context.Background(), job)
+	if !ok {
+		t.Fatal("registration failed")
+	}
+	check(1)
+	if _, _, ok := a.registerExecution(context.Background(), job); ok {
+		t.Fatal("duplicate registration succeeded")
+	}
+	check(1)
+	a.cancelExecution(key)
+	check(1)
+	a.finishJob(key)
+	check(0)
 }

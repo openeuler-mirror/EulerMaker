@@ -239,6 +239,7 @@ spec:
 
 ```go
 type RunnerStatus struct {
+    ActiveJobs  int32              `json:"activeJobs,omitempty"`
     Phase       RunnerPhase        `json:"phase,omitempty"`
     Conditions  []metav1.Condition `json:"conditions,omitempty"`
     Capacity    map[string]string  `json:"capacity,omitempty"`
@@ -254,6 +255,7 @@ type RunnerStatus struct {
 | `phase` | 公共 `ebs/v1` API 定义的 `RunnerPhase`，稳定取值为 `Online` / `Offline` / `Evicted` |
 | `conditions` | 详细状态条件 |
 | `capacity` | Runner 上报的总资源容量，当前包含 `cpu`、`memory`、`ephemeral-storage` |
+| `activeJobs` | Runner 本地尚未退出的 Job 数量，包含执行前校验、PostRun 产物上传和已取消但仍在退出的 Job；心跳始终发送该字段（包括 0），不用于替代调度器资源核算 |
 | `allocatable` | Runner 上报的可调度资源容量，当前 `cpu`、`memory` 与 `capacity` 一致，`ephemeral-storage` 为 runner 工作目录所在文件系统的可用空间 |
 | `addresses` | 当前 runner agent 上报 Hostname，并在发现非 loopback 地址时上报 InternalIP |
 | `info` | OS、内核、架构、agent 版本；当前 runner agent 暂不主动填充运行时版本 |

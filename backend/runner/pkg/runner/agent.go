@@ -380,9 +380,13 @@ func (a *Agent) patchRunnerPhase(ctx context.Context, phase string) error {
 }
 
 func (a *Agent) currentStatus() gateway.RunnerStatus {
+	a.mu.Lock()
+	activeJobs := int32(len(a.executions))
+	a.mu.Unlock()
 	now := time.Now().UTC()
 	capacity, allocatable := nodeResources(workDir(a.cfg.RootDir))
 	return gateway.RunnerStatus{
+		ActiveJobs:  activeJobs,
 		Phase:       "Online",
 		Capacity:    capacity,
 		Allocatable: allocatable,

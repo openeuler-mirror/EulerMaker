@@ -2153,6 +2153,13 @@ func schema_ebs_api_ebs_v1_RunnerStatus(ref common.ReferenceCallback) common.Ope
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"activeJobs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ActiveJobs counts local executions, including verification, PostRun, and cancelled jobs still stopping.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
 					"phase": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"string"},

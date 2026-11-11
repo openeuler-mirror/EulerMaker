@@ -415,6 +415,8 @@ type RunnerSpec struct {
 }
 
 type RunnerStatus struct {
+	// ActiveJobs counts local executions, including verification, PostRun, and cancelled jobs still stopping.
+	ActiveJobs  int32              `json:"activeJobs,omitempty"`
 	Phase       RunnerPhase        `json:"phase,omitempty"`
 	Conditions  []metav1.Condition `json:"conditions,omitempty"`
 	Capacity    map[string]string  `json:"capacity,omitempty"`

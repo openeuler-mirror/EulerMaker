@@ -62,6 +62,9 @@ func ValidateRunnerDelete(obj *ebsv1.Runner) field.ErrorList {
 
 func ValidateRunnerStatusUpdate(newObj, oldObj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
+	if newObj.Status.ActiveJobs < 0 {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("status", "activeJobs"), newObj.Status.ActiveJobs, "must be non-negative"))
+	}
 	phase := newObj.Status.Phase
 	if phase == "" {
 		allErrs = append(allErrs, field.Required(field.NewPath("status", "phase"), "must be Online, Offline or Evicted"))
