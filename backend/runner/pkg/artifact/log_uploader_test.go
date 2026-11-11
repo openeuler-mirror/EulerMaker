@@ -20,6 +20,43 @@ type recordedChunk struct {
 	data     []byte
 }
 
+func TestCompletedRemoteLogRecoveryChecksSpool(t *testing.T) {
+	for _, match := range []bool{true, false} {
+		root := t.TempDir()
+		dir := filepath.Join(root, "logs", "project", "job")
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "combined.log")
+		if err := os.WriteFile(path, []byte("finished log\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		sum, size, err := hashFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !match {
+			sum = "different"
+		}
+		remote := &fakeLogRemote{status: &LogStatus{State: "Completed", CommittedBytes: size, FinalSize: &size, FinalSHA256: sum, NextSequence: 1}}
+		factory := &LogFactory{Remote: remote, RootDir: root}
+		sink, err := factory.Open(gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err = sink.Complete(ctx)
+		cancel()
+		sink.Abort()
+		if (err == nil) != match {
+			t.Fatalf("match=%v err=%v", match, err)
+		}
+		if len(remote.chunks) != 0 {
+			t.Fatal("appended to sealed log")
+		}
+	}
+}
+
 type fakeLogRemote struct {
 	mu             sync.Mutex
 	chunks         []recordedChunk

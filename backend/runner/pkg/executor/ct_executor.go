@@ -24,15 +24,16 @@ const (
 )
 
 type CTExecutor struct {
-	WorkDir         string
-	ResultRoot      string
-	RunnerName      string
-	Runtime         containerruntime.Runtime
-	Scripts         *ScriptCache
-	LogFactory      artifact.JobLogSinkFactory
-	ResolvePayload  func(gateway.JobResource) (string, error)
-	LogDrainTimeout time.Duration
-	StopGracePeriod time.Duration
+	WorkDir          string
+	ResultRoot       string
+	RunnerName       string
+	Runtime          containerruntime.Runtime
+	Scripts          *ScriptCache
+	LogFactory       artifact.JobLogSinkFactory
+	ResolvePayload   func(gateway.JobResource) (string, error)
+	LogDrainTimeout  time.Duration
+	StopGracePeriod  time.Duration
+	RecordCompletion func(gateway.JobResource, error) error
 }
 
 type ContainerRuntimeSpec struct {
@@ -250,6 +251,15 @@ func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (stri
 		logErr = fmt.Errorf("drain container logs: timeout after %s", drainTimeout)
 	}
 	cancelLogs()
+	completionErr := errors.Join(waitErr, logErr)
+	if exitCode != 0 {
+		completionErr = errors.Join(completionErr, fmt.Errorf("container exited with code %d", exitCode))
+	}
+	if e.RecordCompletion != nil {
+		if err := e.RecordCompletion(job, completionErr); err != nil {
+			return resultRoot, errors.Join(completionErr, fmt.Errorf("persist execution completion: %w", err))
+		}
+	}
 	if logSink != nil {
 		completeCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 		_, completeErr := logSink.Complete(completeCtx)

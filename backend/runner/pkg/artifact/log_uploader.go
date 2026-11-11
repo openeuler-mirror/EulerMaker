@@ -254,6 +254,13 @@ func (s *artifactLogSink) run(ctx context.Context) {
 		s.setWorkerErr(fmt.Errorf("query log status: %w", err))
 		return
 	}
+	if status.State == "Completed" {
+		sum, size, err := hashFile(filepath.Join(s.dir, "combined.log"))
+		if err != nil || status.FinalSize == nil || *status.FinalSize != size || status.FinalSHA256 != sum || status.CommittedBytes != size {
+			s.setWorkerErr(errors.New("completed remote log does not match local spool"))
+			return
+		}
+	}
 	s.mu.Lock()
 	if status.CommittedBytes > s.produced {
 		s.workerErr = fmt.Errorf("remote log offset %d exceeds local spool %d", status.CommittedBytes, s.produced)

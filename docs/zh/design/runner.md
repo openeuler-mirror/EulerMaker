@@ -353,11 +353,11 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 5. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
 6. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 JSON 参数提供给任务入口
 7. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
-8. 将 Job 保持为 phase=Running 并推进到 stage=PostRun，封账日志；业务执行失败或超时也必须尝试封账已有日志
+8. 将执行结果及 PostRun 状态意图按 Job UID 持久化到本地，随后封账日志，并将 Job 保持为 phase=Running、推进到 stage=PostRun；业务执行失败或超时也必须尝试封账已有日志
 9. 业务执行成功时收集并上传产物，完成 JobUploadManifest
 10. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Succeeded 和 Artifact 摘要
 11. 业务执行、必需日志封账、必需产物上传或清单封账失败时更新 phase=Failed，并保留明确的失败原因和已完成 Artifact 摘要
-12. 清理执行环境和已确认的本地上传状态；Runner 保持 `Online`
+12. 服务端终态确认后清理本地完成记录及上传状态；产物上传失败时沿用原保留期。Runner 保持 `Online`
 ```
 
 Job status 使用当前数据模型：
@@ -417,7 +417,7 @@ containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默
 
 创建容器时持久化归属标签和可写快照；启动前订阅退出结果，stdout/stderr 由 shim 合并落盘到 `${rootDir}/containerd/{namespace}/{containerID}.log`。Runner 跟读并复用既有日志上传流程。进程退出后删除 task 以排空 shim 输出，再完成日志读取；执行器结束时清理容器元数据、可写快照和运行时日志，不删除镜像缓存。停止操作先发送 SIGTERM，宽限期结束后 SIGKILL 并确认退出；启动响应丢失时同样查询、停止并清理 task。
 
-启动恢复仅处理所选后端、namespace 中属于本 Runner 的容器，沿用 8.6 的恢复规则。切换后端或 namespace 前应排空原后端任务。containerd 模式需要宿主机 socket、快照文件访问及挂载权限；容器部署须同路径挂载 Runner 根目录和 containerd 存储目录。namespace 不提供安全隔离，运行时日志无自动轮转，部署侧需监控磁盘。
+启动恢复仅处理所选后端、namespace 中属于本 Runner 的容器，沿用 8.6、8.7 的恢复规则。切换后端或 namespace 前应排空原后端任务。containerd 模式需要宿主机 socket、快照文件访问及挂载权限；容器部署须同路径挂载 Runner 根目录和 containerd 存储目录。namespace 不提供安全隔离，运行时日志无自动轮转，部署侧需监控磁盘。
 
 推荐的容器生命周期：
 
@@ -638,13 +638,25 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 中止与遗留目录清理遵循以下规则：
 
 - 取消执行后，等待容器或进程停止、日志采集与上传 worker 退出、PostRun 产物上传返回，才移除本地活动执行记录。日志排空超时后取消采集并等待退出；执行器所有退出路径都停止日志上传 worker、关闭 spool 文件。
-- 取消路径退出后使用独立超时 GET 确认 Job：`Aborted` 或 404 时立即删除当前 Job 的 `work`、`results`、`logs`、`uploads` 和清理标记；不需要先写新标记，磁盘满也可执行。仅 Runner 停机或 context 取消不能证明 Job 已中止，非终态或查询失败时保留可恢复数据。
-- 完成容器恢复后启动一次扫描，随后每 10 分钟扫描上述四类目录；按 Project + Job name 去重，即使 work 已不存在，也能发现其他残留。
+- 取消路径退出后使用独立超时 GET 确认 Job：`Aborted` 或 404 时立即删除当前 Job 的 `work`、`results`、`logs`、`uploads`、`executions` 和清理标记；不需要先写新标记，磁盘满也可执行。仅 Runner 停机或 context 取消不能证明 Job 已中止，非终态或查询失败时保留可恢复数据。
+- 完成容器恢复后启动一次扫描，随后每 10 分钟扫描上述五类目录；按 Project + Job name 去重，即使 work 已不存在，也能发现其他残留。
 - 查询状态前在互斥锁内确认无本地活动执行，并登记该 Project + Job name 正在清理；同名执行注册和重复清理暂不进入。GET、标记恢复和目录删除均在锁外进行，所有退出路径释放清理占用，不阻塞其他 Job 的注册或取消。
 - `Aborted` 或 404 按上述规则清理；`Succeeded` 立即清理全部本地目录，即使没有清理标记。`Failed` 先清理 work，已有标记沿用原期限；无标记时按 `endTime` 恢复 `createdAt`，按 `endTime + artifact-failed-retention` 恢复 `notBefore`，到期后清理。重复扫描或重启不延长已有期限。缺少有效 `endTime` 或标记损坏时保留其余数据并告警，不猜测保留期。
 - 清理失败只记录告警，保留剩余目录供下一轮扫描重试，不改变 Job 终态，也不删除 Artifact Manager 中已接收的数据。最终清理必须限定在当前 Job 的规范化目录内，禁止跟随符号链接或跨越 `rootDir`。
 
-### 8.6 Job 主动中止
+### 8.6 执行完成后的状态恢复
+
+- 在容器退出且日志采集停止后、日志封账前，原子写入 `${rootDir}/executions/{project}/{jobName}/{jobUID}.json`，同步文件和父目录。记录包含版本、UID、Runner、执行结束时间、PostRun 状态意图（含脚本结果和错误）及日志是否仍需封账。持久化失败则停止本次封账并报告错误。
+- 执行器返回后补存日志处理结果；普通产物收尾结束后，先持久化最终 Failed/Succeeded 状态意图（含 endTime 和上传失败标记），再回写服务端。状态尚未确认时保留完成记录及恢复所需数据。
+- List/Watch 启动任务时，先 GET 校验 UID、Runner、Running 和删除标记，再读取对应 UID 的完成记录。存在记录时只恢复日志、状态与产物收尾，不重新执行业务脚本，也不刷新 startTime。最终状态意图已经存在时只补写状态，不重复上传。记录损坏或身份不一致时停止恢复并告警，禁止回退到重新执行。
+- 日志仍待封账时从原 spool 恢复；远端已经 Completed，必须确认本地完整日志的大小、SHA-256 与远端封账信息一致，否则明确失败。不得向已封账日志追加新一轮执行输出。
+- PostRun 和最终状态采用 resourceVersion 条件写入；响应丢失先 GET 确认完整状态意图。暂时失败以 200ms 至 30s 的指数退避重试，每次重新写入前读取最新版本并核验身份、归属和终态。发现终态、删除或归属变化立即停止；400/403/422 结束本轮并保留记录。另有独立的 30 秒定期恢复检查，权限恢复后无需等待新的 Watch 事件。
+- 确认终态后删除完成记录；产物上传失败仍按原期限保留诊断数据。定期清理同时扫描 executions 目录，仅在 GET 确认终态或 404 且没有活动执行时清理遗留记录。
+- 本方案依赖 Runner 本地磁盘持久保存。容器退出到完成记录成功落盘之间仍存在崩溃窗口，不承诺跨容器运行时与文件系统的严格恰好一次执行。旧版本没有生成完成记录的任务不能凭已封账日志推断脚本结果。
+
+测试覆盖：封账前记录执行结果、记录失败阻止封账、502 后刷新版本重试、响应丢失后确认、403 后重启补写最终状态、中止/UID/归属/删除变化、损坏记录拒绝恢复，以及已封账日志摘要匹配与不匹配。
+
+### 8.7 Job 主动中止
 
 中止 API 和终态第一写入获胜规则以 [apiserver Job 主动中止](ebs-apiserver.md#job-主动中止) 为准。Runner 不调用 `/abort`，只消费服务端已经持久化的终态并执行停止/清理。
 
@@ -667,7 +679,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 #### 断线与重启恢复
 
 - Watch 重连先完整 List 并记录 resourceVersion，再 Watch；List 中终态 Job 也用于取消本地活动任务，而不只是筛选可启动任务。完整列表未出现的本地活动项逐一 GET：404 或 UID 不同则停止旧执行，读取失败保留并重试，不把一次 List 缺项当成确定删除。
-- Runner 重启先扫描带 Runner、Project、Job name 和 Job UID 标签的受管容器，将这些标签作为持久化执行身份，与服务端核对；不得仅依赖内存执行表。已 Aborted/其它终态或已删除的旧任务停止并清理，不恢复执行或普通产物上传；不能误杀非本 Runner 管理的容器。当前 CT 执行器不重接旧进程：确认移除受管旧容器后才启动 List/Watch，由最新 Running/PostRun 状态决定重新执行或继续上传；清理无法确认时启动失败，不接收新任务。
+- Runner 重启先扫描带 Runner、Project、Job name 和 Job UID 标签的受管容器，将这些标签作为持久化执行身份，与服务端核对；不得仅依赖内存执行表。已 Aborted/其它终态或已删除的旧任务停止并清理，不恢复执行或普通产物上传；不能误杀非本 Runner 管理的容器。当前 CT 执行器不重接旧进程：确认移除受管旧容器后才启动 List/Watch，优先按 8.6 的本地完成记录恢复；没有记录时才按最新 Running/PostRun 状态决定重新执行或继续上传。清理无法确认时启动失败，不接收新任务。
 - Runner 失联期间无法立即感知中止。Scheduler 可能在 Job 逻辑终态后释放账面占用，但 Runner 必须在实际退出前保留本地占用，并继续执行本地容量准入，避免旧进程尚未退出就超额运行新 Job。
 
 #### 测试

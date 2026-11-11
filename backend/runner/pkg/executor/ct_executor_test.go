@@ -21,6 +21,35 @@ import (
 
 type staticTokens struct{ token string }
 
+func TestCTExecutorRecordsCompletionBeforeLogSeal(t *testing.T) {
+	for _, persistFails := range []bool{false, true} {
+		sink := &recordingLogSink{}
+		called := false
+		root := t.TempDir()
+		e := &CTExecutor{WorkDir: filepath.Join(root, "work"), ResultRoot: filepath.Join(root, "results"), Runtime: &fakeContainerRuntime{exitCode: 1}, LogFactory: staticLogFactory{sink: sink}}
+		e.RecordCompletion = func(job gateway.JobResource, err error) error {
+			called = true
+			if sink.completed {
+				t.Error("log sealed before durable completion")
+			}
+			if err == nil {
+				t.Error("missing execution error")
+			}
+			if persistFails {
+				return errors.New("disk full")
+			}
+			return nil
+		}
+		job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}, Spec: gateway.JobSpec{RuntimeSpec: mustJSON(t, ContainerRuntimeSpec{Image: "test"})}}
+		if _, err := e.Execute(context.Background(), job); err == nil {
+			t.Fatal("expected failure")
+		}
+		if !called || sink.completed == persistFails {
+			t.Fatalf("called=%v sealed=%v persistFails=%v", called, sink.completed, persistFails)
+		}
+	}
+}
+
 func (s *staticTokens) Token(context.Context) (string, error) { return s.token, nil }
 
 func (s *staticTokens) RefreshAfterUnauthorized(context.Context, string) (string, error) {
