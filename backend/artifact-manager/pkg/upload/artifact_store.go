@@ -19,10 +19,44 @@ import (
 type Store struct {
 	root        string
 	mu          sync.RWMutex
+	jobs        map[string]*jobLock
 	logRecovery map[string]struct{}
 	subscribers map[string]map[chan LogEvent]struct{}
 	sealer      *Sealer
 	sealing     map[string]bool
+}
+
+type jobLock struct {
+	sync.Mutex
+	refs int
+}
+
+// retainJob counts holders and waiters so an in-use lock cannot be replaced.
+// Never wait for a Job lock while holding mu; mu only protects in-memory bookkeeping.
+func (s *Store) retainJob(project, job string) (*jobLock, func()) {
+	key := logKey(project, job, "")
+	s.mu.Lock()
+	lock := s.jobs[key]
+	if lock == nil {
+		lock = &jobLock{}
+		s.jobs[key] = lock
+	}
+	lock.refs++
+	s.mu.Unlock()
+	return lock, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.jobs, key)
+		}
+	}
+}
+
+func (s *Store) lockJob(project, job string) func() {
+	lock, release := s.retainJob(project, job)
+	lock.Lock()
+	return func() { lock.Unlock(); release() }
 }
 
 type LogEvent struct {
@@ -34,6 +68,7 @@ type LogEvent struct {
 func NewStore(root string) (*Store, error) {
 	s := &Store{
 		root:        root,
+		jobs:        make(map[string]*jobLock),
 		logRecovery: make(map[string]struct{}),
 		subscribers: make(map[string]map[chan LogEvent]struct{}),
 		sealing:     make(map[string]bool),
@@ -179,7 +214,7 @@ func (s *Store) persistArtifact(project, job string, a *Artifact) error {
 	return fileutil.AtomicJSON(s.artifactMeta(project, job, a.ID), a)
 }
 
-// readArtifact and readJobArtifacts are called with the store lock held, or during startup.
+// readArtifact and readJobArtifacts require the Job lock, or exclusive startup access.
 func (s *Store) readArtifact(project, job, id string) (*Artifact, error) {
 	for _, part := range []string{project, job, id} {
 		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, `/\`+"\x00") {
@@ -238,8 +273,8 @@ func sameUploadMetadata(a *Artifact, m UploadMetadata) bool {
 }
 
 func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSize int64) (*Artifact, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	rel, e := fileutil.SafeRelative(m.RelativePath)
 	if e != nil {
 		return nil, false, e
@@ -370,8 +405,8 @@ func (s *Store) BeginUpload(project, job, key string, m UploadMetadata, maxJobSi
 }
 
 func (s *Store) CompleteUpload(project, job string, a *Artifact, tmp string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	manifest, err := s.readManifest(project, job)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -400,22 +435,22 @@ func (s *Store) CompleteUpload(project, job string, a *Artifact, tmp string) err
 	return s.completeArtifact(project, job, a)
 }
 
-func (s *Store) UploadCommitted(a *Artifact) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *Store) UploadCommitted(project, job string, a *Artifact) bool {
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	return fileutil.VerifyFile(s.ArtifactPath(a), a.Size, a.SHA256) == nil
 }
 
 func (s *Store) FailUpload(project, job string, a *Artifact, code, msg string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	_ = s.failArtifact(project, job, a, code, msg)
 }
 
 // GetJobArtifact returns an artifact only when it belongs to the requested Job.
 func (s *Store) GetJobArtifact(project, job, id string) (*Artifact, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	a, err := s.readArtifact(project, job, id)
 	if err != nil {
 		return nil, false
@@ -431,8 +466,8 @@ func (s *Store) GetJobArtifact(project, job, id string) (*Artifact, bool) {
 }
 
 func (s *Store) ListArtifacts(project, job string, cat Category) ([]Artifact, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	var out []Artifact
 	artifacts, err := s.readJobArtifacts(project, job)
 	if err != nil {

@@ -14,6 +14,8 @@ func (s *Store) DeleteJob(project, job string) error {
 			return errors.New("invalid job location")
 		}
 	}
+	unlock := s.lockJob(project, job)
+	defer unlock()
 	if err := s.removeJobDirectory(project, job); err != nil {
 		return err
 	}

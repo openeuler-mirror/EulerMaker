@@ -72,14 +72,16 @@ func (s *Store) CompleteManifest(ctx context.Context, project, job, runner strin
 	r.Files = append([]ManifestFile(nil), r.Files...)
 	sort.Slice(r.Files, func(i, j int) bool { return r.Files[i].RelativePath < r.Files[j].RelativePath })
 	digest := ManifestDigest(r.Files)
-	s.mu.Lock()
+	guard, release := s.retainJob(project, job)
+	defer release()
+	guard.Lock()
 	old, err := s.readManifest(project, job)
 	if err != nil && !os.IsNotExist(err) {
-		s.mu.Unlock()
+		guard.Unlock()
 		return nil, err
 	}
 	if old != nil {
-		s.mu.Unlock()
+		guard.Unlock()
 		if old.State == ManifestCompleted && old.UploadDigest == digest {
 			return old, nil
 		}
@@ -87,21 +89,24 @@ func (s *Store) CompleteManifest(ctx context.Context, project, job, runner strin
 	}
 	record, err := s.readSeal(project, job)
 	if err != nil && !os.IsNotExist(err) {
-		s.mu.Unlock()
+		guard.Unlock()
 		return nil, err
 	}
 	if record != nil && record.UploadDigest != digest {
-		s.mu.Unlock()
+		guard.Unlock()
 		return nil, &SealError{"ManifestConflict", 409, false}
 	}
 	key := logKey(project, job, "")
-	if s.sealing[key] {
-		s.mu.Unlock()
+	s.mu.RLock()
+	sealing := s.sealing[key]
+	s.mu.RUnlock()
+	if sealing {
+		guard.Unlock()
 		return nil, &SealError{"ManifestInProgress", 409, true}
 	}
 	artifacts, err := s.validateSealInput(project, job, r.Files)
 	if err != nil {
-		s.mu.Unlock()
+		guard.Unlock()
 		return nil, err
 	}
 	fingerprint := s.sealer.fingerprint()
@@ -117,24 +122,26 @@ func (s *Store) CompleteManifest(ctx context.Context, project, job, runner strin
 			Done:               make(map[string]ManifestFile),
 		}
 		if err := fileutil.AtomicJSON(s.sealPath(project, job), record); err != nil {
-			s.mu.Unlock()
+			guard.Unlock()
 			return nil, &SealError{"StorageError", 503, true}
 		}
 	}
 	if record.SigningFingerprint != fingerprint {
-		s.mu.Unlock()
+		guard.Unlock()
 		return nil, &SealError{"SigningConfigurationChanged", 503, true}
 	}
+	s.mu.Lock()
 	s.sealing[key] = true
 	s.mu.Unlock()
+	guard.Unlock()
 	defer func() { s.mu.Lock(); delete(s.sealing, key); s.mu.Unlock() }()
 
 	final, err := s.prepareFiles(ctx, project, job, record, artifacts)
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	guard.Lock()
+	defer guard.Unlock()
 	if ctx.Err() != nil {
 		return nil, &SealError{"SigningBackendUnavailable", 503, true}
 	}
@@ -167,7 +174,7 @@ func (s *Store) CompleteManifest(ctx context.Context, project, job, runner strin
 	return m, nil
 }
 
-// validateSealInput runs under the Store lock and checks original upload receipts, never signed projections.
+// validateSealInput holds the Job lock and checks original upload receipts, never signed projections.
 func (s *Store) validateSealInput(project, job string, files []ManifestFile) ([]Artifact, error) {
 	if len(files) == 0 {
 		return nil, errors.New("invalid manifest")
@@ -267,8 +274,8 @@ func (s *Store) prepareFiles(ctx context.Context, project, job string, record *s
 }
 
 func (s *Store) GetManifest(p, j string) (*JobUploadManifest, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	unlock := s.lockJob(p, j)
+	defer unlock()
 	return s.readManifest(p, j)
 }
 
@@ -276,7 +283,7 @@ func (s *Store) manifestPath(project, job string) string {
 	return filepath.Join(s.root, "artifacts", project, "jobs", job, ".manifest.json")
 }
 
-// readManifest is called with the store lock held; only a missing file means the Job is unsealed.
+// readManifest requires the Job lock; only a missing file means the Job is unsealed.
 func (s *Store) readManifest(project, job string) (*JobUploadManifest, error) {
 	for _, part := range []string{project, job} {
 		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "/\\\x00") {

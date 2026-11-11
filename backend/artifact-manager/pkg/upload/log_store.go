@@ -22,7 +22,7 @@ func (s *Store) LogPaths(p, j string) (string, string, string) {
 		filepath.Join(dir, ".combined.index.jsonl"), filepath.Join(dir, ".combined.json")
 }
 
-// loadLog requires the write lock: interrupted writes may need recovery before use.
+// loadLog requires the Job lock: interrupted writes may need recovery before use.
 func (s *Store) loadLog(p, j string) (*LogStream, error) {
 	for _, part := range []string{p, j} {
 		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "/\\\x00") {
@@ -42,11 +42,14 @@ func (s *Store) loadLog(p, j string) (*LogStream, error) {
 		return nil, errors.New("log identity mismatch")
 	}
 	k := logKey(p, j, "combined")
-	if _, interrupted := s.logRecovery[k]; interrupted || l.State == LogFinalizing {
+	s.mu.RLock()
+	_, interrupted := s.logRecovery[k]
+	s.mu.RUnlock()
+	if interrupted || l.State == LogFinalizing {
 		if err := s.recoverLog(&l); err != nil {
 			return &l, err
 		}
-		delete(s.logRecovery, k)
+		s.markLogRecovery(k, false)
 	}
 	return &l, nil
 }
@@ -193,8 +196,8 @@ func bytesLines(data []byte) [][]byte {
 }
 
 func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum string) (*LogStream, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(p, j)
+	defer unlock()
 	k := logKey(p, j, "combined")
 	l, err := s.loadOrCreateLog(p, j, runner)
 	if err != nil {
@@ -222,7 +225,7 @@ func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum strin
 		return nil, errors.New("SequenceGap")
 	}
 	// Keep only a recovery marker on failure, never the LogStream metadata.
-	s.logRecovery[k] = struct{}{}
+	s.markLogRecovery(k, true)
 	f, e := os.OpenFile(body, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if e != nil {
 		return nil, e
@@ -254,8 +257,8 @@ func (s *Store) AppendLog(p, j, runner string, seq int64, data []byte, sum strin
 	if e = fileutil.AtomicJSON(meta, l); e != nil {
 		return nil, e
 	}
-	delete(s.logRecovery, k)
-	s.publishLocked(k, LogEvent{Sequence: seq, Data: append([]byte(nil), data...)})
+	s.markLogRecovery(k, false)
+	s.publish(k, LogEvent{Sequence: seq, Data: append([]byte(nil), data...)})
 	return l, nil
 }
 
@@ -276,8 +279,12 @@ func findLogRecord(path string, seq int64) (LogChunkRecord, error) {
 }
 
 func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]LogEvent, int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(p, j)
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	l, err := s.loadLog(p, j)
 	if err != nil {
 		return nil, 0, err
@@ -307,9 +314,13 @@ func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]LogEvent, int6
 		return nil, l.NextSequence, err
 	}
 	defer ix.Close()
+	// Open both files under the Job lock, then read only this committed snapshot.
+	// Append/rename/unlink cannot change the committed prefix of these open files.
+	unlock()
+	unlock = nil
 	var out []LogEvent
 	sc := bufio.NewScanner(ix)
-	for sc.Scan() {
+	for remaining := l.NextSequence; remaining > 0 && sc.Scan(); remaining-- {
 		var rec LogChunkRecord
 		if json.Unmarshal(sc.Bytes(), &rec) != nil {
 			return nil, l.NextSequence, errors.New("corrupted index")
@@ -327,10 +338,31 @@ func (s *Store) ReplayLog(p, j string, after int64, limit int) ([]LogEvent, int6
 }
 
 func (s *Store) GetLog(p, j string) (*LogStream, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(p, j)
+	defer unlock()
 	l, err := s.loadLog(p, j)
 	return l, err == nil
+}
+
+// OpenLog pins the body matching this metadata snapshot before completion can rename it.
+// The caller closes the file and reads at most CommittedBytes without holding a Job lock.
+func (s *Store) OpenLog(p, j string) (*os.File, *LogStream, error) {
+	unlock := s.lockJob(p, j)
+	defer unlock()
+	l, err := s.loadLog(p, j)
+	if err != nil {
+		return nil, nil, err
+	}
+	body, _, _ := s.LogPaths(p, j)
+	if l.State == LogCompleted {
+		a, err := s.readArtifact(p, j, l.ArtifactID)
+		if err != nil {
+			return nil, nil, err
+		}
+		body = s.ArtifactPath(a)
+	}
+	f, err := os.Open(body)
+	return f, l, err
 }
 
 func (s *Store) Subscribe(p, j string) (chan LogEvent, func()) {
@@ -355,7 +387,19 @@ func (s *Store) Subscribe(p, j string) (chan LogEvent, func()) {
 	}
 }
 
-func (s *Store) publishLocked(k string, e LogEvent) {
+func (s *Store) markLogRecovery(key string, interrupted bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if interrupted {
+		s.logRecovery[key] = struct{}{}
+	} else {
+		delete(s.logRecovery, key)
+	}
+}
+
+func (s *Store) publish(k string, e LogEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for ch := range s.subscribers[k] {
 		select {
 		case ch <- e:
@@ -370,8 +414,8 @@ func (s *Store) publishLocked(k string, e LogEvent) {
 }
 
 func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifact, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lockJob(p, j)
+	defer unlock()
 	k := logKey(p, j, "combined")
 	l, err := s.loadOrCreateLog(p, j, runner)
 	if err != nil {
@@ -451,7 +495,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	if e = os.MkdirAll(filepath.Dir(final), 0750); e != nil {
 		return nil, e
 	}
-	s.logRecovery[k] = struct{}{}
+	s.markLogRecovery(k, true)
 	l.State, l.ArtifactID, l.FinalSize, l.FinalSHA256, l.UpdatedAt = LogFinalizing, id, &r.Size, r.SHA256, now
 	if e = s.persistArtifact(p, j, a); e != nil {
 		return nil, e
@@ -475,7 +519,7 @@ func (s *Store) CompleteLog(p, j, runner string, r CompleteLogRequest) (*Artifac
 	if e = fileutil.AtomicJSON(meta, l); e != nil {
 		return nil, e
 	}
-	delete(s.logRecovery, k)
-	s.publishLocked(k, LogEvent{Complete: a})
+	s.markLogRecovery(k, false)
+	s.publish(k, LogEvent{Complete: a})
 	return a, nil
 }

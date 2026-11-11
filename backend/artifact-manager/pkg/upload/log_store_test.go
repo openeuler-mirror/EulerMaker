@@ -2,13 +2,276 @@ package upload
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"artifact-manager/pkg/fileutil"
 )
+
+func TestLogOperationsUseJobLock(t *testing.T) {
+	for _, operation := range []string{"append", "query", "content", "replay", "complete", "manifest", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			s, err := NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.AppendLog("project", "job", "runner", 0, []byte("log"), hashText("log")); err != nil {
+				t.Fatal(err)
+			}
+			var manifest CompleteManifestRequest
+			if operation == "manifest" {
+				a, err := s.CompleteLog("project", "job", "runner", CompleteLogRequest{
+					Stream: "combined", LastSequence: 0, Size: 3, SHA256: hashText("log"),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifest.Files = []ManifestFile{{
+					ArtifactID: a.ID, RelativePath: a.RelativePath, Category: a.Category, Size: a.Size, SHA256: a.SHA256,
+				}}
+			}
+			var once sync.Once
+			unlock := s.lockJob("project", "job")
+			release := func() { once.Do(unlock) }
+			defer release()
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				switch operation {
+				case "append":
+					_, err = s.AppendLog("project", "job", "runner", 1, []byte("more"), hashText("more"))
+				case "query":
+					if _, ok := s.GetLog("project", "job"); !ok {
+						err = fmt.Errorf("log missing")
+					}
+				case "content":
+					var f *os.File
+					f, _, err = s.OpenLog("project", "job")
+					if f != nil {
+						f.Close()
+					}
+				case "replay":
+					_, _, err = s.ReplayLog("project", "job", -1, 10)
+				case "complete":
+					_, err = s.CompleteLog("project", "job", "runner", CompleteLogRequest{
+						Stream: "combined", LastSequence: 0, Size: 3, SHA256: hashText("log"),
+					})
+				case "manifest":
+					_, err = s.CompleteManifest(context.Background(), "project", "job", "runner", manifest)
+				case "delete":
+					err = s.DeleteJob("project", "job")
+				}
+				done <- err
+			}()
+			waitJobLockRefs(t, s, "project", "job", 2)
+			select {
+			case err := <-done:
+				t.Fatalf("operation bypassed Job lock: %v", err)
+			default:
+			}
+			// The same Job name in a different Project must remain independent.
+			other := make(chan error, 1)
+			go func() {
+				_, err := s.AppendLog("other-project", "job", "runner", 0, []byte("log"), hashText("log"))
+				if err == nil {
+					_, err = s.CompleteLog("other-project", "job", "runner", CompleteLogRequest{
+						Stream: "combined", LastSequence: 0, Size: 3, SHA256: hashText("log"),
+					})
+				}
+				other <- err
+			}()
+			waitLogOperation(t, other)
+			release()
+			waitLogOperation(t, done)
+			s.mu.RLock()
+			locks := len(s.jobs)
+			s.mu.RUnlock()
+			if locks != 0 {
+				t.Fatalf("idle Job locks retained: %d", locks)
+			}
+		})
+	}
+}
+
+func TestOpenLogSnapshotSurvivesAppendCompletionAndDeletion(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendLog("project", "job", "runner", 0, []byte("first"), hashText("first")); err != nil {
+		t.Fatal(err)
+	}
+	f, snapshot, err := s.OpenLog("project", "job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := s.AppendLog("project", "job", "runner", 1, []byte("next"), hashText("next")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompleteLog("project", "job", "runner", CompleteLogRequest{
+		Stream: "combined", LastSequence: 1, Size: 9, SHA256: hashText("firstnext"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completed, state, err := s.OpenLog("project", "job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer completed.Close()
+	if err := s.DeleteJob("project", "job"); err != nil {
+		t.Fatal(err)
+	}
+	content, err := io.ReadAll(io.NewSectionReader(f, 0, snapshot.CommittedBytes))
+	if err != nil || string(content) != "first" || snapshot.NextSequence != 1 {
+		t.Fatalf("open snapshot: %q, %+v, %v", content, snapshot, err)
+	}
+	content, err = io.ReadAll(io.NewSectionReader(completed, 0, state.CommittedBytes))
+	if err != nil || string(content) != "firstnext" || state.State != LogCompleted {
+		t.Fatalf("completed snapshot: %q, %+v, %v", content, state, err)
+	}
+}
+
+func TestReplayLogDuringAppendAndCompletion(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendLog("project", "job", "runner", 0, []byte("log"), hashText("log")); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for seq := int64(1); seq < 16; seq++ {
+			if _, err := s.AppendLog("project", "job", "runner", seq, []byte("log"), hashText("log")); err != nil {
+				done <- err
+				return
+			}
+		}
+		_, err := s.CompleteLog("project", "job", "runner", CompleteLogRequest{
+			Stream: "combined", LastSequence: 15, Size: 48, SHA256: hashText(string(bytes.Repeat([]byte("log"), 16))),
+		})
+		done <- err
+	}()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		events, next, err := s.ReplayLog("project", "job", -1, 32)
+		if err != nil || int64(len(events)) != next {
+			t.Fatalf("replay crossed snapshot boundary: events=%d next=%d err=%v", len(events), next, err)
+		}
+		for i, event := range events {
+			if event.Sequence != int64(i) || string(event.Data) != "log" {
+				t.Fatalf("invalid committed event: %+v", event)
+			}
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			return
+		case <-deadline.C:
+			t.Fatal("append or completion blocked by replay")
+		default:
+		}
+	}
+}
+
+func waitJobLockRefs(t *testing.T, s *Store, project, job string, count int) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		s.mu.RLock()
+		lock := s.jobs[logKey(project, job, "")]
+		ready := lock != nil && lock.refs == count
+		s.mu.RUnlock()
+		if ready {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("operation did not acquire a Job lock reference")
+		case <-tick.C:
+		}
+	}
+}
+
+func waitLogOperation(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Job operation blocked")
+	}
+}
+
+func TestConcurrentLogRetriesAndSubscriptions(t *testing.T) {
+	s, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const jobs = 8
+	done := make(chan error, jobs)
+	for i := range jobs {
+		go func() {
+			job := fmt.Sprintf("job-%d", i)
+			ch, unsubscribe := s.Subscribe("project", job)
+			defer unsubscribe()
+			for seq := range int64(3) {
+				// Concurrent retries must commit exactly one body/index entry per sequence.
+				attempts := make(chan error, 4)
+				for range 4 {
+					go func() {
+						_, err := s.AppendLog("project", job, "runner", seq, []byte("log"), hashText("log"))
+						attempts <- err
+					}()
+				}
+				for range 4 {
+					if err := <-attempts; err != nil {
+						done <- err
+						return
+					}
+				}
+			}
+			_, err := s.CompleteLog("project", job, "runner", CompleteLogRequest{
+				Stream: "combined", LastSequence: 2, Size: 9, SHA256: hashText("logloglog"),
+			})
+			if err == nil {
+				events, next, replayErr := s.ReplayLog("project", job, -1, 10)
+				if replayErr != nil || next != 3 || len(events) != 3 || len(ch) != 4 {
+					err = fmt.Errorf("replay/events for %s: next=%d events=%d live=%d err=%v", job, next, len(events), len(ch), replayErr)
+				}
+			}
+			unsubscribe()
+			if err == nil {
+				err = s.DeleteJob("project", job)
+			}
+			done <- err
+		}()
+	}
+	for range jobs {
+		waitLogOperation(t, done)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.jobs) != 0 || len(s.logRecovery) != 0 || len(s.subscribers) != 0 {
+		t.Fatalf("retained state: locks=%d recovery=%d subscribers=%d", len(s.jobs), len(s.logRecovery), len(s.subscribers))
+	}
+}
 
 func TestJobLogLayoutSurvivesRestartAndCompletion(t *testing.T) {
 	root := t.TempDir()
@@ -279,9 +542,9 @@ func TestLogSubscriberCleanup(t *testing.T) {
 	ch, unsubscribe := s.Subscribe("project", "job")
 	k := logKey("project", "job", "combined")
 	for i := 0; i <= cap(ch); i++ {
-		s.publishLocked(k, LogEvent{Sequence: int64(i)})
+		s.publish(k, LogEvent{Sequence: int64(i)})
 	}
-	// A slow subscriber is already closed by publishLocked; cleanup remains safe.
+	// A slow subscriber is already closed by publish; cleanup remains safe.
 	unsubscribe()
 	unsubscribe()
 	if len(s.subscribers) != 0 {

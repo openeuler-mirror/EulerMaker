@@ -96,24 +96,31 @@ Artifact（包含上传幂等信息）和 Job 上传清单均以元数据文件�
 
 ### 3.3 并发与锁模型
 
-以下为单可写实例的并发边界。“Job/日志流/仓库粒度”描述业务互斥范围，不代表实现了同名的独立互斥锁。
+以下为单可写实例的并发边界。上传存储按 `(project, jobName)` 使用独立 Job 锁；仓库与发布模块仍使用各自 Manager 的锁。
 
 | 保护对象 | 当前同步方式 | 锁内操作与边界 |
 |---|---|---|
-| 普通上传请求 | Store 全局读写锁下登记 Pending，相同幂等作用域的进行中请求返回冲突 | 配额与路径检查、最终提交在 Store 锁内；网络正文流式写入不持有 Store 锁，不存在贯穿上传全程的独立键锁 |
-| Artifact / Manifest 元数据 | `upload.Store` 全局读写锁；同一 Job 的封账执行去重 | 锁内冻结输入及提交清单；签名、验签和正文摘要计算在锁外执行，完成后重新核验冻结输入 |
-| 封账签名 | 服务级有界 worker pool，默认 8 个 worker | 所有 Job 共用并发上限；队列有界，满载返回可重试错误，不持 Store 锁排队 |
-| 日志流 | 同一个 Store 全局写锁 | chunk 追加、索引/汇总更新、恢复、重放和封账可能持锁执行文件 I/O；不同 Job 并非完全独立并发 |
-| Job 数据删除 | 文件删除不持 Store 锁，释放订阅和恢复标记时加锁 | 调用方先停止该 Job 的写入和依赖任务；接口同步返回，不创建后台删除任务 |
+| 普通上传请求 | Job 锁下登记 Pending，相同幂等作用域的进行中请求返回冲突 | 配额与路径检查、最终提交在 Job 锁内；网络正文流式写入不持锁 |
+| Artifact / Manifest 元数据 | 与日志共用对应 Job 锁；同一 Job 的封账执行去重 | 锁内冻结输入及提交清单；签名、验签和清单文件摘要计算在锁外执行，完成后重新核验冻结输入 |
+| 封账签名 | 服务级有界 worker pool，默认 8 个 worker | 所有 Job 共用并发上限；队列有界，满载返回可重试错误，不持 Job 锁排队 |
+| 日志流 | 对应 Job 锁 | 追加、恢复和封账在 Job 锁内，磁盘 I/O 不持 Store 全局锁；重放取得已提交边界和文件句柄后释放 Job 锁读取 |
+| Job 数据删除 | 持对应 Job 锁删除文件，全局锁仅用于清理内存状态 | 与同 Job 的日志追加、日志封账和元数据提交串行；调用方仍须先停止写入和签名等依赖任务 |
 | 过程仓任务 | Repository Manager 全局读写锁及 `queued/running` 集合 | 提交、去重、状态落盘和队列标记受锁保护；物化和外部命令在锁外运行，完成后重新检查状态 |
 | 发布任务与 current | Release Manager 全局读写锁及任务集合 | 正文生成在锁外；状态提交与 current 切换在锁内，不同目标的激活也串行 |
 | 按 Build 删除仓库 | Manager 锁内检查活动任务并登记 Build 清理占用，递归文件删除在锁外执行 | 清理完成后锁内移除索引，其他 Build 可继续处理；完整协议见 13.2 |
 | 按 Build 停止仓库操作 | 依次持 Release Manager、Repository Manager 写锁持久化停止标记 | 与提交及激活串行；不持锁等待后台任务结束，尚有活动任务时返回 202 |
-| 鉴权、SSE | 认证缓存内部同步；订阅集合由 Store 锁保护 | 网络鉴权与 HTTP 流式发送不长期占用业务状态锁；慢订阅者断开，不反压上传 |
+| 鉴权、SSE | 认证缓存内部同步；订阅集合由 Store 全局锁保护 | 发布、关闭和移除 channel 串行；只做非阻塞发送，网络写入在锁外，慢订阅者断开 |
 
 跨模块调用先获取源数据快照，再进入本模块的状态临界区；13.2 的停止标记操作按 Release Manager → Repository Manager 固定顺序加锁，其余跨模块操作不嵌套持有两个 Manager 的锁。不在持有 Store 或 Repository Manager 锁时执行签名命令；Store 不回调上层 Manager。当前不存在跨进程锁，多个可写实例不能共享同一数据目录。
 
-正文生成与删除之间不通过持有全程锁来协调，具体竞态边界见 8.10。全局 Store 锁可能使慢磁盘、日志重放或封账影响其他 Job；细粒度锁优化属于后续工作，不能将配置的 worker 数直接等同于端到端并行度。
+Store 全局锁只保护 Job 锁表、日志恢复标记、封账执行标记和 SSE 订阅，不执行文件读写、摘要计算或磁盘同步。
+获取 Job 锁前先登记引用并释放全局锁，再等待 Job 锁；释放时先解锁 Job，再减少引用。引用计数包含持有者和等待者，
+归零即移除锁条目，不因历史 Job 增多而常驻全部锁。需要临时释放 Job 锁的 Manifest 封账在整个调用期间保留引用。
+禁止持全局锁等待 Job 锁，避免与 Job 锁内更新内存状态形成反向锁顺序。
+
+日志封账仍持对应 Job 锁校验全量 SHA-256，防止校验期间同 Job 追加或删除改变正文，但不再阻塞其他 Job。
+不同 Job 可并发执行，不代表磁盘吞吐没有上限；日志追加仍逐块同步，不能通过省略 fsync 换取并发。
+正文上传和签名不通过持有全程锁与删除协调，调用方的停止写入责任不变，具体竞态边界见 8.10。
 
 ## 四、文件归属与存储键
 
@@ -166,11 +173,11 @@ Job 根目录的 `.seal.json` 保存封账检查点，封账成功后移除；�
 
 签名不覆盖原始上传正文。临时副本放在 `${dataDir}/artifacts/{project}/jobs/{jobName}/.signing/`，验签并持久化后以不覆盖方式提交到同一 Job 下的 `.signed/{artifactID}.rpm`。`.signing/` 和 `.signed/` 均为保留目录，普通上传不得占用这两个目录及其子路径；两者与仓库位于同一文件系统，均不是公开目录，最终清单决定下载和物化选择原始正文还是签名正文。封账发布边界及清理见 6.2.1。
 
-Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `.artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Store 锁串行保护。
+Artifact 元数据按 Project、JobName、artifactID 直接定位文件，不保留全局 Artifact 缓存、归属索引或上传幂等索引。查询、配额、路径冲突和上传幂等判断只读取当前 Job 的 `.artifacts/` 目录；Manifest 封账和物化读取按清单中的 ID 读取对应文件。元数据仅在本次调用期间保留，读写及检查后写入仍由 Job 锁串行保护。
 
 启动时仅遍历 Job 的 `.artifacts/` 和 `logs/`，读取 Artifact 元数据及 `logs/.combined.json` 并执行恢复，跳过其它正文和嵌套目录，处理完即释放，不将历史产物或日志流状态常驻内存。`.manifest.json` 不在启动时加载，按 Project、JobName 定位读取，用完释放。
 
-上传前及提交正文前，在 Store 锁内检查 Manifest 和封账记录；输入冻结后不再允许增加或完成新的上传，已完成 Artifact 的相同上传请求仍返回原始回执。只有文件不存在才视为无记录，JSON 损坏、归属不匹配和 I/O 错误均阻止写入。清单 GET 对尚未成功封账返回 404，对读取失败返回存储错误，不返回空清单。
+上传前及提交正文前，在 Job 锁内检查 Manifest 和封账记录；输入冻结后不再允许增加或完成新的上传，已完成 Artifact 的相同上传请求仍返回原始回执。只有文件不存在才视为无记录，JSON 损坏、归属不匹配和 I/O 错误均阻止写入。清单 GET 对尚未成功封账返回 404，对读取失败返回存储错误，不返回空清单。
 
 元数据先写入临时文件并 `fsync`，再原子重命名，最后 `fsync` 父目录。首版只运行一个可写实例，避免在没有分布式锁的情况下并发修改同一 Artifact 或 Job 上传清单。
 
@@ -353,7 +360,7 @@ type LogStream struct {
 
 ### 5.4 上传幂等
 
-整文件上传的幂等键保存在 Artifact 元数据中，不创建独立幂等记录。上传时在 Store 锁内读取当前 Job 的 Artifact 元数据，按 `idempotencyKey` 查找已有记录；相同作用域和 key 只能对应一个 Artifact，重启后仍能识别重复请求。
+整文件上传的幂等键保存在 Artifact 元数据中，不创建独立幂等记录。上传时在 Job 锁内读取当前 Job 的 Artifact 元数据，按 `idempotencyKey` 查找已有记录；相同作用域和 key 只能对应一个 Artifact，重启后仍能识别重复请求。
 
 重复请求须与原 Artifact 的 `category`、`fileName`、规范化后的 `relativePath`、`contentType`、`size` 和 `sha256` 逐项一致；不比较 multipart boundary、header 顺序或文件正文。
 
@@ -539,12 +546,12 @@ Artifact 元数据持久化 `idempotencyKey` 和上传元数据，所在目录�
 
 整文件上传不是跨多个文件的原子事务。实现必须使用以下固定、可重放的提交顺序，以最终正文的原子 rename 作为正文提交点：
 
-1. 在 Store 锁内检查 `(project,jobName,idempotencyKey)` 并原子写入含上传元数据和最终 `StorageKey` 的 `Pending` Artifact；用 Pending 登记阻止重复上传，之后释放 Store 锁，锁范围见 3.3。
+1. 在 Job 锁内检查 `(project,jobName,idempotencyKey)` 并原子写入含上传元数据和最终 `StorageKey` 的 `Pending` Artifact；用 Pending 登记阻止重复上传，之后释放 Job 锁，锁范围见 3.3。
 2. 以独占方式创建 Job 目录下的 `.uploads/{artifactID}.tmp`，流式写入并计算大小和 SHA-256。
 3. 校验成功后对临时正文执行 `fdatasync`。
-4. 重新获取 Store 锁并检查 Manifest，允许提交时将临时正文原子 rename 到最终 `StorageKey`，随后 `fsync` 最终正文的父目录；该 rename 是正文提交点。
+4. 重新获取 Job 锁并检查 Manifest，允许提交时将临时正文原子 rename 到最终 `StorageKey`，随后 `fsync` 最终正文的父目录；该 rename 是正文提交点。
 5. 原子更新 Artifact 元数据为 `Completed`，设置 `CompletedAt` 并 `fsync` 元数据父目录。
-6. 释放 Store 锁，返回成功响应。
+6. 释放 Job 锁，返回成功响应。
 
 步骤 4 之后任何失败都不能删除最终正文；服务应返回可重试错误，由相同幂等键请求或启动恢复流程补齐元数据。步骤 4 之前失败则关闭并删除临时正文，将 Artifact 标记为 `Failed`，允许上传元数据相同的请求整文件重传。
 
@@ -583,7 +590,7 @@ Content-Type: application/json
 }
 ```
 
-请求中的大小和 SHA-256 始终来自原始上传回执，Runner 不负责生成或预测签名后的摘要。服务先在 Store 锁内对 `(project, jobName)` 执行输入校验，锁模型见 3.3：
+请求中的大小和 SHA-256 始终来自原始上传回执，Runner 不负责生成或预测签名后的摘要。服务先在 Job 锁内对 `(project, jobName)` 执行输入校验，锁模型见 3.3：
 
 1. Runner Token 仍然有效；使用 URL 的 Project 和 Job 定位元数据目录，已有 Manifest 的归属与该作用域一致。
 2. 清单内路径唯一，每个 Artifact ID 均在该 Job 的 `artifacts/` 目录中解析；Artifact 本身不包含 project、jobName 字段。
@@ -610,10 +617,10 @@ Content-Type: application/json
 #### 6.2.1 签名、提交与恢复
 
 1. 校验通过后先原子持久化 `.seal.json`，记录规范化的原始文件集合、`uploadDigest`、签名指纹及已完成文件的最终大小和摘要。它是内部恢复记录，不是另一个可选 Manifest；同一 Job 仅一个冻结输入，同输入失败可重试，不允许替换输入或密钥。
-2. 释放 Store 锁，将 `category=artifact`、位于 `packages/` 下且扩展名为 `.rpm`（不区分大小写）的二进制 RPM 和 SRPM 纳入签名。其他产物和日志不签名；格式非法的 RPM 明确失败。只包含日志的清单无需调用签名后端。
+2. 释放 Job 锁，将 `category=artifact`、位于 `packages/` 下且扩展名为 `.rpm`（不区分大小写）的二进制 RPM 和 SRPM 纳入签名。其他产物和日志不签名；格式非法的 RPM 明确失败。只包含日志的清单无需调用签名后端。
 3. 每个任务流式复核原始大小和摘要，创建不共享 inode 的私有副本，签名、验签并确认完整密钥指纹。复核 NEVRA、架构、来源 spec、Provides 和 Requires 未改变，计算最终大小和 SHA-256。签名后副本也受单文件和 Job 配额限制，不一次性读入内存。
 4. 每个成功副本 fsync 后以不覆盖语义提交到 `.signed`，再原子保存该文件的恢复进度。已有副本只能经验签、身份及摘要核验后复用；已记录进度的副本丢失或损坏时明确失败，不重新签名替换。不能仅凭文件存在判断成功，也不能对已提交副本再次原地签名。
-5. 所有文件成功后重新获取 Store 锁，核对冻结输入、签名指纹与全部最终文件，从最终元数据生成 Manifest。原子写入 `.manifest.json` 是唯一发布点；此前签名副本不可公开下载或用于物化，之后不可变。原始 Artifact 保留供上传幂等校验，完成响应及后续 GET 返回相同 `uploadDigest` 和最终 `digest`。
+5. 所有文件成功后重新获取 Job 锁，核对冻结输入、签名指纹与全部最终文件，从最终元数据生成 Manifest。原子写入 `.manifest.json` 是唯一发布点；此前签名副本不可公开下载或用于物化，之后不可变。原始 Artifact 保留供上传幂等校验，完成响应及后续 GET 返回相同 `uploadDigest` 和最终 `digest`。
 6. 超时、断连、取消或崩溃不代表封账失败已确定。Runner 先 GET 唯一 Manifest：仅 `Completed` 且 `uploadDigest` 与本地原请求匹配才确认成功；404 时用原请求重试，不把签名后的文件摘要与本地未签名文件逐项比较。服务不因重复请求创建第二套签名任务。
 7. 重启不加载历史 Manifest 常驻内存。下一次相同完成请求按需读取 `.seal.json` 恢复，已提交 Manifest 优先返回；已提交签名副本但恢复记录未更新时核验后补记，未提交临时副本可重建。当前配置指纹与冻结指纹不一致时返回 `503 SigningConfigurationChanged / retryable=true`，等待恢复配置，不改签名策略。
 
@@ -1266,15 +1273,19 @@ ${dataDir}/artifacts/{project}/jobs/{jobName}/logs/.combined.json
 
 `.combined.index.jsonl` 是 sequence、字节范围和 chunk 摘要的持久化索引；`.combined.json` 只保存 `LogStream` 的小型汇总状态，不重复保存最近 chunk 列表。日志正文只追加到一个活动文件，不把每个 chunk 保存成长期独立对象。
 
-查询、追加、重放和封账按需读取 `.combined.json`，在 Store 锁内完成读取、校验及状态写入。首次追加前先持久化 Open 元数据，保证正文或索引写入中断后仍可恢复。内存只保留写入中断的轻量恢复标记；下一次访问先按索引校准正文和进度，恢复成功后删除标记。正常请求不重复扫描完整索引，Finalizing 状态按封账恢复规则处理。
+查询、追加、重放和封账按需读取 `.combined.json`，在 Job 锁内完成读取、校验及状态写入。首次追加前先持久化 Open 元数据，保证正文或索引写入中断后仍可恢复。内存只保留写入中断的轻量恢复标记；下一次访问先按索引校准正文和进度，恢复成功后删除标记。正常请求不重复扫描完整索引，Finalizing 状态按封账恢复规则处理。
+
+正文查询在 Job 锁内取得元数据并打开对应正文，避免读取元数据后正文被封账 rename 导致短暂 404；
+释放锁后仅发送快照中的 `committedBytes`。重放同样在锁内打开正文和索引，锁外最多读取快照中的 `nextSequence` 条索引，
+不混入随后追加或未提交的块。已打开文件允许本次读取继续完成，网络传输不阻塞同 Job 的追加、封账或删除。
 
 SSE 仅保留活跃连接的订阅通道，最后一个连接退出或被移除后删除对应订阅条目，不保留历史 Job 的空订阅表。
 
 接收新 chunk 时，提交顺序固定为：
 
-1. 将解压后的正文追加到 `combined.log`，执行 `fdatasync`。
-2. 将一条带换行符的完整 JSON 记录追加到 `.combined.index.jsonl`，执行 `fdatasync`。
-3. 原子更新 `.combined.json` 中的 `nextSequence`、`committedBytes` 和 `updatedAt`，并 `fsync` 父目录。
+1. 将解压后的正文追加到 `combined.log`，执行 `fsync`。
+2. 将一条带换行符的完整 JSON 记录追加到 `.combined.index.jsonl`，执行 `fsync`。
+3. 将 `.combined.json` 的新 `nextSequence`、`committedBytes` 和 `updatedAt` 写入临时文件并 `fsync`，原子 rename 后 `fsync` 父目录。
 4. 只有以上步骤全部成功后才向 Runner 返回确认。
 
 `.combined.index.jsonl` 是已提交 chunk 边界的事实来源，`.combined.json` 是可重建的汇总和状态来源。只有正文已写入、对应完整索引未持久化的尾部才需要截断。完整索引落盘后，即使步骤 3 未完成或响应丢失，也保留该 chunk 并从索引重建汇总；Runner 重试时按 sequence、大小和摘要确认幂等结果。索引残缺和正文短缺的处理统一见 10.2.6。
@@ -1412,7 +1423,7 @@ Content-Type: application/json
 }
 ```
 
-服务端在 Store 锁内对目标日志流封账（锁范围见 3.3），并执行：
+服务端在 Job 锁内对目标日志流封账（锁范围见 3.3），并执行：
 
 1. 重新校验 Runner Token 的签名、有效期和 `type=runner`。
 2. 检查 `nextSequence == lastSequence + 1`，且没有 sequence 缺口。
@@ -1485,7 +1496,7 @@ Artifact Manager 必须确认响应中的 `identity.type=runner` 且 `identity.s
 | 上传 Artifact | 读取文件正文前校验 Token；提交 Artifact 前确认 Token 仍在有效期内 |
 | 完成 Job 上传清单 | 校验 Token，锁内冻结输入，锁外签名，锁内提交最终清单；不接受调用方指定签名策略 |
 | 追加日志、查询日志流状态 | 校验 Token；允许使用短期认证缓存 |
-| 完成日志流 | 重新校验 Token，在 Store 锁内完成目标日志流的摘要校验和封账 |
+| 完成日志流 | 重新校验 Token，在 Job 锁内完成目标日志流的摘要校验和封账 |
 
 SSE 和活动日志正文读取遵循第七章的公开查询策略，不使用 Runner Token；部署方必须通过网络边界、并发连接数、读取速率和带宽限制控制访问。若后续将构建日志调整为非公开数据，这两个接口必须统一接入用户或服务身份鉴权，不能依赖不可伪造的 URL。
 
@@ -1550,7 +1561,8 @@ DELETE /internal/v1/projects/{project}/jobs/{job}
 - 文件系统失败返回 `503 JobDataCleanupFailed`、`retryable=true` 和 `Retry-After: 5`。部分完成仍可重试：按固定 Job 目录继续清理，不依赖元数据枚举临时正文；重启后即使元数据已删除，也能清理该 Job 下的剩余文件。配置的数据根目录无法打开属于存储错误，不能当作 Job 不存在。
 - 未知响应可以重复同一 DELETE；资源缺失由接口以 `204` 表达。HTTP `404` 不能当作清理成功，它可能表示目标实例不支持该路由或地址配置错误。
 
-文件删除不持 Store 全局锁；成功后加锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
+文件删除持对应 Job 锁，不持 Store 全局锁；成功后短暂获取全局锁关闭该 Job 的 SSE 订阅并移除恢复标记和封账执行标记。
+接口不建立持久化删除墓碑，也不阻止后续重新上传，因此不能代替上层停止写入的保证。
 
 上层接入契约：仅由 Job Controller 为删除中的 OldJob 调用本接口，前提是源 Job 已消失且归档已确认、写入已停止、输入使用者已排空；源 Job 分支及 dry-run 不调用。只有 204 才允许移除 OldJob 的 `ebs.io/job-cleanup`，失败或未知时保留对象与 finalizer 重试。数据清理后 API 对象可能暂时仍在，不回滚重建文件。归档意图、迁移确认和上层停止归档写入的前提统一见 [apiserver 归档协议](ebs-apiserver.md#job-删除与归档-finalizer)，不能仅凭 DELETE 或 Watch 删除事件推断完成。
 
@@ -1753,6 +1765,8 @@ GET /readyz    # HTTP 监听后固定返回 200
 | Manifest 封账与在途上传竞争 | 6.2：输入冻结、原始/最终摘要分离、同输入重试、不同输入冲突、签名失败不封账及只含日志的清单 |
 | 签名与封账恢复 | 6.2.1：签名副本落盘前后崩溃、响应丢失、重启恢复、指纹变化、全局并发上限、队列满载、下载使用最终正文及清理竞争 |
 | 日志追加与丢失响应 | 10.2：同 sequence 相同内容可重放，完整索引已落盘而汇总未更新时能恢复确认 |
+| Job 锁隔离与生命周期 | 3.3：同 Job 的追加、查询、封账和删除串行；另一 Project 的同名 Job 不受阻塞；等待者计入引用，空闲锁条目释放；并发测试通过 race 检查 |
+| 日志并发读取与 SSE | 10.2：重放只返回捕获的已提交索引范围；已打开正文在追加、封账和删除后仍按快照边界读取；并发重试只发布一次 chunk 事件，订阅退出后移除 |
 | 日志异常与封账崩溃 | 10.2.5、10.2.6：覆盖残缺索引、正文短缺、空日志及正文移动后的中断，按既定规则恢复或标记损坏 |
 | 鉴权与缓存过期 | 第十一章：有效 Runner Token 可上传，过期缓存不能延长 Token 有效期；Gateway 暂不可达不能伪造认证成功 |
 | 队列满、重启与删除竞争 | 8.6、8.9、8.10：结果落盘失败保留 Creating 且不能提前确认排空；Deleting 失败运行期重试、队列去重、等待同标识运行任务退出，以及固定 trash 路径恢复 |
