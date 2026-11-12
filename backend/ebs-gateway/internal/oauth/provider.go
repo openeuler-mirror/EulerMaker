@@ -185,7 +185,6 @@ func (p *provider) request(req *http.Request, output any) error {
 
 type claims struct {
 	Subject           string `json:"sub"`
-	PreferredUsername string `json:"preferred_username"`
 	OpenEulerUsername string `json:"openeuler_username"`
 	Name              string `json:"name"`
 	Email             string `json:"email"`
@@ -258,10 +257,7 @@ func (p *provider) exchange(ctx context.Context, code string, state browserConte
 	if !validIdentity(identity) {
 		return identity, profile{}, failure(401, "OAuthAuthenticationFailed")
 	}
-	result := profile{Username: info.PreferredUsername, DisplayName: info.Name}
-	if result.Username == "" {
-		result.Username = info.OpenEulerUsername
-	}
+	result := profile{Username: info.OpenEulerUsername, DisplayName: info.Name}
 	if info.EmailVerified {
 		result.Email = info.Email
 	}

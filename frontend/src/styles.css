@@ -393,8 +393,7 @@ body.modal-open { overflow: hidden; }
 .build-history-item { width: 100%; display: flex; flex-direction: column; align-items: stretch; color: #536176; background: transparent; border-bottom: 1px solid #edf1f6; text-align: left; }
 .build-history-item:hover { background: #f6f9fd; }
 .build-history-item.active { background: #edf6ff; box-shadow: inset 3px 0 var(--blue); }
-.build-history-select { min-width: 0; flex: 0 1 auto; padding: 14px 0 14px 12px; display: block; color: inherit; background: transparent; border: 0; text-align: left; }
-.build-history-item.has-actions .build-history-select { padding-bottom: 8px; }
+.build-history-select { min-width: 0; flex: 0 1 auto; padding: 14px 0 0 12px; display: block; color: inherit; background: transparent; border: 0; text-align: left; }
 .build-history-select:focus-visible { position: relative; outline: 2px solid #9bc5f5; outline-offset: -2px; }
 .build-history-copy { flex: none; width: 26px; height: 26px; margin-top: 11px; padding: 0; display: grid; place-items: center; color: #728096; background: transparent; border: 0; border-radius: 5px; }
 .build-history-copy:hover:not(:disabled) { color: var(--blue); background: #eaf4ff; }
@@ -414,8 +413,9 @@ body.modal-open { overflow: hidden; }
 .build-history-item-type, .build-history-arch { flex: none; padding: 2px 6px; border-radius: 4px; color: #536176; background: #e8eef5; font-size: 13px; font-weight: 700; line-height: 18px; white-space: nowrap; }
 .build-history-item small, .build-history-item time { display: block; margin-top: 6px; color: #7e899a; font-size: 12px; }
 .build-history-item time { color: #9aa4b3; }
-.build-history-times { display: flex; gap: 12px; max-width: 100%; overflow-x: auto; }
-.build-history-times time { flex: none; white-space: nowrap; }
+.build-history-times { display: flex; flex-wrap: wrap; gap: 0 12px; min-width: 0; margin: 0 12px 14px; }
+.build-history-item.has-actions .build-history-times { margin-bottom: 8px; }
+.build-history-times time { flex: none; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .build-history-git-ref, .build-history-packages { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .build-history-git-ref code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: inherit; }
 .build-detail-panel .section-heading { flex-wrap: wrap; }
