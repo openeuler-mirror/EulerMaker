@@ -173,7 +173,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, p, j string) {
 	}
 	if e = s.store.CompleteUpload(p, j, a, tmp); e != nil {
 		recordFailure(r, "", e)
-		if !s.store.UploadCommitted(a) {
+		if !s.store.UploadCommitted(p, j, a) {
 			s.store.FailUpload(p, j, a, "StorageError", e.Error())
 		}
 		writeErr(w, r, 503, "StorageError", "storage unavailable", true, nil)

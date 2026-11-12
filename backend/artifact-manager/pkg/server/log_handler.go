@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -103,18 +102,7 @@ func (s *Server) logStatus(w http.ResponseWriter, r *http.Request, p, j string) 
 }
 
 func (s *Server) logContent(w http.ResponseWriter, r *http.Request, p, j string) {
-	l, ok := s.store.GetLog(p, j)
-	if !ok {
-		writeErr(w, r, 404, "NotFound", "log not found", false, nil)
-		return
-	}
-	body, _, _ := s.store.LogPaths(p, j)
-	if l.State == upload.LogCompleted {
-		if a, yes := s.store.GetJobArtifact(p, j, l.ArtifactID); yes {
-			body = s.store.ArtifactPath(a)
-		}
-	}
-	f, e := os.Open(body)
+	f, l, e := s.store.OpenLog(p, j)
 	if e != nil {
 		writeErr(w, r, 404, "NotFound", "log not found", false, nil)
 		return
