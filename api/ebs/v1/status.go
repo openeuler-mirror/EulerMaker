@@ -9,12 +9,10 @@ const (
 	ExecutionTypeHardware  ExecutionType = "hw"
 )
 
-// IsValid reports whether the execution type is supported by the API.
 func (t ExecutionType) IsValid() bool {
 	return t == ExecutionTypeContainer || t == ExecutionTypeVM || t == ExecutionTypeHardware
 }
 
-// ExecutionTypeValues returns all supported execution types.
 func ExecutionTypeValues() []string {
 	return []string{string(ExecutionTypeContainer), string(ExecutionTypeVM), string(ExecutionTypeHardware)}
 }
@@ -27,12 +25,10 @@ const (
 	TolerationExists TolerationOperator = "Exists"
 )
 
-// IsValid reports whether the operator is supported.
 func (o TolerationOperator) IsValid() bool {
 	return o == TolerationEqual || o == TolerationExists
 }
 
-// TolerationOperatorValues returns the supported nonempty operators.
 func TolerationOperatorValues() []string {
 	return []string{string(TolerationEqual), string(TolerationExists)}
 }
@@ -46,12 +42,10 @@ const (
 	TaintEffectNoExecute        TaintEffect = "NoExecute"
 )
 
-// IsValid reports whether the effect is supported.
 func (e TaintEffect) IsValid() bool {
 	return e == TaintEffectNoSchedule || e == TaintEffectPreferNoSchedule || e == TaintEffectNoExecute
 }
 
-// TaintEffectValues returns the supported nonempty effects.
 func TaintEffectValues() []string {
 	return []string{string(TaintEffectNoSchedule), string(TaintEffectPreferNoSchedule), string(TaintEffectNoExecute)}
 }
@@ -66,12 +60,10 @@ const (
 	BuildTypeSingle      BuildType = "single"
 )
 
-// BuildTypeValues returns the supported nonempty values.
 func BuildTypeValues() []string {
 	return []string{string(BuildTypeFull), string(BuildTypeIncremental), string(BuildTypeSpecified), string(BuildTypeSingle)}
 }
 
-// IsValid reports whether the value is supported.
 func (v BuildType) IsValid() bool {
 	switch v {
 	case BuildTypeFull, BuildTypeIncremental, BuildTypeSpecified, BuildTypeSingle:
@@ -81,7 +73,6 @@ func (v BuildType) IsValid() bool {
 	}
 }
 
-// BuildStage describes the current build or publication stage.
 type BuildStage string
 
 const (
@@ -89,12 +80,10 @@ const (
 	BuildStagePublish BuildStage = "publish"
 )
 
-// BuildStageValues returns the supported nonempty values.
 func BuildStageValues() []string {
 	return []string{string(BuildStageBuild), string(BuildStagePublish)}
 }
 
-// IsValid reports whether the value is supported.
 func (v BuildStage) IsValid() bool {
 	switch v {
 	case BuildStageBuild, BuildStagePublish:
@@ -121,8 +110,15 @@ const (
 
 func SpecResultPhaseValues() []string {
 	return []string{
-		string(SpecPending), string(SpecPrepared), string(SpecPrepareFailed), string(SpecRunning),
-		string(SpecBuildFailed), string(SpecRpmDependsMissing), string(SpecInstallFailed), string(SpecSucceeded), string(SpecArchUnsupported),
+		string(SpecPending),
+		string(SpecPrepared),
+		string(SpecPrepareFailed),
+		string(SpecRunning),
+		string(SpecBuildFailed),
+		string(SpecRpmDependsMissing),
+		string(SpecInstallFailed),
+		string(SpecSucceeded),
+		string(SpecArchUnsupported),
 	}
 }
 
@@ -146,7 +142,6 @@ func (s SpecResultPhase) IsTerminal() bool {
 		s == SpecRpmDependsMissing || s == SpecArchUnsupported
 }
 
-// ProjectPhase describes the lifecycle state of a Project.
 type ProjectPhase string
 
 const (
@@ -159,17 +154,14 @@ var projectPhaseValues = []string{
 	string(ProjectTerminating),
 }
 
-// ProjectPhaseValues returns all valid Project phase values.
 func ProjectPhaseValues() []string {
 	return append([]string(nil), projectPhaseValues...)
 }
 
-// IsValid reports whether p is a supported Project phase.
 func (p ProjectPhase) IsValid() bool {
 	return p == ProjectActive || p == ProjectTerminating
 }
 
-// BuildInfoPhase describes the lifecycle state of BuildInfo generation.
 type BuildInfoPhase string
 
 const (
@@ -188,12 +180,10 @@ var buildInfoPhaseValues = []string{
 	string(BuildInfoAborted),
 }
 
-// BuildInfoPhaseValues returns all valid BuildInfo phase values.
 func BuildInfoPhaseValues() []string {
 	return append([]string(nil), buildInfoPhaseValues...)
 }
 
-// IsValid reports whether p is a supported BuildInfo phase.
 func (p BuildInfoPhase) IsValid() bool {
 	switch p {
 	case BuildInfoPending, BuildInfoProcessing, BuildInfoCompleted, BuildInfoFailed, BuildInfoAborted:
@@ -203,12 +193,10 @@ func (p BuildInfoPhase) IsValid() bool {
 	}
 }
 
-// IsTerminal reports whether no more BuildInfo work is expected for p.
 func (p BuildInfoPhase) IsTerminal() bool {
 	return p == BuildInfoCompleted || p == BuildInfoFailed || p == BuildInfoAborted
 }
 
-// JobPhase describes the lifecycle state of a Job.
 type JobPhase string
 
 // JobResultStatus describes the script verdict. An absent result means no reliable verdict is available.
@@ -240,12 +228,10 @@ var jobPhaseValues = []string{
 	string(JobAborted),
 }
 
-// JobPhaseValues returns all valid Job phase values.
 func JobPhaseValues() []string {
 	return append([]string(nil), jobPhaseValues...)
 }
 
-// IsValid reports whether p is a supported Job phase.
 func (p JobPhase) IsValid() bool {
 	switch p {
 	case JobPending, JobRunning, JobSucceeded, JobFailed, JobAborted:
@@ -255,12 +241,10 @@ func (p JobPhase) IsValid() bool {
 	}
 }
 
-// IsTerminal reports whether no more Job execution is expected for p.
 func (p JobPhase) IsTerminal() bool {
 	return p == JobSucceeded || p == JobFailed || p == JobAborted
 }
 
-// JobStage describes the current execution stage of a Job.
 type JobStage string
 
 const (
@@ -275,12 +259,10 @@ var jobStageValues = []string{
 	string(JobStagePostRun),
 }
 
-// JobStageValues returns all valid Job stage values.
 func JobStageValues() []string {
 	return append([]string(nil), jobStageValues...)
 }
 
-// IsValid reports whether s is a supported Job stage.
 func (s JobStage) IsValid() bool {
 	return s == JobStagePending || s == JobStageRunning || s == JobStagePostRun
 }
@@ -300,17 +282,14 @@ var runnerPhaseValues = []string{
 	string(RunnerEvicted),
 }
 
-// RunnerPhaseValues returns all valid Runner phase values.
 func RunnerPhaseValues() []string {
 	return append([]string(nil), runnerPhaseValues...)
 }
 
-// IsValid reports whether p is a supported Runner phase.
 func (p RunnerPhase) IsValid() bool {
 	return p == RunnerOnline || p == RunnerOffline || p == RunnerEvicted
 }
 
-// SnapshotPhase describes the lifecycle state of a Snapshot.
 type SnapshotPhase string
 
 // PackageRepoErrorCode classifies a package repository resolution failure.
@@ -337,12 +316,10 @@ var snapshotPhaseValues = []string{
 	string(SnapshotActive),
 }
 
-// SnapshotPhaseValues returns all valid Snapshot phase values.
 func SnapshotPhaseValues() []string {
 	return append([]string(nil), snapshotPhaseValues...)
 }
 
-// IsValid reports whether p is a supported Snapshot phase.
 func (p SnapshotPhase) IsValid() bool {
 	switch p {
 	case SnapshotPending, SnapshotProcessing, SnapshotActive:
@@ -352,7 +329,6 @@ func (p SnapshotPhase) IsValid() bool {
 	}
 }
 
-// BuildPhase describes the lifecycle state of a Build.
 type BuildPhase string
 
 const (
@@ -373,12 +349,10 @@ var buildPhaseValues = []string{
 	string(BuildAborted),
 }
 
-// BuildPhaseValues returns all valid Build phase values.
 func BuildPhaseValues() []string {
 	return append([]string(nil), buildPhaseValues...)
 }
 
-// IsValid reports whether p is a supported Build phase.
 func (p BuildPhase) IsValid() bool {
 	switch p {
 	case BuildPending, BuildPrepared, BuildProcessing, BuildSuccess, BuildFailed, BuildAborted:
@@ -388,7 +362,6 @@ func (p BuildPhase) IsValid() bool {
 	}
 }
 
-// IsTerminal reports whether no more Build work is expected for p.
 func (p BuildPhase) IsTerminal() bool {
 	switch p {
 	case BuildSuccess, BuildFailed, BuildAborted:
@@ -436,12 +409,10 @@ var rpmRepoReleasePhaseValues = []string{
 	string(RpmRepoReleaseSkipped),
 }
 
-// RpmRepoReleasePhaseValues returns all valid formal release phase values.
 func RpmRepoReleasePhaseValues() []string {
 	return append([]string(nil), rpmRepoReleasePhaseValues...)
 }
 
-// IsValid reports whether p is a supported formal release phase.
 func (p RpmRepoReleasePhase) IsValid() bool {
 	switch p {
 	case RpmRepoReleasePending, RpmRepoReleaseCreating,

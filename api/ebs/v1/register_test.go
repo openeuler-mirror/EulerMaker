@@ -9,101 +9,34 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func TestJobFieldLabelConversion(t *testing.T) {
+func TestFieldLabelConversion(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
-	gvk := SchemeGroupVersion.WithKind("Job")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.runner", "status.phase"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-}
-
-func TestBuildFieldLabelConversion(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-	gvk := SchemeGroupVersion.WithKind("Build")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase", "status.stage"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-}
-
-func TestBuildInfoFieldLabelConversion(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-	gvk := SchemeGroupVersion.WithKind("BuildInfo")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-}
-
-func TestRpmRepoFieldLabelConversion(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-	gvk := SchemeGroupVersion.WithKind("RpmRepo")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "metadata.deletionTimestamp", "status.release.phase"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-}
-
-func TestSnapshotFieldLabelConversion(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-	gvk := SchemeGroupVersion.WithKind("Snapshot")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-}
-
-func TestRunnerFieldLabelConversion(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-	gvk := SchemeGroupVersion.WithKind("Runner")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
-	}
-}
-
-func TestProjectFieldLabelConversion(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := AddToScheme(scheme); err != nil {
-		t.Fatalf("add scheme: %v", err)
-	}
-	gvk := SchemeGroupVersion.WithKind("Project")
-	for _, field := range []string{"metadata.name", "metadata.namespace", "status.phase"} {
-		label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
-		if err != nil || label != field || value != "value" {
-			t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
-		}
+	for _, tc := range []struct {
+		kind   string
+		fields []string
+	}{
+		{"Project", []string{"status.phase"}},
+		{"Snapshot", []string{"status.phase"}},
+		{"Build", []string{"metadata.deletionTimestamp", "status.phase", "status.stage"}},
+		{"BuildInfo", []string{"metadata.deletionTimestamp", "status.phase"}},
+		{"BuildGraph", nil},
+		{"RpmRepo", []string{"metadata.deletionTimestamp", "status.release.phase"}},
+		{"Job", []string{"metadata.deletionTimestamp", "status.runner", "status.phase", "status.stage"}},
+		{"Runner", []string{"status.phase"}},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			gvk := SchemeGroupVersion.WithKind(tc.kind)
+			fields := append([]string{"metadata.name", "metadata.namespace"}, tc.fields...)
+			for _, field := range fields {
+				label, value, err := scheme.ConvertFieldLabel(gvk, field, "value")
+				if err != nil || label != field || value != "value" {
+					t.Fatalf("convert %q: label=%q value=%q err=%v", field, label, value, err)
+				}
+			}
+		})
 	}
 }
 
