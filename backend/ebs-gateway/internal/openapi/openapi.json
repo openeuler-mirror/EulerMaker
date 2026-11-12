@@ -1952,6 +1952,14 @@
             "default": {}
           },
           "phase": {
+            "enum": [
+              "Pending",
+              "Prepared",
+              "Processing",
+              "Success",
+              "Failed",
+              "Aborted"
+            ],
             "type": "string"
           },
           "stage": {

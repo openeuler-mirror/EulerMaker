@@ -151,7 +151,7 @@ func (s coordinationBuilds) List(ctx context.Context, opts *internalversion.List
 	defer s.f.mu.Unlock()
 	list := &ebsv1.BuildList{}
 	for _, b := range s.f.builds {
-		if b.Namespace == ns && opts.LabelSelector.Matches(labels.Set(b.Labels)) && (opts.FieldSelector == nil || opts.FieldSelector.Matches(fields.Set{"status.phase": string(b.Status.Phase)})) {
+		if b.Namespace == ns && opts.LabelSelector.Matches(labels.Set(b.Labels)) && (opts.FieldSelector == nil || opts.FieldSelector.Matches(fields.Set{"status.phase": string(b.Status.Phase), "status.stage": string(b.Status.Stage)})) {
 			list.Items = append(list.Items, *b.DeepCopy())
 		}
 	}
@@ -232,10 +232,12 @@ func TestClaimTargetsAndSingle(t *testing.T) {
 	archBaseline.Spec.Arch = "other"
 	archBaseline.Labels[ebsv1.BuildTargetArchLabel] = "other"
 	archBaseline.Status.Phase = ebsv1.BuildSuccess
+	archBaseline.Status.Stage = ebsv1.BuildStagePublish
 	f.builds[archBaseline.Namespace+"/"+archBaseline.Name] = archBaseline
 	projectBaseline := testBuild("project-baseline", "full")
 	projectBaseline.Namespace = "other-project"
 	projectBaseline.Status.Phase = ebsv1.BuildSuccess
+	projectBaseline.Status.Stage = ebsv1.BuildStagePublish
 	f.builds[projectBaseline.Namespace+"/"+projectBaseline.Name] = projectBaseline
 	for i, b := range []*ebsv1.Build{testBuild("a", "full"), testBuild("b", "single"), testBuild("c", "incremental"), testBuild("d", "specified")} {
 		if i == 2 {

@@ -416,11 +416,11 @@ func TestProcessingBuildNonSingleResults(t *testing.T) {
 		},
 		{
 			name: "success skips publishing", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecSucceeded}},
-			wantPhase: ebsv1.BuildSkipped, wantStage: ebsv1.BuildStagePublish, wantEndTime: true, wantSucceeded: true,
+			wantPhase: ebsv1.BuildSuccess, wantStage: ebsv1.BuildStageBuild, wantEndTime: true, wantSucceeded: true,
 		},
 		{
 			name: "failure skips publishing", statuses: map[string]ebsv1.SpecResult{"gcc": {Status: ebsv1.SpecInstallFailed}},
-			wantPhase: ebsv1.BuildSkipped, wantStage: ebsv1.BuildStagePublish, wantEndTime: true, wantPermanent: true,
+			wantPhase: ebsv1.BuildFailed, wantStage: ebsv1.BuildStageBuild, wantEndTime: true, wantPermanent: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

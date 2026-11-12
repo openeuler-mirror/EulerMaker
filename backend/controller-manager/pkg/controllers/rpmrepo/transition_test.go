@@ -733,37 +733,43 @@ func TestReconcileBuildPromotesBatchWithoutSeparateReleaseKey(t *testing.T) {
 }
 
 func TestReconcileBuildWithoutPublishingMaterializesBeforeSkipping(t *testing.T) {
-	client := NewFakeClient()
-	client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
-	build := newBuild(testBuild)
-	build.Spec.Publish = new(bool)
-	client.Builds[key(testProject, testBuild)] = build
-	client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
-	client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
+	for _, phase := range []ebsv1.BuildPhase{ebsv1.BuildProcessing, ebsv1.BuildSuccess, ebsv1.BuildFailed} {
+		t.Run(string(phase), func(t *testing.T) {
+			client := NewFakeClient()
+			client.RpmRepos[key(testProject, testBuild)] = newRpmRepo(testBuild)
+			build := newBuild(testBuild)
+			build.Spec.Publish = new(bool)
+			build.Status.Phase = phase
+			build.Status.Stage = ebsv1.BuildStageBuild
+			client.Builds[key(testProject, testBuild)] = build
+			client.BuildInfos[key(testProject, testBuild)] = newBuildInfo(testBuild, ebsv1.BuildInfoCompleted)
+			client.Jobs[testProject] = []ebsv1.Job{newSucceededJob("job-a", "gcc", "uid-job-a", time.Unix(1, 0))}
 
-	artifacts := NewFakeArtifactManager()
-	artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
-		return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/next/", UpdatedAt: time.Now()}, nil
-	}
-	c := newTestController(t, client, artifacts, testConfig())
-	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	updated := client.RpmRepos[key(testProject, testBuild)]
-	if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "artifact:///repositories/project/builds/build/next/" {
-		t.Fatalf("process repository was not materialized: %+v", updated.Status.Repository)
-	}
-	if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || updated.Status.Release.UpdatedAt == nil || updated.Status.Release.ContentURL != "" {
-		t.Fatalf("release was not skipped: %+v", updated.Status.Release)
-	}
-	if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 0 {
-		t.Fatal("a nonpublishing build must not submit or enqueue a release")
-	}
-	if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
-		t.Fatalf("second sync: %v", err)
-	}
-	if len(artifacts.SubmitRepositoryRequests) != 1 {
-		t.Fatal("a skipped release must not rematerialize the repository")
+			artifacts := NewFakeArtifactManager()
+			artifacts.SubmitRepositoryFunc = func(_ context.Context, req CreateRepositoryRequest) (RepositoryResponse, error) {
+				return RepositoryResponse{RepositoryUID: req.RepositoryUID, State: RepositoryReady, Attempt: 1, ContentURL: "/repositories/project/builds/build/next/", UpdatedAt: time.Now()}, nil
+			}
+			c := newTestController(t, client, artifacts, testConfig())
+			if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			updated := client.RpmRepos[key(testProject, testBuild)]
+			if len(artifacts.SubmitRepositoryRequests) != 1 || updated.Status.Repository == nil || updated.Status.Repository.ContentURL != "artifact:///repositories/project/builds/build/next/" {
+				t.Fatalf("process repository was not materialized: %+v", updated.Status.Repository)
+			}
+			if updated.Status.Release == nil || updated.Status.Release.Phase != ebsv1.RpmRepoReleaseSkipped || updated.Status.Release.UpdatedAt == nil || updated.Status.Release.ContentURL != "" {
+				t.Fatalf("release was not skipped: %+v", updated.Status.Release)
+			}
+			if len(artifacts.SubmitReleaseRequests) != 0 || c.Queue().Len() != 0 {
+				t.Fatal("a nonpublishing build must not submit or enqueue a release")
+			}
+			if _, err := c.sync(context.Background(), rpmRepoKey(testProject, testBuild)); err != nil {
+				t.Fatalf("second sync: %v", err)
+			}
+			if len(artifacts.SubmitRepositoryRequests) != 1 {
+				t.Fatal("a skipped release must not rematerialize the repository")
+			}
+		})
 	}
 }
 

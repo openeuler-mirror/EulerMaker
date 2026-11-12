@@ -155,15 +155,21 @@ func (r *reconciler) advanceNonSingleBuild(succeeded bool, failing string) (cont
 	target := r.current.DeepCopy()
 	merged, intent := r.withCondition(target.Status.Conditions, ConditionBuildSucceed, conditionStatus(succeeded), buildResultReason(succeeded))
 	target.Status.Conditions = merged
-	target.Status.Stage = ebsv1.BuildStagePublish
+	target.Status.Stage = ebsv1.BuildStageBuild
 	write := writeIntent{
 		uid: target.UID, phase: target.Status.Phase, stage: target.Status.Stage,
 		setConditions: true, conditions: merged, conditionIntents: []conditionIntent{intent},
 	}
 	if r.current.Spec.Publish == nil || *r.current.Spec.Publish {
+		target.Status.Stage = ebsv1.BuildStagePublish
+		write.stage = target.Status.Stage
 		return r.apply(target, write, nil)
 	}
-	target.Status.Phase = ebsv1.BuildSkipped
+	if succeeded {
+		target.Status.Phase = ebsv1.BuildSuccess
+	} else {
+		target.Status.Phase = ebsv1.BuildFailed
+	}
 	target.Status.EndTime = r.now
 	write.phase = target.Status.Phase
 	write.setEndTime = true

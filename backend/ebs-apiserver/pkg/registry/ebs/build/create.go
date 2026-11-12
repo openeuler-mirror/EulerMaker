@@ -69,7 +69,10 @@ func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *
 			ebsv1.BuildTargetArchLabel: build.Spec.Arch,
 			ebsv1.BuildTypeLabel:       string(ebsv1.BuildTypeFull),
 		}),
-		FieldSelector: fields.OneTermEqualSelector("status.phase", string(ebsv1.BuildSuccess)),
+		FieldSelector: fields.SelectorFromSet(fields.Set{
+			"status.phase": string(ebsv1.BuildSuccess),
+			"status.stage": string(ebsv1.BuildStagePublish),
+		}),
 	})
 	if err != nil {
 		return err

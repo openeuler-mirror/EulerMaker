@@ -187,7 +187,7 @@ func TestSnapshotPhase(t *testing.T) {
 func TestBuildPhase(t *testing.T) {
 	for _, phase := range []BuildPhase{
 		BuildPending, BuildPrepared, BuildProcessing,
-		BuildSuccess, BuildFailed, BuildAborted, BuildSkipped,
+		BuildSuccess, BuildFailed, BuildAborted,
 	} {
 		if !phase.IsValid() {
 			t.Errorf("phase %q is not valid", phase)
@@ -196,7 +196,7 @@ func TestBuildPhase(t *testing.T) {
 	if BuildPhase("Unknown").IsValid() {
 		t.Error("unknown phase is valid")
 	}
-	for _, phase := range []BuildPhase{BuildSuccess, BuildFailed, BuildAborted, BuildSkipped} {
+	for _, phase := range []BuildPhase{BuildSuccess, BuildFailed, BuildAborted} {
 		if !phase.IsTerminal() {
 			t.Errorf("phase %q is not terminal", phase)
 		}

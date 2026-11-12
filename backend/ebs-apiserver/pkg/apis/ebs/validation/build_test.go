@@ -21,11 +21,10 @@ func TestValidateBuildDelete(t *testing.T) {
 		{name: "building", phase: ebsv1.BuildProcessing, stage: ebsv1.BuildStageBuild},
 		{name: "publishing", phase: ebsv1.BuildProcessing, stage: ebsv1.BuildStagePublish},
 		{name: "published", phase: ebsv1.BuildSuccess, stage: ebsv1.BuildStagePublish},
-		{name: "single succeeded", phase: ebsv1.BuildSuccess, stage: ebsv1.BuildStageBuild, allowed: true},
+		{name: "build succeeded without publishing", phase: ebsv1.BuildSuccess, stage: ebsv1.BuildStageBuild, allowed: true},
 		{name: "build failed", phase: ebsv1.BuildFailed, stage: ebsv1.BuildStageBuild, allowed: true},
 		{name: "publish failed", phase: ebsv1.BuildFailed, stage: ebsv1.BuildStagePublish, allowed: true},
 		{name: "aborted", phase: ebsv1.BuildAborted, allowed: true},
-		{name: "skipped publication", phase: ebsv1.BuildSkipped, stage: ebsv1.BuildStagePublish, allowed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			build := &ebsv1.Build{Status: ebsv1.BuildStatus{Phase: tc.phase, Stage: tc.stage}}
@@ -239,7 +238,7 @@ func TestValidateBuildUpdate(t *testing.T) {
 func TestValidateBuildStatusUpdate(t *testing.T) {
 	for _, phase := range []ebsv1.BuildPhase{
 		ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing,
-		ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped,
+		ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted,
 	} {
 		t.Run(string(phase), func(t *testing.T) {
 			errs := ValidateBuildStatusUpdate(&ebsv1.Build{Status: ebsv1.BuildStatus{Phase: phase}}, validBuild())
@@ -286,7 +285,7 @@ func TestIncrementalPackagesMayChangeOnlyWhilePending(t *testing.T) {
 }
 
 func TestTerminalBuildPhaseImmutable(t *testing.T) {
-	for _, oldPhase := range []ebsv1.BuildPhase{ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped} {
+	for _, oldPhase := range []ebsv1.BuildPhase{ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted} {
 		for _, phase := range ebsv1.BuildPhaseValues() {
 			old := validBuild()
 			old.Status.Phase = oldPhase

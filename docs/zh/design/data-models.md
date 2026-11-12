@@ -325,8 +325,8 @@ type BaseBuildRef struct {
 
 | 字段 | Go 类型 | 说明 |
 |------|---------|------|
-| `phase` | `BuildPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborted"` / `"Skipped"`；后四项为终态 |
-| `stage` | BuildStage | `"build"` / `"publish"`，标识构建阶段还是发布阶段；尚未进入时允许为空。single 成功为 `Success/build`、失败为 `Failed/build`，不进入 publish；非 single 跳过发布时为 `Skipped/publish` |
+| `phase` | `BuildPhase` | 公共 `ebs/v1` API 定义的稳定取值：`"Pending"` / `"Prepared"` / `"Processing"` / `"Success"` / `"Failed"` / `"Aborted"`；后三项为终态 |
+| `stage` | BuildStage | `"build"` / `"publish"`，标识构建阶段还是发布阶段；尚未进入时允许为空。single 及 `publish=false` 的非 single 构建，按 `BuildSucceed` 结果收敛为 `Success/build` 或 `Failed/build`，不进入 publish |
 | `startTime` | metav1.Time | 开始时间 |
 | `endTime` | metav1.Time | 结束时间 |
 | `baseBuildRef` | BaseBuildRef | 仅非 single 使用的基础 Build 名称，single 保持为空；未设置表示尚未查询，`{}` 表示已查询但没有基础 Build；过程仓 UID 和地址从同名 RpmRepo 获取 |
@@ -1153,7 +1153,7 @@ type VersionConstraint struct {
 |------|---------------------------------------------------------------------------------------|
 | Project | `Active` / `Terminating`                                                              |
 | Snapshot | `Pending` / `Processing` / `Active`                                                   |
-| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` / `Skipped` |
+| Build | `Pending` / `Prepared` / `Processing` / `Success` / `Failed` / `Aborted` |
 | BuildInfo | `Pending` / `Processing` / `Completed` / `Failed` / `Aborted`                         |
 | RpmRepo | 过程仓无 phase；正式发布：`Pending` / `Creating` / `Ready` / `Failed` / `Skipped` |
 | Job | `Pending` → `Running` → `Succeeded` / `Failed` / `Aborted`                            |
