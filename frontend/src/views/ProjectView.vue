@@ -164,7 +164,10 @@
                   </span>
                 </button>
                 <button class="build-history-copy" type="button" :disabled="!build.metadata?.name" :class="{ copied: copiedBuildName === build.metadata?.name }" :aria-label="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" :title="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" @click="copyBuildName(build.metadata?.name)"><Check v-if="copiedBuildName === build.metadata?.name" /><DocumentCopy v-else /></button>
-                <StatusBadge :value="buildDisplayStatus(build)" />
+                <div class="build-history-statuses">
+                  <StatusBadge :value="buildDisplayStatus(build)" />
+                  <StatusBadge v-if="build.spec?.buildType !== 'single'" :value="buildPublishStatus(build)" />
+                </div>
               </div>
               <div v-if="canAbortBuild(build) || canDeleteBuild(build)" class="build-history-actions">
                 <button v-if="canAbortBuild(build)" class="build-history-action" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>
@@ -436,6 +439,7 @@ import JobLogInline from "@/components/JobLogInline.vue";
 import PackageJobArtifacts from "@/components/PackageJobArtifacts.vue";
 import { PACKAGE_NAME_LABEL, packageNameLabelValue } from "@/utils/packageLabel";
 import { decodeSpecName } from "@/utils/specName";
+import { buildDisplayStatus, buildPublishStatus } from "@/utils/buildStatus";
 import { isValidBootstrapRepoUrl } from "@/utils/bootstrapRepoUrl";
 import { formatGitRef, isFullGitRef, toFullGitRef, toGitRefInput, toPackageRefFields, toPackageRefInput, type PackageRefInput } from "@/utils/gitRef";
 import type { BootstrapRepo, Build, ConfiguredBuildTarget, Job, PackageRepo, Project } from "@/types";
@@ -708,16 +712,6 @@ function buildTypeLabel(type?: string): string {
     case "specified": return t("project.specifiedBuild");
     default: return type || t("project.unspecifiedType");
   }
-}
-
-function buildDisplayStatus(build: Build): string | undefined {
-  if (build.metadata?.deletionTimestamp) return "Deleting";
-  const phase = build.status?.phase;
-  if (build.spec?.buildType !== "single" || !["Skipped", "Success", "Failed"].includes(phase || "")) return phase;
-  const result = build.status?.conditions?.find((condition) => condition.type === "BuildSucceed")?.status;
-  if (result === "True") return "Success";
-  if (result === "False") return "Failed";
-  return phase;
 }
 
 function canAbortBuild(build: Build): boolean {
