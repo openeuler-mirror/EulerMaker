@@ -1,11 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { compile } from "@vue/compiler-dom";
+import { baseParse, compile } from "@vue/compiler-dom";
 import * as Vue from "vue";
 import { renderToString } from "@vue/server-renderer";
 
 const source = readFileSync(new URL("../src/views/ProjectView.vue", import.meta.url), "utf8");
+
+test("build history times occupy a separate row outside the title and status heading", () => {
+  const ast = baseParse(source.slice(source.indexOf("<template>") + 10, source.indexOf("</template>\n\n<script")));
+  const hasClass = (node, name) => node.props?.some(prop => prop.name === "class" && prop.value?.content === name);
+  function findRowParent(node) {
+    if (node.children?.some(child => hasClass(child, "build-history-times"))) return node;
+    return node.children?.map(findRowParent).find(Boolean);
+  }
+  const item = findRowParent(ast);
+  assert.ok(item);
+  const heading = item.children.findIndex(child => hasClass(child, "build-history-item-heading"));
+  const times = item.children.findIndex(child => hasClass(child, "build-history-times"));
+  assert.ok(heading >= 0 && times > heading);
+  assert.equal(item.children[times].children.filter(child => child.tag === "time").length, 2);
+});
 const statusesTemplate = source.match(/<div class="build-history-statuses">[\s\S]*?<\/div>/)?.[0];
 assert.ok(statusesTemplate);
 const statusesRender = new Function("Vue", compile(statusesTemplate, { mode: "function", prefixIdentifiers: true }).code)(Vue);

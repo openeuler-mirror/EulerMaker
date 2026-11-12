@@ -1084,8 +1084,8 @@ User 私有身份存储、跨副本唯一性及占位恢复由 [apiserver IAM](e
 
 只有 IAM 明确返回 registrationRequired 才创建注册凭据并展示表单。加密注册 Cookie 包含 purpose、provider、configFingerprint、随机 registrationID、已验证 issuer/subject、原 returnTo、固定期限及有限预填资料；不含 code、verifier、第三方 Token 或业务 scopes。
 
-用户填写必填 username，以及可选 displayName/email，遵循 IAM 资料规则。username 默认使用第三方返回的
-preferred_username，为空时使用社区字段 openeuler_username；均未返回时留空。该值只用于预填，允许用户修改，
+用户填写必填 username，以及可选 displayName/email，遵循 IAM 资料规则。username 默认使用社区返回的
+`openeuler_username`，字段缺失或为空时留空，由用户手动填写。该值只用于预填，允许用户修改，
 不做大小写转换或截断；不符合本地格式或名称已占用时由用户修正，不能据此关联已有账号。
 可用昵称及已验证邮箱预填，编辑后的邮箱只是未验证联系资料，不作为身份。表单不要求密码、不允许选择权限。
 

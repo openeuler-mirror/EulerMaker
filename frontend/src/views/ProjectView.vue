@@ -158,16 +158,16 @@
                   <span class="build-history-item-title"><strong class="build-history-item-type">{{ buildTypeLabel(build.spec?.buildType) }}</strong><strong class="build-history-arch">{{ build.spec?.arch || t("common.emptyValue") }}</strong><span class="build-history-item-name">{{ build.metadata?.name }}</span></span>
                   <small v-if="build.spec?.buildType !== 'full' && build.spec?.packages?.length" class="build-history-packages" :title="build.spec.packages.join(', ')">{{ t('project.packages') }}: {{ build.spec.packages.slice(0, 3).join(', ') }}{{ build.spec.packages.length > 3 ? ', …' : '' }}</small>
                   <small v-if="build.metadata?.annotations?.['ebs.io/git-ref']" class="build-history-git-ref" :title="build.metadata.annotations['ebs.io/git-ref']">Git ref: <code>{{ build.metadata.annotations['ebs.io/git-ref'] }}</code></small>
-                  <span class="build-history-times">
-                    <time :datetime="build.status?.startTime">{{ t('project.startedAt') }}: {{ formatDate(build.status?.startTime) }}</time>
-                    <time :datetime="build.status?.endTime">{{ t('project.finishedAt') }}: {{ formatDate(build.status?.endTime) }}</time>
-                  </span>
                 </button>
                 <button class="build-history-copy" type="button" :disabled="!build.metadata?.name" :class="{ copied: copiedBuildName === build.metadata?.name }" :aria-label="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" :title="copiedBuildName === build.metadata?.name ? t('project.copied') : t('project.copyBuildName')" @click="copyBuildName(build.metadata?.name)"><Check v-if="copiedBuildName === build.metadata?.name" /><DocumentCopy v-else /></button>
                 <div class="build-history-statuses">
                   <StatusBadge :value="buildDisplayStatus(build)" />
                   <StatusBadge v-if="build.spec?.buildType !== 'single'" :value="buildPublishStatus(build)" />
                 </div>
+              </div>
+              <div class="build-history-times">
+                <time :datetime="build.status?.startTime">{{ t('project.startedAt') }}: {{ formatDate(build.status?.startTime) }}</time>
+                <time :datetime="build.status?.endTime">{{ t('project.finishedAt') }}: {{ formatDate(build.status?.endTime) }}</time>
               </div>
               <div v-if="canAbortBuild(build) || canDeleteBuild(build)" class="build-history-actions">
                 <button v-if="canAbortBuild(build)" class="build-history-action" type="button" :disabled="abortingBuild" @click="openAbortDialog(build)">{{ t("project.abortBuild") }}</button>

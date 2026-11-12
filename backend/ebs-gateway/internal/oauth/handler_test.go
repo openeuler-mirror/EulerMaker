@@ -121,7 +121,7 @@ func newFixture(t *testing.T) *oauthFixture {
 				w.WriteHeader(401)
 				return
 			}
-			json.NewEncoder(w).Encode(map[string]any{"sub": f.userSub, "preferred_username": "community-alice", "name": "Alice", "email": "alice@example.com", "email_verified": true})
+			json.NewEncoder(w).Encode(map[string]any{"sub": f.userSub, "openeuler_username": "community-alice", "name": "Alice", "email": "alice@example.com", "email_verified": true})
 		default:
 			w.WriteHeader(404)
 		}

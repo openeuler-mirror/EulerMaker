@@ -111,27 +111,39 @@ func TestOAuthUserInfoSubAdapter(t *testing.T) {
 	if err := cfg.validate(); err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
-	p := newProvider(cfg, time.Now, transportFunc(func(r *http.Request) (*http.Response, error) {
-		calls++
-		var body string
-		if r.URL.Path == "/token" {
-			r.ParseForm()
-			if r.Form.Get("client_secret") != "secret" || r.Form.Get("code_verifier") != "verifier" || r.Header.Get("Authorization") != "" {
-				t.Fatal("incorrect token authentication")
+	for _, username := range []string{"community-example", ""} {
+		t.Run("community username="+username, func(t *testing.T) {
+			calls := 0
+			p := newProvider(cfg, time.Now, transportFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				var body string
+				if r.URL.Path == "/token" {
+					r.ParseForm()
+					if r.Form.Get("client_secret") != "secret" || r.Form.Get("code_verifier") != "verifier" || r.Header.Get("Authorization") != "" {
+						t.Fatal("incorrect token authentication")
+					}
+					body = `{"access_token":"access","token_type":"Bearer"}`
+				} else {
+					if r.Header.Get("Authorization") != "Bearer access" {
+						t.Fatal("missing userinfo authentication")
+					}
+					user := map[string]any{
+						"sub": "immutable-id", "name": "Example", "preferred_username": "another-name",
+						"email": "unverified@example.com", "email_verified": false,
+					}
+					if username != "" {
+						user["openeuler_username"] = username
+					}
+					data, _ := json.Marshal(user)
+					body = string(data)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			external, profile, err := p.exchange(context.Background(), "code", browserContext{Verifier: "verifier"}, "")
+			if err != nil || external.Subject != "immutable-id" || profile.Username != username || profile.Email != "" || calls != 2 {
+				t.Fatalf("identity=%+v profile=%+v err=%v", external, profile, err)
 			}
-			body = `{"access_token":"access","token_type":"Bearer"}`
-		} else {
-			if r.Header.Get("Authorization") != "Bearer access" {
-				t.Fatal("missing userinfo authentication")
-			}
-			body = `{"sub":"immutable-id","openeuler_username":"community-example","name":"Example","email":"unverified@example.com","email_verified":false}`
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
-	}))
-	external, profile, err := p.exchange(context.Background(), "code", browserContext{Verifier: "verifier"}, "")
-	if err != nil || external.Subject != "immutable-id" || profile.Username != "community-example" || profile.Email != "" || calls != 2 {
-		t.Fatalf("identity=%+v profile=%+v err=%v", external, profile, err)
+		})
 	}
 }
 
