@@ -525,6 +525,8 @@ Content-Type: multipart/form-data; boundary=...
 
 Artifact 元数据持久化 `idempotencyKey` 和上传元数据，所在目录提供 Project 和 JobName，共同确定幂等作用域。相同键且上传元数据逐项一致时：已有 Artifact 为 `Completed` 则直接返回原结果；仍有上传请求进行中则返回 409 `UploadInProgress`；前次失败或中断则清理旧临时文件并允许整文件重传。相同键但上传元数据不一致时返回 409 `IdempotencyConflict`。
 
+返回原 Completed Artifact 时无需读取本次重复上传的完整正文。Runner 校验成功回执后可以接受发送管道被提前关闭；遇到 `UploadInProgress` 时使用原幂等键和元数据退避重试，不将其他 409 一律视为可重试错误。回执校验和重试规则见 [Runner 设计 8.3.4、8.5](runner.md)。
+
 #### 6.1.1 Multipart 解析限制
 
 首版 multipart 请求必须满足：

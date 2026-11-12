@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -109,6 +110,60 @@ type flakyLogStatusRemote struct {
 	err   error
 }
 
+type retryUploadRemote struct {
+	fakeArtifactRemote
+	errors []error
+	calls  int
+	keys   []string
+	inputs []UploadArtifactInput
+}
+
+func (r *retryUploadRemote) UploadArtifact(ctx context.Context, project, job, key, path string, input UploadArtifactInput) (ArtifactRecord, error) {
+	r.calls++
+	r.keys = append(r.keys, key)
+	r.inputs = append(r.inputs, input)
+	if r.calls <= len(r.errors) {
+		return ArtifactRecord{}, r.errors[r.calls-1]
+	}
+	return r.fakeArtifactRemote.UploadArtifact(ctx, project, job, key, path, input)
+}
+
+func TestArtifactUploadRetryAndReceipt(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		err       error
+		wantCalls int
+	}{
+		{"upload in progress", APIError{StatusCode: 409, Code: "UploadInProgress"}, 2},
+		{"lost response", io.ErrUnexpectedEOF, 2},
+		{"metadata conflict", APIError{StatusCode: 409, Code: "IdempotencyConflict"}, 1},
+		{"local file missing", &os.PathError{Op: "open", Path: "package.rpm", Err: os.ErrNotExist}, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			remote := &retryUploadRemote{errors: []error{test.err}}
+			p := &Processor{Remote: remote, RootDir: t.TempDir(), RetryMaxBackoff: time.Millisecond}
+			job := gateway.JobResource{Metadata: gateway.ObjectMeta{Namespace: "project", Name: "job"}}
+			candidate := artifactCandidate{RelativePath: "packages/package.rpm", FileName: "package.rpm", Size: 3, SHA256: "sum"}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, err := p.uploadOne(ctx, job, candidate)
+			if (err == nil) != (test.wantCalls == 2) || remote.calls != test.wantCalls {
+				t.Fatalf("calls=%d error=%v", remote.calls, err)
+			}
+			for i := 1; i < remote.calls; i++ {
+				if remote.keys[i] != remote.keys[0] || !reflect.DeepEqual(remote.inputs[i], remote.inputs[0]) {
+					t.Fatal("retry changed the idempotency key or upload metadata")
+				}
+			}
+			if err == nil {
+				if _, err := p.uploadOne(ctx, job, candidate); err != nil || remote.calls != test.wantCalls {
+					t.Fatalf("completed receipt not reused: calls=%d error=%v", remote.calls, err)
+				}
+			}
+		})
+	}
+}
+
 func (f *flakyLogStatusRemote) LogStatus(ctx context.Context, project, job string) (LogStatus, error) {
 	f.calls++
 	if f.calls == 1 {
@@ -202,7 +257,7 @@ func TestArtifactProcessorUploadsResultsAndCompletesManifest(t *testing.T) {
 }
 
 func TestArtifactProcessorRetriesLogStatusBeforeUpload(t *testing.T) {
-	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: errors.New("connection refused")}
+	remote := &flakyLogStatusRemote{fakeArtifactRemote: &fakeArtifactRemote{}, err: io.ErrUnexpectedEOF}
 	processor := &Processor{Remote: remote}
 	job := gateway.JobResource{Metadata: gateway.ObjectMeta{Name: "job", Namespace: "project", UID: "uid"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

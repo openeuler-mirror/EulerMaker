@@ -2,7 +2,9 @@ package artifact
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -12,6 +14,73 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestArtifactClientConfirmsEarlyUploadResponse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "package.rpm")
+	data := strings.Repeat("rpm", 1<<19)
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	input := UploadArtifactInput{
+		Category: "artifact", FileName: "package.rpm", RelativePath: "packages/package.rpm",
+		Size: int64(len(data)), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(data))),
+	}
+	for _, field := range []string{"matching", "id", "state", "category", "path", "size", "sha256", "invalid JSON"} {
+		t.Run(field, func(t *testing.T) {
+			receipt := ArtifactRecord{
+				ID: "existing", State: "Completed", Category: input.Category, RelativePath: input.RelativePath,
+				Size: input.Size, SHA256: input.SHA256,
+			}
+			switch field {
+			case "id":
+				receipt.ID = ""
+			case "state":
+				receipt.State = "Pending"
+			case "category":
+				receipt.Category = "log"
+			case "path":
+				receipt.RelativePath = "another.rpm"
+			case "size":
+				receipt.Size++
+			case "sha256":
+				receipt.SHA256 = "different"
+			}
+			httpClient := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				// Read only metadata and the file header, as the server does for a replay.
+				_, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				reader := multipart.NewReader(req.Body, params["boundary"])
+				for range 2 {
+					if _, err := reader.NextPart(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				body, err := json.Marshal(map[string]any{"artifact": receipt})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if field == "invalid JSON" {
+					body = []byte("not JSON")
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(body)))}, nil
+			})}
+			client, err := NewClient("http://artifact-manager", &staticTokens{token: "token"}, httpClient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := client.UploadArtifact(context.Background(), "project", "job", "key", path, input)
+			if field == "matching" {
+				if err != nil || got.ID != "existing" {
+					t.Fatalf("valid replay was not confirmed: %+v, %v", got, err)
+				}
+			} else if err == nil || retryableArtifactError(err) {
+				t.Fatalf("invalid receipt should fail without retry: %+v, %v", got, err)
+			}
+		})
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

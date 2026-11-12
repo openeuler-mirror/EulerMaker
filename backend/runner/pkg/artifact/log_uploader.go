@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -353,23 +355,13 @@ func (s *artifactLogSink) appendWithRetry(ctx context.Context, seq int64, sum st
 		if err == nil {
 			return nil
 		}
-		var apiErr APIError
-		if errors.As(err, &apiErr) && !apiErr.Retryable && apiErr.StatusCode < 500 {
+		if !retryableArtifactError(err) {
 			return err
 		}
-		wait := backoff
-		if errors.As(err, &apiErr) && apiErr.RetryAfter > wait {
-			wait = apiErr.RetryAfter
+		if err := waitForRetry(ctx, retryDelay(err, backoff)); err != nil {
+			return err
 		}
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		backoff *= 2
-		if backoff > s.retryMaxBackoff {
-			backoff = s.retryMaxBackoff
-		}
+		backoff = nextBackoff(backoff, s.retryMaxBackoff)
 	}
 }
 
@@ -408,14 +400,39 @@ func (s *artifactLogSink) completeWithRetry(ctx context.Context, key string, inp
 }
 
 func retryableArtifactError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return false
+	}
 	var apiErr APIError
-	return !errors.As(err, &apiErr) || apiErr.Retryable || apiErr.StatusCode >= 500 || apiErr.StatusCode == 429
+	if errors.As(err, &apiErr) {
+		return apiErr.Retryable || apiErr.StatusCode >= 500 || apiErr.StatusCode == 429 ||
+			(apiErr.StatusCode == 409 && apiErr.Code == "UploadInProgress")
+	}
+	var gatewayErr gateway.StatusError
+	if errors.As(err, &gatewayErr) {
+		return gatewayErr.Code == 429 || gatewayErr.Code >= 500
+	}
+	// url.Error also implements net.Error for permanent URL/TLS failures.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return retryableArtifactError(urlErr.Err)
+	}
+	var networkErr net.Error
+	return errors.As(err, &networkErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func retryDelay(err error, fallback time.Duration) time.Duration {
 	var apiErr APIError
 	if errors.As(err, &apiErr) && apiErr.RetryAfter > fallback {
 		return apiErr.RetryAfter
+	}
+	var gatewayErr gateway.StatusError
+	if errors.As(err, &gatewayErr) && gatewayErr.RetryAfter > fallback {
+		return gatewayErr.RetryAfter
 	}
 	return fallback
 }
