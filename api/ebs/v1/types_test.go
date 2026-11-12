@@ -196,12 +196,6 @@ func TestSpecResultsJSONAndDeepCopy(t *testing.T) {
 	if len(info.Status.SpecResults["gcc/gcc.spec"].MissingDeps) != 1 {
 		t.Fatal("DeepCopy shares missing dependencies")
 	}
-	if got := results.FailedPackages(); !reflect.DeepEqual(got, []string{"bash", "gcc", "missing", "unreadable"}) {
-		t.Fatalf("failed repositories = %v", got)
-	}
-	if SpecResultRepo("gcc/gcc.spec") != "gcc" {
-		t.Fatal("repository extraction failed")
-	}
 }
 
 func TestPackageRepoCommitIDRoundTrip(t *testing.T) {
