@@ -6,6 +6,27 @@ import * as Vue from "vue";
 import { renderToString } from "@vue/server-renderer";
 
 const source = readFileSync(new URL("../src/views/ProjectView.vue", import.meta.url), "utf8");
+const statusesTemplate = source.match(/<div class="build-history-statuses">[\s\S]*?<\/div>/)?.[0];
+assert.ok(statusesTemplate);
+const statusesRender = new Function("Vue", compile(statusesTemplate, { mode: "function", prefixIdentifiers: true }).code)(Vue);
+
+test("build history shows a separate publication badge only for non-single builds", async () => {
+  for (const buildType of ["full", "incremental", "specified", "single"]) {
+    const app = Vue.createSSRApp({
+      setup: () => ({
+        build: { spec: { buildType } },
+        buildDisplayStatus: () => "BuildCompleted",
+        buildPublishStatus: () => "NotPublishing",
+      }),
+      render: statusesRender,
+    });
+    app.component("StatusBadge", { props: ["value"], render() { return Vue.h("span", this.value); } });
+    const html = await renderToString(app);
+    assert.ok(html.includes("BuildCompleted"));
+    assert.equal(html.includes("NotPublishing"), buildType !== "single");
+  }
+});
+
 const archTemplate = source.match(/<span class="build-history-item-title">[^\n]+/)?.[0]?.trim();
 assert.ok(archTemplate);
 const archRender = new Function("Vue", compile(archTemplate, { mode: "function", prefixIdentifiers: true }).code)(Vue);
