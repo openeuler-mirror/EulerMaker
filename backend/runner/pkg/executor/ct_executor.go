@@ -251,6 +251,11 @@ func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (stri
 		logErr = fmt.Errorf("drain container logs: timeout after %s", drainTimeout)
 	}
 	cancelLogs()
+	if logSink != nil {
+		if err := logSink.Sync(); err != nil {
+			logErr = errors.Join(logErr, fmt.Errorf("persist container log: %w", err))
+		}
+	}
 	completionErr := errors.Join(waitErr, logErr)
 	if exitCode != 0 {
 		completionErr = errors.Join(completionErr, fmt.Errorf("container exited with code %d", exitCode))
@@ -258,14 +263,6 @@ func (e *CTExecutor) Execute(ctx context.Context, job gateway.JobResource) (stri
 	if e.RecordCompletion != nil {
 		if err := e.RecordCompletion(job, completionErr); err != nil {
 			return resultRoot, errors.Join(completionErr, fmt.Errorf("persist execution completion: %w", err))
-		}
-	}
-	if logSink != nil {
-		completeCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
-		_, completeErr := logSink.Complete(completeCtx)
-		cancel()
-		if completeErr != nil {
-			logErr = errors.Join(logErr, fmt.Errorf("complete artifact log: %w", completeErr))
 		}
 	}
 	if waitErr != nil {

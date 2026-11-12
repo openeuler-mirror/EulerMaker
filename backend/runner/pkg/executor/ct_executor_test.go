@@ -29,8 +29,8 @@ func TestCTExecutorRecordsCompletionBeforeLogSeal(t *testing.T) {
 		e := &CTExecutor{WorkDir: filepath.Join(root, "work"), ResultRoot: filepath.Join(root, "results"), Runtime: &fakeContainerRuntime{exitCode: 1}, LogFactory: staticLogFactory{sink: sink}}
 		e.RecordCompletion = func(job gateway.JobResource, err error) error {
 			called = true
-			if sink.completed {
-				t.Error("log sealed before durable completion")
+			if sink.completed || !sink.synced {
+				t.Error("completion requires durable local logs without remote sealing")
 			}
 			if err == nil {
 				t.Error("missing execution error")
@@ -44,7 +44,7 @@ func TestCTExecutorRecordsCompletionBeforeLogSeal(t *testing.T) {
 		if _, err := e.Execute(context.Background(), job); err == nil {
 			t.Fatal("expected failure")
 		}
-		if !called || sink.completed == persistFails {
+		if !called || sink.completed || !sink.aborted {
 			t.Fatalf("called=%v sealed=%v persistFails=%v", called, sink.completed, persistFails)
 		}
 	}
@@ -301,7 +301,7 @@ func TestCTExecutorReturnsContainerExitCode(t *testing.T) {
 	}
 }
 
-func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
+func TestCTExecutorPersistsRealtimeLogWhenContainerFails(t *testing.T) {
 	dir := t.TempDir()
 	container := &fakeContainerRuntime{exitCode: 7}
 	sink := &recordingLogSink{}
@@ -317,7 +317,7 @@ func TestCTExecutorCompletesRealtimeLogWhenContainerFails(t *testing.T) {
 	if resultRoot != filepath.Join(dir, "results", "project-a", "job-a") {
 		t.Fatalf("result root = %s", resultRoot)
 	}
-	if !strings.HasSuffix(string(sink.data), "] container log\n") || !sink.completed {
+	if !strings.HasSuffix(string(sink.data), "] container log\n") || !sink.synced || sink.completed || !sink.aborted {
 		t.Fatalf("sink data=%q completed=%v", sink.data, sink.completed)
 	}
 }
@@ -463,8 +463,14 @@ func (f staticLogFactory) Open(gateway.JobResource) (artifact.JobLogSink, error)
 
 type recordingLogSink struct {
 	data      []byte
+	synced    bool
 	completed bool
 	aborted   bool
+}
+
+func (s *recordingLogSink) Sync() error {
+	s.synced = true
+	return nil
 }
 
 func (s *recordingLogSink) Write(p []byte) (int, error) {

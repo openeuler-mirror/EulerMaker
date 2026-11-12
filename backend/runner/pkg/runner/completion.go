@@ -144,33 +144,9 @@ func recordExecution(root string, job gateway.JobResource, executionErr error, l
 
 func (a *Agent) resumeCompletion(ctx context.Context, key string, job gateway.JobResource, record *completionRecord) {
 	defer a.finishJob(key)
-	if record.LogsPending {
-		if a.logFactory == nil {
-			log.Printf("cannot recover log for Job %s: log factory unavailable", key)
-			return
-		}
-		sink, err := a.logFactory.Open(job)
-		if err == nil {
-			defer sink.Abort()
-			drain := a.cfg.Artifact.Log.DrainTimeout
-			if drain <= 0 {
-				drain = 30 * time.Second
-			}
-			logCtx, cancel := context.WithTimeout(ctx, drain)
-			_, err = sink.Complete(logCtx)
-			cancel()
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			record.Status.Message = fmt.Sprintf("%s; recover completed log: %v", record.Status.Message, err)
-		}
-		record.LogsPending = false
-		if err := saveCompletion(a.cfg.RootDir, job, *record); err != nil {
-			log.Printf("persist recovered log %s: %v", key, err)
-			return
-		}
+	if record.LogsPending && a.logFactory == nil {
+		log.Printf("cannot recover log for Job %s: log factory unavailable", key)
+		return
 	}
 	if err := a.writeCompletionStatus(ctx, &job, record.Status); err != nil {
 		log.Printf("recover Job completion %s: %v", key, err)
@@ -186,6 +162,18 @@ func (a *Agent) resumeCompletion(ctx context.Context, key string, job gateway.Jo
 		executionErr = errors.New(record.Status.Message)
 	}
 	a.finalizeArtifacts(ctx, job, record.Status, filepath.Join(resultRoot(a.cfg.RootDir), job.Metadata.Namespace, job.Metadata.Name), executionErr)
+}
+
+func (a *Agent) completeLog(ctx context.Context, job gateway.JobResource) error {
+	sink, err := a.logFactory.Open(job)
+	if err != nil {
+		return fmt.Errorf("open completed log: %w", err)
+	}
+	defer sink.Abort()
+	if _, err := sink.Complete(ctx); err != nil {
+		return fmt.Errorf("complete artifact log: %w", err)
+	}
+	return nil
 }
 
 func (a *Agent) writeCompletionStatus(ctx context.Context, job *gateway.JobResource, status gateway.JobStatus) error {

@@ -574,7 +574,7 @@ func (a *Agent) runJob(parent context.Context, key string, job gateway.JobResour
 		a.cleanupJobWork(job)
 		return
 	}
-	if err := recordExecution(a.cfg.RootDir, job, executionErr, false); err != nil {
+	if err := recordExecution(a.cfg.RootDir, job, executionErr, a.logFactory != nil); err != nil {
 		log.Printf("persist Job completion failed: %v", err)
 		return
 	}
@@ -653,7 +653,13 @@ func (a *Agent) cleanupJobWork(job gateway.JobResource) {
 
 func (a *Agent) finalizeArtifacts(parent context.Context, job gateway.JobResource, status gateway.JobStatus, resultDir string, executionErr error) {
 	artifactCtx, cancelArtifacts := context.WithTimeout(parent, a.cfg.Artifact.Upload.Timeout)
-	_, artifactErr := a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
+	var artifactErr error
+	if a.logFactory != nil {
+		artifactErr = a.completeLog(artifactCtx, job)
+	}
+	if artifactErr == nil {
+		_, artifactErr = a.artifacts.Finalize(artifactCtx, job, resultDir, executionErr == nil)
+	}
 	cancelArtifacts()
 	if parent.Err() != nil {
 		return

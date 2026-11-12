@@ -273,6 +273,28 @@ func readLogCheckpoint(t *testing.T, dir string) logUploadCheckpoint {
 	return checkpoint
 }
 
+func TestArtifactLogSinkSyncPersistsUnuploadedTail(t *testing.T) {
+	remote := &fakeLogRemote{}
+	sink, spool := newTestLogSink(t, remote)
+	if _, err := sink.Write([]byte("tail")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if spool.syncs != 1 || sink.durable != 4 || len(remote.chunks) != 0 {
+		t.Fatalf("syncs=%d durable=%d uploaded=%d", spool.syncs, sink.durable, len(remote.chunks))
+	}
+	if _, err := sink.Write([]byte("more")); err != nil {
+		t.Fatal(err)
+	}
+	syncErr := errors.New("disk sync failed")
+	spool.onSync = func() error { return syncErr }
+	if err := sink.Sync(); !errors.Is(err, syncErr) || sink.durable != 4 {
+		t.Fatalf("sync error=%v durable=%d", err, sink.durable)
+	}
+}
+
 func TestArtifactLogSinkSyncsBeforeIndexAndUpload(t *testing.T) {
 	remote := &fakeLogRemote{}
 	sink, spool := newTestLogSink(t, remote)
