@@ -33,8 +33,8 @@ func TestSyncIgnoresMissingAndFinishedBuilds(t *testing.T) {
 			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildFailed, ebsv1.BuildStageBuild),
 		},
 		{
-			name:  "skipped",
-			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSkipped, ebsv1.BuildStagePublish),
+			name:  "unpublished success",
+			build: withPhaseStage(newBuild("project-a", "build-a", "full", []string{"gcc"}), ebsv1.BuildSuccess, ebsv1.BuildStageBuild),
 		},
 		{
 			name:  "aborted",

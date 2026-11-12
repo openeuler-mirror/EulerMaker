@@ -84,7 +84,7 @@ Snapshot/BuildInfo/RpmRepo            reconcile（仅经包内 Client）──�
 使用两个服务端过滤的 Build PollingSource，共享同一工作队列：业务源选择非终态对象，删除源选择所有删除中对象。两者仅取 metadata，Add/Update 全量入队，重叠 key 由队列合并：
 
 ```text
-GET /apis/ebs/v1/builds?fieldSelector=status.phase!=Success,status.phase!=Failed,status.phase!=Aborted,status.phase!=Skipped&includeFields=metadata&limit=100
+GET /apis/ebs/v1/builds?fieldSelector=status.phase!=Success,status.phase!=Failed,status.phase!=Aborted&includeFields=metadata&limit=100
 GET /apis/ebs/v1/builds?fieldSelector=metadata.deletionTimestamp!=null&includeFields=metadata&limit=100
 ```
 
@@ -323,7 +323,7 @@ status:
 
 ## 五、状态机
 
-非终态 Build 指 `Build.status.phase` 不在终态集合 `{Success, Failed, Aborted, Skipped}` 中。
+非终态 Build 指 `Build.status.phase` 不在终态集合 `{Success, Failed, Aborted}` 中。
 
 | 当前 phase / stage | 动作与分支 | 下一 phase / stage |
 | --- | --- | --- |
@@ -334,7 +334,7 @@ status:
 | `Processing` / `build` | 等待 `BuildInfo.status.phase=Completed`；完成后按以下分支处理 | — |
 |  | `Build.spec.buildType=single` 且结果汇总失败（build 或 install 非 Succeeded，汇总规则见 7.4） | `Failed` / `build` |
 |  | `buildType=single` 且结果汇总成功 | `Success` / `build` |
-|  | 非 single 且 `Build.spec.publish=false`（由本控制器判定跳过发布） | `Skipped` / `publish` |
+|  | 非 single 且 `Build.spec.publish=false` | 按 `BuildSucceed` 收敛为 `Success` 或 `Failed` / `build` |
 |  | 其余情况（非 single 且 `Build.spec.publish=true`） | `Processing` / `publish` |
 | `Processing` / `publish` | RpmRepo GET 返回 NotFound | `Failed` / `publish` |
 | `Processing` / `publish` | 等待 RpmRepo 发布收口：`RpmRepo.status.release` 缺失或 `release.phase` 不是 `Ready` / `Failed`；未收口时等待 | — |
@@ -394,7 +394,7 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
 
 1. 读取最新 Build。
 2. 若 `Build.metadata.deletionTimestamp` 非空，转入 7.7；该判断先于 phase/stage 校验和终态守卫，不继续正常构建流程。
-3. 若 Build 已处于 Success、Failed、Aborted 或 Skipped 终态，本轮直接成功返回（`Aborted` 由外部中止流程写入，reconcile 不负责推进）。
+3. 若 Build 已处于 Success、Failed 或 Aborted 终态，本轮直接成功返回（`Aborted` 由外部中止流程写入，reconcile 不负责推进）。
 4. 校验 `(phase, stage)` 组合，合法集合为 `{(Pending,""), (Prepared,""), (Processing,"build"), (Processing,"publish")}`：
    - `buildType=single` 不允许 `(Processing,"publish")`：记录并返回永久错误，不写 status、不创建 RpmRepo。
    - 非终态 phase 但不在 Pending / Prepared / Processing 内：记录未知 phase 错误，返回永久错误。
@@ -459,8 +459,8 @@ Snapshot 的创建需要先读 Project：仅当 Snapshot NotFound 时才 `GetPro
   - 按上述汇总结果写 `BuildSucceed`：成功为 `True/BuildSucceeded`，失败为 `False/BuildFailed`。
   - `BuildSucceed` 记录所有目标 spec 的构建与安装依赖是否全部成功，不作为发布门禁。
   - 若 `Build.spec.publish=false`（跳过发布），写：
-    - `Build.status.phase=Skipped`
-    - `Build.status.stage=publish`
+    - `Build.status.phase=Success`（`BuildSucceed=True`）或 `Failed`（`BuildSucceed=False`）
+    - `Build.status.stage=build`
     - `Build.status.endTime`
     - `BuildSucceed`（取上一步计算结果）
   - 否则写：
@@ -777,7 +777,7 @@ oldjobs:        get, list, delete
 - 发布收口映射（成功）：`RpmRepo.status.release.phase=Ready` 时，断言同一次 `/status` 写入 `Build.status.phase=Success`、`stage=publish`、`endTime` 非空与 `PublishSucceed=True/PublishSucceeded`；
 - 发布收口映射（失败）：`release.phase=Failed` 时，断言同一次 `/status` 写入 `phase=Failed`、`stage=publish`、`endTime` 非空与 `PublishSucceed=False/PublishFailed`，不覆盖已写入的 `BuildSucceed`；
 - 等待语义：`RpmRepo.status.release` 缺失或 `release.phase` 为 `Pending` / `Creating` 时断言不写 `Build.status`、返回零值 + `nil`；收口完成后下一轮收敛到同一终态；
-- 跳过发布：非 single 的 `spec.publish=false` 断言直接写 `Skipped` / `publish` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo；
+- 跳过发布：非 single 的 `spec.publish=false` 断言按构建结果写 `Success` 或 `Failed` / `build` + `endTime` + `BuildSucceed`、不写 `PublishSucceed`、不消费或等待发布结果；BuildInfo 已存在时不 GET RpmRepo；
 - `Build.spec.buildType=single` 分支：验证所有阶段不创建或读取 RpmRepo；覆盖目标仓库含多个 spec、统一结果全部 Succeeded、部分 BuildFailed/InstallFailed、空 map、缺失结果，按 7.4 断言 Success/build 或 Failed/build，并写入 endTime 和 BuildSucceed，不写 PublishSucceed。Success/build 重入不再写状态或读取子资源。改变 map 插入顺序不改变结论；Completed 前即使已有部分成功结果也不得提前收口；与 BuildInfo Controller 联调验证结果范围仅限目标仓库，且 Completed 时目标 spec 结果齐全；
 - API 交互：`/status` 保留 spec、AlreadyExists 与 Conflict 的处理、`GetLastPublishedBuild` 通过项目级 List 路径限定 Project；
 - 崩溃恢复：分别模拟崩在 ensure 之间、崩在 `/status` 之前、崩在 `/status` 结果未知之后、崩在读 RpmRepo 发布收口结果前后、崩在终态写入前，断言重启后收敛到同一终态，且不产生重复子资源；
@@ -790,7 +790,7 @@ oldjobs:        get, list, delete
 
 | 场景 | 验收要求 | 验证层级 |
 |------|----------|----------|
-| 删除入口状态校验 | 单个/批量 DELETE 及 dry-run 拒绝非终态、Success/publish；Success/build、Failed、Aborted、Skipped 允许删除 | apiserver 单元测试 |
+| 删除入口状态校验 | 单个/批量 DELETE 及 dry-run 拒绝非终态、Success/publish；Success/build、Failed、Aborted 允许删除 | apiserver 单元测试 |
 | 允许删除的终态 Build、single 缺少 RpmRepo | 同一队列进入删除分支；保留业务状态及其它 finalizer | Controller 单元测试 |
 | BuildInfo 存在且持有 cleanup finalizer | 仅发起 BuildInfo DELETE 并等待，不与 BuildInfo Controller 并行编排 Job 删除 | Controller 单元测试 |
 | BuildInfo 缺失 | 继续处理 Snapshot/RpmRepo，不跨级访问 Job、OldJob、BuildGraph | Controller 单元测试 |

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	ebsv1 "ebs-api/ebs/v1"
 )
 
 func TestDocumentContract(t *testing.T) {
@@ -48,6 +50,18 @@ func TestDocumentContract(t *testing.T) {
 		}
 	}
 	checkRefs(doc)
+	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	buildStatus := schemas["ebs-api.ebs.v1.BuildStatus"].(map[string]any)["properties"].(map[string]any)
+	phases := buildStatus["phase"].(map[string]any)["enum"].([]any)
+	wantPhases := ebsv1.BuildPhaseValues()
+	if len(phases) != len(wantPhases) {
+		t.Fatalf("Build phase enum=%v, want %v", phases, wantPhases)
+	}
+	for i, phase := range phases {
+		if phase != wantPhases[i] {
+			t.Fatalf("Build phase enum=%v, want %v", phases, wantPhases)
+		}
+	}
 	ids := map[string]bool{}
 	for path, value := range doc["paths"].(map[string]any) {
 		if !strings.HasPrefix(path, "/auth/") && !strings.HasPrefix(path, "/apis/") {

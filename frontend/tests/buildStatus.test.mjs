@@ -10,8 +10,8 @@ const { buildDisplayStatus, buildPublishStatus } = await import(
 );
 
 for (const [name, phase, stage, publish, built, released, expectedBuild, expectedRelease] of [
-  ["unpublished successful build", "Skipped", "publish", false, "True", undefined, "BuildCompleted", "NotPublishing"],
-  ["unpublished failed build", "Skipped", "publish", false, "False", undefined, "BuildFailed", "NotPublishing"],
+  ["unpublished successful build", "Success", "build", false, "True", undefined, "BuildCompleted", "NotPublishing"],
+  ["unpublished failed build", "Failed", "build", false, "False", undefined, "BuildFailed", "NotPublishing"],
   ["waiting for preparation", "Pending", "prepare", true, undefined, undefined, "Pending", "PublishPending"],
   ["prepared", "Prepared", "prepare", true, undefined, undefined, "Prepared", "PublishPending"],
   ["building", "Processing", "build", true, undefined, undefined, "Building", "PublishPending"],
@@ -53,7 +53,7 @@ test("deletion remains the primary displayed status", () => {
   const build = {
     metadata: { deletionTimestamp: "2026-11-12T00:00:00Z" },
     spec: { buildType: "full", publish: false },
-    status: { phase: "Skipped", stage: "publish", conditions: [{ type: "BuildSucceed", status: "True" }] },
+    status: { phase: "Success", stage: "build", conditions: [{ type: "BuildSucceed", status: "True" }] },
   };
   assert.equal(buildDisplayStatus(build), "Deleting");
   assert.equal(buildPublishStatus(build), "NotPublishing");

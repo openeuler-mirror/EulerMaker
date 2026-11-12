@@ -720,7 +720,7 @@ function canAbortBuild(build: Build): boolean {
 
 function canDeleteBuild(build: Build): boolean {
   if (!isProjectOwner.value || build.metadata?.deletionTimestamp) return false;
-  if (!['Success', 'Failed', 'Aborted', 'Skipped'].includes(build.status?.phase || '')) return false;
+  if (!['Success', 'Failed', 'Aborted'].includes(build.status?.phase || '')) return false;
   if (build.status?.phase === 'Success' && build.status?.stage === 'publish') return false;
   return Boolean(build.metadata?.name && build.metadata.uid && build.metadata.resourceVersion);
 }

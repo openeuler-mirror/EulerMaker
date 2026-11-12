@@ -171,7 +171,6 @@ func TestAbortTransitionsBuild(t *testing.T) {
 		{name: "already aborted", phase: ebsv1.BuildAborted, endTime: existingEndTime, wantPhase: ebsv1.BuildAborted, wantEndTime: existingEndTime},
 		{name: "obsolete aborting phase", phase: ebsv1.BuildPhase("Aborting"), wantPhase: ebsv1.BuildPhase("Aborting"), wantConflict: true},
 		{name: "terminal build", phase: ebsv1.BuildSuccess, wantPhase: ebsv1.BuildSuccess, wantConflict: true},
-		{name: "skipped build", phase: ebsv1.BuildSkipped, wantPhase: ebsv1.BuildSkipped, wantConflict: true},
 	}
 
 	for _, tt := range tests {

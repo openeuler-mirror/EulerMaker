@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kube-openapi/pkg/validation/spec"
 
+	ebsv1 "ebs-api/ebs/v1"
 	generated "ebs-apiserver/pkg/generated/openapi"
 )
 
@@ -53,6 +54,8 @@ func schemas() object {
 	for _, field := range []string{"uid", "generation", "creationTimestamp", "deletionTimestamp", "managedFields"} {
 		meta[field].(map[string]any)["description"] = "Server-managed. Echo unchanged on PUT; do not set on creation."
 	}
+	buildStatus := result[schemaName("ebs-api/ebs/v1.BuildStatus")].(map[string]any)["properties"].(map[string]any)
+	buildStatus["phase"].(map[string]any)["enum"] = ebsv1.BuildPhaseValues()
 	requestSchemas(result)
 	result[schemaName("k8s.io/apimachinery/pkg/apis/meta/v1.Time")] = object{"type": "string", "format": "date-time"}
 	result[schemaName("k8s.io/apimachinery/pkg/runtime.RawExtension")] = object{"type": "object", "additionalProperties": true}

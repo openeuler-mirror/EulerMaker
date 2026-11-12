@@ -20,7 +20,7 @@ import (
 const Name = "build"
 
 // nonTerminalBuildFieldSelector keeps the polling source focused on Builds that still need work.
-const nonTerminalBuildFieldSelector = "status.phase!=Success,status.phase!=Failed,status.phase!=Aborted,status.phase!=Skipped"
+const nonTerminalBuildFieldSelector = "status.phase!=Success,status.phase!=Failed,status.phase!=Aborted"
 
 type Config struct {
 	PollPeriod time.Duration

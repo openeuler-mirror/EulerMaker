@@ -808,7 +808,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - 普通 Build Update 比较旧、新 `ebs.io/git-ref` annotation 的键存在性和值，增加、删除或修改均返回 `422 Invalid`；PATCH 合并后的对象执行同一校验。`/status` 保留旧 metadata，不能绕过保护。其他 annotation 的更新规则不变。
 - 创建 full/incremental Build 时（含 dry-run），`spec.packages` 统一清空，不要求非空；前端请求不携带该字段。创建 `buildType=single` 或 `specified` 的 Build 时（含 dry-run），要求 packages 非空，额外读取一次所属 Project，校验每个包名均存在于 `Project.spec.packageRepos[].name`；允许多个包及重复包名。不存在的包返回 `422 Invalid`，错误字段定位到 `spec.packages[i]`；Project 不存在或读取失败时原样返回对应 API 错误，不创建 Build。`incremental` 创建后允许 Build Controller 在 Pending 阶段通过主资源 Update 幂等更新 `spec.packages`，由 Controller 保证名称来自本轮 Snapshot.spec.packageRepos，允许空数组；确认持久化且进入 Prepared 后禁止再次修改，其他 spec 字段仍不可变；普通用户不能修改该字段。
 - 创建 `full`、`incremental` 或 `specified` Build 时，按 Project + Arch 执行下节的 ES 目标占用协议。single 不参与占用。该协议替代当前单实例创建锁，最新一条非 single Build 查询仅作为历史数据门禁，不作为跨实例互斥依据。
-- 创建 `incremental` 或 `specified` Build 时，同一 Project + Arch 必须已有 `status.phase=Success` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
+- 创建 `incremental` 或 `specified` Build 时，同一 Project + Arch 必须已有 `status.phase=Success && status.stage=publish` 的 full Build；没有则返回 `412 FullBuildRequired`，错误信息为 `No complete full build exists yet for this project and target`。占用文档只表示当前进行中的构建，不能作为已完成全量构建的依据。
 - Runner 的 `instanceID` 创建时必须是规范小写 UUID v4，创建后不可变；类型必须为 `ct`、`vm` 或 `hw`，`arch` 必填，type/arch labels 必须分别与 spec 字段一致。etcd generic store 负责校验 `resourceVersion` 并返回更新冲突。
 - User 名称必须满足 DNS1123 label；`spec.email` 必须是合法邮箱格式。`spec.scopes` 只允许且必须恰好包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 中的一项，不得组合或重复；单独的 `ebs:ops` 即表示运维人员。Runner 由 Token 的 `type` 区分，不是 User scope。User 的 `metadata.name` 是全局唯一的稳定用户标识，与用户 JWT 的 `sub` 一致。User labels 是普通扩展元数据，不参与身份和资源权限判定。
 - Runner 删除仅允许 `status.phase=Offline` 或 `Evicted`，Online、空值及其他状态返回 `409 Conflict`。校验接入存储删除回调，依据实际删除时的对象状态执行，并保留调用方删除校验及 UID/resourceVersion 前置条件。单对象删除、DeleteCollection 的逐项删除和 dry-run 均适用；批量删除不是原子操作，遇到拒绝时其他对象可能已删除。本规则只检查 Runner 状态，不检查关联 Job，也不停止 Runner 进程或清理其本地文件。
@@ -846,8 +846,8 @@ apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进
 
 1. 执行认证授权、默认值、字段和 Project 包名校验及 admission；确定 Build name。相同 Build 名称已存在时维持标准 `409 AlreadyExists`，不得当作本次请求成功或转换为更新。后续持久化不得重新生成 UID 或改变目标。
 2. 按确定 ID 使用 `_create` 抢占 Reserved 文档。存在其他占用时返回 `409 Conflict`，附带占用 Build 名称；读取失败返回临时错误，禁止绕过。
-3. 抢占成功后执行历史门禁：按 Project + Arch 查询创建时间降序最新一条非 single Build（`ebs.io/build-type!=single`，`limit=1`，不按 phase 过滤）。不存在或已为 Success/Failed/Aborted/Skipped 时继续；否则拒绝创建并释放本次 Reserved 占用。空/未知 phase 视为非终态，查询失败也不创建。仅查最新一条，不承诺排除更早的历史非终态对象。
-4. 对 incremental/specified 另查同目标下至少一条 `ebs.io/build-type=full` 且 `status.phase=Success` 的 Build（`limit=1`）。查询为空返回 `412 FullBuildRequired` 并释放 Reserved；查询失败返回原错误，不得当作没有历史记录。full 不需要此门禁。
+3. 抢占成功后执行历史门禁：按 Project + Arch 查询创建时间降序最新一条非 single Build（`ebs.io/build-type!=single`，`limit=1`，不按 phase 过滤）。不存在或已为 Success/Failed/Aborted 时继续；否则拒绝创建并释放本次 Reserved 占用。空/未知 phase 视为非终态，查询失败也不创建。仅查最新一条，不承诺排除更早的历史非终态对象。
+4. 对 incremental/specified 另查同目标下至少一条 `ebs.io/build-type=full` 且 `status.phase=Success && status.stage=publish` 的 Build（`limit=1`）。查询为空返回 `412 FullBuildRequired` 并释放 Reserved；查询失败返回原错误，不得当作没有历史记录。full 不需要此门禁。
 5. CAS 将 Reserved 改为 Creating。只有成功完成这次状态迁移的请求能够发送一次 Build create-only 写入；其他实例和恢复任务不得替它重新发送创建。ES 客户端也不得自动重试这笔写请求。
 6. Build 创建确认成功后，CAS 将占用改为 Bound，再返回正常创建结果。若记录 Bound 失败但 Build 已确认成功，仍返回已创建 Build，记录错误并交由恢复任务补齐；Creating 仍阻塞其他创建。
 
@@ -872,7 +872,7 @@ dry-run 只检查现有占用和历史门禁，不创建占用、不写 Build，
 
 占用释放由 apiserver 完成，覆盖 `/status`、`/abort`、DELETE 与 DeleteCollection 的逐项删除路径：
 
-- Build 成功持久化终态后，实时 GET 核实同名称、同 Project、同目标且 phase 为 Success/Failed/Aborted/Skipped，将自己的占用 CAS 为 Releasing/Terminal 后删除。若占用还在 Creating 但同名称、同 Project、同目标 Build 已存在，可先确认 Bound。不得在 Build 写入成功前释放。
+- Build 成功持久化终态后，实时 GET 核实同名称、同 Project、同目标且 phase 为 Success/Failed/Aborted，将自己的占用 CAS 为 Releasing/Terminal 后删除。若占用还在 Creating 但同名称、同 Project、同目标 Build 已存在，可先确认 Bound。不得在 Build 写入成功前释放。
 - Build DELETE 先完成权限、UID/resourceVersion 前置条件和删除校验。实际删除成功后，使用被删对象的名称、Project 和目标核实占用归属，CAS 为 Releasing/Deleted 后删除。仅设置 deletionTimestamp、finalizer 尚未完成时不得释放。
 - 对 Bound 记录实时 GET Build 返回 NotFound，也可 CAS 到 Releasing/Deleted 后删除：Bound 已证明该次唯一创建写入曾完成，且协议禁止重发该创建。Creating + NotFound 不适用此规则。名称、Project 或目标不匹配属于身份异常，保留占用并告警，不更新或删除替代对象。
 - Build 状态/删除已成功，但释放失败时，不把成功的业务操作改报失败；输出结构化错误，由扫描补偿。占用漏释放只会暂时阻止新构建，不会放行两个构建。
@@ -931,7 +931,7 @@ Content-Type: application/json
 
 ## Build 删除 finalizer
 
-删除入口由 apiserver 校验当前存储的 Build 状态：仅允许终态，拒绝 `Pending`、`Prepared`、`Processing`；同时拒绝 `phase=Success && stage=publish` 的发布成功构建，不区分是否仍为 current。单包成功的 `Success/build`、`Failed`、`Aborted`、`Skipped` 可删除。非终态须先调用 `/abort` 并确认 Build 已终态，再发起删除；Build 终态不代表 Job 已停止，子任务仍由清理流程收敛。
+删除入口由 apiserver 校验当前存储的 Build 状态：仅允许终态，拒绝 `Pending`、`Prepared`、`Processing`；同时拒绝 `phase=Success && stage=publish` 的发布成功构建，不区分是否仍为 current。单包或未开启发布构建的 `Success/build`、`Failed`、`Aborted` 可删除。非终态须先调用 `/abort` 并确认 Build 已终态，再发起删除；Build 终态不代表 Job 已停止，子任务仍由清理流程收敛。
 
 单个 DELETE、DeleteCollection 的逐对象删除及 dry-run 共用该校验；拒绝返回 `409 Conflict`，不写 deletionTimestamp、不触发派生资源清理。批量删除不是原子操作，遇到拒绝时停止，之前已受理的对象不回滚。校验与删除标记使用同一次 GET 的对象及 ES 版本 CAS，状态并发变化时返回冲突，调用方重新读取后决策。删除资格与权限分离，Gateway 不重复实现状态门卫。
 

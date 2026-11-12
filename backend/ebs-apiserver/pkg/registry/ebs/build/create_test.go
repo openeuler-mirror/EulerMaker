@@ -68,7 +68,7 @@ func (l *latestBuildLister) List(ctx context.Context, opts *internalversion.List
 func TestValidateLatestBuild(t *testing.T) {
 	ctx := request.WithNamespace(context.Background(), "project-a")
 	build := &ebsv1.Build{Spec: ebsv1.BuildSpec{Arch: "arch"}}
-	for _, phase := range []ebsv1.BuildPhase{ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing, ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, ebsv1.BuildSkipped, "", "Unknown"} {
+	for _, phase := range []ebsv1.BuildPhase{ebsv1.BuildPending, ebsv1.BuildPrepared, ebsv1.BuildProcessing, ebsv1.BuildSuccess, ebsv1.BuildFailed, ebsv1.BuildAborted, "", "Unknown"} {
 		t.Run(string(phase), func(t *testing.T) {
 			err := validateLatestBuild(ctx, &latestBuildLister{t: t, phase: phase}, build)
 			if phase.IsTerminal() {
@@ -109,8 +109,19 @@ func (l *fullBuildLister) Exists(ctx context.Context, opts *internalversion.List
 	if ns, _ := request.NamespaceFrom(ctx); ns != "project-a" {
 		l.t.Fatalf("namespace = %q", ns)
 	}
-	if !opts.FieldSelector.Matches(fields.Set{"status.phase": string(ebsv1.BuildSuccess)}) || opts.FieldSelector.Matches(fields.Set{"status.phase": string(ebsv1.BuildFailed)}) {
-		l.t.Fatal("must query one successful full Build")
+	for _, tc := range []struct {
+		phase ebsv1.BuildPhase
+		stage ebsv1.BuildStage
+		match bool
+	}{
+		{ebsv1.BuildSuccess, ebsv1.BuildStagePublish, true},
+		{ebsv1.BuildSuccess, ebsv1.BuildStageBuild, false},
+		{ebsv1.BuildFailed, ebsv1.BuildStagePublish, false},
+		{ebsv1.BuildSuccess, "", false},
+	} {
+		if got := opts.FieldSelector.Matches(fields.Set{"status.phase": string(tc.phase), "status.stage": string(tc.stage)}); got != tc.match {
+			l.t.Fatalf("published baseline selector mismatch for %+v", tc)
+		}
 	}
 	for _, tc := range []struct {
 		arch, typ string

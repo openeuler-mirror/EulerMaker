@@ -362,7 +362,6 @@ const (
 	BuildSuccess    BuildPhase = "Success"
 	BuildFailed     BuildPhase = "Failed"
 	BuildAborted    BuildPhase = "Aborted"
-	BuildSkipped    BuildPhase = "Skipped"
 )
 
 var buildPhaseValues = []string{
@@ -372,7 +371,6 @@ var buildPhaseValues = []string{
 	string(BuildSuccess),
 	string(BuildFailed),
 	string(BuildAborted),
-	string(BuildSkipped),
 }
 
 // BuildPhaseValues returns all valid Build phase values.
@@ -383,8 +381,7 @@ func BuildPhaseValues() []string {
 // IsValid reports whether p is a supported Build phase.
 func (p BuildPhase) IsValid() bool {
 	switch p {
-	case BuildPending, BuildPrepared, BuildProcessing,
-		BuildSuccess, BuildFailed, BuildAborted, BuildSkipped:
+	case BuildPending, BuildPrepared, BuildProcessing, BuildSuccess, BuildFailed, BuildAborted:
 		return true
 	default:
 		return false
@@ -394,7 +391,7 @@ func (p BuildPhase) IsValid() bool {
 // IsTerminal reports whether no more Build work is expected for p.
 func (p BuildPhase) IsTerminal() bool {
 	switch p {
-	case BuildSuccess, BuildFailed, BuildAborted, BuildSkipped:
+	case BuildSuccess, BuildFailed, BuildAborted:
 		return true
 	default:
 		return false
