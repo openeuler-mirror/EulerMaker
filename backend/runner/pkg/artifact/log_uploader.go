@@ -24,6 +24,7 @@ type LogRemote interface {
 
 type JobLogSink interface {
 	io.Writer
+	Sync() error
 	Complete(context.Context) (CompletedLog, error)
 	Abort()
 }
@@ -162,6 +163,9 @@ func (s *artifactLogSink) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// Sync makes the collected body durable without waiting for the remote service.
+func (s *artifactLogSink) Sync() error { return s.syncSpool() }
 
 // syncSpool captures the durable boundary under the same lock as Write.
 func (s *artifactLogSink) syncSpool() error {

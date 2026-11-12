@@ -354,8 +354,8 @@ gateway 和 apiserver必须共同校验路径中的 Runner 身份。apiserver负
 4. 准备执行环境并开始业务执行；环境准备和业务运行统一属于 `Running` stage
 5. 创建日志上传状态，查询 Artifact Manager 的日志状态并确定恢复 sequence
 6. 启动容器和实时日志采集；按 Job.spec.timeoutSeconds 限制业务执行，将 Job.spec.payload 作为 JSON 参数提供给任务入口
-7. 容器结束后等待日志采集 EOF，并确认全部日志 chunk 已提交
-8. 将执行结果及 PostRun 状态意图按 Job UID 持久化到本地，随后封账日志，并将 Job 保持为 phase=Running、推进到 stage=PostRun；业务执行失败或超时也必须尝试封账已有日志
+7. 容器结束后等待日志采集 EOF，同步本地日志正文；停止并等待实时上传 worker 退出，不等待远端封账
+8. 将执行结果及 PostRun 状态意图按 Job UID 持久化到本地，将 Job 保持为 phase=Running、推进到 stage=PostRun；随后从本地 spool 补传并封账日志，业务执行失败或超时也按此处理
 9. 业务执行成功时收集并上传产物，完成 JobUploadManifest
 10. 日志封账以及全部必需产物和清单完成后，更新 Job.status.phase=Succeeded 和 Artifact 摘要
 11. 业务执行、必需日志封账、必需产物上传或清单封账失败时更新 phase=Failed，并保留明确的失败原因和已完成 Artifact 摘要
@@ -580,7 +580,11 @@ type LogUploadCheckpoint struct {
 
 #### 8.3.5 排空和封账
 
-容器无论成功、失败、超时或被取消，只要已经产生日志，Runner 都应在有限的 `--log-drain-timeout` 内执行：等待日志 EOF、刷新最后一个非空 chunk、确认所有 sequence、重新计算本地完整正文的 size 和 SHA-256，然后调用 `/logs/complete`。空日志使用 `lastSequence=-1`、`size=0` 和 SHA-256 空输入。
+`--log-drain-timeout`（默认 30 秒）只限制容器结束后等待日志采集 EOF 的时间，不限制远端日志上传和封账。采集停止后先同步本地正文、持久化执行结果，关闭实时上传 worker 和文件句柄，再进入 PostRun。
+
+PostRun 从本地 spool 和服务端已确认位置恢复，刷新最后一个非空 chunk、确认所有 sequence、计算完整正文的 size 和 SHA-256，然后调用 `/logs/complete`。日志状态查询、补传和封账与后续普通产物上传、签名及 Manifest 封账共用一次 `--artifact-upload-timeout`（默认 2 小时），不为各步骤单独重置期限。网络错误、5xx 和可重试错误使用现有退避策略，等待期间保持 `Running/PostRun`，不会因默认 30 秒采集期限而失败。空日志使用 `lastSequence=-1`、`size=0` 和 SHA-256 空输入。
+
+不可重试错误或上传总期限耗尽后进入失败终态，并按失败保留期保留本地现场；业务执行错误不因重试成功而消失。Runner 停机取消时保留完成记录和 spool，恢复后重新进入 PostRun；Job 中止时取消后处理并按 8.7 节清理，不等待封账成功。
 
 完成请求使用稳定的 `Idempotency-Key={jobName}-log-complete`。网络错误或结果未知时先查询 status；已 Completed 且返回的最终 size、SHA-256 与本地一致时视为成功。重复完成必须得到同一个 Artifact。封账摘要不匹配时保留 spool 和 checkpoint 供诊断，不重新从 sequence 0 上传，也不删除服务端活动日志。
 
@@ -651,7 +655,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 - 在容器退出且日志采集停止后、日志封账前，原子写入 `${rootDir}/executions/{project}/{jobName}/{jobUID}.json`，同步文件和父目录。记录包含版本、UID、Runner、执行结束时间、PostRun 状态意图（含脚本结果和错误）及日志是否仍需封账。持久化失败则停止本次封账并报告错误。
 - 执行器返回后补存日志处理结果；普通产物收尾结束后，先持久化最终 Failed/Succeeded 状态意图（含 endTime 和上传失败标记），再回写服务端。状态尚未确认时保留完成记录及恢复所需数据。
 - List/Watch 启动任务时，先 GET 校验 UID、Runner、Running 和删除标记，再读取对应 UID 的完成记录。存在记录时只恢复日志、状态与产物收尾，不重新执行业务脚本，也不刷新 startTime。最终状态意图已经存在时只补写状态，不重复上传。记录损坏或身份不一致时停止恢复并告警，禁止回退到重新执行。
-- 日志仍待封账时从原 spool 恢复；远端已经 Completed，必须确认本地完整日志的大小、SHA-256 与远端封账信息一致，否则明确失败。不得向已封账日志追加新一轮执行输出。
+- 非终态完成记录先确认 `Running/PostRun` 状态，再按 8.3.5 节从原 spool 恢复日志和上传，不使用独立的 30 秒日志封账期限；远端已经 Completed，必须确认本地完整日志的大小、SHA-256 与远端封账信息一致，否则明确失败。已持久化最终状态的记录只补写状态，不重新执行或上传。
 - PostRun 和最终状态采用 resourceVersion 条件写入；响应丢失先 GET 确认完整状态意图。暂时失败以 200ms 至 30s 的指数退避重试，每次重新写入前读取最新版本并核验身份、归属和终态。发现终态、删除或归属变化立即停止；400/403/422 结束本轮并保留记录。另有独立的 30 秒定期恢复检查，权限恢复后无需等待新的 Watch 事件。
 - 确认终态后删除完成记录；产物上传失败仍按原期限保留诊断数据。定期清理同时扫描 executions 目录，仅在 GET 确认终态或 404 且没有活动执行时清理遗留记录。
 - 本方案依赖 Runner 本地磁盘持久保存。容器退出到完成记录成功落盘之间仍存在崩溃窗口，不承诺跨容器运行时与文件系统的严格恰好一次执行。旧版本没有生成完成记录的任务不能凭已封账日志推断脚本结果。
@@ -674,7 +678,7 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 - Aborted 事件取消执行和普通产物上传（包含 PostRun），CT 执行器依次 Stop、等待既有宽限期、必要时 Kill；shell 执行器需终止整个任务进程组，不能只终止启动 shell 而遗留子进程。
 - 运行时停止/清理使用独立、有上限的 context；Stop/Kill/Wait 都必须有退出边界，不能因后台 Wait 永不返回而永久阻塞。停止失败记录结构化告警，并保留可重试的本地任务/容器记录；实际进程未退出前不释放本地执行占用。
-- 日志按 8.3 的独立 `--log-drain-timeout` 尽力排空封账；不启动新的普通产物扫描/上传。已经提交的远端上传无法保证撤销，已完成 Manifest 不删除；RpmRepo Controller 按 Job phase 排除 Aborted 输入，不能只凭 Manifest Completed 纳入新批次。对已经冻结/发布的批次不承诺回滚。
+- 日志采集按 `--log-drain-timeout` 尽力排空，随后取消并等待上传 worker 退出；不启动新的日志封账或普通产物扫描/上传。已经提交的远端上传无法保证撤销，已完成 Manifest 不删除；RpmRepo Controller 按 Job phase 排除 Aborted 输入，不能只凭 Manifest Completed 纳入新批次。对已经冻结/发布的批次不承诺回滚。
 - Runner 的 PostRun 与最终状态写入统一携带 resourceVersion；Conflict 或 Unknown 后 GET 确认，发现任一终态即停止全部业务 status 写入，不能将 Aborted 覆盖为 Failed/Succeeded，也不改 endTime/message/产物字段。终态之后的日志清理只更新本地状态或 Artifact Manager，不更新 Job status。
 - 超时引发的执行失败仍按原执行失败流程写 Failed；用户中止以服务端 Aborted 为准，取消异常本身不决定 Job 必须为 Failed。最终写入与 `/abort` 并发时接受服务端先持久化的终态。
 
@@ -738,13 +742,13 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--log-chunk-size` | `256KiB` | 解压后单个日志 chunk 的目标和最大大小，不得超过服务端限制 |
 | `--log-flush-interval` | `500ms` | 未达到目标大小时的最长聚合时间 |
 | `--log-spool-limit` | 按部署配置 | 单 Job 完整本地日志 spool 的空间上限，至少应与服务端 `--max-log-size` 协调 |
-| `--log-drain-timeout` | `30s` | 容器结束后等待日志 EOF、上传排空和封账的期限 |
+| `--log-drain-timeout` | `30s` | 容器结束后等待日志采集 EOF 的期限，不包含远端上传和封账 |
 | `--log-retry-max-backoff` | `30s` | 实时日志临时错误的最大退避间隔 |
 | `--artifact-max-file-size` | `25GiB` | 单个普通产物大小上限，不能超过 Artifact Manager 配置 |
 | `--artifact-max-job-size` | `100GiB` | 单 Job 普通产物总大小上限，不能超过 Artifact Manager 配置 |
 | `--artifact-max-files` | `10000` | 单 Job 普通产物文件数量上限 |
 | `--artifact-upload-concurrency` | `4` | 单 Job 普通产物并发上传数 |
-| `--artifact-upload-timeout` | `2h` | 单 Job 普通产物上传、服务端可选签名等待、Manifest 查询及封账重试的总期限，超时后进入失败终态 |
+| `--artifact-upload-timeout` | `2h` | 单次 PostRun 的日志补传及封账、普通产物上传、服务端签名等待、Manifest 查询及封账重试的共享总期限，超时后进入失败终态；Runner 恢复 PostRun 时重新计时 |
 | `--artifact-retry-max-backoff` | `30s` | 普通产物和 Manifest 临时错误的最大退避间隔 |
 | `--artifact-failed-retention` | `24h` | 上传失败、超时、结果未知或封账失败并成功写回失败终态后，本地现场的默认保留时间；磁盘压力下可提前回收 |
 
@@ -797,7 +801,7 @@ secrets:
 | 协议错误 | SequenceGap、SequenceConflict、LogAlreadyFinalized、JobIdentityConflict、LogChunkMismatch |
 | 认证和退避 | 401 单次刷新重放、403 不刷新、429 Retry-After、503/网络错误指数退避；日志故障不阻塞心跳和 watch |
 | 背压 | 慢服务端、内存队列满、本地 spool 达上限时不丢日志；Job 取消后仍能在 drain timeout 内排空 |
-| 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应 |
+| 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应；PostRun 状态查询、补传及封账短暂 503 后恢复，上传总期限耗尽、不可重试错误和停机取消保留现场 |
 | 普通产物扫描 | 空目录、嵌套目录、点文件、稳定排序、RPM MIME、普通 MIME、路径冲突、非法 UTF-8、不可读文件、符号链接和特殊文件拒绝、文件数及大小限制 |
 | 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
 | Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、uploadDigest 确认、签名前后摘要不同、签名等待与失败、完成结果未知查询和内容冲突处理 |
