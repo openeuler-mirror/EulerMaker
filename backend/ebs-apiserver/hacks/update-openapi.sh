@@ -6,15 +6,14 @@ set -o pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 module_dir=$(cd -- "${script_dir}/.." && pwd)
-output_base=$(cd -- "${module_dir}/.." && pwd)
-openapi_gen_version="v0.0.0-20230717233707-2695361300d9"
+openapi_gen_version="v0.0.0-20261104182252-5bee61fc5225"
 
 cd "${module_dir}"
 
 go run "k8s.io/kube-openapi/cmd/openapi-gen@${openapi_gen_version}" \
-  --output-base "${output_base}" \
-  --output-package ebs-apiserver/pkg/generated/openapi \
-  --output-file-base zz_generated.openapi \
+  --output-dir "${module_dir}/pkg/generated/openapi" \
+  --output-pkg ebs-apiserver/pkg/generated/openapi \
+  --output-file zz_generated.openapi.go \
   --go-header-file /dev/null \
   --report-filename /dev/null \
-  --input-dirs ebs-api/ebs/v1,ebs-api/iam/v1
+  ebs-api/ebs/v1 ebs-api/iam/v1

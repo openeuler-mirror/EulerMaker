@@ -1698,8 +1698,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildGraph",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildGraph"
             },
             "type": "array"
           },
@@ -1725,21 +1724,18 @@
           },
           "inDep": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.VersionConstraint",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.VersionConstraint"
             },
             "type": "object"
           },
           "installInDep": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.VersionConstraint",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.VersionConstraint"
             },
             "type": "object"
           },
           "outDep": {
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
@@ -1754,8 +1750,7 @@
         "properties": {
           "nodes": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildGraphNode",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildGraphNode"
             },
             "type": "object"
           }
@@ -1798,8 +1793,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildInfo",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildInfo"
             },
             "type": "array"
           },
@@ -1821,8 +1815,7 @@
         "properties": {
           "bootstrapRepos": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BootstrapRepo",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BootstrapRepo"
             },
             "type": "array"
           },
@@ -1845,8 +1838,7 @@
         "properties": {
           "conditions": {
             "items": {
-              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition",
-              "default": {}
+              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition"
             },
             "type": "array"
           },
@@ -1855,8 +1847,7 @@
           },
           "specResults": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.SpecResult",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.SpecResult"
             },
             "type": "object"
           }
@@ -1874,8 +1865,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Build",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Build"
             },
             "type": "array"
           },
@@ -1901,8 +1891,7 @@
           },
           "packages": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageResourceConfig",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageResourceConfig"
             },
             "type": "object"
           }
@@ -1923,7 +1912,6 @@
           },
           "packages": {
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
@@ -1942,14 +1930,12 @@
           },
           "conditions": {
             "items": {
-              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition",
-              "default": {}
+              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition"
             },
             "type": "array"
           },
           "endTime": {
-            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time",
-            "default": {}
+            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time"
           },
           "phase": {
             "enum": [
@@ -1966,8 +1952,7 @@
             "type": "string"
           },
           "startTime": {
-            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time",
-            "default": {}
+            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time"
           }
         },
         "type": "object"
@@ -1988,8 +1973,7 @@
         "properties": {
           "arches": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildTargetArch",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildTargetArch"
             },
             "type": "object"
           }
@@ -2003,8 +1987,7 @@
         "properties": {
           "targets": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildTargetConfigEntry",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BuildTargetConfigEntry"
             },
             "type": "object"
           }
@@ -2047,8 +2030,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Config",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Config"
             },
             "type": "array"
           },
@@ -2108,6 +2090,32 @@
         },
         "type": "object"
       },
+      "ebs-api.ebs.v1.JobArchiveState": {
+        "description": "JobArchiveState confirms a persisted archive independently of the source Job's lifetime.",
+        "properties": {
+          "action": {
+            "default": "",
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "phase": {
+            "default": "",
+            "type": "string"
+          },
+          "uid": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uid",
+          "action",
+          "phase"
+        ],
+        "type": "object"
+      },
       "ebs-api.ebs.v1.JobList": {
         "properties": {
           "apiVersion": {
@@ -2116,8 +2124,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Job",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Job"
             },
             "type": "array"
           },
@@ -2140,8 +2147,7 @@
         "properties": {
           "missingDeps": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.MissingDep",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.MissingDep"
             },
             "type": "object"
           },
@@ -2159,7 +2165,6 @@
         "properties": {
           "nodeSelector": {
             "additionalProperties": {
-              "default": "",
               "type": "string"
             },
             "type": "object"
@@ -2179,13 +2184,11 @@
             "type": "string"
           },
           "runtimeSpec": {
-            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.runtime.RawExtension",
-            "default": {}
+            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.runtime.RawExtension"
           },
           "scriptRefs": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.ScriptRef",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.ScriptRef"
             },
             "type": "array"
           },
@@ -2195,8 +2198,7 @@
           },
           "tolerations": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Toleration",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Toleration"
             },
             "type": "array"
           }
@@ -2206,8 +2208,7 @@
       "ebs-api.ebs.v1.JobStatus": {
         "properties": {
           "endTime": {
-            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time",
-            "default": {}
+            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time"
           },
           "message": {
             "type": "string"
@@ -2225,8 +2226,7 @@
             "type": "string"
           },
           "startTime": {
-            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time",
-            "default": {}
+            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time"
           }
         },
         "type": "object"
@@ -2293,8 +2293,7 @@
         "properties": {
           "arches": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.ResourceRequirements",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.ResourceRequirements"
             },
             "type": "object"
           },
@@ -2338,8 +2337,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Project",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Project"
             },
             "type": "array"
           },
@@ -2361,15 +2359,13 @@
         "properties": {
           "bootstrapRepos": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.BootstrapRepo",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.BootstrapRepo"
             },
             "type": "array"
           },
           "buildArches": {
             "description": "BuildArches lists the unique architectures available to builds in this project.",
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
@@ -2392,8 +2388,7 @@
           },
           "packageRepos": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageRepo",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageRepo"
             },
             "type": "array"
           }
@@ -2412,7 +2407,6 @@
         "properties": {
           "excludeSpecs": {
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
@@ -2451,8 +2445,7 @@
           },
           "inputs": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.RepositoryInput",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.RepositoryInput"
             },
             "type": "array"
           },
@@ -2471,14 +2464,12 @@
         "properties": {
           "limits": {
             "additionalProperties": {
-              "default": "",
               "type": "string"
             },
             "type": "object"
           },
           "requests": {
             "additionalProperties": {
-              "default": "",
               "type": "string"
             },
             "type": "object"
@@ -2515,8 +2506,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.RpmRepo",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.RpmRepo"
             },
             "type": "array"
           },
@@ -2564,14 +2554,12 @@
           },
           "skippedJobNames": {
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
           },
           "sourceJobNames": {
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
@@ -2589,8 +2577,7 @@
         "properties": {
           "conditions": {
             "items": {
-              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition",
-              "default": {}
+              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition"
             },
             "type": "array"
           },
@@ -2667,8 +2654,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Runner",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Runner"
             },
             "type": "array"
           },
@@ -2696,8 +2682,7 @@
           },
           "taints": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.RunnerTaint",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.RunnerTaint"
             },
             "type": "array"
           },
@@ -2719,35 +2704,30 @@
           },
           "addresses": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.RunnerAddress",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.RunnerAddress"
             },
             "type": "array"
           },
           "allocatable": {
             "additionalProperties": {
-              "default": "",
               "type": "string"
             },
             "type": "object"
           },
           "capacity": {
             "additionalProperties": {
-              "default": "",
               "type": "string"
             },
             "type": "object"
           },
           "conditions": {
             "items": {
-              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition",
-              "default": {}
+              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition"
             },
             "type": "array"
           },
           "heartbeat": {
-            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time",
-            "default": {}
+            "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Time"
           },
           "info": {
             "$ref": "#/components/schemas/ebs-api.ebs.v1.RunnerInfo",
@@ -2811,8 +2791,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Script",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Script"
             },
             "type": "array"
           },
@@ -2870,8 +2849,7 @@
         "properties": {
           "artifactManagers": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.ServiceEndpoints",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.ServiceEndpoints"
             },
             "type": "object"
           },
@@ -2937,8 +2915,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.Snapshot",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.Snapshot"
             },
             "type": "array"
           },
@@ -2963,8 +2940,7 @@
           },
           "packageRepos": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageRepo",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageRepo"
             },
             "type": "array"
           }
@@ -2975,15 +2951,13 @@
         "properties": {
           "conditions": {
             "items": {
-              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition",
-              "default": {}
+              "$ref": "#/components/schemas/k8s.io.apimachinery.pkg.apis.meta.v1.Condition"
             },
             "type": "array"
           },
           "packageRepoStatuses": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageRepoStatus",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.PackageRepoStatus"
             },
             "type": "object"
           },
@@ -3005,8 +2979,7 @@
           },
           "missingDeps": {
             "additionalProperties": {
-              "$ref": "#/components/schemas/ebs-api.ebs.v1.MissingDep",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.ebs.v1.MissingDep"
             },
             "type": "object"
           },
@@ -3089,8 +3062,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.iam.v1.MachineAccount",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.iam.v1.MachineAccount"
             },
             "type": "array"
           },
@@ -3146,8 +3118,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/ebs-api.iam.v1.User",
-              "default": {}
+              "$ref": "#/components/schemas/ebs-api.iam.v1.User"
             },
             "type": "array"
           },
@@ -3178,7 +3149,6 @@
           },
           "scopes": {
             "items": {
-              "default": "",
               "type": "string"
             },
             "type": "array"
