@@ -343,11 +343,9 @@ func (p *Processor) retryMaxBackoff() time.Duration {
 }
 
 func validateUploadedArtifact(candidate artifactCandidate, artifact ArtifactRecord) error {
-	if artifact.ID == "" || artifact.State != "Completed" || artifact.Category != "artifact" ||
-		artifact.RelativePath != candidate.RelativePath || artifact.Size != candidate.Size || artifact.SHA256 != candidate.SHA256 {
-		return fmt.Errorf("artifact upload response does not match %s", candidate.RelativePath)
-	}
-	return nil
+	return validateArtifactReceipt(UploadArtifactInput{
+		Category: "artifact", RelativePath: candidate.RelativePath, Size: candidate.Size, SHA256: candidate.SHA256,
+	}, artifact)
 }
 
 func (p *Processor) receiptPath(job gateway.JobResource, relative string) string {

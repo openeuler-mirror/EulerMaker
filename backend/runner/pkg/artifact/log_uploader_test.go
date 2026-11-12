@@ -5,10 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -62,6 +67,7 @@ type fakeLogRemote struct {
 	chunks         []recordedChunk
 	appended       chan struct{}
 	appendFailures int
+	appendError    error
 	completed      CompleteLogInput
 	status         *LogStatus
 	beforeAppend   func(int64)
@@ -82,7 +88,10 @@ func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64
 	defer f.mu.Unlock()
 	if f.appendFailures > 0 {
 		f.appendFailures--
-		return AppendLogResult{}, errors.New("temporary network error")
+		if f.appendError != nil {
+			return AppendLogResult{}, f.appendError
+		}
+		return AppendLogResult{}, io.ErrUnexpectedEOF
 	}
 	f.chunks = append(f.chunks, recordedChunk{sequence: sequence, data: append([]byte(nil), data...)})
 	if f.appended != nil {
@@ -92,6 +101,69 @@ func (f *fakeLogRemote) AppendLog(_ context.Context, _, _ string, sequence int64
 		}
 	}
 	return AppendLogResult{AcceptedSequence: sequence, NextSequence: sequence + 1}, nil
+}
+
+func TestArtifactRetryClassification(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"network", &url.Error{Op: "Post", URL: "http://artifacts", Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}, true},
+		{"lost response", io.EOF, true},
+		{"truncated response", fmt.Errorf("decode response: %w", io.ErrUnexpectedEOF), true},
+		{"unavailable", APIError{StatusCode: 503}, true},
+		{"rate limit", APIError{StatusCode: 429}, true},
+		{"upload in progress", APIError{StatusCode: 409, Code: "UploadInProgress"}, true},
+		{"retryable conflict", APIError{StatusCode: 409, Code: "ManifestInProgress", Retryable: true}, true},
+		{"token exchange unavailable", fmt.Errorf("get token: %w", gateway.StatusError{Code: 503}), true},
+		{"token exchange rate limit", gateway.StatusError{Code: 429}, true},
+		{"token rejected", gateway.StatusError{Code: 401}, false},
+		{"metadata conflict", APIError{StatusCode: 409, Code: "IdempotencyConflict"}, false},
+		{"path conflict", APIError{StatusCode: 409, Code: "ArtifactPathConflict"}, false},
+		{"unknown conflict", APIError{StatusCode: 409}, false},
+		{"unauthorized", APIError{StatusCode: 401}, false},
+		{"invalid input", APIError{StatusCode: 422}, false},
+		{"missing file", &os.PathError{Op: "open", Path: "rpm", Err: os.ErrNotExist}, false},
+		{"file access denied", &os.PathError{Op: "open", Path: "rpm", Err: os.ErrPermission}, false},
+		{"local read failure", &os.PathError{Op: "read", Path: "rpm", Err: io.ErrUnexpectedEOF}, false},
+		{"invalid URL", &url.Error{Op: "Post", Err: errors.New("unsupported protocol")}, false},
+		{"invalid response", &json.SyntaxError{}, false},
+		{"unknown local error", errors.New("destination not pinned"), false},
+		{"cancelled", context.Canceled, false},
+		{"deadline", context.DeadlineExceeded, false},
+		{"no error", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := retryableArtifactError(test.err); got != test.want {
+				t.Fatalf("retry=%v, want %v for %v", got, test.want, test.err)
+			}
+		})
+	}
+	for _, err := range []error{
+		APIError{StatusCode: 429, RetryAfter: time.Second},
+		gateway.StatusError{Code: 429, RetryAfter: time.Second},
+	} {
+		if got := retryDelay(err, time.Millisecond); got != time.Second {
+			t.Fatalf("Retry-After ignored: %s", got)
+		}
+		if got := retryDelay(err, 2*time.Second); got != 2*time.Second {
+			t.Fatalf("backoff shortened: %s", got)
+		}
+	}
+}
+
+func TestLogAppendRetriesRateLimitWithoutRetryableFlag(t *testing.T) {
+	remote := &fakeLogRemote{appendFailures: 1, appendError: APIError{StatusCode: 429}}
+	sink := &artifactLogSink{remote: remote, project: "project", job: "job", retryMaxBackoff: time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := sink.appendWithRetry(ctx, 3, "sum", []byte("log")); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.chunks) != 1 || remote.chunks[0].sequence != 3 || string(remote.chunks[0].data) != "log" {
+		t.Fatalf("replayed chunk=%+v", remote.chunks)
+	}
 }
 
 func (f *fakeLogRemote) CompleteLog(_ context.Context, _, _, _ string, input CompleteLogInput) (CompletedLog, error) {

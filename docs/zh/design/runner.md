@@ -565,12 +565,18 @@ type LogUploadCheckpoint struct {
 
 #### 8.3.4 错误处理
 
+日志状态查询、chunk 上传、日志封账、普通产物上传和 Manifest 封账共用重试分类：
+
+- 网络传输错误、响应提前结束（EOF）、5xx、429、服务端明确标记 `retryable=true` 的错误，以及 409 `UploadInProgress`，使用指数退避重试；`Retry-After` 比当前退避更长时优先采用。获取 Token 返回的 429/5xx 也按此处理。
+- 其余 4xx、文件不存在或不可读、无效地址或 TLS 证书、响应 JSON 格式错误、回执不匹配等错误停止当前重试。不能把所有 409 或所有本地错误当成临时故障。
+- 请求取消或上下文期限耗尽时退出；PostRun 各步骤共享上传总期限，重试不会重置期限。失败后的现场保留和清理见 8.5。
+
 | 响应或错误 | Runner 行为 |
 |------------|-------------|
-| 网络中断、超时、503 | 保留当前 chunk，指数退避后以相同 sequence 和正文重试；结果未知时先查 status |
-| 401 | 强制刷新一次 Token，以相同 chunk 重放一次；再次 401 进入低频配置错误重试 |
+| 网络中断、503 | 保留当前 chunk，指数退避后以相同 sequence 和正文重试 |
+| 401 | 强制刷新一次 Token，以相同请求重放一次；再次 401 停止当前重试 |
 | 403 | 不刷新 Token，标记身份/权限配置错误 |
-| 429 | 保留当前 chunk，遵循 `Retry-After` 并增加抖动 |
+| 429 | 即使响应未标记 `retryable=true` 也保留当前 chunk，按公共退避规则重试 |
 | 409 `SequenceGap` | 读取响应 `details.nextSequence`，再查询 status；按服务端连续边界恢复 |
 | 409 `SequenceConflict` | 查询 status 和本地 chunk 索引；摘要无法证明一致时将日志标记为不可恢复 |
 | 409 `LogAlreadyFinalized` | 查询 status；Completed 视为可能的重复完成，其他状态按冲突失败 |
@@ -614,7 +620,7 @@ PostRun 从本地 spool 和服务端已确认位置恢复，刷新最后一个�
 Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续保存本地副本。每个文件必须使用以下顺序处理：
 
 1. 流式计算本地文件大小和 SHA-256，构造稳定的 `Idempotency-Key` 并上传。
-2. 只在收到 200/201 且响应 Artifact 为 `state=Completed`、project、jobName、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。
+2. 只在收到成功响应、Artifact ID 非空、`state=Completed`，且 category、relativePath、size 和 SHA-256 均与请求一致时，认为正文已被接管。Project 和 Job 归属由请求路径确定。
 3. 将完整 Artifact 响应作为上传回执原子写入 `${rootDir}/uploads/{project}/{jobName}/artifacts/{relativePath}.json`；实际文件名使用安全编码或路径摘要，不能直接信任 relativePath 拼接。
 4. JobUploadManifest 从持久化回执生成。Manifest 完成且最终 Job Status 成功写回后即视为上传成功，原子写入 `notBefore=now` 的成功清理标记并立即执行清理；清理失败时保留标记供后台重试，不设置成功保留期。
 5. 后台清理器按 `notBefore` 处理有效清理标记；清理标记保存 Project 和 Job 名，并按该目录清理本地内容。Runner 本地目录所在文件系统使用率超过 85% 时，可提前清理尚未到期的失败标记，按标记的 `createdAt` 从早到晚处理，直至使用率不超过 85% 或候选耗尽；不清理无标记的运行中 Job。
@@ -625,7 +631,9 @@ Runner 不需要在 Artifact Manager 已可靠接管普通产物正文后继续�
 
 普通产物的幂等键固定为 `artifact-{sha256(normalizedRelativePath)}`；服务端以 Project 和 Job 名限定键的作用域。同一路径重试必须复用该键，路径或元数据变化属于不同请求并应作为冲突处理。回执保存 Artifact Manager 返回的 Artifact ID、文件类别、relativePath、size、SHA-256、状态、CompletedAt 和所用幂等键，保证重启后能验证并重建 Manifest 条目。归属由上传请求和本地回执的 Project/Job 目录确定，Artifact 响应不携带 Project、JobName 或 RunnerName。
 
-上传返回网络错误、超时、非 2xx、响应字段不匹配或结果未知时，在重试和状态确认期间不得删除本地文件。Runner 使用相同幂等键重试；如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed` 并记录失败原因，再写入失败清理标记；失败现场从该状态写回时间起默认保留 `--artifact-failed-retention=24h`，磁盘使用率超过 85% 时可能提前回收。最终状态写回失败或结果仍可能恢复时不得启动保留期。回收意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
+幂等重放时，服务端可能在读完 multipart 正文前返回原 Completed Artifact。Runner 仅在回执通过上述校验后，忽略本次发送管道的 `io.ErrClosedPipe`；其他文件读取错误、无效响应或回执不匹配不能视为成功。确认后仍按相同顺序持久化回执，不因为正文发送被提前结束而重复失败。
+
+上传返回错误或结果未知时，不得立即删除本地文件。按 8.3.4 分类重试，409 `UploadInProgress` 使用相同幂等键和元数据等待原请求完成；`IdempotencyConflict` 等冲突不盲目重试。如果重试返回原 Completed Artifact，则按上述顺序持久化回执。重试最终失败后，必须先将 Job 成功写为 `phase=Failed` 并记录失败原因，再写入失败清理标记；失败现场从该状态写回时间起默认保留 `--artifact-failed-retention=24h`，磁盘使用率超过 85% 时可能提前回收。最终状态写回失败或结果仍可能恢复时不得启动保留期。回收意味着放弃本地重试能力，服务端可能已经接管但响应未知的 Artifact 不由 Runner 猜测或删除。清理本地文件失败不改变 Job 或服务端 Artifact 状态，记录告警并由后台清理器重试。
 
 该顺序允许在任意点崩溃后恢复：
 
@@ -799,11 +807,11 @@ secrets:
 | 本地持久化 | 正文先于索引、JSON Lines 残缺尾行恢复、正文未组块尾部继续聚合、正文短于索引时拒绝恢复 |
 | 断线恢复 | status 为 Open/Completed/Failed；服务端领先、客户端 checkpoint 落后、结果未知、Runner 进程在各提交点崩溃 |
 | 协议错误 | SequenceGap、SequenceConflict、LogAlreadyFinalized、JobIdentityConflict、LogChunkMismatch |
-| 认证和退避 | 401 单次刷新重放、403 不刷新、429 Retry-After、503/网络错误指数退避；日志故障不阻塞心跳和 watch |
+| 认证和退避 | 401 单次刷新重放、403 不刷新、429 未标记 retryable 时仍重试并遵循 Retry-After、503/网络错误指数退避；Token 请求失败按同类规则处理；本地文件错误、无效响应和取消停止重试；日志故障不阻塞心跳和 watch |
 | 背压 | 慢服务端、内存队列满、本地 spool 达上限时不丢日志；Job 取消后仍能在 drain timeout 内排空 |
 | 封账 | 正常日志、空日志、业务失败日志、超时日志、重复完成、完成结果未知、摘要不匹配及相同 Artifact 响应；PostRun 状态查询、补传及封账短暂 503 后恢复，上传总期限耗尽、不可重试错误和停机取消保留现场 |
 | 普通产物扫描 | 空目录、嵌套目录、点文件、稳定排序、RPM MIME、普通 MIME、路径冲突、非法 UTF-8、不可读文件、符号链接和特殊文件拒绝、文件数及大小限制 |
-| 普通产物上传 | multipart 流式上传、响应字段校验、并发上限、稳定幂等键、整文件重试、部分成功后恢复、业务失败时不上传普通产物 |
+| 普通产物上传 | multipart 流式上传、提前返回成功时校验 Completed 回执、无效回执不确认、UploadInProgress 后同键重试、其他冲突停止重试、并发上限、稳定幂等键、整文件重试、持久化回执复用、部分成功后恢复、业务失败时不上传普通产物 |
 | Manifest | 日志必需项、只含日志的清单、普通产物全部 required、稳定排序、单次成功封账、uploadDigest 确认、签名前后摘要不同、签名等待与失败、完成结果未知查询和内容冲突处理 |
 | 本地清理 | PostRun 后清理工作目录、成功后立即删除、立即删除失败重试、失败清理标记和 `notBefore`、无标记终态恢复及期限不延长、缺少 endTime 保留告警、24 小时到期统一删除、磁盘使用率超过 85% 时最旧失败标记优先回收、空间不足时清理旧候选并重试且必要时兜底回收当前终态 Job、各回收路径隔离损坏标记和单项删除错误、结果未知未终态不计时 |
 | Job 状态 | PostRun 期间保持 Running；必需日志/产物完成后才 Succeeded；上传失败时 phase 为 Failed 且 message 记录原因 |

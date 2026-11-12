@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -234,7 +235,7 @@ func (c *Client) uploadArtifactOnce(ctx context.Context, token, project, job, ke
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ArtifactRecord{}, false, artifactResponseError(resp)
 	}
-	if writeErr != nil {
+	if writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
 		return ArtifactRecord{}, false, writeErr
 	}
 	var out struct {
@@ -243,7 +244,20 @@ func (c *Client) uploadArtifactOnce(ctx context.Context, token, project, job, ke
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return ArtifactRecord{}, false, fmt.Errorf("decode artifact-manager response: %w", err)
 	}
+	// An idempotent replay can return before the server consumes the body.
+	// Only a matching completed receipt can confirm that interrupted send.
+	if err := validateArtifactReceipt(input, out.Artifact); err != nil {
+		return ArtifactRecord{}, false, err
+	}
 	return out.Artifact, false, nil
+}
+
+func validateArtifactReceipt(input UploadArtifactInput, artifact ArtifactRecord) error {
+	if artifact.ID == "" || artifact.State != "Completed" || artifact.Category != input.Category ||
+		artifact.RelativePath != input.RelativePath || artifact.Size != input.Size || artifact.SHA256 != input.SHA256 {
+		return fmt.Errorf("artifact upload response does not match %s", input.RelativePath)
+	}
+	return nil
 }
 
 func (c *Client) CompleteManifest(ctx context.Context, project, job string, input CompleteManifestInput) (CompletedManifest, error) {
