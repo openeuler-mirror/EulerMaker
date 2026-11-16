@@ -798,6 +798,11 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 - API 请求使用严格解码：`apiVersion`、`kind`、对象结构或字段类型不合法时直接拒绝，未知字段不会被静默丢弃。
 
+- Job 的 `spec.runtimeSpec` 是运行时扩展配置，创建及主资源 PUT/PATCH 必须通过公共 `ValidateJob` 校验：禁止解码后 `privileged=true`，返回 `422 Invalid`，字段为 `spec.runtimeSpec.privileged`、cause 为 `FieldValueForbidden`；不区分调用方权限或 runtime。允许省略配置、`null`、省略 privileged 或显式 `false`/`null`。非法 JSON、非对象配置或 privileged 类型错误返回 `422 Invalid`，字段为 `spec.runtimeSpec`；错误响应不回显配置正文。
+  - 特权字段采用与 Runner 相同的 Go JSON struct 解码语义，覆盖大小写变体、转义字段名和重复字段，按解码结果判断，不能只检查 JSON map 中精确拼写的键。其余运行时字段仍由 executor 解释，本规则不是完整的运行时配置白名单。
+  - `/status` 保留原 spec，不允许借状态更新修改运行时配置。该准入校验不会追溯拒绝已存储的 Job 或撤销已运行容器的权限；上线时须核查存量特权任务。本轮不增加 Runner 执行端校验，也不改变网络或 seccomp 配置。
+  - 回归测试覆盖正常构建配置、显式关闭特权、大小写及重复字段、错误类型，并通过 Job storage 的创建与更新 strategy 验证规则已接入实际资源存储入口。
+
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，`spec.distro` 必填、符合发行版标识语法，创建后不可修改或删除（更新值与原值不一致返回 `422 Invalid`，错误字段为 `spec.distro`），`spec.buildArches` 为非空字符串数组，架构值非空且不得重复。
 - Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。创建后除 Build Controller 在 `incremental` 的 Pending 阶段固化 `spec.packages` 外，Build `spec` 不可修改；普通 Update 不能改变受保护的标签，`/status` 更新保留原对象 metadata。
 - Job 创建时若带有 `ebs.io/build-name`（由 BuildInfo Controller 创建的构建 Job），还必须带有 `ebs.io/spec-name` 和 `ebs.io/package-name` label；apiserver 校验标签存在且值符合 Kubernetes label 规则，缺失或非法返回 `422 Invalid`。包名标签由 BuildInfo Controller 按[标签约定](labels.md#7-job-构建归属标签)从 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 计算。普通更新不得修改已有归属标签，`/status` 更新保留原 metadata。没有 `ebs.io/build-name` 的通用 Job 不强制要求这些字段；存量构建 Job 即使缺少包名标签，普通更新和状态更新仍允许，且不会自动回填。

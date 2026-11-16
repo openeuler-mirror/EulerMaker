@@ -1,10 +1,12 @@
 package validation
 
 import (
+	"encoding/json"
+	"slices"
+
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"slices"
 
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -16,6 +18,21 @@ func ValidateJob(obj *ebsv1.Job) field.ErrorList {
 	}
 	if executionType := obj.Spec.Runtime; executionType != "" && !executionType.IsValid() {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "runtime"), executionType, ebsv1.ExecutionTypeValues()))
+	}
+	var runtimeSpec struct {
+		Privileged bool `json:"privileged,omitempty"`
+	}
+	raw, err := obj.Spec.RuntimeSpec.MarshalJSON()
+	if err == nil {
+		// Match the Runner's struct decoding, including case-insensitive field names.
+		err = json.Unmarshal(raw, &runtimeSpec)
+	}
+	if err != nil {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("spec", "runtimeSpec"), nil,
+			"must be a JSON object or null with privileged omitted, null or boolean"))
+	} else if runtimeSpec.Privileged {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "runtimeSpec", "privileged"),
+			"privileged Job execution is not allowed"))
 	}
 	for i, toleration := range obj.Spec.Tolerations {
 		path := field.NewPath("spec", "tolerations").Index(i)

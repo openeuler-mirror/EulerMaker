@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -12,6 +14,57 @@ import (
 func TestValidateJob(t *testing.T) {
 	errs := ValidateJob(validJob())
 	assertErrorList(t, errs, 0, nil)
+}
+
+func TestValidateJobRuntimePrivileges(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw string
+		forbidden bool
+		invalid   bool
+	}{
+		{name: "omitted"},
+		{name: "null", raw: `null`},
+		{name: "normal build", raw: `{"image":"build:test","networkMode":"host"}`},
+		{name: "explicit false", raw: `{"privileged":false}`},
+		{name: "explicit null", raw: `{"privileged":null}`},
+		{name: "privileged", raw: `{"privileged":true}`, forbidden: true},
+		{name: "mixed case", raw: `{"PrIvIlEgEd":true}`, forbidden: true},
+		{name: "escaped name", raw: `{"\u0070rivileged":true}`, forbidden: true},
+		{name: "duplicate enabling", raw: `{"privileged":false,"privileged":true}`, forbidden: true},
+		{name: "case variant enabling", raw: `{"privileged":false,"Privileged":true}`, forbidden: true},
+		{name: "null retains true", raw: `{"privileged":true,"privileged":null}`, forbidden: true},
+		{name: "duplicate disabling", raw: `{"privileged":true,"privileged":false}`},
+		{name: "string boolean", raw: `{"privileged":"true"}`, invalid: true},
+		{name: "number boolean", raw: `{"privileged":1}`, invalid: true},
+		{name: "array", raw: `[]`, invalid: true},
+		{name: "malformed JSON", raw: `{"privileged":`, invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			job := validJob()
+			if tt.raw != "" {
+				job.Spec.RuntimeSpec.Raw = []byte(tt.raw)
+			}
+			want := map[string]field.ErrorType{}
+			if tt.forbidden {
+				want["spec.runtimeSpec.privileged"] = field.ErrorTypeForbidden
+			}
+			if tt.invalid {
+				want["spec.runtimeSpec"] = field.ErrorTypeInvalid
+			}
+			assertErrorList(t, ValidateJob(job), len(want), want)
+			assertErrorList(t, ValidateJobUpdate(job, validJob()), len(want), want)
+		})
+	}
+}
+
+func TestValidateJobRuntimePrivilegesFromDecodedObject(t *testing.T) {
+	job := validJob()
+	job.Spec.RuntimeSpec = runtime.RawExtension{Object: &unstructured.Unstructured{
+		Object: map[string]interface{}{"privileged": true},
+	}}
+	assertErrorList(t, ValidateJob(job), 1, map[string]field.ErrorType{
+		"spec.runtimeSpec.privileged": field.ErrorTypeForbidden,
+	})
 }
 
 func TestValidateJobExecutionType(t *testing.T) {
