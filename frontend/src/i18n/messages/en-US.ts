@@ -576,6 +576,8 @@ export default {
     noRunnersHint: "There are no Runners to show.",
     loadRunnersFailed: "Could not load Runners",
     runnerName: "Runner name",
+    runnerCPU: "CPU (cores)",
+    runnerMemory: "Total memory",
     agentVersion: "Agent version",
     phase: "Phase",
     type: "Type",
