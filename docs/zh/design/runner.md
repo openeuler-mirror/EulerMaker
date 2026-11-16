@@ -441,7 +441,7 @@ containerd 后端只接受 host 网络，不管理 CNI。镜像 config 提供默
 
 脚本通过临时文件写入并原子替换为可执行的 `0555` 文件，在容器中位于 `/workspace/scripts/{name}`。非空数组时覆盖镜像 ENTRYPOINT 为 `/workspace/scripts/{scriptRefs[0].name}`，不传镜像默认 CMD 参数；此时 `runtimeSpec.command/args` 不能同时指定。Runner 拒绝遮蔽 `/workspace` 或脚本目录的额外挂载。空数组时不覆盖镜像入口，仍按 `runtimeSpec.command/args` 的原有方式执行。拉取和退避计入 Job 既有执行期限；取消时停止拉取，不启动容器。
 
-`runtimeSpec` 对 `ct` runtime 可采用以下结构，字段由 ct executor 解释：
+`runtimeSpec` 对 `ct` runtime 可采用以下结构，字段由 ct executor 解释。API Server 在 Job 创建和普通更新时拒绝 `privileged=true`；该准入限制不替代 Runner 执行端隔离，也不会自动处理存量任务，边界见 [API Server 校验规则](ebs-apiserver.md)：
 
 ```yaml
 runtime: ct

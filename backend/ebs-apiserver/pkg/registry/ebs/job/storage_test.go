@@ -8,6 +8,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -58,5 +60,30 @@ func TestJobStorageStrategies(t *testing.T) {
 	statusStore.UpdateStrategy.PrepareForUpdate(ctx, updated, old)
 	if !reflect.DeepEqual(updated.Spec, old.Spec) || !reflect.DeepEqual(updated.Labels, old.Labels) || updated.Status.Phase != ebsv1.JobSucceeded {
 		t.Fatalf("status update=%+v", updated)
+	}
+}
+
+func TestJobStorageRejectsPrivilegedRuntime(t *testing.T) {
+	store := NewStorage().Resource.(*genericregistry.Store)
+	ctx := context.Background()
+	old := &ebsv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job", Namespace: "project"}}
+	store.CreateStrategy.PrepareForCreate(ctx, old)
+	job := old.DeepCopy()
+	job.Spec.RuntimeSpec = runtime.RawExtension{Raw: []byte(`{"image":"build:test","privileged":true}`)}
+	store.CreateStrategy.PrepareForCreate(ctx, job)
+	createErrs := store.CreateStrategy.Validate(ctx, job)
+	store.UpdateStrategy.PrepareForUpdate(ctx, job, old)
+	updateErrs := store.UpdateStrategy.ValidateUpdate(ctx, job, old)
+	for _, errs := range []field.ErrorList{createErrs, updateErrs} {
+		if len(errs) != 1 || errs[0].Field != "spec.runtimeSpec.privileged" || errs[0].Type != field.ErrorTypeForbidden {
+			t.Fatalf("privileged runtime validation = %v", errs)
+		}
+	}
+	job.Spec.RuntimeSpec.Raw = []byte(`{"image":"build:test","privileged":false}`)
+	if errs := store.CreateStrategy.Validate(ctx, job); len(errs) != 0 {
+		t.Fatalf("non-privileged create rejected: %v", errs)
+	}
+	if errs := store.UpdateStrategy.ValidateUpdate(ctx, job, old); len(errs) != 0 {
+		t.Fatalf("non-privileged update rejected: %v", errs)
 	}
 }

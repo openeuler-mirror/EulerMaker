@@ -818,7 +818,7 @@ type JobSpec struct {
 |------|---------|------|------|
 | `priority` | int64 | 否 | Job 调度优先级，值越大越优先，默认：0 |
 | `runtime` | ExecutionType | 否 | `ct`（容器）/`vm`（虚拟机）/`hw`（物理机）；省略时按 `ct` 调度。与 Docker/containerd 的容器运行时实现无关 |
-| `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置，由对应 runtime 解释 |
+| `runtimeSpec` | runtime.RawExtension | 否 | 运行时专属配置；创建和普通更新禁止解码后 `privileged=true`，其余字段由对应 runtime 解释 |
 | `scriptRefs` | []ScriptRef | 否 | 为空时使用镜像入口；非空时按顺序拉取，第一项为主脚本，名称不得重复；记录创建 Job 时观察到的 Script name、UID、resourceVersion，不锁定执行时的脚本内容，见 [Script 设计](data-models~script.md) |
 | `timeoutSeconds` | int64 | 否 | 最大运行秒数，默认 10800 |
 | `resources` | ResourceRequirements | 否 | Job 资源请求与限制 |
