@@ -20,7 +20,7 @@ Runner 与其 Job 容器（Docker/containerd）── 可从构建节点访问�
 
 - 首版将前端、Gateway、apiserver、Scheduler、Controller Manager 和 Git Server 放在 `ebs` Namespace，Artifact Manager 单独放在 `art-01` Namespace。前端和 Controller Manager 使用 `artifact-manager.art-01` 访问它。构建节点可在集群外；不要求 Runner 使用集群 ServiceAccount，也不让 Job 容器直接访问 Kubernetes API。
 - etcd 和 Elasticsearch 在目标集群中自部署，数据使用持久卷。
-- 自研组件镜像从仓库内各组件 Dockerfile 构建，推送到 `swr.cn-north-4.myhuaweicloud.com/eulermaker/`。模板暂用 `:dev` 标签；投产时应固定到不可变 digest。应用参数由容器 `args` 传递；非敏感参数由部署模板管理，JWT 密钥、仓库凭据、签名凭据和私钥由 Secret 或外部密钥系统只读挂载。
+- 自研组件镜像从仓库内各组件 Dockerfile 构建，推送到 `swr.cn-north-4.myhuaweicloud.com/eulermaker/`。模板统一使用 `:0.1.0` 标签，包括 Runner 及 Mapping check/apply Job；etcd、Elasticsearch 保留各自版本。发布后不覆盖版本标签，投产时应进一步固定到不可变 digest。应用参数由容器 `args` 传递；非敏感参数由部署模板管理，JWT 密钥、仓库凭据、签名凭据和私钥由 Secret 或外部密钥系统只读挂载。
 - `Config` 和 `Script` 是 EulerMaker API 对象，不用 Kubernetes ConfigMap 替代。apiserver 初始化默认对象后，后续修改仍走 EulerMaker API。
 
 ## 工作负载与副本

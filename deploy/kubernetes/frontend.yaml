@@ -32,7 +32,7 @@ spec:
         node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: frontend
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/frontend:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/frontend:0.1.0
           imagePullPolicy: Always
           env:
             - name: DEFAULT_ARTIFACT_MANAGER
