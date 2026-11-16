@@ -32,7 +32,7 @@ spec:
         node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: ebs-apiserver
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:0.1.0
           imagePullPolicy: Always
           env:
             - name: SSL_CERT_FILE

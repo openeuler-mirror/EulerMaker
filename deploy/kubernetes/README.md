@@ -12,7 +12,7 @@ ebs-apiserver、Gateway、frontend、Scheduler、Controller Manager 和 Git Serv
 
 在 ES 节点持久设置 `vm.max_map_count >= 262144`，核对文件描述符上限，并确保成员间 `:2380`、`:9300` 可达。通过 VPC 和安全组限制数据服务端口，不要暴露到公网。`ebs-disk-ssd-retain` 使用 `WaitForFirstConsumer` 和 `Retain`；删除 PVC 不会自动删除底层 EVS。
 
-先创建基础资源。`namespace.yaml` 只创建控制面 `ebs` 命名空间；首个 Artifact Manager 实例的 `art-01` 命名空间由其自身 Manifest 创建，本模板只部署这一个实例。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀，当前 Manifest 暂用 `dev` tag 和 `imagePullPolicy: Always`；部署前确认镜像已推送且节点可拉取，正式部署时改用不可变 digest。
+先创建基础资源。`namespace.yaml` 只创建控制面 `ebs` 命名空间；首个 Artifact Manager 实例的 `art-01` 命名空间由其自身 Manifest 创建，本模板只部署这一个实例。自研组件的镜像统一使用 `swr.cn-north-4.myhuaweicloud.com/eulermaker/` 前缀、`0.1.0` 标签和 `imagePullPolicy: Always`，包括 Runner 及 Mapping check/apply Job。etcd、Elasticsearch 保留各自的版本。部署前确认对应版本镜像已推送且节点可拉取；发布后不要覆盖 `0.1.0` 标签，生产环境建议进一步固定到不可变 digest。
 
 ```sh
 kubectl apply -f deploy/kubernetes/namespace.yaml
@@ -201,7 +201,7 @@ apiserver 使用三个 etcd 成员地址，通过服务端 CA 校验成员身份
 
 `upgrade/mapping-check.yaml` 和 `upgrade/mapping-apply.yaml` 是独立的一次性 Job，分别用于预览和应用新增 Mapping 字段，不属于首次部署步骤。不要批量执行 `upgrade/` 目录；先检查、人工确认差异，再单独执行 apply，最后升级 apiserver。
 
-执行前将两个 Job 和 `ebs-apiserver.yaml` 的镜像改成**同一个待升级版本的不可变 digest**，该镜像必须包含 `mapping` 子命令。使用旧镜像只能检查旧版本定义；可变的 `dev` tag 也不能保证三次执行使用同一份定义。提前完成 ES 备份，并避免同时执行其他 Mapping 更新、别名切换或 reindex 操作。
+两个 Job 和 `ebs-apiserver.yaml` 默认使用 `0.1.0` 镜像。执行升级前，将三者固定到**同一个待升级版本的不可变 digest**，该镜像必须包含 `mapping` 子命令。使用旧镜像只能检查旧版本定义；仅使用标签无法防止标签被覆盖后执行不同版本。提前完成 ES 备份，并避免同时执行其他 Mapping 更新、别名切换或 reindex 操作。
 
 两个 Job 复用 `ebs-apiserver-es-auth` 的 API Key 和 CA，仅访问 ES，不需要 etcd、apiserver 入站证书或 Kubernetes API Token。第 4.2 节的 API Key 权限已覆盖 Mapping 查询和更新。
 

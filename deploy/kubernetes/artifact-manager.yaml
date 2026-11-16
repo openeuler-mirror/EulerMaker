@@ -42,7 +42,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: artifact-manager
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/artifact-manager:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/artifact-manager:0.1.0
           imagePullPolicy: Always
           args:
             - --listen=:8081

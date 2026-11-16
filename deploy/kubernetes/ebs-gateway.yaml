@@ -32,7 +32,7 @@ spec:
         node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: ebs-gateway
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-gateway:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-gateway:0.1.0
           imagePullPolicy: Always
           args:
             - --apiserver-addr=https://ebs-apiserver:8443

@@ -34,7 +34,7 @@ spec:
         node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: scheduler
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/scheduler:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/scheduler:0.1.0
           imagePullPolicy: Always
           args:
             - --apiserver=https://ebs-apiserver:8443

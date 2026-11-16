@@ -29,7 +29,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: ebs-runner
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/runner:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/runner:0.1.0
           imagePullPolicy: Always
           args:
             - --gateway=http://ebs-gateway.ebs.svc.cluster.local:8080

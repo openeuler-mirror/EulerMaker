@@ -35,7 +35,7 @@ spec:
         node-role.kubernetes.io/ebs-control-plane: ""
       containers:
         - name: controller-manager
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/controller-manager:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/controller-manager:0.1.0
           imagePullPolicy: Always
           args:
             - --apiserver=https://ebs-apiserver:8443

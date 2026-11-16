@@ -19,7 +19,7 @@ spec:
       containers:
         - name: mapping-apply
           # Use the same target image digest for check, apply and the Deployment.
-          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:dev
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/ebs-apiserver:0.1.0
           imagePullPolicy: Always
           env:
             - name: SSL_CERT_FILE
