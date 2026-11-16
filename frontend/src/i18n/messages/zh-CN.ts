@@ -27,6 +27,7 @@ export default {
     isolated: '此节点没有图内依赖关系。',
   },
   jobLog: {
+    download: '下载日志', downloadHint: '下载当前已上传的全部日志；上传中的日志可能尚不完整',
     title: '任务日志', open: '查看任务 {name} 的日志', expand: '展开日志', collapse: '收起日志', refresh: '刷新日志', fullscreen: '全屏', exitFullscreen: '退出全屏',
     loading: '正在加载日志…', empty: '暂无日志', loadFailed: '加载日志失败，请重试',
     tailNotice: '日志较长，仅显示最后 1 MiB', viewAll: '查看全部', state: '日志状态',

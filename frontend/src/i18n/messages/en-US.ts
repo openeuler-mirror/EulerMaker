@@ -30,6 +30,7 @@ export default {
     isolated: 'This node has no dependencies within the graph.',
   },
   jobLog: {
+    download: 'Download logs', downloadHint: 'Download all logs uploaded so far; uploads in progress may be incomplete',
     title: 'Job logs', open: 'View logs for job {name}', expand: 'Show logs', collapse: 'Hide logs', refresh: 'Refresh logs', fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen',
     loading: 'Loading logs…', empty: 'No logs yet', loadFailed: 'Could not load logs. Try again.',
     tailNotice: 'Showing only the last 1 MiB of this log', viewAll: 'View all', state: 'Log state',
