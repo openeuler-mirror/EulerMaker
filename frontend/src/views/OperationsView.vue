@@ -46,7 +46,8 @@
           <table class="project-table admin-table">
             <thead><tr>
               <th>{{ t("operations.runnerName") }}</th><th>{{ t("operations.phase") }}</th><th>{{ t("operations.type") }}</th>
-              <th>{{ t("operations.arch") }}</th><th>{{ t("operations.agentVersion") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.activeJobs") }}</th><th>{{ t("operations.heartbeat") }}</th>
+              <th>{{ t("operations.arch") }}</th><th>{{ t("operations.runnerCPU") }}</th><th>{{ t("operations.runnerMemory") }}</th>
+              <th>{{ t("operations.agentVersion") }}</th><th>{{ t("operations.schedulable") }}</th><th>{{ t("operations.activeJobs") }}</th><th>{{ t("operations.heartbeat") }}</th>
               <th v-if="canManageRunners">{{ t("admin.actions") }}</th>
             </tr></thead>
             <tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name">
@@ -54,6 +55,8 @@
               <td><StatusBadge :value="runner.status?.phase" /></td>
               <td>{{ runner.spec?.type || t("common.emptyValue") }}</td>
               <td>{{ runner.spec?.arch || t("common.emptyValue") }}</td>
+              <td class="runner-capacity">{{ runner.status?.capacity?.cpu || t("common.emptyValue") }}</td>
+              <td class="runner-capacity">{{ formatRunnerMemory(runner.status?.capacity?.memory) || t("common.emptyValue") }}</td>
               <td><code class="runner-agent-version" :title="runner.status?.info?.agentVersion">{{ runner.status?.info?.agentVersion || t("common.emptyValue") }}</code></td>
               <td>{{ t(runner.spec?.unschedulable || runner.status?.phase !== 'Online' ? 'common.no' : 'common.yes') }}</td>
               <td>{{ runner.status?.activeJobs ?? 0 }}</td>
@@ -106,6 +109,7 @@ import BuildTargetConfigEditor from "@/components/BuildTargetConfigEditor.vue";
 import ServiceConfigEditor from "@/components/ServiceConfigEditor.vue";
 import ScriptManager from "@/components/ScriptManager.vue";
 import type { BuildResourceContent, Config, Runner } from "@/types";
+import { formatRunnerMemory } from "@/utils/runnerResources";
 
 type OperationsSection = "build" | "services" | "resources" | "scripts" | "runners";
 type ResourceConfigView = { config: Config; content: BuildResourceContent };
@@ -300,6 +304,7 @@ async function loadAll<T>(path: string): Promise<T[]> {
 </script>
 
 <style scoped>
+.runner-capacity { white-space: nowrap; }
 .runner-agent-version { display: inline-block; max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
 .runner-refresh-button { width: 28px; height: 28px; padding: 0; flex: none; border-radius: 6px; }
 .runner-refresh-button :deep(svg) { width: 16px; height: 16px; display: block; }
