@@ -1,11 +1,15 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"k8s.io/klog/v2"
 
 	"artifact-manager/pkg/auth"
+	"artifact-manager/pkg/diagnostics"
 	"artifact-manager/pkg/release"
 	"artifact-manager/pkg/repository"
 	"artifact-manager/pkg/signing"
@@ -13,22 +17,21 @@ import (
 )
 
 type Server struct {
-	cfg          Config
-	store        *upload.Store
-	auth         auth.Authorizer
-	repositories *repository.Manager
-	releases     *release.Manager
-	router       *gin.Engine
-	signer       *signing.Signer
-	sealer       *upload.Sealer
+	cfg           Config
+	store         *upload.Store
+	auth          auth.Authorizer
+	repositories  *repository.Manager
+	releases      *release.Manager
+	router        *gin.Engine
+	signer        *signing.Signer
+	sealer        *upload.Sealer
+	cleanupCancel context.CancelFunc
+	cleanupDone   chan struct{}
 }
 
 func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	st, e := upload.NewStore(c.DataDir)
 	if e != nil {
-		return nil, e
-	}
-	if e = st.CleanupTemporary(c.Upload.TemporaryUploadTTL); e != nil {
 		return nil, e
 	}
 	signingConfig := c.Signing
@@ -52,10 +55,29 @@ func NewHandler(c Config, a auth.Authorizer) (*Server, error) {
 	}
 	s.signer = signer
 	s.sealer = sealer
+	s.startTemporaryCleanup(func(ctx context.Context) error {
+		return st.CleanupTemporary(ctx, c.Upload.TemporaryUploadTTL)
+	})
 	return s, nil
 }
 
+func (s *Server) startTemporaryCleanup(cleanup func(context.Context) error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cleanupCancel, s.cleanupDone = cancel, make(chan struct{})
+	go func() {
+		defer close(s.cleanupDone)
+		if err := cleanup(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			klog.ErrorS(nil, "upload cleanup-temporary failed",
+				"component", "upload", "operation", "cleanup-temporary", "cause", diagnostics.Cause(err))
+		}
+	}()
+}
+
 func (s *Server) Close() {
+	if s.cleanupCancel != nil {
+		s.cleanupCancel()
+		<-s.cleanupDone
+	}
 	if s.sealer != nil {
 		s.sealer.Close()
 	}

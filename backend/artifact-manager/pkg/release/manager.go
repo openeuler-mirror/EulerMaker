@@ -36,6 +36,7 @@ type Manager struct {
 	queue           chan string
 	ctx             context.Context
 	cancel          context.CancelFunc
+	retention       sync.WaitGroup
 }
 
 func NewManager(root string, c Config, repositories *repository.Manager, materializer Materializer) (*Manager, error) {
@@ -67,8 +68,11 @@ func NewManager(root string, c Config, repositories *repository.Manager, materia
 		go m.worker()
 	}
 	go m.recoverQueue()
-	go m.retentionLoop()
-	m.cleanupHistory(time.Now().UTC())
+	m.retention.Add(1)
+	go func() {
+		defer m.retention.Done()
+		m.retentionLoop()
+	}()
 	return m, nil
 }
 
@@ -490,6 +494,7 @@ func (m *Manager) retryPending() {
 
 func (m *Manager) Stop() {
 	m.cancel()
+	m.retention.Wait()
 }
 
 func (m *Manager) persist(record *ReleaseRecord) (err error) {

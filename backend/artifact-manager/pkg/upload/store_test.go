@@ -63,9 +63,64 @@ func TestCleanupTemporaryJobDirectories(t *testing.T) {
 		})
 	}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := store.CleanupTemporary(24 * time.Hour); err != nil {
+		if err := store.CleanupTemporary(context.Background(), 24*time.Hour); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestCleanupTemporaryPreservesActiveUpload(t *testing.T) {
+	store, err := upload.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("rpm")
+	a, _, err := store.BeginUpload("project", "job", "key", upload.UploadMetadata{
+		Category: upload.CategoryArtifact, FileName: "package.rpm", RelativePath: "packages/package.rpm",
+		Size: int64(len(data)), SHA256: sum(data),
+	}, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := store.TemporaryUploadPath("project", "job", a.ID)
+	if err := os.WriteFile(tmp, data, 0640); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(tmp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CleanupTemporary(context.Background(), 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteUpload("project", "job", a, tmp); err != nil {
+		t.Fatalf("active upload lost its temporary body: %v", err)
+	}
+}
+
+func TestCleanupTemporaryCancellation(t *testing.T) {
+	store, err := upload.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := store.TemporaryUploadPath("project", "job", "orphan")
+	if err := os.MkdirAll(filepath.Dir(tmp), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("data"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(tmp, old, old); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := store.CleanupTemporary(ctx, 24*time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cleanup cancellation: %v", err)
+	}
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("canceled cleanup removed file: %v", err)
 	}
 }
 

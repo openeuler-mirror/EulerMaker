@@ -1226,7 +1226,7 @@ single 传给 Job 的地址为 `artifact://{instance}/repositories/{project}/{ar
 
 Ready、Failed 记录在查询、重复提交或删除时按需从磁盘读取，不加入常驻缓存。状态成功持久化后同步更新缓存：进入活动状态时加入，进入 Ready、Failed 时移除。存储读取错误与记录不存在分开处理，前者返回可重试错误，不作为新请求创建记录。
 
-历史清理在启动时及之后每小时执行一次，扫描磁盘上的 Ready 记录并临时分组，处理后释放扫描结果。按 `UpdatedAt` 倒序保留指定数量，并额外保护当前版本；非当前且超出数量的记录，只有 `UpdatedAt` 距今超过 TTL 才可删除。当前没有独立激活历史，也不以被替换时刻计时；恢复可能刷新 `UpdatedAt`。配置统一见第十六章。清理只处理 `releases`，不连带删除源过程仓或 Artifact。
+历史保留扫描由后台任务在初始化完成后执行首轮，之后每小时执行一次；首次扫描不阻塞 HTTP 监听和就绪。扫描磁盘上的 Ready 记录并临时分组，处理后释放扫描结果。按 `UpdatedAt` 倒序保留指定数量，并额外保护当前版本；非当前且超出数量的记录，只有 `UpdatedAt` 距今超过 TTL 才可删除。服务停止时取消扫描并等待扫描任务退出；磁盘错误记录脱敏日志，后续周期重新尝试。当前没有独立激活历史，也不以被替换时刻计时；恢复可能刷新 `UpdatedAt`。配置统一见第十六章。清理只处理 `releases`，不连带删除源过程仓或 Artifact。
 
 ### 9.7 可观测性与验收
 
@@ -1449,7 +1449,7 @@ Content-Type: application/json
 
 #### 10.2.6 崩溃恢复和清理
 
-服务启动时逐条读取日志元数据、执行恢复后释放，不建立 LogStream 常驻缓存：
+服务启动时逐条读取日志元数据后释放，不建立 LogStream 常驻缓存。Completed 日志仅校验元数据身份，不读取正文或索引、不重新计算 SHA-256，也不因正文缺失或损坏改写终态；内容请求按需打开文件，缺失时返回读取错误。完整性校验仍在首次封账和 Finalizing 恢复时执行；历史正文审计由运维另行安排。其余未完成日志按以下规则恢复：
 
 - 逐行解析 `.combined.index.jsonl`；最后一行不是完整 JSON 或缺少结尾换行时，删除该残缺尾行并 `fdatasync`，文件中部存在无效 JSON 时标记为 `Failed/Corrupted`。
 - 验证索引从 sequence 0 开始连续，首条 `startOffset=0`，且每条 `startOffset` 等于上一条的 `startOffset+size`；不满足时标记为 `Failed/Corrupted`。
@@ -1458,7 +1458,6 @@ Content-Type: application/json
 - 正文长度小于索引得出的 `committedBytes` 时，将日志流标记为 `Failed/Corrupted`，禁止继续追加和封账。
 - `.combined.json` 与索引汇总不一致且日志仍为 Open 时，以索引为准原子重建汇总字段；终态和失败信息仍以 `.combined.json` 为准。
 - `Finalizing` 状态根据最终 Artifact 元数据和正文是否存在幂等完成或回退到可重试状态。
-- `Completed` 状态缺少 Artifact 元数据或正文时标记为 `Failed/Corrupted`，不得返回成功。
 
 活动日志过期清理尚未实现，当前没有对应命令行参数。后续接入 Job 生命周期后，再区分终态未封账日志与仍可运行的 Job；最终日志 Artifact 的保留策略见第十三章。
 
@@ -1538,7 +1537,7 @@ Project 配额、单 Job 文件数、服务端 Runner 上传并发、速率和 S
 
 当前清理入口如下：
 
-- 启动时调用 `CleanupTemporary`，仅扫描各 Job 的 `.uploads/`，按修改时间清理超过 `--temporary-upload-ttl` 的普通 `.tmp` 文件，跳过其它正文和元数据目录，不跟随符号链接；没有周期扫描，因此该值不是严格的最长存活时间。
+- 初始化完成后在后台调用一次 `CleanupTemporary`，仅扫描各 Job 的 `.uploads/`，按修改时间清理超过 `--temporary-upload-ttl` 的普通 `.tmp` 文件，跳过其它正文和元数据目录，不跟随符号链接。删除前在 Job 锁内复查文件及 Artifact 状态，跳过 Pending 上传，避免与在线上传冲突；并发删除导致文件或目录消失视为已处理。扫描失败记录脱敏日志，不阻止 HTTP 就绪，下次启动再次尝试；服务停止时取消扫描并等待退出。没有周期扫描，因此该值不是严格的最长存活时间。
 - worker 启动前，仅扫描各 `repositories/{project}/{arch}/` 下的 `history/{buildName}/.work/` 和 `releases/.work/`，按任务目录修改时间清理超过对应 WorkTTL 的目录，跳过 steps、发布正文、元数据及 trash 目录，不跟随符号链接；所有工作和删除暂存目录均不在公开浏览或下载白名单中。
 - 过程仓通过显式 DELETE 请求删除，没有自动仓库 TTL；删除及中断恢复的边界见 8.10。
 - 正式发布每小时执行历史保留清理，规则见 9.6。
@@ -1665,7 +1664,7 @@ header 总大小上限 32 KiB；日志去重和 SSE 重放窗口均为 1024，SS
 | `--auth-cache-ttl` | `1h` | Token 认证结果最大缓存时间 |
 | `--data-dir` | `/var/lib/ebs-artifacts` | 本地持久化目录 |
 | `--upload-timeout` | `2h` | 上传及单次 Manifest 封账请求的 context 超时，包含签名排队和执行；阻塞正文读取的超时控制仍待完善 |
-| `--temporary-upload-ttl` | `24h` | 启动清理时判断临时正文过期的时间阈值 |
+| `--temporary-upload-ttl` | `24h` | 启动后的后台清理判断临时正文过期的时间阈值 |
 | `--max-metadata-size` | `64KiB` | multipart metadata part 的最大正文大小 |
 | `--max-file-size` | `25GiB` | 单文件上限 |
 | `--max-job-size` | `100GiB` | 单 Job 总大小上限 |
@@ -1723,7 +1722,7 @@ header 总大小上限 32 KiB；日志去重和 SSE 重放窗口均为 1024，SS
 | 峰值磁盘 | 保留数据 + 在途上传临时正文 + 活动日志 + 并行物化/发布工作目录 + trash/隔离残留；工作目录不能跨文件系统 |
 | 常驻与峰值内存 | 常驻活动任务、仓库/发布元数据路径索引、队列、认证缓存和 SSE 订阅；历史完整记录按需加载。峰值还包括并行仓库的完整 RPM 索引、单 Job Artifact 列表、日志重放与外部命令输出 |
 | 子任务并发 | 封账签名全服务默认最多 8 个 worker，物化不再创建签名 worker；发布 worker 和 `createrepo_c` 另占资源 |
-| 启动成本 | 历史元数据目录仍需扫描；日志恢复还读取索引。按需加载降低常驻内存，不代表启动耗时与历史规模无关 |
+| 启动成本 | 历史元数据目录仍需扫描，未完成日志恢复还读取索引；Completed 日志跳过正文摘要校验，临时上传清理及首次历史发布保留扫描在后台执行 |
 
 若单份完整仓库索引 JSON 平均每 RPM 2 KiB，25000 个 RPM 的索引约 49 MiB；Go 解码后的对象、map 和临时副本会进一步放大内存，必须实测，不能据此直接设置 49 MiB 内存限额。
 
@@ -1744,7 +1743,7 @@ GET /healthz   # HTTP 监听后固定返回 200
 GET /readyz    # HTTP 监听后固定返回 200
 ```
 
-启动加载和恢复初始化在 HTTP 监听之前执行，期间探针无法连接。监听后两项探针都不持续检查存储可用性、current 指针或后台 worker 健康，也没有停机状态切换；不能把 `/readyz` 的 200 视为所有业务依赖正常。
+上传、日志与仓库的必要恢复及签名初始化在 HTTP 监听之前执行，期间探针无法连接。Completed 日志正文校验跳过，过期上传临时文件清理及首次历史发布保留扫描异步执行，就绪不等待这两项清理完成。监听后两项探针都不持续检查存储可用性、current 指针或后台 worker 健康，也没有停机状态切换；不能把 `/readyz` 的 200 视为所有业务依赖正常。
 
 ### 17.3 备份、恢复与磁盘故障
 
