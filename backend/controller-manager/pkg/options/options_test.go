@@ -58,6 +58,9 @@ func TestParseDevelopmentOptions(t *testing.T) {
 	if o.Manager.Workers != 6 || o.Source.PollPeriod != 10*time.Second || o.Source.PollPageSize != 500 || o.Manager.ControllerMaxRetries != 15 {
 		t.Fatalf("unexpected defaults: %+v", o)
 	}
+	if o.API.ClientQPS != 50 || o.API.ClientBurst != 100 {
+		t.Fatalf("unexpected API rate limits: %+v", o.API)
+	}
 	if o.Snapshot.ResolveWorkers != 10 {
 		t.Fatalf("unexpected Snapshot resolve workers: %d", o.Snapshot.ResolveWorkers)
 	}
@@ -94,6 +97,23 @@ func TestParseRpmRepoFlags(t *testing.T) {
 	}
 	if o.ArtifactManager.Timeout != 10*time.Second {
 		t.Fatalf("artifact manager flags were not stored: %+v", o.ArtifactManager)
+	}
+}
+
+func TestParseClientRateLimits(t *testing.T) {
+	o, err := Parse([]string{
+		"--apiserver=https://api:8443", "--insecure-skip-verify=true",
+		"--client-qps=75", "--client-burst=150",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := o.RESTConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.QPS != 75 || config.Burst != 150 {
+		t.Fatalf("REST client rate limits = %v/%d, want 75/150", config.QPS, config.Burst)
 	}
 }
 

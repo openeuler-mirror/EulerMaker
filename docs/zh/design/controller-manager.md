@@ -728,6 +728,8 @@ Worker 边界必须捕获 panic，记录 controller、key 和堆栈。发生 pan
 | `--apiserver-ca` | 空 | 服务端 CA |
 | `--apiserver-client-cert` / `--apiserver-client-key` | 空 | apiserver 客户端证书与私钥，启用内部证书认证时成对提供 |
 | `--insecure-skip-verify` | false | 仅开发环境允许关闭 TLS 校验 |
+| `--client-qps` | 50 | apiserver 客户端持续请求速率限制 |
+| `--client-burst` | 100 | apiserver 客户端突发请求额度 |
 | `--controllers` | `*` | 启用或禁用的 Controller 集合 |
 | `--workers` | 6 | 每个 Controller 默认 reconcile Worker 数量 |
 | `--controller-max-retries` | 15 | 单个 key 进入慢速阶段前的快速连续重试次数 |

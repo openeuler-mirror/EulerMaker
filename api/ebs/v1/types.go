@@ -183,6 +183,8 @@ type BuildSpec struct {
 	// Publish controls release publication. Defaults to true for non-single builds; single builds must omit it.
 	Publish  *bool    `json:"publish,omitempty"`
 	Packages []string `json:"packages,omitempty"`
+	// Priority is inherited by Jobs; higher values are scheduled first. Defaults to 5 for community projects, otherwise 0.
+	Priority *int64 `json:"priority,omitempty"`
 }
 
 type BuildStatus struct {

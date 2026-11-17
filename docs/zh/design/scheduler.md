@@ -714,6 +714,8 @@ event handler 根据最新 Job 计算 `QueuedJob.Schedulable`：仅当 Job 仍�
 
 `QueuedJob.Priority` 固定取自 `Job.spec.priority`，未填写时 Go 零值为 0，直接使用 `int64` 比较，不做偏移或转换。priority 更新属于调度相关更新；同一 UID 的 active 条目原位修复堆，backoff 或 inFlight 条目按下述事件优先规则处理。
 
+构建任务的优先级由 `Build.spec.priority` 指定，省略时 apiserver 创建 Build 按工程类型补齐：社区工程 `5`、个人工程 `0`，显式值保留。BuildInfo Controller 创建 Job 时原样传递，不随后续工程类型变化而改变。该值只影响已派发且可调度 Job 的出队顺序，不改变构建依赖顺序，不绕过资源约束，也不抢占正在运行的任务。当前仅通过 Build API 配置，前端暂不提供入口。
+
 `Add` 必须在 Queue 的一个锁临界区内按以下规则处理，同一 Key 在 `activeQ`、`backoffQ` 和 `inFlight` 中至多存在一个主条目：
 
 | 当前状态 | 最新 Job | `Add` 行为 |

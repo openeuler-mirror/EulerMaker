@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kvalidation "k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/utils/ptr"
 	syaml "sigs.k8s.io/yaml"
 
 	clientpkg "controller-manager/pkg/clients/apiserver"
@@ -449,6 +450,7 @@ func (c *Controller) jobForSpec(
 			},
 		},
 		Spec: ebsv1.JobSpec{
+			Priority:       ptr.Deref(round.build.Spec.Priority, 0),
 			ScriptRefs:     []ebsv1.ScriptRef{scriptRef},
 			Runtime:        ebsv1.ExecutionTypeContainer,
 			RuntimeSpec:    runtime.RawExtension{Raw: runtimeSpec},

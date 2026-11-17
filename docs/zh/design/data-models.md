@@ -249,6 +249,7 @@ type BuildSpec struct {
     Packages           []string               `json:"packages,omitempty"`
     Arch               string                 `json:"arch,omitempty"`
     Publish            *bool                  `json:"publish,omitempty"`
+    Priority           *int64                 `json:"priority,omitempty"`
 }
 ```
 
@@ -256,6 +257,7 @@ type BuildSpec struct {
 |----------------|---------|------|------|
 | `buildType`    | BuildType | 是 | 公共 API 枚举：`"full"` / `"incremental"` / `"specified"` / `"single"` |
 | `arch` | string | 是 | 必须属于 Project.spec.buildArches；创建后不可修改 |
+| `priority` | *int64 | 否 | 所有构建类型均可设置，允许负数，值越大越优先；省略时 apiserver 按 Project 类型补齐并持久化：社区工程为 `5`，个人工程为 `0`；显式 `0` 等配置值原样保留。BuildInfo Controller 将其传递给每次派发的 `Job.spec.priority`；创建后不可修改 |
 | `publish` | *bool | 否 | 仅非 single 允许设置；创建时省略由 apiserver 补为 `true`，显式 `false` 跳过正式发布但仍生成过程仓。single 必须省略，否则拒绝请求 |
 | `packages`     | []string | 条件必填 | `single`、`specified` 为用户指定的目标仓库名；`full` 为空；`incremental` 创建时为空，由 Build Controller 在当前 Snapshot Active 后写入变更仓库与上次发布成功轮次中失败 spec 所属仓库的去重集合。该集合是依赖扩散的种子，不是最终 spec 构建集 |
 

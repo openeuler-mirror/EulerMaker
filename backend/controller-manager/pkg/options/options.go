@@ -98,7 +98,7 @@ type GitServerOptions struct {
 
 func Parse(args []string) (Options, error) {
 	o := Options{
-		API:             APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 20, ClientBurst: 40},
+		API:             APIOptions{RequestTimeout: 30 * time.Second, ClientQPS: 50, ClientBurst: 100},
 		Manager:         ManagerOptions{Controllers: "*", Workers: 6, ControllerMaxRetries: 15, CacheSyncTimeout: 2 * time.Minute, ShutdownTimeout: 30 * time.Second, SlowRetryInitialDelay: 30 * time.Second, SlowRetryMaxDelay: 15 * time.Minute, SlowRetryJitter: 0.2},
 		Source:          SourceOptions{PollPeriod: 10 * time.Second, PollPageSize: 500, SourceStaleThreshold: 2 * time.Minute, ResyncPeriod: 10 * time.Minute},
 		Health:          HealthOptions{Address: ":8080"},

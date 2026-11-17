@@ -1916,6 +1916,11 @@
             },
             "type": "array"
           },
+          "priority": {
+            "description": "Priority is inherited by Jobs; higher values are scheduled first. Defaults to 5 for community projects, otherwise 0.",
+            "format": "int64",
+            "type": "integer"
+          },
           "publish": {
             "description": "Publish controls release publication. Defaults to true for non-single builds; single builds must omit it.",
             "type": "boolean"

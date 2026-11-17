@@ -236,6 +236,25 @@ func TestBootstrapRepoURLs(t *testing.T) {
 
 // --- Job construction ---
 
+func TestJobForSpecPriority(t *testing.T) {
+	c, _, _, _ := newTestController(t)
+	for _, buildType := range ebsv1.BuildTypeValues() {
+		for _, priority := range []int64{-10, 0, 100} {
+			build := testBuildObj(buildType)
+			build.Spec.Priority = &priority
+			round := &reconcileRound{current: testBuildInfoObj(ebsv1.BuildInfoProcessing), build: build}
+			depend := dependEntry("a")
+			for _, generation := range []int64{1, 2} {
+				job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL,
+					testBuildResourceContent(), testScriptRef(), "job-priority", generation, nil)
+				if job.Spec.Priority != priority {
+					t.Fatalf("type=%s generation=%d: priority=%d, want %d", buildType, generation, job.Spec.Priority, priority)
+				}
+			}
+		}
+	}
+}
+
 func TestJobForSpecConstruction(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild
