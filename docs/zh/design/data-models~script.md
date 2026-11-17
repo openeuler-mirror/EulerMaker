@@ -14,9 +14,17 @@ BuildInfo Controller 从空对象组装 Job payload，只下发已识别的配�
 
 默认脚本先执行 `git clone --no-checkout`；本地不存在目标 commit 时，执行 `git fetch --no-tags origin <commit_id>`，最多尝试 3 次，失败后间隔 2 秒再试。确认 commit 存在后执行 `checkout --detach <commit_id>`；普通 Git 和 Git LFS 路径共用该逻辑。获取成功仍依赖远端允许按 SHA 读取且保留目标对象，本流程不提供远端 commit 保留能力。
 
+源码复制到 `rpmbuild/SOURCES` 和 `SPECS` 后，脚本立即以容器内 root 身份清空 `/workspace/source` 的内容（含 `.git` 等隐藏文件），保留空目录。退出时再次清理，覆盖克隆失败、后续构建失败和可处理的 INT/TERM；清理失败记录错误但不覆盖原执行结果。不跟随源码目录或其内部的符号链接，不删除构建目录和产物。SIGKILL、容器或宿主机故障无法保证执行退出清理，仍由 Runner 工作目录回收兜底。
+
 PR 引用在 Snapshot 阶段解析，Job 不感知 PR ref，也不额外携带 build_type 或动态引用字段。自定义 Script 应遵循相同的固定提交契约；实际检出的 commit 可记录到日志。
 
+下载 Source/Patch 时，默认脚本先执行 `rpmspec -P`。展开后的 HTTP(S) URL 若仍包含 `%{...}` 形式的未展开宏，则记录警告并跳过该项，继续处理其他下载；URL 编码如 `%20` 不受影响。`rpmspec` 执行失败及正常 URL 的下载失败仍使脚本失败，不回退原文解析。跳过下载不保证构建成功：所需源文件若未由源码仓库等途径提供，后续构建仍会报告缺失。
+
 ### 构建环境参数
+
+`BuildInfo.spec.buildPayload.macros` 存在时原样下发为 Job payload 的 `macros`。默认脚本要求字符串数组；未配置、null 或空数组不修改用户宏文件，其他类型明确失败。每项作为 RPM 宏文件正文原样写入并追加换行，不补 `%define`/`%global`、不排序或去重，也不通过 shell `eval`/`source` 执行；空字符串和多行宏保持原义。
+
+脚本在安装依赖和解析 spec 前，将宏追加到 `/root/.rpmmacros`，保留镜像已有宏，并在已有内容与新宏之间补换行。非 root 构建在用户创建后、执行 `rpmbuild` 前，将同一份宏追加到 `/home/eulermaker/.rpmmacros` 并调整文件归属。因此 root 执行的 `dnf builddep`、`rpmspec -P` 和实际构建用户执行的 `rpmbuild` 都加载项目宏；同名定义遵循 RPM 加载顺序，spec 内定义仍可覆盖它们。宏本身可能包含 RPM shell/Lua 展开，不应视为不可执行的普通数据；管理面解析风险边界见 BuildInfo Controller 设计的 21.1 节 BI-02。
 
 默认 `rpmbuild` 脚本读取 Job payload 中的 `preinstall` 字符串数组（来自已固化的 `BuildInfo.spec.buildPayload`），使用 Job 配置的 RPM 仓库先执行 `dnf install`，再执行 `dnf builddep`。未配置、值为 null 或数组为空时跳过预装；其他非数组值或包含空包名时构建失败。此能力只处理工程级预装列表，不解释旧架构的 `exclude_*` 条件规则。
 

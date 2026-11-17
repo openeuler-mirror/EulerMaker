@@ -118,6 +118,40 @@ spec:
       [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
     }
 
+    configure_rpm_macros() {
+      python3 - "$payload" "$1/.rpmmacros" <<'PY'
+    import json
+    from pathlib import Path
+    import sys
+
+    with open(sys.argv[1], encoding='utf-8') as source:
+        macros = json.load(source).get('macros')
+    if macros is None:
+        macros = []
+    if not isinstance(macros, list) or any(not isinstance(macro, str) for macro in macros):
+        sys.exit('payload.macros must be an array of strings')
+    if macros:
+        path = Path(sys.argv[2])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Keep image defaults; project macros follow them without shell evaluation.
+        with path.open('a', encoding='utf-8') as output:
+            output.write('\n')
+            for macro in macros:
+                output.write(macro + '\n')
+    PY
+    }
+
+    cleanup_source_dir() {
+      # Never follow a replaced source directory or delete outside the clone location.
+      if [[ "$source_dir" != /workspace/source || -L "$source_dir" ]]; then
+        echo "refusing to clean unexpected source directory" >&2
+        return
+      fi
+      [[ -d "$source_dir" ]] || return 0
+      find "$source_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || \
+        echo "failed to clean cloned source files" >&2
+    }
+
     checkout_source_commit() {
       local attempt
       # A normal clone may omit commits reachable only through PR refs.
@@ -190,6 +224,10 @@ spec:
       local expanded_spec url file
       expanded_spec=$(rpmspec --define "_topdir $topdir" -P "$spec")
       while IFS= read -r url; do
+        if [[ "$url" == *'%{'* ]]; then
+          echo "skipping source download with an unexpanded RPM macro: $url" >&2
+          continue
+        fi
         file=${url##*/}
         file=${file%%\?*}
         test -n "$file" || { echo "source URL has no filename: $url" >&2; exit 1; }
@@ -254,6 +292,10 @@ spec:
         command -v runuser >/dev/null || { echo "runuser is required for non-root rpmbuild" >&2; exit 1; }
         chown -R "$build_user" "$topdir"
         configure_maven "$build_user"
+        configure_rpm_macros "/home/$build_user"
+        if [[ -f "/home/$build_user/.rpmmacros" ]]; then
+          chown "$build_user" "/home/$build_user/.rpmmacros"
+        fi
         runuser -u "$build_user" -- rpmbuild --define "_topdir $topdir" -ba "$spec"
       fi
     }
@@ -319,8 +361,13 @@ spec:
 
     main() {
       check_environment
+      trap cleanup_source_dir EXIT
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
       load_payload
+      configure_rpm_macros /root
       prepare_sources
+      cleanup_source_dir
       configure_repositories
       install_build_dependencies
       download_source_files

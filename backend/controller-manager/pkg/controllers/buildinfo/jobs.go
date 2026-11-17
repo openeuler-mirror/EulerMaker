@@ -486,6 +486,9 @@ func (c *Controller) jobPayload(
 		// Keep the declared value so the script can reject malformed input.
 		payload["preinstall"] = preinstall
 	}
+	if macros, exists := configured["macros"]; exists {
+		payload["macros"] = macros
+	}
 	configuredPrefer := payloadPrefer(configured)
 	if matched := jobPrefer(depend, sources, configuredPrefer); len(matched) > 0 {
 		payload["prefer"] = strings.Join(matched, " ")
