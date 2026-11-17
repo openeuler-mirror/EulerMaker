@@ -658,6 +658,13 @@ func schema_ebs_api_ebs_v1_BuildSpec(ref common.ReferenceCallback) common.OpenAP
 							},
 						},
 					},
+					"priority": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Priority is inherited by Jobs; higher values are scheduled first. Defaults to 5 for community projects, otherwise 0.",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
 				},
 			},
 		},

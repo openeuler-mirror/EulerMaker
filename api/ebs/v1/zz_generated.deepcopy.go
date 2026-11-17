@@ -370,6 +370,11 @@ func (in *BuildSpec) DeepCopyInto(out *BuildSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Priority != nil {
+		in, out := &in.Priority, &out.Priority
+		*out = new(int64)
+		**out = **in
+	}
 	return
 }
 

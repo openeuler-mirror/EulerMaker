@@ -792,6 +792,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 - `Build.spec.buildType` 必填，不设置默认值；缺失时返回 422。
 - `Build.spec.publish` 仅非 single 允许设置，创建时省略则补为 `true`，显式 `false` 保持不变。single 携带该字段时返回 422；创建后遵循 Build spec 不可变规则。Project 的构建目标只包含 arch，不保存发布策略。
 - `Job.spec.runtime` 默认为 `ct`，`spec.timeoutSeconds` 默认为 `10800`。
+- `Build.spec.priority` 省略时，复用创建阶段的 Project 查询，按 `project.ebs.io/type` 补齐并持久化：`community` 为 `5`，个人工程为 `0`；显式数值（包括 `0`）不覆盖。dry-run 返回相同的默认结果但不写入存储；该字段创建后不可修改，不随工程类型变化重算。
 - `Runner.spec.type` 默认为 `ct`。
 
 当前校验逻辑位于 `pkg/apis/ebs/validation/validation.go`，主要包括：

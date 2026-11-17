@@ -89,8 +89,8 @@ func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *
 	}}
 }
 
-// ValidateBuildInputs checks the target and packages using one Project read.
-func ValidateBuildInputs(configs, projects rest.Getter) rest.ValidateObjectFunc {
+// PrepareBuildInputs checks the target and packages and defaults priority using one Project read.
+func PrepareBuildInputs(configs, projects rest.Getter) func(context.Context, runtime.Object) error {
 	return func(ctx context.Context, obj runtime.Object) error {
 		build, ok := obj.(*ebsv1.Build)
 		if !ok || build == nil {
@@ -126,6 +126,13 @@ func ValidateBuildInputs(configs, projects rest.Getter) rest.ValidateObjectFunc 
 		}
 		if len(errs) > 0 {
 			return apierrors.NewInvalid(ebsv1.Kind("Build"), build.Name, errs)
+		}
+		if build.Spec.Priority == nil {
+			priority := int64(0)
+			if project.Labels[ebsv1.ProjectTypeLabel] == ebsv1.ProjectTypeCommunity {
+				priority = 5
+			}
+			build.Spec.Priority = &priority
 		}
 		return nil
 	}

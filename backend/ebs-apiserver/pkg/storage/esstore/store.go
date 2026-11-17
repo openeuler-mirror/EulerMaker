@@ -67,6 +67,7 @@ type Store struct {
 	tableConvertor    rest.TableConvertor
 	deleteHook        func(context.Context, string) error
 	createHook        rest.ValidateObjectFunc
+	prepareCreateHook func(context.Context, runtime.Object) error
 	updateHook        rest.ValidateObjectUpdateFunc
 	createTransaction func(context.Context, runtime.Object, bool, func() (runtime.Object, error)) (runtime.Object, error)
 	afterWrite        func(context.Context, runtime.Object, bool)
@@ -103,6 +104,11 @@ func (s *Store) SetDeleteHook(hook func(context.Context, string) error) { s.dele
 
 // SetCreateHook registers resource-specific validation after defaulting and before persistence.
 func (s *Store) SetCreateHook(hook rest.ValidateObjectFunc) { s.createHook = hook }
+
+// SetPrepareCreateHook fills defaults that depend on other resources before create validation hooks and persistence.
+func (s *Store) SetPrepareCreateHook(hook func(context.Context, runtime.Object) error) {
+	s.prepareCreateHook = hook
+}
 
 // SetUpdateHook registers resource-specific validation for ordinary updates.
 func (s *Store) SetUpdateHook(hook rest.ValidateObjectUpdateFunc) { s.updateHook = hook }
@@ -235,6 +241,11 @@ func (s *Store) create(ctx context.Context, obj runtime.Object, credential json.
 	}
 	if err := rest.BeforeCreate(s.createStrategy, ctx, obj); err != nil {
 		return nil, err
+	}
+	if s.prepareCreateHook != nil {
+		if err := s.prepareCreateHook(ctx, obj); err != nil {
+			return nil, err
+		}
 	}
 	if s.createHook != nil {
 		if err := s.createHook(ctx, obj.DeepCopyObject()); err != nil {

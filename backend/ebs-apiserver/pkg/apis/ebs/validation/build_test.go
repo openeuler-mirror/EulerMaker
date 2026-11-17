@@ -49,6 +49,22 @@ func TestBuildPublishIsImmutable(t *testing.T) {
 	}
 }
 
+func TestBuildPriorityIsImmutable(t *testing.T) {
+	for _, buildType := range ebsv1.BuildTypeValues() {
+		for _, priority := range []int64{-10, 0, 100} {
+			build := validBuild()
+			build.Spec.BuildType = ebsv1.BuildType(buildType)
+			build.Labels[ebsv1.BuildTypeLabel] = buildType
+			build.Spec.Priority = &priority
+			build.Status.Phase = ebsv1.BuildPending
+			assertErrorList(t, ValidateBuildUpdate(build.DeepCopy(), build), 0, nil)
+			next := build.DeepCopy()
+			*next.Spec.Priority++
+			assertErrorList(t, ValidateBuildUpdate(next, build), 1, map[string]field.ErrorType{"spec": field.ErrorTypeInvalid})
+		}
+	}
+}
+
 func TestBuildTypeAndStageEnums(t *testing.T) {
 	for _, value := range ebsv1.BuildTypeValues() {
 		build := validBuild()

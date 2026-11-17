@@ -1108,7 +1108,7 @@ metadata:
     ebs.io/dispatch-generation: "${dispatchGeneration}"
     ebs.io/artifacts: "${project.metadata.annotations['ebs.io/artifacts'] 或 default}"
 spec:
-  priority: 0                                       # 类型零值默认，不显式设置
+  priority: ${build.spec.priority}                  # apiserver 创建 Build 时补齐：社区 5、个人 0
   runtime: ct                                       # controller 常量；apiserver 同值兜底
   runtimeSpec:
     image: ${buildInfo.spec.image}                   # 复用创建 BuildInfo 时固化的镜像
@@ -1142,7 +1142,7 @@ status:                                             # 创建时恒 Pending/Pendi
 | `metadata.labels["ebs.io/target-arch"]` | `Build.spec.arch` | G-08 必写；RpmRepo 候选 Job 的目标架构校验字段，见 [RpmRepo Controller 设计](controller-manager~rpmrepo-controller.md) 第六章 |
 | `metadata.annotations["ebs.io/dispatch-generation"]` | 十进制派发代次 | 与基于 BuildInfo UID 计算的 Job 名共同核验创建身份；资源配置来源不写入 Job annotation，调度以 `spec.resources` 为准 |
 | `metadata.annotations["ebs.io/artifacts"]` | Project 选定的实例名；缺省为 `default` | 创建时固化，Runner 据此选择日志和产物上传地址，创建后不可修改 |
-| `spec.priority` | `0` | 类型零值即默认，不显式设置                                                                                                                 |
+| `spec.priority` | `Build.spec.priority` | 从本轮已读取的父 Build 传递；apiserver 创建 Build 时按工程类型补齐默认值（社区 `5`、个人 `0`）。所有构建类型及重派发 Job 均沿用相同值，不在 BuildInfo spec 中重复保存 |
 | `spec.runtime` | `"ct"` | 常量；apiserver `SetDefaults_Job` 同值兜底（见下"apiserver 默认与覆写"）                                                                      |
 | `spec.runtimeSpec` | `{"image": BuildInfo.spec.image, "networkMode":"host"}` | RawExtension；镜像直接取自 BuildInfo.spec.image，同一 Build 的所有 Job 使用相同引用。Runner 按所选 Docker/containerd 后端配置宿主机网络，运行时契约见 [Runner 设计](runner.md) |
 | `spec.scriptRefs` | 创建时 Script 的 name、UID、resourceVersion，当前写入一个元素 | 从 `buildPayload.rpmbuild_script` 选名，未配置时使用 `rpmbuild`；GET Script 后写入观测值，不下发 `rpmbuild_script` 到 Job payload。读取失败不创建 Job；观测值不锁定 Runner 执行时的正文 |

@@ -37,6 +37,29 @@ func TestBuildSpecPublishJSON(t *testing.T) {
 	}
 }
 
+func TestBuildSpecPriorityJSON(t *testing.T) {
+	for _, input := range []string{`{}`, `{"priority":0}`, `{"priority":-10}`, `{"priority":100}`, `{"priority":9223372036854775807}`} {
+		var spec BuildSpec
+		if err := json.Unmarshal([]byte(input), &spec); err != nil {
+			t.Fatal(err)
+		}
+		copy := spec.DeepCopy()
+		data, err := json.Marshal(copy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != input {
+			t.Fatalf("priority round trip = %s, want %s", data, input)
+		}
+		if copy.Priority != nil {
+			*copy.Priority = 42
+			if *spec.Priority == 42 {
+				t.Fatal("DeepCopy shares the priority pointer")
+			}
+		}
+	}
+}
+
 func TestRepositoryAndRunnerJSONNames(t *testing.T) {
 	var status PackageRepoStatus
 	if err := json.Unmarshal([]byte(`{"cloneURL":"git-server:///git/repo.git","commitID":"abc"}`), &status); err != nil {
