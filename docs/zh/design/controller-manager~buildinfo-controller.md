@@ -1155,7 +1155,7 @@ status:                                             # 创建时恒 Pending/Pendi
 
 **payload 构造契约**：
 
-1. **输入与白名单**：`BuildInfo.spec.buildPayload`（Build Controller 创建时从 `Project.spec.buildPayload` 固化，见 15.2.2）经前置校验并 YAML 解码 → map；解析失败或非 map 按 E-31 停止派发，不回退 `{}`。从空 Job payload 开始，只读取 `preinstall`、`prefer`、`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz`、`unuse_gcc_secure` 和 `repo` 这九个配置键；`preinstall` 存在时原值写入，由脚本校验类型。`prefer` 按当前 spec 计算，不原样下发；六个包仓库名列表按下述规则转为单 Job 可选布尔值；`repo` 按下述规则归一。`macros`、`unparsable_spec`、`rpmbuild_script`、`cpu`、`memory` 等其他键不进入 Job payload，未知自定义键也不透传。
+1. **输入与白名单**：`BuildInfo.spec.buildPayload`（Build Controller 创建时从 `Project.spec.buildPayload` 固化，见 15.2.2）经前置校验并 YAML 解码 → map；解析失败或非 map 按 E-31 停止派发，不回退 `{}`。从空 Job payload 开始，只读取 `macros`、`preinstall`、`prefer`、`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz`、`unuse_gcc_secure` 和 `repo`；`macros`、`preinstall` 存在时原值写入，由脚本校验类型。`macros` 在默认脚本中供 root 和非 root 构建用户统一加载，具体规则见 [Script 构建环境参数](data-models~script.md#构建环境参数)。`prefer` 按当前 spec 计算，不原样下发；六个包仓库名列表按下述规则转为单 Job 可选布尔值；`repo` 按下述规则归一。`unparsable_spec`、`rpmbuild_script`、`cpu`、`memory` 等其他键不进入 Job payload，未知自定义键也不透传。
 2. **字段组装**：
    - per-spec 字段（`specDepends` 统一为本轮组装的内存视图，15.11，不读主资源字段）：
      - `spec_name` = 本轮组装的 specDepends **map key**（条目内 `specName` 字段以 key 为准，不直读）；

@@ -243,7 +243,7 @@ func TestJobForSpecConstruction(t *testing.T) {
 	bi.UID = "bi-job-construct"
 	bi.Spec.BuildPayload = "custom: omit\nRepo: http://legacy-override\nrepo: http://base-override\n" +
 		"repo_priority: \"7\"\nspec_name: forged\ncommit_id: forged\npreinstall:\n" +
-		"- rpm-build\n- systemd-rpm-macros\n"
+		"- rpm-build\n- systemd-rpm-macros\nmacros:\n- '%_vendor openEuler'\n- '%dist .oe2403sp3'\n"
 	bi.Spec.BootstrapRepos = []ebsv1.BootstrapRepo{{Name: "base", URL: "http://bootstrap.local/base"}}
 	seeded := client.SeedBuildInfo(bi)
 	round := &reconcileRound{key: key, current: seeded, build: testBuildObj("full"), failures: c.newRoundFailures(key)}
@@ -340,8 +340,11 @@ func TestJobForSpecConstruction(t *testing.T) {
 	if got, want := payload["preinstall"], []any{"rpm-build", "systemd-rpm-macros"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("payload.preinstall = %v, want %v", got, want)
 	}
-	if len(payload) != 8 {
-		t.Errorf("payload = %v, want only the eight recognized fields", payload)
+	if got, want := payload["macros"], []any{"%_vendor openEuler", "%dist .oe2403sp3"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("payload.macros = %v, want %v", got, want)
+	}
+	if len(payload) != 9 {
+		t.Errorf("payload = %v, want only the nine recognized fields", payload)
 	}
 }
 

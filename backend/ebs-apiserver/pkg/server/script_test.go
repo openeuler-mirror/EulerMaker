@@ -144,6 +144,251 @@ func TestDefaultRpmbuildScriptReadsCloneURL(t *testing.T) {
 	}
 }
 
+func TestDefaultRpmbuildScriptLoadsMacros(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script, _, found := strings.Cut(storage.object.Spec.Content, "\nmain \"$@\"")
+	if !found {
+		t.Fatal("default script main call not found")
+	}
+	const defaults = "%image_macro preserved"
+	macros := []string{"%_vendor openEuler", "%dist .oe2403sp3", "", "%literal $(touch must-not-exist)", "%multiline first\\\nsecond"}
+	for _, useRoot := range []bool{true, false} {
+		for _, mode := range []string{"configured", "missing", "null", "empty"} {
+			t.Run(fmt.Sprintf("root=%t/%s", useRoot, mode), func(t *testing.T) {
+				dir := t.TempDir()
+				fields := map[string]any{
+					"clone_url": "https://git.example/repo.git", "commit_id": strings.Repeat("a", 40),
+					"spec_file_name": "example.spec", "package_name": "example", "use_root": useRoot,
+					"unuse_gcc_secure": true,
+				}
+				want := defaults
+				switch mode {
+				case "configured":
+					fields["macros"] = macros
+					want += "\n" + strings.Join(macros, "\n") + "\n"
+				case "null":
+					fields["macros"] = nil
+				case "empty":
+					fields["macros"] = []string{}
+				}
+				data, err := json.Marshal(fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for path, content := range map[string]string{
+					"payload.json": string(data), "expected": want,
+					"root/.rpmmacros": defaults, "home/eulermaker/.rpmmacros": defaults,
+				} {
+					fullPath := filepath.Join(dir, path)
+					if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(fullPath, []byte(content), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				setup := `
+payload=$TEST_DIR/payload.json
+topdir=$TEST_DIR/rpmbuild
+spec=$TEST_DIR/example.spec
+macro_home=$TEST_DIR/root
+check_environment() { :; }
+prepare_sources() { :; }
+configure_repositories() { dnf_args=(); }
+configure_maven() { :; }
+archive_source_directories() { :; }
+collect_artifacts() { :; }
+check_installation() { :; }
+id() { echo 1000; }
+chown() { :; }
+verify_macros() { cmp "$TEST_DIR/expected" "$macro_home/.rpmmacros"; }
+dnf() { verify_macros; echo dnf >> "$TEST_DIR/calls"; }
+rpmspec() { verify_macros; echo rpmspec >> "$TEST_DIR/calls"; }
+rpmbuild() { verify_macros; echo rpmbuild >> "$TEST_DIR/calls"; }
+runuser() { test "$1 $2 $3" = '-u eulermaker --'; shift 3; (macro_home=$TEST_DIR/home/eulermaker; "$@"); }
+main
+`
+				// Redirect both user homes; no real users, RPM installation or host files are changed.
+				localScript := strings.ReplaceAll(script, "/root", dir+"/root")
+				localScript = strings.ReplaceAll(localScript, "/home/", dir+"/home/")
+				localScript = strings.ReplaceAll(localScript, "/workspace/source", dir+"/source")
+				cmd := exec.Command("bash")
+				cmd.Dir = dir
+				cmd.Env = append(os.Environ(), "TEST_DIR="+dir)
+				cmd.Stdin = strings.NewReader(localScript + setup)
+				if output, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("load RPM macros: %v\n%s", err, output)
+				}
+				calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+				if err != nil || string(calls) != "dnf\nrpmspec\nrpmbuild\n" {
+					t.Fatalf("build calls = %q: %v", calls, err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "must-not-exist")); !os.IsNotExist(err) {
+					t.Fatalf("macro was evaluated by the shell: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestDefaultRpmbuildScriptRejectsMalformedMacros(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script, _, found := strings.Cut(storage.object.Spec.Content, "\nmain \"$@\"")
+	if !found {
+		t.Fatal("default script main call not found")
+	}
+	for _, payload := range []string{`{"macros":"%dist .test"}`, `{"macros":["%dist .test",1]}`} {
+		t.Run(payload, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "payload.json"), []byte(payload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash")
+			cmd.Env = append(os.Environ(), "TEST_DIR="+dir)
+			cmd.Stdin = strings.NewReader(script + "\npayload=$TEST_DIR/payload.json\nconfigure_rpm_macros \"$TEST_DIR\"\n")
+			if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "payload.macros must be an array of strings") {
+				t.Fatalf("malformed macros: %v\n%s", err, output)
+			}
+			if _, err := os.Stat(filepath.Join(dir, ".rpmmacros")); !os.IsNotExist(err) {
+				t.Fatalf("macros partially written: %v", err)
+			}
+		})
+	}
+}
+
+func TestDefaultRpmbuildScriptCleansClonedSources(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script, _, found := strings.Cut(storage.object.Spec.Content, "\nmain \"$@\"")
+	if !found {
+		t.Fatal("default script main call not found")
+	}
+	for _, mode := range []string{"success", "clone-failed", "build-failed", "terminated"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			setup := `
+check_environment() { :; }
+load_payload() { :; }
+configure_rpm_macros() { :; }
+prepare_sources() {
+  mkdir -p "$source_dir/.git/objects" "$TEST_DIR/rpmbuild/SOURCES" "$TEST_DIR/results"
+  printf source > "$source_dir/example.spec"
+  printf object > "$source_dir/.git/objects/data"
+  printf preserve > "$TEST_DIR/results/package.rpm"
+  ln -s "$TEST_DIR/results" "$source_dir/outside"
+  if [[ "$TEST_MODE" == clone-failed ]]; then return 17; fi
+  if [[ "$TEST_MODE" == terminated ]]; then kill -TERM $$; fi
+  cp "$source_dir/example.spec" "$TEST_DIR/rpmbuild/SOURCES/example.spec"
+}
+configure_repositories() {
+  test -z "$(find "$source_dir" -mindepth 1 -print -quit)"
+  test -s "$TEST_DIR/rpmbuild/SOURCES/example.spec"
+}
+install_build_dependencies() { :; }
+download_source_files() { :; }
+archive_source_directories() { :; }
+build_rpm() { if [[ "$TEST_MODE" == build-failed ]]; then return 23; fi; }
+collect_artifacts() { :; }
+check_installation() { :; }
+main
+`
+			cmd := exec.Command("bash")
+			cmd.Env = append(os.Environ(), "TEST_DIR="+dir, "TEST_MODE="+mode)
+			cmd.Stdin = strings.NewReader(strings.ReplaceAll(script, "/workspace/source", dir+"/source") + setup)
+			output, err := cmd.CombinedOutput()
+			wantExit := map[string]int{"success": 0, "clone-failed": 17, "build-failed": 23, "terminated": 143}[mode]
+			if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != wantExit {
+				t.Fatalf("exit = %v, want %d: %v\n%s", cmd.ProcessState, wantExit, err, output)
+			}
+			entries, err := os.ReadDir(filepath.Join(dir, "source"))
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("source directory not empty: %v, %v", entries, err)
+			}
+			if data, err := os.ReadFile(filepath.Join(dir, "results", "package.rpm")); err != nil || string(data) != "preserve" {
+				t.Fatalf("artifact outside source changed: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+func TestDefaultRpmbuildScriptDownloadsResolvedSources(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script, _, found := strings.Cut(storage.object.Spec.Content, "\nmain \"$@\"")
+	if !found {
+		t.Fatal("default script main call not found")
+	}
+	for _, tc := range []struct {
+		name                    string
+		parseExit, downloadExit int
+		wantExit                int
+	}{
+		{name: "skip unresolved and continue"},
+		{name: "spec parsing failure", parseExit: 17, wantExit: 17},
+		{name: "resolved download failure", downloadExit: 22, wantExit: 22},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			setup := `
+topdir=$TEST_DIR/rpmbuild
+spec=$TEST_DIR/example.spec
+mkdir -p "$topdir/SOURCES"
+touch "$topdir/SOURCES/cached.tar.gz"
+rpmspec() {
+  printf '%s\n' \
+    'Source0: https://example.com/%{undefined}/source.tar.gz' \
+    'Source1: https://example.com/source-%{undefined}.tar.gz' \
+    'Patch0: https://example.com/fix.patch?ref=%{undefined}' \
+    'Source2: https://example.com/cached.tar.gz' \
+    'Source3: https://example.com/source%20archive.tar.gz' \
+    'Patch1: https://example.com/fix.patch'
+  return "$TEST_PARSE_EXIT"
+}
+curl() {
+  printf '%s\n' "${@: -1}" >> "$TEST_DIR/downloads"
+  return "$TEST_DOWNLOAD_EXIT"
+}
+download_source_files
+`
+			cmd := exec.Command("bash")
+			cmd.Env = append(os.Environ(), "TEST_DIR="+dir,
+				fmt.Sprintf("TEST_PARSE_EXIT=%d", tc.parseExit), fmt.Sprintf("TEST_DOWNLOAD_EXIT=%d", tc.downloadExit))
+			cmd.Stdin = strings.NewReader(script + setup)
+			output, err := cmd.CombinedOutput()
+			if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != tc.wantExit {
+				t.Fatalf("exit = %v, want %d: %v\n%s", cmd.ProcessState, tc.wantExit, err, output)
+			}
+			downloads, readErr := os.ReadFile(filepath.Join(dir, "downloads"))
+			if tc.parseExit != 0 {
+				if !os.IsNotExist(readErr) {
+					t.Fatalf("download attempted after spec parsing failure: %q, %v", downloads, readErr)
+				}
+				return
+			}
+			want := "https://example.com/source%20archive.tar.gz\n"
+			if tc.downloadExit == 0 {
+				want += "https://example.com/fix.patch\n"
+			}
+			if readErr != nil || string(downloads) != want {
+				t.Fatalf("downloads = %q, want %q: %v", downloads, want, readErr)
+			}
+			if strings.Count(string(output), "skipping source download with an unexpanded RPM macro:") != 3 {
+				t.Fatalf("missing skipped-source warnings: %s", output)
+			}
+		})
+	}
+}
+
 func TestDefaultRpmbuildScriptFetchesPRCommit(t *testing.T) {
 	storage := &bootstrapScriptStorage{}
 	if err := ensureDefaultScript(context.Background(), storage); err != nil {
