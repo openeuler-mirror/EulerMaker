@@ -214,7 +214,7 @@ spec:
       if (( ${#preinstall_packages[@]} > 0 )); then
         dnf "${dnf_args[@]}" -y install "${preinstall_packages[@]}"
       fi
-      dnf "${dnf_args[@]}" -y builddep "$spec"
+      dnf "${dnf_args[@]}" -y builddep --define "_topdir $topdir" "$spec"
       if [[ "$use_kmod_libs" == true ]]; then
         dnf "${dnf_args[@]}" -y install kmod-libs
       fi

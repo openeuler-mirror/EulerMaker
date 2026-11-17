@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -146,6 +149,97 @@ func TestContainerdLogsFollowAndDrain(t *testing.T) {
 		t.Fatalf("logs = %q", output.String())
 	}
 }
+
+type cleanupTask struct {
+	containerd.Task
+	deleteFn func(context.Context) error
+}
+
+func (*cleanupTask) ID() string { return "job" }
+func (t *cleanupTask) Delete(ctx context.Context, _ ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error) {
+	return nil, t.deleteFn(ctx)
+}
+
+func TestDeleteExitedTask(t *testing.T) {
+	for _, scenario := range []string{"retry success", "already deleted", "exhausted", "permanent error", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			task := &cleanupTask{deleteFn: func(attemptCtx context.Context) error {
+				calls++
+				if attemptCtx.Err() != nil {
+					t.Fatal("retry reused an expired context")
+				}
+				if scenario == "permanent error" {
+					return errdefs.ErrPermissionDenied
+				}
+				if scenario == "cancelled" {
+					cancel()
+					return context.Canceled
+				}
+				if calls == 2 && scenario == "retry success" {
+					return nil
+				}
+				if calls == 2 && scenario == "already deleted" {
+					return errgrpc.ToGRPC(errdefs.ErrNotFound)
+				}
+				<-attemptCtx.Done()
+				return errgrpc.ToGRPC(attemptCtx.Err())
+			}}
+			err := deleteExitedTask(ctx, task, 10*time.Millisecond, time.Millisecond)
+			wantCalls := 2
+			var wantErr error
+			switch scenario {
+			case "exhausted":
+				wantCalls, wantErr = 3, context.DeadlineExceeded
+			case "permanent error":
+				wantCalls, wantErr = 1, errdefs.ErrPermissionDenied
+			case "cancelled":
+				wantCalls, wantErr = 1, context.Canceled
+			}
+			if calls != wantCalls || !errors.Is(err, wantErr) {
+				t.Fatalf("delete = %v after %d calls; want %v after %d", err, calls, wantErr, wantCalls)
+			}
+		})
+	}
+}
+
+func TestContainerdCleanupFailurePreservesExit(t *testing.T) {
+	for _, code := range []uint32{0, 7} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			r := &Containerd{ctx: context.Background(), tasks: make(map[string]*containerdExecution)}
+			execution := &containerdExecution{done: make(chan struct{}), code: -1}
+			r.tasks["job"] = execution
+			exits := make(chan containerd.ExitStatus, 1)
+			exits <- *containerd.NewExitStatus(code, time.Now(), nil)
+			task := &cleanupTask{deleteFn: func(context.Context) error { return context.DeadlineExceeded }}
+			go r.observeExit(task, exits, execution)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if got, err := r.Wait(ctx, "job"); got != int(code) || err != nil {
+				t.Fatalf("wait = %d, %v; want %d, nil", got, err, code)
+			}
+			if !errors.Is(execution.cleanupErr, context.DeadlineExceeded) {
+				t.Fatalf("cleanup error lost: %v", execution.cleanupErr)
+			}
+			var output bytes.Buffer
+			if err := followContainerdLog(ctx, strings.NewReader("build output\n"), &output, execution); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(output.String(), "build output\n") || !strings.Contains(output.String(), "WARNING:") {
+				t.Fatalf("missing output or cleanup warning: %q", output.String())
+			}
+			if err := followContainerdLog(ctx, strings.NewReader(""), failingLogWriter{}, execution); !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("log write failure hidden: %v", err)
+			}
+		})
+	}
+}
+
+type failingLogWriter struct{}
+
+func (failingLogWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func TestContainerdWaitCancellation(t *testing.T) {
 	r := &Containerd{tasks: map[string]*containerdExecution{"job": {done: make(chan struct{})}}}
