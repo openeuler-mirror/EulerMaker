@@ -259,7 +259,7 @@ func TestDeleteBuildRelease(t *testing.T) {
 
 func TestBuildCleanupReleasesGlobalLock(t *testing.T) {
 	m := &Manager{
-		root: t.TempDir(), records: map[string]*ReleaseRecord{},
+		root: t.TempDir(), records: map[string]*ReleaseRecord{}, ctx: context.Background(),
 		queued: map[string]bool{}, running: map[string]bool{}, queue: make(chan string, 1),
 	}
 	record := &ReleaseRecord{Project: "project", TargetArch: "arch", BuildName: "build", State: ReleaseReady}

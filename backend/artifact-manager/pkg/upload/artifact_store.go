@@ -1,6 +1,7 @@
 package upload
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -82,10 +83,16 @@ func NewStore(root string) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) CleanupTemporary(ttl time.Duration) error {
+func (s *Store) CleanupTemporary(ctx context.Context, ttl time.Duration) error {
 	root := filepath.Join(s.root, "artifacts")
 	cutoff := time.Now().Add(-ttl)
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if os.IsNotExist(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -101,12 +108,30 @@ func (s *Store) CleanupTemporary(ttl time.Duration) error {
 		if len(parts) != 5 || !entry.Type().IsRegular() || filepath.Ext(path) != ".tmp" {
 			return nil
 		}
-		info, err := entry.Info()
+		unlock := s.lockJob(parts[0], parts[2])
+		defer unlock()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		if info.ModTime().Before(cutoff) {
-			return os.Remove(path)
+		if info.Mode().IsRegular() && info.ModTime().Before(cutoff) {
+			// An upload streams outside the Job lock; its Pending record protects the body.
+			artifact, err := s.readArtifact(parts[0], parts[2], strings.TrimSuffix(parts[4], ".tmp"))
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if artifact != nil && artifact.State == Pending {
+				return nil
+			}
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 		}
 		return nil
 	})
@@ -151,6 +176,9 @@ func (s *Store) load() error {
 			var v LogStream
 			if e := json.Unmarshal(b, &v); e != nil || v.Project != parts[0] || v.JobName != parts[2] || v.Stream != "combined" {
 				return fmt.Errorf("load log metadata %s: invalid JSON", path)
+			}
+			if v.State == LogCompleted {
+				return nil
 			}
 			return s.recoverLog(&v)
 		}

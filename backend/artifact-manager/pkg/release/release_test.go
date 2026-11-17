@@ -371,7 +371,7 @@ func TestReleaseRecoveryCachesActiveRecords(t *testing.T) {
 	}
 }
 
-func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
+func TestReleaseHistoryCleanupRunsOnBackgroundStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		root: t.TempDir(), records: map[string]*ReleaseRecord{}, historyCount: 1, historyTTL: time.Hour,
@@ -379,7 +379,7 @@ func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
 	}
 	stopped := make(chan struct{})
 	go func() { defer close(stopped); m.worker() }()
-	t.Cleanup(func() { cancel(); <-stopped })
+	t.Cleanup(func() { cancel(); m.retention.Wait(); <-stopped })
 	now := time.Now().UTC()
 	for i, name := range []string{"latest", "old", "current"} {
 		record := &ReleaseRecord{
@@ -401,7 +401,11 @@ func TestReleaseHistoryCleanupReadsDiskRecords(t *testing.T) {
 	if len(m.records) != 0 {
 		t.Fatalf("historical records cached: %d", len(m.records))
 	}
-	m.cleanupHistory(now)
+	m.retention.Add(1)
+	go func() {
+		defer m.retention.Done()
+		m.retentionLoop()
+	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		_, ok, err := m.Get("old")

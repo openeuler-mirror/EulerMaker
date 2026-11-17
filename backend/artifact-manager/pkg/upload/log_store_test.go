@@ -401,34 +401,58 @@ func TestLogMetadataReadOnDemand(t *testing.T) {
 	}
 }
 
-func TestRestartWithMissingCompletedLogArtifact(t *testing.T) {
-	root := t.TempDir()
-	store, err := NewStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data := []byte("completed log")
-	if _, err := store.AppendLog("project", "job", "runner", 0, data, hashText(string(data))); err != nil {
-		t.Fatal(err)
-	}
-	artifact, err := store.CompleteLog("project", "job", "runner", CompleteLogRequest{
-		Stream: "combined", LastSequence: 0, Size: int64(len(data)), SHA256: hashText(string(data)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(store.ArtifactPath(artifact)); err != nil {
-		t.Fatal(err)
-	}
-	for attempt := 0; attempt < 2; attempt++ {
-		store, err = NewStore(root)
-		if err != nil {
-			t.Fatalf("restart %d: %v", attempt+1, err)
-		}
-		log, ok := store.GetLog("project", "job")
-		if !ok || log.State != LogFailed || log.Failure == nil || log.Failure.Code != "Corrupted" {
-			t.Fatalf("restart %d log: %+v", attempt+1, log)
-		}
+func TestRestartSkipsCompletedLogVerification(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%t", missing), func(t *testing.T) {
+			root := t.TempDir()
+			store, err := NewStore(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := []byte("completed log")
+			if _, err := store.AppendLog("project", "job", "runner", 0, data, hashText(string(data))); err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := store.CompleteLog("project", "job", "runner", CompleteLogRequest{
+				Stream: "combined", LastSequence: 0, Size: int64(len(data)), SHA256: hashText(string(data)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if missing {
+				err = os.Remove(store.ArtifactPath(artifact))
+			} else {
+				err = os.WriteFile(store.ArtifactPath(artifact), bytes.Repeat([]byte("x"), len(data)), 0640)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, meta := store.LogPaths("project", "job")
+			before, err := os.ReadFile(meta)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				store, err = NewStore(root)
+				if err != nil {
+					t.Fatalf("restart %d: %v", attempt+1, err)
+				}
+				log, ok := store.GetLog("project", "job")
+				if !ok || log.State != LogCompleted || log.ArtifactID != artifact.ID {
+					t.Fatalf("restart %d log: %+v", attempt+1, log)
+				}
+				after, err := os.ReadFile(meta)
+				if err != nil || !bytes.Equal(before, after) {
+					t.Fatalf("restart changed completed log metadata: %v", err)
+				}
+			}
+			if missing {
+				if f, _, err := store.OpenLog("project", "job"); err == nil {
+					f.Close()
+					t.Fatal("missing log content was served")
+				}
+			}
+		})
 	}
 }
 

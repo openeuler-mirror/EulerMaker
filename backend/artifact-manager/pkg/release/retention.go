@@ -12,6 +12,7 @@ import (
 )
 
 func (m *Manager) retentionLoop() {
+	m.cleanupHistory(time.Now().UTC())
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
 	for {
@@ -27,23 +28,38 @@ func (m *Manager) retentionLoop() {
 func (m *Manager) cleanupHistory(now time.Time) {
 	type target struct{ project, arch string }
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ctx.Err() != nil {
+		return
+	}
 	groups := map[target][]*ReleaseRecord{}
 	if err := m.scanRecords(func(record *ReleaseRecord) error {
+		if m.ctx.Err() != nil {
+			return m.ctx.Err()
+		}
 		if record.State == ReleaseReady {
 			key := target{record.Project, record.TargetArch}
 			groups[key] = append(groups[key], record)
 		}
 		return nil
 	}); err != nil {
-		m.mu.Unlock()
+		if m.ctx.Err() != nil {
+			return
+		}
 		klog.ErrorS(nil, "release scan-history failed",
 			"component", "release", "operation", "scan-history", "cause", diagnostics.Cause(err))
 		return
 	}
 	for key, records := range groups {
+		if m.ctx.Err() != nil {
+			return
+		}
 		sort.Slice(records, func(i, j int) bool { return records[i].UpdatedAt.After(records[j].UpdatedAt) })
 		currentTarget, _ := os.Readlink(filepath.Join(m.root, "repositories", key.project, key.arch, "current"))
 		for i, record := range records {
+			if m.ctx.Err() != nil {
+				return
+			}
 			if m.cleaningBuilds[record.BuildName] || i < m.historyCount ||
 				currentTarget == filepath.ToSlash(filepath.Join("releases", record.BuildName)) ||
 				now.Sub(record.UpdatedAt) < m.historyTTL {
@@ -55,5 +71,4 @@ func (m *Manager) cleanupHistory(now time.Time) {
 			}
 		}
 	}
-	m.mu.Unlock()
 }
