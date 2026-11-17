@@ -3,8 +3,10 @@ package container
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +24,7 @@ import (
 	"github.com/containerd/errdefs/pkg/errgrpc"
 	"github.com/distribution/reference"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"google.golang.org/grpc/status"
 )
 
 type Containerd struct {
@@ -36,9 +39,10 @@ type Containerd struct {
 }
 
 type containerdExecution struct {
-	done chan struct{}
-	code int
-	err  error
+	done       chan struct{}
+	code       int
+	err        error
+	cleanupErr error
 }
 
 var _ ManagedRuntime = (*Containerd)(nil)
@@ -185,13 +189,42 @@ func (r *Containerd) observeExit(task containerd.Task, exits <-chan containerd.E
 		}
 		// Task deletion drains shim IO before Logs reads the final bytes. Keep the
 		// container metadata/snapshot until the executor finishes log uploading.
-		ctx, cancel := context.WithTimeout(r.ctx, 15*time.Second)
-		defer cancel()
-		_, err = task.Delete(ctx)
-		if err != nil && !errdefs.IsNotFound(err) {
-			execution.err = fmt.Errorf("drain containerd task: %w", err)
+		execution.cleanupErr = deleteExitedTask(r.ctx, task, 30*time.Second, time.Second)
+		if execution.cleanupErr != nil {
+			log.Printf("containerd task %s exited with code %d; cleanup warning: %v", task.ID(), code, execution.cleanupErr)
 		}
 	}
+}
+
+// An exit has already been observed. Cleanup failure must not replace its result.
+// Use a fresh deadline on each retry: a timed-out delete may also have succeeded
+// on the daemon, in which case NotFound confirms cleanup on the next attempt.
+func deleteExitedTask(ctx context.Context, task containerd.Task, timeout, delay time.Duration) error {
+	for attempt := 1; attempt <= 3; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		_, err := task.Delete(attemptCtx)
+		cancel()
+		if _, ok := status.FromError(err); ok {
+			err = errgrpc.ToNative(err)
+		}
+		if err == nil || errdefs.IsNotFound(err) {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("cleanup containerd task: %w", ctx.Err())
+		}
+		if attempt == 3 || !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("cleanup containerd task after %d attempt(s): %w", attempt, err)
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("cleanup containerd task: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return nil
 }
 
 func (r *Containerd) execution(id string) (*containerdExecution, error) {
@@ -403,10 +436,16 @@ func followContainerdLog(ctx context.Context, input io.Reader, output io.Writer,
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-execution.done:
-			// The shim has drained and closed its output; copy the tail exactly once.
+			// Cleanup normally drains shim output. If it timed out, preserve all
+			// currently available bytes and report that the tail may be incomplete.
 			_, err := io.CopyBuffer(output, input, buf)
 			if err != nil {
 				return err
+			}
+			if execution.cleanupErr != nil {
+				if _, err := fmt.Fprintf(output, "\nWARNING: %v; process exit code %d is preserved; final container log output may be incomplete.\n", execution.cleanupErr, execution.code); err != nil {
+					return err
+				}
 			}
 			return execution.err
 		case <-ticker.C:
