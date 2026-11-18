@@ -458,6 +458,9 @@ func containerdSpecOptions(image oci.Image, spec Spec) ([]oci.SpecOpts, error) {
 	opts := []oci.SpecOpts{
 		oci.WithImageConfigArgs(image, args), oci.WithHostNamespace(specs.NetworkNamespace),
 		oci.WithHostHostsFile, oci.WithHostResolvconf,
+		// The OCI default hard limit of 1024 prevents build tests (including
+		// Go's TestOpenFileLimit) from raising their soft limit sufficiently.
+		oci.WithRlimit(&specs.POSIXRlimit{Type: "RLIMIT_NOFILE", Soft: 65536, Hard: 65536}),
 	}
 	if spec.Entrypoint != "" {
 		opts = append(opts, oci.WithProcessArgs(append([]string{spec.Entrypoint}, args...)...))

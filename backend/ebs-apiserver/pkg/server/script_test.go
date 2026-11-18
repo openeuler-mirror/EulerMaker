@@ -144,6 +144,42 @@ func TestDefaultRpmbuildScriptReadsCloneURL(t *testing.T) {
 	}
 }
 
+func TestDefaultRpmbuildScriptBuildCommand(t *testing.T) {
+	storage := &bootstrapScriptStorage{}
+	if err := ensureDefaultScript(context.Background(), storage); err != nil {
+		t.Fatal(err)
+	}
+	script, _, found := strings.Cut(storage.object.Spec.Content, "\nmain \"$@\"")
+	if !found {
+		t.Fatal("default script main call not found")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".build.command")
+	if err := os.WriteFile(path, []byte("stale.spec\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script = strings.ReplaceAll(script, "/.build.command", path)
+	cmd := exec.Command("bash")
+	cmd.Env = append(os.Environ(), "TEST_COMMAND="+path)
+	cmd.Stdin = strings.NewReader(script + `
+umask 077
+spec_file=gdb.spec
+package_name=different-repository-name
+create_build_command
+# Match the exclusion check used by gcc_secure, without invoking a compiler.
+cat "$TEST_COMMAND" | grep -E 'gcc.spec|gdb.spec' >/dev/null
+`)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create build command: %v\n%s", err, output)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "gdb.spec\n" {
+		t.Fatalf("build command = %q, %v", data, err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("build command must be readable by the non-root build user: %v, %v", info, err)
+	}
+}
+
 func TestDefaultRpmbuildScriptLoadsMacros(t *testing.T) {
 	storage := &bootstrapScriptStorage{}
 	if err := ensureDefaultScript(context.Background(), storage); err != nil {
@@ -213,6 +249,7 @@ main
 `
 				// Redirect both user homes; no real users, RPM installation or host files are changed.
 				localScript := strings.ReplaceAll(script, "/root", dir+"/root")
+				localScript = strings.ReplaceAll(localScript, "/.build.command", dir+"/.build.command")
 				localScript = strings.ReplaceAll(localScript, "/home/", dir+"/home/")
 				localScript = strings.ReplaceAll(localScript, "/workspace/source", dir+"/source")
 				cmd := exec.Command("bash")
@@ -277,6 +314,7 @@ func TestDefaultRpmbuildScriptCleansClonedSources(t *testing.T) {
 			setup := `
 check_environment() { :; }
 load_payload() { :; }
+create_build_command() { :; }
 configure_rpm_macros() { :; }
 prepare_sources() {
   mkdir -p "$source_dir/.git/objects" "$TEST_DIR/rpmbuild/SOURCES" "$TEST_DIR/results"
