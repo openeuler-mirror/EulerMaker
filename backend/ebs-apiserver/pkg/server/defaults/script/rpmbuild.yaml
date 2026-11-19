@@ -118,6 +118,13 @@ spec:
       [[ "$spec_file" =~ ^[[:alnum:]_][[:alnum:]_.+-]*\.spec$ ]] || { echo "invalid payload.spec_file_name" >&2; exit 1; }
     }
 
+    create_build_command() {
+      # gcc_secure matches this spec filename against %gcc_secure_exclude.
+      # Keep it readable after switching to the non-root build user.
+      printf '%s\n' "$spec_file" > /.build.command
+      chmod 0644 /.build.command
+    }
+
     configure_rpm_macros() {
       python3 - "$payload" "$1/.rpmmacros" <<'PY'
     import json
@@ -365,6 +372,7 @@ spec:
       trap 'exit 130' INT
       trap 'exit 143' TERM
       load_payload
+      create_build_command
       configure_rpm_macros /root
       prepare_sources
       cleanup_source_dir

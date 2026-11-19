@@ -38,6 +38,8 @@ PR 引用在 Snapshot 阶段解析，Job 不感知 PR ref，也不额外携带 b
 
 `BuildInfo.spec.buildPayload.unuse_gcc_secure` 也是包仓库名列表。命中时 Job 携带 `unuse_gcc_secure: true`；默认脚本通常在预装包及 `dnf builddep` 前从 Job 仓库安装 `gcc_secure`，但该标记为 true 或 `package_name` 为 `gcc-10` 时跳过。`package_name` 始终由 BuildInfo Controller 从包仓库名写入，`gcc-10` 例外只在脚本中判断。
 
+默认脚本在 payload 校验后、准备源码和安装依赖前，将 `spec_file_name` 写入容器内的 `/.build.command`，权限设为 `0644`，供 root 和非 root 构建用户读取。`gcc_secure` 使用该文件与 `%gcc_secure_exclude` 匹配，沿用旧架构按 spec 文件名排除的规则；文件内容不是包仓库名，也不是待执行的 shell 命令。
+
 缓存未命中时，尚未拉取脚本的 Job 可以使用更新后的内容；缓存命中时复用先前拉取的内容。已经启动的执行尝试使用本地副本，不热更新。同一 Build 的不同 Job，以及同一 Job 的不同执行尝试，可能使用不同内容，不承诺历史脚本可重放。
 
 ## 2. 资源与 API

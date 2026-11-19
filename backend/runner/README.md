@@ -118,6 +118,8 @@ Runner 无需安装或挂载 `docker` 可执行文件；容器化运行仍需挂
 
 containerd 后端直接调用 Go Client，不依赖 Docker、ctr、nerdctl 或 CRI。使用独立 namespace，不使用 kubelet 的 `k8s.io`；namespace 只用于对象分组，不是安全边界。
 
+Runner 为新建 containerd 构建容器显式设置 `RLIMIT_NOFILE` 软、硬限制均为 `65536`，覆盖 OCI 默认的 `1024`，满足 Go 等软件包测试打开大量文件的需求。该设置由 Runner 生成的 OCI spec 控制，不读取 CRI 的限制配置；更新 Runner 后对新建容器生效。
+
 当前只支持 `runtimeSpec.networkMode=host`，BuildInfo Controller 生成的 Job 已使用该值；其他网络模式会明确报错。镜像入口、命令、环境变量、绑定挂载和 privileged 配置沿用 CT Job 契约。镜像通过原生 resolver 拉取，当前支持公开仓库，不读取 Docker 登录凭据，也不自动继承 containerd CRI 插件的镜像认证或 mirror 配置。
 
 日志由 shim 写入 `${rootDir}/containerd/{namespace}/{containerID}.log`，Runner 实时读取并上传；退出后删除 task、排空日志，再清理容器元数据、可写快照及运行时日志。镜像缓存保留。Runner 重启后按容器标签核对归属并停止、移除旧任务，再处理服务端分配的 Job。切换运行时或 namespace 前应先排空原后端的任务。

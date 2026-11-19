@@ -90,6 +90,18 @@ func TestContainerdSpec(t *testing.T) {
 			if !reflect.DeepEqual(spec.Process.Args, tt.args) || spec.Process.Cwd != "/image" {
 				t.Fatalf("process = %+v", spec.Process)
 			}
+			nofileCount := 0
+			for _, limit := range spec.Process.Rlimits {
+				if limit.Type == "RLIMIT_NOFILE" {
+					nofileCount++
+					if limit.Soft != 65536 || limit.Hard != 65536 {
+						t.Fatalf("unexpected file descriptor limit: %+v", limit)
+					}
+				}
+			}
+			if nofileCount != 1 {
+				t.Fatalf("expected one RLIMIT_NOFILE entry, got %d: %+v", nofileCount, spec.Process.Rlimits)
+			}
 			if !slices.Contains(spec.Process.Env, "VALUE=job") || !slices.Contains(spec.Process.Env, "PATH=/usr/bin") {
 				t.Fatalf("env = %v", spec.Process.Env)
 			}
