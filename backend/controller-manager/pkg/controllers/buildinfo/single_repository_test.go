@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	clientpkg "controller-manager/pkg/clients/apiserver"
 	"controller-manager/pkg/controller"
 	ebsv1 "ebs-api/ebs/v1"
 )
@@ -160,9 +161,86 @@ func TestSingleUnpublishedRequiresBootstrap(t *testing.T) {
 			Body: io.NopCloser(strings.NewReader(`{"code":"ReleaseNotPublished"}`))}, nil
 	})
 	_, err := c.singleContentURL(context.Background(), round)
-	var permanent controller.PermanentError
-	if !errors.As(err, &permanent) || !strings.Contains(err.Error(), "BootstrapRepoRequired") || client.artifactReads != 1 {
+	if !errors.Is(err, errBootstrapRepoRequired) || client.artifactReads != 1 {
 		t.Fatalf("unpublished without bootstrap = %v", err)
+	}
+}
+
+func TestSingleMissingRepositoriesConverges(t *testing.T) {
+	for _, runningJob := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before dispatch", true: "after partial dispatch"}[runningJob], func(t *testing.T) {
+			c, client, git, _ := newTestController(t)
+			bi := seedHealthyBasics(client, "single", "repo1")
+			client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+			git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a"), "b.spec": specText("b")})
+			if runningJob {
+				seedJobAt(client, bi, "a", 1, ebsv1.JobRunning, testStart)
+			}
+			probes := 0
+			c.releaseClient.Transport = releaseTransportFunc(func(*http.Request) (*http.Response, error) {
+				probes++
+				return &http.Response{StatusCode: http.StatusNotFound,
+					Body: io.NopCloser(strings.NewReader(`{"code":"ReleaseNotPublished"}`))}, nil
+			})
+			reconcileOnce(t, c)
+			persisted := getBuildInfo(t, client)
+			requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonBootstrapRepoRequired)
+			wantJobs := 0
+			if runningJob {
+				wantJobs = 1
+				requirePhase(t, persisted, ebsv1.BuildInfoPending)
+				// A persisted stop marker remains effective even if a release becomes available.
+				c.releaseClient.Transport = releaseTransportFunc(func(*http.Request) (*http.Response, error) {
+					probes++
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(testRepomd))}, nil
+				})
+				reconcileOnce(t, c)
+				requirePhase(t, getBuildInfo(t, client), ebsv1.BuildInfoPending)
+				seedJobAt(client, bi, "a", 1, ebsv1.JobSucceeded, testStart)
+				reconcileOnce(t, c)
+				persisted = getBuildInfo(t, client)
+				if persisted.Status.SpecResults.Entry("a").Status != ebsv1.SpecSucceeded {
+					t.Fatalf("completed Job result lost: %+v", persisted.Status.SpecResults)
+				}
+			}
+			requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
+			if persisted.Status.SpecResults.Entry("b").Status != ebsv1.SpecBuildFailed {
+				t.Fatalf("undispatched spec result = %+v", persisted.Status.SpecResults.Entry("b"))
+			}
+			reconcileOnce(t, c)
+			if probes != 1 || len(listJobs(t, client)) != wantJobs {
+				t.Fatalf("probes=%d jobs=%d, want 1 and %d", probes, len(listJobs(t, client)), wantJobs)
+			}
+		})
+	}
+}
+
+func TestSingleMissingRepositoriesRetriesStopWrite(t *testing.T) {
+	c, client, git, _ := newTestController(t)
+	seedHealthyBasics(client, "single", "repo1")
+	client.SeedSnapshot(testSnapshotObj(repoEntry{name: "repo1", cloneURL: gitURL1, commitID: "c1", declare: true}))
+	git.repo(gitURL1, "c1", map[string]string{"a.spec": specText("a")})
+	probes := 0
+	c.releaseClient.Transport = releaseTransportFunc(func(*http.Request) (*http.Response, error) {
+		probes++
+		if probes == 1 {
+			client.InjectWrite("update-status", clientpkg.WriteRejected, http.StatusServiceUnavailable, false)
+		}
+		return &http.Response{StatusCode: http.StatusNotFound,
+			Body: io.NopCloser(strings.NewReader(`{"code":"ReleaseNotPublished"}`))}, nil
+	})
+	if _, err := c.reconcile(context.Background(), testNS+"/"+testBuild); err == nil || controller.IsPermanent(err) {
+		t.Fatalf("stop write failure must be retried: %v", err)
+	}
+	persisted := getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoPending)
+	requireNoCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable)
+	reconcileOnce(t, c)
+	persisted = getBuildInfo(t, client)
+	requirePhase(t, persisted, ebsv1.BuildInfoCompleted)
+	requireCondition(t, persisted.Status.Conditions, ConditionRpmRepoUnavailable, ReasonBootstrapRepoRequired)
+	if probes != 2 || len(listJobs(t, client)) != 0 {
+		t.Fatalf("probes=%d jobs=%d", probes, len(listJobs(t, client)))
 	}
 }
 

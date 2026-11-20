@@ -52,6 +52,7 @@ const (
 	ReasonBootstrapRepoXMLUnavail     = "BootstrapRepoXmlUnavailable"
 	ReasonBootstrapRepoXMLParseFailed = "BootstrapRepoXmlParseFailed"
 	ReasonBootstrapRepoConfigInvalid  = "BootstrapRepoConfigInvalid"
+	ReasonBootstrapRepoRequired       = "BootstrapRepoRequired"
 	ReasonSnapshotNotFound            = "SnapshotNotFound"
 	ReasonSnapshotQueryFailed         = "SnapshotQueryFailed"
 )

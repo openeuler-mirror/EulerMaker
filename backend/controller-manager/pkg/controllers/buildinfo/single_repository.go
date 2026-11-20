@@ -18,6 +18,8 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
+var errBootstrapRepoRequired = errors.New("BootstrapRepoRequired: no published release or bootstrap repository")
+
 func newReleaseClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
@@ -60,7 +62,7 @@ func (c *Controller) singleContentURL(ctx context.Context, round *reconcileRound
 	if !published {
 		reference, contentURL = "", ""
 		if len(bootstrapRepoURLs(round.current.Spec.BootstrapRepos, arch)) == 0 {
-			return "", controller.NewPermanentError(fmt.Errorf("BootstrapRepoRequired: no published release or bootstrap repository"))
+			return "", errBootstrapRepoRequired
 		}
 	}
 	round.singleRepoReference = reference
