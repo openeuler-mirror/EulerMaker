@@ -148,6 +148,9 @@ func (c *Controller) reconcile(ctx context.Context, key string) (controller.Reco
 		log.Printf("controller=%s key=%q reason=UnknownPhase phase=%q", Name, key, round.current.Status.Phase)
 		return controller.ReconcileResult{}, nil
 	}
+	if errors.Is(err, errBootstrapRepoRequired) {
+		return c.escalateStop(ctx, round, ConditionRpmRepoUnavailable, ReasonBootstrapRepoRequired, err.Error())
+	}
 	if len(round.createdJobs) > 0 && err == nil && (result == (controller.ReconcileResult{}) || result.Requeue) &&
 		ctx.Err() == nil {
 		flushResult, flushErr := c.flushCreatedJobs(ctx, round)

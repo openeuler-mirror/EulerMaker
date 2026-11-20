@@ -558,7 +558,7 @@ buildSet = buildSet ∪ direct                                                # 
 - single 不读取当前/历史 RpmRepo、历史 Build 或 baseBuildRef。首次需要派发新 Job 时，使用本轮 Project 的 `ebs.io/artifacts`（缺省 default），与父 Build 的 Project、Arch 组成目标；实例选择与本批 Job 的上传 annotation 一致。
 - 构造逻辑入口 `artifact://{instance}/repositories/{project}/{arch}/`，路径段逐项安全编码，保留末尾斜线。从本轮 `Config/services` 快照读取 `artifactManagers[instance].internalURL`，拼接管理面 HTTP(S) 地址并 GET 稳定入口的 `repodata/repomd.xml`。不遍历发布历史、不解析目录页。
 - 确认接口、错误码与响应校验见 Artifact Manager 9.3「稳定入口的发布可用性确认」。200 且 repomd.xml 有效才注入稳定仓，priority=10；仅 `404 + code=ReleaseNotPublished` 表示当前没有已激活发布，此时省略稳定仓。普通 404、ReleaseNotFound、网络/超时、429/5xx 或已发布仓缺文件均不是“尚未发布”，本轮暂停新派发并重试，先回填已有 Job；认证/参数/配置错误返回 PermanentError，不能静默降级或标包失败。完整分类见 E-32。
-- 按声明顺序追加 `BuildInfo.spec.bootstrapRepos[].url` 经目标架构展开的 URL，priority=99。稳定入口已含目标架构，不再追加架构。尚未发布时只使用 bootstrapRepos；single 不回退到 buildPayload.repo。最终没有任何 URL 时返回明确的配置 PermanentError（BootstrapRepoRequired），不创建 Job。
+- 按声明顺序追加 `BuildInfo.spec.bootstrapRepos[].url` 经目标架构展开的 URL，priority=99。稳定入口已含目标架构，不再追加架构。尚未发布时只使用 bootstrapRepos；single 不回退到 buildPayload.repo。最终没有任何 URL 时写入 `RpmRepoUnavailable=True`（reason=`BootstrapRepoRequired`），停止派发并按 6.5 收敛：没有已下发 Job 时直接完成，否则等待已有 Job 终态；未完成条目标为 `BuildFailed`，BuildInfo 置 `Completed`，父 Build 汇总为 `Failed`。停止标记持久化后不因仓库恢复重新派发。
 - 每轮首次需要创建 Job 时执行一次实例配置读取与发布确认，结果供本轮最多 20 次创建共用；不跨 reconcile 缓存“尚未发布”。仅确认既有 Job、结果回填或收敛时不发送发布确认请求。已创建 Job 保持原 payload，后续批次重新确认；创建重试沿用确定性名称。
 - 只确认发布入口，不扫描全部 RPM。HTTP 使用公共 `--artifact-manager-timeout`（默认 30s）与本轮 context；repomd.xml 上限 1 MiB，错误正文上限 64 KiB。拒绝跨源重定向；缺少 repomd 根元素或有效元数据引用、内容超限等响应异常不得按成功使用。
 - 配置 prefer 时基于本轮选定的稳定仓与 bootstrapRepos 读取 RPM 元数据；single 的稳定仓元数据不按 URL 永久复用，至少每轮重新获取 repomd，并按其实际引用更新元数据。元数据失败沿用 15.10，不静默使用旧版本。未配置 prefer 时无需下载 primary/filelists。
@@ -805,7 +805,7 @@ Job 与 BuildInfo 通过 label 关联，无 ownerReference；仅进入 Aborted �
 | `ReleaseUnavailable` | E-28：非 single 的 release.phase=Failed，reason/message 见对应错误条目 | status=True 为持久化停止派发标记，不因依赖恢复移除；按 6.5 等待已有 Job 收敛后 Completed，保留条件 |
 | `ResourceConfigUnavailable` | E-27：Config/build-resource GET 404，reason 为 `ResourceConfigMissing` | 可恢复的派发暂停条件，不是永久停止标记；不写包级失败、不提前结束 BuildInfo，继续回填已有 Job，5 秒后重新入队。派发前成功读取配置后清除此条件并继续，相同条件不重复写入 |
 | `RpmRepoRetrying` | 非 single 的 RpmRepo 查询或仓库元数据错误 | status=True 仅描述可重试异常，不是停止派发标记；具体计数与恢复见 15.10。single 的稳定入口确认及 prefer 元数据错误返回分类错误，不写此条件 |
-| `RpmRepoUnavailable` | E-29：无效 URL、确定性请求拒绝，或过程仓/bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮） | status=True 为持久化停止派发标记；按 6.5 等待已有 Job 收敛后 Completed，保留明确 reason/message |
+| `RpmRepoUnavailable` | E-29：无效 URL、确定性请求拒绝，或过程仓/bootstrap 仓 XML 连续解析失败达阈值（默认 3 轮）；E-32：single 确认尚未发布且 bootstrap 仓为空（reason=BootstrapRepoRequired） | status=True 为持久化停止派发标记；按 6.5 等待已有 Job 收敛后 Completed，保留明确 reason/message |
 | `SnapshotUnavailable` | E-30：当前 Snapshot GET 404/5xx/超时连续失败达阈值（默认 3 轮，每轮至多计一次），reason/message 见对应错误条目 | status=True 为持久化停止派发标记，不因依赖恢复移除；按 6.5 等待已有 Job 收敛后 Completed，保留条件 |
 
 **SpecResult 包级诊断**：
@@ -984,7 +984,7 @@ apiserver 权限以 15.1 资源访问矩阵为准；本控制器不访问 Runner
 | E-13 | 所有节点均在环中且未下发 | 选择破环点并执行 bootstrap 门禁 | 7.2.1 / 7.4.6 |
 | E-14 | 节点存在自环 | 按环节点参与选点及派发门禁 | 7.2.1 / 7.4.6 |
 | E-15 | 多代 Job 时间字段缺失或非法 | 按多代排序规则处理 | 7.4.4 |
-| E-32 | single 稳定发布入口确认 | 仅 404/ReleaseNotPublished 正常省略稳定仓；网络、超时、408/429/5xx、其他 404 及损坏/不完整响应均可重试，不消耗包级失败预算；401/403、非法请求、Config 缺失/实例缺失等配置错误返回 PermanentError。所有错误暂停新派发但不阻止已有 Job 回填；恢复后重新确认，不使用过期探测结果。无可用仓库报 BootstrapRepoRequired 配置错误 | 7.2.3 / Artifact Manager 9.3 |
+| E-32 | single 稳定发布入口确认 | 仅 404/ReleaseNotPublished 正常省略稳定仓；网络、超时、408/429/5xx、其他 404 及损坏/不完整响应均可重试，不消耗包级失败预算；401/403、非法请求、Config 缺失/实例缺失等配置错误返回 PermanentError。这些请求错误暂停新派发但不阻止已有 Job 回填；恢复后重新确认，不使用过期探测结果。确认尚未发布且 bootstrap 仓为空时，写 RpmRepoUnavailable=True（reason=BootstrapRepoRequired），按 6.5 停止派发并失败收敛，不再等待仓库恢复 | 7.2.3 / Artifact Manager 9.3 |
 | E-16 | **RpmRepo 资源不存在** | 非 single 写 `RpmRepoRetrying=True`（reason=`RpmRepoNotFound`）并记录日志，本轮不持有 RpmRepo；首次建图与依赖裁决等待后续轮次，已有 Job 仍可回填。资源及所需元数据就绪后清除该条件，不因 404 次数停止。single 不调用 RpmRepo GET。contentURL 为空也是正常空态；XML 下载失败继续重试，连续解析失败与确定性错误按 E-29 处理 | 7.1 / 15.4 / 15.10 / E-29 |
 | E-17 | 直接上游 Failed | 不递归传播失败；按有效 required 和依赖存在性裁决 | 7.4.2 / 7.4.1 |
 | E-18 | 构建依赖缺失或版本不满足 | 依赖不可满足与数据暂不可用分别处理 | 7.4.1 / 15.10 / E-29 |
