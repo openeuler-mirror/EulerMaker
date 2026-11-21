@@ -65,10 +65,16 @@ go run ./cmd/runner \
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
 使用 `--labels=ebs.io/runner-capability.kvm=true,ebs.io/runner-capability.network=internal` 注册能力标签，
-参数可重复传入，只接受 `ebs.io/runner-capability.*`。启动注册时写入当前配置并删除已移除的能力标签；
-未传 `--labels` 或传空值会清空已有全部能力标签。类型、架构和能力标签在前端只读；
-资源池等自定义标签可由 Ops/Admin 在运维页面编辑，不受能力标签同步影响。心跳不会修改标签，
+参数可重复传入，只接受 `ebs.io/runner-capability.*`，仅首次创建 Runner 时写入。
+已存在对象重新注册时不新增、修改或删除能力标签；修改参数、未传参数或传空值均不影响已有标签。
+类型、架构标签继续随自身声明更新，能力标签在前端保持只读；
+资源池等自定义标签可由 Ops/Admin 在运维页面编辑。心跳不会修改标签，
 这些标签属于 EulerMaker Runner 对象，不会从 Kubernetes Node/Pod 自动同步。
+
+使用 `--taints=ebs.io/dedicated=gating:NoSchedule` 设置首次注册污点，支持逗号分隔或重复传参，
+格式为 `key[=value]:effect`，effect 可选 `NoSchedule`、`PreferNoSchedule`、`NoExecute`。
+未传或传空值表示不设置初始污点。仅新建 Runner 时写入；已存在对象的重新注册（包括创建冲突后的恢复）和心跳均不覆盖污点，
+后续由 Ops/Admin 在详情页管理。修改启动参数不会同步到已注册对象，也不会恢复被运维删除的污点。
 
 Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`；`external` 使用 Artifact Manager 的 `runnerExternalURL`，源码直接访问 Job payload 的 `origin_url`，不依赖 Git Server 外网地址。配置来自 `Config/services`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
 

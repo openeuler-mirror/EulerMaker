@@ -116,7 +116,7 @@ spec:
 - `ebs.io/runner-type` 和 `ebs.io/runner-arch` 创建时必须存在，并分别与 `spec.type`、`spec.arch` 相同；apiserver 负责权威校验。
 - Runner 只能声明或更新 type、arch 和 `ebs.io/runner-capability.*` 标签。
 - `ebs.io/zone` 以及其他自定义管理标签由 Ops/Admin 或 system 维护；Runner PUT/PATCH 必须保留已有值。前端对类型、架构及能力标签只读，其余标签可由 Ops/Admin 编辑。
-- Runner 的 `--labels` 只接收 `ebs.io/runner-capability.*`。启动注册时写入配置中的值，并用 Merge Patch 的 null 删除未再配置的能力标签；缺省或空配置清空能力标签，其他标签不受影响。心跳不修改标签。能力标签不代表管理员授予的权限或可信资源池身份。
+- Runner 的 `--labels` 只接收 `ebs.io/runner-capability.*`，仅首次创建对象时写入。重新注册或创建冲突恢复不新增、修改或删除能力标签，参数修改、缺省或空配置均不影响已有标签。类型和架构标签继续与 spec 一致，心跳不修改标签。能力标签不代表管理员授予的权限或可信资源池身份。
 - Scheduler 的 `NodeSelectorFilter` 对 Job `spec.nodeSelector` 和 Runner labels 执行逐项精确匹配。
 - RuntimeFilter 使用 Job `spec.runtime` 和 Runner `spec.type`，不依赖 `ebs.io/runner-type`。
 

@@ -19,6 +19,7 @@ type Config struct {
 	Type              string
 	Arch              string
 	Labels            map[string]string
+	Taints            []gateway.RunnerTaint
 	RootDir           string
 	ServiceAccessMode string
 	HeartbeatInterval time.Duration
@@ -74,7 +75,7 @@ func LoadConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.Gateway.MachineCredentialFile, "machine-credential-file", cfg.Gateway.MachineCredentialFile, "MachineAccount credential JSON file")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
-	fs.Func("labels", "comma-separated ebs.io/runner-capability.* labels (key=value); may be repeated; startup removes omitted capability labels", func(value string) error {
+	fs.Func("labels", "comma-separated ebs.io/runner-capability.* labels (key=value); may be repeated; applied only when creating a new Runner", func(value string) error {
 		if cfg.Labels == nil {
 			cfg.Labels = make(map[string]string)
 		}
@@ -95,6 +96,30 @@ func LoadConfig(args []string) (Config, error) {
 				return fmt.Errorf("duplicate label %q", key)
 			}
 			cfg.Labels[key] = labelValue
+		}
+		return nil
+	})
+	fs.Func("taints", "comma-separated key[=value]:effect taints; may be repeated; applied only when creating a new Runner", func(value string) error {
+		if value == "" {
+			return nil
+		}
+		for _, item := range strings.Split(value, ",") {
+			pair, effect, ok := strings.Cut(strings.TrimSpace(item), ":")
+			key, taintValue, _ := strings.Cut(pair, "=")
+			if !ok || !validTaintKey(key) || len(taintValue) > 63 || (taintValue != "" && !labelPartPattern.MatchString(taintValue)) {
+				return fmt.Errorf("invalid taint %q: expected key[=value]:effect", item)
+			}
+			switch effect {
+			case "NoSchedule", "PreferNoSchedule", "NoExecute":
+			default:
+				return fmt.Errorf("invalid taint effect %q", effect)
+			}
+			for _, taint := range cfg.Taints {
+				if taint.Key == key && taint.Effect == effect {
+					return fmt.Errorf("duplicate taint key/effect %q:%s", key, effect)
+				}
+			}
+			cfg.Taints = append(cfg.Taints, gateway.RunnerTaint{Key: key, Value: taintValue, Effect: effect})
 		}
 		return nil
 	})
@@ -170,6 +195,24 @@ func LoadConfig(args []string) (Config, error) {
 }
 
 var labelPartPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`)
+var dnsPartPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
+func validTaintKey(key string) bool {
+	prefix, name, qualified := strings.Cut(key, "/")
+	if !qualified {
+		name = key
+	} else {
+		if len(prefix) > 253 {
+			return false
+		}
+		for _, part := range strings.Split(prefix, ".") {
+			if len(part) > 63 || !dnsPartPattern.MatchString(part) {
+				return false
+			}
+		}
+	}
+	return len(name) <= 63 && labelPartPattern.MatchString(name)
+}
 
 func runtimeArch() string {
 	switch runtime.GOARCH {

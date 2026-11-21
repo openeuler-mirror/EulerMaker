@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -71,14 +72,13 @@ func TestBytesToGiQuantity(t *testing.T) {
 const testRunnerInstanceID = "01234567-89ab-4def-8123-456789abcdef"
 
 type registrationAPI struct {
-	getResults    []*gateway.RunnerResource
-	getErrors     []error
-	getCalls      int
-	createErr     error
-	updateErr     error
-	created       *gateway.RunnerResource
-	updated       *gateway.RunnerResource
-	removedLabels []string
+	getResults []*gateway.RunnerResource
+	getErrors  []error
+	getCalls   int
+	createErr  error
+	updateErr  error
+	created    *gateway.RunnerResource
+	updated    *gateway.RunnerResource
 }
 
 func (f *registrationAPI) GetRunner(context.Context, string) (*gateway.RunnerResource, error) {
@@ -100,9 +100,8 @@ func (f *registrationAPI) CreateRunner(_ context.Context, runner gateway.RunnerR
 	return f.createErr
 }
 
-func (f *registrationAPI) UpdateRunner(_ context.Context, runner gateway.RunnerResource, removedLabels []string) error {
+func (f *registrationAPI) UpdateRunner(_ context.Context, runner gateway.RunnerResource) error {
 	f.updated = &runner
-	f.removedLabels = removedLabels
 	return f.updateErr
 }
 
@@ -138,6 +137,7 @@ func TestRegisterCreatesRunnerWithInstanceID(t *testing.T) {
 	client := &registrationAPI{getErrors: []error{gateway.StatusError{Code: 404}}}
 	agent := newRegistrationAgent(client)
 	agent.cfg.Labels = map[string]string{"ebs.io/runner-capability.kvm": "true"}
+	agent.cfg.Taints = []gateway.RunnerTaint{{Key: "ebs.io/dedicated", Value: "gating", Effect: "NoSchedule"}}
 	if err := agent.register(context.Background()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -146,6 +146,33 @@ func TestRegisterCreatesRunnerWithInstanceID(t *testing.T) {
 	}
 	if client.created.Metadata.Labels["ebs.io/runner-capability.kvm"] != "true" {
 		t.Fatalf("created labels = %v", client.created.Metadata.Labels)
+	}
+	if !reflect.DeepEqual(client.created.Spec.Taints, agent.cfg.Taints) {
+		t.Fatalf("created taints = %v", client.created.Spec.Taints)
+	}
+}
+
+func TestRegisterPreservesExistingTaints(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		for _, existingTaints := range [][]gateway.RunnerTaint{nil, {{Key: "pool", Value: "ops", Effect: "NoExecute"}}} {
+			for _, configured := range [][]gateway.RunnerTaint{nil, {{Key: "pool", Value: "startup", Effect: "NoSchedule"}}} {
+				existing := &gateway.RunnerResource{Spec: gateway.RunnerSpec{InstanceID: testRunnerInstanceID, Taints: existingTaints}}
+				client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
+				if conflict {
+					client.getResults = []*gateway.RunnerResource{nil, existing}
+					client.getErrors = []error{gateway.StatusError{Code: 404}, nil}
+					client.createErr = gateway.StatusError{Code: 409}
+				}
+				agent := newRegistrationAgent(client)
+				agent.cfg.Taints = configured
+				if err := agent.register(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if client.updated == nil || !reflect.DeepEqual(client.updated.Spec.Taints, existingTaints) {
+					t.Fatalf("registration changed existing taints: %#v", client.updated)
+				}
+			}
+		}
 	}
 }
 
@@ -166,48 +193,35 @@ func TestRegisterUpdatesMatchingInstance(t *testing.T) {
 	if client.updated == nil || client.updated.Spec.InstanceID != testRunnerInstanceID || !client.updated.Spec.Unschedulable {
 		t.Fatalf("updated runner = %#v", client.updated)
 	}
-	if len(client.updated.Metadata.Labels) != 4 || client.updated.Metadata.Labels["ebs.io/runner-capability.kvm"] != "true" ||
-		client.updated.Metadata.Labels["ebs.io/runner-capability.empty"] != "" {
-		t.Fatalf("updated capability labels = %v", client.updated.Metadata.Labels)
-	}
-	if existing.Metadata.Labels["ebs.io/runner-capability.kvm"] != "false" {
-		t.Fatal("registration mutated the read object")
-	}
-	if len(client.removedLabels) != 1 || client.removedLabels[0] != "ebs.io/runner-capability.old" {
-		t.Fatalf("removed labels = %v", client.removedLabels)
+	if !reflect.DeepEqual(client.updated.Metadata.Labels, existing.Metadata.Labels) || existing.Metadata.Labels["ebs.io/runner-capability.kvm"] != "false" {
+		t.Fatalf("registration changed labels: %v", client.updated.Metadata.Labels)
 	}
 }
 
-func TestRegisterWithoutLabelsClearsCapabilities(t *testing.T) {
-	existing := &gateway.RunnerResource{
-		Metadata: gateway.ObjectMeta{Name: "runner-a", Labels: map[string]string{
-			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64", "ebs.io/pool": "community",
-			"ebs.io/runner-capability.kvm": "true", "ebs.io/runner-capability.empty": "",
-		}},
-		Spec: gateway.RunnerSpec{InstanceID: testRunnerInstanceID},
-	}
-	client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
-	agent := newRegistrationAgent(client)
-	client.updateErr = errors.New("temporary update failure")
-	if err := agent.updateExistingRunner(context.Background(), existing); !errors.Is(err, client.updateErr) {
-		t.Fatalf("registration must report cleanup failure: %v", err)
-	}
-	client.updateErr = nil
-	if err := agent.register(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(client.removedLabels) != 2 || len(client.updated.Metadata.Labels) != 2 {
-		t.Fatalf("labels=%v removed=%v", client.updated.Metadata.Labels, client.removedLabels)
-	}
-	for _, key := range client.removedLabels {
-		if !strings.HasPrefix(key, "ebs.io/runner-capability.") {
-			t.Fatalf("unexpected removal: %s", key)
+func TestRegisterPreservesLabels(t *testing.T) {
+	for _, conflict := range []bool{false, true} {
+		for _, configured := range []map[string]string{nil, {}, {"ebs.io/runner-capability.kvm": "true"}} {
+			for _, labels := range []map[string]string{nil, {"ebs.io/pool": "community", "ebs.io/runner-capability.kvm": "false"}} {
+				existing := &gateway.RunnerResource{
+					Metadata: gateway.ObjectMeta{Name: "runner-a", Labels: labels},
+					Spec:     gateway.RunnerSpec{InstanceID: testRunnerInstanceID},
+				}
+				client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
+				if conflict {
+					client.getResults = []*gateway.RunnerResource{nil, existing}
+					client.getErrors = []error{gateway.StatusError{Code: 404}, nil}
+					client.createErr = gateway.StatusError{Code: 409}
+				}
+				agent := newRegistrationAgent(client)
+				agent.cfg.Labels = configured
+				if err := agent.register(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if client.updated == nil || !reflect.DeepEqual(client.updated.Metadata.Labels, labels) {
+					t.Fatalf("registration changed labels: %#v", client.updated)
+				}
+			}
 		}
-	}
-	// A retry after the successful cleanup no longer requests any removals.
-	existing.Metadata.Labels = map[string]string{"ebs.io/pool": "community"}
-	if err := agent.updateExistingRunner(context.Background(), existing); err != nil || len(client.removedLabels) != 0 {
-		t.Fatalf("idempotent registration: removals=%v error=%v", client.removedLabels, err)
 	}
 }
 
@@ -316,7 +330,7 @@ func (f *fakeRunnerAPI) GetRunner(context.Context, string) (*gateway.RunnerResou
 
 func (f *fakeRunnerAPI) CreateRunner(context.Context, gateway.RunnerResource) error { return nil }
 
-func (f *fakeRunnerAPI) UpdateRunner(context.Context, gateway.RunnerResource, []string) error {
+func (f *fakeRunnerAPI) UpdateRunner(context.Context, gateway.RunnerResource) error {
 	return nil
 }
 
