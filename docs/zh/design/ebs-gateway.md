@@ -137,7 +137,7 @@ label 语义：
 
 普通用户、Ops 和 Admin 创建 Project 时，gateway 统一写入或覆盖 `ebs.io/owner-user=<jwt.sub>`，不采用客户端指定的 owner，也不额外查询 owner User。
 
-仅 Project owner 可更新或删除已有 Project；更新时 `ebs.io/owner-user` 必须保持不变。成员用户 label 用于表达共享权限，owner 可增删；新增的 member user 必须对应已存在且启用、scope 为 `ebs:user` 或 `ebs:ops` 的 User。
+Gateway 不开放 Project 删除路由，工程删除由内部运维通过 apiserver 执行。仅 Project owner 可更新已有 Project；更新时 `ebs.io/owner-user` 必须保持不变。成员用户 label 用于表达共享权限，owner 可增删；新增的 member user 必须对应已存在且启用、scope 为 `ebs:user` 或 `ebs:ops` 的 User。
 
 匿名调用方可以读取第 4.1 节定义的公开资源，认证用户通过 Project API 访问 Project 级资源。Runner 使用独立的 runner token。普通用户 token 只有在对应 User 存在且已启用时才有效；gateway 直接使用 JWT `sub` 作为用户身份，并限制用户只能写入自己拥有或被授权为 member 的 Project 和 Project 子资源。
 
@@ -508,7 +508,7 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 
 | 资源范围 | Owner 用户 | Member 用户 | Ops | Runner | Admin |
 |----------|------------|-------------|-----|--------|-------|
-| Project | `get/list/create/update/patch/delete` | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | `get/list/create`，禁止更新和删除 |
+| Project | `get/list/create/update/patch`，禁止删除 | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | `get/list/create`，禁止更新和删除 |
 | Project 子资源：Snapshot、BuildInfo、BuildGraph、RpmRepo | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建和中止；仅为 Project owner 时可删除；禁止 PUT/PATCH |
@@ -719,7 +719,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/auth/register`、`/auth/login` | 无 | 匿名注册普通用户、密码登录 |
 | `/auth/runner-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner token；后者凭 Bearer Token 校验身份 |
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
-| `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改或删除 Project，包含 `/status`；member 不可写 Project |
+| `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改 Project（包含 `/status`）；不开放 Project 删除；member 不可写 Project |
 | `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`buildgraphs`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
 | `/apis/ebs/v1/projects/{project}/builds[/{name}][/status]`、`/apis/ebs/v1/projects/{project}/builds/{name}/abort` | 匿名及已认证用户可读取；watch 不开放 | 按上表权限创建或中止；仅 Project owner 可删除；Gateway 不允许任何身份 PUT/PATCH Build 及其 `/status` |
 | `/apis/ebs/v1/projects/{project}/jobs[/{name}][/status]` | 匿名及已认证用户可读取；Runner 仅可读取已分配的具名 Job；watch 需认证并授权 | owner/member 可按 Project 权限写主资源，但不能写 `/status`；Admin 可写主资源；Runner 仅可更新已分配 Job 的 `/status` |

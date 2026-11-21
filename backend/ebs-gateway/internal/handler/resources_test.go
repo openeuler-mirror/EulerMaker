@@ -14,6 +14,7 @@ func TestResourceMethodBoundary(t *testing.T) {
 		route     policy.Route
 		wantAllow bool
 	}{
+		{"project delete", policy.Route{Resource: "projects", Name: "p", Method: http.MethodDelete}, false},
 		{"collection list", policy.Route{Resource: "projects", Method: http.MethodGet}, true},
 		{"collection update", policy.Route{Resource: "projects", Method: http.MethodPut}, false},
 		{"named create", policy.Route{Resource: "projects", Name: "p", Method: http.MethodPost}, false},

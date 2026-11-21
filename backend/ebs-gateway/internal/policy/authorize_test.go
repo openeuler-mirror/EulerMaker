@@ -38,7 +38,8 @@ func TestProjectAuthorizationMatrix(t *testing.T) {
 		allow bool
 	}{
 		{"owner updates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
-		{"owner deletes Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodDelete}, true},
+		{"owner cannot delete Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodDelete}, false},
+		{"ops owner cannot delete Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.OpsScope}, Route{Resource: "projects", Name: "team", Method: http.MethodDelete}, false},
 		{"ops owner updates Project", identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.OpsScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, true},
 		{"member cannot update Project", identity.Principal{Type: identity.UserType, Subject: "bob", Scope: identity.UserScope}, Route{Resource: "projects", Name: "team", Method: http.MethodPatch}, false},
 		{"admin may create Project", identity.Principal{Type: identity.UserType, Subject: "admin", Scope: identity.AdminScope}, Route{Resource: "projects", Method: http.MethodPost}, true},

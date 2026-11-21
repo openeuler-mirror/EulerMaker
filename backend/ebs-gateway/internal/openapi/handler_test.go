@@ -128,3 +128,21 @@ func TestTransformedResponseSchemas(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectDeleteNotExposed(t *testing.T) {
+	var doc struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(document, &doc); err != nil {
+		t.Fatal(err)
+	}
+	path := doc.Paths["/apis/ebs/v1/projects/{project}"]
+	if _, ok := path["delete"]; ok {
+		t.Fatal("Project DELETE is exposed")
+	}
+	for _, method := range []string{"get", "put", "patch"} {
+		if _, ok := path[method]; !ok {
+			t.Fatalf("Project %s missing", method)
+		}
+	}
+}

@@ -112,7 +112,7 @@ func operations() object {
 					if r.name != "builds" {
 						methods = append(methods, "put", "patch")
 					}
-					if part == "object" {
+					if part == "object" && r.name != "projects" {
 						methods = append(methods, "delete")
 					}
 				case "abort":
