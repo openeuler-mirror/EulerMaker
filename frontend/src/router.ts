@@ -21,6 +21,7 @@ export const router = createRouter({
       ],
     },
     { path: "/operations", alias: "/runners", name: "operations", component: () => import("@/views/OperationsView.vue"), meta: { roles: ["ops", "admin"] } },
+    { path: "/operations/runners/:name", alias: "/runners/:name", name: "runner", component: () => import("@/views/RunnerView.vue"), meta: { roles: ["ops", "admin"] } },
     { path: "/settings", name: "settings", component: () => import("@/views/SettingsView.vue"), meta: { authenticated: true } },
     { path: "/:pathMatch(.*)*", redirect: { name: "projects" } },
   ],

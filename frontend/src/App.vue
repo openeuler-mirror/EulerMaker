@@ -12,7 +12,7 @@
 
       <nav :class="['main-nav', { open: menuOpen }]" :aria-label="t('app.mainNavigation')" @click="menuOpen = false">
         <RouterLink to="/projects">{{ t("app.projects") }}</RouterLink>
-        <RouterLink v-if="session.role === 'ops' || session.role === 'admin'" to="/operations">{{ t("app.operations") }}</RouterLink>
+        <RouterLink v-if="session.role === 'ops' || session.role === 'admin'" to="/operations" :class="{ 'router-link-active': $route.name === 'runner' }">{{ t("app.operations") }}</RouterLink>
         <RouterLink v-if="session.role === 'admin'" to="/admin">{{ t("app.userManagement") }}</RouterLink>
       </nav>
 

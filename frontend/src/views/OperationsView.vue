@@ -51,7 +51,7 @@
               <th v-if="canManageRunners">{{ t("admin.actions") }}</th>
             </tr></thead>
             <tbody><tr v-for="runner in filteredRunners" :key="runner.metadata?.name">
-              <td><strong>{{ runner.metadata?.name }}</strong><small class="admin-cell-subtitle">{{ runner.spec?.instanceID }}</small></td>
+              <td><RouterLink v-if="runner.metadata?.name" class="project-name-link" :to="{ name: 'runner', params: { name: runner.metadata.name } }"><strong>{{ runner.metadata.name }}</strong></RouterLink><small class="admin-cell-subtitle">{{ runner.spec?.instanceID }}</small></td>
               <td><StatusBadge :value="runner.status?.phase" /></td>
               <td>{{ runner.spec?.type || t("common.emptyValue") }}</td>
               <td>{{ runner.spec?.arch || t("common.emptyValue") }}</td>
@@ -96,7 +96,8 @@
 
 <script setup lang="ts">
 import { CircleCheckFilled, Refresh, WarningFilled } from "@element-plus/icons-vue";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { RouterLink, useRoute } from "vue-router";
 import { parse, stringify } from "yaml";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
@@ -116,6 +117,7 @@ type ResourceConfigView = { config: Config; content: BuildResourceContent };
 
 const { t } = useI18n();
 const session = useSessionStore();
+const route = useRoute();
 const activeSection = ref<OperationsSection>("build");
 const operationSections = computed<Array<{ id: OperationsSection; label: string }>>(() => [
   { id: "build", label: t("operations.buildConfiguration") },
@@ -301,6 +303,9 @@ async function loadAll<T>(path: string): Promise<T[]> {
   } while (token);
   return items;
 }
+watch(() => route.query.section, section => {
+  if (section === "runners") selectSection("runners");
+}, { immediate: true });
 </script>
 
 <style scoped>
