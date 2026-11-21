@@ -11,6 +11,42 @@ import (
 	"ebs-runner/pkg/gateway"
 )
 
+func TestRegistrationTaints(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		flags   []string
+		want    []gateway.RunnerTaint
+		invalid bool
+	}{
+		{name: "default"},
+		{name: "empty", flags: []string{"--taints="}},
+		{name: "multiple and repeated", flags: []string{
+			"--taints=ebs.io/dedicated=gating:NoSchedule,pool:PreferNoSchedule", "--taints=pool=:NoExecute",
+		}, want: []gateway.RunnerTaint{
+			{Key: "ebs.io/dedicated", Value: "gating", Effect: "NoSchedule"},
+			{Key: "pool", Effect: "PreferNoSchedule"}, {Key: "pool", Effect: "NoExecute"},
+		}},
+		{name: "duplicate key and effect", flags: []string{"--taints=pool=a:NoSchedule", "--taints=pool=b:NoSchedule"}, invalid: true},
+		{name: "missing effect", flags: []string{"--taints=pool=gating"}, invalid: true},
+		{name: "unknown effect", flags: []string{"--taints=pool:Other"}, invalid: true},
+		{name: "empty key", flags: []string{"--taints=:NoSchedule"}, invalid: true},
+		{name: "invalid prefix", flags: []string{"--taints=Bad_Domain/pool:NoSchedule"}, invalid: true},
+		{name: "invalid value", flags: []string{"--taints=pool=two words:NoSchedule"}, invalid: true},
+		{name: "long key", flags: []string{"--taints=" + strings.Repeat("a", 64) + ":NoSchedule"}, invalid: true},
+		{name: "long value", flags: []string{"--taints=pool=" + strings.Repeat("a", 64) + ":NoSchedule"}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadConfig(append([]string{"--machine-credential-file=/credential", "--name=runner-a"}, tc.flags...))
+			if (err != nil) != tc.invalid {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if err == nil && !reflect.DeepEqual(cfg.Taints, tc.want) {
+				t.Fatalf("taints = %v, want %v", cfg.Taints, tc.want)
+			}
+		})
+	}
+}
+
 func TestCapabilityLabels(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

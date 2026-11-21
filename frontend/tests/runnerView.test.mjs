@@ -78,6 +78,7 @@ async function renderView(state) {
   app.component("RouterLink", { props: ["to"], setup: (_, { slots }) => () => Vue.h("a", slots.default?.()) });
   app.component("StatusBadge", { props: ["value"], setup: props => () => Vue.h("span", props.value) });
   app.component("RunnerLabels", { props: ["runner"], setup: props => () => Vue.h("div", JSON.stringify(props.runner.metadata?.labels)) });
+  app.component("RunnerTaints", { props: ["runner"], setup: props => () => Vue.h("div", JSON.stringify(props.runner.spec?.taints)) });
   for (const name of ["ArrowLeft", "Refresh", "WarningFilled"]) app.component(name, { render: () => Vue.h("i") });
   return renderToString(app);
 }

@@ -42,12 +42,13 @@ func TestClientGetServiceEndpoints(t *testing.T) {
 func TestClientPatchRunnerStatus(t *testing.T) {
 	var gotMethod, gotPath, gotAuth, gotContentType string
 	var gotBody struct {
-		Status   RunnerStatus `json:"status"`
-		Metadata ObjectMeta   `json:"metadata"`
+		Status   RunnerStatus    `json:"status"`
+		Metadata ObjectMeta      `json:"metadata"`
+		Spec     json.RawMessage `json:"spec"`
 	}
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
 		if req.Method == http.MethodGet {
-			return response(200, `{"metadata":{"resourceVersion":"7"},"status":{"phase":"Online"}}`), nil
+			return response(200, `{"metadata":{"resourceVersion":"7"},"spec":{"taints":[{"key":"pool","value":"gating","effect":"NoSchedule"}]},"status":{"phase":"Online"}}`), nil
 		}
 		gotMethod = req.Method
 		gotPath = req.URL.RequestURI()
@@ -78,9 +79,16 @@ func TestClientPatchRunnerStatus(t *testing.T) {
 	if gotBody.Status.Phase != "Online" || gotBody.Metadata.ResourceVersion != "7" {
 		t.Fatalf("unexpected body: %#v", gotBody)
 	}
+	if gotBody.Spec != nil {
+		t.Fatalf("heartbeat changed spec: %s", gotBody.Spec)
+	}
+	if gotBody.Metadata.Labels != nil {
+		t.Fatalf("heartbeat changed labels: %v", gotBody.Metadata.Labels)
+	}
 }
 
 func TestClientCreateRunnerOmitsStatus(t *testing.T) {
+	taints := []RunnerTaint{{Key: "pool", Value: "gating", Effect: "NoSchedule"}}
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
 		var body map[string]json.RawMessage
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -96,14 +104,25 @@ func TestClientCreateRunnerOmitsStatus(t *testing.T) {
 		if spec.InstanceID != testRunnerInstanceID {
 			t.Fatalf("instanceID = %q", spec.InstanceID)
 		}
+		if !reflect.DeepEqual(spec.Taints, taints) {
+			t.Fatalf("created taints = %v", spec.Taints)
+		}
+		var meta ObjectMeta
+		if err := json.Unmarshal(body["metadata"], &meta); err != nil {
+			t.Fatal(err)
+		}
+		if meta.Labels["ebs.io/runner-capability.kvm"] != "true" {
+			t.Fatalf("initial capability labels = %v", meta.Labels)
+		}
 		return response(http.StatusCreated, `{}`), nil
 	})
 	err := client.CreateRunner(context.Background(), RunnerResource{
 		TypeMeta: TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"},
 		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{
 			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64",
+			"ebs.io/runner-capability.kvm": "true",
 		}},
-		Spec: RunnerSpec{InstanceID: testRunnerInstanceID, Type: "ct", Arch: "x86_64"},
+		Spec: RunnerSpec{InstanceID: testRunnerInstanceID, Type: "ct", Arch: "x86_64", Taints: taints},
 	})
 	if err != nil {
 		t.Fatalf("create runner: %v", err)
@@ -129,10 +148,12 @@ func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 		if _, exists := patch["status"]; exists {
 			t.Fatalf("runner update included status: %#v", patch)
 		}
+		if !reflect.DeepEqual(patch["spec"], map[string]any{"instanceID": "", "type": "ct", "arch": "x86_64"}) {
+			t.Fatalf("unexpected spec patch: %#v", patch["spec"])
+		}
 		labels := patch["metadata"].(map[string]any)["labels"]
 		if !reflect.DeepEqual(labels, map[string]any{
-			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64", "ebs.io/runner-capability.kvm": "true",
-			"ebs.io/runner-capability.old": nil,
+			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64",
 		}) {
 			t.Fatalf("labels patch = %#v", labels)
 		}
@@ -149,14 +170,14 @@ func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{
 			"ebs.io/pool": "community", "ebs.io/runner-capability.kvm": "true",
 		}},
-		Spec:   RunnerSpec{Type: "ct", Arch: "x86_64", Unschedulable: true},
+		Spec:   RunnerSpec{Type: "ct", Arch: "x86_64", Unschedulable: true, Taints: []RunnerTaint{{Key: "pool", Effect: "NoSchedule"}}},
 		Status: RunnerStatus{Phase: "Online"},
-	}, []string{"ebs.io/runner-capability.old", "ebs.io/pool", "ebs.io/runner-arch"})
+	})
 	if err != nil {
 		t.Fatalf("update runner: %v", err)
 	}
-	if storedLabels["ebs.io/pool"] != "community" || storedLabels["ebs.io/runner-capability.old"] != nil ||
-		storedLabels["ebs.io/runner-capability.kvm"] != "true" {
+	if storedLabels["ebs.io/pool"] != "community" || storedLabels["ebs.io/runner-capability.old"] != "preserved" ||
+		storedLabels["ebs.io/runner-capability.kvm"] != "false" {
 		t.Fatalf("merged labels = %v", storedLabels)
 	}
 }

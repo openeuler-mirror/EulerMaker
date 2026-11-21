@@ -9,6 +9,28 @@ import (
 	"ebs-gateway/internal/identity"
 )
 
+func TestRunnerCreateWithInitialTaints(t *testing.T) {
+	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-a", Runner: "runner-a"}
+	body := []byte(`{"metadata":{"name":"runner-a"},"spec":{"instanceID":"01234567-89ab-4def-8123-456789abcdef","type":"ct","arch":"x86_64","taints":[{"key":"pool","value":"gating","effect":"NoSchedule"}]}}`)
+	encoded, err := (&Authorizer{}).PrepareCreate(context.Background(), who,
+		Route{Resource: "runners", Method: http.MethodPost}, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object struct {
+		Spec struct {
+			Taints []struct{ Key, Value, Effect string }
+		}
+	}
+	if err := json.Unmarshal(encoded, &object); err != nil {
+		t.Fatal(err)
+	}
+	if len(object.Spec.Taints) != 1 || object.Spec.Taints[0].Key != "pool" ||
+		object.Spec.Taints[0].Value != "gating" || object.Spec.Taints[0].Effect != "NoSchedule" {
+		t.Fatalf("initial taints were not preserved: %s", encoded)
+	}
+}
+
 func TestProjectScopedCreateCannotNameAnotherNamespace(t *testing.T) {
 	authorizer := &Authorizer{}
 	_, err := authorizer.PrepareCreate(context.Background(), identity.Principal{Type: identity.UserType, Subject: "alice", Scope: identity.UserScope},

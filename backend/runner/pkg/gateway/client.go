@@ -58,24 +58,17 @@ func (c *Client) CreateRunner(ctx context.Context, runner RunnerResource) error 
 			"arch":       runner.Spec.Arch,
 		},
 	}
+	if len(runner.Spec.Taints) > 0 {
+		body["spec"].(map[string]any)["taints"] = runner.Spec.Taints
+	}
 	return c.doJSON(ctx, http.MethodPost, apiPrefix+"/runners", body, nil)
 }
 
-func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource, removedLabels []string) error {
+func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error {
 	path := apiPrefix + "/runners/" + url.PathEscape(runner.Metadata.Name)
 	labels := map[string]any{
 		"ebs.io/runner-type": runner.Spec.Type,
 		"ebs.io/runner-arch": runner.Spec.Arch,
-	}
-	for _, key := range removedLabels {
-		if strings.HasPrefix(key, "ebs.io/runner-capability.") {
-			labels[key] = nil
-		}
-	}
-	for key, value := range runner.Metadata.Labels {
-		if strings.HasPrefix(key, "ebs.io/runner-capability.") {
-			labels[key] = value
-		}
 	}
 	body := map[string]any{
 		"metadata": map[string]any{

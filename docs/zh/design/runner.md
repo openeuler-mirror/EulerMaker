@@ -22,7 +22,7 @@ runner -> artifact-manager -> local persistent storage
 
 | 职责 | 说明 |
 |------|------|
-| 注册 Runner | 创建或受限更新与 token 身份一致的集群级 `Runner` 对象，声明安装实例 ID、执行机类型、架构和能力标签 |
+| 注册 Runner | 创建或受限更新与 token 身份一致的集群级 `Runner` 对象，声明安装实例 ID、执行机类型、架构和能力标签；首次创建可携带初始污点 |
 | 上报状态 | 定期更新 `Runner.status`，包括 phase、资源容量、可调度资源、地址、系统信息和心跳时间 |
 | 监听 Job | 通过自身 Runner 范围的 Job list-watch 获取已分配任务，服务端只返回 `status.runner` 等于自身名称的 Job |
 | 执行 Job | 根据 Job spec 准备执行环境、提供 payload 参数、运行任务、收集产物 |
@@ -214,7 +214,8 @@ type RunnerSpec struct {
 | `unschedulable` | 是否禁止调度新 Job |
 | `taints` | 反亲和污点 |
 
-`instanceID`、`type` 和 `arch` 由 Runner 自身声明；`instanceID` 创建后不可变，`unschedulable` 和 `taints` 虽然位于 RunnerSpec，但由 Ops/Admin 管理，Runner 自注册和更新时不得修改。
+`instanceID`、`type` 和 `arch` 由 Runner 自身声明；`instanceID` 创建后不可变。`unschedulable` 由 Ops/Admin 管理；
+`taints` 允许 Runner 首次创建时声明，创建后由 Ops/Admin 管理，Runner 重新注册和心跳不得修改。
 
 调度标签统一写入 `metadata.labels`，不在 `spec` 中重复定义。例如：
 
@@ -225,10 +226,17 @@ Runner 通过 `--labels=ebs.io/runner-capability.kvm=true,ebs.io/runner-capabili
 63 个字符，值可以为空，重复键或无效格式导致启动失败。类型和架构标签自动生成，不能通过此参数覆盖；
 `ebs.io/pool` 等其他自定义标签由 Ops/Admin 通过管理接口或前端维护。
 
-首次注册写入配置标签；重启注册时对比已有标签与 `--labels`，使用受限 Merge Patch 同步整个能力标签集合：
-配置中的键写入当前值，已移除的能力标签写 null 删除，不影响类型、架构及其他管理标签。
-未传 `--labels` 或传空值表示空集合，会清除已有全部 `ebs.io/runner-capability.*` 标签；配置为空字符串值的键仍保留。
-同步只在启动注册时执行，不热加载。能力标签由 Runner 独占维护，前端只读；失败时启动不继续，重启可幂等重试。
+`--labels` 仅在首次创建 Runner 时写入，未传或空参数表示不设置初始能力标签；配置为空字符串值的键仍写入。
+已有对象重新注册（包括创建返回 409 后确认同一 instanceID）时，不新增、修改或删除能力标签，
+参数增删不改变已注册对象，也不恢复被管理员删除的标签。类型和架构标签继续与 spec.type、spec.arch 保持一致，
+其他标签保持服务端值，心跳不修改标签。前端仍将能力标签设为只读；需要修改已有能力标签时由 Ops/Admin 通过管理接口操作。
+
+Runner 通过 `--taints=ebs.io/dedicated=gating:NoSchedule` 声明初始污点，支持逗号分隔和重复参数，格式为 `key[=value]:effect`。
+键遵循可选 DNS 前缀的标签键规则，值可为空且最多 63 字符；启动前校验键值、effect 枚举和 key/effect 组合唯一性。
+允许的 effect 为 NoSchedule、PreferNoSchedule、NoExecute；缺省或空参数表示无初始污点。
+仅 collection POST 创建 Runner 时提交 spec.taints。对象已存在或创建返回 409 后读取到同一 instanceID 时，
+受限更新不包含 taints，保留运维设置；修改或移除启动参数不改变已有污点，心跳只更新 status。
+测试覆盖首次创建携带污点、已有污点被修改或清空后的重启保留、创建冲突恢复，以及 Gateway 创建放行、更新拒绝。
 心跳只更新 status，不写标签。标签变更供后续 Job 的 `nodeSelector` 匹配，不迁移已运行 Job，
 也不会自动复制 Kubernetes Node/Pod 的标签。
 
@@ -748,7 +756,8 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--service-access-mode` | `internal` | internal 使用内网服务地址；external 使用制品外网地址，并以 `origin_url` 替换本地 `clone_url` |
 | `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
 | `--name` | hostname | Runner 资源名称 |
-| `--labels` | 空 | 逗号分隔的 `ebs.io/runner-capability.*=value`，可重复传入；注册时同步并删除未配置的能力标签，缺省清空能力标签 |
+| `--labels` | 空 | 逗号分隔的 `ebs.io/runner-capability.*=value`，可重复传入；仅首次创建对象时写入，重新注册和心跳不覆盖已有能力标签 |
+| `--taints` | 空 | 逗号分隔的 `key[=value]:effect`，可重复传入；仅首次创建对象时写入，重新注册和心跳保留已有污点 |
 | `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |
 | `--root-dir` | `/var/lib/ebs-runner` | Runner 工作目录和结果目录的根路径 |
 | `--container-runtime` | `docker` | CT 后端：`docker` 或 `containerd` |

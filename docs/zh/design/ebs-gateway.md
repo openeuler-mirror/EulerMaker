@@ -499,8 +499,8 @@ gateway 在转发前进行用户级 Project 鉴权。
 Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行以下检查：
 
 - JWT `sub`、`runner` claim 和 `metadata.name` 完全一致；请求不能使用 `generateName`。
-- 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceID`、`spec.type`、`spec.arch`。
-- `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable`、`spec.taints` 或其他管理字段。
+- 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceID`、`spec.type`、`spec.arch`、初始 `spec.taints`。污点仅在创建时允许声明，已有对象的污点由 Ops/Admin 管理，Runner 更新仍须保留原值。
+- `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable` 或其他管理字段。
 
 `spec.instanceID` 必填和 UUID v4 格式、type 取值、`arch` 必填以及 type/arch labels 与 spec 一致性均由 apiserver 统一校验。apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并比较 `instanceID`，相同才按 4.9.1 节发起受限 PUT/PATCH，不同则停止注册。
 

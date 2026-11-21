@@ -33,14 +33,7 @@
         <dl v-if="group.entries.length" class="runner-detail-fields metadata-fields"><div v-for="[key, value] in group.entries" :key="key"><dt>{{ key }}</dt><dd>{{ value || t('common.emptyValue') }}</dd></div></dl>
         <p v-else class="form-hint">{{ t('runnerDetail.none') }}</p>
       </section>
-      <section class="content-panel">
-        <h2>{{ t('runnerDetail.taints') }}</h2>
-        <div v-if="runner.spec?.taints?.length" class="table-scroll"><table class="taints-table">
-          <thead><tr><th>{{ t('operations.labelKey') }}</th><th>{{ t('operations.labelValue') }}</th><th>{{ t('runnerDetail.effect') }}</th></tr></thead>
-          <tbody><tr v-for="(taint, index) in runner.spec.taints" :key="index"><td>{{ taint.key }}</td><td>{{ taint.value || t('common.emptyValue') }}</td><td>{{ taint.effect }}</td></tr></tbody>
-        </table></div>
-        <p v-else class="form-hint">{{ t('runnerDetail.none') }}</p>
-      </section>
+      <RunnerTaints :key="`taints-${runner.metadata?.uid || name}`" :runner="runner" @saved="loadRunner" />
     </div>
     <section class="content-panel">
       <h2>{{ t('runnerDetail.addresses') }}</h2>
@@ -66,6 +59,7 @@ import { useI18n } from "vue-i18n";
 import { errorTranslationKey, request } from "@/api";
 import StatusBadge from "@/components/StatusBadge.vue";
 import RunnerLabels from "@/components/RunnerLabels.vue";
+import RunnerTaints from "@/components/RunnerTaints.vue";
 import type { Runner } from "@/types";
 import { formatRunnerMemory } from "@/utils/runnerResources";
 
@@ -148,10 +142,6 @@ onBeforeUnmount(() => activeRequest?.abort());
 }
 .runner-metadata-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .runner-metadata-grid > * { min-width: 0; }
-.taints-table { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: left; }
-.taints-table th, .taints-table td { padding: 6px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; font-size: 13px; }
-.taints-table th { color: var(--muted); font-size: 13px; font-weight: 500; }
-.taints-table tbody tr:last-child td { border-bottom: 0; }
 @media (max-width: 1000px) {
   .runner-metadata-grid { grid-template-columns: 1fr; }
 }
