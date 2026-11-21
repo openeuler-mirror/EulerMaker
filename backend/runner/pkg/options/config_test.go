@@ -3,12 +3,48 @@ package options
 import (
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"ebs-runner/pkg/artifact"
 	"ebs-runner/pkg/gateway"
 )
+
+func TestCapabilityLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		flags   []string
+		want    map[string]string
+		invalid bool
+	}{
+		{name: "default"},
+		{name: "empty", flags: []string{"--labels="}, want: map[string]string{}},
+		{name: "multiple and repeated", flags: []string{
+			"--labels=ebs.io/runner-capability.kvm=true,ebs.io/runner-capability.network=internal",
+			"--labels=ebs.io/runner-capability.empty=",
+		}, want: map[string]string{"ebs.io/runner-capability.kvm": "true", "ebs.io/runner-capability.network": "internal", "ebs.io/runner-capability.empty": ""}},
+		{name: "type reserved", flags: []string{"--labels=ebs.io/runner-type=vm"}, invalid: true},
+		{name: "arch reserved", flags: []string{"--labels=ebs.io/runner-arch=aarch64"}, invalid: true},
+		{name: "ops owned", flags: []string{"--labels=ebs.io/pool=community"}, invalid: true},
+		{name: "duplicate", flags: []string{"--labels=ebs.io/runner-capability.kvm=true", "--labels=ebs.io/runner-capability.kvm=false"}, invalid: true},
+		{name: "missing value separator", flags: []string{"--labels=ebs.io/runner-capability.kvm"}, invalid: true},
+		{name: "empty capability", flags: []string{"--labels=ebs.io/runner-capability.=true"}, invalid: true},
+		{name: "invalid value", flags: []string{"--labels=ebs.io/runner-capability.kvm=two words"}, invalid: true},
+		{name: "long name", flags: []string{"--labels=ebs.io/runner-capability." + strings.Repeat("a", 46) + "=true"}, invalid: true},
+		{name: "long value", flags: []string{"--labels=ebs.io/runner-capability.kvm=" + strings.Repeat("a", 64)}, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := LoadConfig(append([]string{"--machine-credential-file=/credential", "--name=runner-a"}, tc.flags...))
+			if (err != nil) != tc.invalid {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if err == nil && !reflect.DeepEqual(cfg.Labels, tc.want) {
+				t.Fatalf("labels = %v, want %v", cfg.Labels, tc.want)
+			}
+		})
+	}
+}
 
 func TestBusinessConfigFlagBindings(t *testing.T) {
 	cfg, err := LoadConfig([]string{

@@ -71,12 +71,14 @@ func TestBytesToGiQuantity(t *testing.T) {
 const testRunnerInstanceID = "01234567-89ab-4def-8123-456789abcdef"
 
 type registrationAPI struct {
-	getResults []*gateway.RunnerResource
-	getErrors  []error
-	getCalls   int
-	createErr  error
-	created    *gateway.RunnerResource
-	updated    *gateway.RunnerResource
+	getResults    []*gateway.RunnerResource
+	getErrors     []error
+	getCalls      int
+	createErr     error
+	updateErr     error
+	created       *gateway.RunnerResource
+	updated       *gateway.RunnerResource
+	removedLabels []string
 }
 
 func (f *registrationAPI) GetRunner(context.Context, string) (*gateway.RunnerResource, error) {
@@ -98,9 +100,10 @@ func (f *registrationAPI) CreateRunner(_ context.Context, runner gateway.RunnerR
 	return f.createErr
 }
 
-func (f *registrationAPI) UpdateRunner(_ context.Context, runner gateway.RunnerResource) error {
+func (f *registrationAPI) UpdateRunner(_ context.Context, runner gateway.RunnerResource, removedLabels []string) error {
 	f.updated = &runner
-	return nil
+	f.removedLabels = removedLabels
+	return f.updateErr
 }
 
 func (*registrationAPI) PatchRunnerStatus(context.Context, string, gateway.RunnerStatus) error {
@@ -133,28 +136,78 @@ func newRegistrationAgent(client RunnerAPI) *Agent {
 
 func TestRegisterCreatesRunnerWithInstanceID(t *testing.T) {
 	client := &registrationAPI{getErrors: []error{gateway.StatusError{Code: 404}}}
-	if err := newRegistrationAgent(client).register(context.Background()); err != nil {
+	agent := newRegistrationAgent(client)
+	agent.cfg.Labels = map[string]string{"ebs.io/runner-capability.kvm": "true"}
+	if err := agent.register(context.Background()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if client.created == nil || client.created.Spec.InstanceID != testRunnerInstanceID {
 		t.Fatalf("created runner = %#v", client.created)
 	}
+	if client.created.Metadata.Labels["ebs.io/runner-capability.kvm"] != "true" {
+		t.Fatalf("created labels = %v", client.created.Metadata.Labels)
+	}
 }
 
 func TestRegisterUpdatesMatchingInstance(t *testing.T) {
 	existing := &gateway.RunnerResource{
-		Metadata: gateway.ObjectMeta{Name: "runner-a", Labels: map[string]string{"custom": "value"}},
-		Spec:     gateway.RunnerSpec{InstanceID: testRunnerInstanceID, Type: "vm", Arch: "aarch64", Unschedulable: true},
+		Metadata: gateway.ObjectMeta{Name: "runner-a", Labels: map[string]string{
+			"custom": "value", "ebs.io/runner-capability.kvm": "false", "ebs.io/runner-capability.old": "true",
+			"ebs.io/runner-capability.empty": "previous",
+		}},
+		Spec: gateway.RunnerSpec{InstanceID: testRunnerInstanceID, Type: "vm", Arch: "aarch64", Unschedulable: true},
 	}
 	client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
-	if err := newRegistrationAgent(client).register(context.Background()); err != nil {
+	agent := newRegistrationAgent(client)
+	agent.cfg.Labels = map[string]string{"ebs.io/runner-capability.kvm": "true", "ebs.io/runner-capability.empty": ""}
+	if err := agent.register(context.Background()); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	if client.updated == nil || client.updated.Spec.InstanceID != testRunnerInstanceID || !client.updated.Spec.Unschedulable {
 		t.Fatalf("updated runner = %#v", client.updated)
 	}
-	if client.updated.Metadata.Labels["custom"] != "value" {
-		t.Fatalf("custom labels were not preserved: %#v", client.updated.Metadata.Labels)
+	if len(client.updated.Metadata.Labels) != 4 || client.updated.Metadata.Labels["ebs.io/runner-capability.kvm"] != "true" ||
+		client.updated.Metadata.Labels["ebs.io/runner-capability.empty"] != "" {
+		t.Fatalf("updated capability labels = %v", client.updated.Metadata.Labels)
+	}
+	if existing.Metadata.Labels["ebs.io/runner-capability.kvm"] != "false" {
+		t.Fatal("registration mutated the read object")
+	}
+	if len(client.removedLabels) != 1 || client.removedLabels[0] != "ebs.io/runner-capability.old" {
+		t.Fatalf("removed labels = %v", client.removedLabels)
+	}
+}
+
+func TestRegisterWithoutLabelsClearsCapabilities(t *testing.T) {
+	existing := &gateway.RunnerResource{
+		Metadata: gateway.ObjectMeta{Name: "runner-a", Labels: map[string]string{
+			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64", "ebs.io/pool": "community",
+			"ebs.io/runner-capability.kvm": "true", "ebs.io/runner-capability.empty": "",
+		}},
+		Spec: gateway.RunnerSpec{InstanceID: testRunnerInstanceID},
+	}
+	client := &registrationAPI{getResults: []*gateway.RunnerResource{existing}}
+	agent := newRegistrationAgent(client)
+	client.updateErr = errors.New("temporary update failure")
+	if err := agent.updateExistingRunner(context.Background(), existing); !errors.Is(err, client.updateErr) {
+		t.Fatalf("registration must report cleanup failure: %v", err)
+	}
+	client.updateErr = nil
+	if err := agent.register(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.removedLabels) != 2 || len(client.updated.Metadata.Labels) != 2 {
+		t.Fatalf("labels=%v removed=%v", client.updated.Metadata.Labels, client.removedLabels)
+	}
+	for _, key := range client.removedLabels {
+		if !strings.HasPrefix(key, "ebs.io/runner-capability.") {
+			t.Fatalf("unexpected removal: %s", key)
+		}
+	}
+	// A retry after the successful cleanup no longer requests any removals.
+	existing.Metadata.Labels = map[string]string{"ebs.io/pool": "community"}
+	if err := agent.updateExistingRunner(context.Background(), existing); err != nil || len(client.removedLabels) != 0 {
+		t.Fatalf("idempotent registration: removals=%v error=%v", client.removedLabels, err)
 	}
 }
 
@@ -263,7 +316,9 @@ func (f *fakeRunnerAPI) GetRunner(context.Context, string) (*gateway.RunnerResou
 
 func (f *fakeRunnerAPI) CreateRunner(context.Context, gateway.RunnerResource) error { return nil }
 
-func (f *fakeRunnerAPI) UpdateRunner(context.Context, gateway.RunnerResource) error { return nil }
+func (f *fakeRunnerAPI) UpdateRunner(context.Context, gateway.RunnerResource, []string) error {
+	return nil
+}
 
 func (f *fakeRunnerAPI) PatchRunnerStatus(context.Context, string, gateway.RunnerStatus) error {
 	return nil

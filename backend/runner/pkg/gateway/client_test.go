@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,10 @@ func TestClientCreateRunnerOmitsStatus(t *testing.T) {
 }
 
 func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
+	storedLabels := map[string]any{
+		"ebs.io/pool": "community", "ebs.io/runner-capability.old": "preserved",
+		"ebs.io/runner-capability.kvm": "false",
+	}
 	client := newTestClient(t, func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodPatch || req.URL.Path != apiPrefix+"/runners/runner-a" {
 			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
@@ -124,15 +129,35 @@ func TestClientUpdateRunnerUsesRestrictedMergePatch(t *testing.T) {
 		if _, exists := patch["status"]; exists {
 			t.Fatalf("runner update included status: %#v", patch)
 		}
+		labels := patch["metadata"].(map[string]any)["labels"]
+		if !reflect.DeepEqual(labels, map[string]any{
+			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64", "ebs.io/runner-capability.kvm": "true",
+			"ebs.io/runner-capability.old": nil,
+		}) {
+			t.Fatalf("labels patch = %#v", labels)
+		}
+		for key, value := range labels.(map[string]any) {
+			if value == nil {
+				delete(storedLabels, key)
+			} else {
+				storedLabels[key] = value
+			}
+		}
 		return response(http.StatusOK, `{}`), nil
 	})
 	err := client.UpdateRunner(context.Background(), RunnerResource{
-		Metadata: ObjectMeta{Name: "runner-a"},
-		Spec:     RunnerSpec{Type: "ct", Arch: "x86_64", Unschedulable: true},
-		Status:   RunnerStatus{Phase: "Online"},
-	})
+		Metadata: ObjectMeta{Name: "runner-a", Labels: map[string]string{
+			"ebs.io/pool": "community", "ebs.io/runner-capability.kvm": "true",
+		}},
+		Spec:   RunnerSpec{Type: "ct", Arch: "x86_64", Unschedulable: true},
+		Status: RunnerStatus{Phase: "Online"},
+	}, []string{"ebs.io/runner-capability.old", "ebs.io/pool", "ebs.io/runner-arch"})
 	if err != nil {
 		t.Fatalf("update runner: %v", err)
+	}
+	if storedLabels["ebs.io/pool"] != "community" || storedLabels["ebs.io/runner-capability.old"] != nil ||
+		storedLabels["ebs.io/runner-capability.kvm"] != "true" {
+		t.Fatalf("merged labels = %v", storedLabels)
 	}
 }
 

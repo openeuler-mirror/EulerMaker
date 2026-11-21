@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"math/rand"
 	"net"
 	"os"
@@ -31,7 +32,7 @@ var agentVersion = "unknown"
 type RunnerAPI interface {
 	GetRunner(context.Context, string) (*gateway.RunnerResource, error)
 	CreateRunner(context.Context, gateway.RunnerResource) error
-	UpdateRunner(context.Context, gateway.RunnerResource) error
+	UpdateRunner(context.Context, gateway.RunnerResource, []string) error
 	PatchRunnerStatus(context.Context, string, gateway.RunnerStatus) error
 	GetJob(context.Context, string, string) (*gateway.JobResource, error)
 	UpdateJobStatus(context.Context, gateway.JobResource, gateway.JobStatus) (*gateway.JobResource, error)
@@ -319,30 +320,37 @@ func (a *Agent) updateExistingRunner(ctx context.Context, existing *gateway.Runn
 	}
 	desired := *existing
 	desired.TypeMeta = gateway.TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"}
-	if desired.Metadata.Labels == nil {
-		desired.Metadata.Labels = map[string]string{}
+	// Capabilities are owned by this Runner; other labels remain server-owned.
+	desired.Metadata.Labels = a.runnerObject("").Metadata.Labels
+	var removedLabels []string
+	for key := range existing.Metadata.Labels {
+		if strings.HasPrefix(key, "ebs.io/runner-capability.") {
+			if _, configured := a.cfg.Labels[key]; !configured {
+				removedLabels = append(removedLabels, key)
+			}
+		}
 	}
-	desired.Metadata.Labels["ebs.io/runner-type"] = a.cfg.Type
-	desired.Metadata.Labels["ebs.io/runner-arch"] = a.cfg.Arch
 	desired.Spec.InstanceID = a.instanceID
 	desired.Spec.Type = a.cfg.Type
 	desired.Spec.Arch = a.cfg.Arch
-	if err := a.client.UpdateRunner(ctx, desired); err != nil {
+	if err := a.client.UpdateRunner(ctx, desired, removedLabels); err != nil {
 		return fmt.Errorf("update runner: %w", err)
 	}
 	return nil
 }
 
 func (a *Agent) runnerObject(resourceVersion string) gateway.RunnerResource {
+	labels := map[string]string{
+		"ebs.io/runner-type": a.cfg.Type,
+		"ebs.io/runner-arch": a.cfg.Arch,
+	}
+	maps.Copy(labels, a.cfg.Labels)
 	return gateway.RunnerResource{
 		TypeMeta: gateway.TypeMeta{APIVersion: "ebs/v1", Kind: "Runner"},
 		Metadata: gateway.ObjectMeta{
 			Name:            a.cfg.Name,
 			ResourceVersion: resourceVersion,
-			Labels: map[string]string{
-				"ebs.io/runner-type": a.cfg.Type,
-				"ebs.io/runner-arch": a.cfg.Arch,
-			},
+			Labels:          labels,
 		},
 		Spec: gateway.RunnerSpec{
 			InstanceID: a.instanceID,

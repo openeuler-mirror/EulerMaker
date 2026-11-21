@@ -4,7 +4,7 @@
 
 本文档集中定义 EulerMaker 使用的标签（label）契约，包括标签适用的对象、值语义、写入方、修改权限以及使用场景。其他设计文档只描述具体业务流程；新增系统保留标签时，应同步更新本文档。
 
-本文档中的 API 对象标签均指 `metadata.labels`。标签的键和值必须满足 Kubernetes label 语法。未列入本文档的标签属于用户自定义元数据，不得被组件解释为权限、调度或生命周期控制信号。
+本文档中的 API 对象标签均指 `metadata.labels`。标签的键和值必须满足 Kubernetes label 语法。未列入本文档的标签属于用户自定义元数据，不隐含权限或生命周期语义；Runner 自定义标签可以被 Job 的 `spec.nodeSelector` 显式匹配。
 
 ## 2. API 对象标签总表
 
@@ -23,7 +23,7 @@
 | Runner | `ebs.io/runner-type` | 与 `spec.type` 相同 | Runner | 表达 Runner 类型 |
 | Runner | `ebs.io/runner-arch` | 与 `spec.arch` 相同 | Runner | 表达 Runner 架构，供 `nodeSelector` 精确匹配 |
 | Runner | `ebs.io/runner-capability.<name>` | 由具体能力定义 | Runner | 表达 Runner 自声明能力，供 `nodeSelector` 精确匹配 |
-| Runner | `ebs.io/zone` | 部署环境定义的区域名称 | system | system 管理的调度区域 |
+| Runner | `ebs.io/zone` | 部署环境定义的区域名称 | Ops/Admin、system | 管理面维护的调度区域 |
 
 `ebs.io/` 前缀由 EulerMaker 保留。使用该前缀但未在本文档登记的标签，不具有稳定的公共语义。
 
@@ -115,7 +115,8 @@ spec:
 
 - `ebs.io/runner-type` 和 `ebs.io/runner-arch` 创建时必须存在，并分别与 `spec.type`、`spec.arch` 相同；apiserver 负责权威校验。
 - Runner 只能声明或更新 type、arch 和 `ebs.io/runner-capability.*` 标签。
-- `ebs.io/zone` 以及其他管理标签只能由 system 维护；Runner PUT/PATCH 必须保留已有值。
+- `ebs.io/zone` 以及其他自定义管理标签由 Ops/Admin 或 system 维护；Runner PUT/PATCH 必须保留已有值。前端对类型、架构及能力标签只读，其余标签可由 Ops/Admin 编辑。
+- Runner 的 `--labels` 只接收 `ebs.io/runner-capability.*`。启动注册时写入配置中的值，并用 Merge Patch 的 null 删除未再配置的能力标签；缺省或空配置清空能力标签，其他标签不受影响。心跳不修改标签。能力标签不代表管理员授予的权限或可信资源池身份。
 - Scheduler 的 `NodeSelectorFilter` 对 Job `spec.nodeSelector` 和 Runner labels 执行逐项精确匹配。
 - RuntimeFilter 使用 Job `spec.runtime` 和 Runner `spec.type`，不依赖 `ebs.io/runner-type`。
 
