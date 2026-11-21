@@ -232,6 +232,12 @@ Build 创建请求提交 `arch`，不包含发行版字段；构建历史与详�
 
 ### 5.7 Runner 页面
 
+运维列表中的 Runner 名称链接到 `/operations/runners/{name}`（别名 `/runners/{name}`），详情路由同样仅允许 Ops/Admin。
+详情页按名称 GET 单个 Runner，展示基础信息、状态、CPU/内存及其他资源的 capacity/allocatable、Agent 版本、标签、
+注解、污点、地址和 Conditions；可分配容量不解释为当前剩余资源。标签的 key/value 同行展示，Ops/Admin 可在详情页编辑普通标签，
+采用标签键值校验和并发冲突处理，系统标签和能力标签保持只读。其余信息只读，支持手动刷新、错误重试和空字段占位。
+切换 Runner 或离开页面取消旧请求，迟到响应不能覆盖新对象。返回按钮定位 `/operations?section=runners`，直接显示 Runner 列表。
+
 Runner 页面展示：
 
 - 名称、`spec.instanceID`、类型、架构和是否不可调度。
@@ -239,7 +245,10 @@ Runner 页面展示：
 - 地址、操作系统、内核、运行时和 Agent 版本。
 - labels、taints 和 conditions。
 
-Ops 和 Admin 均可进入运维页面查看 Runner，并执行驱逐、取消驱逐和移除；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、调度开关或 taint 编辑入口。
+Ops 和 Admin 均可进入运维页面查看 Runner，并编辑标签、执行驱逐、取消驱逐和移除；普通用户不显示该入口，也不能通过前端路由直接进入。Gateway 支持的 Runner 管理权限比当前页面功能更广，前端暂不提供创建、调度开关或 taint 编辑入口。
+
+- 标签编辑区域展示全部标签，支持自定义管理标签的添加、修改和删除；`ebs.io/runner-type`、`ebs.io/runner-arch` 和 `ebs.io/runner-capability.*` 由 Runner 维护，前端不允许添加、修改或删除。保存前校验键值格式和重复键；能力标签在启动注册时与 `--labels` 同步，移除的键会删除，缺省清空全部能力标签，编辑区域明确提示此行为。
+- 保存标签前 GET 最新 Runner 并核对 UID，只对相对开始编辑时发生变化的键提交 Merge Patch（删除写 null），保留并发新增或修改的无关标签。同一标签已被并发改为其他值时提示冲突，不覆盖；PATCH 携带最新 UID/resourceVersion，仅修改 metadata.labels，不修改 spec/status。请求失败保留草稿并显示错误，不自动重放。
 
 - 非 `Evicted` Runner 显示“驱逐”，`Evicted` Runner 显示“取消驱逐”，操作均需二次确认。
 - 提交前 GET 最新 Runner，确认 UID 与选中对象一致，并携带最新 resourceVersion PATCH `/runners/{name}/status`；驱逐写 `Evicted`，取消驱逐写 `Offline`，等待新心跳恢复 `Online`，不修改 `spec.unschedulable`。
