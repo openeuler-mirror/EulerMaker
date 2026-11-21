@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -9,13 +10,79 @@ import (
 	ebsv1 "ebs-api/ebs/v1"
 )
 
-func TestValidateRunnerTaintEffects(t *testing.T) {
-	for _, effect := range ebsv1.TaintEffectValues() {
-		runner := validRunner("ct", "x86_64")
-		runner.Spec.Taints = []ebsv1.RunnerTaint{{Key: "dedicated", Value: "build", Effect: ebsv1.TaintEffect(effect)}}
-		if errs := ValidateRunner(runner); len(errs) != 0 {
-			t.Fatalf("effect %q: %v", effect, errs)
-		}
+func TestValidateRunnerTaints(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		taints    []ebsv1.RunnerTaint
+		wantField string
+		wantType  field.ErrorType
+	}{
+		{name: "no taints"},
+		{name: "empty value", taints: []ebsv1.RunnerTaint{{Key: "dedicated", Effect: ebsv1.TaintEffectNoSchedule}}},
+		{name: "same key different effects", taints: []ebsv1.RunnerTaint{
+			{Key: "ebs.io/pool", Value: "gating", Effect: ebsv1.TaintEffectNoSchedule},
+			{Key: "ebs.io/pool", Value: "gating", Effect: ebsv1.TaintEffectPreferNoSchedule},
+			{Key: "ebs.io/pool", Value: "gating", Effect: ebsv1.TaintEffectNoExecute},
+		}},
+		{name: "maximum name and value", taints: []ebsv1.RunnerTaint{
+			{Key: "ebs.io/" + strings.Repeat("a", 63), Value: strings.Repeat("b", 63), Effect: ebsv1.TaintEffectNoSchedule},
+		}},
+		{
+			name:      "empty key",
+			taints:    []ebsv1.RunnerTaint{{Effect: ebsv1.TaintEffectNoSchedule}},
+			wantField: "spec.taints[0].key", wantType: field.ErrorTypeInvalid,
+		},
+		{
+			name:      "invalid key prefix",
+			taints:    []ebsv1.RunnerTaint{{Key: "Bad_Domain/pool", Effect: ebsv1.TaintEffectNoSchedule}},
+			wantField: "spec.taints[0].key", wantType: field.ErrorTypeInvalid,
+		},
+		{
+			name:      "long key name",
+			taints:    []ebsv1.RunnerTaint{{Key: strings.Repeat("a", 64), Effect: ebsv1.TaintEffectNoSchedule}},
+			wantField: "spec.taints[0].key", wantType: field.ErrorTypeInvalid,
+		},
+		{
+			name:      "invalid value",
+			taints:    []ebsv1.RunnerTaint{{Key: "pool", Value: "two words", Effect: ebsv1.TaintEffectNoSchedule}},
+			wantField: "spec.taints[0].value", wantType: field.ErrorTypeInvalid,
+		},
+		{
+			name:      "long value",
+			taints:    []ebsv1.RunnerTaint{{Key: "pool", Value: strings.Repeat("a", 64), Effect: ebsv1.TaintEffectNoSchedule}},
+			wantField: "spec.taints[0].value", wantType: field.ErrorTypeInvalid,
+		},
+		{
+			name:      "unsupported effect",
+			taints:    []ebsv1.RunnerTaint{{Key: "pool", Effect: "Other"}},
+			wantField: "spec.taints[0].effect", wantType: field.ErrorTypeNotSupported,
+		},
+		{name: "duplicate", taints: []ebsv1.RunnerTaint{
+			{Key: "pool", Value: "gating", Effect: ebsv1.TaintEffectNoSchedule},
+			{Key: "pool", Value: "gating", Effect: ebsv1.TaintEffectNoSchedule},
+		}, wantField: "spec.taints[1]", wantType: field.ErrorTypeDuplicate},
+		{name: "same key effect different value", taints: []ebsv1.RunnerTaint{
+			{Key: "pool", Value: "gating", Effect: ebsv1.TaintEffectNoSchedule},
+			{Key: "pool", Value: "other", Effect: ebsv1.TaintEffectNoSchedule},
+		}, wantField: "spec.taints[1]", wantType: field.ErrorTypeDuplicate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := validRunner("ct", "x86_64")
+			old.Spec.Taints = []ebsv1.RunnerTaint{{Key: "old", Effect: ebsv1.TaintEffectNoSchedule}}
+			runner := validRunner("ct", "x86_64")
+			runner.Spec.Taints = tc.taints
+			for operation, errs := range map[string]field.ErrorList{
+				"create": ValidateRunner(runner), "update": ValidateRunnerUpdate(runner, old),
+			} {
+				t.Run(operation, func(t *testing.T) {
+					want := map[string]field.ErrorType{}
+					if tc.wantField != "" {
+						want[tc.wantField] = tc.wantType
+					}
+					assertErrorList(t, errs, len(want), want)
+				})
+			}
+		})
 	}
 }
 

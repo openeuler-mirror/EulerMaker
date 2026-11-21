@@ -502,7 +502,9 @@ Runner 创建自身对象时，gateway 必须解析完整 JSON 对象并执行�
 - 只允许设置 `metadata.name`、`ebs.io/runner-type`、`ebs.io/runner-arch`、名称以 `ebs.io/runner-capability.` 开头的能力 labels，以及 `spec.instanceID`、`spec.type`、`spec.arch`、初始 `spec.taints`。污点仅在创建时允许声明，已有对象的污点由 Ops/Admin 管理，Runner 更新仍须保留原值。
 - `status` 必须为空；不得设置 `resourceVersion`、UID、timestamps、generation、managedFields、annotations、finalizers、ownerReferences、`spec.unschedulable` 或其他管理字段。
 
-`spec.instanceID` 必填和 UUID v4 格式、type 取值、`arch` 必填以及 type/arch labels 与 spec 一致性均由 apiserver 统一校验。apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并比较 `instanceID`，相同才按 4.9.1 节发起受限 PUT/PATCH，不同则停止注册。
+`spec.instanceID` 必填和 UUID v4 格式、type 取值、`arch` 必填以及 type/arch labels 与 spec 一致性均由 apiserver 统一校验。
+污点 key/value 格式、effect 枚举和 key/effect 组合唯一性也由 apiserver 在创建和更新时统一校验；Gateway 仅保留调用方身份和字段权限限制。
+apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 409。gateway 不把创建转换为更新，Runner 必须 GET 已有对象并比较 `instanceID`，相同才按 4.9.1 节发起受限 PUT/PATCH，不同则停止注册。
 
 以下资源—verb 矩阵是已认证身份对非公开读取和写操作的授权规范；4.1 节公开 `GET/HEAD` 在身份校验通过后优先适用，不受 owner/member 行限制。未列出或标为“禁止”的组合默认拒绝。`get/list/watch` 统称读操作，`create/update/patch/delete` 统称写操作；资源实际不支持的 verb 即使矩阵允许也由 apiserver 拒绝。
 
