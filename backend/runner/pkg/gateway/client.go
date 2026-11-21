@@ -61,15 +61,26 @@ func (c *Client) CreateRunner(ctx context.Context, runner RunnerResource) error 
 	return c.doJSON(ctx, http.MethodPost, apiPrefix+"/runners", body, nil)
 }
 
-func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource) error {
+func (c *Client) UpdateRunner(ctx context.Context, runner RunnerResource, removedLabels []string) error {
 	path := apiPrefix + "/runners/" + url.PathEscape(runner.Metadata.Name)
+	labels := map[string]any{
+		"ebs.io/runner-type": runner.Spec.Type,
+		"ebs.io/runner-arch": runner.Spec.Arch,
+	}
+	for _, key := range removedLabels {
+		if strings.HasPrefix(key, "ebs.io/runner-capability.") {
+			labels[key] = nil
+		}
+	}
+	for key, value := range runner.Metadata.Labels {
+		if strings.HasPrefix(key, "ebs.io/runner-capability.") {
+			labels[key] = value
+		}
+	}
 	body := map[string]any{
 		"metadata": map[string]any{
-			"name": runner.Metadata.Name,
-			"labels": map[string]string{
-				"ebs.io/runner-type": runner.Spec.Type,
-				"ebs.io/runner-arch": runner.Spec.Arch,
-			},
+			"name":   runner.Metadata.Name,
+			"labels": labels,
 		},
 		"spec": map[string]any{
 			"instanceID": runner.Spec.InstanceID,

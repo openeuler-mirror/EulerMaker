@@ -64,6 +64,12 @@ go run ./cmd/runner \
 
 `--insecure-skip-verify` 仅用于本地测试。生产环境应使用 HTTPS，并通过 `--gateway-ca` 和 `--artifact-manager-ca` 配置信任的 CA。
 
+使用 `--labels=ebs.io/runner-capability.kvm=true,ebs.io/runner-capability.network=internal` 注册能力标签，
+参数可重复传入，只接受 `ebs.io/runner-capability.*`。启动注册时写入当前配置并删除已移除的能力标签；
+未传 `--labels` 或传空值会清空已有全部能力标签。类型、架构和能力标签在前端只读；
+资源池等自定义标签可由 Ops/Admin 在运维页面编辑，不受能力标签同步影响。心跳不会修改标签，
+这些标签属于 EulerMaker Runner 对象，不会从 Kubernetes Node/Pod 自动同步。
+
 Runner 启动时读取服务地址，此后每 600 秒加 ±30 秒抖动刷新，刷新失败继续使用最后一次成功的地址表。`--service-access-mode=internal`（默认）使用两类服务的 `runnerInternalURL`；`external` 使用 Artifact Manager 的 `runnerExternalURL`，源码直接访问 Job payload 的 `origin_url`，不依赖 Git Server 外网地址。配置来自 `Config/services`，Gateway 仅投影 Runner 地址，不返回管理面 `internalURL`。
 
 Runner 写入本地 `payload.json` 前，按访问模式解析 `repo[].url` 中的 `artifact://{instance}/repositories/...`。源码处理规则如下：

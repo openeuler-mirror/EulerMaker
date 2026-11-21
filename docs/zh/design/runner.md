@@ -220,6 +220,18 @@ type RunnerSpec struct {
 
 系统保留的 Runner 标签及其写入权限见 [EulerMaker 标签约定](./labels.md)。
 
+Runner 通过 `--labels=ebs.io/runner-capability.kvm=true,ebs.io/runner-capability.network=internal` 声明能力标签，
+允许重复传入参数。仅接受 `ebs.io/runner-capability.*` 键；标签名称和值遵循 Kubernetes 标签格式，名称和值最长
+63 个字符，值可以为空，重复键或无效格式导致启动失败。类型和架构标签自动生成，不能通过此参数覆盖；
+`ebs.io/pool` 等其他自定义标签由 Ops/Admin 通过管理接口或前端维护。
+
+首次注册写入配置标签；重启注册时对比已有标签与 `--labels`，使用受限 Merge Patch 同步整个能力标签集合：
+配置中的键写入当前值，已移除的能力标签写 null 删除，不影响类型、架构及其他管理标签。
+未传 `--labels` 或传空值表示空集合，会清除已有全部 `ebs.io/runner-capability.*` 标签；配置为空字符串值的键仍保留。
+同步只在启动注册时执行，不热加载。能力标签由 Runner 独占维护，前端只读；失败时启动不继续，重启可幂等重试。
+心跳只更新 status，不写标签。标签变更供后续 Job 的 `nodeSelector` 匹配，不迁移已运行 Job，
+也不会自动复制 Kubernetes Node/Pod 的标签。
+
 ```yaml
 apiVersion: ebs/v1
 kind: Runner
@@ -736,6 +748,7 @@ Runner 作为独立组件容器化部署，至少需要以下配置：
 | `--service-access-mode` | `internal` | internal 使用内网服务地址；external 使用制品外网地址，并以 `origin_url` 替换本地 `clone_url` |
 | `--machine-credential-file` | 无 | 包含 MachineAccount client ID 和 client secret 的 JSON 文件路径，必填 |
 | `--name` | hostname | Runner 资源名称 |
+| `--labels` | 空 | 逗号分隔的 `ebs.io/runner-capability.*=value`，可重复传入；注册时同步并删除未配置的能力标签，缺省清空能力标签 |
 | `--type` | `ct` | Runner 类型：`ct` / `vm` / `hw` |
 | `--root-dir` | `/var/lib/ebs-runner` | Runner 工作目录和结果目录的根路径 |
 | `--container-runtime` | `docker` | CT 后端：`docker` 或 `containerd` |

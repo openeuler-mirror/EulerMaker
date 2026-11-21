@@ -4,7 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
+	"strings"
 	"time"
 
 	"ebs-runner/pkg/artifact"
@@ -16,6 +18,7 @@ type Config struct {
 	Name              string
 	Type              string
 	Arch              string
+	Labels            map[string]string
 	RootDir           string
 	ServiceAccessMode string
 	HeartbeatInterval time.Duration
@@ -71,6 +74,30 @@ func LoadConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.Gateway.MachineCredentialFile, "machine-credential-file", cfg.Gateway.MachineCredentialFile, "MachineAccount credential JSON file")
 	fs.StringVar(&cfg.Name, "name", cfg.Name, "runner resource name")
 	fs.StringVar(&cfg.Type, "type", cfg.Type, "runner type: ct, vm, or hw")
+	fs.Func("labels", "comma-separated ebs.io/runner-capability.* labels (key=value); may be repeated; startup removes omitted capability labels", func(value string) error {
+		if cfg.Labels == nil {
+			cfg.Labels = make(map[string]string)
+		}
+		if value == "" {
+			return nil
+		}
+		for _, item := range strings.Split(value, ",") {
+			key, labelValue, ok := strings.Cut(strings.TrimSpace(item), "=")
+			name, capability := strings.CutPrefix(key, "ebs.io/")
+			if !ok || !capability || !strings.HasPrefix(name, "runner-capability.") || name == "runner-capability." ||
+				len(name) > 63 || !labelPartPattern.MatchString(name) {
+				return fmt.Errorf("invalid capability label key %q", key)
+			}
+			if len(labelValue) > 63 || (labelValue != "" && !labelPartPattern.MatchString(labelValue)) {
+				return fmt.Errorf("invalid value for label %q", key)
+			}
+			if _, exists := cfg.Labels[key]; exists {
+				return fmt.Errorf("duplicate label %q", key)
+			}
+			cfg.Labels[key] = labelValue
+		}
+		return nil
+	})
 	fs.StringVar(&cfg.RootDir, "root-dir", cfg.RootDir, "runner root directory")
 	fs.StringVar(&cfg.Container.Runtime, "container-runtime", cfg.Container.Runtime, "CT runtime: docker or containerd")
 	fs.StringVar(&cfg.Container.Containerd.Address, "containerd-address", cfg.Container.Containerd.Address, "containerd socket address")
@@ -141,6 +168,8 @@ func LoadConfig(args []string) (Config, error) {
 	}
 	return cfg, nil
 }
+
+var labelPartPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9_.-]*[A-Za-z0-9])?$`)
 
 func runtimeArch() string {
 	switch runtime.GOARCH {
