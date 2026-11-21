@@ -38,6 +38,9 @@ func New(upstreamClient *upstream.Client) *Authorizer {
 }
 
 func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, route Route) error {
+	if route.Resource == "projects" && route.Method == http.MethodDelete {
+		return deny("Project deletion is not available through Gateway")
+	}
 	if IsReadOnlyProjectResource(route.Resource) && route.Method != http.MethodGet {
 		return deny("resource is read-only through Gateway")
 	}

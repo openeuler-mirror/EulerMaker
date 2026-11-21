@@ -203,6 +203,9 @@ func (a *Handler) limitWriteBody(c *gin.Context) bool {
 }
 
 func allowedResourceMethod(route policy.Route) bool {
+	if route.Resource == "projects" && route.Method == http.MethodDelete {
+		return false
+	}
 	method := route.Method
 	if route.Resource == "scripts" && method == http.MethodHead {
 		return false
@@ -228,6 +231,9 @@ func allowedResourceMethod(route policy.Route) bool {
 }
 
 func allowedResourceVerbs(route policy.Route) string {
+	if route.Resource == "projects" && route.Name != "" {
+		return "GET, HEAD, PUT, PATCH"
+	}
 	if policy.IsReadOnlyProjectResource(route.Resource) {
 		return "GET"
 	}

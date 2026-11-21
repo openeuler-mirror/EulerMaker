@@ -105,5 +105,17 @@ func registerCollection(parent *gin.RouterGroup, api *handler.Handler, resource,
 
 func registerResource(group *gin.RouterGroup, api *handler.Handler, path, resource, projectKey, nameKey, subresource string) {
 	guard, endpoint := api.ResourceHandlers(resource, projectKey, nameKey, subresource)
+	if resource == "projects" {
+		methods := []string{http.MethodGet, http.MethodHead}
+		if path == "" {
+			methods = append(methods, http.MethodPost)
+		} else {
+			methods = append(methods, http.MethodPut, http.MethodPatch)
+		}
+		for _, method := range methods {
+			group.Handle(method, path, guard, endpoint)
+		}
+		return
+	}
 	group.Any(path, guard, endpoint)
 }

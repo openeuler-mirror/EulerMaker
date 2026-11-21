@@ -948,7 +948,6 @@ func TestAdminCannotModifyProject(t *testing.T) {
 		method, path  string
 	}{
 		{"admin update", "admin", identity.AdminScope, http.MethodPut, "/apis/ebs/v1/projects/team"},
-		{"admin delete", "admin", identity.AdminScope, http.MethodDelete, "/apis/ebs/v1/projects/team"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			token, err := api.tokens.Issue(test.subject, "", identity.UserType, test.scope, time.Hour, api.now())
@@ -963,5 +962,30 @@ func TestAdminCannotModifyProject(t *testing.T) {
 				t.Fatalf("status=%d, want 403", response.Code)
 			}
 		})
+	}
+}
+
+func TestProjectDeleteRouteRemoved(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("removed route reached upstream: %s %s", request.Method, request.URL.Path)
+		return nil, nil
+	}))
+	routes := api.Router().Routes()
+	for _, path := range []string{"/apis/ebs/v1/projects", "/apis/ebs/v1/projects/:project", "/apis/ebs/v1/projects/:project/status"} {
+		seenGet := false
+		for _, route := range routes {
+			if route.Path != path {
+				continue
+			}
+			if route.Method == http.MethodDelete {
+				t.Fatalf("DELETE %s is still registered", path)
+			}
+			if route.Method == http.MethodGet {
+				seenGet = true
+			}
+		}
+		if !seenGet {
+			t.Fatalf("GET %s missing", path)
+		}
 	}
 }
