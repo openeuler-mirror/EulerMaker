@@ -172,6 +172,32 @@ func TestPrepareForCreateDefaultsOffline(t *testing.T) {
 	}
 }
 
+func TestRunnerStorageValidatesTaintsOnCreateAndUpdate(t *testing.T) {
+	old := &ebsv1.Runner{
+		ObjectMeta: metav1.ObjectMeta{Name: "runner-a", Labels: map[string]string{
+			"ebs.io/runner-type": "ct", "ebs.io/runner-arch": "x86_64",
+		}},
+		Spec: ebsv1.RunnerSpec{InstanceID: "01234567-89ab-4def-8123-456789abcdef", Type: "ct", Arch: "x86_64"},
+	}
+	store := NewStorage().Resource.(*genericregistry.Store)
+	ctx := context.Background()
+	for _, valid := range []bool{true, false} {
+		candidate := old.DeepCopy()
+		candidate.Spec.Taints = []ebsv1.RunnerTaint{{Key: "ebs.io/pool", Effect: ebsv1.TaintEffectNoSchedule}}
+		if !valid {
+			candidate.Spec.Taints[0].Value = "invalid value"
+		}
+		store.CreateStrategy.PrepareForCreate(ctx, candidate)
+		if errs := store.CreateStrategy.Validate(ctx, candidate); (len(errs) == 0) != valid {
+			t.Fatalf("create valid=%t errors=%v", valid, errs)
+		}
+		store.UpdateStrategy.PrepareForUpdate(ctx, candidate, old)
+		if errs := store.UpdateStrategy.ValidateUpdate(ctx, candidate, old); (len(errs) == 0) != valid {
+			t.Fatalf("update valid=%t errors=%v", valid, errs)
+		}
+	}
+}
+
 func TestOrdinaryUpdatePreservesRunnerStatus(t *testing.T) {
 	old := &ebsv1.Runner{Status: ebsv1.RunnerStatus{
 		Phase: ebsv1.RunnerEvicted, Heartbeat: metav1.NewTime(time.Unix(100, 0)),

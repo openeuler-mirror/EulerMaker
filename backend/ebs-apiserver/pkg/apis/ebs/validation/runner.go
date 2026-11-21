@@ -2,7 +2,9 @@ package validation
 
 import (
 	"regexp"
+	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	ebsv1 "ebs-api/ebs/v1"
@@ -12,11 +14,24 @@ var uuidV4Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[8
 
 func ValidateRunner(obj *ebsv1.Runner) field.ErrorList {
 	var allErrs field.ErrorList
+	taintKeys := make(map[[2]string]struct{}, len(obj.Spec.Taints))
 	for i, taint := range obj.Spec.Taints {
+		path := field.NewPath("spec", "taints").Index(i)
+		if messages := validation.IsQualifiedName(taint.Key); len(messages) > 0 {
+			allErrs = append(allErrs, field.Invalid(path.Child("key"), taint.Key, strings.Join(messages, "; ")))
+		}
+		if messages := validation.IsValidLabelValue(taint.Value); len(messages) > 0 {
+			allErrs = append(allErrs, field.Invalid(path.Child("value"), taint.Value, strings.Join(messages, "; ")))
+		}
 		if !taint.Effect.IsValid() {
-			allErrs = append(allErrs, field.NotSupported(field.NewPath("spec", "taints").Index(i).Child("effect"),
+			allErrs = append(allErrs, field.NotSupported(path.Child("effect"),
 				taint.Effect, ebsv1.TaintEffectValues()))
 		}
+		key := [2]string{taint.Key, string(taint.Effect)}
+		if _, exists := taintKeys[key]; exists {
+			allErrs = append(allErrs, field.Duplicate(path, taint.Key+":"+string(taint.Effect)))
+		}
+		taintKeys[key] = struct{}{}
 	}
 	if len(obj.Name) == 0 {
 		allErrs = append(allErrs, field.Required(field.NewPath("metadata", "name"), "name is required"))
