@@ -232,6 +232,11 @@ Build 创建请求提交 `arch`，不包含发行版字段；构建历史与详�
 
 ### 5.7 Runner 页面
 
+Runner 列表使用单个搜索框，支持 `name:runner-01 labels:ebs.io/pool=gating` 组合查询，不带前缀时按名称搜索。
+首次分页加载完整 Runner 列表，名称、标签筛选和补全均在本地执行，输入与搜索不触发 API 请求。
+标签支持 `key`、`!key`、`=`、`==`、`!=`、`in`、`notin`，多条件以逗号分隔；格式错误时提示并保留上次筛选。
+筛选不缩小补全范围，清空搜索框并搜索恢复全部范围。刷新或修改 Runner 后重新加载完整列表，保留已应用的筛选并更新补全候选。
+
 运维列表中的 Runner 名称链接到 `/operations/runners/{name}`（别名 `/runners/{name}`），详情路由同样仅允许 Ops/Admin。
 详情页按名称 GET 单个 Runner，展示基础信息、状态、CPU/内存及其他资源的 capacity/allocatable、Agent 版本、标签、
 注解、污点、地址和 Conditions；可分配容量不解释为当前剩余资源。标签的 key/value 同行展示，Ops/Admin 可在详情页编辑普通标签，
