@@ -433,7 +433,7 @@ func (c *Controller) jobForSpec(
 		artifactInstance = round.project.Annotations[ebsv1.ProjectArtifactsAnnotation]
 	}
 	runtimeSpec, _ := json.Marshal(map[string]string{"image": image, "networkMode": "host"})
-	return &ebsv1.Job{
+	job := &ebsv1.Job{
 		TypeMeta: metav1.TypeMeta{APIVersion: ebsv1.SchemeGroupVersion.String(), Kind: "Job"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -460,6 +460,15 @@ func (c *Controller) jobForSpec(
 			Payload:        c.jobPayload(round, specName, depend, snapshot, contentURL, sources),
 		},
 	}
+	if round.build.Labels[ebsv1.BuildPurposeLabel] == ebsv1.BuildPurposeGating {
+		job.Labels[ebsv1.BuildPurposeLabel] = ebsv1.BuildPurposeGating
+		job.Spec.NodeSelector[ebsv1.RunnerPoolLabel] = ebsv1.BuildPurposeGating
+		job.Spec.Tolerations = []ebsv1.Toleration{{
+			Key: ebsv1.RunnerDedicatedTaint, Value: ebsv1.BuildPurposeGating,
+			Operator: ebsv1.TolerationEqual, Effect: ebsv1.TaintEffectNoSchedule,
+		}}
+	}
+	return job
 }
 
 // jobPayload assembles only the recognized per-Job fields from buildPayload and the resolved spec and repository

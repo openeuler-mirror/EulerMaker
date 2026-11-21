@@ -255,6 +255,45 @@ func TestJobForSpecPriority(t *testing.T) {
 	}
 }
 
+func TestJobForSpecGatingPlacement(t *testing.T) {
+	c, _, _, _ := newTestController(t)
+	for _, buildType := range ebsv1.BuildTypeValues() {
+		for _, gating := range []bool{false, true} {
+			build := testBuildObj(buildType)
+			if gating {
+				if build.Labels == nil {
+					build.Labels = map[string]string{}
+				}
+				build.Labels[ebsv1.BuildPurposeLabel] = ebsv1.BuildPurposeGating
+			}
+			// A later Project edit must not change the Build's frozen purpose.
+			project := &ebsv1.Project{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{}}}
+			if !gating {
+				project.Labels[ebsv1.BuildPurposeLabel] = ebsv1.BuildPurposeGating
+			}
+			round := &reconcileRound{current: testBuildInfoObj(ebsv1.BuildInfoProcessing), build: build, project: project}
+			depend := dependEntry("a")
+			for _, generation := range []int64{1, 2} {
+				job := c.jobForSpec(round, "a", &depend, testSnapshotObj(), testImage, testRepoURL,
+					testBuildResourceContent(), testScriptRef(), "job-purpose", generation, nil)
+				if job.Spec.NodeSelector[runnerArchSelector] != testArch {
+					t.Fatal("architecture selector lost")
+				}
+				if gating {
+					want := ebsv1.Toleration{Key: ebsv1.RunnerDedicatedTaint, Value: ebsv1.BuildPurposeGating,
+						Operator: ebsv1.TolerationEqual, Effect: ebsv1.TaintEffectNoSchedule}
+					if len(job.Spec.NodeSelector) != 2 || job.Spec.NodeSelector[ebsv1.RunnerPoolLabel] != ebsv1.BuildPurposeGating ||
+						len(job.Spec.Tolerations) != 1 || job.Spec.Tolerations[0] != want || job.Labels[ebsv1.BuildPurposeLabel] != ebsv1.BuildPurposeGating {
+						t.Fatalf("gating placement: %+v", job.Spec)
+					}
+				} else if len(job.Spec.NodeSelector) != 1 || len(job.Spec.Tolerations) != 0 || job.Labels[ebsv1.BuildPurposeLabel] != "" {
+					t.Fatalf("ordinary placement: %+v", job.Spec)
+				}
+			}
+		}
+	}
+}
+
 func TestJobForSpecConstruction(t *testing.T) {
 	c, client, _, _ := newTestController(t)
 	key := testNS + "/" + testBuild

@@ -9,6 +9,9 @@ import (
 
 func ValidateProject(obj *ebsv1.Project) field.ErrorList {
 	var allErrs field.ErrorList
+	if value, exists := obj.Labels[ebsv1.BuildPurposeLabel]; exists && value != ebsv1.BuildPurposeGating {
+		allErrs = append(allErrs, field.NotSupported(field.NewPath("metadata", "labels").Key(ebsv1.BuildPurposeLabel), value, []string{ebsv1.BuildPurposeGating}))
+	}
 	if value, exists := obj.Labels[ebsv1.ProjectTypeLabel]; exists && value != ebsv1.ProjectTypeCommunity && value != ebsv1.ProjectTypePersonal {
 		allErrs = append(allErrs, field.NotSupported(field.NewPath("metadata", "labels").Key(ebsv1.ProjectTypeLabel), value, []string{ebsv1.ProjectTypeCommunity, ebsv1.ProjectTypePersonal}))
 	}

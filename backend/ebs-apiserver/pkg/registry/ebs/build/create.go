@@ -89,7 +89,7 @@ func validateFullBuildBaseline(ctx context.Context, builds buildQueries, build *
 	}}
 }
 
-// PrepareBuildInputs checks the target and packages and defaults priority using one Project read.
+// PrepareBuildInputs checks inputs and resolves priority and purpose using one Project read.
 func PrepareBuildInputs(configs, projects rest.Getter) func(context.Context, runtime.Object) error {
 	return func(ctx context.Context, obj runtime.Object) error {
 		build, ok := obj.(*ebsv1.Build)
@@ -126,6 +126,15 @@ func PrepareBuildInputs(configs, projects rest.Getter) func(context.Context, run
 		}
 		if len(errs) > 0 {
 			return apierrors.NewInvalid(ebsv1.Kind("Build"), build.Name, errs)
+		}
+		// The Project is authoritative; callers cannot opt into or out of the gating pool.
+		if project.Labels[ebsv1.BuildPurposeLabel] == ebsv1.BuildPurposeGating {
+			if build.Labels == nil {
+				build.Labels = make(map[string]string)
+			}
+			build.Labels[ebsv1.BuildPurposeLabel] = ebsv1.BuildPurposeGating
+		} else {
+			delete(build.Labels, ebsv1.BuildPurposeLabel)
 		}
 		if build.Spec.Priority == nil {
 			priority := int64(0)

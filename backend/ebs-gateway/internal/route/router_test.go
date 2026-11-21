@@ -934,8 +934,11 @@ func TestControllerResourcesRegisterOnlyGet(t *testing.T) {
 	}
 }
 
-func TestAdminCannotModifyProject(t *testing.T) {
+func TestAdminCannotModifyAnotherOwnersProject(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method == http.MethodGet && request.URL.Path == "/apis/ebs/v1/projects/team" {
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"metadata":{"name":"team","labels":{"ebs.io/owner-user":"alice"}}}`))}, nil
+		}
 		if request.Method != http.MethodGet || request.URL.Path != "/apis/iam.ebs/v1/users/admin" {
 			t.Fatalf("unexpected Project write or lookup: %s %s", request.Method, request.URL.Path)
 		}
@@ -960,6 +963,52 @@ func TestAdminCannotModifyProject(t *testing.T) {
 			api.Router().ServeHTTP(response, request)
 			if response.Code != http.StatusForbidden {
 				t.Fatalf("status=%d, want 403", response.Code)
+			}
+		})
+	}
+}
+
+func TestAdminOwnerProjectPurposePatch(t *testing.T) {
+	for _, test := range []struct {
+		name, body string
+		want       int
+	}{
+		{"purpose", `{"metadata":{"labels":{"ebs.io/build-purpose":"gating"}}}`, http.StatusOK},
+		{"spec", `{"spec":{"description":"changed"}}`, http.StatusForbidden},
+		{"owner", `{"metadata":{"labels":{"ebs.io/owner-user":"alice"}}}`, http.StatusForbidden},
+		{"other label", `{"metadata":{"labels":{"note":"changed"}}}`, http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writes := 0
+			api := newTestAPI(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				body := `{"apiVersion":"ebs/v1","kind":"Project","metadata":{"name":"team","resourceVersion":"1","labels":{"ebs.io/owner-user":"admin"}},"spec":{"description":"original"}}`
+				switch {
+				case request.Method == http.MethodGet && request.URL.Path == "/apis/iam.ebs/v1/users/admin":
+					body = `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
+				case request.Method == http.MethodGet && request.URL.Path == "/apis/ebs/v1/projects/team":
+				case request.Method == http.MethodPut && request.URL.Path == "/apis/ebs/v1/projects/team":
+					writes++
+					data, err := io.ReadAll(request.Body)
+					if err != nil || !strings.Contains(string(data), `"ebs.io/build-purpose":"gating"`) {
+						t.Fatalf("forwarded body=%s error=%v", data, err)
+					}
+					body = string(data)
+				default:
+					t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPatch, "/apis/ebs/v1/projects/team", strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", "application/merge-patch+json")
+			response := httptest.NewRecorder()
+			api.Router().ServeHTTP(response, request)
+			if response.Code != test.want || (writes == 1) != (test.want == http.StatusOK) {
+				t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body.String())
 			}
 		})
 	}

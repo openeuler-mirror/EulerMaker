@@ -176,7 +176,9 @@ func (a *Authorizer) projectResource(ctx context.Context, who identity.Principal
 		return deny("Runner project access denied")
 	}
 	if route.Resource == "projects" && route.Name != "" && isWrite(route.Method) {
-		if who.Scope != identity.UserScope && who.Scope != identity.OpsScope {
+		adminPurposeUpdate := who.Scope == identity.AdminScope && route.Subresource == "" &&
+			(route.Method == http.MethodPut || route.Method == http.MethodPatch)
+		if who.Type != identity.UserType || (who.Scope != identity.UserScope && who.Scope != identity.OpsScope && !adminPurposeUpdate) {
 			return deny("only the Project owner can modify Project")
 		}
 		access, err := a.projectAccess(ctx, route.Name, who.Subject)

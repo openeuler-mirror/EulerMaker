@@ -635,6 +635,8 @@ TaintFilter 规则：
 - Job toleration 的非法 operator 或 effect 按 5.2 节终止整个周期并记录非法对象，不写 Job status，也不能只淘汰当前 Runner后继续选择其他 Runner。
 - toleration effect 为空时匹配该 key 对应的全部 effect；`Exists` 忽略 value，`Equal` 要求 key 和 value 都相等。
 
+门禁资源池复用 NodeSelectorFilter 与 TaintFilter，不增加用途专用插件。BuildInfo 生成的门禁 Job 同时匹配架构和 `ebs.io/pool=gating`，容忍 `ebs.io/dedicated=gating:NoSchedule`；普通构建 Job 不携带该容忍。无合适 Runner 时按现有 Unschedulable 流程等待，不取消资源池约束。部署约定见 [标签文档 3.4](labels.md#34-门禁构建用途)。
+
 ### 6.2 Score Plugin
 
 单项分数范围为 `[0, 100]`，分数越高越优先。
