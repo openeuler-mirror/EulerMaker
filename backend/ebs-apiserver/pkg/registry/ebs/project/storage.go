@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,16 +52,25 @@ func NewStorage() *scopedresource.Storage {
 	})
 }
 
-func ValidateArtifactsConfig(configs rest.Getter) rest.ValidateObjectFunc {
+func ValidateConfig(configs rest.Getter) rest.ValidateObjectFunc {
 	return func(ctx context.Context, obj runtime.Object) error {
-		return validateArtifactsConfig(ctx, obj.(*ebsv1.Project), configs)
+		project := obj.(*ebsv1.Project)
+		if err := validateBuildTargetConfig(ctx, project, configs); err != nil {
+			return err
+		}
+		return validateArtifactsConfig(ctx, project, configs)
 	}
 }
 
-func ValidateArtifactsConfigUpdate(configs rest.Getter) rest.ValidateObjectUpdateFunc {
+func ValidateConfigUpdate(configs rest.Getter) rest.ValidateObjectUpdateFunc {
 	return func(ctx context.Context, newObj, oldObj runtime.Object) error {
 		project := newObj.(*ebsv1.Project)
 		old := oldObj.(*ebsv1.Project)
+		if !slices.Equal(project.Spec.BuildArches, old.Spec.BuildArches) {
+			if err := validateBuildTargetConfig(ctx, project, configs); err != nil {
+				return err
+			}
+		}
 		newValue, newSet := project.Annotations[ebsv1.ProjectArtifactsAnnotation]
 		oldValue, oldSet := old.Annotations[ebsv1.ProjectArtifactsAnnotation]
 		if newValue == oldValue && newSet == oldSet {
@@ -68,6 +78,25 @@ func ValidateArtifactsConfigUpdate(configs rest.Getter) rest.ValidateObjectUpdat
 		}
 		return validateArtifactsConfig(ctx, project, configs)
 	}
+}
+
+func validateBuildTargetConfig(ctx context.Context, project *ebsv1.Project, configs rest.Getter) error {
+	obj, err := configs.Get(request.WithNamespace(ctx, ""), ebsv1.BuildTargetConfigName, &metav1.GetOptions{})
+	if err != nil {
+		return apierrors.NewServiceUnavailable("build-target Config is unavailable")
+	}
+	config, ok := obj.(*ebsv1.Config)
+	if !ok || config == nil {
+		return apierrors.NewServiceUnavailable("invalid build-target Config response")
+	}
+	var content ebsv1.BuildTargetContent
+	if err := yaml.UnmarshalStrict([]byte(config.Spec.Content), &content); err != nil {
+		return apierrors.NewServiceUnavailable("invalid build-target Config content")
+	}
+	if errs := validation.ValidateProjectBuildTargets(project, &content); len(errs) > 0 {
+		return apierrors.NewInvalid(ebsv1.Kind("Project"), project.Name, errs)
+	}
+	return nil
 }
 
 func validateArtifactsConfig(ctx context.Context, project *ebsv1.Project, configs rest.Getter) error {

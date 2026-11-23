@@ -89,7 +89,7 @@ apiVersion: ebs/v1
 
 资源契约如下：
 
-集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `services`。Config 创建、更新时完整校验三个内置对象的内容；`services` 固定为 `OpsOnly`，服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。创建 Build 前读取 `build-target`，只检查从 Project 读取的 distro 与所选 arch 是否有映射。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
+集群级 `Config` 使用 Elasticsearch 存储，在 Ready 前以 create-only 方式初始化 `build-target`、`build-resource` 和 `services`。Config 创建、更新时完整校验三个内置对象的内容；`services` 固定为 `OpsOnly`，服务地址契约见 [服务配置](data-models~config.md#4-服务配置内容)。Project 创建或修改 buildArches、创建 Build 时读取 `build-target`，检查 distro 与目标 arch 的映射。接口、初始化和错误规则见 [Config 设计](data-models~config.md#11-config-公共资源与可见性)。
 
 | 资源 | 主存储 | Project API | 全局 API | Watch | 子资源 |
 |------|--------|-------------|----------|-------|--------|
@@ -839,6 +839,7 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
   - 回归测试覆盖正常构建配置、显式关闭特权、大小写及重复字段、错误类型，并通过 Job storage 的创建与更新 strategy 验证规则已接入实际资源存储入口。
 
 - Project 名称必须满足 DNS1123 label、不能是系统保留名称 `default`，`spec.distro` 必填、符合发行版标识语法，创建后不可修改或删除（更新值与原值不一致返回 `422 Invalid`，错误字段为 `spec.distro`），`spec.buildArches` 为非空字符串数组，架构值非空且不得重复。
+- Project 创建或修改 `spec.buildArches` 时，在写入前校验 `Config/build-target` 中的发行版及全部目标架构；无对应映射返回 `422 Invalid`，配置读取或解析异常返回 `503 ServiceUnavailable`。其他更新不触发该配置查询，详细规则见 [Project 与 Build](data-models~config.md#251-project-与-build)。
 - Build 创建时根据默认化后的 spec 补齐缺失的 `ebs.io/target-arch`、`ebs.io/build-type` 标签；显式提供但与 spec 不一致的标签返回 `422 Invalid`。创建后除 Build Controller 在 `incremental` 的 Pending 阶段固化 `spec.packages` 外，Build `spec` 不可修改；普通 Update 不能改变受保护的标签，`/status` 更新保留原对象 metadata。
 - Job 创建时若带有 `ebs.io/build-name`（由 BuildInfo Controller 创建的构建 Job），还必须带有 `ebs.io/spec-name` 和 `ebs.io/package-name` label；apiserver 校验标签存在且值符合 Kubernetes label 规则，缺失或非法返回 `422 Invalid`。包名标签由 BuildInfo Controller 按[标签约定](labels.md#7-job-构建归属标签)从 BuildInfo Controller 本轮解析结果 `specDepends[specName].repoName` 计算。普通更新不得修改已有归属标签，`/status` 更新保留原 metadata。没有 `ebs.io/build-name` 的通用 Job 不强制要求这些字段；存量构建 Job 即使缺少包名标签，普通更新和状态更新仍允许，且不会自动回填。
 - Snapshot 的 `status.packageRepoStatuses` 由 Snapshot Controller 根据 `spec.packageRepos` 写入：`cloneURL` 记录 Git Server 客户端在同步确认后由 `clone_path` 生成的 `git-server:///git/...` 逻辑地址；包解析成功时记录 commitID，失败时记录包级 error。原始仓库地址始终从 `spec.packageRepos[].url` 读取，不在 status 中重复保存。创建请求不能直接设置该字段。Snapshot conditions 记录整体级异常。
