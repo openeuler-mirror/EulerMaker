@@ -34,6 +34,54 @@ docker compose -f hacks/docker-compose.yml logs -f
 
 基础配置不包含 Runner，实际执行构建需另行启动 `docker-compose.runner.yml`，并在 `Config/services` 中配置 Runner 和 Job 容器可访问的服务地址。`RUNNER_SERVICE_ACCESS_MODE` 默认 `internal`，使用两类服务的 `runnerInternalURL`；设为 `external` 时使用制品服务的 `runnerExternalURL`，源码直接访问 payload 的 `origin_url`，保留固定 `commit_id`，无需 Git Server 外网地址。同机宿主机网络可使用初始化的回环地址，异机部署须修改服务地址，并设置 `RUNNER_GATEWAY_URL` 和唯一的 `RUNNER_NAME`。这套配置仅适用于隔离的开发环境：映射的 etcd、ES 和 apiserver 端口不应暴露给不可信网络。不要直接复用 TLS 部署的数据目录切换模式。
 
+## 可选：Release Management 周期同步
+
+基础 Compose 中的 `release-management` 使用独立 profile，默认不启动。先创建目标 Project 和
+`type=service` 的机器账号。工程范围与操作授权由独立的 apiserver/Gateway 改动提供；启用后配置 `projects` 覆盖所有绑定工程、`permissions` 为 `projects:update`，此前仅向可信内部服务发放凭据。插件管理绑定工程的整个软件包列表，
+启动前必须预览并确认差异，同一工程只能由一个实例维护。
+
+准备配置、数据目录及机器凭据（UID/GID 固定为 1000）：
+
+```bash
+install -d -m 0700 hacks/release-management/secrets
+cp backend/release-management/config.example.yaml hacks/release-management/config.yaml
+sudo install -d -o 1000 -g 1000 -m 0700 /srv/release-management
+```
+
+编辑 `config.yaml` 的工程名、清单目录、引用与 URL 模板。示例使用可信 Compose 网络内的
+`gatewayURL: http://ebs-gateway:8080`，无需 CA 文件。HTTP 会明文传输机器凭据和 Token，
+跨公网或不可信网络必须改用 HTTPS；私有 CA 时将 CA 保存到配置目录的 `ca.crt`，
+并设置 `gatewayCAFile: /etc/release-management/ca.crt`。TLS 覆盖文件不会自动启用 Gateway 入站 HTTPS。
+
+`machineCredentialFile` 为全局配置，所有 bindings 共用同一机器凭据及 Token 缓存。
+
+将创建机器账号时保存的 JSON 凭据写入 `hacks/release-management/secrets/machine-credential.json`，
+内容仅包含 `clientID`、`clientSecret`。配置目录已被 Git 忽略，不提交真实凭据。
+目录及文件需允许容器 UID 1000 访问，限制其他宿主机用户访问；例如准备好文件后执行：
+
+```bash
+sudo chown -R 1000:1000 hacks/release-management
+sudo chmod 0700 hacks/release-management hacks/release-management/secrets
+sudo chmod 0400 hacks/release-management/secrets/machine-credential.json
+docker compose -f hacks/docker-compose.yml --profile release-management build release-management
+docker compose -f hacks/docker-compose.yml --profile release-management run --rm --no-deps \
+  release-management plan --binding oe2403-next-everything
+```
+
+确认 plan 结果后启动；绑定名应与实际配置一致：
+
+```bash
+docker compose -f hacks/docker-compose.yml --profile release-management up -d release-management
+docker compose -f hacks/docker-compose.yml exec release-management \
+  release-management status --binding oe2403-next-everything
+docker compose -f hacks/docker-compose.yml exec release-management \
+  release-management sync --binding oe2403-next-everything
+```
+
+服务不映射宿主机端口；8080 仅提供内部探针和指标，管理命令通过数据目录中的 Unix socket 执行。
+配置修改后重启服务生效；凭据目录整体只读挂载，原子替换文件并保持权限后，下一次写入会重新读取凭据。
+`sync` 成功仅表示入队，用 `status` 确认结果。日志轮转为 `100m × 3`。
+
 ## TLS 联调
 
 | 链路 | TLS 覆盖文件的配置 |

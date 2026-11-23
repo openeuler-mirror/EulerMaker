@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-management-config
+  namespace: ebs
+data:
+  config.yaml: |
+    # HTTP is only for the trusted cluster network.
+    gatewayURL: http://ebs-gateway.ebs:8080
+    machineCredentialFile: /etc/release-management/secrets/machine-credential.json
+    dataDir: /var/lib/release-management
+    listen: :8080
+    pollInterval: 10m
+    workers: 2
+    maxProjectBytes: 1048576
+    webhook:
+      enabled: false
+    sources:
+      - name: openeuler-release
+        repository: https://atomgit.com/openeuler/release-management.git
+        ref: refs/heads/master
+        allowPrivateNetwork: false
+    bindings:
+      - name: openeuler-24-03-lts-next-everything
+        project: openeuler-24-03-lts-next-everything
+        source: openeuler-release
+        paths:
+          - directory: openEuler-24.03-LTS-Next/baseos
+          - directory: openEuler-24.03-LTS-Next/everything-exclude-baseos
+        packageURLTemplate: https://atomgit.com/src-openeuler/{name}.git
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: release-management-data
+  namespace: ebs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ebs-disk-ssd-retain
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-management
+  namespace: ebs
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: release-management
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-management
+  namespace: ebs
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: release-management
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: release-management
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        node-role.kubernetes.io/ebs-control-plane: ""
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: release-management
+          image: swr.cn-north-4.myhuaweicloud.com/eulermaker/release-management:0.1.0
+          imagePullPolicy: Always
+          args: [serve, --config=/etc/release-management/config.yaml]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/release-management
+              readOnly: true
+            - name: credential
+              mountPath: /etc/release-management/secrets
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/release-management
+      volumes:
+        - name: config
+          configMap:
+            name: release-management-config
+        - name: credential
+          secret:
+            secretName: release-management-machine-credential
+            defaultMode: 0440
+        - name: data
+          persistentVolumeClaim:
+            claimName: release-management-data

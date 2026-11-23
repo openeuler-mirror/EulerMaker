@@ -17,6 +17,9 @@ BuildGraph 独立保存依赖图检查点，由 BuildInfo Controller 持久化�
 - 可选 RPM 签名：Artifact Manager 在 Manifest 封账时使用内置的本地 GPG 或 Signatrust 后端，过程仓和正式发布复用最终产物；未启用时不执行签名。详见 [Artifact Manager 设计](artifact-manager.md)。
 - 可容器化部署：测试环境通过 `hacks/docker-compose.yml` 启动 etcd、Elasticsearch、`ebs-apiserver` 等组件。
 
+可选外部扩展：[release-management 软件包同步插件](release-management.md) 从发行版清单周期同步 Project 软件包列表，
+经 Gateway 调用资源 API，不将外部清单格式耦合到核心构建流程。
+
 ---
 
 ## 二、整体架构
