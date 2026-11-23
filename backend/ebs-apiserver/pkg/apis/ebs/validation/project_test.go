@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -8,6 +9,35 @@ import (
 
 	ebsv1 "ebs-api/ebs/v1"
 )
+
+func TestValidateProjectBuildTargets(t *testing.T) {
+	content := &ebsv1.BuildTargetContent{Targets: map[string]ebsv1.BuildTargetConfigEntry{
+		"openEuler": {Arches: map[string]ebsv1.BuildTargetArch{"x86_64": {}, "aarch64": {}}},
+		"other":     {Arches: map[string]ebsv1.BuildTargetArch{"riscv64": {}}},
+	}}
+	for _, tc := range []struct {
+		name, distro   string
+		arches, fields []string
+	}{
+		{"configured", "openEuler", []string{"x86_64", "aarch64"}, nil},
+		{"unknown distro", "missing", []string{"x86_64"}, []string{"spec.distro"}},
+		{"case sensitive distro", "openeuler", []string{"x86_64"}, []string{"spec.distro"}},
+		{"arch belongs to another distro", "openEuler", []string{"riscv64"}, []string{"spec.buildArches[0]"}},
+		{"all missing arches reported", "openEuler", []string{"x86_64", "unknown", "riscv64"}, []string{"spec.buildArches[1]", "spec.buildArches[2]"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			project := &ebsv1.Project{Spec: ebsv1.ProjectSpec{Distro: tc.distro, BuildArches: tc.arches}}
+			errs := ValidateProjectBuildTargets(project, content)
+			var fields []string
+			for _, err := range errs {
+				fields = append(fields, err.Field)
+			}
+			if !slices.Equal(fields, tc.fields) {
+				t.Fatalf("errors=%v want fields=%v", errs, tc.fields)
+			}
+		})
+	}
+}
 
 func TestPackageRepoCommitID(t *testing.T) {
 	for _, tc := range []struct {

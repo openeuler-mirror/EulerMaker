@@ -117,11 +117,14 @@ type ProjectSpec struct {
 | `defaultRef` | string | 否 | 默认完整 Git 引用，例如 `refs/heads/master`、`refs/tags/v1`；为空时默认 `refs/heads/master` |
 | `buildPayload` | string | 否 | 构建环境参数，YAML 格式；`disable_check_path`、`use_kmod_libs`、`use_git_lfs`、`use_root`、`use_xz` 和 `unuse_gcc_secure` 是包仓库名列表，命中时向 Job payload 写入相应布尔标记；`unparsable_spec` 是 spec 名列表，仅供 BuildInfo Controller 组装依赖时使用 |
 | `distro` | string | 是 | 工程统一的发行版标识，与 `Config/build-target.spec.content.targets` 的键精确匹配；不是镜像引用；创建后不可修改 |
-| `buildArches` | []string | 是 | 非空构建架构列表；创建和更新时每个架构必须非空且唯一 |
+| `buildArches` | []string | 是 | 非空构建架构列表；架构非空且唯一；Project 创建或该数组修改时，全部架构须存在于 `Config/build-target` 的对应 distro 下 |
 | `packageRepos` | []PackageRepo | 否 | 包仓库列表；创建和更新时各条目 name 必须非空且在本 Project 内唯一，URL 或 ref 不同也不能使用同名条目 |
 | `bootstrapRepos` | []BootstrapRepo | 否 | Project 默认使用的引导 RPM 仓库 |
 
 `distro` 在 Project 创建后不可修改或删除；更新后的值与原值不一致时，apiserver 返回 `422 Invalid`，错误字段为 `spec.distro`。切换发行版环境必须创建新 Project，避免复用原工程的增量基准和稳定仓库。
+
+创建 Project 或修改 `buildArches` 时，apiserver 校验发行版及架构的配置映射；未修改架构的更新不依赖当前目标配置。
+错误返回与配置读取边界见 [Project 与 Build 的配置校验](data-models~config.md#251-project-与-build)。
 
 ```yaml
 spec:

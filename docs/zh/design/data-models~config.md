@@ -116,13 +116,21 @@ spec:
 3. 对象不存在时校验初始化 YAML，并通过 create-only 写入创建。
 4. 多实例创建冲突后读取获胜对象并继续；不覆盖。其他存储错误导致初始化失败，不能在未知结果下覆盖配置。
 
-启动配置不是持续同步源。发布新版本不修改运维数据；导入生产映射由 Ops 使用 API 或前端完成。初始化空表不阻止 apiserver Ready，但新建 Build 会因目标未配置而被拒绝。
+启动配置不是持续同步源。发布新版本不修改运维数据；导入生产映射由 Ops 使用 API 或前端完成。初始化空表不阻止 apiserver Ready，但新建 Project、修改 Project 架构或新建 Build 会因目标未配置而被拒绝。
 
 ### 2.5 构建流程
 
 #### 2.5.1 Project 与 Build
 
-Project.spec.distro 保存工程统一的发行版标识，创建后不可修改；Project.spec.buildArches 只记录架构，且架构非空、不重复。Project 创建/更新校验字段格式，更新时还校验 distro 不变；不强制所有目标当前都在 `Config/build-target` 中，避免全局配置变更后工程无法进行其他编辑。
+Project.spec.distro 保存工程统一的发行版标识，创建后不可修改；Project.spec.buildArches 只记录架构，且架构非空、不重复。
+Project 创建时，以及普通更新中 `spec.buildArches` 数组发生变化时，apiserver 读取一次 `Config/build-target`，
+确认 distro 存在且更新后的每个 arch 均属于该 distro；PUT 与 PATCH 合并后的对象执行同一校验。
+
+- distro 不存在：返回 `422 Invalid`，错误字段为 `spec.distro`；arch 不存在：返回 `422 Invalid`，定位到 `spec.buildArches[i]`，不写入 Project。
+- 配置不存在、读取失败、响应类型错误或反序列化失败：返回 `503 ServiceUnavailable`，不写入 Project。
+- 未修改 `buildArches` 的普通更新及 `/status` 更新不触发该配置查询，避免配置移除目标或短暂不可用时阻断软件包、描述等其他编辑。distro 不可变和字段格式校验仍然生效。
+
+配置完整性由 Config 创建和更新时校验，此处只检查目标映射存在性；不锁定配置，也不因后续 Config 变更回写既有 Project。
 
 创建任意类型 Build 时，apiserver 先读取所属 Project，确认目标 arch 属于 Project.spec.buildArches，并从同一对象读取 Project.spec.distro。随后在申请非 single 目标占用、写入 Build 之前读取 `Config/build-target`，反序列化后只检查 Project 的 distro 与 Build 的 arch 是否有对应映射，不重复校验整张目标表：
 

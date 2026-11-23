@@ -82,6 +82,22 @@ func ValidateProjectArtifactInstance(project *ebsv1.Project, content *ebsv1.Serv
 	return nil
 }
 
+func ValidateProjectBuildTargets(project *ebsv1.Project, content *ebsv1.BuildTargetContent) field.ErrorList {
+	target, exists := content.Targets[project.Spec.Distro]
+	if !exists {
+		return field.ErrorList{field.Invalid(field.NewPath("spec", "distro"), project.Spec.Distro,
+			"distribution is not configured in build-target Config")}
+	}
+	var errs field.ErrorList
+	for i, arch := range project.Spec.BuildArches {
+		if _, exists := target.Arches[arch]; !exists {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "buildArches").Index(i), arch,
+				"architecture is not configured for this distribution in build-target Config"))
+		}
+	}
+	return errs
+}
+
 func ValidateProjectUpdate(newObj, oldObj *ebsv1.Project) field.ErrorList {
 	errs := ValidateProject(newObj)
 	if newObj.Spec.Distro != oldObj.Spec.Distro {
