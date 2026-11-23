@@ -125,24 +125,46 @@ func TestValidRegistration(t *testing.T) {
 }
 
 func TestRegisterMachineAccount(t *testing.T) {
-	machines := &fakeMachineStorage{}
-	h := &Handler{machines: machines}
-	secret := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	body := `{"name":"runner-site-a","clientSecret":"` + secret + `","tokenTTLSeconds":86400}`
-	req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/machineaccounts/register", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	response := restful.NewResponse(rec)
-	response.SetRequestAccepts(restful.MIME_JSON)
-	h.registerMachine(restful.NewRequest(req), response)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if machines.account == nil || machines.account.Name != "runner-site-a" || machines.account.Spec.TokenTTLSeconds != 86400 {
-		t.Fatalf("unexpected account: %#v", machines.account)
-	}
-	if len(machines.credential) == 0 {
-		t.Fatal("credential was not stored")
+	for _, tc := range []struct {
+		name, typeField string
+		wantType        iamv1.MachineAccountType
+		status          int
+	}{
+		{"default", "", iamv1.MachineAccountRunner, http.StatusCreated},
+		{"runner", `,"type":"runner"`, iamv1.MachineAccountRunner, http.StatusCreated},
+		{"service", `,"type":"service"`, iamv1.MachineAccountService, http.StatusCreated},
+		{"empty", `,"type":""`, "", http.StatusBadRequest},
+		{"null", `,"type":null`, "", http.StatusBadRequest},
+		{"unknown", `,"type":"admin"`, "", http.StatusBadRequest},
+		{"wrong JSON type", `,"type":1`, "", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			machines := &fakeMachineStorage{}
+			h := &Handler{machines: machines}
+			secret := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+			body := `{"name":"runner-site-a","clientSecret":"` + secret + `","tokenTTLSeconds":86400` + tc.typeField + `}`
+			req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/machineaccounts/register", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			response := restful.NewResponse(rec)
+			response.SetRequestAccepts(restful.MIME_JSON)
+			h.registerMachine(restful.NewRequest(req), response)
+			if rec.Code != tc.status {
+				t.Fatalf("expected %d, got %d: %s", tc.status, rec.Code, rec.Body.String())
+			}
+			if tc.status != http.StatusCreated {
+				if machines.account != nil || len(machines.credential) != 0 {
+					t.Fatal("invalid type was persisted")
+				}
+				return
+			}
+			if machines.account == nil || machines.account.Name != "runner-site-a" || machines.account.Spec.TokenTTLSeconds != 86400 || machines.account.Spec.Type != tc.wantType {
+				t.Fatalf("unexpected account: %#v", machines.account)
+			}
+			if len(machines.credential) == 0 {
+				t.Fatal("credential was not stored")
+			}
+		})
 	}
 }
 
@@ -183,7 +205,17 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 				Document:   es.Document{Data: json.RawMessage(`{"spec":{"tokenTTLSeconds":3600}}`)},
 				Credential: machineCredential,
 			},
-			response: `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600}`,
+			response: `{"authenticated":true,"name":"worker","type":"runner","tokenTTLSeconds":3600}`,
+		},
+		{
+			name: "service", path: "/internal/iam/v1/machineaccounts/authenticate",
+			body:   `{"name":"worker","clientSecret":"` + secret + `"}`,
+			esPath: "/ebs-machineaccounts/_doc/worker",
+			document: es.IAMDocument{
+				Document:   es.Document{Data: json.RawMessage(`{"spec":{"type":"service","tokenTTLSeconds":3600}}`)},
+				Credential: machineCredential,
+			},
+			response: `{"authenticated":true,"name":"worker","type":"service","tokenTTLSeconds":3600}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

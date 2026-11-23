@@ -52,9 +52,10 @@ func InstallInternalRoutes(server *genericapiserver.GenericAPIServer, credential
 
 func (h *Handler) registerMachine(req *restful.Request, resp *restful.Response) {
 	var body struct {
-		Name            string `json:"name"`
-		ClientSecret    string `json:"clientSecret"`
-		TokenTTLSeconds int64  `json:"tokenTTLSeconds"`
+		Name            string          `json:"name"`
+		ClientSecret    string          `json:"clientSecret"`
+		TokenTTLSeconds int64           `json:"tokenTTLSeconds"`
+		Type            json.RawMessage `json:"type"`
 	}
 	if err := decode(req.Request, &body); err != nil || body.Name == "" || len(utilvalidation.IsDNS1123Label(body.Name)) != 0 {
 		writeError(resp, http.StatusBadRequest, "invalid registration request")
@@ -63,12 +64,24 @@ func (h *Handler) registerMachine(req *restful.Request, resp *restful.Response) 
 	if body.TokenTTLSeconds == 0 {
 		body.TokenTTLSeconds = 3600
 	}
+	accountType := iamv1.MachineAccountRunner
+	if len(body.Type) != 0 {
+		accountType = ""
+		if err := json.Unmarshal(body.Type, &accountType); err != nil || !accountType.IsValid() {
+			writeError(resp, http.StatusBadRequest, "type must be runner or service")
+			return
+		}
+	}
 	credentialData, err := credential.NewMachineCredential(body.ClientSecret)
 	if err != nil || body.TokenTTLSeconds < 300 || body.TokenTTLSeconds > 86400 {
 		writeError(resp, http.StatusBadRequest, "invalid registration request")
 		return
 	}
-	account := &iamv1.MachineAccount{TypeMeta: metav1.TypeMeta{APIVersion: iamv1.SchemeGroupVersion.String(), Kind: "MachineAccount"}, ObjectMeta: metav1.ObjectMeta{Name: body.Name}, Spec: iamv1.MachineAccountSpec{TokenTTLSeconds: body.TokenTTLSeconds}}
+	account := &iamv1.MachineAccount{
+		TypeMeta:   metav1.TypeMeta{APIVersion: iamv1.SchemeGroupVersion.String(), Kind: "MachineAccount"},
+		ObjectMeta: metav1.ObjectMeta{Name: body.Name},
+		Spec:       iamv1.MachineAccountSpec{Type: accountType, TokenTTLSeconds: body.TokenTTLSeconds},
+	}
 	ctx := genericapirequest.WithNamespace(req.Request.Context(), "")
 	if _, err := h.machines.CreateWithCredential(ctx, account, credentialData, nil, &metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -91,7 +104,7 @@ func (h *Handler) authenticateMachine(req *restful.Request, resp *restful.Respon
 		writeError(resp, http.StatusBadRequest, "invalid request")
 		return
 	}
-	ttl, ok, err := h.credentials.AuthenticateMachine(req.Request.Context(), body.Name, body.ClientSecret)
+	spec, ok, err := h.credentials.AuthenticateMachine(req.Request.Context(), body.Name, body.ClientSecret)
 	if err != nil {
 		writeError(resp, http.StatusInternalServerError, "authentication unavailable")
 		return
@@ -100,7 +113,9 @@ func (h *Handler) authenticateMachine(req *restful.Request, resp *restful.Respon
 		writeError(resp, http.StatusUnauthorized, "authentication failed")
 		return
 	}
-	_ = resp.WriteHeaderAndEntity(http.StatusOK, map[string]interface{}{"authenticated": true, "name": body.Name, "tokenTTLSeconds": ttl})
+	_ = resp.WriteHeaderAndEntity(http.StatusOK, map[string]interface{}{
+		"authenticated": true, "name": body.Name, "type": spec.Type, "tokenTTLSeconds": spec.TokenTTLSeconds,
+	})
 }
 
 func (h *Handler) register(req *restful.Request, resp *restful.Response) {

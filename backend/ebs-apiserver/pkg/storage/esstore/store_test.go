@@ -33,11 +33,72 @@ import (
 	projectstore "ebs-apiserver/pkg/registry/ebs/project"
 	rpmrepostore "ebs-apiserver/pkg/registry/ebs/rpmrepo"
 	"ebs-apiserver/pkg/registry/ebs/scopedresource"
+	machinestore "ebs-apiserver/pkg/registry/iam/machineaccount"
 	userstore "ebs-apiserver/pkg/registry/iam/user"
 	"ebs-apiserver/pkg/storage/es"
 )
 
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
+
+func TestMachineAccountTypeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name, typeField string
+		want            iamv1.MachineAccountType
+	}{
+		{"legacy", "", iamv1.MachineAccountRunner},
+		{"runner", `,"type":"runner"`, iamv1.MachineAccountRunner},
+		{"service", `,"type":"service"`, iamv1.MachineAccountService},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hit := map[string]any{
+				"_id": "worker", "_seq_no": 3, "_primary_term": 1,
+				"sort": []any{"2026-11-23T00:00:00Z", "worker"},
+				"_source": es.IAMDocument{
+					Document:   es.Document{Data: json.RawMessage(`{"metadata":{"name":"worker"},"spec":{"tokenTTLSeconds":3600` + tc.typeField + `}}`)},
+					Credential: json.RawMessage(`{"secretHash":"private"}`),
+				},
+			}
+			client := es.NewClientForTesting("http://elasticsearch", &http.Client{Transport: fakeRoundTripper(func(req *http.Request) (*http.Response, error) {
+				switch {
+				case req.Method == http.MethodGet && req.URL.Path == "/ebs-machineaccounts/_doc/worker":
+					return jsonResponse(http.StatusOK, hit), nil
+				case req.Method == http.MethodPost && req.URL.Path == "/ebs-machineaccounts/_pit":
+					return jsonResponse(http.StatusOK, map[string]string{"id": "pit"}), nil
+				case req.Method == http.MethodPost && req.URL.Path == "/_search":
+					return jsonResponse(http.StatusOK, map[string]any{"hits": map[string]any{"total": map[string]int{"value": 1}, "hits": []any{hit}}}), nil
+				case req.Method == http.MethodDelete && req.URL.Path == "/_pit":
+					return jsonResponse(http.StatusOK, map[string]bool{"succeeded": true}), nil
+				default:
+					t.Fatalf("unexpected request or read-triggered write: %s %s", req.Method, req.URL)
+					return nil, nil
+				}
+			})})
+			store := New(client, "machineaccount", "MachineAccount", machinestore.NewStorage().MachineAccount.(*genericregistry.Store))
+			obj, err := store.Get(context.Background(), "worker", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := obj.(*iamv1.MachineAccount).Spec.Type; got != tc.want {
+				t.Fatalf("GET type=%q", got)
+			}
+			obj, err = store.List(context.Background(), &internalversion.ListOptions{Limit: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			items := obj.(*iamv1.MachineAccountList).Items
+			if len(items) != 1 || items[0].Spec.Type != tc.want {
+				t.Fatalf("LIST items=%+v", items)
+			}
+			data, err := json.Marshal(obj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(data, []byte("secretHash")) {
+				t.Fatal("credential exposed")
+			}
+		})
+	}
+}
 
 func TestUserExternalIdentityPersistence(t *testing.T) {
 	var stored es.IAMDocument

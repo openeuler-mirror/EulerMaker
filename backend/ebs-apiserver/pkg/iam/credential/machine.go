@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-apiserver/pkg/storage/es"
 )
 
@@ -41,45 +42,47 @@ func NewMachineCredential(secret string) (json.RawMessage, error) {
 	return json.Marshal(MachineCredential{SecretHash: hash, SecretCreatedAt: time.Now().UTC()})
 }
 
-func (s *Store) AuthenticateMachine(ctx context.Context, name, secret string) (int64, bool, error) {
+func (s *Store) AuthenticateMachine(ctx context.Context, name, secret string) (iamv1.MachineAccountSpec, bool, error) {
 	if len(secret) == 0 || len(secret) > 256 {
-		return 0, false, nil
+		return iamv1.MachineAccountSpec{}, false, nil
 	}
 	hit, err := s.client.Get(ctx, "machineaccount", name)
 	if err != nil {
 		if es.IsStatus(err, 404) {
 			_, _ = HashPassword(secret)
-			return 0, false, nil
+			return iamv1.MachineAccountSpec{}, false, nil
 		}
-		return 0, false, err
+		return iamv1.MachineAccountSpec{}, false, err
 	}
-	var account struct {
-		Spec struct {
-			TokenTTLSeconds int64 `json:"tokenTTLSeconds"`
-		} `json:"spec"`
-	}
+	var account iamv1.MachineAccount
 	var doc es.IAMDocument
 	if err := hit.Decode(&doc); err != nil {
-		return 0, false, err
+		return iamv1.MachineAccountSpec{}, false, err
 	}
 	if err := json.Unmarshal(doc.Data, &account); err != nil {
-		return 0, false, err
+		return iamv1.MachineAccountSpec{}, false, err
+	}
+	if account.Spec.Type == "" {
+		account.Spec.Type = iamv1.MachineAccountRunner
+	}
+	if !account.Spec.Type.IsValid() {
+		return iamv1.MachineAccountSpec{}, false, errors.New("invalid stored machine account type")
 	}
 	var cred MachineCredential
 	if len(doc.Credential) == 0 || json.Unmarshal(doc.Credential, &cred) != nil {
-		return 0, false, nil
+		return iamv1.MachineAccountSpec{}, false, nil
 	}
 	now := time.Now().UTC()
 	if cred.LockedUntil != nil && now.Before(*cred.LockedUntil) {
-		return 0, false, nil
+		return iamv1.MachineAccountSpec{}, false, nil
 	}
 	ok, err := VerifyPassword(secret, cred.SecretHash)
 	if err != nil {
-		return 0, false, err
+		return iamv1.MachineAccountSpec{}, false, err
 	}
 	if ok {
 		if cred.FailedAttempts == 0 && cred.LockedUntil == nil {
-			return account.Spec.TokenTTLSeconds, true, nil
+			return account.Spec, true, nil
 		}
 		cred.FailedAttempts = 0
 		cred.LockedUntil = nil
@@ -92,14 +95,14 @@ func (s *Store) AuthenticateMachine(ctx context.Context, name, secret string) (i
 	}
 	data, err := json.Marshal(cred)
 	if err != nil {
-		return 0, false, err
+		return iamv1.MachineAccountSpec{}, false, err
 	}
 	doc.Credential = data
 	if _, err := s.client.Update(ctx, "machineaccount", name, doc, hit.SeqNo, hit.PrimaryTerm); err != nil {
-		return 0, false, err
+		return iamv1.MachineAccountSpec{}, false, err
 	}
 	if !ok {
-		return 0, false, nil
+		return iamv1.MachineAccountSpec{}, false, nil
 	}
-	return account.Spec.TokenTTLSeconds, true, nil
+	return account.Spec, true, nil
 }

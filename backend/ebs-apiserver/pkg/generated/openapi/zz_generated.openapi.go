@@ -2881,6 +2881,14 @@ func schema_ebs_api_iam_v1_MachineAccountSpec(ref common.ReferenceCallback) comm
 			SchemaProps: spec.SchemaProps{
 				Type: []string{"object"},
 				Properties: map[string]spec.Schema{
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Type is immutable. Omitted registration input defaults to runner; service does not grant permissions.\n\nPossible enum values:\n - `\"runner\"`\n - `\"service\"`",
+							Type:        []string{"string"},
+							Format:      "",
+							Enum:        []interface{}{"runner", "service"},
+						},
+					},
 					"tokenTTLSeconds": {
 						SchemaProps: spec.SchemaProps{
 							Type:   []string{"integer"},

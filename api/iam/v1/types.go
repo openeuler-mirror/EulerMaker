@@ -31,7 +31,21 @@ type MachineAccount struct {
 }
 
 type MachineAccountSpec struct {
-	TokenTTLSeconds int64 `json:"tokenTTLSeconds,omitempty"`
+	// Type is immutable. Omitted registration input defaults to runner; service does not grant permissions.
+	Type            MachineAccountType `json:"type,omitempty"`
+	TokenTTLSeconds int64              `json:"tokenTTLSeconds,omitempty"`
+}
+
+// +enum
+type MachineAccountType string
+
+const (
+	MachineAccountRunner  MachineAccountType = "runner"
+	MachineAccountService MachineAccountType = "service"
+)
+
+func (t MachineAccountType) IsValid() bool {
+	return t == MachineAccountRunner || t == MachineAccountService
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

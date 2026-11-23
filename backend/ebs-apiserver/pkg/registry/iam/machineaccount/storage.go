@@ -34,6 +34,9 @@ func (*strategy) AllowCreateOnUpdate() bool      { return false }
 func (*strategy) AllowUnconditionalUpdate() bool { return false }
 func (*strategy) PrepareForCreate(_ context.Context, obj runtime.Object) {
 	account := obj.(*iamv1.MachineAccount)
+	if account.Spec.Type == "" {
+		account.Spec.Type = iamv1.MachineAccountRunner
+	}
 	if account.Spec.TokenTTLSeconds == 0 {
 		account.Spec.TokenTTLSeconds = 3600
 	}
@@ -42,6 +45,9 @@ func (*strategy) PrepareForUpdate(context.Context, runtime.Object, runtime.Objec
 func (*strategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList {
 	account := obj.(*iamv1.MachineAccount)
 	var errs field.ErrorList
+	if !account.Spec.Type.IsValid() {
+		errs = append(errs, field.NotSupported(field.NewPath("spec", "type"), account.Spec.Type, []string{"runner", "service"}))
+	}
 	if account.Name == "" {
 		errs = append(errs, field.Required(field.NewPath("metadata", "name"), "name is required"))
 	} else if messages := utilvalidation.IsDNS1123Label(account.Name); len(messages) > 0 {
@@ -52,8 +58,16 @@ func (*strategy) Validate(_ context.Context, obj runtime.Object) field.ErrorList
 	}
 	return errs
 }
-func (s *strategy) ValidateUpdate(_ context.Context, obj, _ runtime.Object) field.ErrorList {
-	return s.Validate(context.Background(), obj)
+func (s *strategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
+	errs := s.Validate(ctx, obj)
+	oldType := old.(*iamv1.MachineAccount).Spec.Type
+	if oldType == "" {
+		oldType = iamv1.MachineAccountRunner
+	}
+	if obj.(*iamv1.MachineAccount).Spec.Type != oldType {
+		errs = append(errs, field.Forbidden(field.NewPath("spec", "type"), "type is immutable"))
+	}
+	return errs
 }
 func (*strategy) Canonicalize(runtime.Object) {}
 func (*strategy) ObjectKinds(runtime.Object) ([]schema.GroupVersionKind, bool, error) {

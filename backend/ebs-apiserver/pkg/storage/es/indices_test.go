@@ -102,6 +102,16 @@ func TestIAMIndexFields(t *testing.T) {
 			if !maps.Equal(got, want) {
 				t.Fatalf("mapping fields = %v, want %v", got, want)
 			}
+			if resource == "machineaccount" {
+				var data map[string]any
+				if err := json.Unmarshal(definition.Mappings.Properties["data"], &data); err != nil {
+					t.Fatal(err)
+				}
+				spec := data["properties"].(map[string]any)["spec"].(map[string]any)
+				if got := spec["properties"].(map[string]any)["type"].(map[string]any)["type"]; got != "keyword" {
+					t.Fatalf("machine account type mapping=%v", got)
+				}
+			}
 		})
 	}
 }
