@@ -18,7 +18,7 @@ func TestTokenProviderExchangesCredential(t *testing.T) {
 		if !ok || clientID != credential.ClientID || clientSecret != credential.ClientSecret {
 			t.Fatalf("unexpected basic credential")
 		}
-		if r.URL.Path != "/auth/runner-token" || r.Method != http.MethodPost {
+		if r.URL.Path != "/auth/machine-token" || r.Method != http.MethodPost {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		var input map[string]string

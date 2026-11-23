@@ -56,7 +56,7 @@ Runner 访问 `ebs-gateway`，API 路径保持 `ebs-apiserver` 的资源路径�
 Runner 不保存长期 Runner JWT，而是使用预置的 MachineAccount client ID 和 client secret 换取短期 token：
 
 ```text
-POST /auth/runner-token
+POST /auth/machine-token
 Authorization: Basic base64(<client-id>:<client-secret>)
 Content-Type: application/json
 
@@ -77,7 +77,7 @@ Content-Type: application/json
 
 Runner 在首次注册前获取 token，并在到期前重新交换。建议在剩余有效期小于 10 分钟或总有效期的 20%（取较小值）时刷新，并加入随机抖动避免大量实例同时请求。交换接口返回 401 表示长期凭据无效，400 表示 Runner 名称或请求格式错误，两者均进入低频退避并报告配置错误，不能无限快速重试。429 遵循 `Retry-After`，网络错误和 503 使用带抖动的指数退避。Runner 不使用 refresh token。
 
-心跳、Runner 状态更新、Job list/watch 和 Job 状态更新共享同一个并发安全的 token provider。任一调用方发现 token 缺失、进入刷新窗口或收到 401 时可以触发刷新，但同一时刻最多只能有一个 `/auth/runner-token` 请求；其他调用方等待并复用该次刷新结果，不得各自交换 token。刷新成功后以原子方式替换内存中的 token 和到期时间；刷新失败时保留尚未过期的旧 token，已经过期或因 401 被拒绝的 token 不得继续用于新请求。处理 401 时只在被拒绝的 token 仍是当前 token 时将其失效；如果并发刷新已经替换了 token，则直接使用新 token 重试，不能使新 token 失效或再次发起交换。
+心跳、Runner 状态更新、Job list/watch 和 Job 状态更新共享同一个并发安全的 token provider。任一调用方发现 token 缺失、进入刷新窗口或收到 401 时可以触发刷新，但同一时刻最多只能有一个 `/auth/machine-token` 请求；其他调用方等待并复用该次刷新结果，不得各自交换 token。刷新成功后以原子方式替换内存中的 token 和到期时间；刷新失败时保留尚未过期的旧 token，已经过期或因 401 被拒绝的 token 不得继续用于新请求。处理 401 时只在被拒绝的 token 仍是当前 token 时将其失效；如果并发刷新已经替换了 token，则直接使用新 token 重试，不能使新 token 失效或再次发起交换。
 
 普通业务请求收到 gateway 返回的 401 后，必须使当前 token 失效，等待一次强制刷新，并使用新 token 重放原请求一次；重放后仍返回 401 时将错误交给上层，不再循环刷新。Runner 发出的 JSON 请求必须能够从内存中的结构重新编码，不能重用已经消费的请求体。watch 建连返回 401 时执行同样的单次强制刷新，然后重新执行 list/watch；已经建立的 watch 断开后按正常重连流程重新取得当前 token。403 不触发刷新，按权限或身份配置错误处理。
 
