@@ -34,7 +34,7 @@ func TestAuthMiddleware(t *testing.T) {
 		{"user", identity.UserType, identity.UserScope, true, http.StatusOK, "/apis/iam.ebs/v1/users/account"},
 		{"runner", identity.RunnerType, "", true, http.StatusOK, ""},
 		{"service token check", identity.ServiceType, "", false, http.StatusOK, "/apis/iam.ebs/v1/machineaccounts/account"},
-		{"service resource access", identity.ServiceType, "", true, http.StatusForbidden, "/apis/iam.ebs/v1/machineaccounts/account"},
+		{"service skips user resolution", identity.ServiceType, "", true, http.StatusOK, "/apis/iam.ebs/v1/machineaccounts/account"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			paths := make(chan string, 4)

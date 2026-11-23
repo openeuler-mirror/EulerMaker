@@ -34,7 +34,7 @@ func main() {
 			"responses": errorResponses(),
 			"securitySchemes": object{
 				"BearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT",
-					"description": "User, Runner or service token. Service tokens currently support only /auth/check and do not grant resource permissions."},
+					"description": "User, Runner or service token. Service tokens may update named Projects with PUT/PATCH and create Builds in any Project. Other resource operations are denied."},
 				"MachineBasic": object{"type": "http", "scheme": "basic",
 					"description": "MachineAccount client ID and client secret for /auth/machine-token. The stored account type selects Runner or service identity."},
 			},

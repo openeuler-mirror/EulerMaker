@@ -31,7 +31,7 @@ type MachineAccount struct {
 }
 
 type MachineAccountSpec struct {
-	// Type is immutable. Omitted registration input defaults to runner; service does not grant permissions.
+	// Type is immutable. Omitted registration input defaults to runner.
 	Type            MachineAccountType `json:"type,omitempty"`
 	TokenTTLSeconds int64              `json:"tokenTTLSeconds,omitempty"`
 }
