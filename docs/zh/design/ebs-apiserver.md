@@ -154,7 +154,7 @@ spec:
   email: alice@example.com
 ```
 
-MachineAccount 保存 Runner token 有效期配置：
+MachineAccount 保存账号用途和 Token 有效期配置：
 
 ```yaml
 apiVersion: iam.ebs/v1
@@ -162,10 +162,41 @@ kind: MachineAccount
 metadata:
   name: runner-site-a
 spec:
+  type: runner
   tokenTTLSeconds: 3600
 ```
 
 `metadata.name` 是 client ID，满足 DNS1123 label 且全局唯一。`tokenTTLSeconds` 在创建时设置，范围为 300～86400 秒，省略时默认为 3600 秒；客户端不能在交换请求中指定或扩大有效期。
+
+<a id="machineaccount-type"></a>
+
+**MachineAccount 类型**
+
+`spec.type` 区分账号用途：
+
+```yaml
+apiVersion: iam.ebs/v1
+kind: MachineAccount
+metadata:
+  name: release-management
+spec:
+  type: service
+  tokenTTLSeconds: 3600
+```
+
+| type | 用途 |
+|------|------|
+| `runner` | Runner 接入，沿用现有 Runner Token 交换流程 |
+| `service` | 自动化服务账号，统一用于软件包同步、门禁触发等服务，不按业务分别定义类型 |
+
+- 类型使用固定枚举；创建时省略 type 默认 `runner`，显式空值和未知值拒绝。已存储的无 type 账号按 runner 读取和认证，GET 不触发回写。
+- 类型在创建时确定，不开放类型修改；现有 MachineAccount 资源仍不提供普通更新接口。
+- 内部注册请求增加可选 `type`，写入 `MachineAccount.spec.type`；对象与凭据仍单文档原子创建。
+- 内部认证请求仍只接收 name、clientSecret，成功响应增加账号的有效 type，由服务端读取，不能由调用方声明或覆盖。
+- MachineAccount 的严格 ES mapping 同步增加 `data.spec.type` 的 keyword 定义；已部署索引通过现有 mapping 更新流程补齐。
+- 本阶段只区分账号用途，不签发 Service Token，也不授予 service 修改 Project 或创建 Build 的权限。
+  Service Token 交换、资源授权及撤销规则后续单独设计，不能把 service 等同于 user、ops、admin 或 runner。
+- 验收覆盖两种类型的注册、GET/List、凭据认证，省略类型的默认行为，以及空值/未知类型拒绝；Gateway 还须覆盖 service 不能换取 Runner Token。
 
 IAM 模块还注册仅供 gateway 使用的内部接口：
 
@@ -202,6 +233,7 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 {
   "name": "runner-site-a",
   "clientSecret": "base64url-encoded-random-secret",
+  "type": "runner",
   "tokenTTLSeconds": 3600
 }
 ```
@@ -214,12 +246,13 @@ MachineAccount 和初始 client secret 通过单一内部接口创建。请求�
 {"name":"runner-site-a","clientSecret":"base64url-encoded-random-secret"}
 ```
 
-认证成功返回账号当前的权威授权信息：
+认证成功返回账号的有效类型和 Token 有效期：
 
 ```json
 {
   "authenticated": true,
   "name": "runner-site-a",
+  "type": "runner",
   "tokenTTLSeconds": 3600
 }
 ```
@@ -568,6 +601,7 @@ User 复用 ES REST Storage；GET/LIST 只返回 data 中的公开对象，PUT/P
     "name": "runner-site-a"
   },
   "spec": {
+    "type": "runner",
     "tokenTTLSeconds": 3600
   },
   "credential": {

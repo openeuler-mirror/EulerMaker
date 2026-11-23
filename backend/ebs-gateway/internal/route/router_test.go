@@ -214,6 +214,95 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	return &testAPI{Handler: api, tokens: tokens, now: now}
 }
 
+func TestRunnerTokenAccountType(t *testing.T) {
+	for _, tc := range []struct {
+		name, typeField            string
+		upstreamStatus, wantStatus int
+	}{
+		{"runner", `,"type":"runner"`, 200, 200},
+		{"service", `,"type":"service"`, 200, 403},
+		{"missing type", "", 200, 503},
+		{"unknown type", `,"type":"unknown"`, 200, 503},
+		{"invalid credentials", "", 401, 401},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method != http.MethodPost || r.URL.Path != "/internal/iam/v1/machineaccounts/authenticate" {
+					t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+				}
+				body := `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600` + tc.typeField + `}`
+				return &http.Response{StatusCode: tc.upstreamStatus, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			req := httptest.NewRequest(http.MethodPost, "/auth/runner-token", strings.NewReader(`{"runner":"runner-1"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetBasicAuth("worker", "secret")
+			rec := httptest.NewRecorder()
+			api.Router().ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+			}
+			var result struct {
+				AccessToken string
+				ExpiresIn   int
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantStatus != http.StatusOK {
+				if result.AccessToken != "" {
+					t.Fatal("rejected account received a token")
+				}
+				return
+			}
+			who, err := api.tokens.Verify(result.AccessToken, api.now())
+			if err != nil || who.Type != identity.RunnerType || who.Runner != "runner-1" || result.ExpiresIn != 3600 {
+				t.Fatalf("token principal=%+v expiresIn=%d error=%v", who, result.ExpiresIn, err)
+			}
+		})
+	}
+}
+
+func TestRegisterMachineAccountTypeForwarding(t *testing.T) {
+	for _, typeField := range []string{"", `,"type":"runner"`, `,"type":"service"`} {
+		t.Run(typeField, func(t *testing.T) {
+			registered := false
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				body := `{"metadata":{"name":"admin"},"spec":{"enabled":true,"scopes":["ebs:admin"]}}`
+				status := http.StatusOK
+				if r.URL.Path == "/internal/iam/v1/machineaccounts/register" {
+					registered = true
+					var input map[string]any
+					if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+						t.Fatal(err)
+					}
+					var want map[string]any
+					_ = json.Unmarshal([]byte(`{"name":"worker"`+typeField+`}`), &want)
+					if input["type"] != want["type"] || input["name"] != "worker" || input["tokenTTLSeconds"] != float64(3600) {
+						t.Fatalf("forwarded input=%v", input)
+					}
+					body, status = `{"name":"worker"}`, http.StatusCreated
+				} else if r.URL.Path != "/apis/iam.ebs/v1/users/admin" {
+					t.Fatalf("unexpected request %s", r.URL)
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			token, err := api.tokens.Issue("admin", "", identity.UserType, identity.AdminScope, time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			secret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
+			req := httptest.NewRequest(http.MethodPost, "/auth/machineaccounts", strings.NewReader(`{"name":"worker","clientSecret":"`+secret+`"`+typeField+`}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			api.Router().ServeHTTP(rec, req)
+			if rec.Code != http.StatusCreated || !registered {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
 func TestOldJobsReadRoutes(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if !strings.HasPrefix(r.URL.Path, "/apis/ebs/v1/projects/project/oldjobs") {

@@ -85,24 +85,27 @@ func (c *Client) SetPassword(ctx context.Context, name, password string) (int, e
 	return response.StatusCode, nil
 }
 
-func (c *Client) AuthenticateMachine(ctx context.Context, name, secret string) (int, bool, int, error) {
+func (c *Client) AuthenticateMachine(ctx context.Context, name, secret string) (iamv1.MachineAccountSpec, bool, int, error) {
 	response, err := c.jsonRequest(ctx, http.MethodPost, "/internal/iam/v1/machineaccounts/authenticate", map[string]string{"name": name, "clientSecret": secret})
 	if err != nil {
-		return 0, false, 0, err
+		return iamv1.MachineAccountSpec{}, false, 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return 0, false, response.StatusCode, nil
+		return iamv1.MachineAccountSpec{}, false, response.StatusCode, nil
 	}
 	var result struct {
-		Authenticated   bool   `json:"authenticated"`
-		Name            string `json:"name"`
-		TokenTTLSeconds int    `json:"tokenTTLSeconds"`
+		Authenticated bool   `json:"authenticated"`
+		Name          string `json:"name"`
+		iamv1.MachineAccountSpec
 	}
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
-		return 0, false, response.StatusCode, fmt.Errorf("decode machine authentication response: %w", err)
+		return iamv1.MachineAccountSpec{}, false, response.StatusCode, fmt.Errorf("decode machine authentication response: %w", err)
 	}
-	return result.TokenTTLSeconds, result.Authenticated && result.Name == name, response.StatusCode, nil
+	if !result.Type.IsValid() {
+		return iamv1.MachineAccountSpec{}, false, response.StatusCode, fmt.Errorf("invalid machine account type in authentication response")
+	}
+	return result.MachineAccountSpec, result.Authenticated && result.Name == name, response.StatusCode, nil
 }
 
 func (c *Client) RegisterMachine(ctx context.Context, payload any) (int, error) {

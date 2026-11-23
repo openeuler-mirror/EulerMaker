@@ -2,6 +2,7 @@ package openapi
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,6 +52,16 @@ func TestDocumentContract(t *testing.T) {
 	}
 	checkRefs(doc)
 	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	for _, name := range []string{"MachineRequest", "ebs-api.iam.v1.MachineAccountSpec"} {
+		properties := schemas[name].(map[string]any)["properties"].(map[string]any)
+		typ := properties["type"].(map[string]any)
+		if !reflect.DeepEqual(typ["enum"], []any{"runner", "service"}) {
+			t.Fatalf("%s type enum=%v", name, typ["enum"])
+		}
+		if name == "MachineRequest" && typ["default"] != "runner" {
+			t.Fatalf("registration default type=%v", typ["default"])
+		}
+	}
 	buildStatus := schemas["ebs-api.ebs.v1.BuildStatus"].(map[string]any)["properties"].(map[string]any)
 	phases := buildStatus["phase"].(map[string]any)["enum"].([]any)
 	wantPhases := ebsv1.BuildPhaseValues()

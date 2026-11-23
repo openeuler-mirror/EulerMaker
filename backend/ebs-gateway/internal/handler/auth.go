@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
@@ -165,7 +166,7 @@ func (a *Handler) runnerToken(c *gin.Context) {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
 		return
 	}
-	ttl, authenticated, status, err := a.iam.AuthenticateMachine(c.Request.Context(), clientID, secret)
+	spec, authenticated, status, err := a.iam.AuthenticateMachine(c.Request.Context(), clientID, secret)
 	if err != nil || status >= 500 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "authentication unavailable"})
 		return
@@ -174,6 +175,11 @@ func (a *Handler) runnerToken(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	if spec.Type != iamv1.MachineAccountRunner {
+		c.JSON(http.StatusForbidden, gin.H{"error": "machine account type cannot obtain a Runner token"})
+		return
+	}
+	ttl := spec.TokenTTLSeconds
 	if ttl < 300 || ttl > 86400 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid authentication response"})
 		return
@@ -252,9 +258,10 @@ func (a *Handler) changePassword(c *gin.Context) {
 
 func (a *Handler) registerMachine(c *gin.Context) {
 	var input struct {
-		Name            string `json:"name"`
-		ClientSecret    string `json:"clientSecret"`
-		TokenTTLSeconds int    `json:"tokenTTLSeconds"`
+		Name            string          `json:"name"`
+		ClientSecret    string          `json:"clientSecret"`
+		TokenTTLSeconds int             `json:"tokenTTLSeconds"`
+		Type            json.RawMessage `json:"type,omitempty"`
 	}
 	if err := a.readJSON(c, &input); err != nil || !validUsername(input.Name) || len(input.ClientSecret) > 256 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid machine account"})

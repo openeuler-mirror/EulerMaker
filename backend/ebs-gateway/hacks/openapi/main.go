@@ -36,7 +36,7 @@ func main() {
 				"BearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT",
 					"description": "User or Runner token; scopes and object ownership are enforced separately."},
 				"MachineBasic": object{"type": "http", "scheme": "basic",
-					"description": "MachineAccount client ID and client secret, used only to obtain a Runner token."},
+					"description": "Runner-type MachineAccount client ID and client secret, used only to obtain a Runner token."},
 			},
 		},
 	}

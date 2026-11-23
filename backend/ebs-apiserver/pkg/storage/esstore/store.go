@@ -26,6 +26,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/util/dryrun"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-apiserver/pkg/storage/es"
 )
 
@@ -674,6 +675,9 @@ func (s *Store) objectFromHit(hit *es.Hit) (runtime.Object, error) {
 	obj := s.newFunc()
 	if err := json.Unmarshal(doc.Data, obj); err != nil {
 		return nil, apierrors.NewInternalError(fmt.Errorf("decode %s from Elasticsearch: %w", s.kind, err))
+	}
+	if account, ok := obj.(*iamv1.MachineAccount); ok && account.Spec.Type == "" {
+		account.Spec.Type = iamv1.MachineAccountRunner
 	}
 	accessor, err := meta.Accessor(obj)
 	if err != nil {

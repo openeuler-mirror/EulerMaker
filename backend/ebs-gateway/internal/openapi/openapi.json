@@ -746,6 +746,15 @@
           "tokenTTLSeconds": {
             "description": "0 or omitted: 3600; otherwise 300–86400 seconds.",
             "type": "integer"
+          },
+          "type": {
+            "default": "runner",
+            "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens and have no service permissions yet.",
+            "enum": [
+              "runner",
+              "service"
+            ],
+            "type": "string"
           }
         },
         "required": [
@@ -3090,6 +3099,14 @@
           "tokenTTLSeconds": {
             "format": "int64",
             "type": "integer"
+          },
+          "type": {
+            "description": "Type is immutable. Omitted registration input defaults to runner; service does not grant permissions.\n\nPossible enum values:\n - `\"runner\"`\n - `\"service\"`",
+            "enum": [
+              "runner",
+              "service"
+            ],
+            "type": "string"
           }
         },
         "type": "object"
@@ -3458,7 +3475,7 @@
         "type": "http"
       },
       "MachineBasic": {
-        "description": "MachineAccount client ID and client secret, used only to obtain a Runner token.",
+        "description": "Runner-type MachineAccount client ID and client secret, used only to obtain a Runner token.",
         "scheme": "basic",
         "type": "http"
       }
@@ -13412,7 +13429,7 @@
     },
     "/auth/runner-token": {
       "post": {
-        "description": "MachineAccount Basic credentials and the Runner name are required.",
+        "description": "Runner-type MachineAccount Basic credentials and the Runner name are required. Service accounts return 403. Missing or unknown account type in the IAM response returns 503.",
         "operationId": "obtainRunnerToken",
         "requestBody": {
           "content": {

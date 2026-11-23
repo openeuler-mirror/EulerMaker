@@ -44,7 +44,7 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.Name != "worker" || input.ClientSecret != "secret" {
 				t.Fatalf("unexpected machine authentication request: %+v, %v", input, err)
 			}
-			body = `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600}`
+			body = `{"authenticated":true,"name":"worker","type":"runner","tokenTTLSeconds":3600}`
 		default:
 			t.Errorf("unexpected path %s", request.URL.Path)
 		}
@@ -62,9 +62,9 @@ func TestClientUsesInternalIAMContract(t *testing.T) {
 	if err != nil || status != http.StatusOK || !valid {
 		t.Fatalf("AuthenticateUser() = %v, %d, %v", valid, status, err)
 	}
-	ttl, valid, status, err := client.AuthenticateMachine(context.Background(), "worker", "secret")
-	if err != nil || status != http.StatusOK || !valid || ttl != 3600 {
-		t.Fatalf("AuthenticateMachine() = %d, %v, %d, %v", ttl, valid, status, err)
+	spec, valid, status, err := client.AuthenticateMachine(context.Background(), "worker", "secret")
+	if err != nil || status != http.StatusOK || !valid || spec.TokenTTLSeconds != 3600 || spec.Type != "runner" {
+		t.Fatalf("AuthenticateMachine() = %+v, %v, %d, %v", spec, valid, status, err)
 	}
 	if got := strings.Join(paths, ", "); got != "GET /apis/iam.ebs/v1/users/alice, POST /internal/iam/v1/users/authenticate, POST /internal/iam/v1/machineaccounts/authenticate" {
 		t.Fatalf("unexpected IAM request sequence %q", got)

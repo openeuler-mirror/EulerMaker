@@ -150,9 +150,11 @@ export interface ManagedUser {
   spec?: { enabled?: boolean; scopes?: string[]; displayName?: string; email?: string };
 }
 
+export type MachineAccountType = "runner" | "service";
+
 export interface MachineAccount {
   metadata?: ObjectMeta;
-  spec?: { tokenTTLSeconds?: number };
+  spec?: { type?: MachineAccountType; tokenTTLSeconds?: number };
 }
 
 export interface Runner {

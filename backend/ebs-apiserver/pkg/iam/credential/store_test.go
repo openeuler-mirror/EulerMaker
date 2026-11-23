@@ -181,8 +181,8 @@ func TestAuthenticateMachine(t *testing.T) {
 		}
 	})}
 	store := NewStore(es.NewClientForTesting("http://elasticsearch", httpClient))
-	ttl, ok, err := store.AuthenticateMachine(context.Background(), "runner-site-a", secret)
-	if err != nil || !ok || ttl != 86400 {
-		t.Fatalf("authenticate machine: ttl=%d ok=%v err=%v", ttl, ok, err)
+	spec, ok, err := store.AuthenticateMachine(context.Background(), "runner-site-a", secret)
+	if err != nil || !ok || spec.TokenTTLSeconds != 86400 || spec.Type != "runner" {
+		t.Fatalf("authenticate machine: spec=%+v ok=%v err=%v", spec, ok, err)
 	}
 }

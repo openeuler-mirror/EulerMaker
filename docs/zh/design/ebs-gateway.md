@@ -332,13 +332,29 @@ Runner不使用 refresh token。短期 token到期前，Runner使用 MachineAcco
 {
   "name": "runner-site-a",
   "clientSecret": "base64url-encoded-random-secret",
+  "type": "runner",
   "tokenTTLSeconds": 3600
 }
 ```
 
-`name` 必填，必须原样满足 DNS1123 label 约束且不超过 63 个字符。`clientSecret` 必须是无填充的 Base64URL 字符串，解码后至少包含 32 字节，编码后长度不得超过 256 字节。`tokenTTLSeconds` 可选，默认为 3600，取值范围为 300 至 86400。Gateway 按原值校验和转发 `name` 与 `clientSecret`，不执行 trim、大小写转换或其他规范化。请求只接受上述三个字段，未知字段或任一字段非法时返回 400。
+`name` 必填，必须原样满足 DNS1123 label 约束且不超过 63 个字符。`clientSecret` 必须是无填充的 Base64URL 字符串，解码后至少包含 32 字节，编码后长度不得超过 256 字节。`tokenTTLSeconds` 可选，默认为 3600，取值范围为 300 至 86400。Gateway 按原值校验和转发 `name` 与 `clientSecret`，不执行 trim、大小写转换或其他规范化。请求只接受上述四个字段，未知字段或任一字段非法时返回 400。
 
 Gateway要求 admin 权限，校验请求后调用`POST /internal/iam/v1/machineaccounts/register`。成功返回201和`{"name":"runner-site-a"}`，不回显secret；名称已存在返回409，非法请求返回400。管理端将名称作为`clientID`、原始secret作为`clientSecret`组成Runner使用的机机凭据文件并通过受保护渠道下发。
+
+##### MachineAccount 类型
+
+按照 [apiserver 类型契约](ebs-apiserver.md#machineaccount-type)，本阶段仅扩展账号用途识别：
+
+- `POST /auth/machineaccounts` 的可选字段 `type=runner|service` 缺省为 runner；仅 Admin 可创建。
+- Gateway 将注册类型传给 IAM，由 apiserver 完成权威枚举校验及持久化；认证结果中的类型是账号当前事实。
+- `/auth/runner-token` 仅接受认证结果为 runner 的账号；凭据正确但类型为 service 返回 403，不签发 JWT。
+  未知或缺失认证响应类型视为上游协议异常，返回 503，不在 Gateway 猜测为 runner。
+  已存储的旧账号由 apiserver 归一为 runner 并显式返回，不要求 Gateway 解析旧对象。
+- MachineAccount.spec.type 与 JWT 的 type 是不同层次的字段；本阶段 JWT 仍仅有 user、runner 两种身份。
+- 暂不新增 `/auth/machine-token` 或 Service Token，不将 service 凭据直接作为资源 API 的 Bearer Token。
+  工程范围与操作权限后续设计，账号创建成功不代表可以更新工程或触发门禁构建。
+
+实现与部署时先使 IAM 返回明确的账号类型，再启用 Gateway 类型检查；现有 Runner 的 Token 内容和权限不变。
 
 #### 4.3.2 公开 Token 校验
 
