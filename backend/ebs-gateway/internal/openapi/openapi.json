@@ -750,7 +750,7 @@
           },
           "type": {
             "default": "runner",
-            "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens and have no service permissions yet.",
+            "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens. They may update named Projects and create Builds across Projects through the fixed Gateway allowlist.",
             "enum": [
               "runner",
               "service"
@@ -3116,7 +3116,7 @@
             "type": "integer"
           },
           "type": {
-            "description": "Type is immutable. Omitted registration input defaults to runner; service does not grant permissions.\n\nPossible enum values:\n - `\"runner\"`\n - `\"service\"`",
+            "description": "Type is immutable. Omitted registration input defaults to runner.\n\nPossible enum values:\n - `\"runner\"`\n - `\"service\"`",
             "enum": [
               "runner",
               "service"
@@ -3485,7 +3485,7 @@
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
-        "description": "User, Runner or service token. Service tokens currently support only /auth/check and do not grant resource permissions.",
+        "description": "User, Runner or service token. Service tokens may update named Projects with PUT/PATCH and create Builds in any Project. Other resource operations are denied.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -4750,7 +4750,7 @@
         ]
       },
       "patch": {
-        "description": "Project owner with user or Ops scope only; Admin has no override. Owner label is immutable.",
+        "description": "Project owner with user or Ops scope, or service token for any Project. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override.",
         "operationId": "patchProjectsObject",
         "parameters": [
           {
@@ -4868,7 +4868,7 @@
         ]
       },
       "put": {
-        "description": "Project owner with user or Ops scope only; Admin has no override. Owner label is immutable. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Project owner with user or Ops scope, or service token for any Project. Owner and server metadata remain protected; service cannot change build-purpose. Admin has no ordinary update override. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "putProjectsObject",
         "parameters": [
           {
@@ -5874,7 +5874,7 @@
         ]
       },
       "post": {
-        "description": "Project owner/member or Admin. Ops has ordinary project-member access, not a cross-project override. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
+        "description": "Project owner/member or Admin, or service token for any Project. Build inputs remain subject to apiserver validation. On creation, provide metadata.name and resource input fields; UID, generation and timestamps are server-managed. For PUT, start from the complete GET object and preserve server metadata, resourceVersion, apiVersion and kind. Ordinary updates do not change stored status; /status updates must preserve spec and metadata.",
         "operationId": "postBuildsList",
         "parameters": [
           {
@@ -12552,7 +12552,7 @@
     },
     "/auth/machine-token": {
       "post": {
-        "description": "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens identify the account by name and do not grant resource access yet. Invalid or missing account type in the IAM response returns 503.",
+        "description": "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens identify the account by name and may update named Projects with PUT/PATCH and create Builds across Projects. Other resource operations are denied. Invalid or missing account type in the IAM response returns 503.",
         "operationId": "obtainMachineToken",
         "requestBody": {
           "content": {

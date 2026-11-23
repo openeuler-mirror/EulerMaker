@@ -85,12 +85,8 @@ func (a *Auth) verifyBearer(c *gin.Context, header string) (identity.Principal, 
 	return who, true
 }
 
-// ConfirmUser validates the current user; service resource access is not enabled.
+// ConfirmUser validates User accounts; other identities are handled by their own authentication and authorization rules.
 func (a *Auth) ConfirmUser(c *gin.Context, who identity.Principal) bool {
-	if who.Type == identity.ServiceType {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "service resource access is not enabled"})
-		return false
-	}
 	if !who.IsUser() {
 		return true
 	}

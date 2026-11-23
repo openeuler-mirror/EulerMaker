@@ -108,6 +108,34 @@ func TestPublicRead(t *testing.T) {
 	}
 }
 
+func TestServiceOperationAllowlist(t *testing.T) {
+	a := &Authorizer{}
+	who := identity.Principal{Type: identity.ServiceType, Subject: "automation"}
+	for _, test := range []struct {
+		route Route
+		allow bool
+	}{
+		{Route{Resource: "projects", Name: "team", Method: http.MethodPut}, true},
+		{Route{Resource: "projects", Name: "other", Method: http.MethodPatch}, true},
+		{Route{Resource: "projects", Name: "team", Method: http.MethodGet}, false},
+		{Route{Resource: "projects", Name: "team", Subresource: "status", Method: http.MethodPut}, false},
+		{Route{Resource: "projects", Method: http.MethodPost}, false},
+		{Route{Resource: "projects", Method: http.MethodPut}, false},
+		{Route{Resource: "builds", Project: "team", Method: http.MethodPost}, true},
+		{Route{Resource: "builds", Project: "other", Method: http.MethodPost}, true},
+		{Route{Resource: "builds", Method: http.MethodPost}, false},
+		{Route{Resource: "builds", Project: "team", Name: "b", Method: http.MethodPost}, false},
+		{Route{Resource: "builds", Project: "team", Name: "b", Subresource: "abort", Method: http.MethodPost}, false},
+		{Route{Resource: "jobs", Project: "team", Method: http.MethodPost}, false},
+		{Route{Resource: "machineaccounts", Method: http.MethodGet}, false},
+	} {
+		err := a.Authorize(context.Background(), who, test.route)
+		if (err == nil) != test.allow {
+			t.Errorf("Authorize(%+v) = %v, want allowed=%v", test.route, err, test.allow)
+		}
+	}
+}
+
 func TestRunnerAndScriptAuthorization(t *testing.T) {
 	a := projectAuthorizer(t)
 	runner := identity.Principal{Type: identity.RunnerType, Subject: "runner-1", Runner: "runner-1"}

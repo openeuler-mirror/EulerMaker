@@ -333,7 +333,7 @@ func TestServiceTokenChecksCurrentAccount(t *testing.T) {
 	}
 }
 
-func TestServiceTokenDoesNotGrantResourceAccess(t *testing.T) {
+func TestServiceTokenRejectsOperationsOutsideAllowlist(t *testing.T) {
 	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
 			t.Fatalf("service request reached resource or user API: %s %s", r.Method, r.URL)
@@ -349,8 +349,12 @@ func TestServiceTokenDoesNotGrantResourceAccess(t *testing.T) {
 	for _, tc := range []struct{ method, path string }{
 		{"GET", "/apis/ebs/v1/projects"},
 		{"GET", "/apis/ebs/v1/projects/team"},
-		{"PATCH", "/apis/ebs/v1/projects/team"},
-		{"POST", "/apis/ebs/v1/projects/team/builds"},
+		{"POST", "/apis/ebs/v1/projects"},
+		{"PATCH", "/apis/ebs/v1/projects/team/status"},
+		{"GET", "/apis/ebs/v1/projects/team/builds"},
+		{"PATCH", "/apis/ebs/v1/projects/team/builds/build-1"},
+		{"DELETE", "/apis/ebs/v1/projects/team/builds/build-1"},
+		{"POST", "/apis/ebs/v1/projects/team/builds/build-1/abort"},
 		{"GET", "/apis/ebs/v1/configs/services"},
 		{"GET", "/apis/ebs/v1/runners/service/jobs?watch=true"},
 		{"GET", "/apis/ebs/v1/service-endpoints"},
@@ -365,6 +369,76 @@ func TestServiceTokenDoesNotGrantResourceAccess(t *testing.T) {
 			router.ServeHTTP(rec, req)
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestServiceTokenAllowedWrites(t *testing.T) {
+	const project = `{"apiVersion":"ebs/v1","kind":"Project","metadata":{"name":"team","uid":"project-uid","resourceVersion":"v1:1:1","labels":{"ebs.io/owner-user":"owner"}},"spec":{"description":"old"}}`
+	for _, test := range []struct {
+		name, method, path, media, body string
+		status                          int
+		forward                         bool
+	}{
+		{"project put", "PUT", "/apis/ebs/v1/projects/team", "application/json", strings.Replace(project, "old", "new", 1), 200, true},
+		{"project merge patch", "PATCH", "/apis/ebs/v1/projects/team", "application/merge-patch+json", `{"spec":{"description":"new"}}`, 200, true},
+		{"project json patch", "PATCH", "/apis/ebs/v1/projects/team", "application/json-patch+json", `[{"op":"replace","path":"/spec/description","value":"new"}]`, 200, true},
+		{"owner immutable", "PATCH", "/apis/ebs/v1/projects/team", "application/merge-patch+json", `{"metadata":{"labels":{"ebs.io/owner-user":"service"}}}`, 403, false},
+		{"purpose protected", "PATCH", "/apis/ebs/v1/projects/team", "application/merge-patch+json", `{"metadata":{"labels":{"ebs.io/build-purpose":"gating"}}}`, 403, false},
+		{"uid protected", "PATCH", "/apis/ebs/v1/projects/team", "application/merge-patch+json", `{"metadata":{"uid":"another"}}`, 403, false},
+		{"stale version", "PATCH", "/apis/ebs/v1/projects/team", "application/json-patch+json", `[{"op":"test","path":"/metadata/resourceVersion","value":"v1:0:1"}]`, 409, false},
+		{"build create", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"team"},"spec":{"type":"single","arch":"aarch64","packages":["pkg"]}}`, 201, true},
+		{"namespace mismatch", "POST", "/apis/ebs/v1/projects/team/builds", "application/json", `{"metadata":{"name":"b","namespace":"other"}}`, 400, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			forwarded := false
+			lookups := 0
+			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				status, body := http.StatusOK, project
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/apis/iam.ebs/v1/machineaccounts/service":
+					lookups++
+					body = `{"metadata":{"name":"service"},"spec":{"type":"service"}}`
+				case r.Method == http.MethodGet && r.URL.Path == "/apis/ebs/v1/projects/team":
+				case r.Method == http.MethodPut && r.URL.Path == "/apis/ebs/v1/projects/team":
+					forwarded = true
+					var obj struct {
+						Metadata struct {
+							UID, ResourceVersion string
+							Labels               map[string]string
+						}
+						Spec struct{ Description string }
+					}
+					if err := json.NewDecoder(r.Body).Decode(&obj); err != nil {
+						t.Fatal(err)
+					}
+					if obj.Spec.Description != "new" || obj.Metadata.UID != "project-uid" ||
+						obj.Metadata.ResourceVersion != "v1:1:1" || obj.Metadata.Labels["ebs.io/owner-user"] != "owner" {
+						t.Fatalf("forwarded project = %+v", obj)
+					}
+				case r.Method == http.MethodPost && r.URL.Path == "/apis/ebs/v1/projects/team/builds":
+					forwarded = true
+					status, body = http.StatusCreated, test.body
+				default:
+					t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL)
+				}
+				if r.Header.Get("Authorization") != "" {
+					t.Fatal("caller token forwarded to apiserver")
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}))
+			token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Content-Type", test.media)
+			rec := httptest.NewRecorder()
+			api.Router().ServeHTTP(rec, request)
+			if rec.Code != test.status || forwarded != test.forward || lookups != 1 {
+				t.Fatalf("status=%d forwarded=%v lookups=%d body=%s", rec.Code, forwarded, lookups, rec.Body)
 			}
 		})
 	}

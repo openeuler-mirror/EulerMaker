@@ -38,6 +38,9 @@ func New(upstreamClient *upstream.Client) *Authorizer {
 }
 
 func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, route Route) error {
+	if who.Type == identity.ServiceType {
+		return authorizeService(route)
+	}
 	if route.Resource == "projects" && route.Method == http.MethodDelete {
 		return deny("Project deletion is not available through Gateway")
 	}
@@ -67,6 +70,22 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 	default:
 		return deny("resource is not exposed")
 	}
+}
+
+func authorizeService(route Route) error {
+	if route.Subresource == "" {
+		switch route.Resource {
+		case "projects":
+			if route.Name != "" && (route.Method == http.MethodPut || route.Method == http.MethodPatch) {
+				return nil
+			}
+		case "builds":
+			if route.Project != "" && route.Name == "" && route.Method == http.MethodPost {
+				return nil
+			}
+		}
+	}
+	return deny("service operation is not allowed")
 }
 
 func IsReadOnlyProjectResource(resource string) bool {

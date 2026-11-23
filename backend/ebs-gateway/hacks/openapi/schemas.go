@@ -112,7 +112,7 @@ func schemas() object {
 	}, "currentPassword", "newPassword")
 	result["MachineRequest"] = record(object{
 		"name":            textSchema(),
-		"type":            object{"type": "string", "enum": []string{"runner", "service"}, "default": "runner", "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens and have no service permissions yet."},
+		"type":            object{"type": "string", "enum": []string{"runner", "service"}, "default": "runner", "description": "Immutable account type. Omitted: runner. Service accounts cannot obtain Runner tokens. They may update named Projects and create Builds across Projects through the fixed Gateway allowlist."},
 		"clientSecret":    object{"type": "string", "format": "password", "description": "Unpadded base64url; at least 32 decoded bytes, at most 256 encoded characters."},
 		"tokenTTLSeconds": object{"type": "integer", "description": "0 or omitted: 3600; otherwise 300–86400 seconds."},
 	}, "name", "clientSecret")

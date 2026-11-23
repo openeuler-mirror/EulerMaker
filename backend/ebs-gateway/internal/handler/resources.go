@@ -62,7 +62,7 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 				return
 			}
 		}
-		if who.Type == identity.RunnerType && resolved.Resource != "configs" {
+		if who.Type == identity.ServiceType || (who.Type == identity.RunnerType && resolved.Resource != "configs") {
 			public = false
 		}
 		if !allowedResourceMethod(resolved) {
