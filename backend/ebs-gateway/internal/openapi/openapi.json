@@ -415,7 +415,8 @@
               "type": {
                 "enum": [
                   "user",
-                  "runner"
+                  "runner",
+                  "service"
                 ],
                 "type": "string"
               }
@@ -760,6 +761,54 @@
         "required": [
           "name",
           "clientSecret"
+        ],
+        "type": "object"
+      },
+      "MachineTokenRequest": {
+        "description": "The authenticated account type selects the request shape; callers cannot choose token type or permissions.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "runner": {
+                "maxLength": 63,
+                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "runner"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "maxProperties": 0,
+            "type": "object"
+          }
+        ]
+      },
+      "MachineTokenResponse": {
+        "properties": {
+          "accessToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "maximum": 86400,
+            "minimum": 300,
+            "type": "integer"
+          },
+          "tokenType": {
+            "enum": [
+              "Bearer"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "accessToken",
+          "tokenType",
+          "expiresIn"
         ],
         "type": "object"
       },
@@ -1289,40 +1338,6 @@
           "metadata",
           "spec",
           "status"
-        ],
-        "type": "object"
-      },
-      "RunnerTokenRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "runner": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "runner"
-        ],
-        "type": "object"
-      },
-      "RunnerTokenResponse": {
-        "properties": {
-          "accessToken": {
-            "type": "string"
-          },
-          "expiresIn": {
-            "type": "integer"
-          },
-          "tokenType": {
-            "enum": [
-              "Bearer"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "accessToken",
-          "tokenType",
-          "expiresIn"
         ],
         "type": "object"
       },
@@ -3470,12 +3485,12 @@
     "securitySchemes": {
       "BearerAuth": {
         "bearerFormat": "JWT",
-        "description": "User or Runner token; scopes and object ownership are enforced separately.",
+        "description": "User, Runner or service token. Service tokens currently support only /auth/check and do not grant resource permissions.",
         "scheme": "bearer",
         "type": "http"
       },
       "MachineBasic": {
-        "description": "Runner-type MachineAccount client ID and client secret, used only to obtain a Runner token.",
+        "description": "MachineAccount client ID and client secret for /auth/machine-token. The stored account type selects Runner or service identity.",
         "scheme": "basic",
         "type": "http"
       }
@@ -12393,7 +12408,7 @@
     },
     "/auth/check": {
       "post": {
-        "description": "Accepts user and Runner Bearer tokens. No request body.",
+        "description": "Accepts user, Runner and service Bearer tokens. No request body. Service tokens require a live MachineAccount with matching name and service type. Deleted accounts return 401; recreating a service account with the same name makes unexpired tokens valid again. IAM failures return 503. Does not grant resource permissions.",
         "operationId": "checkToken",
         "responses": {
           "200": {
@@ -12537,13 +12552,13 @@
     },
     "/auth/machine-token": {
       "post": {
-        "description": "Runner-type MachineAccount Basic credentials and the Runner name are required. Service accounts return 403. Missing or unknown account type in the IAM response returns 503.",
-        "operationId": "obtainRunnerToken",
+        "description": "Requires MachineAccount Basic credentials. Runner accounts send a runner name; service accounts send an empty object. The stored account type determines the token identity. Service tokens identify the account by name and do not grant resource access yet. Invalid or missing account type in the IAM response returns 503.",
+        "operationId": "obtainMachineToken",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RunnerTokenRequest"
+                "$ref": "#/components/schemas/MachineTokenRequest"
               }
             }
           },
@@ -12554,7 +12569,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunnerTokenResponse"
+                  "$ref": "#/components/schemas/MachineTokenResponse"
                 }
               }
             },
@@ -12608,7 +12623,7 @@
             "MachineBasic": []
           }
         ],
-        "summary": "Obtain a Runner token",
+        "summary": "Obtain a machine token",
         "tags": [
           "Authentication"
         ]

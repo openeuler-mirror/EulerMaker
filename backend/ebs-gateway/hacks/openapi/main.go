@@ -34,9 +34,9 @@ func main() {
 			"responses": errorResponses(),
 			"securitySchemes": object{
 				"BearerAuth": object{"type": "http", "scheme": "bearer", "bearerFormat": "JWT",
-					"description": "User or Runner token; scopes and object ownership are enforced separately."},
+					"description": "User, Runner or service token. Service tokens currently support only /auth/check and do not grant resource permissions."},
 				"MachineBasic": object{"type": "http", "scheme": "basic",
-					"description": "Runner-type MachineAccount client ID and client secret, used only to obtain a Runner token."},
+					"description": "MachineAccount client ID and client secret for /auth/machine-token. The stored account type selects Runner or service identity."},
 			},
 		},
 	}

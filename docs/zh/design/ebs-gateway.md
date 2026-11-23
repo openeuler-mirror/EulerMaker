@@ -31,6 +31,8 @@ etcd / Elasticsearch
 
 `ebs-gateway` 不保存业务资源，User 和 MachineAccount 由 `ebs-apiserver` 的 IAM 模块提供。OAuth 使用加密 HttpOnly Cookie 携带短期登录上下文，不增加 Gateway 到 ES/etcd 的连接；多副本共享密钥环，不依赖实例会话或粘性路由。用途、期限和重放边界见 [OAuth 上下文设计](#1041-cookie-上下文与跨副本)。匿名调用方可以读取公开业务资源的完整对象，但不能 watch、写入或访问 Runner/IAM；认证用户仍按身份获得对应写权限。gateway 通过 User API 获取用户状态，并基于认证身份限制用户写入自己有权限的 Project；通过 MachineAccount 凭据认证为请求指定的 Runner 签发短期 token。
 
+Service Token 已支持换取与实时身份校验，目前资源访问统一拒绝，不继承下文的公开读取、用户或 Runner 权限。
+
 ## 二、设计目标
 
 | 目标 | 说明 |
@@ -201,7 +203,7 @@ gateway 记录结构化审计日志，建议包含：
 | `latency_ms` | 请求耗时 |
 | `client_ip` | 客户端地址 |
 | `user` | 认证后的调用方标识 |
-| `token_type` | `user` 或 `runner`；用户权限另由 scope 表示 |
+| `token_type` | `user`、`runner` 或 `service`；用户权限另由 scope 表示 |
 | `jti` | JWT 唯一标识，不记录完整 token |
 | `user_agent` | 客户端 User-Agent |
 
@@ -250,8 +252,8 @@ Runner JWT 额外包含与 Runner 对象名称一致的 `runner` claim：
 
 | Claim | 说明 |
 |------|------|
-| `sub` | 稳定调用方标识；普通用户与 User `metadata.name` 一致，Runner 与 `runner` claim 一致 |
-| `type` | 主体类别：`user` 或 `runner` |
+| `sub` | 稳定调用方标识；普通用户与 User `metadata.name` 一致，Runner 与 `runner` claim 一致，service 为 MachineAccount 名称 |
+| `type` | 主体类别：`user`、`runner` 或 `service` |
 | `runner` | Runner 对象名称，只允许 `type=runner` token 携带且必须提供 |
 | `scopes` | 用户权限；`type=user` 恰好一个，其他类型为空数组 |
 | `iss` | 固定为 `ebs-gateway`，不提供外部配置 |
@@ -269,7 +271,7 @@ JWT header 必须包含：
 
 Gateway 只接受 `HS256`，使用 `--jwt-secret-file` 指定的单一 HMAC 密钥签发 token，并使用常量时间比较验证签名。非 `HS256` 算法、header 不合法或签名错误均返回 401。密钥文件内容是单个 base64 字符串，解码后不得少于 32 字节；密钥文件缺失、无法解码或密钥过短时 gateway 拒绝启动。
 
-Gateway 必须验证 `sub`、`type`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` 和 `jti`。`sub` 必须是非空字符串，`type` 必须是合法主体类别，`scopes` 必须是数组；`type=user` 时恰好包含一个合法用户权限，`type=runner` 时为空。`iss` 和 `aud` 必须分别精确等于固定值 `ebs-gateway` 和 `ebs-api`，不接受多 audience 数组。普通用户 token 有效期在代码中固定为 24 小时，允许的时钟偏差固定为 30 秒，接受的 token 最大有效期固定为 24 小时；`iat` 和 `nbf` 均不得晚于“当前时间 + 时钟偏差”，`exp` 必须晚于“当前时间 - 时钟偏差”、`iat` 和 `nbf`，且 `exp-iat` 不得超过最大有效期。缺失必需 claim、claim 类型错误或校验失败均返回 401。
+Gateway 必须验证 `sub`、`type`、`scopes`、`iss`、`aud`、`iat`、`nbf`、`exp` 和 `jti`。`sub` 必须是非空字符串，`type` 必须是合法主体类别，`scopes` 必须是数组；`type=user` 时恰好包含一个合法用户权限，`type=runner/service` 时必须为空数组。`iss` 和 `aud` 必须分别精确等于固定值 `ebs-gateway` 和 `ebs-api`，不接受多 audience 数组。普通用户 token 有效期在代码中固定为 24 小时，允许的时钟偏差固定为 30 秒，接受的 token 最大有效期固定为 24 小时；`iat` 和 `nbf` 均不得晚于“当前时间 + 时钟偏差”，`exp` 必须晚于“当前时间 - 时钟偏差”、`iat` 和 `nbf`，且 `exp-iat` 不得超过最大有效期。缺失必需 claim、claim 类型错误或校验失败均返回 401。
 
 固定 scope 及合法组合：
 
@@ -278,9 +280,10 @@ Gateway 必须验证 `sub`、`type`、`scopes`、`iss`、`aud`、`iat`、`nbf`�
 | 普通用户 | `user` | 仅 `ebs:user` | 只由 `POST /auth/login` 签发 | 是 |
 | 运维用户 | `user` | 仅 `ebs:ops` | `spec.scopes=["ebs:ops"]` 的 User 通过 `POST /auth/login` 签发 | 是 |
 | Runner | `runner` | `[]` | 只由 `POST /auth/machine-token` 使用 MachineAccount 凭据签发 | 否 |
+| Service | `service` | `[]` | `POST /auth/machine-token` 使用 service 账号凭据签发 | 否，实时核验 MachineAccount |
 | 管理员 | `user` | 仅 `ebs:admin` | `spec.scopes=["ebs:admin"]` 的 User 通过 `POST /auth/login` 签发 | 是 |
 
-JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发 `type=user` 且仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 之一的 token；`POST /auth/machine-token` 使用 MachineAccount 凭据签发 `type=runner`、`scopes=[]` 的 token。调用方不能指定 type、scope、`sub`、有效期或 `runner` claim。用户权限不可重复、未知或组合，主体类型与 scopes 不匹配时返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
+JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发 `type=user` 且仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 之一的 token；`POST /auth/machine-token` 根据已认证 MachineAccount 类型签发 runner 或 service Token，两者 scopes 均为空。调用方不能指定 type、scope、`sub`、有效期或 `runner` claim。用户权限不可重复、未知或组合，主体类型与 scopes 不匹配时返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
 
 此次 Token 格式变更不兼容缺少 `type` 或仍使用旧机器权限 scope 的 Token；部署后用户需重新登录，Runner 需重新换取 Token。
 
@@ -296,7 +299,7 @@ JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `s
 | scope 未知、冲突或组合不合法 | 401 |
 | Runner token 缺少合法 `runner` claim | 401 |
 
-#### 4.3.1 MachineAccountAndRunnerTokenExchange
+#### 4.3.1 MachineAccountTokenExchange
 
 Runner 使用 HTTP Basic 提交 MachineAccount 名称和 client secret，并在 JSON 请求体中声明 Runner 名称：
 
@@ -343,16 +346,22 @@ Gateway要求 admin 权限，校验请求后调用`POST /internal/iam/v1/machine
 
 ##### MachineAccount 类型
 
-按照 [apiserver 类型契约](ebs-apiserver.md#machineaccount-type)，本阶段仅扩展账号用途识别：
+按照 [apiserver 类型契约](ebs-apiserver.md#machineaccount-type)，账号类型决定换取身份：
 
 - `POST /auth/machineaccounts` 的可选字段 `type=runner|service` 缺省为 runner；仅 Admin 可创建。
 - Gateway 将注册类型传给 IAM，由 apiserver 完成权威枚举校验及持久化；认证结果中的类型是账号当前事实。
-- `/auth/machine-token` 仅接受认证结果为 runner 的账号；凭据正确但类型为 service 返回 403，不签发 JWT。
+- `/auth/machine-token` 支持 runner 和 service 账号。runner 请求提供合法 runner 名称；service 请求必须为 `{}`，不能携带 runner 字段，包括空值或 null。
   未知或缺失认证响应类型视为上游协议异常，返回 503，不在 Gateway 猜测为 runner。
   已存储的旧账号由 apiserver 归一为 runner 并显式返回，不要求 Gateway 解析旧对象。
-- MachineAccount.spec.type 与 JWT 的 type 是不同层次的字段；本阶段 JWT 仍仅有 user、runner 两种身份。
-- 暂不签发 Service Token，不将 service 凭据直接作为资源 API 的 Bearer Token。
-  工程范围与操作权限后续设计，账号创建成功不代表可以更新工程或触发门禁构建。
+- service Token 的 `type=service`、`sub` 为账号名称，`scopes=[]`，不携带 runner claim。
+  类型、主体、权限和有效期不能由交换请求指定。
+- 两类交换沿用相同的响应格式、有效期、no-store 和限流规则；service 同样通过重新交换续期，不使用 refresh token。
+- Service Token 每次校验都通过现有内部连接读取 `GET /apis/iam.ebs/v1/machineaccounts/{sub}`，不缓存结果。
+  名称及 type=service 必须匹配，不比较账号 UID；账号不存在、名称或类型不匹配返回 401，上游异常或响应无效返回 503。
+  账号删除后请求暂时失效；同名 service 账号重建后，未过期的旧 Token 恢复有效。
+  更换 secret 只影响后续换取，不撤销已签发 Token。Runner Token 的既有到期规则不变。
+- 当前 service 只可换取 Token 和调用 `/auth/check`，业务资源及 IAM 管理请求返回 403，不走匿名读取兜底。
+  不映射同名 User，不授予工程更新、Build 创建或 Runner 权限。
 
 实现与部署时先使 IAM 返回明确的账号类型，再启用 Gateway 类型检查；现有 Runner 的 Token 内容和权限不变。
 
@@ -365,9 +374,9 @@ POST /auth/check
 Authorization: Bearer <token>
 ```
 
-该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查 scopes。Token 非法返回 401，携带非空请求正文返回 400，超过按 `{sub}/{clientIP}` 计算的限流返回 429。接口不查询 User、Runner 或 Job，不执行资源授权，也不向 apiserver 转发。
+该接口不要求 mTLS 客户端证书、服务凭据或其他服务身份。Gateway 验证 JWT 签名、issuer、audience、时间字段和 scope 结构；成功返回认证身份、Token scopes 和过期时间，调用方根据自身需求检查 scopes。Token 非法返回 401，携带非空请求正文返回 400，超过按 `{sub}/{clientIP}` 计算的限流返回 429。接口不查询 User、Runner 或 Job，不执行资源授权；service 额外执行 MachineAccount 实时核验，IAM 异常返回 503。
 
-响应中的 `identity.type` 表示已验证的主体类别：用户返回 `user`，Runner 返回 `runner`。用户权限由 `identity.scopes` 表示；Runner 的 scopes 为空数组。
+响应中的 `identity.type` 表示已验证的主体类别：用户返回 `user`，Runner 返回 `runner`，服务账号返回 `service` 和 MachineAccount 名称。Runner/Service 的 scopes 均为空数组。
 
 ### 4.4 RegistrationAndPasswordLogin
 
@@ -789,7 +798,7 @@ Gateway 提供对外 API 的 OpenAPI 3.0 JSON 文档，前端展示方式见 [�
 
 #### 身份与权限表达
 
-OpenAPI 的 `securitySchemes` 定义 HTTP Bearer JWT 和 MachineAccount Basic 认证。各操作单独声明认证要求：匿名接口使用空 security，允许匿名或 JWT 的操作列出两种选择，Runner token 换取接口使用 Basic。
+OpenAPI 的 `securitySchemes` 定义 HTTP Bearer JWT 和 MachineAccount Basic 认证。各操作单独声明认证要求：匿名接口使用空 security，允许匿名或 JWT 的操作列出两种选择，机器账号 token 换取接口使用 Basic，区分 runner 名称请求与 service 空对象请求。
 
 Bearer scheme 只表达令牌格式，不能表达 owner/member、Ops/Admin 或 Runner 任务归属。各操作的 description 应明确允许的身份与对象关系，沿用 5.1 和第四章的规则。文档向所有查看者展示同一接口集合，接口可见不代表调用获授权；不读取当前用户或 Project 数据来动态裁剪文档。
 
@@ -938,7 +947,7 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | 登录接口泄漏密码 | 登录请求体不记录日志，gateway 与 apiserver 之间使用 TLS，错误响应不回显输入 |
 | 密码暴力尝试 | gateway 按账号和客户端地址限流，IAM 模块维护失败次数和临时锁定状态 |
 | MachineAccount凭据泄漏 | 删除账号并使用新secret创建账号；每个Runner或受控站点使用独立账号和随机secret，secret只从受限文件读取且不写日志 |
-| MachineAccount提升权限 | 交换接口只固定签发`type=runner`、`scopes=[]`，调用方不能指定scope、TTL或除Runner名称外的claim |
+| MachineAccount提升权限 | 交换接口按已认证账号类型签发 Runner/Service Token，scopes为空；调用方不能自报身份或权限，service 无资源访问权限 |
 | 已删除或禁用的用户访问 | UserResolve 返回 403，不进入业务鉴权 |
 | User API 不可用 | 仅使用仍有效的短期缓存；无有效缓存时返回 503，不默认放行 |
 | Admin 越权操作管理员 User | User list 过滤 `spec.scopes=["ebs:admin"]` 对象；单对象读取和写入先校验旧对象；PUT/PATCH 保护管理员角色 |
@@ -964,8 +973,9 @@ curl -N 'http://localhost:8080/apis/ebs/v1/runners/runner-001/jobs?watch=true&al
 | Registration | User和密码哈希单文档原子创建、注册成功但不签发token、User固定启用、未知/越权字段、用户名和email校验、密码长度、重复用户名、请求体过大、限流、IAM不可用、REST响应不包含credential以及敏感字段不入日志 |
 | MachineAccountRegistration | 对象和凭据原子创建、重复名称409、非法名称/secret/TTL、响应不回显secret、通用资源POST返回405、非Admin返回403以及失败不保留可认证账号 |
 | PasswordLogin | User 根据唯一的 `spec.scopes` 获得 `ebs:user`、`ebs:ops` 或 `ebs:admin`、请求 scope 不产生提权、非法或多 scope 配置、密码错误、用户不存在、用户禁用、账号锁定、认证接口不可用和登录限流 |
-| RunnerTokenExchange | MachineAccount认证成功、不存在/错误secret统一401、非法Runner名称400、固定scope和TTL、独立限流、响应no-store以及凭据不入日志 |
-| TokenCheck | 公开访问、合法身份与 scopes 响应、非法 Token 401、非空请求正文 400 和调用方限流 |
+| MachineTokenExchange | MachineAccount认证成功、不存在/错误secret统一401、非法Runner名称400、固定scope和TTL、独立限流、响应no-store以及凭据不入日志 |
+| TokenCheck | 合法身份与 scopes 响应、service 逐请求账号核验、删除时拒绝、同名重建后旧Token恢复、上游异常503、非法 Token 401、非空请求正文400及限流 |
+| ServiceIdentity | 按名称核验、空scope、拒绝caller指定身份、service不继承公开读取或用户/Runner权限 |
 | UserResolve | User 不存在、名称与 JWT `sub` 不匹配、禁用、Token scope 与当前唯一 User scope 不一致、缓存命中和 User API 不可用；runner token 跳过 User 查询 |
 | Header | 不向上游转发外部 Bearer Token，也不注入最终用户身份 |
 | ProjectAuthz | 普通用户和 Ops 按 owner/member 关系操作 Project 与子资源；公开读取不按 owner/member 过滤；Runner 可以创建、读取和受限更新自身 Runner，只能 list/watch 自身已分配 Job，并对匹配的单个 Job执行 get和 status写入 |

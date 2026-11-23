@@ -24,11 +24,12 @@ type Scope string
 type Type string
 
 const (
-	UserScope  Scope = "ebs:user"
-	OpsScope   Scope = "ebs:ops"
-	AdminScope Scope = "ebs:admin"
-	UserType   Type  = "user"
-	RunnerType Type  = "runner"
+	UserScope   Scope = "ebs:user"
+	OpsScope    Scope = "ebs:ops"
+	AdminScope  Scope = "ebs:admin"
+	UserType    Type  = "user"
+	RunnerType  Type  = "runner"
+	ServiceType Type  = "service"
 )
 
 type Principal struct {
@@ -142,6 +143,9 @@ func validClaims(c claims, now time.Time) bool {
 		return false
 	}
 	var scope Scope
+	if c.Type != UserType && len(c.Scopes) != 0 {
+		return false
+	}
 	if len(c.Scopes) == 1 {
 		scope = c.Scopes[0]
 	}
@@ -158,6 +162,8 @@ func validClaims(c claims, now time.Time) bool {
 
 func validIdentity(kind Type, scope Scope, runner, subject string) bool {
 	switch kind {
+	case ServiceType:
+		return scope == "" && runner == ""
 	case RunnerType:
 		return scope == "" && runner != "" && runner == subject
 	case UserType:

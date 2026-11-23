@@ -139,7 +139,7 @@ func (a *Handler) Middleware() Middleware {
 type Endpoints struct {
 	RegisterUser    gin.HandlerFunc
 	Login           gin.HandlerFunc
-	RunnerToken     gin.HandlerFunc
+	MachineToken    gin.HandlerFunc
 	CheckToken      gin.HandlerFunc
 	ChangePassword  gin.HandlerFunc
 	RegisterMachine gin.HandlerFunc
@@ -148,6 +148,6 @@ type Endpoints struct {
 }
 
 func (a *Handler) Endpoints() Endpoints {
-	return Endpoints{a.registerUser, a.login, a.runnerToken, a.checkToken, a.changePassword,
+	return Endpoints{a.registerUser, a.login, a.machineToken, a.checkToken, a.changePassword,
 		a.registerMachine, a.getOrdinaryUser, a.listOrdinaryUsers}
 }
