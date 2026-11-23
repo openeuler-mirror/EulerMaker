@@ -118,10 +118,10 @@ func TestTransformedResponseSchemas(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, fields := range map[string][]string{
-		"ServiceEndpoints":    {"artifactManagers", "gitServer"},
-		"LoginResponse":       {"token", "tokenType", "expiresIn"},
-		"RunnerTokenResponse": {"accessToken", "tokenType", "expiresIn"},
-		"CheckResponse":       {"authenticated", "identity", "expiresAt"},
+		"ServiceEndpoints":     {"artifactManagers", "gitServer"},
+		"LoginResponse":        {"token", "tokenType", "expiresIn"},
+		"MachineTokenResponse": {"accessToken", "tokenType", "expiresIn"},
+		"CheckResponse":        {"authenticated", "identity", "expiresAt"},
 	} {
 		var schema struct {
 			Properties map[string]json.RawMessage `json:"properties"`
@@ -137,6 +137,46 @@ func TestTransformedResponseSchemas(t *testing.T) {
 				t.Fatalf("%s missing %s", name, field)
 			}
 		}
+	}
+}
+
+func TestMachineTokenSchemas(t *testing.T) {
+	var doc struct {
+		Components struct {
+			Schemas map[string]struct {
+				OneOf []struct {
+					Type                 string
+					AdditionalProperties bool
+					Required             []string
+					MaxProperties        *int
+					Properties           map[string]json.RawMessage
+				}
+				Properties map[string]json.RawMessage
+			}
+		}
+	}
+	if err := json.Unmarshal(document, &doc); err != nil {
+		t.Fatal(err)
+	}
+	variants := doc.Components.Schemas["MachineTokenRequest"].OneOf
+	if len(variants) != 2 {
+		t.Fatalf("machine token variants=%+v", variants)
+	}
+	runner, service := variants[0], variants[1]
+	if runner.Type != "object" || runner.AdditionalProperties || len(runner.Required) != 1 || runner.Required[0] != "runner" || len(runner.Properties) != 1 {
+		t.Fatalf("runner request=%+v", runner)
+	}
+	if service.Type != "object" || service.AdditionalProperties || service.MaxProperties == nil || *service.MaxProperties != 0 {
+		t.Fatalf("service request=%+v", service)
+	}
+	var identity struct {
+		Properties map[string]struct{ Enum []string }
+	}
+	if err := json.Unmarshal(doc.Components.Schemas["CheckResponse"].Properties["identity"], &identity); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(identity.Properties["type"].Enum, ","); got != "user,runner,service" {
+		t.Fatalf("identity types=%s", got)
 	}
 }
 

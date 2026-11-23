@@ -202,7 +202,7 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 			body:   `{"name":"worker","clientSecret":"` + secret + `"}`,
 			esPath: "/ebs-machineaccounts/_doc/worker",
 			document: es.IAMDocument{
-				Document:   es.Document{Data: json.RawMessage(`{"spec":{"tokenTTLSeconds":3600}}`)},
+				Document:   es.Document{Data: json.RawMessage(`{"metadata":{"name":"worker"},"spec":{"tokenTTLSeconds":3600}}`)},
 				Credential: machineCredential,
 			},
 			response: `{"authenticated":true,"name":"worker","type":"runner","tokenTTLSeconds":3600}`,
@@ -212,7 +212,7 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 			body:   `{"name":"worker","clientSecret":"` + secret + `"}`,
 			esPath: "/ebs-machineaccounts/_doc/worker",
 			document: es.IAMDocument{
-				Document:   es.Document{Data: json.RawMessage(`{"spec":{"type":"service","tokenTTLSeconds":3600}}`)},
+				Document:   es.Document{Data: json.RawMessage(`{"metadata":{"name":"worker"},"spec":{"type":"service","tokenTTLSeconds":3600}}`)},
 				Credential: machineCredential,
 			},
 			response: `{"authenticated":true,"name":"worker","type":"service","tokenTTLSeconds":3600}`,

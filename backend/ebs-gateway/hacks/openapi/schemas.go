@@ -86,15 +86,22 @@ func schemas() object {
 		"token": textSchema(), "tokenType": object{"type": "string", "enum": []string{"Bearer"}},
 		"expiresIn": object{"type": "integer", "description": "Token lifetime in seconds."},
 	}, "token", "tokenType", "expiresIn")
-	result["RunnerTokenRequest"] = record(object{"runner": textSchema()}, "runner")
-	result["RunnerTokenResponse"] = record(object{
+	runnerTokenRequest := record(object{"runner": object{
+		"type": "string", "maxLength": 63, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+	}}, "runner")
+	runnerTokenRequest["additionalProperties"] = false
+	result["MachineTokenRequest"] = object{
+		"description": "The authenticated account type selects the request shape; callers cannot choose token type or permissions.",
+		"oneOf":       []object{runnerTokenRequest, {"type": "object", "additionalProperties": false, "maxProperties": 0}},
+	}
+	result["MachineTokenResponse"] = record(object{
 		"accessToken": textSchema(), "tokenType": object{"type": "string", "enum": []string{"Bearer"}},
-		"expiresIn": object{"type": "integer"},
+		"expiresIn": object{"type": "integer", "minimum": 300, "maximum": 86400},
 	}, "accessToken", "tokenType", "expiresIn")
 	result["CheckResponse"] = record(object{
 		"authenticated": object{"type": "boolean"},
 		"identity": record(object{
-			"type": object{"type": "string", "enum": []string{"user", "runner"}}, "name": textSchema(),
+			"type": object{"type": "string", "enum": []string{"user", "runner", "service"}}, "name": textSchema(),
 			"scopes": object{"type": "array", "items": textSchema()},
 		}, "type", "name", "scopes"),
 		"expiresAt": object{"type": "string", "format": "date-time"},
@@ -109,7 +116,7 @@ func schemas() object {
 		"clientSecret":    object{"type": "string", "format": "password", "description": "Unpadded base64url; at least 32 decoded bytes, at most 256 encoded characters."},
 		"tokenTTLSeconds": object{"type": "integer", "description": "0 or omitted: 3600; otherwise 300–86400 seconds."},
 	}, "name", "clientSecret")
-	for _, name := range []string{"LoginRequest", "RegisterRequest", "RunnerTokenRequest", "PasswordRequest", "MachineRequest", "JobAbort"} {
+	for _, name := range []string{"LoginRequest", "RegisterRequest", "PasswordRequest", "MachineRequest", "JobAbort"} {
 		result[name].(map[string]any)["additionalProperties"] = false
 	}
 	result["BuildCreate"].(map[string]any)["example"] = object{

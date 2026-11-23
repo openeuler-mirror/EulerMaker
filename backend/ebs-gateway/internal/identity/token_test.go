@@ -2,6 +2,7 @@ package identity
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -57,5 +58,52 @@ func TestRunnerTypeRequiresMatchingSubject(t *testing.T) {
 		if err != nil || who.Type != test.kind || who.Scope != "" {
 			t.Fatalf("verify %s token: principal=%+v err=%v", test.kind, who, err)
 		}
+	}
+}
+
+func TestServiceTokenIdentity(t *testing.T) {
+	tokens, err := NewTokens(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1790000000, 0)
+	token, err := tokens.Issue("release-management", "", ServiceType, "", time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	who, err := tokens.Verify(token, now)
+	if err != nil || who.Type != ServiceType || who.Subject != "release-management" || who.IsUser() || who.IsPrivileged() {
+		t.Fatalf("principal=%+v err=%v", who, err)
+	}
+	parts := strings.Split(token, ".")
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original claims
+	if err := json.Unmarshal(payload, &original); err != nil {
+		t.Fatal(err)
+	}
+	if original.Runner != "" || len(original.Scopes) != 0 || original.Scopes == nil {
+		t.Fatalf("service claims=%+v", original)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*claims)
+	}{
+		{"runner claim", func(c *claims) { c.Runner = c.Subject }},
+		{"user scope", func(c *claims) { c.Scopes = []Scope{AdminScope} }},
+		{"empty scope entry", func(c *claims) { c.Scopes = []Scope{""} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := original
+			test.mutate(&c)
+			data, _ := json.Marshal(c)
+			unsigned := parts[0] + "." + base64.RawURLEncoding.EncodeToString(data)
+			signed := unsigned + "." + base64.RawURLEncoding.EncodeToString(tokens.signature(unsigned))
+			if _, err := tokens.Verify(signed, now); err == nil {
+				t.Fatal("invalid service identity accepted")
+			}
+		})
 	}
 }

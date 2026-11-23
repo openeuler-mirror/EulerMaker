@@ -148,17 +148,17 @@ func (a *Handler) login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"token": token, "tokenType": "Bearer", "expiresIn": 86400})
 }
 
-func (a *Handler) runnerToken(c *gin.Context) {
+func (a *Handler) machineToken(c *gin.Context) {
 	clientID, secret, ok := c.Request.BasicAuth()
 	if !ok || !validUsername(clientID) || secret == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 	var input struct {
-		Runner string `json:"runner"`
+		Runner json.RawMessage `json:"runner"`
 	}
-	if err := a.readJSON(c, &input); err != nil || !validUsername(input.Runner) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runner"})
+	if err := a.readJSON(c, &input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid token request"})
 		return
 	}
 	if !a.machineLimit.Allow(clientID + "/" + c.ClientIP()) {
@@ -175,16 +175,26 @@ func (a *Handler) runnerToken(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	if spec.Type != iamv1.MachineAccountRunner {
-		c.JSON(http.StatusForbidden, gin.H{"error": "machine account type cannot obtain a Runner token"})
-		return
-	}
 	ttl := spec.TokenTTLSeconds
 	if ttl < 300 || ttl > 86400 {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "invalid authentication response"})
 		return
 	}
-	token, err := a.tokens.Issue(input.Runner, input.Runner, identity.RunnerType, "", time.Duration(ttl)*time.Second, a.now())
+	var token string
+	if spec.Type == iamv1.MachineAccountService {
+		if len(input.Runner) != 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "service token request must be empty"})
+			return
+		}
+		token, err = a.tokens.Issue(spec.Name, "", identity.ServiceType, "", time.Duration(ttl)*time.Second, a.now())
+	} else {
+		var runner string
+		if err := json.Unmarshal(input.Runner, &runner); err != nil || !validUsername(runner) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid runner"})
+			return
+		}
+		token, err = a.tokens.Issue(runner, runner, identity.RunnerType, "", time.Duration(ttl)*time.Second, a.now())
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token unavailable"})
 		return

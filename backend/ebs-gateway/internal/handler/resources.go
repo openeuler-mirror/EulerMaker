@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 	"ebs-gateway/internal/policy"
@@ -126,10 +127,25 @@ func (a *Handler) verifyBearer(c *gin.Context, header string) (identity.Principa
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return identity.Principal{}, false
 	}
+	if who.Type == identity.ServiceType {
+		account, status, err := a.iam.GetMachine(c.Request.Context(), who.Subject)
+		if err != nil || (status != http.StatusOK && status != http.StatusNotFound) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "machine account service unavailable"})
+			return identity.Principal{}, false
+		}
+		if status == http.StatusNotFound || account.Name != who.Subject || account.Spec.Type != iamv1.MachineAccountService {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return identity.Principal{}, false
+		}
+	}
 	return who, true
 }
 
 func (a *Handler) confirmUser(c *gin.Context, who identity.Principal) bool {
+	if who.Type == identity.ServiceType {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "service resource access is not enabled"})
+		return false
+	}
 	if !who.IsUser() {
 		return true
 	}

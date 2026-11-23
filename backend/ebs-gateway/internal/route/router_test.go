@@ -214,16 +214,23 @@ func newTestAPI(t *testing.T, transport http.RoundTripper) *testAPI {
 	return &testAPI{Handler: api, tokens: tokens, now: now}
 }
 
-func TestRunnerTokenAccountType(t *testing.T) {
+func TestMachineTokenAccountType(t *testing.T) {
 	for _, tc := range []struct {
-		name, typeField            string
+		name, typeField, body      string
 		upstreamStatus, wantStatus int
 	}{
-		{"runner", `,"type":"runner"`, 200, 200},
-		{"service", `,"type":"service"`, 200, 403},
-		{"missing type", "", 200, 503},
-		{"unknown type", `,"type":"unknown"`, 200, 503},
-		{"invalid credentials", "", 401, 401},
+		{"runner", `,"type":"runner"`, `{"runner":"runner-1"}`, 200, 200},
+		{"service", `,"type":"service"`, `{}`, 200, 200},
+		{"service runner field", `,"type":"service"`, `{"runner":"runner-1"}`, 200, 400},
+		{"service null runner", `,"type":"service"`, `{"runner":null}`, 200, 400},
+		{"service empty runner", `,"type":"service"`, `{"runner":""}`, 200, 400},
+		{"caller type", `,"type":"service"`, `{"type":"user"}`, 200, 400},
+		{"caller scope", `,"type":"service"`, `{"scopes":["ebs:admin"]}`, 200, 400},
+		{"runner missing name", `,"type":"runner"`, `{}`, 200, 400},
+		{"missing type", "", `{}`, 200, 503},
+		{"unknown type", `,"type":"unknown"`, `{}`, 200, 503},
+		{"invalid credentials", "", `{}`, 401, 401},
+		{"upstream unavailable", "", `{}`, 503, 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -233,7 +240,7 @@ func TestRunnerTokenAccountType(t *testing.T) {
 				body := `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600` + tc.typeField + `}`
 				return &http.Response{StatusCode: tc.upstreamStatus, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			req := httptest.NewRequest(http.MethodPost, "/auth/machine-token", strings.NewReader(`{"runner":"runner-1"}`))
+			req := httptest.NewRequest(http.MethodPost, "/auth/machine-token", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetBasicAuth("worker", "secret")
 			rec := httptest.NewRecorder()
@@ -244,6 +251,7 @@ func TestRunnerTokenAccountType(t *testing.T) {
 			var result struct {
 				AccessToken string
 				ExpiresIn   int
+				TokenType   string
 			}
 			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
@@ -255,8 +263,108 @@ func TestRunnerTokenAccountType(t *testing.T) {
 				return
 			}
 			who, err := api.tokens.Verify(result.AccessToken, api.now())
-			if err != nil || who.Type != identity.RunnerType || who.Runner != "runner-1" || result.ExpiresIn != 3600 {
+			if err != nil || who.Scope != "" || result.ExpiresIn != 3600 || result.TokenType != "Bearer" || rec.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("token principal=%+v expiresIn=%d error=%v", who, result.ExpiresIn, err)
+			}
+			if tc.name == "service" {
+				if who.Type != identity.ServiceType || who.Subject != "worker" || who.Runner != "" {
+					t.Fatalf("service principal=%+v", who)
+				}
+			} else if who.Type != identity.RunnerType || who.Subject != "runner-1" || who.Runner != "runner-1" {
+				t.Fatalf("runner principal=%+v", who)
+			}
+		})
+	}
+}
+
+func TestServiceTokenChecksCurrentAccount(t *testing.T) {
+	status := http.StatusOK
+	account := `{"metadata":{"name":"service","uid":"uid-1"},"spec":{"type":"service"}}`
+	lookups := 0
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		lookups++
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(account))}, nil
+	}))
+	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct {
+		name, body   string
+		status, want int
+	}{
+		{"current", account, 200, 200},
+		{"name only", `{"metadata":{"name":"service"},"spec":{"type":"service"}}`, 200, 200},
+		{"deleted", `{}`, 404, 401},
+		{"recreated", `{"metadata":{"name":"service","uid":"uid-2"},"spec":{"type":"service"}}`, 200, 200},
+		{"wrong name", `{"metadata":{"name":"other","uid":"uid-1"},"spec":{"type":"service"}}`, 200, 401},
+		{"wrong type", `{"metadata":{"name":"service","uid":"uid-1"},"spec":{"type":"runner"}}`, 200, 401},
+		{"unavailable", `{}`, 503, 503},
+		{"malformed", `{}`, 200, 503},
+		{"recovered", account, 200, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, account = tc.status, tc.body
+			before := lookups
+			req := httptest.NewRequest(http.MethodPost, "/auth/check", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.want || lookups != before+1 {
+				t.Fatalf("status=%d lookups=%d body=%s", rec.Code, lookups-before, rec.Body)
+			}
+			if tc.want == http.StatusOK {
+				var result struct {
+					Authenticated bool
+					Identity      struct {
+						Type, Name string
+						Scopes     []string
+					}
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || !result.Authenticated || result.Identity.Type != "service" || result.Identity.Name != "service" || result.Identity.Scopes == nil || len(result.Identity.Scopes) != 0 {
+					t.Fatalf("check response=%s err=%v", rec.Body, err)
+				}
+			}
+		})
+	}
+}
+
+func TestServiceTokenDoesNotGrantResourceAccess(t *testing.T) {
+	api := newTestAPI(t, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/apis/iam.ebs/v1/machineaccounts/service" {
+			t.Fatalf("service request reached resource or user API: %s %s", r.Method, r.URL)
+		}
+		body := `{"metadata":{"name":"service","uid":"uid-1"},"spec":{"type":"service"}}`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	token, err := api.tokens.Issue("service", "", identity.ServiceType, "", time.Hour, api.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := api.Router()
+	for _, tc := range []struct{ method, path string }{
+		{"GET", "/apis/ebs/v1/projects"},
+		{"GET", "/apis/ebs/v1/projects/team"},
+		{"PATCH", "/apis/ebs/v1/projects/team"},
+		{"POST", "/apis/ebs/v1/projects/team/builds"},
+		{"GET", "/apis/ebs/v1/configs/services"},
+		{"GET", "/apis/ebs/v1/runners/service/jobs?watch=true"},
+		{"GET", "/apis/ebs/v1/service-endpoints"},
+		{"GET", "/apis/iam.ebs/v1/machineaccounts"},
+		{"POST", "/auth/machineaccounts"},
+		{"PUT", "/auth/users/service/password"},
+	} {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
 			}
 		})
 	}
