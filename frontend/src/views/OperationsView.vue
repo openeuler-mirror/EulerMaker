@@ -120,7 +120,7 @@
 <script setup lang="ts">
 import { CircleCheckFilled, Refresh, Search, WarningFilled } from "@element-plus/icons-vue";
 import { computed, nextTick, ref, watch } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { parse, stringify } from "yaml";
 import { useI18n } from "vue-i18n";
 import { errorTranslationKey, list, request } from "@/api";
@@ -143,7 +143,7 @@ type ResourceConfigView = { config: Config; content: BuildResourceContent };
 const { t } = useI18n();
 const session = useSessionStore();
 const route = useRoute();
-const activeSection = ref<OperationsSection>("build");
+const router = useRouter();
 const operationSections = computed<Array<{ id: OperationsSection; label: string }>>(() => [
   { id: "build", label: t("operations.buildConfiguration") },
   { id: "services", label: t("serviceConfig.title") },
@@ -151,6 +151,9 @@ const operationSections = computed<Array<{ id: OperationsSection; label: string 
   { id: "scripts", label: t("scripts.title") },
   { id: "runners", label: t("operations.runnerManagement") },
 ]);
+const activeSection = computed<OperationsSection>(() =>
+  operationSections.value.find(item => item.id === route.query.section)?.id || "build",
+);
 const canManageRunners = computed(() => session.role === "admin" || session.role === "ops");
 const labelRunner = ref<Runner | null>(null);
 const labelRows = ref<RunnerLabelRow[]>([]);
@@ -197,7 +200,12 @@ function removableRunner(runner: Runner | null): boolean {
   return runner?.status?.phase === "Evicted" || runner?.status?.phase === "Offline";
 }
 function selectSection(section: OperationsSection): void {
-  activeSection.value = section;
+  const query = { ...route.query };
+  if (section === "build") delete query.section;
+  else query.section = section;
+  void router.replace({ query });
+}
+function loadSection(section: OperationsSection): void {
   success.value = "";
   if (section === "resources" && !editing.value && !resourcesLoading.value) void loadResources();
   if (section === "runners" && !runners.value.length && !runnersLoading.value) void loadRunners();
@@ -440,9 +448,7 @@ async function loadAll<T>(path: string): Promise<T[]> {
   } while (token);
   return items;
 }
-watch(() => route.query.section, section => {
-  if (section === "runners") selectSection("runners");
-}, { immediate: true });
+watch(activeSection, loadSection, { immediate: true });
 </script>
 
 <style scoped>

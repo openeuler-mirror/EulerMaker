@@ -131,5 +131,4 @@ test("Runner navigation is restricted to Ops/Admin and returns to the Runner tab
   const operations = readFileSync(new URL("../src/views/OperationsView.vue", import.meta.url), "utf8");
   assert.match(operations, /name: 'runner', params: \{ name: runner\.metadata\.name \}/);
   assert.match(source, /name: 'operations', query: \{ section: 'runners' \}/);
-  assert.match(operations, /if \(section === "runners"\) selectSection\("runners"\)/);
 });
