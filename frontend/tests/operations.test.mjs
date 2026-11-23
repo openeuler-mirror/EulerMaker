@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { compile } from "@vue/compiler-dom";
 import * as Vue from "vue";
+import { createMemoryHistory, createRouter } from "vue-router";
 import { renderToString } from "@vue/server-renderer";
 import ts from "typescript";
 
@@ -220,7 +221,7 @@ test("Runner capacity headers have Chinese and English labels", async () => {
 function runnerFilterView(list) {
   const declarations = source.slice(source.indexOf("const runners ="), source.indexOf("const resourcesLoading ="));
   const actions = source.slice(source.indexOf("function searchRunners("), source.indexOf("function openRunnerLabels("));
-  const pagination = source.slice(source.indexOf("async function loadAll<"), source.indexOf("watch(() => route.query.section"));
+  const pagination = source.slice(source.indexOf("async function loadAll<"), source.indexOf("watch(activeSection"));
   const code = ts.transpileModule(declarations + actions + pagination, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
   }).outputText;
@@ -229,6 +230,83 @@ function runnerFilterView(list) {
     Vue.ref, Vue.computed, list, () => "operations.loadRunnersFailed", searchHelpers.runnerSearchOptions, searchHelpers.runnerSearchSuggestions, Vue.nextTick, searchHelpers.compileRunnerLabelSelector,
   );
 }
+
+function operationsNavigation(router) {
+  const calls = [];
+  const script = source.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1].replace(/^import .*;\n/gm, "");
+  const code = ts.transpileModule(script, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText;
+  const dependencies = {
+    computed: Vue.computed, ref: Vue.ref, watch: Vue.watch, nextTick: Vue.nextTick,
+    useRoute: () => ({ get query() { return router.currentRoute.value.query; } }), useRouter: () => router,
+    useI18n: () => ({ t: key => key }), useSessionStore: () => ({ role: "ops" }),
+    ...searchHelpers, ...labelHelpers,
+    list: async path => { calls.push(path); return { items: [], next: "" }; },
+    errorTranslationKey: () => "errors.unavailable",
+  };
+  const scope = Vue.effectScope();
+  const state = scope.run(() => new Function(...Object.keys(dependencies), code +
+    "\nreturn { activeSection, selectSection };")(...Object.values(dependencies)));
+  return { ...state, calls, dispose: () => scope.stop() };
+}
+
+function navigationRouter() {
+  return createRouter({ history: createMemoryHistory(), routes: [
+    { path: "/operations", name: "operations", component: {} },
+    { path: "/operations/runners/:name", name: "runner", component: {} },
+  ] });
+}
+
+async function navigate(router, action) {
+  await new Promise(resolve => {
+    const stop = router.afterEach(() => { stop(); resolve(); });
+    action();
+  });
+  await Vue.nextTick();
+}
+
+test("Runner tab survives detail navigation, browser back and page reload", async () => {
+  const router = navigationRouter();
+  await router.push("/operations?extra=keep");
+  let view = operationsNavigation(router);
+  try {
+    assert.equal(view.activeSection.value, "build");
+    assert.equal(view.calls.length, 0);
+    await navigate(router, () => view.selectSection("runners"));
+    assert.deepEqual(router.currentRoute.value.query, { extra: "keep", section: "runners" });
+    assert.equal(view.activeSection.value, "runners");
+    assert.deepEqual(view.calls, ["/apis/ebs/v1/runners?limit=100"]);
+    view.dispose();
+    await router.push({ name: "runner", params: { name: "runner-a" } });
+    await navigate(router, () => router.back());
+    view = operationsNavigation(router);
+    assert.equal(view.activeSection.value, "runners");
+    assert.equal(view.calls.length, 1);
+    view.dispose();
+    view = operationsNavigation(router);
+    assert.equal(view.activeSection.value, "runners");
+    await navigate(router, () => view.selectSection("services"));
+    assert.equal(view.activeSection.value, "services");
+    await navigate(router, () => view.selectSection("build"));
+    assert.deepEqual(router.currentRoute.value.query, { extra: "keep" });
+    assert.equal(view.activeSection.value, "build");
+  } finally { view.dispose(); }
+});
+
+test("Operations honors explicit section links and defaults invalid sections to build configuration", async () => {
+  const router = navigationRouter();
+  await router.push("/operations?section=runners");
+  const view = operationsNavigation(router);
+  try {
+    assert.equal(view.activeSection.value, "runners");
+    for (const section of ["services", "scripts", "unknown", ["runners", "scripts"], undefined]) {
+      await router.push({ name: "operations", query: { section } });
+      await Vue.nextTick();
+      assert.equal(view.activeSection.value, section === "services" || section === "scripts" ? section : "build");
+    }
+  } finally { view.dispose(); }
+});
 
 test("Runner suggestions complete names and label terms without losing existing query clauses", () => {
   const options = searchHelpers.runnerSearchOptions([
