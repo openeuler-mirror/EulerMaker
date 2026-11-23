@@ -1,0 +1,23 @@
+# HTTP is only for a trusted internal network; use HTTPS elsewhere.
+gatewayURL: http://ebs-gateway:8080
+machineCredentialFile: /etc/release-management/secrets/machine-credential.json
+dataDir: /var/lib/release-management
+listen: :8080
+pollInterval: 10m
+workers: 2
+maxProjectBytes: 1048576
+webhook:
+  enabled: false
+sources:
+  - name: openeuler-release
+    repository: https://atomgit.com/openeuler/release-management.git
+    ref: refs/heads/master
+    allowPrivateNetwork: false
+bindings:
+  - name: oe2403-next-everything
+    project: openeuler-24-03-lts-next
+    source: openeuler-release
+    paths:
+      - directory: openEuler-22.03-LTS-Next/baseos
+      - directory: openEuler-24.03-LTS-Next/everything-exclude-baseos
+    packageURLTemplate: https://atomgit.com/src-openeuler/{name}.git
