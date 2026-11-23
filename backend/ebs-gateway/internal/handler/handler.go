@@ -12,6 +12,7 @@ import (
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/limit"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/oauth"
 	"ebs-gateway/internal/policy"
 	"ebs-gateway/internal/upstream"
@@ -34,6 +35,7 @@ type Handler struct {
 	now                   func() time.Time
 	limits                *limit.Buckets
 	iam                   *iam.Client
+	auth                  *middleware.Auth
 	bodyLimit             int64
 	registerIP            *limit.Buckets
 	registrationUserLimit *limit.Buckets
@@ -59,10 +61,12 @@ func New(deps Dependencies) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	iamClient := iam.New(deps.Upstream)
 	return &Handler{
-		OAuth:    oauth.New(config, iam.New(deps.Upstream), deps.Tokens, deps.Now),
+		OAuth:    oauth.New(config, iamClient, deps.Tokens, deps.Now),
 		upstream: deps.Upstream, tokens: deps.Tokens, limits: deps.Limits, now: deps.Now,
-		iam: iam.New(deps.Upstream), bodyLimit: deps.BodyLimit,
+		iam: iamClient, bodyLimit: deps.BodyLimit,
+		auth:                  middleware.NewAuth(deps.Tokens, iamClient, deps.Now),
 		registerIP:            limit.New(5.0/60.0, 5, deps.Now),
 		registrationUserLimit: limit.New(3.0/60.0, 3, deps.Now),
 		loginLimit:            limit.New(5.0/60.0, 5, deps.Now),
@@ -73,34 +77,8 @@ func New(deps Dependencies) (*Handler, error) {
 	}, nil
 }
 
-const principalKey = "principal"
-
-func principal(c *gin.Context) identity.Principal {
-	value, exists := c.Get(principalKey)
-	if !exists {
-		return identity.Principal{}
-	}
-	return value.(identity.Principal)
-}
-
-func (a *Handler) authenticate(c *gin.Context) {
-	who, ok := a.verifyBearer(c, c.GetHeader("Authorization"))
-	if !ok {
-		return
-	}
-	c.Set(principalKey, who)
-	c.Next()
-}
-
-func (a *Handler) resolveUser(c *gin.Context) {
-	if !a.confirmUser(c, principal(c)) {
-		return
-	}
-	c.Next()
-}
-
 func (a *Handler) limitAuthenticated(c *gin.Context) {
-	user := principal(c)
+	user := middleware.Principal(c)
 	if !a.limits.Allow(user.Subject + "/" + c.ClientIP()) {
 		c.Header("Retry-After", "1")
 		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "too many requests"})
@@ -114,7 +92,7 @@ func (a *Handler) audit(c *gin.Context) {
 	method := c.Request.Method
 	path := c.Request.URL.Path
 	c.Next()
-	user := principal(c)
+	user := middleware.Principal(c)
 	subject := user.Subject
 	if subject == "" {
 		subject = "anonymous"
@@ -133,7 +111,7 @@ type Middleware struct {
 }
 
 func (a *Handler) Middleware() Middleware {
-	return Middleware{a.authenticate, a.resolveUser, a.limitAuthenticated, a.audit, a.requireAdmin}
+	return Middleware{a.auth.Authenticate, a.auth.ResolveUser, a.limitAuthenticated, a.audit, a.requireAdmin}
 }
 
 type Endpoints struct {

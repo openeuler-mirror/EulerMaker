@@ -15,13 +15,14 @@ import (
 
 	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/mutation"
 )
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func (a *Handler) requireAdmin(c *gin.Context) {
-	if principal(c).Scope != identity.AdminScope {
+	if middleware.Principal(c).Scope != identity.AdminScope {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return
 	}
@@ -210,7 +211,7 @@ func (a *Handler) checkToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "request body must be empty"})
 		return
 	}
-	user := principal(c)
+	user := middleware.Principal(c)
 	name := user.Subject
 	if user.Type == identity.RunnerType {
 		name = user.Runner
@@ -232,7 +233,7 @@ func (a *Handler) checkToken(c *gin.Context) {
 }
 
 func (a *Handler) changePassword(c *gin.Context) {
-	user := principal(c)
+	user := middleware.Principal(c)
 	if c.Param("name") != user.Subject || !user.IsUser() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 		return

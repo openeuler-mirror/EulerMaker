@@ -12,8 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	iamv1 "ebs-api/iam/v1"
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/mutation"
 	"ebs-gateway/internal/policy"
 )
@@ -54,15 +54,13 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 		if header == "" && public {
 			c.Set("anonymous", true)
 		} else {
-			var ok bool
-			who, ok = a.verifyBearer(c, header)
-			if !ok {
+			if !a.auth.Verify(c) {
 				return
 			}
-			if !a.confirmUser(c, who) {
+			who = middleware.Principal(c)
+			if !a.auth.ConfirmUser(c, who) {
 				return
 			}
-			c.Set(principalKey, who)
 		}
 		if who.Type == identity.RunnerType && resolved.Resource != "configs" {
 			public = false
@@ -116,51 +114,6 @@ func (a *Handler) resourceGuard(route resourceRoute) gin.HandlerFunc {
 	}
 }
 
-func (a *Handler) verifyBearer(c *gin.Context, header string) (identity.Principal, bool) {
-	parts := strings.Fields(header)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return identity.Principal{}, false
-	}
-	who, err := a.tokens.Verify(parts[1], a.now())
-	if err != nil {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return identity.Principal{}, false
-	}
-	if who.Type == identity.ServiceType {
-		account, status, err := a.iam.GetMachine(c.Request.Context(), who.Subject)
-		if err != nil || (status != http.StatusOK && status != http.StatusNotFound) {
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "machine account service unavailable"})
-			return identity.Principal{}, false
-		}
-		if status == http.StatusNotFound || account.Name != who.Subject || account.Spec.Type != iamv1.MachineAccountService {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return identity.Principal{}, false
-		}
-	}
-	return who, true
-}
-
-func (a *Handler) confirmUser(c *gin.Context, who identity.Principal) bool {
-	if who.Type == identity.ServiceType {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "service resource access is not enabled"})
-		return false
-	}
-	if !who.IsUser() {
-		return true
-	}
-	user, status, err := a.iam.GetUser(c.Request.Context(), who.Subject)
-	if err != nil || (status != http.StatusOK && status != http.StatusNotFound) {
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "user service unavailable"})
-		return false
-	}
-	if status == http.StatusNotFound || user.Name != who.Subject || !user.Enabled || len(user.Scopes) != 1 || user.Scopes[0] != who.Scope {
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
-		return false
-	}
-	return true
-}
-
 func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		resolved := route.at(c)
@@ -168,7 +121,7 @@ func (a *Handler) forwardResource(route resourceRoute) gin.HandlerFunc {
 			a.serveConfig(c)
 			return
 		}
-		who := principal(c)
+		who := middleware.Principal(c)
 		if who.Type == identity.RunnerType && route.resource == "runners" && route.subresource == "jobs" && c.Query("watch") == "true" {
 			if !a.acquireRunnerWatch(who.Runner) {
 				c.Header("Retry-After", "5")
@@ -491,7 +444,7 @@ func (a *Handler) serveConfig(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "invalid Config response"})
 		return
 	}
-	if object.Spec.Visibility != "Public" && !principal(c).IsPrivileged() {
+	if object.Spec.Visibility != "Public" && !middleware.Principal(c).IsPrivileged() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Config access denied"})
 		return
 	}

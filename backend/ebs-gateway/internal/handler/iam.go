@@ -10,6 +10,7 @@ import (
 	iamv1 "ebs-api/iam/v1"
 
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 	"ebs-gateway/internal/policy"
 )
 
@@ -37,7 +38,7 @@ func (a *Handler) serveIAM(resource string) gin.HandlerFunc {
 			return
 		}
 		route := policy.Route{Resource: resource, Name: name, Method: method}
-		if err := a.policy.Authorize(c.Request.Context(), principal(c), route); err != nil {
+		if err := a.policy.Authorize(c.Request.Context(), middleware.Principal(c), route); err != nil {
 			c.JSON(http.StatusForbidden, gin.H{"error": "forbidden"})
 			return
 		}
@@ -55,7 +56,7 @@ func (a *Handler) serveIAM(resource string) gin.HandlerFunc {
 			}
 		}
 		if method == http.MethodPut || method == http.MethodPatch {
-			if !a.prepareUpdate(c, principal(c), route) {
+			if !a.prepareUpdate(c, middleware.Principal(c), route) {
 				return
 			}
 		}

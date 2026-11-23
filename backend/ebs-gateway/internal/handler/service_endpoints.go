@@ -11,6 +11,7 @@ import (
 
 	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
+	"ebs-gateway/internal/middleware"
 )
 
 const maxServiceConfigResponse = 5 << 20
@@ -23,7 +24,7 @@ type runnerServiceEndpoint struct {
 // ServiceEndpoints returns Runner-facing addresses without exposing management URLs or the OpsOnly Config.
 func (a *Handler) ServiceEndpoints(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
-	if principal(c).Type != identity.RunnerType {
+	if middleware.Principal(c).Type != identity.RunnerType {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Runner identity required"})
 		return
 	}
