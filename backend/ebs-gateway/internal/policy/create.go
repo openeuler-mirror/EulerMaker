@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
 )
@@ -35,6 +36,9 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		labels := objectMap(meta["labels"])
 		if labels == nil {
 			labels = make(map[string]any)
+		}
+		if _, exists := labels[ebsv1.BuildPurposeLabel]; exists && !who.IsPrivileged() {
+			return nil, deny("Project build purpose requires Ops or Admin")
 		}
 		labels["ebs.io/owner-user"] = who.Subject
 		if who.Scope == identity.UserScope {

@@ -37,6 +37,25 @@ func TestPackageRepoCommitID(t *testing.T) {
 	}
 }
 
+func TestProjectBuildPurpose(t *testing.T) {
+	for _, labels := range []map[string]string{nil, {ebsv1.BuildPurposeLabel: ebsv1.BuildPurposeGating}, {ebsv1.BuildPurposeLabel: ""}, {ebsv1.BuildPurposeLabel: "other"}} {
+		project := validProject()
+		project.Labels = labels
+		value, set := labels[ebsv1.BuildPurposeLabel]
+		for operation, errs := range map[string]field.ErrorList{
+			"create": ValidateProject(project), "update": ValidateProjectUpdate(project, validProject()),
+		} {
+			if set && value != ebsv1.BuildPurposeGating {
+				assertErrorList(t, errs, 1, map[string]field.ErrorType{
+					"metadata.labels[ebs.io/build-purpose]": field.ErrorTypeNotSupported,
+				})
+			} else if len(errs) != 0 {
+				t.Fatalf("%s: %v", operation, errs)
+			}
+		}
+	}
+}
+
 func TestProjectBuildArchUniqueness(t *testing.T) {
 	tests := []struct {
 		name    string

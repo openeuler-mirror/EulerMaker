@@ -6,8 +6,22 @@ import (
 	"net/http"
 	"testing"
 
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/identity"
 )
+
+func TestProjectCreateBuildPurpose(t *testing.T) {
+	for _, scope := range []identity.Scope{identity.UserScope, identity.OpsScope, identity.AdminScope} {
+		for _, purpose := range []any{nil, "", "gating"} {
+			who := identity.Principal{Type: identity.UserType, Subject: "alice", Scope: scope}
+			body, _ := json.Marshal(map[string]any{"metadata": map[string]any{"name": "team", "labels": map[string]any{ebsv1.BuildPurposeLabel: purpose}}})
+			_, err := (&Authorizer{}).PrepareCreate(context.Background(), who, Route{Resource: "projects", Method: http.MethodPost}, body)
+			if (err == nil) != who.IsPrivileged() {
+				t.Fatalf("scope=%s purpose=%v error=%v", scope, purpose, err)
+			}
+		}
+	}
+}
 
 func TestRunnerCreateWithInitialTaints(t *testing.T) {
 	who := identity.Principal{Type: identity.RunnerType, Subject: "runner-a", Runner: "runner-a"}

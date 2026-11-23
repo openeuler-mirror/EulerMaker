@@ -49,6 +49,32 @@ func TestTaintMatching(t *testing.T) {
 	}
 }
 
+func TestGatingPoolIsolation(t *testing.T) {
+	for _, gatingJob := range []bool{false, true} {
+		for _, gatingRunner := range []bool{false, true} {
+			job := &ebsv1.Job{Spec: ebsv1.JobSpec{NodeSelector: map[string]string{"ebs.io/runner-arch": "aarch64"}}}
+			runner := &ebsv1.Runner{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"ebs.io/runner-arch": "aarch64"}}}
+			if gatingJob {
+				job.Spec.NodeSelector[ebsv1.RunnerPoolLabel] = ebsv1.BuildPurposeGating
+				job.Spec.Tolerations = []ebsv1.Toleration{{Key: ebsv1.RunnerDedicatedTaint, Value: ebsv1.BuildPurposeGating,
+					Operator: ebsv1.TolerationEqual, Effect: ebsv1.TaintEffectNoSchedule}}
+			}
+			if gatingRunner {
+				runner.Labels[ebsv1.RunnerPoolLabel] = ebsv1.BuildPurposeGating
+				runner.Spec.Taints = []ebsv1.RunnerTaint{{Key: ebsv1.RunnerDedicatedTaint, Value: ebsv1.BuildPurposeGating,
+					Effect: ebsv1.TaintEffectNoSchedule}}
+			}
+			session := &framework.Session{Job: job}
+			snapshot := &framework.RunnerSnapshot{Runner: runner}
+			matches := NodeSelector().Filter(context.Background(), session, snapshot).Code == framework.Success &&
+				Taint().Filter(context.Background(), session, snapshot).Code == framework.Success
+			if matches != (gatingJob == gatingRunner) {
+				t.Fatalf("gating Job=%t Runner=%t matches=%t", gatingJob, gatingRunner, matches)
+			}
+		}
+	}
+}
+
 func TestExecutionTypeMatching(t *testing.T) {
 	values := []ebsv1.ExecutionType{"", ebsv1.ExecutionTypeContainer, ebsv1.ExecutionTypeVM, ebsv1.ExecutionTypeHardware}
 	for _, jobType := range values {

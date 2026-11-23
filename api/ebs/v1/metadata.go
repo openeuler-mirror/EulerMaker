@@ -2,6 +2,9 @@ package v1
 
 const (
 	ProjectTypeLabel     = "project.ebs.io/type"
+	BuildPurposeLabel    = "ebs.io/build-purpose"
+	RunnerPoolLabel      = "ebs.io/pool"
+	RunnerDedicatedTaint = "ebs.io/dedicated"
 	BuildTargetArchLabel = "ebs.io/target-arch"
 	BuildTypeLabel       = "ebs.io/build-type"
 	JobBuildNameLabel    = "ebs.io/build-name"
@@ -12,6 +15,7 @@ const (
 const (
 	ProjectTypeCommunity = "community"
 	ProjectTypePersonal  = "personal"
+	BuildPurposeGating   = "gating"
 )
 
 const (

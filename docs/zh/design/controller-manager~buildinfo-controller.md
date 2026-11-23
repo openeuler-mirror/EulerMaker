@@ -1148,8 +1148,8 @@ status:                                             # 创建时恒 Pending/Pendi
 | `spec.scriptRefs` | 创建时 Script 的 name、UID、resourceVersion，当前写入一个元素 | 从 `buildPayload.rpmbuild_script` 选名，未配置时使用 `rpmbuild`；GET Script 后写入观测值，不下发 `rpmbuild_script` 到 Job payload。读取失败不创建 Job；观测值不锁定 Runner 执行时的正文 |
 | `spec.timeoutSeconds` | `10800` | 常量（3 小时）；apiserver `SetDefaults_Job` 同值兜底                                                                                     |
 | `spec.resources` | 按解析结果填写 `requests` 与 `limits` 的 `cpu`/`memory`（均深拷贝写入） | 创建 Job 时 GET `Config/build-resource` 并解析 `spec.content`；配置不可用时按 E-27 暂停本轮新 Job 派发，恢复后继续。内容按 `default` → `packages[specName].default` → `packages[specName].arches[arch]` 逐字段覆盖（[构建配置设计](data-models~config.md#32-匹配与校验)） |
-| `spec.nodeSelector` | `{"ebs.io/runner-arch": Build.spec.arch}` | scheduler 按 runner label 精确匹配架构                                                                                               |
-| `spec.tolerations` | 不设置（空） | 类型零值                                                                                                                          |
+| `spec.nodeSelector` | `{"ebs.io/runner-arch": Build.spec.arch}`；门禁构建另加 `ebs.io/pool=gating` | 用途取父 Build 固化的 `ebs.io/build-purpose`，不读取 Project 当前标签；所有类型及重派发一致 |
+| `spec.tolerations` | 普通构建为空；门禁构建为 `key=ebs.io/dedicated,value=gating,operator=Equal,effect=NoSchedule` | 与资源池选择器共同作用；门禁 Job 同时携带 `ebs.io/build-purpose=gating` 标签，约定见 [标签文档](labels.md#34-门禁构建用途) |
 | `spec.payload` | 构造 JSON 字符串（见下"payload 构造契约"） | 按白名单解析 `BuildInfo.spec.buildPayload` 并填充派生字段                                                                                        |
 | `status.phase` / `status.stage` | `"Pending"` / `"Pending"` | 初始状态；apiserver `PrepareForCreate` 强制覆写同值（服务端为权威）                                                                              |
 

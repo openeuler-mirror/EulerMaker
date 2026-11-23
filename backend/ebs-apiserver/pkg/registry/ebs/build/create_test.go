@@ -414,6 +414,7 @@ type projectGetter struct {
 	err         error
 	calls       int
 	projectType string
+	purpose     string
 }
 
 func (g *projectGetter) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runtime.Object, error) {
@@ -421,13 +422,38 @@ func (g *projectGetter) Get(ctx context.Context, name string, _ *metav1.GetOptio
 	if ns, _ := request.NamespaceFrom(ctx); ns != "" || name != "project-a" {
 		g.t.Fatalf("unexpected project GET: namespace=%q name=%q", ns, name)
 	}
-	return &ebsv1.Project{
+	project := &ebsv1.Project{
 		ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{ebsv1.ProjectTypeLabel: g.projectType}},
 		Spec:       ebsv1.ProjectSpec{Distro: "os", BuildArches: []string{"arch", "x86_64"}, PackageRepos: []ebsv1.PackageRepo{{Name: "gcc"}, {Name: "bash"}}},
-	}, g.err
+	}
+	if g.purpose != "" {
+		project.Labels[ebsv1.BuildPurposeLabel] = g.purpose
+	}
+	return project, g.err
 }
 
-func TestCreateBuildPriority(t *testing.T) {
+func TestPrepareBuildPurpose(t *testing.T) {
+	for _, buildType := range ebsv1.BuildTypeValues() {
+		for _, purpose := range []string{"", ebsv1.BuildPurposeGating} {
+			for _, input := range []map[string]string{nil, {ebsv1.BuildPurposeLabel: "gating"}, {ebsv1.BuildPurposeLabel: ""}} {
+				build := testBuild("01234567-89ab-4cde-8fab-0123456789ab", buildType)
+				build.Spec.Packages = []string{"gcc"}
+				build.Labels = input
+				project := &projectGetter{t: t, purpose: purpose}
+				prepare := PrepareBuildInputs(defaultConfigGetter(t), project)
+				if err := prepare(request.WithNamespace(context.Background(), "project-a"), build); err != nil {
+					t.Fatal(err)
+				}
+				got, exists := build.Labels[ebsv1.BuildPurposeLabel]
+				if got != purpose || exists != (purpose != "") || project.calls != 1 {
+					t.Fatalf("type=%s projectPurpose=%q labels=%v reads=%d", buildType, purpose, build.Labels, project.calls)
+				}
+			}
+		}
+	}
+}
+
+func TestCreateBuildResolvedInputs(t *testing.T) {
 	for _, projectType := range []string{ebsv1.ProjectTypeCommunity, ebsv1.ProjectTypePersonal} {
 		for _, buildType := range ebsv1.BuildTypeValues() {
 			for _, input := range []string{`{}`, `{"priority":0}`, `{"priority":-10}`, `{"priority":100}`} {
@@ -457,11 +483,14 @@ func TestCreateBuildPriority(t *testing.T) {
 								if doc.Data.Spec.Priority == nil || *doc.Data.Spec.Priority != want {
 									t.Fatalf("persisted priority = %v, want %d", doc.Data.Spec.Priority, want)
 								}
+								if doc.Data.Labels[ebsv1.BuildPurposeLabel] != ebsv1.BuildPurposeGating {
+									t.Fatalf("persisted purpose = %v", doc.Data.Labels)
+								}
 								return &http.Response{StatusCode: http.StatusCreated, Header: make(http.Header),
 									Body: io.NopCloser(strings.NewReader(`{"_seq_no":0,"_primary_term":1}`))}, nil
 							})})
 						store := esstore.New(client, "build", "Build", NewStorage().Resource.(*genericregistry.Store))
-						project := &projectGetter{t: t, projectType: projectType}
+						project := &projectGetter{t: t, projectType: projectType, purpose: ebsv1.BuildPurposeGating}
 						store.SetPrepareCreateHook(PrepareBuildInputs(defaultConfigGetter(t), project))
 						opts := &metav1.CreateOptions{}
 						wantWrites := 1
@@ -476,6 +505,9 @@ func TestCreateBuildPriority(t *testing.T) {
 						priority := obj.(*ebsv1.Build).Spec.Priority
 						if priority == nil || *priority != want || writes != wantWrites || project.calls != 1 {
 							t.Fatalf("priority=%v want=%d writes=%d projectReads=%d", priority, want, writes, project.calls)
+						}
+						if obj.(*ebsv1.Build).Labels[ebsv1.BuildPurposeLabel] != ebsv1.BuildPurposeGating {
+							t.Fatalf("returned purpose = %v", obj.(*ebsv1.Build).Labels)
 						}
 					})
 				}

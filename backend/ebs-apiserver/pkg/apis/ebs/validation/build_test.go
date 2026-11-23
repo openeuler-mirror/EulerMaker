@@ -405,6 +405,28 @@ func TestBuildGitRefImmutable(t *testing.T) {
 	}
 }
 
+func TestBuildPurposeIsImmutable(t *testing.T) {
+	for _, before := range []string{"", ebsv1.BuildPurposeGating} {
+		for _, after := range []string{"", ebsv1.BuildPurposeGating, "other"} {
+			old := validBuild()
+			if before != "" {
+				old.Labels[ebsv1.BuildPurposeLabel] = before
+			}
+			next := old.DeepCopy()
+			delete(next.Labels, ebsv1.BuildPurposeLabel)
+			if after != "" {
+				next.Labels[ebsv1.BuildPurposeLabel] = after
+			}
+			errs := ValidateBuildUpdate(next, old)
+			if before == after {
+				assertErrorList(t, errs, 0, nil)
+			} else {
+				assertErrorList(t, errs, 1, map[string]field.ErrorType{"metadata.labels[ebs.io/build-purpose]": field.ErrorTypeInvalid})
+			}
+		}
+	}
+}
+
 func validBuild() *ebsv1.Build {
 	return &ebsv1.Build{
 		ObjectMeta: metav1.ObjectMeta{Name: "123e4567-e89b-42d3-a456-426614174000", Labels: map[string]string{

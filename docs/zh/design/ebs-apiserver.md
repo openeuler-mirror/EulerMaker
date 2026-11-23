@@ -823,6 +823,12 @@ Runner `/status` 支持 `Evicted` 驱逐状态。该状态禁止 Scheduler 分�
 
 从旧模型升级时必须在启用新 Gateway 前迁移已有 User：`spec.admin=true` 转为 `spec.scopes=["ebs:admin"]`，其他 User 转为 `spec.scopes=["ebs:user"]`，迁移完成后删除旧 `spec.admin` 字段。存量对象读取不依赖创建默认值，不能把数据迁移交给 storage strategy 隐式完成。
 
+### 门禁用途准入
+
+- Project 创建、更新时校验 `metadata.labels["ebs.io/build-purpose"]`：可缺省，存在时只能为 `gating`。身份权限由 Gateway 校验。
+- Build 创建（含 dry-run）复用目标及包范围校验中的 Project 查询，将 Project 用途写入 Build 标签；普通工程移除调用方提供的用途标签，不增加额外查询。
+- Build 普通更新禁止增删或修改用途标签；`/status` 保留旧 metadata。Project 后续调整仅影响新 Build，所有构建类型执行同一规则。
+
 ## 非 single Build 的 ES 目标占用
 
 apiserver 使用 ES 内部目标占用文档实现跨实例互斥，不依赖进程内锁或 etcd。Build Controller 更新 Build 状态，并在 incremental 的 Pending 阶段固化 `spec.packages`；不读写占用索引。占用编排和恢复位于 `pkg/registry/ebs/build/claims.go`，底层复用 `pkg/storage/es` 的 create-only、实时 GET、CAS 与 PIT 扫描能力。

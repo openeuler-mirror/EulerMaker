@@ -108,6 +108,11 @@ func ValidateBuildDelete(obj *ebsv1.Build) field.ErrorList {
 
 func ValidateBuildUpdate(newObj, oldObj *ebsv1.Build) field.ErrorList {
 	allErrs := ValidateBuild(newObj)
+	newPurpose, newSet := newObj.Labels[ebsv1.BuildPurposeLabel]
+	oldPurpose, oldSet := oldObj.Labels[ebsv1.BuildPurposeLabel]
+	if newSet != oldSet || newPurpose != oldPurpose {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("metadata", "labels").Key(ebsv1.BuildPurposeLabel), newPurpose, "field is immutable"))
+	}
 	newRef, newExists := newObj.Annotations[ebsv1.BuildGitRefAnnotation]
 	oldRef, oldExists := oldObj.Annotations[ebsv1.BuildGitRefAnnotation]
 	if newExists != oldExists || newRef != oldRef {

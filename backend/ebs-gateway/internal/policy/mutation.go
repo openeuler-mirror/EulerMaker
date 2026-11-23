@@ -2,10 +2,12 @@ package policy
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"reflect"
 	"strings"
 
+	ebsv1 "ebs-api/ebs/v1"
 	"ebs-gateway/internal/iam"
 	"ebs-gateway/internal/identity"
 	"ebs-gateway/internal/mutation"
@@ -69,6 +71,18 @@ func (a *Authorizer) ValidateUpdate(ctx context.Context, who identity.Principal,
 		return validateRunnerOrdinary(oldMeta, newMeta, objectMap(old["spec"]), objectMap(candidate["spec"]))
 	}
 	if route.Resource == "projects" {
+		if who.Scope == identity.AdminScope {
+			// Admin owners may manage purpose, without gaining ordinary Project update privileges.
+			oldLabels := maps.Clone(objectMap(oldMeta["labels"]))
+			newLabels := maps.Clone(objectMap(newMeta["labels"]))
+			delete(oldLabels, ebsv1.BuildPurposeLabel)
+			delete(newLabels, ebsv1.BuildPurposeLabel)
+			if !reflect.DeepEqual(old["spec"], candidate["spec"]) ||
+				!reflect.DeepEqual(oldMeta["annotations"], newMeta["annotations"]) ||
+				!maps.EqualFunc(oldLabels, newLabels, reflect.DeepEqual) {
+				return deny("Admin Project updates may only change build purpose")
+			}
+		}
 		return a.validateProjectLabels(ctx, who, oldMeta, newMeta)
 	}
 	if route.Resource == "users" {
@@ -193,6 +207,12 @@ func runnerLabelWritable(name string) bool {
 func (a *Authorizer) validateProjectLabels(ctx context.Context, who identity.Principal, oldMeta, newMeta map[string]any) error {
 	oldLabels := objectMap(oldMeta["labels"])
 	newLabels := objectMap(newMeta["labels"])
+	oldPurpose, oldSet := oldLabels[ebsv1.BuildPurposeLabel]
+	newPurpose, newSet := newLabels[ebsv1.BuildPurposeLabel]
+	if (oldSet != newSet || !reflect.DeepEqual(oldPurpose, newPurpose)) &&
+		(!who.IsPrivileged() || oldLabels["ebs.io/owner-user"] != who.Subject) {
+		return deny("Project build purpose requires an Ops or Admin owner")
+	}
 	if who.Scope == identity.UserScope && !reflect.DeepEqual(oldLabels["project.ebs.io/type"], newLabels["project.ebs.io/type"]) {
 		if oldLabels["project.ebs.io/type"] != nil || newLabels["project.ebs.io/type"] != "personal" {
 			return deny("ordinary users cannot change Project type")

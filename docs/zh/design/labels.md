@@ -13,6 +13,7 @@
 | Project | `project.ebs.io/type` | `community` / `personal` | 创建方；apiserver 默认 `personal` | 工程分类，详见 3.3 |
 | Project | `ebs.io/owner-user` | User `metadata.name` | Gateway（创建时） | 标识 Project owner；写入及不可变规则见 3.1 |
 | Project | `ebs.io/member-user.<username>` | 固定为 `"true"` | Project owner | 授予指定用户 Project 成员权限 |
+| Project、Build、Job | `ebs.io/build-purpose` | `gating`；缺省为普通构建 | Ops/Admin owner 设置 Project；apiserver 固化到 Build；BuildInfo 传递到 Job | 门禁任务调度，详见 3.4 |
 | Build | `ebs.io/target-arch` | Build Target 的架构名称 | Build 创建方 | 按构建目标查询 Build |
 | Build | `ebs.io/build-type` | Build `spec.buildType` | Build 创建方 | 按构建类型查询 Build |
 | RpmRepo | `ebs.io/target-arch` | 同名 Build 的 `spec.arch` | Build Controller | 按构建目标查询/归组 RpmRepo |
@@ -24,6 +25,7 @@
 | Runner | `ebs.io/runner-arch` | 与 `spec.arch` 相同 | Runner | 表达 Runner 架构，供 `nodeSelector` 精确匹配 |
 | Runner | `ebs.io/runner-capability.<name>` | 由具体能力定义 | Runner | 表达 Runner 自声明能力，供 `nodeSelector` 精确匹配 |
 | Runner | `ebs.io/zone` | 部署环境定义的区域名称 | Ops/Admin、system | 管理面维护的调度区域 |
+| Runner | `ebs.io/pool` | `gating` 表示门禁资源池 | Ops/Admin、system | 门禁 Job 的资源池选择器 |
 
 `ebs.io/` 前缀由 EulerMaker 保留。使用该前缀但未在本文档登记的标签，不具有稳定的公共语义。
 
@@ -58,7 +60,7 @@ Project 子资源不重复保存访问标签，而是通过所属 Project 继承
 `project.ebs.io/type` 是系统保留的分类标签，只允许 `community`（社区工程）和 `personal`（个人工程），不增加对应 spec 字段。
 
 - apiserver 创建及普通更新时补齐缺失标签为 `personal`；显式空值或其他值返回 `422 Invalid`。读取旧对象不写回，缺失标签按个人工程解释。
-- 普通用户只能创建个人工程；不能修改或删除已有类型标签。旧对象可补写 `personal`。Ops 在自己拥有的 Project 中可修改类型；Ops、Admin 创建 Project 时可以指定类型，但 Admin 不能通过 Gateway 修改已有 Project。
+- 普通用户只能创建个人工程；不能修改或删除已有类型标签。旧对象可补写 `personal`。Ops 在自己拥有的 Project 中可修改类型；Ops、Admin 创建 Project 时可以指定类型，Admin 对已有 Project 的更新仅开放 3.4 中的用途标签。
 - Gateway 负责上述权限；普通用户的 JSON/Merge PATCH 按最新对象计算完整候选对象，检查类型和访问标签后转为携带原 resourceVersion 的 PUT，避免通过替换 metadata/labels、move/copy 或并发修改绕过保护。
 - Project `/status` 更新保留服务端原 labels，不能借状态更新修改分类。
 - 分类不影响公开读取或 owner/member 权限；“个人工程”表示类型，不等于“我的工程”。
@@ -71,6 +73,35 @@ Project 子资源不重复保存访问标签，而是通过所属 Project 继承
 | 个人工程 | `project.ebs.io/type!=community` |
 
 不等于筛选包含无标签对象，保证旧工程在个人 Tab 中可见；过滤在服务端分页前完成。Tab 切换后忽略前一次未完成请求的结果。普通用户表单固定创建个人工程；Ops 及以上可以选择类型，YAML 导入保留显式标签并由后端校验。
+
+### 3.4 门禁构建用途
+
+Project 可设置 `ebs.io/build-purpose=gating`；缺省表示普通构建，显式空值或其他值由 apiserver 拒绝。
+Gateway 创建工程时仅允许 Ops/Admin 指定该标签，owner 仍由创建者身份写入。
+更新时必须同时是工程 owner 和 Ops/Admin，才能增加、修改或删除该标签。普通 owner 可保留原标签修改其他配置。
+Admin owner 的更新例外仅允许修改此标签，不能同时改变 spec、annotation 或其他标签；非 owner 不允许修改。
+PUT 和 PATCH 使用同一候选对象校验，`/status` 不开放修改标签。
+
+apiserver 创建任意类型 Build 时从同一次 Project 查询中固化用途，覆盖客户端提供的用途标签；普通工程则移除该标签。
+Build 创建后不能增删或修改用途，Project 的后续修改不影响已有 Build。BuildInfo 依据 Build 标签生成 Job，重派发沿用相同用途。
+
+门禁 Runner 需同时配置以下标签和污点（可由 Ops/Admin 在前端维护）：
+
+```yaml
+metadata:
+  labels:
+    ebs.io/pool: gating
+spec:
+  taints:
+    - key: ebs.io/dedicated
+      value: gating
+      effect: NoSchedule
+```
+
+污点也可在首次注册时用 `--taints=ebs.io/dedicated=gating:NoSchedule` 设置；资源池标签由管理面维护，不通过 Runner 的能力标签参数设置。
+门禁 Job 保留架构选择器，增加 `ebs.io/pool=gating` 选择器及对上述污点的 Equal 容忍。
+普通构建 Job 不增加该容忍；门禁资源不足时保持待调度，不回退普通 Runner。仅设置标签不能阻止普通 Job 使用该 Runner，必须配合污点。
+这是控制器生成任务的调度约定，不替代 Job API 的授权；具备直接创建 Job 权限的调用方仍可显式设置选择器和容忍。
 
 ## 4. Build 查询标签
 

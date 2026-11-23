@@ -139,6 +139,8 @@ label 语义：
 
 Gateway 不开放 Project 删除路由，工程删除由内部运维通过 apiserver 执行。仅 Project owner 可更新已有 Project；更新时 `ebs.io/owner-user` 必须保持不变。成员用户 label 用于表达共享权限，owner 可增删；新增的 member user 必须对应已存在且启用、scope 为 `ebs:user` 或 `ebs:ops` 的 User。
 
+`ebs.io/build-purpose` 的创建需要 Ops/Admin，更新需要同时具备 owner 和 Ops/Admin 身份。普通 owner 只能保留原值；替换整个 labels 或通过 PATCH 删除同样受校验。Admin owner 仅获准修改该标签，其他工程更新权限不扩大；非 owner 的 Ops/Admin 仍被拒绝。用途固化及调度约定见 [标签约定 3.4](labels.md#34-门禁构建用途)。
+
 匿名调用方可以读取第 4.1 节定义的公开资源，认证用户通过 Project API 访问 Project 级资源。Runner 使用独立的 runner token。普通用户 token 只有在对应 User 存在且已启用时才有效；gateway 直接使用 JWT `sub` 作为用户身份，并限制用户只能写入自己拥有或被授权为 member 的 Project 和 Project 子资源。
 
 ## 四、请求处理流程
@@ -510,7 +512,7 @@ apiserver 不限制 `arch` 的枚举值。对象已存在由 apiserver 返回 40
 
 | 资源范围 | Owner 用户 | Member 用户 | Ops | Runner | Admin |
 |----------|------------|-------------|-----|--------|-------|
-| Project | `get/list/create/update/patch`，禁止删除 | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户 | 禁止 | `get/list/create`，禁止更新和删除 |
+| Project | `get/list/create/update/patch`，用途标签另需 Ops/Admin；禁止删除 | `get/list`，禁止所有写操作 | 按 owner/member 关系同普通用户；owner 可管理用途标签 | 禁止 | `get/list/create`；仅 owner 可 PUT/PATCH 用途标签，禁止其他更新及删除 |
 | Project 子资源：Snapshot、BuildInfo、BuildGraph、RpmRepo | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：历史 Job（oldjobs） | 仅 GET | 仅 GET | 仅 GET | 禁止 | 仅 GET |
 | Project 子资源：Build | 可读取、创建、删除和中止；禁止 PUT/PATCH | 可读取、创建和中止；禁止删除、PUT/PATCH | 按 owner/member 关系同普通用户 | 禁止 | 可读取、创建和中止；仅为 Project owner 时可删除；禁止 PUT/PATCH |
