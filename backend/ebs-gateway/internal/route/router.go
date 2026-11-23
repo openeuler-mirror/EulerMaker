@@ -42,7 +42,7 @@ func registerAuth(router *gin.Engine, middleware handler.Middleware, endpoints h
 	auth := router.Group("/auth")
 	auth.POST("/register", endpoints.RegisterUser)
 	auth.POST("/login", endpoints.Login)
-	auth.POST("/runner-token", endpoints.RunnerToken)
+	auth.POST("/machine-token", endpoints.RunnerToken)
 	auth.POST("/check", middleware.Authenticate, middleware.LimitAuthenticated, endpoints.CheckToken)
 	auth.PUT("/users/:name/password", middleware.Authenticate, middleware.ResolveUser, middleware.LimitAuthenticated, endpoints.ChangePassword)
 	auth.POST("/machineaccounts", middleware.Authenticate, middleware.ResolveUser, middleware.LimitAuthenticated, middleware.RequireAdmin, endpoints.RegisterMachine)

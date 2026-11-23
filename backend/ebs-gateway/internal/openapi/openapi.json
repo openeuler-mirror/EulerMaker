@@ -12535,6 +12535,85 @@
         ]
       }
     },
+    "/auth/machine-token": {
+      "post": {
+        "description": "Runner-type MachineAccount Basic credentials and the Runner name are required. Service accounts return 403. Missing or unknown account type in the IAM response returns 503.",
+        "operationId": "obtainRunnerToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunnerTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerTokenResponse"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "401": {
+            "$ref": "#/components/responses/401"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          },
+          "410": {
+            "$ref": "#/components/responses/410"
+          },
+          "413": {
+            "$ref": "#/components/responses/413"
+          },
+          "415": {
+            "$ref": "#/components/responses/415"
+          },
+          "422": {
+            "$ref": "#/components/responses/422"
+          },
+          "429": {
+            "$ref": "#/components/responses/429"
+          },
+          "500": {
+            "$ref": "#/components/responses/500"
+          },
+          "502": {
+            "$ref": "#/components/responses/502"
+          },
+          "503": {
+            "$ref": "#/components/responses/503"
+          },
+          "504": {
+            "$ref": "#/components/responses/504"
+          }
+        },
+        "security": [
+          {
+            "MachineBasic": []
+          }
+        ],
+        "summary": "Obtain a Runner token",
+        "tags": [
+          "Authentication"
+        ]
+      }
+    },
     "/auth/machineaccounts": {
       "post": {
         "description": "Admin only. The secret is supplied by the caller and is never returned.",
@@ -13422,85 +13501,6 @@
         },
         "security": [],
         "summary": "Register a user",
-        "tags": [
-          "Authentication"
-        ]
-      }
-    },
-    "/auth/runner-token": {
-      "post": {
-        "description": "Runner-type MachineAccount Basic credentials and the Runner name are required. Service accounts return 403. Missing or unknown account type in the IAM response returns 503.",
-        "operationId": "obtainRunnerToken",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RunnerTokenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunnerTokenResponse"
-                }
-              }
-            },
-            "description": "Successful response."
-          },
-          "400": {
-            "$ref": "#/components/responses/400"
-          },
-          "401": {
-            "$ref": "#/components/responses/401"
-          },
-          "403": {
-            "$ref": "#/components/responses/403"
-          },
-          "404": {
-            "$ref": "#/components/responses/404"
-          },
-          "409": {
-            "$ref": "#/components/responses/409"
-          },
-          "410": {
-            "$ref": "#/components/responses/410"
-          },
-          "413": {
-            "$ref": "#/components/responses/413"
-          },
-          "415": {
-            "$ref": "#/components/responses/415"
-          },
-          "422": {
-            "$ref": "#/components/responses/422"
-          },
-          "429": {
-            "$ref": "#/components/responses/429"
-          },
-          "500": {
-            "$ref": "#/components/responses/500"
-          },
-          "502": {
-            "$ref": "#/components/responses/502"
-          },
-          "503": {
-            "$ref": "#/components/responses/503"
-          },
-          "504": {
-            "$ref": "#/components/responses/504"
-          }
-        },
-        "security": [
-          {
-            "MachineBasic": []
-          }
-        ],
-        "summary": "Obtain a Runner token",
         "tags": [
           "Authentication"
         ]

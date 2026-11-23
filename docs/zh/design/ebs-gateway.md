@@ -277,10 +277,10 @@ Gateway 必须验证 `sub`、`type`、`scopes`、`iss`、`aud`、`iat`、`nbf`�
 |------------|--------|-------------|----------|------------------|
 | 普通用户 | `user` | 仅 `ebs:user` | 只由 `POST /auth/login` 签发 | 是 |
 | 运维用户 | `user` | 仅 `ebs:ops` | `spec.scopes=["ebs:ops"]` 的 User 通过 `POST /auth/login` 签发 | 是 |
-| Runner | `runner` | `[]` | 只由 `POST /auth/runner-token` 使用 MachineAccount 凭据签发 | 否 |
+| Runner | `runner` | `[]` | 只由 `POST /auth/machine-token` 使用 MachineAccount 凭据签发 | 否 |
 | 管理员 | `user` | 仅 `ebs:admin` | `spec.scopes=["ebs:admin"]` 的 User 通过 `POST /auth/login` 签发 | 是 |
 
-JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发 `type=user` 且仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 之一的 token；`POST /auth/runner-token` 使用 MachineAccount 凭据签发 `type=runner`、`scopes=[]` 的 token。调用方不能指定 type、scope、`sub`、有效期或 `runner` claim。用户权限不可重复、未知或组合，主体类型与 scopes 不匹配时返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
+JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `spec.scopes` 项签发 `type=user` 且仅包含 `ebs:user`、`ebs:ops` 或 `ebs:admin` 之一的 token；`POST /auth/machine-token` 使用 MachineAccount 凭据签发 `type=runner`、`scopes=[]` 的 token。调用方不能指定 type、scope、`sub`、有效期或 `runner` claim。用户权限不可重复、未知或组合，主体类型与 scopes 不匹配时返回 401。所有签发路径使用同一 HMAC 密钥和固定 issuer `ebs-gateway`，生成不可预测且不重复的 `jti`，并遵守固定的 24 小时验证上限；user、ops 和 admin token 固定为 24 小时，Runner token 由 MachineAccount 的 `tokenTTLSeconds` 决定且最长 24 小时。
 
 此次 Token 格式变更不兼容缺少 `type` 或仍使用旧机器权限 scope 的 Token；部署后用户需重新登录，Runner 需重新换取 Token。
 
@@ -301,7 +301,7 @@ JWT 在线签发只有两条路径：`POST /auth/login` 根据 User 唯一的 `s
 Runner 使用 HTTP Basic 提交 MachineAccount 名称和 client secret，并在 JSON 请求体中声明 Runner 名称：
 
 ```text
-POST /auth/runner-token
+POST /auth/machine-token
 Authorization: Basic base64(<client-id>:<client-secret>)
 Content-Type: application/json
 ```
@@ -347,11 +347,11 @@ Gateway要求 admin 权限，校验请求后调用`POST /internal/iam/v1/machine
 
 - `POST /auth/machineaccounts` 的可选字段 `type=runner|service` 缺省为 runner；仅 Admin 可创建。
 - Gateway 将注册类型传给 IAM，由 apiserver 完成权威枚举校验及持久化；认证结果中的类型是账号当前事实。
-- `/auth/runner-token` 仅接受认证结果为 runner 的账号；凭据正确但类型为 service 返回 403，不签发 JWT。
+- `/auth/machine-token` 仅接受认证结果为 runner 的账号；凭据正确但类型为 service 返回 403，不签发 JWT。
   未知或缺失认证响应类型视为上游协议异常，返回 503，不在 Gateway 猜测为 runner。
   已存储的旧账号由 apiserver 归一为 runner 并显式返回，不要求 Gateway 解析旧对象。
 - MachineAccount.spec.type 与 JWT 的 type 是不同层次的字段；本阶段 JWT 仍仅有 user、runner 两种身份。
-- 暂不新增 `/auth/machine-token` 或 Service Token，不将 service 凭据直接作为资源 API 的 Bearer Token。
+- 暂不签发 Service Token，不将 service 凭据直接作为资源 API 的 Bearer Token。
   工程范围与操作权限后续设计，账号创建成功不代表可以更新工程或触发门禁构建。
 
 实现与部署时先使 IAM 返回明确的账号类型，再启用 Gateway 类型检查；现有 Runner 的 Token 内容和权限不变。
@@ -737,7 +737,7 @@ Gateway 的请求链为“路径路由 → 路由中间件 → 最终 Handler”
 | `/healthz` | 匿名健康检查 | 无 |
 | `/openapi.json` | 匿名及所有身份可 GET 同一份静态接口文档，见 5.3 | 无 |
 | `/auth/register`、`/auth/login` | 无 | 匿名注册普通用户、密码登录 |
-| `/auth/runner-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner token；后者凭 Bearer Token 校验身份 |
+| `/auth/machine-token`、`/auth/check` | 无 | 前者凭 MachineAccount Basic 凭据换取 Runner token；后者凭 Bearer Token 校验身份 |
 | `/auth/users/{name}/password`、`/auth/machineaccounts` | 无 | 登录用户仅修改本人密码；仅 Admin 可创建 MachineAccount |
 | `/apis/ebs/v1/projects[/{name}][/status]` | 匿名及已认证用户可读取 | 登录用户可创建；仅 owner 可修改 Project（包含 `/status`）；不开放 Project 删除；member 不可写 Project |
 | `/apis/ebs/v1/projects/{project}/{资源}[/{name}][/status]`；资源为 `snapshots`、`buildinfos`、`buildgraphs`、`rpmrepos` | 匿名及已认证用户仅可 GET | 无；只注册 GET |
@@ -914,7 +914,7 @@ curl -X POST http://localhost:8080/apis/ebs/v1/projects \
 Runner 使用 MachineAccount 长期凭据换取 `type=runner`、`scopes=[]` 的短期 token，再通过自身范围 Job list-watch 发现分配给自己的 Job：
 
 ```bash
-TOKEN_RESPONSE=$(curl --fail-with-body 'http://localhost:8080/auth/runner-token' \
+TOKEN_RESPONSE=$(curl --fail-with-body 'http://localhost:8080/auth/machine-token' \
   --user "runner-site-a:${RUNNER_CLIENT_SECRET}" \
   -H 'Content-Type: application/json' \
   --data '{"runner":"runner-001"}')

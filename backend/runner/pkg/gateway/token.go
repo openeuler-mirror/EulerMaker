@@ -173,7 +173,7 @@ func (p *TokenProvider) nextRetryDelay(err error) time.Duration {
 func (p *TokenProvider) exchange(ctx context.Context) (string, time.Duration, error) {
 	payload, _ := json.Marshal(map[string]string{"runner": p.runner})
 	u := *p.baseURL
-	u.Path = singleJoiningSlash(p.baseURL.Path, "/auth/runner-token")
+	u.Path = singleJoiningSlash(p.baseURL.Path, "/auth/machine-token")
 	u.RawQuery = ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
 	if err != nil {

@@ -160,7 +160,7 @@ func TestPublicOpenAPIRoutes(t *testing.T) {
 		}
 	}
 	for path, methods := range map[string]string{
-		"/auth/login": "post", "/auth/register": "post", "/auth/runner-token": "post", "/auth/check": "post",
+		"/auth/login": "post", "/auth/register": "post", "/auth/machine-token": "post", "/auth/check": "post",
 		"/auth/users/{name}/password": "put", "/auth/machineaccounts": "post",
 		"/apis/ebs/v1/projects/{project}/builds":               "get head post",
 		"/apis/ebs/v1/projects/{project}/builds/{name}":        "get head delete",
@@ -233,7 +233,7 @@ func TestRunnerTokenAccountType(t *testing.T) {
 				body := `{"authenticated":true,"name":"worker","tokenTTLSeconds":3600` + tc.typeField + `}`
 				return &http.Response{StatusCode: tc.upstreamStatus, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}))
-			req := httptest.NewRequest(http.MethodPost, "/auth/runner-token", strings.NewReader(`{"runner":"runner-1"}`))
+			req := httptest.NewRequest(http.MethodPost, "/auth/machine-token", strings.NewReader(`{"runner":"runner-1"}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetBasicAuth("worker", "secret")
 			rec := httptest.NewRecorder()
