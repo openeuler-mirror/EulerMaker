@@ -57,3 +57,27 @@ func TestMachineAccountTypeValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestMachineAccountGrantValidationOnCreateAndUpdate(t *testing.T) {
+	s := &strategy{}
+	account := &iamv1.MachineAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "automation"},
+		Spec: iamv1.MachineAccountSpec{
+			Type: iamv1.MachineAccountService, TokenTTLSeconds: 3600,
+			Projects: []string{"demo"}, Permissions: []iamv1.MachineAccountPermission{iamv1.MachinePermissionProjectsUpdate},
+		},
+	}
+	if errs := s.Validate(context.Background(), account); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	invalid := account.DeepCopy()
+	invalid.Spec.Permissions = []iamv1.MachineAccountPermission{"admin"}
+	for _, errs := range []int{
+		len(s.Validate(context.Background(), invalid)),
+		len(s.ValidateUpdate(context.Background(), invalid, account)),
+	} {
+		if errs == 0 {
+			t.Fatal("strategy accepted invalid authorization")
+		}
+	}
+}

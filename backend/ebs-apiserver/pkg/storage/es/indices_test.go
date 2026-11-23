@@ -108,8 +108,10 @@ func TestIAMIndexFields(t *testing.T) {
 					t.Fatal(err)
 				}
 				spec := data["properties"].(map[string]any)["spec"].(map[string]any)
-				if got := spec["properties"].(map[string]any)["type"].(map[string]any)["type"]; got != "keyword" {
-					t.Fatalf("machine account type mapping=%v", got)
+				for _, name := range []string{"type", "projects", "permissions"} {
+					if got := spec["properties"].(map[string]any)[name].(map[string]any)["type"]; got != "keyword" {
+						t.Fatalf("machine account %s mapping=%v", name, got)
+					}
 				}
 			}
 		})

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -168,6 +169,59 @@ func TestRegisterMachineAccount(t *testing.T) {
 	}
 }
 
+func TestRegisterMachineGrants(t *testing.T) {
+	for _, test := range []struct {
+		name, fields string
+		status       int
+	}{
+		{"service grants", `"type":"service","projects":["demo","other"],"permissions":["projects:update","builds:create","builds:abort"]`, http.StatusCreated},
+		{"abort only", `"type":"service","projects":["demo"],"permissions":["builds:abort"]`, http.StatusCreated},
+		{"empty grants", `"type":"service","projects":[],"permissions":[]`, http.StatusCreated},
+		{"invalid project", `"type":"service","projects":["*"]`, http.StatusBadRequest},
+		{"duplicate projects", `"type":"service","projects":["demo","demo"]`, http.StatusBadRequest},
+		{"unknown permission", `"type":"service","permissions":["projects:delete"]`, http.StatusBadRequest},
+		{"duplicate permissions", `"type":"service","permissions":["builds:create","builds:create"]`, http.StatusBadRequest},
+		{"default runner grants", `"projects":["demo"]`, http.StatusBadRequest},
+		{"runner grants", `"type":"runner","permissions":["builds:abort"]`, http.StatusBadRequest},
+		{"projects scalar", `"type":"service","projects":"demo"`, http.StatusBadRequest},
+		{"permissions object", `"type":"service","permissions":{}`, http.StatusBadRequest},
+		{"null project entry", `"type":"service","projects":[null]`, http.StatusBadRequest},
+		{"null permission entry", `"type":"service","permissions":[null]`, http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			machines := &fakeMachineStorage{}
+			h := &Handler{machines: machines}
+			secret := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+			body := `{"name":"automation","clientSecret":"` + secret + `",` + test.fields + `}`
+			req := httptest.NewRequest(http.MethodPost, "/internal/iam/v1/machineaccounts/register", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			response := restful.NewResponse(rec)
+			response.SetRequestAccepts(restful.MIME_JSON)
+			h.registerMachine(restful.NewRequest(req), response)
+			if rec.Code != test.status {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if test.status != http.StatusCreated {
+				if machines.account != nil || len(machines.credential) != 0 {
+					t.Fatal("invalid grants reached storage")
+				}
+				return
+			}
+			want := iamv1.MachineAccountSpec{TokenTTLSeconds: 3600}
+			if err := json.Unmarshal([]byte("{"+test.fields+"}"), &want); err != nil {
+				t.Fatal(err)
+			}
+			if machines.account == nil || !reflect.DeepEqual(machines.account.Spec, want) || len(machines.credential) == 0 {
+				t.Fatalf("account or credential missing: %+v", machines.account)
+			}
+			if strings.Contains(rec.Body.String(), secret) {
+				t.Fatal("registration response leaked secret")
+			}
+		})
+	}
+}
+
 func TestInternalAuthenticationRoutes(t *testing.T) {
 	password := "correct password"
 	secret := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
@@ -212,7 +266,7 @@ func TestInternalAuthenticationRoutes(t *testing.T) {
 			body:   `{"name":"worker","clientSecret":"` + secret + `"}`,
 			esPath: "/ebs-machineaccounts/_doc/worker",
 			document: es.IAMDocument{
-				Document:   es.Document{Data: json.RawMessage(`{"metadata":{"name":"worker"},"spec":{"type":"service","tokenTTLSeconds":3600}}`)},
+				Document:   es.Document{Data: json.RawMessage(`{"metadata":{"name":"worker"},"spec":{"type":"service","tokenTTLSeconds":3600,"projects":["demo"],"permissions":["builds:abort"]}}`)},
 				Credential: machineCredential,
 			},
 			response: `{"authenticated":true,"name":"worker","type":"service","tokenTTLSeconds":3600}`,

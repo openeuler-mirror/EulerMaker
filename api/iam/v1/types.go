@@ -34,6 +34,22 @@ type MachineAccountSpec struct {
 	// Type is immutable. Omitted registration input defaults to runner.
 	Type            MachineAccountType `json:"type,omitempty"`
 	TokenTTLSeconds int64              `json:"tokenTTLSeconds,omitempty"`
+	// Projects and Permissions apply only to service accounts; either empty list grants no resource access.
+	Projects    []string                   `json:"projects,omitempty"`
+	Permissions []MachineAccountPermission `json:"permissions,omitempty"`
+}
+
+// +enum
+type MachineAccountPermission string
+
+const (
+	MachinePermissionProjectsUpdate MachineAccountPermission = "projects:update"
+	MachinePermissionBuildsCreate   MachineAccountPermission = "builds:create"
+	MachinePermissionBuildsAbort    MachineAccountPermission = "builds:abort"
+)
+
+func (p MachineAccountPermission) IsValid() bool {
+	return p == MachinePermissionProjectsUpdate || p == MachinePermissionBuildsCreate || p == MachinePermissionBuildsAbort
 }
 
 // +enum
