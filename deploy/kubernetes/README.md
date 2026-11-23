@@ -461,6 +461,35 @@ Pod Ready 只代表进程已启动，Runner 没有 HTTP 健康接口；还须在
 
 同一 Pod 内容器重启保留 Runner 名；Pod 删除重建后名称变化，会注册为新的 Runner，旧 Runner 记录不会自动改名。新实例不能按新名称接管旧名称下的构建容器，异常重建后须核对旧 Job 和宿主机残留容器；旧 Runner 达到 Offline/Evicted 后可删除其 API 记录。
 
+## 12. 可选：部署 Release Management
+
+`release-management.yaml` 提供 ConfigMap、10 GiB PVC、内部 Service 和单副本 Deployment，使用 `Recreate` 策略，调度到 `node-role.kubernetes.io/ebs-control-plane=` 节点。镜像为 `swr.cn-north-4.myhuaweicloud.com/eulermaker/release-management:0.1.0`，部署前须构建并推送，不能假定该新增组件已随现有版本发布。进程使用 UID/GID 1000，PVC 通过 fsGroup 提供写权限。
+
+先创建目标 Project 和 `type=service` 的机器账号，确认 Gateway 已支持 Service Token 更新 Project。修改模板 ConfigMap 中的绑定工程、清单目录及引用。模板使用可信集群网络内的 `gatewayURL: http://ebs-gateway.ebs:8080`，无需 CA 文件。HTTP 会明文传输机器凭据和 Token；跨公网或不可信网络必须改为 Pod 可达的 HTTPS 入口，默认校验系统 CA。私有 CA 可在同一 ConfigMap 增加 `ca.crt` 数据，并在配置中加入 `gatewayCAFile: /etc/release-management/ca.crt`，不要挂载 apiserver 客户端私钥或跳过证书校验。
+
+凭据以独立 Secret 保存，由全局 `machineCredentialFile` 引用，所有绑定共用；文件内容为创建机器账号时保存的 `clientID`、`clientSecret` JSON：
+
+```sh
+kubectl -n ebs create secret generic release-management-machine-credential \
+  --from-file=machine-credential.json=/secure/path/to/machine-credential.json \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+插件启动后立即同步并完全替换绑定工程的 packageRepos；不保留人工逐包覆盖，不自动创建工程或 Build。首次部署前先在本地执行组件 README 中的 `plan`，使用相同来源及绑定配置，将 dataDir、CA 和凭据路径改为本地可访问路径，确认列表差异后再部署。同一工程不能同时由 Compose 实例或其他 Kubernetes 实例维护。
+
+```sh
+kubectl apply -f deploy/kubernetes/release-management.yaml
+kubectl -n ebs rollout status deployment/release-management --timeout=10m
+kubectl -n ebs exec deployment/release-management -- \
+  release-management status --binding openeuler-24-03-lts-next-everything
+kubectl -n ebs exec deployment/release-management -- \
+  release-management sync --binding openeuler-24-03-lts-next-everything
+```
+
+绑定名按实际配置替换。服务运行时也可通过相同 exec 方式执行 `plan`；`sync` 返回只表示入队，须查看 `status` 确认完成。Ready 仅表示 worker 已启动，不代表所有绑定同步成功；通过状态、日志及内部 Service 的 `/metrics` 观察失败和最近成功时间。
+
+更新 ConfigMap 后执行 `kubectl -n ebs rollout restart deployment/release-management`。轮换凭据可重新执行上述 Secret apply 命令；Secret 使用目录挂载而非 subPath，等待 kubelet 更新挂载内容后，下次写入读取新凭据并换取 Token。配置默认每 10 分钟加少量抖动同步，也可手动触发；Webhook 尚未启用。工程范围与操作授权由独立的 apiserver/Gateway 改动提供；启用后机器账号的 `projects` 必须覆盖所有绑定工程，`permissions` 仅需 `projects:update`。此前固定允许列表不限制工程范围，凭据只应向可信内部服务发放。
+
 ## 运维边界
 
 - 不直接修改 StatefulSet `replicas` 扩缩已有 etcd 集群；使用 etcd `member add/remove` 并调整配置，避免同时重启多数成员。ES 扩缩容须核对分片迁移与节点状态。

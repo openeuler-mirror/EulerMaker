@@ -145,6 +145,30 @@ services:
     depends_on:
       - ebs-gateway
 
+  release-management:
+    profiles: [release-management]
+    build:
+      context: ..
+      dockerfile: backend/release-management/Dockerfile
+    command: [serve, --config=/etc/release-management/config.yaml]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - type: bind
+        source: ./release-management
+        target: /etc/release-management
+        read_only: true
+        bind:
+          create_host_path: false
+      - /srv/release-management:/var/lib/release-management
+    networks:
+      - ebs-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "3"
+
   git-server:
     build:
       context: ../backend/git-server
