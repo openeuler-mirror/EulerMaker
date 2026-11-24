@@ -43,18 +43,6 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 	if who.Type == identity.ServiceType {
 		return authorizeService(who, route)
 	}
-	if route.Resource == "projects" && route.Method == http.MethodDelete {
-		return deny("Project deletion is not available through Gateway")
-	}
-	if IsReadOnlyProjectResource(route.Resource) && route.Method != http.MethodGet {
-		return deny("resource is read-only through Gateway")
-	}
-	if route.Subresource == "abort" && route.Resource == "jobs" {
-		return a.jobAbort(ctx, who, route)
-	}
-	if route.Resource == "builds" && (route.Method == http.MethodPut || route.Method == http.MethodPatch) {
-		return deny("Build updates are not available through Gateway")
-	}
 	switch route.Resource {
 	case "configs":
 		return authorizeConfig(who, route)
@@ -63,15 +51,53 @@ func (a *Authorizer) Authorize(ctx context.Context, who identity.Principal, rout
 	case "runners":
 		return authorizeRunner(who, route)
 	case "users", "machineaccounts":
-		if who.Scope != identity.AdminScope {
-			return deny("IAM administration requires Admin")
-		}
-		return nil
-	case "projects", "snapshots", "builds", "buildinfos", "buildgraphs", "rpmrepos", "jobs", "oldjobs":
-		return a.projectResource(ctx, who, route)
+		return authorizeIAM(who)
+	case "projects":
+		return a.authorizeProject(ctx, who, route)
+	case "builds":
+		return a.authorizeBuild(ctx, who, route)
+	case "jobs":
+		return a.authorizeJob(ctx, who, route)
+	case "snapshots", "buildinfos", "buildgraphs", "rpmrepos", "oldjobs":
+		return a.authorizeReadOnlyResource(ctx, who, route)
 	default:
 		return deny("resource is not exposed")
 	}
+}
+
+func (a *Authorizer) authorizeProject(ctx context.Context, who identity.Principal, route Route) error {
+	if route.Method == http.MethodDelete {
+		return deny("Project deletion is not available through Gateway")
+	}
+	return a.projectResource(ctx, who, route)
+}
+
+func (a *Authorizer) authorizeBuild(ctx context.Context, who identity.Principal, route Route) error {
+	if route.Method == http.MethodPut || route.Method == http.MethodPatch {
+		return deny("Build updates are not available through Gateway")
+	}
+	return a.projectResource(ctx, who, route)
+}
+
+func (a *Authorizer) authorizeJob(ctx context.Context, who identity.Principal, route Route) error {
+	if route.Subresource == "abort" {
+		return a.jobAbort(ctx, who, route)
+	}
+	return a.projectResource(ctx, who, route)
+}
+
+func (a *Authorizer) authorizeReadOnlyResource(ctx context.Context, who identity.Principal, route Route) error {
+	if route.Method != http.MethodGet {
+		return deny("resource is read-only through Gateway")
+	}
+	return a.projectResource(ctx, who, route)
+}
+
+func authorizeIAM(who identity.Principal) error {
+	if who.Scope != identity.AdminScope {
+		return deny("IAM administration requires Admin")
+	}
+	return nil
 }
 
 func authorizeService(who identity.Principal, route Route) error {
@@ -304,8 +330,8 @@ func (a *Authorizer) projectAccess(ctx context.Context, project, subject string)
 		return access{}, fmt.Errorf("Project identity mismatch")
 	}
 	return access{
-		owner:  object.Metadata.Labels["ebs.io/owner-user"] == subject,
-		member: object.Metadata.Labels["ebs.io/member-user."+subject] == "true",
+		owner:  object.Metadata.Labels[ebsv1.ProjectOwnerUserLabel] == subject,
+		member: object.Metadata.Labels[ebsv1.ProjectMemberUserLabelPrefix+subject] == "true",
 	}, nil
 }
 

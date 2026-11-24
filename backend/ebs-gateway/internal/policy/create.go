@@ -26,35 +26,9 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 	}
 	switch route.Resource {
 	case "projects":
-		if who.Type == identity.RunnerType {
-			return nil, deny("Runner cannot create Project")
+		if err := a.prepareProjectCreate(ctx, who, object); err != nil {
+			return nil, err
 		}
-		meta := objectMap(object["metadata"])
-		if meta == nil {
-			return nil, &Error{Status: http.StatusBadRequest, Message: "Project metadata is required"}
-		}
-		labels := objectMap(meta["labels"])
-		if labels == nil {
-			labels = make(map[string]any)
-		}
-		if _, exists := labels[ebsv1.BuildPurposeLabel]; exists && !who.IsPrivileged() {
-			return nil, deny("Project build purpose requires Ops or Admin")
-		}
-		labels["ebs.io/owner-user"] = who.Subject
-		if who.Scope == identity.UserScope {
-			if value, exists := labels["project.ebs.io/type"]; exists && value != "personal" {
-				return nil, deny("ordinary users can only create personal Projects")
-			}
-		}
-		for key, value := range labels {
-			if !strings.HasPrefix(key, "ebs.io/member-user.") {
-				continue
-			}
-			if value != "true" || a.validateMember(ctx, strings.TrimPrefix(key, "ebs.io/member-user.")) != nil {
-				return nil, deny("invalid Project member")
-			}
-		}
-		meta["labels"] = labels
 	case "runners":
 		if who.Type != identity.RunnerType {
 			break
@@ -68,6 +42,39 @@ func (a *Authorizer) PrepareCreate(ctx context.Context, who identity.Principal, 
 		return nil, fmt.Errorf("encode object: %w", err)
 	}
 	return encoded, nil
+}
+
+func (a *Authorizer) prepareProjectCreate(ctx context.Context, who identity.Principal, object mutation.Object) error {
+	if who.Type == identity.RunnerType {
+		return deny("Runner cannot create Project")
+	}
+	meta := objectMap(object["metadata"])
+	if meta == nil {
+		return &Error{Status: http.StatusBadRequest, Message: "Project metadata is required"}
+	}
+	labels := objectMap(meta["labels"])
+	if labels == nil {
+		labels = make(map[string]any)
+	}
+	if _, exists := labels[ebsv1.BuildPurposeLabel]; exists && !who.IsPrivileged() {
+		return deny("Project build purpose requires Ops or Admin")
+	}
+	labels[ebsv1.ProjectOwnerUserLabel] = who.Subject
+	if who.Scope == identity.UserScope {
+		if value, exists := labels[ebsv1.ProjectTypeLabel]; exists && value != "personal" {
+			return deny("ordinary users can only create personal Projects")
+		}
+	}
+	for key, value := range labels {
+		if !strings.HasPrefix(key, ebsv1.ProjectMemberUserLabelPrefix) {
+			continue
+		}
+		if value != "true" || a.validateMember(ctx, strings.TrimPrefix(key, ebsv1.ProjectMemberUserLabelPrefix)) != nil {
+			return deny("invalid Project member")
+		}
+	}
+	meta["labels"] = labels
+	return nil
 }
 
 func validateRunnerCreate(object mutation.Object, runner string) error {
